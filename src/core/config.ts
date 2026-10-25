@@ -32,8 +32,7 @@ export const CONFIG = {
    * 5 是按"能看见但不必算太远"定的——排满 5 格大约对应一次战术周期，
    * 再长就变成开局一次性规划、后面不用管了，这个模式的乐趣恰恰是每回合微调。
    */
-  commanderSlots: 5,
-  /** 建造单位能盖建筑的最大距离（以建造者为中心） */
+  commanderSlots: 5,  /** 建造单位能盖建筑的最大距离（以建造者为中心） */
   buildRange: 2,
   /** 经济单位或经济建筑相邻水域时的额外收入（灌溉、运输之利） */
   riverTradeBonus: 3,
@@ -103,9 +102,18 @@ export const CONFIG = {
   } as Record<Terrain, string>,
 };
 
+/**
+ * 指挥官模式里"这一格用来升级时代"的哨兵值。
+ *
+ * 生产序列本来只放兵种 id，但升级同样是"排期"性质的决定——
+ * 什么时候把城升上去，直接决定接下来能造什么兵。所以让它占一格，而不是另开一套控件。
+ *
+ * 用 `@` 开头是为了不和任何兵种 id 撞车（兵种 id 全是纯小写字母）。
+ */
+export const ORDER_UPGRADE = '@upgrade';
+
 /** 城市参数（与时代无关的部分） */
-export const CITY = {
-  /** 边长：占 size × size 个格子 */
+export const CITY = {  /** 边长：占 size × size 个格子 */
   size: 2,
   /** 被攻陷后易主时保留的血量比例 */
   captureHpRatio: 0.3,

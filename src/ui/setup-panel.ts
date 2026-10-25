@@ -187,7 +187,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <button class="chip ${!config.commanderMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
                 <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
               </div>
-              <div class="field-hint">指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。</div>
+              <div class="field-hint">指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。</div>
             </section>
 
             <section class="field">
@@ -257,8 +257,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const mode = aiBtn.dataset.ai;
         config.aiAlly = mode === '2';
         config.aiOpponent = mode === '1' || mode === '2';
-        // 双 AI 观战里没有"玩家"，指挥官模式就无从谈起，顺手关掉
-        if (config.aiAlly) config.commanderMode = false;
+        // 指挥官模式保留：双 AI 观战时两边都受"一回合一个兵"的限制，
+        // 这正是用来量"这套限制下 AI 到底能打成什么样"的场景。
         paint();
         return;
       }

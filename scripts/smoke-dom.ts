@@ -828,6 +828,17 @@ check('指挥官模式开局后出现 5 格生产序列', () => {
   assert.ok(bar.textContent?.includes('参谋部'), '标题应该是参谋部');
 });
 
+check('生产序列里能排「升级时代」', () => {
+  const sel = doc
+    .querySelector<HTMLElement>('#commander')
+    ?.querySelector<HTMLSelectElement>('select[data-slot="1"]');
+  assert.ok(sel, '找不到第二格');
+  assert.ok(
+    Array.from(sel.options).some((o) => o.value === '@upgrade'),
+    '每一格都应该能选升级时代',
+  );
+});
+
 check('改一格只更新序列，下拉不会被重建', () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
   assert.ok(bar);

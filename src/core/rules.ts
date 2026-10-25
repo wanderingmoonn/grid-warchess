@@ -11,7 +11,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CHEAPEST_COST, CITY, CONFIG, eraDef, nextUpgradeCost, passable } from './config.ts';
+import { CHEAPEST_COST, CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
 import { activeExpansions } from './expansions.ts';
 import type {
   ActionResult,
@@ -1364,6 +1364,8 @@ function doSetOrders(s: GameState, queue: string[]): ActionResult {
 
   for (const id of cleaned) {
     if (!id) continue;
+    // 哨兵值：这一格是"升级时代"，不是兵种
+    if (id === ORDER_UPGRADE) continue;
     const def = s.unitTypes[id];
     if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
     if (def.category === 'building') {

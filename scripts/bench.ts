@@ -24,6 +24,14 @@ const CAP = Number(process.env.BENCH_CAP ?? 180);
 const ONLY = process.env.BENCH_ERA ? process.env.BENCH_ERA.split(',').map(Number) : null;
 /** BENCH_SIZE 给定时，强制所有组合用同一个棋盘尺寸，方便只对比起始时代这一个变量 */
 const SIZE = Number(process.env.BENCH_SIZE ?? 0);
+/**
+ * BENCH_COMMANDER=1 时按指挥官模式跑：双方都只有「一回合一个兵」的产能，
+ * AI 也不再自作主张升时代（maxUpgrade 归零由界面层控制，bench 这边保留自主升级，
+ * 因为这里测的是产能限制本身）。
+ *
+ * 用来回答一个问题：把每回合两个兵砍到一个，对局会变成什么样。
+ */
+const COMMANDER = process.env.BENCH_COMMANDER === '1';
 
 interface Combo {
   era: number;
@@ -62,12 +70,18 @@ function playOne(combo: Combo, seed: number): Result {
       startEra: combo.era,
       aiOpponent: true,
       aiAlly: true,
+      commanderMode: COMMANDER,
       enabledUnits: Object.keys(UNIT_TYPES),
     },
     seed,
   );
 
-  const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
+  const budget = {
+    maxRecruit: COMMANDER ? 1 : 2,
+    maxUpgrade: 1,
+    recruited: 0,
+    upgraded: 0,
+  };
   let turns = 0;
   let sieges = 0;
   let attacks = 0;
@@ -115,7 +129,7 @@ function playOne(combo: Combo, seed: number): Result {
 const avg = (xs: number[]): number =>
   xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
 
-console.log(`每个组合 ${SEEDS} 个种子，回合上限 ${CAP}\n`);
+console.log(`每个组合 ${SEEDS} 个种子，回合上限 ${CAP}${COMMANDER ? '，指挥官模式（每回合 1 兵）' : ''}\n`);
 console.log('组合            完成  平均回合  中位  最高时代  攻城/局  交战/局  招兵/局  胜方');
 
 const rows: Array<{ name: string; r: Result[] }> = [];

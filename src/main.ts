@@ -10,7 +10,7 @@ import './style.css';
 import { expansionById } from './core/expansions.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
-import { CONFIG, passable } from './core/config.ts';
+import { CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import {
   adjacentToWater,
@@ -791,7 +791,13 @@ async function runAiLoop(): Promise<void> {
  */
 async function runAiTurn(token: number, overrides?: Partial<AiBudget>): Promise<void> {
   const player = state.current;
-  const budget: AiBudget = { ...DEFAULT_BUDGET, ...overrides };
+  const budget: AiBudget = {
+    ...DEFAULT_BUDGET,
+    // 指挥官模式下**每一方**都只有"一回合一个兵"的产能，AI 也不例外。
+    // 否则双 AI 观战跑出来的还是普通对局，测不到限制本身。
+    ...(state.config.commanderMode ? { maxRecruit: 1 } : {}),
+    ...overrides,
+  };
   const delay = AI_SPEED_MS[aiSpeed] ?? 70;
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
@@ -875,7 +881,10 @@ function renderCommander(): void {
 
   const queue = ordersOf(state, me());
   const opts = (sel: string) =>
-    ['<option value="">— 不指定 —</option>']
+    [
+      '<option value="">— 不指定 —</option>',
+      `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
+    ]
       .concat(
         pool.map(
           (d) =>
@@ -895,7 +904,7 @@ function renderCommander(): void {
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
-      <span class="cmd-hint">你只决定造什么，走位与开火交给 AI。每格占一个回合，造不出来也照样消耗。</span>
+      <span class="cmd-hint">你只排「造什么 / 何时升时代」，走位与开火交给 AI。每格占一个回合，造不出来也照样消耗。</span>
     </div>
     <div class="cmd-slots">${slots}</div>
     <button class="btn btn-primary" data-cmd="run">交给参谋部执行本回合</button>
@@ -920,20 +929,29 @@ commanderEl.addEventListener('click', (e) => {
 /**
  * 把这一方交给 AI 打完，然后结束回合。
  *
- * 和普通 AI 回合只有两点不同：产兵上限 1 个、且只造玩家点名的那个兵。
- * 上限设 1 是因为生产序列就是"一回合一个"——让它按自己的节奏造两个，
- * 玩家排的计划就失去意义了。
+ * 玩家这一回合的"命令"全在序列队首上，三种走法：
+ *   · 点了某个兵种 —— 只造它，别的钱让 AI 去盖房、走路（造不起就空过）
+ *   · 点了「升级时代」—— 这回合专注升级，不产兵
+ *   · 空着 —— 这回合既不产兵也不升级，只让 AI 走位开火
+ *
+ * 升级必须显式排：指挥官模式下 AI 不会自作主张升时代，
+ * 因为"什么时候换代"和"造什么兵"是同一层的决定，交出去一半就没得算了。
  */
 async function runCommanderTurn(): Promise<void> {
   if (!commanderActive()) return;
   const player = state.current;
-  const order = ordersOf(state, player)[0] || null;
+  const head = ordersOf(state, player)[0] ?? '';
+
+  const budget: Partial<AiBudget> =
+    head === ORDER_UPGRADE
+      ? { maxRecruit: 0, maxUpgrade: 1, order: null }
+      : { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
 
   const token = ++aiToken;
   clearSelection();
   aiPaused = false;
 
-  await runAiTurn(token, { maxRecruit: 1, order });
+  await runAiTurn(token, budget);
 
   if (token !== aiToken) return;
   if (!state.winner && isAiSide(state, state.current)) void runAiLoop();

@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 
-import { CITY, CONFIG, ERAS, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
+import { CITY, CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
@@ -3690,6 +3690,51 @@ test('结束回合时序列前移一格，造没造出来都算消耗', () => {
   const end = applyAction(r.state, { type: 'END_TURN' });
   assert.ok(end.ok);
   assert.deepEqual(ordersOf(end.state, 'A'), ['militia'], '队首应该出队');
+});
+
+test('「升级时代」能排进序列，同样占一格', () => {
+  const s = commandPost();
+  const r = applyAction(s, { type: 'SET_ORDERS', queue: [ORDER_UPGRADE, 'archer'] });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.deepEqual(ordersOf(r.state, 'A'), [ORDER_UPGRADE, 'archer']);
+
+  const end = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(end.ok);
+  assert.deepEqual(ordersOf(end.state, 'A'), ['archer'], '升级那一格也该被消耗掉');
+});
+
+test('排了「升级时代」，AI 这一回合真的会去升级', () => {
+  const s = commandPost(); // 1000 金，够升到中世
+  const budget = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 1, order: null };
+  let cur = s;
+  let got = false;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, budget);
+    if (!a) break;
+    if (a.type === 'UPGRADE') {
+      got = true;
+      break;
+    }
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.ok(got, '钱够就该升级');
+});
+
+test('没排升级时 AI 不会自作主张升时代', () => {
+  // 指挥官模式下 AI 拿到的 maxUpgrade 是 0
+  const s = commandPost();
+  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, maxUpgrade: 0, order: null };
+  let cur = s;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, budget);
+    if (!a) break;
+    assert.notEqual(a.type, 'UPGRADE', 'maxUpgrade 为 0 时不该出现升级动作');
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
 });
 
 test('AI 会把点名的兵优先造出来', () => {
