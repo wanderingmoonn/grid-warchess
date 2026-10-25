@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支上新的推送会取消还没跑完的旧任务，PR 里连着改几次不会被排队拖住
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 脚本用 node --experimental-strip-types 直接跑 TypeScript，需要 22+
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npx tsc --noEmit
+
+      - name: 规则内核测试
+        run: npm run test:rules
+
+      - name: DOM 冒烟测试
+        run: npm run test:ui
+
+      # 规则书是从 config.ts / abilities.ts / expansions.ts 生成的。
+      # 改了数值却忘了重新生成，线上和文档就会对不上，所以这里卡一道。
+      - name: 规则书与代码是否同步
+        run: |
+          npm run manual
+          if ! git diff --exit-code public/manual.html; then
+            echo "::error::public/manual.html 与代码不同步，本地跑 npm run manual 后提交"
+            exit 1
+          fi
+
+      - name: 构建
+        run: npm run build
+
+  # 只是把格式问题挡在 PR 阶段，不阻塞主流程
+  hygiene:
+    name: 仓库卫生
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 不该提交的文件
+        run: |
+          bad=$(git ls-files | grep -E '^(node_modules|dist)/|^manual\.html$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::这些文件不该进版本库：$bad"
+            exit 1
+          fi
