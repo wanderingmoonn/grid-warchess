@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { UNIT_TYPES } from '../src/core/config.ts';
+import { ERA_PACKS } from '../src/core/era-packs.ts';
 
 const DIR = 'results/packs';
 const OUT = path.join(DIR, 'report.md');
@@ -67,10 +68,9 @@ const PACKS = [
   {
     era: 1,
     id: 'pack-antiquity',
+    theme: '方阵、战车战象、攻城槌与弩炮',
     name: '古典会战',
     eraName: '古典',
-    newUnits: 14,
-    vanilla: 12,
     note:
       '这一包的重心是**重甲与攻城**：重装步兵/军团兵把正面顶住，投石兵和标枪兵把便宜的远程补上，' +
       '攻城槌和弩炮第一次让"拆城"有了专门的工具。实测里它明显偏"扛"——每百金抗伤远高于原版，' +
@@ -79,10 +79,9 @@ const PACKS = [
   {
     era: 2,
     id: 'pack-medieval',
+    theme: '破甲、长矛方阵、投石机与攻城塔',
     name: '中世兵备',
     eraName: '中世',
-    newUnits: 12,
-    vanilla: 8,
     note:
       '中世的关键词是**破甲**：弩手和双手剑士负责把对方的甲剥掉，瑞士长矛兵负责站住，' +
       '骑射手提供机动。投石机与攻城塔让攻城从"人肉撞墙"变成有节奏的工序。' +
@@ -91,10 +90,9 @@ const PACKS = [
   {
     era: 3,
     id: 'pack-gunpowder',
+    theme: '线列齐射、散兵、加农炮与棱堡',
     name: '火药列国',
     eraName: '火药',
-    newUnits: 13,
-    vanilla: 11,
     note:
       '火药包的定位是**火力层次**：线列步兵正面齐射，猎兵负责视野和点杀，龙骑兵/胸甲骑兵负责冲击，' +
       '攻城加农炮与长管炮负责拆工事。它也是唯一一个"改过一次才收住"的包——' +
@@ -103,10 +101,9 @@ const PACKS = [
   {
     era: 4,
     id: 'pack-industry',
+    theme: '堑壕、毒气、列车炮与初代坦克',
     name: '工业绞肉机',
     eraName: '工业',
-    newUnits: 13,
-    vanilla: 7,
     note:
       '工业包是**阵地战**：毒气兵与火焰喷射器负责清堑壕，榴弹炮/列车炮负责曲射，' +
       '马克 I 坦克第一次把"装甲"变成独立的战术变量，机枪碉堡和铁丝网把地图切成小块。' +
@@ -115,10 +112,9 @@ const PACKS = [
   {
     era: 5,
     id: 'pack-modern',
+    theme: '合成兵种、喀秋莎、重坦与地堡',
     name: '现代合成兵',
     eraName: '现代',
-    newUnits: 13,
-    vanilla: 11,
     note:
       '现代包讲的是**合成**：伞兵/突击队找后排，反坦克炮专治重装甲，喀秋莎与自行火炮负责面杀伤，' +
       '重型坦克正面顶线，机枪地堡和反坦克拒马把防线做厚。它的单位最贵，也最容易出现样本不足。',
@@ -205,6 +201,14 @@ for (const p of PACKS) {
   );
 }
 
+// 第 1 节的单位数是**算出来的**，不是手写的：之前手写过一次，漏了工业包的装甲列车，
+// 表格写 13、实际 12，报告和代码对不上还是靠导出数据才发现的。
+const packTable = PACKS.map((p) => {
+  const n = ERA_PACKS.find((e) => e.id === p.id)?.units?.length ?? 0;
+  const vanilla = Object.values(UNIT_TYPES).filter((d) => d.era === p.era).length;
+  return `| ${p.eraName} | \`${p.id}\` | ${n} | ${vanilla} | ${n + vanilla} | ${p.theme} |`;
+}).join('\n');
+
 const report = `# 方格战棋 · 五个时代兵种扩展包 平衡测试报告
 
 > 数据由 \`scripts/balance-report.ts\` 跑出、\`scripts/pack-report.ts\` 汇总。
@@ -221,11 +225,7 @@ const report = `# 方格战棋 · 五个时代兵种扩展包 平衡测试报告
 
 | 时代 | 包 id | 新增单位 | 原版同期 | 合计 | 主题 |
 |---|---|---:|---:|---:|---|
-| 古典 | \`pack-antiquity\` | 14 | 12 | 26 | 方阵、战车战象、攻城槌与弩炮 |
-| 中世 | \`pack-medieval\` | 12 | 8 | 20 | 破甲、长矛方阵、投石机与攻城塔 |
-| 火药 | \`pack-gunpowder\` | 13 | 11 | 24 | 线列齐射、散兵、加农炮与棱堡 |
-| 工业 | \`pack-industry\` | 13 | 7 | 20 | 堑壕、毒气、列车炮与初代坦克 |
-| 现代 | \`pack-modern\` | 13 | 11 | 24 | 合成兵种、喀秋莎、重坦与地堡 |
+${packTable}
 
 每个包都是独立的扩展项，在开局面板里单独勾选；不勾选时对原版零影响
 （不进场、不进 AI 候选、不进存档）。

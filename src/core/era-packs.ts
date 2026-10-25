@@ -824,6 +824,26 @@ const INDUSTRY: UnitTypeDef[] = [
     abilities: ['siege-master'],
   },
   {
+    // 装甲列车：一战东线的主角，一门炮加几挺机枪装在铁路上。
+    // 本作没有轨道机制，所以按普通地面单位处理（说明列里注明这一点）。
+    // 第一版 atk 40 + burst 2，实测每百金 48.1、交换比 3.69，是全包最高（步枪兵 23.9）——
+    // 射程 4 加护甲 9 让它站在后排既打得到人又不挨打。攻击收到 34，保留连发作卖点。
+    id: 'ind_armoredtrain',
+    name: '装甲列车',
+    short: '轨',
+    era: 4,
+    category: 'combat',
+    cost: 340,
+    move: 2,
+    atk: 34,
+    armor: 9,
+    maxHp: 70,
+    range: 4,
+    vision: 3,
+    burst: 2,
+    abilities: ['siege-master'],
+  },
+  {
     // 机枪碉堡：把 burst 装进建筑，谁靠近谁碎
     id: 'ind_pillbox',
     name: '机枪碉堡',
