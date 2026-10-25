@@ -22,11 +22,14 @@ import {
   citiesOf,
   distance,
   idx,
+  incomeOf,
   ordersOf,
   reachableTiles,
+  recruitCost,
   refreshMemory,
   siegeTargets,
   threatTiles,
+  upgradeCostOf,
   utype,
 } from './core/rules.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
@@ -789,7 +792,11 @@ async function runAiLoop(): Promise<void> {
  * 每一步之间停一下，是为了让玩家看得见它在干什么——
  * 瞬间跳完会让整局变成"我做了什么？对面怎么就满编了？"。
  */
-async function runAiTurn(token: number, overrides?: Partial<AiBudget>): Promise<void> {
+async function runAiTurn(
+  token: number,
+  overrides?: Partial<AiBudget>,
+  delayOverride?: number,
+): Promise<void> {
   const player = state.current;
   const budget: AiBudget = {
     ...DEFAULT_BUDGET,
@@ -798,7 +805,7 @@ async function runAiTurn(token: number, overrides?: Partial<AiBudget>): Promise<
     ...(state.config.commanderMode ? { maxRecruit: 1 } : {}),
     ...overrides,
   };
-  const delay = AI_SPEED_MS[aiSpeed] ?? 70;
+  const delay = delayOverride ?? AI_SPEED_MS[aiSpeed] ?? 70;
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
 
@@ -843,6 +850,15 @@ function kickAiIfNeeded(): void {
 
 /** 面板上一次重建时对应的局面签名，用来避免无谓重建（重建会把下拉框抽走） */
 let commanderSig = '';
+/** 批量执行中：面板换成进度条，按钮禁用 */
+let commanderRunning = false;
+/** 批量执行到第几个回合（1..5），0 表示没在跑 */
+let commanderRound = 0;
+/** 窄屏下「参谋部」是折叠的，点一下才展开排计划 */
+let commanderExpanded = false;
+
+/** 批量执行时每步的停顿。比"慢档"快得多：一次要跑 5 个回合，180ms 会拖成一分钟 */
+const BATCH_DELAY = 40;
 
 /** 现在是不是"轮到玩家当指挥官" */
 function commanderActive(): boolean {
@@ -859,11 +875,66 @@ function commanderPool(): UnitTypeDef[] {
 }
 
 /**
+ * 生产序列里一格要花多少钱。
+ *
+ * 「升级时代」按"自己几座城里最便宜的那次升级"算——AI 执行时会挑它认为最该升的那座，
+ * 个数对不上是常态，所以界面上的金币数字一律标成"≈"，不假装精确。
+ */
+function slotCost(unitId: string): number {
+  if (!unitId) return 0;
+  if (unitId === ORDER_UPGRADE) {
+    const costs = citiesOf(state, me())
+      .map((c) => upgradeCostOf(state, c))
+      .filter((c): c is number => c !== null);
+    return costs.length > 0 ? Math.min(...costs) : 0;
+  }
+  const def = state.unitTypes[unitId];
+  return def ? recruitCost(state, me(), def) : 0;
+}
+
+/**
+ * 每一格执行时手上有多少钱（估算）。
+ *
+ * 回合顺序是"我方 → 对方 → 我方…"，而收入是在结束回合时结算给**下一位**的，
+ * 所以每轮到我方时正好多进一笔收入。于是：
+ *   第 i 格可用 = 现有金币 + i × 每回合收入 − 前面各格的花费
+ */
+function estimateGold(): number[] {
+  const income = incomeOf(state, me());
+  const queue = ordersOf(state, me());
+  const out: number[] = [];
+  let spent = 0;
+  for (let i = 0; i < CONFIG.commanderSlots; i++) {
+    out.push(state.players[me()].gold + i * income - spent);
+    spent += slotCost(queue[i] ?? '');
+  }
+  return out;
+}
+
+/** 只刷新金币提示，不重建下拉——否则玩家正在点的格子会被抽走 */
+function refreshEstimates(): void {
+  const gold = estimateGold();
+  commanderEl.querySelectorAll<HTMLElement>('[data-est]').forEach((el) => {
+    const i = Number(el.dataset.est);
+    const avail = gold[i] ?? 0;
+    const queue = ordersOf(state, me());
+    const cost = slotCost(queue[i] ?? '');
+    const tight = cost > avail;
+    el.textContent = `≈ ${Math.max(0, Math.round(avail))} 金`;
+    el.classList.toggle('tight', tight);
+  });
+  const tail = commanderEl.querySelector<HTMLElement>('[data-est-total]');
+  if (tail) {
+    const last = gold[gold.length - 1] ?? 0;
+    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(last - slotCost(ordersOf(state, me())[CONFIG.commanderSlots - 1] ?? '')))} 金`;
+  }
+}
+
+/**
  * 画指挥官面板。
  *
- * 只在"回合 / 可用时代"变化时重建：面板里是 <select>，而 AI 每走一步都会触发
- * render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
- * 玩家自己改选项走 change 事件，只更新序列、不重建。
+ * 只在"回合 / 可用时代 / 是否在跑"变化时重建：面板里是 <select>，
+ * 而 AI 每走一步都会触发 render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
  */
 function renderCommander(): void {
   if (!commanderActive()) {
@@ -873,10 +944,28 @@ function renderCommander(): void {
   }
   commanderEl.hidden = false;
 
+  if (commanderRunning) {
+    const sig = `run|${commanderRound}`;
+    if (sig === commanderSig) return;
+    commanderSig = sig;
+    commanderEl.innerHTML = `
+      <div class="cmd-head">
+        <b>参谋部</b>
+        <span class="cmd-hint">正在执行：第 ${commanderRound} / ${CONFIG.commanderSlots} 回合</span>
+      </div>
+      <div class="cmd-progress"><i style="width:${(commanderRound / CONFIG.commanderSlots) * 100}%"></i></div>
+      <button class="btn" data-cmd="stop">中断</button>
+    `;
+    return;
+  }
+
   const pool = commanderPool();
   const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
-  const sig = `${state.turn}|${era}`;
-  if (sig === commanderSig) return;
+  const sig = `${state.turn}|${era}|${commanderExpanded}`;
+  if (sig === commanderSig) {
+    refreshEstimates();
+    return;
+  }
   commanderSig = sig;
 
   const queue = ordersOf(state, me());
@@ -898,17 +987,23 @@ function renderCommander(): void {
     return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
       <span class="cmd-step">${label}</span>
       <select data-slot="${i}">${opts(queue[i] ?? '')}</select>
+      <span class="cmd-est" data-est="${i}"></span>
     </label>`;
   }).join('');
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
-      <span class="cmd-hint">你只排「造什么 / 何时升时代」，走位与开火交给 AI。每格占一个回合，造不出来也照样消耗。</span>
+      <span class="cmd-hint">排满下面 5 格，点一次就把这 5 个回合一起交给 AI 打完。</span>
+      <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
     </div>
-    <div class="cmd-slots">${slots}</div>
-    <button class="btn btn-primary" data-cmd="run">交给参谋部执行本回合</button>
+    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">${slots}</div>
+    <div class="cmd-foot">
+      <span class="cmd-total" data-est-total></span>
+      <button class="btn btn-primary" data-cmd="run">执行 ${CONFIG.commanderSlots} 回合</button>
+    </div>
   `;
+  refreshEstimates();
 }
 
 /** 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等） */
@@ -919,45 +1014,98 @@ commanderEl.addEventListener('change', (e) => {
     commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
   ).map((s) => s.value);
   dispatch({ type: 'SET_ORDERS', queue });
+  refreshEstimates();
 });
 
 commanderEl.addEventListener('click', (e) => {
-  if (!(e.target as HTMLElement).closest('[data-cmd="run"]')) return;
-  void runCommanderTurn();
+  const cmd = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
+  if (!cmd) return;
+  if (cmd === 'run') void runCommanderBatch();
+  if (cmd === 'stop') {
+    // 令牌一换，所有正在跑的 AI 循环下一步就自己退出
+    aiToken += 1;
+  }
+  if (cmd === 'toggle') {
+    commanderExpanded = !commanderExpanded;
+    commanderSig = '';
+    renderCommander();
+  }
 });
 
-/**
- * 把这一方交给 AI 打完，然后结束回合。
- *
- * 玩家这一回合的"命令"全在序列队首上，三种走法：
- *   · 点了某个兵种 —— 只造它，别的钱让 AI 去盖房、走路（造不起就空过）
- *   · 点了「升级时代」—— 这回合专注升级，不产兵
- *   · 空着 —— 这回合既不产兵也不升级，只让 AI 走位开火
- *
- * 升级必须显式排：指挥官模式下 AI 不会自作主张升时代，
- * 因为"什么时候换代"和"造什么兵"是同一层的决定，交出去一半就没得算了。
- */
-async function runCommanderTurn(): Promise<void> {
-  if (!commanderActive()) return;
-  const player = state.current;
+/** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
+function commanderBudget(player: PlayerId): Partial<AiBudget> {
   const head = ordersOf(state, player)[0] ?? '';
+  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null };
+  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
+}
 
-  const budget: Partial<AiBudget> =
-    head === ORDER_UPGRADE
-      ? { maxRecruit: 0, maxUpgrade: 1, order: null }
-      : { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
+/**
+ * 把接下来 5 个回合一次性打完。
+ *
+ * 这是指挥官模式的本意：**减负**。玩家一次排 5 格、点一次，然后看结果，
+ * 而不是每回合都要回来点一下——那就只是把"走子"换成了"点按钮"，负担没减。
+ *
+ * 每一轮：我方按序列队首执行 → 对方（AI）自己排 → 轮回我方，序列各前移一格。
+ * 中途分出胜负或玩家点"中断"就停。
+ */
+async function runCommanderBatch(): Promise<void> {
+  if (!commanderActive() || commanderRunning) return;
 
   const token = ++aiToken;
   clearSelection();
   aiPaused = false;
+  // 先把当前下拉里的选择落到状态里：玩家可能只是改了选择就直接点执行
+  const plan = Array.from(
+    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
+  ).map((s) => s.value);
+  if (plan.length > 0) {
+    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+    if (set.ok) state = set.state;
+  }
 
-  await runAiTurn(token, budget);
+  commanderRunning = true;
+  commanderRound = 0;
+  commanderSig = '';
+  renderCommander();
 
-  if (token !== aiToken) return;
-  if (!state.winner && isAiSide(state, state.current)) void runAiLoop();
-  else render();
+  try {
+    for (let r = 0; r < CONFIG.commanderSlots; r++) {
+      if (token !== aiToken || state.winner) break;
+      if (state.current !== me()) break;
+
+      commanderRound = r + 1;
+      commanderSig = '';
+      renderCommander();
+
+      await runAiTurn(token, commanderBudget(state.current), BATCH_DELAY);
+      if (token !== aiToken || state.winner) break;
+
+      // 对手的回合：指挥官模式下对手也是 AI，自己决定这一回合造什么
+      while (token === aiToken && !state.winner && state.current !== me()) {
+        await runAiTurn(token, undefined, BATCH_DELAY);
+      }
+    }
+  } finally {
+    commanderRunning = false;
+    commanderRound = 0;
+    commanderSig = '';
+  }
+
+  if (state.winner) {
+    render();
+    return;
+  }
+
+  // 把这批计划重新装回序列：玩家满意的话下一次直接点执行，不用重排 5 格。
+  // 这也正是"减负"——排一次能用很多批，想改再改。
+  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+  if (rearm.ok) state = rearm.state;
+
+  saveMatch(state);
+  render();
+  // 被"中断"打断时 token 已经换人，这时别报"打完了"
+  if (token === aiToken) toast(`这 ${CONFIG.commanderSlots} 个回合打完了`);
 }
-
 
 // ---------- 联机 ----------
 

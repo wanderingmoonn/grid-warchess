@@ -51,6 +51,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  /* 顶栏/参谋部栏再高也不许子元素顶出去压到棋盘上 */
+  overflow: hidden;
 }
 
 /* ---------- 顶栏 ---------- */
@@ -203,7 +205,14 @@ body {
 .board {
   position: relative;
   aspect-ratio: 1 / 1;
-  width: min(100%, calc(100dvh - 108px));
+  /*
+   * 以前是 width: min(100%, calc(100dvh - 108px))——把"顶栏多高"写死在算式里。
+   * 后来加了参谋部栏，算式没跟着改，棋盘就顶穿容器、上半截钻到顶栏底下，
+   * 看起来像"功能栏遮住了棋局"。
+   * 现在改成按容器能给的最小边定尺寸（见下面 >920px 的 container-type），
+   * 以后再加几条横栏都不用动这里。
+   */
+  width: 100%;
   max-width: 100%;
   border-radius: 14px;
   background: #cfc9bc;
@@ -1102,6 +1111,18 @@ a.btn {
 }
 
 /* ---------- 窄屏 ---------- */
+
+/* 宽屏：棋盘取容器的短边，顶栏/参谋部栏占多少高度它自己会让 */
+@media (min-width: 921px) {
+  .board-wrap {
+    container-type: size;
+  }
+
+  .board {
+    width: min(100cqw, 100cqh);
+  }
+}
+
 @media (max-width: 920px) {
   .main {
     grid-template-columns: 1fr;
@@ -1758,5 +1779,86 @@ a.btn {
 
   .cmd-slot select {
     max-width: 110px;
+  }
+}
+
+/* ---------- 参谋部：金币预估与批量执行 ---------- */
+.cmd-est {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cmd-est.tight {
+  color: var(--b);
+  font-weight: 600;
+}
+
+.cmd-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.cmd-total {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.cmd-toggle {
+  display: none;
+}
+
+.cmd-progress {
+  flex: 1 1 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.cmd-progress i {
+  display: block;
+  height: 100%;
+  background: var(--a);
+  transition: width 120ms linear;
+}
+
+/*
+ * 窄屏：参谋部折叠成一行。
+ *
+ * 手机上顶栏本来就吃掉 50px，再让 5 个下拉横着铺开，棋盘会只剩下一条缝——
+ * 所以默认只留"参谋部 + 排计划"这一行，点开才铺开，且铺开时最多占 46vh 并可滚动，
+ * 靠页面纵向滚动看棋盘，绝不叠在棋盘上面。
+ */
+@media (max-width: 720px) {
+  .commander-bar {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .cmd-toggle {
+    display: inline-block;
+  }
+
+  .cmd-slots {
+    display: none;
+  }
+
+  .cmd-slots.open {
+    display: flex;
+    flex-basis: 100%;
+    max-height: 46vh;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .cmd-foot {
+    flex-basis: 100%;
+    margin-left: 0;
+    justify-content: space-between;
   }
 }

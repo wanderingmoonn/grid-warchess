@@ -48,6 +48,12 @@ if (!window.structuredClone) {
   (window as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
 }
 
+// 首局用的是 Math.random() 派生的种子。不钉死的话，换个种子就可能多看见一个
+// 敌人、多一座山，测试随机变红——这个套件已经这样飘过两次了。
+let seedPick = 0;
+const SEED_PICKS = [0.137, 0.421, 0.639, 0.911, 0.283, 0.774, 0.058, 0.365];
+(window.Math as Math).random = () => SEED_PICKS[seedPick++ % SEED_PICKS.length]!;
+
 window.eval(code);
 
 const doc = window.document;
@@ -856,27 +862,31 @@ check('改一格只更新序列，下拉不会被重建', () => {
 });
 
 
-await checkAsync('点「交给参谋部执行」会走完这一回合并消耗一格序列', async () => {
+await checkAsync('每格都给出可用金币的估算', async () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
   assert.ok(bar);
-  const slot0 = () =>
-    doc.querySelector<HTMLElement>('#commander')?.querySelector<HTMLSelectElement>('select[data-slot="0"]');
-  const before = slot0()?.value;
-  assert.ok(before, '这一格应该有兵');
+  const ests = Array.from(bar.querySelectorAll<HTMLElement>('[data-est]'));
+  assert.equal(ests.length, 5, '5 格各有一条估算');
+  assert.ok(/≈\s*\d+\s*金/.test(ests[0]?.textContent ?? ''), `第一格应该显示估算金币，实际：${ests[0]?.textContent}`);
+  assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
+});
 
-  // 切到极快，否则 AI 每步 180ms，一回合能等到超时
-  click('[data-act="ai-speed"]');
-  click('[data-act="ai-speed"]');
+await checkAsync('点「执行 5 回合」先进进度态，可以中断', async () => {
   click('[data-cmd="run"]');
+  await wait(150);
 
-  let waited = 0;
-  while (waited < 8000 && slot0()?.value === before) {
-    await wait(200);
-    waited += 200;
-  }
-  assert.equal(slot0()?.value, '', '回合走完后队首应该被消耗掉');
-  const again = doc.querySelector<HTMLElement>('#commander');
-  assert.ok(again && !again.hidden, '回到玩家回合时指挥官栏应该重新出现');
+  const running = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(running?.querySelector('[data-cmd="stop"]'), '执行中应该有中断按钮');
+  assert.ok(running?.querySelector('.cmd-progress'), '应该有进度条');
+  assert.ok((running?.textContent ?? '').includes('/ 5'), `应该显示第几回合，实际：${running?.textContent}`);
+
+  click('[data-cmd="stop"]');
+  await wait(250);
+
+  const back = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(back?.querySelector('[data-cmd="run"]'), '中断后应该回到可排计划的状态');
+  assert.equal(back?.querySelectorAll('select[data-slot]').length, 5, '5 格应该还在');
+  assert.ok(!back?.querySelector('[data-cmd="stop"]'), '不该还停在进度态');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

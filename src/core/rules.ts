@@ -595,8 +595,14 @@ export function unitIncome(s: GameState, u: Unit): number {
   return income;
 }
 
-/** 回合结束时给当前玩家结算收入：基础 + 每座城 + 每个经济单位按其所在地形 */
-function settleIncome(s: GameState, p: PlayerId): number {
+/**
+ * 这一方现在每回合能收多少金。**纯函数，不写状态。**
+ *
+ * 单独抽出来是因为界面要拿它算"接下来几回合大概还有多少钱可花"。
+ * 估算和真实结算必须同源——各写一遍的话，指挥官排计划时看到的数字
+ * 早晚会和实际扣钱对不上，而这个模式的全部乐趣就是算这笔账。
+ */
+export function incomeOf(s: GameState, p: PlayerId): number {
   let income = CONFIG.baseIncome;
   for (const city of citiesOf(s, p)) {
     income += eraDef(city.era).cityIncome;
@@ -607,7 +613,12 @@ function settleIncome(s: GameState, p: PlayerId): number {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyIncome) income = e.hooks.modifyIncome({ state: s, player: p, income });
   }
-  income = Math.max(0, income);
+  return Math.max(0, income);
+}
+
+/** 回合结束时给当前玩家结算收入：基础 + 每座城 + 每个经济单位按其所在地形 */
+function settleIncome(s: GameState, p: PlayerId): number {
+  const income = incomeOf(s, p);
   s.players[p].gold += income;
   return income;
 }

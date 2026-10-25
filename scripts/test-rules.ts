@@ -29,6 +29,7 @@ import {
   distance,
   distToCity,
   idx,
+  incomeOf,
   movePower,
   ordersOf,
   previewAttack,
@@ -3636,6 +3637,16 @@ test('同样的配置和操作序列得到同样的结果', () => {
   assert.equal(JSON.stringify(run()), JSON.stringify(run()));
 });
 
+
+test('incomeOf 和真实结算同源', () => {
+  // 界面靠它算"接下来几回合还有多少钱"，算错就会误导玩家排计划
+  const s = fresh();
+  const before = s.players.B.gold;
+  const income = incomeOf(s, 'B');
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.players.B.gold, before + income, '估算应该和结束回合实际到账一致');
+});
 
 console.log('\n指挥官模式');
 
