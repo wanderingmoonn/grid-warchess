@@ -1120,7 +1120,14 @@ a.btn {
     padding: 12px;
     gap: 12px;
   }
+  /*
+   * 单列布局是"棋盘在上、面板在下"，放不下时由 .main 整条竖着滚。
+   * 所以这两行必须是"按内容撑开"的：上面全局的 min-height: 0 是给并排布局
+   * 留缩量用的，在单列里反而让网格行被压扁——棋盘比所在行高，居中后上下各
+   * 溢出一截，被 .app 的 overflow: hidden 裁掉，看上去就是"顶栏盖住了最后一行"。
+   */
   .board-wrap {
+    min-height: auto;
     padding-bottom: 4px;
   }
   .board {
@@ -1128,6 +1135,7 @@ a.btn {
   }
   .side {
     overflow: visible;
+    min-height: auto;
   }
 }
 
