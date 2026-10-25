@@ -343,7 +343,7 @@ check('扩展规则可以勾选并高亮', () => {
 check('兵种至少保留一个，不能全取消', () => {
   const total = doc.querySelectorAll('[data-unit]').length;
   assert.ok(total >= 4);
-  // 反复点掉当前激活的兵种；面板会重绘，所以每次都重新查
+  // 兵种 chip 是就地翻转的（不重绘面板），所以还能抓住同一个节点
   for (let i = 0; i < total + 2; i++) {
     const on = doc.querySelector<HTMLElement>('[data-unit].active');
     if (!on) break;
@@ -356,6 +356,41 @@ check('兵种池按时代分组展示', () => {
   assert.ok(doc.querySelectorAll('.era-group').length >= 3, '三个时代各一组');
   const tags = Array.from(doc.querySelectorAll('.era-tag')).map((n) => n.textContent?.trim());
   assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '现代']);
+});
+
+check('点兵种不重绘面板，不会把页面弹回顶部', () => {
+  const body = doc.querySelector<HTMLElement>('.modal-body');
+  assert.ok(body, '找不到面板滚动区');
+  // 模拟"已经滚到兵种池那一屏"
+  body.scrollTop = 240;
+
+  const chip = doc.querySelector<HTMLElement>('[data-unit]:not(.active)');
+  assert.ok(chip, '需要一个未选中的兵种');
+  chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  // 重建 .modal-body 会把 scrollTop 清零，这就是"弹回顶部"的根因
+  assert.equal(doc.querySelector<HTMLElement>('.modal-body'), body, '点兵种不该重建滚动区');
+  assert.equal(body.scrollTop, 240, '滚动位置不该被重置');
+  assert.ok(chip.classList.contains('active'), 'chip 应该就地点亮');
+});
+
+check('确实要重绘的按钮，滚动位置也会被搬回来', () => {
+  const body = doc.querySelector<HTMLElement>('.modal-body');
+  assert.ok(body);
+  body.scrollTop = 300;
+  // 棋盘大小这类按钮会整块重绘面板（因为要联动别的选项）
+  const btn = doc.querySelector<HTMLElement>('[data-size]');
+  assert.ok(btn);
+  btn.focus();
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const after = doc.querySelector<HTMLElement>('.modal-body');
+  assert.ok(after, '面板应该还在');
+  assert.equal(after.scrollTop, 300, '重绘后滚动位置应该被搬回来');
+  assert.ok(
+    (doc.activeElement as HTMLElement | null)?.hasAttribute('data-size'),
+    '焦点也该还回同一类按钮上，否则键盘操作会断',
+  );
 });
 
 // 把兵种全部勾回来，后面的对局才有完整兵种可造

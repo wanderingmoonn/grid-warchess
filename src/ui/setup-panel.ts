@@ -61,7 +61,33 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
     };
 
+    /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
+    const selectorFor = (el: HTMLElement): string | null => {
+      const d = el.dataset;
+      if (d.unit) return `[data-unit="${d.unit}"]`;
+      if (d.era) return `[data-era="${d.era}"]`;
+      if (d.size) return `[data-size="${d.size}"]`;
+      if (d.mapstyle) return `[data-mapstyle="${d.mapstyle}"]`;
+      if (d.symmetry) return `[data-symmetry="${d.symmetry}"]`;
+      if (d.ailevel) return `[data-ailevel="${d.ailevel}"]`;
+      if (d.ai !== undefined) return `[data-ai="${d.ai}"]`;
+      if (d.act) return `[data-act="${d.act}"]`;
+      return null;
+    };
+
     const paint = () => {
+      // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
+      // 兵种池在面板最下面，点一个兵种就"弹回顶部"就是这么来的——
+      // 所以先把两者记下来，画完再搬回去。
+      const prevBody = mask.querySelector<HTMLElement>('.modal-body');
+      const prevScrollTop = prevBody?.scrollTop ?? 0;
+      const prevScrollLeft = prevBody?.scrollLeft ?? 0;
+      const prevFocusEl = document.activeElement;
+      const prevFocus =
+        prevFocusEl instanceof HTMLElement && mask.contains(prevFocusEl)
+          ? selectorFor(prevFocusEl)
+          : null;
+
       const eraChips = ERAS.map(
         (e) =>
           `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
@@ -194,6 +220,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           </div>
         </div>
       `;
+
+      // 把滚动位置与焦点搬回重绘前的状态
+      const nextBody = mask.querySelector<HTMLElement>('.modal-body');
+      if (nextBody) {
+        nextBody.scrollTop = prevScrollTop;
+        nextBody.scrollLeft = prevScrollLeft;
+      }
+      if (prevFocus) {
+        mask.querySelector<HTMLElement>(prevFocus)?.focus({ preventScroll: true });
+      }
     };
 
     mask.addEventListener('click', (e) => {
@@ -255,8 +291,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       const unitBtn = target.closest<HTMLElement>('[data-unit]');
       if (unitBtn?.dataset.unit) {
-        toggleUnit(unitBtn.dataset.unit);
-        paint();
+        const id = unitBtn.dataset.unit;
+        const before = config.enabledUnits.length;
+        toggleUnit(id);
+        // 只翻转这一颗 chip 的样式，不重绘整个面板。
+        // 兵种池在面板最底下，重绘会把滚动位置清零，点一下就像被弹回顶部；
+        // 而且全部重绘还会让 chip 闪一下。和上面扩展勾选是同一套做法。
+        if (config.enabledUnits.length !== before) {
+          unitBtn.classList.toggle('active', config.enabledUnits.includes(id));
+        }
         return;
       }
 
