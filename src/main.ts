@@ -233,6 +233,42 @@ function render(): void {
     waitingForPeer: !myTurn() && !state.winner,
   });
   syncTopbarScroll();
+  fitBoard();
+}
+
+/**
+ * 把棋盘压进容器。
+ *
+ * 为什么要用 JS 量而不是交给 CSS：
+ *   · calc(100dvh - 108px) 把"顶栏多高"写死了，后来加参谋部栏就顶穿容器；
+ *   · 容器查询（100cqh）在不支持的客户端上整条声明失效，棋盘退回 100% 宽，
+ *     容器比它矮时就裁掉最后一两行——就是"只能看到 11 行"那个现象。
+ * 量一次写像素，就不存在"支持不支持"的问题了。
+ *
+ * 量的是"容器宽"和"视口高减去实际工具栏高度"：
+ * 容器高度在窄屏下是由内容撑出来的，直接量它自己会绕成环
+ * （棋盘变高 → 容器变高 → 棋盘更高）。
+ */
+function fitBoard(): void {
+  const wrap = boardEl.parentElement;
+  if (!wrap) return;
+  const width = wrap.clientWidth;
+  if (width <= 0) return;
+
+  const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
+  const box = wrap.parentElement;
+  const cs = box ? window.getComputedStyle(box) : null;
+  const padY = cs
+    ? parseFloat(cs.paddingTop || '0') + parseFloat(cs.paddingBottom || '0')
+    : 36;
+
+  // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
+  const viewportH = appEl.clientHeight || window.innerHeight;
+  const availH = viewportH - chrome - padY;
+  // 160 是地板：窗口被压到极窄时也别让棋盘缩成一个点
+  const size = Math.max(160, Math.round(Math.min(width, availH)));
+  boardEl.style.width = `${size}px`;
+  boardEl.style.height = `${size}px`;
 }
 
 /**
@@ -1029,6 +1065,7 @@ commanderEl.addEventListener('click', (e) => {
     commanderExpanded = !commanderExpanded;
     commanderSig = '';
     renderCommander();
+    fitBoard();
   }
 });
 

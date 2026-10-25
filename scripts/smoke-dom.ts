@@ -889,5 +889,29 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
   assert.ok(!back?.querySelector('[data-cmd="stop"]'), '不该还停在进度态');
 });
 
+check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方形的', () => {
+  // jsdom 没有布局引擎，量什么都是 0，所以这里手工喂一组尺寸进去，
+  // 验的是那段算术本身：size = min(容器宽, 视口高 − 顶栏 − 参谋部栏 − 内边距)
+  const wrap = doc.querySelector<HTMLElement>('.board-wrap');
+  const board = doc.querySelector<HTMLElement>('.board');
+  const topbar = doc.querySelector<HTMLElement>('#topbar');
+  const app = doc.querySelector<HTMLElement>('#app');
+  assert.ok(wrap && board && topbar && app, '找不到尺寸计算需要的元素');
+
+  Object.defineProperty(wrap, 'clientWidth', { configurable: true, value: 900 });
+  Object.defineProperty(topbar, 'offsetHeight', { configurable: true, value: 54 });
+  Object.defineProperty(app, 'clientHeight', { configurable: true, value: 700 });
+
+  // 换个 AI 速度会触发一次完整 render，也就走了 fitBoard
+  click('[data-act="ai-speed"]');
+
+  const w = Number.parseFloat(board.style.width);
+  const h = Number.parseFloat(board.style.height);
+  assert.ok(w > 0, `棋盘宽度应该被算出来，实际「${board.style.width}」`);
+  assert.equal(w, h, '必须还是正方形，否则格子会被拉成长方形');
+  // 视口 700 是瓶颈（容器宽 900）：700 − 54 顶栏 − 0 内边距(jsdom 读不到) = 646
+  assert.equal(w, 646, `应该被视口高度卡住，实际 ${w}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
