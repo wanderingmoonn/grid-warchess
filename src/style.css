@@ -1,0 +1,1666 @@
+:root {
+  --bg: #f2efe8;
+  --panel: #ffffff;
+  --panel-2: #faf8f4;
+  --line: #e2ddd3;
+  --line-strong: #c8c1b3;
+  --text: #2b2823;
+  --text-2: #6b6459;
+  --text-3: #9a9287;
+
+  --a: #2f6ea8;
+  --a-soft: #dfeaf4;
+  --b: #b8433a;
+  --b-soft: #f6e2df;
+
+  --plain: #dfe9d3;
+  --forest: #aecb98;
+  --hill: #ddcba6;
+  --water: #a8cadf;
+  --mountain: #b8b3ab;
+  --bridge: #c9a878;
+  --city: #d3d7de;
+
+  --radius: 12px;
+  --cell: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* ---------- 顶栏 ---------- */
+/*
+ * 按钮多到一屏放不下（预览面板窄、手机上更窄），所以顶栏本身就是一个
+ * 横向滚动容器：放不下就横着滚，滚动条一直可见——它是"这里还有东西"的唯一提示。
+ * 子元素一律 flex: 0 0 auto，宁可让它滚，也不要被压成两行字。
+ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+  height: 54px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* 滚动条细一点，但一定要看得见 */
+.topbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.topbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.topbar::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 3px;
+}
+
+.topbar::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+.topbar > * {
+  flex: 0 0 auto;
+}
+
+.topbar .btn,
+.topbar .room-pill {
+  white-space: nowrap;
+}
+
+/* [hidden] 会被 .btn 之类的 display 覆盖，这里强制一下 */
+.topbar [hidden] {
+  display: none !important;
+}
+
+/* 还有没滚出来的按钮时，用内阴影给个"这边还有东西"的暗示 */
+.topbar.can-scroll-left {
+  box-shadow: inset 22px 0 16px -16px rgba(43, 40, 35, 0.45);
+}
+
+.topbar.can-scroll-right {
+  box-shadow: inset -22px 0 16px -16px rgba(43, 40, 35, 0.45);
+}
+
+.topbar.can-scroll-left.can-scroll-right {
+  box-shadow:
+    inset 22px 0 16px -16px rgba(43, 40, 35, 0.45),
+    inset -22px 0 16px -16px rgba(43, 40, 35, 0.45);
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.brand small {
+  color: var(--text-3);
+  font-weight: 400;
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+.topbar-spacer {
+  flex: 1 1 0;
+}
+
+/* 当前回合 / 行动方：观战和托管时最需要一眼看清的状态 */
+.turn-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.turn-chip b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.side-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.side-dot.a {
+  background: var(--a);
+}
+
+.side-dot.b {
+  background: var(--b);
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- 主区 ---------- */
+.main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  padding: 18px;
+  min-height: 0;
+}
+
+.board-wrap {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- 棋盘 ---------- */
+.board {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  width: min(100%, calc(100dvh - 108px));
+  max-width: 100%;
+  border-radius: 14px;
+  background: #cfc9bc;
+  padding: 6px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 8px 28px rgba(60, 50, 30, 0.14);
+  user-select: none;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.tile {
+  position: relative;
+  border-right: 1px solid rgba(0, 0, 0, 0.045);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.045);
+  cursor: pointer;
+}
+
+.tile.t-plain {
+  background: var(--plain);
+}
+.tile.t-forest {
+  background: var(--forest);
+}
+.tile.t-hill {
+  background: var(--hill);
+}
+.tile.t-water {
+  background: var(--water);
+  cursor: not-allowed;
+}
+.tile.t-mountain {
+  background: var(--mountain);
+  cursor: not-allowed;
+}
+.tile.t-bridge {
+  background: var(--bridge);
+}
+.tile.t-city {
+  background: var(--city);
+}
+
+.tile.t-forest::before {
+  content: '';
+  position: absolute;
+  inset: 26% 30% 34% 30%;
+  border-radius: 50% 50% 42% 42%;
+  background: rgba(60, 100, 50, 0.35);
+}
+
+.tile.t-hill::before {
+  content: '';
+  position: absolute;
+  inset: 42% 20% 32% 20%;
+  border-radius: 50% 50% 10% 10%;
+  background: rgba(140, 110, 60, 0.32);
+}
+
+.tile.t-bridge::before {
+  content: '';
+  position: absolute;
+  inset: 30% 0% 30% 0%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(120, 90, 55, 0.5) 0 3px,
+    rgba(120, 90, 55, 0.18) 3px 7px
+  );
+}
+
+.tile.t-mountain::before {
+  content: '';
+  position: absolute;
+  inset: 18% 16% 26% 16%;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  background: rgba(70, 62, 52, 0.42);
+}
+
+.tile.t-city {
+  background: #dfe2e7;
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+}
+
+.tile.t-city.own-A {
+  background: #d9e5ef;
+}
+
+.tile.t-city.own-B {
+  background: #f1dedb;
+}
+
+/* 叠加高亮层 */
+.tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: background 0.12s ease;
+}
+
+.tile.reach::after {
+  background: rgba(47, 110, 168, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(47, 110, 168, 0.55);
+}
+
+.tile.reach-hover::after {
+  background: rgba(47, 110, 168, 0.52);
+}
+
+.tile.attackable::after {
+  background: rgba(184, 67, 58, 0.2);
+  box-shadow: inset 0 0 0 2px rgba(184, 67, 58, 0.85);
+}
+
+.tile.selected::after {
+  box-shadow: inset 0 0 0 3px #e0a33c;
+}
+
+/* 威胁范围：这个单位挪过去之后能打到的格子，用淡红斜纹表示 */
+.tile.threat::after {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(200, 80, 60, 0.13) 0 4px,
+    rgba(200, 80, 60, 0) 4px 8px
+  );
+  box-shadow: inset 0 0 0 1px rgba(200, 80, 60, 0.26);
+}
+
+/* 建造选址：可以落子的空地 */
+.tile.placeable::after {
+  background: rgba(224, 163, 60, 0.26);
+  box-shadow: inset 0 0 0 2px rgba(224, 163, 60, 0.85);
+  animation: place-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes place-pulse {
+  0%,
+  100% {
+    background: rgba(224, 163, 60, 0.2);
+  }
+  50% {
+    background: rgba(224, 163, 60, 0.4);
+  }
+}
+
+.tile.spawnable::after {
+  background: rgba(224, 163, 60, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(224, 163, 60, 0.75);
+}
+
+.board.fog .tile.out {
+  filter: brightness(0.74) saturate(0.55);
+}
+
+/* ---------- 棋子层 ---------- */
+.units {
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+}
+
+/* ---------- 城市层 ---------- */
+/* 放在棋子之后、背景透明：视觉上压在棋子上方，但只画边框和血条，
+   点击全部穿透，点格子照常生效。 */
+.cities {
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+}
+
+.city-block {
+  position: absolute;
+  border: 2px solid rgba(95, 94, 90, 0.45);
+  border-radius: 9px;
+  background: transparent;
+  pointer-events: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.city-block.owner-A {
+  border-color: rgba(47, 110, 168, 0.78);
+}
+
+.city-block.owner-B {
+  border-color: rgba(184, 67, 58, 0.78);
+}
+
+.city-block.siege-target {
+  border-color: #d9483f;
+  animation: siege-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes siege-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(217, 72, 63, 0.35),
+      0 0 0 7px rgba(217, 72, 63, 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(217, 72, 63, 0.62),
+      0 0 0 12px rgba(217, 72, 63, 0.2);
+  }
+}
+
+.city-block.selected {
+  box-shadow: 0 0 0 3px rgba(224, 163, 60, 0.9);
+}
+
+.city-plate {
+  position: absolute;
+  left: 7%;
+  right: 7%;
+  top: 5%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.city-name {
+  font-size: calc(var(--cell) * 0.19);
+  line-height: 1;
+  font-weight: 500;
+  color: rgba(43, 40, 35, 0.55);
+  white-space: nowrap;
+}
+
+/* 时代徽章：一眼看出哪座城是高级城 */
+.city-era {
+  font-size: calc(var(--cell) * 0.18);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: rgba(43, 40, 35, 0.24);
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+}
+
+.city-block.era-2 .city-era {
+  background: rgba(184, 120, 40, 0.85);
+}
+
+.city-block.era-3 .city-era {
+  background: rgba(140, 60, 140, 0.9);
+}
+
+.city-block.era-2 {
+  border-width: 2.5px;
+}
+
+.city-block.era-3 {
+  border-width: 3px;
+  box-shadow: 0 0 0 1px rgba(140, 60, 140, 0.25);
+}
+
+.city-block.era-3.siege-target {
+  animation: siege-pulse 1.15s ease-in-out infinite;
+}
+
+.city-hp {
+  flex: 1;
+  height: calc(var(--cell) * 0.13);
+  min-height: 4px;
+  background: rgba(0, 0, 0, 0.36);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.city-hp > i {
+  display: block;
+  height: 100%;
+  background: #7ec47e;
+  transition: width 0.25s ease;
+}
+
+.city-hp > i.mid {
+  background: #e8c76b;
+}
+
+.city-hp > i.low {
+  background: #e07b6b;
+}
+
+.city-armor {
+  font-size: calc(var(--cell) * 0.19);
+  line-height: 1;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(43, 40, 35, 0.74);
+  border-radius: 3px;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+.unit {
+  position: absolute;
+  width: calc(100% / var(--cols, 12));
+  height: calc(100% / var(--rows, 12));
+  padding: calc(var(--cell) * 0.075);
+  transition:
+    left 0.16s ease,
+    top 0.16s ease;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.unit-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 26%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: calc(var(--cell) * 0.4);
+  font-weight: 600;
+  line-height: 1;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(0, 0, 0, 0.12) inset;
+  transition:
+    transform 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.unit.owner-A .unit-inner {
+  background: var(--a);
+}
+.unit.owner-B .unit-inner {
+  background: var(--b);
+}
+
+.unit:hover .unit-inner {
+  transform: translateY(-1px) scale(1.04);
+}
+
+.unit.selected .unit-inner {
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 4px #e0a33c,
+    0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.unit.spent .unit-inner {
+  opacity: 0.52;
+  filter: grayscale(0.5);
+}
+
+/* 建筑：方角 + 亮边，一眼看出"这玩意儿不会动" */
+.unit.cat-building .unit-inner {
+  border-radius: 12%;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* 经济单位：金色内描边，提醒你它是赚钱的、也是脆的 */
+.unit.cat-economy .unit-inner {
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 214, 102, 0.85),
+    0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.unit.ghost {
+  pointer-events: none;
+  opacity: 0.42;
+}
+
+.unit.ghost .unit-inner {
+  background: #8b8477;
+  border: 2px dashed rgba(255, 255, 255, 0.85);
+  box-shadow: none;
+}
+
+.unit-hp {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 5%;
+  height: 13%;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.unit-hp > i {
+  display: block;
+  height: 100%;
+  background: #86d386;
+  transition: width 0.2s ease;
+}
+
+.unit-hp > i.mid {
+  background: #e8c76b;
+}
+.unit-hp > i.low {
+  background: #e07b6b;
+}
+
+/* ---------- 侧栏 ---------- */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 13px;
+  flex: 0 0 auto;
+}
+
+.card-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+/* 双方对比 */
+.versus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vs-side {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vs-side.right {
+  text-align: right;
+}
+
+.vs-name {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vs-side.right .vs-name {
+  justify-content: flex-end;
+}
+
+.vs-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.vs-dot.a {
+  background: var(--a);
+}
+.vs-dot.b {
+  background: var(--b);
+}
+
+.vs-stats {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.vs-mid {
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+  min-width: 52px;
+}
+
+.turn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.turn-badge.active-A {
+  background: var(--a-soft);
+  border-color: rgba(47, 110, 168, 0.35);
+  color: var(--a);
+}
+
+.turn-badge.active-B {
+  background: var(--b-soft);
+  border-color: rgba(184, 67, 58, 0.35);
+  color: var(--b);
+}
+
+/* 单位信息 */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 3px 0;
+  color: var(--text-2);
+}
+
+.info-row b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* 单位与地形的"说明书" */
+.unit-notes {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.85;
+}
+
+.hpbar {
+  height: 6px;
+  border-radius: 3px;
+  background: #eae6dd;
+  overflow: hidden;
+  margin: 8px 0 10px;
+}
+
+.hpbar > i {
+  display: block;
+  height: 100%;
+  background: #7ec47e;
+  transition: width 0.2s ease;
+}
+
+.unit-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.unit-chip {
+  width: 30px;
+  height: 30px;
+  border-radius: 26%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.unit-chip.a {
+  background: var(--a);
+}
+.unit-chip.b {
+  background: var(--b);
+}
+
+.unit-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.unit-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 造兵 */
+.recruit-group {
+  margin-bottom: 10px;
+}
+
+.recruit-group:last-child {
+  margin-bottom: 0;
+}
+
+.recruit-group-title {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  margin-bottom: 5px;
+}
+
+.recruit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.recruit-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.recruit-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: #fff;
+}
+
+.recruit-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.recruit-btn .meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.recruit-btn .meta b {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.recruit-btn .meta span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.recruit-btn .price {
+  font-size: 12px;
+  color: #a8761a;
+  font-weight: 500;
+}
+
+/* 升级时代按钮：比产兵按钮更醒目，因为这是个战略决策 */
+.upgrade-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #cdb684;
+  border-radius: 10px;
+  background: #fbf7ea;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.upgrade-btn:hover:not(:disabled) {
+  background: #f6efd8;
+  border-color: #b19a5c;
+}
+
+.upgrade-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.upgrade-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upgrade-main b {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.upgrade-main span {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+
+.upgrade-btn .price {
+  font-size: 13px;
+  font-weight: 500;
+  color: #a8761a;
+}
+
+/* 战报 */
+.log {
+  max-height: 210px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.log-item {
+  padding: 2px 0;
+  color: var(--text-2);
+  border-bottom: 1px dotted transparent;
+}
+
+.log-item .who {
+  font-weight: 600;
+  margin-right: 5px;
+}
+
+.log-item.a .who {
+  color: var(--a);
+}
+.log-item.b .who {
+  color: var(--b);
+}
+
+.log-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+/* 底部按钮 */
+.side-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.btn {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  padding: 9px 13px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.35;
+}
+
+.btn-primary {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+  font-weight: 500;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1f1d19;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-sm {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+/* ---------- 交接遮罩 ---------- */
+.handoff {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(242, 239, 232, 0.94);
+  backdrop-filter: blur(8px);
+}
+
+.handoff-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 32px 36px;
+  text-align: center;
+  max-width: 380px;
+  box-shadow: 0 20px 60px rgba(60, 50, 30, 0.16);
+}
+
+.handoff-card h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.handoff-card p {
+  margin: 0 0 22px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.handoff-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+
+.handoff-badge.a {
+  background: var(--a-soft);
+  color: var(--a);
+}
+.handoff-badge.b {
+  background: var(--b-soft);
+  color: var(--b);
+}
+
+/* ---------- 提示条 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  background: rgba(43, 40, 35, 0.94);
+  color: #fff;
+  padding: 9px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  z-index: 60;
+  animation: toast-in 0.18s ease;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 920px) {
+  .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+    padding: 12px;
+    gap: 12px;
+  }
+  .board-wrap {
+    padding-bottom: 4px;
+  }
+  .board {
+    width: 100%;
+  }
+  .side {
+    overflow: visible;
+  }
+}
+
+/* ---------- 开局设置面板 ---------- */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(30, 28, 24, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.modal {
+  width: min(560px, 100%);
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(40, 35, 25, 0.28);
+  overflow: hidden;
+}
+
+.modal-head {
+  padding: 20px 24px 0;
+}
+
+.modal-head h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.modal-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.modal-body {
+  padding: 18px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.field-hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+/* AI 难度那一行：跟上面的对手模式分个层，别让人以为它是第四种模式 */
+.ai-level-row {
+  margin-top: 8px;
+}
+
+.era-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.era-group:last-child {
+  margin-bottom: 0;
+}
+
+.era-tag {
+  flex: 0 0 38px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: right;
+}
+
+.chip {
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.chip:hover {
+  border-color: var(--text-3);
+}
+
+.chip.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+}
+
+.expansion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.expansion-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.expansion-item:hover {
+  border-color: var(--line-strong);
+}
+
+.expansion-item.on {
+  border-color: #8fb0cc;
+  background: #f3f8fb;
+}
+
+.expansion-item input {
+  margin-top: 3px;
+  accent-color: var(--a);
+}
+
+.expansion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.expansion-body b {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.expansion-body span {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.seed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.seed-row code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12.5px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.meta-line {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+
+/* ---------- 兵种编辑器 ---------- */
+.modal.wide {
+  width: min(680px, 100%);
+}
+
+.editor-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.editor-group {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.editor-group:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.editor-group-title {
+  font-size: 11.5px;
+  color: var(--text-3);
+  letter-spacing: 0.05em;
+  margin-bottom: 7px;
+}
+
+.editor-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.editor-row:hover {
+  background: var(--panel-2);
+}
+
+.editor-chip {
+  flex: 0 0 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--text);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.editor-name {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+}
+
+.editor-name small {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.editor-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.editor-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.7;
+  padding: 8px 2px;
+}
+
+.editor-block {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.editor-block:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.editor-block-title {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.editor-field input,
+.editor-field select {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.editor-field input:focus,
+.editor-field select:focus {
+  outline: 2px solid rgba(47, 110, 168, 0.35);
+  outline-offset: 1px;
+}
+
+.editor-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.editor-check input {
+  accent-color: var(--a);
+}
+
+.editor-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 10px;
+}
+
+.editor-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+.editor-ability-group {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 7px;
+}
+
+.editor-ability-tag {
+  flex: 0 0 34px;
+  padding-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.editor-ability-group .editor-checks {
+  flex: 1;
+}
+
+/* ---------- 联机 / 房间 ---------- */
+
+.modal-narrow {
+  width: min(440px, 100%);
+}
+
+/* 顶栏上的房间胶囊：一眼能看到自己正在某局里 */
+.room-pill {
+  border: 1px solid var(--a);
+  background: var(--a-soft);
+  color: var(--a);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.text-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.text-input:focus {
+  outline: 2px solid var(--a-soft);
+  border-color: var(--a);
+}
+
+.room-input {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 16px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.btn-danger {
+  color: var(--b);
+  border-color: var(--b-soft);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--b-soft);
+}
+
+.online-error {
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: var(--b-soft);
+  color: var(--b);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.online-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--text-2);
+}
+
+.room-code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-align: center;
+  padding: 14px 0 12px;
+  color: var(--text);
+}
+
+.room-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.room-status {
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.room-status.go {
+  border-color: var(--a);
+  background: var(--a-soft);
+  color: var(--a);
+  font-weight: 500;
+}
+
+.room-status.wait {
+  color: var(--text-2);
+}
+
+.room-status.bad {
+  border-color: var(--b-soft);
+  background: var(--b-soft);
+  color: var(--b);
+}
+
+.room-seats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.seat-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.seat-chip.mine {
+  border-color: var(--text);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 顶栏按钮越来越多，窄屏先保证动作条还在视野里 */
+@media (max-width: 1180px) {
+  .topbar {
+    gap: 10px;
+  }
+
+  .brand small {
+    display: none;
+  }
+}
+
+/* 手机：横向空间太贵，标题让给按钮，留一个回合胶囊当锚点 */
+@media (max-width: 640px) {
+  .topbar {
+    padding: 0 10px;
+    gap: 8px;
+    height: 50px;
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .turn-chip {
+    font-size: 11.5px;
+    padding: 3px 9px;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .topbar .btn {
+    padding: 7px 10px;
+    font-size: 12.5px;
+  }
+}

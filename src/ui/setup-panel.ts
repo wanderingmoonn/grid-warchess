@@ -1,0 +1,293 @@
+/**
+ * 开局设置面板。
+ *
+ * 这是给"每次开局想换个玩法"准备的：棋盘多大、开哪些扩展、用哪些兵种。
+ * 面板只负责收集选择，真正的校验和构建交给 createMatch。
+ */
+
+import { ERAS } from '../core/config.ts';
+import { allAvailableUnits } from './unit-editor.ts';
+import { EXPANSIONS } from '../core/expansions.ts';
+import { MAP_STYLES, MAP_SYMMETRIES } from '../core/mapgen.ts';
+import { BOARD_SIZES, randomSeed } from '../core/setup.ts';
+import type { MatchConfig } from '../core/types.ts';
+
+export interface SetupResult {
+  config: MatchConfig;
+  seed: number;
+}
+
+/**
+ * 起始时代对应的标准棋盘尺寸。
+ *
+ * 这是"标准对局"的默认组合：古典配小图打快棋，火药之后配大图拉开战线。
+ * 玩家当然可以手动改尺寸——这里只是把默认值调成匹配的。
+ */
+export function DEFAULT_SIZE_FOR_ERA(era: number): number {
+  if (era <= 1) return 12;
+  if (era === 2) return 16;
+  return 20;
+}
+
+export function openSetupPanel(initial: MatchConfig, seed: number): Promise<SetupResult | null> {
+  return new Promise((resolve) => {
+    const config: MatchConfig = {
+      size: initial.size,
+      startEra: initial.startEra,
+      aiOpponent: initial.aiOpponent,
+      aiAlly: initial.aiAlly,
+      aiLevel: initial.aiLevel === 'basic' ? 'basic' : 'advanced',
+      mapStyle: initial.mapStyle ?? 'random',
+      mapSymmetry: initial.mapSymmetry ?? 'fair',
+      expansionIds: [...initial.expansionIds],
+      enabledUnits: [...initial.enabledUnits],
+    };
+    let currentSeed = seed;
+
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+
+    const close = (result: SetupResult | null) => {
+      mask.remove();
+      resolve(result);
+    };
+
+    const toggleUnit = (id: string) => {
+      if (config.enabledUnits.includes(id)) {
+        if (config.enabledUnits.length <= 1) return;
+        config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
+      } else {
+        config.enabledUnits.push(id);
+      }
+    };
+
+    const paint = () => {
+      const eraChips = ERAS.map(
+        (e) =>
+          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
+      ).join('');
+
+      const styleChips = MAP_STYLES.map(
+        (st) =>
+          `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
+      ).join('');
+
+      const symChips = MAP_SYMMETRIES.map(
+        (sy) =>
+          `<button class="chip ${config.mapSymmetry === sy.id ? 'active' : ''}" data-symmetry="${sy.id}" title="${sy.note}">${sy.name}</button>`,
+      ).join('');
+
+      // 只在对局里有 AI 的时候才给难度选项：双人热座选它没有意义
+      const aiOn = config.aiOpponent || config.aiAlly;
+      const aiLevelChips = aiOn
+        ? `<div class="chip-row ai-level-row">
+            <button class="chip ${config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
+            <button class="chip ${config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="会算威胁范围、换子价值和兵种搭配，走位明显更刁">高级 AI</button>
+          </div>
+          <div class="field-hint">初级适合熟悉规则；高级会躲炮口、会挑软的打</div>`
+        : '';
+
+      const sizeChips = BOARD_SIZES.map(
+        (s) =>
+          `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
+      ).join('');
+
+      // 兵种按时代分组展示：一眼看出哪些是开局就有、哪些要升级城市才能造
+      const catalog = allAvailableUnits();
+      const unitGroups = ERAS.map((era) => {
+        const units = Object.values(catalog).filter((u) => u.era === era.level);
+        if (units.length === 0) return '';
+        const chips = units
+          .map(
+            (u) =>
+              `<button class="chip ${config.enabledUnits.includes(u.id) ? 'active' : ''}" data-unit="${u.id}">
+                 ${u.short} ${u.name}
+               </button>`,
+          )
+          .join('');
+        return `<div class="era-group">
+          <span class="era-tag">${era.name}</span>
+          <div class="chip-row">${chips}</div>
+        </div>`;
+      }).join('');
+
+      const expItems = EXPANSIONS.map(
+        (e) => `
+        <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
+          <input type="checkbox" data-exp="${e.id}" ${config.expansionIds.includes(e.id) ? 'checked' : ''} />
+          <span class="expansion-body">
+            <b>${e.name}</b>
+            <span>${e.summary}</span>
+          </span>
+        </label>`,
+      ).join('');
+
+      mask.innerHTML = `
+        <div class="modal">
+          <div class="modal-head">
+            <h2>新对局</h2>
+            <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>
+          </div>
+
+          <div class="modal-body">
+            <section class="field">
+              <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
+              <div class="chip-row">
+                <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
+                <button class="chip ${config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="1">人机对战</button>
+                <button class="chip ${config.aiAlly ? 'active' : ''}" data-ai="2">双 AI 观战</button>
+              </div>
+              ${aiLevelChips}
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                起始时代 <span class="field-hint">从哪一级开始；越高一局越短</span>
+              </div>
+              <div class="chip-row">${eraChips}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">棋盘大小</div>
+              <div class="chip-row">${sizeChips}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种</span>
+              </div>
+              <div class="chip-row">${styleChips}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                地形对称 <span class="field-hint">地势各异：两侧地形数量相同、分布不同</span>
+              </div>
+              <div class="chip-row">${symChips}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                兵种池 <span class="field-hint">至少留一个；高时代兵种要城市升级后才能生产</span>
+              </div>
+              ${unitGroups}
+            </section>
+
+            <section class="field">
+              <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
+              <div class="expansion-list">${expItems}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">地图种子</div>
+              <div class="seed-row">
+                <code>${currentSeed}</code>
+                <button class="btn btn-sm" data-act="reroll">换一张地图</button>
+              </div>
+              <div class="field-hint">同一个种子永远生成同一张地图，方便复盘和公平对战。</div>
+            </section>
+          </div>
+
+          <div class="modal-foot">
+            <button class="btn" data-act="cancel">取消</button>
+            <button class="btn btn-primary" data-act="start">开始对局</button>
+          </div>
+        </div>
+      `;
+    };
+
+    mask.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+
+      if (target === mask) {
+        close(null);
+        return;
+      }
+
+      const aiBtn = target.closest<HTMLElement>('[data-ai]');
+      if (aiBtn?.dataset.ai !== undefined) {
+        const mode = aiBtn.dataset.ai;
+        config.aiAlly = mode === '2';
+        config.aiOpponent = mode === '1' || mode === '2';
+        paint();
+        return;
+      }
+
+      const lvBtn = target.closest<HTMLElement>('[data-ailevel]');
+      if (lvBtn?.dataset.ailevel) {
+        config.aiLevel = lvBtn.dataset.ailevel === 'basic' ? 'basic' : 'advanced';
+        paint();
+        return;
+      }
+
+      const eraBtn = target.closest<HTMLElement>('[data-era]');
+      if (eraBtn?.dataset.era) {
+        config.startEra = Number(eraBtn.dataset.era);
+        // 选时代会顺手把棋盘换成这个时代的"标准尺寸"：
+        // 古典 12×12、中世 16×16、火药/工业/现代 20×20。
+        // 理由是实测出来的——小图配现代开局，摆不下几个兵就打成一团；
+        // 大图配古典开局，两边要走十个回合才照面。
+        config.size = DEFAULT_SIZE_FOR_ERA(config.startEra);
+        paint();
+        return;
+      }
+
+      const sizeBtn = target.closest<HTMLElement>('[data-size]');
+      if (sizeBtn?.dataset.size) {
+        config.size = Number(sizeBtn.dataset.size);
+        paint();
+        return;
+      }
+
+      const styleBtn = target.closest<HTMLElement>('[data-mapstyle]');
+      if (styleBtn?.dataset.mapstyle) {
+        config.mapStyle = styleBtn.dataset.mapstyle as NonNullable<MatchConfig['mapStyle']>;
+        paint();
+        return;
+      }
+
+      const symBtn = target.closest<HTMLElement>('[data-symmetry]');
+      if (symBtn?.dataset.symmetry) {
+        config.mapSymmetry = symBtn.dataset.symmetry as NonNullable<MatchConfig['mapSymmetry']>;
+        paint();
+        return;
+      }
+
+      const unitBtn = target.closest<HTMLElement>('[data-unit]');
+      if (unitBtn?.dataset.unit) {
+        toggleUnit(unitBtn.dataset.unit);
+        paint();
+        return;
+      }
+
+      const act = target.closest<HTMLElement>('[data-act]')?.dataset.act;
+      if (act === 'cancel') close(null);
+      if (act === 'start') {
+        // 按注册顺序固定下来：同样的勾选组合，不管点击先后，生效顺序都一样。
+        // 钩子是有叠加效果的，顺序漂移会让"同一局"算出不同结果。
+        const ordered = EXPANSIONS.filter((e) => config.expansionIds.includes(e.id)).map((e) => e.id);
+        close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
+      }
+      if (act === 'reroll') {
+        currentSeed = randomSeed();
+        paint();
+      }
+    });
+
+    mask.addEventListener('change', (e) => {
+      const input = e.target as HTMLInputElement;
+      const id = input.dataset.exp;
+      if (!id) return;
+      if (input.checked) {
+        if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
+      } else {
+        config.expansionIds = config.expansionIds.filter((x) => x !== id);
+      }
+      // 让卡片边框跟着变，不重绘整个面板（否则 checkbox 会闪）
+      input.closest('.expansion-item')?.classList.toggle('on', input.checked);
+    });
+
+    paint();
+    document.body.appendChild(mask);
+  });
+}
