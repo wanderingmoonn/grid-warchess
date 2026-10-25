@@ -1,0 +1,91 @@
+# 方格战棋
+
+一个回合制战棋：古典到现代五个时代，基于地形的走位、跨河的桥、迷雾、联机对局。
+没有 UI 框架，没有后端，一套纯函数规则内核 + 一层手写 DOM。
+
+线上地址：<https://grid-warchess.app.workbuddy.host/?sharecode=XJSBOE55O7>
+
+## 跑起来
+
+```bash
+npm install
+npm run dev      # 本地开发，http://127.0.0.1:5178
+```
+
+需要 Node 18+（`node --experimental-strip-types` 直接跑 TypeScript，不需要编译）。
+
+## 常用命令
+
+| 命令 | 做什么 |
+|---|---|
+| `npm run dev` | 本地开发服务器 |
+| `npm test` | 全量测试：规则内核 162 项 + DOM 冒烟 54 项 |
+| `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
+| `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
+| `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书 |
+| `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |
+| `npm run ablate` | 消融实验：逐个"撤销"某轮平衡改动，看它到底影响多少 |
+| `npm run balance` | 生成平衡报告（JSON + markdown） |
+| `npm run map` | 打印一张地图，排查地图生成问题 |
+| `npm run sim` | 单局 AI 对打，逐步打印决策 |
+
+环境变量对基准工具很好用，例如只跑古典 12×12 的 100 局：
+
+```bash
+BENCH_ERA=1 BENCH_SIZE=12 BENCH_SEEDS=100 npm run bench
+AB_ERA=1 AB_SEEDS=60 npm run ablate
+```
+
+## 目录结构
+
+```
+src/core/      纯函数规则内核（不含 DOM、不含网络、不含 Math.random）
+  types.ts       数据模型，GameState 可 JSON 序列化
+  config.ts      ⭐ 所有可调数值都在这里：兵种、时代、地形、城市
+  rules.ts       applyAction(state, action) → ActionResult，规则的唯一入口
+  ai.ts          AI 决策，只吃玩家视图，不作弊
+  mapgen.ts      地图生成：城市布点、河、山脊、出生点
+  fog.ts         战争迷雾与视野
+  expansions.ts  扩展规则（血战、老兵、堑壕战……）与钩子
+  abilities.ts   特殊能力表（破甲、破城、盾墙……）
+  setup.ts       开局装配、起始金币
+
+src/ui/        手写 DOM，没有框架
+src/net/       联机房间（云数据库存整局状态，6 位房间码）
+src/storage/   本机存档（自动落盘，刷新不丢）
+scripts/       测试、基准、报告、规则书生成
+```
+
+## 三条硬约束
+
+改代码前值得先知道这三条，它们是这套东西能撑住的原因：
+
+1. **`applyAction` 是纯函数。** 吃一个 `GameState` 和一个 `Action`，返回新的 state，不碰 DOM、不发网络、不用 `Math.random`。所以整套规则能在 Node 里直接测，也能拿去做 AI 对打基准。
+2. **一切都是确定性的。** 随机数走 `state.seed`，AI 的"手感"走 `aiNoise(seed, turn, log.length)`。同样的种子和操作序列，结果一定相同——测试和复现靠这个。
+3. **AI 不作弊。** 它只拿到 `playerView(state, player)` 同一份迷雾视图，没有上帝视角。
+
+## 改数值改哪里
+
+绝大多数平衡工作只需要动 `src/core/config.ts` 里的 `UNIT_TYPES`（兵种）和 `ERAS`（时代）。改完跑：
+
+```bash
+npm test           # 有回归测试兜底，比如"射程必须大于移速"
+npm run manual     # 规则书会跟着数据重新生成
+npm run bench      # 看对局长度和时代推进有没有跑偏
+```
+
+如果某次改动让对局长度变了，先别猜原因，`npm run ablate` 会把每个改动的影响单独量出来。
+
+## 联机
+
+房间码就是通行证：把 6 位代码发给对方，谁拿到谁就能进这局。
+只在**结束回合（提交）**时把整局状态写到云端，所以对方看不到你这一回合正在怎么摆兵。
+
+一个必须说清的边界：`GameState` 是整块存进去的，服务端不参与规则计算。
+**迷雾是界面约定，不是安全边界**——真要防作弊得把 `playerView` 挪到服务端算。
+
+## 已知的待办
+
+- 联机防作弊（服务端算视野）
+- 高时代攻城单位在中场对峙时推不到城下，工业时代仍有跑满回合上限的局
+- 移动端触摸操作只做了基础适配
