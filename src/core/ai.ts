@@ -320,6 +320,14 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit): number {
     if (iDie && kill) score -= Math.max(0, myValue - theirValue) * 0.18;
     // 已经残血还去打一个打不死的：这是在给对方送击杀
     if (attacker.hp / selfDef.maxHp < 0.3 && !kill) score -= 12 * Math.min(3, myValue / 80);
+
+    // 高机动突击队偏爱后排：摸得到火力单位就优先打，能白打（对方够不着）更值。
+    // 和移动那边是一套逻辑的两半——移动负责"绕到能打后排的位置"，
+    // 这里负责"真到了别又去打最前面那个肉盾"。
+    if (isRaider(selfDef)) {
+      if (targetDef.range >= 3) score += 16;
+      if (preview.toAttacker === 0) score += 8;
+    }
   }
 
   return score;
@@ -806,7 +814,62 @@ function scoreMove(
     if (hpFrac < 0.5) score += (nowTh.n - th.n) * 10;
   }
 
+  // 高机动突击单位：目标不是"往前推"，而是"绕到后面去"。
+  //
+  // 这条是后来补的。以前 AI 对骑兵和步兵一视同仁——都按"离敌方城市近了多少"给分，
+  // 于是骠骑兵、胸甲骑兵、突击队全都冲在最前面挨集火，机动性只剩下"更快地送死"
+  // （实测工业骑兵交换比 0.45、每百金杀伤 10.1，连步枪兵的三分之一都不到）。
+  // 现在高级 AI 会做三件事：
+  //   ① 找后排猎物（射程 ≥3 的火力单位，或比自己更贵的东西），往它身上靠；
+  //   ② 躲开敌方近战主力的贴身范围——贴上去等于白挨一轮，这不是"冲锋"；
+  //   ③ 残血时按威胁数量反向外撤，而不是继续往人堆里钻。
+  // 这三条加起来才是"机动"的价值：不是走得远，是能选一个对方打不到你的角度。
+  if (aiLevelOf(s) === 'advanced' && isRaider(def)) {
+    const prey = nearestPrey(s, unit, def);
+    if (prey) {
+      const step = distance(unit, prey) - distance({ x, y }, prey);
+      score += step * 7;
+    }
+    if (def.range <= 1) {
+      const brawlers = unitsOf(s, other(unit.owner)).filter(
+        (e) => (utype(s, e.type).range ?? 1) <= 1 && (utype(s, e.type).atk ?? 0) >= 15,
+      );
+      if (brawlers.some((e) => distance({ x, y }, e) <= 1)) score -= 14;
+    }
+    if (unit.hp / def.maxHp < 0.45) {
+      const th = enemyThreatAt(s, unit.owner, x, y);
+      score -= th.n * 8;
+    }
+  }
+
   return score;
+}
+
+/**
+ * 高机动突击单位：跑得快、射程又不足以"白嫖"，价值全在位置上。
+ *
+ * 射程 3 是分界线：再远就已经是火力单位了，它们本来就该待在后排，
+ * 不需要"绕后"这套逻辑。
+ */
+function isRaider(def: UnitTypeDef): boolean {
+  return def.category === 'combat' && def.domain !== 'water' && def.move >= 4 && def.range <= 3;
+}
+
+/** 突击单位眼里的"猎物"：后排火力（射程 ≥3），或比自己更贵的目标 */
+function nearestPrey(s: GameState, unit: Unit, def: UnitTypeDef): Unit | null {
+  let best: Unit | null = null;
+  let bestD = Infinity;
+  for (const e of unitsOf(s, other(unit.owner))) {
+    const ed = s.unitTypes[e.type];
+    if (!ed) continue;
+    if (!(ed.range >= 3 || ed.cost >= def.cost * 1.2)) continue;
+    const d = distance(unit, e);
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  return best;
 }
 
 function buildSpots(
@@ -974,6 +1037,29 @@ function rawBuildScore(
     }
     const near = Number.isFinite(nearest) ? Math.max(0, 20 - nearest * 2) : 10;
     return 35 + near - def.cost * 0.04 - sameKind * 8;
+  }
+
+  // 纯防御工事：城墙、栅栏、拒马这类。它们不输出、不生钱、不产兵，
+  // 值钱的地方只有一处——敌人已经压过来时，把通路堵窄。
+  //
+  // 以前这类单位落到最后的 return 10，等于"永远排最后"：五个时代的城墙
+  // 招募数全是 0，加了跟没加一样。现在的规则是"挨打才砌墙"，而且总量有上限，
+  // 免得两边对着垒墙、把对局拖回那个谁也推不动的拉锯。
+  if (!def.autoAttack && !def.barracks && !def.incomeByTerrain && !def.bridges) {
+    const mine = unitsOf(s, unit.owner).filter((u) => {
+      const ud = utype(s, u.type);
+      return ud.category === 'building' && !ud.autoAttack && !ud.barracks && !ud.incomeByTerrain;
+    }).length;
+    if (mine >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
+    if (risky) return -999;
+
+    let nearestFoe = Infinity;
+    for (const e of unitsOf(s, other(unit.owner))) {
+      nearestFoe = Math.min(nearestFoe, distance(spot, e));
+    }
+    // 敌人还没到门口，砌墙就是浪费一个建造回合
+    if (!Number.isFinite(nearestFoe) || nearestFoe > 7) return 4;
+    return 26 + (7 - nearestFoe) * 4 - def.cost * 0.03 - mine * 6;
   }
 
   return 10;
@@ -1221,6 +1307,17 @@ function recruitCandidate(
         if (d.range >= 3) score += rangedShare < 0.7 ? 9 : -5;
         else if (d.range === 2) score += rangedShare < 0.7 ? 1 : 3;
         else score += rangedShare < 0.7 ? -4 : 7;
+        // 高机动突击单位：绕后切炮是现在这套 AI 真会用的一招，所以值一点分。
+        // 但别给多——骑兵不是万能牌，远程占比已经够高时它就没那么必要。
+        if (isRaider(d) && rangedShare < 0.85) score += 7;
+        // 攻城器：野战几乎打不动人，只有"已经压到城下"时才值得买。
+        // 以前它们一律排最后，五个时代的攻城器械招募数全是 0——
+        // 破城 1.5 倍这件事，AI 从来没有为它付过钱。
+        if ((d.abilities ?? []).includes('siege-master')) {
+          const foeCities = citiesOf(s, other(me));
+          const atWall = myUnits.some((u) => foeCities.some((c) => distance(u, c) <= 4));
+          if (atWall) score += 16;
+        }
       }
       // 开局一只兵都没有的时候，先凑出一小撮能打的，别急着攒钱升科技
       if (aiLevelOf(s) === 'advanced' && landCombat.length < 4 && price <= 80) score += 8;
