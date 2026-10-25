@@ -1,0 +1,772 @@
+{
+  "seed": 954,
+  "era": 1,
+  "turn": 201,
+  "compA": {
+    "farmer": 1,
+    "herder": 3,
+    "laborer": 2,
+    "camp": 1,
+    "tower": 4,
+    "mill": 13,
+    "bridge": 3
+  },
+  "compB": {
+    "farmer": 1,
+    "herder": 2,
+    "camp": 3,
+    "bridge": 5,
+    "laborer": 1,
+    "tower": 3,
+    "mill": 19,
+    "squad": 1
+  },
+  "combatA": 0,
+  "combatB": 1,
+  "hpA": 669,
+  "hpB": 888,
+  "citiesA": 2,
+  "citiesB": 2,
+  "armyA": 27,
+  "armyB": 35,
+  "cap": 24,
+  "bridgesA": 3,
+  "bridgesB": 5,
+  "bandGap": 1,
+  "cityHpA": 160,
+  "cityFullA": 160,
+  "cityHpB": 94,
+  "cityFullB": 160,
+  "cityArmorA": 12,
+  "cityArmorB": 12,
+  "goldA": 14345,
+  "goldB": 15734,
+  "nearestA": -1,
+  "nearestB": 5,
+  "onWallA": 0,
+  "onWallB": 0,
+  "reachA": true,
+  "reachB": true,
+  "attacksA": 126,
+  "attacksB": 124,
+  "siegesA": 38,
+  "siegesB": 3,
+  "siegeDmgA": 125,
+  "siegeDmgB": 14,
+  "recentAttacksA": 0,
+  "recentAttacksB": 20,
+  "recentSiegesA": 0,
+  "recentSiegesB": 0,
+  "lastSiegeA": 135,
+  "lastSiegeB": 126,
+  "cause": "一方野战军打光，城却拆不动",
+  "detail": "A 方一个能开火的单位都不剩了，B 方 3 次攻城共打出 14 点城市伤害，A 方城防还剩 100%。　另外A 顶满 24 个单位、金库里还压着 14345 金，B 顶满 24 个单位、金库里还压着 15734 金——编制满了，钱花不出去，也就加不上压力。",
+  "terrain": [
+    "h.........##",
+    "h.h.f.cc....",
+    "~==cc.cc===~",
+    ".hhcc....ff.",
+    "fff.........",
+    "hhhhhhhhhhhh",
+    "####hhhhhh##",
+    "hhhhh=hhhhhh",
+    ".....=...ffh",
+    "h#.hcc..fcc.",
+    "hh..cc...cc=",
+    "h.......ff.h"
+  ],
+  "units": [
+    "...磨塔磨磨.....",
+    ".农营磨磨磨..营..牧",
+    ".桥桥.塔磨.塔桥桥桥.",
+    ".....磨磨磨.磨磨营",
+    "....班.磨磨磨磨工磨",
+    ".........磨磨牧",
+    "............",
+    ".....桥磨磨磨.磨.",
+    ".....桥工磨塔磨磨磨",
+    "...牧..磨塔塔.工营",
+    ".牧....磨农磨.塔桥",
+    ".........磨磨牧"
+  ],
+  "unitList": [
+    {
+      "id": "u11",
+      "type": "farmer",
+      "name": "农民",
+      "owner": "A",
+      "x": 7,
+      "y": 10,
+      "hp": 16,
+      "maxHp": 16
+    },
+    {
+      "id": "u12",
+      "type": "herder",
+      "name": "牧民",
+      "owner": "A",
+      "x": 3,
+      "y": 9,
+      "hp": 18,
+      "maxHp": 18
+    },
+    {
+      "id": "u13",
+      "type": "farmer",
+      "name": "农民",
+      "owner": "B",
+      "x": 1,
+      "y": 1,
+      "hp": 16,
+      "maxHp": 16
+    },
+    {
+      "id": "u14",
+      "type": "herder",
+      "name": "牧民",
+      "owner": "B",
+      "x": 11,
+      "y": 1,
+      "hp": 18,
+      "maxHp": 18
+    },
+    {
+      "id": "u15",
+      "type": "laborer",
+      "name": "劳工",
+      "owner": "A",
+      "x": 6,
+      "y": 8,
+      "hp": 20,
+      "maxHp": 20
+    },
+    {
+      "id": "u16",
+      "type": "herder",
+      "name": "牧民",
+      "owner": "A",
+      "x": 11,
+      "y": 11,
+      "hp": 18,
+      "maxHp": 18
+    },
+    {
+      "id": "u17",
+      "type": "herder",
+      "name": "牧民",
+      "owner": "B",
+      "x": 11,
+      "y": 5,
+      "hp": 18,
+      "maxHp": 18
+    },
+    {
+      "id": "u19",
+      "type": "camp",
+      "name": "军营",
+      "owner": "A",
+      "x": 11,
+      "y": 9,
+      "hp": 34,
+      "maxHp": 34
+    },
+    {
+      "id": "u20",
+      "type": "herder",
+      "name": "牧民",
+      "owner": "A",
+      "x": 1,
+      "y": 10,
+      "hp": 18,
+      "maxHp": 18
+    },
+    {
+      "id": "u26",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "A",
+      "x": 8,
+      "y": 9,
+      "hp": 30,
+      "maxHp": 30
+    },
+    {
+      "id": "u32",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "A",
+      "x": 7,
+      "y": 9,
+      "hp": 27,
+      "maxHp": 30
+    },
+    {
+      "id": "u33",
+      "type": "camp",
+      "name": "军营",
+      "owner": "B",
+      "x": 2,
+      "y": 1,
+      "hp": 34,
+      "maxHp": 34
+    },
+    {
+      "id": "u38",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "A",
+      "x": 8,
+      "y": 8,
+      "hp": 6,
+      "maxHp": 30
+    },
+    {
+      "id": "u41",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "B",
+      "x": 1,
+      "y": 2,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u45",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "B",
+      "x": 2,
+      "y": 2,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u51",
+      "type": "laborer",
+      "name": "劳工",
+      "owner": "B",
+      "x": 10,
+      "y": 4,
+      "hp": 14,
+      "maxHp": 20
+    },
+    {
+      "id": "u57",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "B",
+      "x": 7,
+      "y": 2,
+      "hp": 28,
+      "maxHp": 30
+    },
+    {
+      "id": "u59",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 11,
+      "y": 8,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u61",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "B",
+      "x": 4,
+      "y": 0,
+      "hp": 30,
+      "maxHp": 30
+    },
+    {
+      "id": "u63",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 10,
+      "y": 8,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u65",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 3,
+      "y": 0,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u66",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 5,
+      "y": 2,
+      "hp": 13,
+      "maxHp": 24
+    },
+    {
+      "id": "u68",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 3,
+      "y": 1,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u69",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 7,
+      "y": 3,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u70",
+      "type": "laborer",
+      "name": "劳工",
+      "owner": "A",
+      "x": 10,
+      "y": 9,
+      "hp": 20,
+      "maxHp": 20
+    },
+    {
+      "id": "u72",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 5,
+      "y": 1,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u75",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "A",
+      "x": 11,
+      "y": 10,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u77",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 5,
+      "y": 0,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u79",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 10,
+      "y": 11,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u80",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 7,
+      "y": 8,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u81",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 4,
+      "y": 1,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u84",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 10,
+      "y": 7,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u86",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 8,
+      "y": 10,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u87",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 8,
+      "y": 7,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u88",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 9,
+      "y": 11,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u92",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "A",
+      "x": 5,
+      "y": 7,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u93",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "A",
+      "x": 5,
+      "y": 8,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u94",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "B",
+      "x": 8,
+      "y": 2,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u95",
+      "type": "camp",
+      "name": "军营",
+      "owner": "B",
+      "x": 8,
+      "y": 1,
+      "hp": 34,
+      "maxHp": 34
+    },
+    {
+      "id": "u97",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "B",
+      "x": 9,
+      "y": 2,
+      "hp": 1,
+      "maxHp": 40
+    },
+    {
+      "id": "u98",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 6,
+      "y": 0,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u99",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 6,
+      "y": 9,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u102",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 6,
+      "y": 10,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u104",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 6,
+      "y": 7,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u106",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 7,
+      "y": 7,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u110",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 5,
+      "y": 3,
+      "hp": 13,
+      "maxHp": 24
+    },
+    {
+      "id": "u111",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "A",
+      "x": 9,
+      "y": 8,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u112",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 6,
+      "y": 4,
+      "hp": 13,
+      "maxHp": 24
+    },
+    {
+      "id": "u117",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 8,
+      "y": 4,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u119",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "A",
+      "x": 10,
+      "y": 10,
+      "hp": 30,
+      "maxHp": 30
+    },
+    {
+      "id": "u120",
+      "type": "squad",
+      "name": "步兵班",
+      "owner": "B",
+      "x": 4,
+      "y": 4,
+      "hp": 48,
+      "maxHp": 48
+    },
+    {
+      "id": "u121",
+      "type": "tower",
+      "name": "箭塔",
+      "owner": "B",
+      "x": 4,
+      "y": 2,
+      "hp": 30,
+      "maxHp": 30
+    },
+    {
+      "id": "u124",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 6,
+      "y": 3,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u125",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 7,
+      "y": 4,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u127",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 9,
+      "y": 4,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u131",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 9,
+      "y": 3,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u133",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 10,
+      "y": 3,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u137",
+      "type": "bridge",
+      "name": "木桥",
+      "owner": "B",
+      "x": 10,
+      "y": 2,
+      "hp": 40,
+      "maxHp": 40
+    },
+    {
+      "id": "u139",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 11,
+      "y": 4,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u141",
+      "type": "camp",
+      "name": "军营",
+      "owner": "B",
+      "x": 11,
+      "y": 3,
+      "hp": 34,
+      "maxHp": 34
+    },
+    {
+      "id": "u143",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 10,
+      "y": 5,
+      "hp": 24,
+      "maxHp": 24
+    },
+    {
+      "id": "u145",
+      "type": "mill",
+      "name": "磨坊",
+      "owner": "B",
+      "x": 9,
+      "y": 5,
+      "hp": 24,
+      "maxHp": 24
+    }
+  ],
+  "cityList": [
+    {
+      "id": "c1",
+      "owner": "A",
+      "x": 4,
+      "y": 9,
+      "era": 5,
+      "hp": 80,
+      "maxHp": 80,
+      "armor": 12
+    },
+    {
+      "id": "c2",
+      "owner": "A",
+      "x": 9,
+      "y": 9,
+      "era": 5,
+      "hp": 80,
+      "maxHp": 80,
+      "armor": 12
+    },
+    {
+      "id": "c3",
+      "owner": "B",
+      "x": 3,
+      "y": 2,
+      "era": 5,
+      "hp": 14,
+      "maxHp": 80,
+      "armor": 12
+    },
+    {
+      "id": "c4",
+      "owner": "B",
+      "x": 6,
+      "y": 1,
+      "era": 5,
+      "hp": 80,
+      "maxHp": 80,
+      "armor": 12
+    }
+  ],
+  "cityDmg": [
+    {
+      "id": "c3",
+      "owner": "B",
+      "dmg": 125,
+      "hp": 14,
+      "maxHp": 80
+    },
+    {
+      "id": "c1",
+      "owner": "A",
+      "dmg": 14,
+      "hp": 80,
+      "maxHp": 80
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+
+> warchess@0.1.0 balance
+> node --experimental-strip-types scripts/balance-report.ts --era 1 --games 60 --seed 900 --size 12 --second-bonus 0 --out results19/bonus0-era1.json
+
+era1 1/60 seed=900 winner=B turns=60
+era1 2/60 seed=901 winner=A turns=63
+era1 3/60 seed=902 winner=A turns=9
+era1 4/60 seed=903 winner=B turns=102
+era1 5/60 seed=904 winner=A turns=25
+era1 6/60 seed=905 winner=B turns=90
+era1 7/60 seed=906 winner=A turns=25
+era1 8/60 seed=907 winner=A turns=7
+era1 9/60 seed=908 winner=A turns=57
+era1 10/60 seed=909 winner=A turns=7
+era1 11/60 seed=910 winner=A turns=65
+era1 12/60 seed=911 winner=A turns=53
+era1 13/60 seed=912 winner=A turns=59
+era1 14/60 seed=913 winner=A turns=33
+era1 15/60 seed=914 winner=A turns=137
+era1 16/60 seed=915 winner=B turns=72
+era1 17/60 seed=916 winner=B turns=62
+era1 18/60 seed=917 winner=A turns=21
+era1 19/60 seed=918 winner=B turns=68
+era1 20/60 seed=919 winner=B turns=52
+era1 21/60 seed=920 winner=B turns=92
+era1 22/60 seed=921 winner=A turns=49
+era1 23/60 seed=922 winner=B turns=82
+era1 24/60 seed=923 winner=A turns=47
+era1 25/60 seed=924 winner=B turns=66
+era1 26/60 seed=925 winner=B turns=118
+era1 27/60 seed=926 winner=A turns=113
+era1 28/60 seed=927 winner=A turns=139
+era1 29/60 seed=928 winner=A turns=43
+era1 30/60 seed=929 winner=A turns=71
+era1 31/60 seed=930 winner=A turns=53
+era1 32/60 seed=931 winner=B turns=64
+era1 33/60 seed=932 winner=A turns=61
+era1 34/60 seed=933 winner=B turns=76
+era1 35/60 seed=934 winner=A turns=57
+era1 36/60 seed=935 winner=B turns=120
+era1 37/60 seed=936 winner=B turns=44
+era1 38/60 seed=937 winner=B turns=82
+era1 39/60 seed=938 winner=B turns=50
+era1 40/60 seed=939 winner=B turns=90
+era1 41/60 seed=940 winner=A turns=31
+era1 42/60 seed=941 winner=B turns=44
+era1 43/60 seed=942 winner=A turns=5
+era1 44/60 seed=943 winner=A turns=49
+era1 45/60 seed=944 winner=A turns=49
+era1 46/60 seed=945 winner=B turns=72
+era1 47/60 seed=946 winner=B turns=56
+era1 48/60 seed=947 winner=A turns=29
+era1 49/60 seed=948 winner=A turns=43
+era1 50/60 seed=949 winner=A turns=55
+era1 51/60 seed=950 winner=A turns=83
+era1 52/60 seed=951 winner=A turns=93
+era1 53/60 seed=952 winner=A turns=57
+era1 54/60 seed=953 winner=A turns=69
+era1 55/60 seed=954 winner=A turns=103
+era1 56/60 seed=955 winner=B turns=140
+era1 57/60 seed=956 winner=B turns=58
+era1 58/60 seed=957 winner=B turns=84
+era1 59/60 seed=958 winner=A turns=59
+era1 60/60 seed=959 winner=B turns=102
+
+写出 results19/bonus0-era1.json
+era1: 60 局 | 先手 35 后手 25 未决 0 | 均 64.4 回合 | 均招兵 127.2

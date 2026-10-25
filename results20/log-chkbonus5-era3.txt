@@ -1,0 +1,67 @@
+
+> warchess@0.1.0 balance
+> node --experimental-strip-types scripts/balance-report.ts --era 3 --games 60 --seed 960 --size 16 --second-bonus 0.05 --out results20/chkbonus5-era3.json
+
+era3 1/60 seed=960 winner=B turns=48
+era3 2/60 seed=961 winner=A turns=25
+era3 3/60 seed=962 winner=B turns=30
+era3 4/60 seed=963 winner=A turns=71
+era3 5/60 seed=964 winner=A turns=45
+era3 6/60 seed=965 winner=B turns=66
+era3 7/60 seed=966 winner=A turns=69
+era3 8/60 seed=967 winner=A turns=19
+era3 9/60 seed=968 winner=B turns=32
+era3 10/60 seed=969 winner=B turns=56
+era3 11/60 seed=970 winner=A turns=19
+era3 12/60 seed=971 winner=A turns=83
+era3 13/60 seed=972 winner=A turns=33
+era3 14/60 seed=973 winner=B turns=76
+era3 15/60 seed=974 winner=B turns=34
+era3 16/60 seed=975 winner=- turns=201 未决:卡在行军（谁也到不了城下）
+era3 17/60 seed=976 winner=A turns=39
+era3 18/60 seed=977 winner=B turns=68
+era3 19/60 seed=978 winner=B turns=28
+era3 20/60 seed=979 winner=B turns=148
+era3 21/60 seed=980 winner=A turns=45
+era3 22/60 seed=981 winner=- turns=201 未决:城市反复易主（耐久被重置）
+era3 23/60 seed=982 winner=B turns=82
+era3 24/60 seed=983 winner=B turns=88
+era3 25/60 seed=984 winner=B turns=26
+era3 26/60 seed=985 winner=B turns=46
+era3 27/60 seed=986 winner=B turns=178
+era3 28/60 seed=987 winner=B turns=28
+era3 29/60 seed=988 winner=B turns=36
+era3 30/60 seed=989 winner=B turns=52
+era3 31/60 seed=990 winner=B turns=70
+era3 32/60 seed=991 winner=A turns=31
+era3 33/60 seed=992 winner=B turns=82
+era3 34/60 seed=993 winner=B turns=62
+era3 35/60 seed=994 winner=- turns=201 未决:城市反复易主（耐久被重置）
+era3 36/60 seed=995 winner=B turns=40
+era3 37/60 seed=996 winner=A turns=53
+era3 38/60 seed=997 winner=B turns=44
+era3 39/60 seed=998 winner=A turns=15
+era3 40/60 seed=999 winner=A turns=33
+era3 41/60 seed=1000 winner=A turns=47
+era3 42/60 seed=1001 winner=B turns=42
+era3 43/60 seed=1002 winner=B turns=48
+era3 44/60 seed=1003 winner=B turns=90
+era3 45/60 seed=1004 winner=A turns=127
+era3 46/60 seed=1005 winner=B turns=38
+era3 47/60 seed=1006 winner=A turns=19
+era3 48/60 seed=1007 winner=B turns=60
+era3 49/60 seed=1008 winner=A turns=57
+era3 50/60 seed=1009 winner=A turns=57
+era3 51/60 seed=1010 winner=B turns=60
+era3 52/60 seed=1011 winner=B turns=40
+era3 53/60 seed=1012 winner=B turns=40
+era3 54/60 seed=1013 winner=B turns=76
+era3 55/60 seed=1014 winner=A turns=59
+era3 56/60 seed=1015 winner=B turns=32
+era3 57/60 seed=1016 winner=- turns=201 未决:城市反复易主（耐久被重置）
+era3 58/60 seed=1017 winner=B turns=44
+era3 59/60 seed=1018 winner=B turns=24
+era3 60/60 seed=1019 winner=B turns=46
+
+写出 results20/chkbonus5-era3.json
+era3: 60 局 | 先手 20 后手 36 未决 4 | 均 53.7 回合 | 均招兵 78.0

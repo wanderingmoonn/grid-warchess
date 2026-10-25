@@ -1,0 +1,68 @@
+
+> warchess@0.1.0 balance
+> node --experimental-strip-types scripts/balance-report.ts --era 3 --games 60 --seed 900 --out results14/balance-era3.json --draws results14/draws
+
+era3 1/60 seed=900 winner=A turns=59
+era3 2/60 seed=901 winner=A turns=55
+era3 3/60 seed=902 winner=B turns=54
+era3 4/60 seed=903 winner=- turns=201 未决:地形隔断（走不到对面城下）
+era3 5/60 seed=904 winner=A turns=39
+era3 6/60 seed=905 winner=B turns=48
+era3 7/60 seed=906 winner=B turns=58
+era3 8/60 seed=907 winner=A turns=59
+era3 9/60 seed=908 winner=B turns=54
+era3 10/60 seed=909 winner=A turns=47
+era3 11/60 seed=910 winner=B turns=36
+era3 12/60 seed=911 winner=A turns=69
+era3 13/60 seed=912 winner=B turns=54
+era3 14/60 seed=913 winner=A turns=59
+era3 15/60 seed=914 winner=B turns=62
+era3 16/60 seed=915 winner=B turns=48
+era3 17/60 seed=916 winner=A turns=61
+era3 18/60 seed=917 winner=B turns=82
+era3 19/60 seed=918 winner=- turns=201 未决:地形隔断（走不到对面城下）
+era3 20/60 seed=919 winner=A turns=51
+era3 21/60 seed=920 winner=B turns=84
+era3 22/60 seed=921 winner=A turns=35
+era3 23/60 seed=922 winner=- turns=201 未决:卡在行军（谁也到不了城下）
+era3 24/60 seed=923 winner=B turns=44
+era3 25/60 seed=924 winner=B turns=58
+era3 26/60 seed=925 winner=A turns=65
+era3 27/60 seed=926 winner=B turns=82
+era3 28/60 seed=927 winner=A turns=51
+era3 29/60 seed=928 winner=A turns=47
+era3 30/60 seed=929 winner=B turns=118
+era3 31/60 seed=930 winner=A turns=49
+era3 32/60 seed=931 winner=A turns=41
+era3 33/60 seed=932 winner=B turns=62
+era3 34/60 seed=933 winner=- turns=201 未决:地形隔断（走不到对面城下）
+era3 35/60 seed=934 winner=A turns=33
+era3 36/60 seed=935 winner=A turns=53
+era3 37/60 seed=936 winner=A turns=39
+era3 38/60 seed=937 winner=- turns=201 未决:地形隔断（走不到对面城下）
+era3 39/60 seed=938 winner=B turns=34
+era3 40/60 seed=939 winner=A turns=43
+era3 41/60 seed=940 winner=B turns=50
+era3 42/60 seed=941 winner=A turns=73
+era3 43/60 seed=942 winner=A turns=55
+era3 44/60 seed=943 winner=B turns=78
+era3 45/60 seed=944 winner=B turns=20
+era3 46/60 seed=945 winner=B turns=62
+era3 47/60 seed=946 winner=A turns=71
+era3 48/60 seed=947 winner=A turns=65
+era3 49/60 seed=948 winner=B turns=82
+era3 50/60 seed=949 winner=B turns=90
+era3 51/60 seed=950 winner=- turns=201 未决:卡在行军（谁也到不了城下）
+era3 52/60 seed=951 winner=A turns=39
+era3 53/60 seed=952 winner=A turns=113
+era3 54/60 seed=953 winner=A turns=69
+era3 55/60 seed=954 winner=A turns=121
+era3 56/60 seed=955 winner=B turns=58
+era3 57/60 seed=956 winner=A turns=71
+era3 58/60 seed=957 winner=- turns=201 未决:城市反复易主（耐久被重置）
+era3 59/60 seed=958 winner=A turns=35
+era3 60/60 seed=959 winner=A turns=111
+
+写出 results14/balance-era3.json
+磨局场面 7 份 -> results14/draws
+era3: 60 局 | 先手 30 后手 23 未决 7 | 均 60.3 回合 | 均招兵 91.1
