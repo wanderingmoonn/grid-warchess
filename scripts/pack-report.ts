@@ -17,6 +17,8 @@ import path from 'node:path';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { ERA_PACKS } from '../src/core/era-packs.ts';
 import { nonWinCount } from './report-outcomes.ts';
+import { describeOutcomes, describePackOverview, exchangeVerdict, percentageChange } from './pack-report-summary.ts';
+import type { PackOverviewEntry } from './pack-report-summary.ts';
 
 const DIR = 'results/packs';
 const OUT = path.join(DIR, 'report.md');
@@ -75,8 +77,7 @@ const PACKS = [
     eraName: '古典',
     note:
       '这一包的重心是**重甲与攻城**：重装步兵/军团兵把正面顶住，投石兵和标枪兵把便宜的远程补上，' +
-      '攻城槌和弩炮第一次让"拆城"有了专门的工具。实测里它明显偏"扛"——每百金抗伤远高于原版，' +
-      '交换比却更低，这是重甲单位的正常代价，不是数值失误。',
+      '攻城槌和弩炮提供专门的攻城职能。交换数据不能单独判断肉盾与攻城单位的价值。',
   },
   {
     era: 2,
@@ -86,8 +87,7 @@ const PACKS = [
     eraName: '中世',
     note:
       '中世的关键词是**破甲**：弩手和双手剑士负责把对方的甲剥掉，瑞士长矛兵负责站住，' +
-      '骑射手提供机动。投石机与攻城塔让攻城从"人肉撞墙"变成有节奏的工序。' +
-      '这一包和原版贴得最近，也是五包里唯一交换比基本持平的。',
+      '骑射手提供机动，投石机与攻城塔负责攻城。当前样本结果见下面动态生成的指标。',
   },
   {
     era: 3,
@@ -97,8 +97,7 @@ const PACKS = [
     eraName: '火药',
     note:
       '火药包的定位是**火力层次**：线列步兵正面齐射，猎兵负责视野和点杀，龙骑兵/胸甲骑兵负责冲击，' +
-      '攻城加农炮与长管炮负责拆工事。它也是唯一一个"改过一次才收住"的包——' +
-      '第一版猎兵带先手，直接变成无风险打靶（见第 6 节）。',
+      '攻城加农炮与长管炮负责拆工事。单位输出需要结合射程、反击和样本规模解读。',
   },
   {
     era: 4,
@@ -109,7 +108,7 @@ const PACKS = [
     note:
       '工业包是**阵地战**：毒气兵与火焰喷射器负责清堑壕，榴弹炮/列车炮负责曲射，' +
       '马克 I 坦克第一次把"装甲"变成独立的战术变量，机枪碉堡和铁丝网把地图切成小块。' +
-      '它是五包里最"贵"的一包，因此每百金指标天然吃亏，但交换比已经接近原版。',
+      '伴随火力与高耐久工事需要同时观察野战交换、推进速度和城市争夺。',
   },
   {
     era: 5,
@@ -149,21 +148,12 @@ function group(stats: TypeStat[], isPack: boolean): GroupMetric {
   };
 }
 
-/** 一句话判断：模组相对原版是偏强、持平还是偏弱 */
-function verdict(packRatio: number | null, baseRatio: number | null): string {
-  if (packRatio === null || baseRatio === null || baseRatio === 0) return '样本不足';
-  const r = packRatio / baseRatio;
-  if (r >= 1.25) return `**偏强**（×${r.toFixed(2)}）`;
-  if (r >= 1.1) return `略强（×${r.toFixed(2)}）`;
-  if (r > 0.9) return `**持平**（×${r.toFixed(2)}）`;
-  if (r > 0.75) return `略弱（×${r.toFixed(2)}）`;
-  return `**偏弱**（×${r.toFixed(2)}）`;
-}
-
 const pct = (n: number) => `${(n * 100).toFixed(0)}%`;
 
 const rows: string[] = [];
 const sections: string[] = [];
+const overview: PackOverviewEntry[] = [];
+const paceRows: string[] = [];
 
 for (const p of PACKS) {
   const run = load(`era${p.era}.json`);
@@ -173,12 +163,14 @@ for (const p of PACKS) {
   // 比出来的差值有一半是随机性——基线只用来量节奏（回合数/未决率）。
   const gPack = group(run.stats, true);
   const gBase = group(run.stats, false);
+  overview.push({ name: p.eraName, games: run.games, packRatio: gPack.ratio, vanillaRatio: gBase.ratio });
+  paceRows.push(`| ${p.eraName} | ${base.summary.turnsAvg.toFixed(1)} | ${run.summary.turnsAvg.toFixed(1)} | ${percentageChange(base.summary.turnsAvg, run.summary.turnsAvg)} |`);
 
   rows.push(
     `| ${p.eraName} | ${run.size}×${run.size} | ${run.games} | ${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)} | ` +
       `${pct(nonWinCount(base.summary) / base.games)} → ${pct(nonWinCount(run.summary) / run.games)} | ` +
       `${gBase.ratio === null ? '-' : gBase.ratio.toFixed(2)} → ${gPack.ratio === null ? '-' : gPack.ratio.toFixed(2)} | ` +
-      `${verdict(gPack.ratio, gBase.ratio)} | ` +
+      `${exchangeVerdict(gPack.ratio, gBase.ratio)} | ` +
       `${gBase.per100.toFixed(1)} → ${gPack.per100.toFixed(1)} | ${gBase.per100Taken.toFixed(1)} → ${gPack.per100Taken.toFixed(1)} |`,
   );
 
@@ -193,9 +185,9 @@ for (const p of PACKS) {
       '',
       `${p.note}`,
       '',
-      `- 战斗单位交换比：**${gPack.ratio === null ? '-' : gPack.ratio.toFixed(2)}**（原版同代 ${gBase.ratio === null ? '-' : gBase.ratio.toFixed(2)}）→ ${verdict(gPack.ratio, gBase.ratio)}`,
+      `- 战斗单位交换比：**${gPack.ratio === null ? '-' : gPack.ratio.toFixed(2)}**（原版同代 ${gBase.ratio === null ? '-' : gBase.ratio.toFixed(2)}）→ ${exchangeVerdict(gPack.ratio, gBase.ratio)}`,
       `- 每百金杀伤：${gPack.per100.toFixed(1)}（原版 ${gBase.per100.toFixed(1)}）　每百金抗伤：${gPack.per100Taken.toFixed(1)}（原版 ${gBase.per100Taken.toFixed(1)}）`,
-      `- 对局节奏：${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)} 回合，平局或未决 ${nonWinCount(base.summary)}/${base.games} → ${nonWinCount(run.summary)}/${run.games}`,
+      `- 历史回合数：${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)}；基线：${describeOutcomes(base.summary, base.games)}；模组：${describeOutcomes(run.summary, run.games)}`,
       '',
       detail.trim(),
       '',
@@ -214,14 +206,12 @@ const packTable = PACKS.map((p) => {
 const report = `# 方格战棋 · 五个时代兵种扩展包 平衡测试报告
 
 > 数据由 \`scripts/balance-report.ts\` 跑出、\`scripts/pack-report.ts\` 汇总。
-> 每个数字都能用文末的命令重跑出来——不是手填的。
+> 摘要与总览指标由同一份 JSON 计算；文末命令可生成新样本，不能保证复现旧版本的数值。
+> **历史报告**：现有 JSON 缺少代码提交与规则版本记录，基线和模组不保证由同一版本 AI 生成，不能当作当前 v5 合并版本的验证。
 
 ## 0. 一句话结论
 
-五个包**没有一个整体碾压原版**：相对原版同代单位的交换比落在 ×0.65 ~ ×1.52 之间，
-其中中世几乎完全持平（×0.99）、工业略弱（×0.80）、古典是刻意偏"扛"（×0.65），
-火药与现代偏强（×1.36 / ×1.52）但已从第一版的严重失衡值收回来。
-模组真正的变化不是"数值更高"，而是**同一代里终于有了可以选的职能**。
+${describePackOverview(overview)}
 
 ## 1. 包含什么
 
@@ -248,25 +238,26 @@ ${packTable}
 
 ## 3. 测试方法
 
-- **引擎**：与线上完全同一套规则内核 + 高级 AI，双 AI 对轰，无人工干预。
-- **规模**：每包 30 局，同一起始种子（900），对应时代默认棋盘（古典 12×12、中世 16×16、火药及以上 20×20）。
+- **引擎**：历史规则内核 + 高级 AI，双 AI 对轰，无人工干预。现有文件未记录提交和规则版本，无法确认与当前线上或本地引擎一致。
+- **规模**：当前存档每包 30 局，起始种子 900，对应时代默认棋盘（古典 12×12、中世 16×16、火药及以上 20×20）；摘要的局数直接读取各 JSON。30 局仅是探索性样本，稀有兵种的招募数可能更少。
 - **其它扩展固定开启** \`bloodbath\` + \`turn-order-comp\`，与项目既有平衡基线一致；只切换被测的时代包。
-- **基线**：同种子、同局数、同其它扩展，但**不开**时代包，用于衡量节奏漂移。
+- **基线**：设计上应同代码、同种子、同局数、同其它扩展，仅切换时代包。现有 base1..5 与 era1..5 不能确认 AI 版本一致，回合数对照只作历史展示，不用于归因。
 - **指标口径**（与 \`balance-report\` 一致）：
   - 只统计 \`ATTACK\` 动作造成的单位掉血；攻城打的是城市耐久，不计入单位交换。
   - 溅射算在开火方头上，反击算在防守方头上。
   - 开局白送的兵与后来招募的兵分开记账，本报告只采信**招募**出来的那部分（花过钱才算性价比）。
   - **每百金杀伤 = 总输出 / 总花费 × 100**；**每百金抗伤 = 总承伤 / 总花费 × 100**；
-    **交换比 = 总输出 / 总承伤**（与价格无关，是判断强弱的首选指标）。
+    **交换比 = 总输出 / 总承伤**（不含价格，也不覆盖攻城、经济、占路和获胜贡献，不能单独判定整体强弱）。
+  - 旧 JSON 的 \`draws\` 可能包含达到模拟上限的未决局；只有显式提供 \`unresolved\` 的新数据才分别展示正式平局与未决。
 
 ## 4. 总览
 
-| 时代 | 棋盘 | 局数 | 平均回合（基线→模组） | 平局或未决率 | 交换比（原版→模组） | 判定 | 每百金杀伤 | 每百金抗伤 |
+| 时代 | 棋盘 | 局数 | 历史平均回合（基线→模组） | 平局/未决合计率 | 交换比（原版→模组） | 判定 | 每百金杀伤 | 每百金抗伤 |
 |---|---:|---:|---|---|---|---|---|---|
 ${rows.join('\n')}
 
-读法：交换比是价格中性的，**先看它**。每百金两个指标会被"单位有多贵"污染——
-贵单位的绝对战力更高，但每金效率天然更低，所以它们只适合同代、同价位之间横向比。
+读法：交换比只比较模组对局内招募出来的两类单位；回合数使用另存的基线，其版本一致性未知。
+每百金指标结合交换比、兵种职能、招募样本与先后手胜率一起查看。低输出的城墙不能用野战交换比衡量价值。
 
 ## 5. 分时代明细
 
@@ -276,86 +267,22 @@ ${rows.join('\n')}
 
 ${sections.join('\n')}
 
-## 6. 跨时代发现
+## 6. 历史节奏对照（版本未配对）
 
-### 6.1 模组不是"更强"，是"更专"
-
-五个包的交换比没有系统性上偏：中世基本持平、工业略弱、古典明显偏"扛"。
-这说明新单位确实被价格和耐久带约束住了（否则新包一定会整体碾压原版）。
-真正变化的是**职能分工**：古典第一次有了"专门拆城的兵"，中世有了"专门破甲的兵"，
-工业有了"专门清堑壕的兵"——这些在原版里都是缺失的。
-
-古典包交换比最低、每百金抗伤却最高，这不是数值失误，而是**设计意图的直接后果**：
-重装步兵、战象、攻城槌都是"用输出换生存"的单位，任务是把战线顶住、让后排开火。
-想让它的交换比好看，就得把重甲改薄——那就不再是古典方阵了。
-
-### 6.2 四个单位在第一版直接失衡，已改到位
-
-| 单位 | 问题 | 首轮实测 | 修改与结果 |
-|---|---|---|---|
-| 猎兵（火药） | 射程 5 + **先手**（不挨反击）+ 潜行 = 无风险打靶 | 每百金杀伤 **61.7**、交换比 5.65，比同代火枪兵高 76% | 去掉先手、射程 5→4、攻击 28→24→22 → **29.6** |
-| 瞭望塔（古典） | 视野 5 在 12×12 上是半个棋盘，永远先手开火 | 每百金杀伤 **72.7**，是原版箭塔（37.0）的两倍 | 视野 5→4、攻击 12→10、价格 75→85 → **40.6**（箭塔 39.1） |
-| 弩手（中世） | 破甲在"人人有甲"的中世太值钱，100 金全面替代长弓 | 每百金杀伤 **55.3**，比长弓（31.7）高 74% | 攻击 18→16、价格 100→110 → **38.5**（长弓 30.4） |
-| 火箭炮（现代） | 射程 6 让它根本挨不到打（整轮承伤只有 633） | 交换比 5.64；先削攻击后**反而升到 7.48** | 真正的病根是射程：6→5（与原版火炮一致）→ **4.27** |
-
-四次调整里，只有火箭炮这一次是"改错了方向又改回来"：第一轮去削攻击，结果它依然碰不到
-伤害，ratio 反而更高。**射程在这套规则里是比攻击更贵的属性**——这是个可以复用的教训。
-
-### 6.3 工业包重做过一轮：同价不能全面更差
-
-第一版堑壕突击队是 210 金 / 攻击 34 / 射程 2，而同代步枪兵是 200 金 / 攻击 36 / 射程 4。
-同样的价钱，攻击更低、射程更短、血量更少——它没有任何存在的理由，实测每百金杀伤只有
-8.6（步枪兵 31.2），而 AI 因为"攻击数字不难看"仍然大量招募（采用率 12%）。
-
-第二轮给三个单位都补上了明确的取舍：
-
-- 堑壕突击队 → 射程 3、攻击 42、195 金（用射程换爆发）：**8.6 → 29.9**
-- 骑兵 → 攻击 42、护甲 5、血 56、210 金（用机动换生存）：**8.7 → 12.5**
-- 毒气兵 → 攻击 36（原 32）：**18.3 → 13.5**（样本 105，噪声大，不作结论）
-
-工业包整体从 ×0.60 收回到 **×0.80**，剩下那 20% 主要来自骑兵（见 6.5）。
-
-### 6.4 "先手 + 长射程"这套组合必须谨慎
-
-两次失衡都出在同一个模式上：**不让对方还手**。原版里带先手的单位没有射程优势，
-一旦把先手和 5 格射程叠在一起，AI 会把它当炮台站着不动，而对手永远走不到它面前。
-结论：\`first-strike\` 只应该出现在"必须贴脸"的单位上（比如骑射手靠机动撤退），
-不该出现在射程已经压过所有人的单位上。
-
-### 6.5 骑兵类在这套测试里天然吃亏（不是数值问题）
-
-工业骑兵交换比 0.62、每百金杀伤 12.5，中世骑射手也偏低，共同点是**高机动 + 低射程**：
-AI 不做侧翼包抄、不做打了就跑，\`move 5\` 在它手里只是"更快地送进对方阵型"。
-这类单位的人类玩家体验和 AI 数据会明显分离，所以**不要照着这张表去加强它们**——
-继续加数值只会让它在真人手里变成无脑强。这是本报告最重要的一条"别用"提示。
-
-### 6.6 节奏影响：没有一个包让对局变僵
-
-| 时代 | 基线回合 | 模组回合 | 变化 |
+| 时代 | 基线回合 | 模组回合 | 表面变化 |
 |---|---:|---:|---:|
-| 古典 | ${load('base1.json').summary.turnsAvg.toFixed(1)} | ${load('era1.json').summary.turnsAvg.toFixed(1)} | +${(((load('era1.json').summary.turnsAvg / load('base1.json').summary.turnsAvg) - 1) * 100).toFixed(0)}% |
-| 中世 | ${load('base2.json').summary.turnsAvg.toFixed(1)} | ${load('era2.json').summary.turnsAvg.toFixed(1)} | +${(((load('era2.json').summary.turnsAvg / load('base2.json').summary.turnsAvg) - 1) * 100).toFixed(0)}% |
-| 火药 | ${load('base3.json').summary.turnsAvg.toFixed(1)} | ${load('era3.json').summary.turnsAvg.toFixed(1)} | +${(((load('era3.json').summary.turnsAvg / load('base3.json').summary.turnsAvg) - 1) * 100).toFixed(0)}% |
-| 工业 | ${load('base4.json').summary.turnsAvg.toFixed(1)} | ${load('era4.json').summary.turnsAvg.toFixed(1)} | +${(((load('era4.json').summary.turnsAvg / load('base4.json').summary.turnsAvg) - 1) * 100).toFixed(0)}% |
-| 现代 | ${load('base5.json').summary.turnsAvg.toFixed(1)} | ${load('era5.json').summary.turnsAvg.toFixed(1)} | +${(((load('era5.json').summary.turnsAvg / load('base5.json').summary.turnsAvg) - 1) * 100).toFixed(0)}% |
+${paceRows.join('\n')}
 
-现代拉得最长（+42%）：它多了重型坦克（护甲 14）、机枪地堡（护甲 15）、反坦克拒马这类
-高耐久单位，正面更难啃；同时火箭炮射程被收回 5，攻城少了一件"够不着"的利器。
-**但未决率反而从 13% 降到 0%**——每一局都分出了胜负，说明变长是"来回攻防"的变长，
-不是又回到了推不动的拉锯。这一条比回合数本身更重要。
+这些变化同时可能受到 AI 版本、规则、单位定义和阵容选择影响，不能归因为时代包。
+现有单位数据还不包含“堵住了几回合通路”“保护了多少城市”等指标，因此也不能从零输出断言城墙无效。
 
-## 7. 遗留风险与下一步
+## 7. 遗留风险与重新验证
 
-1. **高价兵样本不足。** 表里标 ⚠ 的单位（重型坦克、列车炮、马克 I 坦克、要塞等）只有 2~9 次招募，
-   两个「每百金」指标不可用。原因是 AI 的招募打分偏好"便宜、当场能打"的兵，
-   贵单位要攒钱、要等时机，它等不了。想测准要么把局数提到 100+，要么给 AI 加"攒钱买大件"的策略。
-2. **水军样本极少。** 只有地图带大片水域时才会造，每包 30 局里常常只有几十艘，结论仅供参考。
-3. **骑兵类需要真人验证。** 见 6.5：AI 用不出机动的价值，这一项数据不能当平衡依据。
-4. **火药（×1.36）与现代（×1.52）仍偏强，可以再收一轮。** 现在处在 ±25% 的边缘带，
-   如果继续调，优先动"射程 + 溅射"的组合（攻城加农炮、自行火炮），而不是再削它们的耐久——
-   耐久一削，这两个包的"贵而脆"特征就没了，会退化成放大版的原版兵。
-5. **古典（×0.65）不建议再拉数值。** 它是"重甲肉盾"包，交换比低是设计的一部分。
-   如果真觉得不好用，正确的做法是降低招募门槛（降价），而不是把重甲改薄。
+1. **同版本配对基准待重跑。** 用同一提交、同一规则、同一随机种子与其它扩展，分别开启/关闭兵种包，再比较胜率、正式平局、未决、回合数及攻城贡献。当前 v5 合并版尚未完成这组平衡验证。
+2. **样本与先手效应。** 当前每包 30 局，需增加种子并做先后手/出生位配对。高价兵、水军及招募数不足 10 的单位，不能用单个比值下强弱结论。
+3. **战术改变会改变数值表现。** 骑兵绕后、真实地形威胁和城墙策略会影响采用率与交换比；不能把旧 AI 下的短板直接解释为兵种缺陷。
+4. **保留历史原始数据。** 本次仅重新汇总已有 JSON，没有重跑或补造对局。旧 \`draws\` 不自动改写为正式平局；新输出应分别保留 \`draws\` 和 \`unresolved\`。
+5. **完整版本来源。** 后续样本应记录代码提交、规则版本、AI/预算配置、扩展列表与模拟上限，避免再次混用不可比的基线。
 
 ## 附：怎么重跑这份报告
 

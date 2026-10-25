@@ -6,7 +6,7 @@
 
 ## 凭证配置
 
-本机已按用户授权复用原项目的 Windows 加密凭证，只在被 Git 忽略的 `.env.local` 中记录文件位置。其他机器可参考 `.env.example`，任选：
+可复用现有 Windows 加密凭证，只在被 Git 忽略的 `.env.local` 中记录文件位置。配置可参考 `.env.example`，任选：
 
 ```dotenv
 DEEPSEEK_API_KEY=你的本机凭证

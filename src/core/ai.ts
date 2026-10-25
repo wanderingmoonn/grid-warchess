@@ -901,6 +901,12 @@ function buildSpots(
   return out;
 }
 
+/** 障碍工事共用墙体额度；桥、经济建筑和产兵点分别使用自己的预算。 */
+function isDefensiveBarrier(def: UnitTypeDef): boolean {
+  return def.category === 'building' && !def.autoAttack && !def.barracks
+    && !def.bridges && !def.income && !def.incomeByTerrain;
+}
+
 function rawBuildScore(
   s: GameState,
   unit: Unit,
@@ -1025,11 +1031,8 @@ function rawBuildScore(
   // 以前这类单位落到最后的 return 10，等于"永远排最后"：五个时代的城墙
   // 招募数全是 0，加了跟没加一样。现在的规则是"挨打才砌墙"，而且总量有上限，
   // 免得两边对着垒墙、把对局拖回那个谁也推不动的拉锯。
-  if (!def.autoAttack && !def.barracks && !def.incomeByTerrain && !def.bridges) {
-    const mine = unitsOf(s, unit.owner).filter((u) => {
-      const ud = utype(s, u.type);
-      return ud.category === 'building' && !ud.autoAttack && !ud.barracks && !ud.incomeByTerrain;
-    }).length;
+  if (isDefensiveBarrier(def)) {
+    const mine = unitsOf(s, unit.owner).filter((u) => isDefensiveBarrier(utype(s, u.type))).length;
     if (mine >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
     if (risky) return -999;
 

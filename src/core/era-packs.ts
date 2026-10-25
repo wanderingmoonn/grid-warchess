@@ -39,6 +39,9 @@
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
 
+// 纯墙体射程为 0：即使邻接指挥光环，也不能主动攻击、攻城或反击。
+// 这只影响新开局兵种表；已有存档仍使用本局保存的定义。
+
 /* ================================================================== */
 /* 时代 1 · 古典（原版 12 个 → 模组 14 个）                            */
 /* ================================================================== */
@@ -234,7 +237,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     atk: 0,
     armor: 3,
     maxHp: 45,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -251,7 +254,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     atk: 0,
     armor: 5,
     maxHp: 75,
-    range: 1,
+    range: 0,
     vision: 1,
   },
 
@@ -459,7 +462,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     atk: 0,
     armor: 8,
     maxHp: 80,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -664,7 +667,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     atk: 0,
     armor: 6,
     maxHp: 50,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -680,7 +683,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     atk: 0,
     armor: 10,
     maxHp: 110,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -927,7 +930,7 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 0,
     armor: 14,
     maxHp: 150,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -1120,7 +1123,7 @@ const MODERN: UnitTypeDef[] = [
     atk: 0,
     armor: 10,
     maxHp: 70,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
@@ -1136,7 +1139,7 @@ const MODERN: UnitTypeDef[] = [
     atk: 0,
     armor: 18,
     maxHp: 200,
-    range: 1,
+    range: 0,
     vision: 1,
   },
   {
