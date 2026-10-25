@@ -1,0 +1,59 @@
+{
+  "controller": "offline-scripted-demo",
+  "offline": true,
+  "result": {
+    "status": "turn-ended",
+    "requests": 3,
+    "appliedActions": 2,
+    "rejectedReplies": 1,
+    "fallbackUsed": false
+  },
+  "events": [
+    {
+      "type": "requested",
+      "requestId": "controller-1:A:1:1",
+      "turn": 1,
+      "player": "A"
+    },
+    {
+      "type": "applied",
+      "requestId": "controller-1:A:1:1",
+      "action": {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "militia"
+      },
+      "explanation": "补充一支民兵。"
+    },
+    {
+      "type": "requested",
+      "requestId": "controller-1:A:1:2",
+      "turn": 1,
+      "player": "A"
+    },
+    {
+      "type": "rejected",
+      "requestId": "controller-1:A:1:2",
+      "code": "RULE_REJECTED",
+      "message": "行动未通过游戏规则校验；请检查占位、距离、金币、时代与产能。状态未改变。"
+    },
+    {
+      "type": "requested",
+      "requestId": "controller-1:A:1:3",
+      "turn": 1,
+      "player": "A"
+    },
+    {
+      "type": "applied",
+      "requestId": "controller-1:A:1:3",
+      "action": {
+        "type": "END_TURN"
+      },
+      "explanation": "已收到产能限制反馈，结束本回合。"
+    },
+    {
+      "type": "stopped",
+      "status": "turn-ended"
+    }
+  ]
+}

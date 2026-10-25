@@ -12,6 +12,7 @@
 import type { PlayerView } from '../core/fog.ts';
 import { cityName, utype } from '../core/rules.ts';
 import type { GameState, Unit } from '../core/types.ts';
+import { escapeHtml } from './html.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -127,10 +128,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       `height:${(city.size / s.h) * 100}%`,
     ].join(';');
 
-    return `<div class="${cls.join(' ')}" data-city-id="${city.id}" style="${style}" title="${cityName(city)} · 时代 ${romanEra(city.era)} · 耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}">
+    return `<div class="${cls.join(' ')}" data-city-id="${escapeHtml(city.id)}" style="${style}" title="${escapeHtml(cityName(city))} · 时代 ${romanEra(city.era)} · 耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}">
       <div class="city-plate">
         <div class="city-era">${romanEra(city.era)}</div>
-        <div class="city-name">${cityName(city)}</div>
+        <div class="city-name">${escapeHtml(cityName(city))}</div>
         <div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
         <div class="city-armor">甲 ${city.armor}</div>
       </div>
@@ -198,12 +199,12 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
       ? `<span style="font-size:9px;vertical-align:top;opacity:.85">${cargo}</span>`
       : '';
 
-  return `<div class="${cls.join(' ')}" data-id="${u.id}" data-x="${u.x}" data-y="${u.y}" style="${tileRect(
+  return `<div class="${cls.join(' ')}" data-id="${escapeHtml(u.id)}" data-x="${u.x}" data-y="${u.y}" style="${tileRect(
     s,
     u.x,
     u.y,
-  )}" title="${title}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}">
-    <div class="unit-inner">${def.short}${cargoBadge}
+  )}" title="${escapeHtml(title)}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}">
+    <div class="unit-inner">${escapeHtml(def.short)}${cargoBadge}
       <div class="unit-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>
   </div>`;
@@ -223,8 +224,8 @@ function ghostHtml(
     s,
     x,
     y,
-  )}" title="${title}">
-    <div class="unit-inner">${def.short}</div>
+  )}" title="${escapeHtml(title)}">
+    <div class="unit-inner">${escapeHtml(def.short)}</div>
   </div>`;
 }
 

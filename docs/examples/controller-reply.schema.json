@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GridWarchessControllerReplyV1",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "MOVE"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "ATTACK"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "targetId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "targetId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "SIEGE"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "cityId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "cityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "RECRUIT"
+            },
+            "cityId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "unitType": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "cityId",
+            "unitType"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "RECRUIT"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "unitType": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "unitType"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "BUILD"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "unitType": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "unitType",
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "LOAD"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "cargoId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "cargoId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "UNLOAD"
+            },
+            "unitId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "cargoId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "unitId",
+            "cargoId",
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "UPGRADE"
+            },
+            "cityId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "cityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "SET_ORDERS"
+            },
+            "queue": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          },
+          "required": [
+            "type",
+            "queue"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "END_TURN"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "explanation": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "action"
+  ],
+  "additionalProperties": false
+}

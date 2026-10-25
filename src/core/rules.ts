@@ -11,7 +11,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CHEAPEST_COST, CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
+import { CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
 import { activeExpansions } from './expansions.ts';
 import type {
   ActionResult,
@@ -19,181 +19,30 @@ import type {
   City,
   GameState,
   PlayerId,
-  Tile,
   Unit,
-  UnitTypeDef,
 } from './types.ts';
 
-/** 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。 */
-const DIRS: ReadonlyArray<readonly [number, number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
+import {
+  DIRS, adjacentToWater, armySize, canAttack, canMove, citiesOf, cityById, cityTiles,
+  cloneState, distance, distToCity, idx, inBounds, other, tileAt, unitAt, unitById,
+  unitsOf, utype, xyOf,
+} from './rules/queries.ts';
+import { movePower, recruitCost, visionOf } from './rules/modifiers.ts';
+import { computeDamage, damageToCity, splashVictims } from './rules/combat.ts';
+import { actionError } from './rules/action-validation.ts';
+import { evaluateOutcome, outcomeText } from './rules/outcome.ts';
+import { productionError, productionOf, recordProduction, resetProduction } from './rules/production.ts';
 
-/**
- * 这一格是不是临水。
- *
- * 桥面也算"临水"：桥底下就是河，军营扎在桥头是有水可用的。
- * 做成对外导出的判断，是因为它不只是一条合法性检查——
- * 地图生成、AI 选址、界面高亮都要用同一套口径，各写一份必然走偏。
- */
-export function adjacentToWater(s: GameState, x: number, y: number): boolean {
-  return DIRS.some(([dx, dy]) => {
-    const t = tileAt(s, x + dx, y + dy);
-    return !!t && (t.terrain === 'water' || t.terrain === 'bridge');
-  });
-}
-
-export function other(p: PlayerId): PlayerId {
-  return p === 'A' ? 'B' : 'A';
-}
-
-/** 从本局的兵种表里取定义（不是全局表，因为对局可能只启用了部分兵种） */
-export function utype(s: GameState, id: string): UnitTypeDef {
-  const def = s.unitTypes[id];
-  if (!def) throw new Error(`本局没有兵种: ${id}`);
-  return def;
-}
-
-export function idx(s: GameState, x: number, y: number): number {
-  return y * s.w + x;
-}
-
-export function inBounds(s: GameState, x: number, y: number): boolean {
-  return x >= 0 && y >= 0 && x < s.w && y < s.h;
-}
-
-export function xyOf(s: GameState, i: number): { x: number; y: number } {
-  return { x: i % s.w, y: Math.floor(i / s.w) };
-}
-
-export function tileAt(s: GameState, x: number, y: number): Tile | null {
-  if (!inBounds(s, x, y)) return null;
-  return s.tiles[idx(s, x, y)] ?? null;
-}
-
-export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
-  return s.units.find((u) => u.x === x && u.y === y);
-}
-
-export function unitById(s: GameState, id: string): Unit | undefined {
-  return s.units.find((u) => u.id === id);
-}
-
-export function unitsOf(s: GameState, p: PlayerId): Unit[] {
-  return s.units.filter((u) => u.owner === p);
-}
-
-/**
- * 编制（${CONFIG.maxUnits} 人上限）只数战斗单位，建筑不算。
- *
- * 以前的写法是"谁在场上都算一个编制"，于是盖了四座磨坊 + 两座军营，
- * 编制就先去掉了六个，产线直接堵死——模拟里出现过一方 24 个单位里只有 4 个能打仗、
- * 金库压着一万二，然后就再也造不出兵、也打不下城，两边耗到第 200 回合。
- * 建筑本来就不该住人：它是工地，不是部队。
- */
-export function armySize(s: GameState, p: PlayerId): number {
-  return s.units.filter((u) => u.owner === p && utype(s, u.type).category !== 'building').length;
-}
-
-export function cityById(s: GameState, id: string): City | undefined {
-  return s.cities.find((c) => c.id === id);
-}
-
-/** 某格属于哪座城市 */
-export function cityAt(s: GameState, x: number, y: number): City | undefined {
-  const tile = tileAt(s, x, y);
-  if (!tile?.cityId) return undefined;
-  return cityById(s, tile.cityId);
-}
-
-/** 某方控制的城市 */
-export function citiesOf(s: GameState, p: PlayerId): City[] {
-  return s.cities.filter((c) => c.owner === p);
-}
-
-/** 城市占的全部格子坐标 */
-export function cityTiles(city: City): Array<{ x: number; y: number }> {
-  const out: Array<{ x: number; y: number }> = [];
-  for (let dy = 0; dy < city.size; dy++) {
-    for (let dx = 0; dx < city.size; dx++) out.push({ x: city.x + dx, y: city.y + dy });
-  }
-  return out;
-}
-
-/** 单位到城市方块的最短曼哈顿距离 */
-export function distToCity(unit: { x: number; y: number }, city: City): number {
-  const cx = Math.min(Math.max(unit.x, city.x), city.x + city.size - 1);
-  const cy = Math.min(Math.max(unit.y, city.y), city.y + city.size - 1);
-  return Math.abs(unit.x - cx) + Math.abs(unit.y - cy);
-}
-
-/** 曼哈顿距离。移动和攻击统一用它，避免"能斜着打但斜着走不过去"的怪事。 */
-export function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-export function cloneState(s: GameState): GameState {
-  return structuredClone(s);
-}
-
-export function canMove(u: Unit): boolean {
-  return !u.moved;
-}
-
-export function canAttack(u: Unit): boolean {
-  return !u.acted;
-}
-
-/**
- * 相邻友军提供的光环加成。
- *
- * 只加不乘，也不递归——否则两个指挥光环互相加成会失控。
- */
-export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: number } {
-  let atk = 0;
-  let armor = 0;
-  for (const ally of s.units) {
-    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    if (distance(ally, unit) !== 1) continue;
-    const d = utype(s, ally.type);
-    if (hasAbility(d, 'aura-command')) atk += 2;
-    if (hasAbility(d, 'aura-armor')) armor += 2;
-  }
-  return { atk, armor };
-}
-
-/** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
-export function movePower(s: GameState, unit: Unit): number {
-  const base = utype(s, unit.type).move;
-  if (base <= 0) return 0;
-  let move = base;
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
-  }
-  return Math.max(1, move);
-}
-
-/** 算上扩展规则后的视野半径 */
-export function visionOf(s: GameState, unit: Unit): number {
-  const selfDef = utype(s, unit.type);
-  let r = selfDef.vision;
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, base: r });
-  }
-  return Math.max(1, r);
-}
-
-/** 算上扩展规则后的兵种造价 */
-export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): number {
-  let cost = def.cost;
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost });
-  }
-  return Math.max(0, cost);
-}
+// 保留原有入口，调用方无需因内部拆分而修改导入路径。
+export {
+  adjacentToWater, armySize, canAttack, canMove, citiesOf, cityAt, cityById, cityTiles,
+  cloneState, distance, distToCity, idx, inBounds, other, tileAt, unitAt, unitById,
+  unitsOf, utype, xyOf,
+} from './rules/queries.ts';
+export { auraBonus, movePower, recruitCost, visionOf } from './rules/modifiers.ts';
+export { computeDamage, damageToCity, previewAttack } from './rules/combat.ts';
+export { evaluateOutcome, outcomeText } from './rules/outcome.ts';
+export { productionOf, productionError } from './rules/production.ts';
 
 /** 这一格能不能站人：水不行，敌方城市也不行（城池得先打下来） */
 /**
@@ -375,7 +224,15 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
 
 export function attackableTargets(s: GameState, unit: Unit): Unit[] {
   if (!canAttack(unit)) return [];
-  return s.units.filter((u) => u.owner !== unit.owner && canStrike(s, unit, u));
+  const visible = s.fog ? visibleTilesOf(s, unit.owner) : undefined;
+  return s.units.filter((u) => u.owner !== unit.owner && canStrike(s, unit, u)
+    && canSeeUnit(s, u, unit.owner, visible));
+}
+
+/** 地形公开，但点名攻击必须实际看见目标；范围伤害仍可波及隐藏单位。 */
+function canSeeUnit(s: GameState, unit: Unit, viewer: PlayerId, visible?: ReadonlySet<number>): boolean {
+  return !s.fog || ((visible ?? visibleTilesOf(s, viewer)).has(idx(s, unit.x, unit.y))
+    && !isHiddenFrom(s, unit, viewer));
 }
 
 /** 射程内的敌方城市 */
@@ -387,125 +244,6 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
     const d = distToCity(unit, c);
     return d > 0 && d <= range;
   });
-}
-
-/**
- * 对单位的伤害：攻击 − （护甲 + 地形加成），最低 1，然后过一遍扩展钩子。
- * 钩子必须是纯函数——这个函数也会在 UI 的伤害预览里被调用。
- */
-export function computeDamage(
-  s: GameState,
-  attacker: Unit,
-  defender: Unit,
-  isCounter = false,
-): number {
-  const at = utype(s, attacker.type);
-  const dt = utype(s, defender.type);
-  const tile = tileAt(s, defender.x, defender.y);
-  const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
-
-  // 允许 0：差四个时代的兵打不动坦克，这是刻意的
-  const attackerAura = auraBonus(s, attacker);
-  const defenderAura = auraBonus(s, defender);
-
-  let armor = dt.armor + defenderAura.armor + terrainBonus;
-
-  // 扩展改护甲放在破甲之前：这样"额外 N 点护甲"和地形加成是同一种东西，
-  // 破甲照样削一半、攻击低于护甲照样是 0 伤害。
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyArmor) {
-      armor = e.hooks.modifyArmor({ state: s, attacker, defender, armor, isCounter });
-    }
-  }
-
-  if (hasAbility(at, 'armor-pierce')) armor = Math.floor(armor / 2);
-
-  let dmg = Math.max(0, at.atk + attackerAura.atk - armor);
-
-  // 盾墙：本回合没挪窝才生效，站着守的人才硬
-  if (hasAbility(dt, 'shield-wall') && !defender.moved) dmg -= 2;
-
-  if (isCounter) dmg = Math.max(0, Math.round(dmg * CONFIG.counterAttackRatio));
-
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyDamage) {
-      dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, isCounter });
-    }
-  }
-
-  return Math.max(0, Math.round(dmg));
-}
-
-/** 对城市的伤害：只用城市自身护甲，地形加成不重复计算 */
-export function damageToCity(attacker: Unit, city: City, s: GameState): number {
-  const at = utype(s, attacker.type);
-  // 同样允许 0：拿民兵去砸现代城，就是砸不动
-  let dmg = Math.max(0, at.atk - city.armor);
-  if (hasAbility(at, 'siege-master')) dmg = Math.round(dmg * 1.5);
-  return dmg;
-}
-
-/** 预估伤害，给 UI 的攻击预览用，不改变状态 */
-export function previewAttack(
-  s: GameState,
-  attacker: Unit,
-  defender: Unit,
-): {
-  toDefender: number;
-  toAttacker: number;
-  counter: boolean;
-  hits: number;
-  toSplash: number;
-} {
-  const def = utype(s, attacker.type);
-  const burst = Math.max(1, def.burst ?? 1);
-
-  // 多段：按顺序算，打死了就不再有后续
-  let toDefender = 0;
-  let hp = defender.hp;
-  let hits = 0;
-  while (hits < burst && hp > 0) {
-    const one = computeDamage(s, attacker, defender);
-    hp -= one;
-    toDefender += one;
-    hits += 1;
-  }
-
-  const survives = hp > 0;
-  const range = utype(s, defender.type).range;
-  const counter = survives && distance(attacker, defender) <= range;
-  const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
-
-  let toSplash = 0;
-  for (const v of splashVictims(s, attacker, defender)) toSplash += v.dmg;
-
-  return { toDefender, toAttacker, counter, hits, toSplash };
-}
-
-/**
- * 溅射范围内的敌人：主目标周围的敌人各吃一份打折的伤害。
- *
- * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
- * 它只会变成"我不敢开炮"，而不是"我要算清楚再开炮"。
- */
-function splashVictims(
-  s: GameState,
-  attacker: Unit,
-  defender: Unit,
-): Array<{ unit: Unit; dmg: number }> {
-  const radius = utype(s, attacker.type).splash ?? 0;
-  if (radius <= 0) return [];
-
-  const out: Array<{ unit: Unit; dmg: number }> = [];
-  for (const v of s.units) {
-    if (v.owner === attacker.owner) continue;
-    if (v.id === defender.id) continue;
-    if (distance(v, defender) > radius) continue;
-    const dmg = Math.floor(computeDamage(s, attacker, v) * CONFIG.splashRatio);
-    if (dmg <= 0) continue;
-    out.push({ unit: v, dmg });
-  }
-  return out;
 }
 
 function pushLog(s: GameState, p: PlayerId, text: string): void {
@@ -552,19 +290,14 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   }
 }
 
-function checkWinner(s: GameState): PlayerId | null {
-  for (const p of ['A', 'B'] as PlayerId[]) {
-    // 城就是根：一座城都没有，就算你还有一支满编部队也翻不了身——
-    // 没有城市就产不了兵、升不了级、也没有收入来源。
-    // 所以这里不看兵力，只看"还剩几座城"。
-    if (citiesOf(s, p).length === 0) return other(p);
-
-    // 没兵又没钱，也是彻底打不下去了（城还在也不行，站着等死而已）
-    const alive = unitsOf(s, p).length;
-    const gold = s.players[p].gold;
-    if (alive === 0 && gold < CHEAPEST_COST) return other(p);
-  }
-  return null;
+function settleOutcome(s: GameState, endingTurn = false): boolean {
+  if (s.winner) return true;
+  const outcome = evaluateOutcome(s, endingTurn);
+  if (!outcome) return false;
+  s.winner = outcome.winner;
+  s.resultReason = outcome.reason;
+  pushLog(s, outcome.winner === 'draw' ? s.current : outcome.winner, outcomeText(s));
+  return true;
 }
 
 /**
@@ -717,8 +450,9 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
   for (const b of buildings) {
     if (!s.units.includes(b)) continue;
     const def = utype(s, b.type);
+    const visible = s.fog ? visibleTilesOf(s, owner) : undefined;
     const inRange = s.units
-      .filter((u) => u.owner !== owner && distance(b, u) > 0 && distance(b, u) <= def.range)
+      .filter((u) => u.owner !== owner && canStrike(s, b, u) && canSeeUnit(s, u, owner, visible))
       .sort((x, y) => distance(b, x) - distance(b, y) || x.hp - y.hp);
 
     const target = inRange[0];
@@ -775,8 +509,15 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
 
   const by = actor ?? s.current;
   if (by !== s.current) return { ok: false, reason: '还没轮到你行动' };
+  const invalid = actionError(action);
+  if (invalid) return { ok: false, reason: invalid };
 
   const next = cloneState(s);
+  // 直接调用规则的旧 v4 局也完成一次性迁移，后续保存不应再次封存新回合。
+  if (next.version === 4) {
+    next.turnProduction = productionOf(next);
+    next.version = 5;
+  }
 
   const result: ActionResult = (() => {
     switch (action.type) {
@@ -805,7 +546,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
 
   if (result.ok) {
     syncBridges(result.state);
-    result.state.winner = result.state.winner ?? checkWinner(result.state);
+    settleOutcome(result.state);
     refreshMemory(result.state);
   }
 
@@ -859,6 +600,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
+  if (!canSeeUnit(s, defender, attacker.owner)) return { ok: false, reason: '目标不在可见范围内' };
 
   const dist = distance(attacker, defender);
   if (!canStrike(s, attacker, defender)) {
@@ -936,7 +678,6 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     fireKilled(s, attacker, undefined);
   }
 
-  s.winner = checkWinner(s);
   return { ok: true, state: s };
 }
 
@@ -988,7 +729,6 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
     pushLog(s, attacker.owner, `城市被攻陷，易主`);
   }
 
-  s.winner = checkWinner(s);
   return { ok: true, state: s };
 }
 
@@ -1123,7 +863,7 @@ function doBuild(
     return { ok: false, reason: `${builderDef.name} 不会建造这个` };
   }
 
-  const def = s.unitTypes[unitTypeId];
+  const def = Object.hasOwn(s.unitTypes, unitTypeId) ? s.unitTypes[unitTypeId] : undefined;
   if (!def) return { ok: false, reason: '本局没有这个建筑' };
   if (def.category !== 'building') return { ok: false, reason: '只有建筑可以修建' };
 
@@ -1131,6 +871,9 @@ function doBuild(
   const tile = tileAt(s, x, y);
   if (!tile) return { ok: false, reason: '目标越界' };
   if (unitAt(s, x, y)) return { ok: false, reason: '这里已经有单位或建筑了' };
+  if (tile.cityId && cityById(s, tile.cityId)?.owner !== s.current) {
+    return { ok: false, reason: '必须先攻占敌方城市，才能在城内建造' };
+  }
 
   const overWater = !!def.bridges;
 
@@ -1207,6 +950,8 @@ function doBuild(
  * eraDef 的绝对值，那些加成就被抹掉了。
  */
 function doUpgrade(s: GameState, cityId: string): ActionResult {
+  const productionIssue = productionError(s, { type: 'UPGRADE' });
+  if (productionIssue) return { ok: false, reason: productionIssue };
   const city = cityById(s, cityId);
   if (!city) return { ok: false, reason: '城市不存在' };
   if (city.owner !== s.current) return { ok: false, reason: '只能升级自己的城市' };
@@ -1227,6 +972,7 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
   city.maxHp += hpGain;
   city.armor += to.cityArmor - from.cityArmor;
   city.hp = Math.min(city.maxHp, city.hp + hpGain);
+  recordProduction(s, { type: 'UPGRADE' });
 
   pushLog(
     s,
@@ -1250,7 +996,9 @@ function doRecruit(
   campId: string | undefined,
   unitTypeId: string,
 ): ActionResult {
-  const def = s.unitTypes[unitTypeId];
+  const productionIssue = productionError(s, { type: 'RECRUIT', unitType: unitTypeId });
+  if (productionIssue) return { ok: false, reason: productionIssue };
+  const def = Object.hasOwn(s.unitTypes, unitTypeId) ? s.unitTypes[unitTypeId] : undefined;
   if (!def) return { ok: false, reason: '本局没有这个兵种' };
   if (def.category === 'building') {
     return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
@@ -1280,7 +1028,7 @@ function doRecruit(
       const y = camp.y + dy;
       const t = tileAt(s, x, y);
       if (!t) continue;
-      if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
+      if (blockedFor(s, x, y, { type: unitTypeId, owner: s.current })) continue;
       if (unitAt(s, x, y)) continue;
       slots.push({ x, y });
     }
@@ -1346,6 +1094,7 @@ function doRecruit(
     acted: true,
   });
 
+  recordProduction(s, { type: 'RECRUIT', unitType: unitTypeId });
   pushLog(s, s.current, `${label}产出了${def.name}`);
   return { ok: true, state: s };
 }
@@ -1377,7 +1126,7 @@ function doSetOrders(s: GameState, queue: string[]): ActionResult {
     if (!id) continue;
     // 哨兵值：这一格是"升级时代"，不是兵种
     if (id === ORDER_UPGRADE) continue;
-    const def = s.unitTypes[id];
+    const def = Object.hasOwn(s.unitTypes, id) ? s.unitTypes[id] : undefined;
     if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
     if (def.category === 'building') {
       return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
@@ -1389,11 +1138,8 @@ function doSetOrders(s: GameState, queue: string[]): ActionResult {
 }
 
 function doEndTurn(s: GameState): ActionResult {
-  s.winner = checkWinner(s);
-  if (s.winner) {
-    pushLog(s, s.winner, '对局结束');
-    return { ok: true, state: s };
-  }
+  // B 的最后一次行动已完成；不要多结算 A 的下一轮收入、休整或防御火力。
+  if (settleOutcome(s, true)) return { ok: true, state: s };
 
   const prevPlayer = s.current;
   // 指挥官模式：这回合过完了，序列前移一格。
@@ -1407,6 +1153,7 @@ function doEndTurn(s: GameState): ActionResult {
   const nextPlayer = other(s.current);
   s.current = nextPlayer;
   s.turn += 1;
+  resetProduction(s);
 
   // 休整：只有上回合没移动、也没攻击的单位才算"歇过来了"。
   // 这个判断必须在 resetUnitsFor 之前做——重置会把这两个标记清掉。
@@ -1426,11 +1173,6 @@ function doEndTurn(s: GameState): ActionResult {
 
   // 守方的建筑在敌人接手回合的第一时间开火
   fireBuildings(s, prevPlayer);
-  s.winner = s.winner ?? checkWinner(s);
-  if (s.winner) {
-    pushLog(s, s.winner, '对局结束');
-    return { ok: true, state: s };
-  }
 
   const income = settleIncome(s, nextPlayer);
 

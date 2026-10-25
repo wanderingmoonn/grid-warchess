@@ -204,6 +204,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     try {
       const token = newToken();
       const seat = await createRoom(state, state.current, token);
+      if (closed) return;
       host.enter(seat, {
         code: seat.code,
         state,
@@ -235,6 +236,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     paint();
     try {
       const snapshotNow = await fetchRoom(code);
+      if (closed) return;
       if (!snapshotNow) {
         error = `没有找到代码为 ${code} 的房间`;
       } else {
@@ -244,7 +246,9 @@ export function openOnlinePanel(host: OnlineHost): void {
         const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
         let seated: PlayerId | null = null;
         for (const seat of order) {
-          if ((await claimSeat(code, seat, token)) === 'ok') {
+          const result = await claimSeat(code, seat, token);
+          if (closed) return;
+          if (result === 'ok') {
             seated = seat;
             break;
           }

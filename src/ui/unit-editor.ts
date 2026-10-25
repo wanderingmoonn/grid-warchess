@@ -288,6 +288,7 @@ export function openUnitEditor(onClose?: () => void): void {
       const v = Number(draft[f]);
       draft[f] = Number.isFinite(v) && v >= 0 ? Math.round(v) : 0;
     }
+    draft.maxHp = Math.max(1, draft.maxHp);
     if (draft.incomeByTerrain) {
       const cleaned: Partial<Record<Terrain, number>> = {};
       for (const t of TERRAINS) {
@@ -298,7 +299,10 @@ export function openUnitEditor(onClose?: () => void): void {
     }
     const all = loadCustomUnits();
     if (!all[draft.id]) draft.id = nextCustomId(all);
-    upsertCustomUnit(draft);
+    if (!upsertCustomUnit(draft)) {
+      window.alert('保存失败：请检查兵种数值，并确认浏览器允许本地存储。');
+      return;
+    }
     draft = null;
     view = 'list';
     paint();

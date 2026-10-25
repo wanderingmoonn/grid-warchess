@@ -5,7 +5,7 @@
  * 运行：node --experimental-strip-types scripts/debug-ai.ts 25
  */
 
-import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import { applyAction, attackableTargets, citiesOf, distToCity, distance, reachableTiles, siegeTargets, unitsOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { GameState } from '../src/core/types.ts';
@@ -19,14 +19,17 @@ for (let turn = 1; turn <= STOP; turn++) {
   budget.upgraded = 0;
   const side = s.current;
   const acts: string[] = [];
+  const rejected = new Set<string>();
   for (let step = 0; step < AI_MAX_STEPS; step++) {
-    const a = aiNextAction(s, budget);
+    const a = aiNextAction(s, budget, rejected);
     if (!a) break;
     const r = applyAction(s, a);
     if (!r.ok) {
       acts.push(`非法:${a.type}(${r.reason})`);
-      break;
+      rejected.add(aiActionKey(a));
+      continue;
     }
+    rejected.clear();
     s = r.state;
     if (a.type === 'RECRUIT') budget.recruited += 1;
     if (a.type === 'UPGRADE') budget.upgraded += 1;

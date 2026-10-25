@@ -78,7 +78,7 @@ export function createMatch(
   }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
-  const enabled = config.enabledUnits.filter((id) => catalog[id]);
+  const enabled = [...new Set(config.enabledUnits.filter((id) => Object.hasOwn(catalog, id)))];
   const pool = enabled.length > 0 ? enabled : Object.keys(UNIT_TYPES);
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
   for (const id of Object.keys(extraUnits)) {
@@ -118,7 +118,8 @@ export function createMatch(
   const unitTypes: Record<string, UnitTypeDef> = {};
   for (const id of pool) {
     const def = catalog[id];
-    if (def) unitTypes[id] = { ...def };
+    // Nested ability/build/income tables belong to this match, not the global catalog.
+    if (def) unitTypes[id] = structuredClone(def);
   }
 
   // ---- 城市 ----
@@ -196,7 +197,7 @@ export function createMatch(
   }
 
   const state: GameState = {
-    version: 4,
+    version: 5,
     seed,
     config: {
       size: config.size,
@@ -210,6 +211,8 @@ export function createMatch(
       expansionIds: EXPANSIONS.filter((e) => config.expansionIds.includes(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
       commanderMode: config.commanderMode === true,
+      ...(config.secondGoldBonus !== undefined ? { secondGoldBonus: config.secondGoldBonus } : {}),
+      ...(config.noFirstIncome !== undefined ? { noFirstIncome: config.noFirstIncome } : {}),
     },
     unitTypes,
     turn: 1,
@@ -226,6 +229,7 @@ export function createMatch(
     nextUnitSeq: unitSeq,
     fog: CONFIG.fogDefault,
     winner: null,
+    turnProduction: { turn: 1, player: 'A', recruited: 0, upgraded: 0 },
     log: [],
     memory: {
       A: { known: [] },

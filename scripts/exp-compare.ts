@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { EXPANSIONS } from '../src/core/expansions.ts';
+import { nonWinRate } from './report-outcomes.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -33,7 +34,7 @@ const SKIP = new Set(argOf('skip', 'bloodbath,fantasy-units').split(','));
 
 interface GameResult {
   seed: number;
-  winner: 'A' | 'B' | null;
+  winner: 'A' | 'B' | 'draw' | null;
   turns: number;
 }
 
@@ -47,6 +48,7 @@ interface Report {
     draws: number;
     aRate: number;
     drawRate: number;
+    unresolvedRate?: number;
     turnsAvg: number;
     recruitsPerGame: number;
   };
@@ -161,8 +163,8 @@ for (const era of ERAS) {
       same,
       baseTurns: base.summary.turnsAvg,
       turns: r.summary.turnsAvg,
-      baseDraw: base.summary.drawRate,
-      draw: r.summary.drawRate,
+      baseDraw: nonWinRate(base.summary),
+      draw: nonWinRate(r.summary),
       baseRate: base.summary.aRate,
       rate: r.summary.aRate,
       rateCi: diffCi95(r.summary.aWins, decided, base.summary.aWins, decidedBase),
@@ -181,10 +183,10 @@ for (const era of ERAS) {
   say();
   say(
     `基线 = 只开「血战」：平均 ${base.summary.turnsAvg.toFixed(1)} 回合（中位 ${median(base.results.map((g) => g.turns)).toFixed(0)}）、` +
-      `未决 ${pct(base.summary.drawRate)}、先手胜率 ${pct(base.summary.aRate)}。`,
+      `平局或未决 ${pct(nonWinRate(base.summary))}、先手胜率 ${pct(base.summary.aRate)}。`,
   );
   say();
-  say('| 叠加扩展 | 平均回合 | Δ回合（配对，95% CI） | 缩短/拉长/相同 | 未决率 | 先手胜率 | Δ胜率（95% CI） | 均招兵 |');
+  say('| 叠加扩展 | 平均回合 | Δ回合（配对，95% CI） | 缩短/拉长/相同 | 平局或未决率 | 先手胜率 | Δ胜率（95% CI） | 均招兵 |');
   say('| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const r of rows) {
     say(
@@ -213,7 +215,7 @@ if (ERAS.length > 1) {
 
   say('## 两时代合并：谁在拖时间');
   say();
-  say('| 扩展 | 古典 Δ回合 | 中世 Δ回合 | 平均 Δ | 未决率变化 |');
+  say('| 扩展 | 古典 Δ回合 | 中世 Δ回合 | 平均 Δ | 平局或未决率变化 |');
   say('| --- | --- | --- | --- | --- |');
   for (const p of pooled) {
     const per = ERAS.map((e) => rowsByEra.get(e)?.find((r) => r.id === p.id));

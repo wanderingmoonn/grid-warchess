@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "requestId": "controller-1:A:1:1",
+  "action": {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "militia"
+  },
+  "explanation": "补充一支民兵。"
+}

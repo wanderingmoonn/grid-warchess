@@ -7,8 +7,20 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "npm run test:rules && npm run test:ui",
+    "test": "npm run test:rules && npm run test:regressions && npm run test:setup && npm run test:app && npm run test:ai && npm run test:controller && npm run test:model && npm run test:storage && npm run test:policy && npm run test:ui-safety && npm run test:ui",
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
+    "test:regressions": "node --experimental-strip-types scripts/test-rules-regressions.ts",
+    "test:policy": "node --experimental-strip-types scripts/test-match-policy.ts && node --experimental-strip-types scripts/test-policy-ui.ts && node --experimental-strip-types scripts/test-report-outcomes.ts",
+    "test:setup": "node --experimental-strip-types scripts/test-setup.ts",
+    "test:app": "node --experimental-strip-types scripts/test-app.ts",
+    "test:ai": "node --experimental-strip-types scripts/test-ai-tactics.ts && node --experimental-strip-types scripts/test-ai-selection.ts && node --experimental-strip-types scripts/test-ai-runner.ts",
+    "test:controller": "node --experimental-strip-types scripts/test-controller-observation.ts && node --experimental-strip-types scripts/test-controller-protocol.ts && node --experimental-strip-types scripts/test-controller-turn.ts",
+    "test:model": "node --experimental-strip-types scripts/test-model-proxy.ts && node --experimental-strip-types scripts/test-model-ui.ts && node --experimental-strip-types scripts/test-model-app.ts",
+    "test:model:live": "node --experimental-strip-types scripts/smoke-model-live.ts",
+    "demo:controller": "node --experimental-strip-types scripts/demo-controller.ts",
+    "test:storage": "node --experimental-strip-types scripts/test-storage.ts",
+    "test:ui-safety": "node --experimental-strip-types scripts/test-ui-safety.ts",
+    "check": "tsc --noEmit",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
     "manual": "node --experimental-strip-types scripts/build-manual.ts",
     "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
@@ -19,6 +31,9 @@
     "ablate": "node --experimental-strip-types scripts/ablate.ts",
     "balance": "node --experimental-strip-types scripts/balance-report.ts",
     "pack-report": "node --experimental-strip-types scripts/pack-report.ts"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

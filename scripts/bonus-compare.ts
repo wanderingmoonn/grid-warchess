@@ -75,7 +75,7 @@ const moneyOf = (arm: Arm, era: number): string => {
 
 interface GameResult {
   seed: number;
-  winner: 'A' | 'B' | null;
+  winner: 'A' | 'B' | 'draw' | null;
   turns: number;
 }
 
@@ -86,6 +86,7 @@ interface Report {
     aWins: number;
     bWins: number;
     draws: number;
+    unresolved?: number;
     aRate: number;
     drawRate: number;
     turnsAvg: number;
@@ -195,7 +196,7 @@ for (const era of ERAS) {
 
   say(`## 时代 ${era}（${base.size}×${base.size}，每组 ${base.results.length} 局）`);
   say();
-  say('| 方案 | 动的钱 | 先手胜/后手胜/未决 | 先手胜率 | Δ胜率（95% CI） | 均回合 | 均招兵 | 胜负被改写 |');
+  say('| 方案 | 动的钱 | 先手胜/后手胜/平局或未决 | 先手胜率 | Δ胜率（95% CI） | 均回合 | 均招兵 | 胜负被改写 |');
   say('| --- | --- | --- | --- | --- | --- | --- | --- |');
 
   for (const arm of ARMS) {
@@ -212,7 +213,7 @@ for (const era of ERAS) {
     const share = aShare(r.summary);
     const baseShare = aShare(base.summary);
     say(
-      `| ${arm.label} | ${moneyOf(arm, era)} | ${r.summary.aWins} / ${r.summary.bWins} / ${r.summary.draws} | ` +
+      `| ${arm.label} | ${moneyOf(arm, era)} | ${r.summary.aWins} / ${r.summary.bWins} / ${r.summary.draws + (r.summary.unresolved ?? 0)} | ` +
         `${pct(share)} | ${isBase ? '—' : `${f1((share - baseShare) * 100)} pp（${f1(lo * 100)} ~ ${f1(hi * 100)}）`} | ` +
         `${r.summary.turnsAvg.toFixed(1)} | ${r.summary.recruitsPerGame.toFixed(0)} | ${isBase ? '—' : flipped} |`,
     );

@@ -17,7 +17,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CONFIG, passable } from './config.ts';
+import { CONFIG, ORDER_UPGRADE, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
   adjacentToWater,
@@ -46,6 +46,8 @@ import {
   xyOf,
 } from './rules.ts';
 import type { Action, AiLevel, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import { productionError, productionOf } from './rules/production.ts';
+import { enemyThreatAt, inDanger } from './ai/threat.ts';
 
 export interface AiBudget {
   maxRecruit: number;
@@ -87,6 +89,12 @@ const WADE_COST = 14;
 interface Candidate {
   action: Action;
   score: number;
+}
+
+/** 动作的稳定标识，供执行器排除已经实际尝试失败的动作。 */
+export function aiActionKey(action: Action): string {
+  const fields = Object.entries(action).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return JSON.stringify(Object.fromEntries(fields));
 }
 
 /* ---------------- 随机性：从状态派生，不碰 Math.random ---------------- */
@@ -152,19 +160,6 @@ function incomeAt(s: GameState, def: UnitTypeDef, x: number, y: number): number 
     if (nearWater) income += CONFIG.riverTradeBonus;
   }
   return income;
-}
-
-/** (x,y) 会不会被敌方下回合打到（AI 只看得到的敌人） */
-function inDanger(s: GameState, owner: PlayerId, x: number, y: number): boolean {
-  const target = { x, y };
-  for (const e of unitsOf(s, other(owner))) {
-    const def = utype(s, e.type);
-    if (distance(e, target) <= def.range) return true;
-    for (const i of reachableTiles(s, e).keys()) {
-      if (distance(xyOf(s, i), target) <= def.range) return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -258,36 +253,13 @@ const THREAT_K = 3.4;
 /** 经济兵专用的系数：农民死了就是纯亏钱，怕得比战斗单位厉害得多 */
 const ECON_THREAT_K = 13;
 
-/**
- * (x, y) 下回合会被几只敌人打到。
- *
- * 和 inDanger 的区别：inDanger 只回答"有没有危险"，这里回答"有多危险"。
- * 战棋里贴着一个人和贴着五个人是两回事——前者叫接敌，后者叫送死。
- * 判据用 move + range 的一次移动射程：进能打到、退能拉开，都算在威胁圈里。
- */
-function enemyThreatAt(
-  s: GameState,
-  owner: PlayerId,
-  x: number,
-  y: number,
-): { n: number; dmg: number } {
-  let n = 0;
-  let dmg = 0;
-  for (const e of unitsOf(s, other(owner))) {
-    const def = utype(s, e.type);
-    if (def.category !== 'combat') continue;
-    const reach = def.move + Math.max(0, def.range);
-    if (Math.abs(e.x - x) + Math.abs(e.y - y) > reach) continue;
-    n += 1;
-    dmg += Math.max(0, def.atk - 2);
-  }
-  return { n, dmg };
-}
-
 function scoreAttack(s: GameState, attacker: Unit, target: Unit): number {
   const preview = previewAttack(s, attacker, target);
   const targetDef = utype(s, target.type);
   const selfDef = utype(s, attacker.type);
+
+  // 不用攻击机会换一条零伤害战报；保留有实际溅射收益的攻击。
+  if (preview.toDefender <= 0 && preview.toSplash <= 0) return -999;
 
   const kill = preview.toDefender >= target.hp;
   let score = kill ? 120 + targetDef.cost * 0.12 : (preview.toDefender / targetDef.maxHp) * 60;
@@ -320,6 +292,14 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit): number {
     if (iDie && kill) score -= Math.max(0, myValue - theirValue) * 0.18;
     // 已经残血还去打一个打不死的：这是在给对方送击杀
     if (attacker.hp / selfDef.maxHp < 0.3 && !kill) score -= 12 * Math.min(3, myValue / 80);
+
+    // 可见敌军下一次原地攻城就能夺城时，清除它比追逐昂贵但无关的目标紧迫。
+    // 最后一城关系到即时败北，优先级高于普通换子与生产。
+    const ownCities = citiesOf(s, attacker.owner);
+    if (kill && ownCities.some((city) => {
+      const d = distToCity(target, city);
+      return d > 0 && d <= targetDef.range && damageToCity(target, city, s) >= city.hp;
+    })) score += ownCities.length === 1 ? 240 : 80;
   }
 
   return score;
@@ -1017,7 +997,7 @@ function unitCandidates(
   unit: Unit,
   all: Fields,
   traits: AiTraits,
-  truth: GameState,
+  rejected: ReadonlySet<string>,
 ): Candidate[] {
   const out: Candidate[] = [];
   const def = utype(s, unit.type);
@@ -1043,8 +1023,6 @@ function unitCandidates(
         // 而执行方遇到非法动作就中断整回合。
         if (s.players[s.current].gold < recruitCost(s, s.current, buildDef)) continue;
         for (const spot of buildSpots(s, unit, buildDef)) {
-          // 同上：视图里空着的地方，真实局面里可能有个看不见的敌人
-          if (unitAt(truth, spot.x, spot.y)) continue;
           out.push({
             action: { type: 'BUILD', unitId: unit.id, unitType: buildId, x: spot.x, y: spot.y },
             score: scoreBuild(s, unit, buildId, spot, all),
@@ -1058,13 +1036,12 @@ function unitCandidates(
     let best: Candidate | null = null;
     for (const i of reachableTiles(s, unit).keys()) {
       const { x, y } = xyOf(s, i);
-      // 视图中那格是空的，真实局面里可能站着一个它看不见的敌人（潜行 / 视野外）。
-      // 这种落点直接跳过，否则会提出一个"目标格不可达"的非法动作，
-      // 而执行方遇到非法动作会中断整个回合。
-      if (unitAt(truth, x, y)) continue;
+      // 仅根据玩家所见规划；隐藏阻挡由真实执行反馈，失败后再选择次优落点。
+      const action: Action = { type: 'MOVE', unitId: unit.id, x, y };
+      if (rejected.has(aiActionKey(action))) continue;
       const score = scoreMove(s, unit, x, y, all, traits);
       if (!best || score > best.score) {
-        best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
+        best = { action, score };
       }
     }
     if (best) out.push(best);
@@ -1309,8 +1286,19 @@ function upgradeCandidate(s: GameState, city: City): Candidate | null {
  *
  * 调用方负责真正执行 action 并循环调用，直到拿到 null 再结束回合。
  */
-export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): Action | null {
+export function aiNextAction(
+  s: GameState,
+  budget: AiBudget = DEFAULT_BUDGET,
+  rejected: ReadonlySet<string> = new Set(),
+): Action | null {
   if (s.winner) return null;
+
+  // 状态里的实际消费是下界，暂停、刷新或调用者重新创建预算均不能抹掉。
+  const used = productionOf(s);
+  const recruited = Math.max(used.recruited, budget.recruited);
+  const upgraded = Math.max(used.upgraded, budget.upgraded);
+  const planned = s.config.commanderMode && Object.hasOwn(s.orders ?? {}, s.current);
+  const order = planned ? s.orders?.[s.current]?.[0] ?? '' : budget.order;
 
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息
@@ -1336,10 +1324,10 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   const traits = aiTraits(view);
 
   for (const u of unitsOf(view, me)) {
-    candidates.push(...unitCandidates(view, u, fields, traits, s));
+    candidates.push(...unitCandidates(view, u, fields, traits, rejected));
   }
 
-  if (budget.recruited < budget.maxRecruit) {
+  if (recruited < budget.maxRecruit && (!planned || (order && order !== ORDER_UPGRADE))) {
     for (const city of citiesOf(view, me)) {
       // 刚打下来的城当回合不产兵（rules 里同一条），提出来只会得到非法动作
       if (city.capturedTurn === s.turn) continue;
@@ -1347,9 +1335,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
         traits,
-        budget.order,
+        order,
       );
-      if (c) candidates.push(c);
+      if (c && c.action.type === 'RECRUIT' && !productionError(s, c.action)) candidates.push(c);
     }
     // 军营：跟城市一样能出兵，时代取最近的己方城市
     const own = citiesOf(view, me);
@@ -1357,23 +1345,35 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
       for (const u of unitsOf(view, me)) {
         if (!utype(view, u.type).barracks) continue;
         const era = own.reduce((a, b) => (distToCity(u, a) <= distToCity(u, b) ? a : b)).era;
-        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits, budget.order);
-        if (c) candidates.push(c);
+        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits, order);
+        if (c && c.action.type === 'RECRUIT' && !productionError(s, c.action)) candidates.push(c);
       }
     }
   }
 
-  if (budget.upgraded < budget.maxUpgrade) {
+  if (upgraded < budget.maxUpgrade && !productionError(s, { type: 'UPGRADE' })) {
     for (const city of citiesOf(view, me)) {
       const c = upgradeCandidate(view, city);
       if (c) candidates.push(c);
     }
   }
 
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.score - a.score);
+  const available = candidates.filter((candidate) => !rejected.has(aiActionKey(candidate.action)));
+  if (available.length === 0) return null;
+  available.sort((a, b) => b.score - a.score);
 
-  const best = candidates[0];
+  // 攻陷最后一城立即获胜，不能被生产偏好或近分随机选择延后。
+  if (foeCities.length === 1) {
+    const lastCity = foeCities[0]!;
+    const winningSiege = available.find(({ action }) => {
+      if (action.type !== 'SIEGE' || action.cityId !== lastCity.id) return false;
+      const attacker = view.units.find((unit) => unit.id === action.unitId);
+      return attacker !== undefined && damageToCity(attacker, lastCity, view) >= lastCity.hp;
+    });
+    if (winningSiege) return winningSiege.action;
+  }
+
+  const best = available[0];
   if (!best || best.score <= 0) return null;
 
   // 在"和最优咬得很紧"的候选里随机挑一个：
@@ -1386,7 +1386,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
     aiLevelOf(s) === 'advanced'
       ? Math.max(4, Math.abs(best.score) * 0.12)
       : Math.max(6, Math.abs(best.score) * 0.25);
-  const tied = candidates.filter((c) => c.score > 0 && best.score - c.score <= band);
+  const tied = available.filter((c) => c.score > 0 && best.score - c.score <= band);
   if (tied.length > 1) {
     const pick = tied[Math.floor(aiNoise(s) * tied.length)];
     if (pick) return pick.action;

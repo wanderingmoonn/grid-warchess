@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { nonWinCount, nonWinRate } from './report-outcomes.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -34,7 +35,7 @@ interface GameResult {
   era: number;
   size: number;
   seed: number;
-  winner: 'A' | 'B' | null;
+  winner: 'A' | 'B' | 'draw' | null;
   turns: number;
 }
 
@@ -42,8 +43,10 @@ interface Summary {
   aWins: number;
   bWins: number;
   draws: number;
+  unresolved?: number;
   aRate: number;
   drawRate: number;
+  unresolvedRate?: number;
   turnsAvg: number;
   recruitsPerGame: number;
   spendPerGame: number;
@@ -144,12 +147,12 @@ for (const era of ERAS) {
     `| 后手 B 胜 | ${off.summary.bWins} | ${on.summary.bWins} | ${on.summary.bWins - off.summary.bWins > 0 ? '+' : ''}${on.summary.bWins - off.summary.bWins} |`,
   );
   say(
-    `| 未决（打到 ${cap} 回合） | ${off.summary.draws} | ${on.summary.draws} | ${on.summary.draws - off.summary.draws > 0 ? '+' : ''}${on.summary.draws - off.summary.draws} |`,
+    `| 平局或未决 | ${nonWinCount(off.summary)} | ${nonWinCount(on.summary)} | ${sign(nonWinCount(on.summary) - nonWinCount(off.summary))} |`,
   );
   say(
     `| 先手胜率（只算分出胜负的局） | ${pct(off.summary.aRate)} | ${pct(on.summary.aRate)} | ${sign((on.summary.aRate - off.summary.aRate) * 100)} 个百分点（95% CI ${sign(alo * 100)} ~ ${sign(ahi * 100)}） |`,
   );
-  say(`| 未决率 | ${pct(off.summary.drawRate)} | ${pct(on.summary.drawRate)} | ${sign((on.summary.drawRate - off.summary.drawRate) * 100)} 个百分点 |`);
+  say(`| 平局或未决率 | ${pct(nonWinRate(off.summary))} | ${pct(nonWinRate(on.summary))} | ${sign((nonWinRate(on.summary) - nonWinRate(off.summary)) * 100)} 个百分点 |`);
   say(
     `| 平均回合（未决记 ${cap + 1}） | ${off.summary.turnsAvg.toFixed(1)} | ${on.summary.turnsAvg.toFixed(1)} | ${sign(on.summary.turnsAvg - off.summary.turnsAvg)} |`,
   );

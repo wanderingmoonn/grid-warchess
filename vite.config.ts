@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
+import type { Plugin } from 'vite';
+import { createModelProxy } from './server/model-proxy.ts';
 
 /**
  * 发布环境会注入 PORT，反向代理按这个端口找服务，
@@ -13,9 +15,23 @@ const inSandbox = !!process.env.PORT;
 const port = Number(process.env.PORT) || 5178;
 const host = inSandbox ? '0.0.0.0' : '127.0.0.1';
 
+/** 私有变量只在 Node 服务侧读取，既不 define 到前端，也不使用 VITE_ 前缀。 */
+function localModelProxy(): Plugin {
+  const middleware = createModelProxy({
+    enabled: !inSandbox,
+    env: { ...loadEnv('development', process.cwd(), 'DEEPSEEK_'), ...process.env },
+  });
+  return {
+    name: 'local-deepseek-controller',
+    configureServer(server) { server.middlewares.use((req, res, next) => { void middleware(req, res, next); }); },
+    configurePreviewServer(server) { server.middlewares.use((req, res, next) => { void middleware(req, res, next); }); },
+  };
+}
+
 export default defineConfig({
   // 相对路径：部署到任何子目录都不会 404
   base: './',
+  plugins: [localModelProxy()],
   server: {
     host,
     port,

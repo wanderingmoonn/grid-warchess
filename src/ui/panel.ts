@@ -23,6 +23,9 @@ import {
   utype,
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import { escapeHtml } from './html.ts';
+import { productionStatus, resultDescription, resultTitle, roundStatus } from '../app/match-status.ts';
+import { productionError } from '../core/rules/production.ts';
 
 export interface PanelInput {
   view: PlayerView;
@@ -45,9 +48,9 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const otherCities = s.cities.filter((c) => c.owner === other).length;
 
   const turnBadge = s.winner
-    ? `<span class="turn-badge">对局结束</span>`
+    ? `<span class="turn-badge">${escapeHtml(resultTitle(s))}</span>`
     : `<span class="turn-badge active-${s.current}">
-         ${s.current === me ? '轮到你行动' : `等待 ${s.players[s.current].name}`}
+         ${s.current === me ? '轮到你行动' : `等待 ${escapeHtml(s.players[s.current].name)}`}
        </span>`;
 
   const detail = renderDetail(input, myTurn);
@@ -67,18 +70,21 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
       <div style="margin-top:12px">
         <div class="versus">
           <div class="vs-side">
-            <div class="vs-name"><span class="vs-dot a"></span>${s.players.A.name}</div>
+            <div class="vs-name"><span class="vs-dot a"></span>${escapeHtml(s.players.A.name)}</div>
             <div class="vs-stats">金币 ${s.players.A.gold}<br />城市 ${me === 'A' ? myCities : otherCities}</div>
           </div>
           <div class="vs-mid">VS</div>
           <div class="vs-side right">
-            <div class="vs-name">${s.players.B.name}<span class="vs-dot b"></span></div>
+            <div class="vs-name">${escapeHtml(s.players.B.name)}<span class="vs-dot b"></span></div>
             <div class="vs-stats">金币 ${s.players.B.gold}<br />城市 ${me === 'B' ? myCities : otherCities}</div>
           </div>
         </div>
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
       <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
+      <div class="meta-line" data-round-status>${escapeHtml(roundStatus(s))}</div>
+      <div class="hint">双方各行动一次为一轮；满 ${CONFIG.maxRounds} 轮按城市数裁决，相同则平局。</div>
+      ${s.config.commanderMode && !s.winner ? `<div class="unit-notes" data-production-status>${escapeHtml(s.players[s.current].name)}：${escapeHtml(productionStatus(s))}</div>` : ''}
     </div>
 
     <div class="card">${detail}</div>
@@ -90,7 +96,7 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
 
     <div class="side-footer">
       <button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-        ${myTurn ? '结束行动，交给对方' : '等待对方行动中'}
+        ${s.winner ? '对局已结束' : myTurn ? '结束行动，交给对方' : '等待对方行动中'}
       </button>
       <div class="hint" style="text-align:center">
         每一步都会自动存档，随时可以关掉页面
@@ -102,6 +108,16 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
 function renderDetail(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedUnit, selectedCityId, selectedCampId, selectedTile } = input;
   const s = view.state;
+
+  if (s.winner) {
+    return `<div data-game-result role="status">
+      <div class="card-title">${escapeHtml(resultTitle(s))}</div>
+      <div class="hint">${escapeHtml(resultDescription(s))}</div>
+      <div class="info-row"><span>${escapeHtml(s.players.A.name)}城市</span><b>${citiesOf(s, 'A').length}</b></div>
+      <div class="info-row"><span>${escapeHtml(s.players.B.name)}城市</span><b>${citiesOf(s, 'B').length}</b></div>
+      <div class="hint">可以导出对局留存，或从顶栏开始新对局。</div>
+    </div>`;
+  }
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -128,7 +144,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         </div>
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
         <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
-        <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
+        <div class="unit-notes">${lines.map((l) => `<div>· ${escapeHtml(l)}</div>`).join('')}</div>
       `;
     }
   }
@@ -154,8 +170,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const noteBlock =
       notes.length === 0
         ? ''
-        : `<div class="unit-notes">${notes.map((n) => `<div>· ${n}</div>`).join('')}</div>`;
-    const canBuildNow = mine && !selectedUnit.acted;
+        : `<div class="unit-notes">${notes.map((n) => `<div>· ${escapeHtml(n)}</div>`).join('')}</div>`;
+    const canBuildNow = myTurn && mine && !selectedUnit.acted;
     const buildBlock =
       buildables.length === 0
         ? ''
@@ -175,9 +191,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                      : b.incomeByTerrain
                        ? '产出金币'
                        : '工事';
-               return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
-                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
-                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · ${tag}</span></span>
+               return `<button class="recruit-btn" data-act="build" data-type="${escapeHtml(b.id)}" ${dis ? 'disabled' : ''}>
+                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(b.short)}</span>
+                 <span class="meta"><b>${escapeHtml(b.name)}</b><span>攻 ${b.atk} · 甲 ${b.armor} · ${escapeHtml(tag)}</span></span>
                  <span class="price">${price}</span>
                </button>`;
              })
@@ -193,10 +209,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
          <div class="hint">${
            cargo.length === 0
              ? '空船。贴着岸边走，把陆军接上来。'
-             : cargo.map((u) => `${utype(s, u.type).name}（${u.hp}）`).join(' · ')
+             : cargo.map((u) => `${escapeHtml(utype(s, u.type).name)}（${u.hp}）`).join(' · ')
          }</div>
          <div class="recruit-list" style="margin-top:8px">
-           <button class="recruit-btn" data-act="load" ${!mine || selectedUnit.acted || cargo.length >= cap ? 'disabled' : ''}>
+           <button class="recruit-btn" data-act="load" ${!myTurn || !mine || selectedUnit.acted || cargo.length >= cap ? 'disabled' : ''}>
              <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">装</span>
              <span class="meta"><b>装载</b><span>把贴身的陆军接上船（占掉它这一回合）</span></span>
              <span class="price">—</span>
@@ -204,7 +220,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
            ${
              cargo.length === 0
                ? ''
-               : `<button class="recruit-btn" data-act="unload" ${!mine || selectedUnit.acted ? 'disabled' : ''}>
+               : `<button class="recruit-btn" data-act="unload" ${!myTurn || !mine || selectedUnit.acted ? 'disabled' : ''}>
                     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">卸</span>
                     <span class="meta"><b>卸载</b><span>放到船边一格空地，下船后本回合不能再动</span></span>
                     <span class="price">—</span>
@@ -214,10 +230,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
     return `
       <div class="unit-head">
-        <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
+        <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${escapeHtml(def.short)}</div>
         <div>
-          <div class="unit-title">${def.name}</div>
-          <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${status.join(' / ')}</div>
+          <div class="unit-title">${escapeHtml(def.name)}</div>
+          <div class="unit-sub">${escapeHtml(s.players[selectedUnit.owner].name)} · ${status.join(' / ')}</div>
         </div>
       </div>
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
@@ -297,7 +313,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const unitButton = (def: UnitTypeDef) => {
     const price = recruitCost(s, me, def);
     const slotsOk = def.domain === 'water' ? hasPort : freeSlots > 0;
-    const disabled = !myTurn || gold < price || !slotsOk;
+    const disabled = !myTurn || gold < price || !slotsOk || city.capturedTurn === s.turn;
 
     let extra = '';
     if (def.incomeByTerrain) {
@@ -326,7 +342,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const upgradeBlock =
     mine && nextEra && upgradeCost !== null
-      ? `<button class="upgrade-btn" data-act="upgrade" ${!myTurn || gold < upgradeCost ? 'disabled' : ''}>
+      ? `<button class="upgrade-btn" data-act="upgrade" title="${escapeHtml(productionError(s, { type: 'UPGRADE' }) ?? '')}" ${!myTurn || gold < upgradeCost || productionError(s, { type: 'UPGRADE' }) ? 'disabled' : ''}>
            <span class="upgrade-main">
              <b>升级到「${nextEra.name}」时代</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
@@ -341,8 +357,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     <div class="unit-head">
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
-        <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name}时代 · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-title">城市 ${escapeHtml(cityName(city))}</div>
+        <div class="unit-sub">${escapeHtml(s.players[city.owner].name)} · ${era.name}时代 · 驻军 ${garrison}/${city.size * city.size}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
@@ -363,7 +379,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
              }
              ${
                locked.length > 0
-                 ? `<br />升级后可解锁：${locked.map((d) => d.name).join('、')}`
+                 ? `<br />升级后可解锁：${locked.map((d) => escapeHtml(d.name)).join('、')}`
                  : ''
              }
            </div>`
@@ -391,11 +407,12 @@ function recruitButton(
 ): string {
   const price = recruitCost(s, me, def);
   const detail = `攻 ${def.atk} · 甲 ${def.armor} · 移 ${def.move} · 射 ${def.range}`;
-  return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${disabled ? 'disabled' : ''}>
-    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+  const reason = productionError(s, { type: 'RECRUIT', unitType: def.id });
+  return `<button class="recruit-btn" data-act="recruit" data-type="${escapeHtml(def.id)}" title="${escapeHtml(reason ?? '')}" ${disabled || reason ? 'disabled' : ''}>
+    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(def.short)}</span>
     <span class="meta">
-      <b>${def.name}</b>
-      <span>${detail}${extra}</span>
+      <b>${escapeHtml(def.name)}</b>
+      <span>${escapeHtml(detail)}${escapeHtml(extra)}</span>
     </span>
     <span class="price">${price}</span>
   </button>`;
@@ -475,17 +492,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   return `
     <div class="unit-head">
-      <div class="unit-chip ${camp.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">${def.short}</div>
+      <div class="unit-chip ${camp.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">${escapeHtml(def.short)}</div>
       <div>
-        <div class="unit-title">${def.name}</div>
-        <div class="unit-sub">${s.players[camp.owner].name} · 前线产兵点</div>
+        <div class="unit-title">${escapeHtml(def.name)}</div>
+        <div class="unit-sub">${escapeHtml(s.players[camp.owner].name)} · 前线产兵点</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
     <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
-    <div class="info-row"><span>补给</span><b>${supplyLine}</b></div>
+    <div class="info-row"><span>补给</span><b>${escapeHtml(supplyLine)}</b></div>
     ${
       mine && supply
         ? `<div class="card-title" style="margin-top:14px">生产</div>
@@ -518,26 +535,9 @@ function renderLog(input: PanelInput): string {
     .map((e) => {
       const side = e.player === 'A' ? 'a' : 'b';
       const label = e.player === me ? '你' : view.state.players[e.player].name;
-      return `<div class="log-item ${side}"><span class="who">${label}</span>${escapeHtml(e.text)}</div>`;
+      return `<div class="log-item ${side}"><span class="who">${escapeHtml(label)}</span>${escapeHtml(e.text)}</div>`;
     })
     .join('')}</div>`;
-}
-
-function escapeHtml(t: string): string {
-  return t.replace(/[&<>"']/g, (c) => {
-    switch (c) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      default:
-        return '&#39;';
-    }
-  });
 }
 
 /**
@@ -567,6 +567,7 @@ export interface TopbarState {
   roomCode: string | null;
   /** 联机里轮到对方了，正在等他提交 */
   waitingForPeer: boolean;
+  result?: string;
 }
 
 export function topbarShell(): string {
@@ -598,14 +599,14 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
   const ref = (name: string) => root.querySelector<HTMLElement>(`[data-ref="${name}"]`);
 
   const turn = ref('turn');
-  if (turn) turn.textContent = `第 ${s.turn} 回合`;
+  if (turn) turn.textContent = `第 ${Math.ceil(s.turn / 2)} / ${CONFIG.maxRounds} 轮`;
 
   const dot = ref('dot');
   if (dot) dot.className = `side-dot ${s.current === 'A' ? 'a' : 'b'}`;
 
   const who = ref('who');
   if (who) {
-    who.textContent = s.waitingForPeer
+    who.textContent = s.result ? s.result : s.waitingForPeer
       ? '等待对方提交'
       : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
   }
@@ -618,13 +619,13 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
 
   const pause = ref('pause');
   if (pause) {
-    pause.hidden = !s.aiAny;
+    pause.hidden = !s.aiAny || !!s.result;
     pause.textContent = s.paused ? '继续' : '暂停 AI';
   }
 
   const speed = ref('speed');
   if (speed) {
-    speed.hidden = !s.aiAny;
+    speed.hidden = !s.aiAny || !!s.result;
     speed.textContent = `速度 ${s.speedName}`;
   }
 
@@ -632,6 +633,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
   if (ai) {
     ai.textContent = s.aiCurrent ? '收回操作权' : '交给 AI';
     ai.classList.toggle('btn-primary', s.aiCurrent);
+    (ai as HTMLButtonElement).disabled = !!s.result;
   }
 
   const fog = ref('fog');

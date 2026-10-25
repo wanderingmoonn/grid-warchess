@@ -10,7 +10,7 @@
  * 运行：node --experimental-strip-types scripts/sim-ai.ts [回合数]
  */
 
-import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import { applyAction, citiesOf, distToCity } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
@@ -92,15 +92,18 @@ for (let turn = 1; turn <= TURNS; turn++) {
   budget.upgraded = 0;
 
   const rep: TurnReport = { turn, side, attacks: 0, sieges: 0, moves: 0, recruits: 0, units: 0 };
+  const rejected = new Set<string>();
 
   for (let step = 0; step < AI_MAX_STEPS; step++) {
-    const action = aiNextAction(s, budget);
+    const action = aiNextAction(s, budget, rejected);
     if (!action) break;
     const r = applyAction(s, action);
     if (!r.ok) {
       console.log(`  ! 第 ${turn} 回合出现非法行动 ${JSON.stringify(action)}：${r.reason}`);
-      break;
+      rejected.add(aiActionKey(action));
+      continue;
     }
+    rejected.clear();
     s = r.state;
     if (action.type === 'ATTACK') rep.attacks += 1;
     if (action.type === 'SIEGE') rep.sieges += 1;
@@ -126,7 +129,7 @@ for (let turn = 1; turn <= TURNS; turn++) {
   reports.push(rep);
 
   if (s.winner) {
-    console.log(`\n第 ${turn} 回合分出胜负：${s.winner} 胜`);
+    console.log(`\n第 ${turn} 次单方行动结束：${s.winner === 'draw' ? '平局' : `${s.winner} 胜`}`);
     break;
   }
 
@@ -180,4 +183,4 @@ const frontText = (p: PlayerId): string => {
 };
 console.log(`  A 战线        ${frontText('A')}（开局 ${startD}，越小越靠前）`);
 console.log(`  B 战线        ${frontText('B')}`);
-console.log(`  胜负          ${s.winner ?? '未分'}`);
+console.log(`  胜负          ${s.winner === 'draw' ? '平局' : s.winner ?? '未决'}`);

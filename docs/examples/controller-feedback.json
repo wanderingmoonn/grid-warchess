@@ -1,0 +1,10 @@
+{
+  "status": "rejected",
+  "code": "RULE_REJECTED",
+  "message": "行动未通过游戏规则校验；请检查占位、距离、金币、时代与产能。状态未改变。",
+  "action": {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "militia"
+  }
+}

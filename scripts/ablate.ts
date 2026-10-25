@@ -10,7 +10,7 @@
  * 运行：npm run ablate          （AB_SEEDS / AB_ERA / AB_SIZE 可调）
  */
 
-import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import { CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -92,16 +92,21 @@ function playOne(seed: number): One {
     budget.recruited = 0;
     budget.upgraded = 0;
     turns += 1;
+    const rejected = new Set<string>();
     for (let step = 0; step < AI_MAX_STEPS * 2; step++) {
-      const a = aiNextAction(s, budget);
+      const a = aiNextAction(s, budget, rejected);
       if (!a) break;
+      const r = applyAction(s, a);
+      if (!r.ok) {
+        rejected.add(aiActionKey(a));
+        continue;
+      }
+      rejected.clear();
+      s = r.state;
       if (!firstBlood && (a.type === 'ATTACK' || a.type === 'SIEGE')) firstBlood = turns;
       if (!firstUpgrade && a.type === 'UPGRADE') firstUpgrade = turns;
       if (a.type === 'RECRUIT') budget.recruited += 1;
       if (a.type === 'UPGRADE') budget.upgraded += 1;
-      const r = applyAction(s, a);
-      if (!r.ok) break;
-      s = r.state;
     }
     if (s.winner) break;
     const end = applyAction(s, { type: 'END_TURN' });

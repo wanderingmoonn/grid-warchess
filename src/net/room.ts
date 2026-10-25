@@ -5,10 +5,10 @@
  *
  * 为什么不是"实时同步"：这个游戏的线下玩法本来就是"各走一段再交接"，
  * 一回合半小时。所以这里刻意不做增量同步、不做每一步推送，
- * 只在**结束回合（提交）**时把整局状态写上去。
+ * 只在**结束回合（提交）或分出胜负**时把整局状态写上去。
  * 好处有两个：
  *   1. 对方看不到你这个回合正在怎么摆兵，迷雾的观感才成立；
- *   2. 断网、关页面、换设备都不会把这一回合弄坏——草稿在你本机。
+ *   2. 断网、关页面后还能继续本机草稿；换设备只能读到云端已提交的回合。
  *
  * 边界（必须诚实说明）：state 是一整块存进去的，服务端不参与规则计算，
  * 所以迷雾只是"界面不给你看"，不是安全边界。真要防作弊得把 playerView
@@ -17,30 +17,12 @@
 
 import { createWorkBuddyCloud } from '@tencent-ai/workbuddy-cloud-sdk';
 
-import type { GameState, PlayerId } from '../core/types.ts';
+import type { GameState } from '../core/types.ts';
+import { normalizeState } from '../storage/migrate.ts';
 import { CLOUD_CONFIG } from './cloud-config.ts';
-
-export type Seat = PlayerId;
-
-/** 一次拉取拿到的房间快照 */
-export interface RoomSnapshot {
-  code: string;
-  state: GameState;
-  /** 冗余出来的两个字段，用来判断"是否轮到我"而不用解析整局 */
-  turn: number;
-  current: PlayerId;
-  /** 最后一次提交时间（ISO 字符串） */
-  updatedAt: string;
-  seats: Record<Seat, string | null>;
-}
-
-/** 我在这局房间里坐哪一桌 */
-export interface RoomSeat {
-  code: string;
-  seat: Seat;
-  /** 席位令牌：换设备时凭它证明"这还是我" */
-  token: string;
-}
+import { isRoomSeat, readRoomSnapshot, sameSubmittedState, submissionPlayer } from './protocol.ts';
+import type { RoomSeat, RoomSnapshot, Seat } from './protocol.ts';
+export type { RoomSeat, RoomSnapshot, Seat } from './protocol.ts';
 
 const TABLE = 'warchess_rooms';
 /** 去掉了 I/O/0/1，念给对面听不会听错 */
@@ -61,7 +43,7 @@ function db() {
  * 表操作入口。
  *
  * SDK 的 schema 泛型要靠代码生成才有，我们没生成，所以默认会把行类型推成 never。
- * 这里只收窄到本项目实际用到的几个方法，返回再显式断言成 Row ——
+ * 这里只收窄到本项目实际用到的几个方法，返回数据交给 protocol 校验 ——
  * 比到处 `as any` 干净，也比手写 fetch 安全（凭证注入、会话都还在 SDK 里）。
  */
 interface Queryish {
@@ -70,8 +52,8 @@ interface Queryish {
   update(row: Record<string, unknown>): Queryish;
   eq(col: string, value: unknown): Queryish;
   is(col: string, value: unknown): Queryish;
-  maybeSingle(): Promise<{ data: unknown; error: DbError }>;
-  then: PromiseLike<{ data: unknown; error: DbError }>['then'];
+  maybeSingle(): Promise<{ data: unknown; error: DbError | null }>;
+  then: PromiseLike<{ data: unknown; error: DbError | null }>['then'];
 }
 
 interface DbError {
@@ -104,37 +86,18 @@ export function normalizeCode(raw: string): string {
   return text.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12);
 }
 
-interface Row {
-  code: string;
-  state: GameState;
-  turn: number;
-  current: PlayerId;
-  seat_a: string | null;
-  seat_b: string | null;
-  updated_at: string;
-}
-
-function toSnapshot(row: Row): RoomSnapshot {
-  return {
-    code: row.code,
-    state: row.state,
-    turn: row.turn,
-    current: row.current,
-    updatedAt: row.updated_at,
-    seats: { A: row.seat_a, B: row.seat_b },
-  };
-}
-
 /** 桌面上早就有一局了，把它变成房间：坐在"当前该行动的那一方" */
 export async function createRoom(state: GameState, seat: Seat, token: string): Promise<RoomSeat> {
+  const normalized = normalizeState(state);
+  if (!normalized || !isRoomSeat({ code: 'pending', seat, token })) throw new Error('无法创建无效的房间');
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const code = newCode();
-    const { error } = await table()
+    const { data, error } = await table()
       .insert({
         code,
-        state,
+        state: normalized,
         turn: state.turn,
         current: state.current,
         seat_a: seat === 'A' ? token : null,
@@ -143,7 +106,10 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
       // 让 PostgREST 回报实际写入的行：没有 .select() 就分不清"写成功"和"被策略挡了"
       .select();
 
-    if (!error) return { code, seat, token };
+    if (!error) {
+      if (!Array.isArray(data) || data.length === 0) throw new Error('云端没有确认房间创建成功，请重试');
+      return { code, seat, token };
+    }
     // 主键冲突就是代码撞车了，换一个再来
     if (error.code === '23505') {
       lastError = error;
@@ -158,11 +124,10 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
   const { data, error } = await table().select('*').eq('code', code).maybeSingle();
   if (error) throw new Error(readableError(error));
-  // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
-  const row = data as Row | null;
-  if (!row) return null;
-  const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
-  return toSnapshot({ ...row, state });
+  if (!data) return null;
+  const snapshot = readRoomSnapshot(data);
+  if (snapshot.code !== code) throw new Error('云端返回了不同的房间，请重试');
+  return snapshot;
 }
 
 /**
@@ -178,6 +143,7 @@ export async function claimSeat(
   seat: Seat,
   token: string,
 ): Promise<'ok' | 'taken' | 'missing'> {
+  if (!isRoomSeat({ code, seat, token })) throw new Error('席位信息无效');
   const snapshot = await fetchRoom(code);
   if (!snapshot) return 'missing';
 
@@ -193,8 +159,7 @@ export async function claimSeat(
     .is(column, null)
     .select();
   if (error) throw new Error(readableError(error));
-  if (Array.isArray(data) && data.length === 0) return 'taken';
-  return 'ok';
+  return Array.isArray(data) && data.length > 0 ? 'ok' : 'taken';
 }
 
 /**
@@ -209,18 +174,25 @@ export async function submitTurn(
   state: GameState,
   expectedTurn: number,
 ): Promise<boolean> {
+  const normalized = normalizeState(state);
+  if (!normalized) throw new Error('无法提交无效的对局状态');
+  const expectedPlayer = submissionPlayer(normalized, expectedTurn);
   const { data, error } = await table()
     .update({
-      state,
+      state: normalized,
       turn: state.turn,
       current: state.current,
       updated_at: new Date().toISOString(),
     })
     .eq('code', code)
     .eq('turn', expectedTurn)
+    .eq('current', expectedPlayer)
     .select();
   if (error) throw new Error(readableError(error));
-  return Array.isArray(data) && data.length > 0;
+  if (Array.isArray(data) && data.length > 0) return true;
+  // The previous attempt may have committed but lost its network response.
+  const snapshot = await fetchRoom(code);
+  return snapshot !== null && sameSubmittedState(snapshot.state, normalized);
 }
 
 /* ---------- 本机的席位记忆 ---------- */
@@ -238,8 +210,8 @@ export function loadSeat(code: string): RoomSeat | null {
   try {
     const raw = localStorage.getItem(seatStorageKey(code));
     if (!raw) return null;
-    const seat = JSON.parse(raw) as RoomSeat;
-    return seat && seat.code === code && typeof seat.token === 'string' ? seat : null;
+    const seat: unknown = JSON.parse(raw);
+    return isRoomSeat(seat) && seat.code === code ? seat : null;
   } catch {
     return null;
   }
@@ -247,13 +219,15 @@ export function loadSeat(code: string): RoomSeat | null {
 
 export function saveSeat(seat: RoomSeat): void {
   try {
+    if (!isRoomSeat(seat)) return;
     localStorage.setItem(seatStorageKey(seat.code), JSON.stringify(seat));
   } catch {
     // 隐私模式下写不进去，不影响这局本身
   }
 }
 
-function readableError(err: unknown): string {  const e = err as { code?: string; message?: string } | null;
+function readableError(err: unknown): string {
+  const e = err as { code?: string; message?: string } | null;
   if (!err) return '';
   if (e?.code === '42P01') return '云端还没有房间表，需要先初始化数据库';
   if (e?.code === '42501') return '云端拒绝了这次读写（权限策略问题）';

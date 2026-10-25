@@ -7,6 +7,7 @@
  */
 
 import type { UnitTypeDef } from './types.ts';
+import { isRecord, isUnitTypeDef } from './validation.ts';
 
 const KEY = 'warchess:custom-units:v1';
 export const CUSTOM_PREFIX = 'c_';
@@ -15,12 +16,12 @@ export function loadCustomUnits(): Record<string, UnitTypeDef> {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, UnitTypeDef>;
-    if (!parsed || typeof parsed !== 'object') return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return {};
     // 只收下结构完整的
     const out: Record<string, UnitTypeDef> = {};
     for (const [id, def] of Object.entries(parsed)) {
-      if (def && def.id === id && typeof def.cost === 'number' && typeof def.atk === 'number') {
+      if (id.startsWith(CUSTOM_PREFIX) && isUnitTypeDef(def) && def.id === id) {
         out[id] = def;
       }
     }
@@ -30,18 +31,22 @@ export function loadCustomUnits(): Record<string, UnitTypeDef> {
   }
 }
 
-export function saveCustomUnits(units: Record<string, UnitTypeDef>): void {
+export function saveCustomUnits(units: Record<string, UnitTypeDef>): boolean {
   try {
+    if (!isRecord(units) || !Object.entries(units).every(([id, def]) =>
+      id.startsWith(CUSTOM_PREFIX) && isUnitTypeDef(def) && def.id === id)) return false;
     localStorage.setItem(KEY, JSON.stringify(units));
+    return true;
   } catch {
-    // 隐私模式下写不进去，忽略
+    return false;
   }
 }
 
-export function upsertCustomUnit(def: UnitTypeDef): void {
+export function upsertCustomUnit(def: UnitTypeDef): boolean {
+  if (!isUnitTypeDef(def) || !def.id.startsWith(CUSTOM_PREFIX)) return false;
   const all = loadCustomUnits();
   all[def.id] = def;
-  saveCustomUnits(all);
+  return saveCustomUnits(all);
 }
 
 export function removeCustomUnit(id: string): void {
@@ -91,19 +96,24 @@ export function exportCustomUnits(): string {
 
 export function importCustomUnits(text: string): number {
   try {
-    const parsed = JSON.parse(text) as { kind?: string; units?: Record<string, UnitTypeDef> };
-    if (parsed.kind !== 'warchess-units' || !parsed.units) return 0;
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed) || parsed.kind !== 'warchess-units' || parsed.version !== 1
+      || !isRecord(parsed.units)) return 0;
     const all = loadCustomUnits();
-    let count = 0;
-    for (const def of Object.values(parsed.units)) {
-      if (!def) continue;
-      // 导入的 id 一律重编号，避免覆盖本地已有的
+    const imported = Object.entries(parsed.units)
+      .filter((entry): entry is [string, UnitTypeDef] => isUnitTypeDef(entry[1]) && entry[1].id === entry[0]);
+    const ids = new Map<string, string>();
+    // 先分配全部 id，第二遍再重写建造清单中的相互引用。
+    for (const [id, def] of imported) {
       const fresh = nextCustomId(all);
-      all[fresh] = { ...def, id: fresh };
-      count += 1;
+      ids.set(id, fresh);
+      all[fresh] = { ...structuredClone(def), id: fresh };
     }
-    saveCustomUnits(all);
-    return count;
+    for (const fresh of ids.values()) {
+      const def = all[fresh]!;
+      if (def.builds) def.builds = def.builds.map((id) => ids.get(id) ?? id);
+    }
+    return imported.length > 0 && saveCustomUnits(all) ? imported.length : 0;
   } catch {
     return 0;
   }

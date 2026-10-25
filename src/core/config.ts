@@ -26,6 +26,8 @@ export const CONFIG = {
   baseIncome: 20,
   /** 每方单位数上限，防止滚雪球 */
   maxUnits: 24,
+  /** 双方各行动一次为一轮；第 100 轮结束按城市数裁决，相同为平局。 */
+  maxRounds: 100,
   /**
    * 指挥官模式：生产序列有几格。
    *
@@ -1012,5 +1014,5 @@ export function unitsByEra(level: number, pool = UNIT_TYPES): UnitTypeDef[] {
   return Object.values(pool).filter((u) => u.era === level);
 }
 
-/** 最便宜的兵种价格，用于判定"是否还有翻盘能力" */
+/** 内置兵种最低标价，仅供统计参考，不参与胜负裁决。 */
 export const CHEAPEST_COST = Math.min(...Object.values(UNIT_TYPES).map((u) => u.cost));

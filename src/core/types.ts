@@ -8,6 +8,20 @@
 
 export type PlayerId = 'A' | 'B';
 
+/** null 表示仍在进行；draw 是已经结束的平局。 */
+export type MatchWinner = PlayerId | 'draw' | null;
+export type ResultReason = 'conquest' | 'turn-limit' | 'no-cities' | 'legacy';
+
+/** 全部产兵点共用的本回合成功生产次数，随存档和联机状态保存。 */
+export interface TurnProduction {
+  turn: number;
+  player: PlayerId;
+  recruited: number;
+  upgraded: number;
+  /** v4 缺少可靠生产记录，迁移时封存当前指挥官回合，交接后解除。 */
+  legacyLocked?: boolean;
+}
+
 export type Terrain = 'plain' | 'forest' | 'hill' | 'water' | 'mountain' | 'bridge' | 'city';
 
 /** 行动域：陆军只能走陆地，水军只能走水面 */
@@ -294,7 +308,11 @@ export interface GameState {
   orders?: Partial<Record<PlayerId, string[]>>;
   nextUnitSeq: number;
   fog: boolean;
-  winner: PlayerId | null;
+  winner: MatchWinner;
+  /** 终局原因；旧已结束对局迁移时标记 legacy，不重新改判。 */
+  resultReason?: ResultReason;
+  /** v5 必须持久化；可选类型仅为兼容 v4 的读取与迁移。 */
+  turnProduction?: TurnProduction;
   log: LogEntry[];
   memory: Record<PlayerId, PlayerMemory>;
 }

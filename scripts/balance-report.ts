@@ -18,7 +18,7 @@
  */
 
 import { DEFAULT_SIZE_FOR_ERA } from '../src/ui/setup-panel.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import {
   applyAction,
   armySize,
@@ -34,7 +34,8 @@ import {
 } from '../src/core/rules.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from '../src/core/config.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
-import type { Action, City, GameState, PlayerId, Terrain, Unit } from '../src/core/types.ts';
+import type { Action, City, GameState, MatchWinner, PlayerId, Terrain, Unit } from '../src/core/types.ts';
+import { summarizeOutcomes } from './report-outcomes.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -45,7 +46,7 @@ const argOf = (name: string, dflt: string): string => {
 const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '30'));
 const BASE_SEED = Number(argOf('seed', '900'));
-const CAP = Number(argOf('cap', '200')); // 回合上限，超过算"未决"
+const CAP = Number(argOf('cap', String(CONFIG.maxRounds * 2))); // 模拟停止上限，不等于正式平局
 const OUT = argOf('out', `results/balance-era${ERA}.json`);
 /** 给了这个目录就把每一局"打到上限还没分出胜负"的终局场面存下来 */
 const DRAWS = argOf('draws', '');
@@ -115,7 +116,7 @@ interface GameResult {
   era: number;
   size: number;
   seed: number;
-  winner: string | null;
+  winner: MatchWinner;
   turns: number;
   steps: number;
   recruitsA: number;
@@ -702,9 +703,14 @@ function runGame(seed: number): {
     return r;
   };
 
-  /** 记一笔账 + 结算这一次动作的交换，然后把动作真的打出去 */
+  /** 成功执行动作后，记账并结算这一次动作的交换。 */
   const act = (action: Action): boolean => {
-    // 招兵 / 建造先记账（用当下的价格，含扩展规则对造价的改动）
+    const before = s;
+    const r = applyAction(s, action);
+    if (!r.ok) return false;
+    const after = r.state;
+
+    // 成功的招兵 / 建造才记账，采用执行前价格（含扩展规则的造价改动）。
     if (action.type === 'RECRUIT' || action.type === 'BUILD') {
       const def = s.unitTypes[action.unitType];
       if (def) {
@@ -719,11 +725,6 @@ function runGame(seed: number): {
         }
       }
     }
-
-    const before = s;
-    const r = applyAction(s, action);
-    if (!r.ok) return false;
-    const after = r.state;
 
     // 磨局诊断：动作级计数。攻城伤害要记到"具体哪座城"上，
     // 否则分不清是"打不动"还是"三座城轮着啃、谁都没破"。
@@ -812,10 +813,15 @@ function runGame(seed: number): {
     // 一回合 = 每回合预算 + 步数上限，和 main.ts 的 runAiTurn 完全同构。
     // 少了这一层，AI 会在一回合里把金库花光——那样测出来的采用率跟实战不是一回事。
     const budget = { ...DEFAULT_BUDGET };
+    const rejected = new Set<string>();
     for (let step = 0; step < AI_MAX_STEPS && !s.winner; step++) {
-      const action = aiNextAction(s, budget);
+      const action = aiNextAction(s, budget, rejected);
       if (!action) break;
-      if (!act(action)) break;
+      if (!act(action)) {
+        rejected.add(aiActionKey(action));
+        continue;
+      }
+      rejected.clear();
       if (action.type === 'RECRUIT') budget.recruited += 1;
       if (action.type === 'UPGRADE') budget.upgraded += 1;
     }
@@ -912,13 +918,15 @@ async function main(): Promise<void> {
   }
   stats.sort((a, b) => b.dealt - a.dealt);
 
-  const aWins = games.filter((g) => g.winner === 'A').length;
-  const bWins = games.filter((g) => g.winner === 'B').length;
-  const draws = games.filter((g) => g.winner === null || g.winner === undefined).length;
-  const done = games.filter((g) => g.turns <= CAP).length;
-  const turnsAvg = done > 0 ? games.filter((g) => g.turns <= CAP).reduce((n, g) => n + g.turns, 0) / done : CAP;
+  const outcomes = summarizeOutcomes(games);
+  const { aWins, bWins, draws, unresolved } = outcomes;
+  // 未决记模拟上限 + 1，与历史配对报告的截尾约定一致。
+  const turnsAvg = games.length > 0 ? games.reduce((sum, game) =>
+    sum + (game.winner === null ? CAP + 1 : game.turns), 0) / games.length : 0;
 
   const payload = {
+    rulesVersion: 5,
+    maxRounds: CONFIG.maxRounds,
     era: ERA,
     // 这里以前写死成"时代默认尺寸"，用 --size 按住棋盘时元数据会说谎，
     // 下游的对比脚本（exp-compare / bonus-compare）就直接按它印表头，一错错一片。
@@ -927,12 +935,7 @@ async function main(): Promise<void> {
     baseSeed: BASE_SEED,
     cap: CAP,
     summary: {
-      aWins,
-      bWins,
-      draws,
-      aRate: games.length > 0 ? aWins / games.length : 0,
-      bRate: games.length > 0 ? bWins / games.length : 0,
-      drawRate: games.length > 0 ? draws / games.length : 0,
+      ...outcomes,
       turnsAvg,
       recruitsPerGame: builtSum / Math.max(1, games.length),
       spendPerGame: spendSum / Math.max(1, games.length),
@@ -1061,7 +1064,7 @@ async function main(): Promise<void> {
     process.stderr.write(`磨局场面 ${stuck.length} 份 -> ${DRAWS}\n`);
   }
   console.log(
-    `era${ERA}: ${GAMES} 局 | 先手 ${aWins} 后手 ${bWins} 未决 ${draws} | 均 ${turnsAvg.toFixed(1)} 回合 | 均招兵 ${(builtSum / Math.max(1, games.length)).toFixed(1)}`,
+    `era${ERA}: ${GAMES} 局 | 先手 ${aWins} 后手 ${bWins} 平局 ${draws} 未决 ${unresolved} | 均 ${turnsAvg.toFixed(1)} 次单方行动 | 均招兵 ${(builtSum / Math.max(1, games.length)).toFixed(1)}`,
   );
 
   // ---- Markdown 表格：给"模组平衡报告"直接拼接用 ----
@@ -1074,7 +1077,7 @@ async function main(): Promise<void> {
     lines.push(`#### ${eraDef(ERA).name}${packName ? `（${packName}）` : ''}`);
     lines.push('');
     lines.push(
-      `${GAMES} 局 · ${sizeN}×${sizeN} · 种子 ${BASE_SEED} · 先手 ${aWins} / 后手 ${bWins} / 未决 ${draws}` +
+      `${GAMES} 局 · ${sizeN}×${sizeN} · 种子 ${BASE_SEED} · 先手 ${aWins} / 后手 ${bWins} / 平局 ${draws} / 未决 ${unresolved}` +
         ` · 平均 ${turnsAvg.toFixed(1)} 回合 · 场均招兵 ${(builtSum / Math.max(1, games.length)).toFixed(1)}`,
     );
     lines.push('');

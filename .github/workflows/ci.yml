@@ -22,8 +22,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # 脚本用 node --experimental-strip-types 直接跑 TypeScript，需要 22+
-          node-version: 22
+          # 与锁定的 jsdom 运行时要求一致，使用 Node 24。
+          node-version: 24
           cache: npm
 
       - name: 安装依赖
@@ -32,11 +32,8 @@ jobs:
       - name: 类型检查
         run: npx tsc --noEmit
 
-      - name: 规则内核测试
-        run: npm run test:rules
-
-      - name: DOM 冒烟测试
-        run: npm run test:ui
+      - name: 全部离线测试（规则、调度、存档和 DOM）
+        run: npm test
 
       # 规则书是从 config.ts / abilities.ts / expansions.ts 生成的。
       # 改了数值却忘了重新生成，线上和文档就会对不上，所以这里卡一道。

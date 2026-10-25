@@ -11,6 +11,7 @@ import { EXPANSIONS } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES } from '../core/mapgen.ts';
 import { BOARD_SIZES, randomSeed } from '../core/setup.ts';
 import type { MatchConfig } from '../core/types.ts';
+import { escapeHtml } from './html.ts';
 
 export interface SetupResult {
   config: MatchConfig;
@@ -127,8 +128,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const chips = units
           .map(
             (u) =>
-              `<button class="chip ${config.enabledUnits.includes(u.id) ? 'active' : ''}" data-unit="${u.id}">
-                 ${u.short} ${u.name}
+              `<button class="chip ${config.enabledUnits.includes(u.id) ? 'active' : ''}" data-unit="${escapeHtml(u.id)}">
+                 ${escapeHtml(u.short)} ${escapeHtml(u.name)}
                </button>`,
           )
           .join('');

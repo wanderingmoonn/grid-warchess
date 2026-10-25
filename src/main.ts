@@ -8,8 +8,22 @@
 import './style.css';
 
 import { expansionById } from './core/expansions.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, anyAiSide, isAiSide } from './core/ai.ts';
+import { aiLevelOf, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
+import { executeAiTurn } from './app/ai-turn.ts';
+import { executeControllerTurn } from './app/controller-turn.ts';
+import { createLocalModelController } from './controllers/local-model.ts';
+import { openModelPanel, type ModelPanelHandle } from './ui/model-panel.ts';
+import { productionStatus, resultTitle } from './app/match-status.ts';
+import { productionOf } from './core/rules/production.ts';
+import {
+  commanderPlayer,
+  commanderPool,
+  commanderSlotCost,
+  estimateCommanderGold,
+  executeCommanderRounds,
+} from './app/commander.ts';
+import { restorePendingTurn, shouldAcceptRoomState, shouldSubmitTurn } from './app/room-session.ts';
 import { CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import {
@@ -19,27 +33,24 @@ import {
   canAttack,
   canMove,
   cityAt,
-  citiesOf,
   distance,
   idx,
-  incomeOf,
   ordersOf,
   reachableTiles,
-  recruitCost,
   refreshMemory,
   siegeTargets,
   threatTiles,
-  upgradeCostOf,
   utype,
 } from './core/rules.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, randomSeed } from './core/setup.ts';
-import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
+import type { Action, GameState, PlayerId, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
+import { escapeHtml } from './ui/html.ts';
 import {
   claimSeat,
   fetchRoom,
@@ -52,7 +63,6 @@ import {
   type RoomSnapshot,
 } from './net/room.ts';
 import {
-  clearMatch,
   exportMatch,
   importMatch,
   loadMatch,
@@ -88,6 +98,17 @@ const commanderEl = pick<HTMLElement>(appEl, '#commander');
 // 顶栏骨架只插一次。之后每一步只改文字/class/hidden，绝不重建按钮节点——
 // 否则 AI 连续行动时 click 会在 mousedown 与 mouseup 之间丢掉目标（按钮点不动）。
 topbarEl.innerHTML = topbarShell();
+const retrySubmitEl = document.createElement('button');
+retrySubmitEl.className = 'btn';
+retrySubmitEl.dataset.act = 'retry-submit';
+retrySubmitEl.textContent = '重试提交';
+retrySubmitEl.hidden = true;
+topbarEl.appendChild(retrySubmitEl);
+const modelButton = document.createElement('button');
+modelButton.className = 'btn btn-sm';
+modelButton.dataset.act = 'model-controller';
+modelButton.textContent = '模型操控';
+pick<HTMLElement>(topbarEl, '[data-act="toggle-ai"]').after(modelButton);
 
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
@@ -116,10 +137,15 @@ let aiSpeed = 0;
 let aiPaused = false;
 /** 每次启动或中止 AI 循环都 +1，旧循环看到自己的令牌过期就自己退出 */
 let aiToken = 0;
+/** 换局和中断不同：旧批次的 finally 也不能碰新对局。 */
+let matchRevision = 0;
+/** 模型只按用户点击执行当前回合；句柄与局次一起隔离过期响应。 */
+let modelRun: AbortController | null = null;
+let modelPanel: ModelPanelHandle | null = null;
 
 /** 现在这一方是 AI 在走、且没被暂停 */
 function aiBusy(): boolean {
-  return isAiSide(state, state.current) && !aiPaused;
+  return modelRun !== null || (isAiSide(state, state.current) && !aiPaused);
 }
 
 /** 双 AI 观战：谁都还没"入座"，给全图视角，否则看的是某一方的迷雾 */
@@ -137,9 +163,21 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+let pendingSubmission: { seat: RoomSeat; state: GameState; expectedTurn: number } | null = null;
+let submissionRunning = false;
 
 /** 记住"我现在在哪一局房间里"，刷新页面能自己回到那一局 */
 const ROOM_KEY = 'warchess:room-current';
+const pendingTurnKey = (code: string) => `warchess:room-pending:${code}`;
+
+function rememberPendingTurn(code: string, expectedTurn: number | null): void {
+  try {
+    if (expectedTurn === null) localStorage.removeItem(pendingTurnKey(code));
+    else localStorage.setItem(pendingTurnKey(code), JSON.stringify(expectedTurn));
+  } catch {
+    // 存储不可用时仍可在当前页面重试。
+  }
+}
 
 function rememberRoom(code: string | null): void {
   try {
@@ -165,7 +203,20 @@ function resumeRoom(): boolean {
     room = seat;
     setSaveScope(code);
     const draft = loadMatch();
-    if (draft) state = draft;
+    if (!draft) {
+      room = null;
+      setSaveScope(null);
+      rememberRoom(null);
+      toast('房间草稿不可用，请通过「联机」重新进入房间');
+      return false;
+    }
+    state = draft;
+    state.aiControl = { A: false, B: false };
+    const expectedTurn = restorePendingTurn(state, seat.seat, localStorage.getItem(pendingTurnKey(code)));
+    dirty = expectedTurn !== null || state.current === seat.seat;
+    if (expectedTurn !== null) {
+      pendingSubmission = { seat, state, expectedTurn };
+    }
     startRoomPolling();
     return true;
   } catch {
@@ -175,7 +226,7 @@ function resumeRoom(): boolean {
 
 /** 视角玩家：联机时永远是自己那一方，而不是"现在轮到谁" */
 function me(): PlayerId {
-  return room ? room.seat : state.current;
+  return room ? room.seat : state.config.commanderMode ? commanderPlayer(state) : state.current;
 }
 
 /** 取当前房间。用函数包一层是为了绕开模块级变量的控制流收窄 */
@@ -231,7 +282,14 @@ function render(): void {
     speedName: AI_SPEED_NAME[aiSpeed] ?? '快',
     roomCode: room?.code ?? null,
     waitingForPeer: !myTurn() && !state.winner,
+    result: state.winner ? resultTitle(state) : undefined,
   });
+  retrySubmitEl.hidden = !pendingSubmission || pendingSubmission.seat !== room;
+  retrySubmitEl.disabled = submissionRunning;
+  retrySubmitEl.textContent = submissionRunning ? '提交中…' : '重试提交';
+  modelButton.disabled = !!room || !!state.winner || commanderRunning;
+  modelButton.textContent = modelRun ? '模型运行中…' : '模型操控';
+  modelButton.title = room ? '模型操控目前用于本地对局' : '让 DeepSeek 执行当前方的一回合';
   syncTopbarScroll();
   fitBoard();
 }
@@ -442,7 +500,7 @@ function toast(msg: string): void {
 
 function dispatch(action: Action): boolean {
   // AI 正在走这一方：玩家的点击一律不生效，不然会出现两边同时改同一个状态
-  if (aiBusy()) {
+  if (aiBusy() || commanderRunning) {
     toast('这一方正由 AI 行动');
     return false;
   }
@@ -461,14 +519,18 @@ function dispatch(action: Action): boolean {
   state = result.state;
   saveMatch(state);
 
+  if (room && shouldSubmitTurn(action, state)) {
+    clearSelection();
+    // 提交中的终局也属于未同步草稿，轮询不能抢先覆盖它。
+    dirty = true;
+    render();
+    void pushTurn(room, prevTurn);
+    return true;
+  }
+
   if (action.type === 'END_TURN') {
     clearSelection();
     render();
-    if (room) {
-      // 联机里"结束回合"就等于提交：把整局推上去，然后等对面
-      void pushTurn(room, prevTurn);
-      return true;
-    }
     if (!state.winner) {
       // 轮到 AI 就让它接着走（双 AI 时会一直走回人类或分出胜负）
       if (isAiSide(state, state.current)) {
@@ -599,7 +661,21 @@ function onBoardClick(e: Event): void {
 }
 
 function handleAction(act: string, el: HTMLElement): void {
+  if (modelRun && !['model-controller', 'ai-pause', 'toggle-ai', 'new-game', 'import', 'export', 'online'].includes(act)) {
+    toast('请先在模型面板中暂停，或关闭面板接管');
+    return;
+  }
   switch (act) {
+    case 'model-controller':
+      showModelPanel();
+      return;
+    case 'retry-submit': {
+      const pending = pendingSubmission;
+      if (pending && pending.seat === room && !submissionRunning) {
+        void pushTurn(pending.seat, pending.expectedTurn);
+      }
+      return;
+    }
     case 'end-turn':
       dispatch({ type: 'END_TURN' });
       return;
@@ -676,6 +752,7 @@ function handleAction(act: string, el: HTMLElement): void {
         toast('联机房间里两边各走各的，AI 托管用不了');
         return;
       }
+      modelRun?.abort();
       const p = state.current;
       const nowAi = !isAiSide(state, p);
       // 两边都写一遍，避免"收回 A 的托管"时 B 的托管状态被顺手抹掉
@@ -699,6 +776,11 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'ai-pause': {
+      if (modelRun) {
+        modelRun.abort();
+        toast('模型已暂停');
+        return;
+      }
       aiPaused = !aiPaused;
       if (!aiPaused) {
         render();
@@ -724,10 +806,13 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'online': {
+      const revision = matchRevision;
       openOnlinePanel({
         currentState: () => state,
         room: () => room,
-        enter: (seat, snapshot) => applyRoom(seat, snapshot),
+        enter: (seat, snapshot) => {
+          if (revision === matchRevision) applyRoom(seat, snapshot);
+        },
         leave: () => leaveRoom(),
       });
       return;
@@ -758,6 +843,7 @@ function handleAction(act: string, el: HTMLElement): void {
         toast(`注意：这局用了本机没有的规则（${missing.join('、')}），它们不会生效`);
       }
 
+      cancelAutomation();
       state = imported;
       detachRoom(); // 换了一局，房间就对不上了
       clearSelection();
@@ -772,6 +858,7 @@ function handleAction(act: string, el: HTMLElement): void {
       // 只有点了"开始对局"才会覆盖当前存档。
       void openSetupPanel(state.config, randomSeed()).then((result) => {
         if (!result) return;
+        cancelAutomation();
         state = createMatch(result.config, result.seed, loadCustomUnits());
         detachRoom();
         clearSelection();
@@ -794,6 +881,60 @@ function handleAction(act: string, el: HTMLElement): void {
 // ---------- AI 回合 ----------
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+function showModelPanel(): void {
+  if (modelPanel?.isOpen()) return;
+  if (room || state.winner || commanderRunning || handoffOpen) {
+    toast(room ? '模型操控目前用于本地对局' : handoffOpen ? '请先完成玩家交接' : '请先结束当前批次，或开始新对局');
+    return;
+  }
+  // 明确中断算法托管；模型完成一回合后也保持暂停，由用户决定下一步。
+  aiToken += 1;
+  aiPaused = true;
+  clearSelection();
+  render();
+  const revision = matchRevision;
+  const initial = state;
+  const panel = openModelPanel({
+    player: state.players[state.current].name,
+    canRun: true,
+    onCancel: () => modelRun?.abort(),
+    onRun: async (handle) => {
+      const cancellation = new AbortController();
+      // 打开面板到点击执行之间换局、修改计划或操作棋盘，必须重新确认当前方。
+      if (modelRun || revision !== matchRevision || state !== initial || room || state.winner || commanderRunning) {
+        return { status: 'stale-state', requests: 0, appliedActions: 0, rejectedReplies: 0, fallbackUsed: false };
+      }
+      modelRun = cancellation;
+      const token = ++aiToken;
+      aiPaused = true;
+      clearSelection();
+      render();
+      try {
+        return await executeControllerTurn({
+          getState: () => state,
+          setState: (next) => { state = next; },
+          active: () => modelRun === cancellation && token === aiToken
+            && revision === matchRevision && !room && !cancellation.signal.aborted,
+          save: () => saveMatch(state),
+          render,
+          sleep,
+          onEvent: (event) => handle.update(event),
+        }, createLocalModelController(), {
+          signal: cancellation.signal, maxRequests: 12, timeoutMs: 35000,
+          failurePolicy: 'stop', allowOrderEdits: false, delayMs: 100,
+        });
+      } finally {
+        if (modelRun === cancellation) modelRun = null;
+        if (revision === matchRevision) {
+          clearSelection();
+          render();
+        }
+      }
+    },
+  });
+  modelPanel = panel;
+}
 
 /**
  * 一直走到"轮到人"或者分出胜负为止。
@@ -832,54 +973,39 @@ async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
   delayOverride?: number,
-): Promise<void> {
-  const player = state.current;
-  const budget: AiBudget = {
-    ...DEFAULT_BUDGET,
-    // 指挥官模式下**每一方**都只有"一回合一个兵"的产能，AI 也不例外。
-    // 否则双 AI 观战跑出来的还是普通对局，测不到限制本身。
-    ...(state.config.commanderMode ? { maxRecruit: 1 } : {}),
-    ...overrides,
-  };
-  const delay = delayOverride ?? AI_SPEED_MS[aiSpeed] ?? 70;
-  const alive = () =>
-    token === aiToken && !aiPaused && !state.winner && state.current === player;
-
-  for (let step = 0; step < AI_MAX_STEPS; step++) {
-    if (!alive()) return;
-    const action = aiNextAction(state, budget);
-    if (!action) break;
-
-    const result = applyAction(state, action);
-    if (!result.ok) break;
-
-    state = result.state;
-    if (action.type === 'RECRUIT') budget.recruited += 1;
-    if (action.type === 'UPGRADE') budget.upgraded += 1;
-
-    // 逐帧重绘是为了让人看清；极快档就不必每步都画，每几步刷一次够了
-    if (delay > 0 || step % 6 === 0) {
-      saveMatch(state);
-      render();
-    }
-
-    // 关键：即使 0ms 也要 await。同步跑完 50 步会把主线程占死，
-    // 那段时间里按钮点不动、暂停按不下去——"AI 一快，界面就死了"。
-    await sleep(delay);
-  }
-
-  if (!alive()) return;
-  const end = applyAction(state, { type: 'END_TURN' });
-  if (end.ok) state = end.state;
-  saveMatch(state);
-  render();
-  await sleep(delay);
+): Promise<boolean> {
+  return executeAiTurn({
+    getState: () => state,
+    setState: (next) => { state = next; },
+    active: () => token === aiToken && !aiPaused,
+    save: () => saveMatch(state),
+    render,
+    sleep,
+  }, overrides, delayOverride ?? AI_SPEED_MS[aiSpeed] ?? 70);
 }
 
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
 function kickAiIfNeeded(): void {
+  aiToken += 1;
   aiPaused = false;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
+}
+
+/** 换局前废弃所有等待中的任务，并清掉属于旧对局的界面状态。 */
+function cancelAutomation(): void {
+  modelRun?.abort();
+  modelRun = null;
+  modelPanel?.close();
+  modelPanel = null;
+  matchRevision += 1;
+  aiToken += 1;
+  aiPaused = false;
+  commanderRunning = false;
+  commanderRound = 0;
+  commanderSig = '';
+  pendingSubmission = null;
+  submissionRunning = false;
+  closeHandoff();
 }
 
 // ---------- 指挥官模式 ----------
@@ -898,71 +1024,30 @@ const BATCH_DELAY = 40;
 
 /** 现在是不是"轮到玩家当指挥官" */
 function commanderActive(): boolean {
-  return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
-}
-
-/** 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代） */
-function commanderPool(): UnitTypeDef[] {
-  const eras = citiesOf(state, me()).map((c) => c.era);
-  const era = eras.length > 0 ? Math.max(...eras) : 1;
-  return Object.values(state.unitTypes)
-    .filter((d) => d.category !== 'building' && d.era <= era && d.era >= era - 1)
-    .sort((a, b) => a.era - b.era || a.cost - b.cost);
-}
-
-/**
- * 生产序列里一格要花多少钱。
- *
- * 「升级时代」按"自己几座城里最便宜的那次升级"算——AI 执行时会挑它认为最该升的那座，
- * 个数对不上是常态，所以界面上的金币数字一律标成"≈"，不假装精确。
- */
-function slotCost(unitId: string): number {
-  if (!unitId) return 0;
-  if (unitId === ORDER_UPGRADE) {
-    const costs = citiesOf(state, me())
-      .map((c) => upgradeCostOf(state, c))
-      .filter((c): c is number => c !== null);
-    return costs.length > 0 ? Math.min(...costs) : 0;
-  }
-  const def = state.unitTypes[unitId];
-  return def ? recruitCost(state, me(), def) : 0;
-}
-
-/**
- * 每一格执行时手上有多少钱（估算）。
- *
- * 回合顺序是"我方 → 对方 → 我方…"，而收入是在结束回合时结算给**下一位**的，
- * 所以每轮到我方时正好多进一笔收入。于是：
- *   第 i 格可用 = 现有金币 + i × 每回合收入 − 前面各格的花费
- */
-function estimateGold(): number[] {
-  const income = incomeOf(state, me());
-  const queue = ordersOf(state, me());
-  const out: number[] = [];
-  let spent = 0;
-  for (let i = 0; i < CONFIG.commanderSlots; i++) {
-    out.push(state.players[me()].gold + i * income - spent);
-    spent += slotCost(queue[i] ?? '');
-  }
-  return out;
+  return !room && !!state.config.commanderMode && !state.winner && !spectating();
 }
 
 /** 只刷新金币提示，不重建下拉——否则玩家正在点的格子会被抽走 */
 function refreshEstimates(): void {
-  const gold = estimateGold();
+  const gold = estimateCommanderGold(state, me());
+  const used = productionOf(state);
+  const consumed = state.current === me() && used.recruited + used.upgraded > 0;
   commanderEl.querySelectorAll<HTMLElement>('[data-est]').forEach((el) => {
     const i = Number(el.dataset.est);
     const avail = gold[i] ?? 0;
     const queue = ordersOf(state, me());
-    const cost = slotCost(queue[i] ?? '');
+    const cost = consumed && i === 0 ? 0 : commanderSlotCost(state, me(), queue[i] ?? '');
     const tight = cost > avail;
     el.textContent = `≈ ${Math.max(0, Math.round(avail))} 金`;
     el.classList.toggle('tight', tight);
   });
+  const production = commanderEl.querySelector<HTMLElement>('[data-cmd-production]');
+  if (production) production.textContent = `${state.players[state.current].name}：${productionStatus(state)}`;
   const tail = commanderEl.querySelector<HTMLElement>('[data-est-total]');
   if (tail) {
     const last = gold[gold.length - 1] ?? 0;
-    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(last - slotCost(ordersOf(state, me())[CONFIG.commanderSlots - 1] ?? '')))} 金`;
+    const cost = commanderSlotCost(state, me(), ordersOf(state, me())[CONFIG.commanderSlots - 1] ?? '');
+    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(last - (cost <= last ? cost : 0)))} 金`;
   }
 }
 
@@ -982,12 +1067,16 @@ function renderCommander(): void {
 
   if (commanderRunning) {
     const sig = `run|${commanderRound}`;
-    if (sig === commanderSig) return;
+    if (sig === commanderSig) {
+      refreshEstimates();
+      return;
+    }
     commanderSig = sig;
     commanderEl.innerHTML = `
       <div class="cmd-head">
         <b>参谋部</b>
         <span class="cmd-hint">正在执行：第 ${commanderRound} / ${CONFIG.commanderSlots} 回合</span>
+        <span class="cmd-hint" data-cmd-production>${escapeHtml(state.players[state.current].name)}：${escapeHtml(productionStatus(state))}</span>
       </div>
       <div class="cmd-progress"><i style="width:${(commanderRound / CONFIG.commanderSlots) * 100}%"></i></div>
       <button class="btn" data-cmd="stop">中断</button>
@@ -995,9 +1084,11 @@ function renderCommander(): void {
     return;
   }
 
-  const pool = commanderPool();
+  const pool = commanderPool(state, me());
   const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
-  const sig = `${state.turn}|${era}|${commanderExpanded}`;
+  const used = productionOf(state);
+  const consumed = state.current === me() && used.recruited + used.upgraded > 0;
+  const sig = `${state.turn}|${me()}|${era}|${commanderExpanded}|${consumed}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -1007,13 +1098,13 @@ function renderCommander(): void {
   const queue = ordersOf(state, me());
   const opts = (sel: string) =>
     [
-      '<option value="">— 不指定 —</option>',
+      '<option value="">— 留空，本回合不生产 —</option>',
       `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
     ]
       .concat(
         pool.map(
           (d) =>
-            `<option value="${d.id}"${d.id === sel ? ' selected' : ''}>${d.name} · ${d.cost} 金</option>`,
+            `<option value="${escapeHtml(d.id)}"${d.id === sel ? ' selected' : ''}>${escapeHtml(d.name)} · ${d.cost} 金</option>`,
         ),
       )
       .join('');
@@ -1022,7 +1113,7 @@ function renderCommander(): void {
     const label = i === 0 ? '本回合' : `+${i}`;
     return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
       <span class="cmd-step">${label}</span>
-      <select data-slot="${i}">${opts(queue[i] ?? '')}</select>
+      <select data-slot="${i}"${state.current !== me() || (i === 0 && consumed) ? ' disabled' : ''}>${opts(queue[i] ?? '')}</select>
       <span class="cmd-est" data-est="${i}"></span>
     </label>`;
   }).join('');
@@ -1031,6 +1122,7 @@ function renderCommander(): void {
     <div class="cmd-head">
       <b>参谋部</b>
       <span class="cmd-hint">排满下面 5 格，点一次就把这 5 个回合一起交给 AI 打完。</span>
+      <span class="cmd-hint" data-cmd-production></span>
       <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
     </div>
     <div class="cmd-slots${commanderExpanded ? ' open' : ''}">${slots}</div>
@@ -1046,6 +1138,7 @@ function renderCommander(): void {
 commanderEl.addEventListener('change', (e) => {
   const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-slot]');
   if (!sel) return;
+  if (state.current !== me() || commanderRunning) return;
   const queue = Array.from(
     commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
   ).map((s) => s.value);
@@ -1069,13 +1162,6 @@ commanderEl.addEventListener('click', (e) => {
   }
 });
 
-/** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
-function commanderBudget(player: PlayerId): Partial<AiBudget> {
-  const head = ordersOf(state, player)[0] ?? '';
-  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null };
-  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
-}
-
 /**
  * 把接下来 5 个回合一次性打完。
  *
@@ -1086,16 +1172,18 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
  * 中途分出胜负或玩家点"中断"就停。
  */
 async function runCommanderBatch(): Promise<void> {
-  if (!commanderActive() || commanderRunning) return;
+  if (!commanderActive() || commanderRunning || modelRun) return;
 
   const token = ++aiToken;
+  const revision = matchRevision;
+  const player = me();
   clearSelection();
   aiPaused = false;
   // 先把当前下拉里的选择落到状态里：玩家可能只是改了选择就直接点执行
   const plan = Array.from(
     commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
   ).map((s) => s.value);
-  if (plan.length > 0) {
+  if (plan.length > 0 && state.current === player) {
     const set = applyAction(state, { type: 'SET_ORDERS', queue: plan });
     if (set.ok) state = set.state;
   }
@@ -1105,28 +1193,27 @@ async function runCommanderBatch(): Promise<void> {
   commanderSig = '';
   renderCommander();
 
+  let completed = false;
   try {
-    for (let r = 0; r < CONFIG.commanderSlots; r++) {
-      if (token !== aiToken || state.winner) break;
-      if (state.current !== me()) break;
-
-      commanderRound = r + 1;
-      commanderSig = '';
-      renderCommander();
-
-      await runAiTurn(token, commanderBudget(state.current), BATCH_DELAY);
-      if (token !== aiToken || state.winner) break;
-
-      // 对手的回合：指挥官模式下对手也是 AI，自己决定这一回合造什么
-      while (token === aiToken && !state.winner && state.current !== me()) {
-        await runAiTurn(token, undefined, BATCH_DELAY);
-      }
-    }
+    completed = await executeCommanderRounds({
+      getState: () => state,
+      active: () => token === aiToken && revision === matchRevision && !aiPaused,
+      progress: (round) => {
+        commanderRound = round;
+        commanderSig = '';
+        renderCommander();
+      },
+      runTurn: (overrides) => runAiTurn(token, overrides, BATCH_DELAY),
+    }, player);
   } finally {
-    commanderRunning = false;
-    commanderRound = 0;
-    commanderSig = '';
+    if (revision === matchRevision) {
+      commanderRunning = false;
+      commanderRound = 0;
+      commanderSig = '';
+    }
   }
+
+  if (revision !== matchRevision) return;
 
   if (state.winner) {
     render();
@@ -1135,22 +1222,26 @@ async function runCommanderBatch(): Promise<void> {
 
   // 把这批计划重新装回序列：玩家满意的话下一次直接点执行，不用重排 5 格。
   // 这也正是"减负"——排一次能用很多批，想改再改。
-  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
-  if (rearm.ok) state = rearm.state;
+  if (completed && token === aiToken && state.current === player) {
+    const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+    if (rearm.ok) state = rearm.state;
+  }
 
   saveMatch(state);
   render();
   // 被"中断"打断时 token 已经换人，这时别报"打完了"
-  if (token === aiToken) toast(`这 ${CONFIG.commanderSlots} 个回合打完了`);
+  if (completed && token === aiToken) toast(`这 ${CONFIG.commanderSlots} 个回合打完了`);
 }
 
 // ---------- 联机 ----------
 
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
+  cancelAutomation();
   room = seat;
   saveSeat(seat);
   rememberRoom(seat.code);
+  rememberPendingTurn(seat.code, null);
   setSaveScope(seat.code);
   // 迷雾是"我这边想不想看"的偏好，不该被对方的存档覆盖
   const fog = state.fog;
@@ -1169,12 +1260,14 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
 }
 
 function leaveRoom(): void {
+  cancelAutomation();
   detachRoom();
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   clearSelection();
   render();
   toast('已退出房间，回到本机对局');
+  kickAiIfNeeded();
 }
 
 /** 只断开房间、不载入本机对局：换局或导入存档时用 */
@@ -1190,17 +1283,33 @@ function detachRoom(): void {
 
 /** 提交这一回合。expectedTurn 是提交前本机的回合数，用来发现"两边同时提交" */
 async function pushTurn(seat: RoomSeat, expectedTurn: number): Promise<void> {
+  const submitted = pendingSubmission?.seat === seat ? pendingSubmission.state : state;
+  const revision = matchRevision;
+  const pending = { seat, state: submitted, expectedTurn };
+  pendingSubmission = pending;
+  rememberPendingTurn(seat.code, expectedTurn);
+  submissionRunning = true;
+  render();
   try {
-    const ok = await submitTurn(seat.code, state, expectedTurn);
+    const ok = await submitTurn(seat.code, submitted, expectedTurn);
+    if (room !== seat || revision !== matchRevision || state !== submitted) return;
     if (!ok) {
       toast('云端已经是别的回合了（可能对面也提交过），点「联机 → 刷新状态」看一眼');
       return;
     }
     dirty = false;
-    toast('这一回合已提交，等对方行动');
+    pendingSubmission = null;
+    rememberPendingTurn(seat.code, null);
+    toast(state.winner ? '对局结果已提交' : '这一回合已提交，等对方行动');
     render();
   } catch (err) {
-    toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
+    if (room !== seat || revision !== matchRevision) return;
+    toast(`${err instanceof Error ? err.message : '提交失败，网络可能不通'}；可点击顶栏「重试提交」`);
+  } finally {
+    if (revision === matchRevision && room === seat && (!pendingSubmission || pendingSubmission === pending)) {
+      submissionRunning = false;
+      render();
+    }
   }
 }
 
@@ -1224,9 +1333,8 @@ async function pollRoom(): Promise<void> {
 
   try {
     const snapshot = await fetchRoom(seat.code);
-    if (!snapshot || room?.code !== seat.code) return;
-    if (snapshot.current !== seat.seat) return;
-    if (snapshot.turn === state.turn) return;
+    if (!snapshot || room !== seat) return;
+    if (!shouldAcceptRoomState(state, snapshot.state, seat.seat)) return;
     if (dirty) {
       toast('对方已提交，但你这边还有没提交的走法——先结束回合，或者重新进房间');
       return;
@@ -1238,7 +1346,7 @@ async function pollRoom(): Promise<void> {
     clearSelection();
     saveMatch(state);
     render();
-    toast('对方已提交，轮到你');
+    toast(state.winner ? '对局结果已同步' : '对方已提交，轮到你');
   } catch {
     // 轮询失败不打扰人：下次再问就是了
   }
@@ -1251,8 +1359,10 @@ async function pollRoom(): Promise<void> {
  * 也就是说"把链接发给同学"这一步，他点开就已经坐下了，不用再填代码。
  */
 async function enterRoomFromUrl(code: string): Promise<void> {
+  const revision = matchRevision;
   try {
     const snapshot = await fetchRoom(code);
+    if (revision !== matchRevision) return;
     if (!snapshot) {
       toast(`没有找到房间 ${code}，可能代码打错了`);
       return;
@@ -1262,6 +1372,7 @@ async function enterRoomFromUrl(code: string): Promise<void> {
     const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
     for (const seat of order) {
       const result = await claimSeat(code, seat, token);
+      if (revision !== matchRevision) return;
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
         toast(`已进入房间 ${code}，你执${seat === 'A' ? '我方' : '敌方'}`);
@@ -1270,6 +1381,7 @@ async function enterRoomFromUrl(code: string): Promise<void> {
     }
     toast('这局两个席位都有人了。换设备请用原来那条邀请链接，或让对方把席位标记清掉');
   } catch (err) {
+    if (revision !== matchRevision) return;
     toast(err instanceof Error ? err.message : '进入房间失败');
   }
 }
@@ -1281,7 +1393,7 @@ function openHandoff(): void {
   handoffOpen = true;
   const nextPlayer = state.current;
   const side = nextPlayer === 'A' ? 'a' : 'b';
-  const name = state.players[nextPlayer].name;
+  const name = escapeHtml(state.players[nextPlayer].name);
   const gold = state.players[nextPlayer].gold;
 
   const el = document.createElement('div');
@@ -1363,12 +1475,7 @@ window.addEventListener('resize', () => {
 // 先看看上次是不是在某个房间里：是的话要先把存档作用域切过去，再读草稿
 const resuming = resumeRoom();
 
-// 旧版本存档结构已经变了，直接丢掉重新开局
-if (state.version !== 4) {
-  clearMatch();
-  detachRoom();
-  state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
-}
+// 存档层已完成版本校验与 v4 → v5 迁移，不能在这里丢弃有效的新版本对局。
 
 refreshMemory(state);
 saveMatch(state);

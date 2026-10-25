@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { ERA_PACKS } from '../src/core/era-packs.ts';
+import { nonWinCount } from './report-outcomes.ts';
 
 const DIR = 'results/packs';
 const OUT = path.join(DIR, 'report.md');
@@ -46,6 +47,7 @@ interface Payload {
     aWins: number;
     bWins: number;
     draws: number;
+    unresolved?: number;
     aRate: number;
     turnsAvg: number;
     recruitsPerGame: number;
@@ -174,7 +176,7 @@ for (const p of PACKS) {
 
   rows.push(
     `| ${p.eraName} | ${run.size}×${run.size} | ${run.games} | ${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)} | ` +
-      `${pct(base.summary.draws / base.games)} → ${pct(run.summary.draws / run.games)} | ` +
+      `${pct(nonWinCount(base.summary) / base.games)} → ${pct(nonWinCount(run.summary) / run.games)} | ` +
       `${gBase.ratio === null ? '-' : gBase.ratio.toFixed(2)} → ${gPack.ratio === null ? '-' : gPack.ratio.toFixed(2)} | ` +
       `${verdict(gPack.ratio, gBase.ratio)} | ` +
       `${gBase.per100.toFixed(1)} → ${gPack.per100.toFixed(1)} | ${gBase.per100Taken.toFixed(1)} → ${gPack.per100Taken.toFixed(1)} |`,
@@ -193,7 +195,7 @@ for (const p of PACKS) {
       '',
       `- 战斗单位交换比：**${gPack.ratio === null ? '-' : gPack.ratio.toFixed(2)}**（原版同代 ${gBase.ratio === null ? '-' : gBase.ratio.toFixed(2)}）→ ${verdict(gPack.ratio, gBase.ratio)}`,
       `- 每百金杀伤：${gPack.per100.toFixed(1)}（原版 ${gBase.per100.toFixed(1)}）　每百金抗伤：${gPack.per100Taken.toFixed(1)}（原版 ${gBase.per100Taken.toFixed(1)}）`,
-      `- 对局节奏：${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)} 回合，未决 ${base.summary.draws}/${base.games} → ${run.summary.draws}/${run.games}`,
+      `- 对局节奏：${base.summary.turnsAvg.toFixed(1)} → ${run.summary.turnsAvg.toFixed(1)} 回合，平局或未决 ${nonWinCount(base.summary)}/${base.games} → ${nonWinCount(run.summary)}/${run.games}`,
       '',
       detail.trim(),
       '',
@@ -259,7 +261,7 @@ ${packTable}
 
 ## 4. 总览
 
-| 时代 | 棋盘 | 局数 | 平均回合（基线→模组） | 未决率 | 交换比（原版→模组） | 判定 | 每百金杀伤 | 每百金抗伤 |
+| 时代 | 棋盘 | 局数 | 平均回合（基线→模组） | 平局或未决率 | 交换比（原版→模组） | 判定 | 每百金杀伤 | 每百金抗伤 |
 |---|---:|---:|---|---|---|---|---|---|
 ${rows.join('\n')}
 
