@@ -1,0 +1,33 @@
+{
+  "name": "warchess",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "npm run test:rules && npm run test:ui",
+    "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
+    "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
+    "manual": "node --experimental-strip-types scripts/build-manual.ts",
+    "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
+    "sim": "node --experimental-strip-types scripts/sim-ai.ts",
+    "sim:debug": "node --experimental-strip-types scripts/debug-ai.ts",
+    "map": "node --experimental-strip-types scripts/dump-map.ts",
+    "bench": "node --experimental-strip-types scripts/bench.ts",
+    "ablate": "node --experimental-strip-types scripts/ablate.ts",
+    "balance": "node --experimental-strip-types scripts/balance-report.ts"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "@tencent-ai/workbuddy-cloud-sdk": "^0.1.4-dev.ca27990.202610161713"
+  }
+}
