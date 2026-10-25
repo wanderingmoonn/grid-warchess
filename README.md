@@ -47,6 +47,7 @@ src/core/      纯函数规则内核（不含 DOM、不含网络、不含 Math.r
   mapgen.ts      地图生成：城市布点、河、山脊、出生点
   fog.ts         战争迷雾与视野
   expansions.ts  扩展规则（血战、老兵、堑壕战……）与钩子
+  era-packs.ts   ⭐ 五个时代兵种包（65 个新单位），数值推导写在文件头
   abilities.ts   特殊能力表（破甲、破城、盾墙……）
   setup.ts       开局装配、起始金币
 
@@ -75,6 +76,38 @@ npm run bench      # 看对局长度和时代推进有没有跑偏
 ```
 
 如果某次改动让对局长度变了，先别猜原因，`npm run ablate` 会把每个改动的影响单独量出来。
+
+## 时代兵种包（大型模组）
+
+五个时代各一套兵种扩展，取材自真实历史的兵种、攻城器械与防御工事，**每套都比原版同期更多**：
+
+| 时代 | 扩展 id | 新增 | 原版同期 | 代表单位 |
+|---|---|---:|---:|---|
+| 古典 | `pack-antiquity` | 14 | 12 | 重装步兵、军团兵、战车、战象、攻城槌、弩炮、瞭望塔 |
+| 中世 | `pack-medieval` | 12 | 8 | 重装军士、弩手、骑射手、瑞士长矛兵、投石机、攻城塔 |
+| 火药 | `pack-gunpowder` | 13 | 11 | 线列步兵、胸甲骑兵、猎兵、攻城加农炮、棱堡、风帆战列舰 |
+| 工业 | `pack-industry` | 13 | 7 | 堑壕突击队、火焰喷射器、毒气兵、榴弹炮、列车炮、马克 I 坦克 |
+| 现代 | `pack-modern` | 13 | 11 | 伞兵、突击队、反坦克炮、喀秋莎、重型坦克、机枪地堡 |
+
+它们在开局面板的扩展列表里单独勾选，不勾选时对原版零影响。
+数值怎么定的、每金耐久带、为什么古典包的价格要压在 60 金以内，都写在
+`src/core/era-packs.ts` 的文件头注释里。
+
+平衡数据在 `results/packs/report.md`（含每兵种的交换比、每百金杀伤/抗伤、采用率）。
+重跑：
+
+```bash
+# 五个模组 + 五个基线，各 30 局（约 1 分钟一组）
+node --experimental-strip-types scripts/balance-report.ts --era 1 --games 30 --seed 900 \
+  --expansions bloodbath,turn-order-comp,pack-antiquity \
+  --md results/packs/era1.md --out results/packs/era1.json
+# ……其余四个时代同理（基线去掉 pack- 那一项）
+npm run pack-report    # 汇总成 results/packs/report.md
+```
+
+**一条改数值时容易踩的坑**：开局部队是从 `era === 1 && category === 'combat' && domain !== 'water'`
+的池子里**轮流白送且不看价钱**的。所以古典包（唯一 era 1 的包）的陆军战斗单位价格必须压在
+60 金以内，否则开局就白送战象，整局基准会直接漂掉——`npm test` 里有一条专门守这个。
 
 ## 指挥官模式
 

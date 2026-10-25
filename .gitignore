@@ -23,3 +23,7 @@ Thumbs.db
 # 临时文件
 *.log
 *.tmp
+
+# 平衡实验的历史产物（results/packs 里的报告要进库，其余不进）
+results/*
+!results/packs/

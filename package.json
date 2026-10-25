@@ -17,7 +17,8 @@
     "map": "node --experimental-strip-types scripts/dump-map.ts",
     "bench": "node --experimental-strip-types scripts/bench.ts",
     "ablate": "node --experimental-strip-types scripts/ablate.ts",
-    "balance": "node --experimental-strip-types scripts/balance-report.ts"
+    "balance": "node --experimental-strip-types scripts/balance-report.ts",
+    "pack-report": "node --experimental-strip-types scripts/pack-report.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

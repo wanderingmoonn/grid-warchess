@@ -32,7 +32,7 @@ import {
   unitsOf,
   utype,
 } from '../src/core/rules.ts';
-import { CONFIG } from '../src/core/config.ts';
+import { CONFIG, UNIT_TYPES, eraDef } from '../src/core/config.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { Action, City, GameState, PlayerId, Terrain, Unit } from '../src/core/types.ts';
 
@@ -72,6 +72,8 @@ const SIZE = Number(argOf('size', '0'));
 const SECOND_BONUS = Number(argOf('second-bonus', '0'));
 /** 带上这个开关就表示"先手第一回合不结算收入"（测结构性配平时用） */
 const NO_FIRST_INCOME = args.includes('--no-first-income');
+/** 给了路径就额外写一份 Markdown 表格（模组平衡报告直接引用这一份） */
+const MD = argOf('md', '');
 
 /** 一个兵种的累计账 */
 interface Tally {
@@ -101,7 +103,9 @@ interface TypeStat {
   dealt: number;
   taken: number;
   ratio: number | null; // 交换比 = 输出 / 承伤；承伤为 0 记 null（∞）
-  per100: number; // 每 100 金输出
+  per100: number; // 每 100 金输出（杀伤）
+  /** 每 100 金承伤：这笔钱在前线"吸"了多少伤害，衡量的是坦度而不是硬度 */
+  per100Taken: number;
   kills: number;
   initCount: number;
   initRatio: number | null;
@@ -874,7 +878,12 @@ async function main(): Promise<void> {
     spendSum += t.spend;
   }
 
-  const defs = createMatch({ ...DEFAULT_CONFIG, startEra: ERA }, BASE_SEED).unitTypes;
+  // 必须把这一轮实际跑的扩展一起传进去：模组单位只存在于"带这个扩展"的兵种表里，
+  // 否则这里查不到它们的 cost，两个"每百金"指标会整列变成 0。
+  const defs = createMatch(
+    { ...DEFAULT_CONFIG, startEra: ERA, expansionIds: EXPANSIONS },
+    BASE_SEED,
+  ).unitTypes;
   const stats: TypeStat[] = [];
   for (const [type, t] of total) {
     const def = defs[type];
@@ -895,6 +904,7 @@ async function main(): Promise<void> {
       // 承伤为 0 时比值在数学上是无穷：JSON 没有 Infinity，落成 null 由报表显示成 ∞
       ratio: t.taken > 0 ? t.dealt / t.taken : t.dealt > 0 ? null : 0,
       per100: inv > 0 ? (t.dealt / inv) * 100 : 0,
+      per100Taken: inv > 0 ? (t.taken / inv) * 100 : 0,
       kills: t.kills,
       initCount: t.initCount,
       initRatio: t.initTaken > 0 ? t.initDealt / t.initTaken : t.initDealt > 0 ? null : 0,
@@ -1053,6 +1063,78 @@ async function main(): Promise<void> {
   console.log(
     `era${ERA}: ${GAMES} 局 | 先手 ${aWins} 后手 ${bWins} 未决 ${draws} | 均 ${turnsAvg.toFixed(1)} 回合 | 均招兵 ${(builtSum / Math.max(1, games.length)).toFixed(1)}`,
   );
+
+  // ---- Markdown 表格：给"模组平衡报告"直接拼接用 ----
+  if (MD) {
+    const fs2 = await import('node:fs');
+    const path2 = await import('node:path');
+    const sizeN = SIZE > 0 ? SIZE : DEFAULT_SIZE_FOR_ERA(ERA);
+    const packName = EXPANSIONS.filter((id) => id.startsWith('pack-')).join('+');
+    const lines: string[] = [];
+    lines.push(`#### ${eraDef(ERA).name}${packName ? `（${packName}）` : ''}`);
+    lines.push('');
+    lines.push(
+      `${GAMES} 局 · ${sizeN}×${sizeN} · 种子 ${BASE_SEED} · 先手 ${aWins} / 后手 ${bWins} / 未决 ${draws}` +
+        ` · 平均 ${turnsAvg.toFixed(1)} 回合 · 场均招兵 ${(builtSum / Math.max(1, games.length)).toFixed(1)}`,
+    );
+    lines.push('');
+    lines.push('| 兵种 | 归属 | 价 | 招募 | 采用率 | 总输出 | 总承伤 | 交换比 | 每百金杀伤 | 每百金抗伤 | 击杀 |');
+    lines.push('|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
+    for (const s of stats) {
+      const src = UNIT_TYPES[s.type] ? '原版' : '模组';
+      const r = s.ratio === null ? '∞' : s.ratio.toFixed(2);
+      // 招募数太少时这两个比值基本是噪声，用 ⚠ 标出来，别让人当真
+      const thin = s.built > 0 && s.built < 10 ? ' ⚠' : '';
+      lines.push(
+        `| ${s.name} | ${src} | ${s.cost} | ${s.built}${thin} | ${(s.share * 100).toFixed(1)}% | ` +
+          `${Math.round(s.dealt)} | ${Math.round(s.taken)} | ${r} | ${s.per100.toFixed(1)} | ` +
+          `${s.per100Taken.toFixed(1)} | ${s.kills} |`,
+      );
+    }
+
+    // 两组分开汇总：模组到底是"多了一种选择"还是"整体更强"，看这两行就够。
+    // 口径只算**战斗单位**：建筑/经济/建造单位本来就该 0 输出，混进来会把每百金指标拉平，
+    // 变成"谁的工事多谁吃亏"，那不是平衡结论。
+    const sum = (pred: (t: TypeStat) => boolean) => {
+      const g = stats.filter(pred);
+      const spend = g.reduce((n, t) => n + t.spend, 0);
+      const dealt = g.reduce((n, t) => n + t.dealt, 0);
+      const taken = g.reduce((n, t) => n + t.taken, 0);
+      const built = g.reduce((n, t) => n + t.built, 0);
+      return {
+        n: g.length,
+        built,
+        spend,
+        dealt,
+        taken,
+        per100: spend > 0 ? (dealt / spend) * 100 : 0,
+        per100Taken: spend > 0 ? (taken / spend) * 100 : 0,
+        ratio: taken > 0 ? dealt / taken : null,
+      };
+    };
+    const isCombat = (t: TypeStat) => t.category === 'combat' && t.built > 0;
+    const pack = sum((t) => !UNIT_TYPES[t.type] && isCombat(t));
+    const base = sum((t) => !!UNIT_TYPES[t.type] && isCombat(t));
+    lines.push('');
+    lines.push('| 分组（只算战斗单位） | 兵种数 | 招募 | 花费 | 每百金杀伤 | 每百金抗伤 | 交换比 |');
+    lines.push('|---|---:|---:|---:|---:|---:|---:|');
+    const row = (label: string, s: ReturnType<typeof sum>) =>
+      `| ${label} | ${s.n} | ${s.built} | ${Math.round(s.spend)} | ${s.per100.toFixed(1)} | ` +
+      `${s.per100Taken.toFixed(1)} | ${s.ratio === null ? '∞' : s.ratio.toFixed(2)} |`;
+    lines.push(row('模组新增', pack));
+    lines.push(row('原版', base));
+    lines.push('');
+    if (pack.spend > 0 && base.spend > 0) {
+      lines.push(
+        `模组/原版：杀伤 ×${(pack.per100 / base.per100).toFixed(2)}、抗伤 ×${(pack.per100Taken / base.per100Taken).toFixed(2)}`,
+      );
+      lines.push('');
+    }
+
+    fs2.mkdirSync(path2.dirname(MD), { recursive: true });
+    fs2.writeFileSync(MD, lines.join('\n'));
+    process.stderr.write(`写出 ${MD}\n`);
+  }
 }
 
 await main();

@@ -3783,5 +3783,73 @@ test('点名的兵造不起时，不会拿别的兵凑数', () => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* 时代兵种包（大型模组）                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 这几条守的是"设计约束"，不是"规则正确"：
+ * 单位数据一旦被人手改坏（改错时代、抄重复 id、把古典贵兵塞进开局池），
+ * 平衡报告会立刻失真，但游戏本身照样能跑——所以必须靠测试拦住。
+ */
+const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
+
+test('五个时代包都在，且各自的兵种数多于原版同期', () => {
+  assert.equal(packs.length, 5, '应有五个时代包');
+  for (const e of packs) {
+    const units = e.units ?? [];
+    const eras = Array.from(new Set(units.map((u) => u.era)));
+    assert.equal(eras.length, 1, `${e.id} 的兵种应属于同一个时代`);
+    const era = eras[0] as number;
+    const vanilla = Object.values(UNIT_TYPES).filter((d) => d.era === era).length;
+    assert.ok(
+      units.length > vanilla,
+      `${e.id} 有 ${units.length} 个单位，应多于原版同期的 ${vanilla} 个`,
+    );
+  }
+});
+
+test('所有兵种 id 全局唯一（原版 + 全部扩展）', () => {
+  const seen = new Map<string, string>();
+  for (const id of Object.keys(UNIT_TYPES)) seen.set(id, '原版');
+  for (const e of EXPANSIONS) {
+    for (const u of e.units ?? []) {
+      assert.ok(!seen.has(u.id), `兵种 id 重复：${u.id}（${seen.get(u.id)} 与 ${e.id}）`);
+      seen.set(u.id, e.id);
+    }
+  }
+});
+
+test('时代包的兵种字段合法（能力存在、数值为正、建筑不能动）', () => {
+  const abilityIds = new Set(ABILITIES.map((a) => a.id));
+  for (const e of packs) {
+    for (const u of e.units ?? []) {
+      assert.ok(u.name.length > 0 && u.short.length > 0, `${u.id} 缺名字或图标`);
+      assert.ok(u.cost > 0, `${u.id} 造价必须为正`);
+      assert.ok(u.maxHp > 0, `${u.id} 血量必须为正`);
+      assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.id} 时代越界`);
+      for (const a of u.abilities ?? []) {
+        assert.ok(abilityIds.has(a), `${u.id} 用了不存在的能力：${a}`);
+      }
+      if (u.category === 'building') assert.equal(u.move, 0, `${u.id} 是建筑，move 应为 0`);
+      if (u.category === 'combat') assert.ok(u.atk > 0, `${u.id} 是战斗单位，攻击应为正`);
+    }
+  }
+});
+
+test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白送）', () => {
+  const pack = EXPANSIONS.find((e) => e.id === 'pack-antiquity');
+  assert.ok(pack, '古典包必须存在');
+  for (const u of pack.units ?? []) {
+    // 水军不进开局池（setup.ts 的 spawnPool 会把 domain=water 剔掉），所以不受这条约束
+    if (u.era === 1 && u.category === 'combat' && u.domain !== 'water') {
+      assert.ok(
+        u.cost <= 60,
+        `${u.name} 是 era 1 陆军战斗单位，造价 ${u.cost} 超过 60：开局部队按池子轮流白送且不看价钱，会直接抬高整局基准`,
+      );
+    }
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

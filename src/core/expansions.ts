@@ -15,6 +15,9 @@
  */
 
 import type { City, GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
+// 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
+// 循环依赖是安全的——那边只 `import type`，运行时没有回指。
+import { ERA_PACKS } from './era-packs.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -409,6 +412,9 @@ export const EXPANSIONS: Expansion[] = [
       modifySecondGold: ({ state }) => turnOrderBonusFor(state.w),
     },
   },
+  // 五个时代兵种包（大型模组）。放在最后是为了不改动既有扩展的注册顺序——
+  // 顺序会进存档，也影响钩子叠加次序。
+  ...ERA_PACKS,
 ];
 
 export function expansionById(id: string): Expansion | undefined {
