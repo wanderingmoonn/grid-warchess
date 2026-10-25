@@ -237,6 +237,23 @@ const ANTIQUITY: UnitTypeDef[] = [
     range: 1,
     vision: 1,
   },
+  {
+    // 夯土城墙：美索不达米亚到先秦的城垣做法，一层层夯出来的土墙。
+    // 城墙这条线是贯穿五个时代的：每代一段，价格与耐久同步涨，
+    // 每金耐久稳定在 1.0~1.2（比同代战斗单位高），代价是**完全不能动、几乎不能打**。
+    id: 'anc_rammed_wall',
+    name: '夯土城墙',
+    short: '垣',
+    era: 1,
+    category: 'building',
+    cost: 70,
+    move: 0,
+    atk: 2,
+    armor: 5,
+    maxHp: 75,
+    range: 1,
+    vision: 1,
+  },
 
   // ---- 建造与水军 ----
   {
@@ -253,7 +270,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     maxHp: 20,
     range: 1,
     vision: 2,
-    builds: ['anc_palisade', 'anc_watchtower', 'bridge', 'camp'],
+    builds: ['anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'bridge', 'camp'],
   },
   {
     // 三层桨战船：古典海权的象征，撞角为主。
@@ -428,9 +445,10 @@ const MEDIEVAL: UnitTypeDef[] = [
     autoAttack: true,
   },
   {
-    // 城墙段：纯堵路，用来把"能过的地方"变少
+    // 城墙：中世这一段是石砌幕墙。名字从"城墙段"改成"城墙"——
+    // 它是城墙这条线（夯土 → 石砌 → 土垒 → 混凝土 → 掩体墙）的第二环，不该只被读成"一段"。
     id: 'med_wall',
-    name: '城墙段',
+    name: '城墙',
     short: '墙',
     era: 2,
     category: 'building',
@@ -646,6 +664,22 @@ const GUNPOWDER: UnitTypeDef[] = [
     vision: 1,
   },
   {
+    // 土垒胸墙：沃邦之前的野战筑城做法，夯土加木排，专门用来吃炮弹。
+    // 城墙这条线的第三环：比棱堡便宜得多，但没有射界、没有溅射，纯粹是"别过来"。
+    id: 'gp_earthwork',
+    name: '土垒胸墙',
+    short: '垒',
+    era: 3,
+    category: 'building',
+    cost: 120,
+    move: 0,
+    atk: 4,
+    armor: 10,
+    maxHp: 110,
+    range: 1,
+    vision: 1,
+  },
+  {
     // 军需官：火药时代军队规模爆炸，后勤本身成了兵种
     id: 'gp_quartermaster',
     name: '军需官',
@@ -675,7 +709,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 24,
     range: 1,
     vision: 2,
-    builds: ['gp_chevaux', 'gp_bastion', 'bridge2', 'camp3'],
+    builds: ['gp_chevaux', 'gp_earthwork', 'gp_bastion', 'bridge2', 'camp3'],
   },
   {
     // 风帆战列舰：三层甲板、一百门炮，火药时代的海上霸主
@@ -876,6 +910,22 @@ const INDUSTRY: UnitTypeDef[] = [
     vision: 1,
   },
   {
+    // 混凝土胸墙：钢筋水泥浇筑的固定工事，一战西线战壕的"硬边"。
+    // 城墙线第四环：护甲 14 + 血量 150，是这个时代唯一能用钱堆出来的"过不去"。
+    id: 'ind_concrete',
+    name: '混凝土胸墙',
+    short: '砼',
+    era: 4,
+    category: 'building',
+    cost: 180,
+    move: 0,
+    atk: 5,
+    armor: 14,
+    maxHp: 150,
+    range: 1,
+    vision: 1,
+  },
+  {
     // 钢厂：工业时代的经济建筑，站在城里最赚
     id: 'ind_steelworks',
     name: '钢厂',
@@ -905,7 +955,7 @@ const INDUSTRY: UnitTypeDef[] = [
     maxHp: 26,
     range: 1,
     vision: 2,
-    builds: ['ind_wire', 'ind_pillbox', 'ind_steelworks', 'bridge2', 'camp4'],
+    builds: ['ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bridge2', 'camp4'],
   },
   {
     // 驱逐舰：工业时代的海上多面手，带一点溅射
@@ -1067,6 +1117,22 @@ const MODERN: UnitTypeDef[] = [
     vision: 1,
   },
   {
+    // 混凝土掩体墙：城墙线第五环。到这个时代它已经变成"纯粹的路障"——
+    // 240 金换 200 血 + 18 护甲，比同价战斗单位耐得多，但一步都走不了。
+    id: 'mod_concretewall',
+    name: '混凝土掩体墙',
+    short: '壁',
+    era: 5,
+    category: 'building',
+    cost: 240,
+    move: 0,
+    atk: 6,
+    armor: 18,
+    maxHp: 200,
+    range: 1,
+    vision: 1,
+  },
+  {
     // 机枪地堡：混凝土 + 重机枪，现代防线的核心
     id: 'mod_mgbunker',
     name: '机枪地堡',
@@ -1113,7 +1179,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 30,
     range: 1,
     vision: 2,
-    builds: ['mod_dragonsteeth', 'mod_mgbunker', 'bridge3', 'camp5'],
+    builds: ['mod_dragonsteeth', 'mod_concretewall', 'mod_mgbunker', 'bridge3', 'camp5'],
   },
   {
     // 驱逐舰：现代海军的通用平台
@@ -1164,35 +1230,35 @@ export const ERA_PACKS: Expansion[] = [
   {
     id: 'pack-antiquity',
     name: '古典会战',
-    summary: '希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮和瞭望塔。14 个新单位。',
+    summary: '希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。',
     hooks: {},
     units: ANTIQUITY,
   },
   {
     id: 'pack-medieval',
     name: '中世兵备',
-    summary: '重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机与攻城塔。12 个新单位。',
+    summary: '重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。',
     hooks: {},
     units: MEDIEVAL,
   },
   {
     id: 'pack-gunpowder',
     name: '火药列国',
-    summary: '线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡与风帆战列舰。13 个新单位。',
+    summary: '线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。',
     hooks: {},
     units: GUNPOWDER,
   },
   {
     id: 'pack-industry',
     name: '工业绞肉机',
-    summary: '堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮与马克 I 坦克。13 个新单位。',
+    summary: '堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。',
     hooks: {},
     units: INDUSTRY,
   },
   {
     id: 'pack-modern',
     name: '现代合成兵',
-    summary: '伞兵、突击队、反坦克炮，配喀秋莎、重型坦克与机枪地堡。13 个新单位。',
+    summary: '伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。',
     hooks: {},
     units: MODERN,
   },

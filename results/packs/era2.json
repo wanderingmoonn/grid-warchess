@@ -816,7 +816,7 @@
     },
     {
       "type": "med_wall",
-      "name": "城墙段",
+      "name": "城墙",
       "era": 2,
       "category": "building",
       "cost": 90,
