@@ -16,7 +16,7 @@ import { CITY, CONFIG, ERAS, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
-import { aiLevelOf, aiNextAction, aiNoise, aiTraits, anyAiSide, isAiSide } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, aiNoise, aiTraits, anyAiSide, isAiSide } from '../src/core/ai.ts';
 import { createMatch, DEFAULT_CONFIG, startGoldFor } from '../src/core/setup.ts';
 import {
   applyAction,
@@ -30,6 +30,7 @@ import {
   distToCity,
   idx,
   movePower,
+  ordersOf,
   previewAttack,
   reachableTiles,
   recruitCost,
@@ -3633,6 +3634,97 @@ test('同样的配置和操作序列得到同样的结果', () => {
     return r.state;
   };
   assert.equal(JSON.stringify(run()), JSON.stringify(run()));
+});
+
+
+console.log('\n指挥官模式');
+
+/** 指挥官模式的一局，A 方行动，钱给足 */
+function commandPost(extra?: Partial<MatchConfig>): GameState {
+  const s = fresh({ commanderMode: true, ...extra });
+  s.current = 'A';
+  s.players.A.gold = 1000;
+  return s;
+}
+
+test('普通对局不接受生产序列', () => {
+  const s = fresh();
+  assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['archer'] }).ok, false);
+  assert.deepEqual(ordersOf(s, 'A'), [], '没开指挥官模式就不该有序列');
+});
+
+test('指挥官模式能排 5 格：末尾空位裁掉，中间空位保留', () => {
+  const s = commandPost();
+  const r = applyAction(s, { type: 'SET_ORDERS', queue: ['archer', '', 'militia', '', ''] });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  // 中间那个空位是"这回合故意不造"，必须留着，否则后面整条序列会往前挪
+  assert.deepEqual(ordersOf(r.state, 'A'), ['archer', '', 'militia']);
+});
+
+test('生产序列最多 5 格，超出的截掉', () => {
+  const s = commandPost();
+  const r = applyAction(s, {
+    type: 'SET_ORDERS',
+    queue: new Array(CONFIG.commanderSlots + 3).fill('archer'),
+  });
+  assert.ok(r.ok);
+  assert.equal(ordersOf(r.state, 'A').length, CONFIG.commanderSlots);
+});
+
+test('不能把建筑排进生产序列', () => {
+  const s = commandPost();
+  const r = applyAction(s, { type: 'SET_ORDERS', queue: ['tower'] });
+  assert.equal(r.ok, false);
+  assert.ok(!r.ok && r.reason.includes('建筑'), `理由该说清是建筑：${!r.ok ? r.reason : ''}`);
+});
+
+test('不存在的兵种会被拒绝', () => {
+  const s = commandPost();
+  assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['no-such-unit'] }).ok, false);
+});
+
+test('结束回合时序列前移一格，造没造出来都算消耗', () => {
+  const s = commandPost();
+  const r = applyAction(s, { type: 'SET_ORDERS', queue: ['archer', 'militia'] });
+  assert.ok(r.ok);
+  const end = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(end.ok);
+  assert.deepEqual(ordersOf(end.state, 'A'), ['militia'], '队首应该出队');
+});
+
+test('AI 会把点名的兵优先造出来', () => {
+  const s = commandPost();
+  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, order: 'archer' };
+  let cur = s;
+  let got: string | null = null;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, budget);
+    if (!a) break;
+    if (a.type === 'RECRUIT') {
+      got = a.unitType;
+      break;
+    }
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.equal(got, 'archer', '点名弓手就该造弓手');
+});
+
+test('点名的兵造不起时，不会拿别的兵凑数', () => {
+  const s = commandPost();
+  // 26 金：够民兵（25），不够弓手（30）
+  s.players.A.gold = 26;
+  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, order: 'archer' };
+  let cur = s;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, budget);
+    if (!a) break;
+    assert.notEqual(a.type, 'RECRUIT', '造不起就空过这一回合，不能自己换个便宜的顶上');
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

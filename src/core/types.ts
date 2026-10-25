@@ -192,6 +192,15 @@ export interface MatchConfig {
    * 所以两边都有。老存档没有这个字段时按 advanced 处理。
    */
   aiLevel?: AiLevel;
+  /**
+   * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
+   * 建造、移动、攻击、升级全部交给 AI。
+   *
+   * 注意它和 aiOpponent / aiAlly 是两回事：那两个说的是"谁被托管"，
+   * 这个说的是"人被托管到什么程度"。指挥官模式下 A 方仍然等人操作，
+   * 只是等的是"下达生产序列"而不是"走子"。
+   */
+  commanderMode?: boolean;
   /** 地貌风格：random 由种子抽；也可以指定横河 / 纵河 / 山岭 / 开阔 */
   mapStyle?: 'random' | 'river-h' | 'river-v' | 'ridge' | 'open';
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */
@@ -275,6 +284,14 @@ export interface GameState {
    * 缺省（undefined）时按 config 推导，所以旧存档照样能读。
    */
   aiControl?: Partial<Record<PlayerId, boolean>>;
+  /**
+   * 指挥官模式的生产序列：每方一份，队首是"这一回合要造的兵种 id"。
+   *
+   * 为什么放进 GameState 而不是留在界面里：它直接决定规则层的产兵结果，
+   * 而且必须随存档一起走——刷新页面丢掉排好的计划，这个模式就没法玩了。
+   * 普通对局里是 undefined，AI 照旧自己挑兵。
+   */
+  orders?: Partial<Record<PlayerId, string[]>>;
   nextUnitSeq: number;
   fog: boolean;
   winner: PlayerId | null;
@@ -299,6 +316,13 @@ export type Action =
   /** 下船：把货舱里的单位放到相邻的空地上 */
   | { type: 'UNLOAD'; unitId: string; cargoId: string; x: number; y: number }
   | { type: 'UPGRADE'; cityId: string }
+  /**
+   * 指挥官模式下排生产序列。
+   *
+   * 整条序列一次写进去（而不是一次加一个），是因为界面允许随时改动任意一格——
+   * 用"设置"而不是"增删"，重发一次就天然幂等，也不用担心两边状态不同步。
+   */
+  | { type: 'SET_ORDERS'; queue: string[] }
   | { type: 'END_TURN' };
 
 /** 规则引擎的返回结果：要么成功带新状态，要么失败带原因 */

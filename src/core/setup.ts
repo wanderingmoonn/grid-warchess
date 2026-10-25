@@ -209,6 +209,7 @@ export function createMatch(
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性
       expansionIds: EXPANSIONS.filter((e) => config.expansionIds.includes(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
+      commanderMode: config.commanderMode === true,
     },
     unitTypes,
     turn: 1,

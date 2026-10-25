@@ -1664,3 +1664,99 @@ a.btn {
     font-size: 12.5px;
   }
 }
+
+/* ---------- 指挥官模式 ---------- */
+/*
+ * 顶栏下面单独一条横带，而不是塞进右侧面板：
+ * 面板是"看选中单位"的地方，指挥官模式里没有选中单位，
+ * 而这条带子是玩家唯一的操作面，得一直看得见、且不随 AI 每步重绘。
+ */
+.commander-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.commander-bar[hidden] {
+  display: none;
+}
+
+.cmd-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cmd-head b {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.cmd-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cmd-slots {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cmd-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.cmd-slot.now {
+  border-color: var(--a);
+  background: var(--a-soft);
+}
+
+.cmd-step {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.cmd-slot.now .cmd-step {
+  color: var(--a);
+  font-weight: 600;
+}
+
+.cmd-slot select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  max-width: 150px;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .commander-bar {
+    gap: 10px;
+    padding: 8px 12px;
+  }
+
+  .cmd-hint {
+    display: none;
+  }
+
+  .cmd-slot select {
+    max-width: 110px;
+  }
+}

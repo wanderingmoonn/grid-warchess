@@ -41,6 +41,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
+      commanderMode: initial.commanderMode === true,
     };
     let currentSeed = seed;
 
@@ -180,6 +181,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
+                你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
+              </div>
+              <div class="chip-row">
+                <button class="chip ${!config.commanderMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
+                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
+              </div>
+              <div class="field-hint">指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
                 地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种</span>
               </div>
               <div class="chip-row">${styleChips}</div>
@@ -245,6 +257,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const mode = aiBtn.dataset.ai;
         config.aiAlly = mode === '2';
         config.aiOpponent = mode === '1' || mode === '2';
+        // 双 AI 观战里没有"玩家"，指挥官模式就无从谈起，顺手关掉
+        if (config.aiAlly) config.commanderMode = false;
+        paint();
+        return;
+      }
+
+      const roleBtn = target.closest<HTMLElement>('[data-role]');
+      if (roleBtn?.dataset.role) {
+        config.commanderMode = roleBtn.dataset.role === 'commander';
+        // 指挥官模式必须对着 AI 打：热座两边都是人，就没人执行战术了
+        if (config.commanderMode) {
+          config.aiOpponent = true;
+          config.aiAlly = false;
+        }
         paint();
         return;
       }

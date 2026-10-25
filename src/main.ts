@@ -9,6 +9,7 @@ import './style.css';
 
 import { expansionById } from './core/expansions.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, anyAiSide, isAiSide } from './core/ai.ts';
+import type { AiBudget } from './core/ai.ts';
 import { CONFIG, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import {
@@ -18,8 +19,10 @@ import {
   canAttack,
   canMove,
   cityAt,
+  citiesOf,
   distance,
   idx,
+  ordersOf,
   reachableTiles,
   refreshMemory,
   siegeTargets,
@@ -28,7 +31,7 @@ import {
 } from './core/rules.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, randomSeed } from './core/setup.ts';
-import type { Action, GameState, PlayerId, Unit } from './core/types.ts';
+import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
@@ -66,6 +69,7 @@ const appEl = pick<HTMLElement>(document, '#app');
 appEl.innerHTML = `
   <div class="app">
     <header class="topbar" id="topbar"></header>
+    <div class="commander-bar" id="commander" hidden></div>
     <div class="main">
       <div class="board-wrap"><div class="board" id="board"></div></div>
       <aside class="side" id="side"></aside>
@@ -76,6 +80,7 @@ appEl.innerHTML = `
 const boardEl = pick<HTMLElement>(appEl, '#board');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
+const commanderEl = pick<HTMLElement>(appEl, '#commander');
 
 // 顶栏骨架只插一次。之后每一步只改文字/class/hidden，绝不重建按钮节点——
 // 否则 AI 连续行动时 click 会在 mousedown 与 mouseup 之间丢掉目标（按钮点不动）。
@@ -208,6 +213,8 @@ function render(): void {
     selectedCampId,
     selectedTile,
   });
+
+  renderCommander();
 
   updateTopbar(topbarEl, {
     fog: state.fog,
@@ -444,6 +451,8 @@ function dispatch(action: Action): boolean {
 
 function onBoardClick(e: Event): void {
   if (handoffOpen || state.winner || aiBusy()) return;
+  // 指挥官模式：这一方的走位与开火归 AI，棋盘只看不碰
+  if (state.config.commanderMode) return;
   if (!myTurn()) {
     toast('等对方提交这一回合');
     return;
@@ -780,9 +789,9 @@ async function runAiLoop(): Promise<void> {
  * 每一步之间停一下，是为了让玩家看得见它在干什么——
  * 瞬间跳完会让整局变成"我做了什么？对面怎么就满编了？"。
  */
-async function runAiTurn(token: number): Promise<void> {
+async function runAiTurn(token: number, overrides?: Partial<AiBudget>): Promise<void> {
   const player = state.current;
-  const budget = { ...DEFAULT_BUDGET };
+  const budget: AiBudget = { ...DEFAULT_BUDGET, ...overrides };
   const delay = AI_SPEED_MS[aiSpeed] ?? 70;
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
@@ -823,6 +832,114 @@ function kickAiIfNeeded(): void {
   aiPaused = false;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
 }
+
+// ---------- 指挥官模式 ----------
+
+/** 面板上一次重建时对应的局面签名，用来避免无谓重建（重建会把下拉框抽走） */
+let commanderSig = '';
+
+/** 现在是不是"轮到玩家当指挥官" */
+function commanderActive(): boolean {
+  return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
+}
+
+/** 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代） */
+function commanderPool(): UnitTypeDef[] {
+  const eras = citiesOf(state, me()).map((c) => c.era);
+  const era = eras.length > 0 ? Math.max(...eras) : 1;
+  return Object.values(state.unitTypes)
+    .filter((d) => d.category !== 'building' && d.era <= era && d.era >= era - 1)
+    .sort((a, b) => a.era - b.era || a.cost - b.cost);
+}
+
+/**
+ * 画指挥官面板。
+ *
+ * 只在"回合 / 可用时代"变化时重建：面板里是 <select>，而 AI 每走一步都会触发
+ * render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
+ * 玩家自己改选项走 change 事件，只更新序列、不重建。
+ */
+function renderCommander(): void {
+  if (!commanderActive()) {
+    commanderEl.hidden = true;
+    commanderSig = '';
+    return;
+  }
+  commanderEl.hidden = false;
+
+  const pool = commanderPool();
+  const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
+  const sig = `${state.turn}|${era}`;
+  if (sig === commanderSig) return;
+  commanderSig = sig;
+
+  const queue = ordersOf(state, me());
+  const opts = (sel: string) =>
+    ['<option value="">— 不指定 —</option>']
+      .concat(
+        pool.map(
+          (d) =>
+            `<option value="${d.id}"${d.id === sel ? ' selected' : ''}>${d.name} · ${d.cost} 金</option>`,
+        ),
+      )
+      .join('');
+
+  const slots = Array.from({ length: CONFIG.commanderSlots }, (_, i) => {
+    const label = i === 0 ? '本回合' : `+${i}`;
+    return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
+      <span class="cmd-step">${label}</span>
+      <select data-slot="${i}">${opts(queue[i] ?? '')}</select>
+    </label>`;
+  }).join('');
+
+  commanderEl.innerHTML = `
+    <div class="cmd-head">
+      <b>参谋部</b>
+      <span class="cmd-hint">你只决定造什么，走位与开火交给 AI。每格占一个回合，造不出来也照样消耗。</span>
+    </div>
+    <div class="cmd-slots">${slots}</div>
+    <button class="btn btn-primary" data-cmd="run">交给参谋部执行本回合</button>
+  `;
+}
+
+/** 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等） */
+commanderEl.addEventListener('change', (e) => {
+  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-slot]');
+  if (!sel) return;
+  const queue = Array.from(
+    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
+  ).map((s) => s.value);
+  dispatch({ type: 'SET_ORDERS', queue });
+});
+
+commanderEl.addEventListener('click', (e) => {
+  if (!(e.target as HTMLElement).closest('[data-cmd="run"]')) return;
+  void runCommanderTurn();
+});
+
+/**
+ * 把这一方交给 AI 打完，然后结束回合。
+ *
+ * 和普通 AI 回合只有两点不同：产兵上限 1 个、且只造玩家点名的那个兵。
+ * 上限设 1 是因为生产序列就是"一回合一个"——让它按自己的节奏造两个，
+ * 玩家排的计划就失去意义了。
+ */
+async function runCommanderTurn(): Promise<void> {
+  if (!commanderActive()) return;
+  const player = state.current;
+  const order = ordersOf(state, player)[0] || null;
+
+  const token = ++aiToken;
+  clearSelection();
+  aiPaused = false;
+
+  await runAiTurn(token, { maxRecruit: 1, order });
+
+  if (token !== aiToken) return;
+  if (!state.winner && isAiSide(state, state.current)) void runAiLoop();
+  else render();
+}
+
 
 // ---------- 联机 ----------
 

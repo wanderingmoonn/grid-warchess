@@ -19,7 +19,7 @@ import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-const TEST_COUNT = 216;
+const TEST_COUNT = 231;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -877,8 +877,36 @@ const html = `<!doctype html>
       </div>
     </section>
 
+    <section id="commander">
+      <h2><span class="sec-num">18</span>指挥官模式</h2>
+      <p>
+        只当指挥官，不当连长：你决定<b>接下来几回合各造什么兵</b>，
+        其余的——建造建筑、升级城市、走位、攻击、上下船——全部交给 AI。
+      </p>
+      <p>开局时在「你的角色」里选「指挥官模式」。之后每个回合你只做一件事：</p>
+      <ol>
+        <li>顶栏下面那条「参谋部」横带里有 <b>5 格生产序列</b>，第一格标着「本回合」。</li>
+        <li>每格选一个兵种，或者留「不指定」，然后点「交给参谋部执行本回合」。</li>
+        <li>AI 打完你这一方，对手再打；轮回你时，序列已经前移一格。</li>
+      </ol>
+      <h3>几条硬规则</h3>
+      <ul>
+        <li><b>每回合最多产 1 个兵</b>。序列就是「一回合一个」——允许多造，计划里的顺序就失去意义了。</li>
+        <li><b>造不出来也照样消耗那一格</b>。钱不够、城市时代不够、编制满了，这一格就是空的。
+          这是这个模式的核心取舍：得算着钱排计划，不是把想要的写上去等它实现。</li>
+        <li><b>点名的兵不会被顶替</b>。排了坦克但造不起，AI 不会「体贴地」换个民兵顶上，它这回合就不产兵。</li>
+        <li><b>中间可以留空</b>：排「弓手 → 空 → 民兵」就是第二回合故意不造、第三回合造民兵。</li>
+        <li><b>棋盘只看不碰</b>。选中、移动、攻击都不响应，这一方的走位归 AI。</li>
+        <li>建筑不能进序列——建筑是建造单位走过去盖的，序列里只能排会被「造出来」的单位。</li>
+      </ul>
+      <p>
+        序列存在对局状态里、跟着存档走，刷新页面不会丢；它同样是<b>可复现</b>的：
+        同一个种子、同一条序列、同样的对手，跑出来是同一局。
+      </p>
+    </section>
+
     <section id="online">
-      <h2><span class="sec-num">18</span>联机与云存档</h2>
+      <h2><span class="sec-num">19</span>联机与云存档</h2>
       <p>这是给"一回合半小时、各走一段再交接"准备的。点顶栏「联机」把当前这局挂到云上，拿到一个 6 位房间码；对方在任意设备上输入代码，或者直接点邀请链接，就坐进这一局。</p>
       <h3>规则</h3>
       <ul>

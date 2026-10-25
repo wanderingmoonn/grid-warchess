@@ -65,6 +65,23 @@ function check(name: string, fn: () => void): void {
   }
 }
 
+/**
+ * 异步用例。
+ *
+ * 和 check 分开是刻意的：如果把 check 改成 async，所有同步用例的
+ * "ok" 会挤到微任务里打印，输出顺序全乱，出问题根本对不上是哪一条。
+ */
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`  ok   ${name}`);
+  } catch (err) {
+    failed += 1;
+    console.log(`  FAIL ${name}\n       ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function click(sel: string): void {
   const el = doc.querySelector<HTMLElement>(sel);
   assert.ok(el, `找不到元素 ${sel}`);
@@ -779,6 +796,76 @@ check('面板写清了房间码就是钥匙', () => {
 check('关掉联机面板回到对局', () => {
   click('[data-act="close"]');
   assert.equal(doc.querySelector('.modal-mask'), null);
+});
+
+
+console.log('\n指挥官模式');
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+check('普通对局不显示指挥官栏', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar, '页面骨架里应该有指挥官栏容器');
+  assert.equal(bar.hidden, true, '非指挥官模式不该出现');
+});
+
+click('[data-act="new-game"]');
+await wait(40);
+
+check('开局面板能选角色', () => {
+  assert.ok(doc.querySelector('[data-role="commander"]'), '应该有指挥官模式选项');
+  assert.ok(doc.querySelector('[data-role="full"]'), '应该有亲自指挥选项');
+});
+
+click('[data-role="commander"]');
+click('[data-act="start"]');
+await wait(60);
+
+check('指挥官模式开局后出现 5 格生产序列', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar && !bar.hidden, '指挥官栏应该显示');
+  assert.equal(bar.querySelectorAll('select[data-slot]').length, 5, '应该有 5 格');
+  assert.ok(bar.textContent?.includes('参谋部'), '标题应该是参谋部');
+});
+
+check('改一格只更新序列，下拉不会被重建', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar);
+  const sel = bar.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0];
+  assert.ok(sel, '找不到第一格');
+  const opt = Array.from(sel.options).find((o) => o.value !== '');
+  assert.ok(opt, '至少要有一个能造的兵种');
+  sel.value = opt.value;
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const again = doc
+    .querySelector<HTMLElement>('#commander')
+    ?.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0];
+  assert.equal(again, sel, '重建会把下拉抽走，玩家刚选的兵就丢了');
+  assert.equal(again?.value, opt.value, '选中的兵种应该还留着');
+});
+
+
+await checkAsync('点「交给参谋部执行」会走完这一回合并消耗一格序列', async () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar);
+  const slot0 = () =>
+    doc.querySelector<HTMLElement>('#commander')?.querySelector<HTMLSelectElement>('select[data-slot="0"]');
+  const before = slot0()?.value;
+  assert.ok(before, '这一格应该有兵');
+
+  // 切到极快，否则 AI 每步 180ms，一回合能等到超时
+  click('[data-act="ai-speed"]');
+  click('[data-act="ai-speed"]');
+  click('[data-cmd="run"]');
+
+  let waited = 0;
+  while (waited < 8000 && slot0()?.value === before) {
+    await wait(200);
+    waited += 200;
+  }
+  assert.equal(slot0()?.value, '', '回合走完后队首应该被消耗掉');
+  const again = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(again && !again.hidden, '回到玩家回合时指挥官栏应该重新出现');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

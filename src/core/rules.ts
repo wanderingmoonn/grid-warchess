@@ -785,6 +785,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doUnload(next, action.unitId, action.cargoId, action.x, action.y);
       case 'UPGRADE':
         return doUpgrade(next, action.cityId);
+      case 'SET_ORDERS':
+        return doSetOrders(next, action.queue);
       case 'END_TURN':
         return doEndTurn(next);
     }
@@ -1337,6 +1339,42 @@ function doRecruit(
   return { ok: true, state: s };
 }
 
+/**
+ * 指挥官模式下这一方的生产序列（只读副本）。普通对局返回空数组。
+ */
+export function ordersOf(s: GameState, player: PlayerId): string[] {
+  return [...(s.orders?.[player] ?? [])];
+}
+
+/**
+ * 指挥官模式下排生产序列。
+ *
+ * 只校验四件事：是不是指挥官模式、长度有没有超、点名的兵种存不存在、是不是建筑。
+ * **不校验钱够不够、城市够不够高级**——那是 AI 执行时的现实约束，
+ * 提前拦下来等于把"排了造不出来"这个后果替玩家抹掉，而它正是这个模式的核心取舍。
+ *
+ * 空字符串是"这一格故意空着"：玩家可能想排"这回合不造、下回合造坦克"。
+ * 所以中间的洞要留着（否则后面整条序列会往前挪），只把末尾的空位裁掉。
+ */
+function doSetOrders(s: GameState, queue: string[]): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有生产序列' };
+
+  const cleaned = queue.slice(0, CONFIG.commanderSlots).map((id) => id ?? '');
+  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') cleaned.pop();
+
+  for (const id of cleaned) {
+    if (!id) continue;
+    const def = s.unitTypes[id];
+    if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
+    if (def.category === 'building') {
+      return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
+    }
+  }
+
+  s.orders = { ...(s.orders ?? {}), [s.current]: cleaned };
+  return { ok: true, state: s };
+}
+
 function doEndTurn(s: GameState): ActionResult {
   s.winner = checkWinner(s);
   if (s.winner) {
@@ -1345,6 +1383,14 @@ function doEndTurn(s: GameState): ActionResult {
   }
 
   const prevPlayer = s.current;
+  // 指挥官模式：这回合过完了，序列前移一格。
+  //
+  // 不管兵有没有造出来都照样消耗——"排了一格、钱不够、这回合空了"
+  // 正是这个模式要玩家学会预判的东西。要是失败就原地保留，
+  // 序列会悄悄滑期，玩家反而看不出自己在哪一步就走了岔。
+  const prevQueue = s.orders?.[prevPlayer];
+  if (prevQueue && prevQueue.length > 0) prevQueue.shift();
+
   const nextPlayer = other(s.current);
   s.current = nextPlayer;
   s.turn += 1;

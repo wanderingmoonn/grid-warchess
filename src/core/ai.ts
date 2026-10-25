@@ -52,6 +52,13 @@ export interface AiBudget {
   maxUpgrade: number;
   recruited: number;
   upgraded: number;
+  /**
+   * 指挥官模式：本回合点名的兵种 id。
+   *
+   * 有值时 AI 只造这一个兵，造不出来就这回合不产兵（转去做别的事）；
+   * 空/未设时照旧自己挑。这一条是"把产兵权交回玩家、其余全托管"的挂钩点。
+   */
+  order?: string | null;
 }
 
 export const DEFAULT_BUDGET: AiBudget = {
@@ -1090,7 +1097,12 @@ interface RecruitSource {
  *
  * 城市和军营共用这段逻辑，区别只在"兵从哪几格出来"和 action 的字段。
  */
-function recruitCandidate(s: GameState, src: RecruitSource, traits: AiTraits): Candidate | null {
+function recruitCandidate(
+  s: GameState,
+  src: RecruitSource,
+  traits: AiTraits,
+  order?: string | null,
+): Candidate | null {
   const me = s.current;
   const gold = s.players[me].gold;
   // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
@@ -1134,9 +1146,14 @@ function recruitCandidate(s: GameState, src: RecruitSource, traits: AiTraits): C
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
 
+  // 指挥官模式：玩家点名了兵种，就只在这个兵种里挑产兵点。
+  // 造不出来（时代不够 / 没水 / 钱不够）时返回 null，让 AI 本回合去干别的事——
+  // 而不是"退而求其次随便造一个"。指挥官要的是可预期，不是被体贴。
+  const pool = order ? choices.filter((d) => d.id === order) : choices;
+  if (pool.length === 0) return null;
+
   const myUnits = unitsOf(s, me);
-  const earners = myUnits.filter((u) => utype(s, u.type).category === 'economy').length;
-  const builders = myUnits.filter((u) => utype(s, u.type).category === 'builder').length;
+  const earners = myUnits.filter((u) => utype(s, u.type).category === 'economy').length;  const builders = myUnits.filter((u) => utype(s, u.type).category === 'builder').length;
   // 被地形困住的单位不算"有效兵力"：它们既上不了前线，还占着产兵格。
   // 算拥挤度时必须扣掉，否则 AI 会以为自己兵很多、不再补兵，其实全是站桩的。
   const combatCount = myUnits.filter(
@@ -1165,7 +1182,7 @@ function recruitCandidate(s: GameState, src: RecruitSource, traits: AiTraits): C
   const wet = waterShare(s);
 
   let best: Candidate | null = null;
-  for (const d of choices) {
+  for (const d of pool) {
     const price = recruitCost(s, me, d);
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
@@ -1247,6 +1264,11 @@ function recruitCandidate(s: GameState, src: RecruitSource, traits: AiTraits): C
     // 高级的随机幅度更小：选择更"有主意"，不会因为噪声去造一个明显不合适的兵
     score += (aiNoise(s, d.id.length * 31 + d.id.charCodeAt(0)) - 0.5) * (aiLevelOf(s) === 'advanced' ? 4 : 8);
 
+    // 指挥官点名的兵种优先落地。
+    // 产兵是这个模式里玩家唯一的杠杆，必须赶在 AI 把钱花到建筑/升级之前执行，
+    // 否则"我排了三个坦克，一个都没出来"——而且玩家看不出是被什么吃掉的。
+    if (order && d.id === order) score += 240;
+
     const action: Action =
       src.kind === 'camp'
         ? { type: 'RECRUIT', unitId: src.id, unitType: d.id }
@@ -1325,6 +1347,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
         traits,
+        budget.order,
       );
       if (c) candidates.push(c);
     }
@@ -1334,7 +1357,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
       for (const u of unitsOf(view, me)) {
         if (!utype(view, u.type).barracks) continue;
         const era = own.reduce((a, b) => (distToCity(u, a) <= distToCity(u, b) ? a : b)).era;
-        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits);
+        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits, budget.order);
         if (c) candidates.push(c);
       }
     }
