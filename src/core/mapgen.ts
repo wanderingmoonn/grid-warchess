@@ -586,40 +586,6 @@ function pickSeed(
   return null;
 }
 
-/**
- * 随机漫游长出一块地形。
- *
- * 逐格独立随机撒出来的"森林"看着像噪点；按团块长才有"林子""山包"的形体，
- * 也才有"绕过去还是穿过去"的选择。
- */
-function growBlob(
-  c: Ctx,
-  rng: () => number,
-  zoneOf: (x: number, y: number) => 'A' | 'B',
-  zone: 'A' | 'B',
-  terrain: Terrain,
-  size: number,
-  blocked: Set<number>,
-): number {
-  const start = pickSeed(c, rng, zoneOf, zone, blocked);
-  if (!start) return 0;
-
-  let cur = start;
-  let placed = 0;
-  for (let i = 0; i < size; i++) {
-    if (at(c, cur.x, cur.y) !== 'plain') break;
-    put(c, cur.x, cur.y, terrain);
-    blocked.add(cur.y * c.w + cur.x);
-    placed += 1;
-
-    // 50% 粘在当前格旁边继续长，50% 跳回起点附近，避免长成一根面条
-    const around = rng() < 0.5 ? cur : start;
-    const [dx, dy] = DIRS[Math.floor(rng() * DIRS.length)] ?? [0, 0];
-    cur = { x: around.x + dx, y: around.y + dy };
-  }
-  return placed;
-}
-
 /** 按配额在两侧铺同数量的团块地形 */
 function scatterTerrain(
   c: Ctx,
@@ -629,15 +595,317 @@ function scatterTerrain(
   counts: Record<'A' | 'B', number>,
   blocked: Set<number>,
 ): void {
+  // 团块大小跟着图长：12×12 一片林子 4~7 格就够看，
+  // 32×32 上还按 2~6 格撒，只剩一地碎斑——"成片的森林"就是这么丢的。
+  const maxBlob = Math.max(5, Math.min(20, Math.round(4 + Math.min(c.w, c.h) / 4)));
   for (const zone of ['A', 'B'] as const) {
     let left = counts[zone];
     let guard = 0;
-    while (left > 0 && guard < 200) {
+    while (left > 0 && guard < 300) {
       guard += 1;
-      const size = Math.min(left, 2 + Math.floor(rng() * 5));
-      const placed = growBlob(c, rng, zoneOf, zone, terrain, size, blocked);
+      const size = Math.min(left, 3 + Math.floor(rng() * Math.max(1, maxBlob - 3)));
+      const seed = pickSeed(c, rng, zoneOf, zone, blocked);
+      if (!seed) break;
+      // 团块用"前沿扩张"长，长出来是连成一片的，而不是面条
+      const placed = growRegion(c, rng, seed, terrain, size, blocked);
       if (placed === 0) break;
       left -= placed;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 3.5 额外地貌：大地图上的河、湖、海、山与成片森林                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 紧凑地长一团地形。
+ *
+ * 老版本是随机游走长的：一步一格，一半概率跳回起点，撞到别的地形就 `break`——
+ * 结果是一片片"细面条"，或者半路断掉。所以"成片的森林"基本没出现过。
+ *
+ * 这里改成前沿扩张：把和已占格相邻的空白格记进 frontier，每次随机挑一个吃掉，
+ * 新格再把它的邻居加进来。长出来的团是连成一片的，尺寸也可控，
+ * 视觉上才像"林子"和"湖"，而不是撒了一把碎块。
+ */
+function growRegion(
+  c: Ctx,
+  rng: () => number,
+  start: Pos,
+  terrain: Terrain,
+  size: number,
+  blocked: Set<number>,
+): number {
+  if (at(c, start.x, start.y) !== 'plain') return 0;
+  const frontier: Pos[] = [];
+  const seen = new Set<number>();
+  const push = (p: Pos): void => {
+    if (at(c, p.x, p.y) !== 'plain') return;
+    const i = p.y * c.w + p.x;
+    if (seen.has(i) || blocked.has(i)) return;
+    seen.add(i);
+    frontier.push(p);
+  };
+
+  put(c, start.x, start.y, terrain);
+  blocked.add(start.y * c.w + start.x);
+  let placed = 1;
+  for (const [dx, dy] of DIRS) push({ x: start.x + dx, y: start.y + dy });
+
+  while (placed < size && frontier.length > 0) {
+    const k = Math.floor(rng() * frontier.length);
+    const p = frontier.splice(k, 1)[0]!;
+    if (at(c, p.x, p.y) !== 'plain') continue;
+    put(c, p.x, p.y, terrain);
+    blocked.add(p.y * c.w + p.x);
+    placed += 1;
+    for (const [dx, dy] of DIRS) push({ x: p.x + dx, y: p.y + dy });
+  }
+  return placed;
+}
+
+/**
+ * 一条会拐弯的线：从 start 出发，朝 target 走，偶尔横向抖一下。
+ *
+ * 用来画支流。它比主河简单——主河要保证横贯全图、还要留渡口，
+ * 支流只要"从边上流进来、接到中间"就够，剩下的交给连通性开凿那一步。
+ * width=2 时两侧各补一格，看起来像条小溪而不是一刀切。
+ */
+function paintWander(
+  c: Ctx,
+  rng: () => number,
+  start: Pos,
+  target: Pos,
+  terrain: Terrain,
+  steps: number,
+  width: number,
+  blocked: Set<number>,
+): void {
+  let cur = { ...start };
+  for (let i = 0; i < steps; i++) {
+    const dx = Math.sign(target.x - cur.x);
+    const dy = Math.sign(target.y - cur.y);
+    // 主方向 + 抖动：全是直的会像尺子画的
+    const r = rng();
+    let nx = cur.x;
+    let ny = cur.y;
+    if (Math.abs(target.x - cur.x) >= Math.abs(target.y - cur.y)) {
+      nx += dx;
+      if (r < 0.3) ny += rng() < 0.5 ? 1 : -1;
+    } else {
+      ny += dy;
+      if (r < 0.3) nx += rng() < 0.5 ? 1 : -1;
+    }
+    if (nx === cur.x && ny === cur.y) break;
+    cur = { x: nx, y: ny };
+    if (at(c, cur.x, cur.y) === undefined) break;
+    put(c, cur.x, cur.y, terrain);
+    blocked.add(cur.y * c.w + cur.x);
+    if (width >= 2) {
+      const side = Math.abs(target.x - cur.x) >= Math.abs(target.y - cur.y)
+        ? { x: cur.x, y: cur.y + (rng() < 0.5 ? 1 : -1) }
+        : { x: cur.x + (rng() < 0.5 ? 1 : -1), y: cur.y };
+      if (at(c, side.x, side.y) === 'plain') {
+        put(c, side.x, side.y, terrain);
+        blocked.add(side.y * c.w + side.x);
+      }
+    }
+  }
+}
+
+/**
+ * 大地图"加料"：额外水体与山系。
+ *
+ * 为什么按边长分级：12×12 上一片湖就占了八分之一，走位全被它决定；
+ * 32×32 上什么都不加，中间就是一大块空地——两个回合走到对面，看着很荒。
+ * 所以这些地貌只在够大的图上出现：
+ *   湖   ≥14（1 对）；≥26（2 对）；≥44（3 对）
+ *   短山脊 ≥18（1 对）
+ *   支流 ≥20（1 对）
+ *   成片森林 ≥24（1 对，18~30 格的林子）
+ *
+ * 公平性：每一件都成对生成——一件落在 A 区，另一件落在它的点镜像位置。
+ * 这样不管是对称图还是公平图，两边拿到的地形数量一致，
+ * 不会出现"我这半边是湖、你那边是平原"的开局。
+ */
+function enrichTerrain(
+  c: Ctx,
+  rng: () => number,
+  zoneOf: (x: number, y: number) => 'A' | 'B',
+  blocked: Set<number>,
+): void {
+  const size = Math.min(c.w, c.h);
+  if (size < 14) return;
+
+  const mirrorPos = (p: Pos): Pos => mirrorOf(c, p);
+
+  /** 在 A 区里挑一块空地的种子 */
+  const seedInA = (): Pos | null => {
+    for (let t = 0; t < 300; t++) {
+      const x = 1 + Math.floor(rng() * (c.w - 2));
+      const y = 1 + Math.floor(rng() * (c.h - 2));
+      if (zoneOf(x, y) !== 'A') continue;
+      if (blocked.has(y * c.w + x)) continue;
+      if (at(c, x, y) !== 'plain') continue;
+      return { x, y };
+    }
+    return null;
+  };
+
+  // ---- 湖：成对的凹地水面 ----
+  //
+  // 按**面积**给，不是按边长：边长翻倍，格子数翻四倍，按边长给会让大图上
+  // 的湖显得越来越"小气"（64×64 实测含水量反而比 32×32 低）。
+  const tiles = c.w * c.h;
+  const lakePairs = Math.max(1, Math.min(4, Math.round(tiles / 700)));
+  const lakeArea = Math.max(8, Math.min(55, Math.round(tiles * 0.02)));
+  for (let k = 0; k < lakePairs; k++) {
+    const seed = seedInA();
+    if (!seed) break;
+    const area = Math.round(lakeArea * (0.75 + rng() * 0.5));
+    growRegion(c, rng, seed, 'water', area, blocked);
+    growRegion(c, rng, mirrorPos(seed), 'water', area, blocked);
+  }
+
+  // ---- 支流：从地图边流进城与城之间的空档 ----
+  //
+  // 只给真正的大图（≥28）。20×20 上一条支流就能把战场切成两半，
+  // 实测加上之后 20×20 的攻城次数从 7 掉到 1——那不是"丰富"，是"堵"。
+  if (size >= 28) {
+    const mid = { x: Math.floor(c.w / 2), y: Math.floor(c.h / 2) };
+    const edge = Math.floor(rng() * 4);
+    const t = 3 + Math.floor(rng() * (size - 6));
+    const start: Pos =
+      edge === 0
+        ? { x: t, y: 0 }
+        : edge === 1
+          ? { x: t, y: c.h - 1 }
+          : edge === 2
+            ? { x: 0, y: t }
+            : { x: c.w - 1, y: t };
+    const steps = Math.round(size * (0.45 + rng() * 0.3));
+    paintWander(c, rng, start, mid, 'water', steps, rng() < 0.5 ? 2 : 1, blocked);
+    paintWander(c, rng, mirrorPos(start), mirrorPos(mid), 'water', steps, rng() < 0.5 ? 2 : 1, blocked);
+    // 64 这种巨图上一条支流感觉不到，再补一条从另一侧流进来的
+    if (size >= 40) {
+      const a = Math.floor(rng() * 4);
+      const t2 = 3 + Math.floor(rng() * (size - 6));
+      const s2: Pos =
+        a === 0 ? { x: t2, y: 0 } : a === 1 ? { x: t2, y: c.h - 1 } : a === 2 ? { x: 0, y: t2 } : { x: c.w - 1, y: t2 };
+      paintWander(c, rng, s2, mid, 'water', steps, 1, blocked);
+      paintWander(c, rng, mirrorPos(s2), mirrorPos(mid), 'water', steps, 1, blocked);
+    }
+  }
+
+  // ---- 次级山脊：一条短的山脉，主山脊之外的那种 ----
+  if (size >= 18) {
+    const ridgePairs = size >= 40 ? 2 : 1;
+    for (let r = 0; r < ridgePairs; r++) {
+    const horizontal = rng() < 0.5;
+    const len = Math.round((horizontal ? c.w : c.h) * (0.35 + rng() * 0.25));
+    const start: Pos = horizontal
+      ? { x: 2 + Math.floor(rng() * (c.w - len - 4)), y: 2 + Math.floor(rng() * (c.h - 5)) }
+      : { x: 2 + Math.floor(rng() * (c.w - 5)), y: 2 + Math.floor(rng() * (c.h - len - 4)) };
+    const drawRidge = (from: Pos): void => {
+      let cur = { ...from };
+      for (let i = 0; i < len; i++) {
+        const t = at(c, cur.x, cur.y);
+        if (t === undefined) break;
+        if (t === 'plain') put(c, cur.x, cur.y, 'mountain');
+        // 山脚补丘陵，山体才不会像一排孤零零的方块
+        for (const [dx, dy] of DIRS) {
+          if (at(c, cur.x + dx, cur.y + dy) === 'plain' && rng() < 0.55) {
+            put(c, cur.x + dx, cur.y + dy, 'hill');
+          }
+        }
+        if (rng() < 0.25) {
+          if (horizontal) cur = { x: cur.x, y: cur.y + (rng() < 0.5 ? 1 : -1) };
+          else cur = { x: cur.x + (rng() < 0.5 ? 1 : -1), y: cur.y };
+        }
+        cur = horizontal ? { x: cur.x + 1, y: cur.y } : { x: cur.x, y: cur.y + 1 };
+      }
+    };
+    drawRidge(start);
+    drawRidge(mirrorPos(start));
+    }
+  }
+
+  // ---- 成片的森林：一条明显的林子，比撒碎块更像"地形" ----
+  if (size >= 24) {
+    const forestPairs = size >= 40 ? 2 : 1;
+    for (let f = 0; f < forestPairs; f++) {
+      const seed = seedInA();
+      if (!seed) break;
+      const area = Math.max(16, Math.min(48, Math.round(tiles * 0.007)));
+      const a = Math.round(area * (0.8 + rng() * 0.5));
+      growRegion(c, rng, seed, 'forest', a, blocked);
+      growRegion(c, rng, mirrorPos(seed), 'forest', a, blocked);
+    }
+  }
+}
+
+/**
+ * 填空白：把仍然是大片空地的区域补上林子和小丘。
+ *
+ * 这是用户直接提的问题——"大地图整体显得较空"。原因不是地形总量不够，
+ * 而是它们**扎堆**：几团林子长在同一个角落，图上就剩下一片几百格的空场。
+ * 光调高比例只是让团块更密，空白区还是空白区。
+ *
+ * 做法：(1) 找出所有连成片的"纯平原"区域；
+ *       (2) 对超过阈值的区域，往里长小团块（森林为主、丘陵为辅），
+ *           直到这块区域的空地比例降到目标值以下。
+ * 这样补的是"缺口"，不是"平均撒一遍"，地形该密的地方仍然密。
+ */
+function fillEmptyRegions(
+  c: Ctx,
+  rng: () => number,
+  blocked: Set<number>,
+  opts: { minRegion: number; keepPlain: number; blob: [number, number] },
+): void {
+  const n = c.w * c.h;
+  const seen = new Uint8Array(n);
+  const regions: number[][] = [];
+
+  for (let i = 0; i < n; i++) {
+    if (seen[i] || c.g[i] !== 'plain' || blocked.has(i)) continue;
+    const region: number[] = [];
+    const st = [i];
+    seen[i] = 1;
+    while (st.length > 0) {
+      const k = st.pop()!;
+      region.push(k);
+      const x = k % c.w;
+      const y = (k - x) / c.w;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= c.w || ny >= c.h) continue;
+        const j = ny * c.w + nx;
+        if (seen[j] || c.g[j] !== 'plain' || blocked.has(j)) continue;
+        seen[j] = 1;
+        st.push(j);
+      }
+    }
+    regions.push(region);
+  }
+
+  for (const region of regions) {
+    if (region.length < opts.minRegion) continue;
+    // 这块区域里还剩多少空地（生长过程中会变，所以每轮重数）
+    let plain = region.filter((k) => c.g[k] === 'plain').length;
+    const target = Math.floor(region.length * opts.keepPlain);
+    let guard = 0;
+    while (plain > target && guard < 60) {
+      guard += 1;
+      const k = region[Math.floor(rng() * region.length)]!;
+      if (c.g[k] !== 'plain') continue;
+      const x = k % c.w;
+      const y = (k - x) / c.w;
+      const terrain: Terrain = rng() < 0.72 ? 'forest' : 'hill';
+      const size = opts.blob[0] + Math.floor(rng() * (opts.blob[1] - opts.blob[0] + 1));
+      const placed = growRegion(c, rng, { x, y }, terrain, size, blocked);
+      plain -= placed;
+      if (placed === 0) break;
     }
   }
 }
@@ -1020,6 +1288,21 @@ export function generateLayout(
     if (n <= 0) continue;
     scatterTerrain(c, rngTerrain, zoneOf, t, { A: n, B: n }, blocked);
     void blob;
+  }
+
+  // ---- 大地图加料：额外的湖、支流、短山脊、成片森林 ----
+  // 放在镜像和连通性开凿之前：镜像会把这些统一成对称的，
+  // 开凿则保证加了这么多水体之后地图还是通得过去的。
+  enrichTerrain(c, rngTerrain, zoneOf, blocked);
+
+  // ---- 填空白：把还剩的大块空地补上林子/小丘 ----
+  // 只对够大的图做：12×12 上一团林子就占了十分之一，本来就不空。
+  if (Math.min(c.w, c.h) >= 16) {
+    fillEmptyRegions(c, rngTerrain, blocked, {
+      minRegion: Math.round((c.w * c.h) * 0.06), // 小于 6% 地图的空地不用管
+      keepPlain: 0.9,                            // 大块空地至少留 90% 是空地
+      blob: [3, Math.max(5, Math.min(10, Math.round(Math.min(c.w, c.h) / 4)))],
+    });
   }
 
   // ---- 完全镜像：把每一对镜像格统一成同一块地形 ----

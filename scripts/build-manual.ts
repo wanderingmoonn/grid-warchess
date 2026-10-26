@@ -19,7 +19,7 @@ import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-const TEST_COUNT = 269;
+const TEST_COUNT = 270;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },

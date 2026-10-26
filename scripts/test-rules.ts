@@ -279,6 +279,74 @@ test('棋盘边长 4~64 都能开局，越界会被夹住', () => {
   assert.equal(clamped.config.size, MAX_BOARD_SIZE);
 });
 
+test('大地图地形要够丰富：多片水、成片林、有山', () => {
+  // 用户反馈"大地图整体显得较空"。这条把"够不够丰富"变成可测的数字：
+  // 32×32 上至少要有若干片水、成片的林子、以及山体；
+  // 同时空地不能占太多（以前是 79%，一眼望去全是绿）。
+  const CH: Record<string, string> = { '.': 'plain', f: 'forest', h: 'hill', '~': 'water', '^': 'mountain' };
+  let plain = 0;
+  let forest = 0;
+  let water = 0;
+  let mountain = 0;
+  let bestForest = 0;
+  let waterBodies = 0;
+  const N = 4;
+
+  for (let k = 1; k <= N; k++) {
+    const layout = generateLayout(32, k * 631 + 17);
+    const w = layout.w;
+    const h = layout.h;
+    const g = layout.rows.join('').split('').map((c) => CH[c] ?? 'plain');
+    const count = (t: string) => g.filter((x) => x === t).length;
+    plain += count('plain') / (w * h);
+    forest += count('forest') / (w * h);
+    water += count('water') / (w * h);
+    mountain += count('mountain') / (w * h);
+
+    // 最大森林连通块 + 水面片数
+    const seen = new Uint8Array(w * h);
+    const flood = (start: number, t: string): number => {
+      let n = 0;
+      const st = [start];
+      seen[start] = 1;
+      while (st.length > 0) {
+        const i = st.pop()!;
+        n += 1;
+        const x = i % w;
+        const y = (i - x) / w;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = ny * w + nx;
+          if (seen[j] || g[j] !== t) continue;
+          seen[j] = 1;
+          st.push(j);
+        }
+      }
+      return n;
+    };
+    for (let i = 0; i < w * h; i++) {
+      if (seen[i] || g[i] !== 'forest') continue;
+      bestForest = Math.max(bestForest, flood(i, 'forest'));
+    }
+    seen.fill(0);
+    for (let i = 0; i < w * h; i++) {
+      if (seen[i] || g[i] !== 'water') continue;
+      flood(i, 'water');
+      waterBodies += 1;
+    }
+  }
+
+  const pct = (v: number) => `${((v / N) * 100).toFixed(0)}%`;
+  assert.ok(plain / N < 0.68, `空地太多：${pct(plain)}（应小于 68%）`);
+  assert.ok(forest / N > 0.08, `森林太少：${pct(forest)}（应大于 8%）`);
+  assert.ok(water / N > 0.08, `水面太少：${pct(water)}（应大于 8%）`);
+  assert.ok(mountain / N > 0.005, `没有山：${pct(mountain)}`);
+  assert.ok(bestForest >= 15, `没有成片的森林：最大一块只有 ${bestForest} 格`);
+  assert.ok(waterBodies / N >= 3, `水面太碎或太少：平均 ${(waterBodies / N).toFixed(1)} 片`);
+});
+
 test('任意边长生成的地图都合法：城在界内、互不重叠', () => {
   // 4 和 5 走的是 mapgen 里的 tinyLayout（一城一边、不画河）；
   // 6 以上走正常流程。这条测试把整条边界扫一遍，防止以后改布点又退回去。
@@ -3468,6 +3536,9 @@ test('AI 会攻击贴到脸上的敌人', () => {
 
 test('看不见敌人时 AI 朝敌方城市推进，而不是原地发呆', () => {
   const s = fresh();
+  // 抹平地形：地图上现在有湖和支流，"曼哈顿距离有没有变小"不再是可靠判据
+  // ——绕湖走一步可能反而远了。这条测的是 AI 的意图，不是地图运气。
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
   s.current = 'B';
   const first = aiNextAction(s, NO_RECRUIT);
   assert.ok(first, 'AI 应该有事可做');
@@ -3575,6 +3646,9 @@ test('AI 会主动离开基地推进战线（而不是龟缩）', () => {
   // 模拟一百个回合打不了一次。这里跑十个回合，看战线有没有真的往前挪。
   // 用开阔图测"敢不敢往前压"：河和山是地形问题，不该混进这条断言里
   let cur = fresh({ aiOpponent: true, aiAlly: true, mapStyle: 'open' });
+  // 同样抹平地形：大地图加了湖、支流、短山脊之后，开阔图上也可能横着一片水，
+  // 十个回合里"先头部队有没有更靠近"就不再只反映"敢不敢压"。
+  for (const t of cur.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
   const enemyCity = citiesOf(cur, 'A')[0];
   assert.ok(enemyCity, '应该有敌方城市');
 
