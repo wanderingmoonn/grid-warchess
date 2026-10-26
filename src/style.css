@@ -1047,6 +1047,20 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
+  /*
+   * 钉在列表顶上。
+   *
+   * 它唯一的用处是"边翻边筛"，而几十种兵的列表一长，搜索框会跟着列表
+   * 一起滚出视野——滚走了的搜索框等于没有（实测在 760px 高的窗口里，
+   * 它在 top≈975 的位置，首屏根本看不到）。
+   * sticky 让它始终停在可视区顶部；背景色是必须的，否则底下的卡片会透上来。
+   * 它的活动范围被限制在自己那张卡片内，卡片滚完了它就跟着走，不会浮到别处。
+   */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--panel);
+  padding: 6px 0 8px;
 }
 
 .recruit-search-input {
