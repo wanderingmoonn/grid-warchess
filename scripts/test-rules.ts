@@ -16,7 +16,18 @@ import { CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, aiNoise, aiTraits, anyAiSide, isAiSide } from '../src/core/ai.ts';
+import {
+  AI_MAX_STEPS,
+  DEFAULT_BUDGET,
+  aiLevelOf,
+  aiNextAction,
+  aiNoise,
+  aiTraits,
+  anyAiSide,
+  isAiSide,
+  rosterBonuses,
+  rosterRoleOf,
+} from '../src/core/ai.ts';
 import {
   MAX_BOARD_SIZE,
   MIN_BOARD_SIZE,
@@ -4946,6 +4957,101 @@ test('按兵种搭配买兵：真远程的预算不会被长兵器挤掉', () =>
   assert.ok(
     ranged >= reach,
     `射程 3 以上的买到 ${ranged} 个、长兵器 ${reach} 个：${picks.map((id) => s.unitTypes[id]?.name).join(' ')}`,
+  );
+});
+
+test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
+  // 模板要解决的问题是"采购是纯 argmax"：分最高的兵种吃满预算，
+  // 一局下来清一色三四种兵。它按职能算配比，不按兵种 id 算。
+  const s = createMatch({ ...BASE, expansionIds: EXPANSIONS.map((e) => e.id) }, 12345);
+  const role = (name: string) => {
+    const def = Object.values(s.unitTypes).find((d) => d.name === name);
+    assert.ok(def, `兵种表里没有 ${name}`);
+    return rosterRoleOf(def);
+  };
+  assert.equal(role('民兵'), 'melee', '没甲没血的近战就是近战输出');
+  assert.equal(role('弓手'), 'ranged');
+  assert.equal(role('长枪兵'), 'tank', '血厚甲高的近战是在顶前排');
+  assert.equal(role('臼炮'), 'siege');
+  assert.equal(role('牧师'), 'support', '自己打不动的治疗算支援');
+  assert.equal(role('天使'), 'tank', '天使能打能顶，治疗光环只是顺带');
+
+  // 六个近战的部队：近战满编制，前排 / 远程 / 支援三档全缺
+  const bonus = rosterBonuses({
+    total: 6,
+    counts: { tank: 0, melee: 6, ranged: 0, support: 0, siege: 0 },
+    siegeAtWall: false,
+  });
+  assert.equal(bonus.melee, 0, '近战已经够了，不再加分');
+  assert.ok(bonus.tank > 8, `缺前排要加分：${JSON.stringify(bonus)}`);
+  assert.ok(bonus.ranged > 8, `缺远程要加分：${JSON.stringify(bonus)}`);
+  assert.ok(bonus.support > 8, `缺支援要加分：${JSON.stringify(bonus)}`);
+  assert.equal(bonus.siege, 0, '攻城器不参与常备配比');
+
+  // 一支部队都没有时不加分：开局该由"先凑出能打的一小撮"决定
+  assert.deepEqual(
+    rosterBonuses({
+      total: 0,
+      counts: { tank: 0, melee: 0, ranged: 0, support: 0, siege: 0 },
+      siegeAtWall: false,
+    }),
+    { tank: 0, melee: 0, ranged: 0, support: 0, siege: 0 },
+  );
+});
+
+test('编队模板：一屋子近战之后，AI 会去补远程和支援', () => {
+  // 上一版没有模板时，这里会连买六七个近战：近战的分本来就高，
+  // 同兵种递减又只按"同一个兵种"算，换个近战兵种照样吃得下预算。
+  const s = fresh(
+    { startEra: 4, size: 20, aiLevel: 'advanced', expansionIds: EXPANSIONS.map((e) => e.id) },
+    4242,
+  );
+  s.units = s.units.filter((u) => u.owner !== 'A');
+  const home = citiesOf(s, 'A')[0];
+
+  // 六个民兵摆在城外两格：既让出出兵的格子，又让"近战已经够了"成为事实
+  let placed = 0;
+  for (let ring = 2; ring <= 4 && placed < 6; ring++) {
+    for (let dy = -ring; dy <= ring && placed < 6; dy++) {
+      for (let dx = -ring; dx <= ring && placed < 6; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        const x = home.x + dx;
+        const y = home.y + dy;
+        if (x < 1 || y < 1 || x >= s.w - 1 || y >= s.h - 1) continue;
+        if (unitAt(s, x, y) || buildingAt(s, x, y)) continue;
+        const ter = s.tiles[idx(s, x, y)].terrain;
+        if (ter === 'water' || ter === 'mountain') continue;
+        place(s, 'A', 'militia', x, y);
+        placed += 1;
+      }
+    }
+  }
+  assert.equal(placed, 6, `城边应该摆得下六个民兵，只摆下 ${placed} 个`);
+
+  s.players.A.gold = 3000;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const picks: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = aiNextAction(s, { maxRecruit: 1, maxUpgrade: 0, recruited: 0, upgraded: 0 });
+    if (!a || a.type !== 'RECRUIT') break;
+    picks.push(a.unitType);
+    const r = applyAction(s, a);
+    if (!r.ok) break;
+    s.units = r.state.units;
+    s.players = r.state.players;
+  }
+  const roles = picks.map((id) => rosterRoleOf(s.unitTypes[id]));
+  const name = picks.map((id) => s.unitTypes[id]?.name).join(' ');
+  assert.ok(picks.length >= 4, `这一轮应该买得起好几支兵：${picks.length} 个（${name}）`);
+  assert.ok(
+    new Set(roles).size >= 2,
+    `买回来的全是同一档职能：${roles.join(' ')}（${name}）`,
+  );
+  assert.ok(
+    roles.some((r) => r === 'ranged' || r === 'support'),
+    `一屋子近战之后该补远程或支援，实际只买了：${roles.join(' ')}（${name}）`,
   );
 });
 

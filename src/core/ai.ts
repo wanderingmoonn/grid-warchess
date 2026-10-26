@@ -909,6 +909,130 @@ function isRaider(def: UnitTypeDef): boolean {
   return def.category === 'combat' && def.domain !== 'water' && def.move >= 4 && def.range <= 3;
 }
 
+/* ---------------- 编队模板 ---------------- */
+
+/**
+ * 支援型能力：这些兵的战场价值不在自己打得多狠，而在整条线更耐打/更能走。
+ * 白名单扩过一次——原来只有三条（指挥、护甲光环、威吓），
+ * 于是奇想包里所有新支援兵（治疗光环、净化、修缮、召唤、疾行、咒域、布雷）
+ * 在 AI 眼里都只是"数值很低的战斗单位"，一局也不会造。
+ */
+const SUPPORT_ABILITIES = [
+  'aura-command',
+  'aura-armor',
+  'aura-speed',
+  'fear',
+  'curse-aura',
+  'heal-aura',
+  'purge',
+  'purge-greater',
+  'repair',
+  'summoner',
+  'trap',
+  'build-wall',
+];
+
+/**
+ * 军队的五种职能。配比按**职能**算，不按兵种 id 算——
+ * "三个前排"由剑士、长枪兵、树人怎么凑都行，重要的是一支部队里有肉盾、
+ * 有输出、有火力、有支撑，而不是"前十名兵种各来两个"。
+ */
+export type RosterRole = 'tank' | 'melee' | 'ranged' | 'support' | 'siege';
+
+/**
+ * 目标配比：前排 30% / 近战输出 25% / 远程 30% / 支援 15%。
+ *
+ * 这几个数字是照着"能推进、能顶住、能持久"三条给的，不是理论最优解：
+ * 前排不够，远程一被贴脸就散；远程不够，压到城下只能拿人命填；
+ * 支援为 0，一条线打完就没有第二条线。
+ * 攻城器不占常备编制——它是"到了墙下才买"的一次性工具。
+ */
+const ROLE_TARGET: Record<RosterRole, number> = {
+  tank: 0.3,
+  melee: 0.25,
+  ranged: 0.3,
+  support: 0.15,
+  siege: 0,
+};
+
+/**
+ * 模板管四档常备职能。攻城器不在里面——它归"到墙下才加分"那条老规则，
+ * 常备配比里给攻城器留份额，等于让 AI 在野战里养一堆拆墙的。
+ */
+const TEMPLATE_ROLES: RosterRole[] = ['tank', 'melee', 'ranged', 'support'];
+
+/** 这个兵在编制里顶哪一档 */
+export function rosterRoleOf(def: UnitTypeDef): RosterRole {
+  const ab = def.abilities ?? [];
+  // 英雄不算攻城器：九头蛇带 siege-master 是因为它砸墙也疼，
+  // 但它进编制是去当主力的，编制里不给它记"攻城"这一档。
+  if (!def.hero && ab.includes('siege-master')) return 'siege';
+  // 能打的支援兵（天使 42 攻、矮人王 34 攻）算前排：它们本职是站在线上，
+  // 光环只是顺带。自己打不动的（牧师、巫医、召唤师）才算支援。
+  const brawler = (def.atk ?? 0) >= 20 || (def.magicAtk ?? 0) >= 16;
+  if (!brawler && ab.some((a) => SUPPORT_ABILITIES.includes(a))) return 'support';
+  if (def.range >= 3) return 'ranged';
+  if ((def.armor ?? 0) >= 5 || (def.maxHp ?? 0) >= 65 || ab.includes('shield-wall')) return 'tank';
+  return 'melee';
+}
+
+export interface RosterShare {
+  /** 参与配比统计的陆军战斗单位数（不含召唤物、不含水军） */
+  total: number;
+  counts: Record<RosterRole, number>;
+  /** 已有单位顶到对面城下——攻城器只在此时才算"缺" */
+  siegeAtWall: boolean;
+}
+
+/**
+ * 数一遍现在这支部队。召唤物不算：它们是消耗品，把总数撑大了会让
+ * "我缺前排"的判断失真——死灵法师每回合造两个骷髅，不等于前排够了。
+ */
+export function rosterOf(s: GameState, owner: PlayerId): RosterShare {
+  const counts: Record<RosterRole, number> = { tank: 0, melee: 0, ranged: 0, support: 0, siege: 0 };
+  let total = 0;
+  for (const u of unitsOf(s, owner)) {
+    const def = s.unitTypes[u.type];
+    if (!def || def.category !== 'combat' || def.domain === 'water') continue;
+    if (def.summonedOnly) continue;
+    counts[rosterRoleOf(def)] += 1;
+    total += 1;
+  }
+  const foes = citiesOf(s, other(owner));
+  const siegeAtWall = unitsOf(s, owner).some((u) => foes.some((c) => distance(u, c) <= 4));
+  return { counts, total, siegeAtWall };
+}
+
+/**
+ * 模板给每个职能加分：缺得越多的那一档，分加得越多。
+ *
+ * 为什么只加不减：
+ *
+ * 一开始写的是"缺的加分、超编的扣分"，结果高时代那条测试直接红了——
+ * 候选池里五个远程兵、一个前排，扣分全落在远程身上，整支军队的采购分
+ * 被压到种田以下，AI 转头买了四间种植园。扣分是"整支部队"的判断，
+ * 却挂在"单个兵"身上，只要候选池构成偏一头，就变成了对一个兵种的惩罚。
+ *
+ * 所以这里只负责把预算往缺的地方推；打压同类刷屏是另一条
+ * （同兵种边际递减），那条挂在兵种上，口径才对得上。
+ *
+ * 系数 70 是照着"整支部队 8 个单位"调的：缺一整档（0.3）≈ +21，封顶 +12。
+ * 够把某个职能从"排第五"抬到"排第一"，又不足以让明显不合适的兵
+ * （缺前排时去买一个 5 级法师）顶掉对口的选择。
+ *
+ * total 为 0 时全部记 0：开局该按"先凑出能打的一小撮"走，
+ * 让模板去指挥第一支兵没有意义。
+ */
+export function rosterBonuses(share: RosterShare): Record<RosterRole, number> {
+  const out: Record<RosterRole, number> = { tank: 0, melee: 0, ranged: 0, support: 0, siege: 0 };
+  if (share.total === 0) return out;
+  for (const r of TEMPLATE_ROLES) {
+    const gap = ROLE_TARGET[r] - share.counts[r] / share.total;
+    out[r] = Math.max(0, Math.min(12, gap * 70));
+  }
+  return out;
+}
+
 /** 突击单位眼里的"猎物"：后排火力（射程 ≥3），或比自己更贵的目标 */
 function nearestPrey(s: GameState, unit: Unit, def: UnitTypeDef): Unit | null {
   let best: Unit | null = null;
@@ -1423,25 +1547,9 @@ function recruitCandidate(
       : 0.5;
 
   const wet = waterShare(s);
-
-  // 支援型能力：这些兵的战场价值不在自己打得多狠，而在整条线更耐打/更能走。
-  // 白名单扩过一次——原来只有三条（指挥、护甲光环、威吓），
-  // 于是奇想包里所有新支援兵（治疗光环、净化、修缮、召唤、疾行、咒域、布雷）
-  // 在 AI 眼里都只是"数值很低的战斗单位"，一局也不会造。
-  const SUPPORT_ABILITIES = [
-    'aura-command',
-    'aura-armor',
-    'aura-speed',
-    'fear',
-    'curse-aura',
-    'heal-aura',
-    'purge',
-    'purge-greater',
-    'repair',
-    'summoner',
-    'trap',
-    'build-wall',
-  ];
+  // 编队模板要的"这支部队现在长什么样"。每次 candidate 都重算一遍，
+  // 所以同一回合里连买三个近战后，第四次会看见"近战已经够了"。
+  const rosterBonus = rosterBonuses(rosterOf(s, me));
 
   let best: Candidate | null = null;
   for (const d of pool) {
@@ -1481,11 +1589,11 @@ function recruitCandidate(
 
       // 高级：兵种搭配（见上面 rangedShare 的说明）
       if (aiLevelOf(s) === 'advanced' && d.domain !== 'water') {
-        // 三档：真远程 / 长兵器 / 近战。长兵器只给一点点，够它当肉盾，
-        // 不足以把火枪兵、步枪兵的预算挤掉——这一档就是"回调一档"。
-        if (d.range >= 3) score += rangedShare < 0.7 ? 9 : -5;
-        else if (d.range === 2) score += rangedShare < 0.7 ? 1 : 3;
-        else score += rangedShare < 0.7 ? -4 : 7;
+        // 以前这里是"远程 / 长兵器 / 近战"三档手调（远程不到七成 +9，
+        // 长兵器 +1~3，近战 -4~7）。它解决过一个问题——射程改 2 之后戟兵
+        // 既拿远程奖励又把远程占比撑虚，火枪兵采用率掉到 6.8%——但阈值是
+        // 按单一维度折出来的，只管"远程 vs 近战"这一条轴，前排和支援没人管。
+        // 现在配比统一由下面的编队模板给分，三档手调撤掉，别再叠第二遍。
         // 高机动突击单位：绕后切炮是现在这套 AI 真会用的一招，所以值一点分。
         // 但别给多——骑兵不是万能牌，远程占比已经够高时它就没那么必要。
         if (isRaider(d) && rangedShare < 0.85) score += 7;
@@ -1503,6 +1611,11 @@ function recruitCandidate(
         if ((d.abilities ?? []).some((a) => ['heal-aura', 'purge', 'summoner'].includes(a))) {
           score += 4;
         }
+        // 编队模板：前排 / 近战输出 / 远程 / 支援，缺哪一档就把预算往哪推。
+        // 上面那些是"这个兵本身值多少"，这一条是"这支部队缺什么"——
+        // 少了它，采购就是纯 argmax：分最高的那个兵种吃满预算，
+        // 一局下来清一色三四种兵，法师和支援连门都进不去。
+        score += rosterBonus[rosterRoleOf(d)];
       }
 
       // 魔法段要算进"这个兵能打多少"。
@@ -1525,8 +1638,12 @@ function recruitCandidate(
       // 没有这一条时，采购是纯粹的 argmax——前十个兵种吃掉九成预算，
       // 剩下十几个"也能用"的兵一局都见不到。递减不是让 AI 变弱，
       // 是让它在第三个狼骑士之后开始想"我是不是该有个法师了"。
+      //
+      // 编队模板管的是"职能别偏科"，这一条管的是"同一种兵别刷满"：
+      // 只靠模板的话，一个占据优势职能的强者（5 级恶魔、装甲车）照样能
+      // 连买四五个，因为职能占比还没超。所以系数从 2.4 提到 3.0、封顶到 20。
       const sameType = myUnits.filter((u) => u.type === d.id).length;
-      if (sameType > 0) score -= Math.min(16, sameType * 2.4);
+      if (sameType > 0) score -= Math.min(20, sameType * 3);
 
       // 开局一只兵都没有的时候，先凑出一小撮能打的，别急着攒钱升科技
       if (aiLevelOf(s) === 'advanced' && landCombat.length < 4 && price <= 80) score += 8;

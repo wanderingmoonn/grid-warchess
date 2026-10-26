@@ -85,7 +85,17 @@ const MD = argOf('md', '');
 
 /** 一个兵种的累计账 */
 interface Tally {
-  built: number; // 招募数量
+  built: number; // 招募/建造次数（花过钱的那部分）
+  /**
+   * 出场次数：这个兵种在这局里"在场上出现过"多少人次。
+   *
+   * 和 built 的区别在召唤流上：元素召唤师招出来的火元素、死灵法师招出来的
+   * 骷髅、史莱姆分裂出来的小史莱姆，都不走 RECRUIT 这条路，built 一次都不记。
+   * 于是"这个兵种到底有没有人用"被系统性低估——召唤系看起来毫无存在感，
+   * 实际上它们每局都在造兵。出场数把这些都算进来：招募、建造、召唤、
+   * 分裂、蛋孵化、开局白送。
+   */
+  seen: number;
   spend: number; // 招募花掉的金币
   /** 招募出来的兵打出的伤害 */
   dealt: number;
@@ -104,9 +114,10 @@ interface TypeStat {
   era: number;
   category: string;
   cost: number;
-  built: number;
+  built: number; // 招募/建造次数
+  seen: number; // 出场次数（含召唤、分裂、孵化、开局）
   spend: number;
-  share: number; // 招募次数占比
+  share: number; // 出场次数占比
   goldShare: number; // 招募金币占比
   dealt: number;
   taken: number;
@@ -678,6 +689,7 @@ function classifyBase(d: DrawInfo): { cause: string; detail: string } {
 function emptyTally(): Tally {
   return {
     built: 0,
+    seen: 0,
     spend: 0,
     dealt: 0,
     taken: 0,
@@ -723,6 +735,10 @@ function runGame(seed: number): {
   // 开局就存在的单位记为"白送"，后面招的才算投入
   const initialIds = new Set(s.units.map((u) => u.id));
   for (const u of s.units) tallyOf(u.type).initCount += 1;
+  // 但它们确实上过场，出场数要算
+  for (const u of s.units) tallyOf(u.type).seen += 1;
+  /** 上一步场上的单位 id：动作打完一比，多出来的就是这一步新出场的 */
+  let liveIds = initialIds;
 
   let steps = 0;
   let turns = 0;
@@ -848,6 +864,14 @@ function runGame(seed: number): {
       }
     }
 
+    // 出场记账：这一步之后场上多出来的兵，都算这个兵种的出场。
+    // 招募、建造、召唤、分裂、蛋孵化全走这一条路——只有"新出现的 id"才算，
+    // 所以走位、换目标不会把数字灌水。
+    for (const u of after.units) {
+      if (!liveIds.has(u.id)) tallyOf(u.type).seen += 1;
+    }
+    liveIds = new Set(after.units.map((u) => u.id));
+
     s = after;
     steps += 1;
     return true;
@@ -921,6 +945,7 @@ async function main(): Promise<void> {
     for (const [type, t] of tallies) {
       const acc = total.get(type) ?? emptyTally();
       acc.built += t.built;
+      acc.seen += t.seen;
       acc.spend += t.spend;
       acc.dealt += t.dealt;
       acc.taken += t.taken;
@@ -938,9 +963,11 @@ async function main(): Promise<void> {
 
   // 汇总
   let builtSum = 0;
+  let seenSum = 0;
   let spendSum = 0;
   for (const t of total.values()) {
     builtSum += t.built;
+    seenSum += t.seen;
     spendSum += t.spend;
   }
 
@@ -962,8 +989,10 @@ async function main(): Promise<void> {
       category: def?.category ?? '?',
       cost,
       built: t.built,
+      seen: t.seen,
       spend: t.spend,
-      share: builtSum > 0 ? t.built / builtSum : 0,
+      // 采用率按出场算：召唤出来的兵也是"这个兵种被用了"
+      share: seenSum > 0 ? t.seen / seenSum : 0,
       goldShare: spendSum > 0 ? t.spend / spendSum : 0,
       dealt: t.dealt,
       taken: t.taken,
