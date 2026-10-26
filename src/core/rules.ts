@@ -238,9 +238,16 @@ export function effectiveRange(s: GameState, u: Unit): number {
 /** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
 export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
   if (outOfAmmo(s, attacker)) return 0;
-  const magic = utype(s, attacker.type).magicAtk ?? 0;
+  const def = utype(s, attacker.type);
+  const magic = def.magicAtk ?? 0;
   if (magic <= 0) return 0;
-  return Math.max(0, magic - (utype(s, defender.type).magicRes ?? 0));
+  const out = Math.max(0, magic - (utype(s, defender.type).magicRes ?? 0));
+  // 暗属性的「属性精研」：魔法段 ×1.5。先减魔抗再放大——"打穿"和"放大"
+  // 是两件事，顺序反过来对高魔抗目标会变成白送。
+  if (hasAbility(def, 'element-mastery') && elementOf(s, attacker) === 'dark') {
+    return Math.round(out * 1.5);
+  }
+  return out;
 }
 
 /** 诅咒：护甲 −2（诅咒光环另算，见 curseAuraPenalty） */
@@ -325,13 +332,34 @@ function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: numbe
   if (hasAbility(def, 'slow-hit')) put('slow', 2, '减速');
   if (hasAbility(def, 'curse-hit')) put('curse', 3, '诅咒');
 
-  // 技能附带的属性效果（至尊法师转属性、不死鸟俯冲）
-  if (attacker.heroBuff?.burnHit) burn();
-  const el = attacker.heroBuff?.elementHit;
-  if (el === 'fire') burn();
-  else if (el === 'water') put('slow', 2, '减速');
-  else if (el === 'nature') put('poison', 3, '中毒');
-  else if (el === 'dark') put('curse', 3, '诅咒');
+  // 技能附带的属性效果（不死鸟俯冲是"这一下多点几层"）
+  const layers = attacker.heroBuff?.burnLayers ?? 0;
+  for (let i = 0; i < layers; i++) burn();
+
+  // 转属性：这一回合的攻击带上切到的属性状态。
+  // 有「属性精研」的兵种跳过这一支——它按**当前属性**永久生效，
+  // 两支都跑会让火属性一次叠两层，等于偷偷加强。
+  if (!hasAbility(def, 'element-mastery')) {
+    const el = attacker.heroBuff?.elementHit;
+    if (el === 'fire') burn();
+    else if (el === 'water') put('slow', 2, '减速');
+    else if (el === 'nature') put('poison', 3, '中毒');
+    else if (el === 'dark') put('curse', 3, '诅咒');
+  } else {
+    // 属性精研（至尊法师）：属性不是"这一回合的选择"，而是它的常驻形态。
+    // 暗的那一条在伤害侧（见 magicDamageOf），这里只管状态和回血。
+    const own = elementOf(s, attacker);
+    if (own === 'fire') burn();
+    else if (own === 'water') put('slow', 2, '霜缚');
+    else if (own === 'nature') {
+      const cap = def.maxHp;
+      const heal = Math.min(cap - attacker.hp, Math.max(1, Math.round(cap * 0.1)));
+      if (heal > 0) {
+        attacker.hp += heal;
+        touched.push(`自然回血 ${heal}`);
+      }
+    }
+  }
 
   return touched;
 }
@@ -1008,7 +1036,9 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
       x: victim.x,
       y: victim.y,
       radius: 2,
-      hpRatio: 0.35,
+      // 重生回一半血：从蛋里爬出来只有三成的话，它只是"再死一次"，
+      // 而且还得玩家花一次选位的机会去救。一半才算真的站起来。
+      hpRatio: 0.5,
     };
     pushLog(s, victim.owner, `${victimDef.name} 倒下了，留下一枚蛋——轮到你时选个地方孵化`);
   }
@@ -1498,9 +1528,20 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   );
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
-  attacker.acted = true;
-  attacker.moved = true;
-  markManualFire(s, attacker);
+  // 投斧那一类是"技能白送的一下"：它不写 acted/moved，扔完还能再正常打一次。
+  // 顺手把射程/折扣收回去——斧子扔出去了，手里只剩刀。
+  if (attacker.heroBuff?.freeShot) {
+    const rest = { ...attacker.heroBuff };
+    delete rest.freeShot;
+    delete rest.range;
+    delete rest.rangeMul;
+    attacker.heroBuff = Object.keys(rest).length > 0 ? rest : undefined;
+    pushLog(s, attacker.owner, `${atName} 的这一下不占本回合的攻击`);
+  } else {
+    attacker.acted = true;
+    attacker.moved = true;
+    markManualFire(s, attacker);
+  }
 
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
@@ -2154,8 +2195,9 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   const power = skill.power ?? 0;
   switch (skill.effect) {
     case 'throw-axe': {
-      // 射程拉长，但隔着打只有六成——和「长短皆可」用的是同一笔账
-      u.heroBuff = { ...u.heroBuff, range: 3, rangeMul: 0.6 };
+      // 射程拉长，但隔着打只有六成——和「长短皆可」用的是同一笔账。
+      // freeShot 是重点：这一下**不占**本回合的攻击次数，扔完还能贴身再劈一刀。
+      u.heroBuff = { ...u.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
       break;
     }
     case 'regenerate': {
@@ -2165,7 +2207,8 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
       break;
     }
     case 'dive': {
-      u.heroBuff = { ...u.heroBuff, moveBonus: power, burnHit: true };
+      // power 就是层数：2 层点燃，等于这一下之后对面每回合都在烧
+      u.heroBuff = { ...u.heroBuff, moveBonus: power, burnLayers: Math.max(1, Math.round(power)) };
       break;
     }
     case 'cycle': {
@@ -2175,7 +2218,9 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
       const i = cyc.indexOf(cur);
       const next = cyc[(i + 1) % cyc.length]!;
       u.element = next;
-      // 属性决定这一回合附带什么：火点着、水减速、自然下毒、暗诅咒
+      // 属性决定**这一回合**附带什么：火点着、水减速、自然下毒、暗诅咒。
+      // 有「属性精研」的兵种（至尊法师）读的是 u.element 本身，不需要这一步——
+      // 但留着它，非精研的属性兵也照样能用这个技能。
       u.heroBuff = { ...u.heroBuff, elementHit: next };
       break;
     }

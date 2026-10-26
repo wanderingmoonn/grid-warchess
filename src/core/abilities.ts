@@ -320,6 +320,13 @@ export const ABILITIES: AbilityDef[] = [
     summary: '每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。',
     group: 'support',
   },
+  {
+    id: 'element-mastery',
+    name: '属性精研',
+    summary:
+      '攻击按**当前属性**附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。',
+    group: 'attack',
+  },
 ];
 
 export function abilityById(id: string): AbilityDef | undefined {

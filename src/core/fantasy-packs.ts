@@ -1089,7 +1089,8 @@ const HERO_UNITS: UnitTypeDef[] = [
       {
         id: 'throw-axe',
         name: '投斧',
-        summary: '本回合射程变 3，隔着一格以上打只有六成伤害。不占行动。',
+        summary:
+          '投出一斧：射程 3、隔着一格以上只有六成伤害。这一下不占本回合的攻击次数——扔完还能贴身再劈一次。',
         effect: 'throw-axe',
         cooldown: 1,
         power: 0.6,
@@ -1118,10 +1119,10 @@ const HERO_UNITS: UnitTypeDef[] = [
       {
         id: 'regrow',
         name: '再生',
-        summary: '立刻回复 25% 生命（约 29 点）。',
+        summary: '立刻回复 40% 生命（约 48 点）。',
         effect: 'regenerate',
         cooldown: 2,
-        power: 0.25,
+        power: 0.4,
       },
     ],
   },
@@ -1148,14 +1149,14 @@ const HERO_UNITS: UnitTypeDef[] = [
       {
         id: 'dive',
         name: '烈焰俯冲',
-        summary: '本回合移动 +2，攻击额外点燃一层。',
+        summary: '本回合移动 +2，攻击额外点燃两层。',
         effect: 'dive',
         cooldown: 2,
         power: 2,
       },
     ],
   },
-  // 至尊法师：溅射 2 格加 24 点魔攻。打的是"一片阵型"，不是一个兵。
+  // 至尊法师：溅射 2 格加 26 点魔攻。打的是"一片阵型"，不是一个兵。
   // 属性不再自动轮换，改成每回合自己切一次（见 skills）：自动轮换等于
   // "你只有四分之一的回合是火属性"，而火要烧谁是你自己该判断的事。
   {
@@ -1172,16 +1173,22 @@ const HERO_UNITS: UnitTypeDef[] = [
     range: 4,
     vision: 7,
     magicAtk: 26,
+    // 法抗 10 让它不至于被对面一发法师打回原形：至尊法师该是"法师里的法师"，
+    // 对轰的时候不能比对面脆。
+    magicRes: 10,
     element: 'fire',
     splash: 2,
     hero: true,
     unlockCost: 300,
     cycle: ['fire', 'water', 'nature', 'dark'],
+    // 属性不再只是"这一回合上什么状态"，而是四种形态：
+    // 火/水继续压状态，自然变成自愈，暗变成纯粹的伤害放大（见 element-mastery）
+    abilities: ['element-mastery'],
     skills: [
       {
         id: 'shift',
         name: '转属性',
-        summary: '切到下一种属性（火→水→自然→暗），本回合攻击附带该属性状态。',
+        summary: '切到下一种属性（火→水→自然→暗）。火=点燃、水=霜缚、自然=攻击时自愈、暗=魔法段 ×1.5。',
         effect: 'cycle',
         cooldown: 1,
       },
@@ -1215,11 +1222,11 @@ const HERO_UNITS: UnitTypeDef[] = [
       {
         id: 'descend',
         name: '降临',
-        summary: '半径 3 内友军回复 10% 生命，并清空全部负面状态。',
+        summary: '半径 3 内友军回复 20% 生命，并清空全部负面状态。',
         effect: 'descend',
         cooldown: 2,
         radius: 3,
-        power: 0.1,
+        power: 0.2,
       },
     ],
   },
@@ -1229,7 +1236,7 @@ const HEROES: Expansion = {
   id: 'fantasy-heroes',
   name: '奇想·英雄',
   summary:
-    '五个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：临时远程）、九头蛇（再生：立刻回血）、不死鸟（烈焰俯冲：加速 + 点燃；阵亡后留下一枚蛋，由你选地方孵化）、至尊法师（转属性）、天使（降临：半径 3 治愈并清空负面状态）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。',
+    '五个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，法抗 10）、天使（降临：半径 3 回 20% 并清空负面状态）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。',
   requires: ['fantasy-core'],
   hooks: {},
   units: HERO_UNITS,

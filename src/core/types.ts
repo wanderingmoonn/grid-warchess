@@ -349,8 +349,15 @@ export interface Unit {
     moveBonus?: number;
     /** 本回合攻击额外附带这个属性的状态 */
     elementHit?: Element;
-    /** 本回合攻击额外加一层燃烧 */
-    burnHit?: boolean;
+    /** 本回合攻击额外叠几层点燃（俯冲是两层） */
+    burnLayers?: number;
+    /**
+     * 这一下攻击是"技能白送的"。
+     *
+     * 投斧就是走的这条路：它不占用本回合的攻击次数，打完还能再正常打一次，
+     * 所以 doAttack 看到这个标记就不写 acted/moved，只把加成收回去。
+     */
+    freeShot?: boolean;
   };
   /** 英雄技能冷却剩余回合数：key 是技能 id */
   skillCd?: Record<string, number>;

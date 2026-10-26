@@ -121,7 +121,7 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   }
   if (def.cycle && def.cycle.length > 0) {
     lines.push(
-      `可切属性：${def.cycle.map((e) => ELEMENT_NAME[e]).join(' → ')}。用技能切过去，本回合攻击附带对应状态（火=点燃、水=减速、自然=中毒、暗=诅咒）。`,
+      `可切属性：${def.cycle.map((e) => ELEMENT_NAME[e]).join(' → ')}。切换后攻击按当前属性附带效果（火=点燃、水=霜缚、自然=自身回血 10%、暗=魔法段 ×1.5）。`,
     );
   }
 

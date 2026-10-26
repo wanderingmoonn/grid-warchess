@@ -1708,7 +1708,7 @@ test('净化只清一层，大净化清全部', () => {
   assert.ok(d1.ok, d1.ok ? '' : d1.reason);
   const healed = d1.state.units.find((u) => u.id === mate.id)!;
   assert.ok(healed.hp > 10, '隔三格的队友也吃到治疗');
-  assert.equal(healed.hp, Math.min(mateMax, 10 + Math.round(mateMax * 0.1)));
+  assert.equal(healed.hp, Math.min(mateMax, 10 + Math.round(mateMax * 0.2)), '降临回 20%');
   assert.deepEqual(healed.status ?? {}, {}, '负面状态一起清掉');
   assert.equal(d1.state.units.find((u) => u.id === a3.id)!.skillCd?.descend, 2, '用完进冷却');
 
@@ -2019,7 +2019,7 @@ test('重生：不死鸟倒下后留下一枚蛋，由玩家选地方孵化', ()
   const born = e.state.units.find((u) => u.type === 'phoenix')!;
   assert.equal(born.x, pick.x);
   assert.equal(born.y, pick.y);
-  assert.equal(born.hp, Math.round(maxHp * 0.35), '孵化时带 35% 生命');
+  assert.equal(born.hp, Math.round(maxHp * 0.5), '孵化时带一半生命');
   assert.equal(born.reborn, true);
   assert.equal(e.state.pendingEgg, undefined, '蛋已经用掉了');
 
@@ -2125,7 +2125,7 @@ test('投斧：默认只能近身，开了技能才够得着三格', () => {
   assert.equal(far, Math.round(melee * 0.6), `远程 ${far} ≈ 近身 ${melee} 的六成`);
 });
 
-test('再生：立刻回四分之一，冷却两回合', () => {
+test('再生：立刻回四成，冷却两回合', () => {
   const s = fresh({ expansionIds: FANTASY });
   s.tiles[idx(s, 5, 5)].terrain = 'plain';
   const hydra = place2(s, 'A', 'hydra', 5, 5);
@@ -2135,13 +2135,13 @@ test('再生：立刻回四分之一，冷却两回合', () => {
   const r = applyAction(s, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const h = r.state.units.find((u) => u.id === hydra.id)!;
-  assert.equal(h.hp, 20 + Math.round(maxHp * 0.25));
+  assert.equal(h.hp, 20 + Math.round(maxHp * 0.4), '回 40%');
   assert.equal(h.skillCd?.regrow, 2, '冷却两回合');
   const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
   assert.equal(again.ok, false, '冷却中不能再开');
 });
 
-test('烈焰俯冲：移动 +2，攻击额外点燃一层', () => {
+test('烈焰俯冲：移动 +2，攻击额外点燃两层', () => {
   const s = fresh({ expansionIds: FANTASY });
   for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const ph = place2(s, 'A', 'phoenix', 5, 5);
@@ -2158,7 +2158,85 @@ test('烈焰俯冲：移动 +2，攻击额外点燃一层', () => {
   const atk = applyAction(r.state, { type: 'ATTACK', unitId: ph.id, targetId: foe.id });
   assert.ok(atk.ok);
   const hurt = atk.state.units.find((u) => u.id === foe.id)!;
-  assert.equal(hurt.status?.burn, 1, '俯冲这一下带一层火');
+  assert.equal(hurt.status?.burn, 2, '俯冲这一下带两层火');
+});
+
+test('投斧：这一下不占本回合的攻击，扔完还能再劈一刀', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const king = place2(s, 'A', 'dwarf-king', 5, 5);
+  const farFoe = place2(s, 'B', 'swordsman', 5, 7);
+  const nearFoe = place2(s, 'B', 'swordsman', 6, 5);
+  farFoe.hp = 400;
+  nearFoe.hp = 400;
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: king.id, skillId: 'throw-axe' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const shot = applyAction(r.state, { type: 'ATTACK', unitId: king.id, targetId: farFoe.id });
+  assert.ok(shot.ok, shot.ok ? '' : shot.reason);
+  const k = shot.state.units.find((u) => u.id === king.id)!;
+  assert.equal(k.acted, false, '投斧不算本回合的攻击');
+  assert.equal(k.moved, false, '也不占移动');
+  assert.equal(k.heroBuff, undefined, '斧子扔出去了，加成收回');
+  assert.equal(effectiveRange(shot.state, k), 1, '射程回到近战');
+
+  // 同一回合还能再打一次贴身目标，这一下才算数
+  const melee = applyAction(shot.state, { type: 'ATTACK', unitId: king.id, targetId: nearFoe.id });
+  assert.ok(melee.ok, melee.ok ? '' : melee.reason);
+  assert.equal(melee.state.units.find((u) => u.id === king.id)?.acted, true, '真正的攻击才结束行动');
+});
+
+test('属性精研：火点燃、水霜缚、自然回血、暗魔攻 ×1.5', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const mage = place2(s, 'A', 'archmage', 5, 5);
+  const foe = place2(s, 'B', 'swordsman', 5, 7);
+  s.current = 'A';
+
+  assert.equal(s.unitTypes.archmage!.magicRes, 10, '至尊法师法抗 10');
+
+  // 火（默认属性）：命中叠一层点燃——只叠一层，别和"转属性"那支重复
+  foe.hp = 500;
+  const fire = applyAction(s, { type: 'ATTACK', unitId: mage.id, targetId: foe.id });
+  assert.ok(fire.ok, fire.ok ? '' : fire.reason);
+  const burned = fire.state.units.find((u) => u.id === foe.id)!;
+  assert.equal(burned.status?.burn, 1, '火属性命中点燃一层');
+
+  // 水：霜缚（沿用减速的实现：移动 −1）
+  const s2 = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7]]) s2.tiles[idx(s2, x, y)].terrain = 'plain';
+  const mage2 = place2(s2, 'A', 'archmage', 5, 5);
+  const foe2 = place2(s2, 'B', 'swordsman', 5, 7);
+  foe2.hp = 500;
+  mage2.element = 'water';
+  s2.current = 'A';
+  const wet = applyAction(s2, { type: 'ATTACK', unitId: mage2.id, targetId: foe2.id });
+  assert.ok(wet.ok, wet.ok ? '' : wet.reason);
+  const chilled = wet.state.units.find((u) => u.id === foe2.id)!;
+  assert.equal(chilled.status?.slow, 2, '水属性挂霜缚');
+
+  // 自然：攻击顺手回自己 10%（不占治疗行动）
+  const s3 = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7]]) s3.tiles[idx(s3, x, y)].terrain = 'plain';
+  const mage3 = place2(s3, 'A', 'archmage', 5, 5);
+  const foe3 = place2(s3, 'B', 'swordsman', 5, 7);
+  foe3.hp = 500;
+  mage3.element = 'nature';
+  mage3.hp = 30;
+  s3.current = 'A';
+  const green = applyAction(s3, { type: 'ATTACK', unitId: mage3.id, targetId: foe3.id });
+  assert.ok(green.ok, green.ok ? '' : green.reason);
+  const m3 = green.state.units.find((u) => u.id === mage3.id)!;
+  assert.equal(m3.hp, 30 + Math.round(60 * 0.1), '自然属性攻击时回 10%');
+
+  // 暗：魔法段 ×1.5（先减魔抗再放大）
+  const dark = { ...mage, element: 'dark' as const };
+  const plain = { ...mage, element: 'fire' as const };
+  const base = magicDamageOf(s, plain, foe);
+  assert.ok(base > 0, '火属性有魔法段');
+  assert.equal(magicDamageOf(s, dark, foe), Math.round(base * 1.5), '暗属性魔法段 ×1.5');
 });
 
 test('转属性：自己切，切到的属性附带对应状态', () => {
