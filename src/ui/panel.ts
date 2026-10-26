@@ -242,8 +242,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       // 别人的单位只给看：兵种一多，临场查对面射程/护甲是刚需，
       // 但这张卡上不该出现任何能按的东西
       status.push(
-        input.commander === true
-          ? '指挥官模式 · 仅查看'
+        input.commander === true && selectedUnit.owner === me
+          ? '指挥官模式 · 走位归 AI，可遣散'
           : `${s.players[selectedUnit.owner].name}单位 · 仅查看`,
       );
     }
@@ -257,6 +257,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       notes.length === 0
         ? ''
         : `<div class="unit-notes">${notes.map((n) => `<div>· ${n}</div>`).join('')}</div>`;
+    /**
+     * 遣散：指挥官模式下也留着。
+     *
+     * 走位和开火归 AI，但"这个兵还留不留"是经济决定——造多了占着路口、
+     * 或者想腾出钱去升时代，撤回四成该由玩家自己拍板。规则层本来就允许
+     * （只看是不是你的、船里有没有货），先前是界面拿 `mine` 一刀切掉了。
+     */
+    const canDisband = !spectator && selectedUnit.owner === me && myTurn;
     const canBuildNow = mine && !selectedUnit.acted;
     // 建造清单只在"自己的单位"上出现：对敌方展示一份点不动的建造菜单没有意义
     const buildBlock =
@@ -353,7 +361,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${buildBlock}
       ${noteBlock}
       ${
-        mine
+        canDisband
           ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
                ${refund > 0 ? `拆除（回收 ${refund} 金）` : '拆除（残兵不回收金币）'}
              </button>`

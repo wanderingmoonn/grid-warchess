@@ -922,7 +922,7 @@ check('指挥官模式开局后出现 5 格生产序列', () => {
   assert.ok(bar.textContent?.includes('参谋部'), '标题应该是参谋部');
 });
 
-check('指挥官模式下点自己的部队能看属性，且没有可点的按钮', () => {
+check('指挥官模式下点自己的部队能看属性，遣散按钮也在', () => {
   const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true }, 20261028, {});
   st.fog = false;
   st.current = 'A';
@@ -955,8 +955,23 @@ check('指挥官模式下点自己的部队能看属性，且没有可点的按�
   // 这一条守的是 onBoardClick 里那句"指挥官模式直接 return"：
   // 参谋部的下拉框写着兵种名，玩家却点不出它的射程和护甲。
   assert.ok(text.includes(name), `点自己的部队应该弹属性卡，实际面板：${text.slice(0, 60)}`);
-  assert.ok(text.includes('指挥官模式 · 仅查看'), '应该标明这一手不归玩家下');
-  assert.equal(side!.querySelector('[data-act="disband"]'), null, '只看不给动，别长按钮');
+  assert.ok(text.includes('可遣散'), '应该标明走位归 AI、但可以遣散');
+
+  // 遣散是经济决定，不该被"只看"一刀切掉
+  const btn = side!.querySelector<HTMLElement>('[data-act="disband"]');
+  assert.ok(btn, '指挥官模式下应该有遣散按钮');
+
+  // 点下去要真拆掉：确认框直接放行
+  (w as unknown as { confirm: () => boolean }).confirm = () => true;
+  btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    units: { id: string }[];
+  };
+  assert.equal(
+    after.units.some((u) => u.id === mine.id),
+    false,
+    '点了拆除，兵应该从盘上消失',
+  );
 });
 
 check('生产序列里能排「升级时代」', () => {
