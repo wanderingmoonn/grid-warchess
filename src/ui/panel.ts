@@ -11,6 +11,7 @@ import { expansionById } from '../core/expansions.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
 import {
+  buildingAt,
   citiesOf,
   cityById,
   cityName,
@@ -243,6 +244,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
            }
          </div>`;
 
+    // 站在自家军营上的兵：点击优先选中兵（否则那个兵会被建筑盖住、再也选不中），
+    // 所以军营的产兵面板要在这里留一个入口。
+    const under = buildingAt(s, selectedUnit.x, selectedUnit.y);
+    const underCampDef = under ? utype(s, under.type) : null;
+    const underCamp =
+      under && !spectator && under.owner === me && underCampDef?.barracks ? under : null;
+
     return `
       <div class="unit-head">
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
@@ -251,6 +259,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${status.join(' / ')}</div>
         </div>
       </div>
+      ${
+        underCamp
+          ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
+              打开脚下的军营（${underCampDef?.name}）
+             </button>`
+          : ''
+      }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
       <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${def.maxHp}</b></div>
       <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>

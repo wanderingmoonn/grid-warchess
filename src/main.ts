@@ -833,6 +833,15 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'open-camp': {
+      const id = el.dataset.id;
+      if (!id) return;
+      const camp = state.units.find((u) => u.id === id);
+      if (!camp) return;
+      selectCamp(camp);
+      return;
+    }
+
     case 'recruit': {
       const type = el.dataset.type;
       if (!type) return;

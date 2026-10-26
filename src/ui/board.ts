@@ -163,8 +163,16 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   citiesEl.innerHTML = cityParts.join('');
 
   // ---- 棋子 ----
+  // 建筑先画、部队后画：同一格上"站着的兵"必须压在"设施"上面。
+  // 反过来的话，兵被自己的塔盖住，点下去选中的是塔——那个兵就再也选不中、
+  // 也就再也走不开了。z-index 不管这件事，DOM 顺序管。
+  const ordered = [...s.units].sort((a, b) => {
+    const ab = utype(s, a.type).category === 'building' ? 0 : 1;
+    const bb = utype(s, b.type).category === 'building' ? 0 : 1;
+    return ab - bb;
+  });
   const unitParts: string[] = [];
-  for (const u of s.units) {
+  for (const u of ordered) {
     unitParts.push(unitHtml(s, u, ui));
   }
   for (const ghost of view.ghosts) {
