@@ -27,6 +27,14 @@ export interface BoardUi {
   placeable: number[];
   /** 威胁范围：移动之后能打到哪些格 */
   threat: number[];
+  /**
+   * 这一步实际走的路线（单位 id → 格子串），只用来画移动动画。
+   *
+   * 不给也能用：退化成"起点直线滑到终点"。给了就沿路线拐弯，
+   * 绕着河走、绕过友军的时候，观众看得出来它是怎么绕的——观战能不能看懂，
+   * 差的就是这一口气。
+   */
+  movePath?: Map<string, Array<{ x: number; y: number }>>;
 }
 
 const TERRAIN_CLASS: Record<string, string> = {
@@ -183,6 +191,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   unitsEl.innerHTML = unitParts.join('');
 
   // ---- FLIP 补间 ----
+  //
+  // 有路线就沿路线走（拐弯、绕过河），没路线就直线滑过去。
+  // 拐弯这件事只在"走了两格以上"时才看得出来，一格的距离两种画法一样。
+  const boardBox = unitsEl.getBoundingClientRect();
+  const cellW = boardBox.width / Math.max(1, s.w);
+  const cellH = boardBox.height / Math.max(1, s.h);
   unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
     const id = node.dataset.id;
     if (!id) return;
@@ -192,6 +206,26 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     const dx = old.left - now.left;
     const dy = old.top - now.top;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+
+    const path = ui.movePath?.get(id);
+    if (path && path.length > 2) {
+      const destX = Number(node.dataset.x);
+      const destY = Number(node.dataset.y);
+      const frames = path
+        .slice(0, -1)
+        .reverse()
+        .map((c) => ({
+          transform: `translate(${(c.x - destX) * cellW}px, ${(c.y - destY) * cellH}px)`,
+        }));
+      frames.push({ transform: 'translate(0, 0)' });
+      node.animate(frames, {
+        // 一格 70ms，封顶 560ms：32×32 上的长距离行军不会让人等到烦
+        duration: Math.min(560, 70 * (path.length - 1)),
+        easing: 'linear',
+      });
+      return;
+    }
+
     node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }], {
       duration: 170,
       easing: 'ease-out',

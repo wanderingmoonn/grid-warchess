@@ -1203,6 +1203,14 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
   const buildings = s.units.filter((u) => u.owner === owner && utype(s, u.type).autoAttack);
   for (const b of buildings) {
     if (!s.units.includes(b)) continue;
+    // 这一回合已经手动开过火的，不再自动开火。
+    //
+    // 不然一座塔在自己的回合打一次、敌方接手时再打一次，一轮两段伤害：
+    // "手动开火"就变成了纯白送，谁还等自动那一下。建筑的火力一次一轮，
+    // 要么你自己点，要么交给它自己打——不能两个都拿。
+    //
+    // 判据用 manualFired 而不是 acted：刚建好的建筑也是 acted=true。
+    if (b.manualFired) continue;
     const def = utype(s, b.type);
     const inRange = s.units
       .filter((u) => u.owner !== owner && distance(b, u) > 0 && distance(b, u) <= def.range)
@@ -1249,8 +1257,19 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
     if (u.owner === p) {
       u.moved = false;
       u.acted = false;
+      u.manualFired = false;
     }
   }
+}
+
+/**
+ * 记一笔"这一炮是人点的"。
+ *
+ * 只对能自动开火的建筑有意义——它们一回合只该有一段火力：
+ * 你点了就由你打，没点才轮到回合结束时的自动那一下（见 fireBuildings）。
+ */
+function markManualFire(s: GameState, u: Unit): void {
+  if (utype(s, u.type).autoAttack) u.manualFired = true;
 }
 
 /**
@@ -1481,6 +1500,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   attacker.acted = true;
   attacker.moved = true;
+  markManualFire(s, attacker);
 
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
@@ -1547,6 +1567,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
 
   attacker.acted = true;
   attacker.moved = true;
+  markManualFire(s, attacker);
 
   if (city.hp <= 0) {
     const prevOwner = city.owner;

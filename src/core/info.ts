@@ -7,8 +7,9 @@
 
 import { abilityById, abilityNames } from './abilities.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from './config.ts';
+import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
 import { ELEMENT_NAME } from './types.ts';
-import type { Element, GameState, Terrain, UnitTypeDef } from './types.ts';
+import type { Element, GameState, PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
 export interface TerrainInfo {
   name: string;
@@ -69,8 +70,18 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
  * 一个单位的特殊之处，翻成人话。
  * 返回空数组表示它就是个普通单位。
  */
-export function describeUnit(s: GameState, def: UnitTypeDef): string[] {
+export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): string[] {
   const lines: string[] = [];
+
+  // 哀兵必胜：这条加成写在伤害结算里，面板上不写就等于没有——
+  // 玩家只看到"我打它 13 点"，永远不知道为什么是 14。
+  if (owner && s.firstCityLost === owner) {
+    lines.push(
+      `哀兵必胜：本方丢过首城，全军伤害 ×${(1 + LAST_STAND_BONUS).toFixed(2)}（+${Math.round(
+        LAST_STAND_BONUS * 100,
+      )}%，野战、反击、攻城都算）`,
+    );
+  }
 
   if (def.domain === 'water') {
     lines.push('只在水上行动：上不了岸，只能在临水的城市下水。能打岸上的目标，也会被岸上打。');
@@ -198,6 +209,12 @@ export function describeUnit(s: GameState, def: UnitTypeDef): string[] {
   }
 
   lines.push(`来自「${eraDef(def.era).name}」时代，造价 ${def.cost}`);
+
+  // 扩展包兵种要说清出处：不然玩家在列表里看见"九头蛇"，
+  // 既不知道它属于哪个包，也不知道为什么下把没了。
+  const src = unitSourceOf(def.id);
+  if (src) lines.push(`来源：${src}（开局勾上这个扩展才会出现）`);
+
   return lines;
 }
 
@@ -215,6 +232,7 @@ export function describeTerrain(t: Terrain): string[] {
     const names = fit.map((d) => `${d.name} +${d.incomeByTerrain?.[t] ?? 0}`).join('、');
     lines.push(`适合布置：${names}`);
   }
+
   return lines;
 }
 

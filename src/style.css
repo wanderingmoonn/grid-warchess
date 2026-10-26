@@ -1027,6 +1027,59 @@ body {
   font-weight: 500;
 }
 
+/* 来源徽标：兵种从 49 个涨到 118 个之后，"这兵是哪个包的"必须写在脸上——
+   它决定了"关掉那个包为什么它就没了" */
+.recruit-src {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--a-soft);
+  color: var(--a);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* 产兵搜索框 */
+.recruit-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.recruit-search-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* 不清掉 type=search 的原生外观：浏览器自带的那个「×」就是清空按钮，
+   自己再画一个只会多一套要维护的图标 */
+.recruit-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.recruit-search-input:focus {
+  outline: 2px solid var(--a-soft);
+  border-color: var(--a);
+  background: #fff;
+}
+
+.recruit-search-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 升级时代按钮：比产兵按钮更醒目，因为这是个战略决策 */
 .upgrade-btn {
   width: 100%;

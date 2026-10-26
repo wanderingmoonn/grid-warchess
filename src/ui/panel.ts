@@ -7,7 +7,7 @@
  */
 
 import { CATEGORY_NAME, CONFIG, eraDef, passable } from '../core/config.ts';
-import { expansionById } from '../core/expansions.ts';
+import { expansionById, unitSourceOf } from '../core/expansions.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
 import {
@@ -37,10 +37,17 @@ export interface PanelInput {
   selectedCampId: string | null;
   /** 点空地时选中的地形，用来显示地形说明 */
   selectedTile: { x: number; y: number } | null;
-  /** 撤回栈里还有没有东西（联机局永远是 false）；不传按 false 处理 */
+  /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
   chimeVolume?: number;
+  /**
+   * 产兵搜索框里的字。
+   *
+   * 高时代一屏能站四十多个兵种，靠滚动找"长弓手"要翻半天。
+   * 这里只做**过滤**，不改变"能买什么"——可买集合仍然由时代和编制决定。
+   */
+  recruitQuery?: string;
   /**
    * 观战位：两边都不归我。
    *
@@ -427,9 +434,12 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     return recruitButton(s, me, def, disabled, extra);
   };
 
-  const recruitGroups = (['combat', 'economy', 'builder'] as const)
+  const q = (input.recruitQuery ?? '').trim();
+  const shown = buildable.filter((d) => matchRecruit(d, q));
+
+  const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
-      const items = buildable.filter((d) => d.category === cat);
+      const items = shown.filter((d) => d.category === cat);
       if (items.length === 0) return '';
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
@@ -437,6 +447,11 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       </div>`;
     })
     .join('');
+
+  const recruitGroups =
+    shown.length === 0
+      ? `<div class="hint">没有匹配「${escapeHtml(q)}」的兵种。这座城在售 ${buildable.length} 种，清空搜索看全部。</div>`
+      : grouped;
 
   const upgradeBlock =
     mine && nextEra && upgradeCost !== null
@@ -468,6 +483,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     ${
       mine
         ? `<div class="card-title" style="margin-top:14px">生产</div>
+           ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            <div class="hint" style="margin-top:10px">
              ${
@@ -499,6 +515,67 @@ function barColor(ratio: number): string {
   return '#7ec47e';
 }
 
+/**
+ * 兵种来源徽标。
+ *
+ * 面板里现在同时躺着原版、时代兵和五个奇想包，光看名字分不出"九头蛇"是
+ * 哪来的——更要命的是：关掉那个包，它就凭空消失了。标出来最省事。
+ * 原版兵种没有徽标（多数，不加噪音）。
+ */
+function sourceTag(def: UnitTypeDef): string {
+  const src = unitSourceOf(def.id);
+  if (!src) return '';
+  return `<span class="recruit-src" title="来自扩展包「${escapeHtml(src)}」，开局没勾就买不到">${escapeHtml(src)}</span>`;
+}
+
+/**
+ * 搜兵种：名字、代号、职能、时代、包名都能命中，多词按"且"处理（"奇想 弓"）。
+ *
+ * 刻意不去搜数值（"攻 20"）：那是筛选器，不是搜索框，两件事混在一起
+ * 会让"为什么搜 20 出来一堆"变成新的困惑。
+ */
+function matchRecruit(def: UnitTypeDef, q: string): boolean {
+  if (!q) return true;
+  const hay = [
+    def.name,
+    def.short,
+    def.id,
+    CATEGORY_NAME[def.category],
+    `${eraDef(def.era).name}时代`,
+    unitSourceOf(def.id) ?? '',
+  ]
+    .join(' ')
+    .toLowerCase();
+  return q
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((w) => hay.includes(w));
+}
+
+/**
+ * 搜索框。
+ *
+ * 兵种少于 6 个就不显示——早期城市一共四行，摆个搜索框纯属添乱。
+ * 输入框的 value 由 PanelInput 回填，重绘之后字还在（光标在末尾）。
+ */
+function recruitSearchBox(q: string, shownCount: number, total: number): string {
+  if (total < 6) return '';
+  const count = q ? `${shownCount}/${total}` : `共 ${total} 种`;
+  return `<div class="recruit-search">
+    <input
+      type="search"
+      class="recruit-search-input"
+      data-act="recruit-search"
+      value="${escapeHtml(q)}"
+      placeholder="搜兵种：名字 / 代号 / 职能 / 包名"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <span class="recruit-search-count">${count}</span>
+  </div>`;
+}
+
 /** 产兵按钮：城市和军营共用一套写法，省得两处的样式慢慢跑偏 */
 function recruitButton(
   s: GameState,
@@ -520,7 +597,7 @@ function recruitButton(
   return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
     <span class="meta">
-      <b>${def.name}</b>
+      <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
     </span>
     <span class="price">${total}</span>
@@ -579,9 +656,12 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
   );
 
-  const groups = (['combat', 'economy', 'builder'] as const)
+  const q = (input.recruitQuery ?? '').trim();
+  const shown = buildable.filter((d) => matchRecruit(d, q));
+
+  const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
-      const items = buildable.filter((d) => d.category === cat);
+      const items = shown.filter((d) => d.category === cat);
       if (items.length === 0) return '';
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
@@ -595,6 +675,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       </div>`;
     })
     .join('');
+
+  const groups =
+    shown.length === 0
+      ? `<div class="hint">没有匹配「${escapeHtml(q)}」的兵种。这座营在售 ${buildable.length} 种，清空搜索看全部。</div>`
+      : grouped;
 
   const supplyLine = supply
     ? `补给来自「${cityName(supply)}」· ${eraDef(era).name}时代`
@@ -616,6 +701,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     ${
       mine && supply
         ? `<div class="card-title" style="margin-top:14px">生产</div>
+           ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
            <div class="hint" style="margin-top:10px">
              兵从营门四邻的空地出来（当前 ${landSlots.length} 个空位${

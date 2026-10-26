@@ -1100,6 +1100,68 @@ check('英雄技能：面板列出技能，冷却中的置灰', () => {
   assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
 });
 
+check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () => {
+  const st = createMatch(
+    {
+      size: 14,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    505,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '找不到 A 的城市');
+
+  const host = doc.createElement('div');
+  const paint = (q: string) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city!.id,
+      selectedCampId: null,
+      selectedTile: null,
+      recruitQuery: q,
+    });
+
+  paint('');
+  assert.ok(host.querySelector('[data-act="recruit-search"]'), '高时代城市应该有搜索框');
+  const all = host.querySelectorAll('[data-act="recruit"]').length;
+  assert.ok(all >= 6, `这一屏应该有一堆兵种，实际 ${all}`);
+
+  const badges = host.querySelectorAll('.recruit-src').length;
+  assert.ok(badges > 0, '奇想兵种要标出包名');
+  assert.ok(badges < all, '原版兵种不该挂徽标');
+  assert.ok(
+    Array.from(host.querySelectorAll('.recruit-src')).every((b) => (b.textContent ?? '').includes('奇想')),
+    '徽标内容应该是包名',
+  );
+
+  // 按名字搜：只剩龙骑兵
+  paint('龙骑');
+  assert.equal(host.querySelectorAll('[data-act="recruit"]').length, 1, '按名字搜应该只剩一个');
+  assert.ok(host.querySelector('[data-type="dragoon-rider"]'), '搜"龙骑"应该命中龙骑兵');
+
+  // 按包名搜：命中的全是这个包的，且每个都带徽标
+  paint('奇想');
+  const packHits = host.querySelectorAll('[data-act="recruit"]');
+  assert.ok(packHits.length > 1, '按包名应该能搜出一批');
+  assert.equal(
+    host.querySelectorAll('[data-act="recruit"] .recruit-src').length,
+    packHits.length,
+    '按包名搜出来的应该全是带徽标的兵种',
+  );
+
+  // 搜不到时给一句人话，而不是一片空白
+  paint('zzz');
+  assert.equal(host.querySelectorAll('[data-act="recruit"]').length, 0);
+  assert.ok(host.innerHTML.includes('没有匹配'), '搜不到要说清楚');
+});
+
 console.log('\n点敌人就是开火');
 
 /**

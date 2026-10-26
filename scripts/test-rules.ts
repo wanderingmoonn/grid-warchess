@@ -1289,6 +1289,47 @@ test('建筑在敌方回合开始时自动开火', () => {
   assert.ok((after?.hp ?? 0) < hpBefore, '应该被塔打掉血');
 });
 
+test('建筑手动开过火，同一回合不再自动补一炮', () => {
+  const s = fresh();
+  const builder = addLaborer(s);
+  const built = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
+  if (!built.ok) assert.fail(built.reason);
+  const tower = built.state.units.find((u) => u.type === 'tower');
+  const enemy = built.state.units.find((u) => u.owner === 'B');
+  assert.ok(tower && enemy);
+
+  enemy.x = tower.x + 1;
+  enemy.y = tower.y;
+  built.state.tiles[idx(built.state, enemy.x, enemy.y)].terrain = 'plain';
+  // 血给厚一点：一炮打不死，才数得清"一共打了几段"
+  enemy.hp = 500;
+
+  // 第 1 段：塔刚盖好那回合不能手动（BUILD 出来就是 acted），由自动开火代劳
+  const endA = applyAction(built.state, { type: 'END_TURN' });
+  if (!endA.ok) assert.fail(endA.reason);
+  const afterAuto = endA.state.units.find((u) => u.id === enemy.id);
+  assert.ok(afterAuto && afterAuto.hp < 500, '自动开火这一段应该成立');
+
+  // 回到 A 的回合，塔重置完就能手动了
+  const endB = applyAction(endA.state, { type: 'END_TURN' });
+  if (!endB.ok) assert.fail(endB.reason);
+  const tw = endB.state.units.find((u) => u.id === tower.id);
+  const foe = endB.state.units.find((u) => u.id === enemy.id);
+  assert.ok(tw && foe);
+  const beforeShot = foe.hp;
+  const shot = applyAction(endB.state, { type: 'ATTACK', unitId: tw.id, targetId: foe.id });
+  if (!shot.ok) assert.fail(shot.reason);
+  const afterShot = shot.state.units.find((u) => u.id === foe.id);
+  assert.ok(afterShot && afterShot.hp < beforeShot, '手动开火这一段应该成立');
+
+  // 第 2 段不该再来：B 接手回合时，塔已经打过一炮了
+  const endC = applyAction(shot.state, { type: 'END_TURN' });
+  if (!endC.ok) assert.fail(endC.reason);
+  const final = endC.state.units.find((u) => u.id === foe.id);
+  assert.ok(final, '目标还活着');
+  assert.ok(final.hp >= afterShot.hp, `手动开火后又挨了一炮：${afterShot.hp} → ${final.hp}`);
+});
+
 test('开局送两个经济单位', () => {
   const s = fresh();
   const econ = s.units.filter((u) => u.owner === 'A' && utype(s, u.type).category === 'economy');
@@ -2419,6 +2460,23 @@ test('桥分三档，越高级越抗拆', () => {
 });
 
 console.log('\n扩展规则');
+
+test('非对称开局：先手工兵 + 斥候，后手两农一牧一步兵一弓手', () => {
+  const sym = fresh();
+  assert.equal(
+    sym.units.filter((u) => u.owner === 'A').length,
+    sym.units.filter((u) => u.owner === 'B').length,
+    '不开扩展时两边对称',
+  );
+
+  const s = fresh({ expansionIds: ['asym-opening'] });
+  const of = (owner: 'A' | 'B') => s.units.filter((u) => u.owner === owner).map((u) => u.type);
+  assert.deepEqual(of('A'), ['engineer', 'scout'], '先手只有工事与侦察');
+  assert.deepEqual(of('B'), ['farmer', 'farmer', 'herder', 'militia', 'archer'], '后手是屯田与守备');
+  // 全部开局兵加起来还是那 7 个，一个不多一个不少
+  assert.equal(s.units.length, 7);
+  assert.ok(s.log.some((l) => l.text.includes('非对称开局')), '开局要在战报里说清楚');
+});
 
 test('战争经济：击杀立刻得 15 金', () => {
   const s = fresh({ expansionIds: ['war-economy'] });

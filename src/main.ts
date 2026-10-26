@@ -39,6 +39,7 @@ import { createMatch, DEFAULT_CONFIG, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
+import type { PanelInput } from './ui/panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
@@ -146,6 +147,13 @@ let selectedCityId: string | null = null;
 let selectedCampId: string | null = null;
 /** 点空地时选中的地形，用来在面板里看说明 */
 let selectedTile: { x: number; y: number } | null = null;
+/**
+ * 产兵搜索框里的字。
+ *
+ * 放在模块级而不是面板里，是因为面板每次都整块重绘：字存进 DOM 的话，
+ * 敲一个字就被下一次 render 冲掉。这里存字、重绘时回填，光标落到末尾。
+ */
+let recruitQuery = '';
 let reach: number[] = [];
 let targets: string[] = [];
 let siege: string[] = [];
@@ -166,6 +174,79 @@ let aiSpeed = 0;
 let aiPaused = false;
 /** 每次启动或中止 AI 循环都 +1，旧循环看到自己的令牌过期就自己退出 */
 let aiToken = 0;
+
+/**
+ * 下一步移动要走的路线，只用于画动画。
+ *
+ * 只活一次：render() 把它交给棋盘、随即清空。留着不清的话，下一次重绘
+ * （比如点了个按钮）会拿旧路线再演一遍，看起来像棋子又走了一次。
+ */
+let pendingMovePath: Map<string, Array<{ x: number; y: number }>> | null = null;
+
+/** 记一条"这个单位这一步是从哪走到哪"，供动画用 */
+function planMovePath(before: GameState, action: Action): void {
+  if (action.type !== 'MOVE') return;
+  const u = before.units.find((x) => x.id === action.unitId);
+  if (!u) return;
+  pendingMovePath = new Map([
+    [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y })],
+  ]);
+}
+
+/**
+ * 从起点到终点的一条路（四连通 BFS，只绕不可走地形）。
+ *
+ * 这是**画动画用的**，不是规则：它不看移动力、不看单位阻挡，所以不能拿去
+ * 判断"这一步合不合法"。规则层算出来的可达格是另一套（reachableTiles）。
+ * 走不通（比如飞行单位直接飞过河）时退化成"起点直连终点"。
+ */
+function pathCells(
+  s: GameState,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): Array<{ x: number; y: number }> {
+  const w = s.w;
+  const start = from.y * w + from.x;
+  const goal = to.y * w + to.x;
+  const prev = new Map<number, number>();
+  const seen = new Set<number>([start]);
+  const queue: number[] = [start];
+  while (queue.length > 0 && !prev.has(goal)) {
+    const cur = queue.shift() as number;
+    const cx = cur % w;
+    const cy = (cur - cx) / w;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= s.h) continue;
+      const ni = ny * w + nx;
+      if (seen.has(ni)) continue;
+      const tile = s.tiles[ni];
+      if (!tile || !passable(tile.terrain)) continue;
+      seen.add(ni);
+      prev.set(ni, cur);
+      queue.push(ni);
+      if (ni === goal) break;
+    }
+  }
+  if (!prev.has(goal)) return [from, to];
+  const cells: Array<{ x: number; y: number }> = [];
+  let cur = goal;
+  while (cur !== start) {
+    const p = prev.get(cur);
+    if (p === undefined) return [from, to];
+    cells.push({ x: cur % w, y: Math.floor(cur / w) });
+    cur = p;
+  }
+  cells.push(from);
+  cells.reverse();
+  return cells;
+}
 
 /** 现在这一方是 AI 在走、且没被暂停 */
 function aiBusy(): boolean {
@@ -251,6 +332,31 @@ function myTurn(): boolean {
   return state.current === room.seat;
 }
 
+/**
+ * 面板要的全部输入。
+ *
+ * 抽成函数是为了"只重画面板"这条路：搜索框每敲一个字都要重绘，
+ * 走整个 render() 会连棋盘一起重建，白掉一次图层、还丢焦点。
+ */
+function panelInput(): PanelInput {
+  const view = playerView(state, me(), spectating());
+  const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
+  return {
+    view,
+    me: me(),
+    // 注意用 view.state 而不是 state：面板同样不该看到视野外的东西
+    selectedUnit: picked,
+    selectedCityId,
+    selectedCampId,
+    selectedTile,
+    // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
+    canUndo: undoStack.length > 0,
+    chimeVolume,
+    recruitQuery,
+    spectator: watching(),
+  };
+}
+
 function render(): void {
   const view = playerView(state, me(), spectating());
 
@@ -268,20 +374,12 @@ function render(): void {
     selectedCityId,
     placeable: computePlaceable(),
     threat,
+    movePath: pendingMovePath ?? undefined,
   });
+  // 路线只演一次：下一次重绘不该再播一遍
+  pendingMovePath = null;
 
-  renderPanel(sideEl, {
-    view,
-    me: me(),
-    // 注意用 view.state 而不是 state：面板同样不该看到视野外的东西
-    selectedUnit: selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null,
-    selectedCityId,
-    selectedCampId,
-    selectedTile,
-    canUndo: undoStack.length > 0 && !room,
-    chimeVolume,
-    spectator: watching(),
-  });
+  renderPanel(sideEl, panelInput());
 
   renderCommander();
 
@@ -443,6 +541,23 @@ function refreshSelection(): void {
     siege = [];
     return;
   }
+  // 观战：只画**当前行动方**这一边的范围。
+  //
+  // 按归属画不行——观战位的 me() 固定是 A，轮到 B 时整盘一片空白；
+  // 两边都画也不行——两堆高亮叠在一起，看不出这一步到底谁有威胁。
+  // 观战看的是"这一步它能打到哪"，那就只画这一步的主人。
+  if (spectating()) {
+    if (unit.owner !== state.current || unit.acted || state.winner) {
+      reach = [];
+      targets = [];
+      siege = [];
+      return;
+    }
+    reach = canMove(unit) ? Array.from(reachableTiles(state, unit).keys()) : [];
+    targets = canAttack(unit) ? attackableTargets(state, unit).map((t) => t.id) : [];
+    siege = canAttack(unit) ? siegeTargets(state, unit).map((c) => c.id) : [];
+    return;
+  }
   if (unit.owner !== me() || watching()) {
     reach = [];
     targets = [];
@@ -455,6 +570,7 @@ function refreshSelection(): void {
 }
 
 function clearSelection(): void {
+  recruitQuery = '';
   selectedId = null;
   selectedCityId = null;
   selectedCampId = null;
@@ -570,6 +686,7 @@ function selectUnit(u: Unit): void {
  * 只有自己（或同盟视角）的军营才这么处理，敌方的还是走普通单位面板看属性。
  */
 function selectCamp(u: Unit): void {
+  if (selectedCampId !== u.id) recruitQuery = '';
   selectedCityId = null;
   selectedTile = null;
   buildPlan = null;
@@ -580,6 +697,9 @@ function selectCamp(u: Unit): void {
 }
 
 function selectCity(cityId: string): void {
+  // 换了城就把搜索词清掉：上一座城搜的「龙」，套到下一座城上只会显示「没有匹配」。
+  // 同一座城里连着买不清——连买三个弓手不该每次重新打字。
+  if (selectedCityId !== cityId) recruitQuery = '';
   selectedId = null;
   selectedCampId = null;
   selectedTile = null;
@@ -614,8 +734,10 @@ function dispatch(action: Action): boolean {
   }
 
   const prevTurn = state.turn;
+  planMovePath(state, action);
   const result = applyAction(state, action);
   if (!result.ok) {
+    pendingMovePath = null;
     toast(result.reason);
     return false;
   }
@@ -656,14 +778,13 @@ function dispatch(action: Action): boolean {
 /**
  * 撤回上一步。
  *
- * 能撤的范围是刻意收窄的：联机不行、指挥官模式不行、AI 正在走不行、跨回合不行。
- * 这四条都是"撤了会和真实状态对不上"的情况，不是保守。
+ * 能撤的范围：本回合、自己这一方、AI 没在走。
+ *
+ * 联机也能撤——只要**这一回合还没提交**。提交发生在「结束回合」那一下
+ * （pushTurn），在那之前所有走子都只是本机草稿，撤掉不会让两边对不上。
+ * 反过来说，一旦按过结束回合，undoStack 就直接清空了，这里也就无从撤起。
  */
 function undoLast(): void {
-  if (room) {
-    toast('联机对局不能撤回：提交过的回合收不回来');
-    return;
-  }
   if (state.config.commanderMode) {
     toast('指挥官模式下走位归 AI，撤不了');
     return;
@@ -753,6 +874,20 @@ function onBoardClick(e: Event): void {
       render();
     }
     return;
+  }
+
+  // 0) 同一格上叠着两个单位（飞行单位压在地面单位头上）时，
+  //    点这一格点到的永远是上面那个 DOM 元素，下面那个就再也选不中、更打不着。
+  //    所以先按格子找"这一格里有没有我能打的目标"，有就直接开火——
+  //    规则层本来就允许距离 0 的对射（空中打地面），只是界面点不到。
+  if (coords && selectedId && targets.length > 0) {
+    const stacked = state.units.find(
+      (u) => u.x === coords.x && u.y === coords.y && targets.includes(u.id),
+    );
+    if (stacked) {
+      dispatch({ type: 'ATTACK', unitId: selectedId, targetId: stacked.id });
+      return;
+    }
   }
 
   // 1) 点到了攻击目标
@@ -1180,6 +1315,8 @@ async function runAiTurn(
     const action = aiNextAction(state, budget);
     if (!action) break;
 
+    planMovePath(state, action);
+    const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const result = applyAction(state, action);
     if (!result.ok) break;
 
@@ -1191,6 +1328,12 @@ async function runAiTurn(
     if (delay > 0 || step % 6 === 0) {
       saveMatch(state);
       render();
+      // 走了两格以上就把这条路线"播完"再走下一步：
+      // 否则动画刚起头就被下一个动作的重绘打断，观众只看到棋子闪了一下。
+      if (delay > 0 && walked > 2) {
+        await sleep(Math.min(560, 70 * (walked - 1)));
+        if (!alive()) return;
+      }
     }
 
     // 关键：即使 0ms 也要 await。同步跑完 50 步会把主线程占死，
@@ -1750,6 +1893,32 @@ topbarEl.addEventListener(
 );
 
 topbarEl.addEventListener('scroll', () => syncTopbarScroll(), { passive: true });
+
+/**
+ * 产兵搜索框。
+ *
+ * 重绘会换掉整个 input 元素，所以敲字之后必须把焦点还回去，否则输入法
+ * 拼音打到一半就被打断（第一个字上屏，后面全丢）——这也是为什么不能
+ * 简单地在 input 上挂 debounce 再 render()：焦点一丢，中文就打不出来。
+ * 这里每次 input 都同步重绘并立刻复位光标，串行跑，中间不留空档。
+ */
+appEl.addEventListener('input', (e) => {
+  const el = e.target as HTMLInputElement | null;
+  if (!el || el.dataset.act !== 'recruit-search') return;
+  recruitQuery = el.value;
+
+  renderPanel(sideEl, panelInput());
+
+  const again = sideEl.querySelector<HTMLInputElement>('[data-act="recruit-search"]');
+  if (!again) return;
+  again.focus({ preventScroll: true });
+  const end = again.value.length;
+  try {
+    again.setSelectionRange(end, end);
+  } catch {
+    // type=search 在某些内核上不支持选区，光标在末尾也无所谓
+  }
+});
 
 // 悬停可移动格时加深高亮
 boardEl.addEventListener('mouseover', (e) => {
