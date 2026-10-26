@@ -3,7 +3,7 @@
 一个回合制战棋：古典到现代五个时代，基于地形的走位、跨河的桥、迷雾、联机对局（带观战位）。
 没有 UI 框架，没有后端，一套纯函数规则内核 + 一层手写 DOM。
 
-线上地址：<https://grid-warchess.app.workbuddy.host/?sharecode=XJSBOE55O7>
+线上地址：<https://grid-warchess-76858.app.workbuddy.host/?sharecode=JXRGIZAHUH>
 
 ## 跑起来
 
