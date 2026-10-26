@@ -1613,9 +1613,58 @@ function closeHandoff(): void {
 
 // ---------- 事件 ----------
 
+// ---------- 拖动看地图 ----------
+//
+// 放大之后只有滚动条，用鼠标得去够右下角那条细缝，很难受；
+// 手机上虽然有系统滚动，但指针事件这条也要能走，行为才一致。
+//
+// 关键一步是"拖动过就别再算点击"：不然松开的地方正好压着一个格子，
+// 会顺带把选中的单位走过去——拖一次地图走一步棋，谁都不敢拖。
+let panning = false;
+let panMoved = false;
+let panFrom = { x: 0, y: 0, left: 0, top: 0 };
+let suppressClick = false;
+
+boardScrollEl.addEventListener('pointerdown', (e) => {
+  if (boardZoom <= 1) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  panning = true;
+  panMoved = false;
+  panFrom = { x: e.clientX, y: e.clientY, left: boardScrollEl.scrollLeft, top: boardScrollEl.scrollTop };
+  boardScrollEl.classList.add('dragging');
+  boardScrollEl.setPointerCapture?.(e.pointerId);
+});
+
+boardScrollEl.addEventListener('pointermove', (e) => {
+  if (!panning) return;
+  const dx = e.clientX - panFrom.x;
+  const dy = e.clientY - panFrom.y;
+  if (!panMoved && Math.abs(dx) + Math.abs(dy) < 6) return;
+  panMoved = true;
+  boardScrollEl.scrollLeft = panFrom.left - dx;
+  boardScrollEl.scrollTop = panFrom.top - dy;
+  e.preventDefault();
+});
+
+const endPan = (): void => {
+  if (!panning) return;
+  panning = false;
+  boardScrollEl.classList.remove('dragging');
+  if (panMoved) suppressClick = true;
+};
+boardScrollEl.addEventListener('pointerup', endPan);
+boardScrollEl.addEventListener('pointercancel', endPan);
+boardScrollEl.addEventListener('pointerleave', endPan);
+
 appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;
   if (!target) return;
+
+  // 上一次操作是"拖地图"：这一下 click 是拖动的尾巴，不是点格子
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
 
   const actionEl = target.closest<HTMLElement>('[data-act]');
   if (actionEl?.dataset.act) {

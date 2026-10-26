@@ -231,6 +231,14 @@ body {
   overscroll-behavior: contain;
   touch-action: pan-x pan-y;
   border-radius: 14px;
+  /* 能拖：告诉人这里是可以抓着走的 */
+  cursor: grab;
+}
+
+.board-scroll.zoomed.dragging {
+  cursor: grabbing;
+  /* 拖的时候别选中格子里的字 */
+  user-select: none;
 }
 
 /* ---------- 缩放条 ---------- */

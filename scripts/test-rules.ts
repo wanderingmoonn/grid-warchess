@@ -3137,6 +3137,54 @@ function runAiSteps(s: GameState, limit = 8): Action[] {
   return acts;
 }
 
+test('大地图上孤零零一支部队也会朝敌城推进', () => {
+  // 大地图"AI 迷路"的最朴素形态：视野里一个敌人都没有的时候，
+  // 它到底知不知道城在哪。以前的目标函数里敌军和敌城取 min，
+  // 只要视野里有个兵，城市就被挤到第二位——32×32 上整局不打城就是这么来的。
+  const s = fresh({ size: 32 }, 2468);
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
+  const m = findUnit(s, 'A', 'militia');
+  s.units = [m];
+  m.x = 16;
+  m.y = 16;
+  m.moved = false;
+  m.acted = false;
+  s.current = 'A';
+  refreshMemory(s);
+
+  // 只留一座敌城。两座城分处两角时，"往哪边走算前进"取决于看哪座城：
+  // 往左走对左城是近、对右城是远，取 min 会漏，取和会互相抵消
+  // （第一版两种指标都误报过）。留一座，指标才单调。
+  const foes = citiesOf(s, 'B');
+  assert.ok(foes.length > 1, '样本需要两座敌城');
+  const keep = foes[0]!;
+  for (const c of foes) {
+    if (c.id === keep.id) continue;
+    for (const t of cityTiles(c)) {
+      const tile = s.tiles[idx(s, t.x, t.y)];
+      if (tile) {
+        tile.cityId = null;
+        tile.terrain = 'plain';
+      }
+    }
+    s.cities = s.cities.filter((x) => x.id !== c.id);
+  }
+
+  const before = distToCity({ x: m.x, y: m.y }, keep);
+  assert.ok(before > 12, `样本要离城够远才有意义，实际 ${before}`);
+
+  const a = aiNextAction(s, NO_RECRUIT);
+  assert.ok(a && a.type === 'MOVE', `应该选择移动，实际选了 ${a?.type ?? '什么都不做'}`);
+  const r = applyAction(s, a!);
+  assert.ok(r.ok, r.ok ? '' : `这一步不合法：${r.reason}`);
+  // 注意从 r.state 里读新位置：applyAction 是深拷贝，手里这个 m 不会动。
+  // 第一版就是拿着旧对象量的距离，于是"走了两步"看起来完全没变化。
+  const moved = r.state.units.find((u) => u.id === m.id);
+  assert.ok(moved, '兵还在');
+  const after = distToCity(moved!, keep);
+  assert.ok(after < before, `应该更靠近敌城，实际 ${before} → ${after}`);
+});
+
 test('AI 不会在丘陵/森林围死的城里造走不动的兵（两档都测）', () => {
   // 重机枪组 move 1，而丘陵和森林进门要 2 点：城门四邻全是这种地形的话，
   // 造出来就永远出不了城，还占着产兵格 —— 城从此再也造不出兵。

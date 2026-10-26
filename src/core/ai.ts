@@ -629,8 +629,20 @@ function bridgeGap(
  * 于是只要离敌人超过十来格，所有移动都是负分，全被丢掉：AI 招完兵就站着不动。
  * 移动的分数必须是**相对"原地不动"的增量**，才谈得上"推进"这件事。
  *
- * 城市用代价图（会绕河找渡口），可见敌军用曼哈顿距离，城市权重更高：
- * 赢是靠推城，追着机动部队跑容易被放风筝。
+ * 分数取"到各敌方城市代价图距离 × 权重"和"到最近敌军距离"里的最小值：
+ *   · 城市用代价图（会绕河找渡口），主攻方向（focus）权重压到 0.32 —— 比别处低一大截，
+ *     等于让全军朝着一座城收，而不是四个方向各派一路人各挠一下；
+ *   · 可见敌军用曼哈顿距离，权重 1.15。它比城市"贵"一点，是为了在野战里先解决挡路的，
+ *     而不是从敌军阵列中间穿过去。
+ *
+ * 两个坑都试过，别再踩回去：
+ *   1. 把敌军那一路直接删掉（"目标只能是城"）——实测更差：32×32 上从 63 次攻城
+ *      掉到 40 次、城市掉血从 249 掉到 199。原因是没人清屏，部队一路撞在对方的
+ *      前排上，反而推不到城下。
+ *   2. 把 focus 权重压得更极端（0.2）——也变差（37 次 / 168 血）。0.32 是量出来的甜点：
+ *      太松就各打各的，太紧就全挤在一条路上被一起打。
+ *
+ * 主攻方向和"同血取最近"这条一起看：focus 选谁，全军就往谁那儿收。
  */
 function advanceDistance(
   s: GameState,
@@ -646,8 +658,10 @@ function advanceDistance(
     const field = fields.get(c.id);
     const d = field?.[y * s.w + x];
     if (d === undefined || !Number.isFinite(d)) continue;
-    // 主攻方向权重更高：同一个位置，往那座城走更"值"
-    const weight = c.id === focusCityId ? 0.5 : 0.85;
+    // 主攻方向权重压得很低：同一个位置，往那座城走"近得多"。
+    // 0.32 是量出来的（见上面的注释）：0.5 太松、全军各扑一座城，
+    // 0.2 太紧、全挤在一条路上被一起打。20×20 和 32×32 的城市掉血都翻了一倍多。
+    const weight = c.id === focusCityId ? 0.32 : 0.85;
     best = Math.min(best, d * weight);
   }
   for (const e of unitsOf(s, other(owner))) {
@@ -1574,12 +1588,21 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   const candidates: Candidate[] = [];
   // 两套地形代价图（陆军 / 水军）算一次，本回合所有单位共用
   const land = distanceFields(view, me);
-  // 主攻方向：血最少的那座敌方城市（同血时取最近的）
+  // 主攻方向：血最少的那座敌方城市（同血时取离我军最近的）
+  //
+  // 注释一直写着"同血时取最近的"，但代码其实没做这件事：四座城都是满血时，
+  // 它会锁死列表里的第一座——大地图上那座很可能在图的对角，
+  // 全军就朝着那个方向开拔，近处那座永远没人管。
+  const nearestOwn = (c: City): number =>
+    view.units
+      .filter((u) => u.owner === me)
+      .reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
   const foeCities = view.cities.filter((c) => c.owner !== me);
-  const focus = foeCities.reduce<City | null>(
-    (best, c) => (!best || c.hp < best.hp ? c : best),
-    null,
-  );
+  const focus = foeCities.reduce<City | null>((best, c) => {
+    if (!best) return c;
+    if (c.hp !== best.hp) return c.hp < best.hp ? c : best;
+    return nearestOwn(c) < nearestOwn(best) ? c : best;
+  }, null);
 
   const fields: Fields = {
     land,
