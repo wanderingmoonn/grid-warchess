@@ -74,8 +74,30 @@ export function tileAt(s: GameState, x: number, y: number): Tile | null {
   return s.tiles[idx(s, x, y)] ?? null;
 }
 
+/**
+ * 这一格上的单位。
+ *
+ * 同一格可能同时站着"建筑"和"站在建筑上的部队"（目前只有桥面允许这样）。
+ * 优先返回**不是建筑**的那个：否则站在桥上的兵会被桥自己挡住——
+ * 移动判定会说"那格已经有人了"，玩家看到的是一个明明站着自己的兵却动不了的格子。
+ */
 export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
-  return s.units.find((u) => u.x === x && u.y === y);
+  let building: Unit | undefined;
+  for (const u of s.units) {
+    if (u.x !== x || u.y !== y) continue;
+    const cat = s.unitTypes[u.type]?.category;
+    if (cat === 'building') {
+      building ??= u;
+      continue;
+    }
+    return u;
+  }
+  return building;
+}
+
+/** 这一格上的建筑（桥、塔、墙……）；没有就是 undefined */
+export function buildingAt(s: GameState, x: number, y: number): Unit | undefined {
+  return s.units.find((u) => u.x === x && u.y === y && s.unitTypes[u.type]?.category === 'building');
 }
 
 export function unitById(s: GameState, id: string): Unit | undefined {
@@ -110,6 +132,11 @@ export function cityAt(s: GameState, x: number, y: number): City | undefined {
 }
 
 /** 某方控制的城市 */
+/** 接管一座废墟要花的重建费：按城市的耐久规模算，越高级的城越贵 */
+export function rebuildCost(city: City): number {
+  return Math.round(city.maxHp * 2.5);
+}
+
 export function citiesOf(s: GameState, p: PlayerId): City[] {
   return s.cities.filter((c) => c.owner === p);
 }
@@ -234,7 +261,8 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
 
   if (tile.cityId) {
     const city = cityById(s, tile.cityId);
-    if (city && city.owner !== unit.owner) return true;
+    // 废墟可以进：进城那一下就是"接管"这个动作本身
+    if (city && city.owner !== unit.owner && !city.ruined) return true;
   }
   return false;
 }
@@ -328,11 +356,27 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     }
   }
 
-  // 己方单位所在的格子不能作为终点
+  // 己方单位所在的格子不能作为终点。
+  //
+  // 建筑是例外，分两种：
+  //   · **能站的建筑**（塔、军营、磨坊、工厂、桥……）：站在自己的建筑上是可以的。
+  //     一座塔占掉一格却永远空着，只会让布阵时莫名其妙地缺一个洞；
+  //     桥更明显——修好了却只能穿过去、停不下来，守桥和换气都没法做。
+  //   · **障碍**（墙、栅栏、拒马、铁丝网）：连友军也停不上去。
+  //     它们的全部作用就是"这一格不存在"，能站就等于把它删了。
+  //
+  // 敌方的建筑（非桥）一律不能站：那一格还被它占着，得先打掉。
   for (const i of Array.from(best.keys())) {
     const { x, y } = xyOf(s, i);
-    const occ = s.units.find((u) => u.x === x && u.y === y);
-    if (occ && occ.id !== unit.id) best.delete(i);
+    const here = s.units.filter((u) => u.x === x && u.y === y && u.id !== unit.id);
+    const blockers = here.filter((u) => {
+      const d = utype(s, u.type);
+      if (d.category !== 'building') return true;
+      if (d.bridges) return false; // 桥是双向的，谁都能站
+      if (d.obstacle) return true; // 墙：自己人也过不去
+      return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
+    });
+    if (blockers.length > 0) best.delete(i);
   }
   // 飞行单位能掠过水面，但落点必须在岸上：中途那一格是"飞过去"的，不是"站上去"的。
   if (flyer && !waterUnit) {
@@ -420,6 +464,8 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
   const range = utype(s, unit.type).range;
   return s.cities.filter((c) => {
     if (c.owner === unit.owner) return false;
+    // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
+    if (c.ruined) return false;
     const d = distToCity(unit, c);
     return d > 0 && d <= range;
   });
@@ -637,9 +683,13 @@ export function unitIncome(s: GameState, u: Unit): number {
   }
 
   if (income > 0) {
-    const nearWater = DIRS.some(
-      ([dx, dy]) => tileAt(s, u.x + dx, u.y + dy)?.terrain === 'water',
-    );
+    // 桥面也要算"临水"：桥架在水上，桥下还是水。
+    // 只判 water 的话，玩家在河边修一座桥，反而把这一带的贸易加成弄没了——
+    // 这是实打实踩过的 bug（建桥之后沿岸农民全少 3 金收入）。
+    const nearWater = DIRS.some(([dx, dy]) => {
+      const t2 = tileAt(s, u.x + dx, u.y + dy)?.terrain;
+      return t2 === 'water' || t2 === 'bridge';
+    });
     if (nearWater) income += CONFIG.riverTradeBonus;
   }
 
@@ -656,6 +706,7 @@ export function unitIncome(s: GameState, u: Unit): number {
 export function incomeOf(s: GameState, p: PlayerId): number {
   let income = CONFIG.baseIncome;
   for (const city of citiesOf(s, p)) {
+    if (city.ruined) continue; // 废墟不产出：它现在只是一堆石头
     income += eraDef(city.era).cityIncome;
   }
   for (const u of unitsOf(s, p)) {
@@ -716,6 +767,8 @@ function recoverCities(s: GameState, p: PlayerId): void {
  * 而这些数字必须和规则完全同源，不能各算一遍。
  */
 export function cityRegenOf(s: GameState, city: City): number {
+  // 废墟不回血：它连墙都没了
+  if (city.ruined) return 0;
   const garrison = s.units.filter(
     (u) => u.owner === city.owner && cityTiles(city).some((t) => t.x === u.x && t.y === u.y),
   ).length;
@@ -849,6 +902,10 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
         return doSetOrders(next, action.queue);
+      case 'DISBAND':
+        return doDisband(next, action.unitId);
+      case 'SURRENDER':
+        return doSurrender(next);
       case 'END_TURN':
         return doEndTurn(next);
     }
@@ -879,10 +936,28 @@ function syncBridges(s: GameState): void {
   for (const u of s.units) {
     if (utype(s, u.type).bridges) alive.add(u.y * s.w + u.x);
   }
+  const collapsed: number[] = [];
   for (let i = 0; i < s.tiles.length; i++) {
     const tile = s.tiles[i];
-    if (tile && tile.terrain === 'bridge' && !alive.has(i)) tile.terrain = 'water';
+    if (tile && tile.terrain === 'bridge' && !alive.has(i)) {
+      tile.terrain = 'water';
+      collapsed.push(i);
+    }
   }
+  if (collapsed.length === 0) return;
+
+  // 桥塌的时候站在桥上的陆军一起没：那一格已经变回水面了，
+  // 留着会得到一个"漂在水上的步兵"，后续所有寻路和攻击判定都会错乱。
+  const drowned = s.units.filter((u) => {
+    if (utype(s, u.type).domain === 'water') return false; // 船本来就在水上
+    return collapsed.includes(u.y * s.w + u.x);
+  });
+  if (drowned.length === 0) return;
+  for (const u of drowned) {
+    pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`);
+  }
+  const gone = new Set(drowned.map((u) => u.id));
+  s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
 function doMove(s: GameState, unitId: string, x: number, y: number): ActionResult {
@@ -895,9 +970,31 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const reach = reachableTiles(s, unit);
   if (!reach.has(idx(s, x, y))) return { ok: false, reason: '目标格不可达' };
 
+  // 走进废墟 = 接管。钱要在动之前就查：走到一半发现掏不起重建费，
+  // 会留下一个"已经站在城里但城市还是别人的"的中间态，很难收拾。
+  const destTile = tileAt(s, x, y);
+  const destCity = destTile?.cityId ? cityById(s, destTile.cityId) : null;
+  if (destCity?.ruined) {
+    const price = rebuildCost(destCity);
+    if (s.players[unit.owner].gold < price) {
+      return { ok: false, reason: `接管这座废墟要 ${price} 金重建，金币不够` };
+    }
+  }
+
   unit.x = x;
   unit.y = y;
   unit.moved = true;
+
+  if (destCity?.ruined) {
+    const price = rebuildCost(destCity);
+    s.players[unit.owner].gold -= price;
+    destCity.owner = unit.owner;
+    destCity.ruined = false;
+    destCity.hp = Math.max(1, Math.ceil(destCity.maxHp * CITY.captureHpRatio));
+    destCity.capturedTurn = s.turn;
+    pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`);
+    s.winner = checkWinner(s);
+  }
 
   return { ok: true, state: s };
 }
@@ -1008,6 +1105,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
+  if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
   const dist = distToCity(attacker, city);
@@ -1032,9 +1130,13 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
     const prevOwner = city.owner;
     // 「谁先丢城」只记第一次：城会被抢回来，但"先吃亏"这件事不该被撤销。
     if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
-    city.owner = attacker.owner;
-    city.hp = Math.max(1, Math.ceil(city.maxHp * CITY.captureHpRatio));
-    // 当回合这条产线是瘫的：刚打下来的城立刻出兵，等于攻城顺手补员
+
+    // 破城 ≠ 易主。城墙打塌、守军打光，但城还在原主名下，只是成了废墟：
+    // 想真正拿到它，得派兵走进去并掏钱重建（见 doMove 里的接管分支）。
+    // 这样"砸开城墙"和"拿到城市"是两件事，攻城方必须留一支部队去占。
+    city.ruined = true;
+    city.hp = 0;
+    // 当回合这条产线是瘫的（废墟本来就不产兵，这里保留是为了兼容旧存档逻辑）
     city.capturedTurn = s.turn;
 
     // 城里还没来得及撤走的守军随城陷落
@@ -1048,7 +1150,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
       for (const g of garrison) fireKilled(s, g, attacker);
     }
 
-    pushLog(s, attacker.owner, `城市被攻陷，易主`);
+    pushLog(s, attacker.owner, `${cityName(city)} 被攻破，守军全灭——派兵入驻才能接管`);
   }
 
   s.winner = checkWinner(s);
@@ -1194,6 +1296,28 @@ function doBuild(
   const tile = tileAt(s, x, y);
   if (!tile) return { ok: false, reason: '目标越界' };
   if (unitAt(s, x, y)) return { ok: false, reason: '这里已经有单位或建筑了' };
+
+  // 别把自己堵死：城市格的出兵位是产线的命门。
+  //
+  // 现实里踩过太多次——在城里仅剩的那格空地上盖一座塔，城市的产兵格就变成 0，
+  // 从此一兵不出，而界面上只是"没有可造的兵"这种不痛不痒的提示。
+  // 这里在落子之前就把这条路掐掉。
+  const hostCity = s.cities.find(
+    (c) =>
+      c.owner === s.current &&
+      x >= c.x &&
+      x < c.x + c.size &&
+      y >= c.y &&
+      y < c.y + c.size,
+  );
+  if (hostCity) {
+    const slotsLeft = cityTiles(hostCity).filter(
+      (t) => !(t.x === x && t.y === y) && !unitAt(s, t.x, t.y),
+    );
+    if (slotsLeft.length === 0) {
+      return { ok: false, reason: '这一格是这座城最后一个出兵位，建在这里会让它再也造不出兵' };
+    }
+  }
 
   const overWater = !!def.bridges;
 
@@ -1353,6 +1477,9 @@ function doRecruit(
     if (city.owner !== s.current) return { ok: false, reason: '只能在自己的城市产兵' };
     era = city.era;
     label = cityName(city);
+    if (city.ruined) {
+      return { ok: false, reason: '这座城市已成废墟，先派兵入驻接管' };
+    }
     if (city.capturedTurn === s.turn) {
       return { ok: false, reason: `${label}刚被打下来，本回合还没恢复生产` };
     }
@@ -1448,6 +1575,38 @@ function doSetOrders(s: GameState, queue: string[]): ActionResult {
   }
 
   s.orders = { ...(s.orders ?? {}), [s.current]: cleaned };
+  return { ok: true, state: s };
+}
+
+/**
+ * 遣散单位 / 拆除建筑。
+ *
+ * 三条约束：
+ *   · 只能动自己的（"帮对手拆塔"显然不行）；
+ *   · 船里还有货就不能拆（否则货舱里的陆军凭空蒸发，玩家会以为是 bug）；
+ *   · 回收按**当前造价**的四成（`CONFIG.disbandRefund`），扩展改了价就跟着变。
+ *
+ * 这个动作不消耗行动：拆完还能接着动别的单位，一回合拆几座是自己的事。
+ */
+function doDisband(s: GameState, unitId: string): ActionResult {
+  const u = s.units.find((x) => x.id === unitId);
+  if (!u) return { ok: false, reason: '这里已经没有单位了' };
+  if (u.owner !== s.current) return { ok: false, reason: '只能拆自己的' };
+  if ((u.cargo?.length ?? 0) > 0) return { ok: false, reason: '船里还有单位，先卸货' };
+
+  const def = utype(s, u.type);
+  const refund = Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
+  s.players[u.owner].gold += refund;
+  s.units = s.units.filter((x) => x.id !== unitId);
+  pushLog(s, u.owner, `拆除「${def.name}」，回收 ${refund} 金`);
+  return { ok: true, state: s };
+}
+
+/** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
+function doSurrender(s: GameState): ActionResult {
+  const me = s.current;
+  s.winner = other(me);
+  pushLog(s, me, `${s.players[me].name} 认输`);
   return { ok: true, state: s };
 }
 

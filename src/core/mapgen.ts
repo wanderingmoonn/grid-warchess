@@ -153,8 +153,19 @@ function blockDist(p: Pos, city: Pos, size = 2): number {
  */
 export type CityLayout = 'split' | 'diagonal';
 
-/** 两座城之间至少要隔开这么远（以左上角曼哈顿距离计），否则会出现"两城贴脸"的怪图 */
-const MIN_CITY_SEP = 4;
+/**
+ * 两座城之间至少要隔开这么远（以左上角曼哈顿距离计），否则会出现"两城贴脸"的怪图。
+ *
+ * 以前是写死的 4：12×12 上还算合理，但到了 20×20、32×32 就变成"两城挤在角落"——
+ * 中间空出一大片没人烟的地，开局要跑七八个回合才照面。现在按棋盘边长的 1/4 给，
+ * 4 是下限（小图上再大就摆不开了）。
+ */
+const MIN_CITY_SEP_FLOOR = 4;
+const MIN_CITY_SEP_RATIO = 0.25;
+
+function minCitySep(size: number): number {
+  return Math.max(MIN_CITY_SEP_FLOOR, Math.floor(size * MIN_CITY_SEP_RATIO));
+}
 
 function citySep(a: Pos, b: Pos): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -185,6 +196,8 @@ function nearestBetween(a: Pos[], b: Pos[]): number {
  */
 function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => number) {
   const span = 2;
+  // 同一侧两座城、以及敌对两城之间的硬下限都按这个走
+  const minSep = minCitySep(Math.min(c.w, c.h));
   // 纵深方向 = 河要横穿的那个方向；横向 = 沿着河的方向
   const along = axis === 'h' ? c.h : c.w;
   const cross = axis === 'h' ? c.w : c.h;
@@ -210,7 +223,7 @@ function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => numb
       const cr = crossLo + Math.floor(rng() * Math.max(1, crossHi - crossLo + 1));
       const a = Math.max(alongLo, Math.min(alongHi, front + d));
       const p: Pos = axis === 'h' ? { x: cr, y: a } : { x: a, y: cr };
-      if (taken.every((q) => citySep(p, q) >= MIN_CITY_SEP)) return p;
+      if (taken.every((q) => citySep(p, q) >= minSep)) return p;
     }
     // 实在撒不下就退到前线上，保证一定回得去一个合法布局
     const cr = crossLo + Math.floor(rng() * Math.max(1, crossHi - crossLo + 1));

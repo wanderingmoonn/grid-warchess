@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 
-import { CITY, CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
+import { CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
@@ -20,6 +20,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, aiNoise, aiTrait
 import { createMatch, DEFAULT_CONFIG, startGoldFor } from '../src/core/setup.ts';
 import {
   applyAction,
+  buildingAt,
   citiesOf,
   cityById,
   cityRegenOf,
@@ -34,6 +35,7 @@ import {
   ordersOf,
   previewAttack,
   reachableTiles,
+  rebuildCost,
   recruitCost,
   refreshMemory,
   threatTiles,
@@ -628,7 +630,7 @@ test('攻城伤害等于攻击减城市护甲', () => {
   assert.equal(damageToCity(cav, city, s), UNIT_TYPES.scout.atk - city.armor);
 });
 
-test('耐久打空则城市易主，守军随城陷落', () => {
+test('耐久打空变废墟、守军随城陷落，派兵入驻并付费才易主', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
@@ -646,9 +648,27 @@ test('耐久打空则城市易主，守军随城陷落', () => {
   const r = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
   assert.ok(r.ok);
   const after = cityById(r.state, city.id);
-  assert.equal(after?.owner, 'A');
-  assert.equal(after?.hp, Math.ceil(city.maxHp * CITY.captureHpRatio));
-  assert.equal(r.state.units.some((n) => n.id === garrison.id), false);
+  // 破城不等于易主：城还是 B 的，只是成了废墟
+  assert.equal(after?.owner, 'B', '破城之后城不该直接归攻方');
+  assert.equal(after?.ruined, true, '应该变成废墟');
+  assert.equal(after?.hp, 0, '废墟没有耐久');
+  assert.equal(r.state.units.some((n) => n.id === garrison.id), false, '守军随城陷落');
+
+  // 派兵走进去接管：要付重建费
+  const push = findUnit(r.state, 'A', 'scout');
+  assert.ok(push);
+  // 攻城把它的行动用掉了；这里直接复位，测的是"入驻"这段逻辑本身
+  push.moved = false;
+  push.acted = false;
+  const goldBefore = r.state.players.A.gold;
+  const cost = rebuildCost(after!);
+  assert.ok(goldBefore >= cost, '这个用例需要 A 掏得起重建费');
+  const move = applyAction(r.state, { type: 'MOVE', unitId: push.id, x: city.x, y: city.y });
+  assert.ok(move.ok, move.ok ? '' : `入驻失败：${move.reason}`);
+  const taken = cityById(move.state, city.id);
+  assert.equal(taken?.owner, 'A', '入驻之后才易主');
+  assert.equal(taken?.ruined, false, '接管后不再是废墟');
+  assert.equal(move.state.players.A.gold, goldBefore - cost, '应该扣掉重建费');
 });
 
 test('丢光所有城市即判负（哪怕还有一支军队）', () => {
@@ -875,7 +895,7 @@ test('城市收入随时代提高', () => {
   );
 });
 
-test('攻陷城市会连同它的时代一起接收', () => {
+test('接管废墟会连同它的时代一起接收', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
@@ -888,9 +908,16 @@ test('攻陷城市会连同它的时代一起接收', () => {
 
   const r = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
   assert.ok(r.ok);
-  const after = cityById(r.state, city.id);
+
+  const push = findUnit(r.state, 'A', 'scout');
+  assert.ok(push);
+  push.moved = false;
+  push.acted = false;
+  const move = applyAction(r.state, { type: 'MOVE', unitId: push.id, x: city.x, y: city.y });
+  assert.ok(move.ok, move.ok ? '' : `入驻失败：${move.reason}`);
+  const after = cityById(move.state, city.id);
   assert.equal(after?.owner, 'A');
-  assert.equal(after?.era, 3, '时代应该跟着城市一起易主');
+  assert.equal(after?.era, 3, '时代跟着城市一起易主');
 });
 
 console.log('\n建筑与经济单位');
@@ -983,6 +1010,74 @@ test('建造者离得太远不能建', () => {
   const builder = addLaborer(s);
   const r = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 9, y: 5 });
   assert.equal(r.ok, false, `超出 ${CONFIG.buildRange} 格不该能建`);
+});
+
+test('自家设施能站人：塔那一格不再是洞', () => {
+  const s = fresh();
+  const builder = addLaborer(s);
+  const built = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
+  assert.ok(built.ok);
+  const tower = built.state.units.find((u) => u.type === 'tower');
+  assert.ok(tower);
+
+  const m = findUnit(built.state, 'A', 'militia');
+  m.x = 6;
+  m.y = 6;
+  m.moved = false;
+  m.acted = false;
+
+  assert.ok(reachableTiles(built.state, m).has(idx(built.state, 6, 5)), '塔那一格应该算可达');
+  const r = applyAction(built.state, { type: 'MOVE', unitId: m.id, x: 6, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : `上塔失败：${r.reason}`);
+  assert.equal(unitAt(r.state, 6, 5)?.id, m.id, 'unitAt 应该返回站上来的兵，而不是塔本身');
+  assert.equal(buildingAt(r.state, 6, 5)?.id, tower.id, '塔还在那儿，只是上面多了个人');
+});
+
+test('障碍类建筑谁都上不去，连自己人也不行', () => {
+  const s = fresh();
+  // 本局没开扩展包，临时塞一个城墙定义：规则只认 obstacle 这个标记
+  s.unitTypes.testwall = {
+    id: 'testwall',
+    name: '城墙',
+    short: '墙',
+    era: 1,
+    category: 'building',
+    cost: 90,
+    move: 0,
+    atk: 0,
+    armor: 8,
+    maxHp: 80,
+    range: 1,
+    vision: 1,
+    obstacle: true,
+  };
+  s.units.push({ id: 'wall-1', type: 'testwall', owner: 'A', x: 6, y: 5, hp: 80, kills: 0, moved: false, acted: false });
+
+  const m = findUnit(s, 'A', 'militia');
+  m.x = 6;
+  m.y = 6;
+  m.moved = false;
+  m.acted = false;
+
+  assert.equal(reachableTiles(s, m).has(idx(s, 6, 5)), false, '墙不能当落点');
+  assert.equal(applyAction(s, { type: 'MOVE', unitId: m.id, x: 6, y: 5 }).ok, false, '停在墙上应该被拒');
+});
+
+test('敌方设施不能站，得先打掉', () => {
+  const s = fresh();
+  const built = applyAction(s, { type: 'BUILD', unitId: addLaborer(s).id, unitType: 'tower', x: 6, y: 5 });
+  assert.ok(built.ok);
+  const tower = built.state.units.find((u) => u.type === 'tower');
+  assert.ok(tower);
+  tower.owner = 'B'; // 变成敌方塔
+
+  const m = findUnit(built.state, 'A', 'militia');
+  m.x = 6;
+  m.y = 6;
+  m.moved = false;
+  m.acted = false;
+
+  assert.equal(reachableTiles(built.state, m).has(idx(built.state, 6, 5)), false, '敌方塔不该是落点');
 });
 
 test('建筑在敌方回合开始时自动开火', () => {
@@ -1571,7 +1666,7 @@ test('哀兵必胜：攻城伤害也吃这 10%', () => {
   assert.equal(damageToCity(findUnit(on, 'A', 'scout'), city1, on), Math.round(base * 1.1));
 });
 
-test('哀兵必胜：谁先丢城由攻城结算记下，抢回来也不改写', () => {
+test('哀兵必胜：谁先丢城由攻城结算记下，接管也不改写', () => {
   const s = fresh({ expansionIds: ['last-stand'] });
   const city = citiesOf(s, 'B')[0]!;
   city.hp = 5;
@@ -1581,21 +1676,23 @@ test('哀兵必胜：谁先丢城由攻城结算记下，抢回来也不改写',
 
   const r1 = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
   assert.ok(r1.ok);
-  assert.equal(cityById(r1.state, city.id)?.owner, 'A');
   assert.equal(r1.state.firstCityLost, 'B', 'B 丢了城，记的就是 B');
+  assert.equal(cityById(r1.state, city.id)?.owner, 'B', '破城还没易主');
 
-  // 再让 B 把城抢回去：这条记录不该被改写
-  const back = cityById(r1.state, city.id)!;
-  back.hp = 1;
-  const at2 = { x: back.x + back.size, y: back.y };
-  r1.state.tiles[idx(r1.state, at2.x, at2.y)] = { terrain: 'plain', cityId: null };
-  const avenger = place(r1.state, 'B', 'militia', at2.x, at2.y);
-  r1.state.current = 'B';
-
-  const r2 = applyAction(r1.state, { type: 'SIEGE', unitId: avenger.id, cityId: back.id });
-  assert.ok(r2.ok);
-  assert.equal(cityById(r2.state, city.id)?.owner, 'B', 'B 应该把城抢回来');
-  assert.equal(r2.state.firstCityLost, 'B', '抢回来也不改写"谁先丢的"——加成跟着人走，不跟着城走');
+  // 入驻接管之后，"谁先丢城"这条记录也不该被改写
+  const push = r1.state.units.find((u) => u.id === cav.id);
+  assert.ok(push, '攻城那只兵应该还在');
+  push.moved = false;
+  push.acted = false;
+  const move = applyAction(r1.state, {
+    type: 'MOVE',
+    unitId: push.id,
+    x: city.x,
+    y: city.y,
+  });
+  assert.ok(move.ok, move.ok ? '' : `入驻失败：${move.reason}`);
+  assert.equal(cityById(move.state, city.id)?.owner, 'A', '入驻之后才易主');
+  assert.equal(move.state.firstCityLost, 'B', '接管不改写"谁先丢的"——加成跟着人走，不跟着城走');
 });
 
 console.log('\n血战扩展');
@@ -2235,7 +2332,7 @@ test('船只能从临水城市下水', () => {
   );
 });
 
-test('架桥：水面变桥面，友军能过，不能停在桥上', () => {
+test('架桥：水面变桥面，友军能过，也能停在桥上', () => {
   const s = fresh();
   const spot = waterWithBank(s);
   assert.ok(spot, '需要一块水');
@@ -2262,13 +2359,25 @@ test('架桥：水面变桥面，友军能过，不能停在桥上', () => {
     '水格应该变成桥面',
   );
 
-  // 桥格可通行但站不住（上面有桥本身）
+  // 桥格既能过，也能停：桥是地面设施，人可以站在上面。
+  // 以前这里断言"停不下来"，结果一条桥修好之后只能穿过去——
+  // 守桥、堵桥、在桥上换气全都做不了，桥的价值被砍掉一半。
   const crosser = place(r.state, 'A', 'militia', spot.land.x, spot.land.y);
   const reach = reachableTiles(r.state, crosser);
   assert.ok(
-    !reach.has(idx(r.state, spot.water.x, spot.water.y)),
-    '桥上有建筑，不能停在上面',
+    reach.has(idx(r.state, spot.water.x, spot.water.y)),
+    '桥面应该可以停留',
   );
+
+  // 站上去之后：这格在 unitAt 眼里是"人"，不是桥
+  const moved = applyAction(r.state, {
+    type: 'MOVE',
+    unitId: crosser.id,
+    x: spot.water.x,
+    y: spot.water.y,
+  });
+  assert.ok(moved.ok, moved.ok ? '' : `上桥失败：${moved.reason}`);
+  assert.equal(unitAt(moved.state, spot.water.x, spot.water.y)?.id, crosser.id, 'unitAt 应该返回站在桥上的人');
 });
 
 test('桥是双向的：东西两岸互相都过得去', () => {
@@ -2300,7 +2409,8 @@ test('船能从桥底下过，桥不挡水路', () => {
   const boat = place(cur, 'A', 'boat', 8, 6);
   const reach = reachableTiles(cur, boat);
   assert.ok(reach.has(idx(cur, 8, 9)), '桥在 (8,7)，船应该能顺流穿过去');
-  assert.ok(!reach.has(idx(cur, 8, 7)), '桥占着那一格，船停不下来');
+  // 桥下也能停船：那一格地形还是水面，桥只是架在上面
+  assert.ok(reach.has(idx(cur, 8, 7)), '船可以停在桥下');
 });
 
 test('桥会被打掉，打掉之后变回水面', () => {
@@ -3594,48 +3704,51 @@ test('两档 AI 的决策都还是确定性的', () => {
 
 console.log('\n接续架桥 / 城陷冷却 / 采购权重');
 
-test('刚攻陷的城市当回合不能产兵，下一回合恢复', () => {
+test('刚接管（包括入驻废墟）的城市当回合不能产兵，下一回合恢复', () => {
   const s = fresh({ startEra: 2, size: 16 }, 7788);
-  assert.ok(citiesOf(s, 'B').length >= 2, '这局得让 B 有两座城，不然攻下一座就直接结束');
+  assert.ok(citiesOf(s, 'B').length >= 2, '这局得让 B 有两座城，不然打下一座就直接结束');
   s.units = s.units.filter((u) => u.owner !== 'B');
   const city = citiesOf(s, 'B')[0];
   assert.ok(city);
-  // 城门只剩 1 点耐久，长弓隔着两格一箭拿下
   city.hp = 1;
   const spot = { x: city.x - 2, y: city.y };
   s.tiles[idx(s, spot.x, spot.y)].terrain = 'plain';
   const bow = place(s, 'A', 'longbow', spot.x, spot.y);
+  // 再放一只贴城的步兵，负责破城之后走进去接管
+  const foot = place(s, 'A', 'militia', city.x + city.size, city.y);
+  s.tiles[idx(s, city.x + city.size, city.y)].terrain = 'plain';
   s.current = 'A';
   s.players.A.gold = 900;
   refreshMemory(s);
 
   const at = s.turn;
-  // applyAction 会先深拷贝一份状态再在里面改，所以断言要看它返回的那份，
-  // 手里这个 city 变量还指着改动前的老对象。
   const hit = applyAction(s, { type: 'SIEGE', unitId: bow.id, cityId: city.id });
   assert.ok(hit.ok, `攻城应该成立：${!hit.ok ? hit.reason : ''}`);
   let st = hit.state;
+  assert.equal(st.cities.find((c) => c.id === city.id)?.ruined, true, '破城之后是废墟');
+
+  const move = applyAction(st, { type: 'MOVE', unitId: foot.id, x: city.x, y: city.y });
+  assert.ok(move.ok, move.ok ? '' : `入驻失败：${move.reason}`);
+  st = move.state;
   const taken = st.cities.find((c) => c.id === city.id);
   assert.ok(taken);
-  assert.equal(taken.owner, 'A', '城应该易主了');
-  assert.equal(taken.capturedTurn, at, '要记下是被哪一回合打下来的');
+  assert.equal(taken.owner, 'A', '入驻之后才易主');
+  assert.equal(taken.capturedTurn, at, '要记下是被哪一回合接管的');
 
   const blocked = applyAction(st, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
-  assert.ok(!blocked.ok, '刚打下来的城当回合不该能出兵');
-  assert.ok(blocked.reason.includes('刚被打下来'), `提示要写清楚：${blocked.reason}`);
+  assert.equal(blocked.ok, false, '当回合不能出兵');
 
-  // 转一圈回到 A：冷却应该只持续"当回合"
-  const e1 = applyAction(st, { type: 'END_TURN' });
-  assert.ok(e1.ok);
-  st = e1.state;
-  const e2 = applyAction(st, { type: 'END_TURN' });
-  assert.ok(e2.ok);
-  st = e2.state;
-  assert.equal(st.current, 'A');
-  st.players.A.gold = 900;
-  const ok = applyAction(st, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
-  assert.ok(ok.ok, `下一回合该恢复生产：${!ok.ok ? ok.reason : ''}`);
+  // 过一回合就恢复生产
+  const next = applyAction(st, { type: 'END_TURN' });
+  assert.ok(next.ok);
+  const again = applyAction({ ...next.state, current: 'A' }, {
+    type: 'RECRUIT',
+    cityId: city.id,
+    unitType: 'militia',
+  });
+  assert.ok(again.ok, again.ok ? '' : `下一回合应该能产兵：${again.reason}`);
 });
+
 
 test('桥能沿着已经铺好的桥面往河心接，但不能斜着接', () => {
   const s = fresh({ startEra: 1, size: 16 }, 5544);

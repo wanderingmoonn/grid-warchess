@@ -236,6 +236,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     maxHp: 45,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 夯土城墙：美索不达米亚到先秦的城垣做法，一层层夯出来的土墙。
@@ -253,6 +254,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     maxHp: 75,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
 
   // ---- 建造与水军 ----
@@ -461,6 +463,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     maxHp: 80,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 掘城兵：负责把城墙/主楼/寨垒立起来（中世纪 sapper 的本义就是挖地道）
@@ -666,6 +669,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 50,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 土垒胸墙：沃邦之前的野战筑城做法，夯土加木排，专门用来吃炮弹。
@@ -682,6 +686,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 110,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 军需官：火药时代军队规模爆炸，后勤本身成了兵种
@@ -913,6 +918,7 @@ const INDUSTRY: UnitTypeDef[] = [
     maxHp: 40,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 混凝土胸墙：钢筋水泥浇筑的固定工事，一战西线战壕的"硬边"。
@@ -929,6 +935,7 @@ const INDUSTRY: UnitTypeDef[] = [
     maxHp: 150,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 钢厂：工业时代的经济建筑，站在城里最赚
@@ -1122,6 +1129,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 70,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 混凝土掩体墙：城墙线第五环。到这个时代它已经变成"纯粹的路障"——
@@ -1138,6 +1146,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 200,
     range: 1,
     vision: 1,
+    obstacle: true,
   },
   {
     // 机枪地堡：混凝土 + 重机枪，现代防线的核心

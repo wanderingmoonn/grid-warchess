@@ -199,6 +199,55 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+
+/* 放大之后：容器变成可滚动的视口，棋盘按像素撑开。
+   flex 的居中在溢出时会把左上角裁掉（经典问题），所以放大时切成 block 布局。 */
+.board-wrap.zoomed {
+  display: block;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------- 缩放条 ---------- */
+.zoom-bar {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 6;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.board-wrap:hover .zoom-bar,
+.zoom-bar:focus-within {
+  opacity: 1;
+}
+
+.zoom-btn {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 110, 92, 0.35);
+  background: rgba(252, 250, 244, 0.92);
+  color: #4a463d;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+
+.zoom-btn:hover {
+  background: #fffdf6;
+  border-color: rgba(120, 110, 92, 0.6);
+}
+
+.zoom-btn:active {
+  transform: translateY(1px);
 }
 
 /* ---------- 棋盘 ---------- */
@@ -221,6 +270,12 @@ body {
     0 1px 0 rgba(255, 255, 255, 0.6) inset,
     0 8px 28px rgba(60, 50, 30, 0.14);
   user-select: none;
+}
+
+/* 放大时不受容器宽度约束：让元素真的比容器大，由外层滚动容器吃掉 */
+.board.zoomed {
+  max-width: none;
+  flex: none;
 }
 
 .tiles {
@@ -443,6 +498,20 @@ body {
 
 .city-block.selected {
   box-shadow: 0 0 0 3px rgba(224, 163, 60, 0.9);
+}
+
+/* 废墟：城市被打空但还没被接管。灰掉、去掉血条，只留"待接管"三个字 */
+.city-block.ruined {
+  filter: grayscale(0.75) brightness(0.92);
+}
+.city-block.ruined .city-plate {
+  border-style: dashed;
+}
+.city-ruin {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: #8a2b22;
+  white-space: nowrap;
 }
 
 .city-plate {
@@ -743,6 +812,13 @@ body {
   color: var(--b);
 }
 
+/* 观战：中性灰，不站任何一边 */
+.turn-badge.watching {
+  background: #efece4;
+  border-color: rgba(110, 104, 92, 0.35);
+  color: #6b6558;
+}
+
 /* 单位信息 */
 .info-row {
   display: flex;
@@ -985,6 +1061,24 @@ body {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
+}
+
+/* 结束回合下面那排：撤回 / 认输 */
+.side-actions {
+  display: flex;
+  gap: 8px;
+}
+.side-actions .btn {
+  flex: 1;
+}
+/* "危险但不显眼"：认输和拆除都不可逆，用红字提示，但不做成实心红按钮，
+   免得误点——这两个动作都是要拦一下的 */
+.btn-quiet-danger {
+  color: var(--b);
+  border-color: rgba(184, 67, 58, 0.35);
+}
+.btn-quiet-danger:hover:not(:disabled) {
+  background: rgba(184, 67, 58, 0.08);
 }
 
 .btn {

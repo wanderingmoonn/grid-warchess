@@ -37,6 +37,7 @@ import { createMatch, DEFAULT_CONFIG, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
+import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
@@ -74,13 +75,21 @@ appEl.innerHTML = `
     <header class="topbar" id="topbar"></header>
     <div class="commander-bar" id="commander" hidden></div>
     <div class="main">
-      <div class="board-wrap"><div class="board" id="board"></div></div>
+      <div class="board-wrap" id="board-wrap">
+        <div class="board" id="board"></div>
+        <div class="zoom-bar" id="zoom-bar">
+          <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">适应</button>
+          <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
+          <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
+        </div>
+      </div>
       <aside class="side" id="side"></aside>
     </div>
   </div>
 `;
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
+const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
@@ -91,6 +100,23 @@ topbarEl.innerHTML = topbarShell();
 
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
+
+/**
+ * 撤回栈：每一步成功的操作之前，把旧 state 存进来。
+ *
+ * 只在本回合、只有自己一个人的局里有效——联机对局一提交就已经推到对面了，
+ * 撤回等于改历史，两边会直接对不上。跨回合也不给撤（上一回合的账已经结了）。
+ *
+ * 存的是 state 的**引用**而不是克隆：applyAction 内部本来就 structuredClone 过，
+ * 旧对象不会再被修改，留着引用是安全的，也省掉每步一次深拷贝。
+ */
+let undoStack: GameState[] = [];
+const UNDO_LIMIT = 30;
+
+/** 回合提示音的音量，存在 localStorage 里 */
+let chimeVolume = loadChimeVolume();
+/** 上一次渲染时的行动方：用来判断"回合是不是换人了" */
+let lastTurnPlayer: PlayerId | null = null;
 let selectedCityId: string | null = null;
 /** 选中的己方军营（点开来当产兵面板用） */
 let selectedCampId: string | null = null;
@@ -122,8 +148,15 @@ function aiBusy(): boolean {
   return isAiSide(state, state.current) && !aiPaused;
 }
 
+/** 观战席位：坐在房间里但没有座位，只能看 */
+function watching(): boolean {
+  return room?.spectator === true;
+}
+
 /** 双 AI 观战：谁都还没"入座"，给全图视角，否则看的是某一方的迷雾 */
 function spectating(): boolean {
+  // 房间观战位是同一回事：没有"我方"，迷雾就没有意义
+  if (watching()) return true;
   return isAiSide(state, 'A') && isAiSide(state, 'B');
 }
 
@@ -175,6 +208,9 @@ function resumeRoom(): boolean {
 
 /** 视角玩家：联机时永远是自己那一方，而不是"现在轮到谁" */
 function me(): PlayerId {
+  // 观战位没有"我的一方"，给谁都一样——渲染走的是全图，
+  // 面板里所有"我的"判断都被 spectator 挡住了。
+  if (watching()) return 'A';
   return room ? room.seat : state.current;
 }
 
@@ -185,7 +221,10 @@ function currentRoom(): RoomSeat | null {
 
 /** 联机时轮到我操作吗（本机对局恒为 true） */
 function myTurn(): boolean {
-  return !room || state.current === room.seat;
+  if (!room) return true;
+  // 观战位永远"不是我的回合"：这一个判断同时挡住了走子、产兵、提交、认输
+  if (room.spectator) return false;
+  return state.current === room.seat;
 }
 
 function render(): void {
@@ -215,12 +254,29 @@ function render(): void {
     selectedCityId,
     selectedCampId,
     selectedTile,
+    canUndo: undoStack.length > 0 && !room,
+    chimeVolume,
+    spectator: watching(),
   });
 
   renderCommander();
 
+  // 换人了就"叮"一声：手机放在桌上等对手的人，靠这一声回神。
+  // AI 之间互打不响（会变成每秒一声），观战也不响。
+  if (
+    lastTurnPlayer !== null &&
+    lastTurnPlayer !== state.current &&
+    !state.winner &&
+    !isAiSide(state, state.current) &&
+    !spectating()
+  ) {
+    playChime(chimeVolume);
+  }
+  lastTurnPlayer = state.current;
+
   updateTopbar(topbarEl, {
     fog: state.fog,
+    blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
     current: state.current,
     currentName: state.players[state.current].name,
@@ -231,10 +287,24 @@ function render(): void {
     speedName: AI_SPEED_NAME[aiSpeed] ?? '快',
     roomCode: room?.code ?? null,
     waitingForPeer: !myTurn() && !state.winner,
+    spectator: watching(),
   });
   syncTopbarScroll();
   fitBoard();
 }
+
+/**
+ * 缩放档位。
+ *
+ * 32×32 的图上"适应屏幕"意味着每格只剩二十来像素，棋子上的字认得出、位置看不清。
+ * 放大不是把画布拉伸（那样只是糊），而是**把棋盘元素本身变宽**：
+ * 格子和棋子全是百分比定位，宽度一变，格子就真的变大了；
+ * 多出来的部分由外层的滚动容器吃掉。
+ */
+const ZOOM_STEPS = [1, 1.5, 2, 3];
+let boardZoom = 1;
+/** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
+let baseBoardSize = 0;
 
 /**
  * 把棋盘压进容器。
@@ -248,15 +318,17 @@ function render(): void {
  * 量的是"容器宽"和"视口高减去实际工具栏高度"：
  * 容器高度在窄屏下是由内容撑出来的，直接量它自己会绕成环
  * （棋盘变高 → 容器变高 → 棋盘更高）。
+ *
+ * 宽度用 offsetWidth 而不是 clientWidth：放大之后容器会长出滚动条，
+ * clientWidth 会跟着少掉一条滚动条的宽度，于是"放大→基准变小→格子变小"，
+ * 每帧都在抖。offsetWidth 含滚动条，数字是稳的。
  */
 function fitBoard(): void {
-  const wrap = boardEl.parentElement;
-  if (!wrap) return;
-  const width = wrap.clientWidth;
+  const width = boardWrapEl.offsetWidth;
   if (width <= 0) return;
 
   const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
-  const box = wrap.parentElement;
+  const box = boardWrapEl.parentElement;
   const cs = box ? window.getComputedStyle(box) : null;
   const padY = cs
     ? parseFloat(cs.paddingTop || '0') + parseFloat(cs.paddingBottom || '0')
@@ -266,9 +338,44 @@ function fitBoard(): void {
   const viewportH = appEl.clientHeight || window.innerHeight;
   const availH = viewportH - chrome - padY;
   // 160 是地板：窗口被压到极窄时也别让棋盘缩成一个点
-  const size = Math.max(160, Math.round(Math.min(width, availH)));
-  boardEl.style.width = `${size}px`;
-  boardEl.style.height = `${size}px`;
+  baseBoardSize = Math.max(160, Math.round(Math.min(width, availH)));
+
+  const px = Math.round(baseBoardSize * boardZoom);
+  boardEl.style.width = `${px}px`;
+  boardEl.style.height = `${px}px`;
+  boardEl.classList.toggle('zoomed', boardZoom > 1);
+  boardWrapEl.classList.toggle('zoomed', boardZoom > 1);
+
+  const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
+  if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
+}
+
+/**
+ * 换一档缩放。
+ *
+ * 放大之后把视口挪回中间：32×32 上放大的目的通常是"看中间那片战场"，
+ * 停在左上角等于放大了一个空的角落。
+ */
+function setZoom(next: number): void {
+  const steps = ZOOM_STEPS;
+  const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
+  if (clamped === boardZoom) return;
+  boardZoom = clamped;
+  // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
+  render();
+  if (boardZoom > 1) {
+    boardWrapEl.scrollLeft = Math.max(0, (boardWrapEl.scrollWidth - boardWrapEl.clientWidth) / 2);
+    boardWrapEl.scrollTop = Math.max(0, (boardWrapEl.scrollHeight - boardWrapEl.clientHeight) / 2);
+  } else {
+    boardWrapEl.scrollLeft = 0;
+    boardWrapEl.scrollTop = 0;
+  }
+}
+
+function zoomStep(dir: 1 | -1): void {
+  const i = ZOOM_STEPS.indexOf(boardZoom);
+  const at = i < 0 ? 0 : i;
+  setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, at + dir))]!);
 }
 
 /**
@@ -298,7 +405,7 @@ function refreshSelection(): void {
     siege = [];
     return;
   }
-  if (unit.owner !== me()) {
+  if (unit.owner !== me() || watching()) {
     reach = [];
     targets = [];
     siege = [];
@@ -458,7 +565,7 @@ function dispatch(action: Action): boolean {
   }
   // 联机里轮到对方：能看棋盘，但不能替他走
   if (!myTurn()) {
-    toast('等对方提交这一回合');
+    toast(watching() ? '观战位只能看，不能操作' : '等对方提交这一回合');
     return false;
   }
 
@@ -468,10 +575,14 @@ function dispatch(action: Action): boolean {
     toast(result.reason);
     return false;
   }
+  undoStack.push(state);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
+    // 回合结束了，这个回合的走子就不许再撤——账已经结了
+    undoStack = [];
     clearSelection();
     render();
     if (room) {
@@ -498,6 +609,40 @@ function dispatch(action: Action): boolean {
   return true;
 }
 
+/**
+ * 撤回上一步。
+ *
+ * 能撤的范围是刻意收窄的：联机不行、指挥官模式不行、AI 正在走不行、跨回合不行。
+ * 这四条都是"撤了会和真实状态对不上"的情况，不是保守。
+ */
+function undoLast(): void {
+  if (room) {
+    toast('联机对局不能撤回：提交过的回合收不回来');
+    return;
+  }
+  if (state.config.commanderMode) {
+    toast('指挥官模式下走位归 AI，撤不了');
+    return;
+  }
+  if (aiBusy()) {
+    toast('AI 正在行动，等它走完');
+    return;
+  }
+  if (!myTurn()) {
+    toast('等对方提交这一回合');
+    return;
+  }
+  const prev = undoStack.pop();
+  if (!prev) {
+    toast('没有可以撤回的操作');
+    return;
+  }
+  state = prev;
+  saveMatch(state);
+  clearSelection();
+  render();
+}
+
 function onBoardClick(e: Event): void {
   if (handoffOpen || state.winner || aiBusy()) return;
 
@@ -511,10 +656,26 @@ function onBoardClick(e: Event): void {
   // 没理由要求轮到自己才能看。面板那边对非己方单位一律不给按钮。
   if (clickedUnitId) {
     const preview = viewNow().state.units.find((u) => u.id === clickedUnitId);
-    if (preview && preview.owner !== me()) {
+    if (preview && (watching() || preview.owner !== me())) {
       selectUnit(preview);
       return;
     }
+  }
+
+  // 观战位：两边都不归我，所以"点单位看属性"要对双方都成立；
+  // 城市和地形照样能点开看，但一律不给按钮。
+  if (watching()) {
+    if (coords) {
+      const city = cityAt(state, coords.x, coords.y);
+      if (city) {
+        selectCity(city.id);
+        return;
+      }
+      clearSelection();
+      selectedTile = coords;
+      render();
+    }
+    return;
   }
 
   // 指挥官模式：这一方的走位与开火归 AI，棋盘只看不碰
@@ -628,6 +789,50 @@ function handleAction(act: string, el: HTMLElement): void {
       dispatch({ type: 'END_TURN' });
       return;
 
+    case 'zoom-in':
+      zoomStep(1);
+      return;
+
+    case 'zoom-out':
+      zoomStep(-1);
+      return;
+
+    case 'zoom-fit':
+      setZoom(1);
+      return;
+
+    case 'undo':
+      undoLast();
+      return;
+
+    case 'chime':
+      chimeVolume = nextChimeVolume(chimeVolume);
+      saveChimeVolume(chimeVolume);
+      // 点一下顺手试听当前档位（音量 0 时 playChime 自己会跳过）
+      playChime(chimeVolume);
+      render();
+      return;
+
+    case 'surrender': {
+      // 认输是不可逆的，必须问一句
+      if (!window.confirm('确认认输？这一局会直接判负，且不能撤回。')) return;
+      dispatch({ type: 'SURRENDER' });
+      return;
+    }
+
+    case 'disband': {
+      if (!selectedId) return;
+      const u = state.units.find((x) => x.id === selectedId);
+      if (!u) return;
+      const def = utype(state, u.type);
+      if (!window.confirm(`确认拆除「${def.name}」？回收约 ${Math.round(recruitCost(state, u.owner, def) * 0.4)} 金。`)) return;
+      if (dispatch({ type: 'DISBAND', unitId: selectedId })) {
+        selectedId = null;
+        render();
+      }
+      return;
+    }
+
     case 'recruit': {
       const type = el.dataset.type;
       if (!type) return;
@@ -687,6 +892,12 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'toggle-fog': {
+      // 「浓雾蔽野」把"地图不可见"当成规则本身，这里必须拦住：
+      // 能一键关掉的话，这个扩展就只是个大号的显示选项
+      if (state.config.expansionIds.includes('blackout')) {
+        toast('「浓雾蔽野」下迷雾锁定开启，不能关闭');
+        return;
+      }
       state.fog = !state.fog;
       if (state.fog) refreshMemory(state);
       saveMatch(state);
@@ -697,7 +908,11 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'toggle-ai': {
       if (room) {
-        toast('联机房间里两边各走各的，AI 托管用不了');
+        toast(
+          watching()
+            ? '观战位不能替任何一方开 AI'
+            : '联机房间里两边各走各的，AI 托管用不了',
+        );
         return;
       }
       const p = state.current;
@@ -752,6 +967,7 @@ function handleAction(act: string, el: HTMLElement): void {
         currentState: () => state,
         room: () => room,
         enter: (seat, snapshot) => applyRoom(seat, snapshot),
+        watch: (code, snapshot) => watchRoom(code, snapshot),
         leave: () => leaveRoom(),
       });
       return;
@@ -784,6 +1000,7 @@ function handleAction(act: string, el: HTMLElement): void {
 
       state = imported;
       detachRoom(); // 换了一局，房间就对不上了
+      boardZoom = 1; // 换局可能换尺寸，缩放档位不能跟着上一局走
       clearSelection();
       saveMatch(state);
       render();
@@ -798,6 +1015,7 @@ function handleAction(act: string, el: HTMLElement): void {
         if (!result) return;
         state = createMatch(result.config, result.seed, loadCustomUnits());
         detachRoom();
+        boardZoom = 1;
         clearSelection();
         saveMatch(state);
         render();
@@ -1193,12 +1411,13 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
 }
 
 function leaveRoom(): void {
+  const wasWatching = watching();
   detachRoom();
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   clearSelection();
   render();
-  toast('已退出房间，回到本机对局');
+  toast(wasWatching ? '已退出观战，回到本机对局' : '已退出房间，回到本机对局');
 }
 
 /** 只断开房间、不载入本机对局：换局或导入存档时用 */
@@ -1236,9 +1455,12 @@ function startRoomPolling(): void {
 /**
  * 定时问一句"对面走完没有"。
  *
- * 只在两个条件同时成立时才把云端状态装进来：
+ * 参赛者：只在两个条件同时成立时才把云端状态装进来：
  *   1. 云端说轮到我了（否则拉回来也没用）；
  *   2. 我这边没有未提交的草稿（否则会把人刚摆好的兵清掉）。
+ *
+ * 观战位没有"轮到我"这回事，所以只要有新东西就往下拉：
+ * 回合变了、换人了、或者分出胜负了（认输不会推进回合，只看 turn 会漏）。
  */
 async function pollRoom(): Promise<void> {
   const seat = room;
@@ -1249,6 +1471,21 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+
+    if (seat.spectator) {
+      const changed =
+        snapshot.turn !== state.turn ||
+        snapshot.current !== state.current ||
+        !!snapshot.state.winner !== !!state.winner;
+      if (!changed) return;
+      const fog = state.fog;
+      state = snapshot.state;
+      state.fog = fog;
+      saveMatch(state);
+      render();
+      return;
+    }
+
     if (snapshot.current !== seat.seat) return;
     if (snapshot.turn === state.turn) return;
     if (dirty) {
@@ -1273,6 +1510,8 @@ async function pollRoom(): Promise<void> {
  *
  * 有本机的席位记录就直接回到原席位；没有就坐空位——
  * 也就是说"把链接发给同学"这一步，他点开就已经坐下了，不用再填代码。
+ * 两个座位都满了就自动转观战：这条链接本来就是"来看我这局"，
+ * 弹一句"席位满了"把人挡在门外，是最没必要的一次拒绝。
  */
 async function enterRoomFromUrl(code: string): Promise<void> {
   try {
@@ -1282,6 +1521,11 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       return;
     }
     const mine = loadSeat(code);
+    if (mine?.spectator) {
+      applyRoom({ code, seat: 'A', token: mine.token, spectator: true }, snapshot);
+      toast(`回到房间 ${code} 的观战视角`);
+      return;
+    }
     const token = mine?.token ?? newToken();
     const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
     for (const seat of order) {
@@ -1292,10 +1536,16 @@ async function enterRoomFromUrl(code: string): Promise<void> {
         return;
       }
     }
-    toast('这局两个席位都有人了。换设备请用原来那条邀请链接，或让对方把席位标记清掉');
+    applyRoom({ code, seat: 'A', token, spectator: true }, snapshot);
+    toast(`两个席位都有人了，已切到观战视角（全图）`);
   } catch (err) {
     toast(err instanceof Error ? err.message : '进入房间失败');
   }
+}
+
+/** 以观战身份进入一个房间：不占座、不写云端，只看 */
+function watchRoom(code: string, snapshot: RoomSnapshot): void {
+  applyRoom({ code, seat: 'A', token: newToken(), spectator: true }, snapshot);
 }
 
 // ---------- 交接遮罩 ----------

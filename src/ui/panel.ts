@@ -23,6 +23,7 @@ import {
   utype,
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import { chimeLabel } from './sound.ts';
 
 export interface PanelInput {
   view: PlayerView;
@@ -33,20 +34,35 @@ export interface PanelInput {
   selectedCampId: string | null;
   /** 点空地时选中的地形，用来显示地形说明 */
   selectedTile: { x: number; y: number } | null;
+  /** 撤回栈里还有没有东西（联机局永远是 false）；不传按 false 处理 */
+  canUndo?: boolean;
+  /** 回合提示音的音量（0~1），按钮上直接显示档位 */
+  chimeVolume?: number;
+  /**
+   * 观战位：两边都不归我。
+   *
+   * 只有这一条开关是不够的——必须**同时**让 `mine` 全线失效，
+   * 否则 me()='A' 会让 A 方的单位长出一整排"产兵/建造/拆除"按钮，
+   * 点下去再被规则挡住，体验上等于一个坏掉的界面。
+   */
+  spectator?: boolean;
 }
 
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const { view, me } = input;
   const s = view.state;
+  const spectator = input.spectator === true;
   const other: PlayerId = me === 'A' ? 'B' : 'A';
-  const myTurn = s.current === me && !s.winner;
+  const myTurn = !spectator && s.current === me && !s.winner;
 
   const myCities = s.cities.filter((c) => c.owner === me).length;
   const otherCities = s.cities.filter((c) => c.owner === other).length;
 
   const turnBadge = s.winner
     ? `<span class="turn-badge">对局结束</span>`
-    : `<span class="turn-badge active-${s.current}">
+    : spectator
+      ? `<span class="turn-badge watching">观战中 · 全图视角</span>`
+      : `<span class="turn-badge active-${s.current}">
          ${s.current === me ? '轮到你行动' : `等待 ${s.players[s.current].name}`}
        </span>`;
 
@@ -90,10 +106,19 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
 
     <div class="side-footer">
       <button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-        ${myTurn ? '结束行动，交给对方' : '等待对方行动中'}
+        ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
       </button>
+      <div class="side-actions">
+        <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
+        <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>认输</button>
+      </div>
+      <button class="btn btn-sm btn-block" data-act="chime">${chimeLabel(input.chimeVolume ?? 0.6)}</button>
       <div class="hint" style="text-align:center">
-        每一步都会自动存档，随时可以关掉页面
+        ${
+          spectator
+            ? '这是全图视角：双方的伏兵和金币都看得见。别在两个人还在打的时候念出来。'
+            : '每一步都会自动存档，随时可以关掉页面'
+        }
       </div>
     </div>
   `;
@@ -136,9 +161,12 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   if (selectedUnit) {
     const def = utype(s, selectedUnit.type);
     const ratio = selectedUnit.hp / def.maxHp;
-    const mine = selectedUnit.owner === me;
+    const spectator = input.spectator === true;
+    const mine = !spectator && selectedUnit.owner === me;
     const status: string[] = [];
-    if (mine) {
+    if (spectator) {
+      status.push('观战中 · 仅查看');
+    } else if (mine) {
       if (!selectedUnit.moved) status.push('可移动');
       if (!selectedUnit.acted) status.push('可攻击');
       if (selectedUnit.moved && selectedUnit.acted) status.push('本回合已行动完毕');
@@ -237,6 +265,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
+      ${
+        mine
+          ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
+               拆除（回收 ${Math.round(recruitCost(s, me, def) * 0.4)} 金）
+             </button>`
+          : ''
+      }
     `;
   }
 
@@ -257,7 +292,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const city = selectedCityId ? cityById(s, selectedCityId) : undefined;
   if (!city) return '';
 
-  const mine = city.owner === me;
+  const mine = !input.spectator && city.owner === me;
   const ratio = city.hp / city.maxHp;
   const era = eraDef(city.era);
   const garrison = unitsOf(s, city.owner).filter((u) =>
@@ -371,7 +406,11 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
              }
            </div>`
         : `<div class="hint" style="margin-top:12px">
-             这是敌方城市（${era.name}时代），耐久打空才能易主。攻城伤害 = 你的攻击 − ${city.armor}。
+             ${
+               input.spectator
+                 ? `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久 ${city.hp} / ${city.maxHp}。观战不给操作。`
+                 : `这是敌方城市（${era.name}时代），耐久打空才能易主。攻城伤害 = 你的攻击 − ${city.armor}。`
+             }
              <br />攻陷后会连同它的时代一起接收。
            </div>`
     }
@@ -426,7 +465,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   if (!camp) return '';
 
   const def = utype(s, camp.type);
-  const mine = camp.owner === me;
+  const mine = !input.spectator && camp.owner === me;
   const ratio = camp.hp / def.maxHp;
   const gold = s.players[me].gold;
 
@@ -555,6 +594,8 @@ function escapeHtml(t: string): string {
  */
 export interface TopbarState {
   fog: boolean;
+  /** 勾了「浓雾蔽野」：迷雾锁定开启，顶栏那个开关要禁用 */
+  blackout: boolean;
   turn: number;
   current: PlayerId;
   currentName: string;
@@ -570,6 +611,8 @@ export interface TopbarState {
   roomCode: string | null;
   /** 联机里轮到对方了，正在等他提交 */
   waitingForPeer: boolean;
+  /** 观战位：既不是等对方，也不是轮到我 */
+  spectator?: boolean;
 }
 
 export function topbarShell(): string {
@@ -608,15 +651,17 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
 
   const who = ref('who');
   if (who) {
-    who.textContent = s.waitingForPeer
-      ? '等待对方提交'
-      : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
+    who.textContent = s.spectator
+      ? '观战 · 全图'
+      : s.waitingForPeer
+        ? '等待对方提交'
+        : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
   }
 
   const room = ref('room');
   if (room) {
     room.hidden = !s.roomCode;
-    if (s.roomCode) room.textContent = `房间 ${s.roomCode}`;
+    if (s.roomCode) room.textContent = `${s.spectator ? '观战' : '房间'} ${s.roomCode}`;
   }
 
   const pause = ref('pause');
@@ -638,7 +683,12 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
   }
 
   const fog = ref('fog');
-  if (fog) fog.textContent = `迷雾：${s.fog ? '开' : '关'}`;
+  if (fog) {
+    // 浓雾扩展下不给关：这个扩展的全部意义就是"地图本身看不见"，
+    // 允许关掉雾等于让它失效
+    fog.textContent = s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`;
+    fog.classList.toggle('is-locked', s.blackout);
+  }
 }
 
 export const TERRAIN_NAMES = CONFIG.terrainName;

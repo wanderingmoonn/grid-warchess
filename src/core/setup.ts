@@ -20,8 +20,14 @@ const CHAR_TO_TERRAIN: Record<string, Terrain> = {
   '^': 'mountain',
 };
 
-/** 开局界面里可选的棋盘尺寸 */
-export const BOARD_SIZES = [12, 16, 20];
+/**
+ * 开局界面里可选的棋盘尺寸
+ *
+ * 32 是"长期局"档：五个时代全开、打到现代也不嫌挤，但一格只有二十来像素，
+ * 所以界面上配了缩放（见 main.ts 的 fitBoard / zoom）。
+ * 它不跟任何时代绑定——20×20 仍是火药及以后的标准图。
+ */
+export const BOARD_SIZES = [12, 16, 20, 32];
 
 /**
  * 标准对局的默认组合：古典时代 + 12×12。

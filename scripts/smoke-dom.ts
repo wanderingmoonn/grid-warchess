@@ -473,6 +473,25 @@ check('新对局按选中的尺寸和扩展生成', () => {
   assert.ok(html.includes('老兵'), '侧栏应该显示已启用的扩展');
 });
 
+await checkAsync('32×32 大地图也能开局，并带出缩放条', async () => {
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  click('[data-size="32"]');
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(doc.querySelectorAll('.tile').length, 1024, '应该变成 32×32');
+  assert.ok(doc.querySelector('[data-act="zoom-in"]'), '大地图要有放大按钮');
+
+  // 后面的用例按 20×20 的布局写的，这里换回来
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  click('[data-size="20"]');
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(doc.querySelectorAll('.tile').length, 400, '应该回到 20×20');
+});
+
 console.log('\n升级时代');
 
 check('二级时代造价远高于开局金币（防先手滚雪球）', () => {
@@ -938,6 +957,9 @@ check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方
   assert.ok(wrap && board && topbar && app, '找不到尺寸计算需要的元素');
 
   Object.defineProperty(wrap, 'clientWidth', { configurable: true, value: 900 });
+  // fitBoard 量的是 offsetWidth（含滚动条）：放大之后 clientWidth 会被滚动条吃掉一截，
+  // 用它当基准会出现"放大 → 基准变小 → 格子变小"的抖动
+  Object.defineProperty(wrap, 'offsetWidth', { configurable: true, value: 900 });
   Object.defineProperty(topbar, 'offsetHeight', { configurable: true, value: 54 });
   Object.defineProperty(app, 'clientHeight', { configurable: true, value: 700 });
 
@@ -950,6 +972,26 @@ check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方
   assert.equal(w, h, '必须还是正方形，否则格子会被拉成长方形');
   // 视口 700 是瓶颈（容器宽 900）：700 − 54 顶栏 − 0 内边距(jsdom 读不到) = 646
   assert.equal(w, 646, `应该被视口高度卡住，实际 ${w}`);
+});
+
+check('放大只撑大棋盘元素，不改基准尺寸；「适应」能回到 1×', () => {
+  const wrap = doc.querySelector<HTMLElement>('.board-wrap');
+  const board = doc.querySelector<HTMLElement>('.board');
+  assert.ok(wrap && board);
+
+  click('[data-act="zoom-in"]');
+  const zoomed = Number.parseFloat(board.style.width);
+  // 646 是上面那一步算出来的基准，1.5× 一档
+  assert.equal(zoomed, 969, `放大一档应该是 646 × 1.5，实际 ${zoomed}`);
+  assert.ok(board.classList.contains('zoomed'), '棋盘要挂上 zoomed，才会取消 max-width');
+  assert.ok(wrap.classList.contains('zoomed'), '容器要挂上 zoomed，才会变成可滚动视口');
+
+  click('[data-act="zoom-in"]');
+  assert.equal(Number.parseFloat(board.style.width), 1292, '第二档 2×');
+
+  click('[data-act="zoom-fit"]');
+  assert.equal(Number.parseFloat(board.style.width), 646, '「适应」应该回到基准尺寸');
+  assert.ok(!board.classList.contains('zoomed'), '回到 1× 就该摘掉 zoomed');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

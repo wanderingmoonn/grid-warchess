@@ -27,3 +27,7 @@ Thumbs.db
 # 平衡实验的历史产物（results/packs 里的报告要进库，其余不进）
 results/*
 !results/packs/
+
+# 跑批脚本一次性导出的实验数据（results20/ results21/ …）
+# 它们都能用 scripts/ 里的脚本按种子重跑出来，几百 KB 的 JSON 进库只是拖慢克隆
+results[0-9]*/

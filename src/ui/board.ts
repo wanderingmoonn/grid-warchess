@@ -133,6 +133,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   };
   const cityParts = s.cities.filter(cityVisible).map((city) => {
     const cls = ['city-block', `owner-${city.owner}`, `era-${city.era}`];
+    if (city.ruined) cls.push('ruined');
     if (ui.siegeTargets.includes(city.id)) cls.push('siege-target');
     if (ui.selectedCityId === city.id) cls.push('selected');
 
@@ -144,12 +145,18 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       `height:${(city.size / s.h) * 100}%`,
     ].join(';');
 
-    return `<div class="${cls.join(' ')}" data-city-id="${city.id}" style="${style}" title="${cityName(city)} · 时代 ${romanEra(city.era)} · 耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}">
+    return `<div class="${cls.join(' ')}" data-city-id="${city.id}" style="${style}" title="${cityName(city)} · 时代 ${romanEra(city.era)} · ${
+      city.ruined ? '已成废墟：派兵入驻并支付重建费才能接管' : `耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}`
+    }">
       <div class="city-plate">
         <div class="city-era">${romanEra(city.era)}</div>
         <div class="city-name">${cityName(city)}</div>
-        <div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
-        <div class="city-armor">甲 ${city.armor}</div>
+        ${
+          city.ruined
+            ? '<div class="city-ruin">废墟 · 待接管</div>'
+            : `<div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
+               <div class="city-armor">甲 ${city.armor}</div>`
+        }
       </div>
     </div>`;
   });

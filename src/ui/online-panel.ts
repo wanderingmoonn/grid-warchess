@@ -28,6 +28,8 @@ export interface OnlineHost {
   room(): RoomSeat | null;
   /** 进入房间：把云端那一局装进本地 */
   enter(seat: RoomSeat, snapshot: RoomSnapshot): void;
+  /** 以观战身份进入：不占座、不写云端，只看（两个席位都有人的时候用） */
+  watch(code: string, snapshot: RoomSnapshot): void;
   /** 退出房间，回到本机对局 */
   leave(): void;
 }
@@ -97,8 +99,12 @@ export function openOnlinePanel(host: OnlineHost): void {
                 <input class="text-input room-input" data-field="code" placeholder="六个字符，例如 K7M2QP"
                   value="${escapeHtml(codeInput)}" maxlength="12" autocapitalize="characters" spellcheck="false" />
                 <button class="btn" data-act="join" ${busy ? 'disabled' : ''}>进入</button>
+                <button class="btn" data-act="watch" ${busy ? 'disabled' : ''}>只看</button>
               </div>
-              <div class="field-hint">可以直接把整条邀请链接黏进来，代码会自己认出来。</div>
+              <div class="field-hint">
+                可以直接把整条邀请链接黏进来，代码会自己认出来。
+                「只看」不用抢座位，两个席位都满了也能进去看——给的是全图视角。
+              </div>
             </section>
 
             <section class="field">
@@ -106,6 +112,7 @@ export function openOnlinePanel(host: OnlineHost): void {
               <ul class="online-notes">
                 <li>房间码就是钥匙，谁拿到谁能进，也就只能进这一局。</li>
                 <li>对方没提交之前，看不到你这个回合的走法——你能存档、能离线、能慢慢想。</li>
+                <li>想旁观一局？用「只看」进来，不占座位，用的是全图视角。</li>
                 <li>战争迷雾在联机里是<b>界面层面</b>的约定，不是加密：存档整局存在云上，别拿它当防外挂。</li>
               </ul>
             </section>
@@ -118,14 +125,18 @@ export function openOnlinePanel(host: OnlineHost): void {
       return;
     }
 
-    const myTurn = snapshot ? snapshot.current === room.seat : false;
+    const isWatcher = room.spectator === true;
+    const myTurn = snapshot && !isWatcher ? snapshot.current === room.seat : false;
     const peer = room.seat === 'A' ? 'B' : 'A';
     const peerSeated = snapshot ? snapshot.seats[peer] !== null : false;
 
     let status = '正在读取房间状态…';
     let statusKind = '';
     if (snapshot) {
-      if (peerSeated) {
+      if (isWatcher) {
+        status = `观战中 —— 现在轮到 ${snapshot.current === 'A' ? 'A 座' : 'B 座'}（最近一次提交：${agoText(snapshot.updatedAt)}）`;
+        statusKind = 'wait';
+      } else if (peerSeated) {
         status = myTurn
           ? `轮到你 —— 对方已于 ${agoText(snapshot.updatedAt)}提交`
           : `等对方行动（他上次提交：${agoText(snapshot.updatedAt)}）`;
@@ -143,7 +154,7 @@ export function openOnlinePanel(host: OnlineHost): void {
       <div class="modal modal-narrow">
         <div class="modal-head">
           <h2>房间 ${room.code}</h2>
-          <p>你执 ${seatName(room.seat)}。</p>
+          <p>${isWatcher ? '你是观战者：不占座位，看的是全图。' : `你执 ${seatName(room.seat)}。`}</p>
         </div>
         <div class="modal-body">
           <div class="room-code">${room.code}</div>
@@ -157,12 +168,13 @@ export function openOnlinePanel(host: OnlineHost): void {
           <section class="field">
             <div class="field-label">席位</div>
             <div class="room-seats">
-              <span class="seat-chip ${room.seat === 'A' ? 'mine' : ''}">A 我方${room.seat === 'A' ? '（你）' : ''}</span>
-              <span class="seat-chip ${room.seat === 'B' ? 'mine' : ''}">B 敌方${room.seat === 'B' ? '（你）' : ''}</span>
+              <span class="seat-chip ${room.seat === 'A' && !isWatcher ? 'mine' : ''}">A 我方${room.seat === 'A' && !isWatcher ? '（你）' : ''}</span>
+              <span class="seat-chip ${room.seat === 'B' && !isWatcher ? 'mine' : ''}">B 敌方${room.seat === 'B' && !isWatcher ? '（你）' : ''}</span>
+              ${isWatcher ? '<span class="seat-chip mine">观战（你）</span>' : ''}
             </div>
             <div class="field-hint">
               ${snapshot ? (peerSeated ? '两边都坐好了。' : '对面那个席位还空着。') : ''}
-              换设备时，重新打开邀请链接就能回到你自己的席位。
+              ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '换设备时，重新打开邀请链接就能回到你自己的席位。'}
             </div>
           </section>
 
@@ -177,8 +189,8 @@ export function openOnlinePanel(host: OnlineHost): void {
         </div>
         <div class="modal-foot">
           <button class="btn" data-act="refresh">刷新状态</button>
-          <button class="btn" data-act="close">回到棋盘</button>
-          <button class="btn btn-danger" data-act="leave">退出房间</button>
+          <button class="btn" data-act="close">${isWatcher ? '去看棋盘' : '回到棋盘'}</button>
+          <button class="btn btn-danger" data-act="leave">${isWatcher ? '退出观战' : '退出房间'}</button>
         </div>
       </div>
     `;
@@ -238,9 +250,11 @@ export function openOnlinePanel(host: OnlineHost): void {
       if (!snapshotNow) {
         error = `没有找到代码为 ${code} 的房间`;
       } else {
-        // 优先回到自己原来的席位（靠本机存的令牌），否则坐空位
-        const mine = loadSeat(code);
-        const token = mine?.token ?? newToken();
+        // 优先回到自己原来的席位（靠本机存的令牌），否则坐空位。
+        // 观战记录不能拿来抢座：那条记录里的 seat 是占位用的 'A'，不是真的坐过 A。
+        const saved = loadSeat(code);
+        const mine = saved && !saved.spectator ? saved : null;
+        const token = saved?.token ?? newToken();
         const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
         let seated: PlayerId | null = null;
         for (const seat of order) {
@@ -250,12 +264,41 @@ export function openOnlinePanel(host: OnlineHost): void {
           }
         }
         if (!seated) {
-          error = '两个席位都有人了。要是你换设备，请直接用原邀请链接打开。';
-        } else {
-          host.enter({ code, seat: seated, token }, snapshotNow);
+          // 两个座位都满了——别再拦人，直接转观战
+          host.watch(code, snapshotNow);
           close();
           return;
         }
+        host.enter({ code, seat: seated, token }, snapshotNow);
+        close();
+        return;
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : '进入失败';
+    }
+    busy = false;
+    if (!closed) paint();
+  };
+
+  /** 只看：不抢座，任何房间只要存在就能进去看 */
+  const doWatch = async () => {
+    const code = normalizeCode(codeInput);
+    if (code.length < 4) {
+      error = '房间码太短了，再确认一下';
+      paint();
+      return;
+    }
+    busy = true;
+    error = '';
+    paint();
+    try {
+      const snapshotNow = await fetchRoom(code);
+      if (!snapshotNow) {
+        error = `没有找到代码为 ${code} 的房间`;
+      } else {
+        host.watch(code, snapshotNow);
+        close();
+        return;
       }
     } catch (err) {
       error = err instanceof Error ? err.message : '进入失败';
@@ -276,6 +319,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (act === 'close') close();
     if (act === 'create') void doCreate();
     if (act === 'join') void doJoin();
+    if (act === 'watch') void doWatch();
     if (act === 'refresh') void refresh();
     if (act === 'leave') {
       host.leave();
