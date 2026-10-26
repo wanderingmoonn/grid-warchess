@@ -379,6 +379,7 @@ const BEASTS: Expansion = {
       abilities: ['forest-walk'],
     },
     // 蜘蛛骑士：无视地形（能掠水、林子丘陵按 1 步）。追不上的侦察。
+    // 挂的是「跳跃」不是「飞行」——蜘蛛是跳过去，不是飞过去，名字得跟画面一致。
     {
       id: 'spider-rider',
       name: '蜘蛛骑士',
@@ -392,7 +393,7 @@ const BEASTS: Expansion = {
       maxHp: 28,
       range: 1,
       vision: 6,
-      abilities: ['fly'],
+      abilities: ['leap'],
     },
     {
       id: 'serpent-man',

@@ -307,7 +307,8 @@ check('点结束回合会弹出交接遮罩', () => {
 
 check('遮罩上写的是下一位玩家', () => {
   const text = doc.querySelector('.handoff')?.textContent ?? '';
-  assert.ok(text.includes('敌方'), `遮罩内容：${text.slice(0, 40)}`);
+  // 双方现在按颜色叫：A 是红方，B 是蓝方
+  assert.ok(text.includes('蓝方'), `遮罩内容：${text.slice(0, 40)}`);
 });
 
 check('点开始后遮罩消失，轮到对方操作', () => {
@@ -919,6 +920,43 @@ check('指挥官模式开局后出现 5 格生产序列', () => {
   assert.ok(bar && !bar.hidden, '指挥官栏应该显示');
   assert.equal(bar.querySelectorAll('select[data-slot]').length, 5, '应该有 5 格');
   assert.ok(bar.textContent?.includes('参谋部'), '标题应该是参谋部');
+});
+
+check('指挥官模式下点自己的部队能看属性，且没有可点的按钮', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true }, 20261028, {});
+  st.fog = false;
+  st.current = 'A';
+  // 挑一个真兵（不是建筑），属性卡上才有射程护甲这些数字
+  const mine = st.units.find(
+    (u) => u.owner === 'A' && UNIT_TYPES[u.type]?.category !== 'building',
+  );
+  assert.ok(mine, 'A 方应该有兵');
+  const name = UNIT_TYPES[mine.type]!.name;
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  const el = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
+  assert.ok(el, '自己的兵没渲染出来');
+  el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const side = d.querySelector('#side');
+  assert.ok(side, '应该有侧栏');
+  const text = side!.textContent ?? '';
+  // 这一条守的是 onBoardClick 里那句"指挥官模式直接 return"：
+  // 参谋部的下拉框写着兵种名，玩家却点不出它的射程和护甲。
+  assert.ok(text.includes(name), `点自己的部队应该弹属性卡，实际面板：${text.slice(0, 60)}`);
+  assert.ok(text.includes('指挥官模式 · 仅查看'), '应该标明这一手不归玩家下');
+  assert.equal(side!.querySelector('[data-act="disband"]'), null, '只看不给动，别长按钮');
 });
 
 check('生产序列里能排「升级时代」', () => {

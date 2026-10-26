@@ -56,12 +56,22 @@ export interface PanelInput {
    * 点下去再被规则挡住，体验上等于一个坏掉的界面。
    */
   spectator?: boolean;
+  /**
+   * 指挥官模式：走位与开火归 AI，棋盘只剩"看"。
+   *
+   * 和 spectator 一样让 `mine` 全线失效（否则己方单位会长出一整排按钮，
+   * 点下去再被规则挡住，等于一个坏掉的界面），区别只在提示文案：
+   * 观战是"两边都不归我"，指挥官是"归我，但这一手不亲自下"。
+   */
+  commander?: boolean;
 }
 
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const { view, me } = input;
   const s = view.state;
   const spectator = input.spectator === true;
+  /** 只看不给动：观战位和指挥官模式都算，后面所有 `mine` 都挂在它上面 */
+  const readOnly = spectator || input.commander === true;
   const other: PlayerId = me === 'A' ? 'B' : 'A';
   const myTurn = !spectator && s.current === me && !s.winner;
 
@@ -82,7 +92,7 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
   // 蛋等着落位：这条提示必须显眼。它是"你的回合被暂停了"的状态，
   // 不写在最上面的话，玩家会以为点了没反应。
   const egg = s.pendingEgg;
-  const eggMine = !!egg && !spectator && egg.owner === me && s.current === me;
+  const eggMine = !!egg && !readOnly && egg.owner === me && s.current === me;
   const eggBanner = !egg
     ? ''
     : `<div class="card" style="border-color:#c9a227">
@@ -217,7 +227,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const def = utype(s, selectedUnit.type);
     const ratio = selectedUnit.hp / def.maxHp;
     const spectator = input.spectator === true;
-    const mine = !spectator && selectedUnit.owner === me;
+    const readOnly = spectator || input.commander === true;
+    const mine = !readOnly && selectedUnit.owner === me;
     // 残兵不给钱，按钮上就得写清楚——"回收 0 金"看着像程序出错
     const refund = disbandRefundOf(s, selectedUnit);
     const status: string[] = [];
@@ -228,9 +239,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       if (!selectedUnit.acted) status.push('可攻击');
       if (selectedUnit.moved && selectedUnit.acted) status.push('本回合已行动完毕');
     } else {
-      // 敌方单位只给看：兵种一多，临场查对面射程/护甲是刚需，
+      // 别人的单位只给看：兵种一多，临场查对面射程/护甲是刚需，
       // 但这张卡上不该出现任何能按的东西
-      status.push('敌方单位 · 仅查看');
+      status.push(
+        input.commander === true
+          ? '指挥官模式 · 仅查看'
+          : `${s.players[selectedUnit.owner].name}单位 · 仅查看`,
+      );
     }
 
     // 建造单位：列出它能盖的东西，点了就进选址模式
@@ -305,7 +320,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const under = buildingAt(s, selectedUnit.x, selectedUnit.y);
     const underCampDef = under ? utype(s, under.type) : null;
     const underCamp =
-      under && !spectator && under.owner === me && underCampDef?.barracks ? under : null;
+      under && !readOnly && under.owner === me && underCampDef?.barracks ? under : null;
 
     return `
       <div class="unit-head">
@@ -359,7 +374,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     <div class="hint">
       点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
       点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
-      点敌方城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
+      点对方的城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
       点任何一块空地 → 看这块地形能干什么、适合谁站。
     </div>
   `;
@@ -371,7 +386,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const city = selectedCityId ? cityById(s, selectedCityId) : undefined;
   if (!city) return '';
 
-  const mine = !input.spectator && city.owner === me;
+  const readOnly = input.spectator === true || input.commander === true;
+  const mine = !readOnly && city.owner === me;
   const ratio = city.hp / city.maxHp;
   const era = eraDef(city.era);
   const garrison = unitsOf(s, city.owner).filter((u) =>
@@ -501,7 +517,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
              ${
                input.spectator
                  ? `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久 ${city.hp} / ${city.maxHp}。观战不给操作。`
-                 : `这是敌方城市（${era.name}时代），耐久打空才能易主。攻城伤害 = 你的攻击 − ${city.armor}。`
+                 : input.commander === true
+                   ? `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久 ${city.hp} / ${city.maxHp}。指挥官模式下产兵按你排的序列走。`
+                   : `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久打空才能易主。攻城伤害 = 你的攻击 − ${city.armor}。`
              }
              <br />攻陷后会连同它的时代一起接收。
            </div>`
@@ -626,7 +644,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   if (!camp) return '';
 
   const def = utype(s, camp.type);
-  const mine = !input.spectator && camp.owner === me;
+  const readOnly = input.spectator === true || input.commander === true;
+  const mine = !readOnly && camp.owner === me;
   const ratio = camp.hp / def.maxHp;
   const gold = s.players[me].gold;
 
@@ -712,7 +731,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         : `<div class="hint" style="margin-top:12px">
              ${
                supply
-                 ? '这是敌方军营。把它打掉，对方就少一个前线补给点。'
+                 ? `这是${s.players[camp.owner].name}的军营。把它打掉，对方就少一个前线补给点。`
                  : '没有城市供养，这座军营已经产不出兵了。'
              }
            </div>`

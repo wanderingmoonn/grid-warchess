@@ -299,7 +299,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'war-economy',
     name: '战争经济',
-    summary: '每消灭一个敌方单位，立刻获得 15 金币。',
+    summary: '每消灭一个对方单位，立刻获得 15 金币。',
     hooks: {
       onUnitKilled: ({ state, victim, killerOwner }) => {
         state.players[killerOwner].gold += 15;

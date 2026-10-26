@@ -53,7 +53,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     mask.remove();
   };
 
-  const seatName = (seat: PlayerId) => (seat === 'A' ? '我方' : '敌方');
+  const seatName = (seat: PlayerId) => (seat === 'A' ? '红方' : '蓝方');
 
   const agoText = (iso: string): string => {
     const t = new Date(iso).getTime();
@@ -168,8 +168,8 @@ export function openOnlinePanel(host: OnlineHost): void {
           <section class="field">
             <div class="field-label">席位</div>
             <div class="room-seats">
-              <span class="seat-chip ${room.seat === 'A' && !isWatcher ? 'mine' : ''}">A 我方${room.seat === 'A' && !isWatcher ? '（你）' : ''}</span>
-              <span class="seat-chip ${room.seat === 'B' && !isWatcher ? 'mine' : ''}">B 敌方${room.seat === 'B' && !isWatcher ? '（你）' : ''}</span>
+              <span class="seat-chip ${room.seat === 'A' && !isWatcher ? 'mine' : ''}">A 红方${room.seat === 'A' && !isWatcher ? '（你）' : ''}</span>
+              <span class="seat-chip ${room.seat === 'B' && !isWatcher ? 'mine' : ''}">B 蓝方${room.seat === 'B' && !isWatcher ? '（你）' : ''}</span>
               ${isWatcher ? '<span class="seat-chip mine">观战（你）</span>' : ''}
             </div>
             <div class="field-hint">

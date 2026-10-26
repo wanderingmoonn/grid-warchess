@@ -392,6 +392,17 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
   };
 }
 
+/**
+ * 能掠水的三种走法：飞行、掠空、跳跃。
+ *
+ * 名字是给玩家看的，代价是同一套：水面按 1 步过，森林丘陵也按 1 步。
+ * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
+ * （"蜘蛛能过河，但 AI 算不出它能过河"）。
+ */
+function crossesWater(def: UnitTypeDef): boolean {
+  return hasAbility(def, 'fly') || hasAbility(def, 'fly-over') || hasAbility(def, 'leap');
+}
+
 /** 这个兵种能不能站在这一格：地形可走、同层没单位 */
 function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
   const tile = tileAt(s, x, y);
@@ -403,7 +414,7 @@ function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
     // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
     // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
     // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
-    if (!(tile.terrain === 'water' && (hasAbility(def, 'fly') || hasAbility(def, 'fly-over')))) {
+    if (!(tile.terrain === 'water' && crossesWater(def))) {
       return false;
     }
   }
@@ -582,7 +593,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
   // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
   // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
-  const flyer = hasAbility(def, 'fly') || hasAbility(def, 'fly-over');
+  const flyer = crossesWater(def);
   const air = hasAbility(def, 'fly-over');
   // 穿行：可以穿过敌军，只是不能停在上面
   const phasing = hasAbility(def, 'phase');

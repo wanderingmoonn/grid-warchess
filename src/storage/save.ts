@@ -10,6 +10,7 @@
  * "迷雾是界面约定而不是安全边界"。
  */
 
+import { normalizePlayerNames } from '../core/setup.ts';
 import type { GameState } from '../core/types.ts';
 
 const KEY_MATCH = 'warchess:match:v1';
@@ -57,7 +58,10 @@ export function loadMatch(): GameState | null {
     const raw = localStorage.getItem(scopedKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as GameState;
-    return isValidState(parsed) ? parsed : null;
+    if (!isValidState(parsed)) return null;
+    // 老存档里双方还叫"我方/敌方"：读出来顺手换成红蓝，不用玩家重开一局
+    normalizePlayerNames(parsed);
+    return parsed;
   } catch {
     return null;
   }
@@ -109,7 +113,9 @@ export function importMatch(text: string): GameState | null {
   try {
     const parsed = JSON.parse(text) as { kind?: string; state?: GameState };
     if (parsed.kind !== 'warchess-match' || !parsed.state) return null;
-    return isValidState(parsed.state) ? parsed.state : null;
+    if (!isValidState(parsed.state)) return null;
+    normalizePlayerNames(parsed.state);
+    return parsed.state;
   } catch {
     return null;
   }

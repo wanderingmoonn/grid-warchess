@@ -34,6 +34,7 @@ import {
   clampBoardSize,
   createMatch,
   DEFAULT_CONFIG,
+  normalizePlayerNames,
   startGoldFor,
 } from '../src/core/setup.ts';
 import {
@@ -1553,7 +1554,7 @@ test('英雄包只装英雄，而且五个都标了 hero', () => {
   }
 });
 
-test('飞行：蜘蛛骑士能越过整条河，也能停在水面上', () => {
+test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () => {
   const s = fresh({ expansionIds: FANTASY });
   // 挖一整列水，两侧留一格：能过去就只能是飞过去
   const cols: number[] = [];
@@ -1572,6 +1573,17 @@ test('飞行：蜘蛛骑士能越过整条河，也能停在水面上', () => {
     s.tiles[idx(s, x0 + 1, y)].terrain = 'plain';
   }
   const spider = place2(s, 'A', 'spider-rider', x0 - 1, y0);
+  // 名字要对得上画面：蜘蛛是跳过去，不是飞过去。
+  // 机制一条没改（掠水、林丘按 1 步），改的只是它挂的能力 id。
+  assert.ok(
+    s.unitTypes['spider-rider']?.abilities?.includes('leap'),
+    '蜘蛛骑士应该挂「跳跃」',
+  );
+  assert.equal(
+    s.unitTypes['spider-rider']?.abilities?.includes('fly'),
+    false,
+    '不该再挂「飞行」——那是鹰和石像鬼的活',
+  );
   const reach = reachableTiles(s, spider);
   assert.ok(reach.has(idx(s, x0 + 1, y0)), '蜘蛛骑士应该能跳到对岸');
   // 水面也能落脚：飞行不是"过河时不许回头"，它可以停在河中间
@@ -1580,6 +1592,33 @@ test('飞行：蜘蛛骑士能越过整条河，也能停在水面上', () => {
   // 对照：走地的照旧进不去水
   const walker = place2(s, 'A', 'swordsman', x0 - 1, y0 + 1);
   assert.ok(!reachableTiles(s, walker).has(idx(s, x0, y0)), '走地单位进不了水');
+});
+
+test('「跳跃」是一条独立能力，名字就叫跳跃', () => {
+  const leap = ABILITIES.find((a) => a.id === 'leap');
+  assert.ok(leap, '应该有 leap 这条能力');
+  assert.equal(leap!.name, '跳跃');
+  assert.equal(leap!.group, 'move', '走法类，不是战斗类');
+});
+
+test('双方按颜色称呼：A 红方，B 蓝方', () => {
+  const s = fresh({});
+  assert.equal(s.players.A.name, '红方');
+  assert.equal(s.players.B.name, '蓝方');
+});
+
+test('老存档的"我方/敌方"会被换成红蓝，自定义名不动', () => {
+  const s = fresh({});
+  s.players.A.name = '我方';
+  s.players.B.name = '敌方';
+  assert.equal(normalizePlayerNames(s), true, '旧默认名应该被替换');
+  assert.equal(s.players.A.name, '红方');
+  assert.equal(s.players.B.name, '蓝方');
+
+  // 玩家自己起的名字不能被顺手改掉
+  s.players.A.name = '老王';
+  assert.equal(normalizePlayerNames(s), false, '没有旧默认名就不该动');
+  assert.equal(s.players.A.name, '老王');
 });
 
 test('掠空：能和地面单位站在同一格，也能从同一格互相打', () => {

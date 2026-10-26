@@ -92,6 +92,28 @@ export function startGoldFor(startEra: number): number {
   return CONFIG.startGold + (startEra - 1) * 240;
 }
 
+/**
+ * 默认双方名字的老写法。
+ *
+ * 名字是存进 state 的（日志、顶栏、交接遮罩都直接读它），所以改默认名
+ * 不能只改这一处——旧存档、云端房间、导入的对局里都还躺着老字符串。
+ * 这里只在"名字还等于旧默认值"时才替换，玩家自己改过的名字一律不动。
+ */
+const LEGACY_PLAYER_NAMES: Record<PlayerId, string> = { A: '我方', B: '敌方' };
+const DEFAULT_PLAYER_NAMES: Record<PlayerId, string> = { A: '红方', B: '蓝方' };
+
+/** 就地把旧默认名换成新默认名；返回是否动过（调用方据此决定要不要回存） */
+export function normalizePlayerNames(s: GameState): boolean {
+  let touched = false;
+  for (const p of ['A', 'B'] as PlayerId[]) {
+    if (s.players?.[p]?.name === LEGACY_PLAYER_NAMES[p]) {
+      s.players[p].name = DEFAULT_PLAYER_NAMES[p];
+      touched = true;
+    }
+  }
+  return touched;
+}
+
 export function createMatch(
   config: MatchConfig,
   seed: number,
@@ -254,8 +276,8 @@ export function createMatch(
     cities,
     units,
     players: {
-      A: { id: 'A', name: '我方', gold: startGoldFor(startEra) },
-      B: { id: 'B', name: '敌方', gold: startGoldFor(startEra) },
+      A: { id: 'A', name: '红方', gold: startGoldFor(startEra) },
+      B: { id: 'B', name: '蓝方', gold: startGoldFor(startEra) },
     },
     nextUnitSeq: unitSeq,
     fog: CONFIG.fogDefault,

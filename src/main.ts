@@ -35,7 +35,7 @@ import {
   utype,
 } from './core/rules.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
-import { createMatch, DEFAULT_CONFIG, randomSeed } from './core/setup.ts';
+import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
@@ -354,6 +354,8 @@ function panelInput(): PanelInput {
     chimeVolume,
     recruitQuery,
     spectator: watching(),
+    // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
+    commander: state.config.commanderMode === true,
   };
 }
 
@@ -852,8 +854,32 @@ function onBoardClick(e: Event): void {
     return;
   }
 
-  // 指挥官模式：这一方的走位与开火归 AI，棋盘只看不碰
-  if (state.config.commanderMode) return;
+  // 指挥官模式：这一方的走位与开火归 AI —— 但"看"是人该有的权利。
+  //
+  // 这里原来是一句光秃秃的 return，结果点自己的部队什么也不弹：参谋部的
+  // 下拉框里写着"长弓手 · 40 金"，想知道它射程几格却只能去翻规则书。
+  // 所以保留三段只读入口（单位 / 城市 / 空地），动词一个都不给——
+  // 面板那边 commander 一开，`mine` 全线失效，卡片上不会长出能按的东西。
+  if (state.config.commanderMode) {
+    if (clickedUnitId) {
+      const u = state.units.find((x) => x.id === clickedUnitId);
+      if (u) {
+        if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
+        else selectUnit(u);
+        return;
+      }
+    }
+    if (!coords) return;
+    const cityHere = cityAt(state, coords.x, coords.y);
+    if (cityHere) {
+      selectCity(cityHere.id);
+      return;
+    }
+    clearSelection();
+    selectedTile = coords;
+    render();
+    return;
+  }
   if (!myTurn()) {
     toast('等对方提交这一回合');
     return;
@@ -1460,12 +1486,13 @@ function renderCommander(): void {
     const sig = `run|${commanderRound}`;
     if (sig === commanderSig) return;
     commanderSig = sig;
+    const rounds = room ? 1 : CONFIG.commanderSlots;
     commanderEl.innerHTML = `
       <div class="cmd-head">
         <b>参谋部</b>
-        <span class="cmd-hint">正在执行：第 ${commanderRound} / ${CONFIG.commanderSlots} 回合</span>
+        <span class="cmd-hint">正在执行：第 ${commanderRound} / ${rounds} 回合</span>
       </div>
-      <div class="cmd-progress"><i style="width:${(commanderRound / CONFIG.commanderSlots) * 100}%"></i></div>
+      <div class="cmd-progress"><i style="width:${(commanderRound / rounds) * 100}%"></i></div>
       <button class="btn" data-cmd="stop">中断</button>
     `;
     return;
@@ -1473,7 +1500,8 @@ function renderCommander(): void {
 
   const pool = commanderPool();
   const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
-  const sig = `${state.turn}|${era}|${commanderExpanded}`;
+  const online = room !== null;
+  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -1506,13 +1534,19 @@ function renderCommander(): void {
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
-      <span class="cmd-hint">排满下面 5 格，点一次就把这 5 个回合一起交给 AI 打完。</span>
+      <span class="cmd-hint">${
+        online
+          ? '联机局里对面是人：点一次只打完你自己这一回合，然后提交给他。'
+          : `排满下面 ${CONFIG.commanderSlots} 格，点一次就把这 ${CONFIG.commanderSlots} 个回合一起交给 AI 打完。`
+      }</span>
       <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
     </div>
     <div class="cmd-slots${commanderExpanded ? ' open' : ''}">${slots}</div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
-      <button class="btn btn-primary" data-cmd="run">执行 ${CONFIG.commanderSlots} 回合</button>
+      <button class="btn btn-primary" data-cmd="run">${
+        online ? '执行本回合并提交' : `执行 ${CONFIG.commanderSlots} 回合`
+      }</button>
     </div>
   `;
   refreshEstimates();
@@ -1553,16 +1587,26 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
 }
 
 /**
- * 把接下来 5 个回合一次性打完。
+ * 把计划一次性执行掉。
  *
  * 这是指挥官模式的本意：**减负**。玩家一次排 5 格、点一次，然后看结果，
  * 而不是每回合都要回来点一下——那就只是把"走子"换成了"点按钮"，负担没减。
  *
- * 每一轮：我方按序列队首执行 → 对方（AI）自己排 → 轮回我方，序列各前移一格。
+ * 单机时每一轮：我方按序列队首执行 → 对方（AI）自己排 → 轮回我方，序列各前移一格。
  * 中途分出胜负或玩家点"中断"就停。
+ *
+ * 联机局必须换一套走法：对面坐的是人，替他跑回合等于替他下棋，而且云端
+ * 根本不知道我们本地走了什么。早先这里一视同仁地跑满 5 回合，症状就是
+ * "预演一遍然后回退"（15 秒后轮询把云端旧局面套回来）加上"两边一起等对方"
+ * （谁都没提交）。所以联机只推进自己这一回合，走完立刻提交，然后等对面。
  */
 async function runCommanderBatch(): Promise<void> {
   if (!commanderActive() || commanderRunning) return;
+
+  const online = room !== null;
+  const rounds = online ? 1 : CONFIG.commanderSlots;
+  /** 提交用的回合号：必须是"这一批开始前"的那个，才能撞出两边同时提交 */
+  const startTurn = state.turn;
 
   const token = ++aiToken;
   clearSelection();
@@ -1582,7 +1626,7 @@ async function runCommanderBatch(): Promise<void> {
   renderCommander();
 
   try {
-    for (let r = 0; r < CONFIG.commanderSlots; r++) {
+    for (let r = 0; r < rounds; r++) {
       if (token !== aiToken || state.winner) break;
       if (state.current !== me()) break;
 
@@ -1593,10 +1637,19 @@ async function runCommanderBatch(): Promise<void> {
       await runAiTurn(token, commanderBudget(state.current), BATCH_DELAY);
       if (token !== aiToken || state.winner) break;
 
-      // 对手的回合：指挥官模式下对手也是 AI，自己决定这一回合造什么
+      // 联机：到此为止。对面那一回合该由他自己在另一台机器上走。
+      if (online) break;
+
+      // 单机：对手也是 AI，自己决定这一回合造什么
       while (token === aiToken && !state.winner && state.current !== me()) {
         await runAiTurn(token, undefined, BATCH_DELAY);
       }
+    }
+
+    // 提交要在 commanderRunning 还是 true 的时候做：一旦放开，
+    // 15 秒轮询就有机会在我们的网络请求回来之前把云端旧局面套上来。
+    if (online && token === aiToken && room) {
+      await pushTurn(room, startTurn);
     }
   } finally {
     commanderRunning = false;
@@ -1609,7 +1662,14 @@ async function runCommanderBatch(): Promise<void> {
     return;
   }
 
-  // 把这批计划重新装回序列：玩家满意的话下一次直接点执行，不用重排 5 格。
+  // 联机：计划不回收。END_TURN 已经把序列前移了一格，让"这 5 格"
+  // 老老实实对应接下来的 5 个回合，比每回合都重复第一格更好懂。
+  if (online) {
+    render();
+    return;
+  }
+
+  // 单机：把这批计划重新装回序列，玩家满意的话下一次直接点执行，不用重排 5 格。
   // 这也正是"减负"——排一次能用很多批，想改再改。
   const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
   if (rearm.ok) state = rearm.state;
@@ -1632,6 +1692,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   const fog = state.fog;
   state = snapshot.state;
   state.fog = fog;
+  // 云端房间可能是老版本建的，"我方/敌方"这种旧默认名顺手换掉
+  normalizePlayerNames(state);
   // 房间里两边各走各的：AI 托管在这里没有意义，顺手关掉免得它替人下棋
   state.aiControl = { A: false, B: false };
   aiToken += 1;
@@ -1701,6 +1763,8 @@ async function pollRoom(): Promise<void> {
   if (!seat || handoffOpen) return;
   if (document.visibilityState !== 'visible') return;
   if (aiBusy()) return;
+  // 参谋部正在批量执行：这时云端的 turn 还是旧的，拉回来就是把刚走的一步抹掉
+  if (commanderRunning) return;
 
   try {
     const snapshot = await fetchRoom(seat.code);
@@ -1766,7 +1830,7 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       const result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
-        toast(`已进入房间 ${code}，你执${seat === 'A' ? '我方' : '敌方'}`);
+        toast(`已进入房间 ${code}，你执${seat === 'A' ? '红方' : '蓝方'}`);
         return;
       }
     }
@@ -1799,7 +1863,7 @@ function openHandoff(): void {
     <div class="handoff-card">
       <div class="handoff-badge ${side}">轮到 ${name}</div>
       <h2>把设备交给对方</h2>
-      <p>当前金币 ${gold}。点开始之后，屏幕上只会显示你视野内的敌方单位。<br />其余看不见的单位会以虚框标记在最后已知的位置。</p>
+      <p>当前金币 ${gold}。点开始之后，屏幕上只会显示你视野内的对方单位。<br />其余看不见的单位会以虚框标记在最后已知的位置。</p>
       <button class="btn btn-primary btn-block" data-act="handoff-start">我是 ${name}，开始行动</button>
     </div>
   `;
