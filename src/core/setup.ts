@@ -21,13 +21,33 @@ const CHAR_TO_TERRAIN: Record<string, Terrain> = {
 };
 
 /**
- * 开局界面里可选的棋盘尺寸
+ * 开局界面里的预设棋盘尺寸
  *
  * 32 是"长期局"档：五个时代全开、打到现代也不嫌挤，但一格只有二十来像素，
  * 所以界面上配了缩放（见 main.ts 的 fitBoard / zoom）。
  * 它不跟任何时代绑定——20×20 仍是火药及以后的标准图。
+ *
+ * 预设之外还能自己填边长：**4 ~ 64**，见 clampBoardSize。
  */
 export const BOARD_SIZES = [12, 16, 20, 32];
+
+/**
+ * 棋盘边长的硬边界。
+ *
+ * 下限 4：再小连两座 2×2 的城都摆不下（4×4 正好是 16 格，一城一边）。
+ * 这种图走 mapgen 里的 tinyLayout——一城一边、不画河不画山脊。
+ * 上限 64：4096 格，再大就不是"看清楚"的问题了，是浏览器扛不扛得住
+ * 每帧重绘 4000 个格子。64 已经要配合 3 倍缩放才看得清一角。
+ */
+export const MIN_BOARD_SIZE = 4;
+export const MAX_BOARD_SIZE = 64;
+
+/** 把任意输入夹到合法范围：非数字、小数、越界都统一处理掉 */
+export function clampBoardSize(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n);
+  if (!Number.isFinite(v)) return DEFAULT_CONFIG.size;
+  return Math.max(MIN_BOARD_SIZE, Math.min(MAX_BOARD_SIZE, Math.round(v)));
+}
 
 /**
  * 标准对局的默认组合：古典时代 + 12×12。
@@ -102,7 +122,7 @@ export function createMatch(
     (id) => catalog[id]?.domain !== 'water',
   );
   const layout = generateLayout(
-    config.size,
+    clampBoardSize(config.size),
     seed,
     spawnPool,
     { style: config.mapStyle ?? 'random', symmetry: config.mapSymmetry ?? 'fair' },
@@ -205,7 +225,7 @@ export function createMatch(
     version: 4,
     seed,
     config: {
-      size: config.size,
+      size: clampBoardSize(config.size),
       startEra,
       mapStyle: config.mapStyle ?? 'random',
       mapSymmetry: config.mapSymmetry ?? 'fair',

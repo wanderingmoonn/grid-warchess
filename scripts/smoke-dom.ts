@@ -382,6 +382,35 @@ check('选起始时代会顺手换成配套的棋盘尺寸', () => {
   click('[data-era="1"]');
 });
 
+check('棋盘边长可以自己填，范围 4~64，越界会被夹住', () => {
+  const input = doc.querySelector<HTMLInputElement>('[data-field="size"]');
+  assert.ok(input, '开局面板里应该有自定义边长输入框');
+  assert.equal(input.min, '4', '下限 4');
+  assert.equal(input.max, '64', '上限 64');
+
+  // 输入 30：不是预设值，所以不该有 chip 高亮
+  input.value = '30';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(
+    doc.querySelectorAll('[data-size].active').length,
+    0,
+    '30 不是预设尺寸，不该有 chip 亮着',
+  );
+
+  // 输入越界：失焦时夹回上限并写回框里
+  input.value = '999';
+  input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.equal(input.value, '64', '越界要夹到上限并写回去');
+
+  // 回到预设 20，后面的用例按 20×20 的布局走
+  input.value = '20';
+  input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.ok(
+    doc.querySelector('[data-size="20"]')?.classList.contains('active'),
+    '20 是预设值，要重新亮起来',
+  );
+});
+
 check('能选地貌与地形对称方式', () => {
   assert.ok(doc.querySelectorAll('[data-mapstyle]').length >= 4, '应该有地貌选项');
   assert.ok(doc.querySelectorAll('[data-symmetry]').length >= 2, '应该有对称方式选项');

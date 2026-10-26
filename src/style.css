@@ -1699,6 +1699,21 @@ a.btn {
   border-color: var(--a);
 }
 
+/* 自定义棋盘边长：一个窄输入框 + 一句说明，跟在尺寸 chip 后面 */
+.size-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.size-input {
+  flex: 0 0 84px;
+  width: 84px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .room-input {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 16px;

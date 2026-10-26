@@ -827,6 +827,77 @@ function spawnsAround(
 /* 主入口                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 微图（边长 ≤ 5）专门走这一条路。
+ *
+ * 4×4 一共 16 格，四个 2×2 的城正好把整张图铺满——标准那套"随机撒点 + 河 + 山脊"
+ * 在这里会退化成四座城叠在同一格上（实测 5/5 张图都叠）。5×5 同理摆不开间距。
+ *
+ * 所以微图不再假装是"缩小的标准图"，而是明确的一张**街角斗殴**图：
+ * 一边一座城，分占对角，不画河也不画山脊，剩下的格子全是出生点。
+ * 这比让主流程去兼容 16 格的地图要诚实得多。
+ */
+function tinyLayout(
+  size: number,
+  unitPool: string[],
+  symmetry: MapSymmetry,
+): MapLayout {
+  const w = size;
+  const h = size;
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain') };
+  const citiesA = [{ x: 0, y: h - 2 }];
+  const citiesB = [{ x: w - 2, y: 0 }];
+  for (const p of [...citiesA, ...citiesB]) {
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) put(c, p.x + dx, p.y + dy, 'city');
+    }
+  }
+
+  const pool = unitPool.length > 0 ? unitPool : ['infantry'];
+  const used = new Set<number>();
+  /** 微图里空地就那么几块，直接按"离城中心近"排一遍，不用环形搜索 */
+  const spots = (city: Pos, count: number, offset: number): SpawnDef[] => {
+    const cx = city.x + 1;
+    const cy = city.y + 1;
+    const cand: Array<{ x: number; y: number; d: number }> = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const t = at(c, x, y);
+        if (t === undefined || !passable(t) || t === 'city') continue;
+        if (used.has(y * w + x)) continue;
+        cand.push({ x, y, d: Math.abs(x - cx) + Math.abs(y - cy) });
+      }
+    }
+    cand.sort((a, b) => a.d - b.d);
+    const out: SpawnDef[] = [];
+    for (const p of cand.slice(0, count)) {
+      used.add(p.y * w + p.x);
+      out.push({ type: pool[(offset + out.length) % pool.length] as string, x: p.x, y: p.y });
+    }
+    return out;
+  };
+
+  const spawnsA = spots(citiesA[0]!, 3, 0);
+  const spawnsB = spots(citiesB[0]!, 3, 3);
+  const rows = Array.from({ length: h }, (_, y) =>
+    Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
+  );
+
+  return {
+    w,
+    h,
+    rows,
+    citiesA,
+    citiesB,
+    spawnsA,
+    spawnsB,
+    style: 'open',
+    symmetry,
+    layout: 'diagonal',
+    fordless: false,
+  };
+}
+
 export function generateLayout(
   size: number,
   seed: number,
@@ -835,6 +906,10 @@ export function generateLayout(
 ): MapLayout {
   const w = size;
   const h = size;
+
+  // 微图是另一套规则（见 tinyLayout 的注释），不走后面的随机生成
+  if (size <= 5) return tinyLayout(size, unitPool, opts.symmetry ?? 'fair');
+
   const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain') };
 
   const rngStyle = makeRng(seed * 2654435761 + size * 7919 + 11);

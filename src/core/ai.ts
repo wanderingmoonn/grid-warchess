@@ -25,6 +25,7 @@ import {
   attackableTargets,
   bridgeChainOk,
   canAttack,
+  cityAt,
   cityById,
   cityTiles,
   citiesOf,
@@ -38,6 +39,7 @@ import {
   other,
   previewAttack,
   reachableTiles,
+  rebuildCost,
   recruitCost,
   siegeTargets,
   tileAt,
@@ -805,6 +807,36 @@ function scoreMove(
 
   // 挪过去就能攻城 → 更值（攻城是唯一通向胜利的路，比多打掉一个兵重要）
   if (canAttack(unit) && !engagedNow && siegeTargets(s, moved).length > 0) score += 44;
+
+  // 附近有待收的废墟时，朝它走这件事本身就值钱。
+  //
+  // 只给"踏进去"那一步加分是不够的：士兵在五格外的时候，那一步还没出现在候选里，
+  // 它就照旧往别的城走；等走到城下，对面也把城修好了或者干脆没人去。
+  // 所以这里给一条朝向废墟的坡度——每近一格值 35 分，比普通推进（9 分）高得多。
+  const ruinsNear = s.cities.filter(
+    (c) => c.ruined && s.players[unit.owner].gold >= rebuildCost(c),
+  );
+  for (const rc of ruinsNear) {
+    const before = distToCity(unit, rc);
+    const after = distToCity({ x, y }, rc);
+    if (before > 0) score += (before - after) * 35;
+  }
+
+  // 走进废墟 = 接管城市。这是"破城"之后的唯一收尾动作，而且要给重建费。
+  //
+  // 这条是补规则的：城市耐久归零之后不再易主，只是变成废墟（不产兵、不产出、不回血），
+  // 必须派兵走进去、付重建费才算拿下。AI 以前不知道这回事——它照旧在城墙外面转，
+  // 一座已经打空的城就那么摊在那儿，双方都不去收，最后靠回合上限判个平局。
+  //
+  // 给的分比"破城"（260）略低：破城是打赢，接管是收尾；但比任何野战都高得多，
+  // 因为废墟不收，前面那几十回合全是白打。自己的废墟同理——那是产线断了，得赶紧修。
+  const destCity = cityAt(s, x, y);
+  if (destCity?.ruined) {
+    const price = rebuildCost(destCity);
+    if (s.players[unit.owner].gold >= price) score += destCity.owner === unit.owner ? 150 : 220;
+    // 钱不够就**别走进去**：doMove 会拒绝，AI 这一回合就卡死在这一步上
+    else score -= 90;
+  }
 
   // 残血别往枪口上撞
   if (unit.hp / def.maxHp < 0.5 && inDanger(s, unit.owner, x, y)) score -= 25;
@@ -1621,6 +1653,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
     for (const city of citiesOf(view, me)) {
       // 刚打下来的城当回合不产兵（rules 里同一条），提出来只会得到非法动作
       if (city.capturedTurn === s.turn) continue;
+      // 废墟也造不出兵（规则里同样会拒）。不跳过的话 AI 会一直提这个动作，
+      // 而它一旦被选中就必然失败——那一回合剩下的动作全被吞掉。
+      if (city.ruined) continue;
       const c = recruitCandidate(
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
@@ -1643,6 +1678,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
 
   if (mayUpgrade) {
     for (const city of citiesOf(view, me)) {
+      if (city.ruined) continue; // 废墟升不了级，同上
       const c = upgradeCandidate(view, city);
       if (c) candidates.push(c);
     }

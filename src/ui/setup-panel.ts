@@ -9,7 +9,13 @@ import { ERAS } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { EXPANSIONS } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES } from '../core/mapgen.ts';
-import { BOARD_SIZES, randomSeed } from '../core/setup.ts';
+import {
+  BOARD_SIZES,
+  MAX_BOARD_SIZE,
+  MIN_BOARD_SIZE,
+  clampBoardSize,
+  randomSeed,
+} from '../core/setup.ts';
 import type { MatchConfig } from '../core/types.ts';
 
 export interface SetupResult {
@@ -175,8 +181,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
-              <div class="field-label">棋盘大小</div>
+              <div class="field-label">
+                棋盘大小 <span class="field-hint">预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}</span>
+              </div>
               <div class="chip-row">${sizeChips}</div>
+              <div class="size-row">
+                <input class="text-input size-input" data-field="size" type="number"
+                  min="${MIN_BOARD_SIZE}" max="${MAX_BOARD_SIZE}" step="1"
+                  value="${config.size}" inputmode="numeric" aria-label="自定义棋盘边长" />
+                <span class="field-hint">边长（格）。${MIN_BOARD_SIZE}×${MIN_BOARD_SIZE} 是"街角斗殴"图，64×64 要配合缩放看。</span>
+              </div>
             </section>
 
             <section class="field">
@@ -343,8 +357,31 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
     });
 
+    /**
+     * 自定义边长输入。
+     *
+     * 每敲一下就夹一次范围并立刻生效，但**不重绘面板**——
+     * 重绘会把输入框换成新节点，光标和还没输完的数字都会被吞掉
+     * （"想输 24，输到 2 就被重绘回 12"）。只同步 chip 的高亮即可。
+     */
+    const applySizeInput = (input: HTMLInputElement, commit: boolean): void => {
+      config.size = clampBoardSize(input.value);
+      mask.querySelectorAll<HTMLElement>('[data-size]').forEach((el) => {
+        el.classList.toggle('active', Number(el.dataset.size) === config.size);
+      });
+      // commit = 失焦/回车：这时候把夹过的值写回框里，免得留着一个越界的 999
+      if (commit) input.value = String(config.size);
+    };
+    mask.addEventListener('input', (e) => {
+      const input = e.target as HTMLInputElement;
+      if (input.dataset.field === 'size') applySizeInput(input, false);
+    });
     mask.addEventListener('change', (e) => {
       const input = e.target as HTMLInputElement;
+      if (input.dataset.field === 'size') {
+        applySizeInput(input, true);
+        return;
+      }
       const id = input.dataset.exp;
       if (!id) return;
       if (input.checked) {

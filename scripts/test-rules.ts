@@ -17,7 +17,14 @@ import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '
 import { generateLayout } from '../src/core/mapgen.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, aiNoise, aiTraits, anyAiSide, isAiSide } from '../src/core/ai.ts';
-import { createMatch, DEFAULT_CONFIG, startGoldFor } from '../src/core/setup.ts';
+import {
+  MAX_BOARD_SIZE,
+  MIN_BOARD_SIZE,
+  clampBoardSize,
+  createMatch,
+  DEFAULT_CONFIG,
+  startGoldFor,
+} from '../src/core/setup.ts';
 import {
   applyAction,
   buildingAt,
@@ -240,6 +247,68 @@ test('城市最小间距 = 棋盘最短边的 1/4，公平图和镜像图都守'
           }
         }
       }
+    }
+  }
+});
+
+test('棋盘边长 4~64 都能开局，越界会被夹住', () => {
+  // 下限 4：4×4 正好 16 格，一边一座 2×2 的城，剩下的格子当兵。
+  // 上限 64：4096 格，再大就不是"看不看得清"，是浏览器每帧重绘 4000 个格子扛不扛得住。
+  assert.equal(clampBoardSize(2), MIN_BOARD_SIZE, '太小要夹到下限');
+  assert.equal(clampBoardSize(999), MAX_BOARD_SIZE, '太大要夹到上限');
+  assert.equal(clampBoardSize(30), 30, '范围内的原样返回');
+  assert.equal(clampBoardSize('17.6'), 18, '小数四舍五入');
+  assert.equal(clampBoardSize('abc'), DEFAULT_CONFIG.size, '乱输入回落到默认值');
+
+  const tiny = createMatch({ ...BASE, size: 4 }, 1234);
+  assert.equal(tiny.w, 4);
+  assert.ok(tiny.units.length > 0, '微图也得有兵可下');
+  assert.equal(tiny.cities.length, 2, '微图一边一座城');
+  for (const city of tiny.cities) {
+    assert.ok(city.x + 2 <= 4 && city.y + 2 <= 4, '城不能出界');
+  }
+
+  const huge = createMatch({ ...BASE, size: 64 }, 1234);
+  assert.equal(huge.w, 64);
+  assert.equal(huge.tiles.length, 64 * 64);
+  assert.ok(huge.units.length > 0);
+
+  // config 里存的尺寸也要是夹过的，否则存档和实际棋盘会对不上
+  const clamped = createMatch({ ...BASE, size: 200 }, 5);
+  assert.equal(clamped.w, MAX_BOARD_SIZE);
+  assert.equal(clamped.config.size, MAX_BOARD_SIZE);
+});
+
+test('任意边长生成的地图都合法：城在界内、互不重叠', () => {
+  // 4 和 5 走的是 mapgen 里的 tinyLayout（一城一边、不画河）；
+  // 6 以上走正常流程。这条测试把整条边界扫一遍，防止以后改布点又退回去。
+  for (const size of [4, 5, 6, 7, 8, 10, 16, 20, 32, 48, 64]) {
+    for (let seed = 1; seed <= 3; seed++) {
+      const layout = generateLayout(size, seed);
+      const all = [...layout.citiesA, ...layout.citiesB];
+      assert.ok(all.length > 0, `${size}×${size} 一座城都没有`);
+      for (const c of all) {
+        assert.ok(
+          c.x >= 0 && c.y >= 0 && c.x + 2 <= size && c.y + 2 <= size,
+          `${size}×${size} seed=${seed}：城 (${c.x},${c.y}) 出界`,
+        );
+      }
+      for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) {
+          const a = all[i]!;
+          const b = all[j]!;
+          const overlap = Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2;
+          assert.ok(!overlap, `${size}×${size} seed=${seed}：两座城叠在一起了`);
+        }
+      }
+      // 出生点不能在城外、也不能踩在城市格上
+      for (const sp of [...layout.spawnsA, ...layout.spawnsB]) {
+        assert.ok(
+          sp.x >= 0 && sp.y >= 0 && sp.x < size && sp.y < size,
+          `${size}×${size}：出生点 (${sp.x},${sp.y}) 出界`,
+        );
+      }
+      assert.ok(layout.spawnsA.length > 0 && layout.spawnsB.length > 0, `${size}×${size} 有一方没有出生点`);
     }
   }
 });
@@ -3136,6 +3205,67 @@ function runAiSteps(s: GameState, limit = 8): Action[] {
   }
   return acts;
 }
+
+test('AI 会走进去接管废墟（并且有钱的时候才走）', () => {
+  // 这条补的是新规则：城打空之后不再易主，只是变成废墟，
+  // 必须派兵走进去、付重建费才算拿下。AI 以前完全不知道这回事——
+  // 它把城砸成废墟之后就在城墙外面转，谁也不去收，
+  // 一局打完两边都"攻不下城"（实测双 AI 40 回合 0 易主）。
+  const s = fresh({ size: 16 }, 8899);
+  const city = citiesOf(s, 'B')[0]!;
+  city.ruined = true;
+  city.hp = 0;
+
+  // 清场，只留一个 A 民兵贴着这座城
+  const m = findUnit(s, 'A', 'militia');
+  s.units = [m];
+  m.x = city.x - 1;
+  m.y = city.y;
+  m.moved = false;
+  m.acted = false;
+  if (s.tiles[idx(s, m.x, m.y)]) s.tiles[idx(s, m.x, m.y)].terrain = 'plain';
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  refreshMemory(s);
+
+  const price = rebuildCost(city);
+  assert.ok(price > 0, '重建费应该大于 0');
+
+  const a = aiNextAction(s, NO_RECRUIT);
+  assert.ok(a && a.type === 'MOVE', `应该选择走进去，实际 ${a?.type ?? '什么都不做'}`);
+  const mv = a as Extract<Action, { type: 'MOVE' }>;
+  assert.ok(
+    cityTiles(city).some((t) => t.x === mv.x && t.y === mv.y),
+    `应该走进城格，实际走到 (${mv.x},${mv.y})`,
+  );
+
+  const r = applyAction(s, a!);
+  assert.ok(r.ok, r.ok ? '' : `这一步不合法：${r.reason}`);
+  const taken = r.state.cities.find((c) => c.id === city.id)!;
+  assert.equal(taken.owner, 'A', '废墟应该归 A 了');
+  assert.ok(!taken.ruined, '接管之后不该还是废墟');
+  assert.equal(r.state.players.A.gold, 5000 - price, '要付重建费');
+
+  // 钱不够的时候不能选这个动作：doMove 会拒绝，AI 这一回合会卡死在这一步
+  const poor = fresh({ size: 16 }, 8899);
+  const c2 = citiesOf(poor, 'B')[0]!;
+  c2.ruined = true;
+  c2.hp = 0;
+  const m2 = findUnit(poor, 'A', 'militia');
+  poor.units = [m2];
+  m2.x = c2.x - 1;
+  m2.y = c2.y;
+  m2.moved = false;
+  m2.acted = false;
+  if (poor.tiles[idx(poor, m2.x, m2.y)]) poor.tiles[idx(poor, m2.x, m2.y)].terrain = 'plain';
+  poor.current = 'A';
+  poor.players.A.gold = 0;
+  refreshMemory(poor);
+  const b = aiNextAction(poor, NO_RECRUIT);
+  const intoCity =
+    b?.type === 'MOVE' && cityTiles(c2).some((t) => t.x === b.x && t.y === b.y);
+  assert.ok(!intoCity, `没钱就不该往废墟里走，实际 ${JSON.stringify(b)}`);
+});
 
 test('大地图上孤零零一支部队也会朝敌城推进', () => {
   // 大地图"AI 迷路"的最朴素形态：视野里一个敌人都没有的时候，
