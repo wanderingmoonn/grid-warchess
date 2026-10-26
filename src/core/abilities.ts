@@ -257,7 +257,7 @@ export const ABILITIES: AbilityDef[] = [
   {
     id: 'rebirth',
     name: '重生',
-    summary: '阵亡时不立刻倒下，而是留下一枚蛋，由玩家在自己回合选一格孵化（35% 生命）。每局一次。',
+    summary: '阵亡时不立刻倒下，而是留下一枚蛋，由玩家在自己回合选一格孵化（一半生命）。每局一次。',
     group: 'defense',
   },
   {
