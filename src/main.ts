@@ -351,12 +351,25 @@ function fitBoard(): void {
   // 160 是地板：窗口被压到极窄时也别让棋盘缩成一个点
   baseBoardSize = Math.max(160, Math.round(Math.min(width, availH)));
 
+  const zoomed = boardZoom > 1;
   const px = Math.round(baseBoardSize * boardZoom);
   boardEl.style.width = `${px}px`;
   boardEl.style.height = `${px}px`;
-  boardEl.classList.toggle('zoomed', boardZoom > 1);
-  // 滚动发生在这里（内层），缩放条留在外层，所以它不会跟着地图一起跑
-  boardScrollEl.classList.toggle('zoomed', boardZoom > 1);
+  boardEl.classList.toggle('zoomed', zoomed);
+  boardScrollEl.classList.toggle('zoomed', zoomed);
+
+  // 放大时把"看地图的窗口"钉在"适应屏幕"那个尺寸上：地图变大、窗口不变，
+  // 于是多出来的部分可以滚（手机上是手指拖）。
+  // 不这么做的话，窄屏单列布局里 board-wrap 是按内容撑高的，
+  // 放大之后整块会跟着长大，被 .app 的 overflow:hidden 裁掉——
+  // 表现就是"一放大就只能看见左上角，剩下的永远看不到"。
+  if (zoomed) {
+    boardScrollEl.style.width = `${baseBoardSize}px`;
+    boardScrollEl.style.height = `${baseBoardSize}px`;
+  } else {
+    boardScrollEl.style.width = '';
+    boardScrollEl.style.height = '';
+  }
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';

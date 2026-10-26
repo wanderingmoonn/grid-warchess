@@ -202,38 +202,61 @@ body {
   position: relative;
 }
 
-/* 滚动发生在这个内层容器里，缩放条留在外层 board-wrap。
+/* 滚动发生在这个内层容器里，缩放条留在外层（fixed 定位，见下）。
    之前滚动直接开在 board-wrap 上，绝对定位的缩放条就成了"可滚动内容"的一部分，
-   放大后一拖动地图，按钮跟着内容一起走掉——这就是"固定在图上而不是画面上"。
-   两层分开之后，外层只负责定位，内层只负责滚。 */
+   放大后一拖动地图，按钮跟着内容一起走掉。
+   注意：这里刻意**不用** position:absolute —— 窄屏单列布局下 board-wrap 是
+   "按内容撑开"的高度，绝对定位的子元素不参与撑高，会把整块棋盘区压成 0 高。 */
 .board-scroll {
-  position: absolute;
-  inset: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 关键：宽度只能由父级给，不能由里面的棋盘反推。
+     flex-basis 0 + width 0 让它的"固有宽度"是 0，否则窄屏单列
+     （grid-template-columns: 1fr，min 是 min-content）会被棋盘撑宽，
+     整页横向溢出——棋盘右侧和侧栏文字都被裁掉一截。 */
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
 }
 
-/* 放大之后：切成 block（flex 的居中在溢出时会裁掉左上角），并开启滚动 */
+/* 放大之后：切成 block（flex 的居中在溢出时会裁掉左上角），并开启滚动。
+   视口的宽高由 fitBoard 写成"适应屏幕"的那个尺寸，地图比它大 → 滚动看。 */
 .board-scroll.zoomed {
   display: block;
   overflow: auto;
   overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  border-radius: 14px;
 }
 
 /* ---------- 缩放条 ---------- */
+/* 钉在**窗口**右下角，不参与棋盘布局，所以地图怎么滚它都不动。
+   窄屏（含预览面板）里 .main 是整条竖向滚动，钉在棋盘栏里会被滚出视野——
+   这正是"按钮位置不对"的来源之一。 */
 .zoom-bar {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
+  position: fixed;
+  right: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   display: flex;
   gap: 4px;
-  z-index: 6;
-  opacity: 0.55;
+  z-index: 60;
+  opacity: 0.72;
   transition: opacity 0.15s ease;
 }
 
-.board-wrap:hover .zoom-bar,
+/* 宽屏右侧是 340px 的信息面板，贴窗口角会压住「结束回合」那一排按钮，
+   所以往外让开一栏：仍然不随地图滚动，但不遮任何可点的东西。 */
+@media (min-width: 921px) {
+  .zoom-bar {
+    right: 372px;
+  }
+}
+
+.zoom-bar:hover,
 .zoom-bar:focus-within {
   opacity: 1;
 }
@@ -1230,7 +1253,9 @@ a.btn {
 
 @media (max-width: 920px) {
   .main {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr) 而不是 1fr：1fr 的最小值是 min-content，
+       棋盘一旦比视口宽，整列就会跟着变宽，页面横向溢出。 */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
     overflow-y: auto;
     padding: 12px;
@@ -1252,6 +1277,9 @@ a.btn {
   .side {
     overflow: visible;
     min-height: auto;
+    /* 给固定定位的缩放条留出落脚处：不然滚到页面底部时，
+       它会正好压在「结束回合」那一排按钮上 */
+    padding-bottom: 56px;
   }
 }
 
