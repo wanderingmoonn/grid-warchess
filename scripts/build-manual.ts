@@ -19,7 +19,7 @@ import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-const TEST_COUNT = 262;
+const TEST_COUNT = 264;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -753,6 +753,10 @@ const html = `<!doctype html>
         </tbody>
       </table>
       <p>在开局面板里点起始时代，棋盘尺寸会<b>自动</b>切到配套的那一档（当然你也可以手动改）。</p>
+      <p><b>城市最小间距 = 棋盘最短边的 1/4</b>（12→3、16→4、20→5、32→8，格数为曼哈顿距离）：
+        四座城随机撒点，但任意两座都不会比这更近。这条以前只是"尽力而为"，
+        镜像图上经常撒出两城贴脸甚至重叠的图，现在改成硬约束——撒不出来就换一次重来，
+        实在不行退回四个角的规整布局。</p>
       <h3>缩放</h3>
       <p>棋盘右下角有 <b>−／适应／＋</b> 三档：1× 是"整张图塞进屏幕"，最多能放到 3×。
         放大是<b>把每个格子真的画大</b>（不是把整块画布拉糊），所以字和血条一起变清楚；

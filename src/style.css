@@ -202,9 +202,20 @@ body {
   position: relative;
 }
 
-/* 放大之后：容器变成可滚动的视口，棋盘按像素撑开。
-   flex 的居中在溢出时会把左上角裁掉（经典问题），所以放大时切成 block 布局。 */
-.board-wrap.zoomed {
+/* 滚动发生在这个内层容器里，缩放条留在外层 board-wrap。
+   之前滚动直接开在 board-wrap 上，绝对定位的缩放条就成了"可滚动内容"的一部分，
+   放大后一拖动地图，按钮跟着内容一起走掉——这就是"固定在图上而不是画面上"。
+   两层分开之后，外层只负责定位，内层只负责滚。 */
+.board-scroll {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 放大之后：切成 block（flex 的居中在溢出时会裁掉左上角），并开启滚动 */
+.board-scroll.zoomed {
   display: block;
   overflow: auto;
   overscroll-behavior: contain;

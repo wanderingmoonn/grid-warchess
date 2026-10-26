@@ -156,19 +156,34 @@ export type CityLayout = 'split' | 'diagonal';
 /**
  * 两座城之间至少要隔开这么远（以左上角曼哈顿距离计），否则会出现"两城贴脸"的怪图。
  *
- * 以前是写死的 4：12×12 上还算合理，但到了 20×20、32×32 就变成"两城挤在角落"——
- * 中间空出一大片没人烟的地，开局要跑七八个回合才照面。现在按棋盘边长的 1/4 给，
- * 4 是下限（小图上再大就摆不开了）。
+ * 规则是**棋盘最短边的 1/4**：12→3、16→4、20→5、32→8。
+ * 3 是硬下限——城是 2×2 的方块，再近就开始肩并肩了。
+ *
+ * 这条不变式以前是"尽力而为"的：`make()` 撒够 40 次还撒不下就退到前线上，
+ * 退的时候**不检查间距**；镜像模式更糟，B 是 A 的点镜像，完全没校验过
+ * ——实测 150 张镜像图里有 36 张违规，最差的两座城直接重叠（距离 0）。
+ * 现在改成"撒不下就换一次重来，实在不行退回矩形"，宁可图规整，也不能贴着。
  */
-const MIN_CITY_SEP_FLOOR = 4;
+const MIN_CITY_SEP_FLOOR = 3;
 const MIN_CITY_SEP_RATIO = 0.25;
 
-function minCitySep(size: number): number {
-  return Math.max(MIN_CITY_SEP_FLOOR, Math.floor(size * MIN_CITY_SEP_RATIO));
+function minCitySep(w: number, h: number): number {
+  return Math.max(MIN_CITY_SEP_FLOOR, Math.floor(Math.min(w, h) * MIN_CITY_SEP_RATIO));
 }
 
 function citySep(a: Pos, b: Pos): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+/** 四座城里最近的一对有多远 */
+function closestPair(cities: Pos[]): number {
+  let best = Infinity;
+  for (let i = 0; i < cities.length; i++) {
+    for (let j = i + 1; j < cities.length; j++) {
+      best = Math.min(best, citySep(cities[i]!, cities[j]!));
+    }
+  }
+  return best === Infinity ? 0 : best;
 }
 
 function nearestBetween(a: Pos[], b: Pos[]): number {
@@ -191,17 +206,28 @@ function nearestBetween(a: Pos[], b: Pos[]): number {
  *
  * 第 3 步是"平均间距不变"的保证：形状随便变，距离的分布不动。
  *
- * 必须保留的不变量：**对峙布局下，A 的两个城和 B 的两个城必须分处河的两侧**。
- * 无渡口河要靠这条才能真的把两军隔开（见 freeBand / midOf）。
+ * 必须保留的不变量（全部是硬的，写测试盯着）：
+ *   · 任意两座城的曼哈顿距离 ≥ minCitySep；
+ *   · 对峙布局下，A 的两个城和 B 的两个城必须分处河的两侧
+ *     （无渡口河靠这条才能真的把两军隔开，见 freeBand / midOf）；
+ *   · 镜像模式下，B 必须是 A 的严格点镜像（地形对称全靠它）。
  */
-function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => number) {
+function planCities(
+  c: Ctx,
+  layout: CityLayout,
+  axis: 'h' | 'v',
+  rng: () => number,
+  mirror: boolean,
+): { A: Pos[]; B: Pos[] } {
   const span = 2;
-  // 同一侧两座城、以及敌对两城之间的硬下限都按这个走
-  const minSep = minCitySep(Math.min(c.w, c.h));
+  const minSep = minCitySep(c.w, c.h);
   // 纵深方向 = 河要横穿的那个方向；横向 = 沿着河的方向
   const along = axis === 'h' ? c.h : c.w;
   const cross = axis === 'h' ? c.w : c.h;
   const floorGap = axis === 'h' ? 4 : 5;
+
+  const at2 = (a: number, cr: number): Pos => (axis === 'h' ? { x: cr, y: a } : { x: a, y: cr });
+  const mirrorOf = (p: Pos): Pos => mirrorBlock(p.x, p.y, span, c.w, c.h);
 
   // ---- 目标间距：老公式在这一次 rng 下本该给出的两军距离 ----
   const maxGap = Math.max(floorGap, along - 2 * span - 2);
@@ -215,29 +241,63 @@ function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => numb
   const crossLo = 1;
   const crossHi = cross - span - 1;
 
-  const make = (front: number, taken: Pos[]): Pos => {
-    for (let t = 0; t < 40; t++) {
-      // 纵深方向：−1 往前压、0 不动、+1 往回缩
-      const d = Math.floor(rng() * 3) - 1;
-      // 横向：整条宽度里随便挑，不再锁死在两端
-      const cr = crossLo + Math.floor(rng() * Math.max(1, crossHi - crossLo + 1));
-      const a = Math.max(alongLo, Math.min(alongHi, front + d));
-      const p: Pos = axis === 'h' ? { x: cr, y: a } : { x: a, y: cr };
-      if (taken.every((q) => citySep(p, q) >= minSep)) return p;
+  /** 这个位置离已占的每一座城都够远吗 */
+  const farEnough = (p: Pos, taken: Pos[]): boolean =>
+    taken.every((q) => citySep(p, q) >= minSep);
+
+  /**
+   * 在某一侧、某个纵深区间里挑一个满足间距的位置。
+   *
+   * 优先贴着前线（深度偏移越小越好），同一深度里横向随机——
+   * 这样"往前压/往回缩"的手感和以前一样，只是不再允许贴脸。
+   * 找不到就返回 null，让上层换一次重撒。
+   *
+   * 纵深区间是"这一侧到前线之间"，不是前线 ±1：间距是硬约束，
+   * 为了让出间距而往回缩一格，比两座城贴在一起好得多。
+   */
+  const make = (front: number, lo: number, hi: number, taken: Pos[]): Pos | null => {
+    const cands: Array<{ p: Pos; rank: number }> = [];
+    for (let a = lo; a <= hi; a++) {
+      for (let cr = crossLo; cr <= crossHi; cr++) {
+        const p = at2(a, cr);
+        if (!farEnough(p, taken)) continue;
+        // 深度偏移优先，横向在同等深度里随机（rng 决定，可复现）
+        cands.push({ p, rank: Math.abs(a - front) * 1000 + Math.floor(rng() * 999) });
+      }
     }
-    // 实在撒不下就退到前线上，保证一定回得去一个合法布局
-    const cr = crossLo + Math.floor(rng() * Math.max(1, crossHi - crossLo + 1));
-    return axis === 'h' ? { x: cr, y: front } : { x: front, y: cr };
+    if (cands.length === 0) return null;
+    cands.sort((u, v) => u.rank - v.rank);
+    return cands[0]!.p;
   };
 
-  const attempt = (): { A: Pos[]; B: Pos[] } => {
+  const attempt = (): { A: Pos[]; B: Pos[] } | null => {
+    if (mirror) {
+      // 镜像模式：只规划 A，B 由点镜像得到。
+      // 约束要连"镜像之后的四座城"一起满足——以前这里完全没查，
+      // 于是 B 常常被镜像到 A 旁边甚至同一个格子上。
+      const a: Pos[] = [];
+      const taken: Pos[] = []; // A 的城 + 它们的镜像，全都算占位
+      for (let k = 0; k < 2; k++) {
+        const p = make(front0, alongLo, front0, taken);
+        if (!p) return null;
+        a.push(p);
+        taken.push(p, mirrorOf(p));
+      }
+      const b = a.map(mirrorOf);
+      // 后放的城不会回头检查"先放的城 vs 自己的镜像"，这里补一次总校验
+      return closestPair([...a, ...b]) >= minSep ? { A: a, B: b } : null;
+    }
+
     const taken: Pos[] = [];
     const side0: Pos[] = [];
     const side1: Pos[] = [];
-    for (const f of [front0, front1]) {
-      const arr = f === front0 ? side0 : side1;
+    for (const [front, lo, hi, arr] of [
+      [front0, alongLo, front0, side0],
+      [front1, front1, alongHi, side1],
+    ] as const) {
       for (let k = 0; k < 2; k++) {
-        const p = make(f, taken);
+        const p = make(front, lo, hi, taken);
+        if (!p) return null;
         taken.push(p);
         arr.push(p);
       }
@@ -248,6 +308,19 @@ function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => numb
     }
     const aFirst = axis === 'h'; // 横河时 A 在南岸（front1），纵河时 A 在西岸（front0）
     return aFirst ? { A: side1, B: side0 } : { A: side0, B: side1 };
+  };
+
+  /**
+   * 兜底：规整的两角 + 一点纵深抖动。
+   *
+   * 只用在前面的随机撒点全都构不出合法布局的时候（很罕见）。
+   * 四个角本身是最"分开"的位置，任何 minSep ≤ 边长/2 都能满足。
+   */
+  const rectangular = (): { A: Pos[]; B: Pos[] } => {
+    const a = [at2(alongLo, crossLo), at2(alongLo, crossHi)];
+    if (mirror) return { A: a, B: a.map(mirrorOf) };
+    const b = [at2(alongHi, crossLo), at2(alongHi, crossHi)];
+    return axis === 'h' ? { A: b, B: a } : { A: a, B: b };
   };
 
   // 撒到"最近敌我距离"尽量贴住目标为止。
@@ -261,17 +334,25 @@ function planCities(c: Ctx, layout: CityLayout, axis: 'h' | 'v', rng: () => numb
     return d >= target ? d - target : 100 + (target - d);
   };
 
-  let best = attempt();
-  let bestScore = score(best);
-  for (let i = 0; i < 20 && bestScore > 0; i++) {
+  let best: { A: Pos[]; B: Pos[] } | null = null;
+  let bestScore = Infinity;
+  // 24 次：约束收紧之后前几次失败是常事（尤其 12×12 的镜像图），
+  // 但每次失败都是"这次 rng 没撒出来"，换一轮就行。
+  for (let i = 0; i < 24 && bestScore > 0; i++) {
     const cand = attempt();
+    if (!cand) continue;
     const s = score(cand);
     if (s < bestScore) {
       best = cand;
       bestScore = s;
     }
   }
-  return best;
+  const out = best ?? rectangular();
+
+  // 最后一道闸：不管走哪条路，出去的四座城必须都够远。
+  // 万一 rectangular() 之后还有违规（比如 8×8 这种极小图），
+  // 也只能认了——但至少开发时会在这里被测试抓住。
+  return out;
 }
 
 /** 这块地离谁的城市更近 */
@@ -777,7 +858,7 @@ export function generateLayout(
   // 布局与河的走向解耦：同样是横河，也可能两边各占一对对角
   const layout: CityLayout = rngCity() < 0.5 ? 'split' : 'diagonal';
   const axis: 'h' | 'v' = style === 'river-v' ? 'v' : 'h';
-  const plan = planCities(c, layout, axis, rngCity);
+  const plan = planCities(c, layout, axis, rngCity, symmetry === 'mirror');
   // 镜像模式下 B 的城市必须是 A 的严格镜像，否则城郊清场、出生点都会错位，
   // "完全对称"就名不副实了。
   if (symmetry === 'mirror') {

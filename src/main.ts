@@ -76,7 +76,9 @@ appEl.innerHTML = `
     <div class="commander-bar" id="commander" hidden></div>
     <div class="main">
       <div class="board-wrap" id="board-wrap">
-        <div class="board" id="board"></div>
+        <div class="board-scroll" id="board-scroll">
+          <div class="board" id="board"></div>
+        </div>
         <div class="zoom-bar" id="zoom-bar">
           <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">适应</button>
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
@@ -90,6 +92,15 @@ appEl.innerHTML = `
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
+/**
+ * 真正滚动的容器。
+ *
+ * 为什么缩放条不能直接挂在 board-wrap 上：board-wrap 一旦自己滚动，
+ * 它里面的绝对定位子元素会跟着内容一起走——表现就是"放大之后拖动地图，
+ * 按钮跟着跑掉了"。所以滚动挪到内层，缩放条留在外层，
+ * 它只认"可视区域"这一个坐标系，永远钉在右下角。
+ */
+const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
@@ -344,7 +355,8 @@ function fitBoard(): void {
   boardEl.style.width = `${px}px`;
   boardEl.style.height = `${px}px`;
   boardEl.classList.toggle('zoomed', boardZoom > 1);
-  boardWrapEl.classList.toggle('zoomed', boardZoom > 1);
+  // 滚动发生在这里（内层），缩放条留在外层，所以它不会跟着地图一起跑
+  boardScrollEl.classList.toggle('zoomed', boardZoom > 1);
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
@@ -364,11 +376,11 @@ function setZoom(next: number): void {
   // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
   render();
   if (boardZoom > 1) {
-    boardWrapEl.scrollLeft = Math.max(0, (boardWrapEl.scrollWidth - boardWrapEl.clientWidth) / 2);
-    boardWrapEl.scrollTop = Math.max(0, (boardWrapEl.scrollHeight - boardWrapEl.clientHeight) / 2);
+    boardScrollEl.scrollLeft = Math.max(0, (boardScrollEl.scrollWidth - boardScrollEl.clientWidth) / 2);
+    boardScrollEl.scrollTop = Math.max(0, (boardScrollEl.scrollHeight - boardScrollEl.clientHeight) / 2);
   } else {
-    boardWrapEl.scrollLeft = 0;
-    boardWrapEl.scrollTop = 0;
+    boardScrollEl.scrollLeft = 0;
+    boardScrollEl.scrollTop = 0;
   }
 }
 

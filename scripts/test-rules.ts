@@ -220,6 +220,30 @@ test('镜像模式下地图严格点对称', () => {
   }
 });
 
+test('城市最小间距 = 棋盘最短边的 1/4，公平图和镜像图都守', () => {
+  // 这条是补一个真 bug：以前间距只在"随机撒点"那一步检查，撒不出来就退回前线，
+  // 退的时候不查间距；镜像模式更糟——B 直接由 A 点镜像，完全没校验，
+  // 实测 150 张镜像图里 36 张违规，最差的两座城重叠在一起（距离 0）。
+  for (const size of [12, 16, 20, 32]) {
+    const need = Math.max(3, Math.floor(size * 0.25));
+    for (const symmetry of ['fair', 'mirror'] as const) {
+      for (let seed = 1; seed <= 12; seed++) {
+        const layout = generateLayout(size, seed, undefined, { symmetry });
+        const all = [...layout.citiesA, ...layout.citiesB];
+        for (let i = 0; i < all.length; i++) {
+          for (let j = i + 1; j < all.length; j++) {
+            const d = Math.abs(all[i]!.x - all[j]!.x) + Math.abs(all[i]!.y - all[j]!.y);
+            assert.ok(
+              d >= need,
+              `${size}×${size} ${symmetry} seed=${seed}：两座城只隔 ${d} 格（应 ≥ ${need}）`,
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
 test('默认模式下两侧地势不再一样', () => {
   // 这条是这次改动的目的：每张图都镜像，等于每局都是同一张图。
   let differing = 0;
@@ -713,6 +737,11 @@ test('城市位置是浮动的，不再是矩形四角', () => {
 test('浮动之后平均间距没变', () => {
   // 老公式在 12×12 上的期望：gap 均匀取 4/5/6，两军距离 = 2 + gap，
   // 也就是 6、6、7、7、8 五种取值的平均 = 7.0。位置浮动不该动这个数。
+  //
+  // 2026-10-26：间距规则改成"最短边 1/4"之后，12×12 的硬下限从 4 降到 3
+  // （3 正好是 12/4），对角布局里两岸的敌我城可以合法地落在 5 格上，
+  // 平均值因此从 7.0 挪到 6.56 —— 下限放宽了，平均值理应跟着动一点。
+  // 这里把带宽放到 6.3~7.6，仍然盯着"别整体塌下来"。
   let sum = 0;
   const n = 120;
   for (let i = 0; i < n; i++) {
@@ -726,7 +755,7 @@ test('浮动之后平均间距没变', () => {
     sum += best;
   }
   const avg = sum / n;
-  assert.ok(avg >= 6.6 && avg <= 7.4, `12×12 平均最近敌我距离 ${avg.toFixed(2)}，偏离 7.0 太多`);
+  assert.ok(avg >= 6.3 && avg <= 7.6, `12×12 平均最近敌我距离 ${avg.toFixed(2)}，偏离 7.0 太多`);
 });
 
 console.log('\n经济与产兵');
@@ -3753,6 +3782,11 @@ test('刚接管（包括入驻废墟）的城市当回合不能产兵，下一�
 test('桥能沿着已经铺好的桥面往河心接，但不能斜着接', () => {
   const s = fresh({ startEra: 1, size: 16 }, 5544);
   s.units = [];
+  // 先把地形抹平：地图自带的河可能正好流经 x=5~8，把"岸边"也变成水面，
+  // 于是下面第一格被判定成"四面都是水"——这条用例就变成在测地图运气了。
+  for (const t of s.tiles) {
+    if (t.terrain !== 'city') t.terrain = 'plain';
+  }
   // 一条 3 格宽的南北向水道
   for (let y = 0; y < s.h; y++) {
     for (const x of [6, 7, 8]) s.tiles[idx(s, x, y)].terrain = 'water';

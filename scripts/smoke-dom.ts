@@ -976,15 +976,18 @@ check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方
 
 check('放大只撑大棋盘元素，不改基准尺寸；「适应」能回到 1×', () => {
   const wrap = doc.querySelector<HTMLElement>('.board-wrap');
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
   const board = doc.querySelector<HTMLElement>('.board');
-  assert.ok(wrap && board);
+  assert.ok(wrap && scroll && board, '找不到 board-wrap / board-scroll / board');
 
   click('[data-act="zoom-in"]');
   const zoomed = Number.parseFloat(board.style.width);
   // 646 是上面那一步算出来的基准，1.5× 一档
   assert.equal(zoomed, 969, `放大一档应该是 646 × 1.5，实际 ${zoomed}`);
   assert.ok(board.classList.contains('zoomed'), '棋盘要挂上 zoomed，才会取消 max-width');
-  assert.ok(wrap.classList.contains('zoomed'), '容器要挂上 zoomed，才会变成可滚动视口');
+  assert.ok(scroll.classList.contains('zoomed'), '滚动要挂在内层 board-scroll 上');
+  // 外层绝不能滚动：一旦它自己滚，里面的缩放条就会跟着地图跑掉
+  assert.ok(!wrap.classList.contains('zoomed'), 'board-wrap 不该承担滚动');
 
   click('[data-act="zoom-in"]');
   assert.equal(Number.parseFloat(board.style.width), 1292, '第二档 2×');
@@ -992,6 +995,15 @@ check('放大只撑大棋盘元素，不改基准尺寸；「适应」能回到 
   click('[data-act="zoom-fit"]');
   assert.equal(Number.parseFloat(board.style.width), 646, '「适应」应该回到基准尺寸');
   assert.ok(!board.classList.contains('zoomed'), '回到 1× 就该摘掉 zoomed');
+  assert.ok(!scroll.classList.contains('zoomed'), '内层也要摘掉');
+});
+
+check('缩放条不在滚动容器里面，所以不跟着地图平移', () => {
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
+  const bar = doc.querySelector<HTMLElement>('.zoom-bar');
+  assert.ok(scroll && bar, '找不到 board-scroll 或 zoom-bar');
+  assert.equal(bar.parentElement?.classList.contains('board-wrap'), true, '缩放条应该挂在 board-wrap 上');
+  assert.equal(scroll.contains(bar), false, '缩放条不能是滚动容器的内容');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
