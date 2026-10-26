@@ -172,7 +172,12 @@ function fantasyTraits(u: UnitTypeDef): string {
 const FANTASY_COLUMNS = ['名称', '图标', '时代', '造价', '攻', '魔攻', '甲', '魔抗', '血', '移', '射', '视', '属性', '特性'];
 
 function fantasyTable(pack: (typeof FANTASY_PACKS)[number]): string {
-  const units = [...(pack.units ?? [])].sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));
+  // 排序不能吃默认 locale：Windows 上默认是 zh-CN（拼音序），CI 的 ubuntu 上是
+  // en-US（码位序），同一份代码会生成两份不同的规则书，「规则书与代码同步」必挂。
+  // 钉死 zh-CN，让生成结果只取决于代码，不取决于跑在哪台机器上。
+  const units = [...(pack.units ?? [])].sort(
+    (a, b) => a.cost - b.cost || a.name.localeCompare(b.name, 'zh-CN'),
+  );
   const body = units
     .map(
       (u) => `
