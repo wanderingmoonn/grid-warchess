@@ -1064,6 +1064,17 @@ const HERO_IDS = ['dwarf-king', 'hydra', 'phoenix', 'archmage', 'angel'];
 // 原因不是"英雄不够强"，是"英雄不够值"：技能化之后每回合多了一次要做的决定，
 // 但面板没动，等于同样的钱买到了更多操作负担。护甲/魔抗/射程/移动一律不动——
 // 那几项每加一档就是换一个量级（护甲尤其非线性），跟"略微提升"不是一回事。
+//
+// 第二次上调：血量整体 ×1.2，造价跟着涨半成（+20~30 金）。
+//
+// 只动血，不动攻。英雄的问题从来不是"打不死人"，是"太容易先死"：
+// 一个 520 金的单位被对面两轮集火就没了，玩家下次就不敢买了，买了也只敢
+// 缩在城后——英雄一旦不能上前线，技能里那些"贴上去才值"的效果（投斧、
+// 烈焰俯冲、降临）就全废了。血量是唯一能把"敢不敢上"改过来的那一项。
+//
+// 加血必然要抬价，否则英雄在性价比上直接压死同费普通兵；但**只能略微涨**：
+// 涨到 600 以上，五个英雄就变成"解锁费之后再交一道钱墙"，节奏被拖垮的是
+// 玩家自己。所以按 +半成 走，谁的血涨得多谁多掏一点，最终都还落在原档位里。
 const HERO_UNITS: UnitTypeDef[] = [
   // 矮人王：近战是本职（atk 32，射程 1），投斧是**技能**（开一回合，射程 3 但只有六成）。
   //
@@ -1076,11 +1087,11 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '王',
     era: 3,
     category: 'combat',
-    cost: 340,
+    cost: 360,
     move: 2,
     atk: 34,
     armor: 8,
-    maxHp: 84,
+    maxHp: 101,
     range: 1,
     vision: 4,
     hero: true,
@@ -1098,18 +1109,18 @@ const HERO_UNITS: UnitTypeDef[] = [
       },
     ],
   },
-  // 九头蛇：115 血 + 每回合 20% 回复。解法只有一个——火。
+  // 九头蛇：145 血 + 每回合两成回复。解法只有一个——火。
   {
     id: 'hydra',
     name: '九头蛇',
     short: '九',
     era: 4,
     category: 'combat',
-    cost: 470,
+    cost: 490,
     move: 3,
     atk: 36,
     armor: 7,
-    maxHp: 121,
+    maxHp: 145,
     range: 1,
     vision: 4,
     hero: true,
@@ -1120,7 +1131,7 @@ const HERO_UNITS: UnitTypeDef[] = [
       {
         id: 'regrow',
         name: '再生',
-        summary: '立刻回复 40% 生命（约 48 点）。',
+        summary: '立刻回复 40% 生命（约 58 点）。',
         effect: 'regenerate',
         cooldown: 2,
         power: 0.4,
@@ -1134,11 +1145,11 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '凤',
     era: 4,
     category: 'combat',
-    cost: 460,
+    cost: 480,
     move: 6,
     atk: 38,
     armor: 4,
-    maxHp: 74,
+    maxHp: 89,
     range: 2,
     vision: 7,
     magicAtk: 10,
@@ -1166,11 +1177,11 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '尊',
     era: 5,
     category: 'combat',
-    cost: 560,
+    cost: 590,
     move: 2,
     atk: 10,
     armor: 3,
-    maxHp: 60,
+    maxHp: 72,
     range: 4,
     vision: 7,
     magicAtk: 26,
@@ -1206,11 +1217,11 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '使',
     era: 5,
     category: 'combat',
-    cost: 520,
+    cost: 550,
     move: 5,
     atk: 42,
     armor: 10,
-    maxHp: 101,
+    maxHp: 121,
     range: 1,
     vision: 7,
     magicAtk: 12,

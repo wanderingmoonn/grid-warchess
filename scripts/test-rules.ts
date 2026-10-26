@@ -1554,6 +1554,18 @@ test('英雄包只装英雄，而且五个都标了 hero', () => {
   }
 });
 
+test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
+  const heroes = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? [];
+  // 只卡下限和上限，不锁具体数字：以后微调面板不该让这条测试变红，
+  // 但"血被打回原样"和"贵到变成第二道钱墙"这两种退化必须拦住。
+  for (const u of heroes) {
+    assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
+    assert.ok(u.cost >= 360 && u.cost <= 600, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵
+    assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
+  }
+});
+
 test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () => {
   const s = fresh({ expansionIds: FANTASY });
   // 挖一整列水，两侧留一格：能过去就只能是飞过去
@@ -2268,7 +2280,7 @@ test('属性精研：火点燃、水霜缚、自然回血、暗魔攻 ×1.5', ()
   const green = applyAction(s3, { type: 'ATTACK', unitId: mage3.id, targetId: foe3.id });
   assert.ok(green.ok, green.ok ? '' : green.reason);
   const m3 = green.state.units.find((u) => u.id === mage3.id)!;
-  assert.equal(m3.hp, 30 + Math.round(60 * 0.1), '自然属性攻击时回 10%');
+  assert.equal(m3.hp, 30 + Math.round(s3.unitTypes.archmage!.maxHp * 0.1), '自然属性攻击时回 10%');
 
   // 暗：魔法段 ×1.5（先减魔抗再放大）
   const dark = { ...mage, element: 'dark' as const };
