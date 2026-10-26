@@ -32,6 +32,7 @@ import {
   damageToCity,
   distance,
   distToCity,
+  eggSpots,
   idx,
   inBounds,
   incomeOf,
@@ -283,7 +284,12 @@ function enemyThreatAt(
     const reach = def.move + Math.max(0, def.range);
     if (Math.abs(e.x - x) + Math.abs(e.y - y) > reach) continue;
     n += 1;
-    dmg += Math.max(0, def.atk - 2);
+    // 威胁要连魔法段一起算。
+    //
+    // 只按 atk 估的话，法师在 AI 眼里是个"7 攻的废物"——它会心安理得地
+    // 把兵停在法师脸上，然后被那 18 点魔攻（还不吃护甲）一炮带走。
+    // 魔法段不吃护甲，所以这里不减那 2 点：它对重甲单位也照打。
+    dmg += Math.max(0, def.atk - 2) + (def.magicAtk ?? 0);
   }
   return { n, dmg };
 }
@@ -1231,6 +1237,104 @@ interface RecruitSource {
  *
  * 城市和军营共用这段逻辑，区别只在"兵从哪几格出来"和 action 的字段。
  */
+/**
+ * 英雄技能要不要开。
+ *
+ * 每条技能只有"该开"和"不该开"两种判断，不做多回合规划——技能 CD 都不长，
+ * 早开一轮和晚开一轮的差别远小于"根本不开"。
+ * 分数给得比普通动作高一点（20~40），因为技能不占行动：开了还能接着打。
+ */
+function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
+  const def = utype(view, u.type);
+  const skills = def.skills ?? [];
+  if (skills.length === 0) return null;
+
+  const foes = unitsOf(view, other(u.owner)).filter(
+    (f) => utype(view, f.type).category === 'combat',
+  );
+  const hpRatio = u.hp / def.maxHp;
+
+  for (const k of skills) {
+    if ((u.skillCd?.[k.id] ?? 0) > 0) continue;
+    let score = 0;
+    switch (k.effect) {
+      case 'throw-axe': {
+        // 贴身的敌人就在眼前，劈比扔疼；扔斧头是"够不着"时的补偿
+        const adjacent = foes.some((f) => distance(f, u) === 1);
+        const outOfReach = foes.some((f) => distance(f, u) >= 2 && distance(f, u) <= 3);
+        if (!adjacent && outOfReach) score = 36;
+        break;
+      }
+      case 'regenerate': {
+        if (hpRatio < 0.65) score = 30 + (0.65 - hpRatio) * 90;
+        break;
+      }
+      case 'dive': {
+        if (foes.some((f) => distance(f, u) <= 4)) score = 26;
+        break;
+      }
+      case 'cycle': {
+        const cyc = def.cycle ?? [];
+        if (cyc.length === 0) break;
+        const cur = u.element ?? cyc[0]!;
+        const next = cyc[(cyc.indexOf(cur) + 1) % cyc.length]!;
+        const near = foes.filter((f) => distance(f, u) <= def.range + 1);
+        if (near.length === 0) break;
+        // 切到的属性正好克对面的弱点，这一轮就更值得
+        const weak = near.some((f) => (utype(view, f.type).weak?.[next] ?? 1) > 1);
+        score = weak ? 40 : 22;
+        break;
+      }
+      case 'descend': {
+        const radius = k.radius ?? 1;
+        const hurt = unitsOf(view, u.owner).filter((a) => {
+          if (distance(a, u) > radius) return false;
+          const ad = utype(view, a.type);
+          if (a.hp < ad.maxHp * 0.75) return true;
+          return !!a.status && Object.keys(a.status).length > 0;
+        });
+        // 只救一个人不值一次冷却；两个以上才算"这一片撑不住了"
+        if (hurt.length >= 2) score = 22 + hurt.length * 5;
+        break;
+      }
+    }
+    if (score > 0) {
+      return { action: { type: 'HERO_SKILL', unitId: u.id, skillId: k.id }, score };
+    }
+  }
+  return null;
+}
+
+/**
+ * 蛋放哪：离敌人越远越好，但别离家太远。
+ *
+ * 两个条件会打架——躲到地图另一头最安全，可这个英雄要重跑十回合才回得来。
+ * 所以用"威胁距离封顶 6 格"折算，再拿离自家城市的距离去扣。
+ */
+function eggPlacement(view: GameState, me: PlayerId): { x: number; y: number } | null {
+  const spots = eggSpots(view);
+  if (spots.length === 0) return null;
+  const foes = unitsOf(view, other(me)).filter((f) => utype(view, f.type).category === 'combat');
+  const own = citiesOf(view, me);
+
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  for (const p of spots) {
+    let threat = 6;
+    for (const f of foes) threat = Math.min(threat, distance(f, p));
+    const home =
+      own.length > 0
+        ? own.reduce((m, c) => Math.min(m, Math.abs(c.x - p.x) + Math.abs(c.y - p.y)), Infinity)
+        : 0;
+    const score = threat * 10 - home * 1.5;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
 function recruitCandidate(
   s: GameState,
   src: RecruitSource,
@@ -1276,6 +1380,11 @@ function recruitCandidate(
     // 运输船目前只给玩家用：AI 还没有"装船—渡河—上岸"这套计划能力，
     // 让它买一条自己不会用的船，等于白烧 60 金。
     if (d.transport) return false;
+    // 召唤物只认召唤者：AI 花 45 金买一个骷髅，等于给死灵法师的赠品单独付钱。
+    if (d.summonedOnly) return false;
+    // 英雄场上只能有一个。这条规则在 doRecruit 里也拦了，但在这里先拦掉，
+    // 才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
+    if (d.hero && s.units.some((u) => u.owner === me && u.type === d.id)) return false;
     if (d.era > src.era || d.era < src.era - 1) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
@@ -1315,15 +1424,37 @@ function recruitCandidate(
 
   const wet = waterShare(s);
 
+  // 支援型能力：这些兵的战场价值不在自己打得多狠，而在整条线更耐打/更能走。
+  // 白名单扩过一次——原来只有三条（指挥、护甲光环、威吓），
+  // 于是奇想包里所有新支援兵（治疗光环、净化、修缮、召唤、疾行、咒域、布雷）
+  // 在 AI 眼里都只是"数值很低的战斗单位"，一局也不会造。
+  const SUPPORT_ABILITIES = [
+    'aura-command',
+    'aura-armor',
+    'aura-speed',
+    'fear',
+    'curse-aura',
+    'heal-aura',
+    'purge',
+    'purge-greater',
+    'repair',
+    'summoner',
+    'trap',
+    'build-wall',
+  ];
+
   let best: Candidate | null = null;
   for (const d of pool) {
+    // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃
+    const unlockFee =
+      d.hero && !(s.unlocked?.[me] ?? []).includes(d.id) ? (d.unlockCost ?? 0) : 0;
     const price = recruitCost(s, me, d);
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
     // 一个池塘边上也能造船，但它开不出去。
     if (d.domain === 'water' && wet < WATER_MIN_SHARE) continue;
-    if (gold < price) continue;
+    if (gold < price + unlockFee) continue;
 
     let score = 50;
     if (d.category === 'combat') {
@@ -1366,14 +1497,37 @@ function recruitCandidate(
           const atWall = myUnits.some((u) => foeCities.some((c) => distance(u, c) <= 4));
           if (atWall) score += 16;
         }
-        // 支援型能力（光环 / 威吓）：它的价值不在自己打得多狠，而在整条线更耐打。
-        // 不给一点分，这类兵永远排在纯数值兵后面——扩展里有这个兵，但一局也没人造就等于没做。
-        if (
-          (d.abilities ?? []).some((a) => a === 'aura-command' || a === 'aura-armor' || a === 'fear')
-        ) {
-          score += 5;
+        // 支援型能力：价值不在自己打得多狠，而在整条线更耐打。
+        // 有治疗/净化/召唤的兵再额外给一点——它们改变的是"这支军队能熬多久"。
+        if ((d.abilities ?? []).some((a) => SUPPORT_ABILITIES.includes(a))) score += 5;
+        if ((d.abilities ?? []).some((a) => ['heal-aura', 'purge', 'summoner'].includes(a))) {
+          score += 4;
         }
       }
+
+      // 魔法段要算进"这个兵能打多少"。
+      //
+      // 打分一直只认 d.atk，于是法师在 52 个候选里排第 42 名：它把一半的伤害
+      // 搬进了 magicAtk，而那笔钱 AI 不认。结果是"法师在表里、在规则里、
+      // 就是不在战场上"。真把攻击力调到 20 才能进前十——那它就不是法师了。
+      const magic = d.magicAtk ?? 0;
+      if (magic > 0) score += Math.min(9, magic * 0.5);
+
+      // 英雄：军中有一定规模、且买完还剩点余钱时才买。
+      // 原来是"钱够就 +14"，等于第一座城一升级就把钱砸在英雄上，
+      // 后面没钱出兵，英雄一个人守空城。英雄是"带兵打"的，不是"替兵打"的。
+      if (d.hero && landCombat.length >= 6 && gold >= price + unlockFee + Math.round(price * 0.6)) {
+        score += 14;
+      }
+
+      // 边际递减：同一兵种越多，下一个越不值。
+      //
+      // 没有这一条时，采购是纯粹的 argmax——前十个兵种吃掉九成预算，
+      // 剩下十几个"也能用"的兵一局都见不到。递减不是让 AI 变弱，
+      // 是让它在第三个狼骑士之后开始想"我是不是该有个法师了"。
+      const sameType = myUnits.filter((u) => u.type === d.id).length;
+      if (sameType > 0) score -= Math.min(16, sameType * 2.4);
+
       // 开局一只兵都没有的时候，先凑出一小撮能打的，别急着攒钱升科技
       if (aiLevelOf(s) === 'advanced' && landCombat.length < 4 && price <= 80) score += 8;
 
@@ -1617,6 +1771,13 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
     : budget.recruited < budget.maxRecruit;
   const mayUpgrade = commander ? head === ORDER_UPGRADE && budget.upgraded < 1 : budget.upgraded < budget.maxUpgrade;
 
+  // 蛋还等着落位：先处理掉。不处理的话这一方会一直卡在"等你选蛋"上，
+  // 而 rules 层虽然会在结束回合时兜底，但那是"最后手段"，位置是随机凑合的。
+  if (s.pendingEgg && s.pendingEgg.owner === me) {
+    const spot = eggPlacement(view, me);
+    if (spot) return { type: 'PLACE_EGG', x: spot.x, y: spot.y };
+  }
+
   const candidates: Candidate[] = [];
   // 两套地形代价图（陆军 / 水军）算一次，本回合所有单位共用
   const land = distanceFields(view, me);
@@ -1647,6 +1808,8 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
 
   for (const u of unitsOf(view, me)) {
     candidates.push(...unitCandidates(view, u, fields, traits, s));
+    const skill = heroSkillCandidate(view, u);
+    if (skill) candidates.push(skill);
   }
 
   if (mayRecruit) {

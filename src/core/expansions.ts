@@ -18,6 +18,7 @@ import type { City, GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_PACKS } from './era-packs.ts';
+import { FANTASY_PACKS } from './fantasy-packs.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -170,6 +171,14 @@ export interface Expansion {
    * "真的只影响画面" 和 "注册了一个什么都不干的包"。
    */
   presentationOnly?: boolean;
+  /**
+   * 前置扩展：这些 id 必须同时启用，本扩展才生效（钩子和兵种都不进场）。
+   *
+   * 存在的理由不是"权限"，是**语义**：奇想兵种包依赖"魔法/属性/状态/空中层"
+   * 这套法则，单开一个兵种包会让玩家以为自己在玩数值包，实际上是半套规则。
+   * 前置包把这件事变成显式的、可见的选择，而不是藏在代码里的隐式依赖。
+   */
+  requires?: string[];
 }
 
 function nameOf(state: GameState, typeId: string): string {
@@ -389,148 +398,10 @@ export const EXPANSIONS: Expansion[] = [
       },
     },
   },
-  {
-    id: 'fantasy-units',
-    name: '奇想兵种包',
-    summary:
-      '八个不属于真实历史线的兵种，每个都带一条新机制：飞行（掠水）、冲锋、吸血、威吓、再生、法术溅射。不勾选就没有。',
-    hooks: {},
-    units: [
-      // ── 2 级：法术与威吓 ────────────────────────────────────────────────
-      // 这一档故意都做得很脆：它们靠"打一片"和"让对方打不疼"吃饭，
-      // 一旦被骑兵贴上来就是一换一，所以摆位比数值更重要。
-      {
-        id: 'warlock',
-        name: '术士',
-        short: '术',
-        era: 2,
-        category: 'combat',
-        cost: 105,
-        move: 2,
-        atk: 16,
-        armor: 1,
-        maxHp: 20,
-        range: 3,
-        vision: 5,
-        // 法术是"一片"而不是"一个"：只有 1 的溅射半径，但足以惩罚挤在一起的阵型
-        splash: 1,
-      },
-      {
-        id: 'banshee',
-        name: '女妖',
-        short: '妖',
-        era: 2,
-        category: 'combat',
-        cost: 85,
-        move: 3,
-        atk: 15,
-        armor: 1,
-        maxHp: 26,
-        range: 2,
-        vision: 5,
-        abilities: ['fear'],
-      },
-      // ── 3 级：机动与攻坚 ────────────────────────────────────────────────
-      {
-        id: 'dragoon',
-        name: '龙骑兵',
-        short: '龙',
-        era: 3,
-        category: 'combat',
-        cost: 145,
-        move: 6,
-        atk: 20,
-        armor: 3,
-        maxHp: 38,
-        range: 1,
-        vision: 6,
-        // 跑得快才打得疼：6 点移动几乎总能先动再打，所以基础攻击压到 20
-        abilities: ['charge'],
-      },
-      {
-        id: 'griffin',
-        name: '狮鹫',
-        short: '鹫',
-        era: 3,
-        category: 'combat',
-        cost: 155,
-        move: 5,
-        atk: 21,
-        armor: 3,
-        maxHp: 36,
-        range: 1,
-        vision: 7,
-        // 飞行的价值全在"过河不用绕渡口"：对双河图是质变，对开阔图只是快一点
-        abilities: ['fly'],
-      },
-      {
-        id: 'treant',
-        name: '树人',
-        short: '树',
-        era: 3,
-        category: 'combat',
-        cost: 180,
-        move: 2,
-        atk: 24,
-        armor: 7,
-        maxHp: 72,
-        range: 1,
-        vision: 3,
-        // 走得慢，但站得住、还能自己修、顺手拆城墙
-        abilities: ['regenerate', 'siege-master'],
-      },
-      // ── 4 级：两条不同的"肉" ────────────────────────────────────────────
-      {
-        id: 'vampire',
-        name: '吸血鬼',
-        short: '鬼',
-        era: 4,
-        category: 'combat',
-        cost: 220,
-        move: 5,
-        atk: 29,
-        armor: 5,
-        maxHp: 54,
-        range: 1,
-        vision: 5,
-        abilities: ['lifesteal'],
-      },
-      {
-        id: 'behemoth',
-        name: '巨兽',
-        short: '兽',
-        era: 4,
-        category: 'combat',
-        cost: 265,
-        move: 2,
-        atk: 34,
-        armor: 8,
-        maxHp: 84,
-        range: 1,
-        vision: 3,
-        // 加破城不是为了让它在野战更强，而是给它一个"值得被造"的理由：
-        // 一局没人造的兵，平衡数据再好也只是名单上的一行字
-        abilities: ['regenerate', 'siege-master'],
-      },
-      // ── 5 级：唯一一张"空地一体"的牌 ───────────────────────────────────
-      {
-        id: 'dragon',
-        name: '巨龙',
-        short: '巨',
-        era: 5,
-        category: 'combat',
-        cost: 450,
-        move: 6,
-        atk: 48,
-        armor: 10,
-        maxHp: 96,
-        range: 2,
-        vision: 7,
-        splash: 1,
-        abilities: ['fly'],
-      },
-    ],
-  },
+  // 五个奇想兵种包（奇想·法则 / 骑士团 / 荒兽 / 秘法 / 英雄）。
+  // 兵种数据在 fantasy-packs.ts 里——六十个单位摆在这里会把钩子表淹掉。
+  // 法则包是另外四个的前置（见 Expansion.requires）。
+  ...FANTASY_PACKS,
   {
     id: 'bloodbath',
     name: '血战',
@@ -585,9 +456,32 @@ export function expansionById(id: string): Expansion | undefined {
 /** 按配置里勾选的顺序取出启用的扩展（顺序固定，保证确定性） */
 export function activeExpansions(state: GameState): Expansion[] {
   const out: Expansion[] = [];
+  const on = enabledExpansionIds(state.config.expansionIds);
   for (const id of state.config.expansionIds) {
+    if (!on.has(id)) continue;
     const e = expansionById(id);
     if (e) out.push(e);
   }
   return out;
+}
+
+/**
+ * 把"勾了什么"过滤成"真正生效了什么"。
+ *
+ * 前置关系可能成链（A 要 B、B 要 C），所以这里跑到不动点：
+ * 每轮剔掉前置没满足的，直到没有可剔的。写成一次遍历会在
+ * "C 被剔掉"和"B 要 C"之间随机出结果——取决于数组顺序，那是不可接受的。
+ */
+export function enabledExpansionIds(ids: readonly string[]): Set<string> {
+  const on = new Set(ids.filter((id) => !!expansionById(id)));
+  for (;;) {
+    let changed = false;
+    for (const id of Array.from(on)) {
+      const need = expansionById(id)?.requires ?? [];
+      if (need.every((r) => on.has(r))) continue;
+      on.delete(id);
+      changed = true;
+    }
+    if (!changed) return on;
+  }
 }

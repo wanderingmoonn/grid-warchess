@@ -18,7 +18,10 @@
     "bench": "node --experimental-strip-types scripts/bench.ts",
     "ablate": "node --experimental-strip-types scripts/ablate.ts",
     "balance": "node --experimental-strip-types scripts/balance-report.ts",
-    "pack-report": "node --experimental-strip-types scripts/pack-report.ts"
+    "pack-report": "node --experimental-strip-types scripts/pack-report.ts",
+    "fantasy": "node --experimental-strip-types scripts/dump-fantasy.ts",
+    "fantasy:xlsx": "python scripts/export-fantasy-xlsx.py",
+    "probe:score": "node --experimental-strip-types scripts/probe-recruit-score.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

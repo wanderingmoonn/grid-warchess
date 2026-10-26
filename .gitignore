@@ -31,3 +31,8 @@ results/*
 # 跑批脚本一次性导出的实验数据（results20/ results21/ …）
 # 它们都能用 scripts/ 里的脚本按种子重跑出来，几百 KB 的 JSON 进库只是拖慢克隆
 results[0-9]*/
+
+# 奇幻兵种那条线的跑批产物（都能用 scripts/ 里的脚本重跑）
+_build/
+results-fantasy/
+奇想兵种表*.xlsx

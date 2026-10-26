@@ -10,7 +10,7 @@
  */
 
 import type { PlayerView } from '../core/fog.ts';
-import { cityName, utype } from '../core/rules.ts';
+import { cityName, isAirborne, utype } from '../core/rules.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
 export interface BoardUi {
@@ -166,10 +166,11 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   // 建筑先画、部队后画：同一格上"站着的兵"必须压在"设施"上面。
   // 反过来的话，兵被自己的塔盖住，点下去选中的是塔——那个兵就再也选不中、
   // 也就再也走不开了。z-index 不管这件事，DOM 顺序管。
+  // 空中单位最后画：它和地面单位可以叠在一格，画在上面才叫"在你头顶"。
   const ordered = [...s.units].sort((a, b) => {
-    const ab = utype(s, a.type).category === 'building' ? 0 : 1;
-    const bb = utype(s, b.type).category === 'building' ? 0 : 1;
-    return ab - bb;
+    const rank = (u: Unit) =>
+      utype(s, u.type).category === 'building' ? 0 : isAirborne(s, u) ? 2 : 1;
+    return rank(a) - rank(b);
   });
   const unitParts: string[] = [];
   for (const u of ordered) {
@@ -215,6 +216,8 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
   const isTarget = ui.targets.includes(u.id);
 
   const cls = ['unit', `owner-${u.owner}`, `cat-${def.category}`];
+  // 空中层：缩一号 + 往左上挪一点，和脚底下那个兵能同时看见
+  if (isAirborne(s, u)) cls.push('air');
   if (isSpent) cls.push('spent');
   if (isSelected) cls.push('selected');
   if (isTarget) cls.push('targeted');

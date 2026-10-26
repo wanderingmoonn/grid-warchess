@@ -18,6 +18,7 @@ import {
   cityRegenOf,
   cityTiles,
   distToCity,
+  heroSkillsOf,
   recruitCost,
   unitsOf,
   upgradeCostOf,
@@ -70,6 +71,21 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const detail = renderDetail(input, myTurn);
   const logHtml = renderLog(input);
 
+  // 蛋等着落位：这条提示必须显眼。它是"你的回合被暂停了"的状态，
+  // 不写在最上面的话，玩家会以为点了没反应。
+  const egg = s.pendingEgg;
+  const eggMine = !!egg && !spectator && egg.owner === me && s.current === me;
+  const eggBanner = !egg
+    ? ''
+    : `<div class="card" style="border-color:#c9a227">
+         <div class="card-title">${eggMine ? '选一格孵化' : '蛋在等着'}</div>
+         <div class="hint">${
+           eggMine
+             ? `不死鸟的蛋落在 ${String.fromCharCode(65 + egg.x)}${egg.y + 1} 附近。点棋盘上的橙格放它，孵化后带 ${Math.round(egg.hpRatio * 100)}% 生命。`
+             : `${s.players[egg.owner].name} 手里还有一枚没孵化的蛋。`
+         }</div>
+       </div>`;
+
   const activeNames = s.config.expansionIds
     .map((id) => expansionById(id)?.name)
     .filter((n): n is string => !!n);
@@ -98,6 +114,8 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
       <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
     </div>
 
+    ${eggBanner}
+
     <div class="card">${detail}</div>
 
     <div class="card">
@@ -123,6 +141,34 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
       </div>
     </div>
   `;
+}
+
+/**
+ * 英雄技能菜单。
+ *
+ * 长得和"可建造""产兵"一样，因为它们回答的是同一类问题：
+ * "这一回合，我手上这几个人能做什么"。冷却是灰按钮，不是不显示——
+ * 玩家要知道"再等一回合"，而不是以为技能丢了。
+ */
+function heroSkillBlock(s: GameState, units: Unit[]): string {
+  const rows: string[] = [];
+  for (const u of units) {
+    const def = utype(s, u.type);
+    if (!def.skills || def.skills.length === 0) continue;
+    for (const k of heroSkillsOf(s, u)) {
+      rows.push(
+        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+           <span class="meta"><b>${def.name} · ${k.def.name}</b><span>${escapeHtml(k.def.summary)}</span></span>
+           <span class="price">${k.ready ? '就绪' : `${k.cd} 回合`}</span>
+         </button>`,
+      );
+    }
+  }
+  if (rows.length === 0) return '';
+  return `<div class="card-title" style="margin-top:14px">英雄技能</div>
+    <div class="recruit-list">${rows.join('')}</div>
+    <div class="hint" style="margin-top:8px">技能不占行动，每个英雄每回合最多一次。冷却中的按钮会显示还要等几回合。</div>`;
 }
 
 function renderDetail(input: PanelInput, myTurn: boolean): string {
@@ -277,6 +323,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       ${def.burst ? `<div class="info-row"><span>连击</span><b>${def.burst} 段 · 每段独立减甲</b></div>` : ''}
+      ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
@@ -290,8 +337,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     `;
   }
 
+  // 没选中任何东西时的默认页：把自己的英雄技能摆出来。
+  // "每回合像建造那样给一个选择"——不去点单位也能看到今天能开什么。
+  const myHeroes =
+    input.spectator !== true && myTurn ? unitsOf(s, me).filter((u) => utype(s, u.type).skills) : [];
+  const heroBlock = heroSkillBlock(s, myHeroes);
+
   return `
-    <div class="card-title">操作</div>
+    ${heroBlock}
+    <div class="card-title"${heroBlock ? ' style="margin-top:14px"' : ''}>操作</div>
     <div class="hint">
       点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
       点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
@@ -343,7 +397,11 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   // 城里只产"能被派出去的单位"，建筑要用建造单位去盖
   const buildable = Object.values(s.unitTypes).filter(
-    (d) => d.category !== 'building' && d.era <= city.era && d.era >= city.era - 1,
+    (d) =>
+      d.category !== 'building' &&
+      !d.summonedOnly &&
+      d.era <= city.era &&
+      d.era >= city.era - 1,
   );
   const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
 
@@ -447,14 +505,22 @@ function recruitButton(
   extra: string,
 ): string {
   const price = recruitCost(s, me, def);
-  const detail = `攻 ${def.atk} · 甲 ${def.armor} · 移 ${def.move} · 射 ${def.range}`;
-  return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${disabled ? 'disabled' : ''}>
+  // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
+  // 看到 300 金的按钮却扣了 450，玩家只会觉得算错了。
+  const unlockFee =
+    def.hero === true && !(s.unlocked?.[me] ?? []).includes(def.id) ? (def.unlockCost ?? 0) : 0;
+  const aliveHere = def.hero === true && s.units.some((u) => u.owner === me && u.type === def.id);
+  const total = price + unlockFee;
+  const blocked = disabled || aliveHere || s.players[me].gold < total;
+  const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
+  const detail = `攻 ${def.atk} · 甲 ${def.armor} · 移 ${def.move} · 射 ${def.range}${tag}`;
+  return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
     <span class="meta">
       <b>${def.name}</b>
       <span>${detail}${extra}</span>
     </span>
-    <span class="price">${price}</span>
+    <span class="price">${total}</span>
   </button>`;
 }
 
@@ -506,7 +572,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   }
 
   const buildable = Object.values(s.unitTypes).filter(
-    (d) => d.category !== 'building' && d.era <= era && d.era >= era - 1,
+    (d) =>
+      d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
   );
 
   const groups = (['combat', 'economy', 'builder'] as const)

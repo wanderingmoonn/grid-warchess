@@ -7,7 +7,7 @@
 
 import { ERAS } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
-import { EXPANSIONS } from '../core/expansions.ts';
+import { EXPANSIONS, expansionById } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES } from '../core/mapgen.ts';
 import {
   BOARD_SIZES,
@@ -144,6 +144,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         </div>`;
       }).join('');
 
+      // 前置关系直接写在卡片上：一个"勾了却不生效"的开关比没有这个开关更糟
+      const reqLine = (id: string): string => {
+        const need = expansionById(id)?.requires ?? [];
+        if (need.length === 0) return '';
+        const names = need.map((r) => expansionById(r)?.name ?? r).join('、');
+        return `<span class="expansion-req">需先开：${names}</span>`;
+      };
       const expItems = EXPANSIONS.map(
         (e) => `
         <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
@@ -151,6 +158,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           <span class="expansion-body">
             <b>${e.name}</b>
             <span>${e.summary}</span>
+            ${reqLine(e.id)}
           </span>
         </label>`,
       ).join('');
@@ -348,7 +356,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (act === 'start') {
         // 按注册顺序固定下来：同样的勾选组合，不管点击先后，生效顺序都一样。
         // 钩子是有叠加效果的，顺序漂移会让"同一局"算出不同结果。
-        const ordered = EXPANSIONS.filter((e) => config.expansionIds.includes(e.id)).map((e) => e.id);
+        // 前置补齐再排序。勾选时已经补过一次，这里再补一次是因为
+        // 配置也可能从别处进来（存档、分享的链接），不能假设它自洽。
+        const ids = new Set(config.expansionIds);
+        for (const id of Array.from(ids)) {
+          for (const need of expansionById(id)?.requires ?? []) ids.add(need);
+        }
+        const ordered = EXPANSIONS.filter((e) => ids.has(e.id)).map((e) => e.id);
         close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
       }
       if (act === 'reroll') {
@@ -386,6 +400,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (!id) return;
       if (input.checked) {
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
+        // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
+        for (const need of expansionById(id)?.requires ?? []) {
+          if (config.expansionIds.includes(need)) continue;
+          config.expansionIds.push(need);
+          const box = mask.querySelector<HTMLInputElement>(`[data-exp="${need}"]`);
+          if (box) {
+            box.checked = true;
+            box.closest('.expansion-item')?.classList.add('on');
+          }
+        }
       } else {
         config.expansionIds = config.expansionIds.filter((x) => x !== id);
       }

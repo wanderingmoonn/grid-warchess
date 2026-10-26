@@ -21,6 +21,7 @@ import {
   cityAt,
   citiesOf,
   distance,
+  eggSpots,
   idx,
   incomeOf,
   ordersOf,
@@ -456,6 +457,12 @@ function clearSelection(): void {
 
 /** 建造者周围哪些空格可以盖东西（桥是唯一能盖在水上的） */
 function computePlaceable(): number[] {
+  // 蛋落位也复用这一层橙格：轮到我了、手里还有一枚蛋，就把可选格点亮。
+  // 它比"点错了再弹提示"友好得多——玩家一眼就知道能放哪儿。
+  if (state.pendingEgg && state.pendingEgg.owner === state.current) {
+    return eggSpots(state).map((p) => p.y * state.w + p.x);
+  }
+
   // 下船选址复用同一层高亮（橙格 = 点这里）。两件事不会同时进行：
   // 一条船在等卸货时，不可能另有一个建造单位在选址。
   if (unloadPlan) {
@@ -679,7 +686,16 @@ function onBoardClick(e: Event): void {
   // 扩展包把兵种从 49 个堆到 118 个之后，"对面这个是什么、射程几格、护甲多少"
   // 变成了临场刚需（以前整局就那几种兵，看图标就知道）。而"看"不是"操作"，
   // 没理由要求轮到自己才能看。面板那边对非己方单位一律不给按钮。
-  if (clickedUnitId) {
+  //
+  // 但这一段排在攻击判断前面，所以必须先算清"这一下到底是不是要开火"：
+  // 早先无条件拦下所有敌方单位，结果选中己方部队之后点敌人只弹属性卡，
+  // 攻击这个动作在界面上等于消失了。能打到的目标要让路给下面第 1 步。
+  const attackingNow =
+    myTurn() &&
+    !watching() &&
+    !state.config.commanderMode &&
+    Boolean(clickedUnitId && selectedId && targets.includes(clickedUnitId));
+  if (clickedUnitId && !attackingNow) {
     const preview = viewNow().state.units.find((u) => u.id === clickedUnitId);
     if (preview && (watching() || preview.owner !== me())) {
       selectUnit(preview);
@@ -781,6 +797,18 @@ function onBoardClick(e: Event): void {
   }
 
   if (!coords) return;
+  // 手里有蛋：这一下必须用来落位。蛋是"死了才出现"的临时状态，
+  // 一直挂着不处理会把整个回合卡住，所以优先于移动/攻击。
+  if (state.pendingEgg && state.pendingEgg.owner === state.current) {
+    const egg = state.pendingEgg;
+    if (eggSpots(state).some((p) => p.x === coords.x && p.y === coords.y)) {
+      dispatch({ type: 'PLACE_EGG', x: coords.x, y: coords.y });
+    } else {
+      toast(`蛋只能放在原地的 ${egg.radius} 格内（橙格）`);
+    }
+    return;
+  }
+
   const cell = idx(state, coords.x, coords.y);
   const city = cityAt(state, coords.x, coords.y);
 
@@ -855,6 +883,15 @@ function handleAction(act: string, el: HTMLElement): void {
         selectedId = null;
         render();
       }
+      return;
+    }
+
+    case 'hero-skill': {
+      const unitId = el.dataset.id;
+      const skillId = el.dataset.skill;
+      if (!unitId || !skillId) return;
+      dispatch({ type: 'HERO_SKILL', unitId, skillId });
+      render();
       return;
     }
 
@@ -1182,7 +1219,10 @@ function commanderPool(): UnitTypeDef[] {
   const eras = citiesOf(state, me()).map((c) => c.era);
   const era = eras.length > 0 ? Math.max(...eras) : 1;
   return Object.values(state.unitTypes)
-    .filter((d) => d.category !== 'building' && d.era <= era && d.era >= era - 1)
+    .filter(
+      (d) =>
+        d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
+    )
     .sort((a, b) => a.era - b.era || a.cost - b.cost);
 }
 

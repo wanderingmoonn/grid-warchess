@@ -32,10 +32,16 @@ import {
   cityById,
   cityRegenOf,
   cityTiles,
+  armySize,
+  canStrike,
   computeDamage,
   damageToCity,
   distance,
   distToCity,
+  effectiveRange,
+  eggSpots,
+  isHiddenFrom,
+  magicDamageOf,
   idx,
   incomeOf,
   movePower,
@@ -48,6 +54,7 @@ import {
   threatTiles,
   unitAt,
   unitIncome,
+  unitsAt,
   unitsOf,
   upgradeCostOf,
   utype,
@@ -1373,34 +1380,126 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
   }
 });
 
-test('勾选奇想兵种包会把额外兵种注入本局', () => {
-  const plain = fresh();
-  const fantasy = fresh({ expansionIds: ['fantasy-units'] });
-  assert.equal(plain.unitTypes.dragoon, undefined);
-  for (const id of ['dragoon', 'warlock', 'behemoth', 'griffin', 'banshee', 'treant', 'vampire', 'dragon']) {
-    assert.ok(fantasy.unitTypes[id], `勾选后应该出现 ${id}`);
-  }
+console.log('\n奇想兵种包：前置、机制、数值');
+
+const FANTASY = ['fantasy-core', 'fantasy-knights', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-heroes'];
+
+/** 摆一个本局存在的兵种（含扩展包），会清掉这一格上的所有单位 */
+function place2(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  const def = s.unitTypes[type];
+  assert.ok(def, `本局没有 ${type} 这个兵种`);
+  s.units = s.units.filter((k) => !(k.x === x && k.y === y));
+  const u: Unit = {
+    id: `k${s.nextUnitSeq++}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  s.units.push(u);
+  return u;
+}
+
+/** 摆一个单位但**不清理**那一格：测「空中层压着地面单位」时必须用它 */
+function stackOn(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  const def = s.unitTypes[type];
+  assert.ok(def, `本局没有 ${type} 这个兵种`);
+  const u: Unit = {
+    id: `s${s.nextUnitSeq++}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  s.units.push(u);
+  return u;
+}
+
+test('前置包没开时，依赖它的兵种包整包不进場', () => {
+  // 只勾骑士团、不勾法则：兵一个都不该出现，配置里也不该留着这条谎话
+  const alone = fresh({ expansionIds: ['fantasy-knights'] });
+  assert.equal(alone.unitTypes.swordsman, undefined, '法则没开，骑士团不该进场');
+  assert.equal(alone.config.expansionIds.includes('fantasy-knights'), false);
+
+  const both = fresh({ expansionIds: ['fantasy-core', 'fantasy-knights'] });
+  assert.ok(both.unitTypes.swordsman, '两个都开才进场');
+  assert.ok(both.unitTypes.mage);
+  assert.equal(both.unitTypes.boneDragon, undefined);
+  assert.equal(both.unitTypes['bone-dragon'], undefined, '荒兽没勾，骷髅飞龙不该在');
 });
 
-test('奇想兵种包每个兵种都带一条机制', () => {
-  const s = fresh({ expansionIds: ['fantasy-units'] });
-  const pack = EXPANSIONS.find((e) => e.id === 'fantasy-units');
-  assert.ok(pack?.units && pack.units.length >= 6, '兵种包应该有一整套兵');
-  for (const u of pack.units!) {
-    const hasMech = (u.abilities ?? []).length > 0 || (u.splash ?? 0) > 0 || (u.burst ?? 1) > 1;
-    assert.ok(hasMech, `${u.name} 只是一组数值，没有带任何机制`);
-    // 能力 id 必须真实存在，否则 rules.ts 里那一段永远不会被走到
-    for (const a of u.abilities ?? []) {
-      assert.ok(ABILITIES.some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
+test('五个奇想包齐了，兵种 id 不重复，能力 id 都真实存在', () => {
+  const packs = EXPANSIONS.filter((e) => e.id.startsWith('fantasy-'));
+  assert.equal(packs.length, 5, '法则 + 骑士团 + 荒兽 + 秘法 + 英雄');
+  const core = packs.find((e) => e.id === 'fantasy-core')!;
+  assert.equal(core.units, undefined, '法则包只带机制，不带兵');
+  for (const p of packs) {
+    if (p.id === 'fantasy-core') continue;
+    assert.deepEqual(p.requires, ['fantasy-core'], `${p.name} 应该依赖法则包`);
+  }
+
+  const seen = new Set<string>();
+  for (const p of packs) {
+    for (const u of p.units ?? []) {
+      assert.ok(!seen.has(u.id), `兵种 id 重复：${u.id}`);
+      seen.add(u.id);
+      for (const a of u.abilities ?? []) {
+        assert.ok(ABILITIES.some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
+      }
+      assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
+      assert.ok(u.cost > 0, `${u.name} 的造价必须为正`);
+      if (u.category === 'building') assert.equal(u.move, 0, `${u.name} 是建筑，不能动`);
     }
-    assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
   }
-  assert.ok(s.unitTypes.dragon, '五级应该有一张自己的牌');
+  assert.ok(seen.size >= 55, `奇想兵种应该有五十多个，现在 ${seen.size}`);
 });
 
-test('飞行：能越过整条河，但停不到水面上', () => {
-  const s = fresh({ expansionIds: ['fantasy-units'] });
-  // 把一整列改成水：这样"从右边绕过去"是不可能的，能过去就只能是飞过去
+test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
+  const packs = EXPANSIONS.filter((e) => e.id.startsWith('fantasy-'));
+  for (const p of packs) {
+    for (const u of p.units ?? []) {
+      // 召唤物不受这条管：骷髅、小史莱姆、小恶魔、幻影就是"一次性的数值块"，
+      // 它们的机制在召唤者身上（周期、上限、随机表）。给杂兵再挂一条能力，
+      // 只会让召唤者的定位变模糊。
+      if (u.summonedOnly) continue;
+      const mech =
+        (u.abilities ?? []).length > 0 ||
+        (u.splash ?? 0) > 0 ||
+        (u.burst ?? 1) > 1 ||
+        (u.magicAtk ?? 0) > 0 ||
+        (u.magicRes ?? 0) > 0 ||
+        !!u.element ||
+        !!u.summon ||
+        !!u.ammo ||
+        !!u.hero ||
+        !!u.decays ||
+        !!u.splitInto ||
+        (u.weak && Object.keys(u.weak).length > 0);
+      assert.ok(mech, `${u.name} 只是一组数值，没有带任何机制`);
+    }
+  }
+});
+
+test('英雄包只装英雄，而且五个都标了 hero', () => {
+  const heroes = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
+  assert.equal((heroes.units ?? []).length, 5);
+  for (const u of heroes.units ?? []) {
+    assert.equal(u.hero, true, `${u.name} 应该在英雄包里且标了 hero`);
+    assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
+  }
+});
+
+test('飞行：蜘蛛骑士能越过整条河，也能停在水面上', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  // 挖一整列水，两侧留一格：能过去就只能是飞过去
   const cols: number[] = [];
   for (let x = 1; x < s.w - 1; x++) {
     let clear = true;
@@ -1409,104 +1508,771 @@ test('飞行：能越过整条河，但停不到水面上', () => {
   }
   const x0 = cols[Math.floor(cols.length / 2)]!;
   for (let y = 0; y < s.h; y++) s.tiles[idx(s, x0, y)].terrain = 'water';
-  for (let y = 0; y < s.h; y++) {
-    for (const x of [x0 - 1, x0 + 1]) {
-      const t = s.tiles[idx(s, x, y)];
-      if (t.terrain === 'water' || t.terrain === 'mountain') t.terrain = 'plain';
-    }
-  }
-  s.units = s.units.filter((u) => u.x !== x0 && u.x !== x0 - 1 && u.x !== x0 + 1);
+  s.units = s.units.filter((u) => Math.abs(u.x - x0) > 1);
 
   const y0 = Math.floor(s.h / 2);
-  const griffin = placeDef(s, 'A', 'griffin', x0 - 1, y0);
-  const reach = reachableTiles(s, griffin);
-  assert.ok(reach.has(idx(s, x0 + 1, y0)), '狮鹫应该能飞到对岸');
-  for (const i of reach.keys()) {
-    const { x, y } = { x: i % s.w, y: Math.floor(i / s.w) };
-    assert.notEqual(s.tiles[idx(s, x, y)].terrain, 'water', '落点不能在水上');
+  for (const y of [y0 - 1, y0, y0 + 1]) {
+    s.tiles[idx(s, x0 - 1, y)].terrain = 'plain';
+    s.tiles[idx(s, x0 + 1, y)].terrain = 'plain';
   }
+  const spider = place2(s, 'A', 'spider-rider', x0 - 1, y0);
+  const reach = reachableTiles(s, spider);
+  assert.ok(reach.has(idx(s, x0 + 1, y0)), '蜘蛛骑士应该能跳到对岸');
+  // 水面也能落脚：飞行不是"过河时不许回头"，它可以停在河中间
+  assert.ok(reach.has(idx(s, x0, y0)), '水面也是合法的落点');
 
-  // 对照：同样起点的骑兵（move 3）连河对岸都摸不到
-  s.units = s.units.filter((u) => u.id !== griffin.id);
-  const knight = place(s, 'A', 'knight', x0 - 1, y0);
-  const landReach = reachableTiles(s, knight);
-  assert.equal(landReach.has(idx(s, x0 + 1, y0)), false, '骑兵过不了河');
+  // 对照：走地的照旧进不去水
+  const walker = place2(s, 'A', 'swordsman', x0 - 1, y0 + 1);
+  assert.ok(!reachableTiles(s, walker).has(idx(s, x0, y0)), '走地单位进不了水');
 });
 
-test('冲锋：动过才有 +5，反击不吃这个加成', () => {
-  const s = fresh();
-  grantAbility(s, 'militia', 'charge');
-  const { a, b } = duel(s);
-  const still = computeDamage(s, a, b);
-  a.moved = true;
-  assert.equal(computeDamage(s, a, b) - still, 5, '移动过之后应该多 5 点');
+test('掠空：能和地面单位站在同一格，也能从同一格互相打', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[4, 5], [5, 5], [5, 6], [4, 6], [6, 5]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  const air = place2(s, 'A', 'griffin-rider', 4, 5);
+  const ground = stackOn(s, 'B', 'swordsman', 5, 5);
+  assert.equal(unitsAt(s, 5, 5).length, 1);
 
-  // 反击是原地还手：同样一个"动过"的单位，反击伤害不该多出来
-  b.moved = false;
-  const counterStill = computeDamage(s, b, a, true);
-  b.moved = true;
-  assert.equal(computeDamage(s, b, a, true), counterStill);
+  // 飞行单位可以把"站着敌人的格子"当成落点
+  assert.ok(reachableTiles(s, air).has(idx(s, 5, 5)), '掠空要能停在敌人头顶');
+  // 地面单位不行（对照组：同一张图、同样的起点）
+  s.units = s.units.filter((u) => u.id !== air.id);
+  const cav = place2(s, 'A', 'royal-cavalry', 4, 5);
+  assert.equal(reachableTiles(s, cav).has(idx(s, 5, 5)), false, '地面兵不能停在敌军格');
+
+  // 叠在一格之后，双方都打得到对方
+  const lifted = stackOn(s, 'A', 'griffin-rider', 4, 5);
+  lifted.x = ground.x;
+  lifted.y = ground.y;
+  assert.equal(unitsAt(s, 5, 5).length, 2, '空中 + 地面应该各占一层');
+  assert.ok(canStrike(s, lifted, ground), '飞在天上也能打脚下的人');
+  assert.ok(canStrike(s, ground, lifted), '脚下的人也能还手');
 });
 
-test('威吓：相邻敌军攻击 −2，最多叠两层', () => {
-  const s = fresh({ expansionIds: ['fantasy-units'] });
-  const { a, b } = duel(s);
-  const base = computeDamage(s, a, b);
-  const one = placeDef(s, 'B', 'banshee', a.x - 1, a.y);
-  s.tiles[idx(s, one.x, one.y)].terrain = 'plain';
-  assert.equal(computeDamage(s, a, b), base - 2, '一个女妖贴身应该 −2');
-
-  const two = placeDef(s, 'B', 'banshee', a.x, a.y + 1);
-  s.tiles[idx(s, two.x, two.y)].terrain = 'plain';
-  assert.equal(computeDamage(s, a, b), base - 4, '两个女妖应该 −4');
-
-  const three = placeDef(s, 'B', 'banshee', a.x + 1, a.y);
-  s.tiles[idx(s, three.x, three.y)].terrain = 'plain';
-  assert.equal(computeDamage(s, a, b), base - 4, '三层封顶，不再继续扣');
-});
-
-test('吸血：把真打出来的伤害换四成血，上限不超过生命上限', () => {
-  const s = fresh({ expansionIds: ['fantasy-units'] });
-  const vamp = placeDef(s, 'A', 'vampire', 5, 5);
-  // 靶子用戟兵：民兵会被一击打死，那就没有反击、也测不出"结算顺序"
-  const target = place(s, 'B', 'halberdier', 5, 4);
+test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
+  const s = fresh({ expansionIds: FANTASY });
   s.tiles[idx(s, 5, 5)].terrain = 'plain';
   s.tiles[idx(s, 5, 4)].terrain = 'plain';
-  const maxHp = s.unitTypes.vampire!.maxHp;
-  vamp.hp = 20;
-  const dmg = computeDamage(s, vamp, target);
-  const counter = computeDamage(s, target, vamp, true);
-  assert.ok(dmg > 0 && counter > 0, '这组数据应该打得出伤害、也挨得到反击');
-  const r = applyAction(s, { type: 'ATTACK', unitId: vamp.id, targetId: target.id });
-  assert.ok(r.ok);
-  assert.ok(r.state.units.some((u) => u.id === target.id), '靶子应该活着，这样才有反击');
-  const after = r.state.units.find((u) => u.id === vamp.id)!;
-  const heal = Math.min(maxHp - (20 - counter), Math.round(dmg * 0.4));
-  assert.equal(after.hp, 20 - counter + heal);
-  assert.ok(heal > 0, '这一下应该真的吸到血');
+  const mage = place2(s, 'A', 'mage', 5, 5);
 
-  // 满血时不会溢出上限
-  vamp.hp = maxHp;
-  const r2 = applyAction(s, { type: 'ATTACK', unitId: vamp.id, targetId: target.id });
-  assert.ok(r2.ok);
-  assert.equal(r2.state.units.find((u) => u.id === vamp.id)!.hp, maxHp);
+  // 超级重骑 8 甲：法师物理段 7−8=0，魔法段 18−0=18
+  const heavy = place2(s, 'B', 'cataphract', 5, 4);
+  assert.equal(computeDamage(s, mage, heavy), 18);
+
+  // 圣骑士 7 甲 + 4 魔抗：物理 0，魔法 18−4=14
+  const paladin = place2(s, 'B', 'paladin', 5, 4);
+  assert.equal(computeDamage(s, mage, paladin), 14);
+
+  // 对照：同样攻击力全走物理的弓手，被 8 甲吃掉一大半
+  const elf = place2(s, 'A', 'elf-archer', 6, 5);
+  assert.equal(computeDamage(s, elf, heavy), 22 - 8);
 });
 
-test('再生：每回合开始回 10% 上限，动过也算', () => {
-  const s = fresh({ expansionIds: ['fantasy-units'] });
-  const treant = placeDef(s, 'A', 'treant', 5, 5);
-  treant.hp = 30;
-  treant.moved = true;
-  treant.acted = true;
-  // 换手两次才轮到 A 自己开局
+test('属性弱点：巨魔怕火，同一个火属性攻击打它翻倍', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const fire = place2(s, 'A', 'fire-elemental', 5, 5);
+  const troll = place2(s, 'B', 'troll', 5, 4);
+  const doubled = computeDamage(s, fire, troll);
+  delete s.unitTypes.troll!.weak;
+  const plain = computeDamage(s, fire, troll);
+  assert.equal(doubled, plain * 2, '怕火的兵挨火属性应该正好翻倍');
+  assert.ok(plain > 0);
+});
+
+test('中毒：打中让其中毒三回合，每回合掉 6% 生命上限', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const snake = place2(s, 'A', 'serpent-man', 5, 5);
+  const target = place2(s, 'B', 'swordsman', 5, 4);
+  const maxHp = s.unitTypes.swordsman!.maxHp;
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: snake.id, targetId: target.id });
+  assert.ok(r.ok);
+  const poisoned = r.state.units.find((u) => u.id === target.id)!;
+  assert.equal(poisoned.status?.poison, 3, '应该贴上三回合中毒');
+  const hpAfterHit = poisoned.hp;
+
+  // A 结束回合 → B 的回合开始，中毒立刻结算一次
+  const r2 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  const ticked = r2.state.units.find((u) => u.id === target.id)!;
+  assert.equal(ticked.hp, hpAfterHit - Math.ceil(maxHp * 0.06));
+  assert.equal(ticked.status?.poison, 2, '结算一次之后剩两回合');
+});
+
+test('净化只清一层，大净化清全部', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 6], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  place2(s, 'A', 'priest', 5, 5);
+  const ward = place2(s, 'A', 'swordsman', 5, 6);
+  ward.status = { poison: 2, slow: 3 };
   const r1 = applyAction(s, { type: 'END_TURN' });
   assert.ok(r1.ok);
-  assert.equal(r1.state.units.find((u) => u.id === treant.id)!.hp, 30, '对手回合不该回血');
   const r2 = applyAction(r1.state, { type: 'END_TURN' });
   assert.ok(r2.ok);
-  const after = r2.state.units.find((u) => u.id === treant.id)!;
-  // 按兵种表算，不写死：这一条测的是"回多少"，不是"这兵现在多少血"
-  assert.equal(after.hp, 30 + Math.ceil(s.unitTypes.treant!.maxHp * 0.1));
+  const after = r2.state.units.find((u) => u.id === ward.id)!;
+  assert.equal(after.status?.poison, undefined, '净化按中毒→点燃→减速→诅咒的顺序先清中毒');
+  assert.equal(after.status?.slow, 2, '一次只清一层（先被中毒扣过一回合）');
+
+  // 大净化：半径 2 一次清空。
+  // 现在没有兵永久带这条能力（天使改成主动技能了），所以这里临时挂上去，
+  // 测的是"半径 2"这件事本身——隔一格的人也该被清到。
+  const s2 = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [6, 5], [7, 5], [5, 6]]) s2.tiles[idx(s2, x, y)].terrain = 'plain';
+  place2(s2, 'A', 'angel', 5, 5);
+  s2.unitTypes.angel!.abilities = [...(s2.unitTypes.angel!.abilities ?? []), 'purge-greater'];
+  const near = place2(s2, 'A', 'swordsman', 5, 6);
+  const far = place2(s2, 'A', 'swordsman', 7, 5);
+  near.status = { poison: 2, burn: 2, slow: 2, curse: 2 };
+  far.status = { poison: 2, burn: 2 };
+  const t1 = applyAction(s2, { type: 'END_TURN' });
+  assert.ok(t1.ok);
+  const t2 = applyAction(t1.state, { type: 'END_TURN' });
+  assert.ok(t2.ok);
+  const cleanNear = t2.state.units.find((u) => u.id === near.id)!;
+  const cleanFar = t2.state.units.find((u) => u.id === far.id)!;
+  assert.deepEqual(cleanNear.status ?? {}, {}, '贴身的人清空');
+  assert.deepEqual(cleanFar.status ?? {}, {}, '隔两格也在半径内，一起清');
+
+  // 「降临」技能：半径 3，回血 + 清空，冷却两回合
+  const s3 = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [8, 5]]) s3.tiles[idx(s3, x, y)].terrain = 'plain';
+  const a3 = place2(s3, 'A', 'angel', 5, 5);
+  const mate = place2(s3, 'A', 'swordsman', 8, 5);
+  const mateMax = s3.unitTypes.swordsman!.maxHp;
+  mate.hp = 10;
+  mate.status = { poison: 2, curse: 2 };
+  s3.current = 'A';
+  const d1 = applyAction(s3, { type: 'HERO_SKILL', unitId: a3.id, skillId: 'descend' });
+  assert.ok(d1.ok, d1.ok ? '' : d1.reason);
+  const healed = d1.state.units.find((u) => u.id === mate.id)!;
+  assert.ok(healed.hp > 10, '隔三格的队友也吃到治疗');
+  assert.equal(healed.hp, Math.min(mateMax, 10 + Math.round(mateMax * 0.1)));
+  assert.deepEqual(healed.status ?? {}, {}, '负面状态一起清掉');
+  assert.equal(d1.state.units.find((u) => u.id === a3.id)!.skillCd?.descend, 2, '用完进冷却');
+
+  // 冷却没到就不能再开
+  const d2 = applyAction(d1.state, { type: 'HERO_SKILL', unitId: a3.id, skillId: 'descend' });
+  assert.equal(d2.ok, false);
+});
+
+test('减速扣 1 点移动、诅咒扣 2 点护甲', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const cav = place2(s, 'A', 'royal-cavalry', 5, 5);
+  const base = movePower(s, cav);
+  cav.status = { slow: 2 };
+  assert.equal(movePower(s, cav), base - 1);
+  cav.status = { slow: 9 };
+  assert.equal(movePower(s, cav), base - 1, '多少层减速都只扣 1 点');
+
+  const atk = place2(s, 'B', 'swordsman', 5, 4);
+  const before = computeDamage(s, atk, cav);
+  cav.status = { curse: 2 };
+  assert.equal(computeDamage(s, atk, cav) - before, 2, '诅咒相当于少 2 点护甲');
+});
+
+test('冲锋 / 威吓 / 吸血 / 再生 在奇想包里仍然按原规则走', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+
+  // 冲锋：动过才有 +5
+  const royal = place2(s, 'A', 'royal-cavalry', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+  const still = computeDamage(s, royal, tgt);
+  royal.moved = true;
+  assert.equal(computeDamage(s, royal, tgt) - still, 5);
+
+  // 威吓：贴一个诅咒师就 −2
+  stackOn(s, 'B', 'curser', 4, 5);
+  s.tiles[idx(s, 4, 5)].terrain = 'plain';
+  const scared = computeDamage(s, royal, tgt);
+  assert.equal(scared, still + 5 - 2, '冲锋 +5 和威吓 −2 应该同时生效');
+
+  // 吸血：真打出来的伤害换四成血
+  const vamp = place2(s, 'A', 'vampire', 6, 5);
+  const victim = place2(s, 'B', 'halberdier', 6, 4);
+  s.tiles[idx(s, 6, 5)].terrain = 'plain';
+  s.tiles[idx(s, 6, 4)].terrain = 'plain';
+  vamp.hp = 20;
+  const dmg = computeDamage(s, vamp, victim);
+  const counter = computeDamage(s, victim, vamp, true);
+  assert.ok(dmg > 0 && counter > 0);
+  const r = applyAction(s, { type: 'ATTACK', unitId: vamp.id, targetId: victim.id });
+  assert.ok(r.ok);
+  const healed = r.state.units.find((u) => u.id === vamp.id)!;
+  const maxHp = s.unitTypes.vampire!.maxHp;
+  assert.equal(healed.hp, 20 - counter + Math.min(maxHp - (20 - counter), Math.round(dmg * 0.4)));
+
+  // 再生：树人每回合回 10%
+  const s2 = fresh({ expansionIds: FANTASY });
+  const treant = place2(s2, 'A', 'treant', 5, 5);
+  treant.hp = 30;
+  const e1 = applyAction(s2, { type: 'END_TURN' });
+  assert.ok(e1.ok);
+  const e2 = applyAction(e1.state, { type: 'END_TURN' });
+  assert.ok(e2.ok);
+  const after = e2.state.units.find((u) => u.id === treant.id)!;
+  assert.equal(after.hp, 30 + Math.ceil(s2.unitTypes.treant!.maxHp * 0.1));
+});
+
+test('狂暴：掉到半血以下才加攻，50%', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  // 目标不能带盾墙：盾墙在狂暴**之后**扣 2 点，会让"乘 1.5"这个关系对不上
+  // （那个顺序是对的——狂暴放大的是攻击力，不是减免），但会让这条断言变得难读
+  s.unitTypes.swordsman!.abilities = [];
+  const bers = place2(s, 'A', 'berserker', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+  const full = computeDamage(s, bers, tgt);
+  // 半血**以下**才算狂暴：maxHp 是奇数时 ceil 会落在半血之上，这里取 floor
+  const half = Math.floor(s.unitTypes.berserker!.maxHp / 2);
+
+  // 只多一点点血就不狂暴——这条边界比 1.25 这个系数更容易写错
+  bers.hp = half + 1;
+  assert.equal(computeDamage(s, bers, tgt), full, '还剩一半多，没到狂暴的份上');
+
+  // 1.5 倍要拿"同一个兵、同一个位置、只有半血"来比，不能拿满血那一下乘 1.5。
+  bers.hp = half;
+  const mad = computeDamage(s, bers, tgt);
+  const abilities = s.unitTypes.berserker!.abilities;
+  s.unitTypes.berserker!.abilities = [];
+  const plain = computeDamage(s, bers, tgt);
+  s.unitTypes.berserker!.abilities = abilities;
+  assert.equal(mad, Math.round(plain * 1.5), `半血该多一半：${plain} → ${mad}`);
+});
+
+test('追猎：和目标每拉开一格 +2（最多 +6）', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 8], [5, 7]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const hound = place2(s, 'A', 'hellhound', 5, 5);
+  const far = place2(s, 'B', 'swordsman', 5, 8);
+  const withTracker = computeDamage(s, hound, far);
+  delete s.unitTypes.hellhound!.abilities;
+  const without = computeDamage(s, hound, far);
+  assert.equal(withTracker - without, 4, '距离 3 应该 +4');
+});
+
+test('群势：牛头人身边每个友军 +2 攻击，最多 +6', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [5, 6], [4, 5], [6, 5]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  const mino = place2(s, 'A', 'minotaur', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+  const alone = computeDamage(s, mino, tgt);
+  stackOn(s, 'A', 'swordsman', 5, 6);
+  stackOn(s, 'A', 'swordsman', 4, 5);
+  assert.equal(computeDamage(s, mino, tgt) - alone, 4, '两个友军 +4');
+  stackOn(s, 'A', 'swordsman', 6, 5);
+  assert.equal(computeDamage(s, mino, tgt) - alone, 6, '三个及以上封顶 +6');
+});
+
+test('游骑：身边干净时 +3，被贴住 −3，贴脸射不算远程', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 8], [4, 5], [5, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const cent = place2(s, 'A', 'centaur', 5, 5);
+  const far = place2(s, 'B', 'swordsman', 5, 8);
+  const clean = computeDamage(s, cent, far);
+  // 一个敌人在身边：这一箭就抖了
+  const pin = place2(s, 'B', 'swordsman', 4, 5);
+  assert.equal(computeDamage(s, cent, far), clean - 6, '被贴住该 −3，跟干净时比差 6');
+  // 贴脸那一箭既不吃加成也不吃惩罚
+  pin.x = 5;
+  pin.y = 4;
+  const near = place2(s, 'B', 'militia', 5, 6);
+  const melee = computeDamage(s, cent, near);
+  const abilities = s.unitTypes.centaur!.abilities;
+  s.unitTypes.centaur!.abilities = [];
+  assert.equal(computeDamage(s, cent, near), melee, '贴脸时游骑不生效');
+  s.unitTypes.centaur!.abilities = abilities;
+});
+
+test('穿隙：精灵弓手无视地形掩护，但打不穿重甲', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  s.tiles[idx(s, 5, 7)].terrain = 'forest';
+  const elf = place2(s, 'A', 'elf-archer', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 7);
+
+  // 直接比"同样的两个人，靶子站在林子里 vs 站在平地上"。
+  // 不比"22 − 护甲"：护甲还会被光环、诅咒影响，那个数不值得在测试里重算一遍。
+  const forest = computeDamage(s, elf, tgt);
+  s.tiles[idx(s, 5, 7)].terrain = 'plain';
+  assert.equal(computeDamage(s, elf, tgt), forest, '林子那 2 点对穿隙不顶用');
+
+  // 对照：同一格上的普通弓手，还是得吃下地形加成
+  s.units = s.units.filter((u) => u.id !== elf.id);
+  const archer = place2(s, 'A', 'archer', 5, 5);
+  const plain = computeDamage(s, archer, tgt);
+  s.tiles[idx(s, 5, 7)].terrain = 'forest';
+  assert.equal(computeDamage(s, archer, tgt), plain - 2, '普通弓手照旧吃森林那 2 点');
+});
+
+test('击退：把目标推开一格，推不动时就只是普通一击', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const wind = place2(s, 'A', 'air-elemental', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+  const r = applyAction(s, { type: 'ATTACK', unitId: wind.id, targetId: tgt.id });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === tgt.id)!.y, 3, '应该被推到 (5,3)');
+
+  // 后面是水：推不动，伤害照常
+  const s2 = fresh({ expansionIds: FANTASY });
+  s2.tiles[idx(s2, 5, 5)].terrain = 'plain';
+  s2.tiles[idx(s2, 5, 4)].terrain = 'plain';
+  s2.tiles[idx(s2, 5, 3)].terrain = 'water';
+  const wind2 = place2(s2, 'A', 'air-elemental', 5, 5);
+  const tgt2 = place2(s2, 'B', 'swordsman', 5, 4);
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: wind2.id, targetId: tgt2.id });
+  assert.ok(r2.ok);
+  assert.equal(r2.state.units.find((u) => u.id === tgt2.id)!.y, 4);
+});
+
+test('阵列：免疫溅射，但被当成主目标时照吃伤害', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [4, 4], [6, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const mage = place2(s, 'A', 'mage', 5, 5);
+  const main = place2(s, 'B', 'swordsman', 5, 4);
+  const guard = stackOn(s, 'B', 'royal-guard', 4, 4);
+  const soft = stackOn(s, 'B', 'swordsman', 6, 4);
+  const guardHp = guard.hp;
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: mage.id, targetId: main.id });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === guard.id)!.hp, guardHp, '阵列不该吃溅射');
+  assert.ok(
+    r.state.units.find((u) => u.id === soft.id)!.hp < s.unitTypes.swordsman!.maxHp,
+    '别的兵应该被溅射到',
+  );
+
+  // 当主目标时照吃
+  const s2 = fresh({ expansionIds: FANTASY });
+  s2.tiles[idx(s2, 5, 5)].terrain = 'plain';
+  s2.tiles[idx(s2, 5, 4)].terrain = 'plain';
+  const mage2 = place2(s2, 'A', 'mage', 5, 5);
+  const target = place2(s2, 'B', 'royal-guard', 5, 4);
+  assert.ok(computeDamage(s2, mage2, target) > 0, '阵列只免疫"被波及"');
+});
+
+test('窃掠：攻城顺手偷走"伤害 ×2"的金币', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  const city = citiesOf(s, 'B')[0]!;
+  const thief = place2(s, 'A', 'thief', city.x, city.y + 2);
+  s.players.B.gold = 100;
+  const mine = s.players.A.gold;
+  const dmg = damageToCity(thief, city, s);
+  assert.ok(dmg > 0, '盗贼应该打得动古典城墙');
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: thief.id, cityId: city.id });
+  assert.ok(r.ok);
+  assert.equal(r.state.players.A.gold, mine + dmg * 2);
+  assert.equal(r.state.players.B.gold, 100 - dmg * 2);
+});
+
+test('召唤：死灵法师每两回合一个骷髅，到上限就停', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [4, 5], [6, 5], [5, 4], [5, 6]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  place2(s, 'A', 'necromancer', 5, 5);
+  let st = s;
+  for (let i = 0; i < 20; i += 1) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok);
+    st = r.state;
+  }
+  const skels = st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton');
+  assert.equal(skels.length, 4, '上限就是 4 个');
+  // 召唤物不占编制：编制里一个都数不到
+  assert.equal(
+    st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton').length,
+    skels.length,
+    '召唤物应该真的在场上',
+  );
+});
+
+test('自损：土墙撑不过四回合', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const wall = stackOn(s, 'A', 'earth-wall', 5, 5);
+  const maxHp = s.unitTypes['earth-wall']!.maxHp;
+  assert.equal(wall.hp, maxHp);
+  let st = s;
+  for (let i = 0; i < 2; i += 1) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok);
+    st = r.state;
+  }
+  assert.equal(st.units.find((u) => u.id === wall.id)!.hp, maxHp - 5, '一个自己的回合掉 5 点');
+  for (let i = 0; i < 8; i += 1) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok);
+    st = r.state;
+  }
+  assert.equal(
+    st.units.some((u) => u.id === wall.id),
+    false,
+    '四回合之后土墙应该自己塌了',
+  );
+});
+
+test('重生：不死鸟倒下后留下一枚蛋，由玩家选地方孵化', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [6, 5], [4, 5], [5, 6]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  const ph = place2(s, 'A', 'phoenix', 5, 5);
+  const killer = place2(s, 'B', 'bone-dragon', 5, 4);
+  const maxHp = s.unitTypes.phoenix!.maxHp;
+  ph.hp = 3;
+  s.current = 'B';
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: ph.id });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.filter((u) => u.type === 'phoenix').length, 0, '先倒下，不立刻复活');
+  const egg = r.state.pendingEgg;
+  assert.ok(egg, '留下一枚蛋');
+  assert.equal(egg!.owner, 'A');
+  assert.equal(egg!.x, 5);
+  assert.equal(egg!.y, 5);
+
+  // 蛋只能落在原地 2 格内：不能"复活到对面家里"
+  const far = applyAction({ ...r.state, current: 'A' }, { type: 'PLACE_EGG', x: 12, y: 12 });
+  assert.equal(far.ok, false);
+
+  // 换一格孵化，这是这次改动的重点：位置由玩家定，不是原地爬起来
+  const spots = eggSpots(r.state);
+  assert.ok(spots.length > 0, '至少有一格能放');
+  const pick = spots.find((p) => p.x === 6 && p.y === 5) ?? spots[0]!;
+  const e = applyAction({ ...r.state, current: 'A' }, {
+    type: 'PLACE_EGG',
+    x: pick.x,
+    y: pick.y,
+  });
+  assert.ok(e.ok, e.ok ? '' : e.reason);
+  const born = e.state.units.find((u) => u.type === 'phoenix')!;
+  assert.equal(born.x, pick.x);
+  assert.equal(born.y, pick.y);
+  assert.equal(born.hp, Math.round(maxHp * 0.35), '孵化时带 35% 生命');
+  assert.equal(born.reborn, true);
+  assert.equal(e.state.pendingEgg, undefined, '蛋已经用掉了');
+
+  // 第二次死就真死：不再留蛋。
+  // 蛋可能孵在别处，所以先把杀手挪到新位置旁边——这里测的是"第二次不留蛋"，
+  // 不是"杀手能不能追上"。
+  const again = e.state.units.find((u) => u.type === 'phoenix')!;
+  again.hp = 1;
+  const killer2 = e.state.units.find((u) => u.id === killer.id)!;
+  e.state.tiles[idx(e.state, again.x, again.y - 1)].terrain = 'plain';
+  killer2.x = again.x;
+  killer2.y = again.y - 1;
+  killer2.moved = false;
+  killer2.acted = false;
+  const r2 = applyAction({ ...e.state, current: 'B' }, {
+    type: 'ATTACK',
+    unitId: killer.id,
+    targetId: again.id,
+  });
+  assert.ok(r2.ok);
+  assert.equal(r2.state.units.filter((u) => u.type === 'phoenix').length, 0);
+  assert.equal(r2.state.pendingEgg, undefined, '每局只重来一次');
+});
+
+test('燃烧：叠层，每层 4 点，结算完掉一层', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const fire = place2(s, 'A', 'fire-elemental', 5, 5);
+  // 靶子要够厚：火元素一击连魔攻四十多点，普通步兵挨不到第二下
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+
+  // 挨两次火：燃烧是唯一会**叠加**的状态
+  tgt.hp = 400;
+  tgt.status = {};
+  s.current = 'A';
+  const hit1 = applyAction(s, { type: 'ATTACK', unitId: fire.id, targetId: tgt.id });
+  assert.ok(hit1.ok);
+  const t1 = hit1.state.units.find((u) => u.id === tgt.id)!;
+  assert.equal(t1.status?.burn, 1, '第一下点着（一层）');
+
+  // 再打一下（把行动重置，模拟下一回合又挨了一下）
+  t1.acted = false;
+  t1.moved = false;
+  const fire2 = hit1.state.units.find((u) => u.id === fire.id)!;
+  fire2.acted = false;
+  fire2.moved = false;
+  const hit2 = applyAction({ ...hit1.state, current: 'A' }, {
+    type: 'ATTACK',
+    unitId: fire.id,
+    targetId: tgt.id,
+  });
+  assert.ok(hit2.ok);
+  const t2 = hit2.state.units.find((u) => u.id === tgt.id)!;
+  assert.equal(t2.status?.burn, 2, '第二下叠成两层');
+
+  // 结算：两层 8 点，结算后剩一层
+  const before = t2.hp;
+  const e1 = applyAction({ ...hit2.state, current: 'A' }, { type: 'END_TURN' });
+  assert.ok(e1.ok);
+  const t3 = e1.state.units.find((u) => u.id === tgt.id)!;
+  assert.equal(before - t3.hp, 8, '两层一共 8 点');
+  assert.equal(t3.status?.burn, 1, '烧完掉一层');
+});
+
+test('燃烧：怕火的单位每层烧得更狠', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  place2(s, 'B', 'swordsman', 5, 4);
+  // 不用巨魔当靶子：它自带每回合回血，会把"这一把火烧掉多少"搅浑。
+  // 这里临时给一个白板单位挂上怕火，只测倍率本身。
+  s.unitTypes.swordsman!.weak = { fire: 2 };
+  const ward = place2(s, 'A', 'swordsman', 5, 5);
+  ward.hp = 200;
+  ward.status = { burn: 3 };
+  s.current = 'B';
+  const before = ward.hp;
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  // END_TURN 后轮到 A，tickStatuses 结算的是 A 的单位
+  const after = r.state.units.find((u) => u.id === ward.id)!;
+  assert.equal(before - after.hp, 3 * 4 * 2, '三层 × 4 点 × 怕火 2 倍 = 24');
+});
+
+test('投斧：默认只能近身，开了技能才够得着三格', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 8]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const king = place2(s, 'A', 'dwarf-king', 5, 5);
+  const foe = place2(s, 'B', 'swordsman', 5, 8);
+  s.current = 'A';
+
+  assert.equal(effectiveRange(s, king), 1, '默认是近战英雄');
+  assert.equal(canStrike(s, king, foe), false, '三格外够不着');
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: king.id, skillId: 'throw-axe' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const k2 = r.state.units.find((u) => u.id === king.id)!;
+  assert.equal(effectiveRange(r.state, k2), 3, '投斧期间射程 3');
+  assert.ok(canStrike(r.state, k2, foe), '够得着了');
+  // 隔着打只有六成；近身那一刀不打折
+  const far = computeDamage(r.state, k2, foe);
+  k2.heroBuff = {};
+  const melee = computeDamage(r.state, k2, foe);
+  assert.equal(far, Math.round(melee * 0.6), `远程 ${far} ≈ 近身 ${melee} 的六成`);
+});
+
+test('再生：立刻回四分之一，冷却两回合', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const hydra = place2(s, 'A', 'hydra', 5, 5);
+  const maxHp = s.unitTypes.hydra!.maxHp;
+  hydra.hp = 20;
+  s.current = 'A';
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const h = r.state.units.find((u) => u.id === hydra.id)!;
+  assert.equal(h.hp, 20 + Math.round(maxHp * 0.25));
+  assert.equal(h.skillCd?.regrow, 2, '冷却两回合');
+  const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
+  assert.equal(again.ok, false, '冷却中不能再开');
+});
+
+test('烈焰俯冲：移动 +2，攻击额外点燃一层', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const ph = place2(s, 'A', 'phoenix', 5, 5);
+  const foe = place2(s, 'B', 'swordsman', 5, 4);
+  foe.hp = 400; // 不死鸟一击就四十多，打死了就看不到状态了
+  s.current = 'A';
+  const base = movePower(s, ph);
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: ph.id, skillId: 'dive' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const p2 = r.state.units.find((u) => u.id === ph.id)!;
+  assert.equal(movePower(r.state, p2), base + 2, '本回合跑得更快');
+
+  // 攻击带上点燃（不死鸟本来没有 run-hit）
+  const atk = applyAction(r.state, { type: 'ATTACK', unitId: ph.id, targetId: foe.id });
+  assert.ok(atk.ok);
+  const hurt = atk.state.units.find((u) => u.id === foe.id)!;
+  assert.equal(hurt.status?.burn, 1, '俯冲这一下带一层火');
+});
+
+test('转属性：自己切，切到的属性附带对应状态', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const mage = place2(s, 'A', 'archmage', 5, 5);
+  const foe = place2(s, 'B', 'swordsman', 5, 4);
+  s.current = 'A';
+  // 单位身上没写 element 时，属性来自兵种表（elementOf 的回退规则）
+  assert.equal(mage.element, undefined, '单位本身没写死属性');
+  assert.equal(s.unitTypes.archmage!.element, 'fire', '兵种表里是火');
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'shift' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const m2 = r.state.units.find((u) => u.id === mage.id)!;
+  assert.equal(m2.element, 'water', '火 → 水');
+  assert.equal(m2.heroBuff?.elementHit, 'water');
+
+  const atk = applyAction(r.state, { type: 'ATTACK', unitId: mage.id, targetId: foe.id });
+  assert.ok(atk.ok);
+  const hurt = atk.state.units.find((u) => u.id === foe.id)!;
+  assert.equal(hurt.status?.slow, 2, '水属性这一下带减速');
+});
+
+test('分裂：史莱姆死了变成两只小史莱姆', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 4], [4, 5], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const slime = place2(s, 'A', 'slime', 5, 5);
+  const killer = place2(s, 'B', 'bone-dragon', 5, 4);
+  slime.hp = 2;
+  s.current = 'B';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: slime.id });
+  assert.ok(r.ok);
+  const kids = r.state.units.filter((u) => u.type === 'slimelet');
+  assert.equal(kids.length, 2, '两只小史莱姆');
+  for (const k of kids) assert.equal(k.owner, 'A');
+});
+
+test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  const city = citiesOf(s, 'A')[0]!;
+  city.hp = 10;
+  place2(s, 'A', 'rune-guardian', city.x, city.y + 2);
+  let st = s;
+  for (let i = 0; i < 2; i += 1) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok);
+    st = r.state;
+  }
+  assert.equal(cityById(st, city.id)!.hp, 16);
+});
+
+test('筑墙：土元素会在自己旁边立一道墙', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [4, 5], [6, 5], [5, 4], [5, 6]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  place2(s, 'A', 'earth-elemental', 5, 5);
+  assert.equal(s.units.some((u) => u.type === 'earth-wall'), false);
+  let st = s;
+  for (let i = 0; i < 2; i += 1) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok);
+    st = r.state;
+  }
+  const wall = st.units.find((u) => u.type === 'earth-wall');
+  assert.ok(wall, '应该立起一道土墙');
+  assert.equal(s.unitTypes['earth-wall']!.obstacle, true);
+});
+
+test('弹药：炼金术士打光六发之后射程掉到 1、魔法段归零', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const al = place2(s, 'A', 'alchemist', 5, 5);
+  const tgt = place2(s, 'B', 'swordsman', 5, 4);
+  al.ammoLeft = 1;
+  assert.equal(effectiveRange(s, al), 3);
+  const magicBefore = magicDamageOf(s, al, tgt);
+  assert.ok(magicBefore > 0);
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: al.id, targetId: tgt.id });
+  assert.ok(r.ok);
+  const empty = r.state.units.find((u) => u.id === al.id)!;
+  assert.equal(empty.ammoLeft, 0);
+  assert.equal(effectiveRange(r.state, empty), 1, '打光了只能贴身');
+  assert.equal(magicDamageOf(r.state, empty, tgt), 0, '没有弹药就没有魔法段');
+});
+
+test('英雄：同方场上只能一个，解锁费只收第一次', () => {
+  const s = fresh({ expansionIds: FANTASY, startEra: 3 });
+  s.players.A.gold = 2000;
+  const city = citiesOf(s, 'A')[0]!;
+  const price = s.unitTypes['dwarf-king']!.cost;
+  const fee = s.unitTypes['dwarf-king']!.unlockCost!;
+
+  const r1 = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.ok(r1.ok);
+  assert.equal(r1.state.players.A.gold, 2000 - price - fee, '第一次要付解锁费');
+
+  const r2 = applyAction(r1.state, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.equal(r2.ok, false, '第二个会被拒');
+
+  // 人死了再招一次：这次不该再收解锁费
+  const after = { ...r1.state };
+  after.units = after.units.filter((u) => u.type !== 'dwarf-king');
+  after.players.A.gold = 1000;
+  const r3 = applyAction(after, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.ok(r3.ok);
+  assert.equal(r3.state.players.A.gold, 1000 - price);
+});
+
+test('召唤物不占编制，也不能从产线招募', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  const before = armySize(s, 'A');
+  for (let i = 0; i < 4; i += 1) stackOn(s, 'A', 'skeleton', 8 + i, 8);
+  assert.equal(armySize(s, 'A'), before, '召唤物不该占编制');
+
+  const city = citiesOf(s, 'A')[0]!;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'skeleton' });
+  assert.equal(r.ok, false, '骷髅只能被召唤');
+});
+
+test('穿行：幽灵能穿过敌军，但停不下来', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  // 在山里凿一条单人通道：这一带除了 y=5 全是山，绕路根本不可能。
+  // （只堵住一边是不够的——四连通总能绕着那颗树走，那就测不出"穿行"了。）
+  for (let x = 3; x <= 9; x += 1) {
+    for (let y = 3; y <= 7; y += 1) s.tiles[idx(s, x, y)].terrain = y === 5 ? 'plain' : 'mountain';
+  }
+  const ghost = place2(s, 'A', 'ghost', 5, 5);
+  place2(s, 'B', 'swordsman', 6, 5);
+  const reach = reachableTiles(s, ghost);
+  assert.ok(reach.has(idx(s, 7, 5)), '能穿过去');
+  assert.equal(reach.has(idx(s, 6, 5)), false, '穿过不等于能停在敌人身上');
+
+  // 对照：普通兵过不去
+  s.units = s.units.filter((u) => u.id !== ghost.id);
+  const hound = place2(s, 'A', 'hellhound', 5, 5);
+  assert.equal(reachableTiles(s, hound).has(idx(s, 7, 5)), false);
+});
+
+test('隐匿：刺客不动就看不见，一出手就现形', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.fog = true;
+  s.tiles[idx(s, 8, 8)].terrain = 'plain';
+  s.tiles[idx(s, 8, 11)].terrain = 'plain';
+  const assassin = place2(s, 'B', 'assassin', 8, 8);
+  place2(s, 'A', 'swordsman', 8, 11);
+  assert.equal(isHiddenFrom(s, assassin, 'A'), true, '在平地上也藏得住');
+  assassin.moved = true;
+  assert.equal(isHiddenFrom(s, assassin, 'A'), false, '动过就现形');
+});
+
+test('重甲难行：超级重骑进林子要多花一倍移动力', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  // 同样的单人通道，只在 6,5 上种一片林子
+  for (let x = 3; x <= 9; x += 1) {
+    for (let y = 3; y <= 7; y += 1) s.tiles[idx(s, x, y)].terrain = y === 5 ? 'plain' : 'mountain';
+  }
+  s.tiles[idx(s, 6, 5)].terrain = 'forest';
+  const cat = place2(s, 'A', 'cataphract', 5, 5);
+  const reach = reachableTiles(s, cat);
+  assert.ok(reach.has(idx(s, 6, 5)), '还是能进林子');
+  assert.equal(reach.has(idx(s, 7, 5)), false, '但进完就没力气再走了');
+
+  // 对照：同样 4 点移动、没有这条限制的骑兵能连着走两格
+  s.units = s.units.filter((u) => u.id !== cat.id);
+  const royal = place2(s, 'A', 'royal-cavalry', 5, 5);
+  assert.ok(reachableTiles(s, royal).has(idx(s, 7, 5)));
 });
 
 test('攻击力低于护甲时造成 0 伤害', () => {
@@ -2311,29 +3077,6 @@ function waterWithBank(
 function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
   const def = UNIT_TYPES[type];
   assert.ok(def, `没有 ${type} 这个兵种`);
-  const u: Unit = {
-    id: `t${s.units.length + 1}`,
-    type,
-    owner,
-    x,
-    y,
-    hp: def.maxHp,
-    kills: 0,
-    moved: false,
-    acted: false,
-  };
-  s.units = s.units.filter((k) => !(k.x === x && k.y === y));
-  s.units.push(u);
-  return u;
-}
-
-/**
- * 摆一个"这一局才有"的兵种（扩展包里的兵不在 UNIT_TYPES 里）。
- * 和 place 一样会先把落点上的单位清掉，避免两支部队叠在一格。
- */
-function placeDef(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
-  const def = s.unitTypes[type];
-  assert.ok(def, `本局没有 ${type} 这个兵种`);
   const u: Unit = {
     id: `t${s.units.length + 1}`,
     type,

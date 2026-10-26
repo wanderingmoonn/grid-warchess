@@ -7,7 +7,7 @@
  */
 
 import { CITY, CONFIG, ERAS, UNIT_TYPES, eraDef, passable } from './config.ts';
-import { EXPANSIONS, activeExpansions, expansionById } from './expansions.ts';
+import { EXPANSIONS, activeExpansions, enabledExpansionIds, expansionById } from './expansions.ts';
 import { generateLayout } from './mapgen.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import type { City, GameState, MatchConfig, PlayerId, Terrain, Tile, Unit, UnitTypeDef } from './types.ts';
@@ -98,8 +98,14 @@ export function createMatch(
   customUnits: Record<string, UnitTypeDef> = {},
 ): GameState {
   // 先合并：内置兵种 + 玩家自定义 + 已启用扩展自带的兵种
+  //
+  // 注意这里用的是 enabledExpansionIds 而不是 config.expansionIds：
+  // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
+  // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
+  const liveExpansions = enabledExpansionIds(config.expansionIds);
   const extraUnits: Record<string, UnitTypeDef> = { ...customUnits };
   for (const id of config.expansionIds) {
+    if (!liveExpansions.has(id)) continue;
     for (const u of expansionById(id)?.units ?? []) extraUnits[u.id] = { ...u };
   }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
@@ -232,8 +238,10 @@ export function createMatch(
       aiOpponent: config.aiOpponent,
       aiAlly: config.aiAlly,
       aiLevel: config.aiLevel === 'basic' ? 'basic' : 'advanced',
-      // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性
-      expansionIds: EXPANSIONS.filter((e) => config.expansionIds.includes(e.id)).map((e) => e.id),
+      // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
+      // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
+      // 在存档里显示成一句谎话。
+      expansionIds: EXPANSIONS.filter((e) => liveExpansions.has(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
       commanderMode: config.commanderMode === true,
     },

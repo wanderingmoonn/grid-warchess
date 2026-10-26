@@ -17,7 +17,9 @@ import type {
   ActionResult,
   Action,
   City,
+  Element,
   GameState,
+  HeroSkillDef,
   PlayerId,
   Tile,
   Unit,
@@ -83,6 +85,7 @@ export function tileAt(s: GameState, x: number, y: number): Tile | null {
  */
 export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
   let building: Unit | undefined;
+  let air: Unit | undefined;
   for (const u of s.units) {
     if (u.x !== x || u.y !== y) continue;
     const cat = s.unitTypes[u.type]?.category;
@@ -90,9 +93,15 @@ export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
       building ??= u;
       continue;
     }
+    // 空中层：它不算"占着这一格"。地面单位优先返回，
+    // 因为"这一格站着谁"在绝大多数判定里问的是地面那个人（挡路、产兵格、踩地形）。
+    if (isAirborne(s, u)) {
+      air ??= u;
+      continue;
+    }
     return u;
   }
-  return building;
+  return air ?? building;
 }
 
 /** 这一格上的建筑（桥、塔、墙……）；没有就是 undefined */
@@ -117,7 +126,15 @@ export function unitsOf(s: GameState, p: PlayerId): Unit[] {
  * 建筑本来就不该住人：它是工地，不是部队。
  */
 export function armySize(s: GameState, p: PlayerId): number {
-  return s.units.filter((u) => u.owner === p && utype(s, u.type).category !== 'building').length;
+  // 召唤物不占编制：它们不是招募来的，用编制去卡它们只会让死灵法师
+  // 反过来把自己的产线堵死（招满四个骷髅，城市就再也造不出兵）。
+  // 它们的上限由召唤者自己的 summon.max 管。
+  return s.units.filter(
+    (u) =>
+      u.owner === p &&
+      utype(s, u.type).category !== 'building' &&
+      !utype(s, u.type).summonedOnly,
+  ).length;
 }
 
 export function cityById(s: GameState, id: string): City | undefined {
@@ -166,6 +183,218 @@ export function cloneState(s: GameState): GameState {
   return structuredClone(s);
 }
 
+// ── 奇想兵种包：魔法、属性、状态 ─────────────────────────────────────────
+//
+// 这一整段只在"兵种自己写了对应字段"时才有非零结果，所以内置兵种
+// 和旧扩展一个都不受影响。之所以可以无条件待在 rules.ts 里而不是挂在
+// 扩展钩子上：钩子只能改数值，而状态、召唤、复活这些是**副作用**，
+// 塞进纯函数钩子会让界面上的伤害预览偷偷改变游戏状态。
+//
+// 代价是规则层仍然"认识"这些机制；收益是它是纯的、可测的、存档不用记
+// "这局有没有开魔法"。选中了「奇想·法则」这个前置包才让这些字段的兵进场，
+// 于是前置包本身就成了总开关。
+
+/** 空中层：能飞，并且可以和地面单位同格 */
+export function isAirborne(s: GameState, u: Unit): boolean {
+  return hasAbility(utype(s, u.type), 'fly-over');
+}
+
+/** 同一格上的全部单位。空中 + 地面最多各一个，可以叠在一格。 */
+export function unitsAt(s: GameState, x: number, y: number): Unit[] {
+  return s.units.filter((u) => u.x === x && u.y === y);
+}
+
+/** 这一格上有没有"同一层"的单位（空中和地面互不占位） */
+function sameLayerAt(s: GameState, x: number, y: number, air: boolean): Unit | undefined {
+  return s.units.find((u) => u.x === x && u.y === y && isAirborne(s, u) === air);
+}
+
+/** 这个单位这一下的攻击属性（运行时覆盖优先，至尊法师轮换写的就是它） */
+export function elementOf(s: GameState, u: Unit): Element | undefined {
+  return u.element ?? utype(s, u.type).element;
+}
+
+/** 弹药打光了吗：没写 ammo 的兵种永远 false */
+export function outOfAmmo(s: GameState, u: Unit): boolean {
+  const def = utype(s, u.type);
+  if (typeof def.ammo !== 'number') return false;
+  return (u.ammoLeft ?? def.ammo) <= 0;
+}
+
+/**
+ * 实际射程。
+ *
+ * 只有一种情况会和兵种表不一样：弹药打光。炼金术士扔完六瓶之后不是"废了"，
+ * 而是"退回近战"——它还有 atk，只是不再有那一段魔法伤害。
+ */
+export function effectiveRange(s: GameState, u: Unit): number {
+  const def = utype(s, u.type);
+  if (typeof def.ammo === 'number' && outOfAmmo(s, u)) return 1;
+  // 投斧：这一回合把射程拉长到技能给的值（矮人王 1 → 3）
+  return u.heroBuff?.range ?? def.range;
+}
+
+/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
+export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+  if (outOfAmmo(s, attacker)) return 0;
+  const magic = utype(s, attacker.type).magicAtk ?? 0;
+  if (magic <= 0) return 0;
+  return Math.max(0, magic - (utype(s, defender.type).magicRes ?? 0));
+}
+
+/** 诅咒：护甲 −2（诅咒光环另算，见 curseAuraPenalty） */
+function cursePenalty(u: Unit): number {
+  return (u.status?.curse ?? 0) > 0 ? 2 : 0;
+}
+
+/**
+ * 咒域：贴着几个带「咒域」的敌人，就少几点护甲（每层 2 点，最多两层）。
+ *
+ * 和威吓对称——威吓削攻击、咒域削护甲，两者都只惩罚"贴脸"，
+ * 所以破解办法是同一个：拉开距离。一支只有咒域的部队打不赢，它只是让对面变脆。
+ */
+export function curseAuraPenalty(s: GameState, unit: Unit): number {
+  let layers = 0;
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    if (distance(foe, unit) !== 1) continue;
+    if (hasAbility(utype(s, foe.type), 'curse-aura')) layers += 1;
+    if (layers >= 2) break;
+  }
+  return layers * 2;
+}
+
+/**
+ * 燃烧：每层每回合多少伤害。
+ *
+ * 从"按生命上限的百分比"改成固定值，是因为百分比对高血量单位太狠：
+ * 九头蛇 115 血，8% 就是 9 点，一个 70 血的恶魔才 5 点——
+ * 同一把火在体型大的身上烧得更旺，这件事在直觉上说不通，
+ * 而且它让"怕火的巨型单位"直接没法上场。
+ *
+ * 现在叠层负责强度：挨一次火加一层，最多三层，每层 4 点，
+ * 结算完掉一层。站着挨烤会越烧越旺，走出去两回合就熄了。
+ */
+export const BURN_PER_LAYER = 4;
+export const BURN_MAX_LAYERS = 3;
+
+/** 中毒 / 燃烧各掉多少血。分开返回：两者强度算法不同，战报也要分开写。 */
+function dotParts(s: GameState, u: Unit): { poison: number; burn: number } {
+  const st = u.status;
+  if (!st) return { poison: 0, burn: 0 };
+  const def = utype(s, u.type);
+  const poison = (st.poison ?? 0) > 0 ? Math.ceil(def.maxHp * 0.06) : 0;
+  const layers = st.burn ?? 0;
+  // 怕火的兵每层烧得更多：弱点表在这一刻才真正值钱
+  const mul = Math.max(1, def.weak?.fire ?? 1);
+  const burn = layers > 0 ? layers * BURN_PER_LAYER * mul : 0;
+  return { poison, burn };
+}
+
+
+/**
+ * 攻击命中后把状态贴上去。返回贴上了哪几种，给战报用。
+ *
+ * 只在"真打出伤害、目标还活着"时生效：打不穿护甲的一下不该带毒，
+ * 否则淬毒就成了"无视护甲的软刀"，那是另一条规则了。
+ *
+ * 燃烧是唯一**累加**的一条：反复打就反复加层，最多三层。
+ * 其余三条都是"贴上时长"，重复命中只是续命——中毒不会因为被打三次就更毒。
+ */
+function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: number): string[] {
+  if (dmg <= 0 || target.hp <= 0) return [];
+  const def = utype(s, attacker.type);
+  const touched: string[] = [];
+  const st = (target.status ??= {});
+  const put = (key: 'poison' | 'burn' | 'slow' | 'curse', turns: number, label: string) => {
+    if ((st[key] ?? 0) >= turns) return;
+    st[key] = turns;
+    touched.push(label);
+  };
+  /** 点燃一层；已经满了就不再报"点燃"（否则战报会天天说一件没发生的事） */
+  const burn = () => {
+    const now = st.burn ?? 0;
+    if (now >= BURN_MAX_LAYERS) return;
+    st.burn = now + 1;
+    touched.push(now === 0 ? '点燃' : `点燃 ${st.burn} 层`);
+  };
+
+  if (hasAbility(def, 'poison-hit')) put('poison', 3, '中毒');
+  if (hasAbility(def, 'burn-hit')) burn();
+  if (hasAbility(def, 'slow-hit')) put('slow', 2, '减速');
+  if (hasAbility(def, 'curse-hit')) put('curse', 3, '诅咒');
+
+  // 技能附带的属性效果（至尊法师转属性、不死鸟俯冲）
+  if (attacker.heroBuff?.burnHit) burn();
+  const el = attacker.heroBuff?.elementHit;
+  if (el === 'fire') burn();
+  else if (el === 'water') put('slow', 2, '减速');
+  else if (el === 'nature') put('poison', 3, '中毒');
+  else if (el === 'dark') put('curse', 3, '诅咒');
+
+  return touched;
+}
+
+/** 确定性抽样：规则层不许用 Math.random，随机召唤也得从种子派生 */
+function hashPick(s: GameState, salt: number, n: number): number {
+  const h =
+    Math.imul(s.seed ^ 0x9e3779b9, 2654435761) ^
+    Math.imul(s.turn + 1, 40503) ^
+    Math.imul(salt + 1, 2246822519);
+  return Math.abs(h) % Math.max(1, n);
+}
+
+/** 造一个单位对象。招募、召唤、分裂三条路都走这里，字段不会走散。 */
+function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: number): Unit {
+  const def = utype(s, type);
+  return {
+    id: `u${s.nextUnitSeq++}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    // 召唤物/分裂体出场即"这一回合不能动"：否则一个死灵法师每两回合
+    // 就凭空多出一次攻击，等于它自己偷偷多打了一刀。
+    moved: true,
+    acted: true,
+    ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
+  };
+}
+
+/** 这个兵种能不能站在这一格：地形可走、同层没单位 */
+function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+  const tile = tileAt(s, x, y);
+  if (!tile) return false;
+  const def = utype(s, type);
+  if (def.domain === 'water') {
+    if (tile.terrain !== 'water' && tile.terrain !== 'bridge') return false;
+  } else if (!passable(tile.terrain)) {
+    // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
+    // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
+    // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
+    if (!(tile.terrain === 'water' && (hasAbility(def, 'fly') || hasAbility(def, 'fly-over')))) {
+      return false;
+    }
+  }
+  if (tile.cityId) {
+    const city = cityById(s, tile.cityId);
+    if (city && city.ruined) return false;
+  }
+  return !sameLayerAt(s, x, y, hasAbility(def, 'fly-over'));
+}
+
+/** 找一格相邻空地放召唤物/分裂体。找不到返回 null。 */
+function freeNeighbor(s: GameState, unit: Unit, type: string): { x: number; y: number } | null {
+  for (const [dx, dy] of DIRS) {
+    const x = unit.x + dx;
+    const y = unit.y + dy;
+    if (canStandAt(s, x, y, type)) return { x, y };
+  }
+  return null;
+}
+
 export function canMove(u: Unit): boolean {
   return !u.moved;
 }
@@ -211,10 +440,26 @@ export function fearPenalty(s: GameState, unit: Unit): number {
   return layers * 2;
 }
 
-/** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */export function movePower(s: GameState, unit: Unit): number {
+/** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
+export function movePower(s: GameState, unit: Unit): number {
   const base = utype(s, unit.type).move;
   if (base <= 0) return 0;
   let move = base;
+
+  // 英雄技能的位移加成（不死鸟俯冲）：只在放技能的这一回合有效
+  move += unit.heroBuff?.moveBonus ?? 0;
+
+  // 减速（霜缚）：只扣 1 点，最少留 1。扣成 0 等于"定身"，
+  // 那是另一个量级的控制，一条附带状态不该有那种分量。
+  if ((unit.status?.slow ?? 0) > 0) move -= 1;
+
+  // 疾行光环：相邻友军各 +1，可以叠（吟游诗人多了确实快）
+  for (const ally of s.units) {
+    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
+    if (distance(ally, unit) !== 1) continue;
+    if (hasAbility(utype(s, ally.type), 'aura-speed')) move += 1;
+  }
+
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
   }
@@ -277,10 +522,18 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
 export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolean {
   if (!s.fog) return false;
   if (unit.owner === viewer) return false;
-  if (!hasAbility(utype(s, unit.type), 'stealth')) return false;
+  const def = utype(s, unit.type);
+  const vanish = hasAbility(def, 'vanish');
+  if (!vanish && !hasAbility(def, 'stealth')) return false;
 
-  const tile = tileAt(s, unit.x, unit.y);
-  if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return false;
+  // 隐匿（刺客）：不挑地形，但只在"这一回合还没暴露"时成立。
+  // 出手/走动就现形，这条让它有节奏——你藏一回合，然后一击，然后被围。
+  if (vanish) {
+    if (unit.moved || unit.acted) return false;
+  } else {
+    const tile = tileAt(s, unit.x, unit.y);
+    if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return false;
+  }
 
   for (const v of unitsOf(s, viewer)) {
     if (distance(v, unit) <= 1) return false;
@@ -299,7 +552,13 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const forestWalk = hasAbility(def, 'forest-walk');
   // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
   // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
-  const flyer = hasAbility(def, 'fly');
+  // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
+  const flyer = hasAbility(def, 'fly') || hasAbility(def, 'fly-over');
+  const air = hasAbility(def, 'fly-over');
+  // 穿行：可以穿过敌军，只是不能停在上面
+  const phasing = hasAbility(def, 'phase');
+  // 重甲难行：铁罐头在森林/丘陵/城里迈不开腿
+  const heavy = hasAbility(def, 'slow-offroad');
   // 水面地形代价是 99（对陆军而言就是"走不了"），所以水军必须单独给价格：
   // 不然船一步都动不了 —— 这一条曾经真的漏过，测试也没抓住（可达格为空，
   // "所有可达格都是水"这种全称命题反而是成立的）。
@@ -331,20 +590,31 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       const tile = s.tiles[idx(s, nx, ny)];
       if (!tile) continue;
 
-      // 敌军挡路：既不能进，也不能穿。
-      // 但**桥是双向的**：谁都能从桥上过（桥面就那么宽，过得了、停不下），
-      // 所以桥上的单位不阻挡通行 —— 想堵路就把桥打塌。
-      const occupant = s.units.find((u) => u.x === nx && u.y === ny);
-      const bridgeOnTile = occupant ? !!utype(s, occupant.type).bridges : false;
-      if (occupant && occupant.owner !== unit.owner && !bridgeOnTile) continue;
+      // 敌军挡路：既不能进，也不能穿（除非你会穿行）。
+      // **只有同一层会挡**：地面的兵挡地面，天上的挡天上。
+      // 不同层可以共格，所以它们彼此既不挡路、也不占位——
+      // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
+      // 桥仍然是双向的：谁都能从桥上过。
+      const blocker = s.units.find((u) => {
+        if (u.x !== nx || u.y !== ny) return false;
+        if (u.owner === unit.owner) return false;
+        if (isAirborne(s, u) !== air) return false;
+        if (utype(s, u.type).bridges) return false;
+        return true;
+      });
+      if (blocker && !phasing) continue;
 
-      const stepCost = waterUnit
+      const baseStep = waterUnit
         ? 1 // 航道一格一步，桥下也一样
         : flyer
           ? 1 // 从空中过：水面、森林、丘陵都不额外收费（高山在 blockedFor 那关就进不来）
           : forestWalk && (tile.terrain === 'forest' || tile.terrain === 'hill')
             ? 1
             : CONFIG.terrainCost[tile.terrain];
+      const stepCost =
+        heavy && (tile.terrain === 'forest' || tile.terrain === 'hill' || tile.terrain === 'city')
+          ? baseStep * 2
+          : baseStep;
       const nextCost = cur.cost + stepCost;
       if (nextCost > budget) continue;
 
@@ -370,6 +640,8 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     const { x, y } = xyOf(s, i);
     const here = s.units.filter((u) => u.x === x && u.y === y && u.id !== unit.id);
     const blockers = here.filter((u) => {
+      // 不同层不占位：脚底下站着敌人，头上那格照样能停
+      if (isAirborne(s, u) !== air) return false;
       const d = utype(s, u.type);
       if (d.category !== 'building') return true;
       if (d.bridges) return false; // 桥是双向的，谁都能站
@@ -378,14 +650,9 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     });
     if (blockers.length > 0) best.delete(i);
   }
-  // 飞行单位能掠过水面，但落点必须在岸上：中途那一格是"飞过去"的，不是"站上去"的。
-  if (flyer && !waterUnit) {
-    for (const i of Array.from(best.keys())) {
-      const { x, y } = xyOf(s, i);
-      const t = tileAt(s, x, y);
-      if (t && t.terrain === 'water') best.delete(i);
-    }
-  }
+  // 飞行单位可以停在水面上（见 canStandAt 的同一条说明）。
+  // 这里以前有一句"落点必须在岸上"，删掉之后飞行才真正是"水里也能歇脚"，
+  // 而不是"过河时不许回头"。
   best.delete(start);
 
   return best;
@@ -401,7 +668,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
  * 建筑（移动力 0）永远按第二种算。
  */
 export function threatTiles(s: GameState, unit: Unit): Set<number> {
-  const range = utype(s, unit.type).range;
+  const range = effectiveRange(s, unit);
   const out = new Set<number>();
 
   const addAround = (cx: number, cy: number) => {
@@ -446,9 +713,11 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
  * 改成必须站到桥边拆，桥就成了"抢桥头"的争夺点——守方要靠人挡，不是靠射程。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
-  const range = utype(s, attacker.type).range;
+  const range = effectiveRange(s, attacker);
   const d = distance(attacker, target);
-  if (d <= 0 || d > range) return false;
+  if (d > range) return false;
+  // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
+  if (d === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
   if (utype(s, target.type).bridges && d > 1) return false;
   return true;
 }
@@ -461,7 +730,7 @@ export function attackableTargets(s: GameState, unit: Unit): Unit[] {
 /** 射程内的敌方城市 */
 export function siegeTargets(s: GameState, unit: Unit): City[] {
   if (!canAttack(unit)) return [];
-  const range = utype(s, unit.type).range;
+  const range = effectiveRange(s, unit);
   return s.cities.filter((c) => {
     if (c.owner === unit.owner) return false;
     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
@@ -492,6 +761,20 @@ export function computeDamage(
 
   let armor = dt.armor + defenderAura.armor + terrainBonus;
 
+  // 穿隙（精灵弓手）：护甲归护甲，掩护归掩护。它只免掉"地形"那一层，
+  // 所以对着重甲还是打不动——这是"看得准"，不是"打得穿"。
+  const ignoreCover = hasAbility(at, 'elf-shot');
+  if (ignoreCover) armor -= terrainBonus;
+
+  // 林地之主：站在林子里就是另一副身板。放在破甲之前，
+  // 所以它和地形加成是同一种东西——会被破甲削、也会让低攻单位彻底打不动。
+  if (hasAbility(dt, 'woodland') && tile && (tile.terrain === 'forest' || tile.terrain === 'hill')) {
+    if (!ignoreCover) armor += 3;
+  }
+  // 诅咒与咒域：都在破甲之前扣，理由同上（它们是"变脆"，不是"少挨"）
+  armor -= cursePenalty(defender);
+  armor -= curseAuraPenalty(s, defender);
+
   // 扩展改护甲放在破甲之前：这样"额外 N 点护甲"和地形加成是同一种东西，
   // 破甲照样削一半、攻击低于护甲照样是 0 伤害。
   for (const e of activeExpansions(s)) {
@@ -507,12 +790,77 @@ export function computeDamage(
   // 冲锋：本回合动过才有这一下。反击是原地还手，不享受冲锋（否则等于白送一条能力）。
   if (!isCounter && hasAbility(at, 'charge') && attacker.moved) dmg += 5;
 
+  // 群势：身边每多一个友军，就多 2 点攻击（最多 6 点）。
+  // 只有进攻才算——被围的牛头人还手时并不更疼，这逼着它往前压而不是站着挨打。
+  if (!isCounter && hasAbility(at, 'herd')) {
+    let allies = 0;
+    for (const a of s.units) {
+      if (a.id === attacker.id || a.owner !== attacker.owner) continue;
+      if (distance(a, attacker) === 1) allies += 1;
+      if (allies >= 3) break;
+    }
+    dmg += allies * 2;
+  }
+
+  // 追猎：和目标每拉开 1 格 +2（最多 +6）。它靠的是"咬住"，不是对捅。
+  if (!isCounter && hasAbility(at, 'tracker')) {
+    dmg += Math.min(6, Math.max(0, (distance(attacker, defender) - 1) * 2));
+  }
+
+  // 狂暴：半血以下是另一个兵。用乘法而不是加法，因为它该跟着攻击力走——
+  // 一个 30 攻的狼人狂暴后是 45，一个 12 攻的小兵狂暴后还是 18。
+  //
+  // 从 +25% 提到 +50% 是因为 25% 打不穿护甲：狂暴兵多半攻击不高，
+  // 多出来的四分之一常常被那几点护甲吃干抹净，"半血更危险"只写在说明里。
+  // 提到 50% 之后它才真的能在残血时翻开一个重甲单位——代价是基础攻击被压低，
+  // 满血时它是全场最差的兵。
+  if (hasAbility(at, 'berserk') && attacker.hp * 2 <= at.maxHp) {
+    dmg = Math.round(dmg * 1.5);
+  }
+
   // 盾墙：本回合没挪窝才生效，站着守的人才硬
   if (hasAbility(dt, 'shield-wall') && !defender.moved) dmg -= 2;
 
   // 威吓：跟会吓人的敌人贴身，手就抖了。放在护甲之后扣，
   // 这样它对"轻甲高攻"的单位更致命，对重甲单位几乎无所谓——和自己的定位一致。
   dmg -= fearPenalty(s, attacker);
+
+  // 长短皆可：隔着一格以上打，只有六成伤害。近身才是本职。
+  //
+  // 矮人王的「投斧」不再靠这条能力，而是走 heroBuff：技能期间射程拉到 3，
+  // 同样只给六成。两者共用同一个折扣，是因为它们说的是同一件事——
+  // "这一下是扔出去的，不是劈下去的"。
+  if (hasAbility(at, 'versatile') && distance(attacker, defender) >= 2) {
+    dmg = Math.round(dmg * 0.6);
+  }
+  if (attacker.heroBuff?.rangeMul !== undefined && distance(attacker, defender) >= 2) {
+    dmg = Math.round(dmg * attacker.heroBuff.rangeMul);
+  }
+
+  // 游骑（半人马）：射得远不算本事，射的时候没人拿刀架在脖子上才算。
+  // 只算远程——贴脸那一箭不享受，也不吃惩罚，否则它就变成"永远 −3"的兵。
+  if (hasAbility(at, 'kite') && distance(attacker, defender) >= 2) {
+    const pinned = s.units.some(
+      (u) => u.id !== attacker.id && u.owner !== attacker.owner && u.hp > 0 && distance(u, attacker) === 1,
+    );
+    dmg += pinned ? -3 : 3;
+  }
+
+  // ── 魔法段 ──
+  // 不吃护甲、不吃地形、不吃破甲，只被目标的魔法抗性平减。
+  // 这就是法师存在的理由：对面越硬，它相对越划算。
+  dmg += magicDamageOf(s, attacker, defender);
+
+  // ── 属性 ──
+  // 弱点倍乘、抗性平减，作用在**整段**伤害上：怕火不是"怕魔法火"，
+  // 是身体怕火，被火把砸一下也疼。
+  const el = elementOf(s, attacker);
+  if (el) {
+    const weak = dt.weak?.[el];
+    if (weak && weak > 0) dmg *= weak;
+    const resist = dt.resist?.[el];
+    if (resist) dmg -= resist;
+  }
 
   if (isCounter) dmg = Math.max(0, Math.round(dmg * CONFIG.counterAttackRatio));
 
@@ -598,6 +946,8 @@ function splashVictims(
     if (v.owner === attacker.owner) continue;
     if (v.id === defender.id) continue;
     if (distance(v, defender) > radius) continue;
+    // 阵列：只免疫"被波及"，当主目标时那一下照吃
+    if (hasAbility(utype(s, v.type), 'aoe-immune')) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * CONFIG.splashRatio);
     if (dmg <= 0) continue;
     out.push({ unit: v, dmg });
@@ -641,6 +991,38 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
       // 不递归触发，避免连环爆炸
       s.units = s.units.filter((u) => u.hp > 0);
     }
+  }
+
+  // 重生（不死鸟）：**不立刻站起来**，而是留下一枚蛋，等主人自己挑地方孵。
+  //
+  // 这里只登记"有一枚蛋等着落位"，孵化动作交给 doPlaceEgg。
+  // 为什么不原地复活：重生最值钱的地方恰恰是"换一个位置"——
+  // 从被围死的角落爬回原地，只是让对面再杀一次。位置该由玩家选，
+  // 规则只负责给一个范围（radius）和一次机会（每局一次）。
+  if (hasAbility(victimDef, 'rebirth') && !victim.reborn) {
+    // 同一方本来就只该有一个不死鸟，重复登记没有意义；后到的覆盖先到的
+    s.pendingEgg = {
+      owner: victim.owner,
+      type: victim.type,
+      x: victim.x,
+      y: victim.y,
+      radius: 2,
+      hpRatio: 0.35,
+    };
+    pushLog(s, victim.owner, `${victimDef.name} 倒下了，留下一枚蛋——轮到你时选个地方孵化`);
+  }
+
+  // 分裂（史莱姆）：两只小史莱姆。有空地才分，被围死在墙角就分不出来。
+  if (hasAbility(victimDef, 'split')) {
+    const kid = utype(s, victim.type).splitInto ?? 'slimelet';
+    let born = 0;
+    for (let k = 0; k < 2; k += 1) {
+      const spot = freeNeighbor(s, victim, kid);
+      if (!spot) break;
+      s.units.push(makeUnit(s, victim.owner, kid, spot.x, spot.y));
+      born += 1;
+    }
+    if (born > 0) pushLog(s, victim.owner, `${victimDef.name} 分裂出 ${born} 只小史莱姆`);
   }
 
   const killerOwner = killer ? killer.owner : other(victim.owner);
@@ -904,6 +1286,10 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doSetOrders(next, action.queue);
       case 'DISBAND':
         return doDisband(next, action.unitId);
+      case 'HERO_SKILL':
+        return doHeroSkill(next, action.unitId, action.skillId);
+      case 'PLACE_EGG':
+        return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
         return doSurrender(next);
       case 'END_TURN':
@@ -1040,7 +1426,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   const noCounter = hasAbility(atkDef, 'first-strike');
   let counterDmg = 0;
-  if (!noCounter && defender.hp > 0 && dist <= utype(s, defender.type).range) {
+  if (!noCounter && defender.hp > 0 && dist <= effectiveRange(s, defender)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
   }
@@ -1055,16 +1441,40 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   }
 
   const hitText = burst > 1 ? `${hits} 连击 · ` : '';
+  // 命中附带的状态 / 击退，都排在"打完之后、结算死亡之前"：
+  // 人已经被打死就不该再中毒，而击退要先确认对面还在，才谈得上往哪推。
+  const statusTouched = applyOnHitStatus(s, attacker, defender, dmg);
+  let pushed = false;
+  if (hasAbility(atkDef, 'knockback') && defender.hp > 0) {
+    const dx = Math.sign(defender.x - attacker.x);
+    const dy = Math.sign(defender.y - attacker.y);
+    if (dx !== 0 || dy !== 0) {
+      const nx = defender.x + dx;
+      const ny = defender.y + dy;
+      if (canStandAt(s, nx, ny, defender.type)) {
+        defender.x = nx;
+        defender.y = ny;
+        pushed = true;
+      }
+    }
+  }
+  // 弹药：打一次少一发。打光了还能贴身砍，只是不再有魔法段、射程掉回 1。
+  if (typeof atkDef.ammo === 'number') {
+    attacker.ammoLeft = Math.max(0, (attacker.ammoLeft ?? atkDef.ammo) - 1);
+  }
+
   const splashText =
     splashed.length > 0
       ? `，溅射 ${splashed.map((v) => utype(s, v.unit.type).name).join('、')}`
       : '';
+  const statusText = statusTouched.length > 0 ? `，附带 ${statusTouched.join('、')}` : '';
+  const pushText = pushed ? '，被推开 1 格' : '';
   pushLog(
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
-      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}`,
+      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
+      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
   );
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
@@ -1109,17 +1519,28 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
   const dist = distToCity(attacker, city);
-  if (dist > utype(s, attacker.type).range) return { ok: false, reason: '城市超出射程' };
+  if (dist > effectiveRange(s, attacker)) return { ok: false, reason: '城市超出射程' };
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);
   city.hp -= dmg;
 
+  // 窃掠：砸墙还能顺手捞一笔。上限按对方金库算，
+  // 不然一个盗贼反复敲同一座城就成了印钞机。
+  let loot = 0;
+  if (hasAbility(utype(s, attacker.type), 'steal-gold') && dmg > 0) {
+    loot = Math.min(s.players[city.owner].gold, dmg * 2);
+    if (loot > 0) {
+      s.players[attacker.owner].gold += loot;
+      s.players[city.owner].gold -= loot;
+    }
+  }
+
   pushLog(
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻城，城市损失 ${dmg} 点耐久`
+      ? `${atName} 攻城，城市损失 ${dmg} 点耐久${loot > 0 ? `，顺手偷走 ${loot} 金` : ''}`
       : `${atName} 攻城，但打不动这座城的城墙`,
   );
 
@@ -1442,6 +1863,13 @@ function doRecruit(
   if (def.category === 'building') {
     return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
   }
+  // 召唤物只认召唤者：让它们进产线会变成"花 45 金买一个死灵法师的免费赠品"
+  if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
+  // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
+  // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
+  if (def.hero && s.units.some((u) => u.owner === s.current && u.type === def.id)) {
+    return { ok: false, reason: `${def.name} 是英雄，场上只能有一个` };
+  }
 
   /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
   let era = 0;
@@ -1509,7 +1937,24 @@ function doRecruit(
 
   const price = recruitCost(s, s.current, def);
   const player = s.players[s.current];
-  if (player.gold < price) return { ok: false, reason: `金币不足（需要 ${price}）` };
+
+  // 英雄解锁：只在第一次招它时收，之后这个兵种就永久开放。
+  // 记在 state 里而不是兵种表里——兵种表是全局限定的，
+  // 我解锁了天使不该等于对手也解锁了天使。
+  const unlocked = (s.unlocked ??= {});
+  const mine = (unlocked[s.current] ??= []);
+  const needUnlock = def.hero === true && !mine.includes(def.id);
+  const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
+  const total = price + unlockFee;
+
+  if (player.gold < total) {
+    return {
+      ok: false,
+      reason: needUnlock
+        ? `金币不足（英雄要 ${price} + 解锁 ${unlockFee}，合计 ${total}）`
+        : `金币不足（需要 ${price}）`,
+    };
+  }
   if (armySize(s, s.current) >= CONFIG.maxUnits) {
     return { ok: false, reason: `作战单位数已达上限 ${CONFIG.maxUnits}（建筑不占编制）` };
   }
@@ -1522,7 +1967,12 @@ function doRecruit(
     };
   }
 
-  player.gold -= price;
+  player.gold -= total;
+  if (needUnlock) {
+    mine.push(def.id);
+    pushLog(s, s.current, `解锁英雄「${def.name}」，花费 ${unlockFee} 金`);
+  }
+
   s.units.push({
     id: `u${s.nextUnitSeq++}`,
     type: def.id,
@@ -1534,6 +1984,7 @@ function doRecruit(
     // 新兵当回合不能行动，否则等于凭空多一次攻击
     moved: true,
     acted: true,
+    ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
 
   pushLog(s, s.current, `${label}产出了${def.name}`);
@@ -1602,6 +2053,160 @@ function doDisband(s: GameState, unitId: string): ActionResult {
   return { ok: true, state: s };
 }
 
+/**
+ * 这个英雄现在能用哪些技能：冷却好了的列出来，没好的也列出来（带剩余回合）。
+ *
+ * 界面要同时显示两种状态——只列可用的，玩家会以为"技能没了"；
+ * 全列出来才知道"再等一回合就能开"。
+ */
+export function heroSkillsOf(
+  s: GameState,
+  u: Unit,
+): Array<{ def: HeroSkillDef; cd: number; ready: boolean }> {
+  const def = utype(s, u.type);
+  return (def.skills ?? []).map((k) => {
+    const cd = u.skillCd?.[k.id] ?? 0;
+    return { def: k, cd, ready: cd <= 0 };
+  });
+}
+
+/**
+ * 放英雄技能。
+ *
+ * 不消耗行动：技能是"这一回合怎么打"的开关，不是"这一回合做什么"。
+ * 让投斧占掉一次攻击，矮人王就永远只能在近战和远程里选一样，
+ * 而它本来该是"贴上去砍、走不到就扔"的兵。
+ */
+function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResult {
+  const u = s.units.find((x) => x.id === unitId);
+  if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
+  if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+  const def = utype(s, u.type);
+  const skill = (def.skills ?? []).find((k) => k.id === skillId);
+  if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
+  const cd = u.skillCd?.[skill.id] ?? 0;
+  if (cd > 0) return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+
+  const power = skill.power ?? 0;
+  switch (skill.effect) {
+    case 'throw-axe': {
+      // 射程拉长，但隔着打只有六成——和「长短皆可」用的是同一笔账
+      u.heroBuff = { ...u.heroBuff, range: 3, rangeMul: 0.6 };
+      break;
+    }
+    case 'regenerate': {
+      const before = u.hp;
+      u.hp = Math.min(def.maxHp, u.hp + Math.max(1, Math.round(def.maxHp * power)));
+      if (u.hp === before) return { ok: false, reason: '已经是满血了' };
+      break;
+    }
+    case 'dive': {
+      u.heroBuff = { ...u.heroBuff, moveBonus: power, burnHit: true };
+      break;
+    }
+    case 'cycle': {
+      const cyc = def.cycle ?? [];
+      if (cyc.length === 0) return { ok: false, reason: '这个单位没有可切的属性' };
+      const cur = u.element ?? cyc[0]!;
+      const i = cyc.indexOf(cur);
+      const next = cyc[(i + 1) % cyc.length]!;
+      u.element = next;
+      // 属性决定这一回合附带什么：火点着、水减速、自然下毒、暗诅咒
+      u.heroBuff = { ...u.heroBuff, elementHit: next };
+      break;
+    }
+    case 'descend': {
+      const radius = skill.radius ?? 1;
+      let healed = 0;
+      let cleansed = 0;
+      for (const t of s.units) {
+        if (t.owner !== u.owner || t.hp <= 0) continue;
+        if (distance(t, u) > radius) continue;
+        const td = utype(s, t.type);
+        if (t.hp < td.maxHp && !hasAbility(td, 'machine')) {
+          t.hp = Math.min(td.maxHp, t.hp + Math.max(1, Math.round(td.maxHp * power)));
+          healed += 1;
+        }
+        if (t.status && Object.keys(t.status).length > 0) {
+          t.status = {};
+          cleansed += 1;
+        }
+      }
+      if (healed === 0 && cleansed === 0) return { ok: false, reason: '附近没有人需要救治' };
+      break;
+    }
+  }
+
+  // 技能名写进战报：玩家要能回头看"这一局我到底开过几次"
+  pushLog(s, u.owner, `${def.name} 使用「${skill.name}」`);
+  u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown };
+  return { ok: true, state: s };
+}
+
+/**
+ * 蛋能落在哪些格。给界面高亮用，也给 AI 挑位置用。
+ *
+ * 和 doPlaceEgg 共用一套判断，避免"界面高亮了、点下去说不行"。
+ */
+export function eggSpots(s: GameState): Array<{ x: number; y: number }> {
+  const egg = s.pendingEgg;
+  if (!egg) return [];
+  const out: Array<{ x: number; y: number }> = [];
+  for (let dy = -egg.radius; dy <= egg.radius; dy++) {
+    for (let dx = -egg.radius; dx <= egg.radius; dx++) {
+      if (Math.abs(dx) + Math.abs(dy) > egg.radius) continue;
+      const x = egg.x + dx;
+      const y = egg.y + dy;
+      if (!inBounds(s, x, y)) continue;
+      if (canStandAt(s, x, y, egg.type)) out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+/** 把蛋放到指定格并孵出来。范围外、格子上有人，都会被拒。 */
+function doPlaceEgg(s: GameState, x: number, y: number): ActionResult {
+  const egg = s.pendingEgg;
+  if (!egg) return { ok: false, reason: '现在没有等待孵化的蛋' };
+  if (egg.owner !== s.current) return { ok: false, reason: '这不是你的蛋' };
+  const spots = eggSpots(s);
+  if (!spots.some((p) => p.x === x && p.y === y)) {
+    return { ok: false, reason: `蛋只能放在原地 ${egg.radius} 格内的空地上` };
+  }
+  const def = utype(s, egg.type);
+  const born = makeUnit(s, egg.owner, egg.type, x, y);
+  born.hp = Math.max(1, Math.round(def.maxHp * egg.hpRatio));
+  born.reborn = true;
+  s.units.push(born);
+  s.pendingEgg = undefined;
+  pushLog(s, egg.owner, `${def.name} 的蛋孵化了（${born.hp} 生命）`);
+  return { ok: true, state: s };
+}
+
+/**
+ * 把没人管的蛋自动安置掉。
+ *
+ * 只在玩家结束回合时兜底：蛋等着落位，玩家不选就一直卡在这儿，
+ * 局面永远轮不下去。挑"离原格最近的空格"，不问玩家。
+ */
+function autoPlaceEgg(s: GameState): void {
+  const egg = s.pendingEgg;
+  if (!egg) return;
+  const spots = eggSpots(s);
+  if (spots.length === 0) {
+    // 方圆两格都被堵死：这一局就别重生了，蛋烂在原地
+    s.pendingEgg = undefined;
+    pushLog(s, egg.owner, `${utype(s, egg.type).name} 的蛋无处安放，熄灭了`);
+    return;
+  }
+  const best = spots.reduce((a, b) => {
+    const da = Math.abs(a.x - egg.x) + Math.abs(a.y - egg.y);
+    const db = Math.abs(b.x - egg.x) + Math.abs(b.y - egg.y);
+    return db < da ? b : a;
+  });
+  doPlaceEgg(s, best.x, best.y);
+}
+
 /** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
@@ -1610,7 +2215,195 @@ function doSurrender(s: GameState): ActionResult {
   return { ok: true, state: s };
 }
 
+/**
+ * 清场：把所有 hp ≤ 0 的单位收掉。
+ *
+ * 单独抽出来，是因为"回合开始的各种自动效果"（中毒、陷阱、自损、燃焰）
+ * 可能一次性打死好几个人，而它们各自删各自的单位会漏掉沉船、击杀钩子、
+ * 重生这些善后。统一扫一遍最不容易出错。
+ */
+function sweepDead(s: GameState): void {
+  for (const u of [...s.units]) {
+    if (u.hp > 0) continue;
+    if (!s.units.some((x) => x.id === u.id)) continue;
+    s.units = s.units.filter((x) => x.id !== u.id);
+    pushLog(s, other(u.owner), `${utype(s, u.type).name} 倒下了`);
+    drownCargo(s, u);
+    fireKilled(s, u, undefined);
+  }
+}
+
+/** 中毒/燃烧每回合结算一次，然后把剩余回合数 −1 */
+function tickStatuses(s: GameState, p: PlayerId): void {
+  for (const u of s.units) {
+    if (u.owner !== p || !u.status) continue;
+    const { poison, burn } = dotParts(s, u);
+    if (poison > 0) {
+      u.hp -= poison;
+      pushLog(s, p, `${utype(s, u.type).name} 因中毒失去 ${poison} 点生命`);
+    }
+    if (burn > 0) {
+      u.hp -= burn;
+      const layers = u.status.burn ?? 0;
+      pushLog(s, p, `${utype(s, u.type).name} 被灼烧（${layers} 层）失去 ${burn} 点生命`);
+    }
+    // 中毒/减速/诅咒掉的是"剩余回合"，燃烧掉的是"层数"——
+    // 数值上都是 −1，但语义不同，所以注释里分开写。
+    for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
+      const v = u.status[k];
+      if (typeof v !== 'number') continue;
+      if (v <= 1) delete u.status[k];
+      else u.status[k] = v - 1;
+    }
+  }
+  sweepDead(s);
+}
+
+/** 自我消耗：土墙、临时召唤物每回合掉血，掉完自己消失 */
+function decayUnits(s: GameState, p: PlayerId): void {
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    const d = utype(s, u.type).decays ?? 0;
+    if (d <= 0) continue;
+    u.hp -= d;
+  }
+  sweepDead(s);
+}
+
+/**
+ * 回合开始的一串结算：冷却、临时状态、以及那些"自然发生"的被动。
+ *
+ * 这里只留被动。**英雄技能不在这里**——它们由玩家点（doHeroSkill），
+ * 冷却在这里 −1。把主动效果也塞进来的话，玩家就成了旁观者：
+ * 英雄强不强只取决于数值，什么时候开、开在谁身上都没得选。
+ */
+function turnStartSkills(s: GameState, p: PlayerId): void {
+  // 0）新回合：清掉上回合的临时状态，技能冷却 −1
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    delete u.heroBuff;
+    if (u.status) {
+      for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
+        if ((u.status[k] ?? 0) <= 0) delete u.status[k];
+      }
+    }
+    if (!u.skillCd) continue;
+    for (const [id, cd] of Object.entries(u.skillCd)) {
+      if (cd <= 1) delete u.skillCd[id];
+      else u.skillCd[id] = cd - 1;
+    }
+  }
+
+  const mine = () => s.units.filter((u) => u.owner === p && u.hp > 0);
+
+  // 1.5）长一岁。召唤周期按这个数算（见第 4 段），不按全局 turn——
+  // 全局回合是两边共用的，先手方永远只碰到奇数回合，周期 2 就永不触发。
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    u.age = (u.age ?? 0) + 1;
+  }
+
+  // 2）治疗光环 / 净化 / 大净化
+  for (const healer of mine()) {
+    const d = utype(s, healer.type);
+    const heal = hasAbility(d, 'heal-aura');
+    const purge = hasAbility(d, 'purge');
+    const greater = hasAbility(d, 'purge-greater');
+    if (!heal && !purge && !greater) continue;
+    // 大净化的半径是 2，小净化和大净化同一圈的半径不同：
+    // 天使在人群里站着，不该只够得着贴身的三个兵——它要解的是一整条线的状态。
+    const radius = greater ? 2 : 1;
+    const targets = [
+      healer,
+      ...s.units.filter(
+        (u) => u.owner === p && u.id !== healer.id && distance(u, healer) <= radius,
+      ),
+    ];
+    let healed = 0;
+    let cleansed = 0;
+    for (const t of targets) {
+      const td = utype(s, t.type);
+      if (heal && t.hp < td.maxHp && !hasAbility(td, 'machine')) {
+        t.hp = Math.min(td.maxHp, t.hp + Math.ceil(td.maxHp * 0.1));
+        healed += 1;
+      }
+      if (!t.status) continue;
+      if (greater) {
+        if (Object.keys(t.status).length > 0) {
+          t.status = {};
+          cleansed += 1;
+        }
+      } else if (purge) {
+        for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
+          if ((t.status[k] ?? 0) > 0) {
+            delete t.status[k];
+            cleansed += 1;
+            break;
+          }
+        }
+      }
+    }
+    if (healed > 0) pushLog(s, p, `${d.name} 治愈了 ${healed} 个单位`);
+    if (cleansed > 0) pushLog(s, p, `${d.name} 净化了 ${cleansed} 个单位的负面状态`);
+  }
+
+  // 3）修缮 / 筑墙 / 布雷
+  for (const u of mine()) {
+    const d = utype(s, u.type);
+    if (hasAbility(d, 'repair')) {
+      for (const c of citiesOf(s, p)) {
+        if (distToCity(u, c) > 1 || c.ruined || c.hp >= c.maxHp) continue;
+        c.hp = Math.min(c.maxHp, c.hp + 6);
+        pushLog(s, p, `${d.name} 修缮 ${cityName(c)}，+6 耐久`);
+      }
+    }
+    if (hasAbility(d, 'build-wall')) {
+      const wall = d.builds?.[0] ?? 'earth-wall';
+      if (s.unitTypes[wall]) {
+        const spot = freeNeighbor(s, u, wall);
+        if (spot) {
+          s.units.push(makeUnit(s, p, wall, spot.x, spot.y));
+          pushLog(s, p, `${d.name} 立起一道土墙`);
+        }
+      }
+    }
+    if (hasAbility(d, 'trap')) {
+      const victims = s.units.filter((v) => v.owner !== p && v.hp > 0 && distance(v, u) <= 1);
+      for (const v of victims) {
+        v.hp -= 6;
+        const st = (v.status ??= {});
+        st.slow = Math.max(st.slow ?? 0, 1);
+        pushLog(s, p, `${d.name} 的陷阱咬住了 ${utype(s, v.type).name}`);
+      }
+    }
+  }
+  sweepDead(s);
+
+  // 4）召唤。放在最后：先结算完伤害和状态，再决定谁还能召。
+  for (const caster of mine()) {
+    const d = utype(s, caster.type);
+    if (!hasAbility(d, 'summoner')) continue;
+    const spec = d.summon;
+    if (!spec) continue;
+    if ((caster.age ?? 0) % Math.max(1, spec.every) !== 0) continue;
+    const type =
+      spec.random && spec.random.length > 0
+        ? spec.random[hashPick(s, caster.x * 37 + caster.y * 7, spec.random.length)]
+        : spec.type;
+    if (!type || !s.unitTypes[type]) continue;
+    const alive = s.units.filter((u) => u.owner === p && u.type === type).length;
+    if (alive >= spec.max) continue;
+    const spot = freeNeighbor(s, caster, type);
+    if (!spot) continue;
+    s.units.push(makeUnit(s, p, type, spot.x, spot.y));
+    pushLog(s, p, `${d.name} 召唤出 ${utype(s, type).name}`);
+  }
+}
+
 function doEndTurn(s: GameState): ActionResult {
+  // 手里还有没落位的蛋：走之前替玩家放好，否则这一方永远等不到下一回合
+  if (s.pendingEgg && s.pendingEgg.owner === s.current) autoPlaceEgg(s);
+
   s.winner = checkWinner(s);
   if (s.winner) {
     pushLog(s, s.winner, '对局结束');
@@ -1630,6 +2423,11 @@ function doEndTurn(s: GameState): ActionResult {
   s.current = nextPlayer;
   s.turn += 1;
 
+  // 回合开始的伤害类结算：先中毒/灼烧，再自损。
+  // 必须在下面算"休整"之前——被毒死的人不该还在名单里等着回血。
+  tickStatuses(s, nextPlayer);
+  decayUnits(s, nextPlayer);
+
   // 休整：只有上回合没移动、也没攻击的单位才算"歇过来了"。
   // 这个判断必须在 resetUnitsFor 之前做——重置会把这两个标记清掉。
   const rested = new Set(
@@ -1640,16 +2438,26 @@ function doEndTurn(s: GameState): ActionResult {
   for (const u of s.units) {
     if (u.owner !== nextPlayer) continue;
     const d = utype(s, u.type);
+    // 机械不会好起来：修不好也治不好，只能靠换
+    const machine = hasAbility(d, 'machine');
     // 再生：不挑场合，每回合都回一点点。
     // 和「休整」是两种活法：休整回得多（15%）但要让出一拍，再生回得少（10%）但可以边打边回。
-    if (hasAbility(d, 'regenerate') && u.hp < d.maxHp) {
-      u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * 0.1));
+    if (!machine && hasAbility(d, 'regenerate') && u.hp < d.maxHp) {
+      const ratio = hasAbility(d, 'regenerate-plus') ? 0.2 : 0.1;
+      u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * ratio));
+    }
+    // 嗜血：只有半血以下才回。它不是"再生"，是"被打疼了才发作"。
+    if (!machine && hasAbility(d, 'bloodlust') && u.hp * 2 < d.maxHp) {
+      u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * 0.15));
     }
     if (!rested.has(u.id)) continue;
-    if (hasAbility(d, 'heal') && u.hp < d.maxHp) {
+    if (!machine && hasAbility(d, 'heal') && u.hp < d.maxHp) {
       u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * 0.15));
     }
   }
+
+  // 光环、净化、修缮、筑墙、布雷、召唤、转属——全部自动触发
+  turnStartSkills(s, nextPlayer);
 
   // 守方的建筑在敌人接手回合的第一时间开火
   fireBuildings(s, prevPlayer);

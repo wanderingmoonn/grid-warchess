@@ -15,11 +15,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { ABILITIES, abilityById, ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 import { CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS } from '../src/core/expansions.ts';
+import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
-import type { UnitCategory, UnitTypeDef } from '../src/core/types.ts';
+import { ELEMENT_NAME } from '../src/core/types.ts';
+import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-const TEST_COUNT = 270;
+/** 规则内核 + 界面冒烟两项之和，改测试记得改这里 */
+const TEST_COUNT = 232 + 72;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -114,6 +117,96 @@ function eraSection(): string {
   }).join('');
 }
 
+/** 全部奇想兵的 id → 名字，用来把"召唤出 skeleton"写成"召唤出 骷髅" */
+const FANTASY_NAMES = new Map<string, string>();
+for (const p of FANTASY_PACKS) {
+  for (const u of p.units ?? []) FANTASY_NAMES.set(u.id, u.name);
+}
+
+function elementLabel(u: UnitTypeDef): string {
+  if (u.cycle && u.cycle.length > 0) {
+    return `轮换（${u.cycle.map((e) => ELEMENT_NAME[e]).join(' → ')}）`;
+  }
+  if (u.element) return ELEMENT_NAME[u.element];
+  return '—';
+}
+
+/** 属性那一格：攻击属性之外，还要写清"怕什么、抗什么" */
+function elementCell(u: UnitTypeDef): string {
+  const parts: string[] = [];
+  const atkEl = elementLabel(u);
+  if (atkEl !== '—') parts.push(atkEl);
+  for (const [k, v] of Object.entries(u.weak ?? {})) {
+    if ((v ?? 0) > 1) parts.push(`怕${ELEMENT_NAME[k as Element]}×${v}`);
+  }
+  for (const [k, v] of Object.entries(u.resist ?? {})) {
+    if ((v ?? 0) > 0) parts.push(`抗${ELEMENT_NAME[k as Element]} ${v}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
+/** 奇想兵的特性列：在通用特性之外补上魔法 / 召唤 / 弹药 / 英雄这些新字段 */
+function fantasyTraits(u: UnitTypeDef): string {
+  const parts: string[] = [];
+  const base = traitsOf(u);
+  if (base !== '—') parts.push(base);
+  if (u.magicAtk) parts.push(`<b>魔法攻击 ${u.magicAtk}</b>（不吃护甲）`);
+  if (u.magicRes) parts.push(`魔法抗性 ${u.magicRes}`);
+  if (u.summon) {
+    const what = u.summon.type
+      ? (FANTASY_NAMES.get(u.summon.type) ?? u.summon.type)
+      : `随机元素（${(u.summon.random ?? []).map((id) => FANTASY_NAMES.get(id) ?? id).join('/')}）`;
+    parts.push(`每 ${u.summon.every} 回合召唤 1 个${what}（同时最多 ${u.summon.max}）`);
+  }
+  if (u.ammo) parts.push(`弹药 ${u.ammo} 发，打完只能贴脸`);
+  if (u.hero) parts.push(`<b>英雄</b>（场上一名 · 首次解锁 ${u.unlockCost ?? 0} 金）`);
+  for (const k of u.skills ?? []) {
+    parts.push(`<b>技能「${esc(k.name)}」</b>（CD ${k.cooldown}）${esc(k.summary)}`);
+  }
+  if (u.summonedOnly) parts.push('只能被召唤，不占编制');
+  if (u.decays) parts.push(`每回合自损 ${u.decays} 血`);
+  if (u.splitInto) parts.push(`死后分裂为 ${FANTASY_NAMES.get(u.splitInto) ?? u.splitInto}`);
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
+const FANTASY_COLUMNS = ['名称', '图标', '时代', '造价', '攻', '魔攻', '甲', '魔抗', '血', '移', '射', '视', '属性', '特性'];
+
+function fantasyTable(pack: (typeof FANTASY_PACKS)[number]): string {
+  const units = [...(pack.units ?? [])].sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));
+  const body = units
+    .map(
+      (u) => `
+      <tr>
+        <td class="name">${esc(u.name)}</td>
+        <td class="glyph">${esc(u.short)}</td>
+        <td class="num">${u.era}</td>
+        <td class="num">${u.cost}</td>
+        <td class="num">${u.atk}${u.burst ? `×${u.burst}` : ''}</td>
+        <td class="num">${u.magicAtk ?? '—'}</td>
+        <td class="num">${u.armor}</td>
+        <td class="num">${u.magicRes ?? 0}</td>
+        <td class="num">${u.maxHp}</td>
+        <td class="num">${u.move === 0 ? '—' : u.move}</td>
+        <td class="num">${u.range}</td>
+        <td class="num">${u.vision}</td>
+        <td class="traits">${elementCell(u)}</td>
+        <td class="traits">${fantasyTraits(u)}</td>
+      </tr>`,
+    )
+    .join('');
+  if (!units.length) return '';
+  return `
+    <h4>${esc(pack.name)} · ${units.length} 个${pack.id === 'fantasy-heroes' ? '英雄' : '兵种'}</h4>
+    <table>
+      <thead><tr>${FANTASY_COLUMNS.map((c) => `<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+}
+
+function fantasySection(): string {
+  return FANTASY_PACKS.map((p) => fantasyTable(p)).join('');
+}
+
 function abilityTable(): string {
   const groups = ['attack', 'defense', 'move', 'support'] as const;
   return groups
@@ -146,10 +239,18 @@ function expansionTable(): string {
       <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
       <tbody>
         ${EXPANSIONS.map((e) => {
-          const units = (e.units ?? []).map((u) => u.name).join('、');
+          const list = (e.units ?? []).map((u) => u.name);
+          // 奇想包动辄二三十个兵，一长串名字会把这一列撑爆，只挑前几个当样本
+          const units = list.length > 8 ? `${list.slice(0, 6).join('、')} 等 ${list.length} 个` : list.join('、');
+          // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场
+          const req = (e.requires ?? []).length
+            ? ` <span class="c">（需先开 ${(e.requires ?? [])
+                .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                .join('、')}）</span>`
+            : '';
           // 默认开着的那条要标出来：新对局不特别选就是它
           const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
-          return `<tr><td class="name">${esc(e.name)}${tag}</td><td>${esc(e.summary)}</td><td class="traits">${units || '—'}</td></tr>`;
+          return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${esc(e.summary)}</td><td class="traits">${units || '—'}</td></tr>`;
         }).join('')}
       </tbody>
     </table>`;
@@ -815,17 +916,46 @@ const html = `<!doctype html>
       <div class="callout">
         <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
       </div>
-      <h3>「奇想兵种包」为什么是机制包</h3>
-      <p>它给的不是"更强的骑兵"，而是八条历史线上不存在的能力：<b>飞行</b>（能越过水面，但停不到水上——河防对它不成立）、
-        <b>冲锋</b>（本回合动过才 +5，站着不动就没有）、<b>吸血</b>（打出伤害的四成回血，残血扑上去照样会被反杀）、
-        <b>威吓</b>（相邻敌军攻击 −2，最多叠两层，破解办法是拉开距离）、<b>再生</b>（每回合回 10%，不用像「休整」那样让出一拍）。
-        这些机制都写成了"有前提、有解法"的形式，而不是纯数值加成——纯加成的兵最后只会变成"贵一点的那个步兵"。</p>
+      <h3>「奇想兵种包」：一个前置包 + 四个兵种包</h3>
+      <p>六十多个兵挤在一个开关里，等于"要么全开、要么全不开"——那就不是可选规则，是另一个游戏。
+        所以它被拆成一棵树：<b>奇想·法则</b>只带机制、一个兵都不带，另外四包都<b>依赖</b>它。
+        只勾子包不勾前置，子包根本不会进场（配置里那条记录也会被剔掉，不留一句谎话）。</p>
+      <table>
+        <thead><tr><th>包</th><th>兵数</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td class="name">奇想·法则</td><td class="num">0</td><td>前置包：魔法攻击 / 魔抗、属性伤害、状态（燃烧按叠层算）、飞行分层（可以停在水面上）。只加规则，不加兵。</td></tr>
+          <tr><td class="name">奇想·骑士团</td><td class="num">12</td><td>全是"人"：剑士、皇家骑兵、游侠、超级重骑、牧师、法师、刺客、狂战士、圣骑士、符文守卫、皇家守卫、盗贼。</td></tr>
+          <tr><td class="name">奇想·荒兽</td><td class="num">18</td><td>狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、半人马、史莱姆、哥布林陷阱师、树人、食人魔、牛头人、巨魔、石像鬼、鹰身女妖、狮鹫骑士、龙骑兵、狼人、双头巨人、骷髅飞龙。</td></tr>
+          <tr><td class="name">奇想·秘法</td><td class="num">26</td><td>吟游诗人、僵尸、德鲁伊、死灵法师、炼金术士、巫医、女巫、诅咒骑士、诅咒师、幻术师、四元素、幽灵、地狱犬、精灵弓手、元素召唤师、吸血鬼、机关傀儡、恶魔……外带 4 个召唤物和 1 道土墙（都不占编制）。</td></tr>
+          <tr><td class="name">奇想·英雄</td><td class="num">5</td><td>矮人王（投斧）、九头蛇（再生）、不死鸟（烈焰俯冲；阵亡后留蛋，由你选位置孵化）、至尊法师（转属性）、天使（降临）。同方场上一名，第一次招募要额外付解锁费；每人每回合一个主动技能，不占行动。</td></tr>
+        </tbody>
+      </table>
+      <h4>四条新规则</h4>
+      <ul>
+        <li><b>魔法攻击 / 魔法抗性</b>：魔攻是独立结算的第二段伤害，不吃护甲、地形、破甲，只被魔抗平减。
+          所以法师打重甲划算、打在魔抗单位身上像挠痒。数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
+        <li><b>属性伤害</b>：火 / 水 / 土 / 风 / 光 / 暗 / 自然 / 奥术。目标可以写「怕X」（倍乘）和「抗X」（平减），
+          作用在整段伤害上——怕火不是"怕魔法火"，被火把砸一下也疼。</li>
+        <li><b>飞行</b>：分两层。<b>飞行</b>能掠水（但不能停在水上）、森林丘陵按 1 步；<b>掠空</b>再进一步，还能和地面单位<b>同格</b>——
+          地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。</li>
+        <li><b>状态</b>：中毒（每回合 6% 上限血）、点燃（8%，怕火的翻倍）、减速（移动 −1，最低 1）、诅咒（护甲 −2，最多两层）。
+          都按<b>兵种血量百分比</b>算，这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
+      </ul>
+      <div class="callout">
+        机制都写成"有前提、有解法"的形式：飞行怕射程、魔法怕魔抗、狂暴怕风筝、召唤怕清场。
+        纯加成的兵最后只会变成"贵一点的那个步兵"——这条在写这个包的时候被反复验证过。
+      </div>
     </section>
 
     <section id="roster">
       <h2><span class="sec-num">15</span>兵种全表</h2>
       <p>按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。</p>
       ${eraSection()}
+      <h3 id="fantasy-roster">奇想兵种（按扩展包）</h3>
+      <p>下表只列扩展包里的兵，原版 35 个兵种不含在内。「魔攻」是<b>第二段伤害</b>，
+        独立于普通攻击结算：它不吃护甲、不吃地形、不吃破甲，只被目标的「魔抗」平减。
+        「魔抗」列的原版兵种一律是 0——这是刻意的，魔法只在新包里成体系。</p>
+      ${fantasySection()}
     </section>
 
     <section id="engine">

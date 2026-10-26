@@ -7,7 +7,8 @@
 
 import { abilityById, abilityNames } from './abilities.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from './config.ts';
-import type { GameState, Terrain, UnitTypeDef } from './types.ts';
+import { ELEMENT_NAME } from './types.ts';
+import type { Element, GameState, Terrain, UnitTypeDef } from './types.ts';
 
 export interface TerrainInfo {
   name: string;
@@ -74,6 +75,60 @@ export function describeUnit(s: GameState, def: UnitTypeDef): string[] {
   if (def.domain === 'water') {
     lines.push('只在水上行动：上不了岸，只能在临水的城市下水。能打岸上的目标，也会被岸上打。');
   }
+  // ── 奇想兵种包的机制 ──────────────────────────────────────────────────
+  if (def.magicAtk) {
+    lines.push(
+      `魔法攻击 ${def.magicAtk}：这是**第二段伤害**，不吃护甲、不吃地形、也不吃破甲，只被目标的魔法抗性平减。打重甲特别划算。`,
+    );
+  }
+  if (def.magicRes) lines.push(`魔法抗性 ${def.magicRes}：直接减掉对方魔法段，对物理伤害无效。`);
+  if (def.element) {
+    lines.push(
+      `攻击属性：${ELEMENT_NAME[def.element]}。属性本身不加伤害，但怕它的兵会多吃——看下面的弱点表。`,
+    );
+  }
+  const weakEntries = Object.entries(def.weak ?? {}) as Array<[Element, number]>;
+  if (weakEntries.length > 0) {
+    lines.push(
+      `弱点：${weakEntries.map(([k, v]) => `${ELEMENT_NAME[k]}属性伤害 ×${v}`).join('、')}`,
+    );
+  }
+  const resistEntries = Object.entries(def.resist ?? {}) as Array<[Element, number]>;
+  if (resistEntries.length > 0) {
+    lines.push(
+      `抗性：${resistEntries.map(([k, v]) => `${ELEMENT_NAME[k]}属性伤害 −${v}`).join('、')}`,
+    );
+  }
+  if (def.ammo) lines.push(`弹药 ${def.ammo} 发：打完魔法段归零、射程掉到 1，只能贴身砍。`);
+  if (def.summon) {
+    const what = def.summon.random
+      ? '随机一种元素'
+      : (def.summon.type ? '随从' : '随从');
+    lines.push(
+      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。召唤物不占编制。`,
+    );
+  }
+  if (def.cycle && def.cycle.length > 0) {
+    lines.push(
+      `可切属性：${def.cycle.map((e) => ELEMENT_NAME[e]).join(' → ')}。用技能切过去，本回合攻击附带对应状态（火=点燃、水=减速、自然=中毒、暗=诅咒）。`,
+    );
+  }
+
+  // 英雄技能：写成"每回合一次的选择"，和界面上那块菜单对应
+  if (def.skills && def.skills.length > 0) {
+    for (const k of def.skills) {
+      const cd = k.cooldown > 1 ? `冷却 ${k.cooldown} 回合` : '每回合可用';
+      lines.push(`技能「${k.name}」（${cd}）：${k.summary}`);
+    }
+    lines.push('技能不占行动，由你主动施放——英雄的强度有一半在"什么时候开"上。');
+  }
+  if (def.hero) {
+    lines.push(
+      `英雄：同方场上只能有一个。第一次招募要额外付 ${def.unlockCost ?? 0} 金解锁，解锁后永久开放。`,
+    );
+  }
+  if (def.summonedOnly) lines.push('只能被召唤出来，不能从产线生产。');
+  if (def.decays) lines.push(`每回合自损 ${def.decays} 点生命，撑不了几回合。`);
   if (def.splash) {
     lines.push(
       `溅射：主目标 ${def.splash} 格内的敌人各吃 ${Math.round(CONFIG.splashRatio * 100)}% 伤害（不打自己人）`,

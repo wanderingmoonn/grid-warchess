@@ -655,6 +655,26 @@ body {
   cursor: pointer;
 }
 
+/* 空中层：和地面单位叠在同一格时，缩一号、挪到右上，两个都看得见。
+   不用 z-index 而用 transform——棋子本身就在同一层 DOM 里，
+   先后顺序已经由渲染顺序决定了（见 board.ts 的 rank）。 */
+.unit.air .unit-inner {
+  transform: translate(26%, -22%) scale(0.78);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55), 0 6px 10px rgba(0, 0, 0, 0.35);
+}
+
+.unit.air .unit-inner::after {
+  content: '';
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: -18%;
+  height: 12%;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.28);
+  filter: blur(1px);
+}
+
 .unit-inner {
   position: relative;
   width: 100%;
@@ -1468,6 +1488,17 @@ a.btn {
   font-size: 11.5px;
   color: var(--text-3);
   line-height: 1.5;
+}
+
+/* 前置依赖：单独一行、单独颜色，别混在说明里被读漏 */
+.expansion-body .expansion-req {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
+  color: var(--accent, #3b82f6);
+  font-size: 11px;
 }
 
 .seed-row {

@@ -1035,5 +1035,194 @@ check('缩放条不在滚动容器里面，所以不跟着地图平移', () => {
   assert.equal(scroll.contains(bar), false, '缩放条不能是滚动容器的内容');
 });
 
+check('英雄技能：面板列出技能，冷却中的置灰', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    909,
+  );
+  st.current = 'A';
+  const hero: Unit = {
+    id: 'hero1',
+    type: 'dwarf-king',
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes['dwarf-king']?.maxHp ?? 80,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(hero);
+
+  const host = doc.createElement('div');
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: hero,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  assert.ok(host.innerHTML.includes('英雄技能'), '英雄详情里应该有一块技能菜单');
+  const btn = host.querySelector<HTMLElement>('[data-act="hero-skill"]');
+  assert.ok(btn, '应该有技能按钮');
+  assert.equal(btn!.dataset.skill, 'throw-axe', '矮人王的技能是投斧');
+  assert.equal(btn!.hasAttribute('disabled'), false, '没冷却时能点');
+  assert.ok(host.innerHTML.includes('就绪'), '就绪状态要写出来');
+
+  // 冷却中：按钮置灰并显示还要等几回合
+  hero.skillCd = { 'throw-axe': 1 };
+  paint();
+  const cold = host.querySelector<HTMLElement>('[data-act="hero-skill"]')!;
+  assert.equal(cold.hasAttribute('disabled'), true, '冷却中不能点');
+  assert.ok(host.innerHTML.includes('1 回合'), '要显示还差几回合');
+
+  // 没选中任何东西时，默认页也要列出自己英雄的技能
+  hero.skillCd = {};
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
+});
+
+console.log('\n点敌人就是开火');
+
+/**
+ * 单开一页，把存档换成"两军贴脸"的局面，再照玩家的手速点两下。
+ *
+ * 守的是 onBoardClick 里的分支顺序。「点敌方单位出属性卡」那段一度排在
+ * 攻击判断前面、而且无条件 return，于是选中部队后点敌人只弹一张属性卡，
+ * 攻击这个核心动作在界面上等于消失了——规则内核好好的，界面自己把动作吞了。
+ *
+ * 属性卡不能被攻击抢走，反过来也不行：打不到的目标仍然只弹卡，
+ * 所以这里同时验"能打到就开火"和"打不到就只看"。
+ */
+check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+
+  // 挑一个真能打的兵：经济单位 atk 是 0，选中它不会有任何目标
+  const mine = st.units.find((u) => u.owner === 'A' && (UNIT_TYPES[u.type]?.atk ?? 0) > 0);
+  const foe = st.units.find((u) => u.owner === 'B');
+  assert.ok(mine, 'A 方应该有能打的兵');
+  assert.ok(foe, 'B 方应该有兵');
+
+  // 把敌人挪到我身边一格：界内、没别的兵占着
+  const free = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < st.w && y < st.h && !st.units.some((u) => u.x === x && u.y === y);
+  const spot = [
+    { x: mine.x + 1, y: mine.y },
+    { x: mine.x - 1, y: mine.y },
+    { x: mine.x, y: mine.y + 1 },
+    { x: mine.x, y: mine.y - 1 },
+  ].find((p) => free(p.x, p.y));
+  assert.ok(spot, '找不到可以贴脸的邻格');
+  foe.x = spot.x;
+  foe.y = spot.y;
+  // 有些地形不放人，抹平，别让"站不上去"混进这次判断
+  st.tiles[foe.y * st.w + foe.x]!.terrain = 'plain';
+  const hpBefore = foe.hp;
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  const mineEl = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
+  assert.ok(mineEl, '我的兵没渲染出来');
+  mineEl.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const foeEl = d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`);
+  assert.ok(foeEl, '敌人的兵没渲染出来——迷雾没关干净？');
+  foeEl.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  // 以落盘的存档为准：图被重绘过，捏着旧节点看不出有没有真打
+  const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    units: { id: string; hp: number }[];
+  };
+  const afterFoe = after.units.find((u) => u.id === foe.id);
+  assert.ok(afterFoe, '敌人从盘上消失了');
+  assert.ok(
+    afterFoe.hp < hpBefore,
+    `点了相邻敌人却没掉血：${hpBefore} → ${afterFoe.hp}，说明攻击被属性卡抢了`,
+  );
+});
+
+check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
+  // 同一条分支的另一半：距离之外点敌人应当出信息面板。
+  // 只断言"没变成攻击"——面板文案由面板自己的测试守。
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+
+  const mine = st.units.find((u) => u.owner === 'A' && (UNIT_TYPES[u.type]?.atk ?? 0) > 0);
+  const foe = st.units.find((u) => u.owner === 'B');
+  assert.ok(mine && foe);
+
+  // 挪到一个明确打不到的位置：扫盘面找离我至少 4 格的空位，
+  // 别用"镜像到对角"这种写法——小图上偶尔就只剩两格，反而贴了脸
+  const free = (x: number, y: number): boolean =>
+    !st.units.some((u) => u.x === x && u.y === y) && Math.abs(x - mine.x) + Math.abs(y - mine.y) >= 4;
+  let far: { x: number; y: number } | null = null;
+  for (let y = 0; y < st.h && !far; y++) {
+    for (let x = 0; x < st.w && !far; x++) {
+      if (free(x, y)) far = { x, y };
+    }
+  }
+  assert.ok(far, '地图上找不到离我 4 格以上的空位');
+  foe.x = far.x;
+  foe.y = far.y;
+  st.tiles[foe.y * st.w + foe.x]!.terrain = 'plain';
+  const hpBefore = foe.hp;
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`)?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`)?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+
+  const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    units: { id: string; hp: number }[];
+  };
+  const afterFoe = after.units.find((u) => u.id === foe.id);
+  assert.equal(afterFoe?.hp, hpBefore, '隔那么远不该开火');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
