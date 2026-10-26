@@ -8,10 +8,20 @@
   --text-2: #6b6459;
   --text-3: #9a9287;
 
+  /* 通用语义色，跟席位无关：--a 是交互主色（蓝），--b 是危险/错误（红）。
+     名字是历史遗留（原本就是 A/B 两方），含义早就泛化了，先不动它。 */
   --a: #2f6ea8;
   --a-soft: #dfeaf4;
   --b: #b8433a;
   --b-soft: #f6e2df;
+
+  /* 席位色：A 座叫红方，那它就是红的；B 座叫蓝方，就是蓝的。
+     和上面两个通用色**故意分开**——"危险"永远是红、"交互"永远是蓝，
+     不能被"这一方是谁"带着跑（拆除按钮在红方手里也不能变蓝）。 */
+  --team-a: #b8433a;
+  --team-a-soft: #f6e2df;
+  --team-b: #2f6ea8;
+  --team-b-soft: #dfeaf4;
 
   --plain: #dfe9d3;
   --forest: #aecb98;
@@ -171,11 +181,11 @@ body {
 }
 
 .side-dot.a {
-  background: var(--a);
+  background: var(--team-a);
 }
 
 .side-dot.b {
-  background: var(--b);
+  background: var(--team-b);
 }
 
 .topbar-actions {
@@ -512,11 +522,11 @@ body {
 }
 
 .city-block.owner-A {
-  border-color: rgba(47, 110, 168, 0.78);
+  border-color: rgba(184, 67, 58, 0.78);
 }
 
 .city-block.owner-B {
-  border-color: rgba(184, 67, 58, 0.78);
+  border-color: rgba(47, 110, 168, 0.78);
 }
 
 .city-block.siege-target {
@@ -695,10 +705,10 @@ body {
 }
 
 .unit.owner-A .unit-inner {
-  background: var(--a);
+  background: var(--team-a);
 }
 .unit.owner-B .unit-inner {
-  background: var(--b);
+  background: var(--team-b);
 }
 
 .unit:hover .unit-inner {
@@ -832,10 +842,10 @@ body {
 }
 
 .vs-dot.a {
-  background: var(--a);
+  background: var(--team-a);
 }
 .vs-dot.b {
-  background: var(--b);
+  background: var(--team-b);
 }
 
 .vs-stats {
@@ -863,15 +873,15 @@ body {
 }
 
 .turn-badge.active-A {
-  background: var(--a-soft);
-  border-color: rgba(47, 110, 168, 0.35);
-  color: var(--a);
+  background: var(--team-a-soft);
+  border-color: rgba(184, 67, 58, 0.35);
+  color: var(--team-a);
 }
 
 .turn-badge.active-B {
-  background: var(--b-soft);
-  border-color: rgba(184, 67, 58, 0.35);
-  color: var(--b);
+  background: var(--team-b-soft);
+  border-color: rgba(47, 110, 168, 0.35);
+  color: var(--team-b);
 }
 
 /* 观战：中性灰，不站任何一边 */
@@ -939,10 +949,10 @@ body {
 }
 
 .unit-chip.a {
-  background: var(--a);
+  background: var(--team-a);
 }
 .unit-chip.b {
-  background: var(--b);
+  background: var(--team-b);
 }
 
 .unit-title {
@@ -1171,10 +1181,10 @@ body {
 }
 
 .log-item.a .who {
-  color: var(--a);
+  color: var(--team-a);
 }
 .log-item.b .who {
-  color: var(--b);
+  color: var(--team-b);
 }
 
 .log-empty {
@@ -1309,12 +1319,12 @@ a.btn {
 }
 
 .handoff-badge.a {
-  background: var(--a-soft);
-  color: var(--a);
+  background: var(--team-a-soft);
+  color: var(--team-a);
 }
 .handoff-badge.b {
-  background: var(--b-soft);
-  color: var(--b);
+  background: var(--team-b-soft);
+  color: var(--team-b);
 }
 
 /* ---------- 提示条 ---------- */
@@ -2176,4 +2186,101 @@ a.btn {
   color: var(--text-3);
   font-size: 12px;
   margin-top: 8px;
+}
+
+/* ---------- 上帝模式（沙盒） ---------- */
+/*
+ * 工具栏和参谋部共用同一条 .commander-bar（位置一样、都在棋盘上方），
+ * 所以这里只补它自己的那几个小组件：阵营/笔刷分组、战况计数、结论文字。
+ */
+.god-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.god-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 结论/提示贴右边：左边是操作，右边是"刚才发生了什么" */
+.god-status {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.god-live {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.god-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 货架会长到六十多个兵种，给个上限自己滚，别把下面"场上"那张卡顶出屏幕 */
+.god-shelf {
+  margin-top: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/*
+ * 侧栏太窄，时代名不占左边那一列：改成压在芯片上方的一行小标题。
+ *
+ * 沿用设置面板那套"左边一竖排、芯片在右"的话，芯片会折成三四行，
+ * 而时代名按 align-items:center 正好卡在第二行旁边——看上去像是
+ * 某个兵种的标签，而不是这一组的标题。
+ */
+.god-shelf .era-group {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.god-shelf .era-tag {
+  display: block;
+  flex: none;
+  margin-bottom: 5px;
+  text-align: left;
+  letter-spacing: 0.08em;
+}
+
+.god-side-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.god-side-row .btn {
+  margin-left: auto;
+}
+
+/*
+ * 窄屏：这条横带要跟棋盘抢高度，所以先把"摆给""笔刷"这几个说明字收掉——
+ * 红方/蓝方和查看/城市/橡皮本来就认得出来。结论文字不能收，
+ * 它是"刚才那一下到底成了没成"的唯一回话，改成换行铺满一行。
+ */
+@media (max-width: 720px) {
+  .god-label {
+    display: none;
+  }
+
+  .god-status {
+    margin-left: 0;
+    max-width: none;
+    white-space: normal;
+  }
 }

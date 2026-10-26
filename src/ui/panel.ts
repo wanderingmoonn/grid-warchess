@@ -811,6 +811,8 @@ export interface TopbarState {
   waitingForPeer: boolean;
   /** 观战位：既不是等对方，也不是轮到我 */
   spectator?: boolean;
+  /** 上帝模式：全图无雾，两边都归玩家摆，所以"轮到谁"不是重点 */
+  god?: boolean;
 }
 
 export function topbarShell(): string {
@@ -849,11 +851,13 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
 
   const who = ref('who');
   if (who) {
-    who.textContent = s.spectator
-      ? '观战 · 全图'
-      : s.waitingForPeer
-        ? '等待对方提交'
-        : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
+    who.textContent = s.god
+      ? '上帝模式 · 全图'
+      : s.spectator
+        ? '观战 · 全图'
+        : s.waitingForPeer
+          ? '等待对方提交'
+          : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
   }
 
   const room = ref('room');
@@ -876,6 +880,9 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
 
   const ai = ref('toggle-ai');
   if (ai) {
+    // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
+    // 而顶栏这个按钮会把它变成"回合自动往前跑"，摆兵就摆不安稳了。
+    ai.hidden = s.god === true;
     ai.textContent = s.aiCurrent ? '收回操作权' : '交给 AI';
     ai.classList.toggle('btn-primary', s.aiCurrent);
   }

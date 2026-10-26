@@ -10,7 +10,7 @@ import './style.css';
 import { expansionById } from './core/expansions.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
-import { CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
+import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import {
   adjacentToWater,
@@ -31,15 +31,20 @@ import {
   refreshMemory,
   siegeTargets,
   threatTiles,
+  unitsOf,
   upgradeCostOf,
   utype,
 } from './core/rules.ts';
+import { clearUnits, placeCity, placeUnit, removeAt, sandboxCityProblem } from './core/sandbox.ts';
+import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
-import { renderPanel, topbarShell, updateTopbar } from './ui/panel.ts';
+import { renderPanel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput } from './ui/panel.ts';
+import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
+import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
@@ -260,6 +265,9 @@ function watching(): boolean {
 
 /** 双 AI 观战：谁都还没"入座"，给全图视角，否则看的是某一方的迷雾 */
 function spectating(): boolean {
+  // 上帝模式也是全图：沙盒里藏信息毫无意义——盘上的兵都是自己摆上去的。
+  // 迷雾要是没关，摆完 B 方的兵下一帧就看不见了，这个模式会变得没法用。
+  if (state.config.godMode === true) return true;
   // 房间观战位是同一回事：没有"我方"，迷雾就没有意义
   if (watching()) return true;
   return isAiSide(state, 'A') && isAiSide(state, 'B');
@@ -313,6 +321,10 @@ function resumeRoom(): boolean {
 
 /** 视角玩家：联机时永远是自己那一方，而不是"现在轮到谁" */
 function me(): PlayerId {
+  // 上帝模式没有"我的一方"：两边都归你摆，所以视角跟着当前行动方走。
+  // 这一步很重要——面板和点击判定里的 `mine` 都要有个主人，
+  // 固定成 A 会让"轮到蓝方时点蓝方的兵"变成点别人家的东西。
+  if (state.config.godMode === true) return state.current;
   // 观战位没有"我的一方"，给谁都一样——渲染走的是全图，
   // 面板里所有"我的"判断都被 spectator 挡住了。
   if (watching()) return 'A';
@@ -381,9 +393,19 @@ function render(): void {
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
 
-  renderPanel(sideEl, panelInput());
-
-  renderCommander();
+  if (state.config.godMode === true) {
+    // 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
+    // 兵是自己一手摆上去的，摆的时候就知道它是谁。
+    renderGodShelf();
+    renderGodBar();
+  } else {
+    // 离开沙盒（新对局 / 导入 / 切回普通局）：两份签名作废，
+    // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
+    godSig = '';
+    godShelfSig = '';
+    renderPanel(sideEl, panelInput());
+    renderCommander();
+  }
 
   // 换人了就"叮"一声：手机放在桌上等对手的人，靠这一声回神。
   // AI 之间互打不响（会变成每秒一声），观战也不响。
@@ -412,6 +434,7 @@ function render(): void {
     roomCode: room?.code ?? null,
     waitingForPeer: !myTurn() && !state.winner,
     spectator: watching(),
+    god: state.config.godMode === true,
   });
   syncTopbarScroll();
   fitBoard();
@@ -587,6 +610,11 @@ function clearSelection(): void {
 
 /** 建造者周围哪些空格可以盖东西（桥是唯一能盖在水上的） */
 function computePlaceable(): number[] {
+  // 上帝模式：只有"摆城"需要提前点亮格子（2×2 的角放哪儿是有讲究的，
+  // 光靠点错再弹提示得试上十几次）。摆兵不点亮——整张图大半都能放，
+  // 亮起来只是把棋盘糊成一片橙的。
+  if (state.config.godMode === true) return godCitySpots();
+
   // 蛋落位也复用这一层橙格：轮到我了、手里还有一枚蛋，就把可选格点亮。
   // 它比"点错了再弹提示"友好得多——玩家一眼就知道能放哪儿。
   if (state.pendingEgg && state.pendingEgg.owner === state.current) {
@@ -811,6 +839,13 @@ function undoLast(): void {
 }
 
 function onBoardClick(e: Event): void {
+  // 上帝模式的点击语义完全不同：这里点棋盘是"落子"，不是"走子"。
+  // 走子那套判断（轮到我吗、这格可达吗、能不能开火）在沙盒里一条都不成立，
+  // 所以整块交出去，不在这里塞一堆 if。
+  if (state.config.godMode === true) {
+    onGodClick(e);
+    return;
+  }
   if (handoffOpen || state.winner || aiBusy()) return;
 
   const clickedUnitId = unitIdFromEvent(e);
@@ -1141,6 +1176,14 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'toggle-fog': {
+      // 上帝模式固定全图：
+      //   1. 沙盒里藏信息没有意义，盘上的兵都是自己摆的；
+      //   2. 更要紧的是 AI——它的寻路方向来自"敌城 + 视野内敌军"，
+      //      沙盒里常常一座城都没有，雾一开两边就互相看不见，谁都不动。
+      if (godMode()) {
+        toast('上帝模式固定全图：关雾不只是给你看，AI 也要看得见才打得起来');
+        return;
+      }
       // 「浓雾蔽野」把"地图不可见"当成规则本身，这里必须拦住：
       // 能一键关掉的话，这个扩展就只是个大号的显示选项
       if (state.config.expansionIds.includes('blackout')) {
@@ -1156,6 +1199,12 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'toggle-ai': {
+      if (godMode()) {
+        // 顶栏那个开关是"托管一方"，而沙盒里两边本来就归 AI 打——
+        // 用它会把某一方永久交给 AI，回合会自动往前跑，摆兵就摆不安稳了
+        toast('沙盒用「交给 AI · 一回合」或「接管 · 打到全灭」');
+        return;
+      }
       if (room) {
         toast(
           watching()
@@ -1276,6 +1325,66 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'handoff-start': {
       closeHandoff();
+      render();
+      return;
+    }
+
+    // ---------- 上帝模式 ----------
+
+    case 'god-side': {
+      godSide = el.dataset.side === 'B' ? 'B' : 'A';
+      render();
+      return;
+    }
+
+    case 'god-brush': {
+      const b = el.dataset.brush;
+      godBrush =
+        b === 'city' ? { kind: 'city' } : b === 'erase' ? { kind: 'erase' } : { kind: 'none' };
+      render();
+      return;
+    }
+
+    case 'god-pick': {
+      const type = el.dataset.unit ?? '';
+      if (!type) return;
+      // 再点一次同一个兵种＝放下笔刷。否则想"查看一下"还得先跑去点工具栏
+      godBrush =
+        godBrush.kind === 'unit' && godBrush.type === type
+          ? { kind: 'none' }
+          : { kind: 'unit', type };
+      render();
+      return;
+    }
+
+    case 'god-city-era': {
+      const n = Number(el.dataset.era ?? 1);
+      godCityEra = Math.max(1, Math.min(5, Number.isFinite(n) ? Math.round(n) : 1));
+      render();
+      return;
+    }
+
+    case 'god-clear': {
+      godApply(clearUnits(state, el.dataset.side === 'B' ? 'B' : 'A'));
+      return;
+    }
+
+    case 'god-run-round': {
+      void runGodFight('round');
+      return;
+    }
+
+    case 'god-run-dead': {
+      void runGodFight('dead');
+      return;
+    }
+
+    case 'god-stop': {
+      // 令牌一换，正在跑的 AI 循环下一步就自己退出（和参谋部中断同一个手法）
+      aiToken += 1;
+      godRunning = false;
+      godResult = '已停止';
+      saveMatch(state);
       render();
       return;
     }
@@ -1678,6 +1787,255 @@ async function runCommanderBatch(): Promise<void> {
   render();
   // 被"中断"打断时 token 已经换人，这时别报"打完了"
   if (token === aiToken) toast(`这 ${CONFIG.commanderSlots} 个回合打完了`);
+}
+
+// ---------- 上帝模式（沙盒） ----------
+
+/**
+ * 上帝模式：不要钱、不看回合，直接往盘上摆兵摆城，然后让 AI 打给你看。
+ *
+ * 它和指挥官模式解决的不是同一件事：
+ *   · 指挥官模式是**降低操作负担**，棋盘仍然是一盘正常对局；
+ *   · 上帝模式是**想试一件事**——十个长弓手守不守得住一座桥、一辆坦克
+ *     能不能捅穿一队枪兵、这个兵种到底值不值那个价。
+ *     这类问题拿正常对局去验证，要先攒十分钟钱，打完还得重开一局。
+ *
+ * 所以这里的按钮只有"打完这一回合"和"打到全灭"，没有一个是在下棋。
+ */
+
+/** 摆哪一方 */
+let godSide: PlayerId = 'A';
+/** 手上拿的是什么 */
+let godBrush: GodBrush = { kind: 'none' };
+/** 摆城用哪个时代；0 表示"还没挑过"，按这一局的起始时代走 */
+let godCityEra = 0;
+/** AI 正在同时操控两边 */
+let godRunning = false;
+/** 打到第几个回合（工具栏上那个"第 N 回合"） */
+let godRound = 0;
+/** 上一次打完的一句话结论 */
+let godResult = '';
+/** 工具栏上次重建时的局面签名：AI 跑起来时每一步都在变，靠它挡掉无谓重建 */
+let godSig = '';
+/**
+ * 货架那份签名。
+ *
+ * 单开一份，是因为它变的条件和工具栏不一样：AI 走一步（位置变了、血量变了）
+ * 不需要重排 49 个兵种按钮，而重排会把货架的滚动位置清零——
+ * 打一场仗要点几百步，站在货架下面看的人会被弹回顶部几百次。
+ */
+let godShelfSig = '';
+
+/** 每一步之间的停顿。比"慢档"快一些：看的是整场仗的走势，不是单步细节 */
+const GOD_DELAY = 60;
+
+/**
+ * 「打到全灭」的安全上限（单位"次行动"，不是回合）。
+ *
+ * 一场歼灭战正常二三十回合就完了，这里给到 400 次行动，因为撞上它只有
+ * 一种情况：两边谁也打不动谁（隔着河、全是高甲单位、或者只剩建筑）。
+ * 那种局面继续跑只是在空转，不如停下来告诉玩家"没分出胜负"。
+ */
+const GOD_MAX_TURNS = 400;
+
+/**
+ * 沙盒里的 AI 不许产兵、不许升时代。
+ *
+ * 不是办不到，是那样就当不了试验场：两座城一开产线，五回合之后场上就变成
+ * 两支新军，玩家摆上去的那几个兵反而成了配角。这个模式要回答的问题是
+ * "我摆的这支部队怎么样"，所以经济这一层直接掐掉。
+ */
+const GOD_BUDGET: Partial<AiBudget> = { maxRecruit: 0, maxUpgrade: 0 };
+
+function godMode(): boolean {
+  return state.config.godMode === true;
+}
+
+/**
+ * 还"能打"的部队。
+ *
+ * 建筑不算：军营、塔、磨坊既不会走也不会主动冲，把它们算进"还有兵"，
+ * 会让一场已经打完的仗在界面上继续跑到 400 次行动——玩家看着空棋盘
+ * 等一个永远不会来的"全灭"。
+ */
+function godCombatUnits(p: PlayerId): Unit[] {
+  return unitsOf(state, p).filter((u) => utype(state, u.type).category === 'combat');
+}
+
+function godUi() {
+  return {
+    state,
+    side: godSide,
+    brush: godBrush,
+    // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
+    // 没有理由默认成另一个时代
+    cityEra: godCityEra || state.config.startEra,
+    running: godRunning,
+    round: godRound,
+    result: godResult,
+  };
+}
+
+function renderGodBar(): void {
+  if (!godMode()) return;
+  commanderEl.hidden = false;
+  const sig = [
+    state.turn,
+    state.current,
+    godSide,
+    godBrush.kind,
+    godBrush.kind === 'unit' ? godBrush.type : '',
+    godCityEra,
+    godRunning ? `run${godRound}` : '-',
+    godResult,
+    state.units.length,
+    state.cities.length,
+  ].join('|');
+  if (sig === godSig) return;
+  godSig = sig;
+  // 参谋部那份签名作废：下次回到指挥官模式时必须整块重建，否则会拿着
+  // 沙盒的签名去比，面板原地不动
+  commanderSig = '';
+  commanderEl.innerHTML = godBarHtml(godUi());
+}
+
+function renderGodShelf(): void {
+  const sig = [
+    Object.keys(state.unitTypes).length,
+    godSide,
+    godBrush.kind,
+    godBrush.kind === 'unit' ? godBrush.type : '',
+    state.units.length,
+    state.cities.length,
+    state.players.A.gold,
+    state.players.B.gold,
+  ].join('|');
+  if (sig === godShelfSig) return;
+  godShelfSig = sig;
+  // 重排会把滚动位置清零，记一下再还回去
+  const keep = sideEl.querySelector<HTMLElement>('.god-shelf')?.scrollTop ?? 0;
+  sideEl.innerHTML = godShelfHtml(godUi());
+  const shelf = sideEl.querySelector<HTMLElement>('.god-shelf');
+  if (shelf) shelf.scrollTop = keep;
+}
+
+/** 摆城时能放下 2×2 的角，扔给棋盘点亮成橙格 */function godCitySpots(): number[] {
+  if (godBrush.kind !== 'city') return [];
+  const out: number[] = [];
+  for (let y = 0; y + CITY.size <= state.h; y++) {
+    for (let x = 0; x + CITY.size <= state.w; x++) {
+      if (sandboxCityProblem(state, x, y) === null) out.push(y * state.w + x);
+    }
+  }
+  return out;
+}
+
+/** 沙盒里改局面：和 dispatch 一样记撤回栈，但不过规则层（不看回合、不查金币） */
+function godApply(result: SandboxResult): void {
+  if (!result.ok) {
+    toast(result.reason);
+    return;
+  }
+  undoStack.push(state);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  state = result.state;
+  godResult = '';
+  saveMatch(state);
+  render();
+}
+
+function onGodClick(e: Event): void {
+  if (godRunning) {
+    toast('AI 正在打，先按「停止」');
+    return;
+  }
+  const coords = coordsFromEvent(e);
+  if (!coords) return;
+  const { x, y } = coords;
+
+  // 空手：这一格上是什么。沙盒里没有属性卡这回事，
+  // 想知道血量就点一下，一句话说清就够了。
+  if (godBrush.kind === 'none') {
+    const u = state.units.find((v) => v.x === x && v.y === y);
+    if (u) {
+      const def = utype(state, u.type);
+      toast(`${state.players[u.owner].name} · ${def.name} ${u.hp}/${def.maxHp} 血`);
+      return;
+    }
+    const city = cityAt(state, x, y);
+    if (city) {
+      toast(
+        `${state.players[city.owner].name} · ${city.era} 级城 ${city.hp}/${city.maxHp} 耐久`,
+      );
+      return;
+    }
+    const tile = state.tiles[idx(state, x, y)];
+    if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+    return;
+  }
+
+  if (godBrush.kind === 'erase') godApply(removeAt(state, x, y));
+  else if (godBrush.kind === 'city') {
+    godApply(placeCity(state, godSide, x, y, godCityEra || state.config.startEra));
+  } else godApply(placeUnit(state, godSide, godBrush.type, x, y));
+}
+
+/**
+ * 让 AI 同时操控两边打。
+ *
+ * mode='round' 只推两方各一个回合（正好是一个完整的"回合"），然后把棋盘
+ * 还给玩家；mode='dead' 一直打到一方没有能打的部队，中途可以按停止。
+ *
+ * 为什么两边都交给 AI：沙盒的看点就是"这两支部队对撞会怎样"。玩家亲自
+ * 走一边，结果就带上了自己的水平，试数值这件事也就没意义了。
+ */
+async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
+  if (!godMode() || godRunning) return;
+  if (godCombatUnits('A').length === 0 || godCombatUnits('B').length === 0) {
+    toast('两边都得有战斗单位才打得起来');
+    return;
+  }
+
+  const token = ++aiToken;
+  godRunning = true;
+  godRound = 0;
+  godResult = '';
+  aiPaused = false;
+  clearSelection();
+  godSig = '';
+  render();
+
+  const maxTurns = mode === 'round' ? 2 : GOD_MAX_TURNS;
+  let turns = 0;
+
+  try {
+    while (token === aiToken && turns < maxTurns) {
+      if (state.winner) break;
+      if (godCombatUnits('A').length === 0 || godCombatUnits('B').length === 0) break;
+      await runAiTurn(token, GOD_BUDGET, GOD_DELAY);
+      turns += 1;
+      godRound = Math.ceil(turns / 2);
+      render();
+    }
+  } finally {
+    godRunning = false;
+    godSig = '';
+  }
+
+  // 被「停止」打断：令牌已经换人，收尾交给停止那一下，这里不许再报结论
+  if (token !== aiToken) return;
+
+  const wiped = (['A', 'B'] as PlayerId[]).filter((p) => godCombatUnits(p).length === 0);
+  if (wiped.length > 0) {
+    godResult = `${state.players[wiped[0]!].name}的部队打光了`;
+  } else if (mode === 'dead') {
+    godResult = `打了 ${turns} 次行动，两边都还有兵`;
+  } else {
+    godResult = '一回合打完，接着摆，或者让 AI 继续';
+  }
+  saveMatch(state);
+  render();
+  toast(godResult);
 }
 
 // ---------- 联机 ----------

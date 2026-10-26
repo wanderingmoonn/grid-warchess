@@ -48,6 +48,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
       commanderMode: initial.commanderMode === true,
+      godMode: initial.godMode === true,
     };
     let currentSeed = seed;
 
@@ -173,12 +174,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           <div class="modal-body">
             <section class="field">
               <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
-              <div class="chip-row">
+              ${
+                config.godMode
+                  ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
+                  : `<div class="chip-row">
                 <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
                 <button class="chip ${config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="1">人机对战</button>
                 <button class="chip ${config.aiAlly ? 'active' : ''}" data-ai="2">双 AI 观战</button>
               </div>
-              ${aiLevelChips}
+              ${aiLevelChips}`
+              }
             </section>
 
             <section class="field">
@@ -206,10 +211,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
               </div>
               <div class="chip-row">
-                <button class="chip ${!config.commanderMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
+                <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
                 <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
+                <button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>
               </div>
-              <div class="field-hint">指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。</div>
+              <div class="field-hint">${
+                config.godMode
+                  ? '上帝模式下棋盘全图可见：点兵种→点棋盘落子，摆完点「交给 AI · 一回合」看一回合，或者「接管 · 打到全灭」看完整场。'
+                  : '指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
+              }</div>
             </section>
 
             <section class="field">
@@ -287,11 +297,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       const roleBtn = target.closest<HTMLElement>('[data-role]');
       if (roleBtn?.dataset.role) {
-        config.commanderMode = roleBtn.dataset.role === 'commander';
+        const role = roleBtn.dataset.role;
+        config.commanderMode = role === 'commander';
+        config.godMode = role === 'god';
         // 指挥官模式必须对着 AI 打：热座两边都是人，就没人执行战术了
         if (config.commanderMode) {
           config.aiOpponent = true;
           config.aiAlly = false;
+        }
+        // 上帝模式是纯单人沙盒：两边都由玩家摆，托管开关留着只会
+        // 让某一方在开局就自己跑起来，"摆完再看"这件事就做不到了
+        if (config.godMode) {
+          config.aiOpponent = false;
+          config.aiAlly = false;
+          config.commanderMode = false;
         }
         paint();
         return;

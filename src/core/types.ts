@@ -410,6 +410,20 @@ export interface MatchConfig {
    * 只是等的是"下达生产序列"而不是"走子"。
    */
   commanderMode?: boolean;
+  /**
+   * 上帝模式（沙盒）：纯单人，往盘上凭空摆兵、摆城，不要金币也不要产线。
+   *
+   * 和前几个开关不是一个层次的东西：
+   *   · aiOpponent / aiAlly 说"谁被托管"，commanderMode 说"人被托管到什么程度"，
+   *     而这个模式说"这一局根本不是对局"——它是一块试兵场。
+   *   · 所以它要求两边都归玩家摆（aiOpponent / aiAlly 一律关掉），
+   *     摆完之后点「交给 AI」/「接管」，让 AI 同时操控两边打给玩家看。
+   *
+   * 胜负也不按城判（checkWinner 在这个模式下直接返回 null）：
+   * 沙盒要的答案是"这两支部队打起来谁赢"，不是"谁先丢光城"。
+   * 一方没兵了由界面判停，见 main.ts 的 runGodFight。
+   */
+  godMode?: boolean;
   /** 地貌风格：random 由种子抽；也可以指定横河 / 纵河 / 山岭 / 开阔 */
   mapStyle?: 'random' | 'river-h' | 'river-v' | 'ridge' | 'open';
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */

@@ -1215,6 +1215,107 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   assert.ok(host.innerHTML.includes('没有匹配'), '搜不到要说清楚');
 });
 
+console.log('\n上帝模式');
+
+click('[data-act="new-game"]');
+await wait(40);
+
+check('开局面板多了"上帝模式"这一档', () => {
+  assert.ok(doc.querySelector('[data-role="god"]'), '应该有上帝模式选项');
+});
+
+click('[data-role="god"]');
+
+check('选了上帝模式，对手那栏就收起来了', () => {
+  // 热座/人机/双 AI 三个选项在这里没有意义：两边都由玩家摆
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('纯单人沙盒'), `应该说明这是纯单人，实际：${body.slice(0, 80)}`);
+  assert.equal(doc.querySelector('[data-ai="1"]'), null, '对手选项应该收掉');
+});
+
+click('[data-act="start"]');
+await wait(80);
+
+/** 读当前这一局的存档（界面重绘过，捏着旧 state 没用） */
+function savedGame(): {
+  w: number;
+  h: number;
+  tiles: { terrain: string; cityId: string | null }[];
+  units: { id: string; type: string; owner: string; x: number; y: number }[];
+  cities: { id: string; owner: string; x: number; y: number }[];
+  players: Record<string, { gold: number }>;
+  unitTypes: Record<string, { id: string; domain?: string; category: string }>;
+} {
+  return JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}');
+}
+
+check('上帝模式开局：工具栏、兵种货架、全图视角一次到位', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar && !bar.hidden, '工具栏应该显示出来');
+  assert.ok((bar!.textContent ?? '').includes('上帝模式'));
+  assert.ok(doc.querySelector('[data-act="god-run-round"]'), '要有「交给 AI · 一回合」');
+  assert.ok(doc.querySelector('[data-act="god-run-dead"]'), '要有「接管 · 打到全灭」');
+  assert.ok(doc.querySelector('.god-shelf'), '侧栏应该换成兵种货架');
+  // 全图：沙盒里藏信息没有意义，摆完 B 方的兵下一帧就看不见的沙盒没法用
+  assert.equal(doc.querySelectorAll('.tile.out').length, 0, '不该有视野外的格子');
+  assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
+});
+
+check('选兵种→点棋盘就落子，不扣金币不推进回合', () => {
+  const before = savedGame();
+  // 挑一个陆地战斗单位：货架按造价排，第一个可能是船或农民
+  const land = Object.values(before.unitTypes).find(
+    (d) => d.domain !== 'water' && d.category === 'combat',
+  );
+  assert.ok(land, '本局应该有陆地战斗单位');
+
+  const chip = doc.querySelector<HTMLElement>(`[data-act="god-pick"][data-unit="${land!.id}"]`);
+  assert.ok(chip, '货架上找不到这个兵种');
+  chip!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  // 找一格能站的空地：非水非山、没有城、没有单位
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 0; y < before.h && !spot; y++) {
+    for (let x = 0; x < before.w && !spot; x++) {
+      const t = before.tiles[y * before.w + x];
+      if (!t || t.terrain === 'water' || t.terrain === 'mountain' || t.cityId) continue;
+      if (before.units.some((u) => u.x === x && u.y === y)) continue;
+      spot = { x, y };
+    }
+  }
+  assert.ok(spot, '棋盘上找不到空地');
+  const cell = doc.querySelector<HTMLElement>(`.tile[data-x="${spot!.x}"][data-y="${spot!.y}"]`);
+  assert.ok(cell, '找不到那一格');
+  cell!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const after = savedGame();
+  const dropped = after.units.find((u) => u.x === spot!.x && u.y === spot!.y);
+  assert.ok(dropped, '点了棋盘却没落子');
+  assert.equal(dropped!.type, land!.id);
+  assert.equal(dropped!.owner, 'A', '默认摆给红方');
+  assert.equal(after.players.A!.gold, before.players.A!.gold, '沙盒里摆兵不该花钱');
+});
+
+check('换「城市」笔刷会把能放的 2×2 角点亮，点一格就盖起来', () => {
+  click('[data-act="god-brush"][data-brush="city"]');
+  const spots = doc.querySelectorAll('.tile.placeable');
+  assert.ok(spots.length > 0, '应该有橙格提示哪里能放城');
+
+  const before = savedGame();
+  spots[0]!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const after = savedGame();
+  assert.equal(after.cities.length, before.cities.length + 1, '城没盖起来');
+});
+
+check('点「交给 AI」立刻换成一整条"正在打"，按停止能收回', () => {
+  click('[data-act="god-run-round"]');
+  // runGodFight 在第一个 await 之前就 render 过了，所以这里是同步的
+  assert.ok(doc.querySelector('[data-act="god-stop"]'), '点下去应该立刻进入"正在打"');
+  click('[data-act="god-stop"]');
+  assert.ok(doc.querySelector('[data-act="god-run-round"]'), '停止之后按钮要换回来');
+  assert.ok((doc.querySelector('#commander')?.textContent ?? '').includes('已停止'));
+});
+
 console.log('\n点敌人就是开火');
 
 /**

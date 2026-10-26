@@ -403,8 +403,14 @@ function crossesWater(def: UnitTypeDef): boolean {
   return hasAbility(def, 'fly') || hasAbility(def, 'fly-over') || hasAbility(def, 'leap');
 }
 
-/** 这个兵种能不能站在这一格：地形可走、同层没单位 */
-function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+/**
+ * 这个兵种能不能站在这一格：地形可走、同层没单位。
+ *
+ * 导出是给沙盒（上帝模式）用的：那个模式可以凭空摆兵，但"摆得合不合理"
+ * 必须和走子用同一条判断——否则会出现船停在山顶上这种局面，
+ * 之后每一次寻路、每一发攻击都在跟它较劲。
+ */
+export function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return false;
   const def = utype(s, type);
@@ -1074,6 +1080,14 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
 }
 
 function checkWinner(s: GameState): PlayerId | null {
+  // 上帝模式不判负。
+  //
+  // 沙盒里"城"只是可以摆上来挨打的靶子，不是根：有人就想试"二十个长弓手
+  // 能不能啃下一座中世纪城"，这种局里没城的那一方恰恰是正常状态。
+  // 按城判负会让第一回合就弹出"你赢了"，沙盒直接没法用。
+  // 真正的停止条件是"一方没兵了"，由界面来判（main.ts 的 runGodFight）。
+  if (s.config.godMode === true) return null;
+
   for (const p of ['A', 'B'] as PlayerId[]) {
     // 城就是根：一座城都没有，就算你还有一支满编部队也翻不了身——
     // 没有城市就产不了兵、升不了级、也没有收入来源。

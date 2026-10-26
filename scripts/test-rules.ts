@@ -15,6 +15,13 @@ import assert from 'node:assert/strict';
 import { CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
+import {
+  clearUnits,
+  placeCity,
+  placeUnit,
+  removeAt,
+  sandboxCityProblem,
+} from '../src/core/sandbox.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
 import {
   AI_MAX_STEPS,
@@ -5659,6 +5666,244 @@ test('满血遣散返还四成，残血一个铜板都不返', () => {
   assert.ok(r2.ok);
   assert.equal(r2.state.players.A.gold, gold2, '残血遣散不该返还金币');
   assert.equal(r2.state.units.some((n) => n.id === hurt.id), false, '照样要移除');
+});
+
+console.log('\n上帝模式（沙盒）');
+
+test('摆兵不要金币、不推进回合，摆上去就是满血能行动', () => {
+  const s = fresh({ godMode: true });
+  const gold = s.players.A.gold;
+  const turn = s.turn;
+  const before = s.units.length;
+  const spot = emptyPlain(s);
+
+  const r = placeUnit(s, 'A', 'militia', spot.x, spot.y);
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const u = r.state.units.find((k) => k.x === spot.x && k.y === spot.y);
+  assert.ok(u, '兵没摆上去');
+  assert.equal(u.owner, 'A');
+  assert.equal(u.hp, s.unitTypes.militia!.maxHp, '摆上去就该是满血');
+  assert.equal(u.moved, false, '当回合就能动');
+  assert.equal(u.acted, false, '当回合就能打');
+  assert.equal(r.state.players.A.gold, gold, '一分钱都不该扣');
+  assert.equal(r.state.turn, turn, '不该推进回合');
+  assert.equal(r.state.units.length, before + 1);
+  assert.equal(s.units.length, before, '原局面不能被就地改掉');
+});
+
+test('摆兵也认地形：步兵不能站水里，船不能停在旱地上', () => {
+  const s = fresh({ godMode: true });
+  const spot = emptyPlain(s);
+  s.tiles[idx(s, spot.x, spot.y)].terrain = 'water';
+
+  const army = placeUnit(s, 'A', 'militia', spot.x, spot.y);
+  assert.equal(army.ok, false, '步兵不该能站在水面上');
+
+  const boatId = Object.values(s.unitTypes).find((d) => d.domain === 'water')?.id;
+  assert.ok(boatId, '基线配置里应该有水军');
+  const boat = placeUnit(s, 'A', boatId!, spot.x, spot.y);
+  assert.ok(boat.ok, boat.ok ? '' : boat.reason);
+
+  const land = emptyPlain(s);
+  const ashore = placeUnit(s, 'A', boatId!, land.x, land.y);
+  assert.equal(ashore.ok, false, '船不该能停在旱地上');
+});
+
+test('不能把兵摆进对面的城', () => {
+  const s = fresh({ godMode: true });
+  const foeCity = s.cities.find((c) => c.owner === 'B');
+  assert.ok(foeCity);
+  // 城格上本来就不该有敌方单位（pinCities 清过了）
+  const r = placeUnit(s, 'A', 'militia', foeCity!.x, foeCity!.y);
+  assert.equal(r.ok, false);
+  assert.ok(r.ok === false && r.reason.includes('城'), '提示要说清是因为"这是对方的城"');
+});
+
+test('盖城占 2×2，耐久按时代给，擦掉之后那四格退回平原', () => {
+  const s = fresh({ godMode: true });
+  // 找一块干净的 2×2
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 1; y < s.h - 3 && !spot; y++) {
+    for (let x = 1; x < s.w - 3 && !spot; x++) {
+      if (sandboxCityProblem(s, x, y) === null) spot = { x, y };
+    }
+  }
+  assert.ok(spot, '地图上找不到能盖城的 2×2');
+
+  const r = placeCity(s, 'A', spot!.x, spot!.y, 3);
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const built = r.state;
+  const city = built.cities[built.cities.length - 1]!;
+  assert.equal(city.owner, 'A');
+  assert.equal(city.era, 3, '时代按界面选的来');
+  assert.equal(city.maxHp, eraDef(3).cityMaxHp, '耐久按时代给');
+  const origin = spot!;
+  for (let dy = 0; dy < 2; dy++) {
+    for (let dx = 0; dx < 2; dx++) {
+      const under = built.tiles[idx(built, origin.x + dx, origin.y + dy)]!;
+      assert.equal(under.terrain, 'city', '这四格要变成城');
+      assert.equal(under.cityId, city.id);
+    }
+  }
+
+  // 擦城：四格退回平原，别留一片不能站人的瓦砾
+  const gone = removeAt(built, origin.x, origin.y);
+  assert.ok(gone.ok, gone.ok ? '' : gone.reason);
+  assert.equal(gone.state.cities.some((c) => c.id === city.id), false, '城应该没了');
+  assert.equal(gone.state.tiles[idx(gone.state, spot!.x, spot!.y)]!.terrain, 'plain');
+  assert.equal(gone.state.tiles[idx(gone.state, spot!.x, spot!.y)]!.cityId, null);
+});
+
+test('城底下站着单位时不给盖，擦掉单位就先擦单位', () => {
+  const s = fresh({ godMode: true });
+  // 先找一块本来能盖城的 2×2，再往它的左上角摆一个兵——
+  // 这样"盖不了"只可能是因为那个兵
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 1; y < s.h - 3 && !spot; y++) {
+    for (let x = 1; x < s.w - 3 && !spot; x++) {
+      if (sandboxCityProblem(s, x, y) === null) spot = { x, y };
+    }
+  }
+  assert.ok(spot, '地图上找不到能盖城的 2×2');
+
+  const placed = placeUnit(s, 'A', 'militia', spot!.x, spot!.y);
+  assert.ok(placed.ok, placed.ok ? '' : placed.reason);
+  const blocked = placeCity(placed.state, 'A', spot!.x, spot!.y, 1);
+  assert.equal(blocked.ok, false);
+  assert.ok(blocked.ok === false && blocked.reason.includes('单位'), '要说清是被谁挡住的');
+
+  // 橡皮：同一格先擦兵，兵没了再擦城
+  const erased = removeAt(placed.state, spot!.x, spot!.y);
+  assert.ok(erased.ok);
+  assert.equal(
+    erased.state.units.some((u) => u.x === spot!.x && u.y === spot!.y),
+    false,
+    '应该先把那个兵擦掉',
+  );
+});
+
+test('撤走部队只撤兵，城留着当靶子', () => {
+  const s = fresh({ godMode: true });
+  const citiesBefore = s.cities.length;
+  const r = clearUnits(s, 'A');
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(unitsOf(r.state, 'A').length, 0, '红方的兵要全没了');
+  assert.ok(unitsOf(r.state, 'B').length > 0, '蓝方的不该受影响');
+  assert.equal(r.state.cities.length, citiesBefore, '城不该跟着一起没');
+
+  const again = clearUnits(r.state, 'A');
+  assert.equal(again.ok, false, '本来就没兵了，要如实说');
+});
+
+test('上帝模式不按"没城"判负，正常对局照旧判', () => {
+  const s = fresh({ godMode: true });
+  const aCities = s.cities.filter((c) => c.owner === 'A');
+  // 县官不如现管：先把站在自家城上的兵挪开，否则 removeAt 会先擦兵
+  s.units = s.units.filter(
+    (u) => !aCities.some((c) => u.x >= c.x && u.x < c.x + c.size && u.y >= c.y && u.y < c.y + c.size),
+  );
+  let cur = s;
+  for (const c of aCities) {
+    const r = removeAt(cur, c.x, c.y);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    cur = r.state;
+  }
+  assert.equal(citiesOf(cur, 'A').length, 0, '红方的城应该被擦光了');
+
+  cur.current = 'A';
+  const sandbox = applyAction(cur, { type: 'END_TURN' });
+  assert.ok(sandbox.ok, sandbox.ok ? '' : sandbox.reason);
+  assert.equal(sandbox.state.winner, null, '沙盒里没城不算输——不然第一回合就"赢了"');
+
+  // 对照组：同一局面关掉上帝模式，老规则要照旧判 B 胜
+  const plain = structuredClone(cur);
+  delete plain.config.godMode;
+  const normal = applyAction(plain, { type: 'END_TURN' });
+  assert.ok(normal.ok, normal.ok ? '' : normal.reason);
+  assert.equal(normal.state.winner, 'B', '正常对局里没城就是输，这条不能一起被改掉');
+});
+
+test('建筑按"建造"那套地形规则落地：桥能架在水上，军营不能', () => {
+  const s = fresh({ godMode: true });
+  const spot = emptyPlain(s);
+  s.tiles[idx(s, spot.x, spot.y)].terrain = 'water';
+
+  // 桥的 buildOn 是 ['water']。要是这里拿走位那套 canStandAt 去判，
+  // 陆军不能站水里，结果就是沙盒里一座桥都架不起来。
+  const bridge = placeUnit(s, 'A', 'bridge', spot.x, spot.y);
+  assert.ok(bridge.ok, bridge.ok ? '' : bridge.reason);
+
+  const camp = placeUnit(s, 'A', 'camp', spot.x, spot.y);
+  assert.equal(camp.ok, false, '军营只能建在平地/丘陵上');
+  assert.ok(camp.ok === false && camp.reason.includes('只能建在'), '提示要写清地形要求');
+});
+
+test('沙盒里两支军队会真的打起来，而且能打到一方全灭', () => {
+  // 这条守的是这个模式的地基。沙盒里经常一座城都不摆，这时候 AI 找方向
+  // 只剩一条路：视野里的敌军（见 ai.ts 的 advanceDistance）。雾一开，
+  // 两支军队在空地上互相看不见，aiNextAction 直接返回 null——
+  // 12 个兵两排站到天荒地老，玩家看到的是"点了没反应"。
+  const s = createMatch({ ...BASE, size: 12, godMode: true }, 987654);
+  assert.equal(s.fog, false, '上帝模式开局就该是关雾的');
+  s.cities = [];
+  s.units = [];
+  s.players.A.gold = 0;
+  s.players.B.gold = 0;
+
+  // 一块干净的试验田：别让河把两军隔开（架桥要钱，沙盒里没有）
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 1; x <= 10; x++) {
+      const t = s.tiles[idx(s, x, y)];
+      if (!t) continue;
+      t.terrain = 'plain';
+      t.cityId = null;
+    }
+  }
+
+  const militia = s.unitTypes.militia!;
+  const put = (owner: PlayerId, x: number, y: number) => {
+    s.units.push({
+      id: `g${s.nextUnitSeq++}`,
+      type: 'militia',
+      owner,
+      x,
+      y,
+      hp: militia.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+  };
+  for (let i = 0; i < 6; i++) {
+    put('A', 2, 3 + i);
+    put('B', 9, 3 + i);
+  }
+
+  const budget = { maxRecruit: 0, maxUpgrade: 0, recruited: 0, upgraded: 0 };
+  let state = s;
+  const combat = (p: PlayerId) =>
+    unitsOf(state, p).filter((u) => utype(state, u.type).category === 'combat');
+
+  let turns = 0;
+  while (turns < 40 && combat('A').length > 0 && combat('B').length > 0) {
+    for (let step = 0; step < AI_MAX_STEPS; step++) {
+      const act = aiNextAction(state, budget);
+      if (!act) break;
+      const r = applyAction(state, act);
+      if (!r.ok) break;
+      state = r.state;
+      if (combat('A').length === 0 || combat('B').length === 0) break;
+    }
+    const end = applyAction(state, { type: 'END_TURN' });
+    assert.ok(end.ok, end.ok ? '' : end.reason);
+    state = end.state;
+    turns += 1;
+  }
+
+  assert.ok(
+    combat('A').length === 0 || combat('B').length === 0,
+    `40 回合还没分出胜负（A ${combat('A').length} 兵 / B ${combat('B').length} 兵），沙盒打不起来`,
+  );
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

@@ -266,6 +266,7 @@ export function createMatch(
       expansionIds: EXPANSIONS.filter((e) => liveExpansions.has(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
       commanderMode: config.commanderMode === true,
+      godMode: config.godMode === true,
     },
     unitTypes,
     turn: 1,
@@ -280,7 +281,15 @@ export function createMatch(
       B: { id: 'B', name: '蓝方', gold: startGoldFor(startEra) },
     },
     nextUnitSeq: unitSeq,
-    fog: CONFIG.fogDefault,
+    // 上帝模式一律关雾。
+    //
+    // 不只是"看着爽"：AI 找方向靠两样东西——敌方的城，和**自己视野里**的敌军
+    // （见 ai.ts 的 advanceDistance）。沙盒里常常一座城都不摆，这时候它唯一的
+    // 方向来源就是看得见的敌人。实测（12×12、两边各 6 个民兵、一块平地、
+    // 没有城）：雾开着，12 个兵两排站到第 80 回合谁都没动一下，aiNextAction
+    // 直接返回 null；雾一关，5 个回合就打完了一边。
+    // 所以这个模式下雾不是偏好，是必须关掉。
+    fog: config.godMode === true ? false : CONFIG.fogDefault,
     winner: null,
     log: [],
     memory: {
