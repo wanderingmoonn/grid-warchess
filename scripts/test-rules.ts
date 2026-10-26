@@ -1116,9 +1116,136 @@ test('勾选奇想兵种包会把额外兵种注入本局', () => {
   const plain = fresh();
   const fantasy = fresh({ expansionIds: ['fantasy-units'] });
   assert.equal(plain.unitTypes.dragoon, undefined);
-  assert.ok(fantasy.unitTypes.dragoon, '勾选后应该出现龙骑兵');
-  assert.ok(fantasy.unitTypes.warlock);
-  assert.ok(fantasy.unitTypes.behemoth);
+  for (const id of ['dragoon', 'warlock', 'behemoth', 'griffin', 'banshee', 'treant', 'vampire', 'dragon']) {
+    assert.ok(fantasy.unitTypes[id], `勾选后应该出现 ${id}`);
+  }
+});
+
+test('奇想兵种包每个兵种都带一条机制', () => {
+  const s = fresh({ expansionIds: ['fantasy-units'] });
+  const pack = EXPANSIONS.find((e) => e.id === 'fantasy-units');
+  assert.ok(pack?.units && pack.units.length >= 6, '兵种包应该有一整套兵');
+  for (const u of pack.units!) {
+    const hasMech = (u.abilities ?? []).length > 0 || (u.splash ?? 0) > 0 || (u.burst ?? 1) > 1;
+    assert.ok(hasMech, `${u.name} 只是一组数值，没有带任何机制`);
+    // 能力 id 必须真实存在，否则 rules.ts 里那一段永远不会被走到
+    for (const a of u.abilities ?? []) {
+      assert.ok(ABILITIES.some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
+    }
+    assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
+  }
+  assert.ok(s.unitTypes.dragon, '五级应该有一张自己的牌');
+});
+
+test('飞行：能越过整条河，但停不到水面上', () => {
+  const s = fresh({ expansionIds: ['fantasy-units'] });
+  // 把一整列改成水：这样"从右边绕过去"是不可能的，能过去就只能是飞过去
+  const cols: number[] = [];
+  for (let x = 1; x < s.w - 1; x++) {
+    let clear = true;
+    for (let y = 0; y < s.h; y++) if (s.tiles[idx(s, x, y)].cityId) clear = false;
+    if (clear) cols.push(x);
+  }
+  const x0 = cols[Math.floor(cols.length / 2)]!;
+  for (let y = 0; y < s.h; y++) s.tiles[idx(s, x0, y)].terrain = 'water';
+  for (let y = 0; y < s.h; y++) {
+    for (const x of [x0 - 1, x0 + 1]) {
+      const t = s.tiles[idx(s, x, y)];
+      if (t.terrain === 'water' || t.terrain === 'mountain') t.terrain = 'plain';
+    }
+  }
+  s.units = s.units.filter((u) => u.x !== x0 && u.x !== x0 - 1 && u.x !== x0 + 1);
+
+  const y0 = Math.floor(s.h / 2);
+  const griffin = placeDef(s, 'A', 'griffin', x0 - 1, y0);
+  const reach = reachableTiles(s, griffin);
+  assert.ok(reach.has(idx(s, x0 + 1, y0)), '狮鹫应该能飞到对岸');
+  for (const i of reach.keys()) {
+    const { x, y } = { x: i % s.w, y: Math.floor(i / s.w) };
+    assert.notEqual(s.tiles[idx(s, x, y)].terrain, 'water', '落点不能在水上');
+  }
+
+  // 对照：同样起点的骑兵（move 3）连河对岸都摸不到
+  s.units = s.units.filter((u) => u.id !== griffin.id);
+  const knight = place(s, 'A', 'knight', x0 - 1, y0);
+  const landReach = reachableTiles(s, knight);
+  assert.equal(landReach.has(idx(s, x0 + 1, y0)), false, '骑兵过不了河');
+});
+
+test('冲锋：动过才有 +5，反击不吃这个加成', () => {
+  const s = fresh();
+  grantAbility(s, 'militia', 'charge');
+  const { a, b } = duel(s);
+  const still = computeDamage(s, a, b);
+  a.moved = true;
+  assert.equal(computeDamage(s, a, b) - still, 5, '移动过之后应该多 5 点');
+
+  // 反击是原地还手：同样一个"动过"的单位，反击伤害不该多出来
+  b.moved = false;
+  const counterStill = computeDamage(s, b, a, true);
+  b.moved = true;
+  assert.equal(computeDamage(s, b, a, true), counterStill);
+});
+
+test('威吓：相邻敌军攻击 −2，最多叠两层', () => {
+  const s = fresh({ expansionIds: ['fantasy-units'] });
+  const { a, b } = duel(s);
+  const base = computeDamage(s, a, b);
+  const one = placeDef(s, 'B', 'banshee', a.x - 1, a.y);
+  s.tiles[idx(s, one.x, one.y)].terrain = 'plain';
+  assert.equal(computeDamage(s, a, b), base - 2, '一个女妖贴身应该 −2');
+
+  const two = placeDef(s, 'B', 'banshee', a.x, a.y + 1);
+  s.tiles[idx(s, two.x, two.y)].terrain = 'plain';
+  assert.equal(computeDamage(s, a, b), base - 4, '两个女妖应该 −4');
+
+  const three = placeDef(s, 'B', 'banshee', a.x + 1, a.y);
+  s.tiles[idx(s, three.x, three.y)].terrain = 'plain';
+  assert.equal(computeDamage(s, a, b), base - 4, '三层封顶，不再继续扣');
+});
+
+test('吸血：把真打出来的伤害换四成血，上限不超过生命上限', () => {
+  const s = fresh({ expansionIds: ['fantasy-units'] });
+  const vamp = placeDef(s, 'A', 'vampire', 5, 5);
+  // 靶子用戟兵：民兵会被一击打死，那就没有反击、也测不出"结算顺序"
+  const target = place(s, 'B', 'halberdier', 5, 4);
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const maxHp = s.unitTypes.vampire!.maxHp;
+  vamp.hp = 20;
+  const dmg = computeDamage(s, vamp, target);
+  const counter = computeDamage(s, target, vamp, true);
+  assert.ok(dmg > 0 && counter > 0, '这组数据应该打得出伤害、也挨得到反击');
+  const r = applyAction(s, { type: 'ATTACK', unitId: vamp.id, targetId: target.id });
+  assert.ok(r.ok);
+  assert.ok(r.state.units.some((u) => u.id === target.id), '靶子应该活着，这样才有反击');
+  const after = r.state.units.find((u) => u.id === vamp.id)!;
+  const heal = Math.min(maxHp - (20 - counter), Math.round(dmg * 0.4));
+  assert.equal(after.hp, 20 - counter + heal);
+  assert.ok(heal > 0, '这一下应该真的吸到血');
+
+  // 满血时不会溢出上限
+  vamp.hp = maxHp;
+  const r2 = applyAction(s, { type: 'ATTACK', unitId: vamp.id, targetId: target.id });
+  assert.ok(r2.ok);
+  assert.equal(r2.state.units.find((u) => u.id === vamp.id)!.hp, maxHp);
+});
+
+test('再生：每回合开始回 10% 上限，动过也算', () => {
+  const s = fresh({ expansionIds: ['fantasy-units'] });
+  const treant = placeDef(s, 'A', 'treant', 5, 5);
+  treant.hp = 30;
+  treant.moved = true;
+  treant.acted = true;
+  // 换手两次才轮到 A 自己开局
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok);
+  assert.equal(r1.state.units.find((u) => u.id === treant.id)!.hp, 30, '对手回合不该回血');
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  const after = r2.state.units.find((u) => u.id === treant.id)!;
+  // 按兵种表算，不写死：这一条测的是"回多少"，不是"这兵现在多少血"
+  assert.equal(after.hp, 30 + Math.ceil(s.unitTypes.treant!.maxHp * 0.1));
 });
 
 test('攻击力低于护甲时造成 0 伤害', () => {
@@ -1383,6 +1510,94 @@ test('多个扩展可以同时生效', () => {
   assert.equal(computeDamage(s, cav, b), UNIT_TYPES.scout.atk - UNIT_TYPES.militia.armor);
 });
 
+console.log('\n哀兵必胜');
+
+test('哀兵必胜：还没丢城的时候，一点加成都没有', () => {
+  const off = fresh();
+  const on = fresh({ expansionIds: ['last-stand'] });
+  assert.equal(off.firstCityLost, undefined, '开局不该有"谁先丢城"的记录');
+  assert.equal(on.firstCityLost, undefined);
+
+  const d0 = duel(off);
+  const d1 = duel(on);
+  assert.equal(
+    computeDamage(on, d1.a, d1.b),
+    computeDamage(off, d0.a, d0.b),
+    '没丢城就不该有加成',
+  );
+
+  const cavOff = findUnit(off, 'A', 'scout');
+  const cityOff = citiesOf(off, 'B')[0]!;
+  const cavOn = findUnit(on, 'A', 'scout');
+  const cityOn = citiesOf(on, 'B')[0]!;
+  assert.ok(damageToCity(cavOff, cityOff, off) > 0, '这个用例的前提是打得动城');
+  assert.equal(damageToCity(cavOn, cityOn, on), damageToCity(cavOff, cityOff, off));
+});
+
+test('哀兵必胜：丢城的一方全军 +10%，没丢的一方没有', () => {
+  const off = fresh();
+  const d0 = duel(off);
+  const baseAB = computeDamage(off, d0.a, d0.b);
+  const baseBA = computeDamage(off, d0.b, d0.a);
+
+  const on = fresh({ expansionIds: ['last-stand'] });
+  const d1 = duel(on);
+  on.firstCityLost = 'A';
+
+  assert.equal(computeDamage(on, d1.a, d1.b), Math.round(baseAB * 1.1), 'A 丢了城，攻击 +10%');
+  assert.equal(computeDamage(on, d1.b, d1.a), baseBA, 'B 没丢城，一下都不多');
+});
+
+test('哀兵必胜：反击也算攻击，一起吃这 10%', () => {
+  const off = fresh();
+  const d0 = duel(off);
+  const baseCounter = computeDamage(off, d0.a, d0.b, true);
+
+  const on = fresh({ expansionIds: ['last-stand'] });
+  const d1 = duel(on);
+  on.firstCityLost = 'A';
+  assert.equal(computeDamage(on, d1.a, d1.b, true), Math.round(baseCounter * 1.1));
+});
+
+test('哀兵必胜：攻城伤害也吃这 10%', () => {
+  const off = fresh();
+  const city0 = citiesOf(off, 'B')[0]!;
+  const base = damageToCity(findUnit(off, 'A', 'scout'), city0, off);
+
+  const on = fresh({ expansionIds: ['last-stand'] });
+  const city1 = citiesOf(on, 'B')[0]!;
+  on.firstCityLost = 'A';
+  assert.ok(base > 0);
+  assert.equal(damageToCity(findUnit(on, 'A', 'scout'), city1, on), Math.round(base * 1.1));
+});
+
+test('哀兵必胜：谁先丢城由攻城结算记下，抢回来也不改写', () => {
+  const s = fresh({ expansionIds: ['last-stand'] });
+  const city = citiesOf(s, 'B')[0]!;
+  city.hp = 5;
+  const at = { x: city.x + city.size, y: city.y };
+  s.tiles[idx(s, at.x, at.y)] = { terrain: 'plain', cityId: null };
+  const cav = place(s, 'A', 'militia', at.x, at.y);
+
+  const r1 = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
+  assert.ok(r1.ok);
+  assert.equal(cityById(r1.state, city.id)?.owner, 'A');
+  assert.equal(r1.state.firstCityLost, 'B', 'B 丢了城，记的就是 B');
+
+  // 再让 B 把城抢回去：这条记录不该被改写
+  const back = cityById(r1.state, city.id)!;
+  back.hp = 1;
+  const at2 = { x: back.x + back.size, y: back.y };
+  r1.state.tiles[idx(r1.state, at2.x, at2.y)] = { terrain: 'plain', cityId: null };
+  const avenger = place(r1.state, 'B', 'militia', at2.x, at2.y);
+  r1.state.current = 'B';
+
+  const r2 = applyAction(r1.state, { type: 'SIEGE', unitId: avenger.id, cityId: back.id });
+  assert.ok(r2.ok);
+  assert.equal(cityById(r2.state, city.id)?.owner, 'B', 'B 应该把城抢回来');
+  assert.equal(r2.state.firstCityLost, 'B', '抢回来也不改写"谁先丢的"——加成跟着人走，不跟着城走');
+});
+
 console.log('\n血战扩展');
 
 /** 造一个"城里有驻军、城外没有敌人"的局面，好让城市回血生效 */
@@ -1458,7 +1673,16 @@ test('每个内置扩展都被注册且带说明', () => {
     assert.ok(e.id && e.name && e.summary, `${e.id} 缺少必要字段`);
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
-    assert.ok(hasHooks || hasUnits, `${e.id} 既没有钩子也没有兵种，等于空包`);
+    // 纯表现层扩展（比如"浓雾"把地形也遮掉）没有钩子是正常的，
+    // 但它必须自己声明过 presentationOnly，否则就是"注册了个什么都不干的包"
+    assert.ok(
+      hasHooks || hasUnits || e.presentationOnly === true,
+      `${e.id} 既没有钩子也没有兵种，等于空包`,
+    );
+    if (e.presentationOnly) {
+      assert.equal(hasHooks, false, `${e.id} 声明了纯表现层，就不该再带钩子`);
+      assert.equal(hasUnits, false, `${e.id} 声明了纯表现层，就不该再带兵种`);
+    }
   }
 });
 
@@ -1824,6 +2048,29 @@ function waterWithBank(
 function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
   const def = UNIT_TYPES[type];
   assert.ok(def, `没有 ${type} 这个兵种`);
+  const u: Unit = {
+    id: `t${s.units.length + 1}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  s.units = s.units.filter((k) => !(k.x === x && k.y === y));
+  s.units.push(u);
+  return u;
+}
+
+/**
+ * 摆一个"这一局才有"的兵种（扩展包里的兵不在 UNIT_TYPES 里）。
+ * 和 place 一样会先把落点上的单位清掉，避免两支部队叠在一格。
+ */
+function placeDef(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  const def = s.unitTypes[type];
+  assert.ok(def, `本局没有 ${type} 这个兵种`);
   const u: Unit = {
     id: `t${s.units.length + 1}`,
     type,
@@ -3652,7 +3899,9 @@ console.log('\n指挥官模式');
 
 /** 指挥官模式的一局，A 方行动，钱给足 */
 function commandPost(extra?: Partial<MatchConfig>): GameState {
-  const s = fresh({ commanderMode: true, ...extra });
+  // aiAlly 一并置真：这几条测的是"AI 在指挥官模式下怎么打"，
+  // 而"替谁排序列"取决于这一方是不是真的托管了
+  const s = fresh({ commanderMode: true, aiAlly: true, ...extra });
   s.current = 'A';
   s.players.A.gold = 1000;
   return s;
@@ -3733,28 +3982,30 @@ test('排了「升级时代」，AI 这一回合真的会去升级', () => {
   assert.ok(got, '钱够就该升级');
 });
 
-test('没排升级时 AI 不会自作主张升时代', () => {
-  // 指挥官模式下 AI 拿到的 maxUpgrade 是 0
+test('队首不是「升级时代」时，AI 不升时代', () => {
+  // 指挥官模式里升级也要占一格序列，队首是兵种就没有升级的余地
   const s = commandPost();
-  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, maxUpgrade: 0, order: null };
-  let cur = s;
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'] });
+  assert.ok(set.ok);
+  let cur = set.state;
   for (let i = 0; i < AI_MAX_STEPS; i++) {
-    const a = aiNextAction(cur, budget);
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
     if (!a) break;
-    assert.notEqual(a.type, 'UPGRADE', 'maxUpgrade 为 0 时不该出现升级动作');
+    assert.notEqual(a.type, 'UPGRADE', '队首是兵种时不该出现升级动作');
     const r = applyAction(cur, a);
     if (!r.ok) break;
     cur = r.state;
   }
 });
 
-test('AI 会把点名的兵优先造出来', () => {
+test('队首点名了哪个兵，AI 就只造哪个兵', () => {
   const s = commandPost();
-  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, order: 'archer' };
-  let cur = s;
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'] });
+  assert.ok(set.ok);
+  let cur = set.state;
   let got: string | null = null;
   for (let i = 0; i < AI_MAX_STEPS; i++) {
-    const a = aiNextAction(cur, budget);
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
     if (!a) break;
     if (a.type === 'RECRUIT') {
       got = a.unitType;
@@ -3764,23 +4015,78 @@ test('AI 会把点名的兵优先造出来', () => {
     if (!r.ok) break;
     cur = r.state;
   }
-  assert.equal(got, 'archer', '点名弓手就该造弓手');
+  assert.equal(got, 'archer', '队首点名弓手就该造弓手');
 });
 
-test('点名的兵造不起时，不会拿别的兵凑数', () => {
+test('队首的兵造不起时，不会拿别的兵凑数', () => {
   const s = commandPost();
   // 26 金：够民兵（25），不够弓手（30）
   s.players.A.gold = 26;
-  const budget = { ...DEFAULT_BUDGET, maxRecruit: 1, order: 'archer' };
-  let cur = s;
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'] });
+  assert.ok(set.ok);
+  let cur = set.state;
   for (let i = 0; i < AI_MAX_STEPS; i++) {
-    const a = aiNextAction(cur, budget);
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
     if (!a) break;
     assert.notEqual(a.type, 'RECRUIT', '造不起就空过这一回合，不能自己换个便宜的顶上');
     const r = applyAction(cur, a);
     if (!r.ok) break;
     cur = r.state;
   }
+});
+
+test('指挥官模式下 AI 会自己排一条序列，而不是自由产兵', () => {
+  const s = commandPost(); // A 方、1000 金、序列空
+  const a = aiNextAction(s, DEFAULT_BUDGET);
+  assert.ok(a, '空序列时 AI 至少该排一条计划');
+  assert.equal(a.type, 'SET_ORDERS', '第一个动作应该是排序列，不是直接造兵');
+
+  const queue = (a as { type: 'SET_ORDERS'; queue: string[] }).queue;
+  assert.ok(queue.length > 0 && queue.length <= CONFIG.commanderSlots, `序列长度该在 1~5：${queue.length}`);
+  // 排出来的东西必须真的能排进去（rules 会拦建筑和不存在的兵种）
+  const r = applyAction(s, a);
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.deepEqual(ordersOf(r.state, 'A'), queue);
+  assert.ok(
+    queue.filter((id) => id === ORDER_UPGRADE).length <= 1,
+    '一格升级就要五个回合里少一个兵，序列里不该排两次',
+  );
+});
+
+test('指挥官模式一回合只产一个兵，队首不会在一回合里被连着用', () => {
+  // 这一条守的是"产能"：AI 一回合会反复问下一步，队首没变就可能连着造好几个。
+  // 只按"队首是不是兵种"开关产兵是不够的，还得看这一回合造过没有。
+  const s = commandPost();
+  s.players.A.gold = 2000;
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer', 'militia', 'archer'] });
+  assert.ok(set.ok);
+
+  const budget = { ...DEFAULT_BUDGET }; // 和界面/跑批一样：一回合共享一份预算
+  let cur = set.state;
+  let recruited = 0;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, budget);
+    if (!a) break;
+    if (a.type === 'RECRUIT') {
+      recruited += 1;
+      budget.recruited += 1;
+    }
+    if (a.type === 'UPGRADE') budget.upgraded += 1;
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.equal(recruited, 1, `一回合只该产 1 个兵，实际 ${recruited} 个`);
+});
+
+test('AI 排的序列会承接前面的产出，不是五格同一种兵', () => {
+  // 投影里每排一格就把这个兵算进场，否则它会一直看到"我还没有远程"，五格全排某种兵
+  const s = commandPost();
+  const a = aiNextAction(s, DEFAULT_BUDGET);
+  assert.ok(a && a.type === 'SET_ORDERS');
+  const queue = (a as { type: 'SET_ORDERS'; queue: string[] }).queue;
+  const kinds = new Set(queue.filter((id) => id !== ORDER_UPGRADE));
+  assert.ok(kinds.size >= 2, `五格应该排出至少两种兵，实际：${queue.join(',')}`);
 });
 
 /* ------------------------------------------------------------------ */

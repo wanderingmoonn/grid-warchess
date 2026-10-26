@@ -550,7 +550,7 @@
     },
     {
       "type": "ind_sapper",
-      "name": "工兵",
+      "name": "战地工兵",
       "era": 4,
       "category": "builder",
       "cost": 210,

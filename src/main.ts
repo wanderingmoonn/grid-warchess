@@ -390,6 +390,16 @@ function computePlaceable(): number[] {
   return out;
 }
 
+/**
+ * 当前这一方"看得见"的状态。
+ *
+ * 点击判定也要走它：直接读 state 会点到视野外的敌方单位（本地还看不见，
+ * 但控制台里能查到），既不安全也不符合"只渲染 playerView"的约定。
+ */
+function viewNow(): ReturnType<typeof playerView> {
+  return playerView(state, me(), spectating());
+}
+
 function selectUnit(u: Unit): void {
   selectedCityId = null;
   selectedCampId = null;
@@ -490,15 +500,29 @@ function dispatch(action: Action): boolean {
 
 function onBoardClick(e: Event): void {
   if (handoffOpen || state.winner || aiBusy()) return;
+
+  const clickedUnitId = unitIdFromEvent(e);
+  const coords = coordsFromEvent(e);
+
+  // 只读查看：点敌方单位出属性卡——不看轮到谁，也不看是不是指挥官模式。
+  //
+  // 扩展包把兵种从 49 个堆到 118 个之后，"对面这个是什么、射程几格、护甲多少"
+  // 变成了临场刚需（以前整局就那几种兵，看图标就知道）。而"看"不是"操作"，
+  // 没理由要求轮到自己才能看。面板那边对非己方单位一律不给按钮。
+  if (clickedUnitId) {
+    const preview = viewNow().state.units.find((u) => u.id === clickedUnitId);
+    if (preview && preview.owner !== me()) {
+      selectUnit(preview);
+      return;
+    }
+  }
+
   // 指挥官模式：这一方的走位与开火归 AI，棋盘只看不碰
   if (state.config.commanderMode) return;
   if (!myTurn()) {
     toast('等对方提交这一回合');
     return;
   }
-
-  const clickedUnitId = unitIdFromEvent(e);
-  const coords = coordsFromEvent(e);
 
   // 正在选址：点哪儿就让建造者在那儿开工
   if (buildPlan) {

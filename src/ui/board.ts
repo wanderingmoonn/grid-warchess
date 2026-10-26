@@ -79,6 +79,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
   el.classList.toggle('fog', s.fog);
 
+  // 浓雾（blackout 扩展）：连地形都不给看。
+  // 基础规则的雾只遮单位，地图本身永远可见；这个扩展把"地图"也遮掉——
+  // 视野外只剩一片黑，城市要侦察到才画得出来。
+  const blackout = s.fog && s.config.expansionIds.includes('blackout');
+  el.classList.toggle('blackout', blackout);
+
   const visibleSet = new Set(view.visible);
   const reachSet = new Set(ui.reach);
   const placeSet = new Set(ui.placeable);
@@ -97,8 +103,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const tile = s.tiles[i];
       if (!tile) continue;
 
-      const cls = ['tile', TERRAIN_CLASS[tile.terrain] ?? 't-plain'];
-      if (tile.cityId) {
+      const seen = !blackout || visibleSet.has(i);
+      const cls = seen ? ['tile', TERRAIN_CLASS[tile.terrain] ?? 't-plain'] : ['tile', 'unknown'];
+      if (seen && tile.cityId) {
         const city = s.cities.find((c) => c.id === tile.cityId);
         if (city) cls.push(`own-${city.owner}`);
       }
@@ -114,7 +121,17 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   tilesEl.innerHTML = tileParts.join('');
 
   // ---- 城市 ----
-  const cityParts = s.cities.map((city) => {
+  // 浓雾下，四格都看不见的城市直接不画：敌城的位置本身就是情报
+  const cityVisible = (city: { x: number; y: number; size: number }): boolean => {
+    if (!blackout) return true;
+    for (let dy = 0; dy < city.size; dy++) {
+      for (let dx = 0; dx < city.size; dx++) {
+        if (visibleSet.has((city.y + dy) * s.w + (city.x + dx))) return true;
+      }
+    }
+    return false;
+  };
+  const cityParts = s.cities.filter(cityVisible).map((city) => {
     const cls = ['city-block', `owner-${city.owner}`, `era-${city.era}`];
     if (ui.siegeTargets.includes(city.id)) cls.push('siege-target');
     if (ui.selectedCityId === city.id) cls.push('selected');

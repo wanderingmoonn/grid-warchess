@@ -297,6 +297,16 @@ export interface GameState {
   winner: PlayerId | null;
   log: LogEntry[];
   memory: Record<PlayerId, PlayerMemory>;
+  /**
+   * 本局**第一座**被攻陷的城原本属于谁——也就是"谁先丢了城"。
+   *
+   * 只写一次，之后再也不改。为什么不能靠"当前城数"推：城会被抢回来，
+   * 抢回来的那一刻当前城数就恢复了，"曾经丢过"这段历史会被抹掉。
+   * 「哀兵必胜」这类"谁先吃亏"的规则必须靠这条记录。
+   *
+   * 旧存档里没有这个字段，读出来是 undefined，语义正好等于"还没有城被攻陷"。
+   */
+  firstCityLost?: PlayerId;
 }
 
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */

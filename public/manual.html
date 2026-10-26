@@ -597,28 +597,28 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>谁有</th></tr></thead>
           <tbody>
-            <tr><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮、铁甲舰</td></tr><tr><td class="name">自爆</td><td>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</td><td class="traits">—</td></tr>
+            <tr><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮、铁甲舰</td></tr><tr><td class="name">自爆</td><td>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</td><td class="traits">—</td></tr><tr><td class="name">冲锋</td><td>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</td><td class="traits">—</td></tr><tr><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>防御</h4>
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>谁有</th></tr></thead>
           <tbody>
-            <tr><td class="name">盾墙</td><td>本回合没有移动过时，受到的伤害 −2。站住才硬。</td><td class="traits">长枪兵、坦克</td></tr>
+            <tr><td class="name">盾墙</td><td>本回合没有移动过时，受到的伤害 −2。站住才硬。</td><td class="traits">长枪兵、坦克</td></tr><tr><td class="name">再生</td><td>每回合开始恢复 10% 生命上限，不需要站桩——代价是这种兵通常很慢。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>机动</h4>
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>谁有</th></tr></thead>
           <tbody>
-            <tr><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</td><td class="traits">斥候</td></tr>
+            <tr><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</td><td class="traits">斥候</td></tr><tr><td class="name">飞行</td><td>可以飞越水面（但不能停在水上），森林和丘陵按 1 步算。河防对它不成立。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>支援</h4>
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>谁有</th></tr></thead>
           <tbody>
-            <tr><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr><td class="name">守护光环</td><td>相邻的友军护甲 +2。</td><td class="traits">—</td></tr><tr><td class="name">指挥光环</td><td>相邻的友军攻击 +2。</td><td class="traits">—</td></tr>
+            <tr><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr><td class="name">守护光环</td><td>相邻的友军护甲 +2。</td><td class="traits">—</td></tr><tr><td class="name">指挥光环</td><td>相邻的友军攻击 +2。</td><td class="traits">—</td></tr><tr><td class="name">威吓</td><td>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
       <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在 <code>abilities.ts</code> 加一条定义，在 <code>rules.ts</code> 对应位置加一个判断。</p>
@@ -635,12 +635,17 @@
     <table>
       <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
       <tbody>
-        <tr><td class="name">战争经济</td><td>每消灭一个敌方单位，立刻获得 15 金币。</td><td class="traits">—</td></tr><tr><td class="name">老兵不死</td><td>单位每击杀一个敌人永久 +1 攻击力，越打越硬。</td><td class="traits">—</td></tr><tr><td class="name">堑壕战</td><td>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</td><td class="traits">—</td></tr><tr><td class="name">闪电战</td><td>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</td><td class="traits">—</td></tr><tr><td class="name">大征兵</td><td>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</td><td class="traits">—</td></tr><tr><td class="name">大雾来了</td><td>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</td><td class="traits">—</td></tr><tr><td class="name">死亡枕藉</td><td>单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。</td><td class="traits">—</td></tr><tr><td class="name">固若金汤</td><td>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</td><td class="traits">—</td></tr><tr><td class="name">奇想兵种包</td><td>加入龙骑兵、术士、巨兽三个不属于真实历史线的兵种。不勾选就没有。</td><td class="traits">龙骑兵、术士、巨兽</td></tr><tr><td class="name">血战<span class="c">（默认开）</span></td><td>第 50 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</td><td class="traits">—</td></tr><tr><td class="name">先后手补偿<span class="c">（默认开）</span></td><td>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</td><td class="traits">—</td></tr><tr><td class="name">古典会战</td><td>希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。</td><td class="traits">投石兵、标枪兵、重装步兵、军团兵、战斧手、轻盾兵、战车、战象、攻城槌、弩炮、瞭望塔、栅栏、夯土城墙、工匠、三层桨战船</td></tr><tr><td class="name">中世兵备</td><td>重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。</td><td class="traits">重装军士、弩手、骑射手、瑞士长矛兵、双手剑士、投石机、攻城塔、战车堡、主楼、城墙、工兵、齿轮帆船</td></tr><tr><td class="name">火药列国</td><td>线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。</td><td class="traits">线列步兵、掷弹兵、胸甲骑兵、龙骑兵、猎兵、攻城加农炮、康格里夫火箭、长管炮、棱堡、防马桩、土垒胸墙、军需官、工兵、风帆战列舰</td></tr><tr><td class="name">工业绞肉机</td><td>堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。</td><td class="traits">战壕迫击炮、堑壕突击队、火焰喷射器、毒气兵、榴弹炮、列车炮、马克 I 坦克、装甲列车、机枪碉堡、铁丝网、混凝土胸墙、钢厂、工兵、驱逐舰</td></tr><tr><td class="name">现代合成兵</td><td>伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。</td><td class="traits">伞兵、突击队、反坦克炮、火箭炮、重型坦克、自行火炮、高射炮、反坦克拒马、混凝土掩体墙、机枪地堡、补给车队、工兵、驱逐舰、重型迫击炮</td></tr>
+        <tr><td class="name">战争经济</td><td>每消灭一个敌方单位，立刻获得 15 金币。</td><td class="traits">—</td></tr><tr><td class="name">老兵不死</td><td>单位每击杀一个敌人永久 +1 攻击力，越打越硬。</td><td class="traits">—</td></tr><tr><td class="name">堑壕战</td><td>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</td><td class="traits">—</td></tr><tr><td class="name">闪电战</td><td>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</td><td class="traits">—</td></tr><tr><td class="name">大征兵</td><td>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</td><td class="traits">—</td></tr><tr><td class="name">大雾来了</td><td>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</td><td class="traits">—</td></tr><tr><td class="name">浓雾蔽野</td><td>基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：视野外的格子、地形、城市全部隐去，只剩一片黑。</td><td class="traits">—</td></tr><tr><td class="name">死亡枕藉</td><td>单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。</td><td class="traits">—</td></tr><tr><td class="name">固若金汤</td><td>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</td><td class="traits">—</td></tr><tr><td class="name">奇想兵种包</td><td>八个不属于真实历史线的兵种，每个都带一条新机制：飞行（掠水）、冲锋、吸血、威吓、再生、法术溅射。不勾选就没有。</td><td class="traits">术士、女妖、龙骑兵、狮鹫、树人、吸血鬼、巨兽、巨龙</td></tr><tr><td class="name">血战<span class="c">（默认开）</span></td><td>第 50 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</td><td class="traits">—</td></tr><tr><td class="name">先后手补偿<span class="c">（默认开）</span></td><td>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</td><td class="traits">—</td></tr><tr><td class="name">哀兵必胜</td><td>先丢掉一座城的一方，全军攻击 +10%——野战、反击、攻城都算。城没了，气还在。</td><td class="traits">—</td></tr><tr><td class="name">古典会战</td><td>希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。</td><td class="traits">投石兵、标枪兵、重装步兵、军团兵、战斧手、轻盾兵、战车、战象、攻城槌、弩炮、瞭望塔、栅栏、夯土城墙、工匠、三层桨战船</td></tr><tr><td class="name">中世兵备</td><td>重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。</td><td class="traits">重装军士、弩手、骑射手、瑞士长矛兵、双手剑士、投石机、攻城塔、战车堡、主楼、城墙、掘城兵、齿轮帆船</td></tr><tr><td class="name">火药列国</td><td>线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。</td><td class="traits">线列步兵、掷弹兵、胸甲骑兵、龙骑兵、猎兵、攻城加农炮、康格里夫火箭、长管炮、棱堡、防马桩、土垒胸墙、军需官、坑道工兵、风帆战列舰</td></tr><tr><td class="name">工业绞肉机</td><td>堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。</td><td class="traits">战壕迫击炮、堑壕突击队、火焰喷射器、毒气兵、榴弹炮、列车炮、马克 I 坦克、装甲列车、机枪碉堡、铁丝网、混凝土胸墙、钢厂、战地工兵、雷击舰</td></tr><tr><td class="name">现代合成兵</td><td>伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。</td><td class="traits">伞兵、突击队、反坦克炮、火箭炮、重型坦克、自行火炮、高射炮、反坦克拒马、混凝土掩体墙、重机枪地堡、补给车队、战斗工兵、驱逐舰、重型迫击炮</td></tr>
       </tbody>
     </table>
       <div class="callout">
         <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
       </div>
+      <h3>「奇想兵种包」为什么是机制包</h3>
+      <p>它给的不是"更强的骑兵"，而是八条历史线上不存在的能力：<b>飞行</b>（能越过水面，但停不到水上——河防对它不成立）、
+        <b>冲锋</b>（本回合动过才 +5，站着不动就没有）、<b>吸血</b>（打出伤害的四成回血，残血扑上去照样会被反杀）、
+        <b>威吓</b>（相邻敌军攻击 −2，最多叠两层，破解办法是拉开距离）、<b>再生</b>（每回合回 10%，不用像「休整」那样让出一拍）。
+        这些机制都写成了"有前提、有解法"的形式，而不是纯数值加成——纯加成的兵最后只会变成"贵一点的那个步兵"。</p>
     </section>
 
     <section id="roster">
@@ -1408,7 +1413,7 @@
         </tbody>
       </table>
       <h3>验证</h3>
-      <p><code>npm test</code> 跑两套测试：规则内核（含 AI、能力、扩展）+ 界面冒烟（jsdom 跑整页）。当前共 242 项。</p>
+      <p><code>npm test</code> 跑两套测试：规则内核（含 AI、能力、扩展）+ 界面冒烟（jsdom 跑整页）。当前共 257 项。</p>
     </section>
 
     <section id="ai">
@@ -1514,8 +1519,15 @@
         说明每回合两个兵本来就是过剩产能；如果立刻打成一团浆糊，说明节奏是靠堆兵撑起来的。
       </p>
       <p>
-        唯一的差别：人类指挥官能一次排 5 格，AI 每回合只知道当下该造什么。
-        所以观战测出来的是这条限制的<b>下界</b>，不是上限。
+        <b>AI 也排序列。</b>它不是一回合一个兵地临时决定造什么——那样它只会做局部最优
+        （谁便宜造谁），永远不会为下一级兵攒三个回合的钱，这个模式对它就等于只剩下"少造"。
+        它每次排满 5 格，并且排的时候会把前面几格的产出算进去（先排了两个农民，
+        第三格就不会再排农民），所以它也会做"先铺经济、后转兵"这种跨回合的取舍。
+        一格升级最多排一次：占掉一格就是五个回合少一个兵。
+      </p>
+      <p>
+        也就是说，人机对局里双方受同一套约束、也都在算同一笔账——观战看到的不是
+        "这条限制的下界"，而是两个都会排计划的指挥官在互相博弈。
       </p>
     </section>
 

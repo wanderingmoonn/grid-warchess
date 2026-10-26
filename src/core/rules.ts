@@ -165,8 +165,26 @@ export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: numbe
   return { atk, armor };
 }
 
-/** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
-export function movePower(s: GameState, unit: Unit): number {
+/**
+ * 威吓：贴着几个会吓人的敌人，就少几分攻击（每层 2 点，最多两层）。
+ *
+ * 做成"减法"而不是"禁攻"：禁攻会让一支靠威吓撑起来的阵型变成铁板，
+ * 而减法只是让贴身换血变亏——破解办法仍然是玩家熟悉的那两条：拉开、或者先射掉它。
+ *
+ * 这里必须只依赖 state（computeDamage 要给 UI 的伤害预览复用），不能记录"谁被吓过"。
+ */
+export function fearPenalty(s: GameState, unit: Unit): number {
+  let layers = 0;
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    if (distance(foe, unit) !== 1) continue;
+    if (hasAbility(utype(s, foe.type), 'fear')) layers += 1;
+    if (layers >= 2) break;
+  }
+  return layers * 2;
+}
+
+/** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */export function movePower(s: GameState, unit: Unit): number {
   const base = utype(s, unit.type).move;
   if (base <= 0) return 0;
   let move = base;
@@ -251,6 +269,9 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const forestWalk = hasAbility(def, 'forest-walk');
+  // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
+  // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
+  const flyer = hasAbility(def, 'fly');
   // 水面地形代价是 99（对陆军而言就是"走不了"），所以水军必须单独给价格：
   // 不然船一步都动不了 —— 这一条曾经真的漏过，测试也没抓住（可达格为空，
   // "所有可达格都是水"这种全称命题反而是成立的）。
@@ -272,7 +293,12 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       const nx = x + dx;
       const ny = y + dy;
       if (!inBounds(s, nx, ny)) continue;
-      if (blockedFor(s, nx, ny, unit)) continue;
+      if (blockedFor(s, nx, ny, unit)) {
+        // 飞行只放行"水面"这一种阻挡：敌方城市、高山、越界照旧拦住。
+        // 放行的代价是不能停在水上（见下面的终点过滤），所以它只是过河，不是潜水。
+        const ft = tileAt(s, nx, ny);
+        if (!(flyer && ft && ft.terrain === 'water')) continue;
+      }
 
       const tile = s.tiles[idx(s, nx, ny)];
       if (!tile) continue;
@@ -286,9 +312,11 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
 
       const stepCost = waterUnit
         ? 1 // 航道一格一步，桥下也一样
-        : forestWalk && (tile.terrain === 'forest' || tile.terrain === 'hill')
-          ? 1
-          : CONFIG.terrainCost[tile.terrain];
+        : flyer
+          ? 1 // 从空中过：水面、森林、丘陵都不额外收费（高山在 blockedFor 那关就进不来）
+          : forestWalk && (tile.terrain === 'forest' || tile.terrain === 'hill')
+            ? 1
+            : CONFIG.terrainCost[tile.terrain];
       const nextCost = cur.cost + stepCost;
       if (nextCost > budget) continue;
 
@@ -305,6 +333,14 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     const { x, y } = xyOf(s, i);
     const occ = s.units.find((u) => u.x === x && u.y === y);
     if (occ && occ.id !== unit.id) best.delete(i);
+  }
+  // 飞行单位能掠过水面，但落点必须在岸上：中途那一格是"飞过去"的，不是"站上去"的。
+  if (flyer && !waterUnit) {
+    for (const i of Array.from(best.keys())) {
+      const { x, y } = xyOf(s, i);
+      const t = tileAt(s, x, y);
+      if (t && t.terrain === 'water') best.delete(i);
+    }
   }
   best.delete(start);
 
@@ -422,8 +458,15 @@ export function computeDamage(
 
   let dmg = Math.max(0, at.atk + attackerAura.atk - armor);
 
+  // 冲锋：本回合动过才有这一下。反击是原地还手，不享受冲锋（否则等于白送一条能力）。
+  if (!isCounter && hasAbility(at, 'charge') && attacker.moved) dmg += 5;
+
   // 盾墙：本回合没挪窝才生效，站着守的人才硬
   if (hasAbility(dt, 'shield-wall') && !defender.moved) dmg -= 2;
+
+  // 威吓：跟会吓人的敌人贴身，手就抖了。放在护甲之后扣，
+  // 这样它对"轻甲高攻"的单位更致命，对重甲单位几乎无所谓——和自己的定位一致。
+  dmg -= fearPenalty(s, attacker);
 
   if (isCounter) dmg = Math.max(0, Math.round(dmg * CONFIG.counterAttackRatio));
 
@@ -442,7 +485,15 @@ export function damageToCity(attacker: Unit, city: City, s: GameState): number {
   // 同样允许 0：拿民兵去砸现代城，就是砸不动
   let dmg = Math.max(0, at.atk - city.armor);
   if (hasAbility(at, 'siege-master')) dmg = Math.round(dmg * 1.5);
-  return dmg;
+
+  // 攻城走单独的钩子链：地势护甲、破甲这些野战概念在城墙上不成立，
+  // 而"全军攻击 +X%"这种按攻击力算的规则，野战和攻城都该吃到。
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifySiegeDamage) {
+      dmg = e.hooks.modifySiegeDamage({ state: s, attacker, city, damage: dmg });
+    }
+  }
+  return Math.max(0, dmg);
 }
 
 /** 预估伤害，给 UI 的攻击预览用，不改变状态 */
@@ -897,6 +948,15 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     attacker.hp -= counterDmg;
   }
 
+  // 吸血：把这一下真打出来的伤害换成血。放在反击之后结算，
+  // 所以"残血扑上去被反杀"依然是死——它奖励的是打得疼，不是敢去送。
+  let healed = 0;
+  if (hasAbility(atkDef, 'lifesteal') && dmg > 0 && attacker.hp > 0) {
+    const room = atkDef.maxHp - attacker.hp;
+    healed = Math.min(room, Math.round(dmg * 0.4));
+    if (healed > 0) attacker.hp += healed;
+  }
+
   const hitText = burst > 1 ? `${hits} 连击 · ` : '';
   const splashText =
     splashed.length > 0
@@ -909,6 +969,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
       ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
       : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}`,
   );
+  if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
   attacker.acted = true;
   attacker.moved = true;
@@ -969,6 +1030,8 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
 
   if (city.hp <= 0) {
     const prevOwner = city.owner;
+    // 「谁先丢城」只记第一次：城会被抢回来，但"先吃亏"这件事不该被撤销。
+    if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
     city.owner = attacker.owner;
     city.hp = Math.max(1, Math.ceil(city.maxHp * CITY.captureHpRatio));
     // 当回合这条产线是瘫的：刚打下来的城立刻出兵，等于攻城顺手补员
@@ -1417,8 +1480,13 @@ function doEndTurn(s: GameState): ActionResult {
 
   for (const u of s.units) {
     if (u.owner !== nextPlayer) continue;
-    if (!rested.has(u.id)) continue;
     const d = utype(s, u.type);
+    // 再生：不挑场合，每回合都回一点点。
+    // 和「休整」是两种活法：休整回得多（15%）但要让出一拍，再生回得少（10%）但可以边打边回。
+    if (hasAbility(d, 'regenerate') && u.hp < d.maxHp) {
+      u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * 0.1));
+    }
+    if (!rested.has(u.id)) continue;
     if (hasAbility(d, 'heal') && u.hp < d.maxHp) {
       u.hp = Math.min(d.maxHp, u.hp + Math.ceil(d.maxHp * 0.15));
     }

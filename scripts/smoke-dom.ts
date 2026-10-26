@@ -20,8 +20,9 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
-import { createMatch } from '../src/core/setup.ts';
+import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { renderBoard } from '../src/ui/board.ts';
 import type { Unit } from '../src/core/types.ts';
 
 const result = await build({
@@ -149,6 +150,44 @@ check('侧栏渲染出卡片和结束按钮', () => {
 
 check('迷雾开启时视野外格子被标记', () => {
   assert.ok(doc.querySelectorAll('.tile.out').length > 0, '应该有视野外的格子');
+});
+
+check('浓雾扩展：视野外的地形和敌城都不渲染', () => {
+  // 两档雾的区别要守住：
+  //   基础规则 —— 雾只遮单位，地形永远画出来，视野外只是压暗（.tile.out）；
+  //   浓雾扩展 —— 连地形和城市一起遮掉，视野外只剩 .tile.unknown。
+  const mkBoard = (expansionIds: string[]) => {
+    const host = doc.createElement('div');
+    host.className = 'board';
+    doc.body.appendChild(host);
+    // 用 16×16：12×12 上双方靠得太近，己方视野就能覆盖到敌城边缘，
+    // 那样根本测不出"城市被雾遮住"这件事
+    const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds }, 777);
+    renderBoard(host, playerView(s2, 'A'), {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+    });
+    return host;
+  };
+
+  const base = mkBoard(['bloodbath']);
+  const dark = mkBoard(['bloodbath', 'blackout']);
+  try {
+    assert.equal(base.querySelectorAll('.tile.unknown').length, 0, '基础规则下地形始终可见');
+    assert.ok(dark.querySelectorAll('.tile.unknown').length > 0, '浓雾下应该有看不见的格子');
+    assert.equal(base.querySelectorAll('.city-block').length, 4, '基础规则下四座城都画出来');
+    assert.equal(dark.querySelectorAll('.city-block').length, 2, '浓雾下只该看见自己的两座城');
+  } finally {
+    // 临时棋盘必须摘掉：后面的用例靠 doc.querySelectorAll('.tile.out') 数全局节点，
+    // 多留两块板会让它们一起变红（第一次跑就是这么崩的）
+    base.remove();
+    dark.remove();
+  }
 });
 
 console.log('\n单位交互');

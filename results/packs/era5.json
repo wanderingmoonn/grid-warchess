@@ -531,7 +531,7 @@
     },
     {
       "type": "mod_pioneer",
-      "name": "工兵",
+      "name": "战斗工兵",
       "era": 5,
       "category": "builder",
       "cost": 265,
@@ -607,7 +607,7 @@
     },
     {
       "type": "mod_mgbunker",
-      "name": "机枪地堡",
+      "name": "重机枪地堡",
       "era": 5,
       "category": "building",
       "cost": 330,

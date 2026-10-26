@@ -17,7 +17,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CONFIG, passable } from './config.ts';
+import { CONFIG, ORDER_UPGRADE, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
   adjacentToWater,
@@ -33,6 +33,8 @@ import {
   distToCity,
   idx,
   inBounds,
+  incomeOf,
+  ordersOf,
   other,
   previewAttack,
   reachableTiles,
@@ -1318,6 +1320,13 @@ function recruitCandidate(
           const atWall = myUnits.some((u) => foeCities.some((c) => distance(u, c) <= 4));
           if (atWall) score += 16;
         }
+        // 支援型能力（光环 / 威吓）：它的价值不在自己打得多狠，而在整条线更耐打。
+        // 不给一点分，这类兵永远排在纯数值兵后面——扩展里有这个兵，但一局也没人造就等于没做。
+        if (
+          (d.abilities ?? []).some((a) => a === 'aura-command' || a === 'aura-armor' || a === 'fear')
+        ) {
+          score += 5;
+        }
       }
       // 开局一只兵都没有的时候，先凑出一小撮能打的，别急着攒钱升科技
       if (aiLevelOf(s) === 'advanced' && landCombat.length < 4 && price <= 80) score += 8;
@@ -1402,6 +1411,131 @@ function upgradeCandidate(s: GameState, city: City): Candidate | null {
 }
 
 /**
+ * 给"计划里的兵"找一格空位。
+ *
+ * 排序列时需要把已经排进去的兵当成"已经在场"来算下一步（否则五格会全是同一种兵：
+ * 每一格看到的都是"我还没有它"）。但我们不能真的改局面，所以在投影状态里塞幽灵单位。
+ *
+ * 幽灵必须放在**能站人的空地**上，而且不能占住城市的产兵格、也不能挨着军营
+ * （那两处正是 recruitCandidate 数可用格子的地方）——不然排到第三格就会被自己堵死。
+ * 找不到就退回 (0,0)，最坏情况只是这几格的打分少了"拥挤度"这一项。
+ */
+function ghostSpot(s: GameState): { x: number; y: number } {
+  const blocked = new Set<string>();
+  for (const c of s.cities) {
+    for (const t of cityTiles(c)) blocked.add(`${t.x},${t.y}`);
+  }
+  for (const u of s.units) {
+    if (!utype(s, u.type).barracks) continue;
+    for (const [dx, dy] of DIRS) blocked.add(`${u.x + dx},${u.y + dy}`);
+  }
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      const t = tileAt(s, x, y);
+      if (!t || !passable(t.terrain)) continue;
+      if (blocked.has(`${x},${y}`)) continue;
+      if (unitAt(s, x, y)) continue;
+      return { x, y };
+    }
+  }
+  return { x: 0, y: 0 };
+}
+
+/**
+ * 指挥官模式下 AI 自己排生产序列。
+ *
+ * 为什么 AI 也得排：这个模式里"造什么"是唯一的策略表达。让 AI 一回合一个兵地临时决定，
+ * 它只会做局部最优（谁划算造谁），既不会为"下一级兵"攒三个回合的钱，也不会提前铺经济——
+ * 那不算"没有序列"，那等于这个模式对 AI 根本不存在，人机对局也就没什么可博弈的。
+ *
+ * 排 5 格真正的含义是**把代价摆出来**：每一格都是"这一回合不造别的"。
+ * 所以下面每一格的打分都必须看得见前面几格的产出（用一个投影状态累加），
+ * 否则它会把五个格全排成同一种兵。
+ *
+ * 只看得到的东西（调用方传 playerView 的结果），不看全图。
+ */
+export function planOrders(s: GameState, player: PlayerId = s.current): string[] {
+  const slots: string[] = [];
+  if (citiesOf(s, player).length === 0) return slots;
+
+  // 投影：序列是"未来几回合"的事，所以每排一格都要把这一格的产出记进去
+  const proj: GameState = {
+    ...s,
+    current: player,
+    cities: s.cities.map((c) => ({ ...c })),
+    units: [...s.units],
+    players: { A: { ...s.players.A }, B: { ...s.players.B } },
+  };
+  const traits = aiTraits(proj);
+  // 每格大约能收到这么多钱（打九折：收入会随城市被打、单位被杀而掉）
+  const perTurn = Math.max(1, Math.round(incomeOf(s, player) * 0.9));
+  // 一格拿来升级 = 五个回合里少一个兵，排两次基本等于自杀
+  let upgradesLeft = 1;
+
+  for (let i = 0; i < CONFIG.commanderSlots; i++) {
+    // 这一格是"下一回合"的产线，那时候还会进一笔收入
+    if (i > 0) proj.players[player].gold += perTurn;
+
+    let bestRecruit: Candidate | null = null;
+    for (const city of citiesOf(proj, player)) {
+      if (city.capturedTurn === proj.turn) continue;
+      const c = recruitCandidate(
+        proj,
+        { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
+        traits,
+        null,
+      );
+      if (c && (!bestRecruit || c.score > bestRecruit.score)) bestRecruit = c;
+    }
+
+    let bestUpgrade: { c: Candidate; city: City } | null = null;
+    if (upgradesLeft > 0) {
+      for (const city of citiesOf(proj, player)) {
+        const c = upgradeCandidate(proj, city);
+        if (c && (!bestUpgrade || c.score > bestUpgrade.c.score)) bestUpgrade = { c, city };
+      }
+    }
+
+    // 升级要多让 6 分才划算：它占掉的是"这回合一个兵"的名额，
+    // 只有真的宽裕、或者科技落后到必须补，才值得插进序列。
+    if (bestUpgrade && (!bestRecruit || bestUpgrade.c.score > bestRecruit.score + 6)) {
+      slots.push(ORDER_UPGRADE);
+      upgradesLeft -= 1;
+      const cost = upgradeCostOf(proj, bestUpgrade.city);
+      if (cost !== null) {
+        proj.players[player].gold = Math.max(0, proj.players[player].gold - cost);
+        bestUpgrade.city.era += 1;
+      }
+      continue;
+    }
+
+    if (!bestRecruit) break;
+    const recruit = bestRecruit.action;
+    if (recruit.type !== 'RECRUIT') break;
+    const type = recruit.unitType;
+    const def = proj.unitTypes[type];
+    slots.push(type);
+    if (!def) break;
+    // 记进投影：这个兵"已经在场"，下一格看到的是补完之后的composition
+    const spot = ghostSpot(proj);
+    proj.units.push({
+      id: `plan-${i}`,
+      type,
+      owner: player,
+      x: spot.x,
+      y: spot.y,
+      hp: def.maxHp,
+      kills: 0,
+      moved: true,
+      acted: true,
+    });
+    proj.players[player].gold = Math.max(0, proj.players[player].gold - recruitCost(proj, player, def));
+  }
+
+  return slots;
+}
+
+/**
  * AI 的下一步。返回 null 表示它认为这一回合没有值得做的事了。
  *
  * 调用方负责真正执行 action 并循环调用，直到拿到 null 再结束回合。
@@ -1412,6 +1546,30 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息
   const view = playerView(s, me).state;
+
+  /**
+   * 指挥官模式：产线和升级都由序列决定，所以调用方给的 maxRecruit / maxUpgrade
+   * 让位给"队首是什么"——这样不管谁在调 AI（界面层、bench、跑批），
+   * 这个模式的规则都只有一份。
+   */
+  const commander = s.config.commanderMode === true;
+  const head = commander ? (ordersOf(s, me)[0] ?? '') : '';
+  // 没序列就先自己排一条。注意两点：
+  //   1. 不是"没序列就自由产兵"——那等于这个模式对 AI 不存在，人机对局也就没有排产这层博弈。
+  //   2. 只在**这一方真的由 AI 托管**时才代排。玩家自己打这个模式时，空序列是他"这回合不造"
+  //      的选择，AI 替他把序列填满就等于替他做决定。
+  if (commander && head === '' && isAiSide(s, me)) {
+    const plan = planOrders(view, me);
+    if (plan.length > 0) return { type: 'SET_ORDERS', queue: plan };
+  }
+  /** 这一回合点名的兵种（不在指挥官模式下就是调用方给的临时指令） */
+  const order = commander ? (head === '' || head === ORDER_UPGRADE ? null : head) : (budget.order ?? null);
+  // 指挥官模式的产能是「每回合 1 个」：队首是兵种**并且**这回合还没造过。
+  // 只砍到"看队首"是不够的——一回合里 AI 会反复问下一步，队首没变就会连着造好几个。
+  const mayRecruit = commander
+    ? head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
+    : budget.recruited < budget.maxRecruit;
+  const mayUpgrade = commander ? head === ORDER_UPGRADE && budget.upgraded < 1 : budget.upgraded < budget.maxUpgrade;
 
   const candidates: Candidate[] = [];
   // 两套地形代价图（陆军 / 水军）算一次，本回合所有单位共用
@@ -1436,7 +1594,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
     candidates.push(...unitCandidates(view, u, fields, traits, s));
   }
 
-  if (budget.recruited < budget.maxRecruit) {
+  if (mayRecruit) {
     for (const city of citiesOf(view, me)) {
       // 刚打下来的城当回合不产兵（rules 里同一条），提出来只会得到非法动作
       if (city.capturedTurn === s.turn) continue;
@@ -1444,7 +1602,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
         traits,
-        budget.order,
+        order,
       );
       if (c) candidates.push(c);
     }
@@ -1454,13 +1612,13 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
       for (const u of unitsOf(view, me)) {
         if (!utype(view, u.type).barracks) continue;
         const era = own.reduce((a, b) => (distToCity(u, a) <= distToCity(u, b) ? a : b)).era;
-        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits, budget.order);
+        const c = recruitCandidate(view, { kind: 'camp', id: u.id, x: u.x, y: u.y, era }, traits, order);
         if (c) candidates.push(c);
       }
     }
   }
 
-  if (budget.upgraded < budget.maxUpgrade) {
+  if (mayUpgrade) {
     for (const city of citiesOf(view, me)) {
       const c = upgradeCandidate(view, city);
       if (c) candidates.push(c);

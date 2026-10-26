@@ -89,6 +89,39 @@ export const ABILITIES: AbilityDef[] = [
     summary: '相邻的友军攻击 +2。',
     group: 'support',
   },
+  // ── 奇想兵种包带来的五条 ───────────────────────────────────────────────
+  // 这五条都刻意做成"有代价/有前提"的机制，而不是纯数值加成：
+  // 飞行要算落点、冲锋要先动过、吸血要真打疼人、威吓要贴上去、再生换的是慢。
+  {
+    id: 'fly',
+    name: '飞行',
+    summary: '可以飞越水面（但不能停在水上），森林和丘陵按 1 步算。河防对它不成立。',
+    group: 'move',
+  },
+  {
+    id: 'charge',
+    name: '冲锋',
+    summary: '本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。',
+    group: 'attack',
+  },
+  {
+    id: 'lifesteal',
+    name: '吸血',
+    summary: '造成伤害的 40% 转成自己的生命，上限不超过生命上限。',
+    group: 'attack',
+  },
+  {
+    id: 'fear',
+    name: '威吓',
+    summary: '相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。',
+    group: 'support',
+  },
+  {
+    id: 'regenerate',
+    name: '再生',
+    summary: '每回合开始恢复 10% 生命上限，不需要站桩——代价是这种兵通常很慢。',
+    group: 'defense',
+  },
 ];
 
 export function abilityById(id: string): AbilityDef | undefined {

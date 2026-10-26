@@ -44,13 +44,26 @@ export interface ArmorCtx {
   isCounter: boolean;
 }
 
+/**
+ * 攻城伤害钩子。
+ *
+ * 和 modifyDamage 分开的原因：攻城只吃城自身的护甲，没有地形、没有破甲、
+ * 也没有反击，两套公式长得完全不一样。硬塞进同一个钩子，写规则的人就得
+ * 在钩子里判断"这次是不是攻城"，很快会写错。
+ */
+export interface SiegeDamageCtx {
+  state: GameState;
+  attacker: Unit;
+  city: City;
+  /** 已经算好的基础伤害（攻击 − 城市护甲，含攻城大师的 1.5 倍） */
+  damage: number;
+}
+
 export interface MoveCtx {
   state: GameState;
   unit: Unit;
   move: number;
-}
-
-export interface CostCtx {
+}export interface CostCtx {
   state: GameState;
   player: PlayerId;
   unitType: UnitTypeDef;
@@ -106,6 +119,8 @@ export interface MatchStartCtx {
 export interface ExpansionHooks {
   /** 纯函数：修正伤害 */
   modifyDamage?: (c: DamageCtx) => number;
+  /** 纯函数：修正攻城伤害（野战那套钩子不参与攻城） */
+  modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
   /** 纯函数：修正移动力 */
@@ -147,6 +162,14 @@ export interface Expansion {
    * 不勾选这个扩展，这些兵种就不会出现在本局的兵种表里。
    */
   units?: UnitTypeDef[];
+  /**
+   * 纯表现层扩展：没有钩子、没有兵种，效果全在渲染层。
+   *
+   * 目前只有「浓雾蔽野」用这个标记（它让视野外的地形和城市不画出来）。
+   * 单独开一个字段而不是塞个空钩子，是为了让测试能区分
+   * "真的只影响画面" 和 "注册了一个什么都不干的包"。
+   */
+  presentationOnly?: boolean;
 }
 
 function nameOf(state: GameState, typeId: string): string {
@@ -214,6 +237,30 @@ export function turnOrderBonusFor(size: number): number {
     }
   }
   return last[1];
+}
+
+/**
+ * 「哀兵必胜」的攻击加成比例。
+ *
+ * 10% 这个量级是挑过的：它够让劣势方在野战里换得更划算，但又小于
+ * "差一个时代"的兵种差距（同代民兵 atk 10，下一时代的中坚大约 14~16，
+ * 也就是 40%~60%）。所以它撮合对局，但翻不了盘——这正是这条规则该待的位置：
+ * 给丢城的一方一口气，不给它一条捷径。
+ *
+ * 伤害是整数，10% 在低伤害上会被取整放大（10 → 11 是 10%，5 → 6 就是 20%），
+ * 这是刻意的：小伤害的兵本来就该从这条规则里受益更多。
+ */
+export const LAST_STAND_BONUS = 0.1;
+
+/**
+ * 「哀兵必胜」的伤害修正，野战和攻城共用一份，免得两边取整规则走散。
+ *
+ * 靠 state.firstCityLost 而不是"当前城数"：城会被抢回来，抢回来那一刻
+ * 当前城数就复原了，只有这条记录留得住"谁先丢的"。加成跟着人走、不跟着城走，
+ * 所以抢回城之后它也不会消失。
+ */
+function lastStandDamage(state: GameState, owner: PlayerId, damage: number): number {
+  return state.firstCityLost === owner ? Math.round(damage * (1 + LAST_STAND_BONUS)) : damage;
 }
 
 export const EXPANSIONS: Expansion[] = [
@@ -287,6 +334,19 @@ export const EXPANSIONS: Expansion[] = [
     },
   },
   {
+    id: 'blackout',
+    name: '浓雾蔽野',
+    summary:
+      '基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：视野外的格子、地形、城市全部隐去，只剩一片黑。',
+    // 纯表现层扩展：不改任何规则数值，只让渲染层把"视野外"画成空白。
+    //
+    // 为什么不连 AI 一起遮：地形是静态的，走一遍就记住了，让 AI 忘掉地形
+    // 只会让它的寻路整体失灵（一支部队卡在山口来回走），而不是变成"更笨的对手"。
+    // 单位迷雾照旧——AI 本来就只拿 playerView，看不到视野外的敌人。
+    hooks: {},
+    presentationOnly: true,
+  },
+  {
     id: 'scorched-earth',
     name: '死亡枕藉',
     summary: '单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。',
@@ -332,9 +392,45 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'fantasy-units',
     name: '奇想兵种包',
-    summary: '加入龙骑兵、术士、巨兽三个不属于真实历史线的兵种。不勾选就没有。',
+    summary:
+      '八个不属于真实历史线的兵种，每个都带一条新机制：飞行（掠水）、冲锋、吸血、威吓、再生、法术溅射。不勾选就没有。',
     hooks: {},
     units: [
+      // ── 2 级：法术与威吓 ────────────────────────────────────────────────
+      // 这一档故意都做得很脆：它们靠"打一片"和"让对方打不疼"吃饭，
+      // 一旦被骑兵贴上来就是一换一，所以摆位比数值更重要。
+      {
+        id: 'warlock',
+        name: '术士',
+        short: '术',
+        era: 2,
+        category: 'combat',
+        cost: 105,
+        move: 2,
+        atk: 16,
+        armor: 1,
+        maxHp: 20,
+        range: 3,
+        vision: 5,
+        // 法术是"一片"而不是"一个"：只有 1 的溅射半径，但足以惩罚挤在一起的阵型
+        splash: 1,
+      },
+      {
+        id: 'banshee',
+        name: '女妖',
+        short: '妖',
+        era: 2,
+        category: 'combat',
+        cost: 85,
+        move: 3,
+        atk: 15,
+        armor: 1,
+        maxHp: 26,
+        range: 2,
+        vision: 5,
+        abilities: ['fear'],
+      },
+      // ── 3 级：机动与攻坚 ────────────────────────────────────────────────
       {
         id: 'dragoon',
         name: '龙骑兵',
@@ -343,25 +439,61 @@ export const EXPANSIONS: Expansion[] = [
         category: 'combat',
         cost: 145,
         move: 6,
-        atk: 21,
+        atk: 20,
         armor: 3,
         maxHp: 38,
         range: 1,
         vision: 6,
+        // 跑得快才打得疼：6 点移动几乎总能先动再打，所以基础攻击压到 20
+        abilities: ['charge'],
       },
       {
-        id: 'warlock',
-        name: '术士',
-        short: '术',
-        era: 2,
+        id: 'griffin',
+        name: '狮鹫',
+        short: '鹫',
+        era: 3,
         category: 'combat',
-        cost: 100,
+        cost: 155,
+        move: 5,
+        atk: 21,
+        armor: 3,
+        maxHp: 36,
+        range: 1,
+        vision: 7,
+        // 飞行的价值全在"过河不用绕渡口"：对双河图是质变，对开阔图只是快一点
+        abilities: ['fly'],
+      },
+      {
+        id: 'treant',
+        name: '树人',
+        short: '树',
+        era: 3,
+        category: 'combat',
+        cost: 180,
         move: 2,
-        atk: 18,
-        armor: 1,
-        maxHp: 20,
-        range: 3,
+        atk: 24,
+        armor: 7,
+        maxHp: 72,
+        range: 1,
+        vision: 3,
+        // 走得慢，但站得住、还能自己修、顺手拆城墙
+        abilities: ['regenerate', 'siege-master'],
+      },
+      // ── 4 级：两条不同的"肉" ────────────────────────────────────────────
+      {
+        id: 'vampire',
+        name: '吸血鬼',
+        short: '鬼',
+        era: 4,
+        category: 'combat',
+        cost: 220,
+        move: 5,
+        atk: 29,
+        armor: 5,
+        maxHp: 54,
+        range: 1,
         vision: 5,
+        abilities: ['lifesteal'],
       },
       {
         id: 'behemoth',
@@ -369,13 +501,33 @@ export const EXPANSIONS: Expansion[] = [
         short: '兽',
         era: 4,
         category: 'combat',
-        cost: 330,
+        cost: 265,
         move: 2,
-        atk: 32,
-        armor: 9,
-        maxHp: 85,
+        atk: 34,
+        armor: 8,
+        maxHp: 84,
         range: 1,
         vision: 3,
+        // 加破城不是为了让它在野战更强，而是给它一个"值得被造"的理由：
+        // 一局没人造的兵，平衡数据再好也只是名单上的一行字
+        abilities: ['regenerate', 'siege-master'],
+      },
+      // ── 5 级：唯一一张"空地一体"的牌 ───────────────────────────────────
+      {
+        id: 'dragon',
+        name: '巨龙',
+        short: '巨',
+        era: 5,
+        category: 'combat',
+        cost: 450,
+        move: 6,
+        atk: 48,
+        armor: 10,
+        maxHp: 96,
+        range: 2,
+        vision: 7,
+        splash: 1,
+        abilities: ['fly'],
       },
     ],
   },
@@ -410,6 +562,15 @@ export const EXPANSIONS: Expansion[] = [
     hooks: {
       // 只报比例，具体加多少钱由 setup.ts 在"开局改动之后、第一回合收入之前"结算
       modifySecondGold: ({ state }) => turnOrderBonusFor(state.w),
+    },
+  },
+  {
+    id: 'last-stand',
+    name: '哀兵必胜',
+    summary: `先丢掉一座城的一方，全军攻击 +${Math.round(LAST_STAND_BONUS * 100)}%——野战、反击、攻城都算。城没了，气还在。`,
+    hooks: {
+      modifyDamage: ({ state, attacker, damage }) => lastStandDamage(state, attacker.owner, damage),
+      modifySiegeDamage: ({ state, attacker, damage }) => lastStandDamage(state, attacker.owner, damage),
     },
   },
   // 五个时代兵种包（大型模组）。放在最后是为了不改动既有扩展的注册顺序——

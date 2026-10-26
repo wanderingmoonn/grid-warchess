@@ -463,10 +463,10 @@ const MEDIEVAL: UnitTypeDef[] = [
     vision: 1,
   },
   {
-    // 工兵：负责把城墙/主楼/寨垒立起来
+    // 掘城兵：负责把城墙/主楼/寨垒立起来（中世纪 sapper 的本义就是挖地道）
     id: 'med_sapper',
-    name: '工兵',
-    short: '工',
+    name: '掘城兵',
+    short: '掘',
     era: 2,
     category: 'builder',
     cost: 95,
@@ -702,8 +702,8 @@ const GUNPOWDER: UnitTypeDef[] = [
   {
     // 工兵：棱堡与防马桩的施工方
     id: 'gp_sapper',
-    name: '工兵',
-    short: '工',
+    name: '坑道工兵',
+    short: '坑',
     era: 3,
     category: 'builder',
     cost: 135,
@@ -949,8 +949,8 @@ const INDUSTRY: UnitTypeDef[] = [
   {
     // 工兵：铁丝网、机枪碉堡、兵站
     id: 'ind_sapper',
-    name: '工兵',
-    short: '工',
+    name: '战地工兵',
+    short: '地',
     era: 4,
     category: 'builder',
     cost: 210,
@@ -965,8 +965,8 @@ const INDUSTRY: UnitTypeDef[] = [
   {
     // 驱逐舰：工业时代的海上多面手，带一点溅射
     id: 'ind_destroyer',
-    name: '驱逐舰',
-    short: '驱',
+    name: '雷击舰',
+    short: '雷',
     era: 4,
     category: 'combat',
     cost: 285,
@@ -1142,7 +1142,7 @@ const MODERN: UnitTypeDef[] = [
   {
     // 机枪地堡：混凝土 + 重机枪，现代防线的核心
     id: 'mod_mgbunker',
-    name: '机枪地堡',
+    name: '重机枪地堡',
     short: '垒',
     era: 5,
     category: 'building',
@@ -1175,8 +1175,8 @@ const MODERN: UnitTypeDef[] = [
   {
     // 工兵：拒马、机枪地堡、钢桥、前进基地
     id: 'mod_pioneer',
-    name: '工兵',
-    short: '工',
+    name: '战斗工兵',
+    short: '战',
     era: 5,
     category: 'builder',
     cost: 265,

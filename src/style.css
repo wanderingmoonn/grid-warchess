@@ -376,6 +376,17 @@ body {
   filter: brightness(0.74) saturate(0.55);
 }
 
+/* 浓雾扩展（blackout）：视野外连地形都不显示，只剩一块暗面。
+   和上面的 .out 是两档——.out 是"记得但看不见"，这里是"根本不知道"。 */
+.board.blackout .tile.unknown {
+  background: #211e19;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+.board.blackout .tile.unknown.reach,
+.board.blackout .tile.unknown.threat {
+  background: #2c2822;
+}
+
 /* ---------- 棋子层 ---------- */
 .units {
   position: absolute;

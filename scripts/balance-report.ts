@@ -72,6 +72,14 @@ const SIZE = Number(argOf('size', '0'));
 const SECOND_BONUS = Number(argOf('second-bonus', '0'));
 /** 带上这个开关就表示"先手第一回合不结算收入"（测结构性配平时用） */
 const NO_FIRST_INCOME = args.includes('--no-first-income');
+/**
+ * 指挥官模式：双方每回合都只能产 1 个兵（和界面层 runAiTurn 的口径一致）。
+ *
+ * 双 AI 跑批里，"指挥官模式"和普通模式的差别**只有这一条**：AI 本来就不排生产序列，
+ * 而人类那侧"排 5 格、AI 执行"在跑批里没有等价物（没有会排序列的 AI）。
+ * 所以这里测的是"产能从每回合 2 个砍到 1 个"本身，别把它当成完整的指挥官体验。
+ */
+const COMMANDER = args.includes('--commander');
 /** 给了路径就额外写一份 Markdown 表格（模组平衡报告直接引用这一份） */
 const MD = argOf('md', '');
 
@@ -122,6 +130,33 @@ interface GameResult {
   recruitsB: number;
   unitsA: number;
   unitsB: number;
+  /**
+   * 第一座被攻下的城。
+   *
+   * 这一个字段就是"滚雪球"的起点：谁先破城、对手有没有在**下一个自己的回合**
+   * 把它抢回来。抢回来了，这只是一次交换；抢不回来，就是三城打两城。
+   */
+  firstCap: {
+    turn: number;
+    by: string;
+    city: string;
+    /** 城被原主抢回来的回合；从没抢回来就是 null */
+    retakeTurn: number | null;
+    /** 是不是在对手的下一个回合内就抢回来了 */
+    retakenNext: boolean;
+  } | null;
+  /** 终局双方城数 */
+  citiesA: number;
+  citiesB: number;
+  /** 整局城市易主次数 */
+  flipCount: number;
+  /**
+   * 每一次城市易主的完整流水。
+   *
+   * 只留"第一次"是不够的：玩家真正问的是"城换了手、短时间又没被抢回来"这个状态，
+   * 它可能发生在第二座城、第三座城上。有了流水，报告那边才能按"几回合内没夺回"分档。
+   */
+  flipLog: Array<{ turn: number; city: string; from: string; to: string }>;
 }
 
 /**
@@ -670,6 +705,7 @@ function runGame(seed: number): {
       expansionIds: EXPANSIONS,
       secondGoldBonus: SECOND_BONUS,
       noFirstIncome: NO_FIRST_INCOME,
+      commanderMode: COMMANDER,
     },
     seed,
   );
@@ -693,6 +729,8 @@ function runGame(seed: number): {
   let recruitsA = 0;
   let recruitsB = 0;
   const play = emptyPlay();
+  /** 城市易主流水：整局记下来，事后再判"首城"和"有没有立刻抢回来" */
+  const flips: Array<{ turn: number; cityId: string; from: string; to: string }> = [];
   const turnRec = (t: number) => {
     let r = play.byTurn.get(t);
     if (!r) {
@@ -724,6 +762,14 @@ function runGame(seed: number): {
     const r = applyAction(s, action);
     if (!r.ok) return false;
     const after = r.state;
+
+    // 城市易主：一条一条记，别只记"有没有发生过"——是哪一座、第几回合、谁抢的，后面都要用
+    for (const c0 of before.cities) {
+      const c1 = after.cities.find((c) => c.id === c0.id);
+      if (c1 && c1.owner !== c0.owner) {
+        flips.push({ turn: before.turn, cityId: c0.id, from: c0.owner, to: c1.owner });
+      }
+    }
 
     // 磨局诊断：动作级计数。攻城伤害要记到"具体哪座城"上，
     // 否则分不清是"打不动"还是"三座城轮着啃、谁都没破"。
@@ -811,7 +857,7 @@ function runGame(seed: number): {
     turns += 1;
     // 一回合 = 每回合预算 + 步数上限，和 main.ts 的 runAiTurn 完全同构。
     // 少了这一层，AI 会在一回合里把金库花光——那样测出来的采用率跟实战不是一回事。
-    const budget = { ...DEFAULT_BUDGET };
+    const budget = { ...DEFAULT_BUDGET, ...(COMMANDER ? { maxRecruit: 1 } : {}) };
     for (let step = 0; step < AI_MAX_STEPS && !s.winner; step++) {
       const action = aiNextAction(s, budget);
       if (!action) break;
@@ -836,7 +882,27 @@ function runGame(seed: number): {
     recruitsB,
     unitsA: s.units.filter((u) => u.owner === 'A').length,
     unitsB: s.units.filter((u) => u.owner === 'B').length,
+    firstCap: null,
+    citiesA: citiesOf(s, 'A').length,
+    citiesB: citiesOf(s, 'B').length,
+    flipCount: flips.length,
+    flipLog: flips.map((f) => ({ turn: f.turn, city: f.cityId, from: f.from, to: f.to })),
   };
+
+  const first = flips[0];
+  if (first) {
+    // "次回合打回来"= 原主在自己紧接着的那个回合里就把城抢回来了。
+    // 回合号每换手 +1，所以攻下的那一回合是 T、对手的下一回合就是 T+1。
+    const back = flips.find((f) => f.cityId === first.cityId && f.to === first.from && f.turn > first.turn);
+    result.firstCap = {
+      turn: first.turn,
+      by: first.to,
+      city: first.cityId,
+      retakeTurn: back ? back.turn : null,
+      retakenNext: back !== undefined && back.turn <= first.turn + 1,
+    };
+  }
+
   return { result, tallies, draw };
 }
 
@@ -923,6 +989,8 @@ async function main(): Promise<void> {
     // 这里以前写死成"时代默认尺寸"，用 --size 按住棋盘时元数据会说谎，
     // 下游的对比脚本（exp-compare / bonus-compare）就直接按它印表头，一错错一片。
     size: SIZE > 0 ? SIZE : DEFAULT_SIZE_FOR_ERA(ERA),
+    commander: COMMANDER,
+    expansions: EXPANSIONS,
     games: GAMES,
     baseSeed: BASE_SEED,
     cap: CAP,

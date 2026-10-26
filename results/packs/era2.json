@@ -607,7 +607,7 @@
     },
     {
       "type": "med_sapper",
-      "name": "工兵",
+      "name": "掘城兵",
       "era": 2,
       "category": "builder",
       "cost": 95,

@@ -143,7 +143,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       if (!selectedUnit.acted) status.push('可攻击');
       if (selectedUnit.moved && selectedUnit.acted) status.push('本回合已行动完毕');
     } else {
-      status.push('敌方单位');
+      // 敌方单位只给看：兵种一多，临场查对面射程/护甲是刚需，
+      // 但这张卡上不该出现任何能按的东西
+      status.push('敌方单位 · 仅查看');
     }
 
     // 建造单位：列出它能盖的东西，点了就进选址模式
@@ -156,8 +158,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         ? ''
         : `<div class="unit-notes">${notes.map((n) => `<div>· ${n}</div>`).join('')}</div>`;
     const canBuildNow = mine && !selectedUnit.acted;
+    // 建造清单只在"自己的单位"上出现：对敌方展示一份点不动的建造菜单没有意义
     const buildBlock =
-      buildables.length === 0
+      buildables.length === 0 || !mine
         ? ''
         : `<div class="card-title" style="margin-top:14px">可建造</div>
            <div class="recruit-list">${buildables

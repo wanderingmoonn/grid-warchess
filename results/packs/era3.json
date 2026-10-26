@@ -455,7 +455,7 @@
     },
     {
       "type": "gp_sapper",
-      "name": "工兵",
+      "name": "坑道工兵",
       "era": 3,
       "category": "builder",
       "cost": 135,
