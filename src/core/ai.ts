@@ -1383,10 +1383,22 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
     let score = 0;
     switch (k.effect) {
       case 'throw-axe': {
-        // 贴身的敌人就在眼前，劈比扔疼；扔斧头是"够不着"时的补偿
+        /*
+         * 投斧是**白送的一下**：规则里给它挂了 freeShot，这一击不写 acted，
+         * 扔完还能贴身再劈一刀（见 rules 的 doAttack 尾部）。
+         *
+         * 所以只要有敌人进了三格就该扔——包括贴脸的时候。
+         * 老写法是"贴身的敌人就在眼前，劈比扔疼，所以不扔"，把"白送的
+         * 六成伤害"当成了"用六成伤害换一次满伤"，白白丢掉一份输出，
+         * 表现出来就是矮人王整局一次斧头都没扔过。
+         *
+         * 贴脸时给的分低一点，只是为了让"够不着"的那种情况优先被看见，
+         * 不是不扔。
+         */
+        const inReach = foes.some((f) => distance(f, u) <= 3);
+        if (!inReach) break;
         const adjacent = foes.some((f) => distance(f, u) === 1);
-        const outOfReach = foes.some((f) => distance(f, u) >= 2 && distance(f, u) <= 3);
-        if (!adjacent && outOfReach) score = 36;
+        score = adjacent ? 28 : 36;
         break;
       }
       case 'regenerate': {
@@ -1411,14 +1423,24 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
       }
       case 'descend': {
         const radius = k.radius ?? 1;
-        const hurt = unitsOf(view, u.owner).filter((a) => {
-          if (distance(a, u) > radius) return false;
+        const near = unitsOf(view, u.owner).filter((a) => distance(a, u) <= radius);
+        const hurt = near.filter((a) => {
           const ad = utype(view, a.type);
           if (a.hp < ad.maxHp * 0.75) return true;
           return !!a.status && Object.keys(a.status).length > 0;
         });
-        // 只救一个人不值一次冷却；两个以上才算"这一片撑不住了"
-        if (hurt.length >= 2) score = 22 + hurt.length * 5;
+        /*
+         * 门槛："两个人受伤"或者"一个人伤得很重"。
+         *
+         * 原来只认前一条，于是残局里只剩一个残血老兵站在天使旁边时，
+         * 「降临」一次都不开——而那种局面恰恰是最该开的：20% 血加上
+         * 清空负面状态，能把这个兵从"下一刀就死"拉回来。
+         */
+        const bad = near.filter((a) => {
+          const ad = utype(view, a.type);
+          return a.hp < ad.maxHp * 0.4;
+        });
+        if (hurt.length >= 2 || bad.length >= 1) score = 22 + hurt.length * 5 + bad.length * 4;
         break;
       }
     }

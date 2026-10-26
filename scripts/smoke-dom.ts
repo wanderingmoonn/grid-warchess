@@ -1261,6 +1261,36 @@ check('上帝模式开局：工具栏、兵种货架、全图视角一次到位'
   assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
 });
 
+check('工具栏上能选 AI 速度，三档都在', () => {
+  // 沙盒要把几十回合一口气跑完，而"跑多快"因人而异：
+  // 想看清每一步的人和只想看结果的人，不该被写死同一个档位
+  const chips = Array.from(doc.querySelectorAll<HTMLElement>('[data-act="god-speed"]'));
+  assert.equal(chips.length, 3, `应该是慢/快/极快三档，实际 ${chips.length} 档`);
+  assert.deepEqual(
+    chips.map((c) => c.textContent?.trim()),
+    ['慢', '快', '极快'],
+  );
+
+  const fastest = doc.querySelector<HTMLElement>('[data-act="god-speed"][data-speed="2"]');
+  assert.ok(fastest, '找不到极快那一档');
+  fastest!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const after = doc.querySelector<HTMLElement>('[data-act="god-speed"][data-speed="2"]');
+  assert.ok(after?.classList.contains('active'), '点了没选中');
+
+  // 换回来，别把后面的用例拖进"极快"档
+  doc
+    .querySelector<HTMLElement>('[data-act="god-speed"][data-speed="1"]')!
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+});
+
+check('侧栏多了「战报」，AI 刚才做了什么能读到', () => {
+  // 两边都交给 AI 之后，棋盘上只剩结果：谁先动的手、技能开没开、蛋有没有留下，
+  // 不给它说话的地方就只能靠猜。这张卡是沙盒唯一能读到过程的地方。
+  const titles = Array.from(doc.querySelectorAll('.card-title')).map((e) => e.textContent ?? '');
+  assert.ok(titles.includes('战报'), `侧栏应该有战报卡，实际有：${titles.join(' / ')}`);
+  assert.ok(doc.querySelector('.log, .log-empty'), '战报区要么有记录，要么有占位提示');
+});
+
 check('选兵种→点棋盘就落子，不扣金币不推进回合', () => {
   const before = savedGame();
   // 挑一个陆地战斗单位：货架按造价排，第一个可能是船或农民
@@ -1314,6 +1344,104 @@ check('点「交给 AI」立刻换成一整条"正在打"，按停止能收回',
   click('[data-act="god-stop"]');
   assert.ok(doc.querySelector('[data-act="god-run-round"]'), '停止之后按钮要换回来');
   assert.ok((doc.querySelector('#commander')?.textContent ?? '').includes('已停止'));
+});
+
+/**
+ * 不死鸟在沙盒里必须真的能复活一次。
+ *
+ * 守的是一条很容易漏掉的分支：`runGodFight` 的停止条件是"一方没有战斗单位"，
+ * 而"打到全灭"下的那一方往往就是只剩一个不死鸟的情况。不死鸟倒下时不会立刻
+ * 站起来——按规则它先在盘上消失，留下一枚蛋，等**下一回合轮到主人**才孵。
+ * 中间这段时间盘上一个战斗单位都没有，只看 `units` 的话循环在蛋出现的那一瞬间
+ * 就收工了，于是"复活"在这模式里永远等不到下一次轮到它。
+ *
+ * 用战报当证据而不是盯着棋盘：蛋孵化会写一条"蛋孵化了"，落在存档里，
+ * 不用去赌"哪一帧能拍到刚站起来的凤凰"。
+ *
+ * 另开一页是因为这条要的是一盘只有一只 1 血凤凰的残局，
+ * 而上面那些用例在同一个页面上已经摆了一堆东西。
+ */
+await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它还会孵出来', async () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      godMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+    },
+    20261026,
+    {},
+  );
+  for (const t of st.tiles) {
+    t.terrain = 'plain';
+    t.cityId = null;
+  }
+  st.units = [];
+  st.cities = [];
+
+  const put = (owner: 'A' | 'B', type: string, x: number, y: number) => {
+    const def = st.unitTypes[type];
+    assert.ok(def, `本局没有 ${type}`);
+    const u = {
+      id: `g${st.units.length}`,
+      type,
+      owner,
+      x,
+      y,
+      hp: def!.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    };
+    st.units.push(u);
+    return u;
+  };
+
+  const phoenix = put('A', 'phoenix', 5, 5);
+  phoenix.hp = 1; // 一刀就倒，省掉十几回合的对砍
+  put('B', 'hydra', 5, 4); // 145 血，砍死 1 血的凤凰之后自己还站得住
+  st.current = 'B'; // 让 B 先动手：这样蛋是在 B 的回合里留下的
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  const btn = d.querySelector<HTMLElement>('[data-act="god-run-dead"]');
+  assert.ok(btn, '没有「打到全灭」按钮——工具栏没进上帝模式？');
+  btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const texts = (): string[] => {
+    const saved = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+      log?: { text: string }[];
+    };
+    return (saved.log ?? []).map((e) => e.text);
+  };
+
+  const deadline = Date.now() + 10000;
+  let hatched = false;
+  while (Date.now() < deadline) {
+    if (texts().some((t) => t.includes('蛋孵化了'))) {
+      hatched = true;
+      break;
+    }
+    await wait(50);
+  }
+  assert.ok(
+    hatched,
+    `10 秒内没等到蛋孵化，说明循环在蛋刚留下时就收了工。战报：${texts().slice(-6).join(' / ')}`,
+  );
+  assert.ok(
+    texts().some((t) => t.includes('留下一枚蛋')),
+    '战报里应该先有一条"留下一枚蛋"',
+  );
 });
 
 console.log('\n点敌人就是开火');

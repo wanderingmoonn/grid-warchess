@@ -5668,6 +5668,86 @@ test('满血遣散返还四成，残血一个铜板都不返', () => {
   assert.equal(r2.state.units.some((n) => n.id === hurt.id), false, '照样要移除');
 });
 
+console.log('\nAI 用不用英雄技能');
+
+/**
+ * 搭一个"干净的试验台"：没有任何友军、敌军、城市，只留摆上去的那几个。
+ *
+ * 为什么要清空：AI 的候选分是相对排序的，场上多一个能打的敌人，
+ * 攻击分就会盖过技能分，测试就变成在测"它先打谁"。这里要验的是
+ * **技能本身会不会开**，所以把别的选项都拿掉。
+ */
+const NO_ECONOMY = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 0 };
+
+function arena(s: GameState): GameState {
+  s.units = [];
+  s.cities = [];
+  for (const t of s.tiles) t.cityId = null;
+  // 城里那四格原来是城，地形本身是平的；这里不用改地形，place2 不查地形
+  return s;
+}
+
+test('贴脸的矮人王照样扔斧头：这一下是白送的，不是拿满伤去换', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const king = place2(s, 'A', 'dwarf-king', 5, 5);
+  const foe = place2(s, 'B', 'hydra', 6, 5); // 145 血，一刀砍不死，才看得见后续
+  assert.equal(Math.abs(king.x - foe.x) + Math.abs(king.y - foe.y), 1, '这个用例要的是贴脸');
+  s.current = 'A';
+
+  const a = aiNextAction(s, NO_ECONOMY);
+  assert.equal(a?.type, 'HERO_SKILL', '贴脸也该先扔一斧');
+  assert.equal(a?.type === 'HERO_SKILL' ? a.skillId : '', 'throw-axe');
+
+  const shot = applyAction(s, a!);
+  assert.ok(shot.ok, shot.ok ? '' : shot.reason);
+  const after = shot.state.units.find((u) => u.id === king.id)!;
+  assert.equal(after.acted, false, '投斧不占本回合的攻击，扔完还能劈');
+  assert.ok(foe.hp === 0 || shot.state.units.some((u) => u.id === foe.id), '目标还在');
+
+  // 扔完那一下之后，AI 还会补一记正常的近战
+  const next = aiNextAction(shot.state, NO_ECONOMY);
+  assert.equal(next?.type, 'ATTACK', '斧头扔完要接着砍');
+});
+
+test('旁边只剩一个重伤的人，天使也会开「降临」', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  place2(s, 'A', 'angel', 5, 5);
+  const mate = place2(s, 'A', 'militia', 5, 6);
+  mate.hp = Math.round(s.unitTypes.militia!.maxHp * 0.25);
+  s.current = 'A';
+
+  const a = aiNextAction(s, NO_ECONOMY);
+  assert.equal(a?.type, 'HERO_SKILL', '一个重伤的也该救');
+  assert.equal(a?.type === 'HERO_SKILL' ? a.skillId : '', 'descend');
+});
+
+test('不死鸟倒下后，AI 会自己去孵蛋，孵出来的不会再复活', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const ph = place2(s, 'A', 'phoenix', 5, 5);
+  ph.hp = 3;
+  const killer = place2(s, 'B', 'bone-dragon', 5, 4);
+  s.current = 'B';
+
+  const kill = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: ph.id });
+  assert.ok(kill.ok, kill.ok ? '' : kill.reason);
+  assert.ok(kill.state.pendingEgg, '倒下时留下一枚蛋');
+  assert.equal(
+    kill.state.units.filter((u) => u.owner === 'A' && u.type === 'phoenix').length,
+    0,
+    '这一刻盘上确实没有不死鸟了——所以界面不能拿"盘上没兵"当打光',
+  );
+
+  const aTurn = { ...kill.state, current: 'A' as const };
+  const a = aiNextAction(aTurn, NO_ECONOMY);
+  assert.equal(a?.type, 'PLACE_EGG', '轮到主人时，第一件事就是孵蛋');
+
+  const hatched = applyAction(aTurn, a!);
+  assert.ok(hatched.ok, hatched.ok ? '' : hatched.reason);
+  const born = hatched.state.units.find((u) => u.type === 'phoenix')!;
+  assert.equal(born.reborn, true, '孵出来的标记为已复活，不能再复活一次');
+  assert.equal(born.hp, Math.round(s.unitTypes.phoenix!.maxHp * 0.5), '孵化带一半生命');
+});
+
 console.log('\n上帝模式（沙盒）');
 
 test('摆兵不要金币、不推进回合，摆上去就是满血能行动', () => {

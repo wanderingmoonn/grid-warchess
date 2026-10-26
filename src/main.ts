@@ -1369,6 +1369,15 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'god-speed': {
+      const n = Number(el.dataset.speed ?? 0);
+      godSpeed = Math.max(0, Math.min(AI_SPEED_MS.length - 1, Number.isFinite(n) ? n : 0));
+      // 跑到一半也能改：runGodFight 每一回合都重新读一次档位，
+      // 点完两三步之内就慢下来。这里不改 aiToken，不打断正在跑的那一回合。
+      render();
+      return;
+    }
+
     case 'god-run-round': {
       void runGodFight('round');
       return;
@@ -1811,8 +1820,8 @@ let godBrush: GodBrush = { kind: 'none' };
 let godCityEra = 0;
 /** AI 正在同时操控两边 */
 let godRunning = false;
-/** 打到第几个回合（工具栏上那个"第 N 回合"） */
-let godRound = 0;
+/** 打到第几个回合（工具栏上那个"第 N 回合"）。1 是"正在打第一轮"，不是 0 */
+let godRound = 1;
 /** 上一次打完的一句话结论 */
 let godResult = '';
 /** 工具栏上次重建时的局面签名：AI 跑起来时每一步都在变，靠它挡掉无谓重建 */
@@ -1826,8 +1835,16 @@ let godSig = '';
  */
 let godShelfSig = '';
 
-/** 每一步之间的停顿。比"慢档"快一些：看的是整场仗的走势，不是单步细节 */
-const GOD_DELAY = 60;
+/**
+ * 沙盒里的 AI 速度档位。
+ *
+ * 和外面那条 `aiSpeed` 分开存，理由是两个场景要的东西不一样：
+ *   · 正常对局最慢档（180ms）是给"我要看清对手在干什么"用的；
+ *   · 沙盒看的是几十回合的走势，用最慢档放一场歼灭战得等一分多钟。
+ * 所以这里默认快一档（70ms），和以前写死的 GOD_DELAY=60 基本一致，
+ * 但现在是能调的。
+ */
+let godSpeed = 1;
 
 /**
  * 「打到全灭」的安全上限（单位"次行动"，不是回合）。
@@ -1862,6 +1879,22 @@ function godCombatUnits(p: PlayerId): Unit[] {
   return unitsOf(state, p).filter((u) => utype(state, u.type).category === 'combat');
 }
 
+/**
+ * 这一方还有没有"人"。
+ *
+ * 比 godCombatUnits 多认一样东西：**一枚等着孵的蛋**。
+ *
+ * 不死鸟倒下时不会立刻站起来，而是留下一枚蛋，等下次轮到主人才孵。
+ * 中间这段时间，这一方在盘上确实一个战斗单位都没有——只按 units 判断，
+ * 「打到全灭」会在蛋出现的那一瞬间收工，于是"复活"这件事在这个模式下
+ * 永远没有机会发生。玩家看到的是"不死鸟死了就没了"，而规则层其实是
+ * 活着的，只是没人把它孵出来。
+ */
+function godHasArmy(p: PlayerId): boolean {
+  if (godCombatUnits(p).length > 0) return true;
+  return state.pendingEgg?.owner === p;
+}
+
 function godUi() {
   return {
     state,
@@ -1873,6 +1906,9 @@ function godUi() {
     running: godRunning,
     round: godRound,
     result: godResult,
+    speed: godSpeed,
+    speedNames: AI_SPEED_NAME,
+    log: state.log,
   };
 }
 
@@ -1886,10 +1922,14 @@ function renderGodBar(): void {
     godBrush.kind,
     godBrush.kind === 'unit' ? godBrush.type : '',
     godCityEra,
+    godSpeed,
     godRunning ? `run${godRound}` : '-',
     godResult,
     state.units.length,
     state.cities.length,
+    // 有一枚蛋等着孵也要重绘：工具栏上那句结论会从"接着摆"变成
+    // "还有一枚蛋"，而蛋出现时单位数正好减一，两边都得算进签名
+    state.pendingEgg ? state.pendingEgg.owner : '-',
   ].join('|');
   if (sig === godSig) return;
   godSig = sig;
@@ -1909,6 +1949,11 @@ function renderGodShelf(): void {
     state.cities.length,
     state.players.A.gold,
     state.players.B.gold,
+    // 战报条数进签名：这是唯一"局面没怎么变、但确实该重画"的东西。
+    // 只认长度不认内容——一条新战报必然让长度 +1（战报只增不减）。
+    state.log.length,
+    // AI 在跑的时候货架要收起来，这也得重画
+    godRunning ? 'run' : '-',
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;
@@ -1991,14 +2036,14 @@ function onGodClick(e: Event): void {
  */
 async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   if (!godMode() || godRunning) return;
-  if (godCombatUnits('A').length === 0 || godCombatUnits('B').length === 0) {
+  if (!godHasArmy('A') || !godHasArmy('B')) {
     toast('两边都得有战斗单位才打得起来');
     return;
   }
 
   const token = ++aiToken;
   godRunning = true;
-  godRound = 0;
+  godRound = 1;
   godResult = '';
   aiPaused = false;
   clearSelection();
@@ -2011,10 +2056,14 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   try {
     while (token === aiToken && turns < maxTurns) {
       if (state.winner) break;
-      if (godCombatUnits('A').length === 0 || godCombatUnits('B').length === 0) break;
-      await runAiTurn(token, GOD_BUDGET, GOD_DELAY);
+      // 认「蛋」也是认兵：不死鸟倒下那一刻这一方在盘上是空的，
+      // 按 godCombatUnits 判断就会在这里收工，复活永远等不到下一回合。
+      // 每回合现读一次速度：跑到一半觉得太快，点一下下一回合就变慢。
+      if (!godHasArmy('A') || !godHasArmy('B')) break;
+      await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70);
       turns += 1;
-      godRound = Math.ceil(turns / 2);
+      // 刚走完的那一步属于第几轮：走完 1 次还是第一轮（另一方还没走）
+      godRound = Math.floor(turns / 2) + 1;
       render();
     }
   } finally {
@@ -2025,9 +2074,13 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   // 被「停止」打断：令牌已经换人，收尾交给停止那一下，这里不许再报结论
   if (token !== aiToken) return;
 
-  const wiped = (['A', 'B'] as PlayerId[]).filter((p) => godCombatUnits(p).length === 0);
+  const wiped = (['A', 'B'] as PlayerId[]).filter((p) => !godHasArmy(p));
   if (wiped.length > 0) {
     godResult = `${state.players[wiped[0]!].name}的部队打光了`;
+  } else if (state.pendingEgg) {
+    // 停在一枚蛋上：不是"打光了"，是还没孵出来。按「打到全灭」再点一次，
+    // AI 会先把它孵出来接着打。
+    godResult = `${state.players[state.pendingEgg.owner].name}还有一枚蛋没孵`;
   } else if (mode === 'dead') {
     godResult = `打了 ${turns} 次行动，两边都还有兵`;
   } else {
