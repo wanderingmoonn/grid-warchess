@@ -976,7 +976,7 @@ const ARCANE: Expansion = {
       short: '召',
       era: 4,
       category: 'combat',
-      cost: 260,
+      cost: 280,
       move: 2,
       atk: 10,
       armor: 3,
@@ -1058,6 +1058,11 @@ const ARCANE: Expansion = {
  */
 const HERO_IDS = ['dwarf-king', 'hydra', 'phoenix', 'archmage', 'angel'];
 
+// 英雄数值在技能化之后整体上调过一档（攻/血各 +5% 上下）。
+//
+// 原因不是"英雄不够强"，是"英雄不够值"：技能化之后每回合多了一次要做的决定，
+// 但面板没动，等于同样的钱买到了更多操作负担。护甲/魔抗/射程/移动一律不动——
+// 那几项每加一档就是换一个量级（护甲尤其非线性），跟"略微提升"不是一回事。
 const HERO_UNITS: UnitTypeDef[] = [
   // 矮人王：近战是本职（atk 32，射程 1），投斧是**技能**（开一回合，射程 3 但只有六成）。
   //
@@ -1072,9 +1077,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 340,
     move: 2,
-    atk: 32,
+    atk: 34,
     armor: 8,
-    maxHp: 80,
+    maxHp: 84,
     range: 1,
     vision: 4,
     hero: true,
@@ -1100,9 +1105,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 470,
     move: 3,
-    atk: 34,
+    atk: 36,
     armor: 7,
-    maxHp: 115,
+    maxHp: 121,
     range: 1,
     vision: 4,
     hero: true,
@@ -1129,9 +1134,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 460,
     move: 6,
-    atk: 36,
+    atk: 38,
     armor: 4,
-    maxHp: 70,
+    maxHp: 74,
     range: 2,
     vision: 7,
     magicAtk: 10,
@@ -1163,10 +1168,10 @@ const HERO_UNITS: UnitTypeDef[] = [
     move: 2,
     atk: 10,
     armor: 3,
-    maxHp: 56,
+    maxHp: 60,
     range: 4,
     vision: 7,
-    magicAtk: 24,
+    magicAtk: 26,
     element: 'fire',
     splash: 2,
     hero: true,
@@ -1195,9 +1200,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 520,
     move: 5,
-    atk: 40,
+    atk: 42,
     armor: 10,
-    maxHp: 96,
+    maxHp: 101,
     range: 1,
     vision: 7,
     magicAtk: 12,
