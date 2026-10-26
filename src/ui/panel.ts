@@ -17,6 +17,7 @@ import {
   cityName,
   cityRegenOf,
   cityTiles,
+  disbandRefundOf,
   distToCity,
   heroSkillsOf,
   recruitCost,
@@ -210,6 +211,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const ratio = selectedUnit.hp / def.maxHp;
     const spectator = input.spectator === true;
     const mine = !spectator && selectedUnit.owner === me;
+    // 残兵不给钱，按钮上就得写清楚——"回收 0 金"看着像程序出错
+    const refund = disbandRefundOf(s, selectedUnit);
     const status: string[] = [];
     if (spectator) {
       status.push('观战中 · 仅查看');
@@ -330,7 +333,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${
         mine
           ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
-               拆除（回收 ${Math.round(recruitCost(s, me, def) * 0.4)} 金）
+               ${refund > 0 ? `拆除（回收 ${refund} 金）` : '拆除（残兵不回收金币）'}
              </button>`
           : ''
       }

@@ -1224,5 +1224,84 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   assert.equal(afterFoe?.hp, hpBefore, '隔那么远不该开火');
 });
 
+console.log('\n启动兜底');
+
+/**
+ * 存档坏了，页面也不许白屏。
+ *
+ * 线上出过一次：有人带着一份对不上的存档进来，`render()` 给棋子查兵种时
+ * `utype` 直接 throw，启动整段中断——页面上一个字都没有。玩家看到的是纯白，
+ * 既没有错误也没有按钮，只能反复刷新，刷多少次都一样。
+ *
+ * 现在规定：抛错就换一局新的把人放进去，并且把错误显示在页面上。
+ */
+check('存档里有一条对不上的兵种，页面仍然能起来（不白屏）', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  // 塞一个兵种表里根本不存在的棋子——这就是"脏存档"最典型的形态
+  st.units.push({
+    ...structuredClone(st.units[0]!),
+    id: 'ghost-unit',
+    type: 'no-such-unit-type',
+    owner: 'A',
+  });
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+
+  let thrown: unknown = null;
+  try {
+    w.eval(code);
+  } catch (err) {
+    thrown = err;
+  }
+
+  assert.equal(thrown, null, `启动不该把异常抛到顶层：${thrown instanceof Error ? thrown.message : ''}`);
+  const tiles = w.document.querySelectorAll('.tile').length;
+  assert.ok(tiles > 0, '棋盘必须画出来——白屏就是这次要修的东西');
+
+  // 能修的就不该整个丢掉：脏棋子摘掉，剩下的照常打
+  const saved = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    units: { id: string; type: string }[];
+  };
+  assert.equal(
+    saved.units.some((u) => u.id === 'ghost-unit' || u.type === 'no-such-unit-type'),
+    false,
+    '不该把不认识的棋子写回存档',
+  );
+  assert.ok(
+    saved.units.length > 0,
+    '除了那条脏数据，别的棋子都要留着——为一条坏记录丢掉整局代价太大',
+  );
+});
+
+check('地址栏带 ?fresh=1 能清掉本机存档重开', () => {
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/?fresh=1',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  // 20×20 的存档，重开之后应该回到默认的 12×12
+  st.w = 20;
+  st.h = 20;
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+  assert.equal(
+    w.document.querySelectorAll('.tile').length,
+    DEFAULT_CONFIG.size * DEFAULT_CONFIG.size,
+    '带 fresh=1 时不该沿用旧存档',
+  );
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

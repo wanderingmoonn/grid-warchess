@@ -2057,3 +2057,56 @@ a.btn {
     justify-content: space-between;
   }
 }
+
+/* ---------------- 启动失败的兜底条 ---------------- */
+/*
+ * 白屏最糟的地方是它什么都不说：玩家不知道是断网、站点挂了还是自己点坏了。
+ * 这条横幅至少把错误原文摆出来，并且给一个"清空存档重开"的确定性出口。
+ */
+.fatal-banner {
+  position: fixed;
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  z-index: 9999;
+  width: min(520px, calc(100vw - 24px));
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--b);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(43, 40, 35, 0.18);
+  padding: 14px 16px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.fatal-banner .fatal-title {
+  font-weight: 700;
+  color: var(--b);
+  margin-bottom: 6px;
+}
+
+.fatal-banner .fatal-msg {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  word-break: break-word;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.fatal-banner .fatal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.fatal-banner .fatal-hint {
+  color: var(--text-3);
+  font-size: 12px;
+  margin-top: 8px;
+}

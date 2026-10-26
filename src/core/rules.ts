@@ -118,11 +118,12 @@ export function unitsOf(s: GameState, p: PlayerId): Unit[] {
 }
 
 /**
- * 编制（${CONFIG.maxUnits} 人上限）只数战斗单位，建筑不算。
+ * 战斗单位数。**规则层不再拿它卡人**，只剩 AI 用它给自己设产兵上限。
  *
- * 以前的写法是"谁在场上都算一个编制"，于是盖了四座磨坊 + 两座军营，
- * 编制就先去掉了六个，产线直接堵死——模拟里出现过一方 24 个单位里只有 4 个能打仗、
- * 金库压着一万二，然后就再也造不出兵、也打不下城，两边耗到第 200 回合。
+ * 编制只数战斗单位，建筑不算。以前的写法是"谁在场上都算一个编制"，
+ * 于是盖了四座磨坊 + 两座军营，编制就先去掉了六个，产线直接堵死——
+ * 模拟里出现过一方 24 个单位里只有 4 个能打仗、金库压着一万二，
+ * 然后就再也造不出兵、也打不下城，两边耗到第 200 回合。
  * 建筑本来就不该住人：它是工地，不是部队。
  */
 export function armySize(s: GameState, p: PlayerId): number {
@@ -1560,18 +1561,38 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
     // 当回合这条产线是瘫的（废墟本来就不产兵，这里保留是为了兼容旧存档逻辑）
     city.capturedTurn = s.turn;
 
-    // 城里还没来得及撤走的守军随城陷落
+    // 城破了，守军不该跟着一起没。
+    //
+    // 以前这里是"城中守军随城陷落"——整队直接清掉。问题是它把两件不相干的事
+    // 绑在了一起：城墙塌了，人为什么死？玩家把主力屯在城里守城，城一破整支
+    // 军队蒸发，这既没道理也没法预判——你会因为"守城"而输得比"不守"更惨。
+    // 现在改成把人挤到城外去：城是他们守丢的，不是他们的棺材。
+    //
+    // 挤不出去（四邻全被围死）就原地留一口气：活着是硬约束，站位可以妥协。
     const tiles = cityTiles(city);
     const garrison = s.units.filter(
       (u) => u.owner === prevOwner && tiles.some((t) => t.x === u.x && t.y === u.y),
     );
+    let spilled = 0;
+    let stuck = 0;
+    for (const g of garrison) {
+      const spot = freeNeighbor(s, g, g.type);
+      if (!spot) {
+        stuck += 1;
+        continue;
+      }
+      g.x = spot.x;
+      g.y = spot.y;
+      spilled += 1;
+    }
     if (garrison.length > 0) {
-      s.units = s.units.filter((u) => !garrison.includes(u));
-      pushLog(s, attacker.owner, `城中 ${garrison.length} 个守军随城陷落`);
-      for (const g of garrison) fireKilled(s, g, attacker);
+      const parts: string[] = [];
+      if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
+      if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
+      pushLog(s, attacker.owner, `破城，${parts.join('，')}`);
     }
 
-    pushLog(s, attacker.owner, `${cityName(city)} 被攻破，守军全灭——派兵入驻才能接管`);
+    pushLog(s, attacker.owner, `${cityName(city)} 被攻破——派兵入驻才能接管`);
   }
 
   s.winner = checkWinner(s);
@@ -1955,10 +1976,8 @@ function doRecruit(
         : `金币不足（需要 ${price}）`,
     };
   }
-  if (armySize(s, s.current) >= CONFIG.maxUnits) {
-    return { ok: false, reason: `作战单位数已达上限 ${CONFIG.maxUnits}（建筑不占编制）` };
-  }
-
+  // 编制上限只在 AI 那边生效（见 ai.ts 的产兵判断），规则层不拦人。
+  // 钱、格子、每回合的行动次数本身就是更硬的约束。
   const slot = slots[0];
   if (!slot) {
     return {
@@ -2037,6 +2056,8 @@ function doSetOrders(s: GameState, queue: string[]): ActionResult {
  *   · 船里还有货就不能拆（否则货舱里的陆军凭空蒸发，玩家会以为是 bug）；
  *   · 回收按**当前造价**的四成（`CONFIG.disbandRefund`），扩展改了价就跟着变。
  *
+ * 但只有完整无损的才回收，见 `disbandRefundOf`。
+ *
  * 这个动作不消耗行动：拆完还能接着动别的单位，一回合拆几座是自己的事。
  */
 function doDisband(s: GameState, unitId: string): ActionResult {
@@ -2046,11 +2067,33 @@ function doDisband(s: GameState, unitId: string): ActionResult {
   if ((u.cargo?.length ?? 0) > 0) return { ok: false, reason: '船里还有单位，先卸货' };
 
   const def = utype(s, u.type);
-  const refund = Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
-  s.players[u.owner].gold += refund;
+  const refund = disbandRefundOf(s, u);
+  if (refund > 0) {
+    s.players[u.owner].gold += refund;
+    pushLog(s, u.owner, `拆除「${def.name}」，回收 ${refund} 金`);
+  } else {
+    // 说清楚为什么一分钱没有，否则玩家会以为是 bug
+    pushLog(s, u.owner, `遣散残破的「${def.name}」，不回收金币`);
+  }
   s.units = s.units.filter((x) => x.id !== unitId);
-  pushLog(s, u.owner, `拆除「${def.name}」，回收 ${refund} 金`);
   return { ok: true, state: s };
+}
+
+/**
+ * 遣散/拆除能回收多少金币。
+ *
+ * 只有**完整无损**的才回收。残血的部队是"打剩的"，不是"没用的"；
+ * 让它按造价折现，等于在战场上开了一个兑现口：这支兵打残了、眼看要死，
+ * 退回去还能换回四成钱——那"撤退"就变成了一门理财，而不是一次损失。
+ * 所以血量不满一律不给钱，重建/修好才谈回收。
+ *
+ * 建筑照同一条规矩办：塌了半边的箭塔拆掉也不退。否则"盖塔挡路、
+ * 挨两下、趁没塌干净拆了回本"会比老老实实守城划算得多。
+ */
+export function disbandRefundOf(s: GameState, u: Unit): number {
+  const def = utype(s, u.type);
+  if (u.hp < def.maxHp) return 0;
+  return Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
 }
 
 /**

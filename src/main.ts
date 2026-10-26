@@ -21,6 +21,7 @@ import {
   cityAt,
   citiesOf,
   distance,
+  disbandRefundOf,
   eggSpots,
   idx,
   incomeOf,
@@ -109,6 +110,17 @@ const commanderEl = pick<HTMLElement>(appEl, '#commander');
 // 顶栏骨架只插一次。之后每一步只改文字/class/hidden，绝不重建按钮节点——
 // 否则 AI 连续行动时 click 会在 mousedown 与 mouseup 之间丢掉目标（按钮点不动）。
 topbarEl.innerHTML = topbarShell();
+
+// 应急入口：地址栏带 ?fresh=1 就丢掉本机存档重开。
+// 留着是因为"存档坏了进不去"这件事，除了让人清缓存之外总得有个说法，
+// 而这个入口不需要打开开发者工具、也不需要知道 localStorage 在哪。
+if (new URLSearchParams(location.search).get('fresh') === '1') {
+  try {
+    clearMatch();
+  } catch {
+    // 隐私模式写不了，忽略
+  }
+}
 
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
@@ -878,7 +890,12 @@ function handleAction(act: string, el: HTMLElement): void {
       const u = state.units.find((x) => x.id === selectedId);
       if (!u) return;
       const def = utype(state, u.type);
-      if (!window.confirm(`确认拆除「${def.name}」？回收约 ${Math.round(recruitCost(state, u.owner, def) * 0.4)} 金。`)) return;
+      const refund = disbandRefundOf(state, u);
+      const hint =
+        refund > 0
+          ? `回收约 ${refund} 金。`
+          : '这支部队已经残破，遣散不回收金币。';
+      if (!window.confirm(`确认拆除「${def.name}」？${hint}`)) return;
       if (dispatch({ type: 'DISBAND', unitId: selectedId })) {
         selectedId = null;
         render();
@@ -1757,19 +1774,144 @@ window.addEventListener('resize', () => {
 
 // ---------- 启动 ----------
 
-// 先看看上次是不是在某个房间里：是的话要先把存档作用域切过去，再读草稿
-const resuming = resumeRoom();
+/**
+ * 白屏兜底。
+ *
+ * 启动是整套界面里唯一"一炸就什么都没了"的地方：state 从存档读出来可能是脏的，
+ * 兵种表对不上存档里的 id 时 `utype` 会直接 throw，而 `render()` 要给每个棋子
+ * 查兵种——一抛错，页面上一个字都不会出现。
+ *
+ * 玩家那边看到的就是白屏：没有提示、没有按钮，不知道是网断了、站点挂了、
+ * 还是自己点坏了，只知道"登不上去了"。这是最糟糕的失败方式。
+ *
+ * 所以这里必须做两件事：把错误**显示出来**，并且留一条**一定能进来**的路。
+ */
+function fatalBanner(err: unknown, title = '启动出错'): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error('[方格战棋]', title, err);
+  if (document.getElementById('fatal-banner')) return;
 
-// 旧版本存档结构已经变了，直接丢掉重新开局
-if (state.version !== 4) {
-  clearMatch();
-  detachRoom();
-  state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+  const box = document.createElement('div');
+  box.id = 'fatal-banner';
+  box.className = 'fatal-banner';
+  const head = document.createElement('div');
+  head.className = 'fatal-title';
+  head.textContent = `${title}，页面没能启动`;
+  const body = document.createElement('div');
+  body.className = 'fatal-msg';
+  body.textContent = msg;
+  const hint = document.createElement('div');
+  hint.className = 'fatal-hint';
+  hint.textContent = '详情在浏览器控制台。旧存档已另存一份（warchess:match:v1.broken），不会丢。';
+  const actions = document.createElement('div');
+  actions.className = 'fatal-actions';
+  const reset = document.createElement('button');
+  reset.className = 'btn btn-sm';
+  reset.textContent = '清空本机存档并重开';
+  reset.addEventListener('click', () => {
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith('warchess:match')) localStorage.removeItem(k);
+      }
+    } catch {
+      // 隐私模式写不了就算了
+    }
+    location.reload();
+  });
+  const reload = document.createElement('button');
+  reload.className = 'btn btn-sm btn-quiet';
+  reload.textContent = '刷新页面';
+  reload.addEventListener('click', () => location.reload());
+  actions.append(reset, reload);
+  box.append(head, body, actions, hint);
+  document.body.prepend(box);
 }
 
-refreshMemory(state);
-saveMatch(state);
-render();
+/**
+ * 先尝试"修"存档，而不是直接扔掉。
+ *
+ * 兵种表是跟着存档一起存快照的，版本一换就可能对不上：存档里记着某个兵种 id，
+ * 而这一版的兵种表里已经没有它了。`utype` 碰到这种 id 会 throw，`render()`
+ * 又在启动时逐个棋子查兵种——于是一条脏数据就能让整页白屏。
+ *
+ * 但为了一条脏数据丢掉人家打了一半的局，代价太大了。所以先把它摘掉：
+ * 棋盘上少一个兵，棋还能接着下。返回摘掉了几个，好让人知道发生了什么。
+ */
+function repairLoadedState(): number {
+  const dropped: string[] = [];
+  state.units = state.units.filter((u) => {
+    if (state.unitTypes[u.type]) return true;
+    dropped.push(`${u.id}:${u.type}`);
+    return false;
+  });
+
+  if (dropped.length > 0) {
+    console.warn('[方格战棋] 存档里有本版不认识的单位，已移除', dropped);
+  }
+  return dropped.length;
+}
+
+/**
+ * 存档读不动了：先把它挪到一边（留证据），再开一局新的把人放进去。
+ *
+ * 宁可丢掉一局，也不能让人卡在进不去的白屏上——前者是可惜，后者是断绝。
+ */
+function recoverFromBadSave(err: unknown): void {
+  console.error('[方格战棋] 存档读不动了，改开新局', err);
+  try {
+    const raw = localStorage.getItem('warchess:match:v1');
+    if (raw) localStorage.setItem('warchess:match:v1.broken', raw);
+  } catch {
+    // 隐私模式写不了，忽略
+  }
+  try {
+    clearMatch();
+    detachRoom();
+  } catch {
+    // 同上
+  }
+  try {
+    state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+    refreshMemory(state);
+    saveMatch(state);
+    render();
+    toast('上一局的存档读不出来，已经为你新开一局（旧存档留在本机）');
+    return;
+  } catch (err2) {
+    fatalBanner(err2, '存档已重置但仍然出错');
+  }
+}
+
+// 运行期兜底：别让一次未捕获的异常变成一个没有任何信息的白屏
+window.addEventListener('error', (e) => {
+  if (e.error) fatalBanner(e.error, '运行时出错');
+});
+
+let resuming = false;
+try {
+  // 先看看上次是不是在某个房间里：是的话要先把存档作用域切过去，再读草稿
+  resuming = resumeRoom();
+
+  // 旧版本存档结构已经变了，直接丢掉重新开局
+  if (state.version !== 4) {
+    clearMatch();
+    detachRoom();
+    state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+    resuming = false;
+  }
+
+  const patched = repairLoadedState();
+  refreshMemory(state);
+  saveMatch(state);
+  render();
+  if (patched > 0) {
+    toast(`存档里有 ${patched} 个本版不认识的单位，已经移除，剩下的照常打`);
+  }
+} catch (err) {
+  resuming = false;
+  recoverFromBadSave(err);
+}
+
 // 双 AI 观战局，打开页面就该自己动起来
 kickAiIfNeeded();
 if (resuming) {

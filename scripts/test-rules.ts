@@ -798,7 +798,7 @@ test('攻城伤害等于攻击减城市护甲', () => {
   assert.equal(damageToCity(cav, city, s), UNIT_TYPES.scout.atk - city.armor);
 });
 
-test('耐久打空变废墟、守军随城陷落，派兵入驻并付费才易主', () => {
+test('耐久打空变废墟、守军被逐出城外，派兵入驻并付费才易主', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
@@ -820,7 +820,11 @@ test('耐久打空变废墟、守军随城陷落，派兵入驻并付费才易�
   assert.equal(after?.owner, 'B', '破城之后城不该直接归攻方');
   assert.equal(after?.ruined, true, '应该变成废墟');
   assert.equal(after?.hp, 0, '废墟没有耐久');
-  assert.equal(r.state.units.some((n) => n.id === garrison.id), false, '守军随城陷落');
+  // 城破了，人还在：守军会被挤出城去，而不是跟着城墙一起没
+  const survivor = r.state.units.find((n) => n.id === garrison.id);
+  assert.ok(survivor, '守军不该随城陷落');
+  const stillInside = cityTiles(after!).some((t) => t.x === survivor.x && t.y === survivor.y);
+  assert.equal(stillInside, false, '守军应该被逐到城外，不能留在废墟里占着城格');
 
   // 派兵走进去接管：要付重建费
   const push = findUnit(r.state, 'A', 'scout');
@@ -5297,6 +5301,71 @@ test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白�
       );
     }
   }
+});
+
+console.log('\n编制 · 遣散');
+
+/**
+ * 编制上限已经撤出规则层。
+ *
+ * 以前招募时超过 CONFIG.maxUnits 会被直接拒掉。这条上限现在只留给 AI
+ * （它没有"钱要花在别处"的自觉），玩家这边不该再被一条全局数字管着。
+ */
+test('规则层不再卡产兵数量，编制上限只留给 AI', () => {
+  const s = fresh();
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+
+  // 先在场外堆出 maxUnits 个战斗单位，把"编制"占满
+  const filler = s.units.find((u) => u.owner === 'A' && UNIT_TYPES[u.type]?.category !== 'building');
+  assert.ok(filler);
+  let seq = 0;
+  let x = 0;
+  while (armySize(s, 'A') < CONFIG.maxUnits) {
+    // 找一块没人的空地摆一个填充兵
+    let placed = false;
+    for (; x < s.w * s.h; x++) {
+      const px = x % s.w;
+      const py = Math.floor(x / s.w);
+      if (s.units.some((u) => u.x === px && u.y === py)) continue;
+      const t = s.tiles[idx(s, px, py)];
+      if (t.terrain !== 'plain' || t.cityId) continue;
+      s.units.push({ ...structuredClone(filler), id: `fill${seq++}`, x: px, y: py });
+      x += 1;
+      placed = true;
+      break;
+    }
+    assert.ok(placed, '盘面上找不到摆填充兵的空地');
+  }
+
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(r.ok, r.ok ? '' : `编制满了仍然应该能产兵：${r.reason}`);
+  assert.equal(armySize(r.state, 'A'), CONFIG.maxUnits + 1, '应该真的多出来一个');
+});
+
+test('满血遣散返还四成，残血一个铜板都不返', () => {
+  const s = fresh();
+  const u = findUnit(s, 'A', 'militia');
+  const def = UNIT_TYPES[u.type];
+  const full = Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
+
+  // 满血：按四成回收
+  u.hp = def.maxHp;
+  const goldBefore = s.players.A.gold;
+  const r1 = applyAction(s, { type: 'DISBAND', unitId: u.id });
+  assert.ok(r1.ok);
+  assert.equal(r1.state.players.A.gold, goldBefore + full, '满血应该回收四成');
+  assert.equal(r1.state.units.some((n) => n.id === u.id), false, '单位应该被移除');
+
+  // 残血：一分不返。否则"打残了退回去还能换钱"，撤退就成了理财
+  const s2 = fresh();
+  const hurt = findUnit(s2, 'A', 'militia');
+  hurt.hp = 1;
+  const gold2 = s2.players.A.gold;
+  const r2 = applyAction(s2, { type: 'DISBAND', unitId: hurt.id });
+  assert.ok(r2.ok);
+  assert.equal(r2.state.players.A.gold, gold2, '残血遣散不该返还金币');
+  assert.equal(r2.state.units.some((n) => n.id === hurt.id), false, '照样要移除');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
