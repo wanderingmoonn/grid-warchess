@@ -59,6 +59,7 @@ import {
   loadSeat,
   newToken,
   normalizeCode,
+  originMismatch,
   saveSeat,
   submitTurn,
   type RoomSeat,
@@ -2743,4 +2744,25 @@ if (invited.length >= 4) {
   clean.searchParams.delete('room');
   window.history.replaceState(null, '', clean.toString());
   void enterRoomFromUrl(invited);
+}
+
+/*
+ * 启动时核对一次"页面域名 vs 云端 endpoint"。
+ *
+ * 这两者必须完全一致：云服务对 Origin 做精确匹配，差一个字就是 403，
+ * 而 SDK 会把 403 包成一个没有 code、没有 message 的错误，界面最终只能说
+ * "网络不通，稍后再试"——2026-10-27 那次联机全挂就是这么被误判成网络问题的。
+ *
+ * 这里只写控制台，不弹窗：本机对局完全用不到云端，没必要为一个"以后可能
+ * 用不到的能力"在开局挡一次路。真正要用的时候，联机面板顶上那条自检
+ * 会把原因摆出来。
+ */
+const drift = originMismatch();
+if (drift) {
+  console.error(
+    `[联机] 云端配置和当前域名不一致：页面在 ${drift.actual}，` +
+      `而 CLOUD_CONFIG.endpoint 是 ${drift.configured}。\n` +
+      '联机（建房 / 进房 / 提交）一定会失败，并且会报成"网络不通"。\n' +
+      '修法：把 src/net/cloud-config.ts 的 endpoint 和 publishableKey 换成这个应用当前下发的 publicConfig。',
+  );
 }

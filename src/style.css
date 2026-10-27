@@ -1946,6 +1946,35 @@ a.btn {
   line-height: 1.6;
 }
 
+/* 云端自检那一条。
+   故意做得比错误条更"轻"：它常驻在面板顶部，通了的时候不该抢注意力，
+   断了的时候才用危险色把整段原因摊开（含 HTTP 状态码和域名对照）。 */
+.cloud-probe {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px dashed var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.cloud-probe.ok {
+  border-style: solid;
+  border-color: #bfd6c2;
+  background: #eef6ef;
+  color: #2f6b3d;
+}
+
+.cloud-probe.bad {
+  border-style: solid;
+  border-color: var(--b-soft);
+  background: var(--b-soft);
+  color: var(--b);
+  word-break: break-word;
+}
+
 .online-notes {
   margin: 0;
   padding-left: 18px;

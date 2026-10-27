@@ -18,6 +18,8 @@ import {
   loadSeat,
   newToken,
   normalizeCode,
+  probeCloud,
+  type CloudProbe,
   type RoomSeat,
   type RoomSnapshot,
 } from '../net/room.ts';
@@ -46,6 +48,43 @@ export function openOnlinePanel(host: OnlineHost): void {
   let closed = false;
   let codeInput = '';
   let timer = 0;
+  /** 云端自检结果：null = 还在查 */
+  let probe: CloudProbe | null = null;
+  let probing = false;
+
+  /**
+   * 面板一开就先问一句"云端通不通"。
+   *
+   * 这不是装饰：联机失败的报错天生含糊（"网络不通，稍后再试"），
+   * 而真正的原因常常是配置过期——域名换了、密钥作废、房间表没建。
+   * 把这几件事分开报出来，用户就知道该改配置还是该换个网络。
+   */
+  const runProbe = async () => {
+    if (probing) return;
+    probing = true;
+    probe = null;
+    if (!closed) paint();
+    try {
+      probe = await probeCloud();
+    } catch (err) {
+      probe = {
+        ok: false,
+        kind: 'unknown',
+        message: err instanceof Error ? err.message : '自检失败',
+      };
+    }
+    probing = false;
+    if (!closed) paint();
+  };
+
+  /** 自检结果那一条：绿色通了，红色说清楚断在哪 */
+  const probeHtml = (): string => {
+    if (probing || !probe) {
+      return '<div class="cloud-probe wait">正在检查云端连通…</div>';
+    }
+    if (probe.ok) return '<div class="cloud-probe ok">云端连通正常</div>';
+    return `<div class="cloud-probe bad">${escapeHtml(probe.message)}</div>`;
+  };
 
   const close = () => {
     closed = true;
@@ -77,6 +116,7 @@ export function openOnlinePanel(host: OnlineHost): void {
             <p>把这一局存到网上，拿一个房间码。同学用手机输入这六个字符就能接着打。</p>
           </div>
           <div class="modal-body">
+            ${probeHtml()}
             ${
               error
                 ? `<div class="online-error">${escapeHtml(error)}</div>`
@@ -118,6 +158,7 @@ export function openOnlinePanel(host: OnlineHost): void {
             </section>
           </div>
           <div class="modal-foot">
+            <button class="btn" data-act="probe">重新自检</button>
             <button class="btn" data-act="close">关闭</button>
           </div>
         </div>
@@ -164,6 +205,7 @@ export function openOnlinePanel(host: OnlineHost): void {
           </div>
 
           <div class="room-status ${statusKind}">${escapeHtml(status)}</div>
+          ${probeHtml()}
 
           <section class="field">
             <div class="field-label">席位</div>
@@ -226,6 +268,8 @@ export function openOnlinePanel(host: OnlineHost): void {
       });
     } catch (err) {
       error = err instanceof Error ? err.message : '创建失败';
+      // 失败了就让自检把话说明白：同一句话背后可能是域名、密钥、断网三种情况
+      void runProbe();
     }
     busy = false;
     if (!closed) {
@@ -275,6 +319,7 @@ export function openOnlinePanel(host: OnlineHost): void {
       }
     } catch (err) {
       error = err instanceof Error ? err.message : '进入失败';
+      void runProbe();
     }
     busy = false;
     if (!closed) paint();
@@ -302,6 +347,7 @@ export function openOnlinePanel(host: OnlineHost): void {
       }
     } catch (err) {
       error = err instanceof Error ? err.message : '进入失败';
+      void runProbe();
     }
     busy = false;
     if (!closed) paint();
@@ -321,6 +367,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (act === 'join') void doJoin();
     if (act === 'watch') void doWatch();
     if (act === 'refresh') void refresh();
+    if (act === 'probe') void runProbe();
     if (act === 'leave') {
       host.leave();
       close();
@@ -346,6 +393,7 @@ export function openOnlinePanel(host: OnlineHost): void {
 
   paint();
   document.body.appendChild(mask);
+  void runProbe();
 
   if (joined) {
     void refresh();

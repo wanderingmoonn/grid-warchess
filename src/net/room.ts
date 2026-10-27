@@ -265,11 +265,116 @@ export function saveSeat(seat: RoomSeat): void {
   }
 }
 
-function readableError(err: unknown): string {  const e = err as { code?: string; message?: string } | null;
+function readableError(err: unknown): string {
+  const e = err as
+    | { code?: string; message?: string; error?: string; error_description?: string }
+    | null;
   if (!err) return '';
+  // 数据面的"网关级"错误（鉴权/域名）不是 PostgREST 那种 {code,message} 形状，
+  // 而是 OAuth 风格的 {error, error_description}。2026-10-27 那次事故里
+  // 前端只认 code/message，于是 403 被降级成"网络不通"，把人往网络问题上带。
+  if (e?.error === 'invalid_client' || e?.error_description?.includes('client credential')) {
+    return '云端不认这个应用的密钥（publishableKey 已失效）。重新发布后要回来更新它';
+  }
+  if (e?.error === 'access_denied' || e?.error_description?.includes('request origin')) {
+    return '云端拒绝了当前域名（Origin 不匹配）。endpoint 必须等于你打开页面的那条发布域名';
+  }
+  if (e?.error_description) return e.error_description;
   if (e?.code === '42P01') return '云端还没有房间表，需要先初始化数据库';
   if (e?.code === '42501') return '云端拒绝了这次读写（权限策略问题）';
   if (e?.code === '23505') return '房间码撞车了';
   if (e?.message) return e.message;
   return '网络不通，稍后再试';
+}
+
+/* ---------- 云端自检 ---------- */
+
+/**
+ * 自检结果：只回答"联机这条路现在是通的吗，不通断在哪一步"。
+ */
+export type CloudProbe =
+  | { ok: true }
+  | { ok: false; kind: 'origin' | 'key' | 'table' | 'network' | 'unknown'; message: string };
+
+/**
+ * 直接敲一次数据面，把状态码翻成人话。
+ *
+ * 为什么要绕开 SDK 单独 probe：SDK 会把 HTTP 层的失败包成一个**既没有 code
+ * 也没有 message** 的错误对象——401（密钥作废）、403（域名不匹配）、404（表
+ * 不存在）、真断网，四种情况到界面上长得一模一样，只能落到兜底文案
+ * "网络不通，稍后再试"。而真凶往往是一行过期的配置，不是网络。
+ *
+ * 这一发是**只读诊断**：读一行房间表，带的是同一个 publishableKey，
+ * 不带额外凭据，不写任何东西。业务读写仍然全部走 SDK（上面几个函数），
+ * 这里只负责在出问题时说清楚是哪一环。
+ */
+export async function probeCloud(): Promise<CloudProbe> {
+  const base = CLOUD_CONFIG.endpoint;
+  const url = `${base}/.cloud/database/rest/${TABLE}?select=code&limit=1`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { 'x-wb-webapp-access-key': CLOUD_CONFIG.publishableKey },
+      cache: 'no-store',
+    });
+  } catch {
+    return {
+      ok: false,
+      kind: 'network',
+      message: `连不上云端地址 ${base}（域名打不开，或本地断网）`,
+    };
+  }
+
+  if (res.ok) return { ok: true };
+
+  const body = await res.text().catch(() => '');
+  const detail = body.slice(0, 120);
+  if (res.status === 401) {
+    return {
+      ok: false,
+      kind: 'key',
+      message: `云端不认这个应用的密钥（HTTP 401）。多半是重新发布后 publishableKey 没跟着更新。${detail}`,
+    };
+  }
+  if (res.status === 403) {
+    return {
+      ok: false,
+      kind: 'origin',
+      message:
+        `云端拒绝了当前域名（HTTP 403）。配置里的 endpoint 是 ${base}，` +
+        `而你现在从 ${location.origin} 打开——两者必须完全一致。${detail}`,
+    };
+  }
+  if (res.status === 404) {
+    return {
+      ok: false,
+      kind: 'table',
+      message: `云端找不到房间表 ${TABLE}（HTTP 404），需要先初始化数据库。${detail}`,
+    };
+  }
+  return {
+    ok: false,
+    kind: 'unknown',
+    message: `云端返回 ${res.status}。${detail}`,
+  };
+}
+
+/**
+ * 当前页面域名和配置里的 endpoint 是否对不上。
+ *
+ * 对不上就是"联机必然失败"，而且报错会伪装成网络问题。所以启动时先看一眼，
+ * 在控制台留一条明确的线索——不弹窗打扰，因为本机对局完全用不到云端。
+ *
+ * 只在**发布域名**上核对：localhost、局域网预览、jsdom 测试里的 origin
+ * 本来就该和 endpoint 不同，那些环境下报这一条纯属噪音。
+ */
+export function originMismatch(): { actual: string; configured: string } | null {
+  if (typeof location === 'undefined') return null;
+  const actual = location.origin;
+  // 只看云托管发出去的域名；本机跑 dev / 预览时不用管
+  if (!location.hostname.endsWith('.workbuddy.host')) return null;
+  const configured = new URL(CLOUD_CONFIG.endpoint).origin;
+  return actual === configured ? null : { actual, configured };
 }
