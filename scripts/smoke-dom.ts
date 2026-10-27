@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
-import { effectiveStats, reachableTiles, unitIncomeAt } from '../src/core/rules.ts';
+import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
@@ -190,6 +190,58 @@ check('浓雾扩展：视野外的地形和敌城都不渲染', () => {
     // 多留两块板会让它们一起变红（第一次跑就是这么崩的）
     base.remove();
     dark.remove();
+  }
+});
+
+check('浓雾扩展：走过的地形和城会留在记忆里', () => {
+  // 三档雾的分界要经得起考验：
+  //   看得见 → 照实画；去过 → 画记忆里的样子（.tile.remembered / .city-block.stale）；
+  //   没去过 → 还是一片黑（.tile.unknown）。
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: ['blackout'] }, 4242);
+  st.fog = true;
+  refreshMemory(st);
+
+  const foeCity = st.cities.find((c) => c.owner === 'B');
+  assert.ok(foeCity, '应该有敌方城市');
+  const scout = st.units.find((u) => u.owner === 'A');
+  assert.ok(scout, '应该有 A 方的兵');
+
+  // 去敌城边上"侦察"一次，再撤回原位——那片重新落回雾里
+  const home = { x: scout!.x, y: scout!.y };
+  scout!.x = foeCity!.x;
+  scout!.y = Math.min(st.h - 1, foeCity!.y + foeCity!.size);
+  refreshMemory(st);
+  scout!.x = home.x;
+  scout!.y = home.y;
+  refreshMemory(st);
+
+  try {
+    renderBoard(host, playerView(st, 'A'), {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+    });
+
+    const stale = host.querySelector('.city-block.stale');
+    assert.ok(stale, '去过的敌城该按旧情报画出来');
+    assert.ok(stale!.textContent?.includes('旧情报'), '旧情报得写在牌子上，不能让人以为是实时情报');
+    assert.equal(stale!.querySelector('.city-hp'), null, '旧情报不该画血条——那是过期数字');
+
+    const remembered = host.querySelectorAll('.tile.remembered');
+    assert.ok(remembered.length > 0, '走过的地形不该还是一片黑');
+    for (const node of Array.from(remembered)) {
+      assert.equal(node.classList.contains('unknown'), false, '记得的格不能同时又画成未知');
+    }
+    assert.ok(host.querySelectorAll('.tile.unknown').length > 0, '从没去过的格还是全黑');
+  } finally {
+    host.remove();
   }
 });
 
@@ -394,6 +446,33 @@ check('产兵按钮上写着血量', () => {
 check('城市里不再直接产建筑', () => {
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(!html.includes('自动开火'), '建筑不该出现在城市生产列表里');
+});
+
+check('输入法组字期间不重建搜索框（"chuan船"不会被敲两遍）', () => {
+  // 事件监听挂在 #app 上做委托，所以往侧栏里塞一个同名的 input 就能测到那条路径。
+  // 这条用例守的是一件很容易被"顺手优化"掉的事：组字期间那个 input 节点
+  // 必须原封不动——换掉它，浏览器会把缓冲的按键重新投递进新节点，
+  // 于是 "chuan" 上屏两次，最后成了 "chuanchuan船"。
+  click('.tile.t-city.own-A');
+  const side = doc.querySelector('.side');
+  assert.ok(side, '侧栏应该在');
+  const probe = doc.createElement('input');
+  probe.dataset.act = 'recruit-search';
+  side!.appendChild(probe);
+
+  probe.dispatchEvent(new window.Event('compositionstart', { bubbles: true }));
+  probe.value = 'chuan';
+  probe.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.ok(side!.contains(probe), '组字期间不许重绘掉搜索框');
+
+  probe.value = 'chuan船';
+  probe.dispatchEvent(new window.Event('compositionend', { bubbles: true }));
+  // 组字结束才重画——重画的证据就是那个探测节点被换走了
+  assert.ok(!side!.contains(probe), '组字结束应该重画一次');
+
+  // 收尾：刚才是拿真面板在测，搜索词被写进去了，后面的用例还要用这个面板
+  click('.tile[data-x="0"][data-y="0"]');
+  click('.tile.t-city.own-A');
 });
 
 check('点产兵按钮会真的出兵并扣钱', () => {
@@ -1452,6 +1531,14 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   assert.equal(host.querySelectorAll('[data-act="recruit"]').length, 0);
   assert.ok(host.innerHTML.includes('没有匹配'), '搜不到要说清楚');
 
+  // 框里是什么，显示的就是什么：中英混排一个字符都不能多
+  paint('chuan船');
+  assert.equal(
+    host.querySelector<HTMLInputElement>('[data-act="recruit-search"]')?.value,
+    'chuan船',
+    '输入内容要原样回填',
+  );
+
   // 按扩展包切一刀：原版那一档全是没徽标的，奇想那一档全是带徽标的
   paint('');
   const packChips = host.querySelectorAll('[data-act="recruit-pack"]');
@@ -1475,7 +1562,6 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
 });
 
 console.log('\n上帝模式');
-
 click('[data-act="new-game"]');
 await wait(40);
 
@@ -1520,6 +1606,48 @@ check('上帝模式开局：工具栏、兵种货架、全图视角一次到位'
   assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
 });
 
+check('己方战报只给自己的条目和战损，观战才看全部', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: true,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    606,
+  );
+  st.log = [
+    { turn: 1, player: 'A', text: '我造了一座箭塔' },
+    { turn: 1, player: 'B', text: '他在攒钱升时代' },
+    { turn: 1, player: 'B', text: '民兵倒下了', open: true },
+  ];
+
+  const host = doc.createElement('div');
+  const paint = (logSide: 'A' | null) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      logSide,
+    });
+
+  paint('A');
+  const mine = host.querySelector('.log')?.textContent ?? '';
+  assert.ok(mine.includes('我造了一座箭塔'), '自己的条目要留着');
+  assert.ok(!mine.includes('他在攒钱'), '对面的私报不该出现在己方战报里（那是免费视野）');
+  assert.ok(mine.includes('民兵倒下了'), '战损是公开信息，棋盘上看得见');
+  assert.ok(host.querySelector('.log-item.open'), '公开的战损条目要标出来');
+
+  paint(null);
+  const all = host.querySelector('.log')?.textContent ?? '';
+  assert.ok(all.includes('他在攒钱'), '观战/热座要看全部');
+});
+
 check('沙盒货架也能按扩展包切一刀', () => {
   // 直接渲染货架，不经过整局：验的是"分组口径"这一件事
   const st = createMatch(
@@ -1561,6 +1689,31 @@ check('沙盒货架也能按扩展包切一刀', () => {
   assert.equal(coreOnly + packOnly, picks(all), '两档加起来应该正好等于全部（互斥且不重不漏）');
   // 「奇想·法则」是纯规则包，一个兵都不带：它不该占一个按下去筛掉 0 个按钮的 chip
   assert.ok(!all.includes('data-pack="fantasy-core"'), '不带兵的规则包不该出现在筛选栏');
+});
+
+check('沙盒里重绘不该把侧栏的滚动甩回顶端', () => {
+  // 一场几十回合的仗打完，玩家正顺着战报往下读；收尾那一帧如果把
+  // scrollTop 清零，他就得重新往下滚一遍才找得到刚才看到哪。
+  const side = doc.querySelector<HTMLElement>('.side');
+  assert.ok(side, '侧栏应该在');
+  const click = (sel: string) =>
+    doc.querySelector<HTMLElement>(sel)!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  side!.scrollTop = 180;
+  click('[data-act="god-side"][data-side="B"]'); // 换一边摆＝一次整块重绘
+  assert.equal(side!.scrollTop, 180, '重绘之后滚轮位置要留着');
+
+  const log = doc.querySelector<HTMLElement>('.log');
+  if (log) {
+    log.scrollTop = 40;
+    click('[data-act="god-side"][data-side="A"]');
+    assert.equal(
+      doc.querySelector<HTMLElement>('.log')?.scrollTop,
+      40,
+      '战报内层的滚动位置也要留着',
+    );
+  }
+  click('[data-act="god-side"][data-side="A"]');
 });
 
 check('工具栏上能选 AI 速度，三档都在', () => {  // 沙盒要把几十回合一口气跑完，而"跑多快"因人而异：

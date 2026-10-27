@@ -12,8 +12,8 @@
  */
 
 import { CONFIG } from './config.ts';
-import { idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
-import type { GameState, KnownUnit, PlayerId } from './types.ts';
+import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
+import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
 
 export interface PlayerView {
   /** 可以直接喂给界面的状态：敌方单位已经被裁掉 */
@@ -22,6 +22,24 @@ export interface PlayerView {
   visible: number[];
   /** 记忆中但当前看不见的敌方单位，渲染成半透明幽灵 */
   ghosts: KnownUnit[];
+  /**
+   * 已探索、此刻却看不见的格，值是记忆里的地形。
+   *
+   * 只有「浓雾蔽野」会有内容：基础规则的雾不遮地图，这份表永远是空的。
+   * 界面要照它画"记忆里的地形"，不能直接读 state.tiles —— 那是活数据，
+   * 对面趁夜在河上架了座桥，我们不该立刻知道。
+   */
+  rememberedTiles: Map<number, Terrain>;
+  /** 已探索、此刻却看不见的城，值是记忆里的那一份样子（归属、时代、是否废墟） */
+  rememberedCities: Map<string, KnownCity>;
+}
+
+/** 这座城此刻有没有任何一格落在视野里 */
+function cityInSight(s: GameState, city: City, visibleSet: ReadonlySet<number>): boolean {
+  for (const t of cityTiles(city)) {
+    if (visibleSet.has(idx(s, t.x, t.y))) return true;
+  }
+  return false;
 }
 
 /** 棋盘上所有格子的索引，观战视角用 */
@@ -41,7 +59,13 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   const cloned = structuredClone(s);
 
   if (!s.fog || reveal) {
-    return { state: cloned, visible, ghosts: [] };
+    return {
+      state: cloned,
+      visible,
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedCities: new Map(),
+    };
   }
 
   cloned.units = cloned.units.filter(
@@ -49,9 +73,29 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   );
 
   const seenIds = new Set(cloned.units.map((u) => u.id));
-  const ghosts = cloned.memory[p].known.filter((k) => !seenIds.has(k.id));
+  const mem = cloned.memory[p];
+  const ghosts = mem.known.filter((k) => !seenIds.has(k.id));
 
-  return { state: cloned, visible, ghosts };
+  // 浓雾才需要"记忆里的地图"：它连地形和城市一起遮，
+  // 走过路过的地方必须留个样子，否则第二次经过等于第一次来。
+  const rememberedTiles = new Map<number, Terrain>();
+  const rememberedCities = new Map<string, KnownCity>();
+  if (s.config.expansionIds.includes('blackout')) {
+    for (const [key, terrain] of Object.entries(mem.tiles ?? {})) {
+      const i = Number(key);
+      if (visibleSet.has(i)) continue; // 眼前看得见，按活的画
+      if (!cloned.tiles[i]) continue; // 地图缩小过，老记忆越界了
+      rememberedTiles.set(i, terrain);
+    }
+    for (const snap of mem.cities ?? []) {
+      const city = cloned.cities.find((c) => c.id === snap.id);
+      if (!city) continue; // 城已经没了，这份记忆作废
+      if (cityInSight(s, city, visibleSet)) continue; // 眼前看得见，用活的
+      rememberedCities.set(snap.id, snap);
+    }
+  }
+
+  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities };
 }
 
 /** 视野外的格子亮度，用于渲染时压暗。返回 0-1 */

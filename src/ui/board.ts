@@ -102,6 +102,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   el.classList.toggle('blackout', blackout);
 
   const visibleSet = new Set(view.visible);
+  // 浓雾下"去过、此刻看不见"的格：按记忆里的样子画，压暗一档
+  const rememberedTiles = view.rememberedTiles;
   const reachSet = new Set(ui.reach);
   const placeSet = new Set(ui.placeable);
   const threatSet = new Set(ui.threat);
@@ -119,9 +121,13 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const tile = s.tiles[i];
       if (!tile) continue;
 
-      const seen = !blackout || visibleSet.has(i);
-      const cls = seen ? ['tile', TERRAIN_CLASS[tile.terrain] ?? 't-plain'] : ['tile', 'unknown'];
-      if (seen && tile.cityId) {
+      // 三档：眼前亮着 / 去过（浓雾下按记忆画）/ 从没去过（浓雾下全黑）
+      const lit = !blackout || visibleSet.has(i);
+      const memo = lit ? undefined : rememberedTiles.get(i);
+      const seen = lit || memo !== undefined;
+      const cls = seen ? ['tile', TERRAIN_CLASS[memo ?? tile.terrain] ?? 't-plain'] : ['tile', 'unknown'];
+      if (memo !== undefined) cls.push('remembered');
+      if (lit && tile.cityId) {
         const city = s.cities.find((c) => c.id === tile.cityId);
         if (city) cls.push(`own-${city.owner}`);
       }
@@ -140,9 +146,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   tilesEl.innerHTML = tileParts.join('');
 
   // ---- 城市 ----
-  // 浓雾下，四格都看不见的城市直接不画：敌城的位置本身就是情报
-  const cityVisible = (city: { x: number; y: number; size: number }): boolean => {
-    if (!blackout) return true;
+  // 浓雾下城市也分三档：眼前看得见就照实画；以前去过就画记忆里的那一份
+  // （虚线框 + "旧情报"）；从没去过连边框都不给——敌城的位置本身就是情报。
+  const cityInSight = (city: { x: number; y: number; size: number }): boolean => {
     for (let dy = 0; dy < city.size; dy++) {
       for (let dx = 0; dx < city.size; dx++) {
         if (visibleSet.has((city.y + dy) * s.w + (city.x + dx))) return true;
@@ -150,9 +156,21 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     }
     return false;
   };
-  const cityParts = s.cities.filter(cityVisible).map((city) => {
-    const cls = ['city-block', `owner-${city.owner}`, `era-${city.era}`];
-    if (city.ruined) cls.push('ruined');
+  const cityParts: string[] = [];
+  for (const city of s.cities) {
+    const lit = !blackout || cityInSight(city);
+    const memo = lit ? undefined : view.rememberedCities.get(city.id);
+    if (!lit && !memo) continue;
+
+    // 记忆只能代表当时：城会易手、会升级，所以这三项一律以快照为准
+    const owner = memo ? memo.owner : city.owner;
+    const era = memo ? memo.era : city.era;
+    const ruined = memo ? memo.ruined : city.ruined === true;
+    const ago = memo ? Math.max(0, s.turn - memo.seenAt) : 0;
+
+    const cls = ['city-block', `owner-${owner}`, `era-${era}`];
+    if (ruined) cls.push('ruined');
+    if (memo) cls.push('stale');
     if (ui.siegeTargets.includes(city.id)) cls.push('siege-target');
     if (ui.selectedCityId === city.id) cls.push('selected');
 
@@ -164,21 +182,28 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       `height:${(city.size / s.h) * 100}%`,
     ].join(';');
 
-    return `<div class="${cls.join(' ')}" data-city-id="${city.id}" style="${style}" title="${cityName(city)} · 时代 ${romanEra(city.era)} · ${
-      city.ruined ? '已成废墟：派兵入驻并支付重建费才能接管' : `耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}`
-    }">
+    // 旧情报不画血条：上次看到的耐久早就不是现在这条了，画出来是假消息
+    const when = ago === 0 ? '刚刚' : `${ago} 个行动前`;
+    const plate = memo
+      ? `<div class="city-stale">旧情报 · ${when}</div>`
+      : ruined
+        ? '<div class="city-ruin">废墟 · 待接管</div>'
+        : `<div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
+               <div class="city-armor">甲 ${city.armor}</div>`;
+    const note = memo
+      ? `${when}看到的：时代 ${romanEra(era)}${ruined ? '，当时是废墟' : ''}`
+      : ruined
+        ? '已成废墟：派兵入驻并支付重建费才能接管'
+        : `耐久 ${city.hp}/${city.maxHp} · 护甲 ${city.armor}`;
+
+    cityParts.push(`<div class="${cls.join(' ')}" data-city-id="${city.id}" style="${style}" title="${cityName(city)} · ${note}">
       <div class="city-plate">
-        <div class="city-era">${romanEra(city.era)}</div>
+        <div class="city-era">${romanEra(era)}</div>
         <div class="city-name">${cityName(city)}</div>
-        ${
-          city.ruined
-            ? '<div class="city-ruin">废墟 · 待接管</div>'
-            : `<div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
-               <div class="city-armor">甲 ${city.armor}</div>`
-        }
+        ${plate}
       </div>
-    </div>`;
-  });
+    </div>`);
+  }
   citiesEl.innerHTML = cityParts.join('');
 
   // ---- 棋子 ----

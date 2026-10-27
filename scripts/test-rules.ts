@@ -90,6 +90,7 @@ import {
   rebuildCost,
   recruitCost,
   recruitResCost,
+  recruitSpawnCells,
   refreshMemory,
   strikeDistance,
   threatTiles,
@@ -2973,8 +2974,39 @@ test('每个内置扩展都被注册且带说明', () => {
 
 console.log('\n迷雾');
 
-test('开局看不到对方后场', () => {
+test('战报分公私：己方条目私有，战损条目双方都读得到', () => {
   const s = fresh();
+  s.current = 'A';
+  s.players.A.gold = 900;
+
+  // 1) 产兵是私报：造了什么，对面没有任何理由知道（等于免费视野）
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city!.id, unitType: 'militia' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const recruitLog = r.state.log.filter((e) => e.text.includes('产出'));
+  assert.ok(recruitLog.length > 0, '产兵应该写一条战报');
+  assert.equal(recruitLog.at(-1)!.open, undefined, '产兵不该是公开战报');
+
+  // 2) 战损是公开的：一个兵倒下，棋盘上看得见，瞒着只会让人以为界面算错了
+  const cur = r.state;
+  cur.current = 'A';
+  const archer = place2(cur, 'A', 'archer', 5, 5);
+  const victim = place2(cur, 'B', 'militia', 6, 5);
+  victim.hp = 1;
+  archer.acted = false;
+  archer.moved = false;
+  const kill = applyAction(cur, { type: 'ATTACK', unitId: archer.id, targetId: victim.id });
+  assert.ok(kill.ok, kill.ok ? '' : kill.reason);
+  const open = kill.state.log.filter((e) => e.open === true);
+  assert.ok(open.length > 0, '阵亡应该留下一条公开战报');
+  assert.ok(
+    open.some((e) => e.text.includes('被消灭') || e.text.includes('倒下')),
+    `公开战报里要写着谁没了：${open.map((e) => e.text).join(' / ')}`,
+  );
+});
+
+test('开局看不到对方后场', () => {  const s = fresh();
   const vis = visibleTilesOf(s, 'A');
   const enemy = s.units.find((u) => u.owner === 'B');
   assert.ok(enemy);
@@ -3031,6 +3063,100 @@ test('见过的敌人离开视野后留下幽灵', () => {
   const ghost = view.ghosts.find((g) => g.id === b.id);
   assert.ok(ghost);
   assert.equal(ghost?.y, 2);
+});
+
+test('浓雾：走过的地方会把地形和城记下来', () => {
+  const s = fresh({ expansionIds: ['blackout'] });
+
+  // 开局只能记住自己脚下这片：没走到的地方一格都不许有
+  const mem = s.memory.A;
+  assert.ok(mem.tiles && Object.keys(mem.tiles).length > 0, '开局就该记下自己看到的格子');
+  // 反过来验：眼前看得见的格，一格都不许漏记。
+  // （不反过来查"记忆里有没有此刻看不见的"——fresh() 里挪过城，
+  //   早先那一眼留下的地形记录本来就该留着，那正是这份记忆的用处。）
+  for (const i of visibleTilesOf(s, 'A')) {
+    assert.ok(mem.tiles![i] !== undefined, `第 ${i} 格看得见却没记下来`);
+  }
+  // 眼前亮着的格绝不能被算成"旧记忆"，否则浓雾下会把自己脚下也压暗
+  const here = Array.from(visibleTilesOf(s, 'A'))[0];
+  assert.equal(playerView(s, 'A').rememberedTiles.has(here), false, '眼前看得见的格不算旧记忆');
+
+  // 派个兵到敌城边上侦察一次，再撤回来——那片重新落回雾里
+  const foeCity = citiesOf(s, 'B')[0];
+  assert.ok(foeCity, 'B 应该有城');
+  assert.equal(
+    (mem.cities ?? []).some((c) => c.id === foeCity!.id),
+    false,
+    '开局没走到敌城，就不该认得它',
+  );
+
+  const scout = unitsOf(s, 'A')[0];
+  const home = { x: scout.x, y: scout.y };
+  scout.x = foeCity!.x;
+  scout.y = Math.min(s.h - 1, foeCity!.y + foeCity!.size);
+  refreshMemory(s);
+  scout.x = home.x;
+  scout.y = home.y;
+  refreshMemory(s);
+
+  const view = playerView(s, 'A');
+  const snapped = view.rememberedCities.get(foeCity!.id);
+  assert.ok(snapped, '去过的敌城应该留在地图记忆里');
+  assert.equal(snapped!.owner, 'B', '记忆里的归属就是当时看到的那个');
+  assert.ok(view.rememberedTiles.size > 0, '走过的地形不该随视野一起消失');
+
+  const vis = new Set(view.visible);
+  for (const i of view.rememberedTiles.keys()) {
+    assert.equal(vis.has(i), false, '记忆表里不该混进眼前看得见的格');
+  }
+
+  // 记忆只能说当时：城在雾里悄悄升了级，我们不该隔着一层雾知道
+  foeCity!.era = 3;
+  const later = playerView(s, 'A').rememberedCities.get(foeCity!.id);
+  assert.ok(later, '去过的城该一直在记忆里');
+  assert.equal(later!.owner, 'B', '记忆里的归属就是当时看到的那个');
+  assert.equal(later!.era, 1, '记忆里的时代不该跟着升级');
+});
+
+test('基础规则的雾不攒地形记忆', () => {
+  const s = fresh();
+  // 没开浓雾：地图本来就一直画在屏幕上，再存一份地形只是撑大存档
+  assert.equal(s.memory.A.tiles, undefined, '不开浓雾就不该有地形记忆');
+  assert.equal(s.memory.A.cities, undefined, '不开浓雾也不该有城市记忆');
+  assert.equal(playerView(s, 'A').rememberedTiles.size, 0, '基础规则下没有"记忆里的地图"');
+});
+
+test('浓雾整局跑得下去：AI 照旧行动，记忆也不会越攒越大', () => {
+  let state = createMatch(
+    { ...BASE, size: 12, startEra: 3, aiOpponent: true, aiAlly: true, expansionIds: ['blackout'] },
+    909090,
+  );
+  const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
+  let turns = 0;
+  while (turns < 12 && !state.winner) {
+    const act = aiNextAction(state, budget);
+    if (!act) {
+      const end = applyAction(state, { type: 'END_TURN' });
+      assert.ok(end.ok, end.ok ? '' : end.reason);
+      state = end.state;
+      turns += 1;
+      budget.recruited = 0;
+      budget.upgraded = 0;
+      continue;
+    }
+    const r = applyAction(state, act);
+    assert.ok(r.ok, `第 ${turns} 回合 AI 提出了非法动作 ${JSON.stringify(act)}：${r.ok ? '' : r.reason}`);
+    state = r.state;
+    if (act.type === 'RECRUIT') budget.recruited += 1;
+    if (act.type === 'UPGRADE') budget.upgraded += 1;
+  }
+
+  // 记忆是按格子覆盖写的，不是一回合追加一条——否则一局打下来会越攒越胖
+  for (const p of ['A', 'B'] as PlayerId[]) {
+    const n = Object.keys(state.memory[p].tiles ?? {}).length;
+    assert.ok(n > 0, `${p} 方打了十几回合，总该记下点什么`);
+    assert.ok(n <= state.w * state.h, `${p} 方的地形记忆最多也就是整张图：${n} > ${state.w * state.h}`);
+  }
 });
 
 console.log('\n威胁范围');
@@ -4110,6 +4236,71 @@ test('溅射半径按兵种不同：火炮能打到更远的一片', () => {
   place(s2, 'B', 'militia', 9, 5); // 离主目标 2 格，超出 1 格溅射
   const p2 = previewAttack(s2, mortar, main2);
   assert.equal(p2.toSplash, 0, '臼炮只有 1 格溅射，够不着 2 格外的目标');
+});
+
+test('临水的城挨着好几片水时，水军可以自己选从哪片下水', () => {
+  const s = fresh();
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 900;
+
+  const setT = (x: number, y: number, terrain: 'plain' | 'water') => {
+    s.tiles[idx(s, x, y)] = { terrain, cityId: null };
+  };
+  // 先把城周围一圈抹平，免得地图自带的水混进"可下水点"
+  for (let y = city!.y - 1; y <= city!.y + city!.size; y++) {
+    for (let x = city!.x - 1; x <= city!.x + city!.size; x++) {
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      if (s.tiles[idx(s, x, y)]?.cityId) continue;
+      setT(x, y, 'plain');
+    }
+  }
+
+  // 城左右各一片水，互不相连
+  const left = { x: city!.x - 1, y: city!.y };
+  const right = { x: city!.x + city!.size, y: city!.y };
+  assert.ok(left.x >= 0 && right.x < s.w, '地图两侧得放得下这两片水');
+  setT(left.x, left.y, 'water');
+  setT(right.x, right.y, 'water');
+
+  const cells = recruitSpawnCells(s, city!.id, undefined, 'boat');
+  assert.equal(cells.length, 2, `两片水面都该算可选，实际 ${cells.length}`);
+  const pick = cells.find((c) => c.x === right.x);
+  assert.ok(pick, '右侧那片水应该在候选里');
+
+  // 1) 指定位置：船就从那儿下水
+  const r = applyAction(s, {
+    type: 'RECRUIT',
+    cityId: city!.id,
+    unitType: 'boat',
+    x: pick!.x,
+    y: pick!.y,
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const born = r.state.units.find((u) => u.type === 'boat');
+  assert.ok(born);
+  assert.equal(born!.x, pick!.x, '船要出现在玩家点的那片水上');
+  assert.equal(born!.y, pick!.y);
+
+  // 2) 不指定位置时还是老规矩：第一格（老行为不变）
+  const dflt = applyAction(s, { type: 'RECRUIT', cityId: city!.id, unitType: 'boat' });
+  assert.ok(dflt.ok, dflt.ok ? '' : dflt.reason);
+  const auto = dflt.state.units.find((u) => u.type === 'boat');
+  assert.ok(auto);
+  assert.equal(auto!.x, cells[0]!.x, '不指定就落在第一格');
+  assert.equal(auto!.y, cells[0]!.y);
+
+  // 3) 指一格不是水的地方：拒绝，并且要说清原因
+  const bad = applyAction(s, {
+    type: 'RECRUIT',
+    cityId: city!.id,
+    unitType: 'boat',
+    x: city!.x,
+    y: city!.y,
+  });
+  assert.equal(bad.ok, false, '城墙里下不了水');
+  assert.ok(bad.ok === false && bad.reason.includes('水面'), '理由要提到水面');
 });
 
 console.log('\n渡船');

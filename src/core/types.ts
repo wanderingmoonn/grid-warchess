@@ -666,15 +666,50 @@ export interface KnownUnit {
   seenAt: number;
 }
 
+/**
+ * 玩家记忆中某座城市的模样。
+ *
+ * 城不会走，但会易手、会升级、会变成废墟——所以记忆里必须存"当时那一份"，
+ * 而不是只记一个 id、到时候回去查活数据：那等于隔着浓雾偷看对面的城建。
+ */
+export interface KnownCity {
+  id: string;
+  owner: PlayerId;
+  era: number;
+  ruined: boolean;
+  /** 在哪一行动序号被看到的 */
+  seenAt: number;
+}
+
 export interface PlayerMemory {
   /** 见过的敌方单位，含已离开视野的（渲染成半透明幽灵） */
   known: KnownUnit[];
+  /**
+   * 走过的地形：格索引 -> 最后一次亲眼看到的地形。
+   *
+   * 只有「浓雾蔽野」用得上：基础规则的雾只遮单位，地图本身一直画在屏幕上，
+   * 记一份地形纯属撑大存档。所以 refreshMemory 只在开了这个扩展时才写。
+   *
+   * 用对象而不是数组：格索引是稀疏的，1024 格的图上打十回合可能只走过几十格。
+   */
+  tiles?: Record<number, Terrain>;
+  /** 见过的城市（含敌城），浓雾下用来还原"记忆里的城" */
+  cities?: KnownCity[];
 }
 
 export interface LogEntry {
   turn: number;
   player: PlayerId;
   text: string;
+  /**
+   * 这条战报是"公开信息"，对面的玩家也能看到。
+   *
+   * 默认的战报只给自己的主人看：它记的是"我刚干了什么"（造了什么、走了哪、
+   * 攒了多少钱），而对面的玩家没有任何理由知道这些——那等于免费送视野。
+   * 但**战损**不一样：一个兵倒下、一座桥塌了、一座城失了，棋盘上看得见，
+   * 瞒着只会让人以为界面算错了。所以这类条目带上这个标记，谁都能读。
+   */
+  open?: boolean;
 }
 
 export interface GameState {
@@ -770,7 +805,21 @@ export type Action =
    * 产兵。source 是城市（cityId）或军营（unitId），两者选其一。
    * 军营是"前线的产兵点"，用的还是最近城市的时代科技。
    */
-  | { type: 'RECRUIT'; cityId?: string; unitId?: string; unitType: string }
+  | {
+      type: 'RECRUIT';
+      cityId?: string;
+      unitId?: string;
+      unitType: string;
+      /**
+       * 指定新兵出在哪一格。
+       *
+       * 只有水军真正需要：临水的城往往挨着好几片水（城角一片湖、另一侧一条河），
+       * 不指定就永远从"列表里的第一格"下水，玩家想让它从另一侧绕过去也没办法。
+       * 不填就按老规矩取第一格可用位置。
+       */
+      x?: number;
+      y?: number;
+    }
   /** 由建造单位在野外盖建筑：谁盖、盖什么、盖在哪 */
   | { type: 'BUILD'; unitId: string; unitType: string; x: number; y: number }
   /** 上船：相邻的陆军走进渡船的货舱 */

@@ -29,6 +29,7 @@ import {
   ordersOf,
   reachableTiles,
   recruitCost,
+  recruitSpawnCells,
   refreshMemory,
   siegeTargets,
   threatTiles,
@@ -183,6 +184,19 @@ let targets: string[] = [];
 let siege: string[] = [];
 /** 非空时表示某个建造单位正在选址 */
 let buildPlan: { unitId: string; type: string } | null = null;
+/**
+ * 非空时表示"正在给这一船选下水的位置"。
+ *
+ * 临水的城常常挨着好几片水（城角一片湖、另一侧一条河），以前只能从
+ * 列表里的第一格下水——想让它从另一侧绕过去，唯一的办法是先把那格水填了。
+ * 现在点水军的产兵按钮先"上膛"，棋盘上把能下水的格点亮，点哪格就从哪格出。
+ */
+let spawnPlan: {
+  cityId?: string;
+  campId?: string;
+  type: string;
+  cells: number[];
+} | null = null;
 /** 非空时表示这条船正在等人上船（值是船的 id） */
 let loadPlan: string | null = null;
 /** 非空时表示这条船正在找地方下船（值是船的 id） */
@@ -363,7 +377,31 @@ function me(): PlayerId {
   // 观战位没有"我的一方"，给谁都一样——渲染走的是全图，
   // 面板里所有"我的"判断都被 spectator 挡住了。
   if (watching()) return 'A';
-  return room ? room.seat : state.current;
+  if (room) return room.seat;
+  // 人机局：AI 那一方永远不是"我"。
+  //
+  // 以前这里跟着 state.current 走，于是 AI 的回合里面板把 AI 的兵当成自己的，
+  // 产兵、升级、技能全都亮着（点下去又被 aiBusy 挡住），视野也跟着 AI 走。
+  // 现在"我是谁"是固定的，AI 走它的回合时，面板就是一张只读的卡。
+  const aiA = isAiSide(state, 'A');
+  const aiB = isAiSide(state, 'B');
+  if (aiA !== aiB) return aiA ? 'B' : 'A';
+  return state.current;
+}
+
+/**
+ * 战报用谁的眼睛看：null = 全都看得见。
+ *
+ * 只看自己这一方，是因为"对面造了什么、走了哪、攒了多少钱"属于迷雾该管的事。
+ * 但战损（兵倒下、桥塌、城破）棋盘上看得见，瞒着只会让人以为界面算错了——
+ * 所以那类条目带 `open` 标记，两个人都能读到。
+ */
+function logScope(): PlayerId | null {
+  // 观战位 / 双 AI 观战：本来就没有"我方"
+  if (watching() || spectating()) return null;
+  // 热座：一台机器两个人轮流玩，谁都别装看不见
+  if (!room && !isAiSide(state, 'A') && !isAiSide(state, 'B')) return null;
+  return me();
 }
 
 /** 取当前房间。用函数包一层是为了绕开模块级变量的控制流收窄 */
@@ -401,11 +439,36 @@ function panelInput(): PanelInput {
     chimeVolume,
     recruitQuery,
     recruitPack,
+    logSide: logScope(),
+    spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
     spectator: watching(),
     // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
     commander: state.config.commanderMode === true,
     forceMode,
   };
+}
+
+/**
+ * 侧栏整块重绘，但保住滚动位置。
+ *
+ * innerHTML 一换，滚动条就回到顶端。普通对局里这不过是"面板跳了一下"，
+ * 在沙盒里却很致命：一场几十回合的仗打完，玩家正顺着战报往下读，
+ * 收尾那一帧就把他甩回顶部，得重新往下滚一遍才找得到刚才看到哪。
+ *
+ * 内外两层一起记：侧栏自己会滚（.side），战报和货架还各有一个内层滚动条。
+ */
+function keepSideScroll(paint: () => void): void {
+  const outer = sideEl.scrollTop;
+  const inner = Array.from(sideEl.querySelectorAll<HTMLElement>('.log, .god-shelf')).map(
+    (el) => el.scrollTop,
+  );
+
+  paint();
+
+  sideEl.scrollTop = outer;
+  Array.from(sideEl.querySelectorAll<HTMLElement>('.log, .god-shelf')).forEach((el, i) => {
+    el.scrollTop = inner[i] ?? 0;
+  });
 }
 
 function render(): void {
@@ -441,7 +504,7 @@ function render(): void {
     // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
     godSig = '';
     godShelfSig = '';
-    renderPanel(sideEl, panelInput());
+    keepSideScroll(() => renderPanel(sideEl, panelInput()));
     renderCommander();
   }
 
@@ -643,6 +706,7 @@ function clearSelection(): void {
   selectedCampId = null;
   selectedTile = null;
   buildPlan = null;
+  spawnPlan = null;
   loadPlan = null;
   unloadPlan = null;
   reach = [];
@@ -678,6 +742,10 @@ function computePlaceable(): number[] {
   // 光靠点错再弹提示得试上十几次）。摆兵不点亮——整张图大半都能放，
   // 亮起来只是把棋盘糊成一片橙的。
   if (state.config.godMode === true) return godCitySpots();
+
+  // 水军选下水点：把能下水的几格点亮，点哪格就从哪格出。
+  // 放在最前面——它是个"已经上膛"的操作，别的选择都该让位。
+  if (spawnPlan) return spawnPlan.cells;
 
   // 蛋落位也复用这一层橙格：轮到我了、手里还有一枚蛋，就把可选格点亮。
   // 它比"点错了再弹提示"友好得多——玩家一眼就知道能放哪儿。
@@ -784,6 +852,7 @@ function selectCamp(u: Unit): void {
   selectedCityId = null;
   selectedTile = null;
   buildPlan = null;
+  spawnPlan = null;
   selectedCampId = u.id;
   selectedId = u.id;
   refreshSelection();
@@ -798,6 +867,7 @@ function selectCity(cityId: string): void {
   selectedCampId = null;
   selectedTile = null;
   buildPlan = null;
+  spawnPlan = null;
   loadPlan = null;
   unloadPlan = null;
   reach = [];
@@ -973,6 +1043,38 @@ function moveRefusal(coords: { x: number; y: number }): string {
   return '这一格不在移动范围内';
 }
 
+/**
+ * 只读查看：点这一格能看什么就看什么（单位 → 城市 → 地形），一个动词都不给。
+ *
+ * 用于"轮不到我"的三种场合：对方在联机里行动、AI 正在思考、自己这一手已经提交。
+ * 以前这些时候点棋盘一律弹一句提示就完事，于是一盘棋里有一半时间点不动——
+ * 而那段等待恰恰是最想点开对面那个兵、看看它射程几格、还剩多少血的时候。
+ * 动词不用在这里挡：面板拿到的 myTurn 是假，产兵/升级/技能本来就是灰的。
+ */
+function inspectAt(coords: { x: number; y: number } | null): void {
+  if (!coords) return;
+
+  const id = pickUnitId(coords, false);
+  const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
+  if (u) {
+    // 自己的军营点开是产兵面板，只读的时候也一样：
+    // "这座营还能出什么"是它身上最值得看的一条
+    if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
+    else selectUnit(u);
+    return;
+  }
+
+  const city = cityAt(state, coords.x, coords.y);
+  if (city) {
+    selectCity(city.id);
+    return;
+  }
+
+  clearSelection();
+  selectedTile = coords;
+  render();
+}
+
 function onBoardClick(e: Event): void {
   // 上帝模式的点击语义完全不同：这里点棋盘是"落子"，不是"走子"。
   // 走子那套判断（轮到我吗、这格可达吗、能不能开火）在沙盒里一条都不成立，
@@ -981,16 +1083,42 @@ function onBoardClick(e: Event): void {
     onGodClick(e);
     return;
   }
-  if (handoffOpen || state.winner || aiBusy()) return;
+  if (handoffOpen || state.winner) return;
 
   const coords = coordsFromEvent(e);
+
+  // AI 正在行动：不许下子，但"看"必须留着。
+  //
+  // 对手思考、走子、开火，这一段能持续十几秒；以前整块 return，
+  // 玩家在这段时间里点什么都没反应，只能干等。
+  if (aiBusy()) {
+    inspectAt(coords);
+    return;
+  }
+
   // 强制键：按钮上膛过一次就卸下；按住 Alt/Shift 也等价
   const mouse = e instanceof MouseEvent ? e : null;
   const wantMove = forceMode === 'move' || mouse?.altKey === true;
   const wantAttack = forceMode === 'attack' || mouse?.shiftKey === true;
   forceMode = null;
 
-  // 0) 强制移动：无视这一格上压着谁，直接按"走上去"解释。
+  // 0) 正在选下水点：点亮的格子就是答案，点别处就当取消。
+  // 排在最前面，因为它是一个"已经上膛"的操作——这时候点棋盘的意思
+  // 一定是"从这儿下水"，不该被下面任何一条选择逻辑抢走。
+  if (spawnPlan) {
+    const spot = coords ? idx(state, coords.x, coords.y) : -1;
+    if (coords && spot >= 0 && spawnPlan.cells.includes(spot)) {
+      const { cityId, campId, type } = spawnPlan;
+      spawnPlan = null;
+      dispatch({ type: 'RECRUIT', cityId, unitId: campId, unitType: type, x: coords.x, y: coords.y });
+      render();
+      return;
+    }
+    spawnPlan = null;
+    render();
+  }
+
+  // 0.5) 强制移动：无视这一格上压着谁，直接按"走上去"解释。
   //
   // 这是"走不上桥"那个问题的根治办法。桥是一枚建筑棋子，画在格子上面，
   // 点上去永远是选中桥——而玩家想做的其实是走上桥面。以前只能在
@@ -1062,27 +1190,23 @@ function onBoardClick(e: Event): void {
   // 所以保留三段只读入口（单位 / 城市 / 空地），动词一个都不给——
   // 面板那边 commander 一开，`mine` 全线失效，卡片上不会长出能按的东西。
   if (state.config.commanderMode) {
-    if (clickedUnitId) {
-      const u = state.units.find((x) => x.id === clickedUnitId);
-      if (u) {
-        if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
-        else selectUnit(u);
-        return;
-      }
-    }
-    if (!coords) return;
-    const cityHere = cityAt(state, coords.x, coords.y);
-    if (cityHere) {
-      selectCity(cityHere.id);
-      return;
-    }
-    clearSelection();
-    selectedTile = coords;
-    render();
+    inspectAt(coords);
     return;
   }
+  // 对方行动阶段（联机等对手提交）：同样只能看。
+  //
+  // 以前这里只弹一句「等对方提交这一回合」，连"我这个兵还剩多少血"都查不到。
+  // 现在走同一条只读路径；只有"手上捏着单位去点空地"这一种情况才提原因——
+  // 那说明他其实是想动兵，光给一格地形对他没帮助。
   if (!myTurn()) {
-    toast('等对方提交这一回合');
+    const hitsUnit = Boolean(pickUnitId(coords, false));
+    const hitsCity = coords ? Boolean(cityAt(state, coords.x, coords.y)) : false;
+    if (!hitsUnit && !hitsCity && selectedId) {
+      clearSelection();
+      toast('等对方提交这一回合');
+      return;
+    }
+    inspectAt(coords);
     return;
   }
 
@@ -1286,14 +1410,32 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'recruit': {
       const type = el.dataset.type;
       if (!type) return;
+      const def = state.unitTypes[type];
+      const cityId = selectedCityId ?? undefined;
+      const campId = selectedCampId ?? undefined;
+
+      // 水军：能下水的位置不止一格时，先让玩家点一格。
+      //
+      // 临水的城常常挨着好几片水，以前永远从"列表里的第一格"下水——
+      // 想让它从另一侧的河道绕过去，唯一的办法是把那格水填了再挖开。
+      if (def?.domain === 'water') {
+        const cells = recruitSpawnCells(state, cityId, campId, type);
+        if (cells.length > 1) {
+          spawnPlan = { cityId, campId, type, cells: cells.map((c) => c.y * state.w + c.x) };
+          toast(`${def.name}：点一格亮起来的水面下水（再点一次别的兵种就取消）`);
+          render();
+          return;
+        }
+      }
+
       // 军营和城市同一类操作，只是 action 里填的字段不同
-      if (selectedCampId) {
-        dispatch({ type: 'RECRUIT', unitId: selectedCampId, unitType: type });
+      if (campId) {
+        dispatch({ type: 'RECRUIT', unitId: campId, unitType: type });
         render();
         return;
       }
-      if (!selectedCityId) return;
-      dispatch({ type: 'RECRUIT', cityId: selectedCityId, unitType: type });
+      if (!cityId) return;
+      dispatch({ type: 'RECRUIT', cityId, unitType: type });
       render();
       return;
     }
@@ -2179,11 +2321,10 @@ function renderGodShelf(): void {
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;
-  // 重排会把滚动位置清零，记一下再还回去
-  const keep = sideEl.querySelector<HTMLElement>('.god-shelf')?.scrollTop ?? 0;
-  sideEl.innerHTML = godShelfHtml(godUi());
-  const shelf = sideEl.querySelector<HTMLElement>('.god-shelf');
-  if (shelf) shelf.scrollTop = keep;
+  // 换包/换兵种会整块重排：滚动位置由 keepSideScroll 一起搬过去
+  keepSideScroll(() => {
+    sideEl.innerHTML = godShelfHtml(godUi());
+  });
 }
 
 /** 摆城时能放下 2×2 的角，扔给棋盘点亮成橙格 */function godCitySpots(): number[] {
@@ -2598,17 +2739,26 @@ topbarEl.addEventListener('scroll', () => syncTopbarScroll(), { passive: true })
 /**
  * 产兵搜索框。
  *
- * 重绘会换掉整个 input 元素，所以敲字之后必须把焦点还回去，否则输入法
- * 拼音打到一半就被打断（第一个字上屏，后面全丢）——这也是为什么不能
- * 简单地在 input 上挂 debounce 再 render()：焦点一丢，中文就打不出来。
- * 这里每次 input 都同步重绘并立刻复位光标，串行跑，中间不留空档。
+ * 重绘会换掉整个 input 元素，所以敲字之后必须把焦点还回去。
+ *
+ * 但**输入法组字期间绝对不许重绘**——这是 "chuan船" 变成一串乱码的根源：
+ * 中文输入时 input 元素正身处分词状态，浏览器把这段状态挂在那个 DOM 节点上。
+ * 我们在 composition 中途把它整个换掉，浏览器只好把缓冲的按键重新投递进
+ * 新元素，于是已经上屏的 "chuan" 又被敲了一遍，最终提交出 "chuanchuan船"。
+ * 所以组字期间只记字、不重绘；`compositionend` 一到再统一重画一次。
+ *
+ * 这也意味着组字期间列表不跟着筛——反正那时候框里是拼音，筛了也没有意义。
+ * 英文/数字输入没有 composition 事件，仍然是逐字实时过滤。
  */
-appEl.addEventListener('input', (e) => {
-  const el = e.target as HTMLInputElement | null;
-  if (!el || el.dataset.act !== 'recruit-search') return;
-  recruitQuery = el.value;
+const isRecruitSearch = (el: EventTarget | null): el is HTMLInputElement =>
+  el instanceof HTMLInputElement && el.dataset.act === 'recruit-search';
 
-  renderPanel(sideEl, panelInput());
+/** 输入法正在组字（分词的临时状态挂在这个 input 节点上，不能动它） */
+let recruitComposing = false;
+
+/** 重绘侧栏并把焦点、光标还回搜索框 */
+function repaintRecruitPanel(): void {
+  keepSideScroll(() => renderPanel(sideEl, panelInput()));
 
   const again = sideEl.querySelector<HTMLInputElement>('[data-act="recruit-search"]');
   if (!again) return;
@@ -2619,6 +2769,28 @@ appEl.addEventListener('input', (e) => {
   } catch {
     // type=search 在某些内核上不支持选区，光标在末尾也无所谓
   }
+}
+
+appEl.addEventListener('compositionstart', (e) => {
+  if (isRecruitSearch(e.target)) recruitComposing = true;
+});
+
+appEl.addEventListener('compositionend', (e) => {
+  if (!isRecruitSearch(e.target)) return;
+  recruitComposing = false;
+  recruitQuery = e.target.value;
+  repaintRecruitPanel();
+});
+
+appEl.addEventListener('input', (e) => {
+  const el = e.target as HTMLInputElement | null;
+  if (!isRecruitSearch(el)) return;
+  recruitQuery = el.value;
+
+  // 组字中（包括没拿到 composition 事件、只在 input 上标了 isComposing 的内核）
+  if (recruitComposing || (e as InputEvent).isComposing === true) return;
+
+  repaintRecruitPanel();
 });
 
 // 悬停可移动格时加深高亮

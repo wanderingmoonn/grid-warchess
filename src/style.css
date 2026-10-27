@@ -524,6 +524,13 @@ body {
   background: #211e19;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
+
+/* 去过、但此刻看不见的格：按记忆里的地形画，比"眼前"暗一档、比"没去过"亮。
+   这三档必须一眼分得开，否则玩家会以为自己压根没走过这里。
+   放在 .out 之后：两条规则权重一样，靠顺序压过 brightness(0.74)。 */
+.board.blackout .tile.remembered {
+  filter: brightness(0.62) saturate(0.36);
+}
 .board.blackout .tile.unknown.reach,
 .board.blackout .tile.unknown.threat {
   background: #2c2822;
@@ -598,6 +605,19 @@ body {
   font-size: 9px;
   letter-spacing: 0.04em;
   color: #8a2b22;
+  white-space: nowrap;
+}
+
+/* 旧情报：去过但此刻看不见的城。虚线框 + 压暗，和"眼前这座"一眼分得开；
+   不画血条——上次看到的耐久早就不作数了。 */
+.city-block.stale {
+  border-style: dashed;
+  filter: brightness(0.72) saturate(0.5);
+}
+.city-stale {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: #6d6255;
   white-space: nowrap;
 }
 
@@ -1294,6 +1314,14 @@ body {
 }
 .log-item.b .who {
   color: var(--team-b);
+}
+
+/* 战损条目：对面也看得见的那种。左侧一道竖线就够了——
+   它要传达的信息只有"这条不是你一个人的情报"，不该抢走注意力 */
+.log-item.open {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 6px;
+  margin-left: -8px;
 }
 
 .log-empty {

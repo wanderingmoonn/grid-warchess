@@ -1434,8 +1434,14 @@ function splashVictims(
   return out;
 }
 
-function pushLog(s: GameState, p: PlayerId, text: string): void {
-  s.log.push({ turn: s.turn, player: p, text });
+/**
+ * 写一条战报。
+ *
+ * `open=true` 表示"对面也看得见"（战损那类：兵倒下、桥塌、城破）。
+ * 默认只给自己的主人看——造了什么、走了哪、攒了多少钱，对面没理由知道。
+ */
+function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
+  s.log.push({ turn: s.turn, player: p, text, ...(open ? { open: true } : {}) });
   if (s.log.length > 80) s.log.splice(0, s.log.length - 80);
 }
 
@@ -1450,7 +1456,7 @@ function pushLog(s: GameState, p: PlayerId, text: string): void {
 function drownCargo(s: GameState, dead: Unit): void {
   if (!dead.cargo || dead.cargo.length === 0) return;
   const names = dead.cargo.map((u) => utype(s, u.type).name).join('、');
-  pushLog(s, other(dead.owner), `随船沉没：${names}`);
+  pushLog(s, other(dead.owner), `随船沉没：${names}`, true);
 }
 
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
@@ -1490,7 +1496,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
       // 而且还得玩家花一次选位的机会去救。一半才算真的站起来。
       hpRatio: 0.5,
     };
-    pushLog(s, victim.owner, `${victimDef.name} 倒下了，留下一枚蛋——轮到你时选个地方孵化`);
+    pushLog(s, victim.owner, `${victimDef.name} 倒下了，留下一枚蛋——轮到你时选个地方孵化`, true);
   }
 
   // 分裂（史莱姆）：两只小史莱姆。有空地才分，被围死在墙角就分不出来。
@@ -1503,7 +1509,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
       s.units.push(makeUnit(s, victim.owner, kid, spot.x, spot.y));
       born += 1;
     }
-    if (born > 0) pushLog(s, victim.owner, `${victimDef.name} 分裂出 ${born} 只小史莱姆`);
+    if (born > 0) pushLog(s, victim.owner, `${victimDef.name} 分裂出 ${born} 只小史莱姆`, true);
   }
 
   const killerOwner = killer ? killer.owner : other(victim.owner);
@@ -1798,7 +1804,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 
     if (target.hp <= 0) {
       s.units = s.units.filter((u) => u.id !== target.id);
-      pushLog(s, owner, `${utype(s, target.type).name} 被击毁`);
+      pushLog(s, owner, `${utype(s, target.type).name} 被击毁`, true);
       fireKilled(s, target, b);
     }
 
@@ -1806,7 +1812,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       if (v.unit.hp > 0) continue;
       if (!s.units.some((u) => u.id === v.unit.id)) continue;
       s.units = s.units.filter((u) => u.id !== v.unit.id);
-      pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
+      pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
       fireKilled(s, v.unit, b);
     }
   }
@@ -1898,7 +1904,15 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'SIEGE':
         return doSiege(next, action.unitId, action.cityId);
       case 'RECRUIT':
-        return doRecruit(next, action.cityId, action.unitId, action.unitType);
+        return doRecruit(
+          next,
+          action.cityId,
+          action.unitId,
+          action.unitType,
+          typeof action.x === 'number' && typeof action.y === 'number'
+            ? { x: action.x, y: action.y }
+            : undefined,
+        );
       case 'BUILD':
         return doBuild(next, action.unitId, action.unitType, action.x, action.y);
       case 'LOAD':
@@ -1965,7 +1979,7 @@ function syncBridges(s: GameState): void {
   });
   if (drowned.length === 0) return;
   for (const u of drowned) {
-    pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`);
+    pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`, true);
   }
   const gone = new Set(drowned.map((u) => u.id));
   s.units = s.units.filter((u) => !gone.has(u.id));
@@ -2003,7 +2017,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     destCity.ruined = false;
     destCity.hp = Math.max(1, Math.ceil(destCity.maxHp * CITY.captureHpRatio));
     destCity.capturedTurn = s.turn;
-    pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`);
+    pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`, true);
     s.winner = checkWinner(s);
   }
 
@@ -2141,7 +2155,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
-    pushLog(s, attacker.owner, `${dfName} 被消灭`);
+    pushLog(s, attacker.owner, `${dfName} 被消灭`, true);
     drownCargo(s, defender);
     fireKilled(s, defender, attacker);
     // 收割（刺客大师）：亲手斩掉一个，本回合的移动力就还回来。
@@ -2160,13 +2174,13 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     if (v.unit.hp > 0) continue;
     if (!s.units.some((u) => u.id === v.unit.id)) continue;
     s.units = s.units.filter((u) => u.id !== v.unit.id);
-    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
+    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
     drownCargo(s, v.unit);
     fireKilled(s, v.unit, attacker);
   }
   if (attacker.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== attacker.id);
-    pushLog(s, other(attacker.owner), `${atName} 在反击中阵亡`);
+    pushLog(s, other(attacker.owner), `${atName} 在反击中阵亡`, true);
     drownCargo(s, attacker);
     fireKilled(s, attacker, undefined);
   }
@@ -2256,10 +2270,10 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
       const parts: string[] = [];
       if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
       if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
-      pushLog(s, attacker.owner, `破城，${parts.join('，')}`);
+      pushLog(s, attacker.owner, `破城，${parts.join('，')}`, true);
     }
 
-    pushLog(s, attacker.owner, `${cityName(city)} 被攻破——派兵入驻才能接管`);
+    pushLog(s, attacker.owner, `${cityName(city)} 被攻破——派兵入驻才能接管`, true);
   }
 
   s.winner = checkWinner(s);
@@ -2675,11 +2689,67 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
  * 早就扎好的旧营隔空跟着换代——一座石板搭的营寨当场能出火枪手。现在
  * 营的时代是个实体属性：想要新时代的兵，就在新地方再扎一座营。
  */
+/**
+ * 产兵点能往哪些格子出兵。
+ *
+ * 城市和军营各有一套扫描（城要看四周的水面，营要沿自家所有格子往外一圈），
+ * 而界面现在也要用这份结果——"临水的城挨着好几片水域时自己选从哪下水"
+ * 得先把可选的格子点亮。所以判据只留这一份，规则和界面都从这里取。
+ */
+export function recruitSpawnCells(
+  s: GameState,
+  cityId: string | undefined,
+  campId: string | undefined,
+  unitTypeId: string,
+): Array<{ x: number; y: number }> {
+  const def = s.unitTypes[unitTypeId];
+  if (!def) return [];
+
+  if (campId) {
+    const camp = unitById(s, campId);
+    if (!camp) return [];
+    // 兵从营地外围出来。占 2×2 的军营门口有十来格，逐个四邻去掉自家的格子，
+    // 拿"锚点四邻"算的话，右半边永远出不了一个人。
+    const self = new Set(tilesOfUnit(s, camp).map((p) => p.y * s.w + p.x));
+    const seen = new Set<number>();
+    const out: Array<{ x: number; y: number }> = [];
+    for (const cell of tilesOfUnit(s, camp)) {
+      for (const [dx, dy] of DIRS) {
+        const x = cell.x + dx;
+        const y = cell.y + dy;
+        const k = y * s.w + x;
+        if (self.has(k) || seen.has(k)) continue;
+        const t = tileAt(s, x, y);
+        if (!t) continue;
+        if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
+        if (!canStandAt(s, x, y, unitTypeId)) continue;
+        seen.add(k);
+        out.push({ x, y });
+      }
+    }
+    return out;
+  }
+
+  const city = cityId ? cityById(s, cityId) : undefined;
+  if (!city) return [];
+  if (def.domain === 'water') {
+    // 水军要下到城边那一格空水面上去
+    return cityTiles(city)
+      .flatMap((t) => DIRS.map(([dx, dy]) => ({ x: t.x + dx, y: t.y + dy })))
+      .filter((p) => {
+        const nb = tileAt(s, p.x, p.y);
+        return nb?.terrain === 'water' && !unitAt(s, p.x, p.y);
+      });
+  }
+  return cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));
+}
+
 function doRecruit(
   s: GameState,
   cityId: string | undefined,
   campId: string | undefined,
   unitTypeId: string,
+  at?: { x: number; y: number },
 ): ActionResult {
   const def = s.unitTypes[unitTypeId];
   if (!def) return { ok: false, reason: '本局没有这个兵种' };
@@ -2712,24 +2782,7 @@ function doRecruit(
     era = camp.era ?? supplyEraAt(s, camp.owner, camp);
     label = campDef.name;
 
-    // 兵从营地外围出来。占 2×2 的军营门口有十来格，逐个四邻去掉自家的格子，
-    // 拿"锚点四邻"算的话，右半边永远出不了一个人。
-    const self = new Set(tilesOfUnit(s, camp).map((p) => p.y * s.w + p.x));
-    const seen = new Set<number>();
-    for (const cell of tilesOfUnit(s, camp)) {
-      for (const [dx, dy] of DIRS) {
-        const x = cell.x + dx;
-        const y = cell.y + dy;
-        const k = y * s.w + x;
-        if (self.has(k) || seen.has(k)) continue;
-        const t = tileAt(s, x, y);
-        if (!t) continue;
-        if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
-        if (!canStandAt(s, x, y, unitTypeId)) continue;
-        seen.add(k);
-        slots.push({ x, y });
-      }
-    }
+    slots = recruitSpawnCells(s, undefined, campId, unitTypeId);
   } else {
     const city = cityId ? cityById(s, cityId) : undefined;
     if (!city) return { ok: false, reason: '城市不存在' };
@@ -2743,17 +2796,10 @@ function doRecruit(
       return { ok: false, reason: `${label}刚被打下来，本回合还没恢复生产` };
     }
 
-    if (def.domain === 'water') {
-      // 水军要下到城边那一格空水面上去
-      slots = cityTiles(city)
-        .flatMap((t) => DIRS.map(([dx, dy]) => ({ x: t.x + dx, y: t.y + dy })))
-        .filter((p) => {
-          const nb = tileAt(s, p.x, p.y);
-          return nb?.terrain === 'water' && !unitAt(s, p.x, p.y);
-        });
-      if (slots.length === 0) return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
-    } else {
-      slots = cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));
+    slots = recruitSpawnCells(s, cityId, undefined, unitTypeId);
+    // 水军没有下水的位置时要说清原因：城不临水，还是水面已经站满了船
+    if (def.domain === 'water' && slots.length === 0) {
+      return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
     }
   }
 
@@ -2790,7 +2836,17 @@ function doRecruit(
   }
   // 编制上限只在 AI 那边生效（见 ai.ts 的产兵判断），规则层不拦人。
   // 钱、格子、每回合的行动次数本身就是更硬的约束。
-  const slot = slots[0];
+  //
+  // 玩家指定了出水位置就用它：临水的城常挨着好几片水，不指定的话
+  // 永远从列表第一格下水，想让它从另一侧绕过去也做不到。
+  let slot = slots[0];
+  if (typeof at?.x === 'number' && typeof at?.y === 'number') {
+    const want = slots.find((p) => p.x === at.x && p.y === at.y);
+    if (!want) {
+      return { ok: false, reason: '这一格没法让新兵下水（水面已被占，或者不在产兵点旁边）' };
+    }
+    slot = want;
+  }
   if (!slot) {
     return {
       ok: false,
@@ -3141,7 +3197,7 @@ function autoPlaceEgg(s: GameState): void {
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
   s.winner = other(me);
-  pushLog(s, me, `${s.players[me].name} 认输`);
+  pushLog(s, me, `${s.players[me].name} 认输`, true);
   return { ok: true, state: s };
 }
 
@@ -3157,7 +3213,7 @@ function sweepDead(s: GameState): void {
     if (u.hp > 0) continue;
     if (!s.units.some((x) => x.id === u.id)) continue;
     s.units = s.units.filter((x) => x.id !== u.id);
-    pushLog(s, other(u.owner), `${utype(s, u.type).name} 倒下了`);
+    pushLog(s, other(u.owner), `${utype(s, u.type).name} 倒下了`, true);
     drownCargo(s, u);
     fireKilled(s, u, undefined);
   }
@@ -3475,6 +3531,10 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
 export function refreshMemory(s: GameState): void {
   if (!s.fog) return;
 
+  // 只有「浓雾蔽野」需要地形与城市的记忆：它把地图也遮了，
+  // 走过的地方必须留下个样子，否则第二次经过等于第一次来。
+  const keepMap = s.config.expansionIds.includes('blackout');
+
   for (const p of ['A', 'B'] as PlayerId[]) {
     const vis = visibleTilesOf(s, p);
     const mem = s.memory[p];
@@ -3503,6 +3563,26 @@ export function refreshMemory(s: GameState): void {
       if (aliveIds.has(k.id)) return true;
       return !vis.has(idx(s, k.x, k.y));
     });
+
+    if (!keepMap) continue;
+
+    // 地形按"此刻亲眼看得到的"刷新。以前看过、现在看不见的格不会被抹掉——
+    // 那正是这份记忆存在的意义。
+    mem.tiles ??= {};
+    for (const i of vis) {
+      const tile = s.tiles[i];
+      if (tile) mem.tiles[i] = tile.terrain;
+    }
+
+    mem.cities ??= [];
+    for (const city of s.cities) {
+      // 沾到城的任意一格就算见过：城格是实心的，视野一定先落在它身上
+      if (!cityTiles(city).some((t) => vis.has(idx(s, t.x, t.y)))) continue;
+      const snap = { owner: city.owner, era: city.era, ruined: city.ruined === true, seenAt: s.turn };
+      const known = mem.cities.find((c) => c.id === city.id);
+      if (known) Object.assign(known, snap);
+      else mem.cities.push({ id: city.id, ...snap });
+    }
   }
 }
 

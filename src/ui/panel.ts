@@ -32,6 +32,7 @@ import {
   effectiveStats,
   heroSkillsOf,
   recruitResCost,
+  recruitSpawnCells,
   unitIncome,
   unitsOf,
   upgradeCostOf,
@@ -75,6 +76,21 @@ export interface PanelInput {
    * 和搜索框是"与"的关系：搜 "弓" + 只看「奇想·骑士」，就是那个包里名字带弓的。
    */
   recruitPack?: string;
+  /**
+   * 战报用谁的眼睛看：给一个 PlayerId 就只看这一方（+ 公开的战损），
+   * 给 null 就是全都看得见。不传按"全都看得见"处理。
+   *
+   * 为什么要和 `me` 分开：热座是一台机器两个人轮流玩，
+   * 谁都没有理由被蒙在鼓里，那时候 me 仍然是某一方，但战报该全给。
+   */
+  logSide?: PlayerId | null;
+  /**
+   * 正在给水军选下水点：给的是"正在等位置的那个兵种"。
+   *
+   * 临水的城挨着好几片水时，光按产兵按钮不知道该从哪片下水，所以先上膛、
+   * 把可选格点亮，玩家点哪格就从哪格出。这个字段只用来写提示语。
+   */
+  spawnPick?: { type: string } | null;
   /**
    * 观战位：两边都不归我。
    *
@@ -579,7 +595,15 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     } else if (def.income) {
       extra = ` · +${def.income} 金`;
     }
-    if (def.domain === 'water') extra += hasPort ? ' · 水上' : ' · 需要临水';
+    if (def.domain === 'water') {
+      if (!hasPort) extra += ' · 需要临水';
+      else {
+        // 能下水的水面不止一格时明说"可选"：不说的话，玩家按下去只看到
+        // 船凭空出现在某一格上，永远不知道原来可以挑。
+        const cells = recruitSpawnCells(s, city.id, undefined, def.id).length;
+        extra += cells > 1 ? ` · ${cells} 处水面可选` : ' · 水上';
+      }
+    }
 
     return recruitButton(s, me, def, disabled, extra);
   };
@@ -637,6 +661,13 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
            ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
+           ${
+             input.spawnPick
+               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+                   s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
+                 }」放下去。点别处就取消。</div>`
+               : ''
+           }
            <div class="hint" style="margin-top:10px">
              ${
                freeSlots > 0
@@ -851,7 +882,12 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         <div class="recruit-list">${items
           .map((d) => {
             const slotsOk = d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
-            const extra = d.domain === 'water' ? ' · 下水' : '';
+            const extra =
+              d.domain === 'water'
+                ? waterSlots.length > 1
+                  ? ` · ${waterSlots.length} 处水面可选`
+                  : ' · 下水'
+                : '';
             return recruitButton(s, me, d, !myTurn || !slotsOk, extra);
           })
           .join('')}</div>
@@ -892,6 +928,13 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
+           ${
+             input.spawnPick
+               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+                   s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
+                 }」放下去。点别处就取消。</div>`
+               : ''
+           }
            <div class="hint" style="margin-top:10px">
              兵从营门四邻的空地出来（当前 ${landSlots.length} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
@@ -909,18 +952,33 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   `;
 }
 
+/**
+ * 战报。
+ *
+ * `logSide` 决定"用谁的眼睛看"：
+ *   · 一个 PlayerId —— 只看这一方自己的条目，加上棋盘上看得见的战损
+ *     （`open` 标记：兵倒下、桥塌、城破）。对面造了什么、走了哪、攒了多少钱，
+ *     对己方来说就是免费视野，没理由给——这也是迷雾做了却不做战报过滤时
+ *     最容易漏的一个后门。
+ *   · null —— 全都看得见：观战位、双 AI 观战、以及一台机器两个人轮流的热座。
+ */
 function renderLog(input: PanelInput): string {
   const { view, me } = input;
-  const entries = view.state.log;
+  const scope = input.logSide === undefined ? null : input.logSide;
+  const entries = scope ? view.state.log.filter((e) => e.player === scope || e.open === true) : view.state.log;
   if (entries.length === 0) {
-    return '<div class="log-empty">还没有战报。走第一步吧。</div>';
+    return scope
+      ? '<div class="log-empty">还没有己方战报。你做的事和场上的战损会记在这里。</div>'
+      : '<div class="log-empty">还没有战报。走第一步吧。</div>';
   }
   const recent = entries.slice(-14).reverse();
   return `<div class="log">${recent
     .map((e) => {
       const side = e.player === 'A' ? 'a' : 'b';
       const label = e.player === me ? '你' : view.state.players[e.player].name;
-      return `<div class="log-item ${side}"><span class="who">${label}</span>${escapeHtml(e.text)}</div>`;
+      // 战损那条挂个"公开"的小标：读的人得知道"这条对面也看得见"
+      const open = e.open === true && scope !== null;
+      return `<div class="log-item ${side}${open ? ' open' : ''}"><span class="who">${label}</span>${escapeHtml(e.text)}</div>`;
     })
     .join('')}</div>`;
 }
