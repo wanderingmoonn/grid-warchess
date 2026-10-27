@@ -2411,5 +2411,89 @@ check('没开「季节与气候」时，界面一点天气都不出现', () => {
   assert.equal(chip?.hidden, true, '季节块也该藏起来');
 });
 
+console.log('\n对局数据上传');
+
+check('结算卡：对局数据默认不上传，勾上才给传', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261028, {});
+  st.winner = 'A';
+  st.players.A.name = '阿甲';
+  st.players.B.name = '阿乙';
+
+  const w = bootWith(st);
+  const d = w.document;
+  const card = d.querySelector('.report-card');
+  assert.ok(card, '打完了就该出现「这局的数据要不要捐出来」');
+  assert.ok(card!.textContent?.includes('要不要捐出来'), '标题要说人话，不要写成"遥测"');
+
+  const box = card!.querySelector('input[data-act="report-opt"]') as HTMLInputElement | null;
+  assert.ok(box, '该有一个"允许上传"的勾选框');
+  assert.equal(box!.checked, false, '默认必须是关的——这件事不能替玩家决定');
+
+  const upload = card!.querySelector('[data-act="report-upload"]') as HTMLButtonElement | null;
+  assert.ok(upload, '该有一个上传按钮');
+  assert.equal(upload!.disabled, true, '没勾之前上传按钮是灰的');
+
+  const html = card!.innerHTML;
+  assert.ok(html.includes('不含玩家名'), '要先把"不交什么"写在脸上');
+  assert.ok(!html.includes('阿甲') && !html.includes('阿乙'), '上传卡里不能出现玩家名');
+  assert.ok(html.includes('次行动'), '要写清这局打了多久，玩家才知道自己在捐什么');
+  assert.ok(card!.querySelector('[data-act="report-copy"]'), '复制报告必须一直可用：传不上去也不能白打');
+  assert.ok(card!.querySelector('[data-act="report-download"]'), '下载也一样');
+
+  // 勾上：这个意愿要记住，按钮跟着活
+  box!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(w.localStorage.getItem('warchess.report.optin'), '1', '勾选状态应该存到本机，别每局都问一遍');
+  const after = d.querySelector('[data-act="report-upload"]') as HTMLButtonElement | null;
+  assert.equal(after?.disabled, false, '勾了就该能点上传');
+});
+
+check('结算卡：上传失败要说清是哪一步不对，并给下一步', () => {
+  const host = doc.createElement('div');
+  host.className = 'side';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4711);
+  st.winner = 'B';
+  st.players.A.name = '阿甲';
+
+  const base = {
+    view: playerView(st, 'A'),
+    me: 'A' as const,
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  };
+
+  try {
+    renderPanel(host, {
+      ...base,
+      report: {
+        optedIn: true,
+        status: 'failed',
+        note: '收集端还没开通（云数据库里没有 warchess_reports 这张表）',
+        howTo: '在云数据库里执行一次 sql/warchess_reports.sql 就能开始收',
+      },
+    });
+    const why = host.querySelector('.report-status.failed');
+    assert.ok(why, '失败要落到界面上，不能只在控制台里');
+    assert.ok(why!.textContent?.includes('收集端还没开通'), `失败原因要原样说出来：${why!.textContent}`);
+    const how = host.querySelector('.report-howto');
+    assert.ok(how, '还得告诉玩家下一步做什么');
+    assert.ok(how!.textContent?.includes('warchess_reports.sql'), '下一步要具体到文件');
+
+    // 成功之后按钮变"已上传"，不能让人反复点
+    renderPanel(host, { ...base, report: { optedIn: true, status: 'done' } });
+    const done = host.querySelector('[data-act="report-upload"]') as HTMLButtonElement | null;
+    assert.equal(done?.disabled, true, '传完了就别再让点');
+    assert.ok(host.querySelector('.report-status.done'), '成功也要有一句回话');
+
+    // 没打完就没有这一块
+    renderPanel(host, base);
+    assert.equal(host.querySelector('.report-card'), null, '对局还没打完不该冒出上传卡');
+  } finally {
+    host.remove();
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

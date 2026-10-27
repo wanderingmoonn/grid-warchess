@@ -60,13 +60,23 @@ const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 let client: ReturnType<typeof createWorkBuddyCloud> | null = null;
 
-function db() {
+/**
+ * 云数据库句柄（联机房间和「对局报告」共用）。
+ *
+ * 一个客户端就够：凭据本来就是同一个应用的，多建一个只会多一份会话状态，
+ * 真出问题时还更难判断是哪一份在过期。
+ */
+export function cloudDatabase(): ReturnType<typeof createWorkBuddyCloud>['database'] {
   client ??= createWorkBuddyCloud({
     endpoint: CLOUD_CONFIG.endpoint,
     oauthRelayBaseUrl: CLOUD_CONFIG.oauthRelayBaseUrl,
     publishableKey: CLOUD_CONFIG.publishableKey,
   });
   return client.database;
+}
+
+function db() {
+  return cloudDatabase();
 }
 
 /**

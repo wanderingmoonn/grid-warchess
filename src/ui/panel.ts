@@ -17,6 +17,7 @@ import {
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf } from '../core/expansions.ts';
 import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
+import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
@@ -107,6 +108,23 @@ export interface PanelInput {
    * 观战是"两边都不归我"，指挥官是"归我，但这一手不亲自下"。
    */
   commander?: boolean;
+  /**
+   * 结算卡上的「对局数据」区块。只有一局打完才传，别的时候是 undefined。
+   *
+   * 默认关：上传对局数据这件事必须玩家自己勾、自己点，
+   * 而且点之前得先看见"要交出去的是哪些东西"。
+   */
+  report?: PanelReport;
+}
+
+export interface PanelReport {
+  /** 「允许上传对局数据」这个开关本身，存在本机、跨对局保留 */
+  optedIn: boolean;
+  status: 'idle' | 'sending' | 'done' | 'failed';
+  /** 上传结果的具体结论，原样显示——不要只说"出错了" */
+  note?: string;
+  /** 失败之后玩家还能做什么 */
+  howTo?: string;
 }
 
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
@@ -189,6 +207,8 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
 
     ${eggBanner}
 
+    ${renderReport(s, input.report)}
+
     <div class="card">${detail}</div>
 
     <div class="card">
@@ -214,6 +234,76 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
       </div>
     </div>
   `;
+}
+
+/**
+ * 结算卡上的「这局的数据要不要捐出来」。
+ *
+ * 三件事必须同时成立，玩家才可能真的愿意点：
+ *   1) 默认是关的，勾选只代表"允许"，点上传才真的发；
+ *   2) 发之前把要发什么摊开写清楚——种子、回合数、双方阵容，一条条列；
+ *   3) 失败的时候说清楚是哪一步不对（没开通 / 凭据过期 / 网络不通），
+ *      并且报告始终能复制、能下载，不会因为传不上去就白打一局。
+ *
+ * 沙盒和观战位不出现这个区块（数据没意义 / 不是你的对局），由调用方挡掉。
+ */
+function renderReport(s: GameState, info: PanelInput['report']): string {
+  if (!info) return '';
+  const rep = buildMatchReport(s);
+  const winnerText = rep.winner ? `${rep.winner} 方胜` : '还没有胜者';
+  const roster = (x: ReportSide): string => {
+    const list = Object.entries(x.roster)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([id, n]) => `${s.unitTypes[id]?.name ?? id}×${n}`);
+    return list.length > 0 ? list.join('、') : '没有兵了';
+  };
+
+  const busy = info.status === 'sending';
+  const canSend = info.optedIn && !busy && info.status !== 'done';
+  const status =
+    info.status === 'sending'
+      ? '<div class="hint report-status">正在上传…</div>'
+      : info.status === 'done'
+        ? `<div class="hint report-status done">${escapeHtml(
+            info.note ?? '已上传，谢谢。这批数据会用来调 AI 和兵种数值。',
+          )}</div>`
+        : info.status === 'failed'
+          ? `<div class="hint report-status failed">${escapeHtml(info.note ?? '没传上去')}</div>${
+              info.howTo ? `<div class="hint report-howto">${escapeHtml(info.howTo)}</div>` : ''
+            }`
+          : '';
+
+  return `<div class="card report-card">
+    <div class="card-title">这局的数据要不要捐出来</div>
+    <div class="hint">
+      打完的局能帮上忙：哪个兵种偏贵、哪套扩展一开就一边倒，光靠自己打的几十局是看不出来的。
+      勾上只是"允许"，点下面的按钮才真的发出去。
+    </div>
+    <ul class="report-list">
+      <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.turns} 次行动 · ${winnerText}</li>
+      <li>${rep.expansions.length > 0 ? `扩展 ${rep.expansions.length} 个` : '没有开扩展'} · 兵种表 ${rep.packSize} 个${
+        rep.ai.opponent || rep.ai.ally ? ` · AI ${rep.ai.level === 'basic' ? '初级' : '高级'}` : ''
+      }</li>
+      <li>${rep.sides
+        .map((x) => `${x.side} 方 ${x.cities} 城 / ${x.units} 兵 / 最高时代 ${x.eras[0] ?? '-'}`)
+        .join('　')}</li>
+      <li>阵容：${rep.sides.map((x) => `${x.side} 方 ${roster(x)}`).join('；')}</li>
+    </ul>
+    <div class="hint report-privacy">不含玩家名、房间码、每一步的操作记录，也不含任何能定位到你的东西。</div>
+    <label class="report-opt">
+      <input type="checkbox" data-act="report-opt" ${info.optedIn ? 'checked' : ''} />
+      <span>允许上传对局数据（存在本机，随时可以取消）</span>
+    </label>
+    <div class="report-actions">
+      <button class="btn btn-sm btn-primary" data-act="report-upload" ${canSend ? '' : 'disabled'}>${
+        info.status === 'done' ? '已上传' : '匿名上传这局'
+      }</button>
+      <button class="btn btn-sm" data-act="report-copy">复制报告</button>
+      <button class="btn btn-sm" data-act="report-download">下载 .json</button>
+    </div>
+    ${status}
+  </div>`;
 }
 
 /**

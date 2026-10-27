@@ -53,7 +53,9 @@ import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from '.
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
-import type { PanelInput } from './ui/panel.ts';
+import type { PanelInput, PanelReport } from './ui/panel.ts';
+import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
+import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
@@ -179,6 +181,62 @@ let recruitQuery = '';
  * JS 侧持有。搜索是"找已知的名字"，这个开关是"先圈定范围再找"，两件事。
  */
 let recruitPack = '';
+
+/**
+ * 「允许上传对局数据」这个开关本身。
+ *
+ * 默认关，存在本机：这是一次性的意愿，不该每打完一局都拿弹窗问一遍。
+ * 但它只代表"允许"——真正的发送仍然要在结算卡上点一次按钮。
+ */
+const REPORT_OPT_KEY = 'warchess.report.optin';
+function loadReportOptIn(): boolean {
+  try {
+    return localStorage.getItem(REPORT_OPT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+let reportOptIn = loadReportOptIn();
+/**
+ * 结算卡上那次上传走到哪一步。
+ *
+ * 只活在这次会话里：刷新页面就回到 idle，反正报告随时能重新生成。
+ * 也刻意不做"失败自动重试"——传不上去就明说，别在后台偷偷再发一遍。
+ */
+let reportSend: { status: 'idle' | 'sending' | 'done' | 'failed'; note?: string; howTo?: string } = {
+  status: 'idle',
+};
+/** 上一份已结算对局的指纹：换了新的一局，上传状态就清回 idle */
+let reportSig = '';
+
+/**
+ * 已经传过的那几局的指纹。
+ *
+ * 为什么要记：一局打完的存档会留在本机，刷新页面还能再看见结算卡——
+ * 不记的话同一局能被传三遍，数据里就多出三个"一模一样的人"，
+ * 统计出来的胜率立刻歪掉。留 20 个够用，也只占几十字节。
+ */
+const REPORT_SENT_KEY = 'warchess.report.sent';
+function loadSentReports(): string[] {
+  try {
+    const raw = localStorage.getItem(REPORT_SENT_KEY);
+    const list: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+let reportSentSigs = loadSentReports();
+
+function markReportSent(sig: string): void {
+  reportSentSigs = [sig, ...reportSentSigs.filter((x) => x !== sig)].slice(0, 20);
+  try {
+    localStorage.setItem(REPORT_SENT_KEY, JSON.stringify(reportSentSigs));
+  } catch {
+    // 存不进去顶多下次再传一遍，不影响这一局
+  }
+}
+
 let reach: number[] = [];
 let targets: string[] = [];
 let siege: string[] = [];
@@ -445,7 +503,35 @@ function panelInput(): PanelInput {
     // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
     commander: state.config.commanderMode === true,
     forceMode,
+    report: reportPanel(),
   };
+}
+
+/**
+ * 结算卡上的上传区块：一局打完才给。
+ *
+ * 三种情况不给：
+ *   · 沙盒——那盘棋是摆出来试兵的（十个坦克打一个农民），交上去只会把数据搅浑；
+ *   · 房间观战位——那不是你的对局，你也没法替两个当事人点头；
+ *   · 还在打——没有结局的报告没有用。
+ *
+ * 双 AI 观战**给**：那正是最该被收集的一类数据（AI 自己打出来的平衡问题，
+ * 人打十局也未必撞得上）。
+ *
+ * 顺手在这里做"换局就清状态"：render 每帧都会走到，不用在十几个
+ * "开新局 / 读存档 / 联机同步"的地方各写一遍重置。
+ */
+function reportPanel(): PanelReport | undefined {
+  if (!state.winner || state.config.godMode === true || watching()) return undefined;
+  const sig = reportSignature(buildMatchReport(state));
+  if (sig !== reportSig) {
+    reportSig = sig;
+    // 这一局之前传过（刷新页面又看见结算卡），就别再让点一遍
+    reportSend = reportSentSigs.includes(sig)
+      ? { status: 'done', note: '这局已经上传过了，不用再传一遍' }
+      : { status: 'idle' };
+  }
+  return { optedIn: reportOptIn, ...reportSend };
 }
 
 /**
@@ -1334,6 +1420,58 @@ function onBoardClick(e: Event): void {
   render();
 }
 
+/** 结算卡上要显示的和要发出去的必须是同一份：都从当前 state 现算 */
+function finishedReport() {
+  return buildMatchReport(state);
+}
+
+async function sendMatchReport(): Promise<void> {
+  if (!state.winner || reportSend.status === 'sending') return;
+  if (!reportOptIn) {
+    toast('先勾上「允许上传对局数据」');
+    return;
+  }
+  reportSend = { status: 'sending' };
+  render();
+
+  const sent = finishedReport();
+  const r = await uploadReport(sent);
+  if (r.ok) markReportSent(reportSignature(sent));
+  reportSend = r.ok ? { status: 'done' } : { status: 'failed', note: r.reason, howTo: r.howTo };
+  render();
+  toast(r.ok ? '这一局的数据已上传，谢谢' : '没传上去，报告还在，可以复制或下载');
+}
+
+/**
+ * 复制到剪贴板。
+ *
+ * 有些环境没有 clipboard API（http 页面、部分旧浏览器），这时退成下载文件，
+ * 而不是留一个点了没反应的按钮。
+ */
+async function copyMatchReport(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(reportJson(finishedReport()));
+    reportSend = { ...reportSend, note: '报告已复制到剪贴板，粘到哪都行' };
+    render();
+    toast('报告已复制');
+  } catch {
+    downloadMatchReport();
+    toast('这个环境不让写剪贴板，改成下载文件');
+  }
+}
+
+function downloadMatchReport(): void {
+  const rep = finishedReport();
+  const blob = new Blob([reportJson(rep)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = reportFileName(rep);
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`已导出 ${a.download}`);
+}
+
 function handleAction(act: string, el: HTMLElement): void {
   switch (act) {
     case 'end-turn':
@@ -1666,6 +1804,30 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     // 按扩展包筛产兵列表：再点一次当前那一档＝回到全部
+    case 'report-opt': {
+      // 勾选框的 checked 在这时候已经翻好了，照它存就行
+      reportOptIn = el instanceof HTMLInputElement ? el.checked : !reportOptIn;
+      try {
+        localStorage.setItem(REPORT_OPT_KEY, reportOptIn ? '1' : '0');
+      } catch {
+        // 隐私模式下写不进去，本次会话内仍然生效
+      }
+      render();
+      return;
+    }
+
+    case 'report-upload':
+      void sendMatchReport();
+      return;
+
+    case 'report-copy':
+      void copyMatchReport();
+      return;
+
+    case 'report-download':
+      downloadMatchReport();
+      return;
+
     case 'recruit-pack': {
       const p = el.dataset.pack ?? '';
       recruitPack = recruitPack === p ? '' : p;

@@ -107,6 +107,7 @@ import {
   visibleTilesOf,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
+import { REPORT_VERSION, buildMatchReport, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import type {
   Action,
@@ -7161,6 +7162,62 @@ test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = r.state.units.find((x) => x.id === unit.id);
   assert.ok(!after || after.hp < hpBefore, '雷暴应该让这个单位掉血');
+});
+
+console.log('\n对局报告');
+
+test('对局报告：只留棋局，不留人', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  s.players.A.name = '张三';
+  s.players.B.name = '李四';
+  const at = new Date('2026-01-02T03:04:05.000Z');
+  const rep = buildMatchReport(s, at);
+  const json = reportJson(rep);
+
+  for (const secret of ['张三', '李四']) {
+    assert.equal(json.includes(secret), false, `报告里不该出现玩家名「${secret}」`);
+  }
+
+  assert.equal(rep.v, REPORT_VERSION);
+  assert.equal(rep.seed, s.seed);
+  assert.equal(rep.board.w, s.w);
+  assert.equal(rep.turns, s.turn);
+  assert.equal(rep.sides.length, 2, '两边各一份，缺一边就没法比');
+
+  // 地形分布加起来必须等于格子总数：这张表是"地图生成有没有偏科"的唯一依据
+  const total = Object.values(rep.board.terrain).reduce((a, b) => a + b, 0);
+  assert.equal(total, s.w * s.h, '地形分布加起来应该等于格子总数');
+
+  // 阵容加起来等于实际兵力，建筑不算在内（建筑不进 roster，单独数）
+  for (const side of rep.sides) {
+    const alive = s.units.filter(
+      (u) => u.owner === side.side && s.unitTypes[u.type]?.category !== 'building',
+    );
+    const counted = Object.values(side.roster).reduce((a, b) => a + b, 0);
+    assert.equal(counted, alive.length, `${side.side} 方的阵容数对不上`);
+    assert.equal(side.units, alive.length, `${side.side} 方的兵力数对不上`);
+  }
+
+  // 同一局、同一时刻生成两次必须一模一样：不然"这局是不是传过了"都没法判断
+  assert.equal(reportJson(buildMatchReport(s, at)), json);
+});
+
+test('对局报告：胜负写实，文件名给谁都打得开', () => {
+  const s = fresh();
+  const at = new Date('2026-01-02T03:04:05.000Z');
+  assert.equal(buildMatchReport(s, at).winner, null, '还没打完就没有胜者');
+
+  s.winner = 'B';
+  const rep = buildMatchReport(s, at);
+  assert.equal(rep.winner, 'B');
+
+  const name = reportFileName(rep);
+  assert.ok(/^[\w.-]+\.json$/.test(name), `文件名只能是安全字符：${name}`);
+  assert.ok(name.endsWith('-b.json'), `文件名里要看得出是谁赢的：${name}`);
+  assert.equal(name.includes(':'), false, '文件名里不能有冒号（Windows 不允许）');
+
+  // 未分胜负也要有个名字，而不是空一段
+  assert.ok(reportFileName(buildMatchReport(s, at)).length > 0);
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

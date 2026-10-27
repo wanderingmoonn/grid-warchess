@@ -2641,3 +2641,57 @@ a.btn {
   background: #e6e3ec;
   color: #463a5c;
 }
+
+/* ---------- 结算卡：对局数据上传 ---------- */
+/* 这一块的分寸：让它看起来像一张"要不要帮忙"的邀请，而不是一个要你填的表格。
+   所以不上重色，勾选框和三个按钮排一行，失败时的说明才用红。 */
+.report-card {
+  border-color: rgba(112, 148, 112, 0.45);
+  background: rgba(247, 250, 245, 0.72);
+}
+
+.report-list {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #4a463d;
+}
+
+.report-privacy {
+  color: #416b46;
+}
+
+.report-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #3d3a33;
+  cursor: pointer;
+}
+
+.report-opt input {
+  flex: none;
+  margin-top: 2px;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.report-status.done {
+  color: #2f6b3a;
+}
+
+.report-status.failed {
+  color: #98312a;
+}
+
+.report-howto {
+  color: #6b5c33;
+}
