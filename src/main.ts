@@ -25,6 +25,7 @@ import {
   eggSpots,
   idx,
   incomeOf,
+  isAirborne,
   ordersOf,
   reachableTiles,
   recruitCost,
@@ -32,6 +33,7 @@ import {
   siegeTargets,
   threatTiles,
   unitIncomeAt,
+  unitsAt,
   unitsOf,
   upgradeCostOf,
   utype,
@@ -41,7 +43,7 @@ import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
-import { coordsFromEvent, renderBoard, unitIdFromEvent } from './ui/board.ts';
+import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import { renderPanel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput } from './ui/panel.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
@@ -171,6 +173,22 @@ let loadPlan: string | null = null;
 /** 非空时表示这条船正在找地方下船（值是船的 id） */
 let unloadPlan: string | null = null;
 let handoffOpen = false;
+/**
+ * 已经"上膛"的强制操作：下一次点棋盘按强制移动 / 强制攻击解释，然后自动卸下。
+ *
+ * 和按住 Alt/Shift 等价，只是给触屏和鼠标党一条路。上膛只生效一次——
+ * 让它常驻的话，之后每次点击都得先想"我现在是不是还在强制模式里"，
+ * 那才是最容易误操作的设计。
+ */
+let forceMode: 'move' | 'attack' | null = null;
+/**
+ * 同一格上压着好几个东西时的轮换位置。
+ *
+ * 为什么需要它：兵站在自己的塔上、飞行单位停在敌人头顶，点这一格
+ * 永远只会命中 DOM 最上面那一个，下面那个就再也选不中——而"选中它"
+ * 是拆塔、驻军、看属性的前提。连点同一格 = 往下翻一层。
+ */
+let pickState: { key: number; ids: string[]; index: number } | null = null;
 
 /** AI 每一步之间的停顿，三档：慢、快、极快（0 = 不等，但仍然让出主线程） */
 const AI_SPEED_MS = [180, 70, 0];
@@ -370,6 +388,7 @@ function panelInput(): PanelInput {
     spectator: watching(),
     // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
     commander: state.config.commanderMode === true,
+    forceMode,
   };
 }
 
@@ -599,6 +618,8 @@ function refreshSelection(): void {
 
 function clearSelection(): void {
   recruitQuery = '';
+  forceMode = null;
+  pickState = null;
   selectedId = null;
   selectedCityId = null;
   selectedCampId = null;
@@ -863,6 +884,77 @@ function undoLast(): void {
   render();
 }
 
+/**
+ * 这一格上压着哪些单位，按"最上面那个先"排。
+ *
+ * 排序必须和渲染层的绘制顺序一致（见 board.ts：建筑 → 地面 → 空中）：
+ * 玩家眼睛看到谁在上面，第一次点就该选中谁，第二次点往下翻。
+ */
+function stackAt(x: number, y: number): Unit[] {
+  const view = viewNow().state;
+  const list = unitsAt(view, x, y).slice();
+  const rank = (u: Unit) => {
+    if (utype(view, u.type).category === 'building') return 2;
+    return isAirborne(view, u) ? 0 : 1;
+  };
+  list.sort((a, b) => rank(a) - rank(b));
+  return list;
+}
+
+/**
+ * 点这一格到底选中谁：同格连点就是往下翻一层。
+ *
+ * preferTarget=true（强制攻击）时，优先挑这一格上"我能打的那个"——
+ * 飞行单位停在敌人头顶时，玩家按 Shift 点的意思一定是打脚下那个，
+ * 不是选中自己的兵。
+ */
+function pickUnitId(coords: { x: number; y: number } | null, preferTarget: boolean): string | null {
+  if (!coords) {
+    pickState = null;
+    return null;
+  }
+  const list = stackAt(coords.x, coords.y);
+  if (list.length === 0) {
+    pickState = null;
+    return null;
+  }
+  const key = coords.y * state.w + coords.x;
+  const ids = list.map((u) => u.id);
+
+  if (preferTarget) {
+    const hit = list.find((u) => targets.includes(u.id));
+    if (hit) {
+      pickState = { key, ids, index: list.indexOf(hit) };
+      return hit.id;
+    }
+  }
+
+  if (!pickState || pickState.key !== key) {
+    pickState = { key, ids, index: 0 };
+    return ids[0]!;
+  }
+  // 抓成局部常量再进闭包：TS 不会把模块级 let 的收窄带进回调，
+  // 直接写 pickState.ids[i] 会被判成"可能是 null"
+  const cur = pickState;
+  const same = cur.ids.length === ids.length && ids.every((id, i) => id === cur.ids[i]);
+  if (!same) {
+    pickState = { key, ids, index: 0 };
+    return ids[0]!;
+  }
+  pickState.index = (pickState.index + 1) % ids.length;
+  return ids[pickState.index]!;
+}
+
+/** 强制移动走不上这一格时，说清楚是为什么——静默无反应比报错更让人困惑 */
+function moveRefusal(coords: { x: number; y: number }): string {
+  const blockers = stackAt(coords.x, coords.y).filter((u) => u.id !== selectedId);
+  if (blockers.length > 0) {
+    const b = blockers[0]!;
+    return `这一格被「${utype(state, b.type).name}」占着，走不上去`;
+  }
+  return '这一格不在移动范围内';
+}
+
 function onBoardClick(e: Event): void {
   // 上帝模式的点击语义完全不同：这里点棋盘是"落子"，不是"走子"。
   // 走子那套判断（轮到我吗、这格可达吗、能不能开火）在沙盒里一条都不成立，
@@ -873,8 +965,39 @@ function onBoardClick(e: Event): void {
   }
   if (handoffOpen || state.winner || aiBusy()) return;
 
-  const clickedUnitId = unitIdFromEvent(e);
   const coords = coordsFromEvent(e);
+  // 强制键：按钮上膛过一次就卸下；按住 Alt/Shift 也等价
+  const mouse = e instanceof MouseEvent ? e : null;
+  const wantMove = forceMode === 'move' || mouse?.altKey === true;
+  const wantAttack = forceMode === 'attack' || mouse?.shiftKey === true;
+  forceMode = null;
+
+  // 0) 强制移动：无视这一格上压着谁，直接按"走上去"解释。
+  //
+  // 这是"走不上桥"那个问题的根治办法。桥是一枚建筑棋子，画在格子上面，
+  // 点上去永远是选中桥——而玩家想做的其实是走上桥面。以前只能在
+  // 规则里给桥开后门，现在把"我要走，不是我要选"明确说出来。
+  if (
+    wantMove &&
+    coords &&
+    !watching() &&
+    myTurn() &&
+    !state.config.commanderMode &&
+    selectedId &&
+    !buildPlan &&
+    !loadPlan &&
+    !unloadPlan
+  ) {
+    const cell = idx(state, coords.x, coords.y);
+    if (reach.includes(cell)) {
+      dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
+      return;
+    }
+    toast(moveRefusal(coords));
+    return;
+  }
+
+  const clickedUnitId = pickUnitId(coords, wantAttack);
 
   // 只读查看：点敌方单位出属性卡——不看轮到谁，也不看是不是指挥官模式。
   //

@@ -10,7 +10,7 @@
  */
 
 import type { PlayerView } from '../core/fog.ts';
-import { cityName, isAirborne, utype } from '../core/rules.ts';
+import { buildProgress, cityName, footprintOf, isAirborne, underConstruction, utype } from '../core/rules.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
 export interface BoardUi {
@@ -244,12 +244,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   });
 }
 
-function tileRect(s: GameState, x: number, y: number): string {
+function tileRect(s: GameState, x: number, y: number, n = 1): string {
   return [
     `left:${(x / s.w) * 100}%`,
     `top:${(y / s.h) * 100}%`,
-    `width:${100 / s.w}%`,
-    `height:${100 / s.h}%`,
+    `width:${(n * 100) / s.w}%`,
+    `height:${(n * 100) / s.h}%`,
   ].join(';');
 }
 
@@ -259,10 +259,12 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
   const isSpent = u.owner === s.current && u.moved && u.acted;
   const isSelected = ui.selectedId === u.id;
   const isTarget = ui.targets.includes(u.id);
+  const fp = footprintOf(s, u);
 
   const cls = ['unit', `owner-${u.owner}`, `cat-${def.category}`];
   // 空中层：缩一号 + 往左上挪一点，和脚底下那个兵能同时看见
   if (isAirborne(s, u)) cls.push('air');
+  if (fp > 1) cls.push('wide');
   if (isSpent) cls.push('spent');
   if (isSelected) cls.push('selected');
   if (isTarget) cls.push('targeted');
@@ -278,12 +280,27 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
       ? `<span style="font-size:9px;vertical-align:top;opacity:.85">${cargo}</span>`
       : '';
 
-  return `<div class="${cls.join(' ')}" data-id="${u.id}" data-x="${u.x}" data-y="${u.y}" style="${tileRect(
+  // 工地：进度条压在血条上面。没有它，玩家只看到一座"残血"的建筑，
+  // 却不知道自己投了多少、还差多少——施工这件事就只活在日志里。
+  const site = underConstruction(u);
+  const prog = site ? buildProgress(s, u) : null;
+  const siteCls = site ? ' site' : '';
+  const buildBar = prog
+    ? `<div class="unit-build" title="施工 ${prog.done}/${prog.need} · 每回合 +${prog.rate} · 还要 ${prog.turnsLeft} 回合"><i style="width:${Math.max(
+        3,
+        prog.ratio * 100,
+      )}%"></i></div>`
+    : '';
+  const siteNote = prog ? ` · 工地 ${prog.done}/${prog.need}（+${prog.rate}/回合）` : '';
+
+  return `<div class="${cls.join(' ')}${siteCls}" data-id="${u.id}" data-x="${u.x}" data-y="${u.y}" data-fp="${fp}" style="${tileRect(
     s,
     u.x,
     u.y,
-  )}" title="${title}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}">
+    fp,
+  )}" title="${title}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}">
     <div class="unit-inner">${def.short}${cargoBadge}
+      ${buildBar}
       <div class="unit-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>
   </div>`;

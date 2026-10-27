@@ -20,10 +20,9 @@ import { hasAbility } from './abilities.ts';
 import { CONFIG, ORDER_UPGRADE, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
-  adjacentToWater,
   armySize,
   attackableTargets,
-  bridgeChainOk,
+  buildSiteError,
   canAttack,
   cityAt,
   cityById,
@@ -1053,67 +1052,33 @@ function nearestPrey(s: GameState, unit: Unit, def: UnitTypeDef): Unit | null {
   return best;
 }
 
+/**
+ * 这个建造者眼下能开工的格子。
+ *
+ * 判据一律走 rules.buildSiteError —— 和 doBuild 是同一份。
+ * 以前这里复制了一套"扫周围九格"的检查，规则一改它就过期：
+ * AI 会提一个必被拒绝的 BUILD，而执行方遇到非法动作会中断整回合，
+ * 整局就死在一个"它以为能盖"的位置上。
+ */
 function buildSpots(
   s: GameState,
   unit: Unit,
   def: UnitTypeDef | undefined,
 ): Array<{ x: number; y: number; terrain: Terrain }> {
   const out: Array<{ x: number; y: number; terrain: Terrain }> = [];
-  // 桥要多往外找两格。
-  //
-  // 工程队站在岸上，够不到三格宽的河心，只能顺着已经铺好的桥面把下一段递出去
-  // （rules 里的 bridgeChainOk 允许到 buildRange + 2）。以前这里只扫 ±buildRange，
-  // 于是"能建"的规则在，AI 却从来没生成过那个候选——三格宽的河永远停在第二格，
-  // 剩下的回合全在岸边来回走。
-  const reach = def?.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
+  if (!def) return out;
+  // 桥要多往外找两格：工程队站在岸上够不到三格宽的河心，
+  // 只能顺着已经铺好的桥面把下一段递出去（规则里的 bridgeChainOk 允许 +2）。
+  const reach = def.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
   for (let dy = -reach; dy <= reach; dy++) {
     for (let dx = -reach; dx <= reach; dx++) {
       if (dx === 0 && dy === 0) continue;
       const x = unit.x + dx;
       const y = unit.y + dy;
       if (!inBounds(s, x, y)) continue;
-      const farOut = distance(unit, { x, y }) > CONFIG.buildRange;
-      // 桥可以沿已经铺好的桥面再往外接两节（和 rules 里同一个判断）
-      if (farOut && !(def?.bridges && bridgeChainOk(unit, x, y, s))) continue;
       const tile = s.tiles[y * s.w + x];
       if (!tile) continue;
-      if (unitAt(s, x, y)) continue;
-
-      // 别把自己堵死：城里最后一格空地不能拿来盖东西。
-      // rules 的 doBuild 会明确拒绝这种落子，AI 一旦提出来就是一次整回合中断，
-      // 而城郭扩展多给了粮仓和采石场，AI 盖得比过去勤，这条路以前没被走过。
-      const host = s.cities.find(
-        (c) =>
-          c.owner === unit.owner &&
-          x >= c.x &&
-          x < c.x + c.size &&
-          y >= c.y &&
-          y < c.y + c.size,
-      );
-      if (host) {
-        const left = cityTiles(host).filter(
-          (t) => !(t.x === x && t.y === y) && !unitAt(s, t.x, t.y),
-        );
-        if (left.length === 0) continue;
-      }
-
-      // 地形要求写在数据里
-      if (def?.buildOn) {
-        if (!def.buildOn.includes(tile.terrain)) continue;
-      } else if (!passable(tile.terrain)) {
-        continue;
-      }
-      if (def?.bridges) {
-        // 桥还得有一侧是陆地
-        const landNext = DIRS.some(([nx2, ny2]) => {
-          const nb = s.tiles[(y + ny2) * s.w + (x + nx2)];
-          return !!nb && passable(nb.terrain);
-        });
-        if (!landNext) continue;
-      }
-      // 军营要临水：这一条不写在 buildOn 里，因为它说的是邻居而不是脚下
-      if (def?.requiresWater && !adjacentToWater(s, x, y)) continue;
-
+      if (buildSiteError(s, def, unit, x, y)) continue;
       out.push({ x, y, terrain: tile.terrain });
     }
   }

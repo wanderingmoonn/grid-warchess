@@ -12,7 +12,16 @@
 
 import assert from 'node:assert/strict';
 
-import { CONFIG, ERAS, ORDER_UPGRADE, UNIT_TYPES, eraDef, nextUpgradeCost } from '../src/core/config.ts';
+import {
+  CONFIG,
+  ERAS,
+  ORDER_UPGRADE,
+  UNIT_TYPES,
+  buildCostOf,
+  buildPowerOf,
+  eraDef,
+  nextUpgradeCost,
+} from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import {
@@ -55,12 +64,14 @@ import {
   canStandAt,
   canStrike,
   computeDamage,
+  coversTile,
   damageToCity,
   distance,
   distToCity,
   effectiveRange,
   effectiveStats,
   eggSpots,
+  footprintOf,
   isAirborne,
   isHiddenFrom,
   magicDamageOf,
@@ -1288,19 +1299,18 @@ test('敌方设施不能站，得先打掉', () => {
 
 test('建筑在敌方回合开始时自动开火', () => {
   const s = fresh();
-  const builder = addLaborer(s);
-  const built = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
-  assert.ok(built.ok);
-  const tower = built.state.units.find((u) => u.type === 'tower');
-  const enemy = built.state.units.find((u) => u.owner === 'B');
+  // 直接摆一座塔：这条测开火节奏，施工进度由「箭塔」那条负责。
+  // 建造点数上线之后，塔不再是一个 BUILD 就立起来的。
+  const tower = place2(s, 'A', 'tower', 6, 5);
+  const enemy = s.units.find((u) => u.owner === 'B');
   assert.ok(tower && enemy);
 
   enemy.x = tower.x + 1;
   enemy.y = tower.y;
-  built.state.tiles[idx(built.state, enemy.x, enemy.y)].terrain = 'plain';
+  s.tiles[idx(s, enemy.x, enemy.y)].terrain = 'plain';
   const hpBefore = enemy.hp;
 
-  const r = applyAction(built.state, { type: 'END_TURN' });
+  const r = applyAction(s, { type: 'END_TURN' });
   assert.ok(r.ok);
   const after = r.state.units.find((u) => u.id === enemy.id);
   assert.ok(after, '一炮打不死，应该还活着');
@@ -1309,21 +1319,18 @@ test('建筑在敌方回合开始时自动开火', () => {
 
 test('建筑手动开过火，同一回合不再自动补一炮', () => {
   const s = fresh();
-  const builder = addLaborer(s);
-  const built = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
-  if (!built.ok) assert.fail(built.reason);
-  const tower = built.state.units.find((u) => u.type === 'tower');
-  const enemy = built.state.units.find((u) => u.owner === 'B');
+  const tower = place2(s, 'A', 'tower', 6, 5);
+  const enemy = s.units.find((u) => u.owner === 'B');
   assert.ok(tower && enemy);
 
   enemy.x = tower.x + 1;
   enemy.y = tower.y;
-  built.state.tiles[idx(built.state, enemy.x, enemy.y)].terrain = 'plain';
+  s.tiles[idx(s, enemy.x, enemy.y)].terrain = 'plain';
   // 血给厚一点：一炮打不死，才数得清"一共打了几段"
   enemy.hp = 500;
 
-  // 第 1 段：塔刚盖好那回合不能手动（BUILD 出来就是 acted），由自动开火代劳
-  const endA = applyAction(built.state, { type: 'END_TURN' });
+  // 第 1 段：塔刚立起来那回合不能手动（acted），由自动开火代劳
+  const endA = applyAction(s, { type: 'END_TURN' });
   if (!endA.ok) assert.fail(endA.reason);
   const afterAuto = endA.state.units.find((u) => u.id === enemy.id);
   assert.ok(afterAuto && afterAuto.hp < 500, '自动开火这一段应该成立');
@@ -6402,7 +6409,11 @@ test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => 
 test('箭塔：两回合施工，工地开不了火', () => {
   const s = fresh({ expansionIds: ['city-works'], godMode: true });
   const tower = s.unitTypes.tower!;
-  assert.ok((tower.buildTurns ?? 1) >= 2, `塔要施工：${tower.buildTurns}`);
+  const laborerPower = buildPowerOf(s.unitTypes.laborer!);
+  assert.ok(
+    buildCostOf(tower) > laborerPower,
+    `塔一回合修不完：${buildCostOf(tower)} 点 vs 劳工 ${laborerPower} 点`,
+  );
   assert.equal(tower.garrison, true, '塔可以驻军');
 
   const laborer = place2(s, 'A', 'laborer', 7, 7);
@@ -6525,6 +6536,100 @@ test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去',
 });
 
 
+
+console.log('\n建造点数 · 多格占地');
+
+test('建造点数：建筑难度从造价派生，工兵能力逐代递增', () => {
+  const s = fresh({ godMode: true });
+  const buildings = Object.values(s.unitTypes).filter((d) => d.category === 'building');
+  assert.ok(buildings.length >= 4, '至少四种建筑');
+  for (const b of buildings) {
+    assert.ok(buildCostOf(b) >= 6, `${b.name} 的建造点数应该 ≥ 6，实际 ${buildCostOf(b)}`);
+  }
+  // 工兵：越晚的时代投得越快，而且每一代都要有提升——
+  // 没提升的话"换工兵"就只是换个外观，建造点数这套东西也就白搭了
+  const chain = ['laborer', 'miller', 'engineer', 'foreman', 'crew'];
+  const powers = chain.map((id) => buildPowerOf(s.unitTypes[id]!));
+  for (let i = 1; i < powers.length; i++) {
+    assert.ok(powers[i]! > powers[i - 1]!, `${chain[i]} 该比 ${chain[i - 1]} 投得快：${powers.join('/')}`);
+  }
+});
+
+test('建造点数：同一座粮仓，弱工兵先落工地、强工兵当回合立起来', () => {
+  const mk = () => {
+    const st = arena(fresh({ expansionIds: ['city-works'], godMode: true }));
+    st.players.A.gold = 9999;
+    st.players.A.res = { food: 9999, material: 9999 };
+    // 试验台上的地形不一定平，抹出一块确定的空地，别赌生成器
+    for (const [x, y] of [[5, 5], [6, 5]]) st.tiles[y * st.w + x]!.terrain = 'plain';
+    return st;
+  };
+
+  const s = mk();
+  const need = buildCostOf(s.unitTypes.granary!);
+  const weak = buildPowerOf(s.unitTypes.laborer!);
+  const strong = buildPowerOf(s.unitTypes.crew!);
+  assert.ok(need > weak && need <= strong, `这个用例需要 ${weak} < 粮仓(${need}) ≤ ${strong}`);
+
+  // 弱工兵：这一下只够落一块工地
+  const a = place2(s, 'A', 'laborer', 5, 5);
+  const r1 = applyAction(s, { type: 'BUILD', unitId: a.id, unitType: 'granary', x: 6, y: 5 });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  const weakSite = r1.state.units.find((u) => u.type === 'granary')!;
+  assert.equal(underConstruction(weakSite), true, '劳工一回合修不完，先落工地');
+  assert.equal(weakSite.buildNeed, need, '工地记着总点数');
+  assert.equal(weakSite.buildDone, weak, '这一下投进去的正好是这个工兵的能力');
+
+  // 强工兵：同样的建筑，当回合成型
+  const s2 = mk();
+  const b = place2(s2, 'A', 'crew', 5, 5);
+  const r2 = applyAction(s2, { type: 'BUILD', unitId: b.id, unitType: 'granary', x: 6, y: 5 });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const strongSite = r2.state.units.find((u) => u.type === 'granary')!;
+  assert.equal(underConstruction(strongSite), false, `建筑队 ${strong} 点修 ${need} 点的粮仓，应该当回合完工`);
+});
+
+test('建造点数：两个工兵同回合能叠加，工期减半', () => {
+  const s = arena(fresh({ expansionIds: ['city-works'], godMode: true }));
+  s.players.A.gold = 9999;
+  s.players.A.res = { food: 9999, material: 9999 };
+  for (const [x, y] of [[4, 5], [5, 5], [6, 5], [7, 5]]) s.tiles[y * s.w + x]!.terrain = 'plain';
+
+  const first = place2(s, 'A', 'laborer', 5, 5);
+  const second = place2(s, 'A', 'laborer', 7, 5);
+  const power = buildPowerOf(s.unitTypes.laborer!);
+
+  const r1 = applyAction(s, { type: 'BUILD', unitId: first.id, unitType: 'tower', x: 6, y: 5 });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  const rateAfterOne = r1.state.units.find((u) => u.type === 'tower')!.buildRate;
+
+  // 第二个工兵接着投同一块工地
+  const r2 = applyAction(r1.state, { type: 'BUILD', unitId: second.id, unitType: 'tower', x: 6, y: 5 });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const site = r2.state.units.find((u) => u.type === 'tower')!;
+  assert.equal(site.buildRate, rateAfterOne! + power, '两个人的能力要相加，之后每回合一起到账');
+  assert.equal(site.buildDone, power * 2, '同一回合投进去的点数也要累加');
+});
+
+test('2×2 兵营：四格全占、贴边打得到、覆盖格放不下别人', () => {
+  const s = arena(fresh({ expansionIds: ['city-works'], godMode: true }));
+  const camp = place2(s, 'A', 'camp', 5, 5);
+  assert.equal(footprintOf(s, camp), 2, '城郭包里兵营是 2×2');
+
+  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+    assert.equal(unitAt(s, 5 + dx, 5 + dy)?.id, camp.id, `(${5 + dx},${5 + dy}) 应该算兵营占着`);
+    assert.equal(coversTile(s, camp, 5 + dx, 5 + dy), true);
+  }
+
+  // 攻击距离按体积算：贴着右下角就是 1 格，而不是到左上角锚点的 2 格
+  const foe = place2(s, 'B', 'militia', 7, 6);
+  assert.equal(strikeDistance(s, foe, camp), 1, '按最近边算距离');
+  assert.ok(canStrike(s, foe, camp), '贴着 2×2 的一边就该打得到');
+
+  // 碰撞：兵营覆盖的格子不能再站人
+  assert.equal(canStandAt(s, 6, 6, 'militia'), false, '兵营身上的格子放不下别人');
+  assert.equal(canStandAt(s, 7, 7, 'militia'), true, '出了体积就该能站');
+});
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

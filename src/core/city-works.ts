@@ -167,7 +167,17 @@ export const CITY_WORKS: Expansion = {
           def.armor += 2;
           def.vision += 2;
           def.garrison = true;
-          def.buildTurns = def.buildTurns ?? 2;
+          // 城郭包把墙修得更厚，塔也就更难立：点数 ×1.4（本代工兵仍是两回合，
+          // 差一点的工兵会明显拖到三回合）。这是"点数"比"回合数"好用的地方——
+          // 换工兵有用，而不用给每种塔各写一个回合数。
+          def.buildCost = Math.round((def.buildCost ?? Math.max(6, (def.cost ?? 0) / 6)) * 1.4);
+          continue;
+        }
+
+        // 兵营类：营地画成 2×2 的营垒——原版的营只有一间房，一顶帐篷。
+        // 占地是原版接口（UnitTypeDef.footprint），这里只是把它用起来。
+        if (def.barracks) {
+          def.footprint = 2;
           continue;
         }
 

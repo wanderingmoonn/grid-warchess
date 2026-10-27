@@ -777,6 +777,44 @@ body {
     0 1px 2px rgba(0, 0, 0, 0.28);
 }
 
+/* 占 2×2 的建筑/单位：字号跟着放大，别让 2×2 的营垒上写着 1×1 的字 */
+.unit.wide .unit-inner {
+  font-size: calc(var(--cell) * 0.62);
+  border-radius: 10%;
+}
+
+/* 工地：虚线边 + 半透明，和"建成了"区分开。
+   没有这一条，工地和成品只差一条血条，玩家会以为塔已经能开火了。 */
+.unit.site .unit-inner {
+  opacity: 0.86;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.75),
+    0 0 0 2px rgba(224, 163, 60, 0.75);
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.18) 0 6px,
+    rgba(0, 0, 0, 0) 6px 12px
+  );
+}
+
+/* 施工进度条：血条上面那一条金色。 */
+.unit-build {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 20%;
+  height: 10%;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.unit-build i {
+  display: block;
+  height: 100%;
+  background: #e0a33c;
+}
+
 .unit.ghost {
   pointer-events: none;
   opacity: 0.42;
@@ -2393,4 +2431,48 @@ a.btn {
   font-size: 12px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+/* ---------- 强制移动 / 强制攻击 ---------- */
+/* 两个按钮长得像"操作"而不像"状态"：没上膛是描边，上膛之后填成主色。
+   键盘党直接用 Alt/Shift，这两个按钮是给触屏和不知道有快捷键的人准备的。 */
+.force-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.force-btn {
+  flex: 1;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.force-btn:hover {
+  border-color: var(--a);
+}
+
+.force-btn.armed {
+  background: var(--a);
+  border-color: var(--a);
+  color: #fff;
+}
+
+.force-btn kbd,
+.hint kbd {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  opacity: 0.75;
 }

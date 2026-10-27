@@ -6,7 +6,7 @@
  */
 
 import { abilityById, abilityNames } from './abilities.ts';
-import { CONFIG, UNIT_TYPES, eraDef } from './config.ts';
+import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
 import { resourceShort } from './resources.ts';
 import { ELEMENT_NAME } from './types.ts';
@@ -172,10 +172,22 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
     if (on) lines.push(`只能扎在${on}上`);
     if (def.requiresWater) lines.push('必须紧邻水域（靠水补给），所以它天然长在水边');
   }
-  if (def.buildTurns && def.buildTurns > 1) {
+  if (def.category === 'building') {
+    const cost = buildCostOf(def);
+    const power = buildPowerOf(def);
     lines.push(
-      `施工 ${def.buildTurns} 回合：先落一个工地——看得见、挡得住、能被打，但开不了火也产不了兵。成型之前它就是个靶子。`,
+      `建造点数 ${cost}：投不够就先落一个工地——看得见、挡得住、能被打，但开不了火也产不了兵。` +
+        `施工能力 ${power} 的工兵要 ${Math.max(1, Math.ceil(cost / power))} 个回合；` +
+        '两个工兵一起修，就是两次"建造"叠在同一个工地上，进度相加。',
     );
+  }
+  if ((def.builds ?? []).length > 0) {
+    lines.push(
+      `施工能力 ${buildPowerOf(def)}：每回合能往工地里投多少点。换个更强的工兵，同一座塔会更快立起来。`,
+    );
+  }
+  if ((def.footprint ?? 1) > 1) {
+    lines.push('占地 2×2：四格一起挡路、一起挨打，拆掉才一起消失（锚点在左上角）。');
   }
   if (def.garrison) {
     lines.push(

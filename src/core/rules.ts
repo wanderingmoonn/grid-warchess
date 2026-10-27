@@ -11,7 +11,17 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CHEAPEST_COST, CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
+import {
+  CHEAPEST_COST,
+  CITY,
+  CONFIG,
+  ORDER_UPGRADE,
+  buildCostOf,
+  buildPowerOf,
+  eraDef,
+  nextUpgradeCost,
+  passable,
+} from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions } from './expansions.ts';
 import {
   GOLD,
@@ -87,10 +97,70 @@ export function tileAt(s: GameState, x: number, y: number): Tile | null {
   return s.tiles[idx(s, x, y)] ?? null;
 }
 
+// ── 占地：一格与多格 ──────────────────────────────────────────────────
+//
+// 单位/建筑以**左上角为锚点**占 n×n 格（n = 1 或 2）。为什么不做成
+// "中心点 + 半径"：锚点语义下 `u.x/u.y` 只需要读一次，所有既有的
+// 存档、AI 打分、渲染定位都不用改形状；而 2×2 的"中心"其实是 2.5 格，
+// 半格坐标会污染每一个距离计算。
+//
+// 三件事必须一致，否则会出现"看着在这儿、规则说在那儿"：
+//   1. 判定（unitAt / unitsAt / sameLayerAt / blockedFor）
+//   2. 距离（distToUnit / distToUnitRect）
+//   3. 落子（canStandAt / buildSiteError / 产兵位）
+
+/** 占地边长：1（缺省）或 2。传单位或兵种 id 都行。 */
+export function footprintOf(s: GameState, u: Unit | string): number {
+  const type = typeof u === 'string' ? u : u.type;
+  return s.unitTypes[type]?.footprint === 2 ? 2 : 1;
+}
+
+/** 这一格是不是被它占着。锚点左上，占 n×n。 */
+export function coversTile(s: GameState, u: Unit, x: number, y: number): boolean {
+  const n = footprintOf(s, u);
+  return x >= u.x && x < u.x + n && y >= u.y && y < u.y + n;
+}
+
+/** 它占的那几格（渲染、存档校验、AI 打分都用得上） */
+export function tilesOfUnit(s: GameState, u: Unit): Array<{ x: number; y: number }> {
+  const n = footprintOf(s, u);
+  const out: Array<{ x: number; y: number }> = [];
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) out.push({ x: u.x + dx, y: u.y + dy });
+  }
+  return out;
+}
+
+/**
+ * 一个坐标到某个单位的距离：到它**覆盖范围**的最近一格。
+ *
+ * 打一座 2×2 的兵营，站在它右下角旁边就该是一格，而不是"到左上角三格"。
+ * 距离只认锚点的话，大建筑会显得比它看起来更难打——玩家没法从画面推出射程。
+ */
+export function distToUnit(s: GameState, from: { x: number; y: number }, u: Unit): number {
+  const n = footprintOf(s, u);
+  const cx = Math.min(Math.max(from.x, u.x), u.x + n - 1);
+  const cy = Math.min(Math.max(from.y, u.y), u.y + n - 1);
+  return Math.abs(from.x - cx) + Math.abs(from.y - cy);
+}
+
+/** 两个单位之间的距离：两个矩形的最近距离（锚点对小单位等价于曼哈顿距离） */
+export function distBetweenUnits(s: GameState, a: Unit, b: Unit): number {
+  const na = footprintOf(s, a);
+  const nb = footprintOf(s, b);
+  const ax2 = a.x + na - 1;
+  const ay2 = a.y + na - 1;
+  const bx2 = b.x + nb - 1;
+  const by2 = b.y + nb - 1;
+  const dx = Math.max(0, Math.max(b.x - ax2, a.x - bx2));
+  const dy = Math.max(0, Math.max(b.y - ay2, a.y - by2));
+  return dx + dy;
+}
+
 /**
  * 这一格上的单位。
  *
- * 同一格可能同时站着"建筑"和"站在建筑上的部队"（目前只有桥面允许这样）。
+ * 同一格可能同时站着"建筑"和"站在建筑上的部队"（驻军、桥面）。
  * 优先返回**不是建筑**的那个：否则站在桥上的兵会被桥自己挡住——
  * 移动判定会说"那格已经有人了"，玩家看到的是一个明明站着自己的兵却动不了的格子。
  */
@@ -98,7 +168,7 @@ export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
   let building: Unit | undefined;
   let air: Unit | undefined;
   for (const u of s.units) {
-    if (u.x !== x || u.y !== y) continue;
+    if (!coversTile(s, u, x, y)) continue;
     const cat = s.unitTypes[u.type]?.category;
     if (cat === 'building') {
       building ??= u;
@@ -115,20 +185,69 @@ export function unitAt(s: GameState, x: number, y: number): Unit | undefined {
   return air ?? building;
 }
 
+/** 这一格上压在下面的那个（建筑优先）。强制选中/循环选中靠它。 */
+export function lowestAt(s: GameState, x: number, y: number): Unit | undefined {
+  let building: Unit | undefined;
+  let ground: Unit | undefined;
+  for (const u of s.units) {
+    if (!coversTile(s, u, x, y)) continue;
+    if (s.unitTypes[u.type]?.category === 'building') building ??= u;
+    else if (!isAirborne(s, u)) ground ??= u;
+  }
+  return building ?? ground;
+}
+
 /** 这一格上的建筑（桥、塔、墙……）；没有就是 undefined */
 export function buildingAt(s: GameState, x: number, y: number): Unit | undefined {
-  return s.units.find((u) => u.x === x && u.y === y && s.unitTypes[u.type]?.category === 'building');
+  return s.units.find(
+    (u) => coversTile(s, u, x, y) && s.unitTypes[u.type]?.category === 'building',
+  );
 }
 
 /**
- * 这个单位还在施工吗（多回合建筑）。
+ * 这个单位还在施工吗（有建造点数的建筑）。
  *
  * 工地不是"半个建筑"：它挡路、能被打、看得见，但不能开火、不能产兵、不能动手。
  * 这样"塔要两回合才立起来"才是一个真实的窗口——对手看得见你在修，
  * 也有机会在它成型之前拆掉它。
  */
 export function underConstruction(u: Unit): boolean {
+  if ((u.buildNeed ?? 0) > 0) return (u.buildDone ?? 0) < (u.buildNeed ?? 0);
+  // 旧存档的写法：只剩回合数
   return (u.buildLeft ?? 0) > 0;
+}
+
+export interface BuildProgress {
+  /** 已投入的点数 */
+  done: number;
+  /** 目标点数 */
+  need: number;
+  /** 每回合自动到账的点数 */
+  rate: number;
+  /** 还要几个自己的回合（按当前速率向下取整，至少 1） */
+  turnsLeft: number;
+  /** 0..1 */
+  ratio: number;
+}
+
+/**
+ * 一个工地的进度条数据。
+ *
+ * `turnsLeft` 是"按当前速率还要几个回合"的估算，给玩家看的——它不是规则，
+ * 实际到账发生在自己回合开始时（advanceConstruction）。
+ */
+export function buildProgress(s: GameState, u: Unit): BuildProgress {
+  const need = u.buildNeed ?? 0;
+  const done = Math.min(u.buildDone ?? 0, need);
+  const rate = Math.max(1, u.buildRate ?? buildPowerOf(utype(s, u.type)));
+  const left = Math.max(0, need - done);
+  return {
+    done,
+    need,
+    rate,
+    turnsLeft: left === 0 ? 0 : Math.max(1, Math.ceil(left / rate)),
+    ratio: need > 0 ? done / need : 1,
+  };
 }
 
 /**
@@ -267,12 +386,12 @@ export function isAirborne(s: GameState, u: Unit): boolean {
 
 /** 同一格上的全部单位。空中 + 地面最多各一个，可以叠在一格。 */
 export function unitsAt(s: GameState, x: number, y: number): Unit[] {
-  return s.units.filter((u) => u.x === x && u.y === y);
+  return s.units.filter((u) => coversTile(s, u, x, y));
 }
 
 /** 这一格上有没有"同一层"的单位（空中和地面互不占位） */
 function sameLayerAt(s: GameState, x: number, y: number, air: boolean): Unit | undefined {
-  return s.units.find((u) => u.x === x && u.y === y && isAirborne(s, u) === air);
+  return s.units.find((u) => coversTile(s, u, x, y) && isAirborne(s, u) === air);
 }
 
 /** 这个单位这一下的攻击属性（运行时覆盖优先，至尊法师轮换写的就是它） */
@@ -314,7 +433,8 @@ export function effectiveRange(s: GameState, u: Unit): number {
  * 免得出现"射程算得到、伤害却按旧距离打折"这种两套账。
  */
 export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): number {
-  const d = distance(attacker, defender);
+  // 多格单位按最近边算：打一座 2×2 兵营的右下角，本该是一格
+  const d = distBetweenUnits(s, attacker, defender);
   if (!isAirborne(s, attacker) && isAirborne(s, defender)) return d + 1;
   return d;
 }
@@ -496,10 +616,15 @@ function crossesWater(def: UnitTypeDef): boolean {
  * 必须和走子用同一条判断——否则会出现船停在山顶上这种局面，
  * 之后每一次寻路、每一发攻击都在跟它较劲。
  */
-export function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+/**
+ * 单格能不能站（不含占地展开）。
+ *
+ * 拆出来是因为 2×2 的单位/建筑要**逐格**过同一套判断：
+ * 地形、城市归属、同层占位。写两份必然走样。
+ */
+function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return false;
-  const def = utype(s, type);
   if (def.domain === 'water') {
     if (tile.terrain !== 'water' && tile.terrain !== 'bridge') return false;
   } else if (!passable(tile.terrain)) {
@@ -515,6 +640,23 @@ export function canStandAt(s: GameState, x: number, y: number, type: string): bo
     if (city && city.ruined) return false;
   }
   return !sameLayerAt(s, x, y, airLayer(def));
+}
+
+/**
+ * 这个兵种能不能站在这一格（锚点）。占地 2 的兵要四格都成立。
+ *
+ * 注意"能不能站"和"这一格有没有人"是两件事：前者是地形与层，
+ * 后者由 sameLayerAt 逐格判（所以 2×2 的兵贴着一座 2×2 的建筑放不下）。
+ */
+export function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+  const def = utype(s, type);
+  const n = footprintOf(s, type);
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      if (!tileStandsOk(s, x + dx, y + dy, def)) return false;
+    }
+  }
+  return true;
 }
 
 /** 找一格相邻空地放召唤物/分裂体。找不到返回 null。 */
@@ -837,6 +979,13 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
  * 己方单位可以穿过友军，但不能停在友军身上。
  */
 export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
+  // 占地 2 的单位暂时按"阵地"处理：它不移动。
+  //
+  // 多格移动不是把落点判四次就行——锚点走一步，四格里有两格跟着挪，
+  // 路径本身要按"四格全部可过"重算，AI 的推进打分和动画也要跟着改。
+  // 在真正需要会走的大单位之前（炮台、巨兽），先让接口成立、移动为 0，
+  // 而不是给一个"能走但会卡在墙上"的半成品。
+  if (footprintOf(s, unit) > 1) return new Map();
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const forestWalk = hasAbility(def, 'forest-walk');
@@ -886,7 +1035,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
       const blocker = s.units.find((u) => {
-        if (u.x !== nx || u.y !== ny) return false;
+        if (!coversTile(s, u, nx, ny)) return false;
         if (u.owner === unit.owner) return false;
         if (isAirborne(s, u) !== air) return false;
         if (utype(s, u.type).bridges) return false;
@@ -928,7 +1077,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 敌方的建筑（非桥）一律不能站：那一格还被它占着，得先打掉。
   for (const i of Array.from(best.keys())) {
     const { x, y } = xyOf(s, i);
-    const here = s.units.filter((u) => u.x === x && u.y === y && u.id !== unit.id);
+    const here = s.units.filter((u) => u.id !== unit.id && coversTile(s, u, x, y));
     const blockers = here.filter((u) => {
       // 不同层不占位：脚底下站着敌人，头上那格照样能停
       if (isAirborne(s, u) !== air) return false;
@@ -1006,7 +1155,7 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   const range = effectiveRange(s, attacker);
   // 地面打空中要多算一格（见 strikeDistance）；同格判定仍然看"真实相对位置"，
   // 否则"空中压着地面"这个免费的第一刀会被 +1 顺手吃掉
-  const real = distance(attacker, target);
+  const real = distBetweenUnits(s, attacker, target);
   const d = strikeDistance(s, attacker, target);
   if (d > range) return false;
   // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
@@ -1626,15 +1775,42 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 }
 
 /**
- * 施工进度：自己回合开始时，工地的剩余回合 −1，归零就算建成。
+ * 工地成型的收尾：桥要在这时候才变成桥面。
  *
- * 放在"重置行动力"之后、"再生/休整"之前：这一回合刚建成的塔应该能开火，
- * 但**这一回合不能动**（它刚刚才完工）。所以不碰 moved/acted。
+ * 建到一半的桥如果提前通车，陆军会从一座"还不存在"的桥上走过去，
+ * 而画面上的工地看起来随时会塌——先绕路，建完再通，才说得通。
+ */
+function finishBuild(s: GameState, u: Unit): void {
+  if (!utype(s, u.type).bridges) return;
+  const tile = tileAt(s, u.x, u.y);
+  if (tile && tile.terrain === 'water') tile.terrain = 'bridge';
+}
+
+/**
+ * 施工进度：自己回合开始时，工地到账一波建造点数，够了就算建成。
+ *
+ * 放在"重置行动力"之后、"再生/休整"之前：这一回合刚建成的塔应该能开火。
+ *
+ * 点数而不是回合：到账量取决于建它的工兵（buildRate），所以"老兵带新兵"
+ * 和"换个更强的工兵"在同一座塔上会读出不同的工期——这才是工兵差异的落点。
  */
 function advanceConstruction(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
     if (!underConstruction(u)) continue;
+    if ((u.buildNeed ?? 0) > 0) {
+      const rate = Math.max(1, u.buildRate ?? buildPowerOf(utype(s, u.type)));
+      u.buildDone = (u.buildDone ?? 0) + rate;
+      if ((u.buildDone ?? 0) >= (u.buildNeed ?? 0)) {
+        delete u.buildDone;
+        delete u.buildNeed;
+        delete u.buildRate;
+        finishBuild(s, u);
+        pushLog(s, p, `${utype(s, u.type).name} 建成`);
+      }
+      continue;
+    }
+    // 旧存档：只有剩余回合数，按 1 点/回合往前推
     u.buildLeft = (u.buildLeft ?? 0) - 1;
     if (u.buildLeft <= 0) {
       delete u.buildLeft;
@@ -2163,6 +2339,127 @@ function doUnload(
   return { ok: true, state: s };
 }
 
+/**
+ * 建造选址检查：这一格（或这 2×2 块）能不能让这个建造者在这儿盖这个建筑。
+ *
+ * 规则和 AI 共用这一份。以前 AI 自己复制了一套"扫周围九格"的判据，
+ * 结果规则改了它不知道——它会提出一个必被拒绝的 BUILD，而执行方
+ * 遇到非法动作就中断整回合。判据只能有一处。
+ *
+ * 返回 null = 可以建；否则是给人看的理由（AI 直接丢掉这个候选）。
+ */
+export function buildSiteError(
+  s: GameState,
+  def: UnitTypeDef,
+  builder: Unit,
+  x: number,
+  y: number,
+): string | null {
+  const n = footprintOf(s, def.id);
+  const overWater = !!def.bridges;
+
+  // 占地逐格过一遍：界内、空着、地形合规。
+  // 2×2 的建筑只要有一格落空，整块就不算数——部分落在水里再补半间房，
+  // 是没法解释给玩家听的。
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      if (!inBounds(s, tx, ty)) return '目标越界';
+      const tile = tileAt(s, tx, ty);
+      if (!tile) return '目标越界';
+      if (unitAt(s, tx, ty)) return '这里已经有单位或建筑了';
+
+      // 地形要求写在数据里（buildOn）：军营要平地/丘陵，桥要水面
+      if (def.buildOn) {
+        if (!def.buildOn.includes(tile.terrain)) {
+          const names = def.buildOn.map((t) => CONFIG.terrainName[t]).join('、');
+          return `${def.name} 只能建在${names}上`;
+        }
+      } else if (!passable(tile.terrain)) {
+        return '水面和高山上不能建造';
+      }
+      if (tile.terrain === 'bridge' && !overWater) {
+        return '桥面上不能再盖东西';
+      }
+    }
+  }
+
+  if (overWater) {
+    // 桥只能跨"一窄条水"：要有一侧是陆地，否则是一片汪洋，架不起来
+    const touchesLand = DIRS.some(([dx, dy]) => {
+      const nb = tileAt(s, x + dx, y + dy);
+      return !!nb && passable(nb.terrain);
+    });
+    if (!touchesLand) return '这里四面都是水，架不了桥';
+  }
+
+  // 临水要求（军营）：靠水补给，所以必须挨着水面。
+  // 占 2×2 的营按整圈外墙算——只看锚点四邻的话，水明明贴着右下角也会被判"不临水"，
+  // 而玩家在画面上看到的是"水就在墙根"。
+  if (def.requiresWater) {
+    const wet = tilesOfFootprint(x, y, n, (tx, ty) =>
+      DIRS.some(([dx, dy]) => tileAt(s, tx + dx, ty + dy)?.terrain === 'water'),
+    );
+    if (!wet) return `${def.name}必须扎在水边（四邻要有一格水面）`;
+  }
+
+  // 别把自己堵死：城市格的出兵位是产线的命门。
+  //
+  // 现实里踩过太多次——在城里仅剩的那格空地上盖一座塔，城市的产兵格就变成 0，
+  // 从此一兵不出，而界面上只是"没有可造的兵"这种不痛不痒的提示。
+  // 占 2×2 的建筑要一次吃掉四格，更容易把城堵死，所以按"盖完之后还剩几格"算。
+  const hostCity = s.cities.find(
+    (c) =>
+      c.owner === builder.owner &&
+      x >= c.x &&
+      x < c.x + c.size &&
+      y >= c.y &&
+      y < c.y + c.size,
+  );
+  if (hostCity) {
+    const covered = (tx: number, ty: number) => tx >= x && tx < x + n && ty >= y && ty < y + n;
+    const slotsLeft = cityTiles(hostCity).filter(
+      (t) => !covered(t.x, t.y) && !unitAt(s, t.x, t.y),
+    );
+    if (slotsLeft.length === 0) {
+      return '这一格是这座城最后一个出兵位，建在这里会让它再也造不出兵';
+    }
+  }
+
+  if (distance(builder, { x, y }) > CONFIG.buildRange && !(overWater && bridgeChainOk(builder, x, y, s))) {
+    return overWater
+      ? `建造者离得太远（最多 ${CONFIG.buildRange} 格；桥可以沿已有的桥面再往外接两节）`
+      : `建造者离得太远（最多 ${CONFIG.buildRange} 格）`;
+  }
+
+  return null;
+}
+
+/**
+ * 对一个 n×n 块里的每一格做一次判断，任一成立就返回 true。
+ *
+ * 选址里"临水""是不是全是陆地"这类条件说的都是整块地，不是锚点那一格。
+ */
+function tilesOfFootprint(
+  x: number,
+  y: number,
+  n: number,
+  test: (tx: number, ty: number) => boolean,
+): boolean {
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      if (test(x + dx, y + dy)) return true;
+    }
+  }
+  return false;
+}
+
+/** 这一格的坐标写法，日志里到处用 */
+function cellName(x: number, y: number): string {
+  return `${String.fromCharCode(65 + x)}${y + 1}`;
+}
+
 function doBuild(
   s: GameState,
   unitId: string,
@@ -2187,69 +2484,45 @@ function doBuild(
   if (!def) return { ok: false, reason: '本局没有这个建筑' };
   if (def.category !== 'building') return { ok: false, reason: '只有建筑可以修建' };
 
-  if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
-  const tile = tileAt(s, x, y);
-  if (!tile) return { ok: false, reason: '目标越界' };
-  if (unitAt(s, x, y)) return { ok: false, reason: '这里已经有单位或建筑了' };
-
-  // 别把自己堵死：城市格的出兵位是产线的命门。
+  // 续建：目标格上是自家的同型工地。
   //
-  // 现实里踩过太多次——在城里仅剩的那格空地上盖一座塔，城市的产兵格就变成 0，
-  // 从此一兵不出，而界面上只是"没有可造的兵"这种不痛不痒的提示。
-  // 这里在落子之前就把这条路掐掉。
-  const hostCity = s.cities.find(
-    (c) =>
-      c.owner === s.current &&
-      x >= c.x &&
-      x < c.x + c.size &&
-      y >= c.y &&
-      y < c.y + c.size,
+  // 两个工兵一起修一座塔，就是把两次 BUILD 叠在同一个工地上：rate 相加、
+  // 各自当场再投一次。这比"建造者必须一直站在旁边"好——工兵建完就走是常态，
+  // 把进度绑在人的站位上，"走开"就成了一个玩家看不见的惩罚。
+  const site = s.units.find(
+    (u) =>
+      u.type === def.id &&
+      u.owner === s.current &&
+      underConstruction(u) &&
+      coversTile(s, u, x, y),
   );
-  if (hostCity) {
-    const slotsLeft = cityTiles(hostCity).filter(
-      (t) => !(t.x === x && t.y === y) && !unitAt(s, t.x, t.y),
-    );
-    if (slotsLeft.length === 0) {
-      return { ok: false, reason: '这一格是这座城最后一个出兵位，建在这里会让它再也造不出兵' };
+  if (site) {
+    const power = buildPowerOf(builderDef);
+    site.buildRate = (site.buildRate ?? 0) + power;
+    site.buildDone = (site.buildDone ?? 0) + power;
+    builder.moved = true;
+    builder.acted = true;
+    const need = site.buildNeed ?? 0;
+    if ((site.buildDone ?? 0) >= need) {
+      // 最后一把力：当场成型（桥这时候才真正通车）
+      const here = tileAt(s, site.x, site.y);
+      delete site.buildDone;
+      delete site.buildNeed;
+      delete site.buildRate;
+      if (utype(s, site.type).bridges && here && here.terrain === 'water') here.terrain = 'bridge';
+      pushLog(s, s.current, `${builderDef.name} 接手 ${def.name} 的工地，当场完工`);
+    } else {
+      pushLog(
+        s,
+        s.current,
+        `${builderDef.name} 加入 ${def.name} 的工地（${site.buildDone}/${need}，此后每回合 +${site.buildRate}）`,
+      );
     }
+    return { ok: true, state: s };
   }
 
-  const overWater = !!def.bridges;
-
-  // 地形要求写在数据里（buildOn）：军营要平地/丘陵，桥要水面，其他建筑任何可通行地形
-  if (def.buildOn) {
-    if (!def.buildOn.includes(tile.terrain)) {
-      const names = def.buildOn.map((t) => CONFIG.terrainName[t]).join('、');
-      return { ok: false, reason: `${def.name} 只能建在${names}上` };
-    }
-  } else if (!passable(tile.terrain)) {
-    return { ok: false, reason: '水面和高山上不能建造' };
-  }
-  if (tile.terrain === 'bridge' && !overWater) {
-    return { ok: false, reason: '桥面上不能再盖东西' };
-  }
-  if (overWater) {
-    // 桥只能跨"一窄条水"：要有一侧是陆地，否则是一片汪洋，架不起来
-    const touchesLand = DIRS.some(([dx, dy]) => {
-      const nb = tileAt(s, x + dx, y + dy);
-      return !!nb && passable(nb.terrain);
-    });
-    if (!touchesLand) return { ok: false, reason: '这里四面都是水，架不了桥' };
-  }
-
-  // 临水要求（军营）：靠水补给，所以必须挨着水面
-  if (def.requiresWater && !adjacentToWater(s, x, y)) {
-    return { ok: false, reason: `${def.name}必须扎在水边（四邻要有一格水面）` };
-  }
-
-  if (distance(builder, { x, y }) > CONFIG.buildRange && !(overWater && bridgeChainOk(builder, x, y, s))) {
-    return {
-      ok: false,
-      reason: overWater
-        ? `建造者离得太远（最多 ${CONFIG.buildRange} 格；桥可以沿已有的桥面再往外接两节）`
-        : `建造者离得太远（最多 ${CONFIG.buildRange} 格）`,
-    };
-  }
+  const problem = buildSiteError(s, def, builder, x, y);
+  if (problem) return { ok: false, reason: problem };
 
   const price = recruitResCost(s, s.current, def);
   if (!canPay(s.players[s.current], price)) {
@@ -2259,10 +2532,14 @@ function doBuild(
     };
   }
   payRes(s.players[s.current], price);
-  // 多回合施工：塔这类"要立起来才算数"的建筑先落一个工地。
-  // buildLeft 记的是"还差几个自己的回合"，所以 2 回合的塔在下一个回合开始时
-  // 才减到 1，再下一个回合成型——和"建造者占掉这个回合"正好对得上。
-  const buildTurns = Math.max(1, Math.round(def.buildTurns ?? 1));
+
+  // 建造点数：动工那一刻把工兵的能力投进去。投够了当回合就成型，
+  // 投不够就先落一个工地，之后每回合自动到账 buildRate（= 这个工兵的能力）。
+  const need = buildCostOf(def);
+  const power = buildPowerOf(builderDef);
+  const done = Math.min(power, need);
+  const unfinished = done < need;
+
   s.units.push({
     id: `u${s.nextUnitSeq++}`,
     type: def.id,
@@ -2273,11 +2550,14 @@ function doBuild(
     kills: 0,
     moved: true,
     acted: true,
-    ...(buildTurns > 1 ? { buildLeft: buildTurns } : {}),
+    ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
   });
 
-  // 桥建好就把那一格换成桥面：友军能走过，敌军得过桥
-  if (overWater) tile.terrain = 'bridge';
+  // 桥建成才把那一格换成桥面：工地桥不许提前通车（船也要先绕）
+  if (def.bridges && !unfinished) {
+    const here = tileAt(s, x, y);
+    if (here) here.terrain = 'bridge';
+  }
 
   // 建造要占掉这个单位的整回合
   builder.moved = true;
@@ -2286,9 +2566,9 @@ function doBuild(
   pushLog(
     s,
     s.current,
-    buildTurns > 1
-      ? `${builderDef.name} 在 ${String.fromCharCode(65 + x)}${y + 1} 开始修建 ${def.name}（要 ${buildTurns} 回合才成型）`
-      : `${builderDef.name} 在 ${String.fromCharCode(65 + x)}${y + 1} 修建了 ${def.name}`,
+    unfinished
+      ? `${builderDef.name} 在 ${cellName(x, y)} 开始修建 ${def.name}（已投 ${done}/${need}，此后每回合 +${power}）`
+      : `${builderDef.name} 在 ${cellName(x, y)} 修建了 ${def.name}`,
   );
   return { ok: true, state: s };
 }
@@ -2376,15 +2656,23 @@ function doRecruit(
     era = nearest.era;
     label = campDef.name;
 
-    // 军营占着自己那一格，兵从四邻的空地出来
-    for (const [dx, dy] of DIRS) {
-      const x = camp.x + dx;
-      const y = camp.y + dy;
-      const t = tileAt(s, x, y);
-      if (!t) continue;
-      if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
-      if (unitAt(s, x, y)) continue;
-      slots.push({ x, y });
+    // 兵从营地外围出来。占 2×2 的军营门口有十来格，逐个四邻去掉自家的格子，
+    // 拿"锚点四邻"算的话，右半边永远出不了一个人。
+    const self = new Set(tilesOfUnit(s, camp).map((p) => p.y * s.w + p.x));
+    const seen = new Set<number>();
+    for (const cell of tilesOfUnit(s, camp)) {
+      for (const [dx, dy] of DIRS) {
+        const x = cell.x + dx;
+        const y = cell.y + dy;
+        const k = y * s.w + x;
+        if (self.has(k) || seen.has(k)) continue;
+        const t = tileAt(s, x, y);
+        if (!t) continue;
+        if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
+        if (!canStandAt(s, x, y, unitTypeId)) continue;
+        seen.add(k);
+        slots.push({ x, y });
+      }
     }
   } else {
     const city = cityId ? cityById(s, cityId) : undefined;
@@ -2409,7 +2697,7 @@ function doRecruit(
         });
       if (slots.length === 0) return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
     } else {
-      slots = cityTiles(city).filter((t) => !unitAt(s, t.x, t.y));
+      slots = cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));
     }
   }
 

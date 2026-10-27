@@ -1965,5 +1965,115 @@ check('城郭与物料：HUD 显示粮和材，建造清单写明施工回合与
   assert.ok(priceText.includes('金') && priceText.includes('材'), `箭塔造价要拆成金+材：${priceText}`);
 });
 
+console.log('\n强制键');
+
+/** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
+function bootWith(st: unknown) {
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+  return w;
+}
+
+check('强制移动：Alt 点自家建筑那一格是"走上去"，不是"选中它"', () => {
+  // 这是"走不上桥"的同一个问题：桥/塔都是一枚建筑棋子，画在格子上面，
+  // 直接点永远是选中它。强制移动键把"我要走"这件事明确说出来。
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+  const me = st.units.find((u) => u.owner === 'A' && (UNIT_TYPES[u.type]?.atk ?? 0) > 0)!;
+
+  const spot = [
+    { x: me.x + 1, y: me.y },
+    { x: me.x - 1, y: me.y },
+    { x: me.x, y: me.y + 1 },
+    { x: me.x, y: me.y - 1 },
+  ].find(
+    (p) =>
+      p.x >= 0 && p.y >= 0 && p.x < st.w && p.y < st.h &&
+      !st.units.some((u) => u.x === p.x && u.y === p.y),
+  )!;
+  st.tiles[spot.y * st.w + spot.x]!.terrain = 'plain';
+  st.units.push({
+    id: 'tower-x', type: 'tower', owner: 'A',
+    x: spot.x, y: spot.y, hp: st.unitTypes.tower!.maxHp, kills: 0, moved: true, acted: true,
+  });
+
+  const w = bootWith(st);
+  const d = w.document;
+  const clickUnit = () =>
+    d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+  const clickTower = (opts: MouseEventInit) =>
+    d.querySelector<HTMLElement>('.unit[data-id="tower-x"]')!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true, ...opts }),
+    );
+  const posOf = (id: string) => {
+    const st2 = JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      units: { id: string; x: number; y: number }[];
+    };
+    return st2.units.find((u) => u.id === id)!;
+  };
+
+  // 对照组：不按修饰键，点塔就是"选中塔"，人不动——这正是要解决的问题
+  clickUnit();
+  clickTower({});
+  const still = posOf(me.id);
+  assert.notEqual(still.x === spot.x && still.y === spot.y, true, '不按 Alt 时不该走过去');
+
+  // 实验组：按住 Alt，同一格变成"走上去"
+  clickUnit();
+  clickTower({ altKey: true });
+  const moved = posOf(me.id);
+  assert.equal(moved.x, spot.x, '按 Alt 点塔那一格应该走上去');
+  assert.equal(moved.y, spot.y);
+});
+
+check('强制攻击：Shift 点敌人照样是开火，没有把攻击路径弄坏', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+  const me = st.units.find((u) => u.owner === 'A' && (UNIT_TYPES[u.type]?.atk ?? 0) > 0)!;
+  const foe = st.units.find((u) => u.owner === 'B')!;
+
+  const spot = [
+    { x: me.x + 1, y: me.y },
+    { x: me.x - 1, y: me.y },
+    { x: me.x, y: me.y + 1 },
+    { x: me.x, y: me.y - 1 },
+  ].find(
+    (p) =>
+      p.x >= 0 && p.y >= 0 && p.x < st.w && p.y < st.h &&
+      !st.units.some((u) => u.x === p.x && u.y === p.y),
+  )!;
+  st.tiles[spot.y * st.w + spot.x]!.terrain = 'plain';
+  foe.x = spot.x;
+  foe.y = spot.y;
+  const hpBefore = foe.hp;
+
+  const w = bootWith(st);
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true, shiftKey: true }),
+  );
+
+  const after = JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+    units: { id: string; hp: number }[];
+  };
+  const hurt = after.units.find((u) => u.id === foe.id)!;
+  assert.ok(hurt.hp < hpBefore, `Shift 点敌人应该开火：${hpBefore} → ${hurt.hp}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

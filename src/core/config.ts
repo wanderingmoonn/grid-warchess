@@ -340,10 +340,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     builds: ['tower', 'mill', 'bridge', 'camp'],
+    buildPower: 8,
   },
   tower: {
     id: 'tower',
     name: '箭塔',
+    buildCost: 16,
     short: '塔',
     era: 1,
     category: 'building',
@@ -359,6 +361,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   mill: {
     id: 'mill',
     name: '磨坊',
+    buildCost: 12,
     short: '磨',
     era: 1,
     category: 'building',
@@ -445,10 +448,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     builds: ['keep', 'watermill', 'bridge', 'camp', 'camp2'],
+    buildPower: 12,
   },
   keep: {
     id: 'keep',
     name: '石堡',
+    buildCost: 24,
     short: '堡',
     era: 2,
     category: 'building',
@@ -464,6 +469,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   watermill: {
     id: 'watermill',
     name: '水车',
+    buildCost: 18,
     short: '水',
     era: 2,
     category: 'building',
@@ -567,10 +573,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     builds: ['battery', 'factory', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3'],
+    buildPower: 18,
   },
   battery: {
     id: 'battery',
     name: '炮台',
+    buildCost: 36,
     short: '炮',
     era: 3,
     category: 'building',
@@ -587,6 +595,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   factory: {
     id: 'factory',
     name: '工厂',
+    buildCost: 36,
     short: '厂',
     era: 3,
     category: 'building',
@@ -680,10 +689,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     builds: ['fortress', 'arsenal', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3', 'camp4'],
+    buildPower: 24,
   },
   fortress: {
     id: 'fortress',
     name: '要塞',
+    buildCost: 48,
     short: '塞',
     era: 4,
     category: 'building',
@@ -699,6 +710,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   arsenal: {
     id: 'arsenal',
     name: '兵工厂',
+    buildCost: 44,
     short: '兵',
     era: 4,
     category: 'building',
@@ -787,10 +799,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     builds: ['bunker', 'industrialpark', 'bridge', 'bridge2', 'bridge3', 'camp', 'camp2', 'camp3', 'camp4', 'camp5'],
+    buildPower: 32,
   },
   bunker: {
     id: 'bunker',
     name: '碉堡',
+    buildCost: 64,
     short: '碉',
     era: 5,
     category: 'building',
@@ -806,6 +820,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   industrialpark: {
     id: 'industrialpark',
     name: '工业园',
+    buildCost: 60,
     short: '园',
     era: 5,
     category: 'building',
@@ -858,6 +873,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   bridge: {
     id: 'bridge',
     name: '木桥',
+    buildCost: 8,
     short: '桥',
     era: 1,
     category: 'building',
@@ -874,6 +890,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   bridge2: {
     id: 'bridge2',
     name: '石桥',
+    buildCost: 12,
     short: '石',
     era: 3,
     category: 'building',
@@ -890,6 +907,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   bridge3: {
     id: 'bridge3',
     name: '钢桥',
+    buildCost: 18,
     short: '钢',
     era: 5,
     category: 'building',
@@ -906,6 +924,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   camp: {
     id: 'camp',
     name: '军营',
+    buildCost: 8,
     short: '营',
     era: 1,
     category: 'building',
@@ -928,6 +947,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   camp2: {
     id: 'camp2',
     name: '寨垒',
+    buildCost: 12,
     short: '寨',
     era: 2,
     category: 'building',
@@ -946,6 +966,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   camp3: {
     id: 'camp3',
     name: '堡寨',
+    buildCost: 18,
     short: '堡',
     era: 3,
     category: 'building',
@@ -964,6 +985,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   camp4: {
     id: 'camp4',
     name: '兵站',
+    buildCost: 24,
     short: '站',
     era: 4,
     category: 'building',
@@ -982,6 +1004,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   camp5: {
     id: 'camp5',
     name: '前进基地',
+    buildCost: 32,
     short: '基',
     era: 5,
     category: 'building',
@@ -1038,3 +1061,27 @@ export function unitsByEra(level: number, pool = UNIT_TYPES): UnitTypeDef[] {
 
 /** 最便宜的兵种价格，用于判定"是否还有翻盘能力" */
 export const CHEAPEST_COST = Math.min(...Object.values(UNIT_TYPES).map((u) => u.cost));
+
+// ── 建造点数：难度与工兵能力 ────────────────────────────────────────────
+//
+// 两个派生函数放在这里而不是 rules.ts，是因为它们只读兵种表：
+// 面板、规则书、AI、规则层都要问"这座塔多难修"，而 rules.ts 反过来
+// 依赖 config —— 让 info/panel 去 import rules 只会绕出一圈循环依赖。
+
+/**
+ * 这座建筑要多少建造点数。
+ *
+ * 没写 `buildCost` 时按造价派生：贵的东西自然更难修，这样所有既有建筑
+ * （包括五个时代兵备包里的那些）不用改数据就自动有了难度梯度。
+ * 想要"便宜但费工"（桥）或"贵但快"（要塞）就显式写一个数覆盖它。
+ */
+export function buildCostOf(def: UnitTypeDef): number {
+  if (typeof def.buildCost === 'number') return Math.max(1, Math.round(def.buildCost));
+  return Math.max(6, Math.round((def.cost ?? 0) / 6));
+}
+
+/** 这个建造单位每回合能投多少点（缺省 8：能让大多数派生难度的建筑两回合成型） */
+export function buildPowerOf(def: UnitTypeDef): number {
+  if (typeof def.buildPower === 'number') return Math.max(1, Math.round(def.buildPower));
+  return 8;
+}

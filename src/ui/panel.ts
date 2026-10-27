@@ -6,7 +6,14 @@
  * 否则迷雾就白做了。城市归属和耐久是公开信息（城墙就在那儿）。
  */
 
-import { CATEGORY_NAME, CONFIG, eraDef, passable } from '../core/config.ts';
+import {
+  CATEGORY_NAME,
+  CONFIG,
+  buildCostOf,
+  buildPowerOf,
+  eraDef,
+  passable,
+} from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf } from '../core/expansions.ts';
 import type { PlayerView } from '../core/fog.ts';
@@ -41,6 +48,13 @@ export interface PanelInput {
   selectedCampId: string | null;
   /** 点空地时选中的地形，用来显示地形说明 */
   selectedTile: { x: number; y: number } | null;
+  /**
+   * 已经"上膛"的强制操作：下一次点棋盘按强制移动 / 强制攻击来解释。
+   *
+   * 和按住 Alt/Shift 是同一件事的两条路：键盘党按修饰键，触屏和鼠标党
+   * 点这两个按钮。状态放在 main 里，面板只负责显示"现在是哪一档"。
+   */
+  forceMode?: 'move' | 'attack' | null;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -302,10 +316,19 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                      : b.incomeByTerrain || b.income || b.yield
                        ? `产出 ${yieldShort(b)}`
                        : '工事';
-               // 施工回合和驻军是"看不见但决定怎么用"的两条，必须写在按钮上：
-               // 一个两回合才成型的塔，玩家在第一回合就得知道它现在是块工地。
+               // 建造难度和驻军是"看不见但决定怎么用"的两条，必须写在按钮上：
+               // 一个要投两回合才成型的塔，玩家在第一回合就得知道它现在是块工地。
+               // 点数后面跟的是"这个工兵要几回合"，因为玩家真正关心的是工期，
+               // 而工期取决于谁去修——这正是建造点数要表达的东西。
                const mods: string[] = [];
-               if (b.buildTurns && b.buildTurns > 1) mods.push(`施工 ${b.buildTurns} 回合`);
+               const need = buildCostOf(b);
+               const power = buildPowerOf(def);
+               mods.push(
+                 need <= power
+                   ? `建造 ${need} 点 · 当回合完工`
+                   : `建造 ${need} 点 · 施工 ${Math.ceil(need / power)} 回合`,
+               );
+               if ((b.footprint ?? 1) > 1) mods.push('占 2×2');
                if (b.garrison) mods.push('可驻军');
                const tagLine = mods.length > 0 ? `${tag} · ${mods.join(' · ')}` : tag;
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
@@ -422,6 +445,22 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${buildBlock}
       ${noteBlock}
       ${
+        mine && myTurn
+          ? `<div class="force-row">
+               <button class="force-btn${input.forceMode === 'move' ? ' armed' : ''}" data-act="force-move">
+                 强制移动 <kbd>Alt</kbd>
+               </button>
+               <button class="force-btn${input.forceMode === 'attack' ? ' armed' : ''}" data-act="force-attack">
+                 强制攻击 <kbd>Shift</kbd>
+               </button>
+             </div>
+             <div class="hint" style="margin-top:6px">
+               同一格压着多个目标（兵站在自己的塔上、飞行单位停在敌人头顶）时，<b>连点同一格会在它们之间轮换</b>；
+               按住 <kbd>Alt</kbd> 点可达格，可以无视压在上面的棋子直接走上去（比如走到桥上）。
+             </div>`
+          : ''
+      }
+      ${
         canDisband
           ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
                ${refund > 0 ? `拆除（回收 ${refund} 金）` : '拆除（残兵不回收金币）'}
@@ -444,7 +483,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
       点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
       点对方的城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
-      点任何一块空地 → 看这块地形能干什么、适合谁站。
+      点任何一块空地 → 看这块地形能干什么、适合谁站。<br /><br />
+      同一格有好几个东西时，连点会轮换选中；按住 <kbd>Alt</kbd> 点可达格是<b>强制移动</b>
+      （无视压在上面的棋子），按住 <kbd>Shift</kbd> 点是<b>强制攻击</b>（打身下的目标）。
     </div>
   `;
 }
