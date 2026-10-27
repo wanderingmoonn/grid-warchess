@@ -1443,6 +1443,51 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
         if (hurt.length >= 2 || bad.length >= 1) score = 22 + hurt.length * 5 + bad.length * 4;
         break;
       }
+      case 'vanish': {
+        /*
+         * 隐匿是"脱战"用的，不是"开打前先加个 buff"用的。
+         * 所以只在身边有威胁时才值：贴脸且血不满 → 该藏；三格内有人 → 顺手藏。
+         * 满血又没人时开它，等于白扔两回合冷却。
+         */
+        const threat = foes.filter((f) => distance(f, u) <= 3);
+        if (threat.length === 0) break;
+        const adjacent = threat.some((f) => distance(f, u) <= 1);
+        if (adjacent) score = hpRatio < 0.7 ? 34 : 24;
+        else score = 18;
+        break;
+      }
+      case 'mitosis': {
+        /*
+         * 裂殖：血越少越划算（四团 1/4 血比一个残血牢大难缠），
+         * 但前提是四邻真有四个空位——裂不出来就别点，规则会拒。
+         */
+        let free = 0;
+        for (const [dx, dy] of DIRS) {
+          const nx = u.x + dx;
+          const ny = u.y + dy;
+          const t = view.tiles[ny * view.w + nx];
+          if (!t) continue;
+          if (view.units.some((v) => v.x === nx && v.y === ny)) continue;
+          if (t.terrain === 'water' || t.terrain === 'mountain') continue;
+          free += 1;
+        }
+        if (free < 4) break;
+        if (hpRatio < 0.6) score = 26 + (0.6 - hpRatio) * 40;
+        else if (foes.some((f) => distance(f, u) <= 3)) score = 16;
+        break;
+      }
+      case 'fuse': {
+        /*
+         * 聚合：碎片在场上凑够两只就该合回去，血越少越急——
+         * 一只大史莱姆单挑谁都打不过，合体才是它真正的形态。
+         */
+        const kin = unitsOf(view, u.owner).filter((a) => a.type === u.type && a.hp > 0);
+        if (kin.length < 2) break;
+        const bossAlive = unitsOf(view, u.owner).some((a) => a.type === (def.mergeInto ?? ''));
+        if (bossAlive) break;
+        score = hpRatio < 0.5 ? 38 : 24 + kin.length * 3;
+        break;
+      }
     }
     if (score > 0) {
       return { action: { type: 'HERO_SKILL', unitId: u.id, skillId: k.id }, score };

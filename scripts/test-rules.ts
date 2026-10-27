@@ -1554,19 +1554,29 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包只装英雄，而且五个都标了 hero', () => {
-  const heroes = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
-  assert.equal((heroes.units ?? []).length, 5);
-  for (const u of heroes.units ?? []) {
-    assert.equal(u.hero, true, `${u.name} 应该在英雄包里且标了 hero`);
+test('英雄包装七个英雄，外加跟班的召唤物', () => {
+  const pack = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
+  const units = pack.units ?? [];
+  const heroes = units.filter((u) => u.hero === true);
+  assert.equal(heroes.length, 7);
+  for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
+    assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
   }
+  // 大史莱姆是牢大的碎片，跟召唤者住一个包，但绝不能进产线
+  const minions = units.filter((u) => u.hero !== true);
+  assert.equal(minions.length, 1, '英雄包里的非英雄单位只有大史莱姆');
+  assert.equal(minions[0]!.id, 'slime-giant');
+  assert.equal(minions[0]!.summonedOnly, true, '大史莱姆只能被裂殖出来');
 });
 
 test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
-  const heroes = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? [];
+  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []).filter(
+    (u) => u.hero === true,
+  );
   // 只卡下限和上限，不锁具体数字：以后微调面板不该让这条测试变红，
   // 但"血被打回原样"和"贵到变成第二道钱墙"这两种退化必须拦住。
+  // 召唤物（大史莱姆）不在这条的口径里：它的血是牢大的四分之一。
   for (const u of heroes) {
     assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
     assert.ok(u.cost >= 360 && u.cost <= 600, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
@@ -6086,6 +6096,136 @@ test('effectiveStats：狂暴是乘法，半血 ×1.5', () => {
   const eff = effectiveStats(s, u);
   assert.equal(eff.atk, Math.round(def.atk * 1.5));
   assert.ok(eff.atkItems.some((it) => it.label.includes('狂暴')));
+});
+
+// ── 新英雄：刺客大师 / 史莱姆牢大，以及至尊法师的加强 ──────────────────
+console.log('\n新英雄与法师加强');
+
+test('收割：刺客斩杀后拿回移动力，但不拿回攻击', () => {
+  const s = arena(fresh({ expansionIds: FANTASY }));
+  for (const [x, y] of [
+    [5, 5],
+    [5, 6],
+  ]) {
+    s.tiles[idx(s, x!, y!)]!.terrain = 'plain';
+  }
+  const ass = place2(s, 'A', 'assassin-master', 5, 5);
+  const foe = place2(s, 'B', 'militia', 5, 6);
+  foe.hp = 1;
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: ass.id, targetId: foe.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === ass.id)!;
+  assert.equal(after.moved, false, '斩杀之后本回合还能再走');
+  assert.equal(after.acted, true, '攻击次数不还——不能一回合砍两个');
+  assert.ok(reachableTiles(r.state, after).size > 0, '移动力是真的可用，不只是个标记');
+});
+
+test('隐匿：藏好之后看不见，贴身能发现，出手即现形', () => {
+  // godMode 关掉胜负判定：arena 把城清空了，正常局会立刻判"一方没城"结束
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  s.fog = true;
+  const ass = place2(s, 'A', 'assassin-master', 5, 5);
+  const foe = place2(s, 'B', 'militia', 9, 5);
+  s.current = 'A';
+  assert.equal(isHiddenFrom(s, ass, 'B'), false, '没开技能前，开阔地上看得见');
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: ass.id, skillId: 'vanish' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const hidden = r.state.units.find((u) => u.id === ass.id)!;
+  assert.equal(isHiddenFrom(r.state, hidden, 'B'), true, '藏好之后看不见');
+
+  // 贴身就能发现：隐匿不是无敌
+  const enemy = r.state.units.find((u) => u.id === foe.id)!;
+  enemy.x = 6;
+  enemy.y = 5;
+  assert.equal(isHiddenFrom(r.state, hidden, 'B'), false, '贴到相邻格就藏不住');
+
+  const atk = applyAction(r.state, { type: 'ATTACK', unitId: hidden.id, targetId: enemy.id });
+  assert.ok(atk.ok, atk.ok ? '' : atk.reason);
+  const shown = atk.state.units.find((u) => u.id === ass.id)!;
+  assert.notEqual(shown.heroBuff?.hidden, true, '动手之后隐匿失效');
+});
+
+test('裂殖：牢大裂成四只大史莱姆，生命按当前值分摊', () => {
+  const s = arena(fresh({ expansionIds: FANTASY }));
+  for (let y = 5; y <= 7; y++) {
+    for (let x = 5; x <= 7; x++) s.tiles[idx(s, x, y)]!.terrain = 'plain';
+  }
+  const boss = place2(s, 'A', 'slime-boss', 6, 6);
+  boss.hp = 160;
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: boss.id, skillId: 'mitosis' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.type === 'slime-boss'), false, '牢大消失了');
+  const kids = r.state.units.filter((u) => u.type === 'slime-giant');
+  assert.equal(kids.length, 4, '裂成四只');
+  assert.equal(kids.reduce((n, k) => n + k.hp, 0), 160, '四只合计等于裂开前那一口血');
+  for (const k of kids) assert.equal(k.acted, true, '裂出来的当回合不能行动');
+
+  // 四邻没有四格空地时不给裂：宁可不开，也别裂出半套
+  const s2 = arena(fresh({ expansionIds: FANTASY }));
+  const boss2 = place2(s2, 'A', 'slime-boss', 6, 6);
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ]) {
+    place2(s2, 'A', 'militia', 6 + dx!, 6 + dy!);
+  }
+  s2.current = 'A';
+  const bad = applyAction(s2, { type: 'HERO_SKILL', unitId: boss2.id, skillId: 'mitosis' });
+  assert.equal(bad.ok, false, '周围占满时不该裂得出来');
+});
+
+test('聚合：两只大史莱姆合回牢大，生命相加且当回合不能动', () => {
+  // 只有一只时合不起来：否则"裂开"就变成回血技能了
+  const s0 = arena(fresh({ expansionIds: FANTASY }));
+  const solo = place2(s0, 'A', 'slime-giant', 5, 5);
+  s0.current = 'A';
+  assert.equal(
+    applyAction(s0, { type: 'HERO_SKILL', unitId: solo.id, skillId: 'fuse' }).ok,
+    false,
+    '一只大史莱姆合不成牢大',
+  );
+
+  const s = arena(fresh({ expansionIds: FANTASY }));
+  const a = place2(s, 'A', 'slime-giant', 5, 5);
+  const b = place2(s, 'A', 'slime-giant', 7, 5);
+  a.hp = 30;
+  b.hp = 40;
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: a.id, skillId: 'fuse' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const boss = r.state.units.find((u) => u.type === 'slime-boss');
+  assert.ok(boss, '合体应该产出一只牢大');
+  assert.equal(boss!.hp, 70, '生命相加');
+  assert.equal(boss!.moved, true, '合体后当回合不能行动');
+  assert.equal(r.state.units.filter((u) => u.type === 'slime-giant').length, 0, '碎片全被合并');
+});
+
+test('至尊法师加强：护甲 6 / 射程 5 / 视野 8，同属性伤害减半', () => {
+  const holder = fresh({ expansionIds: FANTASY });
+  const def = holder.unitTypes.archmage!;
+  assert.equal(def.armor, 6, '护甲 3 → 6');
+  assert.equal(def.range, 5, '射程 4 → 5');
+  assert.equal(def.vision, 8, '视野 7 → 8');
+
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const mage = place2(s, 'A', 'archmage', 6, 6);
+  const fireAtk = place2(s, 'B', 'archmage', 6, 5);
+  fireAtk.element = 'fire';
+
+  mage.element = 'fire';
+  const same = computeDamage(s, fireAtk, mage);
+  mage.element = 'water';
+  const other = computeDamage(s, fireAtk, mage);
+  assert.ok(other > same, `换个属性打就该更疼：同属性 ${same}，异属性 ${other}`);
+  assert.equal(same, Math.round(other * 0.5), '同属性只吃一半');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

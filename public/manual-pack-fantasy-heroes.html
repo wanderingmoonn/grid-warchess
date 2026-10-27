@@ -223,15 +223,15 @@
   <main>
     <header class="page-head">
       <h1>方格战棋 · 奇想·英雄</h1>
-      <p>扩展分册 · 5 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+      <p>扩展分册 · 8 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
     </header>
 
 
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>五个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，法抗 10）、天使（降临：半径 3 回 20% 并清空负面状态）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。</p>
+      <p>七个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。</p>
       <dl class="kv">
-        <dt>兵种数量</dt><dd>5 个（奇想系列）</dd>
+        <dt>兵种数量</dt><dd>8 个（奇想系列）</dd>
         <dt>覆盖时代</dt><dd>3（火药）、4（工业）、5（现代）</dd>
         <dt>前置</dt><dd>需要先开「奇想·法则」</dd>
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
@@ -248,10 +248,26 @@
     <section id="pack-units">
       <h2><span class="sec-num">02</span>兵种表</h2>
       
-    <h4>奇想·英雄 · 5 个英雄</h4>
+    <h4>奇想·英雄 · 8 个英雄</h4>
     <table>
       <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>魔攻</th><th>甲</th><th>魔抗</th><th>血</th><th>移</th><th>射</th><th>视</th><th>属性</th><th>特性</th></tr></thead>
       <tbody>
+      <tr>
+        <td class="name">大史莱姆</td>
+        <td class="glyph">巨</td>
+        <td class="num">3</td>
+        <td class="num">130</td>
+        <td class="num">14</td>
+        <td class="num">—</td>
+        <td class="num">1</td>
+        <td class="num">0</td>
+        <td class="num">50</td>
+        <td class="num">5</td>
+        <td class="num">1</td>
+        <td class="num">3</td>
+        <td class="traits">怕火×1.5</td>
+        <td class="traits"><b>技能「聚合」</b>（CD 1）和场上其它大史莱姆合体成史莱姆牢大（至少两只）：生命相加，上限按牢大算。合体后当回合不能行动。 · 只能被召唤，不占编制</td>
+      </tr>
       <tr>
         <td class="name">矮人王</td>
         <td class="glyph">王</td>
@@ -267,6 +283,22 @@
         <td class="num">4</td>
         <td class="traits">—</td>
         <td class="traits"><b>守护光环</b> · <b>盾墙</b> · <b>英雄</b>（场上一名 · 首次解锁 150 金） · <b>技能「投斧」</b>（CD 1）投出一斧：射程 3、隔着一格以上只有六成伤害。这一下不占本回合的攻击次数——扔完还能贴身再劈一次。</td>
+      </tr>
+      <tr>
+        <td class="name">刺客大师</td>
+        <td class="glyph">刺</td>
+        <td class="num">4</td>
+        <td class="num">430</td>
+        <td class="num">30</td>
+        <td class="num">—</td>
+        <td class="num">3</td>
+        <td class="num">0</td>
+        <td class="num">78</td>
+        <td class="num">3</td>
+        <td class="num">1</td>
+        <td class="num">5</td>
+        <td class="traits">—</td>
+        <td class="traits"><b>收割</b> · <b>英雄</b>（场上一名 · 首次解锁 180 金） · <b>技能「隐匿」</b>（CD 2）隐去身形：直到你下个回合开始，敌人只有贴到相邻格才发现它。出手或挨打会立刻暴露。</td>
       </tr>
       <tr>
         <td class="name">不死鸟</td>
@@ -301,6 +333,22 @@
         <td class="traits"><b>强再生</b> · <b>破城</b> · <b>英雄</b>（场上一名 · 首次解锁 200 金） · <b>技能「再生」</b>（CD 2）立刻回复 40% 生命（约 58 点）。</td>
       </tr>
       <tr>
+        <td class="name">史莱姆牢大</td>
+        <td class="glyph">牢</td>
+        <td class="num">3</td>
+        <td class="num">520</td>
+        <td class="num">32</td>
+        <td class="num">—</td>
+        <td class="num">2</td>
+        <td class="num">0</td>
+        <td class="num">200</td>
+        <td class="num">3</td>
+        <td class="num">1</td>
+        <td class="num">3</td>
+        <td class="traits">怕火×1.5</td>
+        <td class="traits"><b>英雄</b>（场上一名 · 首次解锁 200 金） · <b>技能「裂殖」</b>（CD 3）裂成四只大史莱姆：每只生命为牢大的四分之一（按当前生命分摊，不凭空多也不丢）。分裂体当回合不能行动。 · 死后分裂为 大史莱姆</td>
+      </tr>
+      <tr>
         <td class="name">天使</td>
         <td class="glyph">使</td>
         <td class="num">5</td>
@@ -323,14 +371,14 @@
         <td class="num">590</td>
         <td class="num">10</td>
         <td class="num">26</td>
-        <td class="num">3</td>
+        <td class="num">6</td>
         <td class="num">10</td>
         <td class="num">72</td>
         <td class="num">2</td>
-        <td class="num">4</td>
-        <td class="num">7</td>
+        <td class="num">5</td>
+        <td class="num">8</td>
         <td class="traits">轮换（火 → 水 → 自然 → 暗）</td>
-        <td class="traits"><b>属性精研</b> · <b>溅射 2 格</b>（50%） · <b>魔法攻击 26</b>（不吃护甲） · 魔法抗性 10 · <b>英雄</b>（场上一名 · 首次解锁 300 金） · <b>技能「转属性」</b>（CD 1）切到下一种属性（火→水→自然→暗）。火=点燃、水=霜缚、自然=攻击时自愈、暗=魔法段 ×1.5。</td>
+        <td class="traits"><b>属性精研</b> · <b>同源护壁</b> · <b>溅射 2 格</b>（50%） · <b>魔法攻击 26</b>（不吃护甲） · 魔法抗性 10 · <b>英雄</b>（场上一名 · 首次解锁 300 金） · <b>技能「转属性」</b>（CD 1）切到下一种属性（火→水→自然→暗）。火=点燃、水=霜缚、自然=攻击时自愈、暗=魔法段 ×1.5。</td>
       </tr></tbody>
     </table>
     </section>

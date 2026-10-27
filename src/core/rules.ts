@@ -687,13 +687,16 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
   if (unit.owner === viewer) return false;
   const def = utype(s, unit.type);
   const vanish = hasAbility(def, 'vanish');
-  if (!vanish && !hasAbility(def, 'stealth')) return false;
+  // 技能带来的隐匿（刺客大师）：不挑地形、也不看"动没动过"——
+  // 它是主动藏起来的，藏到自己的下个回合开始（见 turnStartSkills 清 heroBuff）。
+  const skillHidden = unit.heroBuff?.hidden === true;
+  if (!skillHidden && !vanish && !hasAbility(def, 'stealth')) return false;
 
   // 隐匿（刺客）：不挑地形，但只在"这一回合还没暴露"时成立。
   // 出手/走动就现形，这条让它有节奏——你藏一回合，然后一击，然后被围。
   if (vanish) {
     if (unit.moved || unit.acted) return false;
-  } else {
+  } else if (!skillHidden) {
     const tile = tileAt(s, unit.x, unit.y);
     if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return false;
   }
@@ -1023,6 +1026,15 @@ export function computeDamage(
     if (weak && weak > 0) dmg *= weak;
     const resist = dt.resist?.[el];
     if (resist) dmg -= resist;
+  }
+
+  // 同源护壁（至尊法师）：挨的是和自己**当前属性**同一路的伤害，只吃一半。
+  //
+  // 放在弱点/抗性之后、反击折减之前：它说的是"这一路的伤害对我打对折"，
+  // 和"我怕不怕火"是两件事——怕火照样怕，只是那口火小了一半。
+  // 属性是会变的（转属性技能），所以这个护壁每回合护的东西都不一样。
+  if (hasAbility(dt, 'element-ward') && el && elementOf(s, defender) === el) {
+    dmg = Math.round(dmg * 0.5);
   }
 
   if (isCounter) dmg = Math.max(0, Math.round(dmg * CONFIG.counterAttackRatio));
@@ -1703,11 +1715,34 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     markManualFire(s, attacker);
   }
 
+  // 一出手就现形：技能隐匿只保到"你先动手为止"，不是永久隐身。
+  if (attacker.heroBuff?.hidden) {
+    const rest = { ...attacker.heroBuff };
+    delete rest.hidden;
+    attacker.heroBuff = Object.keys(rest).length > 0 ? rest : undefined;
+    pushLog(s, attacker.owner, `${atName} 动手，隐匿失效`);
+  }
+  // 挨了实伤一样暴露：刀落在身上，隐身衣挡不住
+  if (dmg > 0 && defender.heroBuff?.hidden) {
+    const rest = { ...defender.heroBuff };
+    delete rest.hidden;
+    defender.heroBuff = Object.keys(rest).length > 0 ? rest : undefined;
+  }
+
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
     pushLog(s, attacker.owner, `${dfName} 被消灭`);
     drownCargo(s, defender);
     fireKilled(s, defender, attacker);
+    // 收割（刺客大师）：亲手斩掉一个，本回合的移动力就还回来。
+    //
+    // 只还移动、不还攻击。攻击次数由 acted 管着，这里刻意不碰——
+    // "杀完再走一步"是脱战，而"杀完再砍一刀"是另一档强度，不在这个技能里。
+    // 死在反击里的情况（attacker.hp <= 0）不给：人都倒了，走给谁看。
+    if (hasAbility(atkDef, 'kill-rush') && attacker.hp > 0 && s.units.some((u) => u.id === attacker.id)) {
+      attacker.moved = false;
+      pushLog(s, attacker.owner, `${atName} 斩杀得手，本回合还能再走一次`);
+    }
   }
 
   // 溅射打死的也要走同一套善后：战报 + 沉船 + 击杀钩子
@@ -2402,6 +2437,77 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
         }
       }
       if (healed === 0 && cleansed === 0) return { ok: false, reason: '附近没有人需要救治' };
+      break;
+    }
+    case 'vanish': {
+      // 主动隐匿：藏在 heroBuff 里，回合开始统一清空 = "藏到你的下个回合"。
+      // 不用 status：status 是负面状态，会被净化类技能顺手清掉，
+      // 而"我藏起来了"显然不该被队友的一次净化洗掉。
+      if (u.heroBuff?.hidden === true) return { ok: false, reason: '已经藏好了' };
+      u.heroBuff = { ...u.heroBuff, hidden: true };
+      break;
+    }
+    case 'mitosis': {
+      /*
+       * 裂殖：牢大裂成四只大史莱姆。
+       *
+       * 三条硬规矩：
+       *   1. 四邻必须全是空地。只裂出两只不叫"裂成四个"，宁可不让开——
+       *      否则玩家点下去会得到一个和说明书不符的结果。
+       *   2. 生命按当前值分摊（向下取整，零头给最后一只），合起来不凭空多。
+       *      按上限分摊的话，残血的牢大裂一次就直接回满，等于白送一堆血。
+       *   3. 裂出来的当回合不能动（makeUnit 默认 moved/acted）——
+       *      否则一次技能凭空多出四次攻击，这不是"分裂"，是四个免费回合。
+       */
+      const kid = def.splitInto;
+      if (!kid || !s.unitTypes[kid]) return { ok: false, reason: '这个单位没有可裂出的形态' };
+      const spots: Array<{ x: number; y: number }> = [];
+      for (const [dx, dy] of DIRS) {
+        if (canStandAt(s, u.x + dx, u.y + dy, kid)) spots.push({ x: u.x + dx, y: u.y + dy });
+      }
+      if (spots.length < 4) {
+        return { ok: false, reason: `周围只有 ${spots.length} 格空地，裂成四个需要 4 格` };
+      }
+      const kidDef = utype(s, kid);
+      const share = Math.max(1, Math.floor(u.hp / 4));
+      let left = u.hp;
+      s.units = s.units.filter((x) => x.id !== u.id);
+      for (let i = 0; i < 4; i += 1) {
+        const spot = spots[i]!;
+        const born = makeUnit(s, u.owner, kid, spot.x, spot.y);
+        // 最后一只吃零头：4 只合起来的血必须等于裂开之前那一口
+        const hp = i === 3 ? Math.max(1, left) : share;
+        born.hp = Math.max(1, Math.min(kidDef.maxHp, hp));
+        left -= hp;
+        s.units.push(born);
+      }
+      break;
+    }
+    case 'fuse': {
+      /*
+       * 聚合：大史莱姆合回牢大。
+       *
+       * 合并的是**场上全部**同类碎片，不只是脚边两只：碎片本来就是一次裂殖
+       * 的产物，跑散在各处还要一只只凑齐才能合体，会变成一件纯粹的手续。
+       * 数量门槛定在 2：一只也能变回满状态的牢大，那"裂开"就变成回血技能了。
+       */
+      const bossId = def.mergeInto;
+      if (!bossId || !s.unitTypes[bossId]) return { ok: false, reason: '这个单位没有可合体的形态' };
+      if (s.units.some((x) => x.owner === u.owner && x.type === bossId && x.hp > 0)) {
+        return { ok: false, reason: '牢大已经在场上了' };
+      }
+      const kin = s.units.filter((x) => x.owner === u.owner && x.type === u.type && x.hp > 0);
+      if (kin.length < 2) return { ok: false, reason: '至少要有两只大史莱姆才能合体' };
+
+      const bossDef = utype(s, bossId);
+      const total = kin.reduce((n, x) => n + x.hp, 0);
+      const at = { x: u.x, y: u.y };
+      s.units = s.units.filter((n) => !kin.some((k) => k.id === n.id));
+      const boss = makeUnit(s, u.owner, bossId, at.x, at.y);
+      // 合计封顶：碎片掉的血不会在合体时补回来，但也不会超过牢大的上限
+      boss.hp = Math.max(1, Math.min(bossDef.maxHp, total));
+      s.units.push(boss);
+      pushLog(s, u.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
       break;
     }
   }

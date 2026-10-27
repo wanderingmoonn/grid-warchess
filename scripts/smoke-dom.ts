@@ -1282,6 +1282,90 @@ check('英雄技能：面板列出技能，冷却中的置灰', () => {
   assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
 });
 
+check('新英雄的技能按钮挂上了对应技能', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    911,
+  );
+  st.current = 'A';
+
+  // 三个新兵：刺客大师（隐匿）、史莱姆牢大（裂殖）、大史莱姆（聚合）
+  const cases: Array<{ type: string; skill: string; label: string }> = [
+    { type: 'assassin-master', skill: 'vanish', label: '隐匿' },
+    { type: 'slime-boss', skill: 'mitosis', label: '裂殖' },
+    { type: 'slime-giant', skill: 'fuse', label: '聚合' },
+  ];
+
+  for (const c of cases) {
+    const unit: Unit = {
+      id: `new-${c.type}`,
+      type: c.type,
+      owner: 'A',
+      x: 5,
+      y: 5,
+      hp: st.unitTypes[c.type]?.maxHp ?? 50,
+      kills: 0,
+      moved: false,
+      acted: false,
+    };
+    st.units = st.units.filter((u) => u.id !== unit.id);
+    st.units.push(unit);
+
+    const host = doc.createElement('div');
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: unit,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const btn = host.querySelector<HTMLElement>('[data-act="hero-skill"]');
+    assert.ok(btn, `${c.type} 应该有技能按钮`);
+    assert.equal(btn!.dataset.skill, c.skill, `${c.type} 的技能应该是 ${c.label}`);
+    assert.ok(host.innerHTML.includes(c.label), `${c.label} 的名字要印在按钮上`);
+  }
+});
+
+check('大史莱姆不进产线：召唤物只能从裂殖里出来', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 5,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    912,
+  );
+  st.current = 'A';
+  st.players.A.gold = 3000;
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '应该有 A 方城市');
+  // 产线只列"当前时代和上一档"，牢大是 3 级兵，城就压到 3 级
+  city.era = 3;
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok(host.querySelector('[data-type="slime-boss"]'), '牢大是英雄，可以在城市里招');
+  assert.ok(!host.querySelector('[data-type="slime-giant"]'), '大史莱姆不该出现在产线上');
+});
+
 check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () => {
   const st = createMatch(
     {
