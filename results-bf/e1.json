@@ -1,0 +1,7052 @@
+{
+  "era": 1,
+  "size": 12,
+  "commander": false,
+  "expansions": [
+    "bloodbath",
+    "turn-order-comp",
+    "fantasy-core",
+    "fantasy-knights",
+    "fantasy-beasts",
+    "fantasy-arcane",
+    "fantasy-heroes"
+  ],
+  "games": 60,
+  "baseSeed": 0,
+  "cap": 200,
+  "summary": {
+    "aWins": 36,
+    "bWins": 24,
+    "draws": 0,
+    "aRate": 0.6,
+    "bRate": 0.4,
+    "drawRate": 0,
+    "turnsAvg": 82.23333333333333,
+    "recruitsPerGame": 105.48333333333333,
+    "spendPerGame": 7483.066666666667
+  },
+  "stats": [
+    {
+      "type": "scout",
+      "name": "斥候",
+      "era": 1,
+      "category": "combat",
+      "cost": 50,
+      "built": 1746,
+      "seen": 1865,
+      "spend": 87300,
+      "share": 0.20560026457942895,
+      "goldShare": 0.19443900005345402,
+      "dealt": 39993,
+      "taken": 42363,
+      "ratio": 0.9440549536151831,
+      "per100": 45.81099656357389,
+      "per100Taken": 48.52577319587629,
+      "kills": 1304,
+      "initCount": 120,
+      "initRatio": 0
+    },
+    {
+      "type": "archer",
+      "name": "弓手",
+      "era": 1,
+      "category": "combat",
+      "cost": 35,
+      "built": 852,
+      "seen": 1088,
+      "spend": 29820,
+      "share": 0.11994267445706096,
+      "goldShare": 0.06641662063681557,
+      "dealt": 30930,
+      "taken": 16015,
+      "ratio": 1.9313143927567904,
+      "per100": 103.72233400402415,
+      "per100Taken": 53.70556673373574,
+      "kills": 1105,
+      "initCount": 240,
+      "initRatio": 0
+    },
+    {
+      "type": "militia",
+      "name": "民兵",
+      "era": 1,
+      "category": "combat",
+      "cost": 25,
+      "built": 855,
+      "seen": 1095,
+      "spend": 21375,
+      "share": 0.12071436445816337,
+      "goldShare": 0.04760748712649003,
+      "dealt": 16011,
+      "taken": 20899,
+      "ratio": 0.7661132111584287,
+      "per100": 74.90526315789474,
+      "per100Taken": 97.77309941520468,
+      "kills": 528,
+      "initCount": 240,
+      "initRatio": 0
+    },
+    {
+      "type": "tower",
+      "name": "箭塔",
+      "era": 1,
+      "category": "building",
+      "cost": 55,
+      "built": 417,
+      "seen": 417,
+      "spend": 22935,
+      "share": 0.04597067577995811,
+      "goldShare": 0.05108199846765141,
+      "dealt": 14255,
+      "taken": 6143,
+      "ratio": 2.3205274295946605,
+      "per100": 62.15391323304993,
+      "per100Taken": 26.784390669282754,
+      "kills": 576,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "priest",
+      "name": "牧师",
+      "era": 2,
+      "category": "combat",
+      "cost": 105,
+      "built": 191,
+      "seen": 191,
+      "spend": 20055,
+      "share": 0.02105611288722302,
+      "goldShare": 0.044667515991661175,
+      "dealt": 8449,
+      "taken": 5758,
+      "ratio": 1.4673497742271622,
+      "per100": 42.12914485165794,
+      "per100Taken": 28.711044627274994,
+      "kills": 250,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "centaur",
+      "name": "半人马",
+      "era": 2,
+      "category": "combat",
+      "cost": 105,
+      "built": 162,
+      "seen": 162,
+      "spend": 17010,
+      "share": 0.017859111454084444,
+      "goldShare": 0.03788553712381733,
+      "dealt": 8223,
+      "taken": 4410,
+      "ratio": 1.864625850340136,
+      "per100": 48.342151675485006,
+      "per100Taken": 25.925925925925924,
+      "kills": 282,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "boat",
+      "name": "舢板",
+      "era": 1,
+      "category": "combat",
+      "cost": 45,
+      "built": 306,
+      "seen": 306,
+      "spend": 13770,
+      "share": 0.033733877191048395,
+      "goldShare": 0.030669244338328315,
+      "dealt": 6073,
+      "taken": 9641,
+      "ratio": 0.6299139093455036,
+      "per100": 44.103122730573716,
+      "per100Taken": 70.01452432824982,
+      "kills": 154,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "spearman",
+      "name": "长枪兵",
+      "era": 2,
+      "category": "combat",
+      "cost": 65,
+      "built": 143,
+      "seen": 143,
+      "spend": 9295,
+      "share": 0.015764524308235033,
+      "goldShare": 0.02070229674108654,
+      "dealt": 4689,
+      "taken": 4386,
+      "ratio": 1.0690834473324213,
+      "per100": 50.446476600322754,
+      "per100Taken": 47.1866594943518,
+      "kills": 136,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "swordsman",
+      "name": "剑士",
+      "era": 2,
+      "category": "combat",
+      "cost": 70,
+      "built": 100,
+      "seen": 100,
+      "spend": 7000,
+      "share": 0.011024142872891633,
+      "goldShare": 0.015590756018031823,
+      "dealt": 3330,
+      "taken": 3234,
+      "ratio": 1.0296846011131726,
+      "per100": 47.57142857142857,
+      "per100Taken": 46.2,
+      "kills": 104,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "mortar",
+      "name": "臼炮",
+      "era": 3,
+      "category": "combat",
+      "cost": 140,
+      "built": 31,
+      "seen": 31,
+      "spend": 4340,
+      "share": 0.003417484290596406,
+      "goldShare": 0.00966626873117973,
+      "dealt": 2977,
+      "taken": 382,
+      "ratio": 7.793193717277487,
+      "per100": 68.59447004608295,
+      "per100Taken": 8.80184331797235,
+      "kills": 90,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "gargoyle",
+      "name": "石像鬼",
+      "era": 3,
+      "category": "combat",
+      "cost": 150,
+      "built": 39,
+      "seen": 39,
+      "spend": 5850,
+      "share": 0.004299415720427737,
+      "goldShare": 0.013029417529355167,
+      "dealt": 2843,
+      "taken": 1214,
+      "ratio": 2.341845140032949,
+      "per100": 48.5982905982906,
+      "per100Taken": 20.752136752136753,
+      "kills": 109,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "mage",
+      "name": "法师",
+      "era": 3,
+      "category": "combat",
+      "cost": 150,
+      "built": 30,
+      "seen": 30,
+      "spend": 4500,
+      "share": 0.00330724286186749,
+      "goldShare": 0.010022628868734743,
+      "dealt": 2492,
+      "taken": 459,
+      "ratio": 5.429193899782135,
+      "per100": 55.37777777777778,
+      "per100Taken": 10.2,
+      "kills": 70,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "spider-rider",
+      "name": "蜘蛛骑士",
+      "era": 2,
+      "category": "combat",
+      "cost": 78,
+      "built": 123,
+      "seen": 122,
+      "spend": 9594,
+      "share": 0.013449454304927793,
+      "goldShare": 0.021368244748142473,
+      "dealt": 2292,
+      "taken": 3265,
+      "ratio": 0.7019908116385911,
+      "per100": 23.889931207004377,
+      "per100Taken": 34.03168647071086,
+      "kills": 60,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "wolf-rider",
+      "name": "狼骑士",
+      "era": 2,
+      "category": "combat",
+      "cost": 55,
+      "built": 256,
+      "seen": 253,
+      "spend": 14080,
+      "share": 0.027891081468415832,
+      "goldShare": 0.03135969210484115,
+      "dealt": 2290,
+      "taken": 5376,
+      "ratio": 0.4259672619047619,
+      "per100": 16.264204545454543,
+      "per100Taken": 38.18181818181819,
+      "kills": 78,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "cursed-knight",
+      "name": "诅咒骑士",
+      "era": 3,
+      "category": "combat",
+      "cost": 195,
+      "built": 17,
+      "seen": 17,
+      "spend": 3315,
+      "share": 0.0018741042883915775,
+      "goldShare": 0.007383336599967928,
+      "dealt": 1222,
+      "taken": 655,
+      "ratio": 1.865648854961832,
+      "per100": 36.86274509803922,
+      "per100Taken": 19.75867269984917,
+      "kills": 42,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "halberdier",
+      "name": "戟兵",
+      "era": 3,
+      "category": "combat",
+      "cost": 100,
+      "built": 27,
+      "seen": 27,
+      "spend": 2700,
+      "share": 0.002976518575680741,
+      "goldShare": 0.006013577321240846,
+      "dealt": 1170,
+      "taken": 743,
+      "ratio": 1.5746971736204576,
+      "per100": 43.333333333333336,
+      "per100Taken": 27.51851851851852,
+      "kills": 37,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "longbow",
+      "name": "长弓手",
+      "era": 2,
+      "category": "combat",
+      "cost": 90,
+      "built": 23,
+      "seen": 23,
+      "spend": 2070,
+      "share": 0.0025355528607650755,
+      "goldShare": 0.004610409279617982,
+      "dealt": 1007,
+      "taken": 282,
+      "ratio": 3.5709219858156027,
+      "per100": 48.647342995169076,
+      "per100Taken": 13.623188405797102,
+      "kills": 39,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "vampire",
+      "name": "吸血鬼",
+      "era": 4,
+      "category": "combat",
+      "cost": 235,
+      "built": 8,
+      "seen": 8,
+      "spend": 1880,
+      "share": 0.0008819314298313307,
+      "goldShare": 0.004187231616271404,
+      "dealt": 990,
+      "taken": 290,
+      "ratio": 3.413793103448276,
+      "per100": 52.659574468085104,
+      "per100Taken": 15.425531914893616,
+      "kills": 33,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "necromancer",
+      "name": "死灵法师",
+      "era": 3,
+      "category": "combat",
+      "cost": 175,
+      "built": 28,
+      "seen": 28,
+      "spend": 4900,
+      "share": 0.003086760004409657,
+      "goldShare": 0.010913529212622276,
+      "dealt": 892,
+      "taken": 341,
+      "ratio": 2.6158357771260996,
+      "per100": 18.20408163265306,
+      "per100Taken": 6.959183673469388,
+      "kills": 35,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "druid",
+      "name": "德鲁伊",
+      "era": 3,
+      "category": "combat",
+      "cost": 155,
+      "built": 11,
+      "seen": 11,
+      "spend": 1705,
+      "share": 0.0012126557160180797,
+      "goldShare": 0.0037974627158206082,
+      "dealt": 863,
+      "taken": 182,
+      "ratio": 4.741758241758242,
+      "per100": 50.615835777126094,
+      "per100Taken": 10.674486803519063,
+      "kills": 34,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "air-elemental",
+      "name": "风元素",
+      "era": 3,
+      "category": "combat",
+      "cost": 165,
+      "built": 0,
+      "seen": 10,
+      "spend": 0,
+      "share": 0.0011024142872891633,
+      "goldShare": 0,
+      "dealt": 831,
+      "taken": 291,
+      "ratio": 2.8556701030927836,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 28,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "alchemist",
+      "name": "炼金术士",
+      "era": 3,
+      "category": "combat",
+      "cost": 165,
+      "built": 12,
+      "seen": 12,
+      "spend": 1980,
+      "share": 0.0013228971447469958,
+      "goldShare": 0.004409956702243287,
+      "dealt": 825,
+      "taken": 166,
+      "ratio": 4.969879518072289,
+      "per100": 41.66666666666667,
+      "per100Taken": 8.383838383838384,
+      "kills": 20,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "rifleman",
+      "name": "步枪兵",
+      "era": 4,
+      "category": "combat",
+      "cost": 200,
+      "built": 5,
+      "seen": 5,
+      "spend": 1000,
+      "share": 0.0005512071436445816,
+      "goldShare": 0.0022272508597188318,
+      "dealt": 824,
+      "taken": 76,
+      "ratio": 10.842105263157896,
+      "per100": 82.39999999999999,
+      "per100Taken": 7.6,
+      "kills": 41,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "illusionist",
+      "name": "幻术师",
+      "era": 3,
+      "category": "combat",
+      "cost": 160,
+      "built": 27,
+      "seen": 27,
+      "spend": 4320,
+      "share": 0.002976518575680741,
+      "goldShare": 0.009621723713985354,
+      "dealt": 820,
+      "taken": 400,
+      "ratio": 2.05,
+      "per100": 18.98148148148148,
+      "per100Taken": 9.25925925925926,
+      "kills": 38,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "poison-bat",
+      "name": "毒蝙蝠",
+      "era": 2,
+      "category": "combat",
+      "cost": 90,
+      "built": 36,
+      "seen": 36,
+      "spend": 3240,
+      "share": 0.003968691434240988,
+      "goldShare": 0.007216292785489015,
+      "dealt": 767,
+      "taken": 653,
+      "ratio": 1.1745788667687596,
+      "per100": 23.672839506172842,
+      "per100Taken": 20.15432098765432,
+      "kills": 27,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "ranger",
+      "name": "游侠",
+      "era": 2,
+      "category": "combat",
+      "cost": 95,
+      "built": 16,
+      "seen": 16,
+      "spend": 1520,
+      "share": 0.0017638628596626613,
+      "goldShare": 0.0033854213067726242,
+      "dealt": 627,
+      "taken": 337,
+      "ratio": 1.86053412462908,
+      "per100": 41.25,
+      "per100Taken": 22.171052631578945,
+      "kills": 24,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "royal-cavalry",
+      "name": "皇家骑兵",
+      "era": 2,
+      "category": "combat",
+      "cost": 125,
+      "built": 12,
+      "seen": 12,
+      "spend": 1500,
+      "share": 0.0013228971447469958,
+      "goldShare": 0.0033408762895782477,
+      "dealt": 554,
+      "taken": 382,
+      "ratio": 1.450261780104712,
+      "per100": 36.93333333333334,
+      "per100Taken": 25.466666666666665,
+      "kills": 16,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "camp",
+      "name": "军营",
+      "era": 1,
+      "category": "building",
+      "cost": 90,
+      "built": 212,
+      "seen": 212,
+      "spend": 19080,
+      "share": 0.02337118289053026,
+      "goldShare": 0.04249594640343531,
+      "dealt": 528,
+      "taken": 2630,
+      "ratio": 0.20076045627376427,
+      "per100": 2.767295597484277,
+      "per100Taken": 13.784067085953877,
+      "kills": 21,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "gunboat",
+      "name": "炮艇",
+      "era": 3,
+      "category": "combat",
+      "cost": 130,
+      "built": 5,
+      "seen": 5,
+      "spend": 650,
+      "share": 0.0005512071436445816,
+      "goldShare": 0.0014477130588172408,
+      "dealt": 491,
+      "taken": 224,
+      "ratio": 2.1919642857142856,
+      "per100": 75.53846153846155,
+      "per100Taken": 34.46153846153846,
+      "kills": 17,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "laborer",
+      "name": "劳工",
+      "era": 1,
+      "category": "builder",
+      "cost": 50,
+      "built": 478,
+      "seen": 478,
+      "spend": 23900,
+      "share": 0.052695402932422,
+      "goldShare": 0.05323129554728008,
+      "dealt": 473,
+      "taken": 4856,
+      "ratio": 0.09740527182866557,
+      "per100": 1.9790794979079498,
+      "per100Taken": 20.317991631799163,
+      "kills": 16,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "paladin",
+      "name": "圣骑士",
+      "era": 3,
+      "category": "combat",
+      "cost": 215,
+      "built": 5,
+      "seen": 5,
+      "spend": 1075,
+      "share": 0.0005512071436445816,
+      "goldShare": 0.0023942946741977444,
+      "dealt": 443,
+      "taken": 226,
+      "ratio": 1.9601769911504425,
+      "per100": 41.20930232558139,
+      "per100Taken": 21.02325581395349,
+      "kills": 19,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "harpy",
+      "name": "鹰身女妖",
+      "era": 3,
+      "category": "combat",
+      "cost": 120,
+      "built": 19,
+      "seen": 19,
+      "spend": 2280,
+      "share": 0.0020945871458494104,
+      "goldShare": 0.005078131960158936,
+      "dealt": 416,
+      "taken": 284,
+      "ratio": 1.4647887323943662,
+      "per100": 18.24561403508772,
+      "per100Taken": 12.456140350877194,
+      "kills": 13,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "elementalist",
+      "name": "元素召唤师",
+      "era": 4,
+      "category": "combat",
+      "cost": 280,
+      "built": 10,
+      "seen": 10,
+      "spend": 2800,
+      "share": 0.0011024142872891633,
+      "goldShare": 0.006236302407212729,
+      "dealt": 392,
+      "taken": 23,
+      "ratio": 17.043478260869566,
+      "per100": 14.000000000000002,
+      "per100Taken": 0.8214285714285714,
+      "kills": 9,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "troll",
+      "name": "巨魔",
+      "era": 3,
+      "category": "combat",
+      "cost": 170,
+      "built": 1,
+      "seen": 1,
+      "spend": 170,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0003786326461522014,
+      "dealt": 376,
+      "taken": 128,
+      "ratio": 2.9375,
+      "per100": 221.1764705882353,
+      "per100Taken": 75.29411764705883,
+      "kills": 12,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "herder",
+      "name": "牧民",
+      "era": 1,
+      "category": "economy",
+      "cost": 45,
+      "built": 561,
+      "seen": 681,
+      "spend": 25245,
+      "share": 0.07507441296439202,
+      "goldShare": 0.05622694795360191,
+      "dealt": 338,
+      "taken": 4086,
+      "ratio": 0.08272148800783162,
+      "per100": 1.3388789859378094,
+      "per100Taken": 16.185383244206776,
+      "kills": 5,
+      "initCount": 120,
+      "initRatio": 0
+    },
+    {
+      "type": "goblin-trapper",
+      "name": "哥布林陷阱师",
+      "era": 2,
+      "category": "combat",
+      "cost": 80,
+      "built": 56,
+      "seen": 56,
+      "spend": 4480,
+      "share": 0.006173520008819314,
+      "goldShare": 0.009978083851540366,
+      "dealt": 336,
+      "taken": 1043,
+      "ratio": 0.3221476510067114,
+      "per100": 7.5,
+      "per100Taken": 23.28125,
+      "kills": 11,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "armoredcar",
+      "name": "装甲车",
+      "era": 4,
+      "category": "combat",
+      "cost": 250,
+      "built": 4,
+      "seen": 4,
+      "spend": 1000,
+      "share": 0.0004409657149156653,
+      "goldShare": 0.0022272508597188318,
+      "dealt": 336,
+      "taken": 54,
+      "ratio": 6.222222222222222,
+      "per100": 33.6,
+      "per100Taken": 5.4,
+      "kills": 11,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "phantom",
+      "name": "幻象",
+      "era": 2,
+      "category": "combat",
+      "cost": 40,
+      "built": 0,
+      "seen": 44,
+      "spend": 0,
+      "share": 0.004850622864072319,
+      "goldShare": 0,
+      "dealt": 325,
+      "taken": 570,
+      "ratio": 0.5701754385964912,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 9,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "demon",
+      "name": "恶魔",
+      "era": 5,
+      "category": "combat",
+      "cost": 400,
+      "built": 2,
+      "seen": 2,
+      "spend": 800,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.0017818006877750655,
+      "dealt": 279,
+      "taken": 42,
+      "ratio": 6.642857142857143,
+      "per100": 34.875,
+      "per100Taken": 5.25,
+      "kills": 10,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "skeleton",
+      "name": "骷髅",
+      "era": 2,
+      "category": "combat",
+      "cost": 45,
+      "built": 0,
+      "seen": 93,
+      "spend": 0,
+      "share": 0.010252452871789218,
+      "goldShare": 0,
+      "dealt": 233,
+      "taken": 873,
+      "ratio": 0.26689576174112256,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 13,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "angel",
+      "name": "天使",
+      "era": 5,
+      "category": "combat",
+      "cost": 550,
+      "built": 2,
+      "seen": 2,
+      "spend": 1100,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.002449975945690715,
+      "dealt": 214,
+      "taken": 0,
+      "ratio": null,
+      "per100": 19.454545454545453,
+      "per100Taken": 0,
+      "kills": 8,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "treant",
+      "name": "树人",
+      "era": 3,
+      "category": "combat",
+      "cost": 175,
+      "built": 13,
+      "seen": 13,
+      "spend": 2275,
+      "share": 0.0014331385734759122,
+      "goldShare": 0.005066995705860343,
+      "dealt": 186,
+      "taken": 673,
+      "ratio": 0.2763744427934621,
+      "per100": 8.175824175824175,
+      "per100Taken": 29.58241758241758,
+      "kills": 7,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "assassin",
+      "name": "刺客",
+      "era": 3,
+      "category": "combat",
+      "cost": 135,
+      "built": 9,
+      "seen": 9,
+      "spend": 1215,
+      "share": 0.000992172858560247,
+      "goldShare": 0.002706109794558381,
+      "dealt": 178,
+      "taken": 149,
+      "ratio": 1.1946308724832215,
+      "per100": 14.650205761316872,
+      "per100Taken": 12.263374485596708,
+      "kills": 7,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "musketeer",
+      "name": "火枪兵",
+      "era": 3,
+      "category": "combat",
+      "cost": 130,
+      "built": 2,
+      "seen": 2,
+      "spend": 260,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.0005790852235268962,
+      "dealt": 177,
+      "taken": 36,
+      "ratio": 4.916666666666667,
+      "per100": 68.07692307692308,
+      "per100Taken": 13.846153846153847,
+      "kills": 6,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "witch",
+      "name": "女巫",
+      "era": 3,
+      "category": "combat",
+      "cost": 160,
+      "built": 3,
+      "seen": 3,
+      "spend": 480,
+      "share": 0.00033072428618674895,
+      "goldShare": 0.0010690804126650393,
+      "dealt": 166,
+      "taken": 58,
+      "ratio": 2.8620689655172415,
+      "per100": 34.583333333333336,
+      "per100Taken": 12.083333333333334,
+      "kills": 5,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "bard",
+      "name": "吟游诗人",
+      "era": 2,
+      "category": "combat",
+      "cost": 115,
+      "built": 3,
+      "seen": 3,
+      "spend": 345,
+      "share": 0.00033072428618674895,
+      "goldShare": 0.000768401546602997,
+      "dealt": 95,
+      "taken": 84,
+      "ratio": 1.130952380952381,
+      "per100": 27.536231884057973,
+      "per100Taken": 24.347826086956523,
+      "kills": 5,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "witch-doctor",
+      "name": "巫医",
+      "era": 3,
+      "category": "combat",
+      "cost": 185,
+      "built": 3,
+      "seen": 3,
+      "spend": 555,
+      "share": 0.00033072428618674895,
+      "goldShare": 0.0012361242271439518,
+      "dealt": 88,
+      "taken": 32,
+      "ratio": 2.75,
+      "per100": 15.855855855855856,
+      "per100Taken": 5.7657657657657655,
+      "kills": 4,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "bone-dragon",
+      "name": "骷髅飞龙",
+      "era": 5,
+      "category": "combat",
+      "cost": 430,
+      "built": 2,
+      "seen": 2,
+      "spend": 860,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.0019154357393581954,
+      "dealt": 78,
+      "taken": 0,
+      "ratio": null,
+      "per100": 9.069767441860465,
+      "per100Taken": 0,
+      "kills": 3,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "water-elemental",
+      "name": "水元素",
+      "era": 3,
+      "category": "combat",
+      "cost": 160,
+      "built": 0,
+      "seen": 5,
+      "spend": 0,
+      "share": 0.0005512071436445816,
+      "goldShare": 0,
+      "dealt": 75,
+      "taken": 11,
+      "ratio": 6.818181818181818,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 3,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "curser",
+      "name": "诅咒师",
+      "era": 3,
+      "category": "combat",
+      "cost": 145,
+      "built": 5,
+      "seen": 5,
+      "spend": 725,
+      "share": 0.0005512071436445816,
+      "goldShare": 0.001614756873296153,
+      "dealt": 72,
+      "taken": 112,
+      "ratio": 0.6428571428571429,
+      "per100": 9.931034482758621,
+      "per100Taken": 15.448275862068966,
+      "kills": 3,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "archmage",
+      "name": "至尊法师",
+      "era": 5,
+      "category": "combat",
+      "cost": 590,
+      "built": 1,
+      "seen": 1,
+      "spend": 590,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0013140780072341109,
+      "dealt": 52,
+      "taken": 0,
+      "ratio": null,
+      "per100": 8.813559322033898,
+      "per100Taken": 0,
+      "kills": 2,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "hellhound",
+      "name": "地狱犬",
+      "era": 3,
+      "category": "combat",
+      "cost": 155,
+      "built": 2,
+      "seen": 2,
+      "spend": 310,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.0006904477665128379,
+      "dealt": 52,
+      "taken": 19,
+      "ratio": 2.736842105263158,
+      "per100": 16.7741935483871,
+      "per100Taken": 6.129032258064516,
+      "kills": 4,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "ghost",
+      "name": "幽灵",
+      "era": 3,
+      "category": "combat",
+      "cost": 130,
+      "built": 5,
+      "seen": 5,
+      "spend": 650,
+      "share": 0.0005512071436445816,
+      "goldShare": 0.0014477130588172408,
+      "dealt": 42,
+      "taken": 30,
+      "ratio": 1.4,
+      "per100": 6.461538461538462,
+      "per100Taken": 4.615384615384616,
+      "kills": 2,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "keep",
+      "name": "石堡",
+      "era": 2,
+      "category": "building",
+      "cost": 100,
+      "built": 4,
+      "seen": 4,
+      "spend": 400,
+      "share": 0.0004409657149156653,
+      "goldShare": 0.0008909003438875327,
+      "dealt": 32,
+      "taken": 0,
+      "ratio": null,
+      "per100": 8,
+      "per100Taken": 0,
+      "kills": 1,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "minotaur",
+      "name": "牛头人",
+      "era": 3,
+      "category": "combat",
+      "cost": 165,
+      "built": 3,
+      "seen": 3,
+      "spend": 495,
+      "share": 0.00033072428618674895,
+      "goldShare": 0.0011024891755608219,
+      "dealt": 30,
+      "taken": 116,
+      "ratio": 0.25862068965517243,
+      "per100": 6.0606060606060606,
+      "per100Taken": 23.434343434343436,
+      "kills": 1,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "slime",
+      "name": "史莱姆",
+      "era": 2,
+      "category": "combat",
+      "cost": 60,
+      "built": 8,
+      "seen": 8,
+      "spend": 480,
+      "share": 0.0008819314298313307,
+      "goldShare": 0.0010690804126650393,
+      "dealt": 26,
+      "taken": 111,
+      "ratio": 0.23423423423423423,
+      "per100": 5.416666666666667,
+      "per100Taken": 23.125,
+      "kills": 1,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "fire-elemental",
+      "name": "火元素",
+      "era": 3,
+      "category": "combat",
+      "cost": 170,
+      "built": 0,
+      "seen": 6,
+      "spend": 0,
+      "share": 0.0006614485723734979,
+      "goldShare": 0,
+      "dealt": 23,
+      "taken": 0,
+      "ratio": null,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 1,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "farmer",
+      "name": "农民",
+      "era": 1,
+      "category": "economy",
+      "cost": 55,
+      "built": 16,
+      "seen": 136,
+      "spend": 880,
+      "share": 0.01499283430713262,
+      "goldShare": 0.001959980756552572,
+      "dealt": 1,
+      "taken": 41,
+      "ratio": 0.024390243902439025,
+      "per100": 0.11363636363636363,
+      "per100Taken": 4.659090909090909,
+      "kills": 0,
+      "initCount": 120,
+      "initRatio": 0
+    },
+    {
+      "type": "lumberjack",
+      "name": "伐木工",
+      "era": 2,
+      "category": "economy",
+      "cost": 70,
+      "built": 38,
+      "seen": 38,
+      "spend": 2660,
+      "share": 0.004189174291698821,
+      "goldShare": 0.005924487286852092,
+      "dealt": 1,
+      "taken": 200,
+      "ratio": 0.005,
+      "per100": 0.03759398496240602,
+      "per100Taken": 7.518796992481203,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "agribusiness",
+      "name": "农业公司",
+      "era": 5,
+      "category": "economy",
+      "cost": 260,
+      "built": 1,
+      "seen": 1,
+      "spend": 260,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0005790852235268962,
+      "dealt": 1,
+      "taken": 6,
+      "ratio": 0.16666666666666666,
+      "per100": 0.38461538461538464,
+      "per100Taken": 2.307692307692308,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "bridge",
+      "name": "木桥",
+      "era": 1,
+      "category": "building",
+      "cost": 45,
+      "built": 799,
+      "seen": 799,
+      "spend": 35955,
+      "share": 0.08808290155440414,
+      "goldShare": 0.0800808046611906,
+      "dealt": 0,
+      "taken": 16606,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 46.185509664858856,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "mill",
+      "name": "磨坊",
+      "era": 1,
+      "category": "building",
+      "cost": 65,
+      "built": 275,
+      "seen": 275,
+      "spend": 17875,
+      "share": 0.03031639290045199,
+      "goldShare": 0.03981210911747412,
+      "dealt": 0,
+      "taken": 1481,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 8.285314685314685,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "earth-elemental",
+      "name": "土元素",
+      "era": 3,
+      "category": "combat",
+      "cost": 190,
+      "built": 1,
+      "seen": 7,
+      "spend": 190,
+      "share": 0.0007716900011024143,
+      "goldShare": 0.00042317766334657803,
+      "dealt": 0,
+      "taken": 0,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "imp",
+      "name": "小恶魔",
+      "era": 3,
+      "category": "combat",
+      "cost": 55,
+      "built": 0,
+      "seen": 4,
+      "spend": 0,
+      "share": 0.0004409657149156653,
+      "goldShare": 0,
+      "dealt": 0,
+      "taken": 26,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "miller",
+      "name": "磨坊主",
+      "era": 2,
+      "category": "builder",
+      "cost": 85,
+      "built": 10,
+      "seen": 10,
+      "spend": 850,
+      "share": 0.0011024142872891633,
+      "goldShare": 0.001893163230761007,
+      "dealt": 0,
+      "taken": 166,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 19.52941176470588,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "watermill",
+      "name": "水车",
+      "era": 2,
+      "category": "building",
+      "cost": 110,
+      "built": 2,
+      "seen": 2,
+      "spend": 220,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.000489995189138143,
+      "dealt": 0,
+      "taken": 0,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "slimelet",
+      "name": "小史莱姆",
+      "era": 2,
+      "category": "combat",
+      "cost": 20,
+      "built": 0,
+      "seen": 2,
+      "spend": 0,
+      "share": 0.00022048285745783266,
+      "goldShare": 0,
+      "dealt": 0,
+      "taken": 26,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "earth-wall",
+      "name": "土墙",
+      "era": 2,
+      "category": "building",
+      "cost": 40,
+      "built": 0,
+      "seen": 32,
+      "spend": 0,
+      "share": 0.0035277257193253226,
+      "goldShare": 0,
+      "dealt": 0,
+      "taken": 0,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "engineer",
+      "name": "工程师",
+      "era": 3,
+      "category": "builder",
+      "cost": 130,
+      "built": 1,
+      "seen": 1,
+      "spend": 130,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0002895426117634481,
+      "dealt": 0,
+      "taken": 0,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "planter",
+      "name": "种植园主",
+      "era": 3,
+      "category": "economy",
+      "cost": 120,
+      "built": 2,
+      "seen": 2,
+      "spend": 240,
+      "share": 0.00022048285745783266,
+      "goldShare": 0.0005345402063325197,
+      "dealt": 0,
+      "taken": 24,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 10,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "hussar",
+      "name": "骠骑兵",
+      "era": 3,
+      "category": "combat",
+      "cost": 150,
+      "built": 1,
+      "seen": 1,
+      "spend": 150,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0003340876289578248,
+      "dealt": 0,
+      "taken": 38,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 25.333333333333336,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    },
+    {
+      "type": "two-head-giant",
+      "name": "双头巨人",
+      "era": 4,
+      "category": "combat",
+      "cost": 300,
+      "built": 1,
+      "seen": 1,
+      "spend": 300,
+      "share": 0.00011024142872891633,
+      "goldShare": 0.0006681752579156496,
+      "dealt": 0,
+      "taken": 0,
+      "ratio": 0,
+      "per100": 0,
+      "per100Taken": 0,
+      "kills": 0,
+      "initCount": 0,
+      "initRatio": 0
+    }
+  ],
+  "results": [
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 900,
+      "winner": "A",
+      "turns": 35,
+      "steps": 381,
+      "recruitsA": 26,
+      "recruitsB": 15,
+      "picksA": {
+        "herder": 6,
+        "laborer": 5,
+        "scout": 7,
+        "militia": 5,
+        "archer": 3
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 1,
+        "scout": 5,
+        "archer": 3,
+        "militia": 3
+      },
+      "unitsA": 24,
+      "unitsB": 13,
+      "firstCap": {
+        "turn": 7,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 12,
+      "flipLog": [
+        {
+          "turn": 7,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 8,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 17,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 18,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 19,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 20,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 21,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 23,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 35,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 901,
+      "winner": "A",
+      "turns": 113,
+      "steps": 1675,
+      "recruitsA": 97,
+      "recruitsB": 73,
+      "picksA": {
+        "herder": 7,
+        "laborer": 3,
+        "scout": 19,
+        "archer": 15,
+        "militia": 15,
+        "boat": 2,
+        "spearman": 9,
+        "priest": 7,
+        "goblin-trapper": 2,
+        "centaur": 7,
+        "spider-rider": 2,
+        "wolf-rider": 7,
+        "swordsman": 1,
+        "longbow": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 4,
+        "scout": 23,
+        "archer": 8,
+        "boat": 7,
+        "militia": 11,
+        "spearman": 5,
+        "priest": 3,
+        "wolf-rider": 4,
+        "centaur": 1,
+        "spider-rider": 1,
+        "poison-bat": 1,
+        "longbow": 1
+      },
+      "unitsA": 34,
+      "unitsB": 13,
+      "firstCap": {
+        "turn": 76,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 93,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 76,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 93,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 103,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 113,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 902,
+      "winner": "A",
+      "turns": 33,
+      "steps": 404,
+      "recruitsA": 24,
+      "recruitsB": 22,
+      "picksA": {
+        "herder": 5,
+        "laborer": 4,
+        "scout": 8,
+        "archer": 3,
+        "militia": 4
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 3,
+        "scout": 6,
+        "archer": 4,
+        "militia": 6
+      },
+      "unitsA": 30,
+      "unitsB": 8,
+      "firstCap": {
+        "turn": 9,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 10,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 9,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 10,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 33,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 903,
+      "winner": "A",
+      "turns": 121,
+      "steps": 1779,
+      "recruitsA": 103,
+      "recruitsB": 86,
+      "picksA": {
+        "herder": 3,
+        "laborer": 5,
+        "scout": 18,
+        "archer": 10,
+        "militia": 7,
+        "boat": 16,
+        "goblin-trapper": 2,
+        "priest": 4,
+        "spearman": 4,
+        "centaur": 9,
+        "wolf-rider": 8,
+        "swordsman": 1,
+        "poison-bat": 3,
+        "spider-rider": 5,
+        "longbow": 1,
+        "royal-cavalry": 1,
+        "lumberjack": 1,
+        "mortar": 1,
+        "mage": 1,
+        "harpy": 1,
+        "gunboat": 1,
+        "ghost": 1
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 7,
+        "scout": 24,
+        "boat": 3,
+        "archer": 10,
+        "militia": 13,
+        "priest": 7,
+        "wolf-rider": 4,
+        "swordsman": 3,
+        "spearman": 3,
+        "spider-rider": 1,
+        "centaur": 5,
+        "lumberjack": 1
+      },
+      "unitsA": 41,
+      "unitsB": 18,
+      "firstCap": {
+        "turn": 85,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 88,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 85,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 88,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 99,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 100,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 107,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 108,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 115,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 118,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 119,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 121,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 904,
+      "winner": "A",
+      "turns": 31,
+      "steps": 377,
+      "recruitsA": 26,
+      "recruitsB": 17,
+      "picksA": {
+        "herder": 4,
+        "laborer": 4,
+        "scout": 11,
+        "archer": 3,
+        "militia": 4
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 2,
+        "scout": 7,
+        "archer": 4,
+        "militia": 2
+      },
+      "unitsA": 28,
+      "unitsB": 12,
+      "firstCap": {
+        "turn": 19,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 24,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 19,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 24,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 31,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 905,
+      "winner": "A",
+      "turns": 95,
+      "steps": 1243,
+      "recruitsA": 53,
+      "recruitsB": 66,
+      "picksA": {
+        "herder": 4,
+        "laborer": 4,
+        "scout": 10,
+        "archer": 4,
+        "militia": 5,
+        "boat": 2,
+        "bard": 3,
+        "swordsman": 1,
+        "priest": 2,
+        "wolf-rider": 2,
+        "spearman": 2,
+        "spider-rider": 1,
+        "halberdier": 1,
+        "goblin-trapper": 1,
+        "ranger": 1,
+        "mage": 1,
+        "cursed-knight": 1,
+        "centaur": 1,
+        "necromancer": 1,
+        "harpy": 1,
+        "assassin": 1,
+        "paladin": 1,
+        "illusionist": 1,
+        "elementalist": 1,
+        "vampire": 1
+      },
+      "picksB": {
+        "laborer": 7,
+        "herder": 3,
+        "scout": 23,
+        "archer": 13,
+        "militia": 18,
+        "boat": 2
+      },
+      "unitsA": 44,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 9,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 10,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 9,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 10,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 13,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 95,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1000,
+      "winner": "A",
+      "turns": 23,
+      "steps": 257,
+      "recruitsA": 20,
+      "recruitsB": 14,
+      "picksA": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 7,
+        "archer": 2,
+        "militia": 5
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 2,
+        "scout": 5,
+        "militia": 4,
+        "archer": 1
+      },
+      "unitsA": 24,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 15,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 15,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 23,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1001,
+      "winner": "B",
+      "turns": 66,
+      "steps": 770,
+      "recruitsA": 37,
+      "recruitsB": 48,
+      "picksA": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 18,
+        "boat": 1,
+        "archer": 6,
+        "militia": 6
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 23,
+        "militia": 8,
+        "archer": 7,
+        "boat": 3
+      },
+      "unitsA": 13,
+      "unitsB": 32,
+      "firstCap": {
+        "turn": 26,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 27,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 16,
+      "flipLog": [
+        {
+          "turn": 26,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 27,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 29,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 31,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 32,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 33,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 34,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 35,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 36,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 37,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 56,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 57,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 58,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 66,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1002,
+      "winner": "B",
+      "turns": 114,
+      "steps": 1485,
+      "recruitsA": 76,
+      "recruitsB": 63,
+      "picksA": {
+        "herder": 2,
+        "laborer": 9,
+        "scout": 19,
+        "archer": 7,
+        "militia": 5,
+        "goblin-trapper": 2,
+        "priest": 3,
+        "spearman": 3,
+        "longbow": 3,
+        "wolf-rider": 4,
+        "swordsman": 1,
+        "spider-rider": 1,
+        "mortar": 1,
+        "treant": 1,
+        "mage": 5,
+        "cursed-knight": 1,
+        "illusionist": 1,
+        "lumberjack": 1,
+        "gargoyle": 2,
+        "harpy": 1,
+        "centaur": 1,
+        "halberdier": 2,
+        "poison-bat": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 7,
+        "scout": 14,
+        "archer": 3,
+        "militia": 9,
+        "priest": 2,
+        "longbow": 2,
+        "wolf-rider": 2,
+        "swordsman": 1,
+        "gargoyle": 3,
+        "cursed-knight": 2,
+        "mortar": 2,
+        "necromancer": 2,
+        "druid": 1,
+        "illusionist": 2,
+        "mage": 1,
+        "treant": 1,
+        "alchemist": 1,
+        "lumberjack": 3,
+        "ghost": 1,
+        "spearman": 1
+      },
+      "unitsA": 16,
+      "unitsB": 38,
+      "firstCap": {
+        "turn": 94,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 94,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 114,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1003,
+      "winner": "B",
+      "turns": 100,
+      "steps": 1066,
+      "recruitsA": 67,
+      "recruitsB": 50,
+      "picksA": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 12,
+        "militia": 13,
+        "archer": 13,
+        "boat": 23
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 4,
+        "scout": 11,
+        "archer": 7,
+        "militia": 4,
+        "boat": 2,
+        "priest": 2,
+        "spearman": 1,
+        "swordsman": 1,
+        "cursed-knight": 3,
+        "lumberjack": 2,
+        "rifleman": 1,
+        "vampire": 1,
+        "elementalist": 1,
+        "bone-dragon": 1,
+        "agribusiness": 1
+      },
+      "unitsA": 17,
+      "unitsB": 44,
+      "firstCap": {
+        "turn": 12,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 12,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 100,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1004,
+      "winner": "A",
+      "turns": 35,
+      "steps": 446,
+      "recruitsA": 30,
+      "recruitsB": 20,
+      "picksA": {
+        "herder": 5,
+        "laborer": 3,
+        "scout": 10,
+        "militia": 7,
+        "archer": 5
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 2,
+        "scout": 10,
+        "archer": 3,
+        "militia": 3
+      },
+      "unitsA": 30,
+      "unitsB": 8,
+      "firstCap": {
+        "turn": 11,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 14,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 14,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 23,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 24,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 29,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 35,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1005,
+      "winner": "A",
+      "turns": 89,
+      "steps": 915,
+      "recruitsA": 39,
+      "recruitsB": 51,
+      "picksA": {
+        "herder": 6,
+        "laborer": 7,
+        "scout": 12,
+        "archer": 4,
+        "militia": 5,
+        "necromancer": 1,
+        "illusionist": 1,
+        "paladin": 1,
+        "vampire": 1,
+        "bone-dragon": 1
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 1,
+        "scout": 16,
+        "boat": 9,
+        "archer": 10,
+        "militia": 9
+      },
+      "unitsA": 49,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 17,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 17,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 89,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1100,
+      "winner": "B",
+      "turns": 28,
+      "steps": 303,
+      "recruitsA": 19,
+      "recruitsB": 23,
+      "picksA": {
+        "herder": 2,
+        "laborer": 2,
+        "scout": 8,
+        "archer": 4,
+        "boat": 1,
+        "militia": 2
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 11,
+        "archer": 4,
+        "militia": 3
+      },
+      "unitsA": 14,
+      "unitsB": 28,
+      "firstCap": {
+        "turn": 26,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 26,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 28,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1101,
+      "winner": "B",
+      "turns": 70,
+      "steps": 1034,
+      "recruitsA": 59,
+      "recruitsB": 59,
+      "picksA": {
+        "herder": 7,
+        "laborer": 4,
+        "scout": 24,
+        "archer": 12,
+        "militia": 12
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 3,
+        "scout": 22,
+        "archer": 12,
+        "militia": 7,
+        "poison-bat": 2,
+        "slime": 1,
+        "spearman": 2,
+        "priest": 2,
+        "centaur": 2
+      },
+      "unitsA": 9,
+      "unitsB": 24,
+      "firstCap": {
+        "turn": 40,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 40,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 43,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 54,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 55,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 56,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 70,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1102,
+      "winner": "B",
+      "turns": 134,
+      "steps": 1782,
+      "recruitsA": 82,
+      "recruitsB": 81,
+      "picksA": {
+        "herder": 5,
+        "laborer": 5,
+        "scout": 11,
+        "archer": 10,
+        "militia": 13,
+        "boat": 14,
+        "priest": 4,
+        "wolf-rider": 11,
+        "spearman": 3,
+        "centaur": 4,
+        "swordsman": 1,
+        "lumberjack": 1
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 4,
+        "scout": 19,
+        "archer": 9,
+        "boat": 8,
+        "militia": 7,
+        "wolf-rider": 8,
+        "priest": 1,
+        "spearman": 1,
+        "swordsman": 2,
+        "centaur": 5,
+        "goblin-trapper": 1,
+        "cursed-knight": 2,
+        "necromancer": 1,
+        "vampire": 1,
+        "rifleman": 1,
+        "gargoyle": 1,
+        "mortar": 1,
+        "lumberjack": 1,
+        "illusionist": 1,
+        "elementalist": 1,
+        "armoredcar": 1
+      },
+      "unitsA": 10,
+      "unitsB": 53,
+      "firstCap": {
+        "turn": 110,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": 111,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 110,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 111,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 112,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 113,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 114,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 117,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 118,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 134,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1103,
+      "winner": "A",
+      "turns": 13,
+      "steps": 124,
+      "recruitsA": 11,
+      "recruitsB": 5,
+      "picksA": {
+        "farmer": 3,
+        "laborer": 2,
+        "scout": 4,
+        "archer": 1,
+        "militia": 1
+      },
+      "picksB": {
+        "farmer": 2,
+        "laborer": 1,
+        "scout": 1,
+        "militia": 1
+      },
+      "unitsA": 14,
+      "unitsB": 7,
+      "firstCap": {
+        "turn": 11,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 13,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1104,
+      "winner": "B",
+      "turns": 102,
+      "steps": 1604,
+      "recruitsA": 84,
+      "recruitsB": 82,
+      "picksA": {
+        "herder": 5,
+        "laborer": 5,
+        "scout": 32,
+        "archer": 16,
+        "militia": 15,
+        "priest": 4,
+        "spearman": 3,
+        "centaur": 2,
+        "swordsman": 1,
+        "boat": 1
+      },
+      "picksB": {
+        "laborer": 7,
+        "herder": 2,
+        "scout": 28,
+        "boat": 1,
+        "militia": 13,
+        "archer": 13,
+        "priest": 4,
+        "spearman": 2,
+        "swordsman": 1,
+        "centaur": 4,
+        "wolf-rider": 3,
+        "longbow": 1,
+        "poison-bat": 1,
+        "lumberjack": 2
+      },
+      "unitsA": 14,
+      "unitsB": 30,
+      "firstCap": {
+        "turn": 84,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 84,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 102,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1105,
+      "winner": "A",
+      "turns": 49,
+      "steps": 638,
+      "recruitsA": 45,
+      "recruitsB": 33,
+      "picksA": {
+        "herder": 4,
+        "laborer": 4,
+        "scout": 22,
+        "archer": 8,
+        "militia": 7
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 15,
+        "archer": 6,
+        "militia": 7
+      },
+      "unitsA": 31,
+      "unitsB": 13,
+      "firstCap": {
+        "turn": 5,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 6,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 5,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 6,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 29,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 33,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 34,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 41,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 49,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1200,
+      "winner": "A",
+      "turns": 71,
+      "steps": 782,
+      "recruitsA": 42,
+      "recruitsB": 35,
+      "picksA": {
+        "herder": 6,
+        "laborer": 4,
+        "scout": 13,
+        "militia": 5,
+        "archer": 7,
+        "boat": 3,
+        "swordsman": 1,
+        "spearman": 1,
+        "priest": 1,
+        "centaur": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 12,
+        "militia": 8,
+        "archer": 8
+      },
+      "unitsA": 40,
+      "unitsB": 15,
+      "firstCap": {
+        "turn": 7,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 12,
+      "flipLog": [
+        {
+          "turn": 7,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 26,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 27,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 31,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 34,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 43,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 50,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 51,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 58,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 61,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 71,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1201,
+      "winner": "A",
+      "turns": 111,
+      "steps": 1572,
+      "recruitsA": 74,
+      "recruitsB": 87,
+      "picksA": {
+        "herder": 4,
+        "laborer": 7,
+        "scout": 22,
+        "militia": 11,
+        "archer": 8,
+        "priest": 1,
+        "spearman": 2,
+        "halberdier": 1,
+        "necromancer": 4,
+        "witch": 1,
+        "mage": 1,
+        "centaur": 2,
+        "alchemist": 1,
+        "wolf-rider": 4,
+        "gargoyle": 1,
+        "mortar": 1,
+        "lumberjack": 2,
+        "harpy": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 4,
+        "scout": 26,
+        "archer": 17,
+        "militia": 8,
+        "swordsman": 3,
+        "priest": 4,
+        "centaur": 3,
+        "spearman": 3,
+        "wolf-rider": 3,
+        "spider-rider": 3,
+        "poison-bat": 3,
+        "ranger": 1,
+        "goblin-trapper": 4,
+        "lumberjack": 1
+      },
+      "unitsA": 37,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 74,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 75,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 74,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 76,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 77,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 93,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 100,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 105,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 111,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1202,
+      "winner": "A",
+      "turns": 121,
+      "steps": 1543,
+      "recruitsA": 56,
+      "recruitsB": 90,
+      "picksA": {
+        "herder": 5,
+        "laborer": 6,
+        "scout": 15,
+        "militia": 5,
+        "archer": 3,
+        "boat": 5,
+        "goblin-trapper": 1,
+        "spearman": 2,
+        "priest": 2,
+        "centaur": 1,
+        "swordsman": 1,
+        "spider-rider": 1,
+        "wolf-rider": 1,
+        "paladin": 1,
+        "lumberjack": 1,
+        "witch": 1,
+        "cursed-knight": 1,
+        "halberdier": 1,
+        "angel": 1,
+        "archmage": 1,
+        "demon": 1
+      },
+      "picksB": {
+        "laborer": 4,
+        "herder": 5,
+        "scout": 35,
+        "archer": 20,
+        "militia": 21,
+        "boat": 5
+      },
+      "unitsA": 51,
+      "unitsB": 13,
+      "firstCap": {
+        "turn": 15,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 15,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 121,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1203,
+      "winner": "B",
+      "turns": 104,
+      "steps": 1604,
+      "recruitsA": 92,
+      "recruitsB": 83,
+      "picksA": {
+        "laborer": 6,
+        "herder": 6,
+        "scout": 23,
+        "militia": 7,
+        "archer": 11,
+        "priest": 5,
+        "swordsman": 2,
+        "spearman": 3,
+        "centaur": 7,
+        "wolf-rider": 11,
+        "spider-rider": 5,
+        "poison-bat": 4,
+        "goblin-trapper": 1,
+        "ranger": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 6,
+        "scout": 26,
+        "militia": 10,
+        "archer": 9,
+        "priest": 2,
+        "spearman": 1,
+        "swordsman": 2,
+        "goblin-trapper": 1,
+        "centaur": 2,
+        "wolf-rider": 6,
+        "spider-rider": 2,
+        "poison-bat": 1,
+        "royal-cavalry": 1,
+        "mortar": 2,
+        "mage": 2,
+        "halberdier": 1,
+        "illusionist": 1,
+        "necromancer": 1,
+        "druid": 1,
+        "harpy": 1,
+        "treant": 1,
+        "alchemist": 1
+      },
+      "unitsA": 16,
+      "unitsB": 47,
+      "firstCap": {
+        "turn": 35,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 38,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 35,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 38,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 98,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 101,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 102,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 104,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1204,
+      "winner": "A",
+      "turns": 53,
+      "steps": 562,
+      "recruitsA": 40,
+      "recruitsB": 24,
+      "picksA": {
+        "herder": 10,
+        "laborer": 3,
+        "scout": 15,
+        "archer": 6,
+        "militia": 4,
+        "boat": 1,
+        "goblin-trapper": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 10,
+        "boat": 2,
+        "militia": 3,
+        "archer": 2
+      },
+      "unitsA": 33,
+      "unitsB": 9,
+      "firstCap": {
+        "turn": 21,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 21,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 33,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 53,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1205,
+      "winner": "A",
+      "turns": 101,
+      "steps": 1503,
+      "recruitsA": 76,
+      "recruitsB": 86,
+      "picksA": {
+        "herder": 3,
+        "laborer": 6,
+        "scout": 15,
+        "militia": 9,
+        "archer": 8,
+        "wolf-rider": 5,
+        "priest": 4,
+        "spearman": 2,
+        "swordsman": 1,
+        "spider-rider": 1,
+        "centaur": 5,
+        "mortar": 2,
+        "alchemist": 1,
+        "gargoyle": 1,
+        "illusionist": 1,
+        "miller": 1,
+        "halberdier": 2,
+        "necromancer": 2,
+        "mage": 1,
+        "treant": 1,
+        "druid": 1,
+        "assassin": 1,
+        "witch": 1,
+        "harpy": 1,
+        "lumberjack": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 13,
+        "militia": 7,
+        "archer": 8,
+        "farmer": 2,
+        "wolf-rider": 13,
+        "priest": 8,
+        "spearman": 5,
+        "swordsman": 1,
+        "centaur": 12,
+        "spider-rider": 6,
+        "longbow": 2,
+        "poison-bat": 2
+      },
+      "unitsA": 44,
+      "unitsB": 18,
+      "firstCap": {
+        "turn": 97,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 97,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 101,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1300,
+      "winner": "A",
+      "turns": 39,
+      "steps": 475,
+      "recruitsA": 30,
+      "recruitsB": 23,
+      "picksA": {
+        "herder": 4,
+        "laborer": 6,
+        "scout": 9,
+        "archer": 5,
+        "militia": 6
+      },
+      "picksB": {
+        "laborer": 1,
+        "herder": 8,
+        "scout": 5,
+        "archer": 4,
+        "militia": 5
+      },
+      "unitsA": 32,
+      "unitsB": 8,
+      "firstCap": {
+        "turn": 12,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 29,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 12,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 13,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 29,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 39,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1301,
+      "winner": "A",
+      "turns": 27,
+      "steps": 333,
+      "recruitsA": 24,
+      "recruitsB": 22,
+      "picksA": {
+        "herder": 4,
+        "laborer": 6,
+        "scout": 6,
+        "archer": 5,
+        "boat": 1,
+        "militia": 2
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 3,
+        "scout": 7,
+        "archer": 3,
+        "militia": 3,
+        "boat": 1
+      },
+      "unitsA": 34,
+      "unitsB": 9,
+      "firstCap": {
+        "turn": 11,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 27,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1302,
+      "winner": "A",
+      "turns": 99,
+      "steps": 1450,
+      "recruitsA": 91,
+      "recruitsB": 76,
+      "picksA": {
+        "herder": 6,
+        "laborer": 5,
+        "scout": 26,
+        "archer": 10,
+        "militia": 10,
+        "goblin-trapper": 5,
+        "spearman": 3,
+        "priest": 3,
+        "swordsman": 2,
+        "wolf-rider": 8,
+        "centaur": 4,
+        "spider-rider": 4,
+        "longbow": 1,
+        "poison-bat": 2,
+        "royal-cavalry": 1,
+        "ranger": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 27,
+        "archer": 14,
+        "militia": 14,
+        "priest": 4,
+        "spearman": 2,
+        "swordsman": 2,
+        "centaur": 3,
+        "wolf-rider": 3,
+        "longbow": 1,
+        "spider-rider": 1
+      },
+      "unitsA": 30,
+      "unitsB": 18,
+      "firstCap": {
+        "turn": 71,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 72,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 71,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 72,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 91,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 92,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 97,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 99,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1303,
+      "winner": "A",
+      "turns": 59,
+      "steps": 702,
+      "recruitsA": 37,
+      "recruitsB": 35,
+      "picksA": {
+        "herder": 7,
+        "laborer": 3,
+        "scout": 9,
+        "boat": 6,
+        "militia": 5,
+        "archer": 5,
+        "priest": 2
+      },
+      "picksB": {
+        "laborer": 2,
+        "herder": 4,
+        "archer": 7,
+        "scout": 6,
+        "boat": 11,
+        "militia": 5
+      },
+      "unitsA": 30,
+      "unitsB": 12,
+      "firstCap": {
+        "turn": 9,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 9,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 36,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 39,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 40,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 41,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 42,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 43,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 44,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 45,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 59,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1304,
+      "winner": "A",
+      "turns": 101,
+      "steps": 1405,
+      "recruitsA": 79,
+      "recruitsB": 62,
+      "picksA": {
+        "laborer": 4,
+        "herder": 7,
+        "scout": 21,
+        "archer": 11,
+        "militia": 13,
+        "priest": 4,
+        "spearman": 2,
+        "swordsman": 3,
+        "centaur": 3,
+        "wolf-rider": 7,
+        "spider-rider": 2,
+        "poison-bat": 1,
+        "longbow": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 4,
+        "scout": 18,
+        "militia": 9,
+        "archer": 9,
+        "priest": 3,
+        "spearman": 3,
+        "swordsman": 2,
+        "wolf-rider": 5,
+        "centaur": 4,
+        "goblin-trapper": 1,
+        "poison-bat": 1
+      },
+      "unitsA": 34,
+      "unitsB": 8,
+      "firstCap": {
+        "turn": 17,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 30,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 17,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 20,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 27,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 29,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 93,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 94,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 95,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 101,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1305,
+      "winner": "B",
+      "turns": 130,
+      "steps": 1691,
+      "recruitsA": 78,
+      "recruitsB": 89,
+      "picksA": {
+        "herder": 5,
+        "laborer": 5,
+        "scout": 23,
+        "archer": 10,
+        "militia": 7,
+        "boat": 7,
+        "priest": 3,
+        "spearman": 2,
+        "wolf-rider": 9,
+        "swordsman": 2,
+        "centaur": 2,
+        "miller": 1,
+        "spider-rider": 1,
+        "goblin-trapper": 1
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 6,
+        "scout": 24,
+        "militia": 7,
+        "archer": 12,
+        "boat": 3,
+        "priest": 3,
+        "spearman": 4,
+        "swordsman": 2,
+        "goblin-trapper": 3,
+        "wolf-rider": 7,
+        "centaur": 3,
+        "poison-bat": 2,
+        "ranger": 1,
+        "spider-rider": 2,
+        "royal-cavalry": 1,
+        "longbow": 1
+      },
+      "unitsA": 8,
+      "unitsB": 42,
+      "firstCap": {
+        "turn": 16,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 16,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 21,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 104,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 105,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 106,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 115,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 116,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 130,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1400,
+      "winner": "A",
+      "turns": 29,
+      "steps": 338,
+      "recruitsA": 20,
+      "recruitsB": 17,
+      "picksA": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 7,
+        "archer": 5,
+        "militia": 2
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 5,
+        "militia": 5,
+        "archer": 2
+      },
+      "unitsA": 24,
+      "unitsB": 12,
+      "firstCap": {
+        "turn": 9,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 10,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 9,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 10,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 29,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1401,
+      "winner": "A",
+      "turns": 65,
+      "steps": 743,
+      "recruitsA": 45,
+      "recruitsB": 38,
+      "picksA": {
+        "herder": 6,
+        "laborer": 5,
+        "scout": 17,
+        "archer": 7,
+        "militia": 7,
+        "boat": 2,
+        "priest": 1
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 5,
+        "scout": 14,
+        "archer": 5,
+        "militia": 7,
+        "boat": 1
+      },
+      "unitsA": 38,
+      "unitsB": 6,
+      "firstCap": {
+        "turn": 23,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 24,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 8,
+      "flipLog": [
+        {
+          "turn": 23,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 24,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 42,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 51,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 52,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 53,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 65,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1402,
+      "winner": "B",
+      "turns": 88,
+      "steps": 1143,
+      "recruitsA": 59,
+      "recruitsB": 60,
+      "picksA": {
+        "herder": 7,
+        "laborer": 3,
+        "scout": 20,
+        "archer": 11,
+        "militia": 13,
+        "priest": 2,
+        "spearman": 1,
+        "swordsman": 1,
+        "goblin-trapper": 1
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 9,
+        "scout": 20,
+        "militia": 5,
+        "archer": 3,
+        "priest": 2,
+        "swordsman": 3,
+        "spearman": 1,
+        "poison-bat": 1,
+        "spider-rider": 2,
+        "mortar": 1,
+        "wolf-rider": 4,
+        "treant": 1,
+        "harpy": 1,
+        "gargoyle": 1,
+        "illusionist": 1
+      },
+      "unitsA": 24,
+      "unitsB": 33,
+      "firstCap": {
+        "turn": 18,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": 19,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 14,
+      "flipLog": [
+        {
+          "turn": 18,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 19,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 33,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 46,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 65,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 78,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 79,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 82,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 83,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 84,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 85,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 86,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 88,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1403,
+      "winner": "A",
+      "turns": 139,
+      "steps": 1606,
+      "recruitsA": 79,
+      "recruitsB": 74,
+      "picksA": {
+        "herder": 10,
+        "laborer": 6,
+        "scout": 21,
+        "boat": 4,
+        "militia": 11,
+        "archer": 12,
+        "priest": 2,
+        "spearman": 2,
+        "swordsman": 2,
+        "wolf-rider": 1,
+        "poison-bat": 1,
+        "spider-rider": 2,
+        "centaur": 1,
+        "lumberjack": 1,
+        "goblin-trapper": 1,
+        "necromancer": 1,
+        "mortar": 1
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 3,
+        "scout": 21,
+        "archer": 9,
+        "militia": 16,
+        "boat": 6,
+        "priest": 2,
+        "spearman": 2,
+        "centaur": 1,
+        "ranger": 1,
+        "wolf-rider": 5,
+        "swordsman": 1,
+        "spider-rider": 1
+      },
+      "unitsA": 43,
+      "unitsB": 12,
+      "firstCap": {
+        "turn": 11,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 22,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 20,
+      "flipLog": [
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 23,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 26,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 31,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 42,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 49,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 50,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 61,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 78,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 81,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 82,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 113,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 114,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 119,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 120,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 121,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 139,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1404,
+      "winner": "A",
+      "turns": 87,
+      "steps": 1233,
+      "recruitsA": 59,
+      "recruitsB": 70,
+      "picksA": {
+        "laborer": 5,
+        "herder": 3,
+        "scout": 16,
+        "militia": 9,
+        "archer": 5,
+        "spearman": 2,
+        "priest": 2,
+        "swordsman": 2,
+        "wolf-rider": 4,
+        "gargoyle": 2,
+        "necromancer": 1,
+        "centaur": 2,
+        "mortar": 1,
+        "ghost": 1,
+        "illusionist": 1,
+        "lumberjack": 2,
+        "alchemist": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 13,
+        "archer": 9,
+        "militia": 18,
+        "priest": 5,
+        "centaur": 5,
+        "spearman": 3,
+        "swordsman": 3,
+        "ranger": 1,
+        "wolf-rider": 6,
+        "spider-rider": 2
+      },
+      "unitsA": 41,
+      "unitsB": 13,
+      "firstCap": {
+        "turn": 25,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 26,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 12,
+      "flipLog": [
+        {
+          "turn": 25,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 26,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 69,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 70,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 73,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 79,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 80,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 83,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 84,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 85,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 87,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1405,
+      "winner": "B",
+      "turns": 136,
+      "steps": 1803,
+      "recruitsA": 83,
+      "recruitsB": 79,
+      "picksA": {
+        "laborer": 6,
+        "herder": 8,
+        "scout": 17,
+        "archer": 11,
+        "militia": 8,
+        "boat": 3,
+        "priest": 3,
+        "spider-rider": 14,
+        "centaur": 2,
+        "swordsman": 3,
+        "spearman": 1,
+        "slime": 3,
+        "wolf-rider": 3,
+        "goblin-trapper": 1
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 6,
+        "scout": 16,
+        "militia": 6,
+        "archer": 5,
+        "boat": 6,
+        "farmer": 1,
+        "priest": 3,
+        "spider-rider": 13,
+        "spearman": 2,
+        "swordsman": 1,
+        "centaur": 4,
+        "slime": 1,
+        "wolf-rider": 1,
+        "necromancer": 1,
+        "cursed-knight": 1,
+        "elementalist": 1,
+        "mage": 1,
+        "halberdier": 1,
+        "armoredcar": 1
+      },
+      "unitsA": 10,
+      "unitsB": 52,
+      "firstCap": {
+        "turn": 7,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 94,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 7,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 94,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 95,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 96,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 136,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1500,
+      "winner": "B",
+      "turns": 178,
+      "steps": 1590,
+      "recruitsA": 93,
+      "recruitsB": 44,
+      "picksA": {
+        "herder": 11,
+        "laborer": 4,
+        "scout": 9,
+        "archer": 5,
+        "boat": 20,
+        "militia": 11,
+        "goblin-trapper": 4,
+        "spearman": 3,
+        "swordsman": 1,
+        "wolf-rider": 8,
+        "lumberjack": 7,
+        "priest": 1,
+        "curser": 1,
+        "miller": 7,
+        "spider-rider": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 5,
+        "scout": 16,
+        "archer": 8,
+        "militia": 5,
+        "boat": 1,
+        "priest": 2,
+        "gargoyle": 1,
+        "spearman": 1,
+        "elementalist": 1
+      },
+      "unitsA": 9,
+      "unitsB": 53,
+      "firstCap": {
+        "turn": 20,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 20,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 178,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1501,
+      "winner": "A",
+      "turns": 25,
+      "steps": 259,
+      "recruitsA": 20,
+      "recruitsB": 13,
+      "picksA": {
+        "laborer": 2,
+        "herder": 4,
+        "scout": 7,
+        "archer": 4,
+        "militia": 3
+      },
+      "picksB": {
+        "laborer": 3,
+        "herder": 2,
+        "scout": 5,
+        "militia": 1,
+        "archer": 2
+      },
+      "unitsA": 17,
+      "unitsB": 14,
+      "firstCap": {
+        "turn": 9,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 10,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 9,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 10,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 17,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 25,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1502,
+      "winner": "A",
+      "turns": 97,
+      "steps": 1046,
+      "recruitsA": 54,
+      "recruitsB": 54,
+      "picksA": {
+        "herder": 3,
+        "laborer": 4,
+        "scout": 11,
+        "militia": 6,
+        "archer": 8,
+        "boat": 3,
+        "farmer": 1,
+        "priest": 2,
+        "swordsman": 1,
+        "spearman": 2,
+        "centaur": 3,
+        "wolf-rider": 2,
+        "poison-bat": 1,
+        "lumberjack": 1,
+        "spider-rider": 2,
+        "longbow": 1,
+        "mortar": 2,
+        "vampire": 1
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 3,
+        "scout": 16,
+        "militia": 15,
+        "archer": 15
+      },
+      "unitsA": 44,
+      "unitsB": 8,
+      "firstCap": {
+        "turn": 25,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 25,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 42,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 45,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 97,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1503,
+      "winner": "B",
+      "turns": 90,
+      "steps": 1349,
+      "recruitsA": 75,
+      "recruitsB": 63,
+      "picksA": {
+        "laborer": 8,
+        "herder": 5,
+        "scout": 30,
+        "archer": 14,
+        "militia": 6,
+        "priest": 4,
+        "royal-cavalry": 2,
+        "spearman": 1,
+        "wolf-rider": 1,
+        "centaur": 3,
+        "swordsman": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 6,
+        "scout": 18,
+        "archer": 5,
+        "militia": 4,
+        "farmer": 1,
+        "priest": 3,
+        "spearman": 2,
+        "royal-cavalry": 4,
+        "swordsman": 2,
+        "wolf-rider": 3,
+        "assassin": 2,
+        "mage": 2,
+        "centaur": 1,
+        "druid": 1,
+        "mortar": 1,
+        "harpy": 1,
+        "illusionist": 1,
+        "alchemist": 1,
+        "necromancer": 1,
+        "lumberjack": 1
+      },
+      "unitsA": 16,
+      "unitsB": 33,
+      "firstCap": {
+        "turn": 84,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 84,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 90,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1504,
+      "winner": "A",
+      "turns": 133,
+      "steps": 1563,
+      "recruitsA": 70,
+      "recruitsB": 81,
+      "picksA": {
+        "herder": 6,
+        "laborer": 8,
+        "scout": 20,
+        "archer": 8,
+        "militia": 7,
+        "boat": 3,
+        "priest": 4,
+        "spearman": 3,
+        "swordsman": 1,
+        "spider-rider": 2,
+        "centaur": 2,
+        "wolf-rider": 2,
+        "poison-bat": 1,
+        "gargoyle": 1,
+        "mortar": 1,
+        "elementalist": 1
+      },
+      "picksB": {
+        "laborer": 5,
+        "herder": 6,
+        "scout": 18,
+        "archer": 8,
+        "militia": 14,
+        "boat": 4,
+        "goblin-trapper": 6,
+        "wolf-rider": 7,
+        "swordsman": 4,
+        "spider-rider": 4,
+        "spearman": 3,
+        "longbow": 1,
+        "slime": 1
+      },
+      "unitsA": 49,
+      "unitsB": 17,
+      "firstCap": {
+        "turn": 21,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 21,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 71,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 72,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 73,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 76,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 77,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 133,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1505,
+      "winner": "A",
+      "turns": 19,
+      "steps": 176,
+      "recruitsA": 15,
+      "recruitsB": 10,
+      "picksA": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 6,
+        "archer": 2,
+        "militia": 1
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 1,
+        "scout": 4,
+        "archer": 2,
+        "militia": 1
+      },
+      "unitsA": 21,
+      "unitsB": 11,
+      "firstCap": {
+        "turn": 5,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 6,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 5,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 6,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 15,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 19,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1600,
+      "winner": "A",
+      "turns": 111,
+      "steps": 1412,
+      "recruitsA": 61,
+      "recruitsB": 78,
+      "picksA": {
+        "herder": 6,
+        "laborer": 5,
+        "scout": 12,
+        "archer": 7,
+        "militia": 8,
+        "boat": 4,
+        "priest": 2,
+        "halberdier": 1,
+        "spearman": 1,
+        "centaur": 1,
+        "swordsman": 1,
+        "mortar": 2,
+        "mage": 1,
+        "cursed-knight": 1,
+        "illusionist": 1,
+        "treant": 1,
+        "necromancer": 1,
+        "paladin": 1,
+        "alchemist": 1,
+        "witch-doctor": 1,
+        "gargoyle": 1,
+        "druid": 1,
+        "hellhound": 1
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 5,
+        "scout": 17,
+        "archer": 15,
+        "militia": 12,
+        "boat": 6,
+        "priest": 6,
+        "centaur": 1,
+        "swordsman": 2,
+        "wolf-rider": 3,
+        "spearman": 3
+      },
+      "unitsA": 46,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 4,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": 5,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 4,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 5,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 20,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 93,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 111,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1601,
+      "winner": "B",
+      "turns": 18,
+      "steps": 184,
+      "recruitsA": 9,
+      "recruitsB": 10,
+      "picksA": {
+        "herder": 2,
+        "laborer": 1,
+        "scout": 5,
+        "archer": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 1,
+        "scout": 5
+      },
+      "unitsA": 6,
+      "unitsB": 14,
+      "firstCap": {
+        "turn": 8,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 8,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 14,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 15,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 16,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 18,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1602,
+      "winner": "B",
+      "turns": 76,
+      "steps": 889,
+      "recruitsA": 41,
+      "recruitsB": 45,
+      "picksA": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 11,
+        "archer": 9,
+        "militia": 9,
+        "boat": 7
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 13,
+        "archer": 4,
+        "militia": 7,
+        "boat": 2,
+        "wolf-rider": 2,
+        "spearman": 2,
+        "swordsman": 1,
+        "priest": 2,
+        "centaur": 3,
+        "spider-rider": 1,
+        "halberdier": 1
+      },
+      "unitsA": 16,
+      "unitsB": 42,
+      "firstCap": {
+        "turn": 20,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": 53,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 20,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 53,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 54,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 76,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1603,
+      "winner": "B",
+      "turns": 34,
+      "steps": 419,
+      "recruitsA": 16,
+      "recruitsB": 26,
+      "picksA": {
+        "herder": 6,
+        "laborer": 2,
+        "scout": 5,
+        "militia": 1,
+        "archer": 2
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 4,
+        "scout": 9,
+        "archer": 4,
+        "militia": 3
+      },
+      "unitsA": 7,
+      "unitsB": 22,
+      "firstCap": {
+        "turn": 10,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 6,
+      "flipLog": [
+        {
+          "turn": 10,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 34,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1604,
+      "winner": "B",
+      "turns": 96,
+      "steps": 1220,
+      "recruitsA": 59,
+      "recruitsB": 55,
+      "picksA": {
+        "herder": 5,
+        "laborer": 4,
+        "scout": 20,
+        "boat": 11,
+        "archer": 9,
+        "militia": 10
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 10,
+        "militia": 7,
+        "priest": 3,
+        "spearman": 3,
+        "swordsman": 2,
+        "centaur": 5,
+        "archer": 6,
+        "wolf-rider": 6,
+        "spider-rider": 3,
+        "goblin-trapper": 1,
+        "poison-bat": 1,
+        "lumberjack": 1,
+        "illusionist": 1
+      },
+      "unitsA": 8,
+      "unitsB": 44,
+      "firstCap": {
+        "turn": 21,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 22,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 21,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 23,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 24,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 60,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 65,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 78,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 96,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1605,
+      "winner": "A",
+      "turns": 23,
+      "steps": 268,
+      "recruitsA": 21,
+      "recruitsB": 9,
+      "picksA": {
+        "herder": 3,
+        "laborer": 2,
+        "scout": 8,
+        "archer": 4,
+        "militia": 4
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 2,
+        "scout": 3,
+        "archer": 1,
+        "militia": 1
+      },
+      "unitsA": 25,
+      "unitsB": 7,
+      "firstCap": {
+        "turn": 21,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 21,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 23,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1700,
+      "winner": "B",
+      "turns": 88,
+      "steps": 1293,
+      "recruitsA": 68,
+      "recruitsB": 69,
+      "picksA": {
+        "herder": 2,
+        "laborer": 4,
+        "scout": 17,
+        "archer": 14,
+        "militia": 10,
+        "farmer": 3,
+        "priest": 3,
+        "spearman": 2,
+        "swordsman": 1,
+        "wolf-rider": 3,
+        "goblin-trapper": 1,
+        "ranger": 2,
+        "spider-rider": 1,
+        "centaur": 1,
+        "necromancer": 1,
+        "gargoyle": 1,
+        "mage": 1,
+        "musketeer": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 5,
+        "scout": 19,
+        "archer": 8,
+        "militia": 6,
+        "farmer": 1,
+        "priest": 3,
+        "spearman": 2,
+        "swordsman": 2,
+        "ranger": 3,
+        "centaur": 1,
+        "wolf-rider": 4,
+        "mortar": 1,
+        "spider-rider": 3,
+        "goblin-trapper": 1,
+        "musketeer": 1,
+        "gargoyle": 1,
+        "necromancer": 1,
+        "druid": 1,
+        "halberdier": 1,
+        "hellhound": 1,
+        "harpy": 1
+      },
+      "unitsA": 23,
+      "unitsB": 31,
+      "firstCap": {
+        "turn": 70,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 73,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 12,
+      "flipLog": [
+        {
+          "turn": 70,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 73,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 76,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 77,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 78,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 79,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 82,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 83,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 86,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 88,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1701,
+      "winner": "B",
+      "turns": 186,
+      "steps": 1977,
+      "recruitsA": 76,
+      "recruitsB": 57,
+      "picksA": {
+        "herder": 6,
+        "laborer": 3,
+        "scout": 21,
+        "boat": 1,
+        "militia": 11,
+        "archer": 14,
+        "farmer": 1,
+        "goblin-trapper": 1,
+        "spearman": 1,
+        "mortar": 1,
+        "halberdier": 7,
+        "necromancer": 1,
+        "mage": 1,
+        "harpy": 3,
+        "illusionist": 2,
+        "curser": 1,
+        "engineer": 1
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 6,
+        "scout": 14,
+        "militia": 8,
+        "archer": 5,
+        "boat": 3,
+        "priest": 3,
+        "swordsman": 1,
+        "spearman": 1,
+        "wolf-rider": 1,
+        "spider-rider": 1,
+        "illusionist": 1,
+        "vampire": 1,
+        "rifleman": 1,
+        "elementalist": 1,
+        "angel": 1,
+        "demon": 1
+      },
+      "unitsA": 15,
+      "unitsB": 47,
+      "firstCap": {
+        "turn": 14,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 26,
+      "flipLog": [
+        {
+          "turn": 14,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 34,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 35,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 36,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 53,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 54,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 55,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 56,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 63,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 64,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 65,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 66,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 73,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 74,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 75,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 82,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 83,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 84,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 97,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 100,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 107,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 110,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 127,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 130,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 186,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1702,
+      "winner": "B",
+      "turns": 98,
+      "steps": 1414,
+      "recruitsA": 82,
+      "recruitsB": 79,
+      "picksA": {
+        "herder": 8,
+        "laborer": 7,
+        "scout": 26,
+        "militia": 13,
+        "archer": 13,
+        "priest": 3,
+        "spearman": 1,
+        "centaur": 3,
+        "swordsman": 2,
+        "longbow": 1,
+        "ranger": 1,
+        "wolf-rider": 3,
+        "goblin-trapper": 1
+      },
+      "picksB": {
+        "herder": 3,
+        "laborer": 5,
+        "scout": 16,
+        "archer": 13,
+        "militia": 9,
+        "wolf-rider": 6,
+        "priest": 4,
+        "swordsman": 3,
+        "spearman": 2,
+        "centaur": 5,
+        "spider-rider": 3,
+        "goblin-trapper": 3,
+        "poison-bat": 2,
+        "ranger": 1,
+        "lumberjack": 1,
+        "longbow": 1,
+        "ghost": 1,
+        "mortar": 1
+      },
+      "unitsA": 10,
+      "unitsB": 35,
+      "firstCap": {
+        "turn": 76,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": 85,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 76,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 85,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 86,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 98,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1703,
+      "winner": "A",
+      "turns": 157,
+      "steps": 1426,
+      "recruitsA": 63,
+      "recruitsB": 79,
+      "picksA": {
+        "herder": 6,
+        "laborer": 4,
+        "scout": 21,
+        "militia": 4,
+        "archer": 5,
+        "boat": 1,
+        "farmer": 1,
+        "priest": 3,
+        "swordsman": 2,
+        "spearman": 1,
+        "wolf-rider": 4,
+        "halberdier": 3,
+        "mortar": 1,
+        "troll": 1,
+        "illusionist": 2,
+        "necromancer": 2,
+        "gargoyle": 1,
+        "elementalist": 1
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 7,
+        "scout": 14,
+        "militia": 15,
+        "archer": 8,
+        "boat": 4,
+        "priest": 3,
+        "centaur": 3,
+        "spearman": 3,
+        "swordsman": 4,
+        "wolf-rider": 4,
+        "goblin-trapper": 2,
+        "longbow": 2,
+        "spider-rider": 6
+      },
+      "unitsA": 48,
+      "unitsB": 10,
+      "firstCap": {
+        "turn": 11,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 12,
+        "retakenNext": true
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 38,
+      "flipLog": [
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 13,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 14,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 15,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 16,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 17,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 18,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 27,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 28,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 31,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 32,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 35,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 36,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 39,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 40,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 41,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 44,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 45,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 48,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 49,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 50,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 51,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 52,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 53,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 54,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 55,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 56,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 57,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 58,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 59,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 60,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 61,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 68,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 111,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 112,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 113,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 157,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1704,
+      "winner": "B",
+      "turns": 42,
+      "steps": 424,
+      "recruitsA": 17,
+      "recruitsB": 28,
+      "picksA": {
+        "herder": 5,
+        "laborer": 2,
+        "scout": 5,
+        "archer": 2,
+        "militia": 3
+      },
+      "picksB": {
+        "herder": 9,
+        "laborer": 2,
+        "scout": 10,
+        "archer": 4,
+        "militia": 3
+      },
+      "unitsA": 4,
+      "unitsB": 27,
+      "firstCap": {
+        "turn": 7,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 8,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 7,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 8,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 9,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 10,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 13,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 14,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 24,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 42,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1705,
+      "winner": "B",
+      "turns": 46,
+      "steps": 508,
+      "recruitsA": 29,
+      "recruitsB": 34,
+      "picksA": {
+        "herder": 3,
+        "laborer": 3,
+        "scout": 11,
+        "archer": 7,
+        "militia": 4,
+        "boat": 1
+      },
+      "picksB": {
+        "herder": 5,
+        "laborer": 3,
+        "scout": 11,
+        "militia": 5,
+        "archer": 10
+      },
+      "unitsA": 10,
+      "unitsB": 23,
+      "firstCap": {
+        "turn": 22,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 23,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 12,
+      "flipLog": [
+        {
+          "turn": 22,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 23,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 24,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 26,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 33,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 38,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 39,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 40,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 43,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 44,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 46,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1800,
+      "winner": "A",
+      "turns": 67,
+      "steps": 737,
+      "recruitsA": 46,
+      "recruitsB": 38,
+      "picksA": {
+        "herder": 7,
+        "laborer": 3,
+        "scout": 14,
+        "militia": 8,
+        "archer": 6,
+        "swordsman": 1,
+        "priest": 1,
+        "spearman": 2,
+        "slime": 2,
+        "wolf-rider": 2
+      },
+      "picksB": {
+        "herder": 8,
+        "laborer": 3,
+        "scout": 13,
+        "archer": 5,
+        "militia": 9
+      },
+      "unitsA": 28,
+      "unitsB": 5,
+      "firstCap": {
+        "turn": 7,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 10,
+      "flipLog": [
+        {
+          "turn": 7,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 12,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 13,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 22,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 25,
+          "city": "c1",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 30,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 35,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 54,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 57,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 67,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1801,
+      "winner": "A",
+      "turns": 175,
+      "steps": 1899,
+      "recruitsA": 105,
+      "recruitsB": 109,
+      "picksA": {
+        "herder": 3,
+        "laborer": 6,
+        "scout": 19,
+        "archer": 8,
+        "militia": 10,
+        "boat": 1,
+        "priest": 3,
+        "wolf-rider": 7,
+        "spearman": 2,
+        "centaur": 5,
+        "swordsman": 1,
+        "mage": 5,
+        "druid": 3,
+        "gargoyle": 3,
+        "illusionist": 2,
+        "mortar": 4,
+        "alchemist": 2,
+        "treant": 3,
+        "spider-rider": 1,
+        "cursed-knight": 2,
+        "harpy": 3,
+        "halberdier": 1,
+        "necromancer": 1,
+        "witch-doctor": 1,
+        "assassin": 1,
+        "minotaur": 2,
+        "armoredcar": 2,
+        "vampire": 2,
+        "two-head-giant": 1,
+        "elementalist": 1
+      },
+      "picksB": {
+        "herder": 2,
+        "laborer": 7,
+        "scout": 16,
+        "archer": 4,
+        "boat": 16,
+        "militia": 3,
+        "goblin-trapper": 1,
+        "priest": 3,
+        "spearman": 1,
+        "swordsman": 1,
+        "wolf-rider": 4,
+        "gunboat": 2,
+        "spider-rider": 2,
+        "illusionist": 4,
+        "mage": 3,
+        "cursed-knight": 2,
+        "alchemist": 1,
+        "necromancer": 3,
+        "gargoyle": 9,
+        "druid": 1,
+        "witch-doctor": 1,
+        "lumberjack": 3,
+        "halberdier": 3,
+        "assassin": 4,
+        "curser": 2,
+        "harpy": 2,
+        "treant": 3,
+        "mortar": 1,
+        "planter": 1,
+        "ghost": 1,
+        "minotaur": 1,
+        "hussar": 1,
+        "paladin": 1
+      },
+      "unitsA": 47,
+      "unitsB": 22,
+      "firstCap": {
+        "turn": 165,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": 172,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 165,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 172,
+          "city": "c4",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 175,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 175,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1802,
+      "winner": "B",
+      "turns": 116,
+      "steps": 1817,
+      "recruitsA": 96,
+      "recruitsB": 98,
+      "picksA": {
+        "herder": 9,
+        "laborer": 4,
+        "scout": 35,
+        "archer": 9,
+        "militia": 11,
+        "priest": 5,
+        "spearman": 3,
+        "swordsman": 3,
+        "wolf-rider": 7,
+        "centaur": 5,
+        "spider-rider": 3,
+        "poison-bat": 1,
+        "royal-cavalry": 1
+      },
+      "picksB": {
+        "herder": 6,
+        "laborer": 3,
+        "scout": 24,
+        "archer": 11,
+        "militia": 7,
+        "priest": 3,
+        "spearman": 4,
+        "swordsman": 4,
+        "wolf-rider": 13,
+        "centaur": 7,
+        "spider-rider": 3,
+        "poison-bat": 4,
+        "goblin-trapper": 3,
+        "ranger": 2,
+        "royal-cavalry": 1,
+        "miller": 1,
+        "longbow": 2
+      },
+      "unitsA": 23,
+      "unitsB": 29,
+      "firstCap": {
+        "turn": 97,
+        "by": "A",
+        "city": "c3",
+        "retakeTurn": 98,
+        "retakenNext": true
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 97,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 98,
+          "city": "c3",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 112,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 116,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1803,
+      "winner": "B",
+      "turns": 102,
+      "steps": 1417,
+      "recruitsA": 79,
+      "recruitsB": 46,
+      "picksA": {
+        "herder": 4,
+        "laborer": 3,
+        "scout": 10,
+        "archer": 9,
+        "boat": 28,
+        "militia": 7,
+        "priest": 2,
+        "swordsman": 2,
+        "spearman": 1,
+        "lumberjack": 2,
+        "centaur": 4,
+        "harpy": 1,
+        "gargoyle": 1,
+        "goblin-trapper": 2,
+        "wolf-rider": 3
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 8,
+        "scout": 13,
+        "militia": 3,
+        "archer": 3,
+        "priest": 2,
+        "swordsman": 1,
+        "planter": 1,
+        "spearman": 1,
+        "illusionist": 1,
+        "mage": 1,
+        "rifleman": 2,
+        "necromancer": 1,
+        "gargoyle": 2,
+        "cursed-knight": 1,
+        "mortar": 1,
+        "elementalist": 1
+      },
+      "unitsA": 16,
+      "unitsB": 49,
+      "firstCap": {
+        "turn": 96,
+        "by": "B",
+        "city": "c1",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 0,
+      "citiesB": 4,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 96,
+          "city": "c1",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 102,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1804,
+      "winner": "A",
+      "turns": 33,
+      "steps": 367,
+      "recruitsA": 26,
+      "recruitsB": 13,
+      "picksA": {
+        "herder": 5,
+        "laborer": 6,
+        "scout": 7,
+        "militia": 4,
+        "archer": 4
+      },
+      "picksB": {
+        "herder": 4,
+        "laborer": 2,
+        "scout": 4,
+        "archer": 2,
+        "militia": 1
+      },
+      "unitsA": 28,
+      "unitsB": 5,
+      "firstCap": {
+        "turn": 10,
+        "by": "B",
+        "city": "c2",
+        "retakeTurn": 29,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 4,
+      "flipLog": [
+        {
+          "turn": 10,
+          "city": "c2",
+          "from": "A",
+          "to": "B"
+        },
+        {
+          "turn": 11,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 29,
+          "city": "c2",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 33,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    },
+    {
+      "era": 1,
+      "size": 12,
+      "seed": 1805,
+      "winner": "A",
+      "turns": 113,
+      "steps": 1405,
+      "recruitsA": 69,
+      "recruitsB": 81,
+      "picksA": {
+        "herder": 3,
+        "laborer": 3,
+        "scout": 12,
+        "archer": 6,
+        "militia": 7,
+        "boat": 8,
+        "priest": 1,
+        "spearman": 1,
+        "gunboat": 2,
+        "spider-rider": 2,
+        "swordsman": 1,
+        "goblin-trapper": 1,
+        "halberdier": 1,
+        "wolf-rider": 2,
+        "illusionist": 2,
+        "mage": 2,
+        "necromancer": 1,
+        "gargoyle": 5,
+        "druid": 1,
+        "mortar": 1,
+        "treant": 1,
+        "alchemist": 1,
+        "curser": 1,
+        "lumberjack": 2,
+        "earth-elemental": 1,
+        "harpy": 1
+      },
+      "picksB": {
+        "laborer": 5,
+        "herder": 4,
+        "scout": 8,
+        "archer": 10,
+        "militia": 8,
+        "boat": 20,
+        "priest": 4,
+        "spider-rider": 12,
+        "centaur": 1,
+        "spearman": 3,
+        "swordsman": 1,
+        "mage": 1,
+        "gargoyle": 2,
+        "alchemist": 1,
+        "mortar": 1
+      },
+      "unitsA": 37,
+      "unitsB": 18,
+      "firstCap": {
+        "turn": 99,
+        "by": "A",
+        "city": "c4",
+        "retakeTurn": null,
+        "retakenNext": false
+      },
+      "citiesA": 4,
+      "citiesB": 0,
+      "flipCount": 2,
+      "flipLog": [
+        {
+          "turn": 99,
+          "city": "c4",
+          "from": "B",
+          "to": "A"
+        },
+        {
+          "turn": 113,
+          "city": "c3",
+          "from": "B",
+          "to": "A"
+        }
+      ]
+    }
+  ],
+  "draw": []
+}

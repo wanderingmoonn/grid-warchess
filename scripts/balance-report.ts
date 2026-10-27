@@ -139,6 +139,9 @@ interface GameResult {
   steps: number;
   recruitsA: number;
   recruitsB: number;
+  /** 这一局每方招了哪些兵、各几个——英雄胜率要按"招了它的一方赢没赢"来算 */
+  picksA: Record<string, number>;
+  picksB: Record<string, number>;
   unitsA: number;
   unitsB: number;
   /**
@@ -744,6 +747,8 @@ function runGame(seed: number): {
   let turns = 0;
   let recruitsA = 0;
   let recruitsB = 0;
+  const picksA: Record<string, number> = {};
+  const picksB: Record<string, number> = {};
   const play = emptyPlay();
   /** 城市易主流水：整局记下来，事后再判"首城"和"有没有立刻抢回来" */
   const flips: Array<{ turn: number; cityId: string; from: string; to: string }> = [];
@@ -768,6 +773,8 @@ function runGame(seed: number): {
         t.built += 1;
         t.spend += cost;
         if (action.type === 'RECRUIT') {
+          const bag = who === 'A' ? picksA : picksB;
+          bag[action.unitType] = (bag[action.unitType] ?? 0) + 1;
           if (who === 'A') recruitsA += 1;
           else recruitsB += 1;
         }
@@ -904,6 +911,8 @@ function runGame(seed: number): {
     steps,
     recruitsA,
     recruitsB,
+    picksA,
+    picksB,
     unitsA: s.units.filter((u) => u.owner === 'A').length,
     unitsB: s.units.filter((u) => u.owner === 'B').length,
     firstCap: null,
