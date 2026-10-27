@@ -38,11 +38,18 @@ import {
   upgradeCostOf,
   utype,
 } from './core/rules.ts';
-import { clearUnits, placeCity, placeUnit, removeAt, sandboxCityProblem } from './core/sandbox.ts';
+import {
+  clearUnits,
+  paintTerrain,
+  placeCity,
+  placeUnit,
+  removeAt,
+  sandboxCityProblem,
+} from './core/sandbox.ts';
 import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
-import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
+import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput } from './ui/panel.ts';
@@ -164,6 +171,13 @@ let selectedTile: { x: number; y: number } | null = null;
  * 敲一个字就被下一次 render 冲掉。这里存字、重绘时回填，光标落到末尾。
  */
 let recruitQuery = '';
+/**
+ * 产兵列表按扩展包筛选：'' = 全部，'core' = 原版，其它是扩展 id。
+ *
+ * 和 recruitQuery 一样存在这里而不是 DOM 里：面板整块重绘，状态必须由
+ * JS 侧持有。搜索是"找已知的名字"，这个开关是"先圈定范围再找"，两件事。
+ */
+let recruitPack = '';
 let reach: number[] = [];
 let targets: string[] = [];
 let siege: string[] = [];
@@ -386,6 +400,7 @@ function panelInput(): PanelInput {
     canUndo: undoStack.length > 0,
     chimeVolume,
     recruitQuery,
+    recruitPack,
     spectator: watching(),
     // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
     commander: state.config.commanderMode === true,
@@ -620,6 +635,7 @@ function refreshSelection(): void {
 
 function clearSelection(): void {
   recruitQuery = '';
+  // 扩展包筛选不清：它是"我这一局只想看哪几个包"，换一个单位不该把它重置掉
   forceMode = null;
   pickState = null;
   selectedId = null;
@@ -1507,6 +1523,34 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    // 按扩展包筛产兵列表：再点一次当前那一档＝回到全部
+    case 'recruit-pack': {
+      const p = el.dataset.pack ?? '';
+      recruitPack = recruitPack === p ? '' : p;
+      render();
+      return;
+    }
+
+    // 地形笔刷：再点一次同一种地形＝放下笔刷，和兵种货架一个手感
+    case 'god-terrain': {
+      const t = el.dataset.terrain as Terrain | undefined;
+      if (!t) return;
+      godBrush =
+        godBrush.kind === 'terrain' && godBrush.terrain === t
+          ? { kind: 'none' }
+          : { kind: 'terrain', terrain: t };
+      render();
+      return;
+    }
+
+    // 货架按扩展包切：再点一次当前那一档＝回到全部
+    case 'god-pack': {
+      const p = el.dataset.pack ?? '';
+      godPack = godPack === p ? '' : p;
+      render();
+      return;
+    }
+
     case 'god-pick': {
       const type = el.dataset.unit ?? '';
       if (!type) return;
@@ -1598,11 +1642,17 @@ async function runAiLoop(): Promise<void> {
  *
  * 每一步之间停一下，是为了让玩家看得见它在干什么——
  * 瞬间跳完会让整局变成"我做了什么？对面怎么就满编了？"。
+ *
+ * `stopWhen` 是"这一仗已经打完了"的外部判据（只有沙盒用得上）：
+ * 它每步都问一次，成立就立刻收手并交还回合。以前只在**回合之间**检查，
+ * 于是一方在自己回合中途把对面最后一个兵清掉之后，剩下的部队还会继续
+ * 原地折腾几十步——沙盒里看到的正是"没有敌人了，它还在动"。
  */
 async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
   delayOverride?: number,
+  stopWhen?: () => boolean,
 ): Promise<void> {
   const player = state.current;
   const budget: AiBudget = {
@@ -1618,6 +1668,9 @@ async function runAiTurn(
 
   for (let step = 0; step < AI_MAX_STEPS; step++) {
     if (!alive()) return;
+    // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
+    // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
+    if (stopWhen?.()) break;
     const action = aiNextAction(state, budget);
     if (!action) break;
 
@@ -1980,6 +2033,8 @@ let godSide: PlayerId = 'A';
 let godBrush: GodBrush = { kind: 'none' };
 /** 摆城用哪个时代；0 表示"还没挑过"，按这一局的起始时代走 */
 let godCityEra = 0;
+/** 货架按扩展包筛选（'' = 全部）。和侧栏那个分开存：两边看的东西不一样 */
+let godPack = '';
 /** AI 正在同时操控两边 */
 let godRunning = false;
 /** 打到第几个回合（工具栏上那个"第 N 回合"）。1 是"正在打第一轮"，不是 0 */
@@ -2062,6 +2117,7 @@ function godUi() {
     state,
     side: godSide,
     brush: godBrush,
+    pack: godPack,
     // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
     // 没有理由默认成另一个时代
     cityEra: godCityEra || state.config.startEra,
@@ -2083,6 +2139,8 @@ function renderGodBar(): void {
     godSide,
     godBrush.kind,
     godBrush.kind === 'unit' ? godBrush.type : '',
+    // 地形笔刷换一种地形也要重画，否则 chip 的高亮会停在上一格
+    godBrush.kind === 'terrain' ? godBrush.terrain : '',
     godCityEra,
     godSpeed,
     godRunning ? `run${godRound}` : '-',
@@ -2107,6 +2165,8 @@ function renderGodShelf(): void {
     godSide,
     godBrush.kind,
     godBrush.kind === 'unit' ? godBrush.type : '',
+    // 换包要重排整个货架，这一格必须进签名
+    godPack,
     state.units.length,
     state.cities.length,
     state.players.A.gold,
@@ -2185,6 +2245,9 @@ function onGodClick(e: Event): void {
   if (godBrush.kind === 'erase') godApply(removeAt(state, x, y));
   else if (godBrush.kind === 'city') {
     godApply(placeCity(state, godSide, x, y, godCityEra || state.config.startEra));
+  } else if (godBrush.kind === 'terrain') {
+    // 改地形不看"摆给谁"：地形不属于任何一方
+    godApply(paintTerrain(state, x, y, godBrush.terrain));
   } else godApply(placeUnit(state, godSide, godBrush.type, x, y));
 }
 
@@ -2223,7 +2286,7 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
       // 按 godCombatUnits 判断就会在这里收工，复活永远等不到下一回合。
       // 每回合现读一次速度：跑到一半觉得太快，点一下下一回合就变慢。
       if (!godHasArmy('A') || !godHasArmy('B')) break;
-      await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70);
+      await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70, () => !godHasArmy('A') || !godHasArmy('B'));
       turns += 1;
       // 刚走完的那一步属于第几轮：走完 1 次还是第一轮（另一方还没走）
       godRound = Math.floor(turns / 2) + 1;

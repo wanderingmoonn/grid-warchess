@@ -15,13 +15,16 @@
  * 不用每一步都重排 60 个按钮。
  */
 
-import { ERAS } from '../core/config.ts';
-import type { GameState, LogEntry, PlayerId } from '../core/types.ts';
+import { CONFIG, ERAS } from '../core/config.ts';
+import { PAINT_TERRAINS } from '../core/sandbox.ts';
+import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
+import { packOk, packRow } from './packs.ts';
 
 export type GodBrush =
   | { kind: 'none' }
   | { kind: 'city' }
   | { kind: 'erase' }
+  | { kind: 'terrain'; terrain: Terrain }
   | { kind: 'unit'; type: string };
 
 export interface GodUi {
@@ -29,6 +32,13 @@ export interface GodUi {
   /** 这一下摆哪一方 */
   side: PlayerId;
   brush: GodBrush;
+  /**
+   * 货架按扩展包筛选：空串 = 全部，`core` = 原版，其它是扩展 id。
+   *
+   * 沙盒的货架是按时代分组的，而奇想包那批兵种散在各个时代里——
+   * 想摆一队"奇想·骑士"得在五个时代组里一个个找。按包切一刀最省事。
+   */
+  pack: string;
   /** 摆城时用哪个时代（1-5） */
   cityEra: number;
   /** AI 正在打 */
@@ -99,6 +109,19 @@ export function godBarHtml(ui: GodUi): string {
     .map((p) => chip(ui.side === p, 'god-side', s.players[p].name, `data-side="${p}"`))
     .join('');
 
+  // 地形笔刷常驻显示，不折进"笔刷"那一组里。
+  //
+  // 折起来的话没人知道这个模式还能改地形——而"摆一场渡河战"恰恰是沙盒
+  // 最想要的东西。六个 chip 占不了多少地方，摆出来比藏起来划算。
+  const terrainChips = PAINT_TERRAINS.map((t) =>
+    chip(
+      ui.brush.kind === 'terrain' && ui.brush.terrain === t,
+      'god-terrain',
+      CONFIG.terrainName[t],
+      `data-terrain="${t}"`,
+    ),
+  ).join('');
+
   return `
     <div class="cmd-head">
       <b>上帝模式</b>
@@ -115,6 +138,10 @@ export function godBarHtml(ui: GodUi): string {
         ${chip(ui.brush.kind === 'city', 'god-brush', '城市', 'data-brush="city"')}
         ${chip(ui.brush.kind === 'erase', 'god-brush', '橡皮', 'data-brush="erase"')}
       </div>
+    </div>
+    <div class="god-group">
+      <span class="god-label">刷地形</span>
+      <div class="chip-row">${terrainChips}</div>
     </div>
     ${eraChips}
     ${speedRow(ui)}
@@ -143,6 +170,8 @@ function brushHint(ui: GodUi, s: GameState): string {
       return '笔刷：城市 —— 点 2×2 的左上角，橙格是能放的位置';
     case 'erase':
       return '笔刷：橡皮 —— 点单位擦单位，点空城擦城';
+    case 'terrain':
+      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，可以连着刷（城格和站着东西的格改不了）`;
     default:
       return '笔刷：查看 —— 点一格看看那儿有什么';
   }
@@ -193,8 +222,12 @@ export function godShelfHtml(ui: GodUi): string {
 
   // 按时代分组、组内按造价排：想找"坦克"就往现代那一组看，
   // 比在一个 60 项的长列表里从头扫快得多。
+  //
+  // 先过一遍扩展包筛选：一屏混着五六个包的时候，"按时代分组"反而是帮倒忙
+  // （每个时代组里都掺着别家的兵）。
+  const pool = Object.values(s.unitTypes).filter((u) => packOk(u, ui.pack));
   const groups = ERAS.map((era) => {
-    const units = Object.values(s.unitTypes)
+    const units = pool
       .filter((u) => u.era === era.level)
       .sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));
     if (units.length === 0) return '';
@@ -235,6 +268,7 @@ export function godShelfHtml(ui: GodUi): string {
     : `<div class="card">
          <div class="card-title">兵种货架</div>
          <div class="hint">点一个兵种当笔刷，再点棋盘落子；点同一个兵种可以取消。</div>
+         ${packRow(Object.values(s.unitTypes), ui.pack, 'god-pack')}
          <div class="god-shelf">${groups}</div>
        </div>`;
 

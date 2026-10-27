@@ -1202,6 +1202,17 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 扩展包筛选：和搜索框一起钉在列表顶上。
+   侧栏窄，chip 比工具栏那套小一号，否则一行放不下三个包名 */
+.pack-row {
+  margin-bottom: 8px;
+}
+
+.pack-row .chip {
+  padding: 3px 9px;
+  font-size: 11.5px;
+}
+
 /* 升级时代按钮：比产兵按钮更醒目，因为这是个战略决策 */
 .upgrade-btn {
   width: 100%;

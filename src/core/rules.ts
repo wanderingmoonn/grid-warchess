@@ -343,8 +343,23 @@ export function distToCity(unit: { x: number; y: number }, city: City): number {
   return Math.abs(unit.x - cx) + Math.abs(unit.y - cy);
 }
 
-/** 曼哈顿距离。移动和攻击统一用它，避免"能斜着打但斜着走不过去"的怪事。 */
-export function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
+/**
+ * 某方在某个位置「能拿到的最新军工」：离它最近的己方城市的时代。
+ *
+ * 军营落成时用它钉死自己的时代（见 doRecruit 的注释），界面和 AI 在
+ * 旧存档（军营还没写 era）上也用它兜底。三处必须同一口径，所以只有这一份。
+ */
+export function supplyEraAt(
+  s: GameState,
+  owner: PlayerId,
+  at: { x: number; y: number },
+): number {
+  const own = citiesOf(s, owner);
+  if (own.length === 0) return 1;
+  return own.reduce((a, b) => (distToCity(at, a) <= distToCity(at, b) ? a : b)).era;
+}
+
+/** 曼哈顿距离。移动和攻击统一用它，避免"能斜着打但斜着走不过去"的怪事。 */export function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
@@ -2393,6 +2408,17 @@ export function buildSiteError(
       if (!tile) return '目标越界';
       if (unitAt(s, tx, ty)) return '这里已经有单位或建筑了';
 
+      // 敌方的城里不许动土。
+      //
+      // 城格是对方的领土：在别人城墙里面砌一座箭塔、或者跨着敌城架一段桥，
+      // 等于不费一兵就插了面旗。以前只判「这里是空地」，于是可以趁城刚易手、
+      // 出兵位还空着的一瞬间把一块建筑塞进去，等于凭空在敌国境内落一颗钉子。
+      // 废墟也不例外——废墟仍挂在原主名下，重建是另一套流程。
+      const hostOwner = cityAt(s, tx, ty)?.owner;
+      if (hostOwner && hostOwner !== builder.owner) {
+        return '这里属于敌方城市，不能在里面建造';
+      }
+
       // 地形要求写在数据里（buildOn）：军营要平地/丘陵，桥要水面
       if (def.buildOn) {
         if (!def.buildOn.includes(tile.terrain)) {
@@ -2573,6 +2599,10 @@ function doBuild(
     kills: 0,
     moved: true,
     acted: true,
+    // 军营动工那一刻就把时代钉下来：它靠后方军工供货，供货方是谁当场就定了。
+    // 等它盖完之后再取一次，会让"同一座营，施工期间后方刚好升了时代"
+    // 这种巧合决定它的档次——玩家看不见这种因果。
+    ...(def.barracks ? { era: supplyEraAt(s, s.current, { x, y }) } : {}),
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
   });
 
@@ -2638,8 +2668,12 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
  * 产兵。
  *
  * 产兵点有两种：城市，或者军营（`barracks`）。
- * 军营自己没有科技，用的是**最近己方城市的时代** —— 这既符合直觉
- *（前线的兵营靠后方军工撑着），也省掉了"军营也要单独升级"的一套系统。
+ * 军营自己没有科技线：它落成的时候取**当时离得最近的己方城市的时代**，
+ * 把这一个数字钉在自己身上（`Unit.era`），之后一直按它结算。
+ *
+ * 以前是每次产兵都现算"最近的己方城市"，于是后方升了一个时代，前线那座
+ * 早就扎好的旧营隔空跟着换代——一座石板搭的营寨当场能出火枪手。现在
+ * 营的时代是个实体属性：想要新时代的兵，就在新地方再扎一座营。
  */
 function doRecruit(
   s: GameState,
@@ -2675,8 +2709,7 @@ function doRecruit(
 
     const own = citiesOf(s, s.current);
     if (own.length === 0) return { ok: false, reason: '没有城市，军营补给就断了' };
-    const nearest = own.reduce((a, b) => (distToCity(camp, a) <= distToCity(camp, b) ? a : b));
-    era = nearest.era;
+    era = camp.era ?? supplyEraAt(s, camp.owner, camp);
     label = campDef.name;
 
     // 兵从营地外围出来。占 2×2 的军营门口有十来格，逐个四邻去掉自家的格子，

@@ -620,3 +620,17 @@ export function unitSourceOf(id: string): string | null {
   }
   return null;
 }
+
+/**
+ * 同上的 id 版。
+ *
+ * 名字是给人看的，id 是给筛选用的：面板上要按包分组/筛选，
+ * 拿名字当 key 会在改文案的那天悄悄坏掉（而名字本来是随时会改的）。
+ * 原版兵种返回 null。
+ */
+export function unitSourceIdOf(id: string): string | null {
+  for (const e of EXPANSIONS) {
+    if (e.units?.some((u) => u.id === id)) return e.id;
+  }
+  return null;
+}

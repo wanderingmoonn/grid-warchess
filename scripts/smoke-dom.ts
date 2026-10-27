@@ -23,6 +23,7 @@ import { playerView } from '../src/core/fog.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { effectiveStats, reachableTiles, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -1406,7 +1407,7 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   assert.ok(city, '找不到 A 的城市');
 
   const host = doc.createElement('div');
-  const paint = (q: string) =>
+  const paint = (q: string, pack = '') =>
     renderPanel(host, {
       view: playerView(st, 'A'),
       me: 'A',
@@ -1415,6 +1416,7 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
       selectedCampId: null,
       selectedTile: null,
       recruitQuery: q,
+      recruitPack: pack,
     });
 
   paint('');
@@ -1449,6 +1451,27 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   paint('zzz');
   assert.equal(host.querySelectorAll('[data-act="recruit"]').length, 0);
   assert.ok(host.innerHTML.includes('没有匹配'), '搜不到要说清楚');
+
+  // 按扩展包切一刀：原版那一档全是没徽标的，奇想那一档全是带徽标的
+  paint('');
+  const packChips = host.querySelectorAll('[data-act="recruit-pack"]');
+  assert.ok(packChips.length >= 3, `应该有"全部/原版/各奇想包"这几档，实际 ${packChips.length}`);
+
+  paint('', 'core');
+  const core = host.querySelectorAll('[data-act="recruit"]');
+  assert.ok(core.length > 0, '原版那一档不该是空的');
+  assert.equal(host.querySelectorAll('.recruit-src').length, 0, '原版兵种头上不该有包名徽标');
+
+  paint('', 'fantasy-beasts');
+  const beasts = host.querySelectorAll('[data-act="recruit"]');
+  assert.ok(beasts.length > 0, '奇想·野兽那一档不该是空的');
+  assert.equal(
+    host.querySelectorAll('.recruit-src').length,
+    beasts.length,
+    '按包筛出来的应该全是这个包的兵',
+  );
+  // 切包不该改变"能买什么"，只改变"看到什么"：两档加起来不会超过全部
+  assert.ok(core.length + beasts.length <= all, '筛选只是过滤，不该凭空多出兵种');
 });
 
 console.log('\n上帝模式');
@@ -1497,8 +1520,50 @@ check('上帝模式开局：工具栏、兵种货架、全图视角一次到位'
   assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
 });
 
-check('工具栏上能选 AI 速度，三档都在', () => {
-  // 沙盒要把几十回合一口气跑完，而"跑多快"因人而异：
+check('沙盒货架也能按扩展包切一刀', () => {
+  // 直接渲染货架，不经过整局：验的是"分组口径"这一件事
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-beasts'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+      godMode: true,
+    },
+    77,
+  );
+  const shelf = (pack: string) =>
+    godShelfHtml({
+      state: st,
+      side: 'A',
+      brush: { kind: 'none' },
+      pack,
+      cityEra: 1,
+      running: false,
+      round: 1,
+      result: '',
+      speed: 1,
+      speedNames: ['慢', '快', '极快'],
+      log: [],
+    });
+  const picks = (html: string) => (html.match(/data-act="god-pick"/g) ?? []).length;
+
+  const all = shelf('');
+  assert.ok(all.includes('data-act="god-pack"'), '货架上该有一排按包筛选的 chip');
+  assert.ok(picks(all) > 10, '全部那一档应该有一屏兵');
+
+  const coreOnly = picks(shelf('core'));
+  const packOnly = picks(shelf('fantasy-beasts'));
+  assert.ok(coreOnly > 0, '原版那一档不该是空的');
+  assert.ok(packOnly > 0, '奇想·野兽那一档不该是空的');
+  assert.equal(coreOnly + packOnly, picks(all), '两档加起来应该正好等于全部（互斥且不重不漏）');
+  // 「奇想·法则」是纯规则包，一个兵都不带：它不该占一个按下去筛掉 0 个按钮的 chip
+  assert.ok(!all.includes('data-pack="fantasy-core"'), '不带兵的规则包不该出现在筛选栏');
+});
+
+check('工具栏上能选 AI 速度，三档都在', () => {  // 沙盒要把几十回合一口气跑完，而"跑多快"因人而异：
   // 想看清每一步的人和只想看结果的人，不该被写死同一个档位
   const chips = Array.from(doc.querySelectorAll<HTMLElement>('[data-act="god-speed"]'));
   assert.equal(chips.length, 3, `应该是慢/快/极快三档，实际 ${chips.length} 档`);

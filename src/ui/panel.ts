@@ -16,6 +16,7 @@ import {
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf } from '../core/expansions.ts';
+import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
@@ -67,6 +68,13 @@ export interface PanelInput {
    * 这里只做**过滤**，不改变"能买什么"——可买集合仍然由时代和编制决定。
    */
   recruitQuery?: string;
+  /**
+   * 按扩展包筛选产兵列表。
+   *
+   * 空串 = 全部；`core` = 原版兵种；其它值是扩展 id。
+   * 和搜索框是"与"的关系：搜 "弓" + 只看「奇想·骑士」，就是那个包里名字带弓的。
+   */
+  recruitPack?: string;
   /**
    * 观战位：两边都不归我。
    *
@@ -577,7 +585,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   };
 
   const q = (input.recruitQuery ?? '').trim();
-  const shown = buildable.filter((d) => matchRecruit(d, q));
+  const pack = input.recruitPack ?? PACK_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -592,7 +601,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const recruitGroups =
     shown.length === 0
-      ? `<div class="hint">没有匹配「${escapeHtml(q)}」的兵种。这座城在售 ${buildable.length} 种，清空搜索看全部。</div>`
+      ? emptyRecruitHint(q, pack, buildable.length, '这座城')
       : grouped;
 
   const upgradeBlock =
@@ -625,6 +634,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     ${
       mine
         ? `<div class="card-title" style="margin-top:14px">生产</div>
+           ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            <div class="hint" style="margin-top:10px">
@@ -698,12 +708,29 @@ function matchRecruit(def: UnitTypeDef, q: string): boolean {
 }
 
 /**
+ * 产兵列表空掉时那句话。
+ *
+ * "搜不到"和"这个包里没有"是两种不同的空：前者玩家会去清搜索框，
+ * 后者要去点「全部」。只会说"没有可造的兵"等于让人自己猜。
+ */
+function emptyRecruitHint(q: string, pack: string, total: number, subject: string): string {
+  const head =
+    q && pack
+      ? `没有匹配「${escapeHtml(q)}」的兵种（只看「${escapeHtml(packLabel(pack))}」）`
+      : q
+        ? `没有匹配「${escapeHtml(q)}」的兵种`
+        : pack
+          ? `「${escapeHtml(packLabel(pack))}」里没有这一档能造的兵`
+          : '没有可造的兵种';
+  return `<div class="hint">${head}。${subject}在售 ${total} 种，清掉筛选看全部。</div>`;
+}
+
+/**
  * 搜索框。
  *
  * 兵种少于 6 个就不显示——早期城市一共四行，摆个搜索框纯属添乱。
  * 输入框的 value 由 PanelInput 回填，重绘之后字还在（光标在末尾）。
- */
-function recruitSearchBox(q: string, shownCount: number, total: number): string {
+ */function recruitSearchBox(q: string, shownCount: number, total: number): string {
   if (total < 6) return '';
   const count = q ? `${shownCount}/${total}` : `共 ${total} 种`;
   return `<div class="recruit-search">
@@ -784,13 +811,14 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const mine = !readOnly && camp.owner === me;
   const ratio = camp.hp / def.maxHp;
 
-  // 补给：离军营最近的己方城市给了它时代
+  // 补给：军营的时代在落成那一刻就钉死了（Unit.era），后方城市升级不会
+  // 隔空把它带着换代。旧存档没有这个字段，按最近己方城市的时代兜底。
   const own = citiesOf(s, camp.owner);
   const supply = own.reduce<typeof own[number] | null>(
     (a, b) => (!a || distToCity(camp, b) < distToCity(camp, a) ? b : a),
     null,
   );
-  const era = supply ? supply.era : 0;
+  const era = camp.era ?? (supply ? supply.era : 0);
 
   // 兵从四邻出来，所以"能出兵"取决于四邻有多少空地 / 空水面
   const landSlots: Array<{ x: number; y: number }> = [];
@@ -811,7 +839,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   );
 
   const q = (input.recruitQuery ?? '').trim();
-  const shown = buildable.filter((d) => matchRecruit(d, q));
+  const pack = input.recruitPack ?? PACK_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -832,11 +861,16 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const groups =
     shown.length === 0
-      ? `<div class="hint">没有匹配「${escapeHtml(q)}」的兵种。这座营在售 ${buildable.length} 种，清空搜索看全部。</div>`
+      ? emptyRecruitHint(q, pack, buildable.length, '这座营')
       : grouped;
 
+  // 军营的时代是写死的。后方城市一旦追上来，玩家会看到"我有三级城，
+  // 这座营怎么还只出二级兵"——必须明说这是落成时的时代，不是 bug。
+  const staleEra = !!supply && supply.era > era;
   const supplyLine = supply
-    ? `补给来自「${cityName(supply)}」· ${eraDef(era).name}时代`
+    ? `补给来自「${cityName(supply)}」· 落成于 ${eraDef(era).name}时代${
+        staleEra ? `（后方已到 ${eraDef(supply.era).name}，这座营不跟着换代）` : ''
+      }`
     : '没有己方城市，补给断了';
 
   return `
@@ -855,13 +889,14 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     ${
       mine && supply
         ? `<div class="card-title" style="margin-top:14px">生产</div>
+           ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
            <div class="hint" style="margin-top:10px">
              兵从营门四邻的空地出来（当前 ${landSlots.length} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
-             <br />军营自己不会升级，时代跟着最近的城市走——那座城丢了，这里就只能出低一级的兵。
+             <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。
            </div>`
         : `<div class="hint" style="margin-top:12px">
              ${

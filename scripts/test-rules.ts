@@ -21,11 +21,13 @@ import {
   buildPowerOf,
   eraDef,
   nextUpgradeCost,
+  passable,
 } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
 import { generateLayout } from '../src/core/mapgen.ts';
 import {
   clearUnits,
+  paintTerrain,
   placeCity,
   placeUnit,
   removeAt,
@@ -41,7 +43,9 @@ import {
   aiNoise,
   aiTraits,
   anyAiSide,
+  cityDistanceField,
   isAiSide,
+  mergeAdvanceField,
   rosterBonuses,
   rosterRoleOf,
 } from '../src/core/ai.ts';
@@ -3683,6 +3687,65 @@ test('军营产兵的时代取最近的己方城市', () => {
   assert.ok(r.ok, r.ok ? '' : `二级兵应该能从军营出：${r.reason}`);
 });
 
+test('军营的时代落成即钉死：后方升级不会让老营跟着换代', () => {
+  const s = fresh();
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 900;
+  city.era = 1;
+
+  // 清出一块空地，旁边留一格水，让军营"临水"这一条过得去
+  const set = (x: number, y: number, terrain: 'plain' | 'water') => {
+    s.tiles[idx(s, x, y)] = { terrain, cityId: null };
+  };
+  for (let y = 3; y <= 7; y++) for (let x = 3; x <= 7; x++) set(x, y, 'plain');
+  set(6, 6, 'water');
+
+  const laborer = place(s, 'A', 'laborer', 5, 5);
+  const r = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'camp', x: 6, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : `扎营失败：${r.reason}`);
+
+  const cur = r.state;
+  const camp = unitsOf(cur, 'A').find((u) => u.type === 'camp');
+  assert.ok(camp, '营应该扎起来了');
+  assert.equal(camp.era, 1, '动工那一刻的时代要钉在营上');
+
+  // 后方升到火器时代：这座一级营不该隔空跟着换代
+  const mine = cur.cities.find((c) => c.id === city.id);
+  assert.ok(mine);
+  mine.era = 3;
+  cur.players.A.gold = 900;
+
+  const stale = applyAction(cur, { type: 'RECRUIT', unitId: camp.id, unitType: 'musketeer' });
+  assert.equal(stale.ok, false, '老营不该跟着后方换代');
+
+  // 同一座三级城造同样的兵就没问题——差别只在"这座营是哪年扎的"
+  const fromCity = applyAction(cur, { type: 'RECRUIT', cityId: city.id, unitType: 'musketeer' });
+  assert.ok(fromCity.ok, fromCity.ok ? '' : `三级城应该能出火枪兵：${fromCity.reason}`);
+});
+
+test('敌方城市里不许建造', () => {
+  const s = fresh();
+  s.current = 'A';
+  s.players.A.gold = 900;
+
+  const foe = citiesOf(s, 'B')[0];
+  assert.ok(foe, '对手应该有一座城');
+
+  // 站到敌人城墙根底下，往城里盖塔
+  const laborer = place(s, 'A', 'laborer', foe.x - 1, foe.y);
+  const r = applyAction(s, {
+    type: 'BUILD',
+    unitId: laborer.id,
+    unitType: 'tower',
+    x: foe.x,
+    y: foe.y,
+  });
+  assert.equal(r.ok, false, '敌城里不该能盖东西');
+  assert.match(r.ok ? '' : r.reason, /敌方城市/, '理由要说清是"敌城"，不是"格子上有东西"');
+});
+
 test('没有城市，军营就补不上兵', () => {
   const s = fresh();
   s.current = 'A';
@@ -4247,6 +4310,70 @@ test('高级军营也是产兵点', () => {
   const r = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'militia' });
   assert.ok(r.ok, r.ok ? '' : `高级营出兵失败：${r.reason}`);
   assert.equal(unitsOf(r.state, 'A').length, before + 1);
+});
+
+console.log('\nAI 寻路：绕开走不通的地形');
+
+test('寻路图把山和水当墙，绕行距离真的变长', () => {
+  const s = fresh();
+  const city = citiesOf(s, 'B')[0];
+  assert.ok(city);
+
+  // 城右边两列外立一道山墙，只在最下面留一个缺口
+  const wall = city.x + city.size + 1;
+  assert.ok(wall < s.w - 2, '地图太小，这道墙摆不下');
+  const top = Math.max(0, city.y - 3);
+  const gap = Math.min(s.h - 1, city.y + 4);
+  for (let y = top; y < gap; y++) s.tiles[idx(s, wall, y)] = { terrain: 'mountain', cityId: null };
+  s.tiles[idx(s, wall, gap)] = { terrain: 'plain', cityId: null };
+
+  const land = cityDistanceField(s, city, 'land');
+  const adv = cityDistanceField(s, city, 'advance');
+
+  // 1) 山是真墙：旱路和涉水图都不许穿过去
+  assert.equal(land[idx(s, wall, top)], Infinity, '山墙在旱路图上应该是不可达');
+  assert.equal(adv[idx(s, wall, top)], Infinity, '山在涉水图上也是墙');
+
+  // 2) 墙外那一格只能从下面的缺口绕过去，所以代价必须明显大于直线距离
+  const detour = land[idx(s, wall + 1, city.y)];
+  assert.ok(Number.isFinite(detour), '绕过去的旱路必须存在');
+  assert.ok(detour >= 8, `绕行距离该明显变长，现在只算到 ${detour}`);
+
+  // 3) 水面在旱路图上是墙，在涉水图上只是"很贵"
+  const pond = { x: city.x, y: city.y + city.size + 1 };
+  assert.ok(pond.x < s.w - 1, '地图太窄，放不下这格水');
+  s.tiles[idx(s, pond.x, pond.y)] = { terrain: 'water', cityId: null };
+  const land2 = cityDistanceField(s, city, 'land');
+  const adv2 = cityDistanceField(s, city, 'advance');
+  assert.equal(land2[idx(s, pond.x, pond.y)], Infinity, '水面不是旱路');
+  assert.ok(Number.isFinite(adv2[idx(s, pond.x, pond.y)]), '涉水图得给水面留一个"很贵"的价');
+});
+
+test('涉水兜底必须比任何旱路都贵，否则 AI 宁可站到河边也不绕路', () => {
+  const s = fresh();
+  const city = citiesOf(s, 'B')[0];
+  assert.ok(city);
+
+  // 造一格"只能涉水到达"的水面：四周全是水/山围起来，再由它连出去
+  const pond = { x: Math.min(city.x + city.size + 1, s.w - 2), y: city.y };
+  s.tiles[idx(s, pond.x, pond.y)] = { terrain: 'water', cityId: null };
+
+  const land = cityDistanceField(s, city, 'land');
+  const adv = cityDistanceField(s, city, 'advance');
+  const merged = mergeAdvanceField(land, adv);
+
+  let maxLand = 0;
+  for (const v of land) if (Number.isFinite(v) && v > maxLand) maxLand = v;
+
+  const at = merged[idx(s, pond.x, pond.y)];
+  assert.ok(Number.isFinite(at), '涉水兜底要给出一个有限值，AI 才不至于彻底失去方向');
+  assert.ok(at > maxLand, `兜底值 ${at} 必须大于旱路最远值 ${maxLand}`);
+
+  // 能走旱路的地方，推进图必须原封不动地等于旱路距离
+  for (let i = 0; i < land.length; i++) {
+    const l = land[i] ?? Infinity;
+    if (Number.isFinite(l)) assert.equal(merged[i], l, '旱路能到的地方不该被涉水值污染');
+  }
 });
 
 console.log('\nAI');
@@ -5246,11 +5373,15 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   s.units = s.units.filter((u) => u.owner !== 'A');
   const home = citiesOf(s, 'A')[0];
 
-  // 六个民兵摆在城外两格：既让出出兵的格子，又让"近战已经够了"成为事实
+  // 五个民兵摆在城外：既让出出兵的格子，又让"近战已经够了"成为事实。
+  //
+  // 为什么是 5 而不是 6：攒钱逻辑的门槛是"军队至少 6 个"。本用例要测的是
+  // **职能配比**（缺远程/支援就补），不是"有钱时先买英雄还是先买兵"——
+  // 那是另一条用例的事。军队压在门槛之下，攒钱不启动，测得就干净。
   let placed = 0;
-  for (let ring = 2; ring <= 4 && placed < 6; ring++) {
-    for (let dy = -ring; dy <= ring && placed < 6; dy++) {
-      for (let dx = -ring; dx <= ring && placed < 6; dx++) {
+  for (let ring = 2; ring <= 4 && placed < 5; ring++) {
+    for (let dy = -ring; dy <= ring && placed < 5; dy++) {
+      for (let dx = -ring; dx <= ring && placed < 5; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
         const x = home.x + dx;
         const y = home.y + dy;
@@ -5263,7 +5394,7 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
       }
     }
   }
-  assert.equal(placed, 6, `城边应该摆得下六个民兵，只摆下 ${placed} 个`);
+  assert.equal(placed, 5, `城边应该摆得下五个民兵，只摆下 ${placed} 个`);
 
   // 城郭与物料下粮/材才是主成本，只给金币等于没给钱
   s.players.A.gold = 3000;
@@ -5283,7 +5414,9 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   }
   const roles = picks.map((id) => rosterRoleOf(s.unitTypes[id]));
   const name = picks.map((id) => s.unitTypes[id]?.name).join(' ');
-  assert.ok(picks.length >= 4, `这一轮应该买得起好几支兵：${picks.length} 个（${name}）`);
+  // 门槛从 4 降到 2：新版 AI 在钱多时会先买英雄/攒升级，一回合里
+  // 未必连着买四支兵。这条用例只验"买回来的要分职能"，不验"买几个"。
+  assert.ok(picks.length >= 2, `这一轮应该买得起几支兵：${picks.length} 个（${name}）`);
   assert.ok(
     new Set(roles).size >= 2,
     `买回来的全是同一档职能：${roles.join(' ')}（${name}）`,
@@ -5844,6 +5977,43 @@ test('不能把兵摆进对面的城', () => {
   assert.ok(r.ok === false && r.reason.includes('城'), '提示要说清是因为"这是对方的城"');
 });
 
+test('刷地形：能改能连着刷，城格和站着人的格改不了', () => {
+  const s = fresh({ godMode: true });
+  const spot = emptyPlain(s);
+
+  const water = paintTerrain(s, spot.x, spot.y, 'water');
+  assert.ok(water.ok, water.ok ? '' : water.reason);
+  assert.equal(water.state.tiles[idx(water.state, spot.x, spot.y)]!.terrain, 'water');
+  assert.equal(s.tiles[idx(s, spot.x, spot.y)]!.terrain, 'plain', '原局面不能被就地改掉');
+
+  // 刷出来的水是真水：船能停，步兵不能
+  const boatId = Object.values(s.unitTypes).find((d) => d.domain === 'water')?.id;
+  assert.ok(boatId);
+  assert.ok(placeUnit(water.state, 'A', boatId!, spot.x, spot.y).ok, '刷出来的水面该能停船');
+  assert.equal(placeUnit(water.state, 'A', 'militia', spot.x, spot.y).ok, false, '水面上站不了步兵');
+
+  // 山：真的挡路
+  const rock = paintTerrain(s, spot.x, spot.y, 'mountain');
+  assert.ok(rock.ok, rock.ok ? '' : rock.reason);
+  assert.ok(!passable('mountain'), '高山不可通行');
+
+  // 城格归城市管
+  const city = s.cities[0]!;
+  const onCity = paintTerrain(s, city.x, city.y, 'water');
+  assert.equal(onCity.ok, false, '城格不许直接刷地形');
+  assert.ok(onCity.ok === false && onCity.reason.includes('城'), '理由要说清是城格');
+
+  // 站着东西的格：先擦再刷
+  const occupied = placeUnit(s, 'A', 'militia', spot.x, spot.y);
+  assert.ok(occupied.ok, occupied.ok ? '' : occupied.reason);
+  const under = paintTerrain(occupied.state, spot.x, spot.y, 'water');
+  assert.equal(under.ok, false, '脚下有人时不许把地挖成水');
+  assert.ok(under.ok === false && under.reason.includes('擦掉'), '要告诉玩家先擦掉');
+
+  // 已经是这个地形：不报"成功"，省得玩家以为改了点什么
+  assert.equal(paintTerrain(s, spot.x, spot.y, 'plain').ok, false);
+});
+
 test('盖城占 2×2，耐久按时代给，擦掉之后那四格退回平原', () => {
   const s = fresh({ godMode: true });
   // 找一块干净的 2×2
@@ -6239,6 +6409,29 @@ test('聚合：两只大史莱姆合回牢大，生命相加且当回合不能�
   assert.equal(boss!.hp, 70, '生命相加');
   assert.equal(boss!.moved, true, '合体后当回合不能行动');
   assert.equal(r.state.units.filter((u) => u.type === 'slime-giant').length, 0, '碎片全被合并');
+});
+
+test('周围没有敌军时，牢大不会自己裂了又合（沙盒空转）', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  for (let y = 5; y <= 7; y++) {
+    for (let x = 5; x <= 7; x++) s.tiles[idx(s, x, y)]!.terrain = 'plain';
+  }
+  const boss = place2(s, 'A', 'slime-boss', 6, 6);
+  boss.hp = 100; // 残血：按老逻辑这正是"该裂"的时候
+  s.current = 'A';
+
+  const quiet = aiNextAction(s, NO_RECRUIT);
+  assert.ok(
+    !(quiet?.type === 'HERO_SKILL' && quiet.skillId === 'mitosis'),
+    '场上一个敌人都没有，不该裂殖（裂完还会被聚合合回去，纯空转）',
+  );
+
+  // 敌军走近（射程外，所以只能靠技能/走位）：残血牢大该裂开来分摊伤害
+  place2(s, 'B', 'militia', 9, 6);
+  s.current = 'A';
+  const loud = aiNextAction(s, NO_RECRUIT);
+  assert.equal(loud?.type, 'HERO_SKILL', '有敌人时该动技能');
+  assert.equal(loud?.type === 'HERO_SKILL' ? loud.skillId : '', 'mitosis');
 });
 
 test('至尊法师加强：护甲 6 / 射程 5 / 视野 8，同属性伤害减半', () => {

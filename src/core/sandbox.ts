@@ -14,8 +14,8 @@
  */
 
 import { CONFIG, ERAS, eraDef } from './config.ts';
-import { canStandAt, cityAt, citySizeOf } from './rules.ts';
-import type { City, GameState, PlayerId, Unit } from './types.ts';
+import { canStandAt, cityAt, citySizeOf, coversTile } from './rules.ts';
+import type { City, GameState, PlayerId, Terrain, Unit } from './types.ts';
 
 export type SandboxResult = { ok: true; state: GameState } | { ok: false; reason: string };
 
@@ -208,5 +208,65 @@ export function clearUnits(s: GameState, owner: PlayerId): SandboxResult {
   const before = next.units.length;
   next.units = next.units.filter((u) => u.owner !== owner);
   if (next.units.length === before) return { ok: false, reason: '这一方本来就没有兵' };
+  return { ok: true, state: next };
+}
+
+/**
+ * 能直接刷的地形。
+ *
+ * 没有 `city`：城格的地形是城市的附属品，直接刷成别的会让
+ * "这座城的四格"里出现一格平原——城市的出兵位、回血判定、攻城判定
+ * 全按 cityId 走，地形对不上只会得到一个自相矛盾的局面。
+ * 想改那儿的地形，先拿橡皮把城擦掉（擦完那几格会退回平原）。
+ */
+export const PAINT_TERRAINS: readonly Terrain[] = [
+  'plain',
+  'forest',
+  'hill',
+  'water',
+  'mountain',
+  'bridge',
+];
+
+/**
+ * 刷一格地形。
+ *
+ * 上帝模式最缺的其实是这个：想试"守住这个山口"，得先有个山口。
+ * 以前只能摆兵摆城，地形是生成器给的，改不了——于是"渡河""过山"这类
+ * 局面根本摆不出来，只能碰运气等一张合适的地图。
+ *
+ * 两条硬限制：城格不许刷（理由见 PAINT_TERRAINS），站东西的格不许刷。
+ * 后者不是懒——一块地形改完，上面那个人可能就站在水里或者山心里了，
+ * 那是规则层从没设计过的局面（寻路、攻击判定、迷雾全都要跟它较劲）。
+ * 想在那儿挖河，先把人擦掉，刷完再摆回去。
+ */
+export function paintTerrain(
+  s: GameState,
+  x: number,
+  y: number,
+  terrain: Terrain,
+): SandboxResult {
+  if (!PAINT_TERRAINS.includes(terrain)) {
+    return { ok: false, reason: '这种地形不能直接刷' };
+  }
+  if (x < 0 || y < 0 || x >= s.w || y >= s.h) return { ok: false, reason: '点到棋盘外面了' };
+
+  const tile = s.tiles[y * s.w + x];
+  if (!tile) return { ok: false, reason: '点到棋盘外面了' };
+  if (tile.cityId) return { ok: false, reason: '城格归城市管，先把这座城擦掉再改地形' };
+
+  const blocker = s.units.find((u) => coversTile(s, u, x, y));
+  if (blocker) {
+    const def = s.unitTypes[blocker.type];
+    return { ok: false, reason: `${def?.name ?? '单位'}站在这一格上，先擦掉再改地形` };
+  }
+
+  if (tile.terrain === terrain) {
+    return { ok: false, reason: `这一格已经是${CONFIG.terrainName[terrain]}了` };
+  }
+
+  const next = clone(s);
+  const t = next.tiles[y * next.w + x];
+  if (t) t.terrain = terrain;
   return { ok: true, state: next };
 }
