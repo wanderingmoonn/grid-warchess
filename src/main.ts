@@ -44,7 +44,7 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
-import { renderPanel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput } from './ui/panel.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
@@ -446,6 +446,7 @@ function render(): void {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
+    season: state.config.expansionIds.includes('seasons') ? seasonLabel(state.turn) : null,
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),

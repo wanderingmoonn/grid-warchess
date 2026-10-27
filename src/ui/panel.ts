@@ -17,7 +17,8 @@ import {
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf } from '../core/expansions.ts';
 import type { PlayerView } from '../core/fog.ts';
-import { describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
+import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
+import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
   buildingAt,
   citiesOf,
@@ -222,6 +223,8 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
 function renderDetail(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedUnit, selectedCityId, selectedCampId, selectedTile } = input;
   const s = view.state;
+  /** 没开「季节与气候」的局里，天气相关的块一律不出现——不留一排"温和" */
+  const weatherOn = s.config.expansionIds.includes('seasons');
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -248,6 +251,12 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         </div>
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
         <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
+        ${
+          weatherOn
+            ? `<div class="card-title" style="margin-top:12px">这里的天气</div>
+               ${weatherBlock(climateAt(s, selectedTile.x, selectedTile.y))}`
+            : ''
+        }
         <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
       `;
     }
@@ -433,6 +442,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
       <div class="info-row"><span>射程 / 视野</span><b>${def.range} / ${vision}</b></div>
+      ${
+        // 天气紧跟在"移动力 / 射程 / 视野"后面：这几项正是它改的东西，
+        // 放在别处玩家就得自己把两处信息对起来
+        weatherOn
+          ? `<div class="card-title" style="margin-top:12px">脚下的天气</div>
+             ${weatherBlock(climateAt(s, selectedUnit.x, selectedUnit.y))}`
+          : ''
+      }
       ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
       ${
         def.splash
@@ -905,6 +922,8 @@ export interface TopbarState {
   /** 勾了「浓雾蔽野」：迷雾锁定开启，顶栏那个开关要禁用 */
   blackout: boolean;
   turn: number;
+  /** 季节条文案；null 表示这一局没开「季节与气候」 */
+  season: string | null;
   current: PlayerId;
   currentName: string;
   /** 当前行动方是不是 AI 在走 */
@@ -925,6 +944,38 @@ export interface TopbarState {
   god?: boolean;
 }
 
+/**
+ * 天气徽标：图标 + 中文名。
+ *
+ * `w-<id>` 这个 class 让每种气候有自己的底色，一眼能分冷暖和干湿；
+ * 颜色只是辅助，名字和数值才是准的（色弱玩家也得读得懂）。
+ */
+export function weatherBadge(c: Climate): string {
+  return `<span class="weather-badge w-${c}">${CLIMATE_ICON[c]} ${CLIMATE_NAME[c]}</span>`;
+}
+
+/**
+ * 天气说明块：徽标 + 逐条效果。
+ *
+ * 效果文字从效果表派生（见 info.ts 的 climateEffectLines），
+ * 所以这里不用维护第二份文案。
+ */
+export function weatherBlock(c: Climate): string {
+  const lines = climateEffectLines(c);
+  const body =
+    lines.length === 0
+      ? `<div class="weather-none">这一格没有额外影响。</div>`
+      : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
+  return `<div class="weather-box">${weatherBadge(c)}${body}</div>`;
+}
+
+/** 季节条：顶栏常驻，显示"现在是哪一季、还有几回合换季" */
+export function seasonLabel(turn: number): string {
+  const season = seasonOf(turn);
+  const left = SEASON_TURNS - ((Math.max(1, turn) - 1) % SEASON_TURNS);
+  return `${SEASON_NAME[season]} · 剩 ${left} 回合`;
+}
+
 export function topbarShell(): string {
   return `
     <div class="brand">方格战棋 <small>回合制 · 1v1</small></div>
@@ -933,6 +984,7 @@ export function topbarShell(): string {
       <span class="side-dot a" data-ref="dot"></span>
       <span data-ref="who"></span>
     </div>
+    <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
     <button class="room-pill" data-act="online" data-ref="room" title="当前房间" hidden></button>
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
@@ -955,6 +1007,14 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
 
   const turn = ref('turn');
   if (turn) turn.textContent = `第 ${s.turn} 回合`;
+
+  // 季节：天气是逐格的，顶栏只放"现在换算哪一季"这个全局事实；
+  // 具体这一格是什么天气，留给侧栏（选中单位 / 格子时显示）。
+  const season = ref('season');
+  if (season) {
+    season.hidden = !s.season;
+    if (s.season) season.textContent = s.season;
+  }
 
   const dot = ref('dot');
   if (dot) dot.className = `side-dot ${s.current === 'A' ? 'a' : 'b'}`;

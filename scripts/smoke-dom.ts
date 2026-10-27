@@ -2075,5 +2075,100 @@ check('强制攻击：Shift 点敌人照样是开火，没有把攻击路径弄�
   assert.ok(hurt.hp < hpBefore, `Shift 点敌人应该开火：${hpBefore} → ${hurt.hp}`);
 });
 
+console.log('\n天气标识');
+
+/** 造一局开了天气的棋，把某个单位摆到一块确定的平原上 */
+function weatherScene(turn: number, withSeasons = true) {
+  const st = createMatch(
+    { ...DEFAULT_CONFIG, ...(withSeasons ? { expansionIds: ['seasons'] } : {}) } as never,
+    20261026,
+    {},
+  );
+  st.fog = false;
+  st.current = 'A';
+  st.turn = turn;
+  for (const t of st.tiles) t.terrain = 'plain';
+  for (const c of st.cities) {
+    // 城市所在格保持城市地形（城市不吃天气，正好用来做反例）
+    for (let dy = 0; dy < c.size; dy++) {
+      for (let dx = 0; dx < c.size; dx++) {
+        st.tiles[(c.y + dy) * st.w + (c.x + dx)]!.terrain = 'city';
+      }
+    }
+  }
+  const me = st.units.find((u) => u.owner === 'A' && (UNIT_TYPES[u.type]?.atk ?? 0) > 0)!;
+  // 挪到一块干净的平原
+  me.x = 2;
+  me.y = 2;
+  me.moved = false;
+  me.acted = false;
+  st.tiles[2 * st.w + 2]!.terrain = 'plain';
+  st.tiles[2 * st.w + 2]!.cityId = null;
+  return { st, me };
+}
+
+check('天气标识：选中单位时显示脚下天气和逐条效果', () => {
+  const { st, me } = weatherScene(15); // 夏天
+  const w = bootWith(st);
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  const side = d.querySelector('.side')!.innerHTML;
+
+  assert.ok(side.includes('weather-badge'), '侧栏要有天气徽标');
+  assert.ok(side.includes('酷暑'), '平原·内陆·夏 = 酷暑，徽标要写出来');
+  // 效果是逐条列出来的，不是一句"有影响"
+  assert.ok(side.includes('移动力 −50%'), `要写清移动力怎么变：${side.slice(0, 0)}`);
+  assert.ok(side.includes('护甲 −2'), '也要写清护甲');
+});
+
+check('天气标识：换季之后徽标和效果一起更新', () => {
+  const summer = weatherScene(15);
+  const w1 = bootWith(summer.st);
+  w1.document
+    .querySelector<HTMLElement>(`.unit[data-id="${summer.me.id}"]`)!
+    .dispatchEvent(new w1.MouseEvent('click', { bubbles: true }));
+  const summerHtml = w1.document.querySelector('.side')!.innerHTML;
+  assert.ok(summerHtml.includes('酷暑'), '夏天该是酷暑');
+
+  const winter = weatherScene(35); // 同一格、同一单位，只换季节
+  const w2 = bootWith(winter.st);
+  w2.document
+    .querySelector<HTMLElement>(`.unit[data-id="${winter.me.id}"]`)!
+    .dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
+  const winterHtml = w2.document.querySelector('.side')!.innerHTML;
+  assert.ok(winterHtml.includes('寒冷'), '冬天该是寒冷');
+  assert.ok(!winterHtml.includes('酷暑'), '换季之后不该还留着上一个季节的天气');
+});
+
+check('天气标识：顶栏的季节条跟着回合走', () => {
+  const spring = weatherScene(5);
+  const w = bootWith(spring.st);
+  const chip = w.document.querySelector('[data-ref="season"]') as HTMLElement | null;
+  assert.ok(chip, '顶栏要有季节块');
+  assert.equal(chip.hidden, false, '开了天气就该显示');
+  assert.ok(chip.textContent?.includes('春'), `第 5 回合是春：${chip.textContent}`);
+
+  const winter = weatherScene(35);
+  const w2 = bootWith(winter.st);
+  const chip2 = w2.document.querySelector('[data-ref="season"]') as HTMLElement | null;
+  assert.ok(chip2?.textContent?.includes('冬'), `第 35 回合是冬：${chip2?.textContent}`);
+});
+
+check('没开「季节与气候」时，界面一点天气都不出现', () => {
+  const { st, me } = weatherScene(15, false);
+  const w = bootWith(st);
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  const side = d.querySelector('.side')!.innerHTML;
+  assert.ok(!side.includes('weather-badge'), '没开扩展就不该有天气徽标');
+
+  const chip = d.querySelector('[data-ref="season"]') as HTMLElement | null;
+  assert.equal(chip?.hidden, true, '季节块也该藏起来');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

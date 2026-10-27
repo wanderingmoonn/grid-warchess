@@ -9,6 +9,7 @@ import { abilityById, abilityNames } from './abilities.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
 import { resourceShort } from './resources.ts';
+import { climateEffect, type Climate } from './climate.ts';
 import { ELEMENT_NAME } from './types.ts';
 import type { Element, GameState, PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
@@ -314,4 +315,82 @@ export function currentIncomeText(s: GameState, typeId: string): string {
 /** 单位是不是"经济型"，UI 用来决定显不显示产出说明 */
 export function isEarner(def: UnitTypeDef): boolean {
   return !!def.incomeByTerrain || typeof def.income === 'number';
+}
+
+/* ------------------------------------------------------------------ */
+/* 天气                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 每种气候的图标。
+ *
+ * 用字形而不是图片：不用加载资源、跟着字号缩放、在深色浅色下都不糊。
+ * 图标只负责"一眼认出是哪一类"，具体数值永远由下面的文字给出——
+ * 图标认错一次没关系，数值写错一次就是另一局游戏了。
+ */
+export const CLIMATE_ICON: Record<Climate, string> = {
+  mild: '☀',
+  cold: '❄',
+  hardWinter: '☃',
+  hot: '☀',
+  blazing: '🔥',
+  dampCold: '🌧',
+  dampHeat: '♨',
+  overcast: '☁',
+  downpour: '⛈',
+  fog: '🌫',
+  thunder: '⚡',
+  frozen: '🧊',
+  driftIce: '❆',
+  storm: '🌪',
+};
+
+function signedPct(rate: number): string {
+  const v = Math.round(rate * 100);
+  return `${v > 0 ? '+' : '−'}${Math.abs(v)}%`;
+}
+
+/**
+ * 这个气候到底改了什么，翻成人话。
+ *
+ * **从效果表派生**，不另写一份文案：表格改了、说明跟着改，
+ * 不会出现"界面上写着 -25%、实际已经调成 -50%"这种最难查的错。
+ */
+export function climateEffectLines(c: Climate): string[] {
+  const e = climateEffect(c);
+  const out: string[] = [];
+
+  if (e.moveMul !== undefined && e.moveMul !== 1) out.push(`移动力 ${signedPct(e.moveMul - 1)}`);
+  if (e.moveCostAdd) out.push(`每格移动消耗 +${e.moveCostAdd}`);
+  if (e.armorPenalty) {
+    out.push(
+      e.armorPenaltyOnlyField
+        ? `不在城里的军队护甲 −${e.armorPenalty}`
+        : `全军护甲 −${e.armorPenalty}`,
+    );
+  }
+  if (e.incomeMul !== undefined && e.incomeMul !== 1) {
+    out.push(`经济产出 ${signedPct(e.incomeMul - 1)}`);
+  }
+  if (e.rangeAdd) out.push(`攻击范围 ${e.rangeAdd > 0 ? '+' : '−'}${Math.abs(e.rangeAdd)}`);
+  if (e.rangeMax) out.push(`攻击范围不超过 ${e.rangeMax}`);
+  if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
+  if (e.endDamage) {
+    const d = e.endDamage;
+    const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
+    out.push(
+      d.hits > 1
+        ? `回合末受 ${d.hits} 次 ${d.amount} 点伤害（吃护甲）`
+        : `回合末受 ${d.amount} 点伤害${splash}`,
+    );
+  }
+  if (e.upkeepRate) out.push(`回合末交 ${Math.round(e.upkeepRate * 100)}% 维护费`);
+  if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
+  if (e.navyMoveZero) out.push('海军移动力归零');
+  if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
+    out.push(`海军移动力 ${signedPct(e.navyMoveMul - 1)}`);
+  }
+  if (e.landOnIce) out.push('陆军可以在冰面上行走');
+
+  return out;
 }

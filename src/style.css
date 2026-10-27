@@ -2476,3 +2476,100 @@ a.btn {
   border: 1px solid currentColor;
   opacity: 0.75;
 }
+
+/* ---------------- 天气标识 ---------------- */
+/*
+ * 图标 + 名字 + 逐条效果。颜色只是"一眼分冷暖干湿"的辅助，
+ * 名字和数值才是准的——色弱玩家也得读得懂，所以不靠颜色单独表意。
+ */
+.weather-chip {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.weather-box {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.weather-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #eef2ea;
+  color: #4a5a44;
+}
+
+.weather-none {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.weather-badge.w-mild {
+  background: #eef2ea;
+  color: #4a5a44;
+}
+.weather-badge.w-cold {
+  background: #e3edf6;
+  color: #2f5c86;
+}
+.weather-badge.w-hardWinter {
+  background: #dbe7f5;
+  color: #24466b;
+}
+.weather-badge.w-hot {
+  background: #fdeee0;
+  color: #a35a1f;
+}
+.weather-badge.w-blazing {
+  background: #fbe0cc;
+  color: #9c3f10;
+}
+.weather-badge.w-dampCold {
+  background: #e2edee;
+  color: #2c5f63;
+}
+.weather-badge.w-dampHeat {
+  background: #f6e9ef;
+  color: #8a3d5c;
+}
+.weather-badge.w-overcast {
+  background: #e9ebef;
+  color: #4c5566;
+}
+.weather-badge.w-downpour {
+  background: #dfe7f1;
+  color: #33496b;
+}
+.weather-badge.w-fog {
+  background: #e8e8e8;
+  color: #55524c;
+}
+.weather-badge.w-thunder {
+  background: #f0e6f7;
+  color: #5b3a7a;
+}
+.weather-badge.w-frozen {
+  background: #e0f2f7;
+  color: #1f6b80;
+}
+.weather-badge.w-driftIce {
+  background: #e8f4f8;
+  color: #2a6b7d;
+}
+.weather-badge.w-storm {
+  background: #e6e3ec;
+  color: #463a5c;
+}
