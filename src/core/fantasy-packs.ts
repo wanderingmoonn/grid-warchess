@@ -118,6 +118,7 @@ export const SUMMONED_UNITS: UnitTypeDef[] = [
 
 const CORE: Expansion = {
   id: 'fantasy-core',
+  scale: 'large',
   name: '奇想·法则',
   summary:
     '奇想兵种的前置包（本身不带兵）：开启「魔法攻击 / 魔法抗性」「属性伤害与弱点」「中毒·点燃·减速·诅咒」四类负面状态，以及「空中层」——掠空单位可以和地面单位站在同一格。另外四个奇想兵种包都要先开它。',
@@ -136,6 +137,7 @@ const CORE: Expansion = {
 
 const KNIGHTS: Expansion = {
   id: 'fantasy-knights',
+  scale: 'large',
   name: '奇想·骑士团',
   summary:
     '人类的十二个兵种：剑士、皇家骑兵、游侠、超级重骑、牧师、法师、刺客、狂战士、圣骑士、皇家守卫、盗贼、符文守卫。有魔法、有治疗、有隐身，也有最硬的一块肉。需先开「奇想·法则」。',
@@ -355,6 +357,7 @@ const KNIGHTS: Expansion = {
 
 const BEASTS: Expansion = {
   id: 'fantasy-beasts',
+  scale: 'large',
   name: '奇想·荒兽',
   summary:
     '二十个野性单位：狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、狮鹫骑士、龙骑兵、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。需先开「奇想·法则」。',
@@ -662,6 +665,7 @@ const BEASTS: Expansion = {
 
 const ARCANE: Expansion = {
   id: 'fantasy-arcane',
+  scale: 'large',
   name: '奇想·秘法',
   summary:
     '法术与亡者：德鲁伊、死灵法师、炼金术士、吟游诗人、巫医、女巫、诅咒骑士、诅咒师、幻术师、元素召唤师、四种元素、幽灵、吸血鬼、僵尸、恶魔、地狱犬、机关傀儡、精灵弓手，以及被召唤的骷髅、小恶魔、幻象、土墙。需先开「奇想·法则」。',
@@ -1246,6 +1250,7 @@ const HERO_UNITS: UnitTypeDef[] = [
 
 const HEROES: Expansion = {
   id: 'fantasy-heroes',
+  scale: 'large',
   name: '奇想·英雄',
   summary:
     '五个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，法抗 10）、天使（降临：半径 3 回 20% 并清空负面状态）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。',

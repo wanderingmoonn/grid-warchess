@@ -19,10 +19,10 @@ npm run dev      # 本地开发，http://127.0.0.1:5178
 | 命令 | 做什么 |
 |---|---|
 | `npm run dev` | 本地开发服务器 |
-| `npm test` | 全量测试：规则内核 195 项 + DOM 冒烟 67 项 |
+| `npm test` | 全量测试：规则内核 256 项 + DOM 冒烟 87 项 |
 | `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
 | `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
-| `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书 |
+| `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（12 册：核心册 + 小型扩展合订本 + 每个大型扩展一册） |
 | `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |
 | `npm run ablate` | 消融实验：逐个"撤销"某轮平衡改动，看它到底影响多少 |
 | `npm run balance` | 生成平衡报告（JSON + markdown） |
@@ -76,6 +76,12 @@ npm run bench      # 看对局长度和时代推进有没有跑偏
 ```
 
 如果某次改动让对局长度变了，先别猜原因，`npm run ablate` 会把每个改动的影响单独量出来。
+
+## 自己做扩展
+
+想给游戏加自己的规则或兵种？看 **[docs/EXTENSIONS.md](docs/EXTENSIONS.md)**——
+一份新手向教程：从第一个五分钟就能跑通的扩展，到全部 13 个钩子的速查表、
+兵种与能力系统的接入方式、测试写法和发布清单。
 
 ## 时代兵种包（大型模组）
 

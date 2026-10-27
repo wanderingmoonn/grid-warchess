@@ -831,7 +831,7 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
-      <a class="btn btn-sm" href="./manual.html" target="_blank" rel="noopener">规则书</a>
+      <button class="btn btn-sm" data-act="manual">规则书</button>
       <button class="btn btn-sm" data-act="unit-editor">兵种编辑器</button>
       <button class="btn btn-sm" data-act="export">导出对局</button>
       <button class="btn btn-sm" data-act="import">导入对局</button>

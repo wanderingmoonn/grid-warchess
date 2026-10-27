@@ -2294,3 +2294,43 @@ a.btn {
     white-space: normal;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * 规则书书单（点顶栏「规则书」时，若本局开了多个相关分册）
+ * --------------------------------------------------------------------------- */
+.book-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 一行一本书：书名加粗在上，说明文字在下。整行可点——
+   这里是"选一本书"，不是"在两列数据里挑一格"，行级目标好点得多 */
+.book-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.book-row:hover {
+  border-color: var(--a);
+  background: #fff;
+}
+
+.book-row b {
+  font-size: 14px;
+}
+
+.book-row span {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}

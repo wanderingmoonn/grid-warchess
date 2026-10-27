@@ -22,7 +22,7 @@ import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 /** 规则内核 + 界面冒烟两项之和，改测试记得改这里 */
-const TEST_COUNT = 256 + 85;
+const TEST_COUNT = 256 + 87;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -208,10 +208,6 @@ function fantasyTable(pack: (typeof FANTASY_PACKS)[number]): string {
     </table>`;
 }
 
-function fantasySection(): string {
-  return FANTASY_PACKS.map((p) => fantasyTable(p)).join('');
-}
-
 function abilityTable(): string {
   const groups = ['attack', 'defense', 'move', 'support'] as const;
   return groups
@@ -238,25 +234,26 @@ function abilityTable(): string {
     .join('');
 }
 
+/** 只列小型扩展的汇总表。大型（带兵种的）各有各的分册，这里一行都不放 */
 function expansionTable(): string {
+  const small = EXPANSIONS.filter((e) => e.scale !== 'large');
   return `
     <table>
       <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
       <tbody>
-        ${EXPANSIONS.map((e) => {
-          const list = (e.units ?? []).map((u) => u.name);
-          // 奇想包动辄二三十个兵，一长串名字会把这一列撑爆，只挑前几个当样本
-          const units = list.length > 8 ? `${list.slice(0, 6).join('、')} 等 ${list.length} 个` : list.join('、');
-          // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场
-          const req = (e.requires ?? []).length
-            ? ` <span class="c">（需先开 ${(e.requires ?? [])
-                .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
-                .join('、')}）</span>`
-            : '';
-          // 默认开着的那条要标出来：新对局不特别选就是它
-          const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
-          return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${esc(e.summary)}</td><td class="traits">${units || '—'}</td></tr>`;
-        }).join('')}
+        ${small
+          .map((e) => {
+            // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场
+            const req = (e.requires ?? []).length
+              ? ` <span class="c">（需先开 ${(e.requires ?? [])
+                  .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                  .join('、')}）</span>`
+              : '';
+            // 默认开着的那条要标出来：新对局不特别选就是它
+            const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
+            return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${esc(e.summary)}</td><td class="traits">—</td></tr>`;
+          })
+          .join('')}
       </tbody>
     </table>`;
 }
@@ -274,12 +271,20 @@ function terrainTable(): string {
     </table>`;
 }
 
-const html = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<title>方格战棋 · 规则书</title>
-<style>
+/* ---------------------------------------------------------------------------
+ * 分册骨架。
+ *
+ * 规则书原来只有一本，扩展规则挤在第 14 章——开了五个扩展包的人要在
+ * 一份两百屏的文档里翻来翻去，没开的人则要跳过一堆和自己无关的表。
+ * 现在拆成：
+ *   · manual.html          核心规则（与扩展无关的那部分）
+ *   · manual-small.html    小型扩展合订本（只改规则的那些开关）
+ *   · manual-pack-<id>.html 大型扩展各一册（带兵种表的那些包）
+ * 游戏里点「规则书」时按本局开了什么列书单（见 src/ui/books.ts）。
+ * ------------------------------------------------------------------------- */
+
+/** 每一册共用的样式。拆册之后所有书长得一样，改这一处就够 */
+const MANUAL_CSS = `
   :root {
     --bg: #f5f2ea;
     --panel: #ffffff;
@@ -483,12 +488,54 @@ const html = `<!doctype html>
     .era-block, table, .callout, .formula { page-break-inside: avoid; }
     a { color: inherit; text-decoration: none; }
   }
-</style>
+`;
+
+interface Book {
+  file: string;
+  title: string;
+  subtitle: string;
+  nav: string;
+  body: string;
+}
+
+/** 一册书的完整 HTML。页脚带文件名，翻到打印版也知道自己在看哪本 */
+function page(b: Book): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>${b.title}</title>
+<style>${MANUAL_CSS}</style>
 </head>
 <body>
 <div class="layout">
   <nav>
     <div class="nav-title">目录</div>
+    ${b.nav}
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>${b.title}</h1>
+      <p>${b.subtitle}</p>
+    </header>
+
+${b.body}
+    <footer>
+      ${b.title} · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+</body>
+</html>
+`;
+}
+
+/* ---------------------------------------------------------------------------
+ * 第一册：核心规则。
+ * --------------------------------------------------------------------------- */
+
+const CORE_NAV = `
     <a href="#goal">1. 目标</a>
     <a href="#flow">2. 回合流程</a>
     <a href="#terrain">3. 地形</a>
@@ -502,23 +549,16 @@ const html = `<!doctype html>
     <a href="#era">11. 时代</a>
     <a href="#fog">12. 战争迷雾</a>
     <a href="#ability">13. 特殊能力</a>
-    <a href="#expansion">14. 扩展规则</a>
-    <a href="#roster">15. 兵种全表</a>
-    <a href="#engine">16. 引擎与兼容</a>
-    <a href="#ai">17. AI 托管与观战</a>
-    <a href="#commander">18. 指挥官模式</a>
-    <a href="#online">19. 联机与云存档</a>
-    <a href="#ops">20. 认输 · 撤回 · 拆除 · 提示音</a>
-    <a href="#god">21. 上帝模式（沙盒）</a>
-  </nav>
+    <a href="#roster">14. 兵种全表</a>
+    <a href="#engine">15. 引擎与兼容</a>
+    <a href="#ai">16. AI 托管与观战</a>
+    <a href="#commander">17. 指挥官模式</a>
+    <a href="#online">18. 联机与云存档</a>
+    <a href="#ops">19. 认输 · 撤回 · 拆除 · 提示音</a>
+    <a href="#god">20. 上帝模式（沙盒）</a>
+  `;
 
-  <main>
-    <header class="page-head">
-      <h1>方格战棋 · 规则书</h1>
-      <p>回合制 · 1v1 · 五个时代 · 本文件由 <code>npm run manual</code> 从配置自动生成，数值与代码一致。</p>
-    </header>
-
-    <section id="goal">
+const CORE_BODY = `    <section id="goal">
       <h2><span class="sec-num">01</span>目标</h2>
       <p>干掉对方的抵抗能力。判定条件是两条，满足任意一条就输：</p>
       <div class="formula">
@@ -899,14 +939,6 @@ const html = `<!doctype html>
         <li>离开视野的敌人会留下<b>半透明幽灵</b>，标在最后已知位置。移动过或已阵亡你都无从确认——这正是它的乐趣。</li>
         <li>玩家视角恒等于当前行动方。人机对战时 AI 也只吃同一份过滤后的视图，不作弊。</li>
       </ul>
-      <h3>浓雾蔽野（扩展）</h3>
-      <p>上面那套雾只遮<b>单位</b>：地形、河流、敌城的位置永远是公开的，等于一张免费的地图。
-        开「浓雾蔽野」之后这一层也没了：</p>
-      <ul>
-        <li>视野外的格子连地形都不画，只剩一片暗面；</li>
-        <li>对方城市要侦察到（四格里有任意一格可见）才会出现在图上；</li>
-        <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
-      </ul>
       <div class="callout">
         幽灵标记是「迷雾」和「长回合异步」交叉出来的刚需：你隔一天回到游戏，战场上你只记得"上次他在河边"，这个记忆必须被画出来。
       </div>
@@ -919,70 +951,16 @@ const html = `<!doctype html>
       <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在 <code>abilities.ts</code> 加一条定义，在 <code>rules.ts</code> 对应位置加一个判断。</p>
     </section>
 
-    <section id="expansion">
-      <h2><span class="sec-num">14</span>扩展规则</h2>
-      <p>开局时在设置面板里勾选，效果叠加。规则以 <b>id</b> 的形式记进对局存档（不存代码），所以存档可以序列化、可以回放，换台机器打开结果也一致。</p>
-      <p><b>「血战」默认开着。</b>不特别说明的话，新对局就是"血战 + 你另外勾选的那些"。
-        它是给后半场踩刹车的：第 ${BLOOD_TURN} 回合起城市不再回血、升级恢复原价、全军移动与视野各 +1。
-        实测（各 120 局、同种子配对）开与不开：古典未决率 5.8% → 0.8%、平均少打 19 回合；中世 17.5% → 10.0%、少打 15 回合；
-        先后手胜率没有可分辨的变化。想体验老节奏就在面板里把它取消勾选。</p>
-      ${expansionTable()}
-      <div class="callout">
-        <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
-      </div>
-      <p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>比如「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
-        会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>
-      <h3>「奇想兵种包」：一个前置包 + 四个兵种包</h3>
-      <p>六十多个兵挤在一个开关里，等于"要么全开、要么全不开"——那就不是可选规则，是另一个游戏。
-        所以它被拆成一棵树：<b>奇想·法则</b>只带机制、一个兵都不带，另外四包都<b>依赖</b>它。
-        只勾子包不勾前置，子包根本不会进场（配置里那条记录也会被剔掉，不留一句谎话）。</p>
-      <table>
-        <thead><tr><th>包</th><th>兵数</th><th>内容</th></tr></thead>
-        <tbody>
-          <tr><td class="name">奇想·法则</td><td class="num">0</td><td>前置包：魔法攻击 / 魔抗、属性伤害、状态（燃烧按叠层算）、飞行分层（可以停在水面上）。只加规则，不加兵。</td></tr>
-          <tr><td class="name">奇想·骑士团</td><td class="num">12</td><td>全是"人"：剑士、皇家骑兵、游侠、超级重骑、牧师、法师、刺客、狂战士、圣骑士、符文守卫、皇家守卫、盗贼。</td></tr>
-          <tr><td class="name">奇想·荒兽</td><td class="num">18</td><td>狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、半人马、史莱姆、哥布林陷阱师、树人、食人魔、牛头人、巨魔、石像鬼、鹰身女妖、狮鹫骑士、龙骑兵、狼人、双头巨人、骷髅飞龙。</td></tr>
-          <tr><td class="name">奇想·秘法</td><td class="num">26</td><td>吟游诗人、僵尸、德鲁伊、死灵法师、炼金术士、巫医、女巫、诅咒骑士、诅咒师、幻术师、四元素、幽灵、地狱犬、精灵弓手、元素召唤师、吸血鬼、机关傀儡、恶魔……外带 4 个召唤物和 1 道土墙（都不占编制）。</td></tr>
-          <tr><td class="name">奇想·英雄</td><td class="num">5</td><td>矮人王（投斧）、九头蛇（再生 40%）、不死鸟（烈焰俯冲两层点燃；阵亡后留蛋，孵化带一半生命）、至尊法师（转属性四形态，法抗 10）、天使（降临：半径 3 回 20% 并净化）。同方场上一名，第一次招募要额外付解锁费；每人每回合一个主动技能，不占行动。</td></tr>
-        </tbody>
-      </table>
-      <h4>四条新规则</h4>
-      <ul>
-        <li><b>魔法攻击 / 魔法抗性</b>：魔攻是独立结算的第二段伤害，不吃护甲、地形、破甲，只被魔抗平减。
-          所以法师打重甲划算、打在魔抗单位身上像挠痒。数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
-        <li><b>属性伤害</b>：火 / 水 / 土 / 风 / 光 / 暗 / 自然 / 奥术。目标可以写「怕X」（倍乘）和「抗X」（平减），
-          作用在整段伤害上——怕火不是"怕魔法火"，被火把砸一下也疼。</li>
-        <li><b>掠水三兄弟：飞行、掠空、跳跃</b>。机制同一套，区别只在名字对不对得上画面——
-          鹰和石像鬼<b>飞行</b>，蜘蛛骑士是<b>跳跃</b>，谁都不该"扑棱翅膀"。三者都能掠水、森林丘陵按 1 步；<b>掠空</b>再进一步，还能和地面单位<b>同格</b>——
-          地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。
-          两个单位叠在同一格时，点这一格<b>会先问"这一格里有没有我能打的目标"</b>——有就直接开火，不再只弹上面那个的属性卡。</li>
-        <li><b>状态</b>：中毒（每回合 6% 上限血）、点燃（8%，怕火的翻倍）、减速（移动 −1，最低 1）、诅咒（护甲 −2，最多两层）。
-          都按<b>兵种血量百分比</b>算，这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
-        <li><b>属性精研</b>（至尊法师）：属性不只是"这一下带什么状态"，而是四种形态——
-          火再点一层、水挂<b>霜缚</b>（就是减速，移动 −1）、自然攻击时回自己 10% 生命、暗把魔法段 ×1.5。
-          所以「转属性」其实是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。</li>
-        <li><b>英雄技能不占行动</b>。矮人王的投斧更进一步：那一斧<b>不占本回合的攻击次数</b>，
-          扔完还能贴身再劈一刀——三格外的目标也照打，代价是只有六成伤害。</li>
-      </ul>
-      <div class="callout">
-        机制都写成"有前提、有解法"的形式：飞行怕射程、魔法怕魔抗、狂暴怕风筝、召唤怕清场。
-        纯加成的兵最后只会变成"贵一点的那个步兵"——这条在写这个包的时候被反复验证过。
-      </div>
-    </section>
 
     <section id="roster">
-      <h2><span class="sec-num">15</span>兵种全表</h2>
-      <p>按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。</p>
+      <h2><span class="sec-num">14</span>兵种全表</h2>
+      <p>原版 ${Object.keys(UNIT_TYPES).length} 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
+        扩展包带来的兵在各自的分册里（点顶栏「规则书」可以选）。</p>
       ${eraSection()}
-      <h3 id="fantasy-roster">奇想兵种（按扩展包）</h3>
-      <p>下表只列扩展包里的兵，原版 35 个兵种不含在内。「魔攻」是<b>第二段伤害</b>，
-        独立于普通攻击结算：它不吃护甲、不吃地形、不吃破甲，只被目标的「魔抗」平减。
-        「魔抗」列的原版兵种一律是 0——这是刻意的，魔法只在新包里成体系。</p>
-      ${fantasySection()}
     </section>
 
     <section id="engine">
-      <h2><span class="sec-num">16</span>引擎与兼容</h2>
+      <h2><span class="sec-num">15</span>引擎与兼容</h2>
       <h3>确定性</h3>
       <p>规则内核是纯函数 <code>(state, action) → state</code>，不碰 DOM、不发网络、不读系统时间、不用 <code>Math.random</code>。所有随机都从 <code>state.seed</code> 派生。所以：</p>
       <ul>
@@ -1016,7 +994,7 @@ const html = `<!doctype html>
     </section>
 
     <section id="ai">
-      <h2><span class="sec-num">17</span>AI 托管与观战</h2>
+      <h2><span class="sec-num">16</span>AI 托管与观战</h2>
       <p>AI 和玩家吃同一份迷雾视图（不作弊），决策不碰 <code>Math.random</code>，随机性从种子派生。几条它自己会算的事：</p>
       <ul>
         <li><b>手长单位不往前顶</b>：射程里已经有人时，弓手会停在射程边缘开火，而不是往前挪到近战怀里。只有"挪过去能多打几个目标"才会继续前进。</li>
@@ -1112,7 +1090,7 @@ const html = `<!doctype html>
     </section>
 
     <section id="commander">
-      <h2><span class="sec-num">18</span>指挥官模式</h2>
+      <h2><span class="sec-num">17</span>指挥官模式</h2>
       <p>
         只当指挥官，不当连长：你决定<b>接下来几回合各造什么兵</b>，
         其余的——建造建筑、升级城市、走位、攻击、上下船——全部交给 AI。
@@ -1173,7 +1151,7 @@ const html = `<!doctype html>
     </section>
 
     <section id="online">
-      <h2><span class="sec-num">19</span>联机与云存档</h2>
+      <h2><span class="sec-num">18</span>联机与云存档</h2>
       <p>这是给"一回合半小时、各走一段再交接"准备的。点顶栏「联机」把当前这局挂到云上，拿到一个 6 位房间码；对方在任意设备上输入代码，或者直接点邀请链接，就坐进这一局。</p>
       <h3>规则</h3>
       <ul>
@@ -1197,7 +1175,7 @@ const html = `<!doctype html>
     </section>
 
     <section id="ops">
-      <h2><span class="sec-num">20</span>认输 · 撤回 · 拆除 · 提示音</h2>
+      <h2><span class="sec-num">19</span>认输 · 撤回 · 拆除 · 提示音</h2>
 
       <h3>认输</h3>
       <p>侧栏底部「认输」，点一下问一句，确认就直接判负、整局结束。</p>
@@ -1247,7 +1225,7 @@ const html = `<!doctype html>
     </section>
 
     <section id="god">
-      <h2><span class="sec-num">21</span>上帝模式（沙盒）</h2>
+      <h2><span class="sec-num">20</span>上帝模式（沙盒）</h2>
       <p>
         不要钱、不看回合，随手往盘上摆兵摆城，然后让 AI 同时操控两边打给你看。
         开局时在「你的角色」里选<b>上帝模式</b>（它是纯单人：选了之后「对手」那一栏会收起来，
@@ -1327,17 +1305,187 @@ const html = `<!doctype html>
       </p>
     </section>
 
-    <footer>
-      方格战棋 · 规则书 · 由 build-manual.ts 生成。数值改动后请重跑 <code>npm run manual</code>。
-    </footer>
-  </main>
-</div>
-</body>
-</html>
 `;
 
+
+/* ---------------------------------------------------------------------------
+ * 第二册：小型扩展合订本。
+ *
+ * 「小型」的判定看扩展自己的 scale 字段（见 expansions.ts 的 Expansion）：
+ * 没标 large 的都进这一册。新加一条纯规则扩展，不用改这里。
+ * --------------------------------------------------------------------------- */
+
+type Exp = (typeof EXPANSIONS)[number];
+
+/** 有些扩展一句 summary 说不清，在这里补。key 是扩展 id */
+const SMALL_NOTES: Record<string, string> = {
+  bloodbath: `<p><b>「血战」默认开着。</b>不特别说明的话，新对局就是"血战 + 你另外勾选的那些"。
+        它是给后半场踩刹车的：第 ${BLOOD_TURN} 回合起城市不再回血、升级恢复原价、全军移动与视野各 +1。
+        实测（各 120 局、同种子配对）开与不开：古典未决率 5.8% → 0.8%、平均少打 19 回合；中世 17.5% → 10.0%、少打 15 回合；
+        先后手胜率没有可分辨的变化。想体验老节奏就在面板里把它取消勾选。</p>`,
+  blackout: `<p>原来那套雾只遮<b>单位</b>：地形、河流、敌城的位置永远是公开的，等于一张免费的地图。
+        开「浓雾蔽野」之后这一层也没了：</p>
+      <ul>
+        <li>视野外的格子连地形都不画，只剩一片暗面；</li>
+        <li>对方城市要侦察到（四格里有任意一格可见）才会出现在图上；</li>
+        <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
+      </ul>`,
+  'last-stand': `<p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
+        会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>`,
+};
+
+function smallSection(e: Exp, num: number): string {
+  return `
+    <section id="exp-${esc(e.id)}">
+      <h2><span class="sec-num">${String(num).padStart(2, '0')}</span>${esc(e.name)}</h2>
+      <p>${esc(e.summary)}</p>
+      ${SMALL_NOTES[e.id] ?? ''}
+    </section>`;
+}
+
+const SMALL_EXPANSIONS = EXPANSIONS.filter((e) => e.scale !== 'large');
+
+const SMALL_BODY = `
+    <section id="small-intro">
+      <h2><span class="sec-num">01</span>扩展怎么用</h2>
+      <p>开局时在设置面板里勾选，效果叠加。规则以 <b>id</b> 的形式记进对局存档（不存代码），
+        所以存档可以序列化、可以回放，换台机器打开结果也一致。</p>
+      ${expansionTable()}
+      <div class="callout">
+        <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
+      </div>
+      <p>带兵种的扩展（时代兵备包、奇想系列）不在这本册子里——它们各有一本，规则书入口会按你这局开了什么列出来。</p>
+    </section>
+    ${SMALL_EXPANSIONS.map((e, i) => smallSection(e, i + 2)).join('')}
+`;
+
+/* ---------------------------------------------------------------------------
+ * 第三册起：大型扩展各一本。
+ *
+ * 「大型」= 扩展自己标了 scale: 'large'。时代兵备包、奇想系列都在这里；
+ * 以后新加一个大包，在它的定义里写一行 scale，书就自动有了。
+ * --------------------------------------------------------------------------- */
+
+/** 奇想系列共用的那套新规则。五包都依赖「奇想·法则」，所以每本奇想分册都带一份，
+ *  省得读者在五本书之间跳来跳去找"魔法到底怎么算" */
+const FANTASY_RULES = `
+      <h3>奇想系列带来的新规则</h3>
+      <p><b>奇想·法则</b>只带机制、一个兵都不带，另外四包都<b>依赖</b>它。
+        只勾子包不勾前置，子包根本不会进场（配置里那条记录也会被剔掉，不留一句谎话）。</p>
+      <ul>
+        <li><b>魔法攻击 / 魔法抗性</b>：魔攻是独立结算的第二段伤害，不吃护甲、地形、破甲，只被魔抗平减。
+          所以法师打重甲划算、打在魔抗单位身上像挠痒。数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
+        <li><b>属性伤害</b>：火 / 水 / 土 / 风 / 光 / 暗 / 自然 / 奥术。目标可以写「怕X」（倍乘）和「抗X」（平减），
+          作用在整段伤害上——怕火不是"怕魔法火"，被火把砸一下也疼。</li>
+        <li><b>掠水三兄弟：飞行、掠空、跳跃</b>。机制同一套，区别只在名字对不对得上画面——
+          鹰和石像鬼<b>飞行</b>，蜘蛛骑士是<b>跳跃</b>，谁都不该"扑棱翅膀"。三者都能掠水、森林丘陵按 1 步；<b>掠空</b>再进一步，还能和地面单位<b>同格</b>——
+          地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。
+          两个单位叠在同一格时，点这一格<b>会先问"这一格里有没有我能打的目标"</b>——有就直接开火，不再只弹上面那个的属性卡。</li>
+        <li><b>状态</b>：中毒（每回合 6% 上限血）、点燃（8%，怕火的翻倍）、减速（移动 −1，最低 1）、诅咒（护甲 −2，最多两层）。
+          都按<b>兵种血量百分比</b>算，这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
+        <li><b>属性精研</b>（至尊法师）：属性不只是"这一下带什么状态"，而是四种形态——
+          火再点一层、水挂<b>霜缚</b>（就是减速，移动 −1）、自然攻击时回自己 10% 生命、暗把魔法段 ×1.5。
+          所以「转属性」其实是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。</li>
+        <li><b>英雄技能不占行动</b>。矮人王的投斧更进一步：那一斧<b>不占本回合的攻击次数</b>，
+          扔完还能贴身再劈一刀——三格外的目标也照打，代价是只有六成伤害。</li>
+      </ul>
+      <div class="callout">
+        机制都写成"有前提、有解法"的形式：飞行怕射程、魔法怕魔抗、狂暴怕风筝、召唤怕清场。
+        纯加成的兵最后只会变成"贵一点的那个步兵"——这条在写这个包的时候被反复验证过。
+      </div>`;
+
+/** 大包各自的补充说明：这包和别的包玩法上差在哪儿。key 是扩展 id */
+const PACK_NOTES: Record<string, string> = {
+  'fantasy-core': `<p>这本册子讲的是<b>机制</b>：它自己不带兵，是另外四包的前置。下面的"新规则"
+        在你开任何一个奇想子包时都会生效。</p>`,
+  'fantasy-heroes': `<p>英雄是<b>全场唯一</b>的：同一方在盘上只能有一个同名英雄。第一次招募要在造价之外
+        另付一笔解锁费，付过之后这一局里随便造。每人每回合一个主动技能，<b>不占行动</b>——
+        开完技能还能照常移动和攻击。AI 也会用：够得着就扔斧头、掉血就再生、
+        身边有人伤得重就降临；不死鸟倒下后留下的蛋，轮到它时 AI 会自己挑地方孵。</p>`,
+  'fantasy-arcane': `<p>召唤物（骷髅、僵尸犬、土元素这类）和土墙<b>不占编制</b>：它们不算进
+        "最多多少个单位"那道门槛，所以不会把你自己的产线堵死。召唤师被杀，已经召出来的还在场上。</p>`,
+};
+
+function packBook(e: Exp): Book {
+  const units = e.units ?? [];
+  const eras = [...new Set(units.map((u) => u.era))].sort((a, b) => a - b);
+  const isFantasy = e.id.startsWith('fantasy-');
+  const reqNames = (e.requires ?? [])
+    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+    .join('、');
+
+  const nav = `
+    <a href="#pack-intro">1. 这个包是什么</a>
+    <a href="#pack-units">2. 兵种表</a>${isFantasy ? '\n    <a href="#pack-rules">3. 新规则</a>' : ''}
+  `;
+
+  const body = `
+    <section id="pack-intro">
+      <h2><span class="sec-num">01</span>这个包是什么</h2>
+      <p>${esc(e.summary)}</p>
+      <dl class="kv">
+        <dt>兵种数量</dt><dd>${units.length} 个${isFantasy ? '（奇想系列）' : '（时代兵备）'}</dd>
+        <dt>覆盖时代</dt><dd>${eras.length ? eras.map((n) => `${n}（${esc(ERAS[n - 1]?.name ?? '')}）`).join('、') : '—（不带兵种）'}</dd>
+        ${reqNames ? `<dt>前置</dt><dd>需要先开「${esc(reqNames)}」</dd>` : ''}
+        <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
+      </dl>
+      <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
+        搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
+        和原版兵是同一把尺子。</p>
+      ${PACK_NOTES[e.id] ?? ''}
+    </section>
+
+    <section id="pack-units">
+      <h2><span class="sec-num">02</span>兵种表</h2>
+      ${units.length ? fantasyTable(e) : '<p class="era-meta">这个包不带兵种，只改规则——表就不用列了。</p>'}
+    </section>
+    ${isFantasy ? `<section id="pack-rules">
+      <h2><span class="sec-num">03</span>新规则</h2>
+      ${FANTASY_RULES}
+    </section>` : ''}
+  `;
+
+  return {
+    file: `public/manual-pack-${e.id}.html`,
+    title: `方格战棋 · ${e.name}`,
+    subtitle: `扩展分册 · ${units.length ? `${units.length} 个兵种` : '只改规则'} · 本文件由 npm run manual 从配置自动生成`,
+    nav,
+    body,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * 落盘。
+ * --------------------------------------------------------------------------- */
+
+const books: Book[] = [
+  {
+    file: 'public/manual.html',
+    title: '方格战棋 · 规则书',
+    subtitle: '回合制 · 1v1 · 五个时代 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。扩展的规则在各自分册里。',
+    nav: CORE_NAV,
+    body: CORE_BODY,
+  },
+  {
+    file: 'public/manual-small.html',
+    title: '方格战棋 · 扩展规则（小型）',
+    subtitle: '只改规则、不带兵种的那批扩展，合成一册。本文件由 npm run manual 从配置自动生成。',
+    nav: `
+    <a href="#small-intro">1. 扩展怎么用</a>
+    ${SMALL_EXPANSIONS.map((e, i) => `<a href="#exp-${esc(e.id)}">${i + 2}. ${esc(e.name)}</a>`).join('\n    ')}
+  `,
+    body: SMALL_BODY,
+  },
+  ...EXPANSIONS.filter((e) => e.scale === 'large').map(packBook),
+];
+
 mkdirSync('public', { recursive: true });
-writeFileSync('public/manual.html', html, 'utf-8');
-writeFileSync('manual.html', html, 'utf-8');
-console.log('已生成 public/manual.html（会随构建一起发布）');
-console.log(`  兵种 ${Object.keys(UNIT_TYPES).length} 个 · 能力 ${ABILITIES.length} 条 · 扩展 ${EXPANSIONS.length} 个`);
+for (const b of books) {
+  writeFileSync(b.file, page(b), 'utf-8');
+  console.log(`  ${b.file.replace('public/', '')} ← ${b.title.replace('方格战棋 · ', '')}`);
+}
+// 根目录留一份核心册，方便不开 dev server 直接看（不入库，见 CI 的仓库卫生检查）
+writeFileSync('manual.html', page(books[0]!), 'utf-8');
+console.log(
+  `共 ${books.length} 册 · 兵种 ${Object.keys(UNIT_TYPES).length} 个 · 能力 ${ABILITIES.length} 条 · 扩展 ${EXPANSIONS.length} 个`,
+);

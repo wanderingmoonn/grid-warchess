@@ -187,6 +187,15 @@ export interface Expansion {
    * 前置包把这件事变成显式的、可见的选择，而不是藏在代码里的隐式依赖。
    */
   requires?: string[];
+  /**
+   * 规则书怎么归册：'small' 进小型扩展合订本，'large' 单独成册。
+   *
+   * 不让生成器去猜（比如"带兵种就算大型"）——「奇想·法则」一个兵都不带，
+   * 却带来一整套魔法/属性/状态规则，按兵种数分它会被错误地塞进合订本。
+   * 归册是**编辑决定**，就该写在这个扩展自己的定义里。
+   * 不写默认按 'small' 处理。
+   */
+  scale?: 'small' | 'large';
 }
 
 function nameOf(state: GameState, typeId: string): string {

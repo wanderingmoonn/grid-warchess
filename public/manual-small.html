@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方格战棋 · 扩展规则（小型）</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 15.5px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 13.5px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12.5px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#small-intro">1. 扩展怎么用</a>
+    <a href="#exp-asym-opening">2. 非对称开局</a>
+    <a href="#exp-war-economy">3. 战争经济</a>
+    <a href="#exp-veterans">4. 老兵不死</a>
+    <a href="#exp-trench">5. 堑壕战</a>
+    <a href="#exp-blitz">6. 闪电战</a>
+    <a href="#exp-conscription">7. 大征兵</a>
+    <a href="#exp-night-raid">8. 大雾来了</a>
+    <a href="#exp-blackout">9. 浓雾蔽野</a>
+    <a href="#exp-scorched-earth">10. 死亡枕藉</a>
+    <a href="#exp-fortress">11. 固若金汤</a>
+    <a href="#exp-bloodbath">12. 血战</a>
+    <a href="#exp-turn-order-comp">13. 先后手补偿</a>
+    <a href="#exp-last-stand">14. 哀兵必胜</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>方格战棋 · 扩展规则（小型）</h1>
+      <p>只改规则、不带兵种的那批扩展，合成一册。本文件由 npm run manual 从配置自动生成。</p>
+    </header>
+
+
+    <section id="small-intro">
+      <h2><span class="sec-num">01</span>扩展怎么用</h2>
+      <p>开局时在设置面板里勾选，效果叠加。规则以 <b>id</b> 的形式记进对局存档（不存代码），
+        所以存档可以序列化、可以回放，换台机器打开结果也一致。</p>
+      
+    <table>
+      <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
+      <tbody>
+        <tr><td class="name">非对称开局</td><td>两边开局不再一样：先手只有工兵和斥候（工事与侦察），后手拿两个农民、一个牧民、一个步兵、一个弓手（屯田与守备）。先手是逆风局——用工地和视野去换对面那支已经成型的小部队。</td><td class="traits">—</td></tr><tr><td class="name">战争经济</td><td>每消灭一个对方单位，立刻获得 15 金币。</td><td class="traits">—</td></tr><tr><td class="name">老兵不死</td><td>单位每击杀一个敌人永久 +1 攻击力，越打越硬。</td><td class="traits">—</td></tr><tr><td class="name">堑壕战</td><td>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</td><td class="traits">—</td></tr><tr><td class="name">闪电战</td><td>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</td><td class="traits">—</td></tr><tr><td class="name">大征兵</td><td>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</td><td class="traits">—</td></tr><tr><td class="name">大雾来了</td><td>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</td><td class="traits">—</td></tr><tr><td class="name">浓雾蔽野</td><td>基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：视野外的格子、地形、城市全部隐去，只剩一片黑；而且迷雾锁定开启、不能关掉。</td><td class="traits">—</td></tr><tr><td class="name">死亡枕藉</td><td>单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。</td><td class="traits">—</td></tr><tr><td class="name">固若金汤</td><td>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</td><td class="traits">—</td></tr><tr><td class="name">血战<span class="c">（默认开）</span></td><td>第 50 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</td><td class="traits">—</td></tr><tr><td class="name">先后手补偿<span class="c">（默认开）</span></td><td>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</td><td class="traits">—</td></tr><tr><td class="name">哀兵必胜</td><td>先丢掉一座城的一方，全军攻击 +10%——野战、反击、攻城都算。城没了，气还在。</td><td class="traits">—</td></tr>
+      </tbody>
+    </table>
+      <div class="callout">
+        <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
+      </div>
+      <p>带兵种的扩展（时代兵备包、奇想系列）不在这本册子里——它们各有一本，规则书入口会按你这局开了什么列出来。</p>
+    </section>
+    
+    <section id="exp-asym-opening">
+      <h2><span class="sec-num">02</span>非对称开局</h2>
+      <p>两边开局不再一样：先手只有工兵和斥候（工事与侦察），后手拿两个农民、一个牧民、一个步兵、一个弓手（屯田与守备）。先手是逆风局——用工地和视野去换对面那支已经成型的小部队。</p>
+      
+    </section>
+    <section id="exp-war-economy">
+      <h2><span class="sec-num">03</span>战争经济</h2>
+      <p>每消灭一个对方单位，立刻获得 15 金币。</p>
+      
+    </section>
+    <section id="exp-veterans">
+      <h2><span class="sec-num">04</span>老兵不死</h2>
+      <p>单位每击杀一个敌人永久 +1 攻击力，越打越硬。</p>
+      
+    </section>
+    <section id="exp-trench">
+      <h2><span class="sec-num">05</span>堑壕战</h2>
+      <p>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</p>
+      
+    </section>
+    <section id="exp-blitz">
+      <h2><span class="sec-num">06</span>闪电战</h2>
+      <p>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</p>
+      
+    </section>
+    <section id="exp-conscription">
+      <h2><span class="sec-num">07</span>大征兵</h2>
+      <p>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</p>
+      
+    </section>
+    <section id="exp-night-raid">
+      <h2><span class="sec-num">08</span>大雾来了</h2>
+      <p>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</p>
+      
+    </section>
+    <section id="exp-blackout">
+      <h2><span class="sec-num">09</span>浓雾蔽野</h2>
+      <p>基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：视野外的格子、地形、城市全部隐去，只剩一片黑；而且迷雾锁定开启、不能关掉。</p>
+      <p>原来那套雾只遮<b>单位</b>：地形、河流、敌城的位置永远是公开的，等于一张免费的地图。
+        开「浓雾蔽野」之后这一层也没了：</p>
+      <ul>
+        <li>视野外的格子连地形都不画，只剩一片暗面；</li>
+        <li>对方城市要侦察到（四格里有任意一格可见）才会出现在图上；</li>
+        <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
+      </ul>
+    </section>
+    <section id="exp-scorched-earth">
+      <h2><span class="sec-num">10</span>死亡枕藉</h2>
+      <p>单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。</p>
+      
+    </section>
+    <section id="exp-fortress">
+      <h2><span class="sec-num">11</span>固若金汤</h2>
+      <p>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</p>
+      
+    </section>
+    <section id="exp-bloodbath">
+      <h2><span class="sec-num">12</span>血战</h2>
+      <p>第 50 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</p>
+      <p><b>「血战」默认开着。</b>不特别说明的话，新对局就是"血战 + 你另外勾选的那些"。
+        它是给后半场踩刹车的：第 50 回合起城市不再回血、升级恢复原价、全军移动与视野各 +1。
+        实测（各 120 局、同种子配对）开与不开：古典未决率 5.8% → 0.8%、平均少打 19 回合；中世 17.5% → 10.0%、少打 15 回合；
+        先后手胜率没有可分辨的变化。想体验老节奏就在面板里把它取消勾选。</p>
+    </section>
+    <section id="exp-turn-order-comp">
+      <h2><span class="sec-num">13</span>先后手补偿</h2>
+      <p>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</p>
+      
+    </section>
+    <section id="exp-last-stand">
+      <h2><span class="sec-num">14</span>哀兵必胜</h2>
+      <p>先丢掉一座城的一方，全军攻击 +10%——野战、反击、攻城都算。城没了，气还在。</p>
+      <p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
+        会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>
+    </section>
+
+    <footer>
+      方格战棋 · 扩展规则（小型） · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+</body>
+</html>

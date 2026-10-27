@@ -1245,6 +1245,8 @@ const MODERN: UnitTypeDef[] = [
 export const ERA_PACKS: Expansion[] = [
   {
     id: 'pack-antiquity',
+
+    scale: 'large',
     name: '古典会战',
     summary: '希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。',
     hooks: {},
@@ -1252,6 +1254,8 @@ export const ERA_PACKS: Expansion[] = [
   },
   {
     id: 'pack-medieval',
+
+    scale: 'large',
     name: '中世兵备',
     summary: '重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。',
     hooks: {},
@@ -1259,6 +1263,8 @@ export const ERA_PACKS: Expansion[] = [
   },
   {
     id: 'pack-gunpowder',
+
+    scale: 'large',
     name: '火药列国',
     summary: '线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。',
     hooks: {},
@@ -1266,6 +1272,8 @@ export const ERA_PACKS: Expansion[] = [
   },
   {
     id: 'pack-industry',
+
+    scale: 'large',
     name: '工业绞肉机',
     summary: '堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。',
     hooks: {},
@@ -1273,6 +1281,8 @@ export const ERA_PACKS: Expansion[] = [
   },
   {
     id: 'pack-modern',
+
+    scale: 'large',
     name: '现代合成兵',
     summary: '伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。',
     hooks: {},

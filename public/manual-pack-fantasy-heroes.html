@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方格战棋 · 奇想·英雄</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 15.5px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 13.5px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12.5px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#pack-intro">1. 这个包是什么</a>
+    <a href="#pack-units">2. 兵种表</a>
+    <a href="#pack-rules">3. 新规则</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>方格战棋 · 奇想·英雄</h1>
+      <p>扩展分册 · 5 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+    </header>
+
+
+    <section id="pack-intro">
+      <h2><span class="sec-num">01</span>这个包是什么</h2>
+      <p>五个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，法抗 10）、天使（降临：半径 3 回 20% 并清空负面状态）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。</p>
+      <dl class="kv">
+        <dt>兵种数量</dt><dd>5 个（奇想系列）</dd>
+        <dt>覆盖时代</dt><dd>3（火药）、4（工业）、5（现代）</dd>
+        <dt>前置</dt><dd>需要先开「奇想·法则」</dd>
+        <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
+      </dl>
+      <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
+        搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
+        和原版兵是同一把尺子。</p>
+      <p>英雄是<b>全场唯一</b>的：同一方在盘上只能有一个同名英雄。第一次招募要在造价之外
+        另付一笔解锁费，付过之后这一局里随便造。每人每回合一个主动技能，<b>不占行动</b>——
+        开完技能还能照常移动和攻击。AI 也会用：够得着就扔斧头、掉血就再生、
+        身边有人伤得重就降临；不死鸟倒下后留下的蛋，轮到它时 AI 会自己挑地方孵。</p>
+    </section>
+
+    <section id="pack-units">
+      <h2><span class="sec-num">02</span>兵种表</h2>
+      
+    <h4>奇想·英雄 · 5 个英雄</h4>
+    <table>
+      <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>魔攻</th><th>甲</th><th>魔抗</th><th>血</th><th>移</th><th>射</th><th>视</th><th>属性</th><th>特性</th></tr></thead>
+      <tbody>
+      <tr>
+        <td class="name">矮人王</td>
+        <td class="glyph">王</td>
+        <td class="num">3</td>
+        <td class="num">360</td>
+        <td class="num">34</td>
+        <td class="num">—</td>
+        <td class="num">8</td>
+        <td class="num">0</td>
+        <td class="num">101</td>
+        <td class="num">2</td>
+        <td class="num">1</td>
+        <td class="num">4</td>
+        <td class="traits">—</td>
+        <td class="traits"><b>守护光环</b> · <b>盾墙</b> · <b>英雄</b>（场上一名 · 首次解锁 150 金） · <b>技能「投斧」</b>（CD 1）投出一斧：射程 3、隔着一格以上只有六成伤害。这一下不占本回合的攻击次数——扔完还能贴身再劈一次。</td>
+      </tr>
+      <tr>
+        <td class="name">不死鸟</td>
+        <td class="glyph">凤</td>
+        <td class="num">4</td>
+        <td class="num">480</td>
+        <td class="num">38</td>
+        <td class="num">10</td>
+        <td class="num">4</td>
+        <td class="num">0</td>
+        <td class="num">89</td>
+        <td class="num">6</td>
+        <td class="num">2</td>
+        <td class="num">7</td>
+        <td class="traits">火</td>
+        <td class="traits"><b>掠空</b> · <b>重生</b> · <b>魔法攻击 10</b>（不吃护甲） · <b>英雄</b>（场上一名 · 首次解锁 220 金） · <b>技能「烈焰俯冲」</b>（CD 2）本回合移动 +2，攻击额外点燃两层。</td>
+      </tr>
+      <tr>
+        <td class="name">九头蛇</td>
+        <td class="glyph">九</td>
+        <td class="num">4</td>
+        <td class="num">490</td>
+        <td class="num">36</td>
+        <td class="num">—</td>
+        <td class="num">7</td>
+        <td class="num">0</td>
+        <td class="num">145</td>
+        <td class="num">3</td>
+        <td class="num">1</td>
+        <td class="num">4</td>
+        <td class="traits">怕火×2</td>
+        <td class="traits"><b>强再生</b> · <b>破城</b> · <b>英雄</b>（场上一名 · 首次解锁 200 金） · <b>技能「再生」</b>（CD 2）立刻回复 40% 生命（约 58 点）。</td>
+      </tr>
+      <tr>
+        <td class="name">天使</td>
+        <td class="glyph">使</td>
+        <td class="num">5</td>
+        <td class="num">550</td>
+        <td class="num">42</td>
+        <td class="num">12</td>
+        <td class="num">10</td>
+        <td class="num">6</td>
+        <td class="num">121</td>
+        <td class="num">5</td>
+        <td class="num">1</td>
+        <td class="num">7</td>
+        <td class="traits">光</td>
+        <td class="traits"><b>掠空</b> · <b>治疗光环</b> · <b>魔法攻击 12</b>（不吃护甲） · 魔法抗性 6 · <b>英雄</b>（场上一名 · 首次解锁 250 金） · <b>技能「降临」</b>（CD 2）半径 3 内友军回复 20% 生命，并清空全部负面状态。</td>
+      </tr>
+      <tr>
+        <td class="name">至尊法师</td>
+        <td class="glyph">尊</td>
+        <td class="num">5</td>
+        <td class="num">590</td>
+        <td class="num">10</td>
+        <td class="num">26</td>
+        <td class="num">3</td>
+        <td class="num">10</td>
+        <td class="num">72</td>
+        <td class="num">2</td>
+        <td class="num">4</td>
+        <td class="num">7</td>
+        <td class="traits">轮换（火 → 水 → 自然 → 暗）</td>
+        <td class="traits"><b>属性精研</b> · <b>溅射 2 格</b>（50%） · <b>魔法攻击 26</b>（不吃护甲） · 魔法抗性 10 · <b>英雄</b>（场上一名 · 首次解锁 300 金） · <b>技能「转属性」</b>（CD 1）切到下一种属性（火→水→自然→暗）。火=点燃、水=霜缚、自然=攻击时自愈、暗=魔法段 ×1.5。</td>
+      </tr></tbody>
+    </table>
+    </section>
+    <section id="pack-rules">
+      <h2><span class="sec-num">03</span>新规则</h2>
+      
+      <h3>奇想系列带来的新规则</h3>
+      <p><b>奇想·法则</b>只带机制、一个兵都不带，另外四包都<b>依赖</b>它。
+        只勾子包不勾前置，子包根本不会进场（配置里那条记录也会被剔掉，不留一句谎话）。</p>
+      <ul>
+        <li><b>魔法攻击 / 魔法抗性</b>：魔攻是独立结算的第二段伤害，不吃护甲、地形、破甲，只被魔抗平减。
+          所以法师打重甲划算、打在魔抗单位身上像挠痒。数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
+        <li><b>属性伤害</b>：火 / 水 / 土 / 风 / 光 / 暗 / 自然 / 奥术。目标可以写「怕X」（倍乘）和「抗X」（平减），
+          作用在整段伤害上——怕火不是"怕魔法火"，被火把砸一下也疼。</li>
+        <li><b>掠水三兄弟：飞行、掠空、跳跃</b>。机制同一套，区别只在名字对不对得上画面——
+          鹰和石像鬼<b>飞行</b>，蜘蛛骑士是<b>跳跃</b>，谁都不该"扑棱翅膀"。三者都能掠水、森林丘陵按 1 步；<b>掠空</b>再进一步，还能和地面单位<b>同格</b>——
+          地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。
+          两个单位叠在同一格时，点这一格<b>会先问"这一格里有没有我能打的目标"</b>——有就直接开火，不再只弹上面那个的属性卡。</li>
+        <li><b>状态</b>：中毒（每回合 6% 上限血）、点燃（8%，怕火的翻倍）、减速（移动 −1，最低 1）、诅咒（护甲 −2，最多两层）。
+          都按<b>兵种血量百分比</b>算，这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
+        <li><b>属性精研</b>（至尊法师）：属性不只是"这一下带什么状态"，而是四种形态——
+          火再点一层、水挂<b>霜缚</b>（就是减速，移动 −1）、自然攻击时回自己 10% 生命、暗把魔法段 ×1.5。
+          所以「转属性」其实是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。</li>
+        <li><b>英雄技能不占行动</b>。矮人王的投斧更进一步：那一斧<b>不占本回合的攻击次数</b>，
+          扔完还能贴身再劈一刀——三格外的目标也照打，代价是只有六成伤害。</li>
+      </ul>
+      <div class="callout">
+        机制都写成"有前提、有解法"的形式：飞行怕射程、魔法怕魔抗、狂暴怕风筝、召唤怕清场。
+        纯加成的兵最后只会变成"贵一点的那个步兵"——这条在写这个包的时候被反复验证过。
+      </div>
+    </section>
+  
+    <footer>
+      方格战棋 · 奇想·英雄 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+</body>
+</html>

@@ -23,6 +23,7 @@ import { playerView } from '../src/core/fog.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
+import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
 
 const result = await build({
@@ -1566,6 +1567,50 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   };
   const afterFoe = after.units.find((u) => u.id === foe.id);
   assert.equal(afterFoe?.hp, hpBefore, '隔那么远不该开火');
+});
+
+console.log('\n规则书分册');
+
+check('书单跟着已开的扩展走，核心规则书永远在', () => {
+  assert.deepEqual(manualBooks([]).map((b) => b.file), ['manual.html'], '什么都没开就只有核心册');
+
+  // 血战是默认开的：光这一条就够凑出一本小型扩展合订本
+  const withBlood = manualBooks(DEFAULT_CONFIG.expansionIds);
+  assert.deepEqual(withBlood.map((b) => b.file), ['manual.html', 'manual-small.html']);
+
+  // 开两个大包就各有一本，前置包（法则）也得在——子包的规则全靠它
+  const fantasy = manualBooks(['bloodbath', 'fantasy-core', 'fantasy-heroes']);
+  assert.deepEqual(fantasy.map((b) => b.file), [
+    'manual.html',
+    'manual-small.html',
+    'manual-pack-fantasy-core.html',
+    'manual-pack-fantasy-heroes.html',
+  ]);
+});
+
+check('点「规则书」：一本就直开，多本先问看哪本', () => {
+  // 顶栏那个按钮原来是个写死 manual.html 的 <a>。拆册之后"开哪本"取决于
+  // 本局开了什么扩展，所以它必须是动作而不是死链接。
+  const opener = window.open;
+  const opened: string[] = [];
+  (window as unknown as { open: (u: string) => unknown }).open = (u: string) => {
+    opened.push(u);
+    return null;
+  };
+  try {
+    // 当前对局是默认配置：核心册 + 小型合订本 = 两本，应该弹书单
+    click('[data-act="manual"]');
+    const rows = Array.from(doc.querySelectorAll<HTMLElement>('.book-row'));
+    assert.equal(rows.length, 2, `默认配置应该有两本书可选，实际 ${rows.length}`);
+    assert.ok((rows[0]!.textContent ?? '').includes('核心规则书'));
+    assert.ok((rows[1]!.textContent ?? '').includes('小型'), '第二本应该是小型扩展合订本');
+
+    rows[1]!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(opened, ['./manual-small.html'], '点书名应该打开对应分册');
+    assert.equal(doc.querySelector('.book-row'), null, '选完书单要收起来');
+  } finally {
+    window.open = opener;
+  }
 });
 
 console.log('\n启动兜底');

@@ -38,13 +38,14 @@ jobs:
       - name: DOM 冒烟测试
         run: npm run test:ui
 
-      # 规则书是从 config.ts / abilities.ts / expansions.ts 生成的。
-      # 改了数值却忘了重新生成，线上和文档就会对不上，所以这里卡一道。
+      # 规则书是从 config.ts / abilities.ts / expansions.ts 生成的，而且不止一本：
+      # 核心册 + 小型扩展合订本 + 每个大型扩展一册。改了数值却忘了重新生成，
+      # 线上和文档就会对不上，所以这里把所有分册一起卡。
       - name: 规则书与代码是否同步
         run: |
           npm run manual
-          if ! git diff --exit-code public/manual.html; then
-            echo "::error::public/manual.html 与代码不同步，本地跑 npm run manual 后提交"
+          if ! git diff --exit-code 'public/manual*.html'; then
+            echo "::error::规则书与代码不同步，本地跑 npm run manual 后提交"
             exit 1
           fi
 

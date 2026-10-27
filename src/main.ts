@@ -48,6 +48,7 @@ import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
+import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
 import {
   claimSeat,
@@ -1252,6 +1253,18 @@ function handleAction(act: string, el: HTMLElement): void {
       aiSpeed = (aiSpeed + 1) % AI_SPEED_MS.length;
       render();
       toast(`AI 速度：${AI_SPEED_NAME[aiSpeed]}`);
+      return;
+    }
+
+    case 'manual': {
+      // 只有核心规则书相关时直接打开，别为形式多问一次；
+      // 开了扩展才可能出现"看哪本"这个选择。
+      const books = manualBooks(state.config.expansionIds);
+      if (books.length === 1) {
+        window.open(`./${books[0]!.file}`, '_blank', 'noopener');
+        return;
+      }
+      openManualChooser(books);
       return;
     }
 
