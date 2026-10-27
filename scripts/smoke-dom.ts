@@ -1011,6 +1011,29 @@ check('顶栏能打开联机面板', () => {
   assert.ok(doc.querySelector('[data-field="code"]'), '应该有房间码输入框');
 });
 
+check('面板一打开就在查云端连通性', () => {
+  const chip = doc.querySelector('.cloud-probe');
+  assert.ok(chip, '面板顶部应该有一条云端自检');
+  assert.ok((chip.textContent ?? '').trim().length > 0, '自检那一条不该是空的');
+});
+
+await checkAsync('自检结论要么"通"，要么说清楚断在哪（不能只甩一句网络不通）', async () => {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const chip = doc.querySelector('.cloud-probe');
+  assert.ok(chip, '自检那一条不该消失');
+  const text = (chip.textContent ?? '').trim();
+  if (chip.classList.contains('ok')) {
+    assert.ok(text.includes('正常'), `通过时应该说清楚：${text}`);
+    return;
+  }
+  assert.ok(chip.classList.contains('bad'), `自检应当落到"通"或"不通"两态之一：${text}`);
+  // 关键：失败要落到"具体原因"，而不是那句把人往网络问题上带的兜底文案
+  assert.ok(
+    /云端|连不上|域名|密钥|房间表/.test(text),
+    `失败原因要具体（云端/域名/密钥/房间表），实际是：${text}`,
+  );
+});
+
 check('面板写清了房间码就是钥匙', () => {
   const text = doc.querySelector('.modal')?.textContent ?? '';
   assert.ok(text.includes('房间码就是钥匙'), '应该有这句说明');
