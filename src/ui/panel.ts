@@ -19,11 +19,14 @@ import {
   cityTiles,
   disbandRefundOf,
   distToCity,
+  effectiveStats,
   heroSkillsOf,
   recruitCost,
+  unitIncome,
   unitsOf,
   upgradeCostOf,
   utype,
+  visionOf,
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
@@ -288,7 +291,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                        : '工事';
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
                  <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
-                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · ${tag}</span></span>
+                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · 血 ${b.maxHp} · ${tag}</span></span>
                  <span class="price">${price}</span>
                </button>`;
              })
@@ -330,6 +333,38 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const underCamp =
       under && !readOnly && under.owner === me && underCampDef?.barracks ? under : null;
 
+    // ── 真实数值 ──
+    // 面板数字必须和结算同源：effectiveStats 把光环、击杀成长、威吓、
+    // 狂暴、哀兵必胜、地形、诅咒、扩展改甲全部算进去，
+    // movePower/visionOf 则是移动力和视野的同一个真相源。
+    // 面板再也不显示"裸装"数值——玩家对不上账，比没有数字更糟。
+    const eff = effectiveStats(s, selectedUnit);
+    const vision = visionOf(s, selectedUnit);
+    const income = unitIncome(s, selectedUnit);
+    const signed = (n: number): string => (n > 0 ? `+${n}` : String(n));
+    const modRow = (scope: string, it: { label: string; delta: number }): string =>
+      `<div class="info-row stat-mod"><span>${scope} · ${it.label}</span><b class="${
+        it.delta >= 0 ? 'up' : 'down'
+      }">${signed(it.delta)}</b></div>`;
+    const atkChanged = eff.atk !== eff.atkBase;
+    const armorChanged = eff.armor !== eff.armorBase;
+    // 只有一个数被改过时，括号里必须点名是哪一个——不写"甲基础 1"的话，
+    // "3 / 4（基础 1）"看起来像是攻击也变成了 1
+    const baseNote =
+      atkChanged && armorChanged
+        ? `（基础 ${eff.atkBase} / ${eff.armorBase}）`
+        : atkChanged
+          ? `（攻基础 ${eff.atkBase}）`
+          : armorChanged
+            ? `（甲基础 ${eff.armorBase}）`
+            : '';
+    const statModBlock =
+      eff.atkItems.length + eff.armorItems.length > 0
+        ? `<div class="stat-mods">${eff.atkItems.map((it) => modRow('攻', it)).join('')}${eff.armorItems
+            .map((it) => modRow('甲', it))
+            .join('')}</div>`
+        : '';
+
     return `
       <div class="unit-head">
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
@@ -347,9 +382,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
       <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${def.maxHp}</b></div>
-      <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
-      <div class="info-row"><span>移动力</span><b>${def.move}</b></div>
-      <div class="info-row"><span>射程 / 视野</span><b>${def.range} / ${def.vision}</b></div>
+      <div class="info-row">
+        <span>攻击 / 护甲</span>
+        <b>${eff.atk} / ${eff.armor}${baseNote}</b>
+      </div>
+      ${statModBlock}
+      <div class="info-row"><span>移动力</span><b>${
+        eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
+      }</b></div>
+      <div class="info-row"><span>射程 / 视野</span><b>${def.range} / ${vision}</b></div>
+      ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
       ${
         def.splash
           ? `<div class="info-row"><span>溅射</span><b>主目标 ${def.splash} 格内（不含斜角）· ${Math.round(CONFIG.splashRatio * 100)}%</b></div>`
@@ -619,7 +661,9 @@ function recruitButton(
   const total = price + unlockFee;
   const blocked = disabled || aliveHere || s.players[me].gold < total;
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
-  const detail = `攻 ${def.atk} · 甲 ${def.armor} · 移 ${def.move} · 射 ${def.range}${tag}`;
+  // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
+  // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
+  const detail = `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 移 ${def.move} · 射 ${def.range}${tag}`;
   return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
     <span class="meta">

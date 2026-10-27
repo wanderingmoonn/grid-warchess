@@ -12,7 +12,7 @@
 
 import { hasAbility } from './abilities.ts';
 import { CHEAPEST_COST, CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
-import { activeExpansions } from './expansions.ts';
+import { LAST_STAND_BONUS, activeExpansions } from './expansions.ts';
 import type {
   ActionResult,
   Action,
@@ -520,6 +520,123 @@ export function visionOf(s: GameState, unit: Unit): number {
     if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, base: r });
   }
   return Math.max(1, r);
+}
+
+export interface StatItem {
+  /** 修正名，直接印在面板上（"指挥光环"、"老兵不死"…） */
+  label: string;
+  /** 最终加减量（乘法修正已经折算成差值） */
+  delta: number;
+}
+
+export interface EffectiveStats {
+  /** 当前状态下的有效攻击力（不含"打谁"才决定的项） */
+  atk: number;
+  atkBase: number;
+  atkItems: StatItem[];
+  /** 当前格上的有效护甲（含地形、光环、诅咒、扩展改甲） */
+  armor: number;
+  armorBase: number;
+  armorItems: StatItem[];
+  /** 算上减速/光环/扩展的移动力 */
+  move: number;
+  moveBase: number;
+}
+
+/**
+ * 点击单位时面板要显示的"真实数值"：把当前状态下就会生效的修正全算进去。
+ *
+ * 只收"现在就成立"的项——光环、击杀成长、威吓、狂暴、哀兵必胜、
+ * 所在格地形、诅咒、扩展改甲。依赖"打谁"的项（冲锋、群势、追猎、
+ * 长短皆可、魔法段、属性弱点）不进来：那些是"这一下打多疼"的问题，
+ * 伤害预览给得出带目标的真数，塞进来只会让"我的攻击力"变成一个
+ * 没人能对上号的数字。
+ *
+ * modifyArmor 钩子以本单位自己充当攻击者来估——现有钩子都只看防守方；
+ * 以后有看攻击者的钩子，这里要跟着改（注释就是防这件事的）。
+ */
+export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
+  const def = utype(s, u.type);
+
+  // ── 攻击 ──
+  const atkBase = def.atk;
+  const atkItems: StatItem[] = [];
+  let atk = atkBase;
+  const aura = auraBonus(s, u);
+  if (aura.atk !== 0) {
+    atk += aura.atk;
+    atkItems.push({ label: '指挥光环', delta: aura.atk });
+  }
+  // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
+  if (u.kills > 0) {
+    atk += u.kills;
+    atkItems.push({ label: '老兵不死 · 击杀成长', delta: u.kills });
+  }
+  const fear = fearPenalty(s, u);
+  if (fear !== 0) {
+    atk -= fear;
+    atkItems.push({ label: '被威吓', delta: -fear });
+  }
+  // 狂暴：乘法，作用在前面所有加减之后（和 computeDamage 的顺序一致）
+  if (hasAbility(def, 'berserk') && u.hp * 2 <= def.maxHp) {
+    const after = Math.round(atk * 1.5);
+    atkItems.push({ label: '狂暴 ×1.5', delta: after - atk });
+    atk = after;
+  }
+  // 哀兵必胜：先丢过城的一方全军 +10%，取整规则与 lastStandDamage 同源
+  if (s.firstCityLost === u.owner) {
+    const after = Math.round(atk * (1 + LAST_STAND_BONUS));
+    atkItems.push({ label: '哀兵必胜 +10%', delta: after - atk });
+    atk = after;
+  }
+
+  // ── 护甲（按当前所在格算）──
+  const armorBase = def.armor;
+  const armorItems: StatItem[] = [];
+  let armor = armorBase;
+  const tile = tileAt(s, u.x, u.y);
+  if (aura.armor !== 0) {
+    armor += aura.armor;
+    armorItems.push({ label: '守护光环', delta: aura.armor });
+  }
+  const terrainDef = tile ? CONFIG.terrainDef[tile.terrain] : 0;
+  if (terrainDef !== 0) {
+    armor += terrainDef;
+    armorItems.push({ label: `地形 · ${CONFIG.terrainName[tile!.terrain]}`, delta: terrainDef });
+  }
+  if (hasAbility(def, 'woodland') && tile && (tile.terrain === 'forest' || tile.terrain === 'hill')) {
+    armor += 3;
+    armorItems.push({ label: '林地之主', delta: 3 });
+  }
+  const curse = cursePenalty(u);
+  if (curse !== 0) {
+    armor -= curse;
+    armorItems.push({ label: '诅咒', delta: -curse });
+  }
+  const curseAura = curseAuraPenalty(s, u);
+  if (curseAura !== 0) {
+    armor -= curseAura;
+    armorItems.push({ label: '咒域', delta: -curseAura });
+  }
+  // 扩展改甲（堑壕战等）：一条钩子一行，标签用扩展名
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyArmor) {
+      const before = armor;
+      armor = e.hooks.modifyArmor({ state: s, attacker: u, defender: u, armor, isCounter: false });
+      if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
+    }
+  }
+
+  return {
+    atk,
+    atkBase,
+    atkItems,
+    armor,
+    armorBase,
+    armorItems,
+    move: movePower(s, u),
+    moveBase: def.move,
+  };
 }
 
 /** 算上扩展规则后的兵种造价 */
@@ -1131,6 +1248,24 @@ export function unitIncome(s: GameState, u: Unit): number {
     if (nearWater) income += CONFIG.riverTradeBonus;
   }
 
+  return income;
+}
+
+/**
+ * 经济单位**如果**站在 (x,y)，每回合能收多少。
+ *
+ * 给移动预览用：选中农民时，可达的每个格子都要印出"来这儿能收几金"。
+ * 不动真身——只临时借用坐标算完就还，整个过程同步、无副作用。
+ * (x,y) 必须是 reachableTiles 给出的可达格，落点合法性由调用方保证。
+ */
+export function unitIncomeAt(s: GameState, u: Unit, x: number, y: number): number {
+  const ox = u.x;
+  const oy = u.y;
+  u.x = x;
+  u.y = y;
+  const income = unitIncome(s, u);
+  u.x = ox;
+  u.y = oy;
   return income;
 }
 

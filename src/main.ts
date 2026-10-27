@@ -31,6 +31,7 @@ import {
   refreshMemory,
   siegeTargets,
   threatTiles,
+  unitIncomeAt,
   unitsOf,
   upgradeCostOf,
   utype,
@@ -390,6 +391,7 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     movePath: pendingMovePath ?? undefined,
+    incomeHints: computeIncomeHints(selected),
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -607,6 +609,28 @@ function clearSelection(): void {
   reach = [];
   targets = [];
   siege = [];
+}
+
+/**
+ * 经济单位的移动产出预览。
+ *
+ * 选中带收入的经济单位、且它还有可达格时，把每一格站上去之后的收入
+ * 都算出来（农民按地形、牧民按地形、临水一律 +河运）。
+ * 固定收入的单位也参与：河边那格会多 3 金，这正是要给人看的差别。
+ * reach 本身已经带上了"是谁的回合、动没动过"的口径，这里只补一条
+ * 收入判空——没收入的东西没必要在几十个格子上各印一个 +0。
+ */
+function computeIncomeHints(unit: Unit | undefined): Map<number, number> {
+  const hints = new Map<number, number>();
+  if (!unit || reach.length === 0) return hints;
+  const def = utype(state, unit.type);
+  if (!def.incomeByTerrain && !def.income) return hints;
+  for (const i of reach) {
+    const x = i % state.w;
+    const y = Math.floor(i / state.w);
+    hints.set(i, unitIncomeAt(state, unit, x, y));
+  }
+  return hints;
 }
 
 /** 建造者周围哪些空格可以盖东西（桥是唯一能盖在水上的） */

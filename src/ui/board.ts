@@ -35,6 +35,14 @@ export interface BoardUi {
    * 差的就是这一口气。
    */
   movePath?: Map<string, Array<{ x: number; y: number }>>;
+  /**
+   * 经济单位的移动产出预览：格索引 → 站上那格后的每回合收入。
+   *
+   * 只在"选中带收入的经济单位、且它还能动"时有值。数字印在可达格的
+   * 角上，玩家挪农民之前就能看到"去平原收 7、蹲河边多 3"——
+   * 收入本来就是按格子算的，不把数字放回格子上，这个机制就只活在说明书里。
+   */
+  incomeHints?: Map<number, number>;
 }
 
 const TERRAIN_CLASS: Record<string, string> = {
@@ -123,7 +131,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       if (placeSet.has(i)) cls.push('placeable');
       if (s.fog && !visibleSet.has(i)) cls.push('out');
 
-      tileParts.push(`<div class="${cls.join(' ')}" data-x="${x}" data-y="${y}"></div>`);
+      // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
+      const hint = ui.incomeHints?.get(i);
+      const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
+      tileParts.push(`<div class="${cls.join(' ')}" data-x="${x}" data-y="${y}">${badge}</div>`);
     }
   }
   tilesEl.innerHTML = tileParts.join('');

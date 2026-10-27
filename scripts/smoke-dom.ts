@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { effectiveStats, reachableTiles, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
 import { manualBooks } from '../src/ui/books.ts';
@@ -236,6 +237,125 @@ check('选中农民会显示产出与临水加成', () => {
   assert.ok(html.includes('相邻水域'), '应该显示临水加成');
 });
 
+check('经济单位选中后，可达格上印出每格产出数字', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    4242,
+  );
+  st.current = 'A';
+  // 城边找两块空地：一块放农民，其余当可达格
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 1; y < st.h - 1 && !spot; y++) {
+    for (let x = 1; x < st.w - 1 && !spot; x++) {
+      const t = st.tiles[y * st.w + x];
+      if (!t || (t.terrain !== 'plain' && t.terrain !== 'hill') || t.cityId) continue;
+      if (st.units.some((u) => u.x === x && u.y === y)) continue;
+      spot = { x, y };
+    }
+  }
+  assert.ok(spot, '应该有能站农民的空地');
+
+  const farmer: Unit = {
+    id: 'farmer-hint',
+    type: 'farmer',
+    owner: 'A',
+    x: spot.x,
+    y: spot.y,
+    hp: st.unitTypes.farmer?.maxHp ?? 16,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(farmer);
+
+  const reach = Array.from(reachableTiles(st, farmer).keys());
+  assert.ok(reach.length > 0, '农民应该有可达格');
+  const hints = new Map<number, number>();
+  for (const i of reach) {
+    hints.set(i, unitIncomeAt(st, farmer, i % st.w, Math.floor(i / st.w)));
+  }
+
+  const host = doc.createElement('div');
+  host.className = 'board';
+  renderBoard(host, playerView(st, 'A'), {
+    selectedId: farmer.id,
+    reach,
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+    incomeHints: hints,
+  });
+  try {
+    const badges = host.querySelectorAll('.tile-income');
+    assert.equal(badges.length, reach.length, '每个可达格都该有一个产出数字');
+    const text = badges[0]?.textContent ?? '';
+    assert.ok(/^\+\d+$/.test(text), `产出数字应该是 +N，实际是「${text}」`);
+    // 数字必须和真相源一致：随便挑一格对一下账
+    const firstIdx = reach[0]!;
+    const shown = Number((badges[0]?.textContent ?? '+0').slice(1));
+    assert.equal(shown, hints.get(firstIdx), '格子上印的数字必须和 unitIncomeAt 同源');
+  } finally {
+    host.remove();
+  }
+});
+
+check('详情面板显示的是算上修正的真实数值', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['veterans'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    4242,
+  );
+  st.current = 'A';
+  const spot = { x: 5, y: 5 };
+  const vet: Unit = {
+    id: 'vet1',
+    type: 'militia',
+    owner: 'A',
+    x: spot.x,
+    y: spot.y,
+    hp: st.unitTypes.militia?.maxHp ?? 28,
+    kills: 2,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(vet);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: vet,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const html = host.innerHTML;
+  const base = st.unitTypes.militia?.atk ?? 0;
+  assert.ok(html.includes('老兵不死'), '修正明细里要写出老兵不死');
+  assert.ok(html.includes(`（攻基础 ${base}）`), `攻击力后面应该点名标出基础值 ${base}`);
+  assert.ok(
+    host.querySelector('.stat-mods .stat-mod b.up'),
+    '有加成时应该出现带 up 样式的修正行',
+  );
+  const eff = effectiveStats(st, vet);
+  assert.ok(html.includes(`<b>${eff.atk}`) || html.includes(`${eff.atk}（基础`), '面板数字要等于 effectiveStats');
+});
+
 console.log('\n城市与产兵');
 
 check('点自己空城会打开产兵面板', () => {
@@ -260,6 +380,14 @@ check('产兵面板按战斗 / 经济 / 建造分组', () => {
   assert.ok(html.includes('经济单位'), '应该有经济单位分组');
   assert.ok(html.includes('建造单位'), '应该有建造单位分组');
   assert.ok(html.includes('平原 +') || html.includes('丘陵 +'), '经济单位应该标注地形产出');
+});
+
+check('产兵按钮上写着血量', () => {
+  // 攻甲移射都在按钮上，唯独血量缺席——新兵能顶几刀，是按下生产前的关键信息
+  const btns = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-btn'));
+  assert.ok(btns.length > 0, '产兵面板应该开着');
+  const withHp = btns.filter((b) => /血 \d+/.test(b.textContent ?? ''));
+  assert.equal(withHp.length, btns.length, '每个产兵按钮都该带血量');
 });
 
 check('城市里不再直接产建筑', () => {

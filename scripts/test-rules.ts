@@ -58,6 +58,7 @@ import {
   distance,
   distToCity,
   effectiveRange,
+  effectiveStats,
   eggSpots,
   isHiddenFrom,
   magicDamageOf,
@@ -73,6 +74,7 @@ import {
   threatTiles,
   unitAt,
   unitIncome,
+  unitIncomeAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
@@ -5984,6 +5986,106 @@ test('沙盒里两支军队会真的打起来，而且能打到一方全灭', ()
     combat('A').length === 0 || combat('B').length === 0,
     `40 回合还没分出胜负（A ${combat('A').length} 兵 / B ${combat('B').length} 兵），沙盒打不起来`,
   );
+});
+
+// ── 面板上的真实数值 / 移动产出预览 ──────────────────────────────────
+//
+// 这两组函数是"界面给人看的数字"的真相源：详情面板的攻击/护甲/移动、
+// 经济单位移动预览里的每格产出，都必须和结算同源。所以它们在这里被
+// 当成规则来测——面板错一个数，玩家对不上账，比没数字更糟。
+console.log('\n面板上的真实数值');
+
+/** 干燥的指定地形（四邻没有水，免得河运加成把期望值搅乱） */
+function dryTiles(s: GameState, terrain: 'plain' | 'forest' | 'hill'): Array<{ x: number; y: number }> {
+  const found: Array<{ x: number; y: number }> = [];
+  const dirs: ReadonlyArray<readonly [number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  for (let y = 1; y < s.h - 1; y++) {
+    for (let x = 1; x < s.w - 1; x++) {
+      const t = s.tiles[y * s.w + x]!;
+      if (t.terrain !== terrain || t.cityId) continue;
+      const wet = dirs.some(([dx, dy]) => {
+        const n = s.tiles[(y + dy) * s.w + (x + dx)]!;
+        return n.terrain === 'water' || n.terrain === 'bridge';
+      });
+      if (!wet) found.push({ x, y });
+    }
+  }
+  return found;
+}
+
+test('unitIncomeAt：农民站平原收 7、站森林收 3，算完不挪动真身', () => {
+  const s = fresh();
+  clearDecor(s);
+  const spots = dryTiles(s, 'plain');
+  const plain = spots[0]!;
+  const forest = spots[1]!;
+  s.tiles[forest.y * s.w + forest.x]!.terrain = 'forest';
+  const farmer = place2(s, 'A', 'farmer', plain.x, plain.y);
+
+  assert.equal(unitIncomeAt(s, farmer, plain.x, plain.y), 7, '平原该收 7');
+  assert.equal(unitIncomeAt(s, farmer, forest.x, forest.y), 3, '森林该收 3');
+  assert.equal(farmer.x, plain.x, '预览不该把单位真的挪走');
+  assert.equal(farmer.y, plain.y, '预览不该把单位真的挪走');
+});
+
+test('effectiveStats：老兵不死的击杀成长进了真实攻击力', () => {
+  const s = arena(fresh({ expansionIds: ['veterans'] }));
+  const u = place2(s, 'A', 'militia', 6, 6);
+  const base = utype(s, 'militia').atk;
+  u.kills = 3;
+  const eff = effectiveStats(s, u);
+  assert.equal(eff.atkBase, base);
+  assert.equal(eff.atk, base + 3, '3 次击杀该是 +3 攻击');
+  assert.ok(
+    eff.atkItems.some((it) => it.label.includes('老兵不死') && it.delta === 3),
+    '修正明细里要有老兵不死这一条',
+  );
+});
+
+test('effectiveStats：指挥光环来自相邻友军，面板上单独列一条', () => {
+  const s = arena(fresh({ expansionIds: ['pack-antiquity'] }));
+  const mate = place2(s, 'A', 'militia', 6, 6);
+  place2(s, 'A', 'anc_legionary', 7, 6);
+  const eff = effectiveStats(s, mate);
+  assert.equal(eff.atk, utype(s, 'militia').atk + 2);
+  assert.ok(eff.atkItems.some((it) => it.label === '指挥光环' && it.delta === 2));
+});
+
+test('effectiveStats：哀兵必胜让先丢城的一方全军 +10%', () => {
+  const s = arena(fresh({ expansionIds: ['last-stand'] }));
+  const u = place2(s, 'A', 'militia', 6, 6);
+  const base = utype(s, 'militia').atk;
+  s.firstCityLost = 'A';
+  const eff = effectiveStats(s, u);
+  assert.equal(eff.atk, Math.round(base * 1.1));
+  assert.ok(eff.atkItems.some((it) => it.label.includes('哀兵必胜')));
+});
+
+test('effectiveStats：堑壕战让林地多 2 甲，并用扩展名标注来源', () => {
+  const s = arena(fresh({ expansionIds: ['trench'] }));
+  const spot = { x: 6, y: 6 };
+  s.tiles[spot.y * s.w + spot.x]!.terrain = 'forest';
+  const u = place2(s, 'A', 'militia', spot.x, spot.y);
+  const def = utype(s, 'militia');
+  const eff = effectiveStats(s, u);
+  assert.equal(eff.armor, def.armor + CONFIG.terrainDef.forest + 2);
+  assert.ok(eff.armorItems.some((it) => it.label === '堑壕战' && it.delta === 2));
+});
+
+test('effectiveStats：狂暴是乘法，半血 ×1.5', () => {
+  const s = arena(fresh());
+  grantAbility(s, 'militia', 'berserk');
+  const u = place2(s, 'A', 'militia', 6, 6);
+  const def = utype(s, 'militia');
+  u.hp = Math.floor(def.maxHp / 2);
+  const eff = effectiveStats(s, u);
+  assert.equal(eff.atk, Math.round(def.atk * 1.5));
+  assert.ok(eff.atkItems.some((it) => it.label.includes('狂暴')));
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
