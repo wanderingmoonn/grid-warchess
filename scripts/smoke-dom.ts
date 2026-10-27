@@ -1612,7 +1612,9 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
 
   const phoenix = put('A', 'phoenix', 5, 5);
   phoenix.hp = 1; // 一刀就倒，省掉十几回合的对砍
-  put('B', 'hydra', 5, 4); // 145 血，砍死 1 血的凤凰之后自己还站得住
+  // 得用**带射程的地面兵**：地面打空中按距离 +1（见 rules 的 strikeDistance），
+  // 九头蛇那种射程 1 的近战现在根本够不着凤凰，这个局面就永远开不了打。
+  put('B', 'archer', 5, 4);
   st.current = 'B'; // 让 B 先动手：这样蛋是在 B 的回合里留下的
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {

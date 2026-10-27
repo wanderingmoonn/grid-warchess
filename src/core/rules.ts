@@ -235,8 +235,26 @@ export function effectiveRange(s: GameState, u: Unit): number {
   return u.heroBuff?.range ?? def.range;
 }
 
-/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
-export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+/**
+ * 攻击距离：**地面打空中时 +1**。
+ *
+ * 站在地上的兵够不着头顶那一层，要"往上多伸一格"才够得着。所以：
+ *   · 射程 1 的步兵打不到**隔壁那格**的飞行单位；
+ *   · 射程 2 的弓手只在"零到一格"内打得中，两格开外就够不着了；
+ *   · 但飞行单位"压着打"（同一格）时距离算 0+1=1，脚下的兵还是能还手——
+ *     这是「掠空」本来就有的交易：贴脸打会被反击，隔着一格才是安全的。
+ * 空中打地面、空中打空中、地面打地面都按正常距离算。
+ *
+ * 攻击判定、反击判定、以及所有"隔几格才打折/才加成"的能力都读它，
+ * 免得出现"射程算得到、伤害却按旧距离打折"这种两套账。
+ */
+export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): number {
+  const d = distance(attacker, defender);
+  if (!isAirborne(s, attacker) && isAirborne(s, defender)) return d + 1;
+  return d;
+}
+
+/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
   if (outOfAmmo(s, attacker)) return 0;
   const def = utype(s, attacker.type);
   const magic = def.magicAtk ?? 0;
@@ -880,10 +898,13 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   const range = effectiveRange(s, attacker);
-  const d = distance(attacker, target);
+  // 地面打空中要多算一格（见 strikeDistance）；同格判定仍然看"真实相对位置"，
+  // 否则"空中压着地面"这个免费的第一刀会被 +1 顺手吃掉
+  const real = distance(attacker, target);
+  const d = strikeDistance(s, attacker, target);
   if (d > range) return false;
   // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
-  if (d === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
+  if (real === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
   if (utype(s, target.type).bridges && d > 1) return false;
   return true;
 }
@@ -970,7 +991,7 @@ export function computeDamage(
 
   // 追猎：和目标每拉开 1 格 +2（最多 +6）。它靠的是"咬住"，不是对捅。
   if (!isCounter && hasAbility(at, 'tracker')) {
-    dmg += Math.min(6, Math.max(0, (distance(attacker, defender) - 1) * 2));
+    dmg += Math.min(6, Math.max(0, (strikeDistance(s, attacker, defender) - 1) * 2));
   }
 
   // 狂暴：半血以下是另一个兵。用乘法而不是加法，因为它该跟着攻击力走——
@@ -996,16 +1017,16 @@ export function computeDamage(
   // 矮人王的「投斧」不再靠这条能力，而是走 heroBuff：技能期间射程拉到 3，
   // 同样只给六成。两者共用同一个折扣，是因为它们说的是同一件事——
   // "这一下是扔出去的，不是劈下去的"。
-  if (hasAbility(at, 'versatile') && distance(attacker, defender) >= 2) {
+  if (hasAbility(at, 'versatile') && strikeDistance(s, attacker, defender) >= 2) {
     dmg = Math.round(dmg * 0.6);
   }
-  if (attacker.heroBuff?.rangeMul !== undefined && distance(attacker, defender) >= 2) {
+  if (attacker.heroBuff?.rangeMul !== undefined && strikeDistance(s, attacker, defender) >= 2) {
     dmg = Math.round(dmg * attacker.heroBuff.rangeMul);
   }
 
   // 游骑（半人马）：射得远不算本事，射的时候没人拿刀架在脖子上才算。
   // 只算远程——贴脸那一箭不享受，也不吃惩罚，否则它就变成"永远 −3"的兵。
-  if (hasAbility(at, 'kite') && distance(attacker, defender) >= 2) {
+  if (hasAbility(at, 'kite') && strikeDistance(s, attacker, defender) >= 2) {
     const pinned = s.units.some(
       (u) => u.id !== attacker.id && u.owner !== attacker.owner && u.hp > 0 && distance(u, attacker) === 1,
     );
@@ -1093,7 +1114,7 @@ export function previewAttack(
 
   const survives = hp > 0;
   const range = utype(s, defender.type).range;
-  const counter = survives && distance(attacker, defender) <= range;
+  const counter = survives && strikeDistance(s, defender, attacker) <= range;
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
@@ -1616,7 +1637,11 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
-  const dist = distance(attacker, defender);
+  // 反击判定也要按"还手的那个人"来算距离：地面兵够不着头顶的飞行单位，
+  // 就不能在被飞行单位贴脸打的时候原地还手。这里必须换成
+  // strikeDistance(defender, attacker)——写成攻击方的距离，等于只限制了
+  // 进攻、放过了防守，这条规则就形同虚设。
+  const counterReach = strikeDistance(s, defender, attacker);
   if (!canStrike(s, attacker, defender)) {
     return {
       ok: false,
@@ -1648,7 +1673,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   const noCounter = hasAbility(atkDef, 'first-strike');
   let counterDmg = 0;
-  if (!noCounter && defender.hp > 0 && dist <= effectiveRange(s, defender)) {
+  if (!noCounter && defender.hp > 0 && counterReach <= effectiveRange(s, defender)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
   }

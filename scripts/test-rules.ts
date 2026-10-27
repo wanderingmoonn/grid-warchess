@@ -71,6 +71,7 @@ import {
   rebuildCost,
   recruitCost,
   refreshMemory,
+  strikeDistance,
   threatTiles,
   unitAt,
   unitIncome,
@@ -6226,6 +6227,61 @@ test('至尊法师加强：护甲 6 / 射程 5 / 视野 8，同属性伤害减�
   const other = computeDamage(s, fireAtk, mage);
   assert.ok(other > same, `换个属性打就该更疼：同属性 ${same}，异属性 ${other}`);
   assert.equal(same, Math.round(other * 0.5), '同属性只吃一半');
+});
+
+test('新英雄数值微调：刺客视野 7、牢大 3/4/2、大史莱姆甲 2', () => {
+  const defs = fresh({ expansionIds: FANTASY }).unitTypes;
+  assert.equal(defs['assassin-master']!.vision, 7, '刺客大师视野 5 → 7');
+  assert.equal(defs['slime-boss']!.armor, 3, '牢大甲 2 → 3');
+  assert.equal(defs['slime-boss']!.vision, 4, '牢大视野 3 → 4');
+  assert.equal(defs['slime-boss']!.range, 2, '牢大射程 1 → 2');
+  assert.equal(defs['slime-giant']!.armor, 2, '大史莱姆甲 1 → 2');
+});
+
+test('地面打空中按距离 +1，空中打地面照常', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const bird = place2(s, 'A', 'phoenix', 6, 6); // 掠空单位
+  const foot = place2(s, 'B', 'militia', 6, 7); // 射程 1
+
+  assert.equal(strikeDistance(s, foot, bird), 2, '地面打空中：1 → 2');
+  assert.equal(strikeDistance(s, bird, foot), 1, '空中打地面不额外加距离');
+  assert.equal(canStrike(s, foot, bird), false, '射程 1 的步兵够不着隔壁那格的飞行单位');
+  assert.equal(canStrike(s, bird, foot), true, '飞行单位打地面照常');
+
+  // 射程 2 的戟兵：隔壁算 2，刚好够得着；隔一格算 3，够不着
+  const hal = place2(s, 'B', 'halberdier', 5, 6);
+  assert.equal(canStrike(s, hal, bird), true, '射程 2 够得着隔壁的飞行单位（1+1=2）');
+  const halFar = place2(s, 'B', 'halberdier', 6, 8);
+  assert.equal(canStrike(s, halFar, bird), false, '隔一格就打不到了（2+1=3 > 2）');
+
+  // 牢大射程 2，这次加强正好让它能还手飞行单位
+  const boss = place2(s, 'B', 'slime-boss', 5, 6);
+  assert.equal(canStrike(s, boss, bird), true, '射程 2 的牢大能打飞行单位');
+});
+
+test('地面单位打不到空中，也就换不了手', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const bird = place2(s, 'A', 'phoenix', 6, 6);
+  // 树人够硬，挨一下不死，才看得清"没有反击"这件事
+  const tank = place2(s, 'B', 'treant', 6, 7);
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: bird.id, targetId: tank.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === bird.id)!;
+  assert.equal(after.hp, s.unitTypes.phoenix!.maxHp, '脚下的树人够不着空中的凤凰，不该有反击');
+  const hurt = r.state.units.find((u) => u.id === tank.id);
+  assert.ok(hurt, '树人应该还活着');
+  assert.ok(hurt!.hp < s.unitTypes.treant!.maxHp, '但凤凰这一下照样打实了');
+});
+
+test('压着打仍然互相能还手：同格距离按 0+1=1 算', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const bird = place2(s, 'A', 'phoenix', 6, 6);
+  // 地面单位站在同一格（掠空层和地面层可以叠）
+  const foot = stackOn(s, 'B', 'swordsman', 6, 6);
+  assert.equal(strikeDistance(s, foot, bird), 1, '同格是 0+1');
+  assert.equal(canStrike(s, foot, bird), true, '射程 1 也能打头顶那个');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

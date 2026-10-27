@@ -339,7 +339,7 @@ CI 会跑 `npm run manual` 然后 `git diff --exit-code 'public/manual*.html'`�
 TypeScript，不需要编译），UI 冒烟在 `scripts/smoke-dom.ts`：
 
 ```bash
-npm run test:rules   # 267 项
+npm run test:rules   # 271 项
 npm run test:ui      # 92 项
 ```
 
@@ -393,7 +393,7 @@ test('丰收祭：开了多收 10', () => {
 - [ ] 有前置依赖的写了 `requires`；大型扩展标了 `scale: 'large'`
 - [ ] `test-rules.ts` 里加了至少一条守门测试（开 vs 不开对比最稳）
 - [ ] `npm run manual` 重新生成，`public/manual*.html` 的更新已提交
-- [ ] `npm run test:rules` 全绿（267+）
+- [ ] `npm run test:rules` 全绿（271+）
 - [ ] `npm run test:ui` 全绿（92+）
 - [ ] `npm run build`（含 `tsc --noEmit`）通过
 - [ ] 开局界面勾上它打一局，看看战报和手感
@@ -414,6 +414,6 @@ test('丰收祭：开了多收 10', () => {
 
 ---
 
-*文档对应代码版本：`EXPANSIONS` 23 个扩展、规则测试 267 项、UI 测试 92 项。
+*文档对应代码版本：`EXPANSIONS` 23 个扩展、规则测试 271 项、UI 测试 92 项。
 接口有变动时，以 `src/core/expansions.ts` 和 `src/core/types.ts` 的注释为准——
 那两处的注释就是这套系统的第一手文档。*

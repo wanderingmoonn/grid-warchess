@@ -1270,7 +1270,8 @@ const HERO_UNITS: UnitTypeDef[] = [
     armor: 3,
     maxHp: 78,
     range: 1,
-    vision: 5,
+    // 视野 5 → 7：刺客要挑"从哪边绕过去"，看不清两格外的援兵就挑不了
+    vision: 7,
     hero: true,
     unlockCost: 180,
     abilities: ['kill-rush'],
@@ -1299,10 +1300,12 @@ const HERO_UNITS: UnitTypeDef[] = [
     cost: 520,
     move: 3,
     atk: 32,
-    armor: 2,
+    // 甲 2 → 3、射程 1 → 2、视野 3 → 4：血厚甲薄的肉块太容易被"隔着打"白嫖，
+    // 射程 2 让它能回手（也意味着它能打到飞行单位了，见 rules 的 strikeDistance）
+    armor: 3,
     maxHp: 200,
-    range: 1,
-    vision: 3,
+    range: 2,
+    vision: 4,
     hero: true,
     unlockCost: 200,
     weak: { fire: 1.5 },
@@ -1336,7 +1339,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     cost: 130,
     move: 5,
     atk: 14,
-    armor: 1,
+    // 甲 1 → 2：碎片本来靠数量活着，但 1 甲连民兵都能两下清掉，
+    // 裂开等于把血直接送出去
+    armor: 2,
     maxHp: 50,
     range: 1,
     vision: 3,
