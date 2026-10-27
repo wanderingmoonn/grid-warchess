@@ -121,15 +121,43 @@ export function aiNoise(s: GameState, salt = 0): number {
 }
 
 /**
+ * 三种战术。
+ *
+ * 原来的 AI 只有一种性格：能打就打、能推就推，能量化的差别只有一个 appetite。
+ * 于是整局看下来，它的开局、出兵、推进节奏几乎一模一样。战棋有意思的地方是
+ * "对手这一局想干什么"，所以这里给它三种**真正不同**的打法：
+ *
+ *   · rush（速攻压制）：趁身价不落下风、对面还没成型，把兵力压到最近的那座城，
+ *     用攻城把优势换成一座城。它几乎不为经济留预算。
+ *   · harass（骚扰消耗）：正面打不穿时不硬碰，用机动单位和远程去切经济、切落单、
+ *     切没人守的城。不换命、少围城，靠"对面越来越穷"赢。
+ *   · boom（弃城爆发）：正面明显不如人、又有一座真的守不住的城时，主动放掉它——
+ *     不在那儿填兵，把兵力和钱换成经济单位、时代升级和英雄。三种里唯一
+ *     "主动亏一步"的打法，赚的是三四个回合后的代差。
+ */
+export type AiDoctrine = 'rush' | 'harass' | 'boom';
+
+
+/**
  * 这局 AI 的性格：同一局里固定，不同种子不同。
  *
  * appetite 是"推进欲望"——0.85 保守、1.2 好战；
- * 兵种口味决定它偏爱的两个兵种，让它这局的部队组成和别人不一样。
+ * 兵种口味决定它偏爱的两个兵种，让它这局的部队组成和别人不一样；
+ * instinct 是战术底色：局势没有明确信号时它天然偏向哪一种，以及这种偏向有多强。
+ *
+ * 底色不是为了"每局固定一种打法"——它是**迟滞**的替代品。AI 的决策必须是
+ * 局面的纯函数（不能偷偷记"我上回合是什么战术"，否则存档一读就前后对不上），
+ * 所以"不会来回横跳"这件事只能靠两样东西：一是这个从种子长出来的底色，
+ * 二是下面那些宽阔的斜坡（ramp）——局势得明显偏向另一边，权重才会翻过去。
  */
 export interface AiTraits {
   appetite: number;
   /** 这局偏爱的兵种 id（会得到额外权重） */
   favorites: string[];
+  /** 战术底色 */
+  instinct: AiDoctrine;
+  /** 底色强度（0.12~0.30）：越强，越需要更强的局势证据才拨得动 */
+  instinctStrength: number;
 }
 
 export function aiTraits(s: GameState): AiTraits {
@@ -142,7 +170,381 @@ export function aiTraits(s: GameState): AiTraits {
     favorites.push(ids[h % ids.length] as string);
     favorites.push(ids[(h >>> 11) % ids.length] as string);
   }
-  return { appetite, favorites };
+  const instincts: AiDoctrine[] = ['rush', 'harass', 'boom'];
+  const d = h >>> 5;
+  const instinct = instincts[d % instincts.length] as AiDoctrine;
+  // 底色只是压舱石，不能当方向盘：0.30 的底色叠在 1.7 次方锐化上，
+  // 会把任何局势信号都压成噪声，AI 就变成"不管你怎么打，它都按性格来"。
+  const instinctStrength = 0.10 + (((d >>> 7) % 100) / 100) * 0.12;
+  return { appetite, favorites, instinct, instinctStrength };
+}
+
+/* ---------------- 战术倾向：这一回合该打哪一种 ---------------- */
+
+/** 0~1 夹紧 */
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * 线性斜坡：x ≤ a 得 0，x ≥ b 得 1，中间线性。
+ *
+ * 三种战术的所有判据都用它，而不是 `if (x > 阈值)`。理由是"切换自然"这件事
+ * 只能靠渐变实现：硬阈值会让同一支部队在两个相邻回合里做出完全相反的决定
+ * （第 11 回合全军压上、第 12 回合全军回撤），看起来像精神分裂。
+ */
+function ramp(x: number, a: number, b: number): number {
+  if (b === a) return x >= b ? 1 : 0;
+  return clamp01((x - a) / (b - a));
+}
+
+/**
+ * 把 x 映射到 [-1, 1]：a 以下是 -1，b 以上是 +1，中间线性。
+ *
+ * 和 ramp 的区别是**中点**。ramp 的 0 落在 a 上，说的是"这个量从无到有"；
+ * bipolar 的 0 落在 a、b 中间，说的是"这个量比中位高还是低"。
+ * 战术证据要的是后者——见 aiMood 里那段注释。
+ */
+function bipolar(x: number, a: number, b: number): number {
+  if (b === a) return x >= b ? 1 : -1;
+  return clamp01((x - a) / (b - a)) * 2 - 1;
+}
+
+/** 一组 [权重, 信号] 的加权平均，结果留在 [-1, 1]。没有信号就是 0（中立）。 */
+function blend(pairs: Array<[number, number]>): number {
+  let num = 0;
+  let den = 0;
+  for (const [w, v] of pairs) {
+    num += w * v;
+    den += w;
+  }
+  return den > 0 ? num / den : 0;
+}
+
+/** 局势指标：全部来自视野内的局面，不带任何隐藏状态 */
+export interface AiMoodMetrics {
+  myVal: number;
+  foeVal: number;
+  /** 身价比：我 / 对面（对面为空时按 60 金折算，避免开局除零放大） */
+  power: number;
+  myIncome: number;
+  foeIncome: number;
+  army: number;
+  /** 高机动突击单位数（骑兵、突击队这一档） */
+  raiders: number;
+  /** 真远程数（射程 ≥ 3） */
+  ranged: number;
+  /** 对面的机动/远程数：骚扰看的是"我比他灵活多少"，不是"我有多少" */
+  foeRaiders: number;
+  foeRanged: number;
+  earners: number;
+  /** 看得见的敌方经济/工程单位数：骚扰的目标就在这儿 */
+  foeEco: number;
+  era: number;
+  foeEra: number;
+  cities: number;
+  /** 我军到最近敌城的距离（没有敌城 = 99） */
+  focusDist: number;
+  /** 敌方战斗单位压到我家城下的最近距离（没有 = 99） */
+  gate: number;
+  /** 最近一座守不住的城的危险度（0~1，没有 = 0） */
+  doomed: number;
+  /** 时代升级/英雄"够不够得着"（0~1）：boom 的兑现目标 */
+  payoff: number;
+}
+
+export interface AiMood {
+  lead: AiDoctrine;
+  weight: Record<AiDoctrine, number>;
+  /**
+   * 加成强度：把"略微占优"当 0，只让"明确主导"出手。
+   *
+   * 三种权重平均就是三分之一。某一项刚到 0.38 的时候它只是略微领先，这时候
+   * 就去改所有评分，会把局面里本来咬得很紧的选择（差几分的那种）整片压平——
+   * 实测直接把"十二个回合里有三种选择"压成了两种，AI 反而更单调了。
+   * 所以先减掉三分之一再放大三倍：≤0.33 全是 0，≥0.66 封顶 1，中间连续过渡。
+   * 权重和恒为 1，这条规则顺带保证"同时只有一方在使劲"。
+   */
+  drive: Record<AiDoctrine, number>;
+  /** 原始证据（未锐化、未加底色）：测试与复盘只看这一层 */
+  evidence: Record<AiDoctrine, number>;
+  /** 本回合的主攻方向（三种战术共用） */
+  focusCityId: string | null;
+  /** boom 主导时才非空：这一回合准备放掉的城 */
+  abandonedCityId: string | null;
+  metrics: AiMoodMetrics;
+}
+
+const DOCTRINES: AiDoctrine[] = ['rush', 'harass', 'boom'];
+
+/**
+ * 弃城的权重门槛。
+ *
+ * 0.42 是三次对照实验里唯一没被推翻的数：更低（0.36）会让 AI 在"只是略微想攒钱"
+ * 的时候就把城送掉；更高（0.55）则整套弃城战术几乎不再触发，等于白写。
+ */
+const ABANDON_AT = 0.42;
+
+/**
+ * 最危险的一座自家城：墙不满、敌人在门口。
+ *
+ * 它有两个用处：一是 boom 的"值得弃吗"判据，二是真的选出要放掉的那一座。
+ * 只认**已经打到门口**(≤4 格)的城——离得远的不叫"守不住"，叫"还没打过来"。
+ */
+function doomedCity(
+  myCities: City[],
+  foeCombat: Unit[],
+): { id: string; danger: number; core: boolean } | null {
+  if (myCities.length === 0 || foeCombat.length === 0) return null;
+  const maxEra = Math.max(...myCities.map((c) => c.era));
+  // 唯一能产当代兵的那座城是"核心"，放了就等于把未来也一起放掉
+  const cores = myCities.filter((c) => c.era >= maxEra).length;
+  let best: { id: string; danger: number; core: boolean } | null = null;
+  for (const c of myCities) {
+    const nearest = foeCombat.reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
+    if (!Number.isFinite(nearest) || nearest > 4) continue;
+    const danger =
+      0.6 * ramp(7 - nearest, 1, 6) + 0.4 * (1 - c.hp / Math.max(1, c.maxHp));
+    const core = c.era >= maxEra && cores <= 1;
+    if (!best || danger > best.danger) best = { id: c.id, danger, core };
+  }
+  return best;
+}
+
+/**
+ * 这一回合的战术倾向。
+ *
+ * 纯函数：只吃局面（调用方给的是 playerView 的结果），不碰 Math.random，
+ * 也不记"上回合我是谁"。同一局面永远同一个答案——存档、回放、双 AI 观战都靠这条。
+ *
+ * 输出不是一个标签，而是一组连续权重。所有下游评分都按权重**加成分数**，
+ * 而不是 `if (lead === 'rush')` 地分叉：这样两种战术交接的那一两个回合，
+ * 部队会同时带着两边的心思（比如一边收拢一边还在摸经济），过渡才不突兀。
+ */
+export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
+  const me = s.current;
+  const foeId = other(me);
+  const my = unitsOf(s, me);
+  const foe = unitsOf(s, foeId);
+  const def = (u: Unit) => utype(s, u.type);
+  const value = (us: Unit[]): number =>
+    us.reduce((n, u) => {
+      const d = def(u);
+      return d.category === 'combat' ? n + (d.cost ?? 0) : n;
+    }, 0);
+
+  const myVal = value(my);
+  const foeVal = value(foe);
+  // 对面清空时不能拿 0 做分母：开局两边都只有两个兵，比值会剧烈抖动
+  const power = myVal / Math.max(60, foeVal);
+
+  const myCombat = my.filter((u) => def(u).category === 'combat');
+  const foeCombat = foe.filter((u) => def(u).category === 'combat');
+  const myCities = citiesOf(s, me).filter((c) => !c.ruined);
+  const foeCities = citiesOf(s, foeId).filter((c) => !c.ruined);
+  const army = myCombat.length;
+  const raiders = myCombat.filter((u) => isRaider(def(u))).length;
+  const ranged = myCombat.filter((u) => (def(u).range ?? 1) >= 3).length;
+  const foeRaiders = foeCombat.filter((u) => isRaider(def(u))).length;
+  const foeRanged = foeCombat.filter((u) => (def(u).range ?? 1) >= 3).length;
+  const earners = my.filter((u) => def(u).category === 'economy').length;
+  const foeEco = foe.filter((u) => {
+    const c = def(u).category;
+    return c === 'economy' || c === 'builder';
+  }).length;
+
+  const myIncome = Math.max(0, incomeResOf(s, me).gold ?? 0);
+  const foeIncome = Math.max(0, incomeResOf(s, foeId).gold ?? 0);
+  const era = myCities.length > 0 ? Math.max(...myCities.map((c) => c.era)) : 1;
+  const foeEra = foeCities.length > 0 ? Math.max(...foeCities.map((c) => c.era)) : era;
+
+  // 主攻方向：血最少的敌城，同血取离我军最近的。
+  //
+  // 试过把它改成"最划算的那座"（走过去几步 + 城墙剩多少 + 城里几个守军 一起算），
+  // 想法是别追着地图另一头的残城跑。实测是**倒退**：同一批种子上胜率从 58.8%
+  // 掉到 43.8%。原因是血最少的那座通常就是"已经在挨打的那座"，换个目标等于
+  // 把围攻到一半的城丢下——残城会回血，回满就白打了。所以这条保持原样。
+  //
+  // （这段原来在 aiNextAction 里，移到 aiMood 是为了让"攻城价值"和"战术倾向"
+  //  看同一个目标——两边各算一次的话，boom 收兵回防了、打分还在往老方向推。）
+  const nearestOwn = (c: City): number =>
+    my.reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
+  const focusCity = foeCities.reduce<City | null>((best, c) => {
+    if (!best) return c;
+    if (c.hp !== best.hp) return c.hp < best.hp ? c : best;
+    return nearestOwn(c) < nearestOwn(best) ? c : best;
+  }, null);
+
+  let focusDist = Infinity;
+  for (const c of foeCities) {
+    for (const u of myCombat) focusDist = Math.min(focusDist, distToCity(u, c));
+  }
+  let gate = Infinity;
+  for (const u of foeCombat) {
+    for (const c of myCities) gate = Math.min(gate, distToCity(u, c));
+  }
+  const doom = doomedCity(myCities, foeCombat);
+  const doomedEv = doom ? doom.danger : 0;
+
+  // 兑现目标够不够得着：一次时代升级，或者一个英雄。
+  // 攒不到头的"大计划"不是计划，是把钱冻住的借口——所以这里要打折看。
+  const gold = s.players[me].gold;
+  const inc = Math.max(1, myIncome);
+  const eraCosts = myCities
+    .map((c) => upgradeCostOf(s, c))
+    .filter((x): x is number => x !== null);
+  const eraReach =
+    eraCosts.length > 0
+      ? clamp01((gold + inc * 5) / Math.max(1, Math.min(...eraCosts)))
+      : 0;
+  const heroOwned = my.some((u) => def(u).hero);
+  const heroCost = heroOwned
+    ? null
+    : (Object.values(s.unitTypes)
+        .filter((d) => d.hero && d.category === 'combat' && d.era <= era)
+        .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0] ?? null);
+  const heroReach = heroCost
+    ? clamp01((gold + inc * 6) / Math.max(1, (heroCost.cost ?? 0) + (heroCost.unlockCost ?? 0)))
+    : 0;
+  const payoff = Math.max(eraReach, heroReach);
+
+  // ── 证据 ──
+  //
+  // 每条证据都是"对中位局面的偏离"，不是"绝对水平"。
+  //
+  // 第一版写的是"若干条斜坡加权平均"（权重和 1、取值恒在 0~1）。看着干净，
+  // 但三条证据的**基线**根本不一样：开局人人都有远程兵、人人都有两个农民，
+  // 骚扰的机动项和软目标项一上来就给满，于是 24 个种子里 17 个被判成骚扰——
+  // "三种战术"退化成了"一种战术"。教训是：**两方处境一样的常数项必须去掉**，
+  // 对称的东西不构成任何一方的理由。
+  //
+  // 现在每个信号过一遍 bipolar()：中位局面返回 0，真偏了才给正负。三条证据
+  // 在中位局面上都落在 0.5 附近，谁抬头只能靠局势，不能靠"这一项天生容易满格"。
+  //
+  // 每个区间的**中点**都摆在"常态值"上：两边各两个兵就是常态、两座城就是常态、
+  // 射程 3+ 的兵各两个就是常态。这样中位局面严格给 0，不会因为"某项天生容易满格"
+  // 就把三种战术里的一种顶起来——第一版栽的就是这个（见上面）。
+  const powerEdge = bipolar(power, 0.85, 1.15);
+  const eraEdge = era > foeEra ? 1 : era === foeEra ? 0 : -1;
+  const mobilityEdge = raiders + ranged - (foeRaiders + foeRanged);
+
+  // 速攻：身价压过对面、兵够多、敌城够得着、时代不落后。
+  // 没有"回合还早"这一项——早期双方都没兵，那不是速攻的条件，是没法速攻。
+  const rushEv = blend([
+    [1.0, powerEdge],
+    [0.8, bipolar(army, 3, 7)],
+    [0.9, bipolar(14 - focusDist, 0, 4)],
+    [0.6, eraEdge],
+  ]);
+
+  // 骚扰：正面打不穿（powerEdge 为负才算），但机动性压过对面，对面还有软目标。
+  const harassEv = blend([
+    [1.0, bipolar(mobilityEdge, -2, 2)],
+    [0.9, bipolar(foeEco, 0, 4)],
+    [1.0, -powerEdge],
+    [0.6, bipolar(foeIncome - myIncome, -4, 4)],
+  ]);
+
+  // 弃城：身价落后、门口真有一座守不住的城、手里有能滚雪球的经济底子，
+  // 而且兑现目标（升时代 / 解锁英雄）确实够得着。够不着就不算计划，叫许愿。
+  const boomEv = blend([
+    [1.0, -powerEdge],
+    [0.9, bipolar(doomedEv, 0, 0.6)],
+    [0.7, bipolar(earners, 0, 4)],
+    [0.5, bipolar(myCities.length, 1, 3)],
+    [0.9, bipolar(payoff, 0, 0.7)],
+  ]);
+
+  const toEvidence = (v: number): number => clamp01(0.5 + 0.5 * v);
+  const rush = toEvidence(rushEv);
+  const harass = toEvidence(harassEv);
+  const boom = toEvidence(boomEv);
+
+  const evidence: Record<AiDoctrine, number> = { rush, harass, boom };
+
+  // 底色：seed 决定这局"天生偏好哪一种"，强度 0.10~0.22。
+  // 它同时是"不会横跳"的压舱石——局势证据要压过它，才拨得动战术。
+  //
+  // 上限从 0.30 收到 0.22：0.30 的底色叠在 1.7 次方锐化上，会把任何局势信号都
+  // 压成噪声，AI 就变成"不管你怎么打，它都按性格来"。底色该是倾向，不是方向盘。
+  const prior: Record<AiDoctrine, number> = { rush: 0, harass: 0, boom: 0 };
+  prior[traits.instinct] = traits.instinctStrength;
+  const raw: Record<AiDoctrine, number> = {
+    rush: rush + prior.rush,
+    harass: harass + prior.harass,
+    boom: boom + prior.boom,
+  };
+  // 锐化：三种战术各占三分之一的话，行为会糊成一锅，谁也看不出它在打什么。
+  // 1.7 次方把"略微领先"放大成"明确主导"，但仍是连续函数——不会一跳到底。
+  const sharp: Record<AiDoctrine, number> = {
+    rush: raw.rush ** 1.7,
+    harass: raw.harass ** 1.7,
+    boom: raw.boom ** 1.7,
+  };
+  const sum = sharp.rush + sharp.harass + sharp.boom;
+  const weight: Record<AiDoctrine, number> = {
+    rush: sum > 0 ? sharp.rush / sum : 1 / 3,
+    harass: sum > 0 ? sharp.harass / sum : 1 / 3,
+    boom: sum > 0 ? sharp.boom / sum : 1 / 3,
+  };
+  // 平手时按底色断：这就是"没有信号时按性格来"
+  const lead = DOCTRINES.reduce<AiDoctrine>(
+    (best, d) => (weight[d] > weight[best] ? d : best),
+    traits.instinct,
+  );
+
+  // 弃城只在三个条件同时成立时才发生，缺一条都不行：
+  //   1. boom 真的主导（不是"略微领先"）——它是最贵的一张牌，不能随手打；
+  //   2. 那座城是真的守不住（威胁已经贴到城下、墙也掉了一半以上）；
+  //   3. 换来的东西真的兑现得来（升时代/英雄的钱看得见）——看不见的叫许愿。
+  //
+  // 第 3 条是踩出来的：第一版只看权重，实测时代 3 的对局里弃城触发率超过一成，
+  // 而那时账上根本攒不出升级钱，等于白白送掉一座产兵点——同一批种子下
+  // 新 AI 的胜率从 52% 掉到 39%。弃城如果不能立刻换成代差，就只是丢了座城。
+  //
+  // 核心城（唯一能产当代兵的）永远不弃——那是把"以后"也一起弃了。
+  const canCashIn = payoff >= 0.5;
+  const trulyLost = doom ? doom.danger >= 0.55 : false;
+  const abandonedCityId =
+    weight.boom >= ABANDON_AT && doom && !doom.core && canCashIn && trulyLost
+      ? doom.id
+      : null;
+
+  const drive: Record<AiDoctrine, number> = {
+    rush: clamp01((weight.rush - 1 / 3) * 3),
+    harass: clamp01((weight.harass - 1 / 3) * 3),
+    boom: clamp01((weight.boom - 1 / 3) * 3),
+  };
+
+  return {
+    lead,
+    weight,
+    drive,
+    evidence,
+    focusCityId: focusCity?.id ?? null,
+    abandonedCityId,
+    metrics: {
+      myVal,
+      foeVal,
+      power,
+      myIncome,
+      foeIncome,
+      army,
+      raiders,
+      ranged,
+      foeRaiders,
+      foeRanged,
+      earners,
+      foeEco,
+      era,
+      foeEra,
+      cities: myCities.length,
+      focusDist: Number.isFinite(focusDist) ? focusDist : 99,
+      gate: Number.isFinite(gate) ? gate : 99,
+      doomed: doomedEv,
+      payoff,
+    },
+  };
 }
 
 /** 经济单位站在 (x,y) 能赚多少 */
@@ -298,7 +700,7 @@ function enemyThreatAt(
   return { n, dmg };
 }
 
-function scoreAttack(s: GameState, attacker: Unit, target: Unit): number {
+function scoreAttack(s: GameState, attacker: Unit, target: Unit, mood: AiMood): number {
   const preview = previewAttack(s, attacker, target);
   const targetDef = utype(s, target.type);
   const selfDef = utype(s, attacker.type);
@@ -344,6 +746,34 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit): number {
     }
   }
 
+  // ── 战术倾向 ──
+  // 一条攻击值多少分，取决于这一局想怎么赢：速攻要的是"城下这条路清干净"，
+  // 骚扰要的是"对面养不起兵"，弃城期要的是"现在别开战"。
+  const w = mood.drive;
+  const targetCat = targetDef.category;
+  if (targetCat === 'economy' || targetCat === 'builder') {
+    // 骚扰的正业：对面那些不还手、却撑着整条产线的东西
+    score += 24 * w.harass;
+  }
+  const dies = preview.toAttacker >= attacker.hp;
+  if (dies && !kill) {
+    // 换命的仗不划算——骚扰的全部资本就是"人还在"
+    score -= 26 * w.harass;
+  }
+  if (preview.toAttacker === 0) score += 7 * w.harass;
+
+  if (w.rush > 0.2) {
+    const focus = mood.focusCityId ? cityById(s, mood.focusCityId) : null;
+    if (focus) {
+      // 速攻只在主攻方向附近开打：追着地图另一头的残兵跑，等于把攻城计划作废
+      const d = distToCity(target, focus);
+      if (d <= 6) score += 9 * w.rush;
+      else if (d >= 12) score -= 12 * w.rush;
+    }
+  }
+  // 弃城期的胜利条件在四五个回合之后，不在这一个兵身上
+  if (w.boom > 0.2 && mood.metrics.gate > 6) score -= 12 * w.boom;
+
   return score;
 }
 
@@ -352,6 +782,7 @@ function scoreSiege(
   attacker: Unit,
   city: City,
   focusCityId: string | null,
+  mood: AiMood,
 ): number {
   const dmg = damageToCity(attacker, city, s);
   if (dmg <= 0) return -10;
@@ -362,6 +793,16 @@ function scoreSiege(
   // 这一档整体抬过一次：以前破城的收益常常比"打掉一个杂兵"高不了多少，
   // AI 于是宁可在野战里刷人头，也不肯把兵力压到城下——而人头是赢不了棋的。
   let score = (capture ? 260 : (dmg / city.maxHp) * 62) + 26;
+
+  // 战术倾向：速攻把攻城当唯一出路（破城是这套规则里唯一通向胜利的动作）；
+  // 弃城期根本不往对面走。
+  //
+  // 骚扰这一档**不压攻城**。以前压过 0.25，理由是"围城要站桩、要挨打，那不是消耗"，
+  // 听着有道理，实测是净亏：这游戏的胜利条件只有破城，一个不肯围城的 AI 只会
+  // 把对局拖长，然后输在对方的第一次破城上。骚扰该做的是"少跟主力换命"，
+  // 那一条在上面的野战评分里，不该跑到这儿来否定唯一的胜利路径。
+  const w = mood.drive;
+  score *= 1 + 0.3 * w.rush - 0.45 * w.boom;
 
   // 破城专精（siege-master）本来就是为攻城而生的，不打城等于白拿这个能力
   if (hasAbility(attackerDef, 'siege-master')) score += 12;
@@ -524,6 +965,13 @@ interface Fields {
    * 每一边都只是把城墙刮花，然后被城市回血修回去——围城永远围不下来。
    */
   focusCityId: string | null;
+  /**
+   * 这一回合的战术倾向（见 aiMood）。
+   *
+   * 放在 Fields 里，是因为它和距离图一样属于"整回合共用"的东西：每个候选
+   * 动作都要读它，一个单位十来种走法、十个单位就是上百次——重算就是白烧时间。
+   */
+  mood: AiMood;
   /**
    * 收缩固守：这一回合不往外推。
    *
@@ -773,10 +1221,18 @@ function advanceDistance(
  *
  * 都"没事"就返回 null——满血又没人来的城不需要留人，守城是有机会成本的。
  */
-function pickGuardCity(s: GameState, me: PlayerId, foe: Unit[]): string | null {
+function pickGuardCity(
+  s: GameState,
+  me: PlayerId,
+  foe: Unit[],
+  abandoned: string | null = null,
+): string | null {
   let best: { id: string; danger: number } | null = null;
   for (const c of citiesOf(s, me)) {
     if (c.ruined) continue;
+    // 已经决定放弃的城不派人守：往一个"注定要丢"的地方填兵，
+    // 等于把弃城换成"城没了、兵也没了"——那是最差的一种结局。
+    if (c.id === abandoned) continue;
     const hpFrac = c.hp / c.maxHp;
     let nearest = Infinity;
     for (const u of foe) {
@@ -907,6 +1363,17 @@ function scoreMove(
   // 乘上这局的性格：好战的 AI 更愿意往前顶，保守的更爱站地形。
   let score = progress * 9 * traits.appetite;
 
+  // 战术倾向对"往前推"的态度（见 aiMood）：
+  //   · 速攻：推进就是目的本身，位置分整体抬高；
+  //   · 弃城：这一回合的任务是收人、攒钱，往前一格反而是把兵送到没用的地方；
+  //   · 骚扰：不加不减——它的方向由下面那条"软目标坡度"决定，不是城墙。
+  const w = all.mood.drive;
+  // 过河阶段把速攻系数摘掉：兵还没过河，"更快压上去"是句空话。留着它只会
+  // 让工程队被"往桥头挪一格"抢走整回合——桥的原始分本来只比挪一格高十几分，
+  // 位移分再乘 1.45 就反超了，实测直接退化成"两座桥铺到河心就不动了"。
+  const aggr = all.needBridge ? 0 : w.rush;
+  score *= 1 + 0.45 * aggr - 0.3 * w.boom;
+
   // 河把两家隔开的时候，"往前推"这件事在距离图上是平的：
   // 沿着河岸走，离敌方城市的涉水距离一点没变（进度 0 分），
   // 于是全军会停在岸边发呆。这时候真正的"往前"是往桥头靠。
@@ -922,10 +1389,15 @@ function scoreMove(
   // 挪过去就能打到人 → 很值（这就是"接敌"的全部意义）。
   // 已经接上火的就不再给这份奖励，否则"往敌人方向平移一格"永远比开火划算。
   const moved = { ...unit, x, y };
-  if (canAttack(unit) && !engagedNow && attackableTargets(s, moved).length > 0) score += 30;
+  if (canAttack(unit) && !engagedNow && attackableTargets(s, moved).length > 0) {
+    score += 30 * (1 + 0.5 * w.rush);
+  }
 
   // 挪过去就能攻城 → 更值（攻城是唯一通向胜利的路，比多打掉一个兵重要）
-  if (canAttack(unit) && !engagedNow && siegeTargets(s, moved).length > 0) score += 44;
+  // 速攻对这条的溢价最高：它整局的胜负就压在一次成功的围城上。
+  if (canAttack(unit) && !engagedNow && siegeTargets(s, moved).length > 0) {
+    score += 44 * (1 + 0.7 * w.rush);
+  }
 
   // 附近有待收的废墟时，朝它走这件事本身就值钱。
   //
@@ -938,6 +1410,9 @@ function scoreMove(
   // 钱在攒、人却走了，等于白攒。
   for (const rc of s.cities) {
     if (!rc.ruined) continue;
+    // 已经决定放弃的城不往回搬：弃城的全部意义就是"别在这儿花钱、别在这儿死人"，
+    // 重建它等于把这几个回合攒的东西又埋回去。
+    if (rc.id === all.mood.abandonedCityId) continue;
     const affordable = s.players[unit.owner].gold >= rebuildCost(rc);
     const perTile = affordable ? 35 : rc.owner === unit.owner ? 8 : 10;
     const before = distToCity(unit, rc);
@@ -1010,6 +1485,48 @@ function scoreMove(
     if (unit.hp / def.maxHp < 0.45) {
       const th = enemyThreatAt(s, unit.owner, x, y);
       score -= th.n * 8;
+    }
+  }
+
+  // 骚扰：目标是"让对面养不起兵"，不是"我占到更多地"。
+  //
+  // 两条坡度：往最近的敌方经济/工程单位靠（那是它整局的现金流），
+  // 以及打完能站到对方够不着的地方——换血不划算，白打才划算。
+  // 只给"方向"，不给"必须打"：能不能打由 scoreAttack 那一条决定。
+  if (w.harass > 0.12 && def.category === 'combat' && def.domain !== 'water') {
+    let prey: Unit | null = null;
+    let pd = Infinity;
+    for (const e of unitsOf(s, other(unit.owner))) {
+      const ed = utype(s, e.type);
+      if (ed.category !== 'economy' && ed.category !== 'builder') continue;
+      const d0 = distance(unit, e);
+      if (d0 < pd) {
+        pd = d0;
+        prey = e;
+      }
+    }
+    if (prey) score += (pd - distance({ x, y }, prey)) * 5.5 * w.harass;
+
+    const th = enemyThreatAt(s, unit.owner, x, y);
+    const hpFrac = unit.hp / def.maxHp;
+    // 站到没人够得着的地方：骚扰的全部本钱就是"人还在"
+    if (th.n === 0 && hpFrac < 0.85) score += 7 * w.harass;
+    // 残血还站在人堆里：这一条比通用威胁分更狠，因为骚扰单位的价值全在活着
+    if (th.n > 0 && hpFrac < 0.55) score -= th.n * 6 * w.harass;
+  }
+
+  // 弃城：这一回合唯一要保住的是"还留着的那座城"。
+  //
+  // 放弃的那座不往里填人（守城的加分在下面也把它排除了），已经在附近的人
+  // 往回走——兵可以丢，但不能丢在一个已经决定不要的地方。
+  if (w.boom > 0.12 && def.category === 'combat' && def.domain !== 'water') {
+    const keep = citiesOf(s, unit.owner).filter(
+      (c) => !c.ruined && c.id !== all.mood.abandonedCityId,
+    );
+    if (keep.length > 0) {
+      const before = Math.min(...keep.map((c) => distToCity(unit, c)));
+      const after = Math.min(...keep.map((c) => distToCity({ x, y }, c)));
+      score += (before - after) * 5 * w.boom;
     }
   }
 
@@ -1249,9 +1766,11 @@ function rawBuildScore(
   buildId: string,
   spot: { x: number; y: number; terrain: Terrain },
   land: Map<string, number[]>,
+  mood?: AiMood,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
+  const w = mood ? mood.drive : { rush: 0, harass: 0, boom: 0 };
 
   // 工地会不会被下回合拆掉。建造者死在这里的概率远高于野战单位：
   // 他站在空地上、没护甲加成、还刚把整回合花掉。
@@ -1318,16 +1837,31 @@ function rawBuildScore(
     for (const e of unitsOf(s, other(unit.owner))) {
       nearFoe = Math.min(nearFoe, distance(spot, e));
     }
-    // 看不见敌人在哪，就先别把补给点压上去
+    // 视野里一个敌人都没有：换敌方城市当"纵深参照物"。
+    //
+    // 以前这里直接 return -999（"看不见敌人就先别压补给点"），单独看很稳，
+    // 实际是个陷阱——**把对面主力歼灭干净之后，AI 反而再也不往前线扎营**，
+    // 兵只能从老家一趟趟往前线跑，赢下来的地盘没有产兵点。
+    // 城市的位置是已知的（迷雾只藏单位和地形），拿它估纵深足够用。
+    if (!Number.isFinite(nearFoe)) {
+      for (const c of s.cities) {
+        if (c.owner === unit.owner || c.ruined) continue;
+        nearFoe = Math.min(nearFoe, distance(spot, c));
+      }
+    }
     if (!Number.isFinite(nearFoe)) return -999;
-    if (nearFoe < 4) return -999;
 
-    // 前线 6~9 格外最值：再近下回合就被推平，再远等于没往前推
-    const front = nearFoe <= 12 ? 34 - Math.abs(nearFoe - 7) * 3 : 6;
+    // "不近不远"的档位随战术移动：速攻时敢往前提，弃城时反而要往后缩
+    // （兵都收回来守家了，营地在前面就是白送）。
+    const tooClose = Math.max(2, 4 - 1.6 * w.rush + 1.2 * w.boom);
+    if (nearFoe < tooClose) return -999;
+    const peak = 7 - 2.2 * w.rush + 2.4 * w.boom;
+    const front = nearFoe <= 12 ? 34 - Math.abs(nearFoe - peak) * 3 : 6;
     // 高级营更贵，但要让它"贵得值"：耐久和火力都上一个台阶，
     // 在前线顶着的时候比多造一座廉价营有用
     const tier = (def.era - 1) * 5;
-    return 52 + front + tier - nearOwn * 0.7 - mine * 16 - def.cost * 0.045;
+    return 52 + front + tier - nearOwn * 0.7 - mine * 16 - def.cost * 0.045
+      + 10 * w.rush - 14 * w.boom;
   }
 
   if (def.incomeByTerrain) {
@@ -1400,7 +1934,7 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(s, unit, buildId, spot, all.land);
+  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood);
   if (raw <= -900) return raw;
 
   const canBridge = (utype(s, unit.type).builds ?? []).includes('bridge');
@@ -1437,13 +1971,13 @@ function unitCandidates(
     for (const t of attackableTargets(s, unit)) {
       out.push({
         action: { type: 'ATTACK', unitId: unit.id, targetId: t.id },
-        score: scoreAttack(s, unit, t),
+        score: scoreAttack(s, unit, t, all.mood),
       });
     }
     for (const c of siegeTargets(s, unit)) {
       out.push({
         action: { type: 'SIEGE', unitId: unit.id, cityId: c.id },
-        score: scoreSiege(s, unit, c, all.focusCityId),
+        score: scoreSiege(s, unit, c, all.focusCityId, all.mood),
       });
     }
     if (def.builds && def.builds.length > 0) {
@@ -1726,7 +2260,13 @@ export interface AiPlan {
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
 const SAVE_HORIZON = 6;
 
-function buildPlan(s: GameState, me: PlayerId, my: Unit[], foe: Unit[]): AiPlan {
+function buildPlan(
+  s: GameState,
+  me: PlayerId,
+  my: Unit[],
+  foe: Unit[],
+  mood: AiMood,
+): AiPlan {
   const gold = s.players[me].gold;
   const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
   const myCities = citiesOf(s, me);
@@ -1741,7 +2281,12 @@ function buildPlan(s: GameState, me: PlayerId, my: Unit[], foe: Unit[]): AiPlan 
   const foeVal = valueOf(foe);
 
   // 城下有人：这时候攒钱是自杀。半径 3 是"下回合就能摸到城墙"的量级。
-  const threaten = foe.some((u) => myCities.some((c) => distToCity(u, c) <= 3));
+  //
+  // 但**放弃掉的那座城不算**：弃城这一档的全部前提就是"门口那座城我已经不要了"，
+  // 要是它一被围就把紧急开关按下去，攒钱计划当回合就作废——弃城变成了空话。
+  const threaten = foe.some((u) =>
+    myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 3),
+  );
   const urgent = army < 3 || threaten;
 
   // 没被打塌的敌城，和已经塌了等接管的废墟。
@@ -1779,7 +2324,10 @@ function buildPlan(s: GameState, me: PlayerId, my: Unit[], foe: Unit[]): AiPlan 
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
   let horizon = SAVE_HORIZON;
-  if (!urgent && army >= 6) {
+  // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
+  // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
+  const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
+  if (!urgent && army >= armyGate) {
     // 6 个回合的收入之内够得着，才值得为它停手。收废墟例外：那是终局，
     // 视野放宽到 14 个回合——攒不够就永远赢不了，慢一点总比平局好。
     if (ruinCost !== null && gold + inc * (winningReclaim ? 14 : SAVE_HORIZON) >= ruinCost) {
@@ -1805,14 +2353,18 @@ function buildPlan(s: GameState, me: PlayerId, my: Unit[], foe: Unit[]): AiPlan 
   // 身价必然落后，于是它自己把自己锁进固守、再也不出击（第一版就是这个死循环：
   // 越攒越不敢打，越不敢打越攒不出胜势）。固守是**防守姿态**，得真有敌人来攻。
   const weaker = myVal < foeVal * 0.75;
-  const atGate = foe.some((u) => myCities.some((c) => distToCity(u, c) <= 5));
+  const atGate = foe.some((u) =>
+    myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 5),
+  );
   // 精兵姿态：兵不是"越多越好"，是"每个出生名额都该值回票价"。
   // 每回合只有两个产兵名额（AI 的编制上限也压着），所以只要手头比一个兵宽裕
   // （金 ≥ 1.2 回合收入）或者编制快满，就该往贵的、能打的上面花钱。
   // 攒钱期同理：钱是要攒着买好的，再拿线性单价惩罚去压大件等于自我否定。
   const quality = savingFor !== null || gold >= inc * 1.2 || army >= CONFIG.maxUnits - 6;
+  // 弃城期一律按"精兵"花钱：钱要攒着换时代/英雄，不该拆成一堆便宜兵。
+  const elite = quality || mood.weight.boom > 0.5;
   const stance: AiPlan['stance'] =
-    weaker && army >= 3 && atGate ? 'turtle' : quality ? 'elite' : 'push';
+    weaker && army >= 3 && atGate ? 'turtle' : elite ? 'elite' : 'push';
 
   return { stance, savingFor, targetCost, allowance, urgent };
 }
@@ -1823,7 +2375,14 @@ function recruitCandidate(
   traits: AiTraits,
   plan: AiPlan,
   order?: string | null,
+  mood?: AiMood,
 ): Candidate | null {
+  // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
+  // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
+  const moodw: Record<AiDoctrine, number> = mood
+    ? mood.drive
+    : { rush: 0, harass: 0, boom: 0 };
+  const w = moodw;
   const me = s.current;
   const gold = s.players[me].gold;
   // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
@@ -1897,7 +2456,9 @@ function recruitCandidate(
   ).length;
   const rough = roughShare(s);
   const cityCount = Math.max(1, citiesOf(s, me).length);
-  const targetEarners = Math.min(8, cityCount * 2);
+  // 弃城期把经济线的目标抬高：这一档赢在"三个回合之后我比你富一代"，
+  // 所以它要的不是"够用的农民"，而是能把整座城的产线滚起来的人手。
+  const targetEarners = Math.min(8, cityCount * 2 + Math.round(3 * w.boom));
 
   // 高级：看现在这支部队的"远程占比"，缺什么补什么。
   //
@@ -2038,6 +2599,8 @@ function recruitCandidate(
         } else if (landCombat.length >= 6 && gold >= price + unlockFee + Math.round(price * 0.6)) {
           score += 14;
         }
+        // 弃城期英雄是"兑现目标"之一：用一座守不住的城换一个永久战力，是划算的
+        score += 30 * w.boom;
       }
 
       // 边际递减：同一兵种越多，下一个越不值。
@@ -2073,14 +2636,37 @@ function recruitCandidate(
 
       // ③ 有当代兵就不堆上一代的
       score -= (src.era - d.era) * 11;
+
+      // ── 战术倾向：这一局到底要什么样的兵 ──
+      // 速攻要"便宜、能打、跑得动"：贵而慢的大件还没走到城下，这一波就打完了。
+      if (w.rush > 0.1) {
+        if ((d.atk ?? 0) >= 14 && d.move >= 3) score += 9 * w.rush;
+        if (d.move <= 2 && price >= 150) score -= 12 * w.rush;
+      }
+      // 骚扰要"跑得快、够得远"：它不指望打赢会战，只指望对面抓不到它。
+      if (w.harass > 0.1) {
+        if (isRaider(d)) score += 14 * w.harass;
+        if ((d.range ?? 1) >= 3 && d.move >= 3) score += 10 * w.harass;
+        if (d.move <= 2) score -= 10 * w.harass;
+      }
+      // 弃城期不补兵：这时候买的每一个兵，都会被"少一座城的产线"吃掉。
+      // plan.urgent 的时候不拦——真到城下还是要打的。
+      if (!plan.urgent) score -= 14 * w.boom;
     }
     if (d.category === 'economy') {
       const inc = maxIncome(d);
       const payback = inc > 0 ? price / inc : 99;
       score += earners < targetEarners ? 34 - Math.min(18, payback * 1.5) : -14;
+      // 弃城期：经济单位就是这一档的本钱，宁可晚一个兵也要先把水龙头拧大
+      score += 26 * w.boom;
+      // 速攻期：除了最开始那一只，经济线一律让位给兵——
+      // 速攻输就输在"钱还没变成兵，对面的墙已经修好了"
+      if (earners >= 1) score -= 14 * w.rush;
     }
     if (d.category === 'builder') {
       score += builders < 1 ? 24 : builders < 2 ? 4 : -12;
+      // 弃城期要靠工事把留守的那座城撑住，工程队值钱
+      score += 8 * w.boom;
     }
     // 高级对单价更敏感一点：便宜的兵能多铺几个方向。
     // 但高时代单位要单独放宽——它们贵是设计如此，不该因此永远排在火枪兵后面。
@@ -2114,7 +2700,7 @@ function recruitCandidate(
   return best;
 }
 
-function upgradeCandidate(s: GameState, city: City): Candidate | null {
+function upgradeCandidate(s: GameState, city: City, mood?: AiMood): Candidate | null {
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;
@@ -2147,6 +2733,15 @@ function upgradeCandidate(s: GameState, city: City): Candidate | null {
   // 会把"产线"整条挤掉——实测 900 金的局面里 AI 连着十二回合只顾升城、一个兵不造。
   if (city.era >= myEra) score += 6;
   else score -= 4;
+
+  // 战术倾向：弃城期升级是**兑现**（攒那几个回合就是为了这一下），
+  // 速攻期升级是"顺便"，骚扰期同样的钱更愿意换成两三个能到处跑的兵。
+  // 幅度必须小。上面 6/4 那段注释记的就是这个坑：升级底分本来就比招兵高一档，
+  // 再叠一个大数，AI 会连着十几回合只顾升城、一个兵不造。第一版这里写了 34，
+  // 实测直接让"十二个回合只有两种选择"，战术多样性反而没了。
+  if (mood) {
+    score += 3 * mood.drive.boom + 2 * mood.drive.rush - 8 * mood.drive.harass;
+  }
 
   return { action: { type: 'UPGRADE', cityId: city.id }, score };
 }
@@ -2208,6 +2803,9 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
     players: { A: { ...s.players.A }, B: { ...s.players.B } },
   };
   const traits = aiTraits(proj);
+  // 排产看的是"这一局想怎么赢"，所以战术倾向要一起进打分——
+  // 否则玩家看到的是"AI 排了一条和自己场上打法不搭的队"。
+  const mood = aiMood(proj, traits);
   // 每格大约能收到这么多钱（打九折：收入会随城市被打、单位被杀而掉）
   const perTurn = Math.max(1, Math.round(incomeOf(s, player) * 0.9));
   // 一格拿来升级 = 五个回合里少一个兵，排两次基本等于自杀
@@ -2227,6 +2825,8 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
         { stance: 'push', savingFor: null, targetCost: 0, allowance: Infinity, urgent: true },
+        null,
+        mood,
       );
       if (c && (!bestRecruit || c.score > bestRecruit.score)) bestRecruit = c;
     }
@@ -2234,7 +2834,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
     let bestUpgrade: { c: Candidate; city: City } | null = null;
     if (upgradesLeft > 0) {
       for (const city of citiesOf(proj, player)) {
-        const c = upgradeCandidate(proj, city);
+        const c = upgradeCandidate(proj, city, mood);
         if (c && (!bestUpgrade || c.score > bestUpgrade.c.score)) bestUpgrade = { c, city };
       }
     }
@@ -2328,37 +2928,32 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   for (const [id, field] of distanceFields(view, me, 'land')) {
     land.set(id, mergeAdvanceField(field, wade.get(id) ?? []));
   }
-  // 主攻方向：血最少的那座敌方城市（同血时取离我军最近的）
+  // 战术倾向 + 主攻方向。
   //
-  // 注释一直写着"同血时取最近的"，但代码其实没做这件事：四座城都是满血时，
-  // 它会锁死列表里的第一座——大地图上那座很可能在图的对角，
-  // 全军就朝着那个方向开拔，近处那座永远没人管。
-  const nearestOwn = (c: City): number =>
-    view.units
-      .filter((u) => u.owner === me)
-      .reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
-  const foeCities = view.cities.filter((c) => c.owner !== me);
-  const focus = foeCities.reduce<City | null>((best, c) => {
-    if (!best) return c;
-    if (c.hp !== best.hp) return c.hp < best.hp ? c : best;
-    return nearestOwn(c) < nearestOwn(best) ? c : best;
-  }, null);
+  // 两件事一起算：主攻方向本来就是"往哪儿使劲"，而这正是三种战术分歧最大的地方
+  // （速攻往最近那座压、骚扰往最没人守的那座摸、弃城期根本不往对面走）。
+  // 所以 focusCityId 也归 aiMood 管，别在两处各算一次——那会出现"打分还在往
+  // 老方向推、走位已经收回来了"的撕裂。
+  const traits = aiTraits(view);
+  const mood = aiMood(view, traits);
+  const foeUnits = unitsOf(view, other(me));
 
   const fields: Fields = {
     land,
     wade,
     water: distanceFields(view, me, 'water'),
     bridgeSite: bestBridgeSite(view, me, wade),
-    focusCityId: focus?.id ?? null,
+    focusCityId: mood.focusCityId,
+    mood,
     needBridge: !canReachEnemyByLand(view, me),
     hold: false,
     commit: false,
-    guardCityId: pickGuardCity(view, me, unitsOf(view, other(me))),
+    // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
+    guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
   };
-  const traits = aiTraits(view);
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
-  const plan = buildPlan(view, me, unitsOf(view, me), unitsOf(view, other(me)));
+  const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood);
   // 这一回合的升级名额已经用掉了：攒时代的计划对采购就不再生效。
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
   if (!mayUpgrade && plan.savingFor === 'era') plan.savingFor = null;
@@ -2370,7 +2965,11 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   const foeVal = unitsOf(view, other(me))
     .filter((u) => utype(view, u.type).category === 'combat')
     .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
-  fields.commit = myVal > 0 && myVal >= foeVal * 1.3;
+  // 压城门槛：速攻更早认定"我现在打得穿"（它整局的胜负压在这一次围城上），
+  // 弃城期更晚——这时候全军压上去只是把攒的钱换成对面的击杀数。
+  const commitAt =
+    1.3 - 0.18 * mood.drive.rush + 0.15 * mood.drive.boom;
+  fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
 
   for (const u of unitsOf(view, me)) {
     candidates.push(...unitCandidates(view, u, fields, traits, s));
@@ -2385,12 +2984,16 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
       // 废墟也造不出兵（规则里同样会拒）。不跳过的话 AI 会一直提这个动作，
       // 而它一旦被选中就必然失败——那一回合剩下的动作全被吞掉。
       if (city.ruined) continue;
+      // 已经决定放弃的城不再往里面出兵：兵出在门口就是给对面送的，
+      // 而且这一档的钱要留着换时代/英雄。（只剩它一座时就照常造，别把自己憋死。）
+      if (city.id === mood.abandonedCityId && citiesOf(view, me).length > 1) continue;
       const c = recruitCandidate(
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
         traits,
         plan,
         order,
+        mood,
       );
       if (c) candidates.push(c);
     }
@@ -2407,6 +3010,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
           traits,
           plan,
           order,
+          mood,
         );
         if (c) candidates.push(c);
       }
@@ -2416,7 +3020,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   if (mayUpgrade) {
     for (const city of citiesOf(view, me)) {
       if (city.ruined) continue; // 废墟升不了级，同上
-      const c = upgradeCandidate(view, city);
+      const c = upgradeCandidate(view, city, mood);
       if (c) candidates.push(c);
     }
   }

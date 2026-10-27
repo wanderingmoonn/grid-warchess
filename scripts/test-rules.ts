@@ -42,6 +42,7 @@ import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
   aiLevelOf,
+  aiMood,
   aiNextAction,
   aiNoise,
   aiTraits,
@@ -5091,6 +5092,201 @@ test('不同种子的 AI 性格不同', () => {
   assert.notEqual(a.appetite, b.appetite, '推进欲望应该随种子变化');
   assert.ok(a.appetite >= 0.85 && a.appetite <= 1.2, '推进欲望应该落在合理区间');
   assert.ok(a.favorites.length >= 1, '应该有兵种偏好');
+});
+
+/**
+ * 按特征挑一个兵种，不写死名字。
+ *
+ * 战术测试关心的是"有骑兵/有远程/有农民"这件事，不是"骑兵叫 scout"。
+ * 写死名字的话，哪天兵种改名，红的是这几条用例，而不是真的坏了。
+ */
+function pickUnit(s: GameState, pred: (d: UnitTypeDef) => boolean): string {
+  const hit = Object.values(s.unitTypes).find(pred);
+  assert.ok(hit, '本局应该存在满足条件的兵种');
+  return hit!.id;
+}
+
+/** 把一方的兵全撤掉，只留下指定阵容 */
+function armyOf(s: GameState, owner: 'A' | 'B', ids: string[], at: { x: number; y: number }): void {
+  s.units = s.units.filter((u) => u.owner !== owner);
+  let k = 0;
+  for (const id of ids) {
+    const def = s.unitTypes[id];
+    if (!def) continue;
+    // 沿城市外圈依次摆开，撞到不能站人的格子就往后挪
+    for (let ring = 1; ring < 8; ring++) {
+      const spot = { x: at.x + ring, y: at.y };
+      const tile = s.tiles[idx(s, spot.x, spot.y)];
+      if (!tile || !passable(tile.terrain) || unitAt(s, spot.x, spot.y)) continue;
+      s.units.push({
+        id: `tz${k++}_${ring}`,
+        type: id,
+        owner,
+        x: spot.x,
+        y: spot.y,
+        hp: def.maxHp,
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+      break;
+    }
+  }
+}
+
+console.log('\nAI 战术倾向');
+
+test('战术：势均力敌时不偏科，也不轻易弃城', () => {
+  const s = fresh();
+  s.current = 'A';
+  refreshMemory(s);
+  const m = aiMood(s);
+  const top = Math.max(m.weight.rush, m.weight.harass, m.weight.boom);
+  // 底色只该是压舱石：一颗种子决定"略微偏好哪种"，不该一上来就一言堂。
+  assert.ok(top < 0.65, `势均力敌时主导战术占了 ${(top * 100).toFixed(0)}%，过于一言堂`);
+  assert.ok(top - Math.min(m.weight.rush, m.weight.harass, m.weight.boom) < 0.5,
+    `三种战术的权重拉得太开：${(m.weight.rush * 100) | 0}/${(m.weight.harass * 100) | 0}/${(m.weight.boom * 100) | 0}`);
+  assert.equal(m.abandonedCityId, null, '门口没有危城的时候不该弃城');
+});
+
+test('战术：身价压过对面、敌城就在门口，就该速攻', () => {
+  const s = fresh({ startEra: 2 });
+  const foeCity = citiesOf(s, 'B')[0];
+  const melee = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && d.move >= 3);
+  const heavy = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && d.move >= 3 && d.era >= 2);
+  // A：六个体壮又跑得动的，压在 B 城边上
+  armyOf(s, 'A', [heavy, heavy, heavy, melee, melee, melee], { x: foeCity.x + 2, y: foeCity.y });
+  // B：只剩一个民兵看家，身价被彻底比下去
+  armyOf(s, 'B', [melee], { x: foeCity.x, y: foeCity.y + 4 });
+  s.current = 'A';
+  refreshMemory(s);
+
+  const m = aiMood(s);
+  assert.ok(m.metrics.power > 1.15, `身价应该压过对面，实际 power=${m.metrics.power.toFixed(2)}`);
+  assert.equal(m.lead, 'rush', `这种局面下应该选速攻，实际选了 ${m.lead}`);
+  assert.ok(m.weight.rush > 0.5, `速攻权重应该过半，实际 ${(m.weight.rush * 100) | 0}%`);
+});
+
+test('战术：正面打不穿、对面一屋子农民，就该转骚扰', () => {
+  const s = fresh({ startEra: 2 });
+  const myCity = citiesOf(s, 'A')[0];
+  const foeCity = citiesOf(s, 'B')[0];
+  const raider = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && d.move >= 4 && d.range <= 3);
+  const shooter = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.range ?? 1) >= 3);
+  const farmer = pickUnit(s, (d) => d.category === 'economy');
+  heavy: {
+    const brute = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.cost ?? 0) >= 150);
+    // B：一支比我贵得多的正面军队，缩在城里守家
+    armyOf(s, 'B', [brute, brute, brute, brute], { x: foeCity.x, y: foeCity.y });
+    // 外加四个农民在后方种地——骚扰的目标就是这些不还手的东西
+    let n = 0;
+    for (let dy = 5; dy < 9 && n < 4; dy++) {
+      for (let dx = 0; dx < 4 && n < 4; dx++) {
+        const x = foeCity.x + dx;
+        const y = foeCity.y + dy;
+        const tile = s.tiles[idx(s, x, y)];
+        if (!tile || !passable(tile.terrain) || unitAt(s, x, y)) continue;
+        const def = s.unitTypes[farmer];
+        s.units.push({ id: `tf${n}`, type: farmer, owner: 'B', x, y, hp: def.maxHp, kills: 0, moved: false, acted: false });
+        n += 1;
+      }
+    }
+    assert.ok(n >= 3, `应该摆得下几个农民，实际 ${n} 个`);
+  }
+  // A：骑兵 + 远程，正面肯定打不过那四个大块头，但跑得快、够得着软目标
+  armyOf(s, 'A', [raider, raider, shooter, shooter], { x: myCity.x + 2, y: myCity.y });
+  s.current = 'A';
+  refreshMemory(s);
+
+  const m = aiMood(s);
+  assert.ok(m.metrics.power < 1, `身价应该落后，实际 power=${m.metrics.power.toFixed(2)}`);
+  assert.ok(m.metrics.foeEco >= 3, `对面应该有可骚扰的经济目标，实际 ${m.metrics.foeEco} 个`);
+  assert.equal(m.lead, 'harass', `这种局面下应该转骚扰，实际选了 ${m.lead}`);
+});
+
+test('战术：兵临城下又攒得起升级，就该弃城换发展', () => {
+  const s = fresh({ startEra: 2 });
+  const mine = citiesOf(s, 'A');
+  assert.ok(mine.length >= 2, '这条用例需要两座城：一座可弃、一座留着');
+  const doomed = mine[0];
+  const brute = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.cost ?? 0) >= 120);
+  // B 的主力贴着这座城：2 格，已经是"下回合就能摸到城墙"的距离
+  armyOf(s, 'B', [brute, brute, brute], { x: doomed.x, y: doomed.y });
+  // A 自己人少、钱多、有经济底子
+  const farmer = pickUnit(s, (d) => d.category === 'economy');
+  armyOf(s, 'A', [farmer, farmer], { x: mine[1].x, y: mine[1].y });
+  s.players.A.gold = 4000;
+  s.players.A.res = { food: 4000, material: 4000 };
+  s.current = 'A';
+  refreshMemory(s);
+
+  const m = aiMood(s);
+  assert.ok(m.metrics.doomed > 0, '门口应该有一座真守不住的城');
+  assert.ok(m.weight.boom >= 0.42, `弃城权重应该够高，实际 ${(m.weight.boom * 100) | 0}%`);
+  assert.equal(m.abandonedCityId, doomed.id, '准备放掉的应该是那座危城');
+});
+
+test('战术：唯一能产当代兵的那座城永远不弃', () => {
+  const s = fresh({ startEra: 2 });
+  const mine = citiesOf(s, 'A');
+  assert.ok(mine.length >= 2);
+  const core = mine[0];
+  const other = mine[1];
+  // 一高一低造出"只有这座城是核心"的局面：核心领先一个时代，另一座落后
+  core.era = 3;
+  other.era = 2;
+  const brute = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.cost ?? 0) >= 120);
+  armyOf(s, 'B', [brute, brute, brute], { x: core.x, y: core.y });
+  const farmer = pickUnit(s, (d) => d.category === 'economy');
+  armyOf(s, 'A', [farmer, farmer], { x: other.x, y: other.y });
+  s.players.A.gold = 4000;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const m = aiMood(s);
+  assert.ok(m.metrics.doomed > 0, '核心城应该在挨打');
+  assert.equal(m.abandonedCityId, null, '唯一能产当代兵的城不能弃——那是把"以后"也一起弃了');
+});
+
+test('战术：切换是渐变的，不会一回合翻脸', () => {
+  // 同一局里连续看若干回合的权重，检查相邻两回合的最大跳变。
+  // 这条是"切换自然"的量化底线：权重是连续函数，加上 drive 只在明确主导时
+  // 才出手，理论上不该出现"这回合猛攻、下回合缩家"的硬切。
+  let s = fresh({ aiOpponent: true, aiAlly: true }, 7);
+  s.aiControl = { A: true, B: true };
+  let prev: { rush: number; harass: number; boom: number } | null = null;
+  let worst = 0;
+  let worstAt = '';
+  for (let round = 0; round < 8; round++) {
+    const m = aiMood(s);
+    if (prev) {
+      const jump = Math.max(
+        Math.abs(m.weight.rush - prev.rush),
+        Math.abs(m.weight.harass - prev.harass),
+        Math.abs(m.weight.boom - prev.boom),
+      );
+      if (jump > worst) {
+        worst = jump;
+        worstAt = `第 ${round} 回合 ${(jump * 100).toFixed(0)} 个百分点`;
+      }
+    }
+    prev = { ...m.weight };
+    for (const p of ['A', 'B'] as const) {
+      s.current = p;
+      for (let i = 0; i < 60; i++) {
+        const a = aiNextAction(s);
+        if (!a) break;
+        const r = applyAction(s, a);
+        if (!r.ok) break;
+        s = r.state;
+      }
+      const e = applyAction(s, { type: 'END_TURN' });
+      if (!e.ok) break;
+      s = e.state;
+    }
+    if (s.winner) break;
+  }
+  assert.ok(worst < 0.4, `相邻回合的战术权重跳变太大：${worstAt}`);
 });
 
 console.log('\nAI 托管');
