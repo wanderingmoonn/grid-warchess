@@ -895,6 +895,18 @@ test('丢光所有城市即判负（哪怕还有一支军队）', () => {
   assert.equal(r.state.winner, 'B', '城丢光了就该判负，不能靠军队苟着');
 });
 
+test('没兵又没粮：金币再多也翻不了盘（判负按真实造价算）', () => {
+  // 不带 godMode：上帝模式走沙盒分支，不结算胜负
+  const s = fresh({ expansionIds: ['city-works'] });
+  s.units = s.units.filter((u) => u.owner !== 'A');
+  // 金币管够，但粮和材是 0 —— 现在这两样才是主成本，一支兵都造不出来
+  s.players.A.gold = 9999;
+  s.players.A.res = { food: 0, material: 0 };
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.winner, 'B', '粮材为 0 就造不出任何兵，该判负，不能拿着金币干耗');
+});
+
 test('不能攻城自己的城市', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
@@ -5253,7 +5265,9 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   }
   assert.equal(placed, 6, `城边应该摆得下六个民兵，只摆下 ${placed} 个`);
 
+  // 城郭与物料下粮/材才是主成本，只给金币等于没给钱
   s.players.A.gold = 3000;
+  s.players.A.res = { food: 3000, material: 3000 };
   s.current = 'A';
   refreshMemory(s);
 
@@ -6365,6 +6379,17 @@ test('多资源：活人吃粮、建筑耗材，缺粮就造不出来', () => {
   const towerCost = recruitResCost(s, 'A', s.unitTypes.tower!);
   assert.ok((towerCost.material ?? 0) > 0, '建筑要建材');
   assert.equal(towerCost.food ?? 0, 0, '建筑不吃粮');
+
+  // 粮/材必须是主成本，金币只是零头。
+  // 上一版是金币六成、粮材四成，实战里金币直接见底——因为经济单位的
+  // 金币产出有六成被转成了粮/材，收入结构和支出结构反着来。
+  for (const [name, c] of [['民兵', cost], ['箭塔', towerCost]] as const) {
+    const res = (c.food ?? 0) + (c.material ?? 0);
+    const gold = c.gold ?? 0;
+    assert.ok(res > gold, `${name}：粮/材应该比金币贵，实际 金 ${gold} / 粮材 ${res}`);
+    const ratio = res / (res + gold);
+    assert.ok(ratio > 0.6, `${name}：粮/材占比应该超过六成，实际 ${(ratio * 100).toFixed(0)}%`);
+  }
 
   // 钱够、粮不够：造不出来，而且理由要点名缺的是粮不是钱
   s.players.A.gold = 5000;

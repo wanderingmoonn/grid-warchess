@@ -22,7 +22,7 @@ import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 /** 规则内核 + 界面冒烟两项之和，改测试记得改这里 */
-const TEST_COUNT = 289 + 95;
+const TEST_COUNT = 290 + 95;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -1417,8 +1417,10 @@ const PACK_NOTES: Record<string, string> = {
   'city-works': `<p>这个包动的是<b>骨架</b>，四条要记住：</p>
         <ul class="bullets">
           <li><b>主城 3×3</b>：城市占九格，耐久 +50%。城墙更厚，攻城就成了苦差事。</li>
-          <li><b>两种新资源</b>：活人（战斗、经济、建造单位）的造价里有四成是<b>粮食</b>，
-              机械与建筑的造价里有四成是<b>建材</b>；金币只占六成。
+          <li><b>两种新资源</b>：活人（战斗、经济、建造单位）的造价里有七成是<b>粮食</b>，
+              机械与建筑的造价里有七成是<b>建材</b>；金币只占三成。
+              <b>粮和材才是主要成本，金币是零头</b>——所以缺钱通常不是问题，
+              缺粮缺材才是。开局就把经济铺开，别把钱攒成一座金山。
               开局按时代给一笔起步粮材，之后就要靠经济单位挣。</li>
           <li><b>一种兵，多种产出</b>：经济单位看脚下——平地打粮、森林丘陵出建材，
               另一部分换回少量金币；经济建筑反过来，产出粮食，而且前期只用粮食就盖（不碰建材）。</li>

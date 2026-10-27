@@ -12,7 +12,6 @@
 
 import { hasAbility } from './abilities.ts';
 import {
-  CHEAPEST_COST,
   CITY,
   CONFIG,
   ORDER_UPGRADE,
@@ -1513,10 +1512,22 @@ function checkWinner(s: GameState): PlayerId | null {
     // 所以这里不看兵力，只看"还剩几座城"。
     if (citiesOf(s, p).length === 0) return other(p);
 
-    // 没兵又没钱，也是彻底打不下去了（城还在也不行，站着等死而已）
+    // 没兵又造不出任何兵，也是彻底打不下去了（城还在也不行，站着等死而已）。
+    //
+    // 判据是"按本局真实的造价构成，还买得起一支兵吗"，而不是"金币够不够"：
+    // 「城郭与物料」把造价拆成金币 + 粮/材之后，金币够了不代表造得起
+    // （没粮照样不行），金币不够也不代表造不起（大头是粮材）。
+    // 只看金币会两头误判：一边把还能打的判死，一边让真死透的继续耗。
     const alive = unitsOf(s, p).length;
-    const gold = s.players[p].gold;
-    if (alive === 0 && gold < CHEAPEST_COST) return other(p);
+    if (alive === 0) {
+      const canField = Object.values(s.unitTypes).some(
+        (d) =>
+          d.category !== 'building' &&
+          !d.summonedOnly &&
+          canPay(s.players[p], recruitResCost(s, p, d)),
+      );
+      if (!canField) return other(p);
+    }
   }
   return null;
 }
