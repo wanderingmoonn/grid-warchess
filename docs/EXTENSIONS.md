@@ -438,7 +438,7 @@ TypeScript，不需要编译），UI 冒烟在 `scripts/smoke-dom.ts`：
 
 ```bash
 npm run test:rules   # 304 项
-npm run test:ui      # 108 项
+npm run test:ui      # 111 项
 ```
 
 ### 9.1 基本写法

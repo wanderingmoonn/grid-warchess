@@ -2503,7 +2503,8 @@ a.btn {
 
 /* ---------- 强制移动 / 强制攻击 ---------- */
 /* 两个按钮长得像"操作"而不像"状态"：没上膛是描边，上膛之后填成主色。
-   键盘党直接用 Alt/Shift，这两个按钮是给触屏和不知道有快捷键的人准备的。 */
+   键盘党直接用 Alt/Shift，这两个按钮是给触屏和不知道有快捷键的人准备的。
+   注意它是**模式**而不是一次性开关：按下之后一直扣着，再按一次才放开。 */
 .force-row {
   display: flex;
   gap: 8px;
@@ -2533,6 +2534,33 @@ a.btn {
   background: var(--a);
   border-color: var(--a);
   color: #fff;
+}
+
+/*
+ * 模式横幅：钉在棋盘左上角。
+ *
+ * 这个模式会接管整个棋盘的点击（每一格只有"走过去 / 开火"一种解释），
+ * 所以它不能只写在侧栏的按钮上——玩家滚到战报那一段就看不见按钮了，
+ * 之后点哪儿都没反应，只会以为界面卡住了。
+ * pointer-events: none 是硬要求：它绝不能挡住棋盘本身的点击。
+ */
+.force-flag {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 40;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--a);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+.force-flag[data-mode='attack'] {
+  background: var(--b);
 }
 
 .force-btn kbd,

@@ -99,6 +99,7 @@ appEl.innerHTML = `
     <div class="commander-bar" id="commander" hidden></div>
     <div class="main">
       <div class="board-wrap" id="board-wrap">
+        <div class="force-flag" id="force-flag" hidden></div>
         <div class="board-scroll" id="board-scroll">
           <div class="board" id="board"></div>
         </div>
@@ -124,6 +125,14 @@ const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
  * 它只认"可视区域"这一个坐标系，永远钉在右下角。
  */
 const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
+/**
+ * 强制模式的横幅。
+ *
+ * 这个模式会**接管整个棋盘的点击**（每一格只有"走过去 / 开火"一种解释），
+ * 所以它必须一直看得见。按钮在侧栏里，玩家滚到战报那一段就把它忘了，
+ * 之后在棋盘上点什么都没反应——第一反应只会是"卡住了"。
+ */
+const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
@@ -261,11 +270,18 @@ let loadPlan: string | null = null;
 let unloadPlan: string | null = null;
 let handoffOpen = false;
 /**
- * 已经"上膛"的强制操作：下一次点棋盘按强制移动 / 强制攻击解释，然后自动卸下。
+ * 强制模式：**扣住**的，不是"上膛一次"。
  *
- * 和按住 Alt/Shift 等价，只是给触屏和鼠标党一条路。上膛只生效一次——
- * 让它常驻的话，之后每次点击都得先想"我现在是不是还在强制模式里"，
- * 那才是最容易误操作的设计。
+ * 早先这里是"点一下按钮 = 给下一次点击换一种解释，然后自动卸下"。实战里
+ * 这条最坑人：强制移动往往要连点几下（先往桥上挪、再挪到桥中间、发现走错了
+ * 换一格），而第二下点击就已经回到普通语义——那一下要是点在别的单位上，
+ * 手上的兵就被换掉了，"强制"这件事还没做完，先被自己的操作打断。
+ * 飞行单位最明显：它停在敌人头顶，脚底下那格永远压着一个单位，
+ * 第二下点击必定选中敌人，飞行的走位就此断在半路。
+ *
+ * 现在按"模式"来：点按钮进入并**保持**，期间棋盘的点击只按这一个动词解释
+ * （不选中、不下别的指令），再点同一个按钮才退出。按住 Alt/Shift 仍然是
+ * 一次性的修饰键，两边互不干扰——老玩家的手感不动。
  */
 let forceMode: 'move' | 'attack' | null = null;
 /**
@@ -579,6 +595,21 @@ function render(): void {
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
+
+  // 强制模式的横幅。文字只在档位变了才写一次：每帧重写一遍是白干活，
+  // 也会让读屏软件把同一句话反复念。
+  if (forceMode && state.config.godMode !== true) {
+    // 沙盒里点棋盘是"落子"，走的不是这条分支，横幅在那儿没有意义
+    const text =
+      forceMode === 'move'
+        ? '强制移动：点可达格就走上去 · 再点按钮退出'
+        : '强制攻击：点目标就开火（含身下那个）· 再点按钮退出';
+    forceFlagEl.hidden = false;
+    if (forceFlagEl.textContent !== text) forceFlagEl.textContent = text;
+    if (forceFlagEl.dataset.mode !== forceMode) forceFlagEl.dataset.mode = forceMode;
+  } else {
+    forceFlagEl.hidden = true;
+  }
 
   if (state.config.godMode === true) {
     // 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
@@ -1126,7 +1157,33 @@ function moveRefusal(coords: { x: number; y: number }): string {
     const b = blockers[0]!;
     return `这一格被「${utype(state, b.type).name}」占着，走不上去`;
   }
+  const mover = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+  if (mover && mover.x === coords.x && mover.y === coords.y) return '它已经站在这了';
+  const tile = state.tiles[idx(state, coords.x, coords.y)];
+  const onFoot = mover ? utype(state, mover.type).domain !== 'water' : true;
+  // 地形拒绝是强制移动里最常见的一种。只回一句"不在移动范围内"，玩家会当成
+  // 走位问题，于是挨个试旁边的格子——而它其实一步都进不去。
+  if (tile?.terrain === 'water' && onFoot) {
+    return '水面对陆军不通：要么从桥上过，要么换成水军';
+  }
+  if (tile?.terrain === 'mountain') return '高山进不去，得绕开';
   return '这一格不在移动范围内';
+}
+
+/**
+ * 强制模式这一下能不能落到"手上这个兵"身上。
+ *
+ * 模式是持续的，所以每次点击都要重新确认主体还成立：轮到我、是自己的兵、
+ * 手上没有别的计划（选址/上下船）。不成立就把这一下交回普通流程——
+ * 比如对手正好提交了回合，模式不该继续拦着人看棋盘。
+ */
+function forceSource(): string | null {
+  if (!selectedId) return null;
+  if (watching() || !myTurn() || state.config.commanderMode === true) return null;
+  if (buildPlan || loadPlan || unloadPlan || spawnPlan) return null;
+  const u = viewNow().state.units.find((x) => x.id === selectedId);
+  if (!u || u.owner !== me()) return null;
+  return u.id;
 }
 
 /**
@@ -1182,11 +1239,14 @@ function onBoardClick(e: Event): void {
     return;
   }
 
-  // 强制键：按钮上膛过一次就卸下；按住 Alt/Shift 也等价
+  // 强制键分两种：按住 Alt/Shift 是一次性修饰键；按钮扣住的模式（forceMode）持续。
+  //
+  // 这里**不能**再清 forceMode——旧语义"上膛一次、点一下就用掉"正是
+  // "强制移动被别的交互打断"的根源（见 forceMode 的注释）。
   const mouse = e instanceof MouseEvent ? e : null;
-  const wantMove = forceMode === 'move' || mouse?.altKey === true;
-  const wantAttack = forceMode === 'attack' || mouse?.shiftKey === true;
-  forceMode = null;
+  const latched = forceMode;
+  const wantMove = latched === 'move' || mouse?.altKey === true;
+  const wantAttack = latched === 'attack' || mouse?.shiftKey === true;
 
   // 0) 正在选下水点：点亮的格子就是答案，点别处就当取消。
   // 排在最前面，因为它是一个"已经上膛"的操作——这时候点棋盘的意思
@@ -1204,11 +1264,43 @@ function onBoardClick(e: Event): void {
     render();
   }
 
-  // 0.5) 强制移动：无视这一格上压着谁，直接按"走上去"解释。
+  // 0.4) 模式扣住了：这一下只按那一个动词解释，绝不落到"选中"上去。
   //
-  // 这是"走不上桥"那个问题的根治办法。桥是一枚建筑棋子，画在格子上面，
-  // 点上去永远是选中桥——而玩家想做的其实是走上桥面。以前只能在
-  // 规则里给桥开后门，现在把"我要走，不是我要选"明确说出来。
+  // 这是"强制移动优先级不足"的正面修法。以前强制是一次性的，第二下点击就
+  // 回到普通语义，于是点到别的单位就把手上的兵换掉。现在只要模式还在，
+  // 任何一格都只有两种结局：照做，或者被明确拒绝——选择与指令一律不做。
+  const forcedFrom = latched && coords ? forceSource() : null;
+  if (latched && coords && forcedFrom) {
+    const cell = idx(state, coords.x, coords.y);
+    if (latched === 'move') {
+      if (reach.includes(cell)) {
+        // 模式不清：下一格还按"走上去"解释，连点几下都是同一个意思
+        dispatch({ type: 'MOVE', unitId: forcedFrom, x: coords.x, y: coords.y });
+        return;
+      }
+      toast(moveRefusal(coords));
+      return;
+    }
+    // 强制攻击：先在这一格里找我打得到的那个——包括压在我身下的那个。
+    // 飞行单位停在敌人头顶时，"打它"和"飞到它那格"落在同一格上，
+    // 所以这里的顺序是先目标、后走位。
+    const hit = stackAt(coords.x, coords.y).find((u) => targets.includes(u.id));
+    if (hit) {
+      dispatch({ type: 'ATTACK', unitId: forcedFrom, targetId: hit.id });
+      return;
+    }
+    toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
+    return;
+  }
+
+  // 0.5) 强制移动（按住 Alt 的那条路）：无视这一格上压着谁，直接按"走上去"解释。
+  //
+  // 和上面 0.4 是同一个动词的两条入口：0.4 是按钮扣住的模式，这一条是一次性
+  // 的修饰键，也是模式因为"轮不到我 / 手上在选址"而不成立时的后备。
+  // 两处都必须"成或明确拒绝，绝不落到选中"，否则压在格子上那枚棋子又把话抢走了。
+  //
+  // 桥不用修饰键了：桥面可达时直接点就算"走上去"（见 1.9），因为桥没有
+  // 自己的操作面板，选中它从来都不是玩家想要的。
   if (
     wantMove &&
     coords &&
@@ -1369,6 +1461,23 @@ function onBoardClick(e: Event): void {
     unloadPlan = null;
   }
 
+  // 1.9) 点在桥面上：桥是"能站的地形"，不是一个等着被选中的物件。
+  //
+  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
+  // 永远是"选中这座桥"——桥修好了却只能穿过去，守桥、堵口、在桥中间换气
+  // 全都点不出来，表现就是"点了没反应"。这一格既然在可达范围里，就让
+  // "我要走上去"赢过"我要选它"：桥没有自己的操作面板（塔和军营才有），
+  // 选中它本来也做不了任何事。真要拆桥走的是上面那条攻击分支——
+  // 敌桥进了射程时，点它就是开火，轮不到这里。
+  const onBridge =
+    coords && selectedId && reach.includes(idx(state, coords.x, coords.y))
+      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
+      : undefined;
+  if (onBridge && coords && selectedId) {
+    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
+    return;
+  }
+
   // 2) 点到了某个单位
   if (clickedUnitId) {
     const u = state.units.find((x) => x.id === clickedUnitId);
@@ -1474,6 +1583,24 @@ function downloadMatchReport(): void {
 
 function handleAction(act: string, el: HTMLElement): void {
   switch (act) {
+    case 'force-move':
+    case 'force-attack': {
+      // 点一下进入、再点同一下退出；点另一个就直接切过去。
+      // 以前这两个按钮只有壳子，data-act 没有对应的分支——点下去什么都不会发生，
+      // 等于把"强制"这件事彻底锁在 Alt/Shift 后面（触屏用户完全没有入口）。
+      const want: 'move' | 'attack' = act === 'force-move' ? 'move' : 'attack';
+      forceMode = forceMode === want ? null : want;
+      render();
+      if (forceMode === 'move') {
+        toast('强制移动：点可达格就走上去，再点一次按钮退出');
+      } else if (forceMode === 'attack') {
+        toast('强制攻击：点目标就开火，再点一次按钮退出');
+      } else {
+        toast('已退出强制模式');
+      }
+      return;
+    }
+
     case 'end-turn':
       dispatch({ type: 'END_TURN' });
       return;

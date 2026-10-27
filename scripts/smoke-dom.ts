@@ -2316,6 +2316,249 @@ check('强制攻击：Shift 点敌人照样是开火，没有把攻击路径弄�
   assert.ok(hurt.hp < hpBefore, `Shift 点敌人应该开火：${hpBefore} → ${hurt.hp}`);
 });
 
+/**
+ * 找一块 n×m 的干净空地（无城、无单位），顺手抹成平原。
+ *
+ * 强制模式这一类用例问的是"点这儿会发生什么"，随机开局里的河、山、城
+ * 会悄悄改掉答案——那样挂掉的时候没人分得清是功能坏了还是地图不合适。
+ */
+function freeBlock(st: ReturnType<typeof createMatch>, n: number, m: number) {
+  for (let y = 1; y + m < st.h - 1; y++) {
+    for (let x = 1; x + n < st.w - 1; x++) {
+      let ok = true;
+      for (let dy = 0; dy < m && ok; dy++) {
+        for (let dx = 0; dx < n && ok; dx++) {
+          const t = st.tiles[(y + dy) * st.w + (x + dx)];
+          if (!t || t.cityId) ok = false;
+          else if (st.units.some((u) => u.x === x + dx && u.y === y + dy)) ok = false;
+        }
+      }
+      if (!ok) continue;
+      for (let dy = 0; dy < m; dy++) {
+        for (let dx = 0; dx < n; dx++) {
+          const t = st.tiles[(y + dy) * st.w + (x + dx)]!;
+          t.terrain = 'plain';
+          t.cityId = null;
+        }
+      }
+      return { x, y };
+    }
+  }
+  throw new Error('找不到一块干净的空地');
+}
+
+/** 校验用的"盘上坐标"：直接读存档，等同于读 state */
+function posIn(w: ReturnType<typeof bootWith>, id: string) {
+  const saved = JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+    units: { id: string; x: number; y: number }[];
+  };
+  return saved.units.find((u) => u.id === id)!;
+}
+
+check('强制移动按钮：点一下就一直扣着，期间点别的兵抢不走选中', () => {
+  // 旧语义是"给下一次点击上膛，点完就卸下"：第二下点击已经回到普通语义，
+  // 点到的若是另一个兵，手上的兵就被换掉了——强制移动还没做完就被自己打断。
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+  const spot = freeBlock(st, 2, 2);
+
+  const movable = st.units.filter(
+    (u) =>
+      u.owner === 'A' &&
+      UNIT_TYPES[u.type]?.category !== 'building' &&
+      UNIT_TYPES[u.type]?.domain !== 'water',
+  );
+  const me = movable[0]!;
+  const ally = movable[1] ?? movable[0]!;
+  me.x = spot.x;
+  me.y = spot.y;
+  me.moved = false;
+  me.acted = false;
+  // 友军站在隔壁那一格：它既是"诱惑"（点它会被选中），也挡住直线
+  ally.x = spot.x + 1;
+  ally.y = spot.y;
+  ally.moved = true;
+  ally.acted = true;
+
+  const w = bootWith(st);
+  const d = w.document;
+  const clickUnit = (id: string) =>
+    d.querySelector<HTMLElement>(`.unit[data-id="${id}"]`)!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+  const clickTile = (x: number, y: number) =>
+    d.querySelector<HTMLElement>(`.tile[data-x="${x}"][data-y="${y}"]`)!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+  const pressForce = () =>
+    d.querySelector<HTMLElement>('[data-act="force-move"]')!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+  const armed = () => Boolean(d.querySelector('.force-btn.armed[data-act="force-move"]'));
+  const heading = () => d.querySelector<HTMLElement>('#force-flag')!;
+
+  clickUnit(me.id);
+  pressForce();
+  assert.ok(armed(), '点一下按钮就该扣住');
+  assert.equal(heading().hidden, false, '模式开着的时候棋盘上要一直挂着横幅');
+
+  // 反例：模式扣住时点隔壁的友军——既不能被选中，也不能把手上这个兵换掉
+  clickUnit(ally.id);
+  assert.equal(
+    d.querySelector<HTMLElement>(`.unit[data-id="${ally.id}"]`)!.classList.contains('selected'),
+    false,
+    '模式扣住时点别的兵不该选中它',
+  );
+  assert.ok(
+    d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.classList.contains('selected'),
+    '选中还应该留在原来那个兵身上',
+  );
+  assert.equal(posIn(w, me.id).x, spot.x, '点友军那一下不该把人挪走');
+
+  // 再点可达格：按"走上去"解释，而且模式不卸下
+  const target = { x: spot.x, y: spot.y + 1 };
+  assert.equal(st.tiles[target.y * st.w + target.x]!.terrain, 'plain');
+  clickTile(target.x, target.y);
+  const after = posIn(w, me.id);
+  assert.equal(after.x, target.x, '强制移动下点可达格要直接走过去');
+  assert.equal(after.y, target.y);
+  assert.ok(armed(), '走完一步模式仍然扣着，要再点一次按钮才退出');
+
+  // 再点同一个按钮 → 退出
+  d.querySelector<HTMLElement>('[data-act="force-move"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  assert.equal(armed(), false, '再点一次按钮要退出强制模式');
+  assert.equal(heading().hidden, true, '退出之后横幅要收起来');
+});
+
+check('强制移动：飞行单位点敌人那格是"飞过去"，不是选中也不是开火', () => {
+  // 飞行单位停在敌人头顶是常态（分层允许共格），所以它脚下那格永远压着人。
+  // 模式扣住时这一下必须按"飞过去"解释——既不能被"选中敌人"截走，
+  // 也不能被"这里有敌人所以先开火"截走。这就是"严格遵循强制移动"。
+  const st = createMatch(
+    { ...DEFAULT_CONFIG, expansionIds: ['fantasy-core', 'fantasy-beasts'] } as never,
+    20261026,
+    {},
+  );
+  st.fog = false;
+  st.current = 'A';
+  const spot = freeBlock(st, 2, 2);
+
+  const flyerDef = Object.values(st.unitTypes).find(
+    (def) => def.category !== 'building' && (def.layer === 'air' || def.flight === true),
+  );
+  assert.ok(flyerDef, '扩展里应该有飞行兵种');
+
+  const me = st.units.find((u) => u.owner === 'A')!;
+  me.type = flyerDef!.id;
+  me.hp = flyerDef!.maxHp;
+  me.x = spot.x;
+  me.y = spot.y;
+  me.moved = false;
+  me.acted = false;
+
+  const foe = st.units.find((u) => u.owner === 'B')!;
+  foe.x = spot.x + 1;
+  foe.y = spot.y;
+  foe.hp = st.unitTypes[foe.type]!.maxHp;
+  const foeHp = foe.hp;
+
+  const w = bootWith(st);
+  const d = w.document;
+  const clickUnit = (id: string) =>
+    d.querySelector<HTMLElement>(`.unit[data-id="${id}"]`)!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+
+  clickUnit(me.id);
+  d.querySelector<HTMLElement>('[data-act="force-move"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+
+  // 点贴在旁边的敌人：按"飞过去"解释（空中层可以和地面共格）
+  clickUnit(foe.id);
+  const after = posIn(w, me.id);
+  assert.equal(after.x, spot.x + 1, '强制移动下点敌人那格，飞行单位要飞过去');
+  assert.equal(after.y, spot.y);
+  assert.equal(
+    d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`)!.classList.contains('selected'),
+    false,
+    '这一下不该顺手把敌人选中',
+  );
+  assert.ok(
+    d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.classList.contains('selected'),
+    '飞行单位仍然被选中，模式没被打断',
+  );
+
+  const hurt = (JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+    units: { id: string; hp: number }[];
+  }).units.find((u) => u.id === foe.id)!;
+  assert.equal(hurt.hp, foeHp, '强制移动期间点敌人是"飞过去"，不是开火');
+  assert.ok(
+    d.querySelector<HTMLElement>('.force-btn.armed[data-act="force-move"]'),
+    '走完之后模式仍然扣着',
+  );
+});
+
+check('点桥面是"走上桥"，不是"选中这座桥"', () => {
+  // 桥在数据上是一枚建筑棋子，所以直接点永远是选中桥——修好了却只能穿过去，
+  // 守桥、堵口、在桥中间换气全都点不出来。这一格既然可达，"走上去"要赢。
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
+  st.fog = false;
+  st.current = 'A';
+  const spot = freeBlock(st, 2, 1);
+  assert.ok(st.unitTypes.bridge, '应该有桥这个兵种');
+
+  const me = st.units.find(
+    (u) =>
+      u.owner === 'A' &&
+      UNIT_TYPES[u.type]?.category !== 'building' &&
+      UNIT_TYPES[u.type]?.domain !== 'water',
+  )!;
+  me.x = spot.x;
+  me.y = spot.y;
+  me.moved = false;
+  me.acted = false;
+
+  const bx = spot.x + 1;
+  const by = spot.y;
+  const tile = st.tiles[by * st.w + bx]!;
+  tile.terrain = 'bridge';
+  tile.cityId = null;
+  st.units.push({
+    id: 'bridge-x',
+    type: 'bridge',
+    owner: 'A',
+    x: bx,
+    y: by,
+    hp: st.unitTypes.bridge!.maxHp,
+    kills: 0,
+    moved: true,
+    acted: true,
+  });
+
+  const w = bootWith(st);
+  const d = w.document;
+  const clickUnit = (id: string) =>
+    d.querySelector<HTMLElement>(`.unit[data-id="${id}"]`)!.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
+
+  clickUnit(me.id);
+  clickUnit('bridge-x');
+
+  const after = posIn(w, me.id);
+  assert.equal(after.x, bx, '点桥面应该走上桥');
+  assert.equal(after.y, by);
+  assert.equal(
+    d.querySelector<HTMLElement>('.unit[data-id="bridge-x"]')!.classList.contains('selected'),
+    false,
+    '走上桥这一下不该顺带把桥选中',
+  );
+});
+
 console.log('\n天气标识');
 
 /** 造一局开了天气的棋，把某个单位摆到一块确定的平原上 */
