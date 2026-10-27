@@ -32,13 +32,14 @@
 关键在于：**`rules.ts` 一行都不用改**。引擎在算伤害、算收入、算移动力的时候
 都会先问一遍"有哪些扩展在生效"，然后把结果交给它们修正。你只管往数组里加对象。
 
-现有 23 个扩展分布在三个文件里，可以当参考读物：
+现有 24 个扩展分布在四个文件里，可以当参考读物：
 
 | 文件 | 内容 |
 |---|---|
 | `src/core/expansions.ts` | 13 个纯规则扩展（非对称开局、战争经济、堑壕战……） |
 | `src/core/era-packs.ts` | 5 个时代兵备包（古典 → 现代） |
 | `src/core/fantasy-packs.ts` | 5 个奇想兵种包（法则、骑士团、荒兽、秘术、英雄） |
+| `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军） |
 
 ---
 
@@ -230,11 +231,61 @@ onTurnStart: ({ state, player }) => {
 | `obstacle` | **反向标注**：默认所有建筑都能站人（塔有梯子、营有营门），只有墙/栅栏/拒马这类要显式写 `obstacle: true` 表示"这格过不去" |
 | `buildOn` | 地形要求：只能建在这些地形上（桥要水面） |
 | `transport` / `capacity` | 运输船：把相邻陆军装进货舱运过水面，自己不打架 |
+| `layer` / `flight` | 移动层（`'air'` 与地面互不占格）与飞行（掠水、林丘 1 步）。**原版机制**，不是奇想包的私货 |
+| `bio` | 这是"活人"还是"东西"：多资源规则靠它决定收粮还是收材。缺省按建筑/机械/水上单位推断 |
+| `costRes` / `yield` / `yieldByTerrain` | 金币之外的造价、固定产出、按地形的产出（同一单位换个地方产不同的资源） |
+| `buildTurns` | 要几个自己的回合才建成（> 1 就先落工地：能被打、开不了火、产不了兵） |
+| `garrison` | 可驻军：友军站上来多 `CONFIG.garrisonArmor` 点护甲，并借用它的视野 |
 | `requiresWater` | 必须紧邻水域才能建（军营靠水补给）。"旁边有没有水"是邻居的事，单靠 `buildOn` 表达不了，所以单独开一个开关 |
 
 奇想包还有一整组机制字段（魔法攻击、属性、状态、英雄技能……），同样全部可选、
 旧数据不写就是"没有"，不用升存档版本号——见 `types.ts` 里
 「奇想兵种包的机制字段」一段的注释。
+
+### 5.1.1 两条**原版**接口：移动层与多资源
+
+这两样是骨架，不是扩展的私货——它们决定"占不占格""吃什么资源"，
+而这两件事会渗进寻路、产兵位、造价判断。所以规则层无条件支持，
+不需要任何扩展勾选；扩展只负责**用它**。
+
+**移动层**
+
+```ts
+{ id: 'balloon', layer: 'air', flight: true, ... }   // 飘在敌人头顶
+{ id: 'eagle',   flight: true, ... }                // 会飞，但还在地上那一层
+```
+
+* `layer: 'air'` —— 与地面**互不占格**：它可以停在敌人头顶，敌人也能从它脚下走过。
+  攻击判定里"地面打空中距离 +1"（`rules.strikeDistance`），所以射程 1 的步兵打不到隔壁那格。
+* `flight: true` —— 能掠水、能停在水面、森林丘陵按 1 步。
+* 旧数据里的 `fly` / `fly-over` / `leap` 三条能力 id **仍然认**（规则层拿它们当别名），
+  自定义兵种编辑器也照旧能勾；新数据建议直接写字段。
+
+**多资源**
+
+```ts
+// 造价：金币 60 + 粮食 40
+{ cost: 100, costRes: { food: 40 }, ... }
+// 产出：站平地出粮、站林子出材
+{ yieldByTerrain: { plain: { food: 6 }, forest: { material: 8 } }, ... }
+```
+
+* `PlayerState.gold` 仍是主资源，读写照旧；其它资源在 `PlayerState.res[id]`，默认 0。
+* 结算一律走 `src/core/resources.ts` 的 helper（`resOf / canPay / payRes / addRes / costLabel`），
+  别自己在 `res` 上加减——漏了 `gold` 那一路就会变成"钱够却造不出来"。
+* 规则层只认 id；名字、简称、颜色在 `RESOURCES` 注册表里，加一种新资源就注册一行。
+* 两个钩子负责"扩展怎么用它"：`modifyResourceCost`（金币之外那份造价）
+  和 `modifyYield`（把金币产出改写成粮/材）。`modifyCost` 只管金币，两者分开，
+  既有扩展一行都不用改。
+
+### 5.1.2 城市变大、建筑要施工
+
+* `Expansion.citySize`：这个扩展要求的主城边长（缺省 2）。地图生成、建城、画城、
+  沙盒摆城四处都读 `config.citySize`，所以扩展只要写一行，城市当场变大。
+  棋盘太小时会自动退回 2（一边的 1/4 是硬上限）。
+* `buildTurns` → 工地：`unit.buildLeft` 记剩余回合，判断统一走 `rules.underConstruction()`。
+  工地不能开火、不能产兵、不能主动攻击，但**能被打**——这就是"塔要两回合"的代价窗口。
+* `garrison` → 驻军：加成在 `garrisonBonus()` 里算，护甲与视野两处都读它。
 
 ### 5.2 大量兵种放哪
 
@@ -307,7 +358,7 @@ UI 上子包不勾前置就不会勾上；玩家只勾子包、没勾前置时�
 
 ## 8. 规则书归册：scale 字段
 
-规则书是从代码**生成**的（`npm run manual`），分成 12 册：
+规则书是从代码**生成**的（`npm run manual`），分成 13 册：
 
 - 核心册 `public/manual.html`（永远存在）
 - 小型扩展合订本 `public/manual-small.html`（所有小型扩展一册）
@@ -339,7 +390,7 @@ CI 会跑 `npm run manual` 然后 `git diff --exit-code 'public/manual*.html'`�
 TypeScript，不需要编译），UI 冒烟在 `scripts/smoke-dom.ts`：
 
 ```bash
-npm run test:rules   # 271 项
+npm run test:rules   # 280 项
 npm run test:ui      # 92 项
 ```
 
@@ -393,7 +444,7 @@ test('丰收祭：开了多收 10', () => {
 - [ ] 有前置依赖的写了 `requires`；大型扩展标了 `scale: 'large'`
 - [ ] `test-rules.ts` 里加了至少一条守门测试（开 vs 不开对比最稳）
 - [ ] `npm run manual` 重新生成，`public/manual*.html` 的更新已提交
-- [ ] `npm run test:rules` 全绿（271+）
+- [ ] `npm run test:rules` 全绿（280+）
 - [ ] `npm run test:ui` 全绿（92+）
 - [ ] `npm run build`（含 `tsc --noEmit`）通过
 - [ ] 开局界面勾上它打一局，看看战报和手感
@@ -414,6 +465,6 @@ test('丰收祭：开了多收 10', () => {
 
 ---
 
-*文档对应代码版本：`EXPANSIONS` 23 个扩展、规则测试 271 项、UI 测试 92 项。
+*文档对应代码版本：`EXPANSIONS` 24 个扩展、规则测试 280 项、UI 测试 93 项。
 接口有变动时，以 `src/core/expansions.ts` 和 `src/core/types.ts` 的注释为准——
 那两处的注释就是这套系统的第一手文档。*

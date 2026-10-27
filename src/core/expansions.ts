@@ -15,10 +15,12 @@
  */
 
 import type { City, GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
+import type { ResourceCost } from './resources.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_PACKS } from './era-packs.ts';
 import { FANTASY_PACKS } from './fantasy-packs.ts';
+import { CITY_WORKS } from './city-works.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -69,6 +71,41 @@ export interface MoveCtx {
   player: PlayerId;
   unitType: UnitTypeDef;
   cost: number;
+}
+
+/**
+ * 金币之外那份价格的钩子（粮食、建材……）。
+ *
+ * 和 modifyCost 分开：那个签名连着所有既有扩展，改成"价格对象"
+ * 等于把每一个钩子都重写一遍，而它们关心的只有金币。
+ * 这里进来的是**当前**的附加价格表，返回新的表即可（返回空表 = 不要额外资源）。
+ *
+ * baseCost 是兵种的原始金币价（没被 modifyCost 改过），goldCost 是折后价——
+ * 想按"总价的 40% 收粮食"的扩展，应该用 baseCost 算，否则两次折价会叠加。
+ */
+export interface ResourceCostCtx {
+  state: GameState;
+  player: PlayerId;
+  unitType: UnitTypeDef;
+  /** 兵种表里写的原始金币价 */
+  baseCost: number;
+  /** 走完 modifyCost 之后的实际金币价 */
+  goldCost: number;
+  /** 当前已经确定的非金币价格（来自 costRes 字段） */
+  cost: ResourceCost;
+}
+
+/**
+ * 产出的钩子：把一个单位每回合的产出表交给你改。
+ *
+ * 纯函数，返回新表。多资源扩展靠它把原版经济单位的"金币收入"
+ * 改写成"所在地形产粮/产材"，而不用去改两百多个兵种条目。
+ */
+export interface YieldCtx {
+  state: GameState;
+  unit: Unit;
+  /** 已经算好的产出表（含金币、地形加成、临水加成） */
+  yields: ResourceCost;
 }
 
 export interface IncomeCtx {
@@ -128,6 +165,10 @@ export interface ExpansionHooks {
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */
   modifyCost?: (c: CostCtx) => number;
+  /** 纯函数：修正金币之外的那部分造价（粮食、建材……） */
+  modifyResourceCost?: (c: ResourceCostCtx) => ResourceCost;
+  /** 纯函数：修正单位每回合的产出（金币换成粮食这类改写走这里） */
+  modifyYield?: (c: YieldCtx) => ResourceCost;
   /** 纯函数：修正回合收入 */
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
@@ -196,6 +237,15 @@ export interface Expansion {
    * 不写默认按 'small' 处理。
    */
   scale?: 'small' | 'large';
+  /**
+   * 这个扩展要求的主城边长（缺省 2）。
+   *
+   * 为什么写在扩展上而不是只给 config：城市占几格会改变地图的生成方式
+   * （城间距、城郊清场、出生点半径），而地图是在开局那一刻生成的——
+   * 玩家在开局界面勾一个扩展，城市就该当场变大，而不是要他再去调一个旋钮。
+   * 多个扩展都声明时取最大值（谁要得大听谁的）。
+   */
+  citySize?: number;
 }
 
 function nameOf(state: GameState, typeId: string): string {
@@ -479,6 +529,7 @@ export const EXPANSIONS: Expansion[] = [
   // 五个时代兵种包（大型模组）。放在最后是为了不改动既有扩展的注册顺序——
   // 顺序会进存档，也影响钩子叠加次序。
   ...ERA_PACKS,
+  CITY_WORKS,
 ];
 
 export function expansionById(id: string): Expansion | undefined {

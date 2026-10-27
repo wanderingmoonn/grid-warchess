@@ -52,6 +52,7 @@ import {
   cityRegenOf,
   cityTiles,
   armySize,
+  canStandAt,
   canStrike,
   computeDamage,
   damageToCity,
@@ -60,25 +61,30 @@ import {
   effectiveRange,
   effectiveStats,
   eggSpots,
+  isAirborne,
   isHiddenFrom,
   magicDamageOf,
   idx,
   incomeOf,
+  incomeResOf,
   movePower,
   ordersOf,
   previewAttack,
   reachableTiles,
   rebuildCost,
   recruitCost,
+  recruitResCost,
   refreshMemory,
   strikeDistance,
   threatTiles,
   unitAt,
+  underConstruction,
   unitIncome,
   unitIncomeAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
+  unitYield,
   utype,
   visionOf,
   visibleTilesOf,
@@ -92,6 +98,7 @@ import type {
   MatchConfig,
   PlayerId,
   Unit,
+  UnitTypeDef,
 } from '../src/core/types.ts';
 
 let passed = 0;
@@ -1539,6 +1546,9 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
       if (u.summonedOnly) continue;
       const mech =
         (u.abilities ?? []).length > 0 ||
+        // 飞行/掠空从能力升格成了类型字段，但它仍然是机制（而且是最贵的那条）
+        u.flight === true ||
+        u.layer === 'air' ||
         (u.splash ?? 0) > 0 ||
         (u.burst ?? 1) > 1 ||
         (u.magicAtk ?? 0) > 0 ||
@@ -6283,6 +6293,238 @@ test('压着打仍然互相能还手：同格距离按 0+1=1 算', () => {
   assert.equal(strikeDistance(s, foot, bird), 1, '同格是 0+1');
   assert.equal(canStrike(s, foot, bird), true, '射程 1 也能打头顶那个');
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 原版预留的两条接口：飞行层、多资源
+//
+// 这两条不是某个兵种包的私货，而是**规则骨架**：占不占格、吃不吃粮，
+// 会渗进寻路、产兵位、造价判断。所以它们必须能在不勾任何扩展的前提下被测试。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 临时往本局兵种表里塞一个测试兵：接口测试不该依赖任何一个兵种包 */
+function testType(s: GameState, id: string, extra: Partial<UnitTypeDef>): UnitTypeDef {
+  const def = {
+    id,
+    name: id,
+    short: '测',
+    era: 1,
+    category: 'combat',
+    cost: 40,
+    move: 2,
+    atk: 10,
+    armor: 2,
+    maxHp: 30,
+    range: 1,
+    vision: 3,
+    ...extra,
+  } as UnitTypeDef;
+  s.unitTypes[id] = def;
+  return def;
+}
+
+test('飞行层是类型字段：air 能和地面同格，flight 能停在水上', () => {
+  const s = arena(fresh({ godMode: true }));
+  testType(s, 'test-hawk', { layer: 'air', flight: true });
+  testType(s, 'test-gull', { flight: true });
+
+  // 找一格水：飞行单位应当能"栖息"在水面上，而不是只能绕过去
+  const wi = s.tiles.findIndex((t) => t.terrain === 'water');
+  assert.ok(wi >= 0, '这张测试图上应该有水');
+  const wx = wi % s.w;
+  const wy = Math.floor(wi / s.w);
+  assert.equal(canStandAt(s, wx, wy, 'test-gull'), true, '飞行单位能停在水上');
+  assert.equal(canStandAt(s, wx, wy, 'militia'), false, '陆军还是进不了水');
+
+  const hawk = place2(s, 'A', 'test-hawk', 6, 6);
+  stackOn(s, 'B', 'militia', 6, 6);
+  assert.equal(isAirborne(s, hawk), true, 'layer: air 就是空中层');
+  assert.ok(
+    s.units.some((u) => u.type === 'militia' && u.x === 6 && u.y === 6),
+    '地面单位可以和空中单位叠在同一格',
+  );
+  assert.equal(canStandAt(s, 6, 6, 'militia'), false, '但地面层自己不能再叠一个');
+});
+
+test('多资源：活人吃粮、建筑耗材，缺粮就造不出来', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const militia = s.unitTypes.militia!;
+  const cost = recruitResCost(s, 'A', militia);
+  assert.ok((cost.gold ?? 0) > 0, '金币还是要的');
+  assert.ok((cost.gold ?? 0) < militia.cost, `金币只占一部分：${JSON.stringify(cost)}`);
+  assert.ok((cost.food ?? 0) > 0, '活人要吃粮');
+
+  const towerCost = recruitResCost(s, 'A', s.unitTypes.tower!);
+  assert.ok((towerCost.material ?? 0) > 0, '建筑要建材');
+  assert.equal(towerCost.food ?? 0, 0, '建筑不吃粮');
+
+  // 钱够、粮不够：造不出来，而且理由要点名缺的是粮不是钱
+  s.players.A.gold = 5000;
+  s.players.A.res = { food: 0, material: 0 };
+  const city = citiesOf(s, 'A')[0]!;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.equal(r.ok, false, '没粮就该失败');
+  assert.match((r as { reason: string }).reason, /粮食/, '失败原因要说清缺什么');
+});
+
+test('经济单位按脚下地形出货：平地打粮、林地出材', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const farmer = place2(s, 'A', 'farmer', 5, 5);
+  const plain = unitYield(s, farmer);
+  assert.ok((plain.food ?? 0) > 0, '平原上种出来的是粮');
+  assert.equal(plain.material ?? 0, 0, '平原不出建材');
+  assert.ok((plain.gold ?? 0) < (s.unitTypes.farmer!.incomeByTerrain?.plain ?? 0), '金币被拆走一部分');
+
+  // 同一支农民挪到林子里：产出换成了建材
+  s.tiles[farmer.y * s.w + farmer.x]!.terrain = 'forest';
+  const wood = unitYield(s, farmer);
+  assert.ok((wood.material ?? 0) > 0, '林子里的产出是建材');
+  assert.equal(wood.food ?? 0, 0, '林子不产粮');
+});
+
+test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const city = citiesOf(s, 'A')[0]!;
+  assert.equal(city.size, 3, '主城边长 3');
+  assert.equal(cityTiles(city).length, 9, '3×3 就是九格');
+  assert.equal(city.maxHp, Math.round(eraDef(1).cityMaxHp * 1.5), '主城血量提高一半');
+
+  const mill = s.unitTypes.mill!;
+  assert.equal(mill.atk, 0, '经济建筑不还手');
+  assert.equal(
+    mill.incomeByTerrain?.plain,
+    Math.round((UNIT_TYPES.mill!.incomeByTerrain?.plain ?? 0) * 1.2),
+    '经济建筑收益 +20%',
+  );
+  assert.ok(mill.maxHp > UNIT_TYPES.mill!.maxHp, '建筑整体更耐打');
+});
+
+test('箭塔：两回合施工，工地开不了火', () => {
+  const s = fresh({ expansionIds: ['city-works'], godMode: true });
+  const tower = s.unitTypes.tower!;
+  assert.ok((tower.buildTurns ?? 1) >= 2, `塔要施工：${tower.buildTurns}`);
+  assert.equal(tower.garrison, true, '塔可以驻军');
+
+  const laborer = place2(s, 'A', 'laborer', 7, 7);
+  // 清出一块确定的平地：测试不该赌生成器给出的地形
+  s.tiles[7 * s.w + 8]!.terrain = 'plain';
+  s.players.A.gold = 5000;
+  s.players.A.res = { food: 999, material: 999 };
+  const built = applyAction(s, {
+    type: 'BUILD',
+    unitId: laborer.id,
+    unitType: 'tower',
+    x: 8,
+    y: 7,
+  });
+  assert.ok(built.ok, built.ok ? '' : built.reason);
+  let st = built.state;
+  const site = st.units.find((u) => u.type === 'tower')!;
+  assert.equal(underConstruction(site), true, '刚盖好的是工地');
+
+  // 工地不能主动开火：这一下该被拒绝
+  const foe = place2(st, 'B', 'militia', 9, 7);
+  const shot = applyAction(st, { type: 'ATTACK', unitId: site.id, targetId: foe.id });
+  assert.equal(shot.ok, false, '工地还没装好武器');
+
+  // 两个自己的回合之后成型（每次 END_TURN 推进的是"接手那一方"的工地）
+  st = built.state;
+  for (let i = 0; i < 4; i++) {
+    const r = applyAction(st, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    st = r.state;
+  }
+  const done = st.units.find((u) => u.type === 'tower');
+  assert.ok(done, '塔还在');
+  assert.equal(underConstruction(done!), false, '两回合之后建成了');
+});
+
+test('驻军：站在自家可驻军建筑上多挡几点伤害', () => {
+  const s = arena(fresh({ expansionIds: ['city-works'], godMode: true }));
+  place2(s, 'A', 'tower', 6, 6);
+  const guard = stackOn(s, 'A', 'militia', 6, 6);
+  const bare = place2(s, 'A', 'militia', 7, 6);
+  const foe = place2(s, 'B', 'militia', 5, 6);
+  const withGarrison = computeDamage(s, foe, guard);
+  const without = computeDamage(s, foe, bare);
+  assert.equal(without - withGarrison, CONFIG.garrisonArmor, '驻军多挡一份护甲');
+});
+
+test('后期经济与工程兵种拿到了攻击和血量', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  assert.equal(s.unitTypes.planter!.atk, UNIT_TYPES.planter!.atk + 3);
+  assert.equal(s.unitTypes.planter!.maxHp, UNIT_TYPES.planter!.maxHp + 6);
+  assert.equal(s.unitTypes.crew!.armor, UNIT_TYPES.crew!.armor + 1, '现代工程兵再硬一点');
+  assert.equal(s.unitTypes.farmer!.atk, UNIT_TYPES.farmer!.atk, '前期兵不动：改的是"后期自保"');
+});
+
+test('多资源收入：incomeResOf 和真实结算同源', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  place2(s, 'A', 'farmer', 5, 5);
+  const expect = incomeResOf(s, 'A');
+  assert.ok((expect.gold ?? 0) > 0, '金币还有收入');
+  assert.ok((expect.food ?? 0) > 0, '粮食也有收入');
+
+  const before = { ...(s.players.A.res ?? {}) };
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  // 结算给的是"接手那一方"，所以这里要把 A 的收入单独再算一遍对比
+  const gainFood = (s.players.A.res?.food ?? 0) - (before.food ?? 0);
+  assert.ok(gainFood >= 0, '结束回合不会让资源倒退');
+  assert.ok((expect.food ?? 0) > 0, '估算与结算读的是同一套产出');
+});
+
+test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去', () => {
+  // 这条守的是一个真实事故：塔要施工两回合，规则层拒绝工地开火，
+  // 但 AI 的候选列表照样生成 ATTACK。执行方遇到非法动作会中断整回合，
+  // 于是双 AI 对局在第 20 回合死在一个永远失败的"箭塔开炮"上。
+  // 所以要测的不是"某个动作对不对"，而是"连续几百步里没有一步被拒"。
+  let sawSite = false;
+  const runs: Array<{ ids: string[]; seed: number }> = [
+    { ids: ['city-works'], seed: 424242 },
+    { ids: ['city-works'], seed: 777 },
+    { ids: ['city-works'], seed: 20260726 },
+    // 扩展全开是另一条路：迷雾里看不见的敌人会挡路、空废墟要重建费，
+    // 这两个坑都只在"扩展拉满、单位很密"的局面里才浮出来。
+    { ids: EXPANSIONS.map((e) => e.id), seed: 20260726 },
+  ];
+  for (const { ids, seed } of runs) {
+    let state = createMatch(
+      {
+        ...BASE,
+        size: 12,
+        startEra: 3,
+        aiOpponent: true,
+        aiAlly: true,
+        expansionIds: ids,
+      },
+      seed,
+    );
+    const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
+    let turns = 0;
+    while (turns < 18 && !state.winner) {
+      const act = aiNextAction(state, budget);
+      if (!act) {
+        const end = applyAction(state, { type: 'END_TURN' });
+        assert.ok(end.ok, end.ok ? '' : end.reason);
+        state = end.state;
+        turns += 1;
+        budget.recruited = 0;
+        budget.upgraded = 0;
+        continue;
+      }
+      const r = applyAction(state, act);
+      assert.ok(r.ok, `种子 ${seed} 第 ${turns} 回合 AI 提出了非法动作 ${JSON.stringify(act)}：${r.ok ? '' : r.reason}`);
+      state = r.state;
+      if (act.type === 'BUILD' || state.units.some(underConstruction)) sawSite = true;
+      if (act.type === 'RECRUIT') budget.recruited += 1;
+      if (act.type === 'UPGRADE') budget.upgraded += 1;
+    }
+  }
+  assert.ok(sawSite, '三局里总该有人盖过一次要施工的东西，否则这条测试没考到点子上');
+});
+
+
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

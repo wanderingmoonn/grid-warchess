@@ -132,6 +132,16 @@ export function createMatch(
   }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
+  // 城市边长：扩展可以要求更大的主城（「城郭与物料」要 3×3）。
+  // 取所有启用扩展里最大的那个；没写就用 config 里的值，再没有就 2。
+  const declaredCitySize = Math.max(
+    CITY.size,
+    ...config.expansionIds
+      .filter((id) => liveExpansions.has(id))
+      .map((id) => expansionById(id)?.citySize ?? 0),
+  );
+  const citySize = Math.max(CITY.size, Math.round(config.citySize ?? declaredCitySize));
+
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
   const pool = enabled.length > 0 ? enabled : Object.keys(UNIT_TYPES);
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
@@ -153,7 +163,11 @@ export function createMatch(
     clampBoardSize(config.size),
     seed,
     spawnPool,
-    { style: config.mapStyle ?? 'random', symmetry: config.mapSymmetry ?? 'fair' },
+    {
+      style: config.mapStyle ?? 'random',
+      symmetry: config.mapSymmetry ?? 'fair',
+      citySize,
+    },
   );
   const w = layout.w;
   const h = layout.h;
@@ -187,15 +201,15 @@ export function createMatch(
       id,
       x: left,
       y: top,
-      size: CITY.size,
+      size: citySize,
       owner,
       era: startEra,
       hp: eraInfo.cityMaxHp,
       maxHp: eraInfo.cityMaxHp,
       armor: eraInfo.cityArmor,
     });
-    for (let dy = 0; dy < CITY.size; dy++) {
-      for (let dx = 0; dx < CITY.size; dx++) {
+    for (let dy = 0; dy < citySize; dy++) {
+      for (let dx = 0; dx < citySize; dx++) {
         const tile = tiles[(top + dy) * w + (left + dx)];
         if (!tile) continue;
         tile.terrain = 'city';
@@ -257,6 +271,8 @@ export function createMatch(
       startEra,
       mapStyle: config.mapStyle ?? 'random',
       mapSymmetry: config.mapSymmetry ?? 'fair',
+      // 城市边长要存进存档：读档之后建城、上帝模式摆城、界面画城都读它
+      citySize,
       aiOpponent: config.aiOpponent,
       aiAlly: config.aiAlly,
       aiLevel: config.aiLevel === 'basic' ? 'basic' : 'advanced',

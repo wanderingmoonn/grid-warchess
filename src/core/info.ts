@@ -8,6 +8,7 @@
 import { abilityById, abilityNames } from './abilities.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
+import { resourceShort } from './resources.ts';
 import { ELEMENT_NAME } from './types.ts';
 import type { Element, GameState, PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
@@ -86,6 +87,16 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   if (def.domain === 'water') {
     lines.push('只在水上行动：上不了岸，只能在临水的城市下水。能打岸上的目标，也会被岸上打。');
   }
+  // ── 移动层与飞行（原版机制，不是某个兵种包的特权） ────────────────────
+  if (def.layer === 'air') {
+    lines.push(
+      '掠空：它在**天上那一层**，和地面单位互不占格——可以停在敌人头顶，敌人也能从它脚下走过。',
+    );
+    lines.push('天上打地上不算同格；地上打天上距离 +1（要先"够得着头顶"），所以射程 1 的步兵打不到隔壁的飞行单位。');
+  }
+  if (def.flight === true) {
+    lines.push('飞行：能掠过水面（也能停在水上），森林和丘陵按 1 步算。河防对它不成立。');
+  }
   // ── 奇想兵种包的机制 ──────────────────────────────────────────────────
   if (def.magicAtk) {
     lines.push(
@@ -161,6 +172,16 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
     if (on) lines.push(`只能扎在${on}上`);
     if (def.requiresWater) lines.push('必须紧邻水域（靠水补给），所以它天然长在水边');
   }
+  if (def.buildTurns && def.buildTurns > 1) {
+    lines.push(
+      `施工 ${def.buildTurns} 回合：先落一个工地——看得见、挡得住、能被打，但开不了火也产不了兵。成型之前它就是个靶子。`,
+    );
+  }
+  if (def.garrison) {
+    lines.push(
+      `可驻军：友军站上来额外 +${CONFIG.garrisonArmor} 护甲、并借用它的视野。这是"进驻"唯一的意义——站上去得有用。`,
+    );
+  }
 
   const names = abilityNames(def);
   if (names.length > 0) {
@@ -172,6 +193,27 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   }
 
   if (def.category === 'economy' || def.category === 'building') {
+    // 多资源：同一个单位在不同地形上可以产不同的东西，所以先列"哪块地出什么"
+    if (def.yieldByTerrain) {
+      const parts = (Object.keys(def.yieldByTerrain) as Terrain[])
+        .map((t) => {
+          const table = def.yieldByTerrain?.[t] ?? {};
+          const items = Object.entries(table)
+            .filter(([, v]) => (v ?? 0) > 0)
+            .map(([id, v]) => `+${v} ${resourceShort(id)}`)
+            .join(' ');
+          return items ? `${TERRAIN_INFO[t].name} ${items}` : '';
+        })
+        .filter(Boolean)
+        .join(' · ');
+      if (parts) lines.push(`每回合产出（按所站地形）：${parts}`);
+    } else if (def.yield) {
+      const items = Object.entries(def.yield)
+        .filter(([, v]) => (v ?? 0) > 0)
+        .map(([id, v]) => `+${v} ${resourceShort(id)}`)
+        .join(' ');
+      if (items) lines.push(`每回合产出：${items}`);
+    }
     if (def.incomeByTerrain) {
       const parts = (Object.keys(def.incomeByTerrain) as Terrain[])
         .map((t) => {
@@ -184,6 +226,14 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
     } else if (def.income) {
       lines.push(`每回合产出 ${def.income} 金`);
     }
+  }
+
+  if (def.costRes) {
+    const extra = Object.entries(def.costRes)
+      .filter(([, v]) => (v ?? 0) > 0)
+      .map(([id, v]) => `${v} ${resourceShort(id)}`)
+      .join(' + ');
+    if (extra) lines.push(`另外要 ${extra}（金币之外的那份）`);
   }
 
   if (def.builds && def.builds.length > 0) {

@@ -42,14 +42,17 @@ import {
   reachableTiles,
   rebuildCost,
   recruitCost,
+  recruitResCost,
   siegeTargets,
   tileAt,
+  underConstruction,
   unitAt,
   unitsOf,
   upgradeCostOf,
   utype,
   xyOf,
 } from './rules.ts';
+import { canPay, payRes } from './resources.ts';
 import type { Action, AiLevel, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 
 export interface AiBudget {
@@ -1076,6 +1079,24 @@ function buildSpots(
       if (!tile) continue;
       if (unitAt(s, x, y)) continue;
 
+      // 别把自己堵死：城里最后一格空地不能拿来盖东西。
+      // rules 的 doBuild 会明确拒绝这种落子，AI 一旦提出来就是一次整回合中断，
+      // 而城郭扩展多给了粮仓和采石场，AI 盖得比过去勤，这条路以前没被走过。
+      const host = s.cities.find(
+        (c) =>
+          c.owner === unit.owner &&
+          x >= c.x &&
+          x < c.x + c.size &&
+          y >= c.y &&
+          y < c.y + c.size,
+      );
+      if (host) {
+        const left = cityTiles(host).filter(
+          (t) => !(t.x === x && t.y === y) && !unitAt(s, t.x, t.y),
+        );
+        if (left.length === 0) continue;
+      }
+
       // 地形要求写在数据里
       if (def?.buildOn) {
         if (!def.buildOn.includes(tile.terrain)) continue;
@@ -1286,7 +1307,10 @@ function unitCandidates(
   const out: Candidate[] = [];
   const def = utype(s, unit.type);
 
-  if (!unit.acted) {
+  // 施工中的工地不能开火、不能围城、不能造东西（规则层会拒），
+  // 所以这里根本不为它生成候选——否则 AI 会提一个必被拒绝的动作，
+  // 而执行方遇到非法动作就中断整回合，整局直接卡死。
+  if (!unit.acted && !underConstruction(unit)) {
     for (const t of attackableTargets(s, unit)) {
       out.push({
         action: { type: 'ATTACK', unitId: unit.id, targetId: t.id },
@@ -1305,7 +1329,7 @@ function unitCandidates(
         if (!buildDef) continue;
         // 钱和编制都要够：以前没查，AI 会一直提"金币不足"的建造，
         // 而执行方遇到非法动作就中断整回合。
-        if (s.players[s.current].gold < recruitCost(s, s.current, buildDef)) continue;
+        if (!canPay(s.players[s.current], recruitResCost(s, s.current, buildDef))) continue;
         for (const spot of buildSpots(s, unit, buildDef)) {
           // 同上：视图里空着的地方，真实局面里可能有个看不见的敌人
           if (unitAt(truth, spot.x, spot.y)) continue;
@@ -1319,13 +1343,25 @@ function unitCandidates(
   }
 
   if (!unit.moved && def.move > 0) {
+    // 迷雾里看不见的敌人也会挡路：视图上算通达的落点，到了真实局面上
+    // 可能被一条"看不见的封锁线"截断。只看落点有没有人是不够的——
+    // 路径中间站一个它也照样过不去。所以在这里再和真实可达集合求一次交，
+    // 提出的落点才一定执行得下去。
+    const real = truth.units.find((u) => u.id === unit.id);
+    const realReach = real ? reachableTiles(truth, real) : null;
+    const me = s.current;
     let best: Candidate | null = null;
     for (const i of reachableTiles(s, unit).keys()) {
+      if (realReach && !realReach.has(i)) continue;
       const { x, y } = xyOf(s, i);
       // 视图中那格是空的，真实局面里可能站着一个它看不见的敌人（潜行 / 视野外）。
       // 这种落点直接跳过，否则会提出一个"目标格不可达"的非法动作，
       // 而执行方遇到非法动作会中断整个回合。
       if (unitAt(truth, x, y)) continue;
+      // 空地废墟走进去要付重建费。掏不起就换个落点——
+      // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
+      const destCity = cityAt(s, x, y);
+      if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
       const score = scoreMove(s, unit, x, y, all, traits);
       if (!best || score > best.score) {
         best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
@@ -1624,6 +1660,10 @@ function recruitCandidate(
     const unlockFee =
       d.hero && !(s.unlocked?.[me] ?? []).includes(d.id) ? (d.unlockCost ?? 0) : 0;
     const price = recruitCost(s, me, d);
+    // 多资源：粮食/建材不够时，光有金币也买不起。
+    // 只看金币会让 AI 反复挑一个造不出来的兵，然后整回合卡在那里。
+    const fullPrice = recruitResCost(s, me, d);
+    if (!canPay(s.players[me], fullPrice)) continue;
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
@@ -1913,7 +1953,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
       moved: true,
       acted: true,
     });
-    proj.players[player].gold = Math.max(0, proj.players[player].gold - recruitCost(proj, player, def));
+    payRes(proj.players[player], recruitResCost(proj, player, def));
   }
 
   return slots;

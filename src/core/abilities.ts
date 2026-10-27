@@ -361,7 +361,18 @@ export function hasAbility(def: UnitTypeDef | undefined, id: string): boolean {
   return !!def?.abilities?.includes(id);
 }
 
-/** 把能力 id 列表翻成人话，给面板用 */
+/**
+ * 把能力 id 列表翻成人话，给面板用。
+ *
+ * 飞行和掠空已经从"能力"升格成类型字段（`flight` / `layer`），
+ * 但它们仍然是玩家看得见的标签——所以字段为真时在这里补回来。
+ * 能力表里的同名条目留着不动：自定义兵种编辑器、老存档、老角色卡
+ * 都还认那两个 id，规则层也照旧认（见 rules.ts 的 airLayer/crossesWater）。
+ */
 export function abilityNames(def: UnitTypeDef): string[] {
-  return (def.abilities ?? []).map((id) => abilityById(id)?.name ?? id);
+  const ids = def.abilities ?? [];
+  const names = ids.map((id) => abilityById(id)?.name ?? id);
+  if (def.layer === 'air' && !ids.includes('fly-over')) names.unshift('掠空');
+  else if (def.flight === true && !ids.includes('fly') && !ids.includes('fly-over')) names.unshift('飞行');
+  return names;
 }

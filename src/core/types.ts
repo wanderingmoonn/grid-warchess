@@ -8,6 +8,19 @@
 
 export type PlayerId = 'A' | 'B';
 
+/**
+ * 资源种类。
+ *
+ * 原版只通行金币，但"钱"从一开始就不该是唯一答案：养兵吃粮、盖楼用材，
+ * 这两件事在历史线里比金币更硬。所以资源在类型上是开放的字符串 id，
+ * 注册表（名字、颜色）放在 resources.ts，规则层只认 id。
+ *
+ * 做成 string 而不是 'gold' | 'food' | 'material' 的联合：
+ * 扩展和自定义兵种应该能加自己的资源（比如"法力""燃油"），
+ * 而每加一种都要改核心类型，等于把扩展性锁死在核心里。
+ */
+export type ResourceId = string;
+
 export type Terrain = 'plain' | 'forest' | 'hill' | 'water' | 'mountain' | 'bridge' | 'city';
 
 /**
@@ -35,6 +48,21 @@ export const ELEMENT_NAME: Record<Element, string> = {
 
 /** 行动域：陆军只能走陆地，水军只能走水面 */
 export type UnitDomain = 'land' | 'water';
+
+/**
+ * 移动层：地面还是空中。
+ *
+ * 原版（古典到现代）没有一个会飞的兵，但**规则层从一开始就得承认"天上还有一层"**：
+ * 这件事没法后补——只要规则里假设了"一格一人"，后来再加飞行就得到处改判定
+ * （占位、寻路、攻击距离、反击、渲染叠放），改一处漏一处。
+ *
+ * 所以层是类型上的第一等概念，不是某个兵种包的私货：
+ *   · ground（缺省）—— 站地上，一格一个人
+ *   · air           —— 掠空，和地面**互不占格**，可以和地面单位叠在同一格
+ *
+ * 有了它，之后任何扩展想让"投石机抛射"“热气球侦察”进原版，都不用再改规则。
+ */
+export type UnitLayer = 'ground' | 'air';
 
 /**
  * 英雄技能的**效果类型**。
@@ -92,7 +120,23 @@ export interface UnitTypeDef {
   era: number;
   /** 战斗单位 / 经济单位 / 建筑 */
   category: UnitCategory;
+  /**
+   * 金币造价。
+   *
+   * 原版只花金币，所以这个字段永远是"总价"。开了多资源的扩展之后，
+   * 总价会被拆成"一部分金币 + 一部分粮食/建材"（见 costRes），
+   * 这里的数字仍然代表**改造之前**的原价——扩展要按原价折算，
+   * 而不是拿了折后价再折一次。
+   */
   cost: number;
+  /**
+   * 金币之外的造价（粮食、建材……）。
+   *
+   * 缺省表示"只要金币"。写成旁边一个表而不是把 cost 改成对象，
+   * 是因为全项目有一百多处读 `def.cost`——改成对象等于把每一处都改成
+   * "要么是数要么是表"，那种代码没人想在半夜维护。
+   */
+  costRes?: Partial<Record<ResourceId, number>>;
   /** 移动力；0 表示不可移动（建筑） */
   move: number;
   atk: number;
@@ -120,6 +164,21 @@ export interface UnitTypeDef {
    * 有这张表的经济单位必须"站对地方"才赚钱——农民在平原富、牧民在丘陵富。
    */
   incomeByTerrain?: Partial<Record<Terrain, number>>;
+  /**
+   * 固定每回合产出（金币之外的资源也走这里）。
+   *
+   * 和 income 的关系：income 是"金币"的简写，两个字段同时写会相加。
+   * 留着 income 不合并，是因为原版两百多个兵种条目全写的是 income，
+   * 改字段名除了制造 diff 之外没有任何收益。
+   */
+  yield?: Partial<Record<ResourceId, number>>;
+  /**
+   * 按地形产出的资源表——**同一个单位在不同地块上产不同的东西**。
+   *
+   * 这是多资源玩法的主轴：一个采集者站平原打粮、站森林砍木头（建材）、
+   * 站丘陵采石（也是建材）。一种兵，三种产出，位置本身就是选择。
+   */
+  yieldByTerrain?: Partial<Record<Terrain, Partial<Record<ResourceId, number>>>>;
   /** 每回合自动对射程内最近的敌人开火（建筑用） */
   autoAttack?: boolean;
   /**
@@ -136,6 +195,27 @@ export interface UnitTypeDef {
    */
   domain?: UnitDomain;
   /**
+   * 移动层。缺省 ground。
+   *
+   * air 的单位与地面**互不占格**：它可以停在敌人头顶，敌人也可以从它脚下走过。
+   * 这条是核心规则（不是扩展），因为"占不占格"会渗进寻路、产兵位、攻城判定。
+   */
+  layer?: UnitLayer;
+  /**
+   * 飞行：可以掠过水面（并且能停在水上），森林丘陵按 1 步算。
+   *
+   * 和 layer 分开：飞行说的是"怎么走"，layer 说的是"在哪一层"。
+   * 一只鹰是"会飞 + 在空中"，一架滑翔机也是；而热气球可能只是"在空中"却不飞得快。
+   */
+  flight?: boolean;
+  /**
+   * 生物：这条单位是"活人/活物"还是"东西"。
+   *
+   * 多资源规则靠它区分"吃粮"还是"耗材"：活人要吃饭，船和投石机要修。
+   * 缺省不写，由规则层按三条线索推：建筑、机械、水上单位都算非生物。
+   */
+  bio?: boolean;
+  /**
    * 这类建筑是架在水面上的桥：那一格会变成可通行的桥面。
    * 桥是双向的——谁都能从上面过（当然，也谁都能把它打塌）。
    */
@@ -145,6 +225,21 @@ export interface UnitTypeDef {
    * 用的是最近己方城市的时代。
    */
   barracks?: boolean;
+  /**
+   * 要几个自己的回合才能建成（缺省 1 = 当回合落成）。
+   *
+   * 大于 1 时先落一个"工地"：挡路、能被打、看得见，但不能开火、不能产兵、
+   * 不能动手。给防御塔用的——"两回合才立起来"让对手有机会在它成型前拆掉它，
+   * 于是"修塔"从一个瞬间动作变成一段需要掩护的过程。
+   */
+  buildTurns?: number;
+  /**
+   * 可驻军：友军站在这一格上时额外获得护甲与视野（见 CONFIG.garrisonArmor）。
+   *
+   * 兵本来就能站自家建筑（见 reachableTiles 的说明），这个字段回答的是
+   * "站上去有什么用"——没有它，"进驻"只是一个说法。
+   */
+  garrison?: boolean;
   /**
    * 障碍：这一格"过不去"，连友军也不能停在上面。
    *
@@ -318,6 +413,13 @@ export interface Unit {
   /** 本回合已攻击 */
   acted: boolean;
   /**
+   * 还差几个自己的回合才能建成（多回合施工的工地）。
+   *
+   * 只在 buildTurns > 1 的建筑上出现；缺省 undefined = 已经建好了。
+   * 判断一律走 rules.ts 的 underConstruction()，别在各处写 `> 0`。
+   */
+  buildLeft?: number;
+  /**
    * 本回合**手动**开过火（只有能自动开火的建筑用得上）。
    *
    * 为什么不复用 acted：新盖好的建筑本来就是 acted=true（当回合不能行动），
@@ -456,6 +558,14 @@ export interface MatchConfig {
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */
   mapSymmetry?: 'fair' | 'mirror';
   /**
+   * 城市边长（占 size × size 格），缺省 2。
+   *
+   * 写在 config 里而不是只从扩展读：地图生成要知道城占多大，
+   * 而地图是在"这一局用什么规则"确定之后、开局之前生成的。
+   * 扩展通过 `Expansion.citySize` 声明它要多大，setup 把它折算进 config。
+   */
+  citySize?: number;
+  /**
    * 后手（B）开局金币补偿比例的**临时覆盖**，默认 0 = 不覆盖。
    *
    * 正式规则是「先后手补偿」扩展（按棋盘边长给：12×12 补 20%、16×16 补 5%）。
@@ -481,7 +591,16 @@ export interface MatchConfig {
 export interface PlayerState {
   id: PlayerId;
   name: string;
+  /** 金币：主资源，也是唯一一种"原版就在流通"的资源 */
   gold: number;
+  /**
+   * 其它资源（粮食、建材……）。
+   *
+   * 不把 gold 也塞进来：gold 会被一百多处直接读写，挪进表里等于给每一处
+   * 加一层容错；而且旧存档读出来没有 res 字段，正好等于"只有金币"。
+   * 读写其它资源一律走 resources.ts 的 helper，别自己在这张表上加减。
+   */
+  res?: Partial<Record<ResourceId, number>>;
 }
 
 /** 玩家记忆中某个敌方单位的最后已知位置 */

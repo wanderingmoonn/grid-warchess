@@ -2004,8 +2004,9 @@ function renderGodShelf(): void {
 /** 摆城时能放下 2×2 的角，扔给棋盘点亮成橙格 */function godCitySpots(): number[] {
   if (godBrush.kind !== 'city') return [];
   const out: number[] = [];
-  for (let y = 0; y + CITY.size <= state.h; y++) {
-    for (let x = 0; x + CITY.size <= state.w; x++) {
+  const cs = state.config.citySize ?? CITY.size;
+  for (let y = 0; y + cs <= state.h; y++) {
+    for (let x = 0; x + cs <= state.w; x++) {
       if (sandboxCityProblem(state, x, y) === null) out.push(y * state.w + x);
     }
   }

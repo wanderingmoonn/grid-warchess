@@ -78,7 +78,8 @@ export const SUMMONED_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 4,
     summonedOnly: true,
-    abilities: ['fly-over'],
+    flight: true,
+    layer: 'air',
   },
   {
     id: 'phantom',
@@ -428,7 +429,9 @@ const BEASTS: Expansion = {
       range: 1,
       vision: 5,
       burst: 3,
-      abilities: ['fly-over', 'poison-hit'],
+      flight: true,
+      layer: 'air',
+      abilities: ['poison-hit'],
     },
     {
       id: 'centaur',
@@ -560,7 +563,9 @@ const BEASTS: Expansion = {
       range: 1,
       vision: 5,
       magicRes: 3,
-      abilities: ['fly-over', 'berserk'],
+      flight: true,
+      layer: 'air',
+      abilities: ['berserk'],
     },
     {
       id: 'harpy',
@@ -575,7 +580,8 @@ const BEASTS: Expansion = {
       maxHp: 24,
       range: 2,
       vision: 6,
-      abilities: ['fly-over'],
+      flight: true,
+      layer: 'air',
     },
     {
       id: 'griffin-rider',
@@ -590,7 +596,8 @@ const BEASTS: Expansion = {
       maxHp: 44,
       range: 1,
       vision: 6,
-      abilities: ['fly-over'],
+      flight: true,
+      layer: 'air',
     },
     // 龙骑兵：飞行 + 冲锋 + 溅射。三条机制叠在一个兵上，所以面板压得低。
     {
@@ -607,7 +614,9 @@ const BEASTS: Expansion = {
       range: 1,
       vision: 6,
       splash: 1,
-      abilities: ['fly-over', 'charge'],
+      flight: true,
+      layer: 'air',
+      abilities: ['charge'],
     },
     // ── 4 级 ──────────────────────────────────────────────────────────────
     {
@@ -658,7 +667,9 @@ const BEASTS: Expansion = {
       maxHp: 92,
       range: 1,
       vision: 6,
-      abilities: ['fly-over', 'siege-master'],
+      flight: true,
+      layer: 'air',
+      abilities: ['siege-master'],
     },
   ],
 };
@@ -920,7 +931,9 @@ const ARCANE: Expansion = {
       maxHp: 42,
       range: 1,
       vision: 5,
-      abilities: ['knockback', 'fly-over'],
+      flight: true,
+      layer: 'air',
+      abilities: ['knockback'],
     },
     // 幽灵：穿行 + 5 魔抗。堵枪眼对它无效；怕光，天使和圣骑士能治它。
     {
@@ -1010,7 +1023,9 @@ const ARCANE: Expansion = {
       maxHp: 56,
       range: 1,
       vision: 5,
-      abilities: ['fly-over', 'lifesteal'],
+      flight: true,
+      layer: 'air',
+      abilities: ['lifesteal'],
       weak: { fire: 2, light: 2 },
     },
     // 机关傀儡：不会好起来的兵。能一直打，但不能一直撑。
@@ -1046,7 +1061,9 @@ const ARCANE: Expansion = {
       vision: 6,
       magicAtk: 10,
       element: 'fire',
-      abilities: ['fly-over', 'kamikaze', 'summoner'],
+      flight: true,
+      layer: 'air',
+      abilities: ['kamikaze', 'summoner'],
       summon: { type: 'imp', every: 3, max: 2 },
     },
     // ── 被召唤的（不进产线、不占编制） ────────────────────────────────────
@@ -1160,7 +1177,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     element: 'fire',
     hero: true,
     unlockCost: 220,
-    abilities: ['fly-over', 'rebirth'],
+    flight: true,
+    layer: 'air',
+    abilities: ['rebirth'],
     skills: [
       {
         id: 'dive',
@@ -1237,7 +1256,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     element: 'light',
     hero: true,
     unlockCost: 250,
-    abilities: ['fly-over', 'heal-aura'],
+    flight: true,
+    layer: 'air',
+    abilities: ['heal-aura'],
     skills: [
       {
         id: 'descend',

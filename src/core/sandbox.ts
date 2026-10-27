@@ -13,8 +13,8 @@
  * 一律"克隆再改"：调用方失败时要能整块丢掉，不留半截状态。
  */
 
-import { CITY, CONFIG, ERAS, eraDef } from './config.ts';
-import { canStandAt, cityAt } from './rules.ts';
+import { CONFIG, ERAS, eraDef } from './config.ts';
+import { canStandAt, cityAt, citySizeOf } from './rules.ts';
 import type { City, GameState, PlayerId, Unit } from './types.ts';
 
 export type SandboxResult = { ok: true; state: GameState } | { ok: false; reason: string };
@@ -101,7 +101,7 @@ function nextCityId(s: GameState): string {
  * 否则会出现"橙格亮着，点下去说不合法"。
  */
 export function sandboxCityProblem(s: GameState, left: number, top: number): string | null {
-  const size = CITY.size;
+  const size = citySizeOf(s);
   if (left < 0 || top < 0 || left + size > s.w || top + size > s.h) {
     return `城要占 ${size}×${size} 格，这个角放不下`;
   }
@@ -141,7 +141,7 @@ export function placeCity(
   const problem = sandboxCityProblem(s, left, top);
   if (problem) return { ok: false, reason: problem };
 
-  const size = CITY.size;
+  const size = citySizeOf(s);
   const lv = Math.max(1, Math.min(ERAS.length, Math.round(era)));
   const info = eraDef(lv);
   const next = clone(s);

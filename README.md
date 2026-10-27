@@ -19,10 +19,10 @@ npm run dev      # 本地开发，http://127.0.0.1:5178
 | 命令 | 做什么 |
 |---|---|
 | `npm run dev` | 本地开发服务器 |
-| `npm test` | 全量测试：规则内核 271 项 + DOM 冒烟 92 项 |
+| `npm test` | 全量测试：规则内核 280 项 + DOM 冒烟 93 项 |
 | `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
 | `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
-| `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（12 册：核心册 + 小型扩展合订本 + 每个大型扩展一册） |
+| `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（13 册：核心册 + 小型扩展合订本 + 每个大型扩展一册） |
 | `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |
 | `npm run ablate` | 消融实验：逐个"撤销"某轮平衡改动，看它到底影响多少 |
 | `npm run balance` | 生成平衡报告（JSON + markdown） |

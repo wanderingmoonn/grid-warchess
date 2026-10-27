@@ -43,6 +43,14 @@ export interface SpawnDef {
 export interface MapOptions {
   style?: MapStyle;
   symmetry?: MapSymmetry;
+  /**
+   * 城市的边长（默认 2）。
+   *
+   * 留成参数而不是常量，是因为「城郭」这类扩展会把主城扩成 3×3：
+   * 城市占多大直接影响城的间距、城郊清场范围、出生点半径，
+   * 这些都在生成地图时就得知道——事后再改，城会互相压住。
+   */
+  citySize?: number;
 }
 
 export interface MapLayout {
@@ -102,6 +110,8 @@ interface Ctx {
   w: number;
   h: number;
   g: Terrain[];
+  /** 城市边长（2 或扩展要求的 3）。所有"城市占几格"的推算都读它。 */
+  citySize: number;
 }
 
 const at = (c: Ctx, x: number, y: number): Terrain | undefined =>
@@ -167,8 +177,8 @@ export type CityLayout = 'split' | 'diagonal';
 const MIN_CITY_SEP_FLOOR = 3;
 const MIN_CITY_SEP_RATIO = 0.25;
 
-function minCitySep(w: number, h: number): number {
-  return Math.max(MIN_CITY_SEP_FLOOR, Math.floor(Math.min(w, h) * MIN_CITY_SEP_RATIO));
+function minCitySep(w: number, h: number, citySize = 2): number {
+  return Math.max(MIN_CITY_SEP_FLOOR + (citySize - 2) * 2, Math.floor(Math.min(w, h) * MIN_CITY_SEP_RATIO));
 }
 
 function citySep(a: Pos, b: Pos): number {
@@ -219,8 +229,8 @@ function planCities(
   rng: () => number,
   mirror: boolean,
 ): { A: Pos[]; B: Pos[] } {
-  const span = 2;
-  const minSep = minCitySep(c.w, c.h);
+  const span = c.citySize;
+  const minSep = minCitySep(c.w, c.h, c.citySize);
   // 纵深方向 = 河要横穿的那个方向；横向 = 沿着河的方向
   const along = axis === 'h' ? c.h : c.w;
   const cross = axis === 'h' ? c.w : c.h;
@@ -356,13 +366,13 @@ function planCities(
 }
 
 /** 这块地离谁的城市更近 */
-function makeZoneOf(citiesA: Pos[], citiesB: Pos[]) {
+function makeZoneOf(citiesA: Pos[], citiesB: Pos[], citySize = 2) {
   return (x: number, y: number): 'A' | 'B' => {
     const p = { x, y };
     let da = Infinity;
     let db = Infinity;
-    for (const c1 of citiesA) da = Math.min(da, blockDist(p, c1));
-    for (const c1 of citiesB) db = Math.min(db, blockDist(p, c1));
+    for (const c1 of citiesA) da = Math.min(da, blockDist(p, c1, citySize));
+    for (const c1 of citiesB) db = Math.min(db, blockDist(p, c1, citySize));
     return da <= db ? 'A' : 'B';
   };
 }
@@ -1012,8 +1022,8 @@ function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false, preser
  * 顺便也当护城河。山必须平，否则城可能被山圈死。
  */
 function clearAroundCity(c: Ctx, city: Pos): void {
-  for (let dy = -1; dy <= 2; dy++) {
-    for (let dx = -1; dx <= 2; dx++) {
+  for (let dy = -1; dy <= c.citySize; dy++) {
+    for (let dx = -1; dx <= c.citySize; dx++) {
       const x = city.x + dx;
       const y = city.y + dy;
       const t = at(c, x, y);
@@ -1035,8 +1045,10 @@ function lakeNearCity(c: Ctx, city: Pos, rng: () => number): void {
   const dirs = DIRS[Math.floor(rng() * DIRS.length)] ?? [0, 1];
   const [dx, dy] = dirs;
   // 从城墙上往外一格开始铺
-  const startX = dx > 0 ? city.x + 2 : dx < 0 ? city.x - 1 : city.x + (rng() < 0.5 ? 0 : 1);
-  const startY = dy > 0 ? city.y + 2 : dy < 0 ? city.y - 1 : city.y + (rng() < 0.5 ? 0 : 1);
+  const startX =
+    dx > 0 ? city.x + c.citySize : dx < 0 ? city.x - 1 : city.x + (rng() < 0.5 ? 0 : 1);
+  const startY =
+    dy > 0 ? city.y + c.citySize : dy < 0 ? city.y - 1 : city.y + (rng() < 0.5 ? 0 : 1);
 
   const size = 2 + Math.floor(rng() * 3);
   let cur = { x: startX, y: startY };
@@ -1045,7 +1057,10 @@ function lakeNearCity(c: Ctx, city: Pos, rng: () => number): void {
     if (t === undefined) break;
     // 不覆盖城市格
     const inCity =
-      cur.x >= city.x && cur.x <= city.x + 1 && cur.y >= city.y && cur.y <= city.y + 1;
+      cur.x >= city.x &&
+      cur.x <= city.x + c.citySize - 1 &&
+      cur.y >= city.y &&
+      cur.y <= city.y + c.citySize - 1;
     if (!inCity) put(c, cur.x, cur.y, 'water');
 
     // 顺着同一个方向延伸，偶尔横摆一格，长得像湖不像点
@@ -1071,8 +1086,8 @@ function spawnsAround(
     for (let dy = -r; dy <= r && out.length < count; dy++) {
       for (let dx = -r; dx <= r && out.length < count; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const x = city.x + Math.floor(1) + dx;
-        const y = city.y + Math.floor(1) + dy;
+        const x = city.x + Math.floor(c.citySize / 2) + dx;
+        const y = city.y + Math.floor(c.citySize / 2) + dy;
         const t = at(c, x, y);
         if (t === undefined || !passable(t) || t === 'city') continue;
         const i = y * c.w + x;
@@ -1109,15 +1124,16 @@ function tinyLayout(
   size: number,
   unitPool: string[],
   symmetry: MapSymmetry,
+  citySize: number,
 ): MapLayout {
   const w = size;
   const h = size;
-  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain') };
-  const citiesA = [{ x: 0, y: h - 2 }];
-  const citiesB = [{ x: w - 2, y: 0 }];
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
+  const citiesA = [{ x: 0, y: h - citySize }];
+  const citiesB = [{ x: w - citySize, y: 0 }];
   for (const p of [...citiesA, ...citiesB]) {
-    for (let dy = 0; dy < 2; dy++) {
-      for (let dx = 0; dx < 2; dx++) put(c, p.x + dx, p.y + dy, 'city');
+    for (let dy = 0; dy < citySize; dy++) {
+      for (let dx = 0; dx < citySize; dx++) put(c, p.x + dx, p.y + dy, 'city');
     }
   }
 
@@ -1125,8 +1141,8 @@ function tinyLayout(
   const used = new Set<number>();
   /** 微图里空地就那么几块，直接按"离城中心近"排一遍，不用环形搜索 */
   const spots = (city: Pos, count: number, offset: number): SpawnDef[] => {
-    const cx = city.x + 1;
-    const cy = city.y + 1;
+    const cx = city.x + Math.floor(citySize / 2);
+    const cy = city.y + Math.floor(citySize / 2);
     const cand: Array<{ x: number; y: number; d: number }> = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -1175,10 +1191,15 @@ export function generateLayout(
   const w = size;
   const h = size;
 
-  // 微图是另一套规则（见 tinyLayout 的注释），不走后面的随机生成
-  if (size <= 5) return tinyLayout(size, unitPool, opts.symmetry ?? 'fair');
+  // 城市边长：扩展可以把主城扩成 3×3，但棋盘太小就退回 2——
+  // 一边长四分之一的硬上限，否则 12×12 上两座 3×3 的城会把出生点挤没。
+  const wanted = Math.round(opts.citySize ?? 2);
+  const citySize = Math.max(2, Math.min(wanted, Math.max(2, Math.floor(size / 4))));
 
-  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain') };
+  // 微图是另一套规则（见 tinyLayout 的注释），不走后面的随机生成
+  if (size <= 5) return tinyLayout(size, unitPool, opts.symmetry ?? 'fair', citySize);
+
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
 
   const rngStyle = makeRng(seed * 2654435761 + size * 7919 + 11);
   const rngCity = makeRng(seed * 40503 + size * 7919 + 29);
@@ -1205,9 +1226,9 @@ export function generateLayout(
   // 镜像模式下 B 的城市必须是 A 的严格镜像，否则城郊清场、出生点都会错位，
   // "完全对称"就名不副实了。
   if (symmetry === 'mirror') {
-    plan.B = plan.A.map((p) => mirrorBlock(p.x, p.y, 2, w, h));
+    plan.B = plan.A.map((p) => mirrorBlock(p.x, p.y, citySize, w, h));
   }
-  const zoneOf = makeZoneOf(plan.A, plan.B);
+  const zoneOf = makeZoneOf(plan.A, plan.B, citySize);
 
   // ---- 大地貌：位置取两军前线的中点，保证横在双方之间 ----
   const midOf = (axis: 'h' | 'v') => {
@@ -1249,8 +1270,8 @@ export function generateLayout(
   const blocked = new Set<number>(); // 不能长地形的格子（城市 + 已长好的地块）
   const cityCells = new Set<number>(); // 只记城市：镜像和寻路要用
   const markCity = (p: Pos) => {
-    for (let dy = 0; dy < 2; dy++) {
-      for (let dx = 0; dx < 2; dx++) {
+    for (let dy = 0; dy < citySize; dy++) {
+      for (let dx = 0; dx < citySize; dx++) {
         const x = p.x + dx;
         const y = p.y + dy;
         if (at(c, x, y) === undefined) continue;

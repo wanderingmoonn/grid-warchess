@@ -7,6 +7,7 @@
  */
 
 import { CATEGORY_NAME, CONFIG, eraDef, passable } from '../core/config.ts';
+import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf } from '../core/expansions.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
@@ -21,7 +22,7 @@ import {
   distToCity,
   effectiveStats,
   heroSkillsOf,
-  recruitCost,
+  recruitResCost,
   unitIncome,
   unitsOf,
   upgradeCostOf,
@@ -72,6 +73,18 @@ export interface PanelInput {
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const { view, me } = input;
   const s = view.state;
+  // HUD 里的资源行：金币永远显示，其余资源只在"真的存在"时出现。
+  // 原版只玩金币，多出来的空徽章只会让面板看起来像坏了。
+  const resLine = (p: PlayerId) => {
+    const ps = s.players[p];
+    const parts = [`金币 ${ps.gold}`];
+    for (const [id, n] of Object.entries(ps.res ?? {})) {
+      if (!n || n <= 0) continue;
+      if (id === 'gold') continue;
+      parts.push(`${resourceShort(id)} ${n}`);
+    }
+    return parts.join(' · ');
+  };
   const spectator = input.spectator === true;
   /** 只看不给动：观战位和指挥官模式都算，后面所有 `mine` 都挂在它上面 */
   const readOnly = spectator || input.commander === true;
@@ -122,12 +135,12 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
         <div class="versus">
           <div class="vs-side">
             <div class="vs-name"><span class="vs-dot a"></span>${s.players.A.name}</div>
-            <div class="vs-stats">金币 ${s.players.A.gold}<br />城市 ${me === 'A' ? myCities : otherCities}</div>
+            <div class="vs-stats">${resLine('A')}<br />城市 ${me === 'A' ? myCities : otherCities}</div>
           </div>
           <div class="vs-mid">VS</div>
           <div class="vs-side right">
             <div class="vs-name">${s.players.B.name}<span class="vs-dot b"></span></div>
-            <div class="vs-stats">金币 ${s.players.B.gold}<br />城市 ${me === 'B' ? myCities : otherCities}</div>
+            <div class="vs-stats">${resLine('B')}<br />城市 ${me === 'B' ? myCities : otherCities}</div>
           </div>
         </div>
       </div>
@@ -276,8 +289,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         : `<div class="card-title" style="margin-top:14px">可建造</div>
            <div class="recruit-list">${buildables
              .map((b) => {
-               const price = recruitCost(s, me, b);
-               const dis = !canBuildNow || s.players[me].gold < price;
+               const price = recruitResCost(s, me, b);
+               const dis = !canBuildNow || !canPay(s.players[me], price);
                const tag = b.bridges
                  ? '架在水上 · 双向通行'
                  : b.barracks
@@ -286,13 +299,19 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                      }`
                    : b.autoAttack
                      ? `自动开火 ${b.range} 格`
-                     : b.incomeByTerrain
-                       ? '产出金币'
+                     : b.incomeByTerrain || b.income || b.yield
+                       ? `产出 ${yieldShort(b)}`
                        : '工事';
+               // 施工回合和驻军是"看不见但决定怎么用"的两条，必须写在按钮上：
+               // 一个两回合才成型的塔，玩家在第一回合就得知道它现在是块工地。
+               const mods: string[] = [];
+               if (b.buildTurns && b.buildTurns > 1) mods.push(`施工 ${b.buildTurns} 回合`);
+               if (b.garrison) mods.push('可驻军');
+               const tagLine = mods.length > 0 ? `${tag} · ${mods.join(' · ')}` : tag;
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
                  <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
-                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · 血 ${b.maxHp} · ${tag}</span></span>
-                 <span class="price">${price}</span>
+                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · 血 ${b.maxHp} · ${tagLine}</span></span>
+                 <span class="price">${costLabel(price)}</span>
                </button>`;
              })
              .join('')}</div>
@@ -482,9 +501,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
 
   const unitButton = (def: UnitTypeDef) => {
-    const price = recruitCost(s, me, def);
     const slotsOk = def.domain === 'water' ? hasPort : freeSlots > 0;
-    const disabled = !myTurn || gold < price || !slotsOk;
+    const disabled = !myTurn || !slotsOk;
 
     let extra = '';
     if (def.incomeByTerrain) {
@@ -644,6 +662,14 @@ function recruitSearchBox(q: string, shownCount: number, total: number): string 
   </div>`;
 }
 
+/** 建造按钮上"产出 X"那半句：只看兵种表里写了什么，不猜运行时换算 */
+function yieldShort(def: UnitTypeDef): string {
+  const ids = new Set<string>();
+  if (def.yield) for (const id of Object.keys(def.yield)) ids.add(id);
+  if (def.incomeByTerrain || def.income) ids.add('gold');
+  return Array.from(ids).map((id) => resourceShort(id)).join('·') || '资源';
+}
+
 /** 产兵按钮：城市和军营共用一套写法，省得两处的样式慢慢跑偏 */
 function recruitButton(
   s: GameState,
@@ -652,14 +678,14 @@ function recruitButton(
   disabled: boolean,
   extra: string,
 ): string {
-  const price = recruitCost(s, me, def);
+  const price = recruitResCost(s, me, def);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
   // 看到 300 金的按钮却扣了 450，玩家只会觉得算错了。
   const unlockFee =
     def.hero === true && !(s.unlocked?.[me] ?? []).includes(def.id) ? (def.unlockCost ?? 0) : 0;
   const aliveHere = def.hero === true && s.units.some((u) => u.owner === me && u.type === def.id);
-  const total = price + unlockFee;
-  const blocked = disabled || aliveHere || s.players[me].gold < total;
+  const payCost = unlockFee > 0 ? { ...price, gold: (price.gold ?? 0) + unlockFee } : price;
+  const blocked = disabled || aliveHere || !canPay(s.players[me], payCost);
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
   // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
   // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
@@ -670,7 +696,7 @@ function recruitButton(
       <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
     </span>
-    <span class="price">${total}</span>
+    <span class="price">${costLabel(payCost)}</span>
   </button>`;
 }
 
@@ -699,7 +725,6 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const readOnly = input.spectator === true || input.commander === true;
   const mine = !readOnly && camp.owner === me;
   const ratio = camp.hp / def.maxHp;
-  const gold = s.players[me].gold;
 
   // 补给：离军营最近的己方城市给了它时代
   const own = citiesOf(s, camp.owner);
@@ -740,7 +765,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
           .map((d) => {
             const slotsOk = d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
             const extra = d.domain === 'water' ? ' · 下水' : '';
-            return recruitButton(s, me, d, !myTurn || gold < recruitCost(s, me, d) || !slotsOk, extra);
+            return recruitButton(s, me, d, !myTurn || !slotsOk, extra);
           })
           .join('')}</div>
       </div>`;

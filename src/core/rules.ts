@@ -13,6 +13,16 @@
 import { hasAbility } from './abilities.ts';
 import { CHEAPEST_COST, CITY, CONFIG, ORDER_UPGRADE, eraDef, nextUpgradeCost, passable } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions } from './expansions.ts';
+import {
+  GOLD,
+  addRes,
+  canPay,
+  cleanCost,
+  costLabel,
+  missingLabel,
+  payRes,
+  type ResourceCost,
+} from './resources.ts';
 import type {
   ActionResult,
   Action,
@@ -21,6 +31,7 @@ import type {
   GameState,
   HeroSkillDef,
   PlayerId,
+  ResourceId,
   Tile,
   Unit,
   UnitTypeDef,
@@ -109,6 +120,33 @@ export function buildingAt(s: GameState, x: number, y: number): Unit | undefined
   return s.units.find((u) => u.x === x && u.y === y && s.unitTypes[u.type]?.category === 'building');
 }
 
+/**
+ * 这个单位还在施工吗（多回合建筑）。
+ *
+ * 工地不是"半个建筑"：它挡路、能被打、看得见，但不能开火、不能产兵、不能动手。
+ * 这样"塔要两回合才立起来"才是一个真实的窗口——对手看得见你在修，
+ * 也有机会在它成型之前拆掉它。
+ */
+export function underConstruction(u: Unit): boolean {
+  return (u.buildLeft ?? 0) > 0;
+}
+
+/**
+ * 驻军加成：站在自家「可驻军」建筑上的部队多一层掩护。
+ *
+ * 为什么给护甲而不是"藏进建筑里"：藏进去要一整套进出动作和"里面的人算不算占格"
+ * 的判定，而玩家真正想要的是"这座塔是个可以守的地方"。护甲 + 视野就是这句话。
+ */
+export function garrisonBonus(s: GameState, unit: Unit): number {
+  const here = buildingAt(s, unit.x, unit.y);
+  if (!here || here.owner !== unit.owner) return 0;
+  if (here.id === unit.id) return 0;
+  const d = utype(s, here.type);
+  if (!d.garrison) return 0;
+  if (underConstruction(here)) return 0;
+  return CONFIG.garrisonArmor;
+}
+
 export function unitById(s: GameState, id: string): Unit | undefined {
   return s.units.find((u) => u.id === id);
 }
@@ -168,6 +206,18 @@ export function cityTiles(city: City): Array<{ x: number; y: number }> {
   return out;
 }
 
+/**
+ * 这一局的城市边长（缺省 2，扩展可以要求 3）。
+ *
+ * 读 config 而不是 CITY.size：城市会大到 3×3，而"建一座城要占几格"
+ * 在建城、画城、摆城（沙盒）三处都要问，各读各的常量迟早对不上。
+ */
+export function citySizeOf(s: GameState): number {
+  const n = Math.round(s.config.citySize ?? CITY.size);
+  if (!Number.isFinite(n) || n < CITY.size) return CITY.size;
+  return n;
+}
+
 /** 单位到城市方块的最短曼哈顿距离 */
 export function distToCity(unit: { x: number; y: number }, city: City): number {
   const cx = Math.min(Math.max(unit.x, city.x), city.x + city.size - 1);
@@ -195,9 +245,24 @@ export function cloneState(s: GameState): GameState {
 // "这局有没有开魔法"。选中了「奇想·法则」这个前置包才让这些字段的兵进场，
 // 于是前置包本身就成了总开关。
 
+/**
+ * 这个兵种在不在空中层。
+ *
+ * 读的是**类型字段** `layer`，不是扩展能力：飞行层是原版规则的一部分
+ * （它决定"占不占格"，这件事渗进寻路、产兵位、攻击距离判断），
+ * 不该由某个兵种包是否勾选来决定规则代码长什么样。
+ *
+ * `fly-over` 这个能力 id 仍然认——它是「掠空」在旧数据里的写法，
+ * 也是自定义兵种编辑器里那个勾选框。保留它等于保留一条兼容路径：
+ * 老存档、老角色卡照常工作，新数据则应该直接写 `layer: 'air'`。
+ */
+export function airLayer(def: UnitTypeDef): boolean {
+  return def.layer === 'air' || hasAbility(def, 'fly-over');
+}
+
 /** 空中层：能飞，并且可以和地面单位同格 */
 export function isAirborne(s: GameState, u: Unit): boolean {
-  return hasAbility(utype(s, u.type), 'fly-over');
+  return airLayer(utype(s, u.type));
 }
 
 /** 同一格上的全部单位。空中 + 地面最多各一个，可以叠在一格。 */
@@ -411,14 +476,17 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
 }
 
 /**
- * 能掠水的三种走法：飞行、掠空、跳跃。
+ * 这个兵种能不能掠水。
  *
- * 名字是给玩家看的，代价是同一套：水面按 1 步过，森林丘陵也按 1 步。
+ * 读 `flight` 字段（原版预留的机制字段），同时认三条旧能力 id：
+ * 飞行、掠空、跳跃。后两者是「奇想」包早期的写法，也是兵种编辑器里
+ * 那三个勾选框——不认识它们，玩家自己捏的飞行兵会当场失灵。
+ *
  * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
  * （"蜘蛛能过河，但 AI 算不出它能过河"）。
  */
 function crossesWater(def: UnitTypeDef): boolean {
-  return hasAbility(def, 'fly') || hasAbility(def, 'fly-over') || hasAbility(def, 'leap');
+  return def.flight === true || hasAbility(def, 'fly') || hasAbility(def, 'fly-over') || hasAbility(def, 'leap');
 }
 
 /**
@@ -446,7 +514,7 @@ export function canStandAt(s: GameState, x: number, y: number, type: string): bo
     const city = cityById(s, tile.cityId);
     if (city && city.ruined) return false;
   }
-  return !sameLayerAt(s, x, y, hasAbility(def, 'fly-over'));
+  return !sameLayerAt(s, x, y, airLayer(def));
 }
 
 /** 找一格相邻空地放召唤物/分裂体。找不到返回 null。 */
@@ -534,6 +602,12 @@ export function movePower(s: GameState, unit: Unit): number {
 export function visionOf(s: GameState, unit: Unit): number {
   const selfDef = utype(s, unit.type);
   let r = selfDef.vision;
+  // 驻军：塔上的哨位看得比平地远——这是"兵进驻"最直接的收益
+  const host = buildingAt(s, unit.x, unit.y);
+  if (host && host.id !== unit.id && host.owner === unit.owner) {
+    const hostDef = utype(s, host.type);
+    if (hostDef.garrison && !underConstruction(host)) r = Math.max(r, hostDef.vision);
+  }
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, base: r });
   }
@@ -626,6 +700,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += 3;
     armorItems.push({ label: '林地之主', delta: 3 });
   }
+  const garrison = garrisonBonus(s, u);
+  if (garrison !== 0) {
+    armor += garrison;
+    armorItems.push({ label: '驻军', delta: garrison });
+  }
   const curse = cursePenalty(u);
   if (curse !== 0) {
     armor -= curse;
@@ -664,6 +743,33 @@ export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): n
     if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost });
   }
   return Math.max(0, cost);
+}
+
+/**
+ * 一个兵种的**完整价格**：金币 + 其它资源。
+ *
+ * 金币那一段走老的 modifyCost（所有既有扩展都在改它），其它资源走
+ * modifyResourceCost。两个钩子分开而不是合成一个"价格对象"：
+ * 合并等于把所有既有扩展的签名改一遍，而它们关心的事情本来就只有金币。
+ */
+export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef): ResourceCost {
+  const gold = recruitCost(s, player, def);
+  let extra: ResourceCost = { ...(def.costRes ?? {}) };
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyResourceCost) {
+      extra = e.hooks.modifyResourceCost({
+        state: s,
+        player,
+        unitType: def,
+        baseCost: def.cost,
+        goldCost: gold,
+        cost: extra,
+      });
+    }
+  }
+  const out: ResourceCost = { ...cleanCost(extra) };
+  if (gold > 0) out[GOLD] = gold;
+  return out;
 }
 
 /** 这一格能不能站人：水不行，敌方城市也不行（城池得先打下来） */
@@ -738,7 +844,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
   // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
   const flyer = crossesWater(def);
-  const air = hasAbility(def, 'fly-over');
+  const air = airLayer(def);
   // 穿行：可以穿过敌军，只是不能停在上面
   const phasing = hasAbility(def, 'phase');
   // 重甲难行：铁罐头在森林/丘陵/城里迈不开腿
@@ -958,6 +1064,8 @@ export function computeDamage(
   if (hasAbility(dt, 'woodland') && tile && (tile.terrain === 'forest' || tile.terrain === 'hill')) {
     if (!ignoreCover) armor += 3;
   }
+  // 驻军：站在自家可驻军建筑上，多一层掩护（和地形加成同一种东西）
+  armor += garrisonBonus(s, defender);
   // 诅咒与咒域：都在破甲之前扣，理由同上（它们是"变脆"，不是"少挨"）
   armor -= cursePenalty(defender);
   armor -= curseAuraPenalty(s, defender);
@@ -1253,35 +1361,56 @@ function checkWinner(s: GameState): PlayerId | null {
 }
 
 /**
- * 一个单位每回合产出多少金币。
+ * 一个单位每回合产出些什么（金币 + 其它资源）。
  *
  * 经济单位的收入看它**站在哪儿**：农民在平原富、牧民在丘陵富、伐木工在森林富。
  * 所以"把农民挪到平原上"本身就是一个决策，而不再是"造完就忘"。
- * 相邻有水再加一点（灌溉和运输），这就是水利的价值。
+ * 相邻有水再加一点金币（灌溉和运输），这就是水利的价值。
+ *
+ * 多资源版本把"产出"从"一个金币数字"变成了一张表：同一种单位站在不同地形上
+ * 可以产不同的东西（平原打粮、森林出木头）。金币仍然走 income / incomeByTerrain
+ * 这两个老字段，所以原版两百多个兵种条目一个字都不用改。
  */
-export function unitIncome(s: GameState, u: Unit): number {
+export function unitYield(s: GameState, u: Unit): ResourceCost {
   const def = utype(s, u.type);
   const tile = tileAt(s, u.x, u.y);
-  let income = 0;
+  const out: ResourceCost = {};
+  const add = (id: ResourceId, n: number | undefined): void => {
+    if (!n) return;
+    out[id] = (out[id] ?? 0) + n;
+  };
 
-  if (def.incomeByTerrain && tile) {
-    income += def.incomeByTerrain[tile.terrain] ?? 0;
-  } else if (def.income) {
-    income += def.income;
+  if (tile) {
+    const byTerrain = def.yieldByTerrain?.[tile.terrain];
+    if (byTerrain) {
+      for (const [id, n] of Object.entries(byTerrain)) add(id, n);
+    } else if (def.yield) {
+      for (const [id, n] of Object.entries(def.yield)) add(id, n);
+    }
+    // 金币沿用老的两条：写了表就按表（站错地方就是 0），没写表才用固定值
+    if (def.incomeByTerrain) add(GOLD, def.incomeByTerrain[tile.terrain] ?? 0);
+    else add(GOLD, def.income);
+  } else if (def.yield) {
+    for (const [id, n] of Object.entries(def.yield)) add(id, n);
   }
 
-  if (income > 0) {
+  if ((out[GOLD] ?? 0) > 0 && adjacentToWater(s, u.x, u.y)) {
     // 桥面也要算"临水"：桥架在水上，桥下还是水。
     // 只判 water 的话，玩家在河边修一座桥，反而把这一带的贸易加成弄没了——
     // 这是实打实踩过的 bug（建桥之后沿岸农民全少 3 金收入）。
-    const nearWater = DIRS.some(([dx, dy]) => {
-      const t2 = tileAt(s, u.x + dx, u.y + dy)?.terrain;
-      return t2 === 'water' || t2 === 'bridge';
-    });
-    if (nearWater) income += CONFIG.riverTradeBonus;
+    add(GOLD, CONFIG.riverTradeBonus);
   }
 
-  return income;
+  let yields = out;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyYield) yields = e.hooks.modifyYield({ state: s, unit: u, yields });
+  }
+  return cleanCost(yields);
+}
+
+/** 一个单位每回合产出多少**金币**（老接口，等价于 unitYield 的金币那一段） */
+export function unitIncome(s: GameState, u: Unit): number {
+  return unitYield(s, u)[GOLD] ?? 0;
 }
 
 /**
@@ -1303,6 +1432,35 @@ export function unitIncomeAt(s: GameState, u: Unit, x: number, y: number): numbe
 }
 
 /**
+ * 这一方现在每回合能收多少（**全部资源**）。纯函数，不写状态。
+ *
+ * 金币那一段仍然过一遍 modifyIncome 钩子（战争经济之类的老扩展读它），
+ * 其它资源暂时没有钩子——它们本来就只在多资源扩展里出现，
+ * 而那个扩展自己就是唯一的生产者。
+ */
+export function incomeResOf(s: GameState, p: PlayerId): ResourceCost {
+  const out: ResourceCost = { gold: CONFIG.baseIncome };
+  const add = (id: ResourceId, n: number | undefined): void => {
+    if (!n) return;
+    out[id] = (out[id] ?? 0) + n;
+  };
+  for (const city of citiesOf(s, p)) {
+    if (city.ruined) continue; // 废墟不产出：它现在只是一堆石头
+    add(GOLD, eraDef(city.era).cityIncome);
+  }
+  for (const u of unitsOf(s, p)) {
+    const yields = unitYield(s, u);
+    for (const [id, n] of Object.entries(yields)) add(id, n);
+  }
+  let gold = out[GOLD] ?? 0;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyIncome) gold = e.hooks.modifyIncome({ state: s, player: p, income: gold });
+  }
+  out[GOLD] = Math.max(0, gold);
+  return cleanCost(out);
+}
+
+/**
  * 这一方现在每回合能收多少金。**纯函数，不写状态。**
  *
  * 单独抽出来是因为界面要拿它算"接下来几回合大概还有多少钱可花"。
@@ -1310,25 +1468,15 @@ export function unitIncomeAt(s: GameState, u: Unit, x: number, y: number): numbe
  * 早晚会和实际扣钱对不上，而这个模式的全部乐趣就是算这笔账。
  */
 export function incomeOf(s: GameState, p: PlayerId): number {
-  let income = CONFIG.baseIncome;
-  for (const city of citiesOf(s, p)) {
-    if (city.ruined) continue; // 废墟不产出：它现在只是一堆石头
-    income += eraDef(city.era).cityIncome;
-  }
-  for (const u of unitsOf(s, p)) {
-    income += unitIncome(s, u);
-  }
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyIncome) income = e.hooks.modifyIncome({ state: s, player: p, income });
-  }
-  return Math.max(0, income);
+  return incomeResOf(s, p)[GOLD] ?? 0;
 }
 
 /** 回合结束时给当前玩家结算收入：基础 + 每座城 + 每个经济单位按其所在地形 */
 function settleIncome(s: GameState, p: PlayerId): number {
-  const income = incomeOf(s, p);
-  s.players[p].gold += income;
-  return income;
+  const income = incomeResOf(s, p);
+  const player = s.players[p];
+  for (const [id, n] of Object.entries(income)) addRes(player, id, n ?? 0);
+  return income[GOLD] ?? 0;
 }
 
 /**
@@ -1423,7 +1571,9 @@ export function upgradeCostOf(s: GameState, city: City): number | null {
  * 享受到防御工事的好处：敌人一踏进射程就先挨一轮，然后才轮到它行动。
  */
 function fireBuildings(s: GameState, owner: PlayerId): void {
-  const buildings = s.units.filter((u) => u.owner === owner && utype(s, u.type).autoAttack);
+  const buildings = s.units.filter(
+    (u) => u.owner === owner && utype(s, u.type).autoAttack && !underConstruction(u),
+  );
   for (const b of buildings) {
     if (!s.units.includes(b)) continue;
     // 这一回合已经手动开过火的，不再自动开火。
@@ -1471,6 +1621,24 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       s.units = s.units.filter((u) => u.id !== v.unit.id);
       pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
       fireKilled(s, v.unit, b);
+    }
+  }
+}
+
+/**
+ * 施工进度：自己回合开始时，工地的剩余回合 −1，归零就算建成。
+ *
+ * 放在"重置行动力"之后、"再生/休整"之前：这一回合刚建成的塔应该能开火，
+ * 但**这一回合不能动**（它刚刚才完工）。所以不碰 moved/acted。
+ */
+function advanceConstruction(s: GameState, p: PlayerId): void {
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    if (!underConstruction(u)) continue;
+    u.buildLeft = (u.buildLeft ?? 0) - 1;
+    if (u.buildLeft <= 0) {
+      delete u.buildLeft;
+      pushLog(s, p, `${utype(s, u.type).name} 建成`);
     }
   }
 }
@@ -1635,6 +1803,9 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   if (!defender) return { ok: false, reason: '目标不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
+  if (underConstruction(attacker)) {
+    return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
+  }
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
   // 反击判定也要按"还手的那个人"来算距离：地面兵够不着头顶的飞行单位，
@@ -2080,9 +2251,18 @@ function doBuild(
     };
   }
 
-  const price = recruitCost(s, s.current, def);
-  if (s.players[s.current].gold < price) return { ok: false, reason: `金币不足（需要 ${price}）` };
-  s.players[s.current].gold -= price;
+  const price = recruitResCost(s, s.current, def);
+  if (!canPay(s.players[s.current], price)) {
+    return {
+      ok: false,
+      reason: `资源不足（需要 ${costLabel(price)}，${missingLabel(s.players[s.current], price)}）`,
+    };
+  }
+  payRes(s.players[s.current], price);
+  // 多回合施工：塔这类"要立起来才算数"的建筑先落一个工地。
+  // buildLeft 记的是"还差几个自己的回合"，所以 2 回合的塔在下一个回合开始时
+  // 才减到 1，再下一个回合成型——和"建造者占掉这个回合"正好对得上。
+  const buildTurns = Math.max(1, Math.round(def.buildTurns ?? 1));
   s.units.push({
     id: `u${s.nextUnitSeq++}`,
     type: def.id,
@@ -2093,6 +2273,7 @@ function doBuild(
     kills: 0,
     moved: true,
     acted: true,
+    ...(buildTurns > 1 ? { buildLeft: buildTurns } : {}),
   });
 
   // 桥建好就把那一格换成桥面：友军能走过，敌军得过桥
@@ -2105,7 +2286,9 @@ function doBuild(
   pushLog(
     s,
     s.current,
-    `${builderDef.name} 在 ${String.fromCharCode(65 + x)}${y + 1} 修建了 ${def.name}`,
+    buildTurns > 1
+      ? `${builderDef.name} 在 ${String.fromCharCode(65 + x)}${y + 1} 开始修建 ${def.name}（要 ${buildTurns} 回合才成型）`
+      : `${builderDef.name} 在 ${String.fromCharCode(65 + x)}${y + 1} 修建了 ${def.name}`,
   );
   return { ok: true, state: s };
 }
@@ -2184,6 +2367,7 @@ function doRecruit(
     if (!camp) return { ok: false, reason: '产兵点不存在' };
     const campDef = utype(s, camp.type);
     if (!campDef.barracks) return { ok: false, reason: '这不是军营' };
+    if (underConstruction(camp)) return { ok: false, reason: `${campDef.name} 还在施工，营门都没立起来` };
     if (camp.owner !== s.current) return { ok: false, reason: '这不是你的军营' };
 
     const own = citiesOf(s, s.current);
@@ -2238,7 +2422,7 @@ function doRecruit(
     return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
   }
 
-  const price = recruitCost(s, s.current, def);
+  const price = recruitResCost(s, s.current, def);
   const player = s.players[s.current];
 
   // 英雄解锁：只在第一次招它时收，之后这个兵种就永久开放。
@@ -2248,14 +2432,16 @@ function doRecruit(
   const mine = (unlocked[s.current] ??= []);
   const needUnlock = def.hero === true && !mine.includes(def.id);
   const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
-  const total = price + unlockFee;
+  const payCost: ResourceCost = { ...price };
+  if (unlockFee > 0) payCost[GOLD] = (payCost[GOLD] ?? 0) + unlockFee;
 
-  if (player.gold < total) {
+  if (!canPay(player, payCost)) {
+    const missing = missingLabel(player, payCost);
     return {
       ok: false,
       reason: needUnlock
-        ? `金币不足（英雄要 ${price} + 解锁 ${unlockFee}，合计 ${total}）`
-        : `金币不足（需要 ${price}）`,
+        ? `资源不足（英雄要 ${costLabel(price)} + 解锁 ${unlockFee} 金，${missing}）`
+        : `资源不足（需要 ${costLabel(payCost)}，${missing}）`,
     };
   }
   // 编制上限只在 AI 那边生效（见 ai.ts 的产兵判断），规则层不拦人。
@@ -2268,7 +2454,7 @@ function doRecruit(
     };
   }
 
-  player.gold -= total;
+  payRes(player, payCost);
   if (needUnlock) {
     mine.push(def.id);
     pushLog(s, s.current, `解锁英雄「${def.name}」，花费 ${unlockFee} 金`);
@@ -2834,6 +3020,7 @@ function doEndTurn(s: GameState): ActionResult {
     s.units.filter((u) => u.owner === nextPlayer && !u.moved && !u.acted).map((u) => u.id),
   );
   resetUnitsFor(s, nextPlayer);
+  advanceConstruction(s, nextPlayer);
 
   for (const u of s.units) {
     if (u.owner !== nextPlayer) continue;

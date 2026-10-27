@@ -1906,5 +1906,64 @@ check('地址栏带 ?fresh=1 能清掉本机存档重开', () => {
   );
 });
 
+check('城郭与物料：HUD 显示粮和材，建造清单写明施工回合与驻军', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['city-works'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5150,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '应该有己方城市');
+  const cs = st.config.citySize ?? 2;
+  assert.equal(cs, 3, '这个扩展把主城扩成 3×3');
+
+  const builder: Unit = {
+    id: 'cw-builder',
+    type: 'laborer',
+    owner: 'A',
+    x: (city as { x: number }).x + cs,
+    y: (city as { y: number }).y,
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(builder);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: builder,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const html = host.innerHTML;
+
+  // 资源行：金币之外还有粮和材，而且写的是余额
+  // 余额取真实值，别写死：起步资源是按时代给的
+  const food = st.players.A.res?.food ?? 0;
+  const material = st.players.A.res?.material ?? 0;
+  assert.ok(food > 0 && html.includes(`粮 ${food}`), `HUD 要显示粮食余额 ${food}`);
+  assert.ok(material > 0 && html.includes(`材 ${material}`), 'HUD 要显示建材余额');
+
+  // 建造清单：塔要两回合、能驻军——这两条不写在按钮上，玩家第一回合就会以为它坏了
+  assert.ok(html.includes('施工 2 回合'), '建造按钮要写明施工回合');
+  assert.ok(html.includes('可驻军'), '塔要写明可以驻军');
+  // 造价必须是"金币 + 建材"，只写一个数字等于骗人
+  const towerBtn = host.querySelector('[data-act="build"][data-type="tower"]');
+  assert.ok(towerBtn, '建造清单里应该有箭塔');
+  const priceText = towerBtn.querySelector('.price')?.textContent ?? '';
+  assert.ok(priceText.includes('金') && priceText.includes('材'), `箭塔造价要拆成金+材：${priceText}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
