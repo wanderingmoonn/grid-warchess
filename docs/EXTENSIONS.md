@@ -12,7 +12,7 @@
 3. [第一个扩展：五分钟上手](#3-第一个扩展五分钟上手)
 4. [全部钩子速查表](#4-全部钩子速查表)
 5. [带兵种的扩展](#5-带兵种的扩展)
-6. [能力系统（abilities.ts + rules.ts）](#6-能力系统abilitiest--rulests)
+6. [能力系统：钩子写在能力自己的文件里](#6-能力系统钩子写在能力自己的文件里)
 7. [前置依赖 requires](#7-前置依赖-requires)
 8. [规则书归册：scale 字段](#8-规则书归册scale-字段)
 9. [写测试](#9-写测试)
@@ -296,36 +296,83 @@ onTurnStart: ({ state, player }) => {
 
 ---
 
-## 6. 能力系统（abilities.ts + rules.ts）
+## 6. 能力系统：钩子写在能力自己的文件里
 
-兵种面板之外的特殊行为走**能力**系统，分两步：
+兵种面板之外的特殊行为走**能力**系统。一条能力 = 一条元数据 + 一组**钩子**：
 
-**第一步：登记名字。** `src/core/abilities.ts` 的 `ABILITIES` 数组加一项：
+- 元数据（`id / name / summary / group`）是给玩家看的，直接印进规则书和悬浮提示；
+- 钩子是引擎在特定时机调用的那段代码，写在 `AbilityHooks` 里（见 `ability-hooks.ts`）。
+
+**能力写在哪，看它被谁用：**
+
+| 情况 | 写在哪 |
+|---|---|
+| 本体兵种（`config.ts`）在用 | `src/core/abilities.ts` 的 `CORE_ABILITIES` |
+| 两个以上扩展都在用（先手、自爆、指挥光环） | 同上，公共词汇 |
+| 只有某个扩展的兵在用 | **那个扩展自己的文件**，例如 `fantasy-packs.ts` 的 `FANTASY_ABILITIES` |
+| 只是留给兵种编辑器勾的词汇 | 同上表按"公共"处理，留在 `CORE_ABILITIES` |
+
+扩展把能力表挂到 `Expansion.abilities` 上即可，合并由 `ability-registry.ts` 做：
+
+```ts
+const CORE: Expansion = {
+  id: 'fantasy-core',
+  ...
+  abilities: FANTASY_ABILITIES,   // ← 新增的能力表
+};
+```
+
+三条纪律：
+
+1. **不要改 `rules.ts`。** 它只负责"在对的时机问一句"，不认识任何具体能力。
+   加一条能力只需要在你自己的文件里写一条 `AbilityDef`，然后让兵种写上它的 id。
+   两类地方都不用动：`rules.ts` 和文档（规则书是生成的）。
+2. **钩子必须是纯函数**（`armorPhase` / `damage` / `statAttack` / `statArmor`
+   这几个尤其重要）：UI 的伤害预览和 AI 试算都会调用它们，一旦有副作用，
+   预览就会悄悄改游戏状态。要随机就用 `ctx.api.hashPick`，从种子派生。
+3. **攻守要分清。** 护甲和伤害这两个阶段，双方的能力改的是同一坨数字：
+   用 `ctx.side === 'attacker'` / `'defender'` 说明"我是出手的还是挨打的"。
+   漏了这个判断，一个带破甲的兵在挨打时就会把自己的护甲砍一半。
+
+举个例子——残血攻击 +3，加在扩展的能力表里：
 
 ```ts
 {
-  id: 'my-ability',            // 全局唯一，小写中划线
+  id: 'my-ability',
   name: '我的能力',
-  summary: '一句话说明，直接印在规则书和悬浮提示里。',
-  group: 'attack',             // attack / defense / move / support
-},
-```
-
-**第二步：给行为。** 在 `src/core/rules.ts` 里找到能力该生效的时机，
-用 `hasAbility()` 分支实现。它被大量复用在伤害、移动、地形判定里：
-
-```ts
-import { hasAbility } from './abilities.ts';
-
-// 例：伤害计算里加一个分支（节选自现有代码的风格）
-if (hasAbility(at, 'my-ability') && attacker.hp * 2 <= at.maxHp) {
-  dmg += 3;   // 残血狂暴 +3
+  summary: '生命低于一半时攻击 +3。',
+  group: 'attack',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.attackFlat,   // 时机：加减法那一段
+        apply: (c) => {
+          if (c.side !== 'attacker') return;
+          const def = c.api.utype(c.state, c.self.type);
+          if (c.self.hp * 2 <= def.maxHp) c.damage += 3;
+        },
+      },
+    ],
+  },
 }
 ```
 
-先在 `rules.ts` 里搜一个语义相近的现有能力（`charge`、`first-strike`、
-`forest-walk`……）抄它的位置和写法，是成本最低的路。规则书会自动把
-`ABILITIES` 里的新能力印进对应分册，不用手写文档。
+时机的取值在 `ability-hooks.ts`：`DAMAGE_STAGE`（伤害公式）、`ARMOR_STAGE`
+（护甲）、`HIT_STAGE`（命中贴状态）、`STRIKE_STAGE`（出手流程）、`TURN_START`
+（回合开始的四段）、`STAT_STAGE`（面板数值）。**stage 的数字有语义**，
+它复刻了规则结算的真实先后（狂暴要在加减之后乘、盾墙要在冲锋之后减），
+抄一条语义相近的现有能力（`charge`、`shield-wall`、`woodland`……）是最省事的路。
+
+改完跑一遍行为快照，确认只改了你想要的那部分：
+
+```bash
+npm run snapshot -- before.json     # 改之前
+npm run snapshot -- after.json      # 改之后
+diff before.json after.json         # 只该出现你预期的差异
+```
+
+规则书会自动把新能力印进对应分册，不用手写文档。`test-rules.ts` 里那条
+「能力各归各家」用例会拦住"把扩展能力塞回本体"的退化。
 
 > 给测试临时发能力有现成辅助：`scripts/test-rules.ts` 的
 > `grantAbility(s, typeId, abil)`。
@@ -390,8 +437,8 @@ CI 会跑 `npm run manual` 然后 `git diff --exit-code 'public/manual*.html'`�
 TypeScript，不需要编译），UI 冒烟在 `scripts/smoke-dom.ts`：
 
 ```bash
-npm run test:rules   # 280 项
-npm run test:ui      # 92 项
+npm run test:rules   # 304 项
+npm run test:ui      # 108 项
 ```
 
 ### 9.1 基本写法

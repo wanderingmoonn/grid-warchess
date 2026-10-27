@@ -5,7 +5,8 @@
  * 这里把这些隐含规则翻成人话，点一下就弹出来。
  */
 
-import { abilityById, abilityNames } from './abilities.ts';
+// 能力表是"核心 + 各扩展贡献"合并出来的，所以从这里查，而不是某个文件里的一张表。
+import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
 import { resourceShort } from './resources.ts';

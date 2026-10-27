@@ -28,6 +28,16 @@
  *   召唤物占不了编制却也不能当主力、英雄贵在解锁而不是贵在面板。
  */
 
+import {
+  ARMOR_STAGE,
+  DAMAGE_STAGE,
+  HIT_STAGE,
+  STAT_STAGE,
+  STRIKE_STAGE,
+  TURN_START,
+  auraTargets,
+} from './ability-hooks.ts';
+import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
 
@@ -117,10 +127,752 @@ export const SUMMONED_UNITS: UnitTypeDef[] = [
   },
 ];
 
+/**
+ * 奇想兵种包的**能力表**：这些兵种的特殊能力，连同实现一起放在这里。
+ *
+ * 为什么能力不放在本体的 abilities.ts：能力是"这个兵种怎么打"，属于兵种设计。
+ * 摆在扩展文件里，删掉「奇想」这套包，它带来的一切（兵、机制、能力）就一起没了；
+ * 摆在本体里，删的时候要回本体一行行找哪几段是谁的，而本体也会慢慢变成
+ * 一张兵种清单——这正是它以前的样子。
+ *
+ * 挂在哪一册上：`fantasy-core`（法则）。四个兵种包都要先开它，能力又是
+ * 五个包共用的词汇（骑士团有冲锋、荒兽也有），挂在这条公共前置上才对得上语义。
+ * 合并由 ability-registry.ts 做，不看本局勾了哪些包——自定义兵种勾了「淬毒」，
+ * 在没开奇想的局里也该照样生效。
+ *
+ * 顺序有意义：它同时是规则书、编辑器里的显示顺序，也是同一个 stage 上
+ * 几条钩子的执行顺序。要重排就整块重排，然后跑一遍行为快照。
+ */
+const FANTASY_ABILITIES: AbilityDef[] = [
+  {
+    id: 'forest-walk',
+    name: '穿林',
+    summary: '森林和丘陵的移动消耗按 1 算。',
+    group: 'move',
+    hooks: {
+      moveCost: (c) => (c.terrain === 'forest' || c.terrain === 'hill' ? 1 : undefined),
+    },
+  },
+  {
+    id: 'aura-armor',
+    name: '守护光环',
+    summary: '相邻的友军护甲 +2。',
+    group: 'support',
+    hooks: { aura: { allyArmor: 2 } },
+  },
+  {
+    id: 'kill-rush',
+    name: '收割',
+    summary:
+      '亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。',
+    group: 'move',
+    hooks: {
+      onKill: (c) => {
+        c.result.moveBack = true;
+      },
+    },
+  },
+  {
+    id: 'element-ward',
+    name: '同源护壁',
+    summary:
+      '受到与自身**当前属性**相同的伤害减半。火打火、水打水都只吃一半——但换个属性打它就照常疼。',
+    group: 'defense',
+    hooks: {
+      damage: [
+        {
+          stage: DAMAGE_STAGE.elementMul,
+          apply: (c) => {
+            if (c.side !== 'defender') return;
+            const self = c.api.utype(c.state, c.self.type);
+            const own = c.self.element ?? self.element;
+            const foe = c.foe ? c.api.utype(c.state, c.foe.type) : undefined;
+            const incoming = c.foe?.element ?? foe?.element;
+            if (!incoming || !own || incoming !== own) return;
+            c.damage = Math.round(c.damage * 0.5);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'leap',
+    name: '跳跃',
+    summary: '一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。',
+    group: 'move',
+    hooks: { crossesWater: true },
+  },
+  {
+    id: 'charge',
+    name: '冲锋',
+    summary: '本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。',
+    group: 'attack',
+    hooks: {
+      damage: [
+        {
+          stage: DAMAGE_STAGE.attackFlat,
+          apply: (c) => {
+            if (c.side !== 'attacker') return;
+            if (!c.isCounter && c.self.moved) c.damage += 5;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'lifesteal',
+    name: '吸血',
+    summary: '造成伤害的 40% 转成自己的生命，上限不超过生命上限。',
+    group: 'attack',
+    hooks: {
+      onStrike: [
+        {
+          stage: STRIKE_STAGE.afterDamage,
+          apply: (c) => {
+            if (c.damage <= 0 || c.self.hp <= 0) return;
+            const def = c.api.utype(c.state, c.self.type);
+            const room = def.maxHp - c.self.hp;
+            const healed = Math.min(room, Math.round(c.damage * 0.4));
+            if (healed > 0) {
+              c.self.hp += healed;
+              c.result.healed = healed;
+            }
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'fear',
+    name: '威吓',
+    summary: '相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。',
+    group: 'support',
+    hooks: { aura: { foeAtk: -2, maxLayers: 2 } },
+  },
+  {
+    id: 'regenerate',
+    name: '再生',
+    summary: '每回合开始恢复 10% 生命上限，不需要站桩——代价是这种兵通常很慢。',
+    group: 'defense',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.self,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            if (!c.healable || c.self.hp >= def.maxHp) return;
+            // 「强再生」不是另一条回血，而是把这条翻倍——所以它自己不挂钩子，
+            // 由这里读一眼。两条同时挂会变成 10%+20%，那不是设计意图。
+            const ratio = c.api.hasAbility(c.state, c.self, 'regenerate-plus') ? 0.2 : 0.1;
+            c.self.hp = Math.min(def.maxHp, c.self.hp + Math.ceil(def.maxHp * ratio));
+          },
+        },
+      ],
+    },
+  },
+  // ── 奇想兵种包带来的五条 ───────────────────────────────────────────────
+  // 这五条都刻意做成"有代价/有前提"的机制，而不是纯数值加成：
+  // 飞行要算落点、冲锋要先动过、吸血要真打疼人、威吓要贴上去、再生换的是慢。
+  {
+    id: 'vanish',
+    name: '隐匿',
+    summary:
+      '不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。',
+    group: 'move',
+    hooks: {
+      hidden: (c) => !c.self.moved && !c.self.acted,
+    },
+  },
+  {
+    id: 'phase',
+    name: '穿行',
+    summary: '可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。',
+    group: 'move',
+    hooks: { passThrough: true },
+  },
+  {
+    id: 'slow-offroad',
+    name: '重甲难行',
+    summary: '森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。',
+    group: 'move',
+    hooks: {
+      moveCostMul: (c) =>
+        c.terrain === 'forest' || c.terrain === 'hill' || c.terrain === 'city' ? 2 : 1,
+    },
+  },
+  {
+    id: 'woodland',
+    name: '林地之主',
+    summary: '站在森林或丘陵上时护甲 +3。把它赶出林子，它就没那么难打了。',
+    group: 'defense',
+    hooks: {
+      statArmor: [
+        {
+          stage: STAT_STAGE.base,
+          apply: (c) => {
+            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
+            c.armor += 3;
+            c.items.push({ label: '林地之主', delta: 3 });
+          },
+        },
+      ],
+      armorPhase: [
+        {
+          stage: ARMOR_STAGE.woodland,
+          apply: (c) => {
+            // 只有"我挨打"才给自己加甲。出手时加的是对手的甲，那是反向的
+            if (c.side !== 'defender') return;
+            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
+            if (!c.ignoreCover) c.armor += 3;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'berserk',
+    name: '狂暴',
+    summary: '生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。',
+    group: 'attack',
+    hooks: {
+      statAttack: [
+        {
+          stage: STAT_STAGE.base,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            if (c.self.hp * 2 > def.maxHp) return;
+            const after = Math.round(c.atk * 1.5);
+            c.items.push({ label: '狂暴 ×1.5', delta: after - c.atk });
+            c.atk = after;
+          },
+        },
+      ],
+      damage: [
+        {
+          stage: DAMAGE_STAGE.attackMul,
+          apply: (c) => {
+            // 狂暴是"我打人更疼"，不是"我挨打更疼"
+            if (c.side !== 'attacker') return;
+            const def = c.api.utype(c.state, c.self.type);
+            if (c.self.hp * 2 <= def.maxHp) c.damage = Math.round(c.damage * 1.5);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'bloodlust',
+    name: '嗜血',
+    summary: '回合开始时如果生命低于一半，恢复 15% 生命上限；否则什么也不发生。',
+    group: 'defense',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.self,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            if (!c.healable || c.self.hp * 2 >= def.maxHp) return;
+            c.self.hp = Math.min(def.maxHp, c.self.hp + Math.ceil(def.maxHp * 0.15));
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'regenerate-plus',
+    name: '强再生',
+    summary: '再生翻倍：每回合开始恢复 20% 生命上限。',
+    group: 'defense',
+    // 不挂钩子：它读的是「再生」那条（见上面 regenerate 的注释）。
+    // 单独存在时没有效果，和以前的实现一致。
+  },
+  {
+    id: 'tracker',
+    name: '追猎',
+    summary: '和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。',
+    group: 'attack',
+    hooks: {
+      damage: [
+        {
+          stage: DAMAGE_STAGE.attackFlat,
+          apply: (c) => {
+            if (c.side !== 'attacker' || c.isCounter) return;
+            c.damage += Math.min(6, Math.max(0, (c.distance - 1) * 2));
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'herd',
+    name: '群势',
+    summary: '每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。',
+    group: 'attack',
+    hooks: {
+      damage: [
+        {
+          stage: DAMAGE_STAGE.attackFlat,
+          apply: (c) => {
+            if (c.side !== 'attacker' || c.isCounter) return;
+            let allies = 0;
+            for (const a of c.state.units) {
+              if (a.id === c.self.id || a.owner !== c.self.owner) continue;
+              if (c.api.distance(a, c.self) === 1) allies += 1;
+              if (allies >= 3) break;
+            }
+            c.damage += allies * 2;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'kite',
+    name: '游骑',
+    summary: '远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。',
+    group: 'attack',
+    hooks: {
+      damage: [
+        {
+          stage: DAMAGE_STAGE.rangeFlat,
+          apply: (c) => {
+            if (c.side !== 'attacker' || c.distance < 2) return;
+            const pinned = c.state.units.some(
+              (u) =>
+                u.id !== c.self.id &&
+                u.owner !== c.self.owner &&
+                u.hp > 0 &&
+                c.api.distance(u, c.self) === 1,
+            );
+            c.damage += pinned ? -3 : 3;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'elf-shot',
+    name: '穿隙',
+    summary:
+      '攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。',
+    group: 'attack',
+    hooks: {
+      armorPhase: [
+        {
+          stage: ARMOR_STAGE.ignoreCover,
+          apply: (c) => {
+            if (c.side !== 'attacker') return;
+            c.armor -= c.terrainBonus;
+            c.ignoreCover = true;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'knockback',
+    name: '击退',
+    summary: '攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。',
+    group: 'attack',
+    hooks: {
+      onStrike: [
+        {
+          stage: STRIKE_STAGE.afterStatus,
+          apply: (c) => {
+            if (c.target.hp <= 0) return;
+            const dx = Math.sign(c.target.x - c.self.x);
+            const dy = Math.sign(c.target.y - c.self.y);
+            if (dx === 0 && dy === 0) return;
+            const nx = c.target.x + dx;
+            const ny = c.target.y + dy;
+            if (!c.api.canStandAt(c.state, nx, ny, c.target.type)) return;
+            c.target.x = nx;
+            c.target.y = ny;
+            c.result.pushed = true;
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'poison-hit',
+    name: '淬毒',
+    summary: '打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。',
+    group: 'attack',
+    hooks: {
+      onHit: [
+        {
+          stage: HIT_STAGE.status,
+          apply: (c) => {
+            if (c.api.putStatus(c.target, 'poison', 3)) c.touched.push('中毒');
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'burn-hit',
+    name: '燃焰',
+    summary: '打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。',
+    group: 'attack',
+    hooks: {
+      onHit: [
+        {
+          stage: HIT_STAGE.status,
+          apply: (c) => {
+            const n = c.api.addBurnLayer(c.target);
+            if (n > 0) c.touched.push(n === 1 ? '点燃' : `点燃 ${n} 层`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'slow-hit',
+    name: '霜缚',
+    summary: '打中就让其减速 2 回合，移动力 −1（最少 1）。',
+    group: 'attack',
+    hooks: {
+      onHit: [
+        {
+          stage: HIT_STAGE.status,
+          apply: (c) => {
+            if (c.api.putStatus(c.target, 'slow', 2)) c.touched.push('减速');
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'curse-hit',
+    name: '咒缚',
+    summary: '打中就让其被诅咒 3 回合，护甲 −2。',
+    group: 'attack',
+    hooks: {
+      onHit: [
+        {
+          stage: HIT_STAGE.status,
+          apply: (c) => {
+            if (c.api.putStatus(c.target, 'curse', 3)) c.touched.push('诅咒');
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'aoe-immune',
+    name: '阵列',
+    summary: '免疫溅射伤害：炮火、法术溅射、亡语爆炸都伤不到它。但主目标那一下照吃。',
+    group: 'defense',
+    hooks: { immuneSplash: true },
+  },
+  {
+    id: 'steal-gold',
+    name: '窃掠',
+    summary: '攻城时额外偷走"伤害 × 2"的金币（不超过对方金库）。砸墙还能顺手捞一笔。',
+    group: 'attack',
+    hooks: {
+      siegeLoot: (c) => {
+        if (c.damage <= 0) return;
+        const loot = Math.min(c.state.players[c.city.owner].gold, c.damage * 2);
+        if (loot > 0) c.result.loot = loot;
+      },
+    },
+  },
+  {
+    id: 'machine',
+    name: '机械',
+    summary: '无法被治疗：休整、再生、治疗光环、净化对它的生命值都不生效。它只能靠修。',
+    group: 'defense',
+    hooks: { healable: false },
+  },
+  {
+    id: 'rebirth',
+    name: '重生',
+    summary: '阵亡时不立刻倒下，而是留下一枚蛋，由玩家在自己回合选一格孵化（一半生命）。每局一次。',
+    group: 'defense',
+    hooks: {
+      onDeath: (c) => {
+        if (c.victim.reborn) return;
+        const def = c.api.utype(c.state, c.victim.type);
+        // 同一方本来就只该有一个不死鸟，重复登记没有意义；后到的覆盖先到的
+        c.state.pendingEgg = {
+          owner: c.victim.owner,
+          type: c.victim.type,
+          x: c.victim.x,
+          y: c.victim.y,
+          radius: 2,
+          // 重生回一半血：从蛋里爬出来只有三成的话，它只是"再死一次"，
+          // 而且还得玩家花一次选位的机会去救。一半才算真的站起来。
+          hpRatio: 0.5,
+        };
+        c.api.pushLog(
+          c.state,
+          c.victim.owner,
+          `${def.name} 倒下了，留下一枚蛋——轮到你时选个地方孵化`,
+          true,
+        );
+      },
+    },
+  },
+  {
+    id: 'split',
+    name: '分裂',
+    summary: '阵亡时分裂成两只小史莱姆（有空地才分裂）。所以"打死它"不等于"解决它"。',
+    group: 'defense',
+    hooks: {
+      onDeath: (c) => {
+        const def = c.api.utype(c.state, c.victim.type);
+        const kid = def.splitInto ?? 'slimelet';
+        let born = 0;
+        for (let k = 0; k < 2; k += 1) {
+          const spot = c.api.freeNeighbor(c.state, c.victim, kid);
+          if (!spot) break;
+          c.api.spawn(c.state, c.victim.owner, kid, spot.x, spot.y);
+          born += 1;
+        }
+        if (born > 0) c.api.pushLog(c.state, c.victim.owner, `${def.name} 分裂出 ${born} 只小史莱姆`, true);
+      },
+    },
+  },
+  {
+    id: 'aura-speed',
+    name: '疾行光环',
+    summary: '相邻友军移动力 +1。',
+    group: 'support',
+    hooks: { aura: { allyMove: 1 } },
+  },
+  {
+    id: 'curse-aura',
+    name: '咒域',
+    summary: '相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。',
+    group: 'support',
+    hooks: { aura: { foeArmor: -2, maxLayers: 2 } },
+  },
+  {
+    id: 'heal-aura',
+    name: '治疗光环',
+    summary: '回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.aura,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            let healed = 0;
+            for (const t of auraTargets(c)) {
+              const td = c.api.utype(c.state, t.type);
+              if (!c.api.canBeHealed(c.state, t) || t.hp >= td.maxHp) continue;
+              t.hp = Math.min(td.maxHp, t.hp + Math.ceil(td.maxHp * 0.1));
+              healed += 1;
+            }
+            if (healed > 0) c.api.pushLog(c.state, c.owner, `${def.name} 治愈了 ${healed} 个单位`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'purge',
+    name: '净化',
+    summary: '回合开始时，自己和相邻友军各移除**一层**负面状态（中毒→点燃→减速→诅咒的顺序）。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.aura,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            let cleansed = 0;
+            for (const t of auraTargets(c)) {
+              if (!t.status) continue;
+              for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
+                if ((t.status[k] ?? 0) > 0) {
+                  delete t.status[k];
+                  cleansed += 1;
+                  break;
+                }
+              }
+            }
+            if (cleansed > 0) c.api.pushLog(c.state, c.owner, `${def.name} 净化了 ${cleansed} 个单位的负面状态`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'purge-greater',
+    name: '大净化',
+    summary: '回合开始时，半径 2 内友军的负面状态**全部**清空（小净化只解一层，它全解）。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.aura,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            let cleansed = 0;
+            for (const t of auraTargets(c, 2)) {
+              if (!t.status || Object.keys(t.status).length === 0) continue;
+              t.status = {};
+              cleansed += 1;
+            }
+            if (cleansed > 0) c.api.pushLog(c.state, c.owner, `${def.name} 净化了 ${cleansed} 个单位的负面状态`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'repair',
+    name: '修缮',
+    summary: '回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.support,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            for (const city of c.api.citiesOf(c.state, c.owner)) {
+              if (c.api.distToCity(c.self, city) > 1 || city.ruined || city.hp >= city.maxHp) continue;
+              city.hp = Math.min(city.maxHp, city.hp + 6);
+              c.api.pushLog(c.state, c.owner, `${def.name} 修缮 ${c.api.cityName(city)}，+6 耐久`);
+            }
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'build-wall',
+    name: '筑墙',
+    summary: '回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.support,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            const wall = def.builds?.[0] ?? 'earth-wall';
+            if (!c.state.unitTypes[wall]) return;
+            const spot = c.api.freeNeighbor(c.state, c.self, wall);
+            if (!spot) return;
+            c.api.spawn(c.state, c.owner, wall, spot.x, spot.y);
+            c.api.pushLog(c.state, c.owner, `${def.name} 立起一道土墙`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'trap',
+    name: '布雷',
+    summary: '回合开始时，对贴身的敌军造成 6 点伤害并让其减速 1 回合。走着走着就踩上了。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.support,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            const victims = c.state.units.filter(
+              (v) => v.owner !== c.owner && v.hp > 0 && c.api.distance(v, c.self) <= 1,
+            );
+            for (const v of victims) {
+              v.hp -= 6;
+              const st = (v.status ??= {});
+              st.slow = Math.max(st.slow ?? 0, 1);
+              c.api.pushLog(
+                c.state,
+                c.owner,
+                `${def.name} 的陷阱咬住了 ${c.api.utype(c.state, v.type).name}`,
+              );
+            }
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'summoner',
+    name: '召唤',
+    summary: '每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.summon,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            const spec = def.summon;
+            if (!spec) return;
+            if ((c.self.age ?? 0) % Math.max(1, spec.every) !== 0) return;
+            const type =
+              spec.random && spec.random.length > 0
+                ? spec.random[c.api.hashPick(c.state, c.self.x * 37 + c.self.y * 7, spec.random.length)]
+                : spec.type;
+            if (!type || !c.state.unitTypes[type]) return;
+            const alive = c.state.units.filter((u) => u.owner === c.owner && u.type === type).length;
+            if (alive >= spec.max) return;
+            const spot = c.api.freeNeighbor(c.state, c.self, type);
+            if (!spot) return;
+            c.api.spawn(c.state, c.owner, type, spot.x, spot.y);
+            c.api.pushLog(c.state, c.owner, `${def.name} 召唤出 ${c.api.utype(c.state, type).name}`);
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: 'element-mastery',
+    name: '属性精研',
+    summary:
+      '攻击按**当前属性**附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。',
+    group: 'attack',
+    hooks: {
+      onHit: [
+        {
+          stage: HIT_STAGE.element,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            const own = c.self.element ?? def.element;
+            if (own === 'fire') {
+              const n = c.api.addBurnLayer(c.target);
+              if (n > 0) c.touched.push(n === 1 ? '点燃' : `点燃 ${n} 层`);
+            } else if (own === 'water') {
+              if (c.api.putStatus(c.target, 'slow', 2)) c.touched.push('霜缚');
+            } else if (own === 'nature') {
+              const cap = def.maxHp;
+              const heal = Math.min(cap - c.self.hp, Math.max(1, Math.round(cap * 0.1)));
+              if (heal > 0) {
+                c.self.hp += heal;
+                c.touched.push(`自然回血 ${heal}`);
+              }
+            }
+            // 暗的那一条在伤害侧（magicMul），这里只管状态和回血
+          },
+        },
+      ],
+      magicMul: (c) => {
+        const def = c.api.utype(c.state, c.self.type);
+        const own = c.self.element ?? def.element;
+        return own === 'dark' ? Math.round(c.magic * 1.5) : c.magic;
+      },
+    },
+  },
+];
+
 const CORE: Expansion = {
   id: 'fantasy-core',
   scale: 'large',
   name: '奇想·法则',
+  // 五个奇想包共用的能力词汇，全在这张表里（实现在上面）
+  abilities: FANTASY_ABILITIES,
   summary:
     '奇想兵种的前置包（本身不带兵）：开启「魔法攻击 / 魔法抗性」「属性伤害与弱点」「中毒·点燃·减速·诅咒」四类负面状态，以及「空中层」——掠空单位可以和地面单位站在同一格。另外四个奇想兵种包都要先开它。',
   hooks: {

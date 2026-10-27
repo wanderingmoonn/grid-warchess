@@ -12,7 +12,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-import { ABILITIES, abilityById, ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
+import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
+// 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
+import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS } from '../src/core/expansions.ts';
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
@@ -212,7 +214,7 @@ function abilityTable(): string {
   const groups = ['attack', 'defense', 'move', 'support'] as const;
   return groups
     .map((g) => {
-      const items = ABILITIES.filter((a) => a.group === g);
+      const items = allAbilities().filter((a) => a.group === g);
       if (items.length === 0) return '';
       return `
         <h4>${ABILITY_GROUP_NAME[g]}</h4>
@@ -952,7 +954,7 @@ const CORE_BODY = `    <section id="goal">
       <h2><span class="sec-num">13</span>特殊能力</h2>
       <p>数值决定"多强"，能力决定"怎么打"。每个能力都是纯标记 + 规则里的一段分支。</p>
       ${abilityTable()}
-      <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在 <code>abilities.ts</code> 加一条定义，在 <code>rules.ts</code> 对应位置加一个判断。</p>
+      <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在能力的主人那里加一条定义（本体兵种写在 <code>abilities.ts</code>，扩展兵种写在扩展自己的文件里），再让兵种写上它的 id。<code>rules.ts</code> 不用改——它只负责在正确的时机问一句。</p>
     </section>
 
 
@@ -982,7 +984,9 @@ const CORE_BODY = `    <section id="goal">
         <tbody>
           <tr><td class="name">core/types.ts</td><td>全部类型；GameState 必须可 JSON 序列化</td></tr>
           <tr><td class="name">core/config.ts</td><td>时代、兵种、地形、经济数值</td></tr>
-          <tr><td class="name">core/abilities.ts</td><td>能力定义表</td></tr>
+          <tr><td class="name">core/ability-hooks.ts</td><td>能力的钩子接口与时机（只定接口，不写实现）</td></tr>
+          <tr><td class="name">core/abilities.ts</td><td>本体兵种的公共能力表</td></tr>
+          <tr><td class="name">core/ability-registry.ts</td><td>核心表 + 各扩展贡献的能力，合并成一张查询表</td></tr>
           <tr><td class="name">core/expansions.ts</td><td>扩展规则与扩展兵种</td></tr>
           <tr><td class="name">core/rules.ts</td><td>唯一的状态迁移入口</td></tr>
           <tr><td class="name">core/mapgen.ts</td><td>分区地图生成器（地貌 / 对称 / 连通性）</td></tr>
@@ -1514,5 +1518,5 @@ for (const b of books) {
 // 根目录留一份核心册，方便不开 dev server 直接看（不入库，见 CI 的仓库卫生检查）
 writeFileSync('manual.html', page(books[0]!), 'utf-8');
 console.log(
-  `共 ${books.length} 册 · 兵种 ${Object.keys(UNIT_TYPES).length} 个 · 能力 ${ABILITIES.length} 条 · 扩展 ${EXPANSIONS.length} 个`,
+  `共 ${books.length} 册 · 兵种 ${Object.keys(UNIT_TYPES).length} 个 · 能力 ${allAbilities().length} 条 · 扩展 ${EXPANSIONS.length} 个`,
 );

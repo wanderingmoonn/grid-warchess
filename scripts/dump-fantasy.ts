@@ -7,7 +7,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-import { ABILITIES } from '../src/core/abilities.ts';
+import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { CONFIG, ERAS } from '../src/core/config.ts';
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { BURN_MAX_LAYERS, BURN_PER_LAYER } from '../src/core/rules.ts';
@@ -32,8 +32,8 @@ const packs = FANTASY_PACKS.map((p) => ({
         : `随机（${(u.summon.random ?? []).map((id) => names.get(id) ?? id).join(' / ')}）`
       : '',
     splitText: u.splitInto ? (names.get(u.splitInto) ?? u.splitInto) : '',
-    abilityNames: (u.abilities ?? []).map((id) => ABILITIES.find((a) => a.id === id)?.name ?? id),
-    abilitySummary: (u.abilities ?? []).map((id) => ABILITIES.find((a) => a.id === id)?.summary ?? ''),
+    abilityNames: (u.abilities ?? []).map((id) => abilityById(id)?.name ?? id),
+    abilitySummary: (u.abilities ?? []).map((id) => abilityById(id)?.summary ?? ''),
     // 技能表也倒出来：表格里要能给"每回合能开什么"单独一列
     skillText: (u.skills ?? [])
       .map((k) => `${k.name}（冷却 ${k.cooldown}）：${k.summary}`)
@@ -53,7 +53,7 @@ const payload = {
     burnPerLayer: BURN_PER_LAYER,
     burnMaxLayers: BURN_MAX_LAYERS,
   },
-  abilities: ABILITIES.map((a) => ({ id: a.id, name: a.name, group: a.group, summary: a.summary })),
+  abilities: allAbilities().map((a) => ({ id: a.id, name: a.name, group: a.group, summary: a.summary })),
   packs,
 };
 

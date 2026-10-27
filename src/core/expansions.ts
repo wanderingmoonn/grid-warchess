@@ -16,6 +16,9 @@
 
 import type { City, GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import type { ResourceCost } from './resources.ts';
+// 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
+// 也就不会形成 abilities → expansions → abilities 的环。
+import type { AbilityDef } from './abilities.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_PACKS } from './era-packs.ts';
@@ -244,6 +247,21 @@ export interface Expansion {
   /** 一句话说清它改变了什么 */
   summary: string;
   hooks: ExpansionHooks;
+  /**
+   * 这个扩展带来的**兵种能力**：名字、说明、以及实现（钩子）。
+   *
+   * 为什么要写在扩展里：能力是"这个兵种怎么打"，属于兵种的设计，
+   * 不属于引擎。放在这里，删掉一个扩展就连它的能力一起没了；
+   * 放在 rules.ts 里，删扩展时要回来一行行找哪几段是谁的。
+   *
+   * 合并由 ability-registry.ts 做：核心表在前、扩展按注册顺序在后，
+   * 并且**不看这一局勾了哪些扩展**——自定义兵种勾了「淬毒」，
+   * 在没开奇想包的局里也该照样生效。
+   *
+   * 同 id 以核心为准：扩展想覆盖本体能力是做不到的（那会变成
+   * "开了某个包，盾墙就换了个算法"，玩家永远查不清自己漏了什么）。
+   */
+  abilities?: AbilityDef[];
   /**
    * 这个扩展额外带来的兵种。
    * 不勾选这个扩展，这些兵种就不会出现在本局的兵种表里。

@@ -11,6 +11,7 @@
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
     "manual": "node --experimental-strip-types scripts/build-manual.ts",
+    "snapshot": "node --experimental-strip-types scripts/snapshot-behavior.ts",
     "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
     "sim": "node --experimental-strip-types scripts/sim-ai.ts",
     "sim:debug": "node --experimental-strip-types scripts/debug-ai.ts",

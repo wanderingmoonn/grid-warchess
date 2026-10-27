@@ -33,7 +33,10 @@ import {
   removeAt,
   sandboxCityProblem,
 } from '../src/core/sandbox.ts';
-import { ABILITIES } from '../src/core/abilities.ts';
+// 能力表现在是"核心 + 各扩展贡献"合并出来的，测试跟着合并后的表走：
+// 扩展兵种引用自家能力时，不该因为"本体表里没有"就报不存在。
+import { allAbilities } from '../src/core/ability-registry.ts';
+import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
   AI_MAX_STEPS,
@@ -1552,7 +1555,7 @@ test('五个奇想包齐了，兵种 id 不重复，能力 id 都真实存在', 
       assert.ok(!seen.has(u.id), `兵种 id 重复：${u.id}`);
       seen.add(u.id);
       for (const a of u.abilities ?? []) {
-        assert.ok(ABILITIES.some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
+        assert.ok(allAbilities().some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
       }
       assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
       assert.ok(u.cost > 0, `${u.name} 的造价必须为正`);
@@ -1663,7 +1666,7 @@ test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () =>
 });
 
 test('「跳跃」是一条独立能力，名字就叫跳跃', () => {
-  const leap = ABILITIES.find((a) => a.id === 'leap');
+  const leap = allAbilities().find((a) => a.id === 'leap');
   assert.ok(leap, '应该有 leap 这条能力');
   assert.equal(leap!.name, '跳跃');
   assert.equal(leap!.group, 'move', '走法类，不是战斗类');
@@ -3422,10 +3425,53 @@ test('自爆：阵亡时波及四周', () => {
 });
 
 test('每个内置能力都有说明且能被查到', () => {
-  assert.ok(ABILITIES.length >= 8);
-  for (const a of ABILITIES) {
+  assert.ok(allAbilities().length >= 8);
+  for (const a of allAbilities()) {
     assert.ok(a.id && a.name && a.summary, `${a.id} 缺字段`);
   }
+});
+
+test('能力各归各家：公共词汇在本体，扩展的能力写在扩展文件里', () => {
+  // 这条用例守的是**结构**，不是数值：能力的实现属于兵种设计，
+  // 只被一个扩展用到的能力不该躺在本体的 abilities.ts 里。
+  // 没有它，这次重构过半年就会退回原样——因为往回加一行永远比搬走更省事。
+  const EDITOR_ONLY = new Set(['heal', 'fly', 'fly-over', 'versatile']);
+
+  /** id → 用到它的来源（'core' 或某个扩展 id） */
+  const owners = new Map<string, Set<string>>();
+  const claim = (owner: string, ids: string[] | undefined) => {
+    for (const id of ids ?? []) {
+      const set = owners.get(id) ?? new Set<string>();
+      set.add(owner);
+      owners.set(id, set);
+    }
+  };
+  for (const u of Object.values(UNIT_TYPES)) claim('core', u.abilities);
+  for (const e of EXPANSIONS) for (const u of e.units ?? []) claim(e.id, u.abilities);
+
+  // 1) 本体只留公共词汇
+  for (const a of CORE_ABILITIES) {
+    const who = owners.get(a.id);
+    if (!who || EDITOR_ONLY.has(a.id)) continue;
+    assert.ok(
+      who.has('core') || who.size >= 2,
+      `「${a.name}」（${a.id}）只被 ${[...who].join('、')} 用到，应该搬回那个扩展`,
+    );
+  }
+
+  // 2) 同一条能力不许在两处各写一份：合并时"核心优先"，重复的那份会静默失效，
+  //    以后改扩展里那份的人会以为改动生效了。
+  const seen = new Set(CORE_ABILITIES.map((a) => a.id));
+  for (const e of EXPANSIONS) {
+    for (const a of e.abilities ?? []) {
+      assert.ok(!seen.has(a.id), `能力 ${a.id} 在 ${e.id} 里重复声明了`);
+      seen.add(a.id);
+    }
+  }
+
+  // 反过来不查：扩展可以先声明一条暂时没有兵种在用的能力（「大净化」就是这样，
+  // 它是商店里没上架的货）。这条只对**本体**有约束——本体多一条没人用的，
+  // 通常意味着有段实现忘了跟着搬走。
 });
 
 console.log('\n水军与桥梁');
@@ -5943,7 +5989,7 @@ test('所有兵种 id 全局唯一（原版 + 全部扩展）', () => {
 });
 
 test('时代包的兵种字段合法（能力存在、数值为正、建筑不能动）', () => {
-  const abilityIds = new Set(ABILITIES.map((a) => a.id));
+  const abilityIds = new Set(allAbilities().map((a) => a.id));
   for (const e of packs) {
     for (const u of e.units ?? []) {
       assert.ok(u.name.length > 0 && u.short.length > 0, `${u.id} 缺名字或图标`);

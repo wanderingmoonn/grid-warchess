@@ -48,7 +48,10 @@ src/core/      纯函数规则内核（不含 DOM、不含网络、不含 Math.r
   fog.ts         战争迷雾与视野
   expansions.ts  扩展规则（血战、老兵、堑壕战……）与钩子
   era-packs.ts   ⭐ 五个时代兵种包（69 个新单位），数值推导写在文件头
-  abilities.ts   特殊能力表（破甲、破城、盾墙……）
+  abilities.ts   能力的接口与时机（各能力自己的实现在它主人的文件里）
+                 · ability-hooks.ts  只定义钩子与 stage，不实现任何能力
+                 · abilities.ts      本体兵种用的公共能力（11 条）
+                 · ability-registry.ts 核心表 + 各扩展贡献的能力，合并查询
   setup.ts       开局装配、起始金币
 
 src/ui/        手写 DOM，没有框架

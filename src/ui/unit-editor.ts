@@ -9,7 +9,10 @@
  * 那是下一步的事。
  */
 
-import { ABILITIES, ABILITY_GROUP_NAME, type AbilityGroup } from '../core/abilities.ts';
+// 能力表是"核心 + 各扩展贡献"合并出来的：编辑器要能勾到扩展带来的能力
+// （自定义兵种勾了「淬毒」，没开奇想包的局里也该照样生效）。
+import { ABILITY_GROUP_NAME, type AbilityGroup } from '../core/abilities.ts';
+import { allAbilities } from '../core/ability-registry.ts';
 import { ERAS, UNIT_TYPES } from '../core/config.ts';
 import {
   blankUnit,
@@ -169,11 +172,14 @@ export function openUnitEditor(onClose?: () => void): void {
          </div>`
       : '';
 
+    // 一次性取好：allAbilities() 每次都会拼一份新数组（核心 + 各扩展），
+    // 放进四个分组的 map 里就成了四次无谓的拷贝。
+    const abilityList = allAbilities();
     const abilityBlock = `<div class="editor-block">
            <div class="editor-block-title">特殊能力</div>
            ${(['attack', 'defense', 'move', 'support'] as AbilityGroup[])
              .map((g) => {
-               const items = ABILITIES.filter((a) => a.group === g);
+               const items = abilityList.filter((a) => a.group === g);
                if (items.length === 0) return '';
                return `<div class="editor-ability-group">
                  <span class="editor-ability-tag">${ABILITY_GROUP_NAME[g]}</span>
