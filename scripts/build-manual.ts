@@ -22,7 +22,7 @@ import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 /** 规则内核 + 界面冒烟两项之和，改测试记得改这里 */
-const TEST_COUNT = 284 + 95;
+const TEST_COUNT = 289 + 95;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },

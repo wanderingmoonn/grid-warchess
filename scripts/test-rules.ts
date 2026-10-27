@@ -32,6 +32,7 @@ import {
   sandboxCityProblem,
 } from '../src/core/sandbox.ts';
 import { ABILITIES } from '../src/core/abilities.ts';
+import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
@@ -6629,6 +6630,128 @@ test('2×2 兵营：四格全占、贴边打得到、覆盖格放不下别人', 
   // 碰撞：兵营覆盖的格子不能再站人
   assert.equal(canStandAt(s, 6, 6, 'militia'), false, '兵营身上的格子放不下别人');
   assert.equal(canStandAt(s, 7, 7, 'militia'), true, '出了体积就该能站');
+});
+
+console.log('\n季节与气候');
+
+/** 把一片区域抹平：天气测试要的是"确定的格子"，不该赌地图生成 */
+function flatten(s: GameState, terrain: 'plain' | 'water' = 'plain'): void {
+  for (const t of s.tiles) t.terrain = terrain;
+}
+function setTile(s: GameState, x: number, y: number, terrain: string): void {
+  s.tiles[y * s.w + x]!.terrain = terrain as never;
+}
+
+test('季节：每 10 回合轮换，春→夏→秋→冬→春', () => {
+  assert.equal(seasonOf(1), 'spring');
+  assert.equal(seasonOf(10), 'spring');
+  assert.equal(seasonOf(11), 'summer');
+  assert.equal(seasonOf(20), 'summer');
+  assert.equal(seasonOf(21), 'autumn');
+  assert.equal(seasonOf(31), 'winter');
+  assert.equal(seasonOf(41), 'spring', '第 41 回合回到春天');
+  // 越界的回合数不该崩：开局前/负数都按第一年来算
+  assert.equal(seasonOf(0), 'spring');
+});
+
+test('海陆距离：方圆 2 格有水算沿海，方圆 7 格没水算内陆', () => {
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  // 在 (10,10) 放一格水
+  setTile(s, 10, 10, 'water');
+
+  assert.equal(coastClassOf(s, 11, 10), 'coastal', '贴着水就是沿海');
+  assert.equal(coastClassOf(s, 12, 10), 'coastal', '隔一格还是沿海（2 格内）');
+  assert.equal(coastClassOf(s, 13, 10), 'nearshore', '隔三格不算沿海，也不算内陆');
+  // 离水 7 格以上：地图角落
+  assert.equal(coastClassOf(s, 0, 0), 'inland', '方圆 7 格没水就是内陆');
+
+  // 水面反过来判
+  assert.equal(coastClassOf(s, 10, 10), 'shore', '水格贴着陆地是沿岸');
+});
+
+test('气候矩阵：地形 × 海陆 × 季节照表走', () => {
+  const mk = (turn: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    s.turn = turn;
+    return s;
+  };
+
+  // 平原内陸的夏天是酷暑，冬天是寒冷
+  const summer = mk(15);
+  setTile(summer, 5, 5, 'plain');
+  assert.equal(coastClassOf(summer, 5, 5), 'inland');
+  assert.equal(climateAt(summer, 5, 5), 'blazing', '平原·内陆·夏 = 酷暑');
+
+  const winter = mk(35);
+  assert.equal(climateAt(winter, 5, 5), 'cold', '平原·内陆·冬 = 寒冷');
+
+  // 山地近岸的冬天是严冬
+  const mtn = mk(35);
+  setTile(mtn, 10, 10, 'water');
+  setTile(mtn, 12, 10, 'mountain');
+  assert.equal(coastClassOf(mtn, 12, 10), 'coastal');
+  assert.equal(climateAt(mtn, 12, 10), 'cold', '山地·沿海·冬 = 寒冷');
+
+  // 城市/桥这类"其他"一律温和，不参与冲突判定
+  const city = mk(35);
+  setTile(city, 5, 5, 'city');
+  assert.equal(climateAt(city, 5, 5), 'mild', '城市不吃气候');
+});
+
+test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 15; // 夏
+  // 整张图抹成平原、没有水 → 每一格都是内陆
+  const u = place2(s, 'A', 'archer', 5, 5);
+  const base = s.unitTypes.archer!.move;
+  assert.equal(climateAt(s, 5, 5), 'blazing', '平原·内陆·夏 = 酷暑');
+  assert.equal(movePower(s, u), Math.floor(base * 0.5), '酷暑是 -50%');
+
+  // 浓雾（丘陵·内陆·秋）：视野压到 2
+  const f = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(f, 'plain');
+  f.turn = 25; // 秋
+  setTile(f, 7, 7, 'hill');
+  const archer = place2(f, 'A', 'archer', 7, 7);
+  assert.equal(climateAt(f, 7, 7), 'fog', '丘陵·内陆·秋 = 浓雾');
+  assert.ok(visionOf(f, archer) <= 2, `浓雾视野应该 ≤2，实际 ${visionOf(f, archer)}`);
+  assert.ok(
+    visionOf(f, archer) < s.unitTypes.archer!.vision,
+    '浓雾必须真的压低了视野，不能本来就这么点',
+  );
+
+  // 阴雨（平原·沿海·秋）：射程 -1
+  const o = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(o, 'plain');
+  o.turn = 25;
+  setTile(o, 9, 8, 'water'); // 贴着 (8,8)，让它成为沿海
+  const bow = place2(o, 'A', 'archer', 8, 8);
+  assert.equal(climateAt(o, 8, 8), 'overcast', '平原·沿海·秋 = 阴雨');
+  assert.equal(
+    effectiveRange(o, bow),
+    Math.max(1, s.unitTypes.archer!.range - 1),
+    '阴雨把射程砍一格',
+  );
+});
+
+test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  // 山地·近岸·夏 = 雷暴：水放在切比雪夫距离 3 的位置（2 格内会变成沿海）
+  s.turn = 15; // 夏
+  setTile(s, 3, 3, 'mountain');
+  setTile(s, 6, 3, 'water');
+  const unit = place2(s, 'A', 'militia', 3, 3);
+  const hpBefore = unit.hp;
+  assert.equal(climateAt(s, 3, 3), 'thunder', '山地·近岸·夏 应该是雷暴');
+
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((x) => x.id === unit.id);
+  assert.ok(!after || after.hp < hpBefore, '雷暴应该让这个单位掉血');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

@@ -21,6 +21,7 @@ import type { ResourceCost } from './resources.ts';
 import { ERA_PACKS } from './era-packs.ts';
 import { FANTASY_PACKS } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
+import { SEASONS } from './seasons.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -117,7 +118,21 @@ export interface IncomeCtx {
 export interface VisionCtx {
   state: GameState;
   player: PlayerId;
+  /** 具体是哪个单位在问视野；不填表示"这一方的整体视野" */
+  unit?: Unit;
   base: number;
+}
+
+/**
+ * 攻击范围钩子。
+ *
+ * 单独开一个而不是塞进 modifyMove：射程和移动是两件事，一个扩展可能只改其中一样
+ * （「季节与气候」的阴雨就是"走得慢一点、还打得近一点"，两条互不相干）。
+ */
+export interface RangeCtx {
+  state: GameState;
+  unit: Unit;
+  range: number;
 }
 
 export interface CityRegenCtx {
@@ -150,6 +165,24 @@ export interface TurnStartCtx {
   player: PlayerId;
 }
 
+/**
+ * 回合末钩子。
+ *
+ * 和 `onTurnStart` 分开，是因为它能**改状态**：掉血、扣钱、写战报。
+ * 但"死"这件事仍然归规则层——钩子只管把血扣到 0，
+ * 清场、记击杀、判负由 rules 在钩子跑完之后统一做。
+ * 这样扩展可以随便加伤害来源，又不会各自造一套半成品死亡逻辑。
+ */
+export interface TurnEndCtx {
+  state: GameState;
+  /** 刚刚结束回合的那一方 */
+  player: PlayerId;
+  /** 造成真实伤害（不吃护甲）；血量归零由规则层统一清场 */
+  hurt: (u: Unit, amount: number) => void;
+  /** 写一条战报 */
+  log: (p: PlayerId, text: string) => void;
+}
+
 export interface MatchStartCtx {
   state: GameState;
 }
@@ -173,6 +206,8 @@ export interface ExpansionHooks {
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
   modifyVision?: (c: VisionCtx) => number;
+  /** 纯函数：修正攻击范围 */
+  modifyRange?: (c: RangeCtx) => number;
   /** 纯函数：修正城市每回合回血量 */
   modifyCityRegen?: (c: CityRegenCtx) => number;
   /** 纯函数：修正升级时代的费用（返回 null 表示已封顶） */
@@ -181,6 +216,8 @@ export interface ExpansionHooks {
   onUnitKilled?: (c: KillCtx) => void;
   /** 有副作用：某方回合开始时 */
   onTurnStart?: (c: TurnStartCtx) => void;
+  /** 有副作用：某方回合结束时（可以扣血、扣钱、写战报） */
+  onTurnEnd?: (c: TurnEndCtx) => void;
   /** 有副作用：开局时改初始状态 */
   onMatchStart?: (c: MatchStartCtx) => void;
   /**
@@ -530,6 +567,7 @@ export const EXPANSIONS: Expansion[] = [
   // 顺序会进存档，也影响钩子叠加次序。
   ...ERA_PACKS,
   CITY_WORKS,
+  SEASONS,
 ];
 
 export function expansionById(id: string): Expansion | undefined {

@@ -416,7 +416,13 @@ export function effectiveRange(s: GameState, u: Unit): number {
   const def = utype(s, u.type);
   if (typeof def.ammo === 'number' && outOfAmmo(s, u)) return 1;
   // 投斧：这一回合把射程拉长到技能给的值（矮人王 1 → 3）
-  return u.heroBuff?.range ?? def.range;
+  let range = u.heroBuff?.range ?? def.range;
+  // 扩展可以再改（浓雾封顶、暴雨缩短）。放在技能之后，
+  // 因为"天气"是场上条件，该对任何来源的射程一视同仁。
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyRange) range = e.hooks.modifyRange({ state: s, unit: u, range });
+  }
+  return Math.max(1, range);
 }
 
 /**
@@ -734,10 +740,16 @@ export function movePower(s: GameState, unit: Unit): number {
     if (hasAbility(utype(s, ally.type), 'aura-speed')) move += 1;
   }
 
+  // 先保底 1：减速、光环这些加减法算完，最少留一格移动力。
+  // 这条要在钩子**之前**——否则"钩子把移动力压到 0"和"减速扣成 0"
+  // 会长得一模一样，而前者是规则（封冻），后者是 bug。
+  move = Math.max(1, move);
+
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
   }
-  return Math.max(1, move);
+  // 钩子返回 0 = 这一回合动不了（封冻的海军）。
+  return move <= 0 ? 0 : move;
 }
 
 /** 算上扩展规则后的视野半径 */
@@ -751,7 +763,7 @@ export function visionOf(s: GameState, unit: Unit): number {
     if (hostDef.garrison && !underConstruction(host)) r = Math.max(r, hostDef.vision);
   }
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, base: r });
+    if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, unit, base: r });
   }
   return Math.max(1, r);
 }
@@ -3296,6 +3308,20 @@ function doEndTurn(s: GameState): ActionResult {
   const nextPlayer = other(s.current);
   s.current = nextPlayer;
   s.turn += 1;
+
+  // 回合末钩子（天气、维护费一类）。钩子只负责把血扣到 0，
+  // 清场仍然由下面的 sweepDead 统一做——扩展不该各自造一套死亡逻辑。
+  for (const e of activeExpansions(s)) {
+    e.hooks.onTurnEnd?.({
+      state: s,
+      player: prevPlayer,
+      hurt: (u, amount) => {
+        u.hp -= amount;
+      },
+      log: (p, text) => pushLog(s, p, text),
+    });
+  }
+  if (activeExpansions(s).some((e) => e.hooks.onTurnEnd)) sweepDead(s);
 
   // 回合开始的伤害类结算：先中毒/灼烧，再自损。
   // 必须在下面算"休整"之前——被毒死的人不该还在名单里等着回血。
