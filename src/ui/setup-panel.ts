@@ -279,7 +279,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种。开了「地形高差」会多出高原 / 峡谷 / 火山群 / 沼泽</span>
+                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种</span>
               </div>
               <div class="chip-row">${styleChips}</div>
             </section>
