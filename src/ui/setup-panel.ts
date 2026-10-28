@@ -7,7 +7,7 @@
 
 import { ERAS } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
-import { EXPANSIONS, expansionById } from '../core/expansions.ts';
+import { EXPANSIONS, availableExpansions, expansionById } from '../core/expansions.ts';
 import { MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
 import {
   BOARD_SIZES,
@@ -187,7 +187,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const names = need.map((r) => expansionById(r)?.name ?? r).join('、');
         return `<span class="expansion-req">需先开：${names}</span>`;
       };
-      const expItems = EXPANSIONS.map(
+      // 隐藏的扩展（规则在跑但玩家还选不到）不列出来
+      const expItems = availableExpansions().map(
         (e) => `
         <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
           <input type="checkbox" data-exp="${e.id}" ${config.expansionIds.includes(e.id) ? 'checked' : ''} />

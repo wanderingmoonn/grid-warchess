@@ -639,37 +639,19 @@ check('能选地貌与地形对称方式', () => {
   );
 });
 
-check('高差地貌跟着「地形高差」扩展开关增减', () => {
-  // 没开扩展：地貌里没有高原/峡谷/火山群/沼泽（这些地形规则里根本不存在）
-  assert.equal(doc.querySelector('[data-mapstyle="highland"]'), null, '没开扩展不该有高原');
-
-  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box, '扩展列表里应该有「地形高差」');
-  box!.checked = true;
-  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+check('地形高差暂时不给玩家选：面板里没有开关，也没有高差地貌', () => {
+  // 规则留在代码里（新 AI 的步耗与射程按它算），但这一批不对玩家开放。
+  // 地貌选项跟着扩展开关走，所以勾不到扩展也就不会冒出高差地貌。
+  assert.equal(
+    doc.querySelector('[data-exp="height-terrain"]'),
+    null,
+    '「地形高差」不该出现在扩展列表里',
+  );
   for (const id of ['highland', 'canyon', 'volcanic', 'marsh']) {
-    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `开了扩展应该有 ${id}`);
+    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没开扩展不该有 ${id}`);
   }
-
-  // 选一张高差地貌，再关掉扩展：选择要退回"随机"，
-  // 不能留下一个"选中了但画不出来"的地貌。
-  doc
-    .querySelector<HTMLElement>('[data-mapstyle="canyon"]')
-    ?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  assert.ok(
-    doc.querySelector('[data-mapstyle="canyon"]')?.classList.contains('active'),
-    '点了峡谷应该高亮',
-  );
-
-  const box2 = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box2, '找不到「地形高差」的勾选框');
-  box2!.checked = false;
-  box2!.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert.equal(doc.querySelector('[data-mapstyle="canyon"]'), null, '关掉扩展后峡谷选项该消失');
-  assert.ok(
-    doc.querySelector('[data-mapstyle="random"]')?.classList.contains('active'),
-    '失效的地貌要退回随机',
-  );
+  // 别顺手把整张列表都藏了
+  assert.ok(doc.querySelector('[data-exp="veterans"]'), '别的扩展要还在');
 });
 
 check('扩展规则可以勾选并高亮', () => {

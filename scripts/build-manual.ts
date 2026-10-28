@@ -16,7 +16,7 @@ import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
-import { BLOOD_TURN, EXPANSIONS } from '../src/core/expansions.ts';
+import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
@@ -24,7 +24,7 @@ import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 /** npm test 的规则、AI 场景、评估方法、界面冒烟总数，改测试记得改这里。 */
-const TEST_COUNT = 330 + 25 + 7 + 114;
+const TEST_COUNT = 331 + 25 + 7 + 114;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -238,7 +238,8 @@ function abilityTable(): string {
 
 /** 只列小型扩展的汇总表。大型（带兵种的）各有各的分册，这里一行都不放 */
 function expansionTable(): string {
-  const small = EXPANSIONS.filter((e) => e.scale !== 'large');
+  // 隐藏的扩展不印：玩家在开局面板里看不到它，手册里也就不该出现
+  const small = availableExpansions().filter((e) => e.scale !== 'large');
   return `
     <table>
       <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
@@ -1351,7 +1352,7 @@ ${SMALL_NOTES[e.id] ? '      ' + SMALL_NOTES[e.id] : ''}
     </section>`;
 }
 
-const SMALL_EXPANSIONS = EXPANSIONS.filter((e) => e.scale !== 'large');
+const SMALL_EXPANSIONS = availableExpansions().filter((e) => e.scale !== 'large');
 
 const SMALL_BODY = `
     <section id="small-intro">

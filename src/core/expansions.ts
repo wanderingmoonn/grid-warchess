@@ -347,6 +347,19 @@ export interface Expansion {
    */
   scale?: 'small' | 'large';
   /**
+   * 还没对玩家开放：规则照常注册，但开局面板和规则书里都不出现。
+   *
+   * 为什么需要这个开关，而不是干脆把扩展删掉：有些扩展的规则已经被别的东西
+   * 依赖了。「地形高差」就是——新 AI 的射程与寻路按"邻格进入当前格"的真实
+   * 步耗算，攻城候选和威胁圈也都走目标相关射程。把这套规则整个拔掉，AI 就得
+   * 退回基础射程，等于刚验收过的引擎当场降级。
+   *
+   * 所以做法是：代码留着、玩家选不到。地图是**开局时按这一局的扩展生成的**，
+   * 地貌选项也跟着扩展开关增减，不勾就一格高差地形都不会出现，
+   * 对局里看到的还是那五种老地貌。
+   */
+  hidden?: boolean;
+  /**
    * 这个扩展要求的主城边长（缺省 2）。
    *
    * 为什么写在扩展上而不是只给 config：城市占几格会改变地图的生成方式
@@ -668,6 +681,17 @@ export const EXPANSIONS: Expansion[] = [
 
 export function expansionById(id: string): Expansion | undefined {
   return EXPANSIONS.find((e) => e.id === id);
+}
+
+/**
+ * 开局面板与规则书里能出现的那部分扩展（`hidden` 的不在其中）。
+ *
+ * 只影响"玩家选不选得到"，不影响 `expansionById` / `activeExpansions`：
+ * 存档里已经写着这个 id 的对局照样按它的规则跑。想彻底拿掉，
+ * 得连带删掉依赖它的规则——见 `Expansion.hidden` 的注释。
+ */
+export function availableExpansions(): Expansion[] {
+  return EXPANSIONS.filter((e) => e.hidden !== true);
 }
 
 /**
