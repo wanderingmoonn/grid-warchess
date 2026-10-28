@@ -96,6 +96,99 @@ create trigger warchess_reports_rate
 
 
 -- ============================================================
+-- P0 加固：体积/范围约束 + 结构白名单（2026-10-28 补）
+--
+-- 这一层挡的是"手写一条 POST 直接灌进来"的那种数据：
+--   · 一条 payload 能塞几十 MB → 配额和查询一起被打爆
+--   · roster 的 key 可以是任意字符串 → 以后渲染进管理页面就是存储型 XSS
+--   · timeline 可以声称有一百万帧 → 汇总脚本直接算死
+-- 注意分工：**这里只挡结构**（什么形状都不可能），不做语义判断
+-- （"这局打得像不像真的"归汇总脚本，那里可以随时改阈值而不影响入库）。
+-- ============================================================
+
+alter table public.warchess_reports add column if not exists campaign text;
+alter table public.warchess_reports add column if not exists consent text;
+alter table public.warchess_reports add column if not exists verdict text not null default 'unverified';
+
+-- 约束用 drop + add 保证可重复执行（add constraint if not exists 语法在 PG 里没有）
+alter table public.warchess_reports drop constraint if exists warchess_reports_payload_size;
+alter table public.warchess_reports add constraint warchess_reports_payload_size
+  check (pg_column_size(payload) < 262144);          -- 256 KB，正常报告是 3~8 KB
+
+alter table public.warchess_reports drop constraint if exists warchess_reports_turns_range;
+alter table public.warchess_reports add constraint warchess_reports_turns_range
+  check (turns between 1 and 5000);
+
+alter table public.warchess_reports drop constraint if exists warchess_reports_exp_len;
+alter table public.warchess_reports add constraint warchess_reports_exp_len
+  check (cardinality(expansions) <= 40);
+
+alter table public.warchess_reports drop constraint if exists warchess_reports_campaign_fmt;
+alter table public.warchess_reports add constraint warchess_reports_campaign_fmt
+  check (campaign is null or campaign ~ '^[a-z0-9][a-z0-9-]{0,23}$');
+
+-- 同意的版本号形状：YYYY-MM-DD.vN（改一句告知就要换一个版本）
+alter table public.warchess_reports drop constraint if exists warchess_reports_consent_fmt;
+alter table public.warchess_reports add constraint warchess_reports_consent_fmt
+  check (consent is null or consent ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.v[0-9]{1,2}$');
+
+-- 结构白名单：过了这道闸的行标成 plausible；老数据保持 unverified
+create or replace function public.warchess_reports_validate() returns trigger
+language plpgsql security definer set search_path = public as $fn$
+declare k text; i int; roster jsonb;
+begin
+  if jsonb_typeof(new.sides) <> 'array' then
+    raise exception 'warchess: sides must be a JSON array';
+  end if;
+  if jsonb_array_length(new.sides) > 2 then
+    raise exception 'warchess: at most 2 sides';
+  end if;
+
+  for i in 0 .. jsonb_array_length(new.sides) - 1 loop
+    roster := new.sides -> i -> 'roster';
+    if jsonb_typeof(roster) = 'object' then
+      if (select count(*) from jsonb_object_keys(roster) g) > 60 then
+        raise exception 'warchess: roster has too many kinds';
+      end if;
+      select g into k from jsonb_object_keys(roster) g
+       where g !~ '^[a-z0-9][a-z0-9_-]{0,31}$' limit 1;
+      if k is not null then
+        raise exception 'warchess: bad unit id %', left(k, 40);
+      end if;
+    end if;
+  end loop;
+
+  if new.payload ? 'timeline'
+     and jsonb_typeof(new.payload -> 'timeline' -> 'samples') = 'array'
+     and jsonb_array_length(new.payload -> 'timeline' -> 'samples') > 300 then
+    raise exception 'warchess: timeline has too many frames';
+  end if;
+
+  if jsonb_typeof(new.ai) <> 'object' then
+    raise exception 'warchess: ai must be an object';
+  end if;
+
+  select e into k from unnest(new.expansions) e
+   where e !~ '^[a-z0-9][a-z0-9-]{0,31}$' limit 1;
+  if k is not null then
+    raise exception 'warchess: bad expansion id %', left(k, 40);
+  end if;
+
+  if new.winner is not null and new.winner not in ('A', 'B') then
+    raise exception 'warchess: winner must be A, B or null';
+  end if;
+
+  new.verdict := 'plausible';
+  return new;
+end $fn$;
+
+drop trigger if exists warchess_reports_validate on public.warchess_reports;
+create trigger warchess_reports_validate
+  before insert on public.warchess_reports
+  for each row execute function public.warchess_reports_validate();
+
+
+-- ============================================================
 -- 分析用的两个视图（2026-10-28 补）
 --
 -- 为什么要有视图：原始表里 sides 是一整块 JSON 数组，直接查它得写

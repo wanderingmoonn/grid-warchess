@@ -22,6 +22,16 @@ import type { GameState, PlayerId } from './types.ts';
 /** 报告格式版本。加字段不一定动它，改语义一定要动 */
 export const REPORT_VERSION = 1;
 
+/**
+ * 玩家点"上传"时同意的那份说明的版本。
+ *
+ * 和 REPORT_VERSION 是两码事：那个说的是**数据结构**变没变，这个说的是
+ * **告知与授权**变没变。改一句"可能用于训练模型"，就必须换一个版本号——
+ * 否则事后无法说清"这条数据是他按哪一版说明同意的"。
+ * 形状跟着数据库的 CHECK：YYYY-MM-DD.vN。
+ */
+export const REPORT_CONSENT_VERSION = '2026-10-28.v1';
+
 export interface ReportSide {
   /** 只写 A/B，不写名字 */
   side: PlayerId;

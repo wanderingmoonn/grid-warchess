@@ -141,3 +141,30 @@ group by 1;
 
 -- ⑨ 清理：只留最近 180 天（按需跑，跑之前先确认①里的量）
 -- delete from warchess_reports where created_at < now() - interval '180 days';
+
+
+-- ⑫ 按批次看：哪一批数据是谁带来的、干不干净
+--    某一批局的"未决率/平均回合"明显偏离其他批次时，先怀疑那一批的采集方式，
+--    而不是怀疑游戏平衡。verdict='quarantined' 的批次不要进结论。
+select coalesce(campaign, '(直接来的)') as campaign,
+       count(*)                          as games,
+       count(*) filter (where verdict = 'plausible')     as plausible,
+       count(*) filter (where verdict = 'quarantined')   as quarantined,
+       round(avg(turns)::numeric, 1)     as avg_turns,
+       min(created_at)                   as first_at,
+       max(created_at)                   as last_at
+from warchess_reports
+group by 1
+order by games desc;
+
+
+-- ⑬ 同意版本分布：改过告知文案之后，能看出新老数据各占多少
+select coalesce(consent, '(未记录)') as consent_version, count(*) as games
+from warchess_reports
+group by 1
+order by games desc;
+
+
+-- ⑭ 隔离一批可疑数据（先看⑫，再决定 in 哪些 id）
+-- update warchess_reports set verdict = 'quarantined'
+--  where campaign = 'xxx' and created_at between '2026-10-28' and '2026-10-29';

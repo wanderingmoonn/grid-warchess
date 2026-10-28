@@ -287,7 +287,8 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
     <div class="card-title">这局的数据要不要捐出来</div>
     <div class="hint">
       打完的局能帮上忙：哪个兵种偏贵、哪套扩展一开就一边倒，光靠自己打的几十局是看不出来的。
-      勾上只是"允许"，点下面的按钮才真的发出去。
+      这些数据只用于<b>调整数值、改进 AI</b>，也可能用于<b>训练模型</b>或发布<b>聚合统计</b>
+      （不会公开单条记录）。勾上只是"允许"，点下面的按钮才真的发出去。
     </div>
     <ul class="report-list">
       <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.turns} 次行动 · ${winnerText}</li>
@@ -304,7 +305,10 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
         ? `<div class="hint report-detail">这局还记了逐回合摘要：${escapeHtml(info.detail)}</div>`
         : ''
     }
-    <div class="hint report-privacy">不含玩家名、房间码、每一步的操作记录，也不含任何能定位到你的东西。</div>
+    <div class="hint report-privacy">
+      不含玩家名、房间码、操作流水。会上传一个<b>随机浏览器代号</b>（只用于限流和去重，
+      不关联任何账号）。提交后<b>无法单独撤回</b>——系统不知道哪条是你的。
+    </div>
     <label class="report-opt">
       <input type="checkbox" data-act="report-opt" ${info.optedIn ? 'checked' : ''} />
       <span>允许上传对局数据（存在本机，随时可以取消）</span>

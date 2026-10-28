@@ -2781,6 +2781,15 @@ check('结算卡：上传失败要说清是哪一步不对，并给下一步', (
     assert.equal(done?.disabled, true, '传完了就别再让点');
     assert.ok(host.querySelector('.report-status.done'), '成功也要有一句回话');
 
+    // 隐私说明必须说准三件事：会上传浏览器代号、不能单独撤回、可能用于训练模型
+    renderPanel(host, { ...base, report: { optedIn: false, status: 'idle' } });
+    const privacy = host.querySelector('.report-privacy')?.textContent ?? '';
+    for (const must of ['随机浏览器代号', '无法单独撤回', '不关联任何账号']) {
+      assert.ok(privacy.includes(must), `隐私说明必须写明「${must}」，实际是：${privacy.trim()}`);
+    }
+    const intro = host.querySelector('.report-card .hint')?.textContent ?? '';
+    assert.ok(intro.includes('训练模型'), '用途里要写明可能用于训练模型，不能含糊带过');
+
     // 没打完就没有这一块
     renderPanel(host, base);
     assert.equal(host.querySelector('.report-card'), null, '对局还没打完不该冒出上传卡');

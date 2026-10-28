@@ -180,6 +180,9 @@ npm run pack-report    # 汇总成 results/packs/report.md
   `node --experimental-strip-types scripts/reports-digest.ts that.json --md digest.md`，
   得到一份带样本量提醒的 markdown 报告
 
+另外两列和采集渠道有关：`campaign`（邀请链接上的 `?campaign=`，用来按批次隔离数据，
+不是身份）、`verdict`（`plausible` 过了结构校验 / `unverified` 老数据 / `quarantined` 人工隔离）。
+
 两层防滥用，别混：
 - **限流**（`client_id`）：每个浏览器一个随机代号，同一小时内超过 30 条由触发器拒掉。
   它只用来分组计数，不是身份，也不进报告正文；

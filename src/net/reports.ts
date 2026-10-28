@@ -12,7 +12,8 @@
  * 那会让玩家以为是自己的网。所以错误按 code 分类，并给出下一步能做什么。
  */
 
-import { reportSignature, type MatchReport } from '../core/report.ts';
+import { REPORT_CONSENT_VERSION, reportSignature, type MatchReport } from '../core/report.ts';
+import { campaignCode } from './campaign.ts';
 import { clientId } from './client-id.ts';
 import { cloudDatabase } from './room.ts';
 
@@ -106,6 +107,10 @@ export async function uploadReport(report: MatchReport): Promise<UploadResult> {
       client_id: clientId(),
       // 跨设备去重的键：种子+回合+胜负+双方终局+摘要规模
       fingerprint: reportSignature(report),
+      // 批次码（邀请链接上的 ?campaign=）：只用来和某一批数据切割，不是身份
+      campaign: campaignCode(),
+      // 他同意的是哪一版说明——改文案必须换版本号，否则事后说不清
+      consent: REPORT_CONSENT_VERSION,
       created_at: report.at,
       version: report.v,
       seed: report.seed,

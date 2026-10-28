@@ -39,6 +39,7 @@ import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import { newTimeline, noteAction, sampleTurn, timelineSummary } from '../src/core/timeline.ts';
+import { normalizeCampaign } from '../src/net/campaign.ts';
 import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
@@ -7786,6 +7787,20 @@ test('逐回合摘要：进得了报告，仍然不带玩家名', () => {
 
   assert.ok(timelineSummary(tl).includes('帧'), '摘要文案要能读懂');
   assert.equal(timelineSummary(null), '', '没摘要就别编一句出来');
+});
+
+test('批次码：清洗成数据库约束认的形状，不合法就当没有', () => {
+  assert.equal(normalizeCampaign('net-friends-a'), 'net-friends-a');
+  assert.equal(normalizeCampaign('  Net Friends A  '), 'net-friends-a', '大小写和空格要收拾干净');
+  assert.equal(normalizeCampaign('群1: 网友'), '1', '中文和冒号会被剥掉，剩下的部分仍然合法');
+  assert.equal(normalizeCampaign('---abc---'), 'abc', '开头的横线要去掉（约束要求首字符是字母或数字）');
+  assert.equal(normalizeCampaign('下拉'), null, '全是非法字符就返回 null，而不是空串');
+  assert.equal(normalizeCampaign(''), null);
+  assert.equal(normalizeCampaign(null), null);
+
+  const long = normalizeCampaign('a'.repeat(60));
+  assert.ok(long && long.length <= 24, '超长要截断');
+  assert.ok(/^[a-z0-9][a-z0-9-]{0,23}$/.test(long ?? ''), '清洗结果必须能被数据库的 CHECK 接受');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

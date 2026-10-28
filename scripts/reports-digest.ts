@@ -59,7 +59,61 @@ function loadRows(path: string): Row[] {
   return (list as Row[]).filter((r) => typeof r?.seed === 'number' && typeof r?.turns === 'number');
 }
 
-const rows = loadRows(file);
+const allRows = loadRows(file);
+
+/**
+ * 一致性检查：只挑"客户端不可能产出"的自相矛盾，不挑"看起来可疑"。
+ *
+ * 为什么只挑这一档：这套系统没有服务端权威，一条数据本来就是一份声明。
+ * 拿"兵力看着太多"这类主观标准去剔，会把真人打的怪局（热座、指挥官模式、
+ * 自定义兵种池）一起误杀；而"赢家 0 城"这种在规则里根本不可能，
+ * 出现就只有两个解释——客户端被改过，或者这一行是手写的。
+ *
+ * 剔除只影响**这份报告**，不改库里任何东西：原始行永远在，等人工复核。
+ */
+function checkRow(r: Row): string[] {
+  const why: string[] = [];
+  const sides = r.sides ?? r.payload?.sides ?? [];
+
+  if (!Number.isFinite(r.turns) || r.turns < 1 || r.turns > 5000) why.push('回合数越界');
+  if (r.winner !== null && r.winner !== 'A' && r.winner !== 'B') why.push('胜负值非法');
+  if (sides.length > 2) why.push('超过两方');
+  if (sides.length > 0 && sides.length < 2) why.push('少了一方');
+
+  // 规则层：没有城就算输。赢家 0 城是自相矛盾的
+  const winner = sides.find((x) => x.side === r.winner);
+  if (r.winner && winner && (winner.cities ?? 0) < 1) why.push('赢家 0 城');
+
+  const tl = r.payload?.timeline;
+  if (tl) {
+    if (!Array.isArray(tl.samples)) why.push('摘要缺 samples');
+    else if (tl.samples.length > 240) why.push('摘要帧数超上限');
+    else {
+      // 同一批行动，两个口径的出兵数必须对得上（客户端是同一处代码数的）
+      for (const p of ['A', 'B'] as const) {
+        const acts = tl.acts?.[p]?.RECRUIT ?? 0;
+        const made = Object.values(tl.made?.[p] ?? {}).reduce((a, b) => a + b, 0);
+        if (acts > 0 && made > 0 && acts !== made) why.push(`${p} 方出兵计数对不上`);
+      }
+      const ts = tl.samples.map((x) => x.t);
+      for (let i = 1; i < ts.length; i++) {
+        if ((ts[i] ?? 0) <= (ts[i - 1] ?? 0)) {
+          why.push('摘要时间不单调');
+          break;
+        }
+      }
+    }
+  }
+  return why;
+}
+
+const bad: Array<{ row: Row; why: string[] }> = [];
+const rows = allRows.filter((r) => {
+  const why = checkRow(r);
+  if (why.length === 0) return true;
+  bad.push({ row: r, why });
+  return false;
+});
 
 /* ---------------- 小工具 ---------------- */
 
@@ -89,6 +143,11 @@ const times = rows.map((r) => new Date(r.created_at ?? 0).getTime()).filter((t) 
 
 say('# 真人对局汇总');
 say();
+if (bad.length > 0) {
+  say(`共收 ${allRows.length} 局，其中 **${bad.length} 局未通过一致性检查**（明细见文末），` +
+    `主结论只基于剩下 ${rows.length} 局。`);
+  say();
+}
 say(`样本 ${rows.length} 局（分出胜负 ${decided.length}，未决 ${draws}），` +
   `平均 ${f1(avg(rows.map((r) => r.turns)))} 次行动，中位 ${median(rows.map((r) => r.turns))}。`);
 if (times.length > 0) {
@@ -275,6 +334,30 @@ if (withTl.length > 0) {
 }
 
 /* ---------------- 这套数据算不出什么 ---------------- */
+
+if (bad.length > 0) {
+  say('## 未通过一致性检查的局');
+  say();
+  const reasons = new Map<string, number>();
+  for (const b of bad) for (const w of b.why) reasons.set(w, (reasons.get(w) ?? 0) + 1);
+  say('| 原因 | 局数 |');
+  say('|---|---|');
+  for (const [k, n] of [...reasons.entries()].sort((a, b) => b[1] - a[1])) {
+    say(`| ${k} | ${n} |`);
+  }
+  say();
+  const sample = bad.slice(0, 8);
+  say('前几行明细（种子 / 回合 / 原因）：');
+  say();
+  for (const b of sample) {
+    say(`- seed ${b.row.seed} · ${b.row.turns} 回合 · ${b.why.join('、')}`);
+  }
+  say();
+  say('> 这些行**没有**从库里删掉，只是不参与本次结论。复核后建议标记而不是删除：');
+  say('> `update warchess_reports set verdict = \'quarantined\' where id in (...)`。');
+  say('> 删了就没法复盘"当初为什么判它可疑"。');
+  say();
+}
 
 say('## 这套数据算不出什么（别硬算）');
 say();
