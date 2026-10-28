@@ -5074,16 +5074,24 @@ test('AI 的随机值仍然可复现', () => {
   assert.notEqual(aiNoise(s), aiNoise(next), '换一个回合应该换一个值');
 });
 
-test('AI 不会每回合都做同一件事', () => {
+test('AI 随真实局面变化使用多种行动，而不是靠回合号乱换选择', () => {
   const picks = new Set<string>();
-  for (let t = 1; t <= 12; t++) {
-    const s = fresh();
-    s.current = 'A';
-    s.players.A.gold = 900;
-    s.turn = t;
-    picks.add(JSON.stringify(aiNextAction(s)));
+  let s = fresh();
+  s.current = 'A';
+  s.players.A.gold = 900;
+  s.fog = false;
+  const budget = { ...DEFAULT_BUDGET };
+  for (let step = 0; step < AI_MAX_STEPS && !s.winner; step++) {
+    const action = aiNextAction(s, budget);
+    if (!action) break;
+    const result = applyAction(s, action);
+    assert.ok(result.ok, result.ok ? '' : result.reason);
+    picks.add(action.type);
+    if (action.type === 'RECRUIT') budget.recruited++;
+    if (action.type === 'UPGRADE') budget.upgraded++;
+    s = result.state;
   }
-  assert.ok(picks.size >= 3, `十二个回合里只出现 ${picks.size} 种选择，太单调`);
+  assert.ok(picks.size >= 3, `实际行动只出现 ${[...picks].join('/')}`);
 });
 
 test('不同种子的 AI 性格不同', () => {
@@ -6023,6 +6031,7 @@ test('「升级时代」能排进序列，同样占一格', () => {
 
 test('排了「升级时代」，AI 这一回合真的会去升级', () => {
   const s = commandPost(); // 1000 金，够升到中世
+  s.orders = { A: [ORDER_UPGRADE] }; // Explicit order: this test is not about auto-planning.
   const budget = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 1, order: null };
   let cur = s;
   let got = false;
