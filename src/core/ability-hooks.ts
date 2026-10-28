@@ -219,13 +219,48 @@ export const STRIKE_STAGE = {
 export const TURN_START = {
   /** 自身恢复：休整、再生、嗜血（在 doEndTurn 的自愈循环里） */
   self: 100,
+  postSelf: 150, 
+
   /** 光环类：治疗光环、净化、大净化 */
   aura: 200,
-  /** 动手类：修缮、筑墙、布雷（这段之后要 sweepDead） */
+  postAura: 250, 
+
+  /** 动手类：修缮、筑墙、布雷（这段之后要清场sweepDead） */
   support: 300,
-  /** 召唤（最后一段：先结算完伤害和状态，再决定谁还能召） */
+  postSupport: 350,
+
+  /** 召唤 */
   summon: 400,
+  postSummon: 450, 
 } as const;
+
+/**
+ * 持续状态的定义。
+ * 扩展可以通过注册表注册自己的状态，从而影响单位。
+ */
+export interface StatusDef {
+  id: string;
+  name: string;
+  summary: string;
+
+  /** 
+   * 回合开始时的结算（比如掉血、回血）。
+   * 返回字符串则写入战报，返回 null 表示不写。
+   */
+  onTurnStart?: (s: GameState, u: Unit, val: number) => string | null;
+
+  /** 修正移动力 */
+  modifyMove?: (s: GameState, u: Unit, val: number, move: number) => number;
+
+  /** 修正护甲 */
+  modifyArmor?: (s: GameState, u: Unit, val: number, armor: number) => number;
+
+  /** 修正攻击力（可以留给未来的面板和使用，目前先挂着） */
+  modifyAtk?: (s: GameState, u: Unit, val: number, atk: number) => number;
+  
+  /** 修正视野 */
+  modifyVision?: (s: GameState, u: Unit, val: number, vision: number) => number;
+}
 
 export interface HitCtx {
   state: GameState;

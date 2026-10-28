@@ -69,7 +69,7 @@ import type {
   City,
   Element,
   GameState,
-  HeroSkillDef,
+  SkillDef,
   PlayerId,
   ResourceId,
   Terrain,
@@ -689,11 +689,6 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
   return dmgMagic;
 }
 
-/** 诅咒：护甲 −2（诅咒光环另算，见 curseAuraPenalty） */
-function cursePenalty(u: Unit): number {
-  return (u.status?.curse ?? 0) > 0 ? 2 : 0;
-}
-
 /**
  * 咒域：贴着几个带「咒域」的敌人，就少几点护甲（每层 2 点，最多两层）。
  *
@@ -714,6 +709,48 @@ export function curseAuraPenalty(s: GameState, unit: Unit): number {
   return hit;
 }
 
+import type { StatusDef } from './ability-hooks.ts';
+
+export const STATUS_REGISTRY: Record<string, StatusDef> = {
+  poison: {
+    id: 'poison',
+    name: '中毒',
+    summary: '每回合掉 6% 生命上限',
+    onTurnStart: (s, u, _val) => {
+      const def = utype(s, u.type);
+      const dmg = Math.ceil(def.maxHp * 0.06);
+      u.hp -= dmg;
+      return `${def.name} 因中毒失去 ${dmg} 点生命`;
+    },
+  },
+  burn: {
+    id: 'burn',
+    name: '灼烧',
+    summary: '每层每回合掉 4 点生命（怕火翻倍）',
+    onTurnStart: (s, u, val) => {
+      const def = utype(s, u.type);
+      const mul = Math.max(1, def.weak?.fire ?? 1);
+      const dmg = val * BURN_PER_LAYER * mul;
+      u.hp -= dmg;
+      return `${def.name} 被灼烧（${val} 层）失去 ${dmg} 点生命`;
+    },
+  },
+  slow: {
+    id: 'slow',
+    name: '减速',
+    summary: '移动力 −1',
+    // 原逻辑：只要 slow > 0，就扣 1 点移动
+    modifyMove: (_s, _u, val, move) => (val > 0 ? move - 1 : move),
+  },
+  curse: {
+    id: 'curse',
+    name: '诅咒',
+    summary: '护甲 −2',
+    // 原逻辑：只要 curse > 0，就扣 2 点护甲
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? armor - 2 : armor),
+  },
+};
+
 /**
  * 燃烧：每层每回合多少伤害。
  *
@@ -728,20 +765,6 @@ export function curseAuraPenalty(s: GameState, unit: Unit): number {
 export const BURN_PER_LAYER = 4;
 // 层数上限也定义在 ability-hooks.ts（命中类能力要和这里用同一个上限），从这里转出去。
 export { BURN_MAX_LAYERS };
-
-/** 中毒 / 燃烧各掉多少血。分开返回：两者强度算法不同，战报也要分开写。 */
-function dotParts(s: GameState, u: Unit): { poison: number; burn: number } {
-  const st = u.status;
-  if (!st) return { poison: 0, burn: 0 };
-  const def = utype(s, u.type);
-  const poison = (st.poison ?? 0) > 0 ? Math.ceil(def.maxHp * 0.06) : 0;
-  const layers = st.burn ?? 0;
-  // 怕火的兵每层烧得更多：弱点表在这一刻才真正值钱
-  const mul = Math.max(1, def.weak?.fire ?? 1);
-  const burn = layers > 0 ? layers * BURN_PER_LAYER * mul : 0;
-  return { poison, burn };
-}
-
 
 /**
  * 攻击命中后把状态贴上去。返回贴上了哪几种，给战报用。
@@ -975,9 +998,12 @@ export function movePower(s: GameState, unit: Unit): number {
   // 英雄技能的位移加成（不死鸟俯冲）：只在放技能的这一回合有效
   move += unit.heroBuff?.moveBonus ?? 0;
 
-  // 减速（霜缚）：只扣 1 点，最少留 1。扣成 0 等于"定身"，
-  // 那是另一个量级的控制，一条附带状态不该有那种分量。
-  if ((unit.status?.slow ?? 0) > 0) move -= 1;
+  // 状态修正移动力
+  for (const [key, val] of Object.entries(unit.status ?? {})) {
+    if (typeof val !== 'number' || val <= 0) continue;
+    const def = STATUS_REGISTRY[key];
+    if (def?.modifyMove) move = def.modifyMove(s, unit, val, move);
+  }
 
   // 疾行光环：相邻友军各 +1，可以叠（吟游诗人多了确实快）
   for (const ally of s.units) {
@@ -1038,8 +1064,7 @@ export interface EffectiveStats {
  * 只收"现在就成立"的项——光环、击杀成长、威吓、狂暴、哀兵必胜、
  * 所在格地形、诅咒、扩展改甲。依赖"打谁"的项（冲锋、群势、追猎、
  * 长短皆可、魔法段、属性弱点）不进来：那些是"这一下打多疼"的问题，
- * 伤害预览给得出带目标的真数，塞进来只会让"我的攻击力"变成一个
- * 没人能对上号的数字。
+ * 伤害预览给得出带目标的真数，塞进来只会让"我的攻击力"变成一个没人能对上号的数字。
  *
  * modifyArmor 钩子以本单位自己充当攻击者来估——现有钩子都只看防守方；
  * 以后有看攻击者的钩子，这里要跟着改（注释就是防这件事的）。
@@ -1130,10 +1155,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += garrison;
     armorItems.push({ label: '驻军', delta: garrison });
   }
-  const curse = cursePenalty(u);
-  if (curse !== 0) {
-    armor -= curse;
-    armorItems.push({ label: '诅咒', delta: -curse });
+  // 状态修正护甲（面板）
+  for (const [key, val] of Object.entries(u.status ?? {})) {
+    if (typeof val !== 'number' || val <= 0) continue;
+    const def = STATUS_REGISTRY[key];
+    if (def?.modifyArmor) {
+      const before = armor;
+      armor = def.modifyArmor(s, u, val, armor);
+      if (armor !== before) armorItems.push({ label: def.name, delta: armor - before });
+    }
   }
   const curseAura = curseAuraPenalty(s, u);
   if (curseAura !== 0) {
@@ -1526,8 +1556,13 @@ export function computeDamage(
   // 林地之主，直到小型扩展之前
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.postWoodland, to: ARMOR_STAGE.expanded });
 
-  // 诅咒与咒域
-  ctx.armor -= cursePenalty(defender);
+  // 状态修正护甲
+  for (const [key, val] of Object.entries(defender.status ?? {})) {
+    if (typeof val !== 'number' || val <= 0) continue;
+    const def = STATUS_REGISTRY[key];
+    if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
+  }
+  // 咒域
   ctx.armor -= curseAuraPenalty(s, defender);
 
   // 小型扩展
@@ -3218,7 +3253,7 @@ export function disbandRefundOf(s: GameState, u: Unit): number {
 export function heroSkillsOf(
   s: GameState,
   u: Unit,
-): Array<{ def: HeroSkillDef; cd: number; ready: boolean }> {
+): Array<{ def: SkillDef; cd: number; ready: boolean }> {
   const def = utype(s, u.type);
   return (def.skills ?? []).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
@@ -3227,12 +3262,35 @@ export function heroSkillsOf(
 }
 
 /**
- * 放英雄技能。
- *
- * 不消耗行动：技能是"这一回合怎么打"的开关，不是"这一回合做什么"。
- * 让投斧占掉一次攻击，矮人王就永远只能在近战和远程里选一样，
- * 而它本来该是"贴上去砍、走不到就扔"的兵。
+ * 放技能逻辑
  */
+
+// 引入刚才定义的类型（如果你还没引的话）
+import type { SkillDef } from './types.ts';
+
+// 1. 定义上下文接口
+export interface SkillCtx {
+  state: GameState;
+  self: Unit;
+  skill: SkillDef;
+  api: typeof abilityApi;
+  result: {
+    ok: boolean;
+    reason?: string;
+    log?: string;
+  };
+}
+
+// 2. 定义注册表和类型
+export type SkillHandler = (c: SkillCtx) => void;
+export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
+
+// 3. 把原来的 switch 里的逻辑搬过来
+SKILL_EFFECTS['throw-axe'] = (c) => {
+  // 原来写 s 和 u 的地方，换成 c.state 和 c.self
+  c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
+  c.result.log = `${utype(c.state, c.self.type).name} 使用「${c.skill.name}」`;
+};
 function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
@@ -3468,19 +3526,19 @@ function sweepDead(s: GameState): void {
 function tickStatuses(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p || !u.status) continue;
-    const { poison, burn } = dotParts(s, u);
-    if (poison > 0) {
-      u.hp -= poison;
-      pushLog(s, p, `${utype(s, u.type).name} 因中毒失去 ${poison} 点生命`);
+
+    // 1. 遍历单位身上的所有状态，查表执行效果
+    for (const [key, val] of Object.entries(u.status)) {
+      if (typeof val !== 'number' || val <= 0) continue;
+      const def = STATUS_REGISTRY[key];
+      if (def?.onTurnStart) {
+        const logText = def.onTurnStart(s, u, val);
+        if (logText) pushLog(s, p, logText);
+      }
     }
-    if (burn > 0) {
-      u.hp -= burn;
-      const layers = u.status.burn ?? 0;
-      pushLog(s, p, `${utype(s, u.type).name} 被灼烧（${layers} 层）失去 ${burn} 点生命`);
-    }
-    // 中毒/减速/诅咒掉的是"剩余回合"，燃烧掉的是"层数"——
-    // 数值上都是 −1，但语义不同，所以注释里分开写。
-    for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
+
+    // 2. 状态时长/层数减 1
+    for (const k of Object.keys(u.status)) {
       const v = u.status[k];
       if (typeof v !== 'number') continue;
       if (v <= 1) delete u.status[k];
@@ -3534,25 +3592,31 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
     u.age = (u.age ?? 0) + 1;
   }
 
-  // 2）治疗光环 / 净化 / 大净化 → 3）修缮 / 筑墙 / 布雷 → 4）召唤
-  //
-  // 三段而不是一段，是因为中间**必须清一次场**：布雷能把人打死，
-  // 而"召唤数量上限"数的是活人、`mine()` 也只看活人。
-  // 合成一次遍历，"刚被炸死的那只还算一个编制"这种账就会算错。
-  for (const phase of [TURN_START.aura, TURN_START.support, TURN_START.summon]) {
-    for (const u of mine()) runTurnStart(s, u, p, phase, false);
-    // 伤害类结算完立刻扫一遍：死人不该再参与后面两段
-    if (phase === TURN_START.support) sweepDead(s);
-  }
+  // 2）光环类（aura）
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.aura, TURN_START.postAura, false);
+  // 2.5）空槽
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.postAura, TURN_START.support, false);
+
+  // 3）动手类（support）
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.support, TURN_START.postSupport, false);
+  // 伤害类结算完立刻清场
+  sweepDead(s);
+  // 3.5）空槽
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.postSupport, TURN_START.summon, false);
+
+  // 4）召唤（summon）
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.summon, TURN_START.postSummon, false);
+  // 4.5）空槽
+  for (const u of mine()) runTurnStart(s, u, p, TURN_START.postSummon, Infinity, false);
 }
 
 /**
- * 跑一个单位在某个回合开始时机上的全部能力。
+ * 一个单位在某个回合开始时机上的全部能力。
  *
  * 四段（自愈 / 光环 / 动手 / 召唤）由 rules 决定什么时候问，能力只声明自己属于哪一段。
  * `rested` 只有"自愈"那一段用得到（休整要看上回合动没动），别的段传什么都无所谓。
  */
-function runTurnStart(s: GameState, u: Unit, p: PlayerId, phase: number, rested: boolean): void {
+function runTurnStart(s: GameState, u: Unit, p: PlayerId, from: number, to: number, rested: boolean): void {
   if (u.owner !== p) return;
   const def = utype(s, u.type);
   const hooks = stagedFor<TurnStartCtx>(def, 'onTurnStart');
@@ -3560,7 +3624,7 @@ function runTurnStart(s: GameState, u: Unit, p: PlayerId, phase: number, rested:
   runStaged(
     hooks,
     { state: s, self: u, owner: p, rested, healable: canBeHealed(def), api: abilityApi },
-    { from: phase, to: phase + 1 },
+    { from, to },
   );
 }
 
@@ -3616,13 +3680,11 @@ function doEndTurn(s: GameState): ActionResult {
 
   for (const u of s.units) {
     if (u.owner !== nextPlayer) continue;
-    // 自愈那一段：休整、再生、嗜血。
-    //
-    // 和「休整」的区别在 rested：再生不挑场合，嗜血要半血以下，休整要让出一拍。
-    // 三条都只是"回合开始回一点血"，所以共用同一个时机，由能力自己判断条件。
-    // 机械不会好起来（healable: false），这件事也由能力读 ctx 自己决定——
-    // 内核不再需要知道"哪个兵种是机械"。
-    runTurnStart(s, u, nextPlayer, TURN_START.self, rested.has(u.id));
+    runTurnStart(s, u, nextPlayer, TURN_START.self, TURN_START.postSelf, rested.has(u.id));
+  }
+  for (const u of s.units) {
+    if (u.owner !== nextPlayer) continue;
+    runTurnStart(s, u, nextPlayer, TURN_START.postSelf, TURN_START.aura, rested.has(u.id));
   }
 
   // 光环、净化、修缮、筑墙、布雷、召唤、转属——全部自动触发

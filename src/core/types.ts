@@ -94,36 +94,17 @@ export type UnitDomain = 'land' | 'water';
 export type UnitLayer = 'ground' | 'air';
 
 /**
- * 英雄技能的**效果类型**。
- *
- * 为什么是枚举而不是让每个兵在自己的数据里写一段脚本：技能效果必须改规则，
- * 规则层要 switch 得出来。数据表里写的是"用哪种效果"，文案和冷却写在旁边，
- * 这样改数值不用碰规则，加一种新效果才动这里。
+ * 技能的效果类型。
+ * 这里定义为 string，是为了让扩展可以自由注册新效果。
  */
-export type HeroSkillEffect =
-  /** 投斧：本回合射程拉长，但隔远打只有六成伤害 */
-  | 'throw-axe'
-  /** 再生：立刻回一截血 */
-  | 'regenerate'
-  /** 俯冲：本回合移动力加长，攻击附带点燃 */
-  | 'dive'
-  /** 转属性：切到下一种属性，本回合攻击附带该属性的状态 */
-  | 'cycle'
-  /** 降临：范围内友军回血并清掉全部负面状态 */
-  | 'descend'
-  /** 隐匿：自己隐去身形，直到下个回合开始（出手/挨打会暴露） */
-  | 'vanish'
-  /** 裂殖：牢大裂成四只大史莱姆，生命按当前值分摊 */
-  | 'mitosis'
-  /** 聚合：大史莱姆合体成牢大，生命合计（封顶） */
-  | 'fuse';
+export type SkillEffect = string;
 
-export interface HeroSkillDef {
+export interface SkillDef {
   id: string;
   name: string;
   /** 一句话说明，直接印在按钮上——玩家点之前要能看懂会发生什么 */
   summary: string;
-  effect: HeroSkillEffect;
+  effect: SkillEffect;
   /** 冷却：用完之后要等几个自己的回合。1 表示下回合就能再用 */
   cooldown: number;
   /** 作用半径；不写表示只影响自己 */
@@ -131,6 +112,29 @@ export interface HeroSkillDef {
   /** 数值参数（回复比例、伤害系数、移动加成），含义由 effect 决定 */
   power?: number;
 }
+
+export interface SkillCtx {
+  state: GameState;
+  /** 施法者 */
+  self: Unit;
+  /** 技能定义本身 */
+  skill: SkillDef;
+  /** 技能结果，由技能自己填 */
+  result: {
+    ok: boolean;
+    reason?: string;
+    /** 成功时写入战报的文本 */
+    log?: string;
+  };
+}
+
+export type SkillHandler = (c: SkillCtx) => void;
+
+/**
+ * 技能效果注册表。
+ * 扩展可以往这里注册自己的新技能 effect。
+ */
+export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
 
 export interface Tile {
   terrain: Terrain;
@@ -413,7 +417,7 @@ export interface UnitTypeDef {
    * 玩家的操作空间就只剩"把兵放到哪"——英雄和一个数值高一点的兵没区别。
    * 每回合一次的主动选择，才让"什么时候开、开在谁身上"成为一个决策。
    */
-  skills?: HeroSkillDef[];
+  skills?: SkillDef[];
 }
 
 /**
@@ -529,16 +533,21 @@ export interface Unit {
   element?: Element;
   /** 剩余弹药；没写 ammo 的兵种不读这个字段 */
   ammoLeft?: number;
+
   /**
-   * 身上的负面状态。
+   * 身上的状态。
    *
-   * 三个"按比例"的（中毒、减速、诅咒）存的是**还剩几回合**，强度另算
-   * （中毒按生命上限 6%，减速 −1 移动，诅咒 −2 护甲）。
-   * `burn` 是个例外：它存的是**层数**——每层每回合 4 点固定伤害，
-   * 结算完自己掉一层。挨一次火就多一层，所以站着不动会被慢慢烤穿，
-   * 而高血量单位也不至于因为体型大就被烧得格外狠。
+   * 历史遗留了4个状态（中毒、减速、诅咒、燃烧）
    */
-  status?: { poison?: number; burn?: number; slow?: number; curse?: number };
+  status?: {
+    poison?: number;
+    burn?: number;
+    slow?: number;
+    curse?: number;
+    /** 允许扩展自定义持续状态，数值代表剩余回合或层数 */
+    [key: string]: number | undefined;
+  };
+
   /** 已经重生过一次（不死鸟的蛋只会孵一次） */
   reborn?: boolean;
   /**
