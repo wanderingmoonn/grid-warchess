@@ -355,7 +355,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const tile = s.tiles[selectedTile.y * s.w + selectedTile.x];
     if (tile) {
       const info = TERRAIN_INFO[tile.terrain];
-      const lines = describeTerrain(tile.terrain);
+      const lines = describeTerrain(tile.terrain, s);
       const coord = `${String.fromCharCode(65 + selectedTile.x)}${selectedTile.y + 1}`;
       return `
         <div class="unit-head">

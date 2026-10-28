@@ -44,6 +44,7 @@ import {
   recruitCost,
   recruitResCost,
   siegeTargets,
+  stepCostBetween,
   supplyEraAt,
   tileAt,
   underConstruction,
@@ -688,8 +689,10 @@ function escapeRoutes(
     const tile = s.tiles[ny * s.w + nx];
     if (!tile || !passable(tile.terrain)) continue;
     if (excludeCityId && tile.cityId === excludeCityId) continue;
-    // 别的地方可能站着人，但那是暂时的；地形才是永久性的墙
-    if ((CONFIG.terrainCost[tile.terrain] ?? 99) <= move) open += 1;
+    // 别的地方可能站着人，但那是暂时的；地形才是永久性的墙。
+    // 出城要按"从城里往外走"的真实价算：往高处走还要加爬坡费。
+    const from = s.tiles[y * s.w + x]?.terrain ?? null;
+    if (stepCostBetween(s, from, tile.terrain) <= move) open += 1;
   }
   return open;
 }
@@ -951,18 +954,25 @@ export function cityDistanceField(
       } else if (mode === 'land') {
         // 严格旱路：水面和高山一样是墙
         if (!passable(tile.terrain)) continue;
-      } else if (tile.terrain === 'mountain') {
-        // 涉水估算：山仍然过不去，水给一个"很贵但有限"的价
+      } else if (!passable(tile.terrain) && tile.terrain !== 'water') {
+        // 涉水估算：过不去的地形（山、火山）仍然是墙，水给"很贵但有限"的价
         continue;
       }
 
+      // 这张图是从城往外算的，而单位实际是往里走，方向正好相反。
+      // 上坡那一步按规矩要贵满，下坡不额外收费——取去程与回程的平均就是半价。
+      // 两个价都从扩展钩子拿，扩展没开时它们相等，这一项自动归零，
+      // 所以这里不认识"高度"，只认识"走进去要多少步"。
+      const fromT = s.tiles[cur.i]?.terrain ?? 'plain';
+      const outCost = stepCostBetween(s, fromT, tile.terrain);
+      const backCost = stepCostBetween(s, tile.terrain, fromT);
       const cost =
         cur.cost +
         (mode === 'water'
           ? 1
           : tile.terrain === 'water'
             ? WADE_COST
-            : CONFIG.terrainCost[tile.terrain]);
+            : (outCost + backCost) / 2);
 
       const ni = ny * s.w + nx;
       if (cost < (dist[ni] ?? Infinity)) {

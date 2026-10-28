@@ -8,7 +8,7 @@
 import { ERAS } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { EXPANSIONS, expansionById } from '../core/expansions.ts';
-import { MAP_STYLES, MAP_SYMMETRIES } from '../core/mapgen.ts';
+import { MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
 import {
   BOARD_SIZES,
   MAX_BOARD_SIZE,
@@ -76,6 +76,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (d.era) return `[data-era="${d.era}"]`;
       if (d.size) return `[data-size="${d.size}"]`;
       if (d.mapstyle) return `[data-mapstyle="${d.mapstyle}"]`;
+      if (d.exp) return `[data-exp="${d.exp}"]`;
       if (d.symmetry) return `[data-symmetry="${d.symmetry}"]`;
       if (d.ailevel) return `[data-ailevel="${d.ailevel}"]`;
       if (d.ai !== undefined) return `[data-ai="${d.ai}"]`;
@@ -101,10 +102,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
       ).join('');
 
-      const styleChips = MAP_STYLES.map(
-        (st) =>
-          `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
-      ).join('');
+      // 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 火山群 / 沼泽。
+      // 这里每次都按当前勾选重算，所以开关扩展时列表会立刻增减。
+      const styleChips = mapStylesFor(config.expansionIds)
+        .map(
+          (st) =>
+            `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
+        )
+        .join('');
 
       const symChips = MAP_SYMMETRIES.map(
         (sy) =>
@@ -225,7 +230,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种</span>
+                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种。开了「地形高差」会多出高原 / 峡谷 / 火山群 / 沼泽</span>
               </div>
               <div class="chip-row">${styleChips}</div>
             </section>
@@ -419,6 +424,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       const id = input.dataset.exp;
       if (!id) return;
+      // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
+      // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
+      const stylesBefore = mapStylesFor(config.expansionIds).length;
       if (input.checked) {
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
         // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
@@ -433,6 +441,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         }
       } else {
         config.expansionIds = config.expansionIds.filter((x) => x !== id);
+      }
+      // 关掉「地形高差」之后，原来选中的高原/峡谷必须退回"随机"——
+      // 不然会画出一张满地图台地、但规则里没有高度的图。
+      const available = mapStylesFor(config.expansionIds);
+      if (!available.some((st) => st.id === (config.mapStyle ?? 'random'))) {
+        config.mapStyle = 'random';
+      }
+      // 选项数变了就重绘（地貌 chip 要增删）。其余情况只改边框，避免 checkbox 闪。
+      if (available.length !== stylesBefore) {
+        paint();
+        return;
       }
       // 让卡片边框跟着变，不重绘整个面板（否则 checkbox 会闪）
       input.closest('.expansion-item')?.classList.toggle('on', input.checked);
