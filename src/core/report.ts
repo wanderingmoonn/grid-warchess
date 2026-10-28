@@ -16,6 +16,7 @@
  */
 
 import { underConstruction } from './rules.ts';
+import { timelineSummary, type MatchTimeline } from './timeline.ts';
 import type { GameState, PlayerId } from './types.ts';
 
 /** 报告格式版本。加字段不一定动它，改语义一定要动 */
@@ -57,6 +58,13 @@ export interface MatchReport {
   sites: number;
   logLines: number;
   sides: ReportSide[];
+  /**
+   * 逐回合摘要 + 行动/出兵计数。
+   *
+   * 只有开局勾了「结束后上传详细数据」的局才有；没勾就是 undefined——
+   * 报告里少一块，不影响其余字段的可比性（version 一样就能比）。
+   */
+  timeline?: MatchTimeline;
 }
 
 function countTerrain(s: GameState): Record<string, number> {
@@ -71,7 +79,11 @@ function countTerrain(s: GameState): Record<string, number> {
  * `now` 可以传进来，测试里钉死时间才能比两次产物一样不一样；
  * 生产代码不传，用当前时间。
  */
-export function buildMatchReport(s: GameState, now: Date = new Date()): MatchReport {
+export function buildMatchReport(
+  s: GameState,
+  now: Date = new Date(),
+  timeline?: MatchTimeline | null,
+): MatchReport {
   const sides: ReportSide[] = (['A', 'B'] as PlayerId[]).map((side) => {
     const mine = s.units.filter((u) => u.owner === side);
     const roster: Record<string, number> = {};
@@ -123,13 +135,22 @@ export function buildMatchReport(s: GameState, now: Date = new Date()): MatchRep
     sites: s.units.filter((u) => underConstruction(u)).length,
     logLines: s.log.length,
     sides,
+    ...(timeline ? { timeline } : {}),
   } satisfies MatchReport;
 }
 
 /** 给一局已经打过的对局做个指纹：用来判断"这局是不是已经传过了" */
 export function reportSignature(r: MatchReport): string {
   const tally = r.sides.map((x) => `${x.cities}-${x.units}-${x.hp}`).join('_');
-  return `${r.seed}:${r.turns}:${r.winner ?? '-'}:${tally}`;
+  // 有没有逐回合摘要进指纹：同一局"详细版"和"精简版"是两份不同的东西，
+  // 先传了精简版再传详细版不该被当成重复。
+  const detail = r.timeline ? `+t${r.timeline.samples.length}` : '';
+  return `${r.seed}:${r.turns}:${r.winner ?? '-'}:${tally}${detail}`;
+}
+
+/** 报告里那句"含多少逐回合数据"，给界面和日志用 */
+export function reportDetailLine(r: MatchReport): string {
+  return timelineSummary(r.timeline);
 }
 
 /**

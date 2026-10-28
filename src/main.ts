@@ -55,6 +55,7 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
+import { newTimeline, noteAction, sampleTurn, timelineSummary, type MatchTimeline } from './core/timeline.ts';
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
@@ -206,6 +207,15 @@ function loadReportOptIn(): boolean {
   }
 }
 let reportOptIn = loadReportOptIn();
+/** 写回许可开关：开局勾了详细记录时用它，和结算卡里那个勾选框是同一份偏好 */
+function saveReportOptIn(v: boolean): void {
+  reportOptIn = v;
+  try {
+    localStorage.setItem(REPORT_OPT_KEY, v ? '1' : '0');
+  } catch {
+    // 隐私模式写不进去：这一次有效，下次打开回到默认（关）
+  }
+}
 /**
  * 结算卡上那次上传走到哪一步。
  *
@@ -236,6 +246,35 @@ function loadSentReports(): string[] {
   }
 }
 let reportSentSigs = loadSentReports();
+
+/**
+ * 这一局的逐回合摘要。
+ *
+ * 只在 config.recordDetail 打开时存在；**不放进 GameState**——它是观测量，
+ * 不是棋局状态，塞进去会让存档、联机同步、规则测试都得为它让路。
+ * 代价是刷新页面会丢（记不清了就记不清，报告里本来就有"帧数"可以看出来），
+ * 换来的是核心规则一厘米都没变。
+ */
+let recorder: MatchTimeline | null = null;
+
+/** 按当前对局的配置决定要不要记；换局 / 读档之后调一次 */
+function resetRecorder(): void {
+  recorder = state.config.recordDetail === true && state.config.godMode !== true
+    ? newTimeline(state.turn)
+    : null;
+}
+
+/** 记一步（AI 和玩家都走这里） */
+function noteStep(actor: PlayerId, action: Action): void {
+  if (!recorder) return;
+  noteAction(recorder, actor, action);
+}
+
+/** 回合结束：采一帧。两处会结束回合——玩家点、AI 循环末尾 */
+function noteTurnEnd(): void {
+  if (!recorder) return;
+  sampleTurn(state, recorder);
+}
 
 function markReportSent(sig: string): void {
   reportSentSigs = [sig, ...reportSentSigs.filter((x) => x !== sig)].slice(0, 20);
@@ -539,7 +578,7 @@ function panelInput(): PanelInput {
  */
 function reportPanel(): PanelReport | undefined {
   if (!state.winner || state.config.godMode === true || watching()) return undefined;
-  const sig = reportSignature(buildMatchReport(state));
+  const sig = reportSignature(buildMatchReport(state, new Date(), recorder));
   if (sig !== reportSig) {
     reportSig = sig;
     // 这一局之前传过（刷新页面又看见结算卡），就别再让点一遍
@@ -547,7 +586,8 @@ function reportPanel(): PanelReport | undefined {
       ? { status: 'done', note: '这局已经上传过了，不用再传一遍' }
       : { status: 'idle' };
   }
-  return { optedIn: reportOptIn, ...reportSend };
+  const detail = timelineSummary(recorder);
+  return { optedIn: reportOptIn, detail, ...reportSend };
 }
 
 /**
@@ -1015,6 +1055,7 @@ function dispatch(action: Action): boolean {
   }
 
   const prevTurn = state.turn;
+  const actor = state.current;
   planMovePath(state, action);
   const result = applyAction(state, action);
   if (!result.ok) {
@@ -1025,6 +1066,8 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  noteStep(actor, action);
+  if (action.type === 'END_TURN') noteTurnEnd();
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
@@ -1531,7 +1574,7 @@ function onBoardClick(e: Event): void {
 
 /** 结算卡上要显示的和要发出去的必须是同一份：都从当前 state 现算 */
 function finishedReport() {
-  return buildMatchReport(state);
+  return buildMatchReport(state, new Date(), recorder);
 }
 
 async function sendMatchReport(): Promise<void> {
@@ -1546,7 +1589,9 @@ async function sendMatchReport(): Promise<void> {
   const sent = finishedReport();
   const r = await uploadReport(sent);
   if (r.ok) markReportSent(reportSignature(sent));
-  reportSend = r.ok ? { status: 'done' } : { status: 'failed', note: r.reason, howTo: r.howTo };
+  reportSend = r.ok
+    ? { status: 'done', note: r.note }
+    : { status: 'failed', note: r.reason, howTo: r.howTo };
   render();
   toast(r.ok ? '这一局的数据已上传，谢谢' : '没传上去，报告还在，可以复制或下载');
 }
@@ -1900,6 +1945,10 @@ function handleAction(act: string, el: HTMLElement): void {
         detachRoom();
         boardZoom = 1;
         clearSelection();
+        resetRecorder();
+        // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
+        // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
+        if (result.config.recordDetail === true) saveReportOptIn(true);
         saveMatch(state);
         render();
         toast('新对局开始');
@@ -2107,10 +2156,12 @@ async function runAiTurn(
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
+    const actor = state.current;
     const result = applyAction(state, action);
     if (!result.ok) break;
 
     state = result.state;
+    noteStep(actor, action);
     if (action.type === 'RECRUIT') budget.recruited += 1;
     if (action.type === 'UPGRADE') budget.upgraded += 1;
 
@@ -2134,6 +2185,7 @@ async function runAiTurn(
   if (!alive()) return;
   const end = applyAction(state, { type: 'END_TURN' });
   if (end.ok) state = end.state;
+  if (end.ok) noteTurnEnd();
   saveMatch(state);
   render();
   await sleep(delay);
@@ -2761,6 +2813,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   state.fog = fog;
   // 云端房间可能是老版本建的，"我方/敌方"这种旧默认名顺手换掉
   normalizePlayerNames(state);
+  // 房间里的这一局记不记，看它自己的配置；换了局就得重开一个记录器
+  resetRecorder();
   // 房间里两边各走各的：AI 托管在这里没有意义，顺手关掉免得它替人下棋
   state.aiControl = { A: false, B: false };
   aiToken += 1;
@@ -2778,6 +2832,7 @@ function leaveRoom(): void {
   detachRoom();
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+  resetRecorder();
   clearSelection();
   render();
   toast(wasWatching ? '已退出观战，回到本机对局' : '已退出房间，回到本机对局');
@@ -3281,6 +3336,10 @@ if (invited.length >= 4) {
  * 用不到的能力"在开局挡一次路。真正要用的时候，联机面板顶上那条自检
  * 会把原因摆出来。
  */
+// 启动收尾：读回来的存档可能开着"记录详细数据"，那就从现在这一回合接着记。
+// 放在文件末尾是因为它要等 recorder 这些模块级变量都初始化完（TDZ）。
+resetRecorder();
+
 const drift = originMismatch();
 if (drift) {
   console.error(

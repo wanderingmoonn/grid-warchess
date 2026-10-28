@@ -127,6 +127,13 @@ export interface PanelReport {
   note?: string;
   /** 失败之后玩家还能做什么 */
   howTo?: string;
+  /**
+   * 这一局有没有逐回合摘要，以及规模。
+   *
+   * 空字符串 = 这局没开详细记录（只交终局快照）。有值时显示成一行，
+   * 让玩家知道"我同意交的东西比上次多了什么"，而不是悄无声息地变大。
+   */
+  detail?: string;
 }
 
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
@@ -292,6 +299,11 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
         .join('　')}</li>
       <li>阵容：${rep.sides.map((x) => `${x.side} 方 ${roster(x)}`).join('；')}</li>
     </ul>
+    ${
+      info.detail
+        ? `<div class="hint report-detail">这局还记了逐回合摘要：${escapeHtml(info.detail)}</div>`
+        : ''
+    }
     <div class="hint report-privacy">不含玩家名、房间码、每一步的操作记录，也不含任何能定位到你的东西。</div>
     <label class="report-opt">
       <input type="checkbox" data-act="report-opt" ${info.optedIn ? 'checked' : ''} />

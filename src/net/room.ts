@@ -290,9 +290,11 @@ function readableError(err: unknown): string {
     return '云端拒绝了当前域名（Origin 不匹配）。endpoint 必须等于你打开页面的那条发布域名';
   }
   if (e?.error_description) return e.error_description;
-  if (e?.code === '42P01') return '云端还没有房间表，需要先初始化数据库';
-  if (e?.code === '42501') return '云端拒绝了这次读写（权限策略问题）';
-  if (e?.code === '23505') return '房间码撞车了';
+  // 错误码可能带 DATABASE_ 前缀，剥掉再认（见 reports.ts 同一处注释）
+  const code = (e?.code ?? '').replace(/^DATABASE_/, '');
+  if (code === '42P01') return '云端还没有房间表，需要先初始化数据库';
+  if (code === '42501') return '云端拒绝了这次读写（权限策略问题）';
+  if (code === '23505') return '房间码撞车了';
   if (e?.message) return e.message;
   return '网络不通，稍后再试';
 }

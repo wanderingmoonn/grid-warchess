@@ -255,6 +255,24 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
+              <div class="field-label">
+                数据收集 <span class="field-hint">可选，默认关；只影响这局记不记详细数据</span>
+              </div>
+              <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
+                <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
+                <span class="expansion-body">
+                  <b>结束后上传这局的详细数据</b>
+                  <span>
+                    每回合记一行压缩数字（双方兵力 / 城防 / 金币 / 军队身价），
+                    外加双方的出兵与行动次数——只交终局快照看不出"这局是怎么崩的"。
+                    不记玩家名、房间码，也不记每一步走哪儿。
+                    勾上之后结算卡的「允许上传」会自动打勾，但实际发送仍然要你点一下。
+                  </span>
+                </span>
+              </label>
+            </section>
+
+            <section class="field">
               <div class="field-label">地图种子</div>
               <div class="seed-row">
                 <code>${currentSeed}</code>
@@ -420,6 +438,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const input = e.target as HTMLInputElement;
       if (input.dataset.field === 'size') {
         applySizeInput(input, true);
+        return;
+      }
+      if (input.dataset.field === 'record') {
+        config.recordDetail = input.checked;
+        // 只翻转卡片边框，不整块重绘：checkbox 重绘会闪，焦点也会丢
+        input.closest('.expansion-item')?.classList.toggle('on', input.checked);
         return;
       }
       const id = input.dataset.exp;

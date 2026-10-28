@@ -97,14 +97,46 @@ order by s.won nulls last;
 
 
 -- ⑧ 重复上传排查
---    客户端会按"种子+回合+胜负+兵力"去重（记在本机），换设备 / 清缓存会漏。
---    一条 seed 出现多次且 turns/winner 完全一样，多半是同一个人传了两遍。
+--    现在已经有两层去重：客户端指纹（记在本机）+ 服务端 fingerprint 唯一索引
+--    （跨设备）。理论上不该有重复了；这条用来验证"真的没有"，
+--    以及看历史上（加索引之前）有没有积压。
+select fingerprint, count(*) as copies, min(created_at) as first_at
+from warchess_reports
+where fingerprint is not null
+group by fingerprint
+having count(*) > 1
+order by copies desc
+limit 50;
+
+-- ⑧b 按 seed 看（老数据没有 fingerprint，只能用这几个字段凑）
 select seed, turns, winner, count(*) as copies, min(created_at) as first_at
 from warchess_reports
 group by seed, turns, winner
 having count(*) > 1
 order by copies desc, first_at desc
 limit 50;
+
+
+-- ⑩ 来源分布：每个浏览器代号交了多少
+--    用来区分"几十个玩家各交一局"和"一个人交了几十局"。
+--    同一小时超过 30 条的会被触发器拒掉，所以这里不会有更大的数。
+select client_id,
+       count(*)                                   as reports,
+       count(distinct date_trunc('day', created_at)) as days,
+       min(created_at)                             as first_at,
+       max(created_at)                             as last_at
+from warchess_reports
+group by client_id
+order by reports desc
+limit 30;
+
+
+-- ⑪ 带逐回合摘要的局有多少（决定"曲线"那部分样本够不够）
+select payload->'timeline' is not null                as has_timeline,
+       count(*)                                        as games,
+       round(avg(jsonb_array_length(coalesce(payload->'timeline'->'samples','[]'::jsonb)))::numeric, 1) as avg_frames
+from warchess_reports
+group by 1;
 
 
 -- ⑨ 清理：只留最近 180 天（按需跑，跑之前先确认①里的量）

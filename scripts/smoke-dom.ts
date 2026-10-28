@@ -1182,6 +1182,18 @@ check('开局面板能选角色', () => {
   assert.ok(doc.querySelector('[data-role="full"]'), '应该有亲自指挥选项');
 });
 
+check('开局面板有"数据收集"开关，默认关', () => {
+  const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
+  assert.ok(box, '应该有"结束后上传详细数据"的勾选框');
+  assert.equal(box.checked, false, '默认必须是关的：不勾就不记，也不多交东西');
+  // 勾上之后只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  box.checked = true;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
+  box.checked = false;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+});
+
 click('[data-role="commander"]');
 click('[data-act="start"]');
 await wait(60);

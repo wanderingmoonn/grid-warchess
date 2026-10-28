@@ -38,6 +38,7 @@ import {
 import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
+import { newTimeline, noteAction, sampleTurn, timelineSummary } from '../src/core/timeline.ts';
 import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
@@ -117,7 +118,7 @@ import {
   visibleTilesOf,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
-import { REPORT_VERSION, buildMatchReport, reportFileName, reportJson } from '../src/core/report.ts';
+import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import type {
   Action,
@@ -7723,6 +7724,68 @@ test('对局报告：胜负写实，文件名给谁都打得开', () => {
 
   // 未分胜负也要有个名字，而不是空一段
   assert.ok(reportFileName(buildMatchReport(s, at)).length > 0);
+});
+
+test('逐回合摘要：按回合采帧、按方计数、封顶之后抽稀', () => {
+  const s = fresh();
+  const tl = newTimeline(1);
+  assert.equal(tl.samples.length, 0);
+
+  for (let t = 1; t <= 6; t++) {
+    s.turn = t;
+    sampleTurn(s, tl);
+  }
+  assert.equal(tl.samples.length, 6, '每回合采一帧');
+  assert.equal(tl.samples[0]?.t, 1, '第一帧是开局');
+  const last = tl.samples[tl.samples.length - 1];
+  assert.ok(last, '最后一帧应该在');
+  assert.equal(last.A.length, 5, '每方五个数：兵/建筑/城/金/血');
+  assert.ok(last.va >= 0 && last.vb >= 0, '身价不可能是负数');
+
+  noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
+  noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
+  noteAction(tl, 'B', { type: 'MOVE', unitId: 'u1', x: 3, y: 4 });
+  assert.equal(tl.acts.A.RECRUIT, 2);
+  assert.equal(tl.made.A.militia, 2, '同一个兵种要累加');
+  assert.equal(tl.acts.B.MOVE, 1);
+  assert.equal(Object.keys(tl.made.B).length, 0, '没造兵就是空的');
+
+  // 长局：必须封顶，否则一局两百回合的报告能有几兆
+  const long = newTimeline(1);
+  const s2 = fresh();
+  for (let t = 1; t <= 700; t++) {
+    s2.turn = t;
+    sampleTurn(s2, long);
+  }
+  assert.ok(long.samples.length <= 240, `样本数应当封顶，实际 ${long.samples.length}`);
+  assert.ok(long.thinned, '超上限之后要标记抽稀过');
+  assert.ok(long.every > 1, '抽稀之后间隔应当变大');
+  assert.equal(long.samples[0]?.t, 1, '抽稀不能把开局帧丢掉');
+  const ts = long.samples.map((x) => x.t);
+  for (let i = 1; i < ts.length; i++) {
+    assert.ok((ts[i] ?? 0) > (ts[i - 1] ?? 0), '时间必须单调递增');
+  }
+});
+
+test('逐回合摘要：进得了报告，仍然不带玩家名', () => {
+  const s = fresh();
+  s.players.A.name = '王五';
+  s.turn = 4;
+  const tl = newTimeline(1);
+  sampleTurn(s, tl);
+  const rep = buildMatchReport(s, new Date('2026-01-02T03:04:05.000Z'), tl);
+  assert.ok(rep.timeline, '给了摘要就该进报告');
+  assert.equal(rep.timeline?.samples.length, 1);
+  assert.equal(reportJson(rep).includes('王五'), false, '摘要里也不许出现玩家名');
+
+  const lean = buildMatchReport(s, new Date('2026-01-02T03:04:05.000Z'));
+  assert.equal(lean.timeline, undefined, '没勾详细记录的时候不该有 timeline');
+
+  // 指纹要把两种版本区分开，否则先传精简版再传详细版会被当成重复
+  assert.notEqual(reportSignature(lean), reportSignature(rep));
+
+  assert.ok(timelineSummary(tl).includes('帧'), '摘要文案要能读懂');
+  assert.equal(timelineSummary(null), '', '没摘要就别编一句出来');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

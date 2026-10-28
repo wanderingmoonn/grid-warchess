@@ -54,6 +54,48 @@ create policy warchess_reports_insert on public.warchess_reports
 
 
 -- ============================================================
+-- 限流 + 跨设备去重（2026-10-28 补）
+--
+-- 两个问题，两套机制，别混：
+--   · 限流：谁都能匿名交，服务端不知道"你是谁"，也就拦不住一台机器刷三百条。
+--     给每个浏览器发一个随机 client_id（只用来分组计数，不是身份），
+--     触发器按它数一小时内的条数。
+--   · 去重：客户端有指纹（种子+回合+胜负+终局），但那份记在本机；
+--     换设备、清缓存就会重复交。唯一索引把这层兜住：重复的直接 23505，
+--     客户端把它翻成"这局云端已经有了"，对玩家就是成功。
+-- ============================================================
+
+alter table public.warchess_reports add column if not exists client_id text;
+alter table public.warchess_reports add column if not exists fingerprint text;
+
+create index if not exists warchess_reports_client_idx
+  on public.warchess_reports (client_id, created_at desc);
+
+-- 部分唯一索引：老数据 fingerprint 是 null，不能因此互相冲突
+create unique index if not exists warchess_reports_fp_idx
+  on public.warchess_reports (fingerprint) where fingerprint is not null;
+
+-- ⚠️ 必须 security definer：触发器里的 count(*) 是在**插入者的权限**下跑的，
+-- 而 anon 只有 insert 策略、读不到任何行，于是计数永远是 0——限流会静默失效。
+-- 第一次就是这么写的，实测连插 33 条一条没拦。
+create or replace function public.warchess_reports_rate_limit() returns trigger
+language plpgsql security definer set search_path = public as $fn$
+declare n int;
+begin
+  if new.client_id is null then return new; end if;
+  select count(*) into n from public.warchess_reports r
+   where r.client_id = new.client_id and r.created_at > now() - interval '1 hour';
+  if n >= 30 then raise exception 'too many reports from this client (limit 30/hour)'; end if;
+  return new;
+end $fn$;
+
+drop trigger if exists warchess_reports_rate on public.warchess_reports;
+create trigger warchess_reports_rate
+  before insert on public.warchess_reports
+  for each row execute function public.warchess_reports_rate_limit();
+
+
+-- ============================================================
 -- 分析用的两个视图（2026-10-28 补）
 --
 -- 为什么要有视图：原始表里 sides 是一整块 JSON 数组，直接查它得写
