@@ -560,22 +560,22 @@ check('点新对局会打开设置面板', () => {
   assert.equal(doc.querySelector('[data-ailevel]'), null, '热座模式不该有难度选项');
 });
 
-check('选了人机对战才出现三档 AI，默认高级', () => {
+check('选了人机对战才出现三档 AI：初级 / 中级 / 高级，默认高级', () => {
   const activeLevel = () =>
     doc.querySelector<HTMLElement>('[data-ailevel].active')?.dataset.ailevel ?? '';
+  const labels = () =>
+    [...doc.querySelectorAll<HTMLElement>('[data-ailevel]')].map((el) => (el.textContent ?? '').trim());
 
   click('[data-ai="1"]');
-  assert.equal(
-    doc.querySelectorAll('[data-ailevel]').length,
-    3,
-    '应该出现初级/高级/战术（测试）三个按钮',
-  );
+  assert.equal(doc.querySelectorAll('[data-ailevel]').length, 3, '应该出现三档按钮');
+  // 顺序是低到高：中级原来叫"战术 AI · 测试"，高级档现在跑的是合并上游之后的引擎
+  assert.deepEqual(labels(), ['初级 AI', '中级 AI', '高级 AI'], '三档的文案与顺序');
   assert.equal(activeLevel(), 'advanced', '默认应该是高级 AI');
 
   click('[data-ailevel="basic"]');
   assert.equal(activeLevel(), 'basic', '点初级应该切过去');
   click('[data-ailevel="tactic"]');
-  assert.equal(activeLevel(), 'tactic', '点战术 AI 应该切过去');
+  assert.equal(activeLevel(), 'tactic', '点中级 AI 应该切过去');
   click('[data-ailevel="advanced"]');
   assert.equal(activeLevel(), 'advanced', '点高级应该切回来');
 

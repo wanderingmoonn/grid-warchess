@@ -5406,8 +5406,8 @@ test('战术：切换是渐变的，不会一回合翻脸', () => {
   assert.ok(worst < 0.4, `相邻回合的战术权重跳变太大：${worstAt}`);
 });
 
-test('战术：只有战术档才打三套战术，高级档保持稳的那一版', () => {
-  // 同一局面下比两档的"生效倾向"：战术档原样输出 aiMood，
+test('档位：只有中级档才打三套战术，高级档保持稳的那一版', () => {
+  // 同一局面下比两档的"生效倾向"：中级档原样输出 aiMood，
   // 高级档权重均分、drive 清零、不弃城——但主攻方向要留着（那是走位，不是战术）。
   const s = fresh({ startEra: 2, aiOpponent: true });
   const mine = citiesOf(s, 'A');
@@ -5423,9 +5423,9 @@ test('战术：只有战术档才打三套战术，高级档保持稳的那一�
 
   s.config.aiLevel = 'tactic';
   const tac = aiActiveMood(s);
-  assert.equal(aiLevelOf(s), 'tactic', '战术档要能识别出来');
-  assert.equal(aiLevelLabel(aiLevelOf(s)), '战术', '界面上叫"战术"');
-  assert.equal(tac.abandonedCityId, doomed.id, '战术档在这种情况下该弃城');
+  assert.equal(aiLevelOf(s), 'tactic', '中级档要能识别出来');
+  assert.equal(aiLevelLabel(aiLevelOf(s)), '中级', '界面上叫"中级"');
+  assert.equal(tac.abandonedCityId, doomed.id, '中级档在这种情况下该弃城');
 
   s.config.aiLevel = 'advanced';
   const adv = aiActiveMood(s);
@@ -5435,7 +5435,7 @@ test('战术：只有战术档才打三套战术，高级档保持稳的那一�
   assert.equal(adv.weight.rush, 1 / 3, '高级档的权重应该是均分');
   assert.equal(adv.focusCityId, tac.focusCityId, '主攻方向两档一致——那是走位');
 
-  // 战术档不做任何改写：它就是 aiMood 本身
+  // 中级档不做任何改写：它就是 aiMood 本身
   s.config.aiLevel = 'tactic';
   assert.deepEqual(aiActiveMood(s), aiMood(s));
 });

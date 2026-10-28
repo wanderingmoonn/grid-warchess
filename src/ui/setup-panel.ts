@@ -150,10 +150,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
             <button class="chip ${config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
-            <button class="chip ${config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="会算威胁范围、换子价值和兵种搭配，走位明显更刁">高级 AI</button>
-            <button class="chip ${config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的基础上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档，测试中">战术 AI · 测试</button>
+            <button class="chip ${config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
+            <button class="chip ${config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
           </div>
-          <div class="field-hint">初级适合熟悉规则；高级会躲炮口、会挑软的打；战术 AI 会换打法，强度还在验证</div>`
+          <div class="field-hint">初级适合熟悉规则；中级会随局面换打法（速攻 / 骚扰 / 弃城）；高级算得最细，走位与采购都稳</div>`
         : '';
 
       const sizeChips = BOARD_SIZES.map(

@@ -759,7 +759,7 @@ export function aiLevelOf(s: GameState): AiLevel {
 
 /** 给界面用的一档名字（不带 "AI" 后缀，由调用方自己拼）。 */
 export function aiLevelLabel(lv: AiLevel): string {
-  return lv === 'basic' ? '初级' : lv === 'tactic' ? '战术' : '高级';
+  return lv === 'basic' ? '初级' : lv === 'tactic' ? '中级' : '高级';
 }
 
 /** 威胁图里"一只敌人占多少分"的系数：一只普通兵大约扣 3.4 分 */
@@ -3105,12 +3105,11 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
 }
 
 /**
- * 战术层只挂在"战术 AI（测试）"这一档上。
+ * 战术层只挂在"中级 AI"这一档上。
  *
  * 高级 AI 是留给玩家对局的稳版本：主攻方向照算（focusCityId 属于走位，
  * 不是战术），但三套战术不打——权重压成均分、drive 清零、也不弃城。
- * 这样同一局里能同时选到"旧手感"和"新战术"两档，用真实对局做对照；
- * 战术档在台子上验证够了，再决定要不要并进高级档。
+ * 这样同一局里能同时选到"稳"和"会换打法"两档，用真实对局做对照。
  */
 function moodFor(s: GameState, mood: AiMood): AiMood {
   if (aiLevelOf(s) === 'tactic') return mood;

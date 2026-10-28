@@ -184,8 +184,10 @@ function lossOf(r: Row): LossStat | null {
   };
 }
 
+// `tactic` 这一档在 2026-10-28 之后界面上叫「中级」；老报告里存的还是同一个
+// 字符串，所以历史数据和新数据能直接放在一张表里比。
 const levelName = (lv: string | undefined): string =>
-  lv === 'basic' ? '初级' : lv === 'tactic' ? '战术·测试' : lv === 'advanced' ? '高级' : lv ?? '—';
+  lv === 'basic' ? '初级' : lv === 'tactic' ? '中级' : lv === 'advanced' ? '高级' : lv ?? '—';
 
 const lines: string[] = [];
 const say = (s = ''): void => void lines.push(s);
