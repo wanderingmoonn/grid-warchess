@@ -21,6 +21,7 @@ import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansi
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
+import { resourceShort } from '../src/core/resources.ts';
 import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
@@ -345,6 +346,14 @@ function traitsOf(u: UnitTypeDef): string {
     if (best) parts.push(ref('income', `产出 ${terrainName(best[0])} +${best[1]}`));
   } else if (u.income) {
     parts.push(ref('income', `+${u.income} 金/回合`));
+  }
+  // 只写 yield 的建筑（粮仓、采石场、砖窑这一串）不产金币，特性列得自己说出来源，
+  // 否则它们在表里看着像"什么都没干"的石头墩子。
+  if (u.yield) {
+    const table = Object.entries(u.yield)
+      .filter(([, n]) => (n ?? 0) > 0)
+      .map(([id, n]) => `+${n} ${resourceShort(id)}`);
+    if (table.length > 0) parts.push(ref('income', `产出 ${table.join(' ')}`));
   }
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
   if (u.burst) parts.push(ref('burst', `连击 ${u.burst} 段`));
@@ -1907,7 +1916,7 @@ const PACK_NOTES: Record<string, string> = {
         身边有人伤得重就降临；不死鸟倒下后留下的蛋，轮到它时 AI 会自己挑地方孵。</p>`,
   'fantasy-arcane': `<p>召唤物（骷髅、僵尸犬、土元素这类）和土墙<b>不占编制</b>：它们不算进
         "最多多少个单位"那道门槛，所以不会把你自己的产线堵死。召唤师被杀，已经召出来的还在场上。</p>`,
-  'city-works': `<p>这个包动的是<b>骨架</b>，四条要记住：</p>
+  'city-works': `<p>这个包动的是<b>骨架</b>，六条要记住：</p>
         <ul class="bullets">
           <li><b>主城 3×3</b>：城市占九格，耐久 +50%。城墙更厚，攻城就成了苦差事。</li>
           <li><b>两种新资源</b>：活人（战斗、经济、建造单位）的造价里有七成是<b>粮食</b>，
@@ -1916,14 +1925,24 @@ const PACK_NOTES: Record<string, string> = {
               缺粮缺材才是。开局就把经济铺开，别把钱攒成一座金山。
               开局按时代给一笔起步粮材，之后就要靠经济单位挣。</li>
           <li><b>一种兵，多种产出</b>：经济单位看脚下——平地打粮、森林丘陵出建材，
-              另一部分换回少量金币；经济建筑反过来，产出粮食，而且前期只用粮食就盖（不碰建材）。</li>
+              另一部分换回少量金币。</li>
+          <li><b>经济建筑只做经济</b>：攻击归零、收益 +20%，而造价只有同类单位的
+              <b>两成金币 + 五成半资源</b>（时代 1-2 连金币都不要），四五个回合就能回本；
+              代价是耐久只加一成、护甲还少一点——它是个好投资，<b>不是一堵墙</b>。
+              它们产什么就吃什么呢：粮仓花粮、采石场花材。</li>
+          <li><b>建材产线一路排到现代</b>：伐木工（2）→ 采石工（3）→ 矿队（4）→ 建材公司（5），
+              配套采石场（2）→ 砖窑（3）→ 水泥厂（4）→ 建材基地（5）。
+              建筑<b>不挑地形</b>，产出 13 → 24 → 40 → 58 材/回合；
+              想要更多建材，要么换人，要么换建筑，不必抢那块丘陵。</li>
           <li><b>塔要施工</b>：箭塔/石堡/炮台/要塞/碉堡先落一个<b>工地</b>（两回合），
               工地开不了火、产不了兵，但看得见也拆得掉；成型后视野 +2，并<b>允许驻军</b>——
               友军站上去多 3 点护甲、还能借用它的视野。相应地，塔自己的攻击被削了三成。</li>
         </ul>
-        <p>经济建筑（磨坊、水车、工厂……）在这一包里<b>不还手</b>：攻击归零，但耐久 +35%、收益 +20%。
-          后期的经济与工程兵种（种植园主、农业公司、工程师、厂长、建筑队）攻击 +3、生命 +6，
-          现代那一档再 +1 护甲——它们不该一上前线就是送人头。</p>`,
+        <p>时代 3 起的经济与工程兵种（工程师、厂长、建筑队，以及采石工、矿队、建材公司这类采集兵）
+          攻击 +3、生命 +6，现代那一档再 +1 护甲——它们不该一上前线就是送人头。</p>
+        <p class="era-meta">上面总表印的是兵种表里的<b>原始数值</b>。这个包在开局时会再叠一层：
+          经济建筑护甲 −1、耐久 ×1.1；时代 3 起的经济与工程兵 +3 攻 +6 血（现代再 +1 甲）。
+          所以游戏里看到的攻击和生命会比表里高一点，经济建筑的护甲低一点。</p>`,
 };
 
 /** 包名去掉系列前缀：表格里"来源"那一列要塞五个字就会把数值列挤扁 */

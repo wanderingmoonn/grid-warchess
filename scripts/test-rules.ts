@@ -7214,7 +7214,7 @@ test('经济单位按脚下地形出货：平地打粮、林地出材', () => {
   assert.equal(wood.food ?? 0, 0, '林子不产粮');
 });
 
-test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => {
+test('城郭与物料：主城 3×3，经济建筑更值钱但不再当墙', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const city = citiesOf(s, 'A')[0]!;
   assert.equal(city.size, 3, '主城边长 3');
@@ -7228,7 +7228,115 @@ test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => 
     Math.round((UNIT_TYPES.mill!.incomeByTerrain?.plain ?? 0) * 1.2),
     '经济建筑收益 +20%',
   );
-  assert.ok(mill.maxHp > UNIT_TYPES.mill!.maxHp, '建筑整体更耐打');
+  assert.equal(mill.armor, UNIT_TYPES.mill!.armor - 1, '经济建筑护甲 −1');
+  assert.equal(
+    mill.maxHp,
+    Math.round(UNIT_TYPES.mill!.maxHp * 1.1),
+    '经济建筑耐久只加一成（普通建筑是 1.35）——它不该顺手变成一堵墙',
+  );
+
+  // 普通建筑照旧 +35%：这条规则不能把所有建筑一起拖下水
+  assert.equal(
+    s.unitTypes.bridge!.maxHp,
+    Math.round(UNIT_TYPES.bridge!.maxHp * 1.35),
+    '非经济建筑还是原来的耐久',
+  );
+
+  // 隘口的真实尺度：粮仓挡得住追兵，挡不住一支有备而来的部队。
+  // 二代骑士（攻 17）拆它必须落在四下以内——以前是五下。
+  const granary = s.unitTypes.granary!;
+  const hits = Math.ceil(granary.maxHp / Math.max(1, s.unitTypes.knight!.atk - granary.armor));
+  assert.ok(hits <= 4, `骑士拆粮仓要 ${hits} 下，应该不超过 4 下`);
+});
+
+test('经济建筑：造价降下来，回本压到四五个回合', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+
+  // 粮仓：55 的六成 = 33 粮，一分金币都不要（"起步靠粮"那一段）
+  const granary = s.unitTypes.granary!;
+  const gc = recruitResCost(s, 'A', granary);
+  assert.equal(gc.gold ?? 0, 0, '前期经济建筑不收金币');
+  assert.equal(gc.food, 33, '粮仓只花 33 粮');
+  const gPayback = gc.food / (granary.yield?.food ?? 1);
+  assert.ok(gPayback <= 4, `粮仓回本要 ${gPayback.toFixed(1)} 回合，应该 ≤ 4`);
+
+  // 采石场：产什么就吃什么——它吃建材，不吃粮
+  const qc = recruitResCost(s, 'A', s.unitTypes.quarry!);
+  assert.equal(qc.gold ?? 0, 0, '前期经济建筑不收金币');
+  assert.equal(qc.food ?? 0, 0, '采石场是建材建筑，不该吃粮');
+  assert.equal(qc.material, 54, '采石场 90 的六成 = 54 材');
+  assert.ok(54 / (s.unitTypes.quarry!.yield?.material ?? 1) <= 4.5, '采石场回本 ≤ 4.5 回合');
+
+  // 后期经济建筑仍要金币，但只有两成（普通兵是三成）
+  const brick = s.unitTypes.brickworks!;
+  const bc = recruitResCost(s, 'A', brick);
+  assert.equal(bc.gold, Math.round(brick.cost * 0.2), '后期经济建筑金币占两成');
+  assert.equal(bc.material, Math.round(brick.cost * 0.55), '建材占五成半');
+  assert.ok(bc.material / (brick.yield?.material ?? 1) <= 5, '砖窑回本 ≤ 5 回合');
+
+  // 降价只给经济建筑：普通兵的金币/资源结构一个字没动
+  const militia = recruitResCost(s, 'A', s.unitTypes.militia!);
+  assert.equal(militia.gold, Math.round(s.unitTypes.militia!.cost * 0.3), '普通兵还是三成金币');
+});
+
+test('建材产线：伐木工之后每一代都有人接，产出逐代往上走', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const chain = [
+    ['lumberjack', 2, 'forest'],
+    ['quarrier', 3, 'hill'],
+    ['minecrew', 4, 'hill'],
+    ['materials', 5, 'hill'],
+  ] as const;
+
+  let prev = 0;
+  for (const [id, era, terrain] of chain) {
+    const def = s.unitTypes[id];
+    assert.ok(def, `城郭包应该带来 ${id}`);
+    assert.equal(def.era, era, `${id} 属于时代 ${era}`);
+    assert.equal(def.category, 'economy', `${id} 是经济单位`);
+
+    const u = place2(s, 'A', id, 5, 5);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain;
+    const material = unitYield(s, u).material ?? 0;
+    assert.ok(material > prev, `${id} 的建材产出 ${material} 应该高于上一代 ${prev}`);
+    prev = material;
+  }
+  // 时代 5 单支建材兵得顶得上半座建材基地，否则"换人"这件事没有意义
+  assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
+});
+
+test('建材建筑按代分工兵：工程师只有砖窑，建筑队三样全会', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const builds = (id: string) => s.unitTypes[id]?.builds ?? [];
+
+  assert.ok(builds('engineer').includes('brickworks'), '工程师起手就是砖窑');
+  assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是工业时代的东西');
+  assert.ok(builds('foreman').includes('cementworks'), '厂长会盖水泥厂');
+  assert.equal(builds('foreman').includes('materialbase'), false, '建材基地要现代建筑队');
+  for (const id of ['brickworks', 'cementworks', 'materialbase']) {
+    assert.ok(builds('crew').includes(id), `建筑队应该会盖 ${id}`);
+  }
+
+  // 产出阶梯：采石场 13 → 砖窑 24 → 水泥厂 40 → 建材基地 58
+  const step = ['quarry', 'brickworks', 'cementworks', 'materialbase'].map(
+    (id) => s.unitTypes[id]!.yield?.material ?? 0,
+  );
+  for (let i = 1; i < step.length; i++) {
+    assert.ok(step[i]! > step[i - 1]!, `建材产出应该逐级上升：${step.join(' → ')}`);
+  }
+  assert.ok(step[3]! >= 58, `建材基地该有 58 材/回合，实际 ${step[3]}`);
+
+  // 高级建材建筑的卖点不是"每材更划算"，是"同样几格地里挤得更多"：
+  // 回本控制在 5 个回合出头，比采石场慢一点，但上限高一个量级。
+  // 另外它们都只吃建材——不要跟粮食抢同一笔钱。
+  for (const id of ['brickworks', 'cementworks', 'materialbase']) {
+    const c = recruitResCost(s, 'A', s.unitTypes[id]!);
+    assert.equal(c.food ?? 0, 0, `${id} 不吃粮`);
+    assert.ok((c.material ?? 0) > 0, `${id} 要建材`);
+    const total = (c.gold ?? 0) + (c.material ?? 0);
+    const payback = total / (s.unitTypes[id]!.yield?.material ?? 1);
+    assert.ok(payback <= 5.2, `${id} 回本 ${payback.toFixed(1)} 回合，应该 ≤ 5.2`);
+  }
 });
 
 test('箭塔：两回合施工，工地开不了火', () => {

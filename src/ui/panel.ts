@@ -929,6 +929,15 @@ function emptyRecruitHint(q: string, pack: string, total: number, subject: strin
 
 /** 建造按钮上"产出 X"那半句：只看兵种表里写了什么，不猜运行时换算 */
 function yieldShort(def: UnitTypeDef): string {
+  // 只写 yield 的建筑（粮仓、砖窑、建材基地……）产多少就是它的全部卖点，
+  // 所以这里印数值而不是只印一个"材"字——建造按钮上那行字是玩家唯一会读的地方。
+  if (def.yield) {
+    const flat = Object.entries(def.yield)
+      .filter(([, n]) => (n ?? 0) > 0)
+      .map(([id, n]) => `+${n}${resourceShort(id)}`)
+      .join('·');
+    if (flat) return flat;
+  }
   const ids = new Set<string>();
   if (def.yield) for (const id of Object.keys(def.yield)) ids.add(id);
   if (def.incomeByTerrain || def.income) ids.add('gold');

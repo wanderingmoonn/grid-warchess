@@ -295,23 +295,23 @@
   <main>
     <header class="page-head">
       <h1>方格战棋 · 城郭与物料</h1>
-      <p>扩展分册 · 2 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+      <p>扩展分册 · 8 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
     </header>
 
 
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>主城扩成 3×3；兵要吃粮、楼要耗材（金币只占六成）；经济单位按脚下地形出粮或出材，经济建筑出另一种；箭塔改成两回合施工、可驻军、视野更远但打不疼；高山画得更扎眼。</p>
+      <p>主城扩成 3×3；兵要吃粮、楼要耗材（金币只占零头）；经济单位按脚下地形出粮或出材，经济建筑只产一种资源；建材产线一路排到现代（采石工→矿队→建材公司，砖窑→水泥厂→建材基地）；箭塔改成两回合施工、可驻军、视野更远但打不疼；高山画得更扎眼。</p>
       <dl class="kv">
-        <dt>兵种数量</dt><dd>2 个</dd>
-        <dt>覆盖时代</dt><dd>1（古典）、2（中世）</dd>
+        <dt>兵种数量</dt><dd>8 个</dd>
+        <dt>覆盖时代</dt><dd>1（古典）、2（中世）、3（火药）、4（工业）、5（现代）</dd>
         
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
       </dl>
       <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
         搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
         和原版兵是同一把尺子。</p>
-      <p>这个包动的是<b>骨架</b>，四条要记住：</p>
+      <p>这个包动的是<b>骨架</b>，六条要记住：</p>
         <ul class="bullets">
           <li><b>主城 3×3</b>：城市占九格，耐久 +50%。城墙更厚，攻城就成了苦差事。</li>
           <li><b>两种新资源</b>：活人（战斗、经济、建造单位）的造价里有七成是<b>粮食</b>，
@@ -320,14 +320,24 @@
               缺粮缺材才是。开局就把经济铺开，别把钱攒成一座金山。
               开局按时代给一笔起步粮材，之后就要靠经济单位挣。</li>
           <li><b>一种兵，多种产出</b>：经济单位看脚下——平地打粮、森林丘陵出建材，
-              另一部分换回少量金币；经济建筑反过来，产出粮食，而且前期只用粮食就盖（不碰建材）。</li>
+              另一部分换回少量金币。</li>
+          <li><b>经济建筑只做经济</b>：攻击归零、收益 +20%，而造价只有同类单位的
+              <b>两成金币 + 五成半资源</b>（时代 1-2 连金币都不要），四五个回合就能回本；
+              代价是耐久只加一成、护甲还少一点——它是个好投资，<b>不是一堵墙</b>。
+              它们产什么就吃什么呢：粮仓花粮、采石场花材。</li>
+          <li><b>建材产线一路排到现代</b>：伐木工（2）→ 采石工（3）→ 矿队（4）→ 建材公司（5），
+              配套采石场（2）→ 砖窑（3）→ 水泥厂（4）→ 建材基地（5）。
+              建筑<b>不挑地形</b>，产出 13 → 24 → 40 → 58 材/回合；
+              想要更多建材，要么换人，要么换建筑，不必抢那块丘陵。</li>
           <li><b>塔要施工</b>：箭塔/石堡/炮台/要塞/碉堡先落一个<b>工地</b>（两回合），
               工地开不了火、产不了兵，但看得见也拆得掉；成型后视野 +2，并<b>允许驻军</b>——
               友军站上去多 3 点护甲、还能借用它的视野。相应地，塔自己的攻击被削了三成。</li>
         </ul>
-        <p>经济建筑（磨坊、水车、工厂……）在这一包里<b>不还手</b>：攻击归零，但耐久 +35%、收益 +20%。
-          后期的经济与工程兵种（种植园主、农业公司、工程师、厂长、建筑队）攻击 +3、生命 +6，
-          现代那一档再 +1 护甲——它们不该一上前线就是送人头。</p>
+        <p>时代 3 起的经济与工程兵种（工程师、厂长、建筑队，以及采石工、矿队、建材公司这类采集兵）
+          攻击 +3、生命 +6，现代那一档再 +1 护甲——它们不该一上前线就是送人头。</p>
+        <p class="era-meta">上面总表印的是兵种表里的<b>原始数值</b>。这个包在开局时会再叠一层：
+          经济建筑护甲 −1、耐久 ×1.1；时代 3 起的经济与工程兵 +3 攻 +6 血（现代再 +1 甲）。
+          所以游戏里看到的攻击和生命会比表里高一点，经济建筑的护甲低一点。</p>
     </section>
 
     <section id="pack-units">
@@ -336,7 +346,7 @@
     <div class="scroll-x">
       <table class="wide">
         <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
-        <tbody><tr class="grp" id="p-city-works"><td colspan="11">城郭与物料 · 2 个</td></tr><tr data-unit="granary"><td class="name">粮仓</td><td class="glyph">仓</td><td class="num">1</td><td class="num">55</td><td class="num">0</td><td class="num">4</td><td class="num">40</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="quarry"><td class="name">采石场</td><td class="glyph">石</td><td class="num">2</td><td class="num">90</td><td class="num">0</td><td class="num">5</td><td class="num">46</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
+        <tbody><tr class="grp" id="p-city-works"><td colspan="11">城郭与物料 · 8 个</td></tr><tr data-unit="granary"><td class="name">粮仓</td><td class="glyph">仓</td><td class="num">1</td><td class="num">55</td><td class="num">0</td><td class="num">4</td><td class="num">40</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +10 粮</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="quarry"><td class="name">采石场</td><td class="glyph">石</td><td class="num">2</td><td class="num">90</td><td class="num">0</td><td class="num">5</td><td class="num">46</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +13 材</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="quarrier"><td class="name">采石工</td><td class="glyph">凿</td><td class="num">3</td><td class="num">140</td><td class="num">4</td><td class="num">2</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 丘陵 +26</a></td></tr><tr data-unit="brickworks"><td class="name">砖窑</td><td class="glyph">砖</td><td class="num">3</td><td class="num">150</td><td class="num">0</td><td class="num">4</td><td class="num">38</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +24 材</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="minecrew"><td class="name">矿队</td><td class="glyph">矿</td><td class="num">4</td><td class="num">200</td><td class="num">4</td><td class="num">3</td><td class="num">26</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 丘陵 +36</a></td></tr><tr data-unit="cementworks"><td class="name">水泥厂</td><td class="glyph">泥</td><td class="num">4</td><td class="num">240</td><td class="num">0</td><td class="num">5</td><td class="num">44</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +40 材</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="materials"><td class="name">建材公司</td><td class="glyph">材</td><td class="num">5</td><td class="num">290</td><td class="num">4</td><td class="num">4</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 丘陵 +48</a></td></tr><tr data-unit="materialbase"><td class="name">建材基地</td><td class="glyph">基</td><td class="num">5</td><td class="num">360</td><td class="num">0</td><td class="num">6</td><td class="num">52</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +58 材</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
       </table>
     </div>
     </section>
@@ -344,7 +354,7 @@
     <section id="pack-terms">
       <h2><span class="sec-num">03</span>机制词条</h2>
       <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
-      <dl class="terms"><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd></dl>
+      <dl class="terms"><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd></dl>
     </section>
   
     <footer>
