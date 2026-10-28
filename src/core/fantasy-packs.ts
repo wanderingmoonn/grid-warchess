@@ -1650,7 +1650,8 @@ const ARCANE: Expansion = {
       element: 'water',
       abilities: ['slow-hit'],
       weak: { fire: 1.5 },
-      resist: { water: 4 },
+      // 抗性按倍率算：这里是"水伤打七折"，不是"少挨 4 点"
+      resist: { water: 0.7 },
     },
     // 土元素：10 甲 + 每回合立一道墙。它的作用是"把路堵住"，不是"打死谁"。
     {

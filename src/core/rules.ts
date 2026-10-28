@@ -1599,6 +1599,10 @@ export function computeDamage(
   if (el) {
     const weak = dt.weak?.[el];
     if (weak && weak > 0) ctx.damage *= weak;
+    // 抗性和弱点一样是**倍率**：`weak` 放大（>1），`resist` 打折（0~1）。
+    // 所以数据必须写成 0.7 这种形式——写成 4 不是"少挨 4 点"，是"受四倍伤害"。
+    // 这条注释是踩过坑留下的：2026-10-28 改结算顺序时，代码换成倍乘、数据没跟着换，
+    // 水元素抗性从 4 变成了 ×4，实测水元素互殴从 15 点涨到 60 点。
     const resist = dt.resist?.[el];
     if (resist) ctx.damage *= resist;
   }

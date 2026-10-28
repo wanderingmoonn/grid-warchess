@@ -7891,5 +7891,63 @@ test('批次码：清洗成数据库约束认的形状，不合法就当没有',
   assert.ok(/^[a-z0-9][a-z0-9-]{0,23}$/.test(long ?? ''), '清洗结果必须能被数据库的 CHECK 接受');
 });
 
+test('属性抗性按倍率作用，且数据必须落在 0~1', () => {
+  // 2026-10-28 改结算顺序时，代码换成了倍乘、数据还是旧的 `water: 4`，
+  // 于是"抗水 4 点"变成"受水伤 ×4"：水元素互殴从 15 点涨到 60 点。
+  // 两条防线：用例锁住"倍率"的算法，下面那段扫全表锁住数据形状。
+  const s = fresh({ expansionIds: EXPANSIONS.map((e) => e.id) });
+  s.units = [];
+
+  const def = s.unitTypes['water-elemental'];
+  assert.ok(def);
+  const mul = def.resist?.water;
+  assert.equal(typeof mul, 'number', '水元素应当抗水');
+  assert.ok(mul! > 0 && mul! < 1, `抗性必须是 0~1 的倍率，实际是 ${mul}`);
+
+  // 复制一个"除了没有水抗之外完全一样"的守方，用来比差值
+  s.unitTypes['water-elemental-plain'] = { ...def, id: 'water-elemental-plain', resist: undefined };
+  const mk = (id: string, owner: 'A' | 'B', x: number, y: number) => {
+    const t = s.unitTypes[id];
+    assert.ok(t);
+    const u = {
+      id: `${id}-${owner}`,
+      type: id,
+      owner,
+      x,
+      y,
+      hp: t.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    };
+    s.units.push(u);
+    return u;
+  };
+
+  const attacker = mk('water-elemental', 'A', 3, 3);
+  const withResist = mk('water-elemental', 'B', 4, 3);
+  const withoutResist = mk('water-elemental-plain', 'B', 4, 4);
+
+  const a = computeDamage(s, attacker, withResist, false);
+  const b = computeDamage(s, attacker, withoutResist, false);
+  assert.ok(b > 0, '对照组要打得动，否则比不出东西');
+  assert.ok(a < b, '抗性只能让伤害变小');
+  // 四舍五入允许 1 点误差
+  assert.ok(
+    Math.abs(a - Math.round(b * mul!)) <= 1,
+    `抗性应当按倍率打折：无抗 ${b}、×${mul} 后应约 ${Math.round(b * mul!)}，实际 ${a}`,
+  );
+
+  // 全表体检：任何一条 resist 只要 ≥1，就等于"越抗越疼"
+  for (const t of Object.values(s.unitTypes)) {
+    for (const [el, v] of Object.entries(t.resist ?? {})) {
+      assert.ok(
+        typeof v === 'number' && v > 0 && v < 1,
+        `${t.id} 的 resist.${el} = ${String(v)}，必须是 0~1 的倍率（写成 4 会变成四倍伤害）`,
+      );
+    }
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
