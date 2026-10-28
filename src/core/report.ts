@@ -69,6 +69,14 @@ export interface MatchReport {
   logLines: number;
   sides: ReportSide[];
   /**
+   * 这一局开打时**要求过**记录逐回合摘要吗。
+   *
+   * 和有没有 timeline 分开记：两者不一致就说明"勾了却没记上"，
+   * 2026-10-28 出过一次这种事故（createMatch 重建 config 时漏了这个字段），
+   * 当时光看数据完全看不出来，只能靠人回忆。有了这个字段，查 SELECT 就知道。
+   */
+  recordRequested: boolean;
+  /**
    * 逐回合摘要 + 行动/出兵计数。
    *
    * 只有开局勾了「结束后上传详细数据」的局才有；没勾就是 undefined——
@@ -145,6 +153,7 @@ export function buildMatchReport(
     sites: s.units.filter((u) => underConstruction(u)).length,
     logLines: s.log.length,
     sides,
+    recordRequested: s.config.recordDetail === true,
     ...(timeline ? { timeline } : {}),
   } satisfies MatchReport;
 }

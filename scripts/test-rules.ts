@@ -7989,5 +7989,49 @@ test('旧的自定义兵种：整数抗性要折成倍率', () => {
   }
 });
 
+test('开局的配置要活进对局：createMatch 不能把开关吃掉', () => {
+  // 2026-10-28 的事故：state.config 是逐个字段白名单抄的，`recordDetail` 漏了，
+  // 于是玩家勾了"数据收集"、开局瞬间被吃掉，上传上来一帧摘要都没有，
+  // 而他本人非常确定自己勾了——因为界面上确实勾了，是内核丢了。
+  const withRecord = createMatch({ ...DEFAULT_CONFIG, recordDetail: true }, 4242);
+  assert.equal(withRecord.config.recordDetail, true, '勾了就要带进对局');
+  assert.equal(withRecord.config.recordDetail !== true ? 'lost' : 'kept', 'kept');
+
+  const without = createMatch({ ...DEFAULT_CONFIG }, 4242);
+  assert.equal(without.config.recordDetail, false, '没勾就是明确的 false，不是 undefined');
+
+  // 顺手把一个"必须活下来"的清单钉住：以后再加开关，漏抄一个就会红
+  const cfg = createMatch(
+    { ...DEFAULT_CONFIG, recordDetail: true, commanderMode: false, godMode: false },
+    4242,
+  ).config;
+  for (const key of ['size', 'startEra', 'expansionIds', 'enabledUnits', 'aiLevel'] as const) {
+    assert.ok(cfg[key] !== undefined, `配置字段 ${key} 不该在开局时丢掉`);
+  }
+  assert.equal(cfg.commanderMode, false);
+  assert.equal(cfg.godMode, false);
+});
+
+test('报告要记下"这局要求过摘要吗"，好让"勾了却没记上"变得可查', () => {
+  const asked = createMatch({ ...DEFAULT_CONFIG, recordDetail: true }, 99);
+  const id = asked.units[0]?.id;
+  assert.ok(id);
+  const tl = newTimeline(1);
+  sampleTurn(asked, tl);
+
+  const withTl = buildMatchReport(asked, new Date('2026-10-28T09:00:00Z'), tl);
+  assert.equal(withTl.recordRequested, true);
+  assert.ok(withTl.timeline, '要求了也记了，两份都该在');
+
+  // 要求了、但没记到（刷新页面 / 沙盒）：靠 recordRequested 与 timeline 的
+  // 不一致就能在数据里直接查出来，不用再靠玩家回忆。
+  const askedNoData = buildMatchReport(asked, new Date('2026-10-28T09:00:00Z'));
+  assert.equal(askedNoData.recordRequested, true);
+  assert.equal(askedNoData.timeline, undefined);
+
+  const notAsked = buildMatchReport(createMatch({ ...DEFAULT_CONFIG }, 99));
+  assert.equal(notAsked.recordRequested, false);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

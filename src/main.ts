@@ -586,7 +586,13 @@ function reportPanel(): PanelReport | undefined {
       ? { status: 'done', note: '这局已经上传过了，不用再传一遍' }
       : { status: 'idle' };
   }
-  const detail = timelineSummary(recorder);
+  // 配置里说要记、但一帧都没有：中途刷新过（记录器在内存里）或者开了沙盒。
+  // 不写这一句的话，玩家会以为"我明明勾了"，然后在数据里留下一个沉默的洞。
+  const detail =
+    timelineSummary(recorder) ||
+    (state.config.recordDetail === true
+      ? '（这局没记下摘要：中途刷新过页面，或这一局是沙盒）'
+      : '');
   return { optedIn: reportOptIn, detail, ...reportSend };
 }
 
@@ -1930,6 +1936,9 @@ function handleAction(act: string, el: HTMLElement): void {
       detachRoom(); // 换了一局，房间就对不上了
       boardZoom = 1; // 换局可能换尺寸，缩放档位不能跟着上一局走
       clearSelection();
+      // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
+      // 否则会把上一局的摘要记到这一局头上
+      resetRecorder();
       saveMatch(state);
       render();
       kickAiIfNeeded();

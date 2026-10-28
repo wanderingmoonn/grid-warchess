@@ -284,6 +284,11 @@ export function createMatch(
       enabledUnits: [...pool],
       commanderMode: config.commanderMode === true,
       godMode: config.godMode === true,
+      // 逐回合摘要的开关必须活进 state.config：
+      // 这个对象的字段是**逐个白名单抄的**，漏一个就等于那个开关在开局瞬间被吃掉。
+      // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，
+      // 因为 resetRecorder() 读到的是 undefined。
+      recordDetail: config.recordDetail === true,
     },
     unitTypes,
     turn: 1,
