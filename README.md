@@ -5,6 +5,16 @@
 
 线上地址：<https://grid-warchess-76858.app.workbuddy.host/?sharecode=JXRGIZAHUH>
 
+## 战术 AI 优化版试用
+
+本分支 `feature/ai-tactics-evaluation` 提供基于远端原版的 AI 优化，包含战术档位与地形高差适配。
+新局选择 **「战术 AI · 测试」** 可启用速攻、骚扰和弃城发展。
+对冻结的远端 `5fb8e5b` 战术 AI，208 场交换先后手对照为 **149 胜 / 50 负 / 9 未决，总胜率 71.6%**。
+这是指定配置与种子上的版本对照；工业时代、火山群仍是弱项。此分支的结果不代表线上地址已部署本版。
+
+**[创作者接入与测试指南](docs/AI-CREATOR-GUIDE.md)**：下载独立副本、试玩、运行快速检查、复现完整评估，以及接入其他 AI。
+完整方法与限制见 [合并验证报告](docs/AI-UPSTREAM-MERGE-2026-10-28.md)。
+
 ## 跑起来
 
 ```bash
@@ -12,15 +22,17 @@ npm install
 npm run dev      # 本地开发，http://127.0.0.1:5178
 ```
 
-需要 Node 18+（`node --experimental-strip-types` 直接跑 TypeScript，不需要编译）。
+建议使用 Node 24（本版在 24.21.0 验证）。测试脚本使用 `node --experimental-strip-types` 直接运行 TypeScript，不能使用 Node 18。
 
 ## 常用命令
 
 | 命令 | 做什么 |
 |---|---|
 | `npm run dev` | 本地开发服务器 |
-| `npm test` | 全量测试：规则内核 280 项 + DOM 冒烟 93 项 |
+| `npm test` | 全量测试：规则 319 项 + AI 场景 25 项 + 评估方法 7 项 + DOM 冒烟 112 项 |
 | `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
+| `npm run test:ai-optimization` | AI 战术、高差兼容、冻结基准与评估统计检查 |
+| `npm run evaluate:ai` | 新旧 AI 配对评估；默认 208 场，快速检查命令见创作者指南 |
 | `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
 | `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（13 册：核心册 + 小型扩展合订本 + 每个大型扩展一册） |
 | `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |

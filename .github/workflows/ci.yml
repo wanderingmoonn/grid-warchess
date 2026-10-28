@@ -22,8 +22,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # 脚本用 node --experimental-strip-types 直接跑 TypeScript，需要 22+
-          node-version: 22
+          # 与本版 AI 验收使用的 Node 主版本一致。
+          node-version: 24
           cache: npm
 
       - name: 安装依赖
@@ -34,6 +34,9 @@ jobs:
 
       - name: 规则内核测试
         run: npm run test:rules
+
+      - name: AI 战术与评估方法测试
+        run: npm run test:ai-optimization
 
       - name: DOM 冒烟测试
         run: npm run test:ui
