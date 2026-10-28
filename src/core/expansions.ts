@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 import type { ResourceCost } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
@@ -25,6 +25,7 @@ import { ERA_PACKS } from './era-packs.ts';
 import { FANTASY_PACKS } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons.ts';
+import { HEIGHT_TERRAIN } from './height-terrain.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -138,6 +139,46 @@ export interface RangeCtx {
   range: number;
 }
 
+/**
+ * "对某个具体目标"的射程钩子。
+ *
+ * 和 modifyRange 的分工：那个只回答"我这回合射程是多少"（浓雾、暴雨），
+ * 与打谁无关；这个回答"打那一个目标时射程是多少"——高差、遮挡这类
+ * 需要知道目标站在哪儿的规则走这里。
+ *
+ * `targetTerrain` 为 null 表示"没有具体目标"（面板上的通用射程显示），
+ * 这时扩展应当只给与目标无关的那部分修正。
+ */
+export interface RangeAgainstCtx {
+  state: GameState;
+  unit: Unit;
+  targetTerrain: Terrain | null;
+  range: number;
+}
+
+/**
+ * 进入某一格的真实步耗钩子（在基础地形价之后、能力改价之前调用）。
+ *
+ * 有 `from` 才能表达"上坡比下坡贵"这类规则：只给目标格的话，
+ * 同一格从山上走进去和从谷底走进去是两件事，钩子根本分不开。
+ * 返回 undefined 表示不改。
+ */
+export interface StepCostCtx {
+  state: GameState;
+  /**
+   * 正在走的单位。**可能为 null**：AI 在算"这张地形图好不好走"时还没有
+   * 具体单位（那是一张给全军用的静态图）。扩展若要做兵种相关的改价，
+   * 应当退到"只按地形算"的分支，而兵种自己的改价走 ability-hooks 的 moveCost。
+   */
+  unit: Unit | null;
+  /** 出发格地形；从地图外/部署进来时为 null */
+  from: Terrain | null;
+  /** 目标格地形 */
+  to: Terrain;
+  /** 已经算好的基础价（地形表里的数） */
+  cost: number;
+}
+
 export interface CityRegenCtx {
   state: GameState;
   city: City;
@@ -211,6 +252,19 @@ export interface ExpansionHooks {
   modifyVision?: (c: VisionCtx) => number;
   /** 纯函数：修正攻击范围 */
   modifyRange?: (c: RangeCtx) => number;
+  /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */
+  modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
+  /** 纯函数：修正进入某一格的真实步耗（爬坡） */
+  modifyStepCost?: (c: StepCostCtx) => number | undefined;
+  /**
+   * 纯函数：这一局某类地形有多高（层）。
+   *
+   * 只给查询、不给计算：高度本身没有意义，意义在"高差怎么影响射程和步耗"，
+   * 那两条由 modifyRangeAgainst / modifyStepCost 表达。把它单独列出来，
+   * 是为了让界面能显示"这里的台地比平原高 2 层"而不必自己去猜扩展的私有表。
+   * 没注册的扩展等于所有地形一样高。
+   */
+  terrainHeight?: (terrain: Terrain) => number;
   /** 纯函数：修正城市每回合回血量 */
   modifyCityRegen?: (c: CityRegenCtx) => number;
   /** 纯函数：修正升级时代的费用（返回 null 表示已封顶） */
@@ -301,6 +355,25 @@ export interface Expansion {
    * 多个扩展都声明时取最大值（谁要得大听谁的）。
    */
   citySize?: number;
+  /**
+   * 这个扩展**新引入**的地形。
+   *
+   * 本体只认平原/林/丘/水/山/桥/城这几样。扩展想加新地形（台地、熔岩……），
+   * 就在这里登记：地图生成器只在勾了这个扩展时才敢往图上画它们，
+   * 上帝模式的画笔也照着这张表出按钮。不登记的话，地图里会冒出
+   * "规则书没写、玩家不认识、关掉扩展也还在"的格子。
+   *
+   * 反过来说，**没勾这个扩展时这些地形一格格都不会出现**，
+   * 所以老存档、老对局不会被新地形污染。
+   */
+  terrains?: readonly Terrain[];
+  /**
+   * 这个扩展带来的地貌风格（开局界面"地貌"一栏的额外选项）。
+   *
+   * 同一套地貌在不同扩展下可能长得完全不同，所以地貌是**扩展的菜单项**，
+   * 不是引擎的常量表。id 必须是 MapStyle 的成员——生成器按 id 分支画图。
+   */
+  mapStyles?: ReadonlyArray<{ id: string; name: string; note: string }>;
 }
 
 function nameOf(state: GameState, typeId: string): string {
@@ -583,6 +656,9 @@ export const EXPANSIONS: Expansion[] = [
       modifySiegeDamage: ({ state, attacker, damage }) => lastStandDamage(state, attacker.owner, damage),
     },
   },
+  // 地形高差：给地形加"高度"，并让高差影响射程与机动。
+  // 放在兵种包之前，因为它只动地形规则，不动兵种表。
+  HEIGHT_TERRAIN,
   // 五个时代兵种包（大型模组）。放在最后是为了不改动既有扩展的注册顺序——
   // 顺序会进存档，也影响钩子叠加次序。
   ...ERA_PACKS,
@@ -594,15 +670,34 @@ export function expansionById(id: string): Expansion | undefined {
   return EXPANSIONS.find((e) => e.id === id);
 }
 
+/**
+ * 上一次算出来的结果。
+ *
+ * 这个函数在热路径上：算一格步耗、算一次射程、算一次护甲都要问一遍
+ * "这一局开了哪些扩展"。地形高差接进来之后，寻路每走一步都要问一次，
+ * 每次都重建 Set + 数组就变成"每次走路都分配内存"。
+ *
+ * 结果只取决于 config.expansionIds 的内容（扩展表是常量），
+ * 所以按内容记住上一次就够了——对局中途不会换扩展，命中率接近 100%。
+ * 返回值是共享的只读数组：调用方只许遍历，不许改。
+ */
+let lastIdsKey: string | null = null;
+let lastActive: Expansion[] = [];
+
 /** 按配置里勾选的顺序取出启用的扩展（顺序固定，保证确定性） */
 export function activeExpansions(state: GameState): Expansion[] {
+  const ids = state.config.expansionIds;
+  const key = ids.join('|');
+  if (key === lastIdsKey) return lastActive;
   const out: Expansion[] = [];
-  const on = enabledExpansionIds(state.config.expansionIds);
-  for (const id of state.config.expansionIds) {
+  const on = enabledExpansionIds(ids);
+  for (const id of ids) {
     if (!on.has(id)) continue;
     const e = expansionById(id);
     if (e) out.push(e);
   }
+  lastIdsKey = key;
+  lastActive = out;
   return out;
 }
 

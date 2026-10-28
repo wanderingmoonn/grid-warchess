@@ -8,7 +8,8 @@
 // 能力表是"核心 + 各扩展贡献"合并出来的，所以从这里查，而不是某个文件里的一张表。
 import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
-import { LAST_STAND_BONUS, unitSourceOf } from './expansions.ts';
+import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
+import { heightOfTerrain } from './rules.ts';
 import { resourceShort } from './resources.ts';
 import { climateEffect, type Climate } from './climate.ts';
 import { ELEMENT_NAME } from './types.ts';
@@ -66,6 +67,42 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     cost: '1 移动力',
     defense: '护甲 +3',
     note: '可产兵、可升级时代。耐久打空才会易主，攻陷时城内守军一起损失。',
+  },
+  plateau: {
+    name: '台地',
+    cost: '2 移动力（爬坡另计）',
+    defense: '护甲 +3',
+    note: '比平原高 2 层、比丘陵高 1 层。站在台地边缘射程 +1，往下打远处的敌人还能再 +1；从下面仰攻它，射程 -1。',
+  },
+  valley: {
+    name: '谷地',
+    cost: '1 移动力',
+    defense: '护甲 +2',
+    note: '比平原低 1 层。射程 -1（视线被两边的坡切掉），但往里走不吃爬坡费——从谷地冲上高地的那一步才贵。',
+  },
+  marsh: {
+    name: '沼泽',
+    cost: '2 移动力',
+    defense: '无加成',
+    note: '与平原同高，但烂泥拖脚：进去 2 点，还要从低处爬出来的话更贵。没有掩护，站在里面等于暴露。',
+  },
+  dune: {
+    name: '沙丘',
+    cost: '2 移动力',
+    defense: '护甲 +1',
+    note: '比平原高 1 层。沙脊上射程 +1，但几乎没有掩护——沙地上站谁谁明显。',
+  },
+  lava: {
+    name: '熔岩浅流',
+    cost: '3 移动力',
+    defense: '无加成',
+    note: '火山脚下缓慢流动的熔岩。能走，但一步顶三步，绕路通常更快；和谷地一样处在低处，仰射高处吃 -1 射程。',
+  },
+  volcano: {
+    name: '火山',
+    cost: '不可通行',
+    defense: '—',
+    note: '全图最高的一类地形（6 层）。任何单位都上不去，它周围的熔岩浅流就是它的"山脚"。',
   },
 };
 
@@ -282,10 +319,33 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   return lines;
 }
 
-/** 地形说明，直接给面板用 */
-export function describeTerrain(t: Terrain): string[] {
+/**
+ * 这一局有没有"高度"这回事。
+ *
+ * 高度是「地形高差」扩展带来的：没勾这个扩展，所有地形一样高，
+ * 面板上就不该出现"高 2 层"这种没有对应规则的数字。
+ */
+function heightRuleOn(s: GameState): boolean {
+  return activeExpansions(s).some((e) => typeof e.hooks.terrainHeight === 'function');
+}
+
+/** 地形说明，直接给面板用。传了 state 才会算高度（高度是扩展给的）。 */
+export function describeTerrain(t: Terrain, s?: GameState): string[] {
   const info = TERRAIN_INFO[t];
   const lines = [`进入消耗：${info.cost}`, `防御：${info.defense}`, info.note];
+
+  if (s && heightRuleOn(s)) {
+    const h = heightOfTerrain(s, t);
+    const base = heightOfTerrain(s, 'plain');
+    const d = h - base;
+    lines.push(
+      d === 0
+        ? `高度：${h} 层（与平原同高）`
+        : `高度：${h} 层（比平原${d > 0 ? '高' : '低'} ${Math.abs(d)} 层）`,
+    );
+    lines.push('俯射：比目标高 2 层以上，远程兵射程 +1；低 2 层以上 -1');
+    lines.push('爬坡：从更低处走进来，每高 1 层多花 1 点移动力（最多算 2 层）；下坡不加价');
+  }
 
   // 这个地形适合谁，从兵种表里现查，改了数值这里自动跟着变
   const fit = Object.values(UNIT_TYPES).filter((d) => {

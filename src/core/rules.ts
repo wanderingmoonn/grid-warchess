@@ -72,6 +72,7 @@ import type {
   HeroSkillDef,
   PlayerId,
   ResourceId,
+  Terrain,
   Tile,
   Unit,
   UnitTypeDef,
@@ -215,6 +216,97 @@ export function xyOf(s: GameState, i: number): { x: number; y: number } {
 export function tileAt(s: GameState, x: number, y: number): Tile | null {
   if (!inBounds(s, x, y)) return null;
   return s.tiles[idx(s, x, y)] ?? null;
+}
+
+// ── 地形高度：射程与机动的共同尺度 ────────────────────────────────────
+//
+// 高度**不是本体规则**，是「地形高差」扩展带来的。本体只提供两个钩子口：
+//   · stepCostInto —— 走进一格的真实步耗（扩展在这里加爬坡费）
+//   · effectiveRangeAgainst —— 对某个具体目标的射程（扩展在这里加高差修正）
+// 没开那个扩展时两个口子都原样放行，步耗与射程与从前一模一样。
+
+/** 某类地形在这一局里的高度：扩展没开就是 0（谁都一样高） */
+export function heightOfTerrain(s: GameState, terrain: Terrain): number {
+  for (const e of activeExpansions(s)) {
+    const h = e.hooks.terrainHeight?.(terrain);
+    if (typeof h === 'number') return h;
+  }
+  return 0;
+}
+
+/**
+ * "从某类地形走进某类地形"的步耗：不带具体单位的那一版。
+ *
+ * AI 的地形距离图需要它（那张图是给全军用的静态图，没有"正在走的单位"）。
+ * 单位相关的改价（穿林、重甲难行）不在这条路上——它们挂在能力钩子里，
+ * 由 budgetMove 在真实移动时叠加。
+ */
+export function stepCostBetween(
+  s: GameState,
+  from: Terrain | null,
+  to: Terrain,
+): number {
+  const base = CONFIG.terrainCost[to] ?? 99;
+  if (base >= 99) return 99;
+  let cost = base;
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.modifyStepCost) continue;
+    const over = e.hooks.modifyStepCost({ state: s, unit: null, from, to, cost });
+    if (over !== undefined) cost = over;
+  }
+  return cost;
+}
+
+/**
+ * 从一格走进另一格的移动力消耗。
+ *
+ * 基础价来自地形表；扩展可以再加（爬坡）。`fromIdx < 0` 表示"没有来处"
+ * （部署、凭空出现、只评估落点），这时只算地形价——没有坡可爬。
+ * 水军和飞行不走这条：水军航道一格一步，飞行从空中过不看地面起伏。
+ */
+export function stepCostInto(
+  s: GameState,
+  unit: Unit,
+  fromIdx: number,
+  toIdx: number,
+  opts: { waterUnit?: boolean; flyer?: boolean } = {},
+): number {
+  const to = s.tiles[toIdx];
+  if (!to) return 99;
+  if (opts.waterUnit || opts.flyer) return 1;
+  const base = CONFIG.terrainCost[to.terrain] ?? 99;
+  if (base >= 99) return 99;
+  const from = fromIdx >= 0 ? (s.tiles[fromIdx] ?? null) : null;
+  let cost = base;
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.modifyStepCost) continue;
+    const over = e.hooks.modifyStepCost({
+      state: s,
+      unit,
+      from: from?.terrain ?? null,
+      to: to.terrain,
+      cost,
+    });
+    if (over !== undefined) cost = over;
+  }
+  return cost;
+}
+
+/**
+ * 对某个目标的实际射程：兵种射程（含天气等全局修正）+ 扩展给的"打它时"修正。
+ */
+export function effectiveRangeAgainst(
+  s: GameState,
+  attacker: Unit,
+  targetTile: Tile | null,
+): number {
+  let range = effectiveRange(s, attacker);
+  const targetTerrain = targetTile ? targetTile.terrain : null;
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.modifyRangeAgainst) continue;
+    range = e.hooks.modifyRangeAgainst({ state: s, unit: attacker, targetTerrain, range });
+  }
+  return Math.max(1, range);
 }
 
 // ── 占地：一格与多格 ──────────────────────────────────────────────────
@@ -1226,15 +1318,12 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       });
       if (blocker && !phasing) continue;
 
-      // 单格步耗。三道：先看这一格的基础价（水军/飞行固定 1），
+      // 单格步耗。三道：先看这一格的基础价（水军/飞行固定 1，地面单位还要
+      // 加上"爬坡附加"——往高处走更贵，见 stepCostInto），
       // 再让"改价"类能力覆盖它（穿林：森林丘陵按 1），最后让"倍率"类能力乘上去
       // （重甲难行 ×2）。三步走而不是一步算出来，是因为穿林和重甲难行都挂在
       // 同一格上时，先减半再翻倍才是玩家预期的那个数。
-      let stepCost = waterUnit
-        ? 1 // 航道一格一步，桥下也一样
-        : flyer
-          ? 1 // 从空中过：水面、森林、丘陵都不额外收费（高山在 blockedFor 那关就进不来）
-          : CONFIG.terrainCost[tile.terrain];
+      let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer });
       const moveCtx = { state: s, unit, def, terrain: tile.terrain, cost: stepCost };
       for (const h of hooks) {
         if (!h.moveCost) continue;
@@ -1300,17 +1389,20 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
  * 建筑（移动力 0）永远按第二种算。
  */
 export function threatTiles(s: GameState, unit: Unit): Set<number> {
-  const range = effectiveRange(s, unit);
   const out = new Set<number>();
+  const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
 
   const addAround = (cx: number, cy: number) => {
+    const projected = { ...unit, x: cx, y: cy, moved: unit.moved || cx !== unit.x || cy !== unit.y };
+    const ranges = new Map(targets.map(t => [t.terrain,effectiveRangeAgainst(s,projected,t)]));
+    const range = Math.max(...ranges.values());
     for (let dy = -range; dy <= range; dy++) {
       for (let dx = -range; dx <= range; dx++) {
         if (Math.abs(dx) + Math.abs(dy) > range) continue;
         if (dx === 0 && dy === 0) continue;
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y)) out.add(idx(s, x, y));
+        if (inBounds(s, x, y) && Math.abs(dx)+Math.abs(dy) <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
       }
     }
   };
@@ -1345,7 +1437,9 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
  * 改成必须站到桥边拆，桥就成了"抢桥头"的争夺点——守方要靠人挡，不是靠射程。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
-  const range = effectiveRange(s, attacker);
+  // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
+  // 站在林子里连平射都被树冠吃掉一格（见 rangeModAgainst）。
+  const range = effectiveRangeAgainst(s, attacker, tileAt(s, target.x, target.y));
   // 地面打空中要多算一格（见 strikeDistance）；同格判定仍然看"真实相对位置"，
   // 否则"空中压着地面"这个免费的第一刀会被 +1 顺手吃掉
   const real = distBetweenUnits(s, attacker, target);
@@ -1365,13 +1459,15 @@ export function attackableTargets(s: GameState, unit: Unit): Unit[] {
 /** 射程内的敌方城市 */
 export function siegeTargets(s: GameState, unit: Unit): City[] {
   if (!canAttack(unit)) return [];
-  const range = effectiveRange(s, unit);
+  // 城按"城市"那一层算高度（2 层）：站在台地上砸城比从谷底仰着砸多一格，
+  // 和野战用同一条规则，不另开一套。
   return s.cities.filter((c) => {
     if (c.owner === unit.owner) return false;
     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
     if (c.ruined) return false;
     const d = distToCity(unit, c);
-    return d > 0 && d <= range;
+    if (d <= 0) return false;
+    return d <= effectiveRangeAgainst(s, unit, tileAt(s, c.x, c.y));
   });
 }
 
@@ -1553,8 +1649,7 @@ export function previewAttack(
   }
 
   const survives = hp > 0;
-  const range = utype(s, defender.type).range;
-  const counter = survives && strikeDistance(s, defender, attacker) <= range;
+  const counter = survives && !hasFlag(def, 'noCounter') && canStrike(s, defender, attacker);
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
@@ -2158,7 +2253,6 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   // 就不能在被飞行单位贴脸打的时候原地还手。这里必须换成
   // strikeDistance(defender, attacker)——写成攻击方的距离，等于只限制了
   // 进攻、放过了防守，这条规则就形同虚设。
-  const counterReach = strikeDistance(s, defender, attacker);
   if (!canStrike(s, attacker, defender)) {
     return {
       ok: false,
@@ -2190,7 +2284,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
-  if (!noCounter && defender.hp > 0 && counterReach <= effectiveRange(s, defender)) {
+  if (!noCounter && defender.hp > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
   }
@@ -2318,7 +2412,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
   const dist = distToCity(attacker, city);
-  if (dist > effectiveRange(s, attacker)) return { ok: false, reason: '城市超出射程' };
+  if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);

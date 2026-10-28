@@ -560,16 +560,22 @@ check('点新对局会打开设置面板', () => {
   assert.equal(doc.querySelector('[data-ailevel]'), null, '热座模式不该有难度选项');
 });
 
-check('选了人机对战才出现初级/高级两档，默认高级', () => {
+check('选了人机对战才出现三档 AI，默认高级', () => {
   const activeLevel = () =>
     doc.querySelector<HTMLElement>('[data-ailevel].active')?.dataset.ailevel ?? '';
 
   click('[data-ai="1"]');
-  assert.equal(doc.querySelectorAll('[data-ailevel]').length, 2, '应该出现初级/高级两个按钮');
+  assert.equal(
+    doc.querySelectorAll('[data-ailevel]').length,
+    3,
+    '应该出现初级/高级/战术（测试）三个按钮',
+  );
   assert.equal(activeLevel(), 'advanced', '默认应该是高级 AI');
 
   click('[data-ailevel="basic"]');
   assert.equal(activeLevel(), 'basic', '点初级应该切过去');
+  click('[data-ailevel="tactic"]');
+  assert.equal(activeLevel(), 'tactic', '点战术 AI 应该切过去');
   click('[data-ailevel="advanced"]');
   assert.equal(activeLevel(), 'advanced', '点高级应该切回来');
 
@@ -630,6 +636,39 @@ check('能选地貌与地形对称方式', () => {
   assert.ok(
     doc.querySelector<HTMLElement>('[data-mapstyle="ridge"]')?.classList.contains('active'),
     '点了之后应该高亮',
+  );
+});
+
+check('高差地貌跟着「地形高差」扩展开关增减', () => {
+  // 没开扩展：地貌里没有高原/峡谷/火山群/沼泽（这些地形规则里根本不存在）
+  assert.equal(doc.querySelector('[data-mapstyle="highland"]'), null, '没开扩展不该有高原');
+
+  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(box, '扩展列表里应该有「地形高差」');
+  box!.checked = true;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+  for (const id of ['highland', 'canyon', 'volcanic', 'marsh']) {
+    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `开了扩展应该有 ${id}`);
+  }
+
+  // 选一张高差地貌，再关掉扩展：选择要退回"随机"，
+  // 不能留下一个"选中了但画不出来"的地貌。
+  doc
+    .querySelector<HTMLElement>('[data-mapstyle="canyon"]')
+    ?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.ok(
+    doc.querySelector('[data-mapstyle="canyon"]')?.classList.contains('active'),
+    '点了峡谷应该高亮',
+  );
+
+  const box2 = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(box2, '找不到「地形高差」的勾选框');
+  box2!.checked = false;
+  box2!.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.equal(doc.querySelector('[data-mapstyle="canyon"]'), null, '关掉扩展后峡谷选项该消失');
+  assert.ok(
+    doc.querySelector('[data-mapstyle="random"]')?.classList.contains('active'),
+    '失效的地貌要退回随机',
   );
 });
 

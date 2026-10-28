@@ -32,7 +32,7 @@
 关键在于：**`rules.ts` 一行都不用改**。引擎在算伤害、算收入、算移动力的时候
 都会先问一遍"有哪些扩展在生效"，然后把结果交给它们修正。你只管往数组里加对象。
 
-现有 24 个扩展分布在四个文件里，可以当参考读物：
+现有 26 个扩展分布在六个文件里，可以当参考读物：
 
 | 文件 | 内容 |
 |---|---|
@@ -40,6 +40,8 @@
 | `src/core/era-packs.ts` | 5 个时代兵备包（古典 → 现代） |
 | `src/core/fantasy-packs.ts` | 5 个奇想兵种包（法则、骑士团、荒兽、秘术、英雄） |
 | `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军） |
+| `src/core/seasons.ts` | 1 个气候包（季节与气候：四季轮换，天气改移动、视野与射程） |
+| `src/core/height-terrain.ts` | 1 个地形包（地形高差：给每类地形定高度，爬坡费、俯射加成，带 6 种新地形与 4 种新地貌） |
 
 ---
 
@@ -106,6 +108,10 @@ npm run dev          # 开局界面就能看到并勾选「丰收祭」了
 | `modifyCost` | `{ state, player, unitType, cost }` | 修正兵种造价。`unitType` 是完整兵种定义，可以按 category/era 筛 |
 | `modifyIncome` | `{ state, player, income }` | 修正回合收入 |
 | `modifyVision` | `{ state, player, base }` | 修正视野半径 |
+| `modifyRange` | `{ state, unit, range }` | 修正攻击范围，**不分目标**（天气、全局光环用它） |
+| `modifyRangeAgainst` | `{ state, unit, targetTerrain, range }` | 修正"打**这个**目标时"的范围。规则要看对手站哪才说得清的用它——高差俯射、树冠遮挡。攻城判定也走这条 |
+| `modifyStepCost` | `{ state, unit, from, to, cost }` | 修正"从 `from` 地形走进 `to` 地形"的真实步耗。`from` 为 `null` = 没有来处（部署、只评估落点）；`unit` 为 `null` = 给 AI 全军用的静态估算 |
+| `terrainHeight` | `{ terrain }` → `number` | 某类地形的高度（层）。**只给查询、不给计算**：高度本身不改任何数值，界面用它显示"比平原高 2 层"，改数值交给上面两个钩子 |
 | `modifyCityRegen` | `{ state, city, regen }` | 修正城市每回合回血量（`regen` 为 0 表示本来不回血） |
 | `modifyUpgradeCost` | `{ state, player, city, nextEra, cost }` | 修正升级时代费用。`cost` 为 `null` 表示已封顶；返回 `null` 同样表示封顶 |
 | `startRoster` | `{ state }` | 整批换掉开局部队。返回 `{ A: ['militia', …], B: [...] }`（兵种 id 名单，摆位由 setup.ts 统一处理）或 `null`（走默认的"3 战斗 + 2 经济"） |
@@ -286,6 +292,33 @@ onTurnStart: ({ state, player }) => {
 * `buildTurns` → 工地：`unit.buildLeft` 记剩余回合，判断统一走 `rules.underConstruction()`。
   工地不能开火、不能产兵、不能主动攻击，但**能被打**——这就是"塔要两回合"的代价窗口。
 * `garrison` → 驻军：加成在 `garrisonBonus()` 里算，护甲与视野两处都读它。
+
+### 5.1.3 新地形与新地貌
+
+本体只认七种地形（平原、林、丘、水、山、桥、城）。想加"台地""熔岩浅流"这种
+新格子，光有规则不够——还得让地图画得出来、让上帝模式的画笔列得出来。
+两个字段各管一头：
+
+* **`Expansion.terrains`**：这个扩展**新引入**的地形名单。
+  `mapgen` 只在勾了这个扩展时才往图上画它们，上帝模式的画笔也照着这张表出按钮
+  （`sandbox.paintTerrainsFor(state)`）。
+  **没勾扩展 = 一格都不会出现**，所以老存档、老对局不会被新地形污染。
+* **`Expansion.mapStyles`**：这个扩展带来的地貌风格（开局界面"地貌"一栏的额外选项），
+  每项 `{ id, name, note }`，`id` 必须是 `MapStyle` 的成员。
+  设置面板用 `mapgen.mapStylesFor(expansionIds)` 现算，勾/取消扩展时列表当场增减；
+  随机袋也只从这份名单里抽，关掉扩展的局里抽不出"高原"。
+
+改完记得同步三处，否则会出现"看得见但不认识"的格子：
+
+1. `types.ts` 的 `Terrain` 联合类型；
+2. `config.ts` 的 `terrainDef` / `terrainCost` / `terrainName` 三张表（地形价、防御、名字）；
+3. `info.ts` 的 `TERRAIN_INFO`（面板说明）与 `style.css` 里的配色。
+
+**高度不是本体规则。** 「地形高差」这个扩展把"高度"整个放在
+`src/core/height-terrain.ts` 里：高度表、爬坡费、俯射阈值都是那个文件的常量，
+本体只留三个通用口子（`terrainHeight` / `modifyStepCost` / `modifyRangeAgainst`）。
+关掉扩展，`rules.stepCostInto()` 拿到的步耗与从前**逐格相同**——
+这是那个扩展的回归测试里最重要的一条断言。
 
 ### 5.2 大量兵种放哪
 

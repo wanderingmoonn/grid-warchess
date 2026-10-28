@@ -16,7 +16,7 @@
  */
 
 import { CONFIG, ERAS } from '../core/config.ts';
-import { PAINT_TERRAINS } from '../core/sandbox.ts';
+import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
 import { packOk, packRow } from './packs.ts';
 
@@ -113,7 +113,8 @@ export function godBarHtml(ui: GodUi): string {
   //
   // 折起来的话没人知道这个模式还能改地形——而"摆一场渡河战"恰恰是沙盒
   // 最想要的东西。六个 chip 占不了多少地方，摆出来比藏起来划算。
-  const terrainChips = PAINT_TERRAINS.map((t) =>
+  // 画笔名单跟着扩展开关走：没开「地形高差」就没有台地/熔岩那几颗按钮
+  const terrainChips = paintTerrainsFor(s).map((t) =>
     chip(
       ui.brush.kind === 'terrain' && ui.brush.terrain === t,
       'god-terrain',

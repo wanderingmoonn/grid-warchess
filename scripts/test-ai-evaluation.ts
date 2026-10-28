@@ -32,9 +32,9 @@ test('Missing seats and duplicate seats are rejected',()=>{
   assert.throws(()=>summarize([record(1,'A','win')]));
   assert.throws(()=>summarize([record(1,'A','win'),record(1,'A','loss')]));
 });
-test('The frozen baseline is byte-identical after reversing import rebasing',()=>{
-  const source=fs.readFileSync(new URL('./baselines/ai-004d48a.ts',import.meta.url),'utf8').replaceAll('\r\n','\n').replaceAll("from '../../src/core/","from './");
-  const meta=JSON.parse(fs.readFileSync(new URL('./baselines/ai-004d48a.json',import.meta.url),'utf8')) as {sha256:string};
+for (const id of ['004d48a','5fb8e5b']) test(`Frozen ${id} is byte-identical after reversing import rebasing`,()=>{
+  const source=fs.readFileSync(new URL(`./baselines/ai-${id}.ts`,import.meta.url),'utf8').replaceAll('\r\n','\n').replaceAll("from '../../src/core/","from './");
+  const meta=JSON.parse(fs.readFileSync(new URL(`./baselines/ai-${id}.json`,import.meta.url),'utf8')) as {sha256:string};
   assert.equal(crypto.createHash('sha256').update(source).digest('hex'),meta.sha256);
 });
 console.log(`${passed} evaluation tests passed`);

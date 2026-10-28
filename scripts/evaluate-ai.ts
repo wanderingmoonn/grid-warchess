@@ -5,16 +5,22 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { performance } from 'node:perf_hooks';
-import { aiNextAction, aiMood, aiActionKey, DEFAULT_BUDGET, AI_MAX_STEPS } from '../src/core/ai.ts';
-import { aiNextAction as baseline } from './baselines/ai-004d48a.ts';
+import { aiNextAction, aiActiveMood, aiActionKey, DEFAULT_BUDGET, AI_MAX_STEPS } from '../src/core/ai.ts';
+import * as original from './baselines/ai-004d48a.ts';
+import * as upstream from './baselines/ai-5fb8e5b.ts';
 import { playerView } from '../src/core/fog.ts';
 import { applyAction, incomeOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
-import type { MatchConfig, PlayerId } from '../src/core/types.ts';
+import type { AiLevel, MatchConfig, PlayerId } from '../src/core/types.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const digest = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8').replaceAll('\r\n', '\n');
+const baselines = {
+  '004d48a': { choose: original.aiNextAction, mood: original.aiMood },
+  '5fb8e5b': { choose: upstream.aiNextAction, mood: upstream.aiActiveMood },
+};
+type BaselineId = keyof typeof baselines;
 const profiles: Record<string, Partial<MatchConfig>> = {
   ancient: { size: 12, startEra: 1 },
   medieval: { size: 16, startEra: 2 },
@@ -24,11 +30,16 @@ const profiles: Record<string, Partial<MatchConfig>> = {
   heroes: { size: 16, startEra: 3, expansionIds: [...DEFAULT_CONFIG.expansionIds, 'fantasy-core', 'fantasy-heroes', 'fantasy-knights'] },
   cityworks: { size: 16, startEra: 2, expansionIds: [...DEFAULT_CONFIG.expansionIds, 'city-works'] },
   seasons: { size: 16, startEra: 2, expansionIds: [...DEFAULT_CONFIG.expansionIds, 'seasons'] },
+  highland: { size: 20, startEra: 3, mapStyle: 'highland', expansionIds: [...DEFAULT_CONFIG.expansionIds,'height-terrain'] },
+  canyon: { size: 20, startEra: 3, mapStyle: 'canyon', expansionIds: [...DEFAULT_CONFIG.expansionIds,'height-terrain'] },
+  volcanic: { size: 20, startEra: 4, mapStyle: 'volcanic', expansionIds: [...DEFAULT_CONFIG.expansionIds,'height-terrain'] },
+  marsh: { size: 16, startEra: 2, mapStyle: 'marsh', expansionIds: [...DEFAULT_CONFIG.expansionIds,'height-terrain'] },
+  combined: { size: 20, startEra: 3, mapStyle: 'highland', expansionIds: [...DEFAULT_CONFIG.expansionIds,'height-terrain','seasons','city-works','fantasy-core','fantasy-heroes','fantasy-knights'] },
 };
-interface Task { profile: string; seed: number; cap: number; self: boolean }
+interface Task { profile: string; seed: number; cap: number; self: boolean; level: AiLevel; baseline: BaselineId }
 
 function game(task: Task, newSide: PlayerId) {
-  let s = createMatch({ ...DEFAULT_CONFIG, ...profiles[task.profile], aiAlly: true, aiOpponent: true }, task.seed);
+  let s = createMatch({ ...DEFAULT_CONFIG, ...profiles[task.profile], aiLevel: task.level, aiAlly: true, aiOpponent: true }, task.seed);
   const config = structuredClone(s.config);
   const errors = { new: 0, old: 0 };
   const rejectionReasons: Record<string,number> = {};
@@ -38,13 +49,13 @@ function game(task: Task, newSide: PlayerId) {
   const development = { economy: 0, buildings: 0, upgrades: 0, heroes: 0 };
   const abandonment: Array<{ turn: number; city: string; gold: number; income: number }> = [];
   let switches = 0, largestWeightStep = 0;
-  let previous: ReturnType<typeof aiMood> | null = null;
+  let previous: ReturnType<typeof aiActiveMood> | null = null;
   let capHits = 0;
   while (!s.winner && s.turn <= task.cap) {
     const who = s.current === newSide ? 'new' : 'old';
-    const choose = who === 'new' && !task.self ? aiNextAction : baseline;
+    const choose = who === 'new' && !task.self ? aiNextAction : baselines[task.baseline].choose;
     if (who === 'new') {
-      const mood = aiMood(playerView(s, s.current).state);
+      const mood = (task.self ? baselines[task.baseline].mood : aiActiveMood)(playerView(s, s.current).state);
       doctrine[mood.lead]++;
       if (previous) {
         if (previous.lead !== mood.lead) switches++;
@@ -133,9 +144,10 @@ export function summarize(games: Game[]) {
     gamesWithAbandonment: games.filter(g => g.abandonment.length > 0).length };
 }
 
-function fingerprint(): string {
-  const files = fs.readdirSync(path.join(root, 'src/core'), { recursive: true }).map(String).filter(p => p.endsWith('.ts')).sort();
-  return digest(files.map(p => `${p}\0${read(`src/core/${p}`)}`).join('\0') + read('scripts/evaluate-ai.ts') + read('scripts/baselines/ai-004d48a.ts') + read('src/main.ts') + read('package.json') + read('package-lock.json'));
+export function fingerprint(): string {
+  const files = fs.readdirSync(path.join(root, 'src'), { recursive: true }).map(String).map(p => p.replaceAll('\\','/')).filter(p => /\.(ts|css)$/.test(p)).sort();
+  return digest(files.map(p => `${p}\0${read(`src/${p}`)}`).join('\0') + read('scripts/evaluate-ai.ts') +
+    Object.keys(baselines).map(id => read(`scripts/baselines/ai-${id}.ts`)+read(`scripts/baselines/ai-${id}.json`)).join('\0') + read('package.json') + read('package-lock.json'));
 }
 
 async function main() {
@@ -143,16 +155,19 @@ async function main() {
   const option = (key: string, fallback: string) => { const i = args.indexOf(`--${key}`); return i < 0 ? fallback : args[i+1] ?? ''; };
   const count = Number(option('pairs', '8')), seed = Number(option('seed', '90000'));
   const cap = Number(option('cap', '200')), workers = Number(option('workers', '4'));
+  const level = option('level','tactic') as AiLevel;
+  const baseline = option('baseline','5fb8e5b') as BaselineId;
+  if (!['basic','advanced','tactic'].includes(level) || !baselines[baseline]) throw new Error('Unknown AI level or baseline');
   if (![count, seed, cap, workers].every(n => Number.isSafeInteger(n) && n > 0) || workers > 16 || count>1000) throw new Error('Expected positive integer arguments; workers <= 16, pairs <= 1000');
   const selected = option('profiles', Object.keys(profiles).join(',')).split(',');
   if (new Set(selected).size !== selected.length || selected.some(p => !profiles[p])) throw new Error('Unknown or repeated profile');
   const output = path.resolve(root, option('out', 'results/ai-evaluation.json'));
   if (fs.existsSync(output)) throw new Error('Output exists; use a new run name');
-  const baselineMeta = JSON.parse(read('scripts/baselines/ai-004d48a.json')) as { sha256: string; commit: string };
-  if (digest(read('scripts/baselines/ai-004d48a.ts').replaceAll("from '../../src/core/", "from './")) !== baselineMeta.sha256) throw new Error('Frozen baseline hash mismatch');
+  const baselineMeta = JSON.parse(read(`scripts/baselines/ai-${baseline}.json`)) as { sha256: string; commit: string };
+  if (digest(read(`scripts/baselines/ai-${baseline}.ts`).replaceAll("from '../../src/core/", "from './")) !== baselineMeta.sha256) throw new Error('Frozen baseline hash mismatch');
   const before = fingerprint();
   // Different profiles get disjoint seeds; the two seats of each pair share a seed.
-  const tasks = selected.flatMap(profile => Array.from({ length: count }, (_,i) => ({ profile, seed: seed+Object.keys(profiles).indexOf(profile)*1000+i, cap, self: args.includes('--self') })));
+  const tasks = selected.flatMap(profile => Array.from({ length: count }, (_,i) => ({ profile, seed: seed+Object.keys(profiles).indexOf(profile)*1000+i, cap, level, baseline, self: args.includes('--self') })));
   const games: Game[] = [];
   let next = 0, finished = 0;
   const start = performance.now();
@@ -175,7 +190,7 @@ async function main() {
   })));
   if (fingerprint() !== before) throw new Error('Source changed during evaluation; output refused');
   games.sort((a,b) => a.profile.localeCompare(b.profile) || a.seed-b.seed || a.newSide.localeCompare(b.newSide));
-  const report = { schema: 1, baseline: baselineMeta, fingerprint: before, args, cap, maxSteps: AI_MAX_STEPS, budget: DEFAULT_BUDGET,
+  const report = { schema: 2, baseline: baselineMeta, level, fingerprint: before, args, cap, maxSteps: AI_MAX_STEPS, budget: DEFAULT_BUDGET,
     acceptance: 'At least 32 independent seed pairs; observed wins / ALL games >= 60%; paired bootstrap and one-sided distribution-free Hoeffding 95% lower bounds > 50%. Unresolved are not draws or wins.',
     elapsedSeconds: (performance.now()-start)/1000, summary: summarize(games),
     byProfile: Object.fromEntries(selected.map(p => [p,summarize(games.filter(g => g.profile===p))])), games };

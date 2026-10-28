@@ -8,7 +8,7 @@
 import './style.css';
 
 import { expansionById } from './core/expansions.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
@@ -646,7 +646,7 @@ function render(): void {
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),
-    aiLevelName: aiLevelOf(state) === 'basic' ? '初级 AI' : '高级 AI',
+    aiLevelName: aiLevelLabel(aiLevelOf(state)) + ' AI',
     aiAny: anyAiSide(state),
     paused: aiPaused,
     speedName: AI_SPEED_NAME[aiSpeed] ?? '快',
@@ -1798,7 +1798,7 @@ function handleAction(act: string, el: HTMLElement): void {
       clearSelection();
       saveMatch(state);
       render();
-      const lv = aiLevelOf(state) === 'basic' ? '初级' : '高级';
+      const lv = aiLevelLabel(aiLevelOf(state));
       toast(
         nowAi
           ? `${state.players[p].name}交给 ${lv} AI 托管`

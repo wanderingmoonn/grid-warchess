@@ -8,17 +8,10 @@
 
 import { CITY, CONFIG, ERAS, UNIT_TYPES, eraDef, passable } from './config.ts';
 import { EXPANSIONS, activeExpansions, enabledExpansionIds, expansionById } from './expansions.ts';
-import { generateLayout } from './mapgen.ts';
+import { generateLayout, terrainFromChar } from './mapgen.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
-import type { City, GameState, MatchConfig, PlayerId, Terrain, Tile, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 
-const CHAR_TO_TERRAIN: Record<string, Terrain> = {
-  '.': 'plain',
-  f: 'forest',
-  h: 'hill',
-  '~': 'water',
-  '^': 'mountain',
-};
 
 /**
  * 开局界面里的预设棋盘尺寸
@@ -167,6 +160,9 @@ export function createMatch(
       style: config.mapStyle ?? 'random',
       symmetry: config.mapSymmetry ?? 'fair',
       citySize,
+      // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
+      // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
+      expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
     },
   );
   const w = layout.w;
@@ -178,7 +174,7 @@ export function createMatch(
     const row = layout.rows[y] ?? '';
     for (let x = 0; x < w; x++) {
       const ch = row[x] ?? '.';
-      tiles.push({ terrain: CHAR_TO_TERRAIN[ch] ?? 'plain', cityId: null });
+      tiles.push({ terrain: terrainFromChar(ch), cityId: null });
     }
   }
 
@@ -275,7 +271,12 @@ export function createMatch(
       citySize,
       aiOpponent: config.aiOpponent,
       aiAlly: config.aiAlly,
-      aiLevel: config.aiLevel === 'basic' ? 'basic' : 'advanced',
+      aiLevel:
+        config.aiLevel === 'basic'
+          ? 'basic'
+          : config.aiLevel === 'tactic'
+            ? 'tactic'
+            : 'advanced',
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。

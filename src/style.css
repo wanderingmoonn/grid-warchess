@@ -30,6 +30,14 @@
   --mountain: #c4ccd6;
   --bridge: #c9a878;
   --city: #d3d7de;
+  /* 高度阶梯的配色：越高的地形越"亮、偏冷"，越低越"暗、偏湿"，
+     这样不看图例也能读出地势——台地最亮、谷地与沼泽最暗，水最蓝。 */
+  --plateau: #e7ecdf;
+  --valley: #c3cfa6;
+  --marsh: #a9b795;
+  --dune: #e8d9a8;
+  --lava: #d99a72;
+  --volcano: #8d8290;
 
   --radius: 12px;
   --cell: 44px;
@@ -392,6 +400,91 @@ body {
 }
 .tile.t-city {
   background: var(--city);
+}
+
+/* ── 高度地形 ──
+   台地：一整片略带阶梯边的浅色台面（比丘陵更亮、更平）。
+   谷地：暗绿凹地，用内阴影表现"陷下去"。
+   沼泽：湿绿底 + 几个水洼点。
+   沙丘：暖沙色 + 一道弧形沙脊。
+   熔岩浅流：橙红底 + 流动的纹路，能走但一眼看出"很贵"。
+   火山：深紫灰锥体，和雪顶高山区分开（火山没有雪帽，顶上开口）。 */
+.tile.t-plateau {
+  background: var(--plateau);
+  box-shadow: inset 0 0 0 1px rgba(120, 130, 100, 0.35);
+}
+.tile.t-plateau::before {
+  content: '';
+  position: absolute;
+  inset: 18% 14% 18% 14%;
+  background: rgba(150, 160, 120, 0.28);
+  clip-path: polygon(12% 0%, 88% 0%, 100% 100%, 0% 100%);
+}
+
+.tile.t-valley {
+  background: var(--valley);
+  box-shadow: inset 0 3px 6px rgba(70, 90, 50, 0.22);
+}
+
+.tile.t-marsh {
+  background: var(--marsh);
+}
+.tile.t-marsh::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 30% 35%, rgba(90, 130, 120, 0.55) 0 14%, transparent 15%),
+    radial-gradient(circle at 68% 64%, rgba(90, 130, 120, 0.45) 0 11%, transparent 12%),
+    radial-gradient(circle at 55% 22%, rgba(90, 130, 120, 0.35) 0 8%, transparent 9%);
+}
+
+.tile.t-dune {
+  background: var(--dune);
+}
+.tile.t-dune::before {
+  content: '';
+  position: absolute;
+  inset: 30% 12% 34% 12%;
+  border-radius: 50% 50% 40% 40%;
+  border-top: 3px solid rgba(180, 150, 90, 0.55);
+  background: rgba(200, 175, 115, 0.22);
+}
+
+.tile.t-lava {
+  background: var(--lava);
+  box-shadow: inset 0 0 0 1px rgba(170, 80, 40, 0.35);
+}
+.tile.t-lava::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    72deg,
+    rgba(212, 96, 48, 0.75) 0 2px,
+    rgba(240, 176, 96, 0.35) 2px 6px,
+    rgba(168, 64, 32, 0.5) 6px 9px
+  );
+}
+
+/* 火山：深紫灰锥体 + 顶端一个火山口。
+   火山口画在底图上，不能占用 `::after`——那一层是"可达/可攻击/选中"的高亮，
+   火山格也必须能被瞄准高亮，否则玩家看不出它到底打不打得到。 */
+.tile.t-volcano {
+  background-color: var(--volcano);
+  background-image: radial-gradient(
+    circle at 50% 14%,
+    rgba(226, 108, 48, 0.95) 0 8%,
+    transparent 9%
+  );
+  cursor: not-allowed;
+}
+.tile.t-volcano::before {
+  content: '';
+  position: absolute;
+  inset: 14% 12% 20% 12%;
+  background: linear-gradient(to bottom, #4a4147 0 22%, #6f6470 22% 100%);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
 }
 
 .tile.t-forest::before {

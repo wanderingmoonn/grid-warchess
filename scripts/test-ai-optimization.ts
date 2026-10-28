@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
-import { aiMood, aiNextAction, aiActionKey, cityThreatUrgency, DEFAULT_BUDGET } from '../src/core/ai.ts';
+import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
-import { applyAction, refreshMemory } from '../src/core/rules.ts';
+import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
 
 let passed=0;
 function test(name: string, run: () => void) { run(); passed++; console.log(`✓ ${name}`); }
 function arena(): GameState {
-  const s = createMatch({...DEFAULT_CONFIG,size:16,startEra:3,expansionIds:['fantasy-core','fantasy-heroes']}, 7654);
+  const s = createMatch({...DEFAULT_CONFIG,size:16,startEra:3,aiLevel:'tactic',expansionIds:['fantasy-core','fantasy-heroes']}, 7654);
   s.fog=false; s.units=[]; s.current='A'; s.turn=15;
   s.players.A.gold=0; s.players.B.gold=0;
   s.cities=[['A',1,1],['A',1,12],['B',12,1],['B',12,12]].map((v,i)=>({id:`city${i}`,owner:v[0] as PlayerId,x:v[1] as number,y:v[2] as number,size:2,era:3,hp:70,maxHp:70,armor:4}));
@@ -181,5 +181,74 @@ test('Invisible enemy locations cannot change the first decision',()=>{
   const a=aiNextAction(s,budget);
   hidden.x=10; hidden.y=10; refreshMemory(s);
   assert.deepEqual(aiNextAction(s,budget),a);
+});
+
+test('Difficulty survives setup and advanced remains separate from doctrines',()=>{
+  for (const level of ['basic','advanced','tactic'] as const) {
+    const s=createMatch({...DEFAULT_CONFIG,aiLevel:level},92);
+    assert.equal(aiLevelOf(s),level);
+    const active=aiActiveMood(s);
+    if (level==='tactic') assert.deepEqual(active,aiMood(s));
+    else { assert.deepEqual(active.drive,{rush:0,harass:0,boom:0}); assert.equal(active.abandonedCityId,null); }
+  }
+});
+
+test('Proactive withdrawal needs a nearby superior enemy and a productive rear',()=>{
+  const s=arena(); s.players.A.gold=300;
+  const econ=Object.values(s.unitTypes).find(d=>d.category==='economy'&&d.era===3)!;
+  unit(s,'A',econ.id,3,12); unit(s,'A',econ.id,3,13);
+  for(let i=0;i<3;i++)unit(s,'B','militia',7+i,2,{cost:400,maxHp:100,atk:45});
+  assert.equal(aiActiveMood(s).abandonedCityId,'city0');
+  for(const enemy of s.units.filter(u=>u.owner==='B')) enemy.x+=3;
+  assert.equal(aiActiveMood(s).abandonedCityId,null);
+});
+
+test('High-ground fire is included beyond base range; low-ground fire is excluded',()=>{
+  const s=arena(); s.config.expansionIds.push('height-terrain');
+  const target=unit(s,'A','militia',3,6);
+  const enemy=unit(s,'B','archer',8,6,{move:0,range:3,atk:25});
+  s.tiles[idx(s,8,6)]!.terrain='plateau'; s.tiles[idx(s,3,6)]!.terrain='valley';
+  assert.ok(canStrike(s,enemy,target));
+  assert.ok(tacticalMap(s,'A').exposure(target).damage>0);
+  assert.ok(threatTiles(s,enemy).has(idx(s,3,6)));
+  target.x=5; s.tiles[idx(s,5,6)]!.terrain='plateau'; s.tiles[idx(s,8,6)]!.terrain='valley';
+  assert.equal(canStrike(s,enemy,target),false);
+  assert.equal(tacticalMap(s,'A').exposure(target).damage,0);
+  assert.equal(threatTiles(s,enemy).has(idx(s,5,6)),false);
+});
+
+test('Siege selection and execution agree on height-dependent range',()=>{
+  const s=arena(); s.config.expansionIds.push('height-terrain');
+  const attacker=unit(s,'A','archer',8,1,{range:3,atk:20});
+  s.tiles[idx(s,8,1)]!.terrain='plateau';
+  assert.ok(siegeTargets(s,attacker).some(c=>c.id==='city2'));
+  assert.ok(applyAction(s,{type:'SIEGE',unitId:attacker.id,cityId:'city2'}).ok);
+  attacker.x=9; s.tiles[idx(s,9,1)]!.terrain='valley';
+  assert.ok(!siegeTargets(s,attacker).some(c=>c.id==='city2'));
+  assert.equal(applyAction(s,{type:'SIEGE',unitId:attacker.id,cityId:'city2'}).ok,false);
+});
+
+test('AI approach distances preserve uphill and downhill direction',()=>{
+  const s=arena(); s.config.expansionIds.push('height-terrain');
+  for(const tile of s.tiles) tile.terrain='mountain';
+  s.tiles[idx(s,3,5)]!.terrain='valley';
+  s.tiles[idx(s,4,5)]!.terrain='plain';
+  s.tiles[idx(s,5,5)]!.terrain='plateau';
+  const goal={...s.cities[0]!,x:5,y:5,size:1};
+  assert.equal(cityDistanceField(s,goal)[idx(s,3,5)],6);
+  assert.equal(cityDistanceField(s,{...goal,x:3})[idx(s,5,5)],2);
+});
+
+for(const highDefender of [false,true]) test(`Counterattack preview matches execution with ${highDefender?'high':'low'} defender`,()=>{
+  const s=arena(); s.config.expansionIds.push('height-terrain');
+  const attacker=unit(s,'A','archer',5,6,{range:5,atk:10,maxHp:100});
+  const defender=unit(s,'B','archer',8,6,{range:3,atk:20,maxHp:100});
+  s.tiles[idx(s,5,6)]!.terrain=highDefender?'valley':'plateau';
+  s.tiles[idx(s,8,6)]!.terrain=highDefender?'plateau':'valley';
+  const preview=previewAttack(s,attacker,defender);
+  assert.equal(preview.counter,highDefender);
+  const result=applyAction(s,{type:'ATTACK',unitId:attacker.id,targetId:defender.id});
+  assert.ok(result.ok);
+  assert.equal(result.state.units.find(u=>u.id===attacker.id)!.hp,attacker.hp-preview.toAttacker);
 });
 console.log(`${passed} AI optimization tests passed`);

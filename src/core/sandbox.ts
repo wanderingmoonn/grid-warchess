@@ -14,6 +14,7 @@
  */
 
 import { CONFIG, ERAS, eraDef } from './config.ts';
+import { activeExpansions } from './expansions.ts';
 import { canStandAt, cityAt, citySizeOf, coversTile } from './rules.ts';
 import type { City, GameState, PlayerId, Terrain, Unit } from './types.ts';
 
@@ -212,12 +213,14 @@ export function clearUnits(s: GameState, owner: PlayerId): SandboxResult {
 }
 
 /**
- * 能直接刷的地形。
+ * 能直接刷的地形（本体部分）。
  *
  * 没有 `city`：城格的地形是城市的附属品，直接刷成别的会让
  * "这座城的四格"里出现一格平原——城市的出兵位、回血判定、攻城判定
  * 全按 cityId 走，地形对不上只会得到一个自相矛盾的局面。
  * 想改那儿的地形，先拿橡皮把城擦掉（擦完那几格会退回平原）。
+ *
+ * 扩展新引入的地形**不在这里**：它们跟着扩展开关走，见 paintTerrainsFor。
  */
 export const PAINT_TERRAINS: readonly Terrain[] = [
   'plain',
@@ -227,6 +230,21 @@ export const PAINT_TERRAINS: readonly Terrain[] = [
   'mountain',
   'bridge',
 ];
+
+/**
+ * 这一局上帝模式能刷的地形：本体六种 + 已启用扩展新引入的地形。
+ *
+ * 为什么要问扩展而不是直接列全：没开「地形高差」的局里刷一块台地，
+ * 得到的是一格"规则不认识、也不知道多高"的地形——玩家摆出来的是个空壳。
+ * 画笔该跟规则同一份名单。
+ */
+export function paintTerrainsFor(s: GameState): readonly Terrain[] {
+  const out: Terrain[] = [...PAINT_TERRAINS];
+  for (const e of activeExpansions(s)) {
+    for (const t of e.terrains ?? []) if (!out.includes(t)) out.push(t);
+  }
+  return out;
+}
 
 /**
  * 刷一格地形。
@@ -246,7 +264,7 @@ export function paintTerrain(
   y: number,
   terrain: Terrain,
 ): SandboxResult {
-  if (!PAINT_TERRAINS.includes(terrain)) {
+  if (!paintTerrainsFor(s).includes(terrain)) {
     return { ok: false, reason: '这种地形不能直接刷' };
   }
   if (x < 0 || y < 0 || x >= s.w || y >= s.h) return { ok: false, reason: '点到棋盘外面了' };

@@ -100,9 +100,20 @@ export const CONFIG = {
     // 站不上去的地形，防御加成没有意义
     mountain: 0,
     bridge: 0,
+    // 台地：坡陡墙高，但顶上没什么遮挡
+    plateau: 3,
+    // 谷地：被两边的坡夹着，等于半个掩体
+    valley: 2,
+    // 沼泽：没掩护，还得站在泥里
+    marsh: 0,
+    // 沙丘：沙脊上目标明显
+    dune: 1,
+    // 熔岩浅流：站在流动的岩浆上，没有任何掩护可言
+    lava: 0,
+    volcano: 0,
   } as Record<Terrain, number>,
 
-  /** 进入一格的移动力消耗，99 表示不可通行 */
+  /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
   terrainCost: {
     plain: 1,
     forest: 2,
@@ -112,7 +123,20 @@ export const CONFIG = {
     mountain: 99,
     // 桥面就是普通路面
     bridge: 1,
+    plateau: 2,
+    valley: 1,
+    marsh: 2,
+    dune: 2,
+    // 熔岩浅流：能过，但一步顶三步——绕路往往更快
+    lava: 3,
+    volcano: 99,
   } as Record<Terrain, number>,
+
+  /**
+   * 爬坡附加消耗、高度差射程阈值、地形高度表——
+   * 都属于「地形高差」扩展，定义在 core/height-terrain.ts 里，
+   * 本体不认识"高度"这件事（关掉扩展就完全不存在这套规则）。
+   */
 
   /** 地形中文名，给 UI 用 */
   terrainName: {
@@ -123,6 +147,12 @@ export const CONFIG = {
     water: '水域',
     mountain: '高山',
     bridge: '桥',
+    plateau: '台地',
+    valley: '谷地',
+    marsh: '沼泽',
+    dune: '沙丘',
+    lava: '熔岩浅流',
+    volcano: '火山',
   } as Record<Terrain, string>,
 };
 
@@ -144,11 +174,12 @@ export const CITY = {  /** 边长：占 size × size 个格子 */
 };
 
 /**
- * 不可通行的地形：水和高山。
- * 不能进入、不能建造、不能驻军；高山是纯粹的"天险"，水还额外提供临水收益。
+ * 不可通行的地形：水、高山、火山。
+ * 不能进入、不能建造、不能驻军；高山和火山是纯粹的"天险"，水还额外提供临水收益。
+ * 熔岩浅流不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
  */
 export function passable(t: Terrain): boolean {
-  return t !== 'water' && t !== 'mountain';
+  return t !== 'water' && t !== 'mountain' && t !== 'volcano';
 }
 
 export interface EraDef {

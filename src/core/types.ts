@@ -21,7 +21,36 @@ export type PlayerId = 'A' | 'B';
  */
 export type ResourceId = string;
 
-export type Terrain = 'plain' | 'forest' | 'hill' | 'water' | 'mountain' | 'bridge' | 'city';
+/**
+ * 地形。
+ *
+ * 除了"能不能走、加多少防御"，每类地形还带一个**高度值**（见 CONFIG.terrainHeight）：
+ * 高度差决定两件事——射程看得到多远（俯射加成、仰攻受限），
+ * 以及爬坡要多花多少移动力。地形清单因此按高度排成一列阶梯：
+ *
+ *   water 0 → marsh / valley / lava 1 → plain / forest / city / bridge 2
+ *   → hill / dune 3 → plateau 4 → mountain 5 → volcano 6
+ */
+export type Terrain =
+  | 'plain'
+  | 'forest'
+  | 'hill'
+  | 'water'
+  | 'mountain'
+  | 'bridge'
+  | 'city'
+  /** 台地：四周陡、顶上平，比丘陵高一档 */
+  | 'plateau'
+  /** 谷地：比平原低一档，站在里面看得近、也难被看到 */
+  | 'valley'
+  /** 沼泽：低洼积水，走得慢但没有掩护 */
+  | 'marsh'
+  /** 沙丘：起伏的沙脊，比平原高一档，视野好、没掩护 */
+  | 'dune'
+  /** 熔岩浅流：火山脚下缓慢流动的熔岩，能过，但极费脚力 */
+  | 'lava'
+  /** 火山：整张图上最高的东西，不可通行 */
+  | 'volcano';
 
 /**
  * 伤害属性。
@@ -553,8 +582,14 @@ export interface Unit {
   age?: number;
 }
 
-/** AI 的思考深度：初级只求推进，高级会算威胁和交换比 */
-export type AiLevel = 'basic' | 'advanced';
+/**
+ * AI 的思考深度：初级只求推进，高级会算威胁和交换比。
+ *
+ * `tactic` 是"战术 AI（测试）"：在高级的基础上再挂三套战术（速攻压制 /
+ * 持续骚扰消耗 / 弃城爆发）。它单独成一档，是为了让玩家能在真实对局里
+ * 拿它和"高级 AI"对照——高级档保持稳的那一版，不跟着战术一起变。
+ */
+export type AiLevel = 'basic' | 'advanced' | 'tactic';
 
 /**
  * 一局对战的配置。
@@ -606,8 +641,20 @@ export interface MatchConfig {
    * 一方没兵了由界面判停，见 main.ts 的 runGodFight。
    */
   godMode?: boolean;
-  /** 地貌风格：random 由种子抽；也可以指定横河 / 纵河 / 山岭 / 开阔 */
-  mapStyle?: 'random' | 'river-h' | 'river-v' | 'ridge' | 'open';
+  /**
+   * 地貌风格：random 由种子抽；也可以指定横河 / 纵河 / 山岭 / 开阔 /
+   * 火山群 / 峡谷 / 高原 / 沼泽。
+   */
+  mapStyle?:
+    | 'random'
+    | 'river-h'
+    | 'river-v'
+    | 'ridge'
+    | 'open'
+    | 'volcanic'
+    | 'canyon'
+    | 'highland'
+    | 'marsh';
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */
   mapSymmetry?: 'fair' | 'mirror';
   /**

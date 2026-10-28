@@ -24,7 +24,7 @@ import {
   passable,
 } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, LEGACY_UPGRADE_COST, turnOrderBonusFor } from '../src/core/expansions.ts';
-import { generateLayout } from '../src/core/mapgen.ts';
+import { generateLayout, mapStylesFor } from '../src/core/mapgen.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -41,6 +41,8 @@ import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
+  aiActiveMood,
+  aiLevelLabel,
   aiLevelOf,
   aiMood,
   aiNextAction,
@@ -78,9 +80,11 @@ import {
   distance,
   distToCity,
   effectiveRange,
+  effectiveRangeAgainst,
   effectiveStats,
   eggSpots,
   footprintOf,
+  heightOfTerrain,
   isAirborne,
   isHiddenFrom,
   magicDamageOf,
@@ -96,6 +100,8 @@ import {
   recruitResCost,
   recruitSpawnCells,
   refreshMemory,
+  stepCostBetween,
+  stepCostInto,
   strikeDistance,
   threatTiles,
   unitAt,
@@ -119,6 +125,7 @@ import type {
   GameState,
   MatchConfig,
   PlayerId,
+  Terrain,
   Unit,
   UnitTypeDef,
 } from '../src/core/types.ts';
@@ -5297,6 +5304,40 @@ test('战术：切换是渐变的，不会一回合翻脸', () => {
   assert.ok(worst < 0.4, `相邻回合的战术权重跳变太大：${worstAt}`);
 });
 
+test('战术：只有战术档才打三套战术，高级档保持稳的那一版', () => {
+  // 同一局面下比两档的"生效倾向"：战术档原样输出 aiMood，
+  // 高级档权重均分、drive 清零、不弃城——但主攻方向要留着（那是走位，不是战术）。
+  const s = fresh({ startEra: 2, aiOpponent: true });
+  const mine = citiesOf(s, 'A');
+  assert.ok(mine.length >= 2, '这条用例需要两座城：一座可弃、一座留着');
+  const doomed = mine[0];
+  const brute = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.cost ?? 0) >= 120);
+  armyOf(s, 'B', [brute, brute, brute], { x: doomed.x, y: doomed.y });
+  const farmer = pickUnit(s, (d) => d.category === 'economy');
+  armyOf(s, 'A', [farmer, farmer], { x: mine[1].x, y: mine[1].y });
+  s.players.A.gold = 4000;
+  s.current = 'A';
+  refreshMemory(s);
+
+  s.config.aiLevel = 'tactic';
+  const tac = aiActiveMood(s);
+  assert.equal(aiLevelOf(s), 'tactic', '战术档要能识别出来');
+  assert.equal(aiLevelLabel(aiLevelOf(s)), '战术', '界面上叫"战术"');
+  assert.equal(tac.abandonedCityId, doomed.id, '战术档在这种情况下该弃城');
+
+  s.config.aiLevel = 'advanced';
+  const adv = aiActiveMood(s);
+  assert.equal(aiLevelOf(s), 'advanced');
+  assert.equal(adv.abandonedCityId, null, '高级档不弃城');
+  assert.equal(adv.drive.rush + adv.drive.harass + adv.drive.boom, 0, '高级档不该有战术出力');
+  assert.equal(adv.weight.rush, 1 / 3, '高级档的权重应该是均分');
+  assert.equal(adv.focusCityId, tac.focusCityId, '主攻方向两档一致——那是走位');
+
+  // 战术档不做任何改写：它就是 aiMood 本身
+  s.config.aiLevel = 'tactic';
+  assert.deepEqual(aiActiveMood(s), aiMood(s));
+});
+
 console.log('\nAI 托管');
 
 test('默认只接管 B 方', () => {
@@ -5873,6 +5914,8 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   // 磨局统计里最刺眼的一条：一方顶满 24 个单位、金库还压着几千金。
   // 钱花不出去等于没有压力，而军营是唯一能把钱直接变成"前线产兵点"的东西。
   const s = fresh({ startEra: 2, size: 16, aiLevel: 'advanced' }, 4848);
+  // 夹具按完整敌军位置选“前线”，让 AI 也能看到这些敌军；迷雾另有专项用例。
+  s.fog = false;
   const own = citiesOf(s, 'A')[0];
   const foes = unitsOf(s, 'B');
   const N4 = [
@@ -5907,12 +5950,17 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   const built: string[] = [];
   let st = s;
   for (let round = 0; round < 8 && built.length === 0; round++) {
-    for (let i = 0; i < 80; i++) {
-      const a = aiNextAction(st);
+    const budget = { ...DEFAULT_BUDGET };
+    const rejected = new Set<string>();
+    for (let i = 0; i < AI_MAX_STEPS; i++) {
+      const a = aiNextAction(st,budget,rejected);
       if (!a) break;
       if (a.type === 'BUILD' && st.unitTypes[a.unitType]?.barracks) built.push(a.unitType);
       const r = applyAction(st, a);
-      if (!r.ok) break;
+      if (!r.ok) { rejected.add(JSON.stringify(a)); continue; }
+      rejected.clear();
+      if (a.type==='RECRUIT') budget.recruited++;
+      if (a.type==='UPGRADE') budget.upgraded++;
       st = r.state;
       st.players.A.gold = 3000; // 只测"想不想建"，不测攒不攒得出钱
     }
@@ -7413,6 +7461,228 @@ test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = r.state.units.find((x) => x.id === unit.id);
   assert.ok(!after || after.hp < hpBefore, '雷暴应该让这个单位掉血');
+});
+
+console.log('\n地形高差（扩展）');
+
+/** 直接写地块（测试专用：不经过沙盒的合法性检查） */
+function putTerrain(s: GameState, x: number, y: number, t: Terrain): void {
+  const tile = s.tiles[idx(s, x, y)];
+  assert.ok(tile, `(${x},${y}) 不在棋盘上`);
+  tile!.terrain = t;
+}
+
+/** 清空双方部队后，在一格上摆一个指定兵种，返回新状态 */
+function unitOn(s: GameState, owner: PlayerId, type: string, x: number, y: number): GameState {
+  const noUnits: GameState = { ...s, units: [] };
+  const r = placeUnit(noUnits, owner, type, x, y);
+  assert.ok(r.ok, `在 (${x},${y}) 摆 ${type} 失败：${r.ok ? '' : r.reason}`);
+  return r.ok ? r.state : s;
+}
+
+const NEW_TERRAINS: readonly Terrain[] = ['plateau', 'valley', 'marsh', 'dune', 'lava', 'volcano'];
+
+test('关掉扩展时没有高度：步耗与射程跟本体一模一样', () => {
+  const off = fresh();
+  const on = fresh({ expansionIds: ['height-terrain'] });
+
+  // 高度：关掉就谁都一样高
+  for (const t of NEW_TERRAINS) {
+    assert.equal(heightOfTerrain(off, t), 0, `关掉扩展时 ${t} 还有高度`);
+  }
+  assert.equal(heightOfTerrain(on, 'plain'), 2);
+  assert.equal(heightOfTerrain(on, 'plateau'), 4);
+  assert.equal(heightOfTerrain(on, 'volcano'), 6);
+
+  // 步耗：关掉只有地形价，没有爬坡
+  assert.equal(stepCostBetween(off, 'valley', 'plateau'), CONFIG.terrainCost.plateau);
+  assert.equal(stepCostBetween(off, 'plateau', 'hill'), CONFIG.terrainCost.hill);
+
+  // 射程：同一支弓兵、同一个目标，关掉扩展时一点都不变
+  const s0 = unitOn(off, 'A', 'archer', 5, 5);
+  putTerrain(s0, 8, 5, 'valley');
+  const u0 = s0.units.find((u) => u.type === 'archer');
+  assert.ok(u0);
+  assert.equal(
+    effectiveRangeAgainst(s0, u0!, s0.tiles[idx(s0, 8, 5)] ?? null),
+    effectiveRange(s0, u0!),
+    '关掉扩展时射程不该被地形改',
+  );
+});
+
+test('高度阶梯：只有差 2 层以上才改射程，差 1 层不动', () => {
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(s, 5, 5, 'plateau'); // 4 层
+  putTerrain(s, 8, 5, 'valley'); // 1 层
+  putTerrain(s, 2, 5, 'plain'); // 2 层
+  const st = unitOn(s, 'A', 'archer', 5, 5);
+  const u = st.units.find((x) => x.type === 'archer');
+  assert.ok(u);
+  const base = effectiveRange(st, u!);
+
+  // 台地打谷地：地形本身 +1（制高点），高度差 3 层再 +1
+  assert.equal(
+    effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null) - base,
+    2,
+    '台地打谷地该 +2',
+  );
+
+  // 反过来：谷地打台地只有 -1，不是 -2——
+  // "被坡挡住"和"地形本身压住视线"是同一件事，减成分不叠加
+  // （叠加会让弓兵在谷地里只剩射程 1，那不是削弱，是废掉这个兵种）。
+  u!.x = 8;
+  u!.y = 5;
+  assert.equal(
+    effectiveRangeAgainst(st, u!, st.tiles[idx(st, 5, 5)] ?? null) - base,
+    -1,
+    '谷地打台地该 -1（惩罚不叠加）',
+  );
+
+  // 平地打谷地：只差 1 层，高度不参与；平地本身也没有静态修正
+  u!.x = 2;
+  u!.y = 5;
+  assert.equal(
+    effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null) - base,
+    0,
+    '差 1 层不该改射程',
+  );
+
+  // 丘陵打高山：制高点 +1、仰攻 -1，正好抵掉，不该变成 +2 或 -2
+  putTerrain(st, 3, 5, 'hill');
+  putTerrain(st, 6, 5, 'mountain'); // 5 层，比丘陵高 2 层
+  u!.x = 3;
+  u!.y = 5;
+  assert.equal(
+    effectiveRangeAgainst(st, u!, st.tiles[idx(st, 6, 5)] ?? null) - base,
+    0,
+    '丘陵仰攻高山该互相抵掉',
+  );
+});
+
+test('近战兵不会被高地变成远程', () => {
+  // 射程 1 的兵站上台地，如果也跟着 +2 就能隔三格砍人——
+  // 那不是"看得远"，是把所有近战变成弓兵。
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(s, 5, 5, 'plateau');
+  putTerrain(s, 8, 5, 'valley');
+  const st = unitOn(s, 'A', 'militia', 5, 5);
+  const u = st.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+  assert.equal(effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null), 1);
+});
+
+test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () => {
+  const on = fresh({ expansionIds: ['height-terrain'] });
+  const s = unitOn(on, 'A', 'militia', 4, 4);
+  const u = s.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+  assert.equal(heightOfTerrain(s, 'valley'), 1);
+  assert.equal(heightOfTerrain(s, 'plain'), 2);
+  assert.equal(heightOfTerrain(s, 'hill'), 3);
+  assert.equal(heightOfTerrain(s, 'plateau'), 4);
+
+  // 谷地(1) → 台地(4)：差 3 层，封顶按 2 层算
+  putTerrain(s, 5, 5, 'valley');
+  putTerrain(s, 5, 4, 'plateau');
+  const up = stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4));
+  assert.equal(up, CONFIG.terrainCost.plateau + 2, '谷地爬台地该贵 2 点');
+
+  // 差 2 层和差 3 层是一个价（封顶 2 层）
+  putTerrain(s, 5, 4, 'hill');
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), CONFIG.terrainCost.hill + 2);
+
+  // 下坡不加价，也不减价
+  putTerrain(s, 5, 5, 'plateau');
+  putTerrain(s, 5, 4, 'valley');
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), CONFIG.terrainCost.valley);
+
+  // 同层不加价
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 5, 4, 'forest');
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), CONFIG.terrainCost.forest);
+
+  // 飞行/水军不看地面起伏
+  putTerrain(s, 5, 5, 'valley');
+  putTerrain(s, 5, 4, 'plateau');
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { flyer: true }), 1);
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
+});
+
+test('火山是墙，熔岩浅流能过但要三步', () => {
+  assert.equal(passable('volcano'), false, '火山不该能走进去');
+  assert.equal(CONFIG.terrainCost.lava, 3);
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  const st = unitOn(s, 'A', 'militia', 4, 4);
+  const u = st.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+  putTerrain(st, 5, 4, 'volcano');
+  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 99);
+  putTerrain(st, 5, 4, 'lava');
+  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
+  // 从台地下到熔岩：下坡不加价
+  putTerrain(st, 4, 4, 'plateau');
+  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
+});
+
+test('新地形只出现在开了「地形高差」的对局里', () => {
+  // 关扩展：40 个种子里一格台地/熔岩都不许有——
+  // 否则老对局会拿到"规则书没写"的格子。
+  for (let seed = 1; seed <= 40; seed++) {
+    const s = createMatch({ ...BASE, expansionIds: [] }, seed * 17 + 3);
+    for (const t of NEW_TERRAINS) {
+      const n = s.tiles.filter((tile) => tile.terrain === t).length;
+      assert.equal(n, 0, `没开扩展的第 ${seed} 号种子地图里出现了 ${n} 格 ${t}`);
+    }
+  }
+
+  // 开扩展：四种高差地貌各自长出自己那味地形
+  const expect: Record<string, Terrain> = {
+    highland: 'plateau',
+    canyon: 'valley',
+    volcanic: 'lava',
+    marsh: 'marsh',
+  };
+  for (const [style, want] of Object.entries(expect)) {
+    const s = createMatch(
+      { ...BASE, expansionIds: ['height-terrain'], mapStyle: style as MatchConfig['mapStyle'] },
+      31,
+    );
+    const n = s.tiles.filter((tile) => tile.terrain === want).length;
+    assert.ok(n > 0, `${style} 地貌里一格 ${want} 都没有`);
+  }
+
+  // 火山群要真的立起火山锥（不可通行的墙）
+  const vol = createMatch({ ...BASE, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, 31);
+  assert.ok(vol.tiles.some((t) => t.terrain === 'volcano'), '火山群地貌里没有火山');
+});
+
+test('地貌选项跟着扩展开关增减', () => {
+  const base = mapStylesFor([]).map((o) => o.id);
+  assert.equal(base.includes('highland'), false, '没开扩展不该有高原');
+  const withExt = mapStylesFor(['height-terrain']).map((o) => o.id);
+  assert.equal(withExt.length, base.length + 4);
+  for (const id of ['highland', 'canyon', 'volcanic', 'marsh']) {
+    assert.ok(withExt.includes(id as never), `开了扩展也没有 ${id}`);
+  }
+  // 随机袋也只在开了扩展时才抽得到 —— 关扩展 40 张图不可能抽出高原
+  const seen = new Set<string>();
+  for (let seed = 1; seed <= 40; seed++) {
+    seen.add(generateLayout(16, seed * 13 + 5).style);
+  }
+  assert.equal(seen.has('highland'), false, '关扩展的随机地貌里抽到了高原');
+});
+
+test('上帝模式的画笔跟着扩展开关走', () => {
+  const off = { ...fresh(), units: [] };
+  const denied = paintTerrain(off, 5, 5, 'plateau');
+  assert.equal(denied.ok, false, '没开扩展也能刷台地？');
+
+  const on = { ...fresh({ expansionIds: ['height-terrain'] }), units: [] };
+  const ok = paintTerrain(on, 5, 5, 'plateau');
+  assert.ok(ok.ok, ok.ok ? '' : ok.reason);
+  if (ok.ok) {
+    assert.equal(ok.state.tiles[idx(ok.state, 5, 5)].terrain, 'plateau');
+  }
 });
 
 console.log('\n对局报告');

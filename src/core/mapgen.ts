@@ -16,9 +16,19 @@
  */
 
 import { passable } from './config.ts';
+import { expansionById } from './expansions.ts';
 import type { Terrain } from './types.ts';
 
-export type MapStyle = 'random' | 'river-h' | 'river-v' | 'ridge' | 'open';
+export type MapStyle =
+  | 'random'
+  | 'river-h'
+  | 'river-v'
+  | 'ridge'
+  | 'open'
+  | 'volcanic'
+  | 'canyon'
+  | 'highland'
+  | 'marsh';
 export type MapSymmetry = 'fair' | 'mirror';
 
 export const MAP_STYLES: Array<{ id: MapStyle; name: string; note: string }> = [
@@ -28,6 +38,27 @@ export const MAP_STYLES: Array<{ id: MapStyle; name: string; note: string }> = [
   { id: 'ridge', name: '山岭', note: '连片高山与丘陵，只有隘口能过' },
   { id: 'open', name: '开阔', note: '没有天险，纯靠正面硬碰' },
 ];
+
+/**
+ * 这一局能选的地貌：本体五种 + 已启用扩展自带的地貌。
+ *
+ * 地貌是跟着扩展走的，不是引擎常量：勾了「地形高差」才有高原/峡谷/火山群/沼泽，
+ * 没勾就看不见（也不该在随机袋里被抽到）。
+ */
+export function mapStylesFor(expansionIds: readonly string[] = []): Array<{
+  id: MapStyle;
+  name: string;
+  note: string;
+}> {
+  const out = [...MAP_STYLES];
+  for (const id of expansionIds) {
+    for (const st of expansionById(id)?.mapStyles ?? []) {
+      if (out.some((o) => o.id === st.id)) continue;
+      out.push({ id: st.id as MapStyle, name: st.name, note: st.note });
+    }
+  }
+  return out;
+}
 
 export const MAP_SYMMETRIES: Array<{ id: MapSymmetry; name: string; note: string }> = [
   { id: 'fair', name: '地势各异', note: '两侧地形数量相同、分布不同' },
@@ -51,6 +82,14 @@ export interface MapOptions {
    * 这些都在生成地图时就得知道——事后再改，城会互相压住。
    */
   citySize?: number;
+  /**
+   * 本局启用的扩展开关。
+   *
+   * 地图生成器不读规则，但得知道"能不能画台地/熔岩/火山"——这些地形
+   * 是扩展带来的，没开就不该出现（否则关掉扩展的局里会留下不认识的格子）。
+   * 同理，扩展自带的地貌也不能进随机袋。
+   */
+  expansions?: readonly string[];
 }
 
 export interface MapLayout {
@@ -81,7 +120,36 @@ const CHAR: Record<Terrain, string> = {
   mountain: '^',
   bridge: '=', // 生成器不画桥，这里只是为了类型完整
   city: '.',
+  // 新地形各用一个不冲突的字符：行字符串按字符还原成地块，所以不能复用
+  plateau: 'P',
+  valley: 'v',
+  marsh: 'w',
+  dune: 'd',
+  lava: 'l',
+  volcano: 'V',
 };
+
+/**
+ * 字符 → 地形。**只有这一份**。
+ *
+ * 以前开局那边自己抄了一张表，只认得 `.f h~^` 五个字符——地图生成加了
+ * 新地形之后，生成器画得好好的台地在开局的还原那一步全变成了平原。
+ * 两张表就是两个真相，所以反向表从 CHAR 派生，谁也别再手抄。
+ */
+const CHAR_TO_TERRAIN: Record<string, Terrain> = (() => {
+  const out: Record<string, Terrain> = {};
+  for (const [t, ch] of Object.entries(CHAR)) {
+    // 'city' 和 'plain' 共用 '.'：格子是不是城由 cityId 决定，字符只管地貌
+    if (t === 'city') continue;
+    out[ch] = t as Terrain;
+  }
+  return out;
+})();
+
+/** 行字符串里的一个字符还原成地形（认不出来的按平原算） */
+export function terrainFromChar(ch: string): Terrain {
+  return CHAR_TO_TERRAIN[ch] ?? 'plain';
+}
 
 type Pos = { x: number; y: number };
 
@@ -999,6 +1067,9 @@ function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false, preser
     const t = at(c, x, y);
     if (t === 'water') put(c, x, y, 'plain');
     else if (t === 'mountain') put(c, x, y, 'hill');
+    // 火山和山一样是墙：连通性这一步必须能把它凿成隘口，
+    // 否则"火山群"会随机把某座城封死在角落
+    else if (t === 'volcano') put(c, x, y, 'dune');
   };
 
   for (const p of path) {
@@ -1028,7 +1099,9 @@ function clearAroundCity(c: Ctx, city: Pos): void {
       const y = city.y + dy;
       const t = at(c, x, y);
       if (t === undefined) continue;
-      if (t === 'mountain') put(c, x, y, 'plain');
+      // 城郊必须是能出兵、能展开的空地：山和火山都平掉，熔岩也换成平原
+      // （不然"开局第一回合就有个单位站在岩浆里"——规则上没错，观感上很怪）
+      if (t === 'mountain' || t === 'volcano' || t === 'lava') put(c, x, y, 'plain');
     }
   }
 }
@@ -1206,16 +1279,22 @@ export function generateLayout(
   const rngTerrain = makeRng(seed * 22695477 + size * 3751 + 7);
 
   const symmetry: MapSymmetry = opts.symmetry ?? 'fair';
+  // 这一局能画哪些地貌：本体五种 + 已启用扩展自带的地貌。
+  // 存档里可能留着"上次勾了扩展时选的高原"，扩展关掉后要退回随机，
+  // 否则会画出一张全是台地、但规则里没有台地高度的图。
+  const styles = mapStylesFor(opts.expansions ?? [])
+    .map((o) => o.id)
+    .filter((id): id is Exclude<MapStyle, 'random'> => id !== 'random');
   let style = opts.style ?? 'random';
+  if (style !== 'random' && !styles.includes(style)) style = 'random';
   if (style === 'random') {
-    const bag: Array<Exclude<MapStyle, 'random'>> = [
-      'river-h',
-      'river-h',
-      'river-v',
-      'ridge',
-      'ridge',
-      'open',
-    ];
+    // 随机袋：河道与山岭各两次（这两种最耐打），其余各一次。
+    // 扩展地貌进了 styles 才会进袋——不然"随机"会变成"每局都在打火山"。
+    const bag: Array<Exclude<MapStyle, 'random'>> = [];
+    for (const id of styles) {
+      bag.push(id);
+      if (id === 'river-h' || id === 'ridge') bag.push(id);
+    }
     style = bag[Math.floor(rngStyle() * bag.length)] ?? 'river-h';
   }
 
@@ -1298,17 +1377,62 @@ export function generateLayout(
   const areaB = countPlain('B');
   const base = Math.min(areaA, areaB);
 
-  const ratio: Array<{ t: Terrain; r: number; blob: [number, number] }> = [
-    { t: 'forest', r: style === 'open' ? 0.06 : 0.11, blob: [3, 7] },
-    { t: 'hill', r: style === 'ridge' ? 0.13 : style === 'open' ? 0.05 : 0.08, blob: [2, 5] },
-    { t: 'mountain', r: style === 'open' ? 0 : 0.03, blob: [2, 4] },
-  ];
+  // 团块地形的配方按地貌走：老四种保持原样，新四种把"高度差"当主角——
+  // 高原是台地成片、峡谷是谷地与台地交错、火山群是熔岩浅流配火山锥、
+  // 沼泽是烂地成片。数值是"占本区空地的比例"，两侧配额相同（公平）。
+  const ratio: Array<{ t: Terrain; r: number; blob: [number, number] }> =
+    style === 'highland'
+      ? [
+          { t: 'forest', r: 0.06, blob: [3, 7] },
+          { t: 'hill', r: 0.10, blob: [3, 6] },
+          { t: 'plateau', r: 0.14, blob: [4, 9] }, // 成片的台地才是"高原"
+          { t: 'mountain', r: 0.02, blob: [2, 4] },
+        ]
+      : style === 'canyon'
+        ? [
+            { t: 'forest', r: 0.05, blob: [3, 6] },
+            { t: 'hill', r: 0.05, blob: [2, 5] },
+            { t: 'valley', r: 0.16, blob: [4, 10] }, // 谷地是主菜：仰攻吃亏的地方
+            { t: 'plateau', r: 0.09, blob: [3, 7] },
+            { t: 'mountain', r: 0.02, blob: [2, 4] },
+          ]
+        : style === 'volcanic'
+          ? [
+              { t: 'forest', r: 0.05, blob: [3, 6] },
+              { t: 'hill', r: 0.06, blob: [2, 5] },
+              { t: 'plateau', r: 0.04, blob: [2, 4] },
+              { t: 'lava', r: 0.10, blob: [3, 8] }, // 熔岩浅流铺成片，逼人绕路
+            ]
+          : style === 'marsh'
+            ? [
+                { t: 'forest', r: 0.06, blob: [3, 6] },
+                { t: 'hill', r: 0.04, blob: [2, 4] },
+                { t: 'marsh', r: 0.18, blob: [4, 11] },
+              ]
+            : [
+                { t: 'forest', r: style === 'open' ? 0.06 : 0.11, blob: [3, 7] },
+                { t: 'hill', r: style === 'ridge' ? 0.13 : style === 'open' ? 0.05 : 0.08, blob: [2, 5] },
+                { t: 'mountain', r: style === 'open' ? 0 : 0.03, blob: [2, 4] },
+              ];
 
   for (const { t, r, blob } of ratio) {
     const n = Math.round(base * r);
     if (n <= 0) continue;
     scatterTerrain(c, rngTerrain, zoneOf, t, { A: n, B: n }, blocked);
     void blob;
+  }
+
+  // 火山群：在熔岩之上再立几座火山锥（不可通行）。数量极省——
+  // 它和山一样是墙，多了会把地图切成互不相通的几块。
+  if (style === 'volcanic') {
+    const cones = Math.max(1, Math.round(base * 0.008));
+    for (const zone of ['A', 'B'] as const) {
+      for (let k = 0; k < cones; k++) {
+        const seed = pickSeed(c, rngTerrain, zoneOf, zone, blocked);
+        if (!seed) break;
+        growRegion(c, rngTerrain, seed, 'volcano', 2, blocked);
+      }
+    }
   }
 
   // ---- 大地图加料：额外的湖、支流、短山脊、成片森林 ----

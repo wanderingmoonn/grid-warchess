@@ -53,6 +53,12 @@ const TERRAIN_CLASS: Record<string, string> = {
   mountain: 't-mountain',
   bridge: 't-bridge',
   city: 't-city',
+  plateau: 't-plateau',
+  valley: 't-valley',
+  marsh: 't-marsh',
+  dune: 't-dune',
+  lava: 't-lava',
+  volcano: 't-volcano',
 };
 
 function ensureStructure(el: HTMLElement): void {

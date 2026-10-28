@@ -33,7 +33,14 @@ const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));
 const BASE_SEED = Number(argOf('seed', '900'));
 const CAP = Number(argOf('cap', '160'));
-const LEVEL = argOf('level', 'advanced') as 'basic' | 'advanced';
+/**
+ * 台子上测哪一档。
+ *
+ * 默认 `tactic`：这里量的是战术 AI（三套战术全开）对冻结旧版，不是高级档。
+ * 想复核"战术层有没有拖累高级档"，用 `--level advanced`——那一档三战术是关的，
+ * 跑出来就是"除战术外的一切改动"的净效果。
+ */
+const LEVEL = argOf('level', 'tactic') as 'basic' | 'advanced' | 'tactic';
 /** 同一颗种子两边各打一局：paired，方差最小 */
 const SWAP = !has('no-swap');
 /** 空扩展开关：只在排查"是不是规则把对局拖进拉锯"时才用 */
