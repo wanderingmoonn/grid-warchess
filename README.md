@@ -47,6 +47,7 @@ npm run dev      # 本地开发，http://127.0.0.1:5178
 | `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
 | `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（13 册：核心册 + 小型扩展合订本 + 每个大型扩展一册） |
 | `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |
+| `npm run perf` | 性能体检：分规模测单帧耗时 / 掉帧率 / 每帧新建 DOM，定位渲染瓶颈（见 [docs/PERF.md](docs/PERF.md)） |
 | `npm run ablate` | 消融实验：逐个"撤销"某轮平衡改动，看它到底影响多少 |
 | `npm run balance` | 生成平衡报告（JSON + markdown） |
 | `npm run map` | 打印一张地图，排查地图生成问题 |
