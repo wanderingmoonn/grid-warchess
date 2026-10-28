@@ -1395,17 +1395,20 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
  * 建筑（移动力 0）永远按第二种算。
  */
 export function threatTiles(s: GameState, unit: Unit): Set<number> {
-  const range = effectiveRange(s, unit);
   const out = new Set<number>();
+  const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
 
   const addAround = (cx: number, cy: number) => {
+    const projected = { ...unit, x: cx, y: cy, moved: unit.moved || cx !== unit.x || cy !== unit.y };
+    const ranges = new Map(targets.map(t => [t.terrain,effectiveRangeAgainst(s,projected,t)]));
+    const range = Math.max(...ranges.values());
     for (let dy = -range; dy <= range; dy++) {
       for (let dx = -range; dx <= range; dx++) {
         if (Math.abs(dx) + Math.abs(dy) > range) continue;
         if (dx === 0 && dy === 0) continue;
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y)) out.add(idx(s, x, y));
+        if (inBounds(s, x, y) && Math.abs(dx)+Math.abs(dy) <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
       }
     }
   };
@@ -1673,8 +1676,7 @@ export function previewAttack(
   }
 
   const survives = hp > 0;
-  const range = utype(s, defender.type).range;
-  const counter = survives && strikeDistance(s, defender, attacker) <= range;
+  const counter = survives && !hasFlag(def, 'noCounter') && canStrike(s, defender, attacker);
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
@@ -2278,7 +2280,6 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   // 就不能在被飞行单位贴脸打的时候原地还手。这里必须换成
   // strikeDistance(defender, attacker)——写成攻击方的距离，等于只限制了
   // 进攻、放过了防守，这条规则就形同虚设。
-  const counterReach = strikeDistance(s, defender, attacker);
   if (!canStrike(s, attacker, defender)) {
     return {
       ok: false,
@@ -2310,7 +2311,7 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
-  if (!noCounter && defender.hp > 0 && counterReach <= effectiveRange(s, defender)) {
+  if (!noCounter && defender.hp > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
   }
@@ -2441,7 +2442,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
   const dist = distToCity(attacker, city);
-  if (dist > effectiveRange(s, attacker)) return { ok: false, reason: '城市超出射程' };
+  if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);

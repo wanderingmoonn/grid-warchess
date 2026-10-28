@@ -5,7 +5,7 @@
  * 一层的分支就是天文数字。所以这里用的是"一步前瞻 + 启发式打分"：
  * 把当前所有能做的动作列出来，各打一个分，挑最高的做，然后重新评估。
  *
- * 三条约束：
+ * 四条约束：
  *   1. 不看全图。AI 只吃 playerView 的结果，跟玩家一样受迷雾限制，
  *      否则它就是在作弊，你测出来的平衡也是假的。
  *   2. 确定性。整个决策过程不碰 Math.random：随机性由 (seed, 回合, 步数) 派生，
@@ -21,6 +21,7 @@ import { CONFIG, ORDER_UPGRADE, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
   armySize,
+  applyAction,
   attackableTargets,
   buildSiteError,
   canAttack,
@@ -32,6 +33,7 @@ import {
   distance,
   distToCity,
   eggSpots,
+  effectiveRangeAgainst,
   idx,
   inBounds,
   incomeOf,
@@ -42,6 +44,7 @@ import {
   reachableTiles,
   rebuildCost,
   recruitCost,
+  recruitSpawnCells,
   recruitResCost,
   siegeTargets,
   stepCostBetween,
@@ -49,12 +52,16 @@ import {
   tileAt,
   underConstruction,
   unitAt,
+  unitYield,
   unitsOf,
   upgradeCostOf,
   utype,
   xyOf,
 } from './rules.ts';
-import { canPay, payRes } from './resources.ts';
+import { canPay, payRes, resOf } from './resources.ts';
+import type { ResourceCost } from './resources.ts';
+import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
+import type { TacticalMap } from './ai-tactics.ts';
 import type { Action, AiLevel, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 
 export interface AiBudget {
@@ -98,6 +105,8 @@ interface Candidate {
   action: Action;
   score: number;
 }
+
+export function aiActionKey(action: Action): string { return JSON.stringify(action); }
 
 /* ---------------- 随机性：从状态派生，不碰 Math.random ---------------- */
 
@@ -157,7 +166,7 @@ export interface AiTraits {
   favorites: string[];
   /** 战术底色 */
   instinct: AiDoctrine;
-  /** 底色强度（0.12~0.30）：越强，越需要更强的局势证据才拨得动 */
+  /** 底色强度（0.10~0.22）：越强，越需要更强的局势证据才拨得动 */
   instinctStrength: number;
 }
 
@@ -264,7 +273,7 @@ export interface AiMood {
    * 就去改所有评分，会把局面里本来咬得很紧的选择（差几分的那种）整片压平——
    * 实测直接把"十二个回合里有三种选择"压成了两种，AI 反而更单调了。
    * 所以先减掉三分之一再放大三倍：≤0.33 全是 0，≥0.66 封顶 1，中间连续过渡。
-   * 权重和恒为 1，这条规则顺带保证"同时只有一方在使劲"。
+   * 两项可以同时提供正向权重，因此过渡期间可以混合两种打法。
    */
   drive: Record<AiDoctrine, number>;
   /** 原始证据（未锐化、未加底色）：测试与复盘只看这一层 */
@@ -277,6 +286,7 @@ export interface AiMood {
 }
 
 const DOCTRINES: AiDoctrine[] = ['rush', 'harass', 'boom'];
+const ABANDON_AT = 0.42;
 
 /**
  * 最危险的一座自家城：墙不满、敌人在门口。
@@ -323,7 +333,7 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const value = (us: Unit[]): number =>
     us.reduce((n, u) => {
       const d = def(u);
-      return d.category === 'combat' ? n + (d.cost ?? 0) : n;
+      return d.category === 'combat' ? n + unitValue(s,u) * Math.max(0,u.hp) / Math.max(1,d.maxHp) : n;
     }, 0);
 
   const myVal = value(my);
@@ -343,7 +353,7 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const earners = my.filter((u) => def(u).category === 'economy').length;
   const foeEco = foe.filter((u) => {
     const c = def(u).category;
-    return c === 'economy' || c === 'builder';
+    return c === 'economy' || c === 'builder' || economicYield(def(u))>0 || def(u).barracks;
   }).length;
 
   const myIncome = Math.max(0, incomeResOf(s, me).gold ?? 0);
@@ -479,7 +489,7 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   // 这是唯一一种"主动弃城"：不是被打得守不住才弃，是提前把一座城空出来当饵。
   const gambitOk =
     !!sacrifice && keptSafe && !doom
-      && payoff >= 1;
+      && sacrifice.near <= 6 && power < 0.85 && earners >= 2 && payoff >= 1;
   const boomEv = blend([
     [1.0, -powerEdge],
     [0.9, bipolar(doomedEv, 0, 0.6)],
@@ -537,17 +547,38 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   // 新 AI 的胜率从 52% 掉到 39%。弃城如果不能立刻换成代差，就只是丢了座城。
   //
   // 核心城（唯一能产当代兵的）永远不弃——那是把"以后"也一起弃了。
-  const canCashIn = payoff >= 0.5;
-  const trulyLost = doom ? doom.danger >= 0.55 : false;
-  // doom 弃城的最后两道闸（防连环弃城送光全图）：
-  //   a) 剩下的城暂时安全——被打到门口的放掉可以，四座全放叫投降；
-  //   b) 手里还有足够的城——弃到只剩一两座就没有"以空间换时间"了。
-  const doomKeptSafe =
-    doom === null
-      ? true
-      : keptMinDist(doom.id) >= 4;
-  const gambitArmed =
-    gambitOk && !doom && weight.boom >= 0.5 && sacrifice !== null && !sacrifice.core;
+  // 后方必须安全，而且失去危城后的真实收入仍能在四回合内支持一次发展。
+  // 留出一个回合给新生产者离开产兵格，避免一次正常采购就反向增援危城。
+  const withdrawal = doom ? myCities.find(c => c.id===doom.id) : sacrifice?.city;
+  const fallback = myCities.filter(c => c.id!==withdrawal?.id).find(c =>
+    foeCombat.every(u => distToCity(u,c)>effectiveRangeAgainst(s,u,tileAt(s,c.x,c.y))+2));
+  const localPower = (us: Unit[], city: City) => us.filter(u => distToCity(u,city)<=5)
+    .reduce((n,u) => n+unitValue(s,u)*u.hp/Math.max(1,def(u).maxHp),0);
+  const doomedObject = myCities.find(c => c.id===doom?.id);
+  const hopeless = doomedObject ? localPower(foeCombat,doomedObject) > localPower(myCombat,doomedObject)*1.35+60 : false;
+  const fallbackCost = fallback ? upgradeCostOf(s,fallback) : null;
+  const retainedState = withdrawal ? {
+    ...s,
+    cities: s.cities.map(c => c.id === withdrawal.id ? { ...c, ruined: true } : c),
+    // 已暴露在敌军附近的生产者不计入可保障收入。
+    units: s.units.filter(u => u.owner !== me || economicYield(def(u)) === 0 ||
+      foeCombat.every(e => distance(u,e) > effectiveRangeAgainst(s,e,tileAt(s,u.x,u.y))+2)),
+  } : s;
+  const retainedIncome = incomeResOf(retainedState,me);
+  const canFund = (cost: ResourceCost) => Object.entries(cost).every(([id,n]) =>
+    resOf(s.players[me],id) + Math.max(0,retainedIncome[id] ?? 0)*4 >= (n ?? 0));
+  const canCashIn = !!fallback && (
+    fallbackCost !== null && canFund({ gold: fallbackCost }) ||
+    !heroOwned && Object.values(s.unitTypes).some(d => {
+      if (!d.hero || d.category !== 'combat' || d.era > fallback.era || d.era < fallback.era-1) return false;
+      const price = recruitResCost(s,me,d);
+      const unlock = (s.unlocked?.[me] ?? []).includes(d.id) ? 0 : (d.unlockCost ?? 0);
+      return canFund({ ...price, gold: (price.gold ?? 0) + unlock });
+    })
+  );
+  const trulyLost = doom ? doom.danger >= 0.55 && hopeless : false;
+  const doomKeptSafe = !doom || keptMinDist(doom.id)>=4;
+  const gambitArmed = gambitOk && canCashIn && !doom && weight.boom>=0.5 && !!sacrifice && !sacrifice.core;
   const abandonedCityId =
     weight.boom >= 0.42 && doom && !doom.core && canCashIn && trulyLost
       && doomKeptSafe
@@ -559,13 +590,9 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const drive: Record<AiDoctrine, number> = {
     rush: clamp01((weight.rush - 1 / 3) * 3),
     harass: clamp01((weight.harass - 1 / 3) * 3),
-    // boom 是唯一"先付钱后收账"的姿态：没真的把城放下（abandonedCityId 为空）时
-    // 保持 boom 姿态只会少产兵、囤经济，白白削弱自己——实测时代 1 有 49% 的时间
-    // 处于这种"假爆发"，真弃城只有 8%。所以没弃城就不给 boom 出力。
-    boom:
-      abandonedCityId !== null
-        ? clamp01((weight.boom - 1 / 3) * 3)
-        : 0,
+    // 保留连续的发展权重：前城失守后，安全后方仍需完成增产和科技兑现。
+    // 非战术档由 aiActiveMood 统一屏蔽，现金预算与安全条件另行约束投资。
+    boom: clamp01((weight.boom - 1 / 3) * 3),
   };
 
   return {
@@ -615,6 +642,15 @@ function incomeAt(s: GameState, def: UnitTypeDef, x: number, y: number): number 
     if (nearWater) income += CONFIG.riverTradeBonus;
   }
   return income;
+}
+
+function resourceValue(s: GameState, owner: PlayerId, resources: Record<string,number | undefined>): number {
+  const stock=s.players[owner];
+  return Object.entries(resources).reduce((sum,[id,n]) => {
+    const held=id==='gold' ? stock.gold : stock.res?.[id]??0;
+    const weight=id==='gold' ? 1 : 1+2*clamp01(1-held/160);
+    return sum+(n??0)*weight;
+  },0);
 }
 
 /** (x,y) 会不会被敌方下回合打到（AI 只看得到的敌人） */
@@ -779,6 +815,12 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, mood: AiMood): 
   // 交手本身就有价值。不加这一条，一次"打掉对方四成血、自己也挨四成"的互换只有几分，
   // 还不如往城里多走一格（9 分）——AI 就会绕着敌人走，永远不打仗。
   score += 14;
+  if (aiLevelOf(s) !== 'basic') {
+    const danger = cityThreatUrgency(s,target,attacker.owner);
+    score += danger * (25 + 75 * Math.min(1,preview.toDefender / Math.max(1,target.hp)));
+    score += Math.min(target.hp,preview.toDefender)/targetDef.maxHp * unitValue(s,target)*0.12;
+    if (economicYield(targetDef)>0 || targetDef.barracks) score += 22*mood.drive.harass;
+  }
 
   // 残血不硬拼
   if (attacker.hp / selfDef.maxHp < 0.4) score -= 15;
@@ -959,12 +1001,8 @@ export function cityDistanceField(
         continue;
       }
 
-      // 这张图是从城往外算的，而单位实际是往里走，方向正好相反。
-      // 上坡那一步按规矩要贵满，下坡不额外收费——取去程与回程的平均就是半价。
-      // 两个价都从扩展钩子拿，扩展没开时它们相等，这一项自动归零，
-      // 所以这里不认识"高度"，只认识"走进去要多少步"。
+      // 反向搜索必须使用“邻格走向当前格”的价；平均上下坡费用会低估爬坡。
       const fromT = s.tiles[cur.i]?.terrain ?? 'plain';
-      const outCost = stepCostBetween(s, fromT, tile.terrain);
       const backCost = stepCostBetween(s, tile.terrain, fromT);
       const cost =
         cur.cost +
@@ -972,7 +1010,7 @@ export function cityDistanceField(
           ? 1
           : tile.terrain === 'water'
             ? WADE_COST
-            : (outCost + backCost) / 2);
+            : backCost);
 
       const ni = ny * s.w + nx;
       if (cost < (dist[ni] ?? Infinity)) {
@@ -1030,6 +1068,7 @@ function distanceFields(
  * 用严格旱路图的话对岸永远是 Infinity，AI 就永远找不到该架桥的地方。
  */
 interface Fields {
+  tactical: TacticalMap;
   land: Map<string, number[]>;
   wade: Map<string, number[]>;
   water: Map<string, number[]>;
@@ -1323,6 +1362,93 @@ function pickGuardCity(
   return best?.id ?? null;
 }
 
+/** Rescue value is tied to real siege damage, including an exposed last city. */
+export function cityThreatUrgency(s: GameState, enemy: Unit, owner: PlayerId): number {
+  const cities = citiesOf(s,owner).filter(c => !c.ruined);
+  let urgency = 0;
+  for (const city of cities) {
+    const range = effectiveRangeAgainst(s,enemy,tileAt(s,city.x,city.y));
+    const d = distToCity(enemy,city);
+    if (d>range+2) continue;
+    const damage = damageToCity(enemy,city,s);
+    if (damage<=0) continue;
+    urgency = Math.max(urgency, Math.min(1.5,damage/Math.max(1,city.hp))
+      * (d<=range ? 1 : 0.4) * (cities.length===1 ? 1.4 : 1));
+  }
+  return urgency;
+}
+
+function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: Fields, traits: AiTraits): number {
+  const def = utype(s, unit.type);
+  const moved = { ...unit, x, y, moved: true };
+  const currentThreat = all.tactical.exposure(unit);
+  const futureThreat = all.tactical.exposure(moved);
+  if (def.category === 'economy') {
+    const gain = resourceValue(s,unit.owner,unitYield(s,moved)) - resourceValue(s,unit.owner,unitYield(s,unit));
+    return gain * 5 - 1.5 + (currentThreat.damage-futureThreat.damage) * 2
+      - futureThreat.damage * 1.5 - (futureThreat.lethal ? 100 : 0);
+  }
+  const w = all.mood.drive;
+  const fields = def.domain === 'water' ? all.water : all.land;
+  const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,all.focusCityId,all.commit);
+  const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
+  const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
+  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35));
+  score += CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
+  let nextAttack = 0, nowAttack = 0;
+  let killed: string | undefined;
+  if (canAttack(unit)) {
+    for (const enemy of attackableTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreAttack(s,unit,enemy,all.mood));
+    for (const enemy of attackableTargets(s,moved)) {
+      const value = scoreAttack(s,moved,enemy,all.mood);
+      if (value > nextAttack) {
+        nextAttack = value;
+        killed = previewAttack(s,moved,enemy).toDefender >= enemy.hp ? enemy.id : undefined;
+      }
+    }
+    for (const city of siegeTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreSiege(s,unit,city,all.focusCityId,all.mood));
+    for (const city of siegeTargets(s,moved)) {
+      const value=scoreSiege(s,moved,city,all.focusCityId,all.mood);
+      if (value>nextAttack) { nextAttack=value; killed=undefined; }
+    }
+    score += nextAttack * 0.82 - nowAttack * 0.65;
+  }
+  const risk = all.tactical.exposure(moved,killed);
+  const cost = unitValue(s,unit);
+  const loss = risk.damage / Math.max(1,def.maxHp);
+  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + w.harass*0.4);
+  if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
+  score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
+  if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
+  for (const city of s.cities) {
+    if (!city.ruined || city.id === all.mood.abandonedCityId) continue;
+    const affordable = s.players[unit.owner].gold >= rebuildCost(city);
+    const a = distToCity(unit,city), b = distToCity(moved,city);
+    score += (a-b)*(affordable ? 35 : 4);
+    if (b===0) score += affordable ? (city.owner===unit.owner ? 150 : 220) : -200;
+  }
+  if (w.harass > 0 && def.category === 'combat') {
+    const prey = unitsOf(s,other(unit.owner)).filter(e => {
+      const d = utype(s,e.type);
+      return economicYield(d)>0 || d.category==='builder' || d.barracks;
+    }).sort((a,b) => distance(unit,a)-distance(unit,b))[0];
+    if (prey && distance(unit,prey)<=12) score += (distance(unit,prey)-distance(moved,prey))*4*w.harass;
+  }
+  const keep = citiesOf(s,unit.owner).filter(c => !c.ruined && c.id!==all.mood.abandonedCityId);
+  if (keep.length && (all.mood.abandonedCityId || all.hold)) {
+    const a = Math.min(...keep.map(c => distToCity(unit,c))), b = Math.min(...keep.map(c => distToCity(moved,c)));
+    score += (a-b)*(all.mood.abandonedCityId ? 7 : 3)*Math.max(0.4,w.boom);
+  }
+  if (all.guardCityId) {
+    const city = cityById(s,all.guardCityId);
+    if (city && !unitsOf(s,unit.owner).some(u => u.id!==unit.id && distToCity(u,city)===0)) {
+      score += (distToCity(unit,city)-distToCity(moved,city))*4;
+      if (distToCity(moved,city)===0 && distToCity(unit,city)>0) score += 16;
+    }
+  }
+  return score;
+}
+
 function scoreMove(
   s: GameState,
   unit: Unit,
@@ -1334,6 +1460,9 @@ function scoreMove(
   const def = utype(s, unit.type);
   const tile = s.tiles[y * s.w + x];
   if (!tile) return -999;
+  if (aiLevelOf(s) !== 'basic' && def.category !== 'builder' && !s.config.godMode) {
+    return tacticalMoveScore(s, unit, x, y, all, traits);
+  }
 
   // 水军要按"水路的距离"算，否则它的起点在图上是无穷远，永远算不出方向
   const fields = def.domain === 'water' ? all.water : all.land;
@@ -1342,7 +1471,7 @@ function scoreMove(
   if (def.incomeByTerrain || typeof def.income === 'number') {
     const gain = incomeAt(s, def, x, y) - incomeAt(s, def, unit.x, unit.y);
     const base = gain * 4 - 1.5;
-    if (aiLevelOf(s) !== 'advanced') return base;
+    if (aiLevelOf(s) === 'basic') return base;
 
     // 高级：农民也是钱。一块多赚 2 金的地，不值得站在两个敌人的射程里种——
     // 被摸掉一只，等于那块地白种十几回合。
@@ -1942,7 +2071,7 @@ function rawBuildScore(
       + 10 * style - 14 * w.boom;
   }
 
-  if (def.incomeByTerrain) {
+  if (def.incomeByTerrain || def.income || def.yield || def.yieldByTerrain) {
     // 经济建筑：建在赚钱的地上才有意义。但被敌人威胁的位置是纯送钱——
     // 经济建筑 2 点护甲，对面一个民兵两下就拆了，还顺手带走建造者。
     if (risky) return -999;
@@ -1951,8 +2080,9 @@ function rawBuildScore(
     // 场面像集市不像战场。经济建筑本身也会继续生钱，越盖越多，最后全在滚利息。
     const sameKind = unitsOf(s, unit.owner).filter((u) => u.type === def.id).length;
     if (sameKind >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
-    const inc = def.incomeByTerrain[spot.terrain] ?? 0;
-    return inc * 3 - def.cost * 0.03;
+    const probe: Unit={id:'ai-production-site',type:def.id,owner:unit.owner,x:spot.x,y:spot.y,hp:def.maxHp,kills:0,moved:true,acted:true};
+    const inc=resourceValue(s,unit.owner,unitYield(s,probe));
+    return inc * 4 - resourceValue(s,unit.owner,recruitResCost(s,unit.owner,def)) * 0.03;
   }
 
   if (def.autoAttack) {
@@ -2037,7 +2167,7 @@ function unitCandidates(
   unit: Unit,
   all: Fields,
   traits: AiTraits,
-  truth: GameState,
+  rejected: ReadonlySet<string>,
 ): Candidate[] {
   const out: Candidate[] = [];
   const def = utype(s, unit.type);
@@ -2066,8 +2196,6 @@ function unitCandidates(
         // 而执行方遇到非法动作就中断整回合。
         if (!canPay(s.players[s.current], recruitResCost(s, s.current, buildDef))) continue;
         for (const spot of buildSpots(s, unit, buildDef)) {
-          // 同上：视图里空着的地方，真实局面里可能有个看不见的敌人
-          if (unitAt(truth, spot.x, spot.y)) continue;
           out.push({
             action: { type: 'BUILD', unitId: unit.id, unitType: buildId, x: spot.x, y: spot.y },
             score: scoreBuild(s, unit, buildId, spot, all),
@@ -2078,21 +2206,12 @@ function unitCandidates(
   }
 
   if (!unit.moved && def.move > 0) {
-    // 迷雾里看不见的敌人也会挡路：视图上算通达的落点，到了真实局面上
-    // 可能被一条"看不见的封锁线"截断。只看落点有没有人是不够的——
-    // 路径中间站一个它也照样过不去。所以在这里再和真实可达集合求一次交，
-    // 提出的落点才一定执行得下去。
-    const real = truth.units.find((u) => u.id === unit.id);
-    const realReach = real ? reachableTiles(truth, real) : null;
+    // A failed hidden path is excluded by the runner; try another observed route.
     const me = s.current;
     let best: Candidate | null = null;
     for (const i of reachableTiles(s, unit).keys()) {
-      if (realReach && !realReach.has(i)) continue;
       const { x, y } = xyOf(s, i);
-      // 视图中那格是空的，真实局面里可能站着一个它看不见的敌人（潜行 / 视野外）。
-      // 这种落点直接跳过，否则会提出一个"目标格不可达"的非法动作，
-      // 而执行方遇到非法动作会中断整个回合。
-      if (unitAt(truth, x, y)) continue;
+      if (rejected.has(aiActionKey({ type:'MOVE',unitId:unit.id,x,y }))) continue;
       // 空地废墟走进去要付重建费。掏不起就换个落点——
       // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
       const destCity = cityAt(s, x, y);
@@ -2330,7 +2449,7 @@ export interface AiPlan {
   stance: 'push' | 'turtle' | 'elite';
   savingFor: 'hero' | 'era' | 'rebuild' | null;
   targetCost: number;
-  /** 攒钱期"可以动用的上限"：账上的钱扣掉计划要用的差额，再加上未来六回合的收入 */
+  /** 攒钱期可动用的现金：当前余额减去目标费用，最低为零 */
   allowance: number;
   urgent: boolean;
 }
@@ -2347,7 +2466,7 @@ function buildPlan(
 ): AiPlan {
   const gold = s.players[me].gold;
   const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
-  const myCities = citiesOf(s, me);
+  const myCities = citiesOf(s, me).filter(c => !c.ruined);
   const combat = my.filter((u) => utype(s, u.type).category === 'combat');
   const army = combat.length;
   const valueOf = (us: Unit[]): number =>
@@ -2365,11 +2484,12 @@ function buildPlan(
   const threaten = foe.some((u) =>
     myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 3),
   );
-  // 兑现纪律：城已经放了，这局的目标就是把代差买回来。这时候"兵少于三个"
-  // 不该把攒钱计划掐死——那正是弃城想换来的局面。真打断攒钱的只有一件事：
-  // 留守的城被敌人贴脸（threaten）。
-  const commit = mood.abandonedCityId !== null;
-  const urgent = commit ? threaten : army < 3 || threaten;
+  // 前线已经丢掉后，安全后方继续兑现发展；不能把废墟附近的敌人当作救城警报。
+  // 后方受威胁、经济基础不足或局势不再适合发展时，自然恢复常规防守/进攻。
+  const developingRear = myCities.length === 1 && mood.weight.boom >= ABANDON_AT &&
+    mood.metrics.earners >= 2 && foe.every(u =>
+      utype(s,u.type).category !== 'combat' || distToCity(u,myCities[0]!) > effectiveRangeAgainst(s,u,tileAt(s,myCities[0]!.x,myCities[0]!.y))+2);
+  const urgent = (army < 3 && !developingRear && !mood.abandonedCityId) || threaten;
 
   // 没被打塌的敌城，和已经塌了等接管的废墟。
   //
@@ -2391,7 +2511,8 @@ function buildPlan(
   const heroDef = heroOwned
     ? null
     : Object.values(s.unitTypes)
-        .filter((d) => d.hero && d.category === 'combat' && d.era <= maxEra)
+        .filter((d) => d.hero && d.category === 'combat' && d.era <= maxEra && myCities.some(c =>
+          !c.ruined && c.id!==mood.abandonedCityId && c.era>=d.era && c.era<=d.era+1))
         .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
   const heroCost = heroDef
     ? recruitCost(s, me, heroDef) +
@@ -2405,29 +2526,15 @@ function buildPlan(
 
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
-  let horizon = SAVE_HORIZON;
   // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
   // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
   const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
-  if (commit && !threaten) {
-    // 兑现纪律：攒钱视野从 6 回合放宽到 8（弃城后收入掉了，6 回合常常够不着），
-    // 兵力门槛整个跳过——弃城换的就是"兵力少但钱变时代"这条命。
-    if (eraCost !== null && gold + inc * 8 >= eraCost) {
-      savingFor = 'era';
-      targetCost = eraCost;
-      horizon = 8;
-    } else if (heroDef && heroCost > 0 && gold + inc * 8 >= heroCost) {
-      savingFor = 'hero';
-      targetCost = heroCost;
-      horizon = 8;
-    }
-  } else if (!urgent && army >= armyGate) {
+  if (!urgent && army >= armyGate) {
     // 6 个回合的收入之内够得着，才值得为它停手。收废墟例外：那是终局，
     // 视野放宽到 14 个回合——攒不够就永远赢不了，慢一点总比平局好。
     if (ruinCost !== null && gold + inc * (winningReclaim ? 14 : SAVE_HORIZON) >= ruinCost) {
       savingFor = 'rebuild';
       targetCost = ruinCost;
-      horizon = winningReclaim ? 14 : SAVE_HORIZON;
     } else if (heroDef && heroCost > 0 && gold + inc * SAVE_HORIZON >= heroCost) {
       savingFor = 'hero';
       targetCost = heroCost;
@@ -2436,10 +2543,23 @@ function buildPlan(
       targetCost = eraCost;
     }
   }
+  // Capture is the winning action. Reserve its fee before buying another unit.
+  const nearbyRuin = foeRuins.filter(c => my.some(u => !u.moved && distToCity(u,c)<=Math.max(2,utype(s,u.type).move+1)))
+    .sort((a,b) => rebuildCost(a)-rebuildCost(b))[0];
+  if (nearbyRuin && !threaten) {
+    savingFor = 'rebuild'; targetCost = rebuildCost(nearbyRuin);
+  }
+  if (mood.abandonedCityId || developingRear) {
+    const retained = myCities.filter(c => !c.ruined && c.id!==mood.abandonedCityId);
+    const costs = retained.map(c => upgradeCostOf(s,c)).filter((c): c is number => c!==null);
+    const nextEra = costs.length ? Math.min(...costs) : null;
+    if (heroDef && gold+inc*4 >= heroCost) { savingFor='hero'; targetCost=heroCost; }
+    else if (nextEra!==null && gold+inc*SAVE_HORIZON>=nextEra) { savingFor='era'; targetCost=nextEra; }
+  }
 
-  // 攒钱期能花多少：账上的钱 + 未来收入 − 目标还差的钱。
-  // 差额被冻结，超出的部分照常买兵——这样"攒钱"不会变成"停摆"。
-  const allowance = savingFor ? gold + inc * horizon - targetCost : Infinity;
+  // 只花超过目标费用的现金。未来收入用于判断目标能否实现，不能当作当前预算。
+  // 短期回本的有限增产，以及危城以外的紧急防守，另有例外。
+  const allowance = savingFor ? Math.max(0,gold - targetCost) : Infinity;
 
   // 兵力明显不如对面、对面又已经压到门口：收缩固守，把人留在城里。
   //
@@ -2460,7 +2580,7 @@ function buildPlan(
   const stance: AiPlan['stance'] =
     weaker && army >= 3 && atGate ? 'turtle' : elite ? 'elite' : 'push';
 
-  return { stance, savingFor, targetCost, allowance, urgent };
+  return { stance, savingFor, targetCost, allowance, urgent: mood.abandonedCityId ? threaten : urgent };
 }
 
 function recruitCandidate(
@@ -2552,7 +2672,7 @@ function recruitCandidate(
   const cityCount = Math.max(1, citiesOf(s, me).length);
   // 弃城期把经济线的目标抬高：这一档赢在"三个回合之后我比你富一代"，
   // 所以它要的不是"够用的农民"，而是能把整座城的产线滚起来的人手。
-  const targetEarners = Math.min(8, cityCount * 2 + Math.round(3 * w.boom));
+  const targetEarners = Math.min(10, cityCount * 2 + Math.round(3 * w.boom) + (mood?.abandonedCityId ? 2 : 0));
 
   // 高级：看现在这支部队的"远程占比"，缺什么补什么。
   //
@@ -2577,6 +2697,7 @@ function recruitCandidate(
 
   let best: Candidate | null = null;
   for (const d of pool) {
+    if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) continue;
     // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃
     const unlockFee =
       d.hero && !(s.unlocked?.[me] ?? []).includes(d.id) ? (d.unlockCost ?? 0) : 0;
@@ -2606,9 +2727,9 @@ function recruitCandidate(
       const ecoInc = maxIncome(d);
       const payback = ecoInc > 0 ? price / ecoInc : 99;
       const fastEco =
-        (d.category === 'economy' && earners < targetEarners && payback <= 8) ||
+        (d.category === 'economy' && earners < Math.min(targetEarners,payback<=4 ? 6 : 4) && payback <= 8) ||
         (d.category === 'builder' && builders === 0);
-      if (!isTarget && !fastEco && price + unlockFee > plan.allowance) continue;
+      if (!isTarget && (!fastEco || plan.savingFor==='rebuild') && price + unlockFee > plan.allowance) continue;
       // 攒的是升时代：钱够了就把这一回合让给 UPGRADE（升完的兵比多一个兵值）。
       // 但要确认升级现在真的买得起——否则那条动作会被别的原因拒掉，这一回合白过。
       if (plan.savingFor === 'era' && !isTarget && gold >= plan.targetCost) {
@@ -2623,6 +2744,12 @@ function recruitCandidate(
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
+      if (aiLevelOf(s)!=='basic') {
+        const efficiency = (d.atk + (d.magicAtk??0)*1.2) * Math.sqrt(d.maxHp)
+          * (1+Math.min(4,Math.max(0,d.range-1))*0.45) / Math.max(20,resourceValue(s,me,fullPrice)+unlockFee*0.4)**0.8;
+        score += Math.min(26,efficiency*3);
+        if (plan.urgent) score += 15;
+      }
       if (d.domain === 'water') {
         score -= 8;
         // 有点水但不宽裕：船能开，只是绕不开岸，别当主力
@@ -2755,11 +2882,16 @@ function recruitCandidate(
       // 速攻期：除了最开始那一只，经济线一律让位给兵——
       // 速攻输就输在"钱还没变成兵，对面的墙已经修好了"
       if (earners >= 1) score -= 14 * w.rush;
+      if (plan.urgent) score -= 35;
+      if (mood?.abandonedCityId && earners<targetEarners) score += 35;
+      if (s.config.expansionIds.includes('city-works') && earners<targetEarners &&
+          ((s.players[me].res?.food??0)<120 || (s.players[me].res?.material??0)<100)) score+=30;
     }
     if (d.category === 'builder') {
       score += builders < 1 ? 24 : builders < 2 ? 4 : -12;
       // 弃城期要靠工事把留守的那座城撑住，工程队值钱
       score += 8 * w.boom;
+      if (plan.urgent) score -= 22;
     }
     // 高级对单价更敏感一点：便宜的兵能多铺几个方向。
     // 但高时代单位要单独放宽——它们贵是设计如此，不该因此永远排在火枪兵后面。
@@ -2794,6 +2926,7 @@ function recruitCandidate(
 }
 
 function upgradeCandidate(s: GameState, city: City, mood?: AiMood): Candidate | null {
+  if (city.id === mood?.abandonedCityId) return null;
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;
@@ -2898,7 +3031,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
   const traits = aiTraits(proj);
   // 排产看的是"这一局想怎么赢"，所以战术倾向要一起进打分——
   // 否则玩家看到的是"AI 排了一条和自己场上打法不搭的队"。
-  const mood = aiMood(proj, traits);
+  const mood = aiActiveMood(proj, traits);
   // 每格大约能收到这么多钱（打九折：收入会随城市被打、单位被杀而掉）
   const perTurn = Math.max(1, Math.round(incomeOf(s, player) * 0.9));
   // 一格拿来升级 = 五个回合里少一个兵，排两次基本等于自杀
@@ -3004,7 +3137,7 @@ export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
  *
  * 调用方负责真正执行 action 并循环调用，直到拿到 null 再结束回合。
  */
-export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): Action | null {
+export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, rejected: ReadonlySet<string> = new Set()): Action | null {
   if (s.winner) return null;
 
   const me = s.current;
@@ -3060,6 +3193,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   const foeUnits = unitsOf(view, other(me));
 
   const fields: Fields = {
+    tactical: tacticalMap(view, me),
     land,
     wade,
     water: distanceFields(view, me, 'water'),
@@ -3093,9 +3227,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
 
   for (const u of unitsOf(view, me)) {
-    candidates.push(...unitCandidates(view, u, fields, traits, s));
+    candidates.push(...unitCandidates(view, u, fields, traits, rejected));
     const skill = heroSkillCandidate(view, u);
-    if (skill) candidates.push(skill);
+    if (skill) candidates.push({ ...skill, score:skill.score+300 });
   }
 
   if (mayRecruit) {
@@ -3142,12 +3276,22 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
     for (const city of citiesOf(view, me)) {
       if (city.ruined) continue; // 废墟升不了级，同上
       const c = upgradeCandidate(view, city, mood);
-      if (c) candidates.push(c);
+      if (c) candidates.push({ ...c,score:c.score+(commander && head===ORDER_UPGRADE ? 1000 : 0) });
     }
   }
 
+  for (let i=candidates.length-1;i>=0;i--) {
+    const action=candidates[i]!.action;
+    if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
+    if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
+      const cost=recruitCost(view,me,utype(view,action.unitType));
+      if (cost>plan.allowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
+    }
+  }
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => b.score - a.score);
+
+  while (candidates.length && !applyAction(view,candidates[0]!.action).ok) candidates.shift();
 
   const best = candidates[0];
   if (!best || best.score <= 0) return null;
@@ -3158,13 +3302,13 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET): A
   //
   // 高级的带宽更窄：同分候选少挑几个，出手更集中在最优解上。
   // 但也不能压到 0——完全没有随机的话，每局都会变成同一盘棋。
-  // 12% 试过收到 7%，实测胜率没有变化，只是把"每回合做的事"变得单调了，
-  // 所以留在 12%：这点宽度换来的是同一局面下它会换个打法。
+  // 高级只在 1.5% 内选择近似等价动作，避免随机跳过救城或高收益击杀。
+  // 战术差异由局势权重与种子偏好提供。
   const band =
     aiLevelOf(s) !== 'basic'
-      ? Math.max(4, Math.abs(best.score) * 0.12)
+      ? Math.max(0.2, Math.abs(best.score) * 0.015)
       : Math.max(6, Math.abs(best.score) * 0.25);
-  const tied = candidates.filter((c) => c.score > 0 && best.score - c.score <= band);
+  const tied = candidates.filter((c) => c.score > 0 && best.score - c.score <= band && applyAction(view,c.action).ok);
   if (tied.length > 1) {
     const pick = tied[Math.floor(aiNoise(s) * tied.length)];
     if (pick) return pick.action;

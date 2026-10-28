@@ -5183,16 +5183,24 @@ test('AI 的随机值仍然可复现', () => {
   assert.notEqual(aiNoise(s), aiNoise(next), '换一个回合应该换一个值');
 });
 
-test('AI 不会每回合都做同一件事', () => {
+test('AI 随真实局面变化使用多种行动，而不是靠回合号乱换选择', () => {
   const picks = new Set<string>();
-  for (let t = 1; t <= 12; t++) {
-    const s = fresh();
-    s.current = 'A';
-    s.players.A.gold = 900;
-    s.turn = t;
-    picks.add(JSON.stringify(aiNextAction(s)));
+  let s = fresh();
+  s.current = 'A';
+  s.players.A.gold = 900;
+  s.fog = false;
+  const budget = { ...DEFAULT_BUDGET };
+  for (let step = 0; step < AI_MAX_STEPS && !s.winner; step++) {
+    const action = aiNextAction(s, budget);
+    if (!action) break;
+    const result = applyAction(s, action);
+    assert.ok(result.ok, result.ok ? '' : result.reason);
+    picks.add(action.type);
+    if (action.type === 'RECRUIT') budget.recruited++;
+    if (action.type === 'UPGRADE') budget.upgraded++;
+    s = result.state;
   }
-  assert.ok(picks.size >= 3, `十二个回合里只出现 ${picks.size} 种选择，太单调`);
+  assert.ok(picks.size >= 3, `实际行动只出现 ${[...picks].join('/')}`);
 });
 
 test('不同种子的 AI 性格不同', () => {
@@ -6008,6 +6016,8 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   // 磨局统计里最刺眼的一条：一方顶满 24 个单位、金库还压着几千金。
   // 钱花不出去等于没有压力，而军营是唯一能把钱直接变成"前线产兵点"的东西。
   const s = fresh({ startEra: 2, size: 16, aiLevel: 'advanced' }, 4848);
+  // 夹具按完整敌军位置选“前线”，让 AI 也能看到这些敌军；迷雾另有专项用例。
+  s.fog = false;
   const own = citiesOf(s, 'A')[0];
   const foes = unitsOf(s, 'B');
   const N4 = [
@@ -6042,12 +6052,17 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   const built: string[] = [];
   let st = s;
   for (let round = 0; round < 8 && built.length === 0; round++) {
-    for (let i = 0; i < 80; i++) {
-      const a = aiNextAction(st);
+    const budget = { ...DEFAULT_BUDGET };
+    const rejected = new Set<string>();
+    for (let i = 0; i < AI_MAX_STEPS; i++) {
+      const a = aiNextAction(st,budget,rejected);
       if (!a) break;
       if (a.type === 'BUILD' && st.unitTypes[a.unitType]?.barracks) built.push(a.unitType);
       const r = applyAction(st, a);
-      if (!r.ok) break;
+      if (!r.ok) { rejected.add(JSON.stringify(a)); continue; }
+      rejected.clear();
+      if (a.type==='RECRUIT') budget.recruited++;
+      if (a.type==='UPGRADE') budget.upgraded++;
       st = r.state;
       st.players.A.gold = 3000; // 只测"想不想建"，不测攒不攒得出钱
     }
@@ -6166,6 +6181,7 @@ test('「升级时代」能排进序列，同样占一格', () => {
 
 test('排了「升级时代」，AI 这一回合真的会去升级', () => {
   const s = commandPost(); // 1000 金，够升到中世
+  s.orders = { A: [ORDER_UPGRADE] }; // Explicit order: this test is not about auto-planning.
   const budget = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 1, order: null };
   let cur = s;
   let got = false;

@@ -8,7 +8,7 @@
 import './style.css';
 
 import { expansionById } from './core/expansions.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, anyAiSide, isAiSide } from './core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
@@ -2196,20 +2196,22 @@ async function runAiTurn(
   const delay = delayOverride ?? AI_SPEED_MS[aiSpeed] ?? 70;
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
+  const rejected = new Set<string>();
 
   for (let step = 0; step < AI_MAX_STEPS; step++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
     if (stopWhen?.()) break;
-    const action = aiNextAction(state, budget);
+    const action = aiNextAction(state, budget, rejected);
     if (!action) break;
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
     const result = applyAction(state, action);
-    if (!result.ok) break;
+    if (!result.ok) { rejected.add(aiActionKey(action)); await sleep(0); continue; }
+    rejected.clear();
 
     state = result.state;
     noteStep(actor, action);

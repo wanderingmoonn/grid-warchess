@@ -23,8 +23,8 @@ import { ELEMENT_NAME } from '../src/core/types.ts';
 import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-/** 规则内核 + 界面冒烟两项之和，改测试记得改这里 */
-const TEST_COUNT = 321 + 113;
+/** npm test 的规则、AI 场景、评估方法、界面冒烟总数，改测试记得改这里。 */
+const TEST_COUNT = 319 + 25 + 7 + 112;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -998,7 +998,7 @@ const CORE_BODY = `    <section id="goal">
         </tbody>
       </table>
       <h3>验证</h3>
-      <p><code>npm test</code> 跑两套测试：规则内核（含 AI、能力、扩展）+ 界面冒烟（jsdom 跑整页）。当前共 ${TEST_COUNT} 项。</p>
+      <p><code>npm test</code> 检查规则内核、AI 战术与高差场景、评估统计方法，以及界面冒烟（jsdom 跑整页）。当前共 ${TEST_COUNT} 项。</p>
     </section>
 
     <section id="ai">
@@ -1347,7 +1347,7 @@ function smallSection(e: Exp, num: number): string {
     <section id="exp-${esc(e.id)}">
       <h2><span class="sec-num">${String(num).padStart(2, '0')}</span>${esc(e.name)}</h2>
       <p>${esc(e.summary)}</p>
-      ${SMALL_NOTES[e.id] ?? ''}
+${SMALL_NOTES[e.id] ? '      ' + SMALL_NOTES[e.id] : ''}
     </section>`;
 }
 

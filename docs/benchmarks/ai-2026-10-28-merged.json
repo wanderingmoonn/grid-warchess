@@ -1,0 +1,5895 @@
+{
+  "schema": 1,
+  "date": "2026-10-28",
+  "workspace": "ai-tactics-remote",
+  "branch": "feature/ai-tactics-evaluation",
+  "priorOptimizationCommit": "1db5d5f",
+  "upstreamCommit": "5fb8e5ba0bbdece226db60c3bc92ae5c5beaee32",
+  "sourceFingerprint": "9cb3cda9283080cd6ade3881f910dc3a5521c1f9df598732b8a0223c0d1af19b",
+  "notes": [
+    "Both controllers use the same merged rule engine, including shared height-dependent siege, counterattack and threat-range fixes.",
+    "The primary acceptance is tactic vs tactic. Advanced is a separate secondary check; its conservative lower bound fails the declared gate.",
+    "Unresolved games score zero wins. Pair is the independent sampling unit. Final validation seeds were not used for tuning.",
+    "Industrial and volcanic subgroups remain weak. Per-profile samples are small.",
+    "Lead labels in advanced telemetry describe inactive situational preferences; all three doctrine drives are zero.",
+    "Abandonment records indicate a decision, not necessarily the actual loss of a city. Whole-game development is not causal post-abandonment attribution.",
+    "The new controller retries rejected candidates within the same 50-decision budget. The frozen controller retains its original stop-on-rejection behavior."
+  ],
+  "verification": {
+    "checks": {
+      "rules": 319,
+      "aiOptimization": 25,
+      "evaluation": 7,
+      "ui": 112,
+      "total": 463
+    },
+    "typescript": "passed",
+    "productionBuild": "passed",
+    "manualVolumes": 14,
+    "manualExpansions": 26,
+    "logs": [
+      {
+        "path": "results/ai-merged-tests-preflight.log",
+        "sha256": "cae096f62e7d72f3b4e731b98f092332abc6af6a3885c0b9c219e1487b1cec27"
+      },
+      {
+        "path": "results/ai-merged-build.log",
+        "sha256": "901e7b253055d910a3d202630100d4c293fc7767fa38ca4a6f0f495cd097933a"
+      },
+      {
+        "path": "results/ai-merged-manual.log",
+        "sha256": "515890f36ca560f2ef84cee39327d78868ef4c89264bd4c5f7073e6270c2234a"
+      }
+    ]
+  },
+  "creativeEditionAudit": {
+    "head": "01bd05b3d3bc7a3db64cf521b1a110e167817372",
+    "baselineFiles": 433,
+    "externallyChanged": 29,
+    "externallyAdded": 21,
+    "missing": 0,
+    "taskWritesToCreativeEdition": false,
+    "rawAudit": {
+      "path": "results/creative-after-upstream-merge.json",
+      "sha256": "22aa04da03f12aab47b447a48188a06d32b9b0f56bf4c10d8ea22d416e028b49"
+    }
+  },
+  "runs": {
+    "tactic": {
+      "raw": {
+        "path": "results/ai-merged-acceptance-tactic.json",
+        "sha256": "c2c10b3f417732dff297f494debcb5e695b3da37941845cc57419dc295935758"
+      },
+      "baseline": {
+        "commit": "5fb8e5ba0bbdece226db60c3bc92ae5c5beaee32",
+        "path": "src/core/ai.ts",
+        "sha256": "f144e8b174009dc528bb0ab9c209f87df45dd71f94086559c202174dbd45df00",
+        "importsRebased": true
+      },
+      "level": "tactic",
+      "args": [
+        "--pairs",
+        "8",
+        "--seed",
+        "500000",
+        "--level",
+        "tactic",
+        "--baseline",
+        "5fb8e5b",
+        "--cap",
+        "200",
+        "--workers",
+        "6",
+        "--out",
+        "results/ai-merged-acceptance-tactic.json"
+      ],
+      "cap": 200,
+      "maxSteps": 50,
+      "budget": {
+        "maxRecruit": 2,
+        "maxUpgrade": 1,
+        "recruited": 0,
+        "upgraded": 0
+      },
+      "acceptance": "At least 32 independent seed pairs; observed wins / ALL games >= 60%; paired bootstrap and one-sided distribution-free Hoeffding 95% lower bounds > 50%. Unresolved are not draws or wins.",
+      "summary": {
+        "games": 208,
+        "pairs": 104,
+        "wins": 149,
+        "losses": 50,
+        "unresolved": 9,
+        "observedWinRate": 0.7163461538461539,
+        "decisiveWinRate": 0.7487437185929648,
+        "pairedBootstrap95": [
+          0.6490384615384616,
+          0.7836538461538461
+        ],
+        "pairedHoeffdingLower95": 0.5963354917886887,
+        "clearlyBetter": true,
+        "errors": {
+          "new": 42,
+          "old": 15
+        },
+        "meanTurns": 78.45192307692308,
+        "meanDecisionMs": {
+          "new": 24.08241050648919,
+          "old": 30.9268933629998
+        },
+        "doctrineTurns": {
+          "rush": 7563,
+          "harass": 156,
+          "boom": 461
+        },
+        "gamesWithAbandonment": 8
+      },
+      "byProfile": {
+        "ancient": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 11,
+          "losses": 5,
+          "unresolved": 0,
+          "observedWinRate": 0.6875,
+          "decisiveWinRate": 0.6875,
+          "pairedBootstrap95": [
+            0.5625,
+            0.875
+          ],
+          "pairedHoeffdingLower95": 0.25479540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 29,
+            "old": 4
+          },
+          "meanTurns": 72.0625,
+          "meanDecisionMs": {
+            "new": 42.29366386929596,
+            "old": 102.07953424680007
+          },
+          "doctrineTurns": {
+            "rush": 505,
+            "harass": 18,
+            "boom": 55
+          },
+          "gamesWithAbandonment": 0
+        },
+        "medieval": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 11,
+          "losses": 3,
+          "unresolved": 2,
+          "observedWinRate": 0.6875,
+          "decisiveWinRate": 0.7857142857142857,
+          "pairedBootstrap95": [
+            0.5625,
+            0.875
+          ],
+          "pairedHoeffdingLower95": 0.25479540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 4,
+            "old": 3
+          },
+          "meanTurns": 94.625,
+          "meanDecisionMs": {
+            "new": 23.510222999845976,
+            "old": 24.10628108342974
+          },
+          "doctrineTurns": {
+            "rush": 734,
+            "harass": 8,
+            "boom": 16
+          },
+          "gamesWithAbandonment": 2
+        },
+        "gunpowder": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 12,
+          "losses": 3,
+          "unresolved": 1,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.8,
+          "pairedBootstrap95": [
+            0.5,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.31729540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 2,
+            "old": 0
+          },
+          "meanTurns": 77.25,
+          "meanDecisionMs": {
+            "new": 20.15935579382235,
+            "old": 24.64761549947412
+          },
+          "doctrineTurns": {
+            "rush": 593,
+            "harass": 4,
+            "boom": 23
+          },
+          "gamesWithAbandonment": 1
+        },
+        "industry": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 4,
+          "losses": 12,
+          "unresolved": 0,
+          "observedWinRate": 0.25,
+          "decisiveWinRate": 0.25,
+          "pairedBootstrap95": [
+            0.0625,
+            0.5
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 59,
+          "meanDecisionMs": {
+            "new": 13.55342390660922,
+            "old": 19.752992190152664
+          },
+          "doctrineTurns": {
+            "rush": 360,
+            "harass": 13,
+            "boom": 97
+          },
+          "gamesWithAbandonment": 1
+        },
+        "modern": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 13,
+          "losses": 3,
+          "unresolved": 0,
+          "observedWinRate": 0.8125,
+          "decisiveWinRate": 0.8125,
+          "pairedBootstrap95": [
+            0.625,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.37979540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 64.1875,
+          "meanDecisionMs": {
+            "new": 15.541153033980663,
+            "old": 13.362820949510114
+          },
+          "doctrineTurns": {
+            "rush": 489,
+            "harass": 21,
+            "boom": 6
+          },
+          "gamesWithAbandonment": 0
+        },
+        "heroes": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 16,
+          "losses": 0,
+          "unresolved": 0,
+          "observedWinRate": 1,
+          "decisiveWinRate": 1,
+          "pairedBootstrap95": [
+            1,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.5672954043494287,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 69.875,
+          "meanDecisionMs": {
+            "new": 27.98102725701065,
+            "old": 20.206482157969738
+          },
+          "doctrineTurns": {
+            "rush": 543,
+            "harass": 6,
+            "boom": 14
+          },
+          "gamesWithAbandonment": 0
+        },
+        "cityworks": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 13,
+          "losses": 1,
+          "unresolved": 2,
+          "observedWinRate": 0.8125,
+          "decisiveWinRate": 0.9285714285714286,
+          "pairedBootstrap95": [
+            0.625,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.37979540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 1,
+            "old": 0
+          },
+          "meanTurns": 93.9375,
+          "meanDecisionMs": {
+            "new": 15.368159042033428,
+            "old": 13.186963933823383
+          },
+          "doctrineTurns": {
+            "rush": 721,
+            "harass": 12,
+            "boom": 21
+          },
+          "gamesWithAbandonment": 1
+        },
+        "seasons": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 15,
+          "losses": 1,
+          "unresolved": 0,
+          "observedWinRate": 0.9375,
+          "decisiveWinRate": 0.9375,
+          "pairedBootstrap95": [
+            0.8125,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.5047954043494287,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 4,
+            "old": 4
+          },
+          "meanTurns": 89.3125,
+          "meanDecisionMs": {
+            "new": 33.350092890922994,
+            "old": 39.864142302974585
+          },
+          "doctrineTurns": {
+            "rush": 691,
+            "harass": 4,
+            "boom": 23
+          },
+          "gamesWithAbandonment": 0
+        },
+        "highland": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 12,
+          "losses": 3,
+          "unresolved": 1,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.8,
+          "pairedBootstrap95": [
+            0.5625,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.31729540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 2,
+            "old": 0
+          },
+          "meanTurns": 79.1875,
+          "meanDecisionMs": {
+            "new": 24.659162427630413,
+            "old": 29.343664402338437
+          },
+          "doctrineTurns": {
+            "rush": 601,
+            "harass": 6,
+            "boom": 28
+          },
+          "gamesWithAbandonment": 0
+        },
+        "canyon": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 13,
+          "losses": 3,
+          "unresolved": 0,
+          "observedWinRate": 0.8125,
+          "decisiveWinRate": 0.8125,
+          "pairedBootstrap95": [
+            0.5625,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.37979540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 83.5625,
+          "meanDecisionMs": {
+            "new": 24.681647529168835,
+            "old": 22.121108188489337
+          },
+          "doctrineTurns": {
+            "rush": 634,
+            "harass": 20,
+            "boom": 17
+          },
+          "gamesWithAbandonment": 1
+        },
+        "volcanic": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 6,
+          "losses": 10,
+          "unresolved": 0,
+          "observedWinRate": 0.375,
+          "decisiveWinRate": 0.375,
+          "pairedBootstrap95": [
+            0.125,
+            0.6875
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 63.875,
+          "meanDecisionMs": {
+            "new": 14.83060674961116,
+            "old": 17.591545324233987
+          },
+          "doctrineTurns": {
+            "rush": 463,
+            "harass": 23,
+            "boom": 24
+          },
+          "gamesWithAbandonment": 0
+        },
+        "marsh": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 12,
+          "losses": 4,
+          "unresolved": 0,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.75,
+          "pairedBootstrap95": [
+            0.5,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.31729540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 4
+          },
+          "meanTurns": 62.125,
+          "meanDecisionMs": {
+            "new": 17.53675669341113,
+            "old": 15.837743445262456
+          },
+          "doctrineTurns": {
+            "rush": 430,
+            "harass": 5,
+            "boom": 64
+          },
+          "gamesWithAbandonment": 1
+        },
+        "combined": {
+          "games": 16,
+          "pairs": 8,
+          "wins": 11,
+          "losses": 2,
+          "unresolved": 3,
+          "observedWinRate": 0.6875,
+          "decisiveWinRate": 0.8461538461538461,
+          "pairedBootstrap95": [
+            0.4375,
+            0.9375
+          ],
+          "pairedHoeffdingLower95": 0.25479540434942866,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 110.875,
+          "meanDecisionMs": {
+            "new": 19.001275523810005,
+            "old": 17.033086910007878
+          },
+          "doctrineTurns": {
+            "rush": 799,
+            "harass": 16,
+            "boom": 73
+          },
+          "gamesWithAbandonment": 1
+        }
+      },
+      "normalizedConfigs": {
+        "ancient": {
+          "size": 12,
+          "startEra": 1,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "canyon": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "canyon",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "cityworks": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 3,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "city-works"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "granary",
+            "quarry"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "combined": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "highland",
+          "mapSymmetry": "fair",
+          "citySize": 3,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "fantasy-core",
+            "fantasy-knights",
+            "fantasy-heroes",
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain",
+            "city-works",
+            "seasons"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "granary",
+            "quarry",
+            "dwarf-king",
+            "hydra",
+            "phoenix",
+            "archmage",
+            "angel",
+            "assassin-master",
+            "slime-boss",
+            "slime-giant",
+            "swordsman",
+            "royal-cavalry",
+            "ranger",
+            "priest",
+            "thief",
+            "cataphract",
+            "mage",
+            "assassin",
+            "berserker",
+            "paladin",
+            "rune-guardian",
+            "royal-guard"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "gunpowder": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "heroes": {
+          "size": 16,
+          "startEra": 3,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "fantasy-core",
+            "fantasy-knights",
+            "fantasy-heroes",
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "dwarf-king",
+            "hydra",
+            "phoenix",
+            "archmage",
+            "angel",
+            "assassin-master",
+            "slime-boss",
+            "slime-giant",
+            "swordsman",
+            "royal-cavalry",
+            "ranger",
+            "priest",
+            "thief",
+            "cataphract",
+            "mage",
+            "assassin",
+            "berserker",
+            "paladin",
+            "rune-guardian",
+            "royal-guard"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "highland": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "highland",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "industry": {
+          "size": 20,
+          "startEra": 4,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "marsh": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "marsh",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "medieval": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "modern": {
+          "size": 20,
+          "startEra": 5,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "seasons": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "seasons"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "volcanic": {
+          "size": 20,
+          "startEra": 4,
+          "mapStyle": "volcanic",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        }
+      },
+      "pairedResults": [
+        {
+          "profile": "ancient",
+          "seed": 500000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 107
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 73
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 35
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 61
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 62
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 113
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 19
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 75
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 85
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 139
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 19
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 16
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 500007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 73
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 101
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 43
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 84
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509001,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 58
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 84
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 106
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 97
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 77
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 70
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 62
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 58
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 115
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 148
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 509007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 83
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 58
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 65
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 127
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 81
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 74
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 31
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 56
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 175
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 71
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 42
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 85
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 506007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 83
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 66
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 63
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 69
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 59
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 90
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 141
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 76
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 77
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 63
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 108
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512006,
+          "seats": {
+            "A": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 175
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 512007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 81
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 72
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 91
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502001,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 60
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 81
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 51
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 52
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 93
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 54
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 57
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 63
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 53
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 50
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 71
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 502007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 91
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 90
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 81
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 42
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 55
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 68
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 46
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 79
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 80
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 45
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 124
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 41
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 56
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 505007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 79
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 108
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 19
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 32
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 57
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 62
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508002,
+          "seats": {
+            "A": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 114
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 121
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 106
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 61
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 57
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 44
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 102
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 92
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 508007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 53
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 79
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 51
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 132
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503001,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 34
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 63
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 48
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 35
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503003,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 46
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 49
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503004,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 50
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 47
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 33
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 33
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 58
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 59
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 503007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 45
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 161
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 45
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 74
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 70
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 47
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 49
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 35
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 32
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 35
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 54
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 119
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 88
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 42
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 43
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 511007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 95
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 99
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 64
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 60
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 51
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 66
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 147
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 124
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 91
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 37
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 56
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 73
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 67
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 56
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 102
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 501007,
+          "seats": {
+            "A": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 118
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 57
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 120
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 51
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 61
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 59
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 58
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 29
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 28
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 98
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504005,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 61
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 108
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 96
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 48
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 504007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 35
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 51
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 52
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 83
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 120
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 105
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 74
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 125
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 82
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 76
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507005,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 60
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 52
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507006,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 95
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 120
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 507007,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 152
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 54
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 51
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 93
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 66
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 29
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 114
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510004,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 93
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 53
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510005,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 38
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 33
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510006,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 64
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 45
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 510007,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 72
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 83
+            }
+          }
+        }
+      ],
+      "diagnostics": {
+        "capHits": 0,
+        "rejectionReasons": {
+          "new:MOVE:目标格不可达": 42,
+          "old:RECRUIT:军营周围没有空地放下新兵": 14,
+          "old:RECRUIT:寨垒周围没有空地放下新兵": 1
+        },
+        "successfulActions": {
+          "new": 65569,
+          "old": 60675
+        },
+        "gamesWithLeadChanges": 123,
+        "totalLeadChanges": 501,
+        "largestWeightStep": 0.6872244728685623,
+        "leadLabelsAreActiveDoctrines": true,
+        "abandonmentCases": [
+          {
+            "profile": "canyon",
+            "seed": 509000,
+            "newSide": "B",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 46,
+                "city": "c4",
+                "gold": 290,
+                "income": 233
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 5,
+              "buildings": 9,
+              "upgrades": 4,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "cityworks",
+            "seed": 506004,
+            "newSide": "A",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 15,
+                "city": "c2",
+                "gold": 375,
+                "income": 109
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 5,
+              "buildings": 0,
+              "upgrades": 6,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "combined",
+            "seed": 512002,
+            "newSide": "A",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 29,
+                "city": "c2",
+                "gold": 837,
+                "income": 138
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 3,
+              "buildings": 11,
+              "upgrades": 4,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "gunpowder",
+            "seed": 502001,
+            "newSide": "A",
+            "outcome": "loss",
+            "events": [
+              {
+                "turn": 21,
+                "city": "c1",
+                "gold": 417,
+                "income": 169
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 3,
+              "buildings": 4,
+              "upgrades": 1,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "industry",
+            "seed": 503001,
+            "newSide": "A",
+            "outcome": "loss",
+            "events": [
+              {
+                "turn": 7,
+                "city": "c2",
+                "gold": 772,
+                "income": 177
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 2,
+              "buildings": 4,
+              "upgrades": 1,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "marsh",
+            "seed": 511005,
+            "newSide": "A",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 89,
+                "city": "c2",
+                "gold": 217,
+                "income": 172
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 3,
+              "buildings": 8,
+              "upgrades": 5,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "medieval",
+            "seed": 501001,
+            "newSide": "A",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 19,
+                "city": "c1",
+                "gold": 173,
+                "income": 172
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 5,
+              "buildings": 6,
+              "upgrades": 1,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "medieval",
+            "seed": 501005,
+            "newSide": "B",
+            "outcome": "loss",
+            "events": [
+              {
+                "turn": 52,
+                "city": "c3",
+                "gold": 172,
+                "income": 147
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 4,
+              "buildings": 4,
+              "upgrades": 1,
+              "heroes": 0
+            }
+          }
+        ]
+      }
+    },
+    "advanced": {
+      "raw": {
+        "path": "results/ai-merged-acceptance-advanced.json",
+        "sha256": "0123cc5d4234bf6f862e5113eeb79947bfb6ced1f008027a245f31dc79b47078"
+      },
+      "baseline": {
+        "commit": "5fb8e5ba0bbdece226db60c3bc92ae5c5beaee32",
+        "path": "src/core/ai.ts",
+        "sha256": "f144e8b174009dc528bb0ab9c209f87df45dd71f94086559c202174dbd45df00",
+        "importsRebased": true
+      },
+      "level": "advanced",
+      "args": [
+        "--pairs",
+        "4",
+        "--seed",
+        "600000",
+        "--level",
+        "advanced",
+        "--baseline",
+        "5fb8e5b",
+        "--cap",
+        "200",
+        "--workers",
+        "4",
+        "--out",
+        "results/ai-merged-acceptance-advanced.json"
+      ],
+      "cap": 200,
+      "maxSteps": 50,
+      "budget": {
+        "maxRecruit": 2,
+        "maxUpgrade": 1,
+        "recruited": 0,
+        "upgraded": 0
+      },
+      "acceptance": "At least 32 independent seed pairs; observed wins / ALL games >= 60%; paired bootstrap and one-sided distribution-free Hoeffding 95% lower bounds > 50%. Unresolved are not draws or wins.",
+      "summary": {
+        "games": 104,
+        "pairs": 52,
+        "wins": 68,
+        "losses": 32,
+        "unresolved": 4,
+        "observedWinRate": 0.6538461538461539,
+        "decisiveWinRate": 0.68,
+        "pairedBootstrap95": [
+          0.5576923076923077,
+          0.75
+        ],
+        "pairedHoeffdingLower95": 0.4841254479351124,
+        "clearlyBetter": false,
+        "errors": {
+          "new": 41,
+          "old": 6
+        },
+        "meanTurns": 83.01923076923077,
+        "meanDecisionMs": {
+          "new": 25.702128444279094,
+          "old": 29.38452245953249
+        },
+        "doctrineTurns": {
+          "rush": 3871,
+          "harass": 221,
+          "boom": 232
+        },
+        "gamesWithAbandonment": 0
+      },
+      "byProfile": {
+        "ancient": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 7,
+          "losses": 1,
+          "unresolved": 0,
+          "observedWinRate": 0.875,
+          "decisiveWinRate": 0.875,
+          "pairedBootstrap95": [
+            0.625,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.26306329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 26,
+            "old": 1
+          },
+          "meanTurns": 67.125,
+          "meanDecisionMs": {
+            "new": 35.56811488673142,
+            "old": 50.00243149606296
+          },
+          "doctrineTurns": {
+            "rush": 254,
+            "harass": 3,
+            "boom": 13
+          },
+          "gamesWithAbandonment": 0
+        },
+        "medieval": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 6,
+          "losses": 2,
+          "unresolved": 0,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.75,
+          "pairedBootstrap95": [
+            0.5,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.13806329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 5,
+            "old": 2
+          },
+          "meanTurns": 89.25,
+          "meanDecisionMs": {
+            "new": 26.682499556606615,
+            "old": 28.813781255349454
+          },
+          "doctrineTurns": {
+            "rush": 331,
+            "harass": 8,
+            "boom": 19
+          },
+          "gamesWithAbandonment": 0
+        },
+        "gunpowder": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 7,
+          "losses": 1,
+          "unresolved": 0,
+          "observedWinRate": 0.875,
+          "decisiveWinRate": 0.875,
+          "pairedBootstrap95": [
+            0.625,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.26306329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 81.625,
+          "meanDecisionMs": {
+            "new": 24.381158234885206,
+            "old": 21.885055663682344
+          },
+          "doctrineTurns": {
+            "rush": 319,
+            "harass": 2,
+            "boom": 7
+          },
+          "gamesWithAbandonment": 0
+        },
+        "industry": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 5,
+          "losses": 3,
+          "unresolved": 0,
+          "observedWinRate": 0.625,
+          "decisiveWinRate": 0.625,
+          "pairedBootstrap95": [
+            0.25,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.013063292329795861,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 84.625,
+          "meanDecisionMs": {
+            "new": 21.12198990929677,
+            "old": 22.116925023577675
+          },
+          "doctrineTurns": {
+            "rush": 287,
+            "harass": 3,
+            "boom": 49
+          },
+          "gamesWithAbandonment": 0
+        },
+        "modern": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 3,
+          "losses": 4,
+          "unresolved": 1,
+          "observedWinRate": 0.375,
+          "decisiveWinRate": 0.42857142857142855,
+          "pairedBootstrap95": [
+            0.125,
+            0.5
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 87.625,
+          "meanDecisionMs": {
+            "new": 14.738001943198286,
+            "old": 26.820096283340852
+          },
+          "doctrineTurns": {
+            "rush": 276,
+            "harass": 56,
+            "boom": 18
+          },
+          "gamesWithAbandonment": 0
+        },
+        "heroes": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 8,
+          "losses": 0,
+          "unresolved": 0,
+          "observedWinRate": 1,
+          "decisiveWinRate": 1,
+          "pairedBootstrap95": [
+            1,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.38806329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 3
+          },
+          "meanTurns": 62.75,
+          "meanDecisionMs": {
+            "new": 27.808982236617535,
+            "old": 15.660129584121085
+          },
+          "doctrineTurns": {
+            "rush": 245,
+            "harass": 2,
+            "boom": 6
+          },
+          "gamesWithAbandonment": 0
+        },
+        "cityworks": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 5,
+          "losses": 2,
+          "unresolved": 1,
+          "observedWinRate": 0.625,
+          "decisiveWinRate": 0.7142857142857143,
+          "pairedBootstrap95": [
+            0.5,
+            0.875
+          ],
+          "pairedHoeffdingLower95": 0.013063292329795861,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 99.375,
+          "meanDecisionMs": {
+            "new": 13.974208006362973,
+            "old": 12.779796934225514
+          },
+          "doctrineTurns": {
+            "rush": 329,
+            "harass": 63,
+            "boom": 6
+          },
+          "gamesWithAbandonment": 0
+        },
+        "seasons": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 5,
+          "losses": 3,
+          "unresolved": 0,
+          "observedWinRate": 0.625,
+          "decisiveWinRate": 0.625,
+          "pairedBootstrap95": [
+            0.5,
+            0.875
+          ],
+          "pairedHoeffdingLower95": 0.013063292329795861,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 4,
+            "old": 0
+          },
+          "meanTurns": 90.875,
+          "meanDecisionMs": {
+            "new": 25.831217304881417,
+            "old": 31.01153235144751
+          },
+          "doctrineTurns": {
+            "rush": 335,
+            "harass": 5,
+            "boom": 24
+          },
+          "gamesWithAbandonment": 0
+        },
+        "highland": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 5,
+          "losses": 3,
+          "unresolved": 0,
+          "observedWinRate": 0.625,
+          "decisiveWinRate": 0.625,
+          "pairedBootstrap95": [
+            0.25,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.013063292329795861,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 2,
+            "old": 0
+          },
+          "meanTurns": 87.125,
+          "meanDecisionMs": {
+            "new": 27.65122675159293,
+            "old": 37.087383476968974
+          },
+          "doctrineTurns": {
+            "rush": 323,
+            "harass": 7,
+            "boom": 19
+          },
+          "gamesWithAbandonment": 0
+        },
+        "canyon": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 6,
+          "losses": 2,
+          "unresolved": 0,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.75,
+          "pairedBootstrap95": [
+            0.5,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.13806329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 82.75,
+          "meanDecisionMs": {
+            "new": 29.274475894813293,
+            "old": 34.00340761839374
+          },
+          "doctrineTurns": {
+            "rush": 306,
+            "harass": 5,
+            "boom": 21
+          },
+          "gamesWithAbandonment": 0
+        },
+        "volcanic": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 1,
+          "losses": 7,
+          "unresolved": 0,
+          "observedWinRate": 0.125,
+          "decisiveWinRate": 0.125,
+          "pairedBootstrap95": [
+            0,
+            0.375
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 3,
+            "old": 0
+          },
+          "meanTurns": 58.125,
+          "meanDecisionMs": {
+            "new": 27.925390177881127,
+            "old": 28.81312349921083
+          },
+          "doctrineTurns": {
+            "rush": 199,
+            "harass": 11,
+            "boom": 21
+          },
+          "gamesWithAbandonment": 0
+        },
+        "marsh": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 6,
+          "losses": 2,
+          "unresolved": 0,
+          "observedWinRate": 0.75,
+          "decisiveWinRate": 0.75,
+          "pairedBootstrap95": [
+            0.5,
+            1
+          ],
+          "pairedHoeffdingLower95": 0.13806329232979586,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 71,
+          "meanDecisionMs": {
+            "new": 27.508203278688658,
+            "old": 37.76154719971804
+          },
+          "doctrineTurns": {
+            "rush": 261,
+            "harass": 16,
+            "boom": 8
+          },
+          "gamesWithAbandonment": 0
+        },
+        "combined": {
+          "games": 8,
+          "pairs": 4,
+          "wins": 4,
+          "losses": 2,
+          "unresolved": 2,
+          "observedWinRate": 0.5,
+          "decisiveWinRate": 0.6666666666666666,
+          "pairedBootstrap95": [
+            0,
+            1
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 1,
+            "old": 0
+          },
+          "meanTurns": 117,
+          "meanDecisionMs": {
+            "new": 22.68143594989649,
+            "old": 23.68968088822403
+          },
+          "doctrineTurns": {
+            "rush": 406,
+            "harass": 40,
+            "boom": 21
+          },
+          "gamesWithAbandonment": 0
+        }
+      },
+      "normalizedConfigs": {
+        "ancient": {
+          "size": 12,
+          "startEra": 1,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "canyon": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "canyon",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "cityworks": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 3,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "city-works"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "granary",
+            "quarry"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "combined": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "highland",
+          "mapSymmetry": "fair",
+          "citySize": 3,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "fantasy-core",
+            "fantasy-knights",
+            "fantasy-heroes",
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain",
+            "city-works",
+            "seasons"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "granary",
+            "quarry",
+            "dwarf-king",
+            "hydra",
+            "phoenix",
+            "archmage",
+            "angel",
+            "assassin-master",
+            "slime-boss",
+            "slime-giant",
+            "swordsman",
+            "royal-cavalry",
+            "ranger",
+            "priest",
+            "thief",
+            "cataphract",
+            "mage",
+            "assassin",
+            "berserker",
+            "paladin",
+            "rune-guardian",
+            "royal-guard"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "gunpowder": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "heroes": {
+          "size": 16,
+          "startEra": 3,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "fantasy-core",
+            "fantasy-knights",
+            "fantasy-heroes",
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad",
+            "dwarf-king",
+            "hydra",
+            "phoenix",
+            "archmage",
+            "angel",
+            "assassin-master",
+            "slime-boss",
+            "slime-giant",
+            "swordsman",
+            "royal-cavalry",
+            "ranger",
+            "priest",
+            "thief",
+            "cataphract",
+            "mage",
+            "assassin",
+            "berserker",
+            "paladin",
+            "rune-guardian",
+            "royal-guard"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "highland": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "highland",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "industry": {
+          "size": 20,
+          "startEra": 4,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "marsh": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "marsh",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "medieval": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "modern": {
+          "size": 20,
+          "startEra": 5,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "seasons": {
+          "size": 16,
+          "startEra": 2,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "seasons"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "volcanic": {
+          "size": 20,
+          "startEra": 4,
+          "mapStyle": "volcanic",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "advanced",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        }
+      },
+      "pairedResults": [
+        {
+          "profile": "ancient",
+          "seed": 600000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 29
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 68
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 600001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 81
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 162
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 600002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 79
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 42
+            }
+          }
+        },
+        {
+          "profile": "ancient",
+          "seed": 600003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 25
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 51
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 609000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 90
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 136
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 609001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 65
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 37
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 609002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 75
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 48
+            }
+          }
+        },
+        {
+          "profile": "canyon",
+          "seed": 609003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 85
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 126
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 606000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 55
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 143
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 606001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 64
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 606002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 79
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "cityworks",
+          "seed": 606003,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 122
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 62
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 612000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 139
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 84
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 612001,
+          "seats": {
+            "A": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 97
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 612002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 73
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 56
+            }
+          }
+        },
+        {
+          "profile": "combined",
+          "seed": 612003,
+          "seats": {
+            "A": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 85
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 602000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 97
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 602001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 52
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 602002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 123
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 88
+            }
+          }
+        },
+        {
+          "profile": "gunpowder",
+          "seed": 602003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 55
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 91
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 605000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 64
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 605001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 37
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 62
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 605002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 53
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 50
+            }
+          }
+        },
+        {
+          "profile": "heroes",
+          "seed": 605003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 83
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 86
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 608000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 98
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 176
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 608001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 55
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 54
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 608002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 78
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 79
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 608003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 73
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 84
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 603000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 46
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 103
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 603001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 98
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 603002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 167
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 100
+            }
+          }
+        },
+        {
+          "profile": "industry",
+          "seed": 603003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 69
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 25
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 611000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 61
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 68
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 611001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 53
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 93
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 611002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 47
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 108
+            }
+          }
+        },
+        {
+          "profile": "marsh",
+          "seed": 611003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 85
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 53
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 601000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 95
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 93
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 601001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 45
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 164
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 601002,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 85
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 82
+            }
+          }
+        },
+        {
+          "profile": "medieval",
+          "seed": 601003,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 95
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 55
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 604000,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 92
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 60
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 604001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 57
+            },
+            "B": {
+              "outcome": "unresolved",
+              "winner": null,
+              "turns": 201
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 604002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 144
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 40
+            }
+          }
+        },
+        {
+          "profile": "modern",
+          "seed": 604003,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 68
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 39
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 607000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 67
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 107
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 607001,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 77
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 84
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 607002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 82
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 110
+            }
+          }
+        },
+        {
+          "profile": "seasons",
+          "seed": 607003,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 122
+            },
+            "B": {
+              "outcome": "win",
+              "winner": "B",
+              "turns": 78
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 610000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 99
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 51
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 610001,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 46
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 51
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 610002,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 32
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 63
+            }
+          }
+        },
+        {
+          "profile": "volcanic",
+          "seed": 610003,
+          "seats": {
+            "A": {
+              "outcome": "loss",
+              "winner": "B",
+              "turns": 60
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 63
+            }
+          }
+        }
+      ],
+      "diagnostics": {
+        "capHits": 0,
+        "rejectionReasons": {
+          "new:MOVE:目标格不可达": 41,
+          "old:RECRUIT:军营周围没有空地放下新兵": 6
+        },
+        "successfulActions": {
+          "new": 34942,
+          "old": 35584
+        },
+        "gamesWithLeadChanges": 78,
+        "totalLeadChanges": 352,
+        "largestWeightStep": 0,
+        "leadLabelsAreActiveDoctrines": false,
+        "abandonmentCases": []
+      }
+    },
+    "selfCheck": {
+      "raw": {
+        "path": "results/ai-merged-self-check.json",
+        "sha256": "4f286eebc18f5d056397b4469030142ab3c1a26b5609f64b1b03743dd0f69809"
+      },
+      "baseline": {
+        "commit": "5fb8e5ba0bbdece226db60c3bc92ae5c5beaee32",
+        "path": "src/core/ai.ts",
+        "sha256": "f144e8b174009dc528bb0ab9c209f87df45dd71f94086559c202174dbd45df00",
+        "importsRebased": true
+      },
+      "level": "tactic",
+      "args": [
+        "--self",
+        "--profiles",
+        "ancient,highland",
+        "--pairs",
+        "1",
+        "--seed",
+        "800000",
+        "--level",
+        "tactic",
+        "--baseline",
+        "5fb8e5b",
+        "--cap",
+        "200",
+        "--workers",
+        "2",
+        "--out",
+        "results/ai-merged-self-check.json"
+      ],
+      "cap": 200,
+      "maxSteps": 50,
+      "budget": {
+        "maxRecruit": 2,
+        "maxUpgrade": 1,
+        "recruited": 0,
+        "upgraded": 0
+      },
+      "acceptance": "At least 32 independent seed pairs; observed wins / ALL games >= 60%; paired bootstrap and one-sided distribution-free Hoeffding 95% lower bounds > 50%. Unresolved are not draws or wins.",
+      "summary": {
+        "games": 4,
+        "pairs": 2,
+        "wins": 2,
+        "losses": 2,
+        "unresolved": 0,
+        "observedWinRate": 0.5,
+        "decisiveWinRate": 0.5,
+        "pairedBootstrap95": [
+          0.5,
+          0.5
+        ],
+        "pairedHoeffdingLower95": 0,
+        "clearlyBetter": false,
+        "errors": {
+          "new": 0,
+          "old": 0
+        },
+        "meanTurns": 47,
+        "meanDecisionMs": {
+          "new": 38.139931917336305,
+          "old": 37.64057726750849
+        },
+        "doctrineTurns": {
+          "rush": 79,
+          "harass": 4,
+          "boom": 11
+        },
+        "gamesWithAbandonment": 2
+      },
+      "byProfile": {
+        "ancient": {
+          "games": 2,
+          "pairs": 1,
+          "wins": 1,
+          "losses": 1,
+          "unresolved": 0,
+          "observedWinRate": 0.5,
+          "decisiveWinRate": 0.5,
+          "pairedBootstrap95": [
+            0.5,
+            0.5
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 13,
+          "meanDecisionMs": {
+            "new": 15.451583185840674,
+            "old": 12.673396460177
+          },
+          "doctrineTurns": {
+            "rush": 6,
+            "harass": 0,
+            "boom": 7
+          },
+          "gamesWithAbandonment": 2
+        },
+        "highland": {
+          "games": 2,
+          "pairs": 1,
+          "wins": 1,
+          "losses": 1,
+          "unresolved": 0,
+          "observedWinRate": 0.5,
+          "decisiveWinRate": 0.5,
+          "pairedBootstrap95": [
+            0.5,
+            0.5
+          ],
+          "pairedHoeffdingLower95": 0,
+          "clearlyBetter": false,
+          "errors": {
+            "new": 0,
+            "old": 0
+          },
+          "meanTurns": 81,
+          "meanDecisionMs": {
+            "new": 41.522231926121265,
+            "old": 41.36259762532968
+          },
+          "doctrineTurns": {
+            "rush": 73,
+            "harass": 4,
+            "boom": 4
+          },
+          "gamesWithAbandonment": 0
+        }
+      },
+      "normalizedConfigs": {
+        "ancient": {
+          "size": 12,
+          "startEra": 1,
+          "mapStyle": "random",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        },
+        "highland": {
+          "size": 20,
+          "startEra": 3,
+          "mapStyle": "highland",
+          "mapSymmetry": "fair",
+          "citySize": 2,
+          "aiOpponent": true,
+          "aiAlly": true,
+          "aiLevel": "tactic",
+          "expansionIds": [
+            "bloodbath",
+            "turn-order-comp",
+            "height-terrain"
+          ],
+          "enabledUnits": [
+            "militia",
+            "archer",
+            "scout",
+            "farmer",
+            "herder",
+            "laborer",
+            "tower",
+            "mill",
+            "spearman",
+            "longbow",
+            "knight",
+            "lumberjack",
+            "miller",
+            "keep",
+            "watermill",
+            "musketeer",
+            "mortar",
+            "halberdier",
+            "hussar",
+            "planter",
+            "engineer",
+            "battery",
+            "factory",
+            "rifleman",
+            "mg",
+            "hmg",
+            "armoredcar",
+            "foreman",
+            "fortress",
+            "arsenal",
+            "squad",
+            "tank",
+            "artillery",
+            "agribusiness",
+            "crew",
+            "bunker",
+            "industrialpark",
+            "boat",
+            "ferry",
+            "bridge",
+            "bridge2",
+            "bridge3",
+            "camp",
+            "camp2",
+            "camp3",
+            "camp4",
+            "camp5",
+            "gunboat",
+            "ironclad"
+          ],
+          "commanderMode": false,
+          "godMode": false
+        }
+      },
+      "pairedResults": [
+        {
+          "profile": "ancient",
+          "seed": 800000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 13
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 13
+            }
+          }
+        },
+        {
+          "profile": "highland",
+          "seed": 808000,
+          "seats": {
+            "A": {
+              "outcome": "win",
+              "winner": "A",
+              "turns": 81
+            },
+            "B": {
+              "outcome": "loss",
+              "winner": "A",
+              "turns": 81
+            }
+          }
+        }
+      ],
+      "diagnostics": {
+        "capHits": 0,
+        "rejectionReasons": {},
+        "successfulActions": {
+          "new": 871,
+          "old": 871
+        },
+        "gamesWithLeadChanges": 3,
+        "totalLeadChanges": 8,
+        "largestWeightStep": 0.4203795810342234,
+        "leadLabelsAreActiveDoctrines": true,
+        "abandonmentCases": [
+          {
+            "profile": "ancient",
+            "seed": 800000,
+            "newSide": "A",
+            "outcome": "win",
+            "events": [
+              {
+                "turn": 9,
+                "city": "c2",
+                "gold": 134,
+                "income": 133
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 6,
+              "buildings": 3,
+              "upgrades": 0,
+              "heroes": 0
+            }
+          },
+          {
+            "profile": "ancient",
+            "seed": 800000,
+            "newSide": "B",
+            "outcome": "loss",
+            "events": [
+              {
+                "turn": 2,
+                "city": "c3",
+                "gold": 236,
+                "income": 92
+              }
+            ],
+            "wholeGameDevelopment": {
+              "economy": 2,
+              "buildings": 5,
+              "upgrades": 0,
+              "heroes": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}
