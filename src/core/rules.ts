@@ -772,7 +772,10 @@ function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: numbe
   const hitHooks = stagedFor<HitCtx>(def, 'onHit');
 
   // 先跑"命中即贴"那批（淬毒/燃焰/霜缚/咒缚）
-  runStaged(hitHooks, hitCtx, { to: HIT_STAGE.element });
+  runStaged(hitHooks, hitCtx, { to: HIT_STAGE.postStatus });
+
+  // 空槽：普通状态之后，属性精研之前（150 ~ 199）
+  runStaged(hitHooks, hitCtx, { from: HIT_STAGE.postStatus, to: HIT_STAGE.element });
 
   // 技能附带的属性效果（不死鸟俯冲是"这一下多点几层"）
   const layers = attacker.heroBuff?.burnLayers ?? 0;
@@ -790,7 +793,10 @@ function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: numbe
     else if (el === 'nature') put(st, 'poison', 3, '中毒', touched);
     else if (el === 'dark') put(st, 'curse', 3, '诅咒', touched);
   } else {
-    runStaged(hitHooks, hitCtx, { from: HIT_STAGE.element });
+    // 属性精研
+    runStaged(hitHooks, hitCtx, { from: HIT_STAGE.element, to: HIT_STAGE.postElement });
+    // 属性精研之后
+    runStaged(hitHooks, hitCtx, { from: HIT_STAGE.postElement });
   }
 
   return touched;
@@ -1469,7 +1475,7 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
 }
 
 /**
- * 对单位的伤害：攻击 − （护甲 + 地形加成），最低 1，然后过一遍扩展钩子。
+ * 对单位的伤害：攻击 − （护甲 + 地形加成），最低 0，然后过一遍扩展钩子。
  * 钩子必须是纯函数——这个函数也会在 UI 的伤害预览里被调用。
  */
 export function computeDamage(
@@ -1482,8 +1488,6 @@ export function computeDamage(
   const dt = utype(s, defender.type);
   const tile = tileAt(s, defender.x, defender.y);
   const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
-
-  // 允许 0：差四个时代的兵打不动坦克，这是刻意的
   const attackerAura = auraBonus(s, attacker);
   const defenderAura = auraBonus(s, defender);
 
@@ -1494,7 +1498,7 @@ export function computeDamage(
     side: 'defender',
     atk: at.atk + attackerAura.atk,
     armor: dt.armor + defenderAura.armor + terrainBonus,
-    damage: 0,
+    damage: at.atk + attackerAura.atk,
     items: [],
     isCounter,
     terrainBonus,
@@ -1503,47 +1507,56 @@ export function computeDamage(
     api: abilityApi,
   };
 
-  // 护甲阶段的钩子：攻方的（穿隙、破甲）和守方的（林地之主）都进同一张表，
+  // 护甲阶段的钩子：攻方和守方的都进同一张表，
   // 按 stage 排；每条跑的时候 ctx.self 临时指向它自己的主人。
   const armorHooks = [
     ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'armorPhase'),
     ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'armorPhase'),
   ];
 
-  // 掩护层：穿隙只免掉"地形"那一层，所以对着重甲还是打不动——
-  // 这是"看得准"，不是"打得穿"。林地之主也在这半段，因为它和地形加成是同一种东西。
-  runBound(armorHooks, ctx, { to: ARMOR_STAGE.expanded });
+  // 地形掩护之前，穿隙
+  runBound(armorHooks, ctx, { to: ARMOR_STAGE.postIgnoreCover });
 
   // 驻军：站在自家可驻军建筑上，多一层掩护（和地形加成同一种东西）
   ctx.armor += garrisonBonus(s, defender);
-  // 诅咒与咒域：都在破甲之前扣，理由同上（它们是"变脆"，不是"少挨"）
+
+  // 林地之主之前
+  runBound(armorHooks, ctx, { from: ARMOR_STAGE.postIgnoreCover, to: ARMOR_STAGE.postWoodland });
+
+  // 林地之主，直到小型扩展之前
+  runBound(armorHooks, ctx, { from: ARMOR_STAGE.postWoodland, to: ARMOR_STAGE.expanded });
+
+  // 诅咒与咒域
   ctx.armor -= cursePenalty(defender);
   ctx.armor -= curseAuraPenalty(s, defender);
 
-  // 扩展改护甲放在破甲之前：这样"额外 N 点护甲"和地形加成是同一种东西，
-  // 破甲照样削一半、攻击低于护甲照样是 0 伤害。
+  // 小型扩展
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
       ctx.armor = e.hooks.modifyArmor({ state: s, attacker, defender, armor: ctx.armor, isCounter });
     }
   }
 
-  // 破甲在扩展改甲之后：它削的是**累出来的**那一坨，包括扩展加的那几点。
-  runBound(armorHooks, ctx, { from: ARMOR_STAGE.expanded });
+  // 小型扩展到破甲之前
+  runBound(armorHooks, ctx, { from: ARMOR_STAGE.expanded, to: ARMOR_STAGE.pierce });
 
-  ctx.damage = Math.max(0, ctx.atk - ctx.armor);
+  // 破甲
+  runBound(armorHooks, ctx, { from: ARMOR_STAGE.pierce, to: ARMOR_STAGE.postPierce });
+  
+  // 破甲之后
+  runBound(armorHooks, ctx, { from: ARMOR_STAGE.postPierce });
 
+  // ── 伤害计算 ──
   const damageHooks = [
     ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'damage'),
     ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'damage'),
   ];
 
-  // 冲锋、群势、追猎（攻击方加数）→ 狂暴（乘）→ 盾墙（守方减）。
-  // 这一段是加减法，乘法的狂暴必须排在它们之后，否则"多 5 点"会被放大成 7.5。
+  // ── 物理加成阶段 ──
+  // 冲锋、群势、追猎
   runBound(damageHooks, ctx, { to: DAMAGE_STAGE.rangeMul });
 
-  // 威吓：跟会吓人的敌人贴身，手就抖了。放在护甲之后扣，
-  // 这样它对"轻甲高攻"的单位更致命，对重甲单位几乎无所谓——和自己的定位一致。
+  // 威吓
   ctx.damage -= fearPenalty(s, attacker);
 
   // 长短皆可：隔着一格以上打，只有六成伤害。近身才是本职。
@@ -1555,49 +1568,59 @@ export function computeDamage(
     ctx.damage = Math.round(ctx.damage * attacker.heroBuff.rangeMul);
   }
 
-  // 游骑（半人马）：射得远不算本事，射的时候没人拿刀架在脖子上才算。
-  // 只算远程——贴脸那一箭不享受，也不吃惩罚，否则它就变成"永远 −3"的兵。
-  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.rangeFlat, to: DAMAGE_STAGE.elementMul });
+  // 游骑（半人马）
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.rangeFlat, to: DAMAGE_STAGE.postRange });
 
-  // ── 魔法段 ──
-  // 不吃护甲、不吃地形、不吃破甲，只被目标的魔法抗性平减。
-  // 这就是法师存在的理由：对面越硬，它相对越划算。
-  ctx.damage += magicDamageOf(s, attacker, defender);
-
-  // ── 属性 ──
-  // 弱点倍乘、抗性平减，作用在**整段**伤害上：怕火不是"怕魔法火"，
-  // 是身体怕火，被火把砸一下也疼。
-  const el = elementOf(s, attacker);
-  if (el) {
-    const weak = dt.weak?.[el];
-    if (weak && weak > 0) ctx.damage *= weak;
-    const resist = dt.resist?.[el];
-    if (resist) ctx.damage -= resist;
-  }
-
-  // 同源护壁（至尊法师）：挨的是和自己**当前属性**同一路的伤害，只吃一半。
-  //
-  // 放在弱点/抗性之后、反击折减之前：它说的是"这一路的伤害对我打对折"，
-  // 和"我怕不怕火"是两件事——怕火照样怕，只是那口火小了一半。
-  // 属性是会变的（转属性技能），所以这个护壁每回合护的东西都不一样。
-  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.elementMul });
-
-  if (isCounter) ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
-
+  // 魔法之前
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postRange, to: DAMAGE_STAGE.postMagic });
+  
+  //各种小型扩展
   let dmg = ctx.damage;
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyDamage) {
       dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, isCounter });
     }
   }
+  ctx.damage = dmg;
 
-  return Math.max(0, Math.round(dmg));
+  // 物理伤害减去护甲，并保底为 0
+  ctx.damage = Math.max(0, ctx.damage - ctx.armor);
+
+  // ── 魔法段 ──
+  // 不吃护甲、不吃地形、不吃破甲，只被目标的魔法抗性平减。
+  ctx.damage += magicDamageOf(s, attacker, defender);
+
+  //魔法之后、属性之前
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postMagic, to: DAMAGE_STAGE.postElement });
+
+  // ── 属性 ──
+  // 作用在整段伤害上
+  const el = elementOf(s, attacker);
+  if (el) {
+    const weak = dt.weak?.[el];
+    if (weak && weak > 0) ctx.damage *= weak;
+    const resist = dt.resist?.[el];
+    if (resist) ctx.damage *= resist;
+  }
+
+  // 属性之后、同源护壁之前
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postElement, to: DAMAGE_STAGE.elementMul });
+
+  // 同源护壁（至尊法师）：挨的是和自己**当前属性**同一路的伤害，只吃一半。
+  // 放在弱点/抗性之后、反击折减之前：它说的是"这一路的伤害对我打对折"。
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.elementMul, to: DAMAGE_STAGE.trueDamage });
+
+  if (isCounter) ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
+
+  // 真实伤害阶段
+  runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
+
+  return Math.max(0, Math.round(ctx.damage));
 }
 
 /** 对城市的伤害：只用城市自身护甲，地形加成不重复计算 */
 export function damageToCity(attacker: Unit, city: City, s: GameState): number {
   const at = utype(s, attacker.type);
-  // 同样允许 0：拿民兵去砸现代城，就是砸不动
   const sctx: SiegeDamageCtx = {
     state: s,
     self: attacker,
@@ -2300,16 +2323,19 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   };
   const strikeHooks = stagedFor<StrikeCtx>(atkDef, 'onStrike');
 
-  // 吸血：把这一下真打出来的伤害换成血。放在反击之后结算，
-  // 所以"残血扑上去被反杀"依然是死——它奖励的是打得疼，不是敢去送。
-  runStaged(strikeHooks, sctx, { to: STRIKE_STAGE.afterStatus });
+  // 吸血：把这一下真打出来的伤害换成血。放在反击之后结算
+  runStaged(strikeHooks, sctx, { to: STRIKE_STAGE.postDamage });
   const healed = sctx.result.healed;
+  runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.postDamage, to: STRIKE_STAGE.afterStatus });
 
   const hitText = burst > 1 ? `${hits} 连击 · ` : '';
-  // 命中附带的状态 / 击退，都排在"打完之后、结算死亡之前"：
-  // 人已经被打死就不该再中毒，而击退要先确认对面还在，才谈得上往哪推。
+
+  // 命中附带的状态 / 击退，都排在"打完之后、结算死亡之前"
   const statusTouched = applyOnHitStatus(s, attacker, defender, dmg);
-  runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.afterStatus });
+  // 命中附带的状态，例如击退
+  runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.afterStatus, to: STRIKE_STAGE.postStatus });
+  // 击退之后
+  runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.postStatus });
   const pushed = sctx.result.pushed;
   // 弹药：打一次少一发。打光了还能贴身砍，只是不再有魔法段、射程掉回 1。
   if (typeof atkDef.ammo === 'number') {
