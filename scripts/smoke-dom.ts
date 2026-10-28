@@ -1194,6 +1194,38 @@ check('开局面板有"数据收集"开关，默认关', () => {
   box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
 });
 
+await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {
+  // 排位：它必须是 .modal-body 里的第一块，在所有对局选项之前
+  const first = doc.querySelector('.modal-body > section');
+  assert.ok(
+    first?.querySelector('[data-field="record"]'),
+    '数据收集应当是面板里的第一块，实际第一块是：' + (first?.textContent ?? '').trim().slice(0, 20),
+  );
+
+  // 勾上 → 取消 → 重新打开，应当还是勾着的
+  const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
+  assert.ok(box);
+  box.checked = true;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  click('[data-act="cancel"]');
+  await wait(20);
+
+  click('[data-act="new-game"]');
+  await wait(40);
+  const again = doc.querySelector<HTMLInputElement>('[data-field="record"]');
+  assert.equal(again?.checked, true, '上次勾了，这次开面板就该自动沿用（只勾一次）');
+
+  // 再取消勾选：这个"取消"也要被记住
+  again!.checked = false;
+  again!.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  click('[data-act="cancel"]');
+  await wait(20);
+  click('[data-act="new-game"]');
+  await wait(40);
+  const third = doc.querySelector<HTMLInputElement>('[data-field="record"]');
+  assert.equal(third?.checked, false, '取消勾选也要记住，不能只记"开"');
+});
+
 click('[data-role="commander"]');
 click('[data-act="start"]');
 await wait(60);

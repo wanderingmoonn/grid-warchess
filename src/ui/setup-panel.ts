@@ -35,6 +35,32 @@ export function DEFAULT_SIZE_FOR_ERA(era: number): number {
   return 20;
 }
 
+/**
+ * 这个开关的选择记住在哪。
+ *
+ * 不放进 state.config 就够了吗？不够——config 跟着**这一局**走，清存档、换浏览器就没了。
+ * 玩家说的"只勾一次"是"以后每次开新局都别再让我勾"，所以单独存一份偏好。
+ * 优先级：本机偏好 > 上一局 config > 关。
+ */
+const RECORD_PREF_KEY = 'warchess.setup.record';
+
+function loadRecordPref(): boolean | null {
+  try {
+    const raw = localStorage.getItem(RECORD_PREF_KEY);
+    return raw === null ? null : raw === '1';
+  } catch {
+    return null;
+  }
+}
+
+function saveRecordPref(on: boolean): void {
+  try {
+    localStorage.setItem(RECORD_PREF_KEY, on ? '1' : '0');
+  } catch {
+    // 隐私模式写不进去：这一次有效，下次回到上一局 config 的值
+  }
+}
+
 export function openSetupPanel(initial: MatchConfig, seed: number): Promise<SetupResult | null> {
   return new Promise((resolve) => {
     const config: MatchConfig = {
@@ -49,6 +75,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       enabledUnits: [...initial.enabledUnits],
       commanderMode: initial.commanderMode === true,
       godMode: initial.godMode === true,
+      // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
+      // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
+      recordDetail: loadRecordPref() ?? initial.recordDetail === true,
     };
     let currentSeed = seed;
 
@@ -179,6 +208,25 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
           <div class="modal-body">
             <section class="field">
+              <div class="field-label">
+                数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
+              </div>
+              <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
+                <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
+                <span class="expansion-body">
+                  <b>结束后上传这局的详细数据</b>
+                  <span>
+                    每回合记一行压缩数字（双方兵力 / 城防 / 金币 / 军队身价），
+                    外加双方的出兵与行动次数——只交终局快照看不出"这局是怎么崩的"。
+                    不记玩家名、房间码，也不记每一步走哪儿。
+                    勾一次就记住了，之后每次开新局都沿用；想改随时再点一下。
+                    勾上之后结算卡的「允许上传」会自动打勾，但实际发送仍然要你点一下。
+                  </span>
+                </span>
+              </label>
+            </section>
+
+            <section class="field">
               <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
               ${
                 config.godMode
@@ -252,24 +300,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <section class="field">
               <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
               <div class="expansion-list">${expItems}</div>
-            </section>
-
-            <section class="field">
-              <div class="field-label">
-                数据收集 <span class="field-hint">可选，默认关；只影响这局记不记详细数据</span>
-              </div>
-              <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
-                <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
-                <span class="expansion-body">
-                  <b>结束后上传这局的详细数据</b>
-                  <span>
-                    每回合记一行压缩数字（双方兵力 / 城防 / 金币 / 军队身价），
-                    外加双方的出兵与行动次数——只交终局快照看不出"这局是怎么崩的"。
-                    不记玩家名、房间码，也不记每一步走哪儿。
-                    勾上之后结算卡的「允许上传」会自动打勾，但实际发送仍然要你点一下。
-                  </span>
-                </span>
-              </label>
             </section>
 
             <section class="field">
@@ -442,6 +472,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       if (input.dataset.field === 'record') {
         config.recordDetail = input.checked;
+        saveRecordPref(input.checked);
         // 只翻转卡片边框，不整块重绘：checkbox 重绘会闪，焦点也会丢
         input.closest('.expansion-item')?.classList.toggle('on', input.checked);
         return;
