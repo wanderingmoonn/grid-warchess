@@ -553,8 +553,14 @@ export interface Unit {
   age?: number;
 }
 
-/** AI 的思考深度：初级只求推进，高级会算威胁和交换比 */
-export type AiLevel = 'basic' | 'advanced';
+/**
+ * AI 的思考深度：初级只求推进，高级会算威胁和交换比。
+ *
+ * `tactic` 是"战术 AI（测试）"：在高级的基础上再挂三套战术（速攻压制 /
+ * 持续骚扰消耗 / 弃城爆发）。它单独成一档，是为了让玩家能在真实对局里
+ * 拿它和"高级 AI"对照——高级档保持稳的那一版，不跟着战术一起变。
+ */
+export type AiLevel = 'basic' | 'advanced' | 'tactic';
 
 /**
  * 一局对战的配置。

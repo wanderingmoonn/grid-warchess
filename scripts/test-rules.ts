@@ -41,6 +41,8 @@ import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
+  aiActiveMood,
+  aiLevelLabel,
   aiLevelOf,
   aiMood,
   aiNextAction,
@@ -5287,6 +5289,40 @@ test('战术：切换是渐变的，不会一回合翻脸', () => {
     if (s.winner) break;
   }
   assert.ok(worst < 0.4, `相邻回合的战术权重跳变太大：${worstAt}`);
+});
+
+test('战术：只有战术档才打三套战术，高级档保持稳的那一版', () => {
+  // 同一局面下比两档的"生效倾向"：战术档原样输出 aiMood，
+  // 高级档权重均分、drive 清零、不弃城——但主攻方向要留着（那是走位，不是战术）。
+  const s = fresh({ startEra: 2, aiOpponent: true });
+  const mine = citiesOf(s, 'A');
+  assert.ok(mine.length >= 2, '这条用例需要两座城：一座可弃、一座留着');
+  const doomed = mine[0];
+  const brute = pickUnit(s, (d) => d.category === 'combat' && d.domain !== 'water' && (d.cost ?? 0) >= 120);
+  armyOf(s, 'B', [brute, brute, brute], { x: doomed.x, y: doomed.y });
+  const farmer = pickUnit(s, (d) => d.category === 'economy');
+  armyOf(s, 'A', [farmer, farmer], { x: mine[1].x, y: mine[1].y });
+  s.players.A.gold = 4000;
+  s.current = 'A';
+  refreshMemory(s);
+
+  s.config.aiLevel = 'tactic';
+  const tac = aiActiveMood(s);
+  assert.equal(aiLevelOf(s), 'tactic', '战术档要能识别出来');
+  assert.equal(aiLevelLabel(aiLevelOf(s)), '战术', '界面上叫"战术"');
+  assert.equal(tac.abandonedCityId, doomed.id, '战术档在这种情况下该弃城');
+
+  s.config.aiLevel = 'advanced';
+  const adv = aiActiveMood(s);
+  assert.equal(aiLevelOf(s), 'advanced');
+  assert.equal(adv.abandonedCityId, null, '高级档不弃城');
+  assert.equal(adv.drive.rush + adv.drive.harass + adv.drive.boom, 0, '高级档不该有战术出力');
+  assert.equal(adv.weight.rush, 1 / 3, '高级档的权重应该是均分');
+  assert.equal(adv.focusCityId, tac.focusCityId, '主攻方向两档一致——那是走位');
+
+  // 战术档不做任何改写：它就是 aiMood 本身
+  s.config.aiLevel = 'tactic';
+  assert.deepEqual(aiActiveMood(s), aiMood(s));
 });
 
 console.log('\nAI 托管');

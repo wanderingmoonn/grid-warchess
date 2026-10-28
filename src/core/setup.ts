@@ -275,7 +275,12 @@ export function createMatch(
       citySize,
       aiOpponent: config.aiOpponent,
       aiAlly: config.aiAlly,
-      aiLevel: config.aiLevel === 'basic' ? 'basic' : 'advanced',
+      aiLevel:
+        config.aiLevel === 'basic'
+          ? 'basic'
+          : config.aiLevel === 'tactic'
+            ? 'tactic'
+            : 'advanced',
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。
