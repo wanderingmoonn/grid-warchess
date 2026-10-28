@@ -123,7 +123,10 @@ import {
   recruitCost,
   recruitResCost,
   recruitSpawnCells,
+  orderedStatuses,
   refreshMemory,
+  registerSkillEffect,
+  registerStatus,
   SKILL_EFFECTS,
   STATUS_REGISTRY,
   stepCostBetween,
@@ -8360,6 +8363,57 @@ test('状态与技能注册表：本体表里的每一条都得有人接', () =>
   assert.ok(STATUS_REGISTRY.burn?.onTurnStart, '灼烧要在回合开始扣血');
   assert.ok(STATUS_REGISTRY.slow?.modifyMove, '减速要改移动力');
   assert.ok(STATUS_REGISTRY.curse?.modifyArmor, '诅咒要改护甲');
+});
+
+test('状态能改攻击力，面板与结算算的是同一个数', () => {
+  // modifyAtk 原本是空挂的：注册了也没人调。现在接在 computeDamage 与
+  // effectiveStats 的同一位置（光环之后、乘算之前），两处必须给出同一个数，
+  // 否则"面板写 18、打出来 15"会成为常驻的困惑。
+  registerStatus({
+    id: 'test-rage',
+    name: '暴怒',
+    summary: '攻击 +5（用例专用）',
+    modifyAtk: (_s, _u, val, atk) => (val > 0 ? atk + 5 : atk),
+  });
+  try {
+    const s = unitOn(fresh(), 'A', 'militia', 3, 3);
+    const me = s.units.find((u) => u.owner === 'A' && u.type === 'militia')!;
+    const target = unitOn(s, 'B', 'militia', 4, 3).units.find(
+      (u) => u.owner === 'B' && u.type === 'militia',
+    )!;
+
+    const plainDmg = computeDamage(s, me, target);
+    const plainAtk = effectiveStats(s, me).atk;
+
+    me.status = { ...(me.status ?? {}), 'test-rage': 2 };
+    const ragedDmg = computeDamage(s, me, target);
+    const ragedAtk = effectiveStats(s, me).atk;
+
+    assert.equal(ragedAtk - plainAtk, 5, '面板上的攻击力要 +5');
+    assert.equal(ragedDmg - plainDmg, 5, '实际伤害也要 +5（对面护甲为 0 时才严格相等）');
+
+    // 结算顺序固定：四条老状态永远排在扩展注册之前，与字段写入顺序无关
+    me.status = { 'test-rage': 2, curse: 1, slow: 1, burn: 1, poison: 1 };
+    assert.deepEqual(
+      orderedStatuses(me.status).map(([k]) => k),
+      ['poison', 'burn', 'slow', 'curse', 'test-rage'],
+      '中毒要先于灼烧，老的四条先于扩展状态',
+    );
+  } finally {
+    delete STATUS_REGISTRY['test-rage'];
+  }
+
+  // 同 id 再注册必须当场失败：悄悄覆盖等于按 import 顺序决定规则
+  assert.throws(
+    () => registerStatus({ id: 'poison', name: '假中毒', summary: '占位' }),
+    /已经注册过/,
+    '重复注册状态要报错',
+  );
+  assert.throws(
+    () => registerSkillEffect('dive', () => {}),
+    /已经注册过/,
+    '重复注册技能效果要报错',
+  );
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

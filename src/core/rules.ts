@@ -753,6 +753,56 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
 };
 
 /**
+ * 状态结算的固定顺序：中毒 → 灼烧 → 减速 → 诅咒。
+ *
+ * 前两条会写战报，顺序一乱，同一兵同时中两种状态时日志的行序就跟着变；
+ * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
+ * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
+ */
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse'];
+
+/** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
+export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
+  if (!status) return [];
+  const out: Array<[string, number]> = [];
+  for (const k of STATUS_ORDER) {
+    const v = status[k];
+    if (typeof v === 'number' && v > 0) out.push([k, v]);
+  }
+  for (const [k, v] of Object.entries(status)) {
+    if (STATUS_ORDER.includes(k)) continue;
+    if (typeof v === 'number' && v > 0) out.push([k, v]);
+  }
+  return out;
+}
+
+/**
+ * 注册一个持续状态（给扩展用）。
+ *
+ * 不提供覆盖：同 id 再注册一次直接抛。悄悄覆盖会让"两个包都想改中毒"
+ * 变成按 import 顺序决定规则，这种 bug 最难查。
+ */
+export function registerStatus(def: StatusDef): void {
+  if (Object.prototype.hasOwnProperty.call(STATUS_REGISTRY, def.id)) {
+    throw new Error(`状态「${def.id}」已经注册过了`);
+  }
+  STATUS_REGISTRY[def.id] = def;
+}
+
+/**
+ * 注册一种技能效果（给扩展用）。
+ *
+ * `effect` 是自由字符串：兵种表里写什么，就得有人接什么。接不上时
+ * doHeroSkill 会当场拒掉并说"未实现的技能效果"，不会静默失败。
+ */
+export function registerSkillEffect(id: string, handler: SkillHandler): void {
+  if (Object.prototype.hasOwnProperty.call(SKILL_EFFECTS, id)) {
+    throw new Error(`技能效果「${id}」已经注册过了`);
+  }
+  SKILL_EFFECTS[id] = handler;
+}
+
+/**
  * 燃烧：每层每回合多少伤害。
  *
  * 从"按生命上限的百分比"改成固定值，是因为百分比对高血量单位太狠：
@@ -1083,6 +1133,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     atkItems.push({ label: '指挥光环', delta: aura.atk });
   }
   // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
+  // 状态修正攻击力（面板）：与 computeDamage 同一段逻辑，位置也在光环之后
+  for (const [key, val] of orderedStatuses(u.status)) {
+    const sdef = STATUS_REGISTRY[key];
+    if (!sdef?.modifyAtk) continue;
+    const before = atk;
+    atk = sdef.modifyAtk(s, u, val, atk);
+    if (atk !== before) atkItems.push({ label: sdef.name, delta: atk - before });
+  }
   if (u.kills > 0) {
     atk += u.kills;
     atkItems.push({ label: '老兵不死 · 击杀成长', delta: u.kills });
@@ -1526,14 +1584,22 @@ export function computeDamage(
   const attackerAura = auraBonus(s, attacker);
   const defenderAura = auraBonus(s, defender);
 
+  // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
+  // 面板的 effectiveStats 用同一段逻辑、同一个位置——否则"面板显示 18、
+  // 打出来 15"会变成常驻的对不上号。
+  let atkNow = at.atk + attackerAura.atk;
+  for (const [key, val] of orderedStatuses(attacker.status)) {
+    const sdef = STATUS_REGISTRY[key];
+    if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
+  }
   const ctx: HookCtx = {
     state: s,
     self: defender,
     foe: attacker,
     side: 'defender',
-    atk: at.atk + attackerAura.atk,
+    atk: atkNow,
     armor: dt.armor + defenderAura.armor + terrainBonus,
-    damage: at.atk + attackerAura.atk,
+    damage: atkNow,
     items: [],
     isCounter,
     terrainBonus,
@@ -3551,9 +3617,8 @@ function tickStatuses(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p || !u.status) continue;
 
-    // 1. 遍历单位身上的所有状态，查表执行效果
-    for (const [key, val] of Object.entries(u.status)) {
-      if (typeof val !== 'number' || val <= 0) continue;
+    // 1. 按固定顺序遍历身上的状态，查表执行效果
+    for (const [key, val] of orderedStatuses(u.status)) {
       const def = STATUS_REGISTRY[key];
       if (def?.onTurnStart) {
         const logText = def.onTurnStart(s, u, val);

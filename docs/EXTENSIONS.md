@@ -116,6 +116,7 @@ npm run dev          # 开局界面就能看到并勾选「丰收祭」了
 | `modifyUpgradeCost` | `{ state, player, city, nextEra, cost }` | 修正升级时代费用。`cost` 为 `null` 表示已封顶；返回 `null` 同样表示封顶 |
 | `startRoster` | `{ state }` | 整批换掉开局部队。返回 `{ A: ['militia', …], B: [...] }`（兵种 id 名单，摆位由 setup.ts 统一处理）或 `null`（走默认的"3 战斗 + 2 经济"） |
 | `modifySecondGold` | `{ state }` | 返回后手额外起始金的**比例**（0.05 = 多 5%）。只返回比例不动手，加钱和写战报由 setup.ts 统一做 |
+| `checkWinner` | `{ state }` → `A` / `B` / `undefined` | 特殊胜利条件。返回某一方直接判胜（排在「没城就输」之前）；返回 `undefined` 交回本体。**不能用来宣布平局**：调用方是 `s.winner = checkWinner(s)`，`null` 和「还没有胜者」同义 |
 
 ### 4.2 副作用系列（可改 state，必须确定性）
 
@@ -429,6 +430,60 @@ diff before.json after.json         # 只该出现你预期的差异
 
 > 给测试临时发能力有现成辅助：`scripts/test-rules.ts` 的
 > `grantAbility(s, typeId, abil)`。
+
+### 6.1 持续状态与技能：往注册表里加东西
+
+状态和技能现在是**查表**的（2026-10-28 重构）：加一条不用改 `rules.ts` 里的判断链。
+内置的四条状态（中毒 / 灼烧 / 减速 / 诅咒）和八个技能效果本身就是这么写的，可以直接照抄。
+
+**状态**——`Unit.status` 是 `id → 数值` 的字典，数值怎么解释由你定：
+
+```ts
+import { registerStatus } from '../core/rules.ts';
+
+registerStatus({
+  id: 'frost',                    // 就是 Unit.status 里的键
+  name: '冰封',
+  summary: '移动力 −2，攻击 −1',   // 界面上/规则书里会用到
+  onTurnStart: (_s, u, val) => {  // 返回字符串就写进战报，返回 null 就不写
+    u.hp -= val;
+    return `${u.type} 被冻伤 ${val} 点`;
+  },
+  modifyMove: (_s, _u, val, move) => Math.max(0, move - 2),
+  modifyAtk: (_s, _u, val, atk) => atk - 1,
+});
+```
+
+三条要记住的：
+
+- **每回合开始统一 −1，减到 0 就删键**。所以「层数」语义（灼烧）和「剩余回合」语义
+  （中毒、减速）共用同一套递减，想清楚你要哪一种。
+- **结算顺序固定**：中毒 → 灼烧 → 减速 → 诅咒 → 扩展注册的（按注册先后），
+  与字段写入顺序无关。战报的行序因此是稳定的。
+- **同 id 重复注册直接抛错**，不提供覆盖：否则「两个包都想改中毒」就变成按 import 顺序决定规则。
+
+`modifyAtk / modifyMove / modifyArmor / modifyVision` 四个修正都读得到，
+面板（`effectiveStats`）与结算（`computeDamage`）用的是同一段逻辑，不用自己算两遍。
+
+**技能**——`UnitTypeDef.skills[].effect` 是字符串，指向 `SKILL_EFFECTS` 里的处理器：
+
+```ts
+import { registerSkillEffect } from '../core/rules.ts';
+
+registerSkillEffect('frost-nova', (c) => {
+  for (const u of c.state.units) {
+    if (u.owner === c.self.owner) continue;
+    u.status = { ...(u.status ?? {}), frost: 2 };
+  }
+  c.result.log = '霜新星炸开';            // 成功走这句
+  // 失败：c.result.ok = false; c.result.reason = '...'，冷却不会扣
+});
+```
+
+接不上处理器时，玩家点技能会收到「未实现的技能效果：xxx」，不会静默无反应。
+`npm test` 里有一条用例扫全兵种表，`effect` 写错名字当场红。
+
+**胜负条件**走 `hooks.checkWinner`（见 4.1 表）：能判某一方赢，不能宣布平局。
 
 ---
 
