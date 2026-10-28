@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/ai-tactics-evaluation]
   pull_request:
 
 # 同一分支上新的推送会取消还没跑完的旧任务，PR 里连着改几次不会被排队拖住
