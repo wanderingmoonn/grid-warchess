@@ -124,6 +124,8 @@ import {
   recruitResCost,
   recruitSpawnCells,
   refreshMemory,
+  SKILL_EFFECTS,
+  STATUS_REGISTRY,
   stepCostBetween,
   stepCostInto,
   strikeDistance,
@@ -8327,6 +8329,37 @@ test('战损：靠单位集合差分，拆除不算', () => {
   assert.equal(sealed.samples.length, tl.samples.length, 'seal 不能丢样本');
   assert.ok(sealed.lost, '累计损失要留着');
   assert.ok(timelineSummary(sealed).includes('战损'), '一句话摘要要能看见战损');
+});
+
+test('状态与技能注册表：本体表里的每一条都得有人接', () => {
+  // 这次重构把状态和技能从 if/switch 改成了查表：表里少一条，游戏里就是
+  // "中毒不扣血"或者"点了技能没反应"，而且 tsc 抓不到（effect 现在是 string）。
+  // 所以这条用例守的不是数值，是"注册表与数据表对得上"这件事本身。
+  // 技能挂在英雄身上，而英雄都在扩展包里：本体 + 各扩展的兵种表合起来扫
+  const allDefs = [
+    ...Object.values(UNIT_TYPES),
+    ...EXPANSIONS.flatMap((e) => e.units ?? []),
+  ];
+  const skills = allDefs.flatMap((d) => d.skills ?? []);
+  assert.ok(skills.length > 0, '整张兵种表里应当有带主动技能的英雄');
+  for (const sk of skills) {
+    assert.ok(
+      SKILL_EFFECTS[sk.effect],
+      `${sk.name} 的效果「${sk.effect}」在 SKILL_EFFECTS 里没有处理器`,
+    );
+  }
+  // 四条内置状态是老规矩里的硬数值，注册表里必须都在，且都在一张表上查
+  for (const id of ['poison', 'burn', 'slow', 'curse']) {
+    const def = STATUS_REGISTRY[id];
+    assert.ok(def, `状态 ${id} 没注册进 STATUS_REGISTRY`);
+    assert.equal(def.id, id, `${id} 的 def.id 要和键一致，否则战报会说错名字`);
+    assert.ok(def.name && def.summary, `${id} 要有名字和一句话说明，界面/战报要用`);
+  }
+  // 中毒、灼烧负责扣血；减速、诅咒负责改属性。挂反了就是"沉默的状态"
+  assert.ok(STATUS_REGISTRY.poison?.onTurnStart, '中毒要在回合开始扣血');
+  assert.ok(STATUS_REGISTRY.burn?.onTurnStart, '灼烧要在回合开始扣血');
+  assert.ok(STATUS_REGISTRY.slow?.modifyMove, '减速要改移动力');
+  assert.ok(STATUS_REGISTRY.curse?.modifyArmor, '诅咒要改护甲');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

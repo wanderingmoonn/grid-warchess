@@ -296,9 +296,13 @@ export interface ExpansionHooks {
   modifySecondGold?: (c: MatchStartCtx) => number;
   /**
    * 纯函数：判定特殊胜负。
-   * 返回 'A' / 'B' 表示某一方获胜；
-   * 返回 null 表示平局或直接结束（无胜者）；
-   * 返回 undefined 表示“本回合不满足我的胜负条件”，交给原版逻辑继续判。
+   *
+   * 返回 'A' / 'B' → 直接判这一方赢（排在"没城就输"之前，扩展可以先开口）；
+   * 返回 undefined → 本回合不满足我的条件，交给后面的本体判据继续判。
+   *
+   * **不能**用它宣布平局：调用方写的是 `s.winner = checkWinner(s)`，
+   * 返回 null 和"此刻还没有胜者"是同一个值，对局会照常继续。
+   * 真要"达成某条件即结束、但不分胜负"，得另加一个显式的终局标记。
    */
   checkWinner?: (state: GameState) => PlayerId | null | undefined;
 }
