@@ -163,9 +163,17 @@ npm run pack-report    # 汇总成 results/packs/report.md
 - 传不上去（没开通 / 凭据过期 / 断网）不影响任何事：报告随时能「复制」或
   「下载 .json」，自己发出来一样有用。
 
-要真的开始收，在云数据库里执行一次 `sql/warchess_reports.sql` 建表。
-表只给 anon 发写权限、不给读权限——谁都能交一份，但没人能顺着这张表把
-别人交的东西整锅端走；做分析请用管理员连接查。
+**收集端已经开通**（2026-10-28）：云端数据库里有 `warchess_reports` 表，
+外加两个分析用的视图。表只给 anon 发写权限、不给读权限——谁都能交一份，
+但没人能顺着这张表把别人交的东西整锅端走；做分析请用管理员连接查
+（云服务面板的 SQL 窗口，或 `cloud-service` 的管理通道）。
+
+- 建表 / 重建：`sql/warchess_reports.sql`（表 + RLS + 两个视图，逐句执行）
+- 分析查询：`sql/warchess_reports_queries.sql`（先手胜率、按难度分组、
+  扩展是否一边倒、兵种采用率、终局经济、重复上传排查）
+- 视图：`warchess_reports_by_side`（一场两行，带 won / ai_level / 阵容）、
+  `warchess_reports_units`（一个兵种一行）。**不要**把视图 grant 给 anon，
+  否则等于绕开"只写不读"的设计。
 
 代码上分两层：`src/core/report.ts` 只负责从 `GameState` 里**算**出一份报告
 （纯函数，规则测试直接断言"里面不许出现某个名字"）；

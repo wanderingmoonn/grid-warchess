@@ -51,3 +51,49 @@ create policy warchess_reports_insert on public.warchess_reports
 -- drop policy if exists warchess_reports_read on public.warchess_reports;
 -- create policy warchess_reports_read on public.warchess_reports
 --   for select to anon, authenticated using (true);
+
+
+-- ============================================================
+-- 分析用的两个视图（2026-10-28 补）
+--
+-- 为什么要有视图：原始表里 sides 是一整块 JSON 数组，直接查它得写
+-- jsonb_array_elements 加一堆 ->>，每问一个问题重写一遍，问三次就写错两次。
+-- 视图把这层"展开"固化下来，之后分析只写普通 SQL。
+--
+-- ⚠️ 视图**不要** grant 给 anon：
+-- PostgreSQL 的视图默认以创建者权限执行，一旦给 anon 开了 select，
+-- 就等于绕开上面"只能写不能读"的设计，整张表又变成人人可拉。
+-- 分析请用管理员连接（云服务面板 / migrate 角色）。
+-- ============================================================
+
+-- 一场两行：每方一行，带 won / ai_level / 阵容。
+create or replace view public.warchess_reports_by_side as
+select r.id, r.created_at, r.version, r.seed, r.board_w, r.board_h, r.turns, r.winner, r.expansions,
+       r.ai->>'level' as ai_level,
+       (r.ai->>'opponent')::boolean as ai_opponent,
+       (r.ai->>'ally')::boolean as ai_ally,
+       (r.ai->>'commander')::boolean as commander,
+       s.value->>'side' as side,
+       case when r.winner is null then null
+            when r.winner = s.value->>'side' then true
+            else false end as won,
+       (s.value->>'cities')::int as cities,
+       (s.value->>'units')::int as units,
+       (s.value->>'buildings')::int as buildings,
+       (s.value->>'gold')::int as gold,
+       (s.value->>'hp')::int as hp,
+       s.value->'eras' as eras,
+       s.value->'roster' as roster
+from public.warchess_reports r
+cross join lateral jsonb_array_elements(r.sides) s;
+
+-- 一个兵种一行：把每方的终局阵容炸开，用来算采用率。
+create or replace view public.warchess_reports_units as
+select r.id, r.created_at, r.seed, r.turns, r.winner, r.expansions, r.ai->>'level' as ai_level,
+       s.value->>'side' as side,
+       u.key as unit_id,
+       (u.value)::int as count
+from public.warchess_reports r
+cross join lateral jsonb_array_elements(r.sides) s
+cross join lateral jsonb_each(coalesce(s.value->'roster', '{}'::jsonb)) u;
+
