@@ -245,6 +245,156 @@ check('浓雾扩展：走过的地形和城会留在记忆里', () => {
   }
 });
 
+console.log('\n增量重绘');
+
+/**
+ * 增量重绘的护栏。
+ *
+ * 棋盘改成"节点留着复用"之后，最容易出的是两类 bug：
+ *   1. 该变的没变（缓存说一样，其实是判据漏了字段）—— 玩家看到的是"卡住的棋子"；
+ *   2. 该没变的变了（每帧重建，缓存白做）—— 不报错，只是慢慢变卡。
+ * 这类问题在手动点几下时几乎看不出来，所以必须在这里钉住。
+ */
+const emptyUi = {
+  selectedId: null,
+  reach: [] as number[],
+  targets: [] as string[],
+  siegeTargets: [] as string[],
+  selectedCityId: null,
+  placeable: [] as number[],
+  threat: [] as number[],
+};
+
+check('同一局面重画：格子、棋子、城市的节点身份不变', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 31337);
+  const view = playerView(st, 'A');
+  try {
+    renderBoard(host, view, emptyUi);
+    const tile = host.querySelector('.tile[data-x="3"][data-y="4"]');
+    const unit = host.querySelector('.unit[data-id]');
+    const city = host.querySelector('.city-block');
+    assert.ok(tile && unit && city, '第一帧就该画出格子、棋子、城市');
+
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector('.tile[data-x="3"][data-y="4"]'), tile, '格子节点该留着复用');
+    assert.equal(host.querySelector('.unit[data-id]'), unit, '棋子节点该留着复用');
+    assert.equal(host.querySelector('.city-block'), city, '城市节点该留着复用');
+    assert.equal(host.querySelectorAll('.tile').length, 256, '复用不该改变格子总数');
+  } finally {
+    host.remove();
+  }
+});
+
+check('高亮变了要真的变，节点还是同一个', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 5150);
+  const view = playerView(st, 'A');
+  try {
+    const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+    const x = i % st.w;
+    const y = (i - x) / st.w;
+    const sel = `[data-x="${x}"][data-y="${y}"]`;
+
+    renderBoard(host, view, { ...emptyUi, reach: [i], threat: [i] });
+    const tile = host.querySelector<HTMLElement>(`.tile${sel}`);
+    assert.ok(tile?.classList.contains('reach'), '可达格要挂上 reach');
+    assert.equal(tile?.classList.contains('threat'), false, '同一个格不该同时是可达和威胁');
+
+    // 取消选中：上一帧的 reach 必须摘干净（整体赋 className 就是为了这件事）
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector<HTMLElement>(`.tile${sel}`), tile, '节点还是同一个');
+    assert.equal(tile?.classList.contains('reach'), false, '取消选中后高亮要摘掉');
+
+    // 产出角标：出现、换数字、消失，都以格子上的 span 为准
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 7]]) });
+    assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+7', '角标要写对数字');
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 9]]) });
+    assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+9', '角标数字变了要跟着变');
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector(`.tile${sel} .tile-income`), null, '角标该消失');
+  } finally {
+    host.remove();
+  }
+});
+
+check('换地图：格子与棋子都按新局面重建，旧节点一个不留', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  try {
+    const small = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 111);
+    renderBoard(host, playerView(small, 'A'), emptyUi);
+    const oldTile = host.querySelector('.tile');
+    assert.equal(host.querySelectorAll('.tile').length, 144);
+
+    const big = createMatch({ ...DEFAULT_CONFIG, size: 20, startEra: 2, expansionIds: [] }, 222);
+    const viewBig = playerView(big, 'A');
+    renderBoard(host, viewBig, emptyUi);
+    assert.equal(host.querySelectorAll('.tile').length, 400, '换地图后格子数要对');
+    assert.notEqual(host.querySelector('.tile'), oldTile, '格子数变了必须整层重建');
+    // 棋子是按 id 复用的，而两局的兵 id 会撞车（都是 A-1、B-3 这种），
+    // 所以不能数"剩了几个旧 id"，要比"盘上的兵和新局面是不是同一批"
+    const shown = Array.from(host.querySelectorAll<HTMLElement>('.unit[data-id]'))
+      .map((n) => n.dataset.id ?? '')
+      .sort();
+    const want = viewBig.state.units.map((u) => u.id).sort();
+    assert.deepEqual(shown, want, '盘上应该正好是新局面的那些兵');
+  } finally {
+    host.remove();
+  }
+});
+
+check('单位被打掉之后，它的节点要从盘上摘掉', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 6161);
+  try {
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    const victim = st.units.find((u) => u.owner === 'A');
+    assert.ok(victim, '应该有己方单位');
+    assert.ok(host.querySelector(`.unit[data-id="${victim!.id}"]`), '它该在盘上');
+
+    st.units = st.units.filter((u) => u.id !== victim!.id);
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    assert.equal(host.querySelector(`.unit[data-id="${victim!.id}"]`), null, '打掉之后节点要跟着没');
+  } finally {
+    host.remove();
+  }
+});
+
+check('侧栏：内容没变就不重写，变了必须重写', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 808);
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  const card = host.querySelector('.card');
+  assert.ok(card, '侧栏该有顶卡');
+  paint();
+  assert.equal(host.querySelector('.card'), card, '内容一样时不该重建节点');
+
+  // 金币变了就是内容真的变了——漏掉这一条，玩家会看到"钱不动"
+  const before = st.players.A.gold;
+  st.players.A.gold = before + 7;
+  paint();
+  assert.notEqual(host.querySelector('.card'), card, '金币变了必须重写');
+  assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
+});
+
 console.log('\n单位交互');
 
 check('点自己的单位会高亮可移动范围', () => {

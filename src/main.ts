@@ -12,6 +12,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, ai
 import type { AiBudget } from './core/ai.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
+import type { PlayerView } from './core/fog.ts';
 import {
   adjacentToWater,
   applyAction,
@@ -52,7 +53,7 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
-import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -566,9 +567,13 @@ function myTurn(): boolean {
  *
  * 抽成函数是为了"只重画面板"这条路：搜索框每敲一个字都要重绘，
  * 走整个 render() 会连棋盘一起重建，白掉一次图层、还丢焦点。
+ *
+ * `known` 是调用方手上已经算好的雾视图。render() 里刚算过一份，
+ * 这里再算一遍纯属白烧——`playerView` 每帧 1.4ms，32×32 上占单帧的 7%。
+ * 单独重画面板的那条路没有，就现算。
  */
-function panelInput(): PanelInput {
-  const view = playerView(state, me(), spectating());
+function panelInput(known?: PlayerView): PanelInput {
+  const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {
     view,
@@ -708,7 +713,7 @@ function render(): void {
     // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
     godSig = '';
     godShelfSig = '';
-    keepSideScroll(() => renderPanel(sideEl, panelInput()));
+    keepSideScroll(() => renderPanel(sideEl, panelInput(view)));
     renderCommander();
   }
 
@@ -725,7 +730,7 @@ function render(): void {
   }
   lastTurnPlayer = state.current;
 
-  updateTopbar(topbarEl, {
+  const topbarChanged = updateTopbar(topbarEl, {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
@@ -742,8 +747,13 @@ function render(): void {
     spectator: watching(),
     god: state.config.godMode === true,
   });
-  syncTopbarScroll();
-  fitBoard();
+  // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
+  // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
+  const remeasure = boardDirty || !canWatchResize;
+  if (remeasure) fitBoard();
+  // 顶栏内容没动、尺寸也没动，"还能不能往两边滚"就不会变——那道判断要读
+  // scrollWidth，是笔强制布局，不值得每帧付一遍。滚动本身另有 scroll 监听。
+  if (topbarChanged || remeasure) syncTopbarScroll();
 }
 
 /**
@@ -758,6 +768,21 @@ const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
 /** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
 let baseBoardSize = 0;
+
+/**
+ * 棋盘尺寸还有效吗。
+ *
+ * `fitBoard()` 要读 `offsetWidth` / `offsetHeight` / 计算样式，再写 `style`。
+ * 读-写这一对放在渲染流水线的末尾，在真机上就是一次**强制同步布局**：
+ * 刚写完一千个格子的样式，浏览器为了回答"容器多宽"必须先把这一切算完。
+ * 而棋盘尺寸一年也变不了几次——窗口改大小、缩放换档、参谋部栏展开/收起，
+ * 就这三件事。所以默认不量：由 ResizeObserver 在真变了的时候把它标脏。
+ *
+ * 没有 ResizeObserver 的宿主（jsdom、很老的浏览器）量不到这些变化，
+ * 就老老实实每帧都量——那是从前的行为，慢一点，但不会算错。
+ */
+let boardDirty = true;
+const canWatchResize = typeof ResizeObserver === 'function';
 
 /**
  * 把棋盘压进容器。
@@ -815,6 +840,39 @@ function fitBoard(): void {
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
+
+  // 这一量是有效的，下一帧不必再来一遍（除非谁把 boardDirty 重新打上）
+  boardDirty = false;
+}
+
+/**
+ * 盯着会改变棋盘可用空间的三个东西。
+ *
+ * 回调里只标脏、并顺手排一次 fitBoard，不调整个 render()：
+ * 尺寸变了不需要重画棋盘内容，格子是按百分比排的，跟着走就行。
+ * 排一次而不是就地做，是因为回调本身就在布局之后，就地写样式会让
+ * 观察者再触发一轮；隔一帧再写，同一轮里的多次变化能合并成一次。
+ */
+function watchBoardResize(): void {
+  if (!canWatchResize) return;
+  let queued = false;
+  const ro = new ResizeObserver(() => {
+    boardDirty = true;
+    if (queued) return;
+    queued = true;
+    const next = (): void => {
+      queued = false;
+      if (!boardDirty) return;
+      fitBoard();
+      // 顶栏换了宽度，"还能不能往两边滚"也跟着变——这一步读 scrollWidth，
+      // 放在这里正好，反正刚量完布局，读一次是顺手的
+      syncTopbarScroll();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(next);
+    else window.setTimeout(next, 16);
+  });
+  // 容器宽、顶栏高（会换行）、参谋部栏高（会展开）—— 这三项决定可用空间
+  for (const el of [boardWrapEl, topbarEl, commanderEl]) ro.observe(el);
 }
 
 /**
@@ -828,6 +886,8 @@ function setZoom(next: number): void {
   const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
   if (clamped === boardZoom) return;
   boardZoom = clamped;
+  // 缩放直接改的是"棋盘该多大"，尺寸缓存必须作废
+  boardDirty = true;
   // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
   render();
   if (boardZoom > 1) {
@@ -2718,6 +2778,9 @@ function renderGodShelf(): void {
   godShelfSig = sig;
   // 换包/换兵种会整块重排：滚动位置由 keepSideScroll 一起搬过去
   keepSideScroll(() => {
+    // 侧栏被直接改写，普通面板的"上次写的是什么"缓存必须作废——
+    // 否则退出沙盒那一帧内容碰巧一样就会被跳过，货架留在屏幕上不走
+    invalidatePanel(sideEl);
     sideEl.innerHTML = godShelfHtml(godUi());
   });
 }
@@ -3211,6 +3274,9 @@ window.addEventListener('resize', () => {
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => render(), 120);
 });
+
+// 尺寸变化走观察者，不必每帧去量（见 watchBoardResize）
+watchBoardResize();
 
 // ---------- 启动 ----------
 

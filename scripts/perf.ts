@@ -307,6 +307,18 @@ interface RunOpts {
   fog?: boolean;
   label?: string;
   ai?: boolean;
+  /**
+   * 这一帧里"画面变了多少"。默认 `select`：每帧换一个选中单位。
+   *
+   * 为什么默认不是"什么都不变"：增量重绘上线之后，反复画同一幅画面会让所有缓存
+   * 全命中（新建元素 0、HTML 0 字节），那一行数字好看但没有意义——真机上玩家
+   * 每点一下、AI 每走一步，面板和高亮都会真的换。"每帧换选中"是能重复的最小
+   * 真实操作，拿它当主表，改前改后才在同一把尺子上。
+   *   · `none` 什么都不变（缓存的乐观下限，只在"缓存省了多少"那一节里用）
+   *   · `select` 玩家在几个兵之间点来点去（默认）
+   *   · `full` 每帧把三层砍掉重来（等价于增量重绘之前的全量重建）
+   */
+  churn?: 'none' | 'select' | 'full';
 }
 
 async function runScenario(
@@ -349,6 +361,8 @@ async function runScenario(
 
   const me: PlayerId = 'A';
   const picked = state.units.find((u) => u.owner === me && u.type !== 'boat' && u.type !== 'tower');
+  /** `select` 档轮流选中的那几个单位：玩家真正会点的自家兵 */
+  const own = state.units.filter((u) => u.owner === me && u.type !== 'boat' && u.type !== 'tower');
 
   // 预热：JIT 和 jsdom 的首次样式表初始化都别算进样本里
   for (let i = 0; i < WARMUP; i += 1) {
@@ -382,6 +396,32 @@ async function runScenario(
   sideEl2.className = 'side';
   doc.body.appendChild(sideEl2);
 
+  // 先画一帧不进样本：这一帧要把格子的节点建起来（换地图才发生一次）。
+  // 把那一次算进"最大帧"，抖动结论就会被它一个人带跑——
+  // 玩家抱怨的"一顿一顿"是稳态里的抖动，不是开局第一帧。
+  {
+    const v0 = playerView(state, me, false);
+    const t0 = picked ? Array.from(threatTiles(state, picked)) : [];
+    renderBoard(boardEl2, v0 as unknown, {
+      selectedId: picked?.id ?? null,
+      reach: t0.slice(0, 40),
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: t0,
+      incomeHints: new Map(t0.slice(0, 20).map((g) => [g, 7])),
+    });
+    renderPanel(sideEl2, {
+      view: v0,
+      me,
+      selectedUnit: picked ?? null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+  }
+
   const samples: Record<'frame' | 'fog' | 'board' | 'panel' | 'threat', number[]> = {
     frame: [],
     fog: [],
@@ -405,18 +445,27 @@ async function runScenario(
 
     const f0 = performance.now();
 
+    // `full` 档先把三层砍掉：等价于"增量重绘之前"的那种每帧全量重建
+    if (opts.churn === 'full') {
+      boardEl2.innerHTML = '';
+      sideEl2.innerHTML = '';
+    }
+    // 换一个选中：面板和高亮真的换，缓存跳不过去（`select`，主表的默认档）
+    const selectOn = (opts.churn ?? 'select') === 'select';
+    const sel = selectOn && own.length > 0 ? own[i % own.length]! : picked;
+
     let t = performance.now();
     const view = playerView(state, me, false);
     const fogMs = performance.now() - t;
 
     // 威胁圈：真实 render() 里每帧都算（选中单位且还没行动时）
     t = performance.now();
-    const threat = picked ? Array.from(threatTiles(state, picked)) : [];
+    const threat = sel ? Array.from(threatTiles(state, sel)) : [];
     const threatMs = performance.now() - t;
 
     t = performance.now();
     renderBoard(boardEl2, view as unknown, {
-      selectedId: picked?.id ?? null,
+      selectedId: sel?.id ?? null,
       reach: threat.slice(0, 40),
       targets: [],
       siegeTargets: [],
@@ -431,7 +480,7 @@ async function runScenario(
     renderPanel(sideEl2, {
       view,
       me,
-      selectedUnit: picked ?? null,
+      selectedUnit: sel ?? null,
       selectedCityId: null,
       selectedCampId: null,
       selectedTile: null,
@@ -649,6 +698,7 @@ function printBudget(rows: ScenarioResult[]): void {
     pad('DOM节点', 10, 'r'),
     pad('新建元素', 10, 'r'),
     pad('HTML/帧', 11, 'r'),
+    pad('读矩形', 9, 'r'),
     pad('堆增量', 10, 'r'),
   ].join('');
   console.log(dim(head));
@@ -662,6 +712,7 @@ function printBudget(rows: ScenarioResult[]): void {
         pad(String(r.elems), 10, 'r'),
         r.htmlNodes > 1500 ? padC(nodes, 10, yellow) : pad(nodes, 10, 'r'),
         pad(bytes(Math.round(r.htmlChars)), 11, 'r'),
+        r.rects > 20 ? padC(String(Math.round(r.rects)), 9, yellow) : pad(String(Math.round(r.rects)), 9, 'r'),
         r.heapMb > 20 ? padC(heap, 10, yellow) : pad(heap, 10, 'r'),
       ].join(''),
     );
@@ -669,7 +720,8 @@ function printBudget(rows: ScenarioResult[]): void {
   console.log(
     dim(
       '  新建元素 = 每帧被丢弃重建的 DOM 数量，HTML/帧 = 每帧写进 innerHTML 的字节数。\n' +
-        '  这两项在真机上还要乘上"重算样式 + 布局 + 绘制"——jsdom 不付这笔账，所以它测不到。',
+        '  读矩形 = 每帧调了几次 getBoundingClientRect，每一次都可能让浏览器立刻做一遍布局。\n' +
+        '  这三项在真机上还要乘上"重算样式 + 布局 + 绘制"——jsdom 不付这笔账，所以它测不到。',
     ),
   );
 }
@@ -715,13 +767,13 @@ function printBrowserSide(rows: ScenarioResult[]): string[] {
     dim(
       '  这些在真机上要重算样式 → 布局 → 绘制三层，代价随绘制对象数线性涨，\n' +
         '  而且对显卡和屏幕分辨率很敏感——这就是"同一份代码，你的机器不卡、朋友的卡"的另一半。\n' +
-        '  另外 main.ts 的 render() 每帧还调一次 fitBoard()：读 offsetWidth/offsetHeight、再写 style，\n' +
-        '  这种"读-写"交替在真机上会强制同步布局，也是脚本量不到但在真机上要付的。',
+        '  脚本量不到的强制布局还有两处：renderBoard 每帧读一次 el.clientWidth（算格子像素宽），\n' +
+        '  fitBoard() 读 offsetWidth 写 style（只在窗口/缩放/工具栏尺寸真变时才跑）。',
     ),
   );
   return [
     `每格最多 3 个绘制对象，${big.label} 最多 ${drawables} 个；.tile 规则 ${tileRules} 条、伪元素 ${pseudos} 处、box-shadow ${shadows} 处。`,
-    'main.ts 的 render() 每帧调 fitBoard()，读 offsetWidth 再写 style，真机上会触发强制同步布局。',
+    'renderBoard 每帧读一次 clientWidth；fitBoard 只在尺寸标脏后才读写布局。真机上仍是强制同步布局，只是不再每帧都付。',
   ];
 }
 
@@ -873,34 +925,49 @@ function analyze(rows: ScenarioResult[]): Finding[] {
     const cells = big.size * big.size;
     const total = f.a + f.b * cells;
     const fixedShare = total > 0 ? f.a / total : 0;
+    const cellRatio = cells / (small.size * small.size);
+    const timeRatio = big.frame.p50 / Math.max(0.001, small.frame.p50);
+    // 拟合贴不贴，决定"每格成本"这个模型还算不算数。
+    // 增量重绘之后它就不贴了：单帧不再按格数涨，而是按"有多少单位、面板内容多少"涨。
+    // 这时再拿"每格多少微秒"往下推，会推出一个不存在的优化方向。
+    const flat = timeRatio < 1.5 && cellRatio > 3;
     out.push({
       level: fixedShare > 0.35 ? 1 : 0,
       text:
         `按格数做线性拟合：**固定开销 ${fmt(f.a)}ms + 每格 ${(f.b * 1000).toFixed(2)}µs**（R²=${f.r2.toFixed(2)}）。` +
-        `${big.label} 的 ${fmt(big.frame.p50)}ms 里，${Math.round(fixedShare * 100)}% 与格数无关（侧栏、棋子、城市），` +
-        `其余 ${Math.round((1 - fixedShare) * 100)}% 是格子本身。` +
-        (f.r2 > 0.85
-          ? '拟合很贴，说明模型对得上——要压帧时间就压"每格成本"这一项。'
-          : '拟合有偏，说明还有别的变量在动（多半是各档兵力不同，或小图上固定开销占比太高）。'),
+        `${big.label} 的 ${fmt(big.frame.p50)}ms 里，${Math.round(fixedShare * 100)}% 与格数无关。` +
+        (flat
+          ? '每格成本已经压到很小，大头换成了"与格数无关"的那部分——见下一条，别再往格子上使劲了。'
+          : f.r2 > 0.85
+            ? '拟合很贴，说明模型对得上——要压帧时间就压"每格成本"这一项。'
+            : '拟合有偏，说明还有别的变量在动（多半是各档兵力不同，或小图上固定开销占比太高）。'),
     });
-    const cellRatio = cells / (small.size * small.size);
-    const timeRatio = big.frame.p50 / Math.max(0.001, small.frame.p50);
     out.push({
       level: 0,
-      text: `从 ${small.label} 到 ${big.label}：格数 ×${cellRatio.toFixed(
-        1,
-      )}、单帧 ×${timeRatio.toFixed(1)}。单帧涨得比格数慢，是因为固定开销在两端都占着——` +
-        `这也说明"只在 12×12 上试"永远发现不了 32×32 的问题。`,
+      text: flat
+        ? `从 ${small.label} 到 ${big.label}：格数 ×${cellRatio.toFixed(1)}，单帧只 ×${timeRatio.toFixed(
+            1,
+          )}。格子已经不是主要变量了——大头挪到了每帧固定的那部分：棋子层重写、侧栏、雾视图。` +
+          `这些只跟"有多少单位、面板里写了多少字"走，跟地图多大几乎无关。`
+        : `从 ${small.label} 到 ${big.label}：格数 ×${cellRatio.toFixed(
+            1,
+          )}、单帧 ×${timeRatio.toFixed(1)}。单帧涨得比格数慢，是因为固定开销在两端都占着——` +
+          `这也说明"只在 12×12 上试"永远发现不了 32×32 的问题。`,
     });
   }
 
   // 4) 每帧重建的 DOM 规模
   if (big.htmlNodes > 0) {
+    // 换成比例来说：22 个节点不该被写成"绝大部分每帧换一批"
+    const share = big.elems > 0 ? big.htmlNodes / big.elems : 0;
     out.push({
       level: big.htmlNodes > 1500 ? 1 : 0,
       text: `每帧新建 ${Math.round(big.htmlNodes)} 个元素、写入 ${bytes(
         Math.round(big.htmlChars),
-      )} HTML。这些节点**全部是丢弃重建的**（${big.elems} 个常驻元素里绝大部分每帧换一批），浏览器每次都要重算样式、重排、重绘。`,
+      )} HTML，约占常驻元素（${big.elems} 个）的 ${(share * 100).toFixed(0)}%。` +
+        (share < 0.1
+          ? '节点已经按需复用了，剩下的这一点是"真的变了"的那部分。'
+          : '这些节点是被丢弃重建的，浏览器每次都要重算样式、重排、重绘。'),
     });
   }
 
@@ -908,7 +975,8 @@ function analyze(rows: ScenarioResult[]): Finding[] {
   if (big.panel.p50 > 1) {
     out.push({
       level: big.panel.p50 > 4 ? 1 : 0,
-      text: `侧栏每帧整块重绘花了 ${fmt(big.panel.p50)}ms。它和棋盘无关，但和棋盘捆在同一次 render 里——棋盘没变的时候它也在重画。`,
+      text: `侧栏每帧 ${fmt(big.panel.p50)}ms。按内容跳过已经做了，这个数代表"内容真变了"的帧——` +
+        `而它是一整块重写：换一个选中，顶卡、战报卡这些没变的也跟着重建。`,
     });
   }
 
@@ -946,7 +1014,7 @@ function analyze(rows: ScenarioResult[]): Finding[] {
       level: big.heapMb > 30 ? 1 : 0,
       text: `${big.label} 跑 ${big.frame.n} 帧涨了 +${big.heapMb.toFixed(
         1,
-      )} MB 堆。量本身不大，但它全是短命的 DOM 节点——真机上这些节点会进 GC 的年轻代，频繁回收就是那种"隔几秒一顿"的节奏。`,
+      )} MB 堆。量本身不大，但它多是短命的 DOM 节点——真机上这些节点会进 GC 的年轻代，频繁回收就是那种"隔几秒一顿"的节奏。`,
     });
   }
 
@@ -960,21 +1028,22 @@ function advise(rows: ScenarioResult[]): string[] {
 
   if (big.board.p50 / sum > 0.4) {
     out.push(
-      `**棋盘改增量重绘**：现在每次 render 都重建全部 ${big.size * big.size} 格。` +
-        `格子内容只在地形/归属/高亮变化时才需要换，其余时候复用节点、只改 class 即可。` +
-        `按这次测出来的占比，这一项占全部脚本耗时的 ${Math.round((big.board.p50 / sum) * 100)}%。`,
+      `**棋盘这一列还剩下的钱**：${fmt(big.board.p50)}ms/帧，占脚本 ${Math.round((big.board.p50 / sum) * 100)}%。` +
+        `格子的节点已经复用（增量重绘），这一列里现在混着三件事：逐格算 class（${big.size * big.size} 格过一遍）、` +
+        `改动的格子写 className、以及棋子层的整块重写。要看究竟是哪一件，得在这三处各插一次计时。`,
     );
   }
   if (big.htmlNodes > 800) {
     out.push(
       `**别用 innerHTML 重建**：每帧 ${Math.round(big.htmlNodes)} 个元素走一遍"解析字符串→建节点→丢旧节点"。` +
-        `缓存格子节点数组、按需 patch，或者把静态地形层画到一张 canvas 上，只在底层数据变化时重画。`,
+        `缓存节点数组、按需 patch，或者把静态地形层画到一张 canvas 上，只在底层数据变化时重画。`,
     );
   }
   if (big.panel.p50 / sum > 0.15) {
     out.push(
-      `**侧栏按签名跳过**：${fmt(big.panel.p50)}ms/帧的整块重绘里，大部分帧的输入根本没变。` +
-        `给它一个和棋盘一样的签名（选中项、金币、回合、可见战报长度），一样就不重画。`,
+      `**侧栏的内容拆分**：${fmt(big.panel.p50)}ms/帧。按内容跳过已经做了（一样的 HTML 不再写），` +
+        `所以这个数全是"内容真的变了"的那部分。要再省，就把侧栏拆成几块各自缓存：` +
+        `顶卡（金币/城市/回合）、详情卡（选中单位）、战报卡——现在换一个选中会把整块 30KB 一起重写。`,
     );
   }
   if (big.threat.p50 / sum > 0.12) {
@@ -995,12 +1064,13 @@ function advise(rows: ScenarioResult[]): string[] {
         '短期可以在决策前后各让一帧（await 一个 setTimeout 0），长期挪到 Worker。',
     );
   }
-  out.push(
-    '**顺手治一下强制同步布局**：`renderBoard` 先量一遍所有棋子的 `getBoundingClientRect`（旧位置），' +
-      '紧接着重写 `innerHTML`，然后再量一遍（新位置）。真机上"写 → 读 → 写"的交替会让浏览器每次都' +
-      '立刻做一次布局来回答矩形查询。棋子越多越贵，而且它和重绘叠在同一帧里。' +
-      '改法是先算好位置再动 DOM，或者把动画交给 transform + 一个 rAF。',
-  );
+  if (big.rects > 20) {
+    out.push(
+      `**治一下强制同步布局**：每帧 ${Math.round(big.rects)} 次 \`getBoundingClientRect\`。` +
+        '写下样式之后再读矩形，浏览器为了回答那一刻的尺寸会立刻把布局算一遍；' +
+        '位置本来就按百分比算得出来，位移量自己乘一下格子宽就行，不必问浏览器。',
+    );
+  }
   if (big.frame.p95 > big.frame.p50 * 2) {
     out.push(
       `**首帧/异常帧**：p95 ${fmt(big.frame.p95)}ms 是 p50 的 ${(big.frame.p95 / big.frame.p50).toFixed(
@@ -1009,6 +1079,60 @@ function advise(rows: ScenarioResult[]): string[] {
     );
   }
   if (out.length === 0) out.push('各阶段都在预算内，先按真机 Performance 面板确认瓶颈层级（脚本、布局、绘制、合成）。');
+  return out;
+}
+
+/**
+ * 缓存到底省了多少、什么情况下省不到。
+ *
+ * 主表每帧画的是同一幅画面，缓存全命中——那是**最乐观**的一种情形。
+ * 真机对局里点一下别的兵、扣一次血、金币变一下，都会让某几层真的重写。
+ * 所以同一档再跑三遍：同一画面 / 每帧换选中 / 每帧全量重画。
+ *
+ * 最后一档是"增量重绘之前"的等价物，拿它当"没优化时会多贵"的参照。
+ */
+function printChurn(rows: ScenarioResult[]): string[] {
+  if (rows.length === 0) return [];
+  const head = [
+    pad('画面情形', 18),
+    pad('最快', 10, 'r'),
+    pad('p50', 10, 'r'),
+    pad('新建元素', 11, 'r'),
+    pad('HTML/帧', 11, 'r'),
+  ].join('');
+  console.log(dim(head));
+  console.log(dim('─'.repeat(dw(head))));
+  const out: string[] = [];
+  for (const r of rows) {
+    console.log(
+      [
+        pad(r.label, 18),
+        pad(`${fmt(r.frame.min)}ms`, 10, 'r'),
+        pad(`${fmt(r.frame.p50)}ms`, 10, 'r'),
+        pad(String(Math.round(r.htmlNodes)), 11, 'r'),
+        pad(bytes(Math.round(r.htmlChars)), 11, 'r'),
+      ].join(''),
+    );
+    out.push(`| ${r.label} | ${fmt(r.frame.min)}ms | ${fmt(r.frame.p50)}ms | ${Math.round(r.htmlNodes)} | ${bytes(Math.round(r.htmlChars))} |`);
+  }
+  const steady = rows.find((r) => r.label === '同一画面');
+  const full = rows.find((r) => r.label === '每帧全量重画');
+  const sel = rows.find((r) => r.label === '每帧换选中');
+  console.log(
+    dim(
+      '  「同一画面」是缓存全命中的下限，「每帧全量重画」是增量重绘之前的等价物；\n' +
+        '  真机上的多数帧落在两者之间——玩家点一下别的兵、金币变了，只有变化的那几层重写。',
+    ),
+  );
+  if (steady && full) {
+    const saved = 1 - steady.frame.min / Math.max(0.001, full.frame.min);
+    console.log(
+      dim(
+        `  省下的：${fmt(full.frame.min)}ms → ${fmt(steady.frame.min)}ms（${(saved * 100).toFixed(0)}%）` +
+          (sel ? `；换选中那一档是 ${fmt(sel.frame.min)}ms` : ''),
+      ),
+    );
+  }
   return out;
 }
 
@@ -1035,6 +1159,7 @@ function renderMarkdown(
   delta: string[] = [],
   browser: string[] = [],
   compare: ScenarioResult[] = [],
+  churn: string[] = [],
 ): string {
   const L: string[] = [];
   L.push('# 性能体检报告', '');
@@ -1055,6 +1180,14 @@ function renderMarkdown(
   if (compare.length > 0) {
     L.push('', '## 配置横比', '');
     L.push(...mdTable(compare));
+  }
+  if (churn.length > 0) {
+    L.push('', '## 缓存省了多少', '');
+    L.push('| 画面情形 | 最快 | p50 | 新建元素 | HTML/帧 |');
+    L.push('|---|---:|---:|---:|---:|');
+    L.push(...churn);
+    L.push('');
+    L.push('「同一画面」是缓存全命中的下限，「每帧全量重画」是增量重绘之前的等价物，真机多数帧落在两者之间。');
   }
   if (browser.length > 0) {
     L.push('', '## 浏览器那边（脚本测不到的一半）', '');
@@ -1093,6 +1226,7 @@ async function main(): Promise<void> {
   console.log(
     dim(
       '  一"帧" = render() 走的一整条流水：playerView → threatTiles → renderBoard → renderPanel\n' +
+        '  主表每帧切一个选中单位（玩家在几个兵之间点的最小真实操作），缓存跳不过去。\n' +
         '  jsdom 不做布局/绘制，所以这里的帧时间是**下限**：它都没过 16.7ms 的档，真机必然掉。',
     ),
   );
@@ -1133,6 +1267,29 @@ async function main(): Promise<void> {
   console.log('');
   console.log(bold('■ AI 决策') + dim('（不在帧循环里，但 AI 回合的停顿主要来自这里）'));
   printAi(rows);
+  console.log('');
+
+  console.log(bold('■ 缓存省了多少') + dim('（同一档换三种"画面变了多少"，别只看主表那一行）'));
+  const churnSize = rows[rows.length - 1]!.size;
+  const churnRows: ScenarioResult[] = [];
+  for (const c of [
+    { churn: 'none', label: '同一画面' },
+    { churn: 'select', label: '每帧换选中' },
+    { churn: 'full', label: '每帧全量重画' },
+  ] as const) {
+    process.stdout.write(dim(`  跑 ${c.label} …`));
+    churnRows.push(
+      await runBest(
+        { size: churnSize, churn: c.churn, label: c.label },
+        win,
+        html,
+        renderBoard as unknown as RenderBoard,
+        renderPanel as unknown as RenderPanel,
+      ),
+    );
+    process.stdout.write(`\r${' '.repeat(30)}\r`);
+  }
+  const churnLines = printChurn(churnRows);
   console.log('');
 
   const findings = analyze(rows);
@@ -1229,7 +1386,7 @@ async function main(): Promise<void> {
     console.log(dim(`  结果已写入 ${JSON_OUT}`));
   }
   if (MD_OUT) {
-    writeFileSync(MD_OUT, renderMarkdown(rows, findings, advice, deltaLines, browserNotes, compare), 'utf8');
+    writeFileSync(MD_OUT, renderMarkdown(rows, findings, advice, deltaLines, browserNotes, compare, churnLines), 'utf8');
     console.log(dim(`  报告已写入 ${MD_OUT}`));
   }
   console.log('');

@@ -137,7 +137,39 @@ export interface PanelReport {
   detail?: string;
 }
 
+/**
+ * 侧栏最近一次写下去的 HTML。
+ *
+ * 一帧里侧栏的开销几乎全在"把这些字符串变成 DOM"上（实测 32×32：整段 1.7ms，
+ * 其中拼字符串只有 0.05ms）。而大部分 render 的触发和侧栏无关——棋盘上换了选中、
+ * 顶栏换了回合、AI 走了一步但金币和战报都没动。内容一模一样还重写一遍，
+ * 等于每帧白扔一百多个节点，还把滚动位置和正在输入的搜索框一起弄没。
+ *
+ * 所以先拼、后比、一样就不写。判"一样"用的是拼出来的整串，不是另做一份摘要：
+ * 摘要漏一个字段就会让面板停在旧内容上，那种 bug 比慢难查得多。
+ */
+const panelHtmlCache = new WeakMap<HTMLElement, string>();
+
+/**
+ * 让缓存作废。
+ *
+ * 侧栏被别人直接写过之后必须调一次（上帝模式的兵种货架就是这么干的）：
+ * 缓存里留着"上一次的普通面板"，下一帧内容碰巧一样就会跳过写入，
+ * 货架会一直挂在屏幕上，而状态里一切正常——这类 bug 极难复现。
+ */
+export function invalidatePanel(el: HTMLElement): void {
+  panelHtmlCache.delete(el);
+}
+
 export function renderPanel(el: HTMLElement, input: PanelInput): void {
+  const html = panelHtml(input);
+  // firstChild 一起看：侧栏被清空过（但没走 invalidatePanel）时不能凭缓存跳过
+  if (panelHtmlCache.get(el) === html && el.firstChild) return;
+  panelHtmlCache.set(el, html);
+  el.innerHTML = html;
+}
+
+function panelHtml(input: PanelInput): string {
   const { view, me } = input;
   const s = view.state;
   // HUD 里的资源行：金币永远显示，其余资源只在"真的存在"时出现。
@@ -192,7 +224,7 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
     .filter((n): n is string => !!n);
   const expansionText = activeNames.length > 0 ? activeNames.join(' · ') : '无';
 
-  el.innerHTML = `
+  return `
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         ${turnBadge}
@@ -1212,7 +1244,38 @@ export function topbarShell(): string {
   `;
 }
 
-export function updateTopbar(root: HTMLElement, s: TopbarState): void {
+/**
+ * 顶栏内容的签名。变了才重写，没变就整段跳过。
+ *
+ * `render()` 每帧都调它，但顶栏这十几个文字一回合只变几次：回合数、谁在走、
+ * 有没有 AI、房间码……全是标量，拼个签名比逐处 `textContent =` 便宜一个数量级。
+ *
+ * 返回值是"真的改过"，调用方据此决定要不要重新算"顶栏还能不能往两边滚"——
+ * 那个判断要读 `scrollWidth`，是一笔强制布局，不能每帧都付。
+ */
+const topbarSigs = new WeakMap<HTMLElement, string>();
+
+export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
+  const sig = [
+    s.turn,
+    s.season ?? '',
+    s.current,
+    s.currentName,
+    s.aiCurrent ? 1 : 0,
+    s.aiLevelName,
+    s.aiAny ? 1 : 0,
+    s.paused ? 1 : 0,
+    s.speedName,
+    s.roomCode ?? '',
+    s.waitingForPeer ? 1 : 0,
+    s.spectator ? 1 : 0,
+    s.god ? 1 : 0,
+    s.fog ? 1 : 0,
+    s.blackout ? 1 : 0,
+  ].join('|');
+  if (topbarSigs.get(root) === sig) return false;
+  topbarSigs.set(root, sig);
+
   const ref = (name: string) => root.querySelector<HTMLElement>(`[data-ref="${name}"]`);
 
   const turn = ref('turn');
@@ -1274,6 +1337,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): void {
     fog.textContent = s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`;
     fog.classList.toggle('is-locked', s.blackout);
   }
+  return true;
 }
 
 export const TERRAIN_NAMES = CONFIG.terrainName;

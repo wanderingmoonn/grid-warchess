@@ -4,9 +4,20 @@
  * 三层结构：格子 → 城市方块 → 棋子。
  * 城市是 2×2 的独立实体，单独占一层，这样血条能横跨四格而不被格子边界切断。
  *
- * 全量重绘：144 个格子 + 二十来个棋子，这个规模下重建比 diff 更快也更不容易出 bug。
- * 唯一的例外是棋子移动：用 FLIP（先量旧位置，重绘后补一段反向位移动画）
- * 让位移看起来是滑过去的，而不是瞬间跳。
+ * **格子层是增量的，另外两层整块重写。**
+ *
+ * 12×12 那会儿整层重建确实更快也更不容易出 bug，但 32×32 是 1 024 个格子：
+ * 每帧丢掉重建 1 024 个 div、再让浏览器重算 1 024 格的样式和布局，
+ * 实测吃掉单帧的九成。而格子的"身世"其实一辈子只定两次——位置（x, y）整局不变，
+ * 地形开局定一次，之后每帧真正会变的只有高亮档（可达 / 可攻击 / 威胁 / 可放置）。
+ * 所以格子节点留着复用，只改变化那几格的 `className`。
+ *
+ * 城市和棋子照旧整块重写：它们加起来才几十个节点，按 id 做 diff 省下的时间
+ * 还不够赔 bug 的风险。唯一的例外是内容没变时干脆不写（见 `paintLayer`）。
+ *
+ * 棋子移动用 FLIP 补间让位移"滑过去"而不是瞬间跳。位移量从格坐标直接算，
+ * 不问浏览器要矩形——写完一大块 DOM 再读 `getBoundingClientRect`，
+ * 在真机上等于把整套布局同步重算一遍，比动画本身贵得多。
  */
 
 import type { PlayerView } from '../core/fog.ts';
@@ -69,6 +80,140 @@ function ensureStructure(el: HTMLElement): void {
   el.innerHTML = '<div class="tiles"></div><div class="units"></div><div class="cities"></div>';
 }
 
+/**
+ * 格子层的节点缓存。
+ *
+ * `key` 一变就整层重建：格子数变了（换地图）或者浓雾档变了（unknown 那一档
+ * 的 class 集合不一样）。除此之外一律只改变化的那几格。
+ *
+ * 缓存挂在 `.tiles` 元素上而不是模块级变量：棋盘元素被换掉（换局、重挂载）时
+ * 旧缓存跟着旧元素一起被回收，不会拿着上一张图的节点去改。
+ */
+interface TileLayer {
+  key: string;
+  nodes: HTMLElement[];
+  /** 上一次写下去的 className，逐格比；一样就不碰 DOM */
+  cls: string[];
+  /** 上一次写的角标 HTML（'' ＝ 没有角标） */
+  badge: string[];
+}
+
+const tileLayers = new WeakMap<HTMLElement, TileLayer>();
+
+/**
+ * 这两层整块重写，但**内容没变就不写**。
+ *
+ * 屏幕上大部分 render 是"顶栏变了 / 横幅变了 / 缩放变了"，棋盘一格没动。
+ * 照写一遍 innerHTML 的代价不只是拼字符串：节点全被换掉，浏览器的样式缓存、
+ * 焦点、正在跑的动画全部作废。存一份上次写进去的字串比这便宜得多。
+ */
+const layerHtml = new WeakMap<HTMLElement, string>();
+
+function paintLayer(el: HTMLElement, html: string): void {
+  if (layerHtml.get(el) === html) return;
+  layerHtml.set(el, html);
+  el.innerHTML = html;
+}
+
+/** 写自定义属性，值没变就不碰：每帧重写同一个 `--cell` 会让样式表整片失效 */
+function setVar(el: HTMLElement, name: string, value: string): void {
+  if (el.style.getPropertyValue(name) === value) return;
+  el.style.setProperty(name, value);
+}
+
+/**
+ * 一个棋子在层里的样子：属性拆成几项，内容单独一份。
+ *
+ * 拆开是为了**原地补丁**：同一个兵位置变了、血条短了一截，节点可以留着，
+ * 只改变的那几项。整块 `innerHTML` 每帧重建 43 个棋子，代价不只是拼字符串——
+ * 旧节点全被丢掉，浏览器的样式缓存作废，正在跑的 FLIP 动画也会被打断。
+ */
+interface UnitItem {
+  /** 身份：单位 id 或幽灵的坐标。用来在两次渲染之间对上同一个节点 */
+  key: string;
+  cls: string;
+  style: string;
+  title: string;
+  x: number;
+  y: number;
+  /** 单位 id；幽灵没有（它只是个"最后已知位置"的记号） */
+  id?: string;
+  /** 占地格数，只有宽单位（2×2 城、大船）才有 */
+  fp?: number;
+  inner: string;
+  /** 上面所有字段的一次性摘要，一样就整节点不碰 */
+  sig: string;
+}
+
+interface UnitNode {
+  node: HTMLElement;
+  sig: string;
+}
+
+const unitLayers = new WeakMap<HTMLElement, Map<string, UnitNode>>();
+
+function writeUnitNode(node: HTMLElement, it: UnitItem): void {
+  node.className = it.cls;
+  node.setAttribute('style', it.style);
+  node.title = it.title;
+  node.dataset.x = String(it.x);
+  node.dataset.y = String(it.y);
+  if (it.id !== undefined) node.dataset.id = it.id;
+  else node.dataset.ghost = '1';
+  if (it.fp !== undefined) node.dataset.fp = String(it.fp);
+  node.innerHTML = it.inner;
+}
+
+/**
+ * 把棋子层刷成 `items` 的样子。
+ *
+ * 三步：对上号的节点只改变化的部分、多出来的摘掉、顺序按 `items` 摆正
+ * （DOM 顺序决定谁压在谁上面：建筑在底、地面单位居中、空中单位在最上）。
+ * 顺序那一步用"就地移动"而不是"全部重插"——已经对的位置一格都不动，
+ * 只有真的换了顺序的节点才会被挪。
+ */
+function paintUnits(unitsEl: HTMLElement, items: UnitItem[]): void {
+  let cache = unitLayers.get(unitsEl);
+  if (!cache) {
+    cache = new Map();
+    unitLayers.set(unitsEl, cache);
+  }
+
+  const doc = unitsEl.ownerDocument;
+  const want: HTMLElement[] = [];
+  const alive = new Set<string>();
+  for (const it of items) {
+    alive.add(it.key);
+    let entry = cache.get(it.key);
+    if (!entry) {
+      const node = doc.createElement('div');
+      writeUnitNode(node, it);
+      entry = { node, sig: it.sig };
+      cache.set(it.key, entry);
+    } else if (entry.sig !== it.sig) {
+      writeUnitNode(entry.node, it);
+      entry.sig = it.sig;
+    }
+    want.push(entry.node);
+  }
+  for (const key of Array.from(cache.keys())) if (!alive.has(key)) cache.delete(key);
+
+  let cursor = unitsEl.firstChild;
+  for (const node of want) {
+    if (node === cursor) {
+      cursor = cursor.nextSibling;
+      continue;
+    }
+    unitsEl.insertBefore(node, cursor);
+  }
+  // 剩下的都是这一帧不该存在的（单位死了、幽灵过期了）
+  while (cursor) {
+    const next = cursor.nextSibling;
+    unitsEl.removeChild(cursor);
+    cursor = next;
+  }
+}
+
 function hpClass(ratio: number): string {
   if (ratio <= 0.3) return 'low';
   if (ratio <= 0.6) return 'mid';
@@ -88,17 +233,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const unitsEl = el.querySelector<HTMLElement>('.units');
   if (!tilesEl || !citiesEl || !unitsEl) return;
 
-  // 先记录棋子旧位置，供 FLIP 用
-  const prevRects = new Map<string, DOMRect>();
+  // 先记录棋子旧位置，供 FLIP 用。
+  // 读的是 dataset 不是 rect：位置本来就是按格坐标算的，四个数字在手边，
+  // 没必要为此让浏览器把布局算一遍。
+  const prevPos = new Map<string, { x: number; y: number }>();
   unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
     const id = node.dataset.id;
-    if (id) prevRects.set(id, node.getBoundingClientRect());
+    if (id) prevPos.set(id, { x: Number(node.dataset.x), y: Number(node.dataset.y) });
   });
 
   const cellSize = Math.max(18, (el.clientWidth - 12) / s.w);
-  el.style.setProperty('--cell', `${cellSize}px`);
-  el.style.setProperty('--cols', String(s.w));
-  el.style.setProperty('--rows', String(s.h));
+  setVar(el, '--cell', `${cellSize}px`);
+  setVar(el, '--cols', String(s.w));
+  setVar(el, '--rows', String(s.h));
 
   el.classList.toggle('fog', s.fog);
 
@@ -121,36 +268,72 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   }
 
   // ---- 格子 ----
-  const tileParts: string[] = [];
+  //
+  // 整层只在"格子数或浓雾档变了"时重建一次，之后逐格比 class：
+  // 没变的格一行 DOM 都不碰，变了的只改 className。
+  const layerKey = `${s.w}x${s.h}x${blackout ? 'b' : 'n'}`;
+  let layer = tileLayers.get(tilesEl);
+  if (!layer || layer.key !== layerKey || layer.nodes.length !== s.w * s.h) {
+    // 重建走一次 innerHTML 而不是 createElement 循环：位置写死在 data-x/data-y 上，
+    // 这两项整局不变，所以建完就再也不用管了。
+    const shell: string[] = [];
+    for (let i = 0; i < s.w * s.h; i++) {
+      const x = i % s.w;
+      const y = (i - x) / s.w;
+      shell.push(`<div class="tile" data-x="${x}" data-y="${y}"></div>`);
+    }
+    // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
+    // 重建这条路上层里本来就没有节点，跳过判断没有意义
+    tilesEl.innerHTML = shell.join('');
+    const nodes = Array.from(tilesEl.children) as HTMLElement[];
+    layer = {
+      key: layerKey,
+      nodes,
+      cls: new Array(nodes.length).fill(''),
+      badge: new Array(nodes.length).fill(''),
+    };
+    tileLayers.set(tilesEl, layer);
+  }
+
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
       const tile = s.tiles[i];
-      if (!tile) continue;
+      const node = layer.nodes[i];
+      if (!tile || !node) continue;
 
       // 三档：眼前亮着 / 去过（浓雾下按记忆画）/ 从没去过（浓雾下全黑）
       const lit = !blackout || visibleSet.has(i);
       const memo = lit ? undefined : rememberedTiles.get(i);
       const seen = lit || memo !== undefined;
-      const cls = seen ? ['tile', TERRAIN_CLASS[memo ?? tile.terrain] ?? 't-plain'] : ['tile', 'unknown'];
-      if (memo !== undefined) cls.push('remembered');
+      let cls = seen ? `tile ${TERRAIN_CLASS[memo ?? tile.terrain] ?? 't-plain'}` : 'tile unknown';
+      if (memo !== undefined) cls += ' remembered';
       if (lit && tile.cityId) {
         const city = s.cities.find((c) => c.id === tile.cityId);
-        if (city) cls.push(`own-${city.owner}`);
+        if (city) cls += ` own-${city.owner}`;
       }
-      if (targetPositions.has(i)) cls.push('attackable');
-      else if (reachSet.has(i)) cls.push('reach');
-      if (threatSet.has(i) && !reachSet.has(i)) cls.push('threat');
-      if (placeSet.has(i)) cls.push('placeable');
-      if (s.fog && !visibleSet.has(i)) cls.push('out');
+      if (targetPositions.has(i)) cls += ' attackable';
+      else if (reachSet.has(i)) cls += ' reach';
+      if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
+      if (placeSet.has(i)) cls += ' placeable';
+      if (s.fog && !visibleSet.has(i)) cls += ' out';
+
+      if (layer.cls[i] !== cls) {
+        // className 整体赋值比 classList 逐项增删快，而且不会有残留：
+        // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
+        node.className = cls;
+        layer.cls[i] = cls;
+      }
 
       // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
       const hint = ui.incomeHints?.get(i);
       const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
-      tileParts.push(`<div class="${cls.join(' ')}" data-x="${x}" data-y="${y}">${badge}</div>`);
+      if (layer.badge[i] !== badge) {
+        node.innerHTML = badge;
+        layer.badge[i] = badge;
+      }
     }
   }
-  tilesEl.innerHTML = tileParts.join('');
 
   // ---- 城市 ----
   // 浓雾下城市也分三档：眼前看得见就照实画；以前去过就画记忆里的那一份
@@ -211,8 +394,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       </div>
     </div>`);
   }
-  citiesEl.innerHTML = cityParts.join('');
-
+  paintLayer(citiesEl, cityParts.join(''));
   // ---- 棋子 ----
   // 建筑先画、部队后画：同一格上"站着的兵"必须压在"设施"上面。
   // 反过来的话，兵被自己的塔盖住，点下去选中的是塔——那个兵就再也选不中、
@@ -223,42 +405,42 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       utype(s, u.type).category === 'building' ? 0 : isAirborne(s, u) ? 2 : 1;
     return rank(a) - rank(b);
   });
-  const unitParts: string[] = [];
-  for (const u of ordered) {
-    unitParts.push(unitHtml(s, u, ui));
-  }
+  const items: UnitItem[] = [];
+  for (const u of ordered) items.push(unitItem(s, u, ui));
   for (const ghost of view.ghosts) {
-    unitParts.push(ghostHtml(s, ghost.x, ghost.y, ghost.type, ghost.seenAt, s.turn));
+    items.push(ghostItem(s, ghost.x, ghost.y, ghost.type, ghost.seenAt, s.turn));
   }
 
-  unitsEl.innerHTML = unitParts.join('');
+  paintUnits(unitsEl, items);
 
   // ---- FLIP 补间 ----
   //
   // 有路线就沿路线走（拐弯、绕过河），没路线就直线滑过去。
   // 拐弯这件事只在"走了两格以上"时才看得出来，一格的距离两种画法一样。
-  const boardBox = unitsEl.getBoundingClientRect();
-  const cellW = boardBox.width / Math.max(1, s.w);
-  const cellH = boardBox.height / Math.max(1, s.h);
+  //
+  // 位移量自己算：`.units` 是 `.board` 内缩 6px 的那块，格子按百分比均分它，
+  // 所以一格的像素宽就是 (棋盘宽 − 12) / 列数。整条路上一次布局都不用求。
+  const boxW = Math.max(0, el.clientWidth - 12);
+  const cellW = s.w > 0 ? boxW / s.w : 0;
+  const cellH = s.h > 0 ? boxW / s.h : 0;
   unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
     const id = node.dataset.id;
     if (!id) return;
-    const old = prevRects.get(id);
+    const old = prevPos.get(id);
     if (!old) return;
-    const now = node.getBoundingClientRect();
-    const dx = old.left - now.left;
-    const dy = old.top - now.top;
+    const nowX = Number(node.dataset.x);
+    const nowY = Number(node.dataset.y);
+    const dx = (old.x - nowX) * cellW;
+    const dy = (old.y - nowY) * cellH;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
 
     const path = ui.movePath?.get(id);
     if (path && path.length > 2) {
-      const destX = Number(node.dataset.x);
-      const destY = Number(node.dataset.y);
       const frames = path
         .slice(0, -1)
         .reverse()
         .map((c) => ({
-          transform: `translate(${(c.x - destX) * cellW}px, ${(c.y - destY) * cellH}px)`,
+          transform: `translate(${(c.x - nowX) * cellW}px, ${(c.y - nowY) * cellH}px)`,
         }));
       frames.push({ transform: 'translate(0, 0)' });
       node.animate(frames, {
@@ -285,7 +467,7 @@ function tileRect(s: GameState, x: number, y: number, n = 1): string {
   ].join(';');
 }
 
-function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
+function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const def = utype(s, u.type);
   const ratio = u.hp / def.maxHp;
   const isSpent = u.owner === s.current && u.moved && u.acted;
@@ -304,7 +486,7 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
   const playerName = s.players[u.owner].name;
   const kindText =
     def.category === 'building' ? '建筑' : def.category === 'economy' ? '经济单位' : '部队';
-  const title = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · 甲 ${def.armor}`;
+  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · 甲 ${def.armor}`;
 
   const cargo = u.cargo?.length ?? 0;
   const cargoBadge =
@@ -325,36 +507,49 @@ function unitHtml(s: GameState, u: Unit, ui: BoardUi): string {
     : '';
   const siteNote = prog ? ` · 工地 ${prog.done}/${prog.need}（+${prog.rate}/回合）` : '';
 
-  return `<div class="${cls.join(' ')}${siteCls}" data-id="${u.id}" data-x="${u.x}" data-y="${u.y}" data-fp="${fp}" style="${tileRect(
-    s,
-    u.x,
-    u.y,
-    fp,
-  )}" title="${title}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}">
-    <div class="unit-inner">${def.short}${cargoBadge}
+  const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
+  const inner = `<div class="unit-inner">${def.short}${cargoBadge}
       ${buildBar}
       <div class="unit-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
-    </div>
-  </div>`;
+    </div>`;
+  const clsText = `${cls.join(' ')}${siteCls}`;
+  const style = tileRect(s, u.x, u.y, fp);
+  return {
+    key: `u:${u.id}`,
+    cls: clsText,
+    style,
+    title,
+    x: u.x,
+    y: u.y,
+    id: u.id,
+    fp,
+    inner,
+    sig: `${clsText}|${style}|${title}|${inner}`,
+  };
 }
 
-function ghostHtml(
+function ghostItem(
   s: GameState,
   x: number,
   y: number,
   type: string,
   seenAt: number,
   currentTurn: number,
-): string {
+): UnitItem {
   const def = utype(s, type);
   const title = `最后已知位置：${def.name}（${currentTurn - seenAt} 个行动前）`;
-  return `<div class="unit ghost" data-ghost="1" data-x="${x}" data-y="${y}" style="${tileRect(
-    s,
+  const inner = `<div class="unit-inner">${def.short}</div>`;
+  const style = tileRect(s, x, y);
+  return {
+    key: `g:${x},${y},${type}`,
+    cls: 'unit ghost',
+    style,
+    title,
     x,
     y,
-  )}" title="${title}">
-    <div class="unit-inner">${def.short}</div>
-  </div>`;
+    inner,
+    sig: `ghost|${style}|${title}|${inner}`,
+  };
 }
 
 /** 从事件目标反推棋盘坐标 */
