@@ -8033,5 +8033,30 @@ test('报告要记下"这局要求过摘要吗"，好让"勾了却没记上"变�
   assert.equal(notAsked.recordRequested, false);
 });
 
+test('摘要也要能记下开局与终局：force 采样绕开间隔，0 帧的摘要不进报告', () => {
+  // 2026-10-28 实测踩到的洞：一局第 1 回合认输，采样只挂在"结束回合"上，
+  // 于是上传的 timeline 里 samples 是空的——有字段、没内容，比没有更误导。
+  const s = createMatch({ ...DEFAULT_CONFIG, recordDetail: true }, 31);
+  const tl = newTimeline(1);
+  tl.every = 2; // 模拟长局抽稀之后的间隔
+
+  s.turn = 3;
+  sampleTurn(s, tl);
+  assert.equal(tl.samples.length, 0, '3 不能被 2 整除，普通采样应当跳过');
+  sampleTurn(s, tl, true);
+  assert.equal(tl.samples.length, 1, 'force 要无视间隔：开局基线和终局帧靠它落地');
+  assert.equal(tl.samples[0]?.t, 3);
+
+  // 0 帧的摘要不该进报告
+  const blank = buildMatchReport(s, new Date('2026-10-28T10:00:00Z'), newTimeline(1));
+  assert.equal(blank.recordRequested, true);
+  assert.equal(blank.timeline, undefined, '一帧都没有就别带 timeline 字段');
+
+  // 有帧才带
+  const withFrame = buildMatchReport(s, new Date('2026-10-28T10:00:00Z'), tl);
+  assert.ok(withFrame.timeline, '采到帧就该带上');
+  assert.equal(withFrame.timeline?.samples.length, 1);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

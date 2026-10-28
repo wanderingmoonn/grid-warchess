@@ -154,7 +154,10 @@ export function buildMatchReport(
     logLines: s.log.length,
     sides,
     recordRequested: s.config.recordDetail === true,
-    ...(timeline ? { timeline } : {}),
+    // 只有真的采到帧才带上：一份 0 帧的摘要既占体积又误导分析
+    // （"有 timeline 字段"会被当成"有曲线"）。真丢了就让它缺着，
+    // 和 recordRequested 一对照就知道是"要求了却没记上"。
+    ...(timeline && timeline.samples.length > 0 ? { timeline } : {}),
   } satisfies MatchReport;
 }
 

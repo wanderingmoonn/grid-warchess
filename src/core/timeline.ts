@@ -112,9 +112,11 @@ function sideSample(s: GameState, p: PlayerId): { line: SideSample; value: numbe
  * every 回合采一次：`s.turn % every === 0` 才记。抽稀之后 every 会变大，
  * 于是自动只在"能被新间隔整除的回合"上采样，不需要回头删数据。
  */
-export function sampleTurn(s: GameState, tl: MatchTimeline): void {
+export function sampleTurn(s: GameState, tl: MatchTimeline, force = false): void {
   const every = Math.max(1, tl.every);
-  if (s.turn % every !== 0) return;
+  // force：跳过间隔检查。开局基线和"认输/被灭"的最后一帧必须落地，
+  // 否则一回合内结束的局会交上一份 0 帧的摘要——什么也说明不了。
+  if (!force && s.turn % every !== 0) return;
 
   const a = sideSample(s, 'A');
   const b = sideSample(s, 'B');

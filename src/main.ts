@@ -262,6 +262,9 @@ function resetRecorder(): void {
   recorder = state.config.recordDetail === true && state.config.godMode !== true
     ? newTimeline(state.turn)
     : null;
+  // 开局先落一帧基线。没有它的话，"第 1 回合就结束"的局会交上一份 0 帧摘要
+  // （2026-10-28 实测：一局认输，上传上来的 timeline 里 samples 是空的）。
+  if (recorder) sampleTurn(state, recorder, true);
 }
 
 /** 记一步（AI 和玩家都走这里） */
@@ -274,6 +277,19 @@ function noteStep(actor: PlayerId, action: Action): void {
 function noteTurnEnd(): void {
   if (!recorder) return;
   sampleTurn(state, recorder);
+}
+
+/**
+ * 分出胜负的那一刻补最后一帧。
+ *
+ * 认输、或者最后一个兵被打死，都不会走"结束回合"，所以只挂在 END_TURN 上是采不到的。
+ * 这一帧很重要：它记的是胜负定格时的双方身价与兵力，正是"崩在哪一步"的终点。
+ */
+function noteFinalFrame(): void {
+  if (!recorder || !state.winner) return;
+  const last = recorder.samples[recorder.samples.length - 1];
+  if (last && last.t === state.turn) return; // 这一回合已经采过了
+  sampleTurn(state, recorder, true);
 }
 
 function markReportSent(sig: string): void {
@@ -1074,6 +1090,7 @@ function dispatch(action: Action): boolean {
   state = result.state;
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
+  noteFinalFrame();
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
@@ -2171,6 +2188,7 @@ async function runAiTurn(
 
     state = result.state;
     noteStep(actor, action);
+    noteFinalFrame();
     if (action.type === 'RECRUIT') budget.recruited += 1;
     if (action.type === 'UPGRADE') budget.upgraded += 1;
 
