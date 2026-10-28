@@ -43,6 +43,11 @@ import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import { newTimeline, noteAction, sampleTurn, timelineSummary } from '../src/core/timeline.ts';
 import { normalizeCampaign } from '../src/net/campaign.ts';
 import {
+  legacyResistToMultiplier,
+  normalizeUnitResist,
+  normalizeUnitTypes,
+} from '../src/core/customUnits.ts';
+import {
   AI_MAX_STEPS,
   DEFAULT_BUDGET,
   aiActiveMood,
@@ -7945,6 +7950,41 @@ test('属性抗性按倍率作用，且数据必须落在 0~1', () => {
         typeof v === 'number' && v > 0 && v < 1,
         `${t.id} 的 resist.${el} = ${String(v)}，必须是 0~1 的倍率（写成 4 会变成四倍伤害）`,
       );
+    }
+  }
+});
+
+test('旧的自定义兵种：整数抗性要折成倍率', () => {
+  // resist 从"平减点数"改成"倍率"之后，玩家 localStorage 里存的旧兵种还是整数。
+  // 不折算的话，写了 4 的兵会变成"受四倍伤害"。
+  const four = legacyResistToMultiplier(4);
+  assert.ok(four > 0 && four < 1, `4 应当折成 0~1 的倍率，实际 ${four}`);
+  assert.ok(Math.abs(four - 0.714) < 0.01, '按 1/(1+v*0.1) 折算，4 应约等于 0.714');
+  assert.ok(Math.abs(four - 0.7) < 0.05, '折算结果应当接近内置表用的 0.7');
+
+  assert.equal(legacyResistToMultiplier(0.7), 0.7, '已经是倍率的不要动');
+  assert.equal(legacyResistToMultiplier(0), 1, '0 等于没抗性');
+  assert.equal(legacyResistToMultiplier(-3), 1, '负数不能变成"加伤"');
+  assert.ok(legacyResistToMultiplier(10) < legacyResistToMultiplier(2), '点数越大，打折越多');
+
+  const legacy = {
+    id: 'c_1',
+    name: '旧兵',
+    resist: { water: 4, fire: 0.8 },
+  } as unknown as Parameters<typeof normalizeUnitResist>[0];
+  const fixed = normalizeUnitResist(legacy);
+  assert.ok(fixed, '有整数抗性就该被修正');
+  assert.ok((fixed!.resist?.water ?? 1) < 1, '水抗要折成倍率');
+  assert.equal(fixed!.resist?.fire, 0.8, '已经合法的不要动');
+
+  assert.equal(normalizeUnitResist(fixed!), null, '修过的定义不该再次被改');
+  assert.equal(normalizeUnitTypes({ c_1: fixed! }), false, '第二遍应该报"没改过"');
+
+  const table: Record<string, typeof legacy> = { c_1: legacy, c_2: { ...legacy, id: 'c_2' } };
+  assert.equal(normalizeUnitTypes(table), true, '第一次应当真的改了');
+  for (const def of Object.values(table)) {
+    for (const v of Object.values(def.resist ?? {})) {
+      assert.ok(v > 0 && v < 1, `折完之后必须是倍率，实际 ${v}`);
     }
   }
 });

@@ -11,6 +11,57 @@ import type { UnitTypeDef } from './types.ts';
 const KEY = 'warchess:custom-units:v1';
 export const CUSTOM_PREFIX = 'c_';
 
+/**
+ * 把旧的"整数抗性"折成倍率。
+ *
+ * 背景：`resist` 原来记的是**平减点数**（水元素写 4 = 少挨 4 点），
+ * 2026-10-28 改结算顺序时改成了**倍率**（0~1 打折）。内置表当场改了，
+ * 但玩家自己存的兵种还在 localStorage 里，那些 4 在新算法下就是"受四倍伤害"——
+ * 不迁移的话，谁改过抗性，谁的兵就会变成玻璃。
+ *
+ * 折算公式 `1/(1+v*0.1)`：4 → 0.714（和内置水元素改的 0.7 基本对齐）、
+ * 2 → 0.833、10 → 0.5。取倒数是有意的：抗性越高，再加一点的边际收益越小，
+ * 不会出现"点数堆到 20 直接免疫"。
+ */
+export function legacyResistToMultiplier(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 1;
+  if (v < 1) return v; // 已经是倍率，别动
+  return Math.min(0.95, Math.max(0.2, 1 / (1 + v * 0.1)));
+}
+
+/**
+ * 修正一个兵种定义里的抗性。没改动就返回 null（省得白白复制对象）。
+ */
+export function normalizeUnitResist(def: UnitTypeDef): UnitTypeDef | null {
+  const src = def.resist;
+  if (!src) return null;
+  const next: Partial<Record<string, number>> = {};
+  let changed = false;
+  for (const [el, v] of Object.entries(src)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const mul = legacyResistToMultiplier(v);
+    next[el] = mul;
+    if (mul !== v) changed = true;
+  }
+  return changed ? { ...def, resist: next as UnitTypeDef['resist'] } : null;
+}
+
+/**
+ * 就地修正一整张兵种表（自定义库、以及老存档里内嵌的 unitTypes 都用它）。
+ * 幂等：第二次调用返回 false。返回 true 表示**真的改过**，调用方可以借此决定要不要写回。
+ */
+export function normalizeUnitTypes(defs: Record<string, UnitTypeDef>): boolean {
+  let changed = false;
+  for (const [id, def] of Object.entries(defs)) {
+    const fixed = normalizeUnitResist(def);
+    if (fixed) {
+      defs[id] = fixed;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function loadCustomUnits(): Record<string, UnitTypeDef> {
   try {
     const raw = localStorage.getItem(KEY);
@@ -24,6 +75,8 @@ export function loadCustomUnits(): Record<string, UnitTypeDef> {
         out[id] = def;
       }
     }
+    // 顺手把老格式的抗性折成倍率：改过就写回，之后每次读都是干净的
+    if (normalizeUnitTypes(out)) saveCustomUnits(out);
     return out;
   } catch {
     return {};
@@ -99,7 +152,9 @@ export function importCustomUnits(text: string): number {
       if (!def) continue;
       // 导入的 id 一律重编号，避免覆盖本地已有的
       const fresh = nextCustomId(all);
-      all[fresh] = { ...def, id: fresh };
+      const withId: UnitTypeDef = { ...def, id: fresh };
+      // 别人用旧版导出的文件里，抗性还是整数点数
+      all[fresh] = normalizeUnitResist(withId) ?? withId;
       count += 1;
     }
     saveCustomUnits(all);

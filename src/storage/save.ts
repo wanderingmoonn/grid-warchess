@@ -10,6 +10,7 @@
  * "迷雾是界面约定而不是安全边界"。
  */
 
+import { normalizeUnitTypes } from '../core/customUnits.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
 import type { GameState } from '../core/types.ts';
 
@@ -61,6 +62,9 @@ export function loadMatch(): GameState | null {
     if (!isValidState(parsed)) return null;
     // 老存档里双方还叫"我方/敌方"：读出来顺手换成红蓝，不用玩家重开一局
     normalizePlayerNames(parsed);
+    // 老存档里内嵌的兵种表用的是"整数抗性"，按倍率语义重新折算一次。
+    // 只改内存里的这一份，下次落盘自然就是新格式——存档不必为了格式单独迁移。
+    if (parsed.unitTypes) normalizeUnitTypes(parsed.unitTypes);
     return parsed;
   } catch {
     return null;
