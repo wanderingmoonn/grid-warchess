@@ -22,6 +22,7 @@ import {
   buildCostOf,
   buildPowerOf,
   eraDef,
+  navigable,
   nextUpgradeCost,
   passable,
 } from '../src/core/config.ts';
@@ -33,7 +34,7 @@ import {
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
-import { generateLayout, mapStylesFor } from '../src/core/mapgen.ts';
+import { generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -7589,7 +7590,7 @@ function unitOn(s: GameState, owner: PlayerId, type: string, x: number, y: numbe
   return r.ok ? r.state : s;
 }
 
-const NEW_TERRAINS: readonly Terrain[] = ['plateau', 'valley', 'marsh', 'dune', 'lava', 'volcano'];
+const NEW_TERRAINS: readonly Terrain[] = ['plateau', 'valley', 'marsh', 'dune', 'shallow', 'lava', 'volcano'];
 
 test('关掉扩展时没有高度：步耗与射程跟本体一模一样', () => {
   const off = fresh();
@@ -7682,6 +7683,7 @@ test('近战兵不会被高地变成远程', () => {
 
 test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () => {
   const on = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(on, 4, 4, 'plain');
   const s = unitOn(on, 'A', 'militia', 4, 4);
   const u = s.units.find((x) => x.type === 'militia');
   assert.ok(u);
@@ -7717,10 +7719,12 @@ test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () =>
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
 });
 
-test('火山是墙，熔岩浅流能过但要三步', () => {
+test('火山是墙，熔岩能过但要三步', () => {
   assert.equal(passable('volcano'), false, '火山不该能走进去');
   assert.equal(CONFIG.terrainCost.lava, 3);
   const s = fresh({ expansionIds: ['height-terrain'] });
+  // 随机地貌可能把 (4,4) 抽成海，先把落脚点钉成平地再摆人
+  putTerrain(s, 4, 4, 'plain');
   const st = unitOn(s, 'A', 'militia', 4, 4);
   const u = st.units.find((x) => x.type === 'militia');
   assert.ok(u);
@@ -7731,6 +7735,181 @@ test('火山是墙，熔岩浅流能过但要三步', () => {
   // 从台地下到熔岩：下坡不加价
   putTerrain(st, 4, 4, 'plateau');
   assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
+});
+
+test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
+  // 三种水面各归各：
+  //   water   —— 深水，只有船能走
+  //   shallow —— 浅滩，陆军涉水、水军也过（水军的抄近路）
+  //   bridge  —— 桥面，两边都能过
+  assert.equal(passable('water'), false, '深水陆军不该走得过去');
+  assert.equal(passable('shallow'), true, '浅流陆军该能涉过去');
+  assert.equal(navigable('water'), true);
+  assert.equal(navigable('bridge'), true);
+  assert.equal(navigable('shallow'), true, '水军也要能过浅滩，这就是给它留的近路');
+  assert.equal(navigable('plain'), false, '船不该能开上平原');
+  assert.equal(CONFIG.terrainCost.shallow, 2, '踩水走一格该顶两格');
+  assert.equal(CONFIG.terrainDef.shallow, -1, '站在水里没处躲，防御该是负的');
+
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(s, 6, 6, 'shallow');
+  putTerrain(s, 6, 7, 'plain');
+  const st = { ...s, units: [] };
+  assert.ok(canStandAt(st, 6, 6, 'militia'), '陆军该能站上浅流');
+  assert.ok(canStandAt(st, 6, 6, 'boat'), '水军该能停在浅流上');
+  assert.equal(canStandAt(st, 6, 7, 'boat'), false, '船不该能开到平原上');
+
+  // 平原(2 层)踩进浅流(1 层)：下坡不爬坡，只算水的价
+  const st2 = unitOn(st, 'A', 'militia', 6, 7);
+  const u = st2.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 7), idx(st2, 6, 6)), 2);
+  // 从浅流爬回平原：平地的价 1 + 1 层爬坡 1（浅流的"贵"只算走进来那一步）
+  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 6), idx(st2, 6, 7)), 2);
+});
+
+test('熔岩真的烧人：回合末还站在上面挨 5 点，护甲挡不住', () => {
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(s, 6, 6, 'lava');
+  const st = unitOn(s, 'A', 'militia', 6, 6);
+  const u = st.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+  assert.ok(effectiveStats(st, u!).armor > 0, '要用带护甲的兵才测得出"真伤"');
+  const hp0 = u!.hp;
+
+  const r = applyAction(st, { type: 'END_TURN' }, 'A');
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  if (!r.ok) return;
+  const after = r.state.units.find((x) => x.id === u!.id);
+  assert.ok(after, '5 点不该把满血兵烧死');
+  assert.equal(after!.hp, hp0 - 5, '熔岩该扣 5 点真伤，不能被护甲吃掉');
+});
+
+test('沼泽陷足：同样是爬回平地，沼泽比谷地多收 1 点', () => {
+  const s = fresh({ expansionIds: ['height-terrain'] });
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 5, 6, 'marsh');
+  putTerrain(s, 4, 5, 'valley');
+  const st = unitOn(s, 'A', 'militia', 5, 5);
+  const u = st.units.find((x) => x.type === 'militia');
+  assert.ok(u);
+
+  // 平地踩进沼泽：下坡，只算地形价
+  assert.equal(stepCostInto(st, u!, idx(st, 5, 5), idx(st, 5, 6)), CONFIG.terrainCost.marsh);
+  // 出来的时候：地形价 + 爬坡 + 陷足
+  const outMarsh = stepCostInto(st, u!, idx(st, 5, 6), idx(st, 5, 5));
+  const outValley = stepCostInto(st, u!, idx(st, 4, 5), idx(st, 5, 5));
+  assert.equal(outMarsh - outValley, 1, '沼泽比谷地多出来的那 1 点就是陷足');
+});
+
+test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
+  // 这条是"层层递进"的可测代理：
+  //   · 一格高山只要四邻没有台地/高山，它就是"从平地拔起来的柱子"；
+  //   · 开着扩展时，这种柱子应该一格都不剩（原版撒团块的地貌也算在内）。
+  const styles = ['open', 'ridge', 'river-h', 'river-v', 'highland', 'canyon'] as const;
+  for (const style of styles) {
+    for (const seed of [31, 77, 1234, 5]) {
+      const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: style }, seed);
+      const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
+      let bare = 0;
+      let plateau = 0;
+      for (let y = 0; y < s.h; y++) {
+        for (let x = 0; x < s.w; x++) {
+          if (s.tiles[y * s.w + x]!.terrain === 'plateau') plateau++;
+          if (H(x, y) !== 5) continue;
+          const skirt = [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+          ].some(([dx, dy]) => {
+            const nx = x + dx!;
+            const ny = y + dy!;
+            return nx >= 0 && ny >= 0 && nx < s.w && ny < s.h && H(nx, ny) >= 4;
+          });
+          if (!skirt) bare++;
+        }
+      }
+      assert.equal(bare, 0, `${style}#${seed} 有 ${bare} 格高山直接从平地拔起`);
+      assert.ok(plateau > 0, `${style}#${seed} 一格台地都没有——山脚根本没补上`);
+    }
+  }
+
+  // 关掉扩展就一格台地也不许有：原版地图必须一模一样
+  for (const style of ['open', 'ridge'] as const) {
+    const s = createMatch({ ...BASE, size: 24, expansionIds: [], mapStyle: style }, 31);
+    assert.equal(s.tiles.filter((t) => t.terrain === 'plateau').length, 0);
+  }
+});
+
+test('过河的口子是浅滩，不是一段平原', () => {
+  // 老版本的连通性修补是"把水填成平原"，于是横河里会出现一段毫无道理的陆桥：
+  // 河看着像被人填了一截，船也被那段陆地挡在河外。开了扩展之后要改成浅滩。
+  for (const style of ['river-h', 'river-v'] as const) {
+    let forded = 0;
+    for (const seed of [31, 77, 1234, 5, 909, 1237]) {
+      const L = generateLayout(24, seed, ['militia'], {
+        style,
+        symmetry: 'fair',
+        expansions: ['height-terrain'],
+      });
+      const deep = L.rows.join('').split('').filter((ch) => ch === '~').length;
+      const shoal = L.rows.join('').split('').filter((ch) => ch === 's').length;
+      assert.ok(deep > 0, `${style}#${seed} 没有河`);
+      if (L.fordless) {
+        // 无渡口图是"天堑"：过河只能造桥，一格浅滩都不该有
+        assert.equal(shoal, 0, `${style}#${seed} 是无渡口河，却留了可徒涉的浅滩`);
+      } else {
+        forded++;
+        assert.ok(shoal > 0, `${style}#${seed} 有渡口的河，渡口该是浅滩`);
+      }
+    }
+    assert.ok(forded > 0, `${style} 六张图里一张带渡口的都没有，用例没测到东西`);
+  }
+});
+
+test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对岸', () => {
+  for (const style of ['isles', 'river'] as const) {
+    let water = 0;
+    let shallow = 0;
+    const seeds = [31, 77, 1234, 5];
+    for (const seed of seeds) {
+      const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: style }, seed);
+      const at = (x: number, y: number) => s.tiles[y * s.w + x]!.terrain;
+      water += s.tiles.filter((t) => t.terrain === 'water').length;
+      shallow += s.tiles.filter((t) => t.terrain === 'shallow').length;
+
+      // 只用陆军走得通的地形，从 A 城走到 B 城：
+      // 说明那片水域上真的有能徒涉的口子，而不是把地图劈成两半
+      const a = s.cities.find((c) => c.owner === 'A');
+      const b = s.cities.find((c) => c.owner === 'B');
+      assert.ok(a && b, `${style}#${seed} 没有双方的城`);
+      const seen = new Set<number>([a!.y * s.w + a!.x]);
+      const q = [a!.y * s.w + a!.x];
+      while (q.length > 0) {
+        const i = q.pop()!;
+        const x = i % s.w;
+        const y = Math.floor(i / s.w);
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+          const j = ny * s.w + nx;
+          if (seen.has(j) || !passable(at(nx, ny))) continue;
+          seen.add(j);
+          q.push(j);
+        }
+      }
+      assert.ok(seen.has(b!.y * s.w + b!.x), `${style}#${seed} 陆军走不到对岸`);
+    }
+    assert.ok(water > 200, `${style} 四张图加起来才 ${water} 格水，说不上"横贯全图"`);
+    assert.ok(shallow > 40, `${style} 的浅滩太少（${shallow} 格），陆军根本过不去`);
+  }
 });
 
 test('新地形只出现在开了「地形高差」的对局里', () => {
@@ -7769,8 +7948,8 @@ test('地貌选项跟着扩展开关增减', () => {
   const base = mapStylesFor([]).map((o) => o.id);
   assert.equal(base.includes('highland'), false, '没开扩展不该有高原');
   const withExt = mapStylesFor(['height-terrain']).map((o) => o.id);
-  assert.equal(withExt.length, base.length + 4);
-  for (const id of ['highland', 'canyon', 'volcanic', 'marsh']) {
+  assert.equal(withExt.length, base.length + 6);
+  for (const id of ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river']) {
     assert.ok(withExt.includes(id as never), `开了扩展也没有 ${id}`);
   }
   // 随机袋也只在开了扩展时才抽得到 —— 关扩展 40 张图不可能抽出高原

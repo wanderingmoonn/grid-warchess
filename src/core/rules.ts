@@ -49,6 +49,7 @@ import {
   buildCostOf,
   buildPowerOf,
   eraDef,
+  navigable,
   nextUpgradeCost,
   passable,
 } from './config.ts';
@@ -874,7 +875,7 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
   const tile = tileAt(s, x, y);
   if (!tile) return false;
   if (def.domain === 'water') {
-    if (tile.terrain !== 'water' && tile.terrain !== 'bridge') return false;
+    if (!navigable(tile.terrain)) return false;
   } else if (!passable(tile.terrain)) {
     // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
     // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
@@ -1211,7 +1212,8 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
   const water = utype(s, unit.type).domain === 'water';
   if (water) {
     // 桥架在水面上，船从桥下过：能穿过去，但桥自己占着那一格，停不下来。
-    if (tile.terrain !== 'water' && tile.terrain !== 'bridge') return true;
+    // 浅滩同理——船能滑过去，而且停得下（见 navigable）。
+    if (!navigable(tile.terrain)) return true;
   } else if (!passable(tile.terrain)) {
     return true;
   }
@@ -2967,7 +2969,7 @@ export function recruitSpawnCells(
         if (self.has(k) || seen.has(k)) continue;
         const t = tileAt(s, x, y);
         if (!t) continue;
-        if (def.domain === 'water' ? t.terrain !== 'water' : !passable(t.terrain)) continue;
+        if (def.domain === 'water' ? !navigable(t.terrain) : !passable(t.terrain)) continue;
         if (!canStandAt(s, x, y, unitTypeId)) continue;
         seen.add(k);
         out.push({ x, y });
@@ -2979,12 +2981,13 @@ export function recruitSpawnCells(
   const city = cityId ? cityById(s, cityId) : undefined;
   if (!city) return [];
   if (def.domain === 'water') {
-    // 水军要下到城边那一格空水面上去
+    // 水军要下到城边那一格空水面上去。浅滩也算水面（船浮得起来），
+    // 桥面不算：桥是别人架的东西，新船不该直接刷在桥面上。
     return cityTiles(city)
       .flatMap((t) => DIRS.map(([dx, dy]) => ({ x: t.x + dx, y: t.y + dy })))
       .filter((p) => {
         const nb = tileAt(s, p.x, p.y);
-        return nb?.terrain === 'water' && !unitAt(s, p.x, p.y);
+        return !!nb && navigable(nb.terrain) && nb.terrain !== 'bridge' && !unitAt(s, p.x, p.y);
       });
   }
   return cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));

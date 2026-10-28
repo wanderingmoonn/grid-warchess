@@ -295,18 +295,31 @@ onTurnStart: ({ state, player }) => {
 
 ### 5.1.3 新地形与新地貌
 
-本体只认七种地形（平原、林、丘、水、山、桥、城）。想加"台地""熔岩浅流"这种
+本体只认七种地形（平原、林、丘、水、山、桥、城）。想加"台地""浅流"这种
 新格子，光有规则不够——还得让地图画得出来、让上帝模式的画笔列得出来。
-两个字段各管一头：
+三个字段各管一头：
 
 * **`Expansion.terrains`**：这个扩展**新引入**的地形名单。
   `mapgen` 只在勾了这个扩展时才往图上画它们，上帝模式的画笔也照着这张表出按钮
   （`sandbox.paintTerrainsFor(state)`）。
   **没勾扩展 = 一格都不会出现**，所以老存档、老对局不会被新地形污染。
+  另外 `mapgen` 还拿它做一件通用判断：这一局有没有 `shallow`（浅流）。
+  有的话，"连通性开凿""河的渡口""城郊多余的水"一律填**浅流**而不是平原——
+  谁引入浅流谁就顺带享有这套待遇，本体那边照旧填平原，不用点名某个扩展。
 * **`Expansion.mapStyles`**：这个扩展带来的地貌风格（开局界面"地貌"一栏的额外选项），
-  每项 `{ id, name, note }`，`id` 必须是 `MapStyle` 的成员。
+  每项 `{ id, name, note, build? }`，`id` 必须是 `MapStyle` 的成员。
   设置面板用 `mapgen.mapStylesFor(expansionIds)` 现算，勾/取消扩展时列表当场增减；
   随机袋也只从这份名单里抽，关掉扩展的局里抽不出"高原"。
+  `build?: MapStyleBuild` 是**自带生成器**的口子：交上去就拿到一张空白棋盘
+  （`MapBuildCtx`：`w / h / citySize / zoneOf / cities / blocked / rng /
+  put / at / mirror / grow / pick`），地形由扩展自己算（等高线、河谷、群岛都这么来）；
+  不交就走本体的撒团块配方。骨架（摆城、镜像、连通、出生点）仍然在 `mapgen` 里，
+  扩展只负责"地形长什么样"。
+* **`Expansion.afterTerrain`**：地形**全部长完之后**的收尾回调
+  `(grid, w, h) => void`。和 `build` 的分工是：`build` 只对自己那一张地貌负责，
+  `afterTerrain` 对**所有**地貌（包括本体那五种）做一遍普适整理。
+  「地形高差」用它把"从平地孤零零拔起来的高山"降成台地——
+  这类"跨所有地貌都该成立"的修正，塞进 `mapgen` 就等于把扩展规则缝进本体了。
 
 改完记得同步三处，否则会出现"看得见但不认识"的格子：
 
@@ -317,8 +330,15 @@ onTurnStart: ({ state, player }) => {
 **高度不是本体规则。** 「地形高差」这个扩展把"高度"整个放在
 `src/core/height-terrain.ts` 里：高度表、爬坡费、俯射阈值都是那个文件的常量，
 本体只留三个通用口子（`terrainHeight` / `modifyStepCost` / `modifyRangeAgainst`）。
+等高线生成器在 `src/core/height-mapgen.ts`，通过 `mapStyles[].build` 交进来。
 关掉扩展，`rules.stepCostInto()` 拿到的步耗与从前**逐格相同**——
 这是那个扩展的回归测试里最重要的一条断言。
+
+**"两种水"的分界也是配置而非规则分支。** `config.navigable(t)` 回答"船能不能待在
+这一格"（深水 / 桥面 / 浅流），`passable(t)` 回答"陆军能不能走进去"
+（浅流可以，深水不行）。给水军、寻路、AI 距离场加新的水面地形时，
+改这两个函数 + `terrainCost` 就够了，不要去各个调用点手抄
+`tile.terrain === 'water'`——本项目已经因为这个抄法出过一次"浅流只有一半系统认识"的错。
 
 ### 5.2 大量兵种放哪
 

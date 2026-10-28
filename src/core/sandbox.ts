@@ -61,7 +61,7 @@ export function placeUnit(
       return { ok: false, reason: '这一格已经站着东西了' };
     }
   } else if (!canStandAt(s, x, y, type)) {
-    const why = def.domain === 'water' ? '船只能停在水上或桥面上' : '这一格站不住（水、山，或者已经有人了）';
+    const why = def.domain === 'water' ? '船只能停在水上、桥面或浅滩上' : '这一格站不住（水、山，或者已经有人了）';
     return { ok: false, reason: `${def.name}：${why}` };
   }
 

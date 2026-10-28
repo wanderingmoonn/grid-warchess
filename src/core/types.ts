@@ -24,12 +24,18 @@ export type ResourceId = string;
 /**
  * 地形。
  *
- * 除了"能不能走、加多少防御"，每类地形还带一个**高度值**（见 CONFIG.terrainHeight）：
- * 高度差决定两件事——射程看得到多远（俯射加成、仰攻受限），
- * 以及爬坡要多花多少移动力。地形清单因此按高度排成一列阶梯：
+ * 除了"能不能走、加多少防御"，每类地形还带一个**高度值**（「地形高差」扩展给的，
+ * 见 core/height-terrain.ts）：高度差决定两件事——射程看得到多远（俯射加成、
+ * 仰攻受限），以及爬坡要多花多少移动力。地形清单因此按高度排成一列阶梯：
  *
- *   water 0 → marsh / valley / lava 1 → plain / forest / city / bridge 2
+ *   water 0 → shallow / marsh / valley / lava 1 → plain / forest / city / bridge 2
  *   → hill / dune 3 → plateau 4 → mountain 5 → volcano 6
+ *
+ * 两种"水"必须分清，这是这个扩展最容易搞混的一处：
+ *   · `water`：深水（河、湖、海）。**只有水军能进**，陆军过不去，只能架桥。
+ *   · `shallow`：浅流（浅滩、漫水滩）。**陆军能涉水过去**，水军反而进不来——
+ *     水太浅，船搁底。它是这个扩展里唯一"能跨过水"的陆路。
+ * 所以"横贯全图的大河/海峡"是 water 铺出来的，两岸能徒涉的地方才是 shallow。
  */
 export type Terrain =
   | 'plain'
@@ -47,7 +53,9 @@ export type Terrain =
   | 'marsh'
   /** 沙丘：起伏的沙脊，比平原高一档，视野好、没掩护 */
   | 'dune'
-  /** 熔岩浅流：火山脚下缓慢流动的熔岩，能过，但极费脚力 */
+  /** 浅流：漫过脚踝的水。陆军能涉水过去，水军进不来（水太浅） */
+  | 'shallow'
+  /** 熔岩：火山脚下缓慢流动的岩浆。能过，但极费脚力，而且会烧人 */
   | 'lava'
   /** 火山：整张图上最高的东西，不可通行 */
   | 'volcano';
@@ -612,6 +620,27 @@ export type AiLevel = 'basic' | 'advanced' | 'tactic';
  * 扩展规则是代码模块，配置里只有 id。这样存档能序列化、能回放、
  * 换台机器打开结果也一致。
  */
+/**
+ * 地貌风格。这是**唯一**一份定义：mapgen 从这里转出去（`export type { MapStyle }`），
+ * 开局界面与 MatchConfig 也从这里取。
+ *
+ * 曾经这里另抄过一份不含高原/峡谷/岛屿的旧清单，结果"能选的地貌"和
+ * "能生成的地貌"两张表各自漂着——加一个地貌要改两处，漏一处就是
+ * "选了群岛却生成了随机图"。所以现在只留这一个联合类型。
+ */
+export type MapStyle =
+  | 'random'
+  | 'river-h'
+  | 'river-v'
+  | 'ridge'
+  | 'open'
+  | 'volcanic'
+  | 'canyon'
+  | 'highland'
+  | 'marsh'
+  | 'isles'
+  | 'river';
+
 export interface MatchConfig {
   /** 棋盘边长（正方形） */
   size: number;
@@ -656,7 +685,6 @@ export interface MatchConfig {
    */
   godMode?: boolean;
   /**
-  /**
    * 记录逐回合摘要（默认关）。
    *
    * 和「允许上传」是两件事，但界面上是一次勾选：勾了之后这局从开局起
@@ -670,18 +698,9 @@ export interface MatchConfig {
   recordDetail?: boolean;
   /**
    * 地貌风格：random 由种子抽；也可以指定横河 / 纵河 / 山岭 / 开阔 /
-   * 火山群 / 峡谷 / 高原 / 沼泽。
+   * 火山群 / 峡谷 / 高原 / 沼泽 / 群岛 / 大川（后几种要开「地形高差」）。
    */
-  mapStyle?:
-    | 'random'
-    | 'river-h'
-    | 'river-v'
-    | 'ridge'
-    | 'open'
-    | 'volcanic'
-    | 'canyon'
-    | 'highland'
-    | 'marsh';
+  mapStyle?: MapStyle;
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */
   mapSymmetry?: 'fair' | 'mirror';
   /**

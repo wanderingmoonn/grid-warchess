@@ -15,6 +15,7 @@
  */
 
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { MapStyleBuild } from './mapgen.ts';
 import type { ResourceCost } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
@@ -386,7 +387,32 @@ export interface Expansion {
    * 同一套地貌在不同扩展下可能长得完全不同，所以地貌是**扩展的菜单项**，
    * 不是引擎的常量表。id 必须是 MapStyle 的成员——生成器按 id 分支画图。
    */
-  mapStyles?: ReadonlyArray<{ id: string; name: string; note: string }>;
+  mapStyles?: ReadonlyArray<{
+    id: string;
+    name: string;
+    note: string;
+    /**
+     * 这个地貌自己的生成器。
+     *
+     * 有它，mapgen 就不再走本体的"撒团块"配方，而是把一张空白棋盘交给扩展，
+     * 由扩展自己算地形（等高线、河谷、群岛……）。没有它，地貌只是
+     * 本体配方换一组比例——本体那五种就是这样。
+     */
+    build?: MapStyleBuild;
+  }>;
+  /**
+   * 地形长完之后的"收尾修正"——整张棋盘交回来，就地改。
+   *
+   * 和 `mapStyles[].build` 分工不同：`build` 只对**自己那一张**地貌负责，
+   * 而这里是给**所有**地貌（包括本体那五种）做一遍普适的整理。
+   * 「地形高差」用它把"孤零零拔地而起的高山"降成台地：本体配方是撒团块的，
+   * 团块边缘必然出现"周围全是平原、中间一柱高山"，而开这个扩展的玩家
+   * 期待的是等高线——山脚下总该有台地托着。
+   *
+   * 为什么放在扩展里而不是 mapgen 里：本体不认识"台地"，也不该认识。
+   * 收尾动作写成本体的一段 if，就等于把扩展规则缝进本体了。
+   */
+  afterTerrain?: (g: Terrain[], w: number, h: number) => void;
 }
 
 function nameOf(state: GameState, typeId: string): string {

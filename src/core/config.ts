@@ -104,11 +104,13 @@ export const CONFIG = {
     plateau: 3,
     // 谷地：被两边的坡夹着，等于半个掩体
     valley: 2,
+    // 浅流：站在漫到小腿的水里，没处躲——比平地还差
+    shallow: -1,
     // 沼泽：没掩护，还得站在泥里
     marsh: 0,
     // 沙丘：沙脊上目标明显
     dune: 1,
-    // 熔岩浅流：站在流动的岩浆上，没有任何掩护可言
+    // 熔岩：站在流动的岩浆上，没有任何掩护可言
     lava: 0,
     volcano: 0,
   } as Record<Terrain, number>,
@@ -125,9 +127,14 @@ export const CONFIG = {
     bridge: 1,
     plateau: 2,
     valley: 1,
+    // 浅流：陆军能涉水过去，但水底打滑、看不清脚，走一格顶两格。
+    // 水军也能过（水够深，船浮得起来）——它的水面判定在 navigable()，
+    // 这里写的只是陆军的价；水军照旧按 1 点一步算。
+    shallow: 2,
     marsh: 2,
     dune: 2,
-    // 熔岩浅流：能过，但一步顶三步——绕路往往更快
+    // 熔岩：能过，但一步顶三步，而且回合末会烧人（见「地形高差」扩展）。
+    // 不做成墙，是因为"咬着牙冲过去"比"绝对过不去"更有战术余地。
     lava: 3,
     volcano: 99,
   } as Record<Terrain, number>,
@@ -151,7 +158,8 @@ export const CONFIG = {
     valley: '谷地',
     marsh: '沼泽',
     dune: '沙丘',
-    lava: '熔岩浅流',
+    shallow: '浅流',
+    lava: '熔岩',
     volcano: '火山',
   } as Record<Terrain, string>,
 };
@@ -176,10 +184,25 @@ export const CITY = {  /** 边长：占 size × size 个格子 */
 /**
  * 不可通行的地形：水、高山、火山。
  * 不能进入、不能建造、不能驻军；高山和火山是纯粹的"天险"，水还额外提供临水收益。
- * 熔岩浅流不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
+ * 熔岩不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
  */
 export function passable(t: Terrain): boolean {
   return t !== 'water' && t !== 'mountain' && t !== 'volcano';
+}
+
+/**
+ * 船能不能待在这一格。
+ *
+ * 三种水面：深水（water）、桥面（bridge）、浅滩（shallow）。
+ * 浅滩是**双方共用**的口子——陆军涉水、水军也能贴着它滑过去，
+ * 它存在的意义之一就是给水军一条抄近路：不用绕整片海，直接从浅滩挤过去。
+ * （所以"船搁底进不了浅流"是错的，别再把浅流当成只有陆军能走的地形。）
+ *
+ * 浅滩只有在开了「地形高差」的对局里才会出现在地图上，
+ * 所以这条判断对本体对局没有任何影响。
+ */
+export function navigable(t: Terrain): boolean {
+  return t === 'water' || t === 'bridge' || t === 'shallow';
 }
 
 export interface EraDef {

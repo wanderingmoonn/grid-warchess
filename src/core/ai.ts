@@ -17,7 +17,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CONFIG, ORDER_UPGRADE, passable } from './config.ts';
+import { CONFIG, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
   armySize,
@@ -991,8 +991,9 @@ export function cityDistanceField(
       if (!tile) continue;
 
       if (mode === 'water') {
-        // 水军的图只走水（桥面也算，船从桥底下过）
-        if (tile.terrain !== 'water' && tile.terrain !== 'bridge') continue;
+        // 水军的图只走水面：深水、桥面、浅滩都算
+        // （浅滩是水军抄近路的地方，不是只有陆军能过）
+        if (!navigable(tile.terrain)) continue;
       } else if (mode === 'land') {
         // 严格旱路：水面和高山一样是墙
         if (!passable(tile.terrain)) continue;
@@ -2620,7 +2621,7 @@ function recruitCandidate(
     for (const cell of cells) {
       const tile = tileAt(s, cell.x, cell.y);
       if (!tile) continue;
-      if (water ? tile.terrain !== 'water' : !passable(tile.terrain)) continue;
+      if (water ? !navigable(tile.terrain) : !passable(tile.terrain)) continue;
       if (unitAt(s, cell.x, cell.y)) continue;
       out.push(cell);
     }
@@ -3290,7 +3291,25 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => b.score - a.score);
 
-  while (candidates.length && !applyAction(view,candidates[0]!.action).ok) candidates.shift();
+  /**
+   * 雾图上看不见的敌人会挡在落点上。
+   *
+   * AI 是在 `view`（自己那份雾图）上算"这一格走得到"的，而真局里那格可能
+   * 正好站着一支它没看见的兵——提出来就是非法动作，而执行方遇到非法动作
+   * 会**中断整回合**，等于这个 AI 白白让掉一回合。
+   * 所以落点要用真局再核一次。不核内容、只核合法性：这不叫开图，
+   * 只是"别提一个必然被拒的动作"。
+   */
+  const moveOkInReal = (a: Action): boolean => {
+    if (a.type !== 'MOVE') return true;
+    const u = s.units.find((x) => x.id === a.unitId);
+    if (!u) return false;
+    return reachableTiles(s, u).has(a.y * s.w + a.x);
+  };
+
+  while (candidates.length && (!moveOkInReal(candidates[0]!.action) || !applyAction(view, candidates[0]!.action).ok)) {
+    candidates.shift();
+  }
 
   const best = candidates[0];
   if (!best || best.score <= 0) return null;
@@ -3307,7 +3326,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     aiLevelOf(s) !== 'basic'
       ? Math.max(0.2, Math.abs(best.score) * 0.015)
       : Math.max(6, Math.abs(best.score) * 0.25);
-  const tied = candidates.filter((c) => c.score > 0 && best.score - c.score <= band && applyAction(view,c.action).ok);
+  const tied = candidates.filter(
+    (c) => c.score > 0 && best.score - c.score <= band && moveOkInReal(c.action) && applyAction(view,c.action).ok,
+  );
   if (tied.length > 1) {
     const pick = tied[Math.floor(aiNoise(s) * tied.length)];
     if (pick) return pick.action;

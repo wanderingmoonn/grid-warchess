@@ -17,21 +17,61 @@
 
 import { passable } from './config.ts';
 import { expansionById } from './expansions.ts';
-import type { Terrain } from './types.ts';
+import type { MapStyle, Terrain } from './types.ts';
 
-export type MapStyle =
-  | 'random'
-  | 'river-h'
-  | 'river-v'
-  | 'ridge'
-  | 'open'
-  | 'volcanic'
-  | 'canyon'
-  | 'highland'
-  | 'marsh';
+// 地貌风格的联合类型只有一个来源（types.ts），这里只是转出去，
+// 免得"能选的地貌"和"能生成的地貌"变成两张会各自走偏的表。
+export type { MapStyle };
 export type MapSymmetry = 'fair' | 'mirror';
 
-export const MAP_STYLES: Array<{ id: MapStyle; name: string; note: string }> = [
+/**
+ * 扩展自带的地貌生成器。
+ *
+ * 地貌"长什么样"是风格问题，不该全部堆在 mapgen 里：本体的五种地貌是
+ * 河、岭、开阔那套配方，而"层层递进的等高线山地"是另一套完全不同的算法
+ * （连续高度场 + 阈值分层）。让扩展把自己的生成器一起交上来，
+ * mapgen 只负责搭骨架（摆城、镜像、连通、出生点），谁也别改谁。
+ */
+export type MapStyleBuild = (c: MapBuildCtx) => void;
+
+/**
+ * 交给扩展生成器的工具包。
+ *
+ * 只给"往格子上写地形"这一件事需要的东西：尺寸、分区、城市、禁写格。
+ * 城市摆放、镜像、连通性开凿、出生点仍由 mapgen 自己做完——
+ * 那些是"一局合法对局"的底线，不能让每个扩展各写一份。
+ */
+export interface MapBuildCtx {
+  w: number;
+  h: number;
+  citySize: number;
+  /** 这一格离哪一方更近（决定"两侧配额相同"该怎么算） */
+  zoneOf: (x: number, y: number) => 'A' | 'B';
+  /** 双方城市锚点（左上角） */
+  cities: { A: Array<{ x: number; y: number }>; B: Array<{ x: number; y: number }> };
+  /** 不能动的格子：城市本体 */
+  blocked: Set<number>;
+  /** 确定性随机：同一个 seed 永远同一张图 */
+  rng: () => number;
+  put: (x: number, y: number, t: Terrain) => void;
+  at: (x: number, y: number) => Terrain | undefined;
+  /** 点对称的另一格（用来把一侧的地势复制给另一侧） */
+  mirror: (x: number, y: number) => { x: number; y: number };
+  /** 从一格开始长一片团块地形 */
+  grow: (x: number, y: number, t: Terrain, area: number) => void;
+  /** 在某一半区里挑一块空地（已排除城市和已有地形） */
+  pick: (zone: 'A' | 'B') => { x: number; y: number } | null;
+}
+
+export interface MapStyleOption {
+  id: MapStyle;
+  name: string;
+  note: string;
+  /** 有它就不走本体的团块配方，改由扩展自己长地形 */
+  build?: MapStyleBuild;
+}
+
+export const MAP_STYLES: MapStyleOption[] = [
   { id: 'random', name: '随机', note: '按种子抽一种地貌' },
   { id: 'river-h', name: '横河', note: '东西向河流，多处渡口' },
   { id: 'river-v', name: '纵河', note: '南北向河流，贯通全图' },
@@ -45,16 +85,12 @@ export const MAP_STYLES: Array<{ id: MapStyle; name: string; note: string }> = [
  * 地貌是跟着扩展走的，不是引擎常量：勾了「地形高差」才有高原/峡谷/火山群/沼泽，
  * 没勾就看不见（也不该在随机袋里被抽到）。
  */
-export function mapStylesFor(expansionIds: readonly string[] = []): Array<{
-  id: MapStyle;
-  name: string;
-  note: string;
-}> {
-  const out = [...MAP_STYLES];
+export function mapStylesFor(expansionIds: readonly string[] = []): MapStyleOption[] {
+  const out: MapStyleOption[] = [...MAP_STYLES];
   for (const id of expansionIds) {
     for (const st of expansionById(id)?.mapStyles ?? []) {
       if (out.some((o) => o.id === st.id)) continue;
-      out.push({ id: st.id as MapStyle, name: st.name, note: st.note });
+      out.push({ id: st.id as MapStyle, name: st.name, note: st.note, build: st.build });
     }
   }
   return out;
@@ -125,6 +161,7 @@ const CHAR: Record<Terrain, string> = {
   valley: 'v',
   marsh: 'w',
   dune: 'd',
+  shallow: 's', // 浅滩：陆军能踩过去的"水"
   lava: 'l',
   volcano: 'V',
 };
@@ -180,6 +217,14 @@ interface Ctx {
   g: Terrain[];
   /** 城市边长（2 或扩展要求的 3）。所有"城市占几格"的推算都读它。 */
   citySize: number;
+  /**
+   * 能不能把"跨水的通道"挖成浅滩而不是平原。
+   *
+   * 开着「地形高差」时为真：浅滩是陆军涉得过去、水军也滑得过去的水面，
+   * 用它当渡口比"把河填成一段平地"合理得多——填平地等于凭空多出一条陆桥，
+   * 河/海在海图上会突然断开一截，而且船也会被那条陆桥挡住。
+   */
+  shallowOk?: boolean;
 }
 
 const at = (c: Ctx, x: number, y: number): Terrain | undefined =>
@@ -536,7 +581,19 @@ function paintRiver(
     if (rng() < 0.14) base += dir;
     base = clampBase(base);
 
-    if (inGap(t)) continue;
+    if (inGap(t)) {
+      // 渡口。开着「地形高差」时铺一段**浅滩**：这才是"能徒涉的渡口"该有的样子，
+      // 也让这条河在视觉上不断——以前这里只是"不画水"，于是渡口就是一截平原，
+      // 远看像河被谁填了一段，还顺带把船挡在河外。
+      if (c.shallowOk) {
+        const w = widthAt(t);
+        for (let k = 0; k < w; k++) {
+          const [x, y] = axis === 'h' ? [t, base + k] : [base + k, t];
+          mark(x, y, 'shallow');
+        }
+      }
+      continue;
+    }
 
     const w = widthAt(t);
     for (let k = 0; k < w; k++) {
@@ -1056,16 +1113,21 @@ function cheapestPath(
 }
 
 /**
- * 把挡路的水/山凿开：水变成浅滩（平原），山开出隘口（丘陵）。
+ * 把挡路的水/山凿开：水变成浅滩，山开出隘口（丘陵）。
  *
  * mirror 为真时同步凿镜像格 —— 否则"完全对称"会被这一凿打破，
  * 而且凿完还得再对称一次，反而可能把刚开的路又堵回去。
+ *
+ * 凿水凿成什么，看 `c.shallowOk`：
+ *   · 没开「地形高差」：只能是平原（本体没有浅滩这种东西）；
+ *   · 开了：用浅滩。既让陆军涉得过去，又不把水面截断——船照样能从这条口子过，
+ *     横贯全图的大川/海峡才不会因为"连通性修补"被填出一条假陆桥。
  */
 function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false, preserve?: Set<number>): void {
   const cut = (x: number, y: number) => {
     if (preserve?.has(y * c.w + x)) return;
     const t = at(c, x, y);
-    if (t === 'water') put(c, x, y, 'plain');
+    if (t === 'water') put(c, x, y, c.shallowOk ? 'shallow' : 'plain');
     else if (t === 'mountain') put(c, x, y, 'hill');
     // 火山和山一样是墙：连通性这一步必须能把它凿成隘口，
     // 否则"火山群"会随机把某座城封死在角落
@@ -1272,7 +1334,12 @@ export function generateLayout(
   // 微图是另一套规则（见 tinyLayout 的注释），不走后面的随机生成
   if (size <= 5) return tinyLayout(size, unitPool, opts.symmetry ?? 'fair', citySize);
 
-  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
+  // 这一局有没有"浅滩"这种东西：只要某个启用的扩展登记了浅流地形，就有。
+  // 不点名具体扩展——谁引入了浅流，谁就顺带享有"凿水凿成浅滩"这套待遇。
+  const shallowOk = (opts.expansions ?? []).some((id) =>
+    (expansionById(id)?.terrains ?? []).includes('shallow'),
+  );
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize, shallowOk };
 
   const rngStyle = makeRng(seed * 2654435761 + size * 7919 + 11);
   const rngCity = makeRng(seed * 40503 + size * 7919 + 29);
@@ -1377,77 +1444,60 @@ export function generateLayout(
   const areaB = countPlain('B');
   const base = Math.min(areaA, areaB);
 
-  // 团块地形的配方按地貌走：老四种保持原样，新四种把"高度差"当主角——
-  // 高原是台地成片、峡谷是谷地与台地交错、火山群是熔岩浅流配火山锥、
-  // 沼泽是烂地成片。数值是"占本区空地的比例"，两侧配额相同（公平）。
-  const ratio: Array<{ t: Terrain; r: number; blob: [number, number] }> =
-    style === 'highland'
-      ? [
-          { t: 'forest', r: 0.06, blob: [3, 7] },
-          { t: 'hill', r: 0.10, blob: [3, 6] },
-          { t: 'plateau', r: 0.14, blob: [4, 9] }, // 成片的台地才是"高原"
-          { t: 'mountain', r: 0.02, blob: [2, 4] },
-        ]
-      : style === 'canyon'
-        ? [
-            { t: 'forest', r: 0.05, blob: [3, 6] },
-            { t: 'hill', r: 0.05, blob: [2, 5] },
-            { t: 'valley', r: 0.16, blob: [4, 10] }, // 谷地是主菜：仰攻吃亏的地方
-            { t: 'plateau', r: 0.09, blob: [3, 7] },
-            { t: 'mountain', r: 0.02, blob: [2, 4] },
-          ]
-        : style === 'volcanic'
-          ? [
-              { t: 'forest', r: 0.05, blob: [3, 6] },
-              { t: 'hill', r: 0.06, blob: [2, 5] },
-              { t: 'plateau', r: 0.04, blob: [2, 4] },
-              { t: 'lava', r: 0.10, blob: [3, 8] }, // 熔岩浅流铺成片，逼人绕路
-            ]
-          : style === 'marsh'
-            ? [
-                { t: 'forest', r: 0.06, blob: [3, 6] },
-                { t: 'hill', r: 0.04, blob: [2, 4] },
-                { t: 'marsh', r: 0.18, blob: [4, 11] },
-              ]
-            : [
-                { t: 'forest', r: style === 'open' ? 0.06 : 0.11, blob: [3, 7] },
-                { t: 'hill', r: style === 'ridge' ? 0.13 : style === 'open' ? 0.05 : 0.08, blob: [2, 5] },
-                { t: 'mountain', r: style === 'open' ? 0 : 0.03, blob: [2, 4] },
-              ];
-
-  for (const { t, r, blob } of ratio) {
-    const n = Math.round(base * r);
-    if (n <= 0) continue;
-    scatterTerrain(c, rngTerrain, zoneOf, t, { A: n, B: n }, blocked);
-    void blob;
-  }
-
-  // 火山群：在熔岩之上再立几座火山锥（不可通行）。数量极省——
-  // 它和山一样是墙，多了会把地图切成互不相通的几块。
-  if (style === 'volcanic') {
-    const cones = Math.max(1, Math.round(base * 0.008));
-    for (const zone of ['A', 'B'] as const) {
-      for (let k = 0; k < cones; k++) {
-        const seed = pickSeed(c, rngTerrain, zoneOf, zone, blocked);
-        if (!seed) break;
-        growRegion(c, rngTerrain, seed, 'volcano', 2, blocked);
-      }
-    }
-  }
-
-  // ---- 大地图加料：额外的湖、支流、短山脊、成片森林 ----
-  // 放在镜像和连通性开凿之前：镜像会把这些统一成对称的，
-  // 开凿则保证加了这么多水体之后地图还是通得过去的。
-  enrichTerrain(c, rngTerrain, zoneOf, blocked);
-
-  // ---- 填空白：把还剩的大块空地补上林子/小丘 ----
-  // 只对够大的图做：12×12 上一团林子就占了十分之一，本来就不空。
-  if (Math.min(c.w, c.h) >= 16) {
-    fillEmptyRegions(c, rngTerrain, blocked, {
-      minRegion: Math.round((c.w * c.h) * 0.06), // 小于 6% 地图的空地不用管
-      keepPlain: 0.9,                            // 大块空地至少留 90% 是空地
-      blob: [3, Math.max(5, Math.min(10, Math.round(Math.min(c.w, c.h) / 4)))],
+  // ---- 地形本体：两条路 ----
+  //
+  //   · 扩展地貌：由扩展自己的生成器长地形。那一套是"连续高度场 + 阈值分层"，
+  //     长出来是同心环状的等高线地形（山心→台地→丘陵→平原→谷地）。
+  //   · 本体地貌：走原来的团块配方，一行不改——老地图的手感不该被动到。
+  //
+  // 分岔放在这里而不是更早，是因为两条路共用同一套骨架：城已摆好、
+  // blocked 已标好、镜像与连通性开凿都在下面统一做。
+  const styleDef = mapStylesFor(opts.expansions ?? []).find((st) => st.id === style);
+  const build = styleDef?.build;
+  if (build) {
+    build({
+      w,
+      h,
+      citySize,
+      zoneOf,
+      cities: plan,
+      blocked,
+      rng: rngTerrain,
+      put: (x, y, t) => put(c, x, y, t),
+      at: (x, y) => at(c, x, y),
+      mirror: (x, y) => mirrorOf(c, { x, y }),
+      grow: (x, y, t, area) => growRegion(c, rngTerrain, { x, y }, t, area, blocked),
+      pick: (zone) => pickSeed(c, rngTerrain, zoneOf, zone, blocked),
     });
+    // 扩展自己长完地形就到此为止：本体的"加料 / 填空白"会把等高线打碎
+    // （它们是给撒点式地图补纹理的，会把山脊掏出一堆碎林子和小湖）。
+  } else {
+    // 本体五种地貌的配方。扩展地貌走上面那条路，不会进到这里。
+    const ratio: Array<{ t: Terrain; r: number }> = [
+      { t: 'forest', r: style === 'open' ? 0.06 : 0.11 },
+      { t: 'hill', r: style === 'ridge' ? 0.13 : style === 'open' ? 0.05 : 0.08 },
+      { t: 'mountain', r: style === 'open' ? 0 : 0.03 },
+    ];
+    for (const { t, r } of ratio) {
+      const n = Math.round(base * r);
+      if (n <= 0) continue;
+      scatterTerrain(c, rngTerrain, zoneOf, t, { A: n, B: n }, blocked);
+    }
+
+    // ---- 大地图加料：额外的湖、支流、短山脊、成片森林 ----
+    // 放在镜像和连通性开凿之前：镜像会把这些统一成对称的，
+    // 开凿则保证加了这么多水体之后地图还是通得过去的。
+    enrichTerrain(c, rngTerrain, zoneOf, blocked);
+
+    // ---- 填空白：把还剩的大块空地补上林子/小丘 ----
+    // 只对够大的图做：12×12 上一团林子就占了十分之一，本来就不空。
+    if (Math.min(c.w, c.h) >= 16) {
+      fillEmptyRegions(c, rngTerrain, blocked, {
+        minRegion: Math.round((c.w * c.h) * 0.06), // 小于 6% 地图的空地不用管
+        keepPlain: 0.9,                            // 大块空地至少留 90% 是空地
+        blob: [3, Math.max(5, Math.min(10, Math.round(Math.min(c.w, c.h) / 4)))],
+      });
+    }
   }
 
   // ---- 完全镜像：把每一对镜像格统一成同一块地形 ----
@@ -1513,9 +1563,10 @@ export function generateLayout(
         ring.push({ x, y, d: Math.abs(dx - 0.5) + Math.abs(dy - 0.5) });
       }
     }
-    // 离城心最近的两格留作港口，其它填平
+    // 离城心最近的两格留作港口，其它填掉。开了「地形高差」时填成浅滩而不是平地：
+    // 船还能停在城门口那片水里，陆军也能直接涉水出城——两边都不吃亏。
     ring.sort((a, b) => a.d - b.d);
-    for (const t of ring.slice(2)) put(c, t.x, t.y, 'plain');
+    for (const t of ring.slice(2)) put(c, t.x, t.y, c.shallowOk ? 'shallow' : 'plain');
   }
   symmetrize(); // 城郊处理也要对称，否则镜像模式会和"严格对称"对不上
 
@@ -1531,6 +1582,15 @@ export function generateLayout(
       );
       if (path) carve(c, path, blocked, symmetry === 'mirror', fordless ? riverCells : undefined);
     }
+  }
+
+  // ---- 扩展的地形收尾：整张棋盘交给它们整理一遍 ----
+  //
+  // 放在所有开凿/清场之后、出生点之前：这一步只看"最后的地形长什么样"，
+  // 前面谁凿了谁填了都不必关心。多个扩展按启用顺序依次过一遍。
+  // 关掉扩展这条循环就是空的——本体地图一格都不会变。
+  for (const id of opts.expansions ?? []) {
+    expansionById(id)?.afterTerrain?.(c.g, c.w, c.h);
   }
 
   // ---- 出生点 ----

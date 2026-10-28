@@ -48,7 +48,7 @@ for (let i = 0; i < count; i++) {
       else if (row[x] === '~') line += '~';
       else if (row[x] === '^') line += '^';
       // 新地形原样打出来：看不清在界面上是什么颜色时，看字符最快
-      else if (row[x] && 'PvwdlV'.includes(row[x] as string)) line += row[x];
+      else if (row[x] && 'PvwdlsV'.includes(row[x] as string)) line += row[x];
       else line += '.';
     }
     console.log(String(y).padStart(2) + ' ' + line);

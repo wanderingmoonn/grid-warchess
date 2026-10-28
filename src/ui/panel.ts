@@ -12,6 +12,7 @@ import {
   buildCostOf,
   buildPowerOf,
   eraDef,
+  navigable,
   passable,
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
@@ -670,7 +671,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       [0, -1],
     ].some(([dx, dy]) => {
       const nb = s.tiles[(t.y + dy) * s.w + (t.x + dx)];
-      return nb?.terrain === 'water' && !s.units.some((u) => u.x === t.x + dx && u.y === t.y + dy);
+      // 港口认"船停得下的水面"：深水、桥面、浅流都算（和 navigable 同一条判定，
+      // 不然会出现"规则里能下水、面板偏说需要临水"的两张皮）
+      return !!nb && navigable(nb.terrain) && !s.units.some((u) => u.x === t.x + dx && u.y === t.y + dy);
     }),
   );
 
@@ -974,7 +977,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     const t = s.tiles[y * s.w + x];
     if (!t) continue;
     if (s.units.some((u) => u.x === x && u.y === y)) continue;
-    if (t.terrain === 'water') waterSlots.push({ x, y });
+    if (navigable(t.terrain)) waterSlots.push({ x, y });
     else if (passable(t.terrain)) landSlots.push({ x, y });
   }
 

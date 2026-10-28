@@ -57,6 +57,7 @@ const TERRAIN_CLASS: Record<string, string> = {
   valley: 't-valley',
   marsh: 't-marsh',
   dune: 't-dune',
+  shallow: 't-shallow',
   lava: 't-lava',
   volcano: 't-volcano',
 };
