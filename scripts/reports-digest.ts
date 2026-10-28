@@ -254,7 +254,8 @@ if (withTl.length > 0) {
     }
   }
   say(`开局双方身价合计中位 ${f1(median(openVa))} 金，终局 ${f1(median(endVa))} 金。`);
-  say(`赢家终局金库中位 **${f1(median(goldSpare))} 金**` +
+  const spareText = goldSpare.length > 0 ? `${f1(median(goldSpare))} 金` : '—（这批没有分出胜负的局）';
+  say(`赢家终局金库中位 **${spareText}**` +
     `${median(goldSpare) > 150 ? ' —— 钱花不出去，先查产线/编制上限，别怪兵种贵' : ''}。`);
   say();
   const total = [...actMix.values()].reduce((a, b) => a + b, 0);
