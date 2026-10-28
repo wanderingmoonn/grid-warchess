@@ -113,29 +113,6 @@ export interface SkillDef {
   power?: number;
 }
 
-export interface SkillCtx {
-  state: GameState;
-  /** 施法者 */
-  self: Unit;
-  /** 技能定义本身 */
-  skill: SkillDef;
-  /** 技能结果，由技能自己填 */
-  result: {
-    ok: boolean;
-    reason?: string;
-    /** 成功时写入战报的文本 */
-    log?: string;
-  };
-}
-
-export type SkillHandler = (c: SkillCtx) => void;
-
-/**
- * 技能效果注册表。
- * 扩展可以往这里注册自己的新技能 effect。
- */
-export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
-
 export interface Tile {
   terrain: Terrain;
   /** 属于哪座城市；非城市格为 null */

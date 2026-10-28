@@ -293,6 +293,13 @@ export interface ExpansionHooks {
    * 写成钩子里的副作用就会踩到顺序，钩子一多就说不清谁先谁后。
    */
   modifySecondGold?: (c: MatchStartCtx) => number;
+  /**
+   * 纯函数：判定特殊胜负。
+   * 返回 'A' / 'B' 表示某一方获胜；
+   * 返回 null 表示平局或直接结束（无胜者）；
+   * 返回 undefined 表示“本回合不满足我的胜负条件”，交给原版逻辑继续判。
+   */
+  checkWinner?: (state: GameState) => PlayerId | null | undefined;
 }
 
 export interface Expansion {

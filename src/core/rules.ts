@@ -1800,18 +1800,21 @@ function checkWinner(s: GameState): PlayerId | null {
   // 真正的停止条件是"一方没兵了"，由界面来判（main.ts 的 runGodFight）。
   if (s.config.godMode === true) return null;
 
+  // 扩展特殊胜利条件
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.checkWinner) {
+      const winner = e.hooks.checkWinner(s);
+      if (winner !== undefined) {
+        return winner;
+      }
+    }
+  }
+
   for (const p of ['A', 'B'] as PlayerId[]) {
-    // 城就是根：一座城都没有，就算你还有一支满编部队也翻不了身——
-    // 没有城市就产不了兵、升不了级、也没有收入来源。
-    // 所以这里不看兵力，只看"还剩几座城"。
+    // 1.失去所有城市
     if (citiesOf(s, p).length === 0) return other(p);
 
-    // 没兵又造不出任何兵，也是彻底打不下去了（城还在也不行，站着等死而已）。
-    //
-    // 判据是"按本局真实的造价构成，还买得起一支兵吗"，而不是"金币够不够"：
-    // 「城郭与物料」把造价拆成金币 + 粮/材之后，金币够了不代表造得起
-    // （没粮照样不行），金币不够也不代表造不起（大头是粮材）。
-    // 只看金币会两头误判：一边把还能打的判死，一边让真死透的继续耗。
+    // 2.造不出任何兵
     const alive = unitsOf(s, p).length;
     if (alive === 0) {
       const canField = Object.values(s.unitTypes).some(
@@ -3265,9 +3268,6 @@ export function heroSkillsOf(
  * 放技能逻辑
  */
 
-// 引入刚才定义的类型（如果你还没引的话）
-import type { SkillDef } from './types.ts';
-
 // 1. 定义上下文接口
 export interface SkillCtx {
   state: GameState;
@@ -3286,149 +3286,169 @@ export type SkillHandler = (c: SkillCtx) => void;
 export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
 
 // 3. 把原来的 switch 里的逻辑搬过来
+// 原来写 s 和 u 的地方，换成 c.state 和 c.self
 SKILL_EFFECTS['throw-axe'] = (c) => {
-  // 原来写 s 和 u 的地方，换成 c.state 和 c.self
   c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
-  c.result.log = `${utype(c.state, c.self.type).name} 使用「${c.skill.name}」`;
 };
+SKILL_EFFECTS['regenerate'] = (c) => {
+  const def = utype(c.state, c.self.type);
+  const power = c.skill.power ?? 0;
+  const before = c.self.hp;
+  c.self.hp = Math.min(def.maxHp, c.self.hp + Math.max(1, Math.round(def.maxHp * power)));
+  if (c.self.hp === before) {
+    c.result.ok = false;
+    c.result.reason = '已经是满血了';
+  }
+};
+SKILL_EFFECTS['dive'] = (c) => {
+  const power = c.skill.power ?? 0;
+  c.self.heroBuff = { 
+    ...c.self.heroBuff, 
+    moveBonus: power, 
+    burnLayers: Math.max(1, Math.round(power)) 
+  };
+};
+SKILL_EFFECTS['cycle'] = (c) => {
+  const def = utype(c.state, c.self.type);
+  const cyc = def.cycle ?? [];
+  if (cyc.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '这个单位没有可切的属性';
+    return;
+  }
+  const cur = c.self.element ?? cyc[0]!;
+  const i = cyc.indexOf(cur);
+  const next = cyc[(i + 1) % cyc.length]!;
+  c.self.element = next;
+  c.self.heroBuff = { ...c.self.heroBuff, elementHit: next };
+};
+SKILL_EFFECTS['descend'] = (c) => {
+  const power = c.skill.power ?? 0;
+  const radius = c.skill.radius ?? 1;
+  let healed = 0;
+  let cleansed = 0;
+  for (const t of c.state.units) {
+    if (t.owner !== c.self.owner || t.hp <= 0) continue;
+    if (distance(t, c.self) > radius) continue;
+    const td = utype(c.state, t.type);
+    if (t.hp < td.maxHp && canBeHealed(td)) {
+      t.hp = Math.min(td.maxHp, t.hp + Math.max(1, Math.round(td.maxHp * power)));
+      healed += 1;
+    }
+    if (t.status && Object.keys(t.status).length > 0) {
+      t.status = {};
+      cleansed += 1;
+    }
+  }
+  if (healed === 0 && cleansed === 0) {
+    c.result.ok = false;
+    c.result.reason = '附近没有人需要救治';
+  }
+};
+SKILL_EFFECTS['vanish'] = (c) => {
+  if (c.self.heroBuff?.hidden === true) {
+    c.result.ok = false;
+    c.result.reason = '已经藏好了';
+    return;
+  }
+  c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
+};
+SKILL_EFFECTS['mitosis'] = (c) => {
+  const def = utype(c.state, c.self.type);
+  const kid = def.splitInto;
+  if (!kid || !c.state.unitTypes[kid]) {
+    c.result.ok = false;
+    c.result.reason = '这个单位没有可裂出的形态';
+    return;
+  }
+  const spots: Array<{ x: number; y: number }> = [];
+  for (const [dx, dy] of DIRS) {
+    if (canStandAt(c.state, c.self.x + dx, c.self.y + dy, kid)) {
+      spots.push({ x: c.self.x + dx, y: c.self.y + dy });
+    }
+  }
+  if (spots.length < 4) {
+    c.result.ok = false;
+    c.result.reason = `周围只有 ${spots.length} 格空地，裂成四个需要 4 格`;
+    return;
+  }
+  const kidDef = utype(c.state, kid);
+  const share = Math.max(1, Math.floor(c.self.hp / 4));
+  let left = c.self.hp;
+  // 把自己从棋盘上删掉
+  c.state.units = c.state.units.filter((x) => x.id !== c.self.id);
+  for (let i = 0; i < 4; i += 1) {
+    const spot = spots[i]!;
+    // 注意这里用 c.state，而不是 s
+    const born = makeUnit(c.state, c.self.owner, kid, spot.x, spot.y);
+    const hp = i === 3 ? Math.max(1, left) : share;
+    born.hp = Math.max(1, Math.min(kidDef.maxHp, hp));
+    left -= hp;
+    c.state.units.push(born);
+  }
+};
+
+SKILL_EFFECTS['fuse'] = (c) => {
+  const def = utype(c.state, c.self.type);
+  const bossId = def.mergeInto;
+  if (!bossId || !c.state.unitTypes[bossId]) {
+    c.result.ok = false;
+    c.result.reason = '这个单位没有可合体的形态';
+    return;
+  }
+  if (c.state.units.some((x) => x.owner === c.self.owner && x.type === bossId && x.hp > 0)) {
+    c.result.ok = false;
+    c.result.reason = '牢大已经在场上了';
+    return;
+  }
+  const kin = c.state.units.filter((x) => x.owner === c.self.owner && x.type === c.self.type && x.hp > 0);
+  if (kin.length < 2) {
+    c.result.ok = false;
+    c.result.reason = '至少要有两只大史莱姆才能合体';
+    return;
+  }
+  const bossDef = utype(c.state, bossId);
+  const total = kin.reduce((n, x) => n + x.hp, 0);
+  const at = { x: c.self.x, y: c.self.y };
+  c.state.units = c.state.units.filter((n) => !kin.some((k) => k.id === n.id));
+  const boss = makeUnit(c.state, c.self.owner, bossId, at.x, at.y);
+  boss.hp = Math.max(1, Math.min(bossDef.maxHp, total));
+  c.state.units.push(boss);
+  pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
+};
+
 function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+
   const def = utype(s, u.type);
   const skill = (def.skills ?? []).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
+
   const cd = u.skillCd?.[skill.id] ?? 0;
   if (cd > 0) return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
 
-  const power = skill.power ?? 0;
-  switch (skill.effect) {
-    case 'throw-axe': {
-      // 射程拉长，但隔着打只有六成——和「长短皆可」用的是同一笔账。
-      // freeShot 是重点：这一下**不占**本回合的攻击次数，扔完还能贴身再劈一刀。
-      u.heroBuff = { ...u.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
-      break;
-    }
-    case 'regenerate': {
-      const before = u.hp;
-      u.hp = Math.min(def.maxHp, u.hp + Math.max(1, Math.round(def.maxHp * power)));
-      if (u.hp === before) return { ok: false, reason: '已经是满血了' };
-      break;
-    }
-    case 'dive': {
-      // power 就是层数：2 层点燃，等于这一下之后对面每回合都在烧
-      u.heroBuff = { ...u.heroBuff, moveBonus: power, burnLayers: Math.max(1, Math.round(power)) };
-      break;
-    }
-    case 'cycle': {
-      const cyc = def.cycle ?? [];
-      if (cyc.length === 0) return { ok: false, reason: '这个单位没有可切的属性' };
-      const cur = u.element ?? cyc[0]!;
-      const i = cyc.indexOf(cur);
-      const next = cyc[(i + 1) % cyc.length]!;
-      u.element = next;
-      // 属性决定**这一回合**附带什么：火点着、水减速、自然下毒、暗诅咒。
-      // 有「属性精研」的兵种（至尊法师）读的是 u.element 本身，不需要这一步——
-      // 但留着它，非精研的属性兵也照样能用这个技能。
-      u.heroBuff = { ...u.heroBuff, elementHit: next };
-      break;
-    }
-    case 'descend': {
-      const radius = skill.radius ?? 1;
-      let healed = 0;
-      let cleansed = 0;
-      for (const t of s.units) {
-        if (t.owner !== u.owner || t.hp <= 0) continue;
-        if (distance(t, u) > radius) continue;
-        const td = utype(s, t.type);
-        if (t.hp < td.maxHp && canBeHealed(td)) {
-          t.hp = Math.min(td.maxHp, t.hp + Math.max(1, Math.round(td.maxHp * power)));
-          healed += 1;
-        }
-        if (t.status && Object.keys(t.status).length > 0) {
-          t.status = {};
-          cleansed += 1;
-        }
-      }
-      if (healed === 0 && cleansed === 0) return { ok: false, reason: '附近没有人需要救治' };
-      break;
-    }
-    case 'vanish': {
-      // 主动隐匿：藏在 heroBuff 里，回合开始统一清空 = "藏到你的下个回合"。
-      // 不用 status：status 是负面状态，会被净化类技能顺手清掉，
-      // 而"我藏起来了"显然不该被队友的一次净化洗掉。
-      if (u.heroBuff?.hidden === true) return { ok: false, reason: '已经藏好了' };
-      u.heroBuff = { ...u.heroBuff, hidden: true };
-      break;
-    }
-    case 'mitosis': {
-      /*
-       * 裂殖：牢大裂成四只大史莱姆。
-       *
-       * 三条硬规矩：
-       *   1. 四邻必须全是空地。只裂出两只不叫"裂成四个"，宁可不让开——
-       *      否则玩家点下去会得到一个和说明书不符的结果。
-       *   2. 生命按当前值分摊（向下取整，零头给最后一只），合起来不凭空多。
-       *      按上限分摊的话，残血的牢大裂一次就直接回满，等于白送一堆血。
-       *   3. 裂出来的当回合不能动（makeUnit 默认 moved/acted）——
-       *      否则一次技能凭空多出四次攻击，这不是"分裂"，是四个免费回合。
-       */
-      const kid = def.splitInto;
-      if (!kid || !s.unitTypes[kid]) return { ok: false, reason: '这个单位没有可裂出的形态' };
-      const spots: Array<{ x: number; y: number }> = [];
-      for (const [dx, dy] of DIRS) {
-        if (canStandAt(s, u.x + dx, u.y + dy, kid)) spots.push({ x: u.x + dx, y: u.y + dy });
-      }
-      if (spots.length < 4) {
-        return { ok: false, reason: `周围只有 ${spots.length} 格空地，裂成四个需要 4 格` };
-      }
-      const kidDef = utype(s, kid);
-      const share = Math.max(1, Math.floor(u.hp / 4));
-      let left = u.hp;
-      s.units = s.units.filter((x) => x.id !== u.id);
-      for (let i = 0; i < 4; i += 1) {
-        const spot = spots[i]!;
-        const born = makeUnit(s, u.owner, kid, spot.x, spot.y);
-        // 最后一只吃零头：4 只合起来的血必须等于裂开之前那一口
-        const hp = i === 3 ? Math.max(1, left) : share;
-        born.hp = Math.max(1, Math.min(kidDef.maxHp, hp));
-        left -= hp;
-        s.units.push(born);
-      }
-      break;
-    }
-    case 'fuse': {
-      /*
-       * 聚合：大史莱姆合回牢大。
-       *
-       * 合并的是**场上全部**同类碎片，不只是脚边两只：碎片本来就是一次裂殖
-       * 的产物，跑散在各处还要一只只凑齐才能合体，会变成一件纯粹的手续。
-       * 数量门槛定在 2：一只也能变回满状态的牢大，那"裂开"就变成回血技能了。
-       */
-      const bossId = def.mergeInto;
-      if (!bossId || !s.unitTypes[bossId]) return { ok: false, reason: '这个单位没有可合体的形态' };
-      if (s.units.some((x) => x.owner === u.owner && x.type === bossId && x.hp > 0)) {
-        return { ok: false, reason: '牢大已经在场上了' };
-      }
-      const kin = s.units.filter((x) => x.owner === u.owner && x.type === u.type && x.hp > 0);
-      if (kin.length < 2) return { ok: false, reason: '至少要有两只大史莱姆才能合体' };
+  const handler = SKILL_EFFECTS[skill.effect];
+  if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
 
-      const bossDef = utype(s, bossId);
-      const total = kin.reduce((n, x) => n + x.hp, 0);
-      const at = { x: u.x, y: u.y };
-      s.units = s.units.filter((n) => !kin.some((k) => k.id === n.id));
-      const boss = makeUnit(s, u.owner, bossId, at.x, at.y);
-      // 合计封顶：碎片掉的血不会在合体时补回来，但也不会超过牢大的上限
-      boss.hp = Math.max(1, Math.min(bossDef.maxHp, total));
-      s.units.push(boss);
-      pushLog(s, u.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
-      break;
-    }
+  const c: SkillCtx = {
+    state: s, self: u, skill, api: abilityApi,
+    result: { ok: true, log: `${def.name} 使用「${skill.name}」` } // 默认战报写这里
+  };
+
+  handler(c);
+
+  if (!c.result.ok) {
+    return { ok: false, reason: c.result.reason ?? '技能无法使用' };
   }
 
-  // 技能名写进战报：玩家要能回头看"这一局我到底开过几次"
-  pushLog(s, u.owner, `${def.name} 使用「${skill.name}」`);
+  // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
+  if (c.result.log) pushLog(s, u.owner, c.result.log);
+  
+  // 进冷却
   u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown };
+  
   return { ok: true, state: s };
 }
 
