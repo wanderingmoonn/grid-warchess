@@ -135,26 +135,24 @@ export const STAT_STAGE = {
 
 /**
  * 计算护甲时的时机。
- *
- * 全部在"扩展 modifyArmor"之前，只有破甲在之后——因为破甲削的是**累出来的**
- * 那一坨护甲，包括扩展加的那几点。
  */
 export const ARMOR_STAGE = {
   /** 穿隙：不吃地形那一层 */
   ignoreCover: 100,
+  postIgnoreCover: 150,
+
   /** 林地之主：站在林丘上 +3 */
   woodland: 200,
-  /**
-   * 分界线，不是钩子：`< expanded` 的在扩展 modifyArmor **之前**跑
-   * （穿隙、林地之主），`>= expanded` 的在**之后**跑（破甲）。
-   *
-   * 之所以要这条线：扩展加的护甲必须和地形加成是同一种东西——
-   * 破甲照样削它一半、攻低照样打不动它。穿隙和林地之主则是"掩护"，
-   * 得在扩展改甲之前就定下来。
-   */
+  postWoodland: 250,
+
+  /** 小型扩展，modifyarmor就在这里发生 */
   expanded: 500,
+  postExpanded: 550,
+
   /** 破甲：把前面累出来的护甲砍一半 */
   pierce: 900,
+  postPierce: 950,
+
 } as const;
 
 /**
@@ -177,24 +175,39 @@ export const DAMAGE_STAGE = {
   rangeMul: 500,
   /** 游骑：拉开 +3，被贴 −3 */
   rangeFlat: 600,
+  
+  // 把 600~700 之间切成几段，给未来留空槽 ──
+  postRange: 610,     // 游骑之后、魔法之前
+  postMagic: 650,     // 魔法之后、属性之前
+  postElement: 680,   // 属性之后、同源护壁之前
+
   /** 同源护壁：同一属性的伤害减半（在属性弱点之后） */
   elementMul: 700,
+
+  /** 真实伤害阶段：不吃护甲、不吃减伤，直接扣血（留空槽） */
+  trueDamage: 1000,
 } as const;
 
 /** 命中附带的时机 */
 export const HIT_STAGE = {
   /** 淬毒、燃焰、霜缚、咒缚：命中即贴 */
   status: 100,
+  postStatus: 150,
+
   /** 属性精研：按自身属性贴，排在普通命中之后 */
   element: 200,
+  postElement: 250,
 } as const;
 
 /** 出手流程里的时机 */
 export const STRIKE_STAGE = {
   /** 反击结算之后：吸血 */
   afterDamage: 100,
+  postDamage: 150, 
+
   /** 命中状态结算之后：击退 */
   afterStatus: 200,
+  postStatus: 250,
 } as const;
 
 /**
