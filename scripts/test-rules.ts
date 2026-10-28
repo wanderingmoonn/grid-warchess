@@ -7960,21 +7960,18 @@ test('地貌选项跟着扩展开关增减', () => {
   assert.equal(seen.has('highland'), false, '关扩展的随机地貌里抽到了高原');
 });
 
-test('地形高差：规则在跑，但开局面板里选不到', () => {
-  // 新 AI 的射程与寻路按"邻格进入当前格"的真实步耗算，攻城候选与威胁圈也走
-  // 目标相关射程——这些都依赖地形高差那套规则。拔掉它等于让刚验收过的引擎降级，
-  // 所以代码留着、开关藏起来：注册表里查得到，可选列表里没有。
-  assert.ok(expansionById('height-terrain'), '扩展本身要留在注册表里，规则还要用');
-  assert.equal(
+test('地形高差可选，但默认不开：不勾就一格新地形都不会落到图上', () => {
+  // 这个包已经对玩家开放（开局界面里能勾），但**默认不勾**：
+  // 不勾就等于不存在——地图是按这一局的扩展现生成的，规则钩子也不挂。
+  assert.ok(expansionById('height-terrain'), '扩展要在注册表里');
+  assert.ok(
     availableExpansions().some((e) => e.id === 'height-terrain'),
-    false,
-    '隐藏的扩展不该出现在开局面板/规则书的可选列表里',
+    '开放的扩展要出现在开局面板/规则书的可选列表里',
   );
-  // 没勾就不该有高差地形落到图上——地图是按这一局的扩展生成的
+
   const s = createMatch({ ...DEFAULT_CONFIG }, 4242);
-  const heightTerrains = new Set(
-    (expansionById('height-terrain')?.terrains ?? []).map((t) => t.id),
-  );
+  // 地形表是 `readonly Terrain[]`（字符串），别再按对象取 .id
+  const heightTerrains = new Set(expansionById('height-terrain')?.terrains ?? []);
   assert.ok(heightTerrains.size > 0, '这条用例依赖扩展自己声明的地形表');
   const leaked = s.tiles.filter((t) => heightTerrains.has(t.terrain));
   assert.equal(leaked.length, 0, `没开扩展却生成了 ${leaked.length} 格高差地形`);

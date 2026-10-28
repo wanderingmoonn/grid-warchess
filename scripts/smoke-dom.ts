@@ -639,19 +639,61 @@ check('能选地貌与地形对称方式', () => {
   );
 });
 
-check('地形高差暂时不给玩家选：面板里没有开关，也没有高差地貌', () => {
-  // 规则留在代码里（新 AI 的步耗与射程按它算），但这一批不对玩家开放。
-  // 地貌选项跟着扩展开关走，所以勾不到扩展也就不会冒出高差地貌。
-  assert.equal(
-    doc.querySelector('[data-exp="height-terrain"]'),
-    null,
-    '「地形高差」不该出现在扩展列表里',
-  );
-  for (const id of ['highland', 'canyon', 'volcanic', 'marsh']) {
-    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没开扩展不该有 ${id}`);
+check('地貌按钮只在勾了「地形高差」之后才出现', () => {
+  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/火山群/沼泽/群岛/大川
+  // 这六颗 chip 完全由"勾没勾那个扩展"决定。
+  const extra = ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river'];
+
+  // 默认没勾：一颗都不该有，否则玩家会选到一张"规则里没有高度"的图
+  for (const id of extra) {
+    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没勾扩展不该有 ${id}`);
   }
-  // 别顺手把整张列表都藏了
-  assert.ok(doc.querySelector('[data-exp="veterans"]'), '别的扩展要还在');
+  // 但那六种之外的基础地貌要在（别为了藏而把整行都藏了）
+  for (const id of ['random', 'river-h', 'ridge', 'open']) {
+    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `基础地貌 ${id} 该一直在`);
+  }
+
+  // 勾上扩展：六颗当场出现（面板会整块重绘，所以要重新查节点）
+  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(box, '「地形高差」应该出现在扩展列表里（它已经对玩家开放）');
+  box.checked = true;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+  for (const id of extra) {
+    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `勾了扩展应该出现 ${id}`);
+  }
+
+  // 取消勾选：又消失（选了高原地貌的还要退回随机，见下一条）
+  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(off, '取消勾选时节点还在');
+  off.checked = false;
+  off.dispatchEvent(new window.Event('change', { bubbles: true }));
+  for (const id of extra) {
+    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `取消勾选后 ${id} 该收起来`);
+  }
+});
+
+check('关掉扩展时，选中的高原地貌退回随机', () => {
+  // 否则存档里会留着"上次选了群岛"，下次开局画出一张规则里没有浅流的图。
+  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(box);
+  box.checked = true;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const chip = doc.querySelector<HTMLElement>('[data-mapstyle="isles"]');
+  assert.ok(chip, '勾了扩展应该有群岛');
+  chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.ok(
+    doc.querySelector<HTMLElement>('[data-mapstyle="isles"]')?.classList.contains('active'),
+    '点了群岛应该高亮',
+  );
+
+  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
+  assert.ok(off);
+  off.checked = false;
+  off.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.ok(
+    doc.querySelector<HTMLElement>('[data-mapstyle="random"]')?.classList.contains('active'),
+    '扩展关掉之后地貌该退回随机',
+  );
 });
 
 check('扩展规则可以勾选并高亮', () => {

@@ -8,7 +8,7 @@
 import { ERAS } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { EXPANSIONS, availableExpansions, expansionById } from '../core/expansions.ts';
-import { MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
+import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
 import {
   BOARD_SIZES,
   MAX_BOARD_SIZE,
@@ -131,14 +131,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
       ).join('');
 
-      // 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 火山群 / 沼泽。
-      // 这里每次都按当前勾选重算，所以开关扩展时列表会立刻增减。
-      const styleChips = mapStylesFor(config.expansionIds)
+      // 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 火山群 / 沼泽 / 群岛 / 大川。
+      // 这里每次都按当前勾选重算，所以开关扩展时列表会立刻增减——
+      // "勾了才有这些按钮"，不需要另外判断，列表本身就是扩展开关的镜子。
+      const styles = mapStylesFor(config.expansionIds);
+      const styleChips = styles
         .map(
           (st) =>
             `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
         )
         .join('');
+      // 提示也跟着变：没勾扩展时说清"多出来的地貌去哪了"，勾了就说现在是几种
+      const extraStyles = styles.length - MAP_STYLES.length;
+      const styleHint =
+        extraStyles > 0
+          ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
+          : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
 
       const symChips = MAP_SYMMETRIES.map(
         (sy) =>
@@ -279,7 +287,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                地貌 <span class="field-hint">决定天险长什么样；随机＝每局抽一种</span>
+                地貌 <span class="field-hint">${styleHint}</span>
               </div>
               <div class="chip-row">${styleChips}</div>
             </section>

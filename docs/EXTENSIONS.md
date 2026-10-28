@@ -41,7 +41,7 @@
 | `src/core/fantasy-packs.ts` | 5 个奇想兵种包（法则、骑士团、荒兽、秘术、英雄） |
 | `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军） |
 | `src/core/seasons.ts` | 1 个气候包（季节与气候：四季轮换，天气改移动、视野与射程） |
-| `src/core/height-terrain.ts` | 1 个地形包（地形高差：给每类地形定高度，爬坡费、俯射加成，带 6 种新地形与 4 种新地貌） |
+| `src/core/height-terrain.ts` | 1 个地形包（地形高差：地形高度、爬坡费、俯射加成、逐地形机制，带 7 种新地形与 6 种等高线地貌；地形生成在 `height-mapgen.ts`） |
 
 ---
 
