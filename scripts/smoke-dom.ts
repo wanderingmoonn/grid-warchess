@@ -2477,13 +2477,32 @@ check('书单跟着已开的扩展走，核心规则书永远在', () => {
   const withBlood = manualBooks(DEFAULT_CONFIG.expansionIds);
   assert.deepEqual(withBlood.map((b) => b.file), ['manual.html', 'manual-small.html']);
 
-  // 开两个大包就各有一本，前置包（法则）也得在——子包的规则全靠它
+  // 同系列合册：开两个奇想包，出来的仍然只有一本
   const fantasy = manualBooks(['bloodbath', 'fantasy-core', 'fantasy-heroes']);
   assert.deepEqual(fantasy.map((b) => b.file), [
     'manual.html',
     'manual-small.html',
-    'manual-pack-fantasy-core.html',
-    'manual-pack-fantasy-heroes.html',
+    'manual-pack-fantasy.html',
+  ]);
+  assert.ok(
+    (fantasy[2]!.note ?? '').includes('骑士团') && (fantasy[2]!.note ?? '').includes('法则'),
+    '合册的说明要写清这一局开的是哪几个包',
+  );
+
+  // 两个系列同时开：各出一本，不重复
+  const both = manualBooks(['fantasy-knights', 'pack-medieval', 'pack-modern']);
+  assert.deepEqual(both.map((b) => b.file), [
+    'manual.html',
+    'manual-pack-fantasy.html',
+    'manual-pack-eras.html',
+  ]);
+
+  // 不属于任何系列的包仍然各自一本
+  const solo = manualBooks(['city-works', 'seasons']);
+  assert.deepEqual(solo.map((b) => b.file), [
+    'manual.html',
+    'manual-pack-city-works.html',
+    'manual-pack-seasons.html',
   ]);
 });
 

@@ -1,10 +1,14 @@
 /**
  * 规则书的书单。
  *
- * 规则书原来只有一本，扩展规则挤在第 14 章。现在拆成多册之后，
+ * 规则书原来只有一本，扩展规则挤在第 14 章。拆成多册之后，
  * 「点规则书看什么」就成了一个真问题：核心规则永远相关；
- * 小型扩展合订本只在开了至少一条小型扩展时相关；
- * 每个大包的分册只在这个包被勾选时相关。
+ * 小型扩展合订本只在开了至少一条小型扩展时相关；大包的合册只在他开了
+ * 其中至少一个包时相关。
+ *
+ * 归册的粒度是**玩法系列**，不是单个包：五个奇想包合成一本，五个时代兵备
+ * 合成一本。按包拆的代价是"同一段机制要印五遍，想在两个包里挑个兵得开五个
+ * 标签页"——那和"别让无关内容占版面"的初衷正好相反。
  *
  * 书单由本局的 `config.expansionIds` 算出来，所以联机房里两边看到的
  * 书单天然一致——规则以 id 记进存档，这是同一份事实。
@@ -21,8 +25,31 @@ export interface ManualBook {
   note: string;
 }
 
-/** 核心规则书的文件名。manual-small / manual-pack-* 都由 build-manual.ts 生成 */
+/** 核心规则书的文件名。其它册都由 build-manual.ts 生成 */
 const SMALL_FILE = 'manual-small.html';
+
+/**
+ * 合册：开了其中任一包，这本就上架。
+ *
+ * `prefix` 必须和 build-manual.ts 里的 BOOK_GROUPS 对齐。两边各写一份是刻意的：
+ * 生成器决定"哪些包印进哪本"，这里决定"什么时候把这本书列出来"。
+ * 合成一个常量会把两件事绑死，而分开写时最坏的情况只是多列一本——
+ * 生成器已经保证不会产出空册。
+ */
+const GROUP_BOOKS: Array<{ prefix: string; file: string; title: string; note: string }> = [
+  {
+    prefix: 'fantasy-',
+    file: 'manual-pack-fantasy.html',
+    title: '奇幻扩展',
+    note: '奇想五包合册——法则、骑士团、荒兽、秘法、英雄：兵种总表 + 机制词条',
+  },
+  {
+    prefix: 'pack-',
+    file: 'manual-pack-eras.html',
+    title: '时代兵备',
+    note: '五个时代的兵种扩充合册——古典、中世、火药、工业、现代：一张总表看全',
+  },
+];
 
 export function manualBooks(enabled: string[]): ManualBook[] {
   const books: ManualBook[] = [
@@ -33,7 +60,10 @@ export function manualBooks(enabled: string[]): ManualBook[] {
     },
   ];
 
-  const small = EXPANSIONS.filter((e) => e.scale !== 'large' && enabled.includes(e.id));
+  // 只认配置里真有的 id：存档可能带着一个已经删掉的扩展
+  const active = EXPANSIONS.filter((e) => enabled.includes(e.id));
+
+  const small = active.filter((e) => e.scale !== 'large');
   if (small.length > 0) {
     books.push({
       file: SMALL_FILE,
@@ -42,8 +72,22 @@ export function manualBooks(enabled: string[]): ManualBook[] {
     });
   }
 
-  for (const e of EXPANSIONS) {
-    if (e.scale !== 'large' || !enabled.includes(e.id)) continue;
+  // 合册：一本顶原来好几本，所以 note 要写清"你这局开的是哪几个包"
+  const grouped = new Set<string>();
+  for (const g of GROUP_BOOKS) {
+    const on = active.filter((e) => e.scale === 'large' && e.id.startsWith(g.prefix));
+    if (on.length === 0) continue;
+    for (const e of on) grouped.add(e.id);
+    books.push({
+      file: g.file,
+      title: g.title,
+      note: `${g.note}（已启用：${on.map((e) => e.name).join('、')}）`,
+    });
+  }
+
+  // 剩下的单个大包（城郭与物料、季节与气候这类）仍各自一本
+  for (const e of active) {
+    if (e.scale !== 'large' || grouped.has(e.id)) continue;
     books.push({
       file: `manual-pack-${e.id}.html`,
       title: e.name,
@@ -79,7 +123,7 @@ export function openManualChooser(books: ManualBook[]): void {
     <div class="modal modal-narrow">
       <div class="modal-head">
         <h2>规则书</h2>
-        <p>这一局开了 ${books.length - 1} 个扩展，相关分册如下</p>
+        <p>按这一局启用的扩展列出相关分册；合册收的是同一套玩法的几个包</p>
       </div>
       <div class="modal-body">
         <div class="book-list">

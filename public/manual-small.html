@@ -158,6 +158,13 @@
   tbody tr:nth-child(even) { background: #fcfbf8; }
   td.name { font-weight: 500; white-space: nowrap; }
   td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
   td.glyph {
     text-align: center;
     font-weight: 600;
@@ -165,6 +172,69 @@
   }
   td.traits { color: var(--muted); font-size: 12.5px; }
   td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+  table.wide { font-size: 12.5px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12.5px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
 
   .era-block {
     background: var(--panel);
@@ -203,6 +273,8 @@
     body { background: #fff; font-size: 11pt; }
     .layout { display: block; max-width: none; padding: 0; }
     nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
     section { page-break-inside: avoid; margin-bottom: 26px; }
     .era-block, table, .callout, .formula { page-break-inside: avoid; }
     a { color: inherit; text-decoration: none; }
@@ -253,7 +325,7 @@
       <div class="callout">
         <b>可组合性的代价：</b>三个扩展一起开时，一场战斗的伤害要过三层修正，没人能心算平衡。建议每次只加一两个，单独验证手感之后再考虑叠加。
       </div>
-      <p>带兵种的扩展（时代兵备包、奇想系列）不在这本册子里——它们各有一本，规则书入口会按你这局开了什么列出来。</p>
+      <p>带兵种的扩展（时代兵备、奇想系列）不在这本册子里——它们按系列合成两本合册，规则书入口会按你这局开了什么列出来。</p>
     </section>
     
     <section id="exp-asym-opening">

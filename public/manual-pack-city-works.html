@@ -158,6 +158,13 @@
   tbody tr:nth-child(even) { background: #fcfbf8; }
   td.name { font-weight: 500; white-space: nowrap; }
   td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
   td.glyph {
     text-align: center;
     font-weight: 600;
@@ -165,6 +172,69 @@
   }
   td.traits { color: var(--muted); font-size: 12.5px; }
   td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+  table.wide { font-size: 12.5px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12.5px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
 
   .era-block {
     background: var(--panel);
@@ -203,6 +273,8 @@
     body { background: #fff; font-size: 11pt; }
     .layout { display: block; max-width: none; padding: 0; }
     nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
     section { page-break-inside: avoid; margin-bottom: 26px; }
     .era-block, table, .callout, .formula { page-break-inside: avoid; }
     a { color: inherit; text-decoration: none; }
@@ -216,6 +288,7 @@
     
     <a href="#pack-intro">1. 这个包是什么</a>
     <a href="#pack-units">2. 兵种表</a>
+    <a href="#pack-terms">3. 机制词条</a>
   
   </nav>
 
@@ -260,50 +333,91 @@
     <section id="pack-units">
       <h2><span class="sec-num">02</span>兵种表</h2>
       
-    <h4>城郭与物料 · 2 个兵种</h4>
-    <table>
-      <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>魔攻</th><th>甲</th><th>魔抗</th><th>血</th><th>移</th><th>射</th><th>视</th><th>属性</th><th>特性</th></tr></thead>
-      <tbody>
-      <tr>
-        <td class="name">粮仓</td>
-        <td class="glyph">仓</td>
-        <td class="num">1</td>
-        <td class="num">55</td>
-        <td class="num">0</td>
-        <td class="num">—</td>
-        <td class="num">4</td>
-        <td class="num">0</td>
-        <td class="num">40</td>
-        <td class="num">—</td>
-        <td class="num">0</td>
-        <td class="num">2</td>
-        <td class="traits">—</td>
-        <td class="traits">不可移动</td>
-      </tr>
-      <tr>
-        <td class="name">采石场</td>
-        <td class="glyph">石</td>
-        <td class="num">2</td>
-        <td class="num">90</td>
-        <td class="num">0</td>
-        <td class="num">—</td>
-        <td class="num">5</td>
-        <td class="num">0</td>
-        <td class="num">46</td>
-        <td class="num">—</td>
-        <td class="num">0</td>
-        <td class="num">2</td>
-        <td class="traits">—</td>
-        <td class="traits">不可移动</td>
-      </tr></tbody>
-    </table>
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-city-works"><td colspan="11">城郭与物料 · 2 个</td></tr><tr data-unit="granary"><td class="name">粮仓</td><td class="glyph">仓</td><td class="num">1</td><td class="num">55</td><td class="num">0</td><td class="num">4</td><td class="num">40</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="quarry"><td class="name">采石场</td><td class="glyph">石</td><td class="num">2</td><td class="num">90</td><td class="num">0</td><td class="num">5</td><td class="num">46</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
+      </table>
+    </div>
     </section>
-    
+
+    <section id="pack-terms">
+      <h2><span class="sec-num">03</span>机制词条</h2>
+      <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
+      <dl class="terms"><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd></dl>
+    </section>
   
     <footer>
       方格战棋 · 城郭与物料 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
     </footer>
   </main>
 </div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
 </body>
 </html>

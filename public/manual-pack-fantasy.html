@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方格战棋 · 奇幻扩展</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 15.5px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 13.5px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+  table.wide { font-size: 12.5px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12.5px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12.5px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#g-intro">1. 这一册怎么读</a>
+    <a href="#g-units">2. 兵种总表</a>
+    <a class="sub" href="#p-fantasy-knights">骑士团</a>
+    <a class="sub" href="#p-fantasy-beasts">荒兽</a>
+    <a class="sub" href="#p-fantasy-arcane">秘法</a>
+    <a class="sub" href="#p-fantasy-heroes">英雄</a>
+    <a href="#g-notes">3. 各包要点</a>
+    <a href="#g-rules">4. 新规则</a>
+    <a href="#g-terms">5. 机制词条</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>方格战棋 · 奇幻扩展</h1>
+      <p>奇想五包的合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。</p>
+    </header>
+
+
+    <section id="g-intro">
+      <h2><span class="sec-num">01</span>这一册怎么读</h2>
+      <p>这一册收了<b>五个包</b>，但它们不是五选一，而是"一套底座 + 四队兵"：
+        「奇想·法则」只带机制（魔法、属性、状态、空中层），一个兵都不带；
+        另外四包各补一队兵，全部<b>依赖</b>它。所以想玩奇幻，最少要勾两个包——
+        只勾兵种包，配置里那条记录会被剔掉，什么都不发生。</p>
+      <p>四队兵的分工不是"越来越强"，而是四种打法：骑士团是<b>阵型与冲锋</b>，
+        荒兽是<b>机动与毒</b>，秘法是<b>远程与召唤</b>，英雄是<b>单体质量</b>。
+        它们可以同时开，但那是给"我想看大乱斗"的人准备的——四个包一起开，
+        一场战斗要过四层修正，没人能心算平衡。</p>
+      
+    <table class="overview">
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <tbody>
+        <tr><td class="name">奇想·法则</td><td class="num">—</td><td class="num">—</td><td class="nowrap">—</td><td>奇想兵种的前置包（本身不带兵）：开启「魔法攻击 / 魔法抗性」「属性伤害与弱点」「中毒·点燃·减速·诅咒」四类负面状态，以及「空中层」——掠空单位可以和地面单位站在同一格。另外四个奇想兵种包都要先开它。</td></tr><tr><td class="name">奇想·骑士团</td><td class="num">12</td><td class="num">2–4</td><td class="nowrap">法则</td><td>人类的十二个兵种：剑士、皇家骑兵、游侠、超级重骑、牧师、法师、刺客、狂战士、圣骑士、皇家守卫、盗贼、符文守卫。有魔法、有治疗、有隐身，也有最硬的一块肉。需先开「奇想·法则」。</td></tr><tr><td class="name">奇想·荒兽</td><td class="num">18</td><td class="num">2–5</td><td class="nowrap">法则</td><td>二十个野性单位：狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、狮鹫骑士、龙骑兵、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。需先开「奇想·法则」。</td></tr><tr><td class="name">奇想·秘法</td><td class="num">26</td><td class="num">2–5</td><td class="nowrap">法则</td><td>法术与亡者：德鲁伊、死灵法师、炼金术士、吟游诗人、巫医、女巫、诅咒骑士、诅咒师、幻术师、元素召唤师、四种元素、幽灵、吸血鬼、僵尸、恶魔、地狱犬、机关傀儡、精灵弓手，以及被召唤的骷髅、小恶魔、幻象、土墙。需先开「奇想·法则」。</td></tr><tr><td class="name">奇想·英雄</td><td class="num">8</td><td class="num">3–5</td><td class="nowrap">法则</td><td>七个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。</td></tr>
+      </tbody>
+    </table>
+      <dl class="kv">
+        <dt>兵种总数</dt><dd>64 个（4 个包），覆盖时代 2、3、4、5</dd>
+        <dt>怎么启用</dt><dd>新对局面板里勾选，效果叠加；规则以 id 记进存档，换机器打开不变</dd>
+        <dt>兵种在哪</dt><dd>生产面板里带包徽标（名字旁的小圆标写着它来自哪个包），搜索框敲包名能过滤；
+          产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，和原版兵同一把尺子</dd>
+        <dt>怎么查</dt><dd>总表里带<b>虚线下划线</b>的词都能悬停看一句说明，点一下跳到本册末尾的词条</dd>
+      </dl>
+    </section>
+
+    <section id="g-units">
+      <h2><span class="sec-num">02</span>兵种总表</h2>
+      <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
+        跨段比较时请对照"来源"那一列。</p>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>魔攻</th><th>甲</th><th>魔抗</th><th>血</th><th>移</th><th>射</th><th>视</th><th>属性</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-fantasy-knights"><td colspan="15">奇想·骑士团 · 12 个</td></tr><tr data-unit="swordsman"><td class="name">剑士</td><td class="glyph">剑</td><td class="src">骑士团</td><td class="num">2</td><td class="num">70</td><td class="num">14</td><td class="num">—</td><td class="num">4</td><td class="num">0</td><td class="num">40</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="thief"><td class="name">盗贼</td><td class="glyph">贼</td><td class="src">骑士团</td><td class="num">2</td><td class="num">85</td><td class="num">13</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">26</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a> · <a class="ref" href="#t-ab-steal-gold">窃掠</a></td></tr><tr data-unit="ranger"><td class="name">游侠</td><td class="glyph">侠</td><td class="src">骑士团</td><td class="num">2</td><td class="num">95</td><td class="num">13</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">26</td><td class="num">3</td><td class="num">3</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-forest-walk">穿林</a> · <a class="ref" href="#t-ab-woodland">林地之主</a></td></tr><tr data-unit="priest"><td class="name">牧师</td><td class="glyph">牧</td><td class="src">骑士团</td><td class="num">2</td><td class="num">105</td><td class="num">9</td><td class="num">6</td><td class="num">2</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">2</td><td class="num">4</td><td class="traits">光</td><td class="traits"><a class="ref" href="#t-ab-heal-aura">治疗光环</a> · <a class="ref" href="#t-ab-purge">净化</a> · <a class="ref" href="#t-magic">魔攻 6</a> · <a class="ref" href="#t-mres">魔抗 3</a></td></tr><tr data-unit="royal-cavalry"><td class="name">皇家骑兵</td><td class="glyph">皇</td><td class="src">骑士团</td><td class="num">2</td><td class="num">125</td><td class="num">16</td><td class="num">—</td><td class="num">4</td><td class="num">0</td><td class="num">40</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-charge">冲锋</a></td></tr><tr data-unit="berserker"><td class="name">狂战士</td><td class="glyph">狂</td><td class="src">骑士团</td><td class="num">3</td><td class="num">120</td><td class="num">19</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">44</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-berserk">狂暴</a></td></tr><tr data-unit="assassin"><td class="name">刺客</td><td class="glyph">刺</td><td class="src">骑士团</td><td class="num">3</td><td class="num">135</td><td class="num">26</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">28</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-vanish">隐匿</a></td></tr><tr data-unit="mage"><td class="name">法师</td><td class="glyph">法</td><td class="src">骑士团</td><td class="num">3</td><td class="num">150</td><td class="num">7</td><td class="num">18</td><td class="num">1</td><td class="num">0</td><td class="num">24</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">奥术</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-magic">魔攻 18</a></td></tr><tr data-unit="rune-guardian"><td class="name">符文守卫</td><td class="glyph">符</td><td class="src">骑士团</td><td class="num">3</td><td class="num">165</td><td class="num">18</td><td class="num">—</td><td class="num">6</td><td class="num">5</td><td class="num">50</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-repair">修缮</a> · <a class="ref" href="#t-ab-shield-wall">盾墙</a> · <a class="ref" href="#t-mres">魔抗 5</a></td></tr><tr data-unit="cataphract"><td class="name">超级重骑</td><td class="glyph">重</td><td class="src">骑士团</td><td class="num">3</td><td class="num">205</td><td class="num">24</td><td class="num">—</td><td class="num">8</td><td class="num">0</td><td class="num">62</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-charge">冲锋</a> · <a class="ref" href="#t-ab-slow-offroad">重甲难行</a></td></tr><tr data-unit="paladin"><td class="name">圣骑士</td><td class="glyph">圣</td><td class="src">骑士团</td><td class="num">3</td><td class="num">215</td><td class="num">24</td><td class="num">5</td><td class="num">7</td><td class="num">4</td><td class="num">58</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">光</td><td class="traits"><a class="ref" href="#t-ab-aura-armor">守护光环</a> · <a class="ref" href="#t-ab-heal-aura">治疗光环</a> · <a class="ref" href="#t-magic">魔攻 5</a> · <a class="ref" href="#t-mres">魔抗 4</a></td></tr><tr data-unit="royal-guard"><td class="name">皇家守卫</td><td class="glyph">卫</td><td class="src">骑士团</td><td class="num">4</td><td class="num">255</td><td class="num">26</td><td class="num">—</td><td class="num">10</td><td class="num">0</td><td class="num">66</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-aoe-immune">阵列</a> · <a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr class="grp" id="p-fantasy-beasts"><td colspan="15">奇想·荒兽 · 18 个</td></tr><tr data-unit="wolf-rider"><td class="name">狼骑士</td><td class="glyph">狼</td><td class="src">荒兽</td><td class="num">2</td><td class="num">55</td><td class="num">11</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">24</td><td class="num">4</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-forest-walk">穿林</a></td></tr><tr data-unit="slime"><td class="name">史莱姆</td><td class="glyph">史</td><td class="src">荒兽</td><td class="num">2</td><td class="num">60</td><td class="num">9</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">怕火×2</td><td class="traits"><a class="ref" href="#t-ab-split">分裂</a> · <a class="ref" href="#t-split">死后分裂 小史莱姆</a></td></tr><tr data-unit="spider-rider"><td class="name">蜘蛛骑士</td><td class="glyph">蛛</td><td class="src">荒兽</td><td class="num">2</td><td class="num">78</td><td class="num">13</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">28</td><td class="num">4</td><td class="num">1</td><td class="num">6</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-leap">跳跃</a></td></tr><tr data-unit="goblin-trapper"><td class="name">哥布林陷阱师</td><td class="glyph">陷</td><td class="src">荒兽</td><td class="num">2</td><td class="num">80</td><td class="num">12</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">24</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-trap">布雷</a></td></tr><tr data-unit="poison-bat"><td class="name">毒蝙蝠</td><td class="glyph">蝠</td><td class="src">荒兽</td><td class="num">2</td><td class="num">90</td><td class="num">7×3</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">22</td><td class="num">5</td><td class="num">1</td><td class="num">5</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-poison-hit">淬毒</a> · <a class="ref" href="#t-burst">连击 3 段</a></td></tr><tr data-unit="serpent-man"><td class="name">蛇人</td><td class="glyph">蛇</td><td class="src">荒兽</td><td class="num">2</td><td class="num">95</td><td class="num">15</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">34</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-poison-hit">淬毒</a></td></tr><tr data-unit="centaur"><td class="name">半人马</td><td class="glyph">人</td><td class="src">荒兽</td><td class="num">2</td><td class="num">105</td><td class="num">13</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">30</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-kite">游骑</a></td></tr><tr data-unit="harpy"><td class="name">鹰身女妖</td><td class="glyph">鹰</td><td class="src">荒兽</td><td class="num">3</td><td class="num">120</td><td class="num">15</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">24</td><td class="num">6</td><td class="num">2</td><td class="num">6</td><td class="traits">—</td><td class="traits">—</td></tr><tr data-unit="gargoyle"><td class="name">石像鬼</td><td class="glyph">石</td><td class="src">荒兽</td><td class="num">3</td><td class="num">150</td><td class="num">17</td><td class="num">—</td><td class="num">5</td><td class="num">3</td><td class="num">40</td><td class="num">4</td><td class="num">1</td><td class="num">5</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-berserk">狂暴</a> · <a class="ref" href="#t-mres">魔抗 3</a></td></tr><tr data-unit="minotaur"><td class="name">牛头人</td><td class="glyph">牛</td><td class="src">荒兽</td><td class="num">3</td><td class="num">165</td><td class="num">21</td><td class="num">—</td><td class="num">4</td><td class="num">0</td><td class="num">58</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-charge">冲锋</a> · <a class="ref" href="#t-ab-herd">群势</a></td></tr><tr data-unit="troll"><td class="name">巨魔</td><td class="glyph">巨</td><td class="src">荒兽</td><td class="num">3</td><td class="num">170</td><td class="num">24</td><td class="num">—</td><td class="num">4</td><td class="num">0</td><td class="num">68</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits">怕火×2</td><td class="traits"><a class="ref" href="#t-ab-regenerate">再生</a></td></tr><tr data-unit="treant"><td class="name">树人</td><td class="glyph">树</td><td class="src">荒兽</td><td class="num">3</td><td class="num">175</td><td class="num">23</td><td class="num">—</td><td class="num">6</td><td class="num">0</td><td class="num">70</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits">怕火×1.5</td><td class="traits"><a class="ref" href="#t-ab-regenerate">再生</a> · <a class="ref" href="#t-ab-woodland">林地之主</a> · <a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr data-unit="griffin-rider"><td class="name">狮鹫骑士</td><td class="glyph">鹫</td><td class="src">荒兽</td><td class="num">3</td><td class="num">190</td><td class="num">22</td><td class="num">—</td><td class="num">4</td><td class="num">0</td><td class="num">44</td><td class="num">5</td><td class="num">1</td><td class="num">6</td><td class="traits">—</td><td class="traits">—</td></tr><tr data-unit="ogre"><td class="name">食人魔</td><td class="glyph">魔</td><td class="src">荒兽</td><td class="num">3</td><td class="num">190</td><td class="num">27</td><td class="num">—</td><td class="num">5</td><td class="num">0</td><td class="num">72</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-lifesteal">吸血</a></td></tr><tr data-unit="dragoon-rider"><td class="name">龙骑兵</td><td class="glyph">龙</td><td class="src">荒兽</td><td class="num">3</td><td class="num">265</td><td class="num">26</td><td class="num">—</td><td class="num">6</td><td class="num">0</td><td class="num">58</td><td class="num">5</td><td class="num">1</td><td class="num">6</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-charge">冲锋</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="werewolf"><td class="name">狼人</td><td class="glyph">狼</td><td class="src">荒兽</td><td class="num">4</td><td class="num">235</td><td class="num">22</td><td class="num">—</td><td class="num">5</td><td class="num">0</td><td class="num">70</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-berserk">狂暴</a> · <a class="ref" href="#t-ab-bloodlust">嗜血</a></td></tr><tr data-unit="two-head-giant"><td class="name">双头巨人</td><td class="glyph">双</td><td class="src">荒兽</td><td class="num">4</td><td class="num">300</td><td class="num">27×2</td><td class="num">—</td><td class="num">6</td><td class="num">0</td><td class="num">88</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-burst">连击 2 段</a></td></tr><tr data-unit="bone-dragon"><td class="name">骷髅飞龙</td><td class="glyph">骸</td><td class="src">荒兽</td><td class="num">5</td><td class="num">430</td><td class="num">42</td><td class="num">—</td><td class="num">8</td><td class="num">0</td><td class="num">92</td><td class="num">5</td><td class="num">1</td><td class="num">6</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr class="grp" id="p-fantasy-arcane"><td colspan="15">奇想·秘法 · 26 个</td></tr><tr data-unit="slimelet"><td class="name">小史莱姆</td><td class="glyph">滴</td><td class="src">秘法</td><td class="num">2</td><td class="num">20</td><td class="num">6</td><td class="num">—</td><td class="num">0</td><td class="num">0</td><td class="num">12</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">怕火×2</td><td class="traits"><a class="ref" href="#t-summoned-only">只能被召唤</a></td></tr><tr data-unit="phantom"><td class="name">幻象</td><td class="glyph">幻</td><td class="src">秘法</td><td class="num">2</td><td class="num">40</td><td class="num">14</td><td class="num">—</td><td class="num">0</td><td class="num">0</td><td class="num">18</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-summoned-only">只能被召唤</a></td></tr><tr data-unit="earth-wall"><td class="name">土墙</td><td class="glyph">墙</td><td class="src">秘法</td><td class="num">2</td><td class="num">40</td><td class="num">0</td><td class="num">—</td><td class="num">8</td><td class="num">0</td><td class="num">20</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a> · <a class="ref" href="#t-summoned-only">只能被召唤</a> · <a class="ref" href="#t-decay">自损 5/回合</a></td></tr><tr data-unit="skeleton"><td class="name">骷髅</td><td class="glyph">骷</td><td class="src">秘法</td><td class="num">2</td><td class="num">45</td><td class="num">9</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">14</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-summoned-only">只能被召唤</a></td></tr><tr data-unit="zombie"><td class="name">僵尸</td><td class="glyph">僵</td><td class="src">秘法</td><td class="num">2</td><td class="num">70</td><td class="num">13</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">52</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="traits">怕火×2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="bard"><td class="name">吟游诗人</td><td class="glyph">吟</td><td class="src">秘法</td><td class="num">2</td><td class="num">115</td><td class="num">10</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">28</td><td class="num">3</td><td class="num">2</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-aura-command">指挥光环</a> · <a class="ref" href="#t-ab-aura-speed">疾行光环</a></td></tr><tr data-unit="imp"><td class="name">小恶魔</td><td class="glyph">魔</td><td class="src">秘法</td><td class="num">3</td><td class="num">55</td><td class="num">12</td><td class="num">—</td><td class="num">1</td><td class="num">0</td><td class="num">16</td><td class="num">5</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-summoned-only">只能被召唤</a></td></tr><tr data-unit="ghost"><td class="name">幽灵</td><td class="glyph">魂</td><td class="src">秘法</td><td class="num">3</td><td class="num">130</td><td class="num">18</td><td class="num">—</td><td class="num">2</td><td class="num">5</td><td class="num">30</td><td class="num">4</td><td class="num">1</td><td class="num">4</td><td class="traits">怕光×2</td><td class="traits"><a class="ref" href="#t-ab-phase">穿行</a> · <a class="ref" href="#t-mres">魔抗 5</a></td></tr><tr data-unit="curser"><td class="name">诅咒师</td><td class="glyph">诅</td><td class="src">秘法</td><td class="num">3</td><td class="num">145</td><td class="num">8</td><td class="num">12</td><td class="num">1</td><td class="num">0</td><td class="num">28</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">暗</td><td class="traits"><a class="ref" href="#t-ab-curse-hit">咒缚</a> · <a class="ref" href="#t-ab-fear">威吓</a> · <a class="ref" href="#t-magic">魔攻 12</a></td></tr><tr data-unit="druid"><td class="name">德鲁伊</td><td class="glyph">德</td><td class="src">秘法</td><td class="num">3</td><td class="num">155</td><td class="num">8</td><td class="num">15</td><td class="num">2</td><td class="num">0</td><td class="num">30</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">自然</td><td class="traits"><a class="ref" href="#t-ab-woodland">林地之主</a> · <a class="ref" href="#t-ab-forest-walk">穿林</a> · <a class="ref" href="#t-magic">魔攻 15</a></td></tr><tr data-unit="hellhound"><td class="name">地狱犬</td><td class="glyph">犬</td><td class="src">秘法</td><td class="num">3</td><td class="num">155</td><td class="num">20</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">40</td><td class="num">5</td><td class="num">1</td><td class="num">7</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-tracker">追猎</a></td></tr><tr data-unit="illusionist"><td class="name">幻术师</td><td class="glyph">幻</td><td class="src">秘法</td><td class="num">3</td><td class="num">160</td><td class="num">8</td><td class="num">10</td><td class="num">1</td><td class="num">0</td><td class="num">26</td><td class="num">2</td><td class="num">3</td><td class="num">5</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-summoner">召唤</a> · <a class="ref" href="#t-magic">魔攻 10</a> · <a class="ref" href="#t-summon">召唤 幻象 3回合×2</a></td></tr><tr data-unit="witch"><td class="name">女巫</td><td class="glyph">女</td><td class="src">秘法</td><td class="num">3</td><td class="num">160</td><td class="num">7</td><td class="num">13</td><td class="num">1</td><td class="num">0</td><td class="num">26</td><td class="num">2</td><td class="num">3</td><td class="num">5</td><td class="traits">暗</td><td class="traits"><a class="ref" href="#t-ab-curse-hit">咒缚</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-magic">魔攻 13</a></td></tr><tr data-unit="water-elemental"><td class="name">水元素</td><td class="glyph">水</td><td class="src">秘法</td><td class="num">3</td><td class="num">160</td><td class="num">17</td><td class="num">6</td><td class="num">4</td><td class="num">0</td><td class="num">52</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">水 · 怕火×1.5 · 抗水 0.7</td><td class="traits"><a class="ref" href="#t-ab-slow-hit">霜缚</a> · <a class="ref" href="#t-magic">魔攻 6</a></td></tr><tr data-unit="air-elemental"><td class="name">风元素</td><td class="glyph">风</td><td class="src">秘法</td><td class="num">3</td><td class="num">165</td><td class="num">19</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">42</td><td class="num">5</td><td class="num">1</td><td class="num">5</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-knockback">击退</a></td></tr><tr data-unit="alchemist"><td class="name">炼金术士</td><td class="glyph">炼</td><td class="src">秘法</td><td class="num">3</td><td class="num">165</td><td class="num">9</td><td class="num">15</td><td class="num">2</td><td class="num">0</td><td class="num">30</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">火</td><td class="traits"><a class="ref" href="#t-ab-burn-hit">燃焰</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-magic">魔攻 15</a> · <a class="ref" href="#t-ammo">弹药 6</a></td></tr><tr data-unit="fire-elemental"><td class="name">火元素</td><td class="glyph">火</td><td class="src">秘法</td><td class="num">3</td><td class="num">170</td><td class="num">21</td><td class="num">8</td><td class="num">4</td><td class="num">0</td><td class="num">48</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">火 · 怕水×2</td><td class="traits"><a class="ref" href="#t-ab-burn-hit">燃焰</a> · <a class="ref" href="#t-magic">魔攻 8</a></td></tr><tr data-unit="elf-archer"><td class="name">精灵弓手</td><td class="glyph">精</td><td class="src">秘法</td><td class="num">3</td><td class="num">175</td><td class="num">22</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">30</td><td class="num">3</td><td class="num">5</td><td class="num">7</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-elf-shot">穿隙</a></td></tr><tr data-unit="necromancer"><td class="name">死灵法师</td><td class="glyph">灵</td><td class="src">秘法</td><td class="num">3</td><td class="num">175</td><td class="num">8</td><td class="num">12</td><td class="num">1</td><td class="num">0</td><td class="num">28</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">暗</td><td class="traits"><a class="ref" href="#t-ab-summoner">召唤</a> · <a class="ref" href="#t-magic">魔攻 12</a> · <a class="ref" href="#t-summon">召唤 骷髅 2回合×4</a></td></tr><tr data-unit="witch-doctor"><td class="name">巫医</td><td class="glyph">巫</td><td class="src">秘法</td><td class="num">3</td><td class="num">185</td><td class="num">10</td><td class="num">10</td><td class="num">2</td><td class="num">0</td><td class="num">32</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">自然</td><td class="traits"><a class="ref" href="#t-ab-heal-aura">治疗光环</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-magic">魔攻 10</a></td></tr><tr data-unit="earth-elemental"><td class="name">土元素</td><td class="glyph">土</td><td class="src">秘法</td><td class="num">3</td><td class="num">190</td><td class="num">20</td><td class="num">—</td><td class="num">9</td><td class="num">4</td><td class="num">66</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-build-wall">筑墙</a> · <a class="ref" href="#t-builds">可建 1 种建筑</a> · <a class="ref" href="#t-mres">魔抗 4</a></td></tr><tr data-unit="cursed-knight"><td class="name">诅咒骑士</td><td class="glyph">咒</td><td class="src">秘法</td><td class="num">3</td><td class="num">195</td><td class="num">22</td><td class="num">—</td><td class="num">6</td><td class="num">0</td><td class="num">54</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-charge">冲锋</a> · <a class="ref" href="#t-ab-curse-aura">咒域</a></td></tr><tr data-unit="vampire"><td class="name">吸血鬼</td><td class="glyph">血</td><td class="src">秘法</td><td class="num">4</td><td class="num">235</td><td class="num">28</td><td class="num">—</td><td class="num">5</td><td class="num">0</td><td class="num">56</td><td class="num">5</td><td class="num">1</td><td class="num">5</td><td class="traits">怕火×2 · 怕光×2</td><td class="traits"><a class="ref" href="#t-ab-lifesteal">吸血</a></td></tr><tr data-unit="clockwork-golem"><td class="name">机关傀儡</td><td class="glyph">械</td><td class="src">秘法</td><td class="num">4</td><td class="num">245</td><td class="num">30</td><td class="num">—</td><td class="num">9</td><td class="num">0</td><td class="num">72</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-machine">机械</a> · <a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="elementalist"><td class="name">元素召唤师</td><td class="glyph">召</td><td class="src">秘法</td><td class="num">4</td><td class="num">280</td><td class="num">10</td><td class="num">14</td><td class="num">3</td><td class="num">0</td><td class="num">34</td><td class="num">2</td><td class="num">3</td><td class="num">5</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-summoner">召唤</a> · <a class="ref" href="#t-magic">魔攻 14</a> · <a class="ref" href="#t-summon">召唤 随机（火元素/水元素/土元素/风元素） 3回合×2</a></td></tr><tr data-unit="demon"><td class="name">恶魔</td><td class="glyph">恶</td><td class="src">秘法</td><td class="num">5</td><td class="num">400</td><td class="num">42</td><td class="num">10</td><td class="num">7</td><td class="num">0</td><td class="num">78</td><td class="num">5</td><td class="num">2</td><td class="num">6</td><td class="traits">火</td><td class="traits"><a class="ref" href="#t-ab-kamikaze">自爆</a> · <a class="ref" href="#t-ab-summoner">召唤</a> · <a class="ref" href="#t-magic">魔攻 10</a> · <a class="ref" href="#t-summon">召唤 小恶魔 3回合×2</a></td></tr><tr class="grp" id="p-fantasy-heroes"><td colspan="15">奇想·英雄 · 8 个</td></tr><tr data-unit="slime-giant"><td class="name">大史莱姆</td><td class="glyph">巨</td><td class="src">英雄</td><td class="num">3</td><td class="num">130</td><td class="num">14</td><td class="num">—</td><td class="num">2</td><td class="num">0</td><td class="num">50</td><td class="num">5</td><td class="num">1</td><td class="num">3</td><td class="traits">怕火×1.5</td><td class="traits"><a class="ref" href="#t-sk-slime-giant-聚合">聚合 CD1</a> · <a class="ref" href="#t-summoned-only">只能被召唤</a></td></tr><tr data-unit="dwarf-king"><td class="name">矮人王</td><td class="glyph">王</td><td class="src">英雄</td><td class="num">3</td><td class="num">360</td><td class="num">34</td><td class="num">—</td><td class="num">8</td><td class="num">0</td><td class="num">101</td><td class="num">2</td><td class="num">1</td><td class="num">4</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-aura-armor">守护光环</a> · <a class="ref" href="#t-ab-shield-wall">盾墙</a> · <a class="ref" href="#t-hero">英雄 解锁 150</a> · <a class="ref" href="#t-sk-dwarf-king-投斧">投斧 CD1</a></td></tr><tr data-unit="slime-boss"><td class="name">史莱姆牢大</td><td class="glyph">牢</td><td class="src">英雄</td><td class="num">3</td><td class="num">520</td><td class="num">32</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">200</td><td class="num">3</td><td class="num">2</td><td class="num">4</td><td class="traits">怕火×1.5</td><td class="traits"><a class="ref" href="#t-hero">英雄 解锁 200</a> · <a class="ref" href="#t-sk-slime-boss-裂殖">裂殖 CD3</a> · <a class="ref" href="#t-split">死后分裂 大史莱姆</a></td></tr><tr data-unit="assassin-master"><td class="name">刺客大师</td><td class="glyph">刺</td><td class="src">英雄</td><td class="num">4</td><td class="num">430</td><td class="num">30</td><td class="num">—</td><td class="num">3</td><td class="num">0</td><td class="num">78</td><td class="num">3</td><td class="num">1</td><td class="num">7</td><td class="traits">—</td><td class="traits"><a class="ref" href="#t-ab-kill-rush">收割</a> · <a class="ref" href="#t-hero">英雄 解锁 180</a> · <a class="ref" href="#t-sk-assassin-master-隐匿">隐匿 CD2</a></td></tr><tr data-unit="phoenix"><td class="name">不死鸟</td><td class="glyph">凤</td><td class="src">英雄</td><td class="num">4</td><td class="num">480</td><td class="num">38</td><td class="num">10</td><td class="num">4</td><td class="num">0</td><td class="num">89</td><td class="num">6</td><td class="num">2</td><td class="num">7</td><td class="traits">火</td><td class="traits"><a class="ref" href="#t-ab-rebirth">重生</a> · <a class="ref" href="#t-magic">魔攻 10</a> · <a class="ref" href="#t-hero">英雄 解锁 220</a> · <a class="ref" href="#t-sk-phoenix-烈焰俯冲">烈焰俯冲 CD2</a></td></tr><tr data-unit="hydra"><td class="name">九头蛇</td><td class="glyph">九</td><td class="src">英雄</td><td class="num">4</td><td class="num">490</td><td class="num">36</td><td class="num">—</td><td class="num">7</td><td class="num">0</td><td class="num">145</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits">怕火×2</td><td class="traits"><a class="ref" href="#t-ab-regenerate-plus">强再生</a> · <a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-hero">英雄 解锁 200</a> · <a class="ref" href="#t-sk-hydra-再生">再生 CD2</a></td></tr><tr data-unit="angel"><td class="name">天使</td><td class="glyph">使</td><td class="src">英雄</td><td class="num">5</td><td class="num">550</td><td class="num">42</td><td class="num">12</td><td class="num">10</td><td class="num">6</td><td class="num">121</td><td class="num">5</td><td class="num">1</td><td class="num">7</td><td class="traits">光</td><td class="traits"><a class="ref" href="#t-ab-heal-aura">治疗光环</a> · <a class="ref" href="#t-magic">魔攻 12</a> · <a class="ref" href="#t-mres">魔抗 6</a> · <a class="ref" href="#t-hero">英雄 解锁 250</a> · <a class="ref" href="#t-sk-angel-降临">降临 CD2</a></td></tr><tr data-unit="archmage"><td class="name">至尊法师</td><td class="glyph">尊</td><td class="src">英雄</td><td class="num">5</td><td class="num">590</td><td class="num">10</td><td class="num">26</td><td class="num">6</td><td class="num">10</td><td class="num">72</td><td class="num">2</td><td class="num">5</td><td class="num">8</td><td class="traits">轮换（火 → 水 → 自然 → 暗）</td><td class="traits"><a class="ref" href="#t-ab-element-mastery">属性精研</a> · <a class="ref" href="#t-ab-element-ward">同源护壁</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-magic">魔攻 26</a> · <a class="ref" href="#t-mres">魔抗 10</a> · <a class="ref" href="#t-hero">英雄 解锁 300</a> · <a class="ref" href="#t-sk-archmage-转属性">转属性 CD1</a></td></tr></tbody>
+      </table>
+    </div>
+    </section>
+
+    <section id="g-notes">
+      <h2><span class="sec-num">03</span>各包要点</h2>
+      <p>表格给的是数值，这一节给的是"这一包和别的包差在玩法上"。</p>
+      <h3 id="n-fantasy-arcane">奇想·秘法</h3><p>召唤物（骷髅、僵尸犬、土元素这类）和土墙<b>不占编制</b>：它们不算进
+        "最多多少个单位"那道门槛，所以不会把你自己的产线堵死。召唤师被杀，已经召出来的还在场上。</p><h3 id="n-fantasy-heroes">奇想·英雄</h3><p>英雄是<b>全场唯一</b>的：同一方在盘上只能有一个同名英雄。第一次招募要在造价之外
+        另付一笔解锁费，付过之后这一局里随便造。每人每回合一个主动技能，<b>不占行动</b>——
+        开完技能还能照常移动和攻击。AI 也会用：够得着就扔斧头、掉血就再生、
+        身边有人伤得重就降临；不死鸟倒下后留下的蛋，轮到它时 AI 会自己挑地方孵。</p>
+    </section>
+    <section id="g-rules">
+      <h2><span class="sec-num">04</span>新规则</h2>
+      
+      <h3>奇想系列带来的新规则</h3>
+      <p><b>奇想·法则</b>只带机制、一个兵都不带，另外四包都<b>依赖</b>它。
+        只勾子包不勾前置，子包根本不会进场（配置里那条记录也会被剔掉，不留一句谎话）。</p>
+      <ul>
+        <li><a class="ref" href="#t-magic">魔法攻击</a>与<a class="ref" href="#t-mres">魔法抗性</a>是这套系的骨架：法师打重甲划算、打在魔抗单位身上像挠痒。
+          数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
+        <li><a class="ref" href="#t-elem">属性</a>决定这一下带什么，<a class="ref" href="#t-weak">怕</a>与<a class="ref" href="#t-resist">抗</a>决定目标怎么接。
+          注意「怕」作用在<b>整段</b>伤害上：怕火的被火把砸一下也疼，不只是怕魔法火。</li>
+        <li><a class="ref" href="#t-air">空中层</a>：飞行、掠空、跳跃是同一套机制，区别只在名字对不对得上画面——
+          鹰和石像鬼飞行，蜘蛛骑士是跳跃，谁都不该"扑棱翅膀"。<a class="ref" href="#t-overhead">地面打空中</a></li>
+        <li><a class="ref" href="#t-status">状态</a>——中毒、点燃、减速、诅咒。都按血量百分比算，
+          这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
+        <li><a class="ref" href="#t-mastery">属性精研</a>：属性不只是"这一下带什么状态"，而是四种形态。所以「转属性」
+          其实是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。</li>
+        <li><a class="ref" href="#t-skill">英雄技能</a>。矮人王的投斧更进一步：那一斧<b>不占本回合的攻击次数</b>，
+          扔完还能贴身再劈一刀——三格外的目标也照打，代价是只有六成伤害。</li>
+      </ul>
+      <div class="callout">
+        机制都写成"有前提、有解法"的形式：飞行怕射程、魔法怕魔抗、狂暴怕风筝、召唤怕清场。
+        纯加成的兵最后只会变成"贵一点的那个步兵"——这条在写这个包的时候被反复验证过。
+      </div>
+    </section>
+
+    <section id="g-terms">
+      <h2><span class="sec-num">05</span>机制词条</h2>
+      <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
+      <dl class="terms"><dt id="t-ab-shield-wall">盾墙</dt><dd>本回合没有移动过时，受到的伤害 −2。站住才硬。</dd><dt id="t-ab-stealth">潜行</dt><dd>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</dd><dt id="t-ab-steal-gold">窃掠</dt><dd>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</dd><dt id="t-ab-forest-walk">穿林</dt><dd>森林和丘陵的移动消耗按 1 算。</dd><dt id="t-ab-woodland">林地之主</dt><dd>站在森林或丘陵上时护甲 +3。把它赶出林子，它就没那么难打了。</dd><dt id="t-elem">属性</dt><dd>这段攻击带什么属性，决定目标怕不怕、抗不抗。 <span class="more">火 / 水 / 土 / 风 / 光 / 暗 / 自然 / 奥术。属性本身不加伤害，只用来查怕与抗。</span></dd><dt id="t-ab-heal-aura">治疗光环</dt><dd>回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。</dd><dt id="t-ab-purge">净化</dt><dd>回合开始时，自己和相邻友军各移除<b>一层</b>负面状态（中毒→点燃→减速→诅咒的顺序）。</dd><dt id="t-magic">魔法攻击</dt><dd>独立结算的第二段伤害：不吃护甲、地形和破甲，只被魔抗平减。 <span class="more">和普通攻击同时结算，所以法师打重甲划算、打在魔抗单位身上像挠痒。数值都压在 20 以内——它是&quot;另一条路&quot;，不是&quot;更大的数字&quot;。</span></dd><dt id="t-mres">魔法抗性</dt><dd>从魔法伤害里直接扣掉的固定值，对普通攻击无效。</dd><dt id="t-ab-charge">冲锋</dt><dd>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</dd><dt id="t-ab-berserk">狂暴</dt><dd>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</dd><dt id="t-ab-vanish">隐匿</dt><dd>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">比例固定为 50%，不分敌我——友军站在炸点上一样掉血。</span></dd><dt id="t-ab-repair">修缮</dt><dd>回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。</dd><dt id="t-ab-slow-offroad">重甲难行</dt><dd>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</dd><dt id="t-ab-aura-armor">守护光环</dt><dd>相邻的友军护甲 +2。</dd><dt id="t-ab-aoe-immune">阵列</dt><dd>免疫溅射伤害：炮火、法术溅射、亡语爆炸都伤不到它。但主目标那一下照吃。</dd><dt id="t-weak">怕</dt><dd>受到该属性伤害时倍乘。作用在整段伤害上，不限于魔法段。 <span class="more">「怕火×2」被火把砸一下也疼——那一下的普通伤害同样翻倍。</span></dd><dt id="t-ab-split">分裂</dt><dd>阵亡时分裂成两只小史莱姆（有空地才分裂）。所以&quot;打死它&quot;不等于&quot;解决它&quot;。</dd><dt id="t-split">分裂</dt><dd>死亡时在原地生成一个更小的同类。</dd><dt id="t-ab-leap">跳跃</dt><dd>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</dd><dt id="t-ab-trap">布雷</dt><dd>回合开始时，对贴身的敌军造成 6 点伤害并让其减速 1 回合。走着走着就踩上了。</dd><dt id="t-ab-poison-hit">淬毒</dt><dd>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</dd><dt id="t-burst">连击</dt><dd>一次攻击拆成 N 段判定，每段单独减一次护甲。 <span class="more">对重甲目标衰减更明显：三段打 6 甲，每段都被扣 6，合计比一刀 3×攻更吃亏。</span></dd><dt id="t-ab-kite">游骑</dt><dd>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</dd><dt id="t-ab-herd">群势</dt><dd>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</dd><dt id="t-ab-regenerate">再生</dt><dd>每回合开始恢复 10% 生命上限，不需要站桩——代价是这种兵通常很慢。</dd><dt id="t-ab-siege-master">破城</dt><dd>攻城伤害 ×1.5。</dd><dt id="t-ab-lifesteal">吸血</dt><dd>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</dd><dt id="t-ab-bloodlust">嗜血</dt><dd>回合开始时如果生命低于一半，恢复 15% 生命上限；否则什么也不发生。</dd><dt id="t-summoned-only">只能被召唤</dt><dd>不进生产面板，也不占编制上限。</dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-decay">自损</dt><dd>每回合开始时自己掉血，掉到 0 就消失。 <span class="more">和中毒一样按上限血计算，所以体型大的单位不会&quot;更耐腐蚀&quot;。</span></dd><dt id="t-ab-aura-command">指挥光环</dt><dd>相邻的友军攻击 +2。</dd><dt id="t-ab-aura-speed">疾行光环</dt><dd>相邻友军移动力 +1。</dd><dt id="t-ab-phase">穿行</dt><dd>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</dd><dt id="t-ab-curse-hit">咒缚</dt><dd>打中就让其被诅咒 3 回合，护甲 −2。</dd><dt id="t-ab-fear">威吓</dt><dd>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</dd><dt id="t-ab-tracker">追猎</dt><dd>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</dd><dt id="t-ab-summoner">召唤</dt><dd>每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。</dd><dt id="t-summon">召唤</dt><dd>每隔 N 回合在自己身边生成一个召唤物，同源同时最多若干个。 <span class="more">召唤物不占编制上限，所以不会把产线堵死；召唤师被杀，已经召出来的还留在场上。</span></dd><dt id="t-resist">抗</dt><dd>从该属性伤害里平减固定值。</dd><dt id="t-ab-slow-hit">霜缚</dt><dd>打中就让其减速 2 回合，移动力 −1（最少 1）。</dd><dt id="t-ab-knockback">击退</dt><dd>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</dd><dt id="t-ab-burn-hit">燃焰</dt><dd>打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。</dd><dt id="t-ammo">弹药</dt><dd>远程攻击有次数上限，打光之后只能贴身肉搏。</dd><dt id="t-ab-elf-shot">穿隙</dt><dd>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</dd><dt id="t-ab-build-wall">筑墙</dt><dd>回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。</dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-ab-curse-aura">咒域</dt><dd>相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。</dd><dt id="t-ab-machine">机械</dt><dd>无法被治疗：休整、再生、治疗光环、净化对它的生命值都不生效。它只能靠修。</dd><dt id="t-ab-kamikaze">自爆</dt><dd>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</dd><dt id="t-sk-slime-giant-聚合">聚合</dt><dd>和场上其它大史莱姆合体成史莱姆牢大（至少两只）：生命相加，上限按牢大算。合体后当回合不能行动。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-hero">英雄</dt><dd>全场同名只能有一个；首次招募要在造价之外另付一笔解锁费。 <span class="more">付过一次之后这一局里随便造。英雄倒下不返还解锁费。</span></dd><dt id="t-sk-dwarf-king-投斧">投斧</dt><dd>投出一斧：射程 3、隔着一格以上只有六成伤害。这一下不占本回合的攻击次数——扔完还能贴身再劈一次。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-sk-slime-boss-裂殖">裂殖</dt><dd>裂成四只大史莱姆：每只生命为牢大的四分之一（按当前生命分摊，不凭空多也不丢）。分裂体当回合不能行动。 <span class="more">冷却 3 回合；不占移动与攻击。</span></dd><dt id="t-ab-kill-rush">收割</dt><dd>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</dd><dt id="t-sk-assassin-master-隐匿">隐匿</dt><dd>隐去身形：直到你下个回合开始，敌人只有贴到相邻格才发现它。出手或挨打会立刻暴露。 <span class="more">冷却 2 回合；不占移动与攻击。</span></dd><dt id="t-ab-rebirth">重生</dt><dd>阵亡时不立刻倒下，而是留下一枚蛋，由玩家在自己回合选一格孵化（一半生命）。每局一次。</dd><dt id="t-sk-phoenix-烈焰俯冲">烈焰俯冲</dt><dd>本回合移动 +2，攻击额外点燃两层。 <span class="more">冷却 2 回合；不占移动与攻击。</span></dd><dt id="t-ab-regenerate-plus">强再生</dt><dd>再生翻倍：每回合开始恢复 20% 生命上限。</dd><dt id="t-sk-hydra-再生">再生</dt><dd>立刻回复 40% 生命（约 58 点）。 <span class="more">冷却 2 回合；不占移动与攻击。</span></dd><dt id="t-sk-angel-降临">降临</dt><dd>半径 3 内友军回复 20% 生命，并清空全部负面状态。 <span class="more">冷却 2 回合；不占移动与攻击。</span></dd><dt id="t-cycle">轮换属性</dt><dd>每回合自动换一种属性，按括号里的顺序循环。</dd><dt id="t-ab-element-mastery">属性精研</dt><dd>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</dd><dt id="t-ab-element-ward">同源护壁</dt><dd>受到与自身<b>当前属性</b>相同的伤害减半。火打火、水打水都只吃一半——但换个属性打它就照常疼。</dd><dt id="t-sk-archmage-转属性">转属性</dt><dd>切到下一种属性（火→水→自然→暗）。火=点燃、水=霜缚、自然=攻击时自愈、暗=魔法段 ×1.5。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-air">空中层</dt><dd>与地面互不占格；地面单位打它时距离 +1，它能掠水、走森林丘陵只花 1 步。 <span class="more">掠水三兄弟（飞行 / 掠空 / 跳跃）机制同一套，差别只在名字对不对得上画面。掠空还能和地面单位同格：地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。两层叠在同一格时，点这一格会先问&quot;有没有我能打的目标&quot;——有就直接开火，不再只弹上面那个的属性卡。</span></dd><dt id="t-overhead">地面打空中</dt><dd>站在地上的兵够不着头顶那一层：射程 1 打不到隔壁那格飞着的单位，射程 2 才刚好够得着。 <span class="more">反过来飞行单位打地面照常算。反击也按&quot;还手的那个人&quot;算距离——所以飞行单位贴脸打完地面单位，除非对面射程 ≥ 2，否则不会挨反击。例外是压着打：飞行单位停在正上方（同一格）时距离算 0+1=1，脚下的兵仍然能还手。</span></dd><dt id="t-status">状态</dt><dd>中毒 / 点燃 / 减速 / 诅咒，都按兵种血量百分比结算。 <span class="more">中毒每回合 6% 上限血、点燃 8%（怕火的翻倍）、减速移动 −1（最低 1）、诅咒护甲 −2（最多两层）。按百分比算，是为了让巨魔中同样的毒掉的血和它的体型相称。</span></dd><dt id="t-mastery">属性精研</dt><dd>至尊法师的四种形态：火再叠一层、水挂霜缚、自然攻击时回血、暗把魔法段 ×1.5。 <span class="more">所以「转属性」是在&quot;控场&quot;和&quot;爆发&quot;之间选，而不是在四种颜色里挑好看的那个。</span></dd><dt id="t-skill">英雄技能</dt><dd>每回合一次的主动技，不占移动与攻击——开完还能照常行动。</dd></dl>
+    </section>
+  
+    <footer>
+      方格战棋 · 奇幻扩展 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>
