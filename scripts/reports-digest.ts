@@ -6,7 +6,7 @@
  * 这个吃的是**玩家真的打完的局**，数据是公开可上交的那部分——没有伤害流水，
  * 所以算不出"每百金杀伤"。它能回答的是另一类问题：
  *   谁先手赢得多、哪套扩展一开就一边倒、哪个兵种真有人用、
- *   一局通常打多久、赢家金库还剩多少钱（钱花不出去 = 产线卡住）。
+ *   一局通常打多久、赢家金库还剩多少钱、双方各掉多少身价（战损与交换比）。
  *
  * 输入：从云数据库导出的 JSON。两种形状都收：
  *   1) 行数组 [{seed, turns, winner, expansions, ai, sides, payload}, ...]
@@ -129,6 +129,61 @@ const median = (xs: number[]): number => {
 const side = (r: Row, p: 'A' | 'B'): ReportSide | undefined =>
   r.sides?.find((s) => s.side === p) ?? r.payload?.sides?.find((s) => s.side === p);
 const timelineOf = (r: Row): MatchTimeline | undefined => r.payload?.timeline;
+
+/**
+ * 老版本客户端上传的帧里没有 lostA/lostB（战损是后补的字段）。
+ * 这里放宽成可选，读的时候按"没有就是没有"处理，别拿 0 冒充。
+ */
+interface LooseSample {
+  t: number;
+  lostA?: number;
+  lostB?: number;
+  deadA?: number;
+  deadB?: number;
+}
+
+interface LossStat {
+  lostA: number;
+  lostB: number;
+  deadA: number;
+  deadB: number;
+  /** 相邻两帧里掉得最凶的一格：哪一回合、哪一方、掉了多少金 */
+  crash: { t: number; side: 'A' | 'B'; value: number } | null;
+}
+
+/**
+ * 从摘要里读战损。
+ *
+ * 只读累计值的**末帧**做总量，只读**相邻差**做崩点——这不是两套数据，
+ * 是同一列数字的两种问法（客户端也只存了累计，见 timeline.ts 的注释）。
+ * 返回 null 表示这一局压根没记战损（旧数据），不能当 0 混进中位数。
+ */
+function lossOf(r: Row): LossStat | null {
+  const tl = timelineOf(r);
+  const samples = (tl?.samples ?? []) as unknown as LooseSample[];
+  const last = samples[samples.length - 1];
+  if (!last || typeof last.lostA !== 'number' || typeof last.lostB !== 'number') return null;
+
+  let crash: LossStat['crash'] = null;
+  for (let i = 1; i < samples.length; i++) {
+    const prev = samples[i - 1];
+    const cur = samples[i];
+    if (!prev || !cur) continue;
+    const dA = (cur.lostA ?? 0) - (prev.lostA ?? 0);
+    const dB = (cur.lostB ?? 0) - (prev.lostB ?? 0);
+    const pick = dA >= dB ? { side: 'A' as const, value: dA } : { side: 'B' as const, value: dB };
+    if (pick.value > 0 && (!crash || pick.value > crash.value)) crash = { t: cur.t, side: pick.side, value: pick.value };
+  }
+
+  return {
+    lostA: last.lostA,
+    lostB: last.lostB,
+    deadA: last.deadA ?? 0,
+    deadB: last.deadB ?? 0,
+    crash,
+  };
+}
+
 const levelName = (lv: string | undefined): string =>
   lv === 'basic' ? '初级' : lv === 'tactic' ? '战术·测试' : lv === 'advanced' ? '高级' : lv ?? '—';
 
@@ -314,9 +369,58 @@ if (withTl.length > 0) {
   }
   say(`开局双方身价合计中位 ${f1(median(openVa))} 金，终局 ${f1(median(endVa))} 金。`);
   const spareText = goldSpare.length > 0 ? `${f1(median(goldSpare))} 金` : '—（这批没有分出胜负的局）';
-  say(`赢家终局金库中位 **${spareText}**` +
-    `${median(goldSpare) > 150 ? ' —— 钱花不出去，先查产线/编制上限，别怪兵种贵' : ''}。`);
+  say(`赢家终局金库中位 **${spareText}**。`);
   say();
+  say('> 金库余额是"胜负已定之后还在继续清场"的常态，别直接当成产线堵了：');
+  say('> 已经推不动的一方不值得再投资，剩下的钱花不花都不影响结果。要看经济效率，');
+  say('> 盯下面战损段的"掉血速度"比盯余额有用。');
+  say();
+
+  /* 战损：靠单位集合差分算出来的，不需要伤害流水 */
+  const lossRows = withTl
+    .map((r) => ({ r, l: lossOf(r) }))
+    .filter((x): x is { r: Row; l: LossStat } => x.l !== null);
+  if (lossRows.length > 0) {
+    const la = lossRows.map((x) => x.l.lostA);
+    const lb = lossRows.map((x) => x.l.lostB);
+    const da = lossRows.map((x) => x.l.deadA);
+    const db = lossRows.map((x) => x.l.deadB);
+    say(`战损（只算兵，不算建筑、不算主动拆除）：A 方中位 **${f1(median(la))} 金 / ${f1(median(da))} 个**，` +
+      `B 方中位 **${f1(median(lb))} 金 / ${f1(median(db))} 个**。`);
+    say();
+
+    // 交换比：赢家用多少金换掉对方多少金。>1 是赚的。
+    const swaps: number[] = [];
+    for (const { r, l } of lossRows) {
+      if (r.winner !== 'A' && r.winner !== 'B') continue;
+      const mine = r.winner === 'A' ? l.lostA : l.lostB;
+      const theirs = r.winner === 'A' ? l.lostB : l.lostA;
+      if (theirs <= 0) continue;
+      // 赢家 0 战损（压着打、对面没还手）时给个上限，不然除出来是无穷
+      swaps.push(theirs / Math.max(1, mine));
+    }
+    if (swaps.length > 0) {
+      say(`赢家交换比中位 **${f1(median(swaps))} : 1**（打掉对方 x 金，自己掉 1 金）。`);
+      say('> 这个数把推城阶段的单方面清场也算进去了，所以会明显偏高；');
+      say('> 它衡量的是"这局赢得有多不对称"，不是野战换血效率。');
+      say();
+    }
+
+    const crashes = lossRows
+      .map((x) => x.l.crash)
+      .filter((c): c is NonNullable<LossStat['crash']> => c !== null);
+    if (crashes.length > 0) {
+      const worst = crashes.reduce((a, b) => (b.value > a.value ? b : a));
+      say(`单格最大掉血中位 ${f1(median(crashes.map((c) => c.value)))} 金；` +
+        `最惨的一格在第 ${worst.t} 回合，${worst.side} 方掉了 ${f1(worst.value)} 金。`);
+      say('> "崩点" = 相邻两帧累计战损之差的最大值。摘要按回合采样，同一回合内的连续交战');
+      say('> 会并进一格，所以这是**下限**，真实的单回合损失只会更大。');
+      say();
+    }
+  } else {
+    say('> 这批摘要里没有战损字段（旧版客户端上传的），换新版打一局就能看到。');
+    say();
+  }
   const total = [...actMix.values()].reduce((a, b) => a + b, 0);
   if (total > 0) {
     say('行动构成：' + [...actMix.entries()]
@@ -361,7 +465,10 @@ if (bad.length > 0) {
 
 say('## 这套数据算不出什么（别硬算）');
 say();
-say('- **每百金杀伤 / 交换比**：需要逐次伤害流水，报告里没有。要这个用 `npm run balance` 跑模拟。');
+say('- **每百金杀伤**：要逐次伤害流水（谁打了谁、多少点），报告里没有。要这个用 `npm run balance` 跑模拟。');
+say('- **兵种级战损**（哪个兵种死得最惨）：摘要只记"掉了多少金"，不记掉的是哪个型号。');
+say('  想补这个字段，代价是每条死亡记录多带上 type id——体积和隐私面都会变大，先攒够样本再说。');
+say('- **单回合增量的精确值**：摘要按回合采样，同一回合内多次交战会并成一格，只能给下限。');
 say('- **兵种强弱**：终局阵容只说明"活到最后的有谁"，活下来的往往是赢家，因果是反的。');
 say('  真要评强弱，看 `timeline.made`（真实产出）加胜负分组，别单看阵容。');
 say('- **玩家水平**：没有账号体系，也没有对局时长与操作速度。');

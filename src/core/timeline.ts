@@ -34,6 +34,19 @@ export interface TurnSample {
   /** 双方军队身价（按造价求和，金币）。能看出"谁的兵更值钱"而不只是"谁兵多" */
   va: number;
   vb: number;
+  /**
+   * 截至本回合，双方**累计损失**的兵力身价（金）与兵数。
+   *
+   * 只记累计不记单回合增量，是因为增量可以相邻两帧相减得到，反过来不行；
+   * 而"哪一回合崩的"恰恰要看增量，所以两种问法都得能从这一对数字里算出来。
+   *
+   * 口径：只算**兵**（不含建筑、不含被拆除的）。拆自己的建筑是主动回收，
+   * 算成战损会把"整理阵型"误读成"被打崩"。
+   */
+  lostA: number;
+  lostB: number;
+  deadA: number;
+  deadB: number;
 }
 
 export interface MatchTimeline {
@@ -49,6 +62,13 @@ export interface MatchTimeline {
   made: Record<PlayerId, Record<string, number>>;
   /** 有没有因为超上限被抽稀过 */
   thinned: boolean;
+  /**
+   * 内部状态：上一次看到的单位（id → [阵营, 身价]，建筑记 0）。
+   * 只用来做差分，**不进报告**——sealTimeline() 会把它剥掉。
+   */
+  seen?: Record<string, [PlayerId, number]>;
+  /** 累计损失（seal 之后保留，方便一眼看到总量） */
+  lost?: Record<PlayerId, { value: number; count: number }>;
 }
 
 const SIDES: PlayerId[] = ['A', 'B'];
@@ -67,7 +87,49 @@ export function newTimeline(fromTurn: number): MatchTimeline {
     acts: emptyTally(),
     made: emptyTally(),
     thinned: false,
+    seen: {},
+    lost: { A: { value: 0, count: 0 }, B: { value: 0, count: 0 } },
   };
+}
+
+/**
+ * 每走完一步调一次：比对上一帧的单位集合，**消失的就是损失**。
+ *
+ * 为什么不数 `u.kills`：那个字段只在开了「老兵不死」扩展时才增长（见 rules 里
+ * 的注释），拿它当击杀数在别的扩展组合下永远是 0。差分不依赖任何规则。
+ *
+ * 拆除（DISBAND）要特殊处理：那是主动回收，不是战损，先从旧集合里摘掉再比。
+ */
+export function noteDeaths(tl: MatchTimeline, s: GameState, action?: Action): void {
+  const seen = tl.seen ?? (tl.seen = {});
+  const lost = tl.lost ?? (tl.lost = { A: { value: 0, count: 0 }, B: { value: 0, count: 0 } });
+
+  if (action?.type === 'DISBAND') delete seen[action.unitId];
+
+  const alive: Record<string, [PlayerId, number]> = {};
+  for (const u of s.units) {
+    const def = s.unitTypes[u.type];
+    // 建筑记 0：它消失时不该算成兵力损失（下面的 value===0 判断会跳过）
+    alive[u.id] = [u.owner, def?.category === 'building' ? 0 : (def?.cost ?? 0)];
+  }
+
+  for (const [id, [side, value]] of Object.entries(seen)) {
+    if (alive[id] || value <= 0) continue;
+    lost[side].value += value;
+    lost[side].count += 1;
+  }
+  tl.seen = alive;
+}
+
+/**
+ * 出报告前把内部状态摘掉。
+ *
+ * `seen` 是"上一次看见的单位 id 表"，几十条、还会随局面变；它留在报告里
+ * 既占体积又毫无意义（还让人以为报告里带了单位坐标）。
+ */
+export function sealTimeline(tl: MatchTimeline): MatchTimeline {
+  const { seen: _seen, ...rest } = tl;
+  return { ...rest, samples: rest.samples.map((x) => ({ ...x })) };
 }
 
 /**
@@ -120,7 +182,18 @@ export function sampleTurn(s: GameState, tl: MatchTimeline, force = false): void
 
   const a = sideSample(s, 'A');
   const b = sideSample(s, 'B');
-  tl.samples.push({ t: s.turn, A: a.line, B: b.line, va: a.value, vb: b.value });
+  const lost = tl.lost ?? { A: { value: 0, count: 0 }, B: { value: 0, count: 0 } };
+  tl.samples.push({
+    t: s.turn,
+    A: a.line,
+    B: b.line,
+    va: a.value,
+    vb: b.value,
+    lostA: lost.A.value,
+    lostB: lost.B.value,
+    deadA: lost.A.count,
+    deadB: lost.B.count,
+  });
 
   if (tl.samples.length > MAX_SAMPLES) {
     // 超了就把所有样本留着、间隔翻倍——只留偶数帧。
@@ -143,6 +216,7 @@ export function timelineSummary(tl: MatchTimeline | null | undefined): string {
     `第 ${first.t}~${last.t} 回合`,
     `A 方身价 ${first.va}→${last.va}`,
     `B 方身价 ${first.vb}→${last.vb}`,
+    `战损 A ${last.lostA} / B ${last.lostB} 金`,
     `${kinds.size} 种兵`,
   ];
   return bits.join(' · ');

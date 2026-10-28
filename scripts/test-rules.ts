@@ -40,7 +40,14 @@ import {
 import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
-import { newTimeline, noteAction, sampleTurn, timelineSummary } from '../src/core/timeline.ts';
+import {
+  newTimeline,
+  noteAction,
+  noteDeaths,
+  sampleTurn,
+  sealTimeline,
+  timelineSummary,
+} from '../src/core/timeline.ts';
 import { normalizeCampaign } from '../src/net/campaign.ts';
 import {
   legacyResistToMultiplier,
@@ -8056,6 +8063,51 @@ test('摘要也要能记下开局与终局：force 采样绕开间隔，0 帧的
   const withFrame = buildMatchReport(s, new Date('2026-10-28T10:00:00Z'), tl);
   assert.ok(withFrame.timeline, '采到帧就该带上');
   assert.equal(withFrame.timeline?.samples.length, 1);
+});
+
+test('战损：靠单位集合差分，拆除不算', () => {
+  // 为什么不数 u.kills：那个字段只在开「老兵不死」时才增长，别的组合下永远是 0。
+  const s = createMatch({ ...DEFAULT_CONFIG }, 77);
+  const tl = newTimeline(1);
+  noteDeaths(tl, s); // 建基线：先把开局在场的单位记下来
+  sampleTurn(s, tl, true);
+
+  const victim = s.units.find(
+    (u) => u.owner === 'B' && s.unitTypes[u.type]?.category === 'combat',
+  );
+  assert.ok(victim, '开局应当有战斗单位');
+  const cost = s.unitTypes[victim.type]?.cost ?? 0;
+  assert.ok(cost > 0);
+
+  // 打死一个
+  s.units = s.units.filter((u) => u.id !== victim.id);
+  noteDeaths(tl, s);
+  assert.equal(tl.lost?.B.value, cost, '损失身价要等于它的造价');
+  assert.equal(tl.lost?.B.count, 1);
+  assert.equal(tl.lost?.A.count, 0, '没死的阵营不该有战损');
+
+  s.turn = 2;
+  sampleTurn(s, tl);
+  const last = tl.samples[tl.samples.length - 1];
+  assert.ok(last);
+  assert.equal(last.lostB, cost, '样本里要带上这个累计损失');
+  assert.equal(last.deadB, 1);
+
+  // 拆除是主动回收，不算战损
+  const own = s.units.find(
+    (u) => u.owner === 'A' && s.unitTypes[u.type]?.category !== 'building',
+  );
+  assert.ok(own);
+  s.units = s.units.filter((u) => u.id !== own.id);
+  noteDeaths(tl, s, { type: 'DISBAND', unitId: own.id });
+  assert.equal(tl.lost?.A.count, 0, '拆自己的兵不是被打死');
+
+  // 出报告前要把内部单位表摘掉，别让它跟着上云
+  const sealed = sealTimeline(tl);
+  assert.equal(sealed.seen, undefined, 'seal 之后不该还有单位表');
+  assert.equal(sealed.samples.length, tl.samples.length, 'seal 不能丢样本');
+  assert.ok(sealed.lost, '累计损失要留着');
+  assert.ok(timelineSummary(sealed).includes('战损'), '一句话摘要要能看见战损');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

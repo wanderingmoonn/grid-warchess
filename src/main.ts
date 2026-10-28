@@ -55,7 +55,16 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
-import { newTimeline, noteAction, sampleTurn, timelineSummary, type MatchTimeline } from './core/timeline.ts';
+import type { MatchReport } from './core/report.ts';
+import {
+  newTimeline,
+  noteAction,
+  noteDeaths,
+  sampleTurn,
+  sealTimeline,
+  timelineSummary,
+  type MatchTimeline,
+} from './core/timeline.ts';
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
@@ -262,15 +271,21 @@ function resetRecorder(): void {
   recorder = state.config.recordDetail === true && state.config.godMode !== true
     ? newTimeline(state.turn)
     : null;
-  // 开局先落一帧基线。没有它的话，"第 1 回合就结束"的局会交上一份 0 帧摘要
-  // （2026-10-28 实测：一局认输，上传上来的 timeline 里 samples 是空的）。
-  if (recorder) sampleTurn(state, recorder, true);
+  if (recorder) {
+    // 先把"开局有哪些单位"记下来，后面才能靠差分认出谁死了
+    noteDeaths(recorder, state);
+    // 再落一帧基线。没有它的话，"第 1 回合就结束"的局会交上一份 0 帧摘要
+    // （2026-10-28 实测：一局认输，上传上来的 timeline 里 samples 是空的）。
+    sampleTurn(state, recorder, true);
+  }
 }
 
 /** 记一步（AI 和玩家都走这里） */
 function noteStep(actor: PlayerId, action: Action): void {
   if (!recorder) return;
   noteAction(recorder, actor, action);
+  // 死亡是在这一步里发生的，所以每次动作后都要比一次单位集合
+  noteDeaths(recorder, state, action);
 }
 
 /** 回合结束：采一帧。两处会结束回合——玩家点、AI 循环末尾 */
@@ -579,6 +594,16 @@ function panelInput(): PanelInput {
 }
 
 /**
+ * 当前对局的报告。
+ *
+ * 面板上的指纹和真正上传的那一份必须是同一个东西，所以在这里统一密封
+ * （sealTimeline 会去掉内部用来做差分的单位表）。两处各建一次很容易漂。
+ */
+function currentReport(): MatchReport {
+  return buildMatchReport(state, new Date(), recorder ? sealTimeline(recorder) : null);
+}
+
+/**
  * 结算卡上的上传区块：一局打完才给。
  *
  * 三种情况不给：
@@ -594,7 +619,7 @@ function panelInput(): PanelInput {
  */
 function reportPanel(): PanelReport | undefined {
   if (!state.winner || state.config.godMode === true || watching()) return undefined;
-  const sig = reportSignature(buildMatchReport(state, new Date(), recorder));
+  const sig = reportSignature(currentReport());
   if (sig !== reportSig) {
     reportSig = sig;
     // 这一局之前传过（刷新页面又看见结算卡），就别再让点一遍
@@ -1597,7 +1622,7 @@ function onBoardClick(e: Event): void {
 
 /** 结算卡上要显示的和要发出去的必须是同一份：都从当前 state 现算 */
 function finishedReport() {
-  return buildMatchReport(state, new Date(), recorder);
+  return currentReport();
 }
 
 async function sendMatchReport(): Promise<void> {
