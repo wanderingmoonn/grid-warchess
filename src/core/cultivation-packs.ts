@@ -98,6 +98,9 @@ function getExpGrowth(u: Unit): number {
 /** 寿元耗尽后还能撑几年才真正老死 */
 const AGING_DEATH_AGE = 3;
 function getLifespan(u: Unit): number {
+  // 允许外部或测试强行指定寿元
+  if (u.custom?.lifespan !== undefined) return u.custom.lifespan as number; 
+  
   const rank = getRank(u);
   if (rank >= MAX_RANK) return Infinity;
   return 5 + rank * 5;
@@ -229,7 +232,7 @@ export const CULTIVATION_PACK: Expansion = {
     },
     
     // ── 面板信息 ───────────────────────────────────
-        getUnitPanelLines: ({ unit }) => {
+    getUnitPanelLines: ({ unit }) => {
       if (unit.type !== 'qi-cultivator') return [];
       const rank = getRank(unit);
       const exp = getExp(unit);
@@ -250,12 +253,10 @@ export const CULTIVATION_PACK: Expansion = {
 
       if (rank > 0) {
         const trueDmg = Math.floor(rank / 2);
-        const splash = Math.floor(rank / 4);
         lines.push(
           `境界加成：攻击 +${rank} · 护甲 +${rank} · 射程 +${rank} · 神识 +${rank} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
         );
         if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
-        if (splash > 0) lines.push(`溅射半径：${splash}`);
       }
 
       if (aging > 0) {

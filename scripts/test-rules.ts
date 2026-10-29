@@ -9128,7 +9128,6 @@ test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
 test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
   
-  // 清一块平地
   for (let y = 3; y <= 7; y++) {
     for (let x = 4; x <= 10; x++) {
       s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
@@ -9136,21 +9135,24 @@ test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   }
 
   const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
-  qi.custom = { lifespan: 100 }; // 测试期间不衰老
-
+  
   // 0级：基础视野 3
-  qi.custom.exp = 0;
+  qi.custom = { exp: 0, lifespan: 100 }; 
   assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
 
   // 9级：基础 3 + 境界 9 = 12
   qi.custom.exp = 512;
   assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
 
-  // 衰老测试：9级，但超龄 2 岁（age = 102）
-  qi.age = 102;
-  assert.equal(effectiveStats(s, qi).vision, 10, '衰老 2 岁，神识减 2');
+  // 衰老测试改用 x=8 级（exp=256）
+  // x=8 级寿元 = 5 + 8*5 = 45。
+  qi.custom = { exp: 256, lifespan: 45 }; 
+  assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
+
+  qi.age = 47; // 超龄 2 岁
+  assert.equal(effectiveStats(s, qi).vision, 9, 'x=8 衰老 2 岁，视野减 2');
   assert.ok(
-    effectiveStats(s, qi).visionItems.some(it => it.label === 'cultivation' && it.delta === -2),
+    effectiveStats(s, qi).visionItems.some(it => it.label === '修真·炼气' && it.delta === 6),
     '面板明细里应显示衰老带来的负修正',
   );
 });
