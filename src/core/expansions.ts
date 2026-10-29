@@ -458,14 +458,20 @@ export interface Expansion {
    *
    * 和 `mapStyles[].build` 分工不同：`build` 只对**自己那一张**地貌负责，
    * 而这里是给**所有**地貌（包括本体那五种）做一遍普适的整理。
-   * 「地形高差」用它把"孤零零拔地而起的高山"降成台地：本体配方是撒团块的，
-   * 团块边缘必然出现"周围全是平原、中间一柱高山"，而开这个扩展的玩家
-   * 期待的是等高线——山脚下总该有台地托着。
+   * 「地形高差」用它给每座山补山脚：本体配方是撒团块的，团块边缘就是山脚，
+   * 一步从平原跨到高山；开这个扩展的玩家期待的是等高线，所以要把那一步
+   * 补成"丘陵 → 台地"两圈缓坡。
    *
    * 为什么放在扩展里而不是 mapgen 里：本体不认识"台地"，也不该认识。
    * 收尾动作写成本体的一段 if，就等于把扩展规则缝进本体了。
    */
-  afterTerrain?: (g: Terrain[], w: number, h: number) => void;
+  afterTerrain?: (
+    g: Terrain[],
+    w: number,
+    h: number,
+    /** 不该动的格子（城市及其一环）：补山脚不能把城门口抬成台地 */
+    keep?: ReadonlySet<number>,
+  ) => void;
 }
 
 function nameOf(state: GameState, typeId: string): string {

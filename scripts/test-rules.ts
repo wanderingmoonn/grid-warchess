@@ -36,7 +36,7 @@ import {
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
-import { generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
+import { MAP_STYLES, generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -327,6 +327,22 @@ test('镜像模式下地图严格点对称', () => {
         assert.equal(here, there, `${size}×${size} 上 (${x},${y}) 不对称`);
       }
     }
+  }
+
+  // 开「地形高差」也一样：扩展的收尾回调会改地形，而它跑在镜像之后，
+  // 所以 mapgen 在收尾之后又补了一次镜像——不补的话补山脚会把对称改成"大体对称"。
+  for (const size of [12, 16, 20]) {
+    const s = fresh({ size, mapSymmetry: 'mirror', expansionIds: ['height-terrain'] }, 999);
+    let plateau = 0;
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const here = s.tiles[idx(s, x, y)].terrain;
+        const there = s.tiles[idx(s, s.w - 1 - x, s.h - 1 - y)].terrain;
+        assert.equal(here, there, `${size}×${size} 开了高差之后 (${x},${y}) 不对称`);
+        if (here === 'plateau') plateau++;
+      }
+    }
+    assert.ok(plateau > 0, `${size}×${size} 一朵台地都没有——补山脚没跑到镜像局里`);
   }
 });
 
@@ -8373,34 +8389,47 @@ test('沼泽陷足：同样是爬回平地，沼泽比谷地多收 1 点', () =>
 });
 
 test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
-  // 这条是"层层递进"的可测代理：
-  //   · 一格高山只要四邻没有台地/高山，它就是"从平地拔起来的柱子"；
-  //   · 开着扩展时，这种柱子应该一格都不剩（原版撒团块的地貌也算在内）。
-  const styles = ['open', 'ridge', 'river-h', 'river-v', 'highland', 'canyon'] as const;
+  // 这条守的是"山脚"，判据比"有没有一个高邻居"严一档：
+  //   · 一格高山只要四邻还有**平原/林地/丘陵**，那就是一步从 2 层跨到 5 层的悬崖，
+  //     玩家看到的是柱子不是等高线；
+  //   · 城郊那一圈例外——补山脚会把出生点抬成台地，所以 mapgen 把城和城郊
+  //     写进 keep 名单，那一圈本来就该保持平整。
+  // 旧版用的判据是"四邻里没有台地/高山就降成台地"，它只会削孤峰：
+  // 一条 20 格的山脊每格都有山邻居，整条边照样贴着平原。
+  const styles = ['open', 'ridge', 'river-h', 'river-v', 'highland', 'canyon', 'volcanic'] as const;
   for (const style of styles) {
     for (const seed of [31, 77, 1234, 5]) {
       const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: style }, seed);
       const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
+      const nearCity = (x: number, y: number) =>
+        s.cities.some((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y)) <= 3);
+      let cliff = 0;
       let bare = 0;
       let plateau = 0;
       for (let y = 0; y < s.h; y++) {
         for (let x = 0; x < s.w; x++) {
           if (s.tiles[y * s.w + x]!.terrain === 'plateau') plateau++;
-          if (H(x, y) !== 5) continue;
-          const skirt = [
+          if (H(x, y) < 5) continue;
+          if (nearCity(x, y)) continue;
+          let skirt = false;
+          for (const [dx, dy] of [
             [1, 0],
             [-1, 0],
             [0, 1],
             [0, -1],
-          ].some(([dx, dy]) => {
-            const nx = x + dx!;
-            const ny = y + dy!;
-            return nx >= 0 && ny >= 0 && nx < s.w && ny < s.h && H(nx, ny) >= 4;
-          });
+          ] as const) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+            const t = s.tiles[ny * s.w + nx]!.terrain;
+            if (H(nx, ny) >= 4) skirt = true;
+            if (t === 'plain' || t === 'forest' || t === 'hill') cliff++;
+          }
           if (!skirt) bare++;
         }
       }
-      assert.equal(bare, 0, `${style}#${seed} 有 ${bare} 格高山直接从平地拔起`);
+      assert.equal(cliff, 0, `${style}#${seed} 有 ${cliff} 处高山直接贴着平原/丘陵（缺山脚）`);
+      assert.equal(bare, 0, `${style}#${seed} 有 ${bare} 格高山没有任何高邻居`);
       assert.ok(plateau > 0, `${style}#${seed} 一格台地都没有——山脚根本没补上`);
     }
   }
@@ -8409,6 +8438,106 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
   for (const style of ['open', 'ridge'] as const) {
     const s = createMatch({ ...BASE, size: 24, expansionIds: [], mapStyle: style }, 31);
     assert.equal(s.tiles.filter((t) => t.terrain === 'plateau').length, 0);
+  }
+});
+
+test('开了「地形高差」，本体那四种地貌也得跟着变样', () => {
+  // 用户反馈："开了扩展，有些图跟没开时几乎一样"。
+  // 根因是随机袋里本体四种地貌占 6/14，抽到它们时那条分支一格都不读扩展——
+  // 旧版只把"孤零零一格的山"降成台地，统计上根本看不出差别（同种子同地貌时
+  // 甚至逐格相同）。补山脚之后，山体从 3~5 格涨到 5~9 格，高地面积必须明显变大。
+  const H = (t: string): number =>
+    t === 'hill'
+      ? 3
+      : t === 'plateau'
+        ? 4
+        : t === 'mountain' || t === 'volcano'
+          ? 5
+          : t === 'dune'
+            ? 3
+            : 0;
+  const share = (s: { tiles: Array<{ terrain: string }> }): number =>
+    s.tiles.filter((t) => H(t.terrain) >= 3).length / s.tiles.length;
+
+  let sum = 0;
+  let cases = 0;
+  for (const style of ['open', 'ridge', 'river-h', 'river-v'] as const) {
+    for (const seed of [31, 77, 1234, 5]) {
+      const off = createMatch({ ...BASE, size: 24, mapStyle: style }, seed);
+      const on = createMatch({ ...BASE, size: 24, mapStyle: style, expansionIds: ['height-terrain'] }, seed);
+      const gain = share(on) - share(off);
+      assert.ok(
+        gain > 0.01,
+        `${style}#${seed} 开了扩展，高地只多了 ${(gain * 100).toFixed(1)} 个点——跟没开差不多`,
+      );
+      sum += gain;
+      cases++;
+    }
+  }
+  const avg = sum / cases;
+  assert.ok(avg > 0.04, `平均只多出 ${(avg * 100).toFixed(1)} 个点的高地（应 > 4）`);
+});
+
+test('随机地貌：开了扩展，抽到的多半是扩展自带的那几种', () => {
+  // 扩展自带的地貌进两次、本体各一次：勾了扩展就是想看那套地势，
+  // 不能一半对局都落回"和没开扩展时一模一样"的本体地图。
+  const baseIds = new Set(MAP_STYLES.map((o) => o.id));
+  const extIds = new Set(
+    mapStylesFor(['height-terrain'])
+      .map((o) => o.id)
+      .filter((id) => !baseIds.has(id)),
+  );
+  assert.equal(extIds.size, 6, '「地形高差」应该带六种地貌');
+
+  let ext = 0;
+  let n = 0;
+  for (let seed = 1; seed <= 40; seed += 1) {
+    const L = generateLayout(20, seed, ['militia'], { style: 'random', expansions: ['height-terrain'] });
+    n += 1;
+    if (extIds.has(L.style)) ext += 1;
+  }
+  assert.ok(ext / n >= 0.6, `四十张随机图里只有 ${ext} 张抽到扩展地貌`);
+
+  // 反过来：没开扩展时，一张都不该抽到
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const L = generateLayout(20, seed, ['militia'], { style: 'random' });
+    assert.ok(!extIds.has(L.style), `没开扩展却抽到了 ${L.style}`);
+  }
+});
+
+test('火山群：火山口在山顶、熔岩在山脚，没有夹在半山腰的坑', () => {
+  // 旧版的阶梯是 平原 → 丘陵 → 台地 → 熔岩 → 火山 → 高山：
+  //   · 最高一档落在 `mountain` 上，火山口反而成了"更高的那座山"；
+  //   · 高度只有 1 层的熔岩夹在 4 层的台地和 5~6 层的山顶之间，
+  //     每座锥子外面都套了一圈三层深的坑。
+  for (const seed of [31, 77, 1234, 5]) {
+    const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, seed);
+    const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
+    let volcano = 0;
+    let lava = 0;
+    let lavaUnderPeak = 0;
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const t = s.tiles[y * s.w + x]!.terrain;
+        if (t === 'volcano') volcano++;
+        if (t !== 'lava') continue;
+        lava++;
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+          if (H(nx, ny) >= 5) lavaUnderPeak++;
+        }
+      }
+    }
+    assert.ok(volcano > 0, `volcanic#${seed} 一格火山口都没有`);
+    assert.ok(lava > 0, `volcanic#${seed} 一格熔岩都没有`);
+    assert.equal(lavaUnderPeak, 0, `volcanic#${seed} 有 ${lavaUnderPeak} 处熔岩贴着山顶/山体`);
   }
 });
 

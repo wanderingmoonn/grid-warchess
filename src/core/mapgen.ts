@@ -1357,10 +1357,19 @@ export function generateLayout(
   if (style === 'random') {
     // 随机袋：河道与山岭各两次（这两种最耐打），其余各一次。
     // 扩展地貌进了 styles 才会进袋——不然"随机"会变成"每局都在打火山"。
+    //
+    // 反过来也要管：**扩展自带的地貌进两次**。它们才是"勾了这个扩展"的理由——
+    // 只进一次的话，本体四种地貌占 6/14，四成对局拿到的图跟没开扩展时
+    // 一模一样（同种子同地貌时甚至逐格相同），等于白勾。
+    // 本体那两条"进两次"的优惠也只留给没开扩展的时候。
+    const baseIds = new Set<string>(MAP_STYLES.map((o) => o.id));
+    const extCount = styles.filter((id) => !baseIds.has(id)).length;
     const bag: Array<Exclude<MapStyle, 'random'>> = [];
     for (const id of styles) {
+      const isExt = !baseIds.has(id);
       bag.push(id);
-      if (id === 'river-h' || id === 'ridge') bag.push(id);
+      if (isExt) bag.push(id);
+      else if (extCount === 0 && (id === 'river-h' || id === 'ridge')) bag.push(id);
     }
     style = bag[Math.floor(rngStyle() * bag.length)] ?? 'river-h';
   }
@@ -1589,9 +1598,27 @@ export function generateLayout(
   // 放在所有开凿/清场之后、出生点之前：这一步只看"最后的地形长什么样"，
   // 前面谁凿了谁填了都不必关心。多个扩展按启用顺序依次过一遍。
   // 关掉扩展这条循环就是空的——本体地图一格都不会变。
-  for (const id of opts.expansions ?? []) {
-    expansionById(id)?.afterTerrain?.(c.g, c.w, c.h);
+  //
+  // 交给它们一张"不许动"的名单：城市本身加城郊那一圈。城门口要能站人、
+  // 要能出兵，补山脚补到那儿就成了"城被台地围死"。
+  const keepAroundCity = new Set<number>();
+  for (const p of [...plan.A, ...plan.B]) {
+    for (let dy = -1; dy <= citySize; dy++) {
+      for (let dx = -1; dx <= citySize; dx++) {
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        keepAroundCity.add(y * w + x);
+      }
+    }
   }
+  for (const id of opts.expansions ?? []) {
+    expansionById(id)?.afterTerrain?.(c.g, c.w, c.h, keepAroundCity);
+  }
+  // 收尾会改地形，而镜像是在这之前做完的。现在这道收尾是"对称进、对称出"
+  // （只看地形、不看 rng），所以这一步其实是空转；留着是因为它很便宜，
+  // 而下一个写 afterTerrain 的人未必守这条——一处不对称，整张镜像图就废了。
+  symmetrize();
 
   // ---- 出生点 ----
   const pool = unitPool.length > 0 ? unitPool : ['infantry'];
