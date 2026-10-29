@@ -27,7 +27,7 @@ import { FANTASY_PACKS } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
-import { CONTEMPORARY_ERA, MODERN_WARFARE } from './modern-warfare-pack.ts';
+import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts';
 // 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
 import { BASE_MAX_ERA, ERAS } from './config.ts';
 
@@ -740,10 +740,10 @@ export const EXPANSIONS: Expansion[] = [
   ...ERA_PACKS,
   CITY_WORKS,
   SEASONS,
-  // 第六时代拆成两包，和"一个时代一队兵"的分法对齐：
-  //   「现代」只开时代（unlockEra: 6），「现代战争」只装兵（requires 前者）。
-  // 时代包排在前：兵种包的前置必须先在场，读配置的人一眼能看出这个先后。
-  CONTEMPORARY_ERA,
+  // 第六时代拆成两包，和"原版给底座、扩展往上加料"的分法对齐：
+  //   「现代」开时代 + 9 个最基本的兵，「现代战争」再加 15 个专精兵（requires 前者）。
+  // 底座排在前：加料包的前置必须先在场，读配置的人一眼能看出这个先后。
+  CONTEMPORARY_BASE_PACK,
   MODERN_WARFARE,
 ];
 

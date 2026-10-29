@@ -920,43 +920,44 @@ check('兵种池按时代分组展示', () => {
 });
 
 check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
-  // 第六时代是两个包：'era-contemporary'「现代」开时代，'pack-contemporary'
-  // 「现代战争」装兵（它 requires 前者）。所以"多出一格"只认时代包。
+  // 第六时代是两个包：'pack-contemporary'「现代」开时代 + 带九个最基本的兵，
+  // 'pack-contemporary-war'「现代战争」在它之上加十五个专精兵（requires 前者）。
+  // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
   const erasNow = () =>
     Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
   assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '不勾包时五格封顶');
 
-  const unitBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
-  assert.ok(unitBox, '开局面板里应有「现代战争」这一项');
-  unitBox.checked = true;
-  unitBox.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
+  assert.ok(warBox, '开局面板里应有「现代战争」这一项');
+  warBox.checked = true;
+  warBox.dispatchEvent(new window.Event('change', { bubbles: true }));
 
-  // 勾兵种包会自动补上它的前置「现代」——所以时代按钮当场多一格。
+  // 勾加料包会自动补上它的前置「现代」——所以时代按钮当场多一格。
   // 这一步顺带守住了"勾了兵却造不出来"那个坑。
   assert.deepEqual(
     erasNow(),
     ['古典', '中世', '火药', '工业', '二战', '现代'],
-    '兵种包会把前置「现代」一起勾上，第六格随之出现',
+    '加料包会把前置「现代」一起勾上，第六格随之出现',
   );
-  const eraBox = doc.querySelector<HTMLInputElement>('[data-exp="era-contemporary"]');
-  assert.ok(eraBox?.checked, '前置「现代」应该被自动勾上');
+  const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(baseBox?.checked, '前置「现代」应该被自动勾上');
 
-  // 单独取消兵种包：时代还在（前置是独立的一包），第六格不该消失
-  const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  // 单独取消加料包：时代还在（底座是独立的一包），第六格不该消失
+  const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
   assert.ok(again);
   again.checked = false;
   again.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(
     erasNow(),
     ['古典', '中世', '火药', '工业', '二战', '现代'],
-    '兵种包取消之后，时代包还开着',
+    '加料包取消之后，底座还开着——这一代仍然打得完一整局',
   );
 
-  // 把时代包也取消：第六格收回去，而且起手时代不能停在一个已经关掉的时代上
-  const eraAgain = doc.querySelector<HTMLInputElement>('[data-exp="era-contemporary"]');
-  assert.ok(eraAgain);
-  eraAgain.checked = false;
-  eraAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
+  // 把底座也取消：第六格收回去，而且起手时代不能停在一个已经关掉的时代上
+  const baseAgain = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(baseAgain);
+  baseAgain.checked = false;
+  baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
 });
 

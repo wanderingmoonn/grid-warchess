@@ -298,7 +298,7 @@ test('默认 16×16，双方各 5 个单位、2 座城市', () => {
 });
 
 test('标准对局：时代和棋盘尺寸是配套的', () => {
-  // 古典 12×12、中世 16×16、火药/工业/现代 20×20
+  // 古典 12×12、中世 16×16、火药/工业/二战 20×20
   assert.equal(eraSize(1), 12);
   assert.equal(eraSize(2), 16);
   assert.equal(eraSize(3), 20);
@@ -6468,8 +6468,11 @@ test('AI 排的序列会承接前面的产出，不是五格同一种兵', () =>
  */
 const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
 
-test('六个时代包都在，且各自的兵种数多于原版同期', () => {
-  assert.equal(packs.length, 6, '应有六个时代包（五个时代 + 「现代战争」）');
+test('七个包都在，且各自的兵种数多于原版同期', () => {
+  // 五个时代 + 第六代拆出来的两个：`pack-contemporary`（底座，开了才有第六时代）
+  // 与 `pack-contemporary-war`（在底座上加料）。第六代在 config.ts 里是空的，
+  // 所以那一代要两个包才凑成"原版一代 + 一代的兵种包"这个形状。
+  assert.equal(packs.length, 7, '应有七个时代包（五个时代 + 第六代的底座与加料）');
   for (const e of packs) {
     const units = e.units ?? [];
     const eras = Array.from(new Set(units.map((u) => u.era)));
@@ -6525,42 +6528,80 @@ test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白�
   }
 });
 
-console.log('\n第六时代 · 现代战争');
+console.log('\n第六时代 · 现代');
 
 /**
- * 「现代战争」做了一件别的包没做的事：它把**时代上限**往后推了一格。
+ * 「现代」做了一件别的包没做的事：它把**时代上限**往后推了一格。
  *
  * 所以这一组测的不是"数值好不好"，而是"那道闸是不是真的装了"：
  * 时代 6 在 ERAS 里，但没开「现代」时城市升不上去、按钮不出现、上帝模式也造不出；
  * 开了之后能升、能造兵，而且升到表底就停。
  *
- * 第六时代拆成两个包，和"一个时代一队兵"的分法对齐：
- *   「现代」`era-contemporary` 只开时代，「现代战争」`pack-contemporary` 只装兵。
- * 所以这里也要分别验：光有兵没有时代，兵是造不出来的。
+ * 第六时代拆成两个包，和"原版给底座、扩展往上加料"的分法对齐：
+ *   「现代」`pack-contemporary`     开时代 + 9 个最基本的兵
+ *   「现代战争」`pack-contemporary-war` 在底座上加 15 个专精兵（requires 前者）
+ * 所以这里也要分别验：上限只在底座那一处，光有加料包既抬不动时代、也造不出兵。
  */
-test('只有「现代」能把时代上限抬到第六级，兵种包自己抬不动', () => {
+test('只有「现代」能把时代上限抬到第六级，「现代战争」自己抬不动', () => {
   assert.equal(BASE_MAX_ERA, 5, '不勾任何扩展时，基础规则停在第五时代');
   assert.equal(eraCeilingFor([]), 5);
   assert.equal(eraCeilingFor(['pack-modern']), 5, '普通时代兵种包不该顺手抬高上限');
-  assert.equal(eraCeilingFor(['era-contemporary']), 6);
-  // 兵种包单独勾选不生效：前置没满足，整包被剔掉（see enabledExpansionIds）
-  assert.equal(eraCeilingFor(['pack-contemporary']), 5, '只勾兵种包，时代还是封在第五级');
-  assert.equal(eraCeilingFor(['era-contemporary', 'pack-contemporary']), 6);
-  assert.equal(eraCeilingFor(['pack-modern', 'era-contemporary']), 6);
+  assert.equal(eraCeilingFor(['pack-contemporary']), 6);
+  // 加料包单独勾选不生效：前置没满足，整包被剔掉（see enabledExpansionIds）
+  assert.equal(eraCeilingFor(['pack-contemporary-war']), 5, '只勾加料包，时代还是封在第五级');
+  assert.equal(eraCeilingFor(['pack-contemporary', 'pack-contemporary-war']), 6);
+  assert.equal(eraCeilingFor(['pack-modern', 'pack-contemporary']), 6);
 
-  const eraPack = expansionById('era-contemporary');
-  assert.ok(eraPack, '「现代」必须注册在 EXPANSIONS 里');
-  assert.equal(eraPack.unlockEra, 6, '开关就是这一条字段');
-  assert.equal(eraPack.units, undefined, '「现代」不带兵种——兵在「现代战争」里');
+  const base = expansionById('pack-contemporary');
+  assert.ok(base, '「现代」必须注册在 EXPANSIONS 里');
+  assert.equal(base.unlockEra, 6, '开关就是这一条字段');
+  assert.equal(base.scale, 'large', '带一整套底座兵的包归大型，单独成册');
+  assert.equal((base.units ?? []).length, 9, '底座就是这一代最基本的九个兵');
 
-  const unitPack = expansionById('pack-contemporary');
-  assert.ok(unitPack, '「现代战争」必须注册在 EXPANSIONS 里');
-  assert.equal(unitPack.scale, 'large', '带一整套兵的包归大型，单独成册');
-  assert.ok(unitPack.requires?.includes('era-contemporary'), '兵种包要挂在前置上');
-  assert.equal(unitPack.unlockEra, undefined, '时代开关只有一处，别写两份');
-  assert.ok((unitPack.units ?? []).every((u) => u.era === 6), '这个包的兵全是第六代');
+  const war = expansionById('pack-contemporary-war');
+  assert.ok(war, '「现代战争」必须注册在 EXPANSIONS 里');
+  assert.equal(war.scale, 'large', '带一整套兵的包归大型，单独成册');
+  assert.ok(war.requires?.includes('pack-contemporary'), '加料包要挂在底座上');
+  assert.equal(war.unlockEra, undefined, '时代开关只有一处，别写两份');
+  assert.equal((war.units ?? []).length, 15, '加料包该有十五个专精兵');
+  assert.ok((war.units ?? []).every((u) => u.era === 6), '这个包的兵全是第六代');
+  assert.ok((base.units ?? []).every((u) => u.era === 6), '底座的兵也全是第六代');
   // 写超了也不许越过表长，否则 eraDef 会 clamp，升级成了"花一千金买同一座城"
-  assert.equal(eraCeilingFor(['era-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
+  assert.equal(eraCeilingFor(['pack-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
+});
+
+test('只开「现代」也能打完一整局：九个基本的兵一个不缺', () => {
+  // 这条守的是"底座必须自洽"。用户要的就是"现代扩展也和前几个时代一样有
+  // 几个最基本的兵"——那么只勾它、不勾「现代战争」，这一代也得是一个完整的代际：
+  // 打得动（战斗兵）、养得起（经济）、盖得出（工程兵 + 建筑）、造得出兵（军营）。
+  const base = expansionById('pack-contemporary');
+  assert.ok(base);
+  const units = base.units ?? [];
+  const byCategory = (c: string) => units.filter((u) => u.category === c);
+  const ids = new Set(units.map((u) => u.id));
+
+  assert.equal(byCategory('combat').length, 4, '战斗兵：步兵班、坦克、榴弹炮、装甲侦察车');
+  assert.equal(byCategory('economy').length, 1, '经济：物流中心');
+  assert.equal(byCategory('builder').length, 1, '工程：工程兵');
+  assert.equal(byCategory('building').length, 3, '建筑：混凝土碉堡、产业园、联合作战中心');
+
+  // 军营要在：没有它，第六时代的兵只能靠开局白送（而 era 6 不会被白送）
+  const camp = units.find((u) => u.barracks === true);
+  assert.ok(camp, '底座得带一座军营，否则第六代兵根本造不出来');
+  assert.equal(camp.id, 'camp6', '军营链条的第六档');
+
+  // 工程兵要盖得出这一代的全部建筑，外加桥——少一样这一代就是残的
+  const sapper = units.find((u) => u.category === 'builder');
+  assert.ok(sapper?.builds);
+  for (const id of ['ct_pillbox', 'ct_industrial', 'camp6']) {
+    assert.ok(sapper.builds.includes(id), `工程兵该盖得出 ${id}`);
+  }
+  assert.ok(sapper.builds.includes('bridge3'), '第六代该盖得出最高一级的桥');
+
+  // 加料包的兵不能混进底座：两个包各管各的，否则"只开底座"就不成立了
+  for (const u of expansionById('pack-contemporary-war')?.units ?? []) {
+    assert.ok(!ids.has(u.id), `${u.id} 不该同时出现在底座里`);
+  }
 });
 
 test('不开「现代」：城市升到二战就封顶，拒绝理由要点出那个包', () => {
@@ -6580,7 +6621,7 @@ test('不开「现代」：城市升到二战就封顶，拒绝理由要点出�
 });
 
 test('开了「现代」和「现代战争」：能升到第六时代，并且造得出第六代兵', () => {
-  const ids = ['era-contemporary', 'pack-contemporary', 'pack-modern'];
+  const ids = ['pack-contemporary', 'pack-contemporary-war', 'pack-modern'];
   // 先看第五时代的城能不能造六代兵：不能（招募门槛按城市时代判）
   const before = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
   const oldCity = citiesOf(before, 'A')[0];
@@ -6645,7 +6686,7 @@ test('对空：防空导弹打飞机 ×1.6，打地面照旧', () => {
   // 飞行单位绕开一切地形，而地面近战**够不着头顶**（strikeDistance 给地面打空中 +1）。
   // 这是空中单位的卖点，但必须有个解法，否则就是"谁有飞机谁赢"。
   // 解法就是防空导弹：它只对飞行目标加成，对地面照旧。
-  const ids = ['era-contemporary', 'pack-contemporary', 'pack-modern'];
+  const ids = ['pack-contemporary', 'pack-contemporary-war', 'pack-modern'];
   const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9904);
   s.units = [];
   for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
@@ -6696,7 +6737,7 @@ test('对空：防空导弹打飞机 ×1.6，打地面照旧', () => {
 
 test('地面近战够不着头顶的直升机', () => {
   // 防空能力之所以必须存在：巡 1 的步兵打不到贴着它飞的直升机（strikeDistance +1）。
-  const ids = ['era-contemporary', 'pack-contemporary'];
+  const ids = ['pack-contemporary', 'pack-contemporary-war'];
   const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9905);
   s.units = [];
   for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';

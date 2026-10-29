@@ -1284,7 +1284,7 @@ export const ERA_PACKS: Expansion[] = [
 
     scale: 'large',
     // 名字从「现代合成兵」改成「二战合成兵」：第五时代本身已经改叫「二战」，
-    // 而真正的第六时代叫「现代」（见 modern-warfare-pack.ts）。
+    // 而真正的第六时代叫「现代」（见 contemporary-packs.ts）。
     // 一个叫"现代"的二战包和一个叫"现代"的现代包，光看名字分不出谁是谁。
     // id 不动（存档里存的是 id），只改显示名。
     name: '二战合成兵',
