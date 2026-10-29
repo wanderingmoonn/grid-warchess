@@ -45,6 +45,7 @@ import { aurasOf, canBeHealed, hasAbility, hasFlag, hooksFor, stagedFor } from '
 import {
   CITY,
   CONFIG,
+  ERAS,
   ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
@@ -53,7 +54,7 @@ import {
   nextUpgradeCost,
   passable,
 } from './config.ts';
-import { LAST_STAND_BONUS, activeExpansions } from './expansions.ts';
+import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import {
   GOLD,
   addRes,
@@ -1536,12 +1537,16 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
 
 /** 射程内的敌方单位 */
 /**
- * 这一下能不能打到：射程够，而且"拆桥必须贴到桥头"。
+ * 这一下能不能打到：射程够就行。
  *
- * 桥只是两格水上的一块板，隔着大半条河用弓箭把它点着，听着就不像话。
- * 更要命的是它的后果：谁先架桥谁先挨打，两边各架七八座、桥头来回换，
- * 打满 200 回合谁也过不去（模拟里六成的"地形隔断"磨局都是这么来的）。
- * 改成必须站到桥边拆，桥就成了"抢桥头"的争夺点——守方要靠人挡，不是靠射程。
+ * 桥曾经是个例外——"拆桥必须贴到桥头"（隔着河放箭打不塌）。那条规则是为了治
+ * 一个真实的毛病：两边各架七八座、隔着河互相对射桥头，打满 200 回合谁也过不去。
+ * 但一刀切也治出了新毛病：远程连"顺手拆一座没人守的桥"都做不到，
+ * 而近战要贴到桥头才能动手，实际打起来又常常够不着。
+ *
+ * 现在的做法是**准许打、但打折**（见 computeDamage 的收尾）：射程够就能朝桥开火，
+ * 只是一发只算一半；贴着桥头打才是满伤。于是"隔着河拆桥"变成一个又慢又费的
+ * 消耗动作——想真的断掉这条路，还是得把部队压到桥边。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
@@ -1554,7 +1559,6 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   if (d > range) return false;
   // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
   if (real === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
-  if (utype(s, target.type).bridges && d > 1) return false;
   return true;
 }
 
@@ -1735,6 +1739,15 @@ export function computeDamage(
 
   // 真实伤害阶段
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
+
+  // ── 拆桥折扣 ──
+  // 放在最后，是因为它说的是"这一发落在桥上的效果"，不是"这个兵有多强"：
+  // 属性倍率、护壁、反击折减都算完之后再对折，才不会被别的倍率抵消掉。
+  // 判定用 strikeDistance（一格 = 贴着桥头打），隔一格以上才算远程，一发放一半。
+  // 见 canStrike 的说明：准许隔河开火，但不许隔着河把桥拆干净。
+  if (dt.bridges && ctx.distance > 1) {
+    ctx.damage = Math.round(ctx.damage * CONFIG.bridgeRangedDamageRatio);
+  }
 
   return Math.max(0, Math.round(ctx.damage));
 }
@@ -2097,8 +2110,14 @@ export function cityRegenOf(s: GameState, city: City): number {
  *
  * 单独导出来，是因为界面、AI、规则三处都要问同一个问题，
  * 而扩展（血战）会让这个价随时间变——各算一遍一定会对不上。
+ *
+ * **封顶判定在钩子之前**：能不能升是规则（`eraCeilingOf`，取决于开没开
+ * 「现代战争」），多少钱是扩展的事。反过来的话，「血战」那种
+ * "照旧价目表收钱"的钩子会在封顶之后把 null 又变回一个价格，
+ * 玩家就会看见一个点得动、点了却没反应的按钮。
  */
 export function upgradeCostOf(s: GameState, city: City): number | null {
+  if (city.era >= eraCeilingOf(s)) return null;
   let cost = nextUpgradeCost(city.era);
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyUpgradeCost) {
@@ -2258,7 +2277,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId);
+        return doAttack(next, action.unitId, action.targetId, action.spillTo);
       case 'SIEGE':
         return doSiege(next, action.unitId, action.cityId);
       case 'RECRUIT':
@@ -2382,7 +2401,87 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   return { ok: true, state: s };
 }
 
-function doAttack(s: GameState, unitId: string, targetId: string): ActionResult {
+interface StrikesTarget {
+  unit: Unit;
+  dmg: number;
+}
+
+interface StrikeSummary {
+  /** 真正打出去的段数（目标提前死光时小于 burst） */
+  hits: number;
+  /** 所有段加起来的伤害 */
+  total: number;
+  /** 每一段打了谁、多少伤害，按出手顺序；死亡结算与战报都读它 */
+  targets: StrikesTarget[];
+}
+
+/**
+ * 多段攻击的结算：把 burst 段拆成依次执行的独立一击。
+ *
+ * 三件事必须和重构前逐点一致，改了就等于改数值：
+ *   1. 每段单独调用 computeDamage——护甲、地形、属性每次都重算（多段打重甲吃亏就靠这个）；
+ *   2. 主目标还活着就一直打它，所以"3 段全打一个人"的总伤害与以前完全相同；
+ *   3. 没有任何可打的目标就停手，剩下的段作废（不会凭空打空气）。
+ *
+ * 新东西只有一条：主目标倒下之后，段数可以按 spillTo 的顺序转给别人。
+ * spillTo 是**候选队列**：每个目标会被连续打到倒下，才轮到下一个；
+ * 死了、够不着、是友军的会被跳过，队列空了就把剩下的段作废——
+ * 界面上点错一个人只会浪费段数，不会让整次攻击变成非法动作。
+ */
+function resolveStrikes(
+  s: GameState,
+  attacker: Unit,
+  primary: Unit,
+  burst: number,
+  spillTo?: readonly string[],
+): StrikeSummary {
+  const out: StrikeSummary = { hits: 0, total: 0, targets: [] };
+
+  // 候选队列：去重、去掉主目标与友军，保持调用方给定的先后顺序
+  const queue: Unit[] = [];
+  for (const id of spillTo ?? []) {
+    const u = unitById(s, id);
+    if (!u || u.id === primary.id || u.owner === attacker.owner) continue;
+    if (queue.some((x) => x.id === u.id)) continue;
+    queue.push(u);
+  }
+
+  let left = burst;
+  let q = 0;
+  while (left > 0) {
+    let target: Unit | undefined;
+    if (primary.hp > 0 && canStrike(s, attacker, primary)) {
+      target = primary;
+    } else {
+      while (q < queue.length) {
+        const c = queue[q];
+        if (c && c.hp > 0 && canStrike(s, attacker, c)) {
+          target = c;
+          break;
+        }
+        q += 1;
+      }
+    }
+    if (!target) break;
+
+    const one = computeDamage(s, attacker, target);
+    target.hp -= one;
+    out.hits += 1;
+    out.total += one;
+    out.targets.push({ unit: target, dmg: one });
+    left -= 1;
+    // 这个溢出目标已经被打倒了，下一段换队列里的下一个
+    if (target !== primary && target.hp <= 0) q += 1;
+  }
+  return out;
+}
+
+function doAttack(
+  s: GameState,
+  unitId: string,
+  targetId: string,
+  spillTo?: readonly string[],
+): ActionResult {
   const attacker = unitById(s, unitId);
   const defender = unitById(s, targetId);
   if (!attacker) return { ok: false, reason: '单位不存在' };
@@ -2401,8 +2500,10 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   if (!canStrike(s, attacker, defender)) {
     return {
       ok: false,
+      // 桥现在不再是"必须贴到桥头"：这一条只在射程真的不够时才会走到。
+      // 隔河能打、但只算半伤，见 computeDamage 收尾的拆桥折扣。
       reason: utype(s, defender.type).bridges
-        ? '拆桥要贴到桥头（隔河打不塌一座桥）'
+        ? '射程不够，还够不着这座桥'
         : '目标超出射程',
     };
   }
@@ -2495,8 +2596,8 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
-      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
+      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${spillText}${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
+      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${spillText}${splashText}${pushText}`,
   );
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
@@ -2552,6 +2653,19 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
         pushLog(s, attacker.owner, `${atName} 斩杀得手，本回合还能再走一次`);
       }
     }
+  }
+
+  // 溢出段打死的也要走同一套善后：战报 + 沉船 + 击杀钩子。
+  // 和主目标那一段的区别只有一个：不给"收割"（刺客大师的还移动）——
+  // 那条能力写的是"亲手斩掉"，指的是这一击的主目标，不该因为顺手扫死一个杂兵就触发。
+  for (const st of strikes.targets) {
+    if (st.unit.id === defender.id) continue;
+    if (st.unit.hp > 0) continue;
+    if (!s.units.some((x) => x.id === st.unit.id)) continue;
+    s.units = s.units.filter((x) => x.id !== st.unit.id);
+    pushLog(s, attacker.owner, `${utype(s, st.unit.type).name} 被连击溢出消灭`, true);
+    drownCargo(s, st.unit);
+    fireKilled(s, st.unit, attacker);
   }
 
   // 溅射打死的也要走同一套善后：战报 + 沉船 + 击杀钩子
@@ -3042,7 +3156,19 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
   if (city.owner !== s.current) return { ok: false, reason: '只能升级自己的城市' };
 
   const cost = upgradeCostOf(s, city);
-  if (cost === null) return { ok: false, reason: '已经是最高时代' };
+  if (cost === null) {
+    // 封顶有两种，说法不能一样：真到表底、和"这一局没开那一层"。
+    // 后者要指出路（哪个包能打开），不然玩家会以为科技线到此为止。
+    const cap = eraCeilingOf(s);
+    const locked = lockedEraPacks(s.config.expansionIds);
+    if (cap < ERAS.length && locked.length > 0) {
+      return {
+        ok: false,
+        reason: `已经是最高时代（没开${locked.map((n) => `「${n}」`).join('、')}，科技线到${eraDef(cap).name}封顶）`,
+      };
+    }
+    return { ok: false, reason: '已经是最高时代' };
+  }
 
   const player = s.players[s.current];
   if (player.gold < cost) return { ok: false, reason: `金币不足（需要 ${cost}）` };

@@ -2834,3 +2834,10 @@ a.btn {
 .report-howto {
   color: #6b5c33;
 }
+
+/* 连击溢出目标：橙色虚线框。和"可攻击"的红框区分开——
+   一个是"我能打他"，一个是"剩下的段归他"。 */
+.unit.spill {
+  outline: 2px dashed #f59e0b;
+  outline-offset: 1px;
+}

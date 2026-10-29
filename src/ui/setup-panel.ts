@@ -5,9 +5,15 @@
  * 面板只负责收集选择，真正的校验和构建交给 createMatch。
  */
 
-import { ERAS } from '../core/config.ts';
+import { ERAS, eraDef } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
-import { EXPANSIONS, availableExpansions, expansionById } from '../core/expansions.ts';
+import {
+  EXPANSIONS,
+  availableExpansions,
+  eraCeilingFor,
+  expansionById,
+  lockedEraPacks,
+} from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
 import {
   BOARD_SIZES,
@@ -81,6 +87,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     };
     let currentSeed = seed;
 
+    // 上一次的选择（存下来的 config）可能带着"第六时代"，而这一次的扩展勾选
+    // 里没有「现代战争」——先夹一次，否则面板上五颗时代按钮没有一个高亮，
+    // 玩家看不出自己到底会从哪一级开局。
+    const ceilingAtOpen = eraCeilingFor(config.expansionIds);
+    if (config.startEra > ceilingAtOpen) config.startEra = ceilingAtOpen;
+
     const mask = document.createElement('div');
     mask.className = 'modal-mask';
 
@@ -126,7 +138,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           ? selectorFor(prevFocusEl)
           : null;
 
-      const eraChips = ERAS.map(
+      // 时代按钮跟着"这一局能升到第几级"走。
+      //
+      // 没勾「现代战争」时这里只有五格——第六时代在 ERAS 里，但基础规则升不上去
+      // （见 config.ts 的 BASE_MAX_ERA）。多摆一格的结果是：玩家从第六时代开局，
+      // 城里一件六代兵都造不出来，还得自己猜为什么。
+      //
+      // 天花板每次重绘现算，所以勾上/取消那个包，按钮会当场增减，不用重启面板。
+      const ceiling = eraCeilingFor(config.expansionIds);
+      const eras = ERAS.filter((e) => e.level <= ceiling);
+      const eraChips = eras.map(
         (e) =>
           `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
       ).join('');
@@ -147,6 +168,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         extraStyles > 0
           ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
           : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
+
+      // 时代那一栏的提示要指出"还能往上开"：只写"从哪一级开始"的话，
+      // 没勾过时代扩展的人根本不知道这游戏还有第六时代。
+      // 包名从 lockedEraPacks 取，别在文案里写死——以后再加一个抬上限的包，
+      // 这里自动就把名字念出来了。
+      const lockedPacks = lockedEraPacks(config.expansionIds);
+      const eraHint =
+        ceiling < ERAS.length && lockedPacks.length > 0
+          ? `从哪一级开始；越高一局越短。这一局科技线到${eraDef(ceiling).name}封顶——勾上「${lockedPacks.join('」「')}」可升到${eraDef(ERAS.length).name}`
+          : '从哪一级开始；越高一局越短';
 
       const symChips = MAP_SYMMETRIES.map(
         (sy) =>
@@ -169,9 +200,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
       ).join('');
 
-      // 兵种按时代分组展示：一眼看出哪些是开局就有、哪些要升级城市才能造
+      // 兵种按时代分组展示：一眼看出哪些是开局就有、哪些要升级城市才能造。
+      // 只列到天花板：第六代的兵在没开「现代战争」的局里永远不会出现在兵表上，
+      // 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
       const catalog = allAvailableUnits();
-      const unitGroups = ERAS.map((era) => {
+      const unitGroups = eras.map((era) => {
         const units = Object.values(catalog).filter((u) => u.era === era.level);
         if (units.length === 0) return '';
         const chips = units
@@ -251,7 +284,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                起始时代 <span class="field-hint">从哪一级开始；越高一局越短</span>
+                起始时代 <span class="field-hint">${eraHint}</span>
               </div>
               <div class="chip-row">${eraChips}</div>
             </section>
@@ -491,6 +524,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
       // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
       const stylesBefore = mapStylesFor(config.expansionIds).length;
+      // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「现代」这一格。
+      const erasBefore = ERAS.filter((e) => e.level <= eraCeilingFor(config.expansionIds)).length;
       if (input.checked) {
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
         // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
@@ -512,8 +547,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (!available.some((st) => st.id === (config.mapStyle ?? 'random'))) {
         config.mapStyle = 'random';
       }
-      // 选项数变了就重绘（地貌 chip 要增删）。其余情况只改边框，避免 checkbox 闪。
-      if (available.length !== stylesBefore) {
+      // 起手时代也不能停在一个刚被关掉的时代上：关掉「现代战争」之后，
+      // startEra 若还是 6，开局会静默退回第五时代，而按钮上没有任何东西
+      // 显示这件事——玩家只会觉得"我明明选了现代"。
+      const ceilingNow = eraCeilingFor(config.expansionIds);
+      if (config.startEra > ceilingNow) config.startEra = ceilingNow;
+      const erasAfter = ERAS.filter((e) => e.level <= ceilingNow).length;
+      // 选项数变了就重绘（地貌 chip 与时代按钮要增删）。其余情况只改边框，避免 checkbox 闪。
+      if (available.length !== stylesBefore || erasAfter !== erasBefore) {
         paint();
         return;
       }

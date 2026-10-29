@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方格战棋 · 时代兵备</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 15.5px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 13.5px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+  table.wide { font-size: 12.5px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12.5px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12.5px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#g-intro">1. 这一册怎么读</a>
+    <a href="#g-units">2. 兵种总表</a>
+    <a class="sub" href="#p-pack-antiquity">古典会战</a>
+    <a class="sub" href="#p-pack-medieval">中世兵备</a>
+    <a class="sub" href="#p-pack-gunpowder">火药列国</a>
+    <a class="sub" href="#p-pack-industry">工业绞肉机</a>
+    <a class="sub" href="#p-pack-modern">二战合成兵</a>
+    <a class="sub" href="#p-pack-contemporary">现代</a>
+    <a class="sub" href="#p-pack-contemporary-war">现代战争</a>
+    <a href="#g-notes">3. 各包要点</a>
+    <a href="#g-terms">4. 机制词条</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>方格战棋 · 时代兵备</h1>
+      <p>七个包的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。</p>
+    </header>
+
+
+    <section id="g-intro">
+      <h2><span class="sec-num">01</span>这一册怎么读</h2>
+      <p>这一册收了<b>七个包</b>。前五个是"一个时代一队兵"：古典、中世、火药、工业、二战，
+        各补 12~17 个兵；第六时代在基础规则里是空的，所以它按原版的样子拆成<b>底座 + 加料</b>两包——
+        「现代」带这一代最基本的九个兵（步兵班、坦克、榴弹炮、装甲侦察车、物流中心、工程兵、
+        混凝土碉堡、产业园、联合作战中心），顺便把科技线开到第六级；
+        「现代战争」在它之上再加十五个专精兵。除「现代战争」依赖「现代」之外，其余各包互不依赖，
+        可以全勾，也可以只勾你现在这个时代那一本——勾了以后生产面板里会多出这批兵，原版兵一个不少。</p>
+      <p>这些包放在一册，是为了回答一个原来查不了的问题：<b>同一档价钱，这几个时代各给了什么解法</b>。
+        总表按时代排序，一眼能看出"古典用方阵顶、工业用射程压、二战用装甲推、现代用射程差清"这条路子。</p>
+      <p>为什么第六代要两个包：原版每一代都是"<b>基础规则给几个最基本的兵，时代兵种包再加一队专精兵</b>"
+        （原版二战那七个 + 「二战合成兵」那十四个）。第六代在基础规则里是空的，照同样的形状补出来，
+        玩家就不用记两套规矩：只勾「现代」，它是一个能自己打完一整局的完整代际；再勾「现代战争」，
+        这一代才多出直升机、无人机、反坦克导弹、防空导弹这些"专精解法"。
+        「现代战争」写了 <code>requires: ['pack-contemporary']</code>——单独勾它不会生效，
+        开局面板会把「现代」一起补上（一个"勾了却造不出来"的兵种包，在玩家眼里就是坏了）。</p>
+      
+    <table class="overview">
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <tbody>
+        <tr><td class="name">古典会战</td><td class="num">15</td><td class="num">1</td><td class="nowrap">—</td><td>希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。</td></tr><tr><td class="name">中世兵备</td><td class="num">12</td><td class="num">2</td><td class="nowrap">—</td><td>重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。</td></tr><tr><td class="name">火药列国</td><td class="num">14</td><td class="num">3</td><td class="nowrap">—</td><td>线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。</td></tr><tr><td class="name">工业绞肉机</td><td class="num">14</td><td class="num">4</td><td class="nowrap">—</td><td>堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。</td></tr><tr><td class="name">二战合成兵</td><td class="num">14</td><td class="num">5</td><td class="nowrap">—</td><td>伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。</td></tr><tr><td class="name">现代</td><td class="num">9</td><td class="num">6</td><td class="nowrap">—</td><td>第六时代「现代」的底座：解锁这一级科技（升级费 1080，城市耐久 96、护甲 14、收入 62），并给出这一代最基本的 9 个兵——步兵班、坦克、榴弹炮、装甲侦察车、物流中心、工程兵、混凝土碉堡、产业园与联合作战中心。想要这一代的专精兵，再勾「现代战争」。</td></tr><tr><td class="name">现代战争</td><td class="num">15</td><td class="num">6</td><td class="nowrap">现代</td><td>第六代的专精兵：机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰，外加复合装甲墙、加固地堡、前进指挥所、物流集团与工程兵团。需要先开「现代」。</td></tr>
+      </tbody>
+    </table>
+      <dl class="kv">
+        <dt>兵种总数</dt><dd>93 个（7 个包），覆盖时代 1、2、3、4、5、6</dd>
+        <dt>怎么启用</dt><dd>新对局面板里勾选，效果叠加；规则以 id 记进存档，换机器打开不变</dd>
+        <dt>兵种在哪</dt><dd>生产面板里带包徽标（名字旁的小圆标写着它来自哪个包），搜索框敲包名能过滤；
+          产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，和原版兵同一把尺子</dd>
+        <dt>怎么查</dt><dd>总表里带<b>虚线下划线</b>的词都能悬停看一句说明，点一下跳到本册末尾的词条</dd>
+      </dl>
+    </section>
+
+    <section id="g-units">
+      <h2><span class="sec-num">02</span>兵种总表</h2>
+      <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
+        跨段比较时请对照"来源"那一列。</p>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-pack-antiquity"><td colspan="12">古典会战 · 15 个</td></tr><tr data-unit="anc_slinger"><td class="name">投石兵</td><td class="glyph">石</td><td class="src">古典会战</td><td class="num">1</td><td class="num">30</td><td class="num">9</td><td class="num">0</td><td class="num">18</td><td class="num">2</td><td class="num">3</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="anc_javelineer"><td class="name">标枪兵</td><td class="glyph">标</td><td class="src">古典会战</td><td class="num">1</td><td class="num">32</td><td class="num">12</td><td class="num">1</td><td class="num">20</td><td class="num">2</td><td class="num">2</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="anc_skirmisher"><td class="name">轻盾兵</td><td class="glyph">轻</td><td class="src">古典会战</td><td class="num">1</td><td class="num">32</td><td class="num">11</td><td class="num">1</td><td class="num">24</td><td class="num">4</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td></tr><tr data-unit="anc_axeman"><td class="name">战斧手</td><td class="glyph">斧</td><td class="src">古典会战</td><td class="num">1</td><td class="num">34</td><td class="num">19</td><td class="num">1</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td></tr><tr data-unit="anc_palisade"><td class="name">栅栏</td><td class="glyph">栅</td><td class="src">古典会战</td><td class="num">1</td><td class="num">40</td><td class="num">0</td><td class="num">3</td><td class="num">45</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="anc_hoplite"><td class="name">重装步兵</td><td class="glyph">重</td><td class="src">古典会战</td><td class="num">1</td><td class="num">42</td><td class="num">14</td><td class="num">5</td><td class="num">40</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="anc_ram"><td class="name">攻城槌</td><td class="glyph">槌</td><td class="src">古典会战</td><td class="num">1</td><td class="num">46</td><td class="num">14</td><td class="num">5</td><td class="num">55</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr data-unit="anc_ballista"><td class="name">弩炮</td><td class="glyph">弩</td><td class="src">古典会战</td><td class="num">1</td><td class="num">48</td><td class="num">15</td><td class="num">1</td><td class="num">22</td><td class="num">1</td><td class="num">4</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="anc_legionary"><td class="name">军团兵</td><td class="glyph">团</td><td class="src">古典会战</td><td class="num">1</td><td class="num">49</td><td class="num">17</td><td class="num">4</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a> · <a class="ref" href="#t-ab-aura-command">指挥光环</a></td></tr><tr data-unit="anc_chariot"><td class="name">战车</td><td class="glyph">车</td><td class="src">古典会战</td><td class="num">1</td><td class="num">52</td><td class="num">16</td><td class="num">2</td><td class="num">30</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="anc_elephant"><td class="name">战象</td><td class="glyph">象</td><td class="src">古典会战</td><td class="num">1</td><td class="num">54</td><td class="num">22</td><td class="num">4</td><td class="num">50</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-kamikaze">自爆</a></td></tr><tr data-unit="anc_engineer"><td class="name">工匠</td><td class="glyph">匠</td><td class="src">古典会战</td><td class="num">1</td><td class="num">55</td><td class="num">5</td><td class="num">2</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 5 种建筑</a></td></tr><tr data-unit="anc_trireme"><td class="name">三层桨战船</td><td class="glyph">桨</td><td class="src">古典会战</td><td class="num">1</td><td class="num">64</td><td class="num">14</td><td class="num">3</td><td class="num">42</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="anc_rammed_wall"><td class="name">夯土城墙</td><td class="glyph">垣</td><td class="src">古典会战</td><td class="num">1</td><td class="num">70</td><td class="num">0</td><td class="num">5</td><td class="num">75</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="anc_watchtower"><td class="name">瞭望塔</td><td class="glyph">望</td><td class="src">古典会战</td><td class="num">1</td><td class="num">85</td><td class="num">10</td><td class="num">4</td><td class="num">32</td><td class="num">—</td><td class="num">4</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr class="grp" id="p-pack-medieval"><td colspan="12">中世兵备 · 12 个</td></tr><tr data-unit="med_pikeman"><td class="name">瑞士长矛兵</td><td class="glyph">矛</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">74</td><td class="num">19</td><td class="num">4</td><td class="num">48</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="med_manatarms"><td class="name">重装军士</td><td class="glyph">士</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">78</td><td class="num">19</td><td class="num">6</td><td class="num">48</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="med_doppelsoldner"><td class="name">双手剑士</td><td class="glyph">剑</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">88</td><td class="num">27</td><td class="num">3</td><td class="num">42</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits">—</td></tr><tr data-unit="med_wall"><td class="name">城墙</td><td class="glyph">墙</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">90</td><td class="num">0</td><td class="num">8</td><td class="num">80</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="med_sapper"><td class="name">掘城兵</td><td class="glyph">掘</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">95</td><td class="num">4</td><td class="num">2</td><td class="num">22</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 4 种建筑</a></td></tr><tr data-unit="med_cog"><td class="name">齿轮帆船</td><td class="glyph">帆</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">98</td><td class="num">16</td><td class="num">4</td><td class="num">55</td><td class="num">4</td><td class="num">2</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="med_siegetower"><td class="name">攻城塔</td><td class="glyph">塔</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">100</td><td class="num">8</td><td class="num">7</td><td class="num">90</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr data-unit="med_crossbow"><td class="name">弩手</td><td class="glyph">弩</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">110</td><td class="num">14</td><td class="num">1</td><td class="num">24</td><td class="num">2</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="med_horsearcher"><td class="name">骑射手</td><td class="glyph">射</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">125</td><td class="num">13</td><td class="num">2</td><td class="num">30</td><td class="num">5</td><td class="num">3</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-first-strike">先手</a></td></tr><tr data-unit="med_trebuchet"><td class="name">投石机</td><td class="glyph">投</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">128</td><td class="num">26</td><td class="num">2</td><td class="num">34</td><td class="num">1</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="med_wagon"><td class="name">战车堡</td><td class="glyph">堡</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">130</td><td class="num">14</td><td class="num">8</td><td class="num">60</td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="med_donjon"><td class="name">主楼</td><td class="glyph">楼</td><td class="src">中世兵备</td><td class="num">2</td><td class="num">160</td><td class="num">16</td><td class="num">9</td><td class="num">60</td><td class="num">—</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr class="grp" id="p-pack-gunpowder"><td colspan="12">火药列国 · 14 个</td></tr><tr data-unit="gp_chevaux"><td class="name">防马桩</td><td class="glyph">桩</td><td class="src">火药列国</td><td class="num">3</td><td class="num">70</td><td class="num">0</td><td class="num">6</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="gp_earthwork"><td class="name">土垒胸墙</td><td class="glyph">垒</td><td class="src">火药列国</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">10</td><td class="num">110</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="gp_sapper"><td class="name">坑道工兵</td><td class="glyph">坑</td><td class="src">火药列国</td><td class="num">3</td><td class="num">135</td><td class="num">5</td><td class="num">3</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 5 种建筑</a></td></tr><tr data-unit="gp_sharpshooter"><td class="name">猎兵</td><td class="glyph">猎</td><td class="src">火药列国</td><td class="num">3</td><td class="num">140</td><td class="num">19</td><td class="num">1</td><td class="num">24</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td></tr><tr data-unit="gp_quartermaster"><td class="name">军需官</td><td class="glyph">需</td><td class="src">火药列国</td><td class="num">3</td><td class="num">150</td><td class="num">4</td><td class="num">2</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 城市 +16</a></td></tr><tr data-unit="gp_rocket"><td class="name">康格里夫火箭</td><td class="glyph">箭</td><td class="src">火药列国</td><td class="num">3</td><td class="num">150</td><td class="num">24</td><td class="num">1</td><td class="num">28</td><td class="num">2</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="gp_lineinfantry"><td class="name">线列步兵</td><td class="glyph">列</td><td class="src">火药列国</td><td class="num">3</td><td class="num">150</td><td class="num">22</td><td class="num">3</td><td class="num">40</td><td class="num">2</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-shield-wall">盾墙</a></td></tr><tr data-unit="gp_dragoon"><td class="name">龙骑兵</td><td class="glyph">龙</td><td class="src">火药列国</td><td class="num">3</td><td class="num">155</td><td class="num">22</td><td class="num">3</td><td class="num">38</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="gp_siegecannon"><td class="name">攻城加农炮</td><td class="glyph">加</td><td class="src">火药列国</td><td class="num">3</td><td class="num">160</td><td class="num">30</td><td class="num">3</td><td class="num">36</td><td class="num">1</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="gp_grenadier"><td class="name">掷弹兵</td><td class="glyph">弹</td><td class="src">火药列国</td><td class="num">3</td><td class="num">165</td><td class="num">26</td><td class="num">4</td><td class="num">44</td><td class="num">2</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="gp_culverin"><td class="name">长管炮</td><td class="glyph">长</td><td class="src">火药列国</td><td class="num">3</td><td class="num">170</td><td class="num">28</td><td class="num">3</td><td class="num">34</td><td class="num">1</td><td class="num">6</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr data-unit="gp_cuirassier"><td class="name">胸甲骑兵</td><td class="glyph">胸</td><td class="src">火药列国</td><td class="num">3</td><td class="num">185</td><td class="num">30</td><td class="num">7</td><td class="num">46</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="gp_bastion"><td class="name">棱堡</td><td class="glyph">棱</td><td class="src">火药列国</td><td class="num">3</td><td class="num">200</td><td class="num">24</td><td class="num">11</td><td class="num">70</td><td class="num">—</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="gp_shipofline"><td class="name">风帆战列舰</td><td class="glyph">战</td><td class="src">火药列国</td><td class="num">3</td><td class="num">205</td><td class="num">34</td><td class="num">8</td><td class="num">80</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="traits">—</td></tr><tr class="grp" id="p-pack-industry"><td colspan="12">工业绞肉机 · 14 个</td></tr><tr data-unit="ind_wire"><td class="name">铁丝网</td><td class="glyph">网</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">60</td><td class="num">4</td><td class="num">4</td><td class="num">40</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ind_concrete"><td class="name">混凝土胸墙</td><td class="glyph">砼</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">150</td><td class="num">0</td><td class="num">14</td><td class="num">150</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ind_trenchraider"><td class="name">堑壕突击队</td><td class="glyph">突</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">195</td><td class="num">42</td><td class="num">3</td><td class="num">40</td><td class="num">2</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td></tr><tr data-unit="ind_trenchmortar"><td class="name">战壕迫击炮</td><td class="glyph">壕</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">200</td><td class="num">26</td><td class="num">3</td><td class="num">32</td><td class="num">2</td><td class="num">4</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="ind_sapper"><td class="name">战地工兵</td><td class="glyph">地</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">210</td><td class="num">5</td><td class="num">3</td><td class="num">26</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 6 种建筑</a></td></tr><tr data-unit="ind_flamethrower"><td class="name">火焰喷射器</td><td class="glyph">焰</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">215</td><td class="num">42</td><td class="num">3</td><td class="num">36</td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="ind_pillbox"><td class="name">机枪碉堡</td><td class="glyph">碉</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">225</td><td class="num">28×3</td><td class="num">10</td><td class="num">60</td><td class="num">—</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-burst">连击 3 段</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ind_howitzer"><td class="name">榴弹炮</td><td class="glyph">榴</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">225</td><td class="num">38</td><td class="num">4</td><td class="num">42</td><td class="num">1</td><td class="num">6</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="ind_gas"><td class="name">毒气兵</td><td class="glyph">毒</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">230</td><td class="num">36</td><td class="num">3</td><td class="num">36</td><td class="num">2</td><td class="num">3</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="ind_railwaygun"><td class="name">列车炮</td><td class="glyph">列</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">265</td><td class="num">44</td><td class="num">6</td><td class="num">60</td><td class="num">1</td><td class="num">7</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="ind_destroyer"><td class="name">雷击舰</td><td class="glyph">雷</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">285</td><td class="num">38</td><td class="num">8</td><td class="num">75</td><td class="num">5</td><td class="num">4</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="ind_steelworks"><td class="name">钢厂</td><td class="glyph">钢</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">300</td><td class="num">4</td><td class="num">7</td><td class="num">55</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 城市 +34</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ind_landship"><td class="name">马克 I 坦克</td><td class="glyph">坦</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">330</td><td class="num">30</td><td class="num">10</td><td class="num">80</td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr data-unit="ind_armoredtrain"><td class="name">装甲列车</td><td class="glyph">轨</td><td class="src">工业绞肉机</td><td class="num">4</td><td class="num">340</td><td class="num">34×2</td><td class="num">9</td><td class="num">70</td><td class="num">2</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-burst">连击 2 段</a></td></tr><tr class="grp" id="p-pack-modern"><td colspan="12">二战合成兵 · 14 个</td></tr><tr data-unit="mod_dragonsteeth"><td class="name">反坦克拒马</td><td class="glyph">拒</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">70</td><td class="num">0</td><td class="num">10</td><td class="num">70</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="mod_concretewall"><td class="name">混凝土掩体墙</td><td class="glyph">壁</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">195</td><td class="num">0</td><td class="num">18</td><td class="num">200</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="mod_atgun"><td class="name">反坦克炮</td><td class="glyph">反</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">260</td><td class="num">54</td><td class="num">3</td><td class="num">34</td><td class="num">1</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-first-strike">先手</a></td></tr><tr data-unit="mod_heavy_mortar"><td class="name">重型迫击炮</td><td class="glyph">迫</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">260</td><td class="num">38</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">4</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="mod_pioneer"><td class="name">战斗工兵</td><td class="glyph">战</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">265</td><td class="num">5</td><td class="num">4</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 5 种建筑</a></td></tr><tr data-unit="mod_supply"><td class="name">补给车队</td><td class="glyph">补</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">285</td><td class="num">4</td><td class="num">4</td><td class="num">34</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 城市 +30</a></td></tr><tr data-unit="mod_flak"><td class="name">高射炮</td><td class="glyph">空</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">290</td><td class="num">46×2</td><td class="num">4</td><td class="num">40</td><td class="num">1</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-burst">连击 2 段</a></td></tr><tr data-unit="mod_katyusha"><td class="name">火箭炮</td><td class="glyph">喀</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">310</td><td class="num">46</td><td class="num">5</td><td class="num">46</td><td class="num">2</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="mod_commando"><td class="name">突击队</td><td class="glyph">击</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">310</td><td class="num">42</td><td class="num">4</td><td class="num">46</td><td class="num">3</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td></tr><tr data-unit="mod_mgbunker"><td class="name">重机枪地堡</td><td class="glyph">垒</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">330</td><td class="num">32×4</td><td class="num">15</td><td class="num">90</td><td class="num">—</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-burst">连击 4 段</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="mod_paratrooper"><td class="name">伞兵</td><td class="glyph">伞</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">340</td><td class="num">41</td><td class="num">4</td><td class="num">48</td><td class="num">4</td><td class="num">3</td><td class="num">5</td><td class="traits">—</td></tr><tr data-unit="mod_spg"><td class="name">自行火炮</td><td class="glyph">自</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">340</td><td class="num">42</td><td class="num">8</td><td class="num">62</td><td class="num">3</td><td class="num">4</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="mod_destroyer"><td class="name">驱逐舰</td><td class="glyph">舰</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">360</td><td class="num">52</td><td class="num">11</td><td class="num">100</td><td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="mod_heavytank"><td class="name">重型坦克</td><td class="glyph">重</td><td class="src">二战合成兵</td><td class="num">5</td><td class="num">480</td><td class="num">60</td><td class="num">14</td><td class="num">100</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr class="grp" id="p-pack-contemporary"><td colspan="12">现代 · 9 个</td></tr><tr data-unit="ct_sapper"><td class="name">工程兵</td><td class="glyph">工</td><td class="src">现代</td><td class="num">6</td><td class="num">300</td><td class="num">4</td><td class="num">4</td><td class="num">32</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 6 种建筑</a></td></tr><tr data-unit="ct_logistics"><td class="name">物流中心</td><td class="glyph">物</td><td class="src">现代</td><td class="num">6</td><td class="num">300</td><td class="num">4</td><td class="num">4</td><td class="num">32</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 平原 +38</a></td></tr><tr data-unit="ct_recon"><td class="name">装甲侦察车</td><td class="glyph">侦</td><td class="src">现代</td><td class="num">6</td><td class="num">320</td><td class="num">34</td><td class="num">6</td><td class="num">44</td><td class="num">4</td><td class="num">2</td><td class="num">5</td><td class="traits">—</td></tr><tr data-unit="ct_infantry"><td class="name">步兵班</td><td class="glyph">班</td><td class="src">现代</td><td class="num">6</td><td class="num">340</td><td class="num">50</td><td class="num">5</td><td class="num">52</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="ct_howitzer"><td class="name">榴弹炮</td><td class="glyph">炮</td><td class="src">现代</td><td class="num">6</td><td class="num">360</td><td class="num">50</td><td class="num">5</td><td class="num">56</td><td class="num">2</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="ct_pillbox"><td class="name">混凝土碉堡</td><td class="glyph">碉</td><td class="src">现代</td><td class="num">6</td><td class="num">370</td><td class="num">34</td><td class="num">13</td><td class="num">88</td><td class="num">—</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="camp6"><td class="name">联合作战中心</td><td class="glyph">联</td><td class="src">现代</td><td class="num">6</td><td class="num">380</td><td class="num">22</td><td class="num">10</td><td class="num">92</td><td class="num">—</td><td class="num">1</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ct_industrial"><td class="name">产业园</td><td class="glyph">园</td><td class="src">现代</td><td class="num">6</td><td class="num">420</td><td class="num">5</td><td class="num">9</td><td class="num">64</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 城市 +26</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="ct_tank"><td class="name">坦克</td><td class="glyph">坦</td><td class="src">现代</td><td class="num">6</td><td class="num">450</td><td class="num">60</td><td class="num">12</td><td class="num">96</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-shield-wall">盾墙</a> · <a class="ref" href="#t-ab-siege-master">破城</a></td></tr><tr class="grp" id="p-pack-contemporary-war"><td colspan="12">现代战争 · 15 个</td></tr><tr data-unit="cnt_armorwall"><td class="name">复合装甲墙</td><td class="glyph">壁</td><td class="src">现代战争</td><td class="num">6</td><td class="num">240</td><td class="num">0</td><td class="num">20</td><td class="num">240</td><td class="num">—</td><td class="num">1</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cnt_uav"><td class="name">察打无人机</td><td class="glyph">无</td><td class="src">现代战争</td><td class="num">6</td><td class="num">300</td><td class="num">34</td><td class="num">2</td><td class="num">32</td><td class="num">4</td><td class="num">5</td><td class="num">6</td><td class="traits">—</td></tr><tr data-unit="cnt_engineer"><td class="name">工程兵团</td><td class="glyph">团</td><td class="src">现代战争</td><td class="num">6</td><td class="num">320</td><td class="num">6</td><td class="num">5</td><td class="num">34</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds">可建 4 种建筑</a></td></tr><tr data-unit="cnt_logistics"><td class="name">物流集团</td><td class="glyph">集</td><td class="src">现代战争</td><td class="num">6</td><td class="num">330</td><td class="num">4</td><td class="num">4</td><td class="num">34</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 平原 +40</a></td></tr><tr data-unit="cnt_mechinf"><td class="name">机械化步兵</td><td class="glyph">机</td><td class="src">现代战争</td><td class="num">6</td><td class="num">380</td><td class="num">54</td><td class="num">7</td><td class="num">62</td><td class="num">3</td><td class="num">3</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="cnt_atgm"><td class="name">反坦克导弹</td><td class="glyph">反</td><td class="src">现代战争</td><td class="num">6</td><td class="num">400</td><td class="num">66</td><td class="num">3</td><td class="num">42</td><td class="num">2</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-first-strike">先手</a></td></tr><tr data-unit="cnt_hq"><td class="name">前进指挥所</td><td class="glyph">所</td><td class="src">现代战争</td><td class="num">6</td><td class="num">400</td><td class="num">0</td><td class="num">11</td><td class="num">96</td><td class="num">—</td><td class="num">1</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-aura-command">指挥光环</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cnt_bunker"><td class="name">加固地堡</td><td class="glyph">堡</td><td class="src">现代战争</td><td class="num">6</td><td class="num">420</td><td class="num">36×4</td><td class="num">16</td><td class="num">100</td><td class="num">—</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-burst">连击 4 段</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cnt_sam"><td class="name">防空导弹营</td><td class="glyph">防</td><td class="src">现代战争</td><td class="num">6</td><td class="num">440</td><td class="num">46</td><td class="num">4</td><td class="num">58</td><td class="num">2</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-anti-air">对空</a></td></tr><tr data-unit="cnt_specops"><td class="name">特种部队</td><td class="glyph">特</td><td class="src">现代战争</td><td class="num">6</td><td class="num">460</td><td class="num">56</td><td class="num">5</td><td class="num">52</td><td class="num">4</td><td class="num">3</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td></tr><tr data-unit="cnt_sph"><td class="name">自行榴弹炮</td><td class="glyph">榴</td><td class="src">现代战争</td><td class="num">6</td><td class="num">500</td><td class="num">60</td><td class="num">6</td><td class="num">64</td><td class="num">2</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="cnt_heli"><td class="name">武装直升机</td><td class="glyph">直</td><td class="src">现代战争</td><td class="num">6</td><td class="num">520</td><td class="num">58</td><td class="num">6</td><td class="num">66</td><td class="num">5</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="cnt_mlrs"><td class="name">远程火箭炮</td><td class="glyph">箭</td><td class="src">现代战争</td><td class="num">6</td><td class="num">520</td><td class="num">40</td><td class="num">4</td><td class="num">56</td><td class="num">2</td><td class="num">5</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 3</a></td></tr><tr data-unit="cnt_destroyer"><td class="name">导弹驱逐舰</td><td class="glyph">驱</td><td class="src">现代战争</td><td class="num">6</td><td class="num">620</td><td class="num">70</td><td class="num">13</td><td class="num">120</td><td class="num">5</td><td class="num">5</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="cnt_mbt"><td class="name">主战坦克</td><td class="glyph">主</td><td class="src">现代战争</td><td class="num">6</td><td class="num">640</td><td class="num">78</td><td class="num">17</td><td class="num">120</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-siege-master">破城</a></td></tr></tbody>
+      </table>
+    </div>
+    </section>
+
+    <section id="g-notes">
+      <h2><span class="sec-num">03</span>各包要点</h2>
+      <p>表格给的是数值，这一节给的是"这一包和别的包差在玩法上"。</p>
+      <p class="era-meta">这几个包没有额外的玩法说明，看总表即可。</p>
+    </section>
+    
+
+    <section id="g-terms">
+      <h2><span class="sec-num">04</span>机制词条</h2>
+      <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
+      <dl class="terms"><dt id="t-ab-stealth">潜行</dt><dd>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-ab-shield-wall">盾墙</dt><dd>本回合没有移动过时，受到的伤害 −2。站住才硬。</dd><dt id="t-ab-siege-master">破城</dt><dd>攻城伤害 ×1.5。</dd><dt id="t-ab-armor-pierce">破甲</dt><dd>无视目标一半护甲。对付重甲和城池的解法。</dd><dt id="t-ab-aura-command">指挥光环</dt><dd>相邻的友军攻击 +2。</dd><dt id="t-ab-kamikaze">自爆</dt><dd>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-ab-first-strike">先手</dt><dd>攻击后不会被反击。远程狙击手的核心。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">比例固定为 50%，不分敌我——友军站在炸点上一样掉血。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-burst">连击</dt><dd>一次攻击拆成 N 段判定，每段单独减一次护甲。 <span class="more">对重甲目标衰减更明显：三段打 6 甲，每段都被扣 6，合计比一刀 3×攻更吃亏。</span></dd><dt id="t-ab-anti-air">对空</dt><dd>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</dd></dl>
+    </section>
+  
+    <footer>
+      方格战棋 · 时代兵备 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>

@@ -39,7 +39,7 @@
 | `src/core/expansions.ts` | 13 个纯规则扩展（非对称开局、战争经济、堑壕战……） |
 | `src/core/era-packs.ts` | 5 个时代兵备包（古典 → 现代） |
 | `src/core/fantasy-packs.ts` | 5 个奇想兵种包（法则、骑士团、荒兽、秘术、英雄） |
-| `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军） |
+| `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军；经济建筑只做经济，建材产线按时代排到现代） |
 | `src/core/seasons.ts` | 1 个气候包（季节与气候：四季轮换，天气改移动、视野与射程） |
 | `src/core/height-terrain.ts` | 1 个地形包（地形高差：地形高度、爬坡费、俯射加成、逐地形机制，带 7 种新地形与 6 种等高线地貌；地形生成在 `height-mapgen.ts`） |
 
@@ -511,19 +511,25 @@ UI 上子包不勾前置就不会勾上；玩家只勾子包、没勾前置时�
 
 ---
 
-## 8. 规则书归册：scale 字段
+## 8. 规则书归册：scale 与系列
 
-规则书是从代码**生成**的（`npm run manual`），分成 13 册：
+规则书是从代码**生成**的（`npm run manual`），现在 6 册：
 
 - 核心册 `public/manual.html`（永远存在）
 - 小型扩展合订本 `public/manual-small.html`（所有小型扩展一册）
-- 每个大型扩展单独一册 `public/manual-pack-<id>.html`
+- 奇幻系列合册 `public/manual-pack-fantasy.html`（`fantasy-*` 全收）
+- 时代兵备合册 `public/manual-pack-eras.html`（`pack-*` 全收）
+- 其余大包各自一册 `public/manual-pack-<id>.html`（城郭与物料、季节与气候）
 
-归册靠扩展定义里的 `scale` 字段：
+归册靠扩展定义里的 `scale` 字段，再按 id 前缀决定进哪一本：
 
 ```ts
-scale: 'large',   // 单独成册；不写默认 'small'，进合订本
+scale: 'large',   // 参与合册；不写默认 'small'，进小型合订本
 ```
+
+合册的分组表在 `scripts/build-manual.ts` 的 `BOOK_GROUPS`（决定印进哪本）
+和 `src/ui/books.ts` 的 `GROUP_BOOKS`（决定什么时候上架）各一份。
+**加一个新的系列包，改这两处的前缀即可**；不归任何组的 `large` 包自动单独成册。
 
 **归册是编辑决定，不让生成器猜**（比如"带兵种就算大型"）——「奇想·法则」
 一个兵都不带，却带来一整套魔法/属性/状态规则，按兵种数分它会被错误地塞进
@@ -531,6 +537,19 @@ scale: 'large',   // 单独成册；不写默认 'small'，进合订本
 
 - 改一两条全局规则的小扩展 → 不写 `scale`；
 - 带一整套兵种/机制、值得玩家单独翻阅的 → `scale: 'large'`。
+
+### 机制词条：别在正文里重复解释
+
+兵种表与正文提到机制时用 `ref('键')`（或 `ref('ab-<能力id>')`），它会输出一颗
+带虚线下划线的链接：悬停出浮层、点击跳词条表。**说明文字只写在词条里**
+（`GENERIC_TERMS`，或能力定义里的 `summary`），不要往正文里再抄一遍——
+同一个能力在几十个兵后面出现，抄几十遍就会变成几十份互相漂移的副本。
+
+生成器有三道自检，任一不满足就 `npm run manual` 直接失败：
+
+1. 每个扩展兵种都出现在某一册的 `data-unit` 行里（合并最怕悄悄漏兵）；
+2. 每颗 `href="#t-…"` 都在**同一册内**有落点（跨册锚点在单册分发时会断）；
+3. 每册的词条表只收本册真的用到的键（不是全量），否则合册会退化成第二本核心册。
 
 生成之后游戏内的「规则书」按钮会根据本局开了哪些扩展弹书单（只列出相关的册）。
 CI 会跑 `npm run manual` 然后 `git diff --exit-code 'public/manual*.html'`——

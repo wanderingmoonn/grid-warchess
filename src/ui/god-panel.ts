@@ -16,6 +16,7 @@
  */
 
 import { CONFIG, ERAS } from '../core/config.ts';
+import { eraCeilingOf } from '../core/expansions.ts';
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
 import { packOk, packRow } from './packs.ts';
@@ -36,7 +37,7 @@ export interface GodUi {
    * 货架按扩展包筛选：空串 = 全部，`core` = 原版，其它是扩展 id。
    *
    * 沙盒的货架是按时代分组的，而奇想包那批兵种散在各个时代里——
-   * 想摆一队"奇想·骑士"得在五个时代组里一个个找。按包切一刀最省事。
+   * 想摆一队"奇想·骑士"得在六个时代组里一个个找。按包切一刀最省事。
    */
   pack: string;
   /** 摆城时用哪个时代（1-5） */
@@ -116,7 +117,9 @@ export function godBarHtml(ui: GodUi): string {
     ui.brush.kind === 'city'
       ? `<div class="god-group">
            <span class="god-label">城的时代</span>
-           <div class="chip-row">${ERAS.map((e) => chip(ui.cityEra === e.level, 'god-city-era', e.name, `data-era="${e.level}"`)).join('')}</div>
+           <div class="chip-row">${ERAS.filter((e) => e.level <= eraCeilingOf(ui.state))
+             .map((e) => chip(ui.cityEra === e.level, 'god-city-era', e.name, `data-era="${e.level}"`))
+             .join('')}</div>
          </div>`
       : '';
 
@@ -315,7 +318,10 @@ export function godShelfHtml(ui: GodUi): string {
   // 先过一遍扩展包筛选：一屏混着五六个包的时候，"按时代分组"反而是帮倒忙
   // （每个时代组里都掺着别家的兵）。
   const pool = Object.values(s.unitTypes).filter((u) => packOk(u, ui.pack));
-  const groups = ERAS.map((era) => {
+  // 只列到这一局的时代上限：没开「现代战争」的局里不会出现第六代兵种，
+  // 但货架是按 ERAS 分组的，不过滤就会留一个永远空着的"现代"标签。
+  const ceiling = eraCeilingOf(s);
+  const groups = ERAS.filter((era) => era.level <= ceiling).map((era) => {
     const units = pool
       .filter((u) => u.era === era.level)
       .sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name));

@@ -395,6 +395,51 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
+check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
+  // 雾里连地形都要走一遍才记得住，隔壁还剩多少钱更不该摆在 HUD 上——
+  // 那等于免费告诉玩家"他还能不能再买一队兵"，照着想就是上帝视角。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['blackout'] }, 909);
+  st.players.A.gold = 123;
+  st.players.B.gold = 456;
+  const paint = (extra: Record<string, unknown> = {}) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      ...extra,
+    });
+
+  paint();
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('金币 123'), '自己的钱必须看得见');
+  assert.ok(!text.includes('金币 456'), '对面的钱不该出现在 HUD 里');
+  // 整行消失会让人以为是渲染坏了：留一个占位，说明"有这个东西，但你不知道"
+  assert.ok(text.includes('金币 ?'), '该给一个占位，而不是把这一项抹掉');
+
+  // 观战位本来就是全图视角（顶栏自己写着"全图视角"），遮一半反而自相矛盾
+  paint({ spectator: true });
+  assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
+});
+
+check('没有浓雾的对局里，对面的金币照旧显示', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 910);
+  st.players.B.gold = 321;
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok((host.textContent ?? '').includes('金币 321'), '普通对局不遮');
+});
+
 console.log('\n单位交互');
 
 check('点自己的单位会高亮可移动范围', () => {
@@ -869,7 +914,51 @@ check('兵种至少保留一个，不能全取消', () => {
 check('兵种池按时代分组展示', () => {
   assert.ok(doc.querySelectorAll('.era-group').length >= 3, '三个时代各一组');
   const tags = Array.from(doc.querySelectorAll('.era-tag')).map((n) => n.textContent?.trim());
-  assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '现代']);
+  // 第五时代叫「二战」（第六时代「现代」的兵全在「现代战争」包里，
+  // 而兵种池只列原版 + 自定义兵，所以这里到二战为止）
+  assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '二战']);
+});
+
+check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
+  // 第六时代是两个包：'pack-contemporary'「现代」开时代 + 带九个最基本的兵，
+  // 'pack-contemporary-war'「现代战争」在它之上加十五个专精兵（requires 前者）。
+  // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
+  const erasNow = () =>
+    Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
+  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '不勾包时五格封顶');
+
+  const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
+  assert.ok(warBox, '开局面板里应有「现代战争」这一项');
+  warBox.checked = true;
+  warBox.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 勾加料包会自动补上它的前置「现代」——所以时代按钮当场多一格。
+  // 这一步顺带守住了"勾了兵却造不出来"那个坑。
+  assert.deepEqual(
+    erasNow(),
+    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    '加料包会把前置「现代」一起勾上，第六格随之出现',
+  );
+  const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(baseBox?.checked, '前置「现代」应该被自动勾上');
+
+  // 单独取消加料包：时代还在（底座是独立的一包），第六格不该消失
+  const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
+  assert.ok(again);
+  again.checked = false;
+  again.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(
+    erasNow(),
+    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    '加料包取消之后，底座还开着——这一代仍然打得完一整局',
+  );
+
+  // 把底座也取消：第六格收回去，而且起手时代不能停在一个已经关掉的时代上
+  const baseAgain = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(baseAgain);
+  baseAgain.checked = false;
+  baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
 });
 
 check('点兵种不重绘面板，不会把页面弹回顶部', () => {
@@ -2477,13 +2566,32 @@ check('书单跟着已开的扩展走，核心规则书永远在', () => {
   const withBlood = manualBooks(DEFAULT_CONFIG.expansionIds);
   assert.deepEqual(withBlood.map((b) => b.file), ['manual.html', 'manual-small.html']);
 
-  // 开两个大包就各有一本，前置包（法则）也得在——子包的规则全靠它
+  // 同系列合册：开两个奇想包，出来的仍然只有一本
   const fantasy = manualBooks(['bloodbath', 'fantasy-core', 'fantasy-heroes']);
   assert.deepEqual(fantasy.map((b) => b.file), [
     'manual.html',
     'manual-small.html',
-    'manual-pack-fantasy-core.html',
-    'manual-pack-fantasy-heroes.html',
+    'manual-pack-fantasy.html',
+  ]);
+  assert.ok(
+    (fantasy[2]!.note ?? '').includes('骑士团') && (fantasy[2]!.note ?? '').includes('法则'),
+    '合册的说明要写清这一局开的是哪几个包',
+  );
+
+  // 两个系列同时开：各出一本，不重复
+  const both = manualBooks(['fantasy-knights', 'pack-medieval', 'pack-modern']);
+  assert.deepEqual(both.map((b) => b.file), [
+    'manual.html',
+    'manual-pack-fantasy.html',
+    'manual-pack-eras.html',
+  ]);
+
+  // 不属于任何系列的包仍然各自一本
+  const solo = manualBooks(['city-works', 'seasons']);
+  assert.deepEqual(solo.map((b) => b.file), [
+    'manual.html',
+    'manual-pack-city-works.html',
+    'manual-pack-seasons.html',
   ]);
 });
 

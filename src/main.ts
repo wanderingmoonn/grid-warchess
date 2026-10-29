@@ -319,6 +319,15 @@ function markReportSent(sig: string): void {
 
 let reach: number[] = [];
 let targets: string[] = [];
+/**
+ * 连击的"溢出目标"队列（只有多段兵用得上）。
+ *
+ * 多段兵打一个人时，前面的段就把他打死了，后面的段以前是白扔的；现在可以
+ * 事先右键点几个敌人排队，主目标倒下后剩下的段按这个顺序接着打。
+ * 不排就是老规矩（打同一个、死了作废），所以这个数组默认为空时行为完全不变。
+ * 换选中的单位、开完火都会清空——它属于"这一次出手"，不是一局的状态。
+ */
+let spillTargets: string[] = [];
 let siege: string[] = [];
 /** 非空时表示某个建造单位正在选址 */
 let buildPlan: { unitId: string; type: string } | null = null;
@@ -678,6 +687,7 @@ function render(): void {
     selectedId,
     reach,
     targets,
+    spillTargets,
     siegeTargets: siege,
     selectedCityId,
     placeable: computePlaceable(),
@@ -962,6 +972,7 @@ function refreshSelection(): void {
 
 function clearSelection(): void {
   recruitQuery = '';
+  spillTargets = [];
   // 扩展包筛选不清：它是"我这一局只想看哪几个包"，换一个单位不该把它重置掉
   forceMode = null;
   pickState = null;
@@ -1101,6 +1112,8 @@ function selectUnit(u: Unit): void {
   loadPlan = null;
   unloadPlan = null;
   selectedId = u.id;
+  // 换了一个单位，上一次排的溢出目标就不再属于这次出手了
+  spillTargets = [];
   refreshSelection();
   render();
 }
@@ -1119,6 +1132,8 @@ function selectCamp(u: Unit): void {
   spawnPlan = null;
   selectedCampId = u.id;
   selectedId = u.id;
+  // 换了一个单位，上一次排的溢出目标就不再属于这次出手了
+  spillTargets = [];
   refreshSelection();
   render();
 }
@@ -1375,6 +1390,65 @@ function inspectAt(coords: { x: number; y: number } | null): void {
   render();
 }
 
+/**
+ * 开火：把排好的溢出目标一起交下去。
+ *
+ * 单独封一层而不是在三处各写一遍，是因为"队列只在这一次出手有效"这条约束
+ * 必须只有一处实现——漏一处就会把上一发排的目标带到下一发去。
+ */
+function dispatchAttack(unitId: string, targetId: string): void {
+  const spill = spillTargets.length > 0 ? { spillTo: [...spillTargets] } : {};
+  const ok = dispatch({ type: 'ATTACK', unitId, targetId, ...spill });
+  if (ok) spillTargets = [];
+}
+
+/**
+ * 右键点敌人：排进/取消"溢出目标"。
+ *
+ * 为什么用右键：左键在这块棋盘上已经被"走、打、看、盖"占满了，
+ * Shift+左键又是强制攻击/拆桥，再抢一个修饰键会打架。右键目前没有任何用途，
+ * 而"给这一发多排一个目标"本来就是个次要动作，放在右键正好。
+ *
+ * 只在"轮到我、选中了多段兵、点的是射程内的敌人"时接管；其余情况不 preventDefault，
+ * 浏览器的右键菜单照旧弹出——不该为了一个边角功能把整块棋盘的右键吃掉。
+ */
+function onBoardRightClick(e: MouseEvent): void {
+  if (state.config.godMode === true && !godInControl()) return;
+  if (!myTurn() || watching() || state.config.commanderMode) return;
+  if (!selectedId) return;
+  const self = state.units.find((u) => u.id === selectedId);
+  if (!self) return;
+  const burst = Math.max(1, utype(state, self.type).burst ?? 1);
+  if (burst <= 1) return;
+
+  const coords = coordsFromEvent(e);
+  if (!coords) return;
+  // 直接在这一格里找"我打得到的那个"，不走 pickUnitId：那个函数带轮换副作用
+  // （同一格叠着好几个人时，每点一次换一个），右键不该偷偷推进它的循环。
+  const hit = stackAt(coords.x, coords.y).find((u) => targets.includes(u.id));
+  if (!hit) return;
+  const id = hit.id;
+
+  e.preventDefault();
+  const at = spillTargets.indexOf(id);
+  if (at >= 0) {
+    spillTargets.splice(at, 1);
+    toast('取消这个溢出目标');
+  } else if (spillTargets.length >= burst - 1) {
+    toast(`${utype(state, self.type).name} 一共 ${burst} 段，主目标之外最多再排 ${burst - 1} 个`);
+    return;
+  } else {
+    spillTargets.push(id);
+    const name = state.units.find((u) => u.id === id);
+    const left = burst - 1 - spillTargets.length;
+    toast(
+      `溢出目标：${name ? utype(state, name.type).name : id}` +
+        `${left > 0 ? `（还能再排 ${left} 个）` : ''} —— 左键点主目标开火`,
+    );
+  }
+  render();
+}
+
 function onBoardClick(e: Event): void {
   if (state.config.godMode === true) {
     // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
@@ -1470,7 +1544,7 @@ function onBoardClick(e: Event): void {
     // 所以这里的顺序是先目标、后走位。
     const hit = stackAt(coords.x, coords.y).find((u) => targets.includes(u.id));
     if (hit) {
-      dispatch({ type: 'ATTACK', unitId: forcedFrom, targetId: hit.id });
+      dispatchAttack(forcedFrom, hit.id);
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -1483,7 +1557,7 @@ function onBoardClick(e: Event): void {
   // 的修饰键，也是模式因为"轮不到我 / 手上在选址"而不成立时的后备。
   // 两处都必须"成或明确拒绝，绝不落到选中"，否则压在格子上那枚棋子又把话抢走了。
   //
-  // 桥不用修饰键了：桥面可达时直接点就算"走上去"（见 1.9），因为桥没有
+  // 桥不用修饰键了：桥面可达时直接点就算"走上去"（见 1.2），因为桥没有
   // 自己的操作面板，选中它从来都不是玩家想要的。
   if (
     wantMove &&
@@ -1506,6 +1580,37 @@ function onBoardClick(e: Event): void {
   }
 
   const clickedUnitId = pickUnitId(coords, wantAttack);
+
+  // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
+  //
+  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
+  // 永远是"选中这座桥"，或者——更糟——"打这座桥"。于是别人的桥修好了却只能
+  // 隔着河干看：桥明明在可达范围里，点上去了却变成开火，永远站不上那座桥。
+  //
+  // 必须排在下面那段"只读查看"**之前**：不能开火的单位（工人、商队、工程队）
+  // 打不出 targets，于是点敌桥永远落到"查看这座桥"上，它们照样过不了河。
+  //
+  // 优先级给"走过去"，理由有三条：
+  //   1. 桥没有自己的操作面板（塔和军营才有），选中它本来就做不了任何事；
+  //   2. "过河"是这个格子上唯一常用的动作，攻击是可以换一种点法的；
+  //   3. 射程放开之后（远程也能打桥），不改的话敌桥几乎永远在 targets 里，
+  //      等于把"站上敌桥"这个玩法彻底关掉。
+  //
+  // 想拆桥：按住 Shift 点（强制攻击），或者走到射程内用强制攻击模式。
+  // 其余动词各管各的：正在选址就不抢（那一下是"盖在这儿"），装卸上膛时同理。
+  const walkable = coords ? idx(state, coords.x, coords.y) : -1;
+  const bridgeWalk =
+    myTurn() && !watching() && !state.config.commanderMode &&
+    coords && selectedId && !wantAttack && !buildPlan && !loadPlan && !unloadPlan &&
+    reach.includes(walkable)
+      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
+      : undefined;
+  if (bridgeWalk && coords && selectedId) {
+    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
+    // 敌桥既能走又能打，两种点法差一个 Shift——不说一句，玩家会以为"打不了"
+    if (bridgeWalk.owner !== me()) toast('走上桥面了。想拆这座桥：按住 Shift 点它');
+    return;
+  }
 
   // 只读查看：点敌方单位出属性卡——不看轮到谁，也不看是不是指挥官模式。
   //
@@ -1598,14 +1703,14 @@ function onBoardClick(e: Event): void {
       (u) => u.x === coords.x && u.y === coords.y && targets.includes(u.id),
     );
     if (stacked) {
-      dispatch({ type: 'ATTACK', unitId: selectedId, targetId: stacked.id });
+      dispatchAttack(selectedId, stacked.id);
       return;
     }
   }
 
   // 1) 点到了攻击目标
   if (clickedUnitId && selectedId && targets.includes(clickedUnitId)) {
-    dispatch({ type: 'ATTACK', unitId: selectedId, targetId: clickedUnitId });
+    dispatchAttack(selectedId, clickedUnitId);
     return;
   }
 
@@ -1643,23 +1748,6 @@ function onBoardClick(e: Event): void {
       return;
     }
     unloadPlan = null;
-  }
-
-  // 1.9) 点在桥面上：桥是"能站的地形"，不是一个等着被选中的物件。
-  //
-  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
-  // 永远是"选中这座桥"——桥修好了却只能穿过去，守桥、堵口、在桥中间换气
-  // 全都点不出来，表现就是"点了没反应"。这一格既然在可达范围里，就让
-  // "我要走上去"赢过"我要选它"：桥没有自己的操作面板（塔和军营才有），
-  // 选中它本来也做不了任何事。真要拆桥走的是上面那条攻击分支——
-  // 敌桥进了射程时，点它就是开火，轮不到这里。
-  const onBridge =
-    coords && selectedId && reach.includes(idx(state, coords.x, coords.y))
-      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
-      : undefined;
-  if (onBridge && coords && selectedId) {
-    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
-    return;
   }
 
   // 2) 点到了某个单位
@@ -3455,6 +3543,7 @@ appEl.addEventListener('input', (e) => {
 });
 
 // 悬停可移动格时加深高亮
+boardEl.addEventListener('contextmenu', (e) => onBoardRightClick(e));
 boardEl.addEventListener('mouseover', (e) => {
   const target = e.target as HTMLElement | null;
   const tile = target?.closest<HTMLElement>('.tile.reach');

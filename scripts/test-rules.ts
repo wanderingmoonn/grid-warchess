@@ -15,6 +15,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  BASE_MAX_ERA,
   CONFIG,
   ERAS,
   ORDER_UPGRADE,
@@ -31,6 +32,7 @@ import {
   EXPANSIONS,
   LEGACY_UPGRADE_COST,
   availableExpansions,
+  eraCeilingFor,
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
@@ -301,7 +303,7 @@ test('默认 16×16，双方各 5 个单位、2 座城市', () => {
 });
 
 test('标准对局：时代和棋盘尺寸是配套的', () => {
-  // 古典 12×12、中世 16×16、火药/工业/现代 20×20
+  // 古典 12×12、中世 16×16、火药/工业/二战 20×20
   assert.equal(eraSize(1), 12);
   assert.equal(eraSize(2), 16);
   assert.equal(eraSize(3), 20);
@@ -1540,10 +1542,15 @@ test('城市只能造当前时代和上一个时代的兵种', () => {
 
 console.log('\n时代链');
 
-test('时代从古典到现代共 5 级，升级费递增', () => {
-  assert.equal(ERAS.length, 5);
+test('时代表五级打底、第六级留给「现代战争」，升级费递增', () => {
+  // 表长 6，但**基础规则**只认前 5 级（BASE_MAX_ERA）：第六时代「现代」
+  // 是「现代战争」包用 unlockEra 打开的，不勾那个包就永远升不上去。
+  // 所以这里查两件事：表本身够长，且"不勾包的上限"正好是第五级。
+  assert.equal(ERAS.length, 6);
+  assert.equal(BASE_MAX_ERA, 5);
   assert.equal(ERAS[0].name, '古典');
-  assert.equal(ERAS[4].name, '现代');
+  assert.equal(ERAS[4].name, '二战');
+  assert.equal(ERAS[5].name, '现代');
   for (let i = 2; i < ERAS.length; i++) {
     const prev = ERAS[i - 1];
     const cur = ERAS[i];
@@ -1557,7 +1564,9 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
   const names = Object.values(UNIT_TYPES).map((u) => u.name);
   assert.ok(!names.includes('龙骑兵'), '龙骑兵应该在扩展包里');
   assert.ok(!names.includes('术士'), '术士应该在扩展包里');
-  for (const era of ERAS) {
+  // 只查基础五级：第六时代的原版兵种表是**空的**（那是刻意的，
+  // 整套第六代兵在「现代战争」包里，见本文件末尾那个包）。
+  for (const era of ERAS.filter((e) => e.level <= BASE_MAX_ERA)) {
     const units = Object.values(UNIT_TYPES).filter((u) => u.era === era.level);
     assert.ok(units.length >= 4, `${era.name} 时代至少要有 4 个兵种`);
     assert.ok(
@@ -3141,10 +3150,13 @@ test('每个内置扩展都被注册且带说明', () => {
     assert.ok(e.id && e.name && e.summary, `${e.id} 缺少必要字段`);
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
+    // 时代开关也算"干了事"：它没有钩子、没有兵种，但改了能升到第几级
+    // （「现代」就是这样——它只把时代上限抬到 6，兵全在「现代战争」里）
+    const opensEra = typeof e.unlockEra === 'number';
     // 纯表现层扩展（比如"浓雾"把地形也遮掉）没有钩子是正常的，
     // 但它必须自己声明过 presentationOnly，否则就是"注册了个什么都不干的包"
     assert.ok(
-      hasHooks || hasUnits || e.presentationOnly === true,
+      hasHooks || hasUnits || opensEra || e.presentationOnly === true,
       `${e.id} 既没有钩子也没有兵种，等于空包`,
     );
     if (e.presentationOnly) {
@@ -3682,7 +3694,9 @@ function waterWithBank(
 
 /** 手动摆一个单位（开局编制里没有水军和工程队） */
 function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
-  const def = UNIT_TYPES[type];
+  // 先查**本局**的兵种表，再退回原版表：扩展包的兵只存在于开了那个包的对局里，
+  // 拿 UNIT_TYPES 去找一律找不到。上限（hp）也从同一处读，别混用两张表。
+  const def = s.unitTypes[type] ?? UNIT_TYPES[type];
   assert.ok(def, `没有 ${type} 这个兵种`);
   const u: Unit = {
     id: `t${s.units.length + 1}`,
@@ -3894,6 +3908,48 @@ test('架桥：水面变桥面，友军能过，也能停在桥上', () => {
   });
   assert.ok(moved.ok, moved.ok ? '' : `上桥失败：${moved.reason}`);
   assert.equal(unitAt(moved.state, spot.water.x, spot.water.y)?.id, crosser.id, 'unitAt 应该返回站在桥上的人');
+});
+
+test('敌方造的桥，谁都能站上去', () => {
+  // 桥在数据上属于造它的人，在规则上只是一格地形。
+  // 这条用例守的是最容易被改坏的那一半：桥单位被当成"敌方占位"挡在
+  // reachableTiles 外面，于是玩家只能隔河干看——桥修好了却上不去。
+  const s = fresh();
+  const spot = waterWithBank(s);
+  assert.ok(spot, '需要一块水');
+
+  const laborer = place(s, 'B', 'laborer', spot.land.x, spot.land.y);
+  s.current = 'B';
+  s.players.B.gold = 900;
+  const r = applyAction(s, {
+    type: 'BUILD',
+    unitId: laborer.id,
+    unitType: 'bridge',
+    x: spot.water.x,
+    y: spot.water.y,
+  });
+  assert.ok(r.ok, r.ok ? '' : `B 架桥失败：${r.reason}`);
+  const bridge = r.state.units.find((u) => u.type === 'bridge');
+  assert.equal(bridge?.owner, 'B', '桥应该记在造它的人名下');
+
+  const st = r.state;
+  // 桥边换 A 的兵站：place 会把同格上的 B 工程队挤走，岸上正好空出来
+  const trooper = place(st, 'A', 'militia', spot.land.x, spot.land.y);
+  st.current = 'A';
+  assert.ok(
+    reachableTiles(st, trooper).has(idx(st, spot.water.x, spot.water.y)),
+    '敌方的桥面也该进可达范围',
+  );
+  const moved = applyAction(st, {
+    type: 'MOVE',
+    unitId: trooper.id,
+    x: spot.water.x,
+    y: spot.water.y,
+  });
+  assert.ok(moved.ok, moved.ok ? '' : `站上敌桥失败：${moved.reason}`);
+  assert.equal(unitAt(moved.state, spot.water.x, spot.water.y)?.id, trooper.id, '人就该站在桥上');
+  // 站上去之后地形仍是桥面：桥还在，别人照样能过
+  assert.equal(moved.state.tiles[idx(moved.state, spot.water.x, spot.water.y)].terrain, 'bridge');
 });
 
 test('桥是双向的：东西两岸互相都过得去', () => {
@@ -5858,9 +5914,10 @@ test('桥能沿着已经铺好的桥面往河心接，但不能斜着接', () =>
   assert.ok(!diag.ok, '斜着往外接不该成立');
 });
 
-test('拆桥要贴到桥头，隔着河放箭打不塌', () => {
-  // 允许远程拆桥的后果是"谁先架桥谁吃亏"：模拟里两边各架七八座、桥头来回换，
-  // 打满 200 回合谁也过不去——六成的"地形隔断"磨局都是这么来的。
+test('隔河拆桥：远程能放箭，但一发只算一半', () => {
+  // 以前是"必须贴到桥头"，一刀切的后果是远程连顺手拆座空桥都做不到。
+  // 现在改成"准许打、但打折"：射程够就能朝桥开火，隔一格以上一发放一半，
+  // 贴着桥头才是满伤。想真的断掉这条路，还是得把部队压到桥边。
   const s = fresh({ startEra: 1, size: 12 }, 7171);
   s.units = [];
   for (const t of s.tiles) {
@@ -5870,20 +5927,101 @@ test('拆桥要贴到桥头，隔着河放箭打不塌', () => {
   s.tiles[idx(s, 5, 4)].terrain = 'bridge';
   const bridge = place(s, 'B', 'bridge', 5, 4);
   const bow = place(s, 'A', 'longbow', 5, 2);
+  // Unit 上只有 hp，没有 maxHp——上限得从兵种表读
+  const bridgeMax = utype(s, bridge.type).maxHp;
 
   s.current = 'A';
   refreshMemory(s);
-  const far = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
-  assert.equal(far.ok, false, '隔两格不该能打桥');
-  assert.ok(far.reason.includes('桥头'), `理由要写清楚：${far.reason}`);
 
-  // 走到桥头（岸边那一格）就能拆
-  bow.moved = false;
-  bow.acted = false;
-  bow.x = 5;
-  bow.y = 3;
-  const near = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
+  // 隔两格：能打，但只算半伤
+  const far = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
+  assert.ok(far.ok, `隔河也该能放箭了：${!far.ok ? far.reason : ''}`);
+  // applyAction 返回的是一份新状态，血量要从 far.state 里读——读 s 上的旧对象永远是满血
+  const hitFar = far.state.units.find((u) => u.id === bridge.id)!;
+  const farDmg = bridgeMax - hitFar.hp;
+
+  // 贴到桥头（岸边那一格）：满伤，而且明显更快
+  const s2 = far.state;
+  const bridge2 = s2.units.find((u) => u.id === bridge.id)!;
+  bridge2.hp = bridgeMax;
+  const bow2 = s2.units.find((u) => u.id === bow.id)!;
+  bow2.moved = false;
+  bow2.acted = false;
+  bow2.x = 5;
+  bow2.y = 3;
+  const near = applyAction(s2, { type: 'ATTACK', unitId: bow2.id, targetId: bridge2.id });
   assert.ok(near.ok, `贴着桥头应该能拆：${!near.ok ? near.reason : ''}`);
+  const nearDmg = bridgeMax - near.state.units.find((u) => u.id === bridge.id)!.hp;
+
+  assert.ok(farDmg > 0, '远程拆桥不是零伤害——放开射程判定就该真的掉血');
+  assert.equal(
+    farDmg,
+    Math.round(nearDmg * CONFIG.bridgeRangedDamageRatio),
+    `隔河一发只算 ${CONFIG.bridgeRangedDamageRatio}：近身 ${nearDmg}、隔河 ${farDmg}`,
+  );
+  // 40 血的木桥：贴桥头 3 下、隔河 6 下。这个倍差就是"快"与"慢"的区别
+  assert.ok(nearDmg * 3 >= bridgeMax, `贴桥头要能在 3 下内拆掉：${nearDmg}×3`);
+  assert.ok(farDmg * 3 < bridgeMax, `隔河 3 下不该拆得掉：${farDmg}×3`);
+});
+
+test('AI 拆桥看态势：桥顶到城门口才拆，两军中间的桥不碰', () => {
+  // 桥的"击杀账"和普通单位不一样：木桥只有几十点耐久，一发两发就塌，
+  // 按"打死一支兵 = 120 分"来算，AI 会为了拆一座桥把整轮齐射都扔进去——
+  // 拆完自己过河还得重新架。所以桥单独算：只有"顶着自家城门"（死守）
+  // 和"桥在对面那一侧、自己还在往前推"这两种情况才给分。
+  //
+  // 这里把两种局面摆出来对撞同一个问题：这一手该不该花在桥上。
+  const s = fresh({ startEra: 1, size: 12 }, 7171);
+  s.units = [];
+  for (const t of s.tiles) {
+    if (t.terrain !== 'city') t.terrain = 'plain';
+  }
+  // 没有金币＝没有产兵/建造候选，这一回合只剩"这个兵做什么"要判断
+  s.players.A.gold = 0;
+  s.players.B.gold = 0;
+
+  const home = s.cities.find((c) => c.owner === 'A')!;
+  const gateY = home.y - 2;
+  s.tiles[idx(s, home.x, gateY)].terrain = 'bridge';
+  const bridge = place(s, 'B', 'bridge', home.x, gateY);
+  // 用民兵而不是长弓：射程 1 的兵不会被"顺手围一下墙那边的城"抢走候选，
+  // 这一回合它要么拆桥、要么什么都不做
+  const bow = place(s, 'A', 'militia', home.x, gateY - 1);
+  // moved 先置真：这样就没有"往前挪一格"的候选来抢，考的就是拆桥本身
+  bow.moved = true;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const atGate = aiNextAction(s);
+  assert.ok(
+    atGate?.type === 'ATTACK' && atGate.targetId === bridge.id,
+    `桥顶到城门口就该拆——这是死守：${JSON.stringify(atGate)}`,
+  );
+
+  // 同一座桥搬到地图正中：离两边都远，谁都不从这里过河
+  const mx = Math.floor(s.w / 2);
+  const my = Math.floor(s.h / 2);
+  bridge.x = mx;
+  bridge.y = my;
+  s.tiles[idx(s, mx, my)].terrain = 'bridge';
+  bow.x = mx;
+  bow.y = my - 1;
+  refreshMemory(s);
+
+  const mine = Math.min(
+    ...s.cities.filter((c) => c.owner === 'A').map((c) => distToCity({ x: mx, y: my }, c)),
+  );
+  const foe = Math.min(
+    ...s.cities.filter((c) => c.owner === 'B').map((c) => distToCity({ x: mx, y: my }, c)),
+  );
+  assert.ok(mine > 3, `这张图上"正中"得离我家城门够远，不然考不出区别：${mine}`);
+  assert.ok(foe >= mine, `正中那格对两边得一样远，才谈得上"谁都不从这里过"：我 ${mine} / 敌 ${foe}`);
+
+  const inMiddle = aiNextAction(s);
+  assert.ok(
+    !(inMiddle?.type === 'ATTACK' && inMiddle.targetId === bridge.id),
+    `不值得为一座谁都不过的桥花掉一次攻击：${JSON.stringify(inMiddle)}`,
+  );
 });
 
 test('AI 会一直铺到对岸，而不是每回合换个地方重来', () => {
@@ -6385,8 +6523,11 @@ test('AI 排的序列会承接前面的产出，不是五格同一种兵', () =>
  */
 const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
 
-test('五个时代包都在，且各自的兵种数多于原版同期', () => {
-  assert.equal(packs.length, 5, '应有五个时代包');
+test('七个包都在，且各自的兵种数多于原版同期', () => {
+  // 五个时代 + 第六代拆出来的两个：`pack-contemporary`（底座，开了才有第六时代）
+  // 与 `pack-contemporary-war`（在底座上加料）。第六代在 config.ts 里是空的，
+  // 所以那一代要两个包才凑成"原版一代 + 一代的兵种包"这个形状。
+  assert.equal(packs.length, 7, '应有七个时代包（五个时代 + 第六代的底座与加料）');
   for (const e of packs) {
     const units = e.units ?? [];
     const eras = Array.from(new Set(units.map((u) => u.era)));
@@ -6440,6 +6581,227 @@ test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白�
       );
     }
   }
+});
+
+console.log('\n第六时代 · 现代');
+
+/**
+ * 「现代」做了一件别的包没做的事：它把**时代上限**往后推了一格。
+ *
+ * 所以这一组测的不是"数值好不好"，而是"那道闸是不是真的装了"：
+ * 时代 6 在 ERAS 里，但没开「现代」时城市升不上去、按钮不出现、上帝模式也造不出；
+ * 开了之后能升、能造兵，而且升到表底就停。
+ *
+ * 第六时代拆成两个包，和"原版给底座、扩展往上加料"的分法对齐：
+ *   「现代」`pack-contemporary`     开时代 + 9 个最基本的兵
+ *   「现代战争」`pack-contemporary-war` 在底座上加 15 个专精兵（requires 前者）
+ * 所以这里也要分别验：上限只在底座那一处，光有加料包既抬不动时代、也造不出兵。
+ */
+test('只有「现代」能把时代上限抬到第六级，「现代战争」自己抬不动', () => {
+  assert.equal(BASE_MAX_ERA, 5, '不勾任何扩展时，基础规则停在第五时代');
+  assert.equal(eraCeilingFor([]), 5);
+  assert.equal(eraCeilingFor(['pack-modern']), 5, '普通时代兵种包不该顺手抬高上限');
+  assert.equal(eraCeilingFor(['pack-contemporary']), 6);
+  // 加料包单独勾选不生效：前置没满足，整包被剔掉（see enabledExpansionIds）
+  assert.equal(eraCeilingFor(['pack-contemporary-war']), 5, '只勾加料包，时代还是封在第五级');
+  assert.equal(eraCeilingFor(['pack-contemporary', 'pack-contemporary-war']), 6);
+  assert.equal(eraCeilingFor(['pack-modern', 'pack-contemporary']), 6);
+
+  const base = expansionById('pack-contemporary');
+  assert.ok(base, '「现代」必须注册在 EXPANSIONS 里');
+  assert.equal(base.unlockEra, 6, '开关就是这一条字段');
+  assert.equal(base.scale, 'large', '带一整套底座兵的包归大型，单独成册');
+  assert.equal((base.units ?? []).length, 9, '底座就是这一代最基本的九个兵');
+
+  const war = expansionById('pack-contemporary-war');
+  assert.ok(war, '「现代战争」必须注册在 EXPANSIONS 里');
+  assert.equal(war.scale, 'large', '带一整套兵的包归大型，单独成册');
+  assert.ok(war.requires?.includes('pack-contemporary'), '加料包要挂在底座上');
+  assert.equal(war.unlockEra, undefined, '时代开关只有一处，别写两份');
+  assert.equal((war.units ?? []).length, 15, '加料包该有十五个专精兵');
+  assert.ok((war.units ?? []).every((u) => u.era === 6), '这个包的兵全是第六代');
+  assert.ok((base.units ?? []).every((u) => u.era === 6), '底座的兵也全是第六代');
+  // 写超了也不许越过表长，否则 eraDef 会 clamp，升级成了"花一千金买同一座城"
+  assert.equal(eraCeilingFor(['pack-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
+});
+
+test('只开「现代」也能打完一整局：九个基本的兵一个不缺', () => {
+  // 这条守的是"底座必须自洽"。用户要的就是"现代扩展也和前几个时代一样有
+  // 几个最基本的兵"——那么只勾它、不勾「现代战争」，这一代也得是一个完整的代际：
+  // 打得动（战斗兵）、养得起（经济）、盖得出（工程兵 + 建筑）、造得出兵（军营）。
+  const base = expansionById('pack-contemporary');
+  assert.ok(base);
+  const units = base.units ?? [];
+  const byCategory = (c: string) => units.filter((u) => u.category === c);
+  const ids = new Set(units.map((u) => u.id));
+
+  assert.equal(byCategory('combat').length, 4, '战斗兵：步兵班、坦克、榴弹炮、装甲侦察车');
+  assert.equal(byCategory('economy').length, 1, '经济：物流中心');
+  assert.equal(byCategory('builder').length, 1, '工程：工程兵');
+  assert.equal(byCategory('building').length, 3, '建筑：混凝土碉堡、产业园、联合作战中心');
+
+  // 军营要在：没有它，第六时代的兵只能靠开局白送（而 era 6 不会被白送）
+  const camp = units.find((u) => u.barracks === true);
+  assert.ok(camp, '底座得带一座军营，否则第六代兵根本造不出来');
+  assert.equal(camp.id, 'camp6', '军营链条的第六档');
+
+  // 工程兵要盖得出这一代的全部建筑，外加桥——少一样这一代就是残的
+  const sapper = units.find((u) => u.category === 'builder');
+  assert.ok(sapper?.builds);
+  for (const id of ['ct_pillbox', 'ct_industrial', 'camp6']) {
+    assert.ok(sapper.builds.includes(id), `工程兵该盖得出 ${id}`);
+  }
+  assert.ok(sapper.builds.includes('bridge3'), '第六代该盖得出最高一级的桥');
+
+  // 加料包的兵不能混进底座：两个包各管各的，否则"只开底座"就不成立了
+  for (const u of expansionById('pack-contemporary-war')?.units ?? []) {
+    assert.ok(!ids.has(u.id), `${u.id} 不该同时出现在底座里`);
+  }
+});
+
+test('不开「现代」：城市升到二战就封顶，拒绝理由要点出那个包', () => {
+  const s = fresh({ startEra: 5, size: 12 }, 9901);
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  assert.equal(city.era, 5);
+  assert.equal(upgradeCostOf(s, city), null, '第五时代就是这一局的天花板');
+
+  const r = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.equal(r.ok, false);
+  // 只说"已经是最高时代"会让玩家以为游戏到此为止；要说清是哪一层没打开
+  assert.ok(!r.ok && r.reason.includes('「现代」'), `理由要指出能打开它的是哪个包：${!r.ok ? r.reason : ''}`);
+  assert.ok(!r.ok && r.reason.includes('二战'), '顺带把封顶在哪一代讲出来');
+});
+
+test('开了「现代」和「现代战争」：能升到第六时代，并且造得出第六代兵', () => {
+  const ids = ['pack-contemporary', 'pack-contemporary-war', 'pack-modern'];
+  // 先看第五时代的城能不能造六代兵：不能（招募门槛按城市时代判）
+  const before = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
+  const oldCity = citiesOf(before, 'A')[0];
+  assert.ok(oldCity);
+  before.current = 'A';
+  before.players.A.gold = 5000;
+  assert.equal(
+    applyAction(before, { type: 'RECRUIT', cityId: oldCity.id, unitType: 'cnt_mbt' }).ok,
+    false,
+    '第五时代的城不该造得出第六代的主战坦克',
+  );
+
+  const s = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  const cost = upgradeCostOf(s, city);
+  assert.equal(cost, ERAS[5]?.upgradeCost, '第六时代的价取自表里那一行');
+  const maxHpBefore = city.maxHp;
+  const armorBefore = city.armor;
+
+  const r = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.ok(r.ok, `应该能升到第六时代：${!r.ok ? r.reason : ''}`);
+  const after = cityById(r.state, city.id);
+  assert.ok(after);
+  assert.equal(after.era, 6);
+  // 增量而不是覆盖：扩展给城市加的耐久不能被升级抹掉（「要塞」就是这么加的）
+  assert.equal(after.maxHp, maxHpBefore + (eraDef(6).cityMaxHp - eraDef(5).cityMaxHp));
+  assert.equal(after.armor, armorBefore + (eraDef(6).cityArmor - eraDef(5).cityArmor));
+  assert.equal(upgradeCostOf(r.state, after), null, '第六时代就是表底');
+
+  const buy = applyAction(r.state, { type: 'RECRUIT', cityId: city.id, unitType: 'cnt_mbt' });
+  assert.ok(buy.ok, `第六时代该造得出主战坦克：${!buy.ok ? buy.reason : ''}`);
+});
+
+test('上帝模式也造不出这一局升不到的城', () => {
+  const s = fresh({ size: 12 }, 9903);
+  // 找一块 2×2 的空平原（城要占满这四格的左上角）
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 0; y + 1 < s.h && !spot; y++) {
+    for (let x = 0; x + 1 < s.w && !spot; x++) {
+      let free = true;
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+        const t = s.tiles[idx(s, x + dx, y + dy)];
+        if (!t || t.terrain !== 'plain' || t.cityId || s.units.some((u) => u.x === x + dx && u.y === y + dy)) {
+          free = false;
+          break;
+        }
+      }
+      if (free) spot = { x, y };
+    }
+  }
+  assert.ok(spot, '盘面上找不到 2×2 的空平原');
+  const r = placeCity(s, 'A', spot.x, spot.y, 6);
+  assert.ok(r.ok, `该能落城：${!r.ok ? r.reason : ''}`);
+  const city = r.state.cities[r.state.cities.length - 1];
+  assert.equal(city?.era, 5, '这一局的上限是五级，写 6 也只给到 5');
+});
+
+test('对空：防空导弹打飞机 ×1.6，打地面照旧', () => {
+  // 飞行单位绕开一切地形，而地面近战**够不着头顶**（strikeDistance 给地面打空中 +1）。
+  // 这是空中单位的卖点，但必须有个解法，否则就是"谁有飞机谁赢"。
+  // 解法就是防空导弹：它只对飞行目标加成，对地面照旧。
+  const ids = ['pack-contemporary', 'pack-contemporary-war', 'pack-modern'];
+  const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9904);
+  s.units = [];
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
+
+  const sam = place(s, 'A', 'cnt_sam', 4, 4);
+  // 血量抬到远超这一发的量级：这两条要量的是"打掉多少"，不是"能不能打死"，
+  // 而反击会先把它打死（直升机 58 攻、坦克 78 攻，甲 4 的防空营吃不下一轮）
+  sam.hp = 500;
+  const heli = place(s, 'B', 'cnt_heli', 6, 4);
+  // 直升机也得抬血：一发对空 68 点，正好超过它 66 的上限，
+  // 打死了就量不到"打掉多少"——而这条要量的就是这个数
+  heli.hp = 500;
+  const heliHpBefore = heli.hp;
+  const tank = place(s, 'B', 'cnt_mbt', 6, 5);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const samDef = s.unitTypes['cnt_sam'];
+  const heliDef = s.unitTypes['cnt_heli'];
+  const tankDef = s.unitTypes['cnt_mbt'];
+  assert.ok(samDef && heliDef && tankDef);
+
+  // 打飞机：46 × 1.6 ＝ 73.6 → 74，再减 6 点甲 ＝ 68。
+  // 乘的是**攻击力**而不是"最终伤害"（能力挂在 damage 的 postRange 段，
+  // 那一段在减护甲之前），所以重甲目标仍然能靠护甲吃掉一部分——
+  // 这也是刻意的：对空是"打得更准"，不是"无视装甲"。
+  const air = applyAction(s, { type: 'ATTACK', unitId: sam.id, targetId: heli.id });
+  assert.ok(air.ok, `防空营该打得到直升机：${!air.ok ? air.reason : ''}`);
+  const airDmg = heliHpBefore - (air.state.units.find((u) => u.id === heli.id)?.hp ?? 0);
+  assert.equal(
+    airDmg,
+    Math.round(samDef.atk * 1.6) - heliDef.armor,
+    `对空应有 1.6 倍（乘在攻击上）：实打 ${airDmg}`,
+  );
+
+  // 打地面：同样的 46 攻，一点加成都不给。
+  // 先把这个兵的"已行动"擦掉——一个单位一回合只能开一次火。
+  const sam2 = air.state.units.find((u) => u.id === sam.id);
+  assert.ok(sam2);
+  sam2.moved = false;
+  sam2.acted = false;
+  const ground = applyAction(air.state, { type: 'ATTACK', unitId: sam.id, targetId: tank.id });
+  assert.ok(ground.ok, `防空营打地面也该打得动：${!ground.ok ? ground.reason : ''}`);
+  const groundDmg = tankDef.maxHp - ground.state.units.find((u) => u.id === tank.id)!.hp;
+  assert.equal(groundDmg, samDef.atk - tankDef.armor, `对地面没有加成：实打 ${groundDmg}`);
+  assert.ok(airDmg > groundDmg, '对空必须比打同血同甲的地面目标更疼，否则这条能力等于没有');
+});
+
+test('地面近战够不着头顶的直升机', () => {
+  // 防空能力之所以必须存在：巡 1 的步兵打不到贴着它飞的直升机（strikeDistance +1）。
+  const ids = ['pack-contemporary', 'pack-contemporary-war'];
+  const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9905);
+  s.units = [];
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
+  const heli = place(s, 'B', 'cnt_heli', 6, 4);
+  const foot = place(s, 'A', 'militia', 6, 5);
+  s.current = 'A';
+  refreshMemory(s);
+  const r = applyAction(s, { type: 'ATTACK', unitId: foot.id, targetId: heli.id });
+  assert.equal(r.ok, false, '射程 1 的地面单位打不到空中目标');
 });
 
 console.log('\n编制 · 遣散');
@@ -7269,7 +7631,7 @@ test('经济单位按脚下地形出货：平地打粮、林地出材', () => {
   assert.equal(wood.food ?? 0, 0, '林子不产粮');
 });
 
-test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => {
+test('城郭与物料：主城 3×3，经济建筑更值钱但不再当墙', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const city = citiesOf(s, 'A')[0]!;
   assert.equal(city.size, 3, '主城边长 3');
@@ -7283,7 +7645,115 @@ test('城郭与物料：主城 3×3，经济建筑不还手但更值钱', () => 
     Math.round((UNIT_TYPES.mill!.incomeByTerrain?.plain ?? 0) * 1.2),
     '经济建筑收益 +20%',
   );
-  assert.ok(mill.maxHp > UNIT_TYPES.mill!.maxHp, '建筑整体更耐打');
+  assert.equal(mill.armor, UNIT_TYPES.mill!.armor - 1, '经济建筑护甲 −1');
+  assert.equal(
+    mill.maxHp,
+    Math.round(UNIT_TYPES.mill!.maxHp * 1.1),
+    '经济建筑耐久只加一成（普通建筑是 1.35）——它不该顺手变成一堵墙',
+  );
+
+  // 普通建筑照旧 +35%：这条规则不能把所有建筑一起拖下水
+  assert.equal(
+    s.unitTypes.bridge!.maxHp,
+    Math.round(UNIT_TYPES.bridge!.maxHp * 1.35),
+    '非经济建筑还是原来的耐久',
+  );
+
+  // 隘口的真实尺度：粮仓挡得住追兵，挡不住一支有备而来的部队。
+  // 二代骑士（攻 17）拆它必须落在四下以内——以前是五下。
+  const granary = s.unitTypes.granary!;
+  const hits = Math.ceil(granary.maxHp / Math.max(1, s.unitTypes.knight!.atk - granary.armor));
+  assert.ok(hits <= 4, `骑士拆粮仓要 ${hits} 下，应该不超过 4 下`);
+});
+
+test('经济建筑：造价降下来，回本压到四五个回合', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+
+  // 粮仓：55 的六成 = 33 粮，一分金币都不要（"起步靠粮"那一段）
+  const granary = s.unitTypes.granary!;
+  const gc = recruitResCost(s, 'A', granary);
+  assert.equal(gc.gold ?? 0, 0, '前期经济建筑不收金币');
+  assert.equal(gc.food, 33, '粮仓只花 33 粮');
+  const gPayback = gc.food / (granary.yield?.food ?? 1);
+  assert.ok(gPayback <= 4, `粮仓回本要 ${gPayback.toFixed(1)} 回合，应该 ≤ 4`);
+
+  // 采石场：产什么就吃什么——它吃建材，不吃粮
+  const qc = recruitResCost(s, 'A', s.unitTypes.quarry!);
+  assert.equal(qc.gold ?? 0, 0, '前期经济建筑不收金币');
+  assert.equal(qc.food ?? 0, 0, '采石场是建材建筑，不该吃粮');
+  assert.equal(qc.material, 54, '采石场 90 的六成 = 54 材');
+  assert.ok(54 / (s.unitTypes.quarry!.yield?.material ?? 1) <= 4.5, '采石场回本 ≤ 4.5 回合');
+
+  // 后期经济建筑仍要金币，但只有两成（普通兵是三成）
+  const brick = s.unitTypes.brickworks!;
+  const bc = recruitResCost(s, 'A', brick);
+  assert.equal(bc.gold, Math.round(brick.cost * 0.2), '后期经济建筑金币占两成');
+  assert.equal(bc.material, Math.round(brick.cost * 0.55), '建材占五成半');
+  assert.ok(bc.material / (brick.yield?.material ?? 1) <= 5, '砖窑回本 ≤ 5 回合');
+
+  // 降价只给经济建筑：普通兵的金币/资源结构一个字没动
+  const militia = recruitResCost(s, 'A', s.unitTypes.militia!);
+  assert.equal(militia.gold, Math.round(s.unitTypes.militia!.cost * 0.3), '普通兵还是三成金币');
+});
+
+test('建材产线：伐木工之后每一代都有人接，产出逐代往上走', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const chain = [
+    ['lumberjack', 2, 'forest'],
+    ['quarrier', 3, 'hill'],
+    ['minecrew', 4, 'hill'],
+    ['materials', 5, 'hill'],
+  ] as const;
+
+  let prev = 0;
+  for (const [id, era, terrain] of chain) {
+    const def = s.unitTypes[id];
+    assert.ok(def, `城郭包应该带来 ${id}`);
+    assert.equal(def.era, era, `${id} 属于时代 ${era}`);
+    assert.equal(def.category, 'economy', `${id} 是经济单位`);
+
+    const u = place2(s, 'A', id, 5, 5);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain;
+    const material = unitYield(s, u).material ?? 0;
+    assert.ok(material > prev, `${id} 的建材产出 ${material} 应该高于上一代 ${prev}`);
+    prev = material;
+  }
+  // 时代 5 单支建材兵得顶得上半座建材基地，否则"换人"这件事没有意义
+  assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
+});
+
+test('建材建筑按代分工兵：工程师只有砖窑，建筑队三样全会', () => {
+  const s = fresh({ expansionIds: ['city-works'] });
+  const builds = (id: string) => s.unitTypes[id]?.builds ?? [];
+
+  assert.ok(builds('engineer').includes('brickworks'), '工程师起手就是砖窑');
+  assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是工业时代的东西');
+  assert.ok(builds('foreman').includes('cementworks'), '厂长会盖水泥厂');
+  assert.equal(builds('foreman').includes('materialbase'), false, '建材基地要现代建筑队');
+  for (const id of ['brickworks', 'cementworks', 'materialbase']) {
+    assert.ok(builds('crew').includes(id), `建筑队应该会盖 ${id}`);
+  }
+
+  // 产出阶梯：采石场 13 → 砖窑 24 → 水泥厂 40 → 建材基地 58
+  const step = ['quarry', 'brickworks', 'cementworks', 'materialbase'].map(
+    (id) => s.unitTypes[id]!.yield?.material ?? 0,
+  );
+  for (let i = 1; i < step.length; i++) {
+    assert.ok(step[i]! > step[i - 1]!, `建材产出应该逐级上升：${step.join(' → ')}`);
+  }
+  assert.ok(step[3]! >= 58, `建材基地该有 58 材/回合，实际 ${step[3]}`);
+
+  // 高级建材建筑的卖点不是"每材更划算"，是"同样几格地里挤得更多"：
+  // 回本控制在 5 个回合出头，比采石场慢一点，但上限高一个量级。
+  // 另外它们都只吃建材——不要跟粮食抢同一笔钱。
+  for (const id of ['brickworks', 'cementworks', 'materialbase']) {
+    const c = recruitResCost(s, 'A', s.unitTypes[id]!);
+    assert.equal(c.food ?? 0, 0, `${id} 不吃粮`);
+    assert.ok((c.material ?? 0) > 0, `${id} 要建材`);
+    const total = (c.gold ?? 0) + (c.material ?? 0);
+    const payback = total / (s.unitTypes[id]!.yield?.material ?? 1);
+    assert.ok(payback <= 5.2, `${id} 回本 ${payback.toFixed(1)} 回合，应该 ≤ 5.2`);
+  }
 });
 
 test('箭塔：两回合施工，工地开不了火', () => {
