@@ -9040,6 +9040,60 @@ test('修士：满级（9 级）永远不会老死', () => {
   assert.equal(getAgingYears(r2.state.units.find(u => u.id === qi.id)!), 0, '满级修士不减益');
 });
 
+test('修士：溅射半径随境界成长（x/4）', () => {
+  // 用一个工厂函数清理地图并摆好阵列，避免重复代码
+  const setup = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    // 清空一块平地
+    for (let y = 3; y <= 7; y++) {
+      for (let x = 4; x <= 10; x++) {
+        s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+      }
+    }
+    s.unitTypes['target'] = { ...s.unitTypes.militia, id: 'target', armor: 0, maxHp: 1000, abilities: [] };
+    
+    // 靶子阵列：主目标 (5,5)，副目标1 (6,5) 距离 1，副目标2 (7,5) 距离 2
+    const main = place2(s, 'B', 'target', 5, 5); main.hp = 1000;
+    const near = place2(s, 'B', 'target', 6, 5); near.hp = 1000;
+    const far  = place2(s, 'B', 'target', 7, 5); far.hp = 1000;
+    
+    // 修士在 (5,4)，距离主目标 1 格
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 4);
+    qi.custom = { lifespan: 100 };
+    
+    return { s, qi, main, near, far };
+  };
+
+  // 1. x=3（exp=8），半径 0：无溅射
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 8;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(r.state.units.find(u => u.id === near.id)!.hp, 1000, 'x=3 没有溅射');
+  }
+
+  // 2. x=4（exp=16），半径 1：波及 near，不波及 far
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 16;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=4 应该波及距离 1 的敌人');
+    assert.equal(r.state.units.find(u => u.id === far.id)!.hp, 1000, 'x=4 够不到距离 2 的敌人');
+  }
+
+  // 3. x=8（exp=256），半径 2：near 和 far 全波及
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 256;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=8 波及距离 1');
+    assert.ok(r.state.units.find(u => u.id === far.id)!.hp < 1000, 'x=8 波及距离 2');
+  }
+});
+
 test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
   // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。

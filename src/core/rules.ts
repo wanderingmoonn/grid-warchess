@@ -1837,7 +1837,13 @@ function splashVictims(
   attacker: Unit,
   defender: Unit,
 ): Array<{ unit: Unit; dmg: number }> {
-  const radius = utype(s, attacker.type).splash ?? 0;
+  // 改成动态计算：
+  let radius = utype(s, attacker.type).splash ?? 0;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifySplash) {
+      radius = e.hooks.modifySplash({ state: s, attacker, splash: radius });
+    }
+  }
   if (radius <= 0) return [];
 
   const out: Array<{ unit: Unit; dmg: number }> = [];
