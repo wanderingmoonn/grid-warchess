@@ -720,7 +720,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     summary: '每回合掉 6% 生命上限',
     onTurnStart: (s, u, _val) => {
       const def = utype(s, u.type);
-      const dmg = Math.ceil(def.maxHp * 0.06);
+      const dmg = Math.ceil(maxHpOf(s, u) * 0.06);
       u.hp -= dmg;
       return `${def.name} 因中毒失去 ${dmg} 点生命`;
     },
@@ -918,6 +918,11 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
   };
 }
 
+export function maxHpOf(s: GameState, u: Unit): number {
+  const base = utype(s, u.type).maxHp;
+  return base + (u.maxHpBonus ?? 0);
+}
+
 /**
  * 这个兵种能不能掠水。
  *
@@ -997,7 +1002,7 @@ export function canMove(u: Unit): boolean {
 }
 
 export function canAttack(u: Unit): boolean {
-  return !u.acted;
+  return !u.acted && (u.attacksLeft ?? 1) > 0;
 }
 
 /**
@@ -1134,7 +1139,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     atkItems.push({ label: '指挥光环', delta: aura.atk });
   }
   // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
-  // 状态修正攻击力（面板）：与 computeDamage 同一段逻辑，位置也在光环之后
+  // 状态修正攻击力面板：与 computeDamage 同一段逻辑，位置也在光环之后
   for (const [key, val] of orderedStatuses(u.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (!sdef?.modifyAtk) continue;
@@ -1142,9 +1147,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     atk = sdef.modifyAtk(s, u, val, atk);
     if (atk !== before) atkItems.push({ label: sdef.name, delta: atk - before });
   }
-  if (u.kills > 0) {
-    atk += u.kills;
-    atkItems.push({ label: '老兵不死 · 击杀成长', delta: u.kills });
+  // 扩展修改攻击力面板面板
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyStatAtk) {
+      const before = atk;
+      atk = e.hooks.modifyStatAtk({ state: s, unit: u, atk });
+      if (atk !== before) {
+        atkItems.push({ label: e.name, delta: atk - before });
+      }
+    }
   }
   const fear = fearPenalty(s, u);
   if (fear !== 0) {
@@ -1774,31 +1785,31 @@ export function previewAttack(
   toDefender: number;
   toAttacker: number;
   counter: boolean;
-  hits: number;
+  hits: number; // 保留字段防 UI 报错，但固定为 1
   toSplash: number;
 } {
   const def = utype(s, attacker.type);
-  const burst = Math.max(1, def.burst ?? 1);
 
-  // 多段：按顺序算，打死了就不再有后续
-  let toDefender = 0;
-  let hp = defender.hp;
-  let hits = 0;
-  while (hits < burst && hp > 0) {
-    const one = computeDamage(s, attacker, defender);
-    hp -= one;
-    toDefender += one;
-    hits += 1;
+  // 单次伤害
+  const toDefender = computeDamage(s, attacker, defender);
+
+  const survives = defender.hp - toDefender > 0;
+  // 新增：算一下防守方还剩几次反击机会
+  let baseCounters = Math.max(1, utype(s, defender.type).burst ?? 1);
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyAttacks) {
+      baseCounters = e.hooks.modifyAttacks({ state: s, unit: defender, attacks: baseCounters });
+    }
   }
-
-  const survives = hp > 0;
-  const counter = survives && !hasFlag(def, 'noCounter') && canStrike(s, defender, attacker);
+  const countersLeft = defender.countersLeft ?? Math.max(0, baseCounters);
+  // 修改反击判定条件
+  const counter = survives && !hasFlag(def, 'noCounter') && countersLeft > 0 && canStrike(s, defender, attacker);
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
   for (const v of splashVictims(s, attacker, defender)) toSplash += v.dmg;
 
-  return { toDefender, toAttacker, counter, hits, toSplash };
+  return { toDefender, toAttacker, counter, hits: 1, toSplash };
 }
 
 /**
@@ -2234,6 +2245,7 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
       u.moved = false;
       u.acted = false;
       u.manualFired = false;
+      delete u.attacksLeft;
     }
   }
 }
@@ -2265,7 +2277,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId, action.spillTo);
+        return doAttack(next, action.unitId, action.targetId);
       case 'SIEGE':
         return doSiege(next, action.unitId, action.cityId);
       case 'RECRUIT':
@@ -2389,86 +2401,10 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   return { ok: true, state: s };
 }
 
-interface StrikesTarget {
-  unit: Unit;
-  dmg: number;
-}
-
-interface StrikeSummary {
-  /** 真正打出去的段数（目标提前死光时小于 burst） */
-  hits: number;
-  /** 所有段加起来的伤害 */
-  total: number;
-  /** 每一段打了谁、多少伤害，按出手顺序；死亡结算与战报都读它 */
-  targets: StrikesTarget[];
-}
-
-/**
- * 多段攻击的结算：把 burst 段拆成依次执行的独立一击。
- *
- * 三件事必须和重构前逐点一致，改了就等于改数值：
- *   1. 每段单独调用 computeDamage——护甲、地形、属性每次都重算（多段打重甲吃亏就靠这个）；
- *   2. 主目标还活着就一直打它，所以"3 段全打一个人"的总伤害与以前完全相同；
- *   3. 没有任何可打的目标就停手，剩下的段作废（不会凭空打空气）。
- *
- * 新东西只有一条：主目标倒下之后，段数可以按 spillTo 的顺序转给别人。
- * spillTo 是**候选队列**：每个目标会被连续打到倒下，才轮到下一个；
- * 死了、够不着、是友军的会被跳过，队列空了就把剩下的段作废——
- * 界面上点错一个人只会浪费段数，不会让整次攻击变成非法动作。
- */
-function resolveStrikes(
-  s: GameState,
-  attacker: Unit,
-  primary: Unit,
-  burst: number,
-  spillTo?: readonly string[],
-): StrikeSummary {
-  const out: StrikeSummary = { hits: 0, total: 0, targets: [] };
-
-  // 候选队列：去重、去掉主目标与友军，保持调用方给定的先后顺序
-  const queue: Unit[] = [];
-  for (const id of spillTo ?? []) {
-    const u = unitById(s, id);
-    if (!u || u.id === primary.id || u.owner === attacker.owner) continue;
-    if (queue.some((x) => x.id === u.id)) continue;
-    queue.push(u);
-  }
-
-  let left = burst;
-  let q = 0;
-  while (left > 0) {
-    let target: Unit | undefined;
-    if (primary.hp > 0 && canStrike(s, attacker, primary)) {
-      target = primary;
-    } else {
-      while (q < queue.length) {
-        const c = queue[q];
-        if (c && c.hp > 0 && canStrike(s, attacker, c)) {
-          target = c;
-          break;
-        }
-        q += 1;
-      }
-    }
-    if (!target) break;
-
-    const one = computeDamage(s, attacker, target);
-    target.hp -= one;
-    out.hits += 1;
-    out.total += one;
-    out.targets.push({ unit: target, dmg: one });
-    left -= 1;
-    // 这个溢出目标已经被打倒了，下一段换队列里的下一个
-    if (target !== primary && target.hp <= 0) q += 1;
-  }
-  return out;
-}
-
 function doAttack(
   s: GameState,
   unitId: string,
   targetId: string,
-  spillTo?: readonly string[],
 ): ActionResult {
   const attacker = unitById(s, unitId);
   const defender = unitById(s, targetId);
@@ -2500,12 +2436,22 @@ function doAttack(
   const atName = atkDef.name;
   const dfName = utype(s, defender.type).name;
 
-  // 多动式连击：burst 段拆成"依次结算的独立一击"，每段各自算一次伤害、各自减一次护甲。
-  // 主目标倒下之后，剩下的段按 spillTo 的顺序转打别人；不填就按老规矩作废。
-  const burst = Math.max(1, atkDef.burst ?? 1);
-  const strikes = resolveStrikes(s, attacker, defender, burst, spillTo);
-  const dmg = strikes.total;
-  const hits = strikes.hits;
+  // 新增：如果是本回合第一次攻击，初始化剩余次数
+  if (attacker.attacksLeft === undefined) {
+    let attacks = Math.max(1, atkDef.burst ?? 1); // 原版连击变成多次攻击
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifyAttacks) {
+        attacks = e.hooks.modifyAttacks({ state: s, unit: attacker, attacks });
+      }
+    }
+    attacker.attacksLeft = Math.max(1, attacks);
+  }
+  if (attacker.attacksLeft <= 0) {
+    return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
+  }
+  // 删掉原来的 while 循环
+  const dmg = computeDamage(s, attacker, defender);
+  defender.hp -= dmg;
 
   // 溅射：主目标周围的人一起挨（按比例打折，只打敌人）
   const splashed = splashVictims(s, attacker, defender);
@@ -2513,9 +2459,24 @@ function doAttack(
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
-  if (!noCounter && defender.hp > 0 && canStrike(s, defender, attacker)) {
+  // 新增：初始化防守方的反击次数
+  if (defender.countersLeft === undefined) {
+    let baseCounters = Math.max(1, utype(s, defender.type).burst ?? 1);
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifyAttacks) { // 复用攻击次数的钩子
+        baseCounters = e.hooks.modifyAttacks({ state: s, unit: defender, attacks: baseCounters });
+      }
+    }
+    defender.countersLeft = Math.max(0, baseCounters);
+  }
+
+  // 判断是否反击：不仅要活下来、不能先手，还要反击次数 > 0
+  if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
+    
+    // 消耗一次反击机会
+    defender.countersLeft -= 1; 
   }
 
   // 出手流程里的补充：吸血在这一步（反击之后、命中状态之前），
@@ -2535,12 +2496,7 @@ function doAttack(
   const healed = sctx.result.healed;
   runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.postDamage, to: STRIKE_STAGE.afterStatus });
 
-  const hitText = burst > 1 ? `${hits} 连击 · ` : '';
-  // 溢出段打到的人：报个名字和数字，不然玩家只会看到"1 连击造成 8"，不知道另外两段去哪了
-  const spillBits = strikes.targets
-    .filter((st) => st.unit.id !== defender.id)
-    .map((st) => `${utype(s, st.unit.type).name} ${st.dmg}`);
-  const spillText = spillBits.length > 0 ? `，溢出打 ${spillBits.join('、')}` : '';
+  const hitText = '';
 
   // 命中附带的状态 / 击退，都排在"打完之后、结算死亡之前"
   const statusTouched = applyOnHitStatus(s, attacker, defender, dmg);
@@ -2564,8 +2520,8 @@ function doAttack(
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${spillText}${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
-      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${spillText}${splashText}${pushText}`,
+      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
+      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
   );
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
@@ -2579,8 +2535,13 @@ function doAttack(
     attacker.heroBuff = Object.keys(rest).length > 0 ? rest : undefined;
     pushLog(s, attacker.owner, `${atName} 的这一下不占本回合的攻击`);
   } else {
-    attacker.acted = true;
+    attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
     attacker.moved = true;
+    
+    // 次数扣完了，才算彻底行动结束
+    if (attacker.attacksLeft <= 0) {
+      attacker.acted = true;
+    }
     markManualFire(s, attacker);
   }
 
@@ -2616,19 +2577,6 @@ function doAttack(
         pushLog(s, attacker.owner, `${atName} 斩杀得手，本回合还能再走一次`);
       }
     }
-  }
-
-  // 溢出段打死的也要走同一套善后：战报 + 沉船 + 击杀钩子。
-  // 和主目标那一段的区别只有一个：不给"收割"（刺客大师的还移动）——
-  // 那条能力写的是"亲手斩掉"，指的是这一击的主目标，不该因为顺手扫死一个杂兵就触发。
-  for (const st of strikes.targets) {
-    if (st.unit.id === defender.id) continue;
-    if (st.unit.hp > 0) continue;
-    if (!s.units.some((x) => x.id === st.unit.id)) continue;
-    s.units = s.units.filter((x) => x.id !== st.unit.id);
-    pushLog(s, attacker.owner, `${utype(s, st.unit.type).name} 被连击溢出消灭`, true);
-    drownCargo(s, st.unit);
-    fireKilled(s, st.unit, attacker);
   }
 
   // 溅射打死的也要走同一套善后：战报 + 沉船 + 击杀钩子
@@ -3439,7 +3387,7 @@ function doDisband(s: GameState, unitId: string): ActionResult {
  */
 export function disbandRefundOf(s: GameState, u: Unit): number {
   const def = utype(s, u.type);
-  if (u.hp < def.maxHp) return 0;
+  if (u.hp < maxHpOf(s, u)) return 0;
   return Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
 }
 
@@ -3487,10 +3435,9 @@ SKILL_EFFECTS['throw-axe'] = (c) => {
   c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
 };
 SKILL_EFFECTS['regenerate'] = (c) => {
-  const def = utype(c.state, c.self.type);
   const power = c.skill.power ?? 0;
   const before = c.self.hp;
-  c.self.hp = Math.min(def.maxHp, c.self.hp + Math.max(1, Math.round(def.maxHp * power)));
+  c.self.hp = Math.min(maxHpOf(c.state, c.self), c.self.hp + Math.max(1, Math.round(maxHpOf(c.state, c.self) * power)));
   if (c.self.hp === before) {
     c.result.ok = false;
     c.result.reason = '已经是满血了';
@@ -3527,8 +3474,8 @@ SKILL_EFFECTS['descend'] = (c) => {
     if (t.owner !== c.self.owner || t.hp <= 0) continue;
     if (distance(t, c.self) > radius) continue;
     const td = utype(c.state, t.type);
-    if (t.hp < td.maxHp && canBeHealed(td)) {
-      t.hp = Math.min(td.maxHp, t.hp + Math.max(1, Math.round(td.maxHp * power)));
+    if (t.hp < maxHpOf(c.state, t) && canBeHealed(td)) {
+      t.hp = Math.min(maxHpOf(c.state, t), t.hp + Math.max(1, Math.round(maxHpOf(c.state, t) * power)));
       healed += 1;
     }
     if (t.status && Object.keys(t.status).length > 0) {
@@ -3568,17 +3515,15 @@ SKILL_EFFECTS['mitosis'] = (c) => {
     c.result.reason = `周围只有 ${spots.length} 格空地，裂成四个需要 4 格`;
     return;
   }
-  const kidDef = utype(c.state, kid);
   const share = Math.max(1, Math.floor(c.self.hp / 4));
   let left = c.self.hp;
   // 把自己从棋盘上删掉
   c.state.units = c.state.units.filter((x) => x.id !== c.self.id);
   for (let i = 0; i < 4; i += 1) {
     const spot = spots[i]!;
-    // 注意这里用 c.state，而不是 s
     const born = makeUnit(c.state, c.self.owner, kid, spot.x, spot.y);
     const hp = i === 3 ? Math.max(1, left) : share;
-    born.hp = Math.max(1, Math.min(kidDef.maxHp, hp));
+    born.hp = Math.max(1, Math.min(maxHpOf(c.state, born), hp));
     left -= hp;
     c.state.units.push(born);
   }
@@ -3608,7 +3553,7 @@ SKILL_EFFECTS['fuse'] = (c) => {
   const at = { x: c.self.x, y: c.self.y };
   c.state.units = c.state.units.filter((n) => !kin.some((k) => k.id === n.id));
   const boss = makeUnit(c.state, c.self.owner, bossId, at.x, at.y);
-  boss.hp = Math.max(1, Math.min(bossDef.maxHp, total));
+  boss.hp = Math.max(1, Math.min(maxHpOf(c.state, boss), total));
   c.state.units.push(boss);
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
@@ -3680,7 +3625,7 @@ function doPlaceEgg(s: GameState, x: number, y: number): ActionResult {
   }
   const def = utype(s, egg.type);
   const born = makeUnit(s, egg.owner, egg.type, x, y);
-  born.hp = Math.max(1, Math.round(def.maxHp * egg.hpRatio));
+  born.hp = Math.max(1, Math.round(maxHpOf(s, born) * egg.hpRatio));
   born.reborn = true;
   s.units.push(born);
   s.pendingEgg = undefined;
@@ -3890,6 +3835,12 @@ function doEndTurn(s: GameState): ActionResult {
   const rested = new Set(
     s.units.filter((u) => u.owner === nextPlayer && !u.moved && !u.acted).map((u) => u.id),
   );
+
+  // 新回合开始，所有单位的反击次数重置
+  for (const u of s.units) {
+    delete u.countersLeft;
+  }
+
   resetUnitsFor(s, nextPlayer);
   advanceConstruction(s, nextPlayer);
 

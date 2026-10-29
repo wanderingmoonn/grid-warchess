@@ -16,7 +16,7 @@ import {
   passable,
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
-import { expansionById, unitSourceOf } from '../core/expansions.ts';
+import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
 import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
@@ -31,7 +31,9 @@ import {
   cityTiles,
   disbandRefundOf,
   distToCity,
+  effectiveRange,
   effectiveStats,
+  maxHpOf, 
   heroSkillsOf,
   recruitResCost,
   recruitSpawnCells,
@@ -476,6 +478,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       notes.length === 0
         ? ''
         : `<div class="unit-notes">${notes.map((n) => `<div>· ${n}</div>`).join('')}</div>`;
+    // 收集所有扩展想在这个兵种面板上显示的文字
+    const customLines: string[] = [];
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.getUnitPanelLines) {
+        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit }));
+      }
+    }
+    const customBlock = customLines.length > 0 
+      ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${customLines.map(l => `<div>· ${escapeHtml(l)}</div>`).join('')}</div>` 
+      : '';
     /**
      * 遣散：指挥官模式下也留着。
      *
@@ -612,7 +624,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
-      <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${def.maxHp}</b></div>
+      <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(s, selectedUnit)}</b></div>
       <div class="info-row">
         <span>攻击 / 护甲</span>
         <b>${eff.atk} / ${eff.armor}${baseNote}</b>
@@ -621,7 +633,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       <div class="info-row"><span>移动力</span><b>${
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
-      <div class="info-row"><span>射程 / 视野</span><b>${def.range} / ${vision}</b></div>
+      <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${vision}</b></div>
       ${
         // 天气紧跟在"移动力 / 射程 / 视野"后面：这几项正是它改的东西，
         // 放在别处玩家就得自己把两处信息对起来
@@ -641,6 +653,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
+      ${customBlock} 
       ${
         mine && myTurn
           ? `<div class="force-row">

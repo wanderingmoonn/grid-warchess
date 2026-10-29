@@ -27,6 +27,8 @@ import { FANTASY_PACKS } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
+//修真扩展包
+import { CULTIVATION_PACK } from './cultivation-packs.ts';
 import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts';
 // 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
 import { BASE_MAX_ERA, ERAS } from './config.ts';
@@ -235,6 +237,12 @@ export interface MatchStartCtx {
   state: GameState;
 }
 
+export interface AttacksCtx {
+  state: GameState;
+  unit: Unit;
+  attacks: number;
+}
+
 export interface ExpansionHooks {
   /** 纯函数：修正伤害 */
   modifyDamage?: (c: DamageCtx) => number;
@@ -308,6 +316,21 @@ export interface ExpansionHooks {
    * 真要"达成某条件即结束、但不分胜负"，得另加一个显式的终局标记。
    */
   checkWinner?: (state: GameState) => PlayerId | null | undefined;
+
+  /** 纯函数：修正每回合的基础攻击次数（默认为 burst 或 1） */
+  modifyAttacks?: (c: AttacksCtx) => number;
+
+  /** 纯函数：修正面板上的常驻攻击力（不影响战斗计算，只影响UI显示）
+   * 虽然造成伤害和敌我双方都有关，但是也可能有些修正自己基础攻击效果，不显示会造成误判
+   */
+  modifyStatAtk?: (c: { state: GameState; unit: Unit; atk: number }) => number;
+
+  /**
+   * 纯函数：扩展给兵种面板提供自定义的信息行。
+   * 返回一个字符串数组，UI 会原样渲染在面板上。
+   * 核心引擎不会读取这里的逻辑，只负责把它们画出来。
+   */
+  getUnitPanelLines?: (c: { state: GameState; unit: Unit }) => string[];
 }
 
 export interface Expansion {
@@ -577,6 +600,11 @@ export const EXPANSIONS: Expansion[] = [
       onUnitKilled: ({ killer }) => {
         if (killer) killer.kills += 1;
       },
+      // 新增：让老兵不死自己负责在面板上显示加成
+      modifyStatAtk: ({ unit, atk }) => {
+        // 如果这个兵有击杀数，面板上就加成
+        return atk + unit.kills;
+      },
     },
   },
   {
@@ -740,6 +768,7 @@ export const EXPANSIONS: Expansion[] = [
   ...ERA_PACKS,
   CITY_WORKS,
   SEASONS,
+  CULTIVATION_PACK,
   // 第六时代拆成两包，和"原版给底座、扩展往上加料"的分法对齐：
   //   「现代」开时代 + 9 个最基本的兵，「现代战争」再加 15 个专精兵（requires 前者）。
   // 底座排在前：加料包的前置必须先在场，读配置的人一眼能看出这个先后。

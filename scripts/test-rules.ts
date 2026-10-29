@@ -143,6 +143,7 @@ import {
   unitsOf,
   upgradeCostOf,
   unitYield,
+  maxHpOf,
   utype,
   visionOf,
   visibleTilesOf,
@@ -160,6 +161,10 @@ import type {
   Unit,
   UnitTypeDef,
 } from '../src/core/types.ts';
+import { 
+  cultivationRank,
+  getAgingYears
+} from '../src/core/cultivation-packs.ts';
 
 let passed = 0;
 let failed = 0;
@@ -1005,6 +1010,56 @@ test('浮动之后平均间距没变', () => {
   }
   const avg = sum / n;
   assert.ok(avg >= 6.3 && avg <= 7.6, `12×12 平均最近敌我距离 ${avg.toFixed(2)}，偏离 7.0 太多`);
+});
+
+test('反击次数：打满上限后不再反击，下一个大回合恢复', () => {
+  const s = fresh({ godMode: true });
+  
+  // 清理地形，防止这几格刚好是高山、水或敌方城市导致攻击失败
+  for (const [x, y] of [[4, 6], [5, 6], [6, 6], [7, 6]]) {
+    s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+  }
+
+  // 靶子：双刀流（burst: 2），0 护甲，1000 血
+  s.unitTypes['double-hitter'] = { ...s.unitTypes.militia, id: 'double-hitter', armor: 0, maxHp: 1000, burst: 2, abilities: [] };
+  // 攻击方：单次攻击
+  s.unitTypes['single-hitter'] = { ...s.unitTypes.militia, id: 'single-hitter', armor: 0, maxHp: 1000, abilities: [] };
+  
+  const t1 = place2(s, 'B', 'double-hitter', 5, 6);
+  const t2 = place2(s, 'A', 'single-hitter', 4, 6);
+  const a1 = place2(s, 'A', 'single-hitter', 6, 6);
+  
+  let st = { ...s, current: 'A' as const, units: [a1, t2, t1] };
+  
+  // A 的 a1 打 B 的 t1。t1 会反击 1 次。
+  let r = applyAction(st, { type: 'ATTACK', unitId: a1.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason); // ⬅️ 失败时打印具体原因
+  
+  let defender = r.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, 1, '防守方反击了一次，次数应减 1');
+  
+  // A 的 t2 打 B 的 t1。t1 还能反击 1 次。
+  r = applyAction(r.state, { type: 'ATTACK', unitId: t2.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  
+  defender = r.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, 0, '防守方次数耗尽');
+  
+  // 新增第三个攻击者，注意 place2 已经把它塞进 s.units 了，绝对不能再 push 一次
+  const a3 = place2(r.state, 'A', 'single-hitter', 5, 5);
+  r = applyAction(r.state, { type: 'ATTACK', unitId: a3.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  
+  assert.equal(r.state.units.find(u => u.id === a3.id)!.hp, 1000, '次数耗尽后不应反击');
+  
+  // 结束回合，到 B 的回合，再回到 A 的回合。次数重置。
+  const end1 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(end1.ok);
+  const end2 = applyAction(end1.state, { type: 'END_TURN' });
+  assert.ok(end2.ok);
+  
+  defender = end2.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, undefined, '新回合应该重置');
 });
 
 console.log('\n经济与产兵');
@@ -8886,106 +8941,63 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
   );
 });
 
-test('连击：每段是一次独立结算，溢出段可以换目标', () => {
-  const burst = UNIT_TYPES.mg?.burst ?? 1;
-  assert.ok(burst >= 3, '这条用例需要一个至少三段的兵（mg）');
+console.log('\n修仙扩展：炼气士');
 
-  // ① 兼容：不排溢出目标时，段数全打主目标，总伤害 = 每段 × 段数
-  const s = fresh();
-  s.current = 'A';
-  s.units = [];
-  putTerrain(s, 5, 5, 'plain');
-  putTerrain(s, 7, 5, 'plain');
-  const mg = place(s, 'A', 'mg', 5, 5);
-  const tank = place(s, 'B', 'tank', 7, 5);
-  tank.hp = 999;
-  const one = computeDamage(s, mg, tank);
-  const before = tank.hp;
-  const r1 = applyAction(s, { type: 'ATTACK', unitId: mg.id, targetId: tank.id });
-  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
-  const tankAfter = r1.state.units.find((u) => u.id === tank.id);
-  assert.ok(tankAfter, '坦克应该还活着');
-  assert.equal(before - tankAfter.hp, one * burst, '没排溢出目标 = 老规矩：段数全打主目标');
+test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  
+  // 1 级，寿元 10。给 100 点经验，保证打坐不会立刻升级干扰测试
+  qi.custom = { exp: 100 }; 
+  assert.equal(cultivationRank(qi), 6, 'exp=100 应该是 6 级（2^6=64, 2^7=128）');
+  // 6 级寿元 = 5 + 6*5 = 35
+  
+  // 35 岁：无衰老
+  qi.age = 35;
+  const baseAtk = effectiveStats(s, qi).atk;
+  const baseArmor = effectiveStats(s, qi).armor;
+  
+  // 36 岁：超 1 岁，攻击 -2，护甲 -1
+  qi.age = 36;
+  assert.equal(effectiveStats(s, qi).atk, baseAtk - 2, '超 1 岁攻击减 2');
+  assert.equal(effectiveStats(s, qi).armor, baseArmor - 1, '超 1 岁护甲减 1');
+  
+  // 38 岁：超 3 岁，生命归 0 等待清场
+  qi.age = 38;
+  assert.equal(getAgingYears(qi), 3, '这里超龄 3 岁');
+  
+  // 模拟回合开始
+  const r = applyAction({ ...s, current: 'A', units: [qi] }, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const r2 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  
+  const doomed = r2.state.units.find(u => u.id === qi.id);
+  assert.ok(doomed, '回光返照期间，单位还在场上');
+  assert.equal(doomed.hp, 0, '生命值应归 0');
+  assert.ok(r2.state.log.some(l => l.text.includes('油尽灯枯')), '战报应提示油尽灯枯');
+  
+  // 进行任意一次操作（比如结束回合），触发清场
+  const r3 = applyAction(r2.state, { type: 'END_TURN' });
+  assert.ok(r3.ok);
+  assert.ok(!r3.state.units.some(u => u.id === qi.id), '一旦触发清场，应该被移除');
+});
 
-  // ② 主目标一段就死：剩下的段按 spillTo 打别人（每段照旧单独减甲）
-  const s2 = fresh();
-  s2.current = 'A';
-  s2.units = [];
-  putTerrain(s2, 5, 5, 'plain');
-  putTerrain(s2, 6, 5, 'plain');
-  putTerrain(s2, 4, 5, 'plain');
-  const mg2 = place(s2, 'A', 'mg', 5, 5);
-  const soft = place(s2, 'B', 'militia', 6, 5);
-  soft.hp = 1; // 第一段必死
-  const next = place(s2, 'B', 'militia', 4, 5);
-  next.hp = 999;
-  const perHit = computeDamage(s2, mg2, next);
-  const r2 = applyAction(s2, {
-    type: 'ATTACK',
-    unitId: mg2.id,
-    targetId: soft.id,
-    spillTo: [next.id],
-  });
-  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
-  assert.equal(r2.state.units.some((u) => u.id === soft.id), false, '主目标应该被打死');
-  const nextAfter = r2.state.units.find((u) => u.id === next.id);
-  assert.ok(nextAfter, '溢出目标血厚，应该还在');
-  assert.equal(999 - nextAfter.hp, perHit * (burst - 1), '剩下的段全落在溢出目标上');
+test('修士：满级（9 级）永远不会老死', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { exp: 512 }; // 9 级
+  qi.age = 9999; // 活了快一万岁
 
-  // ③ 队列里的坏目标（友军 / 不存在 / 已死）只被跳过，不让整次攻击变成非法
-  const s3 = fresh();
-  s3.current = 'A';
-  s3.units = [];
-  putTerrain(s3, 5, 5, 'plain');
-  putTerrain(s3, 6, 5, 'plain');
-  putTerrain(s3, 4, 5, 'plain');
-  const mg3 = place(s3, 'A', 'mg', 5, 5);
-  const friend = place(s3, 'A', 'militia', 5, 6);
-  const soft3 = place(s3, 'B', 'militia', 6, 5);
-  soft3.hp = 1;
-  const corpse = place(s3, 'B', 'militia', 5, 7);
-  corpse.hp = 0;
-  const back = place(s3, 'B', 'militia', 4, 5);
-  back.hp = 999;
-  const friendHp = friend.hp;
-  const perHit3 = computeDamage(s3, mg3, back);
-  const r3 = applyAction(s3, {
-    type: 'ATTACK',
-    unitId: mg3.id,
-    targetId: soft3.id,
-    spillTo: [friend.id, '不存在的单位', corpse.id, back.id],
-  });
-  assert.ok(r3.ok, r3.ok ? '' : r3.reason);
-  const friendAfter = r3.state.units.find((u) => u.id === friend.id);
-  assert.ok(friendAfter, '友军不该被溢出打掉');
-  assert.equal(friendAfter.hp, friendHp, '友军一点血都不该掉');
-  const backAfter = r3.state.units.find((u) => u.id === back.id);
-  assert.ok(backAfter);
-  assert.equal(999 - backAfter.hp, perHit3 * (burst - 1), '跳过坏目标之后，段数仍然落到能打的人身上');
+  const r = applyAction({ ...s, current: 'A', units: [qi] }, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const r2 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
 
-  // ④ 只有主目标会反击：主目标被打死了，溢出目标白挨
-  const s4 = fresh();
-  s4.current = 'A';
-  s4.units = [];
-  putTerrain(s4, 5, 5, 'plain');
-  putTerrain(s4, 6, 5, 'plain');
-  putTerrain(s4, 4, 5, 'plain');
-  const mg4 = place(s4, 'A', 'mg', 5, 5);
-  const soft4 = place(s4, 'B', 'militia', 6, 5);
-  soft4.hp = 1;
-  const near = place(s4, 'B', 'militia', 4, 5);
-  near.hp = 999;
-  const mgHp = mg4.hp;
-  const r4 = applyAction(s4, {
-    type: 'ATTACK',
-    unitId: mg4.id,
-    targetId: soft4.id,
-    spillTo: [near.id],
-  });
-  assert.ok(r4.ok, r4.ok ? '' : r4.reason);
-  const mg4After = r4.state.units.find((u) => u.id === mg4.id);
-  assert.ok(mg4After);
-  assert.equal(mg4After.hp, mgHp, '溢出目标不该还手（反击只属于主目标）');
+  // 依然活着
+  assert.ok(r2.state.units.some(u => u.id === qi.id), '满级修士不应该老死');
+  // 也不应该有油尽灯枯的减益
+  assert.equal(getAgingYears(r2.state.units.find(u => u.id === qi.id)!), 0, '满级修士不减益');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
