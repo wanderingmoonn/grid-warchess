@@ -203,8 +203,8 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   }
   if (def.burst) {
     lines.push(
-      `连击：一次攻击打 ${def.burst} 段，每段单独减护甲——打轻甲赚，打重甲亏。` +
-        `打死了还有富余的段，可以先右键点几个敌人排队，剩下的段接着打他们`,
+      `多动：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
+        `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }
   if (def.transport) {

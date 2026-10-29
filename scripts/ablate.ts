@@ -293,7 +293,7 @@ for (let e = 1; e <= 5; e++) {
   const hp = avg(us.map((u) => u.maxHp ?? 0));
   const hits = hp / Math.max(1, atk - armor);
   console.log(
-    `  E${e}  攻击 ${atk.toFixed(0).padStart(3)}（含连击）  护甲 ${armor.toFixed(1)}` +
+    `  E${e}  攻击 ${atk.toFixed(0).padStart(3)}（含多动）  护甲 ${armor.toFixed(1)}` +
       `  血量 ${hp.toFixed(0).padStart(3)}   →  需要 ${hits.toFixed(1)} 次命中`,
   );
 }

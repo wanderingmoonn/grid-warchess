@@ -720,9 +720,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     category: 'combat',
     cost: 175,
     move: 1,
-    // 一次攻击打三下，每下单独减护甲：
-    // 打轻甲是一串数字（3×12），打重甲全被挡回去（3×2）。
-    // 所以单发攻击力从 28 降到 12 —— 总伤害只在"软目标"上才是净赚。
+    // 多动 3 次：一回合打三发完整的，总输出是单发的三倍。
+    // 下面这个 atk 只是"一发"的数，动 burst 等于把整条输出线乘上去——两个要一起调。
     atk: 20,
     armor: 3,
     maxHp: 32,
@@ -743,7 +742,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 32,
     range: 4,
     vision: 2,
-    // 四段：比机枪队多一段，但每段更弱 —— 对重甲的惩罚更狠
+    // 四动：比机枪队多一动，所以单发伤害压到更低——总输出靠次数堆
     burst: 4,
   },
   armoredcar: {

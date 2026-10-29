@@ -1001,6 +1001,26 @@ export function canMove(u: Unit): boolean {
   return !u.moved;
 }
 
+/**
+ * 这个单位一回合能攻击几次（多动的次数）。
+ *
+ * 兵种的 burst 是基数，扩展的 modifyAttacks 在它上面改。攻击次数、
+ * 反击次数、界面上的显示都走这一个函数——三处各写一遍的话，
+ * 以后改 hook 只改到两处，玩家就会看到"面板说 2 次，实际只打 1 次"。
+ */
+export function attacksPerTurn(s: GameState, u: Unit): number {
+  let attacks = Math.max(1, utype(s, u.type).burst ?? 1);
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyAttacks) attacks = e.hooks.modifyAttacks({ state: s, unit: u, attacks });
+  }
+  return attacks;
+}
+
+/** 这回合还剩几次攻击（没开始打时就是满的）。 */
+export function attacksLeftOf(s: GameState, u: Unit): number {
+  return u.attacksLeft ?? attacksPerTurn(s, u);
+}
+
 export function canAttack(u: Unit): boolean {
   return !u.acted && (u.attacksLeft ?? 1) > 0;
 }
@@ -1794,14 +1814,8 @@ export function previewAttack(
   const toDefender = computeDamage(s, attacker, defender);
 
   const survives = defender.hp - toDefender > 0;
-  // 新增：算一下防守方还剩几次反击机会
-  let baseCounters = Math.max(1, utype(s, defender.type).burst ?? 1);
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyAttacks) {
-      baseCounters = e.hooks.modifyAttacks({ state: s, unit: defender, attacks: baseCounters });
-    }
-  }
-  const countersLeft = defender.countersLeft ?? Math.max(0, baseCounters);
+  // 这次打完还吃不吃得到反击：看防守方剩余的反击次数
+  const countersLeft = defender.countersLeft ?? Math.max(0, attacksPerTurn(s, defender));
   // 修改反击判定条件
   const counter = survives && !hasFlag(def, 'noCounter') && countersLeft > 0 && canStrike(s, defender, attacker);
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
@@ -2154,43 +2168,60 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     // 判据用 manualFired 而不是 acted：刚建好的建筑也是 acted=true。
     if (b.manualFired) continue;
     const def = utype(s, b.type);
-    const inRange = s.units
-      .filter((u) => u.owner !== owner && distance(b, u) > 0 && distance(b, u) <= def.range)
-      .sort((x, y) => distance(b, x) - distance(b, y) || x.hp - y.hp);
+    // 多动：自动开火也要把这一回合的攻击次数打满。
+    //
+    // 否则同一座塔有两套火力：自己点能点四下，交给它自己打只打一下——
+    // 玩家只能被迫每回合手点一次，上面那条"要么你点、要么它自己打"的约定就废了。
+    // 每一发都重新挑"最近的、血最少的"，所以打死一个会自动转火下一个。
+    let shots = Math.max(1, def.burst ?? 1);
+    let hits = 0;
+    let totalDmg = 0;
+    const hitNames = new Set<string>();
+    const splashNames = new Set<string>();
 
-    const target = inRange[0];
-    if (!target) continue;
+    while (shots > 0) {
+      const inRange = s.units
+        .filter((u) => u.owner !== owner && distance(b, u) > 0 && distance(b, u) <= def.range)
+        .sort((x, y) => distance(b, x) - distance(b, y) || x.hp - y.hp);
+      const target = inRange[0];
+      if (!target) break;
 
-    const dmg = computeDamage(s, b, target);
-    target.hp -= dmg;
+      const dmg = computeDamage(s, b, target);
+      target.hp -= dmg;
+      totalDmg += dmg;
+      hits += 1;
+      shots -= 1;
+      hitNames.add(utype(s, target.type).name);
 
-    // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
-    const splashed = splashVictims(s, b, target);
-    for (const v of splashed) v.unit.hp -= v.dmg;
+      // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
+      const splashed = splashVictims(s, b, target);
+      for (const v of splashed) {
+        v.unit.hp -= v.dmg;
+        splashNames.add(utype(s, v.unit.type).name);
+      }
 
-    const splashText =
-      splashed.length > 0
-        ? `，溅射 ${splashed.map((v) => utype(s, v.unit.type).name).join('、')}`
-        : '';
+      if (target.hp <= 0) {
+        s.units = s.units.filter((u) => u.id !== target.id);
+        pushLog(s, owner, `${utype(s, target.type).name} 被击毁`, true);
+        fireKilled(s, target, b);
+      }
+
+      for (const v of splashed) {
+        if (v.unit.hp > 0) continue;
+        if (!s.units.some((u) => u.id === v.unit.id)) continue;
+        s.units = s.units.filter((u) => u.id !== v.unit.id);
+        pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
+        fireKilled(s, v.unit, b);
+      }
+    }
+
+    if (hits === 0) continue;
+    const splashText = splashNames.size > 0 ? `，溅射 ${[...splashNames].join('、')}` : '';
     pushLog(
       s,
       owner,
-      `${def.name} 自动开火，对 ${utype(s, target.type).name} 造成 ${dmg} 伤害${splashText}`,
+      `${def.name} 自动开火${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
     );
-
-    if (target.hp <= 0) {
-      s.units = s.units.filter((u) => u.id !== target.id);
-      pushLog(s, owner, `${utype(s, target.type).name} 被击毁`, true);
-      fireKilled(s, target, b);
-    }
-
-    for (const v of splashed) {
-      if (v.unit.hp > 0) continue;
-      if (!s.units.some((u) => u.id === v.unit.id)) continue;
-      s.units = s.units.filter((u) => u.id !== v.unit.id);
-      pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-      fireKilled(s, v.unit, b);
-    }
   }
 }
 
@@ -2436,15 +2467,9 @@ function doAttack(
   const atName = atkDef.name;
   const dfName = utype(s, defender.type).name;
 
-  // 新增：如果是本回合第一次攻击，初始化剩余次数
+  // 本回合第一次攻击时把剩余次数填满；之后每次攻击各扣一次
   if (attacker.attacksLeft === undefined) {
-    let attacks = Math.max(1, atkDef.burst ?? 1); // 原版连击变成多次攻击
-    for (const e of activeExpansions(s)) {
-      if (e.hooks.modifyAttacks) {
-        attacks = e.hooks.modifyAttacks({ state: s, unit: attacker, attacks });
-      }
-    }
-    attacker.attacksLeft = Math.max(1, attacks);
+    attacker.attacksLeft = Math.max(1, attacksPerTurn(s, attacker));
   }
   if (attacker.attacksLeft <= 0) {
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
@@ -2459,15 +2484,9 @@ function doAttack(
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
-  // 新增：初始化防守方的反击次数
+  // 防守方的反击次数也按"一回合能攻击几次"算，第一次挨打时填满
   if (defender.countersLeft === undefined) {
-    let baseCounters = Math.max(1, utype(s, defender.type).burst ?? 1);
-    for (const e of activeExpansions(s)) {
-      if (e.hooks.modifyAttacks) { // 复用攻击次数的钩子
-        baseCounters = e.hooks.modifyAttacks({ state: s, unit: defender, attacks: baseCounters });
-      }
-    }
-    defender.countersLeft = Math.max(0, baseCounters);
+    defender.countersLeft = Math.max(0, attacksPerTurn(s, defender));
   }
 
   // 判断是否反击：不仅要活下来、不能先手，还要反击次数 > 0

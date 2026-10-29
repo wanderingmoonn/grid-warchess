@@ -92,6 +92,8 @@ import {
 } from '../src/core/setup.ts';
 import {
   applyAction,
+  attacksLeftOf,
+  attacksPerTurn,
   buildingAt,
   citiesOf,
   cityById,
@@ -1608,6 +1610,19 @@ function place2(s: GameState, owner: 'A' | 'B', type: string, x: number, y: numb
   return u;
 }
 
+/**
+ * 手工把单位送回"这一个回合还没动过"的状态。
+ *
+ * 多段改多动之后，光清 moved/acted 不够了：attacksLeft 才是"这一回合还剩几次攻击"
+ * 的真相，不清它，同一个单位的第二发会被判成"没有剩余攻击次数"。
+ * 需要"同一单位连打两发"的用例一律用它，别手写两行——漏一行就红。
+ */
+function readyAgain(u: Unit): void {
+  u.moved = false;
+  u.acted = false;
+  delete u.attacksLeft;
+}
+
 /** 摆一个单位但**不清理**那一格：测「空中层压着地面单位」时必须用它 */
 function stackOn(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
   const def = s.unitTypes[type];
@@ -2307,8 +2322,7 @@ test('重生：不死鸟倒下后留下一枚蛋，由玩家选地方孵化', ()
   e.state.tiles[idx(e.state, again.x, again.y - 1)].terrain = 'plain';
   killer2.x = again.x;
   killer2.y = again.y - 1;
-  killer2.moved = false;
-  killer2.acted = false;
+  readyAgain(killer2);
   const r2 = applyAction({ ...e.state, current: 'B' }, {
     type: 'ATTACK',
     unitId: killer.id,
@@ -2336,11 +2350,9 @@ test('燃烧：叠层，每层 4 点，结算完掉一层', () => {
   assert.equal(t1.status?.burn, 1, '第一下点着（一层）');
 
   // 再打一下（把行动重置，模拟下一回合又挨了一下）
-  t1.acted = false;
-  t1.moved = false;
+  readyAgain(t1);
   const fire2 = hit1.state.units.find((u) => u.id === fire.id)!;
-  fire2.acted = false;
-  fire2.moved = false;
+  readyAgain(fire2);
   const hit2 = applyAction({ ...hit1.state, current: 'A' }, {
     type: 'ATTACK',
     unitId: fire.id,
@@ -4013,8 +4025,7 @@ test('桥会被打掉，打掉之后变回水面', () => {
     cur.current = 'B';
     const atk = cur.units.find((u) => u.id === hitter.id);
     if (!atk) break;
-    atk.moved = false;
-    atk.acted = false;
+    readyAgain(atk);
     const hit = applyAction(cur, { type: 'ATTACK', unitId: atk.id, targetId: bridge.id });
     if (!hit.ok) break;
     cur = hit.state;
@@ -4356,7 +4367,7 @@ test('无渡口的局，开局战报会直接把这件事说出来', () => {
   assert.ok(said, `开局战报里应该提到无渡口：${s.log.map((e) => e.text).join(' / ')}`);
 });
 
-console.log('\n射程 / 溅射 / 连击');
+console.log('\n射程 / 溅射 / 多动');
 
 test('远程单位的射程至少比移速多 1', () => {
   // 这一条是"能被追上"和"能先打一轮"的分界：
@@ -4436,65 +4447,97 @@ test('溅射打死的人也走正常善后', () => {
   );
 });
 
-test('连击：每段单独减护甲，打重甲反而更弱', () => {
+test('多动：burst 是一回合的攻击次数，每次独立结算', () => {
+  // burst 的含义从"一次攻击打 N 段"改成了"一回合能攻击 N 次"：
+  // 每次都是完整的一击（护甲照常各减一次），可以逐次换目标，
+  // 次数没用完之前不算行动结束（acted 还是 false）。
+  const burst = UNIT_TYPES.mg?.burst ?? 1;
+  assert.ok(burst >= 2, '这条用例需要一个多动兵（mg）');
+
   const s = fresh();
   s.current = 'A';
   s.units = [];
-
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 7, 5, 'plain');
+  putTerrain(s, 5, 4, 'plain');
   const mg = place(s, 'A', 'mg', 5, 5);
-  const burst = UNIT_TYPES.mg?.burst ?? 1;
-  assert.ok(burst >= 2);
+  const tank = place(s, 'B', 'tank', 7, 5);
+  tank.hp = 5000;
+  const one = computeDamage(s, mg, tank);
+  const mgHp0 = mg.hp;
 
-  // 要验证"打满段数"，目标得扛得住——打死了就提前停手（那是设计）
-  const tough = place(s, 'B', 'tank', 7, 5);
-  const p = previewAttack(s, mg, tough);
-  const one = computeDamage(s, mg, tough);
-  assert.equal(p.hits, burst, '应该打满段数');
-  assert.equal(p.toDefender, one * burst, '总伤害 = 每段 × 段数');
+  // 没开始打时"还剩几次"就是满的，而且和面板用的是同一个函数
+  assert.equal(attacksPerTurn(s, mg), burst, '一回合的攻击次数应该等于兵种 burst');
+  assert.equal(attacksLeftOf(s, mg), burst, '还没出手时剩余次数就是满的');
 
-  // 软目标：血薄，可能两段就打死，此时段数按"打了几下"算
-  const soft = place(s, 'B', 'militia', 6, 5);
-  const ps = previewAttack(s, mg, soft);
-  assert.ok(ps.hits <= burst);
+  // 第 1 发：打掉一整击的伤害，但不算行动结束
+  let r = applyAction(s, { type: 'ATTACK', unitId: mg.id, targetId: tank.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  let me = r.state.units.find((u) => u.id === mg.id)!;
+  assert.equal(me.acted, false, '还有攻击次数时不该算行动结束');
+  assert.equal(me.attacksLeft, burst - 1, '剩几次攻击要记在单位身上');
+  assert.equal(5000 - r.state.units.find((u) => u.id === tank.id)!.hp, one, '每次都是一整击');
+  const mgHpAfterFirst = me.hp;
+  assert.ok(mgHpAfterFirst < mgHp0, '第一发该吃到一次反击');
 
-  // 同样的总攻击力，如果是一次打完，护甲只减一次；分成三段就减三次。
-  // 把目标放到城市格上（+3 地形护甲）就能看出这个差距。
-  const city = citiesOf(s, 'B')[0];
-  assert.ok(city);
-  const t0 = cityTiles(city)[0];
-  assert.ok(t0);
-  const hard = place(s, 'B', 'militia', t0.x, t0.y);
+  // 打满次数
+  let guard = 0;
+  while (guard < 12) {
+    guard += 1;
+    const now = r.state.units.find((u) => u.id === mg.id)!;
+    if (now.acted) break;
+    r = applyAction(r.state, { type: 'ATTACK', unitId: mg.id, targetId: tank.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+  }
+  me = r.state.units.find((u) => u.id === mg.id)!;
+  assert.equal(me.acted, true, '次数用完才算行动结束');
+  assert.equal(me.attacksLeft, 0);
+  assert.equal(me.hp, mgHpAfterFirst, '坦克只有 1 次反击，后面几发不再还手');
 
-  const perHit = computeDamage(s, mg, hard);
-  const burstTotal = perHit * burst;
-
-  // 单发等效：同样的攻击力一次性打出去，护甲只减一次
-  const armor = (UNIT_TYPES.militia?.armor ?? 0) + CONFIG.terrainDef.city;
-  const singleBlow = Math.max(0, (UNIT_TYPES.mg?.atk ?? 0) * burst - armor);
+  // 再来一发：没有剩余次数，直接拒
+  const extra = applyAction(r.state, { type: 'ATTACK', unitId: mg.id, targetId: tank.id });
+  assert.equal(extra.ok, false, '次数用完不能再打');
+  // 两种拒法都算对：次数归零时 acted 已经置位，走的是"已经攻击过"那一条；
+  // 单独一句"没有剩余攻击次数"是给"acted 被别的路径清掉、次数还没回满"兜底的。
   assert.ok(
-    burstTotal < singleBlow,
-    `打重甲时连击应该吃亏：连击 ${burstTotal} vs 等效单发 ${singleBlow}`,
+    !extra.ok && /已经攻击过|没有剩余攻击次数/.test(extra.reason),
+    extra.ok ? '' : `理由要说清是没次数了：${extra.reason}`,
   );
 
-  const p2 = previewAttack(s, mg, hard);
-  // 血不够就提前停手：段数会小于 burst，总伤害按实际打出的段数算。
-  // 这里不能死写 burstTotal —— 兵种数值一动，民兵可能在第二段就被打死。
-  assert.ok(p2.hits <= burst);
-  assert.equal(p2.toDefender, perHit * p2.hits, `实际打了 ${p2.hits} 段`);
+  // 换目标：多动的意义就在于"第二发可以打别人"
+  const s2 = fresh();
+  s2.current = 'A';
+  s2.units = [];
+  putTerrain(s2, 5, 5, 'plain');
+  putTerrain(s2, 7, 5, 'plain');
+  putTerrain(s2, 5, 4, 'plain');
+  const mg2 = place(s2, 'A', 'mg', 5, 5);
+  const t1 = place(s2, 'B', 'tank', 7, 5);
+  t1.hp = 5000;
+  const t2 = place(s2, 'B', 'militia', 5, 4);
+  t2.hp = 5000;
+  const h2a = applyAction(s2, { type: 'ATTACK', unitId: mg2.id, targetId: t1.id });
+  assert.ok(h2a.ok, h2a.ok ? '' : h2a.reason);
+  const h2b = applyAction(h2a.state, { type: 'ATTACK', unitId: mg2.id, targetId: t2.id });
+  assert.ok(h2b.ok, `第二发应该能换目标：${h2b.ok ? '' : h2b.reason}`);
+  assert.ok(
+    (h2b.state.units.find((u) => u.id === t2.id)!.hp ?? 0) < 5000,
+    '第二发的伤害要落在新目标身上',
+  );
 });
 
-test('连击段数按兵种不同，不是固定三段', () => {
+test('多动次数按兵种不同，不是固定三次', () => {
   const counts = [...new Set(Object.values(UNIT_TYPES).filter((u) => u.burst).map((u) => u.burst))];
-  assert.ok(counts.length >= 3, `段数应该拉开档次，现在只有：${counts.join('、')}`);
+  assert.ok(counts.length >= 3, `次数应该拉开档次，现在只有：${counts.join('、')}`);
   assert.ok((UNIT_TYPES.armoredcar?.burst ?? 0) >= 2);
   assert.ok((UNIT_TYPES.mg?.burst ?? 0) >= 3);
-  assert.ok((UNIT_TYPES.hmg?.burst ?? 0) > (UNIT_TYPES.mg?.burst ?? 0), '重机枪的段数应该多于机枪队');
+  assert.ok((UNIT_TYPES.hmg?.burst ?? 0) > (UNIT_TYPES.mg?.burst ?? 0), '重机枪的次数应该多于机枪队');
 
-  // 段数越多，单段越弱：不然四段单位会直接翻倍
+  // 次数是倍率，所以次数越多单发越弱：不然四动单位会直接把输出翻倍
   const mg = UNIT_TYPES.mg;
   const hmg = UNIT_TYPES.hmg;
   assert.ok(mg && hmg);
-  assert.ok(hmg.atk < mg.atk, '四段的单段攻击力应该比三段低');
+  assert.ok(hmg.atk < mg.atk, '四动的单发攻击力应该比三动低');
 });
 
 test('溅射半径按兵种不同：火炮能打到更远的一片', () => {
@@ -4727,8 +4770,7 @@ test('船被打沉，舱里的人一起没', () => {
     cur.current = 'B';
     const atk = cur.units.find((u) => u.id === 'raider-1');
     if (!atk) break;
-    atk.moved = false;
-    atk.acted = false;
+    readyAgain(atk);
     const hit = applyAction(cur, { type: 'ATTACK', unitId: atk.id, targetId: ferry.id });
     if (!hit.ok) {
       assert.fail(`打不到船：${hit.reason}`);
@@ -5945,8 +5987,7 @@ test('隔河拆桥：远程能放箭，但一发只算一半', () => {
   const bridge2 = s2.units.find((u) => u.id === bridge.id)!;
   bridge2.hp = bridgeMax;
   const bow2 = s2.units.find((u) => u.id === bow.id)!;
-  bow2.moved = false;
-  bow2.acted = false;
+  readyAgain(bow2);
   bow2.x = 5;
   bow2.y = 3;
   const near = applyAction(s2, { type: 'ATTACK', unitId: bow2.id, targetId: bridge2.id });
@@ -6781,8 +6822,7 @@ test('对空：防空导弹打飞机 ×1.6，打地面照旧', () => {
   // 先把这个兵的"已行动"擦掉——一个单位一回合只能开一次火。
   const sam2 = air.state.units.find((u) => u.id === sam.id);
   assert.ok(sam2);
-  sam2.moved = false;
-  sam2.acted = false;
+  readyAgain(sam2);
   const ground = applyAction(air.state, { type: 'ATTACK', unitId: sam.id, targetId: tank.id });
   assert.ok(ground.ok, `防空营打地面也该打得动：${!ground.ok ? ground.reason : ''}`);
   const groundDmg = tankDef.maxHp - ground.state.units.find((u) => u.id === tank.id)!.hp;
@@ -8998,6 +9038,46 @@ test('修士：满级（9 级）永远不会老死', () => {
   assert.ok(r2.state.units.some(u => u.id === qi.id), '满级修士不应该老死');
   // 也不应该有油尽灯枯的减益
   assert.equal(getAgingYears(r2.state.units.find(u => u.id === qi.id)!), 0, '满级修士不减益');
+});
+
+test('多动：自动开火的建筑也把这一回合的次数打满', () => {
+  // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
+  // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (const [x, y] of [[5, 5], [6, 5], [6, 4], [4, 5]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  // 一座三连发的哨塔（拿民兵当底子改，避免依赖某个扩展包的具体兵种）
+  s.unitTypes['test-tower'] = {
+    ...s.unitTypes.militia,
+    id: 'test-tower',
+    category: 'building',
+    autoAttack: true,
+    move: 0,
+    burst: 3,
+    atk: 20,
+    armor: 0,
+    maxHp: 200,
+    range: 3,
+    abilities: [],
+  };
+  const tower = place2(s, 'A', 'test-tower', 5, 5);
+  const e1 = place2(s, 'B', 'militia', 6, 5);
+  const e2 = place2(s, 'B', 'militia', 6, 4);
+  e1.hp = 500;
+  e2.hp = 500;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const single = computeDamage(s, tower, e1);
+  const total0 = e1.hp + e2.hp;
+  // A 结束回合 → B 的回合开始 → A 的塔自动开火
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.filter((u) => u.owner === 'B');
+  const total1 = after.reduce((a, u) => a + u.hp, 0);
+  assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

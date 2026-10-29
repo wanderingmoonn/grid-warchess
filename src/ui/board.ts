@@ -30,13 +30,6 @@ export interface BoardUi {
   reach: number[];
   /** 可攻击的敌方单位 id */
   targets: string[];
-  /**
-   * 已经排进"连击溢出"队列的敌人 id。
-   *
-   * 多段兵打一个人时，前面的段就把他打死了，后面的段以前白扔；排了队就接着打。
-   * 只做视觉标记（橙色虚线），规则全在 rules.ts 的 resolveStrikes 里。
-   */
-  spillTargets?: string[];
   /** 可攻城的城市 id */
   siegeTargets: string[];
   /** 当前选中的城市 id */
@@ -489,8 +482,6 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   if (isSpent) cls.push('spent');
   if (isSelected) cls.push('selected');
   if (isTarget) cls.push('targeted');
-  // 排进溢出队列的目标单独标出来：玩家右键点过谁，棋盘上得看得见
-  if (ui.spillTargets?.includes(u.id)) cls.push('spill');
 
   const playerName = s.players[u.owner].name;
   const kindText =

@@ -23,6 +23,8 @@ import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
+  attacksLeftOf,
+  attacksPerTurn,
   buildingAt,
   citiesOf,
   cityById,
@@ -648,7 +650,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           ? `<div class="info-row"><span>溅射</span><b>主目标 ${def.splash} 格内（不含斜角）· ${Math.round(CONFIG.splashRatio * 100)}%</b></div>`
           : ''
       }
-      ${def.burst ? `<div class="info-row"><span>连击</span><b>${def.burst} 段 · 每段独立减甲</b></div>` : ''}
+      ${
+        // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
+        // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
+        attacksPerTurn(s, selectedUnit) > 1
+          ? `<div class="info-row"><span>多动</span><b>还剩 ${attacksLeftOf(
+              s,
+              selectedUnit,
+            )} / ${attacksPerTurn(s, selectedUnit)} 次 · 每次各算一击</b></div>`
+          : ''
+      }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${cargoBlock}
       ${buildBlock}

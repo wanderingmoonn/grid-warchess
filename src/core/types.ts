@@ -904,22 +904,7 @@ export interface GameState {
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */
 export type Action =
   | { type: 'MOVE'; unitId: string; x: number; y: number }
-  | {
-      type: 'ATTACK';
-      unitId: string;
-      targetId: string;
-      /**
-       * 溢出段的目标（可选）：多段攻击把主目标打死了，剩下的段按这个顺序转打别人。
-       *
-       * 为什么是"溢出"而不是"每段各指定一个"：不填的时候行为必须和以前一模一样
-       * （所有段都打 targetId，目标死了剩下的段作废），所以这里只描述"多出来的段去哪"。
-       * 列表里的目标当场校验：死了、够不着、是友军就跳过，跳到没有就作废——
-       * 绝不会因为写错一个 id 就把整次攻击变成非法动作。
-       *
-       * 只有 burst > 1 的兵种有意义；普通兵种塞这个字段等于没写。
-       */
-      spillTo?: string[];
-    }
+  | { type: 'ATTACK'; unitId: string; targetId: string }
   | { type: 'SIEGE'; unitId: string; cityId: string }
   /**
    * 产兵。source 是城市（cityId）或军营（unitId），两者选其一。
