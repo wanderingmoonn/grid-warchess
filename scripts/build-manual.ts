@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
-import { CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
+import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -26,7 +26,7 @@ import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 /** npm test 的规则、AI 场景、评估方法、界面冒烟总数，改测试记得改这里。 */
-const TEST_COUNT = 344 + 25 + 7 + 127;
+const TEST_COUNT = 350 + 25 + 7 + 128;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -401,13 +401,29 @@ function unitTable(category: UnitCategory, eraLevel: number): string {
     </table>`;
 }
 
+/**
+ * 时代序号用的罗马数字。
+ *
+ * 单独一张表而不是 `['I','II',...][level-1]` 现取：现取那种写法在表长到六之后
+ * 会安静地返回 undefined（"时代 undefined · 现代"），而且报错的位置离原因很远。
+ * 表短了会当场抛错，比印出一行乱码强。
+ */
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI'] as const;
+
+function romanOf(level: number): string {
+  return ROMAN[level - 1] ?? `(${level})`;
+}
+
 function eraSection(): string {
-  return ERAS.map((era) => {
+  // 只印基础规则的五个时代。第六时代「现代」的数值在 ERAS 里，但它的兵
+  // 全在「现代战争」包里——这里把它印出来，只会得到一节没有兵种表、
+  // 却写着"升级费 1080"的空条目。那一节在扩展合册里。
+  return ERAS.filter((era) => era.level <= BASE_MAX_ERA).map((era) => {
     const groups: UnitCategory[] = ['combat', 'economy', 'builder', 'building'];
     const tables = groups.map((g) => unitTable(g, era.level)).join('');
     return `
       <div class="era-block">
-        <h3 id="era-${era.level}">时代 ${['I', 'II', 'III', 'IV', 'V'][era.level - 1]} · ${esc(era.name)}</h3>
+        <h3 id="era-${era.level}">时代 ${romanOf(era.level)} · ${esc(era.name)}</h3>
         <p class="era-meta">
           ${esc(era.hint)} ·
           升级费 ${era.upgradeCost === 0 ? '—' : `${era.upgradeCost} 金`} ·
@@ -1279,7 +1295,10 @@ const CORE_BODY_MAIN = `    <section id="goal">
 
       <h3>时代升级为什么这么贵</h3>
       <div class="formula">
-        升级费用：${ERAS.slice(1).map((e) => `${esc(e.name)} ${e.upgradeCost}`).join(' · ')}<br />
+        升级费用：${ERAS.filter((e) => e.level <= BASE_MAX_ERA)
+          .slice(1)
+          .map((e) => `${esc(e.name)} ${e.upgradeCost}`)
+          .join(' · ')}<br />
         <span class="c">开局 ${CONFIG.startGold} 金起步，先结一次收入后手上有两百出头</span>
       </div>
       <p>升级一次性给你三样东西：<b>更好的兵、更硬的城市、更高的城市收入</b>。三样叠在一起就是滚雪球——
@@ -1351,20 +1370,28 @@ const CORE_BODY_MAIN = `    <section id="goal">
           <tr><th>时代</th><th>升级费</th><th>城市耐久</th><th>城市护甲</th><th>城市收入</th></tr>
         </thead>
         <tbody>
-          ${ERAS.map(
-            (e) =>
-              `<tr><td class="name">${esc(e.name)}</td><td class="num">${e.upgradeCost === 0 ? '—' : e.upgradeCost}</td><td class="num">${e.cityMaxHp}</td><td class="num">${e.cityArmor}</td><td class="num">${e.cityIncome}</td></tr>`,
-          ).join('')}
+          ${ERAS.filter((e) => e.level <= BASE_MAX_ERA)
+            .map(
+              (e) =>
+                `<tr><td class="name">${esc(e.name)}</td><td class="num">${e.upgradeCost === 0 ? '—' : e.upgradeCost}</td><td class="num">${e.cityMaxHp}</td><td class="num">${e.cityArmor}</td><td class="num">${e.cityIncome}</td></tr>`,
+            )
+            .join('')}
         </tbody>
       </table>
       <p>升级会同时提升耐久、护甲、收入，并解锁新兵种。升级用<b>增量</b>而非覆盖，所以扩展规则（比如「要塞」）给城市加的属性不会被升级抹掉。</p>
+      <p><b>表里还有第六时代「现代」（升级费 ${ERAS[5]?.upgradeCost ?? 1080}，城市耐久 ${ERAS[5]?.cityMaxHp ?? 96}），但基础规则升不上去</b>：
+        它没有原版兵种，单开基础规则升到那里只会花一大笔钱换一座更厚的空城。
+        打开它的开关是扩展「现代」——一个小包，除了一行 <code>unlockEra: 6</code> 什么都不带。
+        第六代的兵种在另一个包「现代战争」里（它 <code>requires</code> 「现代」，单独勾会整包不进场）。
+        没开「现代」时，升级按钮到第五时代就停了，提示会明确写出"没开「现代」，科技线到二战封顶"。</p>
       <h3>标准对局：时代和棋盘是配套的</h3>
       <table>
         <thead><tr><th>起始时代</th><th>棋盘</th><th>为什么这么配</th></tr></thead>
         <tbody>
           <tr><td class="name">古典（默认）</td><td>12×12</td><td>兵走得慢、打得近，小图才能在十几回合里接上火</td></tr>
           <tr><td class="name">中世</td><td>16×16</td><td>长弓和骑兵把战线拉开了一档</td></tr>
-          <tr><td class="name">火药 / 工业 / 现代</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
+          <tr><td class="name">火药 / 工业 / 二战</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
+          <tr><td class="name">现代（需「现代战争」）</td><td>20×20</td><td>自行火炮与火箭炮射程 6，直升机还绕地形——再小就变成一开局就被隔河点名</td></tr>
           <tr><td class="name">长期局（手动选）</td><td>32×32</td><td>五级链条全开也不嫌挤；一格只有二十来像素，配合缩放看</td></tr>
           <tr><td class="name">自定义</td><td>4×4 ~ 64×64</td><td>任意边长，面板里直接填数字</td></tr>
         </tbody>
@@ -1384,11 +1411,12 @@ const CORE_BODY_MAIN = `    <section id="goal">
         超出的部分用滚动看，缩放时会自动把视口挪到地图中间。</p>
       <p>为什么要它：32×32 的图"适应屏幕"之后一格约 20 像素，认得出棋子、看不清位置。
         这也正是大地图不能只靠"图更大"来做多线的原因——看得见全图和在某一处看得清，是两件事。</p>
-      <p>开局时可以选起始时代（1~5）。越高，一局越短：</p>
+      <p>开局时可以选起始时代（1~5；勾了「现代战争」还能选第 6 时代）。越高，一局越短：</p>
       <ul>
         <li>古典开局：完整五级链条，适合打整晚</li>
         <li>火药开局：跳过冷兵器，直接进入排队枪毙</li>
-        <li>现代开局：纯装甲对抗，二十分钟一局</li>
+        <li>二战开局：纯装甲对抗，二十分钟一局</li>
+        <li>现代开局（要勾「现代」+「现代战争」）：导弹与直升机，打的是视野和射程，十来分钟一局</li>
       </ul>
     </section>
 
@@ -1416,7 +1444,8 @@ const CORE_BODY_MAIN = `    <section id="goal">
     <section id="roster">
       <h2><span class="sec-num">14</span>兵种全表</h2>
       <p>原版 ${Object.keys(UNIT_TYPES).length} 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
-        扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备五包一本（点顶栏「规则书」会按这一局开了什么列出来）。</p>
+        扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备六包一本（点顶栏「规则书」会按这一局开了什么列出来）。
+        第六时代「现代」的兵属于「现代战争」包（时代本身由「现代」打开）：不勾它，这里只有五节。</p>
       ${eraSection()}
     </section>
 
@@ -2133,7 +2162,7 @@ function packBook(e: Exp): Book {
  * 得开五个标签页对着看。所以现在按**玩法系列**归册，而不是按包：
  *
  *   · 奇幻系列（法则 + 骑士团 + 荒兽 + 秘法 + 英雄）→ 一本
- *   · 时代兵备（古典 + 中世 + 火药 + 工业 + 现代）    → 一本
+ *   · 时代兵备（古典 + 中世 + 火药 + 工业 + 二战 + 现代） → 一本
  *   · 其余大包（城郭与物料、季节与气候）               → 各自一本
  *
  * 判据仍是扩展自己的 id 前缀，写在下面这张表里——加一个新包不用改书单逻辑。
@@ -2171,14 +2200,19 @@ const BOOK_GROUPS: BookGroup[] = [
     file: 'public/manual-pack-eras.html',
     title: '方格战棋 · 时代兵备',
     subtitle:
-      '五个时代的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
+      '六个时代的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
     prefix: 'pack-',
     kind: 'era',
-    intro: `<p>这一册收了<b>五个包</b>，一个时代一队：古典、中世、火药、工业、现代，
-        各补 12~15 个兵。它们<b>互不依赖</b>，可以全勾，也可以只勾你现在这个时代那一本——
+    intro: `<p>这一册收了<b>六个包</b>，一个时代一队：古典、中世、火药、工业、二战、现代，
+        各补 12~17 个兵。它们<b>互不依赖</b>，可以全勾，也可以只勾你现在这个时代那一本——
         勾了以后生产面板里会多出这批兵，原版兵一个不少。</p>
-      <p>五个包放在一册，是为了回答一个原来查不了的问题：<b>同一档价钱，这五个时代各给了什么解法</b>。
-        总表按时代排序，一眼能看出"古典用方阵顶、工业用射程压、现代用溅射清"这条路子。</p>`,
+      <p>六个包放在一册，是为了回答一个原来查不了的问题：<b>同一档价钱，这六个时代各给了什么解法</b>。
+        总表按时代排序，一眼能看出"古典用方阵顶、工业用射程压、二战用装甲推、现代用射程差清"这条路子。</p>
+      <p>最后一包「现代战争」和另外五包有一处结构上的不同，但不是它自己的：<b>第六时代本身在基础规则里没有开</b>。
+        原版科技线到第五时代（二战）封顶，往上那一步由另一个小包「现代」负责（一行 <code>unlockEra: 6</code>），
+        所以「现代战争」写了 <code>requires: ['era-contemporary']</code>——单独勾它不会生效，
+        开局面板会把「现代」一起补上。这就是"一个开时代、一个装兵"的分工：
+        想单看第六时代的经济曲线，只开「现代」；想打六代兵，两个都开。</p>`,
   },
 ];
 

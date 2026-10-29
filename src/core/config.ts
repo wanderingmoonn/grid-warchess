@@ -1,7 +1,9 @@
 /**
  * 全部可调数值集中在这里。
  *
- * 基础兵种严格按真实历史线走：古典 → 中世 → 火药 → 工业 → 现代。
+ * 基础兵种严格按真实历史线走：古典 → 中世 → 火药 → 工业 → 二战。
+ * 第六时代「现代」不在这里——它整套兵种都在「现代战争」扩展包里，
+ * 基础规则只把时代那一行数值先摆好（见 BASE_MAX_ERA 的说明）。
  * 奇想类兵种在 expansions.ts 的「奇想兵种包」里，不勾选就不会出现。
  *
  * 单位分四类：
@@ -265,14 +267,36 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 5,
-    name: '现代',
+    name: '二战',
     hint: '内燃机与总动员',
     upgradeCost: 780,
     cityMaxHp: 80,
     cityArmor: 12,
     cityIncome: 56,
   },
+  {
+    level: 6,
+    name: '现代',
+    hint: '信息化与精确打击',
+    upgradeCost: 1080,
+    cityMaxHp: 96,
+    cityArmor: 14,
+    cityIncome: 62,
+  },
 ];
+
+/**
+ * 不开"加时代"扩展时的时代上限。
+ *
+ * 第 6 时代「现代」在表里，但**基础规则升不上去**：它没有原版兵种，
+ * 升上去只会花一千多金换来一座更厚的空城。真正把它打开的是
+ * 「现代战争」扩展（`Expansion.unlockEra`）——那边带了一整套第六代兵种。
+ *
+ * 所以 ERAS.length 是"表有多长"，这个常量是"不勾任何包时能走到第几级"。
+ * 两者混用会立刻出事：开局面板的时代按钮会多出一格、AI 会攒钱去升一个
+ * 空时代，而玩家看到的只是"我花了一千金，什么也没多出来"。
+ */
+export const BASE_MAX_ERA = 5;
 
 export const MAX_ERA = ERAS.length;
 
@@ -787,7 +811,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { city: 30, plain: 14, hill: 9, forest: 9 },
   },
 
-  // ================= 时代 5 · 现代 =================
+  // ============ 时代 5 · 二战（第六时代在原版表里是空的） ============
   squad: {
     id: 'squad',
     name: '步兵班',

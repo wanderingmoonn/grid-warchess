@@ -27,6 +27,9 @@ import { FANTASY_PACKS } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
+import { CONTEMPORARY_ERA, MODERN_WARFARE } from './modern-warfare-pack.ts';
+// 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
+import { BASE_MAX_ERA, ERAS } from './config.ts';
 
 export interface DamageCtx {
   state: GameState;
@@ -334,6 +337,20 @@ export interface Expansion {
    */
   units?: UnitTypeDef[];
   /**
+   * 这个扩展把科技线往后打开到第几级（不写 = 不开任何时代）。
+   *
+   * 为什么要单开一个字段，而不是"看这个包有没有 era 6 的兵"：
+   * 时代上限是**规则**，兵种是**内容**。两者今天恰好一套配一套（「现代战争」
+   * 既带第六代兵、又开第六时代），但混在一起写，以后做"只加几个六代兵、
+   * 不开新时代"的包就会出问题——那种包的单位永远造不出来，
+   * 而"造不出来"在玩家眼里是 bug，不是设计。
+   *
+   * 生效方式（见 `eraCeilingFor`）：取**所有已启用扩展**里最大的那个值，
+   * 与 `BASE_MAX_ERA` 取大，再按 `ERAS.length` 夹住。不勾这个包，
+   * 城市升到第五时代就到顶，开局面板的时代按钮也只有五格。
+   */
+  unlockEra?: number;
+  /**
    * 纯表现层扩展：没有钩子、没有兵种，效果全在渲染层。
    *
    * 目前只有「浓雾蔽野」用这个标记（它让视野外的地形和城市不画出来）。
@@ -454,8 +471,13 @@ export const BLOOD_TURN = 50;
 /**
  * 涨价之前的升级费用表（下标 = 要升到的时代）。
  * 血战生效后按这个价走，也就是把第 20 轮那次涨价撤掉。
+ *
+ * 第六格（640）对应第六时代：原版没有这一代，是「现代战争」加的。
+ * 按同样的折扣口径给的——现价 1080 × 0.59 ≈ 640，和前五格的比值对齐。
+ * 不写这一格也不会崩（`?? cost` 会退回原价），但那样第六时代就成了
+ * 整张表里唯一一个"血战不给打折"的时代，看不出理由。
  */
-export const LEGACY_UPGRADE_COST = [0, 120, 200, 320, 460];
+export const LEGACY_UPGRADE_COST = [0, 120, 200, 320, 460, 640];
 
 /**
  * 先后手补偿的比例表：按**棋盘边长**给，不按时代给。
@@ -718,6 +740,11 @@ export const EXPANSIONS: Expansion[] = [
   ...ERA_PACKS,
   CITY_WORKS,
   SEASONS,
+  // 第六时代拆成两包，和"一个时代一队兵"的分法对齐：
+  //   「现代」只开时代（unlockEra: 6），「现代战争」只装兵（requires 前者）。
+  // 时代包排在前：兵种包的前置必须先在场，读配置的人一眼能看出这个先后。
+  CONTEMPORARY_ERA,
+  MODERN_WARFARE,
 ];
 
 export function expansionById(id: string): Expansion | undefined {
@@ -785,6 +812,50 @@ export function enabledExpansionIds(ids: readonly string[]): Set<string> {
     }
     if (!changed) return on;
   }
+}
+
+/**
+ * 这一局能升到第几时代。
+ *
+ * 三件事在这里合流：
+ *   · `BASE_MAX_ERA`（5）——不开任何包时的天花板；
+ *   · 扩展的 `unlockEra`——「现代战争」把它抬到 6；
+ *   · `ERAS.length`——表本身有多长，扩展写超了也不许越过它
+ *     （否则 `eraDef` 会 clamp 到最后一行，升级就成了"花一千金买同一座城"）。
+ *
+ * 传 id 而不是 state，是因为**开局那一刻还没有 state**：`setup.ts` 要先用
+ * 这个数决定城市从几级起手，那时候只有 config.expansionIds。
+ *
+ * 走 `enabledExpansionIds`（而不是直接遍历 ids）是为了尊重 `requires`：
+ * 前置没满足的包不生效，它那一格时代也不该生效。
+ */
+export function eraCeilingFor(ids: readonly string[]): number {
+  const on = enabledExpansionIds(ids);
+  let max = BASE_MAX_ERA;
+  for (const id of on) {
+    const unlock = expansionById(id)?.unlockEra;
+    if (typeof unlock === 'number' && unlock > max) max = unlock;
+  }
+  return Math.min(max, ERAS.length);
+}
+
+/** 同上的 state 版：对局中途到处都要问，参数少一个是一个 */
+export function eraCeilingOf(state: GameState): number {
+  return eraCeilingFor(state.config.expansionIds);
+}
+
+/**
+ * 能把时代上限往上抬、但这一局**没开**的那些包的名字。
+ *
+ * 只为了写一句话：玩家在第五时代点升级被拒，看到的若是"已经是最高时代"，
+ * 他会以为游戏到此为止；写成"没开「现代战争」，科技线到二战封顶"，
+ * 他才知道还有一层可以打开。文案要能指出路，不能只报告死路。
+ */
+export function lockedEraPacks(ids: readonly string[]): string[] {
+  const on = enabledExpansionIds(ids);
+  return EXPANSIONS.filter((e) => typeof e.unlockEra === 'number' && !on.has(e.id)).map(
+    (e) => e.name,
+  );
 }
 
 /**

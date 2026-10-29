@@ -914,7 +914,50 @@ check('兵种至少保留一个，不能全取消', () => {
 check('兵种池按时代分组展示', () => {
   assert.ok(doc.querySelectorAll('.era-group').length >= 3, '三个时代各一组');
   const tags = Array.from(doc.querySelectorAll('.era-tag')).map((n) => n.textContent?.trim());
-  assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '现代']);
+  // 第五时代叫「二战」（第六时代「现代」的兵全在「现代战争」包里，
+  // 而兵种池只列原版 + 自定义兵，所以这里到二战为止）
+  assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '二战']);
+});
+
+check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
+  // 第六时代是两个包：'era-contemporary'「现代」开时代，'pack-contemporary'
+  // 「现代战争」装兵（它 requires 前者）。所以"多出一格"只认时代包。
+  const erasNow = () =>
+    Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
+  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '不勾包时五格封顶');
+
+  const unitBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(unitBox, '开局面板里应有「现代战争」这一项');
+  unitBox.checked = true;
+  unitBox.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 勾兵种包会自动补上它的前置「现代」——所以时代按钮当场多一格。
+  // 这一步顺带守住了"勾了兵却造不出来"那个坑。
+  assert.deepEqual(
+    erasNow(),
+    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    '兵种包会把前置「现代」一起勾上，第六格随之出现',
+  );
+  const eraBox = doc.querySelector<HTMLInputElement>('[data-exp="era-contemporary"]');
+  assert.ok(eraBox?.checked, '前置「现代」应该被自动勾上');
+
+  // 单独取消兵种包：时代还在（前置是独立的一包），第六格不该消失
+  const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(again);
+  again.checked = false;
+  again.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(
+    erasNow(),
+    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    '兵种包取消之后，时代包还开着',
+  );
+
+  // 把时代包也取消：第六格收回去，而且起手时代不能停在一个已经关掉的时代上
+  const eraAgain = doc.querySelector<HTMLInputElement>('[data-exp="era-contemporary"]');
+  assert.ok(eraAgain);
+  eraAgain.checked = false;
+  eraAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
 });
 
 check('点兵种不重绘面板，不会把页面弹回顶部', () => {

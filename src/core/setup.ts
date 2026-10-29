@@ -6,8 +6,14 @@
  * 同一个 (config, seed) 永远得到完全一样的一局，回放和联机才有意义。
  */
 
-import { CITY, CONFIG, ERAS, UNIT_TYPES, eraDef, passable } from './config.ts';
-import { EXPANSIONS, activeExpansions, enabledExpansionIds, expansionById } from './expansions.ts';
+import { CITY, CONFIG, UNIT_TYPES, eraDef, passable } from './config.ts';
+import {
+  EXPANSIONS,
+  activeExpansions,
+  enabledExpansionIds,
+  eraCeilingFor,
+  expansionById,
+} from './expansions.ts';
 import { generateLayout, terrainFromChar } from './mapgen.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
@@ -16,7 +22,7 @@ import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } 
 /**
  * 开局界面里的预设棋盘尺寸
  *
- * 32 是"长期局"档：五个时代全开、打到现代也不嫌挤，但一格只有二十来像素，
+ * 32 是"长期局"档：五级链条全开、打到第六时代也不嫌挤，但一格只有二十来像素，
  * 所以界面上配了缩放（见 main.ts 的 fitBoard / zoom）。
  * 它不跟任何时代绑定——20×20 仍是火药及以后的标准图。
  *
@@ -188,7 +194,9 @@ export function createMatch(
   // ---- 城市 ----
   const cities: City[] = [];
   let citySeq = 1;
-  const startEra = Math.max(1, Math.min(ERAS.length, config.startEra));
+  // 开局时代也要按"这一局能走到第几级"夹住：不勾「现代战争」时，
+  // 配置里写 startEra: 6 只该得到第五时代，而不是一座没有兵可用、也再造不出兵的城。
+  const startEra = Math.max(1, Math.min(eraCeilingFor(config.expansionIds), config.startEra));
   const eraInfo = eraDef(startEra);
 
   const placeCity = (owner: PlayerId, left: number, top: number) => {

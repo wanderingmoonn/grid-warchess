@@ -40,7 +40,7 @@ npm run dev      # 本地开发，http://127.0.0.1:5178
 | 命令 | 做什么 |
 |---|---|
 | `npm run dev` | 本地开发服务器 |
-| `npm test` | 全量测试：规则 344 项 + AI 场景 25 项 + 评估方法 7 项 + DOM 冒烟 127 项 |
+| `npm test` | 全量测试：规则 350 项 + AI 场景 25 项 + 评估方法 7 项 + DOM 冒烟 128 项 |
 | `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
 | `npm run test:ai-optimization` | AI 战术、高差兼容、冻结基准与评估统计检查 |
 | `npm run evaluate:ai` | 新旧 AI 配对评估；默认 208 场，快速检查命令见创作者指南 |
@@ -112,7 +112,7 @@ npm run bench      # 看对局长度和时代推进有没有跑偏
 
 ## 时代兵种包（大型模组）
 
-五个时代各一套兵种扩展，取材自真实历史的兵种、攻城器械与防御工事，**每套都比原版同期更多**：
+六个时代各一套兵种扩展，取材自真实历史的兵种、攻城器械与防御工事，**每套都比原版同期更多**：
 
 | 时代 | 扩展 id | 新增 | 原版同期 | 代表单位 |
 |---|---|---:|---:|---|
@@ -120,21 +120,34 @@ npm run bench      # 看对局长度和时代推进有没有跑偏
 | 中世 | `pack-medieval` | 12 | 8 | 重装军士、弩手、骑射手、瑞士长矛兵、投石机、攻城塔 |
 | 火药 | `pack-gunpowder` | 14 | 11 | 线列步兵、胸甲骑兵、猎兵、攻城加农炮、棱堡、风帆战列舰 |
 | 工业 | `pack-industry` | 14 | 7 | 堑壕突击队、火焰喷射器、毒气兵、榴弹炮、列车炮、马克 I 坦克 |
-| 现代 | `pack-modern` | 14 | 11 | 伞兵、突击队、反坦克炮、喀秋莎、重型坦克、机枪地堡 |
+| 二战 | `pack-modern` | 14 | 11 | 伞兵、突击队、反坦克炮、喀秋莎、重型坦克、机枪地堡 |
+| 现代 | `pack-contemporary` | 16 | 0 | 机械化步兵、主战坦克、反坦克导弹、自行榴弹炮、远程火箭炮、武装直升机、察打无人机、防空导弹、导弹驱逐舰 |
 
 它们在开局面板的扩展列表里单独勾选，不勾选时对原版零影响。
 数值怎么定的、每金耐久带、为什么古典包的价格要压在 60 金以内，都写在
-`src/core/era-packs.ts` 的文件头注释里。
+`src/core/era-packs.ts` 的文件头注释里；第六代那一套在 `src/core/modern-warfare-pack.ts`。
+
+**第六时代要开两个包，和"一个时代一队兵"的分法保持一致**：
+
+| 包 | id | 干什么 |
+|---|---|---|
+| 现代 | `era-contemporary` | 只做一件事：`unlockEra: 6`，把科技线接到第六时代 |
+| 现代战争 | `pack-contemporary` | 只做一件事：16 个第六代兵种（`requires: ['era-contemporary']`） |
+
+前五个时代是写死在基础规则里的（ERAS 有一行、原版有那一代的兵），时代兵种包只负责
+"多塞几个兵"；第六时代连"能不能升上去"都是新的，所以那一步单独拆成一个小包。
+只开「现代」＝ 一个能升到 6 级但一件六代装备都没有的空时代（拿来量经济曲线正好）；
+开「现代战争」会自动把「现代」一起勾上——不勾就会得到一个"勾了却造不出来"的兵种包。
 
 平衡数据在 `results/packs/report.md`（含每兵种的交换比、每百金杀伤/抗伤、采用率）。
 重跑：
 
 ```bash
-# 五个模组 + 五个基线，各 30 局（约 1 分钟一组）
+# 每个模组 + 对应基线，各 30 局（约 1 分钟一组）
 node --experimental-strip-types scripts/balance-report.ts --era 1 --games 30 --seed 900 \
   --expansions bloodbath,turn-order-comp,pack-antiquity \
   --md results/packs/era1.md --out results/packs/era1.json
-# ……其余四个时代同理（基线去掉 pack- 那一项）
+# ……其余时代同理（基线去掉 pack- 那一项；第六时代再加 era-contemporary）
 npm run pack-report    # 汇总成 results/packs/report.md
 ```
 
@@ -246,8 +259,12 @@ npm run pack-report    # 汇总成 results/packs/report.md
 每批改动会留一份 `docs/UPDATE-<日期>.md`：以前什么样、现在什么样、为什么这么改。
 同一天有多批时，后一批带主题后缀。
 
-最近八份：
+最近九份：
 
+- [2026-10-28 · 第六时代与「现代战争」](docs/UPDATE-2026-10-28-contemporary.md)：把科技线
+  接到第六时代「现代」，原第五时代改名「二战」（`pack-modern` 的显示名同步改成
+  「二战合成兵」，id 不动）。拆成两个包：`era-contemporary`「现代」只开时代，
+  `pack-contemporary`「现代战争」带 16 个第六代兵种（陆军为主）并挂在前者上。
 - [2026-10-28 · 浓雾下的钱袋与拆桥](docs/UPDATE-2026-10-28-bridges-fog.md)：四项。
   浓雾蔽野下对面金币只显示成「?」（观战位例外）；点敌方桥面是**走过去**（以前
   永远被判成开火，桥修好了也站不上），想拆按 Shift 点；远程拆桥放开——射程够就能打，

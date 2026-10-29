@@ -15,6 +15,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  BASE_MAX_ERA,
   CONFIG,
   ERAS,
   ORDER_UPGRADE,
@@ -31,6 +32,7 @@ import {
   EXPANSIONS,
   LEGACY_UPGRADE_COST,
   availableExpansions,
+  eraCeilingFor,
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
@@ -1485,10 +1487,15 @@ test('城市只能造当前时代和上一个时代的兵种', () => {
 
 console.log('\n时代链');
 
-test('时代从古典到现代共 5 级，升级费递增', () => {
-  assert.equal(ERAS.length, 5);
+test('时代表五级打底、第六级留给「现代战争」，升级费递增', () => {
+  // 表长 6，但**基础规则**只认前 5 级（BASE_MAX_ERA）：第六时代「现代」
+  // 是「现代战争」包用 unlockEra 打开的，不勾那个包就永远升不上去。
+  // 所以这里查两件事：表本身够长，且"不勾包的上限"正好是第五级。
+  assert.equal(ERAS.length, 6);
+  assert.equal(BASE_MAX_ERA, 5);
   assert.equal(ERAS[0].name, '古典');
-  assert.equal(ERAS[4].name, '现代');
+  assert.equal(ERAS[4].name, '二战');
+  assert.equal(ERAS[5].name, '现代');
   for (let i = 2; i < ERAS.length; i++) {
     const prev = ERAS[i - 1];
     const cur = ERAS[i];
@@ -1502,7 +1509,9 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
   const names = Object.values(UNIT_TYPES).map((u) => u.name);
   assert.ok(!names.includes('龙骑兵'), '龙骑兵应该在扩展包里');
   assert.ok(!names.includes('术士'), '术士应该在扩展包里');
-  for (const era of ERAS) {
+  // 只查基础五级：第六时代的原版兵种表是**空的**（那是刻意的，
+  // 整套第六代兵在「现代战争」包里，见本文件末尾那个包）。
+  for (const era of ERAS.filter((e) => e.level <= BASE_MAX_ERA)) {
     const units = Object.values(UNIT_TYPES).filter((u) => u.era === era.level);
     assert.ok(units.length >= 4, `${era.name} 时代至少要有 4 个兵种`);
     assert.ok(
@@ -3086,10 +3095,13 @@ test('每个内置扩展都被注册且带说明', () => {
     assert.ok(e.id && e.name && e.summary, `${e.id} 缺少必要字段`);
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
+    // 时代开关也算"干了事"：它没有钩子、没有兵种，但改了能升到第几级
+    // （「现代」就是这样——它只把时代上限抬到 6，兵全在「现代战争」里）
+    const opensEra = typeof e.unlockEra === 'number';
     // 纯表现层扩展（比如"浓雾"把地形也遮掉）没有钩子是正常的，
     // 但它必须自己声明过 presentationOnly，否则就是"注册了个什么都不干的包"
     assert.ok(
-      hasHooks || hasUnits || e.presentationOnly === true,
+      hasHooks || hasUnits || opensEra || e.presentationOnly === true,
       `${e.id} 既没有钩子也没有兵种，等于空包`,
     );
     if (e.presentationOnly) {
@@ -3627,7 +3639,9 @@ function waterWithBank(
 
 /** 手动摆一个单位（开局编制里没有水军和工程队） */
 function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
-  const def = UNIT_TYPES[type];
+  // 先查**本局**的兵种表，再退回原版表：扩展包的兵只存在于开了那个包的对局里，
+  // 拿 UNIT_TYPES 去找一律找不到。上限（hp）也从同一处读，别混用两张表。
+  const def = s.unitTypes[type] ?? UNIT_TYPES[type];
   assert.ok(def, `没有 ${type} 这个兵种`);
   const u: Unit = {
     id: `t${s.units.length + 1}`,
@@ -6454,8 +6468,8 @@ test('AI 排的序列会承接前面的产出，不是五格同一种兵', () =>
  */
 const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
 
-test('五个时代包都在，且各自的兵种数多于原版同期', () => {
-  assert.equal(packs.length, 5, '应有五个时代包');
+test('六个时代包都在，且各自的兵种数多于原版同期', () => {
+  assert.equal(packs.length, 6, '应有六个时代包（五个时代 + 「现代战争」）');
   for (const e of packs) {
     const units = e.units ?? [];
     const eras = Array.from(new Set(units.map((u) => u.era)));
@@ -6509,6 +6523,189 @@ test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白�
       );
     }
   }
+});
+
+console.log('\n第六时代 · 现代战争');
+
+/**
+ * 「现代战争」做了一件别的包没做的事：它把**时代上限**往后推了一格。
+ *
+ * 所以这一组测的不是"数值好不好"，而是"那道闸是不是真的装了"：
+ * 时代 6 在 ERAS 里，但没开「现代」时城市升不上去、按钮不出现、上帝模式也造不出；
+ * 开了之后能升、能造兵，而且升到表底就停。
+ *
+ * 第六时代拆成两个包，和"一个时代一队兵"的分法对齐：
+ *   「现代」`era-contemporary` 只开时代，「现代战争」`pack-contemporary` 只装兵。
+ * 所以这里也要分别验：光有兵没有时代，兵是造不出来的。
+ */
+test('只有「现代」能把时代上限抬到第六级，兵种包自己抬不动', () => {
+  assert.equal(BASE_MAX_ERA, 5, '不勾任何扩展时，基础规则停在第五时代');
+  assert.equal(eraCeilingFor([]), 5);
+  assert.equal(eraCeilingFor(['pack-modern']), 5, '普通时代兵种包不该顺手抬高上限');
+  assert.equal(eraCeilingFor(['era-contemporary']), 6);
+  // 兵种包单独勾选不生效：前置没满足，整包被剔掉（see enabledExpansionIds）
+  assert.equal(eraCeilingFor(['pack-contemporary']), 5, '只勾兵种包，时代还是封在第五级');
+  assert.equal(eraCeilingFor(['era-contemporary', 'pack-contemporary']), 6);
+  assert.equal(eraCeilingFor(['pack-modern', 'era-contemporary']), 6);
+
+  const eraPack = expansionById('era-contemporary');
+  assert.ok(eraPack, '「现代」必须注册在 EXPANSIONS 里');
+  assert.equal(eraPack.unlockEra, 6, '开关就是这一条字段');
+  assert.equal(eraPack.units, undefined, '「现代」不带兵种——兵在「现代战争」里');
+
+  const unitPack = expansionById('pack-contemporary');
+  assert.ok(unitPack, '「现代战争」必须注册在 EXPANSIONS 里');
+  assert.equal(unitPack.scale, 'large', '带一整套兵的包归大型，单独成册');
+  assert.ok(unitPack.requires?.includes('era-contemporary'), '兵种包要挂在前置上');
+  assert.equal(unitPack.unlockEra, undefined, '时代开关只有一处，别写两份');
+  assert.ok((unitPack.units ?? []).every((u) => u.era === 6), '这个包的兵全是第六代');
+  // 写超了也不许越过表长，否则 eraDef 会 clamp，升级成了"花一千金买同一座城"
+  assert.equal(eraCeilingFor(['era-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
+});
+
+test('不开「现代」：城市升到二战就封顶，拒绝理由要点出那个包', () => {
+  const s = fresh({ startEra: 5, size: 12 }, 9901);
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  assert.equal(city.era, 5);
+  assert.equal(upgradeCostOf(s, city), null, '第五时代就是这一局的天花板');
+
+  const r = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.equal(r.ok, false);
+  // 只说"已经是最高时代"会让玩家以为游戏到此为止；要说清是哪一层没打开
+  assert.ok(!r.ok && r.reason.includes('「现代」'), `理由要指出能打开它的是哪个包：${!r.ok ? r.reason : ''}`);
+  assert.ok(!r.ok && r.reason.includes('二战'), '顺带把封顶在哪一代讲出来');
+});
+
+test('开了「现代」和「现代战争」：能升到第六时代，并且造得出第六代兵', () => {
+  const ids = ['era-contemporary', 'pack-contemporary', 'pack-modern'];
+  // 先看第五时代的城能不能造六代兵：不能（招募门槛按城市时代判）
+  const before = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
+  const oldCity = citiesOf(before, 'A')[0];
+  assert.ok(oldCity);
+  before.current = 'A';
+  before.players.A.gold = 5000;
+  assert.equal(
+    applyAction(before, { type: 'RECRUIT', cityId: oldCity.id, unitType: 'cnt_mbt' }).ok,
+    false,
+    '第五时代的城不该造得出第六代的主战坦克',
+  );
+
+  const s = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  const cost = upgradeCostOf(s, city);
+  assert.equal(cost, ERAS[5]?.upgradeCost, '第六时代的价取自表里那一行');
+  const maxHpBefore = city.maxHp;
+  const armorBefore = city.armor;
+
+  const r = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.ok(r.ok, `应该能升到第六时代：${!r.ok ? r.reason : ''}`);
+  const after = cityById(r.state, city.id);
+  assert.ok(after);
+  assert.equal(after.era, 6);
+  // 增量而不是覆盖：扩展给城市加的耐久不能被升级抹掉（「要塞」就是这么加的）
+  assert.equal(after.maxHp, maxHpBefore + (eraDef(6).cityMaxHp - eraDef(5).cityMaxHp));
+  assert.equal(after.armor, armorBefore + (eraDef(6).cityArmor - eraDef(5).cityArmor));
+  assert.equal(upgradeCostOf(r.state, after), null, '第六时代就是表底');
+
+  const buy = applyAction(r.state, { type: 'RECRUIT', cityId: city.id, unitType: 'cnt_mbt' });
+  assert.ok(buy.ok, `第六时代该造得出主战坦克：${!buy.ok ? buy.reason : ''}`);
+});
+
+test('上帝模式也造不出这一局升不到的城', () => {
+  const s = fresh({ size: 12 }, 9903);
+  // 找一块 2×2 的空平原（城要占满这四格的左上角）
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 0; y + 1 < s.h && !spot; y++) {
+    for (let x = 0; x + 1 < s.w && !spot; x++) {
+      let free = true;
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+        const t = s.tiles[idx(s, x + dx, y + dy)];
+        if (!t || t.terrain !== 'plain' || t.cityId || s.units.some((u) => u.x === x + dx && u.y === y + dy)) {
+          free = false;
+          break;
+        }
+      }
+      if (free) spot = { x, y };
+    }
+  }
+  assert.ok(spot, '盘面上找不到 2×2 的空平原');
+  const r = placeCity(s, 'A', spot.x, spot.y, 6);
+  assert.ok(r.ok, `该能落城：${!r.ok ? r.reason : ''}`);
+  const city = r.state.cities[r.state.cities.length - 1];
+  assert.equal(city?.era, 5, '这一局的上限是五级，写 6 也只给到 5');
+});
+
+test('对空：防空导弹打飞机 ×1.6，打地面照旧', () => {
+  // 飞行单位绕开一切地形，而地面近战**够不着头顶**（strikeDistance 给地面打空中 +1）。
+  // 这是空中单位的卖点，但必须有个解法，否则就是"谁有飞机谁赢"。
+  // 解法就是防空导弹：它只对飞行目标加成，对地面照旧。
+  const ids = ['era-contemporary', 'pack-contemporary', 'pack-modern'];
+  const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9904);
+  s.units = [];
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
+
+  const sam = place(s, 'A', 'cnt_sam', 4, 4);
+  // 血量抬到远超这一发的量级：这两条要量的是"打掉多少"，不是"能不能打死"，
+  // 而反击会先把它打死（直升机 58 攻、坦克 78 攻，甲 4 的防空营吃不下一轮）
+  sam.hp = 500;
+  const heli = place(s, 'B', 'cnt_heli', 6, 4);
+  // 直升机也得抬血：一发对空 68 点，正好超过它 66 的上限，
+  // 打死了就量不到"打掉多少"——而这条要量的就是这个数
+  heli.hp = 500;
+  const heliHpBefore = heli.hp;
+  const tank = place(s, 'B', 'cnt_mbt', 6, 5);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const samDef = s.unitTypes['cnt_sam'];
+  const heliDef = s.unitTypes['cnt_heli'];
+  const tankDef = s.unitTypes['cnt_mbt'];
+  assert.ok(samDef && heliDef && tankDef);
+
+  // 打飞机：46 × 1.6 ＝ 73.6 → 74，再减 6 点甲 ＝ 68。
+  // 乘的是**攻击力**而不是"最终伤害"（能力挂在 damage 的 postRange 段，
+  // 那一段在减护甲之前），所以重甲目标仍然能靠护甲吃掉一部分——
+  // 这也是刻意的：对空是"打得更准"，不是"无视装甲"。
+  const air = applyAction(s, { type: 'ATTACK', unitId: sam.id, targetId: heli.id });
+  assert.ok(air.ok, `防空营该打得到直升机：${!air.ok ? air.reason : ''}`);
+  const airDmg = heliHpBefore - (air.state.units.find((u) => u.id === heli.id)?.hp ?? 0);
+  assert.equal(
+    airDmg,
+    Math.round(samDef.atk * 1.6) - heliDef.armor,
+    `对空应有 1.6 倍（乘在攻击上）：实打 ${airDmg}`,
+  );
+
+  // 打地面：同样的 46 攻，一点加成都不给。
+  // 先把这个兵的"已行动"擦掉——一个单位一回合只能开一次火。
+  const sam2 = air.state.units.find((u) => u.id === sam.id);
+  assert.ok(sam2);
+  sam2.moved = false;
+  sam2.acted = false;
+  const ground = applyAction(air.state, { type: 'ATTACK', unitId: sam.id, targetId: tank.id });
+  assert.ok(ground.ok, `防空营打地面也该打得动：${!ground.ok ? ground.reason : ''}`);
+  const groundDmg = tankDef.maxHp - ground.state.units.find((u) => u.id === tank.id)!.hp;
+  assert.equal(groundDmg, samDef.atk - tankDef.armor, `对地面没有加成：实打 ${groundDmg}`);
+  assert.ok(airDmg > groundDmg, '对空必须比打同血同甲的地面目标更疼，否则这条能力等于没有');
+});
+
+test('地面近战够不着头顶的直升机', () => {
+  // 防空能力之所以必须存在：巡 1 的步兵打不到贴着它飞的直升机（strikeDistance +1）。
+  const ids = ['era-contemporary', 'pack-contemporary'];
+  const s = fresh({ startEra: 6, size: 12, expansionIds: ids }, 9905);
+  s.units = [];
+  for (const t of s.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
+  const heli = place(s, 'B', 'cnt_heli', 6, 4);
+  const foot = place(s, 'A', 'militia', 6, 5);
+  s.current = 'A';
+  refreshMemory(s);
+  const r = applyAction(s, { type: 'ATTACK', unitId: foot.id, targetId: heli.id });
+  assert.equal(r.ok, false, '射程 1 的地面单位打不到空中目标');
 });
 
 console.log('\n编制 · 遣散');

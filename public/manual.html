@@ -587,7 +587,7 @@
 
       <h3>时代升级为什么这么贵</h3>
       <div class="formula">
-        升级费用：中世 220 · 火药 360 · 工业 540 · 现代 780<br />
+        升级费用：中世 220 · 火药 360 · 工业 540 · 二战 780<br />
         <span class="c">开局 120 金起步，先结一次收入后手上有两百出头</span>
       </div>
       <p>升级一次性给你三样东西：<b>更好的兵、更硬的城市、更高的城市收入</b>。三样叠在一起就是滚雪球——
@@ -657,17 +657,23 @@
           <tr><th>时代</th><th>升级费</th><th>城市耐久</th><th>城市护甲</th><th>城市收入</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">古典</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">30</td></tr><tr><td class="name">中世</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">35</td></tr><tr><td class="name">火药</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">41</td></tr><tr><td class="name">工业</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">48</td></tr><tr><td class="name">现代</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">56</td></tr>
+          <tr><td class="name">古典</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">30</td></tr><tr><td class="name">中世</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">35</td></tr><tr><td class="name">火药</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">41</td></tr><tr><td class="name">工业</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">48</td></tr><tr><td class="name">二战</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">56</td></tr>
         </tbody>
       </table>
       <p>升级会同时提升耐久、护甲、收入，并解锁新兵种。升级用<b>增量</b>而非覆盖，所以扩展规则（比如「要塞」）给城市加的属性不会被升级抹掉。</p>
+      <p><b>表里还有第六时代「现代」（升级费 1080，城市耐久 96），但基础规则升不上去</b>：
+        它没有原版兵种，单开基础规则升到那里只会花一大笔钱换一座更厚的空城。
+        打开它的开关是扩展「现代」——一个小包，除了一行 <code>unlockEra: 6</code> 什么都不带。
+        第六代的兵种在另一个包「现代战争」里（它 <code>requires</code> 「现代」，单独勾会整包不进场）。
+        没开「现代」时，升级按钮到第五时代就停了，提示会明确写出"没开「现代」，科技线到二战封顶"。</p>
       <h3>标准对局：时代和棋盘是配套的</h3>
       <table>
         <thead><tr><th>起始时代</th><th>棋盘</th><th>为什么这么配</th></tr></thead>
         <tbody>
           <tr><td class="name">古典（默认）</td><td>12×12</td><td>兵走得慢、打得近，小图才能在十几回合里接上火</td></tr>
           <tr><td class="name">中世</td><td>16×16</td><td>长弓和骑兵把战线拉开了一档</td></tr>
-          <tr><td class="name">火药 / 工业 / 现代</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
+          <tr><td class="name">火药 / 工业 / 二战</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
+          <tr><td class="name">现代（需「现代战争」）</td><td>20×20</td><td>自行火炮与火箭炮射程 6，直升机还绕地形——再小就变成一开局就被隔河点名</td></tr>
           <tr><td class="name">长期局（手动选）</td><td>32×32</td><td>五级链条全开也不嫌挤；一格只有二十来像素，配合缩放看</td></tr>
           <tr><td class="name">自定义</td><td>4×4 ~ 64×64</td><td>任意边长，面板里直接填数字</td></tr>
         </tbody>
@@ -687,11 +693,12 @@
         超出的部分用滚动看，缩放时会自动把视口挪到地图中间。</p>
       <p>为什么要它：32×32 的图"适应屏幕"之后一格约 20 像素，认得出棋子、看不清位置。
         这也正是大地图不能只靠"图更大"来做多线的原因——看得见全图和在某一处看得清，是两件事。</p>
-      <p>开局时可以选起始时代（1~5）。越高，一局越短：</p>
+      <p>开局时可以选起始时代（1~5；勾了「现代战争」还能选第 6 时代）。越高，一局越短：</p>
       <ul>
         <li>古典开局：完整五级链条，适合打整晚</li>
         <li>火药开局：跳过冷兵器，直接进入排队枪毙</li>
-        <li>现代开局：纯装甲对抗，二十分钟一局</li>
+        <li>二战开局：纯装甲对抗，二十分钟一局</li>
+        <li>现代开局（要勾「现代」+「现代战争」）：导弹与直升机，打的是视野和射程，十来分钟一局</li>
       </ul>
     </section>
 
@@ -716,7 +723,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮、铁甲舰</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被诅咒 3 回合，护甲 −2。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮、铁甲舰</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被诅咒 3 回合，护甲 −2。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr><tr id="t-ab-anti-air"><td class="name">对空</td><td>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>防御</h4>
@@ -747,7 +754,8 @@
     <section id="roster">
       <h2><span class="sec-num">14</span>兵种全表</h2>
       <p>原版 49 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
-        扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备五包一本（点顶栏「规则书」会按这一局开了什么列出来）。</p>
+        扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备六包一本（点顶栏「规则书」会按这一局开了什么列出来）。
+        第六时代「现代」的兵属于「现代战争」包（时代本身由「现代」打开）：不勾它，这里只有五节。</p>
       
       <div class="era-block">
         <h3 id="era-1">时代 I · 古典</h3>
@@ -1317,7 +1325,7 @@
     </table>
       </div>
       <div class="era-block">
-        <h3 id="era-5">时代 V · 现代</h3>
+        <h3 id="era-5">时代 V · 二战</h3>
         <p class="era-meta">
           内燃机与总动员 ·
           升级费 780 金 ·
@@ -1512,7 +1520,7 @@
         </tbody>
       </table>
       <h3>验证</h3>
-      <p><code>npm test</code> 检查规则内核、AI 战术与高差场景、评估统计方法，以及界面冒烟（jsdom 跑整页）。当前共 503 项。</p>
+      <p><code>npm test</code> 检查规则内核、AI 战术与高差场景、评估统计方法，以及界面冒烟（jsdom 跑整页）。当前共 510 项。</p>
     </section>
 
     <section id="ai">

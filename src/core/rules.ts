@@ -45,6 +45,7 @@ import { aurasOf, canBeHealed, hasAbility, hasFlag, hooksFor, stagedFor } from '
 import {
   CITY,
   CONFIG,
+  ERAS,
   ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
@@ -53,7 +54,7 @@ import {
   nextUpgradeCost,
   passable,
 } from './config.ts';
-import { LAST_STAND_BONUS, activeExpansions } from './expansions.ts';
+import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import {
   GOLD,
   addRes,
@@ -2098,8 +2099,14 @@ export function cityRegenOf(s: GameState, city: City): number {
  *
  * 单独导出来，是因为界面、AI、规则三处都要问同一个问题，
  * 而扩展（血战）会让这个价随时间变——各算一遍一定会对不上。
+ *
+ * **封顶判定在钩子之前**：能不能升是规则（`eraCeilingOf`，取决于开没开
+ * 「现代战争」），多少钱是扩展的事。反过来的话，「血战」那种
+ * "照旧价目表收钱"的钩子会在封顶之后把 null 又变回一个价格，
+ * 玩家就会看见一个点得动、点了却没反应的按钮。
  */
 export function upgradeCostOf(s: GameState, city: City): number | null {
+  if (city.era >= eraCeilingOf(s)) return null;
   let cost = nextUpgradeCost(city.era);
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyUpgradeCost) {
@@ -3019,7 +3026,19 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
   if (city.owner !== s.current) return { ok: false, reason: '只能升级自己的城市' };
 
   const cost = upgradeCostOf(s, city);
-  if (cost === null) return { ok: false, reason: '已经是最高时代' };
+  if (cost === null) {
+    // 封顶有两种，说法不能一样：真到表底、和"这一局没开那一层"。
+    // 后者要指出路（哪个包能打开），不然玩家会以为科技线到此为止。
+    const cap = eraCeilingOf(s);
+    const locked = lockedEraPacks(s.config.expansionIds);
+    if (cap < ERAS.length && locked.length > 0) {
+      return {
+        ok: false,
+        reason: `已经是最高时代（没开${locked.map((n) => `「${n}」`).join('、')}，科技线到${eraDef(cap).name}封顶）`,
+      };
+    }
+    return { ok: false, reason: '已经是最高时代' };
+  }
 
   const player = s.players[s.current];
   if (player.gold < cost) return { ok: false, reason: `金币不足（需要 ${cost}）` };

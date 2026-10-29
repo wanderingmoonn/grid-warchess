@@ -13,8 +13,8 @@
  * 一律"克隆再改"：调用方失败时要能整块丢掉，不留半截状态。
  */
 
-import { CONFIG, ERAS, eraDef } from './config.ts';
-import { activeExpansions } from './expansions.ts';
+import { CONFIG, eraDef } from './config.ts';
+import { activeExpansions, eraCeilingOf } from './expansions.ts';
 import { canStandAt, cityAt, citySizeOf, coversTile } from './rules.ts';
 import type { City, GameState, PlayerId, Terrain, Unit } from './types.ts';
 
@@ -143,7 +143,9 @@ export function placeCity(
   if (problem) return { ok: false, reason: problem };
 
   const size = citySizeOf(s);
-  const lv = Math.max(1, Math.min(ERAS.length, Math.round(era)));
+  // 上帝模式也不许造出一座"这一局根本升不到"的城：那种城没有兵种可造，
+  // 面板上时代是 6、兵表里却一件六代装备都没有——看着像 bug，其实就是。
+  const lv = Math.max(1, Math.min(eraCeilingOf(s), Math.round(era)));
   const info = eraDef(lv);
   const next = clone(s);
   const id = nextCityId(next);
