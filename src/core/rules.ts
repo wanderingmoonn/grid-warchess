@@ -1133,6 +1133,21 @@ export interface EffectiveStats {
   /** 算上减速/光环/扩展的移动力 */
   move: number;
   moveBase: number;
+  moveItems: StatItem[];
+  /** 有效视野 */
+  vision: number;
+  visionBase: number;
+  visionItems: StatItem[];
+  /** 有效射程 */
+  range: number;
+  rangeBase: number;
+  rangeItems: StatItem[];
+  /** 有效溅射半径 */
+  splash: number;
+  splashBase: number;
+  splashItems: StatItem[];
+  /** 有效溅射比例 */
+  splashRatio: number;
 }
 
 /**
@@ -1269,16 +1284,110 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
     }
   }
+  
+  // ── 移动力 (严格按照 movePower 的执行顺序) ──
+  const moveBase = def.move;
+  const moveItems: StatItem[] = [];
+  let moveNow = moveBase;
+  if (moveBase > 0) {
+    const heroMove = u.heroBuff?.moveBonus ?? 0;
+    if (heroMove !== 0) {
+      moveNow += heroMove;
+      moveItems.push({ label: '英雄技能', delta: heroMove });
+    }
+    for (const [key, val] of Object.entries(u.status ?? {})) {
+      if (typeof val !== 'number' || val <= 0) continue;
+      const sdef = STATUS_REGISTRY[key];
+      if (sdef?.modifyMove) {
+        const before = moveNow;
+        moveNow = sdef.modifyMove(s, u, val, moveNow);
+        if (moveNow !== before) moveItems.push({ label: sdef.name, delta: moveNow - before });
+      }
+    }
+    for (const ally of s.units) {
+      if (ally.id === u.id || ally.owner !== u.owner) continue;
+      if (distance(ally, u) !== 1) continue;
+      for (const a of aurasOf(utype(s, ally.type))) {
+        if (a.allyMove) {
+          moveNow += a.allyMove;
+          moveItems.push({ label: '疾行光环', delta: a.allyMove });
+        }
+      }
+    }
+    const beforeClamp = moveNow;
+    moveNow = Math.max(1, moveNow);
+    if (moveNow !== beforeClamp) moveItems.push({ label: '保底', delta: moveNow - beforeClamp });
+
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifyMove) {
+        const before = moveNow;
+        moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
+        if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
+      }
+    }
+  }
+
+  // ── 视野 (按 visionOf 展开) ──
+  const visionBase = def.vision;
+  const visionItems: StatItem[] = [];
+  let visionNow = visionBase;
+  const host = buildingAt(s, u.x, u.y);
+  if (host && host.id !== u.id && host.owner === u.owner) {
+    const hostDef = utype(s, host.type);
+    if (hostDef.garrison && !underConstruction(host) && hostDef.vision > visionNow) {
+      visionItems.push({ label: '驻军', delta: hostDef.vision - visionNow });
+      visionNow = hostDef.vision;
+    }
+  }
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifyVision) {
+      const before = visionNow;
+      visionNow = e.hooks.modifyVision({ state: s, player: u.owner, unit: u, base: visionNow });
+      if (visionNow !== before) visionItems.push({ label: e.name, delta: visionNow - before });
+    }
+  }
+
+  // ── 射程 ──
+  const rangeBase = def.range;
+  const rangeItems: StatItem[] = [];
+  let rangeNow = rangeBase;
+  if (typeof def.ammo === 'number' && outOfAmmo(s, u)) {
+    rangeItems.push({ label: '弹药耗尽', delta: 1 - rangeBase });
+    rangeNow = 1;
+  } else {
+    if (u.heroBuff?.range !== undefined && u.heroBuff.range !== rangeBase) {
+      rangeItems.push({ label: '英雄技能', delta: u.heroBuff.range - rangeBase });
+      rangeNow = u.heroBuff.range;
+    }
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifyRange) {
+        const before = rangeNow;
+        rangeNow = e.hooks.modifyRange({ state: s, unit: u, range: rangeNow });
+        if (rangeNow !== before) rangeItems.push({ label: e.name, delta: rangeNow - before });
+      }
+    }
+  }
+
+  // ── 溅射 ──
+  const splashBase = def.splash ?? 0;
+  const splashItems: StatItem[] = [];
+  let splashNow = splashBase;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifySplash) {
+      const before = splashNow;
+      splashNow = e.hooks.modifySplash({ state: s, attacker: u, splash: splashNow });
+      if (splashNow !== before) splashItems.push({ label: e.name, delta: splashNow - before });
+    }
+  }
 
   return {
-    atk,
-    atkBase,
-    atkItems,
-    armor,
-    armorBase,
-    armorItems,
-    move: movePower(s, u),
-    moveBase: def.move,
+    atk, atkBase, atkItems,
+    armor, armorBase, armorItems,
+    move: moveNow, moveBase, moveItems,
+    vision: visionNow, visionBase, visionItems,
+    range: rangeNow, rangeBase, rangeItems,
+    splash: splashNow, splashBase, splashItems,
+    splashRatio: (u.custom?.splashRatio as number) ?? CONFIG.splashRatio,
   };
 }
 

@@ -17,7 +17,7 @@ const CULTIVATOR: UnitTypeDef = {
   era: 1,
   category: 'combat',
   cost: 100,
-  move: 3,
+  move: 2,
   atk: 1,
   armor: 0,
   maxHp: 2,
@@ -166,6 +166,14 @@ export const CULTIVATION_PACK: Expansion = {
       }
       return range;
     },
+    // ── 视野（神识）：随境界提升，随衰老枯竭 ─────────
+    modifyVision: ({ unit, base }) => {
+      if (!unit || unit.type !== 'qi-cultivator') return base;
+      const rank = getRank(unit);
+      const aging = getAgingYears(unit);
+      // 神识：随境界每级 +1 格；衰老：每超龄 1 岁 -1 格。
+      return Math.max(1, base + rank - aging);
+    },
     // 一回合攻击次数：(x+1)/2 向下取整，至少 1。
     // x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
     modifyAttacks: ({ unit, attacks }) => {
@@ -177,6 +185,11 @@ export const CULTIVATION_PACK: Expansion = {
     modifySplash: ({ attacker, splash }) => {
       if (attacker.type !== 'qi-cultivator') return splash;
       return Math.floor(getRank(attacker) / 4);
+    },
+    // ── 移动力：2 + floor(x/3) ─────────────────────
+    modifyMove: ({ unit, move }) => {
+      if (unit.type !== 'qi-cultivator') return move;
+      return move + Math.floor(getRank(unit) / 3);
     },
     // ── 回合开始：寿元判定 + 打坐 ──────────────────
     onTurnStart: ({ state, player }) => {
@@ -239,7 +252,7 @@ export const CULTIVATION_PACK: Expansion = {
         const trueDmg = Math.floor(rank / 2);
         const splash = Math.floor(rank / 4);
         lines.push(
-          `境界加成：攻击 +${rank} · 护甲 +${rank} · 射程 +${rank} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
+          `境界加成：攻击 +${rank} · 护甲 +${rank} · 射程 +${rank} · 神识 +${rank} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
         );
         if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
         if (splash > 0) lines.push(`溅射半径：${splash}`);
@@ -247,7 +260,7 @@ export const CULTIVATION_PACK: Expansion = {
 
       if (aging > 0) {
         lines.push(
-          `油尽灯枯：攻击 -${aging * 2} · 护甲 -${aging} · 视野 -${aging}`,
+          `油尽灯枯：攻击 -${aging * 2} · 护甲 -${aging} · 神识 -${aging}`,
         );
         const remaining = lifespan + AGING_DEATH_AGE - age;
         if (remaining > 0) lines.push(`坐化倒计时：${remaining} 年`);

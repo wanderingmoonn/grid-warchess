@@ -9094,6 +9094,67 @@ test('修士：溅射半径随境界成长（x/4）', () => {
   }
 });
 
+test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  
+  // 清理一块平地（虽然测移动力不依赖地形，但为了保证移动不被阻挡）
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { lifespan: 100 };
+
+  // 用来测试边界值的等级和对应的经验阈值
+  const table: Array<[rank: number, exp: number, expectedMove: number]> = [
+    [0, 0, 2],    // 0/3 = 0 -> 2
+    [2, 4, 2],    // 2/3 = 0 -> 2
+    [3, 8, 3],    // 3/3 = 1 -> 3
+    [5, 32, 3],   // 5/3 = 1 -> 3
+    [6, 64, 4],   // 6/3 = 2 -> 4
+    [8, 256, 4],  // 8/3 = 2 -> 4
+    [9, 512, 5],  // 9/3 = 3 -> 5
+  ];
+
+  for (const [rank, exp, expectedMove] of table) {
+    qi.custom.exp = exp;
+    assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
+    assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
+  }
+});
+
+test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  
+  // 清一块平地
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { lifespan: 100 }; // 测试期间不衰老
+
+  // 0级：基础视野 3
+  qi.custom.exp = 0;
+  assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
+
+  // 9级：基础 3 + 境界 9 = 12
+  qi.custom.exp = 512;
+  assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
+
+  // 衰老测试：9级，但超龄 2 岁（age = 102）
+  qi.age = 102;
+  assert.equal(effectiveStats(s, qi).vision, 10, '衰老 2 岁，神识减 2');
+  assert.ok(
+    effectiveStats(s, qi).visionItems.some(it => it.label === 'cultivation' && it.delta === -2),
+    '面板明细里应显示衰老带来的负修正',
+  );
+});
+
 test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
   // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。
