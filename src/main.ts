@@ -1507,6 +1507,37 @@ function onBoardClick(e: Event): void {
 
   const clickedUnitId = pickUnitId(coords, wantAttack);
 
+  // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
+  //
+  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
+  // 永远是"选中这座桥"，或者——更糟——"打这座桥"。于是别人的桥修好了却只能
+  // 隔着河干看：桥明明在可达范围里，点上去了却变成开火，永远站不上那座桥。
+  //
+  // 必须排在下面那段"只读查看"**之前**：不能开火的单位（工人、商队、工程队）
+  // 打不出 targets，于是点敌桥永远落到"查看这座桥"上，它们照样过不了河。
+  //
+  // 优先级给"走过去"，理由有三条：
+  //   1. 桥没有自己的操作面板（塔和军营才有），选中它本来就做不了任何事；
+  //   2. "过河"是这个格子上唯一常用的动作，攻击是可以换一种点法的；
+  //   3. 射程放开之后（远程也能打桥），不改的话敌桥几乎永远在 targets 里，
+  //      等于把"站上敌桥"这个玩法彻底关掉。
+  //
+  // 想拆桥：按住 Shift 点（强制攻击），或者走到射程内用强制攻击模式。
+  // 其余动词各管各的：正在选址就不抢（那一下是"盖在这儿"），装卸上膛时同理。
+  const walkable = coords ? idx(state, coords.x, coords.y) : -1;
+  const bridgeWalk =
+    myTurn() && !watching() && !state.config.commanderMode &&
+    coords && selectedId && !wantAttack && !buildPlan && !loadPlan && !unloadPlan &&
+    reach.includes(walkable)
+      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
+      : undefined;
+  if (bridgeWalk && coords && selectedId) {
+    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
+    // 敌桥既能走又能打，两种点法差一个 Shift——不说一句，玩家会以为"打不了"
+    if (bridgeWalk.owner !== me()) toast('走上桥面了。想拆这座桥：按住 Shift 点它');
+    return;
+  }
+
   // 只读查看：点敌方单位出属性卡——不看轮到谁，也不看是不是指挥官模式。
   //
   // 扩展包把兵种从 49 个堆到 118 个之后，"对面这个是什么、射程几格、护甲多少"
@@ -1586,32 +1617,6 @@ function onBoardClick(e: Event): void {
       buildPlan = null;
       render();
     }
-    return;
-  }
-
-  // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
-  //
-  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
-  // 永远是"选中这座桥"，或者——更糟——"打这座桥"。于是别人的桥修好了却只能
-  // 隔着河干看：桥明明在可达范围里，点上去了却变成开火，永远站不上那座桥。
-  //
-  // 现在优先级是"走过去"赢过"选中/开火"，理由有三条：
-  //   1. 桥没有自己的操作面板（塔和军营才有），选中它本来就做不了任何事；
-  //   2. "过河"是这个格子上唯一常用的动作，攻击是可以换一种点法的；
-  //   3. 射程放开之后（远程也能打桥），不改的话敌桥几乎永远进 targets，
-  //      等于把"站上敌桥"这个玩法彻底关掉。
-  // 想拆桥：按住 Shift 点（强制攻击），或者干脆走到射程内用强制攻击模式。
-  // 桥面上站着敌方单位时走不上去——那种格子不在 reach 里，会落到下面的开火分支。
-  // 装卸上膛时不抢：那一下点击的意思是"装/卸"，不是"走到那格去"。
-  const walkable = coords ? idx(state, coords.x, coords.y) : -1;
-  const bridgeStep =
-    coords && selectedId && !wantAttack && !loadPlan && !unloadPlan && reach.includes(walkable)
-      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
-      : undefined;
-  if (bridgeStep && coords && selectedId) {
-    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
-    // 敌桥既能走又能打，两种点法差一个 Shift——不说一句，玩家会以为"打不了"
-    if (bridgeStep.owner !== me()) toast('走上桥面了。想拆这座桥：按住 Shift 点它');
     return;
   }
 
