@@ -172,11 +172,26 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
 function panelHtml(input: PanelInput): string {
   const { view, me } = input;
   const s = view.state;
+  /**
+   * 「浓雾蔽野」把"看不清对面"当成规则本身，钱袋也得跟着看不见。
+   *
+   * 只看数量不给数字：雾里连地形都要走一遍才记得住，隔壁还剩多少钱更不该
+   * 摆在 HUD 上——那等于免费送一份"他还能不能再买一队兵"的情报，
+   * 玩家照着这个数决定要不要趁现在压过去，雾就白做了。
+   * 观战位例外：它本来就是全图视角（顶栏写着"全图视角"），遮一半反而自相矛盾。
+   */
+  const blackout = s.config.expansionIds.includes('blackout');
+  const hideEnemyGold = (p: PlayerId) => blackout && p !== me && input.spectator !== true;
+
   // HUD 里的资源行：金币永远显示，其余资源只在"真的存在"时出现。
   // 原版只玩金币，多出来的空徽章只会让面板看起来像坏了。
   const resLine = (p: PlayerId) => {
     const ps = s.players[p];
-    const parts = [`金币 ${ps.gold}`];
+    const parts = [
+      hideEnemyGold(p)
+        ? '<span title="「浓雾蔽野」下打探不到对面的钱袋">金币 ?</span>'
+        : `金币 ${ps.gold}`,
+    ];
     for (const [id, n] of Object.entries(ps.res ?? {})) {
       if (!n || n <= 0) continue;
       if (id === 'gold') continue;

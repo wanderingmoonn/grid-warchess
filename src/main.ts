@@ -1483,7 +1483,7 @@ function onBoardClick(e: Event): void {
   // 的修饰键，也是模式因为"轮不到我 / 手上在选址"而不成立时的后备。
   // 两处都必须"成或明确拒绝，绝不落到选中"，否则压在格子上那枚棋子又把话抢走了。
   //
-  // 桥不用修饰键了：桥面可达时直接点就算"走上去"（见 1.9），因为桥没有
+  // 桥不用修饰键了：桥面可达时直接点就算"走上去"（见 1.2），因为桥没有
   // 自己的操作面板，选中它从来都不是玩家想要的。
   if (
     wantMove &&
@@ -1589,6 +1589,32 @@ function onBoardClick(e: Event): void {
     return;
   }
 
+  // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
+  //
+  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
+  // 永远是"选中这座桥"，或者——更糟——"打这座桥"。于是别人的桥修好了却只能
+  // 隔着河干看：桥明明在可达范围里，点上去了却变成开火，永远站不上那座桥。
+  //
+  // 现在优先级是"走过去"赢过"选中/开火"，理由有三条：
+  //   1. 桥没有自己的操作面板（塔和军营才有），选中它本来就做不了任何事；
+  //   2. "过河"是这个格子上唯一常用的动作，攻击是可以换一种点法的；
+  //   3. 射程放开之后（远程也能打桥），不改的话敌桥几乎永远进 targets，
+  //      等于把"站上敌桥"这个玩法彻底关掉。
+  // 想拆桥：按住 Shift 点（强制攻击），或者干脆走到射程内用强制攻击模式。
+  // 桥面上站着敌方单位时走不上去——那种格子不在 reach 里，会落到下面的开火分支。
+  // 装卸上膛时不抢：那一下点击的意思是"装/卸"，不是"走到那格去"。
+  const walkable = coords ? idx(state, coords.x, coords.y) : -1;
+  const bridgeStep =
+    coords && selectedId && !wantAttack && !loadPlan && !unloadPlan && reach.includes(walkable)
+      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
+      : undefined;
+  if (bridgeStep && coords && selectedId) {
+    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
+    // 敌桥既能走又能打，两种点法差一个 Shift——不说一句，玩家会以为"打不了"
+    if (bridgeStep.owner !== me()) toast('走上桥面了。想拆这座桥：按住 Shift 点它');
+    return;
+  }
+
   // 0) 同一格上叠着两个单位（飞行单位压在地面单位头上）时，
   //    点这一格点到的永远是上面那个 DOM 元素，下面那个就再也选不中、更打不着。
   //    所以先按格子找"这一格里有没有我能打的目标"，有就直接开火——
@@ -1643,23 +1669,6 @@ function onBoardClick(e: Event): void {
       return;
     }
     unloadPlan = null;
-  }
-
-  // 1.9) 点在桥面上：桥是"能站的地形"，不是一个等着被选中的物件。
-  //
-  // 桥在数据上是一枚建筑棋子（bridges 标记 + 把水格改成桥面），所以直接点
-  // 永远是"选中这座桥"——桥修好了却只能穿过去，守桥、堵口、在桥中间换气
-  // 全都点不出来，表现就是"点了没反应"。这一格既然在可达范围里，就让
-  // "我要走上去"赢过"我要选它"：桥没有自己的操作面板（塔和军营才有），
-  // 选中它本来也做不了任何事。真要拆桥走的是上面那条攻击分支——
-  // 敌桥进了射程时，点它就是开火，轮不到这里。
-  const onBridge =
-    coords && selectedId && reach.includes(idx(state, coords.x, coords.y))
-      ? stackAt(coords.x, coords.y).find((u) => utype(state, u.type).bridges)
-      : undefined;
-  if (onBridge && coords && selectedId) {
-    dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
-    return;
   }
 
   // 2) 点到了某个单位

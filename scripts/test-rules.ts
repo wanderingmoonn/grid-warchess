@@ -3841,6 +3841,48 @@ test('架桥：水面变桥面，友军能过，也能停在桥上', () => {
   assert.equal(unitAt(moved.state, spot.water.x, spot.water.y)?.id, crosser.id, 'unitAt 应该返回站在桥上的人');
 });
 
+test('敌方造的桥，谁都能站上去', () => {
+  // 桥在数据上属于造它的人，在规则上只是一格地形。
+  // 这条用例守的是最容易被改坏的那一半：桥单位被当成"敌方占位"挡在
+  // reachableTiles 外面，于是玩家只能隔河干看——桥修好了却上不去。
+  const s = fresh();
+  const spot = waterWithBank(s);
+  assert.ok(spot, '需要一块水');
+
+  const laborer = place(s, 'B', 'laborer', spot.land.x, spot.land.y);
+  s.current = 'B';
+  s.players.B.gold = 900;
+  const r = applyAction(s, {
+    type: 'BUILD',
+    unitId: laborer.id,
+    unitType: 'bridge',
+    x: spot.water.x,
+    y: spot.water.y,
+  });
+  assert.ok(r.ok, r.ok ? '' : `B 架桥失败：${r.reason}`);
+  const bridge = r.state.units.find((u) => u.type === 'bridge');
+  assert.equal(bridge?.owner, 'B', '桥应该记在造它的人名下');
+
+  const st = r.state;
+  // 桥边换 A 的兵站：place 会把同格上的 B 工程队挤走，岸上正好空出来
+  const trooper = place(st, 'A', 'militia', spot.land.x, spot.land.y);
+  st.current = 'A';
+  assert.ok(
+    reachableTiles(st, trooper).has(idx(st, spot.water.x, spot.water.y)),
+    '敌方的桥面也该进可达范围',
+  );
+  const moved = applyAction(st, {
+    type: 'MOVE',
+    unitId: trooper.id,
+    x: spot.water.x,
+    y: spot.water.y,
+  });
+  assert.ok(moved.ok, moved.ok ? '' : `站上敌桥失败：${moved.reason}`);
+  assert.equal(unitAt(moved.state, spot.water.x, spot.water.y)?.id, trooper.id, '人就该站在桥上');
+  // 站上去之后地形仍是桥面：桥还在，别人照样能过
+  assert.equal(moved.state.tiles[idx(moved.state, spot.water.x, spot.water.y)].terrain, 'bridge');
+});
+
 test('桥是双向的：东西两岸互相都过得去', () => {
   const build = () => {
     const s = fresh();
@@ -5803,9 +5845,10 @@ test('桥能沿着已经铺好的桥面往河心接，但不能斜着接', () =>
   assert.ok(!diag.ok, '斜着往外接不该成立');
 });
 
-test('拆桥要贴到桥头，隔着河放箭打不塌', () => {
-  // 允许远程拆桥的后果是"谁先架桥谁吃亏"：模拟里两边各架七八座、桥头来回换，
-  // 打满 200 回合谁也过不去——六成的"地形隔断"磨局都是这么来的。
+test('隔河拆桥：远程能放箭，但一发只算一半', () => {
+  // 以前是"必须贴到桥头"，一刀切的后果是远程连顺手拆座空桥都做不到。
+  // 现在改成"准许打、但打折"：射程够就能朝桥开火，隔一格以上一发放一半，
+  // 贴着桥头才是满伤。想真的断掉这条路，还是得把部队压到桥边。
   const s = fresh({ startEra: 1, size: 12 }, 7171);
   s.units = [];
   for (const t of s.tiles) {
@@ -5815,20 +5858,101 @@ test('拆桥要贴到桥头，隔着河放箭打不塌', () => {
   s.tiles[idx(s, 5, 4)].terrain = 'bridge';
   const bridge = place(s, 'B', 'bridge', 5, 4);
   const bow = place(s, 'A', 'longbow', 5, 2);
+  // Unit 上只有 hp，没有 maxHp——上限得从兵种表读
+  const bridgeMax = utype(s, bridge.type).maxHp;
 
   s.current = 'A';
   refreshMemory(s);
-  const far = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
-  assert.equal(far.ok, false, '隔两格不该能打桥');
-  assert.ok(far.reason.includes('桥头'), `理由要写清楚：${far.reason}`);
 
-  // 走到桥头（岸边那一格）就能拆
-  bow.moved = false;
-  bow.acted = false;
-  bow.x = 5;
-  bow.y = 3;
-  const near = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
+  // 隔两格：能打，但只算半伤
+  const far = applyAction(s, { type: 'ATTACK', unitId: bow.id, targetId: bridge.id });
+  assert.ok(far.ok, `隔河也该能放箭了：${!far.ok ? far.reason : ''}`);
+  // applyAction 返回的是一份新状态，血量要从 far.state 里读——读 s 上的旧对象永远是满血
+  const hitFar = far.state.units.find((u) => u.id === bridge.id)!;
+  const farDmg = bridgeMax - hitFar.hp;
+
+  // 贴到桥头（岸边那一格）：满伤，而且明显更快
+  const s2 = far.state;
+  const bridge2 = s2.units.find((u) => u.id === bridge.id)!;
+  bridge2.hp = bridgeMax;
+  const bow2 = s2.units.find((u) => u.id === bow.id)!;
+  bow2.moved = false;
+  bow2.acted = false;
+  bow2.x = 5;
+  bow2.y = 3;
+  const near = applyAction(s2, { type: 'ATTACK', unitId: bow2.id, targetId: bridge2.id });
   assert.ok(near.ok, `贴着桥头应该能拆：${!near.ok ? near.reason : ''}`);
+  const nearDmg = bridgeMax - near.state.units.find((u) => u.id === bridge.id)!.hp;
+
+  assert.ok(farDmg > 0, '远程拆桥不是零伤害——放开射程判定就该真的掉血');
+  assert.equal(
+    farDmg,
+    Math.round(nearDmg * CONFIG.bridgeRangedDamageRatio),
+    `隔河一发只算 ${CONFIG.bridgeRangedDamageRatio}：近身 ${nearDmg}、隔河 ${farDmg}`,
+  );
+  // 40 血的木桥：贴桥头 3 下、隔河 6 下。这个倍差就是"快"与"慢"的区别
+  assert.ok(nearDmg * 3 >= bridgeMax, `贴桥头要能在 3 下内拆掉：${nearDmg}×3`);
+  assert.ok(farDmg * 3 < bridgeMax, `隔河 3 下不该拆得掉：${farDmg}×3`);
+});
+
+test('AI 拆桥看态势：桥顶到城门口才拆，两军中间的桥不碰', () => {
+  // 桥的"击杀账"和普通单位不一样：木桥只有几十点耐久，一发两发就塌，
+  // 按"打死一支兵 = 120 分"来算，AI 会为了拆一座桥把整轮齐射都扔进去——
+  // 拆完自己过河还得重新架。所以桥单独算：只有"顶着自家城门"（死守）
+  // 和"桥在对面那一侧、自己还在往前推"这两种情况才给分。
+  //
+  // 这里把两种局面摆出来对撞同一个问题：这一手该不该花在桥上。
+  const s = fresh({ startEra: 1, size: 12 }, 7171);
+  s.units = [];
+  for (const t of s.tiles) {
+    if (t.terrain !== 'city') t.terrain = 'plain';
+  }
+  // 没有金币＝没有产兵/建造候选，这一回合只剩"这个兵做什么"要判断
+  s.players.A.gold = 0;
+  s.players.B.gold = 0;
+
+  const home = s.cities.find((c) => c.owner === 'A')!;
+  const gateY = home.y - 2;
+  s.tiles[idx(s, home.x, gateY)].terrain = 'bridge';
+  const bridge = place(s, 'B', 'bridge', home.x, gateY);
+  // 用民兵而不是长弓：射程 1 的兵不会被"顺手围一下墙那边的城"抢走候选，
+  // 这一回合它要么拆桥、要么什么都不做
+  const bow = place(s, 'A', 'militia', home.x, gateY - 1);
+  // moved 先置真：这样就没有"往前挪一格"的候选来抢，考的就是拆桥本身
+  bow.moved = true;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const atGate = aiNextAction(s);
+  assert.ok(
+    atGate?.type === 'ATTACK' && atGate.targetId === bridge.id,
+    `桥顶到城门口就该拆——这是死守：${JSON.stringify(atGate)}`,
+  );
+
+  // 同一座桥搬到地图正中：离两边都远，谁都不从这里过河
+  const mx = Math.floor(s.w / 2);
+  const my = Math.floor(s.h / 2);
+  bridge.x = mx;
+  bridge.y = my;
+  s.tiles[idx(s, mx, my)].terrain = 'bridge';
+  bow.x = mx;
+  bow.y = my - 1;
+  refreshMemory(s);
+
+  const mine = Math.min(
+    ...s.cities.filter((c) => c.owner === 'A').map((c) => distToCity({ x: mx, y: my }, c)),
+  );
+  const foe = Math.min(
+    ...s.cities.filter((c) => c.owner === 'B').map((c) => distToCity({ x: mx, y: my }, c)),
+  );
+  assert.ok(mine > 3, `这张图上"正中"得离我家城门够远，不然考不出区别：${mine}`);
+  assert.ok(foe >= mine, `正中那格对两边得一样远，才谈得上"谁都不从这里过"：我 ${mine} / 敌 ${foe}`);
+
+  const inMiddle = aiNextAction(s);
+  assert.ok(
+    !(inMiddle?.type === 'ATTACK' && inMiddle.targetId === bridge.id),
+    `不值得为一座谁都不过的桥花掉一次攻击：${JSON.stringify(inMiddle)}`,
+  );
 });
 
 test('AI 会一直铺到对岸，而不是每回合换个地方重来', () => {

@@ -395,6 +395,51 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
+check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
+  // 雾里连地形都要走一遍才记得住，隔壁还剩多少钱更不该摆在 HUD 上——
+  // 那等于免费告诉玩家"他还能不能再买一队兵"，照着想就是上帝视角。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['blackout'] }, 909);
+  st.players.A.gold = 123;
+  st.players.B.gold = 456;
+  const paint = (extra: Record<string, unknown> = {}) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      ...extra,
+    });
+
+  paint();
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('金币 123'), '自己的钱必须看得见');
+  assert.ok(!text.includes('金币 456'), '对面的钱不该出现在 HUD 里');
+  // 整行消失会让人以为是渲染坏了：留一个占位，说明"有这个东西，但你不知道"
+  assert.ok(text.includes('金币 ?'), '该给一个占位，而不是把这一项抹掉');
+
+  // 观战位本来就是全图视角（顶栏自己写着"全图视角"），遮一半反而自相矛盾
+  paint({ spectator: true });
+  assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
+});
+
+check('没有浓雾的对局里，对面的金币照旧显示', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 910);
+  st.players.B.gold = 321;
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok((host.textContent ?? '').includes('金币 321'), '普通对局不遮');
+});
+
 console.log('\n单位交互');
 
 check('点自己的单位会高亮可移动范围', () => {

@@ -799,10 +799,71 @@ function enemyThreatAt(
   return { n, dmg };
 }
 
-function scoreAttack(s: GameState, attacker: Unit, target: Unit, mood: AiMood): number {
+/** 某一方到某格最近的自家城（不算废墟、不算本回合准备放弃的那座）；没有城就 null */
+function nearestCityGap(
+  s: GameState,
+  owner: PlayerId,
+  at: { x: number; y: number },
+  skipId: string | null,
+): number | null {
+  let best: number | null = null;
+  for (const c of s.cities) {
+    if (c.owner !== owner || c.ruined) continue;
+    if (skipId && c.id === skipId) continue;
+    const d = distToCity(at, c);
+    if (best === null || d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * 打一座桥值多少分；0 = 这一手不值得占一次攻击，干脆别想。
+ *
+ * 桥不是"战果"。拆掉它不减对面的兵、不涨我的兵，只是把一格地形改回水面——
+ * 而"击杀"那一套账（120 + 造价）在桥身上特别容易成立：木桥只有几十点耐久，
+ * 一发两发就塌，于是一次拆桥能拿到跟"打死一支骑士"一样的分数。
+ * 表现出来就是 AI 见桥就打：部队走到河边先拿一轮齐射把桥拆了，
+ * 然后自己过河还得重新架——纯粹是把自己这一回合扔进水里。
+ *
+ * 所以桥单独算，按"这座桥对谁有用"来：
+ *
+ *  一、死守：桥顶着自家城门（三格之内，且离我的城比离对面的城近）。
+ *      拆掉它，对面的下一波就得绕路或者重新架桥，这是在替自己拆掉一条
+ *      进攻路线。城越近越急，正在收缩固守的时候再加一点。
+ *  二、进攻：桥在对面那一侧、我又在往前推。拆掉它掐的是对面的增援线，
+ *      值一点分，但不值得为它放弃一次正经交换。
+ *  三、其余（在攒钱、在收缩、已经放弃进攻、桥就在我过河的路上）：
+ *      一分不给。"不需要死守、也不打算进攻"的时候还去拆桥，
+ *      等于替对面把路修好了——反正桥是双向的，我打下来的桥我也要过。
+ */
+function scoreBridgeAttack(s: GameState, attacker: Unit, bridge: Unit, all: Fields): number {
+  const at = { x: bridge.x, y: bridge.y };
+  const me = attacker.owner;
+  const mine = nearestCityGap(s, me, at, all.mood.abandonedCityId);
+  const foe = nearestCityGap(s, other(me), at, null);
+  if (mine === null) return 0;
+
+  // 一、死守
+  const holding = all.hold || all.guardCityId !== null;
+  if (mine <= 3 && (foe === null || mine < foe)) {
+    return 30 - mine * 4 + (holding ? 14 : 0);
+  }
+
+  // 二、进攻：桥已经在我推进的方向上（离对面的城更近），而且我没在收着打
+  const pushing = !all.hold && all.mood.abandonedCityId === null && all.mood.drive.boom < 0.5;
+  if (pushing && foe !== null && foe < mine) return 20;
+
+  return 0;
+}
+
+function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): number {
+  const mood = all.mood;
   const preview = previewAttack(s, attacker, target);
   const targetDef = utype(s, target.type);
   const selfDef = utype(s, attacker.type);
+
+  // 桥走自己那本账：它既不算击杀，也不吃"击杀 = 120"那一套（见 scoreBridgeAttack）
+  if (targetDef.bridges) return scoreBridgeAttack(s, attacker, target, all);
 
   const kill = preview.toDefender >= target.hp;
   let score = kill ? 120 + targetDef.cost * 0.12 : (preview.toDefender / targetDef.maxHp) * 60;
@@ -1399,9 +1460,9 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   let nextAttack = 0, nowAttack = 0;
   let killed: string | undefined;
   if (canAttack(unit)) {
-    for (const enemy of attackableTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreAttack(s,unit,enemy,all.mood));
+    for (const enemy of attackableTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreAttack(s,unit,enemy,all));
     for (const enemy of attackableTargets(s,moved)) {
-      const value = scoreAttack(s,moved,enemy,all.mood);
+      const value = scoreAttack(s,moved,enemy,all);
       if (value > nextAttack) {
         nextAttack = value;
         killed = previewAttack(s,moved,enemy).toDefender >= enemy.hp ? enemy.id : undefined;
@@ -2180,7 +2241,7 @@ function unitCandidates(
     for (const t of attackableTargets(s, unit)) {
       out.push({
         action: { type: 'ATTACK', unitId: unit.id, targetId: t.id },
-        score: scoreAttack(s, unit, t, all.mood),
+        score: scoreAttack(s, unit, t, all),
       });
     }
     for (const c of siegeTargets(s, unit)) {

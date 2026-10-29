@@ -1525,12 +1525,16 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
 
 /** 射程内的敌方单位 */
 /**
- * 这一下能不能打到：射程够，而且"拆桥必须贴到桥头"。
+ * 这一下能不能打到：射程够就行。
  *
- * 桥只是两格水上的一块板，隔着大半条河用弓箭把它点着，听着就不像话。
- * 更要命的是它的后果：谁先架桥谁先挨打，两边各架七八座、桥头来回换，
- * 打满 200 回合谁也过不去（模拟里六成的"地形隔断"磨局都是这么来的）。
- * 改成必须站到桥边拆，桥就成了"抢桥头"的争夺点——守方要靠人挡，不是靠射程。
+ * 桥曾经是个例外——"拆桥必须贴到桥头"（隔着河放箭打不塌）。那条规则是为了治
+ * 一个真实的毛病：两边各架七八座、隔着河互相对射桥头，打满 200 回合谁也过不去。
+ * 但一刀切也治出了新毛病：远程连"顺手拆一座没人守的桥"都做不到，
+ * 而近战要贴到桥头才能动手，实际打起来又常常够不着。
+ *
+ * 现在的做法是**准许打、但打折**（见 computeDamage 的收尾）：射程够就能朝桥开火，
+ * 只是一发只算一半；贴着桥头打才是满伤。于是"隔着河拆桥"变成一个又慢又费的
+ * 消耗动作——想真的断掉这条路，还是得把部队压到桥边。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
@@ -1543,7 +1547,6 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   if (d > range) return false;
   // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
   if (real === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
-  if (utype(s, target.type).bridges && d > 1) return false;
   return true;
 }
 
@@ -1724,6 +1727,15 @@ export function computeDamage(
 
   // 真实伤害阶段
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
+
+  // ── 拆桥折扣 ──
+  // 放在最后，是因为它说的是"这一发落在桥上的效果"，不是"这个兵有多强"：
+  // 属性倍率、护壁、反击折减都算完之后再对折，才不会被别的倍率抵消掉。
+  // 判定用 strikeDistance（一格 = 贴着桥头打），隔一格以上才算远程，一发放一半。
+  // 见 canStrike 的说明：准许隔河开火，但不许隔着河把桥拆干净。
+  if (dt.bridges && ctx.distance > 1) {
+    ctx.damage = Math.round(ctx.damage * CONFIG.bridgeRangedDamageRatio);
+  }
 
   return Math.max(0, Math.round(ctx.damage));
 }
@@ -2389,8 +2401,10 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   if (!canStrike(s, attacker, defender)) {
     return {
       ok: false,
+      // 桥现在不再是"必须贴到桥头"：这一条只在射程真的不够时才会走到。
+      // 隔河能打、但只算半伤，见 computeDamage 收尾的拆桥折扣。
       reason: utype(s, defender.type).bridges
-        ? '拆桥要贴到桥头（隔河打不塌一座桥）'
+        ? '射程不够，还够不着这座桥'
         : '目标超出射程',
     };
   }
