@@ -8886,5 +8886,107 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
   );
 });
 
+test('连击：每段是一次独立结算，溢出段可以换目标', () => {
+  const burst = UNIT_TYPES.mg?.burst ?? 1;
+  assert.ok(burst >= 3, '这条用例需要一个至少三段的兵（mg）');
+
+  // ① 兼容：不排溢出目标时，段数全打主目标，总伤害 = 每段 × 段数
+  const s = fresh();
+  s.current = 'A';
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 7, 5, 'plain');
+  const mg = place(s, 'A', 'mg', 5, 5);
+  const tank = place(s, 'B', 'tank', 7, 5);
+  tank.hp = 999;
+  const one = computeDamage(s, mg, tank);
+  const before = tank.hp;
+  const r1 = applyAction(s, { type: 'ATTACK', unitId: mg.id, targetId: tank.id });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  const tankAfter = r1.state.units.find((u) => u.id === tank.id);
+  assert.ok(tankAfter, '坦克应该还活着');
+  assert.equal(before - tankAfter.hp, one * burst, '没排溢出目标 = 老规矩：段数全打主目标');
+
+  // ② 主目标一段就死：剩下的段按 spillTo 打别人（每段照旧单独减甲）
+  const s2 = fresh();
+  s2.current = 'A';
+  s2.units = [];
+  putTerrain(s2, 5, 5, 'plain');
+  putTerrain(s2, 6, 5, 'plain');
+  putTerrain(s2, 4, 5, 'plain');
+  const mg2 = place(s2, 'A', 'mg', 5, 5);
+  const soft = place(s2, 'B', 'militia', 6, 5);
+  soft.hp = 1; // 第一段必死
+  const next = place(s2, 'B', 'militia', 4, 5);
+  next.hp = 999;
+  const perHit = computeDamage(s2, mg2, next);
+  const r2 = applyAction(s2, {
+    type: 'ATTACK',
+    unitId: mg2.id,
+    targetId: soft.id,
+    spillTo: [next.id],
+  });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  assert.equal(r2.state.units.some((u) => u.id === soft.id), false, '主目标应该被打死');
+  const nextAfter = r2.state.units.find((u) => u.id === next.id);
+  assert.ok(nextAfter, '溢出目标血厚，应该还在');
+  assert.equal(999 - nextAfter.hp, perHit * (burst - 1), '剩下的段全落在溢出目标上');
+
+  // ③ 队列里的坏目标（友军 / 不存在 / 已死）只被跳过，不让整次攻击变成非法
+  const s3 = fresh();
+  s3.current = 'A';
+  s3.units = [];
+  putTerrain(s3, 5, 5, 'plain');
+  putTerrain(s3, 6, 5, 'plain');
+  putTerrain(s3, 4, 5, 'plain');
+  const mg3 = place(s3, 'A', 'mg', 5, 5);
+  const friend = place(s3, 'A', 'militia', 5, 6);
+  const soft3 = place(s3, 'B', 'militia', 6, 5);
+  soft3.hp = 1;
+  const corpse = place(s3, 'B', 'militia', 5, 7);
+  corpse.hp = 0;
+  const back = place(s3, 'B', 'militia', 4, 5);
+  back.hp = 999;
+  const friendHp = friend.hp;
+  const perHit3 = computeDamage(s3, mg3, back);
+  const r3 = applyAction(s3, {
+    type: 'ATTACK',
+    unitId: mg3.id,
+    targetId: soft3.id,
+    spillTo: [friend.id, '不存在的单位', corpse.id, back.id],
+  });
+  assert.ok(r3.ok, r3.ok ? '' : r3.reason);
+  const friendAfter = r3.state.units.find((u) => u.id === friend.id);
+  assert.ok(friendAfter, '友军不该被溢出打掉');
+  assert.equal(friendAfter.hp, friendHp, '友军一点血都不该掉');
+  const backAfter = r3.state.units.find((u) => u.id === back.id);
+  assert.ok(backAfter);
+  assert.equal(999 - backAfter.hp, perHit3 * (burst - 1), '跳过坏目标之后，段数仍然落到能打的人身上');
+
+  // ④ 只有主目标会反击：主目标被打死了，溢出目标白挨
+  const s4 = fresh();
+  s4.current = 'A';
+  s4.units = [];
+  putTerrain(s4, 5, 5, 'plain');
+  putTerrain(s4, 6, 5, 'plain');
+  putTerrain(s4, 4, 5, 'plain');
+  const mg4 = place(s4, 'A', 'mg', 5, 5);
+  const soft4 = place(s4, 'B', 'militia', 6, 5);
+  soft4.hp = 1;
+  const near = place(s4, 'B', 'militia', 4, 5);
+  near.hp = 999;
+  const mgHp = mg4.hp;
+  const r4 = applyAction(s4, {
+    type: 'ATTACK',
+    unitId: mg4.id,
+    targetId: soft4.id,
+    spillTo: [near.id],
+  });
+  assert.ok(r4.ok, r4.ok ? '' : r4.reason);
+  const mg4After = r4.state.units.find((u) => u.id === mg4.id);
+  assert.ok(mg4After);
+  assert.equal(mg4After.hp, mgHp, '溢出目标不该还手（反击只属于主目标）');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

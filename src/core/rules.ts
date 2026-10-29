@@ -2265,7 +2265,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId);
+        return doAttack(next, action.unitId, action.targetId, action.spillTo);
       case 'SIEGE':
         return doSiege(next, action.unitId, action.cityId);
       case 'RECRUIT':
@@ -2389,7 +2389,87 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   return { ok: true, state: s };
 }
 
-function doAttack(s: GameState, unitId: string, targetId: string): ActionResult {
+interface StrikesTarget {
+  unit: Unit;
+  dmg: number;
+}
+
+interface StrikeSummary {
+  /** 真正打出去的段数（目标提前死光时小于 burst） */
+  hits: number;
+  /** 所有段加起来的伤害 */
+  total: number;
+  /** 每一段打了谁、多少伤害，按出手顺序；死亡结算与战报都读它 */
+  targets: StrikesTarget[];
+}
+
+/**
+ * 多段攻击的结算：把 burst 段拆成依次执行的独立一击。
+ *
+ * 三件事必须和重构前逐点一致，改了就等于改数值：
+ *   1. 每段单独调用 computeDamage——护甲、地形、属性每次都重算（多段打重甲吃亏就靠这个）；
+ *   2. 主目标还活着就一直打它，所以"3 段全打一个人"的总伤害与以前完全相同；
+ *   3. 没有任何可打的目标就停手，剩下的段作废（不会凭空打空气）。
+ *
+ * 新东西只有一条：主目标倒下之后，段数可以按 spillTo 的顺序转给别人。
+ * spillTo 是**候选队列**：每个目标会被连续打到倒下，才轮到下一个；
+ * 死了、够不着、是友军的会被跳过，队列空了就把剩下的段作废——
+ * 界面上点错一个人只会浪费段数，不会让整次攻击变成非法动作。
+ */
+function resolveStrikes(
+  s: GameState,
+  attacker: Unit,
+  primary: Unit,
+  burst: number,
+  spillTo?: readonly string[],
+): StrikeSummary {
+  const out: StrikeSummary = { hits: 0, total: 0, targets: [] };
+
+  // 候选队列：去重、去掉主目标与友军，保持调用方给定的先后顺序
+  const queue: Unit[] = [];
+  for (const id of spillTo ?? []) {
+    const u = unitById(s, id);
+    if (!u || u.id === primary.id || u.owner === attacker.owner) continue;
+    if (queue.some((x) => x.id === u.id)) continue;
+    queue.push(u);
+  }
+
+  let left = burst;
+  let q = 0;
+  while (left > 0) {
+    let target: Unit | undefined;
+    if (primary.hp > 0 && canStrike(s, attacker, primary)) {
+      target = primary;
+    } else {
+      while (q < queue.length) {
+        const c = queue[q];
+        if (c && c.hp > 0 && canStrike(s, attacker, c)) {
+          target = c;
+          break;
+        }
+        q += 1;
+      }
+    }
+    if (!target) break;
+
+    const one = computeDamage(s, attacker, target);
+    target.hp -= one;
+    out.hits += 1;
+    out.total += one;
+    out.targets.push({ unit: target, dmg: one });
+    left -= 1;
+    // 这个溢出目标已经被打倒了，下一段换队列里的下一个
+    if (target !== primary && target.hp <= 0) q += 1;
+  }
+  return out;
+}
+
+function doAttack(
+  s: GameState,
+  unitId: string,
+  targetId: string,
+  spillTo?: readonly string[],
+): ActionResult {
   const attacker = unitById(s, unitId);
   const defender = unitById(s, targetId);
   if (!attacker) return { ok: false, reason: '单位不存在' };
@@ -2420,17 +2500,12 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   const atName = atkDef.name;
   const dfName = utype(s, defender.type).name;
 
-  // 多段攻击：一下一下打，每一下都单独减一次护甲。
-  // 打死了就停手（省下来的段数不会转到别人身上，那是溅射的活）。
+  // 多动式连击：burst 段拆成"依次结算的独立一击"，每段各自算一次伤害、各自减一次护甲。
+  // 主目标倒下之后，剩下的段按 spillTo 的顺序转打别人；不填就按老规矩作废。
   const burst = Math.max(1, atkDef.burst ?? 1);
-  let dmg = 0;
-  let hits = 0;
-  while (hits < burst && defender.hp > 0) {
-    const one = computeDamage(s, attacker, defender);
-    defender.hp -= one;
-    dmg += one;
-    hits += 1;
-  }
+  const strikes = resolveStrikes(s, attacker, defender, burst, spillTo);
+  const dmg = strikes.total;
+  const hits = strikes.hits;
 
   // 溅射：主目标周围的人一起挨（按比例打折，只打敌人）
   const splashed = splashVictims(s, attacker, defender);
@@ -2461,6 +2536,11 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
   runStaged(strikeHooks, sctx, { from: STRIKE_STAGE.postDamage, to: STRIKE_STAGE.afterStatus });
 
   const hitText = burst > 1 ? `${hits} 连击 · ` : '';
+  // 溢出段打到的人：报个名字和数字，不然玩家只会看到"1 连击造成 8"，不知道另外两段去哪了
+  const spillBits = strikes.targets
+    .filter((st) => st.unit.id !== defender.id)
+    .map((st) => `${utype(s, st.unit.type).name} ${st.dmg}`);
+  const spillText = spillBits.length > 0 ? `，溢出打 ${spillBits.join('、')}` : '';
 
   // 命中附带的状态 / 击退，都排在"打完之后、结算死亡之前"
   const statusTouched = applyOnHitStatus(s, attacker, defender, dmg);
@@ -2484,8 +2564,8 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
-      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
+      ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${spillText}${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
+      : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${spillText}${splashText}${pushText}`,
   );
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
@@ -2536,6 +2616,19 @@ function doAttack(s: GameState, unitId: string, targetId: string): ActionResult 
         pushLog(s, attacker.owner, `${atName} 斩杀得手，本回合还能再走一次`);
       }
     }
+  }
+
+  // 溢出段打死的也要走同一套善后：战报 + 沉船 + 击杀钩子。
+  // 和主目标那一段的区别只有一个：不给"收割"（刺客大师的还移动）——
+  // 那条能力写的是"亲手斩掉"，指的是这一击的主目标，不该因为顺手扫死一个杂兵就触发。
+  for (const st of strikes.targets) {
+    if (st.unit.id === defender.id) continue;
+    if (st.unit.hp > 0) continue;
+    if (!s.units.some((x) => x.id === st.unit.id)) continue;
+    s.units = s.units.filter((x) => x.id !== st.unit.id);
+    pushLog(s, attacker.owner, `${utype(s, st.unit.type).name} 被连击溢出消灭`, true);
+    drownCargo(s, st.unit);
+    fireKilled(s, st.unit, attacker);
   }
 
   // 溅射打死的也要走同一套善后：战报 + 沉船 + 击杀钩子

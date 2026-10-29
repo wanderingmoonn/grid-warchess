@@ -202,7 +202,10 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
     );
   }
   if (def.burst) {
-    lines.push(`连击：一次攻击打 ${def.burst} 段，每段单独减护甲——打轻甲赚，打重甲亏`);
+    lines.push(
+      `连击：一次攻击打 ${def.burst} 段，每段单独减护甲——打轻甲赚，打重甲亏。` +
+        `打死了还有富余的段，可以先右键点几个敌人排队，剩下的段接着打他们`,
+    );
   }
   if (def.transport) {
     lines.push(`运输船：能把贴身的陆军装进货舱（容量 ${def.capacity ?? 0}），运过水面再放下来。`);
