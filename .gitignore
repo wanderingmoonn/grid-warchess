@@ -36,3 +36,7 @@ results[0-9]*/
 _build/
 results-fantasy/
 奇想兵种表*.xlsx
+
+# 行为快照的对照文件（npm run snapshot 的输出，能用脚本重跑）
+before.json
+after.json
