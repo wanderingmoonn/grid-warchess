@@ -18,6 +18,7 @@ import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
+import { AP_COST, AP_HOLD_ARMOR, AP_MAX } from '../src/core/action-points.ts';
 import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
@@ -1931,6 +1932,25 @@ const SMALL_NOTES: Record<string, string> = {
       </ul>`,
   'last-stand': `<p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
         会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>`,
+  'action-points': `<p>五种行动一张价目表。所有数字都在 <code>src/core/action-points.ts</code> 顶上那张表里
+        （<code>AP_MAX</code> / <code>AP_COST</code> / <code>AP_CLASS_MOD</code>）——改价不用碰规则引擎，
+        规则引擎也一行都不认识"行动点"这三个字。</p>
+      <ul>
+        <li><b>池子</b>：每个单位每回合 ${AP_MAX} E，轮到自己时回满（先扣掉上回合的透支）。</li>
+        <li><b>移动 / 上下船</b> ${AP_COST.move}E：站位和开账时不一样就算走过。
+          上下船在下船那一刻同样是"换了个位置"，所以记的是同一档。</li>
+        <li><b>攻击</b> ${AP_COST.attack}E，多段攻击每段各算一次；E 买得起几次就只给几次。</li>
+        <li><b>驻扎</b> ${AP_COST.hold}E（与机动同价）：这一回合什么都没干。
+          就地架着换 +${AP_HOLD_ARMOR} 护甲，一直到下次轮到自己。</li>
+        <li><b>技能</b> ${AP_COST.skill}E，一个英雄一回合最多一次（这一条引擎本来就管着）。</li>
+      </ul>
+      <p><b>减免</b>：骑兵与车机动 −5E、近战出手 −10E，两类可以叠加（斥候两样都占）。
+        「近战」按"射程 1 的战斗单位"算，所以自动覆盖整张兵种表；「骑兵 / 车」写的是 id 名单，
+        漏写的兵按标准价付——多花 5 点，不会白占便宜。</p>
+      <p><b>这套规则唯一的边界</b>：引擎在第一次攻击时会把次数兜底成 1，技能也不看行动点，
+        这两处扩展没有否决位。所以 E 见底时仍然打得出一击、放得出技能，代价是<b>透支</b>——
+        超出的部分下回合先从池里扣（只滚一回合，不滚雪球）。移动和"还能打几下"是真拦住的：
+        E 不够就走不动，够打一次就不给第二次。</p>`,
 };
 
 function smallSection(e: Exp, num: number): string {

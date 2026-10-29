@@ -63,6 +63,15 @@ import { adoptDecision } from '../src/net/room.ts';
 import { CHAT_MAX_LEN, chatLinesHtml, chatWhoLabel, trimChatBody } from '../src/net/chat.ts';
 import type { ChatLine } from '../src/net/chat.ts';
 import {
+  AP_COST,
+  AP_MAX,
+  MOUNTED_IDS,
+  VEHICLE_IDS,
+  apActionCost,
+  apClassesOf,
+  apLedger,
+} from '../src/core/action-points.ts';
+import {
   legacyResistToMultiplier,
   normalizeUnitResist,
   normalizeUnitTypes,
@@ -9760,6 +9769,180 @@ test('聊天记录：转义、三种归属、空态', () => {
 
   const empty = chatLinesHtml([], 'A');
   assert.ok(empty.includes('chat-empty'), '空的时候要有一句话，不要留一块空白');
+});
+
+console.log('\n行动点扩展');
+
+/** 找一格空着的平地：摆兵用例不该赌某张图上有水 */
+function freePlain(s: GameState): { x: number; y: number } {
+  for (let k = 0; k < s.w * s.h; k++) {
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    const t = s.tiles[k];
+    if (!t || t.terrain !== 'plain' || t.cityId) continue;
+    if (s.units.some((u) => u.x === x && u.y === y)) continue;
+    return { x, y };
+  }
+  throw new Error('整张图没有一格空着的平地');
+}
+
+test('行动点：单价表——骑兵与车机动 −5、近战出手 −10，两类能叠加', () => {
+  // 名单里的 id 必须真的存在。改兵种 id、写错字，都会在这里当场变红——
+  // 一份"看起来配了、实际一个都没命中"的表，比不配更糟。
+  const known = new Set<string>([
+    ...Object.keys(UNIT_TYPES),
+    ...EXPANSIONS.flatMap((e) => (e.units ?? []).map((u) => u.id)),
+  ]);
+  for (const id of [...MOUNTED_IDS, ...VEHICLE_IDS]) {
+    assert.ok(known.has(id), `名单里的 ${id} 不在任何兵种表里`);
+  }
+
+  // 斥候两头都占：骑兵（机动便宜）+ 近战（出手便宜）——这正是规则要的效果
+  assert.deepEqual(apClassesOf(UNIT_TYPES.scout, 'scout').sort(), ['melee', 'mounted']);
+  assert.equal(apActionCost(UNIT_TYPES.scout, 'scout', 'move'), AP_COST.move - 5);
+  assert.equal(apActionCost(UNIT_TYPES.scout, 'scout', 'attack'), AP_COST.attack - 10);
+
+  // 坦克只是车，射程够远所以不算近战
+  assert.deepEqual(apClassesOf(UNIT_TYPES.tank, 'tank'), ['vehicle']);
+  assert.equal(apActionCost(UNIT_TYPES.tank, 'tank', 'move'), AP_COST.move - 5);
+  assert.equal(apActionCost(UNIT_TYPES.tank, 'tank', 'attack'), AP_COST.attack);
+
+  // 弓手两样都不吃
+  assert.deepEqual(apClassesOf(UNIT_TYPES.archer, 'archer'), []);
+  assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'move'), AP_COST.move);
+  assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'attack'), AP_COST.attack);
+
+  // 驻扎和机动同价：不然"先待着、再走一步"会让 E 先掉 20 再涨回 5
+  assert.equal(
+    apActionCost(UNIT_TYPES.scout, 'scout', 'hold'),
+    apActionCost(UNIT_TYPES.scout, 'scout', 'move'),
+    '驻扎跟机动同一档，否则账会回涨',
+  );
+});
+
+test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记各的', () => {
+  const s = fresh({ expansionIds: ['action-points'] }, 2024);
+  const { a } = duel(s);
+  // duel 把单位挪过去之后，开账时的站位就对不上了——重新钉一次，
+  // 这样"这一回合还没动过"才是真的
+  a.custom = { ap: { turn: s.turn, x: a.x, y: a.y, debt: 0, over: 0 } };
+  // onMatchStart 已经把先手方的账开了——第一回合不走 onTurnStart
+  const open = apLedger(s, a);
+  assert.equal(open.settled, true, '先手第一回合也要开账');
+  assert.deepEqual(open.items.map((i) => i.action), ['hold'], '什么都没干＝驻扎');
+  assert.equal(open.left, AP_MAX - AP_COST.hold, '驻扎先扣一档');
+
+  // 走一步：记成移动，不是驻扎
+  const dest = [...reachableTiles(s, a).keys()].find((k) => k !== idx(s, a.x, a.y));
+  assert.ok(dest !== undefined, '应该至少有一格可走');
+  const r = applyAction(s, { type: 'MOVE', unitId: a.id, x: dest! % s.w, y: Math.floor(dest! / s.w) });
+  assert.ok(r.ok, r.ok ? '' : `走不动：${r.reason}`);
+  const moved = r.state.units.find((u) => u.id === a.id)!;
+  const L = apLedger(r.state, moved);
+  assert.deepEqual(L.items.map((i) => i.action), ['move'], '走过就只记移动');
+  assert.equal(L.left, AP_MAX - apActionCost(s.unitTypes.militia, 'militia', 'move'));
+});
+
+test('行动点：攻击按次扣，次数被 E 压回，打满就扣不动了', () => {
+  const s = fresh({ expansionIds: ['action-points'] }, 2024);
+
+  // 机枪队 burst 3：100E 只买得起 2 次（每次 40），于是这一回合就是 2 次
+  const spot = freePlain(s);
+  const placed = placeUnit(s, 'A', 'mg', spot.x, spot.y);
+  assert.ok(placed.ok, placed.ok ? '' : placed.reason);
+  const mg = placed.state.units.find((u) => u.type === 'mg')!;
+  mg.custom = { ap: { turn: placed.state.turn, x: mg.x, y: mg.y, debt: 0, over: 0 } };
+  assert.equal(attacksPerTurn(placed.state, mg), 2, 'burst 3 应该被 E 压到 2 次');
+  assert.equal(apLedger(placed.state, mg).attacksAllowed, 2);
+
+  // 民兵（近战，每次 30E）打一下，账上写 30
+  const st = fresh({ expansionIds: ['action-points'] }, 2024);
+  const { a: atk, b: foe } = duel(st);
+  atk.custom = { ap: { turn: st.turn, x: atk.x, y: atk.y, debt: 0, over: 0 } };
+  const hit = applyAction(st, { type: 'ATTACK', unitId: atk.id, targetId: foe.id });
+  assert.ok(hit.ok, hit.ok ? '' : `打不着：${hit.reason}`);
+  const after = hit.state.units.find((u) => u.id === atk.id)!;
+  const L = apLedger(hit.state, after);
+  assert.deepEqual(L.items.map((i) => i.action), ['attack']);
+  assert.equal(L.spent, apActionCost(st.unitTypes.militia, 'militia', 'attack'), '近战一下 30E');
+});
+
+test('行动点：E 不够时走不动（modifyMove 归零），技能与保底首击记成透支', () => {
+  const s = fresh({ expansionIds: ['action-points'] }, 2024);
+  const { a, b } = duel(s);
+
+  // 欠 85E：起点 15，连驻扎那 20 都付不起 —— 池子见底
+  a.custom = { ap: { turn: s.turn, x: a.x, y: a.y, debt: 85, over: 0 } };
+  assert.equal(apLedger(s, a).start, 15);
+  assert.equal(movePower(s, a), 0, 'E 见底就是动不了（返回 0 是引擎认的口径）');
+  const mv = applyAction(s, { type: 'MOVE', unitId: a.id, x: b.x, y: b.y + 2 });
+  assert.equal(mv.ok, false, '走不动要真的走不动');
+
+  // 欠 75E：起点 25，买不起一次 30E 的出手，但引擎的首次攻击拦不住 ——
+  // 账要记：这一下算 30，透支 5，下回合起点变 95
+  const s2 = fresh({ expansionIds: ['action-points'] }, 2024);
+  const { a: a2, b: b2 } = duel(s2);
+  a2.custom = { ap: { turn: s2.turn, x: a2.x, y: a2.y, debt: 75, over: 0 } };
+  assert.equal(apLedger(s2, a2).attacksAllowed, 0, '25E 买不起 30E 的一击');
+  const atk = applyAction(s2, { type: 'ATTACK', unitId: a2.id, targetId: b2.id });
+  assert.ok(atk.ok, '引擎会在第一次攻击时把次数兜底成 1，扩展拦不住——这条边界写在文档里');
+  const spent = apLedger(atk.state, atk.state.units.find((u) => u.id === a2.id)!);
+  assert.equal(spent.over, 5, '超支的 5 点要记成透支');
+
+  const end = applyAction(atk.state, { type: 'END_TURN' });
+  const marked = end.state.units.find((u) => u.id === a2.id)!;
+  assert.equal((marked.custom as { ap: { over: number } }).ap.over, 5, '回合结束时把透支钉在单位上');
+  assert.ok(
+    end.state.log.some((l) => l.text.includes('透支行动 5 E')),
+    '战报要说清透支了多少',
+  );
+
+  const back = applyAction(end.state, { type: 'END_TURN' });
+  const next = apLedger(back.state, back.state.units.find((u) => u.id === a2.id)!);
+  assert.equal(next.start, AP_MAX - 5, '下回合起点先扣掉透支');
+  assert.equal(next.debt, 5);
+});
+
+test('行动点：驻扎 +2 护甲，动过的就不算驻扎', () => {
+  const s = fresh({ expansionIds: ['action-points'] }, 2024);
+  const { a, b } = duel(s);
+  a.custom = { ap: { turn: s.turn, x: a.x, y: a.y, debt: 0, over: 0 } };
+  // B 不是当前行动方：他上一回合的账就是 s.turn - 1
+  b.custom = { ap: { turn: s.turn - 1, x: b.x, y: b.y, debt: 0, over: 0 } };
+  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['hold']);
+  const holdDmg = computeDamage(s, a, b);
+
+  // 站位和开账时对不上 = 这一回合动过 → 不驻扎、不加甲
+  b.custom = { ap: { turn: s.turn - 1, x: b.x + 1, y: b.y, debt: 0, over: 0 } };
+  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['move']);
+  const moveDmg = computeDamage(s, a, b);
+  assert.ok(moveDmg > holdDmg, `驻扎应该更抗打：站着挨 ${holdDmg}，动过挨 ${moveDmg}`);
+});
+
+test('行动点：建筑不参与，刚上场的单位按满池且不被拦', () => {
+  const s = fresh({ expansionIds: ['action-points'] }, 2024);
+  const wall = freePlain(s);
+  const built = placeUnit(s, 'A', 'tower', wall.x, wall.y);
+  assert.ok(built.ok, built.ok ? '' : built.reason);
+  const tower = built.state.units.find((u) => u.type === 'tower')!;
+  const L = apLedger(built.state, tower);
+  assert.equal(L.active, false, '城墙不会"走"也不会"驻扎"');
+  const lines = expansionById('action-points')!.hooks.getUnitPanelLines!({
+    state: built.state,
+    unit: tower,
+  });
+  assert.deepEqual(lines, [], '建筑的面板上不出现行动点');
+
+  // 刚招出来的单位还没开账：按满池显示，而且不拦它（它本来就 acted）
+  const open = freePlain(built.state);
+  const recruit = placeUnit(built.state, 'A', 'militia', open.x, open.y);
+  assert.ok(recruit.ok, recruit.ok ? '' : recruit.reason);
+  const rookie = recruit.state.units.find(
+    (u) => u.type === 'militia' && u.x === open.x && u.y === open.y,
+  )!;
+  const rl = apLedger(recruit.state, rookie);
+  assert.equal(rl.settled, false);
+  assert.equal(rl.left, AP_MAX);
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

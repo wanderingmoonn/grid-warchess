@@ -30,6 +30,9 @@ import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
 import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts';
+// 行动点：把移动/攻击/驻扎/上下船/技能统一成"行动"，各自扣 E。
+// 它只用一个新文件（action-points.ts），这里加一行注册，rules.ts 依然一行不动。
+import { ACTION_POINTS } from './action-points.ts';
 // 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
 import { BASE_MAX_ERA, ERAS } from './config.ts';
 
@@ -780,6 +783,10 @@ export const EXPANSIONS: Expansion[] = [
   // 底座排在前：加料包的前置必须先在场，读配置的人一眼能看出这个先后。
   CONTEMPORARY_BASE_PACK,
   MODERN_WARFARE,
+  // 行动点：一整条"行动经济"规则，排在最后——
+  // 它的 modifyMove / modifyAttacks 只做"取更小的那个"，不关心别人先给了多少，
+  // 所以放在钩子链末尾既不影响老扩展，也不会被它们绕过去。
+  ACTION_POINTS,
 ];
 
 export function expansionById(id: string): Expansion | undefined {

@@ -2059,6 +2059,73 @@ check('英雄面板：隐匿显示剩余发数，至尊法师显示当前属性'
   assert.ok((host.textContent ?? '').includes('火'), '切回火属性要跟着变');
 });
 
+check('行动点面板：还剩多少 E、这一回合花在哪、单价为什么便宜', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['action-points'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    912,
+    {},
+  );
+  st.current = 'A';
+  const mk = (type: string, id: string, x: number): Unit => ({
+    id,
+    type,
+    owner: 'A',
+    x,
+    y: 5,
+    hp: st.unitTypes[type]!.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  const foot = mk('militia', 'ap-foot', 5);
+  const horse = mk('scout', 'ap-horse', 7);
+  st.units.push(foot, horse);
+  // 开账：站位对齐＝这一回合还没动过
+  foot.custom = { ap: { turn: st.turn, x: 5, y: 5, debt: 0, over: 0 } };
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 0, over: 0 } };
+
+  const host = doc.createElement('div');
+  const paint = (u: Unit): void =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+  const text = (): string => host.textContent ?? '';
+
+  // ① 民兵站着不动：驻扎扣 20，没有减免所以不写单价
+  paint(foot);
+  assert.ok(text().includes('行动点 80 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
+  assert.ok(text().includes('本回合：驻扎 −20'), '什么都没干要写成驻扎');
+
+  // ② 走过一格：记成移动
+  foot.custom = { ap: { turn: st.turn, x: 4, y: 5, debt: 0, over: 0 } };
+  paint(foot);
+  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动，不再写驻扎');
+
+  // ③ 斥候：骑兵 −5、近战 −10，两行单价要说得出"为什么便宜"
+  paint(horse);
+  assert.ok(text().includes('行动点 85 / 100 E'), '斥候驻扎/移动都只花 15');
+  assert.ok(text().includes('机动 15E（骑兵）'), '骑兵的机动便宜要写出来');
+  assert.ok(text().includes('出手 30E（近战）'), '近战的出手便宜要写出来');
+
+  // ④ 池子见底：要明说走不动 / 打不出第二下，而不是让玩家点下去才发现
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 88, over: 0 } };
+  paint(horse);
+  assert.ok(text().includes('走不动了'), 'E 见底要写在面板上');
+  assert.ok(text().includes('上回合透支 88'), '透支了多少要交代');
+});
+
 check('新英雄的技能按钮挂上了对应技能', () => {
   const st = createMatch(
     {
