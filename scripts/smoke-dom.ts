@@ -245,6 +245,156 @@ check('浓雾扩展：走过的地形和城会留在记忆里', () => {
   }
 });
 
+console.log('\n增量重绘');
+
+/**
+ * 增量重绘的护栏。
+ *
+ * 棋盘改成"节点留着复用"之后，最容易出的是两类 bug：
+ *   1. 该变的没变（缓存说一样，其实是判据漏了字段）—— 玩家看到的是"卡住的棋子"；
+ *   2. 该没变的变了（每帧重建，缓存白做）—— 不报错，只是慢慢变卡。
+ * 这类问题在手动点几下时几乎看不出来，所以必须在这里钉住。
+ */
+const emptyUi = {
+  selectedId: null,
+  reach: [] as number[],
+  targets: [] as string[],
+  siegeTargets: [] as string[],
+  selectedCityId: null,
+  placeable: [] as number[],
+  threat: [] as number[],
+};
+
+check('同一局面重画：格子、棋子、城市的节点身份不变', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 31337);
+  const view = playerView(st, 'A');
+  try {
+    renderBoard(host, view, emptyUi);
+    const tile = host.querySelector('.tile[data-x="3"][data-y="4"]');
+    const unit = host.querySelector('.unit[data-id]');
+    const city = host.querySelector('.city-block');
+    assert.ok(tile && unit && city, '第一帧就该画出格子、棋子、城市');
+
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector('.tile[data-x="3"][data-y="4"]'), tile, '格子节点该留着复用');
+    assert.equal(host.querySelector('.unit[data-id]'), unit, '棋子节点该留着复用');
+    assert.equal(host.querySelector('.city-block'), city, '城市节点该留着复用');
+    assert.equal(host.querySelectorAll('.tile').length, 256, '复用不该改变格子总数');
+  } finally {
+    host.remove();
+  }
+});
+
+check('高亮变了要真的变，节点还是同一个', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 5150);
+  const view = playerView(st, 'A');
+  try {
+    const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+    const x = i % st.w;
+    const y = (i - x) / st.w;
+    const sel = `[data-x="${x}"][data-y="${y}"]`;
+
+    renderBoard(host, view, { ...emptyUi, reach: [i], threat: [i] });
+    const tile = host.querySelector<HTMLElement>(`.tile${sel}`);
+    assert.ok(tile?.classList.contains('reach'), '可达格要挂上 reach');
+    assert.equal(tile?.classList.contains('threat'), false, '同一个格不该同时是可达和威胁');
+
+    // 取消选中：上一帧的 reach 必须摘干净（整体赋 className 就是为了这件事）
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector<HTMLElement>(`.tile${sel}`), tile, '节点还是同一个');
+    assert.equal(tile?.classList.contains('reach'), false, '取消选中后高亮要摘掉');
+
+    // 产出角标：出现、换数字、消失，都以格子上的 span 为准
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 7]]) });
+    assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+7', '角标要写对数字');
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 9]]) });
+    assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+9', '角标数字变了要跟着变');
+    renderBoard(host, view, emptyUi);
+    assert.equal(host.querySelector(`.tile${sel} .tile-income`), null, '角标该消失');
+  } finally {
+    host.remove();
+  }
+});
+
+check('换地图：格子与棋子都按新局面重建，旧节点一个不留', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  try {
+    const small = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 111);
+    renderBoard(host, playerView(small, 'A'), emptyUi);
+    const oldTile = host.querySelector('.tile');
+    assert.equal(host.querySelectorAll('.tile').length, 144);
+
+    const big = createMatch({ ...DEFAULT_CONFIG, size: 20, startEra: 2, expansionIds: [] }, 222);
+    const viewBig = playerView(big, 'A');
+    renderBoard(host, viewBig, emptyUi);
+    assert.equal(host.querySelectorAll('.tile').length, 400, '换地图后格子数要对');
+    assert.notEqual(host.querySelector('.tile'), oldTile, '格子数变了必须整层重建');
+    // 棋子是按 id 复用的，而两局的兵 id 会撞车（都是 A-1、B-3 这种），
+    // 所以不能数"剩了几个旧 id"，要比"盘上的兵和新局面是不是同一批"
+    const shown = Array.from(host.querySelectorAll<HTMLElement>('.unit[data-id]'))
+      .map((n) => n.dataset.id ?? '')
+      .sort();
+    const want = viewBig.state.units.map((u) => u.id).sort();
+    assert.deepEqual(shown, want, '盘上应该正好是新局面的那些兵');
+  } finally {
+    host.remove();
+  }
+});
+
+check('单位被打掉之后，它的节点要从盘上摘掉', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 6161);
+  try {
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    const victim = st.units.find((u) => u.owner === 'A');
+    assert.ok(victim, '应该有己方单位');
+    assert.ok(host.querySelector(`.unit[data-id="${victim!.id}"]`), '它该在盘上');
+
+    st.units = st.units.filter((u) => u.id !== victim!.id);
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    assert.equal(host.querySelector(`.unit[data-id="${victim!.id}"]`), null, '打掉之后节点要跟着没');
+  } finally {
+    host.remove();
+  }
+});
+
+check('侧栏：内容没变就不重写，变了必须重写', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 808);
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  const card = host.querySelector('.card');
+  assert.ok(card, '侧栏该有顶卡');
+  paint();
+  assert.equal(host.querySelector('.card'), card, '内容一样时不该重建节点');
+
+  // 金币变了就是内容真的变了——漏掉这一条，玩家会看到"钱不动"
+  const before = st.players.A.gold;
+  st.players.A.gold = before + 7;
+  paint();
+  assert.notEqual(host.querySelector('.card'), card, '金币变了必须重写');
+  assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
+});
+
 console.log('\n单位交互');
 
 check('点自己的单位会高亮可移动范围', () => {
@@ -1782,6 +1932,10 @@ check('沙盒货架也能按扩展包切一刀', () => {
       speed: 1,
       speedNames: ['慢', '快', '极快'],
       log: [],
+      play: null,
+      myTurn: false,
+      passing: false,
+      selected: '',
     });
   const picks = (html: string) => (html.match(/data-act="god-pick"/g) ?? []).length;
 
@@ -2005,6 +2159,189 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
     texts().some((t) => t.includes('留下一枚蛋')),
     '战报里应该先有一条"留下一枚蛋"',
   );
+});
+
+console.log('\n沙盒：自己下场走两步');
+
+/**
+ * 上帝模式原本只有一条路：摆完，交给 AI。
+ *
+ * 想亲自试一手——"这个长弓手该不该退一格"、"这一枪要不要先手"——就只能把两边
+ * 都交出去，试出来的是 AI 的水平，不是你的。所以加了「操控」这一档。
+ *
+ * 下面三条守的不是"能不能走"，而是两个更易碎的东西：
+ * 摆放不能被操控抢走（手上捏着笔刷时点下去还是落子），
+ * 以及回合交接不能被联机那套"把设备交给对方"接走。
+ */
+function godArena(seed: number) {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, godMode: true, expansionIds: [] }, seed, {});
+  for (const t of st.tiles) {
+    t.terrain = 'plain';
+    t.cityId = null;
+  }
+  st.units = [];
+  st.cities = [];
+  st.current = 'A';
+  st.turn = 1;
+  return st;
+}
+
+function godPut(
+  st: ReturnType<typeof createMatch>,
+  id: string,
+  owner: 'A' | 'B',
+  type: string,
+  x: number,
+  y: number,
+) {
+  const def = st.unitTypes[type];
+  assert.ok(def, `本局没有 ${type}`);
+  const u = { id, type, owner, x, y, hp: def!.maxHp, kills: 0, moved: false, acted: false };
+  st.units.push(u);
+  return u;
+}
+
+check('上帝模式：切到「我打这一方」后，点棋盘是走子不是落子', () => {
+  const st = godArena(424242);
+  godPut(st, 'p1', 'A', 'militia', 3, 3);
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      units: { id: string; x: number; y: number }[];
+    };
+
+  assert.ok(
+    d.querySelector('[data-act="god-play"][data-play="none"]')?.classList.contains('active'),
+    '默认该停在「只摆放」——老玩家进来不该发现自己莫名其妙能走子了',
+  );
+
+  click('[data-act="god-play"][data-play="me"]');
+  click('.unit[data-id="p1"]');
+  assert.ok(
+    d.querySelector('.unit[data-id="p1"]')?.classList.contains('selected'),
+    '切到操控档之后，点自己的兵要能选中',
+  );
+  assert.ok(d.querySelectorAll('.tile.reach').length > 0, '选中之后棋盘上要画出可达格');
+  // 沙盒没有属性卡：血量与"还剩不剩行动力"只能靠状态行报
+  const status = d.querySelector('.god-status')?.textContent ?? '';
+  assert.ok(status.includes('民兵') && status.includes('血'), `状态行该报出选中的是谁，实际是「${status}」`);
+
+  // 点可达格：走过去。不是"在那一格再落一个兵"——那是两件完全不同的事，
+  // 而这一档的整个意义就在这个区别上。
+  click('.tile[data-x="4"][data-y="3"]');
+  const after = saved().units.find((u) => u.id === 'p1')!;
+  assert.equal(after.x, 4, '点可达格应该把兵走过去');
+  assert.equal(after.y, 3);
+  assert.equal(saved().units.length, 1, '这是走子，不该顺手在那一格又落一个兵');
+});
+
+check('上帝模式：结束回合交给对面，不弹「把设备交给对方」', () => {
+  const st = godArena(424243);
+  godPut(st, 'p1', 'A', 'militia', 3, 3);
+  // 对面一个兵都不留：它走完一个空回合就会交还，整套交割是同步的，好断言
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
+
+  click('[data-act="god-play"][data-play="me"]');
+  click('[data-act="god-end-turn"]');
+
+  assert.equal(d.querySelector('#handoff'), null, '沙盒里不该出现「把设备交给对方」那张遮罩');
+  assert.equal(saved().current, 'A', '对面没有兵，空回合走完就该交还给你');
+  // 手操那一下 + 对面空回合那一下 = 两次交割
+  assert.equal(saved().turn, 3, '两边各结束一次回合，回合数应该走两格');
+});
+
+check('上帝模式：手上捏着笔刷时，点棋盘仍然是落子', () => {
+  const st = godArena(424244);
+  godPut(st, 'p1', 'A', 'militia', 3, 3);
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      units: { id: string; x: number; y: number }[];
+    };
+
+  click('[data-act="god-play"][data-play="me"]');
+  // 从货架上挑一个兵种：笔刷一上手，"点棋盘"就该回到"再摆一个"
+  click('[data-act="god-pick"][data-unit="militia"]');
+  click('.tile[data-x="7"][data-y="7"]');
+
+  const units = saved().units;
+  assert.equal(units.length, 2, '笔刷在手时点棋盘还是落子，不能被操控档抢走');
+  assert.ok(
+    units.some((u) => u.x === 7 && u.y === 7),
+    '新兵要落在点的那一格上',
+  );
+  assert.equal(units.find((u) => u.id === 'p1')!.x, 3, '原来那个兵不该被顺手挪走');
+});
+
+await checkAsync('上帝模式：对面那一方真由 AI 接手，走完一个回合就交还', async () => {
+  // 上一条只证明"交割不弹遮罩"，用的还是对面没兵的空回合。
+  // 这一条让对面真有兵：AI 得把它走完，棋盘才回得来。
+  // 交还失败的样子很难看——停在"轮到蓝方（AI）"、按钮全灰、谁也不动，
+  // 而界面上没有任何东西会说"卡住了"。
+  const st = godArena(424245);
+  godPut(st, 'p1', 'A', 'militia', 2, 2);
+  godPut(st, 'e1', 'B', 'militia', 5, 2);
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
+
+  click('[data-act="god-play"][data-play="me"]');
+  click('[data-act="god-end-turn"]');
+
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline && saved().turn < 3) await wait(25);
+
+  assert.equal(saved().turn, 3, '回合数要往前走两格：你一下、对面一下');
+  assert.equal(saved().current, 'A', 'AI 走完对面那一个回合之后必须把棋盘交还给你');
+  assert.equal(d.querySelector('#handoff'), null, '全程不该出现「把设备交给对方」');
+});
+
+check('上帝模式：两边我都打——结束回合不叫 AI，另一边自己接着走', () => {
+  const st = godArena(424246);
+  godPut(st, 'p1', 'A', 'militia', 2, 2);
+  godPut(st, 'e1', 'B', 'militia', 8, 8);
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      current: string;
+      turn: number;
+      units: { id: string; x: number; y: number }[];
+    };
+
+  click('[data-act="god-play"][data-play="both"]');
+  click('[data-act="god-end-turn"]');
+
+  // 关键：这一档不许把对面交给 AI。回合交割完就停在那儿，等你自己接着走。
+  assert.equal(saved().current, 'B', '两边都归你时，结束回合只是把行动方翻过去');
+  assert.equal(saved().turn, 2, '只交割了一次：这一下不叫 AI');
+
+  // 对面那一方现在也归你：点它的兵要能选中、能走
+  click('.unit[data-id="e1"]');
+  assert.ok(
+    d.querySelector('.unit[data-id="e1"]')?.classList.contains('selected'),
+    '两边我都打时，另一边的兵也该能选中',
+  );
+  click('.tile[data-x="9"][data-y="8"]');
+  const foe = saved().units.find((u) => u.id === 'e1')!;
+  assert.equal(foe.x, 9, '另一边的兵也该走得动');
+  assert.equal(foe.y, 8);
 });
 
 console.log('\n点敌人就是开火');

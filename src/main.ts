@@ -12,6 +12,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, ai
 import type { AiBudget } from './core/ai.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
+import type { PlayerView } from './core/fog.ts';
 import {
   adjacentToWater,
   applyAction,
@@ -52,7 +53,7 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
-import { renderPanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -566,9 +567,13 @@ function myTurn(): boolean {
  *
  * 抽成函数是为了"只重画面板"这条路：搜索框每敲一个字都要重绘，
  * 走整个 render() 会连棋盘一起重建，白掉一次图层、还丢焦点。
+ *
+ * `known` 是调用方手上已经算好的雾视图。render() 里刚算过一份，
+ * 这里再算一遍纯属白烧——`playerView` 每帧 1.4ms，32×32 上占单帧的 7%。
+ * 单独重画面板的那条路没有，就现算。
  */
-function panelInput(): PanelInput {
-  const view = playerView(state, me(), spectating());
+function panelInput(known?: PlayerView): PanelInput {
+  const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {
     view,
@@ -708,7 +713,7 @@ function render(): void {
     // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
     godSig = '';
     godShelfSig = '';
-    keepSideScroll(() => renderPanel(sideEl, panelInput()));
+    keepSideScroll(() => renderPanel(sideEl, panelInput(view)));
     renderCommander();
   }
 
@@ -725,7 +730,7 @@ function render(): void {
   }
   lastTurnPlayer = state.current;
 
-  updateTopbar(topbarEl, {
+  const topbarChanged = updateTopbar(topbarEl, {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
@@ -742,8 +747,13 @@ function render(): void {
     spectator: watching(),
     god: state.config.godMode === true,
   });
-  syncTopbarScroll();
-  fitBoard();
+  // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
+  // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
+  const remeasure = boardDirty || !canWatchResize;
+  if (remeasure) fitBoard();
+  // 顶栏内容没动、尺寸也没动，"还能不能往两边滚"就不会变——那道判断要读
+  // scrollWidth，是笔强制布局，不值得每帧付一遍。滚动本身另有 scroll 监听。
+  if (topbarChanged || remeasure) syncTopbarScroll();
 }
 
 /**
@@ -758,6 +768,21 @@ const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
 /** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
 let baseBoardSize = 0;
+
+/**
+ * 棋盘尺寸还有效吗。
+ *
+ * `fitBoard()` 要读 `offsetWidth` / `offsetHeight` / 计算样式，再写 `style`。
+ * 读-写这一对放在渲染流水线的末尾，在真机上就是一次**强制同步布局**：
+ * 刚写完一千个格子的样式，浏览器为了回答"容器多宽"必须先把这一切算完。
+ * 而棋盘尺寸一年也变不了几次——窗口改大小、缩放换档、参谋部栏展开/收起，
+ * 就这三件事。所以默认不量：由 ResizeObserver 在真变了的时候把它标脏。
+ *
+ * 没有 ResizeObserver 的宿主（jsdom、很老的浏览器）量不到这些变化，
+ * 就老老实实每帧都量——那是从前的行为，慢一点，但不会算错。
+ */
+let boardDirty = true;
+const canWatchResize = typeof ResizeObserver === 'function';
 
 /**
  * 把棋盘压进容器。
@@ -815,6 +840,39 @@ function fitBoard(): void {
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
+
+  // 这一量是有效的，下一帧不必再来一遍（除非谁把 boardDirty 重新打上）
+  boardDirty = false;
+}
+
+/**
+ * 盯着会改变棋盘可用空间的三个东西。
+ *
+ * 回调里只标脏、并顺手排一次 fitBoard，不调整个 render()：
+ * 尺寸变了不需要重画棋盘内容，格子是按百分比排的，跟着走就行。
+ * 排一次而不是就地做，是因为回调本身就在布局之后，就地写样式会让
+ * 观察者再触发一轮；隔一帧再写，同一轮里的多次变化能合并成一次。
+ */
+function watchBoardResize(): void {
+  if (!canWatchResize) return;
+  let queued = false;
+  const ro = new ResizeObserver(() => {
+    boardDirty = true;
+    if (queued) return;
+    queued = true;
+    const next = (): void => {
+      queued = false;
+      if (!boardDirty) return;
+      fitBoard();
+      // 顶栏换了宽度，"还能不能往两边滚"也跟着变——这一步读 scrollWidth，
+      // 放在这里正好，反正刚量完布局，读一次是顺手的
+      syncTopbarScroll();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(next);
+    else window.setTimeout(next, 16);
+  });
+  // 容器宽、顶栏高（会换行）、参谋部栏高（会展开）—— 这三项决定可用空间
+  for (const el of [boardWrapEl, topbarEl, commanderEl]) ro.observe(el);
 }
 
 /**
@@ -828,6 +886,8 @@ function setZoom(next: number): void {
   const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
   if (clamped === boardZoom) return;
   boardZoom = clamped;
+  // 缩放直接改的是"棋盘该多大"，尺寸缓存必须作废
+  boardDirty = true;
   // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
   render();
   if (boardZoom > 1) {
@@ -1129,6 +1189,12 @@ function dispatch(action: Action): boolean {
       return true;
     }
     if (!state.winner) {
+      // 沙盒里没有"把设备交给对方"这回事：对面那一方交给 AI 走一个回合，
+      // 或者（两边都归你时）直接把棋盘交给下一步。
+      if (godMode()) {
+        void godAfterTurn();
+        return true;
+      }
       // 轮到 AI 就让它接着走（双 AI 时会一直走回人类或分出胜负）
       if (isAiSide(state, state.current)) {
         void runAiLoop();
@@ -1310,12 +1376,39 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 }
 
 function onBoardClick(e: Event): void {
-  // 上帝模式的点击语义完全不同：这里点棋盘是"落子"，不是"走子"。
-  // 走子那套判断（轮到我吗、这格可达吗、能不能开火）在沙盒里一条都不成立，
-  // 所以整块交出去，不在这里塞一堆 if。
   if (state.config.godMode === true) {
-    onGodClick(e);
-    return;
+    // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
+    // 这格可达吗、能不能开火）在纯沙盒里一条都不成立，整块交出去。
+    if (!godInControl()) {
+      onGodClick(e);
+      return;
+    }
+    // 操控档：下面落到正常那一套（选中、走子、开火、强制移动全都照旧）。
+    // 借的只有一样——`me()`：上帝模式里它返回"当前行动方"，正好就是你要走的那一方。
+    if (godRunning || godPassing) {
+      toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
+      return;
+    }
+    if (!godMyTurn()) {
+      toast(`现在是${state.players[state.current].name}（AI）的回合，等它走完`);
+      return;
+    }
+    // 上一次"交给 AI"那句结论到这儿就过期了：局面马上就要被你自己改。
+    // 不清的话它会一直占着状态行，把刚加的"这支兵还剩什么"压住。
+    if (godResult) {
+      godResult = '';
+      godSig = '';
+    }
+    // 空手点空地＝"看看这儿是什么"：沙盒里这比"取消选中"常用得多。
+    // 只在**手上没选中任何东西**时提示——手上有一支兵的时候，点别处
+    // 几乎总是"想走到那儿"，这时候弹地形名就是噪声。
+    const probe = coordsFromEvent(e);
+    if (!selectedId && probe && !cityAt(state, probe.x, probe.y)) {
+      if (stackAt(probe.x, probe.y).length === 0) {
+        const tile = state.tiles[idx(state, probe.x, probe.y)];
+        if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+      }
+    }
   }
   if (handoffOpen || state.winner) return;
 
@@ -1574,7 +1667,11 @@ function onBoardClick(e: Event): void {
     const u = state.units.find((x) => x.id === clickedUnitId);
     if (u) {
       // 自己的军营：点开就是产兵面板（它不能动也不能打，没什么别的可看）
-      if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
+      //
+      // 沙盒例外：那边侧栏是货架，没有产兵面板可开，`selectCamp` 等于
+      // "点了没反应"。改成普通选中——至少棋盘上会亮出一个选中框，
+      // 让人知道这一下确实点到了东西。
+      if (u.owner === me() && utype(state, u.type).barracks && !godMode()) selectCamp(u);
       else selectUnit(u);
       return;
     }
@@ -2018,7 +2115,37 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'god-side': {
       godSide = el.dataset.side === 'B' ? 'B' : 'A';
+      // 「我打这一方」跟着「摆给」走：换边摆的时候，操控的那一方也跟着换，
+      // 否则会出现"摆给蓝方、却还在走红方"，两件事对不上
+      godSig = '';
+      clearSelection();
       render();
+      // 新这一边如果正轮到它就没事；轮到对面就让人家先把这一步走完
+      if (godPlay === 'me' && state.current !== godSide) void godAfterTurn();
+      return;
+    }
+
+    // 操控档：谁亲手走。和上面的笔刷是两件事——笔刷决定"点下去放什么"，
+    // 这一组决定"点下去是走子还是落子"
+    case 'god-play': {
+      const mode = el.dataset.play;
+      godPlay = mode === 'me' ? 'me' : mode === 'both' ? 'both' : null;
+      godSig = '';
+      // 切档就把上一轮的结论收掉：那句话说的是"上一次 AI 打完的样子"，
+      // 而你现在要自己动手了，留着它只会盖住手上这支兵的血量
+      godResult = '';
+      clearSelection();
+      render();
+      // 接管时正轮到对面：让它先把这一步走完。不然「我打红方」按下去，
+      // 棋盘上一个能点的兵都没有，看着像没生效
+      if (godPlay === 'me' && state.current !== godSide) void godAfterTurn();
+      return;
+    }
+
+    case 'god-end-turn': {
+      // 对面在走时按不动：那一个回合不归你收尾
+      if (!godMyTurn() || state.winner) return;
+      dispatch({ type: 'END_TURN' });
       return;
     }
 
@@ -2570,6 +2697,26 @@ let godSide: PlayerId = 'A';
 let godBrush: GodBrush = { kind: 'none' };
 /** 摆城用哪个时代；0 表示"还没挑过"，按这一局的起始时代走 */
 let godCityEra = 0;
+/**
+ * 玩家亲手操控哪一方。
+ *
+ *   · `null`    只摆放：点棋盘＝落子，两边都只有按按钮才动（这个模式原来的样子）
+ *   · `'me'`    我打「摆给」那一边，对面交给 AI
+ *   · `'both'`  两边都由我走：摆完自己演一遍，不劳烦 AI
+ *
+ * 为什么不复用 `state.aiControl`：那个开关是"这一方**永久**托管"，一个回合接一个
+ * 回合地自己往下跑，沙盒里会跑到你摆不下子。这里的交接是**一步一交**——对面走完
+ * 一个回合就停住，等你。两者的区别在 AI 那半边看得很清楚：那边是循环，这边是一回合。
+ */
+let godPlay: 'me' | 'both' | null = null;
+/**
+ * AI 正在替对面走那一个回合。
+ *
+ * 和 godRunning 分开：godRunning 是"两边都交给 AI，一直打到全灭"，这个只是把
+ * 对面那一步补上然后交还。界面上也分开——前者整条工具栏换成进度条，
+ * 后者只把「结束回合」换成"对面在想"。
+ */
+let godPassing = false;
 /** 货架按扩展包筛选（'' = 全部）。和侧栏那个分开存：两边看的东西不一样 */
 let godPack = '';
 /** AI 正在同时操控两边 */
@@ -2623,6 +2770,27 @@ function godMode(): boolean {
 }
 
 /**
+ * 现在轮不轮得到玩家自己走一步。
+ *
+ * `'both'` 档永远算"轮到你"——两边都是你，当前行动方就是你要走的那一方。
+ */
+function godMyTurn(): boolean {
+  if (godPlay === null || godRunning || godPassing) return false;
+  if (godPlay === 'both') return true;
+  return state.current === godSide;
+}
+
+/**
+ * 这一下点棋盘该按"操控"解释吗。
+ *
+ * 手上有摆放笔刷时**仍然先摆放**：沙盒里"我想在这儿加一个人"永远比
+ * "我想走一步"急，而且摆完立刻能走，反过来的顺序要切两次模式。
+ */
+function godInControl(): boolean {
+  return godPlay !== null && !godRunning && godBrush.kind === 'none';
+}
+
+/**
  * 还"能打"的部队。
  *
  * 建筑不算：军营、塔、磨坊既不会走也不会主动冲，把它们算进"还有兵"，
@@ -2649,6 +2817,24 @@ function godHasArmy(p: PlayerId): boolean {
   return state.pendingEgg?.owner === p;
 }
 
+/**
+ * 操控档下"手上这支兵还剩什么"的一句话。
+ *
+ * 沙盒没有属性卡（侧栏是货架），而自己下场走子时，"它还有没有行动力、
+ * 这一下打不打得出去"是每一下都要看的东西。放到工具栏末尾那一行，
+ * 比让人去悬停看 tooltip 快得多。
+ */
+function godSelectedNote(): string {
+  const u = selectedId ? state.units.find((x) => x.id === selectedId) : null;
+  if (!u) return '';
+  const def = utype(state, u.type);
+  const bits = [`${def.name} ${u.hp}/${def.maxHp} 血`];
+  if (def.atk > 0) bits.push(`攻 ${def.atk}${def.armor ? ` · 甲 ${def.armor}` : ''}`);
+  bits.push(canMove(u) ? '还能走' : '走完了');
+  if (def.atk > 0) bits.push(canAttack(u) ? '还能打' : '打完了');
+  return bits.join(' · ');
+}
+
 function godUi() {
   return {
     state,
@@ -2664,6 +2850,10 @@ function godUi() {
     speed: godSpeed,
     speedNames: AI_SPEED_NAME,
     log: state.log,
+    play: godPlay,
+    myTurn: godMyTurn(),
+    passing: godPassing,
+    selected: godSelectedNote(),
   };
 }
 
@@ -2680,6 +2870,12 @@ function renderGodBar(): void {
     godBrush.kind === 'terrain' ? godBrush.terrain : '',
     godCityEra,
     godSpeed,
+    // 操控档：换了谁亲手走、轮到谁、AI 是不是正在替对面走，
+    // 这三样都会改工具栏的按钮和提示
+    godPlay ?? '-',
+    godPassing ? 'pass' : '-',
+    // 状态行会显示"手上这支兵还剩多少行动力"，换了选中就得重画
+    selectedId ?? '-',
     godRunning ? `run${godRound}` : '-',
     godResult,
     state.units.length,
@@ -2713,11 +2909,19 @@ function renderGodShelf(): void {
     state.log.length,
     // AI 在跑的时候货架要收起来，这也得重画
     godRunning ? 'run' : '-',
+    // 操控档决定货架顶上那句提示，AI 替对面走的时候又要换一句
+    godPlay ?? '-',
+    godPassing ? 'pass' : '-',
+    // 手上选着谁：状态行会换成这支兵的血量与行动力
+    selectedId ?? '-',
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;
   // 换包/换兵种会整块重排：滚动位置由 keepSideScroll 一起搬过去
   keepSideScroll(() => {
+    // 侧栏被直接改写，普通面板的"上次写的是什么"缓存必须作废——
+    // 否则退出沙盒那一帧内容碰巧一样就会被跳过，货架留在屏幕上不走
+    invalidatePanel(sideEl);
     sideEl.innerHTML = godShelfHtml(godUi());
   });
 }
@@ -2749,8 +2953,8 @@ function godApply(result: SandboxResult): void {
 }
 
 function onGodClick(e: Event): void {
-  if (godRunning) {
-    toast('AI 正在打，先按「停止」');
+  if (godRunning || godPassing) {
+    toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
     return;
   }
   const coords = coordsFromEvent(e);
@@ -2788,7 +2992,59 @@ function onGodClick(e: Event): void {
 }
 
 /**
- * 让 AI 同时操控两边打。
+ * 玩家结束回合之后：把对面那一步补上，然后交还。
+ *
+ * `'both'` 档什么都不做——两边都是你，棋盘直接交给下一步。
+ * `'me'` 档让 AI 走完对面**那一个回合**再停住，而不是像「交给 AI」那样一直打：
+ * 沙盒里要的是"我走一步、看它怎么应"，不是看它俩自己打完。
+ *
+ * 这一步是"一步一交"的关键，也是它和 `aiControl` 托管的区别所在。
+ */
+async function godAfterTurn(): Promise<void> {
+  if (!godMode() || godRunning) return;
+  if (godPlay !== 'me') {
+    // 两边都归你：提示一句轮到谁，免得摆完忘了刚才走的是哪一边
+    if (godPlay === 'both' && !state.winner) {
+      toast(`轮到${state.players[state.current].name}，接着走`);
+    }
+    return;
+  }
+  // 已经转回自己这一边：上一步是玩家自己结束的，没有对面的事
+  if (state.current === godSide) return;
+
+  const token = ++aiToken;
+  godPassing = true;
+  godSig = '';
+  render();
+  try {
+    // 对面这一方也可能没兵了（刚被玩家打光）——那时候让它走一个空回合
+    // 反而会把回合数推上去，不如直接判定结束
+    if (godHasArmy(state.current)) {
+      await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70, () =>
+        !godHasArmy(godSide),
+      );
+    } else {
+      const end = applyAction(state, { type: 'END_TURN' });
+      if (end.ok) state = end.state;
+    }
+  } finally {
+    godPassing = false;
+  }
+  // 被「停止」或别人抢了令牌：收尾交给那一下
+  if (token !== aiToken) return;
+
+  if (!godHasArmy(godSide)) {
+    godResult = `${state.players[godSide].name}的部队打光了`;
+  } else {
+    godResult = '';
+  }
+  godSig = '';
+  saveMatch(state);
+  render();
+  if (godResult) toast(godResult);
+}
+
+/** 让 AI 同时操控两边打。
  *
  * mode='round' 只推两方各一个回合（正好是一个完整的"回合"），然后把棋盘
  * 还给玩家；mode='dead' 一直打到一方没有能打的部队，中途可以按停止。
@@ -2851,6 +3107,13 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   saveMatch(state);
   render();
   toast(godResult);
+
+  // 收尾要交还给你。
+  //
+  // 「打到全灭」可能正好停在**对面那一方**的回合上（谁先没兵是随机的）。
+  // 操控档下那一方归 AI，而 AI 这时已经停了——不在这里接一下，棋盘就永远
+  // 停在"轮到 X（AI）"，按钮也是灰的，看着像卡死。
+  if (godPlay === 'me' && !state.winner && state.current !== godSide) void godAfterTurn();
 }
 
 // ---------- 联机 ----------
@@ -3211,6 +3474,9 @@ window.addEventListener('resize', () => {
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => render(), 120);
 });
+
+// 尺寸变化走观察者，不必每帧去量（见 watchBoardResize）
+watchBoardResize();
 
 // ---------- 启动 ----------
 

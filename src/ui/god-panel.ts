@@ -52,6 +52,21 @@ export interface GodUi {
   speedNames: readonly string[];
   /** 战报。最新的在最后，渲染时自己倒过来 */
   log: readonly LogEntry[];
+  /**
+   * 谁亲手走：`null` = 只摆放（老样子），`'me'` = 我打 `side` 这一边，
+   * `'both'` = 两边都由我走。
+   */
+  play: 'me' | 'both' | null;
+  /** 现在轮不轮到玩家自己走 */
+  myTurn: boolean;
+  /** AI 正在替对面走**这一个回合**（不是两边都托管，那个走的是 running） */
+  passing: boolean;
+  /**
+   * 手上那支兵的一句话（血量、攻击、还剩不剩行动力）。空串＝没选中。
+   *
+   * 沙盒里没有属性卡，而自己下场走子时这几项每一下都要看。
+   */
+  selected: string;
 }
 
 const chip = (on: boolean, act: string, label: string, extra = ''): string =>
@@ -109,6 +124,43 @@ export function godBarHtml(ui: GodUi): string {
     .map((p) => chip(ui.side === p, 'god-side', s.players[p].name, `data-side="${p}"`))
     .join('');
 
+  // 操控档：摆完之后是自己下场，还是交给 AI。
+  //
+  // 和「摆给」挨着放，因为它俩是同一个问题的两半——一个说"这是谁的东西"，
+  // 一个说"这一边由谁动手"。分开摆的话，玩家会以为"摆给蓝方"就等于"蓝方归我走"。
+  const playName = s.players[ui.side].name;
+  const playChips = [
+    chip(
+      ui.play === null,
+      'god-play',
+      '只摆放',
+      'data-play="none" title="点棋盘只落子；两边都要按「交给 AI」才动"',
+    ),
+    chip(
+      ui.play === 'me',
+      'god-play',
+      `我打${playName}`,
+      'data-play="me" title="只操控这一边，对面交给 AI：你走一步、看它怎么应"',
+    ),
+    chip(
+      ui.play === 'both',
+      'god-play',
+      '两边我都打',
+      'data-play="both" title="摆完自己演一遍，两边都由你走"',
+    ),
+  ].join('');
+
+  // 轮次条：只在操控档出现。它要回答的是一句话——"现在该谁动"。
+  const turnRow =
+    ui.play === null
+      ? ''
+      : `<div class="god-group">
+           <span class="god-label">轮次</span>
+           <div class="chip-row">${turnLabel(ui, s)}<button class="btn btn-sm${ui.myTurn ? ' btn-primary' : ''}" data-act="god-end-turn"${
+             ui.myTurn ? '' : ' disabled'
+           } title="这一回合走完了，交给对面">结束回合</button></div>
+         </div>`;
+
   // 地形笔刷常驻显示，不折进"笔刷"那一组里。
   //
   // 折起来的话没人知道这个模式还能改地形——而"摆一场渡河战"恰恰是沙盒
@@ -126,16 +178,30 @@ export function godBarHtml(ui: GodUi): string {
   return `
     <div class="cmd-head">
       <b>上帝模式</b>
-      <span class="cmd-hint">全图无雾 · 摆兵摆城都不要钱</span>
+      <span class="cmd-hint">${
+        ui.play === null ? '全图无雾 · 摆兵摆城都不要钱' : '全图无雾 · 放下笔刷后点棋盘就是走子'
+      }</span>
     </div>
     <div class="god-group">
       <span class="god-label">摆给</span>
       <div class="chip-row">${sideChips}</div>
     </div>
     <div class="god-group">
+      <span class="god-label">操控</span>
+      <div class="chip-row">${playChips}</div>
+    </div>
+    ${turnRow}
+    <div class="god-group">
       <span class="god-label">笔刷</span>
       <div class="chip-row">
-        ${chip(ui.brush.kind === 'none', 'god-brush', '查看', 'data-brush="none"')}
+        ${chip(
+          ui.brush.kind === 'none',
+          'god-brush',
+          ui.play === null ? '查看' : '操控',
+          `data-brush="none" title="${
+            ui.play === null ? '点一格看看那儿有什么' : '放下笔刷，点棋盘就是走子/开火'
+          }"`,
+        )}
         ${chip(ui.brush.kind === 'city', 'god-brush', '城市', 'data-brush="city"')}
         ${chip(ui.brush.kind === 'erase', 'god-brush', '橡皮', 'data-brush="erase"')}
       </div>
@@ -153,7 +219,7 @@ export function godBarHtml(ui: GodUi): string {
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
       </div>
     </div>
-    <span class="god-status">${ui.result || brushHint(ui, s)}</span>
+    <span class="god-status">${ui.result || ui.selected || brushHint(ui, s)}</span>
   `;
 }
 
@@ -161,7 +227,29 @@ function countUnits(s: GameState, p: PlayerId): number {
   return s.units.filter((u) => u.owner === p).length;
 }
 
+/**
+ * "现在该谁动"。
+ *
+ * 三态要分清：AI 正在替对面走这一步、轮到玩家、轮到 AI 但还没推起来。
+ * 最后一种看着像瞬间状态，其实会实打实出现在"你刚切到操控档、对面还没开跑"
+ * 的那一帧上——那时候棋盘点不动，没有一句解释，玩家只会以为按钮坏了。
+ */
+function turnLabel(ui: GodUi, s: GameState): string {
+  if (ui.passing) {
+    return `<span class="hint">${s.players[s.current].name}（AI）正在走这一步…</span>`;
+  }
+  if (ui.myTurn) return `<span class="hint">轮到${s.players[s.current].name}（你）</span>`;
+  return `<span class="hint">${s.players[s.current].name}（AI）的回合</span>`;
+}
+
 function brushHint(ui: GodUi, s: GameState): string {
+  // 空手 + 操控档：这时候点棋盘不是"查看"，是走子。提示得跟着换，
+  // 否则玩家看到"点一格看看那儿有什么"，点下去却把兵动了。
+  if (ui.brush.kind === 'none' && ui.play !== null) {
+    if (ui.passing) return '对面正在走这一步，走完就轮到你';
+    if (!ui.myTurn) return `${s.players[s.current].name}（AI）的回合，它走完就轮到你`;
+    return `点${s.players[s.current].name}的兵选中：蓝格走过去、红格开火。走完按「结束回合」`;
+  }
   switch (ui.brush.kind) {
     case 'unit': {
       const def = s.unitTypes[ui.brush.type];
@@ -268,7 +356,11 @@ export function godShelfHtml(ui: GodUi): string {
        </div>`
     : `<div class="card">
          <div class="card-title">兵种货架</div>
-         <div class="hint">点一个兵种当笔刷，再点棋盘落子；点同一个兵种可以取消。</div>
+         <div class="hint">${
+           ui.play === null
+             ? '点一个兵种当笔刷，再点棋盘落子；点同一个兵种可以取消。'
+             : '点兵种当笔刷＝接着摆放；再点一次同一个兵种放下笔刷，就能直接用棋盘走子。'
+         }</div>
          ${packRow(Object.values(s.unitTypes), ui.pack, 'god-pack')}
          <div class="god-shelf">${groups}</div>
        </div>`;
