@@ -141,6 +141,7 @@ import {
   unitsOf,
   upgradeCostOf,
   unitYield,
+  maxHpOf,
   utype,
   visionOf,
   visibleTilesOf,
@@ -158,6 +159,10 @@ import type {
   Unit,
   UnitTypeDef,
 } from '../src/core/types.ts';
+import { 
+  cultivationRank,
+  getAgingYears
+} from '../src/core/cultivation-packs.ts';
 
 let passed = 0;
 let failed = 0;
@@ -1003,6 +1008,56 @@ test('浮动之后平均间距没变', () => {
   }
   const avg = sum / n;
   assert.ok(avg >= 6.3 && avg <= 7.6, `12×12 平均最近敌我距离 ${avg.toFixed(2)}，偏离 7.0 太多`);
+});
+
+test('反击次数：打满上限后不再反击，下一个大回合恢复', () => {
+  const s = fresh({ godMode: true });
+  
+  // 清理地形，防止这几格刚好是高山、水或敌方城市导致攻击失败
+  for (const [x, y] of [[4, 6], [5, 6], [6, 6], [7, 6]]) {
+    s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+  }
+
+  // 靶子：双刀流（burst: 2），0 护甲，1000 血
+  s.unitTypes['double-hitter'] = { ...s.unitTypes.militia, id: 'double-hitter', armor: 0, maxHp: 1000, burst: 2, abilities: [] };
+  // 攻击方：单次攻击
+  s.unitTypes['single-hitter'] = { ...s.unitTypes.militia, id: 'single-hitter', armor: 0, maxHp: 1000, abilities: [] };
+  
+  const t1 = place2(s, 'B', 'double-hitter', 5, 6);
+  const t2 = place2(s, 'A', 'single-hitter', 4, 6);
+  const a1 = place2(s, 'A', 'single-hitter', 6, 6);
+  
+  let st = { ...s, current: 'A' as const, units: [a1, t2, t1] };
+  
+  // A 的 a1 打 B 的 t1。t1 会反击 1 次。
+  let r = applyAction(st, { type: 'ATTACK', unitId: a1.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason); // ⬅️ 失败时打印具体原因
+  
+  let defender = r.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, 1, '防守方反击了一次，次数应减 1');
+  
+  // A 的 t2 打 B 的 t1。t1 还能反击 1 次。
+  r = applyAction(r.state, { type: 'ATTACK', unitId: t2.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  
+  defender = r.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, 0, '防守方次数耗尽');
+  
+  // 新增第三个攻击者，注意 place2 已经把它塞进 s.units 了，绝对不能再 push 一次
+  const a3 = place2(r.state, 'A', 'single-hitter', 5, 5);
+  r = applyAction(r.state, { type: 'ATTACK', unitId: a3.id, targetId: t1.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  
+  assert.equal(r.state.units.find(u => u.id === a3.id)!.hp, 1000, '次数耗尽后不应反击');
+  
+  // 结束回合，到 B 的回合，再回到 A 的回合。次数重置。
+  const end1 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(end1.ok);
+  const end2 = applyAction(end1.state, { type: 'END_TURN' });
+  assert.ok(end2.ok);
+  
+  defender = end2.state.units.find(u => u.id === t1.id)!;
+  assert.equal(defender.countersLeft, undefined, '新回合应该重置');
 });
 
 console.log('\n经济与产兵');
@@ -8414,6 +8469,65 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
     /已经注册过/,
     '重复注册技能效果要报错',
   );
+});
+
+console.log('\n修仙扩展：炼气士');
+
+test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  
+  // 1 级，寿元 10。给 100 点经验，保证打坐不会立刻升级干扰测试
+  qi.custom = { exp: 100 }; 
+  assert.equal(cultivationRank(qi), 6, 'exp=100 应该是 6 级（2^6=64, 2^7=128）');
+  // 6 级寿元 = 5 + 6*5 = 35
+  
+  // 35 岁：无衰老
+  qi.age = 35;
+  const baseAtk = effectiveStats(s, qi).atk;
+  const baseArmor = effectiveStats(s, qi).armor;
+  
+  // 36 岁：超 1 岁，攻击 -2，护甲 -1
+  qi.age = 36;
+  assert.equal(effectiveStats(s, qi).atk, baseAtk - 2, '超 1 岁攻击减 2');
+  assert.equal(effectiveStats(s, qi).armor, baseArmor - 1, '超 1 岁护甲减 1');
+  
+  // 38 岁：超 3 岁，生命归 0 等待清场
+  qi.age = 38;
+  assert.equal(getAgingYears(qi), 3, '这里超龄 3 岁');
+  
+  // 模拟回合开始
+  const r = applyAction({ ...s, current: 'A', units: [qi] }, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const r2 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  
+  const doomed = r2.state.units.find(u => u.id === qi.id);
+  assert.ok(doomed, '回光返照期间，单位还在场上');
+  assert.equal(doomed.hp, 0, '生命值应归 0');
+  assert.ok(r2.state.log.some(l => l.text.includes('油尽灯枯')), '战报应提示油尽灯枯');
+  
+  // 进行任意一次操作（比如结束回合），触发清场
+  const r3 = applyAction(r2.state, { type: 'END_TURN' });
+  assert.ok(r3.ok);
+  assert.ok(!r3.state.units.some(u => u.id === qi.id), '一旦触发清场，应该被移除');
+});
+
+test('修士：满级（9 级）永远不会老死', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { exp: 512 }; // 9 级
+  qi.age = 9999; // 活了快一万岁
+
+  const r = applyAction({ ...s, current: 'A', units: [qi] }, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const r2 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+
+  // 依然活着
+  assert.ok(r2.state.units.some(u => u.id === qi.id), '满级修士不应该老死');
+  // 也不应该有油尽灯枯的减益
+  assert.equal(getAgingYears(r2.state.units.find(u => u.id === qi.id)!), 0, '满级修士不减益');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
