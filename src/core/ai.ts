@@ -35,6 +35,7 @@ import {
   eggSpots,
   effectiveRangeAgainst,
   heroBlocked,
+  heroSkillsOf,
   idx,
   inBounds,
   incomeOf,
@@ -2342,7 +2343,11 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
   const hpRatio = u.hp / def.maxHp;
 
   for (const k of skills) {
-    if ((u.skillCd?.[k.id] ?? 0) > 0) continue;
+    // 能不能开读 heroSkillsOf，别自己翻 skillCd：隐匿这类技能改成充能之后，
+    // 只认冷却会让 AI 以为它永远"不能用"（skillCd 一直是空的），
+    // 于是整局一次都不藏。
+    const state = heroSkillsOf(view, u).find((x) => x.def.id === k.id);
+    if (!state?.ready) continue;
     let score = 0;
     switch (k.effect) {
       case 'throw-axe': {

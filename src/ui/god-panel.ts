@@ -317,12 +317,17 @@ function pickedCard(ui: GodUi): string {
           ? '等它走完'
           : k.ready
             ? ''
-            : `${k.cd} 回合`;
+            : k.chargeMax > 0
+              ? `${k.toNext} 回合回一发`
+              : `${k.cd} 回合`;
+      // 充能型技能把"还剩几发"写在名字后面：只写"就绪/冷却"会丢掉
+      // "它其实攒着三发"这个信息，而那正是这个技能最要紧的一点
+      const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
       return `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
         on ? '' : 'disabled'
       }>
         <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
-        <span class="meta"><b>${def.name} · ${k.def.name}</b><span>${escapeHtml(k.def.summary)}</span></span>
+        <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
         <span class="price">${on ? '就绪' : escapeHtml(why)}</span>
       </button>`;
     })

@@ -59,6 +59,9 @@ import {
   timelineSummary,
 } from '../src/core/timeline.ts';
 import { normalizeCampaign } from '../src/net/campaign.ts';
+import { adoptDecision } from '../src/net/room.ts';
+import { CHAT_MAX_LEN, chatLinesHtml, chatWhoLabel, trimChatBody } from '../src/net/chat.ts';
+import type { ChatLine } from '../src/net/chat.ts';
 import {
   legacyResistToMultiplier,
   normalizeUnitResist,
@@ -111,6 +114,7 @@ import {
   effectiveRangeAgainst,
   effectiveStats,
   eggSpots,
+  fearPenalty,
   footprintOf,
   heightOfTerrain,
   isAirborne,
@@ -123,6 +127,7 @@ import {
   orderSitesOf,
   ordersOf,
   heroBlocked,
+  heroSkillsOf,
   previewAttack,
   reachableTiles,
   rebuildCost,
@@ -911,7 +916,108 @@ test('攻城伤害等于攻击减城市护甲', () => {
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
   assert.ok(city);
+  // 这个兵没有魔法段、也没有状态加成才轮得到这个等式；有魔法段的见下一条
   assert.equal(damageToCity(cav, city, s), UNIT_TYPES.scout.atk - city.armor);
+});
+
+test('攻城和野战走同一套公式：魔法段、威吓都算到城墙头上', () => {
+  const s = fresh({ expansionIds: ['fantasy-core', 'fantasy-heroes'] });
+  const city = citiesOf(s, 'B')[0]!;
+  for (const [x, y] of [[3, 5], [4, 5]]) s.tiles[idx(s, x, y)]!.terrain = 'plain';
+  const mage = place2(s, 'A', 'archmage', 3, 5);
+  const def = s.unitTypes.archmage!;
+
+  // 前提：至尊法师攻 0，物理段被城墙吃干净——改之前攻城伤害就是 0
+  assert.equal(Math.max(0, def.atk - city.armor), 0);
+  assert.equal(
+    damageToCity(mage, city, s),
+    def.magicAtk,
+    '魔法段要原样打到城墙上（城没有魔抗），不然法师攻城等于没带兵',
+  );
+
+  // 威吓：贴着会吓人的敌人，攻城那一下也要少打（削的是物理段，和野战一致）
+  s.unitTypes['test-scarer'] = {
+    id: 'test-scarer',
+    name: '试吓兵',
+    short: '吓',
+    era: 1,
+    category: 'combat',
+    cost: 10,
+    move: 2,
+    atk: 0,
+    armor: 0,
+    maxHp: 50,
+    range: 1,
+    vision: 3,
+    abilities: ['fear'], // 光环挂在能力上（见 ability-registry 的 aurasOf）
+  };
+  const cav = place2(s, 'A', 'scout', 4, 4);
+  const clean = Math.max(0, s.unitTypes.scout!.atk - city.armor);
+  assert.equal(damageToCity(cav, city, s), clean, '没有威吓时是"攻击 − 城墙护甲"');
+
+  const scarer = place2(s, 'B', 'test-scarer', 4, 5); // 贴着斥候（曼哈顿 1 格）
+  assert.equal(scarer.owner, 'B');
+  assert.equal(fearPenalty(s, cav), 2, '一层威吓 2 点');
+  assert.equal(
+    damageToCity(cav, city, s),
+    Math.max(0, clean - 2),
+    '被威吓的部队攻城，威吓那 2 点要扣掉——这里以前是另一套账',
+  );
+});
+
+test('大型目标挨溅射只结算一次，不按占的格子数翻倍', () => {
+  const s = arena(fresh({ godMode: true }));
+  for (let x = 3; x <= 8; x++) {
+    for (let y = 4; y <= 7; y++) s.tiles[idx(s, x, y)]!.terrain = 'plain';
+  }
+
+  const boom: UnitTypeDef = {
+    id: 'test-boom',
+    name: '试炮',
+    short: '炮',
+    era: 1,
+    category: 'combat',
+    cost: 10,
+    move: 0,
+    atk: 40,
+    armor: 0,
+    maxHp: 100,
+    range: 4,
+    vision: 5,
+    splash: 2,
+    abilities: [],
+  };
+  const big: UnitTypeDef = {
+    ...boom,
+    id: 'test-big',
+    name: '试大件',
+    short: '大',
+    atk: 0,
+    splash: undefined,
+    footprint: 2,
+    maxHp: 300,
+  };
+  s.unitTypes[boom.id] = boom;
+  s.unitTypes[big.id] = big;
+
+  const gun = place2(s, 'A', 'test-boom', 3, 5);
+  const small = place2(s, 'B', 'militia', 5, 5); // 主目标
+  const large = place2(s, 'B', 'test-big', 6, 5); // 2×2，四格里有两格在爆心旁
+  s.current = 'A';
+  small.hp = 500;
+  large.hp = 300;
+
+  const per = Math.floor(computeDamage(s, gun, large) * CONFIG.splashRatio);
+  assert.ok(per > 0, '这个用例的前提是溅射真的打得动它');
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: small.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === large.id)!;
+  assert.equal(
+    large.hp - after.hp,
+    per,
+    `大型目标占 4 格，但只该挨一份溅射：掉 ${large.hp - after.hp}，应为 ${per}`,
+  );
 });
 
 test('耐久打空变废墟、守军被逐出城外，派兵入驻并付费才易主', () => {
@@ -1755,7 +1861,9 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
   // 召唤物（大史莱姆）不在这条的口径里：它的血是牢大的四分之一。
   for (const u of heroes) {
     assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
-    assert.ok(u.cost >= 360 && u.cost <= 600, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 上限 650：至尊法师这一档（攻 -10 → 魔法 +10、甲 +4、魔抗 +4、射程 +1、
+    // 视野 +1）的价格按 +50 走，640 仍在"英雄"这一档里；再往上就该另算。
+    assert.ok(u.cost >= 360 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
@@ -2509,7 +2617,7 @@ test('属性精研：火点燃、水霜缚、自然回血、暗魔攻 ×1.5', ()
   const foe = place2(s, 'B', 'swordsman', 5, 7);
   s.current = 'A';
 
-  assert.equal(s.unitTypes.archmage!.magicRes, 10, '至尊法师法抗 10');
+  assert.equal(s.unitTypes.archmage!.magicRes, 14, '至尊法师法抗 14');
 
   // 火（默认属性）：命中叠一层点燃——只叠一层，别和"转属性"那支重复
   foe.hp = 500;
@@ -7797,12 +7905,19 @@ test('周围没有敌军时，牢大不会自己裂了又合（沙盒空转）',
   assert.equal(loud?.type === 'HERO_SKILL' ? loud.skillId : '', 'mitosis');
 });
 
-test('至尊法师加强：护甲 6 / 射程 5 / 视野 8，同属性伤害减半', () => {
+test('至尊法师加强：攻 0 / 护甲 10 / 射程 6 / 视野 9 / 魔攻 36，同属性伤害减半', () => {
   const holder = fresh({ expansionIds: FANTASY });
   const def = holder.unitTypes.archmage!;
-  assert.equal(def.armor, 6, '护甲 3 → 6');
-  assert.equal(def.range, 5, '射程 4 → 5');
-  assert.equal(def.vision, 8, '视野 7 → 8');
+  // 一处口径：物理归零、伤害全在魔法段（36 点只被魔抗挡），
+  // 甲/魔抗/射程/视野各 +4/+4/+1/+1，价 +50、解锁 +50。
+  assert.equal(def.atk, 0, '攻击 10 → 0（伤害全走魔法段）');
+  assert.equal(def.magicAtk, 36, '魔攻 26 → 36');
+  assert.equal(def.armor, 10, '护甲 6 → 10');
+  assert.equal(def.magicRes, 14, '魔抗 10 → 14');
+  assert.equal(def.range, 6, '射程 5 → 6');
+  assert.equal(def.vision, 9, '视野 8 → 9');
+  assert.equal(def.cost, 640, '价格 590 → 640');
+  assert.equal(def.unlockCost, 350, '解锁 300 → 350');
 
   const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
   const mage = place2(s, 'A', 'archmage', 6, 6);
@@ -9491,6 +9606,160 @@ test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   const after = r.state.units.filter((u) => u.owner === 'B');
   const total1 = after.reduce((a, u) => a + u.hp, 0);
   assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
+});
+
+test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {
+  const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
+  const killer = place2(s, 'A', 'assassin-master', 5, 5);
+  // B 也得有兵：没有城、又没有任何单位的一方会被判负，回合就推不下去了
+  place2(s, 'B', 'militia', 8, 8);
+  s.current = 'A';
+
+  // applyAction 是"克隆改完再还给你"的语义，所以这里一路往下接 r.state，
+  // 别对着最初那个 s 继续断言——读到的会是放技能之前的快照。
+  let cur = s;
+  const me = (): Unit => cur.units.find((u) => u.id === killer.id)!;
+  const view = (): { charge: number; ready: boolean; toNext: number } => {
+    const k = heroSkillsOf(cur, me()).find((x) => x.def.id === 'vanish')!;
+    return { charge: k.charge, ready: k.ready, toNext: k.toNext };
+  };
+  const doAction = (a: Parameters<typeof applyAction>[1]): ReturnType<typeof applyAction> => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+
+  assert.equal(view().charge, 3, '没放过＝满发（老存档缺这个字段也走这条路）');
+  assert.equal(view().ready, true, '满发时就应该能放');
+
+  /** 走完一整个来回：A 结束 → B 结束 → 又轮到 A（A 的回合开始会回充） */
+  const round = (): void => {
+    for (let i = 0; i < 2; i++) {
+      const r = doAction({ type: 'END_TURN' });
+      assert.ok(r.ok, r.ok ? '' : r.reason);
+      cur.winner = null; // 用例只关心技能，别被胜负判定打断
+    }
+  };
+
+  const use = (): void => {
+    const r = doAction({ type: 'HERO_SKILL', unitId: killer.id, skillId: 'vanish' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    // 同一回合再放一次必须被拒：充能没有冷却，"一回合只能一次"要单独守住，
+    // 否则攒下的三发能在同一回合连开——那不是攒着用，是一回合无敌三回合
+    const twice = doAction({ type: 'HERO_SKILL', unitId: killer.id, skillId: 'vanish' });
+    assert.equal(twice.ok, false, '一回合只能放一次技能');
+  };
+
+  use();
+  assert.equal(view().charge, 2, '放一发少一发');
+  round();
+  assert.equal(view().charge, 2, '才过了一个自己的回合，还没到回充的点');
+  assert.equal(view().toNext, 1, '还差 1 个回合回一发');
+  round();
+  assert.equal(view().charge, 3, '满发之后不再往上加');
+
+  // 打空的样子：直接把发数写成 0（连开三次不现实——一回合只能一次，
+  // 而排到第三次时前面早就回了一发）。这里要验的是"没发数时怎么说"，
+  // 以及"回充是不是真的按每 2 个自己的回合走"。
+  me().skillCharge = { vanish: { n: 0, t: 0 } };
+  assert.equal(view().charge, 0, '三发打完');
+  assert.equal(view().ready, false, '没发了就不能放');
+  assert.equal(view().toNext, 2, '空的时候要等满 2 个回合');
+  const denied = doAction({ type: 'HERO_SKILL', unitId: killer.id, skillId: 'vanish' });
+  assert.equal(denied.ok, false, '没发数时点下去要被拒');
+  assert.ok(
+    !denied.ok && denied.reason.includes('回合后回一发'),
+    `拒的时候要说清还要等多久，实际：${!denied.ok ? denied.reason : ''}`,
+  );
+
+  round();
+  assert.equal(view().charge, 0, '第一个回合还不够');
+  round();
+  assert.equal(view().charge, 1, '两个自己的回合回一发');
+  assert.equal(view().ready, true, '回上一发就该能放');
+});
+
+test('投降同步：云端说终局了，本机就算没轮到自己、还有草稿也要装进来', () => {
+  const head = (turn: number, current: 'A' | 'B', winner: 'A' | 'B' | null) => ({
+    turn,
+    current,
+    winner,
+  });
+
+  // 认输不换人、不推进回合：这一条就是那个事故的正面用例
+  const surrendered = adoptDecision(head(7, 'A', 'B'), head(7, 'A', null), { seat: 'B' });
+  assert.equal(surrendered.take, true, '对面投降了，我这边必须收到');
+  assert.equal(surrendered.take && surrendered.why, 'finished');
+
+  // 草稿也挡不住终局：这局已经结了，未提交的走法没有意义
+  const withDraft = adoptDecision(head(7, 'A', 'B'), head(7, 'A', null), {
+    seat: 'B',
+    draft: true,
+  });
+  assert.equal(withDraft.take, true, '终局压倒未提交的草稿');
+
+  // 平时怎么挡还是怎么挡
+  assert.equal(
+    adoptDecision(head(8, 'A', null), head(7, 'A', null), { seat: 'B' }).take,
+    false,
+    '没轮到我就不拉',
+  );
+  assert.equal(
+    adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B', draft: true }).take,
+    false,
+    '有草稿就不覆盖',
+  );
+  assert.equal(
+    adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B' }).take,
+    true,
+    '轮到我、没草稿、回合变了：就该拉',
+  );
+
+  // 观战位没有"轮到我"这回事，只看有没有新东西
+  assert.equal(
+    adoptDecision(head(7, 'A', null), head(7, 'A', null), { seat: 'A', spectator: true }).take,
+    false,
+    '什么都没变就别重绘',
+  );
+  assert.equal(
+    adoptDecision(head(7, 'A', 'B'), head(7, 'A', null), { seat: 'A', spectator: true }).why,
+    'finished',
+    '观战位也要看见终局',
+  );
+});
+
+test('聊天文本清洗：去控制字符、压空白、截断，空串不放行', () => {
+  assert.equal(trimChatBody('  gg  '), 'gg', '首尾空白去掉');
+  assert.equal(trimChatBody('上\t\t路\n\n快点'), '上 路 快点', '换行/制表压成一个空格：聊天框不是记事本');
+  assert.equal(trimChatBody('好的\u0000\u0007'), '好的', '控制字符不能带进去');
+  assert.equal(trimChatBody('   '), '', '全是空格＝这条不该发');
+  assert.equal(trimChatBody(''), '', '空串同样不放行');
+  const long = trimChatBody('字'.repeat(500));
+  assert.equal(long.length, CHAT_MAX_LEN, `超长要截到 ${CHAT_MAX_LEN} 字`);
+
+  // 归属标签站在"我"的角度写：屏幕两边都写着同样的名字，用 A/B 会看不懂
+  assert.equal(chatWhoLabel('A', 'A'), '我方');
+  assert.equal(chatWhoLabel('B', 'A'), '对方');
+  assert.equal(chatWhoLabel('watch', 'A'), '观众');
+  assert.equal(chatWhoLabel('watch', 'watch'), '观众');
+});
+
+test('聊天记录：转义、三种归属、空态', () => {
+  const lines: ChatLine[] = [
+    { id: 1, seat: 'A', name: '红方', body: '打个赌？', at: '2026-10-29T20:31:00Z' },
+    { id: 2, seat: 'B', name: '蓝方', body: '<b>不赌</b>', at: '2026-10-29T20:32:00Z' },
+    { id: 3, seat: 'watch', name: '观众', body: '好看', at: '2026-10-29T20:33:00Z' },
+  ];
+  const mine = chatLinesHtml(lines, 'A');
+  assert.ok(mine.includes('我方'), '自己的消息标"我方"');
+  assert.ok(mine.includes('对方'), '对面的消息标"对方"');
+  assert.ok(mine.includes('观众'), '观战者的消息要照常显示');
+  assert.ok(!mine.includes('<b>不赌</b>'), '消息里的标签必须转义，否则一条消息就能改界面');
+  assert.ok(mine.includes('&lt;b&gt;不赌&lt;/b&gt;'), '转义之后原样显示');
+  assert.ok(mine.includes('20:31'), '带时分，不然分不清谁先说的');
+
+  const empty = chatLinesHtml([], 'A');
+  assert.ok(empty.includes('chat-empty'), '空的时候要有一句话，不要留一块空白');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

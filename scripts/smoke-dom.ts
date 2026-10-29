@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { unitSourceIdOf } from '../src/core/expansions.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
@@ -1461,6 +1462,17 @@ check('关掉联机面板回到对局', () => {
   assert.equal(doc.querySelector('.modal-mask'), null);
 });
 
+check('本机对局没有聊天入口：聊天只开在房间里', () => {
+  // 热座是对着人、AI 局是对着电脑，这两种局里放一个永远没回应的输入框
+  // 比没有更让人困惑。所以没有房间时那颗按钮是隐藏的（元素在、但不出现）。
+  const fab = doc.querySelector<HTMLElement>('.chat-fab');
+  if (fab) {
+    assert.equal(fab.hidden, true, '不在房间里时聊天入口应该收起来');
+    return;
+  }
+  assert.ok(!doc.querySelector('.chat-panel'), '没有房间就不该有聊天面板');
+});
+
 
 console.log('\n指挥官模式');
 
@@ -1648,63 +1660,136 @@ check('每一格都能指定由哪座城产兵，选了就写进序列', () => {
   );
 });
 
-check('兵种能搜：敲关键词只剩对得上号的，已排好的那一格不会被筛掉', () => {
-  const before = doc
-    .querySelector<HTMLElement>('#commander')!
-    .querySelector<HTMLSelectElement>('select[data-slot="0"]')!.value;
-  const input = doc.querySelector<HTMLInputElement>('[data-act="cmd-search"]');
-  assert.ok(input, '参谋部该有一个搜索框');
-
-  input!.value = '弓';
-  input!.dispatchEvent(new window.Event('input', { bubbles: true }));
-
+check('只有一个包、只有一个时代的对局：整条筛选行都不出现，只留计数', () => {
   const bar = doc.querySelector<HTMLElement>('#commander')!;
-  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="0"]')!;
-  const names = Array.from(sel.options).map((o) => o.textContent ?? '');
-  assert.ok(
-    names.some((t) => t.includes('弓')),
-    `搜「弓」至少要剩下弓手，实际选项：${names.join('/')}`,
-  );
-  assert.equal(sel.value, before, '搜索只是"看得见什么"，不该把已经排好的那一格改掉');
-  // 筛完剩下的每一项都得真的含这个字（否则等于没筛）
-  const units = Array.from(sel.options).filter((o) => o.value && o.value !== '@upgrade');
-  assert.ok(units.length < names.length || names.length <= 2, '应该比全部那一档窄');
-
-  // 清空恢复
-  const again = doc.querySelector<HTMLInputElement>('[data-act="cmd-search"]')!;
-  again.value = '';
-  again.dispatchEvent(new window.Event('input', { bubbles: true }));
+  // 这一局是原版、1 代开局：名单里只有一个包、一个时代，两排 chip 都"筛无可筛"。
+  // 留一颗按下去什么都不变的按钮，比没有这颗按钮更让人困惑——所以整排都不渲染。
+  assert.equal(bar.querySelectorAll('[data-act="cmd-pack"]').length, 0, '单包不该显示包筛选');
+  assert.equal(bar.querySelectorAll('[data-cmd-era]').length, 0, '单代不该显示时代筛选');
+  const count = bar.querySelector('.cmd-count')?.textContent ?? '';
+  assert.ok(/\d+ \/ \d+ 个兵种/.test(count), `计数应该还在，实际：${count}`);
+  assert.equal(count.includes('已筛选'), false, '没筛的时候不该说"已筛选"');
 });
 
-check('兵种能分类：点「远程」之后，下拉里只剩射程 2 格以上的', () => {
-  const chip = doc.querySelector<HTMLElement>('[data-cmd-class="ranged"]');
-  assert.ok(chip, '参谋部该有「远程」这个分类');
-  chip!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+/**
+ * 参谋部的两个筛选维度（DLC / 时代）要在一个**多包**对局里验：
+ * 单包对局根本不该出现包筛选，所以不能在 doc 那一局上测。
+ *
+ * 顺便造一个必然为空的组合：把奇想包里 4 代的兵从兵种表里拿掉，
+ * 这样"奇想 + 4 代"一定没有命中，空态才有得测。
+ */
+check('兵种能按 DLC 筛：只留这个包的兵；和时代能叠加；没命中时说清是空的', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 4,
+      commanderMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    20261029,
+    {},
+  );
+  // 奇想包里 4 代的那几个先摘掉，用来制造"这个组合是空的"
+  for (const id of Object.keys(st.unitTypes)) {
+    if (unitSourceIdOf(id) === 'fantasy-heroes' && st.unitTypes[id]!.era === 4) {
+      delete st.unitTypes[id];
+    }
+  }
+  st.fog = false;
+  st.current = 'A';
 
-  const bar = doc.querySelector<HTMLElement>('#commander')!;
-  // 看第二格：那格是空的，不会掺进"当前已选"那一条
-  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="1"]')!;
-  const units = Array.from(sel.options).filter((o) => o.value && o.value !== '@upgrade');
-  assert.ok(units.length > 0, '「远程」不该是空的');
-  // 兵种表要查对局里的那一份：前面几条用例往 UNIT_TYPES 里注册过自定义兵种，
-  // 只认全局表会把它们当成"射程 undefined"而误报
-  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
-    unitTypes: Record<string, { range: number }>;
-  };
-  for (const o of units) {
-    const def = saved.unitTypes[o.value];
-    assert.ok(def && def.range >= 2, `${o.value} 射程只有 ${def?.range}，不该出现在远程里`);
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  const bar = () => d.querySelector<HTMLElement>('#commander')!;
+  const unitOpts = (slot = 1) =>
+    Array.from(bar().querySelector<HTMLSelectElement>(`select[data-slot="${slot}"]`)!.options).filter(
+      (o) => o.value && o.value !== '@upgrade',
+    );
+  const countShown = () => Number((bar().querySelector('.cmd-count')?.textContent ?? '').split(' / ')[0]);
+  const total = unitOpts().length;
+
+  // ① 只按时代筛（不选包）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const eraOnly = unitOpts();
+  assert.ok(eraOnly.length > 0 && eraOnly.length < total, `4 代应该有兵、且比全部少：${eraOnly.length}/${total}`);
+  for (const o of eraOnly) {
+    assert.equal(st.unitTypes[o.value]!.era, 4, `${o.value} 不是 4 代，不该留下来`);
+  }
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, total, '退回「全部时代」应该回到全部');
+
+  // ② 只按包筛（不选时代）——下面接着做
+
+  // 两个包都在：原版 + 奇想·英雄（chip 上的数字就是那个包在这份名单里有几个）
+  const packChips = Array.from(bar().querySelectorAll<HTMLElement>('[data-act="cmd-pack"]'));
+  assert.ok(packChips.length >= 2, `多包对局该有包筛选，实际 ${packChips.length} 颗`);
+
+  const fantasy = bar().querySelector<HTMLElement>('[data-pack="fantasy-heroes"]');
+  assert.ok(fantasy, '该有奇想那一颗');
+  const fantasyCount = Number((fantasy!.textContent ?? '').replace(/^\D+/, '').trim() || '0');
+
+  fantasy!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(countShown(), fantasyCount, '计数应该等于这个包在名单里的兵数');
+  for (const o of unitOpts()) {
+    assert.equal(
+      unitSourceIdOf(o.value),
+      'fantasy-heroes',
+      `${o.value} 不是奇想包的，不该留下来`,
+    );
   }
 
-  // 再点一次同一颗＝回到全部
-  const all = doc.querySelector<HTMLElement>('[data-cmd-class=""]');
-  assert.ok(all, '该有「全部」那一颗');
-  all!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  const back = doc
-    .querySelector<HTMLElement>('#commander')!
-    .querySelectorAll<HTMLSelectElement>('select[data-slot="1"]')[0]!;
-  const backUnits = Array.from(back.options).filter((o) => o.value && o.value !== '@upgrade');
-  assert.ok(backUnits.length >= units.length, '切回全部之后不该更少');
+  // 叠加时代：奇想 + 3 代（这个组合还有东西）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="3"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const combo = unitOpts();
+  assert.ok(combo.length > 0, '奇想 + 3 代应该还有兵');
+  for (const o of combo) {
+    assert.equal(unitSourceIdOf(o.value), 'fantasy-heroes', '组合筛选后不该混进别的包');
+    assert.equal(st.unitTypes[o.value]!.era, 3, '组合筛选后不该混进别的代');
+  }
+
+  // 空组合：奇想 + 4 代（4 代的奇想兵已经被摘掉了）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, 0, '这个组合应该是空的');
+  assert.ok(
+    (bar().querySelector('.cmd-count')?.textContent ?? '').includes('0 /'),
+    '计数要说 0，否则看着像界面坏了',
+  );
+  const allText = Array.from(
+    bar().querySelector<HTMLSelectElement>('select[data-slot="1"]')!.options,
+  ).map((o) => o.textContent ?? '');
+  assert.ok(
+    allText.some((t) => t.includes('没有兵种')),
+    `空的时候要有一句明确的说明，实际选项：${allText.join('/')}`,
+  );
+
+  // 两个维度都退回"全部"，名单回到原样
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  bar()
+    .querySelector<HTMLElement>('[data-pack=""]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, total, '两个维度都清掉之后应该回到全部');
 });
 
 check('英雄在参谋部里标着解锁费；已经在场的那一个排不进去', () => {
@@ -1909,6 +1994,71 @@ check('英雄技能：面板列出技能，冷却中的置灰', () => {
   assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
 });
 
+check('英雄面板：隐匿显示剩余发数，至尊法师显示当前属性', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    910,
+    {},
+  );
+  st.current = 'A';
+  const mk = (type: string, id: string): Unit => ({
+    id,
+    type,
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes[type]!.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  const assassin = mk('assassin-master', 'a1');
+  const mage = mk('archmage', 'm1');
+  st.units.push(assassin, mage);
+
+  const host = doc.createElement('div');
+  const paint = (u: Unit | null): void =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  // ① 隐匿：3 发，用掉一发要少一发，打空之后按钮灰掉并写清多久回一发
+  paint(assassin);
+  assert.ok((host.textContent ?? '').includes('3/3 发'), '隐匿要写明还剩几发');
+  assassin.skillCharge = { vanish: { n: 2, t: 0 } };
+  paint(assassin);
+  assert.ok((host.textContent ?? '').includes('2/3 发'), '扣了一发要跟着变');
+  assassin.skillCharge = { vanish: { n: 0, t: 0 } };
+  paint(assassin);
+  const btn = host.querySelector<HTMLElement>('[data-act="hero-skill"]')!;
+  assert.equal(btn.hasAttribute('disabled'), true, '没发数时按钮要灰');
+  assert.ok((host.textContent ?? '').includes('回合回一发'), '要写清多久回一发');
+
+  // ② 至尊法师：当前属性跟着运行时值走，攻 0 的兵必须把魔法段单独写出来
+  mage.element = 'dark';
+  paint(mage);
+  const dark = host.textContent ?? '';
+  assert.ok(dark.includes('当前属性'), '要有一行「当前属性」');
+  assert.ok(dark.includes('暗'), '显示的是运行时属性（切过之后是暗）');
+  assert.ok(dark.includes('魔法段 ×1.5'), '暗形态要说明它干了什么');
+  assert.ok(dark.includes('魔法攻击'), '攻 0 的兵不写魔法段，看着就像不会打人');
+  mage.element = 'fire';
+  paint(mage);
+  assert.ok((host.textContent ?? '').includes('火'), '切回火属性要跟着变');
+});
+
 check('新英雄的技能按钮挂上了对应技能', () => {
   const st = createMatch(
     {
@@ -1917,8 +2067,7 @@ check('新英雄的技能按钮挂上了对应技能', () => {
       aiOpponent: false,
       aiAlly: false,
       expansionIds: ['fantasy-core', 'fantasy-heroes'],
-      enabledUnits: Object.keys(UNIT_TYPES),
-    },
+      enabledUnits: Object.keys(UNIT_TYPES),    },
     911,
   );
   st.current = 'A';

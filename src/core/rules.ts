@@ -674,21 +674,79 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
   return d;
 }
 
-/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+/**
+ * 这一下能打出多少魔法伤害。
+ *
+ * `foe` 可以为 null（攻城时目标是一座城，不是单位）：魔法段本身只被魔抗平减，
+ * 不需要目标是个单位；只有「属性精研·暗」那种"按对手放大"的钩子需要它，
+ * 没有对手时自然跳过。
+ */
+export function magicSegment(
+  s: GameState,
+  attacker: Unit,
+  magicRes: number,
+  foe: Unit | null,
+): number {
   if (outOfAmmo(s, attacker)) return 0;
   const def = utype(s, attacker.type);
   const magic = def.magicAtk ?? 0;
   if (magic <= 0) return 0;
-  const out = Math.max(0, magic - (utype(s, defender.type).magicRes ?? 0));
+  const out = Math.max(0, magic - magicRes);
   // 魔法段的倍率交给能力自己（现在只有「属性精研·暗」用它）。
   // 先减魔抗再放大——"打穿"和"放大"是两件事，顺序反过来对高魔抗目标会变成白送。
   let dmgMagic = out;
+  if (!foe) return dmgMagic;
   for (const h of hooksFor(def)) {
     if (h.magicMul) {
-      dmgMagic = h.magicMul({ state: s, self: attacker, foe: defender, magic: dmgMagic, api: abilityApi });
+      dmgMagic = h.magicMul({ state: s, self: attacker, foe, magic: dmgMagic, api: abilityApi });
     }
   }
   return dmgMagic;
+}
+
+/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
+export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+  return magicSegment(s, attacker, utype(s, defender.type).magicRes ?? 0, defender);
+}
+
+/**
+ * 出手方的攻击力：基础 + 光环 + 状态修正（威吓、狂暴……）。
+ *
+ * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
+ * 以前这条只在野战里成立，攻城走的是另一套账。
+ */
+export function attackPowerNow(s: GameState, attacker: Unit): number {
+  let atkNow = utype(s, attacker.type).atk + auraBonus(s, attacker).atk;
+  for (const [key, val] of orderedStatuses(attacker.status)) {
+    const sdef = STATUS_REGISTRY[key];
+    if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
+  }
+  return atkNow;
+}
+
+/**
+ * 属性倍率：弱点放大、抗性打折。
+ *
+ * 作用在**整段**伤害上（物理 + 魔法），所以必须放在魔法段之后。
+ * 单位和城市共用：城没有 weak/resist 字段时这两行什么都不做。
+ */
+export function applyElementMul(
+  damage: number,
+  el: Element | undefined,
+  weak?: Partial<Record<Element, number>>,
+  resist?: Partial<Record<Element, number>>,
+): number {
+  if (!el) return damage;
+  let out = damage;
+  const w = weak?.[el];
+  if (w && w > 0) out *= w;
+  // 抗性和弱点一样是**倍率**：`weak` 放大（>1），`resist` 打折（0~1）。
+  // 所以数据必须写成 0.7 这种形式——写成 4 不是"少挨 4 点"，是"受四倍伤害"。
+  // 这条注释是踩过坑留下的：2026-10-28 改结算顺序时，代码换成倍乘、数据没跟着换，
+  // 水元素抗性从 4 变成了 ×4，实测水元素互殴从 15 点涨到 60 点。
+  const r = resist?.[el];
+  if (r) out *= r;
+  return out;
 }
 
 /**
@@ -1665,17 +1723,12 @@ export function computeDamage(
   const dt = utype(s, defender.type);
   const tile = tileAt(s, defender.x, defender.y);
   const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
-  const attackerAura = auraBonus(s, attacker);
   const defenderAura = auraBonus(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
   // 面板的 effectiveStats 用同一段逻辑、同一个位置——否则"面板显示 18、
   // 打出来 15"会变成常驻的对不上号。
-  let atkNow = at.atk + attackerAura.atk;
-  for (const [key, val] of orderedStatuses(attacker.status)) {
-    const sdef = STATUS_REGISTRY[key];
-    if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
-  }
+  const atkNow = attackPowerNow(s, attacker);
   const ctx: HookCtx = {
     state: s,
     self: defender,
@@ -1785,17 +1838,7 @@ export function computeDamage(
 
   // ── 属性 ──
   // 作用在整段伤害上
-  const el = elementOf(s, attacker);
-  if (el) {
-    const weak = dt.weak?.[el];
-    if (weak && weak > 0) ctx.damage *= weak;
-    // 抗性和弱点一样是**倍率**：`weak` 放大（>1），`resist` 打折（0~1）。
-    // 所以数据必须写成 0.7 这种形式——写成 4 不是"少挨 4 点"，是"受四倍伤害"。
-    // 这条注释是踩过坑留下的：2026-10-28 改结算顺序时，代码换成倍乘、数据没跟着换，
-    // 水元素抗性从 4 变成了 ×4，实测水元素互殴从 15 点涨到 60 点。
-    const resist = dt.resist?.[el];
-    if (resist) ctx.damage *= resist;
-  }
+  ctx.damage = applyElementMul(ctx.damage, elementOf(s, attacker), dt.weak, dt.resist);
 
   // 属性之后、同源护壁之前
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postElement, to: DAMAGE_STAGE.elementMul });
@@ -1821,14 +1864,37 @@ export function computeDamage(
   return Math.max(0, Math.round(ctx.damage));
 }
 
-/** 对城市的伤害：只用城市自身护甲，地形加成不重复计算 */
+/**
+ * 对城市的伤害。
+ *
+ * 2026-10-29 起它和野战走**同一套公式**，顺序也一样：
+ *
+ *   1. 攻击力 = 基础 + 光环 + 状态修正（`attackPowerNow`）
+ *   2. 物理段 = max(0, 攻击力 − 城墙护甲)，攻城加成（破城 ×1.5、扩展的全军伤害）作用在这一段上
+ *   3. 魔法段 = max(0, 魔攻 − 城市魔抗)（`magicSegment`）
+ *   4. 属性倍率作用在**整段**上（`applyElementMul`）
+ *   5. 取整、保底 0
+ *
+ * 以前这里是"攻击 − 护甲"一句了事，于是：法师攻城等于没有魔法段、
+ * 被威吓的部队攻城照样满伤、属性克制对城墙完全不存在——同一支部队
+ * 打兵和打城的账对不上，玩家没法从面板推出任何结论。
+ *
+ * 仍然停在城门外的东西，写在这里免得以后有人以为是漏了：
+ *   · **地形加成**：城墙自带护甲（`city.armor`），再叠一层地形就是重复计算；
+ *   · **驻军 / 状态 / 兵种能力钩子**：城不是单位，没有 status、没有 abilities，
+ *     那串"兵打兵"的钩子读不到任何东西，跳过而不是编一个空壳单位；
+ *   · **射程折扣（长短皆可）**：攻城本来就是隔着城墙打，那不是"扔出去的一下"。
+ */
 export function damageToCity(attacker: Unit, city: City, s: GameState): number {
   const at = utype(s, attacker.type);
   const sctx: SiegeDamageCtx = {
     state: s,
     self: attacker,
     city,
-    damage: Math.max(0, at.atk - city.armor),
+    // 第 1、2 步：攻击力（含光环/状态/威吓）减城墙护甲。
+    // 威吓和状态在野战里是两处减的，这里一次减掉——它们说的是同一件事：
+    // "这一下出手的人不在状态"。
+    damage: Math.max(0, attackPowerNow(s, attacker) - fearPenalty(s, attacker) - city.armor),
     api: abilityApi,
   };
   // 破城（×1.5）这类"攻城伤害加成"先走能力，再走扩展钩子：
@@ -1837,12 +1903,24 @@ export function damageToCity(attacker: Unit, city: City, s: GameState): number {
 
   // 攻城走单独的钩子链：地势护甲、破甲这些野战概念在城墙上不成立，
   // 而"全军攻击 +X%"这种按攻击力算的规则，野战和攻城都该吃到。
+  // 注意这里**不再**跑 `modifyDamage`：两者的差额是同一笔加成，
+  // 两条都跑就等于给攻城算两遍。
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifySiegeDamage) {
       sctx.damage = e.hooks.modifySiegeDamage({ state: s, attacker, city, damage: sctx.damage });
     }
   }
-  return Math.max(0, sctx.damage);
+
+  // 第 3 步：魔法段。城没有魔抗（`City` 里没有这一列，也不打算加：
+  // 城本来就该被法师克制，给城墙一条法抗等于把"带法师攻城"这条战术关掉），
+  // 所以这一段的系数是满额的——这正是"法师攻城不再等于零"的来源。
+  sctx.damage += magicSegment(s, attacker, 0, null);
+
+  // 第 4 步：属性倍率（城没有 weak/resist 时什么都不做，留着是为了
+  // 以后扩展给城加抗性时不用再回来改这里）
+  sctx.damage = applyElementMul(sctx.damage, elementOf(s, attacker), undefined, undefined);
+
+  return Math.max(0, Math.round(sctx.damage));
 }
 
 /** 预估伤害，给 UI 的攻击预览用，不改变状态 */
@@ -1880,6 +1958,12 @@ export function previewAttack(
  *
  * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
  * 它只会变成"我不敢开炮"，而不是"我要算清楚再开炮"。
+ *
+ * 两条关于**大型目标**的约定（2026-10-29）：
+ *   1. 距离按"身体最近的边"算（`distBetweenUnits`）。2×2 的大单位紧贴爆心时，
+ *      它的四格都在范围内，用锚点算会把它误判成"离得远"。
+ *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
+ *      所以"直接伤害 + 溅射"加起来也只结算一次。
  */
 function splashVictims(
   s: GameState,
@@ -1890,14 +1974,17 @@ function splashVictims(
   if (radius <= 0) return [];
 
   const out: Array<{ unit: Unit; dmg: number }> = [];
+  const seen = new Set<string>([defender.id]);
   for (const v of s.units) {
     if (v.owner === attacker.owner) continue;
-    if (v.id === defender.id) continue;
-    if (distance(v, defender) > radius) continue;
+    // 已经结算过的（主目标，或者同一格被扫到两次）不再收
+    if (seen.has(v.id)) continue;
+    if (distBetweenUnits(s, defender, v) > radius) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * CONFIG.splashRatio);
     if (dmg <= 0) continue;
+    seen.add(v.id);
     out.push({ unit: v, dmg });
   }
   return out;
@@ -3512,14 +3599,50 @@ export function disbandRefundOf(s: GameState, u: Unit): number {
  * 界面要同时显示两种状态——只列可用的，玩家会以为"技能没了"；
  * 全列出来才知道"再等一回合就能开"。
  */
+/**
+ * 这个单位的技能现在能不能放。
+ *
+ * 两种模型：
+ *   · 冷却（`cooldown`）：一次性技能，用完等 N 个自己的回合；
+ *   · 充能（`charges`）：一池 N 发，每 `regen` 个自己的回合回一发。
+ *
+ * 界面和 AI 都读这里，不要各自去翻 `skillCd`——不然会出现"按钮亮着、
+ * 点下去说没充能"这种只有玩家会发现的对不上号。
+ */
 export function heroSkillsOf(
   s: GameState,
   u: Unit,
-): Array<{ def: SkillDef; cd: number; ready: boolean }> {
+): Array<{
+  def: SkillDef;
+  cd: number;
+  ready: boolean;
+  /** 还剩几发（只有充能型技能有意义，其它是 0） */
+  charge: number;
+  /** 充能上限（0 表示这个技能吃冷却，不吃充能） */
+  chargeMax: number;
+  /** 还要几个自己的回合回下一发（满发时是 0） */
+  toNext: number;
+}> {
   const def = utype(s, u.type);
   return (def.skills ?? []).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
-    return { def: k, cd, ready: cd <= 0 };
+    const chargeMax = k.charges ?? 0;
+    if (chargeMax <= 0) {
+      return { def: k, cd, ready: cd <= 0, charge: 0, chargeMax: 0, toNext: 0 };
+    }
+    // 没这个字段＝从没放过也没攒过 → 满发
+    const box = u.skillCharge?.[k.id];
+    const n = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
+    const t = Math.max(0, box?.t ?? 0);
+    const regen = Math.max(1, k.regen ?? 2);
+    return {
+      def: k,
+      cd,
+      ready: n > 0,
+      charge: n,
+      chargeMax,
+      toNext: n >= chargeMax ? 0 : Math.max(1, regen - t),
+    };
   });
 }
 
@@ -3682,8 +3805,25 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   const skill = (def.skills ?? []).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
 
+  // 每个英雄每回合最多放一个技能。以前这条靠"冷却至少 1"顺带成立，
+  // 充能型技能没有冷却，必须单独拦——否则三发能在同一回合全打出去。
+  if (u.skillTurn === s.turn) {
+    return { ok: false, reason: '这个单位这一回合已经放过技能了' };
+  }
+
   const cd = u.skillCd?.[skill.id] ?? 0;
-  if (cd > 0) return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+  const chargeMax = skill.charges ?? 0;
+  const regen = Math.max(1, skill.regen ?? 2);
+  const box = u.skillCharge?.[skill.id];
+  const charge = chargeMax > 0 ? Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax)) : 0;
+  if (chargeMax > 0) {
+    if (charge <= 0) {
+      const wait = Math.max(1, regen - Math.max(0, box?.t ?? 0));
+      return { ok: false, reason: `${skill.name} 已经用光了，${wait} 个回合后回一发` };
+    }
+  } else if (cd > 0) {
+    return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+  }
 
   const handler = SKILL_EFFECTS[skill.effect];
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
@@ -3701,10 +3841,19 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
 
   // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
   if (c.result.log) pushLog(s, u.owner, c.result.log);
-  
-  // 进冷却
-  u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown };
-  
+
+  u.skillTurn = s.turn;
+
+  if (chargeMax > 0) {
+    // 充能型：扣一发，不动冷却。t 保留——"用完最后一发之后还要攒两回合"
+    // 这件事必须从放的那一回合就开始算，否则连开两发能白赚两回合。
+    u.skillCharge = { ...(u.skillCharge ?? {}), [skill.id]: { n: charge - 1, t: Math.max(0, box?.t ?? 0) } };
+    pushLog(s, u.owner, `${skill.name} 还剩 ${charge - 1}/${chargeMax} 发`);
+  } else {
+    // 进冷却
+    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 1 };
+  }
+
   return { ok: true, state: s };
 }
 
@@ -3842,7 +3991,7 @@ function decayUnits(s: GameState, p: PlayerId): void {
  * 英雄强不强只取决于数值，什么时候开、开在谁身上都没得选。
  */
 function turnStartSkills(s: GameState, p: PlayerId): void {
-  // 0）新回合：清掉上回合的临时状态，技能冷却 −1
+  // 0）新回合：清掉上回合的临时状态，技能冷却 −1，充能型技能攒一发
   for (const u of s.units) {
     if (u.owner !== p) continue;
     delete u.heroBuff;
@@ -3851,10 +4000,29 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
         if ((u.status[k] ?? 0) <= 0) delete u.status[k];
       }
     }
-    if (!u.skillCd) continue;
-    for (const [id, cd] of Object.entries(u.skillCd)) {
-      if (cd <= 1) delete u.skillCd[id];
-      else u.skillCd[id] = cd - 1;
+    if (u.skillCd) {
+      for (const [id, cd] of Object.entries(u.skillCd)) {
+        if (cd <= 1) delete u.skillCd[id];
+        else u.skillCd[id] = cd - 1;
+      }
+    }
+
+    // 充能型技能：满发时计时归零（攒着不浪费），没满就往前走一格，
+    // 走够 regen 回合回一发。按"自己的回合"数，不按全局 turn——
+    // 全局回合两边共用，先手方永远只碰到奇数回合，周期 2 就成了永不触发。
+    for (const k of utype(s, u.type).skills ?? []) {
+      const max = k.charges ?? 0;
+      if (max <= 0) continue;
+      const regen = Math.max(1, k.regen ?? 2);
+      const box = u.skillCharge?.[k.id] ?? { n: max, t: 0 };
+      const n = Math.max(0, Math.min(max, box.n));
+      if (n >= max) {
+        if (box.t !== 0) u.skillCharge = { ...(u.skillCharge ?? {}), [k.id]: { n: max, t: 0 } };
+        continue;
+      }
+      const t = box.t + 1;
+      const next = t >= regen ? { n: n + 1, t: 0 } : { n, t };
+      u.skillCharge = { ...(u.skillCharge ?? {}), [k.id]: next };
     }
   }
 

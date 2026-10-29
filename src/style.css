@@ -2324,11 +2324,14 @@ a.btn {
 }
 
 /*
- * 检索行：搜索框 + 分类 chip + 计数。
+ * 筛选行：包（DLC）+ 时代 + 计数。
  *
  * 占满一整行（flex-basis:100%），否则它会被挤到第 5 格右边、
  * 把 5 个格子推成两行。一排兵种六七十项，五个下拉各翻一遍是没法用的——
- * 搜索和分类把"我就要那个会飞的"压到两次点击里。
+ * 两个维度把"我就要奇想包里 4 代的那个"压到两次点击里。
+ *
+ * 两个 chip 行之间不再加分隔线：它们本来就是同一条筛选带的上下两排，
+ * 加了线反而像两块互不相干的控件。
  */
 .cmd-filter {
   display: flex;
@@ -2336,27 +2339,6 @@ a.btn {
   gap: 8px;
   flex-wrap: wrap;
   flex-basis: 100%;
-}
-
-.cmd-search {
-  font: inherit;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 3px 8px;
-  flex: 0 1 240px;
-  min-width: 140px;
-}
-
-.cmd-search:focus {
-  outline: none;
-  border-color: var(--a);
-}
-
-.cmd-search::placeholder {
-  color: var(--text-3);
 }
 
 .cmd-count {
@@ -2396,8 +2378,20 @@ a.btn {
     max-width: 92px;
   }
 
-  .cmd-search {
-    flex: 1 1 100%;
+  /* 窄屏：两排 chip 换成横滑，不要折成四五行的"筛选项墙" */
+  .cmd-filter {
+    gap: 6px;
+  }
+
+  .cmd-filter .chip-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: 100%;
+  }
+
+  .cmd-filter .chip-row::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -2903,4 +2897,184 @@ a.btn {
 
 .report-howto {
   color: #6b5c33;
+}
+
+/* ---------- 房间聊天 ---------- */
+
+/*
+ * 放在右下角、和棋盘不抢位置：这是一条"随时能说话"的侧路，
+ * 不是主界面的一部分。手机上面板改成整屏高一截，原因和参谋部一样——
+ * 窄屏没有"右下角"这块地方。
+ */
+.chat-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.chat-fab {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 7px 14px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(60, 50, 30, 0.12);
+}
+
+.chat-fab.has-new {
+  border-color: var(--a);
+  color: var(--a);
+}
+
+.chat-panel {
+  width: 280px;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(60, 50, 30, 0.18);
+  overflow: hidden;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.chat-head .chat-who {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.chat-x {
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 90px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.chat-line {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-line .chat-meta {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.chat-line .chat-body {
+  word-break: break-word;
+}
+
+/* 我方 / 对方 / 观众：用左侧一道细色条分，比给整条上底色安静得多 */
+.chat-line.mine {
+  border-left: 2px solid var(--team-a);
+  padding-left: 6px;
+}
+
+.chat-line.foe {
+  border-left: 2px solid var(--team-b);
+  padding-left: 6px;
+}
+
+.chat-line.watch {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 6px;
+  color: var(--text-2);
+}
+
+.chat-send {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--a);
+}
+
+.chat-note {
+  font-size: 11px;
+  color: var(--b);
+  padding: 0 10px 8px;
+  line-height: 1.4;
+}
+
+.chat-note:empty {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .chat-dock {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    align-items: stretch;
+  }
+
+  .chat-fab {
+    align-self: flex-end;
+  }
+
+  .chat-panel {
+    width: auto;
+    max-height: 52vh;
+  }
 }

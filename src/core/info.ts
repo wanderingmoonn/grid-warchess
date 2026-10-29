@@ -184,7 +184,13 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   // 英雄技能：写成"每回合一次的选择"，和界面上那块菜单对应
   if (def.skills && def.skills.length > 0) {
     for (const k of def.skills) {
-      const cd = k.cooldown > 1 ? `冷却 ${k.cooldown} 回合` : '每回合可用';
+      // 两种模型分开说：充能型不是"多久能用一次"，而是"一共攒几次、多久回一发"
+      const cd =
+        (k.charges ?? 0) > 0
+          ? `最多 ${k.charges} 发，每 ${Math.max(1, k.regen ?? 2)} 回合回一发`
+          : (k.cooldown ?? 1) > 1
+            ? `冷却 ${k.cooldown} 回合`
+            : '每回合可用';
       lines.push(`技能「${k.name}」（${cd}）：${k.summary}`);
     }
     lines.push('技能不占行动，由你主动施放——英雄的强度有一半在"什么时候开"上。');
@@ -338,9 +344,22 @@ function heightRuleOn(s: GameState): boolean {
   return activeExpansions(s).some((e) => typeof e.hooks.terrainHeight === 'function');
 }
 
+/**
+ * 属性在「属性精研」下的实际效果，一句话版（面板上那行小字）。
+ *
+ * 数值的真相在 `fantasy-packs.ts` 的 `element-mastery` 里，这里只负责
+ * "说得清"：玩家看着「当前属性：暗」得知道这代表什么，否则那个词只是一枚徽标。
+ * 改那条能力时这张表要跟着改——它是同一件事的两种写法。
+ */
+export const ELEMENT_EFFECT: Partial<Record<Element, string>> = {
+  fire: '命中再点一层火',
+  water: '命中挂霜缚（移动 −1）',
+  nature: '攻击时回自己 10% 生命',
+  dark: '魔法段 ×1.5',
+};
+
 /** 地形说明，直接给面板用。传了 state 才会算高度（高度是扩展给的）。 */
-export function describeTerrain(t: Terrain, s?: GameState): string[] {
-  const info = TERRAIN_INFO[t];
+export function describeTerrain(t: Terrain, s?: GameState): string[] {  const info = TERRAIN_INFO[t];
   const lines = [`进入消耗：${info.cost}`, `防御：${info.defense}`, info.note];
 
   if (s && heightRuleOn(s)) {

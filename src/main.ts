@@ -10,7 +10,7 @@ import './style.css';
 import { expansionById } from './core/expansions.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
-import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
+import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -73,12 +73,14 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
+import { PACK_ALL, packOk, packRow } from './ui/packs.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
 import {
+  adoptDecision,
   claimSeat,
   fetchRoom,
   loadSeat,
@@ -98,6 +100,15 @@ import {
   saveMatch,
   setSaveScope,
 } from './storage/save.ts';
+import {
+  CHAT_MAX_LEN,
+  chatLinesHtml,
+  fetchChat,
+  sendChat,
+  trimChatBody,
+  type ChatLine,
+  type ChatSeat,
+} from './net/chat.ts';
 
 /** 取元素，取不到直接抛——界面结构缺失属于硬错误，不该静默继续 */
 function pick<T extends Element>(parent: ParentNode, sel: string): T {
@@ -758,6 +769,9 @@ function render(): void {
   // 顶栏内容没动、尺寸也没动，"还能不能往两边滚"就不会变——那道判断要读
   // scrollWidth，是笔强制布局，不值得每帧付一遍。滚动本身另有 scroll 监听。
   if (topbarChanged || remeasure) syncTopbarScroll();
+
+  // 聊天入口跟着房间走：进房间才出现，退出去就收起
+  renderChatDock();
 }
 
 /**
@@ -1167,6 +1181,7 @@ function dispatch(action: Action): boolean {
 
   const prevTurn = state.turn;
   const actor = state.current;
+  const prevWinner = state.winner;
   planMovePath(state, action);
   const result = applyAction(state, action);
   if (!result.ok) {
@@ -1211,6 +1226,15 @@ function dispatch(action: Action): boolean {
   }
 
   dirty = true;
+
+  // 一出手就把这局判了（认输是唯一的一种）：联机里也要**立刻提交**。
+  //
+  // 不提交的话，对面要等到"轮到我"才去拉云端，而认输既不换人也不推进回合，
+  // 于是赢的那一边一直停在旧局面上——输了的人已经看见结算卡，赢的人还在等下家。
+  if (room && !prevWinner && state.winner) {
+    dirty = false;
+    void pushTurn(room, prevTurn, '这一局已结束，结果已经同步给对方');
+  }
 
   refreshSelection();
   render();
@@ -2407,15 +2431,18 @@ let commanderRound = 0;
 /** 窄屏下「参谋部」是折叠的，点一下才展开排计划 */
 let commanderExpanded = false;
 /**
- * 参谋部里的兵种检索词。
+ * 参谋部的两个筛选维度：**哪个包** + **哪一代**。
  *
- * 为什么不并进 `recruitQuery`：那是侧栏产兵面板的搜索框，两个面板可能同时被
- * 打开过（切模式时），共用一个词的结果是"在参谋部搜了坦克，切回面板产兵
- * 列表也只剩坦克"。这两处要回答的问题本来就不一样。
+ * 为什么不并进 `recruitQuery` / 侧栏的包筛选：那是产兵面板的状态，
+ * 两个面板可能同时被打开过（切模式时），共用一个值的结果是"在参谋部筛了
+ * 奇想，切回面板产兵列表也只剩奇想"。这两处要回答的问题本来就不一样。
+ *
+ * 取值都是**空＝不筛**：`PACK_ALL` 是所有包，era 0 是所有代。
+ * 两个条件是 AND——同时选「奇想」和「4 代」就是"奇想包里 4 代的那几个"。
  */
-let commanderQuery = '';
-/** 参谋部的分类筛选，空串＝全部 */
-let commanderClass = '';
+let commanderPack = PACK_ALL;
+/** 时代筛选：0＝全部，其余是兵种表里的 `era`（第几代） */
+let commanderEra = 0;
 
 /** 批量执行时每步的停顿。比"慢档"快得多：一次要跑 5 个回合，180ms 会拖成一分钟 */
 const BATCH_DELAY = 40;
@@ -2426,39 +2453,40 @@ function commanderActive(): boolean {
 }
 
 /**
- * 参谋部下拉里的分类。
+ * 参谋部的筛选只有两个维度：**哪个包（DLC）** 和 **哪一代**。
  *
- * 分类是**按数值推出来的**，不是给每个兵种手写一个标签：兵种表有两百多条，
- * 手写一列标签等于每加一个兵就要回来补一次，而"射程几格、跑多快、在哪一层"
- * 本来就是它的定义。同一条推论会被界面和将来的筛选/统计共用。
+ * 这两个维度的取值都不是手写的清单，而是从"这一局真能造的那份名单"里推出来的：
+ *   · 包——`packOf(def)`（`expansions.ts` 里登记的兵种出处；原版 49 个记作 `core`）。
+ *     和侧栏产兵面板、上帝模式货架共用同一个函数，三处不会是三种说法。
+ *   · 代——`def.era`（1..6，标签取自 `ERAS` 配置里那套「古典 / 中世 / …」）。
+ *     名单本来就只放"本代 + 上一代"（和侧栏同一个口径），所以通常只有两颗时代 chip。
  *
- * 一个兵可以同时属于几类（一辆快速远程车既是「远程」也是「机动」）：
- * 每加一类，玩法上的找法就多一条路。
+ * 一个维度都不选＝不筛（原样列出全部）；只选一个、或者两个都选都行，
+ * 两个条件之间是 AND。
  */
-type CmdClass = 'melee' | 'ranged' | 'fast' | 'air' | 'water' | 'eco' | 'hero';
 
-const CMD_CLASS_ORDER: readonly CmdClass[] = ['melee', 'ranged', 'fast', 'air', 'water', 'eco', 'hero'];
+/** 这一项过不过筛 */
+function cmdPass(it: CmdItem): boolean {
+  if (!packOk(it.def, commanderPack)) return false;
+  if (commanderEra !== 0 && it.def.era !== commanderEra) return false;
+  return true;
+}
 
-const CMD_CLASS_LABEL: Record<CmdClass, string> = {
-  melee: '近战',
-  ranged: '远程',
-  fast: '机动',
-  air: '飞行',
-  water: '水上',
-  eco: '经济工程',
-  hero: '英雄',
-};
-
-function classesOf(def: UnitTypeDef): CmdClass[] {
-  const out: CmdClass[] = [];
-  if (def.hero) out.push('hero');
-  if (def.category === 'economy' || def.category === 'builder') out.push('eco');
-  if (def.domain === 'water') out.push('water');
-  if (def.layer === 'air' || def.flight) out.push('air');
-  // 近战/远程只对作战单位分：经济单位和工匠没有"射程"这回事
-  if (def.category === 'combat') out.push(def.range >= 2 ? 'ranged' : 'melee');
-  if (def.move >= 4) out.push('fast');
-  return out;
+/**
+ * 时代筛选 chip。
+ *
+ * 只列**这份名单里真有的代**：一个按下去筛掉零个选项的按钮，比没有它更让人困惑。
+ * 只剩一代时整块不显示（筛无可筛），和 `packRow` 遇到"只有一个包"时的处理一致。
+ */
+function eraChipRow(items: CmdItem[]): string {
+  const levels = [...new Set(items.map((it) => it.def.era))].sort((a, b) => a - b);
+  if (levels.length < 2) return '';
+  const one = (level: number, text: string, active: boolean) =>
+    `<button class="chip ${active ? 'active' : ''}" data-cmd-era="${level}">${text}</button>`;
+  return `<div class="chip-row">
+    ${one(0, '全部时代', commanderEra === 0)}
+    ${levels.map((l) => one(l, `${l} 代 · ${eraDef(l).name}`, commanderEra === l)).join('')}
+  </div>`;
 }
 
 /** 参谋部里一个能排的兵种 */
@@ -2470,7 +2498,6 @@ interface CmdItem {
   unlockFee: number;
   /** 场上已经有 / 蛋还等着孵：排了也造不出来，说清楚为什么 */
   blocked: string | null;
-  classes: CmdClass[];
 }
 
 /**
@@ -2497,7 +2524,6 @@ function commanderPool(): CmdItem[] {
         gold: quote.gold,
         unlockFee: quote.unlockFee,
         blocked: heroBlocked(state, me(), def) ? '已在场' : null,
-        classes: classesOf(def),
       } satisfies CmdItem;
     });
 }
@@ -2662,7 +2688,7 @@ function renderCommander(): void {
   const items = commanderPool();
   const era = items.length > 0 ? Math.max(...items.map((it) => it.def.era)) : 1;
   const online = room !== null;
-  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}|${commanderQuery}|${commanderClass}`;
+  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}|${commanderPack}|${commanderEra}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -2671,19 +2697,24 @@ function renderCommander(): void {
 
   const queue = ordersOf(state, me());
   const sites = orderSitesOf(state, me());
-  const shown = items.filter(cmdMatch);
+  const shown = items.filter(cmdPass);
 
   const opts = (sel: string) => {
-    // 这一格已经排好的兵种如果被检索/分类筛掉了，**只为这一格**补回来：
+    // 这一格已经排好的兵种如果被筛选筛掉了，**只为这一格**补回来：
     // 补进公用列表会让别的格子也看见它，"筛过了"就名不副实；
     // 不补的话浏览器会因为找不到当前值而跳回第一项，等于替玩家把计划改了。
     const list =
       sel && !shown.some((it) => it.def.id === sel)
         ? [...shown, ...items.filter((it) => it.def.id === sel)]
         : shown;
+    // 筛选组合一个都没命中时给一句明确的空态：下拉照旧列「不指定」「升级时代」，
+    // 但要说清"不是列表坏了，是这个组合下真的没有兵"
+    const empty =
+      list.length === 0 ? '<option value="" disabled>（这个筛选组合下没有兵种）</option>' : '';
     return [
       '<option value="">— 不指定 —</option>',
       `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
+      empty,
     ]
       .concat(
         list.map((it) => {
@@ -2727,15 +2758,11 @@ function renderCommander(): void {
     </label>`;
   }).join('');
 
-  // 分类 chip 只列"这一局真有的那几类"：没有船的地图不该留一颗永远点不出东西的按钮
-  const avail = CMD_CLASS_ORDER.filter((c) => items.some((it) => it.classes.includes(c)));
-  const classChips = [
-    `<button class="chip ${commanderClass === '' ? 'active' : ''}" data-cmd-class="">全部</button>`,
-    ...avail.map(
-      (c) =>
-        `<button class="chip ${commanderClass === c ? 'active' : ''}" data-cmd-class="${c}">${CMD_CLASS_LABEL[c]}</button>`,
-    ),
-  ].join('');
+  // 两个筛选维度：包（复用侧栏/god 货架那颗 chip 行的口径与外观）+ 代。
+  // 包那行在"这一局只有一个包"时自己返回空串，不会留一颗点了没反应的按钮。
+  const packRowHtml = packRow(items.map((it) => it.def), commanderPack, 'cmd-pack');
+  const eraRowHtml = eraChipRow(items);
+  const filtered = commanderPack !== PACK_ALL || commanderEra !== 0;
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
@@ -2749,16 +2776,11 @@ function renderCommander(): void {
     </div>
     <div class="cmd-slots${commanderExpanded ? ' open' : ''}">
       <div class="cmd-filter">
-        <input
-          class="cmd-search"
-          type="search"
-          data-act="cmd-search"
-          value="${escAttr(commanderQuery)}"
-          placeholder="搜兵种：名字、单字图标，或者「远程」「英雄」"
-          autocomplete="off"
-        />
-        <div class="chip-row">${classChips}</div>
-        <span class="cmd-count">${shown.length} / ${items.length} 个兵种${commanderQuery || commanderClass ? '（已筛选）' : ''}</span>
+        ${packRowHtml}
+        ${eraRowHtml}
+        <span class="cmd-count">${shown.length} / ${items.length} 个兵种${
+          filtered ? '（已筛选）' : ''
+        }${shown.length === 0 ? ' — 换个包或时代看看' : ''}</span>
       </div>
       ${slots}
     </div>
@@ -2772,18 +2794,6 @@ function renderCommander(): void {
   refreshEstimates();
 }
 
-/** 检索词/分类是不是命中这一项 */
-function cmdMatch(it: CmdItem): boolean {
-  if (commanderClass !== '' && !it.classes.includes(commanderClass as CmdClass)) return false;
-  const q = commanderQuery.trim().toLowerCase();
-  if (!q) return true;
-  const d = it.def;
-  if (d.name.toLowerCase().includes(q)) return true;
-  if (d.id.toLowerCase().includes(q)) return true;
-  if (d.short === q || d.short.toLowerCase() === q) return true;
-  // 分类名也参与匹配：敲「远程」两个字，比去点那颗 chip 更顺手
-  return it.classes.some((c) => CMD_CLASS_LABEL[c].includes(q));
-}
 
 /** 这个产兵点能不能造这一格点的兵（返回给下拉选项后面那半句提示） */
 function unitEraProblem(unitId: string, site: { era: number; city: boolean }): string {
@@ -2793,9 +2803,6 @@ function unitEraProblem(unitId: string, site: { era: number; city: boolean }): s
   if (!def) return '';
   return def.era > site.era ? ` · 只到 ${site.era} 代` : '';
 }
-
-/** 塞进 HTML 属性的文本：搜索框内容来自玩家，必须转义 */
-const escAttr = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /**
  * 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等）。
@@ -2844,15 +2851,28 @@ commanderEl.addEventListener('change', (e) => {
 
 commanderEl.addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
-  const cls = el.closest<HTMLElement>('[data-cmd-class]');
-  if (cls) {
-    // 再点一次当前那一类＝回到全部，和别处的 chip 一个手感
-    const next = cls.dataset.cmdClass ?? '';
-    commanderClass = commanderClass === next ? '' : next;
+
+  // 包（DLC）：再点一次当前那个包＝回到全部，和别处的 chip 一个手感。
+  // 属性名来自共用的 packRow（data-act + data-pack），所以这里认 data-pack 而不是自造一个。
+  const packChip = el.closest<HTMLElement>('[data-act="cmd-pack"]');
+  if (packChip) {
+    const next = packChip.dataset.pack ?? PACK_ALL;
+    commanderPack = commanderPack === next ? PACK_ALL : next;
     commanderSig = '';
     renderCommander();
     return;
   }
+
+  // 时代：同一套手感（再点一次＝全部时代）
+  const eraChip = el.closest<HTMLElement>('[data-cmd-era]');
+  if (eraChip) {
+    const next = Number(eraChip.dataset.cmdEra ?? '0');
+    commanderEra = commanderEra === next ? 0 : next;
+    commanderSig = '';
+    renderCommander();
+    return;
+  }
+
   const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
   if (cmd === 'run') void runCommanderBatch();
@@ -2866,51 +2886,6 @@ commanderEl.addEventListener('click', (e) => {
     renderCommander();
     fitBoard();
   }
-});
-
-/**
- * 参谋部的检索框。
- *
- * 和侧栏那个产兵搜索框是同一套讲究：重绘会换掉整个 input，
- * 所以敲完要把焦点和光标还回去；**输入法组字期间一律不重绘**——
- * 中文输入时那段"chuan"的缓冲挂在 DOM 节点上，把节点换掉会让它重投一遍，
- * 最后变成 "chuanchuan船"。
- */
-const isCommanderSearch = (el: EventTarget | null): el is HTMLInputElement =>
-  el instanceof HTMLInputElement && el.dataset.act === 'cmd-search';
-
-let commanderComposing = false;
-
-function repaintCommander(): void {
-  commanderSig = '';
-  renderCommander();
-  const again = commanderEl.querySelector<HTMLInputElement>('[data-act="cmd-search"]');
-  if (!again) return;
-  again.focus({ preventScroll: true });
-  const end = again.value.length;
-  try {
-    again.setSelectionRange(end, end);
-  } catch {
-    // type=search 在某些内核上不支持选区，光标在末尾也无所谓
-  }
-}
-
-commanderEl.addEventListener('compositionstart', (e) => {
-  if (isCommanderSearch(e.target)) commanderComposing = true;
-});
-
-commanderEl.addEventListener('compositionend', (e) => {
-  if (!isCommanderSearch(e.target)) return;
-  commanderComposing = false;
-  commanderQuery = e.target.value;
-  repaintCommander();
-});
-
-commanderEl.addEventListener('input', (e) => {
-  if (!isCommanderSearch(e.target)) return;
-  commanderQuery = e.target.value;
-  if (commanderComposing || (e as InputEvent).isComposing === true) return;
-  repaintCommander();
 });
 
 /** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
@@ -3499,6 +3474,11 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   dirty = false;
   closeHandoff();
   clearSelection();
+  // 换房间＝换一间屋子说话：上一局的消息一条都不该跟过来
+  chatLines = [];
+  chatLastId = 0;
+  chatNotice = '';
+  chatUnread = 0;
   saveMatch(state);
   render();
   startRoomPolling();
@@ -3527,7 +3507,7 @@ function detachRoom(): void {
 }
 
 /** 提交这一回合。expectedTurn 是提交前本机的回合数，用来发现"两边同时提交" */
-async function pushTurn(seat: RoomSeat, expectedTurn: number): Promise<void> {
+async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): Promise<void> {
   try {
     const ok = await submitTurn(seat.code, state, expectedTurn);
     if (!ok) {
@@ -3535,7 +3515,7 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number): Promise<void> {
       return;
     }
     dirty = false;
-    toast('这一回合已提交，等对方行动');
+    toast(okText ?? '这一回合已提交，等对方行动');
     render();
   } catch (err) {
     toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
@@ -3554,8 +3534,15 @@ function startRoomPolling(): void {
  *   1. 云端说轮到我了（否则拉回来也没用）；
  *   2. 我这边没有未提交的草稿（否则会把人刚摆好的兵清掉）。
  *
+ * 但有一个例外，而且是压倒性的：**云端说这局已经结束了**。
+ * 认输既不推进回合、也不换行动方（`doSurrender` 只是把 winner 写上），
+ * 所以只按上面两条判断的话，对手点完认输，这一边永远等不到"轮到我了"，
+ * 棋盘就一直停在原状——输了的人那边已经看见结算卡，赢的人还在等下家。
+ * 分出胜负之后"未提交的草稿"也没有意义了（这局已经结了），所以这一条
+ * 不看 dirty、也不看轮次，直接把终局装进来。
+ *
  * 观战位没有"轮到我"这回事，所以只要有新东西就往下拉：
- * 回合变了、换人了、或者分出胜负了（认输不会推进回合，只看 turn 会漏）。
+ * 回合变了、换人了、或者分出胜负了（同样是因为认输不推进回合）。
  */
 async function pollRoom(): Promise<void> {
   const seat = room;
@@ -3569,30 +3556,45 @@ async function pollRoom(): Promise<void> {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
 
+    // 要不要把云端的这一局装进来，交给 room.ts 里那个纯函数判断（它有专门的用例）。
+    // 这里只负责"装进来之后干什么"——两份分支的分工就是这么切的。
+    const decision = adoptDecision(
+      {
+        turn: snapshot.turn,
+        current: snapshot.current,
+        winner: snapshot.state.winner ?? null,
+      },
+      { turn: state.turn, current: state.current, winner: state.winner ?? null },
+      { seat: seat.seat, spectator: seat.spectator === true, draft: dirty },
+    );
+    if (!decision.take) {
+      if (decision.why === 'draft') {
+        toast('对方已提交，但你这边还有没提交的走法——先结束回合，或者重新进房间');
+      }
+      return;
+    }
+
+    const fog = state.fog;
+    state = snapshot.state;
+    state.aiControl = { A: false, B: false };
+    state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    if (decision.why === 'finished') {
+      dirty = false;
+      clearSelection();
+      saveMatch(state);
+      render();
+      toast(
+        snapshot.state.winner === seat.seat
+          ? '对面已经结束这一局，你赢了'
+          : '这一局已经结束，对面赢了',
+      );
+      return;
+    }
     if (seat.spectator) {
-      const changed =
-        snapshot.turn !== state.turn ||
-        snapshot.current !== state.current ||
-        !!snapshot.state.winner !== !!state.winner;
-      if (!changed) return;
-      const fog = state.fog;
-      state = snapshot.state;
-      state.fog = fog;
       saveMatch(state);
       render();
       return;
     }
-
-    if (snapshot.current !== seat.seat) return;
-    if (snapshot.turn === state.turn) return;
-    if (dirty) {
-      toast('对方已提交，但你这边还有没提交的走法——先结束回合，或者重新进房间');
-      return;
-    }
-    const fog = state.fog;
-    state = snapshot.state;
-    state.aiControl = { A: false, B: false };
-    state.fog = fog; // 同上：迷雾是本地偏好，别被对面关掉
     clearSelection();
     saveMatch(state);
     render();
@@ -3643,6 +3645,197 @@ async function enterRoomFromUrl(code: string): Promise<void> {
 /** 以观战身份进入一个房间：不占座、不写云端，只看 */
 function watchRoom(code: string, snapshot: RoomSnapshot): void {
   applyRoom({ code, seat: 'A', token: newToken(), spectator: true }, snapshot);
+}
+
+// ---------- 房间聊天 ----------
+
+/**
+ * 聊天只开在房间里。
+ *
+ * 本机对局没有"别人"可说话：双人热座是把设备递过去，AI 局是对着电脑；
+ * 在这两种局里放一个永远没回应的输入框，比没有更让人困惑。
+ * 观战位**有**（这正是它存在的意义之一）：看局的人也能说话，两边都看得见。
+ */
+let chatOpen = false;
+let chatLines: ChatLine[] = [];
+let chatLastId = 0;
+let chatTimer = 0;
+let chatDock: HTMLElement | null = null;
+let chatNotice = '';
+/** 收起面板时来了新消息，就在按钮上点一下——不然说完话没人知道 */
+let chatUnread = 0;
+
+const chatSeat = (): ChatSeat => (watching() ? 'watch' : (room?.seat ?? 'A'));
+
+/** 我在这条聊天里的名字：玩家用他那一方的名字，观战就叫"观众" */
+function chatMyName(): string {
+  if (watching()) return '观众';
+  return state.players[me()].name;
+}
+
+/**
+ * 聊天面板（一次建好，之后只更新里面的日志）。
+ *
+ * 为什么不像交接遮罩那样每次重建：里面有一个正在输入的 `<input>`。
+ * 重建＝把节点换掉＝焦点丢失、光标回到开头，一边打字一边被"新消息"打断。
+ * 所以壳子只建一次，`paintChat` 只改 `.chat-log` 那一块。
+ */
+function ensureChatDock(): HTMLElement {
+  if (chatDock) return chatDock;
+  const el = document.createElement('div');
+  el.className = 'chat-dock';
+  el.innerHTML = `
+    <button class="chat-fab" data-chat="toggle" hidden>聊天</button>
+    <section class="chat-panel" hidden aria-label="房间聊天">
+      <header class="chat-head">
+        <b>房间聊天</b>
+        <span class="chat-who"></span>
+        <button class="chat-x" data-chat="close" aria-label="收起">×</button>
+      </header>
+      <div class="chat-log"></div>
+      <form class="chat-send">
+        <input class="chat-input" type="text" maxlength="${CHAT_MAX_LEN}"
+               placeholder="说点什么…（Enter 发送）" autocomplete="off" />
+        <button class="btn btn-sm" type="submit">发送</button>
+      </form>
+      <div class="chat-note"></div>
+    </section>`;
+  document.body.append(el);
+
+  el.addEventListener('click', (e) => {
+    const act = (e.target as HTMLElement).closest<HTMLElement>('[data-chat]')?.dataset.chat;
+    if (act === 'toggle') openChat();
+    if (act === 'close') closeChat();
+  });
+  el.querySelector('form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    void sendChatNow();
+  });
+
+  chatDock = el;
+  return el;
+}
+
+/** 显示 / 隐藏聊天入口。跟着 `room` 走——没房间就没有聊天这回事 */
+function renderChatDock(): void {
+  const el = ensureChatDock();
+  const fab = el.querySelector<HTMLElement>('.chat-fab')!;
+  const panel = el.querySelector<HTMLElement>('.chat-panel')!;
+  if (!room) {
+    // 退出房间：把面板收掉，记录清空——换到另一局时不该看见上一局的对话
+    if (chatOpen) closeChat();
+    chatLines = [];
+    chatLastId = 0;
+    chatNotice = '';
+    chatUnread = 0;
+  }
+  fab.hidden = !room;
+  panel.hidden = !(room && chatOpen);
+  fab.textContent = chatUnread > 0 ? `聊天 · ${chatUnread}` : '聊天';
+  fab.classList.toggle('has-new', chatUnread > 0);
+}
+
+/** 只重画日志那一块（壳子里的输入框不动） */
+function paintChat(): void {
+  const el = ensureChatDock();
+  const log = el.querySelector<HTMLElement>('.chat-log')!;
+  log.innerHTML = chatLinesHtml(chatLines, chatSeat());
+  // 贴在底部：新消息进来时不往上翻就等于没看见
+  log.scrollTop = log.scrollHeight;
+  const who = el.querySelector<HTMLElement>('.chat-who');
+  if (who) {
+    who.textContent = room
+      ? `${chatMyName()} · 房间 ${room.code}${watching() ? '（观战）' : ''}`
+      : '';
+  }
+  const note = el.querySelector<HTMLElement>('.chat-note');
+  if (note) note.textContent = chatNotice;
+}
+
+function openChat(): void {
+  if (!room) return;
+  chatOpen = true;
+  chatUnread = 0;
+  renderChatDock();
+  paintChat();
+  chatDock?.querySelector<HTMLInputElement>('.chat-input')?.focus({ preventScroll: true });
+  void pollChat();
+  window.clearInterval(chatTimer);
+  // 4 秒一轮：回合制对局里聊天不是弹幕，比这个更快只是白耗电；
+  // 比 15 秒的房间轮询快，是因为"说话"这件事本来就该有回声。
+  chatTimer = window.setInterval(() => void pollChat(), 4000);
+}
+
+function closeChat(): void {
+  chatOpen = false;
+  window.clearInterval(chatTimer);
+  chatTimer = 0;
+  renderChatDock();
+}
+
+/** 收下一条消息（去重：轮询和"发送成功返回的那一行"可能撞上同一条） */
+function pushChatLine(line: ChatLine): void {
+  if (chatLines.some((l) => l.id === line.id)) return;
+  chatLines.push(line);
+  if (line.id > chatLastId) chatLastId = line.id;
+  if (chatLines.length > 200) chatLines.splice(0, chatLines.length - 200);
+  if (!chatOpen) chatUnread += 1;
+}
+
+async function pollChat(): Promise<void> {
+  const seat = room;
+  if (!seat || !chatOpen) return;
+  if (document.visibilityState !== 'visible') return;
+  const res = await fetchChat(seat.code, chatLastId);
+  if (room?.code !== seat.code) return; // 期间退出了房间
+  if (!res.ok) {
+    const msg = res.reason ?? '';
+    if (msg !== chatNotice) {
+      chatNotice = msg;
+      paintChat();
+    }
+    return;
+  }
+  if (res.lines.length === 0) {
+    if (chatNotice) {
+      chatNotice = '';
+      paintChat();
+    }
+    return;
+  }
+  for (const l of res.lines) pushChatLine(l);
+  paintChat();
+}
+
+async function sendChatNow(): Promise<void> {
+  const seat = room;
+  if (!seat) return;
+  const input = chatDock?.querySelector<HTMLInputElement>('.chat-input');
+  const raw = input?.value ?? '';
+  const body = trimChatBody(raw);
+  if (!body) {
+    input?.focus();
+    return;
+  }
+  if (input) input.value = '';
+  const res = await sendChat(seat.code, chatSeat(), chatMyName(), body);
+  if (!res.ok) {
+    // 发失败就把字还回去：重打一遍是最气人的一种失败
+    if (input && !input.value) input.value = body;
+    chatNotice = res.howTo ? `${res.reason}（${res.howTo}）` : (res.reason ?? '没发出去');
+    paintChat();
+    return;
+  }
+  chatNotice = '';
+  if (res.line) {
+    pushChatLine(res.line);
+    chatUnread = 0;
+    paintChat();
+  } else {
+    // 云端没回那一行：立刻增量取一次，别让人对着空白等
+    await pollChat();
+    paintChat();
+  }
 }
 
 // ---------- 交接遮罩 ----------
