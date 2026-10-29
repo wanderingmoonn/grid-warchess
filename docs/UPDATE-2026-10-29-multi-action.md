@@ -117,6 +117,6 @@ if (attacker.attacksLeft <= 0) attacker.acted = true;
 
 ## 六、验证
 
-`npm test`：规则 **355** 项、AI 场景 25 项、评估方法 7 项、界面冒烟 **129** 项，全过。
+`npm test`：规则 **355** 项、AI 场景 26 项、评估方法 7 项、界面冒烟 **129** 项，全过。
 `npx tsc --noEmit` 与 `npx vite build` 通过，规则书与代码同步（CI 的
 「规则书与代码同步」一步不会红）。

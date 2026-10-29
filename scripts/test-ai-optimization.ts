@@ -103,6 +103,35 @@ test('Threat to the last city has higher rescue value than a distant enemy',()=>
   assert.ok(cityThreatUrgency(s,near,'A')>1);
   assert.equal(cityThreatUrgency(s,far,'A'),0);
 });
+test('Multi-action units spend every attack of the turn',()=>{
+  // 多动之后"还能打"不再等于"这回合已经动过"：canAttack 看的是剩余次数。
+  // AI 的行动循环是"再要一步、直到没有"，所以它应该把次数一次不剩地打出去——
+  // 要是它打完一发就换下一个单位，多动兵在 AI 手里会白白少掉三分之二的输出。
+  const s=arena(); s.players.A.gold=0;
+  const mg=unit(s,'A','mg',6,6);
+  const burst=s.unitTypes[mg.type]!.burst ?? 1;
+  assert.ok(burst>=2,'这条用例需要一个多动兵（mg）');
+  const target=unit(s,'B','militia',8,6,{maxHp:900,armor:0,atk:1,range:1});
+  refreshMemory(s);
+  const budget={...DEFAULT_BUDGET,maxRecruit:0,maxUpgrade:0};
+
+  let attacks=0;
+  const deltas: number[]=[];
+  let prevHp=target.hp;
+  for(let step=0;step<12;step++){
+    const a=aiNextAction(s,budget); if(!a)break;
+    const r=applyAction(s,a); assert.ok(r.ok,r.ok?'':r.reason);
+    Object.assign(s,r.state);
+    const cur=s.units.find(u=>u.id===target.id)!.hp;
+    if(a.type==='ATTACK'&&a.unitId===mg.id){ attacks++; deltas.push(prevHp-cur); }
+    prevHp=cur;
+    if(s.units.find(u=>u.id===mg.id)!.acted)break;
+  }
+  assert.equal(attacks,burst,`多动 ${burst} 次，AI 应该全部用掉，实际 ${attacks} 次`);
+  assert.equal(new Set(deltas).size,1,`每一发都该是一整击，实际伤害：${deltas.join('、')}`);
+  assert.equal(s.units.find(u=>u.id===mg.id)!.acted,true,'次数打完才算行动结束');
+});
+
 test('Same state gives same legal action without mutation',()=>{
   const s=arena(); s.players.A.gold=500;
   unit(s,'A','militia',5,6); unit(s,'B','archer',7,6);
