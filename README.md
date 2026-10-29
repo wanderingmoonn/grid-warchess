@@ -263,8 +263,12 @@ npm run pack-report    # 汇总成 results/packs/report.md
 每批改动会留一份 `docs/UPDATE-<日期>.md`：以前什么样、现在什么样、为什么这么改。
 同一天有多批时，后一批带主题后缀。
 
-最近十一份：
+最近十二份：
 
+- [2026-10-29 · 首屏从四十多个请求降到三个](docs/UPDATE-2026-10-29-faster-load.md)：线上不再跑
+  `vite dev`，改成发构建产物——gzip 后一个 JS（148KB）+ 一个 CSS + 一个 HTML，
+  自己写了个只用 node 内置模块的静态服务器（`scripts/serve-static.mjs`），带
+  `immutable` 缓存和 304 复访；顺手给白屏加了转圈占位。
 - [2026-10-29 · 连击改成多动](docs/UPDATE-2026-10-29-multi-action.md)：`burst` 从"一次攻击
   拆成 N 段"改成"一回合能打 N 次"，每次都是完整一击、可以换目标、次数用完才算行动结束；
   反击次数同样按 N 算，围攻终于比单挑划算。
