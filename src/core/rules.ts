@@ -1853,7 +1853,9 @@ function splashVictims(
     if (distance(v, defender) > radius) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
-    const dmg = Math.floor(computeDamage(s, attacker, v) * CONFIG.splashRatio);
+    // 读取单位自定义的溅射比例，如果没有设置则默认 0.5
+    const ratio = (attacker.custom?.splashRatio as number) ?? CONFIG.splashRatio;
+    const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
     out.push({ unit: v, dmg });
   }
