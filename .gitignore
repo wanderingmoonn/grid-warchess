@@ -40,3 +40,6 @@ results-fantasy/
 # 行为快照的对照文件（npm run snapshot 的输出，能用脚本重跑）
 before.json
 after.json
+
+# 线上发布的静态产物：由 npm run build:static 生成，线上只发这几个文件
+_publish/

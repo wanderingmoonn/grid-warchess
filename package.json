@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:static": "vite build --outDir _publish --emptyOutDir",
     "preview": "vite preview",
     "test": "npm run test:rules && npm run test:ai-optimization && npm run test:ui",
     "test:ai-optimization": "node --experimental-strip-types scripts/test-ai-optimization.ts && node --experimental-strip-types scripts/test-ai-evaluation.ts",
