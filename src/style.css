@@ -2905,16 +2905,29 @@ a.btn {
  * 放在右下角、和棋盘不抢位置：这是一条"随时能说话"的侧路，
  * 不是主界面的一部分。手机上面板改成整屏高一截，原因和参谋部一样——
  * 窄屏没有"右下角"这块地方。
+ *
+ * 位置要和另外两个贴角的东西错开（2026-10-29）：
+ *   · `.zoom-bar` 钉在 right:14 / bottom:14（宽屏时让到 right:372），
+ *     聊天按钮原来正好压在它上面——它是 z-index:60，聊天按钮点都点不到；
+ *   · 宽屏右侧是 340px 的信息面板，贴窗口角会压住「铃声 / 认输」那一排。
+ * 所以：底边抬到缩放条上方，宽屏再整体让开一栏，跟缩放条站在棋盘这一列里。
  */
 .chat-dock {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: calc(52px + env(safe-area-inset-bottom, 0px));
   z-index: 40;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
+}
+
+/* 和缩放条同一条竖线：仍然不随地图滚动，但不遮任何可点的东西 */
+@media (min-width: 921px) {
+  .chat-dock {
+    right: 372px;
+  }
 }
 
 .chat-fab {
@@ -2936,7 +2949,8 @@ a.btn {
 
 .chat-panel {
   width: 280px;
-  max-height: 46vh;
+  /* 底下已经抬了 52px，矮屏上还要再收一收，不然面板顶会顶出视口 */
+  max-height: min(46vh, calc(100vh - 140px));
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -3064,7 +3078,8 @@ a.btn {
 @media (max-width: 720px) {
   .chat-dock {
     right: 8px;
-    bottom: 8px;
+    /* 同样让开底下那条缩放条，否则按钮被它盖住、点不动 */
+    bottom: calc(52px + env(safe-area-inset-bottom, 0px));
     left: 8px;
     align-items: stretch;
   }
@@ -3076,5 +3091,11 @@ a.btn {
   .chat-panel {
     width: auto;
     max-height: 52vh;
+  }
+
+  /* iOS 上输入框字号小于 16px，聚焦时整页会被放大一次，
+     放大之后聊天框就跑出屏幕——这一条是防这个的，别当成随手写的 */
+  .chat-input {
+    font-size: 16px;
   }
 }

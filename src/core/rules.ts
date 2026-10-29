@@ -1954,6 +1954,33 @@ export function previewAttack(
 }
 
 /**
+ * 这个单位现在的溅射半径。
+ *
+ * 兵种表给基数，扩展的 `modifySplash` 在它上面改（修真按境界撑大）。
+ * 结算、预览、侧栏、兵种卡都走这一个函数——四处各算一遍的话，
+ * 界面上写着"1 格"而实际波及 2 格，玩家只会觉得规则在骗人。
+ */
+export function splashRadiusOf(s: GameState, u: Unit): number {
+  let radius = utype(s, u.type).splash ?? 0;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifySplash) radius = e.hooks.modifySplash({ state: s, attacker: u, splash: radius });
+  }
+  return Math.max(0, radius);
+}
+
+/**
+ * 这个单位的溅射比例。
+ *
+ * 单位自己带了 `custom.splashRatio` 就按它算，没带用全局默认（50%）。
+ * 允许正数以外的值没有意义：0 和负数等于"没有溅射"，交给半径去表达，
+ * 所以这里只在 0 < r 时才采信，免得一个手滑写成 0 的单位静默变成"没伤害"。
+ */
+export function splashRatioOf(u: Unit): number {
+  const own = u.custom?.splashRatio;
+  return typeof own === 'number' && own > 0 ? own : CONFIG.splashRatio;
+}
+
+/**
  * 溅射范围内的敌人：主目标周围的敌人各吃一份打折的伤害。
  *
  * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
@@ -1970,9 +1997,10 @@ function splashVictims(
   attacker: Unit,
   defender: Unit,
 ): Array<{ unit: Unit; dmg: number }> {
-  const radius = utype(s, attacker.type).splash ?? 0;
+  const radius = splashRadiusOf(s, attacker);
   if (radius <= 0) return [];
 
+  const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
   const seen = new Set<string>([defender.id]);
   for (const v of s.units) {
@@ -1982,7 +2010,7 @@ function splashVictims(
     if (distBetweenUnits(s, defender, v) > radius) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
-    const dmg = Math.floor(computeDamage(s, attacker, v) * CONFIG.splashRatio);
+    const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
     seen.add(v.id);
     out.push({ unit: v, dmg });

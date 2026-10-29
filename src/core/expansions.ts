@@ -246,6 +246,13 @@ export interface AttacksCtx {
   attacks: number;
 }
 
+export interface SplashCtx {
+  state: GameState;
+  attacker: Unit;
+  /** 兵种表里的初始溅射半径 */
+  splash: number;
+}
+
 export interface ExpansionHooks {
   /** 纯函数：修正伤害 */
   modifyDamage?: (c: DamageCtx) => number;
@@ -327,6 +334,9 @@ export interface ExpansionHooks {
    * 虽然造成伤害和敌我双方都有关，但是也可能有些修正自己基础攻击效果，不显示会造成误判
    */
   modifyStatAtk?: (c: { state: GameState; unit: Unit; atk: number }) => number;
+
+  /** 纯函数：修正溅射半径；返回 0 表示没有溅射 */
+  modifySplash?: (c: SplashCtx) => number;
 
   /**
    * 纯函数：扩展给兵种面板提供自定义的信息行。

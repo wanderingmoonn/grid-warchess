@@ -104,6 +104,8 @@ npm run dev          # 开局界面就能看到并勾选「丰收祭」了
 | `modifyDamage` | `{ state, attacker, defender, damage, isCounter }` | 修正野战伤害。`damage` 已算好"攻击 − 护甲 − 地形"。`isCounter` 区分主动攻击和反击 |
 | `modifySiegeDamage` | `{ state, attacker, city, damage }` | 修正攻城伤害。**和 modifyDamage 分开**：攻城只吃城甲，没有地形、破甲、反击，公式完全不同 |
 | `modifyArmor` | `{ state, attacker, defender, armor, isCounter }` | 修正**护甲本身**（在破甲之前生效，会被 armor-pierce 削半）。想表达"多了 2 点甲"用它；想表达"这下少挨 2 点"用 `modifyDamage` |
+| `modifySplash` | `{ state, attacker, splash }` | 修正溅射**半径**（返回 0 = 这个单位眼下没有溅射）。修真按境界撑大用它；结算、伤害预览、侧栏读的都是同一个 `splashRadiusOf()` |
+| `modifyAttacks` | `{ state, unit, attacks }` | 修正一回合的**攻击次数**（多动）。它同时决定被打时的反击次数，`attacksPerTurn()` 是唯一口径 |
 | `modifyMove` | `{ state, unit, move }` | 修正移动力 |
 | `modifyCost` | `{ state, player, unitType, cost }` | 修正兵种造价。`unitType` 是完整兵种定义，可以按 category/era 筛 |
 | `modifyIncome` | `{ state, player, income }` | 修正回合收入 |
@@ -229,6 +231,7 @@ onTurnStart: ({ state, player }) => {
 |---|---|
 | `splash` | 溅射半径：主目标周围的敌人也吃一份伤害（炮的玩法） |
 | `burst` | 多动：一回合能发起 N 次**独立**攻击（每次都是完整一击，可换目标）。反击次数也等于它 |
+| `custom.splashRatio` | 不是兵种字段，是**单位**上的数：这个单位的溅射按它自己的比例结算（缺省用 `CONFIG.splashRatio`）。`splashRatioOf()` 读它 |
 | `income` / `incomeByTerrain` | 经济单位收入：固定值，或按所在地形给（牧民在丘陵富、农民在平原富） |
 | `autoAttack` | 每回合自动对射程内最近的敌人开火（建筑用） |
 | `builds` | 这个单位能建造哪些建筑（建筑 id 列表） |

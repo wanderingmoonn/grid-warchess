@@ -461,6 +461,40 @@ check('多动兵的面板写"还剩几次"，不是"几段"', () => {
   assert.ok(text.includes(`还剩 ${burst - 1} / ${burst} 次`), '出手之后剩余次数要跟着减');
 });
 
+check('溅射兵的面板写的是"现在这一发"的半径和比例', () => {
+  // 半径会被扩展改（修士按境界），比例会被单位自己的 custom.splashRatio 改。
+  // 侧栏要是照兵种表写死，玩家看到的就是一句谎话。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: [] }, 918);
+  st.current = 'A';
+  const splash = UNIT_TYPES.mortar?.splash ?? 0;
+  assert.ok(splash > 0, '这条用例需要一个溅射兵（mortar）');
+  const mine = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.category === 'combat');
+  assert.ok(mine, '开局该有战斗单位');
+  mine!.type = 'mortar';
+
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: mine!,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  let text = host.textContent ?? '';
+  assert.ok(text.includes(`主目标 ${splash} 格内`), '溅射行要写出半径');
+  assert.ok(text.includes('50%'), '没设比例时按全局默认 50% 显示');
+
+  // 单位自带比例：面板要跟着变
+  mine!.custom = { ...(mine!.custom ?? {}), splashRatio: 0.3 };
+  paint();
+  text = host.textContent ?? '';
+  assert.ok(text.includes('30%'), '单位自带 30% 时，面板不能还写 50%');
+});
+
 check('没有浓雾的对局里，对面的金币照旧显示', () => {
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 910);

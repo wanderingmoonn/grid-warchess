@@ -25,6 +25,8 @@ import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Clim
 import {
   attacksLeftOf,
   attacksPerTurn,
+  splashRadiusOf,
+  splashRatioOf,
   buildingAt,
   citiesOf,
   cityById,
@@ -489,7 +491,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const buildables = (def.builds ?? [])
       .map((id) => s.unitTypes[id])
       .filter((x): x is UnitTypeDef => !!x);
-    const notes = describeUnit(s, def);
+    const notes = describeUnit(s, def, undefined, selectedUnit);
     const noteBlock =
       notes.length === 0
         ? ''
@@ -689,8 +691,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       }
       ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
       ${
-        def.splash
-          ? `<div class="info-row"><span>溅射</span><b>主目标 ${def.splash} 格内（不含斜角）· ${Math.round(CONFIG.splashRatio * 100)}%</b></div>`
+        // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
+        // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
+        splashRadiusOf(s, selectedUnit) > 0
+          ? `<div class="info-row"><span>溅射</span><b>主目标 ${splashRadiusOf(
+              s,
+              selectedUnit,
+            )} 格内（不含斜角）· ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
           : ''
       }
       ${

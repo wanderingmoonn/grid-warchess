@@ -116,7 +116,7 @@ function isDoomed(u: Unit): boolean {
 }
 
 // ── 属性修正 ───────────────────────
-// 返回的是增量，
+// 返回的是增量
 
 /** 攻击力修正：境界 +2/级，衰老 −2/岁 */
 function atkModifier(u: Unit): number {
@@ -171,6 +171,12 @@ export const CULTIVATION_PACK: Expansion = {
     modifyAttacks: ({ unit, attacks }) => {
       if (unit.type !== 'qi-cultivator') return attacks;
       return Math.max(1, Math.floor((getRank(unit) + 1) / 2));
+    },
+    // ── 溅射半径：floor(x/4) ────────────────────────
+    // x=0~3 -> 0，x=4~7 -> 1，x=8~9 -> 2
+    modifySplash: ({ attacker, splash }) => {
+      if (attacker.type !== 'qi-cultivator') return splash;
+      return Math.floor(getRank(attacker) / 4);
     },
     // ── 回合开始：寿元判定 + 打坐 ──────────────────
     onTurnStart: ({ state, player }) => {

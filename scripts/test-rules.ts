@@ -106,6 +106,8 @@ import {
   applyAction,
   attacksLeftOf,
   attacksPerTurn,
+  splashRadiusOf,
+  splashRatioOf,
   buildingAt,
   citiesOf,
   cityById,
@@ -9575,6 +9577,98 @@ test('修士：满级（9 级）永远不会老死', () => {
   assert.ok(r2.state.units.some(u => u.id === qi.id), '满级修士不应该老死');
   // 也不应该有油尽灯枯的减益
   assert.equal(getAgingYears(r2.state.units.find(u => u.id === qi.id)!), 0, '满级修士不减益');
+});
+
+test('修士：溅射半径随境界成长（x/4）', () => {
+  // 用一个工厂函数清理地图并摆好阵列，避免重复代码
+  const setup = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    // 清空一块平地
+    for (let y = 3; y <= 7; y++) {
+      for (let x = 4; x <= 10; x++) {
+        s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+      }
+    }
+    s.unitTypes['target'] = { ...s.unitTypes.militia, id: 'target', armor: 0, maxHp: 1000, abilities: [] };
+    
+    // 靶子阵列：主目标 (5,5)，副目标1 (6,5) 距离 1，副目标2 (7,5) 距离 2
+    const main = place2(s, 'B', 'target', 5, 5); main.hp = 1000;
+    const near = place2(s, 'B', 'target', 6, 5); near.hp = 1000;
+    const far  = place2(s, 'B', 'target', 7, 5); far.hp = 1000;
+    
+    // 修士在 (5,4)，距离主目标 1 格
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 4);
+    qi.custom = { lifespan: 100 };
+    
+    return { s, qi, main, near, far };
+  };
+
+  // 1. x=3（exp=8），半径 0：无溅射
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 8;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(r.state.units.find(u => u.id === near.id)!.hp, 1000, 'x=3 没有溅射');
+  }
+
+  // 2. x=4（exp=16），半径 1：波及 near，不波及 far
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 16;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=4 应该波及距离 1 的敌人');
+    assert.equal(r.state.units.find(u => u.id === far.id)!.hp, 1000, 'x=4 够不到距离 2 的敌人');
+  }
+
+  // 3. x=8（exp=256），半径 2：near 和 far 全波及
+  {
+    const { s, qi, main, near, far } = setup();
+    qi.custom.exp = 256;
+    const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=8 波及距离 1');
+    assert.ok(r.state.units.find(u => u.id === far.id)!.hp < 1000, 'x=8 波及距离 2');
+  }
+});
+
+test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
+  // 2026-10-29 起溅射比例不再写死在 CONFIG 里：单位 `custom.splashRatio`
+  // 存在就用它自己的。半径同理，交给扩展的 modifySplash（修士按境界）。
+  const build = (ratio?: number) => {
+    const s = fresh();
+    s.current = 'A';
+    s.units = [];
+    const mortar = place(s, 'A', 'mortar', 5, 5);
+    if (ratio !== undefined) mortar.custom = { ...(mortar.custom ?? {}), splashRatio: ratio };
+    const main = place(s, 'B', 'militia', 7, 5);
+    const side = place(s, 'B', 'militia', 8, 5);
+    const wide = place(s, 'B', 'militia', 10, 5);
+    return { s, mortar, main, side, wide };
+  };
+
+  // 1. 没设比例：用全局默认；半径取兵种表
+  const base = build();
+  assert.equal(splashRatioOf(base.mortar), CONFIG.splashRatio, '没设比例时应该走全局默认');
+  assert.equal(splashRadiusOf(base.s, base.mortar), UNIT_TYPES.mortar!.splash, '半径取兵种表里的基数');
+  // 写 0 不算"按 0 结算"，而是"没设"——否则一个手滑就让这门炮变成没有溅射伤害
+  const zero = build(0);
+  assert.equal(splashRatioOf(zero.mortar), CONFIG.splashRatio, '比例写 0 应该退回默认值');
+
+  // 2. 设了比例：按它自己的算，且真的落到伤害上
+  const quarter = build(0.25);
+  assert.equal(splashRatioOf(quarter.mortar), 0.25);
+  const full = computeDamage(quarter.s, quarter.mortar, quarter.main);
+  const expected = Math.floor(computeDamage(quarter.s, quarter.mortar, quarter.side) * 0.25);
+  assert.ok(expected > 0, '这个配置下 25% 也该有伤害');
+  const r = applyAction(quarter.s, { type: 'ATTACK', unitId: quarter.mortar.id, targetId: quarter.main.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  if (!r.ok) return;
+  const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
+  const maxHp = UNIT_TYPES.militia?.maxHp ?? 0;
+  assert.equal(hp(quarter.main.id), maxHp - full, '主目标照旧吃满');
+  assert.equal(hp(quarter.side.id), maxHp - expected, '旁边那格按 25% 结算，而不是默认的 50%');
 });
 
 test('多动：自动开火的建筑也把这一回合的次数打满', () => {

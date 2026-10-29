@@ -9,11 +9,11 @@
 import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
-import { heightOfTerrain } from './rules.ts';
+import { heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
 import { resourceShort } from './resources.ts';
 import { climateEffect, type Climate } from './climate.ts';
 import { ELEMENT_NAME } from './types.ts';
-import type { Element, GameState, PlayerId, Terrain, UnitTypeDef } from './types.ts';
+import type { Element, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 
 export interface TerrainInfo {
   name: string;
@@ -116,7 +116,12 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
  * 一个单位的特殊之处，翻成人话。
  * 返回空数组表示它就是个普通单位。
  */
-export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): string[] {
+export function describeUnit(
+  s: GameState,
+  def: UnitTypeDef,
+  owner?: PlayerId,
+  unit?: Unit,
+): string[] {
   const lines: string[] = [];
 
   // 哀兵必胜：这条加成写在伤害结算里，面板上不写就等于没有——
@@ -202,9 +207,18 @@ export function describeUnit(s: GameState, def: UnitTypeDef, owner?: PlayerId): 
   }
   if (def.summonedOnly) lines.push('只能被召唤出来，不能从产线生产。');
   if (def.decays) lines.push(`每回合自损 ${def.decays} 点生命，撑不了几回合。`);
-  if (def.splash) {
+  // 传了具体单位就按它现在的数值说（境界、custom.splashRatio 都会改这两项），
+  // 只给兵种定义时退化成兵种表里的基数。修士的溅射完全由扩展给，
+  // 兵种表里没有 splash，所以判断条件要看"算出来的半径"，不能只看 def.splash。
+  const baseSplash = def.splash ?? 0;
+  const radius = unit ? splashRadiusOf(s, unit) : baseSplash;
+  if (baseSplash > 0 || radius > 0) {
     lines.push(
-      `溅射：主目标 ${def.splash} 格内的敌人各吃 ${Math.round(CONFIG.splashRatio * 100)}% 伤害（不打自己人）`,
+      radius > 0
+        ? `溅射：主目标 ${radius} 格内的敌人各吃 ${Math.round(
+            (unit ? splashRatioOf(unit) : CONFIG.splashRatio) * 100,
+          )}% 伤害（不打自己人）`
+        : '溅射：这个单位眼下没有溅射范围（扩展按境界/状态给的半径是 0）',
     );
   }
   if (def.burst) {
