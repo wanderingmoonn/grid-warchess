@@ -764,7 +764,8 @@ function render(): void {
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
-  const remeasure = boardDirty || !canWatchResize;
+  // 第三个条件是那道对账单：档位换了但 DOM 没跟上，必须补量一次。
+  const remeasure = boardDirty || lastFitZoom !== boardZoom || !canWatchResize;
   if (remeasure) fitBoard();
   // 顶栏内容没动、尺寸也没动，"还能不能往两边滚"就不会变——那道判断要读
   // scrollWidth，是笔强制布局，不值得每帧付一遍。滚动本身另有 scroll 监听。
@@ -784,6 +785,15 @@ function render(): void {
  */
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
+/**
+ * 上一次 `fitBoard()` 用的是哪一档。
+ *
+ * 这是"我想要的档位"和"屏幕上真的写进去的档位"之间的对账单。
+ * 两者对不上就说明 DOM 落后了——不管 `boardDirty` 是谁忘了打上，
+ * 下一帧都会重新量一次。玩家报的"放大之后缩不回去、而且一直缩不回去"，
+ * 本质上就是这两个值悄悄分家了，却没人负责把它们捏回去。
+ */
+let lastFitZoom = 0;
 /** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
 let baseBoardSize = 0;
 
@@ -861,6 +871,7 @@ function fitBoard(): void {
 
   // 这一量是有效的，下一帧不必再来一遍（除非谁把 boardDirty 重新打上）
   boardDirty = false;
+  lastFitZoom = boardZoom;
 }
 
 /**
@@ -898,16 +909,24 @@ function watchBoardResize(): void {
  *
  * 放大之后把视口挪回中间：32×32 上放大的目的通常是"看中间那片战场"，
  * 停在左上角等于放大了一个空的角落。
+ *
+ * **不能用"数字没变就直接 return"**。`boardZoom` 只是"我想要的档位"，
+ * 屏幕上真实的大小由 `fitBoard()` 写进 `style` 和 `zoomed` 类——这两者会脱钩
+ * （换局、导入存档、窗口从隐藏变可见都会改 DOM 而不改这个变量）。
+ * 一旦脱钩，早退就变成了"数字是 1、画面是 3×，点缩小永远没反应"，
+ * 也就是玩家报的那个"放大之后缩不回去、开新局也缩不回去"。所以每次调用都
+ * 重绘一次、重新量一次，让 DOM 跟着这个数字走。
  */
 function setZoom(next: number): void {
   const steps = ZOOM_STEPS;
   const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
-  if (clamped === boardZoom) return;
+  const same = clamped === boardZoom;
   boardZoom = clamped;
   // 缩放直接改的是"棋盘该多大"，尺寸缓存必须作废
   boardDirty = true;
   // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
   render();
+  if (same) return;
   if (boardZoom > 1) {
     boardScrollEl.scrollLeft = Math.max(0, (boardScrollEl.scrollWidth - boardScrollEl.clientWidth) / 2);
     boardScrollEl.scrollTop = Math.max(0, (boardScrollEl.scrollHeight - boardScrollEl.clientHeight) / 2);
@@ -917,10 +936,49 @@ function setZoom(next: number): void {
   }
 }
 
+/**
+ * 当前档位在第几档。
+ *
+ * 用"最近的一档"而不是 `indexOf`：`indexOf` 找不到会给 -1，
+ * 再拿 -1 去 `+dir`，一次点击就变成"原地不动"，看起来就是按键失灵。
+ */
+function zoomIndex(): number {
+  let best = 0;
+  let bestGap = Infinity;
+  for (let i = 0; i < ZOOM_STEPS.length; i++) {
+    const gap = Math.abs(ZOOM_STEPS[i]! - boardZoom);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function zoomStep(dir: 1 | -1): void {
-  const i = ZOOM_STEPS.indexOf(boardZoom);
-  const at = i < 0 ? 0 : i;
-  setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, at + dir))]!);
+  const at = zoomIndex() + dir;
+  setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, at))]!);
+}
+
+/**
+ * 缩放退回"适应屏幕"。
+ *
+ * 换局、导入存档、进房间都必须走这里，而不是写一句 `boardZoom = 1`：
+ * 只改数字不把 `boardDirty` 打上，`render()` 里那句
+ * `const remeasure = boardDirty || !canWatchResize;` 就不成立，`fitBoard()` 根本不跑，
+ * 棋盘尺寸、滚动窗口、右下角那个档位标签全部停在上一局的放大状态。
+ * 于是变量是 1、画面是 3×，点"缩小"被 `setZoom` 的早退挡掉——怎么点都没反应，
+ * 而且再开一局还是这样（新局同样只改了数字）。
+ */
+function resetZoom(): void {
+  boardZoom = 1;
+  // 尺寸缓存必须作废，否则下一帧不会重新量
+  boardDirty = true;
+  // 视口也回去：换局之后还停在上一局拖到的位置，会看着像"棋盘缺了一块"
+  boardScrollEl.scrollLeft = 0;
+  boardScrollEl.scrollTop = 0;
+  boardScrollEl.classList.remove('dragging', 'zoomed');
+  boardEl.classList.remove('zoomed');
 }
 
 /**
@@ -2115,7 +2173,7 @@ function handleAction(act: string, el: HTMLElement): void {
 
       state = imported;
       detachRoom(); // 换了一局，房间就对不上了
-      boardZoom = 1; // 换局可能换尺寸，缩放档位不能跟着上一局走
+      resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
       clearSelection();
       // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
       // 否则会把上一局的摘要记到这一局头上
@@ -2133,7 +2191,7 @@ function handleAction(act: string, el: HTMLElement): void {
         if (!result) return;
         state = createMatch(result.config, result.seed, loadCustomUnits());
         detachRoom();
-        boardZoom = 1;
+        resetZoom();
         clearSelection();
         resetRecorder();
         // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
@@ -3473,6 +3531,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   aiPaused = false;
   dirty = false;
   closeHandoff();
+  // 换了一局就是换了一张图：上一局放大到 3× 拖着看的位置，到这一局毫无意义
+  resetZoom();
   clearSelection();
   // 换房间＝换一间屋子说话：上一局的消息一条都不该跟过来
   chatLines = [];
@@ -3490,6 +3550,7 @@ function leaveRoom(): void {
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   resetRecorder();
+  resetZoom();
   clearSelection();
   render();
   toast(wasWatching ? '已退出观战，回到本机对局' : '已退出房间，回到本机对局');
@@ -3664,6 +3725,15 @@ let chatDock: HTMLElement | null = null;
 let chatNotice = '';
 /** 收起面板时来了新消息，就在按钮上点一下——不然说完话没人知道 */
 let chatUnread = 0;
+/**
+ * 聊天面板被拖到哪了（相对出厂位置的像素偏移）。
+ *
+ * 出厂位置是"钉在视口右下"，这个偏移只在它上面加一层 transform：
+ * 换成 left/top 的话，每换一次窗口大小、每换一档缩放，都得重新算一遍基准。
+ */
+let chatShift = { x: 0, y: 0 };
+/** 至少留这么多像素在视口里，拖到边上也还能抓回来 */
+const CHAT_EDGE = 8;
 
 const chatSeat = (): ChatSeat => (watching() ? 'watch' : (room?.seat ?? 'A'));
 
@@ -3687,7 +3757,7 @@ function ensureChatDock(): HTMLElement {
   el.innerHTML = `
     <button class="chat-fab" data-chat="toggle" hidden>聊天</button>
     <section class="chat-panel" hidden aria-label="房间聊天">
-      <header class="chat-head">
+      <header class="chat-head" title="按住这里可以拖动面板">
         <b>房间聊天</b>
         <span class="chat-who"></span>
         <button class="chat-x" data-chat="close" aria-label="收起">×</button>
@@ -3711,9 +3781,118 @@ function ensureChatDock(): HTMLElement {
     e.preventDefault();
     void sendChatNow();
   });
+  bindChatDrag(el);
 
   chatDock = el;
   return el;
+}
+
+/**
+ * 让聊天面板能被拖着走。
+ *
+ * 为什么抓手是标题栏而不是整块面板：面板里有滚动的聊天记录和输入框，
+ * 整块可拖会把"选中一句话 / 拖滚动条 / 点输入框"统统变成"挪窗口"。
+ * 标题栏上没有别的功能（除了那个 ×，它被排除掉了），是唯一不妨碍任何操作的抓手。
+ *
+ * 位移只写 `transform`，不碰 right/bottom：出厂位置按视口右下钉着，
+ * 改定位属性就得跟着视口尺寸重算，而 transform 是个与基准无关的偏移。
+ * 拖动范围夹在视口里，最少留 CHAT_EDGE 个像素——不然一拖就再也抓不回来了。
+ */
+function bindChatDrag(el: HTMLElement): void {
+  const panel = el.querySelector<HTMLElement>('.chat-panel');
+  const head = el.querySelector<HTMLElement>('.chat-head');
+  if (!panel || !head) return;
+
+  /**
+   * 拖动开始时的现场：指针位置、面板当时的位置、以及当时的偏移量。
+   *
+   * `l/t` 是**含当前偏移**的位置。用"没偏移的基准"去加位移是错的：
+   * 面板已经被拖过一次之后再拖，它会被拉回基准位置重新起步，看着像"跳了一下"。
+   */
+  let drag: {
+    id: number;
+    x: number;
+    y: number;
+    l: number;
+    t: number;
+    w: number;
+    h: number;
+    sx: number;
+    sy: number;
+  } | null = null;
+
+  const paint = (): void => {
+    panel.style.transform =
+      chatShift.x || chatShift.y ? `translate(${chatShift.x}px, ${chatShift.y}px)` : '';
+  };
+
+  head.addEventListener('pointerdown', (e) => {
+    // 点在 × 上是要关面板，不是要拖
+    if ((e.target as HTMLElement).closest('button')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const box = panel.getBoundingClientRect();
+    if (box.width <= 0) return; // 还没显示出来，量不到基准
+    drag = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      l: box.left,
+      t: box.top,
+      w: box.width,
+      h: box.height,
+      sx: chatShift.x,
+      sy: chatShift.y,
+    };
+    head.setPointerCapture?.(e.pointerId);
+    panel.classList.add('dragging');
+    // 不拦这一下，标题文字会被顺手选中，拖起来像在划词
+    e.preventDefault();
+  });
+
+  head.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const maxL = Math.max(CHAT_EDGE, window.innerWidth - drag.w - CHAT_EDGE);
+    const maxT = Math.max(CHAT_EDGE, window.innerHeight - drag.h - CHAT_EDGE);
+    const l = Math.min(maxL, Math.max(CHAT_EDGE, drag.l + (e.clientX - drag.x)));
+    const t = Math.min(maxT, Math.max(CHAT_EDGE, drag.t + (e.clientY - drag.y)));
+    chatShift = {
+      x: Math.round(drag.sx + (l - drag.l)),
+      y: Math.round(drag.sy + (t - drag.t)),
+    };
+    paint();
+  });
+
+  const end = (e: PointerEvent): void => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag = null;
+    panel.classList.remove('dragging');
+    head.releasePointerCapture?.(e.pointerId);
+  };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+}
+
+/**
+ * 把拖过的位置夹回视口。
+ *
+ * 只在"打开面板"时做一次：窗口可能在上次关掉之后被改小了，
+ * 或者手机横竖屏换过，不夹一下面板就有一半在屏幕外，而且抓不回来。
+ */
+function clampChatShift(): void {
+  const panel = chatDock?.querySelector<HTMLElement>('.chat-panel');
+  if (!panel || panel.hidden) return;
+  if (!chatShift.x && !chatShift.y) return;
+  const box = panel.getBoundingClientRect();
+  if (box.width <= 0) return;
+  const maxL = Math.max(CHAT_EDGE, window.innerWidth - box.width - CHAT_EDGE);
+  const maxT = Math.max(CHAT_EDGE, window.innerHeight - box.height - CHAT_EDGE);
+  const l = Math.min(maxL, Math.max(CHAT_EDGE, box.left));
+  const t = Math.min(maxT, Math.max(CHAT_EDGE, box.top));
+  const nx = Math.round(chatShift.x + (l - box.left));
+  const ny = Math.round(chatShift.y + (t - box.top));
+  if (nx === chatShift.x && ny === chatShift.y) return;
+  chatShift = { x: nx, y: ny };
+  panel.style.transform = `translate(${nx}px, ${ny}px)`;
 }
 
 /** 显示 / 隐藏聊天入口。跟着 `room` 走——没房间就没有聊天这回事 */
@@ -3758,6 +3937,8 @@ function openChat(): void {
   chatUnread = 0;
   renderChatDock();
   paintChat();
+  // 上次拖到的位置可能已经不在视口里（换过窗口、转过屏幕），先夹回来
+  clampChatShift();
   chatDock?.querySelector<HTMLInputElement>('.chat-input')?.focus({ preventScroll: true });
   void pollChat();
   window.clearInterval(chatTimer);
@@ -3916,10 +4097,13 @@ appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;
   if (!target) return;
 
-  // 上一次操作是"拖地图"：这一下 click 是拖动的尾巴，不是点格子
+  // 上一次操作是"拖地图"：这一下 click 是拖动的尾巴，不是点格子。
+  // **只吞落在棋盘上的那一下**：缩放条和顶栏按钮不在 .board 里面，
+  // 拖着地图松手时正好压在"缩小"上，要是连它一起吞掉，按键看着就是失灵的
+  // ——"放大了点缩小没反应"有一部分就是这么来的。
   if (suppressClick) {
     suppressClick = false;
-    return;
+    if (target.closest('.board')) return;
   }
 
   const actionEl = target.closest<HTMLElement>('[data-act]');
@@ -4047,7 +4231,7 @@ watchBoardResize();
  */
 function fatalBanner(err: unknown, title = '启动出错'): void {
   const msg = err instanceof Error ? err.message : String(err);
-  console.error('[方格战棋]', title, err);
+  console.error('[时代与回旋镖]', title, err);
   if (document.getElementById('fatal-banner')) return;
 
   const box = document.createElement('div');
@@ -4105,7 +4289,7 @@ function repairLoadedState(): number {
   });
 
   if (dropped.length > 0) {
-    console.warn('[方格战棋] 存档里有本版不认识的单位，已移除', dropped);
+    console.warn('[时代与回旋镖] 存档里有本版不认识的单位，已移除', dropped);
   }
   return dropped.length;
 }
@@ -4116,7 +4300,7 @@ function repairLoadedState(): number {
  * 宁可丢掉一局，也不能让人卡在进不去的白屏上——前者是可惜，后者是断绝。
  */
 function recoverFromBadSave(err: unknown): void {
-  console.error('[方格战棋] 存档读不动了，改开新局', err);
+  console.error('[时代与回旋镖] 存档读不动了，改开新局', err);
   try {
     const raw = localStorage.getItem('warchess:match:v1');
     if (raw) localStorage.setItem('warchess:match:v1.broken', raw);

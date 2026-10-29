@@ -824,9 +824,11 @@ body {
   width: calc(100% / var(--cols, 12));
   height: calc(100% / var(--rows, 12));
   padding: calc(var(--cell) * 0.075);
-  transition:
-    left 0.16s ease,
-    top 0.16s ease;
+  /* 这里**不能**再给 left/top 加 transition。
+     位移是 board.ts 用 FLIP 补出来的：先把 left/top 写到新格子，
+     再用一段 translate 把它"拉回"旧位置滑过去。两条曲线各走各的，
+     合起来就是"先窜出去再缩回来"，也就是棋子的那种抽搐。
+     一个位移只能有一个动画源，这里让给 FLIP。 */
   pointer-events: auto;
   cursor: pointer;
 }
@@ -2958,6 +2960,15 @@ a.btn {
   border-radius: 12px;
   box-shadow: 0 16px 40px rgba(60, 50, 30, 0.18);
   overflow: hidden;
+  /* 拖动只改这一条 transform（见 main.ts 的 bindChatDrag）：
+     不给 will-change 的话，某些浏览器每帧都要重排一次阴影，拖起来发涩 */
+  will-change: transform;
+}
+
+/* `hidden` 是 UA 的 `display:none`，会被上面那条 `display:flex` 盖掉——
+   不补这一行，面板压根收不起来，一进房间就永远摊在棋盘上 */
+.chat-panel[hidden] {
+  display: none;
 }
 
 .chat-head {
@@ -2968,6 +2979,15 @@ a.btn {
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
   font-size: 13px;
+  /* 抓手：整块面板只有这一条可以拖 */
+  cursor: grab;
+  user-select: none;
+  /* 触摸设备上不写这条，按住往下拉会变成滚页面，面板跟不上手指 */
+  touch-action: none;
+}
+
+.chat-panel.dragging .chat-head {
+  cursor: grabbing;
 }
 
 .chat-head .chat-who {

@@ -329,8 +329,20 @@ function nearestBetween(a: Pos[], b: Pos[]): number {
  *
  * 第 3 步是"平均间距不变"的保证：形状随便变，距离的分布不动。
  *
+ * **纵深必须两侧同构**（2026-10-29 修的真 bug）：
+ * 以前两边的纵深窗口不是镜像的——近侧永远是 `[底线, 前线]`（只有 1~2 格，
+ * 城只能贴着自己的边），远侧是 `[前线, 对面底线]`（把整张图的余量都吃下来）。
+ * 于是上半区的城离自己的上边平均 1.5 格、下半区的城离自己的下边平均 3.3 格，
+ * 32×32 上差到 3.3 格：同一张图上一边被逼在墙角、另一边坐拥纵深。
+ * 现在两侧共用同一个"能退几格"的 `pad`（由目标间距反推），四座城的纵深**完全相同**。
+ *
+ * 注意这里对称的只是**纵深**（到各自底线的那一段）。横向（沿河方向）两半区各抽各的，
+ * 不做镜像：真要做镜像就是 `symmetry: 'mirror'` 那条路（B 是 A 的 180° 点对称，
+ * 见 mirrorBlock），公平图要留着自己"两边城墙不在同一段"的样子。
+ *
  * 必须保留的不变量（全部是硬的，写测试盯着）：
  *   · 任意两座城的曼哈顿距离 ≥ minCitySep；
+ *   · 上/下半区到各自底线的平均距离相等（见 test-rules「城市到各自底线」）；
  *   · 对峙布局下，A 的两个城和 B 的两个城必须分处河的两侧
  *     （无渡口河靠这条才能真的把两军隔开，见 freeBand / midOf）；
  *   · 镜像模式下，B 必须是 A 的严格点镜像（地形对称全靠它）。
@@ -364,33 +376,43 @@ function planCities(
   const crossLo = 1;
   const crossHi = cross - span - 1;
 
+  /**
+   * 每一侧能从**自己的底线**往里退几格，也就是"两军各压到多前"。
+   *
+   * 由目标间距反推，两侧平分余量：
+   *   `(alongHi - pad) - (alongLo + pad) = target`  ⇒  `pad = (alongHi - alongLo - target)/2`
+   *
+   * 以前只有近侧拿到 `alongLo..front0`（1~2 格）、远侧拿到 `front1..alongHi`
+   * （把整张图的余量一个人吃了）：于是上半区的城被逼在墙角、下半区的城坐拥纵深，
+   * 32×32 上"到各自底线"的平均距离差到 3.3 格。现在两侧都只有 pad 格。
+   *
+   * 已经反推成"刚好 target"，所以纵深不再抽签——**再抽只会让两军离得更远**。
+   * 地图的多样性留给横向：那一整条边随便挑。
+   * 小图上 target 可能吃满纵深，pad 退化成 0：两侧各只剩一行，城退回
+   * "同一行、横向拉开"的老样子，这是约束下的唯一解。
+   */
+  const pad = Math.max(0, Math.floor((alongHi - alongLo - target) / 2));
+
   /** 这个位置离已占的每一座城都够远吗 */
   const farEnough = (p: Pos, taken: Pos[]): boolean =>
     taken.every((q) => citySep(p, q) >= minSep);
 
   /**
-   * 在某一侧、某个纵深区间里挑一个满足间距的位置。
+   * 在某一侧的前沿上挑一个横向位置。
    *
-   * 优先贴着前线（深度偏移越小越好），同一深度里横向随机——
-   * 这样"往前压/往回缩"的手感和以前一样，只是不再允许贴脸。
-   * 找不到就返回 null，让上层换一次重撒。
-   *
-   * 纵深区间是"这一侧到前线之间"，不是前线 ±1：间距是硬约束，
-   * 为了让出间距而往回缩一格，比两座城贴在一起好得多。
+   * `side` 0 = 靠近 `alongLo` 的那一侧（横河时是上），1 = 另一侧。
+   * 两侧的纵深都是 `pad`（互为镜像），横向才是随机的——横向本来就不需要对称，
+   * 两边的城墙落在哪一段本来就不该一样。
    */
-  const make = (front: number, lo: number, hi: number, taken: Pos[]): Pos | null => {
-    const cands: Array<{ p: Pos; rank: number }> = [];
-    for (let a = lo; a <= hi; a++) {
-      for (let cr = crossLo; cr <= crossHi; cr++) {
-        const p = at2(a, cr);
-        if (!farEnough(p, taken)) continue;
-        // 深度偏移优先，横向在同等深度里随机（rng 决定，可复现）
-        cands.push({ p, rank: Math.abs(a - front) * 1000 + Math.floor(rng() * 999) });
-      }
+  const placeAt = (side: 0 | 1, taken: Pos[]): Pos | null => {
+    const a = side === 0 ? alongLo + pad : alongHi - pad;
+    const cands: Pos[] = [];
+    for (let cr = crossLo; cr <= crossHi; cr++) {
+      const p = at2(a, cr);
+      if (farEnough(p, taken)) cands.push(p);
     }
     if (cands.length === 0) return null;
-    cands.sort((u, v) => u.rank - v.rank);
-    return cands[0]!.p;
+    return cands[Math.floor(rng() * cands.length)]!;
   };
 
   const attempt = (): { A: Pos[]; B: Pos[] } | null => {
@@ -401,7 +423,7 @@ function planCities(
       const a: Pos[] = [];
       const taken: Pos[] = []; // A 的城 + 它们的镜像，全都算占位
       for (let k = 0; k < 2; k++) {
-        const p = make(front0, alongLo, front0, taken);
+        const p = placeAt(0, taken);
         if (!p) return null;
         a.push(p);
         taken.push(p, mirrorOf(p));
@@ -414,16 +436,17 @@ function planCities(
     const taken: Pos[] = [];
     const side0: Pos[] = [];
     const side1: Pos[] = [];
-    for (const [front, lo, hi, arr] of [
-      [front0, alongLo, front0, side0],
-      [front1, front1, alongHi, side1],
-    ] as const) {
-      for (let k = 0; k < 2; k++) {
-        const p = make(front, lo, hi, taken);
-        if (!p) return null;
-        taken.push(p);
-        arr.push(p);
-      }
+    for (let k = 0; k < 2; k++) {
+      const p0 = placeAt(0, taken);
+      if (!p0) return null;
+      taken.push(p0);
+      side0.push(p0);
+
+      // 另一半区：同一格纵深，横向独立抽
+      const p1 = placeAt(1, taken);
+      if (!p1) return null;
+      taken.push(p1);
+      side1.push(p1);
     }
     // 对峙：A 整条边、B 整条边；对角：两岸各有敌我各一
     if (layout === 'diagonal') {

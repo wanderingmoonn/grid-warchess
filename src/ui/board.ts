@@ -413,7 +413,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
   paintUnits(unitsEl, items);
 
-  // ---- FLIP 补间 ----
+  // ---- 补间（FLIP） ----
   //
   // 有路线就沿路线走（拐弯、绕过河），没路线就直线滑过去。
   // 拐弯这件事只在"走了两格以上"时才看得出来，一格的距离两种画法一样。
@@ -430,32 +430,74 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     if (!old) return;
     const nowX = Number(node.dataset.x);
     const nowY = Number(node.dataset.y);
-    const dx = (old.x - nowX) * cellW;
-    const dy = (old.y - nowY) * cellH;
+    let dx = (old.x - nowX) * cellW;
+    let dy = (old.y - nowY) * cellH;
+
+    // 上一次滑动还没落地，就把"欠"的那一截接上。
+    //
+    // AI 快起来之后两次重绘可能只隔 70ms，而一格要滑 150ms——直接开一段新的，
+    // 棋子会先按新基准跳过去再往回补，肉眼看到的就是抽搐。
+    // 起点 = 新格子的上一格（dx,dy） + 上一段没走完的余量，位移就接得上了。
+    // 缓动必须是线性的，否则"走了几成"没法反算，余量就是错的。
+    const t = nowMs();
+    const prev = slides.get(node);
+    if (prev) {
+      const k = Math.min(1, Math.max(0, (t - prev.at) / prev.dur));
+      dx += prev.dx * (1 - k);
+      dy += prev.dy * (1 - k);
+      prev.anim.cancel();
+      slides.delete(node);
+    }
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
 
-    const path = ui.movePath?.get(id);
-    if (path && path.length > 2) {
-      const frames = path
+    // 路线只有在"这一段就是从上一格直接走过来的"时才敢用：
+    // 极快档会攒几步才重绘一次，这时 route 只覆盖最后一步，
+    // 拿它去演两三格的位移，头一格会直接跳到终点附近——又是一次抽搐。
+    const route = prev ? undefined : ui.movePath?.get(id);
+    const onRoute =
+      route && route.length > 2 && route[0] && route[0].x === old.x && route[0].y === old.y;
+    const cells = Math.max(Math.abs(dx) / (cellW || 1), Math.abs(dy) / (cellH || 1));
+
+    let frames: Array<{ transform: string }>;
+    let dur: number;
+    if (onRoute) {
+      frames = route
         .slice(0, -1)
         .reverse()
-        .map((c) => ({
-          transform: `translate(${(c.x - nowX) * cellW}px, ${(c.y - nowY) * cellH}px)`,
-        }));
+        .map((c) => ({ transform: `translate(${(c.x - nowX) * cellW}px, ${(c.y - nowY) * cellH}px)` }));
       frames.push({ transform: 'translate(0, 0)' });
-      node.animate(frames, {
-        // 一格 70ms，封顶 560ms：32×32 上的长距离行军不会让人等到烦
-        duration: Math.min(560, 70 * (path.length - 1)),
-        easing: 'linear',
-      });
-      return;
+      // 一格 70ms：这个数还管着 AI 那边"等动画播完再走下一步"的停顿，两边必须一样
+      dur = Math.min(560, 70 * (route.length - 1));
+    } else {
+      frames = [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }];
+      // 一格 150ms，多走几格按距离加时；封顶 420ms，别让长行军把人看困
+      dur = Math.min(420, 150 * Math.max(1, Math.round(cells)));
     }
 
-    node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }], {
-      duration: 170,
-      easing: 'ease-out',
-    });
+    const anim = node.animate(frames, { duration: dur, easing: 'linear' });
+    // 落地就销账：下一次位移照常从零算，不会把残余当成本次起点
+    anim.onfinish = () => {
+      if (slides.get(node)?.anim === anim) slides.delete(node);
+    };
+    slides.set(node, { dx, dy, at: t, dur, anim });
   });
+}
+
+/**
+ * 正在飞的那一段：起点偏移、开始时刻、时长。
+ *
+ * 按**节点**记而不是按单位 id：换局、换棋盘尺寸都会换掉一批节点，
+ * 旧记录跟着节点一起被回收，不用谁记得来清。值为 WeakMap，也不占内存。
+ */
+const slides = new WeakMap<
+  HTMLElement,
+  { dx: number; dy: number; at: number; dur: number; anim: Animation }
+>();
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 }
 
 function tileRect(s: GameState, x: number, y: number, n = 1): string {

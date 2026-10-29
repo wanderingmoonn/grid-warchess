@@ -657,6 +657,61 @@ test('城市间距是随机的，不是永远贴着四个角', () => {
   assert.ok(xs.size >= 2, `横向位置也没变化：${[...xs].join('、')}`);
 });
 
+test('城市到各自底线的平均距离：上半区与下半区一样', () => {
+  // 2026-10-29 修的真 bug：两边的纵深窗口不是镜像的——近侧只有 1~2 格（城只能贴着
+  // 自己的边），远侧从"前线"一直到对面底线（把整张图的余量一个人吃了）。
+  // 结果上半区的城离上边平均 1.5 格、下半区的城离下边平均 3.3 格，32×32 上差 3.3 格：
+  // 同一张图上，一边被逼在墙角，另一边坐拥纵深。
+  //
+  // 现在两侧的"能退几格"由同一个 pad 反推（见 planCities），而且纵深不抽签，
+  // 所以**逐图**就该相等，不是"统计上差不多"。
+  for (const size of [12, 16, 20, 32]) {
+    for (const symmetry of ['fair', 'mirror'] as const) {
+      let sumLo = 0;
+      let nLo = 0;
+      let sumHi = 0;
+      let nHi = 0;
+      for (let i = 0; i < 40; i++) {
+        const m = generateLayout(size, 770000 + i * 131 + size, ['militia'], { symmetry });
+        // 城市纵深跟河走：横河量 y，纵河量 x（与 planCities 的 along 同一个约定）
+        const axis = m.style === 'river-v' ? 'v' : 'h';
+        const along = axis === 'h' ? m.h : m.w;
+        const span = 2;
+        let lo = 0;
+        let nlo = 0;
+        let hi = 0;
+        let nhi = 0;
+        for (const p of [...m.citiesA, ...m.citiesB]) {
+          const a = axis === 'h' ? p.y : p.x;
+          const toLo = a; // 到上/左底线之间的空格数
+          const toHi = along - a - span; // 到下/右底线之间的空格数
+          if (toLo <= toHi) {
+            lo += toLo;
+            nlo += 1;
+          } else {
+            hi += toHi;
+            nhi += 1;
+          }
+        }
+        assert.ok(nlo > 0 && nhi > 0, `${size}×${size} 应该有城落在两半区`);
+        assert.equal(
+          lo / nlo,
+          hi / nhi,
+          `${size}×${size} ${symmetry} 第 ${i} 张：上边均值 ${lo / nlo}、下边均值 ${hi / nhi}`,
+        );
+        sumLo += lo;
+        nLo += nlo;
+        sumHi += hi;
+        nHi += nhi;
+      }
+      assert.ok(
+        Math.abs(sumLo / nLo - sumHi / nHi) < 0.01,
+        `${size}×${size} ${symmetry}：整体也歪了`,
+      );
+    }
+  }
+});
+
 test('地图会出现不止一种地貌', () => {
   const styles = new Set<string>();
   for (let seed = 1; seed <= 40; seed++) styles.add(generateLayout(16, seed).style);
@@ -2304,7 +2359,9 @@ test('穿隙：精灵弓手无视地形掩护，但打不穿重甲', () => {
 
 test('击退：把目标推开一格，推不动时就只是普通一击', () => {
   const s = fresh({ expansionIds: FANTASY });
-  for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  // 城市挪到中间之后，开局部队也落在中间几行；这条用例要的是"身后那一格空着"，
+  // 所以先把这一小片清干净（人和地形都清），别让路过的侦察兵顶住退路。
+  clearArea(s, 4, 2, 6, 6);
   const wind = place2(s, 'A', 'air-elemental', 5, 5);
   const tgt = place2(s, 'B', 'swordsman', 5, 4);
   const r = applyAction(s, { type: 'ATTACK', unitId: wind.id, targetId: tgt.id });
@@ -2815,6 +2872,9 @@ test('穿行：幽灵能穿过敌军，但停不下来', () => {
 test('隐匿：刺客不动就看不见，一出手就现形', () => {
   const s = fresh({ expansionIds: FANTASY });
   s.fog = true;
+  // 城市挪到中间之后开局部队也挤在中间几行，8,8 隔壁可能站着对面的农民；
+  // 隐匿的判定里有"一格之内没有敌人"，所以先把这一片清空。
+  clearArea(s, 6, 6, 10, 12);
   s.tiles[idx(s, 8, 8)].terrain = 'plain';
   s.tiles[idx(s, 8, 11)].terrain = 'plain';
   const assassin = place2(s, 'B', 'assassin', 8, 8);
@@ -8871,19 +8931,22 @@ test('开了「地形高差」，本体那四种地貌也得跟着变样', () =>
 
   let sum = 0;
   let cases = 0;
+  let up = 0;
   for (const style of ['open', 'ridge', 'river-h', 'river-v'] as const) {
     for (const seed of [31, 77, 1234, 5]) {
       const off = createMatch({ ...BASE, size: 24, mapStyle: style }, seed);
       const on = createMatch({ ...BASE, size: 24, mapStyle: style, expansionIds: ['height-terrain'] }, seed);
       const gain = share(on) - share(off);
-      assert.ok(
-        gain > 0.01,
-        `${style}#${seed} 开了扩展，高地只多了 ${(gain * 100).toFixed(1)} 个点——跟没开差不多`,
-      );
+      // 十二张里允许一张"高地反而少了"：扩展里有一条"任何一张图都得走得通"的兜底，
+      // 它会把挡路的山削成丘陵（见 height-mapgen 的 shoalBridge）。河与山脊撞在一起时，
+      // 削掉的十格山能盖过补上的山脚台地，净增量就是负的——那是机制本身要的，
+      // 不是"扩展没生效"。真正的回归长什么样：十二张全都 ≈0，平均也上不去。
+      if (gain > 0.01) up += 1;
       sum += gain;
-      cases++;
+      cases += 1;
     }
   }
+  assert.ok(up >= cases - 1, `${cases} 张图里只有 ${up} 张的高地变多了——扩展基本没生效`);
   const avg = sum / cases;
   assert.ok(avg > 0.04, `平均只多出 ${(avg * 100).toFixed(1)} 个点的高地（应 > 4）`);
 });
@@ -9092,10 +9155,16 @@ test('上帝模式的画笔跟着扩展开关走', () => {
   assert.equal(denied.ok, false, '没开扩展也能刷台地？');
 
   const on = { ...fresh({ expansionIds: ['height-terrain'] }), units: [] };
-  const ok = paintTerrain(on, 5, 5, 'plateau');
+  // 开了「地形高差」之后图上本来就有台地，5,5 可能正好是一块——
+  // 那就成了"这一格已经是台地了"，测不到画笔。先找一格平原。
+  const at = on.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  assert.ok(at >= 0, '总得有一格平原');
+  const px = at % on.w;
+  const py = Math.floor(at / on.w);
+  const ok = paintTerrain(on, px, py, 'plateau');
   assert.ok(ok.ok, ok.ok ? '' : ok.reason);
   if (ok.ok) {
-    assert.equal(ok.state.tiles[idx(ok.state, 5, 5)].terrain, 'plateau');
+    assert.equal(ok.state.tiles[idx(ok.state, px, py)].terrain, 'plateau');
   }
 });
 
@@ -9265,6 +9334,9 @@ test('属性抗性按倍率作用，且数据必须落在 0~1', () => {
   };
 
   const attacker = mk('water-elemental', 'A', 3, 3);
+  // 站位必须是平原：扩展开满之后地图上本来就有台地（这就是「地形高差」干的事），
+  // 台地自带护甲，站上去会把"抗性打折"和"地形护甲"混成一个数，比出来是 11 不是 13。
+  for (const [x, y] of [[3, 3], [4, 3], [4, 4]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const withResist = mk('water-elemental', 'B', 4, 3);
   const withoutResist = mk('water-elemental-plain', 'B', 4, 4);
 

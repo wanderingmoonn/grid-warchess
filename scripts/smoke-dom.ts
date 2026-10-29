@@ -59,6 +59,27 @@ let seedPick = 0;
 const SEED_PICKS = [0.137, 0.421, 0.639, 0.911, 0.283, 0.774, 0.058, 0.365];
 (window.Math as Math).random = () => SEED_PICKS[seedPick++ % SEED_PICKS.length]!;
 
+/**
+ * jsdom 没有 ResizeObserver，而 main.ts 拿它决定"这一帧要不要重新量棋盘"：
+ * 没有它就走"每帧都量"的老路——那条路上，档位和 DOM 永远不会脱钩，
+ * 于是"放大之后缩不回去""换局也缩不回去"在测试里根本复现不出来，
+ * 用例不管怎么改都是绿的。这里补一个只记账、不自己触发的假观察者，
+ * 让代码走真实浏览器那条分支（改了尺寸得有人标脏，否则不重量）。
+ */
+class FakeResizeObserver {
+  private readonly cb: () => void;
+  constructor(cb: () => void) {
+    this.cb = cb;
+  }
+  observe(): void {
+    // 真浏览器 observe 之后会立刻回一次；这里不必，首帧本来就是脏的
+    void this.cb;
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+}
+(window as unknown as { ResizeObserver: unknown }).ResizeObserver = FakeResizeObserver;
+
 window.eval(code);
 
 const doc = window.document;
@@ -616,11 +637,22 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
     const badges = host.querySelectorAll('.tile-income');
     assert.equal(badges.length, reach.length, '每个可达格都该有一个产出数字');
     const text = badges[0]?.textContent ?? '';
-    assert.ok(/^\+\d+$/.test(text), `产出数字应该是 +N，实际是「${text}」`);
-    // 数字必须和真相源一致：随便挑一格对一下账
-    const firstIdx = reach[0]!;
-    const shown = Number((badges[0]?.textContent ?? '+0').slice(1));
-    assert.equal(shown, hints.get(firstIdx), '格子上印的数字必须和 unitIncomeAt 同源');
+    assert.ok(/^\+\d+$/, `${text} 应该是 +N`);
+
+    // 数字必须和真相源一致。**按格子对账，不按数组下标**：
+    // badge 的 DOM 顺序是"棋盘的格子顺序"（逐行），而 reach 是可达搜索的顺序
+    // （从脚下往外扩），两者本来就不是一回事——以前正好撞上了，地图一改就露馅。
+    const tiles = [...host.querySelectorAll<HTMLElement>('.tile')];
+    let matched = 0;
+    for (const badge of badges) {
+      const tile = badge.parentElement;
+      const idx = tile ? tiles.indexOf(tile) : -1;
+      assert.ok(idx >= 0, '产出数字应该挂在格子里');
+      const shown = Number((badge.textContent ?? '+0').slice(1));
+      assert.equal(shown, hints.get(idx), `第 ${idx} 格印的是 ${shown}，真相源是 ${hints.get(idx)}`);
+      matched += 1;
+    }
+    assert.ok(matched > 0, '总得对上一格');
   } finally {
     host.remove();
   }
@@ -1507,6 +1539,59 @@ check('本机对局没有聊天入口：聊天只开在房间里', () => {
   assert.ok(!doc.querySelector('.chat-panel'), '没有房间就不该有聊天面板');
 });
 
+check('聊天面板能按住标题栏拖动，拖不出视口，点 × 不算拖', () => {
+  // 面板平时是 hidden 的（不在房间里），jsdom 又没有布局，矩形一律是 0——
+  // 所以这里塞一个假矩形进去，验的是"位移怎么算、边界怎么夹"这套逻辑，
+  // 不是像素好不好看。
+  const panel = doc.querySelector<HTMLElement>('.chat-panel');
+  const head = panel?.querySelector<HTMLElement>('.chat-head');
+  assert.ok(panel && head, '聊天面板应该已经建好（只是隐藏）');
+  panel.hidden = false;
+  const box = { left: 600, top: 300, width: 280, height: 200, right: 880, bottom: 500, x: 600, y: 300 };
+  // 真浏览器里 transform 会把矩形一起挪走，这里照着做——不然第二次拖动
+  // 拿到的是"没挪过的位置"，测出来的位移会多出一截
+  panel.getBoundingClientRect = () => {
+    const m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(panel.style.transform);
+    const dx = m ? Number(m[1]) : 0;
+    const dy = m ? Number(m[2]) : 0;
+    return {
+      ...box,
+      left: box.left + dx,
+      top: box.top + dy,
+      right: box.right + dx,
+      bottom: box.bottom + dy,
+      x: box.x + dx,
+      y: box.y + dy,
+      toJSON: () => box,
+    } as DOMRect;
+  };
+
+  const at = (el: Element, type: string, x: number, y: number): void => {
+    el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y }));
+  };
+
+  // 按住标题栏往左上拖 40 / 30
+  at(head, 'pointerdown', 620, 320);
+  at(head, 'pointermove', 660, 290);
+  at(head, 'pointerup', 660, 290);
+  assert.equal(panel.style.transform, 'translate(40px, -30px)', '位移应该正好等于手指走的量');
+  assert.ok(!panel.classList.contains('dragging'), '松手之后要摘掉 dragging');
+
+  // 一直往右拖：右边的极限是 innerWidth − 宽 − 8（1024 − 280 − 8 = 736）
+  at(head, 'pointerdown', 660, 290);
+  at(head, 'pointermove', 2000, 290);
+  at(head, 'pointerup', 2000, 290);
+  assert.equal(panel.style.transform, 'translate(136px, -30px)', '拖出右边要被夹住');
+
+  // 点在 × 上不是拖：那一下既不移动面板，也不该吞掉关闭
+  at(head.querySelector('.chat-x')!, 'pointerdown', 860, 310);
+  at(head.querySelector('.chat-x')!, 'pointermove', 900, 340);
+  assert.equal(panel.style.transform, 'translate(136px, -30px)', '点 × 不该把面板拖走');
+
+  panel.hidden = true;
+  panel.style.transform = '';
+});
+
 
 console.log('\n指挥官模式');
 
@@ -1961,6 +2046,64 @@ check('缩放条不在滚动容器里面，所以不跟着地图平移', () => {
   assert.ok(scroll && bar, '找不到 board-scroll 或 zoom-bar');
   assert.equal(bar.parentElement?.classList.contains('board-wrap'), true, '缩放条应该挂在 board-wrap 上');
   assert.equal(scroll.contains(bar), false, '缩放条不能是滚动容器的内容');
+});
+
+check('拖过地图之后，缩放按钮还得点得动', () => {
+  // 拖动过地图要吞掉"拖动的尾巴"那一下点击，否则松开的地方压着格子就会走一步棋。
+  // 但吞的时候只该吞棋盘上的：缩放条是 board-wrap 的子元素、不在 .board 里，
+  // 以前这里一并吞掉，玩家拖着地图松手正好压在「−」上，看起来就是"缩小键失灵"。
+  const board = doc.querySelector<HTMLElement>('.board');
+  assert.ok(board, '找不到 .board');
+  // 拖动只在放大之后才成立（1× 时整张图都在屏幕里，没有可拖的）
+  click('[data-act="zoom-in"]');
+  const before = Number.parseFloat(board.style.width);
+  assert.ok(before > 646, '这条要 1× 以上才有意义');
+
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
+  assert.ok(scroll, '找不到 board-scroll');
+  const pointer = (type: string, x: number): void => {
+    scroll.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: 300 }));
+  };
+  pointer('pointerdown', 300);
+  pointer('pointermove', 250); // 超过 6px 才算真的拖，不够就是一次点击
+  pointer('pointerup', 250);
+
+  click('[data-act="zoom-out"]');
+  const after = Number.parseFloat(board.style.width);
+  assert.ok(after < before, `拖过地图之后「缩小」应该照常生效：${before} → ${after}`);
+});
+
+await checkAsync('换一局之后缩放必须回到「适应」，而且还能再放大缩小', async () => {
+  // 玩家报的 bug：放大之后缩不回去，开新局也还是缩不回去。
+  // 根因是换局只写了 `boardZoom = 1`，没把 boardDirty 打上——fitBoard() 不跑，
+  // 棋盘尺寸/zoomed 类/档位标签全停在上一局的放大状态，而变量已经是 1，
+  // 再点「缩小」就被 setZoom 的"数字没变"挡掉了。
+  const board = doc.querySelector<HTMLElement>('.board');
+  assert.ok(board, '找不到 .board');
+
+  // 先真的放大到 2×
+  click('[data-act="zoom-fit"]');
+  click('[data-act="zoom-in"]');
+  click('[data-act="zoom-in"]');
+  assert.equal(Number.parseFloat(board.style.width), 1292, '先放到 2×');
+  assert.ok(board.classList.contains('zoomed'), '2× 时棋盘该带着 zoomed');
+
+  // 开一局新的（面板里什么都不改，直接开始）
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(Number.parseFloat(board.style.width), 646, '换局之后应该回到基准尺寸');
+  assert.ok(!board.classList.contains('zoomed'), '换局之后不该还带着 zoomed');
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
+  assert.ok(scroll && !scroll.classList.contains('zoomed'), '滚动容器也要摘掉 zoomed');
+
+  // 而且档位还得能正常往回走
+  click('[data-act="zoom-in"]');
+  assert.equal(Number.parseFloat(board.style.width), 969, '换局之后放大一档照样是 1.5×');
+  click('[data-act="zoom-out"]');
+  assert.equal(Number.parseFloat(board.style.width), 646, '再缩回去');
 });
 
 check('英雄技能：面板列出技能，冷却中的置灰', () => {

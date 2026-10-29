@@ -2226,7 +2226,7 @@ function packBook(e: Exp): Book {
 
   return {
     file: `public/manual-pack-${e.id}.html`,
-    title: `方格战棋 · ${e.name}`,
+    title: `时代与回旋镖 · ${e.name}`,
     subtitle: `扩展分册 · ${units.length ? `${units.length} 个兵种` : '只改规则'} · 本文件由 npm run manual 从配置自动生成`,
     nav,
     body,
@@ -2261,7 +2261,7 @@ interface BookGroup {
 const BOOK_GROUPS: BookGroup[] = [
   {
     file: 'public/manual-pack-fantasy.html',
-    title: '方格战棋 · 奇幻扩展',
+    title: '时代与回旋镖 · 奇幻扩展',
     subtitle:
       '奇想五包的合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
     prefix: 'fantasy-',
@@ -2277,7 +2277,7 @@ const BOOK_GROUPS: BookGroup[] = [
   },
   {
     file: 'public/manual-pack-eras.html',
-    title: '方格战棋 · 时代兵备',
+    title: '时代与回旋镖 · 时代兵备',
     subtitle:
       '七个包的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
     prefix: 'pack-',
@@ -2402,14 +2402,14 @@ for (const g of BOOK_GROUPS) {
 const books: Book[] = [
   {
     file: 'public/manual.html',
-    title: '方格战棋 · 规则书',
+    title: '时代与回旋镖 · 规则书',
     subtitle: '回合制 · 1v1 · 五个时代 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。扩展的规则在各自分册里。',
     nav: CORE_NAV,
     body: CORE_BODY,
   },
   {
     file: 'public/manual-small.html',
-    title: '方格战棋 · 扩展规则（小型）',
+    title: '时代与回旋镖 · 扩展规则（小型）',
     subtitle: '只改规则、不带兵种的那批扩展，合成一册。本文件由 npm run manual 从配置自动生成。',
     nav: `
     <a href="#small-intro">1. 扩展怎么用</a>
@@ -2428,7 +2428,7 @@ const rendered = books.map((b) => ({ b, html: page(b) }));
 for (const { b, html } of rendered) {
   writeFileSync(b.file, html, 'utf-8');
   const kb = Math.round(html.length / 1024);
-  console.log(`  ${b.file.replace('public/', '')} ← ${b.title.replace('方格战棋 · ', '')}（${kb}KB）`);
+  console.log(`  ${b.file.replace('public/', '')} ← ${b.title.replace('时代与回旋镖 · ', '')}（${kb}KB）`);
 }
 
 /* ---------------------------------------------------------------------------

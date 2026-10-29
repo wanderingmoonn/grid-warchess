@@ -1318,7 +1318,7 @@ export function seasonLabel(turn: number): string {
 
 export function topbarShell(): string {
   return `
-    <div class="brand">方格战棋 <small>回合制 · 1v1</small></div>
+    <div class="brand">时代与回旋镖 <small>回合制 · 1v1</small></div>
     <div class="turn-chip" title="当前行动方">
       <b data-ref="turn"></b>
       <span class="side-dot a" data-ref="dot"></span>
