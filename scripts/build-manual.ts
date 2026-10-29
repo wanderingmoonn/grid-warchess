@@ -25,8 +25,6 @@ import { resourceShort } from '../src/core/resources.ts';
 import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
-/** npm test 的规则、AI 场景、评估方法、界面冒烟总数，改测试记得改这里。 */
-const TEST_COUNT = 350 + 25 + 7 + 128;
 
 const TERRAIN_TABLE: Array<{ id: string; name: string; cost: string; def: string; note: string }> = [
   { id: 'plain', name: '平原', cost: '1', def: '—', note: '农民收益最高（+7）。开阔地，无掩护。' },
@@ -1485,7 +1483,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         </tbody>
       </table>
       <h3>验证</h3>
-      <p><code>npm test</code> 检查规则内核、AI 战术与高差场景、评估统计方法，以及界面冒烟（jsdom 跑整页）。当前共 ${TEST_COUNT} 项。</p>
+      <p><code>npm test</code> 检查规则内核、AI 战术与高差场景、评估统计方法，以及界面冒烟（jsdom 跑整页）。任何一项失败，CI 都会红。</p>
     </section>
 
     <section id="ai">
