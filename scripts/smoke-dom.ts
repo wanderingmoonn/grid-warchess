@@ -425,6 +425,41 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
 });
 
+check('多动兵的面板写"还剩几次"，不是"几段"', () => {
+  // 多动的次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
+  // 顺带钉住旧说法：面板上不能再出现"每段独立减甲"——那是被否掉的模型。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 4, expansionIds: [] }, 917);
+  st.current = 'A';
+  const burst = UNIT_TYPES.mg?.burst ?? 0;
+  assert.ok(burst >= 2, '这条用例需要一个多动兵（mg）');
+  const mine = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.category === 'combat');
+  assert.ok(mine, '开局该有战斗单位');
+  mine!.type = 'mg';
+
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: mine!,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  let text = host.textContent ?? '';
+  assert.ok(text.includes('多动'), '多动兵的侧栏要写出这件事');
+  assert.ok(text.includes(`还剩 ${burst} / ${burst} 次`), '还没出手时应该显示满次数');
+  assert.ok(!text.includes('每段'), '不能再出现"每段"这种旧口径');
+
+  // 打掉一发之后，面板要跟着变——不然玩家会以为还能再打满一轮
+  (mine as Unit & { attacksLeft?: number }).attacksLeft = burst - 1;
+  paint();
+  text = host.textContent ?? '';
+  assert.ok(text.includes(`还剩 ${burst - 1} / ${burst} 次`), '出手之后剩余次数要跟着减');
+});
+
 check('没有浓雾的对局里，对面的金币照旧显示', () => {
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 910);
