@@ -334,7 +334,9 @@ function nearestBetween(a: Pos[], b: Pos[]): number {
  * 城只能贴着自己的边），远侧是 `[前线, 对面底线]`（把整张图的余量都吃下来）。
  * 于是上半区的城离自己的上边平均 1.5 格、下半区的城离自己的下边平均 3.3 格，
  * 32×32 上差到 3.3 格：同一张图上一边被逼在墙角、另一边坐拥纵深。
- * 现在两侧共用同一个"能退几格"的 `pad`（由目标间距反推），四座城的纵深**完全相同**。
+ * 现在两侧共用同一个"能退几格"的 `pad`（由目标间距反推），也共用**同一组纵深**
+ * （第一个钉死 `pad`、第二个有机会退一格）：两座城能错开一行，但上/下半区的
+ * 纵深多重集逐格相同，均值也就必然相同——不是"统计上差不多"。
  *
  * 注意这里对称的只是**纵深**（到各自底线的那一段）。横向（沿河方向）两半区各抽各的，
  * 不做镜像：真要做镜像就是 `symmetry: 'mirror'` 那条路（B 是 A 的 180° 点对称，
@@ -386,26 +388,39 @@ function planCities(
    * （把整张图的余量一个人吃了）：于是上半区的城被逼在墙角、下半区的城坐拥纵深，
    * 32×32 上"到各自底线"的平均距离差到 3.3 格。现在两侧都只有 pad 格。
    *
-   * 已经反推成"刚好 target"，所以纵深不再抽签——**再抽只会让两军离得更远**。
-   * 地图的多样性留给横向：那一整条边随便挑。
    * 小图上 target 可能吃满纵深，pad 退化成 0：两侧各只剩一行，城退回
    * "同一行、横向拉开"的老样子，这是约束下的唯一解。
    */
   const pad = Math.max(0, Math.floor((alongHi - alongLo - target) / 2));
+
+  /**
+   * 两侧**共用**的纵深多重集：两座城最多错开一行。
+   *
+   * 第一个永远是 `pad`（压到最前），第二个有对半的机会退一格。
+   * 为什么必须"共用"：所谓"上下等距"就是两侧到各自底线的距离分布一样，
+   * 而分布一样的最省事写法就是**同一组数**——远侧不是另抽一次，而是把这一组调个顺序用。
+   * 所以哪怕错开了，两边的均值、甚至多重集都逐格相同。
+   *
+   * 为什么只退一格：`pad` 是"两军刚好隔 target"的位置，再往回退就是让两军比 target
+   * 更远，退两格就开始不像同一张图上的对局了。
+   * 为什么第一个钉死 `pad`：这样无论错开与否，**最近的那一对城**始终在 `pad` 上，
+   * 目标间距不会因为错落而被动变宽。
+   */
+  const depth: [number, number] = [pad, pad > 0 && rng() < 0.5 ? pad - 1 : pad];
 
   /** 这个位置离已占的每一座城都够远吗 */
   const farEnough = (p: Pos, taken: Pos[]): boolean =>
     taken.every((q) => citySep(p, q) >= minSep);
 
   /**
-   * 在某一侧的前沿上挑一个横向位置。
+   * 在某一侧、指定纵深上挑一个横向位置。
    *
    * `side` 0 = 靠近 `alongLo` 的那一侧（横河时是上），1 = 另一侧。
-   * 两侧的纵深都是 `pad`（互为镜像），横向才是随机的——横向本来就不需要对称，
-   * 两边的城墙落在哪一段本来就不该一样。
+   * 纵深由调用方给（两侧共用同一组），这里只负责横向随机——
+   * 横向本来就不需要对称，两边的城墙落在哪一段本来就不该一样。
    */
-  const placeAt = (side: 0 | 1, taken: Pos[]): Pos | null => {
-    const a = side === 0 ? alongLo + pad : alongHi - pad;
+  const placeAt = (side: 0 | 1, d: number, taken: Pos[]): Pos | null => {
+    const a = side === 0 ? alongLo + d : alongHi - d;
     const cands: Pos[] = [];
     for (let cr = crossLo; cr <= crossHi; cr++) {
       const p = at2(a, cr);
@@ -423,7 +438,7 @@ function planCities(
       const a: Pos[] = [];
       const taken: Pos[] = []; // A 的城 + 它们的镜像，全都算占位
       for (let k = 0; k < 2; k++) {
-        const p = placeAt(0, taken);
+        const p = placeAt(0, depth[k]!, taken);
         if (!p) return null;
         a.push(p);
         taken.push(p, mirrorOf(p));
@@ -437,13 +452,15 @@ function planCities(
     const side0: Pos[] = [];
     const side1: Pos[] = [];
     for (let k = 0; k < 2; k++) {
-      const p0 = placeAt(0, taken);
+      const p0 = placeAt(0, depth[k]!, taken);
       if (!p0) return null;
       taken.push(p0);
       side0.push(p0);
 
-      // 另一半区：同一格纵深，横向独立抽
-      const p1 = placeAt(1, taken);
+      // 另一半区：**同一组纵深的另一个顺序**。顺序对调是给对角布局留的：
+      // 对角时 A 拿 side0[0] + side1[0]、B 拿 side0[1] + side1[1]，
+      // 顺序照抄的话 A 会吃下两个"深"的、B 两个"浅"的——那是新的不公平。
+      const p1 = placeAt(1, depth[1 - k]!, taken);
       if (!p1) return null;
       taken.push(p1);
       side1.push(p1);
@@ -1597,8 +1614,16 @@ export function generateLayout(
     }
     // 离城心最近的两格留作港口，其它填掉。开了「地形高差」时填成浅滩而不是平地：
     // 船还能停在城门口那片水里，陆军也能直接涉水出城——两边都不吃亏。
+    //
+    // 两处例外，都为了"无渡口河"那张图的口径（对外宣称"过河只能造桥"）：
+    //   · 河身那几格**保持深水**——填平等于在城门口架了一座不用造的桥；
+    //   · 其余的水**填平地**，不留浅滩——天堑图上"一格浅滩都没有"是硬口径，
+    //     而城边正是最要命的位置：留个能徒涉的口子，桥就白造了。
     ring.sort((a, b) => a.d - b.d);
-    for (const t of ring.slice(2)) put(c, t.x, t.y, c.shallowOk ? 'shallow' : 'plain');
+    for (const t of ring.slice(2)) {
+      if (fordless && riverCells.has(t.y * c.w + t.x)) continue;
+      put(c, t.x, t.y, c.shallowOk && !fordless ? 'shallow' : 'plain');
+    }
   }
   symmetrize(); // 城郊处理也要对称，否则镜像模式会和"严格对称"对不上
 

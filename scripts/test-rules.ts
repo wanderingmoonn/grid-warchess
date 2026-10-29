@@ -663,14 +663,16 @@ test('城市到各自底线的平均距离：上半区与下半区一样', () =>
   // 结果上半区的城离上边平均 1.5 格、下半区的城离下边平均 3.3 格，32×32 上差 3.3 格：
   // 同一张图上，一边被逼在墙角，另一边坐拥纵深。
   //
-  // 现在两侧的"能退几格"由同一个 pad 反推（见 planCities），而且纵深不抽签，
-  // 所以**逐图**就该相等，不是"统计上差不多"。
+  // 现在两侧的"能退几格"由同一个 pad 反推（见 planCities），而且两侧**共用同一组纵深**
+  // ——组里可能有一个"退一格"的名额，但两个半区拿到的是同一组数，只是顺序不同。
+  // 所以不光均值逐图相等，连多重集都逐图相等，不是"统计上差不多"。
   for (const size of [12, 16, 20, 32]) {
     for (const symmetry of ['fair', 'mirror'] as const) {
       let sumLo = 0;
       let nLo = 0;
       let sumHi = 0;
       let nHi = 0;
+      let staggered = 0;
       for (let i = 0; i < 40; i++) {
         const m = generateLayout(size, 770000 + i * 131 + size, ['militia'], { symmetry });
         // 城市纵深跟河走：横河量 y，纵河量 x（与 planCities 的 along 同一个约定）
@@ -681,6 +683,9 @@ test('城市到各自底线的平均距离：上半区与下半区一样', () =>
         let nlo = 0;
         let hi = 0;
         let nhi = 0;
+        const loDepth: number[] = [];
+        const hiDepth: number[] = [];
+        const depthOf = (a: number) => (a <= along - a - span ? a : along - a - span);
         for (const p of [...m.citiesA, ...m.citiesB]) {
           const a = axis === 'h' ? p.y : p.x;
           const toLo = a; // 到上/左底线之间的空格数
@@ -688,9 +693,11 @@ test('城市到各自底线的平均距离：上半区与下半区一样', () =>
           if (toLo <= toHi) {
             lo += toLo;
             nlo += 1;
+            loDepth.push(toLo);
           } else {
             hi += toHi;
             nhi += 1;
+            hiDepth.push(toHi);
           }
         }
         assert.ok(nlo > 0 && nhi > 0, `${size}×${size} 应该有城落在两半区`);
@@ -699,6 +706,21 @@ test('城市到各自底线的平均距离：上半区与下半区一样', () =>
           hi / nhi,
           `${size}×${size} ${symmetry} 第 ${i} 张：上边均值 ${lo / nlo}、下边均值 ${hi / nhi}`,
         );
+        // 均值相等还不够：如果一边全在 2、另一边一个 1 一个 3，均值也相等，但那不是
+        // "共用一组纵深"，是两拨不一样的数碰巧加起来一样。这里比的是排好序的多重集。
+        assert.deepEqual(
+          [...loDepth].sort((x, y) => x - y),
+          [...hiDepth].sort((x, y) => x - y),
+          `${size}×${size} ${symmetry} 第 ${i} 张：两侧的纵深多重集不一样，` +
+            `上边 [${loDepth.join(',')}]、下边 [${hiDepth.join(',')}]`,
+        );
+        // "错开一行"是指**同一侧的两座城**不并排（多重集里那个"退一格"的名额生效了），
+        // 不是拿上半区的顺序去比下半区：镜像图上两侧本来就照着同一顺序排，
+        // 那样的比较永远相等，测不出任何东西。
+        const depthSet = new Set(
+          m.citiesA.map((p) => depthOf(axis === 'h' ? p.y : p.x)),
+        );
+        if (depthSet.size > 1) staggered += 1;
         sumLo += lo;
         nLo += nlo;
         sumHi += hi;
@@ -707,6 +729,13 @@ test('城市到各自底线的平均距离：上半区与下半区一样', () =>
       assert.ok(
         Math.abs(sumLo / nLo - sumHi / nHi) < 0.01,
         `${size}×${size} ${symmetry}：整体也歪了`,
+      );
+      // 若某天有人把纵深改回"两侧共用同一个值"，这条会在 40 张图上全部落空
+      // （退一格是按对半概率抽的，40 张一张都不错开的概率是 2^-40）。
+      assert.ok(
+        staggered > 0,
+        `${size}×${size} ${symmetry}：40 张图里没有一张把同一侧的两座城错开过，` +
+          `多半是纵深又退回"整侧只有同一个值"了`,
       );
     }
   }
@@ -5486,10 +5515,19 @@ test('AI 会主动离开基地推进战线（而不是龟缩）', () => {
   for (const t of cur.tiles) if (t.terrain !== 'city') t.terrain = 'plain';
   const enemyCity = citiesOf(cur, 'A')[0];
   assert.ok(enemyCity, '应该有敌方城市');
-
+  // 战线 = "B 的战斗单位离**最近那座**敌城还有多远"。
+  //
+  // 这里不能只看 citiesOf('A')[0]：AI 自己会挑目标，两个回合它可能先去啃左边那座、
+  // 也可能先去啃右边那座。钉一座城当尺子的话，"AI 集中兵力打另一座城"会被读成
+  // "十回合原地不动"——那是尺子错了，不是 AI 缩了。
+  // 城位仍是随机的（planCities），所以取最近的一座才是不依赖这一次抽签的度量。
+  const enemyCities = citiesOf(cur, 'A');
   const combatOf = (s: GameState, p: 'A' | 'B') =>
     unitsOf(s, p).filter((u) => utype(s, u.type).category === 'combat');
-  const front = (s: GameState) => Math.min(...combatOf(s, 'B').map((u) => distToCity(u, enemyCity)));
+  const front = (s: GameState) =>
+    Math.min(
+      ...combatOf(s, 'B').flatMap((u) => enemyCities.map((c) => distToCity(u, c))),
+    );
   const start = front(cur);
   // 注意：front 取的是"最靠前那个还活着的战斗单位"。
   // 先头部队阵亡会让这个数字变差——那是打输了，不是缩回去了。
@@ -8882,6 +8920,7 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
           if (H(x, y) < 5) continue;
           if (nearCity(x, y)) continue;
           let skirt = false;
+          let land = 0; // 四邻里"陆地"有几格
           for (const [dx, dy] of [
             [1, 0],
             [-1, 0],
@@ -8894,8 +8933,12 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
             const t = s.tiles[ny * s.w + nx]!.terrain;
             if (H(nx, ny) >= 4) skirt = true;
             if (t === 'plain' || t === 'forest' || t === 'hill') cliff++;
+            if (t !== 'water' && t !== 'shallow') land += 1;
           }
-          if (!skirt) bare++;
+          // 水中的孤峰不算违规：补山脚那一趟**故意**不动水（"隔着一条河的对岸
+          // 不该被算成这座山的山脚"，见 height-terrain 的注释），
+          // 湖心一块石头本来就是孤零零的，那不是缺山脚，是它确实站在水里。
+          if (!skirt && land > 0) bare++;
         }
       }
       assert.equal(cliff, 0, `${style}#${seed} 有 ${cliff} 处高山直接贴着平原/丘陵（缺山脚）`);
@@ -9552,7 +9595,12 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
     modifyAtk: (_s, _u, val, atk) => (val > 0 ? atk + 5 : atk),
   });
   try {
-    const s = unitOn(fresh(), 'A', 'militia', 3, 3);
+    // 先抹平这一小片：(4,3) 在 seed 12345 的图上正好压在河身上。
+    // 城市改成"纵深多重集"之后河道跟着城位重新走了一遍，这一格从平地变成水，
+    // 本用例要测的是"状态如何改数值"，不是"水里能不能站人"，所以先铲平。
+    const flat = fresh();
+    clearArea(flat, 3, 2, 4, 4);
+    const s = unitOn(flat, 'A', 'militia', 3, 3);
     const me = s.units.find((u) => u.owner === 'A' && u.type === 'militia')!;
     const target = unitOn(s, 'B', 'militia', 4, 3).units.find(
       (u) => u.owner === 'B' && u.type === 'militia',
