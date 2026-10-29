@@ -1318,6 +1318,55 @@ export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef)
   return out;
 }
 
+/**
+ * 招这一个兵，这一下**真正要从国库里扣多少**。
+ *
+ * 和 `recruitResCost` 的差别只有一条：英雄**第一次**招要额外付解锁费。
+ * 抽成函数是因为这笔钱有三个地方要算，而它们以前各算各的：
+ *   · 规则层（`doRecruit`）——扣钱；
+ *   · 指挥官面板（硬币图标旁边那个"≈ 多少金"）——给玩家预估；
+ *   · AI 采购（`recruitCandidate` / `planOrders`）——判断买不买得起。
+ *
+ * 三处只要有一处漏了解锁费，症状都一样：面板说买得起、AI 也以为买得起，
+ * 到了规则层被"资源不足"拒掉，那一格生产序列就静默空转——玩家排了英雄，
+ * 结果什么都没发生，还找不出原因。所以这个口径只能有一份。
+ *
+ * `price` 是兵价、`unlockFee` 是这次要额的解锁费、`total` 是两者之和
+ * （多资源扩展下 `price` 里可能还有粮食/建材），`gold` 是 `total` 里的金币段——
+ * 界面和 AI 平时只关心这一个数，省得各自去查 `GOLD`。
+ */
+export function recruitPriceOf(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+): { price: ResourceCost; unlockFee: number; total: ResourceCost; gold: number } {
+  const price = recruitResCost(s, player, def);
+  const needUnlock = def.hero === true && !(s.unlocked?.[player] ?? []).includes(def.id);
+  const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
+  const total: ResourceCost = { ...price };
+  if (unlockFee > 0) total[GOLD] = (total[GOLD] ?? 0) + unlockFee;
+  return { price, unlockFee, total, gold: total[GOLD] ?? 0 };
+}
+
+/**
+ * 这个英雄现在能不能再招一个：场上已经有、或者蛋还等着孵，都不行。
+ *
+ * 为什么单拎出来：规则层（`doRecruit`）和 AI 采购（`recruitCandidate`）都要判，
+ * 两处各写一遍必然漂——以前 `doRecruit` 只看 `units`，于是不死鸟倒下、
+ * 蛋还没孵的时候能再买一只，场上最后站起来两只不死鸟。
+ */
+export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): string | null {
+  if (def.hero !== true) return null;
+  if (s.units.some((u) => u.owner === player && u.type === def.id)) {
+    return `${def.name} 是英雄，场上只能有一个`;
+  }
+  const egg = s.pendingEgg;
+  if (egg && egg.owner === player && egg.type === def.id) {
+    return `${def.name} 的蛋还在原地等着孵，别急着再造一只`;
+  }
+  return null;
+}
+
 /** 这一格能不能站人：水不行，敌方城市也不行（城池得先打下来） */
 /**
  * 这一格对某个单位来说能不能进。
@@ -2330,7 +2379,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'UPGRADE':
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
-        return doSetOrders(next, action.queue);
+        return doSetOrders(next, action.queue, action.sites);
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
@@ -3206,9 +3255,9 @@ function doRecruit(
   if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
   // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
   // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
-  if (def.hero && s.units.some((u) => u.owner === s.current && u.type === def.id)) {
-    return { ok: false, reason: `${def.name} 是英雄，场上只能有一个` };
-  }
+  // 「一个」也包括还没孵出来的那只（不死鸟的蛋），见 heroBlocked。
+  const blocked = heroBlocked(s, s.current, def);
+  if (blocked) return { ok: false, reason: blocked };
 
   /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
   let era = 0;
@@ -3258,25 +3307,24 @@ function doRecruit(
     return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
   }
 
-  const price = recruitResCost(s, s.current, def);
   const player = s.players[s.current];
 
   // 英雄解锁：只在第一次招它时收，之后这个兵种就永久开放。
   // 记在 state 里而不是兵种表里——兵种表是全局限定的，
   // 我解锁了天使不该等于对手也解锁了天使。
-  const unlocked = (s.unlocked ??= {});
-  const mine = (unlocked[s.current] ??= []);
-  const needUnlock = def.hero === true && !mine.includes(def.id);
-  const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
-  const payCost: ResourceCost = { ...price };
-  if (unlockFee > 0) payCost[GOLD] = (payCost[GOLD] ?? 0) + unlockFee;
+  //
+  // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
+  // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
+  const quote = recruitPriceOf(s, s.current, def);
+  const payCost = quote.total;
+  const unlockFee = quote.unlockFee;
 
   if (!canPay(player, payCost)) {
     const missing = missingLabel(player, payCost);
     return {
       ok: false,
-      reason: needUnlock
-        ? `资源不足（英雄要 ${costLabel(price)} + 解锁 ${unlockFee} 金，${missing}）`
+      reason: unlockFee > 0
+        ? `资源不足（英雄要 ${costLabel(quote.price)} + 解锁 ${unlockFee} 金，${missing}）`
         : `资源不足（需要 ${costLabel(payCost)}，${missing}）`,
     };
   }
@@ -3301,8 +3349,10 @@ function doRecruit(
   }
 
   payRes(player, payCost);
-  if (needUnlock) {
-    mine.push(def.id);
+  if (unlockFee > 0) {
+    const unlocked = (s.unlocked ??= {});
+    const mine = (unlocked[s.current] ??= []);
+    if (!mine.includes(def.id)) mine.push(def.id);
     pushLog(s, s.current, `解锁英雄「${def.name}」，花费 ${unlockFee} 金`);
   }
 
@@ -3332,33 +3382,79 @@ export function ordersOf(s: GameState, player: PlayerId): string[] {
 }
 
 /**
+ * 每一格指定的产兵点（和 `ordersOf` 逐格对齐，空串＝哪座都行）。
+ *
+ * 旧存档没有这个字段：长度按序列补齐成空串，语义就是"全部不指定"，
+ * 于是老存档读出来还是原来那条"AI 自己挑产兵点"的序列。
+ */
+export function orderSitesOf(s: GameState, player: PlayerId): string[] {
+  const queue = ordersOf(s, player);
+  const raw = s.orderSites?.[player] ?? [];
+  return queue.map((_, i) => raw[i] ?? '');
+}
+
+/**
+ * 这一格指定的产兵点还成立吗：返回 null 表示"没指定/指定得上"，否则给一句原因。
+ *
+ * 为什么单独抽出来：`doSetOrders` 要拦住"指定了一个不存在的城"，
+ * 界面要据此把不成立的格子标红——以前只有一处用，现在两处，将来还会有第三处。
+ */
+export function orderSiteProblem(s: GameState, player: PlayerId, site: string): string | null {
+  if (!site) return null;
+  const city = s.cities.find((c) => c.id === site);
+  if (city) {
+    if (city.owner !== player) return '那座城不是你的';
+    return null;
+  }
+  const camp = s.units.find((u) => u.id === site);
+  if (!camp) return '这个产兵点不存在了';
+  if (camp.owner !== player) return '那座军营不是你的';
+  if (!utype(s, camp.type).barracks) return '指定的产兵点不是军营';
+  return null;
+}
+
+/**
  * 指挥官模式下排生产序列。
  *
- * 只校验四件事：是不是指挥官模式、长度有没有超、点名的兵种存不存在、是不是建筑。
+ * 只校验四件事：是不是指挥官模式、长度有没有超、点名的兵种存不存在、是不是建筑；
+ * 外加一条"指定的产兵点得真的存在而且是你的"。
  * **不校验钱够不够、城市够不够高级**——那是 AI 执行时的现实约束，
  * 提前拦下来等于把"排了造不出来"这个后果替玩家抹掉，而它正是这个模式的核心取舍。
+ * 同理也不校验"这座城的时代够不够造它"：让那一格空转，是这个模式要的后果。
  *
  * 空字符串是"这一格故意空着"：玩家可能想排"这回合不造、下回合造坦克"。
  * 所以中间的洞要留着（否则后面整条序列会往前挪），只把末尾的空位裁掉。
+ *
+ * `sites` 与 `queue` 逐格对齐。空位上的 `sites` 一律抹成空串：那一格既然
+ * "这回合什么都不造"，留着产兵点只会在界面回显时对不上。
  */
-function doSetOrders(s: GameState, queue: string[]): ActionResult {
+function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionResult {
   if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有生产序列' };
 
   const cleaned = queue.slice(0, CONFIG.commanderSlots).map((id) => id ?? '');
-  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') cleaned.pop();
+  const where = cleaned.map((id, i) => (id ? (sites?.[i] ?? '') : ''));
+  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') {
+    cleaned.pop();
+    where.pop();
+  }
 
-  for (const id of cleaned) {
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const id = cleaned[i] as string;
     if (!id) continue;
     // 哨兵值：这一格是"升级时代"，不是兵种
-    if (id === ORDER_UPGRADE) continue;
-    const def = s.unitTypes[id];
-    if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
-    if (def.category === 'building') {
-      return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
+    if (id !== ORDER_UPGRADE) {
+      const def = s.unitTypes[id];
+      if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
+      if (def.category === 'building') {
+        return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
+      }
     }
+    const problem = orderSiteProblem(s, s.current, where[i] ?? '');
+    if (problem) return { ok: false, reason: `第 ${i + 1} 格：${problem}` };
   }
 
   s.orders = { ...(s.orders ?? {}), [s.current]: cleaned };
+  s.orderSites = { ...(s.orderSites ?? {}), [s.current]: where };
   return { ok: true, state: s };
 }
 
@@ -3823,8 +3919,13 @@ function doEndTurn(s: GameState): ActionResult {
   // 不管兵有没有造出来都照样消耗——"排了一格、钱不够、这回合空了"
   // 正是这个模式要玩家学会预判的东西。要是失败就原地保留，
   // 序列会悄悄滑期，玩家反而看不出自己在哪一步就走了岔。
+  //
+  // 两串必须一起前移：`orderSites` 是按位置对齐的，只挪队列会让
+  // 后一格的"造在哪座城"错位到前一格上去——那比不做还要糟。
   const prevQueue = s.orders?.[prevPlayer];
   if (prevQueue && prevQueue.length > 0) prevQueue.shift();
+  const prevSites = s.orderSites?.[prevPlayer];
+  if (prevSites && prevSites.length > 0) prevSites.shift();
 
   const nextPlayer = other(s.current);
   s.current = nextPlayer;

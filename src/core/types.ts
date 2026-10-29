@@ -854,6 +854,17 @@ export interface GameState {
    * 普通对局里是 undefined，AI 照旧自己挑兵。
    */
   orders?: Partial<Record<PlayerId, string[]>>;
+  /**
+   * 每一格"由哪个产兵点产出"：和 `orders` **逐格对齐**，空串表示"哪座都行"。
+   *
+   * 为什么不把两者合成一个对象数组：`orders` 已经是存档里的既成结构，
+   * 改成对象数组等于让所有老存档都读不出来（版本号还得升一次）。
+   * 并行两个数组的唯一代价是"长度必须一致"——这条由 `doSetOrders`
+   * 和回合末的前移统一保证，别在别处各自增删。
+   *
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"全部不指定"。
+   */
+  orderSites?: Partial<Record<PlayerId, string[]>>;
   nextUnitSeq: number;
   fog: boolean;
   winner: PlayerId | null;
@@ -937,8 +948,12 @@ export type Action =
    *
    * 整条序列一次写进去（而不是一次加一个），是因为界面允许随时改动任意一格——
    * 用"设置"而不是"增删"，重发一次就天然幂等，也不用担心两边状态不同步。
+   *
+   * `sites` 与 `queue` 逐格对齐，写的是"这一格由哪座城/哪座军营产出"，
+   * 空串或没传＝不指定（AI 自己挑最合适的产兵点）。排在「升级时代」那一格上时，
+   * 它指的是"升这一座城"。
    */
-  | { type: 'SET_ORDERS'; queue: string[] }
+  | { type: 'SET_ORDERS'; queue: string[]; sites?: string[] }
   /**
    * 遣散/拆除：把自己场上的一个单位或建筑清掉，回收一部分造价。
    *

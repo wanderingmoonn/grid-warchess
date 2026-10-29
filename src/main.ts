@@ -21,18 +21,22 @@ import {
   canMove,
   cityAt,
   citiesOf,
+  cityName,
   distance,
   disbandRefundOf,
   eggSpots,
+  heroBlocked,
   idx,
   incomeOf,
   isAirborne,
   ordersOf,
+  orderSitesOf,
   reachableTiles,
-  recruitCost,
+  recruitPriceOf,
   recruitSpawnCells,
   refreshMemory,
   siegeTargets,
+  supplyEraAt,
   threatTiles,
   unitIncomeAt,
   unitsAt,
@@ -2402,6 +2406,16 @@ let commanderRunning = false;
 let commanderRound = 0;
 /** 窄屏下「参谋部」是折叠的，点一下才展开排计划 */
 let commanderExpanded = false;
+/**
+ * 参谋部里的兵种检索词。
+ *
+ * 为什么不并进 `recruitQuery`：那是侧栏产兵面板的搜索框，两个面板可能同时被
+ * 打开过（切模式时），共用一个词的结果是"在参谋部搜了坦克，切回面板产兵
+ * 列表也只剩坦克"。这两处要回答的问题本来就不一样。
+ */
+let commanderQuery = '';
+/** 参谋部的分类筛选，空串＝全部 */
+let commanderClass = '';
 
 /** 批量执行时每步的停顿。比"慢档"快得多：一次要跑 5 个回合，180ms 会拖成一分钟 */
 const BATCH_DELAY = 40;
@@ -2411,8 +2425,63 @@ function commanderActive(): boolean {
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
 }
 
-/** 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代） */
-function commanderPool(): UnitTypeDef[] {
+/**
+ * 参谋部下拉里的分类。
+ *
+ * 分类是**按数值推出来的**，不是给每个兵种手写一个标签：兵种表有两百多条，
+ * 手写一列标签等于每加一个兵就要回来补一次，而"射程几格、跑多快、在哪一层"
+ * 本来就是它的定义。同一条推论会被界面和将来的筛选/统计共用。
+ *
+ * 一个兵可以同时属于几类（一辆快速远程车既是「远程」也是「机动」）：
+ * 每加一类，玩法上的找法就多一条路。
+ */
+type CmdClass = 'melee' | 'ranged' | 'fast' | 'air' | 'water' | 'eco' | 'hero';
+
+const CMD_CLASS_ORDER: readonly CmdClass[] = ['melee', 'ranged', 'fast', 'air', 'water', 'eco', 'hero'];
+
+const CMD_CLASS_LABEL: Record<CmdClass, string> = {
+  melee: '近战',
+  ranged: '远程',
+  fast: '机动',
+  air: '飞行',
+  water: '水上',
+  eco: '经济工程',
+  hero: '英雄',
+};
+
+function classesOf(def: UnitTypeDef): CmdClass[] {
+  const out: CmdClass[] = [];
+  if (def.hero) out.push('hero');
+  if (def.category === 'economy' || def.category === 'builder') out.push('eco');
+  if (def.domain === 'water') out.push('water');
+  if (def.layer === 'air' || def.flight) out.push('air');
+  // 近战/远程只对作战单位分：经济单位和工匠没有"射程"这回事
+  if (def.category === 'combat') out.push(def.range >= 2 ? 'ranged' : 'melee');
+  if (def.move >= 4) out.push('fast');
+  return out;
+}
+
+/** 参谋部里一个能排的兵种 */
+interface CmdItem {
+  def: UnitTypeDef;
+  /** 这一次要多少金（英雄第一次含解锁费） */
+  gold: number;
+  /** 其中有多少是解锁费（已经解锁、或者不是英雄就是 0） */
+  unlockFee: number;
+  /** 场上已经有 / 蛋还等着孵：排了也造不出来，说清楚为什么 */
+  blocked: string | null;
+  classes: CmdClass[];
+}
+
+/**
+ * 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代）。
+ *
+ * 「造得出来」是一个上限口径：具体某一格能不能造，还要看那一格指定的
+ * 是哪座城（时代可能更低），见 `slotProblem`。这里不按城过滤，
+ * 是因为下拉是**所有格子共用**的一份名单——按城过滤会让"这一格能排、
+ * 那一格排不了"变成"列表里忽有忽无"，比标一句「产不了」更难懂。
+ */
+function commanderPool(): CmdItem[] {
   const eras = citiesOf(state, me()).map((c) => c.era);
   const era = eras.length > 0 ? Math.max(...eras) : 1;
   return Object.values(state.unitTypes)
@@ -2420,7 +2489,60 @@ function commanderPool(): UnitTypeDef[] {
       (d) =>
         d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
     )
-    .sort((a, b) => a.era - b.era || a.cost - b.cost);
+    .sort((a, b) => a.era - b.era || a.cost - b.cost || a.name.localeCompare(b.name))
+    .map((def) => {
+      const quote = recruitPriceOf(state, me(), def);
+      return {
+        def,
+        gold: quote.gold,
+        unlockFee: quote.unlockFee,
+        blocked: heroBlocked(state, me(), def) ? '已在场' : null,
+        classes: classesOf(def),
+      } satisfies CmdItem;
+    });
+}
+
+/** 自己的产兵点：城市 + 军营。`era` 是它现在能产到第几代 */
+function ownSites(): Array<{ id: string; label: string; era: number; city: boolean }> {
+  const out: Array<{ id: string; label: string; era: number; city: boolean }> = [];
+  for (const c of citiesOf(state, me())) {
+    out.push({ id: c.id, label: `${cityName(c)} · ${c.era} 代`, era: c.era, city: true });
+  }
+  for (const u of unitsOf(state, me())) {
+    const d = utype(state, u.type);
+    if (!d.barracks) continue;
+    const x = String.fromCharCode(65 + u.x);
+    out.push({
+      id: u.id,
+      label: `${d.name}（${x}${u.y + 1}）· 营`,
+      era: u.era ?? supplyEraAt(state, me(), u),
+      city: false,
+    });
+  }
+  return out;
+}
+
+/** 这一格为什么造不出来（能造返回空串）。界面据此把估价标红并写一句原因 */
+function slotProblem(unitId: string, site: string): string {
+  if (!unitId) return '';
+  const def = state.unitTypes[unitId];
+  if (!def) return '没有这个兵种';
+  if (unitId === ORDER_UPGRADE) {
+    if (!site) return '';
+    const city = state.cities.find((c) => c.id === site);
+    if (!city) return '营不升级';
+    return upgradeCostOf(state, city) === null ? '升不上去了' : '';
+  }
+  if (heroBlocked(state, me(), def)) return '已在场';
+  // 没指定产兵点时按"最高级那座城"算：AI 会自己挑能造的那一座
+  const eras = citiesOf(state, me()).map((c) => c.era);
+  const era = site
+    ? (ownSites().find((s) => s.id === site)?.era ?? (eras.length > 0 ? Math.max(...eras) : 1))
+    : eras.length > 0
+      ? Math.max(...eras)
+      : 1;
+  if (def.era > era) return '产不了（时代不够）';
+  return '';
 }
 
 /**
@@ -2428,8 +2550,15 @@ function commanderPool(): UnitTypeDef[] {
  *
  * 「升级时代」按"自己几座城里最便宜的那次升级"算——AI 执行时会挑它认为最该升的那座，
  * 个数对不上是常态，所以界面上的金币数字一律标成"≈"，不假装精确。
+ *
+ * 兵种走 `recruitPriceOf`：英雄**第一次**要连解锁费一起算。
+ * 以前这里只算兵价，于是面板上写着「矮人王 · 360 金」、估价也照 360 算，
+ * 玩家排了它，执行时规则层还要再收 150 金解锁——钱不够，那一格静默空转。
+ *
+ * `paid` 是"这条序列里前面已经付过解锁费的英雄"：同一份计划里排两次
+ * 同一个英雄（比如第一格造、第四格补），第二格不该再算一次解锁费。
  */
-function slotCost(unitId: string): number {
+function slotCost(unitId: string, paid?: Set<string>): number {
   if (!unitId) return 0;
   if (unitId === ORDER_UPGRADE) {
     const costs = citiesOf(state, me())
@@ -2438,52 +2567,73 @@ function slotCost(unitId: string): number {
     return costs.length > 0 ? Math.min(...costs) : 0;
   }
   const def = state.unitTypes[unitId];
-  return def ? recruitCost(state, me(), def) : 0;
+  if (!def) return 0;
+  const quote = recruitPriceOf(state, me(), def);
+  if (!def.hero || !paid) return quote.gold;
+  if (paid.has(def.id)) return Math.max(0, quote.gold - quote.unlockFee);
+  paid.add(def.id);
+  return quote.gold;
 }
 
 /**
- * 每一格执行时手上有多少钱（估算）。
+ * 每一格执行时手上有多少钱、这一格要花多少（都是估算）。
  *
  * 回合顺序是"我方 → 对方 → 我方…"，而收入是在结束回合时结算给**下一位**的，
  * 所以每轮到我方时正好多进一笔收入。于是：
  *   第 i 格可用 = 现有金币 + i × 每回合收入 − 前面各格的花费
+ *
+ * 两串一起返回，是因为调用方两个数都要用（一个显示、一个判"钱紧不紧"），
+ * 分开算等于把这条走位逻辑（含"英雄解锁费只在第一格收"）抄两遍。
  */
-function estimateGold(): number[] {
+function estimateGold(): { avail: number[]; cost: number[] } {
   const income = incomeOf(state, me());
   const queue = ordersOf(state, me());
-  const out: number[] = [];
+  const paid = new Set<string>();
+  const avail: number[] = [];
+  const cost: number[] = [];
   let spent = 0;
   for (let i = 0; i < CONFIG.commanderSlots; i++) {
-    out.push(state.players[me()].gold + i * income - spent);
-    spent += slotCost(queue[i] ?? '');
+    avail.push(state.players[me()].gold + i * income - spent);
+    const c = slotCost(queue[i] ?? '', paid);
+    cost.push(c);
+    spent += c;
   }
-  return out;
+  return { avail, cost };
 }
 
 /** 只刷新金币提示，不重建下拉——否则玩家正在点的格子会被抽走 */
 function refreshEstimates(): void {
-  const gold = estimateGold();
+  const est = estimateGold();
+  const queue = ordersOf(state, me());
+  const sites = orderSitesOf(state, me());
   commanderEl.querySelectorAll<HTMLElement>('[data-est]').forEach((el) => {
     const i = Number(el.dataset.est);
-    const avail = gold[i] ?? 0;
-    const queue = ordersOf(state, me());
-    const cost = slotCost(queue[i] ?? '');
-    const tight = cost > avail;
-    el.textContent = `≈ ${Math.max(0, Math.round(avail))} 金`;
-    el.classList.toggle('tight', tight);
+    const avail = est.avail[i] ?? 0;
+    const cost = est.cost[i] ?? 0;
+    // 造不出来的原因比余额更要紧：钱够、但那座城时代不够，同样是一格空转
+    const why = slotProblem(queue[i] ?? '', sites[i] ?? '');
+    el.textContent = why
+      ? `≈ ${Math.max(0, Math.round(avail))} 金 · ${why}`
+      : `≈ ${Math.max(0, Math.round(avail))} 金`;
+    el.classList.toggle('tight', cost > avail || why !== '');
   });
   const tail = commanderEl.querySelector<HTMLElement>('[data-est-total]');
   if (tail) {
-    const last = gold[gold.length - 1] ?? 0;
-    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(last - slotCost(ordersOf(state, me())[CONFIG.commanderSlots - 1] ?? '')))} 金`;
+    const last = est.avail.length - 1;
+    const left = (est.avail[last] ?? 0) - (est.cost[last] ?? 0);
+    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(left))} 金`;
   }
 }
 
 /**
  * 画指挥官面板。
  *
- * 只在"回合 / 可用时代 / 是否在跑"变化时重建：面板里是 <select>，
+ * 只在"回合 / 可用时代 / 检索词 / 分类 / 是否在跑"变化时重建：面板里是 <select>，
  * 而 AI 每走一步都会触发 render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
+ *
+ * 每一格现在是**两个**下拉：造什么、由哪个产兵点造。第二件事以前是 AI 自己挑的，
+ * 于是"我想让前线的营出兵、不想让主城少一个守军"这种要求根本表达不出来；
+ * 城市一多，"兵出在哪一头"比"造什么"更能决定这一回合值不值。
  */
 function renderCommander(): void {
   if (!commanderActive()) {
@@ -2509,10 +2659,10 @@ function renderCommander(): void {
     return;
   }
 
-  const pool = commanderPool();
-  const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
+  const items = commanderPool();
+  const era = items.length > 0 ? Math.max(...items.map((it) => it.def.era)) : 1;
   const online = room !== null;
-  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}`;
+  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}|${commanderQuery}|${commanderClass}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -2520,27 +2670,72 @@ function renderCommander(): void {
   commanderSig = sig;
 
   const queue = ordersOf(state, me());
-  const opts = (sel: string) =>
-    [
+  const sites = orderSitesOf(state, me());
+  const shown = items.filter(cmdMatch);
+
+  const opts = (sel: string) => {
+    // 这一格已经排好的兵种如果被检索/分类筛掉了，**只为这一格**补回来：
+    // 补进公用列表会让别的格子也看见它，"筛过了"就名不副实；
+    // 不补的话浏览器会因为找不到当前值而跳回第一项，等于替玩家把计划改了。
+    const list =
+      sel && !shown.some((it) => it.def.id === sel)
+        ? [...shown, ...items.filter((it) => it.def.id === sel)]
+        : shown;
+    return [
       '<option value="">— 不指定 —</option>',
       `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
     ]
       .concat(
-        pool.map(
-          (d) =>
-            `<option value="${d.id}"${d.id === sel ? ' selected' : ''}>${d.name} · ${d.cost} 金</option>`,
-        ),
+        list.map((it) => {
+          const d = it.def;
+          // 英雄第一次要把解锁费写在脸上：只标 360 而实际要 510，
+          // 是这个模式下最容易踩的一脚
+          const price =
+            it.unlockFee > 0 ? `${d.cost} + 解锁 ${it.unlockFee}` : `${it.gold}`;
+          // 已经在场的英雄造不出第二个（含蛋还没孵的那种），但当前选中的留活口，
+          // 否则旧存档里的那一格会显示成"不指定"，看着像自己跳掉了
+          const blocked = it.blocked && d.id !== sel ? ` disabled` : '';
+          const note = it.blocked ? ` · ${it.blocked}` : '';
+          return `<option value="${d.id}"${d.id === sel ? ' selected' : ''}${blocked}>${d.name} · ${price} 金${note}</option>`;
+        }),
       )
       .join('');
+  };
+
+  const siteOpts = (unitId: string, sel: string) => {
+    const own = ownSites();
+    if (own.length === 0) return '<option value="">没有产兵点</option>';
+    return [
+      `<option value=""${sel ? '' : ' selected'}>哪座都行</option>`,
+      ...own.map((s) => {
+        // 标一句"产不了"，而不是把选项禁掉：这和"钱不够"是同一类后果——
+        // 排了造不出来，是玩家该自己看见的事，不是界面替他做主的事
+        const bad = unitEraProblem(unitId, s);
+        return `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${s.label}${bad}</option>`;
+      }),
+    ].join('');
+  };
 
   const slots = Array.from({ length: CONFIG.commanderSlots }, (_, i) => {
     const label = i === 0 ? '本回合' : `+${i}`;
+    const cur = queue[i] ?? '';
     return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
       <span class="cmd-step">${label}</span>
-      <select data-slot="${i}">${opts(queue[i] ?? '')}</select>
+      <select data-slot="${i}" title="这一格造什么">${opts(cur)}</select>
+      <select data-site="${i}" title="由哪个产兵点产出"${cur ? '' : ' disabled'}>${siteOpts(cur, sites[i] ?? '')}</select>
       <span class="cmd-est" data-est="${i}"></span>
     </label>`;
   }).join('');
+
+  // 分类 chip 只列"这一局真有的那几类"：没有船的地图不该留一颗永远点不出东西的按钮
+  const avail = CMD_CLASS_ORDER.filter((c) => items.some((it) => it.classes.includes(c)));
+  const classChips = [
+    `<button class="chip ${commanderClass === '' ? 'active' : ''}" data-cmd-class="">全部</button>`,
+    ...avail.map(
+      (c) =>
+        `<button class="chip ${commanderClass === c ? 'active' : ''}" data-cmd-class="${c}">${CMD_CLASS_LABEL[c]}</button>`,
+    ),
+  ].join('');
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
@@ -2552,7 +2747,21 @@ function renderCommander(): void {
       }</span>
       <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
     </div>
-    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">${slots}</div>
+    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">
+      <div class="cmd-filter">
+        <input
+          class="cmd-search"
+          type="search"
+          data-act="cmd-search"
+          value="${escAttr(commanderQuery)}"
+          placeholder="搜兵种：名字、单字图标，或者「远程」「英雄」"
+          autocomplete="off"
+        />
+        <div class="chip-row">${classChips}</div>
+        <span class="cmd-count">${shown.length} / ${items.length} 个兵种${commanderQuery || commanderClass ? '（已筛选）' : ''}</span>
+      </div>
+      ${slots}
+    </div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
       <button class="btn btn-primary" data-cmd="run">${
@@ -2563,19 +2772,88 @@ function renderCommander(): void {
   refreshEstimates();
 }
 
-/** 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等） */
-commanderEl.addEventListener('change', (e) => {
-  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-slot]');
-  if (!sel) return;
+/** 检索词/分类是不是命中这一项 */
+function cmdMatch(it: CmdItem): boolean {
+  if (commanderClass !== '' && !it.classes.includes(commanderClass as CmdClass)) return false;
+  const q = commanderQuery.trim().toLowerCase();
+  if (!q) return true;
+  const d = it.def;
+  if (d.name.toLowerCase().includes(q)) return true;
+  if (d.id.toLowerCase().includes(q)) return true;
+  if (d.short === q || d.short.toLowerCase() === q) return true;
+  // 分类名也参与匹配：敲「远程」两个字，比去点那颗 chip 更顺手
+  return it.classes.some((c) => CMD_CLASS_LABEL[c].includes(q));
+}
+
+/** 这个产兵点能不能造这一格点的兵（返回给下拉选项后面那半句提示） */
+function unitEraProblem(unitId: string, site: { era: number; city: boolean }): string {
+  if (!unitId) return '';
+  if (unitId === ORDER_UPGRADE) return site.city ? '' : ' · 营不升级';
+  const def = state.unitTypes[unitId];
+  if (!def) return '';
+  return def.era > site.era ? ` · 只到 ${site.era} 代` : '';
+}
+
+/** 塞进 HTML 属性的文本：搜索框内容来自玩家，必须转义 */
+const escAttr = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/**
+ * 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等）。
+ *
+ * 两个下拉一起收：兵种和产兵点是同一格的两半，分开发会让"改了城、兵种那半
+ * 还是老的"这种中间状态先写进状态里。
+ */
+function readCommanderPlan(): { queue: string[]; sites: string[] } {
   const queue = Array.from(
     commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
   ).map((s) => s.value);
-  dispatch({ type: 'SET_ORDERS', queue });
+  const sites = Array.from(
+    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]'),
+  ).map((s) => s.value);
+  return { queue, sites };
+}
+
+/**
+ * 把产兵点下拉回填成状态里的值。
+ *
+ * 兵种被改成「不指定」时，规则层会把那一格的产兵点抹成空串（"这回合什么都不造"
+ * 却留着"造在哪座城"，下次一改兵种就会把那座城悄悄带上）。下拉得跟着回填，
+ * 否则界面还显示着 c1，而状态里已经是空的了——两边各说各话。
+ */
+function syncCommanderSites(): void {
+  const queue = ordersOf(state, me());
+  const sites = orderSitesOf(state, me());
+  commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]').forEach((sel) => {
+    const i = Number(sel.dataset.site);
+    const want = sites[i] ?? '';
+    if (sel.value !== want) sel.value = want;
+    sel.disabled = !(queue[i] ?? '');
+  });
+}
+
+commanderEl.addEventListener('change', (e) => {
+  const el = e.target as HTMLElement;
+  if (!el.matches('select[data-slot], select[data-site]')) return;
+  // 产兵点下拉跟着兵种走：兵种一改，那一格的"能造吗"结论就变了，
+  // 而 estimate 是唯一会说这件事的地方，所以改完要把提示一起刷新
+  const { queue, sites } = readCommanderPlan();
+  dispatch({ type: 'SET_ORDERS', queue, sites });
+  syncCommanderSites();
   refreshEstimates();
 });
 
 commanderEl.addEventListener('click', (e) => {
-  const cmd = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
+  const el = e.target as HTMLElement;
+  const cls = el.closest<HTMLElement>('[data-cmd-class]');
+  if (cls) {
+    // 再点一次当前那一类＝回到全部，和别处的 chip 一个手感
+    const next = cls.dataset.cmdClass ?? '';
+    commanderClass = commanderClass === next ? '' : next;
+    commanderSig = '';
+    renderCommander();
+    return;
+  }
+  const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
   if (cmd === 'run') void runCommanderBatch();
   if (cmd === 'stop') {
@@ -2590,11 +2868,58 @@ commanderEl.addEventListener('click', (e) => {
   }
 });
 
+/**
+ * 参谋部的检索框。
+ *
+ * 和侧栏那个产兵搜索框是同一套讲究：重绘会换掉整个 input，
+ * 所以敲完要把焦点和光标还回去；**输入法组字期间一律不重绘**——
+ * 中文输入时那段"chuan"的缓冲挂在 DOM 节点上，把节点换掉会让它重投一遍，
+ * 最后变成 "chuanchuan船"。
+ */
+const isCommanderSearch = (el: EventTarget | null): el is HTMLInputElement =>
+  el instanceof HTMLInputElement && el.dataset.act === 'cmd-search';
+
+let commanderComposing = false;
+
+function repaintCommander(): void {
+  commanderSig = '';
+  renderCommander();
+  const again = commanderEl.querySelector<HTMLInputElement>('[data-act="cmd-search"]');
+  if (!again) return;
+  again.focus({ preventScroll: true });
+  const end = again.value.length;
+  try {
+    again.setSelectionRange(end, end);
+  } catch {
+    // type=search 在某些内核上不支持选区，光标在末尾也无所谓
+  }
+}
+
+commanderEl.addEventListener('compositionstart', (e) => {
+  if (isCommanderSearch(e.target)) commanderComposing = true;
+});
+
+commanderEl.addEventListener('compositionend', (e) => {
+  if (!isCommanderSearch(e.target)) return;
+  commanderComposing = false;
+  commanderQuery = e.target.value;
+  repaintCommander();
+});
+
+commanderEl.addEventListener('input', (e) => {
+  if (!isCommanderSearch(e.target)) return;
+  commanderQuery = e.target.value;
+  if (commanderComposing || (e as InputEvent).isComposing === true) return;
+  repaintCommander();
+});
+
 /** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
 function commanderBudget(player: PlayerId): Partial<AiBudget> {
   const head = ordersOf(state, player)[0] ?? '';
-  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null };
-  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
+  // 队首那一格指定的产兵点：空串＝不指定（AI 自己挑最合适的那座）
+  const site = orderSitesOf(state, player)[0] || null;
+  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null, orderSite: site };
+  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null, orderSite: head ? site : null };
 }
 
 /**
@@ -2623,11 +2948,12 @@ async function runCommanderBatch(): Promise<void> {
   clearSelection();
   aiPaused = false;
   // 先把当前下拉里的选择落到状态里：玩家可能只是改了选择就直接点执行
-  const plan = Array.from(
-    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
-  ).map((s) => s.value);
-  if (plan.length > 0) {
-    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+  //
+  // 兵种和产兵点一起收：只落兵种会让"这一格造在哪座城"退回 AI 自选，
+  // 玩家排了半天的布阵在按执行的一瞬间被抹掉。
+  const plan = readCommanderPlan();
+  if (plan.queue.length > 0) {
+    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
     if (set.ok) state = set.state;
   }
 
@@ -2682,7 +3008,7 @@ async function runCommanderBatch(): Promise<void> {
 
   // 单机：把这批计划重新装回序列，玩家满意的话下一次直接点执行，不用重排 5 格。
   // 这也正是"减负"——排一次能用很多批，想改再改。
-  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
   if (rearm.ok) state = rearm.state;
 
   saveMatch(state);
@@ -2868,7 +3194,24 @@ function godUi() {
     myTurn: godMyTurn(),
     passing: godPassing,
     selected: godSelectedNote(),
+    // 侧栏那块「手上这支兵」要它本人：工具栏一行只能放血量，技能按钮放不下
+    picked: selectedId ? (state.units.find((u) => u.id === selectedId) ?? null) : null,
   };
+}
+
+/**
+ * 「手上这支兵」这一路会变的所有状态：血量、还能走/打、技能冷却。
+ *
+ * 两个签名都要它：工具栏那行状态文字写的是血量与行动力，侧栏那块卡写的是
+ * 同一批数字再加技能按钮。只认 `selectedId` 的话，同一个兵挨了一刀、
+ * 或者刚开完技能，两块地方都会停在旧内容上——而那正是最需要看准的时刻。
+ */
+function godPickedSig(): string {
+  const u = selectedId ? state.units.find((x) => x.id === selectedId) : undefined;
+  if (!u) return '-';
+  return `${u.id}:${u.hp}:${u.moved ? 'm' : '-'}${u.acted ? 'a' : '-'}:${
+    u.attacksLeft ?? ''
+  }:${JSON.stringify(u.skillCd ?? {})}`;
 }
 
 function renderGodBar(): void {
@@ -2888,8 +3231,9 @@ function renderGodBar(): void {
     // 这三样都会改工具栏的按钮和提示
     godPlay ?? '-',
     godPassing ? 'pass' : '-',
-    // 状态行会显示"手上这支兵还剩多少行动力"，换了选中就得重画
-    selectedId ?? '-',
+    // 状态行会显示"手上这支兵还剩多少行动力"，所以不是只看换了没换，
+    // 血量/行动力/技能冷却任何一项变了都得重写这一行
+    godPickedSig(),
     godRunning ? `run${godRound}` : '-',
     godResult,
     state.units.length,
@@ -2907,6 +3251,7 @@ function renderGodBar(): void {
 }
 
 function renderGodShelf(): void {
+  const pickedSig = godPickedSig();
   const sig = [
     Object.keys(state.unitTypes).length,
     godSide,
@@ -2926,8 +3271,9 @@ function renderGodShelf(): void {
     // 操控档决定货架顶上那句提示，AI 替对面走的时候又要换一句
     godPlay ?? '-',
     godPassing ? 'pass' : '-',
-    // 手上选着谁：状态行会换成这支兵的血量与行动力
-    selectedId ?? '-',
+    // 「手上这支兵」那块卡：id、血量、还能走/打、技能冷却。
+    // 只放 id 是不够的——开完技能冷却变了，卡片却还停在"就绪"上。
+    pickedSig,
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;

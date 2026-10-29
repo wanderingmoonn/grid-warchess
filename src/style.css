@@ -2305,6 +2305,66 @@ a.btn {
   font-weight: 600;
 }
 
+/*
+ * 一格里的两个下拉：造什么 / 由哪个产兵点造。
+ *
+ * 产兵点那个压暗一点：它是修饰"造什么"的，不该和兵种名抢注意力；
+ * 兵种没选时它是灰的（`disabled`），一眼就看得出"先选兵，再选城"。
+ */
+.cmd-slot select[data-site] {
+  max-width: 120px;
+  color: var(--text-2);
+  border-left: 1px solid var(--line);
+  padding-left: 6px;
+}
+
+.cmd-slot select[data-site]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/*
+ * 检索行：搜索框 + 分类 chip + 计数。
+ *
+ * 占满一整行（flex-basis:100%），否则它会被挤到第 5 格右边、
+ * 把 5 个格子推成两行。一排兵种六七十项，五个下拉各翻一遍是没法用的——
+ * 搜索和分类把"我就要那个会飞的"压到两次点击里。
+ */
+.cmd-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+}
+
+.cmd-search {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  flex: 0 1 240px;
+  min-width: 140px;
+}
+
+.cmd-search:focus {
+  outline: none;
+  border-color: var(--a);
+}
+
+.cmd-search::placeholder {
+  color: var(--text-3);
+}
+
+.cmd-count {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 .cmd-slot select {
   font: inherit;
   font-size: 13px;
@@ -2328,6 +2388,16 @@ a.btn {
 
   .cmd-slot select {
     max-width: 110px;
+  }
+
+  /* 窄屏一格只留"造什么"：产兵点跟着默认走（哪座都行），
+     5 格 × 两个下拉会把屏幕横向撑破 */
+  .cmd-slot select[data-site] {
+    max-width: 92px;
+  }
+
+  .cmd-search {
+    flex: 1 1 100%;
   }
 }
 

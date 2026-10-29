@@ -1614,6 +1614,149 @@ check('改一格只更新序列，下拉不会被重建', () => {
   assert.equal(again?.value, opt.value, '选中的兵种应该还留着');
 });
 
+check('每一格都能指定由哪座城产兵，选了就写进序列', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar);
+  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="0"]');
+  const sites = bar.querySelectorAll<HTMLSelectElement>('select[data-site]');
+  assert.equal(sites.length, 5, '5 格各有一个产兵点下拉');
+  assert.ok(sites[0], '找不到第一格的产兵点');
+
+  // 先选一个真兵种：产兵点下拉只在"这一格要造东西"时才可用
+  const unitOpt = Array.from(sel!.options).find((o) => o.value && o.value !== '@upgrade');
+  assert.ok(unitOpt, '至少要有一个能造的兵种');
+  sel!.value = unitOpt.value;
+  sel!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const siteSel = doc
+    .querySelector<HTMLElement>('#commander')!
+    .querySelector<HTMLSelectElement>('select[data-site="0"]')!;
+  assert.equal(siteSel.disabled, false, '这一格有兵种，产兵点就该能选');
+  const cityOpt = Array.from(siteSel.options).find((o) => o.value !== '');
+  assert.ok(cityOpt, '自己的城应该在下拉里');
+
+  siteSel.value = cityOpt.value;
+  siteSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orderSites?: { A?: string[] };
+  };
+  assert.equal(
+    saved.orderSites?.A?.[0],
+    cityOpt.value,
+    '选了产兵点就得落到 state 里，否则 AI 执行时还是自己挑',
+  );
+});
+
+check('兵种能搜：敲关键词只剩对得上号的，已排好的那一格不会被筛掉', () => {
+  const before = doc
+    .querySelector<HTMLElement>('#commander')!
+    .querySelector<HTMLSelectElement>('select[data-slot="0"]')!.value;
+  const input = doc.querySelector<HTMLInputElement>('[data-act="cmd-search"]');
+  assert.ok(input, '参谋部该有一个搜索框');
+
+  input!.value = '弓';
+  input!.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+  const bar = doc.querySelector<HTMLElement>('#commander')!;
+  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="0"]')!;
+  const names = Array.from(sel.options).map((o) => o.textContent ?? '');
+  assert.ok(
+    names.some((t) => t.includes('弓')),
+    `搜「弓」至少要剩下弓手，实际选项：${names.join('/')}`,
+  );
+  assert.equal(sel.value, before, '搜索只是"看得见什么"，不该把已经排好的那一格改掉');
+  // 筛完剩下的每一项都得真的含这个字（否则等于没筛）
+  const units = Array.from(sel.options).filter((o) => o.value && o.value !== '@upgrade');
+  assert.ok(units.length < names.length || names.length <= 2, '应该比全部那一档窄');
+
+  // 清空恢复
+  const again = doc.querySelector<HTMLInputElement>('[data-act="cmd-search"]')!;
+  again.value = '';
+  again.dispatchEvent(new window.Event('input', { bubbles: true }));
+});
+
+check('兵种能分类：点「远程」之后，下拉里只剩射程 2 格以上的', () => {
+  const chip = doc.querySelector<HTMLElement>('[data-cmd-class="ranged"]');
+  assert.ok(chip, '参谋部该有「远程」这个分类');
+  chip!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const bar = doc.querySelector<HTMLElement>('#commander')!;
+  // 看第二格：那格是空的，不会掺进"当前已选"那一条
+  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="1"]')!;
+  const units = Array.from(sel.options).filter((o) => o.value && o.value !== '@upgrade');
+  assert.ok(units.length > 0, '「远程」不该是空的');
+  // 兵种表要查对局里的那一份：前面几条用例往 UNIT_TYPES 里注册过自定义兵种，
+  // 只认全局表会把它们当成"射程 undefined"而误报
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    unitTypes: Record<string, { range: number }>;
+  };
+  for (const o of units) {
+    const def = saved.unitTypes[o.value];
+    assert.ok(def && def.range >= 2, `${o.value} 射程只有 ${def?.range}，不该出现在远程里`);
+  }
+
+  // 再点一次同一颗＝回到全部
+  const all = doc.querySelector<HTMLElement>('[data-cmd-class=""]');
+  assert.ok(all, '该有「全部」那一颗');
+  all!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const back = doc
+    .querySelector<HTMLElement>('#commander')!
+    .querySelectorAll<HTMLSelectElement>('select[data-slot="1"]')[0]!;
+  const backUnits = Array.from(back.options).filter((o) => o.value && o.value !== '@upgrade');
+  assert.ok(backUnits.length >= units.length, '切回全部之后不该更少');
+});
+
+check('英雄在参谋部里标着解锁费；已经在场的那一个排不进去', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 4,
+      commanderMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    424250,
+    {},
+  );
+  st.current = 'A';
+  st.players.A.gold = 2000;
+  // 先在场上放一个矮人王：它就该从下拉里"关掉"，而不是排了没反应
+  const king = st.unitTypes['dwarf-king']!;
+  st.units.push({
+    id: 'h0',
+    type: 'dwarf-king',
+    owner: 'A',
+    x: 2,
+    y: 2,
+    hp: king.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+
+  const w = bootWith(st);
+  const d = w.document;
+  const bar = d.querySelector<HTMLElement>('#commander');
+  assert.ok(bar && !bar.hidden, '指挥官栏该显示出来');
+  const opts = Array.from(bar!.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0]!.options);
+
+  const mine = opts.find((o) => o.value === 'dwarf-king');
+  assert.ok(mine, '矮人王应该在下拉里');
+  assert.equal(mine!.disabled, true, '场上已经有一个了，这一格排了也造不出来');
+  assert.ok((mine!.textContent ?? '').includes('已在场'), `该写明原因，实际：${mine!.textContent}`);
+
+  const other = opts.find((o) => o.value === 'hydra');
+  assert.ok(other, '九头蛇也该在下拉里');
+  assert.equal(other!.disabled, false, '没在场上的英雄当然能排');
+  const fee = st.unitTypes['hydra']!.unlockCost ?? 0;
+  assert.ok(
+    (other!.textContent ?? '').includes(`解锁 ${fee}`),
+    `第一次招的英雄要把解锁费写出来（${fee} 金），实际：${other!.textContent}`,
+  );
+});
+
 
 await checkAsync('每格都给出可用金币的估算', async () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
@@ -2060,6 +2203,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
       myTurn: false,
       passing: false,
       selected: '',
+      picked: null,
     });
   const picks = (html: string) => (html.match(/data-act="god-pick"/g) ?? []).length;
 
@@ -2466,6 +2610,74 @@ check('上帝模式：两边我都打——结束回合不叫 AI，另一边自�
   const foe = saved().units.find((u) => u.id === 'e1')!;
   assert.equal(foe.x, 9, '另一边的兵也该走得动');
   assert.equal(foe.y, 8);
+});
+
+/**
+ * 上帝模式下的技能。
+ *
+ * 这个模式的侧栏整块让给了货架，正常对局那张属性卡（含技能菜单）根本不存在。
+ * 于是"选中英雄 → 按技能"这条路是断的：棋盘上连一个按钮都没有。
+ * 这一条守着"补回来的那块卡"：切到操控档、点英雄、按技能，技能真进冷却。
+ */
+check('上帝模式：操控档里选中英雄，侧栏能开技能', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 3,
+      godMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    424251,
+    {},
+  );
+  for (const t of st.tiles) {
+    t.terrain = 'plain';
+    t.cityId = null;
+  }
+  st.units = [];
+  st.cities = [];
+  st.current = 'A';
+  st.turn = 1;
+  // 矮人王 + 一个三格内的敌人：投斧要有目标才值得开
+  godPut(st, 'h1', 'A', 'dwarf-king', 3, 3);
+  godPut(st, 'e1', 'B', 'militia', 5, 3);
+
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      units: { id: string; skillCd?: Record<string, number>; heroBuff?: Record<string, unknown> }[];
+    };
+
+  // 只摆放的时候没有"手上这支兵"这回事：点棋盘是落子，不是选中
+  assert.equal(d.querySelector('[data-act="hero-skill"]'), null, '还没进操控档，不该有技能按钮');
+
+  click('[data-act="god-play"][data-play="me"]');
+  click('.unit[data-id="h1"]');
+
+  const btn = d.querySelector<HTMLButtonElement>('[data-act="hero-skill"]');
+  assert.ok(btn, '操控档里选中英雄，侧栏就该出现技能按钮');
+  assert.equal(btn!.disabled, false, '冷却好了、轮到自己，就该能按');
+  assert.ok(
+    (d.querySelector('#side')?.textContent ?? '').includes('投斧'),
+    '按钮上要写清是哪个技能',
+  );
+
+  btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const hero = saved().units.find((u) => u.id === 'h1')!;
+  assert.equal(hero.skillCd?.['throw-axe'], 1, '按下去技能要真的进冷却');
+  assert.ok(hero.heroBuff?.rangeMul === 0.6, '投斧的效果也得落到这个兵身上');
+
+  // 开完之后按钮该灰掉并说明还要等几回合——不然玩家会以为没点中
+  const after = d.querySelector<HTMLButtonElement>('[data-act="hero-skill"]');
+  assert.ok(after, '按钮不该消失');
+  assert.equal(after!.disabled, true, '冷却中就该是灰的');
+  assert.ok((after!.textContent ?? '').includes('回合'), '要写清还要等几回合');
 });
 
 console.log('\n点敌人就是开火');

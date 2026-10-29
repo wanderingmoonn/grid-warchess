@@ -120,11 +120,14 @@ import {
   incomeOf,
   incomeResOf,
   movePower,
+  orderSitesOf,
   ordersOf,
+  heroBlocked,
   previewAttack,
   reachableTiles,
   rebuildCost,
   recruitCost,
+  recruitPriceOf,
   recruitResCost,
   recruitSpawnCells,
   orderedStatuses,
@@ -151,6 +154,7 @@ import {
   visibleTilesOf,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
+import { GOLD } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import type {
@@ -6567,6 +6571,286 @@ test('AI 排的序列会承接前面的产出，不是五格同一种兵', () =>
   const queue = (a as { type: 'SET_ORDERS'; queue: string[] }).queue;
   const kinds = new Set(queue.filter((id) => id !== ORDER_UPGRADE));
   assert.ok(kinds.size >= 2, `五格应该排出至少两种兵，实际：${queue.join(',')}`);
+});
+
+test('每一格都能指定由哪座城产兵，序列与产兵点逐格对齐', () => {
+  const s = commandPost();
+  const cities = citiesOf(s, 'A');
+  assert.ok(cities.length >= 1, 'A 方至少该有一座城');
+  const second = cities[1] ?? cities[0]!;
+  const r = applyAction(s, {
+    type: 'SET_ORDERS',
+    queue: ['archer', 'militia', ''],
+    sites: [second.id, '', ''],
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.deepEqual(ordersOf(r.state, 'A'), ['archer', 'militia']);
+  assert.deepEqual(orderSitesOf(r.state, 'A'), [second.id, ''], '第二格不指定，就是空串');
+});
+
+test('指定的产兵点不存在、不是自己的、或者不是军营，都排不进去', () => {
+  const s = commandPost();
+  const enemyCity = citiesOf(s, 'B')[0]!;
+  const bad = [
+    { sites: ['no-such-city'], why: '不存在' },
+    { sites: [enemyCity.id], why: '不是自己的城' },
+    { sites: [s.units.find((u) => u.owner === 'A')!.id], why: '不是军营' },
+  ];
+  for (const b of bad) {
+    const r = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'], sites: b.sites });
+    assert.equal(r.ok, false, `指定了${b.why}的产兵点，应当被拒`);
+  }
+});
+
+test('空位上的产兵点会被抹成空串：那一格本来就不造东西', () => {
+  const s = commandPost();
+  const city = citiesOf(s, 'A')[0]!;
+  const r = applyAction(s, {
+    type: 'SET_ORDERS',
+    queue: ['archer', '', 'militia'],
+    sites: [city.id, city.id, ''],
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.deepEqual(orderSitesOf(r.state, 'A'), [city.id, '', ''], '中间那个洞不该留着产兵点');
+});
+
+test('回合末序列前移时，产兵点跟着一起前移（不能错位到前一格）', () => {
+  const s = commandPost();
+  const cities = citiesOf(s, 'A');
+  const first = cities[0]!;
+  const second = cities[1] ?? cities[0]!;
+  const r = applyAction(s, {
+    type: 'SET_ORDERS',
+    queue: ['archer', 'militia'],
+    sites: [first.id, second.id],
+  });
+  assert.ok(r.ok);
+  const end = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(end.ok);
+  assert.deepEqual(ordersOf(end.state, 'A'), ['militia']);
+  assert.deepEqual(orderSitesOf(end.state, 'A'), [second.id], '产兵点必须跟着它那一格走');
+});
+
+test('指定了产兵点，AI 就只从那一座出兵', () => {
+  // 这里点名的是**最后一座城**：不指定产兵点时，几个候选的打分往往咬得很紧，
+  // 平手时会落在列表最前面那一座。所以"最后一个"正好是"不指定时选不到的那一座"——
+  // 只要它真出了兵，就只可能是那条指定在起作用。
+  for (const seed of [12345, 777, 20261029, 4242]) {
+    const s = commandPost(undefined, seed);
+    const cities = citiesOf(s, 'A');
+    assert.ok(cities.length >= 2, '这一条要两座城才成立');
+    const want = cities[cities.length - 1]!;
+    const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'], sites: [want.id] });
+    assert.ok(set.ok, set.ok ? '' : set.reason);
+    let cur = set.state;
+    let got: { cityId?: string; unitType?: string } | null = null;
+    for (let i = 0; i < AI_MAX_STEPS; i++) {
+      const a = aiNextAction(cur, DEFAULT_BUDGET);
+      if (!a) break;
+      if (a.type === 'RECRUIT') {
+        got = a;
+        break;
+      }
+      const r = applyAction(cur, a);
+      if (!r.ok) break;
+      cur = r.state;
+    }
+    assert.ok(got, `种子 ${seed}：钱够就该造出来`);
+    assert.equal(got.cityId, want.id, `种子 ${seed}：指定了哪座城，兵就该从哪座城出来`);
+    assert.equal(got.unitType, 'archer', '队首点名了弓手，就该造弓手');
+  }
+});
+
+test('指定的那座城放不下新兵时，也不会从别的城偷偷出兵', () => {
+  // 把点名的那座城的出兵格全站满。另一座城空着、什么都造得出来——
+  // 但玩家要的是"兵从这座城出来"，出不来就是出不来。
+  const s = commandPost();
+  const cities = citiesOf(s, 'A');
+  assert.ok(cities.length >= 2, '这一条要两座城才成立');
+  const want = cities[0]!;
+  for (const t of cityTiles(want)) {
+    s.units.push({
+      id: `fill-${t.x}-${t.y}`,
+      type: 'militia',
+      owner: 'A',
+      x: t.x,
+      y: t.y,
+      hp: 100,
+      kills: 0,
+      moved: true,
+      acted: true,
+    });
+  }
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: ['archer'], sites: [want.id] });
+  assert.ok(set.ok, set.ok ? '' : set.reason);
+  let cur = set.state;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
+    if (!a) break;
+    assert.notEqual(a.type, 'RECRUIT', '点名的那座城站满了，就该空转，不能换一座城出');
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+});
+
+test('指定了一座时代不够的城：这一格空转，不换座城凑数', () => {
+  // 两座城一低一高，长矛兵只有高的那座造得出来。玩家点名了低的那座，
+  // 正确的行为是**这一格空转**——而不是"反正另一座造得出来，就替你换了"。
+  const s = commandPost();
+  const cities = citiesOf(s, 'A');
+  assert.ok(cities.length >= 2, '这一条要两座城才成立');
+  const low = cities[0]!;
+  const high = cities[1]!;
+  low.era = 1;
+  high.era = 3;
+
+  /** 跑一整个回合，返回它造出来的那个兵（没造就是 null） */
+  const runTurn = (siteId: string): string | null => {
+    const set = applyAction(s, { type: 'SET_ORDERS', queue: ['spearman'], sites: [siteId] });
+    assert.ok(set.ok, set.ok ? '' : set.reason);
+    let cur = set.state;
+    for (let i = 0; i < AI_MAX_STEPS; i++) {
+      const a = aiNextAction(cur, DEFAULT_BUDGET);
+      if (!a) break;
+      if (a.type === 'RECRUIT') return a.unitType;
+      const r = applyAction(cur, a);
+      if (!r.ok) break;
+      cur = r.state;
+    }
+    return null;
+  };
+
+  assert.equal(runTurn(low.id), null, '点名的那座城时代不够，就该空转，不能偷偷换一座城');
+  assert.equal(runTurn(high.id), 'spearman', '换成够高级的那座城，同一个兵就该造得出来');
+});
+
+test('「升级时代」那一格也能指定升哪座城', () => {
+  const s = commandPost();
+  const cities = citiesOf(s, 'A');
+  assert.ok(cities.length >= 2);
+  const want = cities[1]!;
+  const set = applyAction(s, { type: 'SET_ORDERS', queue: [ORDER_UPGRADE], sites: [want.id] });
+  assert.ok(set.ok, set.ok ? '' : set.reason);
+  let cur = set.state;
+  let upgraded: string | null = null;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
+    if (!a) break;
+    if (a.type === 'UPGRADE') {
+      upgraded = a.cityId;
+      break;
+    }
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.equal(upgraded, want.id, '指定了哪座城，就该升哪座城');
+});
+
+/* ------------------------------------------------------------------ */
+/* 英雄：价格口径与"只能有一个"                                        */
+/* ------------------------------------------------------------------ */
+
+/** 带奇想·英雄包的一局，A 方行动，城市到第四代（英雄在第三代与第四代） */
+function heroPost(extra?: Partial<MatchConfig>): GameState {
+  const s = fresh({ startEra: 4, expansionIds: ['fantasy-core', 'fantasy-heroes'], ...extra });
+  s.current = 'A';
+  s.players.A.gold = 2000;
+  return s;
+}
+
+test('英雄的价格口径：第一次含解锁费，解锁之后不再收', () => {
+  const s = heroPost();
+  const def = s.unitTypes['dwarf-king']!;
+  const base = recruitCost(s, 'A', def);
+  const fee = def.unlockCost ?? 0;
+  assert.ok(fee > 0, '这一条要求英雄真有解锁费');
+
+  const q = recruitPriceOf(s, 'A', def);
+  assert.equal(q.price[GOLD], base, '兵价还是兵价');
+  assert.equal(q.unlockFee, fee, '第一次要把解锁费算进来');
+  assert.equal(q.gold, base + fee, '真正要付的是两者之和');
+
+  // 金正好够：招完该是 0。以前界面按 base 估价，这一下会被规则层拒掉
+  s.players.A.gold = base + fee;
+  const city = citiesOf(s, 'A')[0]!;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.players.A.gold, 0, '金刚好够，招完就该一文不剩');
+
+  const again = recruitPriceOf(r.state, 'A', def);
+  assert.equal(again.unlockFee, 0, '解锁过了就不再收');
+  assert.equal(again.gold, base, '之后只收兵价');
+});
+
+test('AI 在指挥官模式下也按含解锁费的价格判断买不买得起', () => {
+  const s = heroPost({ commanderMode: true, aiAlly: true });
+  const def = s.unitTypes['dwarf-king']!;
+  const base = recruitCost(s, 'A', def);
+  const fee = def.unlockCost ?? 0;
+
+  // 只够兵价：AI 不该把这一格排成"造英雄"（它会白跑一趟）
+  s.players.A.gold = base;
+  s.orders = { A: ['dwarf-king'] };
+  let cur = s;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
+    if (!a) break;
+    assert.equal(a.type === 'RECRUIT', false, '钱不够解锁费，就不该提这个动作');
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+
+  // 加上解锁费就够了
+  const s2 = heroPost({ commanderMode: true, aiAlly: true });
+  s2.players.A.gold = base + fee;
+  s2.orders = { A: ['dwarf-king'] };
+  let cur2 = s2;
+  let got = false;
+  for (let i = 0; i < AI_MAX_STEPS; i++) {
+    const a = aiNextAction(cur2, DEFAULT_BUDGET);
+    if (!a) break;
+    if (a.type === 'RECRUIT' && a.unitType === 'dwarf-king') {
+      got = true;
+      break;
+    }
+    const r = applyAction(cur2, a);
+    if (!r.ok) break;
+    cur2 = r.state;
+  }
+  assert.ok(got, '钱够兵价 + 解锁费，英雄就该造得出来');
+});
+
+test('英雄的唯一性：蛋还没孵出来，也不能再造一只', () => {
+  const s = heroPost();
+  const def = s.unitTypes['phoenix']!;
+  assert.ok(def.hero && def.era <= 4, '这一条要一个能造的不死鸟');
+  const city = citiesOf(s, 'A')[0]!;
+  // 先造一只，再让它"倒下"留下一枚蛋——规则层的唯一性检查必须把蛋也算进去
+  const first = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'phoenix' });
+  assert.ok(first.ok, first.ok ? '' : first.reason);
+  const st = first.state;
+  const phoenix = st.units.find((u) => u.owner === 'A' && u.type === 'phoenix')!;
+  st.units = st.units.filter((u) => u.id !== phoenix.id);
+  st.pendingEgg = {
+    owner: 'A',
+    type: 'phoenix',
+    x: phoenix.x,
+    y: phoenix.y,
+    radius: 1,
+    hpRatio: 0.5,
+  };
+
+  const again = applyAction(st, { type: 'RECRUIT', cityId: city.id, unitType: 'phoenix' });
+  assert.equal(again.ok, false, '蛋还等着孵，不该能再造一只');
+  assert.ok(
+    !again.ok && again.reason.includes('蛋'),
+    `理由该点明是那枚蛋：${!again.ok ? again.reason : ''}`,
+  );
+  // AI 那边也要先拦掉，否则它会每回合撞一次墙
+  assert.ok(heroBlocked(st, 'A', def), 'AI 的候选人列表也该把它排除');
 });
 
 /* ------------------------------------------------------------------ */
