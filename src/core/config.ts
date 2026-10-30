@@ -344,6 +344,29 @@ export const CATEGORY_NAME: Record<UnitCategory, string> = {
  * 桥梁（唯一的跨河手段）从"锦上添花"变成"必须提前规划"。
  */
 export const UNIT_TYPES: Record<string, UnitTypeDef> = {
+  // ─────────────────────────────────────────────────────────────
+  // 城防伪装：把 City 包一层最小的 Unit 形状，喂进 computeDamage。
+  // 判据只在这里出现一次，其余逻辑全靠 isCity 短路。
+  // ─────────────────────────────────────────────────────────────
+  '__city__': {
+    id: '__city__',
+    name: '城市',
+    short: '城',          // 兵种缩写，随便填
+    era: 'none' as any,   // 所属时代，如果你的 era 有严格枚举，这里直接 as any 绕过
+    armor: 0,             // 真实护甲会在计算时动态替换
+    weak: undefined,
+    resist: undefined,
+    bridges: false,
+    abilities: [],
+    category: 'building',
+    cost: 0,
+    move: 0,
+    atk: 0,
+    maxHp: 1,
+    range: 0,
+    vision: 0,
+    autoAttack: true,
+  } as UnitTypeDef, 
   // ================= 时代 1 · 古典 =================
   militia: {
     id: 'militia',
