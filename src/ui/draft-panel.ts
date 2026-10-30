@@ -112,8 +112,20 @@ export interface DraftScreenCtx {
 }
 
 /** 顶栏右上角的两颗按钮：跳过与退出。两个阶段都要能点到 */
-function headActions(isLobby: boolean): string {
+function headActions(isLobby: boolean, online: boolean): string {
   return `<div class="draft-head-actions">
+    ${
+      /*
+       * 「刷新房间状态」：联机选卡出岔子时的逃生口。
+       *
+       * 选卡的每一步都要写进房间，写失败（断网、对面抢先、手机切后台）之后
+       * 本机会停在一份"房间里并不存在"的名单上，看起来就是"点不动了"。
+       * 与其让玩家只能关页面重进，不如给他一颗按钮：按房间那份重新对齐。
+       */
+      online
+        ? '<button class="draft-btn is-quiet" data-draft-act="refresh" title="按房间里的状态重新对齐一次（卡住时点这里）">刷新房间状态</button>'
+        : ''
+    }
     <button class="draft-btn" data-draft-act="skip" title="${
       isLobby ? '不选卡，这一局直接用全部兵种开打' : '放弃这一轮选卡，改用全部兵种继续'
     }">跳过选卡</button>
@@ -166,7 +178,7 @@ function lobbyHtml(s: GameState, ctx: DraftScreenCtx): string {
         <span class="draft-step">选卡 · 等待开局</span>
         <span class="draft-seat">${room ? `房间 ${esc(room.code)}` : '本机 / 热座'}</span>
       </div>
-      ${headActions(true)}
+      ${headActions(true, room !== null)}
       <div class="draft-hint">${
         room
           ? room.peerSeated
@@ -280,7 +292,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         <span class="draft-seat">${sideName(s, seat)}操作中</span>
       </div>
       <div class="draft-timer ${secs <= 5 ? 'is-hurry' : ''}" data-ref="draft-timer">${secs}s</div>
-      ${headActions(false)}
+      ${headActions(false, ctx.room != null)}
       <div class="draft-hint">${hint}</div>
     </header>
     <div class="draft-body">

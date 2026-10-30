@@ -18,6 +18,7 @@ import {
   BASE_MAX_ERA,
   CONFIG,
   ERAS,
+  ORDER_IDLE,
   ORDER_UPGRADE,
   UNIT_TYPES,
   buildCostOf,
@@ -139,6 +140,7 @@ import {
 } from '../src/core/setup.ts';
 import {
   applyAction,
+  mergeDraftStep,
   adjacentToWater,
   attacksLeftOf,
   attacksPerTurn,
@@ -5558,6 +5560,60 @@ test('AI 决策是确定性的', () => {
   const a1 = aiNextAction(s);
   const a2 = aiNextAction(s);
   assert.deepEqual(a1, a2, '同一局面应该给出同一个决策');
+});
+
+test('指挥官模式：排在队首的「空过」不会被 AI 当成"没计划"而自作主张造兵', () => {
+  const s = fresh({ commanderMode: true });
+  s.current = 'B';
+  s.players.B.gold = 900;
+  s.orders = { ...(s.orders ?? {}), B: [ORDER_IDLE] };
+  s.orderSites = { ...(s.orderSites ?? {}), B: [''] };
+
+  // 这一回合 AI 可以走位、可以升级兵营，但绝不能再掏钱造兵
+  const acts: Action[] = [];
+  let cur = s;
+  for (let i = 0; i < 10; i++) {
+    const a = aiNextAction(cur);
+    if (!a) break;
+    acts.push(a);
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.equal(
+    acts.filter((a) => a.type === 'RECRUIT').length,
+    0,
+    `队首是@idle 时不该造兵，实际：${acts.map((a) => a.type).join(',')}`,
+  );
+  // 队列不能被"代排"覆盖掉：空过的意思就是这一格不花钱
+  assert.deepEqual(cur.orders?.B, [ORDER_IDLE], '序列要原样留着，等这一回合过去');
+  assert.equal(
+    acts.filter((a) => a.type === 'SET_ORDERS').length,
+    0,
+    '不该把玩家排的序列换成 AI 自己那套',
+  );
+
+  // 反证：同一个局面里，队首点的是一个**真兵种**时 AI 会把它造出来。
+  // 这一条必须留着——否则上面"一个兵都没造"也可能只是因为它这回合压根没得造。
+  const real = fresh({ commanderMode: true });
+  real.current = 'B';
+  real.players.B.gold = 900;
+  real.orders = { ...(real.orders ?? {}), B: ['militia'] };
+  real.orderSites = { ...(real.orderSites ?? {}), B: [''] };
+  let c2 = real;
+  const acts2: Action[] = [];
+  for (let i = 0; i < 12; i++) {
+    const a = aiNextAction(c2);
+    if (!a) break;
+    acts2.push(a);
+    const r = applyAction(c2, a);
+    if (!r.ok) break;
+    c2 = r.state;
+  }
+  assert.ok(
+    acts2.some((a) => a.type === 'RECRUIT'),
+    `队首点了民兵就该造民兵（实际：${acts2.map((a) => a.type).join(',')}）`,
+  );
 });
 
 test('AI 会招募和升级', () => {
@@ -11347,6 +11403,101 @@ test('选卡：超时——禁用视为放弃，选人由系统补一个', () =>
   // 没到时限的"超时"一律拒掉：只有时间能决定谁超时
   const early = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline - 1000 }, 'A');
   assert.ok(!early.ok, '没到点不该能提前触发超时');
+});
+
+/* ── 联机选卡的合并协议 ────────────────────────────────────────────────
+ *
+ * 这一段只在"两个浏览器 + 一个房间"时出错，却恰好是"禁不动、选不动"的来源，
+ * 所以用两个假客户端 + 一个假房间把它钉住。房间的规则和真实那张表一样：
+ * 只有 `turn` 还等于"我以为的进度号"才写得进去（乐观锁）。
+ */
+function fakeRoom(seed: number) {
+  const state0 = startStep(fresh({ draftMode: true }, seed));
+  return {
+    state: state0,
+    /** 房间那一列 turn：BP 期间存的是进度号 */
+    lock: state0.draft!.seq,
+    submit(client: GameState, expectedSeq: number): boolean {
+      if (this.lock !== expectedSeq) return false;
+      this.state = client;
+      this.lock = client.draft!.seq;
+      return true;
+    },
+  };
+}
+
+/**
+ * 一个客户端提交一步：本地先落（手感即时），被挡就合并重交。
+ * 这就是 main.ts 里 pushDraft 的算法，抽出来是为了能用例盯着。
+ */
+function clientSubmit(
+  room: ReturnType<typeof fakeRoom>,
+  local: GameState,
+  action: Parameters<typeof applyAction>[1],
+  actor: 'A' | 'B',
+): { state: GameState; ok: boolean } {
+  const applied = applyAction(local, action, actor);
+  if (!applied.ok) return { state: local, ok: false };
+  let next = applied.state;
+  for (let i = 0; i < 4; i++) {
+    // 第一轮用"我落这一步之前看到的进度号"，之后用房间刚写到的那个
+    const expected = i === 0 ? local.draft!.seq : room.lock;
+    if (room.submit(next, expected)) return { state: next, ok: true };
+    // 被对面先写了：把自己的这一步补到房间那份上，再来一次
+    const merged = mergeDraftStep(room.state, action, actor);
+    if (!merged.ok) return { state: room.state, ok: false };
+    next = merged.state;
+  }
+  return { state: room.state, ok: false };
+}
+
+test('联机选卡：两边同时禁用，后交的一方合并重交，两份名单都留在房间里', () => {
+  const room = fakeRoom(7201);
+  const a = structuredClone(room.state);
+  const b = structuredClone(room.state);
+  const banA = remainingUnits(a)[0]!;
+  const banB = remainingUnits(b).find((id) => id !== banA)!;
+
+  const ra = clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A');
+  assert.ok(ra.ok, 'A 应该交得上去（房间还停在开局那一步）');
+  const rb = clientSubmit(room, b, { type: 'DRAFT_BAN', unitId: banB, at: Date.now() }, 'B');
+  assert.ok(rb.ok, 'B 被挡回来之后要能合并重交，而不是失败');
+
+  assert.deepEqual(room.state.draft!.bans.A, [banA], '房间里必须留着 A 的禁用');
+  assert.deepEqual(room.state.draft!.bans.B, [banB], '房间里必须留着 B 的禁用');
+  assert.equal(room.state.draft!.phase, 'pick', '两边都禁完才进入选人');
+  // 两边都能靠"进度号变大"拉到这一份：谁也不会停在只有自己那一手的名单上
+  assert.ok(room.state.draft!.seq > a.draft!.seq, '房间的进度号要比 A 本地大，A 才拉得到');
+  assert.ok(room.state.draft!.seq > b.draft!.seq, '也要比 B 本地大');
+});
+
+test('联机选卡：超时是一步动作，提交进房间之后两边一起往前，不用再选一次', () => {
+  const room = fakeRoom(7202);
+  const a = structuredClone(room.state);
+  const r = clientSubmit(
+    room,
+    a,
+    { type: 'DRAFT_TIMEOUT', at: a.draft!.deadline } as Parameters<typeof applyAction>[1],
+    'A',
+  );
+  assert.ok(r.ok, '超时这一步也要提交进房间（以前只改本地）');
+  assert.equal(room.state.draft!.phase, 'pick', '房间跟着进入选人，不是只有本地前进');
+  assert.ok(room.state.draft!.seq > a.draft!.seq, 'B 靠进度号就能拉到这一步');
+});
+
+test('联机选卡：同一手补不进新局面上，就判失败让调用方退回房间那份', () => {
+  const room = fakeRoom(7203);
+  const a = structuredClone(room.state);
+  const banA = remainingUnits(a)[0]!;
+  assert.ok(clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A').ok);
+
+  // 对面那一手仍然补得进去（盲禁是双方各一次，池子里的东西谁都还没被禁掉）
+  const other = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'B');
+  assert.equal(other.ok, true, 'B 在合并后的局面上还能禁同一个兵（两个人可以禁同一个）');
+
+  // 但"同一个席位禁第二次"必须失败：否则重放会把一步变成两步
+  const again = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: 'archer', at: Date.now() }, 'A');
+  assert.equal(again.ok, false, 'A 已经禁过，再补一次必须被挡住');
 });
 
 test('选卡：AI 会禁用与选人，且只在池子里挑', () => {

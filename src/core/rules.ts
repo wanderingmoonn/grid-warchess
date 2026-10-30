@@ -46,6 +46,7 @@ import {
   CITY,
   CONFIG,
   ERAS,
+  ORDER_IDLE,
   ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
@@ -2631,6 +2632,26 @@ function markManualFire(s: GameState, u: Unit): void {
  * 唯一的状态迁移入口。
  * 所有 UI 操作、AI、未来的联机请求，都必须走这里。
  */
+/**
+ * 把"我这一手"补到房间里的**最新**状态上（联机选卡的合并规则）。
+ *
+ * 联机 AB 同时禁用时，两边都会先在本机落一步再提交。后交的那一方一定被
+ * 进度号挡回来——这不是冲突，是常态。挡回来之后**不能**直接覆盖房间：
+ * 那会把对面刚提的那一步抹掉，两边从此各拿一份对方没有的名单互相等
+ * （界面上就是"禁不动、选不动"）。正确做法是把手里这一步补到房间那份上，
+ * 再用新的进度号重交。抽成纯函数是为了能有用例盯着这段协议。
+ *
+ * 补不进去（对面已经禁过、轮到别人选、这一格已经不是你的）就返回失败，
+ * 调用方按"房间是权威"处理：退回房间那份，把出手权还给玩家。
+ */
+export function mergeDraftStep(
+  remote: GameState,
+  action: Action,
+  actor: PlayerId,
+): ActionResult {
+  return applyAction(remote, action, actor);
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -3779,7 +3800,8 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
   for (let i = 0; i < cleaned.length; i += 1) {
     const id = cleaned[i] as string;
     if (!id) continue;
-    // 哨兵值：这一格是"升级时代"，不是兵种
+    // 哨兵值：这一格是"升级时代"或者"空过"，都不是兵种
+    if (id === ORDER_IDLE) continue;
     if (id !== ORDER_UPGRADE) {
       const def = s.unitTypes[id];
       if (!def) return { ok: false, reason: `没有这个兵种：${id}` };

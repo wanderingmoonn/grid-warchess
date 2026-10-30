@@ -122,6 +122,15 @@ export interface PanelInput {
    */
   commander?: boolean;
   /**
+   * 参谋部正在批量执行（指挥官模式）。
+   *
+   * 这段里"结束行动"那个按钮要换成进度/中断状态：批处理自己会推进回合，
+   * 这时候再让人点一次"结束行动"就是两只手同时推同一扇门。
+   */
+  commanderRunning?: boolean;
+  /** 一批打几个回合：单机 5、联机 1（对面是人的时候只推自己这一回合） */
+  commanderRounds?: number;
+  /**
    * 结算卡上的「对局数据」区块。只有一局打完才传，别的时候是 undefined。
    *
    * 默认关：上传对局数据这件事必须玩家自己勾、自己点，
@@ -284,9 +293,24 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     <div class="side-footer">
-      <button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-        ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
-      </button>
+      ${
+        /*
+         * 指挥官模式：这里原来还是「结束行动，交给对方」。
+         *
+         * 那个按钮只推进**一个**回合，而参谋部是按 5 回合一批走的——两个入口
+         * 各推各的，玩家顺手点一下就变成"我走了半批、对面还没走"，批处理的
+         * 回合计数和对面看到的局面全都对不齐。所以它在这里换成同一件事：
+         * 执行一批（5 回合 / 联机 1 回合）再交还，和顶部那颗按钮同源。
+         */
+        input.commander === true
+          ? `<button class="btn btn-primary btn-block" data-act="commander-run"
+               ${myTurn && input.commanderRunning !== true ? '' : 'disabled'}>
+               ${input.commanderRunning === true ? '参谋部正在执行…' : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`}
+             </button>`
+          : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
+               ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
+             </button>`
+      }
       <div class="side-actions">
         <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>认输</button>
@@ -1337,6 +1361,10 @@ export interface TopbarState {
   spectator?: boolean;
   /** 上帝模式：全图无雾，两边都归玩家摆，所以"轮到谁"不是重点 */
   god?: boolean;
+  /** 指挥官模式：顶栏那颗"交给 AI"要换成"交给参谋部"（同一个动作的另一条入口） */
+  commander?: boolean;
+  /** 参谋部正在批量执行 */
+  commanderRunning?: boolean;
 }
 
 /**
@@ -1479,8 +1507,18 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
     // 而顶栏这个按钮会把它变成"回合自动往前跑"，摆兵就摆不安稳了。
     ai.hidden = s.god === true;
-    ai.textContent = s.aiCurrent ? '收回操作权' : '交给 AI';
-    ai.classList.toggle('btn-primary', s.aiCurrent);
+    // 指挥官模式：这一方本来就在 AI 手里，"交给 AI / 收回操作权"没有第二种解释。
+    // 这里的按钮改成同一件事的另一个入口——执行一批再交还，和参谋部那颗同源，
+    // 顺手点错不会把对面也托管掉。
+    ai.textContent = s.commander
+      ? s.commanderRunning
+        ? '参谋部执行中…'
+        : '交给参谋部'
+      : s.aiCurrent
+        ? '收回操作权'
+        : '交给 AI';
+    ai.classList.toggle('btn-primary', s.commander ? false : s.aiCurrent);
+    (ai as HTMLButtonElement).disabled = s.commander === true && s.commanderRunning === true;
   }
 
   const fog = ref('fog');

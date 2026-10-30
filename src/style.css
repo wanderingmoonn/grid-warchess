@@ -3500,6 +3500,19 @@ a.btn {
   background: transparent;
 }
 
+/* 排了「空过」：实线 + 淡底，和"还没排"的虚线框必须一眼分得开 */
+.cmd-chip.is-idle {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--text-3) 40%, var(--line));
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+}
+
+.cmd-chip.is-idle .cmd-chip-name {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
 .cmd-chip > b {
   display: grid;
   place-items: center;

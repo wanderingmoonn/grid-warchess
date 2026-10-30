@@ -1910,6 +1910,52 @@ await checkAsync('每格都给出可用金币的估算', async () => {
   assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
 });
 
+check('「空过一回合」能排进队列，且和"还没排"是两种长相', () => {
+  const bar = () => doc.querySelector<HTMLElement>('#commander')!;
+  // 先把上一批留下的队列清掉
+  const clear = bar().querySelector<HTMLElement>('[data-cmd="clear"]');
+  if (clear && !(clear as HTMLButtonElement).disabled) {
+    clear.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  }
+  assert.equal(bar().querySelectorAll('.cmd-chip:not(.is-empty)').length, 0, '先清空');
+
+  const idle = bar().querySelector<HTMLElement>('[data-cmd="idle"]');
+  assert.ok(idle, '参谋部要有一颗「空过一回合」');
+  idle!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const filled = bar().querySelectorAll('.cmd-chip.is-idle');
+  assert.equal(filled.length, 1, '队列里应该出现一格"空过"');
+  assert.ok((filled[0]!.textContent ?? '').includes('空过'), '那一格要写「空过」');
+
+  // 关键：它和"还没排到"的虚线空格必须分得开——
+  // 混在一起的话，玩家看不出"我明确要求这回合不造兵"和"我这格还没想好"
+  const empty = bar().querySelectorAll('.cmd-chip.is-empty');
+  assert.equal(empty.length, 4, '后面 4 格仍然是空的');
+
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orders?: { A?: string[] };
+  };
+  assert.deepEqual(saved.orders?.A, ['@idle'], '空过要落成哨兵值，不是空串');
+});
+
+check('指挥官模式：推进游戏只剩「执行一批」这一条路', () => {
+  // 「结束行动」只推进一个回合，而参谋部按 5 回合一批走。两个入口各推各的，
+  // 玩家顺手点一下就变成"走了半批"，对面看到的回合数也对不上。
+  assert.equal(
+    doc.querySelector('[data-act="end-turn"]'),
+    null,
+    '指挥官模式里不该再有「结束行动，交给对方」',
+  );
+  const run = doc.querySelector<HTMLElement>('#side [data-act="commander-run"]');
+  assert.ok(run, '底栏那颗按钮要换成"执行一批再交还"');
+  assert.ok((run!.textContent ?? '').includes('回合'), `按钮要写清打几个回合，实际：${run!.textContent}`);
+
+  // 顶栏那颗也改成同一件事的另一条入口，而不是"把某一方托管给 AI"
+  const toggle = doc.querySelector<HTMLElement>('#topbar [data-act="toggle-ai"]');
+  assert.ok(toggle, '顶栏按钮还在');
+  assert.equal(toggle!.textContent?.trim(), '交给参谋部', '指挥官模式下它叫「交给参谋部」');
+});
+
 check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方形的', () => {
   // jsdom 没有布局引擎，量什么都是 0，所以这里手工喂一组尺寸进去，
   // 验的是那段算术本身：size = min(容器宽, 视口高 − 顶栏 − 参谋部栏 − 内边距)
