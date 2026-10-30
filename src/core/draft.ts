@@ -44,10 +44,12 @@ export const DRAFT_PICK_BASE = 6;
 /**
  * 上限。为什么不无限涨：一人选 20 个兵的时候，"选"这件事就没有信息量了——
  * 谁都能凑出一套完整的兵种表，BP 只剩下走流程。
- * 三个上限都在"全扩展全开"时才会碰到，只开一两个包时按公式线性涨。
+ *
+ * 现在的分类加成最多加到「禁 3 / 选 10」（海军+空军+时代军备同时在场），
+ * 所以这两个上限是**纯保险**，正常组合碰不到。
  */
 export const DRAFT_POOL_CAP = 60;
-export const DRAFT_BAN_CAP = 3;
+export const DRAFT_BAN_CAP = 4;
 export const DRAFT_PICK_CAP = 12;
 
 /** 禁用期与每一步选人的时限（毫秒）。禁用短一点：反正不看对面 */
@@ -66,25 +68,78 @@ export interface DraftBudget {
 }
 
 /**
- * 按扩展新增的兵种数量放大规模。
+ * 分类加成：**按扩展的"兵种体系"加**，而不是按兵的数量加。
  *
- * 公式刻意保持"池子 : 选位 ≈ 3.3 : 1"这个原版比例——它是"选出 6 个之前
- * 要在 20 个里做三次取舍"的由来。所以池子每涨 10 个，选位 +1；每涨 20 个，禁位 +1。
+ * 规则（和玩法需求逐条对应）：
+ *   · 只有海军                 → 选位 +1
+ *   · 只有空军                 → 选位 +1
+ *   · 海军与空军同时在场       → 禁位 +1、选位 +2
+ *   · 时代军备（pack-* 那几包）→ 禁位 +1、选位 +2
  *
- *   extra  0 → 池 20 / 禁 1 / 选 6   （原版，与需求一致）
- *   extra 20 → 池 30 / 禁 1 / 选 7
- *   extra 40 → 池 40 / 禁 2 / 选 8
- *   extra 200 → 池 60 / 禁 3 / 选 10 （撞上限，全扩展全开时的样子）
+ * 为什么按体系而不按兵数：一个体系（海/空/时代）带来的是一整套**互相制衡**的
+ * 兵种关系（船怕飞机、飞机怕防空、各时代的兵互相压制）。多一个体系才需要更多
+ * 名额去"照顾"它；同一个体系里多二十个兵，只是池子更大，不需要更多名额。
+ * 这也让规则对玩家可预期：开海军就该多一个选位，而不是"开海军加了多少兵"。
+ */
+export interface DraftBonus {
+  naval: boolean;
+  air: boolean;
+  era: boolean;
+  /** 禁位加成 */
+  bans: number;
+  /** 选位加成 */
+  picks: number;
+}
+
+export function draftBonus(expansionIds: readonly string[]): DraftBonus {
+  const naval = expansionIds.some((id) => id.startsWith('naval-'));
+  const air = expansionIds.some((id) => id.startsWith('air-'));
+  // 时代军备＝「古典/中世/火药/工业/二战/现代」那一组，id 都是 pack- 开头
+  const era = expansionIds.some((id) => id.startsWith('pack-'));
+
+  let bans = 0;
+  let picks = 0;
+  if (naval && air) {
+    // 两个体系同时在场：制空与制海互相压制，禁位也要多一个，否则拦不住对面的核心
+    bans += 1;
+    picks += 2;
+  } else if (naval || air) {
+    picks += 1;
+  }
+  if (era) {
+    bans += 1;
+    picks += 2;
+  }
+  return { naval, air, era, bans, picks };
+}
+
+/**
+ * 规模：池子按**兵的数量**长，禁位/选位按**体系**长。
+ *
+ * 池子保持"每一档都要有货"的比例——扩展多给 2 个可进池的兵，池子就多 1 格；
+ * 名额则看上面那套分类规则（`draftBonus`）。
+ *
+ *   原版                       → 池 20 / 禁 1 / 选 6
+ *   单海军（naval-fleet）      → 池 28 / 禁 1 / 选 7
+ *   单空军（air-corps）        → 池 25 / 禁 1 / 选 7
+ *   海军 + 空军                → 池 32 / 禁 2 / 选 8
+ *   时代军备（pack-antiquity） → 池 27 / 禁 2 / 选 8
+ *   海军 + 空军 + 时代军备     → 池 39 / 禁 3 / 选 10
+ *   全扩展全开                 → 池 60（撞上限）/ 禁 3 / 选 10
+ *
+ * 要注意的一个组合：「现代海军」要带「现代」，而「现代」本身就是时代军备的一包，
+ * 所以它会同时点亮海军的 +1 与时代军备的 +2（池 27 / 禁 2 / 选 9）。
+ * 规则按**实际生效的体系**算，不按"玩家本来想开哪一类"算。
  */
 export function draftBudget(state: GameState): DraftBudget {
   const extra = draftCandidates(state).filter((id) => unitSourceIdOf(id) !== null).length;
   const pool = Math.min(DRAFT_POOL_CAP, DRAFT_POOL_BASE + Math.ceil(extra / 2));
-  const grown = pool - DRAFT_POOL_BASE;
+  const bonus = draftBonus(state.config.expansionIds ?? []);
   return {
     extra,
     pool,
-    bans: Math.min(DRAFT_BAN_CAP, DRAFT_BAN_BASE + Math.floor(grown / 20)),
-    picks: Math.min(DRAFT_PICK_CAP, DRAFT_PICK_BASE + Math.floor(grown / 10)),
+    bans: Math.min(DRAFT_BAN_CAP, DRAFT_BAN_BASE + bonus.bans),
+    picks: Math.min(DRAFT_PICK_CAP, DRAFT_PICK_BASE + bonus.picks),
   };
 }
 
@@ -221,6 +276,8 @@ export function createDraft(state: GameState, now: number): DraftState {
     picks: { A: [], B: [] },
     order: draftPickOrder(budget.picks),
     step: 0,
+    // 联机锁从 1 起：房间那一行建出来时 turn 也是 1，第一笔 BP 提交正好对得上
+    seq: 1,
     deadline: now + DRAFT_BAN_MS,
     history: [],
   };
@@ -315,6 +372,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (draft.bans[actor].includes(id)) return { ok: false, reason: '你已经禁过它了' };
 
     draft.bans[actor] = [...draft.bans[actor], id];
+    draft.seq += 1;
     draft.history = [...draft.history, { side: actor, kind: 'ban', unitId: id, auto: false }];
     // 双方都交完才揭晓，同时进入选人阶段
     if (draft.bans.A.length >= draft.banSlots && draft.bans.B.length >= draft.banSlots) {
@@ -340,6 +398,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
 
     draft.picks[actor] = [...draft.picks[actor], id];
     draft.step += 1;
+    draft.seq += 1;
     draft.history = [...draft.history, { side: actor, kind: 'pick', unitId: id, auto: false }];
     s.log = [
       ...s.log,
@@ -373,6 +432,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
       }
       draft.phase = 'pick';
       draft.step = 0;
+      draft.seq += 1;
       draft.deadline = action.at + DRAFT_PICK_MS;
       s.log = [...s.log, { turn: s.turn, player: 'A', open: true, text: '禁用超时：未禁用的一方视为放弃' }];
       return { ok: true, state: s };
@@ -386,6 +446,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     const picked = left[Math.floor(seededUnit(s) * left.length)] ?? left[0]!;
     draft.picks[side] = [...draft.picks[side], picked];
     draft.step += 1;
+    draft.seq += 1;
     draft.history = [...draft.history, { side, kind: 'pick', unitId: picked, auto: true }];
     s.log = [
       ...s.log,

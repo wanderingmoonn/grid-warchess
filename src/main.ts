@@ -99,6 +99,7 @@ import {
   normalizeCode,
   originMismatch,
   saveSeat,
+  submitDraft,
   submitTurn,
   type RoomSeat,
   type RoomSnapshot,
@@ -1225,8 +1226,12 @@ let draftSeat: PlayerId = 'A';
 let draftSig = '';
 /** 是否已经排了一次 AI 选卡（防止每帧都排） */
 let draftAiPending = false;
+/** 正在往云端提交一步 BP：期间不接受新的点击（避免同一手上交两次） */
+let draftBusy = false;
 
 function draftIsAi(side: PlayerId): boolean {
+  // 房间里的两侧都是人（席位就是身份），托管开关在进房时已经被关掉了
+  if (room) return false;
   return isAiSide(state, side);
 }
 
@@ -1239,6 +1244,11 @@ function draftIsAi(side: PlayerId): boolean {
 function syncDraftSeat(): void {
   const view = draftView(state);
   if (!view || view.phase === 'done') return;
+  // 联机：设备只代表自己那个席位，不跟着 order 换手
+  if (room) {
+    if (!room.spectator) draftSeat = room.seat;
+    return;
+  }
   if (view.phase === 'pick' && view.toAct && !draftIsAi(view.toAct)) {
     draftSeat = view.toAct;
     return;
@@ -1253,6 +1263,34 @@ function syncDraftSeat(): void {
 }
 
 function dispatchDraft(action: Action, actor: PlayerId): boolean {
+  /*
+   * 联机：本地先落一步（手感即时，点下去就见效），然后带着"我看到的进度号"
+   * 提交上去。被对面抢先写了就重新拉、把这一步补到最新状态上再交——
+   * 禁用期本来就允许双方同时提交，这不是冲突而是常态。
+   */
+  if (room) {
+    if (room.spectator) {
+      toast('观战位只能看，不参与选卡');
+      return false;
+    }
+    if (draftBusy) return false;
+    if (actor !== room.seat) {
+      toast('这是对面的席位');
+      return false;
+    }
+    const prevSeq = state.draft?.seq ?? 0;
+    const result = applyAction(state, action, actor);
+    if (!result.ok) {
+      toast(result.reason);
+      return false;
+    }
+    state = result.state;
+    saveMatch(state);
+    render();
+    void pushDraft(room, prevSeq, action, actor);
+    return true;
+  }
+
   const result = applyAction(state, action, actor);
   if (!result.ok) {
     toast(result.reason);
@@ -1266,6 +1304,69 @@ function dispatchDraft(action: Action, actor: PlayerId): boolean {
     render();
   }
   return true;
+}
+
+/**
+ * 把一步 BP 交到云端。
+ *
+ * 锁是"进度号"（房间的 turn 列在 BP 期间存 draft.seq）：被挡回来就说明
+ * 对面先写了。这时候**不能直接覆盖**——先把最新状态拉下来，把自己的这一步
+ * 补上去，再用新的进度号重交。最多试四轮，失败就明说"没交上去"。
+ */
+async function pushDraft(
+  seat: RoomSeat,
+  prevSeq: number,
+  action: Action,
+  actor: PlayerId,
+): Promise<void> {
+  draftBusy = true;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const ok = await submitDraft(seat.code, state, prevSeq);
+      if (ok) {
+        dirty = false;
+        if (state.draft?.phase === 'done') afterDraft();
+        return;
+      }
+      const snap = await fetchRoom(seat.code);
+      if (!snap || room?.code !== seat.code) return;
+      const remote = snap.state.draft;
+      if (!remote || remote.phase === 'done') {
+        // 对面已经打完 BP 并且推上去了：直接采纳，别在旧状态上继续折腾
+        takeSnapshot(snap);
+        return;
+      }
+      // 对面先写了：把自己的这一步补到最新状态上再来一次
+      const retry = applyAction(snap.state, action, actor);
+      if (!retry.ok) {
+        takeSnapshot(snap);
+        toast(retry.reason);
+        return;
+      }
+      state = retry.state;
+      prevSeq = remote.seq;
+      saveMatch(state);
+      render();
+    }
+    dirty = true;
+    toast('这一步没交上去（网络可能不稳）。点「联机 → 刷新状态」看一眼');
+  } catch (err) {
+    dirty = true;
+    toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
+  } finally {
+    draftBusy = false;
+  }
+}
+
+/** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
+function takeSnapshot(snapshot: RoomSnapshot): void {
+  const fog = state.fog;
+  state = snapshot.state;
+  state.aiControl = { A: false, B: false };
+  state.fog = fog;
+  clearSelection();
+  saveMatch(state);
+  render();
 }
 
 /** 选卡打完：把方向盘交回正常对局 */
@@ -1285,9 +1386,11 @@ function renderDraft(): void {
     if (!draftEl.hidden) draftEl.hidden = true;
     draftSig = '';
     stopDraftTicker();
+    stopDraftPolling();
     return;
   }
   startDraftTicker();
+  if (room) startDraftPolling();
   draftEl.hidden = false;
   syncDraftSeat();
   const view = draftView(state)!;
@@ -1335,7 +1438,10 @@ function startDraftTicker(): void {
     }
     const now = Date.now();
     paintDraftTimer(draftEl, state, now);
-    if (draftSecondsLeft(state, now) > 0) return;
+    // 联机时多等一会儿再判超时：deadline 是**对方那台机器的钟**写进来的，
+    // 两边差个一两秒很正常，早判就等于替对面抢答了
+    const slack = room ? 1500 : 0;
+    if (draftSecondsLeft(state, now + slack) > 0) return;
     const view = draftView(state)!;
     const actor = view.phase === 'ban' ? draftSeat : (view.toAct ?? draftSeat);
     const r = applyAction(state, { type: 'DRAFT_TIMEOUT', at: now }, actor);
@@ -3795,6 +3901,30 @@ function startRoomPolling(): void {
   roomTimer = window.setInterval(() => void pollRoom(), 15000);
 }
 
+let draftPollTimer = 0;
+
+/**
+ * BP 期间的快取轮询。
+ *
+ * 正常对局 15 秒问一次就够了（一个回合以分钟计），但 BP 是一来一回的十几步，
+ * 15 秒等于没法玩。所以 BP 期间单独开一条 1.5 秒的轮询，选完立刻关掉——
+ * 常驻定时器会让页面和测试进程一直挂着不退出（这个坑刚踩过一次）。
+ */
+function startDraftPolling(): void {
+  if (draftPollTimer) return;
+  draftPollTimer = window.setInterval(() => {
+    if (!room || !draftInProgress(state) || draftBusy) return;
+    if (document.visibilityState !== 'visible') return;
+    void pollRoom();
+  }, 1500);
+}
+
+function stopDraftPolling(): void {
+  if (!draftPollTimer) return;
+  window.clearInterval(draftPollTimer);
+  draftPollTimer = 0;
+}
+
 /**
  * 定时问一句"对面走完没有"。
  *
@@ -3823,6 +3953,26 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+
+    /*
+     * BP 期间另走一条判断：**进度号往前走了就采纳**。
+     *
+     * 不能套用 adoptDecision——它按"回合 + 行动方"判，而 BP 里回合一直是 1、
+     * 行动方一直是 A（棋盘还没开始），两边都会以为"没我的事"，于是一直停在
+     * 自己那份旧名单上。这正是联机 BP 必须单独一条判断的原因。
+     */
+    const remoteDraft = snapshot.state.draft;
+    const localDraft = state.draft;
+    const remoteBP = !!remoteDraft && remoteDraft.phase !== 'done';
+    const localBP = !!localDraft && localDraft.phase !== 'done';
+    if (remoteBP || localBP) {
+      const rseq = remoteDraft?.seq ?? 0;
+      const lseq = localDraft?.seq ?? 0;
+      if (rseq <= lseq) return; // 没新东西，或者我这边更新
+      takeSnapshot(snapshot);
+      if (!remoteBP) toast('对面的选卡打完了，进入对局');
+      return;
+    }
 
     // 要不要把云端的这一局装进来，交给 room.ts 里那个纯函数判断（它有专门的用例）。
     // 这里只负责"装进来之后干什么"——两份分支的分工就是这么切的。

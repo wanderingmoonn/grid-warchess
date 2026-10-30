@@ -167,7 +167,13 @@ function toSnapshot(row: Row): RoomSnapshot {
   };
 }
 
-/** 桌面上早就有一局了，把它变成房间：坐在"当前该行动的那一方" */
+/**
+ * 桌面上早就有一局了，把它变成房间：坐在"当前该行动的那一方"。
+ *
+ * 选卡没打完时，`turn` 列存的是 **BP 进度号**（见 draft.ts 的 seq）而不是回合数：
+ * 建房之后两边才能在同一把锁上继续 BP。
+ */
+
 export async function createRoom(state: GameState, seat: Seat, token: string): Promise<RoomSeat> {
   let lastError: unknown = null;
 
@@ -177,7 +183,7 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
       .insert({
         code,
         state,
-        turn: state.turn,
+        turn: state.draft && state.draft.phase !== 'done' ? state.draft.seq : state.turn,
         current: state.current,
         seat_a: seat === 'A' ? token : null,
         seat_b: seat === 'B' ? token : null,
@@ -260,6 +266,40 @@ export async function submitTurn(
     })
     .eq('code', code)
     .eq('turn', expectedTurn)
+    .select();
+  if (error) throw new Error(readableError(error));
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * 提交一步 BP（禁用/选人/超时）。
+ *
+ * `expectedSeq` 是本机提交前看到的 `draft.seq`，也就是房间里 `turn` 列当前的值。
+ * 为什么复用 turn 列而不是加一列：BP 有十几个来回而回合数一直是 1，
+ * 拿回合做锁等于没锁（两边都匹配得上，后写的直接盖掉前面那一步）。
+ * 把进度号写进 turn 列，锁就是真的；BP 的最后一笔再把 turn 写回 1，
+ * 把锁干干净净交还给正常对局。
+ *
+ * 返回 false = 被挡了（对面先写了），调用方应当重新拉一次、把自己的这一步
+ * 补到最新状态上再交——禁用期双方本来就是同时提交的。
+ */
+export async function submitDraft(
+  code: string,
+  state: GameState,
+  expectedSeq: number,
+): Promise<boolean> {
+  const draft = state.draft;
+  if (!draft) return false;
+  const lock = draft.phase === 'done' ? state.turn : draft.seq;
+  const { data, error } = await (await table()).q
+    .update({
+      state,
+      turn: lock,
+      current: state.current,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('code', code)
+    .eq('turn', expectedSeq)
     .select();
   if (error) throw new Error(readableError(error));
   return Array.isArray(data) && data.length > 0;

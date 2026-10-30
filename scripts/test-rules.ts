@@ -68,6 +68,7 @@ import {
   aiDraftBan,
   aiDraftPick,
   canUseType,
+  draftBonus,
   draftBudget,
   draftCandidates,
   draftPickOrder,
@@ -11002,28 +11003,83 @@ test('选卡：按时代分层抽样，每个有货的时代都抽得到', () =>
   assert.deepEqual(again.draft!.pool, draft.pool, '同一个 seed 必须抽出同一个池子');
 });
 
-test('选卡：扩展新增兵种越多，池子/禁位/选位同步变大', () => {
-  const base = fresh({ draftMode: true }, 7103);
-  const baseBudget = draftBudget(base);
-  assert.equal(baseBudget.extra, 0, '原版对局不该有扩展兵');
+test('选卡：名额按"兵种体系"加——单海军/单空军 +1 选，海空同开 +1 禁 +2 选', () => {
+  const mk = (ids: string[], seed: number) =>
+    createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra: 5, expansionIds: ids, draftMode: true },
+      seed,
+    );
 
-  // 开两包（海军 + 空军）：可进池的兵变多，池子必须跟着涨
-  const withPacks = createMatch(
-    {
-      ...DEFAULT_CONFIG,
-      size: 14,
-      startEra: 5,
-      expansionIds: ['naval-fleet', 'air-corps'],
-      draftMode: true,
-    },
-    7104,
+  // 原版：不加成
+  const none = fresh({ draftMode: true }, 7103);
+  const baseBudget = draftBudget(none);
+  assert.equal(baseBudget.extra, 0, '原版对局不该有扩展兵');
+  assert.equal(baseBudget.bans, 1);
+  assert.equal(baseBudget.picks, 6);
+
+  // 单海军 → 选卡 +1
+  const naval = draftBudget(mk(['naval-fleet'], 7104));
+  assert.equal(naval.bans, 1, '只有海军不加禁位');
+  assert.equal(naval.picks, 7, '单海军：选卡 +1');
+
+  // 单空军 → 选卡 +1
+  const air = draftBudget(mk(['air-corps'], 7105));
+  assert.equal(air.bans, 1, '只有空军不加禁位');
+  assert.equal(air.picks, 7, '单空军：选卡 +1');
+
+  // 海 + 空 → 禁位 +1、选卡 +2
+  const both = draftBudget(mk(['naval-fleet', 'air-corps'], 7106));
+  assert.equal(both.bans, 2, '海军与空军同时在场：禁用 +1');
+  assert.equal(both.picks, 8, '海军与空军同时在场：选卡 +2');
+
+  // 池子仍然按兵的数量长（和名额是两套规则）
+  assert.ok(both.pool > baseBudget.pool, `池子应该变大：${baseBudget.pool} → ${both.pool}`);
+  assert.equal(mk(['naval-fleet', 'air-corps'], 7107).draft!.pool.length, both.pool);
+});
+
+test('选卡：时代军备 +1 禁 +2 选，且能和海空叠加', () => {
+  const mk = (ids: string[]) =>
+    createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra: 5, expansionIds: ids, draftMode: true },
+      7201,
+    );
+
+  const era = draftBudget(mk(['pack-antiquity']));
+  assert.equal(era.bans, 2, '时代军备：禁用 +1');
+  assert.equal(era.picks, 8, '时代军备：选卡 +2');
+
+  // 三样同时在场：禁 1+1+1=3、选 6+2+2=10
+  const all = draftBudget(
+    mk(['pack-antiquity', 'naval-fleet', 'air-corps', 'pack-contemporary']),
   );
-  const big = draftBudget(withPacks);
-  assert.ok(big.extra > 0, '开了扩展就该有额外的可进池兵种');
-  assert.ok(big.pool > baseBudget.pool, `池子应该变大：${baseBudget.pool} → ${big.pool}`);
-  assert.ok(big.picks >= baseBudget.picks, '选位不该缩水');
-  assert.ok(big.picks > baseBudget.picks, `选位应该跟着涨：${baseBudget.picks} → ${big.picks}`);
-  assert.ok(withPacks.draft!.pool.length === big.pool, '实际池子长度要和预算一致');
+  assert.equal(all.bans, 3);
+  assert.equal(all.picks, 10);
+  assert.ok(all.pool <= 60, '池子有上限');
+
+  // 「现代海军」这条线要带「现代」，而「现代」本身就是时代军备的一包——
+  // 于是它同时点亮两个体系：禁 1+1=2、选 6+1（单海军）+2（时代军备）=9。
+  // 规则按**实际在场的体系**算，不按玩家"本来想开哪一类"算，
+  // 这样联机两边看到的数字永远一致。
+  const navalModern = draftBudget(mk(['pack-contemporary', 'naval-modern']));
+  assert.equal(navalModern.bans, 2);
+  assert.equal(navalModern.picks, 9);
+  // 单独勾「现代海军」不满足前置，整包不生效，也就不该有任何加成
+  const orphan = draftBudget(mk(['naval-modern']));
+  assert.equal(orphan.bans, 1);
+  assert.equal(orphan.picks, 6);
+});
+
+test('选卡：进度号每走一步 +1（联机靠它做乐观锁）', () => {
+  let s = fresh({ draftMode: true }, 7202);
+  const start = s.draft!.seq;
+  assert.equal(start, 1, '开局进度号是 1，和房间那一行的 turn 对得上');
+
+  s = banStep(s, 'A', s.draft!.pool[0]!);
+  assert.equal(s.draft!.seq, start + 1, '一次禁用一个号');
+  s = banStep(s, 'B', s.draft!.pool[1]!);
+  assert.equal(s.draft!.seq, start + 2, '两边都禁完只加两个号（进入选人不额外加）');
+  s = pickStep(s, s.draft!.pool[2]!);
+  assert.equal(s.draft!.seq, start + 3, '一次选人一个号');
 });
 
 test('选卡：盲禁——两边都交完才揭晓，禁掉的兵谁都拿不到', () => {
