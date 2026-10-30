@@ -1187,6 +1187,15 @@ export function visionOf(s: GameState, unit: Unit): number {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, unit, base: r });
   }
+  /*
+   * 本体里视野就是 0 的东西（桥）**一格都不给**。
+   *
+   * 下面那句 `Math.max(1, …)` 是给"被减益压到 0 的兵"留的下限，但它顺手把
+   * "本来就不看"的东西也抬到了 1 格——桥于是永远白送一圈视野，
+   * 而扩展那边的 modifyVision 也都自带同样的下限，光改数据表清不掉。
+   * 所以判据落在这里：兵种表写 0，就是真的没有视野。
+   */
+  if (selfDef.vision <= 0) return 0;
   return Math.max(1, r);
 }
 

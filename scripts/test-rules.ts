@@ -8933,9 +8933,19 @@ test('高机动性：移动/射程/视野 ×1.5，近战射程不动，桥不再
   // 建筑不动：墙还是 0
   assert.equal(movePower(on, u(on, 'tower')), 0);
 
-  // 桥不再自带视野（本体里三座桥都清零了）
+  // 桥不再自带视野：本体三座桥的数据表都是 0，而且**真的**一格不看——
+  // visionOf 那个 Math.max(1, …) 下限不能把它抬回 1（扩展的 modifyVision 也带同样的下限）
   for (const id of ['bridge', 'bridge2', 'bridge3']) {
-    assert.equal(UNIT_TYPES[id]!.vision, 0, `${id} 不该再有视野`);
+    assert.equal(UNIT_TYPES[id]!.vision, 0, `${id} 的数据表不该再有视野`);
+  }
+  for (const ids of [[], ['height-terrain'], ['high-mobility'], ['seasons']]) {
+    const st = fresh({ expansionIds: ids });
+    // 桥只能架在水上：先铺一格水，再放桥
+    putTerrain(st, 5, 5, 'water');
+    const r = placeUnit(st, 'A', 'bridge', 5, 5);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const br = r.state.units.find((x) => x.type === 'bridge')!;
+    assert.equal(visionOf(r.state, br), 0, `开了 ${ids.join('+') || '本体'} 时桥也不该有视野`);
   }
 });
 
