@@ -14,9 +14,9 @@ import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts'
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
-  adjacentToWater,
   applyAction,
   attackableTargets,
+  buildSiteError,
   canAttack,
   canMove,
   cityAt,
@@ -57,6 +57,7 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
@@ -102,11 +103,13 @@ import {
 } from './storage/save.ts';
 import {
   CHAT_MAX_LEN,
+  ChatFeed,
+  chatBodyLength,
+  chatBodyOverflows,
   chatLinesHtml,
   fetchChat,
   sendChat,
   trimChatBody,
-  type ChatLine,
   type ChatSeat,
 } from './net/chat.ts';
 
@@ -1117,42 +1120,19 @@ function computePlaceable(): number[] {
   const builder = state.units.find((u) => u.id === buildPlan?.unitId);
   if (!builder) return [];
   const def = state.unitTypes[buildPlan.type];
-  const overWater = !!def?.bridges;
+  if (!def) return [];
 
+  // 高亮的含义是"点下去一定建得成"，所以不在这里另写一套判据，直接问规则。
+  //
+  // 以前这里是第二份实现：地形、桥要两侧有陆地、军营要临水……每一条单看都对，
+  // 但和 `buildSiteError` 是两套代码，改一处忘一处就冒出"高亮了、点了却被拒"。
+  // 军营那次就是这么坏的：规则里判临水只认 `water`，这里用的 `adjacentToWater`
+  // 认桥面，于是桥头被高亮成可建，点下去才回一句"必须扎在水边"。
+  // 判据只能有一处，界面这一层只负责问。
   const out: number[] = [];
   for (let y = 0; y < state.h; y++) {
     for (let x = 0; x < state.w; x++) {
-      const tile = state.tiles[y * state.w + x];
-      if (!tile) continue;
-      if (state.units.some((u) => u.x === x && u.y === y)) continue;
-      if (distance(builder, { x, y }) > CONFIG.buildRange) continue;
-
-      const allowed = def?.buildOn;
-      if (allowed) {
-        if (!allowed.includes(tile.terrain)) continue;
-      } else if (!passable(tile.terrain)) {
-        continue;
-      }
-
-      if (overWater) {
-        // 桥：至少要有一侧是陆地
-        const landNext = [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ].some(([dx, dy]) => {
-          const nb = state.tiles[(y + dy) * state.w + (x + dx)];
-          return !!nb && passable(nb.terrain);
-        });
-        if (!landNext) continue;
-      } else if (tile.terrain === 'bridge') {
-        continue;
-      }
-
-      // 军营要临水（靠水补给）：高亮只画真正能建的地方
-      if (def?.requiresWater && !adjacentToWater(state, x, y)) continue;
-
+      if (buildSiteError(state, def, builder, x, y) !== null) continue;
       out.push(y * state.w + x);
     }
   }
@@ -3535,8 +3515,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   resetZoom();
   clearSelection();
   // 换房间＝换一间屋子说话：上一局的消息一条都不该跟过来
-  chatLines = [];
-  chatLastId = 0;
+  chatFeed.reset();
   chatNotice = '';
   chatUnread = 0;
   saveMatch(state);
@@ -3718,8 +3697,14 @@ function watchRoom(code: string, snapshot: RoomSnapshot): void {
  * 观战位**有**（这正是它存在的意义之一）：看局的人也能说话，两边都看得见。
  */
 let chatOpen = false;
-let chatLines: ChatLine[] = [];
-let chatLastId = 0;
+/**
+ * 已经收到的消息 + "拉到哪儿了"。
+ *
+ * 水位（`lastId`）只能由服务器返回的数据推，见 net/chat.ts 里 `ChatFeed` 的注释：
+ * 以前自己发一条就把水位推到自己那条的 id，两个人几乎同时说话时，
+ * 夹在中间的那条会被永久跳过——"对方说的我这边缺一句"就是这么来的。
+ */
+const chatFeed = new ChatFeed();
 let chatTimer = 0;
 let chatDock: HTMLElement | null = null;
 let chatNotice = '';
@@ -3777,10 +3762,11 @@ function ensureChatDock(): HTMLElement {
     if (act === 'toggle') openChat();
     if (act === 'close') closeChat();
   });
-  el.querySelector('form')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    void sendChatNow();
-  });
+
+  // 输入法组字的时候按 Enter 是"选词"，不是"发送"（见 ui/chat-input.ts）
+  const input = el.querySelector<HTMLInputElement>('.chat-input');
+  if (input) bindChatComposer(input, () => void sendChatNow());
+
   bindChatDrag(el);
 
   chatDock = el;
@@ -3903,8 +3889,7 @@ function renderChatDock(): void {
   if (!room) {
     // 退出房间：把面板收掉，记录清空——换到另一局时不该看见上一局的对话
     if (chatOpen) closeChat();
-    chatLines = [];
-    chatLastId = 0;
+    chatFeed.reset();
     chatNotice = '';
     chatUnread = 0;
   }
@@ -3918,7 +3903,7 @@ function renderChatDock(): void {
 function paintChat(): void {
   const el = ensureChatDock();
   const log = el.querySelector<HTMLElement>('.chat-log')!;
-  log.innerHTML = chatLinesHtml(chatLines, chatSeat());
+  log.innerHTML = chatLinesHtml(chatFeed.lines, chatSeat());
   // 贴在底部：新消息进来时不往上翻就等于没看见
   log.scrollTop = log.scrollHeight;
   const who = el.querySelector<HTMLElement>('.chat-who');
@@ -3954,20 +3939,11 @@ function closeChat(): void {
   renderChatDock();
 }
 
-/** 收下一条消息（去重：轮询和"发送成功返回的那一行"可能撞上同一条） */
-function pushChatLine(line: ChatLine): void {
-  if (chatLines.some((l) => l.id === line.id)) return;
-  chatLines.push(line);
-  if (line.id > chatLastId) chatLastId = line.id;
-  if (chatLines.length > 200) chatLines.splice(0, chatLines.length - 200);
-  if (!chatOpen) chatUnread += 1;
-}
-
 async function pollChat(): Promise<void> {
   const seat = room;
   if (!seat || !chatOpen) return;
   if (document.visibilityState !== 'visible') return;
-  const res = await fetchChat(seat.code, chatLastId);
+  const res = await fetchChat(seat.code, chatFeed.lastId);
   if (room?.code !== seat.code) return; // 期间退出了房间
   if (!res.ok) {
     const msg = res.reason ?? '';
@@ -3984,7 +3960,9 @@ async function pollChat(): Promise<void> {
     }
     return;
   }
-  for (const l of res.lines) pushChatLine(l);
+  // 水位由这一页推（见 ChatFeed.accept）；这里是唯一推进它的地方
+  const fresh = chatFeed.accept(res.lines);
+  if (!chatOpen) chatUnread += fresh.length;
   paintChat();
 }
 
@@ -3993,6 +3971,14 @@ async function sendChatNow(): Promise<void> {
   if (!seat) return;
   const input = chatDock?.querySelector<HTMLInputElement>('.chat-input');
   const raw = input?.value ?? '';
+  // 先问一句"会不会被截"：`maxlength` 是输入框自己在拦，输入法和某些粘贴
+  // 并不总是听话。真超了就不发、把字留在框里——让对面收到半句比拒发更糟。
+  if (chatBodyOverflows(raw)) {
+    chatNotice = `太长了，最多 ${CHAT_MAX_LEN} 字（现在 ${chatBodyLength(raw)} 字）。拆成两条发吧，字还留在框里。`;
+    paintChat();
+    input?.focus();
+    return;
+  }
   const body = trimChatBody(raw);
   if (!body) {
     input?.focus();
@@ -4009,9 +3995,13 @@ async function sendChatNow(): Promise<void> {
   }
   chatNotice = '';
   if (res.line) {
-    pushChatLine(res.line);
+    // 自己这条先显示出来。注意 `adopt` **不推水位**：见 ChatFeed 的注释，
+    // 推了就会跳过别人夹在中间发的那条。
+    chatFeed.adopt(res.line);
     chatUnread = 0;
     paintChat();
+    // 顺手补一次增量：自己这条的 id 之前可能还有别人刚发的消息
+    void pollChat();
   } else {
     // 云端没回那一行：立刻增量取一次，别让人对着空白等
     await pollChat();

@@ -60,7 +60,15 @@ import {
 } from '../src/core/timeline.ts';
 import { normalizeCampaign } from '../src/net/campaign.ts';
 import { adoptDecision } from '../src/net/room.ts';
-import { CHAT_MAX_LEN, chatLinesHtml, chatWhoLabel, trimChatBody } from '../src/net/chat.ts';
+import {
+  CHAT_MAX_LEN,
+  ChatFeed,
+  chatBodyLength,
+  chatBodyOverflows,
+  chatLinesHtml,
+  chatWhoLabel,
+  trimChatBody,
+} from '../src/net/chat.ts';
 import type { ChatLine } from '../src/net/chat.ts';
 import {
   AP_COST,
@@ -104,6 +112,7 @@ import {
 } from '../src/core/setup.ts';
 import {
   applyAction,
+  adjacentToWater,
   attacksLeftOf,
   attacksPerTurn,
   splashRadiusOf,
@@ -4298,6 +4307,44 @@ test('军营只能扎在平地或丘陵上，而且必须临水', () => {
   set(6, 6, 'plain');
   const dry = build(6, 5);
   assert.equal(dry.ok, false, '不临水就不该能扎营');
+});
+
+test('军营能扎在桥头：桥面也算临水', () => {
+  // 规则书里写的是"四邻还要有一格水面（桥面也算，桥下就是河）"。
+  // 但判定曾经自己写了一遍 `terrain === 'water'`——桥一格是 `bridge`，
+  // 于是桥头被判"不临水"；而界面上的建造高亮用的是 `adjacentToWater`（认桥面），
+  // 一路高亮成"可建"，点下去才回一句"必须扎在水边"。
+  const s = fresh();
+  const laborer = place(s, 'A', 'laborer', 5, 5);
+  s.current = 'A';
+  s.players.A.gold = 900;
+
+  const set = (x: number, y: number, terrain: Terrain) => {
+    s.tiles[idx(s, x, y)] = { terrain, cityId: null };
+  };
+  for (let y = 3; y <= 7; y++) for (let x = 3; x <= 7; x++) set(x, y, 'plain');
+
+  // (6,6) 是架了桥的那格水。先确认"只有桥、没有水"时也能扎营
+  set(6, 6, 'bridge');
+  const onBridge = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'camp', x: 6, y: 5 });
+  assert.ok(
+    onBridge.ok,
+    `桥头应该能扎营（桥下就是河）：${onBridge.ok ? '' : onBridge.reason}`,
+  );
+
+  // 界面上高亮的那一套判据也要同意，否则"高亮了却建不了"会回来
+  assert.equal(adjacentToWater(s, 6, 5), true, '高亮用的判据也得认桥面');
+
+  // 反过来：把桥拆成平地之后，同一格就不该再能扎营（免得放宽成"随便扎"）
+  const dry = fresh();
+  const laborer2 = place(dry, 'A', 'laborer', 5, 5);
+  dry.current = 'A';
+  dry.players.A.gold = 900;
+  for (let y = 3; y <= 7; y++) for (let x = 3; x <= 7; x++) {
+    dry.tiles[idx(dry, x, y)] = { terrain: 'plain', cityId: null };
+  }
+  const noWater = applyAction(dry, { type: 'BUILD', unitId: laborer2.id, unitType: 'camp', x: 6, y: 5 });
+  assert.equal(noWater.ok, false, '一格水都没有的时候仍然不许扎营');
 });
 
 test('军营能像城市一样产兵', () => {
@@ -9983,6 +10030,62 @@ test('聊天记录：转义、三种归属、空态', () => {
 
   const empty = chatLinesHtml([], 'A');
   assert.ok(empty.includes('chat-empty'), '空的时候要有一句话，不要留一块空白');
+});
+
+test('超长消息不发出去，而不是截一半发出去', () => {
+  // `maxlength` 是输入框自己在拦，输入法和粘贴并不总是听话。
+  // 真超了就"不发、字留在框里"——对面收到半句还以为那就是全文，比拒发糟得多。
+  assert.equal(chatBodyOverflows('字'.repeat(CHAT_MAX_LEN)), false, '刚好到上限不算超');
+  assert.equal(chatBodyOverflows('字'.repeat(CHAT_MAX_LEN + 1)), true, '多一个字就要拦');
+  assert.equal(chatBodyOverflows(`  ${'字'.repeat(CHAT_MAX_LEN)}  `), false, '首尾空白不占额度');
+  assert.equal(chatBodyOverflows(`${'字'.repeat(CHAT_MAX_LEN)}\n\n\n`), false, '换行先压平成空格再算');
+  // 提示里那个"现在 N 字"要算上会被截掉的部分，否则永远显示 120，等于没说话
+  assert.equal(chatBodyLength('字'.repeat(CHAT_MAX_LEN + 5)), CHAT_MAX_LEN + 5);
+  assert.equal(chatBodyLength('  好 的  '), 3, '数的是清洗之后的字数');
+});
+
+test('聊天水位只由服务器推：两个人同时说话不能丢', () => {
+  // 这条盯的是一个真实事故：以前"收进一行就把水位推到它的 id"，
+  // 包括自己刚发出去的那一条。于是：
+  //   上次拉到 99 → 对方发了 100（还没拉）→ 我发了 101，水位立刻变 101
+  //   → 下一轮问 `id > 101`，100 永远拉不回来。
+  // 表现是"对面说的我这边缺一句"，刷新一次又都在——最容易被当成网络问题那种。
+  const feed = new ChatFeed();
+  const line = (id: number, body: string): ChatLine => ({
+    id,
+    seat: id % 2 ? 'A' : 'B',
+    name: 'x',
+    body,
+    at: '2026-10-29T20:31:00Z',
+  });
+
+  feed.accept([line(99, '开局')]);
+  assert.equal(feed.lastId, 99, '拉到 99 之后水位就是 99');
+
+  // 对方发了 100，我发了 101：我这条先显示，但水位不能跟着跳
+  feed.adopt(line(101, '我这句'));
+  assert.equal(feed.lastId, 99, '自己发的那条不能推水位，否则夹在中间的 100 会被跳过');
+  assert.equal(feed.lines.length, 2, '自己发的要立刻显示');
+
+  // 下一轮照常从 99 往后拉，100 和 101 都回来了
+  const got = feed.accept([line(100, '对方那句'), line(101, '我这句')]);
+  assert.equal(got.length, 1, '101 要按 id 去重，不能显示两遍');
+  assert.equal(
+    feed.lines.map((l) => l.id).join(','),
+    '99,100,101',
+    '三条都在，而且按 id 排好——自己那条是提前显示的，不能排在别人更早那句前面',
+  );
+  assert.equal(feed.lastId, 101, '这一页跑完了，水位才推到 101');
+
+  // 一页里有多条时只推一次，且推的是这一页的最大 id（不是"新的那几条"的最大 id）
+  const more = feed.accept([line(102, 'a'), line(103, 'b'), line(104, 'c')]);
+  assert.equal(more.length, 3);
+  assert.equal(feed.lastId, 104);
+
+  // 退出房间要清干净，否则换一局会看到上一局的话
+  feed.reset();
+  assert.equal(feed.lastId, 0);
+  assert.equal(feed.lines.length, 0);
 });
 
 console.log('\n行动点扩展');

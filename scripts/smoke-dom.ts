@@ -26,6 +26,7 @@ import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
+import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
 
@@ -1590,6 +1591,46 @@ check('聊天面板能按住标题栏拖动，拖不出视口，点 × 不算拖
 
   panel.hidden = true;
   panel.style.transform = '';
+});
+
+check('输入法组字中按 Enter 只选词，不发送（否则对方只收到半句）', () => {
+  // 中文一句话要打几个字才组成词，按 Enter 是选词。那一刻输入框里只有
+  // 已经上屏的部分，剩下的还在输入法里——这时候按"发送"发出去的就是半句，
+  // 而发的人以为自己发的是整句。
+  const form = doc.createElement('form');
+  const input = doc.createElement('input');
+  form.append(input);
+  doc.body.append(form);
+
+  let sent = 0;
+  bindChatComposer(input, () => {
+    sent += 1;
+  });
+  const pressEnter = () =>
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  input.dispatchEvent(new window.Event('compositionstart'));
+  pressEnter();
+  assert.equal(sent, 0, '组字中不该发送');
+
+  input.dispatchEvent(new window.Event('compositionend'));
+  pressEnter();
+  assert.equal(sent, 1, '上屏之后再按 Enter 才发');
+
+  // 兜底：某个环境不发 compositionend，下一次"不在组字中的按键"要能把状态解开，
+  // 否则这个人从此再也发不出消息
+  input.dispatchEvent(new window.Event('compositionstart'));
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', isComposing: false }));
+  pressEnter();
+  assert.equal(sent, 2, '卡住的组字状态要能被下一次普通按键解开');
+
+  // 反过来：组字中的按键（isComposing = true）不该把状态解开
+  input.dispatchEvent(new window.Event('compositionstart'));
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', isComposing: true }));
+  pressEnter();
+  assert.equal(sent, 2, '组字中的按键不能算"已经上屏"');
+
+  form.remove();
 });
 
 

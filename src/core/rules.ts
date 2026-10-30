@@ -3057,10 +3057,13 @@ export function buildSiteError(
   // 临水要求（军营）：靠水补给，所以必须挨着水面。
   // 占 2×2 的营按整圈外墙算——只看锚点四邻的话，水明明贴着右下角也会被判"不临水"，
   // 而玩家在画面上看到的是"水就在墙根"。
+  //
+  // 判据必须走 `adjacentToWater`，**不要**在这里再写一遍 `terrain === 'water'`。
+  // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
+  // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
+  // 桥是架在河上的，桥面那一格底下还是水——规则书里写的也是"桥面也算"。
   if (def.requiresWater) {
-    const wet = tilesOfFootprint(x, y, n, (tx, ty) =>
-      DIRS.some(([dx, dy]) => tileAt(s, tx + dx, ty + dy)?.terrain === 'water'),
-    );
+    const wet = tilesOfFootprint(x, y, n, (tx, ty) => adjacentToWater(s, tx, ty));
     if (!wet) return `${def.name}必须扎在水边（四邻要有一格水面）`;
   }
 

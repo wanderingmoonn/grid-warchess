@@ -52,12 +52,39 @@ export interface ChatLine {
  * 返回空串＝这条不该发（全空格、只敲了回车）。
  */
 export function trimChatBody(raw: string): string {
-  const flat = raw
+  return trimFlat(raw).slice(0, CHAT_MAX_LEN);
+}
+
+/** 清洗里"压平"的那一步（不含截断）。截断要不要做，由调用方决定 */
+function trimFlat(raw: string): string {
+  return raw
     // 控制字符（含 \u0000-\u001f）：粘贴进来的富文本里常有
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return flat.slice(0, CHAT_MAX_LEN);
+}
+
+/**
+ * 清洗之后有多少个字（含超出上限、会被截掉的部分）。
+ *
+ * 提示要用它算：`trimChatBody` 的结果永远不超过上限，拿它去说"现在 N 字"
+ * 只会永远显示 120，等于没告诉人超了多少。
+ */
+export function chatBodyLength(raw: string): number {
+  return trimFlat(raw).length;
+}
+
+/**
+ * 这条按上限会被截掉一截吗。
+ *
+ * 为什么要单独问一句：`<input maxlength>` 是**输入框自己**在拦，而输入法（以及
+ * 某些浏览器的粘贴）并不总是老老实实遵守它——中英文混排、组字过程中上屏一长串，
+ * 值就会超过上限。这时候如果直接 `trimChatBody` 发出去，发的人看到的是一整句，
+ * 收的人看到的是半句，两边都以为"就这些"。
+ * 所以发送前先问一句，超了就不发、把字留在框里，让人自己决定怎么拆。
+ */
+export function chatBodyOverflows(raw: string): boolean {
+  return chatBodyLength(raw) > CHAT_MAX_LEN;
 }
 
 function escapeHtml(t: string): string {
@@ -111,6 +138,85 @@ export function chatLinesHtml(lines: readonly ChatLine[], mine: ChatSeat): strin
       </div>`;
     })
     .join('');
+}
+
+/* ---------- 本地那一份记录 ---------- */
+
+/**
+ * 聊天记录的本地状态：已收到的行 + 一个"拉到哪儿了"的水位。
+ *
+ * 单拎出来是为了能测，也是为了把那条水位线的规矩写死：
+ * **水位只能由服务器返回的数据推**，不能由"我这边见过的大 id"推。
+ *
+ * 以前的写法是"收进一行就把水位推到它的 id"，包括自己刚发出去的那一条。
+ * 两个人几乎同时说话就丢消息：
+ *
+ *   我上次拉到 99 → 对方发了 100（我还没拉）→ 我发了一条，id 101
+ *   → 界面立刻把水位推到 101 → 下一轮问的是 `id > 101` → 100 永远拉不回来。
+ *
+ * 对方那句只在我这儿没了，在他那儿好好的。看起来就是"对方说的只收到一半"，
+ * 而刷新一次又全都在（重新从 0 拉）——最容易归咎成"网络不好"的那种 bug。
+ *
+ * 所以分成两个入口：
+ *   · `adopt()`：自己刚发出去的那条先显示出来，**不动水位**；
+ *   · `accept()`：收服务器返回的一页（按 id 升序），去重后把水位推到这一页的最大 id。
+ *     自己那条如果也在这一页里，会被 id 去重掉，正好不会重复显示。
+ */
+export class ChatFeed {
+  lines: ChatLine[] = [];
+  /** 拉到哪儿了：下一轮问的是 `id > lastId` */
+  lastId = 0;
+
+  /** 超过这么多条就丢最老的：聊天是过程，不是档案 */
+  private readonly keep: number;
+
+  // 不用"构造函数参数属性"（`constructor(private readonly keep = 200)`）：
+  // 测试是 `node --experimental-strip-types` 直接跑 .ts 的，那个模式不支持这种语法。
+  constructor(keep = 200) {
+    this.keep = keep;
+  }
+
+  /**
+   * 收下服务器返回的一页，返回**这次新增**的那几条。
+   *
+   * 水位取这一页的最大 id——不能取"全局最大"，也不能取自己发过的 id：
+   * 服务端按 id 升序、一次最多一页，所以"这一页跑完了"就等于"到这儿为止都见过了"。
+   */
+  accept(page: readonly ChatLine[]): ChatLine[] {
+    const added = page.filter((l) => this.push(l));
+    if (page.length > 0) {
+      const maxId = page.reduce((m, l) => Math.max(m, l.id), 0);
+      if (maxId > this.lastId) this.lastId = maxId;
+    }
+    return added;
+  }
+
+  /**
+   * 收下自己刚发出去的那一条（乐观显示）。
+   *
+   * **不动水位**：它的 id 一定比"我拉到的地方"大，把它当成水位就等于
+   * 宣布"中间那些我都有了"，而中间恰恰可能有别人刚发的消息。
+   * 下一轮照样会把它拉回来，`accept` 按 id 去重，不会重复显示。
+   */
+  adopt(line: ChatLine): boolean {
+    return this.push(line);
+  }
+
+  reset(): void {
+    this.lines = [];
+    this.lastId = 0;
+  }
+
+  private push(line: ChatLine): boolean {
+    if (this.lines.some((l) => l.id === line.id)) return false;
+    this.lines.push(line);
+    // 按 id 排一下：自己那条是"先显示、后拉回"的，它可能比夹在中间的那条
+    // （别人的、我还没拉到的）先到；不排就会看见"我的回复排在对方那句之前"。
+    // 同一间屋子里 id 就是先后，所以排序＝按时间线。
+    this.lines.sort((a, b) => a.id - b.id);
+    if (this.lines.length > this.keep) this.lines.splice(0, this.lines.length - this.keep);
+    return true;
+  }
 }
 
 /* ---------- 云端读写 ---------- */
