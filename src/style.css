@@ -3147,10 +3147,10 @@ a.btn {
 
 .draft-head {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto 1fr auto;
   grid-template-areas:
-    'step timer seat'
-    'hint hint hint';
+    'step timer seat actions'
+    'hint hint hint hint';
   align-items: center;
   gap: 6px 14px;
   padding: 12px 16px;
@@ -3466,5 +3466,145 @@ a.btn {
   }
   .draft-log {
     flex: 1 1 100%;
+  }
+}
+
+/* ---------- 选卡：顶栏按钮与等待开局 ---------- */
+
+.draft-head-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 6px;
+  justify-self: end;
+}
+
+.draft-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.draft-btn:hover {
+  border-color: var(--a);
+  background: var(--a-soft);
+}
+
+.draft-btn.is-quiet {
+  color: var(--text-2);
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+
+.draft-btn.is-primary {
+  background: var(--a);
+  border-color: var(--a);
+  color: #fff;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.draft-btn.is-primary:hover {
+  background: color-mix(in srgb, var(--a) 88%, #000);
+  color: #fff;
+}
+
+.draft-lobby {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.draft-lobby h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.draft-lobby-lead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+  max-width: 62ch;
+}
+
+.lobby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.lobby-room {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel-2);
+}
+
+.lobby-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lobby-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.lobby-code {
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+}
+
+.lobby-status {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.lobby-status.is-ok {
+  color: #2e7d4f;
+  font-weight: 600;
+}
+
+.lobby-link {
+  flex: 1 1 260px;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text-2);
+}
+
+@media (max-width: 640px) {
+  .draft-head {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'step timer'
+      'seat actions'
+      'hint hint';
+  }
+  .draft-head-actions {
+    justify-self: stretch;
+    justify-content: flex-end;
   }
 }

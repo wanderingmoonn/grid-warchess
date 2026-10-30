@@ -874,8 +874,14 @@ export interface LogEntry {
   open?: boolean;
 }
 
-/** 选卡的阶段：禁用 → 选人 → 结束 */
-export type DraftPhase = 'ban' | 'pick' | 'done';
+/**
+ * 选卡的阶段：等待开局 → 禁用 → 选人 → 结束。
+ *
+ * 为什么要有 `lobby`：BP 遮罩是整屏的，一盖上去顶栏的「联机」「新对局」就都点不到了，
+ * 于是"先建房把链接发给朋友"这件事在 BP 期间根本做不到。所以开局先进 lobby：
+ * 那里能建房、能看邀请链接、能等对面入座，然后再开始禁用。
+ */
+export type DraftPhase = 'lobby' | 'ban' | 'pick' | 'done';
 
 /** 一条选卡记录：谁、禁/选、哪一个、是不是超时代选 */
 export interface DraftEntry {
@@ -918,6 +924,14 @@ export interface DraftState {
   deadline: number;
   /** 全部选卡记录，界面上按顺序显示 */
   history: DraftEntry[];
+  /**
+   * 这一局跳过了选卡（用全部兵种打）。
+   *
+   * 不直接把 `state.draft` 删掉，是因为联机要能被对面看见：删字段等于"没有 BP"，
+   * 而对面那边还停在 BP 里，双方的进度号对不上就再也不会同步了。
+   * 留一个 phase='done' + skipped=true 的记录，两边都读得懂。
+   */
+  skipped?: boolean;
 }
 
 export interface GameState {
@@ -1084,6 +1098,14 @@ export type Action =
    * 双方**同时**禁用、互不可见：提交后界面只显示"对方已 ban / 未 ban"，
    * 两边都交完才一起揭晓。这是竞技 BP 的通行做法——先 ban 的人不该被后手针对。
    */
+  /**
+   * 选卡：从"等待开局"进入"禁用"。
+   *
+   * 单开一个动作而不是"开局即禁用"，是为了给建房/邀请留出位置（见 DraftPhase 的说明）。
+   */
+  | { type: 'DRAFT_START'; at: number }
+  /** 选卡：整轮跳过，这一局用全部兵种直接开打 */
+  | { type: 'DRAFT_SKIP'; at?: number }
   | { type: 'DRAFT_BAN'; unitId: string; at?: number }
   /** 选卡：轮到谁选就选一个（顺序见 state.draft.order 的蛇形排法） */
   | { type: 'DRAFT_PICK'; unitId: string; at?: number }

@@ -3998,6 +3998,22 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   assert.ok(mask, '应该有选卡遮罩节点');
   assert.equal(mask!.hidden, false, '选卡期间遮罩必须盖住棋盘');
 
+  // 开局先停在"等待开局"：这一屏是建房/邀请的地方，不能直接进禁用
+  assert.ok(
+    (doc.querySelector('#draft .draft-step')?.textContent ?? '').includes('等待开局'),
+    '开局应该先进等待开局，而不是直接开始禁用',
+  );
+  assert.ok(doc.querySelector('#draft [data-act="online"]'), '等待开局里要有"联机 · 建房 / 加入"的入口');
+  assert.ok(doc.querySelector('#draft [data-draft-act="start"]'), '要有"开始选卡"按钮');
+  assert.equal(doc.querySelector('#draft [data-draft]'), null, '等待开局里不该铺出兵种池');
+
+  click('#draft [data-draft-act="start"]');
+  await tick(60);
+  assert.ok(
+    (doc.querySelector('#draft .draft-step')?.textContent ?? '').includes('禁用'),
+    '点了开始之后才进入禁用阶段',
+  );
+
   const cards = () => [...doc.querySelectorAll<HTMLElement>('#draft [data-draft]')];
   assert.ok(cards().length >= 18, `池子应该铺开（至少 18 张卡），实际 ${cards().length}`);
   assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
@@ -4040,6 +4056,38 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
 });
 
 
+await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
+  click('[data-act="new-game"]');
+  click('[data-draft-mode="on"]');
+  click('[data-act="start"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false);
+
+  click('#draft [data-draft-act="skip"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, true, '跳过后遮罩要收起');
+  // 跳过＝按原版打：结束回合应该能点
+  const endTurn = doc.querySelector<HTMLElement>('[data-act="end-turn"]');
+  assert.ok(endTurn, '应该有结束回合按钮');
+  endTurn!.click();
+  await tick(40);
+});
+
+await checkAsync('选卡可以退出：退出后回到开局设置面板', async () => {
+  click('[data-act="new-game"]');
+  click('[data-draft-mode="on"]');
+  click('[data-act="start"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '先要有遮罩');
+
+  click('#draft [data-draft-act="exit"]');
+  await tick(80);
+  assert.ok(doc.querySelector('.modal-mask'), '退出之后应该弹出开局设置面板');
+  // 收掉面板，别把后面的用例挡在模态框外面
+  doc.querySelector<HTMLElement>('.modal-mask [data-act="cancel"]')?.click();
+  await tick(40);
+});
+
 await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完', async () => {
   click('[data-act="new-game"]');
   click('[data-ai="1"]');
@@ -4047,6 +4095,8 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   click('[data-act="start"]');
   await tick(80);
   assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '遮罩应该出现');
+  click('#draft [data-draft-act="start"]');
+  await tick(80);
 
   // 只替甲方点；轮到 AI 时卡片会全部禁用，这里等它自己动（每步 600ms）
   for (let i = 0; i < 40; i++) {

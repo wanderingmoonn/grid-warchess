@@ -2542,7 +2542,13 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
    *   2. 普通动作 → 选卡没打完一律拒掉。不挡的话玩家能在 BP 期间就开始
    *      造兵走子，那这一局的名单就成了装饰。
    */
-  if (action.type === 'DRAFT_BAN' || action.type === 'DRAFT_PICK' || action.type === 'DRAFT_TIMEOUT') {
+  if (
+    action.type === 'DRAFT_START' ||
+    action.type === 'DRAFT_SKIP' ||
+    action.type === 'DRAFT_BAN' ||
+    action.type === 'DRAFT_PICK' ||
+    action.type === 'DRAFT_TIMEOUT'
+  ) {
     const staged = cloneState(s);
     return applyDraftAction(staged, action, by);
   }

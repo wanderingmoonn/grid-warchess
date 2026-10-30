@@ -124,6 +124,18 @@ import {
   type ChatSeat,
 } from './net/chat.ts';
 
+/**
+ * 邀请链接：在当前地址上加 `?room=CODE`。
+ *
+ * 必须在**当前地址**上加，不能拼一个干净的 origin+path：分享出来的站点靠
+ * `?sharecode=…` 才放行，把它丢了对方点开就是 403。
+ */
+function inviteLink(code: string): string {
+  const url = new URL(location.href);
+  url.searchParams.set('room', code);
+  return url.toString();
+}
+
 /** 取元素，取不到直接抛——界面结构缺失属于硬错误，不该静默继续 */
 function pick<T extends Element>(parent: ParentNode, sel: string): T {
   const el = parent.querySelector<T>(sel);
@@ -1228,6 +1240,8 @@ let draftSig = '';
 let draftAiPending = false;
 /** 正在往云端提交一步 BP：期间不接受新的点击（避免同一手上交两次） */
 let draftBusy = false;
+/** 对面是否已经入座（选卡 lobby 要显示"等待对方加入"） */
+let peerSeated = false;
 
 function draftIsAi(side: PlayerId): boolean {
   // 房间里的两侧都是人（席位就是身份），托管开关在进房时已经被关掉了
@@ -1374,9 +1388,13 @@ function afterDraft(): void {
   draftSig = '';
   draftEl.hidden = true;
   render();
-  const names = (side: PlayerId) =>
-    (state.draft?.picks[side] ?? []).map((id) => state.unitTypes[id]?.name ?? id).join('、');
-  toast(`选卡完成 · 甲方：${names('A')} ／ 乙方：${names('B')}`);
+  if (state.draft?.skipped) {
+    toast('已跳过选卡：这一局用全部兵种开打');
+  } else {
+    const names = (side: PlayerId) =>
+      (state.draft?.picks[side] ?? []).map((id) => state.unitTypes[id]?.name ?? id).join('、');
+    toast(`选卡完成 · 甲方：${names('A')} ／ 乙方：${names('B')}`);
+  }
   if (isAiSide(state, state.current)) void runAiLoop();
 }
 
@@ -1403,6 +1421,8 @@ function renderDraft(): void {
     view.b.picks.join(','),
     draftSeat,
     view.remaining.length,
+    room?.code ?? '',
+    peerSeated ? '1' : '0',
   ].join('|');
   if (sig !== draftSig) {
     draftSig = sig;
@@ -1410,6 +1430,9 @@ function renderDraft(): void {
       seat: draftSeat,
       now: Date.now(),
       isAi: draftIsAi,
+      room: room
+        ? { code: room.code, link: inviteLink(room.code), peerSeated }
+        : null,
     });
     // AI 的那一手：晚半秒再动，让它看起来像在挑，而不是"你点完它就位"
     scheduleDraftAi();
@@ -1436,6 +1459,9 @@ function startDraftTicker(): void {
       stopDraftTicker();
       return;
     }
+    // lobby 不计时（要等人），done 更不用；只有禁用与选人这两段才有倒计时
+    const phase = state.draft?.phase;
+    if (phase !== 'ban' && phase !== 'pick') return;
     const now = Date.now();
     paintDraftTimer(draftEl, state, now);
     // 联机时多等一会儿再判超时：deadline 是**对方那台机器的钟**写进来的，
@@ -1491,6 +1517,42 @@ function scheduleDraftAi(): void {
       if (id) dispatchDraft({ type: 'DRAFT_PICK', unitId: id, at: Date.now() }, now.toAct);
     }
   }, 600);
+}
+
+/**
+ * 选卡界面上的按钮（开始 / 跳过 / 退出 / 复制链接）。
+ *
+ * 这几个都是"遮罩自己的出口"——遮罩盖住了顶栏，如果没有它们，玩家进了 lobby
+ * 就只能干看着，既建不了房也退不出去。
+ */
+function onDraftCommand(cmd: string): void {
+  const view = draftView(state);
+  if (!view) return;
+  const actor: PlayerId = room && !room.spectator ? room.seat : 'A';
+
+  if (cmd === 'copy-link') {
+    if (!room) return;
+    const link = inviteLink(room.code);
+    void navigator.clipboard?.writeText(link);
+    toast(`邀请链接已复制（房间 ${room.code}）`);
+    return;
+  }
+
+  if (cmd === 'start') {
+    dispatchDraft({ type: 'DRAFT_START', at: Date.now() }, actor);
+    return;
+  }
+
+  if (cmd === 'skip') {
+    dispatchDraft({ type: 'DRAFT_SKIP', at: Date.now() }, actor);
+    return;
+  }
+
+  if (cmd === 'exit') {
+    // 放弃这一局：走和顶栏「新对局」同一条路（它会顺带离开房间）
+    handleAction('new-game', draftEl);
+    toast('已退出选卡，可以重新配置开局');
+  }
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -3828,6 +3890,7 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   room = seat;
+  peerSeated = seat.spectator === true ? true : snapshot.seats[seat.seat === 'A' ? 'B' : 'A'] !== null;
   saveSeat(seat);
   rememberRoom(seat.code);
   setSaveScope(seat.code);
@@ -3953,6 +4016,17 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+
+    // "对面入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
+    if (!seat.spectator) {
+      const other = seat.seat === 'A' ? 'B' : 'A';
+      const seated = snapshot.seats[other] !== null;
+      if (seated !== peerSeated) {
+        peerSeated = seated;
+        // 进度号没变时下面会直接 return，所以这里得自己重画一次遮罩
+        renderDraft();
+      }
+    }
 
     /*
      * BP 期间另走一条判断：**进度号往前走了就采纳**。
@@ -4472,6 +4546,12 @@ appEl.addEventListener('click', (e) => {
   if (suppressClick) {
     suppressClick = false;
     if (target.closest('.board')) return;
+  }
+
+  const draftAct = target.closest<HTMLElement>('[data-draft-act]');
+  if (draftAct?.dataset.draftAct) {
+    onDraftCommand(draftAct.dataset.draftAct);
+    return;
   }
 
   const draftCard = target.closest<HTMLElement>('[data-draft]');
