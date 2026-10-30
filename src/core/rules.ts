@@ -4102,16 +4102,19 @@ SKILL_EFFECTS['raise-dead'] = (c) => {
   const owner = c.self.owner;
   // `turn >= 当前-1`：上一回合（对手刚打完的那一轮）+ 本回合。
   // 只看"当前 turn"不够用——你的兵基本都死在对面回合里。
+  // 英雄不进名单：全场唯一，招魂再拉一个出来就变成"两个牢大"，
+  // 而"唯一"是英雄这条设计的根。活着的时候不能有两只，死了也不该被造出第二只。
   const pool = (c.state.fallen ?? []).filter(
     (r) =>
       r.owner === owner &&
       r.turn >= c.state.turn - 1 &&
       !r.revived &&
-      !!c.state.unitTypes[r.type],
+      !!c.state.unitTypes[r.type] &&
+      c.state.unitTypes[r.type]!.hero !== true,
   );
   if (pool.length === 0) {
     c.result.ok = false;
-    c.result.reason = '本回合还没有友军倒下';
+    c.result.reason = '本轮没有可招魂的友军（英雄不在其列）';
     return;
   }
   // 造价高的排前面：钱是按生产价格付的，先救回最值钱的那一次牺牲

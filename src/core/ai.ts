@@ -2548,7 +2548,9 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
             r.owner === u.owner &&
             r.turn >= view.turn - 1 &&
             !r.revived &&
-            !!view.unitTypes[r.type],
+            !!view.unitTypes[r.type] &&
+            // 英雄不能被招魂：别让 AI 反复点一个注定被规则拒掉的技能
+            view.unitTypes[r.type]!.hero !== true,
         );
         if (mine.length === 0) break;
         let best = 0;

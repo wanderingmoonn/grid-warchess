@@ -2164,11 +2164,20 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
     '这条记录标记为已招过',
   );
 
-  // 冷却清掉也不再能招：同一具遗体只算一次
+  // 冷却清掉也不再能招：同一具遗体只算一次；英雄则根本不进候选
   const again = r.state.units.find((u) => u.id === necro.id)!;
   again.skillCd = {};
+  again.skillTurn = undefined;
+  r.state.fallen = [
+    ...(r.state.fallen ?? []),
+    { owner: 'A', type: 'hydra', x: 6, y: 6, turn: r.state.turn },
+  ];
   const r2 = applyAction(r.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
   assert.equal(r2.ok, false, '同一具不能被反复招起来');
+  assert.ok(
+    !r2.ok && r2.reason.includes('英雄'),
+    `应该说明英雄不在其列，实际：${!r2.ok ? r2.reason : ''}`,
+  );
 });
 
 test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () => {
