@@ -1864,11 +1864,12 @@ export function computeDamage(
   // 放在弱点/抗性之后、反击折减之前：它说的是"这一路的伤害对我打对折"。
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.elementMul, to: DAMAGE_STAGE.trueDamage });
 
-  if (isCounter) ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
 
   // 真实伤害阶段
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
 
+  if (isCounter) ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
+  
   // ── 拆桥折扣 ──
   // 放在最后，是因为它说的是"这一发落在桥上的效果"，不是"这个兵有多强"：
   // 属性倍率、护壁、反击折减都算完之后再对折，才不会被别的倍率抵消掉。
