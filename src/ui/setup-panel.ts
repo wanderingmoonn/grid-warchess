@@ -86,6 +86,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
       recordDetail: loadRecordPref() ?? initial.recordDetail === true,
     };
+
+    // 新增：清洗无效数据（防止 __city__ 或空数据导致测试崩盘）
+    const availableCatalog = allAvailableUnits();
+    config.enabledUnits = Array.from(
+      new Set(config.enabledUnits.filter((id) => availableCatalog[id] && id !== '__city__'))
+    );
+    // 如果清洗后发现全空了，保底给一个合法的初始兵种
+    if (config.enabledUnits.length === 0) {
+      const firstValid = Object.values(availableCatalog).find((u) => u.id !== '__city__');
+      if (firstValid) config.enabledUnits.push(firstValid.id);
+    }
+
     let currentSeed = seed;
 
     // 上一次的选择（存下来的 config）可能带着"第六时代"，而这一次的扩展勾选
@@ -103,6 +115,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     };
 
     const toggleUnit = (id: string) => {
+      // 新增：每次点击前先强制去重，保证 length 统计的准确性
+      config.enabledUnits = Array.from(new Set(config.enabledUnits));
       if (config.enabledUnits.includes(id)) {
         if (config.enabledUnits.length <= 1) return;
         config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
@@ -206,7 +220,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
       const catalog = allAvailableUnits();
       const unitGroups = eras.map((era) => {
-        const units = Object.values(catalog).filter((u) => u.era === era.level);
+        const units = Object.values(catalog).filter((u) => u.era === era.level && u.id !== '__city__');
         if (units.length === 0) return '';
         const chips = units
           .map(

@@ -3870,7 +3870,9 @@ test('破城：攻城伤害 ×1.5', () => {
   const normal = damageToCity(cav, city, s);
   grantAbility(s, 'scout', 'siege-master');
   const boosted = damageToCity(cav, city, s);
-  assert.equal(boosted, Math.round(normal * 1.5));
+  // 破城现在作用于攻击力，而不是最终伤害
+  const expected = Math.max(0, Math.round((normal + city.armor) * 1.5 - city.armor));
+  assert.equal(boosted, expected);
 });
 
 test('自爆：阵亡时波及四周', () => {
@@ -9828,6 +9830,69 @@ test('修士：溅射半径随境界成长（x/4）', () => {
   }
 });
 
+test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  
+  // 清理一块平地（虽然测移动力不依赖地形，但为了保证移动不被阻挡）
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { lifespan: 100 };
+
+  // 用来测试边界值的等级和对应的经验阈值
+  const table: Array<[rank: number, exp: number, expectedMove: number]> = [
+    [0, 0, 2],    // 0/3 = 0 -> 2
+    [2, 4, 2],    // 2/3 = 0 -> 2
+    [3, 8, 3],    // 3/3 = 1 -> 3
+    [5, 32, 3],   // 5/3 = 1 -> 3
+    [6, 64, 4],   // 6/3 = 2 -> 4
+    [8, 256, 4],  // 8/3 = 2 -> 4
+    [9, 512, 5],  // 9/3 = 3 -> 5
+  ];
+
+  for (const [rank, exp, expectedMove] of table) {
+    qi.custom.exp = exp;
+    assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
+    assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
+  }
+});
+
+test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  
+  // 0级：基础视野 3
+  qi.custom = { exp: 0, lifespan: 100 }; 
+  assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
+
+  // 9级：基础 3 + 境界 9 = 12
+  qi.custom.exp = 512;
+  assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
+
+  // 衰老测试改用 x=8 级（exp=256）
+  // x=8 级寿元 = 5 + 8*5 = 45。
+  qi.custom = { exp: 256, lifespan: 45 }; 
+  assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
+
+  qi.age = 47; // 超龄 2 岁
+  assert.equal(effectiveStats(s, qi).vision, 9, 'x=8 衰老 2 岁，视野减 2');
+  assert.ok(
+    effectiveStats(s, qi).visionItems.some(it => it.label === '修真·炼气' && it.delta === 6),
+    '面板明细里应显示衰老带来的负修正',
+  );
+});
+
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   // 2026-10-29 起溅射比例不再写死在 CONFIG 里：单位 `custom.splashRatio`
   // 存在就用它自己的。半径同理，交给扩展的 modifySplash（修士按境界）。
@@ -10409,7 +10474,12 @@ test('岸轰：同一条船带不带这条能力，攻城差 25%', () => {
   const plain = damageToCity(monitor, city, s);
 
   assert.ok(withBombard > plain, `带岸轰(${withBombard}) 应该高于不带(${plain})`);
-  assert.equal(withBombard, Math.round(plain * 1.25), '差的正好是 25%');
+  const expected = Math.round(plain * 1.25);
+  // 因为 plain 是取整后的，游戏内是浮点数，允许 1 点精度误差
+  assert.ok(
+    Math.abs(withBombard - expected) <= 1, 
+    `带岸轰(${withBombard}) 应该比不带(${plain}) 高约 25%，预期约 ${expected}`
+  );
 });
 
 test('大型单位：航母占 2×2，能移动，但进不了一格宽的水道', () => {

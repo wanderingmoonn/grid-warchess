@@ -49,7 +49,6 @@ import {
   unitsOf,
   upgradeCostOf,
   utype,
-  visionOf,
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
@@ -603,7 +602,6 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     // movePower/visionOf 则是移动力和视野的同一个真相源。
     // 面板再也不显示"裸装"数值——玩家对不上账，比没有数字更糟。
     const eff = effectiveStats(s, selectedUnit);
-    const vision = visionOf(s, selectedUnit);
     const income = unitIncome(s, selectedUnit);
     const signed = (n: number): string => (n > 0 ? `+${n}` : String(n));
     const modRow = (scope: string, it: { label: string; delta: number }): string =>
@@ -612,6 +610,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       }">${signed(it.delta)}</b></div>`;
     const atkChanged = eff.atk !== eff.atkBase;
     const armorChanged = eff.armor !== eff.armorBase;
+    const stats = effectiveStats(s, selectedUnit); 
     // 只有一个数被改过时，括号里必须点名是哪一个——不写"甲基础 1"的话，
     // "3 / 4（基础 1）"看起来像是攻击也变成了 1
     const baseNote =
@@ -683,7 +682,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       <div class="info-row"><span>移动力</span><b>${
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
-      <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${vision}</b></div>
+      <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${stats.vision}</b></div>
       ${
         // 天气紧跟在"移动力 / 射程 / 视野"后面：这几项正是它改的东西，
         // 放在别处玩家就得自己把两处信息对起来
@@ -729,10 +728,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                </button>
              </div>
              <div class="hint" style="margin-top:6px">
-               同一格压着多个目标（兵站在自己的塔上、飞行单位停在敌人头顶）时，<b>连点同一格会在它们之间轮换</b>。
+               同一格压着多个目标时，<b>连点同一格会在它们之间轮换</b>。
                <br /><br />
-               走不上桥、或者点不到身下那格时，按<b>强制移动</b>：它会一直扣着，期间点棋盘只有
-               "走上去"一种意思（不选中、不下别的指令），再点一次按钮才退出。
+               走不上桥、或者点不到身下那格时，按<b>强制移动</b>：期间点棋盘只有移动指令，再点一次按钮才退出。
                按住 <kbd>Alt</kbd> 点可达格是同样的效果，只是只生效一次。
              </div>`
           : ''
