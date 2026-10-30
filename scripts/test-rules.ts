@@ -10520,5 +10520,179 @@ test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', 
   }
 });
 
+console.log('\n海军：地形与舰种');
+
+test('深水：离岸两格才变外海，浅流原地不动', () => {
+  const side = 7;
+  const g: Terrain[] = new Array(side * side).fill('plain') as Terrain[];
+  for (let y = 2; y <= 4; y++) for (let x = 2; x <= 4; x++) g[y * side + x] = 'water';
+  g[2 * side + 2] = 'shallow'; // 一角改成浅流：它不该被深水化
+
+  const hook = expansionById('naval-fleet')!.afterTerrain!;
+  hook(g, side, side);
+
+  assert.equal(g[3 * side + 3], 'deep', '水塘正中间离岸两格，应该是深水');
+  assert.equal(g[2 * side + 3], 'water', '贴着岸那一圈还是水域');
+  assert.equal(g[2 * side + 2], 'shallow', '浅流不该被改成深水（会凭空掐掉陆军的过河口）');
+
+  // 通行判定：船进得去，陆军进不去
+  assert.equal(navigable('deep'), true, '船应该能进深水');
+  assert.equal(passable('deep'), false, '陆军不该能进深水');
+  assert.equal(navigable('shallow'), true, '浅流仍然双方都能过');
+  assert.equal(passable('shallow'), true);
+});
+
+test('吃水：浅流能让小船过，2×2 的大舰进不去', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    8181,
+  );
+  s.fog = false;
+  s.units = [];
+  // 上半深水、下半浅流的一道横向水道
+  for (let y = 6; y <= 9; y++) for (let x = 3; x <= 12; x++) putTerrain(s, x, y, 'water');
+  for (let x = 3; x <= 12; x++) putTerrain(s, x, 10, 'water');
+  putTerrain(s, 7, 10, 'shallow');
+  putTerrain(s, 8, 10, 'shallow');
+  // 另一处浅流就贴在小船旁边，免得"走不过去"和"吃水不放行"混在一起
+  putTerrain(s, 4, 7, 'shallow');
+  putTerrain(s, 4, 8, 'shallow');
+
+  const carrier = place(s, 'A', 'nv_carrier', 6, 7);
+  s.current = 'A';
+  const reach = reachableTiles(s, carrier);
+  for (const i of reach.keys()) {
+    const x = i % s.w;
+    const y = Math.floor(i / s.w);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        assert.notEqual(
+          s.tiles[(y + dy) * s.w + (x + dx)]!.terrain,
+          'shallow',
+          `2×2 的航母不该能压在浅流上（锚点 ${x},${y}）`,
+        );
+      }
+    }
+  }
+
+  // 小船不受这条限制
+  const boat = place(s, 'A', 'gunboat', 5, 7);
+  boat.moved = false;
+  const smallReach = reachableTiles(s, boat);
+  const onShallow = [...smallReach.keys()].some((i) => {
+    const x = i % s.w;
+    const y = Math.floor(i / s.w);
+    return s.tiles[y * s.w + x]!.terrain === 'shallow';
+  });
+  assert.ok(onShallow, '一格宽的小船应该能开进浅流');
+});
+
+test('钻井平台：深水最肥，敌舰贴着就停产', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    8282,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 6; y <= 9; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const deep = { x: 8, y: 7 };
+  const mid = { x: 5, y: 7 };
+  const shallow = { x: 5, y: 9 };
+  putTerrain(s, deep.x, deep.y, 'deep');
+  putTerrain(s, shallow.x, shallow.y, 'shallow');
+
+  const a = place(s, 'A', 'nv_oil_platform', deep.x, deep.y);
+  const b = place(s, 'A', 'nv_oil_platform', mid.x, mid.y);
+  const c = place(s, 'A', 'nv_oil_platform', shallow.x, shallow.y);
+  const yDeep = unitIncome(s, a);
+  const yWater = unitIncome(s, b);
+  const yShallow = unitIncome(s, c);
+  assert.ok(yDeep > yWater && yWater > yShallow, `深水(${yDeep}) > 水域(${yWater}) > 浅流(${yShallow})`);
+
+  // 敌舰贴上来 → 这座平台停产，旁边那座照收
+  place(s, 'B', 'gunboat', deep.x + 1, deep.y);
+  assert.equal(unitIncome(s, a), 0, '被敌舰贴着的平台应该停产');
+  assert.ok(unitIncome(s, b) > 0, '别的平台不受影响');
+});
+
+test('战列舰停在第五时代，第六时代由超巡接位', () => {
+  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const bb = ships.find((u) => u.id === 'nv_battleship')!;
+  assert.equal(bb.era, 5, '战列舰的历史定位应该落在第五时代（二战）');
+  assert.ok(
+    !ships.some((u) => u.era === 6 && u.name.includes('战列舰')),
+    '第六时代不该再有战列舰（1945 年后没有任何国家开工建过）',
+  );
+  const large = ships.find((u) => u.id === 'nv_large_cruiser')!;
+  assert.equal(large.era, 6, '接替大舰位置的是超巡');
+
+  // 战巡 / 战列舰的分工：同炮径，一个快一个硬
+  const bc = ships.find((u) => u.id === 'nv_battlecruiser')!;
+  assert.ok(bc.move > bb.move, '战巡应该比战列舰快');
+  assert.ok(bc.armor < bb.armor, '战巡的甲应该比战列舰薄');
+  assert.ok(bc.cost < bb.cost, '战巡应该更便宜');
+});
+
+test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
+  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const byId = (id: string) => ships.find((u) => u.id === id)!;
+
+  // 甲板：舰队航母 4 > 轻母 2 > 航战 1
+  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4);
+  assert.equal(deckSpecOf('nv_light_carrier')!.capacity, 2);
+  assert.equal(deckSpecOf('nv_aviation_battleship')!.capacity, 1);
+  assert.equal(byId('nv_light_carrier').cost < byId('nv_carrier').cost, true, '轻母应该更便宜');
+
+  // 潜母只修潜艇，维修舰只修水面舰：两条船能力不同
+  assert.deepEqual(byId('nv_sub_tender').abilities, ['nv-sub-tender']);
+  assert.deepEqual(byId('nv_repair_ship').abilities, ['nv-fleet-repair']);
+  // 补给舰给的是机动，不是修理
+  assert.deepEqual(byId('nv_oiler').abilities, ['nv-fleet-oiler']);
+
+  // 潜母：只奶潜艇
+  const s = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 16,
+      startEra: 6,
+      expansionIds: ['pack-contemporary', 'naval-fleet', 'naval-modern'],
+    },
+    8383,
+  );
+  s.units = [];
+  for (let y = 6; y <= 8; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const tender = place(s, 'A', 'nv_sub_tender', 6, 7);
+  const sub = place(s, 'A', 'nv_submarine', 7, 7);
+  const frigate = place(s, 'A', 'nv_frigate', 5, 7);
+  sub.hp = 10;
+  frigate.hp = 10;
+  s.current = 'B';
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)!.hp;
+  assert.ok(after(sub.id) > 10, '潜艇应该被潜母修好');
+  assert.equal(after(frigate.id), 10, '水面舰不该被潜母修理');
+  assert.ok(tender.hp > 0);
+
+  // 补给舰：相邻友舰 +1 移动
+  const s2 = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 16,
+      startEra: 6,
+      expansionIds: ['pack-contemporary', 'naval-fleet', 'naval-modern'],
+    },
+    8484,
+  );
+  s2.units = [];
+  for (let y = 6; y <= 8; y++) for (let x = 4; x <= 12; x++) putTerrain(s2, x, y, 'water');
+  const mate = place(s2, 'A', 'nv_frigate', 7, 7);
+  const baseMove = s2.unitTypes['nv_frigate']!.move;
+  assert.equal(movePower(s2, mate), baseMove, '身边没有补给舰时按兵种表');
+  const oiler = place(s2, 'A', 'nv_oiler', 6, 7);
+  assert.ok(movePower(s2, mate) >= baseMove + 1, '贴着补给舰应该 +1 移动');
+  assert.ok(oiler.hp > 0);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

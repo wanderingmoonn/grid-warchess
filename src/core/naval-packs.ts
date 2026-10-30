@@ -39,6 +39,8 @@ import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
+import { navigable } from './config.ts';
+import type { ResourceCost } from './resources.ts';
 import { airwingOps, deckLine, deckSpecOf } from './naval-carrier.ts';
 
 /* ===========================================================================
@@ -173,6 +175,56 @@ const FLEET_COMMAND: AbilityDef = {
 };
 
 /**
+ * 潜母：给潜艇补氧、补雷、修耐压壳。
+ *
+ * 为什么单独一条、不复用「海上补给」：那条管水面舰，这条只管潜艇。
+ * 合成一条的话，一艘潜母就能同时奶住整支舰队，"编队要带几种支援船"
+ * 这个取舍就没了——而取舍正是这一版加这么多舰种的理由。
+ */
+const SUB_TENDER: AbilityDef = {
+  id: 'nv-sub-tender',
+  name: '潜母',
+  summary: '每回合开始时，相邻的友方潜艇回复 6 点生命（只对潜艇有效）。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.aura,
+        apply: (c) => {
+          let fixed = 0;
+          for (const u of c.state.units) {
+            if (u.owner !== c.owner || u.id === c.self.id) continue;
+            const def = c.api.utype(c.state, u.type);
+            if (!(def.abilities ?? []).includes('nv-submerge')) continue; // 只修潜艇
+            if (c.api.distance(u, c.self) > 1) continue;
+            if (u.hp >= def.maxHp) continue;
+            u.hp = Math.min(def.maxHp, u.hp + 6);
+            fixed += 1;
+          }
+          if (fixed > 0) {
+            c.api.pushLog(c.state, c.owner, `潜母：给 ${fixed} 艘潜艇各补 6 点`);
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 远洋补给：相邻友舰 +1 移动。
+ *
+ * 和「海上补给」（回血）刻意分工：一个管血、一个管腿。
+ * 两条都给同一条船的话，支援舰就只剩"哪个便宜买哪个"一个选择。
+ */
+const FLEET_OILER: AbilityDef = {
+  id: 'nv-fleet-oiler',
+  name: '远洋补给',
+  summary: '相邻的友方水面单位 +1 移动力。',
+  group: 'support',
+  hooks: { aura: { allyMove: 1 } },
+};
+
+/**
  * 能力各归各家（引擎里有一条测试盯着这件事）。
  *
  * 「岸轰」两个包都会用（浅水重炮舰在「海战」、战列舰在「现代海军」），
@@ -180,8 +232,8 @@ const FLEET_COMMAND: AbilityDef = {
  * 能力表是**全局合并**的（不看这一局勾了哪些包），所以现代包引用基础包的
  * 能力 id 完全没问题——但反过来"两个包各声明一份"会直接踩测试。
  */
-const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD];
-const MODERN_ABILITIES: AbilityDef[] = [SUBMERGE, AA_COVER, FLEET_REPAIR, FLEET_COMMAND];
+const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD, SUBMERGE, FLEET_REPAIR, SUB_TENDER];
+const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
 
 /* ===========================================================================
  * 二、兵种
@@ -279,7 +331,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     short: '护',
     era: 4,
     category: 'combat',
-    cost: 295,
+    cost: 310,
     move: 6,
     atk: 30,
     armor: 8,
@@ -290,7 +342,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     burst: 2,
     // 蒸汽护卫舰的卖点是"追得上"：移动 6、两动。多动就是两次完整的一击，
     // 所以单发攻击力压到 30（对照雷击舰 38/单发）。
-    // V = 60+35.1+40+12+15+6 = 168 → 0.57（比雷击舰贵 10 金，换来多动与移 6）
+    // V = 60+35.1+40+12+15+6 = 168 → 0.54
   },
   {
     id: 'nv_monitor',
@@ -313,6 +365,45 @@ const FLEET_UNITS: UnitTypeDef[] = [
     // V = 50+36.9+50+12+7.5+4.5+4 = 165 → 0.50
   },
   {
+    id: 'nv_submarine',
+    name: '潜艇',
+    short: '艇',
+    era: 4,
+    category: 'combat',
+    cost: 300,
+    move: 5,
+    atk: 62,
+    armor: 6,
+    maxHp: 70,
+    range: 3,
+    vision: 5,
+    domain: 'water',
+    abilities: ['nv-submerge'],
+    // 一战 U 艇：便宜、隐蔽、一发狠。它和第六时代的核潜艇是**同一条线**的两端，
+    // 不是重复品——这里射程只有 3、甲 6，被逼出水面就是挨打。
+    // V = 62+31.5+30+9+12.5+7.5 = 152 → 0.51
+  },
+  {
+    id: 'nv_transport',
+    name: '运输舰',
+    short: '运',
+    era: 4,
+    category: 'combat',
+    cost: 300,
+    move: 5,
+    atk: 6,
+    armor: 8,
+    maxHp: 110,
+    range: 1,
+    vision: 5,
+    domain: 'water',
+    transport: true,
+    capacity: 5,
+    // 纯运输：五个舱位、几乎不还手。和第六时代的两栖攻击舰分工明确——
+    // 两栖能带直升机、能防空、能自保；运输舰只负责"一次把五个人送过去"，
+    // 便宜一半，但必须有人护航。V = 6+49.5+40+3+12.5+7.5 = 119 → 0.40
+  },
+  {
     id: 'nv_cruiser',
     name: '装甲巡洋舰',
     short: '巡',
@@ -329,6 +420,129 @@ const FLEET_UNITS: UnitTypeDef[] = [
     abilities: ['armor-pierce', 'nv-shore-bombard'],
     // 无畏舰之前的远洋主力：射程 5、带破甲，专门去啃铁甲舰（甲 11）。
     // V = 56+45+60+15+12.5+7.5 = 196 → 0.49
+  },
+  {
+    id: 'nv_battlecruiser',
+    name: '战列巡洋舰',
+    short: '巡',
+    era: 5,
+    category: 'combat',
+    cost: 660,
+    move: 6,
+    atk: 92,
+    armor: 12,
+    maxHp: 140,
+    range: 5,
+    vision: 5,
+    domain: 'water',
+    abilities: ['armor-pierce', 'nv-shore-bombard'],
+    // 费舍尔的赌注：战列舰的炮 + 巡洋舰的速度。跑得比战列舰快 2 格，
+    // 甲薄 6 点、便宜 120 金——日德兰之后大家都知道"薄皮大炮"意味着什么。
+    // 和战列舰**不是替代关系**：追歼、破交、抓巡洋舰用它；顶线用它换不起。
+    // V = 92+63+60+15+15+7.5 = 252 → 0.38
+  },
+  {
+    id: 'nv_battleship',
+    name: '战列舰',
+    short: '战',
+    era: 5,
+    category: 'combat',
+    cost: 780,
+    move: 4,
+    atk: 95,
+    armor: 18,
+    maxHp: 180,
+    range: 5,
+    vision: 5,
+    domain: 'water',
+    splash: 2,
+    abilities: ['armor-pierce', 'siege-master', 'nv-shore-bombard'],
+    // **无畏舰**，历史定位落在第五时代（二战），不是第六时代。
+    // 全部三项攻城加成（破甲 + 破城 + 岸轰）都在它身上，射程 5、溅射 2——
+    // 它是一战到二战之间"大舰巨炮"这条路的终点。
+    // 第六时代没有战列舰：1945 年之后没有任何国家再开工建一级，
+    // 原因写在 docs/NAVAL-PACK.md（导弹、航母、成本三件事各补一刀）。
+    // V = 95+81+90+15+10+7.5+8 = 306 → 0.39
+  },
+  {
+    id: 'nv_light_carrier',
+    name: '轻型航空母舰',
+    short: '轻',
+    era: 5,
+    category: 'combat',
+    cost: 640,
+    move: 5,
+    atk: 20,
+    armor: 10,
+    maxHp: 130,
+    range: 3,
+    vision: 8,
+    domain: 'water',
+    abilities: ['nv-aa-cover'],
+    // 独立级 / 护航航母：用巡洋舰船体改出来的应急航母。两个机位、
+    // 视野 8、能防空，自己几乎不打人。和第六时代的舰队航母分工：
+    // 轻母是"数量"，一艘航母的钱能买两艘半轻母。
+    // V = 20+58.5+50+9+12.5+12 = 162 → 0.25（甲板的价值不在公式里）
+  },
+  {
+    id: 'nv_aviation_battleship',
+    name: '航空战列舰',
+    short: '航',
+    era: 5,
+    category: 'combat',
+    cost: 860,
+    move: 4,
+    atk: 70,
+    armor: 16,
+    maxHp: 165,
+    range: 5,
+    vision: 7,
+    domain: 'water',
+    splash: 1,
+    abilities: ['armor-pierce', 'nv-shore-bombard'],
+    // 伊势级那种"拆了后主炮换飞行甲板"的混血。它存在的意义不是强，
+    // 而是**告诉你专精更划算**：炮不如战列舰（95→70）、机位只有一个、
+    // 比轻母贵 220。造它是因为"我两样都想要"，而两样都想要通常两样都不够。
+    // V = 70+74.25+80+15+10+10.5+4 = 264 → 0.31
+  },
+  {
+    id: 'nv_sub_tender',
+    name: '潜母',
+    short: '母',
+    era: 5,
+    category: 'combat',
+    cost: 460,
+    move: 4,
+    atk: 0,
+    armor: 10,
+    maxHp: 140,
+    range: 0,
+    vision: 7,
+    domain: 'water',
+    abilities: ['nv-sub-tender'],
+    // 潜水母舰：给潜艇补氧气、补鱼雷、修耐压壳。完全不打人，视野 7。
+    // 它和维修舰的分工是**水下 / 水面**：潜母只修潜艇（一次 6 点，比维修舰高），
+    // 维修舰只修水面舰。想两样都管就得带两艘船——这就是编队的成本。
+    // V = 0+63+50+0+10+10.5 = 134 → 0.29
+  },
+  {
+    id: 'nv_repair_ship',
+    name: '维修舰',
+    short: '修',
+    era: 5,
+    category: 'combat',
+    cost: 420,
+    move: 4,
+    atk: 0,
+    armor: 10,
+    maxHp: 130,
+    range: 0,
+    vision: 5,
+    domain: 'water',
+    abilities: ['nv-fleet-repair'],
+    // 海上抢修船：把"回港修三个月"压成"跟着舰队慢慢回"。
+    // 不打人、跑得慢，是整支舰队里最该被保护的那条船。
+    // V = 0+58.5+50+0+10+7.5 = 126 → 0.30
   },
 ];
 
@@ -364,29 +578,27 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     //
     // 没有空军扩展时它不是废铁：旗舰光环（相邻 +2/+2）+ 视野 9 + 防空，
     // 是一艘"移动指挥部"。V = 26+117+75+9+7.5+13.5 = 248 → 0.18，
-    // 光是船体确实不值这个价——它的价值在甲板、光环和那四格航道上，
-    // 这三样都不进公式。
+    // 光是船体确实不值这个价——它的价值在甲板、光环和那四格航道上，这三样都不进公式。
   },
   {
-    id: 'nv_battleship',
-    name: '战列舰',
-    short: '战',
+    id: 'nv_large_cruiser',
+    name: '超巡',
+    short: '超',
     era: 6,
     category: 'combat',
-    cost: 1150,
-    move: 4,
-    atk: 100,
-    armor: 19,
-    maxHp: 190,
+    cost: 1050,
+    move: 5,
+    atk: 85,
+    armor: 17,
+    maxHp: 175,
     range: 6,
-    vision: 5,
+    vision: 6,
     domain: 'water',
-    splash: 2,
-    abilities: ['armor-pierce', 'siege-master', 'nv-shore-bombard'],
-    // 大舰巨炮的终点：射程 6 全场最远，溅射 2 相当于每炮顺带打一片。
-    // 攻城三项全占（破甲 + 破城 + 岸轰），但它移动 4、视野 5，
-    // 看得比打得近——没有侦察就是一座会动的炮台。
-    // V = 100+85.5+95+18+10+7.5+8 = 324 → 0.28
+    abilities: ['armor-pierce', 'nv-shore-bombard'],
+    // 基洛夫级那种核动力大巡洋舰：**它接的是战列舰的位置，但不是战列舰**。
+    // 导弹时代的"大舰"是巡洋舰体量——炮只是副业，主战武器是射程 6 的导弹。
+    // 所以它没有溅射 2（舰炮不再是主角），但射程和护甲都压过普通巡洋舰。
+    // V = 85+78.75+85+18+12.5+9 = 288 → 0.27
   },
   {
     id: 'nv_aegis',
@@ -403,7 +615,7 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     vision: 7,
     domain: 'water',
     abilities: ['nv-aa-cover', 'armor-pierce'],
-    // 舰队之伞：视野 7 比战列舰好，区域防空对空中层多打 12 点。
+    // 舰队之伞：视野 7 比超巡好，区域防空对空中层多打 12 点。
     // 空军扩展上线之前，它就是"视野好、能打、跑得快"的通用巡洋舰。
     // V = 72+67.5+75+18+12.5+10.5 = 256 → 0.29
   },
@@ -423,7 +635,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     domain: 'water',
     abilities: ['nv-submerge'],
     // 水下刺客：迷雾局里贴脸才现形，先手不被反击。
-    // 代价是护甲只有 9、血 100——被发现之后连护卫舰都打得穿它。
+    // 它是第四时代那艘「潜艇」的**升级而不是重复**：射程 3→4、攻 62→92、
+    // 血 70→100，价格翻三倍。差别在"能不能单挑一支护航队"。
     // V = 92+45+45+12+12.5+7.5 = 214 → 0.24（潜航的价值不在公式里）
   },
   {
@@ -445,6 +658,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     abilities: ['nv-aa-cover'],
     // 登陆作战的核心：4 个舱位 + 2 个直升机位（DECK_SPECS 里登记）。
     // 火力很弱（22 攻），它存在的意义是把四个兵送到对岸的城市旁边。
+    // 和「运输舰」的分工：运输舰只运（容量 5、更便宜），两栖能自保、能防空、
+    // 能带直升机——贵一倍多。
     // V = 22+74.25+60+6+12.5+9 = 184 → 0.24
   },
   {
@@ -461,7 +676,7 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     range: 4,
     vision: 5,
     domain: 'water',
-    // 空潜快里的"快"：55 金买不到的东西它都有——射程 4、移 7、58 攻。
+    // 空潜快里的"快"：400 金买不到的东西它都有——射程 4、移 7、58 攻。
     // 代价是甲 5、血 58：挨一发战列舰的溅射就没了。
     // V = 58+26.1+25+12+17.5+7.5 = 146 → 0.37（略高于同代，靠脆换来的）
   },
@@ -477,12 +692,38 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     armor: 10,
     maxHp: 130,
     range: 0,
-    vision: 5,
+    vision: 6,
     domain: 'water',
-    abilities: ['nv-fleet-repair'],
-    // 完全不打人。价值全在"每回合给相邻友舰补 3 点"——
-    // 舰队在外面待久的差别，就是"能不能不回家"。
-    // V = 0+58.5+50+0+10+7.5 = 126 → 0.29
+    abilities: ['nv-fleet-oiler'],
+    // 和第五时代的「维修舰」刻意分工：维修舰修血，补给舰给**机动**
+    // （相邻友舰 +1 移动）。两种支援不该是同一条船的两个数值版本——
+    // 那样玩家只会买便宜的那条，另一条永远不出场。
+    // V = 0+58.5+50+0+10+9 = 128 → 0.30
+  },
+  {
+    id: 'nv_oil_platform',
+    name: '海上钻井平台',
+    short: '井',
+    era: 6,
+    category: 'economy',
+    cost: 480,
+    move: 0,
+    atk: 0,
+    armor: 6,
+    maxHp: 90,
+    range: 0,
+    vision: 3,
+    domain: 'water',
+    incomeByTerrain: { deep: 50, water: 34, shallow: 20 },
+    // 海上经济单位：**造出来就不动了**，收入看它站在什么水上。
+    // 深水 50 / 水域 34 / 浅流 20——「深水」是这一版新加的地形，
+    // 越往外海走越肥，但也就越难守（离本土远、补给线长）。
+    // 回本：480 / 50 = 9.6 回合（深水），比陆上的农业公司（7.2）慢，
+    // 换来的是"陆地上没这块地"——岛上或者海峡中间的局，这是唯一的收入增长点。
+    //
+    // 和海军单位的互动：**敌舰贴着它，它就停产**（见 modifyYield）。
+    // 所以它天然要求制海权；反过来，敌方的钻井平台也是最好的袭扰目标——
+    // 打掉一座 480 金的平台，比击沉一条 300 金的运输舰更伤经济。
   },
 ];
 
@@ -581,6 +822,78 @@ function navalPanelLines(state: GameState, unit: Unit): string[] {
   return lines;
 }
 
+/* ---------------------------------------------------------------------------
+ * 深水与钻井平台：两个包里都要用，同样只写一份
+ * ------------------------------------------------------------------------- */
+
+const DIRS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * 把离岸两格以上的 water 改写成 deep。
+ *
+ * 为什么走 `afterTerrain` 而不是让 mapgen 直接画：地形生成器是本体的事，
+ * 让它认识一种"扩展才有的格子"，等于把扩展规则缝进核心。`afterTerrain`
+ * 拿到的是已经画完的整张图，就地改——「地形高差」补山脚用的也是这一招。
+ *
+ * 只改 `water`，不动 `shallow`：浅流是"陆军能踩过去的水"，把它深水化
+ * 等于偷偷改了整张图的可通行性（陆军的过河点会凭空消失）。
+ */
+const deepenWater: NonNullable<Expansion['afterTerrain']> = (g, w, h) => {
+  // 从所有陆地出发做一遍 BFS，水格的层数就是"离岸几步"
+  const far = new Int16Array(w * h).fill(-1);
+  const queue: number[] = [];
+  for (let i = 0; i < g.length; i++) {
+    if (navigable(g[i]!)) continue;
+    far[i] = 0;
+    queue.push(i);
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head]!;
+    const x = i % w;
+    const y = (i / w) | 0;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const k = ny * w + nx;
+      if (!navigable(g[k]!)) continue;
+      if (far[k] !== -1) continue;
+      far[k] = far[i]! + 1;
+      queue.push(k);
+    }
+  }
+  // 离岸 >=2 格才算外海：沿岸那一圈留成水域，
+  // 这样"贴着岸能不能下水/靠港"的老判定一条都不用改。
+  for (let i = 0; i < g.length; i++) {
+    if (g[i] !== 'water') continue;
+    if (far[i]! >= 2) g[i] = 'deep';
+  }
+};
+
+/**
+ * 钻井平台：敌舰贴着就停产。
+ *
+ * 走 `modifyYield` 而不是"改 unit.income"：那个字段是兵种表里的共享定义，
+ * 改它等于给全场所有平台一起停产。钩子是按单位算的，天然分得清。
+ *
+ * 只对**水上经济单位**生效：陆地上的农田不该被一条路过的船掐掉收入。
+ */
+function platformYield(state: GameState, unit: Unit, yields: ResourceCost): ResourceCost {
+  const def = state.unitTypes[unit.type];
+  if (def?.category !== 'economy' || def.domain !== 'water') return yields;
+  const cut = state.units.some((u) => {
+    if (u.owner === unit.owner) return false;
+    if (state.unitTypes[u.type]?.domain !== 'water') return false;
+    return Math.abs(u.x - unit.x) + Math.abs(u.y - unit.y) <= 1;
+  });
+  return cut ? {} : yields;
+}
+
 /**
  * 「海战」：E2~E5 的七条船 + 封锁与抢修。
  *
@@ -599,11 +912,17 @@ export const NAVAL_FLEET: Expansion = {
   name: '海战',
   scale: 'large',
   summary:
-    '补上第二到第五时代的水面力量：德罗蒙、卡拉克、火船、盖伦、护卫舰、浅水重炮舰、装甲巡洋舰七条船，' +
-    '外加两条海权规则——舰队封锁港口（贴着敌城的水面单位让那座城少收 8 金，三座封顶）、船只贴着自家城可以抢修。',
+    '补上第二到第五时代的水上力量：德罗蒙、卡拉克、火船、盖伦、护卫舰、浅水重炮舰、潜艇、运输舰、' +
+    '装甲巡洋舰、战列巡洋舰、战列舰、轻型航母、航空战列舰、潜母、维修舰十五条船；' +
+    '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +
+    '（离岸两格以上的外海，只有船进得去，大舰吃水深进不了浅流）。',
   abilities: FLEET_ABILITIES,
   units: FLEET_UNITS,
+  terrains: ['deep'],
+  afterTerrain: deepenWater,
   hooks: {
+    /** 钻井平台：敌舰贴着就停产（海战包先开，现代海军再开也不会叠加出错） */
+    modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
     /**
      * 封锁：敌方水面单位贴着你的城，那座城这一回合的税收断掉。
      *
@@ -648,12 +967,19 @@ export const MODERN_NAVAL: Expansion = {
   requires: ['pack-contemporary'],
   scale: 'large',
   summary:
-    '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、战列舰、防空巡洋舰、' +
-    '攻击核潜艇（潜航）、两栖攻击舰、导弹快艇、舰队补给舰。' +
+    '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、超巡、防空巡洋舰、' +
+    '攻击核潜艇（潜航）、两栖攻击舰、导弹快艇、舰队补给舰、海上钻井平台。' +
+    '**第六时代没有战列舰**——它停在第五时代（二战），1945 年之后再没有国家开工建过一级。' +
     '航母的机位与起飞半径写在 naval-carrier.ts 的 DECK_SPECS 里，不在这张数值表上。',
   abilities: MODERN_ABILITIES,
   units: MODERN_FLEET_UNITS,
+  // 只开「现代海军」也想要深水（钻井平台的产出靠它）——两个包都登记一次，
+  // 沙箱画笔那边会去重，afterTerrain 也是幂等的。
+  terrains: ['deep'],
+  afterTerrain: deepenWater,
   hooks: {
+    /** 钻井平台：敌舰贴着就停产 */
+    modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
     // 封锁与抢修是海军共同的规则，两个包各写一份就会走散（改一处忘一处），
     // 所以这里直接复用同一套实现——封锁是纯函数（同样输入同样输出），
     // 抢修带"这一回合修过"的哨兵，重合也不会有副作用。

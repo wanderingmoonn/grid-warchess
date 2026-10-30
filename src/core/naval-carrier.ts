@@ -73,6 +73,10 @@ export interface DeckSpec {
 export const DECK_SPECS: Readonly<Record<string, DeckSpec>> = {
   // 航空母舰：四个机位，起飞半径 2（够到相邻格之外）
   nv_carrier: { capacity: 4, launchRange: 2 },
+  // 轻型航母：两个机位，起飞半径 1——船小，甲板短
+  nv_light_carrier: { capacity: 2, launchRange: 1 },
+  // 航空战列舰：拆了后主炮换来的一个机位，只能起降一架
+  nv_aviation_battleship: { capacity: 1, launchRange: 1 },
   // 两栖攻击舰：两个机位，主要带直升机
   nv_amphib: { capacity: 2, launchRange: 1 },
 };
