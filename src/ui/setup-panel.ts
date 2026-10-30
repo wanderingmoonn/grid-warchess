@@ -5,7 +5,7 @@
  * 面板只负责收集选择，真正的校验和构建交给 createMatch。
  */
 
-import { ERAS, eraDef } from '../core/config.ts';
+import { ERAS, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import {
   EXPANSIONS,
@@ -87,14 +87,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       recordDetail: loadRecordPref() ?? initial.recordDetail === true,
     };
 
-    // 新增：清洗无效数据（防止 __city__ 或空数据导致测试崩盘）
+    // 上一次存下来的勾选里可能带着伪单位（攻城结算用的「城市」壳）或者本版
+    // 已经不认识的 id——它们是"存档能起来"和"清单一格不多"的分界线。
     const availableCatalog = allAvailableUnits();
     config.enabledUnits = Array.from(
-      new Set(config.enabledUnits.filter((id) => availableCatalog[id] && id !== '__city__'))
+      new Set(config.enabledUnits.filter((id) => availableCatalog[id] && !isPseudoUnit(id))),
     );
-    // 如果清洗后发现全空了，保底给一个合法的初始兵种
+    // 全都洗没了就保底给一个真兵种：空名单会让开局面板一格都没有
     if (config.enabledUnits.length === 0) {
-      const firstValid = Object.values(availableCatalog).find((u) => u.id !== '__city__');
+      const firstValid = Object.values(availableCatalog).find((u) => !isPseudoUnit(u.id));
       if (firstValid) config.enabledUnits.push(firstValid.id);
     }
 
@@ -220,7 +221,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
       const catalog = allAvailableUnits();
       const unitGroups = eras.map((era) => {
-        const units = Object.values(catalog).filter((u) => u.era === era.level && u.id !== '__city__');
+        const units = Object.values(catalog).filter(
+          (u) => u.era === era.level && !isPseudoUnit(u.id),
+        );
         if (units.length === 0) return '';
         const chips = units
           .map(

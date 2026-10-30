@@ -11067,6 +11067,19 @@ test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位
   }
 });
 
+test('选卡：池子里不会混进攻城结算用的伪单位', () => {
+  // 攻城走"把城市包成伪 Unit 喂进 computeDamage"，那条路要一个 UnitTypeDef
+  // 形状的壳（见 config.ts 的 PSEUDO_UNIT_IDS）。壳在兵种表里躺着一份，
+  // 一旦被当成真兵种，选卡池就会少一格、多一张点不动的空卡。
+  const s = fresh({ draftMode: true }, 7111);
+  assert.ok(!draftCandidates(s).includes('__city__'), '伪单位不该是选卡候选');
+  assert.ok(!s.draft!.pool.includes('__city__'), '伪单位不该占池子里的名额');
+  assert.ok(!('__city__' in s.unitTypes), '它连"这一局有哪些兵"都不该进');
+  // 抽满 20 个真兵种，一个不差
+  assert.equal(s.draft!.pool.length, DRAFT_POOL_BASE);
+  assert.equal(new Set(s.draft!.pool).size, DRAFT_POOL_BASE, '池子里不该有重复');
+});
+
 test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {
   const s = fresh({ draftMode: true }, 7102);
   const draft = s.draft!;

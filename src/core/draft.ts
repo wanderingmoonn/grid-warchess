@@ -28,6 +28,7 @@
  * 对方进房后看到的是已经定下来的名单（界面会写明这一点）。
  */
 
+import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
 import type { Action, ActionResult, DraftState, GameState, PlayerId, UnitTypeDef } from './types.ts';
@@ -164,10 +165,13 @@ export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
  * 能进池子的兵种：战斗单位 + 非生产性建筑。
  *
  * 召唤物（只认召唤者）排除：它没有独立造价，选了也没法造。
+ * 伪单位（攻城结算用的「城市」壳）排除：池子里多它一格，玩家就少一个真兵种，
+ * 而且那张卡在界面上是空的——见 config.ts 的 PSEUDO_UNIT_IDS。
  */
 export function draftCandidates(state: GameState): string[] {
   return Object.values(state.unitTypes)
     .filter((def) => {
+      if (isPseudoUnit(def.id)) return false;
       if (draftAlwaysAllowed(def)) return false;
       if (def.summonedOnly) return false;
       if (def.category === 'combat') return true;
@@ -335,7 +339,7 @@ export function remainingUnits(state: GameState): string[] {
   const draft = state.draft;
   if (!draft) return [];
   const taken = new Set<string>([...draft.bans.A, ...draft.bans.B, ...draft.picks.A, ...draft.picks.B]);
-  return draft.pool.filter((id) => id !== '__city__' && !taken.has(id));
+  return draft.pool.filter((id) => !isPseudoUnit(id) && !taken.has(id));
 }
 
 /** 当前该谁选（禁用期返回 null：两边同时进行） */

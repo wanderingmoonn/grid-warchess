@@ -7,6 +7,7 @@
  * 因为它不报错，只是偶尔少一个按钮。
  */
 
+import { isPseudoUnit } from '../core/config.ts';
 import { EXPANSIONS, expansionById, unitSourceIdOf } from '../core/expansions.ts';
 import type { UnitTypeDef } from '../core/types.ts';
 
@@ -54,8 +55,11 @@ function escapeHtml(t: string): string {
  * @param act 点击时用的 data-act，两个界面的处理器是分开的
  */
 export function packRow(defs: UnitTypeDef[], current: string, act = 'recruit-pack'): string {
+  // 伪单位（攻城结算用的「城市」壳）不数：它不属于任何包，混进来只会让
+  // "全部 N" 比玩家真能看见的按钮多一个——这种账对不上是最难查的那种
+  const real = defs.filter((d) => !isPseudoUnit(d.id));
   const counts = new Map<string, number>();
-  for (const d of defs) {
+  for (const d of real) {
     const p = packOf(d);
     counts.set(p, (counts.get(p) ?? 0) + 1);
   }
@@ -70,7 +74,7 @@ export function packRow(defs: UnitTypeDef[], current: string, act = 'recruit-pac
     `<button class="chip ${current === id ? 'active' : ''}" data-act="${act}" data-pack="${id}">${escapeHtml(text)}</button>`;
 
   return `<div class="chip-row pack-row">
-    ${one(PACK_ALL, `全部 ${defs.length}`)}
+    ${one(PACK_ALL, `全部 ${real.length}`)}
     ${order.map((p) => one(p, `${packLabel(p)} ${counts.get(p) ?? 0}`)).join('')}
   </div>`;
 }

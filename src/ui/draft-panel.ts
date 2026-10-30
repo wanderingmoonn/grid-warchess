@@ -10,7 +10,7 @@
  *   （决定"现在该不该急"），底部是流水（回看谁禁了谁）。
  */
 
-import { eraDef } from '../core/config.ts';
+import { eraDef, isPseudoUnit } from '../core/config.ts';
 import { draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
 import type { DraftState } from '../core/types.ts';
@@ -228,12 +228,13 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const remain = view.remaining;
   const cards = remain
     .map((id) => {
-      // 接跳过城市伪单位
-      if (id === '__city__') return '';
-      
+      // 伪单位（攻城结算用的「城市」壳）不该占一张卡：池子里本来就不该有它，
+      // 这里是最后一道闸——真漏进来时宁可少一张卡，也不要一张点不动的空位。
+      if (isPseudoUnit(id)) return '';
+
       const def = s.unitTypes[id];
       if (!def) return '';
-      
+
       const blocked = !clickable;
       // 给 era 加上兜底，防止其他没配 era 的奇怪兵种也把界面搞崩
       const eraName = eraDef(def.era)?.name ?? '未知';

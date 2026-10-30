@@ -3895,7 +3895,15 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   );
 
   const cards = () => [...doc.querySelectorAll<HTMLElement>('#draft [data-draft]')];
-  assert.ok(cards().length >= 18, `池子应该铺开（至少 18 张卡），实际 ${cards().length}`);
+  // 一张卡对应池子里的一个真兵种：伪单位（攻城结算用的「城市」壳）一旦混进来，
+  // 这里就会少一张——而少的那张在界面上是空白，玩家只会觉得"池子抽少了"。
+  assert.equal(cards().length, 20, `原版池子应该铺满 20 张卡，实际 ${cards().length}`);
+  assert.equal(
+    cards().filter((c) => (c.querySelector('.dc-name')?.textContent ?? '').trim() === '').length,
+    0,
+    '每张卡都得有兵种名，空卡片说明池子里混了伪单位',
+  );
+  assert.equal(doc.querySelector('#draft [data-draft="__city__"]'), null, '池子里不该有伪单位');
   assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
   assert.ok(doc.querySelector('#draft .draft-side.is-b'), '要显示乙方那一栏');
   assert.ok(doc.querySelector('#draft [data-ref="draft-timer"]'), '要有倒计时');

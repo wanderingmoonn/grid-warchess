@@ -1173,8 +1173,30 @@ export function unitsByEra(level: number, pool = UNIT_TYPES): UnitTypeDef[] {
   return Object.values(pool).filter((u) => u.era === level);
 }
 
-/** 最便宜的兵种价格，用于判定"是否还有翻盘能力" */
-export const CHEAPEST_COST = Math.min(...Object.values(UNIT_TYPES).map((u) => u.cost));
+/**
+ * 只给结算用的"伪单位"。
+ *
+ * 城市要在 `computeDamage` 里有一个 `UnitTypeDef` 形状的壳（护甲、弱点、抗性
+ * 都得参与伤害公式），但它不是一局里存在、能造、能选、能摆上场的东西。
+ * 于是任何"把兵种表摊给玩家看"或"从兵种表里抽候选"的地方都必须跳过它：
+ * 漏一处就是一张叫「城市」的空卡片混进选卡池、一个 0 金的建筑混进建造清单。
+ *
+ * 判据只写在这里。以前 draft / setup / 选卡面板各写一遍 `!== '__city__'`，
+ * 谁少写一次，池子就少一个真兵种、多一个空位。
+ */
+export const PSEUDO_UNIT_IDS: ReadonlySet<string> = new Set(['__city__']);
+
+/** 这个 id 是不是伪单位（见 PSEUDO_UNIT_IDS） */
+export function isPseudoUnit(id: string): boolean {
+  return PSEUDO_UNIT_IDS.has(id);
+}
+
+/** 最便宜的兵种价格，用于判定"是否还有翻盘能力"。伪单位不算：它标价 0 */
+export const CHEAPEST_COST = Math.min(
+  ...Object.values(UNIT_TYPES)
+    .filter((u) => !isPseudoUnit(u.id))
+    .map((u) => u.cost),
+);
 
 // ── 建造点数：难度与工兵能力 ────────────────────────────────────────────
 //

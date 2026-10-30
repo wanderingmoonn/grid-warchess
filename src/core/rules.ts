@@ -50,6 +50,7 @@ import {
   buildCostOf,
   buildPowerOf,
   eraDef,
+  isPseudoUnit,
   navigable,
   nextUpgradeCost,
   passable,
@@ -715,7 +716,11 @@ export function magicSegment(
 
 /** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
 export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
-  return magicSegment(s, attacker, utype(s, defender.type).magicRes ?? 0, defender);
+  // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
+  // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
+  // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
+  const res = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  return magicSegment(s, attacker, res, defender);
 }
 
 /**
