@@ -325,7 +325,7 @@ export function remainingUnits(state: GameState): string[] {
   const draft = state.draft;
   if (!draft) return [];
   const taken = new Set<string>([...draft.bans.A, ...draft.bans.B, ...draft.picks.A, ...draft.picks.B]);
-  return draft.pool.filter((id) => !taken.has(id));
+  return draft.pool.filter((id) => id !== '__city__' && !taken.has(id));
 }
 
 /** 当前该谁选（禁用期返回 null：两边同时进行） */

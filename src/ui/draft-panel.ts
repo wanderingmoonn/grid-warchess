@@ -135,10 +135,17 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const remain = view.remaining;
   const cards = remain
     .map((id) => {
+      // 接跳过城市伪单位
+      if (id === '__city__') return '';
+      
       const def = s.unitTypes[id];
       if (!def) return '';
+      
       const blocked = !clickable;
-      const title = blocked ? '现在不是你的操作' : `${def.name}（${eraDef(def.era).name}）`;
+      // 给 era 加上兜底，防止其他没配 era 的奇怪兵种也把界面搞崩
+      const eraName = eraDef(def.era)?.name ?? '未知';
+      const title = blocked ? '现在不是你的操作' : `${def.name}（${eraName}）`;
+      
       return unitCard(def, blocked, title);
     })
     .join('');
