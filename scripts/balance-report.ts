@@ -73,6 +73,14 @@ const SECOND_BONUS = Number(argOf('second-bonus', '0'));
 /** 带上这个开关就表示"先手第一回合不结算收入"（测结构性配平时用） */
 const NO_FIRST_INCOME = args.includes('--no-first-income');
 /**
+ * 地貌风格：`random`（默认）或 `isles` / `highland` / `river-h` 这些具体 id。
+ *
+ * 加这个参数是为了"只在海军局里算船的数据"：群岛（`isles`）上陆军得靠船和桥过海，
+ * 船的交换比才有意义；在开阔地上跑一百局，船根本不下水，统计出来全是 0。
+ * 注意 `isles` 属于「地形高差」扩展，得同时在 `--expansions` 里带上它。
+ */
+const STYLE = argOf('style', 'random');
+/**
  * 指挥官模式：双方每回合都只能产 1 个兵（和界面层 runAiTurn 的口径一致）。
  *
  * 双 AI 跑批里，"指挥官模式"和普通模式的差别**只有这一条**：AI 本来就不排生产序列，
@@ -717,6 +725,7 @@ function runGame(seed: number): {
       aiOpponent: true,
       aiAlly: true,
       aiLevel: 'advanced',
+      mapStyle: STYLE as never,
       expansionIds: EXPANSIONS,
       secondGoldBonus: SECOND_BONUS,
       noFirstIncome: NO_FIRST_INCOME,
@@ -1029,6 +1038,8 @@ async function main(): Promise<void> {
     size: SIZE > 0 ? SIZE : DEFAULT_SIZE_FOR_ERA(ERA),
     commander: COMMANDER,
     expansions: EXPANSIONS,
+    // 地貌要写进元数据：分片合并时表头直接读它，不写就只能靠命令行回填
+    mapStyle: STYLE,
     games: GAMES,
     baseSeed: BASE_SEED,
     cap: CAP,

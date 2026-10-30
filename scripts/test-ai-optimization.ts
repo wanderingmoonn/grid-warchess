@@ -289,4 +289,60 @@ for(const highDefender of [false,true]) test(`Counterattack preview matches exec
   assert.ok(result.ok);
   assert.equal(result.state.units.find(u=>u.id===attacker.id)!.hp,attacker.hp-preview.toAttacker);
 });
+
+// ── 海军：装卸 ───────────────────────────────────────────────
+// 两座岛，中间整条深水。陆路真的走不过去，所以这是"船就是路"的那一档。
+function twoIslands(): GameState {
+  const s = createMatch({...DEFAULT_CONFIG, size:16, startEra:3, aiLevel:'tactic', expansionIds:['naval-fleet']}, 4321);
+  s.fog = false; s.units = []; s.current = 'A'; s.turn = 5;
+  s.players.A.gold = 1200; s.players.B.gold = 1200;
+  s.cities = [['A',1,1],['A',1,12],['B',12,1],['B',12,12]].map((v,i)=>({
+    id:`city${i}`, owner:v[0] as PlayerId, x:v[1] as number, y:v[2] as number,
+    size:2, era:3, hp:70, maxHp:70, armor:4,
+  }));
+  for(let y=0;y<s.h;y++) for(let x=0;x<s.w;x++){
+    const c = s.cities.find(c=>x>=c.x&&x<c.x+c.size&&y>=c.y&&y<c.y+c.size);
+    // 6..9 列是深水：船能走，人走不了（没有浅滩，这个宽度也架不起桥）
+    s.tiles[y*s.w+x] = { terrain: c?'city':(x>=6&&x<=9?'deep':'plain'), cityId: c?.id ?? null };
+  }
+  return s;
+}
+
+test('海军：陆路被海隔断时，运输船会把兵装上船',()=>{
+  const s = twoIslands();
+  unit(s,'A','nv_carrack',6,6,{move:4,maxHp:60});
+  const foot = unit(s,'A','militia',5,6,{move:3,maxHp:100});
+  foot.acted = false; foot.moved = false;
+  const act = aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.ok(act, '应该给出一个动作');
+  assert.equal(act!.type,'LOAD', `陆路不通时该装船，实际 ${act!.type}`);
+  assert.equal((act as {cargoId?:string}).cargoId, foot.id);
+  assert.ok(applyAction(s,act!).ok, '装船动作要被规则层接受');
+});
+
+test('海军：船到了对面那侧，就把兵放下来',()=>{
+  const s = twoIslands();
+  const foot = unit(s,'A','militia',9,6,{move:3,maxHp:100});
+  const ferry = unit(s,'A','nv_carrack',9,6,{move:4,maxHp:60});
+  // 已经装好了：船在 9 列，右边 10 列就是对面那侧的陆地
+  ferry.cargo = [{...foot, x:9, y:6, moved:true, acted:true}];
+  s.units = s.units.filter(u=>u.id!==foot.id);
+  const act = aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.ok(act, '应该给出一个动作');
+  assert.equal(act!.type,'UNLOAD', `该上岸了，实际 ${act!.type}`);
+  assert.equal((act as {x?:number}).x, 10, '落点是右岸那一格');
+  assert.ok(applyAction(s,act!).ok, '下船动作要被规则层接受');
+});
+
+test('海军：陆路走得通时，船不会无脑来回运人',()=>{
+  const s = twoIslands();
+  // 把中间那四列填成平地：路通了，装船就只是白花两回合
+  for(let y=0;y<s.h;y++) for(let x=6;x<=9;x++) s.tiles[y*s.w+x]!.terrain='plain';
+  unit(s,'A','nv_carrack',6,6,{move:4,maxHp:60});
+  const foot = unit(s,'A','militia',5,6,{move:3,maxHp:100});
+  foot.acted = false; foot.moved = false;
+  const act = aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.notEqual(act?.type,'LOAD', '路通的时候不该装船');
+});
+
 console.log(`${passed} AI optimization tests passed`);

@@ -19,6 +19,8 @@
     "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
     "sim": "node --experimental-strip-types scripts/sim-ai.ts",
     "sim:debug": "node --experimental-strip-types scripts/debug-ai.ts",
+    "sim:naval": "node --experimental-strip-types scripts/naval-batch.ts",
+    "sim:naval-merge": "node --experimental-strip-types scripts/naval-merge.ts",
     "map": "node --experimental-strip-types scripts/dump-map.ts",
     "bench": "node --experimental-strip-types scripts/bench.ts",
     "perf": "node --experimental-strip-types --expose-gc scripts/perf.ts",
