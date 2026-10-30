@@ -715,7 +715,6 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
 
 /**
  * 出手方的攻击力：基础 + 光环 + 状态修正（威吓、狂暴……）。
- *
  * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
  * 以前这条只在野战里成立，攻城走的是另一套账。
  */
@@ -1886,38 +1885,46 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
 export function computeDamage(
   s: GameState,
   attacker: Unit,
-  defender: Unit,
+  defender: any, // 放宽类型，兼容裸 City 和伪 Unit
   isCounter = false,
 ): number {
+  // 1. 识别是否为城市
+  const isCity = defender?.__isCity === true || defender?.type === '__city__';
+  const city = isCity ? (defender.__city || defender) : null;
+
   const at = utype(s, attacker.type);
-  const dt = utype(s, defender.type);
-  const tile = tileAt(s, defender.x, defender.y);
+  const dt = utype(s, defender.type || '__city__');
+
+  // 2. 城市不吃地形和光环
+  const tile = isCity ? null : tileAt(s, defender.x, defender.y);
   const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
-  const defenderAura = auraBonus(s, defender);
+  const defenderAura = isCity ? { armor: 0 } : auraBonus(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
-  // 面板的 effectiveStats 用同一段逻辑、同一个位置——否则"面板显示 18、
-  // 打出来 15"会变成常驻的对不上号。
   const atkNow = attackPowerNow(s, attacker);
+
+  // 3. 核心：真实护甲是动态读取城市的，而不是读全局表里的 0
+  const actualArmor = isCity ? city.armor : dt.armor;
+
   const ctx: HookCtx = {
     state: s,
     self: defender,
     foe: attacker,
     side: 'defender',
     atk: atkNow,
-    armor: dt.armor + defenderAura.armor + terrainBonus,
+    armor: actualArmor + defenderAura.armor + terrainBonus,
     damage: atkNow,
     items: [],
     isCounter,
     terrainBonus,
     ignoreCover: false,
-    distance: strikeDistance(s, attacker, defender),
+    distance: isCity ? 1 : strikeDistance(s, attacker, defender),
     api: abilityApi,
   };
 
   // 护甲阶段的钩子：攻方和守方的都进同一张表，
   // 按 stage 排；每条跑的时候 ctx.self 临时指向它自己的主人。
-  const armorHooks = [
+  const armorHooks = isCity ? []:[
     ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'armorPhase'),
     ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'armorPhase'),
   ];
@@ -1926,7 +1933,7 @@ export function computeDamage(
   runBound(armorHooks, ctx, { to: ARMOR_STAGE.postIgnoreCover });
 
   // 驻军：站在自家可驻军建筑上，多一层掩护（和地形加成同一种东西）
-  ctx.armor += garrisonBonus(s, defender);
+  if (!isCity) ctx.armor += garrisonBonus(s, defender);
 
   // 林地之主之前
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.postIgnoreCover, to: ARMOR_STAGE.postWoodland });
@@ -1936,11 +1943,11 @@ export function computeDamage(
 
   // 状态修正护甲
   for (const [key, val] of Object.entries(defender.status ?? {})) {
-    if (typeof val !== 'number' || val <= 0) continue;
-    const def = STATUS_REGISTRY[key];
-    if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
-  }
-  // 咒域
+      if (typeof val !== 'number' || val <= 0) continue;
+      const def = STATUS_REGISTRY[key];
+      if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
+    }
+  // 咒域光环
   ctx.armor -= curseAuraPenalty(s, defender);
 
   // 小型扩展
@@ -1960,7 +1967,7 @@ export function computeDamage(
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.postPierce });
 
   // ── 伤害计算 ──
-  const damageHooks = [
+  const damageHooks = isCity ? [] :[
     ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'damage'),
     ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'damage'),
   ];
@@ -1977,7 +1984,7 @@ export function computeDamage(
   // 矮人王的「投斧」不走能力，而是走 heroBuff：技能期间射程拉到 3、同样只给六成。
   // 两者共用同一个折扣，是因为它们说的是同一件事——"这一下是扔出去的"。
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.rangeMul, to: DAMAGE_STAGE.rangeFlat });
-  if (attacker.heroBuff?.rangeMul !== undefined && ctx.distance >= 2) {
+  if (!isCity && attacker.heroBuff?.rangeMul !== undefined && ctx.distance >= 2) {
     ctx.damage = Math.round(ctx.damage * attacker.heroBuff.rangeMul);
   }
 
@@ -1987,14 +1994,35 @@ export function computeDamage(
   // 魔法之前
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postRange, to: DAMAGE_STAGE.postMagic });
   
-  //各种小型扩展
-  let dmg = ctx.damage;
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyDamage) {
-      dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, isCounter });
+  if (!isCity) {
+    let dmg = ctx.damage;
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifyDamage) {
+        dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, isCounter });
+      }
+    }
+    ctx.damage = dmg;
+  }
+
+  // ── 城市：攻城加成（破城×1.5 / 扩展 modifySiegeDamage）──
+  if (isCity) {
+    const sctx: SiegeDamageCtx = {
+      state: s,
+      self: attacker,
+      city: city!,
+      damage: ctx.damage,
+      api: abilityApi,
+    };
+    runStaged(stagedFor<SiegeDamageCtx>(at, 'siegeDamage'), sctx);
+    ctx.damage = sctx.damage;
+    for (const e of activeExpansions(s)) {
+      if (e.hooks.modifySiegeDamage) {
+        ctx.damage = e.hooks.modifySiegeDamage({
+          state: s, attacker, city: city!, damage: ctx.damage,
+        });
+      }
     }
   }
-  ctx.damage = dmg;
 
   // 物理伤害减去护甲，并保底为 0
   ctx.damage = Math.max(0, ctx.damage - ctx.armor);
@@ -2020,14 +2048,11 @@ export function computeDamage(
   // 真实伤害阶段
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
 
-  if (isCounter) ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
-  
-  // ── 拆桥折扣 ──
-  // 放在最后，是因为它说的是"这一发落在桥上的效果"，不是"这个兵有多强"：
-  // 属性倍率、护壁、反击折减都算完之后再对折，才不会被别的倍率抵消掉。
-  // 判定用 strikeDistance（一格 = 贴着桥头打），隔一格以上才算远程，一发放一半。
-  // 见 canStrike 的说明：准许隔河开火，但不许隔着河把桥拆干净。
-  if (dt.bridges && ctx.distance > 1) {
+  if (!isCity && isCounter) {
+    ctx.damage = Math.max(0, Math.round(ctx.damage * CONFIG.counterAttackRatio));
+  }
+
+  if (!isCity && dt.bridges && ctx.distance > 1) {
     ctx.damage = Math.round(ctx.damage * CONFIG.bridgeRangedDamageRatio);
   }
 
@@ -2036,61 +2061,20 @@ export function computeDamage(
 
 /**
  * 对城市的伤害。
- *
- * 2026-10-29 起它和野战走**同一套公式**，顺序也一样：
- *
- *   1. 攻击力 = 基础 + 光环 + 状态修正（`attackPowerNow`）
- *   2. 物理段 = max(0, 攻击力 − 城墙护甲)，攻城加成（破城 ×1.5、扩展的全军伤害）作用在这一段上
- *   3. 魔法段 = max(0, 魔攻 − 城市魔抗)（`magicSegment`）
- *   4. 属性倍率作用在**整段**上（`applyElementMul`）
- *   5. 取整、保底 0
- *
- * 以前这里是"攻击 − 护甲"一句了事，于是：法师攻城等于没有魔法段、
- * 被威吓的部队攻城照样满伤、属性克制对城墙完全不存在——同一支部队
- * 打兵和打城的账对不上，玩家没法从面板推出任何结论。
- *
- * 仍然停在城门外的东西，写在这里免得以后有人以为是漏了：
- *   · **地形加成**：城墙自带护甲（`city.armor`），再叠一层地形就是重复计算；
- *   · **驻军 / 状态 / 兵种能力钩子**：城不是单位，没有 status、没有 abilities，
- *     那串"兵打兵"的钩子读不到任何东西，跳过而不是编一个空壳单位；
- *   · **射程折扣（长短皆可）**：攻城本来就是隔着城墙打，那不是"扔出去的一下"。
+ * 历史遗留，现在已经瘦身。
  */
 export function damageToCity(attacker: Unit, city: City, s: GameState): number {
-  const at = utype(s, attacker.type);
-  const sctx: SiegeDamageCtx = {
-    state: s,
-    self: attacker,
-    city,
-    // 第 1、2 步：攻击力（含光环/状态/威吓）减城墙护甲。
-    // 威吓和状态在野战里是两处减的，这里一次减掉——它们说的是同一件事：
-    // "这一下出手的人不在状态"。
-    damage: Math.max(0, attackPowerNow(s, attacker) - fearPenalty(s, attacker) - city.armor),
-    api: abilityApi,
-  };
-  // 破城（×1.5）这类"攻城伤害加成"先走能力，再走扩展钩子：
-  // 扩展是按攻击力算的百分比，应该吃到加成的结果，而不是反过来。
-  runStaged(stagedFor<SiegeDamageCtx>(at, 'siegeDamage'), sctx);
+  // 把城市伪装成一个带 __isCity 标记的伪单位
+  const fakeDefender = {
+    type: '__city__',
+    __isCity: true,
+    __city: city,
+    x: city.x,
+    y: city.y,
+    status: {},
+  } as any;
 
-  // 攻城走单独的钩子链：地势护甲、破甲这些野战概念在城墙上不成立，
-  // 而"全军攻击 +X%"这种按攻击力算的规则，野战和攻城都该吃到。
-  // 注意这里**不再**跑 `modifyDamage`：两者的差额是同一笔加成，
-  // 两条都跑就等于给攻城算两遍。
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifySiegeDamage) {
-      sctx.damage = e.hooks.modifySiegeDamage({ state: s, attacker, city, damage: sctx.damage });
-    }
-  }
-
-  // 第 3 步：魔法段。城没有魔抗（`City` 里没有这一列，也不打算加：
-  // 城本来就该被法师克制，给城墙一条法抗等于把"带法师攻城"这条战术关掉），
-  // 所以这一段的系数是满额的——这正是"法师攻城不再等于零"的来源。
-  sctx.damage += magicSegment(s, attacker, 0, null);
-
-  // 第 4 步：属性倍率（城没有 weak/resist 时什么都不做，留着是为了
-  // 以后扩展给城加抗性时不用再回来改这里）
-  sctx.damage = applyElementMul(sctx.damage, elementOf(s, attacker), undefined, undefined);
-
-  return Math.max(0, Math.round(sctx.damage));
+  return computeDamage(s, attacker, fakeDefender);
 }
 
 /** 预估伤害，给 UI 的攻击预览用，不改变状态 */

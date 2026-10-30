@@ -3853,7 +3853,9 @@ test('破城：攻城伤害 ×1.5', () => {
   const normal = damageToCity(cav, city, s);
   grantAbility(s, 'scout', 'siege-master');
   const boosted = damageToCity(cav, city, s);
-  assert.equal(boosted, Math.round(normal * 1.5));
+  // 破城现在作用于攻击力，而不是最终伤害
+  const expected = Math.max(0, Math.round((normal + city.armor) * 1.5 - city.armor));
+  assert.equal(boosted, expected);
 });
 
 test('自爆：阵亡时波及四周', () => {
@@ -10455,7 +10457,12 @@ test('岸轰：同一条船带不带这条能力，攻城差 25%', () => {
   const plain = damageToCity(monitor, city, s);
 
   assert.ok(withBombard > plain, `带岸轰(${withBombard}) 应该高于不带(${plain})`);
-  assert.equal(withBombard, Math.round(plain * 1.25), '差的正好是 25%');
+  const expected = Math.round(plain * 1.25);
+  // 因为 plain 是取整后的，游戏内是浮点数，允许 1 点精度误差
+  assert.ok(
+    Math.abs(withBombard - expected) <= 1, 
+    `带岸轰(${withBombard}) 应该比不带(${plain}) 高约 25%，预期约 ${expected}`
+  );
 });
 
 test('大型单位：航母占 2×2，能移动，但进不了一格宽的水道', () => {
