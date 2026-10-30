@@ -2369,7 +2369,7 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
       startEra: 4,
       aiOpponent: false,
       aiAlly: false,
-      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-knights'],
       enabledUnits: Object.keys(UNIT_TYPES),
     },
     505,

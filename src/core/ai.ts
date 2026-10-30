@@ -2535,6 +2535,56 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
         else if (foes.some((f) => distance(f, u) <= 3)) score = 16;
         break;
       }
+      case 'raise-dead': {
+        /*
+         * 招魂：只在本回合真有人倒下、而且付得起的时候才点。
+         *
+         * 分数按"救回来的造价"给——它占的是冷却，不是行动，
+         * 所以只要这次复活值钱，这一回合开就是赚的。
+         * 太便宜的目标（几十金的杂兵）不值得为它烧掉两回合冷却。
+         */
+        const mine = (view.fallen ?? []).filter(
+          (r) =>
+            r.owner === u.owner &&
+            r.turn >= view.turn - 1 &&
+            !r.revived &&
+            !!view.unitTypes[r.type],
+        );
+        if (mine.length === 0) break;
+        let best = 0;
+        for (const r of mine) {
+          const rd = view.unitTypes[r.type] as UnitTypeDef;
+          best = Math.max(best, recruitCost(view, u.owner, rd));
+        }
+        if (best < 90) break;
+        if (view.players[u.owner].gold < best) break;
+        // 复活落在死灵法师旁边的空地上：四邻占满时规则会拒，AI 也别白点一次
+        const open = DIRS.some(([dx, dy]) => {
+          const nx = u.x + dx;
+          const ny = u.y + dy;
+          const t = view.tiles[ny * view.w + nx];
+          if (!t) return false;
+          if (view.units.some((v) => v.x === nx && v.y === ny)) return false;
+          return t.terrain !== 'water' && t.terrain !== 'mountain';
+        });
+        if (!open) break;
+        score = 24 + Math.min(20, best / 25);
+        break;
+      }
+      case 'holy-banner': {
+        /*
+         * 圣旗：身边有三个人（含自己）就值。
+         *
+         * 和「降临」不同，它不看血线——护甲和魔抗是**预支**的减伤，
+         * 等队友都残了再开，等于已经挨完了才加装甲。
+         */
+        const radius = k.radius ?? 2;
+        const near = unitsOf(view, u.owner).filter((a) => distance(a, u) <= radius);
+        if (near.length < 3) break;
+        if (!foes.some((f) => distance(f, u) <= 6)) break;
+        score = 26 + Math.min(12, near.length * 2);
+        break;
+      }
       case 'fuse': {
         /*
          * 聚合：碎片在场上凑够两只就该合回去，血越少越急——

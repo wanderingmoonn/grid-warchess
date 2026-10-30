@@ -78,6 +78,7 @@ import type {
   Action,
   City,
   Element,
+  FallenRecord,
   GameState,
   SkillDef,
   PlayerId,
@@ -720,8 +721,11 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
   // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
   // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
   // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
-  const res = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
-  return magicSegment(s, attacker, res, defender);
+  const base = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  // 圣旗之类"临时加魔抗"的增益在这条线上生效：魔法段是唯一一条
+  // 只看魔抗、不看护甲的伤害，把增益挂在别处就等于没加。
+  const ward = defender.buff?.magicRes ?? 0;
+  return magicSegment(s, attacker, base + Math.max(0, ward), defender);
 }
 
 /**
@@ -1353,11 +1357,18 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (armor !== before) armorItems.push({ label: def.name, delta: armor - before });
     }
   }
+  // 圣旗（神圣骑士长）：临时护甲。面板和结算必须读同一个字段，
+  // 否则会出现"面板写着 10 点、实际按 7 点算"这种只能靠猜的偏差。
+  if (u.buff?.armor) {
+    armor += u.buff.armor;
+    armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
+  }
   const curseAura = curseAuraPenalty(s, u);
   if (curseAura !== 0) {
     armor -= curseAura;
     armorItems.push({ label: '咒域', delta: -curseAura });
   }
+
   // 扩展改甲（堑壕战等）：一条钩子一行，标签用扩展名
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
@@ -1982,6 +1993,8 @@ export function computeDamage(
       const def = STATUS_REGISTRY[key];
       if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
     }
+  // 圣旗（神圣骑士长的技能）：临时护甲，和面板走同一个字段
+  if (!isCity && defender.buff?.armor) ctx.armor += defender.buff.armor;
   // 咒域光环
   ctx.armor -= curseAuraPenalty(s, defender);
 
@@ -2199,6 +2212,8 @@ function splashVictims(
     if (distBetweenUnits(s, defender, v) > radius) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
+    // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
+    if (v.buff?.splashImmune) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
     seen.add(v.id);
@@ -2691,6 +2706,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   if (by !== s.current) return { ok: false, reason: '还没轮到你行动' };
 
   const next = cloneState(s);
+  // 招魂要读"本回合谁没了"，所以每一个动作前后各数一次人头（见 recordDeaths）
+  const rosterBefore = rosterOf(next);
 
   const result: ActionResult = (() => {
     switch (action.type) {
@@ -2740,6 +2757,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
 
   if (result.ok) {
     syncBridges(result.state);
+    // 放在 syncBridges 之后：桥塌落水也算"这一下没的"，早写就漏掉那一批
+    recordDeaths(result.state, rosterBefore, action);
     result.state.winner = result.state.winner ?? checkWinner(result.state);
     refreshMemory(result.state);
   }
@@ -4067,6 +4086,97 @@ SKILL_EFFECTS['vanish'] = (c) => {
   }
   c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
 };
+/**
+ * 招魂（暗夜死灵法师）：付这个兵的生产价格，把本回合倒下的一名友军拉回来。
+ *
+ * 三个刻意的选择：
+ *   · **自动挑最贵的那个**。技能按钮不带选目标（引擎的 HERO_SKILL 没有目标字段），
+ *     而"救便宜的那个"等于替玩家做了一笔亏本买卖——按造价排序，
+ *     最贵的那次牺牲先被拉回来，这是唯一不需要额外操作、也不会被骂的判断。
+ *   · **出场即"本回合不能动"**。走 makeUnit 的老规矩（moved/acted 都是 true），
+ *     否则招魂就成了一次白送的行动，节奏上等于凭空多出一个回合。
+ *   · **一条记录只能复活一次**。不标记的话，同一具尸体能被反复招起来，
+ *     那就不是"复活"而是"无限兵源"，一条技能就能拖死整局。
+ */
+SKILL_EFFECTS['raise-dead'] = (c) => {
+  const owner = c.self.owner;
+  // `turn >= 当前-1`：上一回合（对手刚打完的那一轮）+ 本回合。
+  // 只看"当前 turn"不够用——你的兵基本都死在对面回合里。
+  const pool = (c.state.fallen ?? []).filter(
+    (r) =>
+      r.owner === owner &&
+      r.turn >= c.state.turn - 1 &&
+      !r.revived &&
+      !!c.state.unitTypes[r.type],
+  );
+  if (pool.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '本回合还没有友军倒下';
+    return;
+  }
+  // 造价高的排前面：钱是按生产价格付的，先救回最值钱的那一次牺牲
+  const ranked = [...pool].sort(
+    (a, b) =>
+      recruitCost(c.state, owner, c.state.unitTypes[b.type] as UnitTypeDef) -
+      recruitCost(c.state, owner, c.state.unitTypes[a.type] as UnitTypeDef),
+  );
+  const pick = ranked[0] as FallenRecord;
+  const def = c.state.unitTypes[pick.type] as UnitTypeDef;
+  const cost = recruitResCost(c.state, owner, def);
+  const me = c.state.players[owner];
+  if (!canPay(me, cost)) {
+    c.result.ok = false;
+    c.result.reason = `招魂「${def.name}」还差：${missingLabel(me, cost)}`;
+    return;
+  }
+  const spot = c.api.freeNeighbor(c.state, c.self, pick.type);
+  if (!spot) {
+    c.result.ok = false;
+    c.result.reason = '身边没有能站起来的空地';
+    return;
+  }
+  payRes(me, cost);
+  c.api.spawn(c.state, owner, pick.type, spot.x, spot.y);
+  pick.revived = true;
+  c.api.pushLog(
+    c.state,
+    owner,
+    `招魂：${def.name} 重新站起（支付 ${costLabel(cost)}，落位 ${spot.x},${spot.y}）`,
+    true,
+  );
+};
+/**
+ * 圣旗（神圣骑士长）：半径内的友军（含自己）获得护甲、魔抗与阵列。
+ *
+ * 三样东西一起给，是因为它们各自单拎出来都不够看：+3 甲挡不住一轮集火、
+ * +4 魔抗只对法师有用、阵列只免疫溅射。合起来才是"这一片阵线顶住了这一轮"，
+ * 也才对得起一个英雄的一次出手。
+ */
+SKILL_EFFECTS['holy-banner'] = (c) => {
+  const radius = c.skill.radius ?? 2;
+  const armorUp = c.skill.armorUp ?? 3;
+  const magicUp = c.skill.magicResUp ?? 4;
+  let n = 0;
+  for (const t of c.state.units) {
+    if (t.owner !== c.self.owner || t.hp <= 0) continue;
+    if (c.api.distance(t, c.self) > radius) continue;
+    t.buff = {
+      armor: armorUp,
+      magicRes: magicUp,
+      splashImmune: true,
+      // 撑到自己的下个回合开始：要保护的是**对面**那一个回合
+      turns: 1,
+      label: '圣旗',
+    };
+    n += 1;
+  }
+  if (n === 0) {
+    c.result.ok = false;
+    c.result.reason = '半径内没有友军';
+    return;
+  }
+  c.api.pushLog(c.state, c.self.owner, `圣旗：${n} 个友军获得护甲 +${armorUp}、魔抗 +${magicUp}、阵列`);
+};
 SKILL_EFFECTS['mitosis'] = (c) => {
   const def = utype(c.state, c.self.type);
   const kid = def.splitInto;
@@ -4280,6 +4390,54 @@ function sweepDead(s: GameState): void {
   }
 }
 
+/**
+ * 动作开始前的在册名单：id → 兵种/主人/位置。
+ *
+ * 船里的人也算在册——他们只是换了个地方放，不是死了。漏了这一步，
+ * 每次装船都会在"阵亡名单"里留下一条，招魂就能把船上的人凭空再拉出来一个。
+ */
+function rosterOf(s: GameState): Map<string, FallenRecord> {
+  const out = new Map<string, FallenRecord>();
+  const add = (u: Unit): void => {
+    out.set(u.id, { owner: u.owner, type: u.type, x: u.x, y: u.y, turn: s.turn });
+  };
+  for (const u of s.units) {
+    add(u);
+    for (const c of u.cargo ?? []) add(c);
+  }
+  return out;
+}
+
+/**
+ * 清算这一下动作里"谁没了"，写进 `s.fallen`。
+ *
+ * 用前后对照而不是在每处死亡代码里各写一条：阵亡路径有战斗、反击、
+ * 自爆波及、桥塌落水、城破守军五处，分散写必然漏一处，而漏的那处
+ * 在玩家眼里就是一个说不清的"招魂点了没反应"。
+ */
+function recordDeaths(s: GameState, before: Map<string, FallenRecord>, action: Action): void {
+  // 遣散是自己拆的，不是"倒下"——招魂把它拉回来等于花一次技能退钱
+  if (action.type === 'DISBAND') return;
+  const alive = new Set<string>();
+  for (const u of s.units) {
+    alive.add(u.id);
+    for (const c of u.cargo ?? []) alive.add(c.id);
+  }
+  const fresh: FallenRecord[] = [];
+  for (const [id, rec] of before) {
+    if (!alive.has(id)) fresh.push(rec);
+  }
+  // 只留"刚过去的这一轮"：死亡大多发生在**对手**回合（你的兵是被人打死的），
+  // 严格按"当前 turn"比会变成"轮到你时名单已经清空"，招魂永远扑空。
+  // 所以口径是"上一回合 + 本回合"，正好等于玩家说的"这一轮里倒下的人"。
+  const kept = (s.fallen ?? []).filter((r) => r.turn >= s.turn - 1);
+  if (fresh.length === 0) {
+    if (kept.length !== (s.fallen ?? []).length) s.fallen = kept;
+    return;
+  }
+  s.fallen = [...kept, ...fresh];
+}
+
 /** 中毒/燃烧每回合结算一次，然后把剩余回合数 −1 */
 function tickStatuses(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
@@ -4328,6 +4486,14 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
     delete u.heroBuff;
+    // 技能增益（圣旗）比 heroBuff 活得久：它要保护的是**对面**那一个回合。
+    // 写在 heroBuff 清理的同一处，是因为两者都是"到自己的回合开始就过期"，
+    // 分成两处写早晚会有一天只改了一处。
+    if (u.buff) {
+      const left = (u.buff.turns ?? 1) - 1;
+      if (left > 0) u.buff.turns = left;
+      else delete u.buff;
+    }
     if (u.status) {
       for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
         if ((u.status[k] ?? 0) <= 0) delete u.status[k];

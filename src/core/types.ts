@@ -154,6 +154,16 @@ export interface SkillDef {
   radius?: number;
   /** 数值参数（回复比例、伤害系数、移动加成），含义由 effect 决定 */
   power?: number;
+  /**
+   * 护甲增益（神圣骑士长的「圣旗」）。
+   *
+   * 为什么单独开一个字段而不是复用 power：同一条技能要同时给三样东西
+   * （护甲、魔抗、阵列），一个 power 说不清哪个数是哪一项，
+   * 而规则书和按钮文案都要把这个数读出来写给人看。
+   */
+  armorUp?: number;
+  /** 魔法抗性增益，和 armorUp 配套 */
+  magicResUp?: number;
 }
 
 export interface Tile {
@@ -612,6 +622,29 @@ export interface Unit {
      * 出手或挨打会立刻删掉它（见 doAttack）。
      */
     hidden?: boolean;
+  };
+  /**
+   * 技能给的**临时增益**（神圣骑士长的「圣旗」）。
+   *
+   * 为什么不能挂在 heroBuff 上：heroBuff 只活到**自己**的回合结束，
+   * 而"护甲提升"要保护的是对面那一个回合——挂在 heroBuff 上等于
+   * 加完就没了，玩家只会看到护甲闪了一下。所以单独一个字段，
+   * 在自己的下个回合开始统一掉一层。
+   *
+   * 也不做成注册状态：状态走的是"负面减益"那一套（毒/烧/减速/诅咒），
+   * 顺序和衰减规则都是按减益写的，塞增益进去会和净化互相打架。
+   */
+  buff?: {
+    /** 护甲加成 */
+    armor?: number;
+    /** 魔法抗性加成（只对魔法段生效） */
+    magicRes?: number;
+    /** 阵列：免疫溅射（当主目标那一下照吃） */
+    splashImmune?: boolean;
+    /** 还能撑几个自己的回合（1 = 撑过对面这一轮，到自己的下个回合开始清掉） */
+    turns?: number;
+    /** 面板上显示的名字 */
+    label?: string;
   };
   /** 英雄技能冷却剩余回合数：key 是技能 id */
   skillCd?: Record<string, number>;
@@ -1072,6 +1105,30 @@ export interface GameState {
     /** 孵出来时保留多少比例的生命 */
     hpRatio: number;
   };
+  /**
+   * 本回合倒下的单位（暗夜死灵法师的「招魂」要读它）。
+   *
+   * 为什么不在死亡那一刻各自写一条：阵亡的路径有四五处（战斗、反击、
+   * 自爆波及、桥塌落水、城破守军），每处各写一遍必然漏一处，
+   * 而漏掉的那处表现出来就是"这个兵明明刚死，招魂却说不出来是谁"。
+   * 所以改成在 applyAction 之后做一次**前后对照**：动作前在册、
+   * 动作后不在册的，就是这一下没的。只留当前回合，回合走完自然作废。
+   */
+  fallen?: FallenRecord[];
+}
+
+/** 一条"谁在什么时候倒下了"。只记复活需要的字段，不存整个单位对象。 */
+export interface FallenRecord {
+  owner: PlayerId;
+  /** 兵种 id */
+  type: string;
+  /** 倒下的大致位置（复活时只写进战报，不限制落点） */
+  x: number;
+  y: number;
+  /** 倒在哪一个 `s.turn` 上——"本回合"就是拿它比的 */
+  turn: number;
+  /** 已经被招魂拉起来过一次，不能反复拉 */
+  revived?: boolean;
 }
 
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */

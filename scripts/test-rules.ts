@@ -1985,11 +1985,11 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包装七个英雄，外加跟班的召唤物', () => {
+test('英雄包装九个英雄，外加跟班的召唤物', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
-  assert.equal(heroes.length, 7);
+  assert.equal(heroes.length, 9);
   for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
@@ -2016,6 +2016,159 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
+});
+
+test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪到火药时代', () => {
+  const pack = (id: string) => EXPANSIONS.find((e) => e.id === id)!;
+  const knights = pack('fantasy-knights').units ?? [];
+  const beasts = pack('fantasy-beasts').units ?? [];
+  const arcane = pack('fantasy-arcane').units ?? [];
+
+  const find = (list: typeof knights, id: string) => list.find((u) => u.id === id);
+
+  // 三个兵从荒兽/秘法搬进骑士团：只在骑士团里出现一次，老包里不再有
+  for (const id of ['griffin-rider', 'dragoon-rider', 'alchemist']) {
+    assert.ok(find(knights, id), `${id} 应该在骑士团里`);
+    assert.ok(!find(beasts, id), `${id} 不该还留在荒兽`);
+    assert.ok(!find(arcane, id) || id === 'alchemist', `${id} 不该还留在秘法`);
+  }
+  assert.ok(!find(arcane, 'alchemist'), '炼金术士已经离开秘法');
+
+  // 老皇家骑兵改名精英骑兵，位置和数值不动
+  const elite = find(knights, 'elite-cavalry');
+  assert.ok(elite, '应该有精英骑兵');
+  assert.equal(elite!.name, '精英骑兵');
+  assert.equal(elite!.era, 2, '精英骑兵留在中世');
+  assert.equal(elite!.cost, 125, '改的是名字，不是数值');
+
+  // 新皇家骑兵：火药时代 + 面板大幅提升
+  const royal = find(knights, 'royal-cavalry');
+  assert.ok(royal, '应该有皇家骑兵');
+  assert.equal(royal!.name, '皇家骑兵');
+  assert.equal(royal!.era, 3, '皇家骑兵改到火药时代');
+  assert.ok(royal!.atk >= elite!.atk * 2, `皇家骑兵攻击 ${royal!.atk} 没到精英骑兵的两倍`);
+  assert.ok(royal!.maxHp >= elite!.maxHp * 2, `皇家骑兵 ${royal!.maxHp} 血没到精英骑兵的两倍`);
+  assert.ok(
+    (royal!.abilities ?? []).includes('charge'),
+    '晋升之后仍然是冲锋骑兵，别把机制一起丢了',
+  );
+
+  // 国王：工业时代，带王命这条被动
+  const king = find(knights, 'royal-king');
+  assert.ok(king, '应该有国王');
+  assert.equal(king!.name, '国王');
+  assert.equal(king!.era, 4, '国王在工业时代');
+  assert.ok((king!.abilities ?? []).includes('royal-decree'), '国王要带王命');
+});
+
+test('王命：回合开始把半径 2 内的精英骑兵晋升为皇家骑兵，按血量比例', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7], [9, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  place2(s, 'A', 'royal-king', 5, 5);
+  const near = place2(s, 'A', 'elite-cavalry', 5, 7); // 距离 2，在半径内
+  const far = place2(s, 'A', 'elite-cavalry', 9, 5); // 距离 4，在半径外
+  const eliteMax = s.unitTypes['elite-cavalry']!.maxHp;
+  const royalMax = s.unitTypes['royal-cavalry']!.maxHp;
+  near.hp = Math.round(eliteMax * 0.5);
+
+  // 自己的回合开始才结算：A 结束 → B 结束 → A 回合开始
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok);
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+
+  const up = r2.state.units.find((u) => u.id === near.id)!;
+  assert.equal(up.type, 'royal-cavalry', '半径内的精英骑兵晋升');
+  assert.equal(up.hp, Math.round(royalMax * 0.5), '按比例换血：半血进去，半血出来');
+  assert.equal(
+    r2.state.units.find((u) => u.id === far.id)!.type,
+    'elite-cavalry',
+    '半径外的不动',
+  );
+  // 只晋升一次：再走一轮也不会反复换
+  const r3 = applyAction(r2.state, { type: 'END_TURN' });
+  assert.ok(r3.ok);
+  const r4 = applyAction(r3.state, { type: 'END_TURN' });
+  assert.ok(r4.ok);
+  assert.equal(r4.state.units.find((u) => u.id === near.id)!.type, 'royal-cavalry');
+});
+
+test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自己的下个回合开始失效', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7], [8, 5], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const lord = place2(s, 'A', 'holy-knight-lord', 5, 5);
+  const mate = place2(s, 'A', 'swordsman', 5, 7); // 距离 2，吃到
+  const out = place2(s, 'A', 'swordsman', 8, 5); // 距离 3，吃不到
+  const mage = place2(s, 'B', 'mage', 6, 5);
+
+  const armorBefore = effectiveStats(s, mate).armor;
+  const magicBefore = magicDamageOf(s, mage, mate);
+  const outArmorBefore = effectiveStats(s, out).armor;
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: lord.id, skillId: 'holy-banner' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const buffed = r.state.units.find((u) => u.id === mate.id)!;
+  assert.equal(effectiveStats(r.state, buffed).armor, armorBefore + 3, '护甲 +3');
+  assert.equal(magicDamageOf(r.state, mage, buffed), magicBefore - 4, '魔抗 +4：魔法段少打 4 点');
+  assert.equal(buffed.buff?.splashImmune, true, '圣旗同时给阵列');
+  assert.equal(
+    effectiveStats(r.state, r.state.units.find((u) => u.id === out.id)!).armor,
+    outArmorBefore,
+    '半径外的队友什么都没拿到',
+  );
+
+  // 撑过对面那一个回合，到自己的下个回合开始清掉
+  const t1 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(t1.ok);
+  const t2 = applyAction(t1.state, { type: 'END_TURN' });
+  assert.ok(t2.ok);
+  const expired = t2.state.units.find((u) => u.id === mate.id)!;
+  assert.equal(expired.buff, undefined, '自己的回合开始时失效');
+  assert.equal(effectiveStats(t2.state, expired).armor, armorBefore, '护甲回到原位');
+});
+
+test('招魂：付生产价格把倒下的友军拉回来，且同一具只能招一次', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [6, 5], [7, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const necro = place2(s, 'A', 'night-necromancer', 5, 5);
+  const doomed = place2(s, 'A', 'militia', 6, 5);
+  const hydra = place2(s, 'B', 'hydra', 7, 5);
+  doomed.hp = 1; // 让它必然死于反击
+
+  const goldBefore = s.players.A.gold;
+  // 开局本来就有民兵，所以数"多出来几个"，而不是数总数
+  const militiaBefore = s.units.filter((u) => u.owner === 'A' && u.type === 'militia').length;
+  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: hydra.id });
+  assert.ok(atk.ok, atk.ok ? '' : atk.reason);
+  assert.ok(
+    !atk.state.units.some((u) => u.id === doomed.id),
+    '条件：这一下它真的倒下了',
+  );
+  assert.ok((atk.state.fallen ?? []).some((r) => r.owner === 'A' && r.type === 'militia'), '倒下的人要进名单');
+
+  const r = applyAction(atk.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const back = r.state.units.filter((u) => u.owner === 'A' && u.type === 'militia');
+  assert.equal(back.length, militiaBefore, '倒下几个就补回来几个');
+  const raised = back.find((u) => u.id !== doomed.id && distance(u, r.state.units.find((x) => x.id === necro.id)!) <= 1);
+  assert.ok(raised, '应该有一个民兵站在死灵法师身边（那就是招回来的）');
+  const zombie = raised as Unit;
+  assert.equal(zombie.moved, true, '当回合不能动');
+  assert.equal(zombie.acted, true, '当回合不能打');
+  const price = recruitCost(s, 'A', s.unitTypes['militia']!);
+  assert.equal(r.state.players.A.gold, goldBefore - price, `按生产价格扣钱（${price} 金）`);
+  assert.equal(
+    (r.state.fallen ?? []).find((x) => x.type === 'militia')?.revived,
+    true,
+    '这条记录标记为已招过',
+  );
+
+  // 冷却清掉也不再能招：同一具遗体只算一次
+  const again = r.state.units.find((u) => u.id === necro.id)!;
+  again.skillCd = {};
+  const r2 = applyAction(r.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
+  assert.equal(r2.ok, false, '同一具不能被反复招起来');
 });
 
 test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () => {
