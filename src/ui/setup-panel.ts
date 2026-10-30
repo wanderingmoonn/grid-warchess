@@ -329,7 +329,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">${
                 config.godMode
                   ? '上帝模式下棋盘全图可见：点兵种→点棋盘落子，摆完点「交给 AI · 一回合」看一回合，或者「接管 · 打到全灭」看完整场。'
-                  : '指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
+                  : '指挥官模式下棋盘只看不碰：点自己的城 → 在右侧点兵种，就排进顶端的生产队列，点一次执行交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
               }</div>
             </section>
 
@@ -343,7 +343,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               <div class="field-hint">${
                 config.draftMode
-                  ? '开局先打一轮 BP：双方同时禁用（互相看不见），然后按蛇形顺序轮流选人，选满才开始。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补。'
+                  ? '开局先停在「等待开局」：那里可以建房、把邀请链接发给朋友，也可以直接本机开打；点「开始选卡」之后双方同时禁用（互相看不见），再按蛇形顺序轮流选人。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补；右上角可随时跳过或退出。'
                   : '打开之后，这一局能造什么由开局的选卡决定——下方逐个勾选兵种在这个模式下不再生效。'
               }</div>
             </section>

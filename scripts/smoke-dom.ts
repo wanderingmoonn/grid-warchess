@@ -20,7 +20,6 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
-import { unitSourceIdOf } from '../src/core/expansions.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
@@ -1700,11 +1699,15 @@ click('[data-role="commander"]');
 click('[data-act="start"]');
 await wait(60);
 
-check('指挥官模式开局后出现 5 格生产序列', () => {
+check('指挥官模式开局后，顶端是一条生产队列（初始 5 个空位）', () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
   assert.ok(bar && !bar.hidden, '指挥官栏应该显示');
-  assert.equal(bar.querySelectorAll('select[data-slot]').length, 5, '应该有 5 格');
-  assert.ok(bar.textContent?.includes('参谋部'), '标题应该是参谋部');
+  assert.ok((bar.textContent ?? '').includes('参谋部'), '标题应该是参谋部');
+  assert.equal(bar.querySelectorAll('.cmd-chip.is-empty').length, 5, '应该有 5 个空位');
+  assert.ok(bar.querySelector('[data-cmd="run"]'), '应该有执行按钮');
+  // 旧那套下拉编辑器已经拆掉：两条入口并存只会让人犹豫该用哪个
+  assert.equal(bar.querySelectorAll('select').length, 0, '顶端不该再有下拉框');
+  assert.equal(bar.querySelectorAll('[data-act="cmd-pack"]').length, 0, '顶端也不该再有包筛选');
 });
 
 check('指挥官模式下点自己的部队能看属性，遣散按钮也在', () => {
@@ -1759,257 +1762,122 @@ check('指挥官模式下点自己的部队能看属性，遣散按钮也在', (
   );
 });
 
-check('生产序列里能排「升级时代」', () => {
-  const sel = doc
-    .querySelector<HTMLElement>('#commander')
-    ?.querySelector<HTMLSelectElement>('select[data-slot="1"]');
-  assert.ok(sel, '找不到第二格');
-  assert.ok(
-    Array.from(sel.options).some((o) => o.value === '@upgrade'),
-    '每一格都应该能选升级时代',
-  );
-});
-
-check('改一格只更新序列，下拉不会被重建', () => {
-  const bar = doc.querySelector<HTMLElement>('#commander');
-  assert.ok(bar);
-  const sel = bar.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0];
-  assert.ok(sel, '找不到第一格');
-  const opt = Array.from(sel.options).find((o) => o.value !== '');
-  assert.ok(opt, '至少要有一个能造的兵种');
-  sel.value = opt.value;
-  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
-  const again = doc
-    .querySelector<HTMLElement>('#commander')
-    ?.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0];
-  assert.equal(again, sel, '重建会把下拉抽走，玩家刚选的兵就丢了');
-  assert.equal(again?.value, opt.value, '选中的兵种应该还留着');
-});
-
-check('每一格都能指定由哪座城产兵，选了就写进序列', () => {
-  const bar = doc.querySelector<HTMLElement>('#commander');
-  assert.ok(bar);
-  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="0"]');
-  const sites = bar.querySelectorAll<HTMLSelectElement>('select[data-site]');
-  assert.equal(sites.length, 5, '5 格各有一个产兵点下拉');
-  assert.ok(sites[0], '找不到第一格的产兵点');
-
-  // 先选一个真兵种：产兵点下拉只在"这一格要造东西"时才可用
-  const unitOpt = Array.from(sel!.options).find((o) => o.value && o.value !== '@upgrade');
-  assert.ok(unitOpt, '至少要有一个能造的兵种');
-  sel!.value = unitOpt.value;
-  sel!.dispatchEvent(new window.Event('change', { bubbles: true }));
-
-  const siteSel = doc
-    .querySelector<HTMLElement>('#commander')!
-    .querySelector<HTMLSelectElement>('select[data-site="0"]')!;
-  assert.equal(siteSel.disabled, false, '这一格有兵种，产兵点就该能选');
-  const cityOpt = Array.from(siteSel.options).find((o) => o.value !== '');
-  assert.ok(cityOpt, '自己的城应该在下拉里');
-
-  siteSel.value = cityOpt.value;
-  siteSel.dispatchEvent(new window.Event('change', { bubbles: true }));
-
-  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
-    orderSites?: { A?: string[] };
-  };
-  assert.equal(
-    saved.orderSites?.A?.[0],
-    cityOpt.value,
-    '选了产兵点就得落到 state 里，否则 AI 执行时还是自己挑',
-  );
-});
-
-check('只有一个包、只有一个时代的对局：整条筛选行都不出现，只留计数', () => {
-  const bar = doc.querySelector<HTMLElement>('#commander')!;
-  // 这一局是原版、1 代开局：名单里只有一个包、一个时代，两排 chip 都"筛无可筛"。
-  // 留一颗按下去什么都不变的按钮，比没有这颗按钮更让人困惑——所以整排都不渲染。
-  assert.equal(bar.querySelectorAll('[data-act="cmd-pack"]').length, 0, '单包不该显示包筛选');
-  assert.equal(bar.querySelectorAll('[data-cmd-era]').length, 0, '单代不该显示时代筛选');
-  const count = bar.querySelector('.cmd-count')?.textContent ?? '';
-  assert.ok(/\d+ \/ \d+ 个兵种/.test(count), `计数应该还在，实际：${count}`);
-  assert.equal(count.includes('已筛选'), false, '没筛的时候不该说"已筛选"');
-});
-
 /**
- * 参谋部的两个筛选维度（DLC / 时代）要在一个**多包**对局里验：
- * 单包对局根本不该出现包筛选，所以不能在 doc 那一局上测。
+ * 点城市＝点城市脚下那一格 tile。
  *
- * 顺便造一个必然为空的组合：把奇想包里 4 代的兵从兵种表里拿掉，
- * 这样"奇想 + 4 代"一定没有命中，空态才有得测。
+ * 城牌（`.city-block`）在 CSS 里是 pointer-events:none，真实浏览器里手点下去
+ * 命中的是城底下的 tile，所以合成事件也必须打在 tile 上，否则 coordsFromEvent
+ * 找不到 [data-x] 祖先，点击会被当成"点空白"。
  */
-check('兵种能按 DLC 筛：只留这个包的兵；和时代能叠加；没命中时说清是空的', () => {
-  const st = createMatch(
-    {
-      ...DEFAULT_CONFIG,
-      size: 12,
-      startEra: 4,
-      commanderMode: true,
-      expansionIds: ['fantasy-core', 'fantasy-heroes'],
-      enabledUnits: Object.keys(UNIT_TYPES),
-    },
-    20261029,
-    {},
-  );
-  // 奇想包里 4 代的那几个先摘掉，用来制造"这个组合是空的"
-  for (const id of Object.keys(st.unitTypes)) {
-    if (unitSourceIdOf(id) === 'fantasy-heroes' && st.unitTypes[id]!.era === 4) {
-      delete st.unitTypes[id];
+function clickOwnCity(side: string): void {
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    cities?: { id: string; owner: string; x: number; y: number; size: number }[];
+    units?: { x: number; y: number }[];
+  };
+  const city = (saved.cities ?? []).find((c) => c.owner === side);
+  assert.ok(city, `${side} 方应该有城`);
+  const taken = new Set((saved.units ?? []).map((u) => `${u.x},${u.y}`));
+  // 城是 2×2：挑一格没站着兵的，免得点下去先命中那支兵
+  const spot = [city!.x, city!.y];
+  outer: for (let dy = 0; dy < (city!.size ?? 2); dy++) {
+    for (let dx = 0; dx < (city!.size ?? 2); dx++) {
+      if (!taken.has(`${city!.x + dx},${city!.y + dy}`)) {
+        spot[0] = city!.x + dx;
+        spot[1] = city!.y + dy;
+        break outer;
+      }
     }
   }
-  st.fog = false;
-  st.current = 'A';
+  const tile = doc.querySelector<HTMLElement>(`.tile[data-x="${spot[0]}"][data-y="${spot[1]}"]`);
+  assert.ok(tile, `城脚下那格 tile 应该渲染出来（${spot[0]},${spot[1]}）`);
+  tile!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+}
 
-  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
-    pretendToBeVisual: true,
-    runScripts: 'outside-only',
-  }).window;
-  if (!w.structuredClone) {
-    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
-  }
-  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
-  w.eval(code);
-
-  const d = w.document;
-  const bar = () => d.querySelector<HTMLElement>('#commander')!;
-  const unitOpts = (slot = 1) =>
-    Array.from(bar().querySelector<HTMLSelectElement>(`select[data-slot="${slot}"]`)!.options).filter(
-      (o) => o.value && o.value !== '@upgrade',
-    );
-  const countShown = () => Number((bar().querySelector('.cmd-count')?.textContent ?? '').split(' / ')[0]);
-  const total = unitOpts().length;
-
-  // ① 只按时代筛（不选包）
-  bar()
-    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  const eraOnly = unitOpts();
-  assert.ok(eraOnly.length > 0 && eraOnly.length < total, `4 代应该有兵、且比全部少：${eraOnly.length}/${total}`);
-  for (const o of eraOnly) {
-    assert.equal(st.unitTypes[o.value]!.era, 4, `${o.value} 不是 4 代，不该留下来`);
-  }
-  bar()
-    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  assert.equal(unitOpts().length, total, '退回「全部时代」应该回到全部');
-
-  // ② 只按包筛（不选时代）——下面接着做
-
-  // 两个包都在：原版 + 奇想·英雄（chip 上的数字就是那个包在这份名单里有几个）
-  const packChips = Array.from(bar().querySelectorAll<HTMLElement>('[data-act="cmd-pack"]'));
-  assert.ok(packChips.length >= 2, `多包对局该有包筛选，实际 ${packChips.length} 颗`);
-
-  const fantasy = bar().querySelector<HTMLElement>('[data-pack="fantasy-heroes"]');
-  assert.ok(fantasy, '该有奇想那一颗');
-  const fantasyCount = Number((fantasy!.textContent ?? '').replace(/^\D+/, '').trim() || '0');
-
-  fantasy!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  assert.equal(countShown(), fantasyCount, '计数应该等于这个包在名单里的兵数');
-  for (const o of unitOpts()) {
-    assert.equal(
-      unitSourceIdOf(o.value),
-      'fantasy-heroes',
-      `${o.value} 不是奇想包的，不该留下来`,
-    );
-  }
-
-  // 叠加时代：奇想 + 3 代（这个组合还有东西）
-  bar()
-    .querySelector<HTMLElement>('[data-cmd-era="3"]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  const combo = unitOpts();
-  assert.ok(combo.length > 0, '奇想 + 3 代应该还有兵');
-  for (const o of combo) {
-    assert.equal(unitSourceIdOf(o.value), 'fantasy-heroes', '组合筛选后不该混进别的包');
-    assert.equal(st.unitTypes[o.value]!.era, 3, '组合筛选后不该混进别的代');
-  }
-
-  // 空组合：奇想 + 4 代（4 代的奇想兵已经被摘掉了）
-  bar()
-    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  assert.equal(unitOpts().length, 0, '这个组合应该是空的');
+check('点自己的城 → 右侧点兵种 → 排进顶端队列（和常规模式同一套操作）', () => {
+  clickOwnCity('A');
   assert.ok(
-    (bar().querySelector('.cmd-count')?.textContent ?? '').includes('0 /'),
-    '计数要说 0，否则看着像界面坏了',
-  );
-  const allText = Array.from(
-    bar().querySelector<HTMLSelectElement>('select[data-slot="1"]')!.options,
-  ).map((o) => o.textContent ?? '');
-  assert.ok(
-    allText.some((t) => t.includes('没有兵种')),
-    `空的时候要有一句明确的说明，实际选项：${allText.join('/')}`,
+    doc.querySelector('.city-block.owner-A.selected'),
+    '点城脚那一格，城本身要亮起来（选中态）',
   );
 
-  // 两个维度都退回"全部"，名单回到原样
-  bar()
-    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  bar()
-    .querySelector<HTMLElement>('[data-pack=""]')!
-    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  assert.equal(unitOpts().length, total, '两个维度都清掉之后应该回到全部');
+  const btn = doc.querySelector<HTMLElement>('#side .recruit-list [data-act="order-add"]');
+  assert.ok(btn, '指挥官模式下自己的城也该出产兵列表（按钮是"加入队列"）');
+  assert.ok((btn!.textContent ?? '').includes('＋队列'), '按钮上要写清这一下是"排进队列"');
+  const type = btn!.dataset.type ?? '';
+
+  btn!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const bar = doc.querySelector<HTMLElement>('#commander')!;
+  const chips = bar.querySelectorAll('.cmd-chip:not(.is-empty)');
+  assert.equal(chips.length, 1, '队列里应该出现一格');
+  assert.ok(
+    (chips[0]!.textContent ?? '').includes(UNIT_TYPES[type]?.name ?? type),
+    `队列要显示兵种名，实际：${chips[0]!.textContent}`,
+  );
+
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orders?: { A?: string[] };
+    orderSites?: { A?: string[] };
+  };
+  assert.equal(saved.orders?.A?.[0], type, '队列要落到 state 里（AI 执行时读的就是它）');
+  assert.ok(saved.orderSites?.A?.[0], '产兵点也要落到 state 里：就是刚点的这座城市');
 });
 
-check('英雄在参谋部里标着解锁费；已经在场的那一个排不进去', () => {
-  const st = createMatch(
-    {
-      ...DEFAULT_CONFIG,
-      size: 12,
-      startEra: 4,
-      commanderMode: true,
-      expansionIds: ['fantasy-core', 'fantasy-heroes'],
-      enabledUnits: Object.keys(UNIT_TYPES),
-    },
-    424250,
-    {},
-  );
-  st.current = 'A';
-  st.players.A.gold = 2000;
-  // 先在场上放一个矮人王：它就该从下拉里"关掉"，而不是排了没反应
-  const king = st.unitTypes['dwarf-king']!;
-  st.units.push({
-    id: 'h0',
-    type: 'dwarf-king',
-    owner: 'A',
-    x: 2,
-    y: 2,
-    hp: king.maxHp,
-    kills: 0,
-    moved: false,
-    acted: false,
-  });
+check('队列里的 × 只删那一格，清空一次清完', () => {
+  const bar = () => doc.querySelector<HTMLElement>('#commander')!;
+  const filled = () => bar().querySelectorAll('.cmd-chip:not(.is-empty)').length;
 
-  const w = bootWith(st);
-  const d = w.document;
-  const bar = d.querySelector<HTMLElement>('#commander');
-  assert.ok(bar && !bar.hidden, '指挥官栏该显示出来');
-  const opts = Array.from(bar!.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0]!.options);
+  // 再排一格，凑成两格
+  const btn = doc.querySelector<HTMLElement>('#side .recruit-list [data-act="order-add"]');
+  assert.ok(btn, '产兵列表应该还在（城市面板没被关掉）');
+  btn!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(filled(), 2, '现在应该有两格');
 
-  const mine = opts.find((o) => o.value === 'dwarf-king');
-  assert.ok(mine, '矮人王应该在下拉里');
-  assert.equal(mine!.disabled, true, '场上已经有一个了，这一格排了也造不出来');
-  assert.ok((mine!.textContent ?? '').includes('已在场'), `该写明原因，实际：${mine!.textContent}`);
+  // 删第一格：按位置删，不是按兵种删
+  bar().querySelector<HTMLElement>('.cmd-x')!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(filled(), 1, '只该少一格');
 
-  const other = opts.find((o) => o.value === 'hydra');
-  assert.ok(other, '九头蛇也该在下拉里');
-  assert.equal(other!.disabled, false, '没在场上的英雄当然能排');
-  const fee = st.unitTypes['hydra']!.unlockCost ?? 0;
-  assert.ok(
-    (other!.textContent ?? '').includes(`解锁 ${fee}`),
-    `第一次招的英雄要把解锁费写出来（${fee} 金），实际：${other!.textContent}`,
-  );
+  bar().querySelector<HTMLElement>('[data-cmd="clear"]')!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(filled(), 0, '清空之后应该一格都不剩');
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orders?: { A?: string[] };
+  };
+  assert.equal((saved.orders?.A ?? []).length, 0, '清空也要落到 state 里');
 });
 
+check('「升级时代」也能排进队列；队列满了按钮就禁用', () => {
+  const bar = () => doc.querySelector<HTMLElement>('#commander')!;
+  const filled = () => bar().querySelectorAll('.cmd-chip:not(.is-empty)').length;
 
-await checkAsync('每格都给出可用金币的估算', async () => {
-  const bar = doc.querySelector<HTMLElement>('#commander');
-  assert.ok(bar);
-  const ests = Array.from(bar.querySelectorAll<HTMLElement>('[data-est]'));
-  assert.equal(ests.length, 5, '5 格各有一条估算');
-  assert.ok(/≈\s*\d+\s*金/.test(ests[0]?.textContent ?? ''), `第一格应该显示估算金币，实际：${ests[0]?.textContent}`);
-  assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
+  // 升级按钮在城市面板里，指挥官模式下它也是"排进队列"
+  const up = doc.querySelector<HTMLElement>('#side .upgrade-btn');
+  assert.ok(up, '城面板应该有升级按钮');
+  assert.equal(up!.dataset.act, 'order-add', '指挥官模式下升级也是排进队列');
+  up!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(filled(), 1);
+  assert.ok(
+    (bar().querySelector('.cmd-chip:not(.is-empty)')?.textContent ?? '').includes('升级时代'),
+    '队列里应该写着「升级时代」',
+  );
+
+  // 排满 5 格：按钮置灰，再点也排不进去
+  for (let i = 0; i < 6; i++) {
+    const btn = doc.querySelector<HTMLElement>(
+      '#side .recruit-list [data-act="order-add"]:not([disabled])',
+    );
+    if (!btn) break;
+    btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  }
+  assert.equal(filled(), 5, '队列最多 5 格');
+  assert.equal(
+    doc.querySelectorAll('#side .recruit-list [data-act="order-add"]:not([disabled])').length,
+    0,
+    '排满之后产兵按钮要禁用，否则点了也只是弹一句"满了"',
+  );
+  assert.ok(
+    doc.querySelector<HTMLButtonElement>('#side .upgrade-btn')?.disabled,
+    '升级按钮也要一起禁掉：它排的也是同一批格子',
+  );
 });
 
 await checkAsync('点「执行 5 回合」先进进度态，可以中断', async () => {
@@ -2026,8 +1894,20 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
 
   const back = doc.querySelector<HTMLElement>('#commander');
   assert.ok(back?.querySelector('[data-cmd="run"]'), '中断后应该回到可排计划的状态');
-  assert.equal(back?.querySelectorAll('select[data-slot]').length, 5, '5 格应该还在');
   assert.ok(!back?.querySelector('[data-cmd="stop"]'), '不该还停在进度态');
+});
+
+await checkAsync('每格都给出可用金币的估算', async () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar);
+  // 中断之后队列还在（单机会把计划装回去），所以估算该有内容
+  const ests = Array.from(bar.querySelectorAll<HTMLElement>('.cmd-chip-est'));
+  assert.ok(ests.length > 0, '排过格子的队列应该有估算');
+  assert.ok(
+    /≈\s*\d+\s*金/.test(ests[0]?.textContent ?? ''),
+    `第一格应该显示估算金币，实际：${ests[0]?.textContent}`,
+  );
+  assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
 });
 
 check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方形的', () => {
@@ -3998,6 +3878,22 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   assert.ok(mask, '应该有选卡遮罩节点');
   assert.equal(mask!.hidden, false, '选卡期间遮罩必须盖住棋盘');
 
+  // 开局先停在"等待开局"：这一屏是建房/邀请的地方，不能直接进禁用
+  assert.ok(
+    (doc.querySelector('#draft .draft-step')?.textContent ?? '').includes('等待开局'),
+    '开局应该先进等待开局，而不是直接开始禁用',
+  );
+  assert.ok(doc.querySelector('#draft [data-act="online"]'), '等待开局里要有"联机 · 建房 / 加入"的入口');
+  assert.ok(doc.querySelector('#draft [data-draft-act="start"]'), '要有"开始选卡"按钮');
+  assert.equal(doc.querySelector('#draft [data-draft]'), null, '等待开局里不该铺出兵种池');
+
+  click('#draft [data-draft-act="start"]');
+  await tick(60);
+  assert.ok(
+    (doc.querySelector('#draft .draft-step')?.textContent ?? '').includes('禁用'),
+    '点了开始之后才进入禁用阶段',
+  );
+
   const cards = () => [...doc.querySelectorAll<HTMLElement>('#draft [data-draft]')];
   assert.ok(cards().length >= 18, `池子应该铺开（至少 18 张卡），实际 ${cards().length}`);
   assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
@@ -4040,6 +3936,38 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
 });
 
 
+await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
+  click('[data-act="new-game"]');
+  click('[data-draft-mode="on"]');
+  click('[data-act="start"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false);
+
+  click('#draft [data-draft-act="skip"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, true, '跳过后遮罩要收起');
+  // 跳过＝按原版打：结束回合应该能点
+  const endTurn = doc.querySelector<HTMLElement>('[data-act="end-turn"]');
+  assert.ok(endTurn, '应该有结束回合按钮');
+  endTurn!.click();
+  await tick(40);
+});
+
+await checkAsync('选卡可以退出：退出后回到开局设置面板', async () => {
+  click('[data-act="new-game"]');
+  click('[data-draft-mode="on"]');
+  click('[data-act="start"]');
+  await tick(60);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '先要有遮罩');
+
+  click('#draft [data-draft-act="exit"]');
+  await tick(80);
+  assert.ok(doc.querySelector('.modal-mask'), '退出之后应该弹出开局设置面板');
+  // 收掉面板，别把后面的用例挡在模态框外面
+  doc.querySelector<HTMLElement>('.modal-mask [data-act="cancel"]')?.click();
+  await tick(40);
+});
+
 await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完', async () => {
   click('[data-act="new-game"]');
   click('[data-ai="1"]');
@@ -4047,6 +3975,8 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   click('[data-act="start"]');
   await tick(80);
   assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '遮罩应该出现');
+  click('#draft [data-draft-act="start"]');
+  await tick(80);
 
   // 只替甲方点；轮到 AI 时卡片会全部禁用，这里等它自己动（每步 600ms）
   for (let i = 0; i < 40; i++) {

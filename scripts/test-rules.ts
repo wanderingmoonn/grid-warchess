@@ -72,6 +72,7 @@ import {
   draftBudget,
   draftCandidates,
   draftPickOrder,
+  draftSecondsLeft,
   eraWindowOk,
   remainingUnits,
 } from '../src/core/draft.ts';
@@ -11008,6 +11009,13 @@ test('掠水：飞机能停在深水上，陆军进不去', () => {
 
 console.log('\n选卡模式');
 
+/** 从"等待开局"进入禁用（选卡不再是开局即禁用，先得有人点开始） */
+function startStep(state: GameState): GameState {
+  const r = applyAction(state, { type: 'DRAFT_START', at: 1_000_000 }, 'A');
+  assert.ok(r.ok, r.ok ? '' : `开始选卡失败：${r.reason}`);
+  return r.ok ? r.state : state;
+}
+
 /** 禁用一步 */
 function banStep(state: GameState, side: PlayerId, unitId: string): GameState {
   const r = applyAction(state, { type: 'DRAFT_BAN', unitId, at: state.draft!.deadline }, side);
@@ -11025,7 +11033,7 @@ function pickStep(state: GameState, unitId: string): GameState {
 
 /** 把整轮 BP 打完（默认按池子顺序拿，保证是合法动作） */
 function finishDraft(state: GameState): GameState {
-  let st = state;
+  let st = state.draft!.phase === 'lobby' ? startStep(state) : state;
   const pool = st.draft!.pool;
   st = banStep(st, 'A', pool[0]!);
   st = banStep(st, 'B', pool[1]!);
@@ -11043,7 +11051,7 @@ test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位
   assert.equal(draft.pool.length, DRAFT_POOL_BASE, `原版应抽 ${DRAFT_POOL_BASE} 个，实际 ${draft.pool.length}`);
   assert.equal(draft.banSlots, DRAFT_BAN_BASE);
   assert.equal(draft.pickSlots, DRAFT_PICK_BASE);
-  assert.equal(draft.phase, 'ban');
+  assert.equal(draft.phase, 'lobby', '开局先停在"等待开局"，不是直接禁用');
 
   // 池子里的东西：战斗单位，或者"不产兵、不是桥"的建筑
   for (const id of draft.pool) {
@@ -11144,16 +11152,62 @@ test('选卡：进度号每走一步 +1（联机靠它做乐观锁）', () => {
   const start = s.draft!.seq;
   assert.equal(start, 1, '开局进度号是 1，和房间那一行的 turn 对得上');
 
+  s = startStep(s);
+  assert.equal(s.draft!.seq, start + 1, '"开始选卡"也算一步：联机时它也要能被对面看见');
   s = banStep(s, 'A', s.draft!.pool[0]!);
-  assert.equal(s.draft!.seq, start + 1, '一次禁用一个号');
+  assert.equal(s.draft!.seq, start + 2, '一次禁用一个号');
   s = banStep(s, 'B', s.draft!.pool[1]!);
-  assert.equal(s.draft!.seq, start + 2, '两边都禁完只加两个号（进入选人不额外加）');
+  assert.equal(s.draft!.seq, start + 3, '两边都禁完只加两个号（进入选人不额外加）');
   s = pickStep(s, s.draft!.pool[2]!);
-  assert.equal(s.draft!.seq, start + 3, '一次选人一个号');
+  assert.equal(s.draft!.seq, start + 4, '一次选人一个号');
+});
+
+test('选卡：开局停在"等待开局"，不计时、不能禁用，点开始才进禁用', () => {
+  let s = fresh({ draftMode: true }, 7301);
+  assert.equal(s.draft!.phase, 'lobby');
+  assert.equal(s.draft!.deadline, 0, 'lobby 不该有倒计时（要等人入座）');
+  assert.equal(draftSecondsLeft(s, Date.now()), 0);
+
+  // 还没开始就想禁用/选人/超时：一律拒
+  const ban = applyAction(s, { type: 'DRAFT_BAN', unitId: s.draft!.pool[0]!, at: 1 }, 'A');
+  assert.ok(!ban.ok, 'lobby 里不该能直接禁用');
+  const timeout = applyAction(s, { type: 'DRAFT_TIMEOUT', at: Date.now() + 60_000 }, 'A');
+  assert.ok(!timeout.ok, 'lobby 里没有"超时"这回事');
+
+  // 走棋同样被拦着
+  assert.match(applyAction(s, { type: 'END_TURN' }).reason ?? '', /选卡/);
+
+  s = startStep(s);
+  assert.equal(s.draft!.phase, 'ban');
+  assert.ok(s.draft!.deadline > 1_000_000, '开始之后才有截止时间');
+});
+
+test('选卡：可以整轮跳过——这一局按原版用全部兵种', () => {
+  // 在 lobby 就跳过
+  let s = fresh({ draftMode: true }, 7302);
+  const skipped = applyAction(s, { type: 'DRAFT_SKIP', at: Date.now() }, 'A');
+  assert.ok(skipped.ok, skipped.ok ? '' : skipped.reason);
+  s = skipped.state;
+  assert.equal(s.draft!.phase, 'done');
+  assert.equal(s.draft!.skipped, true);
+  assert.equal(canUseType(s, 'A', 'tank'), true, '跳过之后名单限制整个不生效');
+  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 5), false, '跳过的局连"旧兵照样能造"也回到原规则');
+
+  // 跳过之后就能正常走棋了
+  const end = applyAction(s, { type: 'END_TURN' });
+  assert.ok(end.ok, end.ok ? '' : `跳过选卡后应该能结束回合：${end.reason}`);
+
+  // 选到一半也能跳（对面掉线时用得上）
+  let t = startStep(fresh({ draftMode: true }, 7303));
+  t = banStep(t, 'A', t.draft!.pool[0]!);
+  const mid = applyAction(t, { type: 'DRAFT_SKIP', at: Date.now() }, 'B');
+  assert.ok(mid.ok, mid.ok ? '' : mid.reason);
+  assert.equal(mid.state.draft!.phase, 'done');
+  assert.equal(mid.state.draft!.skipped, true);
 });
 
 test('选卡：盲禁——两边都交完才揭晓，禁掉的兵谁都拿不到', () => {
-  let s = fresh({ draftMode: true }, 7105);
+  let s = startStep(fresh({ draftMode: true }, 7105));
   const pool = s.draft!.pool;
   const banned = pool[0]!;
 
@@ -11257,7 +11311,7 @@ test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () =>
 });
 
 test('选卡：超时——禁用视为放弃，选人由系统补一个', () => {
-  let s = fresh({ draftMode: true }, 7112);
+  let s = startStep(fresh({ draftMode: true }, 7112));
   // 只让 A 交禁用，B 超时
   s = banStep(s, 'A', s.draft!.pool[0]!);
   const late = s.draft!.deadline + 1;

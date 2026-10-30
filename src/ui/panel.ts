@@ -9,6 +9,7 @@
 import {
   CATEGORY_NAME,
   CONFIG,
+  ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
   eraDef,
@@ -41,6 +42,7 @@ import {
   elementOf,
   maxHpOf, 
   heroSkillsOf,
+  ordersOf,
   recruitResCost,
   recruitSpawnCells,
   unitIncome,
@@ -772,8 +774,18 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const city = selectedCityId ? cityById(s, selectedCityId) : undefined;
   if (!city) return '';
 
-  const readOnly = input.spectator === true || input.commander === true;
-  const mine = !readOnly && city.owner === me;
+  /*
+   * 指挥官模式下，自己的城仍然算"我的"。
+   *
+   * 原来这里把 readOnly 一刀切成 spectator || commander，于是指挥官模式的产兵面板
+   * 整个不渲染——玩家只能在顶端的下拉框里排兵，跟常规模式（点城 → 右边点兵）是两套手感。
+   * 现在两种模式共用同一块面板，区别只在**点下去之后**做什么：
+   *   常规模式：立刻扣钱出兵；指挥官模式：把这一格排进本回合的生产队列。
+   */
+  const spectating = input.spectator === true;
+  const ordering = input.commander === true;
+  const mine = !spectating && city.owner === me;
+  const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = city.hp / city.maxHp;
   const era = eraDef(city.era);
   const garrison = unitsOf(s, city.owner).filter((u) =>
@@ -823,7 +835,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const unitButton = (def: UnitTypeDef) => {
     const slotsOk = def.domain === 'water' ? hasPort : freeSlots > 0;
-    const disabled = !myTurn || !slotsOk;
+    // 下单模式下"城里有没有空位 / 现在轮不轮得到你"都不作数：那些是 AI 执行那一回合才面对的事
+    const disabled = ordering ? queueFull : !myTurn || !slotsOk;
 
     let extra = '';
     if (def.incomeByTerrain) {
@@ -844,7 +857,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       }
     }
 
-    return recruitButton(s, me, def, disabled, extra);
+    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id);
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -869,12 +882,15 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const upgradeBlock =
     mine && nextEra && upgradeCost !== null
-      ? `<button class="upgrade-btn" data-act="upgrade" ${!myTurn || gold < upgradeCost ? 'disabled' : ''}>
+      ? `<button class="upgrade-btn" data-act="${ordering ? 'order-add' : 'upgrade'}"${
+          ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
+        } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
            <span class="upgrade-main">
              <b>升级到「${nextEra.name}」时代</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
            </span>
            <span class="price">${upgradeCost}</span>
+           ${ordering ? '<span class="order-tag">＋队列</span>' : ''}
          </button>`
       : mine
         ? '<div class="hint">已经是最高时代。</div>'
@@ -896,7 +912,10 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     ${upgradeBlock}
     ${
       mine
-        ? `<div class="card-title" style="margin-top:14px">生产</div>
+        ? `<div class="card-title" style="margin-top:14px">${
+                    ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
+                  }</div>
+           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
@@ -909,9 +928,11 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
            }
            <div class="hint" style="margin-top:10px">
              ${
-               freeSlots > 0
-                 ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
-                 : '城内已站满，先让部队挪一挪。'
+               ordering
+                 ? '排进队列的是「这座城 · 这个兵」，AI 执行那一回合才扣钱出兵；队列可以在顶部随时删。'
+                 : freeSlots > 0
+                   ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
+                   : '城内已站满，先让部队挪一挪。'
              }
              ${
                locked.length > 0
@@ -1035,12 +1056,21 @@ function yieldShort(def: UnitTypeDef): string {
 }
 
 /** 产兵按钮：城市和军营共用一套写法，省得两处的样式慢慢跑偏 */
+/**
+ * 产兵按钮。
+ *
+ * `mode === 'order'` 是指挥官模式：点下去不是立刻造，而是**往本回合的生产队列里排一格**。
+ * 两种模式共用同一个按钮外观，是因为它们对玩家是同一件事（"我要这个兵"），
+ * 只是付钱和出兵的人不同——按钮长得不一样反而要重新学一遍。
+ */
 function recruitButton(
   s: GameState,
   me: PlayerId,
   def: UnitTypeDef,
   disabled: boolean,
   extra: string,
+  mode: 'recruit' | 'order' = 'recruit',
+  site = '',
 ): string {
   const price = recruitResCost(s, me, def);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
@@ -1049,18 +1079,25 @@ function recruitButton(
     def.hero === true && !(s.unlocked?.[me] ?? []).includes(def.id) ? (def.unlockCost ?? 0) : 0;
   const aliveHere = def.hero === true && s.units.some((u) => u.owner === me && u.type === def.id);
   const payCost = unlockFee > 0 ? { ...price, gold: (price.gold ?? 0) + unlockFee } : price;
-  const blocked = disabled || aliveHere || !canPay(s.players[me], payCost);
+  // 下单模式下不看"现在够不够钱"：钱是 AI 执行那一回合才花的，
+  // 用当下的余额把按钮禁掉，等于逼玩家先把钱攒够再来排计划。
+  const blocked =
+    mode === 'order' ? disabled || aliveHere : disabled || aliveHere || !canPay(s.players[me], payCost);
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
   // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
   // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
   const detail = `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 移 ${def.move} · 射 ${def.range}${tag}`;
-  return `<button class="recruit-btn" data-act="recruit" data-type="${def.id}" ${blocked ? 'disabled' : ''}>
+  const act = mode === 'order' ? 'order-add' : 'recruit';
+  const siteAttr = mode === 'order' && site ? ` data-site="${site}"` : '';
+  const tail =
+    mode === 'order' ? `<span class="order-tag">＋队列</span>` : '';
+  return `<button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
     </span>
-    <span class="price">${costLabel(payCost)}</span>
+    <span class="price">${costLabel(payCost)}</span>${tail}
   </button>`;
 }
 
@@ -1086,8 +1123,10 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   if (!camp) return '';
 
   const def = utype(s, camp.type);
-  const readOnly = input.spectator === true || input.commander === true;
-  const mine = !readOnly && camp.owner === me;
+  // 同城市面板：指挥官模式里军营也是"我的"，产兵列表照常显示，点下去是排进队列
+  const ordering = input.commander === true;
+  const mine = input.spectator !== true && camp.owner === me;
+  const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = camp.hp / def.maxHp;
 
   // 补给：军营的时代在落成那一刻就钉死了（Unit.era），后方城市升级不会
@@ -1139,7 +1178,15 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                   ? ` · ${waterSlots.length} 处水面可选`
                   : ' · 下水'
                 : '';
-            return recruitButton(s, me, d, !myTurn || !slotsOk, extra);
+            return recruitButton(
+              s,
+              me,
+              d,
+              ordering ? queueFull : !myTurn || !slotsOk,
+              extra,
+              ordering ? 'order' : 'recruit',
+              camp.id,
+            );
           })
           .join('')}</div>
       </div>`;
@@ -1175,7 +1222,10 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="info-row"><span>补给</span><b>${supplyLine}</b></div>
     ${
       mine && supply
-        ? `<div class="card-title" style="margin-top:14px">生产</div>
+        ? `<div class="card-title" style="margin-top:14px">${
+                    ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
+                  }</div>
+           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
@@ -1191,6 +1241,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
              <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。
+             ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
              ${

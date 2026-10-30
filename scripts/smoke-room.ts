@@ -74,6 +74,14 @@ if (!bpRow) throw new Error('BP 房间建完读不到');
 if (bpRow.turn !== bpBase.draft!.seq) throw new Error('建房时 turn 列应该是进度号，不是回合数');
 
 let bp = bpBase;
+// 开局停在"等待开局"：这一步也要能同步到对面（进度号 +1）
+const seqLobby = bp.draft!.seq;
+const started = applyAction(bp, { type: 'DRAFT_START', at: Date.now() }, 'A');
+if (!started.ok) throw new Error(started.reason);
+bp = started.state;
+if (!(await submitDraft(bpRoom.code, bp, seqLobby))) throw new Error('"开始选卡"没交上去');
+console.log('开始选卡', { 阶段: bp.draft!.phase, 进度号: bp.draft!.seq });
+
 const seq0 = bp.draft!.seq;
 const aBan = applyAction(bp, { type: 'DRAFT_BAN', unitId: bp.draft!.pool[0]!, at: bp.draft!.deadline }, 'A');
 if (!aBan.ok) throw new Error(aBan.reason);

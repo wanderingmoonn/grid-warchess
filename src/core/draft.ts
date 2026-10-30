@@ -263,12 +263,18 @@ export function draftPickOrder(picks: number): PlayerId[] {
   return out;
 }
 
-/** 开局造一份选卡状态（由 setup.createMatch 调用） */
-export function createDraft(state: GameState, now: number): DraftState {
+/**
+ * 开局造一份选卡状态（由 setup.createMatch 调用）。
+ *
+ * 不需要"现在几点"：开局停在 lobby，不计时；开始禁用的那一刻才由 `DRAFT_START`
+ * 带上 `at` 把截止时间钉下来（这样联机双方用的是同一台机器的钟，不会各算各的）。
+ */
+export function createDraft(state: GameState): DraftState {
   const budget = draftBudget(state);
   const sampled = sampleDraftPool(state, budget.pool, state.seed ^ 0x5eed1);
   return {
-    phase: 'ban',
+    // 先进"等待开局"：建房、贴邀请链接都发生在这一步（见 DraftPhase 的说明）
+    phase: 'lobby',
     pool: sampled.pool,
     banSlots: budget.bans,
     pickSlots: budget.picks,
@@ -278,7 +284,8 @@ export function createDraft(state: GameState, now: number): DraftState {
     step: 0,
     // 联机锁从 1 起：房间那一行建出来时 turn 也是 1，第一笔 BP 提交正好对得上
     seq: 1,
-    deadline: now + DRAFT_BAN_MS,
+    // lobby 不计时：等人入座可能要好几分钟，给倒计时只会逼人乱点
+    deadline: 0,
     history: [],
   };
 }
@@ -297,6 +304,8 @@ export function createDraft(state: GameState, now: number): DraftState {
 export function canUseType(state: GameState, side: PlayerId, typeId: string): boolean {
   const draft = state.draft;
   if (!draft) return true;
+  // 跳过选卡＝这一局按原版打，名单限制整个不生效
+  if (draft.skipped) return true;
   const def = state.unitTypes[typeId];
   if (!def) return false;
   if (draftAlwaysAllowed(def)) return true;
@@ -313,7 +322,8 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
  */
 export function eraWindowOk(state: GameState, def: UnitTypeDef, era: number): boolean {
   if (def.era > era) return false;
-  if (state.draft) return true;
+  // 只有"真的在选卡"才放开下限；跳过的局等于没开这个模式
+  if (state.draft && !state.draft.skipped) return true;
   return def.era >= era - 1;
 }
 
@@ -361,6 +371,38 @@ function label(state: GameState, id: string): string {
 export function applyDraftAction(s: GameState, action: Action, actor: PlayerId): ActionResult {
   const draft = s.draft;
   if (!draft) return { ok: false, reason: '这一局没有开选卡模式' };
+
+  if (action.type === 'DRAFT_START') {
+    if (draft.phase !== 'lobby') return { ok: false, reason: '这一局的选卡已经开始了' };
+    draft.phase = 'ban';
+    draft.deadline = action.at + DRAFT_BAN_MS;
+    draft.seq += 1;
+    s.log = [
+      ...s.log,
+      { turn: s.turn, player: 'A', open: true, text: '选卡开始：双方同时禁用' },
+    ];
+    return { ok: true, state: s };
+  }
+
+  if (action.type === 'DRAFT_SKIP') {
+    if (draft.phase === 'done') return { ok: false, reason: '选卡已经结束了' };
+    const stage = draft.phase;
+    draft.phase = 'done';
+    draft.skipped = true;
+    draft.deadline = 0;
+    draft.seq += 1;
+    s.current = 'A';
+    s.log = [
+      ...s.log,
+      {
+        turn: s.turn,
+        player: 'A',
+        open: true,
+        text: stage === 'lobby' ? '跳过选卡：本局用全部兵种' : '中途跳过选卡：本局用全部兵种',
+      },
+    ];
+    return { ok: true, state: s };
+  }
 
   if (action.type === 'DRAFT_BAN') {
     if (draft.phase !== 'ban') return { ok: false, reason: '禁用阶段已经结束了' };
@@ -415,6 +457,8 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
 
   if (action.type === 'DRAFT_TIMEOUT') {
     if (draft.phase === 'done') return { ok: false, reason: '选卡已经结束了' };
+    // lobby 不计时：这一屏是"等人入座"，超时兜底在这里没有意义
+    if (draft.phase === 'lobby') return { ok: false, reason: '还没开始选卡' };
     if (action.at < draft.deadline) return { ok: false, reason: '还没到时限' };
 
     if (draft.phase === 'ban') {
@@ -596,6 +640,7 @@ function draftValueOf(def: UnitTypeDef | undefined): number {
 export function draftPhaseLabel(state: GameState): string {
   const draft = state.draft;
   if (!draft) return '';
+  if (draft.phase === 'lobby') return '等待开局';
   if (draft.phase === 'ban') return '禁用阶段';
   if (draft.phase === 'pick') return `选人 ${draft.step + 1} / ${draft.order.length}`;
   return '选卡完成';
@@ -604,6 +649,7 @@ export function draftPhaseLabel(state: GameState): string {
 /** 秒数（给倒计时用），小于 0 归零 */
 export function draftSecondsLeft(state: GameState, now: number): number {
   const draft = state.draft;
-  if (!draft || draft.phase === 'done') return 0;
+  // lobby 不计时（要等人），结束/跳过也不计
+  if (!draft || draft.phase === 'done' || draft.phase === 'lobby') return 0;
   return Math.max(0, Math.ceil((draft.deadline - now) / 1000));
 }

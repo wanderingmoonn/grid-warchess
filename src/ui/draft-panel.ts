@@ -93,12 +93,103 @@ function sideBlock(
   </div>`;
 }
 
+export interface DraftLobbyInfo {
+  code: string;
+  /** 邀请链接（带 ?room= 的那个） */
+  link: string;
+  /** 对面已经入座了吗 */
+  peerSeated: boolean;
+}
+
 export interface DraftScreenCtx {
   /** 本地设备现在替哪一方操作（热座会换手） */
   seat: PlayerId;
   now: number;
   /** 这一方是不是 AI（用来写"AI 正在挑"而不是"轮到你了"） */
   isAi: (side: PlayerId) => boolean;
+  /** 联机房间信息（没建房时是 null） */
+  room?: DraftLobbyInfo | null;
+}
+
+/** 顶栏右上角的两颗按钮：跳过与退出。两个阶段都要能点到 */
+function headActions(isLobby: boolean): string {
+  return `<div class="draft-head-actions">
+    <button class="draft-btn" data-draft-act="skip" title="${
+      isLobby ? '不选卡，这一局直接用全部兵种开打' : '放弃这一轮选卡，改用全部兵种继续'
+    }">跳过选卡</button>
+    <button class="draft-btn is-quiet" data-draft-act="exit" title="放弃这一局，回到开局设置">退出</button>
+  </div>`;
+}
+
+/** 转义进 HTML 属性/文本的东西（房间链接里有 & 和 ?） */
+function esc(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 等待开局（lobby）。
+ *
+ * 这一屏存在的理由很具体：选卡遮罩是整屏的，一盖上去顶栏的「联机」「新对局」
+ * 就都点不到了——于是"建房把链接发给朋友"这件事在 BP 期间根本做不到。
+ * 所以开局先停在这里：能建房、能看到邀请链接、能等对面入座，然后再开始禁用。
+ */
+function lobbyHtml(s: GameState, ctx: DraftScreenCtx): string {
+  const draft = s.draft!;
+  const room = ctx.room ?? null;
+  const bonus = draft.pickSlots > 6 || draft.banSlots > 1
+    ? `（本局按扩展加成：各禁 ${draft.banSlots}、各选 ${draft.pickSlots}）`
+    : '';
+
+  const roomBlock = room
+    ? `<div class="lobby-room">
+        <div class="lobby-row">
+          <span class="lobby-label">房间码</span>
+          <b class="lobby-code">${esc(room.code)}</b>
+          <span class="lobby-status ${room.peerSeated ? 'is-ok' : ''}">${
+            room.peerSeated ? '对面已入座' : '等待对面入座…'
+          }</span>
+        </div>
+        <div class="lobby-row">
+          <input class="lobby-link" readonly value="${esc(room.link)}" aria-label="邀请链接" />
+          <button class="draft-btn" data-draft-act="copy-link">复制</button>
+        </div>
+      </div>`
+    : '';
+
+  return `<div class="draft">
+    <header class="draft-head">
+      <div class="draft-head-main">
+        <span class="draft-step">选卡 · 等待开局</span>
+        <span class="draft-seat">${room ? `房间 ${esc(room.code)}` : '本机 / 热座'}</span>
+      </div>
+      ${headActions(true)}
+      <div class="draft-hint">${
+        room
+          ? room.peerSeated
+            ? '对面已经入座，点「开始选卡」进入禁用'
+            : '把上面的链接发给他，他点开就入座；入座之后点「开始选卡」'
+          : '想联机就先建房、把链接发过去；也可以直接在本机开打（热座轮流操作）'
+      }</div>
+    </header>
+    <section class="draft-lobby">
+      <h2>这一局能造什么，由这轮选卡决定</h2>
+      <p class="draft-lobby-lead">
+        系统抽出 <b>${draft.pool.length}</b> 个兵种组成池子，双方各禁用 <b>${draft.banSlots}</b> 个，
+        再从剩下的里各选 <b>${draft.pickSlots}</b> 个${bonus}。这一局只能造自己选到的，
+        外加经济、建造、军营这些骨架单位。
+      </p>
+      <div class="lobby-actions">
+        <button class="draft-btn is-primary" data-act="online">联机 · 建房 / 加入</button>
+        <button class="draft-btn is-primary" data-draft-act="start">开始选卡</button>
+      </div>
+      ${roomBlock}
+      <p class="draft-hint">不想选卡也可以点右上角「跳过选卡」，这一局按原版用全部兵种开打。</p>
+    </section>
+  </div>`;
 }
 
 /**
@@ -110,6 +201,8 @@ export interface DraftScreenCtx {
 export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const view = draftView(s);
   if (!view) return '';
+  // 等待开局单独一屏：那里还没有禁/选，画池子只会让人以为可以点
+  if (view.phase === 'lobby') return lobbyHtml(s, ctx);
   const draft = s.draft!;
   const seat = ctx.seat;
   const aiTurn = view.toAct ? ctx.isAi(view.toAct) : false;
@@ -186,6 +279,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         <span class="draft-seat">${sideName(s, seat)}操作中</span>
       </div>
       <div class="draft-timer ${secs <= 5 ? 'is-hurry' : ''}" data-ref="draft-timer">${secs}s</div>
+      ${headActions(false)}
       <div class="draft-hint">${hint}</div>
     </header>
     <div class="draft-body">

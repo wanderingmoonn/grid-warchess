@@ -118,8 +118,6 @@ export function createMatch(
   config: MatchConfig,
   seed: number,
   customUnits: Record<string, UnitTypeDef> = {},
-  /** 当前挂钟时间：选卡模式的倒计时要一个起点。测试传固定值即可复现 */
-  now: number = Date.now(),
 ): GameState {
   // 先合并：内置兵种 + 玩家自定义 + 已启用扩展自带的兵种
   //
@@ -347,7 +345,7 @@ export function createMatch(
 
   // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
   if (config.draftMode === true) {
-    state.draft = createDraft(state, now);
+    state.draft = createDraft(state);
     state.log.push({
       turn: state.turn,
       player: 'A',
