@@ -51,6 +51,7 @@ import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
+  airwingOps,
   deckLine,
   deckOf,
   deckSpecOf,
@@ -60,6 +61,7 @@ import {
   stowPlane,
 } from '../src/core/naval-carrier.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
   newTimeline,
   noteAction,
@@ -10460,6 +10462,12 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
 
   assert.equal(deckSpecOf('nv_carrier')!.capacity, 4, '航母应该有四个机位');
   assert.equal(deckSpecOf('gunboat'), null, '没登记的船没有甲板');
+
+  // 这条用例守的是**契约**，不是空军包本身：先把真实的实现摘掉，
+  // 单独验"没人接入时面板怎么说"。不摘的话跑完空军那几条用例再跑这条，
+  // 甲板上会挂着「舰载航空兵」，断言就变成在测另一件事了。
+  const real = airwingOps();
+  registerAirwingOps(null);
   assert.equal(deckLine(carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
 
   // 收两架进去
@@ -10477,12 +10485,12 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     launch: () => ({ ok: true }),
     recover: () => ({ ok: true }),
   });
-  try {
-    assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
-  } finally {
-    registerAirwingOps(null);
-  }
+  assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
+
+  // 注销之后要退回"未接入"，不能残留；再还原成真实实现，别把后面几条用例弄脏
+  registerAirwingOps(null);
   assert.ok(deckLine(carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
+  registerAirwingOps(real);
 
   // 取下一架：按索引，取完就少一个
   const taken = popPlane(carrier, 0);
@@ -10492,6 +10500,7 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
 });
 
 test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', () => {
+  const real = airwingOps();
   let calls = 0;
   registerAirwingOps({
     id: 'test-air-2',
@@ -10516,7 +10525,7 @@ test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', 
     assert.ok(r.ok, r.ok ? '' : r.reason);
     assert.ok(calls >= 1, '轮到航母这一方时，甲板整备必须被叫一次');
   } finally {
-    registerAirwingOps(null);
+    registerAirwingOps(real);
   }
 });
 
@@ -10692,6 +10701,224 @@ test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
   const oiler = place(s2, 'A', 'nv_oiler', 6, 7);
   assert.ok(movePower(s2, mate) >= baseMove + 1, '贴着补给舰应该 +1 移动');
   assert.ok(oiler.hp > 0);
+});
+
+console.log('\n空军扩展');
+
+/** 空军两包 + 各自需要的前置，测试里反复要写 */
+const AIR_ALL = ['pack-contemporary', 'naval-fleet', 'naval-modern', 'air-corps', 'air-modern'];
+
+test('空军：两包都注册上，18 个兵种全在空气层', () => {
+  const ids = new Set(allAbilities().map((a) => a.id));
+  const planes = [...(AIR_CORPS.units ?? []), ...(MODERN_AIR.units ?? [])];
+  assert.equal(planes.length, 18, `空军应该有 18 个兵种，现在 ${planes.length} 个`);
+
+  for (const u of planes) {
+    assert.equal(u.layer, 'air', `${u.name} 应该待在空中层`);
+    assert.equal(u.flight, true, `${u.name} 应该能掠水，否则它飞不过一条河`);
+    assert.ok(u.era >= 4 && u.era <= 6, `${u.name} 的时代 ${u.era} 越界`);
+    assert.equal(u.short.length, 1, `${u.name} 的图标应该是一个字`);
+    assert.ok(u.cost > 0 && u.maxHp > 0, `${u.name} 的数值不合法`);
+    for (const a of u.abilities ?? []) {
+      assert.ok(ids.has(a), `${u.name} 引用了不存在的能力 ${a}`);
+    }
+  }
+  assert.ok(!planes.some((u) => u.domain === 'water'), '飞机不该被登记成水面单位');
+});
+
+test('空军：现代空军依赖「现代」与基础空军，单勾它什么都没有', () => {
+  assert.deepEqual(MODERN_AIR.requires, ['pack-contemporary', 'air-corps']);
+
+  const alone = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['air-modern'] },
+    9101,
+  );
+  assert.ok(!alone.unitTypes['af_jet'], '前置没开时喷气机不该出现在兵种表里');
+
+  const withBase = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 6,
+      expansionIds: ['pack-contemporary', 'air-corps', 'air-modern'],
+    },
+    9102,
+  );
+  assert.ok(withBase.unitTypes['af_jet'], '三个包都开了才有喷气机');
+
+  const era6 = (MODERN_AIR.units ?? []).filter((u) => u.era === 6);
+  assert.ok(era6.length >= 8, `第六时代至少要补 8 种飞机，现在 ${era6.length} 种`);
+});
+
+test('制空：战斗机打空中目标，比打同血同甲的地面目标更疼', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  for (const [x, y] of [
+    [5, 5],
+    [5, 6],
+    [6, 5],
+  ]) {
+    putTerrain(s, x!, y!, 'plain');
+  }
+  const fighter = place(s, 'A', 'af_fighter', 5, 5);
+  // 同血同甲的"地面版轰炸机"：只差一个层字段，别的都一样
+  s.unitTypes['probe_ground'] = { ...s.unitTypes['af_heavy_bomber']!, layer: undefined, flight: false };
+  const bomberAir = place(s, 'B', 'af_heavy_bomber', 5, 6);
+  const bomberGround = place(s, 'B', 'probe_ground', 6, 5);
+
+  const vsAir = computeDamage(s, fighter, bomberAir);
+  const vsGround = computeDamage(s, fighter, bomberGround);
+  assert.ok(vsAir > vsGround, `对空 ${vsAir} 应该高于对地 ${vsGround}——否则制空这条能力等于没有`);
+});
+
+test('对地/反舰：两条加成各管一层，不会串味', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  for (const [x, y] of [
+    [5, 5],
+    [5, 6],
+    [6, 5],
+  ]) {
+    putTerrain(s, x!, y!, 'plain');
+  }
+  const base = s.unitTypes['af_heavy_bomber']!;
+  s.unitTypes['probe_air'] = { ...base, layer: 'air', flight: true };
+  s.unitTypes['probe_land'] = { ...base, layer: undefined, flight: false };
+  s.unitTypes['probe_ship'] = { ...base, layer: undefined, flight: false, domain: 'water' };
+
+  // 强击机只有「对地攻击」：打地面层更疼，打空中层没有加成
+  const striker = place(s, 'A', 'af_sturmovik', 5, 5);
+  const groundTarget = place(s, 'B', 'probe_land', 5, 6);
+  const airTarget = place(s, 'B', 'probe_air', 6, 5);
+  assert.ok(
+    computeDamage(s, striker, groundTarget) > computeDamage(s, striker, airTarget),
+    '强击机打地面应该比打飞机更疼',
+  );
+
+  // 俯冲轰炸机只有「反舰」：打船更疼，打陆地没有加成
+  const diver = place(s, 'A', 'af_dive_bomber', 5, 5);
+  const shipTarget = place(s, 'B', 'probe_ship', 5, 6);
+  const landTarget = place(s, 'B', 'probe_land', 6, 5);
+  assert.ok(
+    computeDamage(s, diver, shipTarget) > computeDamage(s, diver, landTarget),
+    '俯冲轰炸机打船应该比打陆地更疼',
+  );
+});
+
+test('隐身：迷雾里贴脸才现形，打完人不挨反击', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9104,
+  );
+  s.units = [];
+  s.fog = true;
+  const ghost = place(s, 'A', 'af_stealth', 5, 5);
+  const foe = place(s, 'B', 'militia', 9, 5);
+  assert.ok(isHiddenFrom(s, ghost, 'B'), '隔着四格，隐身机应该藏得住');
+  foe.x = 6;
+  foe.y = 5;
+  assert.ok(!isHiddenFrom(s, ghost, 'B'), '贴脸就该现形');
+
+  // 换上同一条思路的另一面：打了人不挨反击
+  const hpAfterHit = (type: string): number => {
+    const st = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+      9105,
+    );
+    st.units = [];
+    st.fog = false;
+    st.current = 'A';
+    putTerrain(st, 5, 5, 'plain');
+    putTerrain(st, 5, 6, 'plain');
+    const atk = place(st, 'A', type, 5, 5);
+    // 一架 200 血、射程 3 的战略轰炸机当靶子：它一定活得下来，也一定够得着还手
+    const tank = place(st, 'B', 'af_strategic', 5, 6);
+    const r = applyAction(st, { type: 'ATTACK', unitId: atk.id, targetId: tank.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    return r.state.units.find((u) => u.id === atk.id)!.hp;
+  };
+
+  assert.equal(hpAfterHit('af_stealth'), 85, '隐身机打完不该掉血——它先手，对面还不了手');
+  assert.ok(hpAfterHit('af_jet') < 90, '普通喷气机对同样的目标会挨一下反击');
+});
+
+test('舰载机白名单：只有四种飞机上得了甲板', () => {
+  const ops = airwingOps();
+  assert.ok(ops, '空军包应该在模块加载时就把甲板实现注册好');
+  const can = (id: string): boolean =>
+    ops!.canBoard({ state: null as never, carrier: null as never, planeTypeId: id });
+
+  assert.equal(can('af_naval_plane'), true, '舰载机当然能上舰');
+  assert.equal(can('af_jet'), true, '喷气机上舰是常识');
+  assert.equal(can('af_awacs'), true, '预警机本来就是舰载的');
+  assert.equal(can('af_heavy_bomber'), false, '重型轰炸机上不了舰');
+  assert.equal(can('af_strategic'), false, '战略轰炸机上不了舰');
+  assert.equal(can('af_transport'), false, '运输机不是舰载机');
+});
+
+test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过来', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9106,
+  );
+  s.units = [];
+  for (let y = 6; y <= 10; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const carrier = place(s, 'A', 'nv_carrier', 7, 8);
+
+  // 手工把一架"带伤返航"的舰载机塞进甲板（正式流程见下一条）
+  const plane = place(s, 'A', 'af_naval_plane', 10, 10);
+  plane.hp = 40;
+  assert.ok(stowPlane(carrier, plane), '四个机位应该收得下第一架');
+  s.units = s.units.filter((u) => u.id !== plane.id);
+  assert.equal(deckUsed(carrier), 1);
+
+  const out = launchFromCarrier(s, carrier);
+  assert.ok(out.ok, out.ok ? '' : `起飞失败：${out.reason}`);
+  assert.equal(deckUsed(carrier), 0, '放飞之后甲板少一架');
+  const flying = s.units.find((u) => u.type === 'af_naval_plane');
+  assert.ok(flying, '棋盘上应该多出一架飞机');
+  assert.equal(flying!.hp, 40, '带伤起飞要带着伤，不能借起飞回血');
+  assert.equal(flying!.moved, true, '起飞占掉这一回合的移动');
+  assert.ok(
+    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf('nv_carrier')!.launchRange,
+    '落点要在起飞半径之内',
+  );
+
+  const back = recoverToCarrier(s, carrier, flying!);
+  assert.ok(back.ok, back.ok ? '' : `返航失败：${back.reason}`);
+  assert.equal(deckUsed(carrier), 1, '返航之后甲板又多一架');
+  assert.ok(!s.units.some((u) => u.id === flying!.id), '进了甲板就不该再占棋盘格');
+});
+
+test('整备：轮到航母时先收、再修 8 点、后放一架', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9107,
+  );
+  s.units = [];
+  for (let y = 6; y <= 10; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const carrier = place(s, 'A', 'nv_carrier', 7, 8);
+
+  const plane = place(s, 'A', 'af_naval_plane', 10, 10);
+  plane.hp = 40;
+  stowPlane(carrier, plane);
+  s.units = s.units.filter((u) => u.id !== plane.id);
+
+  s.current = 'B'; // 结束 B 的回合 → 轮到 A，触发整备
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const flying = r.state.units.find((u) => u.type === 'af_naval_plane');
+  assert.ok(flying, '整备完应该放出去一架');
+  assert.equal(flying!.hp, 48, '先修 8 点再放飞：40 → 48');
+  assert.equal(deckOf(r.state.units.find((u) => u.id === carrier.id)!).length, 0, '放出去之后甲板空了');
+});
+
+test('掠水：飞机能停在深水上，陆军进不去', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  putTerrain(s, 3, 3, 'deep');
+  assert.equal(canStandAt(s, 3, 3, 'af_scout'), true, '飞机应该能停在深水上（航母头顶也是空域）');
+  assert.equal(canStandAt(s, 3, 3, 'militia'), false, '陆军进不了深水');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

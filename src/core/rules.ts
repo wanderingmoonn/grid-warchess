@@ -1021,7 +1021,9 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
     // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
     // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
     // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
-    if (!(tile.terrain === 'water' && crossesWater(def))) {
+    // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
+    // （浅流本来就可通行，不用单列。）
+    if (!((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def))) {
       return false;
     }
   }
