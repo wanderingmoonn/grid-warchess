@@ -358,7 +358,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                        禁用时限 <span class="field-hint">只看一眼名单的事，给短一点</span>
                      </div>
                      <div class="chip-row">
-                       ${[15_000, 25_000, 40_000]
+                       ${[15_000, 25_000, 40_000, 60_000]
                          .map(
                            (ms) =>
                              `<button class="chip ${
@@ -371,7 +371,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                        选人时限 <span class="field-hint">每一手单独计时，选出六轮</span>
                      </div>
                      <div class="chip-row">
-                       ${[20_000, 30_000, 45_000]
+                       ${[20_000, 30_000, 45_000, 75_000]
                          .map(
                            (ms) =>
                              `<button class="chip ${
