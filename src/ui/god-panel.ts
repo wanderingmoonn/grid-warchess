@@ -17,8 +17,9 @@
 
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
+import { canAttack, canMove, heroSkillsOf } from '../core/rules.ts';
 import { paintTerrainsFor } from '../core/sandbox.ts';
-import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
+import type { GameState, LogEntry, PlayerId, Terrain, Unit } from '../core/types.ts';
 import { packOk, packRow } from './packs.ts';
 
 export type GodBrush =
@@ -68,6 +69,15 @@ export interface GodUi {
    * 沙盒里没有属性卡，而自己下场走子时这几项每一下都要看。
    */
   selected: string;
+  /**
+   * 手上那支兵本人（没选中就是 null）。
+   *
+   * 工具栏上那句话只能放一行，技能按钮放不下——而"能不能开技能"恰恰是
+   * 操控档里最容易踩空的一件事：货架把侧栏整块占走了，属性卡和技能菜单
+   * 都不在，英雄站到对面脸上了也没有一个能按的按钮。所以侧栏要单独
+   * 给这支兵留一块地方，见 `pickedCard`。
+   */
+  picked: Unit | null;
 }
 
 const chip = (on: boolean, act: string, label: string, extra = ''): string =>
@@ -269,6 +279,84 @@ function brushHint(ui: GodUi, s: GameState): string {
   }
 }
 
+/**
+ * 侧栏顶上那块「手上这支兵」。
+ *
+ * 为什么必须单开一块：上帝模式的侧栏整块让给了兵种货架，正常对局里那张
+ * 属性卡（含英雄技能菜单）在这个模式下根本不存在。于是操控档里
+ * "选中英雄 → 按技能"这条路是断的——玩家看得见矮人王站在那儿，
+ * 也看得见「投斧」两个字印在货架上，但棋盘上没有任何一个按钮能开它。
+ *
+ * 契约只有一条：**能按的按钮就是现在真能按的**。冷却中、不是自己这一方、
+ * 没轮到自己，一律灰掉并写清原因——沙漠盒里最容易让人以为"坏了"的，
+ * 就是一个亮着的按钮点下去什么都不发生。
+ */
+function pickedCard(ui: GodUi): string {
+  const s = ui.state;
+  const u = ui.picked;
+  if (!u) return '';
+  const def = s.unitTypes[u.type];
+  if (!def) return '';
+
+  const mine = u.owner === s.current;
+  const canAct = ui.myTurn && mine;
+  const owner = s.players[u.owner].name;
+
+  const facts: string[] = [`${u.hp}/${def.maxHp} 血`];
+  if (def.atk > 0) facts.push(`攻 ${def.atk}${def.armor ? ` · 甲 ${def.armor}` : ''} · 射程 ${def.range}`);
+  facts.push(canMove(u) ? '还能走' : '走完了');
+  if (def.atk > 0) facts.push(canAttack(u) ? '还能打' : '打完了');
+
+  const skills = heroSkillsOf(s, u);
+  const rows = skills
+    .map((k) => {
+      const on = k.ready && canAct;
+      const why = !mine
+        ? '不是这一方'
+        : !ui.myTurn
+          ? '等它走完'
+          : k.ready
+            ? ''
+            : k.chargeMax > 0
+              ? `${k.toNext} 回合回一发`
+              : `${k.cd} 回合`;
+      // 充能型技能把"还剩几发"写在名字后面：只写"就绪/冷却"会丢掉
+      // "它其实攒着三发"这个信息，而那正是这个技能最要紧的一点
+      const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
+      return `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
+        on ? '' : 'disabled'
+      }>
+        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+        <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
+        <span class="price">${on ? '就绪' : escapeHtml(why)}</span>
+      </button>`;
+    })
+    .join('');
+
+  const tail = skills.length === 0
+    ? '<div class="hint">这个兵没有主动技能。技能不占行动，冷却中的按钮会写还要等几回合。</div>'
+    : `<div class="recruit-list">${rows}</div>
+       <div class="hint">技能不占行动，每个英雄每回合最多一次。</div>`;
+
+  return `<div class="card">
+    <div class="card-title">手上这支兵</div>
+    <div class="unit-head">
+      <div class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
+      <div>
+        <div class="unit-title">${def.name}</div>
+        <div class="unit-sub">${owner} · ${def.era} 代${def.hero ? ' · 英雄' : ''}</div>
+      </div>
+    </div>
+    <div class="hint">${facts.join(' · ')}</div>
+    ${
+      ui.play === null
+        ? '<div class="hint">现在只是摆子，技能开不了。先选「我打…」或「两边我都打」。</div>'
+        : ''
+    }
+    ${tail}
+  </div>`;
+}
+
 function escapeHtml(t: string): string {
   return t.replace(/[&<>"']/g, (c) => {
     switch (c) {
@@ -371,7 +459,18 @@ export function godShelfHtml(ui: GodUi): string {
          <div class="god-shelf">${groups}</div>
        </div>`;
 
+  /*
+   * 「手上这支兵」摆在货架**上面**。
+   *
+   * 不是塞进货架里：这块要回答的是"我这一下能做什么"，货架回答的是
+   * "还能摆什么"，摆完笔刷一放下就再也用不到货架了，而这块卡片
+   * 是操控档里每一步都要看的。AI 在跑的时候整块收掉——那时候没有
+   * "手上"这回事（点棋盘都不许）。
+   */
+  const picked = ui.running ? '' : pickedCard(ui);
+
   return `
+    ${picked}
     ${shelfCard}
 
     <div class="card">

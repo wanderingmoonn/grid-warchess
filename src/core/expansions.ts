@@ -30,6 +30,12 @@ import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
 import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts';
+// 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
+// 航母甲板那道"留给空军扩展"的接口在 naval-carrier.ts。这里只负责注册。
+import { NAVAL_FLEET, MODERN_NAVAL } from './naval-packs.ts';
+// 行动点：把移动/攻击/驻扎/上下船/技能统一成"行动"，各自扣 E。
+// 它只用一个新文件（action-points.ts），这里加一行注册，rules.ts 依然一行不动。
+import { ACTION_POINTS } from './action-points.ts';
 // 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
 import { BASE_MAX_ERA, ERAS } from './config.ts';
 
@@ -468,14 +474,20 @@ export interface Expansion {
    *
    * 和 `mapStyles[].build` 分工不同：`build` 只对**自己那一张**地貌负责，
    * 而这里是给**所有**地貌（包括本体那五种）做一遍普适的整理。
-   * 「地形高差」用它把"孤零零拔地而起的高山"降成台地：本体配方是撒团块的，
-   * 团块边缘必然出现"周围全是平原、中间一柱高山"，而开这个扩展的玩家
-   * 期待的是等高线——山脚下总该有台地托着。
+   * 「地形高差」用它给每座山补山脚：本体配方是撒团块的，团块边缘就是山脚，
+   * 一步从平原跨到高山；开这个扩展的玩家期待的是等高线，所以要把那一步
+   * 补成"丘陵 → 台地"两圈缓坡。
    *
    * 为什么放在扩展里而不是 mapgen 里：本体不认识"台地"，也不该认识。
    * 收尾动作写成本体的一段 if，就等于把扩展规则缝进本体了。
    */
-  afterTerrain?: (g: Terrain[], w: number, h: number) => void;
+  afterTerrain?: (
+    g: Terrain[],
+    w: number,
+    h: number,
+    /** 不该动的格子（城市及其一环）：补山脚不能把城门口抬成台地 */
+    keep?: ReadonlySet<number>,
+  ) => void;
 }
 
 function nameOf(state: GameState, typeId: string): string {
@@ -784,6 +796,14 @@ export const EXPANSIONS: Expansion[] = [
   // 底座排在前：加料包的前置必须先在场，读配置的人一眼能看出这个先后。
   CONTEMPORARY_BASE_PACK,
   MODERN_WARFARE,
+  // 海军：先「海战」（E2~E5 + 海权规则），再「现代海军」（E6，依赖「现代」）。
+  // 顺序靠后不影响任何东西——这两个包的钩子只读地形与城，不参与伤害公式。
+  NAVAL_FLEET,
+  MODERN_NAVAL,
+  // 行动点：一整条"行动经济"规则，排在最后——
+  // 它的 modifyMove / modifyAttacks 只做"取更小的那个"，不关心别人先给了多少，
+  // 所以放在钩子链末尾既不影响老扩展，也不会被它们绕过去。
+  ACTION_POINTS,
 ];
 
 export function expansionById(id: string): Expansion | undefined {

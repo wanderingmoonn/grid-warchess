@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>方格战棋 · 时代兵备</title>
+<title>时代与回旋镖 · 时代兵备</title>
 <style>
   :root {
     --bg: #f5f2ea;
@@ -302,7 +302,7 @@
 
   <main>
     <header class="page-head">
-      <h1>方格战棋 · 时代兵备</h1>
+      <h1>时代与回旋镖 · 时代兵备</h1>
       <p>七个包的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。</p>
     </header>
 
@@ -362,11 +362,11 @@
     <section id="g-terms">
       <h2><span class="sec-num">04</span>机制词条</h2>
       <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
-      <dl class="terms"><dt id="t-ab-stealth">潜行</dt><dd>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-ab-shield-wall">盾墙</dt><dd>本回合没有移动过时，受到的伤害 −2。站住才硬。</dd><dt id="t-ab-siege-master">破城</dt><dd>攻城伤害 ×1.5。</dd><dt id="t-ab-armor-pierce">破甲</dt><dd>无视目标一半护甲。对付重甲和城池的解法。</dd><dt id="t-ab-aura-command">指挥光环</dt><dd>相邻的友军攻击 +2。</dd><dt id="t-ab-kamikaze">自爆</dt><dd>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-ab-first-strike">先手</dt><dd>攻击后不会被反击。远程狙击手的核心。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">比例固定为 50%，不分敌我——友军站在炸点上一样掉血。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-burst">多动</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd><dt id="t-ab-anti-air">对空</dt><dd>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</dd></dl>
+      <dl class="terms"><dt id="t-ab-stealth">潜行</dt><dd>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-ab-shield-wall">盾墙</dt><dd>本回合没有移动过时，受到的伤害 −2。站住才硬。</dd><dt id="t-ab-siege-master">破城</dt><dd>攻城伤害 ×1.5。</dd><dt id="t-ab-armor-pierce">破甲</dt><dd>无视目标一半护甲。对付重甲和城池的解法。</dd><dt id="t-ab-aura-command">指挥光环</dt><dd>相邻的友军攻击 +2。</dd><dt id="t-ab-kamikaze">自爆</dt><dd>阵亡时对四周相邻单位各造成自身攻击一半的伤害。</dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-ab-first-strike">先手</dt><dd>攻击后不会被反击。远程狙击手的核心。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-burst">多动</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd><dt id="t-ab-anti-air">对空</dt><dd>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</dd></dl>
     </section>
   
     <footer>
-      方格战棋 · 时代兵备 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+      时代与回旋镖 · 时代兵备 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
     </footer>
   </main>
 </div>

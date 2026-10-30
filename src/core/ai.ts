@@ -34,16 +34,20 @@ import {
   distToCity,
   eggSpots,
   effectiveRangeAgainst,
+  heroBlocked,
+  heroSkillsOf,
   idx,
   inBounds,
   incomeOf,
   incomeResOf,
   ordersOf,
+  orderSitesOf,
   other,
   previewAttack,
   reachableTiles,
   rebuildCost,
   recruitCost,
+  recruitPriceOf,
   recruitSpawnCells,
   recruitResCost,
   siegeTargets,
@@ -76,6 +80,14 @@ export interface AiBudget {
    * 空/未设时照旧自己挑。这一条是"把产兵权交回玩家、其余全托管"的挂钩点。
    */
   order?: string | null;
+  /**
+   * 指挥官模式：这一格指定的产兵点（城市或军营的 id）。空/未设＝哪座都行。
+   *
+   * 指定了就只在那一个产兵点造：城市不够高级、军营被拆、兵种下水没位置，
+   * 这一格就空转——和"钱不够"一样，是玩家排计划时该自己预见到的后果。
+   * 队首是「升级时代」时，它指的是"升这一座城"。
+   */
+  orderSite?: string | null;
 }
 
 export const DEFAULT_BUDGET: AiBudget = {
@@ -2331,7 +2343,11 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
   const hpRatio = u.hp / def.maxHp;
 
   for (const k of skills) {
-    if ((u.skillCd?.[k.id] ?? 0) > 0) continue;
+    // 能不能开读 heroSkillsOf，别自己翻 skillCd：隐匿这类技能改成充能之后，
+    // 只认冷却会让 AI 以为它永远"不能用"（skillCd 一直是空的），
+    // 于是整局一次都不藏。
+    const state = heroSkillsOf(view, u).find((x) => x.def.id === k.id);
+    if (!state?.ready) continue;
     let score = 0;
     switch (k.effect) {
       case 'throw-axe': {
@@ -2700,9 +2716,9 @@ function recruitCandidate(
     if (d.transport) return false;
     // 召唤物只认召唤者：AI 花 45 金买一个骷髅，等于给死灵法师的赠品单独付钱。
     if (d.summonedOnly) return false;
-    // 英雄场上只能有一个。这条规则在 doRecruit 里也拦了，但在这里先拦掉，
-    // 才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
-    if (d.hero && s.units.some((u) => u.owner === me && u.type === d.id)) return false;
+    // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
+    // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
+    if (heroBlocked(s, me, d)) return false;
     if (d.era > src.era || d.era < src.era - 1) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
@@ -2760,20 +2776,21 @@ function recruitCandidate(
   let best: Candidate | null = null;
   for (const d of pool) {
     if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) continue;
-    // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃
-    const unlockFee =
-      d.hero && !(s.unlocked?.[me] ?? []).includes(d.id) ? (d.unlockCost ?? 0) : 0;
+    // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃。
+    // 这笔钱和规则层、界面估价共用 recruitPriceOf 一份口径——三处各算一次，
+    // 迟早会出现"AI 以为买得起、规则层说资源不足、这一格生产序列静默空转"。
+    const quote = recruitPriceOf(s, me, d);
+    const unlockFee = quote.unlockFee;
     const price = recruitCost(s, me, d);
     // 多资源：粮食/建材不够时，光有金币也买不起。
     // 只看金币会让 AI 反复挑一个造不出来的兵，然后整回合卡在那里。
-    const fullPrice = recruitResCost(s, me, d);
-    if (!canPay(s.players[me], fullPrice)) continue;
+    if (!canPay(s.players[me], quote.total)) continue;
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
     // 一个池塘边上也能造船，但它开不出去。
     if (d.domain === 'water' && wet < WATER_MIN_SHARE) continue;
-    if (gold < price + unlockFee) continue;
+    if (gold < quote.gold) continue;
 
     // ── 攒钱 ──
     // 计划要用的那笔钱是**冻结差额**，不是"停掉产线"：买完这兵之后账上还剩得下
@@ -2808,7 +2825,7 @@ function recruitCandidate(
       score += 12 + d.era * 4;
       if (aiLevelOf(s)!=='basic') {
         const efficiency = (d.atk + (d.magicAtk??0)*1.2) * Math.sqrt(d.maxHp)
-          * (1+Math.min(4,Math.max(0,d.range-1))*0.45) / Math.max(20,resourceValue(s,me,fullPrice)+unlockFee*0.4)**0.8;
+          * (1+Math.min(4,Math.max(0,d.range-1))*0.45) / Math.max(20,resourceValue(s,me,quote.price)+unlockFee*0.4)**0.8;
         score += Math.min(26,efficiency*3);
         if (plan.urgent) score += 15;
       }
@@ -3083,12 +3100,22 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
   if (citiesOf(s, player).length === 0) return slots;
 
   // 投影：序列是"未来几回合"的事，所以每排一格都要把这一格的产出记进去
+  //
+  // `unlocked` 也要拷一份：排到英雄那一格时得把"解锁过了"记进投影，
+  // 否则同一份序列里再排到同一个英雄会重复算一次解锁费（钱白扣，
+  // 后面几格的余额被压得偏低，排出来的序列比实际能力短一截）。
+  // 直接改 `s.unlocked` 是不行的——`s` 是调用方那份真局面（或者它的雾视图）。
+  const unlockedCopy: Partial<Record<PlayerId, string[]>> = {};
+  for (const [k, v] of Object.entries(s.unlocked ?? {})) {
+    unlockedCopy[k as PlayerId] = [...(v ?? [])];
+  }
   const proj: GameState = {
     ...s,
     current: player,
     cities: s.cities.map((c) => ({ ...c })),
     units: [...s.units],
     players: { A: { ...s.players.A }, B: { ...s.players.B } },
+    unlocked: unlockedCopy,
   };
   const traits = aiTraits(proj);
   // 排产看的是"这一局想怎么赢"，所以战术倾向要一起进打分——
@@ -3160,7 +3187,15 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
       moved: true,
       acted: true,
     });
-    payRes(proj.players[player], recruitResCost(proj, player, def));
+    // 付钱：英雄第一次要连解锁费一起扣，和 doRecruit 同一份口径。
+    // 只扣兵价的话，投影里的余额会比真局面多出那笔解锁费，
+    // 后面几格排进去的兵到执行时其实买不起。
+    payRes(proj.players[player], recruitPriceOf(proj, player, def).total);
+    if (def.hero === true) {
+      const paid = (proj.unlocked ??= {});
+      const mine = (paid[player] ??= []);
+      if (!mine.includes(def.id)) mine.push(def.id);
+    }
   }
 
   return slots;
@@ -3222,6 +3257,11 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   }
   /** 这一回合点名的兵种（不在指挥官模式下就是调用方给的临时指令） */
   const order = commander ? (head === '' || head === ORDER_UPGRADE ? null : head) : (budget.order ?? null);
+  /**
+   * 这一回合点名的产兵点。指挥官模式从序列里读（和队首对齐），
+   * 其它场合用调用方给的（跑批/用例可以借此固定"从哪座城出"）。
+   */
+  const orderSite = commander ? (orderSitesOf(s, me)[0] || null) : (budget.orderSite ?? null);
   // 指挥官模式的产能是「每回合 1 个」：队首是兵种**并且**这回合还没造过。
   // 只砍到"看队首"是不够的——一回合里 AI 会反复问下一步，队首没变就会连着造好几个。
   const mayRecruit = commander
@@ -3295,6 +3335,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
 
   if (mayRecruit) {
     for (const city of citiesOf(view, me)) {
+      // 指定了产兵点就只看那一个：别的地方再合适也不许造，
+      // 否则"这座城出兵"就成了摆设（玩家指定它是为了布阵，不是为了择优）
+      if (orderSite && city.id !== orderSite) continue;
       // 刚打下来的城当回合不产兵（rules 里同一条），提出来只会得到非法动作
       if (city.capturedTurn === s.turn) continue;
       // 废墟也造不出兵（规则里同样会拒）。不跳过的话 AI 会一直提这个动作，
@@ -3319,6 +3362,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     if (own.length > 0) {
       for (const u of unitsOf(view, me)) {
         if (!utype(view, u.type).barracks) continue;
+        if (orderSite && u.id !== orderSite) continue;
         const era = u.era ?? supplyEraAt(view, me, u);
         const c = recruitCandidate(
           view,
@@ -3336,6 +3380,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   if (mayUpgrade) {
     for (const city of citiesOf(view, me)) {
       if (city.ruined) continue; // 废墟升不了级，同上
+      // 「升级时代」那一格也能指定城市：玩家常想"先升那座靠前的主城"。
+      // 指定的是军营时不匹配任何城市，这一格就空转（营不会升级）。
+      if (orderSite && city.id !== orderSite) continue;
       const c = upgradeCandidate(view, city, mood);
       if (c) candidates.push({ ...c,score:c.score+(commander && head===ORDER_UPGRADE ? 1000 : 0) });
     }

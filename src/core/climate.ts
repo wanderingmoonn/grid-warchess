@@ -177,6 +177,10 @@ function terrainClass(t: Terrain | null): 'plain' | 'hill' | 'mountain' | 'fores
     case 'forest':
       return 'forest';
     case 'water':
+    // 深水和浅流都算水面：风暴该在海上更凶，不是更温和。
+    // 漏掉这两档的话，开了「季节与气候」的对局里外海反而是最安全的地方。
+    case 'deep':
+    case 'shallow':
       return 'water';
     default:
       return 'other';

@@ -10,29 +10,33 @@ import './style.css';
 import { expansionById } from './core/expansions.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
 import type { AiBudget } from './core/ai.ts';
-import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
+import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
-  adjacentToWater,
   applyAction,
   attackableTargets,
+  buildSiteError,
   canAttack,
   canMove,
   cityAt,
   citiesOf,
+  cityName,
   distance,
   disbandRefundOf,
   eggSpots,
+  heroBlocked,
   idx,
   incomeOf,
   isAirborne,
   ordersOf,
+  orderSitesOf,
   reachableTiles,
-  recruitCost,
+  recruitPriceOf,
   recruitSpawnCells,
   refreshMemory,
   siegeTargets,
+  supplyEraAt,
   threatTiles,
   unitIncomeAt,
   unitsAt,
@@ -53,6 +57,7 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
@@ -69,12 +74,14 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
+import { PACK_ALL, packOk, packRow } from './ui/packs.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
 import {
+  adoptDecision,
   claimSeat,
   fetchRoom,
   loadSeat,
@@ -94,6 +101,17 @@ import {
   saveMatch,
   setSaveScope,
 } from './storage/save.ts';
+import {
+  CHAT_MAX_LEN,
+  ChatFeed,
+  chatBodyLength,
+  chatBodyOverflows,
+  chatLinesHtml,
+  fetchChat,
+  sendChat,
+  trimChatBody,
+  type ChatSeat,
+} from './net/chat.ts';
 
 /** 取元素，取不到直接抛——界面结构缺失属于硬错误，不该静默继续 */
 function pick<T extends Element>(parent: ParentNode, sel: string): T {
@@ -749,11 +767,15 @@ function render(): void {
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
-  const remeasure = boardDirty || !canWatchResize;
+  // 第三个条件是那道对账单：档位换了但 DOM 没跟上，必须补量一次。
+  const remeasure = boardDirty || lastFitZoom !== boardZoom || !canWatchResize;
   if (remeasure) fitBoard();
   // 顶栏内容没动、尺寸也没动，"还能不能往两边滚"就不会变——那道判断要读
   // scrollWidth，是笔强制布局，不值得每帧付一遍。滚动本身另有 scroll 监听。
   if (topbarChanged || remeasure) syncTopbarScroll();
+
+  // 聊天入口跟着房间走：进房间才出现，退出去就收起
+  renderChatDock();
 }
 
 /**
@@ -766,6 +788,15 @@ function render(): void {
  */
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
+/**
+ * 上一次 `fitBoard()` 用的是哪一档。
+ *
+ * 这是"我想要的档位"和"屏幕上真的写进去的档位"之间的对账单。
+ * 两者对不上就说明 DOM 落后了——不管 `boardDirty` 是谁忘了打上，
+ * 下一帧都会重新量一次。玩家报的"放大之后缩不回去、而且一直缩不回去"，
+ * 本质上就是这两个值悄悄分家了，却没人负责把它们捏回去。
+ */
+let lastFitZoom = 0;
 /** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
 let baseBoardSize = 0;
 
@@ -843,6 +874,7 @@ function fitBoard(): void {
 
   // 这一量是有效的，下一帧不必再来一遍（除非谁把 boardDirty 重新打上）
   boardDirty = false;
+  lastFitZoom = boardZoom;
 }
 
 /**
@@ -880,16 +912,24 @@ function watchBoardResize(): void {
  *
  * 放大之后把视口挪回中间：32×32 上放大的目的通常是"看中间那片战场"，
  * 停在左上角等于放大了一个空的角落。
+ *
+ * **不能用"数字没变就直接 return"**。`boardZoom` 只是"我想要的档位"，
+ * 屏幕上真实的大小由 `fitBoard()` 写进 `style` 和 `zoomed` 类——这两者会脱钩
+ * （换局、导入存档、窗口从隐藏变可见都会改 DOM 而不改这个变量）。
+ * 一旦脱钩，早退就变成了"数字是 1、画面是 3×，点缩小永远没反应"，
+ * 也就是玩家报的那个"放大之后缩不回去、开新局也缩不回去"。所以每次调用都
+ * 重绘一次、重新量一次，让 DOM 跟着这个数字走。
  */
 function setZoom(next: number): void {
   const steps = ZOOM_STEPS;
   const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
-  if (clamped === boardZoom) return;
+  const same = clamped === boardZoom;
   boardZoom = clamped;
   // 缩放直接改的是"棋盘该多大"，尺寸缓存必须作废
   boardDirty = true;
   // 先重绘再量：格子大小是从元素宽度推出来的，宽度变了必须重算一次
   render();
+  if (same) return;
   if (boardZoom > 1) {
     boardScrollEl.scrollLeft = Math.max(0, (boardScrollEl.scrollWidth - boardScrollEl.clientWidth) / 2);
     boardScrollEl.scrollTop = Math.max(0, (boardScrollEl.scrollHeight - boardScrollEl.clientHeight) / 2);
@@ -899,10 +939,49 @@ function setZoom(next: number): void {
   }
 }
 
+/**
+ * 当前档位在第几档。
+ *
+ * 用"最近的一档"而不是 `indexOf`：`indexOf` 找不到会给 -1，
+ * 再拿 -1 去 `+dir`，一次点击就变成"原地不动"，看起来就是按键失灵。
+ */
+function zoomIndex(): number {
+  let best = 0;
+  let bestGap = Infinity;
+  for (let i = 0; i < ZOOM_STEPS.length; i++) {
+    const gap = Math.abs(ZOOM_STEPS[i]! - boardZoom);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function zoomStep(dir: 1 | -1): void {
-  const i = ZOOM_STEPS.indexOf(boardZoom);
-  const at = i < 0 ? 0 : i;
-  setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, at + dir))]!);
+  const at = zoomIndex() + dir;
+  setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, at))]!);
+}
+
+/**
+ * 缩放退回"适应屏幕"。
+ *
+ * 换局、导入存档、进房间都必须走这里，而不是写一句 `boardZoom = 1`：
+ * 只改数字不把 `boardDirty` 打上，`render()` 里那句
+ * `const remeasure = boardDirty || !canWatchResize;` 就不成立，`fitBoard()` 根本不跑，
+ * 棋盘尺寸、滚动窗口、右下角那个档位标签全部停在上一局的放大状态。
+ * 于是变量是 1、画面是 3×，点"缩小"被 `setZoom` 的早退挡掉——怎么点都没反应，
+ * 而且再开一局还是这样（新局同样只改了数字）。
+ */
+function resetZoom(): void {
+  boardZoom = 1;
+  // 尺寸缓存必须作废，否则下一帧不会重新量
+  boardDirty = true;
+  // 视口也回去：换局之后还停在上一局拖到的位置，会看着像"棋盘缺了一块"
+  boardScrollEl.scrollLeft = 0;
+  boardScrollEl.scrollTop = 0;
+  boardScrollEl.classList.remove('dragging', 'zoomed');
+  boardEl.classList.remove('zoomed');
 }
 
 /**
@@ -1041,42 +1120,19 @@ function computePlaceable(): number[] {
   const builder = state.units.find((u) => u.id === buildPlan?.unitId);
   if (!builder) return [];
   const def = state.unitTypes[buildPlan.type];
-  const overWater = !!def?.bridges;
+  if (!def) return [];
 
+  // 高亮的含义是"点下去一定建得成"，所以不在这里另写一套判据，直接问规则。
+  //
+  // 以前这里是第二份实现：地形、桥要两侧有陆地、军营要临水……每一条单看都对，
+  // 但和 `buildSiteError` 是两套代码，改一处忘一处就冒出"高亮了、点了却被拒"。
+  // 军营那次就是这么坏的：规则里判临水只认 `water`，这里用的 `adjacentToWater`
+  // 认桥面，于是桥头被高亮成可建，点下去才回一句"必须扎在水边"。
+  // 判据只能有一处，界面这一层只负责问。
   const out: number[] = [];
   for (let y = 0; y < state.h; y++) {
     for (let x = 0; x < state.w; x++) {
-      const tile = state.tiles[y * state.w + x];
-      if (!tile) continue;
-      if (state.units.some((u) => u.x === x && u.y === y)) continue;
-      if (distance(builder, { x, y }) > CONFIG.buildRange) continue;
-
-      const allowed = def?.buildOn;
-      if (allowed) {
-        if (!allowed.includes(tile.terrain)) continue;
-      } else if (!passable(tile.terrain)) {
-        continue;
-      }
-
-      if (overWater) {
-        // 桥：至少要有一侧是陆地
-        const landNext = [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ].some(([dx, dy]) => {
-          const nb = state.tiles[(y + dy) * state.w + (x + dx)];
-          return !!nb && passable(nb.terrain);
-        });
-        if (!landNext) continue;
-      } else if (tile.terrain === 'bridge') {
-        continue;
-      }
-
-      // 军营要临水（靠水补给）：高亮只画真正能建的地方
-      if (def?.requiresWater && !adjacentToWater(state, x, y)) continue;
-
+      if (buildSiteError(state, def, builder, x, y) !== null) continue;
       out.push(y * state.w + x);
     }
   }
@@ -1163,6 +1219,7 @@ function dispatch(action: Action): boolean {
 
   const prevTurn = state.turn;
   const actor = state.current;
+  const prevWinner = state.winner;
   planMovePath(state, action);
   const result = applyAction(state, action);
   if (!result.ok) {
@@ -1207,6 +1264,15 @@ function dispatch(action: Action): boolean {
   }
 
   dirty = true;
+
+  // 一出手就把这局判了（认输是唯一的一种）：联机里也要**立刻提交**。
+  //
+  // 不提交的话，对面要等到"轮到我"才去拉云端，而认输既不换人也不推进回合，
+  // 于是赢的那一边一直停在旧局面上——输了的人已经看见结算卡，赢的人还在等下家。
+  if (room && !prevWinner && state.winner) {
+    dirty = false;
+    void pushTurn(room, prevTurn, '这一局已结束，结果已经同步给对方');
+  }
 
   refreshSelection();
   render();
@@ -2087,7 +2153,7 @@ function handleAction(act: string, el: HTMLElement): void {
 
       state = imported;
       detachRoom(); // 换了一局，房间就对不上了
-      boardZoom = 1; // 换局可能换尺寸，缩放档位不能跟着上一局走
+      resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
       clearSelection();
       // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
       // 否则会把上一局的摘要记到这一局头上
@@ -2105,7 +2171,7 @@ function handleAction(act: string, el: HTMLElement): void {
         if (!result) return;
         state = createMatch(result.config, result.seed, loadCustomUnits());
         detachRoom();
-        boardZoom = 1;
+        resetZoom();
         clearSelection();
         resetRecorder();
         // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
@@ -2402,6 +2468,19 @@ let commanderRunning = false;
 let commanderRound = 0;
 /** 窄屏下「参谋部」是折叠的，点一下才展开排计划 */
 let commanderExpanded = false;
+/**
+ * 参谋部的两个筛选维度：**哪个包** + **哪一代**。
+ *
+ * 为什么不并进 `recruitQuery` / 侧栏的包筛选：那是产兵面板的状态，
+ * 两个面板可能同时被打开过（切模式时），共用一个值的结果是"在参谋部筛了
+ * 奇想，切回面板产兵列表也只剩奇想"。这两处要回答的问题本来就不一样。
+ *
+ * 取值都是**空＝不筛**：`PACK_ALL` 是所有包，era 0 是所有代。
+ * 两个条件是 AND——同时选「奇想」和「4 代」就是"奇想包里 4 代的那几个"。
+ */
+let commanderPack = PACK_ALL;
+/** 时代筛选：0＝全部，其余是兵种表里的 `era`（第几代） */
+let commanderEra = 0;
 
 /** 批量执行时每步的停顿。比"慢档"快得多：一次要跑 5 个回合，180ms 会拖成一分钟 */
 const BATCH_DELAY = 40;
@@ -2411,8 +2490,63 @@ function commanderActive(): boolean {
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
 }
 
-/** 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代） */
-function commanderPool(): UnitTypeDef[] {
+/**
+ * 参谋部的筛选只有两个维度：**哪个包（DLC）** 和 **哪一代**。
+ *
+ * 这两个维度的取值都不是手写的清单，而是从"这一局真能造的那份名单"里推出来的：
+ *   · 包——`packOf(def)`（`expansions.ts` 里登记的兵种出处；原版 49 个记作 `core`）。
+ *     和侧栏产兵面板、上帝模式货架共用同一个函数，三处不会是三种说法。
+ *   · 代——`def.era`（1..6，标签取自 `ERAS` 配置里那套「古典 / 中世 / …」）。
+ *     名单本来就只放"本代 + 上一代"（和侧栏同一个口径），所以通常只有两颗时代 chip。
+ *
+ * 一个维度都不选＝不筛（原样列出全部）；只选一个、或者两个都选都行，
+ * 两个条件之间是 AND。
+ */
+
+/** 这一项过不过筛 */
+function cmdPass(it: CmdItem): boolean {
+  if (!packOk(it.def, commanderPack)) return false;
+  if (commanderEra !== 0 && it.def.era !== commanderEra) return false;
+  return true;
+}
+
+/**
+ * 时代筛选 chip。
+ *
+ * 只列**这份名单里真有的代**：一个按下去筛掉零个选项的按钮，比没有它更让人困惑。
+ * 只剩一代时整块不显示（筛无可筛），和 `packRow` 遇到"只有一个包"时的处理一致。
+ */
+function eraChipRow(items: CmdItem[]): string {
+  const levels = [...new Set(items.map((it) => it.def.era))].sort((a, b) => a - b);
+  if (levels.length < 2) return '';
+  const one = (level: number, text: string, active: boolean) =>
+    `<button class="chip ${active ? 'active' : ''}" data-cmd-era="${level}">${text}</button>`;
+  return `<div class="chip-row">
+    ${one(0, '全部时代', commanderEra === 0)}
+    ${levels.map((l) => one(l, `${l} 代 · ${eraDef(l).name}`, commanderEra === l)).join('')}
+  </div>`;
+}
+
+/** 参谋部里一个能排的兵种 */
+interface CmdItem {
+  def: UnitTypeDef;
+  /** 这一次要多少金（英雄第一次含解锁费） */
+  gold: number;
+  /** 其中有多少是解锁费（已经解锁、或者不是英雄就是 0） */
+  unlockFee: number;
+  /** 场上已经有 / 蛋还等着孵：排了也造不出来，说清楚为什么 */
+  blocked: string | null;
+}
+
+/**
+ * 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代）。
+ *
+ * 「造得出来」是一个上限口径：具体某一格能不能造，还要看那一格指定的
+ * 是哪座城（时代可能更低），见 `slotProblem`。这里不按城过滤，
+ * 是因为下拉是**所有格子共用**的一份名单——按城过滤会让"这一格能排、
+ * 那一格排不了"变成"列表里忽有忽无"，比标一句「产不了」更难懂。
+ */
+function commanderPool(): CmdItem[] {
   const eras = citiesOf(state, me()).map((c) => c.era);
   const era = eras.length > 0 ? Math.max(...eras) : 1;
   return Object.values(state.unitTypes)
@@ -2420,7 +2554,59 @@ function commanderPool(): UnitTypeDef[] {
       (d) =>
         d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
     )
-    .sort((a, b) => a.era - b.era || a.cost - b.cost);
+    .sort((a, b) => a.era - b.era || a.cost - b.cost || a.name.localeCompare(b.name))
+    .map((def) => {
+      const quote = recruitPriceOf(state, me(), def);
+      return {
+        def,
+        gold: quote.gold,
+        unlockFee: quote.unlockFee,
+        blocked: heroBlocked(state, me(), def) ? '已在场' : null,
+      } satisfies CmdItem;
+    });
+}
+
+/** 自己的产兵点：城市 + 军营。`era` 是它现在能产到第几代 */
+function ownSites(): Array<{ id: string; label: string; era: number; city: boolean }> {
+  const out: Array<{ id: string; label: string; era: number; city: boolean }> = [];
+  for (const c of citiesOf(state, me())) {
+    out.push({ id: c.id, label: `${cityName(c)} · ${c.era} 代`, era: c.era, city: true });
+  }
+  for (const u of unitsOf(state, me())) {
+    const d = utype(state, u.type);
+    if (!d.barracks) continue;
+    const x = String.fromCharCode(65 + u.x);
+    out.push({
+      id: u.id,
+      label: `${d.name}（${x}${u.y + 1}）· 营`,
+      era: u.era ?? supplyEraAt(state, me(), u),
+      city: false,
+    });
+  }
+  return out;
+}
+
+/** 这一格为什么造不出来（能造返回空串）。界面据此把估价标红并写一句原因 */
+function slotProblem(unitId: string, site: string): string {
+  if (!unitId) return '';
+  const def = state.unitTypes[unitId];
+  if (!def) return '没有这个兵种';
+  if (unitId === ORDER_UPGRADE) {
+    if (!site) return '';
+    const city = state.cities.find((c) => c.id === site);
+    if (!city) return '营不升级';
+    return upgradeCostOf(state, city) === null ? '升不上去了' : '';
+  }
+  if (heroBlocked(state, me(), def)) return '已在场';
+  // 没指定产兵点时按"最高级那座城"算：AI 会自己挑能造的那一座
+  const eras = citiesOf(state, me()).map((c) => c.era);
+  const era = site
+    ? (ownSites().find((s) => s.id === site)?.era ?? (eras.length > 0 ? Math.max(...eras) : 1))
+    : eras.length > 0
+      ? Math.max(...eras)
+      : 1;
+  if (def.era > era) return '产不了（时代不够）';
+  return '';
 }
 
 /**
@@ -2428,8 +2614,15 @@ function commanderPool(): UnitTypeDef[] {
  *
  * 「升级时代」按"自己几座城里最便宜的那次升级"算——AI 执行时会挑它认为最该升的那座，
  * 个数对不上是常态，所以界面上的金币数字一律标成"≈"，不假装精确。
+ *
+ * 兵种走 `recruitPriceOf`：英雄**第一次**要连解锁费一起算。
+ * 以前这里只算兵价，于是面板上写着「矮人王 · 360 金」、估价也照 360 算，
+ * 玩家排了它，执行时规则层还要再收 150 金解锁——钱不够，那一格静默空转。
+ *
+ * `paid` 是"这条序列里前面已经付过解锁费的英雄"：同一份计划里排两次
+ * 同一个英雄（比如第一格造、第四格补），第二格不该再算一次解锁费。
  */
-function slotCost(unitId: string): number {
+function slotCost(unitId: string, paid?: Set<string>): number {
   if (!unitId) return 0;
   if (unitId === ORDER_UPGRADE) {
     const costs = citiesOf(state, me())
@@ -2438,52 +2631,73 @@ function slotCost(unitId: string): number {
     return costs.length > 0 ? Math.min(...costs) : 0;
   }
   const def = state.unitTypes[unitId];
-  return def ? recruitCost(state, me(), def) : 0;
+  if (!def) return 0;
+  const quote = recruitPriceOf(state, me(), def);
+  if (!def.hero || !paid) return quote.gold;
+  if (paid.has(def.id)) return Math.max(0, quote.gold - quote.unlockFee);
+  paid.add(def.id);
+  return quote.gold;
 }
 
 /**
- * 每一格执行时手上有多少钱（估算）。
+ * 每一格执行时手上有多少钱、这一格要花多少（都是估算）。
  *
  * 回合顺序是"我方 → 对方 → 我方…"，而收入是在结束回合时结算给**下一位**的，
  * 所以每轮到我方时正好多进一笔收入。于是：
  *   第 i 格可用 = 现有金币 + i × 每回合收入 − 前面各格的花费
+ *
+ * 两串一起返回，是因为调用方两个数都要用（一个显示、一个判"钱紧不紧"），
+ * 分开算等于把这条走位逻辑（含"英雄解锁费只在第一格收"）抄两遍。
  */
-function estimateGold(): number[] {
+function estimateGold(): { avail: number[]; cost: number[] } {
   const income = incomeOf(state, me());
   const queue = ordersOf(state, me());
-  const out: number[] = [];
+  const paid = new Set<string>();
+  const avail: number[] = [];
+  const cost: number[] = [];
   let spent = 0;
   for (let i = 0; i < CONFIG.commanderSlots; i++) {
-    out.push(state.players[me()].gold + i * income - spent);
-    spent += slotCost(queue[i] ?? '');
+    avail.push(state.players[me()].gold + i * income - spent);
+    const c = slotCost(queue[i] ?? '', paid);
+    cost.push(c);
+    spent += c;
   }
-  return out;
+  return { avail, cost };
 }
 
 /** 只刷新金币提示，不重建下拉——否则玩家正在点的格子会被抽走 */
 function refreshEstimates(): void {
-  const gold = estimateGold();
+  const est = estimateGold();
+  const queue = ordersOf(state, me());
+  const sites = orderSitesOf(state, me());
   commanderEl.querySelectorAll<HTMLElement>('[data-est]').forEach((el) => {
     const i = Number(el.dataset.est);
-    const avail = gold[i] ?? 0;
-    const queue = ordersOf(state, me());
-    const cost = slotCost(queue[i] ?? '');
-    const tight = cost > avail;
-    el.textContent = `≈ ${Math.max(0, Math.round(avail))} 金`;
-    el.classList.toggle('tight', tight);
+    const avail = est.avail[i] ?? 0;
+    const cost = est.cost[i] ?? 0;
+    // 造不出来的原因比余额更要紧：钱够、但那座城时代不够，同样是一格空转
+    const why = slotProblem(queue[i] ?? '', sites[i] ?? '');
+    el.textContent = why
+      ? `≈ ${Math.max(0, Math.round(avail))} 金 · ${why}`
+      : `≈ ${Math.max(0, Math.round(avail))} 金`;
+    el.classList.toggle('tight', cost > avail || why !== '');
   });
   const tail = commanderEl.querySelector<HTMLElement>('[data-est-total]');
   if (tail) {
-    const last = gold[gold.length - 1] ?? 0;
-    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(last - slotCost(ordersOf(state, me())[CONFIG.commanderSlots - 1] ?? '')))} 金`;
+    const last = est.avail.length - 1;
+    const left = (est.avail[last] ?? 0) - (est.cost[last] ?? 0);
+    tail.textContent = `跑完这批预计剩 ≈ ${Math.max(0, Math.round(left))} 金`;
   }
 }
 
 /**
  * 画指挥官面板。
  *
- * 只在"回合 / 可用时代 / 是否在跑"变化时重建：面板里是 <select>，
+ * 只在"回合 / 可用时代 / 检索词 / 分类 / 是否在跑"变化时重建：面板里是 <select>，
  * 而 AI 每走一步都会触发 render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
+ *
+ * 每一格现在是**两个**下拉：造什么、由哪个产兵点造。第二件事以前是 AI 自己挑的，
+ * 于是"我想让前线的营出兵、不想让主城少一个守军"这种要求根本表达不出来；
+ * 城市一多，"兵出在哪一头"比"造什么"更能决定这一回合值不值。
  */
 function renderCommander(): void {
   if (!commanderActive()) {
@@ -2509,10 +2723,10 @@ function renderCommander(): void {
     return;
   }
 
-  const pool = commanderPool();
-  const era = pool.length > 0 ? Math.max(...pool.map((d) => d.era)) : 1;
+  const items = commanderPool();
+  const era = items.length > 0 ? Math.max(...items.map((it) => it.def.era)) : 1;
   const online = room !== null;
-  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}`;
+  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}|${commanderPack}|${commanderEra}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -2520,27 +2734,73 @@ function renderCommander(): void {
   commanderSig = sig;
 
   const queue = ordersOf(state, me());
-  const opts = (sel: string) =>
-    [
+  const sites = orderSitesOf(state, me());
+  const shown = items.filter(cmdPass);
+
+  const opts = (sel: string) => {
+    // 这一格已经排好的兵种如果被筛选筛掉了，**只为这一格**补回来：
+    // 补进公用列表会让别的格子也看见它，"筛过了"就名不副实；
+    // 不补的话浏览器会因为找不到当前值而跳回第一项，等于替玩家把计划改了。
+    const list =
+      sel && !shown.some((it) => it.def.id === sel)
+        ? [...shown, ...items.filter((it) => it.def.id === sel)]
+        : shown;
+    // 筛选组合一个都没命中时给一句明确的空态：下拉照旧列「不指定」「升级时代」，
+    // 但要说清"不是列表坏了，是这个组合下真的没有兵"
+    const empty =
+      list.length === 0 ? '<option value="" disabled>（这个筛选组合下没有兵种）</option>' : '';
+    return [
       '<option value="">— 不指定 —</option>',
       `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
+      empty,
     ]
       .concat(
-        pool.map(
-          (d) =>
-            `<option value="${d.id}"${d.id === sel ? ' selected' : ''}>${d.name} · ${d.cost} 金</option>`,
-        ),
+        list.map((it) => {
+          const d = it.def;
+          // 英雄第一次要把解锁费写在脸上：只标 360 而实际要 510，
+          // 是这个模式下最容易踩的一脚
+          const price =
+            it.unlockFee > 0 ? `${d.cost} + 解锁 ${it.unlockFee}` : `${it.gold}`;
+          // 已经在场的英雄造不出第二个（含蛋还没孵的那种），但当前选中的留活口，
+          // 否则旧存档里的那一格会显示成"不指定"，看着像自己跳掉了
+          const blocked = it.blocked && d.id !== sel ? ` disabled` : '';
+          const note = it.blocked ? ` · ${it.blocked}` : '';
+          return `<option value="${d.id}"${d.id === sel ? ' selected' : ''}${blocked}>${d.name} · ${price} 金${note}</option>`;
+        }),
       )
       .join('');
+  };
+
+  const siteOpts = (unitId: string, sel: string) => {
+    const own = ownSites();
+    if (own.length === 0) return '<option value="">没有产兵点</option>';
+    return [
+      `<option value=""${sel ? '' : ' selected'}>哪座都行</option>`,
+      ...own.map((s) => {
+        // 标一句"产不了"，而不是把选项禁掉：这和"钱不够"是同一类后果——
+        // 排了造不出来，是玩家该自己看见的事，不是界面替他做主的事
+        const bad = unitEraProblem(unitId, s);
+        return `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${s.label}${bad}</option>`;
+      }),
+    ].join('');
+  };
 
   const slots = Array.from({ length: CONFIG.commanderSlots }, (_, i) => {
     const label = i === 0 ? '本回合' : `+${i}`;
+    const cur = queue[i] ?? '';
     return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
       <span class="cmd-step">${label}</span>
-      <select data-slot="${i}">${opts(queue[i] ?? '')}</select>
+      <select data-slot="${i}" title="这一格造什么">${opts(cur)}</select>
+      <select data-site="${i}" title="由哪个产兵点产出"${cur ? '' : ' disabled'}>${siteOpts(cur, sites[i] ?? '')}</select>
       <span class="cmd-est" data-est="${i}"></span>
     </label>`;
   }).join('');
+
+  // 两个筛选维度：包（复用侧栏/god 货架那颗 chip 行的口径与外观）+ 代。
+  // 包那行在"这一局只有一个包"时自己返回空串，不会留一颗点了没反应的按钮。
+  const packRowHtml = packRow(items.map((it) => it.def), commanderPack, 'cmd-pack');
+  const eraRowHtml = eraChipRow(items);
+  const filtered = commanderPack !== PACK_ALL || commanderEra !== 0;
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
@@ -2552,7 +2812,16 @@ function renderCommander(): void {
       }</span>
       <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
     </div>
-    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">${slots}</div>
+    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">
+      <div class="cmd-filter">
+        ${packRowHtml}
+        ${eraRowHtml}
+        <span class="cmd-count">${shown.length} / ${items.length} 个兵种${
+          filtered ? '（已筛选）' : ''
+        }${shown.length === 0 ? ' — 换个包或时代看看' : ''}</span>
+      </div>
+      ${slots}
+    </div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
       <button class="btn btn-primary" data-cmd="run">${
@@ -2563,19 +2832,86 @@ function renderCommander(): void {
   refreshEstimates();
 }
 
-/** 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等） */
-commanderEl.addEventListener('change', (e) => {
-  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-slot]');
-  if (!sel) return;
+
+/** 这个产兵点能不能造这一格点的兵（返回给下拉选项后面那半句提示） */
+function unitEraProblem(unitId: string, site: { era: number; city: boolean }): string {
+  if (!unitId) return '';
+  if (unitId === ORDER_UPGRADE) return site.city ? '' : ' · 营不升级';
+  const def = state.unitTypes[unitId];
+  if (!def) return '';
+  return def.era > site.era ? ` · 只到 ${site.era} 代` : '';
+}
+
+/**
+ * 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等）。
+ *
+ * 两个下拉一起收：兵种和产兵点是同一格的两半，分开发会让"改了城、兵种那半
+ * 还是老的"这种中间状态先写进状态里。
+ */
+function readCommanderPlan(): { queue: string[]; sites: string[] } {
   const queue = Array.from(
     commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
   ).map((s) => s.value);
-  dispatch({ type: 'SET_ORDERS', queue });
+  const sites = Array.from(
+    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]'),
+  ).map((s) => s.value);
+  return { queue, sites };
+}
+
+/**
+ * 把产兵点下拉回填成状态里的值。
+ *
+ * 兵种被改成「不指定」时，规则层会把那一格的产兵点抹成空串（"这回合什么都不造"
+ * 却留着"造在哪座城"，下次一改兵种就会把那座城悄悄带上）。下拉得跟着回填，
+ * 否则界面还显示着 c1，而状态里已经是空的了——两边各说各话。
+ */
+function syncCommanderSites(): void {
+  const queue = ordersOf(state, me());
+  const sites = orderSitesOf(state, me());
+  commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]').forEach((sel) => {
+    const i = Number(sel.dataset.site);
+    const want = sites[i] ?? '';
+    if (sel.value !== want) sel.value = want;
+    sel.disabled = !(queue[i] ?? '');
+  });
+}
+
+commanderEl.addEventListener('change', (e) => {
+  const el = e.target as HTMLElement;
+  if (!el.matches('select[data-slot], select[data-site]')) return;
+  // 产兵点下拉跟着兵种走：兵种一改，那一格的"能造吗"结论就变了，
+  // 而 estimate 是唯一会说这件事的地方，所以改完要把提示一起刷新
+  const { queue, sites } = readCommanderPlan();
+  dispatch({ type: 'SET_ORDERS', queue, sites });
+  syncCommanderSites();
   refreshEstimates();
 });
 
 commanderEl.addEventListener('click', (e) => {
-  const cmd = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
+  const el = e.target as HTMLElement;
+
+  // 包（DLC）：再点一次当前那个包＝回到全部，和别处的 chip 一个手感。
+  // 属性名来自共用的 packRow（data-act + data-pack），所以这里认 data-pack 而不是自造一个。
+  const packChip = el.closest<HTMLElement>('[data-act="cmd-pack"]');
+  if (packChip) {
+    const next = packChip.dataset.pack ?? PACK_ALL;
+    commanderPack = commanderPack === next ? PACK_ALL : next;
+    commanderSig = '';
+    renderCommander();
+    return;
+  }
+
+  // 时代：同一套手感（再点一次＝全部时代）
+  const eraChip = el.closest<HTMLElement>('[data-cmd-era]');
+  if (eraChip) {
+    const next = Number(eraChip.dataset.cmdEra ?? '0');
+    commanderEra = commanderEra === next ? 0 : next;
+    commanderSig = '';
+    renderCommander();
+    return;
+  }
+
+  const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
   if (cmd === 'run') void runCommanderBatch();
   if (cmd === 'stop') {
@@ -2593,8 +2929,10 @@ commanderEl.addEventListener('click', (e) => {
 /** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
 function commanderBudget(player: PlayerId): Partial<AiBudget> {
   const head = ordersOf(state, player)[0] ?? '';
-  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null };
-  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null };
+  // 队首那一格指定的产兵点：空串＝不指定（AI 自己挑最合适的那座）
+  const site = orderSitesOf(state, player)[0] || null;
+  if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null, orderSite: site };
+  return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null, orderSite: head ? site : null };
 }
 
 /**
@@ -2623,11 +2961,12 @@ async function runCommanderBatch(): Promise<void> {
   clearSelection();
   aiPaused = false;
   // 先把当前下拉里的选择落到状态里：玩家可能只是改了选择就直接点执行
-  const plan = Array.from(
-    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
-  ).map((s) => s.value);
-  if (plan.length > 0) {
-    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+  //
+  // 兵种和产兵点一起收：只落兵种会让"这一格造在哪座城"退回 AI 自选，
+  // 玩家排了半天的布阵在按执行的一瞬间被抹掉。
+  const plan = readCommanderPlan();
+  if (plan.queue.length > 0) {
+    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
     if (set.ok) state = set.state;
   }
 
@@ -2682,7 +3021,7 @@ async function runCommanderBatch(): Promise<void> {
 
   // 单机：把这批计划重新装回序列，玩家满意的话下一次直接点执行，不用重排 5 格。
   // 这也正是"减负"——排一次能用很多批，想改再改。
-  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan });
+  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
   if (rearm.ok) state = rearm.state;
 
   saveMatch(state);
@@ -2868,7 +3207,24 @@ function godUi() {
     myTurn: godMyTurn(),
     passing: godPassing,
     selected: godSelectedNote(),
+    // 侧栏那块「手上这支兵」要它本人：工具栏一行只能放血量，技能按钮放不下
+    picked: selectedId ? (state.units.find((u) => u.id === selectedId) ?? null) : null,
   };
+}
+
+/**
+ * 「手上这支兵」这一路会变的所有状态：血量、还能走/打、技能冷却。
+ *
+ * 两个签名都要它：工具栏那行状态文字写的是血量与行动力，侧栏那块卡写的是
+ * 同一批数字再加技能按钮。只认 `selectedId` 的话，同一个兵挨了一刀、
+ * 或者刚开完技能，两块地方都会停在旧内容上——而那正是最需要看准的时刻。
+ */
+function godPickedSig(): string {
+  const u = selectedId ? state.units.find((x) => x.id === selectedId) : undefined;
+  if (!u) return '-';
+  return `${u.id}:${u.hp}:${u.moved ? 'm' : '-'}${u.acted ? 'a' : '-'}:${
+    u.attacksLeft ?? ''
+  }:${JSON.stringify(u.skillCd ?? {})}`;
 }
 
 function renderGodBar(): void {
@@ -2888,8 +3244,9 @@ function renderGodBar(): void {
     // 这三样都会改工具栏的按钮和提示
     godPlay ?? '-',
     godPassing ? 'pass' : '-',
-    // 状态行会显示"手上这支兵还剩多少行动力"，换了选中就得重画
-    selectedId ?? '-',
+    // 状态行会显示"手上这支兵还剩多少行动力"，所以不是只看换了没换，
+    // 血量/行动力/技能冷却任何一项变了都得重写这一行
+    godPickedSig(),
     godRunning ? `run${godRound}` : '-',
     godResult,
     state.units.length,
@@ -2907,6 +3264,7 @@ function renderGodBar(): void {
 }
 
 function renderGodShelf(): void {
+  const pickedSig = godPickedSig();
   const sig = [
     Object.keys(state.unitTypes).length,
     godSide,
@@ -2926,8 +3284,9 @@ function renderGodShelf(): void {
     // 操控档决定货架顶上那句提示，AI 替对面走的时候又要换一句
     godPlay ?? '-',
     godPassing ? 'pass' : '-',
-    // 手上选着谁：状态行会换成这支兵的血量与行动力
-    selectedId ?? '-',
+    // 「手上这支兵」那块卡：id、血量、还能走/打、技能冷却。
+    // 只放 id 是不够的——开完技能冷却变了，卡片却还停在"就绪"上。
+    pickedSig,
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;
@@ -3152,7 +3511,13 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   aiPaused = false;
   dirty = false;
   closeHandoff();
+  // 换了一局就是换了一张图：上一局放大到 3× 拖着看的位置，到这一局毫无意义
+  resetZoom();
   clearSelection();
+  // 换房间＝换一间屋子说话：上一局的消息一条都不该跟过来
+  chatFeed.reset();
+  chatNotice = '';
+  chatUnread = 0;
   saveMatch(state);
   render();
   startRoomPolling();
@@ -3164,6 +3529,7 @@ function leaveRoom(): void {
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   resetRecorder();
+  resetZoom();
   clearSelection();
   render();
   toast(wasWatching ? '已退出观战，回到本机对局' : '已退出房间，回到本机对局');
@@ -3181,7 +3547,7 @@ function detachRoom(): void {
 }
 
 /** 提交这一回合。expectedTurn 是提交前本机的回合数，用来发现"两边同时提交" */
-async function pushTurn(seat: RoomSeat, expectedTurn: number): Promise<void> {
+async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): Promise<void> {
   try {
     const ok = await submitTurn(seat.code, state, expectedTurn);
     if (!ok) {
@@ -3189,7 +3555,7 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number): Promise<void> {
       return;
     }
     dirty = false;
-    toast('这一回合已提交，等对方行动');
+    toast(okText ?? '这一回合已提交，等对方行动');
     render();
   } catch (err) {
     toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
@@ -3208,8 +3574,15 @@ function startRoomPolling(): void {
  *   1. 云端说轮到我了（否则拉回来也没用）；
  *   2. 我这边没有未提交的草稿（否则会把人刚摆好的兵清掉）。
  *
+ * 但有一个例外，而且是压倒性的：**云端说这局已经结束了**。
+ * 认输既不推进回合、也不换行动方（`doSurrender` 只是把 winner 写上），
+ * 所以只按上面两条判断的话，对手点完认输，这一边永远等不到"轮到我了"，
+ * 棋盘就一直停在原状——输了的人那边已经看见结算卡，赢的人还在等下家。
+ * 分出胜负之后"未提交的草稿"也没有意义了（这局已经结了），所以这一条
+ * 不看 dirty、也不看轮次，直接把终局装进来。
+ *
  * 观战位没有"轮到我"这回事，所以只要有新东西就往下拉：
- * 回合变了、换人了、或者分出胜负了（认输不会推进回合，只看 turn 会漏）。
+ * 回合变了、换人了、或者分出胜负了（同样是因为认输不推进回合）。
  */
 async function pollRoom(): Promise<void> {
   const seat = room;
@@ -3223,30 +3596,45 @@ async function pollRoom(): Promise<void> {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
 
+    // 要不要把云端的这一局装进来，交给 room.ts 里那个纯函数判断（它有专门的用例）。
+    // 这里只负责"装进来之后干什么"——两份分支的分工就是这么切的。
+    const decision = adoptDecision(
+      {
+        turn: snapshot.turn,
+        current: snapshot.current,
+        winner: snapshot.state.winner ?? null,
+      },
+      { turn: state.turn, current: state.current, winner: state.winner ?? null },
+      { seat: seat.seat, spectator: seat.spectator === true, draft: dirty },
+    );
+    if (!decision.take) {
+      if (decision.why === 'draft') {
+        toast('对方已提交，但你这边还有没提交的走法——先结束回合，或者重新进房间');
+      }
+      return;
+    }
+
+    const fog = state.fog;
+    state = snapshot.state;
+    state.aiControl = { A: false, B: false };
+    state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    if (decision.why === 'finished') {
+      dirty = false;
+      clearSelection();
+      saveMatch(state);
+      render();
+      toast(
+        snapshot.state.winner === seat.seat
+          ? '对面已经结束这一局，你赢了'
+          : '这一局已经结束，对面赢了',
+      );
+      return;
+    }
     if (seat.spectator) {
-      const changed =
-        snapshot.turn !== state.turn ||
-        snapshot.current !== state.current ||
-        !!snapshot.state.winner !== !!state.winner;
-      if (!changed) return;
-      const fog = state.fog;
-      state = snapshot.state;
-      state.fog = fog;
       saveMatch(state);
       render();
       return;
     }
-
-    if (snapshot.current !== seat.seat) return;
-    if (snapshot.turn === state.turn) return;
-    if (dirty) {
-      toast('对方已提交，但你这边还有没提交的走法——先结束回合，或者重新进房间');
-      return;
-    }
-    const fog = state.fog;
-    state = snapshot.state;
-    state.aiControl = { A: false, B: false };
-    state.fog = fog; // 同上：迷雾是本地偏好，别被对面关掉
     clearSelection();
     saveMatch(state);
     render();
@@ -3297,6 +3685,328 @@ async function enterRoomFromUrl(code: string): Promise<void> {
 /** 以观战身份进入一个房间：不占座、不写云端，只看 */
 function watchRoom(code: string, snapshot: RoomSnapshot): void {
   applyRoom({ code, seat: 'A', token: newToken(), spectator: true }, snapshot);
+}
+
+// ---------- 房间聊天 ----------
+
+/**
+ * 聊天只开在房间里。
+ *
+ * 本机对局没有"别人"可说话：双人热座是把设备递过去，AI 局是对着电脑；
+ * 在这两种局里放一个永远没回应的输入框，比没有更让人困惑。
+ * 观战位**有**（这正是它存在的意义之一）：看局的人也能说话，两边都看得见。
+ */
+let chatOpen = false;
+/**
+ * 已经收到的消息 + "拉到哪儿了"。
+ *
+ * 水位（`lastId`）只能由服务器返回的数据推，见 net/chat.ts 里 `ChatFeed` 的注释：
+ * 以前自己发一条就把水位推到自己那条的 id，两个人几乎同时说话时，
+ * 夹在中间的那条会被永久跳过——"对方说的我这边缺一句"就是这么来的。
+ */
+const chatFeed = new ChatFeed();
+let chatTimer = 0;
+let chatDock: HTMLElement | null = null;
+let chatNotice = '';
+/** 收起面板时来了新消息，就在按钮上点一下——不然说完话没人知道 */
+let chatUnread = 0;
+/**
+ * 聊天面板被拖到哪了（相对出厂位置的像素偏移）。
+ *
+ * 出厂位置是"钉在视口右下"，这个偏移只在它上面加一层 transform：
+ * 换成 left/top 的话，每换一次窗口大小、每换一档缩放，都得重新算一遍基准。
+ */
+let chatShift = { x: 0, y: 0 };
+/** 至少留这么多像素在视口里，拖到边上也还能抓回来 */
+const CHAT_EDGE = 8;
+
+const chatSeat = (): ChatSeat => (watching() ? 'watch' : (room?.seat ?? 'A'));
+
+/** 我在这条聊天里的名字：玩家用他那一方的名字，观战就叫"观众" */
+function chatMyName(): string {
+  if (watching()) return '观众';
+  return state.players[me()].name;
+}
+
+/**
+ * 聊天面板（一次建好，之后只更新里面的日志）。
+ *
+ * 为什么不像交接遮罩那样每次重建：里面有一个正在输入的 `<input>`。
+ * 重建＝把节点换掉＝焦点丢失、光标回到开头，一边打字一边被"新消息"打断。
+ * 所以壳子只建一次，`paintChat` 只改 `.chat-log` 那一块。
+ */
+function ensureChatDock(): HTMLElement {
+  if (chatDock) return chatDock;
+  const el = document.createElement('div');
+  el.className = 'chat-dock';
+  el.innerHTML = `
+    <button class="chat-fab" data-chat="toggle" hidden>聊天</button>
+    <section class="chat-panel" hidden aria-label="房间聊天">
+      <header class="chat-head" title="按住这里可以拖动面板">
+        <b>房间聊天</b>
+        <span class="chat-who"></span>
+        <button class="chat-x" data-chat="close" aria-label="收起">×</button>
+      </header>
+      <div class="chat-log"></div>
+      <form class="chat-send">
+        <input class="chat-input" type="text" maxlength="${CHAT_MAX_LEN}"
+               placeholder="说点什么…（Enter 发送）" autocomplete="off" />
+        <button class="btn btn-sm" type="submit">发送</button>
+      </form>
+      <div class="chat-note"></div>
+    </section>`;
+  document.body.append(el);
+
+  el.addEventListener('click', (e) => {
+    const act = (e.target as HTMLElement).closest<HTMLElement>('[data-chat]')?.dataset.chat;
+    if (act === 'toggle') openChat();
+    if (act === 'close') closeChat();
+  });
+
+  // 输入法组字的时候按 Enter 是"选词"，不是"发送"（见 ui/chat-input.ts）
+  const input = el.querySelector<HTMLInputElement>('.chat-input');
+  if (input) bindChatComposer(input, () => void sendChatNow());
+
+  bindChatDrag(el);
+
+  chatDock = el;
+  return el;
+}
+
+/**
+ * 让聊天面板能被拖着走。
+ *
+ * 为什么抓手是标题栏而不是整块面板：面板里有滚动的聊天记录和输入框，
+ * 整块可拖会把"选中一句话 / 拖滚动条 / 点输入框"统统变成"挪窗口"。
+ * 标题栏上没有别的功能（除了那个 ×，它被排除掉了），是唯一不妨碍任何操作的抓手。
+ *
+ * 位移只写 `transform`，不碰 right/bottom：出厂位置按视口右下钉着，
+ * 改定位属性就得跟着视口尺寸重算，而 transform 是个与基准无关的偏移。
+ * 拖动范围夹在视口里，最少留 CHAT_EDGE 个像素——不然一拖就再也抓不回来了。
+ */
+function bindChatDrag(el: HTMLElement): void {
+  const panel = el.querySelector<HTMLElement>('.chat-panel');
+  const head = el.querySelector<HTMLElement>('.chat-head');
+  if (!panel || !head) return;
+
+  /**
+   * 拖动开始时的现场：指针位置、面板当时的位置、以及当时的偏移量。
+   *
+   * `l/t` 是**含当前偏移**的位置。用"没偏移的基准"去加位移是错的：
+   * 面板已经被拖过一次之后再拖，它会被拉回基准位置重新起步，看着像"跳了一下"。
+   */
+  let drag: {
+    id: number;
+    x: number;
+    y: number;
+    l: number;
+    t: number;
+    w: number;
+    h: number;
+    sx: number;
+    sy: number;
+  } | null = null;
+
+  const paint = (): void => {
+    panel.style.transform =
+      chatShift.x || chatShift.y ? `translate(${chatShift.x}px, ${chatShift.y}px)` : '';
+  };
+
+  head.addEventListener('pointerdown', (e) => {
+    // 点在 × 上是要关面板，不是要拖
+    if ((e.target as HTMLElement).closest('button')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const box = panel.getBoundingClientRect();
+    if (box.width <= 0) return; // 还没显示出来，量不到基准
+    drag = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      l: box.left,
+      t: box.top,
+      w: box.width,
+      h: box.height,
+      sx: chatShift.x,
+      sy: chatShift.y,
+    };
+    head.setPointerCapture?.(e.pointerId);
+    panel.classList.add('dragging');
+    // 不拦这一下，标题文字会被顺手选中，拖起来像在划词
+    e.preventDefault();
+  });
+
+  head.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const maxL = Math.max(CHAT_EDGE, window.innerWidth - drag.w - CHAT_EDGE);
+    const maxT = Math.max(CHAT_EDGE, window.innerHeight - drag.h - CHAT_EDGE);
+    const l = Math.min(maxL, Math.max(CHAT_EDGE, drag.l + (e.clientX - drag.x)));
+    const t = Math.min(maxT, Math.max(CHAT_EDGE, drag.t + (e.clientY - drag.y)));
+    chatShift = {
+      x: Math.round(drag.sx + (l - drag.l)),
+      y: Math.round(drag.sy + (t - drag.t)),
+    };
+    paint();
+  });
+
+  const end = (e: PointerEvent): void => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag = null;
+    panel.classList.remove('dragging');
+    head.releasePointerCapture?.(e.pointerId);
+  };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+}
+
+/**
+ * 把拖过的位置夹回视口。
+ *
+ * 只在"打开面板"时做一次：窗口可能在上次关掉之后被改小了，
+ * 或者手机横竖屏换过，不夹一下面板就有一半在屏幕外，而且抓不回来。
+ */
+function clampChatShift(): void {
+  const panel = chatDock?.querySelector<HTMLElement>('.chat-panel');
+  if (!panel || panel.hidden) return;
+  if (!chatShift.x && !chatShift.y) return;
+  const box = panel.getBoundingClientRect();
+  if (box.width <= 0) return;
+  const maxL = Math.max(CHAT_EDGE, window.innerWidth - box.width - CHAT_EDGE);
+  const maxT = Math.max(CHAT_EDGE, window.innerHeight - box.height - CHAT_EDGE);
+  const l = Math.min(maxL, Math.max(CHAT_EDGE, box.left));
+  const t = Math.min(maxT, Math.max(CHAT_EDGE, box.top));
+  const nx = Math.round(chatShift.x + (l - box.left));
+  const ny = Math.round(chatShift.y + (t - box.top));
+  if (nx === chatShift.x && ny === chatShift.y) return;
+  chatShift = { x: nx, y: ny };
+  panel.style.transform = `translate(${nx}px, ${ny}px)`;
+}
+
+/** 显示 / 隐藏聊天入口。跟着 `room` 走——没房间就没有聊天这回事 */
+function renderChatDock(): void {
+  const el = ensureChatDock();
+  const fab = el.querySelector<HTMLElement>('.chat-fab')!;
+  const panel = el.querySelector<HTMLElement>('.chat-panel')!;
+  if (!room) {
+    // 退出房间：把面板收掉，记录清空——换到另一局时不该看见上一局的对话
+    if (chatOpen) closeChat();
+    chatFeed.reset();
+    chatNotice = '';
+    chatUnread = 0;
+  }
+  fab.hidden = !room;
+  panel.hidden = !(room && chatOpen);
+  fab.textContent = chatUnread > 0 ? `聊天 · ${chatUnread}` : '聊天';
+  fab.classList.toggle('has-new', chatUnread > 0);
+}
+
+/** 只重画日志那一块（壳子里的输入框不动） */
+function paintChat(): void {
+  const el = ensureChatDock();
+  const log = el.querySelector<HTMLElement>('.chat-log')!;
+  log.innerHTML = chatLinesHtml(chatFeed.lines, chatSeat());
+  // 贴在底部：新消息进来时不往上翻就等于没看见
+  log.scrollTop = log.scrollHeight;
+  const who = el.querySelector<HTMLElement>('.chat-who');
+  if (who) {
+    who.textContent = room
+      ? `${chatMyName()} · 房间 ${room.code}${watching() ? '（观战）' : ''}`
+      : '';
+  }
+  const note = el.querySelector<HTMLElement>('.chat-note');
+  if (note) note.textContent = chatNotice;
+}
+
+function openChat(): void {
+  if (!room) return;
+  chatOpen = true;
+  chatUnread = 0;
+  renderChatDock();
+  paintChat();
+  // 上次拖到的位置可能已经不在视口里（换过窗口、转过屏幕），先夹回来
+  clampChatShift();
+  chatDock?.querySelector<HTMLInputElement>('.chat-input')?.focus({ preventScroll: true });
+  void pollChat();
+  window.clearInterval(chatTimer);
+  // 4 秒一轮：回合制对局里聊天不是弹幕，比这个更快只是白耗电；
+  // 比 15 秒的房间轮询快，是因为"说话"这件事本来就该有回声。
+  chatTimer = window.setInterval(() => void pollChat(), 4000);
+}
+
+function closeChat(): void {
+  chatOpen = false;
+  window.clearInterval(chatTimer);
+  chatTimer = 0;
+  renderChatDock();
+}
+
+async function pollChat(): Promise<void> {
+  const seat = room;
+  if (!seat || !chatOpen) return;
+  if (document.visibilityState !== 'visible') return;
+  const res = await fetchChat(seat.code, chatFeed.lastId);
+  if (room?.code !== seat.code) return; // 期间退出了房间
+  if (!res.ok) {
+    const msg = res.reason ?? '';
+    if (msg !== chatNotice) {
+      chatNotice = msg;
+      paintChat();
+    }
+    return;
+  }
+  if (res.lines.length === 0) {
+    if (chatNotice) {
+      chatNotice = '';
+      paintChat();
+    }
+    return;
+  }
+  // 水位由这一页推（见 ChatFeed.accept）；这里是唯一推进它的地方
+  const fresh = chatFeed.accept(res.lines);
+  if (!chatOpen) chatUnread += fresh.length;
+  paintChat();
+}
+
+async function sendChatNow(): Promise<void> {
+  const seat = room;
+  if (!seat) return;
+  const input = chatDock?.querySelector<HTMLInputElement>('.chat-input');
+  const raw = input?.value ?? '';
+  // 先问一句"会不会被截"：`maxlength` 是输入框自己在拦，输入法和某些粘贴
+  // 并不总是听话。真超了就不发、把字留在框里——让对面收到半句比拒发更糟。
+  if (chatBodyOverflows(raw)) {
+    chatNotice = `太长了，最多 ${CHAT_MAX_LEN} 字（现在 ${chatBodyLength(raw)} 字）。拆成两条发吧，字还留在框里。`;
+    paintChat();
+    input?.focus();
+    return;
+  }
+  const body = trimChatBody(raw);
+  if (!body) {
+    input?.focus();
+    return;
+  }
+  if (input) input.value = '';
+  const res = await sendChat(seat.code, chatSeat(), chatMyName(), body);
+  if (!res.ok) {
+    // 发失败就把字还回去：重打一遍是最气人的一种失败
+    if (input && !input.value) input.value = body;
+    chatNotice = res.howTo ? `${res.reason}（${res.howTo}）` : (res.reason ?? '没发出去');
+    paintChat();
+    return;
+  }
+  chatNotice = '';
+  if (res.line) {
+    // 自己这条先显示出来。注意 `adopt` **不推水位**：见 ChatFeed 的注释，
+    // 推了就会跳过别人夹在中间发的那条。
+    chatFeed.adopt(res.line);
+    chatUnread = 0;
+    paintChat();
+    // 顺手补一次增量：自己这条的 id 之前可能还有别人刚发的消息
+    void pollChat();
+  } else {
+    // 云端没回那一行：立刻增量取一次，别让人对着空白等
+    await pollChat();
+    paintChat();
+  }
 }
 
 // ---------- 交接遮罩 ----------
@@ -3377,10 +4087,13 @@ appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;
   if (!target) return;
 
-  // 上一次操作是"拖地图"：这一下 click 是拖动的尾巴，不是点格子
+  // 上一次操作是"拖地图"：这一下 click 是拖动的尾巴，不是点格子。
+  // **只吞落在棋盘上的那一下**：缩放条和顶栏按钮不在 .board 里面，
+  // 拖着地图松手时正好压在"缩小"上，要是连它一起吞掉，按键看着就是失灵的
+  // ——"放大了点缩小没反应"有一部分就是这么来的。
   if (suppressClick) {
     suppressClick = false;
-    return;
+    if (target.closest('.board')) return;
   }
 
   const actionEl = target.closest<HTMLElement>('[data-act]');
@@ -3508,7 +4221,7 @@ watchBoardResize();
  */
 function fatalBanner(err: unknown, title = '启动出错'): void {
   const msg = err instanceof Error ? err.message : String(err);
-  console.error('[方格战棋]', title, err);
+  console.error('[时代与回旋镖]', title, err);
   if (document.getElementById('fatal-banner')) return;
 
   const box = document.createElement('div');
@@ -3566,7 +4279,7 @@ function repairLoadedState(): number {
   });
 
   if (dropped.length > 0) {
-    console.warn('[方格战棋] 存档里有本版不认识的单位，已移除', dropped);
+    console.warn('[时代与回旋镖] 存档里有本版不认识的单位，已移除', dropped);
   }
   return dropped.length;
 }
@@ -3577,7 +4290,7 @@ function repairLoadedState(): number {
  * 宁可丢掉一局，也不能让人卡在进不去的白屏上——前者是可惜，后者是断绝。
  */
 function recoverFromBadSave(err: unknown): void {
-  console.error('[方格战棋] 存档读不动了，改开新局', err);
+  console.error('[时代与回旋镖] 存档读不动了，改开新局', err);
   try {
     const raw = localStorage.getItem('warchess:match:v1');
     if (raw) localStorage.setItem('warchess:match:v1.broken', raw);

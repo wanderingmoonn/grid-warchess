@@ -162,6 +162,9 @@ const CHAR: Record<Terrain, string> = {
   marsh: 'w',
   dune: 'd',
   shallow: 's', // 浅滩：陆军能踩过去的"水"
+  // 生成器自己**不画**深水：它是「海战」扩展在 afterTerrain 里把
+  // 离岸 2 格以上的 water 改写的。这里留字符只是为了类型完整 + 调试转储够用。
+  deep: 'D',
   lava: 'l',
   volcano: 'V',
 };
@@ -329,8 +332,22 @@ function nearestBetween(a: Pos[], b: Pos[]): number {
  *
  * 第 3 步是"平均间距不变"的保证：形状随便变，距离的分布不动。
  *
+ * **纵深必须两侧同构**（2026-10-29 修的真 bug）：
+ * 以前两边的纵深窗口不是镜像的——近侧永远是 `[底线, 前线]`（只有 1~2 格，
+ * 城只能贴着自己的边），远侧是 `[前线, 对面底线]`（把整张图的余量都吃下来）。
+ * 于是上半区的城离自己的上边平均 1.5 格、下半区的城离自己的下边平均 3.3 格，
+ * 32×32 上差到 3.3 格：同一张图上一边被逼在墙角、另一边坐拥纵深。
+ * 现在两侧共用同一个"能退几格"的 `pad`（由目标间距反推），也共用**同一组纵深**
+ * （第一个钉死 `pad`、第二个有机会退一格）：两座城能错开一行，但上/下半区的
+ * 纵深多重集逐格相同，均值也就必然相同——不是"统计上差不多"。
+ *
+ * 注意这里对称的只是**纵深**（到各自底线的那一段）。横向（沿河方向）两半区各抽各的，
+ * 不做镜像：真要做镜像就是 `symmetry: 'mirror'` 那条路（B 是 A 的 180° 点对称，
+ * 见 mirrorBlock），公平图要留着自己"两边城墙不在同一段"的样子。
+ *
  * 必须保留的不变量（全部是硬的，写测试盯着）：
  *   · 任意两座城的曼哈顿距离 ≥ minCitySep；
+ *   · 上/下半区到各自底线的平均距离相等（见 test-rules「城市到各自底线」）；
  *   · 对峙布局下，A 的两个城和 B 的两个城必须分处河的两侧
  *     （无渡口河靠这条才能真的把两军隔开，见 freeBand / midOf）；
  *   · 镜像模式下，B 必须是 A 的严格点镜像（地形对称全靠它）。
@@ -364,33 +381,56 @@ function planCities(
   const crossLo = 1;
   const crossHi = cross - span - 1;
 
+  /**
+   * 每一侧能从**自己的底线**往里退几格，也就是"两军各压到多前"。
+   *
+   * 由目标间距反推，两侧平分余量：
+   *   `(alongHi - pad) - (alongLo + pad) = target`  ⇒  `pad = (alongHi - alongLo - target)/2`
+   *
+   * 以前只有近侧拿到 `alongLo..front0`（1~2 格）、远侧拿到 `front1..alongHi`
+   * （把整张图的余量一个人吃了）：于是上半区的城被逼在墙角、下半区的城坐拥纵深，
+   * 32×32 上"到各自底线"的平均距离差到 3.3 格。现在两侧都只有 pad 格。
+   *
+   * 小图上 target 可能吃满纵深，pad 退化成 0：两侧各只剩一行，城退回
+   * "同一行、横向拉开"的老样子，这是约束下的唯一解。
+   */
+  const pad = Math.max(0, Math.floor((alongHi - alongLo - target) / 2));
+
+  /**
+   * 两侧**共用**的纵深多重集：两座城最多错开一行。
+   *
+   * 第一个永远是 `pad`（压到最前），第二个有对半的机会退一格。
+   * 为什么必须"共用"：所谓"上下等距"就是两侧到各自底线的距离分布一样，
+   * 而分布一样的最省事写法就是**同一组数**——远侧不是另抽一次，而是把这一组调个顺序用。
+   * 所以哪怕错开了，两边的均值、甚至多重集都逐格相同。
+   *
+   * 为什么只退一格：`pad` 是"两军刚好隔 target"的位置，再往回退就是让两军比 target
+   * 更远，退两格就开始不像同一张图上的对局了。
+   * 为什么第一个钉死 `pad`：这样无论错开与否，**最近的那一对城**始终在 `pad` 上，
+   * 目标间距不会因为错落而被动变宽。
+   */
+  const depth: [number, number] = [pad, pad > 0 && rng() < 0.5 ? pad - 1 : pad];
+
   /** 这个位置离已占的每一座城都够远吗 */
   const farEnough = (p: Pos, taken: Pos[]): boolean =>
     taken.every((q) => citySep(p, q) >= minSep);
 
   /**
-   * 在某一侧、某个纵深区间里挑一个满足间距的位置。
+   * 在某一侧、指定纵深上挑一个横向位置。
    *
-   * 优先贴着前线（深度偏移越小越好），同一深度里横向随机——
-   * 这样"往前压/往回缩"的手感和以前一样，只是不再允许贴脸。
-   * 找不到就返回 null，让上层换一次重撒。
-   *
-   * 纵深区间是"这一侧到前线之间"，不是前线 ±1：间距是硬约束，
-   * 为了让出间距而往回缩一格，比两座城贴在一起好得多。
+   * `side` 0 = 靠近 `alongLo` 的那一侧（横河时是上），1 = 另一侧。
+   * 纵深由调用方给（两侧共用同一组），这里只负责横向随机——
+   * 横向本来就不需要对称，两边的城墙落在哪一段本来就不该一样。
    */
-  const make = (front: number, lo: number, hi: number, taken: Pos[]): Pos | null => {
-    const cands: Array<{ p: Pos; rank: number }> = [];
-    for (let a = lo; a <= hi; a++) {
-      for (let cr = crossLo; cr <= crossHi; cr++) {
-        const p = at2(a, cr);
-        if (!farEnough(p, taken)) continue;
-        // 深度偏移优先，横向在同等深度里随机（rng 决定，可复现）
-        cands.push({ p, rank: Math.abs(a - front) * 1000 + Math.floor(rng() * 999) });
-      }
+  const placeAt = (side: 0 | 1, d: number, taken: Pos[]): Pos | null => {
+    const a = side === 0 ? alongLo + d : alongHi - d;
+    const cands: Pos[] = [];
+    for (let cr = crossLo; cr <= crossHi; cr++) {
+      const p = at2(a, cr);
+      if (farEnough(p, taken)) cands.push(p);
     }
     if (cands.length === 0) return null;
-    cands.sort((u, v) => u.rank - v.rank);
-    return cands[0]!.p;
+    return cands[Math.floor(rng() * cands.length)]!;
   };
 
   const attempt = (): { A: Pos[]; B: Pos[] } | null => {
@@ -401,7 +441,7 @@ function planCities(
       const a: Pos[] = [];
       const taken: Pos[] = []; // A 的城 + 它们的镜像，全都算占位
       for (let k = 0; k < 2; k++) {
-        const p = make(front0, alongLo, front0, taken);
+        const p = placeAt(0, depth[k]!, taken);
         if (!p) return null;
         a.push(p);
         taken.push(p, mirrorOf(p));
@@ -414,16 +454,19 @@ function planCities(
     const taken: Pos[] = [];
     const side0: Pos[] = [];
     const side1: Pos[] = [];
-    for (const [front, lo, hi, arr] of [
-      [front0, alongLo, front0, side0],
-      [front1, front1, alongHi, side1],
-    ] as const) {
-      for (let k = 0; k < 2; k++) {
-        const p = make(front, lo, hi, taken);
-        if (!p) return null;
-        taken.push(p);
-        arr.push(p);
-      }
+    for (let k = 0; k < 2; k++) {
+      const p0 = placeAt(0, depth[k]!, taken);
+      if (!p0) return null;
+      taken.push(p0);
+      side0.push(p0);
+
+      // 另一半区：**同一组纵深的另一个顺序**。顺序对调是给对角布局留的：
+      // 对角时 A 拿 side0[0] + side1[0]、B 拿 side0[1] + side1[1]，
+      // 顺序照抄的话 A 会吃下两个"深"的、B 两个"浅"的——那是新的不公平。
+      const p1 = placeAt(1, depth[1 - k]!, taken);
+      if (!p1) return null;
+      taken.push(p1);
+      side1.push(p1);
     }
     // 对峙：A 整条边、B 整条边；对角：两岸各有敌我各一
     if (layout === 'diagonal') {
@@ -1357,10 +1400,19 @@ export function generateLayout(
   if (style === 'random') {
     // 随机袋：河道与山岭各两次（这两种最耐打），其余各一次。
     // 扩展地貌进了 styles 才会进袋——不然"随机"会变成"每局都在打火山"。
+    //
+    // 反过来也要管：**扩展自带的地貌进两次**。它们才是"勾了这个扩展"的理由——
+    // 只进一次的话，本体四种地貌占 6/14，四成对局拿到的图跟没开扩展时
+    // 一模一样（同种子同地貌时甚至逐格相同），等于白勾。
+    // 本体那两条"进两次"的优惠也只留给没开扩展的时候。
+    const baseIds = new Set<string>(MAP_STYLES.map((o) => o.id));
+    const extCount = styles.filter((id) => !baseIds.has(id)).length;
     const bag: Array<Exclude<MapStyle, 'random'>> = [];
     for (const id of styles) {
+      const isExt = !baseIds.has(id);
       bag.push(id);
-      if (id === 'river-h' || id === 'ridge') bag.push(id);
+      if (isExt) bag.push(id);
+      else if (extCount === 0 && (id === 'river-h' || id === 'ridge')) bag.push(id);
     }
     style = bag[Math.floor(rngStyle() * bag.length)] ?? 'river-h';
   }
@@ -1565,8 +1617,16 @@ export function generateLayout(
     }
     // 离城心最近的两格留作港口，其它填掉。开了「地形高差」时填成浅滩而不是平地：
     // 船还能停在城门口那片水里，陆军也能直接涉水出城——两边都不吃亏。
+    //
+    // 两处例外，都为了"无渡口河"那张图的口径（对外宣称"过河只能造桥"）：
+    //   · 河身那几格**保持深水**——填平等于在城门口架了一座不用造的桥；
+    //   · 其余的水**填平地**，不留浅滩——天堑图上"一格浅滩都没有"是硬口径，
+    //     而城边正是最要命的位置：留个能徒涉的口子，桥就白造了。
     ring.sort((a, b) => a.d - b.d);
-    for (const t of ring.slice(2)) put(c, t.x, t.y, c.shallowOk ? 'shallow' : 'plain');
+    for (const t of ring.slice(2)) {
+      if (fordless && riverCells.has(t.y * c.w + t.x)) continue;
+      put(c, t.x, t.y, c.shallowOk && !fordless ? 'shallow' : 'plain');
+    }
   }
   symmetrize(); // 城郊处理也要对称，否则镜像模式会和"严格对称"对不上
 
@@ -1589,9 +1649,27 @@ export function generateLayout(
   // 放在所有开凿/清场之后、出生点之前：这一步只看"最后的地形长什么样"，
   // 前面谁凿了谁填了都不必关心。多个扩展按启用顺序依次过一遍。
   // 关掉扩展这条循环就是空的——本体地图一格都不会变。
-  for (const id of opts.expansions ?? []) {
-    expansionById(id)?.afterTerrain?.(c.g, c.w, c.h);
+  //
+  // 交给它们一张"不许动"的名单：城市本身加城郊那一圈。城门口要能站人、
+  // 要能出兵，补山脚补到那儿就成了"城被台地围死"。
+  const keepAroundCity = new Set<number>();
+  for (const p of [...plan.A, ...plan.B]) {
+    for (let dy = -1; dy <= citySize; dy++) {
+      for (let dx = -1; dx <= citySize; dx++) {
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        keepAroundCity.add(y * w + x);
+      }
+    }
   }
+  for (const id of opts.expansions ?? []) {
+    expansionById(id)?.afterTerrain?.(c.g, c.w, c.h, keepAroundCity);
+  }
+  // 收尾会改地形，而镜像是在这之前做完的。现在这道收尾是"对称进、对称出"
+  // （只看地形、不看 rng），所以这一步其实是空转；留着是因为它很便宜，
+  // 而下一个写 afterTerrain 的人未必守这条——一处不对称，整张镜像图就废了。
+  symmetrize();
 
   // ---- 出生点 ----
   const pool = unitPool.length > 0 ? unitPool : ['infantry'];

@@ -117,6 +117,8 @@ export const CONFIG = {
     valley: 2,
     // 浅流：站在漫到小腿的水里，没处躲——比平地还差
     shallow: -1,
+    // 深水：外海，没遮没挡（船在这里挨打就是挨打）
+    deep: 0,
     // 沼泽：没掩护，还得站在泥里
     marsh: 0,
     // 沙丘：沙脊上目标明显
@@ -142,6 +144,8 @@ export const CONFIG = {
     // 水军也能过（水够深，船浮得起来）——它的水面判定在 navigable()，
     // 这里写的只是陆军的价；水军照旧按 1 点一步算。
     shallow: 2,
+    // 深水：陆军一律过不去（99），水军按 navigable() 走 1 点一步
+    deep: 99,
     marsh: 2,
     dune: 2,
     // 熔岩：能过，但一步顶三步，而且回合末会烧人（见「地形高差」扩展）。
@@ -170,6 +174,7 @@ export const CONFIG = {
     marsh: '沼泽',
     dune: '沙丘',
     shallow: '浅流',
+    deep: '深水',
     lava: '熔岩',
     volcano: '火山',
   } as Record<Terrain, string>,
@@ -198,13 +203,13 @@ export const CITY = {  /** 边长：占 size × size 个格子 */
  * 熔岩不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
  */
 export function passable(t: Terrain): boolean {
-  return t !== 'water' && t !== 'mountain' && t !== 'volcano';
+  return t !== 'water' && t !== 'deep' && t !== 'mountain' && t !== 'volcano';
 }
 
 /**
  * 船能不能待在这一格。
  *
- * 三种水面：深水（water）、桥面（bridge）、浅滩（shallow）。
+ * 四种水面：水域（water）、深水（deep）、桥面（bridge）、浅滩（shallow）。
  * 浅滩是**双方共用**的口子——陆军涉水、水军也能贴着它滑过去，
  * 它存在的意义之一就是给水军一条抄近路：不用绕整片海，直接从浅滩挤过去。
  * （所以"船搁底进不了浅流"是错的，别再把浅流当成只有陆军能走的地形。）
@@ -213,7 +218,7 @@ export function passable(t: Terrain): boolean {
  * 所以这条判断对本体对局没有任何影响。
  */
 export function navigable(t: Terrain): boolean {
-  return t === 'water' || t === 'bridge' || t === 'shallow';
+  return t === 'water' || t === 'deep' || t === 'bridge' || t === 'shallow';
 }
 
 export interface EraDef {

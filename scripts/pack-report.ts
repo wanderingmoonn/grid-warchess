@@ -209,7 +209,7 @@ const packTable = PACKS.map((p) => {
   return `| ${p.eraName} | \`${p.id}\` | ${n} | ${vanilla} | ${n + vanilla} | ${p.theme} |`;
 }).join('\n');
 
-const report = `# 方格战棋 · 五个时代兵种扩展包 平衡测试报告
+const report = `# 时代与回旋镖 · 五个时代兵种扩展包 平衡测试报告
 
 > 数据由 \`scripts/balance-report.ts\` 跑出、\`scripts/pack-report.ts\` 汇总。
 > 每个数字都能用文末的命令重跑出来——不是手填的。

@@ -20,11 +20,13 @@ import { expansionById, unitSourceOf, activeExpansions } from '../core/expansion
 import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
-import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, TERRAIN_INFO } from '../core/info.ts';
+import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
   attacksLeftOf,
   attacksPerTurn,
+  splashRadiusOf,
+  splashRatioOf,
   buildingAt,
   citiesOf,
   cityById,
@@ -35,6 +37,7 @@ import {
   distToCity,
   effectiveRange,
   effectiveStats,
+  elementOf,
   maxHpOf, 
   heroSkillsOf,
   recruitResCost,
@@ -45,6 +48,7 @@ import {
   utype,
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
 
 export interface PanelInput {
@@ -384,15 +388,25 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
  */
 function heroSkillBlock(s: GameState, units: Unit[]): string {
   const rows: string[] = [];
+  let anyCharge = false;
   for (const u of units) {
     const def = utype(s, u.type);
     if (!def.skills || def.skills.length === 0) continue;
     for (const k of heroSkillsOf(s, u)) {
+      // 充能型技能要把"还剩几发"写在脸上：写成"就绪/冷却"会让人以为
+      // 只能一次一次地等，而它其实是"攒着可以连开"的那一类。
+      const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
+      const status = k.ready
+        ? '就绪'
+        : k.chargeMax > 0
+          ? `${k.toNext} 回合回一发`
+          : `${k.cd} 回合`;
+      if (k.chargeMax > 0) anyCharge = true;
       rows.push(
         `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
-           <span class="meta"><b>${def.name} · ${k.def.name}</b><span>${escapeHtml(k.def.summary)}</span></span>
-           <span class="price">${k.ready ? '就绪' : `${k.cd} 回合`}</span>
+           <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
+           <span class="price">${status}</span>
          </button>`,
       );
     }
@@ -400,7 +414,9 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
   if (rows.length === 0) return '';
   return `<div class="card-title" style="margin-top:14px">英雄技能</div>
     <div class="recruit-list">${rows.join('')}</div>
-    <div class="hint" style="margin-top:8px">技能不占行动，每个英雄每回合最多一次。冷却中的按钮会显示还要等几回合。</div>`;
+    <div class="hint" style="margin-top:8px">技能不占行动，每个英雄每回合最多一次。${
+      anyCharge ? '带「N/M 发」的是充能型：一池攒着用，用完还要等回充。' : ''
+    }冷却中的按钮会显示还要等几回合。</div>`;
 }
 
 function renderDetail(input: PanelInput, myTurn: boolean): string {
@@ -474,7 +490,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const buildables = (def.builds ?? [])
       .map((id) => s.unitTypes[id])
       .filter((x): x is UnitTypeDef => !!x);
-    const notes = describeUnit(s, def);
+    const notes = describeUnit(s, def, undefined, selectedUnit);
     const noteBlock =
       notes.length === 0
         ? ''
@@ -608,7 +624,11 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             .map((it) => modRow('甲', it))
             .join('')}</div>`
         : '';
-    
+
+    // 当前属性（运行时值优先：至尊法师每回合写 u.element）
+    const elNow = elementOf(s, selectedUnit);
+    const hasMastery = (def.abilities ?? []).includes('element-mastery');
+    const canShift = (def.cycle ?? []).length > 1;
 
     return `
       <div class="unit-head">
@@ -632,6 +652,30 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         <b>${eff.atk} / ${eff.armor}${baseNote}</b>
       </div>
       ${statModBlock}
+      ${
+        // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
+        // 只写"攻击 0"等于告诉玩家这个兵不会打人。
+        def.magicAtk
+          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${def.magicAtk} / ${
+              def.magicRes ?? 0
+            }</b></div>`
+          : ''
+      }
+      ${
+        // 当前属性：至尊法师每回合自己切一次，而属性决定"打出去带什么状态、
+        // 暗形态下魔法段还 ×1.5"。不显示就是在让人猜——那个词会变成一枚纯装饰的徽标。
+        elNow
+          ? `<div class="info-row"><span>当前属性</span><b>${ELEMENT_NAME[elNow]}${
+              canShift ? '（可切）' : ''
+            }</b></div>${
+              hasMastery && ELEMENT_EFFECT[elNow]
+                ? `<div class="hint">${ELEMENT_EFFECT[elNow]}${
+                    canShift ? ' · 点「转属性」切下一种' : ''
+                  }</div>`
+                : ''
+            }`
+          : ''
+      }
       <div class="info-row"><span>移动力</span><b>${
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
@@ -646,8 +690,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       }
       ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
       ${
-        stats.splash > 0
-          ? `<div class="info-row"><span>溅射</span><b>主目标 ${stats.splash} 格内（不含斜角） · ${Math.round(stats.splashRatio * 100)}%</b></div>`
+        // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
+        // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
+        splashRadiusOf(s, selectedUnit) > 0
+          ? `<div class="info-row"><span>溅射</span><b>主目标 ${splashRadiusOf(
+              s,
+              selectedUnit,
+            )} 格内（不含斜角）· ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
           : ''
       }
       ${
@@ -1267,7 +1316,7 @@ export function seasonLabel(turn: number): string {
 
 export function topbarShell(): string {
   return `
-    <div class="brand">方格战棋 <small>回合制 · 1v1</small></div>
+    <div class="brand">时代与回旋镖 <small>回合制 · 1v1</small></div>
     <div class="turn-chip" title="当前行动方">
       <b data-ref="turn"></b>
       <span class="side-dot a" data-ref="dot"></span>

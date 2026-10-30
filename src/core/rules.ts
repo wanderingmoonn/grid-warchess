@@ -94,7 +94,11 @@ import type {
 export function adjacentToWater(s: GameState, x: number, y: number): boolean {
   return DIRS.some(([dx, dy]) => {
     const t = tileAt(s, x + dx, y + dy);
-    return !!t && (t.terrain === 'water' || t.terrain === 'bridge');
+    if (!t) return false;
+    // 临水就是临水，不分深浅：浅流踩得过去、深水只有船能进，
+    // 但"挨着水"这件事对贸易、港口、造船位是一回事。
+    // 浅流漏判过一次（农民站在渡口边上拿不到河运加成），和桥那次是同一类错。
+    return t.terrain === 'water' || t.terrain === 'deep' || t.terrain === 'shallow' || t.terrain === 'bridge';
   });
 }
 
@@ -674,21 +678,79 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
   return d;
 }
 
-/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+/**
+ * 这一下能打出多少魔法伤害。
+ *
+ * `foe` 可以为 null（攻城时目标是一座城，不是单位）：魔法段本身只被魔抗平减，
+ * 不需要目标是个单位；只有「属性精研·暗」那种"按对手放大"的钩子需要它，
+ * 没有对手时自然跳过。
+ */
+export function magicSegment(
+  s: GameState,
+  attacker: Unit,
+  magicRes: number,
+  foe: Unit | null,
+): number {
   if (outOfAmmo(s, attacker)) return 0;
   const def = utype(s, attacker.type);
   const magic = def.magicAtk ?? 0;
   if (magic <= 0) return 0;
-  const out = Math.max(0, magic - (utype(s, defender.type).magicRes ?? 0));
+  const out = Math.max(0, magic - magicRes);
   // 魔法段的倍率交给能力自己（现在只有「属性精研·暗」用它）。
   // 先减魔抗再放大——"打穿"和"放大"是两件事，顺序反过来对高魔抗目标会变成白送。
   let dmgMagic = out;
+  if (!foe) return dmgMagic;
   for (const h of hooksFor(def)) {
     if (h.magicMul) {
-      dmgMagic = h.magicMul({ state: s, self: attacker, foe: defender, magic: dmgMagic, api: abilityApi });
+      dmgMagic = h.magicMul({ state: s, self: attacker, foe, magic: dmgMagic, api: abilityApi });
     }
   }
   return dmgMagic;
+}
+
+/** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
+export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
+  return magicSegment(s, attacker, utype(s, defender.type).magicRes ?? 0, defender);
+}
+
+/**
+ * 出手方的攻击力：基础 + 光环 + 状态修正（威吓、狂暴……）。
+ *
+ * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
+ * 以前这条只在野战里成立，攻城走的是另一套账。
+ */
+export function attackPowerNow(s: GameState, attacker: Unit): number {
+  let atkNow = utype(s, attacker.type).atk + auraBonus(s, attacker).atk;
+  for (const [key, val] of orderedStatuses(attacker.status)) {
+    const sdef = STATUS_REGISTRY[key];
+    if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
+  }
+  return atkNow;
+}
+
+/**
+ * 属性倍率：弱点放大、抗性打折。
+ *
+ * 作用在**整段**伤害上（物理 + 魔法），所以必须放在魔法段之后。
+ * 单位和城市共用：城没有 weak/resist 字段时这两行什么都不做。
+ */
+export function applyElementMul(
+  damage: number,
+  el: Element | undefined,
+  weak?: Partial<Record<Element, number>>,
+  resist?: Partial<Record<Element, number>>,
+): number {
+  if (!el) return damage;
+  let out = damage;
+  const w = weak?.[el];
+  if (w && w > 0) out *= w;
+  // 抗性和弱点一样是**倍率**：`weak` 放大（>1），`resist` 打折（0~1）。
+  // 所以数据必须写成 0.7 这种形式——写成 4 不是"少挨 4 点"，是"受四倍伤害"。
+  // 这条注释是踩过坑留下的：2026-10-28 改结算顺序时，代码换成倍乘、数据没跟着换，
+  // 水元素抗性从 4 变成了 ×4，实测水元素互殴从 15 点涨到 60 点。
+  const r = resist?.[el];
+  if (r) out *= r;
+  return out;
 }
 
 /**
@@ -1427,6 +1489,55 @@ export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef)
   return out;
 }
 
+/**
+ * 招这一个兵，这一下**真正要从国库里扣多少**。
+ *
+ * 和 `recruitResCost` 的差别只有一条：英雄**第一次**招要额外付解锁费。
+ * 抽成函数是因为这笔钱有三个地方要算，而它们以前各算各的：
+ *   · 规则层（`doRecruit`）——扣钱；
+ *   · 指挥官面板（硬币图标旁边那个"≈ 多少金"）——给玩家预估；
+ *   · AI 采购（`recruitCandidate` / `planOrders`）——判断买不买得起。
+ *
+ * 三处只要有一处漏了解锁费，症状都一样：面板说买得起、AI 也以为买得起，
+ * 到了规则层被"资源不足"拒掉，那一格生产序列就静默空转——玩家排了英雄，
+ * 结果什么都没发生，还找不出原因。所以这个口径只能有一份。
+ *
+ * `price` 是兵价、`unlockFee` 是这次要额的解锁费、`total` 是两者之和
+ * （多资源扩展下 `price` 里可能还有粮食/建材），`gold` 是 `total` 里的金币段——
+ * 界面和 AI 平时只关心这一个数，省得各自去查 `GOLD`。
+ */
+export function recruitPriceOf(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+): { price: ResourceCost; unlockFee: number; total: ResourceCost; gold: number } {
+  const price = recruitResCost(s, player, def);
+  const needUnlock = def.hero === true && !(s.unlocked?.[player] ?? []).includes(def.id);
+  const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
+  const total: ResourceCost = { ...price };
+  if (unlockFee > 0) total[GOLD] = (total[GOLD] ?? 0) + unlockFee;
+  return { price, unlockFee, total, gold: total[GOLD] ?? 0 };
+}
+
+/**
+ * 这个英雄现在能不能再招一个：场上已经有、或者蛋还等着孵，都不行。
+ *
+ * 为什么单拎出来：规则层（`doRecruit`）和 AI 采购（`recruitCandidate`）都要判，
+ * 两处各写一遍必然漂——以前 `doRecruit` 只看 `units`，于是不死鸟倒下、
+ * 蛋还没孵的时候能再买一只，场上最后站起来两只不死鸟。
+ */
+export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): string | null {
+  if (def.hero !== true) return null;
+  if (s.units.some((u) => u.owner === player && u.type === def.id)) {
+    return `${def.name} 是英雄，场上只能有一个`;
+  }
+  const egg = s.pendingEgg;
+  if (egg && egg.owner === player && egg.type === def.id) {
+    return `${def.name} 的蛋还在原地等着孵，别急着再造一只`;
+  }
+  return null;
+}
+
 /** 这一格能不能站人：水不行，敌方城市也不行（城池得先打下来） */
 /**
  * 这一格对某个单位来说能不能进。
@@ -1443,6 +1554,10 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
     // 桥架在水面上，船从桥下过：能穿过去，但桥自己占着那一格，停不下来。
     // 浅滩同理——船能滑过去，而且停得下（见 navigable）。
     if (!navigable(tile.terrain)) return true;
+    // 吃水：占地 2×2 的大舰进不了浅流，会搁浅。
+    // 这是「浅水 vs 深水」这一对地形真正的分工——否则浅流对舰队只是"另一片水"。
+    // 判据用 footprint 而不是船名表：以后再加巨舰不用回来改这里。
+    if (tile.terrain === 'shallow' && footprintOf(s, unit.type) > 1) return true;
   } else if (!passable(tile.terrain)) {
     return true;
   }
@@ -1493,13 +1608,18 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
  * 己方单位可以穿过友军，但不能停在友军身上。
  */
 export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
-  // 占地 2 的单位暂时按"阵地"处理：它不移动。
+  // 占地 2 的单位也能移动（2026-10-30）。
   //
-  // 多格移动不是把落点判四次就行——锚点走一步，四格里有两格跟着挪，
-  // 路径本身要按"四格全部可过"重算，AI 的推进打分和动画也要跟着改。
-  // 在真正需要会走的大单位之前（炮台、巨兽），先让接口成立、移动为 0，
-  // 而不是给一个"能走但会卡在墙上"的半成品。
-  if (footprintOf(s, unit) > 1) return new Map();
+  // 以前这里是一句"占地 2 一律返回空集"——那时 2×2 只有炮台、兵营这类
+  // 移动力 0 的建筑，等于没写。航空母舰要做成 2×2 之后，"不会动"就成了
+  // 规则错误，所以这一版把它做成真的：
+  //
+  //   · 锚点走一步，n×n 四格跟着挪 → 每一步都要求**四格地形全过**；
+  //   · 敌军只挡同一层（和单格完全一致），桥仍然可以从下面过；
+  //   · 自己的四格要豁免——否则它当前踩着的两格会把自己挡住，一步都动不了；
+  //   · 步耗按**锚点落的那一格**算。四格取最大或取和都会让"横向挪一格"
+  //     在岸边莫名其妙翻倍，而玩家看的是锚点那个格子，口径跟肉眼一致最要紧。
+  const n = footprintOf(s, unit);
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const hooks = hooksFor(def);
@@ -1514,6 +1634,42 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 不然船一步都动不了 —— 这一条曾经真的漏过，测试也没抓住（可达格为空，
   // "所有可达格都是水"这种全称命题反而是成立的）。
   const waterUnit = def.domain === 'water';
+
+  /** 锚点落在 (ax,ay) 时它占的那 n×n 格（n=1 时就是它自己） */
+  const cellsAt = (ax: number, ay: number): Array<{ x: number; y: number }> => {
+    if (n === 1) return [{ x: ax, y: ay }];
+    const out: Array<{ x: number; y: number }> = [];
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) out.push({ x: ax + dx, y: ay + dy });
+    return out;
+  };
+
+  /** 地形与城市：四格全部合规才算过；飞行只给"水面"开一个例外（下同） */
+  const terrainOk = (ax: number, ay: number): boolean => {
+    for (const c of cellsAt(ax, ay)) {
+      if (!blockedFor(s, c.x, c.y, unit)) continue;
+      const ft = tileAt(s, c.x, c.y);
+      if (flyer && ft && ft.terrain === 'water') continue;
+      return false;
+    }
+    return true;
+  };
+
+  /** 敌军挡路：任一格被同层的非桥敌军占着就不能进（除非会穿行） */
+  const enemyBlocks = (ax: number, ay: number): boolean => {
+    if (phasing) return false;
+    for (const c of cellsAt(ax, ay)) {
+      const hit = s.units.some((u) => {
+        if (!coversTile(s, u, c.x, c.y)) return false;
+        if (u.owner === unit.owner) return false;
+        if (isAirborne(s, u) !== air) return false;
+        if (utype(s, u.type).bridges) return false;
+        return true;
+      });
+      if (hit) return true;
+    }
+    return false;
+  };
+
   const best = new Map<number, number>();
   const start = idx(s, unit.x, unit.y);
   best.set(start, 0);
@@ -1531,12 +1687,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       const nx = x + dx;
       const ny = y + dy;
       if (!inBounds(s, nx, ny)) continue;
-      if (blockedFor(s, nx, ny, unit)) {
-        // 飞行只放行"水面"这一种阻挡：敌方城市、高山、越界照旧拦住。
-        // 放行的代价是不能停在水上（见下面的终点过滤），所以它只是过河，不是潜水。
-        const ft = tileAt(s, nx, ny);
-        if (!(flyer && ft && ft.terrain === 'water')) continue;
-      }
+      // 地形与城市：四格全过（n=1 时就是原来那一格）。
+      // 飞行只放行"水面"这一种阻挡：敌方城市、高山、越界照旧拦住。
+      // 放行的代价是不能停在水上（见下面的终点过滤），所以它只是过河，不是潜水。
+      if (!terrainOk(nx, ny)) continue;
 
       const tile = s.tiles[idx(s, nx, ny)];
       if (!tile) continue;
@@ -1546,20 +1700,16 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 不同层可以共格，所以它们彼此既不挡路、也不占位——
       // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
-      const blocker = s.units.find((u) => {
-        if (!coversTile(s, u, nx, ny)) return false;
-        if (u.owner === unit.owner) return false;
-        if (isAirborne(s, u) !== air) return false;
-        if (utype(s, u.type).bridges) return false;
-        return true;
-      });
-      if (blocker && !phasing) continue;
+      if (enemyBlocks(nx, ny)) continue;
 
       // 单格步耗。三道：先看这一格的基础价（水军/飞行固定 1，地面单位还要
       // 加上"爬坡附加"——往高处走更贵，见 stepCostInto），
       // 再让"改价"类能力覆盖它（穿林：森林丘陵按 1），最后让"倍率"类能力乘上去
       // （重甲难行 ×2）。三步走而不是一步算出来，是因为穿林和重甲难行都挂在
       // 同一格上时，先减半再翻倍才是玩家预期的那个数。
+      //
+      // 多格单位按**锚点那一格**付账：四格取最大或取和，都会让"贴着岸横挪一格"
+      // 在玩家眼里突然贵一倍，而界面上高亮的正是锚点格。口径跟肉眼一致优先。
       let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer });
       const moveCtx = { state: s, unit, def, terrain: tile.terrain, cost: stepCost };
       for (const h of hooks) {
@@ -1594,19 +1744,26 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   //     它们的全部作用就是"这一格不存在"，能站就等于把它删了。
   //
   // 敌方的建筑（非桥）一律不能站：那一格还被它占着，得先打掉。
+  //
+  // 多格单位逐格看：**只要有一格停不下，整个锚点就不算落点**。
+  const blockedAnchor = (x: number, y: number): boolean =>
+    cellsAt(x, y).some(({ x: cx, y: cy }) => {
+      const here = s.units.filter((u) => u.id !== unit.id && coversTile(s, u, cx, cy));
+      const blockers = here.filter((u) => {
+        // 不同层不占位：脚底下站着敌人，头上那格照样能停
+        if (isAirborne(s, u) !== air) return false;
+        const d = utype(s, u.type);
+        if (d.category !== 'building') return true;
+        if (d.bridges) return false; // 桥是双向的，谁都能站
+        if (d.obstacle) return true; // 墙：自己人也过不去
+        return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
+      });
+      return blockers.length > 0;
+    });
+
   for (const i of Array.from(best.keys())) {
     const { x, y } = xyOf(s, i);
-    const here = s.units.filter((u) => u.id !== unit.id && coversTile(s, u, x, y));
-    const blockers = here.filter((u) => {
-      // 不同层不占位：脚底下站着敌人，头上那格照样能停
-      if (isAirborne(s, u) !== air) return false;
-      const d = utype(s, u.type);
-      if (d.category !== 'building') return true;
-      if (d.bridges) return false; // 桥是双向的，谁都能站
-      if (d.obstacle) return true; // 墙：自己人也过不去
-      return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
-    });
-    if (blockers.length > 0) best.delete(i);
+    if (blockedAnchor(x, y)) best.delete(i);
   }
   // 飞行单位可以停在水面上（见 canStandAt 的同一条说明）。
   // 这里以前有一句"落点必须在岸上"，删掉之后飞行才真正是"水里也能歇脚"，
@@ -1628,18 +1785,29 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
 export function threatTiles(s: GameState, unit: Unit): Set<number> {
   const out = new Set<number>();
   const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
+  // 多格单位：距离要量到**整个矩形**，不能量锚点。
+  // 量锚点的话，2×2 的船右边和下边会少画一排——玩家看到"打不到"，
+  // 实际能打，这种错比不画还糟。
+  const n = footprintOf(s, unit);
+  const gapTo = (cx: number, cy: number, x: number, y: number) => {
+    const gx = Math.max(0, Math.max(cx - x, x - (cx + n - 1)));
+    const gy = Math.max(0, Math.max(cy - y, y - (cy + n - 1)));
+    return gx + gy;
+  };
 
   const addAround = (cx: number, cy: number) => {
     const projected = { ...unit, x: cx, y: cy, moved: unit.moved || cx !== unit.x || cy !== unit.y };
     const ranges = new Map(targets.map(t => [t.terrain,effectiveRangeAgainst(s,projected,t)]));
     const range = Math.max(...ranges.values());
-    for (let dy = -range; dy <= range; dy++) {
-      for (let dx = -range; dx <= range; dx++) {
-        if (Math.abs(dx) + Math.abs(dy) > range) continue;
-        if (dx === 0 && dy === 0) continue;
+    const pad = range + n - 1;
+    for (let dy = -pad; dy <= pad; dy++) {
+      for (let dx = -pad; dx <= pad; dx++) {
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y) && Math.abs(dx)+Math.abs(dy) <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
+        if (!inBounds(s, x, y)) continue;
+        const gap = gapTo(cx, cy, x, y);
+        if (gap === 0) continue; // 自己身体那几格不算威胁
+        if (gap <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
       }
     }
   };
@@ -1725,17 +1893,12 @@ export function computeDamage(
   const dt = utype(s, defender.type);
   const tile = tileAt(s, defender.x, defender.y);
   const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
-  const attackerAura = auraBonus(s, attacker);
   const defenderAura = auraBonus(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
   // 面板的 effectiveStats 用同一段逻辑、同一个位置——否则"面板显示 18、
   // 打出来 15"会变成常驻的对不上号。
-  let atkNow = at.atk + attackerAura.atk;
-  for (const [key, val] of orderedStatuses(attacker.status)) {
-    const sdef = STATUS_REGISTRY[key];
-    if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
-  }
+  const atkNow = attackPowerNow(s, attacker);
   const ctx: HookCtx = {
     state: s,
     self: defender,
@@ -1845,17 +2008,7 @@ export function computeDamage(
 
   // ── 属性 ──
   // 作用在整段伤害上
-  const el = elementOf(s, attacker);
-  if (el) {
-    const weak = dt.weak?.[el];
-    if (weak && weak > 0) ctx.damage *= weak;
-    // 抗性和弱点一样是**倍率**：`weak` 放大（>1），`resist` 打折（0~1）。
-    // 所以数据必须写成 0.7 这种形式——写成 4 不是"少挨 4 点"，是"受四倍伤害"。
-    // 这条注释是踩过坑留下的：2026-10-28 改结算顺序时，代码换成倍乘、数据没跟着换，
-    // 水元素抗性从 4 变成了 ×4，实测水元素互殴从 15 点涨到 60 点。
-    const resist = dt.resist?.[el];
-    if (resist) ctx.damage *= resist;
-  }
+  ctx.damage = applyElementMul(ctx.damage, elementOf(s, attacker), dt.weak, dt.resist);
 
   // 属性之后、同源护壁之前
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.postElement, to: DAMAGE_STAGE.elementMul });
@@ -1882,14 +2035,37 @@ export function computeDamage(
   return Math.max(0, Math.round(ctx.damage));
 }
 
-/** 对城市的伤害：只用城市自身护甲，地形加成不重复计算 */
+/**
+ * 对城市的伤害。
+ *
+ * 2026-10-29 起它和野战走**同一套公式**，顺序也一样：
+ *
+ *   1. 攻击力 = 基础 + 光环 + 状态修正（`attackPowerNow`）
+ *   2. 物理段 = max(0, 攻击力 − 城墙护甲)，攻城加成（破城 ×1.5、扩展的全军伤害）作用在这一段上
+ *   3. 魔法段 = max(0, 魔攻 − 城市魔抗)（`magicSegment`）
+ *   4. 属性倍率作用在**整段**上（`applyElementMul`）
+ *   5. 取整、保底 0
+ *
+ * 以前这里是"攻击 − 护甲"一句了事，于是：法师攻城等于没有魔法段、
+ * 被威吓的部队攻城照样满伤、属性克制对城墙完全不存在——同一支部队
+ * 打兵和打城的账对不上，玩家没法从面板推出任何结论。
+ *
+ * 仍然停在城门外的东西，写在这里免得以后有人以为是漏了：
+ *   · **地形加成**：城墙自带护甲（`city.armor`），再叠一层地形就是重复计算；
+ *   · **驻军 / 状态 / 兵种能力钩子**：城不是单位，没有 status、没有 abilities，
+ *     那串"兵打兵"的钩子读不到任何东西，跳过而不是编一个空壳单位；
+ *   · **射程折扣（长短皆可）**：攻城本来就是隔着城墙打，那不是"扔出去的一下"。
+ */
 export function damageToCity(attacker: Unit, city: City, s: GameState): number {
   const at = utype(s, attacker.type);
   const sctx: SiegeDamageCtx = {
     state: s,
     self: attacker,
     city,
-    damage: Math.max(0, at.atk - city.armor),
+    // 第 1、2 步：攻击力（含光环/状态/威吓）减城墙护甲。
+    // 威吓和状态在野战里是两处减的，这里一次减掉——它们说的是同一件事：
+    // "这一下出手的人不在状态"。
+    damage: Math.max(0, attackPowerNow(s, attacker) - fearPenalty(s, attacker) - city.armor),
     api: abilityApi,
   };
   // 破城（×1.5）这类"攻城伤害加成"先走能力，再走扩展钩子：
@@ -1898,12 +2074,24 @@ export function damageToCity(attacker: Unit, city: City, s: GameState): number {
 
   // 攻城走单独的钩子链：地势护甲、破甲这些野战概念在城墙上不成立，
   // 而"全军攻击 +X%"这种按攻击力算的规则，野战和攻城都该吃到。
+  // 注意这里**不再**跑 `modifyDamage`：两者的差额是同一笔加成，
+  // 两条都跑就等于给攻城算两遍。
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifySiegeDamage) {
       sctx.damage = e.hooks.modifySiegeDamage({ state: s, attacker, city, damage: sctx.damage });
     }
   }
-  return Math.max(0, sctx.damage);
+
+  // 第 3 步：魔法段。城没有魔抗（`City` 里没有这一列，也不打算加：
+  // 城本来就该被法师克制，给城墙一条法抗等于把"带法师攻城"这条战术关掉），
+  // 所以这一段的系数是满额的——这正是"法师攻城不再等于零"的来源。
+  sctx.damage += magicSegment(s, attacker, 0, null);
+
+  // 第 4 步：属性倍率（城没有 weak/resist 时什么都不做，留着是为了
+  // 以后扩展给城加抗性时不用再回来改这里）
+  sctx.damage = applyElementMul(sctx.damage, elementOf(s, attacker), undefined, undefined);
+
+  return Math.max(0, Math.round(sctx.damage));
 }
 
 /** 预估伤害，给 UI 的攻击预览用，不改变状态 */
@@ -1937,36 +2125,65 @@ export function previewAttack(
 }
 
 /**
+ * 这个单位现在的溅射半径。
+ *
+ * 兵种表给基数，扩展的 `modifySplash` 在它上面改（修真按境界撑大）。
+ * 结算、预览、侧栏、兵种卡都走这一个函数——四处各算一遍的话，
+ * 界面上写着"1 格"而实际波及 2 格，玩家只会觉得规则在骗人。
+ */
+export function splashRadiusOf(s: GameState, u: Unit): number {
+  let radius = utype(s, u.type).splash ?? 0;
+  for (const e of activeExpansions(s)) {
+    if (e.hooks.modifySplash) radius = e.hooks.modifySplash({ state: s, attacker: u, splash: radius });
+  }
+  return Math.max(0, radius);
+}
+
+/**
+ * 这个单位的溅射比例。
+ *
+ * 单位自己带了 `custom.splashRatio` 就按它算，没带用全局默认（50%）。
+ * 允许正数以外的值没有意义：0 和负数等于"没有溅射"，交给半径去表达，
+ * 所以这里只在 0 < r 时才采信，免得一个手滑写成 0 的单位静默变成"没伤害"。
+ */
+export function splashRatioOf(u: Unit): number {
+  const own = u.custom?.splashRatio;
+  return typeof own === 'number' && own > 0 ? own : CONFIG.splashRatio;
+}
+
+/**
  * 溅射范围内的敌人：主目标周围的敌人各吃一份打折的伤害。
  *
  * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
  * 它只会变成"我不敢开炮"，而不是"我要算清楚再开炮"。
+ *
+ * 两条关于**大型目标**的约定（2026-10-29）：
+ *   1. 距离按"身体最近的边"算（`distBetweenUnits`）。2×2 的大单位紧贴爆心时，
+ *      它的四格都在范围内，用锚点算会把它误判成"离得远"。
+ *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
+ *      所以"直接伤害 + 溅射"加起来也只结算一次。
  */
 function splashVictims(
   s: GameState,
   attacker: Unit,
   defender: Unit,
 ): Array<{ unit: Unit; dmg: number }> {
-  // 改成动态计算：
-  let radius = utype(s, attacker.type).splash ?? 0;
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifySplash) {
-      radius = e.hooks.modifySplash({ state: s, attacker, splash: radius });
-    }
-  }
+  const radius = splashRadiusOf(s, attacker);
   if (radius <= 0) return [];
 
+  const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
+  const seen = new Set<string>([defender.id]);
   for (const v of s.units) {
     if (v.owner === attacker.owner) continue;
-    if (v.id === defender.id) continue;
-    if (distance(v, defender) > radius) continue;
+    // 已经结算过的（主目标，或者同一格被扫到两次）不再收
+    if (seen.has(v.id)) continue;
+    if (distBetweenUnits(s, defender, v) > radius) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
-    // 读取单位自定义的溅射比例，如果没有设置则默认 0.5
-    const ratio = (attacker.custom?.splashRatio as number) ?? CONFIG.splashRatio;
     const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
+    seen.add(v.id);
     out.push({ unit: v, dmg });
   }
   return out;
@@ -2448,7 +2665,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'UPGRADE':
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
-        return doSetOrders(next, action.queue);
+        return doSetOrders(next, action.queue, action.sites);
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
@@ -3011,10 +3228,13 @@ export function buildSiteError(
   // 临水要求（军营）：靠水补给，所以必须挨着水面。
   // 占 2×2 的营按整圈外墙算——只看锚点四邻的话，水明明贴着右下角也会被判"不临水"，
   // 而玩家在画面上看到的是"水就在墙根"。
+  //
+  // 判据必须走 `adjacentToWater`，**不要**在这里再写一遍 `terrain === 'water'`。
+  // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
+  // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
+  // 桥是架在河上的，桥面那一格底下还是水——规则书里写的也是"桥面也算"。
   if (def.requiresWater) {
-    const wet = tilesOfFootprint(x, y, n, (tx, ty) =>
-      DIRS.some(([dx, dy]) => tileAt(s, tx + dx, ty + dy)?.terrain === 'water'),
-    );
+    const wet = tilesOfFootprint(x, y, n, (tx, ty) => adjacentToWater(s, tx, ty));
     if (!wet) return `${def.name}必须扎在水边（四邻要有一格水面）`;
   }
 
@@ -3324,9 +3544,9 @@ function doRecruit(
   if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
   // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
   // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
-  if (def.hero && s.units.some((u) => u.owner === s.current && u.type === def.id)) {
-    return { ok: false, reason: `${def.name} 是英雄，场上只能有一个` };
-  }
+  // 「一个」也包括还没孵出来的那只（不死鸟的蛋），见 heroBlocked。
+  const blocked = heroBlocked(s, s.current, def);
+  if (blocked) return { ok: false, reason: blocked };
 
   /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
   let era = 0;
@@ -3376,25 +3596,24 @@ function doRecruit(
     return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
   }
 
-  const price = recruitResCost(s, s.current, def);
   const player = s.players[s.current];
 
   // 英雄解锁：只在第一次招它时收，之后这个兵种就永久开放。
   // 记在 state 里而不是兵种表里——兵种表是全局限定的，
   // 我解锁了天使不该等于对手也解锁了天使。
-  const unlocked = (s.unlocked ??= {});
-  const mine = (unlocked[s.current] ??= []);
-  const needUnlock = def.hero === true && !mine.includes(def.id);
-  const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
-  const payCost: ResourceCost = { ...price };
-  if (unlockFee > 0) payCost[GOLD] = (payCost[GOLD] ?? 0) + unlockFee;
+  //
+  // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
+  // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
+  const quote = recruitPriceOf(s, s.current, def);
+  const payCost = quote.total;
+  const unlockFee = quote.unlockFee;
 
   if (!canPay(player, payCost)) {
     const missing = missingLabel(player, payCost);
     return {
       ok: false,
-      reason: needUnlock
-        ? `资源不足（英雄要 ${costLabel(price)} + 解锁 ${unlockFee} 金，${missing}）`
+      reason: unlockFee > 0
+        ? `资源不足（英雄要 ${costLabel(quote.price)} + 解锁 ${unlockFee} 金，${missing}）`
         : `资源不足（需要 ${costLabel(payCost)}，${missing}）`,
     };
   }
@@ -3419,8 +3638,10 @@ function doRecruit(
   }
 
   payRes(player, payCost);
-  if (needUnlock) {
-    mine.push(def.id);
+  if (unlockFee > 0) {
+    const unlocked = (s.unlocked ??= {});
+    const mine = (unlocked[s.current] ??= []);
+    if (!mine.includes(def.id)) mine.push(def.id);
     pushLog(s, s.current, `解锁英雄「${def.name}」，花费 ${unlockFee} 金`);
   }
 
@@ -3450,33 +3671,79 @@ export function ordersOf(s: GameState, player: PlayerId): string[] {
 }
 
 /**
+ * 每一格指定的产兵点（和 `ordersOf` 逐格对齐，空串＝哪座都行）。
+ *
+ * 旧存档没有这个字段：长度按序列补齐成空串，语义就是"全部不指定"，
+ * 于是老存档读出来还是原来那条"AI 自己挑产兵点"的序列。
+ */
+export function orderSitesOf(s: GameState, player: PlayerId): string[] {
+  const queue = ordersOf(s, player);
+  const raw = s.orderSites?.[player] ?? [];
+  return queue.map((_, i) => raw[i] ?? '');
+}
+
+/**
+ * 这一格指定的产兵点还成立吗：返回 null 表示"没指定/指定得上"，否则给一句原因。
+ *
+ * 为什么单独抽出来：`doSetOrders` 要拦住"指定了一个不存在的城"，
+ * 界面要据此把不成立的格子标红——以前只有一处用，现在两处，将来还会有第三处。
+ */
+export function orderSiteProblem(s: GameState, player: PlayerId, site: string): string | null {
+  if (!site) return null;
+  const city = s.cities.find((c) => c.id === site);
+  if (city) {
+    if (city.owner !== player) return '那座城不是你的';
+    return null;
+  }
+  const camp = s.units.find((u) => u.id === site);
+  if (!camp) return '这个产兵点不存在了';
+  if (camp.owner !== player) return '那座军营不是你的';
+  if (!utype(s, camp.type).barracks) return '指定的产兵点不是军营';
+  return null;
+}
+
+/**
  * 指挥官模式下排生产序列。
  *
- * 只校验四件事：是不是指挥官模式、长度有没有超、点名的兵种存不存在、是不是建筑。
+ * 只校验四件事：是不是指挥官模式、长度有没有超、点名的兵种存不存在、是不是建筑；
+ * 外加一条"指定的产兵点得真的存在而且是你的"。
  * **不校验钱够不够、城市够不够高级**——那是 AI 执行时的现实约束，
  * 提前拦下来等于把"排了造不出来"这个后果替玩家抹掉，而它正是这个模式的核心取舍。
+ * 同理也不校验"这座城的时代够不够造它"：让那一格空转，是这个模式要的后果。
  *
  * 空字符串是"这一格故意空着"：玩家可能想排"这回合不造、下回合造坦克"。
  * 所以中间的洞要留着（否则后面整条序列会往前挪），只把末尾的空位裁掉。
+ *
+ * `sites` 与 `queue` 逐格对齐。空位上的 `sites` 一律抹成空串：那一格既然
+ * "这回合什么都不造"，留着产兵点只会在界面回显时对不上。
  */
-function doSetOrders(s: GameState, queue: string[]): ActionResult {
+function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionResult {
   if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有生产序列' };
 
   const cleaned = queue.slice(0, CONFIG.commanderSlots).map((id) => id ?? '');
-  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') cleaned.pop();
+  const where = cleaned.map((id, i) => (id ? (sites?.[i] ?? '') : ''));
+  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') {
+    cleaned.pop();
+    where.pop();
+  }
 
-  for (const id of cleaned) {
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const id = cleaned[i] as string;
     if (!id) continue;
     // 哨兵值：这一格是"升级时代"，不是兵种
-    if (id === ORDER_UPGRADE) continue;
-    const def = s.unitTypes[id];
-    if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
-    if (def.category === 'building') {
-      return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
+    if (id !== ORDER_UPGRADE) {
+      const def = s.unitTypes[id];
+      if (!def) return { ok: false, reason: `没有这个兵种：${id}` };
+      if (def.category === 'building') {
+        return { ok: false, reason: '建筑要由建造单位去盖，不能排进生产序列' };
+      }
     }
+    const problem = orderSiteProblem(s, s.current, where[i] ?? '');
+    if (problem) return { ok: false, reason: `第 ${i + 1} 格：${problem}` };
   }
 
   s.orders = { ...(s.orders ?? {}), [s.current]: cleaned };
+  s.orderSites = { ...(s.orderSites ?? {}), [s.current]: where };
   return { ok: true, state: s };
 }
 
@@ -3534,14 +3801,50 @@ export function disbandRefundOf(s: GameState, u: Unit): number {
  * 界面要同时显示两种状态——只列可用的，玩家会以为"技能没了"；
  * 全列出来才知道"再等一回合就能开"。
  */
+/**
+ * 这个单位的技能现在能不能放。
+ *
+ * 两种模型：
+ *   · 冷却（`cooldown`）：一次性技能，用完等 N 个自己的回合；
+ *   · 充能（`charges`）：一池 N 发，每 `regen` 个自己的回合回一发。
+ *
+ * 界面和 AI 都读这里，不要各自去翻 `skillCd`——不然会出现"按钮亮着、
+ * 点下去说没充能"这种只有玩家会发现的对不上号。
+ */
 export function heroSkillsOf(
   s: GameState,
   u: Unit,
-): Array<{ def: SkillDef; cd: number; ready: boolean }> {
+): Array<{
+  def: SkillDef;
+  cd: number;
+  ready: boolean;
+  /** 还剩几发（只有充能型技能有意义，其它是 0） */
+  charge: number;
+  /** 充能上限（0 表示这个技能吃冷却，不吃充能） */
+  chargeMax: number;
+  /** 还要几个自己的回合回下一发（满发时是 0） */
+  toNext: number;
+}> {
   const def = utype(s, u.type);
   return (def.skills ?? []).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
-    return { def: k, cd, ready: cd <= 0 };
+    const chargeMax = k.charges ?? 0;
+    if (chargeMax <= 0) {
+      return { def: k, cd, ready: cd <= 0, charge: 0, chargeMax: 0, toNext: 0 };
+    }
+    // 没这个字段＝从没放过也没攒过 → 满发
+    const box = u.skillCharge?.[k.id];
+    const n = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
+    const t = Math.max(0, box?.t ?? 0);
+    const regen = Math.max(1, k.regen ?? 2);
+    return {
+      def: k,
+      cd,
+      ready: n > 0,
+      charge: n,
+      chargeMax,
+      toNext: n >= chargeMax ? 0 : Math.max(1, regen - t),
+    };
   });
 }
 
@@ -3704,8 +4007,25 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   const skill = (def.skills ?? []).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
 
+  // 每个英雄每回合最多放一个技能。以前这条靠"冷却至少 1"顺带成立，
+  // 充能型技能没有冷却，必须单独拦——否则三发能在同一回合全打出去。
+  if (u.skillTurn === s.turn) {
+    return { ok: false, reason: '这个单位这一回合已经放过技能了' };
+  }
+
   const cd = u.skillCd?.[skill.id] ?? 0;
-  if (cd > 0) return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+  const chargeMax = skill.charges ?? 0;
+  const regen = Math.max(1, skill.regen ?? 2);
+  const box = u.skillCharge?.[skill.id];
+  const charge = chargeMax > 0 ? Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax)) : 0;
+  if (chargeMax > 0) {
+    if (charge <= 0) {
+      const wait = Math.max(1, regen - Math.max(0, box?.t ?? 0));
+      return { ok: false, reason: `${skill.name} 已经用光了，${wait} 个回合后回一发` };
+    }
+  } else if (cd > 0) {
+    return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+  }
 
   const handler = SKILL_EFFECTS[skill.effect];
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
@@ -3723,10 +4043,19 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
 
   // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
   if (c.result.log) pushLog(s, u.owner, c.result.log);
-  
-  // 进冷却
-  u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown };
-  
+
+  u.skillTurn = s.turn;
+
+  if (chargeMax > 0) {
+    // 充能型：扣一发，不动冷却。t 保留——"用完最后一发之后还要攒两回合"
+    // 这件事必须从放的那一回合就开始算，否则连开两发能白赚两回合。
+    u.skillCharge = { ...(u.skillCharge ?? {}), [skill.id]: { n: charge - 1, t: Math.max(0, box?.t ?? 0) } };
+    pushLog(s, u.owner, `${skill.name} 还剩 ${charge - 1}/${chargeMax} 发`);
+  } else {
+    // 进冷却
+    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 1 };
+  }
+
   return { ok: true, state: s };
 }
 
@@ -3864,7 +4193,7 @@ function decayUnits(s: GameState, p: PlayerId): void {
  * 英雄强不强只取决于数值，什么时候开、开在谁身上都没得选。
  */
 function turnStartSkills(s: GameState, p: PlayerId): void {
-  // 0）新回合：清掉上回合的临时状态，技能冷却 −1
+  // 0）新回合：清掉上回合的临时状态，技能冷却 −1，充能型技能攒一发
   for (const u of s.units) {
     if (u.owner !== p) continue;
     delete u.heroBuff;
@@ -3873,10 +4202,29 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
         if ((u.status[k] ?? 0) <= 0) delete u.status[k];
       }
     }
-    if (!u.skillCd) continue;
-    for (const [id, cd] of Object.entries(u.skillCd)) {
-      if (cd <= 1) delete u.skillCd[id];
-      else u.skillCd[id] = cd - 1;
+    if (u.skillCd) {
+      for (const [id, cd] of Object.entries(u.skillCd)) {
+        if (cd <= 1) delete u.skillCd[id];
+        else u.skillCd[id] = cd - 1;
+      }
+    }
+
+    // 充能型技能：满发时计时归零（攒着不浪费），没满就往前走一格，
+    // 走够 regen 回合回一发。按"自己的回合"数，不按全局 turn——
+    // 全局回合两边共用，先手方永远只碰到奇数回合，周期 2 就成了永不触发。
+    for (const k of utype(s, u.type).skills ?? []) {
+      const max = k.charges ?? 0;
+      if (max <= 0) continue;
+      const regen = Math.max(1, k.regen ?? 2);
+      const box = u.skillCharge?.[k.id] ?? { n: max, t: 0 };
+      const n = Math.max(0, Math.min(max, box.n));
+      if (n >= max) {
+        if (box.t !== 0) u.skillCharge = { ...(u.skillCharge ?? {}), [k.id]: { n: max, t: 0 } };
+        continue;
+      }
+      const t = box.t + 1;
+      const next = t >= regen ? { n: n + 1, t: 0 } : { n, t };
+      u.skillCharge = { ...(u.skillCharge ?? {}), [k.id]: next };
     }
   }
 
@@ -3941,8 +4289,13 @@ function doEndTurn(s: GameState): ActionResult {
   // 不管兵有没有造出来都照样消耗——"排了一格、钱不够、这回合空了"
   // 正是这个模式要玩家学会预判的东西。要是失败就原地保留，
   // 序列会悄悄滑期，玩家反而看不出自己在哪一步就走了岔。
+  //
+  // 两串必须一起前移：`orderSites` 是按位置对齐的，只挪队列会让
+  // 后一格的"造在哪座城"错位到前一格上去——那比不做还要糟。
   const prevQueue = s.orders?.[prevPlayer];
   if (prevQueue && prevQueue.length > 0) prevQueue.shift();
+  const prevSites = s.orderSites?.[prevPlayer];
+  if (prevSites && prevSites.length > 0) prevSites.shift();
 
   const nextPlayer = other(s.current);
   s.current = nextPlayer;

@@ -245,8 +245,51 @@ export async function submitTurn(
   return Array.isArray(data) && data.length > 0;
 }
 
-/* ---------- 本机的席位记忆 ---------- */
+/**
+ * 拉回来的云端快照要不要装进本机。
+ *
+ * 单独抽成纯函数，是因为这段判断**只在联机里出错、却只能在真实房间复现**：
+ * 认输那次事故（2026-10-29）就是"回合没变、行动方没变，于是谁都没去拉云端"，
+ * 赢的那一边永远停在旧局面上。这条规则值得有几条能跑的用例盯着，
+ * 而不是靠两个人开两个浏览器手点一遍。
+ *
+ * 顺序就是优先级：
+ *   1. 云端说这局已经结束、而本机还不知道 → 装（终局压倒一切，
+ *      认输不推进回合、也不换行动方，只按轮次判断会漏掉它）；
+ *   2. 观战位：回合/行动方/胜负任一变就装（它没有"轮到我"这回事）；
+ *   3. 参赛者：不是我的回合、或者回合没变 → 不装；
+ *   4. 本机还有没提交的草稿 → 不装（否则会把人刚摆好的兵清掉）。
+ */
+export type AdoptDecision =
+  | { take: false; why: 'same' | 'not-my-turn' | 'draft' }
+  | { take: true; why: 'finished' | 'turn' };
 
+export interface RemoteHead {
+  turn: number;
+  current: PlayerId;
+  winner: PlayerId | null;
+}
+
+export function adoptDecision(
+  remote: RemoteHead,
+  local: RemoteHead,
+  seat: { seat: Seat; spectator?: boolean; draft?: boolean },
+): AdoptDecision {
+  if (remote.winner && !local.winner) return { take: true, why: 'finished' };
+  if (seat.spectator) {
+    const changed =
+      remote.turn !== local.turn ||
+      remote.current !== local.current ||
+      !!remote.winner !== !!local.winner;
+    return changed ? { take: true, why: 'turn' } : { take: false, why: 'same' };
+  }
+  if (remote.current !== seat.seat) return { take: false, why: 'not-my-turn' };
+  if (remote.turn === local.turn) return { take: false, why: 'same' };
+  if (seat.draft) return { take: false, why: 'draft' };
+  return { take: true, why: 'turn' };
+}
+
+/* ---------- 本机的席位记忆 ---------- */
 /**
  * 我在这局坐哪一桌，存在本机。
  * 换设备时没有这条记录，就只能凭"哪个席位是空的"入座——

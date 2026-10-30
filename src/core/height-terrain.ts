@@ -40,6 +40,8 @@ import type { Terrain } from './types.ts';
  */
 export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   water: 0,
+  // 深水：外海，比沿岸水面低一档（浅水看得见海底，深水看不见）
+  deep: 0,
   // 浅流：水皮刚过脚踝，跟谷地/沼泽一个高度档
   shallow: 1,
   // 低洼：谷地、沼泽，还有火山脚下那圈熔岩
@@ -74,6 +76,7 @@ export const TERRAIN_RANGE_MOD: Record<Terrain, number> = {
   forest: -1, // 树冠挡视线
   hill: 1, // 制高点
   water: 0,
+  deep: 0, // 外海：没有遮挡，但也没有制高点
   shallow: 0, // 蹲在水里，视野没好处也没坏处
   mountain: 0,
   bridge: 0,
@@ -97,6 +100,7 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   forest: -1, // 树冠把天遮了一半
   hill: 1,
   water: 0,
+  deep: 0,
   shallow: 0,
   mountain: 0,
   bridge: 0,
@@ -147,7 +151,7 @@ export const HEIGHT_MAP_STYLES: Array<{
   {
     id: 'volcanic',
     name: '火山群',
-    note: '锥体从山口往外依次是熔岩、台地、丘陵；熔岩能过，但会烧人',
+    note: '锥体从山口往外依次是高山、台地、丘陵，山脚一圈溢流的熔岩；熔岩能过，但会烧人',
     build: (c) => buildContour(c, 'volcanic'),
   },
   {
@@ -182,52 +186,74 @@ export const HEIGHT_PAINT_TERRAINS: readonly Terrain[] = [
 ];
 
 /**
- * 收尾：把"从平地上孤零零拔起来"的高山降成台地。
+ * 收尾：给每一个山心补上"山脚"。
  *
- * 本体那五种地貌是**撒团块**的：山是一坨一坨撒的，团块边缘必然出现
- * "四周全是平原、中间一柱高山"——那不是等高线，是石头柱子。
- * 这个扩展的卖点是"高低差层层递进"，所以开它的时候要把这种柱子抹平：
+ * 本体那五种地貌是**撒团块**的：山是一坨一坨撒出来的，团块的边缘也就是山的边缘，
+ * 靠外的格子直接和平原/丘陵接壤——一步就从 2 层跨到 5 层。
+ * 这个扩展的卖点是"高低差层层递进"，所以开它的时候要把这道悬崖抹成坡：
  *
- *   · 一格高山只要四邻里**没有**台地或高山，它就缺"山脚"，降成台地；
- *   · 台地本身算 4 层，能给别人当山脚，所以这条规则跑一遍就收敛
- *     （最多两遍：先补一圈台地，再确认新台地够不够当裙边）；
- *   · 结果是一座山的边缘永远有一圈台地托着，山体从外往内是
- *     平原 → 丘陵 → 台地 → 高山，正好是现实里等高线的顺序。
+ *   1. 从所有高山/火山出发做一次 4 邻 BFS，记下"离山心几格"；
+ *   2. 第 1 圈抬成台地（4 层）、第 2 圈抬成丘陵（3 层）；
+ *   3. 只抬平原/林地/丘陵这三类"软地面"——水、浅流、谷地、沼泽、熔岩、沙丘、
+ *      城市一律不动：海边是悬崖、沟底是沟底，那些本来就该是断的。
+ *
+ * 于是任何一座山从外往内一定是 平原(2) → 丘陵(3) → 台地(4) → 高山(5)，
+ * 每步只差一层；特征尺度也从"一格柱子"变成"三圈 5~9 格"的山体。
  *
  * 为什么不做"整体重新生成"：本体地貌有它自己的手感（开阔图就该平），
- * 换掉生成器等于把原版地图全变样。这里只动"明显不合理的那一类格子"。
+ * 换掉生成器等于把原版地图全变样。这里只补山脚，不搬山。
  */
-export function softenPeaks(g: Terrain[], w: number, h: number): void {
-  const tall = (t: Terrain): number => TERRAIN_HEIGHT[t] ?? 0;
-  for (let pass = 0; pass < 4; pass += 1) {
-    const snap = [...g];
-    let changed = false;
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        const i = y * w + x;
-        if (snap[i] !== 'mountain') continue;
-        let skirt = false;
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          if (tall(snap[ny * w + nx] as Terrain) >= 4) {
-            skirt = true;
-            break;
-          }
-        }
-        if (!skirt) {
-          g[i] = 'plateau';
-          changed = true;
-        }
-      }
+export function softenPeaks(g: Terrain[], w: number, h: number, keep?: ReadonlySet<number>): void {
+  const n = w * h;
+  /** 离山心几格：0 = 山心本身，-1 = 没算到 */
+  const dist = new Int16Array(n).fill(-1);
+  const queue = new Int32Array(n);
+  let tail = 0;
+  for (let i = 0; i < n; i += 1) {
+    const t = g[i];
+    if (t === 'mountain' || t === 'volcano') {
+      dist[i] = 0;
+      queue[tail] = i;
+      tail += 1;
     }
-    if (!changed) break;
+  }
+  // 两圈就够了：再往外是平原，不需要更远的"缓坡"。
+  // 水不参与传播——隔着一条河的对岸不该被算成这座山的山脚。
+  for (let head = 0; head < tail; head += 1) {
+    const cur = queue[head] as number;
+    const d = dist[cur] as number;
+    if (d >= 2) continue;
+    const x = cur % w;
+    const y = (cur - x) / w;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const ni = ny * w + nx;
+      if (dist[ni] !== -1) continue;
+      const t = g[ni];
+      if (t === 'water' || t === 'shallow') continue;
+      dist[ni] = d + 1;
+      queue[tail] = ni;
+      tail += 1;
+    }
+  }
+
+  for (let i = 0; i < n; i += 1) {
+    const d = dist[i];
+    if (d !== 1 && d !== 2) continue;
+    // 城郊那一圈不能抬：出生点要能站人，城门口也不该变成台地
+    if (keep?.has(i)) continue;
+    const t = g[i] as Terrain;
+    if (t !== 'plain' && t !== 'forest' && t !== 'hill') continue;
+    const height = TERRAIN_HEIGHT[t] ?? 0;
+    if (d === 1 && height < 4) g[i] = 'plateau';
+    else if (d === 2 && height < 3) g[i] = 'hill';
   }
 }
 

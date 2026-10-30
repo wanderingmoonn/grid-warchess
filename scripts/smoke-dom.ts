@@ -20,11 +20,13 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { unitSourceIdOf } from '../src/core/expansions.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
+import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
 
@@ -57,6 +59,27 @@ if (!window.structuredClone) {
 let seedPick = 0;
 const SEED_PICKS = [0.137, 0.421, 0.639, 0.911, 0.283, 0.774, 0.058, 0.365];
 (window.Math as Math).random = () => SEED_PICKS[seedPick++ % SEED_PICKS.length]!;
+
+/**
+ * jsdom 没有 ResizeObserver，而 main.ts 拿它决定"这一帧要不要重新量棋盘"：
+ * 没有它就走"每帧都量"的老路——那条路上，档位和 DOM 永远不会脱钩，
+ * 于是"放大之后缩不回去""换局也缩不回去"在测试里根本复现不出来，
+ * 用例不管怎么改都是绿的。这里补一个只记账、不自己触发的假观察者，
+ * 让代码走真实浏览器那条分支（改了尺寸得有人标脏，否则不重量）。
+ */
+class FakeResizeObserver {
+  private readonly cb: () => void;
+  constructor(cb: () => void) {
+    this.cb = cb;
+  }
+  observe(): void {
+    // 真浏览器 observe 之后会立刻回一次；这里不必，首帧本来就是脏的
+    void this.cb;
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+}
+(window as unknown as { ResizeObserver: unknown }).ResizeObserver = FakeResizeObserver;
 
 window.eval(code);
 
@@ -460,6 +483,40 @@ check('多动兵的面板写"还剩几次"，不是"几段"', () => {
   assert.ok(text.includes(`还剩 ${burst - 1} / ${burst} 次`), '出手之后剩余次数要跟着减');
 });
 
+check('溅射兵的面板写的是"现在这一发"的半径和比例', () => {
+  // 半径会被扩展改（修士按境界），比例会被单位自己的 custom.splashRatio 改。
+  // 侧栏要是照兵种表写死，玩家看到的就是一句谎话。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: [] }, 918);
+  st.current = 'A';
+  const splash = UNIT_TYPES.mortar?.splash ?? 0;
+  assert.ok(splash > 0, '这条用例需要一个溅射兵（mortar）');
+  const mine = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.category === 'combat');
+  assert.ok(mine, '开局该有战斗单位');
+  mine!.type = 'mortar';
+
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: mine!,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  let text = host.textContent ?? '';
+  assert.ok(text.includes(`主目标 ${splash} 格内`), '溅射行要写出半径');
+  assert.ok(text.includes('50%'), '没设比例时按全局默认 50% 显示');
+
+  // 单位自带比例：面板要跟着变
+  mine!.custom = { ...(mine!.custom ?? {}), splashRatio: 0.3 };
+  paint();
+  text = host.textContent ?? '';
+  assert.ok(text.includes('30%'), '单位自带 30% 时，面板不能还写 50%');
+});
+
 check('没有浓雾的对局里，对面的金币照旧显示', () => {
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 910);
@@ -581,11 +638,22 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
     const badges = host.querySelectorAll('.tile-income');
     assert.equal(badges.length, reach.length, '每个可达格都该有一个产出数字');
     const text = badges[0]?.textContent ?? '';
-    assert.ok(/^\+\d+$/.test(text), `产出数字应该是 +N，实际是「${text}」`);
-    // 数字必须和真相源一致：随便挑一格对一下账
-    const firstIdx = reach[0]!;
-    const shown = Number((badges[0]?.textContent ?? '+0').slice(1));
-    assert.equal(shown, hints.get(firstIdx), '格子上印的数字必须和 unitIncomeAt 同源');
+    assert.ok(/^\+\d+$/, `${text} 应该是 +N`);
+
+    // 数字必须和真相源一致。**按格子对账，不按数组下标**：
+    // badge 的 DOM 顺序是"棋盘的格子顺序"（逐行），而 reach 是可达搜索的顺序
+    // （从脚下往外扩），两者本来就不是一回事——以前正好撞上了，地图一改就露馅。
+    const tiles = [...host.querySelectorAll<HTMLElement>('.tile')];
+    let matched = 0;
+    for (const badge of badges) {
+      const tile = badge.parentElement;
+      const idx = tile ? tiles.indexOf(tile) : -1;
+      assert.ok(idx >= 0, '产出数字应该挂在格子里');
+      const shown = Number((badge.textContent ?? '+0').slice(1));
+      assert.equal(shown, hints.get(idx), `第 ${idx} 格印的是 ${shown}，真相源是 ${hints.get(idx)}`);
+      matched += 1;
+    }
+    assert.ok(matched > 0, '总得对上一格');
   } finally {
     host.remove();
   }
@@ -1461,6 +1529,110 @@ check('关掉联机面板回到对局', () => {
   assert.equal(doc.querySelector('.modal-mask'), null);
 });
 
+check('本机对局没有聊天入口：聊天只开在房间里', () => {
+  // 热座是对着人、AI 局是对着电脑，这两种局里放一个永远没回应的输入框
+  // 比没有更让人困惑。所以没有房间时那颗按钮是隐藏的（元素在、但不出现）。
+  const fab = doc.querySelector<HTMLElement>('.chat-fab');
+  if (fab) {
+    assert.equal(fab.hidden, true, '不在房间里时聊天入口应该收起来');
+    return;
+  }
+  assert.ok(!doc.querySelector('.chat-panel'), '没有房间就不该有聊天面板');
+});
+
+check('聊天面板能按住标题栏拖动，拖不出视口，点 × 不算拖', () => {
+  // 面板平时是 hidden 的（不在房间里），jsdom 又没有布局，矩形一律是 0——
+  // 所以这里塞一个假矩形进去，验的是"位移怎么算、边界怎么夹"这套逻辑，
+  // 不是像素好不好看。
+  const panel = doc.querySelector<HTMLElement>('.chat-panel');
+  const head = panel?.querySelector<HTMLElement>('.chat-head');
+  assert.ok(panel && head, '聊天面板应该已经建好（只是隐藏）');
+  panel.hidden = false;
+  const box = { left: 600, top: 300, width: 280, height: 200, right: 880, bottom: 500, x: 600, y: 300 };
+  // 真浏览器里 transform 会把矩形一起挪走，这里照着做——不然第二次拖动
+  // 拿到的是"没挪过的位置"，测出来的位移会多出一截
+  panel.getBoundingClientRect = () => {
+    const m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(panel.style.transform);
+    const dx = m ? Number(m[1]) : 0;
+    const dy = m ? Number(m[2]) : 0;
+    return {
+      ...box,
+      left: box.left + dx,
+      top: box.top + dy,
+      right: box.right + dx,
+      bottom: box.bottom + dy,
+      x: box.x + dx,
+      y: box.y + dy,
+      toJSON: () => box,
+    } as DOMRect;
+  };
+
+  const at = (el: Element, type: string, x: number, y: number): void => {
+    el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y }));
+  };
+
+  // 按住标题栏往左上拖 40 / 30
+  at(head, 'pointerdown', 620, 320);
+  at(head, 'pointermove', 660, 290);
+  at(head, 'pointerup', 660, 290);
+  assert.equal(panel.style.transform, 'translate(40px, -30px)', '位移应该正好等于手指走的量');
+  assert.ok(!panel.classList.contains('dragging'), '松手之后要摘掉 dragging');
+
+  // 一直往右拖：右边的极限是 innerWidth − 宽 − 8（1024 − 280 − 8 = 736）
+  at(head, 'pointerdown', 660, 290);
+  at(head, 'pointermove', 2000, 290);
+  at(head, 'pointerup', 2000, 290);
+  assert.equal(panel.style.transform, 'translate(136px, -30px)', '拖出右边要被夹住');
+
+  // 点在 × 上不是拖：那一下既不移动面板，也不该吞掉关闭
+  at(head.querySelector('.chat-x')!, 'pointerdown', 860, 310);
+  at(head.querySelector('.chat-x')!, 'pointermove', 900, 340);
+  assert.equal(panel.style.transform, 'translate(136px, -30px)', '点 × 不该把面板拖走');
+
+  panel.hidden = true;
+  panel.style.transform = '';
+});
+
+check('输入法组字中按 Enter 只选词，不发送（否则对方只收到半句）', () => {
+  // 中文一句话要打几个字才组成词，按 Enter 是选词。那一刻输入框里只有
+  // 已经上屏的部分，剩下的还在输入法里——这时候按"发送"发出去的就是半句，
+  // 而发的人以为自己发的是整句。
+  const form = doc.createElement('form');
+  const input = doc.createElement('input');
+  form.append(input);
+  doc.body.append(form);
+
+  let sent = 0;
+  bindChatComposer(input, () => {
+    sent += 1;
+  });
+  const pressEnter = () =>
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  input.dispatchEvent(new window.Event('compositionstart'));
+  pressEnter();
+  assert.equal(sent, 0, '组字中不该发送');
+
+  input.dispatchEvent(new window.Event('compositionend'));
+  pressEnter();
+  assert.equal(sent, 1, '上屏之后再按 Enter 才发');
+
+  // 兜底：某个环境不发 compositionend，下一次"不在组字中的按键"要能把状态解开，
+  // 否则这个人从此再也发不出消息
+  input.dispatchEvent(new window.Event('compositionstart'));
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', isComposing: false }));
+  pressEnter();
+  assert.equal(sent, 2, '卡住的组字状态要能被下一次普通按键解开');
+
+  // 反过来：组字中的按键（isComposing = true）不该把状态解开
+  input.dispatchEvent(new window.Event('compositionstart'));
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', isComposing: true }));
+  pressEnter();
+  assert.equal(sent, 2, '组字中的按键不能算"已经上屏"');
+
+  form.remove();
+});
+
 
 console.log('\n指挥官模式');
 
@@ -1614,6 +1786,222 @@ check('改一格只更新序列，下拉不会被重建', () => {
   assert.equal(again?.value, opt.value, '选中的兵种应该还留着');
 });
 
+check('每一格都能指定由哪座城产兵，选了就写进序列', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander');
+  assert.ok(bar);
+  const sel = bar.querySelector<HTMLSelectElement>('select[data-slot="0"]');
+  const sites = bar.querySelectorAll<HTMLSelectElement>('select[data-site]');
+  assert.equal(sites.length, 5, '5 格各有一个产兵点下拉');
+  assert.ok(sites[0], '找不到第一格的产兵点');
+
+  // 先选一个真兵种：产兵点下拉只在"这一格要造东西"时才可用
+  const unitOpt = Array.from(sel!.options).find((o) => o.value && o.value !== '@upgrade');
+  assert.ok(unitOpt, '至少要有一个能造的兵种');
+  sel!.value = unitOpt.value;
+  sel!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const siteSel = doc
+    .querySelector<HTMLElement>('#commander')!
+    .querySelector<HTMLSelectElement>('select[data-site="0"]')!;
+  assert.equal(siteSel.disabled, false, '这一格有兵种，产兵点就该能选');
+  const cityOpt = Array.from(siteSel.options).find((o) => o.value !== '');
+  assert.ok(cityOpt, '自己的城应该在下拉里');
+
+  siteSel.value = cityOpt.value;
+  siteSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orderSites?: { A?: string[] };
+  };
+  assert.equal(
+    saved.orderSites?.A?.[0],
+    cityOpt.value,
+    '选了产兵点就得落到 state 里，否则 AI 执行时还是自己挑',
+  );
+});
+
+check('只有一个包、只有一个时代的对局：整条筛选行都不出现，只留计数', () => {
+  const bar = doc.querySelector<HTMLElement>('#commander')!;
+  // 这一局是原版、1 代开局：名单里只有一个包、一个时代，两排 chip 都"筛无可筛"。
+  // 留一颗按下去什么都不变的按钮，比没有这颗按钮更让人困惑——所以整排都不渲染。
+  assert.equal(bar.querySelectorAll('[data-act="cmd-pack"]').length, 0, '单包不该显示包筛选');
+  assert.equal(bar.querySelectorAll('[data-cmd-era]').length, 0, '单代不该显示时代筛选');
+  const count = bar.querySelector('.cmd-count')?.textContent ?? '';
+  assert.ok(/\d+ \/ \d+ 个兵种/.test(count), `计数应该还在，实际：${count}`);
+  assert.equal(count.includes('已筛选'), false, '没筛的时候不该说"已筛选"');
+});
+
+/**
+ * 参谋部的两个筛选维度（DLC / 时代）要在一个**多包**对局里验：
+ * 单包对局根本不该出现包筛选，所以不能在 doc 那一局上测。
+ *
+ * 顺便造一个必然为空的组合：把奇想包里 4 代的兵从兵种表里拿掉，
+ * 这样"奇想 + 4 代"一定没有命中，空态才有得测。
+ */
+check('兵种能按 DLC 筛：只留这个包的兵；和时代能叠加；没命中时说清是空的', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 4,
+      commanderMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    20261029,
+    {},
+  );
+  // 奇想包里 4 代的那几个先摘掉，用来制造"这个组合是空的"
+  for (const id of Object.keys(st.unitTypes)) {
+    if (unitSourceIdOf(id) === 'fantasy-heroes' && st.unitTypes[id]!.era === 4) {
+      delete st.unitTypes[id];
+    }
+  }
+  st.fog = false;
+  st.current = 'A';
+
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  w.eval(code);
+
+  const d = w.document;
+  const bar = () => d.querySelector<HTMLElement>('#commander')!;
+  const unitOpts = (slot = 1) =>
+    Array.from(bar().querySelector<HTMLSelectElement>(`select[data-slot="${slot}"]`)!.options).filter(
+      (o) => o.value && o.value !== '@upgrade',
+    );
+  const countShown = () => Number((bar().querySelector('.cmd-count')?.textContent ?? '').split(' / ')[0]);
+  const total = unitOpts().length;
+
+  // ① 只按时代筛（不选包）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const eraOnly = unitOpts();
+  assert.ok(eraOnly.length > 0 && eraOnly.length < total, `4 代应该有兵、且比全部少：${eraOnly.length}/${total}`);
+  for (const o of eraOnly) {
+    assert.equal(st.unitTypes[o.value]!.era, 4, `${o.value} 不是 4 代，不该留下来`);
+  }
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, total, '退回「全部时代」应该回到全部');
+
+  // ② 只按包筛（不选时代）——下面接着做
+
+  // 两个包都在：原版 + 奇想·英雄（chip 上的数字就是那个包在这份名单里有几个）
+  const packChips = Array.from(bar().querySelectorAll<HTMLElement>('[data-act="cmd-pack"]'));
+  assert.ok(packChips.length >= 2, `多包对局该有包筛选，实际 ${packChips.length} 颗`);
+
+  const fantasy = bar().querySelector<HTMLElement>('[data-pack="fantasy-heroes"]');
+  assert.ok(fantasy, '该有奇想那一颗');
+  const fantasyCount = Number((fantasy!.textContent ?? '').replace(/^\D+/, '').trim() || '0');
+
+  fantasy!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(countShown(), fantasyCount, '计数应该等于这个包在名单里的兵数');
+  for (const o of unitOpts()) {
+    assert.equal(
+      unitSourceIdOf(o.value),
+      'fantasy-heroes',
+      `${o.value} 不是奇想包的，不该留下来`,
+    );
+  }
+
+  // 叠加时代：奇想 + 3 代（这个组合还有东西）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="3"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const combo = unitOpts();
+  assert.ok(combo.length > 0, '奇想 + 3 代应该还有兵');
+  for (const o of combo) {
+    assert.equal(unitSourceIdOf(o.value), 'fantasy-heroes', '组合筛选后不该混进别的包');
+    assert.equal(st.unitTypes[o.value]!.era, 3, '组合筛选后不该混进别的代');
+  }
+
+  // 空组合：奇想 + 4 代（4 代的奇想兵已经被摘掉了）
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="4"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, 0, '这个组合应该是空的');
+  assert.ok(
+    (bar().querySelector('.cmd-count')?.textContent ?? '').includes('0 /'),
+    '计数要说 0，否则看着像界面坏了',
+  );
+  const allText = Array.from(
+    bar().querySelector<HTMLSelectElement>('select[data-slot="1"]')!.options,
+  ).map((o) => o.textContent ?? '');
+  assert.ok(
+    allText.some((t) => t.includes('没有兵种')),
+    `空的时候要有一句明确的说明，实际选项：${allText.join('/')}`,
+  );
+
+  // 两个维度都退回"全部"，名单回到原样
+  bar()
+    .querySelector<HTMLElement>('[data-cmd-era="0"]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  bar()
+    .querySelector<HTMLElement>('[data-pack=""]')!
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(unitOpts().length, total, '两个维度都清掉之后应该回到全部');
+});
+
+check('英雄在参谋部里标着解锁费；已经在场的那一个排不进去', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 4,
+      commanderMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    424250,
+    {},
+  );
+  st.current = 'A';
+  st.players.A.gold = 2000;
+  // 先在场上放一个矮人王：它就该从下拉里"关掉"，而不是排了没反应
+  const king = st.unitTypes['dwarf-king']!;
+  st.units.push({
+    id: 'h0',
+    type: 'dwarf-king',
+    owner: 'A',
+    x: 2,
+    y: 2,
+    hp: king.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+
+  const w = bootWith(st);
+  const d = w.document;
+  const bar = d.querySelector<HTMLElement>('#commander');
+  assert.ok(bar && !bar.hidden, '指挥官栏该显示出来');
+  const opts = Array.from(bar!.querySelectorAll<HTMLSelectElement>('select[data-slot]')[0]!.options);
+
+  const mine = opts.find((o) => o.value === 'dwarf-king');
+  assert.ok(mine, '矮人王应该在下拉里');
+  assert.equal(mine!.disabled, true, '场上已经有一个了，这一格排了也造不出来');
+  assert.ok((mine!.textContent ?? '').includes('已在场'), `该写明原因，实际：${mine!.textContent}`);
+
+  const other = opts.find((o) => o.value === 'hydra');
+  assert.ok(other, '九头蛇也该在下拉里');
+  assert.equal(other!.disabled, false, '没在场上的英雄当然能排');
+  const fee = st.unitTypes['hydra']!.unlockCost ?? 0;
+  assert.ok(
+    (other!.textContent ?? '').includes(`解锁 ${fee}`),
+    `第一次招的英雄要把解锁费写出来（${fee} 金），实际：${other!.textContent}`,
+  );
+});
+
 
 await checkAsync('每格都给出可用金币的估算', async () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
@@ -1701,6 +2089,64 @@ check('缩放条不在滚动容器里面，所以不跟着地图平移', () => {
   assert.equal(scroll.contains(bar), false, '缩放条不能是滚动容器的内容');
 });
 
+check('拖过地图之后，缩放按钮还得点得动', () => {
+  // 拖动过地图要吞掉"拖动的尾巴"那一下点击，否则松开的地方压着格子就会走一步棋。
+  // 但吞的时候只该吞棋盘上的：缩放条是 board-wrap 的子元素、不在 .board 里，
+  // 以前这里一并吞掉，玩家拖着地图松手正好压在「−」上，看起来就是"缩小键失灵"。
+  const board = doc.querySelector<HTMLElement>('.board');
+  assert.ok(board, '找不到 .board');
+  // 拖动只在放大之后才成立（1× 时整张图都在屏幕里，没有可拖的）
+  click('[data-act="zoom-in"]');
+  const before = Number.parseFloat(board.style.width);
+  assert.ok(before > 646, '这条要 1× 以上才有意义');
+
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
+  assert.ok(scroll, '找不到 board-scroll');
+  const pointer = (type: string, x: number): void => {
+    scroll.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: 300 }));
+  };
+  pointer('pointerdown', 300);
+  pointer('pointermove', 250); // 超过 6px 才算真的拖，不够就是一次点击
+  pointer('pointerup', 250);
+
+  click('[data-act="zoom-out"]');
+  const after = Number.parseFloat(board.style.width);
+  assert.ok(after < before, `拖过地图之后「缩小」应该照常生效：${before} → ${after}`);
+});
+
+await checkAsync('换一局之后缩放必须回到「适应」，而且还能再放大缩小', async () => {
+  // 玩家报的 bug：放大之后缩不回去，开新局也还是缩不回去。
+  // 根因是换局只写了 `boardZoom = 1`，没把 boardDirty 打上——fitBoard() 不跑，
+  // 棋盘尺寸/zoomed 类/档位标签全停在上一局的放大状态，而变量已经是 1，
+  // 再点「缩小」就被 setZoom 的"数字没变"挡掉了。
+  const board = doc.querySelector<HTMLElement>('.board');
+  assert.ok(board, '找不到 .board');
+
+  // 先真的放大到 2×
+  click('[data-act="zoom-fit"]');
+  click('[data-act="zoom-in"]');
+  click('[data-act="zoom-in"]');
+  assert.equal(Number.parseFloat(board.style.width), 1292, '先放到 2×');
+  assert.ok(board.classList.contains('zoomed'), '2× 时棋盘该带着 zoomed');
+
+  // 开一局新的（面板里什么都不改，直接开始）
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(Number.parseFloat(board.style.width), 646, '换局之后应该回到基准尺寸');
+  assert.ok(!board.classList.contains('zoomed'), '换局之后不该还带着 zoomed');
+  const scroll = doc.querySelector<HTMLElement>('.board-scroll');
+  assert.ok(scroll && !scroll.classList.contains('zoomed'), '滚动容器也要摘掉 zoomed');
+
+  // 而且档位还得能正常往回走
+  click('[data-act="zoom-in"]');
+  assert.equal(Number.parseFloat(board.style.width), 969, '换局之后放大一档照样是 1.5×');
+  click('[data-act="zoom-out"]');
+  assert.equal(Number.parseFloat(board.style.width), 646, '再缩回去');
+});
+
 check('英雄技能：面板列出技能，冷却中的置灰', () => {
   const st = createMatch(
     {
@@ -1766,6 +2212,138 @@ check('英雄技能：面板列出技能，冷却中的置灰', () => {
   assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
 });
 
+check('英雄面板：隐匿显示剩余发数，至尊法师显示当前属性', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    910,
+    {},
+  );
+  st.current = 'A';
+  const mk = (type: string, id: string): Unit => ({
+    id,
+    type,
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes[type]!.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  const assassin = mk('assassin-master', 'a1');
+  const mage = mk('archmage', 'm1');
+  st.units.push(assassin, mage);
+
+  const host = doc.createElement('div');
+  const paint = (u: Unit | null): void =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  // ① 隐匿：3 发，用掉一发要少一发，打空之后按钮灰掉并写清多久回一发
+  paint(assassin);
+  assert.ok((host.textContent ?? '').includes('3/3 发'), '隐匿要写明还剩几发');
+  assassin.skillCharge = { vanish: { n: 2, t: 0 } };
+  paint(assassin);
+  assert.ok((host.textContent ?? '').includes('2/3 发'), '扣了一发要跟着变');
+  assassin.skillCharge = { vanish: { n: 0, t: 0 } };
+  paint(assassin);
+  const btn = host.querySelector<HTMLElement>('[data-act="hero-skill"]')!;
+  assert.equal(btn.hasAttribute('disabled'), true, '没发数时按钮要灰');
+  assert.ok((host.textContent ?? '').includes('回合回一发'), '要写清多久回一发');
+
+  // ② 至尊法师：当前属性跟着运行时值走，攻 0 的兵必须把魔法段单独写出来
+  mage.element = 'dark';
+  paint(mage);
+  const dark = host.textContent ?? '';
+  assert.ok(dark.includes('当前属性'), '要有一行「当前属性」');
+  assert.ok(dark.includes('暗'), '显示的是运行时属性（切过之后是暗）');
+  assert.ok(dark.includes('魔法段 ×1.5'), '暗形态要说明它干了什么');
+  assert.ok(dark.includes('魔法攻击'), '攻 0 的兵不写魔法段，看着就像不会打人');
+  mage.element = 'fire';
+  paint(mage);
+  assert.ok((host.textContent ?? '').includes('火'), '切回火属性要跟着变');
+});
+
+check('行动点面板：还剩多少 E、这一回合花在哪、单价为什么便宜', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['action-points'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    912,
+    {},
+  );
+  st.current = 'A';
+  const mk = (type: string, id: string, x: number): Unit => ({
+    id,
+    type,
+    owner: 'A',
+    x,
+    y: 5,
+    hp: st.unitTypes[type]!.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  const foot = mk('militia', 'ap-foot', 5);
+  const horse = mk('scout', 'ap-horse', 7);
+  st.units.push(foot, horse);
+  // 开账：站位对齐＝这一回合还没动过
+  foot.custom = { ap: { turn: st.turn, x: 5, y: 5, debt: 0, over: 0 } };
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 0, over: 0 } };
+
+  const host = doc.createElement('div');
+  const paint = (u: Unit): void =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+  const text = (): string => host.textContent ?? '';
+
+  // ① 民兵站着不动：驻扎扣 20，没有减免所以不写单价
+  paint(foot);
+  assert.ok(text().includes('行动点 80 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
+  assert.ok(text().includes('本回合：驻扎 −20'), '什么都没干要写成驻扎');
+
+  // ② 走过一格：记成移动
+  foot.custom = { ap: { turn: st.turn, x: 4, y: 5, debt: 0, over: 0 } };
+  paint(foot);
+  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动，不再写驻扎');
+
+  // ③ 斥候：骑兵 −5、近战 −10，两行单价要说得出"为什么便宜"
+  paint(horse);
+  assert.ok(text().includes('行动点 85 / 100 E'), '斥候驻扎/移动都只花 15');
+  assert.ok(text().includes('机动 15E（骑兵）'), '骑兵的机动便宜要写出来');
+  assert.ok(text().includes('出手 30E（近战）'), '近战的出手便宜要写出来');
+
+  // ④ 池子见底：要明说走不动 / 打不出第二下，而不是让玩家点下去才发现
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 88, over: 0 } };
+  paint(horse);
+  assert.ok(text().includes('走不动了'), 'E 见底要写在面板上');
+  assert.ok(text().includes('上回合透支 88'), '透支了多少要交代');
+});
+
 check('新英雄的技能按钮挂上了对应技能', () => {
   const st = createMatch(
     {
@@ -1774,8 +2352,7 @@ check('新英雄的技能按钮挂上了对应技能', () => {
       aiOpponent: false,
       aiAlly: false,
       expansionIds: ['fantasy-core', 'fantasy-heroes'],
-      enabledUnits: Object.keys(UNIT_TYPES),
-    },
+      enabledUnits: Object.keys(UNIT_TYPES),    },
     911,
   );
   st.current = 'A';
@@ -2060,6 +2637,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
       myTurn: false,
       passing: false,
       selected: '',
+      picked: null,
     });
   const picks = (html: string) => (html.match(/data-act="god-pick"/g) ?? []).length;
 
@@ -2466,6 +3044,74 @@ check('上帝模式：两边我都打——结束回合不叫 AI，另一边自�
   const foe = saved().units.find((u) => u.id === 'e1')!;
   assert.equal(foe.x, 9, '另一边的兵也该走得动');
   assert.equal(foe.y, 8);
+});
+
+/**
+ * 上帝模式下的技能。
+ *
+ * 这个模式的侧栏整块让给了货架，正常对局那张属性卡（含技能菜单）根本不存在。
+ * 于是"选中英雄 → 按技能"这条路是断的：棋盘上连一个按钮都没有。
+ * 这一条守着"补回来的那块卡"：切到操控档、点英雄、按技能，技能真进冷却。
+ */
+check('上帝模式：操控档里选中英雄，侧栏能开技能', () => {
+  const st = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 3,
+      godMode: true,
+      expansionIds: ['fantasy-core', 'fantasy-heroes'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    424251,
+    {},
+  );
+  for (const t of st.tiles) {
+    t.terrain = 'plain';
+    t.cityId = null;
+  }
+  st.units = [];
+  st.cities = [];
+  st.current = 'A';
+  st.turn = 1;
+  // 矮人王 + 一个三格内的敌人：投斧要有目标才值得开
+  godPut(st, 'h1', 'A', 'dwarf-king', 3, 3);
+  godPut(st, 'e1', 'B', 'militia', 5, 3);
+
+  const w = bootWith(st);
+  const d = w.document;
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as {
+      units: { id: string; skillCd?: Record<string, number>; heroBuff?: Record<string, unknown> }[];
+    };
+
+  // 只摆放的时候没有"手上这支兵"这回事：点棋盘是落子，不是选中
+  assert.equal(d.querySelector('[data-act="hero-skill"]'), null, '还没进操控档，不该有技能按钮');
+
+  click('[data-act="god-play"][data-play="me"]');
+  click('.unit[data-id="h1"]');
+
+  const btn = d.querySelector<HTMLButtonElement>('[data-act="hero-skill"]');
+  assert.ok(btn, '操控档里选中英雄，侧栏就该出现技能按钮');
+  assert.equal(btn!.disabled, false, '冷却好了、轮到自己，就该能按');
+  assert.ok(
+    (d.querySelector('#side')?.textContent ?? '').includes('投斧'),
+    '按钮上要写清是哪个技能',
+  );
+
+  btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const hero = saved().units.find((u) => u.id === 'h1')!;
+  assert.equal(hero.skillCd?.['throw-axe'], 1, '按下去技能要真的进冷却');
+  assert.ok(hero.heroBuff?.rangeMul === 0.6, '投斧的效果也得落到这个兵身上');
+
+  // 开完之后按钮该灰掉并说明还要等几回合——不然玩家会以为没点中
+  const after = d.querySelector<HTMLButtonElement>('[data-act="hero-skill"]');
+  assert.ok(after, '按钮不该消失');
+  assert.equal(after!.disabled, true, '冷却中就该是灰的');
+  assert.ok((after!.textContent ?? '').includes('回合'), '要写清还要等几回合');
 });
 
 console.log('\n点敌人就是开火');
