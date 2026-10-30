@@ -9816,6 +9816,71 @@ test('修士：溅射半径随境界成长（x/4）', () => {
   }
 });
 
+test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
+  // 10-30 修真分支重排了经验曲线之后重算过这张表：
+  // 从 r 级升到 r+1 级的门槛是 floor(10 + 10r(r+1) + 0.05·4^r)，
+  // 也就是 0→10→30→70→133→222→361→634→1389→4006 这九道坎。
+  // 曲线一改，旧阈值（0/4/8/32/64/256/512）就全部错位了——这正是当初这条用例被删掉的原因，
+  // 但"移动力随境界涨"这件事本身没变，覆盖率不该跟着一起没。
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  qi.custom = { lifespan: 100 };
+
+  const table: Array<[rank: number, exp: number, expectedMove: number]> = [
+    [0, 0, 2],      // 0/3 = 0 -> 2
+    [2, 30, 2],     // 2/3 = 0 -> 2
+    [3, 70, 3],     // 3/3 = 1 -> 3
+    [5, 222, 3],    // 5/3 = 1 -> 3
+    [6, 361, 4],    // 6/3 = 2 -> 4
+    [8, 1389, 4],   // 8/3 = 2 -> 4
+    [9, 4006, 5],   // 9/3 = 3 -> 5
+  ];
+
+  for (const [rank, exp, expectedMove] of table) {
+    qi.custom.exp = exp;
+    assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
+    assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
+  }
+});
+
+test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+
+  for (let y = 3; y <= 7; y++) {
+    for (let x = 4; x <= 10; x++) {
+      s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+  }
+
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+
+  // 0 级：基础视野 3
+  qi.custom = { exp: 0, lifespan: 100 };
+  assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
+
+  // 9 级：基础 3 + 境界 9 = 12
+  qi.custom.exp = 4006;
+  assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
+
+  // 衰老测试用 8 级（exp=1389），寿元照旧由 custom 钉死，免得跟着曲线漂
+  qi.custom = { exp: 1389, lifespan: 45 };
+  assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
+
+  qi.age = 47; // 超龄 2 岁
+  assert.equal(effectiveStats(s, qi).vision, 9, 'x=8 衰老 2 岁，视野减 2');
+  assert.ok(
+    effectiveStats(s, qi).visionItems.some(it => it.label === '修真' && it.delta === 6),
+    '面板明细里应显示衰老带来的负修正',
+  );
+});
+
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   // 2026-10-29 起溅射比例不再写死在 CONFIG 里：单位 `custom.splashRatio`
   // 存在就用它自己的。半径同理，交给扩展的 modifySplash（修士按境界）。
