@@ -9713,23 +9713,21 @@ test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
   const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
   
-  // 1 级，寿元 10。给 100 点经验，保证打坐不会立刻升级干扰测试
-  qi.custom = { exp: 100 }; 
-  assert.equal(cultivationRank(qi), 6, 'exp=100 应该是 6 级（2^6=64, 2^7=128）');
-  // 6 级寿元 = 5 + 6*5 = 35
+  qi.custom = { exp: 600 }; 
+  assert.equal(cultivationRank(qi), 6, 'exp=600应该是 6 级');
   
   // 35 岁：无衰老
   qi.age = 35;
   const baseAtk = effectiveStats(s, qi).atk;
   const baseArmor = effectiveStats(s, qi).armor;
   
-  // 36 岁：超 1 岁，攻击 -2，护甲 -1
-  qi.age = 36;
+  // 66岁：超 1 岁，攻击 -2，护甲 -1
+  qi.age = 66;
   assert.equal(effectiveStats(s, qi).atk, baseAtk - 2, '超 1 岁攻击减 2');
   assert.equal(effectiveStats(s, qi).armor, baseArmor - 1, '超 1 岁护甲减 1');
   
-  // 38 岁：超 3 岁，生命归 0 等待清场
-  qi.age = 38;
+  // 68 岁：超 3 岁，生命归 0 等待清场
+  qi.age = 68;
   assert.equal(getAgingYears(qi), 3, '这里超龄 3 岁');
   
   // 模拟回合开始
@@ -9752,7 +9750,7 @@ test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
 test('修士：满级（9 级）永远不会老死', () => {
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
   const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
-  qi.custom = { exp: 512 }; // 9 级
+  qi.custom = { exp: 20000 }; // 9 级
   qi.age = 9999; // 活了快一万岁
 
   const r = applyAction({ ...s, current: 'A', units: [qi] }, { type: 'END_TURN' });
@@ -9790,7 +9788,6 @@ test('修士：溅射半径随境界成长（x/4）', () => {
     return { s, qi, main, near, far };
   };
 
-  // 1. x=3（exp=8），半径 0：无溅射
   {
     const { s, qi, main, near, far } = setup();
     qi.custom.exp = 8;
@@ -9799,20 +9796,19 @@ test('修士：溅射半径随境界成长（x/4）', () => {
     assert.equal(r.state.units.find(u => u.id === near.id)!.hp, 1000, 'x=3 没有溅射');
   }
 
-  // 2. x=4（exp=16），半径 1：波及 near，不波及 far
   {
     const { s, qi, main, near, far } = setup();
-    qi.custom.exp = 16;
+    qi.custom.exp = 250;
     const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
     assert.ok(r.ok, r.ok ? '' : r.reason);
     assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=4 应该波及距离 1 的敌人');
     assert.equal(r.state.units.find(u => u.id === far.id)!.hp, 1000, 'x=4 够不到距离 2 的敌人');
   }
 
-  // 3. x=8（exp=256），半径 2：near 和 far 全波及
+  // 3. x=8，半径 2：near 和 far 全波及
   {
     const { s, qi, main, near, far } = setup();
-    qi.custom.exp = 256;
+    qi.custom.exp = 2000;
     const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
     assert.ok(r.ok, r.ok ? '' : r.reason);
     assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=8 波及距离 1');
@@ -9821,9 +9817,13 @@ test('修士：溅射半径随境界成长（x/4）', () => {
 });
 
 test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
+  // 10-30 修真分支重排了经验曲线之后重算过这张表：
+  // 从 r 级升到 r+1 级的门槛是 floor(10 + 10r(r+1) + 0.05·4^r)，
+  // 也就是 0→10→30→70→133→222→361→634→1389→4006 这九道坎。
+  // 曲线一改，旧阈值（0/4/8/32/64/256/512）就全部错位了——这正是当初这条用例被删掉的原因，
+  // 但"移动力随境界涨"这件事本身没变，覆盖率不该跟着一起没。
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
-  
-  // 清理一块平地（虽然测移动力不依赖地形，但为了保证移动不被阻挡）
+
   for (let y = 3; y <= 7; y++) {
     for (let x = 4; x <= 10; x++) {
       s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
@@ -9833,15 +9833,14 @@ test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
   const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
   qi.custom = { lifespan: 100 };
 
-  // 用来测试边界值的等级和对应的经验阈值
   const table: Array<[rank: number, exp: number, expectedMove: number]> = [
-    [0, 0, 2],    // 0/3 = 0 -> 2
-    [2, 4, 2],    // 2/3 = 0 -> 2
-    [3, 8, 3],    // 3/3 = 1 -> 3
-    [5, 32, 3],   // 5/3 = 1 -> 3
-    [6, 64, 4],   // 6/3 = 2 -> 4
-    [8, 256, 4],  // 8/3 = 2 -> 4
-    [9, 512, 5],  // 9/3 = 3 -> 5
+    [0, 0, 2],      // 0/3 = 0 -> 2
+    [2, 30, 2],     // 2/3 = 0 -> 2
+    [3, 70, 3],     // 3/3 = 1 -> 3
+    [5, 222, 3],    // 5/3 = 1 -> 3
+    [6, 361, 4],    // 6/3 = 2 -> 4
+    [8, 1389, 4],   // 8/3 = 2 -> 4
+    [9, 4006, 5],   // 9/3 = 3 -> 5
   ];
 
   for (const [rank, exp, expectedMove] of table) {
@@ -9853,7 +9852,7 @@ test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
 
 test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
-  
+
   for (let y = 3; y <= 7; y++) {
     for (let x = 4; x <= 10; x++) {
       s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
@@ -9861,24 +9860,23 @@ test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   }
 
   const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
-  
-  // 0级：基础视野 3
-  qi.custom = { exp: 0, lifespan: 100 }; 
+
+  // 0 级：基础视野 3
+  qi.custom = { exp: 0, lifespan: 100 };
   assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
 
-  // 9级：基础 3 + 境界 9 = 12
-  qi.custom.exp = 512;
+  // 9 级：基础 3 + 境界 9 = 12
+  qi.custom.exp = 4006;
   assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
 
-  // 衰老测试改用 x=8 级（exp=256）
-  // x=8 级寿元 = 5 + 8*5 = 45。
-  qi.custom = { exp: 256, lifespan: 45 }; 
+  // 衰老测试用 8 级（exp=1389），寿元照旧由 custom 钉死，免得跟着曲线漂
+  qi.custom = { exp: 1389, lifespan: 45 };
   assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
 
   qi.age = 47; // 超龄 2 岁
   assert.equal(effectiveStats(s, qi).vision, 9, 'x=8 衰老 2 岁，视野减 2');
   assert.ok(
-    effectiveStats(s, qi).visionItems.some(it => it.label === '修真·炼气' && it.delta === 6),
+    effectiveStats(s, qi).visionItems.some(it => it.label === '修真' && it.delta === 6),
     '面板明细里应显示衰老带来的负修正',
   );
 });

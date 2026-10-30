@@ -9,6 +9,9 @@ import type {
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
 
+// 境界名称
+const _REAMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
+
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
   id: 'qi-cultivator',
@@ -18,10 +21,10 @@ const CULTIVATOR: UnitTypeDef = {
   category: 'combat',
   cost: 100,
   move: 2,
-  atk: 1,
+  atk: 10,
   armor: 0,
-  maxHp: 2,
-  range: 2,
+  maxHp: 20,
+  range: 1,
   vision: 3,
   abilities: ['qi-true-damage'], 
 };
@@ -40,7 +43,8 @@ const QI_TRUE_DAMAGE: AbilityDef = {
         stage: DAMAGE_STAGE.trueDamage,
         apply: (c) => {
           if (c.side !== 'attacker') return;
-          const trueDmg = Math.floor(getRank(c.self) / 2);
+          const x = getRank(c.self)
+          const trueDmg = Math.floor((x*x)/2+x*(1.2**x));
           if (trueDmg > 0) c.damage += trueDmg;
         },
       },
@@ -58,7 +62,7 @@ const MAX_RANK = 9;
 function getRank(u: Unit): number {
   const exp = getExp(u);
   let rank = 0;
-  while (rank < MAX_RANK && exp >= 2 ** (rank + 1)) {
+  while (rank < MAX_RANK && exp >= Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank)) {
     rank++;
   }
   return rank;
@@ -77,20 +81,21 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   
   // 如果升级了，立刻结算加成并写战报
   if (newRank > rank) {
-    u.maxHpBonus = (u.maxHpBonus ?? 0) + 5;
-    u.hp += 5; // 升级瞬间回 5 血
+    const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
+    u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
+    u.hp += deltaMaxHp; // 升级瞬间回血
     
     s.log.push({
       turn: s.turn,
       player: u.owner, 
-      text: `炼气士 突破至 ${newRank} 层！`,
+      text: `炼气士 突破至 ${_REAMS[newRank]} 期！`,
       open: true,
     });
   }
 }
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
-  return getRank(u)*2+2;
+  return getRank(u) + 3;
 }
 
 // ── 寿元与衰老 ─────────────────────────────────────
@@ -103,7 +108,7 @@ function getLifespan(u: Unit): number {
   
   const rank = getRank(u);
   if (rank >= MAX_RANK) return Infinity;
-  return 5 + rank * 5;
+  return 5 + rank * 10;
 }
 /**
  * 超出寿元多少岁。
@@ -120,27 +125,47 @@ function isDoomed(u: Unit): boolean {
 
 // ── 属性修正 ───────────────────────
 // 返回的是增量
-
-/** 攻击力修正：境界 +2/级，衰老 −2/岁 */
+/** 攻击力修正：境界，衰老 −2/岁 */
 function atkModifier(u: Unit): number {
-  return getRank(u) * 2 - getAgingYears(u) * 2;
+  const rank = getRank(u);
+  const realmsModifier = 5 * rank + 2**(rank-0.5);
+  return Math.floor(realmsModifier - getAgingYears(u) * 2);
 }
-
-/** 炼气士的护甲修正：境界 +1/级，衰老 −1/岁 */
+/** 真伤修正：用能力实现，不用在这里写 */
+/** 攻击次数修正 */
+/** 生命修正 */
+/** 护甲修正：境界，衰老 −1/岁 */
 function armorModifier(u: Unit): number {
-  return getRank(u) - getAgingYears(u);
+  const rank = getRank(u);
+  const realmsModifier = -1 + rank * rank + 1.5**rank;
+  return Math.floor(realmsModifier - getAgingYears(u));
 }
+/** 移动修正 */
+function moveModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = rank/3;
+  return Math.floor(realmsModifier);
+}
+/** 溅射范围修正 */
+/** 射程修正 */
+function RangeModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = rank/2;
+  return Math.floor(realmsModifier);
+}
+/** 视野修正 */
+
 
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
-  name: '修真·炼气',
+  name: '修真',
   summary: '带来了会修炼成长的炼气士。',
   hooks: {
     //升级逻辑
     // 1. 击杀敌人获得经验
     onUnitKilled: (c) => {
       if (c.killer && c.killer.type === 'qi-cultivator') {
-        addExp(c.killer, c.state, 15); 
+        addExp(c.killer, c.state, 10); 
       }
     },
     modifyDamage: ({ attacker, damage }) => {
@@ -164,8 +189,8 @@ export const CULTIVATION_PACK: Expansion = {
     },
     // 3. 射程加成（假设等级 2 以上，射程变远）
     modifyRange: ({ unit, range }) => {
-      if (unit.type === 'qi-cultivator' && getRank(unit) >= 2) {
-        return range + 1;
+      if (unit.type === 'qi-cultivator') {
+        return range + RangeModifier(unit);
       }
       return range;
     },
@@ -189,10 +214,10 @@ export const CULTIVATION_PACK: Expansion = {
       if (attacker.type !== 'qi-cultivator') return splash;
       return Math.floor(getRank(attacker) / 4);
     },
-    // ── 移动力：2 + floor(x/3) ─────────────────────
+    // ── 移动 ─────────────────────
     modifyMove: ({ unit, move }) => {
       if (unit.type !== 'qi-cultivator') return move;
-      return move + Math.floor(getRank(unit) / 3);
+      return move + moveModifier(unit);
     },
     // ── 回合开始：寿元判定 + 打坐 ──────────────────
     onTurnStart: ({ state, player }) => {
@@ -240,11 +265,11 @@ export const CULTIVATION_PACK: Expansion = {
       const lifespan = getLifespan(unit);
       const aging = getAgingYears(unit);
       
-      // 升级所需总经验：2^(rank+1)
-      const nextExp = rank < MAX_RANK ? 2 ** (rank + 1) : null;
+      // 升级所需总经验
+      const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
 
       const lines = [
-        `当前境界：第 ${rank} 层 / ${MAX_RANK}`,
+        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMS[rank]} 期`,
         nextExp !== null
           ? `修为经验：${exp} / ${nextExp}`
           : `修为经验：${exp}（已臻化境）`,
@@ -254,7 +279,7 @@ export const CULTIVATION_PACK: Expansion = {
       if (rank > 0) {
         const trueDmg = Math.floor(rank / 2);
         lines.push(
-          `境界加成：攻击 +${rank} · 护甲 +${rank} · 射程 +${rank} · 神识 +${rank} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
+          `境界加成：攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
         );
         if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
       }
