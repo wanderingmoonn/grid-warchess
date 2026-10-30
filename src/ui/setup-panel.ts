@@ -315,7 +315,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">${
                 config.godMode
                   ? '上帝模式下棋盘全图可见：点兵种→点棋盘落子，摆完点「交给 AI · 一回合」看一回合，或者「接管 · 打到全灭」看完整场。'
-                  : '指挥官模式下棋盘只看不碰：每回合调好生产序列，点一次就交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
+                  : '指挥官模式下棋盘只看不碰：点自己的城 → 在右侧点兵种，就排进顶端的生产队列，点一次执行交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
               }</div>
             </section>
 

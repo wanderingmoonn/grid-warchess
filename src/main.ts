@@ -12,7 +12,7 @@ import { expansionById } from './core/expansions.ts';
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
 import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
-import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts';
+import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -57,7 +57,7 @@ import {
 import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
-import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
+import type { Action, GameState, PlayerId, Terrain, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
@@ -84,7 +84,6 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
-import { PACK_ALL, packOk, packRow } from './ui/packs.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
@@ -2251,6 +2250,12 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'order-add': {
+      // 指挥官模式：产兵面板上的按钮不再是"立刻造"，而是"排进队列"
+      enqueueOrder(el.dataset.type ?? '', el.dataset.site ?? '');
+      return;
+    }
+
     case 'end-turn':
       dispatch({ type: 'END_TURN' });
       return;
@@ -2862,21 +2867,6 @@ let commanderSig = '';
 let commanderRunning = false;
 /** 批量执行到第几个回合（1..5），0 表示没在跑 */
 let commanderRound = 0;
-/** 窄屏下「参谋部」是折叠的，点一下才展开排计划 */
-let commanderExpanded = false;
-/**
- * 参谋部的两个筛选维度：**哪个包** + **哪一代**。
- *
- * 为什么不并进 `recruitQuery` / 侧栏的包筛选：那是产兵面板的状态，
- * 两个面板可能同时被打开过（切模式时），共用一个值的结果是"在参谋部筛了
- * 奇想，切回面板产兵列表也只剩奇想"。这两处要回答的问题本来就不一样。
- *
- * 取值都是**空＝不筛**：`PACK_ALL` 是所有包，era 0 是所有代。
- * 两个条件是 AND——同时选「奇想」和「4 代」就是"奇想包里 4 代的那几个"。
- */
-let commanderPack = PACK_ALL;
-/** 时代筛选：0＝全部，其余是兵种表里的 `era`（第几代） */
-let commanderEra = 0;
 
 /** 批量执行时每步的停顿。比"慢档"快得多：一次要跑 5 个回合，180ms 会拖成一分钟 */
 const BATCH_DELAY = 40;
@@ -2884,82 +2874,6 @@ const BATCH_DELAY = 40;
 /** 现在是不是"轮到玩家当指挥官" */
 function commanderActive(): boolean {
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
-}
-
-/**
- * 参谋部的筛选只有两个维度：**哪个包（DLC）** 和 **哪一代**。
- *
- * 这两个维度的取值都不是手写的清单，而是从"这一局真能造的那份名单"里推出来的：
- *   · 包——`packOf(def)`（`expansions.ts` 里登记的兵种出处；原版 49 个记作 `core`）。
- *     和侧栏产兵面板、上帝模式货架共用同一个函数，三处不会是三种说法。
- *   · 代——`def.era`（1..6，标签取自 `ERAS` 配置里那套「古典 / 中世 / …」）。
- *     名单本来就只放"本代 + 上一代"（和侧栏同一个口径），所以通常只有两颗时代 chip。
- *
- * 一个维度都不选＝不筛（原样列出全部）；只选一个、或者两个都选都行，
- * 两个条件之间是 AND。
- */
-
-/** 这一项过不过筛 */
-function cmdPass(it: CmdItem): boolean {
-  if (!packOk(it.def, commanderPack)) return false;
-  if (commanderEra !== 0 && it.def.era !== commanderEra) return false;
-  return true;
-}
-
-/**
- * 时代筛选 chip。
- *
- * 只列**这份名单里真有的代**：一个按下去筛掉零个选项的按钮，比没有它更让人困惑。
- * 只剩一代时整块不显示（筛无可筛），和 `packRow` 遇到"只有一个包"时的处理一致。
- */
-function eraChipRow(items: CmdItem[]): string {
-  const levels = [...new Set(items.map((it) => it.def.era))].sort((a, b) => a - b);
-  if (levels.length < 2) return '';
-  const one = (level: number, text: string, active: boolean) =>
-    `<button class="chip ${active ? 'active' : ''}" data-cmd-era="${level}">${text}</button>`;
-  return `<div class="chip-row">
-    ${one(0, '全部时代', commanderEra === 0)}
-    ${levels.map((l) => one(l, `${l} 代 · ${eraDef(l).name}`, commanderEra === l)).join('')}
-  </div>`;
-}
-
-/** 参谋部里一个能排的兵种 */
-interface CmdItem {
-  def: UnitTypeDef;
-  /** 这一次要多少金（英雄第一次含解锁费） */
-  gold: number;
-  /** 其中有多少是解锁费（已经解锁、或者不是英雄就是 0） */
-  unlockFee: number;
-  /** 场上已经有 / 蛋还等着孵：排了也造不出来，说清楚为什么 */
-  blocked: string | null;
-}
-
-/**
- * 玩家这一方现在造得出来的兵种（按自己最高级的城市算，含上一代）。
- *
- * 「造得出来」是一个上限口径：具体某一格能不能造，还要看那一格指定的
- * 是哪座城（时代可能更低），见 `slotProblem`。这里不按城过滤，
- * 是因为下拉是**所有格子共用**的一份名单——按城过滤会让"这一格能排、
- * 那一格排不了"变成"列表里忽有忽无"，比标一句「产不了」更难懂。
- */
-function commanderPool(): CmdItem[] {
-  const eras = citiesOf(state, me()).map((c) => c.era);
-  const era = eras.length > 0 ? Math.max(...eras) : 1;
-  return Object.values(state.unitTypes)
-    .filter(
-      (d) =>
-        d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
-    )
-    .sort((a, b) => a.era - b.era || a.cost - b.cost || a.name.localeCompare(b.name))
-    .map((def) => {
-      const quote = recruitPriceOf(state, me(), def);
-      return {
-        def,
-        gold: quote.gold,
-        unlockFee: quote.unlockFee,
-        blocked: heroBlocked(state, me(), def) ? '已在场' : null,
-      } satisfies CmdItem;
-    });
 }
 
 /** 自己的产兵点：城市 + 军营。`era` 是它现在能产到第几代 */
@@ -3061,7 +2975,7 @@ function estimateGold(): { avail: number[]; cost: number[] } {
   return { avail, cost };
 }
 
-/** 只刷新金币提示，不重建下拉——否则玩家正在点的格子会被抽走 */
+/** 只刷新金币提示，不重建队列条——否则玩家刚点出来的那一格会被抽走 */
 function refreshEstimates(): void {
   const est = estimateGold();
   const queue = ordersOf(state, me());
@@ -3086,14 +3000,16 @@ function refreshEstimates(): void {
 }
 
 /**
- * 画指挥官面板。
+ * 画指挥官面板（顶端那条生产队列）。
  *
- * 只在"回合 / 可用时代 / 检索词 / 分类 / 是否在跑"变化时重建：面板里是 <select>，
- * 而 AI 每走一步都会触发 render()，每次都重建的话玩家的下拉框会在点到一半时被抽走。
+ * 这里是**只读的展示层**：排队动作全部走"点自己的城 → 右侧面板点兵种"，
+ * 和常规模式一模一样，只是按钮从「生产」变成「＋队列」（见 panel.ts 的
+ * recruitButton）。从前这里挂着 5×2 个下拉框（造什么 / 哪个产兵点），
+ * 等于把产兵这件事在两种模式下做成两套操作——同一座城，常规模式点右边，
+ * 指挥官模式写下拉框，玩家得先想"我现在是哪种模式"。
  *
- * 每一格现在是**两个**下拉：造什么、由哪个产兵点造。第二件事以前是 AI 自己挑的，
- * 于是"我想让前线的营出兵、不想让主城少一个守军"这种要求根本表达不出来；
- * 城市一多，"兵出在哪一头"比"造什么"更能决定这一回合值不值。
+ * 重建只在"队列内容 / 产兵点 / 在线与否 / 当前行动方"变化时发生：AI 每走一步
+ * 都会 render()，无脑重建会把这排按钮在玩家点到一半时抽走。
  */
 function renderCommander(): void {
   if (!commanderActive()) {
@@ -3119,109 +3035,67 @@ function renderCommander(): void {
     return;
   }
 
-  const items = commanderPool();
-  const era = items.length > 0 ? Math.max(...items.map((it) => it.def.era)) : 1;
+  /*
+   * 队列条：只显示"排了什么"，不再提供下拉框。
+   *
+   * 排队只有一条路——点自己的城（或军营），在右侧面板点兵种。这样指挥官模式和
+   * 常规模式的手感是同一套：**城市是入口，兵种在右边点**。
+   * 这里只负责把结果摆出来：排了哪几格、每格预计花多少、哪一格会空转。
+   */
+  const queue = ordersOf(state, me());
+  const sites = orderSitesOf(state, me());
+  const slots = CONFIG.commanderSlots;
   const online = room !== null;
-  const sig = `${state.turn}|${era}|${commanderExpanded}|${online}|${commanderPack}|${commanderEra}`;
+  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
   }
   commanderSig = sig;
 
-  const queue = ordersOf(state, me());
-  const sites = orderSitesOf(state, me());
-  const shown = items.filter(cmdPass);
-
-  const opts = (sel: string) => {
-    // 这一格已经排好的兵种如果被筛选筛掉了，**只为这一格**补回来：
-    // 补进公用列表会让别的格子也看见它，"筛过了"就名不副实；
-    // 不补的话浏览器会因为找不到当前值而跳回第一项，等于替玩家把计划改了。
-    const list =
-      sel && !shown.some((it) => it.def.id === sel)
-        ? [...shown, ...items.filter((it) => it.def.id === sel)]
-        : shown;
-    // 筛选组合一个都没命中时给一句明确的空态：下拉照旧列「不指定」「升级时代」，
-    // 但要说清"不是列表坏了，是这个组合下真的没有兵"
-    const empty =
-      list.length === 0 ? '<option value="" disabled>（这个筛选组合下没有兵种）</option>' : '';
-    return [
-      '<option value="">— 不指定 —</option>',
-      `<option value="${ORDER_UPGRADE}"${sel === ORDER_UPGRADE ? ' selected' : ''}>升级时代</option>`,
-      empty,
-    ]
-      .concat(
-        list.map((it) => {
-          const d = it.def;
-          // 英雄第一次要把解锁费写在脸上：只标 360 而实际要 510，
-          // 是这个模式下最容易踩的一脚
-          const price =
-            it.unlockFee > 0 ? `${d.cost} + 解锁 ${it.unlockFee}` : `${it.gold}`;
-          // 已经在场的英雄造不出第二个（含蛋还没孵的那种），但当前选中的留活口，
-          // 否则旧存档里的那一格会显示成"不指定"，看着像自己跳掉了
-          const blocked = it.blocked && d.id !== sel ? ` disabled` : '';
-          const note = it.blocked ? ` · ${it.blocked}` : '';
-          return `<option value="${d.id}"${d.id === sel ? ' selected' : ''}${blocked}>${d.name} · ${price} 金${note}</option>`;
-        }),
-      )
-      .join('');
+  /** 产兵点的短名：城市叫名字，军营叫兵种名，空串＝交给 AI 挑 */
+  const siteLabel = (id: string): string => {
+    if (!id) return '自动选址';
+    const city = state.cities.find((c) => c.id === id);
+    if (city) return cityName(city);
+    const unit = state.units.find((u) => u.id === id);
+    if (unit) return state.unitTypes[unit.type]?.name ?? unit.type;
+    return id;
   };
 
-  const siteOpts = (unitId: string, sel: string) => {
-    const own = ownSites();
-    if (own.length === 0) return '<option value="">没有产兵点</option>';
-    return [
-      `<option value=""${sel ? '' : ' selected'}>哪座都行</option>`,
-      ...own.map((s) => {
-        // 标一句"产不了"，而不是把选项禁掉：这和"钱不够"是同一类后果——
-        // 排了造不出来，是玩家该自己看见的事，不是界面替他做主的事
-        const bad = unitEraProblem(unitId, s);
-        return `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${s.label}${bad}</option>`;
-      }),
-    ].join('');
-  };
-
-  const slots = Array.from({ length: CONFIG.commanderSlots }, (_, i) => {
-    const label = i === 0 ? '本回合' : `+${i}`;
-    const cur = queue[i] ?? '';
-    return `<label class="cmd-slot${i === 0 ? ' now' : ''}">
-      <span class="cmd-step">${label}</span>
-      <select data-slot="${i}" title="这一格造什么">${opts(cur)}</select>
-      <select data-site="${i}" title="由哪个产兵点产出"${cur ? '' : ' disabled'}>${siteOpts(cur, sites[i] ?? '')}</select>
-      <span class="cmd-est" data-est="${i}"></span>
-    </label>`;
-  }).join('');
-
-  // 两个筛选维度：包（复用侧栏/god 货架那颗 chip 行的口径与外观）+ 代。
-  // 包那行在"这一局只有一个包"时自己返回空串，不会留一颗点了没反应的按钮。
-  const packRowHtml = packRow(items.map((it) => it.def), commanderPack, 'cmd-pack');
-  const eraRowHtml = eraChipRow(items);
-  const filtered = commanderPack !== PACK_ALL || commanderEra !== 0;
+  const chips: string[] = [];
+  for (let i = 0; i < slots; i++) {
+    const type = queue[i] ?? '';
+    if (!type) {
+      chips.push(`<span class="cmd-chip is-empty"><b>${i + 1}</b><span>空</span></span>`);
+      continue;
+    }
+    const name = type === ORDER_UPGRADE ? '升级时代' : (state.unitTypes[type]?.name ?? type);
+    chips.push(`<span class="cmd-chip">
+      <b>${i + 1}</b>
+      <span class="cmd-chip-name">${name}</span>
+      <i>· ${siteLabel(sites[i] ?? '')}</i>
+      <span class="cmd-chip-est" data-est="${i}"></span>
+      <button class="cmd-x" data-cmd="drop" data-idx="${i}" title="把这一格从队列里去掉">×</button>
+    </span>`);
+  }
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
       <span class="cmd-hint">${
         online
-          ? '联机局里对面是人：点一次只打完你自己这一回合，然后提交给他。'
-          : `排满下面 ${CONFIG.commanderSlots} 格，点一次就把这 ${CONFIG.commanderSlots} 个回合一起交给 AI 打完。`
+          ? '点自己的城市 → 在右侧点兵种，就排进这条队列；执行一次打完你自己这一回合并提交。'
+          : `点自己的城市 → 在右侧点兵种，就排进这条队列；排好之后点执行，AI 一次打完这 ${slots} 回合。`
       }</span>
-      <button class="btn btn-sm cmd-toggle" data-cmd="toggle">${commanderExpanded ? '收起' : '排计划'}</button>
+      <span class="cmd-count">已排 ${queue.length} / ${slots}</span>
     </div>
-    <div class="cmd-slots${commanderExpanded ? ' open' : ''}">
-      <div class="cmd-filter">
-        ${packRowHtml}
-        ${eraRowHtml}
-        <span class="cmd-count">${shown.length} / ${items.length} 个兵种${
-          filtered ? '（已筛选）' : ''
-        }${shown.length === 0 ? ' — 换个包或时代看看' : ''}</span>
-      </div>
-      ${slots}
-    </div>
+    <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
-      <button class="btn btn-primary" data-cmd="run">${
-        online ? '执行本回合并提交' : `执行 ${CONFIG.commanderSlots} 回合`
+      <button class="btn btn-sm" data-cmd="clear" ${queue.length > 0 ? '' : 'disabled'}>清空</button>
+      <button class="btn btn-primary" data-cmd="run" ${queue.length > 0 ? '' : 'disabled'}>${
+        online ? '执行本回合并提交' : `执行 ${slots} 回合`
       }</button>
     </div>
   `;
@@ -3229,98 +3103,59 @@ function renderCommander(): void {
 }
 
 
-/** 这个产兵点能不能造这一格点的兵（返回给下拉选项后面那半句提示） */
-function unitEraProblem(unitId: string, site: { era: number; city: boolean }): string {
-  if (!unitId) return '';
-  if (unitId === ORDER_UPGRADE) return site.city ? '' : ' · 营不升级';
-  const def = state.unitTypes[unitId];
-  if (!def) return '';
-  return def.era > site.era ? ` · 只到 ${site.era} 代` : '';
-}
-
 /**
- * 玩家改了某一格：整条序列重发一次（SET_ORDERS 是"设置"语义，天然幂等）。
+ * 队列条上的三颗操作：执行、中断、删一格、清空。
  *
- * 两个下拉一起收：兵种和产兵点是同一格的两半，分开发会让"改了城、兵种那半
- * 还是老的"这种中间状态先写进状态里。
+ * 删格是"按位置删"，不是"按兵种删"：同一条队列里可以有两次同一个兵（两个回合各造一个），
+ * 按兵种删会把两格一起删掉，而玩家只点了其中一格。
  */
-function readCommanderPlan(): { queue: string[]; sites: string[] } {
-  const queue = Array.from(
-    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-slot]'),
-  ).map((s) => s.value);
-  const sites = Array.from(
-    commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]'),
-  ).map((s) => s.value);
-  return { queue, sites };
-}
-
-/**
- * 把产兵点下拉回填成状态里的值。
- *
- * 兵种被改成「不指定」时，规则层会把那一格的产兵点抹成空串（"这回合什么都不造"
- * 却留着"造在哪座城"，下次一改兵种就会把那座城悄悄带上）。下拉得跟着回填，
- * 否则界面还显示着 c1，而状态里已经是空的了——两边各说各话。
- */
-function syncCommanderSites(): void {
-  const queue = ordersOf(state, me());
-  const sites = orderSitesOf(state, me());
-  commanderEl.querySelectorAll<HTMLSelectElement>('select[data-site]').forEach((sel) => {
-    const i = Number(sel.dataset.site);
-    const want = sites[i] ?? '';
-    if (sel.value !== want) sel.value = want;
-    sel.disabled = !(queue[i] ?? '');
-  });
-}
-
-commanderEl.addEventListener('change', (e) => {
-  const el = e.target as HTMLElement;
-  if (!el.matches('select[data-slot], select[data-site]')) return;
-  // 产兵点下拉跟着兵种走：兵种一改，那一格的"能造吗"结论就变了，
-  // 而 estimate 是唯一会说这件事的地方，所以改完要把提示一起刷新
-  const { queue, sites } = readCommanderPlan();
-  dispatch({ type: 'SET_ORDERS', queue, sites });
-  syncCommanderSites();
-  refreshEstimates();
-});
-
 commanderEl.addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
-
-  // 包（DLC）：再点一次当前那个包＝回到全部，和别处的 chip 一个手感。
-  // 属性名来自共用的 packRow（data-act + data-pack），所以这里认 data-pack 而不是自造一个。
-  const packChip = el.closest<HTMLElement>('[data-act="cmd-pack"]');
-  if (packChip) {
-    const next = packChip.dataset.pack ?? PACK_ALL;
-    commanderPack = commanderPack === next ? PACK_ALL : next;
-    commanderSig = '';
-    renderCommander();
-    return;
-  }
-
-  // 时代：同一套手感（再点一次＝全部时代）
-  const eraChip = el.closest<HTMLElement>('[data-cmd-era]');
-  if (eraChip) {
-    const next = Number(eraChip.dataset.cmdEra ?? '0');
-    commanderEra = commanderEra === next ? 0 : next;
-    commanderSig = '';
-    renderCommander();
-    return;
-  }
-
   const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
+
   if (cmd === 'run') void runCommanderBatch();
   if (cmd === 'stop') {
     // 令牌一换，所有正在跑的 AI 循环下一步就自己退出
     aiToken += 1;
   }
-  if (cmd === 'toggle') {
-    commanderExpanded = !commanderExpanded;
-    commanderSig = '';
-    renderCommander();
-    fitBoard();
+  if (cmd === 'drop') {
+    const idx = Number(el.closest<HTMLElement>('[data-idx]')?.dataset.idx ?? '-1');
+    const queue = [...ordersOf(state, me())];
+    const sites = [...orderSitesOf(state, me())];
+    if (idx < 0 || idx >= queue.length) return;
+    queue.splice(idx, 1);
+    sites.splice(idx, 1);
+    dispatch({ type: 'SET_ORDERS', queue, sites });
+    return;
+  }
+  if (cmd === 'clear') {
+    dispatch({ type: 'SET_ORDERS', queue: [], sites: [] });
   }
 });
+
+/**
+ * 把「这座城 · 这个兵」排进本回合的生产队列。
+ *
+ * 队列就是一串"每回合造什么"，`orders` 与 `orderSites` 逐格对齐
+ * （见 types.ts 的 orders 注释）。这里只做追加，删除在顶端队列条上。
+ * 动作走 `dispatch` 而不是直接改 state：SET_ORDERS 是规则层的动作，
+ * 联机时它会连同其它动作一起被推给对面。
+ */
+function enqueueOrder(type: string, site: string): void {
+  if (!state.config.commanderMode) return;
+  const queue = [...ordersOf(state, me())];
+  const sites = [...orderSitesOf(state, me())];
+  if (queue.length >= CONFIG.commanderSlots) {
+    toast(`队列满了（${CONFIG.commanderSlots} 格）：先在顶部删掉一格`);
+    return;
+  }
+  queue.push(type);
+  sites.push(site);
+  if (!dispatch({ type: 'SET_ORDERS', queue, sites })) return;
+  const name = type === ORDER_UPGRADE ? '升级时代' : (state.unitTypes[type]?.name ?? type);
+  toast(`已排入队列：${name}`);
+}
 
 /** 这一方本回合的命令：三种走法见 runCommanderBatch 的注释 */
 function commanderBudget(player: PlayerId): Partial<AiBudget> {
@@ -3356,15 +3191,8 @@ async function runCommanderBatch(): Promise<void> {
   const token = ++aiToken;
   clearSelection();
   aiPaused = false;
-  // 先把当前下拉里的选择落到状态里：玩家可能只是改了选择就直接点执行
-  //
-  // 兵种和产兵点一起收：只落兵种会让"这一格造在哪座城"退回 AI 自选，
-  // 玩家排了半天的布阵在按执行的一瞬间被抹掉。
-  const plan = readCommanderPlan();
-  if (plan.queue.length > 0) {
-    const set = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
-    if (set.ok) state = set.state;
-  }
+  // 队列就是状态本身（点城市面板的那一刻就写进去了），执行时不必再"收一遍下拉"。
+  // 以前那一步是必需的：下拉是界面的临时值，不收就会把玩家刚改的那一格漏掉。
 
   commanderRunning = true;
   commanderRound = 0;
@@ -3415,9 +3243,13 @@ async function runCommanderBatch(): Promise<void> {
     return;
   }
 
-  // 单机：把这批计划重新装回序列，玩家满意的话下一次直接点执行，不用重排 5 格。
+  // 单机：把这批计划重新装回序列，玩家满意的话下一次直接点执行，不用重排。
   // 这也正是"减负"——排一次能用很多批，想改再改。
-  const rearm = applyAction(state, { type: 'SET_ORDERS', queue: plan.queue, sites: plan.sites });
+  const rearm = applyAction(state, {
+    type: 'SET_ORDERS',
+    queue: [...ordersOf(state, me())],
+    sites: [...orderSitesOf(state, me())],
+  });
   if (rearm.ok) state = rearm.state;
 
   saveMatch(state);
