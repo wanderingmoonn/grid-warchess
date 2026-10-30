@@ -8910,6 +8910,35 @@ test('近战兵不会被高地变成远程', () => {
   assert.equal(effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null), 1);
 });
 
+test('高机动性：移动/射程/视野 ×1.5，近战射程不动，桥不再给视野', () => {
+  const off = fresh();
+  const on = fresh({ expansionIds: ['high-mobility'] });
+  const u = (st: GameState, type: string): Unit => {
+    const unit = placeUnit(st, 'A', type, 5, 5);
+    assert.ok(unit.ok, unit.ok ? '' : unit.reason);
+    return unit.state.units.find((x) => x.type === type)!;
+  };
+
+  // 移动：2 → 3（向上取整，缩放不该让谁变慢）
+  assert.equal(movePower(off, u(off, 'militia')), 2);
+  assert.equal(movePower(on, u(on, 'militia')), 3);
+  // 视野：2 → 3
+  assert.equal(visionOf(off, u(off, 'militia')), 2);
+  assert.equal(visionOf(on, u(on, 'militia')), 3);
+  // 远程射程：3 → 4（向下取整）
+  assert.equal(effectiveRange(off, u(off, 'archer')), 3);
+  assert.equal(effectiveRange(on, u(on, 'archer')), 4);
+  // 近战射程保持 1：×1.5 之后变 2 会把所有近战变远程，那是抹掉兵种分类
+  assert.equal(effectiveRange(on, u(on, 'militia')), 1);
+  // 建筑不动：墙还是 0
+  assert.equal(movePower(on, u(on, 'tower')), 0);
+
+  // 桥不再自带视野（本体里三座桥都清零了）
+  for (const id of ['bridge', 'bridge2', 'bridge3']) {
+    assert.equal(UNIT_TYPES[id]!.vision, 0, `${id} 不该再有视野`);
+  }
+});
+
 test('爬坡：往高处走每层 +1、封顶 2 层，下坡不加价，且一格最多吃掉全部移动力', () => {
   const on = fresh({ expansionIds: ['height-terrain'] });
   putTerrain(on, 4, 4, 'plain');
