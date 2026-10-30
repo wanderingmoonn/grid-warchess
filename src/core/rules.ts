@@ -680,8 +680,7 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
 
 /**
  * 这一下能打出多少魔法伤害。
- *
- * `foe` 可以为 null（攻城时目标是一座城，不是单位）：魔法段本身只被魔抗平减，
+ * 魔法段本身只被魔抗平减，
  * 不需要目标是个单位；只有「属性精研·暗」那种"按对手放大"的钩子需要它，
  * 没有对手时自然跳过。
  */
@@ -716,7 +715,6 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
 /**
  * 出手方的攻击力：基础 + 光环 + 状态修正（威吓、狂暴……）。
  * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
- * 以前这条只在野战里成立，攻城走的是另一套账。
  */
 export function attackPowerNow(s: GameState, attacker: Unit): number {
   let atkNow = utype(s, attacker.type).atk + auraBonus(s, attacker).atk;
@@ -2939,6 +2937,13 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
 
+  if (attacker.attacksLeft === undefined) {
+    attacker.attacksLeft = Math.max(1, attacksPerTurn(s, attacker));
+  }
+  if (attacker.attacksLeft <= 0) {
+    return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
+  }
+  
   const dist = distToCity(attacker, city);
   if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
 
@@ -2969,8 +2974,11 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
       : `${atName} 攻城，但打不动这座城的城墙`,
   );
 
-  attacker.acted = true;
+  attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
   attacker.moved = true;
+  if (attacker.attacksLeft <= 0) {
+    attacker.acted = true;
+  }
   markManualFire(s, attacker);
 
   if (city.hp <= 0) {
