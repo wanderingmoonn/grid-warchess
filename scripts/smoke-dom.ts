@@ -2557,6 +2557,56 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   }
 });
 
+check('热座指挥官：底栏是「提交作战计划」，交完就变「已提交，等对方」', () => {
+  // 热座 = 一台机器两个人、对面不是 AI。这时底栏那颗按钮不能是「执行 5 回合」——
+  // 第一个人一按，第二个人就只剩看的分。
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      commanderMode: true,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    611,
+  );
+  st.current = 'A';
+  const host = doc.createElement('div');
+  const paint = (planHotseat: boolean, planReady: boolean) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      commander: true,
+      planHotseat,
+      planReady,
+    });
+
+  paint(true, false);
+  const commit = host.querySelector<HTMLButtonElement>('[data-act="plan-commit"]');
+  assert.ok(commit, '热座里底栏应该是"提交作战计划"');
+  assert.equal(commit!.textContent?.trim(), '提交作战计划');
+  assert.equal(commit!.disabled, false, '轮到你就该能交');
+  assert.equal(host.querySelector('[data-act="commander-run"]'), null, '热座不该再有"执行 N 回合"');
+
+  paint(true, true);
+  const again = host.querySelector<HTMLButtonElement>('[data-act="plan-commit"]');
+  assert.ok((again!.textContent ?? '').includes('已提交'), `交完要写「已提交」，实际：${again!.textContent}`);
+  assert.equal(again!.disabled, true, '交过了就别让他再交一次');
+
+  // 人机指挥官维持原样：一次打完一批再交还
+  paint(false, false);
+  const batch = host.querySelector<HTMLButtonElement>('[data-act="commander-run"]');
+  assert.ok(batch, '人机局照旧是"执行 N 回合"');
+  assert.ok((batch!.textContent ?? '').includes('回合'));
+  assert.equal(host.querySelector('[data-act="plan-commit"]'), null);
+});
+
 check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {
   // 这条以前是反的：城市 era 5，面板里连一个古典兵都不剩。
   const st = createMatch(

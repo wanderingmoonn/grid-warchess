@@ -34,6 +34,7 @@ import {
   isAirborne,
   ordersOf,
   orderSitesOf,
+  planBothReady,
   reachableTiles,
   recruitPriceOf,
   recruitSpawnCells,
@@ -63,8 +64,7 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
-  DRAFT_BAN_MS,
-  DRAFT_PICK_MS,
+  draftMsOf,
   draftInProgress,
   draftPhaseLabel,
   draftSecondsLeft,
@@ -650,6 +650,9 @@ function panelInput(known?: PlayerView): PanelInput {
     // 底栏那颗按钮在指挥官模式里是"执行一批再交还"的入口，得知道这批打几个回合
     commanderRunning,
     commanderRounds: room ? 1 : CONFIG.commanderSlots,
+    // 热座：底栏那颗按钮变成「提交作战计划」，两边都交完才开推
+    planHotseat: commanderHotseat(),
+    planReady: state.orderReady?.[me()] === true,
     forceMode,
     report: reportPanel(),
   };
@@ -1518,7 +1521,8 @@ let draftAnchor = { key: '', at: 0 };
 
 /** 这一轮的时长（禁用 25 秒 / 每次选人 30 秒） */
 function draftPhaseMs(state: GameState): number {
-  return state.draft?.phase === 'pick' ? DRAFT_PICK_MS : DRAFT_BAN_MS;
+  // 时长必须和规则层写 deadline 时用的是同一份（开局面板可以改这两档）
+  return draftMsOf(state);
 }
 
 /**
@@ -2479,6 +2483,12 @@ function handleAction(act: string, el: HTMLElement): void {
       void runCommanderBatch();
       return;
 
+    // 热座：交自己这一份。交完还差对面就只换人；两边齐了就开始轮流推进
+    case 'plan-commit': {
+      commitPlan();
+      return;
+    }
+
     case 'zoom-in':
       zoomStep(1);
       return;
@@ -3117,6 +3127,24 @@ function commanderActive(): boolean {
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
 }
 
+/**
+ * 双人热座指挥官：两个人共用一台机器、对面不是 AI、也不是联机。
+ *
+ * 这一档和"人机 / 联机"的区别是**排队这件事本身要不要等对面**：
+ *   · 人机：对面是 AI，我排完直接执行，不用等；
+ *   · 联机：两边各在自己机器上排，房间进度号就是同步点；
+ *   · 热座：两台"人"轮流用同一块屏幕，所以必须先各自排完、再一起开推，
+ *     否则第一个人一按执行，第二个人就只剩看的分。
+ */
+function commanderHotseat(): boolean {
+  return (
+    state.config.commanderMode === true &&
+    room === null &&
+    state.config.aiOpponent !== true &&
+    !watching()
+  );
+}
+
 /** 自己的产兵点：城市 + 军营。`era` 是它现在能产到第几代 */
 function ownSites(): Array<{ id: string; label: string; era: number; city: boolean }> {
   const out: Array<{ id: string; label: string; era: number; city: boolean }> = [];
@@ -3289,7 +3317,10 @@ function renderCommander(): void {
   const sites = orderSitesOf(state, me());
   const slots = CONFIG.commanderSlots;
   const online = room !== null;
-  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}`;
+  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态
+  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${
+    state.orderReady?.A === true ? 'A' : ''
+  }${state.orderReady?.B === true ? 'B' : ''}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -3336,15 +3367,27 @@ function renderCommander(): void {
     </span>`);
   }
 
+  // 热座：这一格按钮是"交计划"，而且要显示"对面交了没有"
+  const hotseat = commanderHotseat();
+  const mineReady = state.orderReady?.[me()] === true;
+  const foeSeat: PlayerId = me() === 'A' ? 'B' : 'A';
+  const foeReady = state.orderReady?.[foeSeat] === true;
+
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
       <span class="cmd-hint">${
         online
           ? '点自己的城市 → 在右侧点兵种，就排进这条队列；执行一次打完你自己这一回合并提交。'
-          : `点自己的城市 → 在右侧点兵种，就排进这条队列；排好之后点执行，AI 一次打完这 ${slots} 回合。`
+          : hotseat
+            ? `点自己的城市 → 在右侧点兵种，把自己这 ${slots} 回合排完，然后点「提交作战计划」；两边都交齐才按回合轮流推进。`
+            : `点自己的城市 → 在右侧点兵种，就排进这条队列；排好之后点执行，AI 一次打完这 ${slots} 回合。`
       }</span>
-      <span class="cmd-count">已排 ${queue.length} / ${slots}</span>
+      <span class="cmd-count">${
+        hotseat
+          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeReady ? '对方已提交' : '等对方排'}`
+          : `已排 ${queue.length} / ${slots}`
+      }</span>
     </div>
     <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
@@ -3352,8 +3395,16 @@ function renderCommander(): void {
       <button class="btn btn-sm" data-cmd="idle" ${queue.length >= slots ? 'disabled' : ''}
         title="在序列末尾排一格「这一回合什么都不造」：攒钱、等时代、等对面先动手">空过一回合</button>
       <button class="btn btn-sm" data-cmd="clear" ${queue.length > 0 ? '' : 'disabled'}>清空</button>
-      <button class="btn btn-primary" data-cmd="run">${
-        online ? '执行本回合并提交' : `执行 ${slots} 回合`
+      <button class="btn btn-primary" data-cmd="run" ${
+        hotseat && mineReady ? 'disabled' : ''
+      }>${
+        online
+          ? '执行本回合并提交'
+          : hotseat
+            ? mineReady
+              ? '已提交，等对方'
+              : '提交作战计划'
+            : `执行 ${slots} 回合`
       }</button>
     </div>
   `;
@@ -3372,7 +3423,8 @@ commanderEl.addEventListener('click', (e) => {
   const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
 
-  if (cmd === 'run') void runCommanderBatch();
+  // 热座：这一颗按钮是"交计划"，不是"开打"（两边都交完才开推）
+  if (cmd === 'run') commanderHotseat() ? commitPlan() : void runCommanderBatch();
   if (cmd === 'idle') enqueueOrder(ORDER_IDLE, '');
   if (cmd === 'stop') {
     // 令牌一换，所有正在跑的 AI 循环下一步就自己退出
@@ -3432,6 +3484,73 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
 }
 
 /**
+ * 双人热座：提交这一方的作战计划（底栏按钮和参谋部那颗按钮共用）。
+ *
+ * 提交**不推进回合**：只把"这一方交了"记下来，然后换人排。
+ * 两边齐了才真正开推——这正是"各自排五回合、齐了再轮流推"的意思。
+ */
+function commitPlan(): void {
+  if (!commanderHotseat() || commanderRunning) return;
+  const r = applyAction(state, { type: 'PLAN_COMMIT' });
+  if (!r.ok) {
+    toast(r.reason);
+    return;
+  }
+  state = r.state;
+  clearSelection();
+  saveMatch(state);
+  render();
+  if (planBothReady(state)) void runCommanderResolve();
+}
+
+/**
+ * 双人热座：两份计划都交齐了，按回合轮流推进。
+ *
+ * 一次循环 = 一个半回合（`runAiTurn` 结尾自己会 END_TURN，顺带把这一方的
+ * 序列前移一格）。所以"五回合轮着来"就是 5 × 2 次调用，不用自己数谁先谁后：
+ * `PLAN_COMMIT` 已经把 `current` 拨回这一批的开局方，END_TURN 负责交替。
+ *
+ * 每一方读的都是**自己那份**队列（`commanderBudget(state.current)`），
+ * 于是 A 排的两个火枪、B 排的三艘船会各自按自己的顺序落到各自那五个回合里。
+ */
+async function runCommanderResolve(): Promise<void> {
+  if (commanderRunning) return;
+  const token = ++aiToken;
+  clearSelection();
+  aiPaused = false;
+  commanderRunning = true;
+  commanderRound = 0;
+  commanderSig = '';
+  render();
+
+  try {
+    for (let r = 0; r < CONFIG.commanderSlots; r++) {
+      for (let half = 0; half < 2; half++) {
+        if (token !== aiToken || state.winner || room) break;
+        commanderRound = r + 1;
+        commanderSig = '';
+        renderCommander();
+        await runAiTurn(token, commanderBudget(state.current), BATCH_DELAY);
+      }
+      if (token !== aiToken || state.winner) break;
+    }
+  } finally {
+    // 标记要清在"跑完之后"：清早了，进场那一刻两边又变成"未提交"，
+    // 面板立刻又能点提交，和正在跑的这批撞在一起。
+    if (token === aiToken) {
+      const end = applyAction(state, { type: 'PLAN_END' });
+      if (end.ok) state = end.state;
+    }
+    commanderRunning = false;
+    commanderRound = 0;
+    commanderSig = '';
+  }
+
+  saveMatch(state);
+  render();
+}
+
+/**
  * 把计划一次性执行掉。
  *
  * 这是指挥官模式的本意：**减负**。玩家一次排 5 格、点一次，然后看结果，
@@ -3446,6 +3565,8 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
  * （谁都没提交）。所以联机只推进自己这一回合，走完立刻提交，然后等对面。
  */
 async function runCommanderBatch(): Promise<void> {
+  // 热座不走这条：那边必须先两边都交计划再开推，见 commitPlan / runCommanderResolve
+  if (commanderHotseat()) return commitPlan();
   if (!commanderActive() || commanderRunning) return;
 
   const online = room !== null;

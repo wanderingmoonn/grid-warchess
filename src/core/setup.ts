@@ -309,6 +309,10 @@ export function createMatch(
       godMode: config.godMode === true,
       // 选卡模式要活进 config：读档/联机之后界面才知道"这一局有 BP"
       draftMode: config.draftMode === true,
+      // 两档选卡时限同样要活进 config：规则写 deadline 和界面倒计时都读这里。
+      // 没填就不写字段，读出来自然回落 DRAFT_BAN_MS / DRAFT_PICK_MS 的默认值。
+      ...(config.draftBanMs !== undefined ? { draftBanMs: config.draftBanMs } : {}),
+      ...(config.draftPickMs !== undefined ? { draftPickMs: config.draftPickMs } : {}),
       // 逐回合摘要的开关必须活进 state.config：
       // 这个对象的字段是**逐个白名单抄的**，漏一个就等于那个开关在开局瞬间被吃掉。
       // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，

@@ -138,6 +138,13 @@ export interface PanelInput {
   /** 一批打几个回合：单机 5、联机 1（对面是人的时候只推自己这一回合） */
   commanderRounds?: number;
   /**
+   * 双人热座指挥官：两个人轮流用同一台机器，所以底栏那颗按钮是「提交作战计划」，
+   * 而不是「执行 5 回合」——两边都交完才开推。
+   */
+  planHotseat?: boolean;
+  /** 自己这一批交了没有（热座模式用来把按钮文案换成「已提交，等对方」） */
+  planReady?: boolean;
+  /**
    * 结算卡上的「对局数据」区块。只有一局打完才传，别的时候是 undefined。
    *
    * 默认关：上传对局数据这件事必须玩家自己勾、自己点，
@@ -310,9 +317,21 @@ function panelHtml(input: PanelInput): string {
          * 执行一批（5 回合 / 联机 1 回合）再交还，和顶部那颗按钮同源。
          */
         input.commander === true
-          ? `<button class="btn btn-primary btn-block" data-act="commander-run"
-               ${myTurn && input.commanderRunning !== true ? '' : 'disabled'}>
-               ${input.commanderRunning === true ? '参谋部正在执行…' : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`}
+          ? `<button class="btn btn-primary btn-block" data-act="${input.planHotseat === true ? 'plan-commit' : 'commander-run'}"
+               ${
+                 myTurn &&
+                 input.commanderRunning !== true &&
+                 !(input.planHotseat === true && input.planReady === true)
+                   ? ''
+                   : 'disabled'
+               }>
+               ${
+                 input.commanderRunning === true
+                   ? '参谋部正在执行…'
+                   : input.planHotseat === true
+                     ? `${input.planReady === true ? '已提交，等对方' : '提交作战计划'}`
+                     : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`
+               }
              </button>`
           : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
                ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}

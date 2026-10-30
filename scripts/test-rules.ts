@@ -70,9 +70,12 @@ import {
   aiDraftPick,
   canUseType,
   draftBonus,
+  draftBanMsOf,
   draftBudget,
   draftCandidates,
+  draftMsOf,
   draftPickOrder,
+  draftPickMsOf,
   draftSecondsLeft,
   eraWindowOk,
   remainingUnits,
@@ -176,6 +179,7 @@ import {
   movePower,
   orderSitesOf,
   ordersOf,
+  planBothReady,
   heroBlocked,
   heroSkillsOf,
   previewAttack,
@@ -6787,8 +6791,69 @@ test('不存在的兵种会被拒绝', () => {
   assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['no-such-unit'] }).ok, false);
 });
 
-test('结束回合时序列前移一格，造没造出来都算消耗', () => {
-  const s = commandPost();
+test('指挥官热座：双方各交一批计划，交齐后才按回合轮流推进', () => {
+  // 热座 = 一台机器两个人、对面不是 AI。三条边界：
+  //   ① 交计划不推进回合（turn / 序列都不动），只换"轮到谁排"；
+  //   ② 两边都交齐之后 current 拨回**先交的那一方**，不能让"谁手慢"决定先后手；
+  //   ③ 普通局 / 人机局一律拒绝这个动作。
+  const hot = fresh({ commanderMode: true, aiOpponent: false, aiAlly: false }, 8802);
+  hot.current = 'A';
+  hot.players.A.gold = 2000;
+  hot.players.B.gold = 2000;
+  const turn0 = hot.turn;
+
+  // A 排两格再提交
+  const aOrders = applyAction(hot, { type: 'SET_ORDERS', queue: ['militia', 'archer'] });
+  assert.ok(aOrders.ok, aOrders.ok ? '' : aOrders.reason);
+  const aCommit = applyAction(aOrders.state, { type: 'PLAN_COMMIT' });
+  assert.ok(aCommit.ok, aCommit.ok ? '' : aCommit.reason);
+  const afterA = aCommit.state;
+  assert.equal(afterA.orderReady?.A, true);
+  assert.equal(afterA.current, 'B', '交完把机器让给对面');
+  assert.equal(afterA.turn, turn0, '提交不能推进回合');
+  assert.deepEqual(ordersOf(afterA, 'A'), ['militia', 'archer'], '提交也不能消耗序列');
+  assert.equal(planBothReady(afterA), false, '只有一边交了');
+
+  // B 排一格再提交 → 两边齐了
+  const bOrders = applyAction(afterA, { type: 'SET_ORDERS', queue: ['spearman'] });
+  assert.ok(bOrders.ok, bOrders.ok ? '' : bOrders.reason);
+  const bCommit = applyAction(bOrders.state, { type: 'PLAN_COMMIT' });
+  assert.ok(bCommit.ok, bCommit.ok ? '' : bCommit.reason);
+  const both = bCommit.state;
+  assert.equal(planBothReady(both), true);
+  assert.equal(both.current, 'A', '拨回这一批的开局方，谁后交都一样');
+  assert.equal(both.turn, turn0, '两份计划都交齐也不推进回合');
+
+  // 推进：一个半回合 = 一次 END_TURN，各自消耗自己那一格
+  const firstHalf = applyAction(both, { type: 'END_TURN' });
+  assert.ok(firstHalf.ok);
+  assert.deepEqual(ordersOf(firstHalf.state, 'A'), ['archer'], 'A 的队首出队');
+  assert.deepEqual(ordersOf(firstHalf.state, 'B'), ['spearman'], 'B 的队首没动');
+  assert.equal(firstHalf.state.current, 'B');
+
+  const secondHalf = applyAction(firstHalf.state, { type: 'END_TURN' });
+  assert.ok(secondHalf.ok);
+  assert.deepEqual(ordersOf(secondHalf.state, 'B'), [], 'B 的队首也出队了');
+  assert.equal(secondHalf.state.current, 'A');
+
+  // 收尾：清标记，两边重新排
+  const done = applyAction(secondHalf.state, { type: 'PLAN_END' });
+  assert.ok(done.ok);
+  assert.equal(planBothReady(done.state), false);
+  assert.equal(done.state.orderReady?.A, undefined);
+  assert.equal(done.state.planStart, undefined);
+
+  // ③ 别的模式不接受
+  const plain = fresh({}, 8803);
+  assert.equal(applyAction(plain, { type: 'PLAN_COMMIT' }).ok, false, '普通局没有作战计划');
+  const vsAi = fresh({ commanderMode: true, aiOpponent: true }, 8804);
+  vsAi.current = 'A';
+  const no = applyAction(vsAi, { type: 'PLAN_COMMIT' });
+  assert.equal(no.ok, false, '人机局对面由 AI 代管，不该互等');
+  assert.ok(!no.ok && no.reason.includes('AI'), `理由该提到 AI：${!no.ok ? no.reason : ''}`);
+});
+
+test('结束回合时序列前移一格，造没造出来都算消耗', () => {  const s = commandPost();
   const r = applyAction(s, { type: 'SET_ORDERS', queue: ['archer', 'militia'] });
   assert.ok(r.ok);
   const end = applyAction(r.state, { type: 'END_TURN' });
@@ -10352,6 +10417,46 @@ test('海军：两个包都注册上，兵种全是水面单位', () => {
   assert.ok(era6.some((u) => u.id === 'nv_carrier'), '六代船里必须有航母');
 });
 
+test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {
+  // 火船：借本体那条 `kamikaze`（阵亡时对四邻各打自身攻击的一半），
+  // 于是"用一条便宜的船换掉贴脸的舰队"成立。这里验三件事：
+  // 挂上了、真按攻击的一半算、而且**敌我都吃**（老规矩，别指望它能和友军叠着走）。
+  const fleet = expansionById('naval-fleet')!;
+  const fire = fleet.units!.find((u) => u.id === 'nv_fireship')!;
+  assert.deepEqual(fire.abilities, ['kamikaze'], '火船应该挂上自爆');
+
+  let s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: ['naval-fleet'] }, 8801);
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
+    s.tiles[y * s.w + x] = { terrain: 'water', cityId: null };
+  }
+  s.units = [];
+  const ship = place2(s, 'A', 'nv_fireship', 5, 5);
+  ship.hp = 1;
+  const foe = place2(s, 'B', 'nv_fireship', 6, 5);
+  foe.hp = 100;
+  const friendly = place2(s, 'A', 'nv_fireship', 4, 5);
+  friendly.hp = 100;
+  const far = place2(s, 'B', 'nv_fireship', 5, 7); // 距离 2，不该被波及
+  far.hp = 100;
+
+  // 用炮艇当凶手：它没有溅射，否则"溅射打到隔壁"会和"自爆打到隔壁"混在一起
+  const killer = place2(s, 'B', 'gunboat', 5, 4);
+  s.current = 'B';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: ship.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.equal(after(ship.id), 0, '1 血的火船应该被击沉');
+  const blast = Math.max(1, Math.round(s.unitTypes['nv_fireship']!.atk / 2));
+  assert.equal(after(foe.id), 100 - blast, `相邻的敌人该吃 ${blast} 点`);
+  assert.equal(after(friendly.id), 100 - blast, '自爆不区分敌我');
+  assert.equal(after(far.id), 100, '隔一格的不该被波及');
+
+  // 炮艇：射程 3 → 4。它是本体里唯一"便宜 + 破甲"的水面单位，
+  // 比同代岸防火力短一格时只能贴着岸挨打。
+  assert.equal(UNIT_TYPES.gunboat!.range, 4, '炮艇射程应该是 4');
+  assert.equal(UNIT_TYPES.gunboat!.domain, 'water');
+});
+
 test('海军：现代海军依赖「现代」，单勾它一条船都造不出来', () => {
   const modern = expansionById('naval-modern')!;
   assert.deepEqual(modern.requires, ['pack-contemporary']);
@@ -11074,6 +11179,43 @@ test('选卡：没有计时起点、或 deadline 是 0/NaN 时，超时一律不
   const bad = applyAction(lobby, { type: 'DRAFT_START' } as never, 'A');
   assert.equal(bad.ok, false, '缺 at 的 DRAFT_START 要被挡住');
   assert.equal(lobby.draft!.phase, 'lobby', '挡下来之后还停在等待开局');
+});
+
+test('选卡：禁用与选人两档时限分开设，规则写 deadline 时用的就是它', () => {
+  // 默认 25s / 30s 之外，开局设置里能各选一档。判据只有一个：
+  // **规则写 deadline 时用的时长** 和界面倒计时读的时长必须是同一份，
+  // 否则改完设置会出现"界面显示 40 秒、规则 25 秒就判超时"。
+  const s = fresh({ draftMode: true, draftBanMs: 10_000, draftPickMs: 45_000 }, 7711);
+  const t0 = 1_000_000;
+  const started = applyAction(s, { type: 'DRAFT_START', at: t0 }, 'A');
+  assert.ok(started.ok, started.ok ? '' : started.reason);
+  const banPhase = started.state;
+  assert.equal(banPhase.draft!.phase, 'ban');
+  assert.equal(banPhase.draft!.deadline - t0, 10_000, '禁用期该按 10 秒算');
+  assert.equal(draftBanMsOf(banPhase), 10_000);
+  assert.equal(draftMsOf(banPhase), 10_000, '当前阶段的时长要和 deadline 对得上');
+
+  // 双方各禁一个 → 进选人，改成 45 秒。
+  // 禁用动作带的 at 是"禁用期的截止时刻"，所以选人的 deadline 是从那一刻起算的。
+  // 池子本身已经剔掉了伪单位（见 draftCandidates），直接按顺序取两个
+  const pool = banPhase.draft!.pool;  const banned = banStep(banStep(banPhase, 'A', pool[0]!), 'B', pool[1]!);
+  assert.equal(banned.draft!.phase, 'pick');
+  assert.equal(draftPickMsOf(banned), 45_000);
+  assert.equal(draftMsOf(banned), 45_000);
+  assert.equal(
+    banned.draft!.deadline,
+    t0 + 10_000 + 45_000,
+    '选人期的 deadline 应该 = 禁用截止 + 45 秒',
+  );
+
+  // 不填就是默认值：旧存档读出来也是它
+  const dflt = fresh({ draftMode: true }, 7712);
+  assert.equal(draftBanMsOf(dflt), 25_000);
+  assert.equal(draftPickMsOf(dflt), 30_000);
+  // 填 0 / NaN 一律回落默认，别把 deadline 算成 NaN（那会让超时永远不触发）
+  const broken = fresh({ draftMode: true, draftBanMs: 0, draftPickMs: Number.NaN }, 7713);
+  assert.equal(draftBanMsOf(broken), 25_000);
+  assert.equal(draftPickMsOf(broken), 30_000);
 });
 
 test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {

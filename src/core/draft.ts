@@ -57,6 +57,29 @@ export const DRAFT_PICK_CAP = 12;
 export const DRAFT_BAN_MS = 25_000;
 export const DRAFT_PICK_MS = 30_000;
 
+/**
+ * 这一局实际用的两档时限。
+ *
+ * 规则层只认"动作里带的 at"，超时判定读的是 `state.draft.deadline`，
+ * 所以**写 deadline 的那一刻**就必须用同一份时长——否则改开局设置之后，
+ * 界面上显示一个数、规则按另一个数判，超时会早到或永远不到。
+ * 两个阶段分开取，是因为它们的节奏本来就不一样（见 `MatchConfig.draftBanMs`）。
+ */
+export function draftBanMsOf(state: GameState): number {
+  const v = state.config.draftBanMs;
+  return Number.isFinite(v) && (v as number) > 0 ? (v as number) : DRAFT_BAN_MS;
+}
+
+export function draftPickMsOf(state: GameState): number {
+  const v = state.config.draftPickMs;
+  return Number.isFinite(v) && (v as number) > 0 ? (v as number) : DRAFT_PICK_MS;
+}
+
+/** 当前阶段该给多久：禁用 / 选人各一档 */
+export function draftMsOf(state: GameState): number {
+  return state.draft?.phase === 'pick' ? draftPickMsOf(state) : draftBanMsOf(state);
+}
+
 export interface DraftBudget {
   /** 扩展一共新增了多少个"可进池"的兵种 */
   extra: number;
@@ -394,7 +417,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
       return { ok: false, reason: '开始选卡要带计时起点（时间戳）' };
     }
     draft.phase = 'ban';
-    draft.deadline = action.at + DRAFT_BAN_MS;
+    draft.deadline = action.at + draftBanMsOf(s);
     draft.seq += 1;
     s.log = [
       ...s.log,
@@ -439,7 +462,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (draft.bans.A.length >= draft.banSlots && draft.bans.B.length >= draft.banSlots) {
       draft.phase = 'pick';
       draft.step = 0;
-      draft.deadline = (action.at ?? draft.deadline) + DRAFT_PICK_MS;
+      draft.deadline = (action.at ?? draft.deadline) + draftPickMsOf(s);
     }
     s.log = [
       ...s.log,
@@ -469,7 +492,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (draft.step >= draft.order.length) {
       finishDraft(s);
     } else {
-      draft.deadline = (action.at ?? draft.deadline) + DRAFT_PICK_MS;
+      draft.deadline = (action.at ?? draft.deadline) + draftPickMsOf(s);
     }
     return { ok: true, state: s };
   }
@@ -507,7 +530,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
       draft.phase = 'pick';
       draft.step = 0;
       draft.seq += 1;
-      draft.deadline = action.at + DRAFT_PICK_MS;
+      draft.deadline = action.at + draftPickMsOf(s);
       s.log = [...s.log, { turn: s.turn, player: 'A', open: true, text: '禁用超时：未禁用的一方视为放弃' }];
       return { ok: true, state: s };
     }
@@ -527,7 +550,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
       { turn: s.turn, player: side, open: true, text: `超时，系统代选「${label(s, picked)}」` },
     ];
     if (draft.step >= draft.order.length) finishDraft(s);
-    else draft.deadline = action.at + DRAFT_PICK_MS;
+    else draft.deadline = action.at + draftPickMsOf(s);
     return { ok: true, state: s };
   }
 

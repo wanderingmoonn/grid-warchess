@@ -2721,6 +2721,10 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
         return doSetOrders(next, action.queue, action.sites);
+      case 'PLAN_COMMIT':
+        return doPlanCommit(next);
+      case 'PLAN_END':
+        return doPlanEnd(next);
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
@@ -3821,6 +3825,57 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
   s.orders = { ...(s.orders ?? {}), [s.current]: cleaned };
   s.orderSites = { ...(s.orderSites ?? {}), [s.current]: where };
   return { ok: true, state: s };
+}
+
+/**
+ * 双人热座：把这一批计划交上去，然后把机器让给对面。
+ *
+ * 三条边界，都是"别把别的模式搅进来"：
+ *   · 只在指挥官模式下存在（普通对局没有生产序列，更没有"交计划"这一步）；
+ *   · 只在**两边都是人**时存在——人机局对面是 AI，它不需要排、也不需要等；
+ *   · 不推进回合：`turn` 不动、序列不前移、不发收入。它只做两件事——
+ *     记下"这一方交了"，以及把 `current` 拨到还没交的那一方去排。
+ *
+ * 两边都交齐之后把 `current` 拨回**这一批开始的那个人**（`planStart`），
+ * 界面据此开始按回合交替推进。谁后交谁先动是不能接受的：先后手在这个游戏里
+ * 是要用钱和回合去配平的东西，不能让它由"谁手慢"决定。
+ */
+function doPlanCommit(s: GameState): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
+  if (s.config.aiOpponent === true) {
+    return { ok: false, reason: '人机局里对面由 AI 代管，不需要互等提交' };
+  }
+  if (s.winner) return { ok: false, reason: '对局已结束' };
+
+  const me = s.current;
+  const foe = other(me);
+  const ready = { ...(s.orderReady ?? {}), [me]: true };
+  s.orderReady = ready;
+  // 第一批：记下"从谁开始"，推进时以此为准
+  s.planStart = s.planStart ?? me;
+
+  if (ready[foe] === true) {
+    // 两边都交齐：拨回这一批的开局方，界面开始轮流推进
+    s.current = s.planStart;
+  } else {
+    // 还差对面那一份：只换人，不动回合
+    s.current = foe;
+  }
+  return { ok: true, state: s };
+}
+
+/** 一批推完了：清掉提交标记，让两边重新排下一批 */
+function doPlanEnd(s: GameState): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
+  s.orderReady = {};
+  s.planStart = undefined;
+  return { ok: true, state: s };
+}
+
+/** 两边都交了没有（界面据此决定"还差谁"还是"可以开推"） */
+export function planBothReady(s: GameState): boolean {
+  const r = s.orderReady;
+  return s.config.commanderMode === true && r?.A === true && r?.B === true;
 }
 
 /**

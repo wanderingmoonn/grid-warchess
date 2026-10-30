@@ -1150,7 +1150,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 25,
     armor: 4,
     maxHp: 46,
-    range: 3,
+    // 3 → 4：炮艇是本体里唯一"便宜、能打、还带破甲"的水面单位，
+    // 射程比同代的岸防火力短一格时，它只能贴着岸挨打（浅水重炮舰 E4 是 3）。
+    range: 4,
     vision: 4,
     domain: 'water',
     abilities: ['armor-pierce'],

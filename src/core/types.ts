@@ -809,6 +809,16 @@ export interface MatchConfig {
    * 具体的池子大小、禁位与选位数量见 core/draft.ts 的 `draftBudget`。
    */
   draftMode?: boolean;
+  /**
+   * 选卡两个阶段各自的时限（毫秒）。
+   *
+   * 分开两档是因为这两件事要的时间根本不一样：禁用只看一眼名单就有主意，
+   * 而选人是"六轮、每轮一个新局面"。默认沿用 `core/draft.ts` 里的
+   * `DRAFT_BAN_MS`（25s）/ `DRAFT_PICK_MS`（30s），开局面板可以改。
+   * 不写就是默认值，旧存档读出来也是默认值。
+   */
+  draftBanMs?: number;
+  draftPickMs?: number;
   /** 启用的扩展规则 id */
   expansionIds: string[];
   /** 启用的兵种 id */
@@ -994,6 +1004,21 @@ export interface GameState {
    * 旧存档没有这个字段，读出来是 undefined，语义正好等于"全部不指定"。
    */
   orderSites?: Partial<Record<PlayerId, string[]>>;
+  /**
+   * 指挥官模式（双人热座）：这一批计划谁已经交了。
+   *
+   * 只有热座用得上——单机人机时对面是 AI，它不需要"排完再交"；
+   * 联机时两边各在自己的机器上交，房间的进度号就是同步点。
+   * 普通对局里是 undefined，一切照旧。
+   */
+  orderReady?: Partial<Record<PlayerId, boolean>>;
+  /**
+   * 这一批从哪一方开始。
+   *
+   * 两份计划都交齐之后要把 `current` 拨回这个人，否则"谁后交谁先动"——
+   * 而先后手在这个游戏里是要用钱和回合去配平的东西，不能让"谁手慢"决定。
+   */
+  planStart?: PlayerId;
   nextUnitSeq: number;
   fog: boolean;
   winner: PlayerId | null;
@@ -1129,6 +1154,22 @@ export type Action =
    * 超时的处理：禁用期＝放弃这次禁用；选人期＝系统从剩余池里随机补一个。
    */
   | { type: 'DRAFT_TIMEOUT'; at: number }
+  /**
+   * 指挥官模式（双人热座）：提交自己这一批的生产计划。
+   *
+   * 热座是两个人轮流用同一台机器，所以"排五格 → 立刻执行"会把对面那一方
+   * 变成纯观众。改成两步走：A 排完整批提交，机器交给 B，B 也提交之后
+   * 才开始**按回合交替**推进这五回合（A1 B1 A2 B2 …）。
+   * 提交本身**不推进回合**，只交换"轮到谁排"。
+   */
+  | { type: 'PLAN_COMMIT' }
+  /**
+   * 一批计划推完了，把提交标记清掉，让两边重新排。
+   *
+   * 单独一个动作而不是让 END_TURN 顺手清：清早了会在第 3 回合就把
+   * "已提交"抹掉，界面立刻又能点提交，排队条和实际节奏就错位了。
+   */
+  | { type: 'PLAN_END' }
   | { type: 'END_TURN' };
 
 /** 规则引擎的返回结果：要么成功带新状态，要么失败带原因 */
