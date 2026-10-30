@@ -2017,7 +2017,6 @@ export function computeDamage(
   // 放在弱点/抗性之后、反击折减之前：它说的是"这一路的伤害对我打对折"。
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.elementMul, to: DAMAGE_STAGE.trueDamage });
 
-
   // 真实伤害阶段
   runBound(damageHooks, ctx, { from: DAMAGE_STAGE.trueDamage });
 
@@ -2496,17 +2495,10 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     if (!s.units.includes(b)) continue;
     // 这一回合已经手动开过火的，不再自动开火。
     //
-    // 不然一座塔在自己的回合打一次、敌方接手时再打一次，一轮两段伤害：
-    // "手动开火"就变成了纯白送，谁还等自动那一下。建筑的火力一次一轮，
-    // 要么你自己点，要么交给它自己打——不能两个都拿。
-    //
     // 判据用 manualFired 而不是 acted：刚建好的建筑也是 acted=true。
     if (b.manualFired) continue;
     const def = utype(s, b.type);
     // 多动：自动开火也要把这一回合的攻击次数打满。
-    //
-    // 否则同一座塔有两套火力：自己点能点四下，交给它自己打只打一下——
-    // 玩家只能被迫每回合手点一次，上面那条"要么你点、要么它自己打"的约定就废了。
     // 每一发都重新挑"最近的、血最少的"，所以打死一个会自动转火下一个。
     let shots = Math.max(1, def.burst ?? 1);
     let hits = 0;
