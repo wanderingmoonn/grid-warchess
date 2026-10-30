@@ -50,6 +50,12 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     defense: '—',
     note: `任何单位都进不去。相邻的经济单位或经济建筑会额外产出 ${CONFIG.riverTradeBonus} 金。`,
   },
+  deep: {
+    name: '深水',
+    cost: '船 1 移动力 / 陆军不可通行',
+    defense: '无加成',
+    note: '离岸两格以上的外海。只有船进得去，陆军连涉水都没这条口子；桥也架不了（桥墩下不去这么深）。',
+  },
   bridge: {
     name: '桥',
     cost: '1 移动力',

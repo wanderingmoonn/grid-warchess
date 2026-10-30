@@ -94,7 +94,11 @@ import type {
 export function adjacentToWater(s: GameState, x: number, y: number): boolean {
   return DIRS.some(([dx, dy]) => {
     const t = tileAt(s, x + dx, y + dy);
-    return !!t && (t.terrain === 'water' || t.terrain === 'bridge');
+    if (!t) return false;
+    // 临水就是临水，不分深浅：浅流踩得过去、深水只有船能进，
+    // 但"挨着水"这件事对贸易、港口、造船位是一回事。
+    // 浅流漏判过一次（农民站在渡口边上拿不到河运加成），和桥那次是同一类错。
+    return t.terrain === 'water' || t.terrain === 'deep' || t.terrain === 'shallow' || t.terrain === 'bridge';
   });
 }
 
@@ -1441,6 +1445,10 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
     // 桥架在水面上，船从桥下过：能穿过去，但桥自己占着那一格，停不下来。
     // 浅滩同理——船能滑过去，而且停得下（见 navigable）。
     if (!navigable(tile.terrain)) return true;
+    // 吃水：占地 2×2 的大舰进不了浅流，会搁浅。
+    // 这是「浅水 vs 深水」这一对地形真正的分工——否则浅流对舰队只是"另一片水"。
+    // 判据用 footprint 而不是船名表：以后再加巨舰不用回来改这里。
+    if (tile.terrain === 'shallow' && footprintOf(s, unit.type) > 1) return true;
   } else if (!passable(tile.terrain)) {
     return true;
   }

@@ -162,6 +162,9 @@ const CHAR: Record<Terrain, string> = {
   marsh: 'w',
   dune: 'd',
   shallow: 's', // 浅滩：陆军能踩过去的"水"
+  // 生成器自己**不画**深水：它是「海战」扩展在 afterTerrain 里把
+  // 离岸 2 格以上的 water 改写的。这里留字符只是为了类型完整 + 调试转储够用。
+  deep: 'D',
   lava: 'l',
   volcano: 'V',
 };

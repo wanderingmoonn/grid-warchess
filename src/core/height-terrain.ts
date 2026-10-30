@@ -40,6 +40,8 @@ import type { Terrain } from './types.ts';
  */
 export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   water: 0,
+  // 深水：外海，比沿岸水面低一档（浅水看得见海底，深水看不见）
+  deep: 0,
   // 浅流：水皮刚过脚踝，跟谷地/沼泽一个高度档
   shallow: 1,
   // 低洼：谷地、沼泽，还有火山脚下那圈熔岩
@@ -74,6 +76,7 @@ export const TERRAIN_RANGE_MOD: Record<Terrain, number> = {
   forest: -1, // 树冠挡视线
   hill: 1, // 制高点
   water: 0,
+  deep: 0, // 外海：没有遮挡，但也没有制高点
   shallow: 0, // 蹲在水里，视野没好处也没坏处
   mountain: 0,
   bridge: 0,
@@ -97,6 +100,7 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   forest: -1, // 树冠把天遮了一半
   hill: 1,
   water: 0,
+  deep: 0,
   shallow: 0,
   mountain: 0,
   bridge: 0,
