@@ -305,8 +305,15 @@ npm run pack-report    # 汇总成 results/packs/report.md
 每批改动会留一份 `docs/UPDATE-<日期>.md`：以前什么样、现在什么样、为什么这么改。
 同一天有多批时，后一批带主题后缀。
 
-最近二十二份：
+最近二十三份：
 
+- [2026-10-30 · 线上崩溃：一个畸形 URL 打死整个服务](docs/UPDATE-2026-10-30-server-crash.md)：
+  线上"毫无征兆崩掉、重启就好"的根因是静态服务器在 async 请求处理器里直接
+  `decodeURIComponent`——一个 `/%` 抛 `URIError`，Node 不兜 async rejection，
+  **整个进程退出**。修法分四层：safeDecode 回 400、处理器兜底、文件流改 `pipeline`、
+  进程级 uncaught 日志。顺手把"资源缺失回首页"改成 404（否则浏览器拿 HTML 当 JS 跑），
+  压缩结果按 `size-mtime` 缓存（不再每次请求同步压 468KB 主包），keepAliveTimeout 抬到 65 秒
+  （服务端必须比代理晚关，否则每几个请求卡一次）。新增 `npm run test:serve` 10 条用例钉住这些。
 - [2026-10-30 · 空军扩展（空军 / 现代空军）](docs/AIR-PACK.md)：**18 种飞机**（E4~E6）、6 条能力、
   一套航母甲板的空军侧实现。三条攻击向能力各自只认一个层（制空打空中 +12、对地打地面 +14、
   反舰打水面 +12），所以"每种飞机只擅长一件事"是规则逼出来的，不是文案。飞行不是免伤：
