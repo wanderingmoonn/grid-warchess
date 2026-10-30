@@ -51,6 +51,7 @@ import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
+  airwingOps,
   deckLine,
   deckOf,
   deckSpecOf,
@@ -60,6 +61,21 @@ import {
   stowPlane,
 } from '../src/core/naval-carrier.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+import {
+  DRAFT_BAN_BASE,
+  DRAFT_PICK_BASE,
+  DRAFT_POOL_BASE,
+  aiDraftBan,
+  aiDraftPick,
+  canUseType,
+  draftBonus,
+  draftBudget,
+  draftCandidates,
+  draftPickOrder,
+  eraWindowOk,
+  remainingUnits,
+} from '../src/core/draft.ts';
+import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
   newTimeline,
   noteAction,
@@ -10530,6 +10546,12 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
 
   assert.equal(deckSpecOf('nv_carrier')!.capacity, 4, '航母应该有四个机位');
   assert.equal(deckSpecOf('gunboat'), null, '没登记的船没有甲板');
+
+  // 这条用例守的是**契约**，不是空军包本身：先把真实的实现摘掉，
+  // 单独验"没人接入时面板怎么说"。不摘的话跑完空军那几条用例再跑这条，
+  // 甲板上会挂着「舰载航空兵」，断言就变成在测另一件事了。
+  const real = airwingOps();
+  registerAirwingOps(null);
   assert.equal(deckLine(carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
 
   // 收两架进去
@@ -10547,12 +10569,12 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     launch: () => ({ ok: true }),
     recover: () => ({ ok: true }),
   });
-  try {
-    assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
-  } finally {
-    registerAirwingOps(null);
-  }
+  assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
+
+  // 注销之后要退回"未接入"，不能残留；再还原成真实实现，别把后面几条用例弄脏
+  registerAirwingOps(null);
   assert.ok(deckLine(carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
+  registerAirwingOps(real);
 
   // 取下一架：按索引，取完就少一个
   const taken = popPlane(carrier, 0);
@@ -10562,6 +10584,7 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
 });
 
 test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', () => {
+  const real = airwingOps();
   let calls = 0;
   registerAirwingOps({
     id: 'test-air-2',
@@ -10586,7 +10609,7 @@ test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', 
     assert.ok(r.ok, r.ok ? '' : r.reason);
     assert.ok(calls >= 1, '轮到航母这一方时，甲板整备必须被叫一次');
   } finally {
-    registerAirwingOps(null);
+    registerAirwingOps(real);
   }
 });
 
@@ -10762,6 +10785,513 @@ test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
   const oiler = place(s2, 'A', 'nv_oiler', 6, 7);
   assert.ok(movePower(s2, mate) >= baseMove + 1, '贴着补给舰应该 +1 移动');
   assert.ok(oiler.hp > 0);
+});
+
+console.log('\n空军扩展');
+
+/** 空军两包 + 各自需要的前置，测试里反复要写 */
+const AIR_ALL = ['pack-contemporary', 'naval-fleet', 'naval-modern', 'air-corps', 'air-modern'];
+
+test('空军：两包都注册上，18 个兵种全在空气层', () => {
+  const ids = new Set(allAbilities().map((a) => a.id));
+  const planes = [...(AIR_CORPS.units ?? []), ...(MODERN_AIR.units ?? [])];
+  assert.equal(planes.length, 18, `空军应该有 18 个兵种，现在 ${planes.length} 个`);
+
+  for (const u of planes) {
+    assert.equal(u.layer, 'air', `${u.name} 应该待在空中层`);
+    assert.equal(u.flight, true, `${u.name} 应该能掠水，否则它飞不过一条河`);
+    assert.ok(u.era >= 4 && u.era <= 6, `${u.name} 的时代 ${u.era} 越界`);
+    assert.equal(u.short.length, 1, `${u.name} 的图标应该是一个字`);
+    assert.ok(u.cost > 0 && u.maxHp > 0, `${u.name} 的数值不合法`);
+    for (const a of u.abilities ?? []) {
+      assert.ok(ids.has(a), `${u.name} 引用了不存在的能力 ${a}`);
+    }
+  }
+  assert.ok(!planes.some((u) => u.domain === 'water'), '飞机不该被登记成水面单位');
+});
+
+test('空军：现代空军依赖「现代」与基础空军，单勾它什么都没有', () => {
+  assert.deepEqual(MODERN_AIR.requires, ['pack-contemporary', 'air-corps']);
+
+  const alone = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['air-modern'] },
+    9101,
+  );
+  assert.ok(!alone.unitTypes['af_jet'], '前置没开时喷气机不该出现在兵种表里');
+
+  const withBase = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 6,
+      expansionIds: ['pack-contemporary', 'air-corps', 'air-modern'],
+    },
+    9102,
+  );
+  assert.ok(withBase.unitTypes['af_jet'], '三个包都开了才有喷气机');
+
+  const era6 = (MODERN_AIR.units ?? []).filter((u) => u.era === 6);
+  assert.ok(era6.length >= 8, `第六时代至少要补 8 种飞机，现在 ${era6.length} 种`);
+});
+
+test('制空：战斗机打空中目标，比打同血同甲的地面目标更疼', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  for (const [x, y] of [
+    [5, 5],
+    [5, 6],
+    [6, 5],
+  ]) {
+    putTerrain(s, x!, y!, 'plain');
+  }
+  const fighter = place(s, 'A', 'af_fighter', 5, 5);
+  // 同血同甲的"地面版轰炸机"：只差一个层字段，别的都一样
+  s.unitTypes['probe_ground'] = { ...s.unitTypes['af_heavy_bomber']!, layer: undefined, flight: false };
+  const bomberAir = place(s, 'B', 'af_heavy_bomber', 5, 6);
+  const bomberGround = place(s, 'B', 'probe_ground', 6, 5);
+
+  const vsAir = computeDamage(s, fighter, bomberAir);
+  const vsGround = computeDamage(s, fighter, bomberGround);
+  assert.ok(vsAir > vsGround, `对空 ${vsAir} 应该高于对地 ${vsGround}——否则制空这条能力等于没有`);
+});
+
+test('对地/反舰：两条加成各管一层，不会串味', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  for (const [x, y] of [
+    [5, 5],
+    [5, 6],
+    [6, 5],
+  ]) {
+    putTerrain(s, x!, y!, 'plain');
+  }
+  const base = s.unitTypes['af_heavy_bomber']!;
+  s.unitTypes['probe_air'] = { ...base, layer: 'air', flight: true };
+  s.unitTypes['probe_land'] = { ...base, layer: undefined, flight: false };
+  s.unitTypes['probe_ship'] = { ...base, layer: undefined, flight: false, domain: 'water' };
+
+  // 强击机只有「对地攻击」：打地面层更疼，打空中层没有加成
+  const striker = place(s, 'A', 'af_sturmovik', 5, 5);
+  const groundTarget = place(s, 'B', 'probe_land', 5, 6);
+  const airTarget = place(s, 'B', 'probe_air', 6, 5);
+  assert.ok(
+    computeDamage(s, striker, groundTarget) > computeDamage(s, striker, airTarget),
+    '强击机打地面应该比打飞机更疼',
+  );
+
+  // 俯冲轰炸机只有「反舰」：打船更疼，打陆地没有加成
+  const diver = place(s, 'A', 'af_dive_bomber', 5, 5);
+  const shipTarget = place(s, 'B', 'probe_ship', 5, 6);
+  const landTarget = place(s, 'B', 'probe_land', 6, 5);
+  assert.ok(
+    computeDamage(s, diver, shipTarget) > computeDamage(s, diver, landTarget),
+    '俯冲轰炸机打船应该比打陆地更疼',
+  );
+});
+
+test('隐身：迷雾里贴脸才现形，打完人不挨反击', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9104,
+  );
+  s.units = [];
+  s.fog = true;
+  const ghost = place(s, 'A', 'af_stealth', 5, 5);
+  const foe = place(s, 'B', 'militia', 9, 5);
+  assert.ok(isHiddenFrom(s, ghost, 'B'), '隔着四格，隐身机应该藏得住');
+  foe.x = 6;
+  foe.y = 5;
+  assert.ok(!isHiddenFrom(s, ghost, 'B'), '贴脸就该现形');
+
+  // 换上同一条思路的另一面：打了人不挨反击
+  const hpAfterHit = (type: string): number => {
+    const st = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+      9105,
+    );
+    st.units = [];
+    st.fog = false;
+    st.current = 'A';
+    putTerrain(st, 5, 5, 'plain');
+    putTerrain(st, 5, 6, 'plain');
+    const atk = place(st, 'A', type, 5, 5);
+    // 一架 200 血、射程 3 的战略轰炸机当靶子：它一定活得下来，也一定够得着还手
+    const tank = place(st, 'B', 'af_strategic', 5, 6);
+    const r = applyAction(st, { type: 'ATTACK', unitId: atk.id, targetId: tank.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    return r.state.units.find((u) => u.id === atk.id)!.hp;
+  };
+
+  assert.equal(hpAfterHit('af_stealth'), 85, '隐身机打完不该掉血——它先手，对面还不了手');
+  assert.ok(hpAfterHit('af_jet') < 90, '普通喷气机对同样的目标会挨一下反击');
+});
+
+test('舰载机白名单：只有四种飞机上得了甲板', () => {
+  const ops = airwingOps();
+  assert.ok(ops, '空军包应该在模块加载时就把甲板实现注册好');
+  const can = (id: string): boolean =>
+    ops!.canBoard({ state: null as never, carrier: null as never, planeTypeId: id });
+
+  assert.equal(can('af_naval_plane'), true, '舰载机当然能上舰');
+  assert.equal(can('af_jet'), true, '喷气机上舰是常识');
+  assert.equal(can('af_awacs'), true, '预警机本来就是舰载的');
+  assert.equal(can('af_heavy_bomber'), false, '重型轰炸机上不了舰');
+  assert.equal(can('af_strategic'), false, '战略轰炸机上不了舰');
+  assert.equal(can('af_transport'), false, '运输机不是舰载机');
+});
+
+test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过来', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9106,
+  );
+  s.units = [];
+  for (let y = 6; y <= 10; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const carrier = place(s, 'A', 'nv_carrier', 7, 8);
+
+  // 手工把一架"带伤返航"的舰载机塞进甲板（正式流程见下一条）
+  const plane = place(s, 'A', 'af_naval_plane', 10, 10);
+  plane.hp = 40;
+  assert.ok(stowPlane(carrier, plane), '四个机位应该收得下第一架');
+  s.units = s.units.filter((u) => u.id !== plane.id);
+  assert.equal(deckUsed(carrier), 1);
+
+  const out = launchFromCarrier(s, carrier);
+  assert.ok(out.ok, out.ok ? '' : `起飞失败：${out.reason}`);
+  assert.equal(deckUsed(carrier), 0, '放飞之后甲板少一架');
+  const flying = s.units.find((u) => u.type === 'af_naval_plane');
+  assert.ok(flying, '棋盘上应该多出一架飞机');
+  assert.equal(flying!.hp, 40, '带伤起飞要带着伤，不能借起飞回血');
+  assert.equal(flying!.moved, true, '起飞占掉这一回合的移动');
+  assert.ok(
+    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf('nv_carrier')!.launchRange,
+    '落点要在起飞半径之内',
+  );
+
+  const back = recoverToCarrier(s, carrier, flying!);
+  assert.ok(back.ok, back.ok ? '' : `返航失败：${back.reason}`);
+  assert.equal(deckUsed(carrier), 1, '返航之后甲板又多一架');
+  assert.ok(!s.units.some((u) => u.id === flying!.id), '进了甲板就不该再占棋盘格');
+});
+
+test('整备：轮到航母时先收、再修 8 点、后放一架', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: AIR_ALL },
+    9107,
+  );
+  s.units = [];
+  for (let y = 6; y <= 10; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  const carrier = place(s, 'A', 'nv_carrier', 7, 8);
+
+  const plane = place(s, 'A', 'af_naval_plane', 10, 10);
+  plane.hp = 40;
+  stowPlane(carrier, plane);
+  s.units = s.units.filter((u) => u.id !== plane.id);
+
+  s.current = 'B'; // 结束 B 的回合 → 轮到 A，触发整备
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const flying = r.state.units.find((u) => u.type === 'af_naval_plane');
+  assert.ok(flying, '整备完应该放出去一架');
+  assert.equal(flying!.hp, 48, '先修 8 点再放飞：40 → 48');
+  assert.equal(deckOf(r.state.units.find((u) => u.id === carrier.id)!).length, 0, '放出去之后甲板空了');
+});
+
+test('掠水：飞机能停在深水上，陆军进不去', () => {
+  const s = fresh({ expansionIds: ['air-corps'] });
+  s.units = [];
+  putTerrain(s, 3, 3, 'deep');
+  assert.equal(canStandAt(s, 3, 3, 'af_scout'), true, '飞机应该能停在深水上（航母头顶也是空域）');
+  assert.equal(canStandAt(s, 3, 3, 'militia'), false, '陆军进不了深水');
+});
+
+
+console.log('\n选卡模式');
+
+/** 禁用一步 */
+function banStep(state: GameState, side: PlayerId, unitId: string): GameState {
+  const r = applyAction(state, { type: 'DRAFT_BAN', unitId, at: state.draft!.deadline }, side);
+  assert.ok(r.ok, r.ok ? '' : `禁用失败：${r.reason}`);
+  return r.ok ? r.state : state;
+}
+
+/** 选人一步（自动取当前轮次的那一方） */
+function pickStep(state: GameState, unitId: string): GameState {
+  const side = state.draft!.order[state.draft!.step]!;
+  const r = applyAction(state, { type: 'DRAFT_PICK', unitId, at: state.draft!.deadline }, side);
+  assert.ok(r.ok, r.ok ? '' : `选人失败：${r.reason}`);
+  return r.ok ? r.state : state;
+}
+
+/** 把整轮 BP 打完（默认按池子顺序拿，保证是合法动作） */
+function finishDraft(state: GameState): GameState {
+  let st = state;
+  const pool = st.draft!.pool;
+  st = banStep(st, 'A', pool[0]!);
+  st = banStep(st, 'B', pool[1]!);
+  while (st.draft!.phase === 'pick') {
+    const left = remainingUnits(st);
+    if (left.length === 0) break;
+    st = pickStep(st, left[0]!);
+  }
+  return st;
+}
+
+test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位与非生产性建筑', () => {
+  const s = fresh({ draftMode: true }, 7101);
+  const draft = s.draft!;
+  assert.equal(draft.pool.length, DRAFT_POOL_BASE, `原版应抽 ${DRAFT_POOL_BASE} 个，实际 ${draft.pool.length}`);
+  assert.equal(draft.banSlots, DRAFT_BAN_BASE);
+  assert.equal(draft.pickSlots, DRAFT_PICK_BASE);
+  assert.equal(draft.phase, 'ban');
+
+  // 池子里的东西：战斗单位，或者"不产兵、不是桥"的建筑
+  for (const id of draft.pool) {
+    const def = s.unitTypes[id]!;
+    assert.ok(
+      def.category === 'combat' || (def.category === 'building' && !def.barracks && !def.bridges),
+      `${def.name} 不该进池子（${def.category}${def.barracks ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
+    );
+  }
+  // 骨架一律不进池：经济、建造、军营、桥
+  for (const id of ['farmer', 'laborer', 'camp', 'bridge']) {
+    assert.ok(!draft.pool.includes(id), `${id} 是骨架，不该进池`);
+  }
+});
+
+test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {
+  const s = fresh({ draftMode: true }, 7102);
+  const draft = s.draft!;
+  const eras = new Set(draft.pool.map((id) => s.unitTypes[id]!.era));
+  for (const era of [1, 2, 3, 4, 5]) {
+    const has = draftCandidates(s).some((id) => s.unitTypes[id]!.era === era);
+    if (!has) continue;
+    assert.ok(eras.has(era), `第 ${era} 时代有候选，池子里却没有 —— 分层抽样漏了`);
+  }
+  // 同一颗种子出同一个池子
+  const again = fresh({ draftMode: true }, 7102);
+  assert.deepEqual(again.draft!.pool, draft.pool, '同一个 seed 必须抽出同一个池子');
+});
+
+test('选卡：名额按"兵种体系"加——单海军/单空军 +1 选，海空同开 +1 禁 +2 选', () => {
+  const mk = (ids: string[], seed: number) =>
+    createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra: 5, expansionIds: ids, draftMode: true },
+      seed,
+    );
+
+  // 原版：不加成
+  const none = fresh({ draftMode: true }, 7103);
+  const baseBudget = draftBudget(none);
+  assert.equal(baseBudget.extra, 0, '原版对局不该有扩展兵');
+  assert.equal(baseBudget.bans, 1);
+  assert.equal(baseBudget.picks, 6);
+
+  // 单海军 → 选卡 +1
+  const naval = draftBudget(mk(['naval-fleet'], 7104));
+  assert.equal(naval.bans, 1, '只有海军不加禁位');
+  assert.equal(naval.picks, 7, '单海军：选卡 +1');
+
+  // 单空军 → 选卡 +1
+  const air = draftBudget(mk(['air-corps'], 7105));
+  assert.equal(air.bans, 1, '只有空军不加禁位');
+  assert.equal(air.picks, 7, '单空军：选卡 +1');
+
+  // 海 + 空 → 禁位 +1、选卡 +2
+  const both = draftBudget(mk(['naval-fleet', 'air-corps'], 7106));
+  assert.equal(both.bans, 2, '海军与空军同时在场：禁用 +1');
+  assert.equal(both.picks, 8, '海军与空军同时在场：选卡 +2');
+
+  // 池子仍然按兵的数量长（和名额是两套规则）
+  assert.ok(both.pool > baseBudget.pool, `池子应该变大：${baseBudget.pool} → ${both.pool}`);
+  assert.equal(mk(['naval-fleet', 'air-corps'], 7107).draft!.pool.length, both.pool);
+});
+
+test('选卡：时代军备 +1 禁 +2 选，且能和海空叠加', () => {
+  const mk = (ids: string[]) =>
+    createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra: 5, expansionIds: ids, draftMode: true },
+      7201,
+    );
+
+  const era = draftBudget(mk(['pack-antiquity']));
+  assert.equal(era.bans, 2, '时代军备：禁用 +1');
+  assert.equal(era.picks, 8, '时代军备：选卡 +2');
+
+  // 三样同时在场：禁 1+1+1=3、选 6+2+2=10
+  const all = draftBudget(
+    mk(['pack-antiquity', 'naval-fleet', 'air-corps', 'pack-contemporary']),
+  );
+  assert.equal(all.bans, 3);
+  assert.equal(all.picks, 10);
+  assert.ok(all.pool <= 60, '池子有上限');
+
+  // 「现代海军」这条线要带「现代」，而「现代」本身就是时代军备的一包——
+  // 于是它同时点亮两个体系：禁 1+1=2、选 6+1（单海军）+2（时代军备）=9。
+  // 规则按**实际在场的体系**算，不按玩家"本来想开哪一类"算，
+  // 这样联机两边看到的数字永远一致。
+  const navalModern = draftBudget(mk(['pack-contemporary', 'naval-modern']));
+  assert.equal(navalModern.bans, 2);
+  assert.equal(navalModern.picks, 9);
+  // 单独勾「现代海军」不满足前置，整包不生效，也就不该有任何加成
+  const orphan = draftBudget(mk(['naval-modern']));
+  assert.equal(orphan.bans, 1);
+  assert.equal(orphan.picks, 6);
+});
+
+test('选卡：进度号每走一步 +1（联机靠它做乐观锁）', () => {
+  let s = fresh({ draftMode: true }, 7202);
+  const start = s.draft!.seq;
+  assert.equal(start, 1, '开局进度号是 1，和房间那一行的 turn 对得上');
+
+  s = banStep(s, 'A', s.draft!.pool[0]!);
+  assert.equal(s.draft!.seq, start + 1, '一次禁用一个号');
+  s = banStep(s, 'B', s.draft!.pool[1]!);
+  assert.equal(s.draft!.seq, start + 2, '两边都禁完只加两个号（进入选人不额外加）');
+  s = pickStep(s, s.draft!.pool[2]!);
+  assert.equal(s.draft!.seq, start + 3, '一次选人一个号');
+});
+
+test('选卡：盲禁——两边都交完才揭晓，禁掉的兵谁都拿不到', () => {
+  let s = fresh({ draftMode: true }, 7105);
+  const pool = s.draft!.pool;
+  const banned = pool[0]!;
+
+  s = banStep(s, 'A', banned);
+  assert.equal(s.draft!.phase, 'ban', '只有一方交了禁用，还不该进入选人');
+  assert.deepEqual(s.draft!.bans.A, [banned]);
+
+  s = banStep(s, 'B', pool[1]!);
+  assert.equal(s.draft!.phase, 'pick', '两边都交完才进入选人');
+  assert.ok(!remainingUnits(s).includes(banned), '被禁的兵必须从池子里消失');
+
+  // 拿被禁的那个去选：得被拒
+  const side = s.draft!.order[0]!;
+  const r = applyAction(s, { type: 'DRAFT_PICK', unitId: banned, at: s.draft!.deadline }, side);
+  assert.ok(!r.ok, '被禁用的兵不该能选');
+});
+
+test('选卡：蛇形顺序，选完 12 步交接给对局', () => {
+  assert.deepEqual(draftPickOrder(3), ['A', 'B', 'B', 'A', 'A', 'B'], '每轮交换首选权');
+  const order6 = draftPickOrder(6);
+  assert.equal(order6.length, 12);
+  assert.equal(order6.filter((x) => x === 'A').length, 6);
+  assert.equal(order6.filter((x) => x === 'B').length, 6);
+
+  let s = fresh({ draftMode: true }, 7106);
+  s = finishDraft(s);
+  assert.equal(s.draft!.phase, 'done');
+  assert.equal(s.draft!.picks.A.length, 6);
+  assert.equal(s.draft!.picks.B.length, 6);
+  assert.equal(s.current, 'A', '选完从甲方开局');
+  // 两边不许撞同一个兵
+  const both = new Set([...s.draft!.picks.A, ...s.draft!.picks.B]);
+  assert.equal(both.size, 12, '被选走的兵不能再被对面选');
+});
+
+test('选卡：没打完之前，走棋与产兵一律被拒', () => {
+  const s = fresh({ draftMode: true }, 7107);
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(!r.ok);
+  assert.match(r.reason, /选卡/);
+});
+
+test('选卡：名单外的兵造不出来，名单内的能造；骨架不受限', () => {
+  let s = fresh({ draftMode: true }, 7108);
+  s = finishDraft(s);
+  // 直接改写名单，才能稳定断言"名单内 / 名单外"这两种情况
+  s.draft!.picks.A = ['militia'];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  s.players.A.gold = 9000;
+
+  const ok = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(ok.ok, ok.ok ? '' : `名单内的民兵应该能造：${ok.reason}`);
+
+  const denied = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'archer' });
+  assert.ok(!denied.ok, '名单外的弓手不该能造');
+  assert.match(denied.reason, /名单/);
+
+  // 经济单位不在池子里，但永远能造（不然没有收入）
+  const econ = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'farmer' });
+  assert.ok(econ.ok, econ.ok ? '' : `经济单位不该被名单挡住：${econ.reason}`);
+});
+
+test('选卡：取消"低于城市两个时代就不能造"的下限', () => {
+  // 原版：E4 的城造不了 E1 的兵
+  const plain = fresh({}, 7109);
+  const pCity = plain.cities.find((c) => c.owner === 'A')!;
+  pCity.era = 4;
+  plain.players.A.gold = 9000;
+  const refused = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
+  assert.ok(!refused.ok, '没开选卡时，四个时代前的兵应该造不出来');
+  assert.match(refused.reason, /过时/);
+
+  // 选卡模式：同一个局面，名单里的民兵照样能造
+  let s = fresh({ draftMode: true }, 7110);
+  s = finishDraft(s);
+  s.draft!.picks.A = ['militia'];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  city.era = 4;
+  s.players.A.gold = 9000;
+  const allowed = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(allowed.ok, allowed.ok ? '' : `选卡模式下民兵应该能造：${allowed.reason}`);
+  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 4), true);
+  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), false);
+});
+
+test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () => {
+  let s = fresh({ draftMode: true }, 7111);
+  s = finishDraft(s);
+  s.draft!.picks.A = [];
+  // 开局配给里没有劳工（只有战斗单位 + 两个经济单位），自己摆一个
+  const laborer = place(s, 'A', 'laborer', 5, 5);
+  const spot = { x: 6, y: 5 };
+  putTerrain(s, 6, 5, 'plain');
+  const r = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'tower', x: spot.x, y: spot.y });
+  assert.ok(!r.ok, '没选到的塔不该能盖');
+  assert.match(r.reason, /名单/);
+
+  s.draft!.picks.A = ['tower'];
+  const ok = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'tower', x: spot.x, y: spot.y });
+  assert.ok(ok.ok, ok.ok ? '' : `选到的塔应该能盖：${ok.reason}`);
+});
+
+test('选卡：超时——禁用视为放弃，选人由系统补一个', () => {
+  let s = fresh({ draftMode: true }, 7112);
+  // 只让 A 交禁用，B 超时
+  s = banStep(s, 'A', s.draft!.pool[0]!);
+  const late = s.draft!.deadline + 1;
+  const r = applyAction(s, { type: 'DRAFT_TIMEOUT', at: late }, 'B');
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  s = r.state;
+  assert.equal(s.draft!.phase, 'pick', '超时之后照样进入选人');
+  assert.deepEqual(s.draft!.bans.B.filter(Boolean), [], 'B 放弃了禁用，不该替它随机禁一个');
+  assert.ok(s.draft!.history.some((h) => h.side === 'B' && h.auto && h.unitId === null), '要留下"放弃"的记录');
+
+  // 选人超时：必须补一个，否则这一方凑不满名单
+  const before = s.draft!.picks[s.draft!.order[s.draft!.step]!].length;
+  const r2 = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline + 1 }, 'A');
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  s = r2.state;
+  const after = s.draft!.picks[s.draft!.order[s.draft!.step - 1]!].length;
+  assert.equal(after, before + 1, '超时方要被系统补选一个');
+  assert.ok(s.draft!.history.some((h) => h.auto && h.kind === 'pick' && h.unitId), '补选要留下记录');
+
+  // 没到时限的"超时"一律拒掉：只有时间能决定谁超时
+  const early = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline - 1000 }, 'A');
+  assert.ok(!early.ok, '没到点不该能提前触发超时');
+});
+
+test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
+  const s = fresh({ draftMode: true, aiOpponent: true }, 7113);
+  const banId = aiDraftBan(s, 'B');
+  assert.ok(banId, 'AI 应该能给出一个禁用');
+  assert.ok(s.draft!.pool.includes(banId!), 'AI 的禁用必须在池子里');
+
+  const pickId = aiDraftPick(s, 'B');
+  assert.ok(pickId, 'AI 应该能给出一个选人');
+  assert.ok(s.draft!.pool.includes(pickId!), 'AI 的选人必须在池子里');
+  assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

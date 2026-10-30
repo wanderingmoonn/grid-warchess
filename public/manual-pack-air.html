@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>时代与回旋镖 · 空军扩展</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 15.5px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 13.5px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+  table.wide { font-size: 12.5px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12.5px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12.5px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#g-intro">1. 这一册怎么读</a>
+    <a href="#g-units">2. 兵种总表</a>
+    <a class="sub" href="#p-air-corps">空军</a>
+    <a class="sub" href="#p-air-modern">现代空军</a>
+    <a href="#g-notes">3. 各包要点</a>
+    <a href="#g-terms">4. 机制词条</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>时代与回旋镖 · 空军扩展</h1>
+      <p>空中力量两包合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。</p>
+    </header>
+
+
+    <section id="g-intro">
+      <h2><span class="sec-num">01</span>这一册怎么读</h2>
+      <p>这一册收了<b>两个包</b>，一共十八种飞机：</p>
+        <ul class="bullets">
+          <li><b>「空军」</b>（第四、第五时代）——侦察气球、侦察机、双翼战斗机、活塞战斗机、
+              俯冲轰炸机、强击机、重型轰炸机、运输机、舰载机；</li>
+          <li><b>「现代空军」</b>（第六时代）——喷气战斗机、隐身战斗机、攻击机、武装直升机、无人机、
+              战略轰炸机、预警机、电子战机、重型运输机。</li>
+        </ul>
+        <p>为什么从第四时代开始：第三时代（火药）之前没有"飞机"这种东西，硬塞进来只能靠编。
+        气球、双翼机、二战机群正好填满第四、第五两代；第六代本来就该是一整代喷气与电子战。</p>
+      <p><b>飞行不是免伤。</b>这条必须先说清楚，否则整册的数值都读错。
+        飞机待在空中层（<code>layer: 'air'</code>），地面单位射程 2 就能打到相邻的它
+        （"地面打空中"多算一格距离），所以一架飞机贴着防空炮站，等于把肚子亮出来。
+        飞行买的是<b>机动与视野</b>——移动 8~12、视野 7~13，而不是无敌。
+        它也因此能停在河与海上（掠水），包括航母头顶那片深水。</p>
+      <p><b>每种飞机只擅长一件事。</b>制空的打不动地、对地的打不过制空、轰炸机只能炸城和堆、
+        支援机不会打架——三条攻击向的能力各自只认一个层：</p>
+        <ul class="bullets">
+          <li><b>制空</b>（+12，只对空中层）：战斗机存在的全部理由。它和海军那条
+              「区域防空」同一个口径，两条可以叠——防空巡洋舰加战斗机一起咬一架轰炸机，
+              是这套规则里最贵的死法。</li>
+          <li><b>对地攻击</b>（+14，只对地面层）：强击机、攻击机、武装直升机、无人机的本职。</li>
+          <li><b>反舰</b>（+12，只对水面单位）：俯冲轰炸机、舰载机的本职。它让"没有制空权的舰队"
+              成为一个真实的处境——二战太平洋就是这么打的。</li>
+        </ul>
+      <p><b>支援机不杀伤。</b>预警机自己一发子弹都没有（攻击 0），价值是视野 13 加
+        相邻友军 +2 攻；电子战机几乎不杀伤，靠相邻敌军 −2 攻削对面一整条战线。
+        它们是最该被护航的单位：打掉一架预警机，整支编队的输出都掉一档。</p>
+      <p><b>便宜的一定脆。</b>无人机 280 金、视野 10，但只有 40 血——它的用法是"去看、去换、
+        去逼对方开火"，不是去赢。反过来战略轰炸机 950 金、200 血、溅射 2 加破城，
+        但它只有射程 3、打不动制空机，必须有人护航。</p>
+      <p><b>航母甲板是两包之间的那座桥。</b>海军扩展交出甲板（机位数量、起飞半径、
+        收放容器），空军扩展交出实现（谁能上舰、起飞落在哪、怎么返航、每回合怎么整备）。
+        两边只认 <code>src/core/naval-carrier.ts</code> 里那几个类型，谁也不改谁的数值。
+        能上舰的是<b>四种</b>：舰载机、喷气战斗机、攻击机、预警机——这是一份白名单，
+        因为能不能上舰是工程问题（起落架、机翼折叠、弹射与拦阻），不是数值问题；
+        重型轰炸机、战略轰炸机、运输机永远上不去。</p>
+      <p>甲板上的飞机<b>不占棋盘格</b>（否则一艘航母四个机位，周边八格全被堵死）。
+        每回合轮到航母时按<b>先收、再修、后放</b>走一遍：贴着母舰的舰载机自动返航进甲板，
+        甲板上的飞机回 8 点，然后再放出去一架。放飞占掉这一回合的移动；
+        起飞失败不会损失飞机——它会留在甲板上，下回合再试。</p>
+      <p>没有开空军扩展时，航母照常是一条船：数值、指挥光环、视野都在，
+        只是甲板是空的、面板上写着「空军扩展未接入」。<b>不做"假装有飞机"的兜底</b>——
+        那会让玩家以为起了飞，实际棋盘上什么都没有。</p>
+      <p>为什么单独成册：飞机是<b>跨代</b>的一条线（同一条制空逻辑从双翼机一直排到隐身机），
+        而且它们的价值不在"同价钱换多少伤害"——一架飞机的钱能买两三个陆军单位。
+        要看"同代陆军与海军各给了什么解法"，翻「时代兵备」与「海战扩展」；
+        要看"空中力量从气球长到预警机"，就是这一本。</p>
+      
+    <table class="overview">
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <tbody>
+        <tr><td class="name">空军</td><td class="num">9</td><td class="num">4–5</td><td class="nowrap">—</td><td>补上第四、第五时代的空中力量：侦察气球、侦察机、双翼战斗机、活塞战斗机、俯冲轰炸机、强击机、重型轰炸机、运输机、舰载机九个兵种。空军不是免伤——地面单位射程 ≥2 就能打到相邻的飞机；飞行买的是机动与视野。舰载机能上航空母舰（海军扩展）。</td></tr><tr><td class="name">现代空军</td><td class="num">9</td><td class="num">6</td><td class="nowrap">现代、空军</td><td>第六时代的空中力量：喷气战斗机、隐身战斗机、攻击机、武装直升机、无人机、战略轰炸机、预警机、电子战机、重型运输机九个兵种。和海军扩展的航母联动：喷气战斗机、攻击机、预警机属于舰载机，能上甲板起飞与返航。</td></tr>
+      </tbody>
+    </table>
+      <dl class="kv">
+        <dt>兵种总数</dt><dd>18 个（2 个包），覆盖时代 4、5、6</dd>
+        <dt>怎么启用</dt><dd>新对局面板里勾选，效果叠加；规则以 id 记进存档，换机器打开不变</dd>
+        <dt>兵种在哪</dt><dd>生产面板里带包徽标（名字旁的小圆标写着它来自哪个包），搜索框敲包名能过滤；
+          产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，和原版兵同一把尺子</dd>
+        <dt>怎么查</dt><dd>总表里带<b>虚线下划线</b>的词都能悬停看一句说明，点一下跳到本册末尾的词条</dd>
+      </dl>
+    </section>
+
+    <section id="g-units">
+      <h2><span class="sec-num">02</span>兵种总表</h2>
+      <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
+        跨段比较时请对照"来源"那一列。</p>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-air-corps"><td colspan="12">空军 · 9 个</td></tr><tr data-unit="af_balloon"><td class="name">侦察气球</td><td class="glyph">球</td><td class="src">空军</td><td class="num">4</td><td class="num">90</td><td class="num">0</td><td class="num">0</td><td class="num">30</td><td class="num">2</td><td class="num">0</td><td class="num">9</td><td class="traits">—</td></tr><tr data-unit="af_scout"><td class="name">侦察机</td><td class="glyph">侦</td><td class="src">空军</td><td class="num">4</td><td class="num">150</td><td class="num">14</td><td class="num">1</td><td class="num">45</td><td class="num">7</td><td class="num">1</td><td class="num">10</td><td class="traits">—</td></tr><tr data-unit="af_biplane"><td class="name">双翼战斗机</td><td class="glyph">翼</td><td class="src">空军</td><td class="num">4</td><td class="num">210</td><td class="num">26</td><td class="num">2</td><td class="num">60</td><td class="num">8</td><td class="num">2</td><td class="num">6</td><td class="traits">—</td></tr><tr data-unit="af_transport"><td class="name">运输机</td><td class="glyph">运</td><td class="src">空军</td><td class="num">5</td><td class="num">300</td><td class="num">4</td><td class="num">3</td><td class="num">120</td><td class="num">8</td><td class="num">1</td><td class="num">6</td><td class="traits">—</td></tr><tr data-unit="af_naval_plane"><td class="name">舰载机</td><td class="glyph">舰</td><td class="src">空军</td><td class="num">5</td><td class="num">330</td><td class="num">38</td><td class="num">3</td><td class="num">70</td><td class="num">8</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-af-anti-ship">反舰</a></td></tr><tr data-unit="af_fighter"><td class="name">活塞战斗机</td><td class="glyph">战</td><td class="src">空军</td><td class="num">5</td><td class="num">340</td><td class="num">44</td><td class="num">4</td><td class="num">80</td><td class="num">9</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-af-superiority">制空</a></td></tr><tr data-unit="af_dive_bomber"><td class="name">俯冲轰炸机</td><td class="glyph">俯</td><td class="src">空军</td><td class="num">5</td><td class="num">380</td><td class="num">62</td><td class="num">3</td><td class="num">85</td><td class="num">8</td><td class="num">2</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-af-anti-ship">反舰</a></td></tr><tr data-unit="af_sturmovik"><td class="name">强击机</td><td class="glyph">强</td><td class="src">空军</td><td class="num">5</td><td class="num">420</td><td class="num">66</td><td class="num">7</td><td class="num">110</td><td class="num">6</td><td class="num">2</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-af-ground-strike">对地攻击</a></td></tr><tr data-unit="af_heavy_bomber"><td class="name">重型轰炸机</td><td class="glyph">轰</td><td class="src">空军</td><td class="num">5</td><td class="num">620</td><td class="num">52</td><td class="num">4</td><td class="num">160</td><td class="num">5</td><td class="num">4</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr class="grp" id="p-air-modern"><td colspan="12">现代空军 · 9 个</td></tr><tr data-unit="af_drone"><td class="name">无人机</td><td class="glyph">无</td><td class="src">现代空军</td><td class="num">6</td><td class="num">280</td><td class="num">44</td><td class="num">1</td><td class="num">40</td><td class="num">9</td><td class="num">3</td><td class="num">10</td><td class="traits"><a class="ref" href="#t-ab-af-ground-strike">对地攻击</a></td></tr><tr data-unit="af_heli"><td class="name">武装直升机</td><td class="glyph">直</td><td class="src">现代空军</td><td class="num">6</td><td class="num">480</td><td class="num">60</td><td class="num">6</td><td class="num">100</td><td class="num">7</td><td class="num">2</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-af-ground-strike">对地攻击</a></td></tr><tr data-unit="af_heavy_transport"><td class="name">重型运输机</td><td class="glyph">重</td><td class="src">现代空军</td><td class="num">6</td><td class="num">520</td><td class="num">6</td><td class="num">4</td><td class="num">170</td><td class="num">10</td><td class="num">1</td><td class="num">7</td><td class="traits">—</td></tr><tr data-unit="af_attack_jet"><td class="name">攻击机</td><td class="glyph">攻</td><td class="src">现代空军</td><td class="num">6</td><td class="num">620</td><td class="num">88</td><td class="num">8</td><td class="num">120</td><td class="num">9</td><td class="num">2</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-af-ground-strike">对地攻击</a></td></tr><tr data-unit="af_awacs"><td class="name">预警机</td><td class="glyph">警</td><td class="src">现代空军</td><td class="num">6</td><td class="num">620</td><td class="num">0</td><td class="num">4</td><td class="num">140</td><td class="num">8</td><td class="num">0</td><td class="num">13</td><td class="traits"><a class="ref" href="#t-ab-af-command">空中指挥</a></td></tr><tr data-unit="af_ew"><td class="name">电子战机</td><td class="glyph">电</td><td class="src">现代空军</td><td class="num">6</td><td class="num">660</td><td class="num">20</td><td class="num">4</td><td class="num">110</td><td class="num">10</td><td class="num">3</td><td class="num">9</td><td class="traits"><a class="ref" href="#t-ab-af-jam">电子压制</a></td></tr><tr data-unit="af_jet"><td class="name">喷气战斗机</td><td class="glyph">喷</td><td class="src">现代空军</td><td class="num">6</td><td class="num">700</td><td class="num">78</td><td class="num">5</td><td class="num">90</td><td class="num">12</td><td class="num">4</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-af-superiority">制空</a></td></tr><tr data-unit="af_stealth"><td class="name">隐身战斗机</td><td class="glyph">隐</td><td class="src">现代空军</td><td class="num">6</td><td class="num">900</td><td class="num">86</td><td class="num">4</td><td class="num">85</td><td class="num">12</td><td class="num">4</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-af-superiority">制空</a> · <a class="ref" href="#t-ab-af-stealth">隐身</a></td></tr><tr data-unit="af_strategic"><td class="name">战略轰炸机</td><td class="glyph">略</td><td class="src">现代空军</td><td class="num">6</td><td class="num">950</td><td class="num">74</td><td class="num">6</td><td class="num">200</td><td class="num">8</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr></tbody>
+      </table>
+    </div>
+    </section>
+
+    <section id="g-notes">
+      <h2><span class="sec-num">03</span>各包要点</h2>
+      <p>表格给的是数值，这一节给的是"这一包和别的包差在玩法上"。</p>
+      <p class="era-meta">这几个包没有额外的玩法说明，看总表即可。</p>
+    </section>
+    
+
+    <section id="g-terms">
+      <h2><span class="sec-num">04</span>机制词条</h2>
+      <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
+      <dl class="terms"><dt id="t-ab-af-anti-ship">反舰</dt><dd>对水面单位造成 +12 伤害。</dd><dt id="t-ab-af-superiority">制空</dt><dd>对空中层目标造成 +12 伤害。战斗机的本职。</dd><dt id="t-ab-af-ground-strike">对地攻击</dt><dd>对地面层目标造成 +14 伤害。强击机与攻击机的本职。</dd><dt id="t-ab-siege-master">破城</dt><dd>攻城伤害 ×1.5。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-ab-af-command">空中指挥</dt><dd>相邻的友军 +2 攻击。预警机的价值不在自己开火。</dd><dt id="t-ab-af-jam">电子压制</dt><dd>相邻的敌军 −2 攻击。</dd><dt id="t-ab-af-stealth">隐身</dt><dd>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</dd></dl>
+    </section>
+  
+    <footer>
+      时代与回旋镖 · 空军扩展 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>

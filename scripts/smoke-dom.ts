@@ -3980,5 +3980,95 @@ check('结算卡：上传失败要说清是哪一步不对，并给下一步', (
   }
 });
 
+
+console.log('\n选卡模式');
+
+const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
+
+await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一个才进入选人', async () => {
+  click('[data-act="new-game"]');
+  click('[data-draft-mode="on"]');
+  const on = doc.querySelector<HTMLElement>('[data-draft-mode="on"]');
+  assert.ok(on?.classList.contains('active'), '"开启选卡模式"要能选中');
+
+  click('[data-act="start"]');
+  await tick(60);
+
+  const mask = doc.querySelector<HTMLElement>('#draft');
+  assert.ok(mask, '应该有选卡遮罩节点');
+  assert.equal(mask!.hidden, false, '选卡期间遮罩必须盖住棋盘');
+
+  const cards = () => [...doc.querySelectorAll<HTMLElement>('#draft [data-draft]')];
+  assert.ok(cards().length >= 18, `池子应该铺开（至少 18 张卡），实际 ${cards().length}`);
+  assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
+  assert.ok(doc.querySelector('#draft .draft-side.is-b'), '要显示乙方那一栏');
+  assert.ok(doc.querySelector('#draft [data-ref="draft-timer"]'), '要有倒计时');
+
+  // 甲方禁一个：遮罩上要出现一条"已禁用"，但还没进入选人
+  cards()[0]!.click();
+  await tick(40);
+  assert.ok(
+    doc.querySelector('#draft .draft-slot.is-ban.is-filled'),
+    '禁完之后要看到禁用位被填上',
+  );
+  assert.ok(
+    (doc.querySelector('#draft .draft-step')?.textContent ?? '').includes('禁用'),
+    '只有一方交完，仍应停在禁用阶段',
+  );
+
+  // 乙方也禁一个 → 进入选人
+  cards()[0]!.click();
+  await tick(40);
+  const step = doc.querySelector('#draft .draft-step')?.textContent ?? '';
+  assert.ok(step.includes('选人'), `两边都禁完该进入选人，实际是「${step}」`);
+});
+
+await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用', async () => {
+  // 一路点第一张卡，直到遮罩消失（选满 12 步）
+  for (let i = 0; i < 20; i++) {
+    const mask = doc.querySelector<HTMLElement>('#draft');
+    if (!mask || mask.hidden) break;
+    const card = doc.querySelector<HTMLElement>('#draft [data-draft]');
+    if (!card) break;
+    card.click();
+    await tick(25);
+  }
+  const mask = doc.querySelector<HTMLElement>('#draft')!;
+  assert.equal(mask.hidden, true, '选满之后遮罩要收起');
+  // 收起之后棋盘要恢复可点：棋盘上应该还有双方的单位
+  assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
+});
+
+
+await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完', async () => {
+  click('[data-act="new-game"]');
+  click('[data-ai="1"]');
+  click('[data-draft-mode="on"]');
+  click('[data-act="start"]');
+  await tick(80);
+  assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '遮罩应该出现');
+
+  // 只替甲方点；轮到 AI 时卡片会全部禁用，这里等它自己动（每步 600ms）
+  for (let i = 0; i < 40; i++) {
+    const mask = doc.querySelector<HTMLElement>('#draft');
+    if (!mask || mask.hidden) break;
+    const card = doc.querySelector<HTMLElement>('#draft [data-draft]:not([disabled])');
+    if (card) {
+      card.click();
+      await tick(80);
+      continue;
+    }
+    await tick(200);
+  }
+
+  assert.equal(
+    doc.querySelector<HTMLElement>('#draft')!.hidden,
+    true,
+    'AI 那一半也要能自己走完，遮罩最终要收起',
+  );
+  // 收起之后轮到人类开局，棋盘上双方都该有单位
+  assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

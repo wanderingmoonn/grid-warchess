@@ -12,10 +12,11 @@
  */
 
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
+import { createReadStream, readFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { extname, join, normalize, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 const ROOT = resolve(process.env.SERVE_DIR ?? '_publish');
 const PORT = Number(process.env.PORT) || 3000;
@@ -51,8 +52,27 @@ function cacheControl(path) {
     : 'no-cache';
 }
 
+/**
+ * 解码请求路径。
+ *
+ * `decodeURIComponent` 遇到不完整的百分号编码（`/%`、`/%E0%A4%A`、`/%ZZ`）会抛
+ * `URIError`。这**不是**可以忽略的小事：它要是从请求处理器里漏出去，
+ * Node 对 async handler 的 rejection 不做兜底，整个进程直接退出——
+ * 线上表现就是"服务器毫无征兆地崩了，所有人都登不进去，重启才好"。
+ * 一个爬虫随手扫一个畸形路径就能做到这件事，所以这里必须就地吃掉。
+ */
+function safeDecode(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
 function resolvePath(urlPath) {
-  let clean = decodeURIComponent(urlPath.split('?')[0] ?? '/');
+  const decoded = safeDecode(urlPath.split('?')[0] ?? '/');
+  if (decoded === null) return null;
+  let clean = decoded;
   if (clean.endsWith('/')) clean += 'index.html';
   // 挡住 ../ 穿越：拼完必须还在 ROOT 里面
   const full = normalize(join(ROOT, clean));
@@ -60,9 +80,101 @@ function resolvePath(urlPath) {
   return full;
 }
 
+/** 出错时的统一出口：头还没发就回一个状态码，已经发了就把连接断掉。 */
+function fail(res, status, body, err) {
+  if (err) console.error('[serve]', err?.code ?? '', err?.message ?? err);
+  try {
+    if (!res.headersSent) {
+      res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(body);
+    } else {
+      res.destroy();
+    }
+  } catch {
+    // 连接已经断了，没什么可做的
+  }
+}
+
+/**
+ * 压缩结果的缓存：`路径 → { key, br?, gz? }`。
+ *
+ * 为什么必须有这一层：压缩是**同步**的，压在事件循环上。主包 357KB，
+ * 压一次几十到几百毫秒，这段时间整个进程一个请求都处理不了——包括 `/__health`。
+ * 线上只有很薄的一份 CPU，一个人开页面就能把别人的请求一起拖住，
+ * 表现成"点开链接半天没反应"。
+ *
+ * 键是 `size-mtime`：产物带内容哈希，文件名变了就是新文件；
+ * 重新构建时同名文件的时间戳也会变，所以缓存不会发旧内容。
+ */
+const bodyCache = new Map();
+
+/** 缓存上限：产物总共不到 10 个文件，留 24 个位置足够，超了整体清空 */
+const BODY_CACHE_MAX = 24;
+
+/** 按需压一次并记住；两种编码各存一份，谁先来先压谁 */
+function compressedBody(filePath, info, encoding) {
+  const key = `${info.size}-${info.mtimeMs}`;
+  const hit = bodyCache.get(filePath);
+  if (hit && hit.key === key && hit[encoding]) return hit[encoding];
+
+  const raw = readFileSync(filePath);
+  const body =
+    encoding === 'br'
+      ? brotliCompressSync(raw, {
+          params: {
+            // 静态文件只压一次（结果留在缓存里），所以直接上最高档；
+            // 11 档比 6 档小 3~5%，而这 3~5% 是每个访客都要付的。
+            [constants.BROTLI_PARAM_QUALITY]: 11,
+            [constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+          },
+        })
+      : gzipSync(raw, { level: 9 });
+
+  const entry = hit && hit.key === key ? hit : { key };
+  entry[encoding] = body;
+  if (bodyCache.size >= BODY_CACHE_MAX && !bodyCache.has(filePath)) bodyCache.clear();
+  bodyCache.set(filePath, entry);
+  return body;
+}
+
+/**
+ * 挑一种压缩编码。
+ *
+ * 顺序按"谁更小"排：br 比 gzip 小 20~30%，所以只要客户端说支持就用 br。
+ * 必须认 `q=0`（显式拒绝）——有些代理会带 `Accept-Encoding: gzip;q=0`，
+ * 照发 gzip 就是违约。通配符 `*` 当作同意 gzip。
+ */
+function negotiateEncoding(header, ext) {
+  if (!COMPRESSIBLE.has(ext)) return null;
+  const raw = String(header ?? '');
+  if (!raw) return null;
+
+  const q = new Map();
+  let wildcard = 0;
+  for (const part of raw.split(',')) {
+    const [nameRaw, ...params] = part.trim().toLowerCase().split(';');
+    const name = nameRaw.trim();
+    if (!name) continue;
+    let weight = 1;
+    for (const p of params) {
+      const m = /^\s*q=([\d.]+)\s*$/.exec(p);
+      if (m) weight = Number(m[1]);
+    }
+    if (name === '*') wildcard = weight;
+    else q.set(name, weight);
+  }
+
+  const weight = (name) => (q.has(name) ? q.get(name) : wildcard);
+  if (weight('br') > 0) return 'br';
+  if (weight('gzip') > 0) return 'gz';
+  return null;
+}
+
 async function send(req, res, filePath, status = 200) {
   const ext = extname(filePath).toLowerCase();
   const info = await stat(filePath);
+  // 目录本身不该走到这里（调用方已经拼了 index.html）；真走到了就当没这个文件
+  if (!info.isFile()) throw Object.assign(new Error('not a file'), { code: 'ENOENT' });
   const etag = `W/"${info.size.toString(16)}-${info.mtimeMs.toString(36)}"`;
 
   // 重新验证：文件没变就 304，省掉整包传输
@@ -80,11 +192,11 @@ async function send(req, res, filePath, status = 200) {
     vary: 'accept-encoding',
   };
 
-  const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '') && COMPRESSIBLE.has(ext);
-  if (wantsGzip) {
-    // 产物都是几 MB 以内的单文件，压一次放内存就够；不值得为它做磁盘缓存
-    const body = gzipSync(await readFile(filePath));
-    headers['content-encoding'] = 'gzip';
+  const encoding = negotiateEncoding(req.headers['accept-encoding'], ext);
+  if (encoding) {
+    // 压过的结果留在内存里，第二次起直接发（见 compressedBody）
+    const body = compressedBody(filePath, info, encoding);
+    headers['content-encoding'] = encoding === 'br' ? 'br' : 'gzip';
     headers['content-length'] = String(body.length);
     res.writeHead(status, headers);
     res.end(req.method === 'HEAD' ? undefined : body);
@@ -97,10 +209,16 @@ async function send(req, res, filePath, status = 200) {
     res.end();
     return;
   }
-  createReadStream(filePath).pipe(res);
+  // 用 pipeline 而不是裸 pipe：读文件失败（文件刚好被重新构建换掉）和
+  // 客户端半路断开，都会变成这里能接住的一次异常。裸 pipe 的情况下
+  // ReadStream 的 'error' 没人听，同样是一个能让进程退出的口子。
+  await pipeline(createReadStream(filePath), res).catch(() => {});
 }
 
-const server = createServer(async (req, res) => {
+async function handle(req, res) {
+  // 客户端中途挂断（刷新、关标签页、网络切换）时不要连带抛错
+  res.on('error', () => {});
+
   const urlPath = req.url ?? '/';
 
   // 健康检查：部署侧要的只是一个能回话的端口
@@ -118,7 +236,8 @@ const server = createServer(async (req, res) => {
 
   const filePath = resolvePath(urlPath);
   if (!filePath) {
-    res.writeHead(400);
+    // 畸形编码与路径穿越都走这里
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('bad path');
     return;
   }
@@ -131,15 +250,60 @@ const server = createServer(async (req, res) => {
     }
     await send(req, res, filePath);
   } catch {
-    // 没这个文件：给首页。战棋是单页应用，`?sharecode=...` 这类地址都得能进
-    try {
-      await send(req, res, join(ROOT, 'index.html'), 200);
-    } catch {
+    // 带扩展名的路径（`/assets/index-xxx.js`、`/favicon.ico`）是资源请求，
+    // 缺了就该老实回 404。要是像老版本那样一律拿首页顶上，
+    // 浏览器会把 HTML 当 JS 执行，控制台里只剩一句莫名其妙的语法错误，
+    // 而真正的原因（这个文件没发上去）被盖掉了。
+    const ext = extname(filePath).toLowerCase();
+    if (ext !== '' && ext !== '.html' && ext !== '.htm') {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('not found');
+      return;
+    }
+    // 其余是页面导航：给首页。战棋是单页应用，`?sharecode=...` 这类地址都得能进
+    try {
+      await send(req, res, join(ROOT, 'index.html'), 200);
+    } catch (err) {
+      fail(res, 404, 'not found', err);
     }
   }
+}
+
+const server = createServer((req, res) => {
+  // 任何漏网的异常都只影响这一个请求。静态文件服务器的职责只有"发字节"，
+  // 一个坏请求把整个对局服务带走，代价远大于这一次请求失败。
+  handle(req, res).catch((err) => fail(res, 500, 'internal error', err));
 });
+
+/**
+ * 连接空闲超时。
+ *
+ * ⚠️ 这一行是"点开链接要等五到十秒，但刷新一下就好了"的原因，不是可选项。
+ *
+ * Node 默认 `keepAliveTimeout = 5s`：空闲五秒就把连接关掉。但前面那层反向代理
+ * 的连接池会把它当成"还能用"，继续往这条正在关闭的 socket 上发请求——于是请求
+ * 落进一个已经半关的连接里，代理只能等自己的超时再重试一次。
+ * 表现就是**随机**的 5~10 秒停顿：同一个页面，有时 0.5 秒，有时 8 秒，
+ * 连 `/__health` 这种一个字节都不读的路径也一样（这一点最能说明问题：
+ * 慢的不是文件，是连接）。
+ *
+ * 反过来做就对了：服务端的空闲超时必须**比代理长**，让关闭永远由代理先发起。
+ * 65 秒是业界常用的取值（比常见的 60 秒代理超时多留一点余量）。
+ */
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+// 大文件在慢速链路上可能传很久，别让 node 从中间掐断
+server.requestTimeout = 0;
+
+// 畸形的请求行/头部（半截 HTTP、超长头）：回 400 并关掉这条连接
+server.on('clientError', (err, socket) => {
+  if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n');
+});
+
+// 最后一道保险：真出现没接住的异常 / rejection，记一行日志继续服务，别静默退出。
+// 线上没有终端，崩溃前那行错误是唯一线索——所以这里一定要打印。
+process.on('uncaughtException', (err) => console.error('[serve] uncaught', err));
+process.on('unhandledRejection', (err) => console.error('[serve] unhandled', err));
 
 server.listen(PORT, HOST, () => {
   console.log(`serving ${ROOT} on http://${HOST}:${PORT}`);

@@ -50,6 +50,12 @@ const GROUP_BOOKS: Array<{ prefix: string; file: string; title: string; note: st
     note: '海上力量两包合册——海战（E2~E5）+ 现代海军（E6）：船种总表、封锁与抢修、航母甲板接口',
   },
   {
+    prefix: 'air-',
+    file: 'manual-pack-air.html',
+    title: '空军扩展',
+    note: '空中力量两包合册——空军（E4~E5）+ 现代空军（E6）：机种总表、制空与对地、航母甲板接口',
+  },
+  {
     prefix: 'pack-',
     file: 'manual-pack-eras.html',
     title: '时代兵备',

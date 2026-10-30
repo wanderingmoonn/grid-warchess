@@ -62,40 +62,18 @@ import {
   utype,
   xyOf,
 } from './rules.ts';
+import { canUseType, eraWindowOk } from './draft.ts';
 import { canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import type { TacticalMap } from './ai-tactics.ts';
-import type { Action, AiLevel, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+// 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
+// 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
+import type { AiBudget } from './ai-meta.ts';
+import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
 
-export interface AiBudget {
-  maxRecruit: number;
-  maxUpgrade: number;
-  recruited: number;
-  upgraded: number;
-  /**
-   * 指挥官模式：本回合点名的兵种 id。
-   *
-   * 有值时 AI 只造这一个兵，造不出来就这回合不产兵（转去做别的事）；
-   * 空/未设时照旧自己挑。这一条是"把产兵权交回玩家、其余全托管"的挂钩点。
-   */
-  order?: string | null;
-  /**
-   * 指挥官模式：这一格指定的产兵点（城市或军营的 id）。空/未设＝哪座都行。
-   *
-   * 指定了就只在那一个产兵点造：城市不够高级、军营被拆、兵种下水没位置，
-   * 这一格就空转——和"钱不够"一样，是玩家排计划时该自己预见到的后果。
-   * 队首是「升级时代」时，它指的是"升这一座城"。
-   */
-  orderSite?: string | null;
-}
-
-export const DEFAULT_BUDGET: AiBudget = {
-  maxRecruit: 2,
-  maxUpgrade: 1,
-  recruited: 0,
-  upgraded: 0,
-};
+export type { AiBudget } from './ai-meta.ts';
 
 const DIRS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
@@ -764,16 +742,6 @@ function isStuck(s: GameState, unit: Unit): boolean {
  * 注意别写成 `=== 'advanced'` 判断"高级以上"：那会把战术档漏掉。
  * 需要"至少高级"的地方一律用 `!== 'basic'`。
  */
-export function aiLevelOf(s: GameState): AiLevel {
-  const lv = s.config.aiLevel;
-  return lv === 'basic' ? 'basic' : lv === 'tactic' ? 'tactic' : 'advanced';
-}
-
-/** 给界面用的一档名字（不带 "AI" 后缀，由调用方自己拼）。 */
-export function aiLevelLabel(lv: AiLevel): string {
-  return lv === 'basic' ? '初级' : lv === 'tactic' ? '中级' : '高级';
-}
-
 /** 威胁图里"一只敌人占多少分"的系数：一只普通兵大约扣 3.4 分 */
 const THREAT_K = 3.4;
 
@@ -2719,7 +2687,10 @@ function recruitCandidate(
     // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
     if (heroBlocked(s, me, d)) return false;
-    if (d.era > src.era || d.era < src.era - 1) return false;
+    // 时代窗口与选卡名单走 core/draft 的同一套判据：
+    // 选卡模式下 AI 也只能造自己选到的兵，且旧时代的兵不再被"过时"挡住
+    if (!eraWindowOk(s, d, src.era)) return false;
+    if (!canUseType(s, me, d.id)) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
 
@@ -3444,23 +3415,4 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   return best.action;
 }
 
-/** 这一回合 AI 大致的行动次数上限，防止它无限循环 */
-export const AI_MAX_STEPS = 50;
-
-/**
- * 这一方现在是 AI 在走吗？
- *
- * 配置（aiOpponent / aiAlly）只决定开局时谁托管，
- * 对局中途要能随时改——调平衡的时候"我这回合自己走、下回合交给它"是常态。
- * 所以运行时的 aiControl 优先，没设置过才回落到配置。
- */
-export function isAiSide(s: GameState, p: PlayerId): boolean {
-  const override = s.aiControl?.[p];
-  if (override !== undefined) return override;
-  return p === 'B' ? s.config.aiOpponent : s.config.aiAlly;
-}
-
-/** 有一方是 AI 就不需要"把设备交给对方"的遮罩了 */
-export function anyAiSide(s: GameState): boolean {
-  return isAiSide(s, 'A') || isAiSide(s, 'B');
-}
+export { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiLevelLabel, isAiSide, anyAiSide } from './ai-meta.ts';

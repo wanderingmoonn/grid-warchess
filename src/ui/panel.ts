@@ -17,6 +17,7 @@ import {
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
+import { canUseType, eraWindowOk } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
@@ -808,13 +809,15 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const upgradeCost = upgradeCostOf(s, city);
   const nextEra = upgradeCost === null ? null : eraDef(city.era + 1);
 
-  // 城里只产"能被派出去的单位"，建筑要用建造单位去盖
+  // 城里只产"能被派出去的单位"，建筑要用建造单位去盖。
+  // 两个判据都问 core/draft：选卡模式下"名单外的造不了"和"旧兵照样能造"
+  // 必须和规则层同一口径，否则面板能点、点下去被拒。
   const buildable = Object.values(s.unitTypes).filter(
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
-      d.era <= city.era &&
-      d.era >= city.era - 1,
+      eraWindowOk(s, d, city.era) &&
+      canUseType(s, city.owner, d.id),
   );
   const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
 
@@ -1111,7 +1114,10 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const buildable = Object.values(s.unitTypes).filter(
     (d) =>
-      d.category !== 'building' && !d.summonedOnly && d.era <= era && d.era >= era - 1,
+      d.category !== 'building' &&
+      !d.summonedOnly &&
+      eraWindowOk(s, d, era) &&
+      canUseType(s, camp.owner, d.id),
   );
 
   const q = (input.recruitQuery ?? '').trim();

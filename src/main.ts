@@ -8,8 +8,10 @@
 import './style.css';
 
 import { expansionById } from './core/expansions.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
-import type { AiBudget } from './core/ai.ts';
+// 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
+// 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
+import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -57,6 +59,14 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import {
+  aiDraftBan,
+  aiDraftPick,
+  draftInProgress,
+  draftSecondsLeft,
+  draftView,
+} from './core/draft.ts';
+import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
@@ -89,6 +99,7 @@ import {
   normalizeCode,
   originMismatch,
   saveSeat,
+  submitDraft,
   submitTurn,
   type RoomSeat,
   type RoomSnapshot,
@@ -140,10 +151,12 @@ appEl.innerHTML = `
       </div>
       <aside class="side" id="side"></aside>
     </div>
+    <div class="draft-mask" id="draft" hidden></div>
   </div>
 `;
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
+const draftEl = pick<HTMLElement>(appEl, '#draft');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 /**
  * 真正滚动的容器。
@@ -684,6 +697,8 @@ function keepSideScroll(paint: () => void): void {
 }
 
 function render(): void {
+  // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
+  renderDraft();
   const view = playerView(state, me(), spectating());
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
@@ -1195,6 +1210,309 @@ function selectCity(cityId: string): void {
   siege = [];
   selectedCityId = cityId;
   render();
+}
+
+/* ===========================================================================
+ * 选卡（BP）：开局那一段的用户操作
+ *
+ * 它不走 dispatch()，因为 dispatch 的整套前提都是"轮到 state.current 走棋"：
+ * 选卡期间 current 一直是 A（棋盘还没开始），而禁用是双方同时进行的。
+ * 所以这里单开一条通道，把 actor 显式传进 applyAction。
+ * ======================================================================== */
+
+/** 本地设备现在替哪一方操作（热座会换手；对 AI 时固定在人类那一方） */
+let draftSeat: PlayerId = 'A';
+/** 上一次画出来的选卡快照，用来避免每帧重建整块遮罩 */
+let draftSig = '';
+/** 是否已经排了一次 AI 选卡（防止每帧都排） */
+let draftAiPending = false;
+/** 正在往云端提交一步 BP：期间不接受新的点击（避免同一手上交两次） */
+let draftBusy = false;
+
+function draftIsAi(side: PlayerId): boolean {
+  // 房间里的两侧都是人（席位就是身份），托管开关在进房时已经被关掉了
+  if (room) return false;
+  return isAiSide(state, side);
+}
+
+/**
+ * 座位交接。
+ *
+ * 禁用是盲禁：我交完就该把设备交出去，不能顺手替对面也点了。
+ * 选人期则完全由 order 决定——轮到谁，设备就跟着谁。
+ */
+function syncDraftSeat(): void {
+  const view = draftView(state);
+  if (!view || view.phase === 'done') return;
+  // 联机：设备只代表自己那个席位，不跟着 order 换手
+  if (room) {
+    if (!room.spectator) draftSeat = room.seat;
+    return;
+  }
+  if (view.phase === 'pick' && view.toAct && !draftIsAi(view.toAct)) {
+    draftSeat = view.toAct;
+    return;
+  }
+  if (view.phase === 'ban') {
+    const mine = draftSeat === 'A' ? view.a : view.b;
+    if (!mine.banDone) return;
+    const other: PlayerId = draftSeat === 'A' ? 'B' : 'A';
+    const otherView = other === 'A' ? view.a : view.b;
+    if (!otherView.banDone && !draftIsAi(other)) draftSeat = other;
+  }
+}
+
+function dispatchDraft(action: Action, actor: PlayerId): boolean {
+  /*
+   * 联机：本地先落一步（手感即时，点下去就见效），然后带着"我看到的进度号"
+   * 提交上去。被对面抢先写了就重新拉、把这一步补到最新状态上再交——
+   * 禁用期本来就允许双方同时提交，这不是冲突而是常态。
+   */
+  if (room) {
+    if (room.spectator) {
+      toast('观战位只能看，不参与选卡');
+      return false;
+    }
+    if (draftBusy) return false;
+    if (actor !== room.seat) {
+      toast('这是对面的席位');
+      return false;
+    }
+    const prevSeq = state.draft?.seq ?? 0;
+    const result = applyAction(state, action, actor);
+    if (!result.ok) {
+      toast(result.reason);
+      return false;
+    }
+    state = result.state;
+    saveMatch(state);
+    render();
+    void pushDraft(room, prevSeq, action, actor);
+    return true;
+  }
+
+  const result = applyAction(state, action, actor);
+  if (!result.ok) {
+    toast(result.reason);
+    return false;
+  }
+  state = result.state;
+  saveMatch(state);
+  if (state.draft?.phase === 'done') {
+    afterDraft();
+  } else {
+    render();
+  }
+  return true;
+}
+
+/**
+ * 把一步 BP 交到云端。
+ *
+ * 锁是"进度号"（房间的 turn 列在 BP 期间存 draft.seq）：被挡回来就说明
+ * 对面先写了。这时候**不能直接覆盖**——先把最新状态拉下来，把自己的这一步
+ * 补上去，再用新的进度号重交。最多试四轮，失败就明说"没交上去"。
+ */
+async function pushDraft(
+  seat: RoomSeat,
+  prevSeq: number,
+  action: Action,
+  actor: PlayerId,
+): Promise<void> {
+  draftBusy = true;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const ok = await submitDraft(seat.code, state, prevSeq);
+      if (ok) {
+        dirty = false;
+        if (state.draft?.phase === 'done') afterDraft();
+        return;
+      }
+      const snap = await fetchRoom(seat.code);
+      if (!snap || room?.code !== seat.code) return;
+      const remote = snap.state.draft;
+      if (!remote || remote.phase === 'done') {
+        // 对面已经打完 BP 并且推上去了：直接采纳，别在旧状态上继续折腾
+        takeSnapshot(snap);
+        return;
+      }
+      // 对面先写了：把自己的这一步补到最新状态上再来一次
+      const retry = applyAction(snap.state, action, actor);
+      if (!retry.ok) {
+        takeSnapshot(snap);
+        toast(retry.reason);
+        return;
+      }
+      state = retry.state;
+      prevSeq = remote.seq;
+      saveMatch(state);
+      render();
+    }
+    dirty = true;
+    toast('这一步没交上去（网络可能不稳）。点「联机 → 刷新状态」看一眼');
+  } catch (err) {
+    dirty = true;
+    toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
+  } finally {
+    draftBusy = false;
+  }
+}
+
+/** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
+function takeSnapshot(snapshot: RoomSnapshot): void {
+  const fog = state.fog;
+  state = snapshot.state;
+  state.aiControl = { A: false, B: false };
+  state.fog = fog;
+  clearSelection();
+  saveMatch(state);
+  render();
+}
+
+/** 选卡打完：把方向盘交回正常对局 */
+function afterDraft(): void {
+  draftSig = '';
+  draftEl.hidden = true;
+  render();
+  const names = (side: PlayerId) =>
+    (state.draft?.picks[side] ?? []).map((id) => state.unitTypes[id]?.name ?? id).join('、');
+  toast(`选卡完成 · 甲方：${names('A')} ／ 乙方：${names('B')}`);
+  if (isAiSide(state, state.current)) void runAiLoop();
+}
+
+/** 画（或收起）遮罩。每次 render 都会问一次，但只有内容变了才重建 DOM */
+function renderDraft(): void {
+  if (!draftInProgress(state)) {
+    if (!draftEl.hidden) draftEl.hidden = true;
+    draftSig = '';
+    stopDraftTicker();
+    stopDraftPolling();
+    return;
+  }
+  startDraftTicker();
+  if (room) startDraftPolling();
+  draftEl.hidden = false;
+  syncDraftSeat();
+  const view = draftView(state)!;
+  const sig = [
+    view.phase,
+    view.step,
+    view.a.bans.join(','),
+    view.b.bans.join(','),
+    view.a.picks.join(','),
+    view.b.picks.join(','),
+    draftSeat,
+    view.remaining.length,
+  ].join('|');
+  if (sig !== draftSig) {
+    draftSig = sig;
+    draftEl.innerHTML = draftScreenHtml(state, {
+      seat: draftSeat,
+      now: Date.now(),
+      isAi: draftIsAi,
+    });
+    // AI 的那一手：晚半秒再动，让它看起来像在挑，而不是"你点完它就位"
+    scheduleDraftAi();
+  }
+  paintDraftTimer(draftEl, state, Date.now());
+}
+
+/**
+ * 倒计时与超时兜底。
+ *
+ * 只在选卡期间跑，选完就停：一个永远活着的 400ms 定时器会让页面和
+ * 测试都"关不掉"（Node 里它等于一直有关系挂着，进程不肯退出）。
+ *
+ * 放在界面侧而不是规则里，是因为"现在几点"不是规则的一部分：
+ * 规则只认动作里带的 `at`，谁先到点谁提交。这样同一个状态在哪台设备上
+ * 都能算出同样的结果，也不会因为某个客户端时钟慢半拍就把对局卡死。
+ */
+let draftTicker: number | null = null;
+
+function startDraftTicker(): void {
+  if (draftTicker !== null) return;
+  draftTicker = window.setInterval(() => {
+    if (!draftInProgress(state)) {
+      stopDraftTicker();
+      return;
+    }
+    const now = Date.now();
+    paintDraftTimer(draftEl, state, now);
+    // 联机时多等一会儿再判超时：deadline 是**对方那台机器的钟**写进来的，
+    // 两边差个一两秒很正常，早判就等于替对面抢答了
+    const slack = room ? 1500 : 0;
+    if (draftSecondsLeft(state, now + slack) > 0) return;
+    const view = draftView(state)!;
+    const actor = view.phase === 'ban' ? draftSeat : (view.toAct ?? draftSeat);
+    const r = applyAction(state, { type: 'DRAFT_TIMEOUT', at: now }, actor);
+    if (!r.ok) return;
+    state = r.state;
+    saveMatch(state);
+    if (state.draft?.phase === 'done') afterDraft();
+    else render();
+  }, 400);
+}
+
+function stopDraftTicker(): void {
+  if (draftTicker === null) return;
+  window.clearInterval(draftTicker);
+  draftTicker = null;
+}
+
+function scheduleDraftAi(): void {
+  if (draftAiPending) return;
+  const view = draftView(state);
+  if (!view) return;
+  const aiPending =
+    view.phase === 'ban'
+      ? (['A', 'B'] as PlayerId[]).some(
+          (side) => draftIsAi(side) && !(side === 'A' ? view.a : view.b).banDone,
+        )
+      : view.phase === 'pick' && !!view.toAct && draftIsAi(view.toAct);
+  if (!aiPending) return;
+
+  draftAiPending = true;
+  window.setTimeout(() => {
+    draftAiPending = false;
+    if (!draftInProgress(state)) return;
+    const now = draftView(state);
+    if (!now) return;
+    if (now.phase === 'ban') {
+      const side = (['A', 'B'] as PlayerId[]).find(
+        (sd) => draftIsAi(sd) && !(sd === 'A' ? now.a : now.b).banDone,
+      );
+      if (!side) return;
+      const id = aiDraftBan(state, side);
+      if (id) dispatchDraft({ type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+      return;
+    }
+    if (now.phase === 'pick' && now.toAct && draftIsAi(now.toAct)) {
+      const id = aiDraftPick(state, now.toAct);
+      if (id) dispatchDraft({ type: 'DRAFT_PICK', unitId: id, at: Date.now() }, now.toAct);
+    }
+  }, 600);
+}
+
+/** 点兵种卡：按当前阶段决定是禁用还是选用 */
+function onDraftClick(typeId: string): void {
+  const view = draftView(state);
+  if (!view) return;
+  if (view.phase === 'ban') {
+    const mine = draftSeat === 'A' ? view.a : view.b;
+    if (mine.banDone) {
+      toast('你已经禁用过了，等对面');
+      return;
+    }
+    dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, draftSeat);
+    return;
+  }
+  if (view.phase === 'pick') {
+    if (view.toAct !== draftSeat) {
+      toast(`等${state.players[view.toAct ?? 'A'].name}选完`);
+      return;
+    }
+    dispatchDraft({ type: 'DRAFT_PICK', unitId: typeId, at: Date.now() }, draftSeat);
+  }
 }
 
 function toast(msg: string): void {
@@ -2386,6 +2704,21 @@ async function runAiLoop(): Promise<void> {
  * 于是一方在自己回合中途把对面最后一个兵清掉之后，剩下的部队还会继续
  * 原地折腾几十步——沙盒里看到的正是"没有敌人了，它还在动"。
  */
+/**
+ * AI 引擎按需加载。
+ *
+ * 引擎有 35KB（威胁图、换子价值、三套战术），而**首屏一帧都用不到它**：
+ * 开局只回答"这一方是不是 AI"。所以它被挪到第一次真的要它走子的时候再拉。
+ *
+ * 代价是 AI 的第一步会多等一次网络（本地缓存后为 0），而这一步本来就
+ * 被 `AI_SPEED_MS` 故意放慢了——玩家看到的是它照常在思考。
+ */
+let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
+function aiEngine(): Promise<typeof import('./core/ai.ts')> {
+  aiEnginePromise ??= import('./core/ai.ts');
+  return aiEnginePromise;
+}
+
 async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
@@ -2404,20 +2737,21 @@ async function runAiTurn(
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
   const rejected = new Set<string>();
+  const engine = await aiEngine();
 
-  for (let step = 0; step < AI_MAX_STEPS; step++) {
+  for (let step = 0; step < engine.AI_MAX_STEPS; step++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
     if (stopWhen?.()) break;
-    const action = aiNextAction(state, budget, rejected);
+    const action = engine.aiNextAction(state, budget, rejected);
     if (!action) break;
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
     const result = applyAction(state, action);
-    if (!result.ok) { rejected.add(aiActionKey(action)); await sleep(0); continue; }
+    if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
     rejected.clear();
 
     state = result.state;
@@ -3567,6 +3901,30 @@ function startRoomPolling(): void {
   roomTimer = window.setInterval(() => void pollRoom(), 15000);
 }
 
+let draftPollTimer = 0;
+
+/**
+ * BP 期间的快取轮询。
+ *
+ * 正常对局 15 秒问一次就够了（一个回合以分钟计），但 BP 是一来一回的十几步，
+ * 15 秒等于没法玩。所以 BP 期间单独开一条 1.5 秒的轮询，选完立刻关掉——
+ * 常驻定时器会让页面和测试进程一直挂着不退出（这个坑刚踩过一次）。
+ */
+function startDraftPolling(): void {
+  if (draftPollTimer) return;
+  draftPollTimer = window.setInterval(() => {
+    if (!room || !draftInProgress(state) || draftBusy) return;
+    if (document.visibilityState !== 'visible') return;
+    void pollRoom();
+  }, 1500);
+}
+
+function stopDraftPolling(): void {
+  if (!draftPollTimer) return;
+  window.clearInterval(draftPollTimer);
+  draftPollTimer = 0;
+}
+
 /**
  * 定时问一句"对面走完没有"。
  *
@@ -3595,6 +3953,26 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+
+    /*
+     * BP 期间另走一条判断：**进度号往前走了就采纳**。
+     *
+     * 不能套用 adoptDecision——它按"回合 + 行动方"判，而 BP 里回合一直是 1、
+     * 行动方一直是 A（棋盘还没开始），两边都会以为"没我的事"，于是一直停在
+     * 自己那份旧名单上。这正是联机 BP 必须单独一条判断的原因。
+     */
+    const remoteDraft = snapshot.state.draft;
+    const localDraft = state.draft;
+    const remoteBP = !!remoteDraft && remoteDraft.phase !== 'done';
+    const localBP = !!localDraft && localDraft.phase !== 'done';
+    if (remoteBP || localBP) {
+      const rseq = remoteDraft?.seq ?? 0;
+      const lseq = localDraft?.seq ?? 0;
+      if (rseq <= lseq) return; // 没新东西，或者我这边更新
+      takeSnapshot(snapshot);
+      if (!remoteBP) toast('对面的选卡打完了，进入对局');
+      return;
+    }
 
     // 要不要把云端的这一局装进来，交给 room.ts 里那个纯函数判断（它有专门的用例）。
     // 这里只负责"装进来之后干什么"——两份分支的分工就是这么切的。
@@ -4094,6 +4472,12 @@ appEl.addEventListener('click', (e) => {
   if (suppressClick) {
     suppressClick = false;
     if (target.closest('.board')) return;
+  }
+
+  const draftCard = target.closest<HTMLElement>('[data-draft]');
+  if (draftCard?.dataset.draft) {
+    onDraftClick(draftCard.dataset.draft);
+    return;
   }
 
   const actionEl = target.closest<HTMLElement>('[data-act]');

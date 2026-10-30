@@ -56,6 +56,12 @@ import {
 } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import {
+  applyDraftAction,
+  canUseType,
+  draftInProgress,
+  eraWindowOk,
+} from './draft.ts';
+import {
   GOLD,
   addRes,
   canPay,
@@ -1018,7 +1024,9 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
     // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
     // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
     // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
-    if (!(tile.terrain === 'water' && crossesWater(def))) {
+    // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
+    // （浅流本来就可通行，不用单列。）
+    if (!((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def))) {
       return false;
     }
   }
@@ -2622,12 +2630,30 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
   const by = actor ?? s.current;
+
+  /*
+   * 选卡模式：开局这一段走的是另一套状态机。
+   *
+   * 两个方向都要挡：
+   *   1. 选卡动作 → 直接交给 draft.applyDraftAction（它不管 `s.current`，
+   *      因为禁用期是双方同时进行的）；
+   *   2. 普通动作 → 选卡没打完一律拒掉。不挡的话玩家能在 BP 期间就开始
+   *      造兵走子，那这一局的名单就成了装饰。
+   */
+  if (action.type === 'DRAFT_BAN' || action.type === 'DRAFT_PICK' || action.type === 'DRAFT_TIMEOUT') {
+    const staged = cloneState(s);
+    return applyDraftAction(staged, action, by);
+  }
+  if (draftInProgress(s)) {
+    return { ok: false, reason: '先完成选卡，然后才轮到走棋' };
+  }
   if (by !== s.current) return { ok: false, reason: '还没轮到你行动' };
 
   const next = cloneState(s);
 
   const result: ActionResult = (() => {
     switch (action.type) {
+      // 选卡动作在上面就被分流走了，类型在这里已经被排除，不用也不该再列分支
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
@@ -3315,6 +3341,10 @@ function doBuild(
   const def = s.unitTypes[unitTypeId];
   if (!def) return { ok: false, reason: '本局没有这个建筑' };
   if (def.category !== 'building') return { ok: false, reason: '只有建筑可以修建' };
+  // 选卡模式：建筑也在名单里（塔、堡、城墙都是要选的东西）
+  if (!canUseType(s, builder.owner, unitTypeId)) {
+    return { ok: false, reason: `${def.name} 不在本局的选用名单里` };
+  }
 
   // 续建：目标格上是自家的同型工地。
   //
@@ -3540,6 +3570,11 @@ function doRecruit(
   }
   // 召唤物只认召唤者：让它们进产线会变成"花 45 金买一个死灵法师的免费赠品"
   if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
+  // 选卡模式：不在本局名单里的东西造不出来。判据只有 core/draft.canUseType 一处，
+  // 界面上的产兵表和 AI 的候选列表都问同一句，不会出现"面板能点、点了被拒"。
+  if (!canUseType(s, s.current, unitTypeId)) {
+    return { ok: false, reason: `${def.name} 不在你本局的选用名单里` };
+  }
   // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
   // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
   // 「一个」也包括还没孵出来的那只（不死鸟的蛋），见 heroBlocked。
@@ -3588,9 +3623,14 @@ function doRecruit(
   if (era < def.era) {
     return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
   }
-  // 只保留当前时代和上一个时代：过老的装备已经淘汰，
-  // 否则到了现代还要在产兵面板里翻十个早已没用的兵种
-  if (def.era < era - 1) {
+  // 时代窗口的上下限要分开报：上限是"科技还没到"，下限是"这条产线不带了"，
+  // 玩家要做的决定完全不同（一个去升城，一个换兵种）。
+  if (def.era > era) {
+    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
+  }
+  // 下限只在**没开选卡**时生效：选卡模式下你花了一个选位拿到的东西，
+  // 不该因为城市升了两级就作废——那等于"越往后期走，选卡越没有意义"。
+  if (!eraWindowOk(s, def, era)) {
     return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
   }
 

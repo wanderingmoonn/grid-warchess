@@ -33,6 +33,9 @@ import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts'
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
 // 航母甲板那道"留给空军扩展"的接口在 naval-carrier.ts。这里只负责注册。
 import { NAVAL_FLEET, MODERN_NAVAL } from './naval-packs.ts';
+// 空军两包（空军 / 现代空军）。兵种与能力在 air-packs.ts，
+// 航母甲板的空军侧实现在同一个文件的 AIRWING_OPS 里（模块加载即注册）。
+import { AIR_CORPS, MODERN_AIR } from './air-packs.ts';
 // 行动点：把移动/攻击/驻扎/上下船/技能统一成"行动"，各自扣 E。
 // 它只用一个新文件（action-points.ts），这里加一行注册，rules.ts 依然一行不动。
 import { ACTION_POINTS } from './action-points.ts';
@@ -800,6 +803,10 @@ export const EXPANSIONS: Expansion[] = [
   // 顺序靠后不影响任何东西——这两个包的钩子只读地形与城，不参与伤害公式。
   NAVAL_FLEET,
   MODERN_NAVAL,
+  // 空军排在海军之后：它会往海里放飞机，而海军是那片海的规则。
+  // 注册顺序不影响行为（两边只通过 AirwingOps 接口通信），这样排只是读起来顺。
+  AIR_CORPS,
+  MODERN_AIR,
   // 行动点：一整条"行动经济"规则，排在最后——
   // 它的 modifyMove / modifyAttacks 只做"取更小的那个"，不关心别人先给了多少，
   // 所以放在钩子链末尾既不影响老扩展，也不会被它们绕过去。

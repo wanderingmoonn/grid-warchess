@@ -791,13 +791,23 @@ function portRepair(state: GameState, player: PlayerId): void {
   }
 }
 
-/** 甲板整备：把"轮到你"这个时机转告空军扩展（没接入就什么都不做） */
+/**
+ * 甲板整备：把"轮到你"这个时机转告空军扩展（没接入就什么都不做）。
+ *
+ * 两个海军包都挂了这个钩子，所以同一次回合开始会被叫两遍。空军那边的
+ * `onDeckTurnStart` 是"先收、再修、后放"的完整一套——跑两遍的后果不是
+ * 放两架，而是**刚放出去的那架立刻被收回来再修一次**，玩家看到的是
+ * "飞机原地没动、血却多回了 8 点"。所以这里用和 `portRepair` 同一个办法：
+ * 在船身上记一个本回合的哨兵，第二遍直接跳过。
+ */
 function deckUpkeep(state: GameState, player: PlayerId): void {
   const ops = airwingOps();
   if (!ops?.onDeckTurnStart) return;
   for (const u of state.units) {
     if (u.owner !== player) continue;
     if (!deckSpecOf(u.type)) continue;
+    if (u.custom?.deckUpkeepTurn === state.turn) continue;
+    u.custom = { ...(u.custom ?? {}), deckUpkeepTurn: state.turn };
     ops.onDeckTurnStart({ state, carrier: u });
   }
 }

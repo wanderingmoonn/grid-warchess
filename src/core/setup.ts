@@ -14,6 +14,7 @@ import {
   eraCeilingFor,
   expansionById,
 } from './expansions.ts';
+import { createDraft } from './draft.ts';
 import { generateLayout, terrainFromChar } from './mapgen.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
@@ -117,6 +118,8 @@ export function createMatch(
   config: MatchConfig,
   seed: number,
   customUnits: Record<string, UnitTypeDef> = {},
+  /** 当前挂钟时间：选卡模式的倒计时要一个起点。测试传固定值即可复现 */
+  now: number = Date.now(),
 ): GameState {
   // 先合并：内置兵种 + 玩家自定义 + 已启用扩展自带的兵种
   //
@@ -142,7 +145,19 @@ export function createMatch(
   const citySize = Math.max(CITY.size, Math.round(config.citySize ?? declaredCitySize));
 
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
-  const pool = enabled.length > 0 ? enabled : Object.keys(UNIT_TYPES);
+  /**
+   * 选卡模式下池子必须是**全部兵种**。
+   *
+   * 理由很直接：选卡是从"这一局有哪些兵"里挑，而 `state.unitTypes` 决定了
+   * "这局存在哪些兵"。如果只放开启的那部分，玩家在 BP 里看到的候选
+   * 一旦落在外面，选中了也造不出来——面板上写着"已选"，按下去却说没有这个兵。
+   * 开局面板里逐个勾兵的开关在这个模式下没有意义（名单由 BP 决定），所以直接全开。
+   */
+  const pool = config.draftMode === true
+    ? Object.keys(catalog)
+    : enabled.length > 0
+      ? enabled
+      : Object.keys(UNIT_TYPES);
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
   for (const id of Object.keys(extraUnits)) {
     if (!pool.includes(id)) pool.push(id);
@@ -292,6 +307,8 @@ export function createMatch(
       enabledUnits: [...pool],
       commanderMode: config.commanderMode === true,
       godMode: config.godMode === true,
+      // 选卡模式要活进 config：读档/联机之后界面才知道"这一局有 BP"
+      draftMode: config.draftMode === true,
       // 逐回合摘要的开关必须活进 state.config：
       // 这个对象的字段是**逐个白名单抄的**，漏一个就等于那个开关在开局瞬间被吃掉。
       // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，
@@ -327,6 +344,17 @@ export function createMatch(
       B: { known: [] },
     },
   };
+
+  // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
+  if (config.draftMode === true) {
+    state.draft = createDraft(state, now);
+    state.log.push({
+      turn: state.turn,
+      player: 'A',
+      open: true,
+      text: `选卡模式：兵种池 ${state.draft.pool.length} 个，各禁 ${state.draft.banSlots} 个、各选 ${state.draft.pickSlots} 个`,
+    });
+  }
 
   // 开局编制类扩展：整批换掉默认的那套开局部队。
   //
