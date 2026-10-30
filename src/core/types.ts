@@ -789,6 +789,14 @@ export interface MatchConfig {
    * 两边都在自己第一个回合开始时才拿钱，先手只剩"先动一步"这一项优势。
    */
   noFirstIncome?: boolean;
+  /**
+   * 选卡模式：开局先打一轮 BP（禁用 + 选人），选完才开始下棋。
+   *
+   * 它改的是"这一局能造什么"，不改规则本身：没有被选中/选到的东西一律造不出来，
+   * 经济、建造、军营这些骨架单位不受限（否则连产线和工地都起不来）。
+   * 具体的池子大小、禁位与选位数量见 core/draft.ts 的 `draftBudget`。
+   */
+  draftMode?: boolean;
   /** 启用的扩展规则 id */
   expansionIds: string[];
   /** 启用的兵种 id */
@@ -866,6 +874,43 @@ export interface LogEntry {
   open?: boolean;
 }
 
+/** 选卡的阶段：禁用 → 选人 → 结束 */
+export type DraftPhase = 'ban' | 'pick' | 'done';
+
+/** 一条选卡记录：谁、禁/选、哪一个、是不是超时代选 */
+export interface DraftEntry {
+  side: PlayerId;
+  kind: 'ban' | 'pick';
+  /** 超时未禁用时是 null */
+  unitId: string | null;
+  auto: boolean;
+}
+
+export interface DraftState {
+  phase: DraftPhase;
+  /** 这一局的兵种池（已按时代分层抽样，长度 = 预算里的 pool） */
+  pool: string[];
+  /** 每人几个禁位 */
+  banSlots: number;
+  /** 每人几个选位 */
+  pickSlots: number;
+  bans: Record<PlayerId, string[]>;
+  picks: Record<PlayerId, string[]>;
+  /**
+   * 选人顺序（长度 = pickSlots × 2，蛇形：A,B,B,A,A,B…）。
+   *
+   * 存进 state 而不是每步现算：联机/回放里两边的顺序必须逐字一致，
+   * 现算一次就等于多一份可能走散的实现。
+   */
+  order: PlayerId[];
+  /** 已经完成了几步选人 */
+  step: number;
+  /** 当前阶段（禁用期 / 这一步选人）的截止时间，epoch 毫秒 */
+  deadline: number;
+  /** 全部选卡记录，界面上按顺序显示 */
+  history: DraftEntry[];
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -937,6 +982,14 @@ export interface GameState {
    * 旧存档没有这个字段，按"什么都没解锁"处理。
    */
   unlocked?: Partial<Record<PlayerId, string[]>>;
+  /**
+   * 选卡模式的开局 BP 状态（普通对局是 undefined）。
+   *
+   * 为什么放进 GameState 而不是界面里：它决定"这一局能造什么"，是规则的一部分；
+   * 而且必须随存档/联机快照一起走——刷新一下就把选好的名单丢掉，这个模式没法玩。
+   * `phase !== 'done'` 期间除了选卡动作，任何动作都会被规则层拒掉。
+   */
+  draft?: DraftState;
   /**
    * 等着落位的"蛋"（不死鸟重生）。
    *
@@ -1016,6 +1069,23 @@ export type Action =
   | { type: 'PLACE_EGG'; x: number; y: number }
   /** 认输：直接把胜利判给对方，不用把棋盘走完 */
   | { type: 'SURRENDER' }
+  /**
+   * 选卡：禁用对方（也禁用自己）一个兵种。
+   *
+   * 双方**同时**禁用、互不可见：提交后界面只显示"对方已 ban / 未 ban"，
+   * 两边都交完才一起揭晓。这是竞技 BP 的通行做法——先 ban 的人不该被后手针对。
+   */
+  | { type: 'DRAFT_BAN'; unitId: string; at?: number }
+  /** 选卡：轮到谁选就选一个（顺序见 state.draft.order 的蛇形排法） */
+  | { type: 'DRAFT_PICK'; unitId: string; at?: number }
+  /**
+   * 选卡超时兜底。
+   *
+   * `at` 是调用方的挂钟时间（epoch 毫秒），规则层用它和 deadline 对账：
+   * 早于 deadline 的一律拒掉——这样"谁先点"不会决定结果，只有时间会。
+   * 超时的处理：禁用期＝放弃这次禁用；选人期＝系统从剩余池里随机补一个。
+   */
+  | { type: 'DRAFT_TIMEOUT'; at: number }
   | { type: 'END_TURN' };
 
 /** 规则引擎的返回结果：要么成功带新状态，要么失败带原因 */

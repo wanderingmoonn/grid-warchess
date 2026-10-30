@@ -81,6 +81,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       enabledUnits: [...initial.enabledUnits],
       commanderMode: initial.commanderMode === true,
       godMode: initial.godMode === true,
+      draftMode: initial.draftMode === true,
       // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
       recordDetail: loadRecordPref() ?? initial.recordDetail === true,
@@ -320,6 +321,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
+                选卡 <span class="field-hint">开局先禁用与选人，双方只用选到的兵</span>
+              </div>
+              <div class="chip-row">
+                <button class="chip ${config.draftMode ? '' : 'active'}" data-draft-mode="off" title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
+                <button class="chip ${config.draftMode ? 'active' : ''}" data-draft-mode="on" title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
+              </div>
+              <div class="field-hint">${
+                config.draftMode
+                  ? '开局先打一轮 BP：双方同时禁用（互相看不见），然后按蛇形顺序轮流选人，选满才开始。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补。'
+                  : '打开之后，这一局能造什么由开局的选卡决定——下方逐个勾选兵种在这个模式下不再生效。'
+              }</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
                 地貌 <span class="field-hint">${styleHint}</span>
               </div>
               <div class="chip-row">${styleChips}</div>
@@ -391,6 +407,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return;
       }
 
+      const draftBtn = target.closest<HTMLElement>('[data-draft-mode]');
+      if (draftBtn?.dataset.draftMode) {
+        config.draftMode = draftBtn.dataset.draftMode === 'on';
+        // 沙盒是"随手摆兵"的地方，跟"这一局只能造选到的兵"正好相反
+        if (config.draftMode && config.godMode) {
+          config.godMode = false;
+          config.commanderMode = false;
+        }
+        paint();
+        return;
+      }
+
       const roleBtn = target.closest<HTMLElement>('[data-role]');
       if (roleBtn?.dataset.role) {
         const role = roleBtn.dataset.role;
@@ -407,6 +435,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           config.aiOpponent = false;
           config.aiAlly = false;
           config.commanderMode = false;
+          // 沙盒不产兵，选卡在这一局没有任何作用，别留个"开了却不生效"的开关
+          config.draftMode = false;
         }
         paint();
         return;

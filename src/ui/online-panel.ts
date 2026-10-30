@@ -11,6 +11,7 @@
  */
 
 import type { GameState, PlayerId } from '../core/types.ts';
+import { draftInProgress } from '../core/draft.ts';
 import {
   claimSeat,
   createRoom,
@@ -251,6 +252,18 @@ export function openOnlinePanel(host: OnlineHost): void {
   };
 
   const doCreate = async () => {
+    /*
+     * 选卡还没打完时不许建房。
+     *
+     * 联机房间是"一次提交一整回合"的模型，用 turn 号做乐观锁；而 BP 有十几个
+     * 来回、turn 一直是 1，硬塞进房间只会每步都撞锁。所以规则是：**先在本地
+     * 把 BP 打完，再建房**——对面进房看到的就是已经定下来的名单。
+     */
+    if (draftInProgress(host.currentState())) {
+      error = '选卡还没打完：先把这一局的 BP 完成，再开房间（对面进房后能看到你选定的名单）';
+      paint();
+      return;
+    }
     busy = true;
     error = '';
     paint();

@@ -59,6 +59,14 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import {
+  aiDraftBan,
+  aiDraftPick,
+  draftInProgress,
+  draftSecondsLeft,
+  draftView,
+} from './core/draft.ts';
+import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
@@ -142,10 +150,12 @@ appEl.innerHTML = `
       </div>
       <aside class="side" id="side"></aside>
     </div>
+    <div class="draft-mask" id="draft" hidden></div>
   </div>
 `;
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
+const draftEl = pick<HTMLElement>(appEl, '#draft');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 /**
  * 真正滚动的容器。
@@ -686,6 +696,8 @@ function keepSideScroll(paint: () => void): void {
 }
 
 function render(): void {
+  // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
+  renderDraft();
   const view = playerView(state, me(), spectating());
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
@@ -1197,6 +1209,204 @@ function selectCity(cityId: string): void {
   siege = [];
   selectedCityId = cityId;
   render();
+}
+
+/* ===========================================================================
+ * 选卡（BP）：开局那一段的用户操作
+ *
+ * 它不走 dispatch()，因为 dispatch 的整套前提都是"轮到 state.current 走棋"：
+ * 选卡期间 current 一直是 A（棋盘还没开始），而禁用是双方同时进行的。
+ * 所以这里单开一条通道，把 actor 显式传进 applyAction。
+ * ======================================================================== */
+
+/** 本地设备现在替哪一方操作（热座会换手；对 AI 时固定在人类那一方） */
+let draftSeat: PlayerId = 'A';
+/** 上一次画出来的选卡快照，用来避免每帧重建整块遮罩 */
+let draftSig = '';
+/** 是否已经排了一次 AI 选卡（防止每帧都排） */
+let draftAiPending = false;
+
+function draftIsAi(side: PlayerId): boolean {
+  return isAiSide(state, side);
+}
+
+/**
+ * 座位交接。
+ *
+ * 禁用是盲禁：我交完就该把设备交出去，不能顺手替对面也点了。
+ * 选人期则完全由 order 决定——轮到谁，设备就跟着谁。
+ */
+function syncDraftSeat(): void {
+  const view = draftView(state);
+  if (!view || view.phase === 'done') return;
+  if (view.phase === 'pick' && view.toAct && !draftIsAi(view.toAct)) {
+    draftSeat = view.toAct;
+    return;
+  }
+  if (view.phase === 'ban') {
+    const mine = draftSeat === 'A' ? view.a : view.b;
+    if (!mine.banDone) return;
+    const other: PlayerId = draftSeat === 'A' ? 'B' : 'A';
+    const otherView = other === 'A' ? view.a : view.b;
+    if (!otherView.banDone && !draftIsAi(other)) draftSeat = other;
+  }
+}
+
+function dispatchDraft(action: Action, actor: PlayerId): boolean {
+  const result = applyAction(state, action, actor);
+  if (!result.ok) {
+    toast(result.reason);
+    return false;
+  }
+  state = result.state;
+  saveMatch(state);
+  if (state.draft?.phase === 'done') {
+    afterDraft();
+  } else {
+    render();
+  }
+  return true;
+}
+
+/** 选卡打完：把方向盘交回正常对局 */
+function afterDraft(): void {
+  draftSig = '';
+  draftEl.hidden = true;
+  render();
+  const names = (side: PlayerId) =>
+    (state.draft?.picks[side] ?? []).map((id) => state.unitTypes[id]?.name ?? id).join('、');
+  toast(`选卡完成 · 甲方：${names('A')} ／ 乙方：${names('B')}`);
+  if (isAiSide(state, state.current)) void runAiLoop();
+}
+
+/** 画（或收起）遮罩。每次 render 都会问一次，但只有内容变了才重建 DOM */
+function renderDraft(): void {
+  if (!draftInProgress(state)) {
+    if (!draftEl.hidden) draftEl.hidden = true;
+    draftSig = '';
+    stopDraftTicker();
+    return;
+  }
+  startDraftTicker();
+  draftEl.hidden = false;
+  syncDraftSeat();
+  const view = draftView(state)!;
+  const sig = [
+    view.phase,
+    view.step,
+    view.a.bans.join(','),
+    view.b.bans.join(','),
+    view.a.picks.join(','),
+    view.b.picks.join(','),
+    draftSeat,
+    view.remaining.length,
+  ].join('|');
+  if (sig !== draftSig) {
+    draftSig = sig;
+    draftEl.innerHTML = draftScreenHtml(state, {
+      seat: draftSeat,
+      now: Date.now(),
+      isAi: draftIsAi,
+    });
+    // AI 的那一手：晚半秒再动，让它看起来像在挑，而不是"你点完它就位"
+    scheduleDraftAi();
+  }
+  paintDraftTimer(draftEl, state, Date.now());
+}
+
+/**
+ * 倒计时与超时兜底。
+ *
+ * 只在选卡期间跑，选完就停：一个永远活着的 400ms 定时器会让页面和
+ * 测试都"关不掉"（Node 里它等于一直有关系挂着，进程不肯退出）。
+ *
+ * 放在界面侧而不是规则里，是因为"现在几点"不是规则的一部分：
+ * 规则只认动作里带的 `at`，谁先到点谁提交。这样同一个状态在哪台设备上
+ * 都能算出同样的结果，也不会因为某个客户端时钟慢半拍就把对局卡死。
+ */
+let draftTicker: number | null = null;
+
+function startDraftTicker(): void {
+  if (draftTicker !== null) return;
+  draftTicker = window.setInterval(() => {
+    if (!draftInProgress(state)) {
+      stopDraftTicker();
+      return;
+    }
+    const now = Date.now();
+    paintDraftTimer(draftEl, state, now);
+    if (draftSecondsLeft(state, now) > 0) return;
+    const view = draftView(state)!;
+    const actor = view.phase === 'ban' ? draftSeat : (view.toAct ?? draftSeat);
+    const r = applyAction(state, { type: 'DRAFT_TIMEOUT', at: now }, actor);
+    if (!r.ok) return;
+    state = r.state;
+    saveMatch(state);
+    if (state.draft?.phase === 'done') afterDraft();
+    else render();
+  }, 400);
+}
+
+function stopDraftTicker(): void {
+  if (draftTicker === null) return;
+  window.clearInterval(draftTicker);
+  draftTicker = null;
+}
+
+function scheduleDraftAi(): void {
+  if (draftAiPending) return;
+  const view = draftView(state);
+  if (!view) return;
+  const aiPending =
+    view.phase === 'ban'
+      ? (['A', 'B'] as PlayerId[]).some(
+          (side) => draftIsAi(side) && !(side === 'A' ? view.a : view.b).banDone,
+        )
+      : view.phase === 'pick' && !!view.toAct && draftIsAi(view.toAct);
+  if (!aiPending) return;
+
+  draftAiPending = true;
+  window.setTimeout(() => {
+    draftAiPending = false;
+    if (!draftInProgress(state)) return;
+    const now = draftView(state);
+    if (!now) return;
+    if (now.phase === 'ban') {
+      const side = (['A', 'B'] as PlayerId[]).find(
+        (sd) => draftIsAi(sd) && !(sd === 'A' ? now.a : now.b).banDone,
+      );
+      if (!side) return;
+      const id = aiDraftBan(state, side);
+      if (id) dispatchDraft({ type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+      return;
+    }
+    if (now.phase === 'pick' && now.toAct && draftIsAi(now.toAct)) {
+      const id = aiDraftPick(state, now.toAct);
+      if (id) dispatchDraft({ type: 'DRAFT_PICK', unitId: id, at: Date.now() }, now.toAct);
+    }
+  }, 600);
+}
+
+/** 点兵种卡：按当前阶段决定是禁用还是选用 */
+function onDraftClick(typeId: string): void {
+  const view = draftView(state);
+  if (!view) return;
+  if (view.phase === 'ban') {
+    const mine = draftSeat === 'A' ? view.a : view.b;
+    if (mine.banDone) {
+      toast('你已经禁用过了，等对面');
+      return;
+    }
+    dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, draftSeat);
+    return;
+  }
+  if (view.phase === 'pick') {
+    if (view.toAct !== draftSeat) {
+      toast(`等${state.players[view.toAct ?? 'A'].name}选完`);
+      return;
+    }
+    dispatchDraft({ type: 'DRAFT_PICK', unitId: typeId, at: Date.now() }, draftSeat);
+  }
 }
 
 function toast(msg: string): void {
@@ -4112,6 +4322,12 @@ appEl.addEventListener('click', (e) => {
   if (suppressClick) {
     suppressClick = false;
     if (target.closest('.board')) return;
+  }
+
+  const draftCard = target.closest<HTMLElement>('[data-draft]');
+  if (draftCard?.dataset.draft) {
+    onDraftClick(draftCard.dataset.draft);
+    return;
   }
 
   const actionEl = target.closest<HTMLElement>('[data-act]');

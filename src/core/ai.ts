@@ -62,6 +62,7 @@ import {
   utype,
   xyOf,
 } from './rules.ts';
+import { canUseType, eraWindowOk } from './draft.ts';
 import { canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
@@ -2686,7 +2687,10 @@ function recruitCandidate(
     // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
     if (heroBlocked(s, me, d)) return false;
-    if (d.era > src.era || d.era < src.era - 1) return false;
+    // 时代窗口与选卡名单走 core/draft 的同一套判据：
+    // 选卡模式下 AI 也只能造自己选到的兵，且旧时代的兵不再被"过时"挡住
+    if (!eraWindowOk(s, d, src.era)) return false;
+    if (!canUseType(s, me, d.id)) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
 

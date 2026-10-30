@@ -61,6 +61,19 @@ import {
   stowPlane,
 } from '../src/core/naval-carrier.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+import {
+  DRAFT_BAN_BASE,
+  DRAFT_PICK_BASE,
+  DRAFT_POOL_BASE,
+  aiDraftBan,
+  aiDraftPick,
+  canUseType,
+  draftBudget,
+  draftCandidates,
+  draftPickOrder,
+  eraWindowOk,
+  remainingUnits,
+} from '../src/core/draft.ts';
 import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
   newTimeline,
@@ -10919,6 +10932,240 @@ test('掠水：飞机能停在深水上，陆军进不去', () => {
   putTerrain(s, 3, 3, 'deep');
   assert.equal(canStandAt(s, 3, 3, 'af_scout'), true, '飞机应该能停在深水上（航母头顶也是空域）');
   assert.equal(canStandAt(s, 3, 3, 'militia'), false, '陆军进不了深水');
+});
+
+
+console.log('\n选卡模式');
+
+/** 禁用一步 */
+function banStep(state: GameState, side: PlayerId, unitId: string): GameState {
+  const r = applyAction(state, { type: 'DRAFT_BAN', unitId, at: state.draft!.deadline }, side);
+  assert.ok(r.ok, r.ok ? '' : `禁用失败：${r.reason}`);
+  return r.ok ? r.state : state;
+}
+
+/** 选人一步（自动取当前轮次的那一方） */
+function pickStep(state: GameState, unitId: string): GameState {
+  const side = state.draft!.order[state.draft!.step]!;
+  const r = applyAction(state, { type: 'DRAFT_PICK', unitId, at: state.draft!.deadline }, side);
+  assert.ok(r.ok, r.ok ? '' : `选人失败：${r.reason}`);
+  return r.ok ? r.state : state;
+}
+
+/** 把整轮 BP 打完（默认按池子顺序拿，保证是合法动作） */
+function finishDraft(state: GameState): GameState {
+  let st = state;
+  const pool = st.draft!.pool;
+  st = banStep(st, 'A', pool[0]!);
+  st = banStep(st, 'B', pool[1]!);
+  while (st.draft!.phase === 'pick') {
+    const left = remainingUnits(st);
+    if (left.length === 0) break;
+    st = pickStep(st, left[0]!);
+  }
+  return st;
+}
+
+test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位与非生产性建筑', () => {
+  const s = fresh({ draftMode: true }, 7101);
+  const draft = s.draft!;
+  assert.equal(draft.pool.length, DRAFT_POOL_BASE, `原版应抽 ${DRAFT_POOL_BASE} 个，实际 ${draft.pool.length}`);
+  assert.equal(draft.banSlots, DRAFT_BAN_BASE);
+  assert.equal(draft.pickSlots, DRAFT_PICK_BASE);
+  assert.equal(draft.phase, 'ban');
+
+  // 池子里的东西：战斗单位，或者"不产兵、不是桥"的建筑
+  for (const id of draft.pool) {
+    const def = s.unitTypes[id]!;
+    assert.ok(
+      def.category === 'combat' || (def.category === 'building' && !def.barracks && !def.bridges),
+      `${def.name} 不该进池子（${def.category}${def.barracks ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
+    );
+  }
+  // 骨架一律不进池：经济、建造、军营、桥
+  for (const id of ['farmer', 'laborer', 'camp', 'bridge']) {
+    assert.ok(!draft.pool.includes(id), `${id} 是骨架，不该进池`);
+  }
+});
+
+test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {
+  const s = fresh({ draftMode: true }, 7102);
+  const draft = s.draft!;
+  const eras = new Set(draft.pool.map((id) => s.unitTypes[id]!.era));
+  for (const era of [1, 2, 3, 4, 5]) {
+    const has = draftCandidates(s).some((id) => s.unitTypes[id]!.era === era);
+    if (!has) continue;
+    assert.ok(eras.has(era), `第 ${era} 时代有候选，池子里却没有 —— 分层抽样漏了`);
+  }
+  // 同一颗种子出同一个池子
+  const again = fresh({ draftMode: true }, 7102);
+  assert.deepEqual(again.draft!.pool, draft.pool, '同一个 seed 必须抽出同一个池子');
+});
+
+test('选卡：扩展新增兵种越多，池子/禁位/选位同步变大', () => {
+  const base = fresh({ draftMode: true }, 7103);
+  const baseBudget = draftBudget(base);
+  assert.equal(baseBudget.extra, 0, '原版对局不该有扩展兵');
+
+  // 开两包（海军 + 空军）：可进池的兵变多，池子必须跟着涨
+  const withPacks = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 14,
+      startEra: 5,
+      expansionIds: ['naval-fleet', 'air-corps'],
+      draftMode: true,
+    },
+    7104,
+  );
+  const big = draftBudget(withPacks);
+  assert.ok(big.extra > 0, '开了扩展就该有额外的可进池兵种');
+  assert.ok(big.pool > baseBudget.pool, `池子应该变大：${baseBudget.pool} → ${big.pool}`);
+  assert.ok(big.picks >= baseBudget.picks, '选位不该缩水');
+  assert.ok(big.picks > baseBudget.picks, `选位应该跟着涨：${baseBudget.picks} → ${big.picks}`);
+  assert.ok(withPacks.draft!.pool.length === big.pool, '实际池子长度要和预算一致');
+});
+
+test('选卡：盲禁——两边都交完才揭晓，禁掉的兵谁都拿不到', () => {
+  let s = fresh({ draftMode: true }, 7105);
+  const pool = s.draft!.pool;
+  const banned = pool[0]!;
+
+  s = banStep(s, 'A', banned);
+  assert.equal(s.draft!.phase, 'ban', '只有一方交了禁用，还不该进入选人');
+  assert.deepEqual(s.draft!.bans.A, [banned]);
+
+  s = banStep(s, 'B', pool[1]!);
+  assert.equal(s.draft!.phase, 'pick', '两边都交完才进入选人');
+  assert.ok(!remainingUnits(s).includes(banned), '被禁的兵必须从池子里消失');
+
+  // 拿被禁的那个去选：得被拒
+  const side = s.draft!.order[0]!;
+  const r = applyAction(s, { type: 'DRAFT_PICK', unitId: banned, at: s.draft!.deadline }, side);
+  assert.ok(!r.ok, '被禁用的兵不该能选');
+});
+
+test('选卡：蛇形顺序，选完 12 步交接给对局', () => {
+  assert.deepEqual(draftPickOrder(3), ['A', 'B', 'B', 'A', 'A', 'B'], '每轮交换首选权');
+  const order6 = draftPickOrder(6);
+  assert.equal(order6.length, 12);
+  assert.equal(order6.filter((x) => x === 'A').length, 6);
+  assert.equal(order6.filter((x) => x === 'B').length, 6);
+
+  let s = fresh({ draftMode: true }, 7106);
+  s = finishDraft(s);
+  assert.equal(s.draft!.phase, 'done');
+  assert.equal(s.draft!.picks.A.length, 6);
+  assert.equal(s.draft!.picks.B.length, 6);
+  assert.equal(s.current, 'A', '选完从甲方开局');
+  // 两边不许撞同一个兵
+  const both = new Set([...s.draft!.picks.A, ...s.draft!.picks.B]);
+  assert.equal(both.size, 12, '被选走的兵不能再被对面选');
+});
+
+test('选卡：没打完之前，走棋与产兵一律被拒', () => {
+  const s = fresh({ draftMode: true }, 7107);
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(!r.ok);
+  assert.match(r.reason, /选卡/);
+});
+
+test('选卡：名单外的兵造不出来，名单内的能造；骨架不受限', () => {
+  let s = fresh({ draftMode: true }, 7108);
+  s = finishDraft(s);
+  // 直接改写名单，才能稳定断言"名单内 / 名单外"这两种情况
+  s.draft!.picks.A = ['militia'];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  s.players.A.gold = 9000;
+
+  const ok = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(ok.ok, ok.ok ? '' : `名单内的民兵应该能造：${ok.reason}`);
+
+  const denied = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'archer' });
+  assert.ok(!denied.ok, '名单外的弓手不该能造');
+  assert.match(denied.reason, /名单/);
+
+  // 经济单位不在池子里，但永远能造（不然没有收入）
+  const econ = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'farmer' });
+  assert.ok(econ.ok, econ.ok ? '' : `经济单位不该被名单挡住：${econ.reason}`);
+});
+
+test('选卡：取消"低于城市两个时代就不能造"的下限', () => {
+  // 原版：E4 的城造不了 E1 的兵
+  const plain = fresh({}, 7109);
+  const pCity = plain.cities.find((c) => c.owner === 'A')!;
+  pCity.era = 4;
+  plain.players.A.gold = 9000;
+  const refused = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
+  assert.ok(!refused.ok, '没开选卡时，四个时代前的兵应该造不出来');
+  assert.match(refused.reason, /过时/);
+
+  // 选卡模式：同一个局面，名单里的民兵照样能造
+  let s = fresh({ draftMode: true }, 7110);
+  s = finishDraft(s);
+  s.draft!.picks.A = ['militia'];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  city.era = 4;
+  s.players.A.gold = 9000;
+  const allowed = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(allowed.ok, allowed.ok ? '' : `选卡模式下民兵应该能造：${allowed.reason}`);
+  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 4), true);
+  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), false);
+});
+
+test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () => {
+  let s = fresh({ draftMode: true }, 7111);
+  s = finishDraft(s);
+  s.draft!.picks.A = [];
+  // 开局配给里没有劳工（只有战斗单位 + 两个经济单位），自己摆一个
+  const laborer = place(s, 'A', 'laborer', 5, 5);
+  const spot = { x: 6, y: 5 };
+  putTerrain(s, 6, 5, 'plain');
+  const r = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'tower', x: spot.x, y: spot.y });
+  assert.ok(!r.ok, '没选到的塔不该能盖');
+  assert.match(r.reason, /名单/);
+
+  s.draft!.picks.A = ['tower'];
+  const ok = applyAction(s, { type: 'BUILD', unitId: laborer.id, unitType: 'tower', x: spot.x, y: spot.y });
+  assert.ok(ok.ok, ok.ok ? '' : `选到的塔应该能盖：${ok.reason}`);
+});
+
+test('选卡：超时——禁用视为放弃，选人由系统补一个', () => {
+  let s = fresh({ draftMode: true }, 7112);
+  // 只让 A 交禁用，B 超时
+  s = banStep(s, 'A', s.draft!.pool[0]!);
+  const late = s.draft!.deadline + 1;
+  const r = applyAction(s, { type: 'DRAFT_TIMEOUT', at: late }, 'B');
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  s = r.state;
+  assert.equal(s.draft!.phase, 'pick', '超时之后照样进入选人');
+  assert.deepEqual(s.draft!.bans.B.filter(Boolean), [], 'B 放弃了禁用，不该替它随机禁一个');
+  assert.ok(s.draft!.history.some((h) => h.side === 'B' && h.auto && h.unitId === null), '要留下"放弃"的记录');
+
+  // 选人超时：必须补一个，否则这一方凑不满名单
+  const before = s.draft!.picks[s.draft!.order[s.draft!.step]!].length;
+  const r2 = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline + 1 }, 'A');
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  s = r2.state;
+  const after = s.draft!.picks[s.draft!.order[s.draft!.step - 1]!].length;
+  assert.equal(after, before + 1, '超时方要被系统补选一个');
+  assert.ok(s.draft!.history.some((h) => h.auto && h.kind === 'pick' && h.unitId), '补选要留下记录');
+
+  // 没到时限的"超时"一律拒掉：只有时间能决定谁超时
+  const early = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline - 1000 }, 'A');
+  assert.ok(!early.ok, '没到点不该能提前触发超时');
+});
+
+test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
+  const s = fresh({ draftMode: true, aiOpponent: true }, 7113);
+  const banId = aiDraftBan(s, 'B');
+  assert.ok(banId, 'AI 应该能给出一个禁用');
+  assert.ok(s.draft!.pool.includes(banId!), 'AI 的禁用必须在池子里');
+
+  const pickId = aiDraftPick(s, 'B');
+  assert.ok(pickId, 'AI 应该能给出一个选人');
+  assert.ok(s.draft!.pool.includes(pickId!), 'AI 的选人必须在池子里');
+  assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
