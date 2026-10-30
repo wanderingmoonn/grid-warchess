@@ -60,31 +60,6 @@ export const TERRAIN_HEIGHT: Record<Terrain, number> = {
 };
 
 /**
- * 进入这一格要额外花的行动点（E）。**地形本身的代价**，和高差无关。
- *
- * 这一列 2026-10-30 取代了原来的"基础步耗"：地形不再改移动力，
- * 改的是行动点——移动这件事在一次行动里按走过的每一格收。
- *
- *   森林 5（穿林）、丘陵 5（上坡起步）、沼泽 10 / 浅流 10 / 沙丘 10（难走）
- *   其余 0；高山不可通行
- */
-export const TERRAIN_EXTRA_E: Record<Terrain, number> = {
-  water: 0,
-  deep: 0,
-  shallow: 10,
-  valley: 0,
-  marsh: 10,
-  plain: 0,
-  forest: 5,
-  city: 0,
-  bridge: 0,
-  hill: 5,
-  dune: 10,
-  plateau: 0,
-  mountain: Number.POSITIVE_INFINITY,
-};
-
-/**
  * 视野 = 高度层数（森林额外 −1，树冠把天遮了一半）。
  *
  * 2026-10-30 取消了两张"地形静态修正"表里的射程那一张：射程只由**高差**决定
@@ -112,10 +87,22 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   mountain: 0,
 };
 
-/** 每往上 1 层多花多少行动点 */
-export const CLIMB_E = 10;
-/** 每往下 1 层少花多少行动点（下坡省力，但不会倒赚：见 stepExtraE 的钳位） */
-export const DESCEND_E = 10;
+/**
+ * 每往上一层多花多少移动力。
+ *
+ * 2026-10-30 收口：地形高差**只留这一条移速惩罚**。以前这里还叠了
+ * 「各地形自己的额外步耗」（浅流 2、沼泽 2、熔岩 3）和「沼泽陷足 +1」，
+ * 叠到爬坡上经常把一格顶到 3~4 点，移动力 2 的兵连隔壁的丘陵都上不去——
+ * 部队被自己的地形规则堵死。现在只按高差算。
+ */
+export const CLIMB_COST = 1;
+/**
+ * 爬坡最多算几层。
+ *
+ * 封顶是给"从谷底爬到台地"这类极端落差留的活口：不封顶的话，
+ * 一层 +1 会一路叠上去，高地变成一堵爬不动的墙。
+ */
+export const CLIMB_CAP = 2;
 
 /**
  * 高度差影响射程的阈值。
@@ -127,27 +114,6 @@ export const RANGE_HEIGHT_BAND = 2;
 /** 沼泽陷足：从泥里拔出脚的那一格多花多少 */
 export const MARSH_BOG_E = 10;
 
-/**
- * 从 `from` 走进 `to` 这一格，地形要多收多少行动点。
- *
- * 三段相加：目标地形自带的额外消耗 + 爬坡（每层 +10）/ 下坡（每层 −10）+ 陷足
- * （从沼泽走出去 +10）。**下坡的减免最多把这一格的地形价抹平，不会变成"走路赚钱"**，
- * 所以结果钳在 0 以上——不然从台地冲下来一路倒赚，玩家会绕着山跑圈刷 E。
- */
-export function stepExtraE(from: Terrain | undefined, to: Terrain): number {
-  const toExtra = TERRAIN_EXTRA_E[to] ?? 0;
-  if (!Number.isFinite(toExtra)) return Number.POSITIVE_INFINITY;
-  let e = toExtra;
-  if (from) {
-    const dh = (TERRAIN_HEIGHT[to] ?? 0) - (TERRAIN_HEIGHT[from] ?? 0);
-    if (Number.isFinite(dh)) {
-      if (dh > 0) e += dh * CLIMB_E;
-      else if (dh < 0) e -= Math.min(-dh * DESCEND_E, toExtra);
-    }
-    if (from === 'marsh') e += MARSH_BOG_E;
-  }
-  return Math.max(0, e);
-}
 /** 这个扩展带来的地貌风格（地图生成器认这几个 id，各自带生成器） */
 export const HEIGHT_MAP_STYLES: Array<{
   id: string;
@@ -290,6 +256,28 @@ export const HEIGHT_TERRAIN: Expansion = {
   afterTerrain: softenPeaks,
   hooks: {
     terrainHeight: (t) => TERRAIN_HEIGHT[t] ?? 0,
+
+    /**
+     * 单格步耗：**只加爬坡这一条**。
+     *
+     * 往高处走每层 +1（封顶 2 层），下坡与平走不加价、也不减价。
+     * 各地形自带的额外步耗与沼泽陷足都已取消——它们和爬坡叠加之后，
+     * 移动力 2 的兵连相邻的丘陵都迈不上去，那是规则把自己堵死。
+     *
+     * 最后再钳一下：**一格最多吃掉这个兵全部的移动力**。
+     * 这样"爬得上去"永远成立（有移动力就上得去），只是这一回合就到头了；
+     * 不会出现"看起来能走、点了没反应"的死角。
+     */
+    modifyStepCost: ({ state, unit, from, to, cost }) => {
+      if (!from) return undefined;
+      const dh = (TERRAIN_HEIGHT[to] ?? 0) - (TERRAIN_HEIGHT[from] ?? 0);
+      if (!(dh > 0)) return undefined;
+      const out = cost + Math.min(CLIMB_CAP, dh) * CLIMB_COST;
+      if (!unit) return out;
+      // 兵种自己的移动力（天气/减益会再压它，这里取表里的基础值做上限）
+      const move = state.unitTypes[unit.type]?.move ?? 0;
+      return move > 0 ? Math.min(out, move) : out;
+    },
 
     /**
      * 射程：只看与目标的高度差。

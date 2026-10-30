@@ -38,9 +38,7 @@
  *     也不会出现"我明明没 E 了却打空了"这种说不清的结果。
  */
 
-import { CONFIG, navigable, passable } from './config.ts';
-import { stepExtraE } from './height-terrain.ts';
-import type { GameState, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { GameState, Unit, UnitTypeDef } from './types.ts';
 import type { Expansion } from './expansions.ts';
 
 /* ══════════════════════════════════════════════════════════════════
@@ -63,7 +61,7 @@ export const AP_BY_TIER = {
 
 /** 三类行动的默认消耗 */
 export const AP_COST = {
-  /** 移动 / 上下船：一次行动的基础价，地形额外消耗另计（见 height-terrain 的 stepExtraE） */
+  /** 移动 / 上下船：一次行动一个价，和地形无关（地形的代价走移动力，不进 E） */
   move: 20,
   /** 一次攻击。多段攻击（burst = n）的单位把它拆成 n 段，每段 40/n */
   attack: 40,
@@ -219,91 +217,6 @@ export function apMaxOf(def: UnitTypeDef | undefined, id: string): number {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * 一·五、按格累加：这一回合走过去的路，地形各收多少
- * ══════════════════════════════════════════════════════════════════ */
-
-/**
- * 走一趟的地形额外消耗。
- *
- * 引擎一次移动只记「从哪到哪」，不记路径（`Unit` 上没有 path 字段，
- * 行动级也没有钩子能截住"刚走完这一步"）。所以这里按**最省脚力的那条路**
- * 反推：用 `CONFIG.terrainCost`（移动力）做 Dijkstra，再把沿途每一格的地形价
- * 加起来。玩家实际走的路和它一致的概率极高——界面画的那条线就是同一种搜索。
- *
- * 算错的后果只在这个方向上：绕远路走贵地形，按便宜那条收费（少收，不多收）。
- * 反过来的话玩家会为了省 E 特意绕路，那才是会被利用的口子。
- */
-const stepPathCache = new Map<string, number>();
-
-function pathExtraE(s: GameState, u: Unit, fromX: number, fromY: number): number {
-  const toIdx = u.y * s.w + u.x;
-  const fromIdx = fromY * s.w + fromX;
-  if (fromIdx === toIdx) return 0;
-  const key = `${s.seed}:${s.turn}:${u.type}:${fromIdx}>${toIdx}`;
-  const hit = stepPathCache.get(key);
-  if (hit !== undefined) return hit;
-
-  const n = s.w * s.h;
-  const dist = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
-  const prev = new Int32Array(n).fill(-1);
-  const done = new Uint8Array(n);
-  const water = u.type ? false : false; // 占位：船的判定在下面按 navigable 走
-  void water;
-  const canEnter = (t: Terrain | undefined): boolean =>
-    t !== undefined && (passable(t) || navigable(t));
-  dist[fromIdx] = 0;
-  for (let iter = 0; iter < n; iter += 1) {
-    let cur = -1;
-    for (let i = 0; i < n; i += 1) {
-      if (!done[i] && dist[i]! < Number.POSITIVE_INFINITY) {
-        if (cur < 0 || dist[i]! < dist[cur]!) cur = i;
-      }
-    }
-    if (cur < 0) break;
-    done[cur] = 1;
-    if (cur === toIdx) break;
-    const cx = cur % s.w;
-    const cy = (cur - cx) / s.w;
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const nx = cx + dx;
-      const ny = cy + dy;
-      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-      const ni = ny * s.w + nx;
-      if (done[ni]) continue;
-      const t = s.tiles[ni]?.terrain;
-      if (!canEnter(t)) continue;
-      const w = Math.min(99, CONFIG.terrainCost[t!] ?? 1);
-      const nd = dist[cur]! + w;
-      if (nd < dist[ni]!) {
-        dist[ni] = nd;
-        prev[ni] = cur;
-      }
-    }
-  }
-
-  let e = 0;
-  let cur = prev[toIdx] ?? -1;
-  let guard = 0;
-  while (cur >= 0 && cur !== fromIdx && guard < n) {
-    guard += 1;
-    const px = cur % s.w;
-    const py = (cur - px) / s.w;
-    const fromTerrain = s.tiles[py * s.w + px]?.terrain;
-    const cx = (prev[cur] ?? -1) >= 0 ? (prev[cur]! % s.w) : -1;
-    void cx;
-    const nextTile = s.tiles[cur]?.terrain;
-    e += stepExtraE(fromTerrain, nextTile!);
-    cur = prev[cur] ?? -1;
-  }
-  // 终点那一格单独算（循环里算的是"进入 prev 格"）
-  const endTile = s.tiles[toIdx]?.terrain;
-  e += stepExtraE(undefined, endTile!);
-  stepPathCache.set(key, e);
-  if (stepPathCache.size > 512) stepPathCache.clear();
-  return e;
-}
-
-/* ══════════════════════════════════════════════════════════════════
  * 二、账本：靠 `Unit.custom.ap` 里的一个开账记录
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -437,15 +350,10 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
   base.settled = true;
 
   const items: ApSpend[] = [];
-  // ① 机动（移动 / 上下船）：站位和开账时不一样就是走过。
-  //    价格 = 基础价 + 沿途每一格的地形价（穿林、上坡、踩泥各收各的）。
+  // ① 机动（移动 / 上下船）：站位和开账时不一样就是走过
   const moved = u.x !== mark.x || u.y !== mark.y;
-  let moveE = cost.move;
-  if (moved) {
-    moveE = cost.move + pathExtraE(s, u, mark.x, mark.y);
-    cost.move = moveE;
-    items.push({ action: 'move', label: AP_ACTION_NAME.move, e: moveE });
-  }
+  const moveE = cost.move;
+  if (moved) items.push({ action: 'move', label: AP_ACTION_NAME.move, e: moveE });
 
   // ② 技能：`skillTurn` 记的是"上一次放技能在哪个回合"
   const skilled = u.skillTurn === turn;
@@ -482,7 +390,7 @@ export const ACTION_POINTS: Expansion = {
   name: '行动点',
   summary:
     '移动、攻击、上下船、释放技能统一成"行动"，每次从单位自己的行动点（E）里扣：' +
-    `移动/上下船 ${AP_COST.move}E（另加沿途地形价）、攻击每段 ${AP_COST.attack}/段数 E、技能 ${AP_COST.skill}E；` +
+    `移动/上下船 ${AP_COST.move}E、攻击每段 ${AP_COST.attack}/段数 E、技能 ${AP_COST.skill}E；` +
     `池子按兵种分档：骑兵/车 ${AP_BY_TIER.mounted}、远程 ${AP_BY_TIER.ranged}、其余 ${AP_BY_TIER.base}。` +
     `E 不够就走不动、也打不出第二下；技能与保底那一击拦不住，会记成透支，下回合先扣回去。`,
   scale: 'small',
@@ -593,7 +501,11 @@ export const ACTION_POINTS: Expansion = {
       if (!L.settled) {
         lines.push('本回合还没开账（刚上场，轮到自己才开始算）');
       } else {
-        lines.push(`本回合：${L.items.map((it) => `${it.label} −${it.e}`).join('、')}`);
+        lines.push(
+          L.items.length > 0
+            ? `本回合：${L.items.map((it) => `${it.label} −${it.e}`).join('、')}`
+            : '本回合：什么都没做（不扣 E）',
+        );
       }
 
       // 单价只在"有减免"时写出来：没有减免时它和规则书的默认值一样，纯占地方

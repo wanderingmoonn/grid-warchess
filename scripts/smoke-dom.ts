@@ -945,20 +945,20 @@ check('能选地貌与地形对称方式', () => {
 });
 
 check('地貌按钮只在勾了「地形高差」之后才出现', () => {
-  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/火山群/沼泽/群岛/大川
-  // 这六颗 chip 完全由"勾没勾那个扩展"决定。
-  const extra = ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river'];
+  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/沼泽/群岛/大川
+  // 这五颗 chip 完全由"勾没勾那个扩展"决定（火山群已随熔岩/火山一起删掉）。
+  const extra = ['highland', 'canyon', 'marsh', 'isles', 'river'];
 
   // 默认没勾：一颗都不该有，否则玩家会选到一张"规则里没有高度"的图
   for (const id of extra) {
     assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没勾扩展不该有 ${id}`);
   }
-  // 但那六种之外的基础地貌要在（别为了藏而把整行都藏了）
+  // 但那五种之外的基础地貌要在（别为了藏而把整行都藏了）
   for (const id of ['random', 'river-h', 'ridge', 'open']) {
     assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `基础地貌 ${id} 该一直在`);
   }
 
-  // 勾上扩展：六颗当场出现（面板会整块重绘，所以要重新查节点）
+  // 勾上扩展：五颗当场出现（面板会整块重绘，所以要重新查节点）
   const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
   assert.ok(box, '「地形高差」应该出现在扩展列表里（它已经对玩家开放）');
   box.checked = true;
@@ -2255,27 +2255,28 @@ check('行动点面板：还剩多少 E、这一回合花在哪、单价为什�
     });
   const text = (): string => host.textContent ?? '';
 
-  // ① 民兵站着不动：驻扎扣 20，没有减免所以不写单价
+  // ① 民兵站着不动：什么都不扣（驻扎已取消），池子原样
   paint(foot);
-  assert.ok(text().includes('行动点 80 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
-  assert.ok(text().includes('本回合：驻扎 −20'), '什么都没干要写成驻扎');
+  assert.ok(text().includes('行动点 100 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
+  assert.ok(text().includes('本回合：什么都没做'), '什么都没干要说清楚，而不是留一行空白');
 
   // ② 走过一格：记成移动
   foot.custom = { ap: { turn: st.turn, x: 4, y: 5, debt: 0, over: 0 } };
   paint(foot);
-  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动，不再写驻扎');
+  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动');
+  assert.ok(text().includes('行动点 80 / 100 E'), '走一步扣 20');
 
   // ③ 斥候：骑兵 −5、近战 −10，两行单价要说得出"为什么便宜"
   paint(horse);
-  assert.ok(text().includes('行动点 85 / 100 E'), '斥候驻扎/移动都只花 15');
+  assert.ok(text().includes('行动点 120 / 120 E'), '斥候是骑兵：池子 120（这一格还没走）');
   assert.ok(text().includes('机动 15E（骑兵）'), '骑兵的机动便宜要写出来');
   assert.ok(text().includes('出手 30E（近战）'), '近战的出手便宜要写出来');
 
   // ④ 池子见底：要明说走不动 / 打不出第二下，而不是让玩家点下去才发现
-  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 88, over: 0 } };
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 110, over: 0 } };
   paint(horse);
   assert.ok(text().includes('走不动了'), 'E 见底要写在面板上');
-  assert.ok(text().includes('上回合透支 88'), '透支了多少要交代');
+  assert.ok(text().includes('上回合透支 110'), '透支了多少要交代');
 });
 
 check('新英雄的技能按钮挂上了对应技能', () => {
