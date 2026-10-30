@@ -38,61 +38,53 @@
  *     也不会出现"我明明没 E 了却打空了"这种说不清的结果。
  */
 
-import type { GameState, Unit, UnitTypeDef } from './types.ts';
+import { CONFIG, navigable, passable } from './config.ts';
+import { stepExtraE } from './height-terrain.ts';
+import type { GameState, Terrain, Unit, UnitTypeDef } from './types.ts';
 import type { Expansion } from './expansions.ts';
 
 /* ══════════════════════════════════════════════════════════════════
  * 一、配置：所有数值都在这一段里
  * ══════════════════════════════════════════════════════════════════ */
 
-/** 一个单位一个回合的行动点上限。移动 20 + 出手 40 + 技能 60 = 120 > 100：
- *  这三件事同一回合做不全，这就是这套规则真正的牙齿。 */
-export const AP_MAX = 100;
-
 /**
- * 五种"行动"的默认消耗。
+ * 一个单位一个回合的行动点上限（E）——**兵种自身属性**，不是全局常数。
  *
- * 注意 `move` 这一档**同时管移动和上下船**：引擎里上下船表现为"单位换个位置
- * 重新进场"（LOAD 把它从棋盘上摘走，UNLOAD 在岸边放回来），从外面看和走一步
- * 是同一件事。分成两个键只会在配置里造出一对永远相等的数字。
+ * 2026-10-30 从固定的 100 改成「和血量一样写在兵种身上」：有的兵行动能力强，
+ * 一回合能干的事就多，这是它的优势（灵活）。没写 `def.ap` 的兵按下面这几档。
  */
+export const AP_BY_TIER = {
+  mounted: 120,
+  vehicle: 120,
+  ranged: 110,
+  base: 100,
+  building: 0,
+} as const;
+
+/** 三类行动的默认消耗 */
 export const AP_COST = {
-  /** 移动 / 上下船 */
+  /** 移动 / 上下船：一次行动的基础价，地形额外消耗另计（见 height-terrain 的 stepExtraE） */
   move: 20,
-  /** 一次攻击（多段攻击的单位每段各算一次） */
+  /** 一次攻击。多段攻击（burst = n）的单位把它拆成 n 段，每段 40/n */
   attack: 40,
-  /** 驻扎：这一回合就地不动、也不出手 */
-  hold: 20,
-  /** 释放一次主动技能。引擎只在 `skillTurn` 里记"哪一回合放的"，不记技能 id，
-   *  所以这里只能定一个统一价：分档定价需要核心先多记一个字段（见文档第八节）。 */
+  /**
+   * 释放一次主动技能。
+   *
+   * **待定**：设计表上写的是「待定」，先沿用 60。引擎只记 `skillTurn`（哪一回合放的），
+   * 不记技能 id，所以眼下也只能是一个统一价；要分档得让核心先多记一个字段。
+   */
   skill: 60,
 } as const;
 
-/** 四档行动在界面上怎么念（上下船并入移动那一档）。表驱动，免得面板里散落中文字面量 */
+/** 三档行动在界面上怎么念（上下船并入移动那一档）。表驱动，免得面板里散落中文字面量 */
 export const AP_ACTION_NAME = {
   move: '移动',
   attack: '攻击',
-  hold: '驻扎',
   skill: '技能',
 } as const;
 
 export type ApAction = keyof typeof AP_COST;
 
-/**
- * 驻扎吃哪一类的减免。
- *
- * 驻扎和机动是**同一档**：一个单位这一回合要么走过去（移动），要么就地待着（驻扎），
- * 两者互斥，占的是同一份预算。所以骑兵/车的机动折扣在这里也照样生效。
- *
- * 这不只是"顺手"：驻扎如果比移动便宜，一个"先待着、再走一步"的单位会看到
- * E 先掉 20 再涨回来 5——账越算越多，玩家只会以为算错了。同价就没有这种回涨。
- */
-const HOLD_USES_MOD = 'move' as const;
-
-/**
- * 兵种类别对 E 的修正。**这就是"骑兵 −5、近战 −10"唯一出现的地方**，
- * 改数值只改这张表，改兵种归属只改下面的 id 名单。
- */
 export const AP_CLASS_MOD = {
   /** 骑兵类：机动更省 —— 移动 −5E */
   mounted: { move: -5 },
@@ -201,13 +193,114 @@ export function apActionCost(
   id: string,
   action: ApAction,
 ): number {
-  let e = AP_COST[action];
-  const modKey = action === 'hold' ? HOLD_USES_MOD : action;
+  let e: number = AP_COST[action];
+  // 攻击按段数拆：burst = n 的单位每次 40/n（打满 n 段仍是 40）
+  if (action === 'attack') e = e / Math.max(1, def?.burst ?? 1);
   for (const cls of apClassesOf(def, id)) {
     const mod = AP_CLASS_MOD[cls] as Partial<Record<ApAction, number>>;
-    e += mod[modKey] ?? 0;
+    e += mod[action] ?? 0;
   }
-  return Math.max(5, e);
+  return Math.max(5, Math.round(e * 100) / 100);
+}
+
+/**
+ * 这个兵种每回合的行动点上限。
+ *
+ * `def.ap` 优先（兵种编辑器里能改），否则按分档：建筑 0、骑兵/车 120、
+ * 远程 110、其余 100。建筑返回 0 表示「不参与」。
+ */
+export function apMaxOf(def: UnitTypeDef | undefined, id: string): number {
+  if (def?.category === 'building') return AP_BY_TIER.building;
+  if (typeof def?.ap === 'number' && def.ap > 0) return def.ap;
+  const classes = apClassesOf(def, id);
+  if (classes.includes('mounted') || classes.includes('vehicle')) return AP_BY_TIER.mounted;
+  if ((def?.range ?? 1) >= 2 && def?.category === 'combat') return AP_BY_TIER.ranged;
+  return AP_BY_TIER.base;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 一·五、按格累加：这一回合走过去的路，地形各收多少
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 走一趟的地形额外消耗。
+ *
+ * 引擎一次移动只记「从哪到哪」，不记路径（`Unit` 上没有 path 字段，
+ * 行动级也没有钩子能截住"刚走完这一步"）。所以这里按**最省脚力的那条路**
+ * 反推：用 `CONFIG.terrainCost`（移动力）做 Dijkstra，再把沿途每一格的地形价
+ * 加起来。玩家实际走的路和它一致的概率极高——界面画的那条线就是同一种搜索。
+ *
+ * 算错的后果只在这个方向上：绕远路走贵地形，按便宜那条收费（少收，不多收）。
+ * 反过来的话玩家会为了省 E 特意绕路，那才是会被利用的口子。
+ */
+const stepPathCache = new Map<string, number>();
+
+function pathExtraE(s: GameState, u: Unit, fromX: number, fromY: number): number {
+  const toIdx = u.y * s.w + u.x;
+  const fromIdx = fromY * s.w + fromX;
+  if (fromIdx === toIdx) return 0;
+  const key = `${s.seed}:${s.turn}:${u.type}:${fromIdx}>${toIdx}`;
+  const hit = stepPathCache.get(key);
+  if (hit !== undefined) return hit;
+
+  const n = s.w * s.h;
+  const dist = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
+  const prev = new Int32Array(n).fill(-1);
+  const done = new Uint8Array(n);
+  const water = u.type ? false : false; // 占位：船的判定在下面按 navigable 走
+  void water;
+  const canEnter = (t: Terrain | undefined): boolean =>
+    t !== undefined && (passable(t) || navigable(t));
+  dist[fromIdx] = 0;
+  for (let iter = 0; iter < n; iter += 1) {
+    let cur = -1;
+    for (let i = 0; i < n; i += 1) {
+      if (!done[i] && dist[i]! < Number.POSITIVE_INFINITY) {
+        if (cur < 0 || dist[i]! < dist[cur]!) cur = i;
+      }
+    }
+    if (cur < 0) break;
+    done[cur] = 1;
+    if (cur === toIdx) break;
+    const cx = cur % s.w;
+    const cy = (cur - cx) / s.w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+      const ni = ny * s.w + nx;
+      if (done[ni]) continue;
+      const t = s.tiles[ni]?.terrain;
+      if (!canEnter(t)) continue;
+      const w = Math.min(99, CONFIG.terrainCost[t!] ?? 1);
+      const nd = dist[cur]! + w;
+      if (nd < dist[ni]!) {
+        dist[ni] = nd;
+        prev[ni] = cur;
+      }
+    }
+  }
+
+  let e = 0;
+  let cur = prev[toIdx] ?? -1;
+  let guard = 0;
+  while (cur >= 0 && cur !== fromIdx && guard < n) {
+    guard += 1;
+    const px = cur % s.w;
+    const py = (cur - px) / s.w;
+    const fromTerrain = s.tiles[py * s.w + px]?.terrain;
+    const cx = (prev[cur] ?? -1) >= 0 ? (prev[cur]! % s.w) : -1;
+    void cx;
+    const nextTile = s.tiles[cur]?.terrain;
+    e += stepExtraE(fromTerrain, nextTile!);
+    cur = prev[cur] ?? -1;
+  }
+  // 终点那一格单独算（循环里算的是"进入 prev 格"）
+  const endTile = s.tiles[toIdx]?.terrain;
+  e += stepExtraE(undefined, endTile!);
+  stepPathCache.set(key, e);
+  if (stepPathCache.size > 512) stepPathCache.clear();
+  return e;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -313,39 +406,46 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
   const cost: Record<ApAction, number> = {
     move: apActionCost(def, u.type, 'move'),
     attack: apActionCost(def, u.type, 'attack'),
-    hold: apActionCost(def, u.type, 'hold'),
     skill: apActionCost(def, u.type, 'skill'),
   };
+  /** 这个兵这一回合的池子：和血量一样写在兵种身上（没写就按分档） */
+  const max = def?.category === 'building' ? 0 : apMaxOf(def, u.type);
   const base: ApLedger = {
     active: def?.category !== 'building',
     settled: false,
-    max: AP_MAX,
-    start: AP_MAX,
+    max,
+    start: max,
     debt: 0,
     spent: 0,
-    left: AP_MAX,
+    left: max,
     over: 0,
     items: [],
     attacksAllowed: Math.max(1, def?.burst ?? 1),
     cost,
     classes,
   };
-  // 建筑不参与：城墙不会"走"、也不会"驻扎"，把 20E 记在它头上纯属噪音
+  // 建筑不参与：城墙不会"走"，把 20E 记在它头上纯属噪音
   if (!base.active) return base;
 
   const mark = readMark(u);
   const turn = ledgerTurn(s, u);
   const debt = Math.max(0, mark?.debt ?? 0);
   base.debt = debt;
-  base.start = Math.max(0, AP_MAX - debt);
+  base.start = Math.max(0, max - debt);
   base.left = base.start;
   if (!mark || mark.turn !== turn) return base; // 还没开账：按满池显示
   base.settled = true;
 
   const items: ApSpend[] = [];
-  // ① 机动（移动 / 上下船）：站位和开账时不一样就是走过
+  // ① 机动（移动 / 上下船）：站位和开账时不一样就是走过。
+  //    价格 = 基础价 + 沿途每一格的地形价（穿林、上坡、踩泥各收各的）。
   const moved = u.x !== mark.x || u.y !== mark.y;
-  if (moved) items.push({ action: 'move', label: AP_ACTION_NAME.move, e: cost.move });
+  let moveE = cost.move;
+  if (moved) {
+    moveE = cost.move + pathExtraE(s, u, mark.x, mark.y);
+    cost.move = moveE;
+    items.push({ action: 'move', label: AP_ACTION_NAME.move, e: moveE });
+  }
 
   // ② 技能：`skillTurn` 记的是"上一次放技能在哪个回合"
   const skilled = u.skillTurn === turn;
@@ -355,7 +455,7 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
   //    `attacksLeft` 只在 doAttack 里第一次攻击时才会被赋值，所以
   //    "有值"就等于"打过至少一次"，这正好用来兜住引擎那记保底首击
   //    （允许 0 次时 attacksLeft 仍会被填成 1，于是这里记 1 次并透支出钱）。
-  const budget = base.start - (moved ? cost.move : 0) - (skilled ? cost.skill : 0);
+  const budget = base.start - (moved ? moveE : 0) - (skilled ? cost.skill : 0);
   const allowed = Math.max(0, Math.floor(Math.max(0, budget) / cost.attack));
   const ceiling = Math.max(1, def?.burst ?? 1);
   const total = Math.min(ceiling, allowed);
@@ -363,11 +463,6 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
   base.attacksAllowed = total;
   if (used > 0) {
     items.push({ action: 'attack', label: AP_ACTION_NAME.attack, e: used * cost.attack });
-  }
-
-  // ④ 驻扎：这一回合什么都没干。它必须排在最后判——先看有没有别的消耗
-  if (items.length === 0) {
-    items.push({ action: 'hold', label: AP_ACTION_NAME.hold, e: cost.hold });
   }
 
   const spent = items.reduce((n, it) => n + it.e, 0);
@@ -378,15 +473,6 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
   return base;
 }
 
-/** 这个单位这一回合是不是在驻扎（护甲加成、界面文案共用同一个判据） */
-function isHolding(s: GameState, u: Unit): boolean {
-  const L = apLedger(s, u);
-  return L.settled && L.items.some((it) => it.action === 'hold');
-}
-
-/** 驻扎的护甲对价。不写在配置段里，是因为它不是"消耗"而是"换来的东西" */
-export const AP_HOLD_ARMOR = 2;
-
 /* ══════════════════════════════════════════════════════════════════
  * 三、扩展本体
  * ══════════════════════════════════════════════════════════════════ */
@@ -395,11 +481,10 @@ export const ACTION_POINTS: Expansion = {
   id: 'action-points',
   name: '行动点',
   summary:
-    '移动、攻击、驻扎、上下船、释放技能统一成"行动"，每次从单位自己的行动点（E）里扣：' +
-    `移动/上下船 ${AP_COST.move}E、攻击 ${AP_COST.attack}E、驻扎 ${AP_COST.hold}E、技能 ${AP_COST.skill}E，` +
-    `一个回合共 ${AP_MAX}E。骑兵与车机动 −5E、近战出手 −10E。` +
-    `E 不够就走不动、也打不出第二下；技能与保底那一击拦不住，会记成透支，下回合先扣回去。` +
-    `驻扎（这一回合什么都没干）额外 +${AP_HOLD_ARMOR} 护甲。`,
+    '移动、攻击、上下船、释放技能统一成"行动"，每次从单位自己的行动点（E）里扣：' +
+    `移动/上下船 ${AP_COST.move}E（另加沿途地形价）、攻击每段 ${AP_COST.attack}/段数 E、技能 ${AP_COST.skill}E；` +
+    `池子按兵种分档：骑兵/车 ${AP_BY_TIER.mounted}、远程 ${AP_BY_TIER.ranged}、其余 ${AP_BY_TIER.base}。` +
+    `E 不够就走不动、也打不出第二下；技能与保底那一击拦不住，会记成透支，下回合先扣回去。`,
   scale: 'small',
 
   hooks: {
@@ -489,16 +574,6 @@ export const ACTION_POINTS: Expansion = {
       if (!L.settled) return attacks;
       return Math.min(attacks, L.attacksAllowed);
     },
-
-    /**
-     * 驻扎的对价：+2 护甲。
-     *
-     * 没有这一条，"驻扎 20E"就是纯扣分——一条只会惹人问"我到底买到了什么"的规则。
-     * 加成只在**防守**时算（ctx.defender），并且从自己回合一直挂到下次开账，
-     * 于是"按住不动"真的等于"这一轮都在这儿架着"。
-     */
-    modifyArmor: ({ state, defender, armor }) =>
-      isHolding(state, defender) ? armor + AP_HOLD_ARMOR : armor,
 
     /**
      * 面板上的三行。

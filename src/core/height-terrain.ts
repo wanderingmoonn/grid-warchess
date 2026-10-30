@@ -26,109 +26,128 @@
  */
 
 import { buildContour } from './height-mapgen.ts';
-import type { Expansion, TurnEndCtx } from './expansions.ts';
+import type { Expansion } from './expansions.ts';
 import type { Terrain } from './types.ts';
 
 /**
- * 高度阶梯（层）。
+ * 高度（层）：**相对平原**的带符号层数，平原 = 0。
  *
- * 数值刻意做成整数层而不是"海拔多少米"：规则只关心相对高低，
- * 层数越少越容易在界面上讲清楚（面板直接写"高 2 层"）。
+ * 2026-10-30 改成有符号：以前是"绝对海拔"（水 0、平原 2、台地 4），
+ * 差值才是规则真正读的东西，而绝对刻度逼着人每次心算减法。现在直接写差值，
+ * 面板上"高 2 层"和表里的数字是同一个数。
  *
- *   water 0 → shallow / valley / marsh / lava 1 → plain / forest / city / bridge 2
- *   → hill / dune 3 → plateau 4 → mountain 5 → volcano 6
+ *   valley / marsh −1 → plain（水、森林、城、桥）0 → hill / dune +1
+ *   → plateau +2 → mountain +∞（站不上去）
+ *
+ * 浅流、水域、深水都是 0：水面和陆地基准面齐平，真正的落差来自岸线而不是水深
+ * （水文上的深浅由"能不能过、大舰会不会搁浅"表达，那是另一条规则）。
  */
 export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   water: 0,
-  // 深水：外海，比沿岸水面低一档（浅水看得见海底，深水看不见）
   deep: 0,
-  // 浅流：水皮刚过脚踝，跟谷地/沼泽一个高度档
-  shallow: 1,
-  // 低洼：谷地、沼泽，还有火山脚下那圈熔岩
-  valley: 1,
-  marsh: 1,
-  lava: 1,
-  // 基准面：平原、林地、城、桥
-  plain: 2,
-  forest: 2,
-  city: 2,
-  bridge: 2,
-  // 上一层：丘陵与沙脊
-  hill: 3,
-  dune: 3,
-  // 台地比丘陵再高一档
-  plateau: 4,
-  // 天险：高山、火山
-  mountain: 5,
-  volcano: 6,
-};
-
-/**
- * 地形自带的射程修正（站在这一格上时生效）。
- *
- * 和"高度差"是两回事，两个都要算：
- *   · 高度差讲"我和目标谁高"（动态，看对手站哪）；
- *   · 这里讲"这一格本身好不好观察"（静态）。森林哪怕在山脊上也挡视线，
- *     所以它不能只由高度算出来。
- */
-export const TERRAIN_RANGE_MOD: Record<Terrain, number> = {
+  shallow: 0,
+  valley: -1,
+  marsh: -1,
   plain: 0,
-  forest: -1, // 树冠挡视线
-  hill: 1, // 制高点
-  water: 0,
-  deep: 0, // 外海：没有遮挡，但也没有制高点
-  shallow: 0, // 蹲在水里，视野没好处也没坏处
-  mountain: 0,
-  bridge: 0,
+  forest: 0,
   city: 0,
-  plateau: 1, // 台地边缘视野极好
-  valley: -1, // 被两坡夹着，看出去一半是坡
-  marsh: 0, // 芦苇挡一点、地势平，对冲
-  dune: 1, // 沙脊上看得远
-  lava: 0,
-  volcano: 0,
+  bridge: 0,
+  hill: 1,
+  dune: 1,
+  plateau: 2,
+  // 天险：任何单位都上不去，用无穷大表示"不参与算账"
+  mountain: Number.POSITIVE_INFINITY,
 };
 
 /**
- * 地形自带的视野修正（站上去那一刻）。
+ * 进入这一格要额外花的行动点（E）。**地形本身的代价**，和高差无关。
  *
- * 和射程修正分开列：视野是"我能看多远"，射程是"我能打多远"，
- * 海面上看得远不代表打得远。浅流踩在水里，视野不打折但防御要打折（那是另一条规则）。
+ * 这一列 2026-10-30 取代了原来的"基础步耗"：地形不再改移动力，
+ * 改的是行动点——移动这件事在一次行动里按走过的每一格收。
+ *
+ *   森林 5（穿林）、丘陵 5（上坡起步）、沼泽 10 / 浅流 10 / 沙丘 10（难走）
+ *   其余 0；高山不可通行
+ */
+export const TERRAIN_EXTRA_E: Record<Terrain, number> = {
+  water: 0,
+  deep: 0,
+  shallow: 10,
+  valley: 0,
+  marsh: 10,
+  plain: 0,
+  forest: 5,
+  city: 0,
+  bridge: 0,
+  hill: 5,
+  dune: 10,
+  plateau: 0,
+  mountain: Number.POSITIVE_INFINITY,
+};
+
+/**
+ * 视野 = 高度层数（森林额外 −1，树冠把天遮了一半）。
+ *
+ * 2026-10-30 取消了两张"地形静态修正"表里的射程那一张：射程只由**高差**决定
+ * （差 2 层以上 ±1），丘陵/台地/沙丘以前那点"制高点 +1"现在由高度自然表达，
+ * 再单独挂一份静态修正就是同一件事算两次。视野留着，因为森林挡视线是高度算不出来的。
  */
 export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
-  plain: 0,
-  forest: -1, // 树冠把天遮了一半
-  hill: 1,
+  // 水面上没有遮挡，也没有制高点
   water: 0,
   deep: 0,
   shallow: 0,
-  mountain: 0,
-  bridge: 0,
-  city: 0,
-  plateau: 1,
+  // 洼地：被两侧坡挡住
   valley: -1,
-  marsh: -1, // 芦苇比人高
+  marsh: -1,
+  // 基准面。森林是唯一"高度 0 但挡视线"的：树冠
+  plain: 0,
+  forest: -1,
+  city: 0,
+  bridge: 0,
+  // 高处看得远
+  hill: 1,
   dune: 1,
-  lava: 0,
-  volcano: 0,
+  plateau: 2,
+  // 站不上去，写 0 只是为了让表完整
+  mountain: 0,
 };
 
-/** 每往上一层多花多少移动力 */
-export const CLIMB_COST = 1;
-/** 爬坡附加最多算几层（防止台地变成 4 点/格的天堑） */
-export const CLIMB_CAP = 2;
+/** 每往上 1 层多花多少行动点 */
+export const CLIMB_E = 10;
+/** 每往下 1 层少花多少行动点（下坡省力，但不会倒赚：见 stepExtraE 的钳位） */
+export const DESCEND_E = 10;
+
 /**
  * 高度差影响射程的阈值。
  *
- * 定 2 而不是 1：平原(2)↔丘陵(3) 只差一层，那是"略高一点"，
- * 弓箭手站上去就多一格射程的话，地形会压过兵种本身的差异。
+ * 定 2 而不是 1：平原↔丘陵只差一层，那是"略高一点"，弓箭手站上去就多一格射程的话，
+ * 地形会压过兵种本身的差异。
  */
 export const RANGE_HEIGHT_BAND = 2;
-/** 熔岩每回合末的真伤：够疼，但一队满血兵不会当场烧死（可以硬闯一次） */
-export const LAVA_BURN = 5;
-/** 沼泽陷足：从泥里拔出脚的那一步多花多少 */
-export const MARSH_BOG = 1;
+/** 沼泽陷足：从泥里拔出脚的那一格多花多少 */
+export const MARSH_BOG_E = 10;
 
+/**
+ * 从 `from` 走进 `to` 这一格，地形要多收多少行动点。
+ *
+ * 三段相加：目标地形自带的额外消耗 + 爬坡（每层 +10）/ 下坡（每层 −10）+ 陷足
+ * （从沼泽走出去 +10）。**下坡的减免最多把这一格的地形价抹平，不会变成"走路赚钱"**，
+ * 所以结果钳在 0 以上——不然从台地冲下来一路倒赚，玩家会绕着山跑圈刷 E。
+ */
+export function stepExtraE(from: Terrain | undefined, to: Terrain): number {
+  const toExtra = TERRAIN_EXTRA_E[to] ?? 0;
+  if (!Number.isFinite(toExtra)) return Number.POSITIVE_INFINITY;
+  let e = toExtra;
+  if (from) {
+    const dh = (TERRAIN_HEIGHT[to] ?? 0) - (TERRAIN_HEIGHT[from] ?? 0);
+    if (Number.isFinite(dh)) {
+      if (dh > 0) e += dh * CLIMB_E;
+      else if (dh < 0) e -= Math.min(-dh * DESCEND_E, toExtra);
+    }
+    if (from === 'marsh') e += MARSH_BOG_E;
+  }
+  return Math.max(0, e);
+}
 /** 这个扩展带来的地貌风格（地图生成器认这几个 id，各自带生成器） */
 export const HEIGHT_MAP_STYLES: Array<{
   id: string;
@@ -147,12 +166,6 @@ export const HEIGHT_MAP_STYLES: Array<{
     name: '峡谷',
     note: '一条深沟横在中间，两岸越往外越高；沟底走得快但仰攻吃亏',
     build: (c) => buildContour(c, 'canyon'),
-  },
-  {
-    id: 'volcanic',
-    name: '火山群',
-    note: '锥体从山口往外依次是高山、台地、丘陵，山脚一圈溢流的熔岩；熔岩能过，但会烧人',
-    build: (c) => buildContour(c, 'volcanic'),
   },
   {
     id: 'marsh',
@@ -181,8 +194,6 @@ export const HEIGHT_PAINT_TERRAINS: readonly Terrain[] = [
   'marsh',
   'dune',
   'shallow',
-  'lava',
-  'volcano',
 ];
 
 /**
@@ -211,7 +222,7 @@ export function softenPeaks(g: Terrain[], w: number, h: number, keep?: ReadonlyS
   let tail = 0;
   for (let i = 0; i < n; i += 1) {
     const t = g[i];
-    if (t === 'mountain' || t === 'volcano') {
+    if (t === 'mountain') {
       dist[i] = 0;
       queue[tail] = i;
       tail += 1;
@@ -281,24 +292,7 @@ export const HEIGHT_TERRAIN: Expansion = {
     terrainHeight: (t) => TERRAIN_HEIGHT[t] ?? 0,
 
     /**
-     * 单格步耗：爬坡 + 沼泽陷足。
-     *
-     * 爬坡只在"往高处走"时加价，下坡免费（顺坡不慢），也绝不减价
-     * （减价会变成"从山上冲下来"的免费机动外挂，而高地本来就带射程优势）。
-     * 陷足反过来看的是"来处"：从沼泽里往外走要多花一点——进来便宜、出去难，
-     * 这才是泥地该死的样子。
-     */
-    modifyStepCost: ({ from, to, cost }) => {
-      if (!from) return undefined;
-      let out = cost;
-      const dh = (TERRAIN_HEIGHT[to] ?? 0) - (TERRAIN_HEIGHT[from] ?? 0);
-      if (dh > 0) out += Math.min(CLIMB_CAP, dh) * CLIMB_COST;
-      if (from === 'marsh') out += MARSH_BOG;
-      return out;
-    },
-
-    /**
-     * 射程：所站地形的静态修正 + 与目标的高度差。
+     * 射程：只看与目标的高度差。
      *
      * 只对**远程兵种**生效。近战兵种的 range 就是它的贴身距离，
      * 站上台地让它"隔三格砍人"不是我们所想的"看得远"——
@@ -316,19 +310,14 @@ export const HEIGHT_TERRAIN: Expansion = {
       const here = state.tiles[unit.y * state.w + unit.x]?.terrain;
       if (!here) return range;
 
-      let plus = 0;
-      let minus = 0;
-      const taste = (v: number) => {
-        if (v > 0) plus += v;
-        else if (v < 0) minus = Math.min(minus, v);
-      };
-      taste(TERRAIN_RANGE_MOD[here] ?? 0);
-      if (targetTerrain) {
-        const dh = (TERRAIN_HEIGHT[here] ?? 0) - (TERRAIN_HEIGHT[targetTerrain] ?? 0);
-        if (dh >= RANGE_HEIGHT_BAND) taste(1);
-        else if (dh <= -RANGE_HEIGHT_BAND) taste(-1);
-      }
-      return Math.max(1, range + plus + minus);
+      // 只有高差这一条：站得比目标高 2 层以上 +1，低 2 层以上 −1，其余不动。
+      // 地形自带的"制高点 +1"已经由高度表达过了，不再单独加一份。
+      if (!targetTerrain) return range;
+      const dh = (TERRAIN_HEIGHT[here] ?? 0) - (TERRAIN_HEIGHT[targetTerrain] ?? 0);
+      if (!Number.isFinite(dh)) return range;
+      if (dh >= RANGE_HEIGHT_BAND) return range + 1;
+      if (dh <= -RANGE_HEIGHT_BAND) return Math.max(1, range - 1);
+      return range;
     },
 
     /**
@@ -344,29 +333,5 @@ export const HEIGHT_TERRAIN: Expansion = {
       return Math.max(1, base + (TERRAIN_VISION_MOD[here] ?? 0));
     },
 
-    /**
-     * 回合末：熔岩灼烧。
-     *
-     * 为什么是"回合末"而不是"进入即伤"：进入即伤会让 AI 的寻路无法评估
-     * （它只看步耗），也会让"路过熔岩边缘"变得莫名其妙地疼。
-     * 回合末结算的语义很干净——**你在岩浆上停了一整个回合**，所以被烧。
-     * 战报按方汇总一条，不逐兵刷屏。
-     */
-    onTurnEnd: ({ state, hurt, log }: TurnEndCtx) => {
-      const total: Record<string, number> = { A: 0, B: 0 };
-      const count: Record<string, number> = { A: 0, B: 0 };
-      for (const u of [...state.units]) {
-        const tile = state.tiles[u.y * state.w + u.x];
-        if (tile?.terrain !== 'lava') continue;
-        hurt(u, LAVA_BURN);
-        total[u.owner] = (total[u.owner] ?? 0) + LAVA_BURN;
-        count[u.owner] = (count[u.owner] ?? 0) + 1;
-      }
-      for (const p of ['A', 'B'] as const) {
-        const n = count[p] ?? 0;
-        if (n <= 0) continue;
-        log(p, `熔岩灼烧：${n} 支部队停在岩浆上，共受 ${total[p] ?? 0} 点伤害`);
-      }
-    },
   },
 };

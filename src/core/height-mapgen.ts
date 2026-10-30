@@ -110,34 +110,6 @@ const RECIPES: Record<string, Recipe> = {
     ],
     grid: [3, 3],
   },
-  // 火山群：又小又尖的锥体，锥顶是火山口。
-  //
-  // 阶梯的顺序按**高度**排，不是按"从山口往外"排——这两件事以前被写反了：
-  // 旧版是 平原 → 丘陵 → 台地 → 熔岩 → 火山 → 高山，于是最高一档落到了
-  // `mountain` 上（火山口反而成了"更高的高山"），而高度只有 1 层的熔岩
-  // 夹在 4 层的台地和 5~6 层的山顶之间，等于每座锥子外面套了一圈三层深的坑。
-  //
-  // 现在按"熔岩堆在山脚"（height-terrain.ts 的高度表也是这么写的）排：
-  //   平原(2) → 熔岩(1，脚下溢流) → 丘陵(3) → 台地(4) → 高山(5) → 火山口(6)
-  // 高度场是单调外降的，所以这几档天然成环：山口一圈高山、外面一圈台地、
-  // 再外面丘陵、山脚一圈熔岩。阈值刻意压在"山脚"那一段（0.36~0.44），
-  // 熔岩才会绕在山脚而不是散到图边去。
-  volcanic: {
-    base: 0.28,
-    noise: 0.08,
-    peaks: { count: 2, radius: 0.16, height: 0.95, sharp: 1.4 },
-    ladder: [
-      [0.36, 'plain'],
-      [0.44, 'lava'],
-      [0.6, 'hill'],
-      [0.78, 'plateau'],
-      [0.92, 'mountain'],
-      // 高度场被 clamp 在 1，所以最后一档要留一点余量，否则 1.0 会漏到阶梯外面
-      [1.01, 'volcano'],
-    ],
-    grid: [3, 3],
-    normalize: false,
-  },
   // 沼泽：几乎没有起伏，低处积水成塘、塘边是浅滩
   marsh: {
     base: 0.14,
@@ -384,7 +356,7 @@ function shoalBridge(c: MapBuildCtx, from: Pos, to: Pos): void {
     const t = c.at(i % w, Math.floor(i / w));
     if (t === 'water') return 9; // 深水很贵，但允许穿——这叫"架不起桥也得能过去"
     if (t === 'shallow') return 2;
-    if (t === 'mountain' || t === 'volcano') return 12;
+    if (t === 'mountain') return 12;
     return 1;
   };
   while (queue.length > 0) {
@@ -427,7 +399,7 @@ function shoalBridge(c: MapBuildCtx, from: Pos, to: Pos): void {
     if (!c.blocked.has(cur)) {
       const t = c.at(x, y);
       if (t === 'water') c.put(x, y, 'shallow');
-      else if (t === 'mountain' || t === 'volcano') c.put(x, y, 'hill');
+      else if (t === 'mountain') c.put(x, y, 'hill');
     }
     cur = prev[cur] ?? -1;
   }
@@ -443,7 +415,7 @@ function shoalBridge(c: MapBuildCtx, from: Pos, to: Pos): void {
 function hugLand(c: MapBuildCtx): void {
   const anchors = [...c.cities.A, ...c.cities.B];
   const bad = (t: Terrain | undefined): boolean =>
-    t === 'water' || t === 'shallow' || t === 'mountain' || t === 'volcano' || t === 'lava';
+    t === 'water' || t === 'shallow' || t === 'mountain';
   for (const p of anchors) {
     const cx = p.x + (c.citySize - 1) / 2;
     const cy = p.y + (c.citySize - 1) / 2;
@@ -464,7 +436,7 @@ function hugLand(c: MapBuildCtx): void {
 /**
  * 主入口：按 `kind` 长一张等高线地形。
  *
- * `kind` 是地貌 id（highland / canyon / volcanic / marsh / isles / river），
+ * `kind` 是地貌 id（highland / canyon / marsh / isles / river），
  * 前四个用 RECIPES 里的配方，`canyon` 走"沟"的形状，`river`/`isles` 再额外开河、搭沙洲。
  */
 export function buildContour(c: MapBuildCtx, kind: string): void {

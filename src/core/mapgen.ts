@@ -165,8 +165,6 @@ const CHAR: Record<Terrain, string> = {
   // 生成器自己**不画**深水：它是「海战」扩展在 afterTerrain 里把
   // 离岸 2 格以上的 water 改写的。这里留字符只是为了类型完整 + 调试转储够用。
   deep: 'D',
-  lava: 'l',
-  volcano: 'V',
 };
 
 /**
@@ -1172,9 +1170,6 @@ function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false, preser
     const t = at(c, x, y);
     if (t === 'water') put(c, x, y, c.shallowOk ? 'shallow' : 'plain');
     else if (t === 'mountain') put(c, x, y, 'hill');
-    // 火山和山一样是墙：连通性这一步必须能把它凿成隘口，
-    // 否则"火山群"会随机把某座城封死在角落
-    else if (t === 'volcano') put(c, x, y, 'dune');
   };
 
   for (const p of path) {
@@ -1204,9 +1199,8 @@ function clearAroundCity(c: Ctx, city: Pos): void {
       const y = city.y + dy;
       const t = at(c, x, y);
       if (t === undefined) continue;
-      // 城郊必须是能出兵、能展开的空地：山和火山都平掉，熔岩也换成平原
-      // （不然"开局第一回合就有个单位站在岩浆里"——规则上没错，观感上很怪）
-      if (t === 'mountain' || t === 'volcano' || t === 'lava') put(c, x, y, 'plain');
+      // 城郊必须是能出兵、能展开的空地：山平掉
+      if (t === 'mountain') put(c, x, y, 'plain');
     }
   }
 }
