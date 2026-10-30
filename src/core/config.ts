@@ -123,9 +123,6 @@ export const CONFIG = {
     marsh: 0,
     // 沙丘：沙脊上目标明显
     dune: 1,
-    // 熔岩：站在流动的岩浆上，没有任何掩护可言
-    lava: 0,
-    volcano: 0,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -148,10 +145,6 @@ export const CONFIG = {
     deep: 99,
     marsh: 2,
     dune: 2,
-    // 熔岩：能过，但一步顶三步，而且回合末会烧人（见「地形高差」扩展）。
-    // 不做成墙，是因为"咬着牙冲过去"比"绝对过不去"更有战术余地。
-    lava: 3,
-    volcano: 99,
   } as Record<Terrain, number>,
 
   /**
@@ -175,8 +168,6 @@ export const CONFIG = {
     dune: '沙丘',
     shallow: '浅流',
     deep: '深水',
-    lava: '熔岩',
-    volcano: '火山',
   } as Record<Terrain, string>,
 };
 
@@ -217,7 +208,7 @@ export const CITY = {  /** 边长：占 size × size 个格子 */
  * 熔岩不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
  */
 export function passable(t: Terrain): boolean {
-  return t !== 'water' && t !== 'deep' && t !== 'mountain' && t !== 'volcano';
+  return t !== 'water' && t !== 'deep' && t !== 'mountain';
 }
 
 /**

@@ -100,7 +100,8 @@ import {
 import type { ChatLine } from '../src/net/chat.ts';
 import {
   AP_COST,
-  AP_MAX,
+  AP_BY_TIER,
+  apMaxOf,
   MOUNTED_IDS,
   VEHICLE_IDS,
   apActionCost,
@@ -8827,9 +8828,9 @@ test('关掉扩展时没有高度：步耗与射程跟本体一模一样', () =>
   for (const t of NEW_TERRAINS) {
     assert.equal(heightOfTerrain(off, t), 0, `关掉扩展时 ${t} 还有高度`);
   }
-  assert.equal(heightOfTerrain(on, 'plain'), 2);
-  assert.equal(heightOfTerrain(on, 'plateau'), 4);
-  assert.equal(heightOfTerrain(on, 'volcano'), 6);
+  assert.equal(heightOfTerrain(on, 'plain'), 0, '平原是基准面');
+  assert.equal(heightOfTerrain(on, 'plateau'), 2);
+  assert.equal(heightOfTerrain(on, 'valley'), -1);
 
   // 步耗：关掉只有地形价，没有爬坡
   assert.equal(stepCostBetween(off, 'valley', 'plateau'), CONFIG.terrainCost.plateau);
@@ -8857,11 +8858,12 @@ test('高度阶梯：只有差 2 层以上才改射程，差 1 层不动', () =>
   assert.ok(u);
   const base = effectiveRange(st, u!);
 
-  // 台地打谷地：地形本身 +1（制高点），高度差 3 层再 +1
+  // 台地打谷地：高度差 3 层 → +1。
+  // 地形本身的"制高点 +1"已经由高度表达过了，不再单独加一份（否则同一件事算两次）。
   assert.equal(
     effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null) - base,
-    2,
-    '台地打谷地该 +2',
+    1,
+    '台地打谷地该 +1',
   );
 
   // 反过来：谷地打台地只有 -1，不是 -2——
@@ -8908,26 +8910,28 @@ test('近战兵不会被高地变成远程', () => {
   assert.equal(effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null), 1);
 });
 
-test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () => {
+test('爬坡：往高处走每层 +1、封顶 2 层，下坡不加价，且一格最多吃掉全部移动力', () => {
   const on = fresh({ expansionIds: ['height-terrain'] });
   putTerrain(on, 4, 4, 'plain');
   const s = unitOn(on, 'A', 'militia', 4, 4);
   const u = s.units.find((x) => x.type === 'militia');
   assert.ok(u);
-  assert.equal(heightOfTerrain(s, 'valley'), 1);
-  assert.equal(heightOfTerrain(s, 'plain'), 2);
-  assert.equal(heightOfTerrain(s, 'hill'), 3);
-  assert.equal(heightOfTerrain(s, 'plateau'), 4);
+  // 高度是"相对平原"的带符号层数
+  assert.equal(heightOfTerrain(s, 'valley'), -1);
+  assert.equal(heightOfTerrain(s, 'plain'), 0);
+  assert.equal(heightOfTerrain(s, 'hill'), 1);
+  assert.equal(heightOfTerrain(s, 'plateau'), 2);
 
-  // 谷地(1) → 台地(4)：差 3 层，封顶按 2 层算
+  // 谷地(−1) → 台地(+2)：差 3 层，封顶按 2 层算 → 台地价 2 + 2 = 4，
+  // 但民兵只有 2 点移动力，钳到 2（这一回合就到头了，但爬得上去）
   putTerrain(s, 5, 5, 'valley');
   putTerrain(s, 5, 4, 'plateau');
   const up = stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4));
-  assert.equal(up, CONFIG.terrainCost.plateau + 2, '谷地爬台地该贵 2 点');
+  assert.equal(up, 2, '爬坡再贵也不会超过这个兵的移动力，否则就是"点了没反应"');
 
   // 差 2 层和差 3 层是一个价（封顶 2 层）
   putTerrain(s, 5, 4, 'hill');
-  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), CONFIG.terrainCost.hill + 2);
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), 2);
 
   // 下坡不加价，也不减价
   putTerrain(s, 5, 5, 'plateau');
@@ -8944,24 +8948,6 @@ test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () =>
   putTerrain(s, 5, 4, 'plateau');
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { flyer: true }), 1);
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
-});
-
-test('火山是墙，熔岩能过但要三步', () => {
-  assert.equal(passable('volcano'), false, '火山不该能走进去');
-  assert.equal(CONFIG.terrainCost.lava, 3);
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  // 随机地貌可能把 (4,4) 抽成海，先把落脚点钉成平地再摆人
-  putTerrain(s, 4, 4, 'plain');
-  const st = unitOn(s, 'A', 'militia', 4, 4);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-  putTerrain(st, 5, 4, 'volcano');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 99);
-  putTerrain(st, 5, 4, 'lava');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
-  // 从台地下到熔岩：下坡不加价
-  putTerrain(st, 4, 4, 'plateau');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
 });
 
 test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
@@ -8991,42 +8977,8 @@ test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
   const u = st2.units.find((x) => x.type === 'militia');
   assert.ok(u);
   assert.equal(stepCostInto(st2, u!, idx(st2, 6, 7), idx(st2, 6, 6)), 2);
-  // 从浅流爬回平原：平地的价 1 + 1 层爬坡 1（浅流的"贵"只算走进来那一步）
-  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 6), idx(st2, 6, 7)), 2);
-});
-
-test('熔岩真的烧人：回合末还站在上面挨 5 点，护甲挡不住', () => {
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  putTerrain(s, 6, 6, 'lava');
-  const st = unitOn(s, 'A', 'militia', 6, 6);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-  assert.ok(effectiveStats(st, u!).armor > 0, '要用带护甲的兵才测得出"真伤"');
-  const hp0 = u!.hp;
-
-  const r = applyAction(st, { type: 'END_TURN' }, 'A');
-  assert.ok(r.ok, r.ok ? '' : r.reason);
-  if (!r.ok) return;
-  const after = r.state.units.find((x) => x.id === u!.id);
-  assert.ok(after, '5 点不该把满血兵烧死');
-  assert.equal(after!.hp, hp0 - 5, '熔岩该扣 5 点真伤，不能被护甲吃掉');
-});
-
-test('沼泽陷足：同样是爬回平地，沼泽比谷地多收 1 点', () => {
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  putTerrain(s, 5, 5, 'plain');
-  putTerrain(s, 5, 6, 'marsh');
-  putTerrain(s, 4, 5, 'valley');
-  const st = unitOn(s, 'A', 'militia', 5, 5);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-
-  // 平地踩进沼泽：下坡，只算地形价
-  assert.equal(stepCostInto(st, u!, idx(st, 5, 5), idx(st, 5, 6)), CONFIG.terrainCost.marsh);
-  // 出来的时候：地形价 + 爬坡 + 陷足
-  const outMarsh = stepCostInto(st, u!, idx(st, 5, 6), idx(st, 5, 5));
-  const outValley = stepCostInto(st, u!, idx(st, 4, 5), idx(st, 5, 5));
-  assert.equal(outMarsh - outValley, 1, '沼泽比谷地多出来的那 1 点就是陷足');
+  // 从浅流走回平原：两者同层（都是基准面），没有爬坡，只算平地的价
+  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 6), idx(st2, 6, 7)), CONFIG.terrainCost.plain);
 });
 
 test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
@@ -9064,7 +9016,8 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
             const ny = y + dy;
             if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
             const t = s.tiles[ny * s.w + nx]!.terrain;
-            if (H(nx, ny) >= 4) skirt = true;
+            // 高度是相对平原的带符号层数：台地是 +2（旧的绝对刻度里是 4）
+            if (H(nx, ny) >= 2) skirt = true;
             if (t === 'plain' || t === 'forest' || t === 'hill') cliff++;
             if (t !== 'water' && t !== 'shallow') land += 1;
           }
@@ -9136,7 +9089,7 @@ test('随机地貌：开了扩展，抽到的多半是扩展自带的那几种',
       .map((o) => o.id)
       .filter((id) => !baseIds.has(id)),
   );
-  assert.equal(extIds.size, 6, '「地形高差」应该带六种地貌');
+  assert.equal(extIds.size, 5, '「地形高差」现在带五种地貌');
 
   let ext = 0;
   let n = 0;
@@ -9151,42 +9104,6 @@ test('随机地貌：开了扩展，抽到的多半是扩展自带的那几种',
   for (let seed = 1; seed <= 20; seed += 1) {
     const L = generateLayout(20, seed, ['militia'], { style: 'random' });
     assert.ok(!extIds.has(L.style), `没开扩展却抽到了 ${L.style}`);
-  }
-});
-
-test('火山群：火山口在山顶、熔岩在山脚，没有夹在半山腰的坑', () => {
-  // 旧版的阶梯是 平原 → 丘陵 → 台地 → 熔岩 → 火山 → 高山：
-  //   · 最高一档落在 `mountain` 上，火山口反而成了"更高的那座山"；
-  //   · 高度只有 1 层的熔岩夹在 4 层的台地和 5~6 层的山顶之间，
-  //     每座锥子外面都套了一圈三层深的坑。
-  for (const seed of [31, 77, 1234, 5]) {
-    const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, seed);
-    const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
-    let volcano = 0;
-    let lava = 0;
-    let lavaUnderPeak = 0;
-    for (let y = 0; y < s.h; y++) {
-      for (let x = 0; x < s.w; x++) {
-        const t = s.tiles[y * s.w + x]!.terrain;
-        if (t === 'volcano') volcano++;
-        if (t !== 'lava') continue;
-        lava++;
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-          if (H(nx, ny) >= 5) lavaUnderPeak++;
-        }
-      }
-    }
-    assert.ok(volcano > 0, `volcanic#${seed} 一格火山口都没有`);
-    assert.ok(lava > 0, `volcanic#${seed} 一格熔岩都没有`);
-    assert.equal(lavaUnderPeak, 0, `volcanic#${seed} 有 ${lavaUnderPeak} 处熔岩贴着山顶/山体`);
   }
 });
 
@@ -9260,44 +9177,12 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
   }
 });
 
-test('新地形只出现在开了「地形高差」的对局里', () => {
-  // 关扩展：40 个种子里一格台地/熔岩都不许有——
-  // 否则老对局会拿到"规则书没写"的格子。
-  for (let seed = 1; seed <= 40; seed++) {
-    const s = createMatch({ ...BASE, expansionIds: [] }, seed * 17 + 3);
-    for (const t of NEW_TERRAINS) {
-      const n = s.tiles.filter((tile) => tile.terrain === t).length;
-      assert.equal(n, 0, `没开扩展的第 ${seed} 号种子地图里出现了 ${n} 格 ${t}`);
-    }
-  }
-
-  // 开扩展：四种高差地貌各自长出自己那味地形
-  const expect: Record<string, Terrain> = {
-    highland: 'plateau',
-    canyon: 'valley',
-    volcanic: 'lava',
-    marsh: 'marsh',
-  };
-  for (const [style, want] of Object.entries(expect)) {
-    const s = createMatch(
-      { ...BASE, expansionIds: ['height-terrain'], mapStyle: style as MatchConfig['mapStyle'] },
-      31,
-    );
-    const n = s.tiles.filter((tile) => tile.terrain === want).length;
-    assert.ok(n > 0, `${style} 地貌里一格 ${want} 都没有`);
-  }
-
-  // 火山群要真的立起火山锥（不可通行的墙）
-  const vol = createMatch({ ...BASE, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, 31);
-  assert.ok(vol.tiles.some((t) => t.terrain === 'volcano'), '火山群地貌里没有火山');
-});
-
 test('地貌选项跟着扩展开关增减', () => {
   const base = mapStylesFor([]).map((o) => o.id);
   assert.equal(base.includes('highland'), false, '没开扩展不该有高原');
   const withExt = mapStylesFor(['height-terrain']).map((o) => o.id);
-  assert.equal(withExt.length, base.length + 6);
-  for (const id of ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river']) {
+  assert.equal(withExt.length, base.length + 5);
+  for (const id of ['highland', 'canyon', 'marsh', 'isles', 'river']) {
     assert.ok(withExt.includes(id as never), `开了扩展也没有 ${id}`);
   }
   // 随机袋也只在开了扩展时才抽得到 —— 关扩展 40 张图不可能抽出高原
@@ -10278,12 +10163,10 @@ test('行动点：单价表——骑兵与车机动 −5、近战出手 −10，
   assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'move'), AP_COST.move);
   assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'attack'), AP_COST.attack);
 
-  // 驻扎和机动同价：不然"先待着、再走一步"会让 E 先掉 20 再涨回 5
-  assert.equal(
-    apActionCost(UNIT_TYPES.scout, 'scout', 'hold'),
-    apActionCost(UNIT_TYPES.scout, 'scout', 'move'),
-    '驻扎跟机动同一档，否则账会回涨',
-  );
+  // 池子按兵种分档：斥候是骑兵 → 120，弓手是远程 → 110，民兵是步兵 → 100
+  assert.equal(apMaxOf(UNIT_TYPES.scout, 'scout'), AP_BY_TIER.mounted);
+  assert.equal(apMaxOf(UNIT_TYPES.archer, 'archer'), AP_BY_TIER.ranged);
+  assert.equal(apMaxOf(UNIT_TYPES.militia, 'militia'), AP_BY_TIER.base);
 });
 
 test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记各的', () => {
@@ -10295,8 +10178,8 @@ test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记�
   // onMatchStart 已经把先手方的账开了——第一回合不走 onTurnStart
   const open = apLedger(s, a);
   assert.equal(open.settled, true, '先手第一回合也要开账');
-  assert.deepEqual(open.items.map((i) => i.action), ['hold'], '什么都没干＝驻扎');
-  assert.equal(open.left, AP_MAX - AP_COST.hold, '驻扎先扣一档');
+  assert.deepEqual(open.items.map((i) => i.action), [], '什么都没干＝不扣（驻扎已取消）');
+  assert.equal(open.left, open.start, '池子原样留着');
 
   // 走一步：记成移动，不是驻扎
   const dest = [...reachableTiles(s, a).keys()].find((k) => k !== idx(s, a.x, a.y));
@@ -10306,20 +10189,23 @@ test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记�
   const moved = r.state.units.find((u) => u.id === a.id)!;
   const L = apLedger(r.state, moved);
   assert.deepEqual(L.items.map((i) => i.action), ['move'], '走过就只记移动');
-  assert.equal(L.left, AP_MAX - apActionCost(s.unitTypes.militia, 'militia', 'move'));
+  assert.equal(
+    L.left,
+    apMaxOf(s.unitTypes.militia, 'militia') - apActionCost(s.unitTypes.militia, 'militia', 'move'),
+  );
 });
 
 test('行动点：攻击按次扣，次数被 E 压回，打满就扣不动了', () => {
   const s = fresh({ expansionIds: ['action-points'] }, 2024);
 
-  // 机枪队 burst 3：100E 只买得起 2 次（每次 40），于是这一回合就是 2 次
+  // 机枪队 burst 3：每段 40/3 ≈ 13.33，池子买得起 3 段 → 这一回合打满 3 次
   const spot = freePlain(s);
   const placed = placeUnit(s, 'A', 'mg', spot.x, spot.y);
   assert.ok(placed.ok, placed.ok ? '' : placed.reason);
   const mg = placed.state.units.find((u) => u.type === 'mg')!;
   mg.custom = { ap: { turn: placed.state.turn, x: mg.x, y: mg.y, debt: 0, over: 0 } };
-  assert.equal(attacksPerTurn(placed.state, mg), 2, 'burst 3 应该被 E 压到 2 次');
-  assert.equal(apLedger(placed.state, mg).attacksAllowed, 2);
+  assert.equal(attacksPerTurn(placed.state, mg), 3, 'burst 3 每段只收 1/3 的价，池子够打满');
+  assert.equal(apLedger(placed.state, mg).attacksAllowed, 3);
 
   // 民兵（近战，每次 30E）打一下，账上写 30
   const st = fresh({ expansionIds: ['action-points'] }, 2024);
@@ -10365,24 +10251,8 @@ test('行动点：E 不够时走不动（modifyMove 归零），技能与保底�
 
   const back = applyAction(end.state, { type: 'END_TURN' });
   const next = apLedger(back.state, back.state.units.find((u) => u.id === a2.id)!);
-  assert.equal(next.start, AP_MAX - 5, '下回合起点先扣掉透支');
+  assert.equal(next.start, next.max - 5, '下回合起点先扣掉透支');
   assert.equal(next.debt, 5);
-});
-
-test('行动点：驻扎 +2 护甲，动过的就不算驻扎', () => {
-  const s = fresh({ expansionIds: ['action-points'] }, 2024);
-  const { a, b } = duel(s);
-  a.custom = { ap: { turn: s.turn, x: a.x, y: a.y, debt: 0, over: 0 } };
-  // B 不是当前行动方：他上一回合的账就是 s.turn - 1
-  b.custom = { ap: { turn: s.turn - 1, x: b.x, y: b.y, debt: 0, over: 0 } };
-  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['hold']);
-  const holdDmg = computeDamage(s, a, b);
-
-  // 站位和开账时对不上 = 这一回合动过 → 不驻扎、不加甲
-  b.custom = { ap: { turn: s.turn - 1, x: b.x + 1, y: b.y, debt: 0, over: 0 } };
-  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['move']);
-  const moveDmg = computeDamage(s, a, b);
-  assert.ok(moveDmg > holdDmg, `驻扎应该更抗打：站着挨 ${holdDmg}，动过挨 ${moveDmg}`);
 });
 
 test('行动点：建筑不参与，刚上场的单位按满池且不被拦', () => {
@@ -10408,7 +10278,7 @@ test('行动点：建筑不参与，刚上场的单位按满池且不被拦', ()
   )!;
   const rl = apLedger(recruit.state, rookie);
   assert.equal(rl.settled, false);
-  assert.equal(rl.left, AP_MAX);
+  assert.equal(rl.left, rl.start);
 });
 
 console.log('\n海军扩展');
