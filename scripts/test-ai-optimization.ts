@@ -234,12 +234,15 @@ test('Proactive withdrawal needs a nearby superior enemy and a productive rear',
 
 test('High-ground fire is included beyond base range; low-ground fire is excluded',()=>{
   const s=arena(); s.config.expansionIds.push('height-terrain');
-  const target=unit(s,'A','militia',3,6);
+  // 高差只剩"一条"之后（plateau +2 / valley −1 → dh 3 ≥ 波段 2）加成是 +1，
+  // 不再是"制高点 +1 再叠高差 +1"的 +2。所以取距离 4：弓兵射程 3 → 4 打得着，
+  // 取 5 就只有旧的 +2 打得着，那是在测一条已经不存在的规则。
+  const target=unit(s,'A','militia',4,6);
   const enemy=unit(s,'B','archer',8,6,{move:0,range:3,atk:25});
-  s.tiles[idx(s,8,6)]!.terrain='plateau'; s.tiles[idx(s,3,6)]!.terrain='valley';
+  s.tiles[idx(s,8,6)]!.terrain='plateau'; s.tiles[idx(s,4,6)]!.terrain='valley';
   assert.ok(canStrike(s,enemy,target));
   assert.ok(tacticalMap(s,'A').exposure(target).damage>0);
-  assert.ok(threatTiles(s,enemy).has(idx(s,3,6)));
+  assert.ok(threatTiles(s,enemy).has(idx(s,4,6)));
   target.x=5; s.tiles[idx(s,5,6)]!.terrain='plateau'; s.tiles[idx(s,8,6)]!.terrain='valley';
   assert.equal(canStrike(s,enemy,target),false);
   assert.equal(tacticalMap(s,'A').exposure(target).damage,0);
@@ -248,13 +251,19 @@ test('High-ground fire is included beyond base range; low-ground fire is exclude
 
 test('Siege selection and execution agree on height-dependent range',()=>{
   const s=arena(); s.config.expansionIds.push('height-terrain');
+  // city2 占 (12..13, 1..2)，台地上一格是高差 +2（≥ 波段 2）→ 射程 3 变 4
   const attacker=unit(s,'A','archer',8,1,{range:3,atk:20});
   s.tiles[idx(s,8,1)]!.terrain='plateau';
+  // 距离 4：平地够不到、台地够得到——"选得出目标"与"真能开火"必须是同一个答案
   assert.ok(siegeTargets(s,attacker).some(c=>c.id==='city2'));
   assert.ok(applyAction(s,{type:'SIEGE',unitId:attacker.id,cityId:'city2'}).ok);
-  attacker.x=9; s.tiles[idx(s,9,1)]!.terrain='valley';
+  // 退一格到距离 5：+1 也够不到了，两处要一起说不
+  attacker.x=7; s.tiles[idx(s,7,1)]!.terrain='plateau';
   assert.ok(!siegeTargets(s,attacker).some(c=>c.id==='city2'));
   assert.equal(applyAction(s,{type:'SIEGE',unitId:attacker.id,cityId:'city2'}).ok,false);
+  // 同一个距离换回平地：加成没了，同样够不到
+  s.tiles[idx(s,7,1)]!.terrain='plain';
+  assert.ok(!siegeTargets(s,attacker).some(c=>c.id==='city2'));
 });
 
 test('AI approach distances preserve uphill and downhill direction',()=>{

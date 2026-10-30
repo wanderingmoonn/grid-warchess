@@ -46,10 +46,12 @@ import {
   CITY,
   CONFIG,
   ERAS,
+  ORDER_IDLE,
   ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
   eraDef,
+  isPseudoUnit,
   navigable,
   nextUpgradeCost,
   passable,
@@ -715,7 +717,11 @@ export function magicSegment(
 
 /** 这一下能打出多少魔法伤害：只被目标的魔法抗性挡，不吃护甲/地形/破甲 */
 export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): number {
-  return magicSegment(s, attacker, utype(s, defender.type).magicRes ?? 0, defender);
+  // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
+  // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
+  // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
+  const res = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  return magicSegment(s, attacker, res, defender);
 }
 
 /**
@@ -1181,6 +1187,15 @@ export function visionOf(s: GameState, unit: Unit): number {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyVision) r = e.hooks.modifyVision({ state: s, player: unit.owner, unit, base: r });
   }
+  /*
+   * 本体里视野就是 0 的东西（桥）**一格都不给**。
+   *
+   * 下面那句 `Math.max(1, …)` 是给"被减益压到 0 的兵"留的下限，但它顺手把
+   * "本来就不看"的东西也抬到了 1 格——桥于是永远白送一圈视野，
+   * 而扩展那边的 modifyVision 也都自带同样的下限，光改数据表清不掉。
+   * 所以判据落在这里：兵种表写 0，就是真的没有视野。
+   */
+  if (selfDef.vision <= 0) return 0;
   return Math.max(1, r);
 }
 
@@ -2626,6 +2641,26 @@ function markManualFire(s: GameState, u: Unit): void {
  * 唯一的状态迁移入口。
  * 所有 UI 操作、AI、未来的联机请求，都必须走这里。
  */
+/**
+ * 把"我这一手"补到房间里的**最新**状态上（联机选卡的合并规则）。
+ *
+ * 联机 AB 同时禁用时，两边都会先在本机落一步再提交。后交的那一方一定被
+ * 进度号挡回来——这不是冲突，是常态。挡回来之后**不能**直接覆盖房间：
+ * 那会把对面刚提的那一步抹掉，两边从此各拿一份对方没有的名单互相等
+ * （界面上就是"禁不动、选不动"）。正确做法是把手里这一步补到房间那份上，
+ * 再用新的进度号重交。抽成纯函数是为了能有用例盯着这段协议。
+ *
+ * 补不进去（对面已经禁过、轮到别人选、这一格已经不是你的）就返回失败，
+ * 调用方按"房间是权威"处理：退回房间那份，把出手权还给玩家。
+ */
+export function mergeDraftStep(
+  remote: GameState,
+  action: Action,
+  actor: PlayerId,
+): ActionResult {
+  return applyAction(remote, action, actor);
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -3626,18 +3661,14 @@ function doRecruit(
     }
   }
 
-  if (era < def.era) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
-  }
-  // 时代窗口的上下限要分开报：上限是"科技还没到"，下限是"这条产线不带了"，
-  // 玩家要做的决定完全不同（一个去升城，一个换兵种）。
-  if (def.era > era) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
-  }
-  // 下限只在**没开选卡**时生效：选卡模式下你花了一个选位拿到的东西，
-  // 不该因为城市升了两级就作废——那等于"越往后期走，选卡越没有意义"。
+  // 时代只剩一条：**不能造还没解锁的兵**。
+  //
+  // 以前这里是三段——"没到那个时代"、"城市不够新（重复写了一遍）"、
+  // "过时了，产线不带它"。第三段随着下限的取消一起没了：城市升到第五代
+  // 仍然能造民兵，因为"面板里堆满老古董"是界面问题，已经由筛选解决
+  // （扩展包 / 时代 / 搜索），不该由规则层拿"升级＝选项变少"来买单。
   if (!eraWindowOk(s, def, era)) {
-    return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
+    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
   }
 
   const player = s.players[s.current];
@@ -3774,7 +3805,8 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
   for (let i = 0; i < cleaned.length; i += 1) {
     const id = cleaned[i] as string;
     if (!id) continue;
-    // 哨兵值：这一格是"升级时代"，不是兵种
+    // 哨兵值：这一格是"升级时代"或者"空过"，都不是兵种
+    if (id === ORDER_IDLE) continue;
     if (id !== ORDER_UPGRADE) {
       const def = s.unitTypes[id];
       if (!def) return { ok: false, reason: `没有这个兵种：${id}` };

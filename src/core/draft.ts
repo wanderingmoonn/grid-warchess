@@ -28,6 +28,7 @@
  * 对方进房后看到的是已经定下来的名单（界面会写明这一点）。
  */
 
+import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
 import type { Action, ActionResult, DraftState, GameState, PlayerId, UnitTypeDef } from './types.ts';
@@ -164,10 +165,13 @@ export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
  * 能进池子的兵种：战斗单位 + 非生产性建筑。
  *
  * 召唤物（只认召唤者）排除：它没有独立造价，选了也没法造。
+ * 伪单位（攻城结算用的「城市」壳）排除：池子里多它一格，玩家就少一个真兵种，
+ * 而且那张卡在界面上是空的——见 config.ts 的 PSEUDO_UNIT_IDS。
  */
 export function draftCandidates(state: GameState): string[] {
   return Object.values(state.unitTypes)
     .filter((def) => {
+      if (isPseudoUnit(def.id)) return false;
       if (draftAlwaysAllowed(def)) return false;
       if (def.summonedOnly) return false;
       if (def.category === 'combat') return true;
@@ -313,18 +317,23 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
 }
 
 /**
- * 时代窗口：能造当前时代及更早的，但没有下限（选卡模式下）。
+ * 时代窗口：只拦"未来的兵"，不拦"更早的兵"。
  *
- * 原版的规则是"只带当前时代和上一个时代"——那是为了不让产兵面板里
- * 堆十个早该淘汰的兵。选卡模式刚好相反：你花了一个选位拿到的东西，
- * 不该因为城市升了两级就再也造不出来。所以这里把下限放开，
- * 上限（不能造未来的兵）保留。
+ * 这里曾经有过一条下限（`def.era >= era - 1`，即只带当前时代和上一个时代），
+ * 理由是不让产兵面板里堆十个早该淘汰的兵——那个理由在**面板**上成立，
+ * 在**规则**上不成立：城市升到第四代就再也造不出民兵，等于"升级把选项变少了"，
+ * 而玩家想要的恰恰是"三级城里还能补两个便宜的长枪兵看家"。
+ *
+ * 面板堆不堆得下是界面问题，已经交给筛选解决（扩展包 / 时代 / 搜索，见
+ * ui/packs.ts）。所以这条判断只剩一件事：**不能造还没解锁的兵**。
+ * 下限整个去掉，所有模式一个口径——选卡模式当年单独放开下限的那段特例
+ * 也就跟着没有必要了。
+ *
+ * `_state` 留着不删：这个判断以后要接"封冻港口"之类的局面条件（比如某个
+ * 扩展把某条产线临时停掉），签名先稳住，四处调用点就不用再改一遍。
  */
-export function eraWindowOk(state: GameState, def: UnitTypeDef, era: number): boolean {
-  if (def.era > era) return false;
-  // 只有"真的在选卡"才放开下限；跳过的局等于没开这个模式
-  if (state.draft && !state.draft.skipped) return true;
-  return def.era >= era - 1;
+export function eraWindowOk(_state: GameState, def: UnitTypeDef, era: number): boolean {
+  return def.era <= era;
 }
 
 /* ===========================================================================
@@ -335,7 +344,7 @@ export function remainingUnits(state: GameState): string[] {
   const draft = state.draft;
   if (!draft) return [];
   const taken = new Set<string>([...draft.bans.A, ...draft.bans.B, ...draft.picks.A, ...draft.picks.B]);
-  return draft.pool.filter((id) => id !== '__city__' && !taken.has(id));
+  return draft.pool.filter((id) => !isPseudoUnit(id) && !taken.has(id));
 }
 
 /** 当前该谁选（禁用期返回 null：两边同时进行） */
@@ -374,6 +383,16 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
 
   if (action.type === 'DRAFT_START') {
     if (draft.phase !== 'lobby') return { ok: false, reason: '这一局的选卡已经开始了' };
+    /*
+     * 计时起点必须是真时间戳。
+     *
+     * 少了它会算出 NaN 的 deadline，而"到点没有"的判断是 `at < deadline`——
+     * 和 NaN 比永远是 false，于是**一进禁用就被判超时**，双方各白丢一次禁用
+     * （联机里表现成"一进选卡就显示双方禁用已超时"）。
+     */
+    if (!Number.isFinite(action.at)) {
+      return { ok: false, reason: '开始选卡要带计时起点（时间戳）' };
+    }
     draft.phase = 'ban';
     draft.deadline = action.at + DRAFT_BAN_MS;
     draft.seq += 1;
@@ -459,6 +478,17 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (draft.phase === 'done') return { ok: false, reason: '选卡已经结束了' };
     // lobby 不计时：这一屏是"等人入座"，超时兜底在这里没有意义
     if (draft.phase === 'lobby') return { ok: false, reason: '还没开始选卡' };
+    /*
+     * deadline 必须是正数，否则一律当作"这一阶段还没开始计时"。
+     *
+     * 这条是"一进选卡就双方禁用超时"的正面修法：deadline 为 0（或 NaN）时，
+     * 下面那句 `action.at < draft.deadline` 永远成立不了，于是任何一次超时
+     * 请求都会被放行，两边各白丢一次禁用。缺省值不该被当成"早就到点了"。
+     */
+    if (!Number.isFinite(draft.deadline) || draft.deadline <= 0) {
+      return { ok: false, reason: '这一阶段还没开始计时' };
+    }
+    if (!Number.isFinite(action.at)) return { ok: false, reason: '超时判定要带当前时间' };
     if (action.at < draft.deadline) return { ok: false, reason: '还没到时限' };
 
     if (draft.phase === 'ban') {

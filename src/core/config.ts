@@ -123,9 +123,6 @@ export const CONFIG = {
     marsh: 0,
     // 沙丘：沙脊上目标明显
     dune: 1,
-    // 熔岩：站在流动的岩浆上，没有任何掩护可言
-    lava: 0,
-    volcano: 0,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -148,10 +145,6 @@ export const CONFIG = {
     deep: 99,
     marsh: 2,
     dune: 2,
-    // 熔岩：能过，但一步顶三步，而且回合末会烧人（见「地形高差」扩展）。
-    // 不做成墙，是因为"咬着牙冲过去"比"绝对过不去"更有战术余地。
-    lava: 3,
-    volcano: 99,
   } as Record<Terrain, number>,
 
   /**
@@ -175,8 +168,6 @@ export const CONFIG = {
     dune: '沙丘',
     shallow: '浅流',
     deep: '深水',
-    lava: '熔岩',
-    volcano: '火山',
   } as Record<Terrain, string>,
 };
 
@@ -189,6 +180,20 @@ export const CONFIG = {
  * 用 `@` 开头是为了不和任何兵种 id 撞车（兵种 id 全是纯小写字母）。
  */
 export const ORDER_UPGRADE = '@upgrade';
+
+/**
+ * 指挥官模式里"这一回合**故意什么都不要**"的哨兵值。
+ *
+ * 序列里的空串（`''`）已经被另一个意思占住了：**队列没排到这一格**。
+ * 两者必须分开，否则"我想空过这一回合"根本表达不出来——AI 看到队首是空串
+ * 会当成"没排计划"自己拍一条，反而把钱花掉。这个哨兵就是那道分界线：
+ *
+ *   `''`      → 队列到此为止，后面的格子是空的（AI 若托管则自行安排）
+ *   `@idle`   → 这一回合确定不产兵、不升级（攒钱、等时代、等对面送上门）
+ *
+ * 同样以 `@` 开头，不和任何兵种 id 撞车。
+ */
+export const ORDER_IDLE = '@idle';
 
 /** 城市参数（与时代无关的部分） */
 export const CITY = {  /** 边长：占 size × size 个格子 */
@@ -203,7 +208,7 @@ export const CITY = {  /** 边长：占 size × size 个格子 */
  * 熔岩不在其中——它是"能过，但一步顶三步"，用来给机动判死刑而不是直接堵死。
  */
 export function passable(t: Terrain): boolean {
-  return t !== 'water' && t !== 'deep' && t !== 'mountain' && t !== 'volcano';
+  return t !== 'water' && t !== 'deep' && t !== 'mountain';
 }
 
 /**
@@ -997,7 +1002,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 0,
     maxHp: 40,
     range: 0,
-    vision: 2,
+    vision: 0,
     bridges: true,
     buildOn: ['water'],
   },
@@ -1014,7 +1019,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 3,
     maxHp: 60,
     range: 0,
-    vision: 2,
+    vision: 0,
     bridges: true,
     buildOn: ['water'],
   },
@@ -1031,7 +1036,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 6,
     maxHp: 120,
     range: 0,
-    vision: 2,
+    vision: 0,
     bridges: true,
     buildOn: ['water'],
   },
@@ -1173,8 +1178,30 @@ export function unitsByEra(level: number, pool = UNIT_TYPES): UnitTypeDef[] {
   return Object.values(pool).filter((u) => u.era === level);
 }
 
-/** 最便宜的兵种价格，用于判定"是否还有翻盘能力" */
-export const CHEAPEST_COST = Math.min(...Object.values(UNIT_TYPES).map((u) => u.cost));
+/**
+ * 只给结算用的"伪单位"。
+ *
+ * 城市要在 `computeDamage` 里有一个 `UnitTypeDef` 形状的壳（护甲、弱点、抗性
+ * 都得参与伤害公式），但它不是一局里存在、能造、能选、能摆上场的东西。
+ * 于是任何"把兵种表摊给玩家看"或"从兵种表里抽候选"的地方都必须跳过它：
+ * 漏一处就是一张叫「城市」的空卡片混进选卡池、一个 0 金的建筑混进建造清单。
+ *
+ * 判据只写在这里。以前 draft / setup / 选卡面板各写一遍 `!== '__city__'`，
+ * 谁少写一次，池子就少一个真兵种、多一个空位。
+ */
+export const PSEUDO_UNIT_IDS: ReadonlySet<string> = new Set(['__city__']);
+
+/** 这个 id 是不是伪单位（见 PSEUDO_UNIT_IDS） */
+export function isPseudoUnit(id: string): boolean {
+  return PSEUDO_UNIT_IDS.has(id);
+}
+
+/** 最便宜的兵种价格，用于判定"是否还有翻盘能力"。伪单位不算：它标价 0 */
+export const CHEAPEST_COST = Math.min(
+  ...Object.values(UNIT_TYPES)
+    .filter((u) => !isPseudoUnit(u.id))
+    .map((u) => u.cost),
+);
 
 // ── 建造点数：难度与工兵能力 ────────────────────────────────────────────
 //

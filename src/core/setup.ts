@@ -6,7 +6,7 @@
  * 同一个 (config, seed) 永远得到完全一样的一局，回放和联机才有意义。
  */
 
-import { CITY, CONFIG, UNIT_TYPES, eraDef, passable } from './config.ts';
+import { CITY, CONFIG, UNIT_TYPES, eraDef, isPseudoUnit, passable } from './config.ts';
 import {
   EXPANSIONS,
   activeExpansions,
@@ -151,11 +151,13 @@ export function createMatch(
    * 一旦落在外面，选中了也造不出来——面板上写着"已选"，按下去却说没有这个兵。
    * 开局面板里逐个勾兵的开关在这个模式下没有意义（名单由 BP 决定），所以直接全开。
    */
-  const pool = config.draftMode === true
-    ? Object.keys(catalog)
-    : enabled.length > 0
-      ? enabled
-      : Object.keys(UNIT_TYPES);
+  const pool = (
+    config.draftMode === true
+      ? Object.keys(catalog)
+      : enabled.length > 0
+        ? enabled
+        : Object.keys(UNIT_TYPES)
+  ).filter((id) => !isPseudoUnit(id));
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
   for (const id of Object.keys(extraUnits)) {
     if (!pool.includes(id)) pool.push(id);

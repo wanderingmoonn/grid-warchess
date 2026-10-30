@@ -19,7 +19,7 @@ import {
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
 import { canUseType, eraWindowOk } from '../core/draft.ts';
-import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
+import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
@@ -91,6 +91,13 @@ export interface PanelInput {
    */
   recruitPack?: string;
   /**
+   * 按时代筛选产兵列表（`ERA_ALL` = 不筛）。
+   *
+   * 和生产无关：时代窗口决定"能造什么"，这里只决定"看得到什么"。
+   * 和扩展包、搜索框都是**与**的关系——三个条件叠在一起才是最终那一屏。
+   */
+  recruitEra?: number;
+  /**
    * 战报用谁的眼睛看：给一个 PlayerId 就只看这一方（+ 公开的战损），
    * 给 null 就是全都看得见。不传按"全都看得见"处理。
    *
@@ -121,6 +128,15 @@ export interface PanelInput {
    * 观战是"两边都不归我"，指挥官是"归我，但这一手不亲自下"。
    */
   commander?: boolean;
+  /**
+   * 参谋部正在批量执行（指挥官模式）。
+   *
+   * 这段里"结束行动"那个按钮要换成进度/中断状态：批处理自己会推进回合，
+   * 这时候再让人点一次"结束行动"就是两只手同时推同一扇门。
+   */
+  commanderRunning?: boolean;
+  /** 一批打几个回合：单机 5、联机 1（对面是人的时候只推自己这一回合） */
+  commanderRounds?: number;
   /**
    * 结算卡上的「对局数据」区块。只有一局打完才传，别的时候是 undefined。
    *
@@ -284,9 +300,24 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     <div class="side-footer">
-      <button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-        ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
-      </button>
+      ${
+        /*
+         * 指挥官模式：这里原来还是「结束行动，交给对方」。
+         *
+         * 那个按钮只推进**一个**回合，而参谋部是按 5 回合一批走的——两个入口
+         * 各推各的，玩家顺手点一下就变成"我走了半批、对面还没走"，批处理的
+         * 回合计数和对面看到的局面全都对不齐。所以它在这里换成同一件事：
+         * 执行一批（5 回合 / 联机 1 回合）再交还，和顶部那颗按钮同源。
+         */
+        input.commander === true
+          ? `<button class="btn btn-primary btn-block" data-act="commander-run"
+               ${myTurn && input.commanderRunning !== true ? '' : 'disabled'}>
+               ${input.commanderRunning === true ? '参谋部正在执行…' : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`}
+             </button>`
+          : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
+               ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
+             </button>`
+      }
       <div class="side-actions">
         <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>认输</button>
@@ -862,7 +893,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
-  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
+  const eraFilter = input.recruitEra ?? ERA_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -877,7 +909,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const recruitGroups =
     shown.length === 0
-      ? emptyRecruitHint(q, pack, buildable.length, '这座城')
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座城')
       : grouped;
 
   const upgradeBlock =
@@ -917,6 +949,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                   }</div>
            ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
+           ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            ${
@@ -1001,18 +1034,25 @@ function matchRecruit(def: UnitTypeDef, q: string): boolean {
 /**
  * 产兵列表空掉时那句话。
  *
- * "搜不到"和"这个包里没有"是两种不同的空：前者玩家会去清搜索框，
+ * "搜不到"和"这一档里没有"是两种不同的空：前者玩家会去清搜索框，
  * 后者要去点「全部」。只会说"没有可造的兵"等于让人自己猜。
+ *
+ * 筛选维度从一维变成两维之后，条件必须**全部写出来**：只提包名不提时代，
+ * 玩家会去清搜索框，然后发现还是空的。所以这里把生效的每一维都摆进括号里，
+ * 维度之间用「·」隔开（和屏幕上那两行 chip 的排列顺序一致）。
  */
-function emptyRecruitHint(q: string, pack: string, total: number, subject: string): string {
-  const head =
-    q && pack
-      ? `没有匹配「${escapeHtml(q)}」的兵种（只看「${escapeHtml(packLabel(pack))}」）`
-      : q
-        ? `没有匹配「${escapeHtml(q)}」的兵种`
-        : pack
-          ? `「${escapeHtml(packLabel(pack))}」里没有这一档能造的兵`
-          : '没有可造的兵种';
+function emptyRecruitHint(
+  q: string,
+  pack: string,
+  era: number,
+  total: number,
+  subject: string,
+): string {
+  const only: string[] = [];
+  if (pack) only.push(escapeHtml(packLabel(pack)));
+  if (era !== ERA_ALL) only.push(eraLabel(era));
+  const cond = only.length > 0 ? `（只看「${only.join('」「')}」）` : '';
+  const head = q ? `没有匹配「${escapeHtml(q)}」的兵种${cond}` : `这一档没有能造的兵${cond}`;
   return `<div class="hint">${head}。${subject}在售 ${total} 种，清掉筛选看全部。</div>`;
 }
 
@@ -1161,7 +1201,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
-  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
+  const eraFilter = input.recruitEra ?? ERA_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -1195,7 +1236,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const groups =
     shown.length === 0
-      ? emptyRecruitHint(q, pack, buildable.length, '这座营')
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
       : grouped;
 
   // 军营的时代是写死的。后方城市一旦追上来，玩家会看到"我有三级城，
@@ -1227,6 +1268,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                   }</div>
            ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
+           ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
            ${
@@ -1337,6 +1379,10 @@ export interface TopbarState {
   spectator?: boolean;
   /** 上帝模式：全图无雾，两边都归玩家摆，所以"轮到谁"不是重点 */
   god?: boolean;
+  /** 指挥官模式：顶栏那颗"交给 AI"要换成"交给参谋部"（同一个动作的另一条入口） */
+  commander?: boolean;
+  /** 参谋部正在批量执行 */
+  commanderRunning?: boolean;
 }
 
 /**
@@ -1479,8 +1525,18 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
     // 而顶栏这个按钮会把它变成"回合自动往前跑"，摆兵就摆不安稳了。
     ai.hidden = s.god === true;
-    ai.textContent = s.aiCurrent ? '收回操作权' : '交给 AI';
-    ai.classList.toggle('btn-primary', s.aiCurrent);
+    // 指挥官模式：这一方本来就在 AI 手里，"交给 AI / 收回操作权"没有第二种解释。
+    // 这里的按钮改成同一件事的另一个入口——执行一批再交还，和参谋部那颗同源，
+    // 顺手点错不会把对面也托管掉。
+    ai.textContent = s.commander
+      ? s.commanderRunning
+        ? '参谋部执行中…'
+        : '交给参谋部'
+      : s.aiCurrent
+        ? '收回操作权'
+        : '交给 AI';
+    ai.classList.toggle('btn-primary', s.commander ? false : s.aiCurrent);
+    (ai as HTMLButtonElement).disabled = s.commander === true && s.commanderRunning === true;
   }
 
   const fog = ref('fog');

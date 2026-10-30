@@ -39,6 +39,7 @@ import { AIR_CORPS, MODERN_AIR } from './air-packs.ts';
 // 行动点：把移动/攻击/驻扎/上下船/技能统一成"行动"，各自扣 E。
 // 它只用一个新文件（action-points.ts），这里加一行注册，rules.ts 依然一行不动。
 import { ACTION_POINTS } from './action-points.ts';
+import { HIGH_MOBILITY } from './mobility.ts';
 // 时代上限：config 不认识扩展，但认识"表有多长"和"不勾包能走到第几级"。
 import { BASE_MAX_ERA, ERAS } from './config.ts';
 
@@ -811,6 +812,9 @@ export const EXPANSIONS: Expansion[] = [
   // 它的 modifyMove / modifyAttacks 只做"取更小的那个"，不关心别人先给了多少，
   // 所以放在钩子链末尾既不影响老扩展，也不会被它们绕过去。
   ACTION_POINTS,
+  // 高机动性：只在既有的 move / range / vision 三个钩子上把数值放大，
+  // 没有判定顺序可言，放哪都一样。
+  HIGH_MOBILITY,
 ];
 
 export function expansionById(id: string): Expansion | undefined {

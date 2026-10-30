@@ -10,8 +10,12 @@
  *   （决定"现在该不该急"），底部是流水（回看谁禁了谁）。
  */
 
-import { eraDef } from '../core/config.ts';
+import { eraDef, isPseudoUnit } from '../core/config.ts';
 import { draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
+import { abilityById } from '../core/ability-registry.ts';
+import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
+import { resourceName } from '../core/resources.ts';
+import type { ResourceId } from '../core/types.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
 import type { DraftState } from '../core/types.ts';
 
@@ -20,21 +24,88 @@ function sideName(s: GameState, side: PlayerId): string {
   return s.players[side]?.name ?? (side === 'A' ? '红方' : '蓝方');
 }
 
-function unitCard(def: UnitTypeDef, disabled: boolean, title: string): string {
+const CATEGORY_LABEL: Record<string, string> = {
+  combat: '战斗',
+  building: '建筑',
+  economy: '经济',
+  builder: '建造',
+};
+
+const DOMAIN_LABEL: Record<string, string> = { water: '水军', air: '空军' };
+
+/** 一行数值：攻/甲/血是每个兵种都有的，其余有才写 */
+function statLine(def: UnitTypeDef): string {
+  const bits = [`攻 ${def.atk}`, `甲 ${def.armor}`, `血 ${def.maxHp}`];
+  if (def.move > 0) bits.push(`移 ${def.move}`);
+  bits.push(`射 ${def.range}`, `视 ${def.vision}`);
+  if (def.splash) bits.push(`溅射 ${def.splash}`);
+  if (def.burst && def.burst > 1) bits.push(`连击 ${def.burst}`);
+  if (def.magicAtk) bits.push(`魔攻 ${def.magicAtk}`);
+  return bits.join(' · ');
+}
+
+/** 造价：金币 + 扩展带来的其它资源（有才写） */
+function costLine(def: UnitTypeDef): string {
+  const bits = [`${def.cost} 金`];
+  for (const [id, n] of Object.entries(def.costRes ?? {})) {
+    if (typeof n === 'number' && n > 0) bits.push(`${n} ${resourceName(id as ResourceId)}`);
+  }
+  const src = unitSourceOf(def.id);
+  return `${bits.join(' + ')}${src ? ` · 来自「${src}」` : ''}`;
+}
+
+/**
+ * 卡片的悬停详情。
+ *
+ * 池子里 20 张卡每张只写"时代 · 造价 · 攻/血"——那是用来**扫**的，不是用来
+ * **算**的。要判断"这一手禁它值不值"，得看护甲、射程、视野、溅射、能力。
+ * 所以详情单放在这里，由界面在悬停时浮动显示（见 main.ts 的 draftTipPanel）。
+ *
+ * 关键一点：**点不动的卡也要有详情**。禁用交完了、轮到对面选人，这时候
+ * 恰恰是最想研究池子的时候。所以"为什么点不了"是详情里的一行，而不是
+ * 干脆不给看。
+ */
+function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
+  const meta = [eraDef(def.era).name, CATEGORY_LABEL[def.category] ?? def.category];
+  if (def.domain && DOMAIN_LABEL[def.domain]) meta.push(DOMAIN_LABEL[def.domain]);
+  const abil = (def.abilities ?? [])
+    .map((id) => abilityById(id)?.name ?? id)
+    .filter(Boolean);
+  return `<span class="draft-tip" hidden>
+      <span class="tip-title"><b>${def.name}</b><i>${meta.join(' · ')}</i></span>
+      <span class="tip-row">${statLine(def)}</span>
+      <span class="tip-row">${costLine(def)}</span>
+      ${abil.length > 0 ? `<span class="tip-row tip-abil">能力：${abil.join(' · ')}</span>` : ''}
+      ${blocked && reason ? `<span class="tip-row tip-blocked">现在点不了：${reason}</span>` : ''}
+    </span>`;
+}
+
+/**
+ * 一张卡。
+ *
+ * 外面套一层 `.draft-card-wrap`：详情浮层要相对卡片定位，同时按钮本身在
+ * "点不动"时仍然要能被悬停（`disabled` 的元素在部分浏览器里连鼠标事件都不派发，
+ * 那样详情就永远出不来）。所以"点不动"用 `aria-disabled` 表达，点击由
+ * onDraftClick 那边拦下并给一句原因。
+ */
+function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   const bits = [`${eraDef(def.era).name}`];
   if (def.cost > 0) bits.push(`${def.cost} 金`);
   if (def.category === 'combat') bits.push(`攻 ${def.atk} · 血 ${def.maxHp}`);
   else bits.push('建筑');
   if (def.splash) bits.push(`溅射 ${def.splash}`);
   if (def.range >= 2) bits.push(`射程 ${def.range}`);
-  return `<button class="draft-card ${def.category === 'building' ? 'is-building' : ''}"
-      data-draft="${def.id}" ${disabled ? 'disabled' : ''} title="${title}">
+  return `<span class="draft-card-wrap">
+    <button type="button" class="draft-card ${def.category === 'building' ? 'is-building' : ''}${blocked ? ' is-blocked' : ''}"
+      data-draft="${def.id}" ${blocked ? 'aria-disabled="true"' : ''}>
       <span class="dc-icon">${def.short}</span>
       <span class="dc-body">
         <span class="dc-name">${def.name}</span>
         <span class="dc-meta">${bits.join(' · ')}</span>
       </span>
-    </button>`;
+    </button>
+    ${unitTip(def, blocked, reason)}
+  </span>`;
 }
 
 /** 一个槽位：已经定了就显示名字，没定就显示虚线占位 */
@@ -109,11 +180,31 @@ export interface DraftScreenCtx {
   isAi: (side: PlayerId) => boolean;
   /** 联机房间信息（没建房时是 null） */
   room?: DraftLobbyInfo | null;
+  /**
+   * 倒计时上限（秒）。
+   *
+   * 房间那份 deadline 是**另一台机器**的钟写进来的，可能早就过期了
+   * （你入座时对面已经在禁用屏上坐了好几分钟）。直接拿它显示，一进来就是
+   * "0s"。所以界面这边另外记一个"我看到这一轮的时刻"，两者取小。
+   */
+  secondsCap?: number;
 }
 
 /** 顶栏右上角的两颗按钮：跳过与退出。两个阶段都要能点到 */
-function headActions(isLobby: boolean): string {
+function headActions(isLobby: boolean, online: boolean): string {
   return `<div class="draft-head-actions">
+    ${
+      /*
+       * 「刷新房间状态」：联机选卡出岔子时的逃生口。
+       *
+       * 选卡的每一步都要写进房间，写失败（断网、对面抢先、手机切后台）之后
+       * 本机会停在一份"房间里并不存在"的名单上，看起来就是"点不动了"。
+       * 与其让玩家只能关页面重进，不如给他一颗按钮：按房间那份重新对齐。
+       */
+      online
+        ? '<button class="draft-btn is-quiet" data-draft-act="refresh" title="按房间里的状态重新对齐一次（卡住时点这里）">刷新房间状态</button>'
+        : ''
+    }
     <button class="draft-btn" data-draft-act="skip" title="${
       isLobby ? '不选卡，这一局直接用全部兵种开打' : '放弃这一轮选卡，改用全部兵种继续'
     }">跳过选卡</button>
@@ -166,7 +257,7 @@ function lobbyHtml(s: GameState, ctx: DraftScreenCtx): string {
         <span class="draft-step">选卡 · 等待开局</span>
         <span class="draft-seat">${room ? `房间 ${esc(room.code)}` : '本机 / 热座'}</span>
       </div>
-      ${headActions(true)}
+      ${headActions(true, room !== null)}
       <div class="draft-hint">${
         room
           ? room.peerSeated
@@ -225,23 +316,44 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
             : `等${sideName(s, view.toAct!)}选，对方选完就轮到你`
         : '选卡完成，正在进入战场';
 
-  const remain = view.remaining;
-  const cards = remain
-    .map((id) => {
-      // 接跳过城市伪单位
-      if (id === '__city__') return '';
-      
-      const def = s.unitTypes[id];
-      if (!def) return '';
-      
-      const blocked = !clickable;
-      // 给 era 加上兜底，防止其他没配 era 的奇怪兵种也把界面搞崩
-      const eraName = eraDef(def.era)?.name ?? '未知';
-      const title = blocked ? '现在不是你的操作' : `${def.name}（${eraName}）`;
-      
-      return unitCard(def, blocked, title);
-    })
-    .join('');
+  /**
+   * 卡片排序：**时代为主、扩展为辅**。
+   *
+   * 玩家扫池子时先问"这一代有什么"（时代决定它什么时候能用），第二个问题才是
+   * "哪个包里带的"（同一代里本体的兵和扩展的兵手感不同）。抽池子时是按时代
+   * 分层抽的，但抽出来的顺序是"一层一张"轮着来，直接铺出来是花的。
+   */
+  const packRank = new Map(EXPANSIONS.map((e, i) => [e.id, i + 1]));
+  const rank = (id: string): [number, number, number, string] => {
+    const def = s.unitTypes[id];
+    // 没配 era 的怪东西排到最后，别把整个池子的顺序搞崩
+    const era = typeof def?.era === 'number' ? def.era : 99;
+    const source = unitSourceIdOf(id);
+    // 原版（没有来源包）排最前，其余按扩展的声明顺序
+    const pack = source ? (packRank.get(source) ?? 98) : 0;
+    // 同一代同一个包里，战斗单位在前、建筑在后
+    const cat = def?.category === 'building' ? 1 : 0;
+    return [era, pack, cat, def?.name ?? id];
+  };
+  const remain = view.remaining
+    .filter((id) => !isPseudoUnit(id) && !!s.unitTypes[id])
+    .slice()
+    .sort((a, b) => {
+      const [ea, pa, ca, na] = rank(a);
+      const [eb, pb, cb, nb] = rank(b);
+      return ea - eb || pa - pb || ca - cb || na.localeCompare(nb);
+    });
+
+  // 点不动的原因要写在卡片详情里：禁用交完、对面在选人时，正是最想研究池子的时候
+  const blockReason =
+    view.phase === 'pick' && view.toAct !== seat
+      ? `等${sideName(s, view.toAct ?? 'A')}选完`
+      : canBan
+        ? ''
+        : view.phase === 'ban'
+          ? '你已经提交过禁用了，等对面'
+          : '现在不是你的操作';
+  const cards = remain.map((id) => unitCard(s.unitTypes[id]!, !clickable, blockReason)).join('');
 
   // 禁用期不揭晓对面禁了什么；选人期两边都公开
   const banLine = (side: PlayerId) => {
@@ -270,7 +382,10 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
     })
     .join('');
 
-  const secs = draftSecondsLeft(s, ctx.now);
+  const remoteSecs = draftSecondsLeft(s, ctx.now);
+  // 房间那份 deadline 可能是另一台机器的钟写的（甚至早就过期）；
+  // 本机另有锚点，两者取小才既不会"一进来 0 秒"也不会把别人的时间当成自己的
+  const secs = ctx.secondsCap === undefined ? remoteSecs : Math.min(remoteSecs, ctx.secondsCap);
 
   return `<div class="draft">
     <header class="draft-head">
@@ -279,7 +394,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         <span class="draft-seat">${sideName(s, seat)}操作中</span>
       </div>
       <div class="draft-timer ${secs <= 5 ? 'is-hurry' : ''}" data-ref="draft-timer">${secs}s</div>
-      ${headActions(false)}
+      ${headActions(false, ctx.room != null)}
       <div class="draft-hint">${hint}</div>
     </header>
     <div class="draft-body">
@@ -301,10 +416,16 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
 }
 
 /** 只换倒计时那一个节点，不整块重绘（整块重绘会把滚动位置和焦点一起丢掉） */
-export function paintDraftTimer(root: HTMLElement, s: GameState, now: number): void {
+export function paintDraftTimer(
+  root: HTMLElement,
+  s: GameState,
+  now: number,
+  cap?: number,
+): void {
   const el = root.querySelector<HTMLElement>('[data-ref="draft-timer"]');
   if (!el) return;
-  const secs = draftSecondsLeft(s, now);
+  const remote = draftSecondsLeft(s, now);
+  const secs = cap === undefined ? remote : Math.min(remote, cap);
   const text = `${secs}s`;
   if (el.textContent !== text) el.textContent = text;
   el.classList.toggle('is-hurry', secs <= 5);

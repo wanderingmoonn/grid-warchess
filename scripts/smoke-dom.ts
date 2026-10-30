@@ -20,8 +20,16 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
+import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
-import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
+import {
+  applyAction,
+  effectiveStats,
+  reachableTiles,
+  refreshMemory,
+  unitIncomeAt,
+} from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
@@ -937,20 +945,20 @@ check('能选地貌与地形对称方式', () => {
 });
 
 check('地貌按钮只在勾了「地形高差」之后才出现', () => {
-  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/火山群/沼泽/群岛/大川
-  // 这六颗 chip 完全由"勾没勾那个扩展"决定。
-  const extra = ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river'];
+  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/沼泽/群岛/大川
+  // 这五颗 chip 完全由"勾没勾那个扩展"决定（火山群已随熔岩/火山一起删掉）。
+  const extra = ['highland', 'canyon', 'marsh', 'isles', 'river'];
 
   // 默认没勾：一颗都不该有，否则玩家会选到一张"规则里没有高度"的图
   for (const id of extra) {
     assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没勾扩展不该有 ${id}`);
   }
-  // 但那六种之外的基础地貌要在（别为了藏而把整行都藏了）
+  // 但那五种之外的基础地貌要在（别为了藏而把整行都藏了）
   for (const id of ['random', 'river-h', 'ridge', 'open']) {
     assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `基础地貌 ${id} 该一直在`);
   }
 
-  // 勾上扩展：六颗当场出现（面板会整块重绘，所以要重新查节点）
+  // 勾上扩展：五颗当场出现（面板会整块重绘，所以要重新查节点）
   const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
   assert.ok(box, '「地形高差」应该出现在扩展列表里（它已经对玩家开放）');
   box.checked = true;
@@ -1910,6 +1918,52 @@ await checkAsync('每格都给出可用金币的估算', async () => {
   assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
 });
 
+check('「空过一回合」能排进队列，且和"还没排"是两种长相', () => {
+  const bar = () => doc.querySelector<HTMLElement>('#commander')!;
+  // 先把上一批留下的队列清掉
+  const clear = bar().querySelector<HTMLElement>('[data-cmd="clear"]');
+  if (clear && !(clear as HTMLButtonElement).disabled) {
+    clear.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  }
+  assert.equal(bar().querySelectorAll('.cmd-chip:not(.is-empty)').length, 0, '先清空');
+
+  const idle = bar().querySelector<HTMLElement>('[data-cmd="idle"]');
+  assert.ok(idle, '参谋部要有一颗「空过一回合」');
+  idle!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+  const filled = bar().querySelectorAll('.cmd-chip.is-idle');
+  assert.equal(filled.length, 1, '队列里应该出现一格"空过"');
+  assert.ok((filled[0]!.textContent ?? '').includes('空过'), '那一格要写「空过」');
+
+  // 关键：它和"还没排到"的虚线空格必须分得开——
+  // 混在一起的话，玩家看不出"我明确要求这回合不造兵"和"我这格还没想好"
+  const empty = bar().querySelectorAll('.cmd-chip.is-empty');
+  assert.equal(empty.length, 4, '后面 4 格仍然是空的');
+
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    orders?: { A?: string[] };
+  };
+  assert.deepEqual(saved.orders?.A, ['@idle'], '空过要落成哨兵值，不是空串');
+});
+
+check('指挥官模式：推进游戏只剩「执行一批」这一条路', () => {
+  // 「结束行动」只推进一个回合，而参谋部按 5 回合一批走。两个入口各推各的，
+  // 玩家顺手点一下就变成"走了半批"，对面看到的回合数也对不上。
+  assert.equal(
+    doc.querySelector('[data-act="end-turn"]'),
+    null,
+    '指挥官模式里不该再有「结束行动，交给对方」',
+  );
+  const run = doc.querySelector<HTMLElement>('#side [data-act="commander-run"]');
+  assert.ok(run, '底栏那颗按钮要换成"执行一批再交还"');
+  assert.ok((run!.textContent ?? '').includes('回合'), `按钮要写清打几个回合，实际：${run!.textContent}`);
+
+  // 顶栏那颗也改成同一件事的另一条入口，而不是"把某一方托管给 AI"
+  const toggle = doc.querySelector<HTMLElement>('#topbar [data-act="toggle-ai"]');
+  assert.ok(toggle, '顶栏按钮还在');
+  assert.equal(toggle!.textContent?.trim(), '交给参谋部', '指挥官模式下它叫「交给参谋部」');
+});
+
 check('棋盘尺寸按"容器宽"和"视口高减工具栏"取小，并且是方形的', () => {
   // jsdom 没有布局引擎，量什么都是 0，所以这里手工喂一组尺寸进去，
   // 验的是那段算术本身：size = min(容器宽, 视口高 − 顶栏 − 参谋部栏 − 内边距)
@@ -2201,27 +2255,28 @@ check('行动点面板：还剩多少 E、这一回合花在哪、单价为什�
     });
   const text = (): string => host.textContent ?? '';
 
-  // ① 民兵站着不动：驻扎扣 20，没有减免所以不写单价
+  // ① 民兵站着不动：什么都不扣（驻扎已取消），池子原样
   paint(foot);
-  assert.ok(text().includes('行动点 80 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
-  assert.ok(text().includes('本回合：驻扎 −20'), '什么都没干要写成驻扎');
+  assert.ok(text().includes('行动点 100 / 100 E'), `要写清还剩多少：${text().slice(0, 200)}`);
+  assert.ok(text().includes('本回合：什么都没做'), '什么都没干要说清楚，而不是留一行空白');
 
   // ② 走过一格：记成移动
   foot.custom = { ap: { turn: st.turn, x: 4, y: 5, debt: 0, over: 0 } };
   paint(foot);
-  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动，不再写驻扎');
+  assert.ok(text().includes('本回合：移动 −20'), '走过就写移动');
+  assert.ok(text().includes('行动点 80 / 100 E'), '走一步扣 20');
 
   // ③ 斥候：骑兵 −5、近战 −10，两行单价要说得出"为什么便宜"
   paint(horse);
-  assert.ok(text().includes('行动点 85 / 100 E'), '斥候驻扎/移动都只花 15');
+  assert.ok(text().includes('行动点 120 / 120 E'), '斥候是骑兵：池子 120（这一格还没走）');
   assert.ok(text().includes('机动 15E（骑兵）'), '骑兵的机动便宜要写出来');
   assert.ok(text().includes('出手 30E（近战）'), '近战的出手便宜要写出来');
 
   // ④ 池子见底：要明说走不动 / 打不出第二下，而不是让玩家点下去才发现
-  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 88, over: 0 } };
+  horse.custom = { ap: { turn: st.turn, x: 7, y: 5, debt: 110, over: 0 } };
   paint(horse);
   assert.ok(text().includes('走不动了'), 'E 见底要写在面板上');
-  assert.ok(text().includes('上回合透支 88'), '透支了多少要交代');
+  assert.ok(text().includes('上回合透支 110'), '透支了多少要交代');
 });
 
 check('新英雄的技能按钮挂上了对应技能', () => {
@@ -2399,6 +2454,146 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   assert.ok(core.length + beasts.length <= all, '筛选只是过滤，不该凭空多出兵种');
 });
 
+check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回全部', () => {
+  const st = createMatch(
+    {
+      size: 14,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    506,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '找不到 A 的城市');
+  city!.era = 4;
+
+  const host = doc.createElement('div');
+  const paint = (q = '', pack = '', era = 0) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city!.id,
+      selectedCampId: null,
+      selectedTile: null,
+      recruitQuery: q,
+      recruitPack: pack,
+      recruitEra: era,
+    });
+  /** 这一屏上每个按钮背后那个兵的时代 */
+  const erasShown = () =>
+    Array.from(host.querySelectorAll<HTMLElement>('[data-act="recruit"]'))
+      .map((el) => UNIT_TYPES[el.dataset.type ?? '']?.era ?? -1)
+      .filter((e) => e > 0);
+  const count = () => host.querySelectorAll('[data-act="recruit"]').length;
+
+  paint();
+  assert.ok(host.querySelector('[data-act="recruit-pack"]'), '第一维：扩展包 chip');
+  assert.ok(host.querySelector('[data-act="recruit-era"]'), '第二维：时代 chip');
+  const all = count();
+
+  // 时代这一维单独用：切到古典，出来的必须全是古典兵
+  const eraChips = Array.from(
+    host.querySelectorAll<HTMLElement>('[data-act="recruit-era"]'),
+  ).map((el) => Number(el.dataset.era));
+  assert.ok(eraChips.includes(0), '「全部时代」那一档要在');
+  const levels = eraChips.filter((e) => e > 0).sort((a, b) => a - b);
+  assert.ok(levels.length >= 2, `两行 chip 至少要能选两个时代，实际 ${levels.join(',')}`);
+
+  paint('', '', levels[0]!);
+  assert.ok(count() > 0, '古典那一档不该是空的');
+  assert.ok(
+    erasShown().every((e) => e === levels[0]),
+    `筛了古典就只该有古典兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
+  );
+  assert.equal(
+    host.querySelector<HTMLElement>(`[data-act="recruit-era"][data-era="${levels[0]}"]`)?.className.includes('active'),
+    true,
+    '当前那一档要亮着',
+  );
+
+  // 各时代加起来 = 全部：一个兵只属于一个时代，不能重也不能漏
+  const sum = levels.reduce((n, l) => {
+    paint('', '', l);
+    return n + count();
+  }, 0);
+  assert.equal(sum, all, `各时代加起来应该正好等于全部（${sum} vs ${all}）`);
+
+  // 叠两个维度：包 + 时代，结果只会更少，而且仍然是"且"
+  const oneLevel = levels[levels.length - 1]!;
+  paint('', 'fantasy-beasts', 0);
+  const onlyPack = count();
+  paint('', '', oneLevel);
+  const onlyEra = count();
+  paint('', 'fantasy-beasts', oneLevel);
+  const both = count();
+  assert.ok(both <= onlyPack && both <= onlyEra, '两个条件是"与"：叠起来不该比任何一边多');
+  assert.ok(
+    erasShown().every((e) => e === oneLevel),
+    '叠了时代之后仍然只能有那个时代的兵',
+  );
+  assert.ok(
+    Array.from(host.querySelectorAll('[data-act="recruit"] .recruit-src')).length === count(),
+    '叠了包之后仍然只能有那个包的兵',
+  );
+  // 再叠搜索：三个条件一起收窄
+  paint('龙骑', 'fantasy-beasts', oneLevel);
+  assert.ok(count() <= both, '再叠一个搜索词只会更少');
+
+  // 回到全部：三个维度全清，兵数是全量
+  paint();
+  assert.equal(count(), all, '清掉筛选应该回到全量');
+
+  // 没命中时要把**生效的每一维**都写出来，否则玩家不知道该清哪一个
+  paint('', 'fantasy-beasts', levels[0]!);
+  if (count() === 0) {
+    assert.ok(host.innerHTML.includes('这一档没有能造的兵'), '空态要给一句人话');
+    assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
+    assert.ok(host.innerHTML.includes('古典'), '空态要写清生效了时代筛选');
+  }
+});
+
+check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {
+  // 这条以前是反的：城市 era 5，面板里连一个古典兵都不剩。
+  const st = createMatch(
+    { size: 14, startEra: 5, aiOpponent: false, aiAlly: false, expansionIds: [], enabledUnits: Object.keys(UNIT_TYPES) },
+    507,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city);
+  city!.era = 5;
+  st.players.A.gold = 9999;
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city!.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  assert.ok(host.querySelector('[data-type="militia"]'), '民兵要在列表里（显示）');
+  const btn = host.querySelector<HTMLButtonElement>('[data-type="militia"]');
+  assert.equal(btn?.disabled, false, '而且真的能点（不是画一个假按钮）');
+
+  // 规则层同一个结论：五代城造得出一代兵
+  const r = applyAction(st, { type: 'RECRUIT', cityId: city!.id, unitType: 'militia' });
+  assert.ok(r.ok, r.ok ? '' : `五代城应该造得出民兵：${r.reason}`);
+
+  // 上界还在：五代的城不该列出六代兵
+  const future = Array.from(host.querySelectorAll<HTMLElement>('[data-act="recruit"]')).filter(
+    (el) => (UNIT_TYPES[el.dataset.type ?? '']?.era ?? 0) > 5,
+  );
+  assert.equal(future.length, 0, '还没解锁的时代不该出现在产兵面板里');
+});
+
 console.log('\n上帝模式');
 click('[data-act="new-game"]');
 await wait(40);
@@ -2500,12 +2695,13 @@ check('沙盒货架也能按扩展包切一刀', () => {
     },
     77,
   );
-  const shelf = (pack: string) =>
+  const shelf = (pack: string, era = 0) =>
     godShelfHtml({
       state: st,
       side: 'A',
       brush: { kind: 'none' },
       pack,
+      era,
       cityEra: 1,
       running: false,
       round: 1,
@@ -2523,6 +2719,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
 
   const all = shelf('');
   assert.ok(all.includes('data-act="god-pack"'), '货架上该有一排按包筛选的 chip');
+  assert.ok(all.includes('data-act="god-era"'), '货架上该有一排按时代筛选的 chip');
   assert.ok(picks(all) > 10, '全部那一档应该有一屏兵');
 
   const coreOnly = picks(shelf('core'));
@@ -2530,6 +2727,21 @@ check('沙盒货架也能按扩展包切一刀', () => {
   assert.ok(coreOnly > 0, '原版那一档不该是空的');
   assert.ok(packOnly > 0, '奇想·野兽那一档不该是空的');
   assert.equal(coreOnly + packOnly, picks(all), '两档加起来应该正好等于全部（互斥且不重不漏）');
+
+  // 时代这一维：单独用、和包叠用，结果都必须是"且"
+  const eraLevels = Array.from(all.matchAll(/data-act="god-era" data-era="(\d+)"/g)).map((m) => Number(m[1]));
+  const onlyEra = eraLevels.filter((l) => l > 0);
+  assert.ok(onlyEra.length >= 2, `货架该列出这一屏真的出现的时代，实际 ${onlyEra.join(',')}`);
+  const eraCounts = onlyEra.map((l) => picks(shelf('', l)));
+  assert.equal(
+    eraCounts.reduce((a, b) => a + b, 0),
+    picks(all),
+    '各时代加起来应该正好等于全部（一个兵只属于一个时代）',
+  );
+  // 叠用：包 + 时代，两个条件同时生效，不会比任何一边单独用更多
+  const stack = picks(shelf('fantasy-beasts', onlyEra[onlyEra.length - 1]!));
+  assert.ok(stack <= picks(shelf('fantasy-beasts')), '叠两个条件只会更少，不会更多');
+  assert.ok(stack <= picks(shelf('', onlyEra[onlyEra.length - 1]!)), '叠两个条件只会更少，不会更多');
   // 「奇想·法则」是纯规则包，一个兵都不带：它不该占一个按下去筛掉 0 个按钮的 chip
   assert.ok(!all.includes('data-pack="fantasy-core"'), '不带兵的规则包不该出现在筛选栏');
 });
@@ -3895,14 +4107,63 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   );
 
   const cards = () => [...doc.querySelectorAll<HTMLElement>('#draft [data-draft]')];
-  assert.ok(cards().length >= 18, `池子应该铺开（至少 18 张卡），实际 ${cards().length}`);
+  // 一张卡对应池子里的一个真兵种：伪单位（攻城结算用的「城市」壳）一旦混进来，
+  // 这里就会少一张——而少的那张在界面上是空白，玩家只会觉得"池子抽少了"。
+  assert.equal(cards().length, 20, `原版池子应该铺满 20 张卡，实际 ${cards().length}`);
+  assert.equal(
+    cards().filter((c) => (c.querySelector('.dc-name')?.textContent ?? '').trim() === '').length,
+    0,
+    '每张卡都得有兵种名，空卡片说明池子里混了伪单位',
+  );
+  assert.equal(doc.querySelector('#draft [data-draft="__city__"]'), null, '池子里不该有伪单位');
   assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
   assert.ok(doc.querySelector('#draft .draft-side.is-b'), '要显示乙方那一栏');
   assert.ok(doc.querySelector('#draft [data-ref="draft-timer"]'), '要有倒计时');
 
+  /*
+   * 一进禁用就该是满格倒计时，而且**不该**有任何"超时"记录。
+   *
+   * 这一条守的是"联机里一进选卡就显示双方禁用已超时"：deadline 早过期或者
+   * 干脆是 0 的时候，界面会把别人的时间当成自己的，倒计时一进来就是 0s，
+   * 紧接着替双方各判一次超时（两边白丢一次禁用）。现在倒计时取"本机看到这一轮
+   * 之后的剩余"和房间那份的小者，锚点一立就是满的。
+   */
+  const timerText = doc.querySelector('#draft [data-ref="draft-timer"]')?.textContent ?? '';
+  const timerSecs = Number.parseInt(timerText, 10);
+  assert.ok(timerSecs > 0, `刚进禁用，倒计时必须是正数，实际「${timerText}」`);
+  assert.equal(
+    doc.querySelectorAll('#draft .draft-log li').length,
+    0,
+    '刚进禁用不该有任何流水，更不能有"超时"',
+  );
+
+  // 卡片排序：时代为主、扩展为辅（同一代里再来比包）
+  const order = cards().map((c) => c.dataset.draft ?? '');
+  const eras = order.map((id) => UNIT_TYPES[id]?.era ?? 0);
+  for (let i = 1; i < eras.length; i++) {
+    assert.ok(
+      eras[i]! >= eras[i - 1]!,
+      `卡片要按时代从低到高排：第 ${i} 张（${order[i]}）是 ${eras[i]} 代，` +
+        `前面是 ${eras[i - 1]} 代`,
+    );
+  }
+
+  // 悬停看详情：被挡住的卡也要能看（这时候正是最想研究池子的时候）
+  const probe = cards()[0]!;
+  probe.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+  const tip = doc.querySelector<HTMLElement>('#draft-tip');
+  assert.ok(tip, '悬停应该浮出一块详情');
+  assert.equal(tip!.hidden, false, '详情要显示出来');
+  const tipText = tip!.textContent ?? '';
+  assert.ok(tipText.includes('攻'), `详情要有数值，实际：${tipText}`);
+  assert.ok(tipText.includes('造价') || tipText.includes('金'), '详情要写造价');
+  probe.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true }));
+  assert.equal(tip!.hidden, true, '移开就收起');
+
   // 甲方禁一个：遮罩上要出现一条"已禁用"，但还没进入选人
   cards()[0]!.click();
   await tick(40);
+
   assert.ok(
     doc.querySelector('#draft .draft-slot.is-ban.is-filled'),
     '禁完之后要看到禁用位被填上',
@@ -3935,6 +4196,53 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
   assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
 });
 
+
+check('选卡池排序：同一代里，原版在扩展前面，扩展之间按声明顺序', () => {
+  // 这条补的是"次要排序依据"：只按时代排的话，同一代里原版兵和扩展兵会混着排，
+  // 扫池子时看不出"这批是哪个包带来的"。
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    const st = createMatch(
+      { ...DEFAULT_CONFIG, draftMode: true, expansionIds: ['fantasy-knights', 'pack-antiquity'] },
+      4242,
+      {},
+    );
+    // 池子只在禁用/选人阶段铺出来（等待开局那一屏是建房的地方）
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    host.innerHTML = draftScreenHtml(started.state, {
+      seat: 'A',
+      now: Date.now(),
+      isAi: () => false,
+    });
+    const ids = [...host.querySelectorAll<HTMLElement>('[data-draft]')].map((c) => c.dataset.draft!);
+    assert.ok(ids.length >= 10, `应该铺出池子，实际 ${ids.length}`);
+
+    const packRank = new Map(EXPANSIONS.map((e, i) => [e.id, i + 1]));
+    // 时代要问**这一局**的兵种表：扩展兵种不在 UNIT_TYPES 里
+    const key = (id: string) => {
+      const src = unitSourceIdOf(id);
+      return {
+        era: started.state.unitTypes[id]?.era ?? 99,
+        pack: src ? (packRank.get(src) ?? 98) : 0, // 原版＝0，排最前
+      };
+    };
+    for (let i = 1; i < ids.length; i++) {
+      const a = key(ids[i - 1]!);
+      const b = key(ids[i]!);
+      assert.ok(b.era >= a.era, `第 ${i} 张跨回了低时代：${ids[i - 1]}(${a.era}) → ${ids[i]}(${b.era})`);
+      if (b.era === a.era) {
+        assert.ok(
+          b.pack >= a.pack,
+          `同一代里扩展包顺序乱了：${ids[i - 1]}(包${a.pack}) → ${ids[i]}(包${b.pack})`,
+        );
+      }
+    }
+  } finally {
+    host.remove();
+  }
+});
 
 await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
   click('[data-act="new-game"]');
@@ -3982,7 +4290,9 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   for (let i = 0; i < 40; i++) {
     const mask = doc.querySelector<HTMLElement>('#draft');
     if (!mask || mask.hidden) break;
-    const card = doc.querySelector<HTMLElement>('#draft [data-draft]:not([disabled])');
+    const card = doc.querySelector<HTMLElement>(
+      '#draft [data-draft]:not([aria-disabled="true"])',
+    );
     if (card) {
       card.click();
       await tick(80);

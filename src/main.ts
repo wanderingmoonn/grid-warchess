@@ -12,11 +12,12 @@ import { expansionById } from './core/expansions.ts';
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
 import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
-import { CITY, CONFIG, ORDER_UPGRADE, passable } from './core/config.ts';
+import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
+  mergeDraftStep,
   attackableTargets,
   buildSiteError,
   canAttack,
@@ -62,7 +63,10 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
+  DRAFT_BAN_MS,
+  DRAFT_PICK_MS,
   draftInProgress,
+  draftPhaseLabel,
   draftSecondsLeft,
   draftView,
 } from './core/draft.ts';
@@ -243,6 +247,13 @@ let recruitQuery = '';
  * JS 侧持有。搜索是"找已知的名字"，这个开关是"先圈定范围再找"，两件事。
  */
 let recruitPack = '';
+/**
+ * 产兵列表按时代筛选：0 = 全部，其它是时代等级。
+ *
+ * 和 recruitPack 同一套：空值＝不筛，两个维度是"与"。同样**不随换城清空**——
+ * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
+ */
+let recruitEra = 0;
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -630,11 +641,15 @@ function panelInput(known?: PlayerView): PanelInput {
     chimeVolume,
     recruitQuery,
     recruitPack,
+    recruitEra,
     logSide: logScope(),
     spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
     spectator: watching(),
     // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
     commander: state.config.commanderMode === true,
+    // 底栏那颗按钮在指挥官模式里是"执行一批再交还"的入口，得知道这批打几个回合
+    commanderRunning,
+    commanderRounds: room ? 1 : CONFIG.commanderSlots,
     forceMode,
     report: reportPanel(),
   };
@@ -790,6 +805,8 @@ function render(): void {
     waitingForPeer: !myTurn() && !state.winner,
     spectator: watching(),
     god: state.config.godMode === true,
+    commander: state.config.commanderMode === true,
+    commanderRunning,
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
@@ -1067,7 +1084,8 @@ function refreshSelection(): void {
 
 function clearSelection(): void {
   recruitQuery = '';
-  // 扩展包筛选不清：它是"我这一局只想看哪几个包"，换一个单位不该把它重置掉
+  // 扩展包 / 时代筛选都不清：它们是"我这一局只想看哪几个包、哪几代"，
+  // 换一个单位不该把它们重置掉
   forceMode = null;
   pickState = null;
   selectedId = null;
@@ -1239,8 +1257,23 @@ let draftSig = '';
 let draftAiPending = false;
 /** 正在往云端提交一步 BP：期间不接受新的点击（避免同一手上交两次） */
 let draftBusy = false;
+/**
+ * 上一步没交上去（重试四轮都失败 / 断网）。
+ *
+ * 单独记一个标记，是因为"本地进度号跑到房间前面"这件事只能从这里来：
+ * 本地已经落下这一步、房间没有，于是两边各拿一份不同的名单互相等——
+ * 谁也不会再动，界面上看起来就是"禁不动、选不动"。看到这个标记就按房间重来。
+ */
+let draftStuck = false;
+/** 提交期间点下去的卡片：不丢，等这一步交完接着办 */
+let draftQueuedClick: { action: Action; actor: PlayerId } | null = null;
 /** 对面是否已经入座（选卡 lobby 要显示"等待对方加入"） */
 let peerSeated = false;
+
+/** 本机现在替哪一方操作：联机以房间席位为准，热座看座位交接 */
+function draftActor(): PlayerId {
+  return room && !room.spectator ? room.seat : draftSeat;
+}
 
 function draftIsAi(side: PlayerId): boolean {
   // 房间里的两侧都是人（席位就是身份），托管开关在进房时已经被关掉了
@@ -1286,10 +1319,14 @@ function dispatchDraft(action: Action, actor: PlayerId): boolean {
       toast('观战位只能看，不参与选卡');
       return false;
     }
-    if (draftBusy) return false;
-    if (actor !== room.seat) {
-      toast('这是对面的席位');
-      return false;
+    // 席位只认房间：缓存下来的 draftSeat 一旦和房间不一致，点下去会被判成
+    // "这是对面的席位"，表现就是"选不动卡"。所以这一步以 room.seat 为准。
+    if (actor !== room.seat) actor = room.seat;
+    if (draftBusy) {
+      // 上一步还在提交：先记下这一下，等它交完再办。
+      // 以前直接 return，快速连点时后几下会被静默吃掉——玩家以为卡了。
+      draftQueuedClick = { action, actor };
+      return true;
     }
     const prevSeq = state.draft?.seq ?? 0;
     const result = applyAction(state, action, actor);
@@ -1338,6 +1375,7 @@ async function pushDraft(
       const ok = await submitDraft(seat.code, state, prevSeq);
       if (ok) {
         dirty = false;
+        draftStuck = false;
         if (state.draft?.phase === 'done') afterDraft();
         return;
       }
@@ -1350,8 +1388,10 @@ async function pushDraft(
         return;
       }
       // 对面先写了：把自己的这一步补到最新状态上再来一次
-      const retry = applyAction(snap.state, action, actor);
+      const retry = mergeDraftStep(snap.state, action, actor);
       if (!retry.ok) {
+        // 这一步在新局面上已经不合法了（比如对面已经禁过、或者轮次已经过去）。
+        // 房间是权威：退回房间那份，把出手权还给玩家。
         takeSnapshot(snap);
         toast(retry.reason);
         return;
@@ -1361,13 +1401,21 @@ async function pushDraft(
       saveMatch(state);
       render();
     }
-    dirty = true;
-    toast('这一步没交上去（网络可能不稳）。点「联机 → 刷新状态」看一眼');
+    // 四轮都没交上去：本地已经落下的这一步房间里没有。记住它，
+    // 轮询看到"本地进度号比房间大"时就会按房间重来，不至于两边干等。
+    draftStuck = true;
+    toast('这一步没交上去（网络可能不稳）。点「刷新房间状态」按房间重来');
   } catch (err) {
-    dirty = true;
+    draftStuck = true;
     toast(err instanceof Error ? err.message : '提交失败，网络可能不通');
   } finally {
     draftBusy = false;
+    // 提交期间点下去的卡片：现在接着办（只留最后一下，连点不会堆成队列）
+    const queued = draftQueuedClick;
+    draftQueuedClick = null;
+    if (queued && room?.code === seat.code && draftInProgress(state)) {
+      window.setTimeout(() => dispatchDraft(queued.action, queued.actor), 0);
+    }
   }
 }
 
@@ -1425,6 +1473,8 @@ function renderDraft(): void {
   ].join('|');
   if (sig !== draftSig) {
     draftSig = sig;
+    // 重画之后旧卡片已经不在文档里，浮层再留着就是一片错位的信息
+    hideDraftTip();
     draftEl.innerHTML = draftScreenHtml(state, {
       seat: draftSeat,
       now: Date.now(),
@@ -1432,11 +1482,14 @@ function renderDraft(): void {
       room: room
         ? { code: room.code, link: inviteLink(room.code), peerSeated }
         : null,
+      // 倒计时取"本机看到这一轮之后剩下的秒数"和房间那份的小者：
+      // 房间那份可能是别人的钟写的，早就不作数了
+      secondsCap: draftLocalSecondsLeft(Date.now()),
     });
     // AI 的那一手：晚半秒再动，让它看起来像在挑，而不是"你点完它就位"
     scheduleDraftAi();
   }
-  paintDraftTimer(draftEl, state, Date.now());
+  paintDraftTimer(draftEl, state, Date.now(), draftLocalSecondsLeft(Date.now()));
 }
 
 /**
@@ -1450,6 +1503,35 @@ function renderDraft(): void {
  * 都能算出同样的结果，也不会因为某个客户端时钟慢半拍就把对局卡死。
  */
 let draftTicker: number | null = null;
+/** 上一次为哪个进度号判过超时（防止每 400ms 重复提交同一步） */
+let draftTimeoutAt = -1;
+/**
+ * 本机第一次看到"当前这一轮"的时刻。
+ *
+ * 为什么不能只信 state 里的 deadline：那个数是**另一台机器**的钟写进来的，
+ * 而且可能是几分钟前写的（你入座时对面已经在禁用屏上坐了一会儿）。拿它直接
+ * 减 Date.now()，轻则倒计时一进来就是 0，重则当场判"双方禁用超时"。
+ * 所以本机自己记一个锚点：超时只在我亲眼看着这一轮走完整个时长之后才发起。
+ * 房间那份 deadline 仍然是上限（它更晚就等它）。
+ */
+let draftAnchor = { key: '', at: 0 };
+
+/** 这一轮的时长（禁用 25 秒 / 每次选人 30 秒） */
+function draftPhaseMs(state: GameState): number {
+  return state.draft?.phase === 'pick' ? DRAFT_PICK_MS : DRAFT_BAN_MS;
+}
+
+/**
+ * 距离本机锚点还有多少秒（倒计时显示用；不小于 0）。
+ *
+ * 还没立锚点时（刚进这一轮、定时器还没跑过第一拍）按**满格**算：
+ * 这一轮就是从这一刻开始的，返回 0 会让界面一进来就写「0s」。
+ */
+function draftLocalSecondsLeft(now: number): number {
+  const ms = draftPhaseMs(state);
+  if (!draftAnchor.at) return Math.ceil(ms / 1000);
+  return Math.max(0, Math.ceil((draftAnchor.at + ms - now) / 1000));
+}
 
 function startDraftTicker(): void {
   if (draftTicker !== null) return;
@@ -1463,18 +1545,43 @@ function startDraftTicker(): void {
     if (phase !== 'ban' && phase !== 'pick') return;
     const now = Date.now();
     paintDraftTimer(draftEl, state, now);
-    // 联机时多等一会儿再判超时：deadline 是**对方那台机器的钟**写进来的，
-    // 两边差个一两秒很正常，早判就等于替对面抢答了
+
+    /*
+     * ① 先把本机的钟对准这一轮。
+     *
+     * 换了一轮（阶段或进度号变了）就重新起算：这一拍只记时，不判超时。
+     * 少了这一句，刚进禁用屏的那一下会因为拿到的是别人的 deadline 而当场
+     * 判"双方禁用超时"——这正是这次要修的那个毛病。
+     */
+    const key = `${phase}:${state.draft?.seq ?? 0}`;
+    if (draftAnchor.key !== key) {
+      draftAnchor = { key, at: now };
+      return;
+    }
+
+    // ② 本机还没走完这一轮 → 不判。
+    if (now < draftAnchor.at + draftPhaseMs(state)) return;
+    // ③ 房间那份 deadline 也得到点（它更晚就等它）。
+    //    联机时多留一点余量：deadline 是对方那台机器的钟写进来的。
     const slack = room ? 1500 : 0;
     if (draftSecondsLeft(state, now + slack) > 0) return;
-    const view = draftView(state)!;
-    const actor = view.phase === 'ban' ? draftSeat : (view.toAct ?? draftSeat);
-    const r = applyAction(state, { type: 'DRAFT_TIMEOUT', at: now }, actor);
-    if (!r.ok) return;
-    state = r.state;
-    saveMatch(state);
-    if (state.draft?.phase === 'done') afterDraft();
-    else render();
+    /*
+     * 到点了。这一步也必须**提交进房间**——以前只改本地，于是两边各超时各的：
+     * A 的钟先到点，A 本机补了一手，房间里没有；B 的钟后到点，也补了一手。
+     * 两份名单从此分叉，进度号各自往前跑，谁也追不上谁，界面上就是
+     * "超时补选之后还得再选一次"（对方的版本被自己这边覆盖/被拉回来）。
+     *
+     * 超时的结果本身是确定的（禁用＝放弃；选人＝按种子在剩余池里取一个），
+     * 所以哪一台机器先提交都一样，谁先到点谁写，另一边拉下来即可。
+     */
+    const actor = draftActor();
+    // 同一格只尝试一次，别每 400ms 反复弹提示
+    if (draftTimeoutAt === state.draft?.seq) return;
+    draftTimeoutAt = state.draft?.seq ?? 0;
+    if (!dispatchDraft({ type: 'DRAFT_TIMEOUT', at: now }, actor)) {
+      // 没接住（比如本地时钟还没到房间的 deadline）：解锁，下一拍再试
+      draftTimeoutAt = -1;
+    }
   }, 400);
 }
 
@@ -1482,6 +1589,7 @@ function stopDraftTicker(): void {
   if (draftTicker === null) return;
   window.clearInterval(draftTicker);
   draftTicker = null;
+  draftAnchor = { key: '', at: 0 };
 }
 
 function scheduleDraftAi(): void {
@@ -1552,27 +1660,127 @@ function onDraftCommand(cmd: string): void {
     handleAction('new-game', draftEl);
     toast('已退出选卡，可以重新配置开局');
   }
+
+  if (cmd === 'refresh') void refreshDraftRoom();
+}
+
+/**
+ * 「刷新房间状态」：把房间那一份硬拉下来。
+ *
+ * 这是联机选卡的逃生口。选卡每一步都要写房间，写失败之后本机会停在
+ * 一份"房间里并不存在"的名单上，表现就是点哪张卡都没反应、或者一直
+ * 显示"等对面"。自动轮询要等下一次、还得满足条件，玩家不该被迫等；
+ * 点一下立刻对齐，然后重新出这一手。
+ */
+async function refreshDraftRoom(): Promise<void> {
+  const seat = room;
+  if (!seat) return;
+  try {
+    const snap = await fetchRoom(seat.code);
+    if (!snap || room?.code !== seat.code) return;
+    draftStuck = false;
+    draftQueuedClick = null;
+    takeSnapshot(snap);
+    if (!snap.state.draft || snap.state.draft.phase === 'done') {
+      afterDraft();
+      toast('房间里的选卡已经完成了，直接开打');
+      return;
+    }
+    toast(`已按房间对齐：${draftPhaseLabel(snap.state)}`);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '拉不到房间状态，检查网络');
+  }
+}
+
+/**
+ * 卡片详情浮层（悬停显示完整数据）。
+ *
+ * 为什么不写在卡片里做 CSS 浮层：池子是 `overflow:auto` 的滚动容器，
+ * 卡片内部的绝对定位浮层会被裁掉——最上面一排的详情直接看不见。所以这个节点
+ * 挂在 body 上，位置按卡片的视口矩形算，指针事件全部穿透（`pointer-events:none`），
+ * 免得它自己把 hover 打断。
+ *
+ * 数据仍然写在卡片里（`.draft-tip[hidden]`），这里只负责"搬上来 + 定位"：
+ * 一份数据、一处渲染逻辑，不用在两边各维护一份文案。
+ */
+let draftTipEl: HTMLElement | null = null;
+
+function draftTipPanel(): HTMLElement {
+  if (draftTipEl) return draftTipEl;
+  const el = document.createElement('div');
+  el.id = 'draft-tip';
+  el.hidden = true;
+  document.body.appendChild(el);
+  draftTipEl = el;
+  return el;
+}
+
+function hideDraftTip(): void {
+  if (draftTipEl) draftTipEl.hidden = true;
+}
+
+function showDraftTip(card: HTMLElement): void {
+  const src = card.parentElement?.querySelector<HTMLElement>('.draft-tip');
+  if (!src) return;
+  const panel = draftTipPanel();
+  panel.innerHTML = src.innerHTML;
+  panel.hidden = false;
+
+  const r = card.getBoundingClientRect();
+  const pw = panel.offsetWidth;
+  const ph = panel.offsetHeight;
+  const vw = window.innerWidth || 1024;
+  const vh = window.innerHeight || 768;
+  // 默认放上面（卡片多半在屏幕下半部分）；顶上放不下就翻到下面
+  const above = r.top - ph - 8 >= 8;
+  const top = above ? r.top - ph - 8 : r.bottom + 8;
+  const left = Math.min(Math.max(8, r.left), Math.max(8, vw - pw - 8));
+  panel.style.left = `${left}px`;
+  panel.style.top = `${Math.min(top, vh - ph - 8)}px`;
+}
+
+/** 选卡遮罩上的悬停：进出卡片时搬运详情 */
+function bindDraftTips(): void {
+  appEl.addEventListener('mouseover', (e) => {
+    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
+    if (!card) return;
+    showDraftTip(card);
+  });
+  appEl.addEventListener('mouseout', (e) => {
+    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
+    if (!card) return;
+    const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
+    // 在同一张卡内部移动（图标→文字）不算离开
+    if (to && card.contains(to)) return;
+    hideDraftTip();
+  });
+  // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
+  appEl.addEventListener('scroll', hideDraftTip, true);
+  document.addEventListener('visibilitychange', hideDraftTip);
+  appEl.addEventListener('click', hideDraftTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
 function onDraftClick(typeId: string): void {
   const view = draftView(state);
   if (!view) return;
+  // 席位一律问 draftActor()：联机以房间为准，热座看交接
+  const seat = draftActor();
   if (view.phase === 'ban') {
-    const mine = draftSeat === 'A' ? view.a : view.b;
+    const mine = seat === 'A' ? view.a : view.b;
     if (mine.banDone) {
       toast('你已经禁用过了，等对面');
       return;
     }
-    dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, draftSeat);
+    dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, seat);
     return;
   }
   if (view.phase === 'pick') {
-    if (view.toAct !== draftSeat) {
+    if (view.toAct !== seat) {
       toast(`等${state.players[view.toAct ?? 'A'].name}选完`);
       return;
     }
-    dispatchDraft({ type: 'DRAFT_PICK', unitId: typeId, at: Date.now() }, draftSeat);
+    dispatchDraft({ type: 'DRAFT_PICK', unitId: typeId, at: Date.now() }, seat);
   }
 }
 
@@ -2260,6 +2468,17 @@ function handleAction(act: string, el: HTMLElement): void {
       dispatch({ type: 'END_TURN' });
       return;
 
+    /*
+     * 指挥官模式里"推进游戏"只有一个意思：**打完一批再交还**。
+     *
+     * 底栏那颗按钮（以前是「结束行动，交给对方」）和顶栏的「交给 AI」都指到这里。
+     * 三条入口（还有参谋部那颗「执行 5 回合」）做同一件事，就不会出现
+     * "我顺手点了结束行动，于是只走了半批、对面看到的回合数和我这边对不上"。
+     */
+    case 'commander-run':
+      void runCommanderBatch();
+      return;
+
     case 'zoom-in':
       zoomStep(1);
       return;
@@ -2427,6 +2646,12 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'toggle-ai': {
+      if (state.config.commanderMode === true && !room) {
+        // 指挥官模式：这一方的走位本来就归 AI，"交给 AI"没有别的意思可讲。
+        // 当成"执行一批"处理，顺手点错也不会把对面也丢给 AI。
+        void runCommanderBatch();
+        return;
+      }
       if (godMode()) {
         // 顶栏那个开关是"托管一方"，而沙盒里两边本来就归 AI 打——
         // 用它会把某一方永久交给 AI，回合会自动往前跑，摆兵就摆不安稳了
@@ -2654,6 +2879,14 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    // 时代的切换规矩和扩展包一致：再点一次当前那一档＝回到全部
+    case 'recruit-era': {
+      const v = Number(el.dataset.era ?? 0);
+      recruitEra = recruitEra === v ? 0 : v;
+      render();
+      return;
+    }
+
     // 地形笔刷：再点一次同一种地形＝放下笔刷，和兵种货架一个手感
     case 'god-terrain': {
       const t = el.dataset.terrain as Terrain | undefined;
@@ -2670,6 +2903,14 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'god-pack': {
       const p = el.dataset.pack ?? '';
       godPack = godPack === p ? '' : p;
+      render();
+      return;
+    }
+
+    // 货架按时代切：同一套手感，再点一次回到「全部时代」
+    case 'god-era': {
+      const v = Number(el.dataset.era ?? 0);
+      godEra = godEra === v ? 0 : v;
       render();
       return;
     }
@@ -2899,6 +3140,8 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
 /** 这一格为什么造不出来（能造返回空串）。界面据此把估价标红并写一句原因 */
 function slotProblem(unitId: string, site: string): string {
   if (!unitId) return '';
+  // 「空过」是玩家亲口排的一个决定，不是"排不出来"：它没有任何前置条件
+  if (unitId === ORDER_IDLE) return '';
   const def = state.unitTypes[unitId];
   if (!def) return '没有这个兵种';
   if (unitId === ORDER_UPGRADE) {
@@ -2933,7 +3176,7 @@ function slotProblem(unitId: string, site: string): string {
  * 同一个英雄（比如第一格造、第四格补），第二格不该再算一次解锁费。
  */
 function slotCost(unitId: string, paid?: Set<string>): number {
-  if (!unitId) return 0;
+  if (!unitId || unitId === ORDER_IDLE) return 0;
   if (unitId === ORDER_UPGRADE) {
     const costs = citiesOf(state, me())
       .map((c) => upgradeCostOf(state, c))
@@ -3067,7 +3310,20 @@ function renderCommander(): void {
   for (let i = 0; i < slots; i++) {
     const type = queue[i] ?? '';
     if (!type) {
+      // 没排到这一格：虚线框，点「空过」可以就地把它变成"这一回合什么都不要"
       chips.push(`<span class="cmd-chip is-empty"><b>${i + 1}</b><span>空</span></span>`);
+      continue;
+    }
+    if (type === ORDER_IDLE) {
+      // 排了"空过"：和虚线空格必须长得不一样，否则玩家分不清
+      // "我还剩 3 格没排"和"我明确要求这 3 回合不造兵"
+      chips.push(`<span class="cmd-chip is-idle">
+        <b>${i + 1}</b>
+        <span class="cmd-chip-name">空过</span>
+        <i>· 这回合不造兵也不升级</i>
+        <span class="cmd-chip-est" data-est="${i}"></span>
+        <button class="cmd-x" data-cmd="drop" data-idx="${i}" title="把这一格从队列里去掉">×</button>
+      </span>`);
       continue;
     }
     const name = type === ORDER_UPGRADE ? '升级时代' : (state.unitTypes[type]?.name ?? type);
@@ -3093,8 +3349,10 @@ function renderCommander(): void {
     <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
+      <button class="btn btn-sm" data-cmd="idle" ${queue.length >= slots ? 'disabled' : ''}
+        title="在序列末尾排一格「这一回合什么都不造」：攒钱、等时代、等对面先动手">空过一回合</button>
       <button class="btn btn-sm" data-cmd="clear" ${queue.length > 0 ? '' : 'disabled'}>清空</button>
-      <button class="btn btn-primary" data-cmd="run" ${queue.length > 0 ? '' : 'disabled'}>${
+      <button class="btn btn-primary" data-cmd="run">${
         online ? '执行本回合并提交' : `执行 ${slots} 回合`
       }</button>
     </div>
@@ -3115,6 +3373,7 @@ commanderEl.addEventListener('click', (e) => {
   if (!cmd) return;
 
   if (cmd === 'run') void runCommanderBatch();
+  if (cmd === 'idle') enqueueOrder(ORDER_IDLE, '');
   if (cmd === 'stop') {
     // 令牌一换，所有正在跑的 AI 循环下一步就自己退出
     aiToken += 1;
@@ -3153,6 +3412,10 @@ function enqueueOrder(type: string, site: string): void {
   queue.push(type);
   sites.push(site);
   if (!dispatch({ type: 'SET_ORDERS', queue, sites })) return;
+  if (type === ORDER_IDLE) {
+    toast(`已排入第 ${queue.length} 格：这一回合什么都不造，钱留着`);
+    return;
+  }
   const name = type === ORDER_UPGRADE ? '升级时代' : (state.unitTypes[type]?.name ?? type);
   toast(`已排入队列：${name}`);
 }
@@ -3163,6 +3426,8 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
   // 队首那一格指定的产兵点：空串＝不指定（AI 自己挑最合适的那座）
   const site = orderSitesOf(state, player)[0] || null;
   if (head === ORDER_UPGRADE) return { maxRecruit: 0, maxUpgrade: 1, order: null, orderSite: site };
+  // 空过：这一回合一个兵都不造、也不要升级，钱留着
+  if (head === ORDER_IDLE) return { maxRecruit: 0, maxUpgrade: 0, order: null, orderSite: null };
   return { maxRecruit: head ? 1 : 0, maxUpgrade: 0, order: head || null, orderSite: head ? site : null };
 }
 
@@ -3300,6 +3565,8 @@ let godPlay: 'me' | 'both' | null = null;
 let godPassing = false;
 /** 货架按扩展包筛选（'' = 全部）。和侧栏那个分开存：两边看的东西不一样 */
 let godPack = '';
+/** 货架按时代筛选（0 = 全部）。理由同上：沙盒里想看的是"这一代有什么" */
+let godEra = 0;
 /** AI 正在同时操控两边 */
 let godRunning = false;
 /** 打到第几个回合（工具栏上那个"第 N 回合"）。1 是"正在打第一轮"，不是 0 */
@@ -3422,6 +3689,7 @@ function godUi() {
     side: godSide,
     brush: godBrush,
     pack: godPack,
+    era: godEra,
     // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
     // 没有理由默认成另一个时代
     cityEra: godCityEra || state.config.startEra,
@@ -3498,8 +3766,9 @@ function renderGodShelf(): void {
     godSide,
     godBrush.kind,
     godBrush.kind === 'unit' ? godBrush.type : '',
-    // 换包要重排整个货架，这一格必须进签名
+    // 换包 / 换时代都要重排整个货架，这两格必须进签名
     godPack,
+    godEra,
     state.units.length,
     state.cities.length,
     state.players.A.gold,
@@ -3874,7 +4143,21 @@ async function pollRoom(): Promise<void> {
     if (remoteBP || localBP) {
       const rseq = remoteDraft?.seq ?? 0;
       const lseq = localDraft?.seq ?? 0;
-      if (rseq <= lseq) return; // 没新东西，或者我这边更新
+      if (rseq <= lseq) {
+        /*
+         * 本地跑到房间前面：只可能是"这一手没交上去"（提交四轮都失败）。
+         *
+         * 以前这里直接 return，于是两边各拿一份对方没有的名单互相等——
+         * 禁用卡在"你已提交，等对面"，选人卡在"等对方选"，点哪张都没用。
+         * 房间是权威：退回房间那份，让玩家重新出这一手。
+         */
+        if (rseq < lseq && draftStuck) {
+          draftStuck = false;
+          takeSnapshot(snapshot);
+          toast('选卡进度已按房间重新对齐，刚才那一步没交上去，请再点一次');
+        }
+        return;
+      }
       takeSnapshot(snapshot);
       if (!remoteBP) toast('对面的选卡打完了，进入对局');
       return;
@@ -4366,6 +4649,9 @@ const endPan = (): void => {
 boardScrollEl.addEventListener('pointerup', endPan);
 boardScrollEl.addEventListener('pointercancel', endPan);
 boardScrollEl.addEventListener('pointerleave', endPan);
+
+// 选卡遮罩上的"悬停看详情"：卡片一多，光看名字和攻血根本判断不了禁它值不值
+bindDraftTips();
 
 appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;

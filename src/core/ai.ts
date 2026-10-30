@@ -17,7 +17,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
-import { CONFIG, ORDER_UPGRADE, navigable, passable } from './config.ts';
+import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { playerView } from './fog.ts';
 import {
   armySize,
@@ -2688,7 +2688,7 @@ function recruitCandidate(
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
     if (heroBlocked(s, me, d)) return false;
     // 时代窗口与选卡名单走 core/draft 的同一套判据：
-    // 选卡模式下 AI 也只能造自己选到的兵，且旧时代的兵不再被"过时"挡住
+    // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
     if (!eraWindowOk(s, d, src.era)) return false;
     if (!canUseType(s, me, d.id)) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
@@ -3227,7 +3227,15 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     if (plan.length > 0) return { type: 'SET_ORDERS', queue: plan };
   }
   /** 这一回合点名的兵种（不在指挥官模式下就是调用方给的临时指令） */
-  const order = commander ? (head === '' || head === ORDER_UPGRADE ? null : head) : (budget.order ?? null);
+  /**
+   * 队首是「空过」：这一回合确定什么都不做。
+   *
+   * 必须和空串分开——空串是"队列没排到这一格"，只有 `@idle` 才是玩家亲口说的
+   * "这一回合我什么都不造"。混在一起的话，想攒钱的那一格会被 AI 当成没计划、
+   * 自作主张花出一笔兵钱。
+   */
+  const idleHead = head === ORDER_IDLE;
+  const order = commander ? (head === '' || head === ORDER_UPGRADE || idleHead ? null : head) : (budget.order ?? null);
   /**
    * 这一回合点名的产兵点。指挥官模式从序列里读（和队首对齐），
    * 其它场合用调用方给的（跑批/用例可以借此固定"从哪座城出"）。
@@ -3236,7 +3244,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   // 指挥官模式的产能是「每回合 1 个」：队首是兵种**并且**这回合还没造过。
   // 只砍到"看队首"是不够的——一回合里 AI 会反复问下一步，队首没变就会连着造好几个。
   const mayRecruit = commander
-    ? head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
+    ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
     : budget.recruited < budget.maxRecruit;
   const mayUpgrade = commander ? head === ORDER_UPGRADE && budget.upgraded < 1 : budget.upgraded < budget.maxUpgrade;
 

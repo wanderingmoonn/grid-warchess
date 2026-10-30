@@ -18,6 +18,7 @@ import {
   BASE_MAX_ERA,
   CONFIG,
   ERAS,
+  ORDER_IDLE,
   ORDER_UPGRADE,
   UNIT_TYPES,
   buildCostOf,
@@ -99,7 +100,8 @@ import {
 import type { ChatLine } from '../src/net/chat.ts';
 import {
   AP_COST,
-  AP_MAX,
+  AP_BY_TIER,
+  apMaxOf,
   MOUNTED_IDS,
   VEHICLE_IDS,
   apActionCost,
@@ -139,6 +141,7 @@ import {
 } from '../src/core/setup.ts';
 import {
   applyAction,
+  mergeDraftStep,
   adjacentToWater,
   attacksLeftOf,
   attacksPerTurn,
@@ -1782,7 +1785,7 @@ test('经济建筑自己也能产金', () => {
   assert.ok(unitIncome(r.state, mill) > 0, '磨坊建在平原上应该有产出');
 });
 
-test('城市只能造当前时代和上一个时代的兵种', () => {
+test('时代窗口只剩上界：三代城能造古典兵，但造不了还没解锁的兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
@@ -1791,13 +1794,23 @@ test('城市只能造当前时代和上一个时代的兵种', () => {
 
   assert.ok(
     applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'spearman' }).ok,
-    '上一个时代的兵种应该还能造',
+    '上一个时代的兵种当然能造',
   );
-  assert.equal(
+  // 这条以前是反的：城市升到第三代，民兵就再也造不出来了——升级让选项变少，
+  // 而玩家想要的恰恰是"三级城里还能补两个便宜的长枪兵看家"。
+  assert.ok(
     applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' }).ok,
-    false,
-    '两个时代前的兵种已经被淘汰',
+    '两个时代前的兵种也该还能造',
   );
+  assert.ok(
+    applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'archer' }).ok,
+    '同代的古典兵一样能造',
+  );
+
+  // 上界不动：还没解锁的时代仍然拒绝，而且要说清差在哪一级
+  const future = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'rifleman' });
+  assert.ok(!future.ok, '工业时代的兵不该在火药城里造出来');
+  assert.match(future.reason, /工业/);
 });
 
 console.log('\n时代链');
@@ -5560,6 +5573,60 @@ test('AI 决策是确定性的', () => {
   assert.deepEqual(a1, a2, '同一局面应该给出同一个决策');
 });
 
+test('指挥官模式：排在队首的「空过」不会被 AI 当成"没计划"而自作主张造兵', () => {
+  const s = fresh({ commanderMode: true });
+  s.current = 'B';
+  s.players.B.gold = 900;
+  s.orders = { ...(s.orders ?? {}), B: [ORDER_IDLE] };
+  s.orderSites = { ...(s.orderSites ?? {}), B: [''] };
+
+  // 这一回合 AI 可以走位、可以升级兵营，但绝不能再掏钱造兵
+  const acts: Action[] = [];
+  let cur = s;
+  for (let i = 0; i < 10; i++) {
+    const a = aiNextAction(cur);
+    if (!a) break;
+    acts.push(a);
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  assert.equal(
+    acts.filter((a) => a.type === 'RECRUIT').length,
+    0,
+    `队首是@idle 时不该造兵，实际：${acts.map((a) => a.type).join(',')}`,
+  );
+  // 队列不能被"代排"覆盖掉：空过的意思就是这一格不花钱
+  assert.deepEqual(cur.orders?.B, [ORDER_IDLE], '序列要原样留着，等这一回合过去');
+  assert.equal(
+    acts.filter((a) => a.type === 'SET_ORDERS').length,
+    0,
+    '不该把玩家排的序列换成 AI 自己那套',
+  );
+
+  // 反证：同一个局面里，队首点的是一个**真兵种**时 AI 会把它造出来。
+  // 这一条必须留着——否则上面"一个兵都没造"也可能只是因为它这回合压根没得造。
+  const real = fresh({ commanderMode: true });
+  real.current = 'B';
+  real.players.B.gold = 900;
+  real.orders = { ...(real.orders ?? {}), B: ['militia'] };
+  real.orderSites = { ...(real.orderSites ?? {}), B: [''] };
+  let c2 = real;
+  const acts2: Action[] = [];
+  for (let i = 0; i < 12; i++) {
+    const a = aiNextAction(c2);
+    if (!a) break;
+    acts2.push(a);
+    const r = applyAction(c2, a);
+    if (!r.ok) break;
+    c2 = r.state;
+  }
+  assert.ok(
+    acts2.some((a) => a.type === 'RECRUIT'),
+    `队首点了民兵就该造民兵（实际：${acts2.map((a) => a.type).join(',')}）`,
+  );
+});
+
 test('AI 会招募和升级', () => {
   const s = fresh();
   s.current = 'B';
@@ -8771,9 +8838,9 @@ test('关掉扩展时没有高度：步耗与射程跟本体一模一样', () =>
   for (const t of NEW_TERRAINS) {
     assert.equal(heightOfTerrain(off, t), 0, `关掉扩展时 ${t} 还有高度`);
   }
-  assert.equal(heightOfTerrain(on, 'plain'), 2);
-  assert.equal(heightOfTerrain(on, 'plateau'), 4);
-  assert.equal(heightOfTerrain(on, 'volcano'), 6);
+  assert.equal(heightOfTerrain(on, 'plain'), 0, '平原是基准面');
+  assert.equal(heightOfTerrain(on, 'plateau'), 2);
+  assert.equal(heightOfTerrain(on, 'valley'), -1);
 
   // 步耗：关掉只有地形价，没有爬坡
   assert.equal(stepCostBetween(off, 'valley', 'plateau'), CONFIG.terrainCost.plateau);
@@ -8801,11 +8868,12 @@ test('高度阶梯：只有差 2 层以上才改射程，差 1 层不动', () =>
   assert.ok(u);
   const base = effectiveRange(st, u!);
 
-  // 台地打谷地：地形本身 +1（制高点），高度差 3 层再 +1
+  // 台地打谷地：高度差 3 层 → +1。
+  // 地形本身的"制高点 +1"已经由高度表达过了，不再单独加一份（否则同一件事算两次）。
   assert.equal(
     effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null) - base,
-    2,
-    '台地打谷地该 +2',
+    1,
+    '台地打谷地该 +1',
   );
 
   // 反过来：谷地打台地只有 -1，不是 -2——
@@ -8852,26 +8920,67 @@ test('近战兵不会被高地变成远程', () => {
   assert.equal(effectiveRangeAgainst(st, u!, st.tiles[idx(st, 8, 5)] ?? null), 1);
 });
 
-test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () => {
+test('高机动性：移动/射程/视野 ×1.5，近战射程不动，桥不再给视野', () => {
+  const off = fresh();
+  const on = fresh({ expansionIds: ['high-mobility'] });
+  const u = (st: GameState, type: string): Unit => {
+    const unit = placeUnit(st, 'A', type, 5, 5);
+    assert.ok(unit.ok, unit.ok ? '' : unit.reason);
+    return unit.state.units.find((x) => x.type === type)!;
+  };
+
+  // 移动：2 → 3（向上取整，缩放不该让谁变慢）
+  assert.equal(movePower(off, u(off, 'militia')), 2);
+  assert.equal(movePower(on, u(on, 'militia')), 3);
+  // 视野：2 → 3
+  assert.equal(visionOf(off, u(off, 'militia')), 2);
+  assert.equal(visionOf(on, u(on, 'militia')), 3);
+  // 远程射程：3 → 4（向下取整）
+  assert.equal(effectiveRange(off, u(off, 'archer')), 3);
+  assert.equal(effectiveRange(on, u(on, 'archer')), 4);
+  // 近战射程保持 1：×1.5 之后变 2 会把所有近战变远程，那是抹掉兵种分类
+  assert.equal(effectiveRange(on, u(on, 'militia')), 1);
+  // 建筑不动：墙还是 0
+  assert.equal(movePower(on, u(on, 'tower')), 0);
+
+  // 桥不再自带视野：本体三座桥的数据表都是 0，而且**真的**一格不看——
+  // visionOf 那个 Math.max(1, …) 下限不能把它抬回 1（扩展的 modifyVision 也带同样的下限）
+  for (const id of ['bridge', 'bridge2', 'bridge3']) {
+    assert.equal(UNIT_TYPES[id]!.vision, 0, `${id} 的数据表不该再有视野`);
+  }
+  for (const ids of [[], ['height-terrain'], ['high-mobility'], ['seasons']]) {
+    const st = fresh({ expansionIds: ids });
+    // 桥只能架在水上：先铺一格水，再放桥
+    putTerrain(st, 5, 5, 'water');
+    const r = placeUnit(st, 'A', 'bridge', 5, 5);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const br = r.state.units.find((x) => x.type === 'bridge')!;
+    assert.equal(visionOf(r.state, br), 0, `开了 ${ids.join('+') || '本体'} 时桥也不该有视野`);
+  }
+});
+
+test('爬坡：往高处走每层 +1、封顶 2 层，下坡不加价，且一格最多吃掉全部移动力', () => {
   const on = fresh({ expansionIds: ['height-terrain'] });
   putTerrain(on, 4, 4, 'plain');
   const s = unitOn(on, 'A', 'militia', 4, 4);
   const u = s.units.find((x) => x.type === 'militia');
   assert.ok(u);
-  assert.equal(heightOfTerrain(s, 'valley'), 1);
-  assert.equal(heightOfTerrain(s, 'plain'), 2);
-  assert.equal(heightOfTerrain(s, 'hill'), 3);
-  assert.equal(heightOfTerrain(s, 'plateau'), 4);
+  // 高度是"相对平原"的带符号层数
+  assert.equal(heightOfTerrain(s, 'valley'), -1);
+  assert.equal(heightOfTerrain(s, 'plain'), 0);
+  assert.equal(heightOfTerrain(s, 'hill'), 1);
+  assert.equal(heightOfTerrain(s, 'plateau'), 2);
 
-  // 谷地(1) → 台地(4)：差 3 层，封顶按 2 层算
+  // 谷地(−1) → 台地(+2)：差 3 层，封顶按 2 层算 → 台地价 2 + 2 = 4，
+  // 但民兵只有 2 点移动力，钳到 2（这一回合就到头了，但爬得上去）
   putTerrain(s, 5, 5, 'valley');
   putTerrain(s, 5, 4, 'plateau');
   const up = stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4));
-  assert.equal(up, CONFIG.terrainCost.plateau + 2, '谷地爬台地该贵 2 点');
+  assert.equal(up, 2, '爬坡再贵也不会超过这个兵的移动力，否则就是"点了没反应"');
 
   // 差 2 层和差 3 层是一个价（封顶 2 层）
   putTerrain(s, 5, 4, 'hill');
-  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), CONFIG.terrainCost.hill + 2);
+  assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4)), 2);
 
   // 下坡不加价，也不减价
   putTerrain(s, 5, 5, 'plateau');
@@ -8888,24 +8997,6 @@ test('爬坡：往高处走每层 +1，最多算 2 层，下坡不加价', () =>
   putTerrain(s, 5, 4, 'plateau');
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { flyer: true }), 1);
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
-});
-
-test('火山是墙，熔岩能过但要三步', () => {
-  assert.equal(passable('volcano'), false, '火山不该能走进去');
-  assert.equal(CONFIG.terrainCost.lava, 3);
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  // 随机地貌可能把 (4,4) 抽成海，先把落脚点钉成平地再摆人
-  putTerrain(s, 4, 4, 'plain');
-  const st = unitOn(s, 'A', 'militia', 4, 4);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-  putTerrain(st, 5, 4, 'volcano');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 99);
-  putTerrain(st, 5, 4, 'lava');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
-  // 从台地下到熔岩：下坡不加价
-  putTerrain(st, 4, 4, 'plateau');
-  assert.equal(stepCostInto(st, u!, idx(st, 4, 4), idx(st, 5, 4)), 3);
 });
 
 test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
@@ -8935,42 +9026,8 @@ test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
   const u = st2.units.find((x) => x.type === 'militia');
   assert.ok(u);
   assert.equal(stepCostInto(st2, u!, idx(st2, 6, 7), idx(st2, 6, 6)), 2);
-  // 从浅流爬回平原：平地的价 1 + 1 层爬坡 1（浅流的"贵"只算走进来那一步）
-  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 6), idx(st2, 6, 7)), 2);
-});
-
-test('熔岩真的烧人：回合末还站在上面挨 5 点，护甲挡不住', () => {
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  putTerrain(s, 6, 6, 'lava');
-  const st = unitOn(s, 'A', 'militia', 6, 6);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-  assert.ok(effectiveStats(st, u!).armor > 0, '要用带护甲的兵才测得出"真伤"');
-  const hp0 = u!.hp;
-
-  const r = applyAction(st, { type: 'END_TURN' }, 'A');
-  assert.ok(r.ok, r.ok ? '' : r.reason);
-  if (!r.ok) return;
-  const after = r.state.units.find((x) => x.id === u!.id);
-  assert.ok(after, '5 点不该把满血兵烧死');
-  assert.equal(after!.hp, hp0 - 5, '熔岩该扣 5 点真伤，不能被护甲吃掉');
-});
-
-test('沼泽陷足：同样是爬回平地，沼泽比谷地多收 1 点', () => {
-  const s = fresh({ expansionIds: ['height-terrain'] });
-  putTerrain(s, 5, 5, 'plain');
-  putTerrain(s, 5, 6, 'marsh');
-  putTerrain(s, 4, 5, 'valley');
-  const st = unitOn(s, 'A', 'militia', 5, 5);
-  const u = st.units.find((x) => x.type === 'militia');
-  assert.ok(u);
-
-  // 平地踩进沼泽：下坡，只算地形价
-  assert.equal(stepCostInto(st, u!, idx(st, 5, 5), idx(st, 5, 6)), CONFIG.terrainCost.marsh);
-  // 出来的时候：地形价 + 爬坡 + 陷足
-  const outMarsh = stepCostInto(st, u!, idx(st, 5, 6), idx(st, 5, 5));
-  const outValley = stepCostInto(st, u!, idx(st, 4, 5), idx(st, 5, 5));
-  assert.equal(outMarsh - outValley, 1, '沼泽比谷地多出来的那 1 点就是陷足');
+  // 从浅流走回平原：两者同层（都是基准面），没有爬坡，只算平地的价
+  assert.equal(stepCostInto(st2, u!, idx(st2, 6, 6), idx(st2, 6, 7)), CONFIG.terrainCost.plain);
 });
 
 test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
@@ -9008,7 +9065,8 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
             const ny = y + dy;
             if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
             const t = s.tiles[ny * s.w + nx]!.terrain;
-            if (H(nx, ny) >= 4) skirt = true;
+            // 高度是相对平原的带符号层数：台地是 +2（旧的绝对刻度里是 4）
+            if (H(nx, ny) >= 2) skirt = true;
             if (t === 'plain' || t === 'forest' || t === 'hill') cliff++;
             if (t !== 'water' && t !== 'shallow') land += 1;
           }
@@ -9080,7 +9138,7 @@ test('随机地貌：开了扩展，抽到的多半是扩展自带的那几种',
       .map((o) => o.id)
       .filter((id) => !baseIds.has(id)),
   );
-  assert.equal(extIds.size, 6, '「地形高差」应该带六种地貌');
+  assert.equal(extIds.size, 5, '「地形高差」现在带五种地貌');
 
   let ext = 0;
   let n = 0;
@@ -9095,42 +9153,6 @@ test('随机地貌：开了扩展，抽到的多半是扩展自带的那几种',
   for (let seed = 1; seed <= 20; seed += 1) {
     const L = generateLayout(20, seed, ['militia'], { style: 'random' });
     assert.ok(!extIds.has(L.style), `没开扩展却抽到了 ${L.style}`);
-  }
-});
-
-test('火山群：火山口在山顶、熔岩在山脚，没有夹在半山腰的坑', () => {
-  // 旧版的阶梯是 平原 → 丘陵 → 台地 → 熔岩 → 火山 → 高山：
-  //   · 最高一档落在 `mountain` 上，火山口反而成了"更高的那座山"；
-  //   · 高度只有 1 层的熔岩夹在 4 层的台地和 5~6 层的山顶之间，
-  //     每座锥子外面都套了一圈三层深的坑。
-  for (const seed of [31, 77, 1234, 5]) {
-    const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, seed);
-    const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
-    let volcano = 0;
-    let lava = 0;
-    let lavaUnderPeak = 0;
-    for (let y = 0; y < s.h; y++) {
-      for (let x = 0; x < s.w; x++) {
-        const t = s.tiles[y * s.w + x]!.terrain;
-        if (t === 'volcano') volcano++;
-        if (t !== 'lava') continue;
-        lava++;
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-          if (H(nx, ny) >= 5) lavaUnderPeak++;
-        }
-      }
-    }
-    assert.ok(volcano > 0, `volcanic#${seed} 一格火山口都没有`);
-    assert.ok(lava > 0, `volcanic#${seed} 一格熔岩都没有`);
-    assert.equal(lavaUnderPeak, 0, `volcanic#${seed} 有 ${lavaUnderPeak} 处熔岩贴着山顶/山体`);
   }
 });
 
@@ -9204,44 +9226,12 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
   }
 });
 
-test('新地形只出现在开了「地形高差」的对局里', () => {
-  // 关扩展：40 个种子里一格台地/熔岩都不许有——
-  // 否则老对局会拿到"规则书没写"的格子。
-  for (let seed = 1; seed <= 40; seed++) {
-    const s = createMatch({ ...BASE, expansionIds: [] }, seed * 17 + 3);
-    for (const t of NEW_TERRAINS) {
-      const n = s.tiles.filter((tile) => tile.terrain === t).length;
-      assert.equal(n, 0, `没开扩展的第 ${seed} 号种子地图里出现了 ${n} 格 ${t}`);
-    }
-  }
-
-  // 开扩展：四种高差地貌各自长出自己那味地形
-  const expect: Record<string, Terrain> = {
-    highland: 'plateau',
-    canyon: 'valley',
-    volcanic: 'lava',
-    marsh: 'marsh',
-  };
-  for (const [style, want] of Object.entries(expect)) {
-    const s = createMatch(
-      { ...BASE, expansionIds: ['height-terrain'], mapStyle: style as MatchConfig['mapStyle'] },
-      31,
-    );
-    const n = s.tiles.filter((tile) => tile.terrain === want).length;
-    assert.ok(n > 0, `${style} 地貌里一格 ${want} 都没有`);
-  }
-
-  // 火山群要真的立起火山锥（不可通行的墙）
-  const vol = createMatch({ ...BASE, expansionIds: ['height-terrain'], mapStyle: 'volcanic' }, 31);
-  assert.ok(vol.tiles.some((t) => t.terrain === 'volcano'), '火山群地貌里没有火山');
-});
-
 test('地貌选项跟着扩展开关增减', () => {
   const base = mapStylesFor([]).map((o) => o.id);
   assert.equal(base.includes('highland'), false, '没开扩展不该有高原');
   const withExt = mapStylesFor(['height-terrain']).map((o) => o.id);
-  assert.equal(withExt.length, base.length + 6);
-  for (const id of ['highland', 'canyon', 'volcanic', 'marsh', 'isles', 'river']) {
+  assert.equal(withExt.length, base.length + 5);
+  for (const id of ['highland', 'canyon', 'marsh', 'isles', 'river']) {
     assert.ok(withExt.includes(id as never), `开了扩展也没有 ${id}`);
   }
   // 随机袋也只在开了扩展时才抽得到 —— 关扩展 40 张图不可能抽出高原
@@ -10155,12 +10145,10 @@ test('行动点：单价表——骑兵与车机动 −5、近战出手 −10，
   assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'move'), AP_COST.move);
   assert.equal(apActionCost(UNIT_TYPES.archer, 'archer', 'attack'), AP_COST.attack);
 
-  // 驻扎和机动同价：不然"先待着、再走一步"会让 E 先掉 20 再涨回 5
-  assert.equal(
-    apActionCost(UNIT_TYPES.scout, 'scout', 'hold'),
-    apActionCost(UNIT_TYPES.scout, 'scout', 'move'),
-    '驻扎跟机动同一档，否则账会回涨',
-  );
+  // 池子按兵种分档：斥候是骑兵 → 120，弓手是远程 → 110，民兵是步兵 → 100
+  assert.equal(apMaxOf(UNIT_TYPES.scout, 'scout'), AP_BY_TIER.mounted);
+  assert.equal(apMaxOf(UNIT_TYPES.archer, 'archer'), AP_BY_TIER.ranged);
+  assert.equal(apMaxOf(UNIT_TYPES.militia, 'militia'), AP_BY_TIER.base);
 });
 
 test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记各的', () => {
@@ -10172,8 +10160,8 @@ test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记�
   // onMatchStart 已经把先手方的账开了——第一回合不走 onTurnStart
   const open = apLedger(s, a);
   assert.equal(open.settled, true, '先手第一回合也要开账');
-  assert.deepEqual(open.items.map((i) => i.action), ['hold'], '什么都没干＝驻扎');
-  assert.equal(open.left, AP_MAX - AP_COST.hold, '驻扎先扣一档');
+  assert.deepEqual(open.items.map((i) => i.action), [], '什么都没干＝不扣（驻扎已取消）');
+  assert.equal(open.left, open.start, '池子原样留着');
 
   // 走一步：记成移动，不是驻扎
   const dest = [...reachableTiles(s, a).keys()].find((k) => k !== idx(s, a.x, a.y));
@@ -10183,20 +10171,23 @@ test('行动点：先手第一回合就开账，驻扎 / 移动 / 出手各记�
   const moved = r.state.units.find((u) => u.id === a.id)!;
   const L = apLedger(r.state, moved);
   assert.deepEqual(L.items.map((i) => i.action), ['move'], '走过就只记移动');
-  assert.equal(L.left, AP_MAX - apActionCost(s.unitTypes.militia, 'militia', 'move'));
+  assert.equal(
+    L.left,
+    apMaxOf(s.unitTypes.militia, 'militia') - apActionCost(s.unitTypes.militia, 'militia', 'move'),
+  );
 });
 
 test('行动点：攻击按次扣，次数被 E 压回，打满就扣不动了', () => {
   const s = fresh({ expansionIds: ['action-points'] }, 2024);
 
-  // 机枪队 burst 3：100E 只买得起 2 次（每次 40），于是这一回合就是 2 次
+  // 机枪队 burst 3：每段 40/3 ≈ 13.33，池子买得起 3 段 → 这一回合打满 3 次
   const spot = freePlain(s);
   const placed = placeUnit(s, 'A', 'mg', spot.x, spot.y);
   assert.ok(placed.ok, placed.ok ? '' : placed.reason);
   const mg = placed.state.units.find((u) => u.type === 'mg')!;
   mg.custom = { ap: { turn: placed.state.turn, x: mg.x, y: mg.y, debt: 0, over: 0 } };
-  assert.equal(attacksPerTurn(placed.state, mg), 2, 'burst 3 应该被 E 压到 2 次');
-  assert.equal(apLedger(placed.state, mg).attacksAllowed, 2);
+  assert.equal(attacksPerTurn(placed.state, mg), 3, 'burst 3 每段只收 1/3 的价，池子够打满');
+  assert.equal(apLedger(placed.state, mg).attacksAllowed, 3);
 
   // 民兵（近战，每次 30E）打一下，账上写 30
   const st = fresh({ expansionIds: ['action-points'] }, 2024);
@@ -10242,24 +10233,8 @@ test('行动点：E 不够时走不动（modifyMove 归零），技能与保底�
 
   const back = applyAction(end.state, { type: 'END_TURN' });
   const next = apLedger(back.state, back.state.units.find((u) => u.id === a2.id)!);
-  assert.equal(next.start, AP_MAX - 5, '下回合起点先扣掉透支');
+  assert.equal(next.start, next.max - 5, '下回合起点先扣掉透支');
   assert.equal(next.debt, 5);
-});
-
-test('行动点：驻扎 +2 护甲，动过的就不算驻扎', () => {
-  const s = fresh({ expansionIds: ['action-points'] }, 2024);
-  const { a, b } = duel(s);
-  a.custom = { ap: { turn: s.turn, x: a.x, y: a.y, debt: 0, over: 0 } };
-  // B 不是当前行动方：他上一回合的账就是 s.turn - 1
-  b.custom = { ap: { turn: s.turn - 1, x: b.x, y: b.y, debt: 0, over: 0 } };
-  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['hold']);
-  const holdDmg = computeDamage(s, a, b);
-
-  // 站位和开账时对不上 = 这一回合动过 → 不驻扎、不加甲
-  b.custom = { ap: { turn: s.turn - 1, x: b.x + 1, y: b.y, debt: 0, over: 0 } };
-  assert.deepEqual(apLedger(s, b).items.map((i) => i.action), ['move']);
-  const moveDmg = computeDamage(s, a, b);
-  assert.ok(moveDmg > holdDmg, `驻扎应该更抗打：站着挨 ${holdDmg}，动过挨 ${moveDmg}`);
 });
 
 test('行动点：建筑不参与，刚上场的单位按满池且不被拦', () => {
@@ -10285,7 +10260,7 @@ test('行动点：建筑不参与，刚上场的单位按满池且不被拦', ()
   )!;
   const rl = apLedger(recruit.state, rookie);
   assert.equal(rl.settled, false);
-  assert.equal(rl.left, AP_MAX);
+  assert.equal(rl.left, rl.start);
 });
 
 console.log('\n海军扩展');
@@ -11000,6 +10975,42 @@ test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位
   }
 });
 
+test('选卡：池子里不会混进攻城结算用的伪单位', () => {
+  // 攻城走"把城市包成伪 Unit 喂进 computeDamage"，那条路要一个 UnitTypeDef
+  // 形状的壳（见 config.ts 的 PSEUDO_UNIT_IDS）。壳在兵种表里躺着一份，
+  // 一旦被当成真兵种，选卡池就会少一格、多一张点不动的空卡。
+  const s = fresh({ draftMode: true }, 7111);
+  assert.ok(!draftCandidates(s).includes('__city__'), '伪单位不该是选卡候选');
+  assert.ok(!s.draft!.pool.includes('__city__'), '伪单位不该占池子里的名额');
+  assert.ok(!('__city__' in s.unitTypes), '它连"这一局有哪些兵"都不该进');
+  // 抽满 20 个真兵种，一个不差
+  assert.equal(s.draft!.pool.length, DRAFT_POOL_BASE);
+  assert.equal(new Set(s.draft!.pool).size, DRAFT_POOL_BASE, '池子里不该有重复');
+});
+
+test('选卡：没有计时起点、或 deadline 是 0/NaN 时，超时一律不成立', () => {
+  // 这一条守的是"联机里一进选卡就显示双方禁用已超时"：
+  // 超时的判据是 `at < deadline`，deadline 为 0 或 NaN 时这句永远不成立，
+  // 于是任何一次超时请求都被放行，两边各白丢一次禁用。
+  const s = fresh({ draftMode: true }, 7301);
+  const ban = startStep(s);
+  assert.equal(ban.draft!.phase, 'ban');
+
+  for (const broken of [0, Number.NaN]) {
+    const st = structuredClone(ban);
+    st.draft!.deadline = broken;
+    const r = applyAction(st, { type: 'DRAFT_TIMEOUT', at: Date.now() }, 'A');
+    assert.equal(r.ok, false, `deadline=${broken} 时不该判超时`);
+    assert.deepEqual(ban.draft!.bans.A, [], '更不该替双方补"放弃"');
+  }
+
+  // 开始选卡必须带计时起点，否则会写出 NaN 的 deadline（就是上面那个坑的源头）
+  const lobby = fresh({ draftMode: true }, 7302);
+  const bad = applyAction(lobby, { type: 'DRAFT_START' } as never, 'A');
+  assert.equal(bad.ok, false, '缺 at 的 DRAFT_START 要被挡住');
+  assert.equal(lobby.draft!.phase, 'lobby', '挡下来之后还停在等待开局');
+});
+
 test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {
   const s = fresh({ draftMode: true }, 7102);
   const draft = s.draft!;
@@ -11124,7 +11135,7 @@ test('选卡：可以整轮跳过——这一局按原版用全部兵种', () =>
   assert.equal(s.draft!.phase, 'done');
   assert.equal(s.draft!.skipped, true);
   assert.equal(canUseType(s, 'A', 'tank'), true, '跳过之后名单限制整个不生效');
-  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 5), false, '跳过的局连"旧兵照样能造"也回到原规则');
+  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 5), true, '跳过选卡也是同一个时代口径：旧兵照样能造');
 
   // 跳过之后就能正常走棋了
   const end = applyAction(s, { type: 'END_TURN' });
@@ -11203,27 +11214,30 @@ test('选卡：名单外的兵造不出来，名单内的能造；骨架不受�
   assert.ok(econ.ok, econ.ok ? '' : `经济单位不该被名单挡住：${econ.reason}`);
 });
 
-test('选卡：取消"低于城市两个时代就不能造"的下限', () => {
-  // 原版：E4 的城造不了 E1 的兵
+test('时代下限取消之后，所有模式同一口径（选卡不再是特例）', () => {
+  // 这四个时代前的兵，以前只有"开了选卡"才造得出来——同一个局面在两种模式下
+  // 给两个答案，玩家得先想"我这一局开没开选卡"。现在下限没了，口径只剩一个。
   const plain = fresh({}, 7109);
   const pCity = plain.cities.find((c) => c.owner === 'A')!;
   pCity.era = 4;
   plain.players.A.gold = 9000;
-  const refused = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
-  assert.ok(!refused.ok, '没开选卡时，四个时代前的兵应该造不出来');
-  assert.match(refused.reason, /过时/);
+  const allowed = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
+  assert.ok(allowed.ok, allowed.ok ? '' : `原版模式下民兵也该能造：${allowed.reason}`);
+  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), true);
 
-  // 选卡模式：同一个局面，名单里的民兵照样能造
+  // 选卡模式：同一个局面、同一个结论
   let s = fresh({ draftMode: true }, 7110);
   s = finishDraft(s);
   s.draft!.picks.A = ['militia'];
   const city = s.cities.find((c) => c.owner === 'A')!;
   city.era = 4;
   s.players.A.gold = 9000;
-  const allowed = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
-  assert.ok(allowed.ok, allowed.ok ? '' : `选卡模式下民兵应该能造：${allowed.reason}`);
+  const picked = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(picked.ok, picked.ok ? '' : `选卡模式下民兵应该能造：${picked.reason}`);
   assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 4), true);
-  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), false);
+
+  // 上界两边都不动
+  assert.equal(eraWindowOk(plain, plain.unitTypes['tank']!, 3), false, '三代城造不了五代的坦克');
 });
 
 test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () => {
@@ -11267,6 +11281,101 @@ test('选卡：超时——禁用视为放弃，选人由系统补一个', () =>
   // 没到时限的"超时"一律拒掉：只有时间能决定谁超时
   const early = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline - 1000 }, 'A');
   assert.ok(!early.ok, '没到点不该能提前触发超时');
+});
+
+/* ── 联机选卡的合并协议 ────────────────────────────────────────────────
+ *
+ * 这一段只在"两个浏览器 + 一个房间"时出错，却恰好是"禁不动、选不动"的来源，
+ * 所以用两个假客户端 + 一个假房间把它钉住。房间的规则和真实那张表一样：
+ * 只有 `turn` 还等于"我以为的进度号"才写得进去（乐观锁）。
+ */
+function fakeRoom(seed: number) {
+  const state0 = startStep(fresh({ draftMode: true }, seed));
+  return {
+    state: state0,
+    /** 房间那一列 turn：BP 期间存的是进度号 */
+    lock: state0.draft!.seq,
+    submit(client: GameState, expectedSeq: number): boolean {
+      if (this.lock !== expectedSeq) return false;
+      this.state = client;
+      this.lock = client.draft!.seq;
+      return true;
+    },
+  };
+}
+
+/**
+ * 一个客户端提交一步：本地先落（手感即时），被挡就合并重交。
+ * 这就是 main.ts 里 pushDraft 的算法，抽出来是为了能用例盯着。
+ */
+function clientSubmit(
+  room: ReturnType<typeof fakeRoom>,
+  local: GameState,
+  action: Parameters<typeof applyAction>[1],
+  actor: 'A' | 'B',
+): { state: GameState; ok: boolean } {
+  const applied = applyAction(local, action, actor);
+  if (!applied.ok) return { state: local, ok: false };
+  let next = applied.state;
+  for (let i = 0; i < 4; i++) {
+    // 第一轮用"我落这一步之前看到的进度号"，之后用房间刚写到的那个
+    const expected = i === 0 ? local.draft!.seq : room.lock;
+    if (room.submit(next, expected)) return { state: next, ok: true };
+    // 被对面先写了：把自己的这一步补到房间那份上，再来一次
+    const merged = mergeDraftStep(room.state, action, actor);
+    if (!merged.ok) return { state: room.state, ok: false };
+    next = merged.state;
+  }
+  return { state: room.state, ok: false };
+}
+
+test('联机选卡：两边同时禁用，后交的一方合并重交，两份名单都留在房间里', () => {
+  const room = fakeRoom(7201);
+  const a = structuredClone(room.state);
+  const b = structuredClone(room.state);
+  const banA = remainingUnits(a)[0]!;
+  const banB = remainingUnits(b).find((id) => id !== banA)!;
+
+  const ra = clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A');
+  assert.ok(ra.ok, 'A 应该交得上去（房间还停在开局那一步）');
+  const rb = clientSubmit(room, b, { type: 'DRAFT_BAN', unitId: banB, at: Date.now() }, 'B');
+  assert.ok(rb.ok, 'B 被挡回来之后要能合并重交，而不是失败');
+
+  assert.deepEqual(room.state.draft!.bans.A, [banA], '房间里必须留着 A 的禁用');
+  assert.deepEqual(room.state.draft!.bans.B, [banB], '房间里必须留着 B 的禁用');
+  assert.equal(room.state.draft!.phase, 'pick', '两边都禁完才进入选人');
+  // 两边都能靠"进度号变大"拉到这一份：谁也不会停在只有自己那一手的名单上
+  assert.ok(room.state.draft!.seq > a.draft!.seq, '房间的进度号要比 A 本地大，A 才拉得到');
+  assert.ok(room.state.draft!.seq > b.draft!.seq, '也要比 B 本地大');
+});
+
+test('联机选卡：超时是一步动作，提交进房间之后两边一起往前，不用再选一次', () => {
+  const room = fakeRoom(7202);
+  const a = structuredClone(room.state);
+  const r = clientSubmit(
+    room,
+    a,
+    { type: 'DRAFT_TIMEOUT', at: a.draft!.deadline } as Parameters<typeof applyAction>[1],
+    'A',
+  );
+  assert.ok(r.ok, '超时这一步也要提交进房间（以前只改本地）');
+  assert.equal(room.state.draft!.phase, 'pick', '房间跟着进入选人，不是只有本地前进');
+  assert.ok(room.state.draft!.seq > a.draft!.seq, 'B 靠进度号就能拉到这一步');
+});
+
+test('联机选卡：同一手补不进新局面上，就判失败让调用方退回房间那份', () => {
+  const room = fakeRoom(7203);
+  const a = structuredClone(room.state);
+  const banA = remainingUnits(a)[0]!;
+  assert.ok(clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A').ok);
+
+  // 对面那一手仍然补得进去（盲禁是双方各一次，池子里的东西谁都还没被禁掉）
+  const other = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'B');
+  assert.equal(other.ok, true, 'B 在合并后的局面上还能禁同一个兵（两个人可以禁同一个）');
+
+  // 但"同一个席位禁第二次"必须失败：否则重放会把一步变成两步
+  const again = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: 'archer', at: Date.now() }, 'A');
+  assert.equal(again.ok, false, 'A 已经禁过，再补一次必须被挡住');
 });
 
 test('选卡：AI 会禁用与选人，且只在池子里挑', () => {

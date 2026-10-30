@@ -13,7 +13,7 @@
 // （自定义兵种勾了「淬毒」，没开奇想包的局里也该照样生效）。
 import { ABILITY_GROUP_NAME, type AbilityGroup } from '../core/abilities.ts';
 import { allAbilities } from '../core/ability-registry.ts';
-import { ERAS, UNIT_TYPES } from '../core/config.ts';
+import { ERAS, UNIT_TYPES, isPseudoUnit } from '../core/config.ts';
 import {
   blankUnit,
   cloneAsCustom,
@@ -126,7 +126,9 @@ export function openUnitEditor(onClose?: () => void): void {
     const isBuilding = d.category === 'building';
     const needsIncome = d.category === 'economy' || d.category === 'building';
 
-    const buildings = Object.values(UNIT_TYPES).filter((u) => u.category === 'building');
+    const buildings = Object.values(UNIT_TYPES).filter(
+      (u) => u.category === 'building' && !isPseudoUnit(u.id),
+    );
 
     const num = (field: (typeof NUM_FIELDS)[number], label: string) => `
       <label class="editor-field">
