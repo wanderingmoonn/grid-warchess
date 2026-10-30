@@ -51,6 +51,16 @@ import { allAbilities } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
+  deckLine,
+  deckOf,
+  deckSpecOf,
+  deckUsed,
+  popPlane,
+  registerAirwingOps,
+  stowPlane,
+} from '../src/core/naval-carrier.ts';
+import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+import {
   newTimeline,
   noteAction,
   noteDeaths,
@@ -150,6 +160,7 @@ import {
   heroSkillsOf,
   previewAttack,
   reachableTiles,
+  tilesOfUnit,
   rebuildCost,
   recruitCost,
   recruitPriceOf,
@@ -10260,6 +10271,253 @@ test('行动点：建筑不参与，刚上场的单位按满池且不被拦', ()
   const rl = apLedger(recruit.state, rookie);
   assert.equal(rl.settled, false);
   assert.equal(rl.left, AP_MAX);
+});
+
+console.log('\n海军扩展');
+
+test('海军：两个包都注册上，兵种全是水面单位', () => {
+  const fleet = expansionById('naval-fleet');
+  const modern = expansionById('naval-modern');
+  assert.ok(fleet && modern, '海军两包应该都在注册表里');
+
+  const ids = new Set(allAbilities().map((a) => a.id));
+  for (const u of [...(fleet!.units ?? []), ...(modern!.units ?? [])]) {
+    assert.equal(u.domain, 'water', `${u.name} 应该只能待在水里`);
+    assert.ok(u.era >= 2 && u.era <= 6, `${u.name} 的时代 ${u.era} 越界`);
+    assert.ok(u.cost > 0 && u.maxHp > 0 && u.move >= 0, `${u.name} 的数值不合法`);
+    assert.equal(u.short.length, 1, `${u.name} 的图标应该是一个字`);
+    for (const a of u.abilities ?? []) {
+      assert.ok(ids.has(a), `${u.name} 引用了不存在的能力 ${a}`);
+    }
+  }
+
+  // 第六时代要补够：这一代水面力量原本只有一条导弹驱逐舰
+  const era6 = (modern!.units ?? []).filter((u) => u.era === 6);
+  assert.ok(era6.length >= 5, `现代海军应该补出至少 5 条六代船，现在 ${era6.length} 条`);
+  assert.ok(era6.some((u) => u.id === 'nv_carrier'), '六代船里必须有航母');
+});
+
+test('海军：现代海军依赖「现代」，单勾它一条船都造不出来', () => {
+  const modern = expansionById('naval-modern')!;
+  assert.deepEqual(modern.requires, ['pack-contemporary']);
+
+  const alone = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['naval-modern'] },
+    5150,
+  );
+  assert.ok(!alone.unitTypes['nv_carrier'], '前置没开时航母不该出现在兵种表里');
+
+  const withBase = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    5151,
+  );
+  assert.ok(withBase.unitTypes['nv_carrier'], '开了「现代」之后航母才该在');
+});
+
+test('海战：封锁让被堵的城少收 8 金，三座封顶', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  const mine = s.cities.filter((c) => c.owner === 'B');
+  assert.ok(mine.length >= 1, '这条用例需要 B 方至少有城');
+
+  const base = incomeOf(s, 'B');
+  // 找一格贴着 B 城的空地改成水面，停一条船上去
+  const city = mine[0]!;
+  const spot = { x: city.x - 1, y: city.y };
+  if (spot.x < 0) return; // 城贴着左边界就跳过（地图是随机的）
+  putTerrain(s, spot.x, spot.y, 'water');
+  place(s, 'A', 'gunboat', spot.x, spot.y);
+  assert.equal(incomeOf(s, 'B'), base - 8, '被封锁的一座城应该少交 8 金');
+
+  // 第二座、第三座：继续掉，到 24 封顶
+  const second = mine[1];
+  if (second) {
+    putTerrain(s, second.x - 1, second.y, 'water');
+    place(s, 'A', 'gunboat', second.x - 1, second.y);
+    assert.equal(incomeOf(s, 'B'), base - 16, '两座城被堵就是 −16');
+  }
+  for (const c of mine.slice(2)) {
+    putTerrain(s, c.x - 1, c.y, 'water');
+    place(s, 'A', 'gunboat', c.x - 1, c.y);
+  }
+  const capped = incomeOf(s, 'B');
+  assert.ok(capped >= base - 24, `封锁最多 −24，实际 ${base - capped}`);
+});
+
+test('海战：船贴着自家城每回合回 4 点，两个包同开也只回 4', () => {
+  const run = (ids: string[]) => {
+    const s = fresh({ expansionIds: ids });
+    const home = s.cities.find((c) => c.owner === 'A')!;
+    const spot = { x: home.x - 1, y: home.y };
+    putTerrain(s, spot.x, spot.y, 'water');
+    const boat = place(s, 'A', 'gunboat', spot.x, spot.y);
+    boat.hp = 20;
+    s.current = 'B'; // 结束 B 的回合 → 轮到 A，触发 A 的回合开始
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    return r.state.units.find((u) => u.id === boat.id)!.hp - 20;
+  };
+
+  assert.equal(run(['naval-fleet']), 4, '停在自家港口应该回 4');
+  // 两包的钩子都会跑一遍，哨兵要保证不会回 8
+  assert.equal(run(['naval-fleet', 'pack-contemporary', 'naval-modern']), 4, '两个包同时开也只回 4');
+});
+
+test('潜航：迷雾局里贴脸才现形，不开迷雾一律可见', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    6060,
+  );
+  s.units = [];
+  for (let y = 6; y <= 10; y++) for (let x = 5; x <= 11; x++) putTerrain(s, x, y, 'water');
+  s.fog = true;
+  const sub = place(s, 'A', 'nv_attack_sub', 6, 6);
+  const foe = place(s, 'B', 'militia', 10, 6);
+  assert.ok(isHiddenFrom(s, sub, 'B'), '隔着四格，潜艇应该藏得住');
+  foe.x = 7; // 贴到相邻
+  foe.y = 6;
+  assert.ok(!isHiddenFrom(s, sub, 'B'), '贴脸就该现形');
+  s.fog = false;
+  assert.ok(!isHiddenFrom(s, sub, 'B'), '没有迷雾就没有"看不见"这回事');
+});
+
+test('岸轰：同一条船带不带这条能力，攻城差 25%', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  const city = s.cities.find((c) => c.owner === 'B')!;
+  putTerrain(s, city.x - 1, city.y, 'water');
+  const monitor = place(s, 'A', 'nv_monitor', city.x - 1, city.y);
+
+  const withBombard = damageToCity(monitor, city, s);
+  const def = s.unitTypes['nv_monitor']!;
+  s.unitTypes['nv_monitor'] = { ...def, abilities: [] };
+  const plain = damageToCity(monitor, city, s);
+
+  assert.ok(withBombard > plain, `带岸轰(${withBombard}) 应该高于不带(${plain})`);
+  assert.equal(withBombard, Math.round(plain * 1.25), '差的正好是 25%');
+});
+
+test('大型单位：航母占 2×2，能移动，但进不了一格宽的水道', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    4242,
+  );
+  s.fog = false;
+  s.units = [];
+  // 一大片开阔水域
+  for (let y = 6; y <= 12; y++) for (let x = 4; x <= 12; x++) putTerrain(s, x, y, 'water');
+  // 一条一格宽的水道，从 (2,9) 往上通到 (2,6)
+  for (let y = 4; y <= 10; y++) putTerrain(s, 2, y, 'water');
+
+  const def = s.unitTypes['nv_carrier']!;
+  assert.equal(def.footprint, 2, '航母必须是 2×2');
+  const carrier = place(s, 'A', 'nv_carrier', 6, 8);
+  s.current = 'A';
+
+  // 四格都占着，四格都别想站人
+  assert.equal(tilesOfUnit(s, carrier).length, 4, '2×2 应该占四格');
+  for (const t of tilesOfUnit(s, carrier)) {
+    assert.ok(unitAt(s, t.x, t.y), `(${t.x},${t.y}) 应该被航母占着`);
+  }
+
+  const reach = reachableTiles(s, carrier);
+  assert.ok(reach.size > 0, '2×2 的单位必须能移动，不能退回"不会动"');
+
+  // 每一个可达锚点，四格都得是水面——水道一格宽，塞不进 2×2
+  for (const i of reach.keys()) {
+    const x = i % s.w;
+    const y = Math.floor(i / s.w);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        assert.equal(
+          s.tiles[(y + dy) * s.w + (x + dx)]!.terrain,
+          'water',
+          `锚点 (${x},${y}) 的四格里有不是水的，说明判定漏了一格`,
+        );
+      }
+    }
+  }
+
+  const moved = applyAction(s, { type: 'MOVE', unitId: carrier.id, x: 7, y: 8 });
+  assert.ok(moved.ok, moved.ok ? '' : `航母挪一格失败：${moved.reason}`);
+  if (!moved.ok) return;
+  const after = moved.state.units.find((u) => u.id === carrier.id)!;
+  assert.equal(after.x, 7);
+  assert.equal(unitAt(moved.state, 6, 8), undefined, '挪走之后原锚点该空出来');
+  assert.ok(unitAt(moved.state, 8, 9), '新位置的四格都要占住');
+});
+
+test('航母甲板：没接入空军时明说，接入之后收放计数正确', () => {
+  const carrier = {
+    id: 'c1',
+    type: 'nv_carrier',
+    owner: 'A' as const,
+    x: 0,
+    y: 0,
+    hp: 260,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+
+  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4, '航母应该有四个机位');
+  assert.equal(deckSpecOf('gunboat'), null, '没登记的船没有甲板');
+  assert.equal(deckLine(carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
+
+  // 收两架进去
+  const plane = (id: string) => ({ ...carrier, id, type: 'fake-plane', hp: 40, kills: 0 });
+  assert.ok(stowPlane(carrier, plane('p1')));
+  assert.ok(stowPlane(carrier, plane('p2')));
+  assert.equal(deckUsed(carrier), 2);
+  assert.equal(deckOf(carrier)[1]!.type, 'fake-plane');
+
+  // 接入一个假的空军实现：面板立刻改名
+  registerAirwingOps({
+    id: 'test-air',
+    name: '测试舰载航空兵',
+    canBoard: () => true,
+    launch: () => ({ ok: true }),
+    recover: () => ({ ok: true }),
+  });
+  try {
+    assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
+  } finally {
+    registerAirwingOps(null);
+  }
+  assert.ok(deckLine(carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
+
+  // 取下一架：按索引，取完就少一个
+  const taken = popPlane(carrier, 0);
+  assert.ok(taken, '应该取得出一架');
+  assert.equal(deckUsed(carrier), 1);
+  assert.equal(popPlane(carrier, 5), null, '越界取不到东西');
+});
+
+test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', () => {
+  let calls = 0;
+  registerAirwingOps({
+    id: 'test-air-2',
+    name: '测试航空兵',
+    canBoard: () => true,
+    launch: () => ({ ok: true }),
+    recover: () => ({ ok: true }),
+    onDeckTurnStart: () => {
+      calls += 1;
+    },
+  });
+  try {
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+      7070,
+    );
+    s.units = [];
+    for (let y = 6; y <= 10; y++) for (let x = 5; x <= 11; x++) putTerrain(s, x, y, 'water');
+    place(s, 'A', 'nv_carrier', 6, 6);
+    s.current = 'B';
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(calls >= 1, '轮到航母这一方时，甲板整备必须被叫一次');
+  } finally {
+    registerAirwingOps(null);
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

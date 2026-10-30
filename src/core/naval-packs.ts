@@ -1,0 +1,678 @@
+/**
+ * 海军扩展：「海战」（naval-fleet）+「现代海军」（naval-modern）。
+ *
+ * ── 放哪里、怎么组织 ──────────────────────────────────────────────────
+ *
+ *   src/core/naval-packs.ts     ← 这个文件：能力 + 兵种 + 两条舰队规则 + 两个扩展
+ *   src/core/naval-carrier.ts   ← 航母甲板接口（空军扩展接进来的那道口子）
+ *   src/core/expansions.ts      ← 只加两行：import + 展开进 EXPANSIONS
+ *
+ * 除了那两行注册，**没有一行代码落在核心引擎里**（`rules.ts` / `types.ts` /
+ * `setup.ts` 一行不动）。所有效果都由现有的扩展接口表达：
+ *   · 数值、造价、机位、运输 → `UnitTypeDef` 的既有字段；
+ *   · 「岸轰 / 潜航 / 区域防空 / 海上补给 / 旗舰」→ `Expansion.abilities`
+ *     （每条能力自带钩子，删掉这个包它们就一起消失）；
+ *   · 「封锁 / 港口抢修 / 甲板整备」→ `ExpansionHooks` 的既有钩子。
+ *
+ * ── 为什么不给海军加新地形 ────────────────────────────────────────────
+ *
+ * "浅水 / 深水"听起来是海军该有的东西，但它会渗进三处核心：`navigable()`、
+ * 寻路、以及城市生成。扩展虽然能登记新地形（`Expansion.terrains`），
+ * 却没法告诉 `navigable()` "这一格也算水面"——那就只能改引擎。
+ * 所以这一版**不加地形**，改用两条不需要新地形的规则表达"海权"：
+ * 封锁（船贴着城，城不回血）和港口抢修（船贴着自家城，每回合修）。
+ *
+ * ── 数值口径 ─────────────────────────────────────────────────────────
+ *
+ * 沿用奇幻包那张粗糙的价值模型，只看**同代**对比（贵兵天然更不值，
+ * 这是被编制上限压出来的，不是漏洞）：
+ *
+ *   V = 攻 + 0.45×血 + 5×甲 + 3×射程 + 2.5×移 + 1.5×视野（溅射每级 +4）
+ *
+ * 现有水军的 V/造价：舢板 1.03、三层桨 0.98、齿轮帆船 0.84、炮艇 0.70、
+ * 风帆战列舰 0.67、雷击舰 0.50、铁甲舰 0.58、驱逐舰 0.52、导弹驱逐舰 0.36。
+ * 新船就按这条线上落位：E2 0.75~0.80、E3 0.57~0.87（火船是玻璃炮，给高一点）、
+ * E4 0.50~0.54、E5 0.49、E6 0.24~0.37。
+ */
+
+import type { AbilityDef } from './abilities.ts';
+import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
+import type { Expansion } from './expansions.ts';
+import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
+import { airwingOps, deckLine, deckSpecOf } from './naval-carrier.ts';
+
+/* ===========================================================================
+ * 一、能力（只在勾了这个包的局里存在）
+ * ======================================================================== */
+
+/**
+ * 舰炮支援登陆：船打城的伤害 ×1.25。
+ *
+ * 为什么单开一条能力而不是给所有船：岸轰是**重炮舰**的活。
+ * 舢板、火船、运输船打城墙本来就该是挠痒——把这条发给全体水面单位，
+ * "海军"就变成了"从水上来的炮兵"，陆军的攻城单位当场失去意义。
+ *
+ * 它能和「破城」（×1.5）叠起来：战列舰打城是 1.5 × 1.25 ≈ 1.88 倍。
+ * 这是有意的——一个一千多金的船，本来就该是攻城效率最高的东西。
+ */
+const SHORE_BOMBARD: AbilityDef = {
+  id: 'nv-shore-bombard',
+  name: '岸轰',
+  summary: '攻城伤害 ×1.25。舰炮支援登陆，和「破城」可以叠。',
+  group: 'attack',
+  hooks: {
+    siegeDamage: [
+      {
+        stage: 1,
+        apply: (c) => {
+          c.damage = Math.round(c.damage * 1.25);
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 潜航：只有贴到相邻格的敌人才发现得了它，而且打完不挨反击。
+ *
+ * 这两条都是既有机制，组合起来正好是潜艇：
+ *   · `hidden` 走的是"潜行"那条判定（迷雾局里生效，而且**所有**观察者
+ *     都要先贴到一格内才发现——这正是"声纳只有这么远"的意思）；
+ *   · `noCounter` 是「先手」用的那个旗标：我打你，你没法立刻还手。
+ *     水面舰追着潜艇打不到，潜艇却能从水下先动手，这个不对称就是它的全部价值。
+ *
+ * 注意它**不是无敌**：贴脸就现形，一旦被发现，护甲 9、血量 100 的船
+ * 挨两轮齐射就没了。所以潜艇的正确用法是"打完就换位置"，不是站桩。
+ */
+const SUBMERGE: AbilityDef = {
+  id: 'nv-submerge',
+  name: '潜航',
+  summary: '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。',
+  group: 'move',
+  hooks: { hidden: () => true, noCounter: true },
+};
+
+/**
+ * 区域防空：对**空中层**目标多打 12 点。
+ *
+ * 空军扩展还没来，这条能力现在是"空转"的——但它是这道接口的一部分：
+ * 等空军上线，带这条能力的船就是舰队的伞。写在这里而不是等空军包再补，
+ * 是因为"哪条船能防空"是海军的设计决定，不该由空军包定义。
+ *
+ * 判据用 `layer === 'air'`（掠空、飞行都在这一层），不是"有没有飞行能力"：
+ * 热气球只在天上、不一定会飞，但它照样是防空炮该打的东西。
+ */
+const AA_COVER: AbilityDef = {
+  id: 'nv-aa-cover',
+  name: '区域防空',
+  summary: '对空中层目标造成 +12 伤害。空军扩展上线后是舰队的伞。',
+  group: 'defense',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.attackFlat,
+        apply: (c) => {
+          if (!c.foe) return;
+          const foe = c.api.utype(c.state, c.foe.type);
+          if (foe.layer === 'air') c.damage += 12;
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 海上补给：回合开始时，相邻的友方水面单位回 3 点。
+ *
+ * 用的是 `TURN_START.aura` 这个时机（治疗光环就在这一段），
+ * 也就是"轮到我方回合，先处理各种补给，再干活"。
+ * 只补水面单位：补给舰的油管子接不到岸上的坦克。
+ */
+const FLEET_REPAIR: AbilityDef = {
+  id: 'nv-fleet-repair',
+  name: '海上补给',
+  summary: '每回合开始时，相邻的友方水面单位回复 3 点生命。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.aura,
+        apply: (c) => {
+          let healed = 0;
+          for (const u of c.state.units) {
+            if (u.owner !== c.owner || u.id === c.self.id) continue;
+            if (c.api.utype(c.state, u.type).domain !== 'water') continue;
+            if (c.api.distance(u, c.self) > 1) continue;
+            const max = c.api.utype(c.state, u.type).maxHp;
+            if (u.hp >= max) continue;
+            u.hp = Math.min(max, u.hp + 3);
+            healed += 1;
+          }
+          if (healed > 0) {
+            c.api.pushLog(c.state, c.owner, `海上补给：${c.api.utype(c.state, c.self.type).name} 给 ${healed} 艘友舰各补 3 点`);
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 旗舰：相邻友军 +2 攻 +2 甲。
+ *
+ * 航母在**没有空军扩展**的局里靠这条站住脚：它自己不打人（攻 26、射程 3），
+ * 但它是全图视野最好（9）的移动指挥部。这条也让"航母必须待在舰队中间"
+ * 成为一条真实的取舍——离得太远，光环就白给了。
+ */
+const FLEET_COMMAND: AbilityDef = {
+  id: 'nv-fleet-command',
+  name: '旗舰',
+  summary: '相邻的友军 +2 攻击、+2 护甲。航母在空军接入前靠它站住脚。',
+  group: 'support',
+  hooks: { aura: { allyAtk: 2, allyArmor: 2 } },
+};
+
+/**
+ * 能力各归各家（引擎里有一条测试盯着这件事）。
+ *
+ * 「岸轰」两个包都会用（浅水重炮舰在「海战」、战列舰在「现代海军」），
+ * 所以它挂在基础包上；其余四条只有第六时代的船用，就归「现代海军」。
+ * 能力表是**全局合并**的（不看这一局勾了哪些包），所以现代包引用基础包的
+ * 能力 id 完全没问题——但反过来"两个包各声明一份"会直接踩测试。
+ */
+const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD];
+const MODERN_ABILITIES: AbilityDef[] = [SUBMERGE, AA_COVER, FLEET_REPAIR, FLEET_COMMAND];
+
+/* ===========================================================================
+ * 二、兵种
+ *
+ * 全部参照真实历史舰型，按"这个时代的海战在解决什么问题"来定位：
+ *   E1 只有舢板/三层桨（撞击与接舷）—— 本体与「古典」已经有，不重复
+ *   E2 帆桨并用 + 第一代运输船（德罗蒙、卡拉克）
+ *   E3 舷侧炮列（盖伦）+ 纵火（火船）
+ *   E4 蒸汽与装甲的过渡（护卫舰、浅水重炮舰）
+ *   E5 装甲巡洋舰（无畏舰之前的远洋主力）
+ *   E6 航母、战列舰、区域防空巡洋舰、核潜艇、两栖舰、导弹艇、补给舰
+ * ======================================================================== */
+
+const FLEET_UNITS: UnitTypeDef[] = [
+  {
+    id: 'nv_dromon',
+    name: '德罗蒙战舰',
+    short: '德',
+    era: 2,
+    category: 'combat',
+    cost: 132,
+    move: 4,
+    atk: 19,
+    armor: 5,
+    maxHp: 60,
+    range: 3,
+    vision: 4,
+    domain: 'water',
+    splash: 1,
+    // 拜占庭的"希腊火"：喷出去是一道火墙，不是一根箭。
+    // 溅射 1 在 E2 只有它和臼炮有，所以它贵、也脆（甲 5）。
+    // V = 19 + 27 + 25 + 9 + 10 + 6 + 4(溅射) = 100 → 0.76 / 金
+  },
+  {
+    id: 'nv_carrack',
+    name: '卡拉克帆船',
+    short: '卡',
+    era: 2,
+    category: 'combat',
+    cost: 150,
+    move: 4,
+    atk: 17,
+    armor: 6,
+    maxHp: 72,
+    range: 2,
+    vision: 4,
+    domain: 'water',
+    transport: true,
+    capacity: 4,
+    // 和齿轮帆船（98 金、容量 3）分工：卡拉克贵一半，换来 4 个舱位和 6 点甲。
+    // 跨海投送是"一次运四个"还是"分两趟运两个"，在 20×20 的图上差一整回合。
+  },
+  {
+    id: 'nv_fireship',
+    name: '火船',
+    short: '火',
+    era: 3,
+    category: 'combat',
+    cost: 105,
+    move: 6,
+    atk: 40,
+    armor: 2,
+    maxHp: 34,
+    range: 1,
+    vision: 3,
+    domain: 'water',
+    splash: 1,
+    // 纵火船：装满火药和沥青冲进敌阵。攻高、血薄、移动快，溅射 1 让它
+    // 贴上去就有交换价值。V = 40+15.3+10+3+15+4.5+4 = 92 → 0.87。
+    // 这个比值偏高是故意的：它只活一回合，价值模型算不出"活不过一轮"。
+  },
+  {
+    id: 'nv_galleon',
+    name: '盖伦帆船',
+    short: '盖',
+    era: 3,
+    category: 'combat',
+    cost: 240,
+    move: 4,
+    atk: 33,
+    armor: 8,
+    maxHp: 82,
+    range: 3,
+    vision: 5,
+    domain: 'water',
+    transport: true,
+    capacity: 3,
+    // 远洋主力：打得过炮艇（130 金 25 攻），又能运三个兵。
+    // 它是"海军独立成军"的起点——从这一代开始，海权不再只是过河的工具。
+    // V = 33+36.9+40+9+10+7.5 = 136 → 0.57
+  },
+  {
+    id: 'nv_frigate',
+    name: '护卫舰',
+    short: '护',
+    era: 4,
+    category: 'combat',
+    cost: 295,
+    move: 6,
+    atk: 30,
+    armor: 8,
+    maxHp: 78,
+    range: 4,
+    vision: 4,
+    domain: 'water',
+    burst: 2,
+    // 蒸汽护卫舰的卖点是"追得上"：移动 6、两动。多动就是两次完整的一击，
+    // 所以单发攻击力压到 30（对照雷击舰 38/单发）。
+    // V = 60+35.1+40+12+15+6 = 168 → 0.57（比雷击舰贵 10 金，换来多动与移 6）
+  },
+  {
+    id: 'nv_monitor',
+    name: '浅水重炮舰',
+    short: '浅',
+    era: 4,
+    category: 'combat',
+    cost: 330,
+    move: 3,
+    atk: 50,
+    armor: 10,
+    maxHp: 82,
+    range: 4,
+    vision: 3,
+    domain: 'water',
+    splash: 1,
+    abilities: ['nv-shore-bombard'],
+    // 内河与近岸的浮动炮台：慢、笨、打城墙特别狠（岸轰 + 溅射）。
+    // 视野只有 3，离开己方侦察就是瞎子——这是它的代价。
+    // V = 50+36.9+50+12+7.5+4.5+4 = 165 → 0.50
+  },
+  {
+    id: 'nv_cruiser',
+    name: '装甲巡洋舰',
+    short: '巡',
+    era: 5,
+    category: 'combat',
+    cost: 400,
+    move: 5,
+    atk: 56,
+    armor: 12,
+    maxHp: 100,
+    range: 5,
+    vision: 5,
+    domain: 'water',
+    abilities: ['armor-pierce', 'nv-shore-bombard'],
+    // 无畏舰之前的远洋主力：射程 5、带破甲，专门去啃铁甲舰（甲 11）。
+    // V = 56+45+60+15+12.5+7.5 = 196 → 0.49
+  },
+];
+
+const MODERN_FLEET_UNITS: UnitTypeDef[] = [
+  {
+    id: 'nv_carrier',
+    name: '航空母舰',
+    short: '航',
+    era: 6,
+    category: 'combat',
+    cost: 1350,
+    move: 3,
+    atk: 26,
+    armor: 15,
+    maxHp: 260,
+    range: 3,
+    vision: 9,
+    domain: 'water',
+    // 2×2：占四格、四格都挡路、只在四格里挨一份伤害（见 rules 的 distBetweenUnits）。
+    // 这是引擎里"大型单位"的唯一表达方式，也是城市与兵营在用的那套。
+    footprint: 2,
+    abilities: ['nv-fleet-command', 'nv-aa-cover'],
+    // 全图视野最好的船，自己几乎不打人。**它是 `naval-carrier.ts` 那道接口的宿主**：
+    // 机位 4、起飞半径 2 写在 DECK_SPECS 里，不写在这儿——甲板规格属于"接口"，
+    // 不属于数值表，改它的人应该先看到那份契约。
+    //
+    // **大型单位**（footprint 2，占 2×2 四格）：
+    //   · 好处：四格一起挡路，是一条能封锁航道的船；只在四格里挨一份溅射；
+    //   · 代价：需要 2×2 的开阔水面才能造、才能停（一寸宽的河里开不进航母），
+    //     而且移动力压到 3——这么大的船掉头本来就慢。
+    //   · 血量从 200 提到 260、护甲 14→15、造价 1250→1350：占到四格之后
+    //     被围住的风险更高，光靠 200 血撑不住一轮集火。
+    //
+    // 没有空军扩展时它不是废铁：旗舰光环（相邻 +2/+2）+ 视野 9 + 防空，
+    // 是一艘"移动指挥部"。V = 26+117+75+9+7.5+13.5 = 248 → 0.18，
+    // 光是船体确实不值这个价——它的价值在甲板、光环和那四格航道上，
+    // 这三样都不进公式。
+  },
+  {
+    id: 'nv_battleship',
+    name: '战列舰',
+    short: '战',
+    era: 6,
+    category: 'combat',
+    cost: 1150,
+    move: 4,
+    atk: 100,
+    armor: 19,
+    maxHp: 190,
+    range: 6,
+    vision: 5,
+    domain: 'water',
+    splash: 2,
+    abilities: ['armor-pierce', 'siege-master', 'nv-shore-bombard'],
+    // 大舰巨炮的终点：射程 6 全场最远，溅射 2 相当于每炮顺带打一片。
+    // 攻城三项全占（破甲 + 破城 + 岸轰），但它移动 4、视野 5，
+    // 看得比打得近——没有侦察就是一座会动的炮台。
+    // V = 100+85.5+95+18+10+7.5+8 = 324 → 0.28
+  },
+  {
+    id: 'nv_aegis',
+    name: '防空巡洋舰',
+    short: '防',
+    era: 6,
+    category: 'combat',
+    cost: 880,
+    move: 5,
+    atk: 72,
+    armor: 15,
+    maxHp: 150,
+    range: 6,
+    vision: 7,
+    domain: 'water',
+    abilities: ['nv-aa-cover', 'armor-pierce'],
+    // 舰队之伞：视野 7 比战列舰好，区域防空对空中层多打 12 点。
+    // 空军扩展上线之前，它就是"视野好、能打、跑得快"的通用巡洋舰。
+    // V = 72+67.5+75+18+12.5+10.5 = 256 → 0.29
+  },
+  {
+    id: 'nv_attack_sub',
+    name: '攻击核潜艇',
+    short: '潜',
+    era: 6,
+    category: 'combat',
+    cost: 900,
+    move: 5,
+    atk: 92,
+    armor: 9,
+    maxHp: 100,
+    range: 4,
+    vision: 5,
+    domain: 'water',
+    abilities: ['nv-submerge'],
+    // 水下刺客：迷雾局里贴脸才现形，先手不被反击。
+    // 代价是护甲只有 9、血 100——被发现之后连护卫舰都打得穿它。
+    // V = 92+45+45+12+12.5+7.5 = 214 → 0.24（潜航的价值不在公式里）
+  },
+  {
+    id: 'nv_amphib',
+    name: '两栖攻击舰',
+    short: '两',
+    era: 6,
+    category: 'combat',
+    cost: 760,
+    move: 5,
+    atk: 22,
+    armor: 12,
+    maxHp: 165,
+    range: 2,
+    vision: 6,
+    domain: 'water',
+    transport: true,
+    capacity: 4,
+    abilities: ['nv-aa-cover'],
+    // 登陆作战的核心：4 个舱位 + 2 个直升机位（DECK_SPECS 里登记）。
+    // 火力很弱（22 攻），它存在的意义是把四个兵送到对岸的城市旁边。
+    // V = 22+74.25+60+6+12.5+9 = 184 → 0.24
+  },
+  {
+    id: 'nv_missile_boat',
+    name: '导弹快艇',
+    short: '导',
+    era: 6,
+    category: 'combat',
+    cost: 400,
+    move: 7,
+    atk: 58,
+    armor: 5,
+    maxHp: 58,
+    range: 4,
+    vision: 5,
+    domain: 'water',
+    // 空潜快里的"快"：55 金买不到的东西它都有——射程 4、移 7、58 攻。
+    // 代价是甲 5、血 58：挨一发战列舰的溅射就没了。
+    // V = 58+26.1+25+12+17.5+7.5 = 146 → 0.37（略高于同代，靠脆换来的）
+  },
+  {
+    id: 'nv_oiler',
+    name: '舰队补给舰',
+    short: '补',
+    era: 6,
+    category: 'combat',
+    cost: 430,
+    move: 4,
+    atk: 0,
+    armor: 10,
+    maxHp: 130,
+    range: 0,
+    vision: 5,
+    domain: 'water',
+    abilities: ['nv-fleet-repair'],
+    // 完全不打人。价值全在"每回合给相邻友舰补 3 点"——
+    // 舰队在外面待久的差别，就是"能不能不回家"。
+    // V = 0+58.5+50+0+10+7.5 = 126 → 0.29
+  },
+];
+
+/* ===========================================================================
+ * 三、两条舰队规则（扩展钩子，纯规则、不绑兵种）
+ * ======================================================================== */
+
+/** 城市矩形到某点的曼哈顿距离（在城内为 0）。和 rules 里那套算法同一个口径 */
+function cityGap(city: { x: number; y: number; size: number }, p: { x: number; y: number }): number {
+  const dx = Math.max(city.x - p.x, 0, p.x - (city.x + city.size - 1));
+  const dy = Math.max(city.y - p.y, 0, p.y - (city.y + city.size - 1));
+  return dx + dy;
+}
+
+/** 封锁的税额：每座 8 金，最多 24 */
+const BLOCKADE_PER_CITY = 8;
+const BLOCKADE_CAP = 24;
+
+/**
+ * 被封锁的城市少交多少税。
+ *
+ * 纯函数：`incomeResOf` 在热路径上（AI 每回合算预算要问几十次），
+ * 这里只数城、数船，不写任何状态。
+ */
+function blockedIncome(state: GameState, player: PlayerId, income: number): number {
+  let lost = 0;
+  for (const city of state.cities) {
+    if (city.owner !== player || city.ruined) continue;
+    if (!blockaded(state, city, player)) continue;
+    lost += BLOCKADE_PER_CITY;
+    if (lost >= BLOCKADE_CAP) return Math.max(0, income - BLOCKADE_CAP);
+  }
+  return Math.max(0, income - lost);
+}
+
+/** 这一方有没有水面单位贴在城边（封锁） */
+function blockaded(s: GameState, city: { x: number; y: number; size: number }, owner: PlayerId): boolean {
+  return s.units.some(
+    (u) => u.owner !== owner && s.unitTypes[u.type]?.domain === 'water' && cityGap(city, u) <= 1,
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * 共用规则：两个包都会用到，所以只写一份
+ *
+ * 「海战」和「现代海军」都要封锁与抢修。两个包各写一遍的话，同时勾上就会
+ * **跑两次**：城回血被掐两次（无害），港口修理却会变成每回合回 8 点（有害）。
+ * 所以这里写成两个共享函数，并且修理带一个"这一回合已经修过"的标记——
+ * 幂等靠数据，不靠"玩家不会同时勾两个包"这种假设。
+ * ------------------------------------------------------------------------- */
+
+/** 港口抢修：贴着自家城的水面单位每回合 +4（同回合只算一次） */
+function portRepair(state: GameState, player: PlayerId): void {
+  for (const u of state.units) {
+    if (u.owner !== player) continue;
+    const def = state.unitTypes[u.type];
+    if (def?.domain !== 'water') continue;
+    if (u.hp >= def.maxHp) continue;
+    const atPort = state.cities.some((c) => c.owner === player && cityGap(c, u) <= 1);
+    if (!atPort) continue;
+    // 两个包同时开时这个钩子会被叫两次，靠哨兵挡住第二次
+    if (u.custom?.portRepairedTurn === state.turn) continue;
+    u.custom = { ...(u.custom ?? {}), portRepairedTurn: state.turn };
+    u.hp = Math.min(def.maxHp, u.hp + 4);
+  }
+}
+
+/** 甲板整备：把"轮到你"这个时机转告空军扩展（没接入就什么都不做） */
+function deckUpkeep(state: GameState, player: PlayerId): void {
+  const ops = airwingOps();
+  if (!ops?.onDeckTurnStart) return;
+  for (const u of state.units) {
+    if (u.owner !== player) continue;
+    if (!deckSpecOf(u.type)) continue;
+    ops.onDeckTurnStart({ state, carrier: u });
+  }
+}
+
+/** 面板行：甲板状态 + 封锁/停泊提示。两个包共用，免得各画一遍出现双份 */
+function navalPanelLines(state: GameState, unit: Unit): string[] {
+  const lines: string[] = [];
+  // 大型单位的体量要写出来：玩家点了半天发现"怎么放不下"，
+  // 得有一句话告诉他这不是 bug，是 2×2 的要求。
+  if (state.unitTypes[unit.type]?.footprint === 2) {
+    lines.push('占地 2×2：四格一起挡路，起飞/停泊都要 2×2 的开阔水面');
+  }
+  const deck = deckLine(unit);
+  if (deck) lines.push(deck);
+  const def = state.unitTypes[unit.type];
+  if (def?.domain === 'water') {
+    const enemyCity = state.cities.find((c) => c.owner !== unit.owner && cityGap(c, unit) <= 1);
+    if (enemyCity) lines.push(`正在封锁敌城外港：它这一回合少收 ${BLOCKADE_PER_CITY} 金`);
+    const ownCity = state.cities.find((c) => c.owner === unit.owner && cityGap(c, unit) <= 1);
+    if (ownCity) lines.push('停在自家港口：每回合回复 4 点');
+  }
+  return lines;
+}
+
+/**
+ * 「海战」：E2~E5 的七条船 + 封锁与抢修。
+ *
+ * 为什么这两条规则要单独放在包上、而不是做成能力：
+ * 它们说的是"**海权**有什么意义"，不是某条船的特长。做成能力的话，
+ * 玩家会以为"只有带这条能力的船才能封锁"，而现实是任何一条船堵在港口
+ * 都能让城断粮——规则的口径应该和直觉一致。
+ *
+ * 封锁掐的是**税收**，不是回血。本来想掐回血的，翻了一遍核心才发现
+ * `cityRegenOf()` 里已经有一条"城外有敌人就不回血"（围城），任何单位贴着
+ * 城都算——再写一遍就是同一条规则的两份实现，看着像新机制，其实什么都不做。
+ * 所以改成断收入：三座城被堵各自少 8 金，一回合少 24，这才是"海权"该有的疼。
+ */
+export const NAVAL_FLEET: Expansion = {
+  id: 'naval-fleet',
+  name: '海战',
+  scale: 'large',
+  summary:
+    '补上第二到第五时代的水面力量：德罗蒙、卡拉克、火船、盖伦、护卫舰、浅水重炮舰、装甲巡洋舰七条船，' +
+    '外加两条海权规则——舰队封锁港口（贴着敌城的水面单位让那座城少收 8 金，三座封顶）、船只贴着自家城可以抢修。',
+  abilities: FLEET_ABILITIES,
+  units: FLEET_UNITS,
+  hooks: {
+    /**
+     * 封锁：敌方水面单位贴着你的城，那座城这一回合的税收断掉。
+     *
+     * 每座 −8 金、最多 −24（也就是三座城封顶）。为什么封顶：
+     * 后期四城全开的话，一条 45 金的舢板堵满四条水路能让对面直接破产，
+     * 而"派一条船过去"根本不该有这么高的赔率。
+     */
+    modifyIncome: ({ state, player, income }) => blockedIncome(state, player, income),
+
+    /**
+     * 回合开始：港口抢修（+ 甲板整备，如果空军扩展接了进来）。
+     *
+     * 抢修的数值（4 点）是照"回一趟港要两三个回合"定的：
+     * 一条 100 血的巡洋舰从残血修回来要十几回合，所以它只是"不用回城",
+     * 不是"永不沉没"。真正让它沉的是被围住——围住就没有自家城可贴。
+     */
+    onTurnStart: ({ state, player }) => {
+      portRepair(state, player);
+      deckUpkeep(state, player);
+    },
+
+    /**
+     * 面板：航母多一行甲板状态；船在封锁/停泊时给一句提示。
+     *
+     * 这一行是**接口的可见部分**：没有空军扩展时它明说"未接入"，
+     * 而不是画一个空甲板让人以为飞机掉了。
+     */
+    getUnitPanelLines: ({ state, unit }) => navalPanelLines(state, unit),
+  },
+};
+
+/**
+ * 「现代海军」：第六时代的七条船，**依赖「现代」**。
+ *
+ * 为什么一定要 `requires`：第六时代是「现代」这个包开出来的（`unlockEra: 6`）。
+ * 单勾「现代海军」的话，城市永远升不到 6 级，这批船一条都造不出来——
+ * 在玩家眼里就是"这个包坏了"。写上依赖之后，开局面板会把「现代」一起补上。
+ */
+export const MODERN_NAVAL: Expansion = {
+  id: 'naval-modern',
+  name: '现代海军',
+  requires: ['pack-contemporary'],
+  scale: 'large',
+  summary:
+    '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、战列舰、防空巡洋舰、' +
+    '攻击核潜艇（潜航）、两栖攻击舰、导弹快艇、舰队补给舰。' +
+    '航母的机位与起飞半径写在 naval-carrier.ts 的 DECK_SPECS 里，不在这张数值表上。',
+  abilities: MODERN_ABILITIES,
+  units: MODERN_FLEET_UNITS,
+  hooks: {
+    // 封锁与抢修是海军共同的规则，两个包各写一份就会走散（改一处忘一处），
+    // 所以这里直接复用同一套实现——封锁是纯函数（同样输入同样输出），
+    // 抢修带"这一回合修过"的哨兵，重合也不会有副作用。
+    modifyIncome: ({ state, player, income }) => blockedIncome(state, player, income),
+
+    onTurnStart: ({ state, player }) => {
+      // 先整备再修船：空军扩展可能在这一步把飞机放回甲板/扣燃油，
+      // 顺序固定下来，两个包同时开时行为一致
+      deckUpkeep(state, player);
+      portRepair(state, player);
+    },
+
+    getUnitPanelLines: ({ state, unit }) => navalPanelLines(state, unit),
+  },
+};
+
+/** 空军扩展接入时用得上的：把一个已经贴着母舰的飞机收进甲板 */
+export function tryRecoverPlane(state: GameState, carrier: Unit, plane: Unit): { ok: boolean; reason?: string } {
+  const ops = airwingOps();
+  if (!ops) return { ok: false, reason: '没有空军扩展接入' };
+  return ops.recover({ state, carrier, plane });
+}

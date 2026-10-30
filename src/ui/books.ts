@@ -44,6 +44,12 @@ const GROUP_BOOKS: Array<{ prefix: string; file: string; title: string; note: st
     note: '奇想五包合册——法则、骑士团、荒兽、秘法、英雄：兵种总表 + 机制词条',
   },
   {
+    prefix: 'naval-',
+    file: 'manual-pack-naval.html',
+    title: '海战扩展',
+    note: '海上力量两包合册——海战（E2~E5）+ 现代海军（E6）：船种总表、封锁与抢修、航母甲板接口',
+  },
+  {
     prefix: 'pack-',
     file: 'manual-pack-eras.html',
     title: '时代兵备',
