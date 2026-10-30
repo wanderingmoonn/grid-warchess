@@ -63,6 +63,8 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
+  DRAFT_BAN_MS,
+  DRAFT_PICK_MS,
   draftInProgress,
   draftPhaseLabel,
   draftSecondsLeft,
@@ -1462,6 +1464,8 @@ function renderDraft(): void {
   ].join('|');
   if (sig !== draftSig) {
     draftSig = sig;
+    // 重画之后旧卡片已经不在文档里，浮层再留着就是一片错位的信息
+    hideDraftTip();
     draftEl.innerHTML = draftScreenHtml(state, {
       seat: draftSeat,
       now: Date.now(),
@@ -1469,11 +1473,14 @@ function renderDraft(): void {
       room: room
         ? { code: room.code, link: inviteLink(room.code), peerSeated }
         : null,
+      // 倒计时取"本机看到这一轮之后剩下的秒数"和房间那份的小者：
+      // 房间那份可能是别人的钟写的，早就不作数了
+      secondsCap: draftLocalSecondsLeft(Date.now()),
     });
     // AI 的那一手：晚半秒再动，让它看起来像在挑，而不是"你点完它就位"
     scheduleDraftAi();
   }
-  paintDraftTimer(draftEl, state, Date.now());
+  paintDraftTimer(draftEl, state, Date.now(), draftLocalSecondsLeft(Date.now()));
 }
 
 /**
@@ -1489,6 +1496,33 @@ function renderDraft(): void {
 let draftTicker: number | null = null;
 /** 上一次为哪个进度号判过超时（防止每 400ms 重复提交同一步） */
 let draftTimeoutAt = -1;
+/**
+ * 本机第一次看到"当前这一轮"的时刻。
+ *
+ * 为什么不能只信 state 里的 deadline：那个数是**另一台机器**的钟写进来的，
+ * 而且可能是几分钟前写的（你入座时对面已经在禁用屏上坐了一会儿）。拿它直接
+ * 减 Date.now()，轻则倒计时一进来就是 0，重则当场判"双方禁用超时"。
+ * 所以本机自己记一个锚点：超时只在我亲眼看着这一轮走完整个时长之后才发起。
+ * 房间那份 deadline 仍然是上限（它更晚就等它）。
+ */
+let draftAnchor = { key: '', at: 0 };
+
+/** 这一轮的时长（禁用 25 秒 / 每次选人 30 秒） */
+function draftPhaseMs(state: GameState): number {
+  return state.draft?.phase === 'pick' ? DRAFT_PICK_MS : DRAFT_BAN_MS;
+}
+
+/**
+ * 距离本机锚点还有多少秒（倒计时显示用；不小于 0）。
+ *
+ * 还没立锚点时（刚进这一轮、定时器还没跑过第一拍）按**满格**算：
+ * 这一轮就是从这一刻开始的，返回 0 会让界面一进来就写「0s」。
+ */
+function draftLocalSecondsLeft(now: number): number {
+  const ms = draftPhaseMs(state);
+  if (!draftAnchor.at) return Math.ceil(ms / 1000);
+  return Math.max(0, Math.ceil((draftAnchor.at + ms - now) / 1000));
+}
 
 function startDraftTicker(): void {
   if (draftTicker !== null) return;
@@ -1502,8 +1536,24 @@ function startDraftTicker(): void {
     if (phase !== 'ban' && phase !== 'pick') return;
     const now = Date.now();
     paintDraftTimer(draftEl, state, now);
-    // 联机时多等一会儿再判超时：deadline 是**对方那台机器的钟**写进来的，
-    // 两边差个一两秒很正常，早判就等于替对面抢答了
+
+    /*
+     * ① 先把本机的钟对准这一轮。
+     *
+     * 换了一轮（阶段或进度号变了）就重新起算：这一拍只记时，不判超时。
+     * 少了这一句，刚进禁用屏的那一下会因为拿到的是别人的 deadline 而当场
+     * 判"双方禁用超时"——这正是这次要修的那个毛病。
+     */
+    const key = `${phase}:${state.draft?.seq ?? 0}`;
+    if (draftAnchor.key !== key) {
+      draftAnchor = { key, at: now };
+      return;
+    }
+
+    // ② 本机还没走完这一轮 → 不判。
+    if (now < draftAnchor.at + draftPhaseMs(state)) return;
+    // ③ 房间那份 deadline 也得到点（它更晚就等它）。
+    //    联机时多留一点余量：deadline 是对方那台机器的钟写进来的。
     const slack = room ? 1500 : 0;
     if (draftSecondsLeft(state, now + slack) > 0) return;
     /*
@@ -1530,6 +1580,7 @@ function stopDraftTicker(): void {
   if (draftTicker === null) return;
   window.clearInterval(draftTicker);
   draftTicker = null;
+  draftAnchor = { key: '', at: 0 };
 }
 
 function scheduleDraftAi(): void {
@@ -1630,6 +1681,74 @@ async function refreshDraftRoom(): Promise<void> {
   } catch (err) {
     toast(err instanceof Error ? err.message : '拉不到房间状态，检查网络');
   }
+}
+
+/**
+ * 卡片详情浮层（悬停显示完整数据）。
+ *
+ * 为什么不写在卡片里做 CSS 浮层：池子是 `overflow:auto` 的滚动容器，
+ * 卡片内部的绝对定位浮层会被裁掉——最上面一排的详情直接看不见。所以这个节点
+ * 挂在 body 上，位置按卡片的视口矩形算，指针事件全部穿透（`pointer-events:none`），
+ * 免得它自己把 hover 打断。
+ *
+ * 数据仍然写在卡片里（`.draft-tip[hidden]`），这里只负责"搬上来 + 定位"：
+ * 一份数据、一处渲染逻辑，不用在两边各维护一份文案。
+ */
+let draftTipEl: HTMLElement | null = null;
+
+function draftTipPanel(): HTMLElement {
+  if (draftTipEl) return draftTipEl;
+  const el = document.createElement('div');
+  el.id = 'draft-tip';
+  el.hidden = true;
+  document.body.appendChild(el);
+  draftTipEl = el;
+  return el;
+}
+
+function hideDraftTip(): void {
+  if (draftTipEl) draftTipEl.hidden = true;
+}
+
+function showDraftTip(card: HTMLElement): void {
+  const src = card.parentElement?.querySelector<HTMLElement>('.draft-tip');
+  if (!src) return;
+  const panel = draftTipPanel();
+  panel.innerHTML = src.innerHTML;
+  panel.hidden = false;
+
+  const r = card.getBoundingClientRect();
+  const pw = panel.offsetWidth;
+  const ph = panel.offsetHeight;
+  const vw = window.innerWidth || 1024;
+  const vh = window.innerHeight || 768;
+  // 默认放上面（卡片多半在屏幕下半部分）；顶上放不下就翻到下面
+  const above = r.top - ph - 8 >= 8;
+  const top = above ? r.top - ph - 8 : r.bottom + 8;
+  const left = Math.min(Math.max(8, r.left), Math.max(8, vw - pw - 8));
+  panel.style.left = `${left}px`;
+  panel.style.top = `${Math.min(top, vh - ph - 8)}px`;
+}
+
+/** 选卡遮罩上的悬停：进出卡片时搬运详情 */
+function bindDraftTips(): void {
+  appEl.addEventListener('mouseover', (e) => {
+    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
+    if (!card) return;
+    showDraftTip(card);
+  });
+  appEl.addEventListener('mouseout', (e) => {
+    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
+    if (!card) return;
+    const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
+    // 在同一张卡内部移动（图标→文字）不算离开
+    if (to && card.contains(to)) return;
+    hideDraftTip();
+  });
+  // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
+  appEl.addEventListener('scroll', hideDraftTip, true);
+  document.addEventListener('visibilitychange', hideDraftTip);
+  appEl.addEventListener('click', hideDraftTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -4501,6 +4620,9 @@ const endPan = (): void => {
 boardScrollEl.addEventListener('pointerup', endPan);
 boardScrollEl.addEventListener('pointercancel', endPan);
 boardScrollEl.addEventListener('pointerleave', endPan);
+
+// 选卡遮罩上的"悬停看详情"：卡片一多，光看名字和攻血根本判断不了禁它值不值
+bindDraftTips();
 
 appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;

@@ -20,8 +20,16 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
+import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
-import { effectiveStats, reachableTiles, refreshMemory, unitIncomeAt } from '../src/core/rules.ts';
+import {
+  applyAction,
+  effectiveStats,
+  reachableTiles,
+  refreshMemory,
+  unitIncomeAt,
+} from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { renderBoard } from '../src/ui/board.ts';
@@ -3954,9 +3962,50 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   assert.ok(doc.querySelector('#draft .draft-side.is-b'), '要显示乙方那一栏');
   assert.ok(doc.querySelector('#draft [data-ref="draft-timer"]'), '要有倒计时');
 
+  /*
+   * 一进禁用就该是满格倒计时，而且**不该**有任何"超时"记录。
+   *
+   * 这一条守的是"联机里一进选卡就显示双方禁用已超时"：deadline 早过期或者
+   * 干脆是 0 的时候，界面会把别人的时间当成自己的，倒计时一进来就是 0s，
+   * 紧接着替双方各判一次超时（两边白丢一次禁用）。现在倒计时取"本机看到这一轮
+   * 之后的剩余"和房间那份的小者，锚点一立就是满的。
+   */
+  const timerText = doc.querySelector('#draft [data-ref="draft-timer"]')?.textContent ?? '';
+  const timerSecs = Number.parseInt(timerText, 10);
+  assert.ok(timerSecs > 0, `刚进禁用，倒计时必须是正数，实际「${timerText}」`);
+  assert.equal(
+    doc.querySelectorAll('#draft .draft-log li').length,
+    0,
+    '刚进禁用不该有任何流水，更不能有"超时"',
+  );
+
+  // 卡片排序：时代为主、扩展为辅（同一代里再来比包）
+  const order = cards().map((c) => c.dataset.draft ?? '');
+  const eras = order.map((id) => UNIT_TYPES[id]?.era ?? 0);
+  for (let i = 1; i < eras.length; i++) {
+    assert.ok(
+      eras[i]! >= eras[i - 1]!,
+      `卡片要按时代从低到高排：第 ${i} 张（${order[i]}）是 ${eras[i]} 代，` +
+        `前面是 ${eras[i - 1]} 代`,
+    );
+  }
+
+  // 悬停看详情：被挡住的卡也要能看（这时候正是最想研究池子的时候）
+  const probe = cards()[0]!;
+  probe.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+  const tip = doc.querySelector<HTMLElement>('#draft-tip');
+  assert.ok(tip, '悬停应该浮出一块详情');
+  assert.equal(tip!.hidden, false, '详情要显示出来');
+  const tipText = tip!.textContent ?? '';
+  assert.ok(tipText.includes('攻'), `详情要有数值，实际：${tipText}`);
+  assert.ok(tipText.includes('造价') || tipText.includes('金'), '详情要写造价');
+  probe.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true }));
+  assert.equal(tip!.hidden, true, '移开就收起');
+
   // 甲方禁一个：遮罩上要出现一条"已禁用"，但还没进入选人
   cards()[0]!.click();
   await tick(40);
+
   assert.ok(
     doc.querySelector('#draft .draft-slot.is-ban.is-filled'),
     '禁完之后要看到禁用位被填上',
@@ -3989,6 +4038,53 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
   assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
 });
 
+
+check('选卡池排序：同一代里，原版在扩展前面，扩展之间按声明顺序', () => {
+  // 这条补的是"次要排序依据"：只按时代排的话，同一代里原版兵和扩展兵会混着排，
+  // 扫池子时看不出"这批是哪个包带来的"。
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    const st = createMatch(
+      { ...DEFAULT_CONFIG, draftMode: true, expansionIds: ['fantasy-knights', 'pack-antiquity'] },
+      4242,
+      {},
+    );
+    // 池子只在禁用/选人阶段铺出来（等待开局那一屏是建房的地方）
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    host.innerHTML = draftScreenHtml(started.state, {
+      seat: 'A',
+      now: Date.now(),
+      isAi: () => false,
+    });
+    const ids = [...host.querySelectorAll<HTMLElement>('[data-draft]')].map((c) => c.dataset.draft!);
+    assert.ok(ids.length >= 10, `应该铺出池子，实际 ${ids.length}`);
+
+    const packRank = new Map(EXPANSIONS.map((e, i) => [e.id, i + 1]));
+    // 时代要问**这一局**的兵种表：扩展兵种不在 UNIT_TYPES 里
+    const key = (id: string) => {
+      const src = unitSourceIdOf(id);
+      return {
+        era: started.state.unitTypes[id]?.era ?? 99,
+        pack: src ? (packRank.get(src) ?? 98) : 0, // 原版＝0，排最前
+      };
+    };
+    for (let i = 1; i < ids.length; i++) {
+      const a = key(ids[i - 1]!);
+      const b = key(ids[i]!);
+      assert.ok(b.era >= a.era, `第 ${i} 张跨回了低时代：${ids[i - 1]}(${a.era}) → ${ids[i]}(${b.era})`);
+      if (b.era === a.era) {
+        assert.ok(
+          b.pack >= a.pack,
+          `同一代里扩展包顺序乱了：${ids[i - 1]}(包${a.pack}) → ${ids[i]}(包${b.pack})`,
+        );
+      }
+    }
+  } finally {
+    host.remove();
+  }
+});
 
 await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
   click('[data-act="new-game"]');
@@ -4036,7 +4132,9 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   for (let i = 0; i < 40; i++) {
     const mask = doc.querySelector<HTMLElement>('#draft');
     if (!mask || mask.hidden) break;
-    const card = doc.querySelector<HTMLElement>('#draft [data-draft]:not([disabled])');
+    const card = doc.querySelector<HTMLElement>(
+      '#draft [data-draft]:not([aria-disabled="true"])',
+    );
     if (card) {
       card.click();
       await tick(80);

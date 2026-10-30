@@ -11136,6 +11136,29 @@ test('选卡：池子里不会混进攻城结算用的伪单位', () => {
   assert.equal(new Set(s.draft!.pool).size, DRAFT_POOL_BASE, '池子里不该有重复');
 });
 
+test('选卡：没有计时起点、或 deadline 是 0/NaN 时，超时一律不成立', () => {
+  // 这一条守的是"联机里一进选卡就显示双方禁用已超时"：
+  // 超时的判据是 `at < deadline`，deadline 为 0 或 NaN 时这句永远不成立，
+  // 于是任何一次超时请求都被放行，两边各白丢一次禁用。
+  const s = fresh({ draftMode: true }, 7301);
+  const ban = startStep(s);
+  assert.equal(ban.draft!.phase, 'ban');
+
+  for (const broken of [0, Number.NaN]) {
+    const st = structuredClone(ban);
+    st.draft!.deadline = broken;
+    const r = applyAction(st, { type: 'DRAFT_TIMEOUT', at: Date.now() }, 'A');
+    assert.equal(r.ok, false, `deadline=${broken} 时不该判超时`);
+    assert.deepEqual(ban.draft!.bans.A, [], '更不该替双方补"放弃"');
+  }
+
+  // 开始选卡必须带计时起点，否则会写出 NaN 的 deadline（就是上面那个坑的源头）
+  const lobby = fresh({ draftMode: true }, 7302);
+  const bad = applyAction(lobby, { type: 'DRAFT_START' } as never, 'A');
+  assert.equal(bad.ok, false, '缺 at 的 DRAFT_START 要被挡住');
+  assert.equal(lobby.draft!.phase, 'lobby', '挡下来之后还停在等待开局');
+});
+
 test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {
   const s = fresh({ draftMode: true }, 7102);
   const draft = s.draft!;

@@ -378,6 +378,16 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
 
   if (action.type === 'DRAFT_START') {
     if (draft.phase !== 'lobby') return { ok: false, reason: '这一局的选卡已经开始了' };
+    /*
+     * 计时起点必须是真时间戳。
+     *
+     * 少了它会算出 NaN 的 deadline，而"到点没有"的判断是 `at < deadline`——
+     * 和 NaN 比永远是 false，于是**一进禁用就被判超时**，双方各白丢一次禁用
+     * （联机里表现成"一进选卡就显示双方禁用已超时"）。
+     */
+    if (!Number.isFinite(action.at)) {
+      return { ok: false, reason: '开始选卡要带计时起点（时间戳）' };
+    }
     draft.phase = 'ban';
     draft.deadline = action.at + DRAFT_BAN_MS;
     draft.seq += 1;
@@ -463,6 +473,17 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (draft.phase === 'done') return { ok: false, reason: '选卡已经结束了' };
     // lobby 不计时：这一屏是"等人入座"，超时兜底在这里没有意义
     if (draft.phase === 'lobby') return { ok: false, reason: '还没开始选卡' };
+    /*
+     * deadline 必须是正数，否则一律当作"这一阶段还没开始计时"。
+     *
+     * 这条是"一进选卡就双方禁用超时"的正面修法：deadline 为 0（或 NaN）时，
+     * 下面那句 `action.at < draft.deadline` 永远成立不了，于是任何一次超时
+     * 请求都会被放行，两边各白丢一次禁用。缺省值不该被当成"早就到点了"。
+     */
+    if (!Number.isFinite(draft.deadline) || draft.deadline <= 0) {
+      return { ok: false, reason: '这一阶段还没开始计时' };
+    }
+    if (!Number.isFinite(action.at)) return { ok: false, reason: '超时判定要带当前时间' };
     if (action.at < draft.deadline) return { ok: false, reason: '还没到时限' };
 
     if (draft.phase === 'ban') {

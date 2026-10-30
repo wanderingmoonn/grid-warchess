@@ -3157,15 +3157,98 @@ a.btn {
   transition: border-color 0.12s ease, transform 0.12s ease, background 0.12s ease;
 }
 
-.draft-card:hover:not(:disabled) {
+/*
+ * 卡片外面那层：详情浮层要靠它定位，同时它得替"点不动的卡"接住鼠标。
+ *
+ * `disabled` 的按钮在部分浏览器里连 mouseover 都不派发，那样详情永远出不来——
+ * 而"禁用交完了、轮到对面选人"正是最想研究池子的时候。所以点不动改用
+ * aria-disabled 表达，这里也就不必再靠 :disabled 选择器。
+ */
+.draft-card-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.draft-card-wrap > .draft-card {
+  flex: 1;
+  min-width: 0;
+}
+
+.draft-card:hover:not(.is-blocked) {
   border-color: var(--a);
   background: var(--a-soft);
   transform: translateY(-1px);
 }
 
-.draft-card:disabled {
+/* 点不动：压暗，但**保留 hover**——详情要继续能看 */
+.draft-card.is-blocked {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.draft-card.is-blocked:hover {
+  border-color: var(--line-strong);
+}
+
+/*
+ * 卡片详情（悬停浮层）。
+ *
+ * 卡片里那份 `.draft-tip` 只是"数据"，靠 hidden 藏着；真正显示的是界面层
+ * 那个 `#draft-tip` 浮动节点——它挂在 body 上，因为池子本身是 overflow:auto
+ * 的滚动容器，卡片内部的绝对定位浮层会被裁掉（最上面一排的详情直接看不到）。
+ */
+#draft-tip {
+  position: fixed;
+  z-index: 90;
+  pointer-events: none;
+  max-width: 320px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+#draft-tip[hidden] {
+  display: none;
+}
+
+#draft-tip .tip-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+#draft-tip .tip-title b {
+  font-size: 13px;
+}
+
+#draft-tip .tip-title i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+#draft-tip .tip-row {
+  display: block;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+#draft-tip .tip-abil {
+  color: var(--a);
+}
+
+#draft-tip .tip-blocked {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+  color: var(--b);
 }
 
 .draft-card.is-building {
