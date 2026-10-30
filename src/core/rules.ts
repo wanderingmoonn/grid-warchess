@@ -1891,7 +1891,21 @@ export function computeDamage(
   const city = isCity ? (defender.__city || defender) : null;
 
   const at = utype(s, attacker.type);
-  const dt = utype(s, defender.type || '__city__');
+  //拦截：如果是城市，现场伪造一个兵种定义，绝对不去查 s.unitTypes，彻底免疫旧存档报错
+  let dt: any;
+  if (isCity) {
+    dt = {
+      id: '__city__',
+      name: '城市',
+      armor: 0,
+      weak: undefined,
+      resist: undefined,
+      bridges: false,
+      abilities: [],
+    };
+  } else {
+    dt = utype(s, defender.type);
+  }
 
   // 2. 城市不吃地形和光环
   const tile = isCity ? null : tileAt(s, defender.x, defender.y);
