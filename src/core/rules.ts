@@ -1491,13 +1491,18 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
  * 己方单位可以穿过友军，但不能停在友军身上。
  */
 export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
-  // 占地 2 的单位暂时按"阵地"处理：它不移动。
+  // 占地 2 的单位也能移动（2026-10-30）。
   //
-  // 多格移动不是把落点判四次就行——锚点走一步，四格里有两格跟着挪，
-  // 路径本身要按"四格全部可过"重算，AI 的推进打分和动画也要跟着改。
-  // 在真正需要会走的大单位之前（炮台、巨兽），先让接口成立、移动为 0，
-  // 而不是给一个"能走但会卡在墙上"的半成品。
-  if (footprintOf(s, unit) > 1) return new Map();
+  // 以前这里是一句"占地 2 一律返回空集"——那时 2×2 只有炮台、兵营这类
+  // 移动力 0 的建筑，等于没写。航空母舰要做成 2×2 之后，"不会动"就成了
+  // 规则错误，所以这一版把它做成真的：
+  //
+  //   · 锚点走一步，n×n 四格跟着挪 → 每一步都要求**四格地形全过**；
+  //   · 敌军只挡同一层（和单格完全一致），桥仍然可以从下面过；
+  //   · 自己的四格要豁免——否则它当前踩着的两格会把自己挡住，一步都动不了；
+  //   · 步耗按**锚点落的那一格**算。四格取最大或取和都会让"横向挪一格"
+  //     在岸边莫名其妙翻倍，而玩家看的是锚点那个格子，口径跟肉眼一致最要紧。
+  const n = footprintOf(s, unit);
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const hooks = hooksFor(def);
@@ -1512,6 +1517,42 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 不然船一步都动不了 —— 这一条曾经真的漏过，测试也没抓住（可达格为空，
   // "所有可达格都是水"这种全称命题反而是成立的）。
   const waterUnit = def.domain === 'water';
+
+  /** 锚点落在 (ax,ay) 时它占的那 n×n 格（n=1 时就是它自己） */
+  const cellsAt = (ax: number, ay: number): Array<{ x: number; y: number }> => {
+    if (n === 1) return [{ x: ax, y: ay }];
+    const out: Array<{ x: number; y: number }> = [];
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) out.push({ x: ax + dx, y: ay + dy });
+    return out;
+  };
+
+  /** 地形与城市：四格全部合规才算过；飞行只给"水面"开一个例外（下同） */
+  const terrainOk = (ax: number, ay: number): boolean => {
+    for (const c of cellsAt(ax, ay)) {
+      if (!blockedFor(s, c.x, c.y, unit)) continue;
+      const ft = tileAt(s, c.x, c.y);
+      if (flyer && ft && ft.terrain === 'water') continue;
+      return false;
+    }
+    return true;
+  };
+
+  /** 敌军挡路：任一格被同层的非桥敌军占着就不能进（除非会穿行） */
+  const enemyBlocks = (ax: number, ay: number): boolean => {
+    if (phasing) return false;
+    for (const c of cellsAt(ax, ay)) {
+      const hit = s.units.some((u) => {
+        if (!coversTile(s, u, c.x, c.y)) return false;
+        if (u.owner === unit.owner) return false;
+        if (isAirborne(s, u) !== air) return false;
+        if (utype(s, u.type).bridges) return false;
+        return true;
+      });
+      if (hit) return true;
+    }
+    return false;
+  };
+
   const best = new Map<number, number>();
   const start = idx(s, unit.x, unit.y);
   best.set(start, 0);
@@ -1529,12 +1570,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       const nx = x + dx;
       const ny = y + dy;
       if (!inBounds(s, nx, ny)) continue;
-      if (blockedFor(s, nx, ny, unit)) {
-        // 飞行只放行"水面"这一种阻挡：敌方城市、高山、越界照旧拦住。
-        // 放行的代价是不能停在水上（见下面的终点过滤），所以它只是过河，不是潜水。
-        const ft = tileAt(s, nx, ny);
-        if (!(flyer && ft && ft.terrain === 'water')) continue;
-      }
+      // 地形与城市：四格全过（n=1 时就是原来那一格）。
+      // 飞行只放行"水面"这一种阻挡：敌方城市、高山、越界照旧拦住。
+      // 放行的代价是不能停在水上（见下面的终点过滤），所以它只是过河，不是潜水。
+      if (!terrainOk(nx, ny)) continue;
 
       const tile = s.tiles[idx(s, nx, ny)];
       if (!tile) continue;
@@ -1544,20 +1583,16 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 不同层可以共格，所以它们彼此既不挡路、也不占位——
       // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
-      const blocker = s.units.find((u) => {
-        if (!coversTile(s, u, nx, ny)) return false;
-        if (u.owner === unit.owner) return false;
-        if (isAirborne(s, u) !== air) return false;
-        if (utype(s, u.type).bridges) return false;
-        return true;
-      });
-      if (blocker && !phasing) continue;
+      if (enemyBlocks(nx, ny)) continue;
 
       // 单格步耗。三道：先看这一格的基础价（水军/飞行固定 1，地面单位还要
       // 加上"爬坡附加"——往高处走更贵，见 stepCostInto），
       // 再让"改价"类能力覆盖它（穿林：森林丘陵按 1），最后让"倍率"类能力乘上去
       // （重甲难行 ×2）。三步走而不是一步算出来，是因为穿林和重甲难行都挂在
       // 同一格上时，先减半再翻倍才是玩家预期的那个数。
+      //
+      // 多格单位按**锚点那一格**付账：四格取最大或取和，都会让"贴着岸横挪一格"
+      // 在玩家眼里突然贵一倍，而界面上高亮的正是锚点格。口径跟肉眼一致优先。
       let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer });
       const moveCtx = { state: s, unit, def, terrain: tile.terrain, cost: stepCost };
       for (const h of hooks) {
@@ -1592,19 +1627,26 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   //     它们的全部作用就是"这一格不存在"，能站就等于把它删了。
   //
   // 敌方的建筑（非桥）一律不能站：那一格还被它占着，得先打掉。
+  //
+  // 多格单位逐格看：**只要有一格停不下，整个锚点就不算落点**。
+  const blockedAnchor = (x: number, y: number): boolean =>
+    cellsAt(x, y).some(({ x: cx, y: cy }) => {
+      const here = s.units.filter((u) => u.id !== unit.id && coversTile(s, u, cx, cy));
+      const blockers = here.filter((u) => {
+        // 不同层不占位：脚底下站着敌人，头上那格照样能停
+        if (isAirborne(s, u) !== air) return false;
+        const d = utype(s, u.type);
+        if (d.category !== 'building') return true;
+        if (d.bridges) return false; // 桥是双向的，谁都能站
+        if (d.obstacle) return true; // 墙：自己人也过不去
+        return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
+      });
+      return blockers.length > 0;
+    });
+
   for (const i of Array.from(best.keys())) {
     const { x, y } = xyOf(s, i);
-    const here = s.units.filter((u) => u.id !== unit.id && coversTile(s, u, x, y));
-    const blockers = here.filter((u) => {
-      // 不同层不占位：脚底下站着敌人，头上那格照样能停
-      if (isAirborne(s, u) !== air) return false;
-      const d = utype(s, u.type);
-      if (d.category !== 'building') return true;
-      if (d.bridges) return false; // 桥是双向的，谁都能站
-      if (d.obstacle) return true; // 墙：自己人也过不去
-      return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
-    });
-    if (blockers.length > 0) best.delete(i);
+    if (blockedAnchor(x, y)) best.delete(i);
   }
   // 飞行单位可以停在水面上（见 canStandAt 的同一条说明）。
   // 这里以前有一句"落点必须在岸上"，删掉之后飞行才真正是"水里也能歇脚"，
@@ -1626,18 +1668,29 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
 export function threatTiles(s: GameState, unit: Unit): Set<number> {
   const out = new Set<number>();
   const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
+  // 多格单位：距离要量到**整个矩形**，不能量锚点。
+  // 量锚点的话，2×2 的船右边和下边会少画一排——玩家看到"打不到"，
+  // 实际能打，这种错比不画还糟。
+  const n = footprintOf(s, unit);
+  const gapTo = (cx: number, cy: number, x: number, y: number) => {
+    const gx = Math.max(0, Math.max(cx - x, x - (cx + n - 1)));
+    const gy = Math.max(0, Math.max(cy - y, y - (cy + n - 1)));
+    return gx + gy;
+  };
 
   const addAround = (cx: number, cy: number) => {
     const projected = { ...unit, x: cx, y: cy, moved: unit.moved || cx !== unit.x || cy !== unit.y };
     const ranges = new Map(targets.map(t => [t.terrain,effectiveRangeAgainst(s,projected,t)]));
     const range = Math.max(...ranges.values());
-    for (let dy = -range; dy <= range; dy++) {
-      for (let dx = -range; dx <= range; dx++) {
-        if (Math.abs(dx) + Math.abs(dy) > range) continue;
-        if (dx === 0 && dy === 0) continue;
+    const pad = range + n - 1;
+    for (let dy = -pad; dy <= pad; dy++) {
+      for (let dx = -pad; dx <= pad; dx++) {
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y) && Math.abs(dx)+Math.abs(dy) <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
+        if (!inBounds(s, x, y)) continue;
+        const gap = gapTo(cx, cy, x, y);
+        if (gap === 0) continue; // 自己身体那几格不算威胁
+        if (gap <= ranges.get(tileAt(s,x,y)!.terrain)!) out.add(idx(s, x, y));
       }
     }
   };
