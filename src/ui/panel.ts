@@ -19,7 +19,7 @@ import {
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
 import { canUseType, eraWindowOk } from '../core/draft.ts';
-import { PACK_ALL, packLabel, packOk, packRow } from './packs.ts';
+import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
@@ -90,6 +90,13 @@ export interface PanelInput {
    * 和搜索框是"与"的关系：搜 "弓" + 只看「奇想·骑士」，就是那个包里名字带弓的。
    */
   recruitPack?: string;
+  /**
+   * 按时代筛选产兵列表（`ERA_ALL` = 不筛）。
+   *
+   * 和生产无关：时代窗口决定"能造什么"，这里只决定"看得到什么"。
+   * 和扩展包、搜索框都是**与**的关系——三个条件叠在一起才是最终那一屏。
+   */
+  recruitEra?: number;
   /**
    * 战报用谁的眼睛看：给一个 PlayerId 就只看这一方（+ 公开的战损），
    * 给 null 就是全都看得见。不传按"全都看得见"处理。
@@ -886,7 +893,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
-  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
+  const eraFilter = input.recruitEra ?? ERA_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -901,7 +909,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   const recruitGroups =
     shown.length === 0
-      ? emptyRecruitHint(q, pack, buildable.length, '这座城')
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座城')
       : grouped;
 
   const upgradeBlock =
@@ -941,6 +949,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                   }</div>
            ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
+           ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            ${
@@ -1025,18 +1034,25 @@ function matchRecruit(def: UnitTypeDef, q: string): boolean {
 /**
  * 产兵列表空掉时那句话。
  *
- * "搜不到"和"这个包里没有"是两种不同的空：前者玩家会去清搜索框，
+ * "搜不到"和"这一档里没有"是两种不同的空：前者玩家会去清搜索框，
  * 后者要去点「全部」。只会说"没有可造的兵"等于让人自己猜。
+ *
+ * 筛选维度从一维变成两维之后，条件必须**全部写出来**：只提包名不提时代，
+ * 玩家会去清搜索框，然后发现还是空的。所以这里把生效的每一维都摆进括号里，
+ * 维度之间用「·」隔开（和屏幕上那两行 chip 的排列顺序一致）。
  */
-function emptyRecruitHint(q: string, pack: string, total: number, subject: string): string {
-  const head =
-    q && pack
-      ? `没有匹配「${escapeHtml(q)}」的兵种（只看「${escapeHtml(packLabel(pack))}」）`
-      : q
-        ? `没有匹配「${escapeHtml(q)}」的兵种`
-        : pack
-          ? `「${escapeHtml(packLabel(pack))}」里没有这一档能造的兵`
-          : '没有可造的兵种';
+function emptyRecruitHint(
+  q: string,
+  pack: string,
+  era: number,
+  total: number,
+  subject: string,
+): string {
+  const only: string[] = [];
+  if (pack) only.push(escapeHtml(packLabel(pack)));
+  if (era !== ERA_ALL) only.push(eraLabel(era));
+  const cond = only.length > 0 ? `（只看「${only.join('」「')}」）` : '';
+  const head = q ? `没有匹配「${escapeHtml(q)}」的兵种${cond}` : `这一档没有能造的兵${cond}`;
   return `<div class="hint">${head}。${subject}在售 ${total} 种，清掉筛选看全部。</div>`;
 }
 
@@ -1185,7 +1201,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
-  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack));
+  const eraFilter = input.recruitEra ?? ERA_ALL;
+  const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
@@ -1219,7 +1236,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
 
   const groups =
     shown.length === 0
-      ? emptyRecruitHint(q, pack, buildable.length, '这座营')
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
       : grouped;
 
   // 军营的时代是写死的。后方城市一旦追上来，玩家会看到"我有三级城，
@@ -1251,6 +1268,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                   }</div>
            ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
            ${packRow(buildable, pack)}
+           ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
            ${

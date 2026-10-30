@@ -20,7 +20,7 @@ import { eraCeilingOf } from '../core/expansions.ts';
 import { canAttack, canMove, heroSkillsOf } from '../core/rules.ts';
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain, Unit } from '../core/types.ts';
-import { packOk, packRow } from './packs.ts';
+import { packOk, packRow, eraChipRow, eraOk } from './packs.ts';
 
 export type GodBrush =
   | { kind: 'none' }
@@ -41,6 +41,14 @@ export interface GodUi {
    * 想摆一队"奇想·骑士"得在六个时代组里一个个找。按包切一刀最省事。
    */
   pack: string;
+  /**
+   * 货架按时代筛选：`ERA_ALL` = 全部。
+   *
+   * 和 pack 是**与**的关系。沙盒的货架本来就按时代分组，这一维看起来
+   * 有点重复，但它解决的是另一件事：想单独看某一代的兵时，分组版仍然
+   * 要滚动穿过别的组；筛完就只剩那一组。
+   */
+  era: number;
   /** 摆城时用哪个时代（1-5） */
   cityEra: number;
   /** AI 正在打 */
@@ -403,12 +411,17 @@ export function godShelfHtml(ui: GodUi): string {
   // 按时代分组、组内按造价排：想找"坦克"就往现代那一组看，
   // 比在一个 60 项的长列表里从头扫快得多。
   //
-  // 先过一遍扩展包筛选：一屏混着五六个包的时候，"按时代分组"反而是帮倒忙
-  // （每个时代组里都掺着别家的兵）。
-  const pool = Object.values(s.unitTypes).filter((u) => packOk(u, ui.pack));
+  // 先过两维筛选：一屏混着五六个包的时候，"按时代分组"反而是帮倒忙
+  // （每个时代组里都掺着别家的兵）；只留一代的时候，分组也只剩一组。
+  //
   // 只列到这一局的时代上限：没开「现代战争」的局里不会出现第六代兵种，
   // 但货架是按 ERAS 分组的，不过滤就会留一个永远空着的"现代"标签。
+  //
+  // 两行 chip 用的都是这份**封顶之后**的清单：筛选栏上的数字必须和货架上
+  // 真能点到的按钮对得上，否则"全部 47"里会混进十几个摆不出来的兵。
   const ceiling = eraCeilingOf(s);
+  const shelfDefs = Object.values(s.unitTypes).filter((u) => u.era <= ceiling);
+  const pool = shelfDefs.filter((u) => packOk(u, ui.pack) && eraOk(u, ui.era));
   const groups = ERAS.filter((era) => era.level <= ceiling).map((era) => {
     const units = pool
       .filter((u) => u.era === era.level)
@@ -455,8 +468,12 @@ export function godShelfHtml(ui: GodUi): string {
              ? '点一个兵种当笔刷，再点棋盘落子；点同一个兵种可以取消。'
              : '点兵种当笔刷＝接着摆放；再点一次同一个兵种放下笔刷，就能直接用棋盘走子。'
          }</div>
-         ${packRow(Object.values(s.unitTypes), ui.pack, 'god-pack')}
-         <div class="god-shelf">${groups}</div>
+         ${packRow(shelfDefs, ui.pack, 'god-pack')}
+         ${eraChipRow(shelfDefs, ui.era, 'god-era')}
+         <div class="god-shelf">${
+           groups ||
+           `<div class="hint">这一档没有兵。换一个扩展包 / 时代，或者点「全部」回到完整货架。</div>`
+         }</div>
        </div>`;
 
   /*

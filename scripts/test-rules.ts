@@ -1785,7 +1785,7 @@ test('经济建筑自己也能产金', () => {
   assert.ok(unitIncome(r.state, mill) > 0, '磨坊建在平原上应该有产出');
 });
 
-test('城市只能造当前时代和上一个时代的兵种', () => {
+test('时代窗口只剩上界：三代城能造古典兵，但造不了还没解锁的兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
@@ -1794,13 +1794,23 @@ test('城市只能造当前时代和上一个时代的兵种', () => {
 
   assert.ok(
     applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'spearman' }).ok,
-    '上一个时代的兵种应该还能造',
+    '上一个时代的兵种当然能造',
   );
-  assert.equal(
+  // 这条以前是反的：城市升到第三代，民兵就再也造不出来了——升级让选项变少，
+  // 而玩家想要的恰恰是"三级城里还能补两个便宜的长枪兵看家"。
+  assert.ok(
     applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' }).ok,
-    false,
-    '两个时代前的兵种已经被淘汰',
+    '两个时代前的兵种也该还能造',
   );
+  assert.ok(
+    applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'archer' }).ok,
+    '同代的古典兵一样能造',
+  );
+
+  // 上界不动：还没解锁的时代仍然拒绝，而且要说清差在哪一级
+  const future = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'rifleman' });
+  assert.ok(!future.ok, '工业时代的兵不该在火药城里造出来');
+  assert.match(future.reason, /工业/);
 });
 
 console.log('\n时代链');
@@ -11192,7 +11202,7 @@ test('选卡：可以整轮跳过——这一局按原版用全部兵种', () =>
   assert.equal(s.draft!.phase, 'done');
   assert.equal(s.draft!.skipped, true);
   assert.equal(canUseType(s, 'A', 'tank'), true, '跳过之后名单限制整个不生效');
-  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 5), false, '跳过的局连"旧兵照样能造"也回到原规则');
+  assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 5), true, '跳过选卡也是同一个时代口径：旧兵照样能造');
 
   // 跳过之后就能正常走棋了
   const end = applyAction(s, { type: 'END_TURN' });
@@ -11271,27 +11281,30 @@ test('选卡：名单外的兵造不出来，名单内的能造；骨架不受�
   assert.ok(econ.ok, econ.ok ? '' : `经济单位不该被名单挡住：${econ.reason}`);
 });
 
-test('选卡：取消"低于城市两个时代就不能造"的下限', () => {
-  // 原版：E4 的城造不了 E1 的兵
+test('时代下限取消之后，所有模式同一口径（选卡不再是特例）', () => {
+  // 这四个时代前的兵，以前只有"开了选卡"才造得出来——同一个局面在两种模式下
+  // 给两个答案，玩家得先想"我这一局开没开选卡"。现在下限没了，口径只剩一个。
   const plain = fresh({}, 7109);
   const pCity = plain.cities.find((c) => c.owner === 'A')!;
   pCity.era = 4;
   plain.players.A.gold = 9000;
-  const refused = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
-  assert.ok(!refused.ok, '没开选卡时，四个时代前的兵应该造不出来');
-  assert.match(refused.reason, /过时/);
+  const allowed = applyAction(plain, { type: 'RECRUIT', cityId: pCity.id, unitType: 'militia' });
+  assert.ok(allowed.ok, allowed.ok ? '' : `原版模式下民兵也该能造：${allowed.reason}`);
+  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), true);
 
-  // 选卡模式：同一个局面，名单里的民兵照样能造
+  // 选卡模式：同一个局面、同一个结论
   let s = fresh({ draftMode: true }, 7110);
   s = finishDraft(s);
   s.draft!.picks.A = ['militia'];
   const city = s.cities.find((c) => c.owner === 'A')!;
   city.era = 4;
   s.players.A.gold = 9000;
-  const allowed = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
-  assert.ok(allowed.ok, allowed.ok ? '' : `选卡模式下民兵应该能造：${allowed.reason}`);
+  const picked = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'militia' });
+  assert.ok(picked.ok, picked.ok ? '' : `选卡模式下民兵应该能造：${picked.reason}`);
   assert.equal(eraWindowOk(s, s.unitTypes['militia']!, 4), true);
-  assert.equal(eraWindowOk(plain, plain.unitTypes['militia']!, 4), false);
+
+  // 上界两边都不动
+  assert.equal(eraWindowOk(plain, plain.unitTypes['tank']!, 3), false, '三代城造不了五代的坦克');
 });
 
 test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () => {

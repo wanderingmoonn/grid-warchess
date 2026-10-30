@@ -247,6 +247,13 @@ let recruitQuery = '';
  * JS 侧持有。搜索是"找已知的名字"，这个开关是"先圈定范围再找"，两件事。
  */
 let recruitPack = '';
+/**
+ * 产兵列表按时代筛选：0 = 全部，其它是时代等级。
+ *
+ * 和 recruitPack 同一套：空值＝不筛，两个维度是"与"。同样**不随换城清空**——
+ * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
+ */
+let recruitEra = 0;
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -634,6 +641,7 @@ function panelInput(known?: PlayerView): PanelInput {
     chimeVolume,
     recruitQuery,
     recruitPack,
+    recruitEra,
     logSide: logScope(),
     spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
     spectator: watching(),
@@ -1076,7 +1084,8 @@ function refreshSelection(): void {
 
 function clearSelection(): void {
   recruitQuery = '';
-  // 扩展包筛选不清：它是"我这一局只想看哪几个包"，换一个单位不该把它重置掉
+  // 扩展包 / 时代筛选都不清：它们是"我这一局只想看哪几个包、哪几代"，
+  // 换一个单位不该把它们重置掉
   forceMode = null;
   pickState = null;
   selectedId = null;
@@ -2870,6 +2879,14 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    // 时代的切换规矩和扩展包一致：再点一次当前那一档＝回到全部
+    case 'recruit-era': {
+      const v = Number(el.dataset.era ?? 0);
+      recruitEra = recruitEra === v ? 0 : v;
+      render();
+      return;
+    }
+
     // 地形笔刷：再点一次同一种地形＝放下笔刷，和兵种货架一个手感
     case 'god-terrain': {
       const t = el.dataset.terrain as Terrain | undefined;
@@ -2886,6 +2903,14 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'god-pack': {
       const p = el.dataset.pack ?? '';
       godPack = godPack === p ? '' : p;
+      render();
+      return;
+    }
+
+    // 货架按时代切：同一套手感，再点一次回到「全部时代」
+    case 'god-era': {
+      const v = Number(el.dataset.era ?? 0);
+      godEra = godEra === v ? 0 : v;
       render();
       return;
     }
@@ -3540,6 +3565,8 @@ let godPlay: 'me' | 'both' | null = null;
 let godPassing = false;
 /** 货架按扩展包筛选（'' = 全部）。和侧栏那个分开存：两边看的东西不一样 */
 let godPack = '';
+/** 货架按时代筛选（0 = 全部）。理由同上：沙盒里想看的是"这一代有什么" */
+let godEra = 0;
 /** AI 正在同时操控两边 */
 let godRunning = false;
 /** 打到第几个回合（工具栏上那个"第 N 回合"）。1 是"正在打第一轮"，不是 0 */
@@ -3662,6 +3689,7 @@ function godUi() {
     side: godSide,
     brush: godBrush,
     pack: godPack,
+    era: godEra,
     // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
     // 没有理由默认成另一个时代
     cityEra: godCityEra || state.config.startEra,
@@ -3738,8 +3766,9 @@ function renderGodShelf(): void {
     godSide,
     godBrush.kind,
     godBrush.kind === 'unit' ? godBrush.type : '',
-    // 换包要重排整个货架，这一格必须进签名
+    // 换包 / 换时代都要重排整个货架，这两格必须进签名
     godPack,
+    godEra,
     state.units.length,
     state.cities.length,
     state.players.A.gold,

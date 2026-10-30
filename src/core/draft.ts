@@ -317,18 +317,23 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
 }
 
 /**
- * 时代窗口：能造当前时代及更早的，但没有下限（选卡模式下）。
+ * 时代窗口：只拦"未来的兵"，不拦"更早的兵"。
  *
- * 原版的规则是"只带当前时代和上一个时代"——那是为了不让产兵面板里
- * 堆十个早该淘汰的兵。选卡模式刚好相反：你花了一个选位拿到的东西，
- * 不该因为城市升了两级就再也造不出来。所以这里把下限放开，
- * 上限（不能造未来的兵）保留。
+ * 这里曾经有过一条下限（`def.era >= era - 1`，即只带当前时代和上一个时代），
+ * 理由是不让产兵面板里堆十个早该淘汰的兵——那个理由在**面板**上成立，
+ * 在**规则**上不成立：城市升到第四代就再也造不出民兵，等于"升级把选项变少了"，
+ * 而玩家想要的恰恰是"三级城里还能补两个便宜的长枪兵看家"。
+ *
+ * 面板堆不堆得下是界面问题，已经交给筛选解决（扩展包 / 时代 / 搜索，见
+ * ui/packs.ts）。所以这条判断只剩一件事：**不能造还没解锁的兵**。
+ * 下限整个去掉，所有模式一个口径——选卡模式当年单独放开下限的那段特例
+ * 也就跟着没有必要了。
+ *
+ * `_state` 留着不删：这个判断以后要接"封冻港口"之类的局面条件（比如某个
+ * 扩展把某条产线临时停掉），签名先稳住，四处调用点就不用再改一遍。
  */
-export function eraWindowOk(state: GameState, def: UnitTypeDef, era: number): boolean {
-  if (def.era > era) return false;
-  // 只有"真的在选卡"才放开下限；跳过的局等于没开这个模式
-  if (state.draft && !state.draft.skipped) return true;
-  return def.era >= era - 1;
+export function eraWindowOk(_state: GameState, def: UnitTypeDef, era: number): boolean {
+  return def.era <= era;
 }
 
 /* ===========================================================================

@@ -3661,18 +3661,14 @@ function doRecruit(
     }
   }
 
-  if (era < def.era) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
-  }
-  // 时代窗口的上下限要分开报：上限是"科技还没到"，下限是"这条产线不带了"，
-  // 玩家要做的决定完全不同（一个去升城，一个换兵种）。
-  if (def.era > era) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
-  }
-  // 下限只在**没开选卡**时生效：选卡模式下你花了一个选位拿到的东西，
-  // 不该因为城市升了两级就作废——那等于"越往后期走，选卡越没有意义"。
+  // 时代只剩一条：**不能造还没解锁的兵**。
+  //
+  // 以前这里是三段——"没到那个时代"、"城市不够新（重复写了一遍）"、
+  // "过时了，产线不带它"。第三段随着下限的取消一起没了：城市升到第五代
+  // 仍然能造民兵，因为"面板里堆满老古董"是界面问题，已经由筛选解决
+  // （扩展包 / 时代 / 搜索），不该由规则层拿"升级＝选项变少"来买单。
   if (!eraWindowOk(s, def, era)) {
-    return { ok: false, reason: `${def.name} 已经过时了，${label}的产线不带它` };
+    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
   }
 
   const player = s.players[s.current];

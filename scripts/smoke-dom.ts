@@ -2454,6 +2454,146 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   assert.ok(core.length + beasts.length <= all, '筛选只是过滤，不该凭空多出兵种');
 });
 
+check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回全部', () => {
+  const st = createMatch(
+    {
+      size: 14,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    506,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '找不到 A 的城市');
+  city!.era = 4;
+
+  const host = doc.createElement('div');
+  const paint = (q = '', pack = '', era = 0) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city!.id,
+      selectedCampId: null,
+      selectedTile: null,
+      recruitQuery: q,
+      recruitPack: pack,
+      recruitEra: era,
+    });
+  /** 这一屏上每个按钮背后那个兵的时代 */
+  const erasShown = () =>
+    Array.from(host.querySelectorAll<HTMLElement>('[data-act="recruit"]'))
+      .map((el) => UNIT_TYPES[el.dataset.type ?? '']?.era ?? -1)
+      .filter((e) => e > 0);
+  const count = () => host.querySelectorAll('[data-act="recruit"]').length;
+
+  paint();
+  assert.ok(host.querySelector('[data-act="recruit-pack"]'), '第一维：扩展包 chip');
+  assert.ok(host.querySelector('[data-act="recruit-era"]'), '第二维：时代 chip');
+  const all = count();
+
+  // 时代这一维单独用：切到古典，出来的必须全是古典兵
+  const eraChips = Array.from(
+    host.querySelectorAll<HTMLElement>('[data-act="recruit-era"]'),
+  ).map((el) => Number(el.dataset.era));
+  assert.ok(eraChips.includes(0), '「全部时代」那一档要在');
+  const levels = eraChips.filter((e) => e > 0).sort((a, b) => a - b);
+  assert.ok(levels.length >= 2, `两行 chip 至少要能选两个时代，实际 ${levels.join(',')}`);
+
+  paint('', '', levels[0]!);
+  assert.ok(count() > 0, '古典那一档不该是空的');
+  assert.ok(
+    erasShown().every((e) => e === levels[0]),
+    `筛了古典就只该有古典兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
+  );
+  assert.equal(
+    host.querySelector<HTMLElement>(`[data-act="recruit-era"][data-era="${levels[0]}"]`)?.className.includes('active'),
+    true,
+    '当前那一档要亮着',
+  );
+
+  // 各时代加起来 = 全部：一个兵只属于一个时代，不能重也不能漏
+  const sum = levels.reduce((n, l) => {
+    paint('', '', l);
+    return n + count();
+  }, 0);
+  assert.equal(sum, all, `各时代加起来应该正好等于全部（${sum} vs ${all}）`);
+
+  // 叠两个维度：包 + 时代，结果只会更少，而且仍然是"且"
+  const oneLevel = levels[levels.length - 1]!;
+  paint('', 'fantasy-beasts', 0);
+  const onlyPack = count();
+  paint('', '', oneLevel);
+  const onlyEra = count();
+  paint('', 'fantasy-beasts', oneLevel);
+  const both = count();
+  assert.ok(both <= onlyPack && both <= onlyEra, '两个条件是"与"：叠起来不该比任何一边多');
+  assert.ok(
+    erasShown().every((e) => e === oneLevel),
+    '叠了时代之后仍然只能有那个时代的兵',
+  );
+  assert.ok(
+    Array.from(host.querySelectorAll('[data-act="recruit"] .recruit-src')).length === count(),
+    '叠了包之后仍然只能有那个包的兵',
+  );
+  // 再叠搜索：三个条件一起收窄
+  paint('龙骑', 'fantasy-beasts', oneLevel);
+  assert.ok(count() <= both, '再叠一个搜索词只会更少');
+
+  // 回到全部：三个维度全清，兵数是全量
+  paint();
+  assert.equal(count(), all, '清掉筛选应该回到全量');
+
+  // 没命中时要把**生效的每一维**都写出来，否则玩家不知道该清哪一个
+  paint('', 'fantasy-beasts', levels[0]!);
+  if (count() === 0) {
+    assert.ok(host.innerHTML.includes('这一档没有能造的兵'), '空态要给一句人话');
+    assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
+    assert.ok(host.innerHTML.includes('古典'), '空态要写清生效了时代筛选');
+  }
+});
+
+check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {
+  // 这条以前是反的：城市 era 5，面板里连一个古典兵都不剩。
+  const st = createMatch(
+    { size: 14, startEra: 5, aiOpponent: false, aiAlly: false, expansionIds: [], enabledUnits: Object.keys(UNIT_TYPES) },
+    507,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city);
+  city!.era = 5;
+  st.players.A.gold = 9999;
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city!.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  assert.ok(host.querySelector('[data-type="militia"]'), '民兵要在列表里（显示）');
+  const btn = host.querySelector<HTMLButtonElement>('[data-type="militia"]');
+  assert.equal(btn?.disabled, false, '而且真的能点（不是画一个假按钮）');
+
+  // 规则层同一个结论：五代城造得出一代兵
+  const r = applyAction(st, { type: 'RECRUIT', cityId: city!.id, unitType: 'militia' });
+  assert.ok(r.ok, r.ok ? '' : `五代城应该造得出民兵：${r.reason}`);
+
+  // 上界还在：五代的城不该列出六代兵
+  const future = Array.from(host.querySelectorAll<HTMLElement>('[data-act="recruit"]')).filter(
+    (el) => (UNIT_TYPES[el.dataset.type ?? '']?.era ?? 0) > 5,
+  );
+  assert.equal(future.length, 0, '还没解锁的时代不该出现在产兵面板里');
+});
+
 console.log('\n上帝模式');
 click('[data-act="new-game"]');
 await wait(40);
@@ -2555,12 +2695,13 @@ check('沙盒货架也能按扩展包切一刀', () => {
     },
     77,
   );
-  const shelf = (pack: string) =>
+  const shelf = (pack: string, era = 0) =>
     godShelfHtml({
       state: st,
       side: 'A',
       brush: { kind: 'none' },
       pack,
+      era,
       cityEra: 1,
       running: false,
       round: 1,
@@ -2578,6 +2719,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
 
   const all = shelf('');
   assert.ok(all.includes('data-act="god-pack"'), '货架上该有一排按包筛选的 chip');
+  assert.ok(all.includes('data-act="god-era"'), '货架上该有一排按时代筛选的 chip');
   assert.ok(picks(all) > 10, '全部那一档应该有一屏兵');
 
   const coreOnly = picks(shelf('core'));
@@ -2585,6 +2727,21 @@ check('沙盒货架也能按扩展包切一刀', () => {
   assert.ok(coreOnly > 0, '原版那一档不该是空的');
   assert.ok(packOnly > 0, '奇想·野兽那一档不该是空的');
   assert.equal(coreOnly + packOnly, picks(all), '两档加起来应该正好等于全部（互斥且不重不漏）');
+
+  // 时代这一维：单独用、和包叠用，结果都必须是"且"
+  const eraLevels = Array.from(all.matchAll(/data-act="god-era" data-era="(\d+)"/g)).map((m) => Number(m[1]));
+  const onlyEra = eraLevels.filter((l) => l > 0);
+  assert.ok(onlyEra.length >= 2, `货架该列出这一屏真的出现的时代，实际 ${onlyEra.join(',')}`);
+  const eraCounts = onlyEra.map((l) => picks(shelf('', l)));
+  assert.equal(
+    eraCounts.reduce((a, b) => a + b, 0),
+    picks(all),
+    '各时代加起来应该正好等于全部（一个兵只属于一个时代）',
+  );
+  // 叠用：包 + 时代，两个条件同时生效，不会比任何一边单独用更多
+  const stack = picks(shelf('fantasy-beasts', onlyEra[onlyEra.length - 1]!));
+  assert.ok(stack <= picks(shelf('fantasy-beasts')), '叠两个条件只会更少，不会更多');
+  assert.ok(stack <= picks(shelf('', onlyEra[onlyEra.length - 1]!)), '叠两个条件只会更少，不会更多');
   // 「奇想·法则」是纯规则包，一个兵都不带：它不该占一个按下去筛掉 0 个按钮的 chip
   assert.ok(!all.includes('data-pack="fantasy-core"'), '不带兵的规则包不该出现在筛选栏');
 });

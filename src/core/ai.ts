@@ -2688,7 +2688,7 @@ function recruitCandidate(
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
     if (heroBlocked(s, me, d)) return false;
     // 时代窗口与选卡名单走 core/draft 的同一套判据：
-    // 选卡模式下 AI 也只能造自己选到的兵，且旧时代的兵不再被"过时"挡住
+    // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
     if (!eraWindowOk(s, d, src.era)) return false;
     if (!canUseType(s, me, d.id)) return false;
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;

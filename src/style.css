@@ -1341,6 +1341,16 @@ body {
   margin-bottom: 8px;
 }
 
+/*
+ * 时代那一行紧跟在包那一行后面。
+ *
+ * 两条都按 8px 排会读成两块互不相干的东西，而它们是同一个筛选块的两个维度；
+ * 上边距收窄到 4px，"两排 chip + 一个搜索框"才会被看成一组。
+ */
+.era-row {
+  margin-top: -4px;
+}
+
 .pack-row .chip {
   padding: 3px 9px;
   font-size: 11.5px;
