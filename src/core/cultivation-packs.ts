@@ -81,7 +81,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   
   // 如果升级了，立刻结算加成并写战报
   if (newRank > rank) {
-    const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
+    const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
     u.hp += deltaMaxHp; // 升级瞬间回血
     
@@ -160,6 +160,7 @@ export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
   name: '修真',
   summary: '带来了会修炼成长的炼气士。',
+  scale: 'large',  
   hooks: {
     //升级逻辑
     // 1. 击杀敌人获得经验
@@ -277,7 +278,7 @@ export const CULTIVATION_PACK: Expansion = {
       ];
 
       if (rank > 0) {
-        const trueDmg = Math.floor(rank / 2);
+        const trueDmg = Math.floor((rank*rank)/2+rank*(1.2**rank));
         lines.push(
           `境界加成：攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
         );
