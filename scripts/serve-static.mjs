@@ -14,7 +14,7 @@
 import { createServer } from 'node:http';
 import { createReadStream, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
@@ -96,29 +96,78 @@ function fail(res, status, body, err) {
 }
 
 /**
- * 压缩结果的缓存：`路径 → { key, body }`。
+ * 压缩结果的缓存：`路径 → { key, br?, gz? }`。
  *
- * 为什么必须有这一层：`gzipSync` 是**同步**的，压在事件循环上。主包 468KB，
- * 压一次的几十毫秒到几百毫秒里，整个进程一个请求都处理不了——包括 `/__health`。
+ * 为什么必须有这一层：压缩是**同步**的，压在事件循环上。主包 357KB，
+ * 压一次几十到几百毫秒，这段时间整个进程一个请求都处理不了——包括 `/__health`。
  * 线上只有很薄的一份 CPU，一个人开页面就能把别人的请求一起拖住，
  * 表现成"点开链接半天没反应"。
  *
  * 键是 `size-mtime`：产物带内容哈希，文件名变了就是新文件；
  * 重新构建时同名文件的时间戳也会变，所以缓存不会发旧内容。
  */
-const gzipCache = new Map();
+const bodyCache = new Map();
 
 /** 缓存上限：产物总共不到 10 个文件，留 24 个位置足够，超了整体清空 */
-const GZIP_CACHE_MAX = 24;
+const BODY_CACHE_MAX = 24;
 
-function gzipBody(filePath, info) {
+/** 按需压一次并记住；两种编码各存一份，谁先来先压谁 */
+function compressedBody(filePath, info, encoding) {
   const key = `${info.size}-${info.mtimeMs}`;
-  const hit = gzipCache.get(filePath);
-  if (hit && hit.key === key) return hit.body;
-  const body = gzipSync(readFileSync(filePath));
-  if (gzipCache.size >= GZIP_CACHE_MAX) gzipCache.clear();
-  gzipCache.set(filePath, { key, body });
+  const hit = bodyCache.get(filePath);
+  if (hit && hit.key === key && hit[encoding]) return hit[encoding];
+
+  const raw = readFileSync(filePath);
+  const body =
+    encoding === 'br'
+      ? brotliCompressSync(raw, {
+          params: {
+            // 静态文件只压一次（结果留在缓存里），所以直接上最高档；
+            // 11 档比 6 档小 3~5%，而这 3~5% 是每个访客都要付的。
+            [constants.BROTLI_PARAM_QUALITY]: 11,
+            [constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+          },
+        })
+      : gzipSync(raw, { level: 9 });
+
+  const entry = hit && hit.key === key ? hit : { key };
+  entry[encoding] = body;
+  if (bodyCache.size >= BODY_CACHE_MAX && !bodyCache.has(filePath)) bodyCache.clear();
+  bodyCache.set(filePath, entry);
   return body;
+}
+
+/**
+ * 挑一种压缩编码。
+ *
+ * 顺序按"谁更小"排：br 比 gzip 小 20~30%，所以只要客户端说支持就用 br。
+ * 必须认 `q=0`（显式拒绝）——有些代理会带 `Accept-Encoding: gzip;q=0`，
+ * 照发 gzip 就是违约。通配符 `*` 当作同意 gzip。
+ */
+function negotiateEncoding(header, ext) {
+  if (!COMPRESSIBLE.has(ext)) return null;
+  const raw = String(header ?? '');
+  if (!raw) return null;
+
+  const q = new Map();
+  let wildcard = 0;
+  for (const part of raw.split(',')) {
+    const [nameRaw, ...params] = part.trim().toLowerCase().split(';');
+    const name = nameRaw.trim();
+    if (!name) continue;
+    let weight = 1;
+    for (const p of params) {
+      const m = /^\s*q=([\d.]+)\s*$/.exec(p);
+      if (m) weight = Number(m[1]);
+    }
+    if (name === '*') wildcard = weight;
+    else q.set(name, weight);
+  }
+
+  const weight = (name) => (q.has(name) ? q.get(name) : wildcard);
+  if (weight('br') > 0) return 'br';
+  if (weight('gzip') > 0) return 'gz';
+  return null;
 }
 
 async function send(req, res, filePath, status = 200) {
@@ -143,11 +192,11 @@ async function send(req, res, filePath, status = 200) {
     vary: 'accept-encoding',
   };
 
-  const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '') && COMPRESSIBLE.has(ext);
-  if (wantsGzip) {
-    // 压过的结果留在内存里，第二次起直接发（见 gzipBody）
-    const body = gzipBody(filePath, info);
-    headers['content-encoding'] = 'gzip';
+  const encoding = negotiateEncoding(req.headers['accept-encoding'], ext);
+  if (encoding) {
+    // 压过的结果留在内存里，第二次起直接发（见 compressedBody）
+    const body = compressedBody(filePath, info, encoding);
+    headers['content-encoding'] = encoding === 'br' ? 'br' : 'gzip';
     headers['content-length'] = String(body.length);
     res.writeHead(status, headers);
     res.end(req.method === 'HEAD' ? undefined : body);

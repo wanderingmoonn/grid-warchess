@@ -305,8 +305,15 @@ npm run pack-report    # 汇总成 results/packs/report.md
 每批改动会留一份 `docs/UPDATE-<日期>.md`：以前什么样、现在什么样、为什么这么改。
 同一天有多批时，后一批带主题后缀。
 
-最近二十三份：
+最近二十四份：
 
+- [2026-10-30 · 首屏再压一轮：430KB → 358KB，传输 173KB → 110KB](docs/UPDATE-2026-10-30-first-paint.md)：
+  先看清主包装了什么，再把"首屏根本用不到"的两块挪出去——云 SDK（71KB，动态 import，
+  只服务联机与云端战报）与 AI 引擎（35KB，拆成 `ai-meta.ts` + 按需加载，
+  首屏只问"是不是 AI 在走"）。服务器改用 **brotli**（br 优先、认 `q=0`，
+  压一次缓存起来）。首屏传输 173KB → **110KB（−36%）**，请求数仍是 3；
+  两块懒加载块单列且没有 preload。`npm test` 全绿，`smoke-room` 打真实云端验证过
+  动态引入的 SDK 是通的。
 - [2026-10-30 · 线上崩溃：一个畸形 URL 打死整个服务](docs/UPDATE-2026-10-30-server-crash.md)：
   线上"毫无征兆崩掉、重启就好"的根因是静态服务器在 async 请求处理器里直接
   `decodeURIComponent`——一个 `/%` 抛 `URIError`，Node 不兜 async rejection，

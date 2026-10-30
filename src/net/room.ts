@@ -15,7 +15,15 @@
  * 挪到服务端去算，那是下一步的事。
  */
 
-import { createWorkBuddyCloud } from '@tencent-ai/workbuddy-cloud-sdk';
+/**
+ * 云 SDK 只取类型，**运行时不在这里引入**。
+ *
+ * 这个 SDK 有 70KB（minify 后，占主包 14%），而它只服务"联机房间"和
+ * "云端战报"两件事——首屏（开局面板 → 进对局 → 打一局本地对战）里
+ * 一行都不碰它。写在这里的 `import` 会被整段算进主包，所以真正的引入
+ * 挪到 `cloudDatabase()` 里做动态 import：用到的那一刻才去取。
+ */
+import type { createWorkBuddyCloud } from '@tencent-ai/workbuddy-cloud-sdk';
 
 import type { GameState, PlayerId } from '../core/types.ts';
 import { CLOUD_CONFIG } from './cloud-config.ts';
@@ -65,18 +73,21 @@ let client: ReturnType<typeof createWorkBuddyCloud> | null = null;
  *
  * 一个客户端就够：凭据本来就是同一个应用的，多建一个只会多一份会话状态，
  * 真出问题时还更难判断是哪一份在过期。
+ *
+ * **异步**是因为 SDK 是动态引入的（见文件顶上那段说明）：第一次调用会多花
+ * 一次拉 chunk 的时间（本地缓存后为 0），之后都走同一个 client。
+ * 所有调用方本来就都在 async 函数里（发消息、拉房间、传战报），改这一处不影响别的。
  */
-export function cloudDatabase(): ReturnType<typeof createWorkBuddyCloud>['database'] {
-  client ??= createWorkBuddyCloud({
-    endpoint: CLOUD_CONFIG.endpoint,
-    oauthRelayBaseUrl: CLOUD_CONFIG.oauthRelayBaseUrl,
-    publishableKey: CLOUD_CONFIG.publishableKey,
-  });
+export async function cloudDatabase(): Promise<ReturnType<typeof createWorkBuddyCloud>['database']> {
+  if (!client) {
+    const { createWorkBuddyCloud: create } = await import('@tencent-ai/workbuddy-cloud-sdk');
+    client = create({
+      endpoint: CLOUD_CONFIG.endpoint,
+      oauthRelayBaseUrl: CLOUD_CONFIG.oauthRelayBaseUrl,
+      publishableKey: CLOUD_CONFIG.publishableKey,
+    });
+  }
   return client.database;
-}
-
-function db() {
-  return cloudDatabase();
 }
 
 /**
@@ -101,8 +112,17 @@ interface DbError {
   message?: string;
 }
 
-function table(): Queryish {
-  return (db() as unknown as { from(name: string): Queryish }).from(TABLE);
+/**
+ * 表操作入口。
+ *
+ * 返回的是一个**普通对象** `{ q }`，不是查询本身。原因：SDK 的查询对象是
+ * thenable（`await query` 才拿到 `{ data, error }`），而 Promise 的解析过程会
+ * 把这个 thenable 直接"吃掉"——`Promise<Queryish>` 实际拿到的永远是查询结果，
+ * 于是 `.select()` / `.insert()` 全都不见了。包一层是唯一干净的解。
+ */
+async function table(): Promise<{ q: Queryish }> {
+  const database = (await cloudDatabase()) as unknown as { from(name: string): Queryish };
+  return { q: database.from(TABLE) };
 }
 
 export function newCode(len = 6): string {
@@ -153,7 +173,7 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const code = newCode();
-    const { error } = await table()
+    const { error } = await (await table()).q
       .insert({
         code,
         state,
@@ -178,7 +198,7 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 }
 
 export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
-  const { data, error } = await table().select('*').eq('code', code).maybeSingle();
+  const { data, error } = await (await table()).q.select('*').eq('code', code).maybeSingle();
   if (error) throw new Error(readableError(error));
   // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
   const row = data as Row | null;
@@ -209,7 +229,7 @@ export async function claimSeat(
 
   const column = seat === 'A' ? 'seat_a' : 'seat_b';
   // 加 is(column, null) 是为了原子性：两个人同时抢占时只有一个人能写进去
-  const { data, error } = await table()
+  const { data, error } = await (await table()).q
     .update({ [column]: token })
     .eq('code', code)
     .is(column, null)
@@ -231,7 +251,7 @@ export async function submitTurn(
   state: GameState,
   expectedTurn: number,
 ): Promise<boolean> {
-  const { data, error } = await table()
+  const { data, error } = await (await table()).q
     .update({
       state,
       turn: state.turn,

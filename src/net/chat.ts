@@ -275,9 +275,15 @@ interface Tableish {
   then: PromiseLike<{ data: unknown; error: DbError | null }>['then'];
 }
 
-function table(): Tableish {
-  const db = cloudDatabase() as unknown as { from(name: string): Tableish };
-  return db.from(CHAT_TABLE);
+/**
+ * 表操作入口。
+ *
+ * `cloudDatabase()` 是异步的（云 SDK 走动态 import，见 room.ts 顶上那段），
+ * 所以这里也跟着变成 async——调用方本来就都在 `await` 一条查询，多一层 await 不碍事。
+ */
+async function table(): Promise<{ q: Tableish }> {
+  const db = (await cloudDatabase()) as unknown as { from(name: string): Tableish };
+  return { q: db.from(CHAT_TABLE) };
 }
 
 interface Row {
@@ -300,7 +306,7 @@ export async function fetchChat(
 ): Promise<{ ok: boolean; lines: ChatLine[]; reason?: string }> {
   try {
     // 老房间可能一条消息都没有：`gt(id, 0)` 就把全表按房间筛一遍，加上 limit 没有性能问题
-    const res = await table()
+    const res = await (await table()).q
       .select('*')
       .eq('room', code)
       .gt('id', afterId)
@@ -334,7 +340,7 @@ export async function sendChat(
   const body = trimChatBody(raw);
   if (!body) return { ok: false, reason: '说点什么再发' };
   try {
-    const res = await table()
+    const res = await (await table()).q
       .insert({ room: code, seat, name: name.slice(0, 24), body })
       .select()
       .single();

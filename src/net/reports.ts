@@ -94,7 +94,7 @@ function classify(err: DbFailure | undefined): UploadResult {
  */
 export async function uploadReport(report: MatchReport): Promise<UploadResult> {
   try {
-    const db = cloudDatabase() as unknown as {
+    const db = (await cloudDatabase()) as unknown as {
       from(name: string): {
         insert(row: Record<string, unknown>): PromiseLike<{ error?: DbFailure | null }>;
       };

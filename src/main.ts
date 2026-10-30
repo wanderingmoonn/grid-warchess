@@ -8,8 +8,10 @@
 import './style.css';
 
 import { expansionById } from './core/expansions.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, aiNextAction, aiActionKey, anyAiSide, isAiSide } from './core/ai.ts';
-import type { AiBudget } from './core/ai.ts';
+// 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
+// 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
+import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_UPGRADE, eraDef, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -2386,6 +2388,21 @@ async function runAiLoop(): Promise<void> {
  * 于是一方在自己回合中途把对面最后一个兵清掉之后，剩下的部队还会继续
  * 原地折腾几十步——沙盒里看到的正是"没有敌人了，它还在动"。
  */
+/**
+ * AI 引擎按需加载。
+ *
+ * 引擎有 35KB（威胁图、换子价值、三套战术），而**首屏一帧都用不到它**：
+ * 开局只回答"这一方是不是 AI"。所以它被挪到第一次真的要它走子的时候再拉。
+ *
+ * 代价是 AI 的第一步会多等一次网络（本地缓存后为 0），而这一步本来就
+ * 被 `AI_SPEED_MS` 故意放慢了——玩家看到的是它照常在思考。
+ */
+let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
+function aiEngine(): Promise<typeof import('./core/ai.ts')> {
+  aiEnginePromise ??= import('./core/ai.ts');
+  return aiEnginePromise;
+}
+
 async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
@@ -2404,20 +2421,21 @@ async function runAiTurn(
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
   const rejected = new Set<string>();
+  const engine = await aiEngine();
 
-  for (let step = 0; step < AI_MAX_STEPS; step++) {
+  for (let step = 0; step < engine.AI_MAX_STEPS; step++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
     if (stopWhen?.()) break;
-    const action = aiNextAction(state, budget, rejected);
+    const action = engine.aiNextAction(state, budget, rejected);
     if (!action) break;
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
     const result = applyAction(state, action);
-    if (!result.ok) { rejected.add(aiActionKey(action)); await sleep(0); continue; }
+    if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
     rejected.clear();
 
     state = result.state;

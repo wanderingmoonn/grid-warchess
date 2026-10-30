@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { request } from 'node:http';
-import { gunzipSync } from 'node:zlib';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -247,6 +247,44 @@ await test('连接空闲 6 秒后还能复用：服务端不能比代理先关�
   const after = await ask();
   assert.equal(after.status, 200, '空闲 6 秒后复用连接必须还能用');
   agent.destroy();
+});
+
+await test('压缩协商：br 优先于 gzip，q=0 当作拒绝，不认识的编码不压', async () => {
+  const fetchRaw = (
+    path: string,
+    accept: string,
+  ): Promise<{ enc: string; body: Buffer }> =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        { host: '127.0.0.1', port: PORT, path, headers: { 'accept-encoding': accept } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (d) => chunks.push(d as Buffer));
+          res.on('end', () =>
+            resolve({
+              enc: String(res.headers['content-encoding'] ?? ''),
+              body: Buffer.concat(chunks),
+            }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  const br = await fetchRaw('/', 'gzip, deflate, br');
+  assert.equal(br.enc, 'br', '同时支持时应该给 br（它比 gzip 小 20~30%）');
+  assert.ok(
+    brotliDecompressSync(br.body).toString('utf8').includes('<!doctype html'),
+    'br 解出来应该是首页',
+  );
+
+  const gz = await fetchRaw('/', 'gzip');
+  assert.equal(gz.enc, 'gzip', '只认 gzip 的客户端仍然要给 gzip');
+
+  const refused = await fetchRaw('/', 'br;q=0, gzip;q=0');
+  assert.equal(refused.enc, '', 'q=0 是"我不要"，不能照发');
+  assert.ok(refused.body.toString('utf8').includes('<!doctype html'), '不压也要给原文');
 });
 
 child.kill();
