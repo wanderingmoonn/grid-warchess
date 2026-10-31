@@ -1,6 +1,11 @@
 -- 房间在线状态（观战人数）
 --
 -- 什么时候要执行这个文件：想让联机房间显示"现在有几个人在看"的时候，一次性执行。
+--
+-- ⚠️ 执行到**哪个应用**的库上：认 publishableKey 里的 appId（wbpk_<appId>_…），
+--    不要认 .workbuddy/applications.yaml —— 那份记的是旧应用，库是另一份。
+--    建完用 `curl -H "x-wb-webapp-access-key: <key>" .../.cloud/database/rest/warchess_presence?select=room`
+--    确认回 200（不是 PGRST205），再各试一次 insert / update。
 -- 不执行也不影响下棋：界面只是不显示人数，其余功能照常。
 --
 -- 为什么单独一张表，而不是往 warchess_rooms 里加一列：
