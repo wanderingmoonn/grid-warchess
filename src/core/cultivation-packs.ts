@@ -8,7 +8,6 @@ import type {
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
-import { maxHpOf } from './rules.ts';
 
 // 境界名称
 const _REAMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
@@ -73,6 +72,12 @@ export function cultivationRank(u: Unit): number {
   return getRank(u);
 }
 
+// 本地算最大血量的函数（核心规则里的 maxHpOf 也是这么写的）
+function getMaxHp(s: GameState, u: Unit): number {
+  // 从本局兵种表里取基础血量，然后加上单位自己积累的额外血量
+  return (s.unitTypes[u.type]?.maxHp ?? 0) + (u.maxHpBonus ?? 0);
+}
+
 // 增加经验并即时判断升级
 function addExp(u: Unit, s: GameState, amount: number): void {
   u.custom ??= {}; 
@@ -85,7 +90,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   if (newRank > rank) {
     const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
     // 升级瞬间按照比例回血
-    const r = u.hp / maxHpOf(s,u);
+    const r = u.hp / getMaxHp(s,u);
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
     u.hp += Math.floor(deltaMaxHp * r); 
     
