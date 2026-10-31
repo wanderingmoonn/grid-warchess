@@ -354,16 +354,16 @@
       <p>境界提升时，会立刻按以下公式结算加成，并回复相应血量：</p>
       <table>
         <thead>
-          <tr><th>属性</th><th>具体加成公式</th></tr>
+          <tr><th>属性</th><th>具体加成公式，小数向下取整</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">攻击力</td><td>5 × 境界 + 2<sup>(境界 − 0.5)</sup> <span class="c">（向下取整）</span></td></tr>
-          <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> <span class="c">（向下取整）</span></td></tr>
-          <tr><td class="name">射程</td><td>境界 ÷ 2 <span class="c">（向下取整）</span></td></tr>
+          <tr><td class="name">攻击力</td><td>5 × 境界 + 2<sup>(境界 − 0.5)</sup> /td></tr>
+          <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> </td></tr>
+          <tr><td class="name">射程</td><td>境界 ÷ 2 </td></tr>
           <tr><td class="name">视野（神识）</td><td>基础视野 + 境界</td></tr>
-          <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（向下取整，至少 1 次）</span></td></tr>
-          <tr><td class="name">溅射半径</td><td>境界 ÷ 4 <span class="c">（向下取整，即 4 级 1 格、8 级 2 格）</span></td></tr>
-          <tr><td class="name">最大生命</td><td>突破时瞬间提升（见下方详情）</td></tr>
+          <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（至少 1 次）</span></td></tr>
+          <tr><td class="name">溅射半径</td><td>境界 ÷ 4 </td></tr>
+          <tr><td class="name">最大生命</td><td>突破时瞬间提升，见下方详情</td></tr>
         </tbody>
       </table>
 
@@ -372,7 +372,6 @@
       
       <div class="formula">
         单次突破增加生命 = <b>8.5 + 0.0685 × (新境界<sup>3</sup> × 1.8<sup>新境界</sup> − 旧境界<sup>3</sup> × 1.8<sup>旧境界</sup>)</b><br />
-        <span class="c">（计算结果向下取整）</span>
       </div>
 
       <p>为了免去心算的麻烦，各阶段突破时增加的生命值如下：</p>
@@ -393,7 +392,7 @@
       <h3>真元（真实伤害）</h3>
       <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害。它是炼气士打重甲单位的唯一手段。</p>
       <div class="formula">
-        真实伤害 = <b>境界² ÷ 2 + 境界 × 1.2<sup>境界</sup></b> <span class="c">（向下取整）</span>
+        真实伤害 = <b>境界² ÷ 2 + 境界 × 1.2<sup>境界</sup></b> <span class="c"></span>
       </div>
 
       <h3>寿元与衰老</h3>
