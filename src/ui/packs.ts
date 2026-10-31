@@ -75,14 +75,23 @@ export function packRow(defs: UnitTypeDef[], current: string, act = 'recruit-pac
   if (counts.has(PACK_CORE)) order.push(PACK_CORE);
   for (const e of EXPANSIONS) if (counts.has(e.id)) order.push(e.id);
   for (const p of counts.keys()) if (!order.includes(p)) order.push(p);
-  if (order.length < 2) return '';
+  // **正在生效的筛选项必须留在这一行里**，哪怕它一个兵都没有。
+  //
+  // 踩过的坑：从"开了奇想"的城切到一座只有原版兵的城，这行会退化成一个选项
+  // 然后整条消失；可 `recruitPack` 还记着那个包，列表因此永远是空的，
+  // 而取消它的那颗按钮已经不在了——玩家只能去别的城市碰运气。
+  // 补进来时计数写 0（甚至不写数字），是为了让人一眼看出"是筛选把它藏了"。
+  if (current && !order.includes(current)) order.push(current);
+  if (order.length < 2 && !current) return '';
 
   const one = (id: string, text: string) =>
     `<button class="chip ${current === id ? 'active' : ''}" data-act="${act}" data-pack="${id}">${escapeHtml(text)}</button>`;
 
   return `<div class="chip-row pack-row">
     ${one(PACK_ALL, `全部 ${real.length}`)}
-    ${order.map((p) => one(p, `${packLabel(p)} ${counts.get(p) ?? 0}`)).join('')}
+    ${order
+      .map((p) => one(p, counts.has(p) ? `${packLabel(p)} ${counts.get(p) ?? 0}` : `${packLabel(p)} 0`))
+      .join('')}
   </div>`;
 }
 
@@ -119,7 +128,13 @@ export function eraChipRow(defs: UnitTypeDef[], current: number, act = 'recruit-
   const counts = new Map<number, number>();
   for (const d of real) counts.set(d.era, (counts.get(d.era) ?? 0) + 1);
   const levels = [...counts.keys()].sort((a, b) => a - b);
-  if (levels.length < 2) return '';
+  // 和扩展包那一行同一条规矩：生效中的时代就算这一屏一个兵都没有，也要留一颗
+  // 能按回去的按钮。否则"换了座低时代的城"就会变成"页面空了，且出不去"。
+  if (current !== ERA_ALL && !levels.includes(current)) {
+    levels.push(current);
+    levels.sort((a, b) => a - b);
+  }
+  if (levels.length < 2 && current === ERA_ALL) return '';
 
   const one = (level: number, text: string) =>
     `<button class="chip ${current === level ? 'active' : ''}" data-act="${act}" data-era="${level}"${
@@ -131,6 +146,8 @@ export function eraChipRow(defs: UnitTypeDef[], current: number, act = 'recruit-
   // 两行并排时数字对得上，玩家才不会怀疑某一档算漏了
   return `<div class="chip-row pack-row era-row">
     ${one(ERA_ALL, `${eraLabel(ERA_ALL)} ${real.length}`)}
-    ${levels.map((l) => one(l, `${eraDef(l).name} ${counts.get(l) ?? 0}`)).join('')}
+    ${levels
+      .map((l) => one(l, counts.has(l) ? `${eraDef(l).name} ${counts.get(l) ?? 0}` : `${eraDef(l).name} 0`))
+      .join('')}
   </div>`;
 }

@@ -70,9 +70,12 @@ import {
   aiDraftPick,
   canUseType,
   draftBonus,
+  draftBanMsOf,
   draftBudget,
   draftCandidates,
+  draftMsOf,
   draftPickOrder,
+  draftPickMsOf,
   draftSecondsLeft,
   eraWindowOk,
   remainingUnits,
@@ -94,10 +97,17 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  shouldAutoExpand,
   chatWhoLabel,
   trimChatBody,
 } from '../src/net/chat.ts';
-import type { ChatLine } from '../src/net/chat.ts';
+import type { ChatLine, ChatSeat } from '../src/net/chat.ts';
+import {
+  PRESENCE_TTL_MS,
+  countWatchers,
+  presenceFromRow,
+  watchLabel,
+} from '../src/net/presence.ts';
 import {
   AP_COST,
   AP_BY_TIER,
@@ -176,6 +186,7 @@ import {
   movePower,
   orderSitesOf,
   ordersOf,
+  planBothReady,
   heroBlocked,
   heroSkillsOf,
   previewAttack,
@@ -1860,6 +1871,8 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
 console.log('\n奇想兵种包：前置、机制、数值');
 
 const FANTASY = ['fantasy-core', 'fantasy-knights', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-heroes'];
+/** 奇想全开 + 现代：圣剑勇者、邪龙王只在「现代」在场时才是这一局的兵种 */
+const FANTASY_WITH_MODERN = [...FANTASY, 'pack-contemporary'];
 
 /** 摆一个本局存在的兵种（含扩展包），会清掉这一格上的所有单位 */
 function place2(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
@@ -1981,20 +1994,24 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包装七个英雄，外加跟班的召唤物', () => {
+test('英雄包装十一个英雄，外加跟班的召唤物', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
-  assert.equal(heroes.length, 7);
+  assert.equal(heroes.length, 11);
   for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
   }
-  // 大史莱姆是牢大的碎片，跟召唤者住一个包，但绝不能进产线
+  // 跟班的召唤物：大史莱姆（牢大的碎片）、魔龙卵与魔龙（邪龙王那条链）。
+  // 三者都住在英雄包里，但绝不能进产线。
   const minions = units.filter((u) => u.hero !== true);
-  assert.equal(minions.length, 1, '英雄包里的非英雄单位只有大史莱姆');
-  assert.equal(minions[0]!.id, 'slime-giant');
-  assert.equal(minions[0]!.summonedOnly, true, '大史莱姆只能被裂殖出来');
+  assert.deepEqual(
+    minions.map((u) => u.id).sort(),
+    ['dragon-egg', 'magic-dragon', 'slime-giant'],
+    '英雄包里的非英雄单位只有这三只',
+  );
+  for (const m of minions) assert.equal(m.summonedOnly, true, `${m.name} 只能被召唤/孵化出来`);
 });
 
 test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
@@ -2008,10 +2025,319 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
     // 上限 650：至尊法师这一档（攻 -10 → 魔法 +10、甲 +4、魔抗 +4、射程 +1、
     // 视野 +1）的价格按 +50 走，640 仍在"英雄"这一档里；再往上就该另算。
-    assert.ok(u.cost >= 360 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
-    // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵
+    // 下限 300：暗夜死灵法师 2026-10-31 降到火药时代，价 320——它是"靠技能吃饭"
+    // 的便宜英雄，不该被这条按工业/现代英雄写的下限卡住。
+    assert.ok(u.cost >= 300 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
+    // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火药时代（320 金），
+    // 这一条"涨"的规则对它不成立。
+    if (u.id === 'night-necromancer') continue;
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
+});
+
+test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪到火药时代', () => {
+  const pack = (id: string) => EXPANSIONS.find((e) => e.id === id)!;
+  const knights = pack('fantasy-knights').units ?? [];
+  const beasts = pack('fantasy-beasts').units ?? [];
+  const arcane = pack('fantasy-arcane').units ?? [];
+
+  const find = (list: typeof knights, id: string) => list.find((u) => u.id === id);
+
+  // 三个兵从荒兽/秘法搬进骑士团：只在骑士团里出现一次，老包里不再有
+  for (const id of ['griffin-rider', 'dragoon-rider', 'alchemist']) {
+    assert.ok(find(knights, id), `${id} 应该在骑士团里`);
+    assert.ok(!find(beasts, id), `${id} 不该还留在荒兽`);
+    assert.ok(!find(arcane, id) || id === 'alchemist', `${id} 不该还留在秘法`);
+  }
+  assert.ok(!find(arcane, 'alchemist'), '炼金术士已经离开秘法');
+
+  // 老皇家骑兵改名精英骑兵，位置和数值不动
+  const elite = find(knights, 'elite-cavalry');
+  assert.ok(elite, '应该有精英骑兵');
+  assert.equal(elite!.name, '精英骑兵');
+  assert.equal(elite!.era, 2, '精英骑兵留在中世');
+  assert.equal(elite!.cost, 125, '改的是名字，不是数值');
+
+  // 新皇家骑兵：火药时代 + 面板大幅提升
+  const royal = find(knights, 'royal-cavalry');
+  assert.ok(royal, '应该有皇家骑兵');
+  assert.equal(royal!.name, '皇家骑兵');
+  assert.equal(royal!.era, 3, '皇家骑兵改到火药时代');
+  assert.ok(royal!.atk >= elite!.atk * 2, `皇家骑兵攻击 ${royal!.atk} 没到精英骑兵的两倍`);
+  assert.ok(royal!.maxHp >= elite!.maxHp * 2, `皇家骑兵 ${royal!.maxHp} 血没到精英骑兵的两倍`);
+  assert.ok(
+    (royal!.abilities ?? []).includes('charge'),
+    '晋升之后仍然是冲锋骑兵，别把机制一起丢了',
+  );
+
+  // 国王：工业时代，带王命这条被动
+  const king = find(knights, 'royal-king');
+  assert.ok(king, '应该有国王');
+  assert.equal(king!.name, '国王');
+  assert.equal(king!.era, 4, '国王在工业时代');
+  assert.ok((king!.abilities ?? []).includes('royal-decree'), '国王要带王命');
+});
+
+test('王命：回合开始把半径 2 内的精英骑兵晋升为皇家骑兵，按血量比例', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7], [9, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  place2(s, 'A', 'royal-king', 5, 5);
+  const near = place2(s, 'A', 'elite-cavalry', 5, 7); // 距离 2，在半径内
+  const far = place2(s, 'A', 'elite-cavalry', 9, 5); // 距离 4，在半径外
+  const eliteMax = s.unitTypes['elite-cavalry']!.maxHp;
+  const royalMax = s.unitTypes['royal-cavalry']!.maxHp;
+  near.hp = Math.round(eliteMax * 0.5);
+
+  // 自己的回合开始才结算：A 结束 → B 结束 → A 回合开始
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok);
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+
+  const up = r2.state.units.find((u) => u.id === near.id)!;
+  assert.equal(up.type, 'royal-cavalry', '半径内的精英骑兵晋升');
+  assert.equal(up.hp, Math.round(royalMax * 0.5), '按比例换血：半血进去，半血出来');
+  assert.equal(
+    r2.state.units.find((u) => u.id === far.id)!.type,
+    'elite-cavalry',
+    '半径外的不动',
+  );
+  // 只晋升一次：再走一轮也不会反复换
+  const r3 = applyAction(r2.state, { type: 'END_TURN' });
+  assert.ok(r3.ok);
+  const r4 = applyAction(r3.state, { type: 'END_TURN' });
+  assert.ok(r4.ok);
+  assert.equal(r4.state.units.find((u) => u.id === near.id)!.type, 'royal-cavalry');
+});
+
+test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自己的下个回合开始失效', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [5, 7], [8, 5], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const lord = place2(s, 'A', 'holy-knight-lord', 5, 5);
+  const mate = place2(s, 'A', 'swordsman', 5, 7); // 距离 2，吃到
+  const out = place2(s, 'A', 'swordsman', 8, 5); // 距离 3，吃不到
+  const mage = place2(s, 'B', 'mage', 6, 5);
+
+  const armorBefore = effectiveStats(s, mate).armor;
+  const magicBefore = magicDamageOf(s, mage, mate);
+  const outArmorBefore = effectiveStats(s, out).armor;
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: lord.id, skillId: 'holy-banner' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const buffed = r.state.units.find((u) => u.id === mate.id)!;
+  assert.equal(effectiveStats(r.state, buffed).armor, armorBefore + 3, '护甲 +3');
+  assert.equal(magicDamageOf(r.state, mage, buffed), magicBefore - 4, '魔抗 +4：魔法段少打 4 点');
+  assert.equal(buffed.buff?.splashImmune, true, '圣旗同时给阵列');
+  assert.equal(
+    effectiveStats(r.state, r.state.units.find((u) => u.id === out.id)!).armor,
+    outArmorBefore,
+    '半径外的队友什么都没拿到',
+  );
+
+  // 撑过对面那一个回合，到自己的下个回合开始清掉
+  const t1 = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(t1.ok);
+  const t2 = applyAction(t1.state, { type: 'END_TURN' });
+  assert.ok(t2.ok);
+  const expired = t2.state.units.find((u) => u.id === mate.id)!;
+  assert.equal(expired.buff, undefined, '自己的回合开始时失效');
+  assert.equal(effectiveStats(t2.state, expired).armor, armorBefore, '护甲回到原位');
+});
+
+test('奇想数值调整：死灵法师降到火药并降价、骑士长 +2 甲、牢大 +22 血', () => {
+  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []);
+  const of = (id: string) => heroes.find((u) => u.id === id)!;
+
+  const necro = of('night-necromancer');
+  assert.equal(necro.era, 3, '暗夜死灵法师改到火药时代');
+  assert.equal(necro.cost, 320, '造价降到 320');
+  // 整体下调：攻/血/甲/魔攻/视野都比上一版低
+  assert.ok(necro.atk < 22 && necro.maxHp < 88 && necro.armor < 4, '面板整体下调');
+  assert.equal(necro.range, 3, '仍是远程，射程没动');
+  assert.equal(necro.move, 3, '仍是中速');
+
+  assert.equal(of('holy-knight-lord').armor, 14, '神圣骑士长护甲 12 → 14');
+  assert.equal(of('slime-boss').maxHp, 222, '史莱姆牢大 200 → 222');
+});
+
+test('圣剑勇者与邪龙王：只在同时开了「现代」时收录', () => {
+  const without = fresh({ startEra: 6, expansionIds: ['fantasy-core', 'fantasy-heroes'] });
+  assert.equal(without.unitTypes['sword-saint'], undefined, '没开现代时不该有圣剑勇者');
+  assert.equal(without.unitTypes['evil-dragon-king'], undefined, '没开现代时不该有邪龙王');
+
+  const withModern = fresh({
+    startEra: 6,
+    expansionIds: ['fantasy-core', 'fantasy-heroes', 'pack-contemporary'],
+  });
+  const saint = withModern.unitTypes['sword-saint'];
+  const dragon = withModern.unitTypes['evil-dragon-king'];
+  assert.ok(saint && dragon, '开了现代，两位都该在');
+  assert.equal(saint!.era, 6, '圣剑勇者是现代时代');
+  assert.equal(saint!.element, 'light', '光属性');
+  assert.equal(saint!.move, 4, '移速 4');
+  assert.equal(saint!.range, 2, '射程 2');
+  assert.equal(saint!.splashLine, true, '攻击是直线形溅射');
+  assert.ok(saint!.maxHp >= 120 && saint!.atk >= 40 && saint!.armor >= 10, '高血高攻高甲');
+
+  assert.equal(dragon!.era, 6, '邪龙王也是现代时代');
+  assert.equal(dragon!.move, 2, '低移速');
+  assert.ok(dragon!.maxHp >= 180, '高血量');
+  assert.ok((dragon!.magicRes ?? 0) >= 10, '高魔抗');
+  // 属性：风火水土减半，光翻倍
+  for (const el of ['fire', 'water', 'earth', 'wind'] as const) {
+    assert.equal(dragon!.resist?.[el], 0.5, `${el} 应该减半`);
+  }
+  assert.equal(dragon!.weak?.light, 2, '光属性应该翻倍');
+
+  // 卵与龙在同一个包里（技能产物），且都进不了产线
+  assert.equal(withModern.unitTypes['dragon-egg']!.summonedOnly, true);
+  assert.equal(withModern.unitTypes['magic-dragon']!.summonedOnly, true);
+});
+
+test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  for (let x = 4; x <= 10; x += 1) putTerrain(s, x, 5, 'plain');
+  for (let y = 4; y <= 8; y += 1) putTerrain(s, 6, y, 'plain');
+
+  const saint = place(s, 'A', 'sword-saint', 5, 5);
+  // 靶子用 40 血的剑士而不是 30 血的民兵：46 攻一发就把民兵打死，
+  // 溅射那一份就无从观察了（这条测的是"扫哪边"，不是"打多疼"）
+  const main = place(s, 'B', 'swordsman', 7, 5); // 正东，射程 2
+  const online = place(s, 'B', 'swordsman', 8, 5); // 同一条线上，主目标旁边
+  const offline = place(s, 'B', 'swordsman', 6, 6); // 斜后方，不在线上
+
+  const hpOffline = offline.hp;
+  const hpOnline = online.hp;
+  const atk = applyAction(s, { type: 'ATTACK', unitId: saint.id, targetId: main.id });
+  assert.ok(atk.ok, atk.ok ? '' : atk.reason);
+  const after = (id: string) => atk.state.units.find((u) => u.id === id);
+  assert.ok(after(online.id)!.hp < hpOnline, '直线上的第二个敌人要吃溅射');
+  assert.equal(after(offline.id)!.hp, hpOffline, '不在直线上的敌人不该被波及');
+
+  // 觉醒：永久 +8 攻 / +2 甲 / +30 生命上限，并回血
+  const s2 = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s2.units = [];
+  const hero = place(s2, 'A', 'sword-saint', 5, 5);
+  hero.hp = 60;
+  const atk0 = effectiveStats(s2, hero).atk;
+  const armor0 = effectiveStats(s2, hero).armor;
+  const max0 = maxHpOf(s2, hero);
+  const r = applyAction(s2, { type: 'HERO_SKILL', unitId: hero.id, skillId: 'ascend' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const up = r.state.units.find((u) => u.id === hero.id)!;
+  assert.equal(effectiveStats(r.state, up).atk, atk0 + 8, '攻击永久 +8');
+  assert.equal(effectiveStats(r.state, up).armor, armor0 + 2, '护甲永久 +2');
+  assert.equal(maxHpOf(r.state, up), max0 + 30, '生命上限永久 +30');
+  assert.ok(up.hp > 60, '同时回血');
+});
+
+test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  for (let x = 3; x <= 12; x += 1) for (let y = 3; y <= 9; y += 1) putTerrain(s, x, y, 'plain');
+  const dragon = place(s, 'A', 'evil-dragon-king', 5, 5);
+  const foes = [
+    place(s, 'B', 'swordsman', 8, 5),
+    place(s, 'B', 'swordsman', 8, 6),
+  ];
+  const hpBefore = foes.map((f) => f.hp);
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: dragon.id, skillId: 'dragon-egg' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const egg = r.state.units.find((u) => u.type === 'dragon-egg');
+  assert.ok(egg, '应该落下一枚魔龙卵');
+  let hurt = 0;
+  for (let i = 0; i < foes.length; i += 1) {
+    const now = r.state.units.find((u) => u.id === foes[i]!.id)!;
+    if (now.hp < hpBefore[i]!) hurt += 1;
+  }
+  assert.ok(hurt >= 1, '落点范围内的敌人应该吃到伤害');
+
+  // 卵按"自己的回合"孵化：两次 A 的回合开始 → 魔龙
+  let st = r.state;
+  for (let i = 0; i < 4; i += 1) {
+    const end = applyAction(st, { type: 'END_TURN' });
+    assert.ok(end.ok, end.ok ? '' : end.reason);
+    st = end.state;
+  }
+  const hatched = st.units.find((u) => u.id === egg!.id);
+  assert.ok(hatched, '卵应该还在场上（或者已经变成龙）');
+  assert.equal(hatched!.type, 'magic-dragon', '两回合后孵成魔龙');
+});
+
+test('邪龙王的光/火抗性：同一发攻击，光翻倍、火减半', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 5, 6, 'plain');
+  const target = place(s, 'B', 'evil-dragon-king', 5, 5);
+  // 两个只有属性不同的"探针"攻击者
+  const base = { ...s.unitTypes['militia']!, atk: 60, magicAtk: 0, range: 2 };
+  s.unitTypes['probe_light'] = { ...base, id: 'probe_light', element: 'light' };
+  s.unitTypes['probe_fire'] = { ...base, id: 'probe_fire', element: 'fire' };
+  const light = place(s, 'A', 'probe_light', 5, 6);
+  const byLight = computeDamage(s, light, target);
+  s.units = s.units.filter((u) => u.id !== light.id);
+  const fire = place(s, 'A', 'probe_fire', 5, 6);
+  const byFire = computeDamage(s, fire, target);
+  assert.ok(byLight > byFire * 3, `光应该远高于火（光 ${byLight} / 火 ${byFire}）`);
+});
+
+test('招魂：付生产价格把倒下的友军拉回来，且同一具只能招一次', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  for (const [x, y] of [[5, 5], [6, 5], [7, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  const necro = place2(s, 'A', 'night-necromancer', 5, 5);
+  const doomed = place2(s, 'A', 'militia', 6, 5);
+  const hydra = place2(s, 'B', 'hydra', 7, 5);
+  doomed.hp = 1; // 让它必然死于反击
+
+  const goldBefore = s.players.A.gold;
+  // 开局本来就有民兵，所以数"多出来几个"，而不是数总数
+  const militiaBefore = s.units.filter((u) => u.owner === 'A' && u.type === 'militia').length;
+  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: hydra.id });
+  assert.ok(atk.ok, atk.ok ? '' : atk.reason);
+  assert.ok(
+    !atk.state.units.some((u) => u.id === doomed.id),
+    '条件：这一下它真的倒下了',
+  );
+  assert.ok((atk.state.fallen ?? []).some((r) => r.owner === 'A' && r.type === 'militia'), '倒下的人要进名单');
+
+  const r = applyAction(atk.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const back = r.state.units.filter((u) => u.owner === 'A' && u.type === 'militia');
+  assert.equal(back.length, militiaBefore, '倒下几个就补回来几个');
+  const raised = back.find(
+    (u) => u.id !== doomed.id && distance(u, r.state.units.find((x) => x.id === necro.id)!) <= 2,
+  );
+  assert.ok(raised, '应该有一个民兵站在死灵法师两格之内（那就是招回来的）');
+  const zombie = raised as Unit;
+  assert.equal(zombie.moved, true, '当回合不能动');
+  assert.equal(zombie.acted, true, '当回合不能打');
+  const price = recruitCost(s, 'A', s.unitTypes['militia']!);
+  assert.equal(r.state.players.A.gold, goldBefore - price, `按生产价格扣钱（${price} 金）`);
+  assert.equal(
+    (r.state.fallen ?? []).find((x) => x.type === 'militia')?.revived,
+    true,
+    '这条记录标记为已招过',
+  );
+
+  // 冷却清掉也不再能招：同一具遗体只算一次；英雄则根本不进候选
+  const again = r.state.units.find((u) => u.id === necro.id)!;
+  again.skillCd = {};
+  again.skillTurn = undefined;
+  r.state.fallen = [
+    ...(r.state.fallen ?? []),
+    { owner: 'A', type: 'hydra', x: 6, y: 6, turn: r.state.turn },
+  ];
+  const r2 = applyAction(r.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
+  assert.equal(r2.ok, false, '同一具不能被反复招起来');
+  assert.ok(
+    !r2.ok && r2.reason.includes('英雄'),
+    `应该说明英雄不在其列，实际：${!r2.ok ? r2.reason : ''}`,
+  );
 });
 
 test('跳跃：蜘蛛骑士能一跃过整条河，也能停在水面上', () => {
@@ -3110,23 +3436,6 @@ test('桥分三档，越高级越抗拆', () => {
 });
 
 console.log('\n扩展规则');
-
-test('非对称开局：先手工兵 + 斥候，后手两农一牧一步兵一弓手', () => {
-  const sym = fresh();
-  assert.equal(
-    sym.units.filter((u) => u.owner === 'A').length,
-    sym.units.filter((u) => u.owner === 'B').length,
-    '不开扩展时两边对称',
-  );
-
-  const s = fresh({ expansionIds: ['asym-opening'] });
-  const of = (owner: 'A' | 'B') => s.units.filter((u) => u.owner === owner).map((u) => u.type);
-  assert.deepEqual(of('A'), ['engineer', 'scout'], '先手只有工事与侦察');
-  assert.deepEqual(of('B'), ['farmer', 'farmer', 'herder', 'militia', 'archer'], '后手是屯田与守备');
-  // 全部开局兵加起来还是那 7 个，一个不多一个不少
-  assert.equal(s.units.length, 7);
-  assert.ok(s.log.some((l) => l.text.includes('非对称开局')), '开局要在战报里说清楚');
-});
 
 test('战争经济：击杀立刻得 15 金', () => {
   const s = fresh({ expansionIds: ['war-economy'] });
@@ -4997,7 +5306,83 @@ test('渡船能把陆军运过水面', () => {
   assert.ok(landed, '人应该回到棋盘上');
   assert.equal(landed.x, 9);
   assert.equal(landed.y, 8);
-  assert.ok(landed.moved && landed.acted, '刚下船不能立刻行动');
+  // 加强渡船（2026-10-31）：这个兵本回合还没行动过，所以下船不再罚站
+  assert.equal(landed.moved, false, '没走过路的兵下船后还能走');
+  assert.equal(landed.acted, false, '没行动过的兵下船后还能行动一次');
+  assert.equal(landed.ferryBoostTurn, unload.state.turn, '记下是哪一回合吃的这一次加强');
+
+  // 而且"再行动一次"是真的能动：下船后走一格应当成功
+  const step = applyAction(unload.state, { type: 'MOVE', unitId: crew.id, x: 10, y: 8 });
+  assert.ok(step.ok, step.ok ? '' : `下船后应该还能走：${step.reason}`);
+});
+
+test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻击次数、一回合只免一次', () => {
+  // 装船和下船各占船的一次"装卸"，所以现实流程一定是"这回合装、下回合卸"。
+  // 这个 helper 就是走那条路：装完过两轮，回到同一方。
+  const roundTrip = (s: GameState, ferryId: string, cargoId: string) => {
+    const l = applyAction(s, { type: 'LOAD', unitId: ferryId, cargoId });
+    assert.ok(l.ok, l.ok ? '' : `上船失败：${l.reason}`);
+    let st = l.state;
+    for (let i = 0; i < 2; i += 1) {
+      const e = applyAction(st, { type: 'END_TURN' });
+      assert.ok(e.ok, e.ok ? '' : e.reason);
+      st = e.state;
+    }
+    return st;
+  };
+
+  // ① 走过路再上船的兵：下船能打，但不能重新走
+  const s = fresh();
+  digRiver(s, 8, 3, 12);
+  s.current = 'A';
+  const ferry = place(s, 'A', 'ferry', 8, 5);
+  const walked = place(s, 'A', 'militia', 7, 5);
+  walked.moved = true; // 模拟"本回合已经走过一步，但还没出手"
+  const ready = roundTrip(s, ferry.id, walked.id);
+  const un = applyAction(ready, {
+    type: 'UNLOAD',
+    unitId: ferry.id,
+    cargoId: walked.id,
+    x: 9,
+    y: 5,
+  });
+  assert.ok(un.ok, un.ok ? '' : `下船失败：${un.reason}`);
+  const landed = un.state.units.find((u) => u.id === walked.id)!;
+  // 下船必然隔着一个回合边界（装卸各占船的一次行动），所以舱里那个 moved
+  // 是上一轮的旧账：落地按新回合算，移动力和出手都还在。
+  assert.equal(landed.moved, false, '下船落在新回合，移动力是新的');
+  assert.equal(landed.acted, false, '还能行动一次');
+
+  // 打一下：正常结算；再打一下必须被拒（加强渡船只免罚站，不改攻击次数）
+  const foe = place(un.state, 'B', 'militia', 10, 5);
+  const hit1 = applyAction(un.state, { type: 'ATTACK', unitId: landed.id, targetId: foe.id });
+  assert.ok(hit1.ok, hit1.ok ? '' : `第一下应该能打：${hit1.reason}`);
+  const after = hit1.state.units.find((u) => u.id === walked.id)!;
+  assert.equal(after.acted, true, '打完就进入已行动');
+  const hit2 = applyAction(hit1.state, { type: 'ATTACK', unitId: walked.id, targetId: foe.id });
+  assert.equal(hit2.ok, false, '同回合不能再打第二下');
+
+  // ② 这一回合已经吃过加强的兵：换一条船再卸也不给第二次
+  const s2 = fresh();
+  digRiver(s2, 8, 3, 12);
+  s2.current = 'A';
+  const ferry2 = place(s2, 'A', 'ferry', 8, 5);
+  const veteran = place(s2, 'A', 'militia', 7, 5);
+  const ready2 = roundTrip(s2, ferry2.id, veteran.id);
+  // 到了下船这一回合，假装它本轮已经被加强过一次
+  const ferryNow = ready2.units.find((u) => u.id === ferry2.id)!;
+  ferryNow.cargo![0]!.ferryBoostTurn = ready2.turn;
+  const un2 = applyAction(ready2, {
+    type: 'UNLOAD',
+    unitId: ferry2.id,
+    cargoId: veteran.id,
+    x: 9,
+    y: 5,
+  });
+  assert.ok(un2.ok, un2.ok ? '' : `下船失败：${un2.reason}`);
+  const again = un2.state.units.find((u) => u.id === veteran.id)!;
+  assert.equal(again.acted, true, '同一回合第二次下船不再免罚站');
+  assert.equal(again.moved, true, '罚站就是走也不能走');
 });
 
 test('渡船有载员上限，而且只装陆军', () => {
@@ -6787,8 +7172,69 @@ test('不存在的兵种会被拒绝', () => {
   assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['no-such-unit'] }).ok, false);
 });
 
-test('结束回合时序列前移一格，造没造出来都算消耗', () => {
-  const s = commandPost();
+test('指挥官热座：双方各交一批计划，交齐后才按回合轮流推进', () => {
+  // 热座 = 一台机器两个人、对面不是 AI。三条边界：
+  //   ① 交计划不推进回合（turn / 序列都不动），只换"轮到谁排"；
+  //   ② 两边都交齐之后 current 拨回**先交的那一方**，不能让"谁手慢"决定先后手；
+  //   ③ 普通局 / 人机局一律拒绝这个动作。
+  const hot = fresh({ commanderMode: true, aiOpponent: false, aiAlly: false }, 8802);
+  hot.current = 'A';
+  hot.players.A.gold = 2000;
+  hot.players.B.gold = 2000;
+  const turn0 = hot.turn;
+
+  // A 排两格再提交
+  const aOrders = applyAction(hot, { type: 'SET_ORDERS', queue: ['militia', 'archer'] });
+  assert.ok(aOrders.ok, aOrders.ok ? '' : aOrders.reason);
+  const aCommit = applyAction(aOrders.state, { type: 'PLAN_COMMIT' });
+  assert.ok(aCommit.ok, aCommit.ok ? '' : aCommit.reason);
+  const afterA = aCommit.state;
+  assert.equal(afterA.orderReady?.A, true);
+  assert.equal(afterA.current, 'B', '交完把机器让给对面');
+  assert.equal(afterA.turn, turn0, '提交不能推进回合');
+  assert.deepEqual(ordersOf(afterA, 'A'), ['militia', 'archer'], '提交也不能消耗序列');
+  assert.equal(planBothReady(afterA), false, '只有一边交了');
+
+  // B 排一格再提交 → 两边齐了
+  const bOrders = applyAction(afterA, { type: 'SET_ORDERS', queue: ['spearman'] });
+  assert.ok(bOrders.ok, bOrders.ok ? '' : bOrders.reason);
+  const bCommit = applyAction(bOrders.state, { type: 'PLAN_COMMIT' });
+  assert.ok(bCommit.ok, bCommit.ok ? '' : bCommit.reason);
+  const both = bCommit.state;
+  assert.equal(planBothReady(both), true);
+  assert.equal(both.current, 'A', '拨回这一批的开局方，谁后交都一样');
+  assert.equal(both.turn, turn0, '两份计划都交齐也不推进回合');
+
+  // 推进：一个半回合 = 一次 END_TURN，各自消耗自己那一格
+  const firstHalf = applyAction(both, { type: 'END_TURN' });
+  assert.ok(firstHalf.ok);
+  assert.deepEqual(ordersOf(firstHalf.state, 'A'), ['archer'], 'A 的队首出队');
+  assert.deepEqual(ordersOf(firstHalf.state, 'B'), ['spearman'], 'B 的队首没动');
+  assert.equal(firstHalf.state.current, 'B');
+
+  const secondHalf = applyAction(firstHalf.state, { type: 'END_TURN' });
+  assert.ok(secondHalf.ok);
+  assert.deepEqual(ordersOf(secondHalf.state, 'B'), [], 'B 的队首也出队了');
+  assert.equal(secondHalf.state.current, 'A');
+
+  // 收尾：清标记，两边重新排
+  const done = applyAction(secondHalf.state, { type: 'PLAN_END' });
+  assert.ok(done.ok);
+  assert.equal(planBothReady(done.state), false);
+  assert.equal(done.state.orderReady?.A, undefined);
+  assert.equal(done.state.planStart, undefined);
+
+  // ③ 别的模式不接受
+  const plain = fresh({}, 8803);
+  assert.equal(applyAction(plain, { type: 'PLAN_COMMIT' }).ok, false, '普通局没有作战计划');
+  const vsAi = fresh({ commanderMode: true, aiOpponent: true }, 8804);
+  vsAi.current = 'A';
+  const no = applyAction(vsAi, { type: 'PLAN_COMMIT' });
+  assert.equal(no.ok, false, '人机局对面由 AI 代管，不该互等');
+  assert.ok(!no.ok && no.reason.includes('AI'), `理由该提到 AI：${!no.ok ? no.reason : ''}`);
+});
+
+test('结束回合时序列前移一格，造没造出来都算消耗', () => {  const s = commandPost();
   const r = applyAction(s, { type: 'SET_ORDERS', queue: ['archer', 'militia'] });
   assert.ok(r.ok);
   const end = applyAction(r.state, { type: 'END_TURN' });
@@ -8548,6 +8994,42 @@ test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去',
   // 但 AI 的候选列表照样生成 ATTACK。执行方遇到非法动作会中断整回合，
   // 于是双 AI 对局在第 20 回合死在一个永远失败的"箭塔开炮"上。
   // 所以要测的不是"某个动作对不对"，而是"连续几百步里没有一步被拒"。
+  //
+  // 为什么这里要自己塞工兵：默认开局是 3 战斗 + 2 经济，里面没有建造单位，
+  // 而 AI 在 18 回合内不会主动去招一个——不塞工兵，整局一个工地都不会出现，
+  // 「对着工地开炮」这条路径就根本没被走到，测试会变成"跑完了但什么都没测"。
+  // （以前是「非对称开局」扩展顺手给了先手一个工兵，那个扩展已下架。）
+  const seedBuilder = (st: GameState, owner: 'A' | 'B'): void => {
+    const city = st.cities.find((c) => c.owner === owner);
+    const def = st.unitTypes['engineer'];
+    if (!city || !def) return;
+    for (let r = 1; r <= 4; r += 1) {
+      for (let dy = -r; dy <= r; dy += 1) {
+        for (let dx = -r; dx <= r; dx += 1) {
+          const x = city.x + dx;
+          const y = city.y + dy;
+          if (x < 0 || y < 0 || x >= st.w || y >= st.h) continue;
+          if (st.units.some((u) => u.x === x && u.y === y)) continue;
+          const tile = st.tiles[y * st.w + x];
+          if (!tile || tile.cityId) continue;
+          if (tile.terrain === 'water' || tile.terrain === 'mountain') continue;
+          st.units.push({
+            id: `b${st.nextUnitSeq++}`,
+            type: 'engineer',
+            owner,
+            x,
+            y,
+            hp: def.maxHp,
+            kills: 0,
+            moved: false,
+            acted: false,
+          });
+          return;
+        }
+      }
+    }
+  };
+
   let sawSite = false;
   const runs: Array<{ ids: string[]; seed: number }> = [
     { ids: ['city-works'], seed: 424242 },
@@ -8569,6 +9051,8 @@ test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去',
       },
       seed,
     );
+    seedBuilder(state, 'A');
+    seedBuilder(state, 'B');
     const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
     let turns = 0;
     while (turns < 18 && !state.winner) {
@@ -10125,6 +10609,82 @@ test('超长消息不发出去，而不是截一半发出去', () => {
   assert.equal(chatBodyLength('  好 的  '), 3, '数的是清洗之后的字数');
 });
 
+test('观战人数：只数 45 秒内有心跳的观众，参赛者不计', () => {
+  const now = Date.parse('2026-10-31T12:00:00Z');
+  const at = (secAgo: number): number => now - secAgo * 1000;
+  const row = (role: 'watch' | 'seat', secAgo: number) => ({
+    clientId: `${role}-${secAgo}`,
+    role,
+    name: '',
+    seenAt: at(secAgo),
+  });
+
+  // 参赛者不算：1v1 里两个座位本来就在棋盘上
+  assert.equal(countWatchers([row('seat', 1), row('seat', 2)], now), 0, '两个参赛者不是两个观众');
+  // 新鲜的算
+  assert.equal(countWatchers([row('watch', 1), row('watch', 20)], now), 2);
+  // 过期的（超过 TTL）不算
+  assert.equal(
+    countWatchers([row('watch', 1), row('watch', PRESENCE_TTL_MS / 1000 + 1)], now),
+    1,
+    '超过 TTL 没心跳就算人走了',
+  );
+  // 边界：正好等于 TTL 还算活着（宁可多留半分钟，也不要人数忽闪）
+  assert.equal(countWatchers([row('watch', PRESENCE_TTL_MS / 1000)], now), 1);
+  // 本机时钟比服务器慢 → 时间戳在未来：按"刚说话"处理，不能因此掉人数
+  assert.equal(countWatchers([{ ...row('watch', 0), seenAt: now + 5000 }], now), 1);
+  // 空名单
+  assert.equal(countWatchers([], now), 0);
+  assert.equal(PRESENCE_TTL_MS, 45000, 'TTL 就是 45 秒，界面上那条 tooltip 也这么写');
+
+  // 台词：0 人时闭嘴
+  assert.equal(watchLabel(0), '');
+  assert.equal(watchLabel(1), '观战 1 人');
+  assert.equal(watchLabel(12), '观战 12 人');
+
+  // 行解析：没有 client_id 的行不是人；坏时间按 0 算（过期）
+  assert.equal(presenceFromRow({ role: 'watch' }), null);
+  const parsed = presenceFromRow({
+    client_id: 'abc',
+    role: 'watch',
+    name: '观众',
+    seen_at: '2026-10-31T12:00:00Z',
+  });
+  assert.ok(parsed);
+  assert.equal(parsed!.seenAt, now);
+  assert.equal(presenceFromRow({ client_id: 'x', seen_at: 'not-a-time' })!.seenAt, 0);
+  assert.equal(presenceFromRow({ client_id: 'x', role: 'seat' })!.role, 'seat');
+});
+
+test('聊天三态：折叠时只有对方开口才自动展开，屏蔽时永不展开', () => {
+  const line = (id: number, seat: ChatSeat): ChatLine => ({
+    id,
+    seat,
+    name: 'x',
+    body: 'b',
+    at: '2026-10-31T10:00:00Z',
+  });
+  const foe = [line(1, 'B')];
+  const mine = [line(2, 'A')];
+  const both = [line(3, 'B'), line(4, 'A')];
+
+  // 折叠：对方说话 → 弹；自己说话 → 不弹（自己那条会被增量拉回来）
+  assert.equal(shouldAutoExpand('folded', foe, 'A'), true, '折叠时对方开口要自动展开');
+  assert.equal(shouldAutoExpand('folded', mine, 'A'), false, '自己发的不该把自己的面板弹开');
+  assert.equal(shouldAutoExpand('folded', both, 'A'), true, '同一页里有对方的话就算');
+
+  // 开着的时候本来就在看，不需要"展开"这个动作
+  assert.equal(shouldAutoExpand('open', foe, 'A'), false);
+  // 屏蔽：对方说什么都不弹
+  assert.equal(shouldAutoExpand('muted', foe, 'A'), false, '屏蔽之后不该有任何自动展开');
+  assert.equal(shouldAutoExpand('muted', both, 'A'), false);
+
+  // 观众没有"对方"：两个座位谁说话都算
+  assert.equal(shouldAutoExpand('folded', mine, 'watch'), true);
+  // 观众自己发的（seat=watch）不该触发自己的面板
+  assert.equal(shouldAutoExpand('folded', [line(5, 'watch')], 'watch'), false);
+});
+
 test('聊天水位只由服务器推：两个人同时说话不能丢', () => {
   // 这条盯的是一个真实事故：以前"收进一行就把水位推到它的 id"，
   // 包括自己刚发出去的那一条。于是：
@@ -10350,6 +10910,46 @@ test('海军：两个包都注册上，兵种全是水面单位', () => {
   const era6 = (modern!.units ?? []).filter((u) => u.era === 6);
   assert.ok(era6.length >= 5, `现代海军应该补出至少 5 条六代船，现在 ${era6.length} 条`);
   assert.ok(era6.some((u) => u.id === 'nv_carrier'), '六代船里必须有航母');
+});
+
+test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {
+  // 火船：借本体那条 `kamikaze`（阵亡时对四邻各打自身攻击的一半），
+  // 于是"用一条便宜的船换掉贴脸的舰队"成立。这里验三件事：
+  // 挂上了、真按攻击的一半算、而且**敌我都吃**（老规矩，别指望它能和友军叠着走）。
+  const fleet = expansionById('naval-fleet')!;
+  const fire = fleet.units!.find((u) => u.id === 'nv_fireship')!;
+  assert.deepEqual(fire.abilities, ['kamikaze'], '火船应该挂上自爆');
+
+  let s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: ['naval-fleet'] }, 8801);
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
+    s.tiles[y * s.w + x] = { terrain: 'water', cityId: null };
+  }
+  s.units = [];
+  const ship = place2(s, 'A', 'nv_fireship', 5, 5);
+  ship.hp = 1;
+  const foe = place2(s, 'B', 'nv_fireship', 6, 5);
+  foe.hp = 100;
+  const friendly = place2(s, 'A', 'nv_fireship', 4, 5);
+  friendly.hp = 100;
+  const far = place2(s, 'B', 'nv_fireship', 5, 7); // 距离 2，不该被波及
+  far.hp = 100;
+
+  // 用炮艇当凶手：它没有溅射，否则"溅射打到隔壁"会和"自爆打到隔壁"混在一起
+  const killer = place2(s, 'B', 'gunboat', 5, 4);
+  s.current = 'B';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: ship.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.equal(after(ship.id), 0, '1 血的火船应该被击沉');
+  const blast = Math.max(1, Math.round(s.unitTypes['nv_fireship']!.atk / 2));
+  assert.equal(after(foe.id), 100 - blast, `相邻的敌人该吃 ${blast} 点`);
+  assert.equal(after(friendly.id), 100 - blast, '自爆不区分敌我');
+  assert.equal(after(far.id), 100, '隔一格的不该被波及');
+
+  // 炮艇：射程 3 → 4。它是本体里唯一"便宜 + 破甲"的水面单位，
+  // 比同代岸防火力短一格时只能贴着岸挨打。
+  assert.equal(UNIT_TYPES.gunboat!.range, 4, '炮艇射程应该是 4');
+  assert.equal(UNIT_TYPES.gunboat!.domain, 'water');
 });
 
 test('海军：现代海军依赖「现代」，单勾它一条船都造不出来', () => {
@@ -10829,6 +11429,50 @@ test('制空：战斗机打空中目标，比打同血同甲的地面目标更�
   assert.ok(vsAir > vsGround, `对空 ${vsAir} 应该高于对地 ${vsGround}——否则制空这条能力等于没有`);
 });
 
+test('空中单位不吃地形：掩体、高差射程、地形视野全都不算', () => {
+  const s = fresh({ expansionIds: ['air-corps', 'height-terrain'] });
+  s.units = [];
+  // 森林有掩体（+2 甲），台地/谷地差 3 层（射程该 +1 / −1），沙丘 +1 视野
+  putTerrain(s, 5, 5, 'forest');
+  putTerrain(s, 6, 5, 'forest');
+  putTerrain(s, 7, 5, 'valley');
+  putTerrain(s, 8, 5, 'plateau');
+  putTerrain(s, 9, 5, 'dune');
+
+  const plane = place(s, 'A', 'af_fighter', 5, 5);
+  const foot = place(s, 'A', 'militia', 6, 5);
+  const planeDef = s.unitTypes['af_fighter']!;
+
+  assert.equal(isAirborne(s, plane), true, '这架飞机确实在空中层');
+  assert.equal(
+    effectiveStats(s, plane).armor,
+    planeDef.armor,
+    '飞机停在林子上不该拿到森林掩体',
+  );
+  assert.ok(
+    effectiveStats(s, foot).armor > UNIT_TYPES.militia.armor,
+    '地面单位照旧吃掩体（对照）',
+  );
+
+  // 高差射程：同一架飞机从台地打谷地，射程不该 +1
+  const flat = place(s, 'A', 'af_fighter', 7, 5); // 谷地打台地
+  const high = place(s, 'A', 'af_fighter', 8, 5); // 台地打谷地
+  const valleyTile = s.tiles[idx(s, 7, 5)]!;
+  const plateauTile = s.tiles[idx(s, 8, 5)]!;
+  assert.equal(effectiveRangeAgainst(s, high, valleyTile), planeDef.range, '空中不吃俯射加成');
+  assert.equal(effectiveRangeAgainst(s, flat, plateauTile), planeDef.range, '空中也不吃仰攻减益');
+
+  // 地形视野：沙丘 +1。飞机停在沙丘上不该拿到，地面单位照旧拿到
+  const onDune = place(s, 'A', 'af_fighter', 9, 5);
+  const footDune = place(s, 'A', 'militia', 9, 5);
+  assert.equal(visionOf(s, onDune), planeDef.vision, '空中不吃地形视野加成');
+  assert.equal(
+    visionOf(s, footDune),
+    UNIT_TYPES.militia.vision + 1,
+    '地面单位站在沙丘上照旧 +1（对照）',
+  );
+});
+
 test('对地/反舰：两条加成各管一层，不会串味', () => {
   const s = fresh({ expansionIds: ['air-corps'] });
   s.units = [];
@@ -11074,6 +11718,43 @@ test('选卡：没有计时起点、或 deadline 是 0/NaN 时，超时一律不
   const bad = applyAction(lobby, { type: 'DRAFT_START' } as never, 'A');
   assert.equal(bad.ok, false, '缺 at 的 DRAFT_START 要被挡住');
   assert.equal(lobby.draft!.phase, 'lobby', '挡下来之后还停在等待开局');
+});
+
+test('选卡：禁用与选人两档时限分开设，规则写 deadline 时用的就是它', () => {
+  // 默认 25s / 30s 之外，开局设置里能各选一档。判据只有一个：
+  // **规则写 deadline 时用的时长** 和界面倒计时读的时长必须是同一份，
+  // 否则改完设置会出现"界面显示 40 秒、规则 25 秒就判超时"。
+  const s = fresh({ draftMode: true, draftBanMs: 10_000, draftPickMs: 45_000 }, 7711);
+  const t0 = 1_000_000;
+  const started = applyAction(s, { type: 'DRAFT_START', at: t0 }, 'A');
+  assert.ok(started.ok, started.ok ? '' : started.reason);
+  const banPhase = started.state;
+  assert.equal(banPhase.draft!.phase, 'ban');
+  assert.equal(banPhase.draft!.deadline - t0, 10_000, '禁用期该按 10 秒算');
+  assert.equal(draftBanMsOf(banPhase), 10_000);
+  assert.equal(draftMsOf(banPhase), 10_000, '当前阶段的时长要和 deadline 对得上');
+
+  // 双方各禁一个 → 进选人，改成 45 秒。
+  // 禁用动作带的 at 是"禁用期的截止时刻"，所以选人的 deadline 是从那一刻起算的。
+  // 池子本身已经剔掉了伪单位（见 draftCandidates），直接按顺序取两个
+  const pool = banPhase.draft!.pool;  const banned = banStep(banStep(banPhase, 'A', pool[0]!), 'B', pool[1]!);
+  assert.equal(banned.draft!.phase, 'pick');
+  assert.equal(draftPickMsOf(banned), 45_000);
+  assert.equal(draftMsOf(banned), 45_000);
+  assert.equal(
+    banned.draft!.deadline,
+    t0 + 10_000 + 45_000,
+    '选人期的 deadline 应该 = 禁用截止 + 45 秒',
+  );
+
+  // 不填就是默认值：旧存档读出来也是它
+  const dflt = fresh({ draftMode: true }, 7712);
+  assert.equal(draftBanMsOf(dflt), 25_000);
+  assert.equal(draftPickMsOf(dflt), 30_000);
+  // 填 0 / NaN 一律回落默认，别把 deadline 算成 NaN（那会让超时永远不触发）
+  const broken = fresh({ draftMode: true, draftBanMs: 0, draftPickMs: Number.NaN }, 7713);
+  assert.equal(draftBanMsOf(broken), 25_000);
+  assert.equal(draftPickMsOf(broken), 30_000);
 });
 
 test('选卡：按时代分层抽样，每个有货的时代都抽得到', () => {

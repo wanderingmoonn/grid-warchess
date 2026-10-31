@@ -115,7 +115,8 @@ export const MOUNTED_IDS: readonly string[] = [
   'gp_cuirassier', // 胸甲骑兵
   'gp_dragoon', // 龙骑兵
   // 奇想（`kite` 是"游骑"这条**能力**的 id，不是兵种，别抄进来）
-  'royal-cavalry', // 皇家骑兵
+  'elite-cavalry', // 精英骑兵（原「皇家骑兵」，2 代）
+  'royal-cavalry', // 皇家骑兵（3 代，精英骑兵的晋升版）
   'cataphract', // 超级重骑
   'paladin', // 圣骑士
   'wolf-rider', // 狼骑士

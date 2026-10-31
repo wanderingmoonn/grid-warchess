@@ -11,7 +11,7 @@
  */
 
 import { eraDef, isPseudoUnit } from '../core/config.ts';
-import { draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
+import { draftMsOf, draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
 import { abilityById } from '../core/ability-registry.ts';
 import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
 import { resourceName } from '../core/resources.ts';
@@ -317,6 +317,16 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         : '选卡完成，正在进入战场';
 
   /**
+   * 这一阶段的时限写成一句话挂在提示后面。
+   *
+   * 单独占一个格子会打乱头部那套 grid 布局，而玩家真正想知道的是
+   * "我现在这一手有多少时间"——留在倒计时旁边最省事。
+   */
+  const limitSecs = Math.round(draftMsOf(s) / 1000);
+  const hintWithLimit =
+    view.phase === 'ban' || view.phase === 'pick' ? `${hint}（本阶段 ${limitSecs} 秒）` : hint;
+
+  /**
    * 卡片排序：**时代为主、扩展为辅**。
    *
    * 玩家扫池子时先问"这一代有什么"（时代决定它什么时候能用），第二个问题才是
@@ -395,7 +405,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
       </div>
       <div class="draft-timer ${secs <= 5 ? 'is-hurry' : ''}" data-ref="draft-timer">${secs}s</div>
       ${headActions(false, ctx.room != null)}
-      <div class="draft-hint">${hint}</div>
+      <div class="draft-hint">${hintWithLimit}</div>
     </header>
     <div class="draft-body">
       <section class="draft-pool">

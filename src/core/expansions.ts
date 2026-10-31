@@ -307,14 +307,6 @@ export interface ExpansionHooks {
   /** 有副作用：开局时改初始状态 */
   onMatchStart?: (c: MatchStartCtx) => void;
   /**
-   * 纯函数：整批换掉开局部队。
-   *
-   * 返回 `{ A: [...], B: [...] }` 就按这份名单重摆（兵种 id，按顺序落在
-   * 各自城市附近）；返回 null 表示这一局不管，走默认的"3 战斗 + 2 经济"。
-   * 只给名单、不自己摆，是为了让摆位、编号、存档一致性全留在 setup.ts 一处。
-   */
-  startRoster?: (c: MatchStartCtx) => Partial<Record<PlayerId, string[]>> | null;
-  /**
    * 纯函数：后手开局额外金币的**比例**（0.05 = 多拿 5% 起始金）。
    *
    * 只返回比例、不动手：真正加钱和写战报由 setup.ts 统一做，
@@ -591,21 +583,6 @@ function lastStandDamage(state: GameState, owner: PlayerId, damage: number): num
 }
 
 export const EXPANSIONS: Expansion[] = [
-  {
-    id: 'asym-opening',
-    name: '非对称开局',
-    summary:
-      '两边开局不再一样：先手只有工兵和斥候（工事与侦察），后手拿两个农民、一个牧民、一个步兵、一个弓手（屯田与守备）。' +
-      '先手是逆风局——用工地和视野去换对面那支已经成型的小部队。',
-    hooks: {
-      // 名单写死，是为了"这一局开局长什么样"能一眼看完——
-      // 随机开局会让复盘时说不清"我开局为什么少一个兵"。
-      startRoster: () => ({
-        A: ['engineer', 'scout'],
-        B: ['farmer', 'farmer', 'herder', 'militia', 'archer'],
-      }),
-    },
-  },
   {
     id: 'war-economy',
     name: '战争经济',

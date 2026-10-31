@@ -78,6 +78,7 @@ import type {
   Action,
   City,
   Element,
+  FallenRecord,
   GameState,
   SkillDef,
   PlayerId,
@@ -720,8 +721,11 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
   // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
   // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
   // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
-  const res = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
-  return magicSegment(s, attacker, res, defender);
+  const base = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  // 圣旗之类"临时加魔抗"的增益在这条线上生效：魔法段是唯一一条
+  // 只看魔抗、不看护甲的伤害，把增益挂在别处就等于没加。
+  const ward = defender.buff?.magicRes ?? 0;
+  return magicSegment(s, attacker, base + Math.max(0, ward), defender);
 }
 
 /**
@@ -729,7 +733,8 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
  * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
  */
 export function attackPowerNow(s: GameState, attacker: Unit): number {
-  let atkNow = utype(s, attacker.type).atk + auraBonus(s, attacker).atk;
+  // 圣剑勇者这类"永久变强"的加成记在单位身上，不进兵种表（见 types 的 atkBonus）
+  let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonus(s, attacker).atk;
   for (const [key, val] of orderedStatuses(attacker.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
@@ -986,6 +991,9 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
     moved: true,
     acted: true,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
+    // 卵一落地就开始倒计时：写在这里而不是"第一次回合开始"，
+    // 否则每颗卵都会比自己写的 `turns` 多待一个回合。
+    ...(def.hatch ? { hatchLeft: def.hatch.turns } : {}),
   };
 }
 
@@ -1058,6 +1066,33 @@ export function canStandAt(s: GameState, x: number, y: number, type: string): bo
     }
   }
   return true;
+}
+
+/**
+ * 找一格**半径 r 以内**的空地（先近后远，同一圈里按左上到右下）。
+ *
+ * 招魂从"只能放在身边"改成"两格以内"之后需要它：相邻四格在混战里几乎永远是满的，
+ * 而"复活"失败的理由如果总是"身边没地方站"，这个技能就只在空旷时才成立。
+ * 由近及远而不是随机，是为了让落点可预期——玩家能大概猜到人会站在哪。
+ */
+function freeSpotWithin(
+  s: GameState,
+  unit: Unit,
+  type: string,
+  radius: number,
+): { x: number; y: number } | null {
+  for (let r = 1; r <= radius; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        // 只看这一圈的边，圈内更近的上一轮已经找过了
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = unit.x + dx;
+        const y = unit.y + dy;
+        if (canStandAt(s, x, y, type)) return { x, y };
+      }
+    }
+  }
+  return null;
 }
 
 /** 找一格相邻空地放召唤物/分裂体。找不到返回 null。 */
@@ -1247,9 +1282,10 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   const def = utype(s, u.type);
 
   // ── 攻击 ──
-  const atkBase = def.atk;
+  const atkBase = def.atk + (u.atkBonus ?? 0);
   const atkItems: StatItem[] = [];
   let atk = atkBase;
+  if (u.atkBonus) atkItems.push({ label: '圣剑觉醒', delta: u.atkBonus });
   const aura = auraBonus(s, u);
   if (aura.atk !== 0) {
     atk += aura.atk;
@@ -1307,15 +1343,19 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   }
 
   // ── 护甲（按当前所在格算）──
-  const armorBase = def.armor;
+  const armorBase = def.armor + (u.armorBonus ?? 0);
   const armorItems: StatItem[] = [];
   let armor = armorBase;
+  if (u.armorBonus) armorItems.push({ label: '圣剑觉醒', delta: u.armorBonus });
   const tile = tileAt(s, u.x, u.y);
   if (aura.armor !== 0) {
     armor += aura.armor;
     armorItems.push({ label: '守护光环', delta: aura.armor });
   }
-  const terrainDef = tile ? CONFIG.terrainDef[tile.terrain] : 0;
+  // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
+  // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
+  // 而空中层存在的理由恰恰是"从上面过去，地面的事与它无关"。
+  const terrainDef = tile && !isAirborne(s, u) ? CONFIG.terrainDef[tile.terrain] : 0;
   if (terrainDef !== 0) {
     armor += terrainDef;
     armorItems.push({ label: `地形 · ${CONFIG.terrainName[tile!.terrain]}`, delta: terrainDef });
@@ -1353,11 +1393,18 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (armor !== before) armorItems.push({ label: def.name, delta: armor - before });
     }
   }
+  // 圣旗（神圣骑士长）：临时护甲。面板和结算必须读同一个字段，
+  // 否则会出现"面板写着 10 点、实际按 7 点算"这种只能靠猜的偏差。
+  if (u.buff?.armor) {
+    armor += u.buff.armor;
+    armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
+  }
   const curseAura = curseAuraPenalty(s, u);
   if (curseAura !== 0) {
     armor -= curseAura;
     armorItems.push({ label: '咒域', delta: -curseAura });
   }
+
   // 扩展改甲（堑壕战等）：一条钩子一行，标签用扩展名
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
@@ -1930,16 +1977,16 @@ export function computeDamage(
     dt = utype(s, defender.type);
   }
 
-  // 2. 城市不吃地形和光环
+  // 2. 城市不吃地形和光环；空中单位同样不吃地形（见 effectiveStats 同一处注释）
   const tile = isCity ? null : tileAt(s, defender.x, defender.y);
-  const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
+  const terrainBonus = tile && !isAirborne(s, defender) ? CONFIG.terrainDef[tile.terrain] : 0;
   const defenderAura = isCity ? { armor: 0 } : auraBonus(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
   const atkNow = attackPowerNow(s, attacker);
 
   // 3. 核心：真实护甲是动态读取城市的，而不是读全局表里的 0
-  const actualArmor = isCity ? city.armor : dt.armor;
+  const actualArmor = isCity ? city.armor : dt.armor + (defender.armorBonus ?? 0);
 
   const ctx: HookCtx = {
     state: s,
@@ -1982,6 +2029,8 @@ export function computeDamage(
       const def = STATUS_REGISTRY[key];
       if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
     }
+  // 圣旗（神圣骑士长的技能）：临时护甲，和面板走同一个字段
+  if (!isCity && defender.buff?.armor) ctx.armor += defender.buff.armor;
   // 咒域光环
   ctx.armor -= curseAuraPenalty(s, defender);
 
@@ -2181,6 +2230,24 @@ export function splashRatioOf(u: Unit): number {
  *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
  *      所以"直接伤害 + 溅射"加起来也只结算一次。
  */
+/**
+ * 这一格是否落在"从攻击者指向主目标"的那条直线上（含对角线）。
+ *
+ * 只用来判直线溅射：方向由 `a → d` 决定，`v` 必须同方向、共线。
+ * 用锚点算而不是身体最近边——直线是瞄准线，不是覆盖面积，
+ * 2×2 单位挡在线上时按它自己那一格算反而更符合直觉。
+ */
+function onStrikeLine(a: Unit, d: Unit, v: Unit): boolean {
+  const dx = Math.sign(d.x - a.x);
+  const dy = Math.sign(d.y - a.y);
+  if (dx === 0 && dy === 0) return true;
+  const vx = v.x - a.x;
+  const vy = v.y - a.y;
+  if (dx === 0) return vx === 0 && Math.sign(vy) === dy;
+  if (dy === 0) return vy === 0 && Math.sign(vx) === dx;
+  return vx * dy === vy * dx && Math.sign(vx) === dx && Math.sign(vy) === dy;
+}
+
 function splashVictims(
   s: GameState,
   attacker: Unit,
@@ -2188,6 +2255,8 @@ function splashVictims(
 ): Array<{ unit: Unit; dmg: number }> {
   const radius = splashRadiusOf(s, attacker);
   if (radius <= 0) return [];
+  // 直线溅射（剑气、光束）：只扫那条线上的，不扫"周围一圈"
+  const line = utype(s, attacker.type).splashLine === true;
 
   const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
@@ -2197,8 +2266,11 @@ function splashVictims(
     // 已经结算过的（主目标，或者同一格被扫到两次）不再收
     if (seen.has(v.id)) continue;
     if (distBetweenUnits(s, defender, v) > radius) continue;
+    if (line && !onStrikeLine(attacker, defender, v)) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
+    // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
+    if (v.buff?.splashImmune) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
     seen.add(v.id);
@@ -2691,6 +2763,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   if (by !== s.current) return { ok: false, reason: '还没轮到你行动' };
 
   const next = cloneState(s);
+  // 招魂要读"本回合谁没了"，所以每一个动作前后各数一次人头（见 recordDeaths）
+  const rosterBefore = rosterOf(next);
 
   const result: ActionResult = (() => {
     switch (action.type) {
@@ -2721,6 +2795,10 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
         return doSetOrders(next, action.queue, action.sites);
+      case 'PLAN_COMMIT':
+        return doPlanCommit(next);
+      case 'PLAN_END':
+        return doPlanEnd(next);
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
@@ -2736,6 +2814,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
 
   if (result.ok) {
     syncBridges(result.state);
+    // 放在 syncBridges 之后：桥塌落水也算"这一下没的"，早写就漏掉那一批
+    recordDeaths(result.state, rosterBefore, action);
     result.state.winner = result.state.winner ?? checkWinner(result.state);
     refreshMemory(result.state);
   }
@@ -3176,9 +3256,14 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   const cap = ferryDef.capacity ?? 0;
   if (load.length >= cap) return { ok: false, reason: `这条船装满了（${cap}）` };
 
-  // 上船：从棋盘上摘下来，整个对象存进货舱
+  // 上船：从棋盘上摘下来，整个对象存进货舱。
+  //
+  // `moved` / `acted` **原样保留**，不强行写成 true：加强渡船要知道
+  // "这个兵本回合到底动没动过"——一律抹成 true，那份信息就没了，
+  // 下船时只能按"谁也不能再动"处理。
+  // （`acted` 在上面的前置里已经确认是 false，真正的差别在 `moved`。）
   s.units = s.units.filter((u) => u.id !== cargo.id);
-  ferry.cargo = [...load, { ...cargo, x: ferry.x, y: ferry.y, moved: true, acted: true }];
+  ferry.cargo = [...load, { ...cargo, x: ferry.x, y: ferry.y }];
   ferry.acted = true;
 
   pushLog(s, s.current, `${cargoDef.name} 登上了${ferryDef.name}`);
@@ -3189,8 +3274,22 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
  * 下船：把人放到相邻的空地上。
  *
  * 落点用 blockedFor 判：不能是水、不能是高山、不能是敌方城市格。
- * 下船的单位这一回合不能再动也不能再打 —— 否则运输船就成了一条
- * "隔河空投骑兵连"的传送门。
+ *
+ * ── 加强渡船（2026-10-31）──────────────────────────────────────────────
+ * 默认规则是"下船即罚站"：这一回合不能再动也不能再打。否则运输船就成了一条
+ * 隔河空投骑兵连的传送门。但罚站也把"过河进攻"整条路堵死了——船靠岸那一回合
+ * 什么都做不了，等于白送对方一轮。
+ *
+ * 现在的口径是：**下船那一刻还没行动过的兵，允许它照常行动一次**。
+ * 三条边界把它锁在"一次"上：
+ *   1. `cargo.acted !== true`：本回合已经行动过的（打过、或打完又动过）不给；
+ *   2. `cargo.ferryBoostTurn !== s.turn`：同一个兵**一回合只吃一次**，
+ *      换一条船再卸也不行——否则两艘船能把一次冲锋拆成两段；
+ *   3. 只免掉"下船罚站"，不动行动次数：攻击仍受 burst / attacksLeft 约束。
+ *
+ * 落地时一律 `moved: false, acted: false`。原因是**下船必然发生在下一回合**：
+ * 装船占掉船的一次装卸，下船还要再占一次，所以中间一定隔着一个回合边界。
+ * 舱里带着的 `moved` 是上一轮的值，拿它当"这个兵这回合走没走过"就是读旧账了。
  */
 function doUnload(
   s: GameState,
@@ -3217,10 +3316,34 @@ function doUnload(
   if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
   ferry.cargo = load.filter((u) => u.id !== cargoId);
-  s.units.push({ ...cargo, x, y, moved: true, acted: true });
+
+  const cargoDef = utype(s, cargo.type);
+  /**
+   * 这个兵能不能吃「加强渡船」：本回合没行动过，而且这一回合还没吃过。
+   *
+   * 注意判的是**它自己**的行动状态，不是船的。船的 `acted` 管的是
+   * "这条船本回合还能不能再装卸"（上面已经查过），两件事不能混。
+   */
+  const boosted = cargo.acted !== true && cargo.ferryBoostTurn !== s.turn;
+  s.units.push({
+    ...cargo,
+    x,
+    y,
+    // 吃不到加强的照旧罚站（走也不能走、打也不能打）；
+    // 吃到的按新回合处理：这一轮它还没动过，移动力和出手都还在。
+    moved: !boosted,
+    acted: !boosted,
+    ...(boosted ? { ferryBoostTurn: s.turn } : {}),
+  });
   ferry.acted = true;
 
-  pushLog(s, s.current, `${utype(s, cargo.type).name} 在岸边下船`);
+  pushLog(
+    s,
+    s.current,
+    boosted
+      ? `${cargoDef.name} 在岸边下船（加强渡船：本回合仍可行动一次）`
+      : `${cargoDef.name} 在岸边下船`,
+  );
   return { ok: true, state: s };
 }
 
@@ -3824,6 +3947,57 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
 }
 
 /**
+ * 双人热座：把这一批计划交上去，然后把机器让给对面。
+ *
+ * 三条边界，都是"别把别的模式搅进来"：
+ *   · 只在指挥官模式下存在（普通对局没有生产序列，更没有"交计划"这一步）；
+ *   · 只在**两边都是人**时存在——人机局对面是 AI，它不需要排、也不需要等；
+ *   · 不推进回合：`turn` 不动、序列不前移、不发收入。它只做两件事——
+ *     记下"这一方交了"，以及把 `current` 拨到还没交的那一方去排。
+ *
+ * 两边都交齐之后把 `current` 拨回**这一批开始的那个人**（`planStart`），
+ * 界面据此开始按回合交替推进。谁后交谁先动是不能接受的：先后手在这个游戏里
+ * 是要用钱和回合去配平的东西，不能让它由"谁手慢"决定。
+ */
+function doPlanCommit(s: GameState): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
+  if (s.config.aiOpponent === true) {
+    return { ok: false, reason: '人机局里对面由 AI 代管，不需要互等提交' };
+  }
+  if (s.winner) return { ok: false, reason: '对局已结束' };
+
+  const me = s.current;
+  const foe = other(me);
+  const ready = { ...(s.orderReady ?? {}), [me]: true };
+  s.orderReady = ready;
+  // 第一批：记下"从谁开始"，推进时以此为准
+  s.planStart = s.planStart ?? me;
+
+  if (ready[foe] === true) {
+    // 两边都交齐：拨回这一批的开局方，界面开始轮流推进
+    s.current = s.planStart;
+  } else {
+    // 还差对面那一份：只换人，不动回合
+    s.current = foe;
+  }
+  return { ok: true, state: s };
+}
+
+/** 一批推完了：清掉提交标记，让两边重新排下一批 */
+function doPlanEnd(s: GameState): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
+  s.orderReady = {};
+  s.planStart = undefined;
+  return { ok: true, state: s };
+}
+
+/** 两边都交了没有（界面据此决定"还差谁"还是"可以开推"） */
+export function planBothReady(s: GameState): boolean {
+  const r = s.orderReady;
+  return s.config.commanderMode === true && r?.A === true && r?.B === true;
+}
+
+/**
  * 遣散单位 / 拆除建筑。
  *
  * 三条约束：
@@ -4011,6 +4185,195 @@ SKILL_EFFECTS['vanish'] = (c) => {
     return;
   }
   c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
+};
+/**
+ * 招魂（暗夜死灵法师）：付这个兵的生产价格，把本回合倒下的一名友军拉回来。
+ *
+ * 三个刻意的选择：
+ *   · **自动挑最贵的那个**。技能按钮不带选目标（引擎的 HERO_SKILL 没有目标字段），
+ *     而"救便宜的那个"等于替玩家做了一笔亏本买卖——按造价排序，
+ *     最贵的那次牺牲先被拉回来，这是唯一不需要额外操作、也不会被骂的判断。
+ *   · **出场即"本回合不能动"**。走 makeUnit 的老规矩（moved/acted 都是 true），
+ *     否则招魂就成了一次白送的行动，节奏上等于凭空多出一个回合。
+ *   · **一条记录只能复活一次**。不标记的话，同一具尸体能被反复招起来，
+ *     那就不是"复活"而是"无限兵源"，一条技能就能拖死整局。
+ */
+SKILL_EFFECTS['raise-dead'] = (c) => {
+  const owner = c.self.owner;
+  // `turn >= 当前-1`：上一回合（对手刚打完的那一轮）+ 本回合。
+  // 只看"当前 turn"不够用——你的兵基本都死在对面回合里。
+  // 英雄不进名单：全场唯一，招魂再拉一个出来就变成"两个牢大"，
+  // 而"唯一"是英雄这条设计的根。活着的时候不能有两只，死了也不该被造出第二只。
+  const pool = (c.state.fallen ?? []).filter(
+    (r) =>
+      r.owner === owner &&
+      r.turn >= c.state.turn - 1 &&
+      !r.revived &&
+      !!c.state.unitTypes[r.type] &&
+      c.state.unitTypes[r.type]!.hero !== true,
+  );
+  if (pool.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '本轮没有可招魂的友军（英雄不在其列）';
+    return;
+  }
+  // 造价高的排前面：钱是按生产价格付的，先救回最值钱的那一次牺牲
+  const ranked = [...pool].sort(
+    (a, b) =>
+      recruitCost(c.state, owner, c.state.unitTypes[b.type] as UnitTypeDef) -
+      recruitCost(c.state, owner, c.state.unitTypes[a.type] as UnitTypeDef),
+  );
+  const pick = ranked[0] as FallenRecord;
+  const def = c.state.unitTypes[pick.type] as UnitTypeDef;
+  const cost = recruitResCost(c.state, owner, def);
+  const me = c.state.players[owner];
+  if (!canPay(me, cost)) {
+    c.result.ok = false;
+    c.result.reason = `招魂「${def.name}」还差：${missingLabel(me, cost)}`;
+    return;
+  }
+  // 两格以内（2026-10-31 从"相邻一格"放宽）：混战里贴身的四格基本是满的
+  const spot = freeSpotWithin(c.state, c.self, pick.type, 2);
+  if (!spot) {
+    c.result.ok = false;
+    c.result.reason = '两格内没有能站起来的空地';
+    return;
+  }
+  payRes(me, cost);
+  c.api.spawn(c.state, owner, pick.type, spot.x, spot.y);
+  pick.revived = true;
+  c.api.pushLog(
+    c.state,
+    owner,
+    `招魂：${def.name} 重新站起（支付 ${costLabel(cost)}，落位 ${spot.x},${spot.y}）`,
+    true,
+  );
+};
+/**
+ * 圣旗（神圣骑士长）：半径内的友军（含自己）获得护甲、魔抗与阵列。
+ *
+ * 三样东西一起给，是因为它们各自单拎出来都不够看：+3 甲挡不住一轮集火、
+ * +4 魔抗只对法师有用、阵列只免疫溅射。合起来才是"这一片阵线顶住了这一轮"，
+ * 也才对得起一个英雄的一次出手。
+ */
+SKILL_EFFECTS['holy-banner'] = (c) => {
+  const radius = c.skill.radius ?? 2;
+  const armorUp = c.skill.armorUp ?? 3;
+  const magicUp = c.skill.magicResUp ?? 4;
+  let n = 0;
+  for (const t of c.state.units) {
+    if (t.owner !== c.self.owner || t.hp <= 0) continue;
+    if (c.api.distance(t, c.self) > radius) continue;
+    t.buff = {
+      armor: armorUp,
+      magicRes: magicUp,
+      splashImmune: true,
+      // 撑到自己的下个回合开始：要保护的是**对面**那一个回合
+      turns: 1,
+      label: '圣旗',
+    };
+    n += 1;
+  }
+  if (n === 0) {
+    c.result.ok = false;
+    c.result.reason = '半径内没有友军';
+    return;
+  }
+  c.api.pushLog(c.state, c.self.owner, `圣旗：${n} 个友军获得护甲 +${armorUp}、魔抗 +${magicUp}、阵列`);
+};
+
+/**
+ * 圣剑觉醒（圣剑勇者）：永久强化自己，并回一口血。
+ *
+ * 为什么是**永久**而不是"这一回合"：这个英雄的定位就是"越打越强"，
+ * 它没有位移、没有控场，全部价值都压在"给它两三个回合，它就变成另一个兵"。
+ * 加成写在单位上（`atkBonus` / `armorBonus` / `maxHpBonus`），不写兵种表——
+ * 兵种表是这一局的公共表，动了它等于全场同名单位一起变强。
+ */
+SKILL_EFFECTS['ascend'] = (c) => {
+  const atkUp = c.skill.atkUp ?? 8;
+  const armorUp = c.skill.armorUp ?? 2;
+  const hpUp = c.skill.hpUp ?? 30;
+  const heal = c.skill.power ?? 0.3;
+  c.self.atkBonus = (c.self.atkBonus ?? 0) + atkUp;
+  c.self.armorBonus = (c.self.armorBonus ?? 0) + armorUp;
+  c.self.maxHpBonus = (c.self.maxHpBonus ?? 0) + hpUp;
+  // 上限涨了，回血按**新的**上限算：先加上限再回血，这一口才吃得到自己刚长出来的那截
+  const max = maxHpOf(c.state, c.self);
+  const healed = Math.max(1, Math.round(max * heal)) + hpUp;
+  c.self.hp = Math.min(max, c.self.hp + healed);
+  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}、生命上限 +${hpUp}，回复 ${healed} 点`;
+};
+
+/**
+ * 陨卵（邪龙王）：在超大范围内落下一枚魔龙卵，落点周围吃一发暗属性魔法。
+ *
+ * 落点是**自动挑**的：引擎的 HERO_SKILL 没有"目标格"这个字段（所有技能都不带目标），
+ * 所以按"这一发能打出最多伤害"来选——先算每个可站格子里能覆盖到多少敌人、
+ * 各吃多少，再挑总和最高的那个；同样多时取离自己近的，让落点看起来"是它抬手砸下去的"。
+ *
+ * 伤害走魔法段（不吃护甲、只被魔抗挡），再过一遍属性倍率——
+ * 光属性的敌人会吃双倍，这正是邪龙王那条属性弱点的另一半。
+ */
+SKILL_EFFECTS['dragon-egg'] = (c) => {
+  const reach = c.skill.radius ?? 6;
+  const blast = c.skill.power ?? 1;
+  const eggType = 'dragon-egg';
+  if (!c.state.unitTypes[eggType]) {
+    c.result.ok = false;
+    c.result.reason = '这个版本里没有魔龙卵';
+    return;
+  }
+  const foes = c.state.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
+  if (foes.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '范围内没有敌人';
+    return;
+  }
+
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -1;
+  for (let dy = -reach; dy <= reach; dy += 1) {
+    for (let dx = -reach; dx <= reach; dx += 1) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) continue;
+      const x = c.self.x + dx;
+      const y = c.self.y + dy;
+      if (!c.api.canStandAt(c.state, x, y, eggType)) continue;
+      let score = 0;
+      for (const f of foes) {
+        if (Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) > blast) continue;
+        score += magicDamageOf(c.state, c.self, f);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  if (!best || bestScore <= 0) {
+    c.result.ok = false;
+    c.result.reason = '没有能砸到敌人的落点';
+    return;
+  }
+
+  c.api.spawn(c.state, c.self.owner, eggType, best.x, best.y);
+  let hit = 0;
+  let dealt = 0;
+  for (const f of foes) {
+    if (Math.max(Math.abs(f.x - best.x), Math.abs(f.y - best.y)) > blast) continue;
+    const fd = utype(c.state, f.type);
+    const raw = magicDamageOf(c.state, c.self, f);
+    const dmg = Math.max(0, Math.round(applyElementMul(raw, 'dark', fd.weak, fd.resist)));
+    if (dmg <= 0) continue;
+    f.hp -= dmg;
+    hit += 1;
+    dealt += dmg;
+  }
+  sweepDead(c.state);
+  c.result.log =
+    hit > 0
+      ? `陨卵落在 (${best.x},${best.y})：${hit} 个敌人共受 ${dealt} 点暗属性伤害`
+      : `陨卵落在 (${best.x},${best.y})，这一下没砸到人`;
 };
 SKILL_EFFECTS['mitosis'] = (c) => {
   const def = utype(c.state, c.self.type);
@@ -4225,6 +4588,54 @@ function sweepDead(s: GameState): void {
   }
 }
 
+/**
+ * 动作开始前的在册名单：id → 兵种/主人/位置。
+ *
+ * 船里的人也算在册——他们只是换了个地方放，不是死了。漏了这一步，
+ * 每次装船都会在"阵亡名单"里留下一条，招魂就能把船上的人凭空再拉出来一个。
+ */
+function rosterOf(s: GameState): Map<string, FallenRecord> {
+  const out = new Map<string, FallenRecord>();
+  const add = (u: Unit): void => {
+    out.set(u.id, { owner: u.owner, type: u.type, x: u.x, y: u.y, turn: s.turn });
+  };
+  for (const u of s.units) {
+    add(u);
+    for (const c of u.cargo ?? []) add(c);
+  }
+  return out;
+}
+
+/**
+ * 清算这一下动作里"谁没了"，写进 `s.fallen`。
+ *
+ * 用前后对照而不是在每处死亡代码里各写一条：阵亡路径有战斗、反击、
+ * 自爆波及、桥塌落水、城破守军五处，分散写必然漏一处，而漏的那处
+ * 在玩家眼里就是一个说不清的"招魂点了没反应"。
+ */
+function recordDeaths(s: GameState, before: Map<string, FallenRecord>, action: Action): void {
+  // 遣散是自己拆的，不是"倒下"——招魂把它拉回来等于花一次技能退钱
+  if (action.type === 'DISBAND') return;
+  const alive = new Set<string>();
+  for (const u of s.units) {
+    alive.add(u.id);
+    for (const c of u.cargo ?? []) alive.add(c.id);
+  }
+  const fresh: FallenRecord[] = [];
+  for (const [id, rec] of before) {
+    if (!alive.has(id)) fresh.push(rec);
+  }
+  // 只留"刚过去的这一轮"：死亡大多发生在**对手**回合（你的兵是被人打死的），
+  // 严格按"当前 turn"比会变成"轮到你时名单已经清空"，招魂永远扑空。
+  // 所以口径是"上一回合 + 本回合"，正好等于玩家说的"这一轮里倒下的人"。
+  const kept = (s.fallen ?? []).filter((r) => r.turn >= s.turn - 1);
+  if (fresh.length === 0) {
+    if (kept.length !== (s.fallen ?? []).length) s.fallen = kept;
+    return;
+  }
+  s.fallen = [...kept, ...fresh];
+}
+
 /** 中毒/燃烧每回合结算一次，然后把剩余回合数 −1 */
 function tickStatuses(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
@@ -4273,6 +4684,34 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
     delete u.heroBuff;
+    // 技能增益（圣旗）比 heroBuff 活得久：它要保护的是**对面**那一个回合。
+    // 写在 heroBuff 清理的同一处，是因为两者都是"到自己的回合开始就过期"，
+    // 分成两处写早晚会有一天只改了一处。
+    if (u.buff) {
+      const left = (u.buff.turns ?? 1) - 1;
+      if (left > 0) u.buff.turns = left;
+      else delete u.buff;
+    }
+
+    // 孵化（魔龙卵）：按**自己的回合**数，和充能技能一把尺子。
+    // 换型保留血量比例：一颗被打掉半血的卵不该孵出一条满血的龙。
+    const hatch = utype(s, u.type).hatch;
+    if (hatch) {
+      const left = (u.hatchLeft ?? hatch.turns) - 1;
+      if (left > 0) {
+        u.hatchLeft = left;
+      } else {
+        const from = utype(s, u.type);
+        const to = s.unitTypes[hatch.into];
+        if (to) {
+          const ratio = from.maxHp > 0 ? Math.min(1, u.hp / from.maxHp) : 1;
+          u.type = hatch.into;
+          u.hp = Math.max(1, Math.round(to.maxHp * ratio));
+          delete u.hatchLeft;
+          pushLog(s, p, `${from.name} 孵化成了 ${to.name}`, true);
+        }
+      }
+    }
     if (u.status) {
       for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
         if ((u.status[k] ?? 0) <= 0) delete u.status[k];

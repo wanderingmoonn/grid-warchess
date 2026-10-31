@@ -34,6 +34,7 @@ import {
   isAirborne,
   ordersOf,
   orderSitesOf,
+  planBothReady,
   reachableTiles,
   recruitPriceOf,
   recruitSpawnCells,
@@ -63,8 +64,7 @@ import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
-  DRAFT_BAN_MS,
-  DRAFT_PICK_MS,
+  draftMsOf,
   draftInProgress,
   draftPhaseLabel,
   draftSecondsLeft,
@@ -72,7 +72,7 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -121,11 +121,18 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  shouldAutoExpand,
   fetchChat,
   sendChat,
   trimChatBody,
   type ChatSeat,
 } from './net/chat.ts';
+import {
+  PRESENCE_BEAT_MS,
+  countWatchers,
+  fetchPresence,
+  heartbeat,
+} from './net/presence.ts';
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -254,6 +261,18 @@ let recruitPack = '';
  * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
+
+/**
+ * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
+ *
+ * 掉血靠前后两帧的血量差自己算出来，而不是在每处扣血的地方各喊一声——
+ * 扣血路径有交战、反击、溅射、中毒、灼烧、攻城好几条，逐条挂必然漏；
+ * "上一帧它是多少血"这件事只有渲染层知道，放这儿最省事也最不会漏。
+ *
+ * 出手那一侧算不出来（它自己没掉血），所以由 dispatch 记一笔，绘制时消费一次。
+ */
+const hpSeen = new Map<string, number>();
+let lastStrikerId: string | null = null;
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -530,6 +549,15 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+/**
+ * 观战人数的心跳与轮询。
+ *
+ * 和房间轮询分开：房间 15 秒一次是"看有没有新棋"，人数 12 秒一次是"我还在这儿"。
+ * 两者节奏不同、失败也互不影响——心跳挂了不该让棋局同步变慢，反之亦然。
+ */
+let presenceTimer = 0;
+/** 最近一次拉到的观战人数。顶栏重画之后要靠它把数字补回去 */
+let watchCount = 0;
 
 /** 记住"我现在在哪一局房间里"，刷新页面能自己回到那一局 */
 const ROOM_KEY = 'warchess:room-current';
@@ -650,6 +678,9 @@ function panelInput(known?: PlayerView): PanelInput {
     // 底栏那颗按钮在指挥官模式里是"执行一批再交还"的入口，得知道这批打几个回合
     commanderRunning,
     commanderRounds: room ? 1 : CONFIG.commanderSlots,
+    // 热座：底栏那颗按钮变成「提交作战计划」，两边都交完才开推
+    planHotseat: commanderHotseat(),
+    planReady: state.orderReady?.[me()] === true,
     forceMode,
     report: reportPanel(),
   };
@@ -725,6 +756,9 @@ function keepSideScroll(paint: () => void): void {
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
+  // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
+  // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
+  setWatchCount(watchCount);
   const view = playerView(state, me(), spectating());
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
@@ -732,6 +766,24 @@ function render(): void {
     selected && selected.owner === state.current && !selected.acted
       ? Array.from(threatTiles(state, selected))
       : [];
+
+  // 这一帧要抖谁：掉血的（强度 1）+ 刚出手的（0.55，往前一顿）
+  const impacts = new Map<string, number>();
+  {
+    const alive = new Set<string>();
+    for (const u of view.state.units) {
+      alive.add(u.id);
+      const prev = hpSeen.get(u.id);
+      if (prev !== undefined && u.hp < prev) impacts.set(u.id, 1);
+      hpSeen.set(u.id, u.hp);
+    }
+    for (const id of Array.from(hpSeen.keys())) if (!alive.has(id)) hpSeen.delete(id);
+    if (lastStrikerId) {
+      // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
+      if (alive.has(lastStrikerId)) impacts.set(lastStrikerId, 0.55);
+      lastStrikerId = null;
+    }
+  }
 
   renderBoard(boardEl, view, {
     selectedId,
@@ -743,6 +795,7 @@ function render(): void {
     threat,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
+    impacts,
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -1518,7 +1571,8 @@ let draftAnchor = { key: '', at: 0 };
 
 /** 这一轮的时长（禁用 25 秒 / 每次选人 30 秒） */
 function draftPhaseMs(state: GameState): number {
-  return state.draft?.phase === 'pick' ? DRAFT_PICK_MS : DRAFT_BAN_MS;
+  // 时长必须和规则层写 deadline 时用的是同一份（开局面板可以改这两档）
+  return draftMsOf(state);
 }
 
 /**
@@ -1817,6 +1871,7 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  if (action.type === 'ATTACK' || action.type === 'SIEGE') lastStrikerId = action.unitId;
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
   noteFinalFrame();
@@ -2312,14 +2367,20 @@ function onBoardClick(e: Event): void {
   if (unloadPlan) {
     const ferry = state.units.find((u) => u.id === unloadPlan);
     if (ferry?.cargo?.length && coords && distance(ferry, coords) === 1) {
-      dispatch({
+      const cargoId = ferry.cargo[0]!.id;
+      const ok = dispatch({
         type: 'UNLOAD',
         unitId: ferry.id,
-        cargoId: ferry.cargo[0]!.id,
+        cargoId,
         x: coords.x,
         y: coords.y,
       });
       unloadPlan = null;
+      // 加强渡船：下船之后那个兵还能动（本回合没行动过的话），
+      // 顺势把它选中——否则玩家看到的是"人都上岸了，但什么事都做不了"，
+      // 得再点一次才知道它其实还亮着。
+      const landed = ok ? state.units.find((u) => u.id === cargoId) : undefined;
+      if (landed && landed.acted === false) selectUnit(landed);
       return;
     }
     if (ferry) {
@@ -2478,6 +2539,12 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'commander-run':
       void runCommanderBatch();
       return;
+
+    // 热座：交自己这一份。交完还差对面就只换人；两边齐了就开始轮流推进
+    case 'plan-commit': {
+      commitPlan();
+      return;
+    }
 
     case 'zoom-in':
       zoomStep(1);
@@ -2879,6 +2946,15 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    // 空结果里那颗「清掉筛选」：一次把三个维度都放回全部
+    case 'recruit-clear': {
+      recruitQuery = '';
+      recruitPack = '';
+      recruitEra = 0;
+      render();
+      return;
+    }
+
     // 时代的切换规矩和扩展包一致：再点一次当前那一档＝回到全部
     case 'recruit-era': {
       const v = Number(el.dataset.era ?? 0);
@@ -3117,6 +3193,24 @@ function commanderActive(): boolean {
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
 }
 
+/**
+ * 双人热座指挥官：两个人共用一台机器、对面不是 AI、也不是联机。
+ *
+ * 这一档和"人机 / 联机"的区别是**排队这件事本身要不要等对面**：
+ *   · 人机：对面是 AI，我排完直接执行，不用等；
+ *   · 联机：两边各在自己机器上排，房间进度号就是同步点；
+ *   · 热座：两台"人"轮流用同一块屏幕，所以必须先各自排完、再一起开推，
+ *     否则第一个人一按执行，第二个人就只剩看的分。
+ */
+function commanderHotseat(): boolean {
+  return (
+    state.config.commanderMode === true &&
+    room === null &&
+    state.config.aiOpponent !== true &&
+    !watching()
+  );
+}
+
 /** 自己的产兵点：城市 + 军营。`era` 是它现在能产到第几代 */
 function ownSites(): Array<{ id: string; label: string; era: number; city: boolean }> {
   const out: Array<{ id: string; label: string; era: number; city: boolean }> = [];
@@ -3289,7 +3383,10 @@ function renderCommander(): void {
   const sites = orderSitesOf(state, me());
   const slots = CONFIG.commanderSlots;
   const online = room !== null;
-  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}`;
+  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态
+  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${
+    state.orderReady?.A === true ? 'A' : ''
+  }${state.orderReady?.B === true ? 'B' : ''}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -3336,15 +3433,27 @@ function renderCommander(): void {
     </span>`);
   }
 
+  // 热座：这一格按钮是"交计划"，而且要显示"对面交了没有"
+  const hotseat = commanderHotseat();
+  const mineReady = state.orderReady?.[me()] === true;
+  const foeSeat: PlayerId = me() === 'A' ? 'B' : 'A';
+  const foeReady = state.orderReady?.[foeSeat] === true;
+
   commanderEl.innerHTML = `
     <div class="cmd-head">
       <b>参谋部</b>
       <span class="cmd-hint">${
         online
           ? '点自己的城市 → 在右侧点兵种，就排进这条队列；执行一次打完你自己这一回合并提交。'
-          : `点自己的城市 → 在右侧点兵种，就排进这条队列；排好之后点执行，AI 一次打完这 ${slots} 回合。`
+          : hotseat
+            ? `点自己的城市 → 在右侧点兵种，把自己这 ${slots} 回合排完，然后点「提交作战计划」；两边都交齐才按回合轮流推进。`
+            : `点自己的城市 → 在右侧点兵种，就排进这条队列；排好之后点执行，AI 一次打完这 ${slots} 回合。`
       }</span>
-      <span class="cmd-count">已排 ${queue.length} / ${slots}</span>
+      <span class="cmd-count">${
+        hotseat
+          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeReady ? '对方已提交' : '等对方排'}`
+          : `已排 ${queue.length} / ${slots}`
+      }</span>
     </div>
     <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
@@ -3352,8 +3461,16 @@ function renderCommander(): void {
       <button class="btn btn-sm" data-cmd="idle" ${queue.length >= slots ? 'disabled' : ''}
         title="在序列末尾排一格「这一回合什么都不造」：攒钱、等时代、等对面先动手">空过一回合</button>
       <button class="btn btn-sm" data-cmd="clear" ${queue.length > 0 ? '' : 'disabled'}>清空</button>
-      <button class="btn btn-primary" data-cmd="run">${
-        online ? '执行本回合并提交' : `执行 ${slots} 回合`
+      <button class="btn btn-primary" data-cmd="run" ${
+        hotseat && mineReady ? 'disabled' : ''
+      }>${
+        online
+          ? '执行本回合并提交'
+          : hotseat
+            ? mineReady
+              ? '已提交，等对方'
+              : '提交作战计划'
+            : `执行 ${slots} 回合`
       }</button>
     </div>
   `;
@@ -3372,7 +3489,8 @@ commanderEl.addEventListener('click', (e) => {
   const cmd = el.closest<HTMLElement>('[data-cmd]')?.dataset.cmd;
   if (!cmd) return;
 
-  if (cmd === 'run') void runCommanderBatch();
+  // 热座：这一颗按钮是"交计划"，不是"开打"（两边都交完才开推）
+  if (cmd === 'run') commanderHotseat() ? commitPlan() : void runCommanderBatch();
   if (cmd === 'idle') enqueueOrder(ORDER_IDLE, '');
   if (cmd === 'stop') {
     // 令牌一换，所有正在跑的 AI 循环下一步就自己退出
@@ -3432,6 +3550,73 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
 }
 
 /**
+ * 双人热座：提交这一方的作战计划（底栏按钮和参谋部那颗按钮共用）。
+ *
+ * 提交**不推进回合**：只把"这一方交了"记下来，然后换人排。
+ * 两边齐了才真正开推——这正是"各自排五回合、齐了再轮流推"的意思。
+ */
+function commitPlan(): void {
+  if (!commanderHotseat() || commanderRunning) return;
+  const r = applyAction(state, { type: 'PLAN_COMMIT' });
+  if (!r.ok) {
+    toast(r.reason);
+    return;
+  }
+  state = r.state;
+  clearSelection();
+  saveMatch(state);
+  render();
+  if (planBothReady(state)) void runCommanderResolve();
+}
+
+/**
+ * 双人热座：两份计划都交齐了，按回合轮流推进。
+ *
+ * 一次循环 = 一个半回合（`runAiTurn` 结尾自己会 END_TURN，顺带把这一方的
+ * 序列前移一格）。所以"五回合轮着来"就是 5 × 2 次调用，不用自己数谁先谁后：
+ * `PLAN_COMMIT` 已经把 `current` 拨回这一批的开局方，END_TURN 负责交替。
+ *
+ * 每一方读的都是**自己那份**队列（`commanderBudget(state.current)`），
+ * 于是 A 排的两个火枪、B 排的三艘船会各自按自己的顺序落到各自那五个回合里。
+ */
+async function runCommanderResolve(): Promise<void> {
+  if (commanderRunning) return;
+  const token = ++aiToken;
+  clearSelection();
+  aiPaused = false;
+  commanderRunning = true;
+  commanderRound = 0;
+  commanderSig = '';
+  render();
+
+  try {
+    for (let r = 0; r < CONFIG.commanderSlots; r++) {
+      for (let half = 0; half < 2; half++) {
+        if (token !== aiToken || state.winner || room) break;
+        commanderRound = r + 1;
+        commanderSig = '';
+        renderCommander();
+        await runAiTurn(token, commanderBudget(state.current), BATCH_DELAY);
+      }
+      if (token !== aiToken || state.winner) break;
+    }
+  } finally {
+    // 标记要清在"跑完之后"：清早了，进场那一刻两边又变成"未提交"，
+    // 面板立刻又能点提交，和正在跑的这批撞在一起。
+    if (token === aiToken) {
+      const end = applyAction(state, { type: 'PLAN_END' });
+      if (end.ok) state = end.state;
+    }
+    commanderRunning = false;
+    commanderRound = 0;
+    commanderSig = '';
+  }
+
+  saveMatch(state);
+  render();
+}
+
+/**
  * 把计划一次性执行掉。
  *
  * 这是指挥官模式的本意：**减负**。玩家一次排 5 格、点一次，然后看结果，
@@ -3446,6 +3631,8 @@ function commanderBudget(player: PlayerId): Partial<AiBudget> {
  * （谁都没提交）。所以联机只推进自己这一回合，走完立刻提交，然后等对面。
  */
 async function runCommanderBatch(): Promise<void> {
+  // 热座不走这条：那边必须先两边都交计划再开推，见 commitPlan / runCommanderResolve
+  if (commanderHotseat()) return commitPlan();
   if (!commanderActive() || commanderRunning) return;
 
   const online = room !== null;
@@ -4038,6 +4225,10 @@ function detachRoom(): void {
   if (!room) return;
   window.clearInterval(roomTimer);
   roomTimer = 0;
+  window.clearInterval(presenceTimer);
+  presenceTimer = 0;
+  watchCount = 0;
+  setWatchCount(0);
   room = null;
   dirty = false;
   rememberRoom(null);
@@ -4063,6 +4254,37 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
 function startRoomPolling(): void {
   window.clearInterval(roomTimer);
   roomTimer = window.setInterval(() => void pollRoom(), 15000);
+  startPresence();
+}
+
+/**
+ * 报送"我还在这儿"，并把这一间房的人数拉回来。
+ *
+ * 顺序很重要：先心跳再拉名单。反过来的话，自己那一条要等到下一轮才会出现在
+ * 名单里，观战者看到的数字永远比自己实际的身份慢一拍（甚至显示 0）。
+ */
+function startPresence(): void {
+  window.clearInterval(presenceTimer);
+  presenceTimer = 0;
+  if (!room) {
+    watchCount = 0;
+    setWatchCount(0);
+    return;
+  }
+  void syncPresence();
+  presenceTimer = window.setInterval(() => void syncPresence(), PRESENCE_BEAT_MS);
+}
+
+async function syncPresence(): Promise<void> {
+  const seat = room;
+  if (!seat) return;
+  await heartbeat(seat.code, seat.spectator ? 'watch' : 'seat', chatMyName());
+  const res = await fetchPresence(seat.code);
+  // 期间换了房间/退出：这一份名单已经不是眼前这间房的了
+  if (room?.code !== seat.code) return;
+  if (!res.ok) return;
+  watchCount = countWatchers(res.rows, Date.now());
+  setWatchCount(watchCount);
 }
 
 let draftPollTimer = 0;
@@ -4263,7 +4485,42 @@ function watchRoom(code: string, snapshot: RoomSnapshot): void {
  * 在这两种局里放一个永远没回应的输入框，比没有更让人困惑。
  * 观战位**有**（这正是它存在的意义之一）：看局的人也能说话，两边都看得见。
  */
-let chatOpen = false;
+/**
+ * 聊天框的三种状态。
+ *
+ *   open   —— 开着，正常收发；
+ *   folded —— 折叠：只留右下角那颗按钮，**对方一说话就自动展开**；
+ *             这是"暂时收起来，但别错过他这句话"。
+ *   muted  —— 屏蔽发言：不自动展开、不计数、不再提示；
+ *             这是"这一局我不想听对面说话"，是社交选择，不是界面状态。
+ *
+ * 以前只有一个 `chatOpen` 布尔：关掉之后既不会自动弹，也不再有未读提示，
+ * 两件不同的事被压成了同一件。
+ */
+type ChatMode = 'open' | 'folded' | 'muted';
+const CHAT_MODE_KEY = 'warchess:chat-mode';
+
+function loadChatMode(): ChatMode {
+  try {
+    const raw = localStorage.getItem(CHAT_MODE_KEY);
+    if (raw === 'open' || raw === 'muted' || raw === 'folded') return raw;
+  } catch {
+    // 隐私模式读不到就用默认值
+  }
+  // 默认折叠：收着，但对方开口时会自己弹出来——比"默认关死"更像有人在家
+  return 'folded';
+}
+
+function saveChatMode(mode: ChatMode): void {
+  try {
+    localStorage.setItem(CHAT_MODE_KEY, mode);
+  } catch {
+    // 写不进去就只在本次会话内生效
+  }
+}
+
+let chatMode: ChatMode = loadChatMode();
+const chatIsOpen = (): boolean => chatMode === 'open';
 /**
  * 已经收到的消息 + "拉到哪儿了"。
  *
@@ -4312,8 +4569,13 @@ function ensureChatDock(): HTMLElement {
       <header class="chat-head" title="按住这里可以拖动面板">
         <b>房间聊天</b>
         <span class="chat-who"></span>
-        <button class="chat-x" data-chat="close" aria-label="收起">×</button>
+        <button class="chat-x chat-fold" data-chat="fold" title="折叠：收起来，对方说话时自动展开" aria-label="折叠">–</button>
+        <button class="chat-x chat-mute" data-chat="mute" title="屏蔽发言：不再提示，也不自动展开" aria-label="屏蔽发言">屏蔽</button>
       </header>
+      <div class="chat-banner" hidden>
+        已屏蔽对方的发言 —— 新消息不会自动弹出，也不会计数。
+        <button class="link-btn" data-chat="unmute" type="button">恢复</button>
+      </div>
       <div class="chat-log"></div>
       <form class="chat-send">
         <input class="chat-input" type="text" maxlength="${CHAT_MAX_LEN}"
@@ -4327,7 +4589,9 @@ function ensureChatDock(): HTMLElement {
   el.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest<HTMLElement>('[data-chat]')?.dataset.chat;
     if (act === 'toggle') openChat();
-    if (act === 'close') closeChat();
+    if (act === 'fold') foldChat();
+    if (act === 'mute') muteChat();
+    if (act === 'unmute') openChat();
   });
 
   // 输入法组字的时候按 Enter 是"选词"，不是"发送"（见 ui/chat-input.ts）
@@ -4455,15 +4719,26 @@ function renderChatDock(): void {
   const panel = el.querySelector<HTMLElement>('.chat-panel')!;
   if (!room) {
     // 退出房间：把面板收掉，记录清空——换到另一局时不该看见上一局的对话
-    if (chatOpen) closeChat();
+    if (chatIsOpen()) foldChat();
     chatFeed.reset();
     chatNotice = '';
     chatUnread = 0;
   }
   fab.hidden = !room;
-  panel.hidden = !(room && chatOpen);
-  fab.textContent = chatUnread > 0 ? `聊天 · ${chatUnread}` : '聊天';
-  fab.classList.toggle('has-new', chatUnread > 0);
+  panel.hidden = !(room && chatIsOpen());
+  panel.classList.toggle('chat-muted', chatMode === 'muted');
+  const muted = chatMode === 'muted';
+  fab.classList.toggle('is-muted', muted);
+  fab.classList.toggle('has-new', !muted && chatUnread > 0);
+  fab.textContent = muted
+    ? '聊天 · 已屏蔽'
+    : chatUnread > 0
+      ? `聊天 · ${chatUnread}`
+      : '聊天';
+  // 被屏蔽时面板里要有一句话和一个开关：否则玩家只能靠"再点一次那颗按钮"
+  // 去猜自己是不是屏蔽了对方
+  const banner = el.querySelector<HTMLElement>('.chat-banner');
+  if (banner) banner.hidden = !muted;
 }
 
 /** 只重画日志那一块（壳子里的输入框不动） */
@@ -4485,7 +4760,8 @@ function paintChat(): void {
 
 function openChat(): void {
   if (!room) return;
-  chatOpen = true;
+  chatMode = 'open';
+  saveChatMode(chatMode);
   chatUnread = 0;
   renderChatDock();
   paintChat();
@@ -4499,8 +4775,27 @@ function openChat(): void {
   chatTimer = window.setInterval(() => void pollChat(), 4000);
 }
 
-function closeChat(): void {
-  chatOpen = false;
+/**
+ * 折叠：面板收起来，但**继续拉消息**。
+ *
+ * 和"屏蔽"的关键差别就在这里——折叠期间必须还在轮询，否则对面说了话，
+ * 我们根本不会知道，也就不可能"自动展开"。轮询停不停是这两种模式的分水岭。
+ */
+function foldChat(): void {
+  chatMode = 'folded';
+  saveChatMode(chatMode);
+  chatUnread = 0;
+  renderChatDock();
+  if (!room) return;
+  window.clearInterval(chatTimer);
+  chatTimer = window.setInterval(() => void pollChat(), 4000);
+}
+
+/** 屏蔽发言：停掉轮询、清掉未读，面板也不弹 */
+function muteChat(): void {
+  chatMode = 'muted';
+  saveChatMode(chatMode);
+  chatUnread = 0;
   window.clearInterval(chatTimer);
   chatTimer = 0;
   renderChatDock();
@@ -4508,7 +4803,8 @@ function closeChat(): void {
 
 async function pollChat(): Promise<void> {
   const seat = room;
-  if (!seat || !chatOpen) return;
+  // 屏蔽时连拉都不拉：既然不看，就不必每 4 秒问一次服务器
+  if (!seat || chatMode === 'muted') return;
   if (document.visibilityState !== 'visible') return;
   const res = await fetchChat(seat.code, chatFeed.lastId);
   if (room?.code !== seat.code) return; // 期间退出了房间
@@ -4529,7 +4825,21 @@ async function pollChat(): Promise<void> {
   }
   // 水位由这一页推（见 ChatFeed.accept）；这里是唯一推进它的地方
   const fresh = chatFeed.accept(res.lines);
-  if (!chatOpen) chatUnread += fresh.length;
+  if (!chatIsOpen()) {
+    // 折叠时：只有**对方**开口才自动展开。自己刚发出去那条（乐观显示）
+    // 也会从服务器拉回来，拿它触发展开就等于"我说话把我自己的面板弹开"。
+    const mine = chatSeat();
+    const foeSpoke = shouldAutoExpand(chatMode, fresh, mine);
+    chatUnread += fresh.length;
+    renderChatDock();
+    if (foeSpoke) {
+      openChat();
+      // 自动展开时给一句话，解释"它为什么自己弹开了"
+      chatNotice = '对方刚发来一条消息，已为你展开';
+      paintChat();
+      return;
+    }
+  }
   paintChat();
 }
 

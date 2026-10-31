@@ -82,6 +82,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       commanderMode: initial.commanderMode === true,
       godMode: initial.godMode === true,
       draftMode: initial.draftMode === true,
+      // 两档选卡时限：不传就是规则层那对默认值（禁用 25s / 选人 30s）
+      draftBanMs: initial.draftBanMs,
+      draftPickMs: initial.draftPickMs,
       // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
       recordDetail: loadRecordPref() ?? initial.recordDetail === true,
@@ -349,6 +352,36 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   ? '开局先停在「等待开局」：那里可以建房、把邀请链接发给朋友，也可以直接本机开打；点「开始选卡」之后双方同时禁用（互相看不见），再按蛇形顺序轮流选人。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补；右上角可随时跳过或退出。'
                   : '打开之后，这一局能造什么由开局的选卡决定——下方逐个勾选兵种在这个模式下不再生效。'
               }</div>
+              ${
+                config.draftMode
+                  ? `<div class="field-label" style="margin-top:10px">
+                       禁用时限 <span class="field-hint">只看一眼名单的事，给短一点</span>
+                     </div>
+                     <div class="chip-row">
+                       ${[15_000, 25_000, 40_000, 60_000]
+                         .map(
+                           (ms) =>
+                             `<button class="chip ${
+                               (config.draftBanMs ?? 25_000) === ms ? 'active' : ''
+                             }" data-draft-ban="${ms}">${ms / 1000} 秒</button>`,
+                         )
+                         .join('')}
+                     </div>
+                     <div class="field-label" style="margin-top:10px">
+                       选人时限 <span class="field-hint">每一手单独计时，选出六轮</span>
+                     </div>
+                     <div class="chip-row">
+                       ${[20_000, 30_000, 45_000, 75_000]
+                         .map(
+                           (ms) =>
+                             `<button class="chip ${
+                               (config.draftPickMs ?? 30_000) === ms ? 'active' : ''
+                             }" data-draft-pick="${ms}">${ms / 1000} 秒</button>`,
+                         )
+                         .join('')}
+                     </div>`
+                  : ''
+              }
             </section>
 
             <section class="field">
@@ -432,6 +465,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           config.godMode = false;
           config.commanderMode = false;
         }
+        paint();
+        return;
+      }
+
+      // 两档时限分开存：禁用和选人的节奏不一样，共用一个旋钮必然其中一头难受
+      const banBtn = target.closest<HTMLElement>('[data-draft-ban]');
+      if (banBtn?.dataset.draftBan) {
+        config.draftBanMs = Number(banBtn.dataset.draftBan);
+        paint();
+        return;
+      }
+      const pickBtn = target.closest<HTMLElement>('[data-draft-pick]');
+      if (pickBtn?.dataset.draftPick) {
+        config.draftPickMs = Number(pickBtn.dataset.draftPick);
         paint();
         return;
       }

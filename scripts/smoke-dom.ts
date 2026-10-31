@@ -318,6 +318,60 @@ check('同一局面重画：格子、棋子、城市的节点身份不变', () =
   }
 });
 
+check('受击：血条立刻缩短，橙色残留随后淡出，同一帧会抖一下', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 9091);
+  try {
+    const u = st.units.find((x) => x.owner === 'A');
+    assert.ok(u, '开局应该有 A 方单位');
+
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    const node = host.querySelector<HTMLElement>(`.unit[data-id="${u.id}"]`);
+    assert.ok(node, '第一帧应该有这个单位');
+    assert.ok(node.querySelector('.hp-now'), '血条要有"当前"这一层');
+    const lag0 = node.querySelector<HTMLElement>('.hp-lag');
+    assert.ok(lag0, '血条还要有"残留"这一层');
+    assert.equal(lag0.classList.contains('chipped'), false, '没挨打就不该有残留动画');
+
+    // 掉到一半：绿条立刻变短，橙条从满血宽度开始追
+    u.hp = Math.max(1, Math.floor(st.unitTypes[u.type]!.maxHp / 2));
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    const node2 = host.querySelector<HTMLElement>(`.unit[data-id="${u.id}"]`);
+    assert.equal(node2, node, '节点还是同一个（增量补丁，不重建）');
+    const lag = node2!.querySelector<HTMLElement>('.hp-lag')!;
+    assert.ok(lag.classList.contains('chipped'), '掉血要触发橙色残留');
+    assert.equal(lag.style.getPropertyValue('--chip-from'), '100%', '残留从旧血量（满血）开始');
+    assert.ok(
+      Math.abs(Number(lag.style.getPropertyValue('--chip-to').replace('%', '')) - 50) <= 1,
+      '残留的终点是新血量',
+    );
+
+    // 回血不该再演一遍残留（否则玩家会以为又挨了一下）
+    u.hp = st.unitTypes[u.type]!.maxHp;
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    assert.equal(
+      node!.querySelector<HTMLElement>('.hp-lag')!.classList.contains('chipped'),
+      false,
+      '回血不该出现残留条',
+    );
+
+    // impacts：同一帧里指定要抖的单位会被记账（jsdom 没有 animate，记账这一步仍要发生）
+    const stampBefore = node!.dataset.impactAt;
+    const bumped = new Map([[u.id, 1]]);
+    renderBoard(host, playerView(st, 'A'), { ...emptyUi, impacts: bumped });
+    assert.ok(node!.dataset.impactAt, '挨打要在这个单位上记一笔');
+    assert.notEqual(node!.dataset.impactAt, stampBefore, '新的一次绘制要重新记，不能沿用上一笔');
+    // 没有 impacts 的一帧不该再记：否则同一份状态重绘会一直抖
+    const stampAfter = node!.dataset.impactAt;
+    renderBoard(host, playerView(st, 'A'), emptyUi);
+    assert.equal(node!.dataset.impactAt, stampAfter, '没有新的打击就不该再抖');
+  } finally {
+    host.remove();
+  }
+});
+
 check('高亮变了要真的变，节点还是同一个', () => {
   const host = doc.createElement('div');
   host.className = 'board';
@@ -2369,7 +2423,7 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
       startEra: 4,
       aiOpponent: false,
       aiAlly: false,
-      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-knights'],
       enabledUnits: Object.keys(UNIT_TYPES),
     },
     505,
@@ -2452,6 +2506,69 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   );
   // 切包不该改变"能买什么"，只改变"看到什么"：两档加起来不会超过全部
   assert.ok(core.length + beasts.length <= all, '筛选只是过滤，不该凭空多出兵种');
+});
+
+check('筛选把整页清空时，筛选栏与「清掉筛选」都必须还在（换城不再锁死）', () => {
+  const st = createMatch(
+    {
+      size: 14,
+      startEra: 4,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['fantasy-core', 'fantasy-knights'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    619,
+  );
+  st.current = 'A';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '找不到 A 的城市');
+
+  const host = doc.createElement('div');
+  const paint = (pack = '', era = 0) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city!.id,
+      selectedCampId: null,
+      selectedTile: null,
+      recruitPack: pack,
+      recruitEra: era,
+    });
+  const count = () => host.querySelectorAll('[data-act="recruit"]').length;
+
+  // 把城压到古典：骑士团一个能造的都没有（它的兵都在 2 代以上）
+  city!.era = 1;
+  paint();
+  const before = count();
+  assert.ok(before > 0, '古典城市本来是有兵可造的');
+
+  // 复现：筛一个这座城市造不了的包 → 空列表
+  paint('fantasy-knights');
+  assert.equal(count(), 0, '前提：这个筛选确实把这页清空了');
+
+  // 关键：那颗"生效中"的 chip 必须还在，否则玩家没有出口
+  const chip = host.querySelector<HTMLElement>(
+    '[data-act="recruit-pack"][data-pack="fantasy-knights"]',
+  );
+  assert.ok(chip, '生效中的包筛选必须留在筛选栏里');
+  assert.equal(chip!.className.includes('active'), true, '它还要是亮着的');
+  const clear = host.querySelector<HTMLElement>('[data-act="recruit-clear"]');
+  assert.ok(clear, '空结果里要给一颗"清掉筛选"');
+  assert.ok((host.textContent ?? '').includes('清掉筛选'), '提示句里也要提到它');
+
+  // 时代那一维同理：筛一个城造不出的时代，也要留按钮
+  paint('', 6);
+  assert.equal(count(), 0, '前提：六代兵在这座古典城里造不出来');
+  assert.ok(
+    host.querySelector('[data-act="recruit-era"][data-era="6"]'),
+    '生效中的时代筛选必须留在筛选栏里',
+  );
+
+  // 清掉之后回到全部
+  paint();
+  assert.equal(count(), before, '回到全部时兵种数应该和一开始一致');
 });
 
 check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回全部', () => {
@@ -2555,6 +2672,56 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
     assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
     assert.ok(host.innerHTML.includes('古典'), '空态要写清生效了时代筛选');
   }
+});
+
+check('热座指挥官：底栏是「提交作战计划」，交完就变「已提交，等对方」', () => {
+  // 热座 = 一台机器两个人、对面不是 AI。这时底栏那颗按钮不能是「执行 5 回合」——
+  // 第一个人一按，第二个人就只剩看的分。
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      commanderMode: true,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    611,
+  );
+  st.current = 'A';
+  const host = doc.createElement('div');
+  const paint = (planHotseat: boolean, planReady: boolean) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      commander: true,
+      planHotseat,
+      planReady,
+    });
+
+  paint(true, false);
+  const commit = host.querySelector<HTMLButtonElement>('[data-act="plan-commit"]');
+  assert.ok(commit, '热座里底栏应该是"提交作战计划"');
+  assert.equal(commit!.textContent?.trim(), '提交作战计划');
+  assert.equal(commit!.disabled, false, '轮到你就该能交');
+  assert.equal(host.querySelector('[data-act="commander-run"]'), null, '热座不该再有"执行 N 回合"');
+
+  paint(true, true);
+  const again = host.querySelector<HTMLButtonElement>('[data-act="plan-commit"]');
+  assert.ok((again!.textContent ?? '').includes('已提交'), `交完要写「已提交」，实际：${again!.textContent}`);
+  assert.equal(again!.disabled, true, '交过了就别让他再交一次');
+
+  // 人机指挥官维持原样：一次打完一批再交还
+  paint(false, false);
+  const batch = host.querySelector<HTMLButtonElement>('[data-act="commander-run"]');
+  assert.ok(batch, '人机局照旧是"执行 N 回合"');
+  assert.ok((batch!.textContent ?? '').includes('回合'));
+  assert.equal(host.querySelector('[data-act="plan-commit"]'), null);
 });
 
 check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {

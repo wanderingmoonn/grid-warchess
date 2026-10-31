@@ -138,6 +138,13 @@ export interface PanelInput {
   /** 一批打几个回合：单机 5、联机 1（对面是人的时候只推自己这一回合） */
   commanderRounds?: number;
   /**
+   * 双人热座指挥官：两个人轮流用同一台机器，所以底栏那颗按钮是「提交作战计划」，
+   * 而不是「执行 5 回合」——两边都交完才开推。
+   */
+  planHotseat?: boolean;
+  /** 自己这一批交了没有（热座模式用来把按钮文案换成「已提交，等对方」） */
+  planReady?: boolean;
+  /**
    * 结算卡上的「对局数据」区块。只有一局打完才传，别的时候是 undefined。
    *
    * 默认关：上传对局数据这件事必须玩家自己勾、自己点，
@@ -310,9 +317,21 @@ function panelHtml(input: PanelInput): string {
          * 执行一批（5 回合 / 联机 1 回合）再交还，和顶部那颗按钮同源。
          */
         input.commander === true
-          ? `<button class="btn btn-primary btn-block" data-act="commander-run"
-               ${myTurn && input.commanderRunning !== true ? '' : 'disabled'}>
-               ${input.commanderRunning === true ? '参谋部正在执行…' : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`}
+          ? `<button class="btn btn-primary btn-block" data-act="${input.planHotseat === true ? 'plan-commit' : 'commander-run'}"
+               ${
+                 myTurn &&
+                 input.commanderRunning !== true &&
+                 !(input.planHotseat === true && input.planReady === true)
+                   ? ''
+                   : 'disabled'
+               }>
+               ${
+                 input.commanderRunning === true
+                   ? '参谋部正在执行…'
+                   : input.planHotseat === true
+                     ? `${input.planReady === true ? '已提交，等对方' : '提交作战计划'}`
+                     : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`
+               }
              </button>`
           : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
                ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
@@ -1053,7 +1072,14 @@ function emptyRecruitHint(
   if (era !== ERA_ALL) only.push(eraLabel(era));
   const cond = only.length > 0 ? `（只看「${only.join('」「')}」）` : '';
   const head = q ? `没有匹配「${escapeHtml(q)}」的兵种${cond}` : `这一档没有能造的兵${cond}`;
-  return `<div class="hint">${head}。${subject}在售 ${total} 种，清掉筛选看全部。</div>`;
+  // 给一颗**能点的**按钮，而不是只说一句"清掉筛选看全部"。
+  // 换到一座时代更低的城时，筛选可能把整页清空；这时如果筛选栏恰好退化消失，
+  // 玩家就只剩"刷新页面"这一条路了——那不该是一个筛选项的代价。
+  const canClear = !!q || !!pack || era !== ERA_ALL;
+  const clear = canClear
+    ? `<button class="link-btn" data-act="recruit-clear" type="button">清掉筛选</button>`
+    : '';
+  return `<div class="hint">${head}。${subject}在售 ${total} 种，${clear || '清掉筛选'}看全部。</div>`;
 }
 
 /**
@@ -1417,6 +1443,21 @@ export function seasonLabel(turn: number): string {
   return `${SEASON_NAME[season]} · 剩 ${left} 回合`;
 }
 
+/**
+ * 顶栏上那个"观战 N 人"。
+ *
+ * 为什么是由外面塞进来、而不是从 `PlayerView` 里读：观战人数不是对局状态，
+ * 它随别人的浏览器开合而变，不该混进存档、也不该参与任何规则计算。
+ * 所以它只活在这一层 DOM 上，谁拉到谁写。
+ */
+export function setWatchCount(n: number): void {
+  const el = document.querySelector<HTMLElement>('[data-ref="watch"]');
+  if (!el) return;
+  const text = n > 0 ? `观战 ${n} 人` : '';
+  el.hidden = n <= 0;
+  if (el.textContent !== text) el.textContent = text;
+}
+
 export function topbarShell(): string {
   return `
     <div class="brand">时代与回旋镖 <small>回合制 · 1v1</small></div>
@@ -1427,6 +1468,7 @@ export function topbarShell(): string {
     </div>
     <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
     <button class="room-pill" data-act="online" data-ref="room" title="当前房间" hidden></button>
+    <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
       <button class="btn btn-sm" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>

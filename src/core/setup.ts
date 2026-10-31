@@ -128,7 +128,13 @@ export function createMatch(
   const extraUnits: Record<string, UnitTypeDef> = { ...customUnits };
   for (const id of config.expansionIds) {
     if (!liveExpansions.has(id)) continue;
-    for (const u of expansionById(id)?.units ?? []) extraUnits[u.id] = { ...u };
+    for (const u of expansionById(id)?.units ?? []) {
+      // 单位级的额外前置（`requiresPack`）：圣剑勇者、邪龙王要「现代」那一套才成立。
+      // 这里直接不收，而不是收进来再在产线上标灰——不存在的兵种不该在选卡池、
+      // AI 报价、规则书里各留下一个"看着能买、点了没反应"的影子。
+      if (u.requiresPack && !liveExpansions.has(u.requiresPack)) continue;
+      extraUnits[u.id] = { ...u };
+    }
   }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
@@ -309,6 +315,10 @@ export function createMatch(
       godMode: config.godMode === true,
       // 选卡模式要活进 config：读档/联机之后界面才知道"这一局有 BP"
       draftMode: config.draftMode === true,
+      // 两档选卡时限同样要活进 config：规则写 deadline 和界面倒计时都读这里。
+      // 没填就不写字段，读出来自然回落 DRAFT_BAN_MS / DRAFT_PICK_MS 的默认值。
+      ...(config.draftBanMs !== undefined ? { draftBanMs: config.draftBanMs } : {}),
+      ...(config.draftPickMs !== undefined ? { draftPickMs: config.draftPickMs } : {}),
       // 逐回合摘要的开关必须活进 state.config：
       // 这个对象的字段是**逐个白名单抄的**，漏一个就等于那个开关在开局瞬间被吃掉。
       // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，
@@ -354,50 +364,6 @@ export function createMatch(
       open: true,
       text: `选卡模式：兵种池 ${state.draft.pool.length} 个，各禁 ${state.draft.banSlots} 个、各选 ${state.draft.pickSlots} 个`,
     });
-  }
-
-  // 开局编制类扩展：整批换掉默认的那套开局部队。
-  //
-  // 放在 state 建好之后、onMatchStart 之前：开局钩子里（大征兵那类）会读
-  // "这局开局给了什么"，如果它先跑，看到的就是默认那五个，跟实际摆出来的对不上。
-  for (const e of activeExpansions(state)) {
-    const roster = e.hooks.startRoster?.({ state });
-    if (!roster) continue;
-    state.units = [];
-    for (const owner of ['A', 'B'] as PlayerId[]) {
-      const list = roster[owner] ?? [];
-      const ownCity = state.cities.find((c) => c.owner === owner);
-      if (!ownCity) continue;
-      for (const type of list) {
-        const def = state.unitTypes[type];
-        if (!def) continue;
-        const spot = freeSpotNear(state.tiles, state.w, state.h, ownCity, state.units);
-        if (!spot) continue;
-        state.units.push({
-          id: `u${state.nextUnitSeq++}`,
-          type: def.id,
-          owner,
-          x: spot.x,
-          y: spot.y,
-          hp: def.maxHp,
-          kills: 0,
-          moved: false,
-          acted: false,
-        });
-      }
-    }
-    // 日志写"这一局到底发了什么"，而不是写死一句话：
-    // 以后再有扩展换开局编制，这句话不能变成谎话。
-    const names = (ids: string[] | undefined): string =>
-      (ids ?? []).length > 0
-        ? (ids ?? []).map((id) => state.unitTypes[id]?.name ?? id).join(' + ')
-        : '无';
-    state.log.push({
-      turn: 1,
-      player: 'A',
-      text: `${e.name}：${state.players.A.name} ${names(roster.A)}，${state.players.B.name} ${names(roster.B)}`,
-    });
-    break;
   }
 
   // "过河只能架桥"这种事必须开局就说清楚。

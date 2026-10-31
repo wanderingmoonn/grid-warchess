@@ -42,6 +42,7 @@ import {
   incomeResOf,
   ordersOf,
   orderSitesOf,
+  airLayer,
   other,
   previewAttack,
   reachableTiles,
@@ -698,6 +699,24 @@ const WATER_MIN_SHARE = 0.08;
 
 /** 水域只是"将将够"的时候，水军只当补充，不当主力 */
 const WATER_GOOD_SHARE = 0.14;
+
+/**
+ * 这片水值不值得养海军：0 = 船是奢侈品，1 = 船就是路。
+ *
+ * 以前采购里对水军只有两行固定减分（-8，水少时再 -10），等于默认"船没用"。
+ * 但"没用"和"是唯一的路"是两件事：陆路走不到敌方城时，没有船这一局根本推不过去。
+ * 判据分三档，宁可粗也不能漏掉第一档：
+ *   · 陆路不通 → 1（真正的刚需）
+ *   · 水域宽 → 0.5（船有回旋余地，能绕后、能抢浅滩）
+ *   · 有水但窄 → 0.2（点缀，不改打法）
+ */
+function seaDemand(s: GameState, me: PlayerId): number {
+  const wet = waterShare(s);
+  if (wet < WATER_MIN_SHARE) return 0;
+  if (!canReachEnemyByLand(s, me)) return 1;
+  if (wet >= WATER_GOOD_SHARE) return 0.5;
+  return 0.2;
+}
 
 function escapeRoutes(
   s: GameState,
@@ -1436,7 +1455,8 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
   let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35));
-  score += CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
+  // 空中单位不吃地形掩体，AI 也就不该为了"站高地"去挪它
+  score += airLayer(def) ? 0 : CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
   let nextAttack = 0, nowAttack = 0;
   let killed: string | undefined;
   if (canAttack(unit)) {
@@ -1630,8 +1650,8 @@ function scoreMove(
     score += (before - after) * 3.5;
   }
 
-  // 站高地
-  score += CONFIG.terrainDef[tile.terrain] * 2;
+  // 站高地（空中单位无意义）
+  score += airLayer(utype(s, unit.type)) ? 0 : CONFIG.terrainDef[tile.terrain] * 2;
 
   // 挪过去就能打到人 → 很值（这就是"接敌"的全部意义）。
   // 已经接上火的就不再给这份奖励，否则"往敌人方向平移一格"永远比开火划算。
@@ -2266,12 +2286,116 @@ function unitCandidates(
     if (best) out.push(best);
   }
 
+  // ── 海军：装卸 ──
+  // 只对运输船生成；别的船走上面的开火/走位就够了
+  if (def.domain === 'water' && def.transport) {
+    out.push(...navalTransferCandidates(s, unit, all));
+  }
+
+  return out;
+}
+
+/**
+ * 这一格在"谁的半场"上：正数＝离敌方城市更近，负数＝离自家城市更近。
+ *
+ * 装卸判据全用它，是因为**"我这一侧 / 对面那一侧"是这张图最稳的地理事实**。
+ * 换别的写法都得算两套距离（水路、陆路），而水陆两套场在岸边本来就不连续，
+ * 比出来的方向会在海岸线上来回抖——船就会把自己人一船船运回头。
+ */
+function enemySideScore(s: GameState, me: PlayerId, x: number, y: number): number {
+  let own = Infinity;
+  let foe = Infinity;
+  for (const c of s.cities) {
+    const d = distToCity({ x, y }, c);
+    if (c.owner === me) own = Math.min(own, d);
+    else foe = Math.min(foe, d);
+  }
+  if (!Number.isFinite(own) && !Number.isFinite(foe)) return 0;
+  if (!Number.isFinite(own)) return 99;
+  if (!Number.isFinite(foe)) return -99;
+  return own - foe;
+}
+
+/**
+ * 运输船的装卸候选。
+ *
+ * 这一段以前**根本不存在**：AI 会造船、会让船开炮，但从来不会把兵装上船。
+ * 于是在群岛图上（整片海隔开两军）两军各自挤在自己那侧的岸边，
+ * 船只是漂着的炮台——50 局跑下来水军只占 1.1% 的建造数、2.0% 的输出，
+ * 而地图的整个设计意图就是"你没有船就过不去"。
+ *
+ * 三条判据，都是为了让船别空转：
+ *   · 上船只在地陆路走不通时发生（`all.needBridge`）。路通的时候把兵装船
+ *     再放下来，等于花两回合把人挪了两格，纯亏。
+ *   · 已经在对面那一侧的人不上船——否则船会把自己人一船船运回头。
+ *   · 下船要求落点在对面那一侧，且那一格真的能站人（`passable` + 没人占）。
+ *     rules 的 doUnload 会拒掉"那里上不了岸"，AI 提一次非法动作就整回合中断。
+ */
+function navalTransferCandidates(s: GameState, unit: Unit, all: Fields): Candidate[] {
+  const out: Candidate[] = [];
+  const def = utype(s, unit.type);
+  if (unit.acted) return out;
+  const me = s.current;
+  const cap = def.capacity ?? 0;
+  const cargo = unit.cargo ?? [];
+
+  // ① 下船：旁边有能上岸的格，而且那一格已经在对面那侧
+  if (cargo.length > 0) {
+    for (const [dx, dy] of DIRS) {
+      const x = unit.x + dx;
+      const y = unit.y + dy;
+      if (!inBounds(s, x, y)) continue;
+      if (unitAt(s, x, y)) continue;
+      const tile = s.tiles[y * s.w + x];
+      if (!tile || !passable(tile.terrain)) continue;
+      const side = enemySideScore(s, me, x, y);
+      if (side <= 0) continue;
+      for (const c of cargo) {
+        // 加强渡船：下船就能接着打的落点，值一次"抢滩"。
+        // 不加这一条，AI 会挑一个安全的空滩上岸，然后那个兵整回合罚站——
+        // 规则允许它动，AI 却不知道，等于白改。
+        const canHit = c.acted !== true && attackableTargets(s, { ...c, x, y }).length > 0;
+        out.push({
+          action: { type: 'UNLOAD', unitId: unit.id, cargoId: c.id, x, y },
+          // 越靠近对面越该上岸：把"离敌方城有多近"直接折成分数
+          score: 58 + Math.min(18, side * 1.2) + (canHit ? 26 : 0),
+        });
+      }
+    }
+  }
+
+  // ② 上船：这一段以前只在"陆路完全不通"时才发生，而群岛图的地图生成器
+  // 总会留几串浅滩把两岸连起来（50 局里 50 局都能走过去），于是条件永远不成立，
+  // 船一次都没运过人。改成比**两种到场**：船走水路几步、那个兵走陆路几步，
+  // 水路明显更快才装船——这才是"运输"的意义，也对得上没有浅滩的地图。
+  if (cargo.length < cap) {
+    // 两家到场都只看城市、不看敌人：混进"到最近敌兵的距离"会把两个数算成不同的东西
+    const seaAdv = advanceDistance(s, me, unit.x, unit.y, all.water, all.focusCityId, true);
+    for (const u of unitsOf(s, me)) {
+      if (u.id === unit.id || u.acted) continue;
+      const d = utype(s, u.type);
+      if (d.domain === 'water' || d.category === 'building') continue;
+      if (distance(unit, u) !== 1) continue;
+      if (enemySideScore(s, me, u.x, u.y) > 0) continue;
+      const landAdv = advanceDistance(s, me, u.x, u.y, all.land, all.focusCityId, true);
+      // 走不到（Infinity）当然运；走得到但绕远（浅滩带绕一大圈）也运。
+      // 2 格余量是"上下船各要一回合"的成本，短途接送不如自己走。
+      const worth =
+        !Number.isFinite(landAdv) || (Number.isFinite(seaAdv) && seaAdv + 4 < landAdv);
+      if (!worth) continue;
+      out.push({
+        action: { type: 'LOAD', unitId: unit.id, cargoId: u.id },
+        // 比"往岸边挪一格"（通常十几分）高一档：装船是这一段路里唯一有意义的动作
+        score: 56 + Math.min(10, cap * 2),
+      });
+    }
+  }
+
   return out;
 }
 
 /** 一个经济单位大概能赚多少（按最好的地形估） */
-function maxIncome(def: UnitTypeDef): number {
-  let best = def.income ?? 0;
+function maxIncome(def: UnitTypeDef): number {  let best = def.income ?? 0;
   for (const v of Object.values(def.incomeByTerrain ?? {})) {
     if (typeof v === 'number' && v > best) best = v;
   }
@@ -2415,6 +2539,80 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
         if (free < 4) break;
         if (hpRatio < 0.6) score = 26 + (0.6 - hpRatio) * 40;
         else if (foes.some((f) => distance(f, u) <= 3)) score = 16;
+        break;
+      }
+      case 'raise-dead': {
+        /*
+         * 招魂：只在本回合真有人倒下、而且付得起的时候才点。
+         *
+         * 分数按"救回来的造价"给——它占的是冷却，不是行动，
+         * 所以只要这次复活值钱，这一回合开就是赚的。
+         * 太便宜的目标（几十金的杂兵）不值得为它烧掉两回合冷却。
+         */
+        const mine = (view.fallen ?? []).filter(
+          (r) =>
+            r.owner === u.owner &&
+            r.turn >= view.turn - 1 &&
+            !r.revived &&
+            !!view.unitTypes[r.type] &&
+            // 英雄不能被招魂：别让 AI 反复点一个注定被规则拒掉的技能
+            view.unitTypes[r.type]!.hero !== true,
+        );
+        if (mine.length === 0) break;
+        let best = 0;
+        for (const r of mine) {
+          const rd = view.unitTypes[r.type] as UnitTypeDef;
+          best = Math.max(best, recruitCost(view, u.owner, rd));
+        }
+        if (best < 90) break;
+        if (view.players[u.owner].gold < best) break;
+        // 复活落在死灵法师旁边的空地上：四邻占满时规则会拒，AI 也别白点一次
+        const open = DIRS.some(([dx, dy]) => {
+          const nx = u.x + dx;
+          const ny = u.y + dy;
+          const t = view.tiles[ny * view.w + nx];
+          if (!t) return false;
+          if (view.units.some((v) => v.x === nx && v.y === ny)) return false;
+          return t.terrain !== 'water' && t.terrain !== 'mountain';
+        });
+        if (!open) break;
+        score = 24 + Math.min(20, best / 25);
+        break;
+      }
+      case 'holy-banner': {
+        /*
+         * 圣旗：身边有三个人（含自己）就值。
+         *
+         * 和「降临」不同，它不看血线——护甲和魔抗是**预支**的减伤，
+         * 等队友都残了再开，等于已经挨完了才加装甲。
+         */
+        const radius = k.radius ?? 2;
+        const near = unitsOf(view, u.owner).filter((a) => distance(a, u) <= radius);
+        if (near.length < 3) break;
+        if (!foes.some((f) => distance(f, u) <= 6)) break;
+        score = 26 + Math.min(12, near.length * 2);
+        break;
+      }
+      case 'ascend': {
+        /*
+         * 圣剑觉醒是**越早开越值**：它加的是永久面板，开得早等于多吃了几个回合的加成。
+         * 但空场上升级没有意义（对面还没来，先把冷却烧掉不划算），
+         * 所以只要求"六格内有人"，不要求贴脸。
+         */
+        if (!foes.some((f) => distance(f, u) <= 6)) break;
+        score = hpRatio < 0.6 ? 38 : 30;
+        break;
+      }
+      case 'dragon-egg': {
+        /*
+         * 陨卵：一枚卵既是伤害也是两回合后的一条龙，所以只要**有一个敌人**
+         * 能吃下这一发就该放——它不是终结技，是"往对面阵线里插一根钉子"。
+         * 真正没得放的情况（周围六格全是自己人/走不进去）交给规则层拒绝，
+         * 这里只做粗判，免得 AI 每次都去试一个必然失败的技能。
+         */
+        const reach = k.radius ?? 6;
+        if (!foes.some((f) => distance(f, u) <= reach)) break;
+        score = 30;
         break;
       }
       case 'fuse': {
@@ -2636,6 +2834,8 @@ function recruitCandidate(
   plan: AiPlan,
   order?: string | null,
   mood?: AiMood,
+  /** 海军的需求度（0~1）：采购时按它给水军加减分，见 `seaDemand` */
+  seaDemand = 0,
 ): Candidate | null {
   // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
   // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
@@ -2740,6 +2940,8 @@ function recruitCandidate(
       : 0.5;
 
   const wet = waterShare(s);
+  /** 现在手上有几条运输船：0 条时最该造，够用了就不再叠 */
+  const myTransports = unitsOf(s, me).filter((u) => utype(s, u.type).transport).length;
   // 编队模板要的"这支部队现在长什么样"。每次 candidate 都重算一遍，
   // 所以同一回合里连买三个近战后，第四次会看见"近战已经够了"。
   const rosterBonus = rosterBonuses(rosterOf(s, me));
@@ -2801,9 +3003,24 @@ function recruitCandidate(
         if (plan.urgent) score += 15;
       }
       if (d.domain === 'water') {
-        score -= 8;
+        /*
+         * 减分按"这片水有多需要海军"缩放，不再是一刀切的 -8 / -18。
+         *
+         * 老写法对开阔图是对的（船确实换不过陆军的性价比），但群岛图上它把
+         * 唯一能过海的手段也一起压死了：50 局基线里水军只占 1.1% 的建造数。
+         */
+        score -= 8 * (1 - seaDemand);
         // 有点水但不宽裕：船能开，只是绕不开岸，别当主力
-        if (wet < WATER_GOOD_SHARE) score -= 10;
+        if (wet < WATER_GOOD_SHARE) score -= 10 * (1 - seaDemand);
+        if (seaDemand >= 0.99) score += 10;
+        // 运输船按 atk 算效率永远是 0（它不开炮），只能单独按"有没有船"给分
+        if (d.transport) {
+          score += (myTransports === 0 ? 40 : myTransports < 3 ? 22 : 0) * seaDemand;
+          // 没有船的时候先把船凑齐，再谈护航
+          if (myTransports >= 3) score -= 6;
+        } else if (myTransports > 0) {
+          score += 6 * seaDemand;
+        }
       }
 
       // 高时代单位要主动去用，否则 AI 会一辈子造火枪兵。
@@ -3312,6 +3529,10 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     if (skill) candidates.push({ ...skill, score:skill.score+300 });
   }
 
+  // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
+  // 别让它跟着每个产兵点、每个候选兵种重算。
+  const seaDemandNow = seaDemand(view, me);
+
   if (mayRecruit) {
     for (const city of citiesOf(view, me)) {
       // 指定了产兵点就只看那一个：别的地方再合适也不许造，
@@ -3332,6 +3553,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
         plan,
         order,
         mood,
+        seaDemandNow,
       );
       if (c) candidates.push(c);
     }
@@ -3350,6 +3572,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
           plan,
           order,
           mood,
+          seaDemandNow,
         );
         if (c) candidates.push(c);
       }

@@ -220,6 +220,42 @@ const FANTASY_ABILITIES: AbilityDef[] = [
     },
   },
   {
+    id: 'royal-decree',
+    name: '王命',
+    summary:
+      '回合开始时，半径 2 内所有「精英骑兵」晋升为「皇家骑兵」（按血量比例换装，上限不超过新兵种的生命）。每名骑兵只会晋升一次。',
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.aura,
+          apply: (c) => {
+            const def = c.api.utype(c.state, c.self.type);
+            // 新兵种直接从兵种表里取：把它写死在能力里，等于以后改 id 要改两处
+            const upgraded = 'royal-cavalry';
+            if (!c.state.unitTypes[upgraded]) return;
+            const to = c.api.utype(c.state, upgraded);
+            let n = 0;
+            for (const t of c.state.units) {
+              if (t.owner !== c.self.owner || t.type !== 'elite-cavalry' || t.hp <= 0) continue;
+              if (c.api.distance(t, c.self) > 2) continue;
+              const from = c.api.utype(c.state, t.type);
+              // 按**比例**换血：一个残血的精英骑兵不该换出一匹满血皇家骑兵，
+              // 否则"先打残再晋升"就成了白送的补血手段。
+              const ratio = from.maxHp > 0 ? Math.min(1, t.hp / from.maxHp) : 1;
+              t.type = upgraded;
+              t.hp = Math.max(1, Math.round(to.maxHp * ratio));
+              // 不写 moved/acted：晋升发生在自己的回合开始，这两个标记刚被重置过。
+              // 在这里把它们置 true，等于"被国王看中的骑兵这一回合原地罚站"。
+              n += 1;
+            }
+            if (n > 0) c.api.pushLog(c.state, c.self.owner, `${def.name}：${n} 名精英骑兵晋升为皇家骑兵`);
+          },
+        },
+      ],
+    },
+  },
+  {
     id: 'lifesteal',
     name: '吸血',
     summary: '造成伤害的 40% 转成自己的生命，上限不超过生命上限。',
@@ -893,7 +929,7 @@ const KNIGHTS: Expansion = {
   scale: 'large',
   name: '奇想·骑士团',
   summary:
-    '人类的十二个兵种：剑士、皇家骑兵、游侠、超级重骑、牧师、法师、刺客、狂战士、圣骑士、皇家守卫、盗贼、符文守卫。有魔法、有治疗、有隐身，也有最硬的一块肉。',
+    '人类的十七个兵种：剑士、精英骑兵、皇家骑兵、国王、游侠、牧师、法师、刺客、狂战士、圣骑士、超级重骑、皇家守卫、符文守卫、盗贼，以及并入本团的狮鹫骑士、龙骑兵、炼金术士。有魔法、有治疗、有隐身，也有最硬的一块肉；骑兵走"精英升皇家"这条线，国王负责把前者变成后者。',
   requires: ['fantasy-core'],
   hooks: {},
   units: [
@@ -914,11 +950,12 @@ const KNIGHTS: Expansion = {
       vision: 2,
       abilities: ['shield-wall'],
     },
-    // 皇家骑兵：4 移动 + 冲锋。它的价值不在面板，在"能挑最软的那一格下手"。
+    // 精英骑兵：原「皇家骑兵」降格而来。4 移动 + 冲锋，价值不在面板，
+    // 在"能挑最软的那一格下手"。仍是最便宜的一档骑兵。
     {
-      id: 'royal-cavalry',
-      name: '皇家骑兵',
-      short: '皇',
+      id: 'elite-cavalry',
+      name: '精英骑兵',
+      short: '精',
       era: 2,
       category: 'combat',
       cost: 125,
@@ -929,6 +966,51 @@ const KNIGHTS: Expansion = {
       range: 1,
       vision: 3,
       abilities: ['charge'],
+    },
+    // 皇家骑兵：从 2 代挪到**火药时代**，面板整体抬一档。
+    //
+    // 挪时代的理由不是"它太强"，而是它原来和精英骑兵挤在同一代同一价位：
+    // 两匹马挨着站，贵的那个永远没人买。现在分工清楚了——精英骑兵是
+    // 中世就能买到的机动部队，皇家骑兵是火药时代用钱换的"一锤子"：
+    // 38 攻配冲锋，冲开一条线的能力比同价步兵强一截。
+    //
+    // 数值口径：V = 38 + 0.45×96 + 5×8 + 3 + 2.5×4 + 1.5×4 ≈ 140，V/造价 ≈ 0.60，
+    // 落在火药档（0.45~0.65）的上沿——它是这一档最贵的骑兵，值这个位。
+    {
+      id: 'royal-cavalry',
+      name: '皇家骑兵',
+      short: '皇',
+      era: 3,
+      category: 'combat',
+      cost: 235,
+      move: 4,
+      atk: 38,
+      armor: 8,
+      maxHp: 96,
+      range: 1,
+      vision: 4,
+      abilities: ['charge'],
+    },
+    // 国王：不靠打，靠"把骑兵变成更好的骑兵"。
+    //
+    // 王命是**被动**（回合开始自动结算），所以它的价值不取决于玩家点得准不准，
+    // 而取决于这一局你带了多少精英骑兵——买它之前先看一眼自己的产线，
+    // 这就是它和别的英雄最不一样的地方。
+    // 声望光环（守护光环）是配套：国王站的这一片，本来就该比别处难啃。
+    {
+      id: 'royal-king',
+      name: '国王',
+      short: '君',
+      era: 4,
+      category: 'combat',
+      cost: 330,
+      move: 2,
+      atk: 26,
+      armor: 10,
+      maxHp: 120,
+      range: 1,
+      vision: 5,
+      abilities: ['royal-decree', 'aura-armor'],
     },
     // 游侠：唯一一个"进了林子变强"的远程。走位就是它的护甲。
     {
@@ -1105,6 +1187,68 @@ const KNIGHTS: Expansion = {
       vision: 2,
       abilities: ['aoe-immune', 'shield-wall'],
     },
+    // ── 并入骑士团的三位 ──────────────────────────────────────────────────
+    // 这三个原本挂在「荒兽」和「秘法」上，现在收进骑士团：它们的用法
+    // 都是"跟着阵线走"，而不是荒兽那种"散开咬人"、秘法那种"站在后面放"。
+    // 数值一个没动——这次只换归属，不动平衡，免得以后分不清
+    // "是搬家改弱的"还是"本来就弱"。
+    //
+    // 狮鹫骑士：骑士团唯一的空中单位。五速、六视野，抓后排和探路都靠它。
+    {
+      id: 'griffin-rider',
+      name: '狮鹫骑士',
+      short: '鹫',
+      era: 3,
+      category: 'combat',
+      cost: 190,
+      move: 5,
+      atk: 22,
+      armor: 4,
+      maxHp: 44,
+      range: 1,
+      vision: 6,
+      flight: true,
+      layer: 'air',
+    },
+    // 龙骑兵：飞行 + 冲锋 + 溅射。三条机制叠在一个兵上，所以面板压得低。
+    {
+      id: 'dragoon-rider',
+      name: '龙骑兵',
+      short: '龙',
+      era: 3,
+      category: 'combat',
+      cost: 265,
+      move: 5,
+      atk: 26,
+      armor: 6,
+      maxHp: 58,
+      range: 1,
+      vision: 6,
+      splash: 1,
+      flight: true,
+      layer: 'air',
+      abilities: ['charge'],
+    },
+    // 炼金术士：六发。前三发改变战场，后三发是余量，打光就退回近战。
+    {
+      id: 'alchemist',
+      name: '炼金术士',
+      short: '炼',
+      era: 3,
+      category: 'combat',
+      cost: 165,
+      move: 2,
+      atk: 9,
+      armor: 2,
+      maxHp: 30,
+      range: 3,
+      vision: 4,
+      magicAtk: 15,
+      element: 'fire',
+      splash: 1,
+      ammo: 6,
+      abilities: ['burn-hit'],
+    },
   ],
 };
 
@@ -1113,7 +1257,7 @@ const BEASTS: Expansion = {
   scale: 'large',
   name: '奇想·荒兽',
   summary:
-    '二十个野性单位：狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、狮鹫骑士、龙骑兵、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。',
+    '十六个野性单位：狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。',
   requires: ['fantasy-core'],
   hooks: {},
   units: [
@@ -1335,41 +1479,6 @@ const BEASTS: Expansion = {
       flight: true,
       layer: 'air',
     },
-    {
-      id: 'griffin-rider',
-      name: '狮鹫骑士',
-      short: '鹫',
-      era: 3,
-      category: 'combat',
-      cost: 190,
-      move: 5,
-      atk: 22,
-      armor: 4,
-      maxHp: 44,
-      range: 1,
-      vision: 6,
-      flight: true,
-      layer: 'air',
-    },
-    // 龙骑兵：飞行 + 冲锋 + 溅射。三条机制叠在一个兵上，所以面板压得低。
-    {
-      id: 'dragoon-rider',
-      name: '龙骑兵',
-      short: '龙',
-      era: 3,
-      category: 'combat',
-      cost: 265,
-      move: 5,
-      atk: 26,
-      armor: 6,
-      maxHp: 58,
-      range: 1,
-      vision: 6,
-      splash: 1,
-      flight: true,
-      layer: 'air',
-      abilities: ['charge'],
-    },
     // ── 4 级 ──────────────────────────────────────────────────────────────
     {
       id: 'werewolf',
@@ -1431,7 +1540,7 @@ const ARCANE: Expansion = {
   scale: 'large',
   name: '奇想·秘法',
   summary:
-    '法术与亡者：德鲁伊、死灵法师、炼金术士、吟游诗人、巫医、女巫、诅咒骑士、诅咒师、幻术师、元素召唤师、四种元素、幽灵、吸血鬼、僵尸、恶魔、地狱犬、机关傀儡、精灵弓手，以及被召唤的骷髅、小恶魔、幻象、土墙。',
+    '法术与亡者：德鲁伊、死灵法师、吟游诗人、巫医、女巫、诅咒骑士、诅咒师、幻术师、元素召唤师、四种元素、幽灵、吸血鬼、僵尸、恶魔、地狱犬、机关傀儡、精灵弓手，以及被召唤的骷髅、小恶魔、幻象、土墙。',
   requires: ['fantasy-core'],
   hooks: {},
   units: [
@@ -1507,26 +1616,6 @@ const ARCANE: Expansion = {
       element: 'dark',
       abilities: ['summoner'],
       summon: { type: 'skeleton', every: 2, max: 4 },
-    },
-    // 炼金术士：六发。前三发改变战场，后三发是余量，打光就退回近战。
-    {
-      id: 'alchemist',
-      name: '炼金术士',
-      short: '炼',
-      era: 3,
-      category: 'combat',
-      cost: 165,
-      move: 2,
-      atk: 9,
-      armor: 2,
-      maxHp: 30,
-      range: 3,
-      vision: 4,
-      magicAtk: 15,
-      element: 'fire',
-      splash: 1,
-      ammo: 6,
-      abilities: ['burn-hit'],
     },
     {
       id: 'witch-doctor',
@@ -1831,7 +1920,22 @@ const ARCANE: Expansion = {
  * 英雄对局节奏的影响是质变级的（一个九头蛇能顶半支部队），所以它必须
  * 是一个可以被整体关掉的选择，而不是藏在兽群里的一行数据。
  */
-const HERO_IDS = ['dwarf-king', 'hydra', 'phoenix', 'archmage', 'angel'];
+// 九个英雄的 id。原先只列了最早那五个，后来加的刺客大师、史莱姆牢大
+// 和这次的两个都没跟上——这张表是"英雄包里有谁"的唯一清单，
+// 漏一个，界面按它筛兵就会少一个能买的英雄。
+const HERO_IDS = [
+  'dwarf-king',
+  'hydra',
+  'phoenix',
+  'archmage',
+  'angel',
+  'assassin-master',
+  'slime-boss',
+  'night-necromancer',
+  'holy-knight-lord',
+  'sword-saint',
+  'evil-dragon-king',
+];
 
 // 英雄数值在技能化之后整体上调过一档（攻/血各 +5% 上下）。
 //
@@ -2086,7 +2190,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     // 甲 2 → 3、射程 1 → 2、视野 3 → 4：血厚甲薄的肉块太容易被"隔着打"白嫖，
     // 射程 2 让它能回手（也意味着它能打到飞行单位了，见 rules 的 strikeDistance）
     armor: 3,
-    maxHp: 200,
+    // 200 → 222（2026-10-31）：它是"靠血换时间"的兵，而现在的集火能力比它上线时更强，
+    // 200 血在工业时代经常撑不过两轮。加两成半的一档，仍是全场最厚的肉。
+    maxHp: 222,
     range: 2,
     vision: 4,
     hero: true,
@@ -2142,6 +2248,219 @@ const HERO_UNITS: UnitTypeDef[] = [
       },
     ],
   },
+  // 暗夜死灵法师：全场唯一一个"把队友拉回来"的英雄。
+  //
+  // 它的面板刻意压得低（22 攻、88 血、3 速），因为技能的价值不在这一回合，
+  // 而在"对面刚用一次漂亮的交换打掉你一个主力，你把它原价买回来"。
+  // 三速是"中速"：跑不过骑兵，但跟得上步兵线，能站在后排够得着的地方。
+  //
+  // 为什么复活要按生产价格收钱：白拉等于让对面所有击杀都失去意义。
+  // 收原价则是"用钱把时间买回来"——它救的是节奏，不是金币。
+  {
+    id: 'night-necromancer',
+    name: '暗夜死灵法师',
+    short: '冥',
+    // 4 代 → 3 代（火药）：招魂的价值随"兵的造价"走，而火药时代正好是
+    // 第一个"每个兵都值一笔钱"的时代。放在工业它永远晚一步，放在中世又太早。
+    era: 3,
+    category: 'combat',
+    // 420 → 320，各项面板同步下调：换时代就得换价位，否则火药时代没人买得起它，
+    // 而它又不是那种"贵一点也值得攒"的兵——它的强度来自把队友买回来，不是自己打。
+    cost: 320,
+    move: 3,
+    atk: 18,
+    armor: 3,
+    maxHp: 76,
+    range: 3,
+    vision: 4,
+    magicAtk: 14,
+    magicRes: 3,
+    element: 'dark',
+    hero: true,
+    unlockCost: 160,
+    abilities: ['element-ward'],
+    skills: [
+      {
+        id: 'raise-dead',
+        name: '招魂',
+        summary:
+          '支付该兵种的生产价格，把**本轮**倒下的一名友军在自己身边复活（对手刚过去的回合与本回合都算；同时倒下好几个时救造价最高的那个）。复活的单位当回合不能行动；同一具遗体只能招一次，**英雄不在其列**。',
+        effect: 'raise-dead',
+        cooldown: 2,
+      },
+    ],
+  },
+  // 神圣骑士长：慢、厚、硬，本团唯一"站在最前面却不靠输出说话"的英雄。
+  //
+  // 2 速让它天然落在阵线中间，而圣旗要的就是"身边有人"——这不是巧合，
+  // 是它和刺客大师（3 速、要绕后）的对照：一个往前挤，一个往外绕。
+  // 护甲 12 配盾墙，让对面必须用破甲或魔法来解它，而它恰好把魔抗发给全队。
+  {
+    id: 'holy-knight-lord',
+    name: '神圣骑士长',
+    short: '骑',
+    era: 4,
+    category: 'combat',
+    cost: 470,
+    move: 2,
+    atk: 36,
+    // 12 → 14（2026-10-31）：它是"站在最前面替全队吃伤害"的定位，
+    // 而 12 甲在工业时代挡不住主流破甲；多这两点，才配得上它 2 速的代价。
+    armor: 14,
+    maxHp: 150,
+    range: 1,
+    vision: 4,
+    magicRes: 5,
+    element: 'light',
+    hero: true,
+    unlockCost: 220,
+    abilities: ['shield-wall'],
+    skills: [
+      {
+        id: 'holy-banner',
+        name: '圣旗',
+        summary:
+          '半径 2 内所有友军（含自己）护甲 +3、魔抗 +4，并获得**阵列**（免疫溅射）；持续到自己的下个回合开始。',
+        effect: 'holy-banner',
+        cooldown: 2,
+        radius: 2,
+        armorUp: 3,
+        magicResUp: 4,
+      },
+    ],
+  },
+  // 圣剑勇者：现代时代的光属性大剑。直线溅射 + 越打越强。
+  //
+  // 为什么挂在「现代」上（requiresPack）：它的整套数值是按第六时代定的——
+  // 46 攻、11 甲、140 血在火药时代是碾压，在工业时代也无对手。
+  // 没有现代那一套兵种做参照，它只会变成一个"开了就能赢"的单件。
+  //
+  // 直线溅射（splash + splashLine）：剑气只扫"从它指向目标"的那一条线，
+  // 所以站位从"贴着一堆人"变成"对准一列人"——这是它和炮的差别，
+  // 也是它值得 620 金的理由之一（一列三个重甲，比一圈杂兵更值）。
+  //
+  // 觉醒是**永久**加成：它没有位移、没有控场，全部价值压在"给它两三个回合"。
+  {
+    id: 'sword-saint',
+    name: '圣剑勇者',
+    short: '圣',
+    era: 6,
+    category: 'combat',
+    cost: 620,
+    move: 4,
+    atk: 46,
+    armor: 11,
+    maxHp: 140,
+    range: 2,
+    vision: 6,
+    magicAtk: 12,
+    magicRes: 6,
+    element: 'light',
+    splash: 1,
+    splashLine: true,
+    hero: true,
+    unlockCost: 260,
+    requiresPack: 'pack-contemporary',
+    abilities: ['shield-wall'],
+    skills: [
+      {
+        id: 'ascend',
+        name: '圣剑觉醒',
+        summary:
+          '永久强化自身：攻击 +8、护甲 +2、生命上限 +30，并按新上限回复 30% 生命。可反复叠加，越打越硬。',
+        effect: 'ascend',
+        cooldown: 3,
+        power: 0.3,
+        atkUp: 8,
+        armorUp: 2,
+        hpUp: 30,
+      },
+    ],
+  },
+  // 邪龙王：慢、厚、魔抗极高，怕光。技能是"隔空落一颗会孵化的卵"。
+  //
+  // 属性表就是它的性格：风火水土四系各减半（龙鳞），光系翻倍（它的逆鳞）。
+  // 这两条走的都是既有的 weak/resist 倍率，没有为它新开一条结算。
+  {
+    id: 'evil-dragon-king',
+    name: '邪龙王',
+    short: '邪',
+    era: 6,
+    category: 'combat',
+    cost: 640,
+    // 2 速：它是阵地单位，不是追人的龙。想让它上场，阵线得围着它摆。
+    move: 2,
+    atk: 40,
+    armor: 8,
+    maxHp: 190,
+    range: 3,
+    vision: 6,
+    magicAtk: 30,
+    magicRes: 12,
+    element: 'dark',
+    hero: true,
+    unlockCost: 300,
+    requiresPack: 'pack-contemporary',
+    weak: { light: 2 },
+    resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
+    skills: [
+      {
+        id: 'dragon-egg',
+        name: '陨卵',
+        summary:
+          '在 6 格内挑一个能砸到最多敌人的位置落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
+        effect: 'dragon-egg',
+        cooldown: 3,
+        radius: 6,
+        power: 1,
+      },
+    ],
+  },
+  // 魔龙卵：邪龙王的技能产物。不产线、不占编制，只负责"倒计时"。
+  //
+  // 血量给得不多（30）：它是可以被对面拆掉的——"先清卵还是先打龙"
+  // 正是这个技能想问对手的问题。
+  {
+    id: 'dragon-egg',
+    name: '魔龙卵',
+    short: '卵',
+    era: 6,
+    category: 'combat',
+    cost: 60,
+    move: 0,
+    atk: 0,
+    armor: 1,
+    maxHp: 30,
+    range: 0,
+    vision: 2,
+    magicRes: 6,
+    element: 'dark',
+    summonedOnly: true,
+    hatch: { into: 'magic-dragon', turns: 2 },
+  },
+  // 魔龙：卵孵出来的东西。面板比邪龙王低一档，但会飞、跑得快。
+  {
+    id: 'magic-dragon',
+    name: '魔龙',
+    short: '魔',
+    era: 6,
+    category: 'combat',
+    cost: 300,
+    move: 5,
+    atk: 44,
+    armor: 10,
+    maxHp: 150,
+    range: 2,
+    vision: 6,
+    magicAtk: 22,
+    magicRes: 8,
+    element: 'dark',
+    flight: true,
+    layer: 'air',
+    summonedOnly: true,
+    weak: { light: 2 },
+    resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
+  },
 ];
 
 const HEROES: Expansion = {
@@ -2149,7 +2468,7 @@ const HEROES: Expansion = {
   scale: 'large',
   name: '奇想·英雄',
   summary:
-    '七个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）。第一次招募要额外付解锁费，解锁后永久开放。',
+    '十一个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：6 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「现代」扩展。',
   requires: ['fantasy-core'],
   hooks: {},
   units: HERO_UNITS,
