@@ -44,7 +44,7 @@ const QI_TRUE_DAMAGE: AbilityDef = {
         apply: (c) => {
           if (c.side !== 'attacker') return;
           const x = getRank(c.self)
-          const trueDmg = Math.floor((x*x)/2+x*(1.2**x));
+          const trueDmg = Math.floor((x*x)/4+x*(1.2**x));
           if (trueDmg > 0) c.damage += trueDmg;
         },
       },
@@ -127,13 +127,20 @@ function isDoomed(u: Unit): boolean {
 // ── 属性修正 ───────────────────────
 // 返回的是增量
 /** 攻击力修正：境界，衰老 −2/岁 */
+// 由于攻击次数和溅射太强，这里的基础数值略为削弱
 function atkModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = 5 * rank + 2**(rank-0.5);
+  const realmsModifier = (5 * rank + 2**(rank-0.5))/(rank**0.2);
   return Math.floor(realmsModifier - getAgingYears(u) * 2);
 }
 /** 真伤修正：用能力实现，不用在这里写 */
 /** 攻击次数修正 */
+// x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
+function attTimesModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = (rank + 1) / 2;
+  return Math.max(1, Math.floor(realmsModifier));
+}
 /** 生命修正 */
 /** 护甲修正：境界，衰老 −1/岁 */
 function armorModifier(u: Unit): number {
@@ -204,11 +211,10 @@ export const CULTIVATION_PACK: Expansion = {
       // 神识：随境界每级 +1 格；衰老：每超龄 1 岁 -1 格。
       return Math.max(1, base + rank - aging);
     },
-    // 一回合攻击次数：(x+1)/2 向下取整，至少 1。
-    // x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
+    // 一回合攻击次数。
     modifyAttacks: ({ unit, attacks }) => {
       if (unit.type !== 'qi-cultivator') return attacks;
-      return Math.max(1, Math.floor((getRank(unit) + 1) / 2));
+      return attTimesModifier(unit);
     },
     // ── 溅射半径：floor(x/4) ────────────────────────
     // x=0~3 -> 0，x=4~7 -> 1，x=8~9 -> 2
