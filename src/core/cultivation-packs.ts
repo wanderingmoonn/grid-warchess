@@ -19,7 +19,7 @@ const CULTIVATOR: UnitTypeDef = {
   short: '炼',
   era: 1,
   category: 'combat',
-  cost: 100,
+  cost: 200,
   move: 2,
   atk: 10,
   armor: 0,
