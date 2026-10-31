@@ -80,6 +80,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   const newRank = getRank(u);
   
   // 如果升级了，立刻结算加成并写战报
+  // 用公开信息模拟升级时的天地异象，给对手及时出击打断成长的反应时间
   if (newRank > rank) {
     const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
@@ -234,7 +235,6 @@ export const CULTIVATION_PACK: Expansion = {
               turn: state.turn,
               player,
               text: `炼气士 寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
-              open: true,
             });
           }
           // 把清场交给核心的 sweepDead。
@@ -248,7 +248,6 @@ export const CULTIVATION_PACK: Expansion = {
             turn: state.turn,
             player,
             text: `炼气士 寿元将尽，身体每况愈下。`,
-            open: true,
           });
         }
 
