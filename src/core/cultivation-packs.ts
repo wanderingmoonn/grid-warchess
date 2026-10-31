@@ -8,6 +8,7 @@ import type {
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
+import { maxHpOf } from './rules.ts';
 
 // 境界名称
 const _REAMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
@@ -83,8 +84,10 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   // 用公开信息模拟升级时的天地异象，给对手及时出击打断成长的反应时间
   if (newRank > rank) {
     const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
+    // 升级瞬间按照比例回血
+    const r = u.hp / maxHpOf(s,u);
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
-    u.hp += deltaMaxHp; // 升级瞬间回血
+    u.hp += Math.floor(deltaMaxHp * r); 
     
     s.log.push({
       turn: s.turn,
