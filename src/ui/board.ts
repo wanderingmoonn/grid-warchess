@@ -54,6 +54,48 @@ export interface BoardUi {
    * 收入本来就是按格子算的，不把数字放回格子上，这个机制就只活在说明书里。
    */
   incomeHints?: Map<number, number>;
+  /**
+   * 这一帧要"抖一下"的单位：id → 强度。
+   *
+   * 1 = 挨打（左右震），0.5 = 出手（往前一顿）。数值只是动画幅度，
+   * 由调用方按"受伤轻重/是不是主动方"给。放在这里而不是让 board 自己判：
+   * 只有调用方知道刚刚结算的是哪一下，棋盘看到的永远只是"已经算完的状态"。
+   */
+  impacts?: ReadonlyMap<string, number>;
+}
+
+/**
+ * 打击感的两个动作。
+ *
+ * 用 Web Animations 而不是加 class：棋盘是**增量补丁**渲染，同一个节点会被反复
+ * 复用，靠 class 增删触发动画要么不重播、要么得配一堆 setTimeout 去摘 class。
+ * `composite: 'add'` 让这段位移叠加在 FLIP 的位移上，两者不会互相覆盖。
+ *
+ * jsdom 里没有 `Element.animate`（单元测试就跑在那儿），这时直接跳过——
+ * 动画是锦上添花，不该让"棋盘能不能渲染"依赖它。
+ */
+function playImpact(node: HTMLElement, strength: number): void {
+  const animate = node.animate;
+  if (typeof animate !== 'function') return;
+  const strong = strength >= 0.9;
+  const frames = strong
+    ? [
+        { transform: 'translate(0, 0)' },
+        { transform: 'translate(-7%, 2%) rotate(-4deg)' },
+        { transform: 'translate(6%, -2%) rotate(3deg)' },
+        { transform: 'translate(-4%, 1%)' },
+        { transform: 'translate(0, 0)' },
+      ]
+    : [
+        { transform: 'translate(0, 0)' },
+        { transform: 'translate(8%, 0) scale(1.06)' },
+        { transform: 'translate(0, 0) scale(1)' },
+      ];
+  node.animate(frames, {
+    duration: strong ? 260 : 200,
+    easing: 'ease-out',
+    composite: 'add',
+  });
 }
 
 const TERRAIN_CLASS: Record<string, string> = {
@@ -141,6 +183,8 @@ interface UnitItem {
   /** 占地格数，只有宽单位（2×2 城、大船）才有 */
   fp?: number;
   inner: string;
+  /** 血量比例（0~1）。受击时用它和节点上记着的旧值算"掉了多少" */
+  hpRatio?: number;
   /** 上面所有字段的一次性摘要，一样就整节点不碰 */
   sig: string;
 }
@@ -152,7 +196,18 @@ interface UnitNode {
 
 const unitLayers = new WeakMap<HTMLElement, Map<string, UnitNode>>();
 
+/**
+ * 这一次绘制的序号。
+ *
+ * 打击动画必须"一次动作播一次"，而 `render()` 会因为顶栏、横幅、缩放的任何变化
+ * 被反复调用。用绘制序号当记号：同一个序号只播一次，下一次 render 的序号变了，
+ * 才会让同一个单位再抖一次——那时也确实是一个新的动作了。
+ */
+let paintStamp = 0;
+
 function writeUnitNode(node: HTMLElement, it: UnitItem): void {
+  // 先记住旧血量再重写内容：重写之后节点上就只剩新值了
+  const before = Number(node.dataset.hpRatio ?? '');
   node.className = it.cls;
   node.setAttribute('style', it.style);
   node.title = it.title;
@@ -162,6 +217,18 @@ function writeUnitNode(node: HTMLElement, it: UnitItem): void {
   else node.dataset.ghost = '1';
   if (it.fp !== undefined) node.dataset.fp = String(it.fp);
   node.innerHTML = it.inner;
+  if (it.hpRatio !== undefined) {
+    node.dataset.hpRatio = String(it.hpRatio);
+    // 只有在**掉血**时才演那截残留：回血时冒一条橙条会让人以为又挨了一下
+    if (Number.isFinite(before) && before > it.hpRatio + 0.001) {
+      const lag = node.querySelector<HTMLElement>('.hp-lag');
+      if (lag) {
+        lag.style.setProperty('--chip-from', `${Math.max(2, before * 100)}%`);
+        lag.style.setProperty('--chip-to', `${Math.max(2, it.hpRatio * 100)}%`);
+        lag.classList.add('chipped');
+      }
+    }
+  }
 }
 
 /**
@@ -172,7 +239,11 @@ function writeUnitNode(node: HTMLElement, it: UnitItem): void {
  * 顺序那一步用"就地移动"而不是"全部重插"——已经对的位置一格都不动，
  * 只有真的换了顺序的节点才会被挪。
  */
-function paintUnits(unitsEl: HTMLElement, items: UnitItem[]): void {
+function paintUnits(
+  unitsEl: HTMLElement,
+  items: UnitItem[],
+  impacts?: ReadonlyMap<string, number>,
+): void {
   let cache = unitLayers.get(unitsEl);
   if (!cache) {
     cache = new Map();
@@ -195,6 +266,15 @@ function paintUnits(unitsEl: HTMLElement, items: UnitItem[]): void {
       entry.sig = it.sig;
     }
     want.push(entry.node);
+    if (impacts && it.id) {
+      const power = impacts.get(it.id);
+      // 同一个 id 一次动作只抖一次：paint 会被同一个状态重复调用，
+      // 不复位成"这一下已经播过"，就会变成连点式的持续抽搐。
+      if (power !== undefined && entry.node.dataset.impactAt !== String(paintStamp)) {
+        entry.node.dataset.impactAt = String(paintStamp);
+        playImpact(entry.node, power);
+      }
+    }
   }
   for (const key of Array.from(cache.keys())) if (!alive.has(key)) cache.delete(key);
 
@@ -411,7 +491,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     items.push(ghostItem(s, ghost.x, ghost.y, ghost.type, ghost.seenAt, s.turn));
   }
 
-  paintUnits(unitsEl, items);
+  paintStamp += 1;
+  paintUnits(unitsEl, items, ui.impacts);
 
   // ---- 补间（FLIP） ----
   //
@@ -552,7 +633,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
   const inner = `<div class="unit-inner">${def.short}${cargoBadge}
       ${buildBar}
-      <div class="unit-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
+      <div class="unit-hp"><i class="hp-lag"></i><i class="hp-now ${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>`;
   const clsText = `${cls.join(' ')}${siteCls}`;
   const style = tileRect(s, u.x, u.y, fp);
@@ -566,6 +647,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
     id: u.id,
     fp,
     inner,
+    hpRatio: Math.max(0, Math.min(1, ratio)),
     sig: `${clsText}|${style}|${title}|${inner}`,
   };
 }

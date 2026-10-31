@@ -1072,7 +1072,14 @@ function emptyRecruitHint(
   if (era !== ERA_ALL) only.push(eraLabel(era));
   const cond = only.length > 0 ? `（只看「${only.join('」「')}」）` : '';
   const head = q ? `没有匹配「${escapeHtml(q)}」的兵种${cond}` : `这一档没有能造的兵${cond}`;
-  return `<div class="hint">${head}。${subject}在售 ${total} 种，清掉筛选看全部。</div>`;
+  // 给一颗**能点的**按钮，而不是只说一句"清掉筛选看全部"。
+  // 换到一座时代更低的城时，筛选可能把整页清空；这时如果筛选栏恰好退化消失，
+  // 玩家就只剩"刷新页面"这一条路了——那不该是一个筛选项的代价。
+  const canClear = !!q || !!pack || era !== ERA_ALL;
+  const clear = canClear
+    ? `<button class="link-btn" data-act="recruit-clear" type="button">清掉筛选</button>`
+    : '';
+  return `<div class="hint">${head}。${subject}在售 ${total} 种，${clear || '清掉筛选'}看全部。</div>`;
 }
 
 /**
@@ -1436,6 +1443,21 @@ export function seasonLabel(turn: number): string {
   return `${SEASON_NAME[season]} · 剩 ${left} 回合`;
 }
 
+/**
+ * 顶栏上那个"观战 N 人"。
+ *
+ * 为什么是由外面塞进来、而不是从 `PlayerView` 里读：观战人数不是对局状态，
+ * 它随别人的浏览器开合而变，不该混进存档、也不该参与任何规则计算。
+ * 所以它只活在这一层 DOM 上，谁拉到谁写。
+ */
+export function setWatchCount(n: number): void {
+  const el = document.querySelector<HTMLElement>('[data-ref="watch"]');
+  if (!el) return;
+  const text = n > 0 ? `观战 ${n} 人` : '';
+  el.hidden = n <= 0;
+  if (el.textContent !== text) el.textContent = text;
+}
+
 export function topbarShell(): string {
   return `
     <div class="brand">时代与回旋镖 <small>回合制 · 1v1</small></div>
@@ -1446,6 +1468,7 @@ export function topbarShell(): string {
     </div>
     <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
     <button class="room-pill" data-act="online" data-ref="room" title="当前房间" hidden></button>
+    <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
       <button class="btn btn-sm" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>

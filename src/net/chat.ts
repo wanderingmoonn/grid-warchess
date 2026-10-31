@@ -110,6 +110,24 @@ export function chatWhoLabel(seat: ChatSeat, mine: ChatSeat): string {
   return seat === mine ? '我方' : '对方';
 }
 
+/**
+ * 折叠状态下，这一页新消息该不该把面板自动展开。
+ *
+ * 抽成纯函数是因为这是三种模式里唯一"有判断"的地方：
+ *   · 只有**折叠**会自己弹；开着的时候本来就在看，屏蔽的时候不该弹；
+ *   · 只有**对方**说话才弹。自己刚发出去那条会被增量拉回来，
+ *     拿它触发展开就等于"我一说话，面板自己弹到自己脸上"；
+ *   · 观众没有"对方"，任何玩家开口都算（观战跟着局面走）。
+ */
+export function shouldAutoExpand(
+  mode: 'open' | 'folded' | 'muted',
+  fresh: readonly ChatLine[],
+  mine: ChatSeat,
+): boolean {
+  if (mode !== 'folded') return false;
+  return fresh.some((l) => l.seat !== 'watch' && l.seat !== mine);
+}
+
 /** 时间只留时分：聊天里没人关心日期，而队列本来就在同一局里 */
 export function chatTimeLabel(at: string): string {
   const m = /T(\d{2}):(\d{2})/.exec(at);

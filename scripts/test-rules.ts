@@ -97,10 +97,17 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  shouldAutoExpand,
   chatWhoLabel,
   trimChatBody,
 } from '../src/net/chat.ts';
-import type { ChatLine } from '../src/net/chat.ts';
+import type { ChatLine, ChatSeat } from '../src/net/chat.ts';
+import {
+  PRESENCE_TTL_MS,
+  countWatchers,
+  presenceFromRow,
+  watchLabel,
+} from '../src/net/presence.ts';
 import {
   AP_COST,
   AP_BY_TIER,
@@ -10373,6 +10380,82 @@ test('超长消息不发出去，而不是截一半发出去', () => {
   assert.equal(chatBodyLength('  好 的  '), 3, '数的是清洗之后的字数');
 });
 
+test('观战人数：只数 45 秒内有心跳的观众，参赛者不计', () => {
+  const now = Date.parse('2026-10-31T12:00:00Z');
+  const at = (secAgo: number): number => now - secAgo * 1000;
+  const row = (role: 'watch' | 'seat', secAgo: number) => ({
+    clientId: `${role}-${secAgo}`,
+    role,
+    name: '',
+    seenAt: at(secAgo),
+  });
+
+  // 参赛者不算：1v1 里两个座位本来就在棋盘上
+  assert.equal(countWatchers([row('seat', 1), row('seat', 2)], now), 0, '两个参赛者不是两个观众');
+  // 新鲜的算
+  assert.equal(countWatchers([row('watch', 1), row('watch', 20)], now), 2);
+  // 过期的（超过 TTL）不算
+  assert.equal(
+    countWatchers([row('watch', 1), row('watch', PRESENCE_TTL_MS / 1000 + 1)], now),
+    1,
+    '超过 TTL 没心跳就算人走了',
+  );
+  // 边界：正好等于 TTL 还算活着（宁可多留半分钟，也不要人数忽闪）
+  assert.equal(countWatchers([row('watch', PRESENCE_TTL_MS / 1000)], now), 1);
+  // 本机时钟比服务器慢 → 时间戳在未来：按"刚说话"处理，不能因此掉人数
+  assert.equal(countWatchers([{ ...row('watch', 0), seenAt: now + 5000 }], now), 1);
+  // 空名单
+  assert.equal(countWatchers([], now), 0);
+  assert.equal(PRESENCE_TTL_MS, 45000, 'TTL 就是 45 秒，界面上那条 tooltip 也这么写');
+
+  // 台词：0 人时闭嘴
+  assert.equal(watchLabel(0), '');
+  assert.equal(watchLabel(1), '观战 1 人');
+  assert.equal(watchLabel(12), '观战 12 人');
+
+  // 行解析：没有 client_id 的行不是人；坏时间按 0 算（过期）
+  assert.equal(presenceFromRow({ role: 'watch' }), null);
+  const parsed = presenceFromRow({
+    client_id: 'abc',
+    role: 'watch',
+    name: '观众',
+    seen_at: '2026-10-31T12:00:00Z',
+  });
+  assert.ok(parsed);
+  assert.equal(parsed!.seenAt, now);
+  assert.equal(presenceFromRow({ client_id: 'x', seen_at: 'not-a-time' })!.seenAt, 0);
+  assert.equal(presenceFromRow({ client_id: 'x', role: 'seat' })!.role, 'seat');
+});
+
+test('聊天三态：折叠时只有对方开口才自动展开，屏蔽时永不展开', () => {
+  const line = (id: number, seat: ChatSeat): ChatLine => ({
+    id,
+    seat,
+    name: 'x',
+    body: 'b',
+    at: '2026-10-31T10:00:00Z',
+  });
+  const foe = [line(1, 'B')];
+  const mine = [line(2, 'A')];
+  const both = [line(3, 'B'), line(4, 'A')];
+
+  // 折叠：对方说话 → 弹；自己说话 → 不弹（自己那条会被增量拉回来）
+  assert.equal(shouldAutoExpand('folded', foe, 'A'), true, '折叠时对方开口要自动展开');
+  assert.equal(shouldAutoExpand('folded', mine, 'A'), false, '自己发的不该把自己的面板弹开');
+  assert.equal(shouldAutoExpand('folded', both, 'A'), true, '同一页里有对方的话就算');
+
+  // 开着的时候本来就在看，不需要"展开"这个动作
+  assert.equal(shouldAutoExpand('open', foe, 'A'), false);
+  // 屏蔽：对方说什么都不弹
+  assert.equal(shouldAutoExpand('muted', foe, 'A'), false, '屏蔽之后不该有任何自动展开');
+  assert.equal(shouldAutoExpand('muted', both, 'A'), false);
+
+  // 观众没有"对方"：两个座位谁说话都算
+  assert.equal(shouldAutoExpand('folded', mine, 'watch'), true);
+  // 观众自己发的（seat=watch）不该触发自己的面板
+  assert.equal(shouldAutoExpand('folded', [line(5, 'watch')], 'watch'), false);
+});
+
 test('聊天水位只由服务器推：两个人同时说话不能丢', () => {
   // 这条盯的是一个真实事故：以前"收进一行就把水位推到它的 id"，
   // 包括自己刚发出去的那一条。于是：
@@ -11115,6 +11198,50 @@ test('制空：战斗机打空中目标，比打同血同甲的地面目标更�
   const vsAir = computeDamage(s, fighter, bomberAir);
   const vsGround = computeDamage(s, fighter, bomberGround);
   assert.ok(vsAir > vsGround, `对空 ${vsAir} 应该高于对地 ${vsGround}——否则制空这条能力等于没有`);
+});
+
+test('空中单位不吃地形：掩体、高差射程、地形视野全都不算', () => {
+  const s = fresh({ expansionIds: ['air-corps', 'height-terrain'] });
+  s.units = [];
+  // 森林有掩体（+2 甲），台地/谷地差 3 层（射程该 +1 / −1），沙丘 +1 视野
+  putTerrain(s, 5, 5, 'forest');
+  putTerrain(s, 6, 5, 'forest');
+  putTerrain(s, 7, 5, 'valley');
+  putTerrain(s, 8, 5, 'plateau');
+  putTerrain(s, 9, 5, 'dune');
+
+  const plane = place(s, 'A', 'af_fighter', 5, 5);
+  const foot = place(s, 'A', 'militia', 6, 5);
+  const planeDef = s.unitTypes['af_fighter']!;
+
+  assert.equal(isAirborne(s, plane), true, '这架飞机确实在空中层');
+  assert.equal(
+    effectiveStats(s, plane).armor,
+    planeDef.armor,
+    '飞机停在林子上不该拿到森林掩体',
+  );
+  assert.ok(
+    effectiveStats(s, foot).armor > UNIT_TYPES.militia.armor,
+    '地面单位照旧吃掩体（对照）',
+  );
+
+  // 高差射程：同一架飞机从台地打谷地，射程不该 +1
+  const flat = place(s, 'A', 'af_fighter', 7, 5); // 谷地打台地
+  const high = place(s, 'A', 'af_fighter', 8, 5); // 台地打谷地
+  const valleyTile = s.tiles[idx(s, 7, 5)]!;
+  const plateauTile = s.tiles[idx(s, 8, 5)]!;
+  assert.equal(effectiveRangeAgainst(s, high, valleyTile), planeDef.range, '空中不吃俯射加成');
+  assert.equal(effectiveRangeAgainst(s, flat, plateauTile), planeDef.range, '空中也不吃仰攻减益');
+
+  // 地形视野：沙丘 +1。飞机停在沙丘上不该拿到，地面单位照旧拿到
+  const onDune = place(s, 'A', 'af_fighter', 9, 5);
+  const footDune = place(s, 'A', 'militia', 9, 5);
+  assert.equal(visionOf(s, onDune), planeDef.vision, '空中不吃地形视野加成');
+  assert.equal(
+    visionOf(s, footDune),
+    UNIT_TYPES.militia.vision + 1,
+    '地面单位站在沙丘上照旧 +1（对照）',
+  );
 });
 
 test('对地/反舰：两条加成各管一层，不会串味', () => {

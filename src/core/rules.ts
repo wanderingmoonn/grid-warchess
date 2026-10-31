@@ -1319,7 +1319,10 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += aura.armor;
     armorItems.push({ label: '守护光环', delta: aura.armor });
   }
-  const terrainDef = tile ? CONFIG.terrainDef[tile.terrain] : 0;
+  // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
+  // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
+  // 而空中层存在的理由恰恰是"从上面过去，地面的事与它无关"。
+  const terrainDef = tile && !isAirborne(s, u) ? CONFIG.terrainDef[tile.terrain] : 0;
   if (terrainDef !== 0) {
     armor += terrainDef;
     armorItems.push({ label: `地形 · ${CONFIG.terrainName[tile!.terrain]}`, delta: terrainDef });
@@ -1941,9 +1944,9 @@ export function computeDamage(
     dt = utype(s, defender.type);
   }
 
-  // 2. 城市不吃地形和光环
+  // 2. 城市不吃地形和光环；空中单位同样不吃地形（见 effectiveStats 同一处注释）
   const tile = isCity ? null : tileAt(s, defender.x, defender.y);
-  const terrainBonus = tile ? CONFIG.terrainDef[tile.terrain] : 0;
+  const terrainBonus = tile && !isAirborne(s, defender) ? CONFIG.terrainDef[tile.terrain] : 0;
   const defenderAura = isCity ? { armor: 0 } : auraBonus(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。

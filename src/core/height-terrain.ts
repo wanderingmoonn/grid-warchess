@@ -27,7 +27,21 @@
 
 import { buildContour } from './height-mapgen.ts';
 import type { Expansion } from './expansions.ts';
-import type { Terrain } from './types.ts';
+import type { GameState, Terrain, Unit } from './types.ts';
+
+/**
+ * 这个单位是不是在**空中层**。
+ *
+ * 放在这里而不是从 rules.ts 引：rules → expansions → 本文件，反过来引会成环。
+ * 判据和 rules 的 `airLayer` 一致（类型字段优先，老数据的能力标记兜底）——
+ * 两处写法的差别只允许是"一个也没有"。
+ */
+function airborne(state: GameState, unit: Unit | undefined): boolean {
+  if (!unit) return false;
+  const def = state.unitTypes[unit.type];
+  if (!def) return false;
+  return def.layer === 'air' || (def.abilities ?? []).includes('fly-over');
+}
 
 /**
  * 高度（层）：**相对平原**的带符号层数，平原 = 0。
@@ -295,6 +309,8 @@ export const HEIGHT_TERRAIN: Expansion = {
     modifyRangeAgainst: ({ unit, targetTerrain, range, state }) => {
       const base = state.unitTypes[unit.type]?.range ?? 1;
       if (base <= 1) return range;
+      // 空中单位不吃高差：它不在坡上，也不在谷底
+      if (airborne(state, unit)) return range;
       const here = state.tiles[unit.y * state.w + unit.x]?.terrain;
       if (!here) return range;
 
@@ -316,6 +332,8 @@ export const HEIGHT_TERRAIN: Expansion = {
      */
     modifyVision: ({ state, unit, base }) => {
       if (!unit) return base;
+      // 空中单位的地形视野加成一律不算：飞在沙脊上并不比飞在平原上看得远
+      if (airborne(state, unit)) return base;
       const here = state.tiles[unit.y * state.w + unit.x]?.terrain;
       if (!here) return base;
       return Math.max(1, base + (TERRAIN_VISION_MOD[here] ?? 0));

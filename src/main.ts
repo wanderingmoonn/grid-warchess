@@ -72,7 +72,7 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -121,11 +121,18 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  shouldAutoExpand,
   fetchChat,
   sendChat,
   trimChatBody,
   type ChatSeat,
 } from './net/chat.ts';
+import {
+  PRESENCE_BEAT_MS,
+  countWatchers,
+  fetchPresence,
+  heartbeat,
+} from './net/presence.ts';
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -254,6 +261,18 @@ let recruitPack = '';
  * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
+
+/**
+ * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
+ *
+ * 掉血靠前后两帧的血量差自己算出来，而不是在每处扣血的地方各喊一声——
+ * 扣血路径有交战、反击、溅射、中毒、灼烧、攻城好几条，逐条挂必然漏；
+ * "上一帧它是多少血"这件事只有渲染层知道，放这儿最省事也最不会漏。
+ *
+ * 出手那一侧算不出来（它自己没掉血），所以由 dispatch 记一笔，绘制时消费一次。
+ */
+const hpSeen = new Map<string, number>();
+let lastStrikerId: string | null = null;
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -530,6 +549,15 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+/**
+ * 观战人数的心跳与轮询。
+ *
+ * 和房间轮询分开：房间 15 秒一次是"看有没有新棋"，人数 12 秒一次是"我还在这儿"。
+ * 两者节奏不同、失败也互不影响——心跳挂了不该让棋局同步变慢，反之亦然。
+ */
+let presenceTimer = 0;
+/** 最近一次拉到的观战人数。顶栏重画之后要靠它把数字补回去 */
+let watchCount = 0;
 
 /** 记住"我现在在哪一局房间里"，刷新页面能自己回到那一局 */
 const ROOM_KEY = 'warchess:room-current';
@@ -728,6 +756,9 @@ function keepSideScroll(paint: () => void): void {
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
+  // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
+  // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
+  setWatchCount(watchCount);
   const view = playerView(state, me(), spectating());
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
@@ -735,6 +766,24 @@ function render(): void {
     selected && selected.owner === state.current && !selected.acted
       ? Array.from(threatTiles(state, selected))
       : [];
+
+  // 这一帧要抖谁：掉血的（强度 1）+ 刚出手的（0.55，往前一顿）
+  const impacts = new Map<string, number>();
+  {
+    const alive = new Set<string>();
+    for (const u of view.state.units) {
+      alive.add(u.id);
+      const prev = hpSeen.get(u.id);
+      if (prev !== undefined && u.hp < prev) impacts.set(u.id, 1);
+      hpSeen.set(u.id, u.hp);
+    }
+    for (const id of Array.from(hpSeen.keys())) if (!alive.has(id)) hpSeen.delete(id);
+    if (lastStrikerId) {
+      // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
+      if (alive.has(lastStrikerId)) impacts.set(lastStrikerId, 0.55);
+      lastStrikerId = null;
+    }
+  }
 
   renderBoard(boardEl, view, {
     selectedId,
@@ -746,6 +795,7 @@ function render(): void {
     threat,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
+    impacts,
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -1821,6 +1871,7 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  if (action.type === 'ATTACK' || action.type === 'SIEGE') lastStrikerId = action.unitId;
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
   noteFinalFrame();
@@ -2885,6 +2936,15 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'recruit-pack': {
       const p = el.dataset.pack ?? '';
       recruitPack = recruitPack === p ? '' : p;
+      render();
+      return;
+    }
+
+    // 空结果里那颗「清掉筛选」：一次把三个维度都放回全部
+    case 'recruit-clear': {
+      recruitQuery = '';
+      recruitPack = '';
+      recruitEra = 0;
       render();
       return;
     }
@@ -4159,6 +4219,10 @@ function detachRoom(): void {
   if (!room) return;
   window.clearInterval(roomTimer);
   roomTimer = 0;
+  window.clearInterval(presenceTimer);
+  presenceTimer = 0;
+  watchCount = 0;
+  setWatchCount(0);
   room = null;
   dirty = false;
   rememberRoom(null);
@@ -4184,6 +4248,37 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
 function startRoomPolling(): void {
   window.clearInterval(roomTimer);
   roomTimer = window.setInterval(() => void pollRoom(), 15000);
+  startPresence();
+}
+
+/**
+ * 报送"我还在这儿"，并把这一间房的人数拉回来。
+ *
+ * 顺序很重要：先心跳再拉名单。反过来的话，自己那一条要等到下一轮才会出现在
+ * 名单里，观战者看到的数字永远比自己实际的身份慢一拍（甚至显示 0）。
+ */
+function startPresence(): void {
+  window.clearInterval(presenceTimer);
+  presenceTimer = 0;
+  if (!room) {
+    watchCount = 0;
+    setWatchCount(0);
+    return;
+  }
+  void syncPresence();
+  presenceTimer = window.setInterval(() => void syncPresence(), PRESENCE_BEAT_MS);
+}
+
+async function syncPresence(): Promise<void> {
+  const seat = room;
+  if (!seat) return;
+  await heartbeat(seat.code, seat.spectator ? 'watch' : 'seat', chatMyName());
+  const res = await fetchPresence(seat.code);
+  // 期间换了房间/退出：这一份名单已经不是眼前这间房的了
+  if (room?.code !== seat.code) return;
+  if (!res.ok) return;
+  watchCount = countWatchers(res.rows, Date.now());
+  setWatchCount(watchCount);
 }
 
 let draftPollTimer = 0;
@@ -4384,7 +4479,42 @@ function watchRoom(code: string, snapshot: RoomSnapshot): void {
  * 在这两种局里放一个永远没回应的输入框，比没有更让人困惑。
  * 观战位**有**（这正是它存在的意义之一）：看局的人也能说话，两边都看得见。
  */
-let chatOpen = false;
+/**
+ * 聊天框的三种状态。
+ *
+ *   open   —— 开着，正常收发；
+ *   folded —— 折叠：只留右下角那颗按钮，**对方一说话就自动展开**；
+ *             这是"暂时收起来，但别错过他这句话"。
+ *   muted  —— 屏蔽发言：不自动展开、不计数、不再提示；
+ *             这是"这一局我不想听对面说话"，是社交选择，不是界面状态。
+ *
+ * 以前只有一个 `chatOpen` 布尔：关掉之后既不会自动弹，也不再有未读提示，
+ * 两件不同的事被压成了同一件。
+ */
+type ChatMode = 'open' | 'folded' | 'muted';
+const CHAT_MODE_KEY = 'warchess:chat-mode';
+
+function loadChatMode(): ChatMode {
+  try {
+    const raw = localStorage.getItem(CHAT_MODE_KEY);
+    if (raw === 'open' || raw === 'muted' || raw === 'folded') return raw;
+  } catch {
+    // 隐私模式读不到就用默认值
+  }
+  // 默认折叠：收着，但对方开口时会自己弹出来——比"默认关死"更像有人在家
+  return 'folded';
+}
+
+function saveChatMode(mode: ChatMode): void {
+  try {
+    localStorage.setItem(CHAT_MODE_KEY, mode);
+  } catch {
+    // 写不进去就只在本次会话内生效
+  }
+}
+
+let chatMode: ChatMode = loadChatMode();
+const chatIsOpen = (): boolean => chatMode === 'open';
 /**
  * 已经收到的消息 + "拉到哪儿了"。
  *
@@ -4433,8 +4563,13 @@ function ensureChatDock(): HTMLElement {
       <header class="chat-head" title="按住这里可以拖动面板">
         <b>房间聊天</b>
         <span class="chat-who"></span>
-        <button class="chat-x" data-chat="close" aria-label="收起">×</button>
+        <button class="chat-x chat-fold" data-chat="fold" title="折叠：收起来，对方说话时自动展开" aria-label="折叠">–</button>
+        <button class="chat-x chat-mute" data-chat="mute" title="屏蔽发言：不再提示，也不自动展开" aria-label="屏蔽发言">屏蔽</button>
       </header>
+      <div class="chat-banner" hidden>
+        已屏蔽对方的发言 —— 新消息不会自动弹出，也不会计数。
+        <button class="link-btn" data-chat="unmute" type="button">恢复</button>
+      </div>
       <div class="chat-log"></div>
       <form class="chat-send">
         <input class="chat-input" type="text" maxlength="${CHAT_MAX_LEN}"
@@ -4448,7 +4583,9 @@ function ensureChatDock(): HTMLElement {
   el.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest<HTMLElement>('[data-chat]')?.dataset.chat;
     if (act === 'toggle') openChat();
-    if (act === 'close') closeChat();
+    if (act === 'fold') foldChat();
+    if (act === 'mute') muteChat();
+    if (act === 'unmute') openChat();
   });
 
   // 输入法组字的时候按 Enter 是"选词"，不是"发送"（见 ui/chat-input.ts）
@@ -4576,15 +4713,26 @@ function renderChatDock(): void {
   const panel = el.querySelector<HTMLElement>('.chat-panel')!;
   if (!room) {
     // 退出房间：把面板收掉，记录清空——换到另一局时不该看见上一局的对话
-    if (chatOpen) closeChat();
+    if (chatIsOpen()) foldChat();
     chatFeed.reset();
     chatNotice = '';
     chatUnread = 0;
   }
   fab.hidden = !room;
-  panel.hidden = !(room && chatOpen);
-  fab.textContent = chatUnread > 0 ? `聊天 · ${chatUnread}` : '聊天';
-  fab.classList.toggle('has-new', chatUnread > 0);
+  panel.hidden = !(room && chatIsOpen());
+  panel.classList.toggle('chat-muted', chatMode === 'muted');
+  const muted = chatMode === 'muted';
+  fab.classList.toggle('is-muted', muted);
+  fab.classList.toggle('has-new', !muted && chatUnread > 0);
+  fab.textContent = muted
+    ? '聊天 · 已屏蔽'
+    : chatUnread > 0
+      ? `聊天 · ${chatUnread}`
+      : '聊天';
+  // 被屏蔽时面板里要有一句话和一个开关：否则玩家只能靠"再点一次那颗按钮"
+  // 去猜自己是不是屏蔽了对方
+  const banner = el.querySelector<HTMLElement>('.chat-banner');
+  if (banner) banner.hidden = !muted;
 }
 
 /** 只重画日志那一块（壳子里的输入框不动） */
@@ -4606,7 +4754,8 @@ function paintChat(): void {
 
 function openChat(): void {
   if (!room) return;
-  chatOpen = true;
+  chatMode = 'open';
+  saveChatMode(chatMode);
   chatUnread = 0;
   renderChatDock();
   paintChat();
@@ -4620,8 +4769,27 @@ function openChat(): void {
   chatTimer = window.setInterval(() => void pollChat(), 4000);
 }
 
-function closeChat(): void {
-  chatOpen = false;
+/**
+ * 折叠：面板收起来，但**继续拉消息**。
+ *
+ * 和"屏蔽"的关键差别就在这里——折叠期间必须还在轮询，否则对面说了话，
+ * 我们根本不会知道，也就不可能"自动展开"。轮询停不停是这两种模式的分水岭。
+ */
+function foldChat(): void {
+  chatMode = 'folded';
+  saveChatMode(chatMode);
+  chatUnread = 0;
+  renderChatDock();
+  if (!room) return;
+  window.clearInterval(chatTimer);
+  chatTimer = window.setInterval(() => void pollChat(), 4000);
+}
+
+/** 屏蔽发言：停掉轮询、清掉未读，面板也不弹 */
+function muteChat(): void {
+  chatMode = 'muted';
+  saveChatMode(chatMode);
+  chatUnread = 0;
   window.clearInterval(chatTimer);
   chatTimer = 0;
   renderChatDock();
@@ -4629,7 +4797,8 @@ function closeChat(): void {
 
 async function pollChat(): Promise<void> {
   const seat = room;
-  if (!seat || !chatOpen) return;
+  // 屏蔽时连拉都不拉：既然不看，就不必每 4 秒问一次服务器
+  if (!seat || chatMode === 'muted') return;
   if (document.visibilityState !== 'visible') return;
   const res = await fetchChat(seat.code, chatFeed.lastId);
   if (room?.code !== seat.code) return; // 期间退出了房间
@@ -4650,7 +4819,21 @@ async function pollChat(): Promise<void> {
   }
   // 水位由这一页推（见 ChatFeed.accept）；这里是唯一推进它的地方
   const fresh = chatFeed.accept(res.lines);
-  if (!chatOpen) chatUnread += fresh.length;
+  if (!chatIsOpen()) {
+    // 折叠时：只有**对方**开口才自动展开。自己刚发出去那条（乐观显示）
+    // 也会从服务器拉回来，拿它触发展开就等于"我说话把我自己的面板弹开"。
+    const mine = chatSeat();
+    const foeSpoke = shouldAutoExpand(chatMode, fresh, mine);
+    chatUnread += fresh.length;
+    renderChatDock();
+    if (foeSpoke) {
+      openChat();
+      // 自动展开时给一句话，解释"它为什么自己弹开了"
+      chatNotice = '对方刚发来一条消息，已为你展开';
+      paintChat();
+      return;
+    }
+  }
   paintChat();
 }
 

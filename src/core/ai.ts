@@ -42,6 +42,7 @@ import {
   incomeResOf,
   ordersOf,
   orderSitesOf,
+  airLayer,
   other,
   previewAttack,
   reachableTiles,
@@ -1454,7 +1455,8 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
   let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35));
-  score += CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
+  // 空中单位不吃地形掩体，AI 也就不该为了"站高地"去挪它
+  score += airLayer(def) ? 0 : CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
   let nextAttack = 0, nowAttack = 0;
   let killed: string | undefined;
   if (canAttack(unit)) {
@@ -1648,8 +1650,8 @@ function scoreMove(
     score += (before - after) * 3.5;
   }
 
-  // 站高地
-  score += CONFIG.terrainDef[tile.terrain] * 2;
+  // 站高地（空中单位无意义）
+  score += airLayer(utype(s, unit.type)) ? 0 : CONFIG.terrainDef[tile.terrain] * 2;
 
   // 挪过去就能打到人 → 很值（这就是"接敌"的全部意义）。
   // 已经接上火的就不再给这份奖励，否则"往敌人方向平移一格"永远比开火划算。

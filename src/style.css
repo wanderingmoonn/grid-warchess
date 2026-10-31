@@ -970,18 +970,62 @@ body {
   overflow: hidden;
 }
 
+/* 两条：底下的橙色残留 + 上面的当前血条。
+   挨打时绿条立刻缩（0.12s，够快但不突兀），橙条先原地停一下再跟上去，
+   最后淡出——玩家因此能看见"这一下掉了多少"，而不是只看到一个更短的血条。 */
 .unit-hp > i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
   display: block;
-  height: 100%;
-  background: #86d386;
-  transition: width 0.2s ease;
+  border-radius: 2px;
 }
 
-.unit-hp > i.mid {
+.unit-hp > i.hp-now {
+  background: #86d386;
+  /* 缩减要"快"：0.12s 是一条几乎跟手的斜率，再慢就会显得这一下没打中 */
+  transition: width 0.12s linear;
+  z-index: 1;
+}
+
+.unit-hp > i.hp-now.mid {
   background: #e8c76b;
 }
-.unit-hp > i.low {
+.unit-hp > i.hp-now.low {
   background: #e07b6b;
+}
+
+.unit-hp > i.hp-lag {
+  width: 0;
+  background: linear-gradient(90deg, #f0a23c, #ffd97a);
+  opacity: 0;
+  z-index: 0;
+}
+
+.unit-hp > i.hp-lag.chipped {
+  animation: hp-chip 0.62s cubic-bezier(0.22, 0.75, 0.3, 1) forwards;
+}
+
+/* 0~40%：橙条停在旧宽度不动，让"掉了多少"看得清楚；
+   40~82%：追上新的血线；最后淡出，界面上不留第二种颜色。 */
+@keyframes hp-chip {
+  0% {
+    width: var(--chip-from, 100%);
+    opacity: 0.95;
+  }
+  40% {
+    width: var(--chip-from, 100%);
+    opacity: 0.95;
+  }
+  82% {
+    width: var(--chip-to, 0%);
+    opacity: 0.72;
+  }
+  100% {
+    width: var(--chip-to, 0%);
+    opacity: 0;
+  }
 }
 
 /* ---------- 侧栏 ---------- */
@@ -1535,6 +1579,22 @@ a.btn {
   line-height: 1.6;
 }
 
+/* 提示句里的行内动作（"清掉筛选"）。做成下划线链接的样子而不是按钮：
+   它跟在句子里读，摆成一个方块按钮会把那句提示截成两段。 */
+.link-btn {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent, #6ea8fe);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--accent-strong, #4f8ef7);
+}
+
 /* ---------- 交接遮罩 ---------- */
 .handoff {
   position: fixed;
@@ -2048,6 +2108,20 @@ a.btn {
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* 观战人数：比房间码更轻，它是个状态不是按钮 */
+.watch-chip {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--line-strong);
+  white-space: nowrap;
+}
+
+.watch-chip[hidden] {
+  display: none;
 }
 
 .text-input {
@@ -2882,6 +2956,46 @@ a.btn {
   color: var(--text-3);
   cursor: pointer;
   padding: 0 2px;
+}
+
+/* 「屏蔽」是两个字，按 16px 排会把标题挤掉一半，单独压小一号 */
+.chat-head .chat-mute {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+
+.chat-head .chat-mute:hover {
+  border-color: var(--a);
+  color: var(--a);
+}
+
+.chat-fold:hover {
+  color: var(--text);
+}
+
+/* 屏蔽状态的两处提示：按钮变灰 + 面板里一条横幅 */
+.chat-fab.is-muted {
+  color: var(--text-3);
+  border-style: dashed;
+}
+
+.chat-banner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-banner[hidden] {
+  display: none;
 }
 
 .chat-log {
