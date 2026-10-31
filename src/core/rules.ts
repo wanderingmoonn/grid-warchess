@@ -3256,9 +3256,14 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   const cap = ferryDef.capacity ?? 0;
   if (load.length >= cap) return { ok: false, reason: `这条船装满了（${cap}）` };
 
-  // 上船：从棋盘上摘下来，整个对象存进货舱
+  // 上船：从棋盘上摘下来，整个对象存进货舱。
+  //
+  // `moved` / `acted` **原样保留**，不强行写成 true：加强渡船要知道
+  // "这个兵本回合到底动没动过"——一律抹成 true，那份信息就没了，
+  // 下船时只能按"谁也不能再动"处理。
+  // （`acted` 在上面的前置里已经确认是 false，真正的差别在 `moved`。）
   s.units = s.units.filter((u) => u.id !== cargo.id);
-  ferry.cargo = [...load, { ...cargo, x: ferry.x, y: ferry.y, moved: true, acted: true }];
+  ferry.cargo = [...load, { ...cargo, x: ferry.x, y: ferry.y }];
   ferry.acted = true;
 
   pushLog(s, s.current, `${cargoDef.name} 登上了${ferryDef.name}`);
@@ -3269,8 +3274,22 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
  * 下船：把人放到相邻的空地上。
  *
  * 落点用 blockedFor 判：不能是水、不能是高山、不能是敌方城市格。
- * 下船的单位这一回合不能再动也不能再打 —— 否则运输船就成了一条
- * "隔河空投骑兵连"的传送门。
+ *
+ * ── 加强渡船（2026-10-31）──────────────────────────────────────────────
+ * 默认规则是"下船即罚站"：这一回合不能再动也不能再打。否则运输船就成了一条
+ * 隔河空投骑兵连的传送门。但罚站也把"过河进攻"整条路堵死了——船靠岸那一回合
+ * 什么都做不了，等于白送对方一轮。
+ *
+ * 现在的口径是：**下船那一刻还没行动过的兵，允许它照常行动一次**。
+ * 三条边界把它锁在"一次"上：
+ *   1. `cargo.acted !== true`：本回合已经行动过的（打过、或打完又动过）不给；
+ *   2. `cargo.ferryBoostTurn !== s.turn`：同一个兵**一回合只吃一次**，
+ *      换一条船再卸也不行——否则两艘船能把一次冲锋拆成两段；
+ *   3. 只免掉"下船罚站"，不动行动次数：攻击仍受 burst / attacksLeft 约束。
+ *
+ * 落地时一律 `moved: false, acted: false`。原因是**下船必然发生在下一回合**：
+ * 装船占掉船的一次装卸，下船还要再占一次，所以中间一定隔着一个回合边界。
+ * 舱里带着的 `moved` 是上一轮的值，拿它当"这个兵这回合走没走过"就是读旧账了。
  */
 function doUnload(
   s: GameState,
@@ -3297,10 +3316,34 @@ function doUnload(
   if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
   ferry.cargo = load.filter((u) => u.id !== cargoId);
-  s.units.push({ ...cargo, x, y, moved: true, acted: true });
+
+  const cargoDef = utype(s, cargo.type);
+  /**
+   * 这个兵能不能吃「加强渡船」：本回合没行动过，而且这一回合还没吃过。
+   *
+   * 注意判的是**它自己**的行动状态，不是船的。船的 `acted` 管的是
+   * "这条船本回合还能不能再装卸"（上面已经查过），两件事不能混。
+   */
+  const boosted = cargo.acted !== true && cargo.ferryBoostTurn !== s.turn;
+  s.units.push({
+    ...cargo,
+    x,
+    y,
+    // 吃不到加强的照旧罚站（走也不能走、打也不能打）；
+    // 吃到的按新回合处理：这一轮它还没动过，移动力和出手都还在。
+    moved: !boosted,
+    acted: !boosted,
+    ...(boosted ? { ferryBoostTurn: s.turn } : {}),
+  });
   ferry.acted = true;
 
-  pushLog(s, s.current, `${utype(s, cargo.type).name} 在岸边下船`);
+  pushLog(
+    s,
+    s.current,
+    boosted
+      ? `${cargoDef.name} 在岸边下船（加强渡船：本回合仍可行动一次）`
+      : `${cargoDef.name} 在岸边下船`,
+  );
   return { ok: true, state: s };
 }
 

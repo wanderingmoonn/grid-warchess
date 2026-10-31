@@ -2367,14 +2367,20 @@ function onBoardClick(e: Event): void {
   if (unloadPlan) {
     const ferry = state.units.find((u) => u.id === unloadPlan);
     if (ferry?.cargo?.length && coords && distance(ferry, coords) === 1) {
-      dispatch({
+      const cargoId = ferry.cargo[0]!.id;
+      const ok = dispatch({
         type: 'UNLOAD',
         unitId: ferry.id,
-        cargoId: ferry.cargo[0]!.id,
+        cargoId,
         x: coords.x,
         y: coords.y,
       });
       unloadPlan = null;
+      // 加强渡船：下船之后那个兵还能动（本回合没行动过的话），
+      // 顺势把它选中——否则玩家看到的是"人都上岸了，但什么事都做不了"，
+      // 得再点一次才知道它其实还亮着。
+      const landed = ok ? state.units.find((u) => u.id === cargoId) : undefined;
+      if (landed && landed.acted === false) selectUnit(landed);
       return;
     }
     if (ferry) {

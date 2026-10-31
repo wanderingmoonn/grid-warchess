@@ -2351,10 +2351,14 @@ function navalTransferCandidates(s: GameState, unit: Unit, all: Fields): Candida
       const side = enemySideScore(s, me, x, y);
       if (side <= 0) continue;
       for (const c of cargo) {
+        // 加强渡船：下船就能接着打的落点，值一次"抢滩"。
+        // 不加这一条，AI 会挑一个安全的空滩上岸，然后那个兵整回合罚站——
+        // 规则允许它动，AI 却不知道，等于白改。
+        const canHit = c.acted !== true && attackableTargets(s, { ...c, x, y }).length > 0;
         out.push({
           action: { type: 'UNLOAD', unitId: unit.id, cargoId: c.id, x, y },
           // 越靠近对面越该上岸：把"离敌方城有多近"直接折成分数
-          score: 58 + Math.min(18, side * 1.2),
+          score: 58 + Math.min(18, side * 1.2) + (canHit ? 26 : 0),
         });
       }
     }

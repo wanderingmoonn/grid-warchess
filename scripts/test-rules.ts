@@ -5306,7 +5306,83 @@ test('渡船能把陆军运过水面', () => {
   assert.ok(landed, '人应该回到棋盘上');
   assert.equal(landed.x, 9);
   assert.equal(landed.y, 8);
-  assert.ok(landed.moved && landed.acted, '刚下船不能立刻行动');
+  // 加强渡船（2026-10-31）：这个兵本回合还没行动过，所以下船不再罚站
+  assert.equal(landed.moved, false, '没走过路的兵下船后还能走');
+  assert.equal(landed.acted, false, '没行动过的兵下船后还能行动一次');
+  assert.equal(landed.ferryBoostTurn, unload.state.turn, '记下是哪一回合吃的这一次加强');
+
+  // 而且"再行动一次"是真的能动：下船后走一格应当成功
+  const step = applyAction(unload.state, { type: 'MOVE', unitId: crew.id, x: 10, y: 8 });
+  assert.ok(step.ok, step.ok ? '' : `下船后应该还能走：${step.reason}`);
+});
+
+test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻击次数、一回合只免一次', () => {
+  // 装船和下船各占船的一次"装卸"，所以现实流程一定是"这回合装、下回合卸"。
+  // 这个 helper 就是走那条路：装完过两轮，回到同一方。
+  const roundTrip = (s: GameState, ferryId: string, cargoId: string) => {
+    const l = applyAction(s, { type: 'LOAD', unitId: ferryId, cargoId });
+    assert.ok(l.ok, l.ok ? '' : `上船失败：${l.reason}`);
+    let st = l.state;
+    for (let i = 0; i < 2; i += 1) {
+      const e = applyAction(st, { type: 'END_TURN' });
+      assert.ok(e.ok, e.ok ? '' : e.reason);
+      st = e.state;
+    }
+    return st;
+  };
+
+  // ① 走过路再上船的兵：下船能打，但不能重新走
+  const s = fresh();
+  digRiver(s, 8, 3, 12);
+  s.current = 'A';
+  const ferry = place(s, 'A', 'ferry', 8, 5);
+  const walked = place(s, 'A', 'militia', 7, 5);
+  walked.moved = true; // 模拟"本回合已经走过一步，但还没出手"
+  const ready = roundTrip(s, ferry.id, walked.id);
+  const un = applyAction(ready, {
+    type: 'UNLOAD',
+    unitId: ferry.id,
+    cargoId: walked.id,
+    x: 9,
+    y: 5,
+  });
+  assert.ok(un.ok, un.ok ? '' : `下船失败：${un.reason}`);
+  const landed = un.state.units.find((u) => u.id === walked.id)!;
+  // 下船必然隔着一个回合边界（装卸各占船的一次行动），所以舱里那个 moved
+  // 是上一轮的旧账：落地按新回合算，移动力和出手都还在。
+  assert.equal(landed.moved, false, '下船落在新回合，移动力是新的');
+  assert.equal(landed.acted, false, '还能行动一次');
+
+  // 打一下：正常结算；再打一下必须被拒（加强渡船只免罚站，不改攻击次数）
+  const foe = place(un.state, 'B', 'militia', 10, 5);
+  const hit1 = applyAction(un.state, { type: 'ATTACK', unitId: landed.id, targetId: foe.id });
+  assert.ok(hit1.ok, hit1.ok ? '' : `第一下应该能打：${hit1.reason}`);
+  const after = hit1.state.units.find((u) => u.id === walked.id)!;
+  assert.equal(after.acted, true, '打完就进入已行动');
+  const hit2 = applyAction(hit1.state, { type: 'ATTACK', unitId: walked.id, targetId: foe.id });
+  assert.equal(hit2.ok, false, '同回合不能再打第二下');
+
+  // ② 这一回合已经吃过加强的兵：换一条船再卸也不给第二次
+  const s2 = fresh();
+  digRiver(s2, 8, 3, 12);
+  s2.current = 'A';
+  const ferry2 = place(s2, 'A', 'ferry', 8, 5);
+  const veteran = place(s2, 'A', 'militia', 7, 5);
+  const ready2 = roundTrip(s2, ferry2.id, veteran.id);
+  // 到了下船这一回合，假装它本轮已经被加强过一次
+  const ferryNow = ready2.units.find((u) => u.id === ferry2.id)!;
+  ferryNow.cargo![0]!.ferryBoostTurn = ready2.turn;
+  const un2 = applyAction(ready2, {
+    type: 'UNLOAD',
+    unitId: ferry2.id,
+    cargoId: veteran.id,
+    x: 9,
+    y: 5,
+  });
+  assert.ok(un2.ok, un2.ok ? '' : `下船失败：${un2.reason}`);
+  const again = un2.state.units.find((u) => u.id === veteran.id)!;
+  assert.equal(again.acted, true, '同一回合第二次下船不再免罚站');
+  assert.equal(again.moved, true, '罚站就是走也不能走');
 });
 
 test('渡船有载员上限，而且只装陆军', () => {
