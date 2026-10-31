@@ -357,7 +357,7 @@
           <tr><th>属性</th><th>具体加成公式，小数向下取整</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">攻击力</td><td>5 × 境界 + 2<sup>(境界 − 0.5)</sup> /td></tr>
+          <tr><td class="name">攻击力</td><td>（5 × 境界 + 2<sup>(境界 − 0.5)</sup>） + 境界<sup>0.2</sup></td></tr>
           <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> </td></tr>
           <tr><td class="name">射程</td><td>境界 ÷ 2 </td></tr>
           <tr><td class="name">视野（神识）</td><td>基础视野 + 境界</td></tr>
@@ -368,7 +368,7 @@
       </table>
 
       <h3>突破与生命值</h3>
-      <p>每次境界突破，炼气士的生命上限会迎来一次<b>指数级暴涨</b>，并立刻回复等同于增加量的生命值。</p>
+      <p>每次境界突破，炼气士的生命上限会迎来一次<b>指数级暴涨</b>，并回复等比例的生命值。</p>
       
       <div class="formula">
         单次突破增加生命 = <b>8.5 + 0.0685 × (新境界<sup>3</sup> × 1.8<sup>新境界</sup> − 旧境界<sup>3</sup> × 1.8<sup>旧境界</sup>)</b><br />
@@ -392,7 +392,7 @@
       <h3>真元（真实伤害）</h3>
       <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害。它是炼气士打重甲单位的唯一手段。</p>
       <div class="formula">
-        真实伤害 = <b>境界² ÷ 2 + 境界 × 1.2<sup>境界</sup></b> <span class="c"></span>
+        真实伤害 = <b>境界² ÷ 4 + 境界 × 1.2<sup>境界</sup></b> <span class="c"></span>
       </div>
 
       <h3>寿元与衰老</h3>
