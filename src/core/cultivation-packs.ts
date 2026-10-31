@@ -96,7 +96,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
 }
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
-  return getRank(u) + 3;
+  return getRank(u) + 2;
 }
 
 // ── 寿元与衰老 ─────────────────────────────────────
@@ -109,7 +109,7 @@ function getLifespan(u: Unit): number {
   
   const rank = getRank(u);
   if (rank >= MAX_RANK) return Infinity;
-  return 5 + rank * 10;
+  return 10 + rank * 10;
 }
 /**
  * 超出寿元多少岁。
