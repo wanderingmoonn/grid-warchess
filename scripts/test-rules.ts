@@ -10465,6 +10465,36 @@ test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   assert.equal(hp(quarter.side.id), maxHp - expected, '旁边那格按 25% 结算，而不是默认的 50%');
 });
 
+test('石堡射程 2 → 3：三格外能还手，四格外打不到，其它防御建筑不受影响', () => {
+  // ① 数据：只有石堡动了一格
+  assert.equal(UNIT_TYPES.keep.range, 3, '石堡射程应该是 3');
+  assert.equal(UNIT_TYPES.fortress.range, 4, '要塞没动');
+  assert.equal(UNIT_TYPES.bunker.range, 4, '碉堡没动');
+  assert.equal(UNIT_TYPES.tower.range, 3, '箭塔本来就是 3，这次没动它');
+  assert.equal(UNIT_TYPES.keep.atk, 13, '只加射程，攻击力不动');
+  assert.equal(UNIT_TYPES.keep.cost, 100, '造价不动');
+
+  // ② 行为：自动开火真的按新射程算
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (const [x, y] of [[5, 5], [8, 5], [9, 5]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  place2(s, 'A', 'keep', 5, 5);
+  const near = place2(s, 'B', 'militia', 8, 5); // 距离 3：射程内
+  const far = place2(s, 'B', 'militia', 9, 5); // 距离 4：射程外
+  near.hp = 500;
+  far.hp = 500;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const hpOf = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.ok(hpOf(near.id) < 500, '三格外的敌人应该挨打');
+  assert.equal(hpOf(far.id), 500, '四格外的敌人打不到（否则就不是"加一格"而是无限射程）');
+});
+
 test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
   // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。

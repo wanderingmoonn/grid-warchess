@@ -582,7 +582,10 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 13,
     armor: 7,
     maxHp: 42,
-    range: 2,
+    // 2 → 3（2026-11-01）：射程 2 意味着它必须贴着前线才打得到人，
+    // 而中世的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
+    // 加一格之后它终于能在自己被打之前先还手，其余数值一个没动。
+    range: 3,
     vision: 3,
     autoAttack: true,
   },
