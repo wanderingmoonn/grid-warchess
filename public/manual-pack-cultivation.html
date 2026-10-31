@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>时代与回旋镖 · 修真</title>
+<title>时代与回旋镖 · 修真扩展</title>
 <style>
   :root {
     --bg: #f5f2ea;
@@ -286,53 +286,133 @@
   <nav>
     <div class="nav-title">目录</div>
     
-    <a href="#pack-intro">1. 这个包是什么</a>
-    <a href="#pack-units">2. 兵种表</a>
-    <a href="#pack-terms">3. 机制词条</a>
+    <a href="#g-intro">1. 基础信息</a>
+    <a href="#g-units">2. 兵种总表</a>
+    <a class="sub" href="#p-cultivation">修真</a>
+    <a href="#g-notes">3. 各包要点</a>
+    <a href="#g-rules">4. 新规则</a>
+    <a href="#g-terms">5. 机制词条</a>
   
   </nav>
 
   <main>
     <header class="page-head">
-      <h1>时代与回旋镖 · 修真</h1>
-      <p>扩展分册 · 1 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+      <h1>时代与回旋镖 · 修真扩展</h1>
+      <p>修真系列合册</p>
     </header>
 
 
-    <section id="pack-intro">
-      <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>带来了会修炼成长的炼气士。</p>
-      <dl class="kv">
-        <dt>兵种数量</dt><dd>1 个</dd>
-        <dt>覆盖时代</dt><dd>1（古典）</dd>
-        
-        <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
-      </dl>
-      <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
-        搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
-        和原版兵是同一把尺子。</p>
+    <section id="g-intro">
+      <h2><span class="sec-num">01</span>这一册怎么读</h2>
+      <p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>
       
+    <table class="overview">
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <tbody>
+        <tr><td class="name">修真</td><td class="num">1</td><td class="num">1</td><td class="nowrap">—</td><td>带来了会修炼成长的炼气士。</td></tr>
+      </tbody>
+    </table>
+      <dl class="kv">
+        <dt>兵种总数</dt><dd>1 个（1 个包），覆盖时代 1</dd>
+        <dt>怎么启用</dt><dd>新对局面板里勾选，效果叠加；规则以 id 记进存档，换机器打开不变</dd>
+        <dt>兵种在哪</dt><dd>生产面板里带包徽标（名字旁的小圆标写着它来自哪个包），搜索框敲包名能过滤；
+          产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，和原版兵同一把尺子</dd>
+        <dt>怎么查</dt><dd>总表里带<b>虚线下划线</b>的词都能悬停看一句说明，点一下跳到本册末尾的词条</dd>
+      </dl>
     </section>
 
-    <section id="pack-units">
-      <h2><span class="sec-num">02</span>兵种表</h2>
+    <section id="g-units">
+      <h2><span class="sec-num">02</span>兵种总表</h2>
+      <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
+        跨段比较时请对照"来源"那一列。</p>
       
     <div class="scroll-x">
       <table class="wide">
-        <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
-        <tbody><tr class="grp" id="p-cultivation"><td colspan="11">修真 · 1 个</td></tr><tr data-unit="qi-cultivator"><td class="name">炼气士</td><td class="glyph">炼</td><td class="num">1</td><td class="num">100</td><td class="num">10</td><td class="num">0</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr></tbody>
+        <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-cultivation"><td colspan="12">修真 · 1 个</td></tr><tr data-unit="qi-cultivator"><td class="name">炼气士</td><td class="glyph">炼</td><td class="src">修真</td><td class="num">1</td><td class="num">200</td><td class="num">10</td><td class="num">0</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr></tbody>
       </table>
     </div>
     </section>
 
-    <section id="pack-terms">
-      <h2><span class="sec-num">03</span>机制词条</h2>
-      <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
+    <section id="g-notes">
+      <h2><span class="sec-num">03</span>各包要点</h2>
+      <p>表格给的是数值，这一节给的是"这一包和别的包差在玩法上"。</p>
+      <h3 id="n-cultivation">修真</h3><p>这个包引入了<b>境界</b>与<b>寿元</b>……（这里写这个包的核心玩法）</p>
+    </section>
+    <section id="g-rules">
+      <h2><span class="sec-num">04</span>新规则</h2>
+      
+      <h3>境界与修为</h3>
+      <p>炼气士不是“造出来就定型”的兵。它每回合打坐涨修为，击杀再额外拿一笔（击杀 10 点）。境界从<b>凡人</b>一路推到<b>渡劫</b>。境界越高，攻击、护甲、射程、神识、攻击次数、溅射半径一起涨。</p>
+      
+      <div class="formula">
+        升级所需总经验 = <b>10 + 10 × 境界 × (境界 + 1) + 0.05 × 4<sup>境界</sup></b><br />
+        <span class="c">（当前境界从 0 算起，最高为 9 级；每回合自动获得等于“当前境界 + 2”的经验）</span>
+      </div>
+
+            <h3>各境界属性加成对照表</h3>
+      <p>境界提升时，会立刻按以下公式结算加成，并回复相应血量：</p>
+      <table>
+        <thead>
+          <tr><th>属性</th><th>具体加成公式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">攻击力</td><td>5 × 境界 + 2<sup>(境界 − 0.5)</sup> <span class="c">（向下取整）</span></td></tr>
+          <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> <span class="c">（向下取整）</span></td></tr>
+          <tr><td class="name">射程</td><td>境界 ÷ 2 <span class="c">（向下取整）</span></td></tr>
+          <tr><td class="name">视野（神识）</td><td>基础视野 + 境界</td></tr>
+          <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（向下取整，至少 1 次）</span></td></tr>
+          <tr><td class="name">溅射半径</td><td>境界 ÷ 4 <span class="c">（向下取整，即 4 级 1 格、8 级 2 格）</span></td></tr>
+          <tr><td class="name">最大生命</td><td>突破时瞬间提升（见下方详情）</td></tr>
+        </tbody>
+      </table>
+
+      <h3>突破与生命值</h3>
+      <p>每次境界突破，炼气士的生命上限会迎来一次<b>指数级暴涨</b>，并立刻回复等同于增加量的生命值。</p>
+      
+      <div class="formula">
+        单次突破增加生命 = <b>8.5 + 0.0685 × (新境界<sup>3</sup> × 1.8<sup>新境界</sup> − 旧境界<sup>3</sup> × 1.8<sup>旧境界</sup>)</b><br />
+        <span class="c">（计算结果向下取整）</span>
+      </div>
+
+      <p>为了免去心算的麻烦，各阶段突破时增加的生命值如下：</p>
+      <table class="overview">
+        <thead>
+          <tr><th>突破阶段</th><th>增加最大生命</th><th>突破阶段</th><th>增加最大生命</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">凡人 → 炼气</td><td class="num">+8</td><td class="name">化神 → 返虚</td><td class="num">+349</td></tr>
+          <tr><td class="name">炼气 → 筑基</td><td class="num">+10</td><td class="name">返虚 → 合体</td><td class="num">+943</td></tr>
+          <tr><td class="name">筑基 → 金丹</td><td class="num">+17</td><td class="name">合体 → 大乘</td><td class="num">+2434</td></tr>
+          <tr><td class="name">金丹 → 元婴</td><td class="num">+43</td><td class="name">大乘 → 渡劫</td><td class="num">+6048</td></tr>
+          <tr><td class="name">元婴 → 化神</td><td class="num">+124</td><td class="name"></td><td class="num"></td></tr>
+        </tbody>
+      </table>
+      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
+
+      <h3>真元（真实伤害）</h3>
+      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害。它是炼气士打重甲单位的唯一手段。</p>
+      <div class="formula">
+        真实伤害 = <b>境界² ÷ 2 + 境界 × 1.2<sup>境界</sup></b> <span class="c">（向下取整）</span>
+      </div>
+
+      <h3>寿元与衰老</h3>
+      <p>凡人只有十年寿元。境界越高寿元越长（每级增加 10 年，渡劫期永生不死）。</p>
+      <div class="callout">
+        <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
+        超出寿元 <b>3 年</b>就会当场坐化。所以“养一个老祖宗”和“养一个速成的”是两条不同的路线。
+      </div>
+    
+    </section>
+
+    <section id="g-terms">
+      <h2><span class="sec-num">05</span>机制词条</h2>
+      <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
       <dl class="terms"><dt id="t-ab-qi-true-damage">真元</dt><dd>每次攻击附带随境界提升的、无视护甲的真实伤害。</dd></dl>
     </section>
   
     <footer>
-      时代与回旋镖 · 修真 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+      时代与回旋镖 · 修真扩展 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
     </footer>
   </main>
 </div>
