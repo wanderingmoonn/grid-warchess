@@ -516,7 +516,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
   if (selectedUnit) {
     const def = utype(s, selectedUnit.type);
-    const ratio = selectedUnit.hp / def.maxHp;
+    const ratio = selectedUnit.hp / maxHpOf(s,selectedUnit);
     const spectator = input.spectator === true;
     const readOnly = spectator || input.commander === true;
     const mine = !readOnly && selectedUnit.owner === me;

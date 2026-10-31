@@ -10205,13 +10205,13 @@ test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
   const baseAtk = effectiveStats(s, qi).atk;
   const baseArmor = effectiveStats(s, qi).armor;
   
-  // 66岁：超 1 岁，攻击 -2，护甲 -1
-  qi.age = 66;
+  // 71岁：超 1 岁，攻击 -2，护甲 -1
+  qi.age = 71;
   assert.equal(effectiveStats(s, qi).atk, baseAtk - 2, '超 1 岁攻击减 2');
   assert.equal(effectiveStats(s, qi).armor, baseArmor - 1, '超 1 岁护甲减 1');
   
-  // 68 岁：超 3 岁，生命归 0 等待清场
-  qi.age = 68;
+  // 73 岁：超 3 岁，生命归 0 等待清场
+  qi.age = 73;
   assert.equal(getAgingYears(qi), 3, '这里超龄 3 岁');
   
   // 模拟回合开始

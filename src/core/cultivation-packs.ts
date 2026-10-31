@@ -19,7 +19,7 @@ const CULTIVATOR: UnitTypeDef = {
   short: '炼',
   era: 1,
   category: 'combat',
-  cost: 100,
+  cost: 200,
   move: 2,
   atk: 10,
   armor: 0,
@@ -44,7 +44,7 @@ const QI_TRUE_DAMAGE: AbilityDef = {
         apply: (c) => {
           if (c.side !== 'attacker') return;
           const x = getRank(c.self)
-          const trueDmg = Math.floor((x*x)/2+x*(1.2**x));
+          const trueDmg = Math.floor((x*x)/4+x*(1.2**x));
           if (trueDmg > 0) c.damage += trueDmg;
         },
       },
@@ -72,6 +72,12 @@ export function cultivationRank(u: Unit): number {
   return getRank(u);
 }
 
+// 本地算最大血量的函数（核心规则里的 maxHpOf 也是这么写的）
+function getMaxHp(s: GameState, u: Unit): number {
+  // 从本局兵种表里取基础血量，然后加上单位自己积累的额外血量
+  return (s.unitTypes[u.type]?.maxHp ?? 0) + (u.maxHpBonus ?? 0);
+}
+
 // 增加经验并即时判断升级
 function addExp(u: Unit, s: GameState, amount: number): void {
   u.custom ??= {}; 
@@ -80,10 +86,13 @@ function addExp(u: Unit, s: GameState, amount: number): void {
   const newRank = getRank(u);
   
   // 如果升级了，立刻结算加成并写战报
+  // 用公开信息模拟升级时的天地异象，给对手及时出击打断成长的反应时间
   if (newRank > rank) {
     const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
+    // 升级瞬间按照比例回血
+    const r = u.hp / getMaxHp(s,u);
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
-    u.hp += deltaMaxHp; // 升级瞬间回血
+    u.hp += Math.floor(deltaMaxHp * r); 
     
     s.log.push({
       turn: s.turn,
@@ -95,7 +104,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
 }
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
-  return getRank(u) + 3;
+  return getRank(u) + 2;
 }
 
 // ── 寿元与衰老 ─────────────────────────────────────
@@ -108,7 +117,7 @@ function getLifespan(u: Unit): number {
   
   const rank = getRank(u);
   if (rank >= MAX_RANK) return Infinity;
-  return 5 + rank * 10;
+  return 10 + rank * 10;
 }
 /**
  * 超出寿元多少岁。
@@ -126,13 +135,20 @@ function isDoomed(u: Unit): boolean {
 // ── 属性修正 ───────────────────────
 // 返回的是增量
 /** 攻击力修正：境界，衰老 −2/岁 */
+// 由于攻击次数和溅射太强，这里的基础数值略为削弱
 function atkModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = 5 * rank + 2**(rank-0.5);
+  const realmsModifier = (5 * rank + 2**(rank-0.5))/(rank**0.2);
   return Math.floor(realmsModifier - getAgingYears(u) * 2);
 }
 /** 真伤修正：用能力实现，不用在这里写 */
 /** 攻击次数修正 */
+// x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
+function attTimesModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = (rank + 1) / 2;
+  return Math.max(1, Math.floor(realmsModifier));
+}
 /** 生命修正 */
 /** 护甲修正：境界，衰老 −1/岁 */
 function armorModifier(u: Unit): number {
@@ -203,11 +219,10 @@ export const CULTIVATION_PACK: Expansion = {
       // 神识：随境界每级 +1 格；衰老：每超龄 1 岁 -1 格。
       return Math.max(1, base + rank - aging);
     },
-    // 一回合攻击次数：(x+1)/2 向下取整，至少 1。
-    // x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
+    // 一回合攻击次数。
     modifyAttacks: ({ unit, attacks }) => {
       if (unit.type !== 'qi-cultivator') return attacks;
-      return Math.max(1, Math.floor((getRank(unit) + 1) / 2));
+      return attTimesModifier(unit);
     },
     // ── 溅射半径：floor(x/4) ────────────────────────
     // x=0~3 -> 0，x=4~7 -> 1，x=8~9 -> 2
@@ -234,7 +249,6 @@ export const CULTIVATION_PACK: Expansion = {
               turn: state.turn,
               player,
               text: `炼气士 寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
-              open: true,
             });
           }
           // 把清场交给核心的 sweepDead。
@@ -248,7 +262,6 @@ export const CULTIVATION_PACK: Expansion = {
             turn: state.turn,
             player,
             text: `炼气士 寿元将尽，身体每况愈下。`,
-            open: true,
           });
         }
 

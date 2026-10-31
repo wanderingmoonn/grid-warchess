@@ -1925,10 +1925,7 @@ type Exp = (typeof EXPANSIONS)[number];
 
 /** 有些扩展一句 summary 说不清，在这里补。key 是扩展 id */
 const SMALL_NOTES: Record<string, string> = {
-  bloodbath: `<p><b>「血战」默认开着。</b>不特别说明的话，新对局就是"血战 + 你另外勾选的那些"。
-        它是给后半场踩刹车的：第 ${BLOOD_TURN} 回合起城市不再回血、升级恢复原价、全军移动与视野各 +1。
-        实测（各 120 局、同种子配对）开与不开：古典未决率 5.8% → 0.8%、平均少打 19 回合；中世 17.5% → 10.0%、少打 15 回合；
-        先后手胜率没有可分辨的变化。想体验老节奏就在面板里把它取消勾选。</p>`,
+  bloodbath: `<p><b>「血战」默认开启。</b>第 ${BLOOD_TURN} 回合起城市不再回血、升级恢复原价、全军移动与视野各 +1。</p>`,
   blackout: `<p>原来那套雾只遮<b>单位</b>：地形、河流、敌城的位置永远是公开的，等于一张免费的地图。
         开「浓雾蔽野」之后这一层也没了：</p>
       <ul>
@@ -2036,6 +2033,7 @@ const PACK_NOTES: Record<string, string> = {
         身边有人伤得重就降临；不死鸟倒下后留下的蛋，轮到它时 AI 会自己挑地方孵。</p>`,
   'fantasy-arcane': `<p>召唤物（骷髅、僵尸犬、土元素这类）和土墙<b>不占编制</b>：它们不算进
         "最多多少个单位"那道门槛，所以不会把你自己的产线堵死。召唤师被杀，已经召出来的还在场上。</p>`,
+  'cultivation': `<p>这个包引入了<b>境界</b>与<b>寿元</b>……（这里写这个包的核心玩法）</p>`,
   'city-works': `<p>这个包动的是<b>骨架</b>，六条要记住：</p>
         <ul class="bullets">
           <li><b>主城 3×3</b>：城市占九格，耐久 +50%。城墙更厚，攻城就成了苦差事。</li>
@@ -2262,6 +2260,8 @@ interface BookGroup {
   kind: 'fantasy' | 'era';
   /** 开篇导读：这一册为什么这样编 */
   intro: string;
+  // 各种扩展包各自的新规则
+  rulesHtml?: string | (() => string); 
 }
 
 const BOOK_GROUPS: BookGroup[] = [
@@ -2272,6 +2272,7 @@ const BOOK_GROUPS: BookGroup[] = [
       '奇想五包的合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
     prefix: 'fantasy-',
     kind: 'fantasy',
+    rulesHtml: () => fantasyRules(), 
     intro: `<p>这一册收了<b>五个包</b>，但它们不是五选一，而是"一套底座 + 四队兵"：
         「奇想·法则」只带机制（魔法、属性、状态、空中层），一个兵都不带；
         另外四包各补一队兵，全部<b>依赖</b>它。所以想玩奇幻，最少要勾两个包——
@@ -2280,6 +2281,75 @@ const BOOK_GROUPS: BookGroup[] = [
         荒兽是<b>机动与毒</b>，秘法是<b>远程与召唤</b>，英雄是<b>单体质量</b>。
         它们可以同时开，但那是给"我想看大乱斗"的人准备的——四个包一起开，
         一场战斗要过四层修正，没人能心算平衡。</p>`,
+  },
+  {
+    file: 'public/manual-pack-cultivation.html',
+    title: '时代与回旋镖 · 修真扩展',
+    subtitle: '修真系列合册',
+    prefix: 'cultivation',
+    kind: 'era',  
+    intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
+    rulesHtml: `
+      <h3>境界与修为</h3>
+      <p>炼气士不是“造出来就定型”的兵。它每回合打坐涨修为，击杀再额外拿一笔（击杀 10 点）。境界从<b>凡人</b>一路推到<b>渡劫</b>。境界越高，攻击、护甲、射程、神识、攻击次数、溅射半径一起涨。</p>
+      
+      <div class="formula">
+        升级所需总经验 = <b>10 + 10 × 境界 × (境界 + 1) + 0.05 × 4<sup>境界</sup></b><br />
+        <span class="c">（当前境界从 0 算起，最高为 9 级；每回合自动获得等于“当前境界 + 2”的经验）</span>
+      </div>
+
+            <h3>各境界属性加成对照表</h3>
+      <p>境界提升时，会立刻按以下公式结算加成，并回复相应血量：</p>
+      <table>
+        <thead>
+          <tr><th>属性</th><th>具体加成公式，小数向下取整</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">攻击力</td><td>（5 × 境界 + 2<sup>(境界 − 0.5)</sup>） + 境界<sup>0.2</sup></td></tr>
+          <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> </td></tr>
+          <tr><td class="name">射程</td><td>境界 ÷ 2 </td></tr>
+          <tr><td class="name">视野（神识）</td><td>基础视野 + 境界</td></tr>
+          <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（至少 1 次）</span></td></tr>
+          <tr><td class="name">溅射半径</td><td>境界 ÷ 4 </td></tr>
+          <tr><td class="name">最大生命</td><td>突破时瞬间提升，见下方详情</td></tr>
+        </tbody>
+      </table>
+
+      <h3>突破与生命值</h3>
+      <p>每次境界突破，炼气士的生命上限会迎来一次<b>指数级暴涨</b>，并回复等比例的生命值。</p>
+      
+      <div class="formula">
+        单次突破增加生命 = <b>8.5 + 0.0685 × (新境界<sup>3</sup> × 1.8<sup>新境界</sup> − 旧境界<sup>3</sup> × 1.8<sup>旧境界</sup>)</b><br />
+      </div>
+
+      <p>为了免去心算的麻烦，各阶段突破时增加的生命值如下：</p>
+      <table class="overview">
+        <thead>
+          <tr><th>突破阶段</th><th>增加最大生命</th><th>突破阶段</th><th>增加最大生命</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="name">凡人 → 炼气</td><td class="num">+8</td><td class="name">化神 → 返虚</td><td class="num">+349</td></tr>
+          <tr><td class="name">炼气 → 筑基</td><td class="num">+10</td><td class="name">返虚 → 合体</td><td class="num">+943</td></tr>
+          <tr><td class="name">筑基 → 金丹</td><td class="num">+17</td><td class="name">合体 → 大乘</td><td class="num">+2434</td></tr>
+          <tr><td class="name">金丹 → 元婴</td><td class="num">+43</td><td class="name">大乘 → 渡劫</td><td class="num">+6048</td></tr>
+          <tr><td class="name">元婴 → 化神</td><td class="num">+124</td><td class="name"></td><td class="num"></td></tr>
+        </tbody>
+      </table>
+      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
+
+      <h3>真元（真实伤害）</h3>
+      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害。它是炼气士打重甲单位的唯一手段。</p>
+      <div class="formula">
+        真实伤害 = <b>境界² ÷ 4 + 境界 × 1.2<sup>境界</sup></b> <span class="c"></span>
+      </div>
+
+      <h3>寿元与衰老</h3>
+      <p>凡人只有十年寿元。境界越高寿元越长（每级增加 10 年，渡劫期永生不死）。</p>
+      <div class="callout">
+        <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
+        超出寿元 <b>3 年</b>就会当场坐化。所以“养一个老祖宗”和“养一个速成的”是两条不同的路线。
+      </div>
+    `,
   },
   {
     file: 'public/manual-pack-eras.html',
@@ -2417,14 +2487,14 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       .join('');
 
   const nav = `
-    <a href="#g-intro">1. 这一册怎么读</a>
+    <a href="#g-intro">1. 基础信息</a>
     <a href="#g-units">2. 兵种总表</a>
     ${packs
       .filter((p) => (p.units ?? []).length > 0)
       .map((p) => `<a class="sub" href="#p-${esc(p.id)}">${esc(shortPackName(p))}</a>`)
       .join('\n    ')}
-    <a href="#g-notes">3. 各包要点</a>${g.kind === 'fantasy' ? '\n    <a href="#g-rules">4. 新规则</a>' : ''}
-    <a href="#g-terms">${g.kind === 'fantasy' ? '5' : '4'}. 机制词条</a>
+    <a href="#g-notes">3. 各包要点</a>${g.rulesHtml ? '\n    <a href="#g-rules">4. 新规则</a>' : ''}
+    <a href="#g-terms">${g.rulesHtml ? '5' : '4'}. 机制词条</a>
   `;
 
   const body = `
@@ -2454,16 +2524,16 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       ${notesHtml() || '<p class="era-meta">这几个包没有额外的玩法说明，看总表即可。</p>'}
     </section>
     ${
-      g.kind === 'fantasy'
+      g.rulesHtml
         ? `<section id="g-rules">
       <h2><span class="sec-num">04</span>新规则</h2>
-      ${fantasyRules()}
+      ${typeof g.rulesHtml === 'function' ? g.rulesHtml() : g.rulesHtml}
     </section>`
         : ''
     }
 
     <section id="g-terms">
-      <h2><span class="sec-num">${g.kind === 'fantasy' ? '05' : '04'}</span>机制词条</h2>
+      <h2><span class="sec-num">${g.rulesHtml ? '05' : '04'}</span>机制词条</h2>
       <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
       ${termTable(takeTerms())}
     </section>
