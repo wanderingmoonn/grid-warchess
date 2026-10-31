@@ -2589,6 +2589,28 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
         score = 26 + Math.min(12, near.length * 2);
         break;
       }
+      case 'ascend': {
+        /*
+         * 圣剑觉醒是**越早开越值**：它加的是永久面板，开得早等于多吃了几个回合的加成。
+         * 但空场上升级没有意义（对面还没来，先把冷却烧掉不划算），
+         * 所以只要求"六格内有人"，不要求贴脸。
+         */
+        if (!foes.some((f) => distance(f, u) <= 6)) break;
+        score = hpRatio < 0.6 ? 38 : 30;
+        break;
+      }
+      case 'dragon-egg': {
+        /*
+         * 陨卵：一枚卵既是伤害也是两回合后的一条龙，所以只要**有一个敌人**
+         * 能吃下这一发就该放——它不是终结技，是"往对面阵线里插一根钉子"。
+         * 真正没得放的情况（周围六格全是自己人/走不进去）交给规则层拒绝，
+         * 这里只做粗判，免得 AI 每次都去试一个必然失败的技能。
+         */
+        const reach = k.radius ?? 6;
+        if (!foes.some((f) => distance(f, u) <= reach)) break;
+        score = 30;
+        break;
+      }
       case 'fuse': {
         /*
          * 聚合：碎片在场上凑够两只就该合回去，血越少越急——

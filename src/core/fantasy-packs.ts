@@ -1933,6 +1933,8 @@ const HERO_IDS = [
   'slime-boss',
   'night-necromancer',
   'holy-knight-lord',
+  'sword-saint',
+  'evil-dragon-king',
 ];
 
 // 英雄数值在技能化之后整体上调过一档（攻/血各 +5% 上下）。
@@ -2188,7 +2190,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     // 甲 2 → 3、射程 1 → 2、视野 3 → 4：血厚甲薄的肉块太容易被"隔着打"白嫖，
     // 射程 2 让它能回手（也意味着它能打到飞行单位了，见 rules 的 strikeDistance）
     armor: 3,
-    maxHp: 200,
+    // 200 → 222（2026-10-31）：它是"靠血换时间"的兵，而现在的集火能力比它上线时更强，
+    // 200 血在工业时代经常撑不过两轮。加两成半的一档，仍是全场最厚的肉。
+    maxHp: 222,
     range: 2,
     vision: 4,
     hero: true,
@@ -2256,20 +2260,24 @@ const HERO_UNITS: UnitTypeDef[] = [
     id: 'night-necromancer',
     name: '暗夜死灵法师',
     short: '冥',
-    era: 4,
+    // 4 代 → 3 代（火药）：招魂的价值随"兵的造价"走，而火药时代正好是
+    // 第一个"每个兵都值一笔钱"的时代。放在工业它永远晚一步，放在中世又太早。
+    era: 3,
     category: 'combat',
-    cost: 420,
+    // 420 → 320，各项面板同步下调：换时代就得换价位，否则火药时代没人买得起它，
+    // 而它又不是那种"贵一点也值得攒"的兵——它的强度来自把队友买回来，不是自己打。
+    cost: 320,
     move: 3,
-    atk: 22,
-    armor: 4,
-    maxHp: 88,
+    atk: 18,
+    armor: 3,
+    maxHp: 76,
     range: 3,
-    vision: 5,
-    magicAtk: 18,
-    magicRes: 4,
+    vision: 4,
+    magicAtk: 14,
+    magicRes: 3,
     element: 'dark',
     hero: true,
-    unlockCost: 200,
+    unlockCost: 160,
     abilities: ['element-ward'],
     skills: [
       {
@@ -2296,7 +2304,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     cost: 470,
     move: 2,
     atk: 36,
-    armor: 12,
+    // 12 → 14（2026-10-31）：它是"站在最前面替全队吃伤害"的定位，
+    // 而 12 甲在工业时代挡不住主流破甲；多这两点，才配得上它 2 速的代价。
+    armor: 14,
     maxHp: 150,
     range: 1,
     vision: 4,
@@ -2319,6 +2329,138 @@ const HERO_UNITS: UnitTypeDef[] = [
       },
     ],
   },
+  // 圣剑勇者：现代时代的光属性大剑。直线溅射 + 越打越强。
+  //
+  // 为什么挂在「现代」上（requiresPack）：它的整套数值是按第六时代定的——
+  // 46 攻、11 甲、140 血在火药时代是碾压，在工业时代也无对手。
+  // 没有现代那一套兵种做参照，它只会变成一个"开了就能赢"的单件。
+  //
+  // 直线溅射（splash + splashLine）：剑气只扫"从它指向目标"的那一条线，
+  // 所以站位从"贴着一堆人"变成"对准一列人"——这是它和炮的差别，
+  // 也是它值得 620 金的理由之一（一列三个重甲，比一圈杂兵更值）。
+  //
+  // 觉醒是**永久**加成：它没有位移、没有控场，全部价值压在"给它两三个回合"。
+  {
+    id: 'sword-saint',
+    name: '圣剑勇者',
+    short: '圣',
+    era: 6,
+    category: 'combat',
+    cost: 620,
+    move: 4,
+    atk: 46,
+    armor: 11,
+    maxHp: 140,
+    range: 2,
+    vision: 6,
+    magicAtk: 12,
+    magicRes: 6,
+    element: 'light',
+    splash: 1,
+    splashLine: true,
+    hero: true,
+    unlockCost: 260,
+    requiresPack: 'pack-contemporary',
+    abilities: ['shield-wall'],
+    skills: [
+      {
+        id: 'ascend',
+        name: '圣剑觉醒',
+        summary:
+          '永久强化自身：攻击 +8、护甲 +2、生命上限 +30，并按新上限回复 30% 生命。可反复叠加，越打越硬。',
+        effect: 'ascend',
+        cooldown: 3,
+        power: 0.3,
+        atkUp: 8,
+        armorUp: 2,
+        hpUp: 30,
+      },
+    ],
+  },
+  // 邪龙王：慢、厚、魔抗极高，怕光。技能是"隔空落一颗会孵化的卵"。
+  //
+  // 属性表就是它的性格：风火水土四系各减半（龙鳞），光系翻倍（它的逆鳞）。
+  // 这两条走的都是既有的 weak/resist 倍率，没有为它新开一条结算。
+  {
+    id: 'evil-dragon-king',
+    name: '邪龙王',
+    short: '邪',
+    era: 6,
+    category: 'combat',
+    cost: 640,
+    // 2 速：它是阵地单位，不是追人的龙。想让它上场，阵线得围着它摆。
+    move: 2,
+    atk: 40,
+    armor: 8,
+    maxHp: 190,
+    range: 3,
+    vision: 6,
+    magicAtk: 30,
+    magicRes: 12,
+    element: 'dark',
+    hero: true,
+    unlockCost: 300,
+    requiresPack: 'pack-contemporary',
+    weak: { light: 2 },
+    resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
+    skills: [
+      {
+        id: 'dragon-egg',
+        name: '陨卵',
+        summary:
+          '在 6 格内挑一个能砸到最多敌人的位置落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
+        effect: 'dragon-egg',
+        cooldown: 3,
+        radius: 6,
+        power: 1,
+      },
+    ],
+  },
+  // 魔龙卵：邪龙王的技能产物。不产线、不占编制，只负责"倒计时"。
+  //
+  // 血量给得不多（30）：它是可以被对面拆掉的——"先清卵还是先打龙"
+  // 正是这个技能想问对手的问题。
+  {
+    id: 'dragon-egg',
+    name: '魔龙卵',
+    short: '卵',
+    era: 6,
+    category: 'combat',
+    cost: 60,
+    move: 0,
+    atk: 0,
+    armor: 1,
+    maxHp: 30,
+    range: 0,
+    vision: 2,
+    magicRes: 6,
+    element: 'dark',
+    summonedOnly: true,
+    hatch: { into: 'magic-dragon', turns: 2 },
+  },
+  // 魔龙：卵孵出来的东西。面板比邪龙王低一档，但会飞、跑得快。
+  {
+    id: 'magic-dragon',
+    name: '魔龙',
+    short: '魔',
+    era: 6,
+    category: 'combat',
+    cost: 300,
+    move: 5,
+    atk: 44,
+    armor: 10,
+    maxHp: 150,
+    range: 2,
+    vision: 6,
+    magicAtk: 22,
+    magicRes: 8,
+    element: 'dark',
+    flight: true,
+    layer: 'air',
+    summonedOnly: true,
+    weak: { light: 2 },
+    resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
+  },
 ];
 
 const HEROES: Expansion = {
@@ -2326,7 +2468,7 @@ const HEROES: Expansion = {
   scale: 'large',
   name: '奇想·英雄',
   summary:
-    '九个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本回合倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）。第一次招募要额外付解锁费，解锁后永久开放。需先开「奇想·法则」。',
+    '十一个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：6 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「现代」扩展。需先开「奇想·法则」。',
   requires: ['fantasy-core'],
   hooks: {},
   units: HERO_UNITS,

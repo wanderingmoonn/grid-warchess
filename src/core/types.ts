@@ -164,6 +164,10 @@ export interface SkillDef {
   armorUp?: number;
   /** 魔法抗性增益，和 armorUp 配套 */
   magicResUp?: number;
+  /** 永久攻击力提升（圣剑勇者的「圣剑觉醒」） */
+  atkUp?: number;
+  /** 永久生命上限提升，配套 atkUp */
+  hpUp?: number;
 }
 
 export interface Tile {
@@ -260,6 +264,32 @@ export interface UnitTypeDef {
   builds?: string[];
   /** 特殊能力 id 列表，见 abilities.ts */
   abilities?: string[];
+  /**
+   * 这个兵**只有在本局也开了另一个扩展时才存在**。
+   *
+   * 和 `Expansion.requires` 的分工：那个管"整包要不要进场"（前置包），
+   * 这个管"包里某一件要不要进场"。圣剑勇者与邪龙王就属于后者——
+   * 它们在奇想·英雄里，但少了「现代」那一套兵种体系，它们既没有对手也没有参照，
+   * 放进来只会变成两个孤零零的六百金大件。
+   *
+   * 收录发生在 `createMatch` 合并兵种表那一刻：条件不满足，这个 id
+   * 根本不进 `state.unitTypes`，于是产线、选卡池、AI 报价全都自然看不到它。
+   */
+  requiresPack?: string;
+  /**
+   * 直线形溅射：只波及从自己指向主目标那条直线上的敌人。
+   *
+   * 普通溅射是"主目标周围一圈"，适合炮；直线溅射是"一条线穿过去"，
+   * 适合剑气、光束这类东西。同一时代里两者并存，玩家才会真的去挑"打一片还是打一列"。
+   */
+  splashLine?: boolean;
+  /**
+   * 孵化：这个"卵"待几回合之后变成另一个兵种。
+   *
+   * 只写在这类临时单位上（魔龙卵）。倒计时按**自己的回合开始**数，
+   * 和充能型技能用同一把尺子——按全局回合数会变成"先手方永远差一拍"。
+   */
+  hatch?: { into: string; turns: number };
   /**
    * 行动域。缺省是 land。
    * water 单位只能待在水面格上（进不了城、上不了岸），
@@ -679,6 +709,21 @@ export interface Unit {
    * 最大生命值修正
    */
   maxHpBonus?: number;
+  /**
+   * 永久攻击力加成（圣剑勇者叠起来的那些）。
+   *
+   * 为什么不写回 `state.unitTypes`：兵种表是**这一局的公共表**，改它等于让
+   * 场上所有同名单位一起变强。增益属于"这一个单位"，只能挂在它身上。
+   */
+  atkBonus?: number;
+  /** 永久护甲加成，和 atkBonus 同一套理由 */
+  armorBonus?: number;
+  /**
+   * 孵化还剩几个自己的回合（只有写 `hatch` 的兵种有）。
+   *
+   * 出场时按兵种表初始化，之后每次自己回合开始 −1，归零就换型。
+   */
+  hatchLeft?: number;
 
   /**
    * 本回合剩余攻击次数。

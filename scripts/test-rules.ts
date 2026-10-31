@@ -1871,6 +1871,8 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
 console.log('\n奇想兵种包：前置、机制、数值');
 
 const FANTASY = ['fantasy-core', 'fantasy-knights', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-heroes'];
+/** 奇想全开 + 现代：圣剑勇者、邪龙王只在「现代」在场时才是这一局的兵种 */
+const FANTASY_WITH_MODERN = [...FANTASY, 'pack-contemporary'];
 
 /** 摆一个本局存在的兵种（含扩展包），会清掉这一格上的所有单位 */
 function place2(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
@@ -1992,20 +1994,24 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包装九个英雄，外加跟班的召唤物', () => {
+test('英雄包装十一个英雄，外加跟班的召唤物', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
-  assert.equal(heroes.length, 9);
+  assert.equal(heroes.length, 11);
   for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
   }
-  // 大史莱姆是牢大的碎片，跟召唤者住一个包，但绝不能进产线
+  // 跟班的召唤物：大史莱姆（牢大的碎片）、魔龙卵与魔龙（邪龙王那条链）。
+  // 三者都住在英雄包里，但绝不能进产线。
   const minions = units.filter((u) => u.hero !== true);
-  assert.equal(minions.length, 1, '英雄包里的非英雄单位只有大史莱姆');
-  assert.equal(minions[0]!.id, 'slime-giant');
-  assert.equal(minions[0]!.summonedOnly, true, '大史莱姆只能被裂殖出来');
+  assert.deepEqual(
+    minions.map((u) => u.id).sort(),
+    ['dragon-egg', 'magic-dragon', 'slime-giant'],
+    '英雄包里的非英雄单位只有这三只',
+  );
+  for (const m of minions) assert.equal(m.summonedOnly, true, `${m.name} 只能被召唤/孵化出来`);
 });
 
 test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
@@ -2019,8 +2025,13 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
     // 上限 650：至尊法师这一档（攻 -10 → 魔法 +10、甲 +4、魔抗 +4、射程 +1、
     // 视野 +1）的价格按 +50 走，640 仍在"英雄"这一档里；再往上就该另算。
-    assert.ok(u.cost >= 360 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
-    // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵
+    // 下限 300：暗夜死灵法师 2026-10-31 降到火药时代，价 320——它是"靠技能吃饭"
+    // 的便宜英雄，不该被这条按工业/现代英雄写的下限卡住。
+    assert.ok(u.cost >= 300 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
+    // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火药时代（320 金），
+    // 这一条"涨"的规则对它不成立。
+    if (u.id === 'night-necromancer') continue;
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
 });
@@ -2135,6 +2146,146 @@ test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自�
   assert.equal(effectiveStats(t2.state, expired).armor, armorBefore, '护甲回到原位');
 });
 
+test('奇想数值调整：死灵法师降到火药并降价、骑士长 +2 甲、牢大 +22 血', () => {
+  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []);
+  const of = (id: string) => heroes.find((u) => u.id === id)!;
+
+  const necro = of('night-necromancer');
+  assert.equal(necro.era, 3, '暗夜死灵法师改到火药时代');
+  assert.equal(necro.cost, 320, '造价降到 320');
+  // 整体下调：攻/血/甲/魔攻/视野都比上一版低
+  assert.ok(necro.atk < 22 && necro.maxHp < 88 && necro.armor < 4, '面板整体下调');
+  assert.equal(necro.range, 3, '仍是远程，射程没动');
+  assert.equal(necro.move, 3, '仍是中速');
+
+  assert.equal(of('holy-knight-lord').armor, 14, '神圣骑士长护甲 12 → 14');
+  assert.equal(of('slime-boss').maxHp, 222, '史莱姆牢大 200 → 222');
+});
+
+test('圣剑勇者与邪龙王：只在同时开了「现代」时收录', () => {
+  const without = fresh({ startEra: 6, expansionIds: ['fantasy-core', 'fantasy-heroes'] });
+  assert.equal(without.unitTypes['sword-saint'], undefined, '没开现代时不该有圣剑勇者');
+  assert.equal(without.unitTypes['evil-dragon-king'], undefined, '没开现代时不该有邪龙王');
+
+  const withModern = fresh({
+    startEra: 6,
+    expansionIds: ['fantasy-core', 'fantasy-heroes', 'pack-contemporary'],
+  });
+  const saint = withModern.unitTypes['sword-saint'];
+  const dragon = withModern.unitTypes['evil-dragon-king'];
+  assert.ok(saint && dragon, '开了现代，两位都该在');
+  assert.equal(saint!.era, 6, '圣剑勇者是现代时代');
+  assert.equal(saint!.element, 'light', '光属性');
+  assert.equal(saint!.move, 4, '移速 4');
+  assert.equal(saint!.range, 2, '射程 2');
+  assert.equal(saint!.splashLine, true, '攻击是直线形溅射');
+  assert.ok(saint!.maxHp >= 120 && saint!.atk >= 40 && saint!.armor >= 10, '高血高攻高甲');
+
+  assert.equal(dragon!.era, 6, '邪龙王也是现代时代');
+  assert.equal(dragon!.move, 2, '低移速');
+  assert.ok(dragon!.maxHp >= 180, '高血量');
+  assert.ok((dragon!.magicRes ?? 0) >= 10, '高魔抗');
+  // 属性：风火水土减半，光翻倍
+  for (const el of ['fire', 'water', 'earth', 'wind'] as const) {
+    assert.equal(dragon!.resist?.[el], 0.5, `${el} 应该减半`);
+  }
+  assert.equal(dragon!.weak?.light, 2, '光属性应该翻倍');
+
+  // 卵与龙在同一个包里（技能产物），且都进不了产线
+  assert.equal(withModern.unitTypes['dragon-egg']!.summonedOnly, true);
+  assert.equal(withModern.unitTypes['magic-dragon']!.summonedOnly, true);
+});
+
+test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  for (let x = 4; x <= 10; x += 1) putTerrain(s, x, 5, 'plain');
+  for (let y = 4; y <= 8; y += 1) putTerrain(s, 6, y, 'plain');
+
+  const saint = place(s, 'A', 'sword-saint', 5, 5);
+  // 靶子用 40 血的剑士而不是 30 血的民兵：46 攻一发就把民兵打死，
+  // 溅射那一份就无从观察了（这条测的是"扫哪边"，不是"打多疼"）
+  const main = place(s, 'B', 'swordsman', 7, 5); // 正东，射程 2
+  const online = place(s, 'B', 'swordsman', 8, 5); // 同一条线上，主目标旁边
+  const offline = place(s, 'B', 'swordsman', 6, 6); // 斜后方，不在线上
+
+  const hpOffline = offline.hp;
+  const hpOnline = online.hp;
+  const atk = applyAction(s, { type: 'ATTACK', unitId: saint.id, targetId: main.id });
+  assert.ok(atk.ok, atk.ok ? '' : atk.reason);
+  const after = (id: string) => atk.state.units.find((u) => u.id === id);
+  assert.ok(after(online.id)!.hp < hpOnline, '直线上的第二个敌人要吃溅射');
+  assert.equal(after(offline.id)!.hp, hpOffline, '不在直线上的敌人不该被波及');
+
+  // 觉醒：永久 +8 攻 / +2 甲 / +30 生命上限，并回血
+  const s2 = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s2.units = [];
+  const hero = place(s2, 'A', 'sword-saint', 5, 5);
+  hero.hp = 60;
+  const atk0 = effectiveStats(s2, hero).atk;
+  const armor0 = effectiveStats(s2, hero).armor;
+  const max0 = maxHpOf(s2, hero);
+  const r = applyAction(s2, { type: 'HERO_SKILL', unitId: hero.id, skillId: 'ascend' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const up = r.state.units.find((u) => u.id === hero.id)!;
+  assert.equal(effectiveStats(r.state, up).atk, atk0 + 8, '攻击永久 +8');
+  assert.equal(effectiveStats(r.state, up).armor, armor0 + 2, '护甲永久 +2');
+  assert.equal(maxHpOf(r.state, up), max0 + 30, '生命上限永久 +30');
+  assert.ok(up.hp > 60, '同时回血');
+});
+
+test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  for (let x = 3; x <= 12; x += 1) for (let y = 3; y <= 9; y += 1) putTerrain(s, x, y, 'plain');
+  const dragon = place(s, 'A', 'evil-dragon-king', 5, 5);
+  const foes = [
+    place(s, 'B', 'swordsman', 8, 5),
+    place(s, 'B', 'swordsman', 8, 6),
+  ];
+  const hpBefore = foes.map((f) => f.hp);
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: dragon.id, skillId: 'dragon-egg' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const egg = r.state.units.find((u) => u.type === 'dragon-egg');
+  assert.ok(egg, '应该落下一枚魔龙卵');
+  let hurt = 0;
+  for (let i = 0; i < foes.length; i += 1) {
+    const now = r.state.units.find((u) => u.id === foes[i]!.id)!;
+    if (now.hp < hpBefore[i]!) hurt += 1;
+  }
+  assert.ok(hurt >= 1, '落点范围内的敌人应该吃到伤害');
+
+  // 卵按"自己的回合"孵化：两次 A 的回合开始 → 魔龙
+  let st = r.state;
+  for (let i = 0; i < 4; i += 1) {
+    const end = applyAction(st, { type: 'END_TURN' });
+    assert.ok(end.ok, end.ok ? '' : end.reason);
+    st = end.state;
+  }
+  const hatched = st.units.find((u) => u.id === egg!.id);
+  assert.ok(hatched, '卵应该还在场上（或者已经变成龙）');
+  assert.equal(hatched!.type, 'magic-dragon', '两回合后孵成魔龙');
+});
+
+test('邪龙王的光/火抗性：同一发攻击，光翻倍、火减半', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 5, 6, 'plain');
+  const target = place(s, 'B', 'evil-dragon-king', 5, 5);
+  // 两个只有属性不同的"探针"攻击者
+  const base = { ...s.unitTypes['militia']!, atk: 60, magicAtk: 0, range: 2 };
+  s.unitTypes['probe_light'] = { ...base, id: 'probe_light', element: 'light' };
+  s.unitTypes['probe_fire'] = { ...base, id: 'probe_fire', element: 'fire' };
+  const light = place(s, 'A', 'probe_light', 5, 6);
+  const byLight = computeDamage(s, light, target);
+  s.units = s.units.filter((u) => u.id !== light.id);
+  const fire = place(s, 'A', 'probe_fire', 5, 6);
+  const byFire = computeDamage(s, fire, target);
+  assert.ok(byLight > byFire * 3, `光应该远高于火（光 ${byLight} / 火 ${byFire}）`);
+});
+
 test('招魂：付生产价格把倒下的友军拉回来，且同一具只能招一次', () => {
   const s = fresh({ expansionIds: FANTASY });
   for (const [x, y] of [[5, 5], [6, 5], [7, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
@@ -2158,8 +2309,10 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const back = r.state.units.filter((u) => u.owner === 'A' && u.type === 'militia');
   assert.equal(back.length, militiaBefore, '倒下几个就补回来几个');
-  const raised = back.find((u) => u.id !== doomed.id && distance(u, r.state.units.find((x) => x.id === necro.id)!) <= 1);
-  assert.ok(raised, '应该有一个民兵站在死灵法师身边（那就是招回来的）');
+  const raised = back.find(
+    (u) => u.id !== doomed.id && distance(u, r.state.units.find((x) => x.id === necro.id)!) <= 2,
+  );
+  assert.ok(raised, '应该有一个民兵站在死灵法师两格之内（那就是招回来的）');
   const zombie = raised as Unit;
   assert.equal(zombie.moved, true, '当回合不能动');
   assert.equal(zombie.acted, true, '当回合不能打');

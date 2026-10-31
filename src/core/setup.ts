@@ -128,7 +128,13 @@ export function createMatch(
   const extraUnits: Record<string, UnitTypeDef> = { ...customUnits };
   for (const id of config.expansionIds) {
     if (!liveExpansions.has(id)) continue;
-    for (const u of expansionById(id)?.units ?? []) extraUnits[u.id] = { ...u };
+    for (const u of expansionById(id)?.units ?? []) {
+      // 单位级的额外前置（`requiresPack`）：圣剑勇者、邪龙王要「现代」那一套才成立。
+      // 这里直接不收，而不是收进来再在产线上标灰——不存在的兵种不该在选卡池、
+      // AI 报价、规则书里各留下一个"看着能买、点了没反应"的影子。
+      if (u.requiresPack && !liveExpansions.has(u.requiresPack)) continue;
+      extraUnits[u.id] = { ...u };
+    }
   }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 

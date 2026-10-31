@@ -733,7 +733,8 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
  * 单位和城市共用这一段——攻城时"我的兵被威吓了"照样该少打几下城墙，
  */
 export function attackPowerNow(s: GameState, attacker: Unit): number {
-  let atkNow = utype(s, attacker.type).atk + auraBonus(s, attacker).atk;
+  // 圣剑勇者这类"永久变强"的加成记在单位身上，不进兵种表（见 types 的 atkBonus）
+  let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonus(s, attacker).atk;
   for (const [key, val] of orderedStatuses(attacker.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
@@ -990,6 +991,9 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
     moved: true,
     acted: true,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
+    // 卵一落地就开始倒计时：写在这里而不是"第一次回合开始"，
+    // 否则每颗卵都会比自己写的 `turns` 多待一个回合。
+    ...(def.hatch ? { hatchLeft: def.hatch.turns } : {}),
   };
 }
 
@@ -1062,6 +1066,33 @@ export function canStandAt(s: GameState, x: number, y: number, type: string): bo
     }
   }
   return true;
+}
+
+/**
+ * 找一格**半径 r 以内**的空地（先近后远，同一圈里按左上到右下）。
+ *
+ * 招魂从"只能放在身边"改成"两格以内"之后需要它：相邻四格在混战里几乎永远是满的，
+ * 而"复活"失败的理由如果总是"身边没地方站"，这个技能就只在空旷时才成立。
+ * 由近及远而不是随机，是为了让落点可预期——玩家能大概猜到人会站在哪。
+ */
+function freeSpotWithin(
+  s: GameState,
+  unit: Unit,
+  type: string,
+  radius: number,
+): { x: number; y: number } | null {
+  for (let r = 1; r <= radius; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        // 只看这一圈的边，圈内更近的上一轮已经找过了
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = unit.x + dx;
+        const y = unit.y + dy;
+        if (canStandAt(s, x, y, type)) return { x, y };
+      }
+    }
+  }
+  return null;
 }
 
 /** 找一格相邻空地放召唤物/分裂体。找不到返回 null。 */
@@ -1251,9 +1282,10 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   const def = utype(s, u.type);
 
   // ── 攻击 ──
-  const atkBase = def.atk;
+  const atkBase = def.atk + (u.atkBonus ?? 0);
   const atkItems: StatItem[] = [];
   let atk = atkBase;
+  if (u.atkBonus) atkItems.push({ label: '圣剑觉醒', delta: u.atkBonus });
   const aura = auraBonus(s, u);
   if (aura.atk !== 0) {
     atk += aura.atk;
@@ -1311,9 +1343,10 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   }
 
   // ── 护甲（按当前所在格算）──
-  const armorBase = def.armor;
+  const armorBase = def.armor + (u.armorBonus ?? 0);
   const armorItems: StatItem[] = [];
   let armor = armorBase;
+  if (u.armorBonus) armorItems.push({ label: '圣剑觉醒', delta: u.armorBonus });
   const tile = tileAt(s, u.x, u.y);
   if (aura.armor !== 0) {
     armor += aura.armor;
@@ -1953,7 +1986,7 @@ export function computeDamage(
   const atkNow = attackPowerNow(s, attacker);
 
   // 3. 核心：真实护甲是动态读取城市的，而不是读全局表里的 0
-  const actualArmor = isCity ? city.armor : dt.armor;
+  const actualArmor = isCity ? city.armor : dt.armor + (defender.armorBonus ?? 0);
 
   const ctx: HookCtx = {
     state: s,
@@ -2197,6 +2230,24 @@ export function splashRatioOf(u: Unit): number {
  *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
  *      所以"直接伤害 + 溅射"加起来也只结算一次。
  */
+/**
+ * 这一格是否落在"从攻击者指向主目标"的那条直线上（含对角线）。
+ *
+ * 只用来判直线溅射：方向由 `a → d` 决定，`v` 必须同方向、共线。
+ * 用锚点算而不是身体最近边——直线是瞄准线，不是覆盖面积，
+ * 2×2 单位挡在线上时按它自己那一格算反而更符合直觉。
+ */
+function onStrikeLine(a: Unit, d: Unit, v: Unit): boolean {
+  const dx = Math.sign(d.x - a.x);
+  const dy = Math.sign(d.y - a.y);
+  if (dx === 0 && dy === 0) return true;
+  const vx = v.x - a.x;
+  const vy = v.y - a.y;
+  if (dx === 0) return vx === 0 && Math.sign(vy) === dy;
+  if (dy === 0) return vy === 0 && Math.sign(vx) === dx;
+  return vx * dy === vy * dx && Math.sign(vx) === dx && Math.sign(vy) === dy;
+}
+
 function splashVictims(
   s: GameState,
   attacker: Unit,
@@ -2204,6 +2255,8 @@ function splashVictims(
 ): Array<{ unit: Unit; dmg: number }> {
   const radius = splashRadiusOf(s, attacker);
   if (radius <= 0) return [];
+  // 直线溅射（剑气、光束）：只扫那条线上的，不扫"周围一圈"
+  const line = utype(s, attacker.type).splashLine === true;
 
   const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
@@ -2213,6 +2266,7 @@ function splashVictims(
     // 已经结算过的（主目标，或者同一格被扫到两次）不再收
     if (seen.has(v.id)) continue;
     if (distBetweenUnits(s, defender, v) > radius) continue;
+    if (line && !onStrikeLine(attacker, defender, v)) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
@@ -4135,10 +4189,11 @@ SKILL_EFFECTS['raise-dead'] = (c) => {
     c.result.reason = `招魂「${def.name}」还差：${missingLabel(me, cost)}`;
     return;
   }
-  const spot = c.api.freeNeighbor(c.state, c.self, pick.type);
+  // 两格以内（2026-10-31 从"相邻一格"放宽）：混战里贴身的四格基本是满的
+  const spot = freeSpotWithin(c.state, c.self, pick.type, 2);
   if (!spot) {
     c.result.ok = false;
-    c.result.reason = '身边没有能站起来的空地';
+    c.result.reason = '两格内没有能站起来的空地';
     return;
   }
   payRes(me, cost);
@@ -4182,6 +4237,100 @@ SKILL_EFFECTS['holy-banner'] = (c) => {
     return;
   }
   c.api.pushLog(c.state, c.self.owner, `圣旗：${n} 个友军获得护甲 +${armorUp}、魔抗 +${magicUp}、阵列`);
+};
+
+/**
+ * 圣剑觉醒（圣剑勇者）：永久强化自己，并回一口血。
+ *
+ * 为什么是**永久**而不是"这一回合"：这个英雄的定位就是"越打越强"，
+ * 它没有位移、没有控场，全部价值都压在"给它两三个回合，它就变成另一个兵"。
+ * 加成写在单位上（`atkBonus` / `armorBonus` / `maxHpBonus`），不写兵种表——
+ * 兵种表是这一局的公共表，动了它等于全场同名单位一起变强。
+ */
+SKILL_EFFECTS['ascend'] = (c) => {
+  const atkUp = c.skill.atkUp ?? 8;
+  const armorUp = c.skill.armorUp ?? 2;
+  const hpUp = c.skill.hpUp ?? 30;
+  const heal = c.skill.power ?? 0.3;
+  c.self.atkBonus = (c.self.atkBonus ?? 0) + atkUp;
+  c.self.armorBonus = (c.self.armorBonus ?? 0) + armorUp;
+  c.self.maxHpBonus = (c.self.maxHpBonus ?? 0) + hpUp;
+  // 上限涨了，回血按**新的**上限算：先加上限再回血，这一口才吃得到自己刚长出来的那截
+  const max = maxHpOf(c.state, c.self);
+  const healed = Math.max(1, Math.round(max * heal)) + hpUp;
+  c.self.hp = Math.min(max, c.self.hp + healed);
+  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}、生命上限 +${hpUp}，回复 ${healed} 点`;
+};
+
+/**
+ * 陨卵（邪龙王）：在超大范围内落下一枚魔龙卵，落点周围吃一发暗属性魔法。
+ *
+ * 落点是**自动挑**的：引擎的 HERO_SKILL 没有"目标格"这个字段（所有技能都不带目标），
+ * 所以按"这一发能打出最多伤害"来选——先算每个可站格子里能覆盖到多少敌人、
+ * 各吃多少，再挑总和最高的那个；同样多时取离自己近的，让落点看起来"是它抬手砸下去的"。
+ *
+ * 伤害走魔法段（不吃护甲、只被魔抗挡），再过一遍属性倍率——
+ * 光属性的敌人会吃双倍，这正是邪龙王那条属性弱点的另一半。
+ */
+SKILL_EFFECTS['dragon-egg'] = (c) => {
+  const reach = c.skill.radius ?? 6;
+  const blast = c.skill.power ?? 1;
+  const eggType = 'dragon-egg';
+  if (!c.state.unitTypes[eggType]) {
+    c.result.ok = false;
+    c.result.reason = '这个版本里没有魔龙卵';
+    return;
+  }
+  const foes = c.state.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
+  if (foes.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '范围内没有敌人';
+    return;
+  }
+
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -1;
+  for (let dy = -reach; dy <= reach; dy += 1) {
+    for (let dx = -reach; dx <= reach; dx += 1) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) continue;
+      const x = c.self.x + dx;
+      const y = c.self.y + dy;
+      if (!c.api.canStandAt(c.state, x, y, eggType)) continue;
+      let score = 0;
+      for (const f of foes) {
+        if (Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) > blast) continue;
+        score += magicDamageOf(c.state, c.self, f);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  if (!best || bestScore <= 0) {
+    c.result.ok = false;
+    c.result.reason = '没有能砸到敌人的落点';
+    return;
+  }
+
+  c.api.spawn(c.state, c.self.owner, eggType, best.x, best.y);
+  let hit = 0;
+  let dealt = 0;
+  for (const f of foes) {
+    if (Math.max(Math.abs(f.x - best.x), Math.abs(f.y - best.y)) > blast) continue;
+    const fd = utype(c.state, f.type);
+    const raw = magicDamageOf(c.state, c.self, f);
+    const dmg = Math.max(0, Math.round(applyElementMul(raw, 'dark', fd.weak, fd.resist)));
+    if (dmg <= 0) continue;
+    f.hp -= dmg;
+    hit += 1;
+    dealt += dmg;
+  }
+  sweepDead(c.state);
+  c.result.log =
+    hit > 0
+      ? `陨卵落在 (${best.x},${best.y})：${hit} 个敌人共受 ${dealt} 点暗属性伤害`
+      : `陨卵落在 (${best.x},${best.y})，这一下没砸到人`;
 };
 SKILL_EFFECTS['mitosis'] = (c) => {
   const def = utype(c.state, c.self.type);
@@ -4499,6 +4648,26 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
       const left = (u.buff.turns ?? 1) - 1;
       if (left > 0) u.buff.turns = left;
       else delete u.buff;
+    }
+
+    // 孵化（魔龙卵）：按**自己的回合**数，和充能技能一把尺子。
+    // 换型保留血量比例：一颗被打掉半血的卵不该孵出一条满血的龙。
+    const hatch = utype(s, u.type).hatch;
+    if (hatch) {
+      const left = (u.hatchLeft ?? hatch.turns) - 1;
+      if (left > 0) {
+        u.hatchLeft = left;
+      } else {
+        const from = utype(s, u.type);
+        const to = s.unitTypes[hatch.into];
+        if (to) {
+          const ratio = from.maxHp > 0 ? Math.min(1, u.hp / from.maxHp) : 1;
+          u.type = hatch.into;
+          u.hp = Math.max(1, Math.round(to.maxHp * ratio));
+          delete u.hatchLeft;
+          pushLog(s, p, `${from.name} 孵化成了 ${to.name}`, true);
+        }
+      }
     }
     if (u.status) {
       for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
