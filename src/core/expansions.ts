@@ -572,6 +572,15 @@ export function turnOrderBonusFor(size: number): number {
 export const LAST_STAND_BONUS = 0.1;
 
 /**
+ * 「老兵不死」在城市地块上的每回合回复比例（占最大生命）。
+ *
+ * 8% 这个数是按"两回合回一次有效攻击"挑的：工业时代一轮集火大约打掉 30%~40%，
+ * 8%/回合意味着站城休整三四回合才补得回来——它是"阵地能守住"，不是"打不死"。
+ * 再高（比如 15%）会让攻城变成谁先撤谁赢的拉锯，那就不是在打，是在耗。
+ */
+export const VETERAN_CITY_HEAL = 0.08;
+
+/**
  * 「哀兵必胜」的伤害修正，野战和攻城共用一份，免得两边取整规则走散。
  *
  * 靠 state.firstCityLost 而不是"当前城数"：城会被抢回来，抢回来那一刻
@@ -597,7 +606,8 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'veterans',
     name: '老兵不死',
-    summary: '单位每击杀一个敌人永久 +1 攻击力，越打越硬。',
+    summary:
+      '单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。',
     hooks: {
       modifyDamage: ({ attacker, damage }) => damage + attacker.kills,
       onUnitKilled: ({ killer }) => {
@@ -607,6 +617,42 @@ export const EXPANSIONS: Expansion[] = [
       modifyStatAtk: ({ unit, atk }) => {
         // 如果这个兵有击杀数，面板上就加成
         return atk + unit.kills;
+      },
+      /**
+       * 城下休整：自己回合开始时，站在**己方城市地块**上的单位回 8% 血。
+       *
+       * 判定口径（这四条是规则本身，不是实现细节）：
+       *   · **只认己方城市**：`city.owner === player` 才算。别人城里站不进去
+       *     （rules 的 blockedFor 挡着），废墟虽然能站但不算"城下"——
+       *     把一个被烧平的城当补给点，等于鼓励"先拆了再蹲进去"。
+       *   · **每回合只结一次**：按单位算，不按它脚踏几格城算，
+       *     所以站在 2×2 城的交界上也不会回两倍。
+       *   · **有上限**：不超过当前最大生命（含圣剑觉醒那类 maxHpBonus）。
+       *   · **不复活**：只处理 hp > 0 的活人；死在城里的不会因此站起来。
+       *
+       * 为什么挂 onTurnStart 而不是 onTurnEnd：回合开始回血，这一回合的行动
+       * 就能围绕"我刚补了多少"来规划；挂回合末的话，回到血的那一下已经
+       * 没有行动可用了，玩家感知不到。
+       */
+      onTurnStart: ({ state, player }) => {
+        let healed = 0;
+        for (const u of state.units) {
+          if (u.owner !== player || u.hp <= 0) continue;
+          const tile = state.tiles[u.y * state.w + u.x];
+          if (!tile?.cityId) continue;
+          const city = state.cities.find((c) => c.id === tile.cityId);
+          if (!city || city.owner !== player || city.ruined) continue;
+          const def = state.unitTypes[u.type];
+          if (!def) continue;
+          const max = def.maxHp + (u.maxHpBonus ?? 0);
+          if (u.hp >= max) continue;
+          const gain = Math.min(max - u.hp, Math.max(1, Math.round(max * VETERAN_CITY_HEAL)));
+          u.hp += gain;
+          healed += 1;
+        }
+        if (healed > 0) {
+          log(state, player, `老兵不死：${healed} 支部队在城下休整，回复 ${Math.round(VETERAN_CITY_HEAL * 100)}% 生命`);
+        }
       },
     },
   },

@@ -27,6 +27,9 @@
   --forest: #aecb98;
   --hill: #ddcba6;
   --water: #a8cadf;
+  /* 深水：比 --water 深两档的蓝，和 --plain（草绿）拉开明度与色相两个维度，
+     缩略图上一眼就能分出"这里过不去"。 */
+  --deep: #4a7fa6;
   --mountain: #c4ccd6;
   --bridge: #c9a878;
   --city: #d3d7de;
@@ -368,6 +371,26 @@ body {
 .tile.t-water {
   background: var(--water);
   cursor: not-allowed;
+}
+
+/* 深水（外海/大河心）：深蓝底 + 稀疏波纹 + 内阴影。
+   三条一起用，是因为只改颜色还不够——缩到 20px 的缩略图上，
+   明度差会被抗锯齿抹平，得靠"有没有纹路"来分辨。
+   波纹比浅流更疏（9px vs 6px）：深水是"看不到底"，浅流是"能踩过去"。 */
+.tile.t-deep {
+  background: var(--deep);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), inset 0 -2px 4px rgba(0, 0, 0, 0.18);
+  cursor: not-allowed;
+}
+.tile.t-deep::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.16) 0 1px,
+    transparent 1px 9px
+  );
 }
 /* 高山：画成一座带雪顶的尖山。
    以前它只是"比丘陵深一点的底色"，缩略或者隔着雾看一眼，

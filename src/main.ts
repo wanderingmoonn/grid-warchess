@@ -265,14 +265,43 @@ let recruitEra = 0;
 /**
  * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
  *
- * 掉血靠前后两帧的血量差自己算出来，而不是在每处扣血的地方各喊一声——
- * 扣血路径有交战、反击、溅射、中毒、灼烧、攻城好几条，逐条挂必然漏；
- * "上一帧它是多少血"这件事只有渲染层知道，放这儿最省事也最不会漏。
+ * 掉血不能靠"渲染时和上一帧比"来推——渲染会因为顶栏、横幅、悔棋、
+ * 联机拉取、AI 连走被跳过或重放，那个比对会把旧伤当新伤，
+ * 表现为"打了一个兵，旁边几个老伤号一起演了一遍掉血"。
+ *
+ * 所以改成**动作前后对账**：`dispatch` / AI 每落地一个动作，就在
+ * `noteHpDrops` 里把"这一下真少了血的单位"记进 `pendingDrops`，
+ * 绘制时取走并清空。一次动作只可能标记它真正伤到的那几个。
  *
  * 出手那一侧算不出来（它自己没掉血），所以由 dispatch 记一笔，绘制时消费一次。
  */
-const hpSeen = new Map<string, number>();
+const pendingDrops = new Map<string, number>();
 let lastStrikerId: string | null = null;
+
+/**
+ * 对账：`after` 里哪些单位比 `before` 少血，以及少之前占最大生命的比例。
+ *
+ * 三条保守约定：
+ *   · 换型的（晋升/孵卵/聚合）不算掉血——maxHp 变了，比例不可比；
+ *   · 只见于一边的（新兵出生、阵亡）不算，它们没有"之前"；
+ *   · 比例差小于 0.1% 的忽略，避免浮点噪声把满血单位也标记成受击。
+ */
+function noteHpDrops(before: GameState, after: GameState): void {
+  const prev = new Map<string, { type: string; ratio: number }>();
+  for (const u of before.units) {
+    const def = before.unitTypes[u.type];
+    if (!def || def.maxHp <= 0) continue;
+    prev.set(u.id, { type: u.type, ratio: u.hp / def.maxHp });
+  }
+  for (const u of after.units) {
+    const was = prev.get(u.id);
+    if (!was || was.type !== u.type) continue;
+    const def = after.unitTypes[u.type];
+    if (!def || def.maxHp <= 0) continue;
+    const now = u.hp / def.maxHp;
+    if (now < was.ratio - 0.001) pendingDrops.set(u.id, was.ratio);
+  }
+}
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -767,22 +796,15 @@ function render(): void {
       ? Array.from(threatTiles(state, selected))
       : [];
 
-  // 这一帧要抖谁：掉血的（强度 1）+ 刚出手的（0.55，往前一顿）
+  // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
+  const hpDrops = new Map(pendingDrops);
+  pendingDrops.clear();
   const impacts = new Map<string, number>();
-  {
-    const alive = new Set<string>();
-    for (const u of view.state.units) {
-      alive.add(u.id);
-      const prev = hpSeen.get(u.id);
-      if (prev !== undefined && u.hp < prev) impacts.set(u.id, 1);
-      hpSeen.set(u.id, u.hp);
-    }
-    for (const id of Array.from(hpSeen.keys())) if (!alive.has(id)) hpSeen.delete(id);
-    if (lastStrikerId) {
-      // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
-      if (alive.has(lastStrikerId)) impacts.set(lastStrikerId, 0.55);
-      lastStrikerId = null;
-    }
+  for (const id of hpDrops.keys()) impacts.set(id, 1);
+  if (lastStrikerId) {
+    // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
+    if (state.units.some((u) => u.id === lastStrikerId)) impacts.set(lastStrikerId, 0.55);
+    lastStrikerId = null;
   }
 
   renderBoard(boardEl, view, {
@@ -796,6 +818,7 @@ function render(): void {
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
     impacts,
+    hpDrops,
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -1862,6 +1885,7 @@ function dispatch(action: Action): boolean {
   const actor = state.current;
   const prevWinner = state.winner;
   planMovePath(state, action);
+  const before = state;
   const result = applyAction(state, action);
   if (!result.ok) {
     pendingMovePath = null;
@@ -1871,6 +1895,7 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  noteHpDrops(before, state);
   if (action.type === 'ATTACK' || action.type === 'SIEGE') lastStrikerId = action.unitId;
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
@@ -3134,11 +3159,13 @@ async function runAiTurn(
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
+    const before = state;
     const result = applyAction(state, action);
     if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
     rejected.clear();
 
     state = result.state;
+    noteHpDrops(before, state);
     noteStep(actor, action);
     noteFinalFrame();
     if (action.type === 'RECRUIT') budget.recruited += 1;

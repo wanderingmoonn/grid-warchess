@@ -3463,6 +3463,68 @@ test('老兵：击杀累积攻击加成', () => {
   assert.equal(r.state.units.find((n) => n.id === a.id)?.kills, 3);
 });
 
+test('老兵不死：己方城市地块上回合开始回 8%，有上限、不叠加、废墟与野外不算', () => {
+  const s = fresh({ expansionIds: ['veterans'] });
+  const cityA = citiesOf(s, 'A')[0]!;
+  const spot = cityTiles(cityA)[0]!;
+  const cx = spot.x;
+  const cy = spot.y;
+  const max = s.unitTypes['militia']!.maxHp;
+  const heal = Math.max(1, Math.round(max * 0.08));
+
+  // ① 站在自家城格、半血 → 回合开始回 8%
+  const holder = place(s, 'A', 'militia', cx, cy);
+  holder.hp = Math.floor(max * 0.5);
+  const hp0 = holder.hp;
+  let r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const healed = r.state.units.find((u) => u.id === holder.id)!;
+  assert.equal(healed.hp, hp0 + heal, `应该回 ${heal} 点（8% 最大生命）`);
+  assert.ok(r.state.log.some((l) => l.text.includes('老兵不死')), '战报里要有一句休整');
+
+  // ② 不叠加：再走一轮还是只回一次（8%，不是 16%）
+  const hp1 = healed.hp;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, hp1 + heal, '每回合只结一次');
+
+  // ③ 有上限：满血不会溢出去
+  const full = r.state.units.find((u) => u.id === holder.id)!;
+  full.hp = max;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, max, '回血不超过上限');
+
+  // ④ 野外不回
+  const outIdx = s.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  const ox = outIdx % s.w;
+  const oy = (outIdx - ox) / s.w;
+  const stray = place(r.state, 'A', 'militia', ox, oy);
+  stray.hp = 10;
+  const strayId = stray.id;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === strayId)!.hp, 10, '野外不回血');
+
+  // ⑤ 废墟不算"城下"：站在原地被烧平的自家城里不回
+  const ruined = r.state.cities.find((c) => c.id === cityA.id)!;
+  ruined.ruined = true;
+  r.state.units.find((u) => u.id === holder.id)!.hp = 5;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, 5, '废墟不是补给点');
+});
+
 test('堑壕战：森林和丘陵额外 +2 护甲', () => {
   const s = fresh({ expansionIds: ['trench'] });
   const { a, b } = duel(s);

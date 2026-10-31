@@ -62,6 +62,15 @@ export interface BoardUi {
    * 只有调用方知道刚刚结算的是哪一下，棋盘看到的永远只是"已经算完的状态"。
    */
   impacts?: ReadonlyMap<string, number>;
+  /**
+   * 这一次动作里**真的掉了血**的单位：id → 掉血前的血量比例（0~1）。
+   *
+   * 以前血条残留是靠"节点上记着的旧比例"自己比对出来的，结果是：
+   * 只要渲染被跳过或重放（AI 连走、悔棋、换局），某些早就受过伤的单位
+   * 会莫名其妙再演一次掉血动画。现在改成由调用方在**动作前后**对账，
+   * 一次动作只给出这一次真的少血的单位——棋盘只画它给的，不再自己猜。
+   */
+  hpDrops?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -103,6 +112,9 @@ const TERRAIN_CLASS: Record<string, string> = {
   forest: 't-forest',
   hill: 't-hill',
   water: 't-water',
+  // 深水（外海）：必须有自己的一档。以前它不在这张表里，`?? 't-plain'`
+  // 把外海兜底成了平原色——地图上"过不去的深水"和"随便走的草地"长得一样。
+  deep: 't-deep',
   mountain: 't-mountain',
   bridge: 't-bridge',
   city: 't-city',
@@ -183,8 +195,10 @@ interface UnitItem {
   /** 占地格数，只有宽单位（2×2 城、大船）才有 */
   fp?: number;
   inner: string;
-  /** 血量比例（0~1）。受击时用它和节点上记着的旧值算"掉了多少" */
+  /** 当前血量比例（0~1） */
   hpRatio?: number;
+  /** 掉血前的比例；只有这一帧真的掉了血才有值 */
+  chipFrom?: number;
   /** 上面所有字段的一次性摘要，一样就整节点不碰 */
   sig: string;
 }
@@ -206,8 +220,6 @@ const unitLayers = new WeakMap<HTMLElement, Map<string, UnitNode>>();
 let paintStamp = 0;
 
 function writeUnitNode(node: HTMLElement, it: UnitItem): void {
-  // 先记住旧血量再重写内容：重写之后节点上就只剩新值了
-  const before = Number(node.dataset.hpRatio ?? '');
   node.className = it.cls;
   node.setAttribute('style', it.style);
   node.title = it.title;
@@ -217,16 +229,14 @@ function writeUnitNode(node: HTMLElement, it: UnitItem): void {
   else node.dataset.ghost = '1';
   if (it.fp !== undefined) node.dataset.fp = String(it.fp);
   node.innerHTML = it.inner;
-  if (it.hpRatio !== undefined) {
-    node.dataset.hpRatio = String(it.hpRatio);
-    // 只有在**掉血**时才演那截残留：回血时冒一条橙条会让人以为又挨了一下
-    if (Number.isFinite(before) && before > it.hpRatio + 0.001) {
-      const lag = node.querySelector<HTMLElement>('.hp-lag');
-      if (lag) {
-        lag.style.setProperty('--chip-from', `${Math.max(2, before * 100)}%`);
-        lag.style.setProperty('--chip-to', `${Math.max(2, it.hpRatio * 100)}%`);
-        lag.classList.add('chipped');
-      }
+  // 残留条只在"这一次动作里真的掉了血"时演：起点由调用方给的旧比例决定，
+  // 不是从节点上猜的（猜的那一版会在渲染重放时让老伤号再抖一次）。
+  if (it.chipFrom !== undefined && it.hpRatio !== undefined && it.chipFrom > it.hpRatio + 0.001) {
+    const lag = node.querySelector<HTMLElement>('.hp-lag');
+    if (lag) {
+      lag.style.setProperty('--chip-from', `${Math.max(2, it.chipFrom * 100)}%`);
+      lag.style.setProperty('--chip-to', `${Math.max(2, it.hpRatio * 100)}%`);
+      lag.classList.add('chipped');
     }
   }
 }
@@ -648,6 +658,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
     fp,
     inner,
     hpRatio: Math.max(0, Math.min(1, ratio)),
+    chipFrom: ui.hpDrops?.get(u.id),
     sig: `${clsText}|${style}|${title}|${inner}`,
   };
 }
