@@ -360,50 +360,6 @@ export function createMatch(
     });
   }
 
-  // 开局编制类扩展：整批换掉默认的那套开局部队。
-  //
-  // 放在 state 建好之后、onMatchStart 之前：开局钩子里（大征兵那类）会读
-  // "这局开局给了什么"，如果它先跑，看到的就是默认那五个，跟实际摆出来的对不上。
-  for (const e of activeExpansions(state)) {
-    const roster = e.hooks.startRoster?.({ state });
-    if (!roster) continue;
-    state.units = [];
-    for (const owner of ['A', 'B'] as PlayerId[]) {
-      const list = roster[owner] ?? [];
-      const ownCity = state.cities.find((c) => c.owner === owner);
-      if (!ownCity) continue;
-      for (const type of list) {
-        const def = state.unitTypes[type];
-        if (!def) continue;
-        const spot = freeSpotNear(state.tiles, state.w, state.h, ownCity, state.units);
-        if (!spot) continue;
-        state.units.push({
-          id: `u${state.nextUnitSeq++}`,
-          type: def.id,
-          owner,
-          x: spot.x,
-          y: spot.y,
-          hp: def.maxHp,
-          kills: 0,
-          moved: false,
-          acted: false,
-        });
-      }
-    }
-    // 日志写"这一局到底发了什么"，而不是写死一句话：
-    // 以后再有扩展换开局编制，这句话不能变成谎话。
-    const names = (ids: string[] | undefined): string =>
-      (ids ?? []).length > 0
-        ? (ids ?? []).map((id) => state.unitTypes[id]?.name ?? id).join(' + ')
-        : '无';
-    state.log.push({
-      turn: 1,
-      player: 'A',
-      text: `${e.name}：${state.players.A.name} ${names(roster.A)}，${state.players.B.name} ${names(roster.B)}`,
-    });
-    break;
-  }
-
   // "过河只能架桥"这种事必须开局就说清楚。
   // 玩家没有义务从一张缩略图里看出"这条河没有渡口"，
   // 而他要为这件事做的是十个回合的准备。

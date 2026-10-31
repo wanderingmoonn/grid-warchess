@@ -3277,23 +3277,6 @@ test('桥分三档，越高级越抗拆', () => {
 
 console.log('\n扩展规则');
 
-test('非对称开局：先手工兵 + 斥候，后手两农一牧一步兵一弓手', () => {
-  const sym = fresh();
-  assert.equal(
-    sym.units.filter((u) => u.owner === 'A').length,
-    sym.units.filter((u) => u.owner === 'B').length,
-    '不开扩展时两边对称',
-  );
-
-  const s = fresh({ expansionIds: ['asym-opening'] });
-  const of = (owner: 'A' | 'B') => s.units.filter((u) => u.owner === owner).map((u) => u.type);
-  assert.deepEqual(of('A'), ['engineer', 'scout'], '先手只有工事与侦察');
-  assert.deepEqual(of('B'), ['farmer', 'farmer', 'herder', 'militia', 'archer'], '后手是屯田与守备');
-  // 全部开局兵加起来还是那 7 个，一个不多一个不少
-  assert.equal(s.units.length, 7);
-  assert.ok(s.log.some((l) => l.text.includes('非对称开局')), '开局要在战报里说清楚');
-});
-
 test('战争经济：击杀立刻得 15 金', () => {
   const s = fresh({ expansionIds: ['war-economy'] });
   const { a, b } = duel(s);
@@ -8775,6 +8758,42 @@ test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去',
   // 但 AI 的候选列表照样生成 ATTACK。执行方遇到非法动作会中断整回合，
   // 于是双 AI 对局在第 20 回合死在一个永远失败的"箭塔开炮"上。
   // 所以要测的不是"某个动作对不对"，而是"连续几百步里没有一步被拒"。
+  //
+  // 为什么这里要自己塞工兵：默认开局是 3 战斗 + 2 经济，里面没有建造单位，
+  // 而 AI 在 18 回合内不会主动去招一个——不塞工兵，整局一个工地都不会出现，
+  // 「对着工地开炮」这条路径就根本没被走到，测试会变成"跑完了但什么都没测"。
+  // （以前是「非对称开局」扩展顺手给了先手一个工兵，那个扩展已下架。）
+  const seedBuilder = (st: GameState, owner: 'A' | 'B'): void => {
+    const city = st.cities.find((c) => c.owner === owner);
+    const def = st.unitTypes['engineer'];
+    if (!city || !def) return;
+    for (let r = 1; r <= 4; r += 1) {
+      for (let dy = -r; dy <= r; dy += 1) {
+        for (let dx = -r; dx <= r; dx += 1) {
+          const x = city.x + dx;
+          const y = city.y + dy;
+          if (x < 0 || y < 0 || x >= st.w || y >= st.h) continue;
+          if (st.units.some((u) => u.x === x && u.y === y)) continue;
+          const tile = st.tiles[y * st.w + x];
+          if (!tile || tile.cityId) continue;
+          if (tile.terrain === 'water' || tile.terrain === 'mountain') continue;
+          st.units.push({
+            id: `b${st.nextUnitSeq++}`,
+            type: 'engineer',
+            owner,
+            x,
+            y,
+            hp: def.maxHp,
+            kills: 0,
+            moved: false,
+            acted: false,
+          });
+          return;
+        }
+      }
+    }
+  };
+
   let sawSite = false;
   const runs: Array<{ ids: string[]; seed: number }> = [
     { ids: ['city-works'], seed: 424242 },
@@ -8796,6 +8815,8 @@ test('AI 不会对着施工现场开炮，开了城郭的整局也走得下去',
       },
       seed,
     );
+    seedBuilder(state, 'A');
+    seedBuilder(state, 'B');
     const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
     let turns = 0;
     while (turns < 18 && !state.winner) {
