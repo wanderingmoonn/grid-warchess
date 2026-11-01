@@ -3657,6 +3657,217 @@ a.btn {
   }
 }
 
+/* ---------- 选卡：底部"我已选"对照区 ----------
+
+ * 这一块是**档案**，不是候选列表：池子里的卡追求"一屏能扫完 20 张"，
+ * 所以那批卡只写一行 meta、详情靠悬停。这里相反——选卡期最常做的判断是
+ * "我已经拿了这三个，下一签补什么"，靠悬停一张张看是做不了这个判断的。
+ *
+ * 因此这里有两条硬约束，改样式时别破坏：
+ *   ① **任何文本都不许截断**：没有 text-overflow、没有 nowrap、没有 max-height，
+ *      能力说明和技能说明整段铺开（`overflow-wrap: anywhere` 只管长英文不撑破格子）；
+ *   ② **列数跟着数量走**：auto-fill + minmax，2 张两列、8 张四列，
+ *      每张卡自己长高，整块跟着长——`.draft-mask` 本来就是 overflow:auto。
+ */
+.draft-picked {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  /* 和右边槽位栏用同一条主色，一眼能对上是哪一方 */
+  border-top: 3px solid var(--line-strong);
+}
+
+.draft-picked.is-a {
+  border-top-color: var(--team-a);
+}
+
+.draft-picked.is-b {
+  border-top-color: var(--team-b);
+}
+
+.draft-picked-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 10px;
+}
+
+.draft-picked-head > b {
+  font-size: 14px;
+}
+
+.draft-picked-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--a);
+}
+
+.draft-picked-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  flex: 1 1 220px;
+}
+
+.draft-picked-grid {
+  display: grid;
+  /* 232px 是"一行数值 + 一段能力说明"能读舒服的下限；窄了就只能折行成三行 */
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.draft-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.dp-head {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.dp-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--a-soft);
+  color: var(--a);
+  font-weight: 700;
+}
+
+.dp-head-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.dp-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dp-index {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-name {
+  font-size: 14px;
+  /* 名字长也不许截断，允许换行 */
+  overflow-wrap: anywhere;
+}
+
+.dp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.dp-tag {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+.dp-tag.is-hero {
+  border-color: var(--city);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dp-tag.is-air {
+  border-color: var(--a);
+  color: var(--a);
+}
+
+.dp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 3px 8px;
+}
+
+.dp-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-stat i {
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.dp-stat b {
+  font-weight: 600;
+}
+
+.dp-cost {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  overflow-wrap: anywhere;
+}
+
+.dp-traits {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dp-trait {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.dp-trait > b {
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.dp-trait > span {
+  /* 说明整段铺开：不截断、不省略、不做..."展开" */
+  overflow-wrap: anywhere;
+}
+
+.dp-trait.is-skill > b {
+  color: var(--a);
+}
+
+.dp-trait.is-element > b {
+  color: var(--text);
+}
+
+@media (max-width: 860px) {
+  .draft-picked-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
 /* ---------- 选卡：顶栏按钮与等待开局 ---------- */
 
 .draft-head-actions {

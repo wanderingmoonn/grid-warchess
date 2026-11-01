@@ -22,6 +22,8 @@ import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
 import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
+import { remainingUnits } from '../src/core/draft.ts';
+import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import {
   applyAction,
@@ -4498,6 +4500,111 @@ check('选卡池排序：同一代里，原版在扩展前面，扩展之间按�
         );
       }
     }
+  } finally {
+    host.remove();
+  }
+});
+
+check('选卡：底部「我已选」区把每张卡的完整面板都摊开，不截断', () => {
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch(
+      { ...DEFAULT_CONFIG, draftMode: true, expansionIds: ['fantasy-knights', 'pack-antiquity'] },
+      4242,
+      {},
+    );
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    st = started.state;
+
+    // 两边把禁用交完，进入选人
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        // 每一手要禁"还没被禁掉"的：池子里第一个可能已经在自己手上
+        const id = remainingUnits(st)[0]!;
+        // 席位从 s.current 读（和界面一致）：热座换人时它才是"谁在操作"
+        st.current = side;
+        const r = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (r.ok) st = r.state;
+      }
+    }
+    assert.equal(st.draft!.phase, 'pick', '两边交完禁用应该进入选人');
+
+    // 甲方连选三个（乙方那个坑用同样的动作跳过，只为推进 step）
+    const mine: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const pickId = remainingUnits(st).find((id) => st.unitTypes[id]?.category === 'combat');
+      assert.ok(pickId, '应该还有一个能选的战斗单位');
+      st.current = side;
+      const r = applyAction(st, { type: 'DRAFT_PICK', unitId: pickId!, at: Date.now() }, side);
+      assert.ok(r.ok, r.ok ? '' : `选人失败：${r.reason}`);
+      st = r.state;
+      if (side === 'A') mine.push(pickId!);
+    }
+    assert.ok(mine.length >= 2, `甲方至少该选到 2 个，实际 ${mine.length}`);
+
+    host.innerHTML = draftScreenHtml(st, { seat: 'A', now: Date.now(), isAi: () => false });
+
+    // ① 位置：必须在 .draft-body **之后**（选卡界面下方），不是塞进侧栏
+    const body = host.querySelector('.draft-body');
+    const panel = host.querySelector('.draft-picked');
+    assert.ok(panel, '应该有底部"我已选"区');
+    // 4 = DOCUMENT_POSITION_FOLLOWING（jsdom 里没有全局 Node 常量）
+    assert.ok(
+      (body!.compareDocumentPosition(panel!) & 4) !== 0,
+      '"我已选"区要排在主体区域之后（界面下方）',
+    );
+
+    // ② 数量：一个已选一张卡，不多不少
+    const cards = [...host.querySelectorAll<HTMLElement>('.draft-pick')];
+    assert.equal(cards.length, mine.length, '每张已选卡都要有一块完整信息卡');
+    assert.ok(
+      panel!.querySelector('.draft-picked-count')!.textContent!.includes(`/ ${st.draft!.pickSlots}`),
+      '计分板要写成"已选 / 名额"',
+    );
+
+    // ③ 内容：数值一个不落、特性整段可读（不靠悬停、不做省略）
+    for (let i = 0; i < mine.length; i += 1) {
+      const def = st.unitTypes[mine[i]!]!;
+      const text = cards[i]!.textContent ?? '';
+      for (const need of [`攻`, `甲`, `血`, `射`, `视`, `${def.atk}`, `${def.armor}`, `${def.maxHp}`]) {
+        assert.ok(text.includes(need), `${def.name} 的面板缺了「${need}」`);
+      }
+      for (const abilityId of def.abilities ?? []) {
+        const ab = abilityById(abilityId);
+        if (!ab) continue;
+        assert.ok(text.includes(ab.name), `${def.name} 的能力「${ab.name}」没写出来`);
+        assert.ok(
+          text.includes(ab.summary),
+          `${def.name} 的能力说明被截断或省略了：「${ab.summary}」`,
+        );
+      }
+      // 页面里不许出现省略号式的截断容器
+      for (const el of cards[i]!.querySelectorAll<HTMLElement>('*')) {
+        const style = el.getAttribute('style') ?? '';
+        assert.ok(!style.includes('ellipsis'), '已选卡里不允许用 text-overflow 截断');
+      }
+    }
+
+    // ④ 禁用阶段还没有选人：这一块要给出说明而不是凭空消失
+    const early = applyAction(
+      createMatch({ ...DEFAULT_CONFIG, draftMode: true }, 99, {}),
+      { type: 'DRAFT_START', at: Date.now() },
+      'A',
+    );
+    assert.ok(early.ok);
+    host.innerHTML = draftScreenHtml(early.state, { seat: 'A', now: Date.now(), isAi: () => false });
+    const emptyPanel = host.querySelector('.draft-picked');
+    assert.ok(emptyPanel, '禁用阶段"我已选"区也应该在，只是空的');
+    assert.equal(host.querySelectorAll('.draft-pick').length, 0, '禁用阶段没有已选卡');
+    assert.ok(
+      (emptyPanel!.textContent ?? '').includes('还没有人选卡'),
+      '空状态要说清楚现在是禁用阶段',
+    );
   } finally {
     host.remove();
   }
