@@ -10,7 +10,7 @@ import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
 
 // 境界名称
-const _REAMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
+const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
 
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
@@ -43,8 +43,7 @@ const QI_TRUE_DAMAGE: AbilityDef = {
         stage: DAMAGE_STAGE.trueDamage,
         apply: (c) => {
           if (c.side !== 'attacker') return;
-          const x = getRank(c.self)
-          const trueDmg = Math.floor((x*x)/4+x*(1.2**x));
+          const trueDmg = trueDamageOf(c.self);
           if (trueDmg > 0) c.damage += trueDmg;
         },
       },
@@ -97,7 +96,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
     s.log.push({
       turn: s.turn,
       player: u.owner, 
-      text: `炼气士 突破至 ${_REAMS[newRank]} 期！`,
+      text: `炼气士 突破至 ${_REAMLS[newRank]} 期！`,
       open: true,
     });
   }
@@ -117,7 +116,7 @@ function getLifespan(u: Unit): number {
   
   const rank = getRank(u);
   if (rank >= MAX_RANK) return Infinity;
-  return 10 + rank * 10;
+  return 10 + rank * 9;
 }
 /**
  * 超出寿元多少岁。
@@ -138,10 +137,15 @@ function isDoomed(u: Unit): boolean {
 // 由于攻击次数和溅射太强，这里的基础数值略为削弱
 function atkModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = (5 * rank + 2**(rank-0.5))/(rank**0.2);
+  const realmsModifier = (5 * rank + 2**(rank-0.5))/((rank+1)**0.2);
   return Math.floor(realmsModifier - getAgingYears(u) * 2);
 }
-/** 真伤修正：用能力实现，不用在这里写 */
+/** 真伤修正 */
+function trueDamageOf(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = (rank*rank)/4+rank*(1.2**rank);
+  return Math.floor(realmsModifier);
+}
 /** 攻击次数修正 */
 // x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
 function attTimesModifier(u: Unit): number {
@@ -283,7 +287,7 @@ export const CULTIVATION_PACK: Expansion = {
       const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
 
       const lines = [
-        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMS[rank]} 期`,
+        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMLS[rank]} 期`,
         nextExp !== null
           ? `修为经验：${exp} / ${nextExp}`
           : `修为经验：${exp}（已臻化境）`,
@@ -291,7 +295,7 @@ export const CULTIVATION_PACK: Expansion = {
       ];
 
       if (rank > 0) {
-        const trueDmg = Math.floor((rank*rank)/2+rank*(1.2**rank));
+        const trueDmg = trueDamageOf(unit);
         lines.push(
           `境界加成：攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
         );
