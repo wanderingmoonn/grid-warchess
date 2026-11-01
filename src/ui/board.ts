@@ -23,7 +23,7 @@
 import type { PlayerView } from '../core/fog.ts';
 import { buildProgress, cityName, footprintOf, isAirborne, underConstruction, utype } from '../core/rules.ts';
 import type { GameState, Unit } from '../core/types.ts';
-import { threatStep } from '../core/threat.ts';
+import { heatStep } from '../core/heat.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -40,13 +40,12 @@ export interface BoardUi {
   /** 威胁范围：移动之后能打到哪些格 */
   threat: number[];
   /**
-   * 敌情预警：这一格正被几个敌人瞄着（格索引 → 次数）。
+   * 战况烈度：上一次敌方回合里，这一格上的我方单位挨了几下（格索引 → 次数）。
    *
-   * 和上面的 `threat` 正好相反：那个是"我打得到哪"，这个是"谁打得到我"。
-   * 有值的时候格子会按次数快慢闪红。视野外的格子不会出现在这里——
-   * 过滤在 core/threat.ts 里就做完了，界面不负责裁剪（否则坐标照样进了 DOM）。
+   * 和上面的 `threat` 不是一回事：那个是"我打得到哪"（前瞻），这个是"刚才在哪儿挨的打"（复盘）。
+   * 次数越多闪得越快。视野外的格子在 main.ts 就算掉了，不会走到这里。
    */
-  danger?: Map<number, number>;
+  heat?: Map<number, number>;
   /**
    * 这一步实际走的路线（单位 id → 格子串），只用来画移动动画。
    *
@@ -360,8 +359,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const reachSet = new Set(ui.reach);
   const placeSet = new Set(ui.placeable);
   const threatSet = new Set(ui.threat);
-  // 敌情预警：格索引 → 能被几个敌人打到。没选中「本回合还没动过」的单位时是 undefined
-  const dangerSet = ui.danger ?? null;
+  // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
+  const heatSet = ui.heat ?? null;
   const targetPositions = new Set<number>();
   for (const id of ui.targets) {
     const u = s.units.find((x) => x.id === id);
@@ -417,9 +416,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       else if (reachSet.has(i)) cls += ' reach';
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
-      // 敌情预警叠在可达层之上：既"走得到"又"会挨打"的格子，两个提示都要在
-      const dangerCount = dangerSet?.get(i) ?? 0;
-      if (dangerCount > 0) cls += ` danger d${threatStep(dangerCount)}`;
+      // 战况烈度叠在可达层之上：既"走得到"又"刚挨过打"的格子，两个提示都要在
+      const heatCount = heatSet?.get(i) ?? 0;
+      if (heatCount > 0) cls += ` heat d${heatStep(heatCount)}`;
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
       if (layer.cls[i] !== cls) {
@@ -433,7 +432,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const hint = ui.incomeHints?.get(i);
       // 闪烁层单独占一个元素：`.tile::after` 是可攻击/可达高亮、
       // `::before` 是地形纹理（山脊、树影），两个都被占了，再挤就会互相盖掉。
-      const flash = dangerCount > 0 ? '<i class="fx-danger"></i>' : '';
+      const flash = heatCount > 0 ? '<i class="fx-heat"></i>' : '';
       const badge = flash + (hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '');
       if (layer.badge[i] !== badge) {
         node.innerHTML = badge;

@@ -1233,6 +1233,14 @@ export interface GameState {
   log: LogEntry[];
   memory: Record<PlayerId, PlayerMemory>;
   /**
+   * 战况烈度账本：`heat[玩家][回合][格索引] = 挨打次数`。
+   *
+   * 只留最近两回合（见 core/heat.ts 的 noteHeat），界面读 `s.turn - 1`
+   * 那一份——也就是"上一次敌方回合我方在哪些格子挨了多少下"。
+   * 复盘用的提示，不参与任何规则计算，旧存档没有这个字段照样能打。
+   */
+  heat?: Record<string, Record<string, Record<string, number>>>;
+  /**
    * 本局**第一座**被攻陷的城原本属于谁——也就是"谁先丢了城"。
    *
    * 只写一次，之后再也不改。为什么不能靠"当前城数"推：城会被抢回来，

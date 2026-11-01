@@ -606,16 +606,19 @@ body {
   box-shadow: inset 0 0 0 1px rgba(200, 80, 60, 0.26);
 }
 
-/* 敌情预警：这一格正落在敌人的火线上。
+/* 战况烈度：上一次敌方回合，这一格上我方挨了几下。
  *
- * 用独立元素 `i.fx-danger` 而不是伪元素：`.tile::after` 是可达/可攻击/选中的
+ * 这是复盘图层，不是威胁预测——所以它是"打过的地方"，不是"能打到的地方"。
+ * 次数越多闪得越快：一眼扫过去，闪得最急的那几格就是上回合的绞肉机。
+ *
+ * 用独立元素 `i.fx-heat` 而不是伪元素：`.tile::after` 是可达/可攻击/选中的
  * 高亮层，`::before` 是地形纹理（山脊、树影、波纹），两个都占满了。
- * 独立元素还有个好处——它可以和"可达"同时存在：既走得到又会挨打的格子，
+ * 独立元素还有个好处——它可以和"可达"同时存在：既走得到又刚挨过打的格子，
  * 两个提示得一起看得见。
  *
- * 闪烁快慢由 `.d1`~`.d5` 决定，JS 只负责把"几个敌人能打到"折成档位。
+ * 闪烁快慢由 `.d1`~`.d5` 决定，JS 只负责把"挨了几下"折成档位。
  * 五档封顶：再快人眼也分不出来，只会变成一片乱闪。 */
-.tile .fx-danger {
+.tile .fx-heat {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -627,26 +630,26 @@ body {
   );
   box-shadow: inset 0 0 0 1px rgba(214, 60, 48, 0.5);
   opacity: 0.35;
-  animation: fx-danger-pulse 1.5s ease-in-out infinite;
+  animation: fx-heat-pulse 1.5s ease-in-out infinite;
 }
 
-.tile.d1 .fx-danger {
+.tile.heat.d1 .fx-heat {
   animation-duration: 1.5s;
 }
-.tile.d2 .fx-danger {
+.tile.heat.d2 .fx-heat {
   animation-duration: 1.15s;
 }
-.tile.d3 .fx-danger {
+.tile.heat.d3 .fx-heat {
   animation-duration: 0.9s;
 }
-.tile.d4 .fx-danger {
+.tile.heat.d4 .fx-heat {
   animation-duration: 0.7s;
 }
-.tile.d5 .fx-danger {
+.tile.heat.d5 .fx-heat {
   animation-duration: 0.5s;
 }
 
-@keyframes fx-danger-pulse {
+@keyframes fx-heat-pulse {
   0%,
   100% {
     opacity: 0.16;
@@ -658,11 +661,12 @@ body {
 
 /* 关掉动效的人看静态红罩：提示还在，只是不闪 */
 @media (prefers-reduced-motion: reduce) {
-  .tile .fx-danger {
+  .tile .fx-heat {
     animation: none;
     opacity: 0.42;
   }
 }
+
 
 /* 建造选址：可以落子的空地 */
 .tile.placeable::after {

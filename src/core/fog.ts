@@ -72,6 +72,16 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     (u) => u.owner === p || (visibleSet.has(idx(s, u.x, u.y)) && !isHiddenFrom(s, u, p)),
   );
 
+  // 战况烈度账本只留自己的那一份。
+  //
+  // 对方的账本里记着"他的哪些格子挨了打"——那等于把他部队的位置和交火点
+  // 直接送给对手。视图层的老规矩：不是自己的东西不下发。
+  if (cloned.heat) {
+    for (const key of Object.keys(cloned.heat)) {
+      if (key !== p) delete cloned.heat[key];
+    }
+  }
+
   const seenIds = new Set(cloned.units.map((u) => u.id));
   const mem = cloned.memory[p];
   const ghosts = mem.known.filter((k) => !seenIds.has(k.id));

@@ -58,6 +58,7 @@ import {
 } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import { canHold, holdOf, holdRoom } from './carry.ts';
+import { noteHeat } from './heat.ts';
 import {
   canProduce,
   isProducer,
@@ -2623,6 +2624,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 
       const dmg = computeDamage(s, b, target);
       target.hp -= dmg;
+      noteHeat(s, target);
       totalDmg += dmg;
       hits += 1;
       shots -= 1;
@@ -2632,6 +2634,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       const splashed = splashVictims(s, b, target);
       for (const v of splashed) {
         v.unit.hp -= v.dmg;
+        noteHeat(s, v.unit);
         splashNames.add(utype(s, v.unit.type).name);
       }
 
@@ -2964,10 +2967,14 @@ function doAttack(
   // 删掉原来的 while 循环
   const dmg = computeDamage(s, attacker, defender);
   defender.hp -= dmg;
+  noteHeat(s, defender);
 
   // 溅射：主目标周围的人一起挨（按比例打折，只打敌人）
   const splashed = splashVictims(s, attacker, defender);
-  for (const v of splashed) v.unit.hp -= v.dmg;
+  for (const v of splashed) {
+    v.unit.hp -= v.dmg;
+    noteHeat(s, v.unit);
+  }
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
@@ -2980,6 +2987,7 @@ function doAttack(
   if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
+    noteHeat(s, attacker);
     
     // 消耗一次反击机会
     defender.countersLeft -= 1; 

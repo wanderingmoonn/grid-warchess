@@ -628,9 +628,9 @@ check('没有浓雾的对局里，对面的金币照旧显示', () => {
   assert.ok((host.textContent ?? '').includes('金币 321'), '普通对局不遮');
 });
 
-console.log('\n敌情预警');
+console.log('\n战况烈度');
 
-check('被瞄着的格子挂 danger 与闪烁层，次数决定档位', () => {
+check('挨过打的格子挂 heat 与闪烁层，次数决定档位', () => {
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4242);
   const host = doc.createElement('div');
   const empty = {
@@ -642,12 +642,12 @@ check('被瞄着的格子挂 danger 与闪烁层，次数决定档位', () => {
     placeable: [],
     threat: [],
   };
-  // 一格被打一次、一格被打三次，其余不在表里
+  // 一格挨了一下、一格挨了三下，其余不在表里
   const once = 5 * st.w + 5;
   const thrice = 6 * st.w + 6;
   renderBoard(host, playerView(st, 'A'), {
     ...empty,
-    danger: new Map([
+    heat: new Map([
       [once, 1],
       [thrice, 3],
     ]),
@@ -657,24 +657,24 @@ check('被瞄着的格子挂 danger 与闪烁层，次数决定档位', () => {
   const tileThrice = host.querySelector<HTMLElement>(`.tile[data-x="6"][data-y="6"]`)!;
   const tileQuiet = host.querySelector<HTMLElement>(`.tile[data-x="7"][data-y="7"]`)!;
 
-  assert.ok(tileOnce.classList.contains('danger'), '被打一次的格子要标红');
+  assert.ok(tileOnce.classList.contains('heat'), '挨过一下的格子要标红');
   assert.ok(tileOnce.classList.contains('d1'), '档位应该是 d1');
-  assert.ok(tileOnce.querySelector('.fx-danger'), '要有独立的闪烁层（伪元素已经被地形和高亮占了）');
-  assert.ok(tileThrice.classList.contains('d3'), '被打三次的格子档位应该更高');
-  assert.ok(!tileQuiet.classList.contains('danger'), '没人打得到的格子不该亮');
-  assert.equal(host.querySelectorAll('.fx-danger').length, 2, '只该有两个闪烁层');
+  assert.ok(tileOnce.querySelector('.fx-heat'), '要有独立的闪烁层（伪元素已经被地形和高亮占了）');
+  assert.ok(tileThrice.classList.contains('d3'), '挨了三下的格子档位应该更高');
+  assert.ok(!tileQuiet.classList.contains('heat'), '没挨过打的格子不该亮');
+  assert.equal(host.querySelectorAll('.fx-heat').length, 2, '只该有两个闪烁层');
 
-  // 档位封顶：六个敌人也还是 d5
-  renderBoard(host, playerView(st, 'A'), { ...empty, danger: new Map([[once, 9]]) });
+  // 档位封顶：挨了九下也还是 d5
+  renderBoard(host, playerView(st, 'A'), { ...empty, heat: new Map([[once, 9]]) });
   assert.ok(
     host.querySelector<HTMLElement>(`.tile[data-x="5"][data-y="5"]`)!.classList.contains('d5'),
     '次数再多也只到第五档',
   );
 
-  // 收起预警（没选中本回合还没动过的单位时就是这条路径）：闪烁层要一起消失
+  // 换到敌方回合（或者这一回合没挨打）：整层收起，class 和元素都不能残留
   renderBoard(host, playerView(st, 'A'), empty);
-  assert.equal(host.querySelectorAll('.fx-danger').length, 0, '不给 danger 就不该留闪烁层');
-  assert.equal(host.querySelectorAll('.tile.danger').length, 0, 'class 也要一起清掉');
+  assert.equal(host.querySelectorAll('.fx-heat').length, 0, '不给 heat 就不该留闪烁层');
+  assert.equal(host.querySelectorAll('.tile.heat').length, 0, 'class 也要一起清掉');
 });
 
 console.log('\n单位交互');

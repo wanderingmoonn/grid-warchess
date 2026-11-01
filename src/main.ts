@@ -16,7 +16,7 @@ import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
-import { incomingThreat } from './core/threat.ts';
+import { heatCells } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
@@ -799,15 +799,16 @@ function render(): void {
       ? Array.from(threatTiles(state, selected))
       : [];
 
-  // 敌情预警：选中一个**本回合还没动过**的己方单位时，把"敌人的火力覆盖到哪"标出来。
+  // 战况烈度：**上一次敌方回合**里，我方在这些格子上挨了多少下。
   //
-  // 为什么卡在"还没动过"：这一层是出手前的风险提示，单位一旦走完，画面该安静下来，
-  // 否则满屏红格会盖住真正要看的东西（可达格与可攻击目标）。
-  // 敌人取自 view.state（雾已经裁过一遍），可见格再叠一层，双保险：
-  // 射程能伸进雾里的敌人在 core/threat.ts 里就被挡住了，坐标根本不会进 DOM。
-  const danger =
-    selected && selected.owner === me() && !selected.moved && !selected.acted && !spectating()
-      ? incomingThreat(view.state, me(), new Set(view.visible))
+  // 轮到自己就生效，不依赖"选中了谁"——这是复盘上一个敌方回合的提示，
+  // 不是某个兵的风险预告。数字来自 core/heat.ts 的账本（挨打时记账），
+  // 所以它随回合自然刷新：新的一次敌方回合打完，这张表就换成新的了。
+  // 只在当前看得见的格子上画：看不见的地方不该泄露"那边刚才打过仗"。
+  const visibleNow = new Set(view.visible);
+  const heat =
+    state.current === me() && !spectating()
+      ? new Map([...heatCells(state, me())].filter(([i]) => visibleNow.has(i)))
       : undefined;
 
   // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
@@ -829,7 +830,7 @@ function render(): void {
     selectedCityId,
     placeable: computePlaceable(),
     threat,
-    danger,
+    heat,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
     impacts,

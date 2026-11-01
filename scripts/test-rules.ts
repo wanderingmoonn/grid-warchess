@@ -63,7 +63,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop } from '../src/core/produce.ts';
-import { incomingThreat, threatStep } from '../src/core/threat.ts';
+import { heatCells, heatStep, noteHeat } from '../src/core/heat.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) =>
@@ -9914,54 +9914,95 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
   }
 });
 
-test('敌情预警：算得出"谁能打到这一格"，视野外的不进表', () => {
+test('战况烈度：只记真实挨打的次数，按回合分开存', () => {
+  const s = fresh();
+  s.current = 'B'; // 让 B 先动手，A 挨打
+  s.units = [];
+
+  const a1 = place(s, 'A', 'militia', 8, 8);
+  a1.hp = 200; // 够扛几下，别一枪打死——死掉的兵会换格子记账
+  const a2 = place(s, 'A', 'militia', 8, 9);
+  a2.hp = 200;
+  const b1 = place(s, 'B', 'archer', 8, 10);
+  const b2 = place(s, 'B', 'archer', 9, 8);
+
+  const hit1 = applyAction(s, { type: 'ATTACK', unitId: b1.id, targetId: a1.id });
+  assert.ok(hit1.ok, hit1.ok ? '' : hit1.reason);
+  const hit2 = applyAction(hit1.state, { type: 'ATTACK', unitId: b2.id, targetId: a1.id });
+  assert.ok(hit2.ok, hit2.ok ? '' : hit2.reason);
+
+  // 这一回合还没走完：烈度表读的是"上一回合"，不该提前露出来
+  assert.equal(heatCells(hit2.state, 'A').size, 0, '当前回合的账不该提前显示');
+
+  const next = applyAction(hit2.state, { type: 'END_TURN' });
+  assert.ok(next.ok);
+  const cells = heatCells(next.state, 'A');
+  assert.equal(cells.get(idx(next.state, 8, 8)), 2, '同一格挨了两下，就该记两次');
+  assert.equal(cells.get(idx(next.state, 8, 9)), undefined, '旁边那格没挨打，不该亮');
+
+  // 再过一个回合：更早的账被清掉，不会残留成"上个回合还在打"
+  const next2 = applyAction(next.state, { type: 'END_TURN' });
+  assert.ok(next2.ok);
+  assert.equal(heatCells(next2.state, 'A').size, 0, '两个回合之后旧账要清干净');
+});
+
+test('战况烈度：溅射按人头各记一格，反击记在出手方那一格上', () => {
   const s = fresh();
   s.current = 'A';
   s.units = [];
 
-  // 一把弓（射程 3），一次溅射都没有
-  const archer = place(s, 'B', 'archer', 8, 8);
-  assert.equal(UNIT_TYPES.archer!.range, 3);
-  const map = incomingThreat(s, 'A');
+  const target = place(s, 'B', 'militia', 8, 8);
+  target.hp = 200;
+  const beside = place(s, 'B', 'militia', 8, 9);
+  beside.hp = 200;
+  assert.ok((UNIT_TYPES.battery!.splash ?? 0) > 0, '这条用例靠炮兵的溅射');
+  const gun = place(s, 'A', 'battery', 6, 8);
 
-  assert.equal(map.get(idx(s, 8, 8)), 1, '它自己脚下也算挨打（贴身能打到）');
-  assert.equal(map.get(idx(s, 5, 8)), 1, '正左三格在射程内');
-  assert.equal(map.get(idx(s, 6, 7)), 1, '曼哈顿距离 3 也在');
-  assert.equal(map.get(idx(s, 4, 8)), undefined, '四格外打不到');
-  assert.equal(map.get(idx(s, 5, 7)), undefined, '距离 4 打不到');
+  const shot = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: target.id });
+  assert.ok(shot.ok, shot.ok ? '' : shot.reason);
 
-  // 第二把弓叠上来：重叠区次数变成 2，这就是"闪得更快"的依据
-  place(s, 'B', 'archer', 9, 8);
-  const two = incomingThreat(s, 'A');
-  assert.equal(two.get(idx(s, 8, 8)), 2, '两把弓都够得着');
+  // 换成 B 的视角看上一回合（A 刚打完）：主目标与溅射对象各算一格
+  const next = applyAction(shot.state, { type: 'END_TURN' });
+  assert.ok(next.ok);
+  const bHeat = heatCells(next.state, 'B');
+  assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
+  assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
 
-  // 溅射算子：射程 + 溅射半径的整条菱形都算在内
-  const bat = UNIT_TYPES.battery!;
-  s.units = [];
-  const battery = place(s, 'B', 'battery', 6, 6);
-  assert.ok((bat.splash ?? 0) > 0, '炮兵要有溅射，否则这条用例测不到东西');
-  const reach = (bat.range ?? 0) + (bat.splash ?? 0);
-  const splashMap = incomingThreat(s, 'A');
-  assert.equal(splashMap.get(idx(s, 6 + reach, 6)), 1, `溅射要到得了 ${reach} 格`);
-  assert.equal(splashMap.get(idx(s, 6 + reach + 1, 6)), undefined, '再远一格就出了射程+溅射');
-
-  // 视野：看不见的格子根本不会进表（射程伸进雾里也一样）
-  const visible = new Set([idx(s, 6, 6)]);
-  const fogged = incomingThreat(s, 'A', visible);
-  assert.deepEqual(Array.from(fogged.keys()), [idx(s, 6, 6)], '只剩看得见的那一格');
-
-  // 自己人不算威胁
-  s.units = [];
-  place(s, 'A', 'archer', 4, 4);
-  assert.equal(incomingThreat(s, 'A').size, 0, '我方弓手不该把自己人标红');
-  assert.equal(incomingThreat(s, 'B').size > 0, true, '换个视角就该看见它');
+  // 反击记在"出手方"那一格：贴身互殴时，A 的炮兵也会挨记一笔
+  const s2 = fresh();
+  s2.current = 'A';
+  s2.units = [];
+  const foe = place(s2, 'B', 'militia', 8, 8);
+  foe.hp = 200;
+  const mine = place(s2, 'A', 'militia', 8, 9);
+  mine.hp = 200;
+  const brawl = applyAction(s2, { type: 'ATTACK', unitId: mine.id, targetId: foe.id });
+  assert.ok(brawl.ok, brawl.ok ? '' : brawl.reason);
+  // A 这一回合挨的那点反击，记在 A 名下（相当于"自己回合的账"）
+  assert.equal(heatCells(brawl.state, 'A').size, 0, '反击记在当前回合，不该出现在上一回合表里');
+  assert.equal(brawl.state.heat?.A?.[String(brawl.state.turn)]?.[idx(brawl.state, 8, 9)], 1, '反击要记账');
 
   // 档位：0 不亮，1~5 依次，超过封顶
-  assert.equal(threatStep(0), 0);
-  assert.equal(threatStep(1), 1);
-  assert.equal(threatStep(4), 4);
-  assert.equal(threatStep(9), 5);
+  assert.equal(heatStep(0), 0);
+  assert.equal(heatStep(1), 1);
+  assert.equal(heatStep(4), 4);
+  assert.equal(heatStep(9), 5);
+
+  // 视图层只下发自己的账本：对手挨打的格子等于他的部队位置，不能漏出去
+  const foggy = fresh({ fog: true });
+  foggy.heat = { A: { [String(foggy.turn)]: { 5: 2 } }, B: { [String(foggy.turn)]: { 9: 3 } } };
+  const viewA = playerView(foggy, 'A');
+  assert.deepEqual(Object.keys(viewA.state.heat ?? {}), ['A'], '别人的烈度账本不该下发');
+  assert.equal(viewA.state.heat?.A?.[String(foggy.turn)]?.[5], 2, '自己的账要留着');
+
+  // 记账本身不该崩在"没有 heat 字段"的旧存档上
+  const old = fresh();
+  old.heat = undefined;
+  const u = old.units[0]!;
+  noteHeat(old, u);
+  assert.equal(old.heat?.[u.owner]?.[String(old.turn)]?.[u.y * old.w + u.x], 1);
 });
+
 
 test('群岛的高山不再是"每张图必有"：配额压低 + 真够高才长', () => {
   let maps = 0;
