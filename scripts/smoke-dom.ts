@@ -34,6 +34,7 @@ import {
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
+import { BUILTIN_MAPS } from '../src/core/fixed-maps.ts';
 import { renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
@@ -1270,6 +1271,102 @@ check('新对局按选中的尺寸和扩展生成', () => {
   assert.equal(doc.querySelectorAll('.tile').length, 400, '应该变成 20×20');
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(html.includes('老兵'), '侧栏应该显示已启用的扩展');
+});
+
+await checkAsync('固定地图：开局面板有画廊，选中/取消都能实时生效', async () => {
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const cards = [...doc.querySelectorAll<HTMLElement>('[data-map]')];
+  assert.ok(cards.length >= 5, `内置四张 + 随机，实际 ${cards.length}`);
+  // 默认必须停在"随机地形"：默认值等于"不选"，否则每局都被一张别人的图顶掉
+  const randomCard = doc.querySelector<HTMLElement>('[data-map=""]');
+  assert.ok(randomCard, '应该有"随机地形"这一张');
+  assert.ok(randomCard!.classList.contains('active'), '默认选中随机地形');
+
+  const builtin = cards.find((c) => (c.dataset.map ?? '').startsWith('builtin:'))!;
+  const id = builtin.dataset.map!;
+  assert.ok(builtin.querySelector('svg.map-thumb'), '固定地图要有缩略图（地形同源）');
+  builtin.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const picked = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
+  assert.ok(picked.classList.contains('active'), '点了之后要变成选中态');
+  assert.ok(!doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '随机那张要取消选中');
+
+  // 点回"随机"＝取消固定地图：必须能退回去
+  doc.querySelector<HTMLElement>('[data-map=""]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '能退回到随机');
+
+  // 真正开一局：地图必须是那张图（不是随机生成的）
+  const target = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
+  target.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const before = doc.querySelectorAll('.tile').length;
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const after = doc.querySelectorAll('.tile').length;
+  assert.equal(after, 256, `内置图是 16×16，应该铺出 256 格（之前 ${before}）`);
+  // 双河渡口第一行是 ..ff..hhhh..ff..，看棋盘前几格是不是森林
+  const firstForest = doc.querySelector<HTMLElement>('.tile[data-x="2"][data-y="0"]');
+  assert.ok(firstForest, '应该有 (2,0) 这一格');
+  assert.ok(
+    firstForest!.className.includes('t-forest') || firstForest!.dataset.terrain === 'forest',
+    '固定地图的地形要逐格照搬',
+  );
+});
+
+await checkAsync('地图工坊：上帝模式里有上传入口，没解析前不显示"待上传"', async () => {
+  // 上帝模式的货架是纯 HTML 生成，这里直接拿它验结构（真上传要走云端）
+  const st = createMatch({ ...DEFAULT_CONFIG, godMode: true }, 7, {});
+  const html = godShelfHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    selected: '',
+    picked: null,
+  } as never);
+  assert.ok(html.includes('地图工坊'), '侧栏要有地图工坊');
+  assert.ok(html.includes('data-act="god-map-file"'), '要有选文件的按钮');
+  assert.ok(!html.includes('god-map-ok'), '还没解析出地图，不该有"上传"按钮');
+
+  const withDraft = godShelfHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    selected: '',
+    picked: null,
+    mapDraft: BUILTIN_MAPS[0]!,
+    mapNote: '看一眼再传',
+  } as never);
+  assert.ok(withDraft.includes('data-act="god-map-ok"'), '解析好之后要有上传按钮');
+  assert.ok(withDraft.includes('双河渡口'), '预览要写出地图名');
+  assert.ok(withDraft.includes('class="map-thumb"'), '预览要有缩略图');
 });
 
 await checkAsync('32×32 大地图也能开局，并带出缩放条', async () => {

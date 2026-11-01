@@ -1279,6 +1279,77 @@ function spawnsAround(
 }
 
 /* ------------------------------------------------------------------ */
+/* 固定地图（手绘 / 玩家上传）                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 用手绘的字符地形直接拼出一份 MapLayout。
+ *
+ * 和 `generateLayout` 的关系：生成器负责"从种子变出地形"，这条负责
+ * "地形已经有人画好了，别乱动"。两条最后都要交出一份同样的 MapLayout，
+ * 所以建局之后的所有流程（摆城、判临水、估出生点、算通行）完全共用一套。
+ *
+ * 刻意只做三件事：
+ *   1. 把字符还原成地形；城市格（citiesA/B 覆盖的方块）强制写成 `city`，
+ *      免得作者画漏一格，出现"城边上缺一角"的怪图；
+ *   2. 用 `spawnsAround` 按同样的规则撒开局部队——手绘图不该自己定"谁站哪"，
+ *      那部分规则一旦两处各写一份，改一处就会漂；
+ *   3. 其余字段填默认值（style/symmetry/layout 只用于显示，`fordless` 永远 false：
+ *      手绘图的河道由作者负责，不该被"无渡口"这条随机规则二次加工）。
+ */
+export function layoutFromRows(
+  rows: string[],
+  citiesA: Pos[],
+  citiesB: Pos[],
+  unitPool: string[] = [],
+  citySize = 2,
+): MapLayout {
+  const h = rows.length;
+  const w = rows[0]?.length ?? 0;
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
+  for (let y = 0; y < h; y += 1) {
+    const row = rows[y] ?? '';
+    for (let x = 0; x < w; x += 1) {
+      const t = terrainFromChar(row[x] ?? '.');
+      put(c, x, y, t);
+    }
+  }
+  const blocked = new Set<number>();
+  for (const city of [...citiesA, ...citiesB]) {
+    for (let dy = 0; dy < citySize; dy += 1) {
+      for (let dx = 0; dx < citySize; dx += 1) {
+        put(c, city.x + dx, city.y + dy, 'city');
+        blocked.add((city.y + dy) * w + (city.x + dx));
+      }
+    }
+  }
+
+  const pool = unitPool.length > 0 ? unitPool : ['infantry'];
+  const used = new Set<number>(blocked);
+  const spawnsA: SpawnDef[] = [];
+  const spawnsB: SpawnDef[] = [];
+  citiesA.forEach((city, i) => spawnsA.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+  citiesB.forEach((city, i) => spawnsB.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+
+  return {
+    w,
+    h,
+    rows: Array.from({ length: h }, (_, y) =>
+      Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
+    ),
+    citiesA,
+    citiesB,
+    spawnsA,
+    spawnsB,
+    // 固定地图没有"风格"可言：`style` 只用于界面显示，给它一个中性值
+    style: 'open',
+    symmetry: 'fair',
+    layout: 'diagonal',
+    fordless: false,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* 主入口                                                              */
 /* ------------------------------------------------------------------ */
 

@@ -15,7 +15,8 @@ import {
   expansionById,
 } from './expansions.ts';
 import { createDraft } from './draft.ts';
-import { generateLayout, terrainFromChar } from './mapgen.ts';
+import { generateLayout, layoutFromRows, terrainFromChar } from './mapgen.ts';
+import { validateFixedMap } from './fixed-maps.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 
@@ -179,19 +180,30 @@ export function createMatch(
   const spawnPool = (startingPool.length > 0 ? startingPool : pool).filter(
     (id) => catalog[id]?.domain !== 'water',
   );
-  const layout = generateLayout(
-    clampBoardSize(config.size),
-    seed,
-    spawnPool,
-    {
-      style: config.mapStyle ?? 'random',
-      symmetry: config.mapSymmetry ?? 'fair',
-      citySize,
-      // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
-      // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
-      expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
-    },
-  );
+  /*
+   * 地图：要么是玩家选定的固定地图，要么按种子生成。
+   *
+   * 固定地图在**这里再校验一遍**，而不是信调用方：`config` 会跟着存档、
+   * 联机房间、分享链接一路传，谁都能改它。校验不过就退回随机生成——
+   * 一张坏图不该让整局建不起来，但也不能让它带着半张地形进场。
+   */
+  const fixed = config.fixedMap ? validateFixedMap(config.fixedMap) : null;
+  const layout =
+    fixed && fixed.ok
+      ? layoutFromRows(fixed.map.rows, fixed.map.citiesA, fixed.map.citiesB, spawnPool, citySize)
+      : generateLayout(
+          clampBoardSize(config.size),
+          seed,
+          spawnPool,
+          {
+            style: config.mapStyle ?? 'random',
+            symmetry: config.mapSymmetry ?? 'fair',
+            citySize,
+            // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
+            // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
+            expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+          },
+        );
   const w = layout.w;
   const h = layout.h;
 

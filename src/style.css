@@ -1899,6 +1899,92 @@ a.btn {
   color: var(--text-3);
 }
 
+
+/* ---------- 开局设置：固定地图画廊 ----------
+
+ * 三列小卡：缩略图在上，名字和尺寸在下。
+ * 缩略图是内联 SVG（一格一个 rect），所以它和进局后看到的地形**同源**——
+ * 这里长得像水的，进局就是水，不存在"预览图是另一套画法"。
+ */
+.map-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.map-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+.map-card:hover {
+  border-color: var(--a);
+  transform: translateY(-1px);
+}
+
+.map-card.active {
+  border-color: var(--a);
+  background: var(--a-soft);
+  box-shadow: inset 0 0 0 1px var(--a);
+}
+
+.map-card-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--plain);
+  border: 1px solid var(--line);
+}
+
+/* 随机地形没有缩略图，给一块"问号"质感的占位 */
+.map-card-thumb.is-random {
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--text-3);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel-2) 0 6px,
+    var(--panel) 6px 12px
+  );
+}
+
+.map-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* 缩略图是"地图"不是"图片"：放大时不要插值糊成一片 */
+  shape-rendering: crispEdges;
+}
+
+.map-card > b {
+  font-size: 12px;
+  font-weight: 600;
+  /* 名字长也不许截断，允许两行 */
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.map-card > i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -2601,6 +2687,82 @@ a.btn {
  * 工具栏和参谋部共用同一条 .commander-bar（位置一样、都在棋盘上方），
  * 所以这里只补它自己的那几个小组件：阵营/笔刷分组、战况计数、结论文字。
  */
+
+/* ---------- 上帝模式：地图工坊 ----------
+
+ * 它和上面那些"一行 chip"不一样：这里要放一张缩略图 + 两行说明 + 两颗按钮，
+ * 所以单独给一块卡片的样子，别挤进 .god-group 的单行流里。
+ */
+.god-maps {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.god-map-preview {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.god-map-thumb {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--plain);
+}
+
+.god-map-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.god-map-meta > b {
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.god-map-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  /* 错误信息里有行列号，长句也不许截断 */
+  overflow-wrap: anywhere;
+}
+
+.god-hint {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.god-hint a {
+  color: var(--a);
+  text-decoration: underline;
+}
+
+.god-hint code {
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
 .god-group {
   display: flex;
   align-items: center;

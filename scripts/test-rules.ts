@@ -38,6 +38,7 @@ import {
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
 import { MAP_STYLES, generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
+import { BUILTIN_MAPS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -2291,6 +2292,96 @@ test('奇想平衡：圣剑觉醒的魔攻 / 魔抗会真的进伤害结算', ()
   assert.equal(magicResOf(r.state, up), res0 + 2, '魔抗 +2（同样是累加）');
   // 面板涨了，结算也必须跟着涨：民兵魔抗 0，所以这一发正好多 8 点
   assert.equal(magicDamageOf(r.state, up, foe), dmg0 + 8, '魔法段的伤害真的变高了');
+});
+
+test('固定地图：内置图能开成局，地形与数据逐格一致', () => {
+  for (const m of BUILTIN_MAPS) {
+    const v = validateFixedMap(m);
+    assert.ok(v.ok, `${m.name} 校验不过：${v.ok ? '' : v.errors.join('；')}`);
+    const s = createMatch({ ...DEFAULT_CONFIG, size: m.w, fixedMap: m }, 1);
+    assert.equal(s.w, m.w, `${m.name} 宽度`);
+    assert.equal(s.h, m.h, `${m.name} 高度`);
+    // 逐格核对：这张图存在的唯一意义就是"画的是什么就是什么"
+    for (let y = 0; y < m.h; y += 1) {
+      for (let x = 0; x < m.w; x += 1) {
+        const ch = m.rows[y]![x]!;
+        const terrain = s.tiles[y * s.w + x]!.terrain;
+        // 城格在数据里画的是地形，进局会被城盖掉；只核对非城格
+        if (terrain === 'city') continue;
+        assert.equal(
+          terrain,
+          { '.': 'plain', f: 'forest', h: 'hill', '~': 'water', '^': 'mountain', '=': 'bridge' }[ch],
+          `${m.name} (${x},${y}) 应该是 ${ch}`,
+        );
+      }
+    }
+    assert.equal(s.cities.filter((c) => c.owner === 'A').length, m.citiesA.length);
+    assert.equal(s.cities.filter((c) => c.owner === 'B').length, m.citiesB.length);
+    // 两边都得有开局部队，否则一开局就是空棋盘
+    assert.ok(s.units.some((u) => u.owner === 'A'), `${m.name} 甲方没有开局部队`);
+    assert.ok(s.units.some((u) => u.owner === 'B'), `${m.name} 乙方没有开局部队`);
+  }
+});
+
+test('固定地图：坏数据被挡住，报错要指出是哪一处', () => {
+  const base = { name: '测试', rows: Array.from({ length: 10 }, () => '..........'), citiesA: [{ x: 1, y: 1 }], citiesB: [{ x: 6, y: 6 }] };
+  assert.ok(validateFixedMap(base).ok, '基线数据应该是合法的');
+
+  const tooSmall = validateFixedMap({ ...base, rows: ['...', '...'] });
+  assert.equal(tooSmall.ok, false);
+  assert.ok(!tooSmall.ok && tooSmall.errors.some((e) => e.includes('高度')), '太小的图要拒');
+
+  const badChar = validateFixedMap({ ...base, rows: base.rows.map((r, i) => (i === 2 ? '...X......' : r)) });
+  assert.equal(badChar.ok, false);
+  assert.ok(!badChar.ok && badChar.errors.some((e) => e.includes('第 3 行第 4 列')), '要指出行列');
+
+  const noCity = validateFixedMap({ ...base, citiesB: [] });
+  assert.equal(noCity.ok, false);
+
+  const edge = validateFixedMap({ ...base, citiesA: [{ x: 0, y: 0 }] });
+  assert.equal(edge.ok, false, '贴边的城要拒');
+
+  // 扩展地形不许进共享地图：没开那个扩展的局里它会变成平原
+  const expanded = validateFixedMap({ ...base, rows: base.rows.map((r, i) => (i === 0 ? 'P.........' : r)) });
+  assert.equal(expanded.ok, false, '台地（P）属于扩展地形，不该收');
+});
+
+test('固定地图：纯文本格式能直接画，A/B 标出城位', () => {
+  const text = [
+    'name: 手画的小图',
+    '....h....',
+    '..A...B..',
+    '....~....',
+    '..ff..hh.',
+    '.........',
+    '...~~....',
+    '..f......',
+    '...h.....',
+    '.........',
+  ].join('\n');
+  const parsed = parseMapFile(text);
+  assert.ok(parsed.ok, parsed.ok ? '' : parsed.errors.join('；'));
+  const map = parsed.ok ? parsed.map : null;
+  assert.ok(map);
+  assert.equal(map!.name, '手画的小图');
+  assert.equal(map!.w, 9);
+  assert.equal(map!.h, 9);
+  assert.deepEqual(map!.citiesA, [{ x: 2, y: 1 }]);
+  assert.deepEqual(map!.citiesB, [{ x: 6, y: 1 }]);
+  // 城位字母本身不是地形，落地时要变回平原
+  assert.equal(map!.rows[1]![2], '.');
+  assert.equal(map!.rows[1]![6], '.');
+
+  // JSON 也认，而且和文本走同一套校验
+  const asJson = parseMapFile(JSON.stringify(map));
+  assert.ok(asJson.ok);
+
+  // 坏文件必须给一句人话
+  const empty = parseMapFile('   ');
+  assert.equal(empty.ok, false);
+  const broken = parseMapFile('{ "name": "x" ');
+  assert.equal(broken.ok, false);
+  assert.ok(!broken.ok && broken.errors[0]!.includes('JSON'));
 });
 
 test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', () => {

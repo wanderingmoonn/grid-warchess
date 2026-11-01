@@ -15,6 +15,9 @@ import {
   lockedEraPacks,
 } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
+import { allFixedMaps, fixedMapById, registerUserMaps } from '../core/fixed-maps.ts';
+import { cachedMaps, listSharedMaps } from '../net/maps.ts';
+import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
   MAX_BOARD_SIZE,
@@ -59,6 +62,11 @@ function loadRecordPref(): boolean | null {
   }
 }
 
+/** 转义进 HTML 的东西：地图名来自玩家上传，不能直接插进 DOM */
+function esc(raw: string): string {
+  return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function saveRecordPref(on: boolean): void {
   try {
     localStorage.setItem(RECORD_PREF_KEY, on ? '1' : '0');
@@ -77,6 +85,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
+      // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
+      fixedMap: initial.fixedMap,
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
       commanderMode: initial.commanderMode === true,
@@ -114,6 +124,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     mask.className = 'modal-mask';
 
     const close = (result: SetupResult | null) => {
+      alive = false;
       mask.remove();
       resolve(result);
     };
@@ -143,6 +154,34 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (d.act) return `[data-act="${d.act}"]`;
       return null;
     };
+
+    /*
+     * 固定地图：内置四张 + 云端地图库里别人上传的那些。
+     *
+     * 三件事按这个顺序发生，界面上不会闪：
+     *   1. 同步登记**本机缓存**里上一次拉到的地图——断网也能立刻选；
+     *   2. 异步拉云端，回来了再重绘一次（`alive` 保证关闭面板后不再碰 DOM）；
+     *   3. 失败只写一行提示，不挡开局：地图拉不到，随机地形照样能打。
+     */
+    registerUserMaps(cachedMaps());
+    let cloudNote = '';
+    let alive = true;
+    void listSharedMaps().then((res) => {
+      if (!alive) return;
+      if (res.maps.length > 0) registerUserMaps(res.maps);
+      cloudNote = res.ok ? '' : (res.reason ?? '');
+      if (res.ok) paint();
+      else if (res.maps.length > 0) paint();
+      else paint();
+    });
+
+    /** 一张地图卡片：缩略图 + 名字 + 尺寸/来源 */
+    const mapCard = (id: string, name: string, size: string, thumb: string, active: boolean, extra = '') =>
+      `<button type="button" class="map-card ${active ? 'active' : ''}" data-map="${id}" title="${name}">
+         <span class="map-card-thumb">${thumb}</span>
+         <b>${name}</b>
+         <i>${size}${extra}</i>
+       </button>`;
 
     const paint = () => {
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
@@ -187,6 +226,38 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         extraStyles > 0
           ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
           : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
+
+      /*
+       * 固定地图画廊。
+       *
+       * 默认是「随机地形」——开局面板的默认值必须和"不选"一致，
+       * 否则每次开局都会被一张别人画好的图顶掉，玩家还得先学会怎么取消。
+       * 选中的卡片加 `active`，靠一条主色描边和随机那张区分开；
+       * 缩略图直接用同一份地形数据画，所见即所得。
+       */
+      const fixedMaps = allFixedMaps();
+      const pickedMapId = config.fixedMap?.id ?? '';
+      const thumbCity = Math.max(2, Math.min(3, Math.round(config.citySize ?? 2)));
+      const mapCards = [
+        `<button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
+           <span class="map-card-thumb is-random">随机</span>
+           <b>随机地形</b>
+           <i>按种子生成</i>
+         </button>`,
+        ...fixedMaps.map((m) =>
+          mapCard(
+            m.id,
+            esc(m.name),
+            `${m.w}×${m.h}`,
+            mapThumbSvg(m, thumbCity),
+            m.id === pickedMapId,
+            m.source === 'user' ? ' · 玩家地图' : '',
+          ),
+        ),
+      ].join('');
+      const mapHint = config.fixedMap
+        ? `已选「${esc(config.fixedMap.name)}」：这一局的地貌、对称、尺寸与种子都不生效`
+        : `随机地形每局不同。选一张固定地图就照着它打——联机两边、复盘重开都是同一张${cloudNote ? `（${cloudNote}）` : ''}`;
 
       // 时代那一栏的提示要指出"还能往上开"：只写"从哪一级开始"的话，
       // 没勾过时代扩展的人根本不知道这游戏还有第六时代。
@@ -393,6 +464,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
+                固定地图 <span class="field-hint">${mapHint}</span>
+              </div>
+              <div class="map-gallery">${mapCards}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
                 地形对称 <span class="field-hint">地势各异：两侧地形数量相同、分布不同</span>
               </div>
               <div class="chip-row">${symChips}</div>
@@ -536,6 +614,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const styleBtn = target.closest<HTMLElement>('[data-mapstyle]');
       if (styleBtn?.dataset.mapstyle) {
         config.mapStyle = styleBtn.dataset.mapstyle as NonNullable<MatchConfig['mapStyle']>;
+        paint();
+        return;
+      }
+
+      const mapBtn = target.closest<HTMLElement>('[data-map]');
+      if (mapBtn) {
+        // 空字符串＝"随机地形"：必须能取消，否则选了固定图就再也回不去了
+        const id = mapBtn.dataset.map ?? '';
+        const picked = id ? fixedMapById(id) : null;
+        config.fixedMap = picked ?? undefined;
+        // 尺寸跟着地图走：面板上那排尺寸按钮显示的是"这一局多大"，
+        // 选了 16×16 的图却还亮着 20×20，就是在说一句和事实相反的话。
+        if (picked) config.size = picked.w;
         paint();
         return;
       }

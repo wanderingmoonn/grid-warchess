@@ -20,6 +20,9 @@ import { eraCeilingOf } from '../core/expansions.ts';
 import { canAttack, canMove, heroSkillsOf } from '../core/rules.ts';
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain, Unit } from '../core/types.ts';
+import type { FixedMap } from '../core/fixed-maps.ts';
+import { mapThumbSvg } from './map-thumb.ts';
+import { MAP_MAX_BYTES } from '../core/fixed-maps.ts';
 import { packOk, packRow, eraChipRow, eraOk } from './packs.ts';
 
 export type GodBrush =
@@ -69,6 +72,15 @@ export interface GodUi {
   play: 'me' | 'both' | null;
   /** 现在轮不轮到玩家自己走 */
   myTurn: boolean;
+  /**
+   * 地图工坊里"解析好、还没传上去"的那一张。
+   *
+   * 为什么不解析完直接传：上传是**不可撤回**的公开动作（传上去别人就能选到），
+   * 作者至少该看一眼缩略图确认没传错文件。所以是两步：先看，再传。
+   */
+  mapDraft?: FixedMap | null;
+  /** 地图工坊的状态行（解析失败原因 / 上传结果） */
+  mapNote?: string;
   /** AI 正在替对面走**这一个回合**（不是两边都托管，那个走的是 running） */
   passing: boolean;
   /**
@@ -405,6 +417,51 @@ function godLogHtml(ui: GodUi): string {
 }
 
 /** 侧栏：场上形势 + 战报 + 兵种货架。 */
+/**
+ * 地图工坊：把一张画好的地图传上云端，别人在开局面板里就能选到。
+ *
+ * 入口刻意放在**上帝模式**里而不是开局面板：这是一件低频、偏作者向的事，
+ * 放在开局面板会让每个新玩家都在"选地图"和"做地图"之间分神；
+ * 而上帝模式本来就是"我要动这套东西"的入口。
+ *
+ * 界面上只有三步，每一步都看得见：
+ *   ① 选择文件（.json 或纯文本网格）；
+ *   ② 看一眼缩略图和尺寸——**先看再传**，因为上传是不可撤回的公开动作；
+ *   ③ 传完给一句话，说明"现在别人也能选到它了"。
+ */
+function mapWorkshop(ui: GodUi): string {
+  const draft = ui.mapDraft ?? null;
+  const note = ui.mapNote ? `<div class="god-map-note">${escapeHtml(ui.mapNote)}</div>` : '';
+  if (!draft) {
+    return `<div class="god-group god-maps">
+      <span class="god-label">地图工坊</span>
+      <button class="btn btn-sm" data-act="god-map-file">选择地图文件…</button>
+      <div class="god-hint">
+        支持 <code>.json</code> 或纯文本网格（<code>.</code> 平原 <code>f</code> 森林 <code>h</code> 丘陵
+        <code>~</code> 水 <code>^</code> 山 <code>=</code> 桥，<code>A</code>/<code>B</code> 标两边城的左上角）。
+        单文件 ≤ ${Math.round(MAP_MAX_BYTES / 1024)}KB，${8}~${40} 格见方。
+        <a href="maps/example-map.txt" download="example-map.txt">下载一个模板</a>
+      </div>
+      ${note}
+    </div>`;
+  }
+  return `<div class="god-group god-maps">
+    <span class="god-label">地图工坊 · 待上传</span>
+    <div class="god-map-preview">
+      <span class="god-map-thumb">${mapThumbSvg(draft, Math.max(2, Math.min(3, Math.round(ui.state.config.citySize ?? 2))))}</span>
+      <div class="god-map-meta">
+        <b>${escapeHtml(draft.name)}</b>
+        <span>${draft.w} × ${draft.h} · 城 ${draft.citiesA.length} : ${draft.citiesB.length}</span>
+      </div>
+    </div>
+    <div class="chip-row">
+      <button class="btn btn-sm btn-primary" data-act="god-map-ok">上传到地图库</button>
+      <button class="btn btn-sm" data-act="god-map-cancel">取消</button>
+    </div>
+    ${note}
+  </div>`;
+}
+
 export function godShelfHtml(ui: GodUi): string {
   const s = ui.state;
 
@@ -488,6 +545,7 @@ export function godShelfHtml(ui: GodUi): string {
 
   return `
     ${picked}
+    ${ui.running ? '' : mapWorkshop(ui)}
     ${shelfCard}
 
     <div class="card">
