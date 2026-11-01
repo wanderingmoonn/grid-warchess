@@ -15,6 +15,7 @@
  */
 
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { ResourceCost } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
@@ -510,6 +511,22 @@ function log(state: GameState, player: PlayerId, text: string): void {
 export const BLOOD_TURN = 50;
 
 /**
+ * 这一局的血战刻度。
+ *
+ * `state.turn` 数的是**行动次数**（一次「结束回合」+1），而 50 是按两人局定的
+ * ——那是每家各走 25 轮的位置。三家四家局里走完一圈要 3/4 次行动，
+ * 直接沿用 50 会把血战提前到第 12/16 轮，正好卡在"开局还没摆完、城市还没升过"的时候。
+ *
+ * 所以按 `人数 / 2` 等比顺延：两人局严格等于 50（老行为一个字都不变），
+ * 三人局 75、四人局 100——三家四家局里每家走过的**轮数**仍然是 25。
+ */
+export function bloodTurnOf(s: { config: { playerCount?: number } }): number {
+  const n = s.config.playerCount ?? 2;
+  if (n <= 2) return BLOOD_TURN;
+  return Math.round((BLOOD_TURN * n) / 2);
+}
+
+/**
  * 涨价之前的升级费用表（下标 = 要升到的时代）。
  * 血战生效后按这个价走，也就是把第 20 轮那次涨价撤掉。
  *
@@ -689,7 +706,7 @@ export const EXPANSIONS: Expansion[] = [
       modifyCost: ({ unitType, cost }) =>
         unitType.category === 'combat' ? Math.max(5, Math.round(cost * 0.8)) : cost,
       onMatchStart: ({ state }) => {
-        for (const p of ['A', 'B'] as PlayerId[]) {
+        for (const p of seatsOf(state)) {
           state.players[p].gold = Math.max(0, Math.round(state.players[p].gold * 0.5));
         }
       },
@@ -815,23 +832,32 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'bloodbath',
     name: '血战',
-    summary: `第 ${BLOOD_TURN} 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。`,
+    summary: `第 ${BLOOD_TURN} 回合起（三/四人局按人数等比顺延）：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。`,
     hooks: {
       // 第 17～20 轮为了压节奏加的三样东西（机动/视野削减、城市回血、升级涨价）
       // 确实把对局从 30 多回合拉到了 100 回合，代价是后期变成谁都推不动的拉锯。
       // 血战给它们一个到期日：前 50 回合照常磨，之后全线提速，逼出一个结果。
-      modifyCityRegen: ({ state, regen }) => (state.turn >= BLOOD_TURN ? 0 : regen),
+      modifyCityRegen: ({ state, regen }) => (state.turn >= bloodTurnOf(state) ? 0 : regen),
       modifyUpgradeCost: ({ state, cost, nextEra }) => {
         if (cost === null) return null;
-        return state.turn >= BLOOD_TURN ? (LEGACY_UPGRADE_COST[nextEra - 1] ?? cost) : cost;
+        return state.turn >= bloodTurnOf(state) ? (LEGACY_UPGRADE_COST[nextEra - 1] ?? cost) : cost;
       },
       // 只给移动力 ≥ 2 的加：机枪队那种 move 1 的单位本来就没被削过
-      modifyMove: ({ state, move }) => (state.turn >= BLOOD_TURN && move >= 2 ? move + 1 : move),
-      modifyVision: ({ state, base }) => (state.turn >= BLOOD_TURN ? base + 1 : base),
+      modifyMove: ({ state, move }) => (state.turn >= bloodTurnOf(state) && move >= 2 ? move + 1 : move),
+      modifyVision: ({ state, base }) => (state.turn >= bloodTurnOf(state) ? base + 1 : base),
       onTurnStart: ({ state, player }) => {
-        if (state.turn === BLOOD_TURN && player === 'A') {
-          log(state, 'A', `血战开始：城市不再回血、升级恢复原价、全军移动与视野各 +1`);
+        const mark = bloodTurnOf(state);
+        if (state.turn !== mark) return;
+        const note = '血战开始：城市不再回血、升级恢复原价、全军移动与视野各 +1';
+        const seats = seatsOf(state);
+        if (seats.length <= 2) {
+          // 两人局的老路：这一条只写给 A（照原样，别顺手改了行动方的语义）
+          if (player === 'A') log(state, 'A', note);
+          return;
         }
+        // 三家四家局里这条消息对每个人都要紧，而战报是按席位过滤的——
+        // 只写一份的话，除了那一个席位，别人永远看不到"血战开了"
+        for (const p of seats) log(state, p, note);
       },
     },
   },

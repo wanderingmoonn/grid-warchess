@@ -32,11 +32,13 @@ export function setSaveScope(roomCode: string | null): void {
   scopedKey = roomCode ? `${KEY_MATCH}:room:${roomCode}` : KEY_MATCH;
 }
 
+import type { PlayerId } from '../core/types.ts';
+
 export interface MatchMeta {
   createdAt: number;
   updatedAt: number;
   /** 当前应该由谁操作 */
-  pendingFor: 'A' | 'B';
+  pendingFor: PlayerId;
 }
 
 export function saveMatch(s: GameState): void {

@@ -12,6 +12,7 @@
 
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from './expansions.ts';
 import { climateEffect, climateOfUnit, isNaval } from './climate.ts';
+import { seatsOf } from './types.ts';
 import type { GameState, Unit } from './types.ts';
 
 /** 这个扩展在这个局面里生效吗（被前置/开关过滤掉时不算） */
@@ -166,7 +167,7 @@ export const SEASONS: Expansion = {
         }
       }
 
-      for (const p of ['A', 'B'] as const) {
+      for (const p of seatsOf(state)) {
         const dmg = hurtTotal[p] ?? 0;
         const fee = feeTotal[p] ?? 0;
         if (dmg > 0) log(p, `天气让 ${hurtCount[p]} 个部队共损失 ${dmg} 点生命`);

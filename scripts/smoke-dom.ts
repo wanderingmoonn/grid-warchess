@@ -1434,6 +1434,56 @@ await checkAsync('32×32 大地图也能开局，并带出缩放条', async () =
   assert.equal(doc.querySelectorAll('.tile').length, 400, '应该回到 20×20');
 });
 
+console.log('\n三/四人对局');
+
+await checkAsync('开始界面选三人：对手区换成说明，开局后顶栏三条席位、每家一座城', async () => {
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const players = [...doc.querySelectorAll<HTMLElement>('[data-players]')];
+  assert.ok(players.length === 3, `人数要有 2/3/4 三个选择，实际 ${players.length}`);
+  const three = doc.querySelector<HTMLElement>('[data-players="3"]');
+  assert.ok(three, '要有「三人」这一档');
+  three!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(
+    doc.querySelector<HTMLElement>('[data-players="3"]')!.classList.contains('active'),
+    '点过之后「三人」要是选中态',
+  );
+  // 多方局里 AI 的两个开关不成立，那一块要换成一句说明，而不是留一串点了没反应的按钮
+  const body = doc.querySelector('.modal-body')!;
+  assert.equal(body.querySelectorAll('[data-ai]').length, 0, '三人局不该还摆着「人机对战」这类开关');
+  assert.equal(body.querySelectorAll('[data-role="god"]').length, 0, '三人局不摆上帝模式（沙盒是按两边写的）');
+
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  assert.equal(doc.querySelector('.seat-row')?.parentElement?.children.length, 3, '顶栏应该有三条席位');
+  const seatRows = [...doc.querySelectorAll<HTMLElement>('.seat-row')];
+  assert.deepEqual(
+    seatRows.map((r) => (r.textContent ?? '').trim().slice(0, 2)),
+    ['红方', '蓝方', '绿方'],
+    `席位条按红/蓝/绿排，实际 ${seatRows.map((r) => r.textContent).join('|')}`,
+  );
+  // 每家只有一座城（这是这个模式的定义）
+  assert.equal(doc.querySelectorAll('.tile.t-city.own-A').length, 4, 'A 的城是 2×2，一处城块');
+  assert.equal(doc.querySelectorAll('.tile.t-city.own-C').length, 4, '绿方也要有一座自己的城');
+  assert.equal(doc.querySelectorAll('.tile.t-city.own-D').length, 0, '三人局没有黄方');
+
+  // 换回两人局 20×20，后面的用例都按那个布局写的
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const two = doc.querySelector<HTMLElement>('[data-players="2"]');
+  assert.ok(two, '人数里要能选回两人');
+  two!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  click('[data-size="20"]');
+  click('[data-act="start"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(doc.querySelectorAll('.tile').length, 400, '应该回到 20×20');
+  assert.equal(doc.querySelectorAll('.seat-row').length, 2, '两人局回到两条席位');
+});
+
 console.log('\n升级时代');
 
 check('二级时代造价远高于开局金币（防先手滚雪球）', () => {

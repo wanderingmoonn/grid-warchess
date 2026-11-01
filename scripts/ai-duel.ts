@@ -20,7 +20,12 @@ import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction as newAi } from '../src/core/ai.ts';
-import { aiNextAction as oldAi } from './baseline-ai.ts';
+// 冻结的旧版 AI：用变量做 specifier，别让 tsc 把它拉进类型检查
+// （它是两人局的旧代码，`players: { A, B }` 和现在的四键定义对不上）。
+const OLD_AI_FILE = './baseline-ai.ts';
+const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
+  ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
+) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {

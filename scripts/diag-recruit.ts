@@ -58,7 +58,7 @@ for (let g = 0; g < GAMES; g += 1) {
     seed,
   );
 
-  const bought: Record<PlayerId, Record<string, number>> = { A: {}, B: {} };
+  const bought: Record<PlayerId, Record<string, number>> = { A: {}, B: {}, C: {}, D: {} };
   const rows: Array<{ turn: number } & ReturnType<typeof snap>> = [];
 
   let ended = false;

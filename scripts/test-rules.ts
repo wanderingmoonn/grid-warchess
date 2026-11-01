@@ -30,6 +30,7 @@ import {
 } from '../src/core/config.ts';
 import {
   BLOOD_TURN,
+  bloodTurnOf,
   EXPANSIONS,
   LEGACY_UPGRADE_COST,
   availableExpansions,
@@ -155,8 +156,7 @@ import {
   DEFAULT_CONFIG,
   normalizePlayerNames,
   startGoldFor,
-} from '../src/core/setup.ts';
-import {
+} from '../src/core/setup.ts';import {
   applyAction,
   mergeDraftStep,
   adjacentToWater,
@@ -229,11 +229,18 @@ import {
   utype,
   visionOf,
   visibleTilesOf,
+  // 三/四人局：席位轮转与出局判定
+  others,
+  nextSeat,
+  aliveSeats,
+  isEliminated,
+  hasQuit,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
 import { GOLD } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
+import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
 import type {
   Action,
   City,
@@ -291,6 +298,8 @@ function clearDecor(s: GameState): void {
  * 地图本身的多样性由下面那些直接调 generateLayout 的用例负责。
  */
 function pinCities(s: GameState): void {
+  // 一家一个角。两人局每家两座城，所以 A/B 各有两个位；
+  // 三人四人局每家只有一座（这正是那个模式的定义），C/D 就落在剩下两个角上。
   const spots: Record<PlayerId, Array<{ x: number; y: number }>> = {
     A: [
       { x: 1, y: s.h - 3 },
@@ -300,8 +309,16 @@ function pinCities(s: GameState): void {
       { x: 1, y: 1 },
       { x: s.w - 3, y: 1 },
     ],
+    C: [
+      { x: s.w - 3, y: s.h - 3 },
+      { x: 1, y: s.h - 3 },
+    ],
+    D: [
+      { x: s.w - 3, y: 1 },
+      { x: 1, y: 1 },
+    ],
   };
-  const used: Record<PlayerId, number> = { A: 0, B: 0 };
+  const used: Record<PlayerId, number> = { A: 0, B: 0, C: 0, D: 0 };
 
   // 必须两遍：先全部清空，再全部放置。
   // 一遍到底的话，后一座城"清自己的旧位置"会抹掉前一座城刚放下的格子——
@@ -352,6 +369,21 @@ function fresh(extra?: Partial<MatchConfig>, seed = 12345): GameState {
   const s = createMatch({ ...BASE, ...extra }, seed);
   clearDecor(s);
   pinCities(s);
+  refreshMemory(s);
+  return s;
+}
+
+/**
+ * 三/四人局的开局：只清装饰地形，**不钉城市**。
+ *
+ * 钉城市那一步是给两人局里那些写死坐标的用例（奴隶站 (5,5)、河在 x=8）准备的，
+ * 它会把城硬挪到四角——而四人局的兵本来就摆在自己城外，一挪城就有几家被"清掉
+ * 站在别人城里的单位"这条规则带走，四家兵力立刻不齐。多方局的对称性必须从
+ * 生成器出来的原样去验，所以在那一批用例里不钉。
+ */
+function freshMulti(n: 3 | 4, extra?: Partial<MatchConfig>, seed = 12345): GameState {
+  const s = createMatch({ ...BASE, ...extra, playerCount: n }, seed);
+  clearDecor(s);
   refreshMemory(s);
   return s;
 }
@@ -13029,6 +13061,188 @@ test('战报：挨打的一方也能看到自己为什么掉血', () => {
   const seen = r2.state.log.filter((l) => l.player === 'B').map((l) => l.text).join(' ');
   assert.ok(seen.includes('视野外的一击'), `隐匿单位出手不该报名字，实际：${seen}`);
   assert.ok(!seen.includes('火炮 打在'), '不该出现具体兵种名');
+});
+
+/* ===========================================================================
+ * 三/四人对局
+ *
+ * 这一组盯的是"多出来的席位真的被照顾到了"，不是"能不能跑起来"：
+ *   · 每家**只有一座城**（两人局是两座）——这是模式的定义，不是巧合；
+ *   · 行动权按座位环转，出局的座位会被跳过；
+ *   · 认输只是这一家退出，不是整局结束；
+ *   · AI / 选卡 / 固定地图在多方局一律不进场（它们都是按两边写的）。
+ * ========================================================================= */
+
+console.log('\n三/四人对局');
+
+test('三人局：三个席位，每家一座城，AI 不进多方局', () => {
+  const s = freshMulti(3);
+  assert.deepEqual(seatsOf(s), ['A', 'B', 'C'], '三个席位按 A/B/C 排');
+  assert.equal(s.config.playerCount, 3, '人数必须活进 config，否则席位会退回两个');
+  for (const p of seatsOf(s)) {
+    assert.equal(citiesOf(s, p).length, 1, `${p} 应该正好一座城`);
+    assert.ok(unitsOf(s, p).length > 0, `${p} 开局得有兵`);
+  }
+  assert.equal(s.cities.length, 3, '棋盘上一共三座城');
+  // AI 的两个开关是按"两边"写的，多方局里必须一直是关的
+  assert.equal(s.config.aiOpponent, false);
+  assert.equal(s.config.aiAlly, false);
+});
+
+test('四人局：四个席位，四座城，开局对等', () => {
+  const s = freshMulti(4);
+  assert.deepEqual(seatsOf(s), ['A', 'B', 'C', 'D']);
+  assert.equal(s.cities.length, 4);
+  const golds = seatsOf(s).map((p) => s.players[p].gold);
+  const arms = seatsOf(s).map((p) => unitsOf(s, p).length);
+  for (const p of seatsOf(s)) assert.equal(citiesOf(s, p).length, 1, `${p} 应该正好一座城`);
+  // 先手补偿会让 A 的金币多一点，所以只比后三家；兵力四家必须一样多
+  assert.equal(new Set(arms).size, 1, `四家开局兵力该一样，实际 ${arms.join('/')}`);
+  assert.equal(new Set(golds.slice(1)).size, 1, `后三家金币该一样，实际 ${golds.join('/')}`);
+  assert.ok(golds[0]! >= golds[1]!, '先手只会多给、不会少给');
+});
+
+test('三人四人不认固定地图：固定地图只有两个城位，硬套会有一家没城', () => {
+  const map = BUILTIN_MAPS[0];
+  assert.ok(map, '要有一张内置图才谈得上这条');
+  const s = freshMulti(4, { fixedMap: map.id });
+  assert.equal(s.cities.length, 4, '四家局仍然要生成四座城，而不是套那张两城位的图');
+  for (const p of seatsOf(s)) assert.equal(citiesOf(s, p).length, 1);
+  // 两人局还是照样用固定地图（不作为反例，只确认这条改动没有波及它）
+  const two = fresh({ fixedMap: map.id });
+  assert.equal(two.cities.length, 4, '两人局：每家两座城，一共四座');
+});
+
+test('行动权按座位环转，出局的座位被跳过', () => {
+  const s = freshMulti(4);
+  assert.equal(s.current, 'A');
+  assert.deepEqual(aliveSeats(s), ['A', 'B', 'C', 'D']);
+  assert.equal(nextSeat(s, 'A'), 'B');
+  assert.equal(nextSeat(s, 'D'), 'A', '最后一家走完回到第一家');
+
+  // 记一笔"B 已经退出了"，轮到 A 之后就该直接跳到 C
+  s.out = ['B'];
+  assert.equal(nextSeat(s, 'A'), 'C');
+  assert.equal(nextSeat(s, 'C'), 'D');
+  assert.deepEqual(aliveSeats(s), ['A', 'C', 'D']);
+  assert.equal(isEliminated(s, 'B'), true);
+  assert.equal(hasQuit(s, 'B'), true);
+});
+
+test('四人局走完一圈：A→B→C→D→A，行动序号跟着涨四次', () => {
+  let s = freshMulti(4);
+  const seen: PlayerId[] = [];
+  for (let i = 0; i < 4; i++) {
+    assert.equal(s.current, PLAYER_ORDER[i], `第 ${i + 1} 手该轮到 ${PLAYER_ORDER[i]}`);
+    seen.push(s.current);
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    s = r.state;
+  }
+  assert.deepEqual(seen, ['A', 'B', 'C', 'D']);
+  assert.equal(s.current, 'A', '一圈走完回到第一家');
+  // `turn` 数的是**行动次数**，不是"每家各走过几次"：两人局里两者差一倍，
+  // 四人局里差四倍。血战阈值（BLOOD_TURN = 50）读的也是它，
+  // 所以四人局到血战大约是 12 轮、两人局是 25 轮——这条口径记在这里，
+  // 别哪天有人误以为"四人局的第 50 回合"还是二十多轮。
+  assert.equal(s.turn, 5, '四次行动之后序号是 5');
+});
+
+test('三人局认输：只退出这一家，剩下两家继续打', () => {
+  const s = freshMulti(3);
+  s.current = 'B';
+  const r = applyAction(s, { type: 'SURRENDER' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state;
+  assert.equal(after.winner, null, '还剩两家，这局没结束');
+  assert.deepEqual(after.out, ['B']);
+  assert.equal(unitsOf(after, 'B').length, 0, '退了的人不能留一群打不还手的靶子');
+  // 城**留在原地**（地形必须还是 city，别人打下来就是战利品），
+  // 只是这一家已经不在活着的席位里了——判负、轮转、顶栏都按席位算
+  assert.equal(isEliminated(after, 'B'), true, '退出的席位算已出局');
+  assert.deepEqual(aliveSeats(after), ['A', 'C'], '活着的只剩两家');
+  assert.equal(after.current, 'C', '行动权要交给下一位，不能停在已退出的席位上');
+});
+
+test('四人局只剩一家：那一家才算赢', () => {
+  const s = freshMulti(4);
+  // B、C 都退出，D 还在：这一局还没完
+  s.out = ['B', 'C'];
+  s.units = s.units.filter((u) => u.owner !== 'B' && u.owner !== 'C');
+  s.cities = s.cities.filter((c) => c.owner !== 'B' && c.owner !== 'C');
+  s.current = 'A';
+  const mid = applyAction(s, { type: 'END_TURN' });
+  assert.ok(mid.ok, mid.ok ? '' : mid.reason);
+  assert.equal(mid.state.winner, null, 'A 和 D 都还在，不能判胜');
+
+  // D 也退出：只剩 A
+  mid.state.out = ['B', 'C', 'D'];
+  mid.state.units = mid.state.units.filter((u) => u.owner !== 'D');
+  mid.state.cities = mid.state.cities.filter((c) => c.owner !== 'D');
+  mid.state.current = 'A';
+  const done = applyAction(mid.state, { type: 'END_TURN' });
+  assert.ok(done.ok, done.ok ? '' : done.reason);
+  assert.equal(done.state.winner, 'A', '只剩一家就该结束，赢的是最后活着的那家');
+});
+
+test('两人局不受影响：认输仍然直接定胜负', () => {
+  const s = fresh();
+  s.current = 'B';
+  const r = applyAction(s, { type: 'SURRENDER' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.winner, 'A', '两人局认输就是对面赢，和以前一样');
+  assert.equal(r.state.out, undefined, '两人局不该有"退出的席位"这种东西');
+});
+
+test('战报带上人数：两人局 2、四人局 4，两侧阵容都要齐', () => {
+  const two = buildMatchReport(fresh());
+  assert.equal(two.playerCount, 2);
+  assert.equal(two.sides.length, 2);
+
+  const four = buildMatchReport(freshMulti(4));
+  assert.equal(four.playerCount, 4);
+  assert.equal(four.sides.length, 4, '四家局的报告要有四条阵容，少一条就没法按家看数据');
+  assert.deepEqual(four.sides.map((x) => x.side), ['A', 'B', 'C', 'D']);
+  for (const side of four.sides) {
+    assert.equal(side.cities, 1, `${side.side} 应该报出一座城`);
+    assert.ok(side.hp > 0, `${side.side} 的终局血量要算进来`);
+  }
+});
+
+test('血战按人数顺延：四人局第 60 次行动还没开打，两人局早就开了', () => {
+  // `turn` 数的是行动次数，两人局 50 次 ≈ 每家 25 轮；四人局一圈 4 次行动，
+  // 直接沿用 50 会提前到第 12 轮。所以刻度按人数等比放大。
+  assert.equal(bloodTurnOf(freshMulti(2)), BLOOD_TURN, '两人局一个数都不能变');
+  assert.equal(bloodTurnOf(freshMulti(3)), 75);
+  assert.equal(bloodTurnOf(freshMulti(4)), 100);
+
+  const four = freshMulti(4, { expansionIds: ['bloodbath'] });
+  four.turn = 60;
+  const city4 = citiesOf(four, 'A')[0]!;
+  assert.equal(
+    upgradeCostOf(four, city4),
+    ERAS[1].upgradeCost,
+    '四人局第 60 次行动还在开局，升级照现价（没提前打折）',
+  );
+  assert.equal(
+    movePower(four, unitsOf(four, 'A')[0]!),
+    utype(four, unitsOf(four, 'A')[0]!.type).move,
+    '机动也还没提速',
+  );
+
+  const two = fresh({ expansionIds: ['bloodbath'] });
+  two.turn = 60;
+  const city2 = citiesOf(two, 'A')[0]!;
+  assert.equal(upgradeCostOf(two, city2), LEGACY_UPGRADE_COST[1], '两人局第 60 次行动已经在血战里了');
+});
+
+test('多人局的顺序、名单、金币都不认识"对方"这个概念', () => {
+  const s = freshMulti(3);
+  assert.deepEqual(others(s, 'A'), ['B', 'C'], '除了我，其余几家都是别人');
+  assert.deepEqual(others(s, 'C'), ['A', 'B']);
+  // 未坐的 D 不该被当成"一个还有兵的玩家"
+  assert.equal(s.players.D.gold, 0, '没坐人的席位不该有开局金币');
+  assert.equal(unitsOf(s, 'D').length, 0);
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

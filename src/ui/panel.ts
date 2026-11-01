@@ -46,6 +46,7 @@ import {
   maxHpOf, 
   magicAtkOf,
   magicResOf,
+  hasQuit,
   heroSkillsOf,
   isAirborne,
   ordersOf,
@@ -56,6 +57,7 @@ import {
   upgradeCostOf,
   utype,
 } from '../core/rules.ts';
+import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
@@ -241,11 +243,8 @@ function panelHtml(input: PanelInput): string {
   const spectator = input.spectator === true;
   /** 只看不给动：观战位和指挥官模式都算，后面所有 `mine` 都挂在它上面 */
   const readOnly = spectator || input.commander === true;
-  const other: PlayerId = me === 'A' ? 'B' : 'A';
   const myTurn = !spectator && s.current === me && !s.winner;
 
-  const myCities = s.cities.filter((c) => c.owner === me).length;
-  const otherCities = s.cities.filter((c) => c.owner === other).length;
 
   const turnBadge = s.winner
     ? `<span class="turn-badge">对局结束</span>`
@@ -278,6 +277,27 @@ function panelHtml(input: PanelInput): string {
     .filter((n): n is string => !!n);
   const expansionText = activeNames.length > 0 ? activeNames.join(' · ') : '无';
 
+  /*
+   * 席位条：两家时是两行，三家四家时就是三行四行。
+   *
+   * 以前这里是硬编码的"A vs B"——三人局里第三个人根本不会出现在这一栏里。
+   * 换成按席位遍历之后，"这一局有几个人"在界面上是一眼可见的：
+   * 行数就是人数，轮到的那个加亮，出局的划掉。
+   */
+  const seatRows = seatsOf(s)
+    .map((p) => {
+      const mine = p === me;
+      const cities = citiesOf(s, p).length;
+      const quit = hasQuit(s, p);
+      const on = p === s.current;
+      return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
+        <span class="vs-dot ${p.toLowerCase()}"></span>
+        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : ''}</b>
+        <span class="seat-stats">${resLine(p)} · 城 ${cities}</span>
+      </div>`;
+    })
+    .join('');
+
   return `
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -285,17 +305,7 @@ function panelHtml(input: PanelInput): string {
         <span class="hint">第 ${s.turn} 次行动</span>
       </div>
       <div style="margin-top:12px">
-        <div class="versus">
-          <div class="vs-side">
-            <div class="vs-name"><span class="vs-dot a"></span>${s.players.A.name}</div>
-            <div class="vs-stats">${resLine('A')}<br />城市 ${me === 'A' ? myCities : otherCities}</div>
-          </div>
-          <div class="vs-mid">VS</div>
-          <div class="vs-side right">
-            <div class="vs-name">${s.players.B.name}<span class="vs-dot b"></span></div>
-            <div class="vs-stats">${resLine('B')}<br />城市 ${me === 'B' ? myCities : otherCities}</div>
-          </div>
-        </div>
+        ${seatRows}
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
       <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
@@ -373,7 +383,12 @@ function panelHtml(input: PanelInput): string {
 function renderReport(s: GameState, info: PanelInput['report']): string {
   if (!info) return '';
   const rep = buildMatchReport(s);
-  const winnerText = rep.winner ? `${rep.winner} 方胜` : '还没有胜者';
+  // 这里**只写席位字母，不写玩家名**：这张卡列的是"点上传之后真的会发出去的东西"，
+  // 而报告里刻意不带名字（见 report.ts 顶上那段）。写名字等于告诉玩家
+  // "名字会被上传"——那是假话，也会让"匿名"这条承诺变得不可信。
+  const winnerText = rep.winner
+    ? `${rep.winner} 方胜${rep.playerCount > 2 ? `（${rep.playerCount} 人局）` : ''}`
+    : '还没有胜者';
   const roster = (x: ReportSide): string => {
     const list = Object.entries(x.roster)
       .sort((a, b) => b[1] - a[1])
@@ -405,7 +420,7 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
       （不会公开单条记录）。勾上只是"允许"，点下面的按钮才真的发出去。
     </div>
     <ul class="report-list">
-      <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.turns} 次行动 · ${winnerText}</li>
+      <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.playerCount} 人 · ${rep.turns} 次行动 · ${winnerText}</li>
       <li>${rep.expansions.length > 0 ? `扩展 ${rep.expansions.length} 个` : '没有开扩展'} · 兵种表 ${rep.packSize} 个${
         rep.ai.opponent || rep.ai.ally ? ` · AI ${rep.ai.level === 'basic' ? '初级' : '高级'}` : ''
       }</li>

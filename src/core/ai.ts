@@ -3663,7 +3663,13 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
     current: player,
     cities: s.cities.map((c) => ({ ...c })),
     units: [...s.units],
-    players: { A: { ...s.players.A }, B: { ...s.players.B } },
+    // 四个席位都拷一份：AI 只在两人局出场，但 GameState 的字段是四键的
+    players: {
+      A: { ...s.players.A },
+      B: { ...s.players.B },
+      C: { ...s.players.C },
+      D: { ...s.players.D },
+    },
     unlocked: unlockedCopy,
   };
   const traits = aiTraits(proj);
@@ -3784,6 +3790,15 @@ export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
  */
 export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, rejected: ReadonlySet<string> = new Set()): Action | null {
   if (s.winner) return null;
+  /*
+   * 三人四人局没有 AI。
+   *
+   * 这套 AI 的每一个判断都建立在"只有一个对手"上：威胁场只算一家、推进方向
+   * 只朝一家、集火只认一个目标。让它打多方不是加个循环的事，而是把目标选择
+   * 整个重写（先打谁？谁在领先？两家夹击怎么办？）。
+   * 所以 3/4 人局一律全真人：这里直接返回 null，界面那边也会禁掉 AI 选项。
+   */
+  if ((s.config.playerCount ?? 2) > 2) return null;
 
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息

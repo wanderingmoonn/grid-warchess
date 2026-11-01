@@ -15,7 +15,7 @@
 import { REPORT_CONSENT_VERSION, reportSignature, type MatchReport } from '../core/report.ts';
 import { campaignCode } from './campaign.ts';
 import { clientId } from './client-id.ts';
-import { cloudDatabase } from './room.ts';
+import { cloudDatabase, isMissingColumn } from './room.ts';
 
 const TABLE = 'warchess_reports';
 
@@ -102,7 +102,7 @@ export async function uploadReport(report: MatchReport): Promise<UploadResult> {
 
     // 列出来的是给人看的几个，整份报告再整块塞进 payload：
     // 以后加了字段，老表不用迁移也能把新数据存下来。
-    const res = await db.from(TABLE).insert({
+    const row: Record<string, unknown> = {
       // 只用于限流分组的随机代号（见 client-id.ts），不是身份
       client_id: clientId(),
       // 跨设备去重的键：种子+回合+胜负+双方终局+摘要规模
@@ -122,7 +122,17 @@ export async function uploadReport(report: MatchReport): Promise<UploadResult> {
       ai: report.ai,
       sides: report.sides,
       payload: report,
-    });
+      // 3/4 人局要靠这一列分组；老表没这列时下面会退回不带它的写法
+      player_count: report.playerCount,
+    };
+
+    let res = await db.from(TABLE).insert(row);
+    if (res?.error && isMissingColumn(res.error)) {
+      // 表还没跑 2026-11-01 那条迁移：把新列摘掉再试，
+      // 少一列不影响报告本身（payload 里整份都在），总比"因为少一列就传不上去"好。
+      delete row.player_count;
+      res = await db.from(TABLE).insert(row);
+    }
 
     return res?.error ? classify(res.error) : { ok: true };
   } catch (err) {

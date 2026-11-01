@@ -10,6 +10,8 @@
  * 谁都能 F12，别让人以为这游戏能防外挂。
  */
 
+import { DEFAULT_PLAYER_NAMES } from '../core/setup.ts';
+import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId } from '../core/types.ts';
 import {
   claimSeat,
@@ -92,7 +94,8 @@ export function openOnlinePanel(host: OnlineHost): void {
     mask.remove();
   };
 
-  const seatName = (seat: PlayerId) => (seat === 'A' ? '红方' : '蓝方');
+  // 名字只有一处定义（setup.ts 的默认名），这里不再抄一遍
+  const seatName = (seat: PlayerId) => DEFAULT_PLAYER_NAMES[seat];
 
   const agoText = (iso: string): string => {
     const t = new Date(iso).getTime();
@@ -166,24 +169,28 @@ export function openOnlinePanel(host: OnlineHost): void {
       return;
     }
 
+    const snap = snapshot;
     const isWatcher = room.spectator === true;
-    const myTurn = snapshot && !isWatcher ? snapshot.current === room.seat : false;
-    const peer = room.seat === 'A' ? 'B' : 'A';
-    const peerSeated = snapshot ? snapshot.seats[peer] !== null : false;
+    const myTurn = snap && !isWatcher ? snap.current === room.seat : false;
+    // 这张桌子有几个座：房间里的 config 说了算（老房间没有 playerCount = 两人局）
+    const tableSeats: PlayerId[] = snap ? seatsOf(snap.state) : ['A', 'B'];
+    const others = tableSeats.filter((x) => x !== room.seat);
+    const emptySeats = snap ? others.filter((x) => snap.seats[x] === null) : [];
+    const allSeated = snap !== null && emptySeats.length === 0;
 
     let status = '正在读取房间状态…';
     let statusKind = '';
-    if (snapshot) {
+    if (snap) {
       if (isWatcher) {
-        status = `观战中 —— 现在轮到 ${snapshot.current === 'A' ? 'A 座' : 'B 座'}（最近一次提交：${agoText(snapshot.updatedAt)}）`;
+        status = `观战中 —— 现在轮到 ${seatName(snap.current)}（最近一次提交：${agoText(snap.updatedAt)}）`;
         statusKind = 'wait';
-      } else if (peerSeated) {
+      } else if (allSeated) {
         status = myTurn
-          ? `轮到你 —— 对方已于 ${agoText(snapshot.updatedAt)}提交`
-          : `等对方行动（他上次提交：${agoText(snapshot.updatedAt)}）`;
+          ? `轮到你 —— 上一手已于 ${agoText(snap.updatedAt)}提交`
+          : `等别人行动（最近一次提交：${agoText(snap.updatedAt)}）`;
         statusKind = myTurn ? 'go' : 'wait';
       } else {
-        status = '对方还没进来。把房间码发给他，他一进来就会接上。';
+        status = `还差 ${emptySeats.length} 位没进来。把房间码发给他们，进来就会自动接上。`;
         statusKind = 'wait';
       }
     } else if (error) {
@@ -210,12 +217,18 @@ export function openOnlinePanel(host: OnlineHost): void {
           <section class="field">
             <div class="field-label">席位</div>
             <div class="room-seats">
-              <span class="seat-chip ${room.seat === 'A' && !isWatcher ? 'mine' : ''}">A 红方${room.seat === 'A' && !isWatcher ? '（你）' : ''}</span>
-              <span class="seat-chip ${room.seat === 'B' && !isWatcher ? 'mine' : ''}">B 蓝方${room.seat === 'B' && !isWatcher ? '（你）' : ''}</span>
+              ${tableSeats
+                .map((p) => {
+                  const mine = room.seat === p && !isWatcher;
+                  const taken = snap ? snap.seats[p] !== null : false;
+                  const tag = mine ? '（你）' : taken ? '' : '（空着）';
+                  return `<span class="seat-chip ${mine ? 'mine' : ''} ${taken ? '' : 'open'}">${p} ${seatName(p)}${tag}</span>`;
+                })
+                .join('')}
               ${isWatcher ? '<span class="seat-chip mine">观战（你）</span>' : ''}
             </div>
             <div class="field-hint">
-              ${snapshot ? (peerSeated ? '两边都坐好了。' : '对面那个席位还空着。') : ''}
+              ${snap ? (allSeated ? '人都到齐了。' : `还有 ${emptySeats.length} 个席位空着。`) : ''}
               ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '换设备时，重新打开邀请链接就能回到你自己的席位。'}
             </div>
           </section>
@@ -264,7 +277,12 @@ export function openOnlinePanel(host: OnlineHost): void {
         turn: state.turn,
         current: state.current,
         updatedAt: new Date().toISOString(),
-        seats: { A: seat.seat === 'A' ? token : null, B: seat.seat === 'B' ? token : null },
+        seats: {
+          A: seat.seat === 'A' ? token : null,
+          B: seat.seat === 'B' ? token : null,
+          C: seat.seat === 'C' ? token : null,
+          D: seat.seat === 'D' ? token : null,
+        },
       });
     } catch (err) {
       error = err instanceof Error ? err.message : '创建失败';
@@ -299,7 +317,11 @@ export function openOnlinePanel(host: OnlineHost): void {
         const saved = loadSeat(code);
         const mine = saved && !saved.spectator ? saved : null;
         const token = saved?.token ?? newToken();
-        const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
+        // 这张桌子有几个座，由房间里的 config 决定（老房间没有 playerCount = 两人局）
+        const seats = seatsOf(snapshotNow.state);
+        const order: PlayerId[] = mine
+          ? [mine.seat, ...seats.filter((x) => x !== mine!.seat)]
+          : seats;
         let seated: PlayerId | null = null;
         for (const seat of order) {
           if ((await claimSeat(code, seat, token)) === 'ok') {

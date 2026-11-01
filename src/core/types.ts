@@ -6,7 +6,33 @@
  * 这样存档、回放、联机、AI 都能直接复用同一份结构。
  */
 
-export type PlayerId = 'A' | 'B';
+/**
+ * 席位。
+ *
+ * 一局最多四家，各自为战（不做组队）。人数由 `MatchConfig.playerCount` 决定，
+ * 用的是这个顺序的前几个：2 人 = A/B，3 人 = A/B/C，4 人 = A/B/C/D。
+ *
+ * 为什么序号而不是队伍色：席位同时是**行动顺序**、配色索引、联机座位和存档键，
+ * 四个身份共用一套编号，加一种玩法就不用再对齐四个表。
+ * 取颜色名（红/蓝/绿/黄）在 ui 层做，规则层只管 A/B/C/D。
+ */
+export type PlayerId = 'A' | 'B' | 'C' | 'D';
+/**
+ * 这一局用到的席位，按行动顺序。
+ *
+ * 放在 types.ts 而不是 rules.ts：它只读 `config.playerCount` 和一个常量表，
+ * 而扩展层（expansions.ts / city-works.ts）也要用它按席位遍历——那些文件
+ * 在 rules 的上游，从 rules 拿会造成循环依赖。
+ */
+export function seatsOf(s: { config: { playerCount?: number } }): PlayerId[] {
+  const n = s.config.playerCount ?? 2;
+  const count = Math.max(2, Math.min(PLAYER_ORDER.length, Math.round(n)));
+  return PLAYER_ORDER.slice(0, count);
+}
+
+
+/** 席位的固定顺序。人数决定取前几个，行动顺序也照它环转 */
+export const PLAYER_ORDER: readonly PlayerId[] = ['A', 'B', 'C', 'D'] as const;
 
 /**
  * 资源种类。
@@ -952,6 +978,14 @@ export interface MatchConfig {
   size: number;
   /** 开局城市的时代等级（1-5），用来缩短或拉长一局的节奏 */
   startEra: number;
+  /**
+   * 这一局几家：2（缺省）/ 3 / 4。
+   *
+   * 取值就是"用 PLAYER_ORDER 的前几个席位"，各自为战、每家恰好一座城。
+   * 缺省 2 而不是必填：老存档、老房间、分享链接读回来一个字都不用改，
+   * 而它们全部都是两人局。
+   */
+  playerCount?: 2 | 3 | 4;
   /** B 方是否由 AI 接管 */
   aiOpponent: boolean;
   /** A 方是否也由 AI 接管（双 AI 观战，用来观察平衡） */
@@ -1264,6 +1298,14 @@ export interface GameState {
   nextUnitSeq: number;
   fog: boolean;
   winner: PlayerId | null;
+  /**
+   * 已经退出的席位（认输 / 判弃权）。
+   *
+   * 两人局里认输直接判对方赢，用不到这张表；三人四人局里"我认输"只是
+   * 我不打了——剩下的人得接着打，所以需要一个地方记着谁已经不在场上了。
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"还没有人退出"。
+   */
+  out?: PlayerId[];
   log: LogEntry[];
   memory: Record<PlayerId, PlayerMemory>;
   /**

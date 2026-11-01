@@ -32,6 +32,7 @@ import { isProducer } from './produce.ts';
 import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
+import { seatsOf } from './types.ts';
 import type { Action, ActionResult, DraftState, GameState, PlayerId, UnitTypeDef } from './types.ts';
 
 /* ===========================================================================
@@ -280,15 +281,23 @@ export function sampleDraftPool(
  * 摊平就是 A,B,B,A,A,B,B,A…。这样各有 6 次机会、各有 3 次"这一轮我先挑"，
  * 先手优势被摊成"先动一步"，而不是"先挑三个"。
  */
-export function draftPickOrder(picks: number): PlayerId[] {
-  const total = Math.max(0, picks) * 2;
+export function draftPickOrderFor(seats: PlayerId[], picks: number): PlayerId[] {
+  const total = Math.max(0, picks) * seats.length;
   const out: PlayerId[] = [];
   for (let round = 0; out.length < total; round++) {
-    const first: PlayerId = round % 2 === 0 ? 'A' : 'B';
-    out.push(first);
-    if (out.length < total) out.push(first === 'A' ? 'B' : 'A');
+    // 蛇形：偶数轮正着走、奇数轮倒着走，名额在两端的人永远连着拿两次
+    const order = round % 2 === 0 ? seats : [...seats].reverse();
+    for (const p of order) {
+      if (out.length >= total) break;
+      out.push(p);
+    }
   }
   return out;
+}
+
+/** 两人局的选卡顺序（老接口，测试和复盘在用） */
+export function draftPickOrder(picks: number): PlayerId[] {
+  return draftPickOrderFor(['A', 'B'], picks);
 }
 
 /**
@@ -306,9 +315,10 @@ export function createDraft(state: GameState): DraftState {
     pool: sampled.pool,
     banSlots: budget.bans,
     pickSlots: budget.picks,
-    bans: { A: [], B: [] },
-    picks: { A: [], B: [] },
-    order: draftPickOrder(budget.picks),
+    // 四个席位都开出来：三人四人局的 BP 也走同一套蛇形
+    bans: { A: [], B: [], C: [], D: [] },
+    picks: { A: [], B: [], C: [], D: [] },
+    order: draftPickOrderFor(seatsOf(state), budget.picks),
     step: 0,
     // 联机锁从 1 起：房间那一行建出来时 turn 也是 1，第一笔 BP 提交正好对得上
     seq: 1,
@@ -383,7 +393,7 @@ export function draftSideToAct(state: GameState): PlayerId | null {
 export function pendingBans(state: GameState): PlayerId[] {
   const draft = state.draft;
   if (!draft || draft.phase !== 'ban') return [];
-  return (['A', 'B'] as PlayerId[]).filter((s) => draft.bans[s].length < draft.banSlots);
+  return seatsOf(state).filter((s) => draft.bans[s].length < draft.banSlots);
 }
 
 /** 这一局选卡是否还没打完（界面据此决定要不要盖住棋盘） */

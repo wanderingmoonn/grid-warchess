@@ -98,6 +98,8 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
+import { seatsOf } from './types.ts';
+export { seatsOf };
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -215,8 +217,64 @@ function runBound<C extends { self: Unit; foe?: Unit; side: Side }>(
   }
 }
 
+/**
+ * 两人局专用：取另一个席位。
+ *
+ * 三人以上不要用它——那时候"敌人"不唯一，问 `others(s, p)` 或 `aliveSeats(s)`。
+ * AI 的整套判断（威胁场、推进方向、集火目标）都建立在"只有一个对手"上，
+ * 所以它只在 2 人局里出场（见 ai.ts 顶部那段），`other` 也就只服务于它。
+ */
 export function other(p: PlayerId): PlayerId {
   return p === 'A' ? 'B' : 'A';
+}
+
+
+/** 除自己以外的全部席位（含已出局的：战报、统计要看得见全场） */
+export function others(s: GameState, p: PlayerId): PlayerId[] {
+  return seatsOf(s).filter((x) => x !== p);
+}
+
+/**
+ * 这一席是不是已经出局了。
+ *
+ * 两条：城被打光（胜负判定里的第一条），或者主动退出（认输 / 判弃权）。
+ *
+ * **上帝模式不算**：沙盒里"没城"是常态——玩家就摆几个兵在空地上试兵种，
+ * 按城判出局会让回合推都推不动（这条以前是藏在 checkWinner 里的同一个特例，
+ * 现在抽出来给回合轮转也用）。
+ */
+export function isEliminated(s: GameState, p: PlayerId): boolean {
+  if (hasQuit(s, p)) return true;
+  if (s.config.godMode === true) return false;
+  return citiesOf(s, p).length === 0;
+}
+
+/** 还没出局的席位 */
+export function aliveSeats(s: GameState): PlayerId[] {
+  return seatsOf(s).filter((p) => !isEliminated(s, p));
+}
+
+/** 这一席是不是已经退出（认输 / 判弃权）。两人局里通常没人会走到这儿 */
+export function hasQuit(s: GameState, p: PlayerId): boolean {
+  return (s.out ?? []).includes(p);
+}
+
+/**
+ * 下一个该行动的席位：按 PLAYER_ORDER 环转，跳过已经出局的。
+ *
+ * 三个人打，一个人出局之后，剩下两家的回合要接得上，不能空转到出局者身上。
+ * 全部出局（或只剩自己）时返回自己——调用方（doEndTurn）在那之前就判完胜负了。
+ */
+export function nextSeat(s: GameState, from: PlayerId): PlayerId {
+  const seats = seatsOf(s);
+  const start = Math.max(0, seats.indexOf(from));
+  for (let k = 1; k <= seats.length; k += 1) {
+    const cand = seats[(start + k) % seats.length]!;
+    if (cand === from) break;
+    if (isEliminated(s, cand)) continue;
+    return cand;
+  }
+  return from;
 }
 
 /** 从本局的兵种表里取定义（不是全局表，因为对局可能只启用了部分兵种） */
@@ -2340,7 +2398,7 @@ function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
 function drownCargo(s: GameState, dead: Unit): void {
   if (!dead.cargo || dead.cargo.length === 0) return;
   const names = dead.cargo.map((u) => utype(s, u.type).name).join('、');
-  pushLog(s, other(dead.owner), `随船沉没：${names}`, true);
+  pushLog(s, dead.owner, `随船沉没：${names}`, true);
 }
 
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
@@ -2357,7 +2415,13 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
   if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
 
-  const killerOwner = killer ? killer.owner : other(victim.owner);
+  // 没有凶手（毒死、烧死、桥塌）时，两人局记在对面头上；三人以上没有"对面"
+  // 这回事，就记在自己头上——宁可少给一份击杀奖励，也不能凭空发给出局的人。
+  const killerOwner = killer
+    ? killer.owner
+    : seatsOf(s).length === 2
+      ? other(victim.owner)
+      : victim.owner;
   for (const e of activeExpansions(s)) {
     e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner });
   }
@@ -2382,22 +2446,28 @@ function checkWinner(s: GameState): PlayerId | null {
     }
   }
 
-  for (const p of ['A', 'B'] as PlayerId[]) {
-    // 1.失去所有城市
-    if (citiesOf(s, p).length === 0) return other(p);
-
-    // 2.造不出任何兵
-    const alive = unitsOf(s, p).length;
-    if (alive === 0) {
-      const canField = Object.values(s.unitTypes).some(
-        (d) =>
-          d.category !== 'building' &&
-          !d.summonedOnly &&
-          canPay(s.players[p], recruitResCost(s, p, d)),
-      );
-      if (!canField) return other(p);
-    }
-  }
+  /*
+   * 出局判定，只剩一家时结束。
+   *
+   * 两人局和以前完全一样：一方出局 = 另一方赢。三人四人局里"一方出局"只是
+   * 少了一个人，剩下的人接着打——所以这里先算清楚谁还活着，再决定要不要收场。
+   * 两条出局条件：城被打光，或者一个兵都没有且连一个都造不起。
+   */
+  const seats = seatsOf(s);
+  const alive = seats.filter((p) => {
+    if (isEliminated(s, p)) return false;
+    if (unitsOf(s, p).length > 0) return true;
+    return Object.values(s.unitTypes).some(
+      (d) =>
+        d.category !== 'building' &&
+        !d.summonedOnly &&
+        canPay(s.players[p], recruitResCost(s, p, d)),
+    );
+  });
+  if (alive.length === seats.length) return null;
+  if (alive.length === 1) return alive[0]!;
+  // 一家都没了（同归于尽）：判给第一个还站着的……没有，那就平局
+  if (alive.length === 0) return null;
   return null;
 }
 
@@ -2635,6 +2705,21 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     let totalDmg = 0;
     const hitNames = new Set<string>();
     const splashNames = new Set<string>();
+    /**
+     * 按"挨打的是谁家"分账。
+     *
+     * 两人局里挨打的必然只有一家，可以写死 `other(owner)`；三人四人局里
+     * 一座塔的射程可能同时覆盖两家的人，一条战报发给一边就成了漏报。
+     * 所以先按主人分组，打完之后各自收自己那一条。
+     */
+    const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
+    const noteVictim = (u: Unit, dmg: number) => {
+      if (u.owner === owner) return;
+      const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
+      box.names.add(utype(s, u.type).name);
+      box.dmg += dmg;
+      byVictim.set(u.owner, box);
+    };
 
     while (shots > 0) {
       const inRange = s.units
@@ -2649,12 +2734,14 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       hits += 1;
       shots -= 1;
       hitNames.add(utype(s, target.type).name);
+      noteVictim(target, dmg);
 
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
       const splashed = splashVictims(s, b, target);
       for (const v of splashed) {
         v.unit.hp -= v.dmg;
         splashNames.add(utype(s, v.unit.type).name);
+        noteVictim(v.unit, v.dmg);
       }
 
       if (target.hp <= 0) {
@@ -2679,13 +2766,15 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       owner,
       `${def.name} 自动开火${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
     );
-    // 挨打的一方也要有一条：塔和营是在**对面回合结束时**自己开火的，
+    // 挨打的一方也要有一条：塔和营是在**对面回合开始时**自己开火的，
     // 不写这一条，防守方看到的就是"我的兵凭空掉血"（理由同 doAttack 里那段）。
-    pushLog(
-      s,
-      other(owner),
-      `${def.name} 对 ${[...hitNames].join('、')} 开火，共造成 ${totalDmg} 点伤害${splashText}`,
-    );
+    for (const [who, box] of byVictim) {
+      pushLog(
+        s,
+        who,
+        `${def.name} 对 ${[...box.names].join('、')} 开火，共造成 ${box.dmg} 点伤害`,
+      );
+    }
   }
 }
 
@@ -3149,7 +3238,7 @@ function doAttack(
   }
   if (attacker.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== attacker.id);
-    pushLog(s, other(attacker.owner), `${atName} 在反击中阵亡`, true);
+    pushLog(s, attacker.owner, `${atName} 在反击中阵亡`, true);
     drownCargo(s, attacker);
     fireKilled(s, attacker, undefined);
   }
@@ -4668,8 +4757,24 @@ function autoPlaceEgg(s: GameState): void {
 /** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
-  s.winner = other(me);
-  pushLog(s, me, `${s.players[me].name} 认输`, true);
+  if (seatsOf(s).length === 2) {
+    // 两人局：认输就是这局结束，对面赢（和以前一模一样）
+    s.winner = other(me);
+    pushLog(s, me, `${s.players[me].name} 认输`, true);
+    return { ok: true, state: s };
+  }
+  /*
+   * 三人四人局：认输只是**我**退出，剩下的人接着打。
+   *
+   * 两条要落实：把这家的兵从盘上撤走（留着就是一群打不还手的靶子，
+   * 还会一直被别人的自动开火当成目标），以及把当前行动权交给下一位——
+   * 否则 `current` 停在一个已经退出的席位上，局面就卡住了。
+   */
+  s.out = [...(s.out ?? []), me];
+  s.units = s.units.filter((u) => u.owner !== me);
+  pushLog(s, me, `${s.players[me].name} 认输，退出这局`, true);
+  s.winner = checkWinner(s);
+  if (!s.winner) s.current = nextSeat(s, me);
   return { ok: true, state: s };
 }
 
@@ -4685,7 +4790,7 @@ function sweepDead(s: GameState): void {
     if (u.hp > 0) continue;
     if (!s.units.some((x) => x.id === u.id)) continue;
     s.units = s.units.filter((x) => x.id !== u.id);
-    pushLog(s, other(u.owner), `${utype(s, u.type).name} 倒下了`, true);
+    pushLog(s, u.owner, `${utype(s, u.type).name} 倒下了`, true);
     drownCargo(s, u);
     fireKilled(s, u, undefined);
   }
@@ -4915,7 +5020,7 @@ function doEndTurn(s: GameState): ActionResult {
   const prevSites = s.orderSites?.[prevPlayer];
   if (prevSites && prevSites.length > 0) prevSites.shift();
 
-  const nextPlayer = other(s.current);
+  const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
   s.turn += 1;
 
@@ -5039,7 +5144,7 @@ export function refreshMemory(s: GameState): void {
   // 走过的地方必须留下个样子，否则第二次经过等于第一次来。
   const keepMap = s.config.expansionIds.includes('blackout');
 
-  for (const p of ['A', 'B'] as PlayerId[]) {
+  for (const p of seatsOf(s)) {
     const vis = visibleTilesOf(s, p);
     const mem = s.memory[p];
     const aliveIds = new Set(s.units.map((u) => u.id));

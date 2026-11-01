@@ -134,8 +134,19 @@ export interface MapLayout {
   rows: string[];
   citiesA: Array<{ x: number; y: number }>;
   citiesB: Array<{ x: number; y: number }>;
+  /**
+   * 第三、第四家的城位。只有三人/四人局才有内容。
+   *
+   * 为什么不把 A/B 也并成 `cities: Record<PlayerId, Pos[]>`：两人局的地图生成
+   * 是被反复调过的（河、渡口、公平性），那条路径一个字都不该动。多出来的两家
+   * 走另一条生成器（generateMultiLayout），字段也就各留各的。
+   */
+  citiesC?: Array<{ x: number; y: number }>;
+  citiesD?: Array<{ x: number; y: number }>;
   spawnsA: SpawnDef[];
   spawnsB: SpawnDef[];
+  spawnsC?: SpawnDef[];
+  spawnsD?: SpawnDef[];
   /** 本局实际用的地貌（random 会被落成具体的一种） */
   style: Exclude<MapStyle, 'random'>;
   symmetry: MapSymmetry;
@@ -1764,5 +1775,215 @@ export function generateLayout(
     symmetry,
     layout,
     fordless,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 三人 / 四人图                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 三家或四家的地图。
+ *
+ * 为什么另起一条而不是给 `generateLayout` 加个参数：两人局那张图是被反复
+ * 调过的（河怎么走、渡口留几个、公平性怎么算），把它参数化成 N 方，等于
+ * 每加一种人数就重调一次。这条只管"多方地图的最低要求"：
+ *
+ *   · **四家**：左上四分之一画好，旋转 90° 铺三遍——三家地形与四家严格同形，
+ *     中心天然对称，这是能做到的**完全公平**；
+ *   · **三家**：方格棋盘没有 120° 旋转对称（转 120° 落在半格上），所以只能
+ *     做到"数量公平"——按离谁最近把棋盘分成三块，每块的森林 / 丘陵 / 水**数量
+ *     完全相同**，位置各自随机。中心的水面是圆心圆，三家等距。
+ *
+ * 共同点：开局位置在三个 / 四个方向上等距，城郊一圈永远清空（城门口要能站人），
+ * 出生部队走和两人局同一个 `spawnsAround`。
+ */
+export function generateMultiLayout(
+  size: number,
+  seed: number,
+  unitPool: string[] = ['infantry', 'archer'],
+  opts: { players: 3 | 4; citySize?: number; style?: MapStyle },
+): MapLayout {
+  const w = size;
+  const h = size;
+  const n = opts.players;
+  const citySize = Math.max(2, Math.min(Math.round(opts.citySize ?? 2), Math.max(2, Math.floor(size / 5))));
+  const style: Exclude<MapStyle, 'random'> = opts.style && opts.style !== 'random' ? opts.style : 'open';
+  const rng = makeRng(seed ^ (n * 7919));
+  const c: Ctx = { w, h, g: new Array(w * h).fill('plain'), citySize };
+  const margin = 1 + citySize;
+
+  /** 把角度换算成城位（锚点＝左上角） */
+  const fromAngle = (deg: number, radius: number): Pos => {
+    const cx = (w - 1) / 2;
+    const cy = (h - 1) / 2;
+    const t = (deg * Math.PI) / 180;
+    const ax = Math.round(cx + Math.cos(t) * radius - (citySize - 1) / 2);
+    const ay = Math.round(cy + Math.sin(t) * radius - (citySize - 1) / 2);
+    return {
+      x: Math.max(margin, Math.min(w - margin - citySize, ax)),
+      y: Math.max(margin, Math.min(h - margin - citySize, ay)),
+    };
+  };
+
+  const anchors: Pos[] =
+    n === 4
+      ? // 四角：矩形四等分，旋转 90° 之后完全重合
+        [
+          { x: margin, y: margin },
+          { x: w - margin - citySize, y: margin },
+          { x: w - margin - citySize, y: h - margin - citySize },
+          { x: margin, y: h - margin - citySize },
+        ]
+      : // 三家：内切圆三等分，顶点朝上
+        [-90, 30, 150].map((deg) => fromAngle(deg, Math.min(w, h) * 0.34));
+
+  /** 城位附近清空：城要放得下，门口也要能站人 */
+  const keep = new Set<number>();
+  for (const a of anchors) {
+    for (let dy = -1; dy <= citySize; dy++) {
+      for (let dx = -1; dx <= citySize; dx++) {
+        const x = a.x + dx;
+        const y = a.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        keep.add(y * w + x);
+      }
+    }
+  }
+
+  /** 离哪座城最近（Voronoi）。三家图用它划区，四家图用不到 */
+  const regionOf = (x: number, y: number): number => {
+    let best = 0;
+    let bd = Infinity;
+    anchors.forEach((a, i) => {
+      const d = Math.abs(x - a.x) + Math.abs(y - a.y);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+
+  /** 一团地形：从种子点随机游走 k 步。walk 保证"连成一团"而不是一堆散点 */
+  const blob = (sx: number, sy: number, terrain: Terrain, k: number, ok: (x: number, y: number) => boolean): void => {
+    let x = sx;
+    let y = sy;
+    for (let i = 0; i < k; i += 1) {
+      if (x >= 0 && y >= 0 && x < w && y < h && ok(x, y)) put(c, x, y, terrain);
+      const [dx, dy] = DIRS[Math.floor(rng() * 4)]!;
+      x = Math.max(1, Math.min(w - 2, x + dx));
+      y = Math.max(1, Math.min(h - 2, y + dy));
+    }
+  };
+
+  if (n === 4) {
+    // 四分之一画好，旋转三次铺满
+    const qw = Math.floor(w / 2);
+    const qh = Math.floor(h / 2);
+    /** 象限内的地形 -> 四个象限（绕中心转 90°） */
+    const paint = (x: number, y: number, t: Terrain) => {
+      put(c, x, y, t);
+      put(c, w - 1 - x, y, t);
+      put(c, w - 1 - x, h - 1 - y, t);
+      put(c, x, h - 1 - y, t);
+    };
+    const inQuadrant = (x: number, y: number) => x > 0 && y > 0 && x < qw && y < qh;
+
+    const features = 5 + Math.floor(rng() * 4);
+    for (let i = 0; i < features; i += 1) {
+      const sx = 1 + Math.floor(rng() * Math.max(1, qw - 2));
+      const sy = 1 + Math.floor(rng() * Math.max(1, qh - 2));
+      const kind = rng();
+      const t: Terrain = kind < 0.45 ? 'forest' : kind < 0.78 ? 'hill' : 'water';
+      const size2 = t === 'water' ? 2 + Math.floor(rng() * 3) : 3 + Math.floor(rng() * 5);
+      let x = sx;
+      let y = sy;
+      for (let k = 0; k < size2; k += 1) {
+        if (inQuadrant(x, y)) paint(x, y, t);
+        const [dx, dy] = DIRS[Math.floor(rng() * 4)]!;
+        x = Math.max(1, Math.min(qw - 1, x + dx));
+        y = Math.max(1, Math.min(qh - 1, y + dy));
+      }
+    }
+    // 城郊一圈清空（四家都要）
+    for (const a of anchors) {
+      for (let dy = -2; dy <= citySize + 1; dy += 1) {
+        for (let dx = -2; dx <= citySize + 1; dx += 1) {
+          put(c, a.x + dx, a.y + dy, 'plain');
+        }
+      }
+    }
+  } else {
+    // 三家：每个区放**同样多、同样大**的团，位置各自随机
+    const perRegion = 4 + Math.floor(rng() * 3);
+    for (let r = 0; r < n; r += 1) {
+      for (let i = 0; i < perRegion; i += 1) {
+        const kind = (i + r) % 3;
+        const t: Terrain = kind === 0 ? 'forest' : kind === 1 ? 'hill' : 'water';
+        const size2 = t === 'water' ? 2 + (i % 2) : 3 + (i % 3);
+        // 在这一区里随便找个点：不属于本区、或者贴着城的，重扔
+        let spot: Pos | null = null;
+        for (let tries = 0; tries < 40 && !spot; tries += 1) {
+          const x = 1 + Math.floor(rng() * (w - 2));
+          const y = 1 + Math.floor(rng() * (h - 2));
+          if (keep.has(y * w + x)) continue;
+          if (regionOf(x, y) !== r) continue;
+          const far = anchors.every((a) => Math.abs(x - a.x) + Math.abs(y - a.y) > citySize + 3);
+          if (!far) continue;
+          spot = { x, y };
+        }
+        if (!spot) continue;
+        blob(spot.x, spot.y, t, size2, (x, y) => regionOf(x, y) === r && !keep.has(y * w + x));
+      }
+    }
+    // 中心一小片水：三家等距，谁也别想独占
+    const cx = Math.floor(w / 2);
+    const cy = Math.floor(h / 2);
+    const rad = Math.max(1, Math.floor(Math.min(w, h) / 12));
+    for (let dy = -rad; dy <= rad; dy += 1) {
+      for (let dx = -rad; dx <= rad; dx += 1) {
+        if (dx * dx + dy * dy > rad * rad) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (keep.has(y * w + x)) continue;
+        put(c, x, y, 'water');
+      }
+    }
+  }
+
+  // 城位与城郊永远踩实：城要放得下、门口要能出兵
+  for (const a of anchors) {
+    for (let dy = -1; dy <= citySize; dy += 1) {
+      for (let dx = -1; dx <= citySize; dx += 1) put(c, a.x + dx, a.y + dy, 'plain');
+    }
+  }
+
+  // ---- 出生点 ----
+  const pool = unitPool.length > 0 ? unitPool : ['infantry'];
+  const used = new Set<number>(keep);
+  const spawnsFor = anchors.map((a, i) => spawnsAround(c, a, 3, used, pool, i * 3));
+
+  const rows = Array.from({ length: h }, (_, y) =>
+    Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
+  );
+
+  const citiesAB = (i: number): Pos[] | undefined => (anchors[i] ? [anchors[i]!] : undefined);
+  return {
+    w,
+    h,
+    rows,
+    citiesA: citiesAB(0) ?? [],
+    citiesB: citiesAB(1) ?? [],
+    citiesC: citiesAB(2),
+    citiesD: citiesAB(3),
+    spawnsA: spawnsFor[0] ?? [],
+    spawnsB: spawnsFor[1] ?? [],
+    spawnsC: n >= 3 ? (spawnsFor[2] ?? []) : undefined,
+    spawnsD: n >= 4 ? (spawnsFor[3] ?? []) : undefined,
+    style,
+    symmetry: n === 4 ? 'fair' : 'fair',
+    layout: 'diagonal',
+    fordless: false,
   };
 }

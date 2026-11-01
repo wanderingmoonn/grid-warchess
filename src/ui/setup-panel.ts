@@ -102,6 +102,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiOpponent: initial.aiOpponent,
       aiAlly: initial.aiAlly,
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
+      // 人数跟着上一局走：连着开三人局是常态
+      playerCount: initial.playerCount ?? 2,
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
@@ -269,6 +271,26 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 城里一件六代兵都造不出来，还得自己猜为什么。
       //
       // 天花板每次重绘现算，所以勾上/取消那个包，按钮会当场增减，不用重启面板。
+      /*
+       * 人数：两家 / 三家 / 四家。
+       *
+       * 三家四家一律**全真人**（AI 的目标选择是"只有一个对手"写的，见 ai.ts），
+       * 所以选了三家/四家之后，下面那栏"对手"会整块收起——不留一个点了没反应的开关。
+       */
+      const playerCount = config.playerCount ?? 2;
+      const playerChips = [2, 3, 4]
+        .map(
+          (n) =>
+            `<button class="chip ${playerCount === n ? 'active' : ''}" data-players="${n}">${n} 人</button>`,
+        )
+        .join('');
+      const playerHint =
+        playerCount === 2 ? '红蓝对峙，敌我分明' : `${playerCount} 家各自为战，每家一座城`;
+      const playerNote =
+        playerCount === 2
+          ? '两人局可以带 AI：人机对战、双 AI 观战都行。'
+          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。每方开局恰好一座城，城丢了就出局。`;
+
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
       const eraChips = eras.map(
@@ -406,9 +428,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
+              <div class="field-label">
+                人数 <span class="field-hint">${playerHint}</span>
+              </div>
+              <div class="chip-row">${playerChips}</div>
+              <div class="field-hint">${playerNote}</div>
+            </section>
+
+            <section class="field">
               <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
               ${
-                config.godMode
+                playerCount > 2
+                  ? `<div class="field-hint">${playerCount} 人局固定为「全真人」：可以本地热座轮流操作，也可以建房联机。AI 不进多方局。</div>`
+                  : config.godMode
                   ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
                   : `<div class="chip-row">
                 <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
@@ -445,8 +477,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               <div class="chip-row">
                 <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
-                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
-                <button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>
+                ${
+                  playerCount > 2
+                    ? ''
+                    : `<button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>`
+                }
+                ${
+                  playerCount > 2
+                    ? ''
+                    : `<button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
+                }
               </div>
               <div class="field-hint">${
                 config.godMode
@@ -459,10 +499,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">
                 选卡 <span class="field-hint">开局先禁用与选人，双方只用选到的兵</span>
               </div>
-              <div class="chip-row">
+              ${
+                playerCount > 2
+                  ? `<div class="field-hint">多人局暂不支持选卡：禁选是"双方互相看不见"设计的，三家四家一桌要改的是整套 BP 界面，不是加两行。这一局直接按下方勾选的兵种池开局。</div>`
+                  : `<div class="chip-row">
                 <button class="chip ${config.draftMode ? '' : 'active'}" data-draft-mode="off" title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
                 <button class="chip ${config.draftMode ? 'active' : ''}" data-draft-mode="on" title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
-              </div>
+              </div>`
+              }
               <div class="field-hint">${
                 config.draftMode
                   ? '开局先停在「等待开局」：那里可以建房、把邀请链接发给朋友，也可以直接本机开打；点「开始选卡」之后双方同时禁用（互相看不见），再按蛇形顺序轮流选人。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补；右上角可随时跳过或退出。'
@@ -543,7 +587,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 现在合成一页：上面挑，下面传，传完那张图直接出现在上面的画廊里并被选中。
        */
       const mapsView = `
-            <section class="field">
+            ${
+              (config.playerCount ?? 2) > 2
+                ? `<section class="field">
+                     <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
+                     <div class="field-hint">多人局不用固定地图：一张手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。</div>
+                   </section>`
+                : `<section class="field">
               <div class="field-label">
                 这一局的地图 <span class="field-hint">${mapHint}</span>
               </div>
@@ -560,7 +610,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   .join('')}
               </div>
               <div class="field-hint">内置图是手摆的对称图，两边条件一样，不随机、不可改。选了固定地图，战役页里的地貌 / 对称 / 尺寸 / 种子都不再起作用。</div>
-            </section>
+            </section>`
+            }
 
             <section class="field">
               <div class="field-label">
@@ -620,8 +671,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
 
       const summary = `${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
-        config.fixedMap ? esc(config.fixedMap.name) : '随机地形'
-      }`;
+        (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
+      }${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
 
       mask.innerHTML = `
         <div class="modal start-panel">
@@ -693,6 +744,27 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         if (next === tab) return;
         tab = next;
         resetScroll = true;
+        paint();
+        return;
+      }
+
+      // 人数：三家四家一律全真人，顺手把互斥的开关关掉——
+      // 留一个"开着但不生效"的开关，比没有这个开关更让人费解。
+      const playersBtn = target.closest<HTMLElement>('[data-players]');
+      if (playersBtn?.dataset.players) {
+        const n = Number(playersBtn.dataset.players);
+        config.playerCount = n === 3 ? 3 : n === 4 ? 4 : 2;
+        if (config.playerCount > 2) {
+          config.aiOpponent = false;
+          config.aiAlly = false;
+          config.commanderMode = false;
+          config.draftMode = false;
+          // 沙盒面板是按"两边"写的（摆给红方/摆给蓝方、交给 AI 同时操两边），
+          // 三家四家局里没有对应物，索性一起关掉
+          config.godMode = false;
+          // 城门只有两个：多人局用不了固定地图，清掉免得带着上一局的选择进场
+          config.fixedMap = undefined;
+        }
         paint();
         return;
       }

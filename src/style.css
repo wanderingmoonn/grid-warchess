@@ -4435,3 +4435,103 @@ a.btn {
     display: none;
   }
 }
+
+/* ---------- 第三、第四席位（三人 / 四人局） ----------
+
+ * 两人的配色是红蓝；三家四家再加绿、黄。中国棋盘上的习惯顺序。
+ * 单独追加一份而不是改上面那套：上面那些规则都被大量选择器引用，
+ * 动它们等于给所有旧界面做一次回归，而这里只需要"多两套颜色"。
+ */
+:root {
+  --team-c: #3f8a5c;
+  --team-c-soft: #e0efe4;
+  --team-d: #a8791b;
+  --team-d-soft: #f6ecd4;
+}
+
+.unit.owner-C .unit-inner {
+  background: var(--team-c);
+}
+
+.unit.owner-D .unit-inner {
+  background: var(--team-d);
+}
+
+.tile.t-city.own-C {
+  background: #dcecdf;
+}
+
+.tile.t-city.own-D {
+  background: #f3e8cc;
+}
+
+.vs-dot.c {
+  background: var(--team-c);
+}
+
+.vs-dot.d {
+  background: var(--team-d);
+}
+
+.turn-badge.active-C {
+  background: var(--team-c-soft);
+  border-color: rgba(63, 138, 92, 0.35);
+  color: var(--team-c);
+}
+
+.turn-badge.active-D {
+  background: var(--team-d-soft);
+  border-color: rgba(168, 121, 27, 0.35);
+  color: var(--team-d);
+}
+
+/* 交接遮罩上的「轮到 X」徽章：两人局一直是 a/b，三家四家要用上 c/d */
+.handoff-badge.c {
+  background: var(--team-c-soft);
+  color: var(--team-c);
+}
+
+.handoff-badge.d {
+  background: var(--team-d-soft);
+  color: var(--team-d);
+}
+
+/* 席位条：一行一席。行数就是人数，轮到的加亮，出局的划掉 */
+.seat-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+
+.seat-row + .seat-row {
+  margin-top: 3px;
+}
+
+.seat-row b {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.seat-row .seat-stats {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.seat-row.active {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+}
+
+.seat-row.quit {
+  opacity: 0.45;
+  text-decoration: line-through;
+}

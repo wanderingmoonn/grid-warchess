@@ -22,6 +22,7 @@
 import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
+import { seatsOf } from './types.ts';
 import { isBioUnit } from './resources.ts';
 
 /**
@@ -454,7 +455,7 @@ export const CITY_WORKS: Expansion = {
       // 6) 起步的一点粮和材：不然第一个兵都造不出来（造价已经不是纯金币了）。
       //    按时代给，是因为高时代开局的兵更贵、吃粮更多：
       //    固定 60 粮在古典够用五六个民兵，在工业连一个步枪兵都不够。
-      for (const p of ['A', 'B'] as const) {
+      for (const p of seatsOf(state)) {
         const player = state.players[p];
         player.res = { ...(player.res ?? {}) };
         player.res.food = (player.res.food ?? 0) + 80 + state.config.startEra * 60;

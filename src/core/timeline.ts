@@ -71,10 +71,11 @@ export interface MatchTimeline {
   lost?: Record<PlayerId, { value: number; count: number }>;
 }
 
-const SIDES: PlayerId[] = ['A', 'B'];
+// 四个席位都留：三人四人局的复盘要能分家看损失
+const SIDES: PlayerId[] = ['A', 'B', 'C', 'D'];
 
 function emptyTally(): Record<PlayerId, Record<string, number>> {
-  return { A: {}, B: {} };
+  return { A: {}, B: {}, C: {}, D: {} };
 }
 
 /** 开一个新的记录器 */
@@ -88,7 +89,12 @@ export function newTimeline(fromTurn: number): MatchTimeline {
     made: emptyTally(),
     thinned: false,
     seen: {},
-    lost: { A: { value: 0, count: 0 }, B: { value: 0, count: 0 } },
+    lost: {
+      A: { value: 0, count: 0 },
+      B: { value: 0, count: 0 },
+      C: { value: 0, count: 0 },
+      D: { value: 0, count: 0 },
+    },
   };
 }
 
@@ -102,7 +108,14 @@ export function newTimeline(fromTurn: number): MatchTimeline {
  */
 export function noteDeaths(tl: MatchTimeline, s: GameState, action?: Action): void {
   const seen = tl.seen ?? (tl.seen = {});
-  const lost = tl.lost ?? (tl.lost = { A: { value: 0, count: 0 }, B: { value: 0, count: 0 } });
+  const lost =
+    tl.lost ??
+    (tl.lost = {
+      A: { value: 0, count: 0 },
+      B: { value: 0, count: 0 },
+      C: { value: 0, count: 0 },
+      D: { value: 0, count: 0 },
+    });
 
   if (action?.type === 'DISBAND') delete seen[action.unitId];
 

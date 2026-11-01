@@ -17,7 +17,7 @@
 
 import { underConstruction } from './rules.ts';
 import { timelineSummary, type MatchTimeline } from './timeline.ts';
-import type { GameState, PlayerId } from './types.ts';
+import { seatsOf, type GameState, type PlayerId } from './types.ts';
 
 /** 报告格式版本。加字段不一定动它，改语义一定要动 */
 export const REPORT_VERSION = 1;
@@ -57,6 +57,13 @@ export interface MatchReport {
   seed: number;
   board: { w: number; h: number; terrain: Record<string, number> };
   startEra: number;
+  /**
+   * 几个人在打（2/3/4）。
+   *
+   * 单独存一层，是因为 sides 的长度已经能看出来但**老数据看不出来**：
+   * v1 时代的 sides 一律是两条，混进新数据后没法区分"两人局"和"三人局里有一家被吃掉"。
+   */
+  playerCount: number;
   expansions: string[];
   /** 兵种表的规模：装了几套自定义兵种，两批数据就没法直接比 */
   packSize: number;
@@ -102,7 +109,8 @@ export function buildMatchReport(
   now: Date = new Date(),
   timeline?: MatchTimeline | null,
 ): MatchReport {
-  const sides: ReportSide[] = (['A', 'B'] as PlayerId[]).map((side) => {
+  const seats = seatsOf(s);
+  const sides: ReportSide[] = seats.map((side) => {
     const mine = s.units.filter((u) => u.owner === side);
     const roster: Record<string, number> = {};
     let buildings = 0;
@@ -139,6 +147,7 @@ export function buildMatchReport(
     seed: s.seed,
     board: { w: s.w, h: s.h, terrain: countTerrain(s) },
     startEra: s.config.startEra,
+    playerCount: seats.length,
     expansions: [...s.config.expansionIds],
     packSize: Object.keys(s.unitTypes).length,
     ai: {

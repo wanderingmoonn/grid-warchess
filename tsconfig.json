@@ -14,5 +14,7 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "scripts"],
+  "comment": "scripts/baselines 是冻结的评测基线：它们的字节必须保持不变（见 test-ai-evaluation），所以不参与类型检查，只在运行时被 esbuild 打包使用。",
+  "exclude": ["scripts/baselines/**", "scripts/baseline-ai.ts"]
 }
