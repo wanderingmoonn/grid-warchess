@@ -186,6 +186,8 @@ import {
   isAirborne,
   isHiddenFrom,
   magicDamageOf,
+  magicAtkOf,
+  magicResOf,
   idx,
   incomeOf,
   incomeResOf,
@@ -2238,6 +2240,57 @@ test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', ()
   assert.equal(effectiveStats(r.state, up).armor, armor0 + 2, '护甲永久 +2');
   assert.equal(maxHpOf(r.state, up), max0 + 30, '生命上限永久 +30');
   assert.ok(up.hp > 60, '同时回血');
+});
+
+test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且掠空、陨卵半径 9', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+
+  const egg = s.unitTypes['dragon-egg']!;
+  assert.equal(egg.armor, 25, '魔龙卵护甲 25');
+  assert.equal(egg.magicRes, 12, '魔龙卵魔抗 12');
+  assert.equal(egg.maxHp, 140, '魔龙卵生命 140');
+
+  const dragon = s.unitTypes['evil-dragon-king']!;
+  assert.equal(dragon.vision, 9, '邪龙王视野 9');
+  assert.equal(dragon.layer, 'air', '邪龙王在空中层');
+  assert.equal(dragon.flight, true, '掠空同时要能掠水，所以 flight 一起写');
+  const skill = (dragon.skills ?? []).find((k) => k.id === 'dragon-egg');
+  assert.equal(skill?.radius, 9, '陨卵半径 9');
+
+  // 掠空的实际含义：能和地面单位叠在同一格（见 layer 的说明）
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  const mate = stackOn(s, 'A', 'militia', 5, 5);
+  const air = stackOn(s, 'A', 'evil-dragon-king', 5, 5);
+  assert.equal(isAirborne(s, air), true);
+  assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
+  assert.ok(unitsAt(s, 5, 5).some((u) => u.id === mate.id), '地面那一个还在');
+});
+
+test('奇想平衡：圣剑觉醒的魔攻 / 魔抗会真的进伤害结算', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 6, 5, 'plain');
+  const hero = place(s, 'A', 'sword-saint', 5, 5);
+  const target = place(s, 'B', 'militia', 6, 5);
+
+  // 先摆一层"上一次觉醒留下的加成"：觉醒必须是**累加**，不是覆盖成 +8
+  hero.magicAtkBonus = 4;
+  hero.magicResBonus = 1;
+  const magic0 = magicAtkOf(s, hero);
+  const res0 = magicResOf(s, hero);
+  const dmg0 = magicDamageOf(s, hero, target);
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: hero.id, skillId: 'ascend' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const up = r.state.units.find((u) => u.id === hero.id)!;
+  const foe = r.state.units.find((u) => u.id === target.id)!;
+
+  assert.equal(magicAtkOf(r.state, up), magic0 + 8, '魔攻 +8（叠在旧的那一层上）');
+  assert.equal(magicResOf(r.state, up), res0 + 2, '魔抗 +2（同样是累加）');
+  // 面板涨了，结算也必须跟着涨：民兵魔抗 0，所以这一发正好多 8 点
+  assert.equal(magicDamageOf(r.state, up, foe), dmg0 + 8, '魔法段的伤害真的变高了');
 });
 
 test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', () => {

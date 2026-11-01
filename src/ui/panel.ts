@@ -43,6 +43,8 @@ import {
   effectiveStats,
   elementOf,
   maxHpOf, 
+  magicAtkOf,
+  magicResOf,
   heroSkillsOf,
   ordersOf,
   recruitResCost,
@@ -714,10 +716,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${
         // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
         // 只写"攻击 0"等于告诉玩家这个兵不会打人。
-        def.magicAtk
-          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${def.magicAtk} / ${
-              def.magicRes ?? 0
-            }</b></div>`
+        // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
+        // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
+        magicAtkOf(s, selectedUnit) > 0
+          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
+              s,
+              selectedUnit,
+            )} / ${magicResOf(s, selectedUnit)}</b></div>`
           : ''
       }
       ${

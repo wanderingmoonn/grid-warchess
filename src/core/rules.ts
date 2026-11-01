@@ -706,6 +706,21 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
 }
 
 /**
+ * 这个单位现在的魔法攻击 / 魔法抗性。
+ *
+ * 兵种表上的值是"这一局这类兵的基础值"，而圣剑觉醒那类加成属于**这一个单位**
+ * （和 atkBonus / armorBonus 同一个道理，见 types 里的注释）。
+ * 魔法段是唯一一条只看魔抗、不看护甲的结算，两处各读各的话就会出现
+ * "面板涨了、打出去的伤害没变"——所以取值只能有这两个函数。
+ */
+export function magicAtkOf(s: GameState, u: Unit): number {
+  return (utype(s, u.type).magicAtk ?? 0) + (u.magicAtkBonus ?? 0);
+}
+export function magicResOf(s: GameState, u: Unit): number {
+  return (utype(s, u.type).magicRes ?? 0) + (u.magicResBonus ?? 0);
+}
+
+/**
  * 这一下能打出多少魔法伤害。
  * 魔法段本身只被魔抗平减，
  * 不需要目标是个单位；只有「属性精研·暗」那种"按对手放大"的钩子需要它，
@@ -719,7 +734,7 @@ export function magicSegment(
 ): number {
   if (outOfAmmo(s, attacker)) return 0;
   const def = utype(s, attacker.type);
-  const magic = def.magicAtk ?? 0;
+  const magic = magicAtkOf(s, attacker);
   if (magic <= 0) return 0;
   const out = Math.max(0, magic - magicRes);
   // 魔法段的倍率交给能力自己（现在只有「属性精研·暗」用它）。
@@ -739,7 +754,7 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
   // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
   // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
   // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
-  const base = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  const base = isPseudoUnit(defender.type) ? 0 : magicResOf(s, defender);
   // 圣旗之类"临时加魔抗"的增益在这条线上生效：魔法段是唯一一条
   // 只看魔抗、不看护甲的伤害，把增益挂在别处就等于没加。
   const ward = defender.buff?.magicRes ?? 0;
@@ -4339,15 +4354,21 @@ SKILL_EFFECTS['ascend'] = (c) => {
   const atkUp = c.skill.atkUp ?? 8;
   const armorUp = c.skill.armorUp ?? 2;
   const hpUp = c.skill.hpUp ?? 30;
+  const magicAtkUp = c.skill.magicAtkUp ?? 0;
+  const magicResUp = c.skill.magicResUp ?? 0;
   const heal = c.skill.power ?? 0.3;
   c.self.atkBonus = (c.self.atkBonus ?? 0) + atkUp;
   c.self.armorBonus = (c.self.armorBonus ?? 0) + armorUp;
   c.self.maxHpBonus = (c.self.maxHpBonus ?? 0) + hpUp;
+  // 魔法段的两项：只在这条技能真的配了值时才写，免得老数据平白多出 0 字段
+  if (magicAtkUp) c.self.magicAtkBonus = (c.self.magicAtkBonus ?? 0) + magicAtkUp;
+  if (magicResUp) c.self.magicResBonus = (c.self.magicResBonus ?? 0) + magicResUp;
   // 上限涨了，回血按**新的**上限算：先加上限再回血，这一口才吃得到自己刚长出来的那截
   const max = maxHpOf(c.state, c.self);
   const healed = Math.max(1, Math.round(max * heal)) + hpUp;
   c.self.hp = Math.min(max, c.self.hp + healed);
-  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}、生命上限 +${hpUp}，回复 ${healed} 点`;
+  const extra = (magicAtkUp ? `、魔攻 +${magicAtkUp}` : '') + (magicResUp ? `、魔抗 +${magicResUp}` : '');
+  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}${extra}、生命上限 +${hpUp}，回复 ${healed} 点`;
 };
 
 /**

@@ -168,6 +168,14 @@ export interface SkillDef {
   atkUp?: number;
   /** 永久生命上限提升，配套 atkUp */
   hpUp?: number;
+  /**
+   * 永久魔法攻击提升（圣剑觉醒的「魔攻 +8」）。
+   *
+   * 为什么单开一个而不是并进 atkUp：魔法段只被魔抗挡、物理段只被护甲挡，
+   * 两个数在结算里从来不参与同一道算式。并进 atkUp 会让「打重甲」和
+   * 「打高魔抗」变成同一件事，圣剑勇者也就没有性格了。
+   */
+  magicAtkUp?: number;
 }
 
 export interface Tile {
@@ -841,6 +849,15 @@ export interface Unit {
   atkBonus?: number;
   /** 永久护甲加成，和 atkBonus 同一套理由 */
   armorBonus?: number;
+  /**
+   * 永久魔法攻击加成（圣剑觉醒里的「魔攻 +8」）。
+   *
+   * 和 atkBonus 并列单独存一份，而不是加进 atkBonus：这两笔走的是两条
+   * 完全不同的结算（魔法段只看魔抗、不看护甲），合并就再也拆不开了。
+   */
+  magicAtkBonus?: number;
+  /** 永久魔法抗性加成，和 magicAtkBonus 配套 */
+  magicResBonus?: number;
   /**
    * 孵化还剩几个自己的回合（只有写 `hatch` 的兵种有）。
    *
