@@ -10432,6 +10432,41 @@ test('修仙：纯挂机曲线——炼气士靠打坐能撑到几级（设计�
   );
 });
 
+test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  // 造一个剑修和靶子
+  const sword = place2(s, 'A', 'sword-cultivator', 5, 5);
+  const target = place2(s, 'B', 'militia', 5, 6);
+  s.current = 'A';
+
+  const baseDmg = computeDamage(s, sword, target); // 普攻伤害
+  const hpBefore = target.hp;
+
+  // 放技能（指向正下方）
+  const r = applyAction(s, { 
+    type: 'HERO_SKILL', 
+    unitId: sword.id, 
+    skillId: 'sword-sweep',
+    targetX: 5,
+    targetY: 8 // 指向正下方，命中 5,6 的靶子
+  });
+  
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state;
+  const swordAfter = after.units.find(u => u.id === sword.id)!;
+  const targetAfter = after.units.find(u => u.id === target.id)!;
+
+  // 1. 扣了次数：剑修 burst 1，放完还剩 0
+  assert.equal(swordAfter.attacksLeft, 0, '剑气应该消耗一次攻击次数');
+
+  // 2. 伤害更高：剑气伤害应该比普攻高（基础 +20%）
+  const skillDmg = hpBefore - targetAfter.hp;
+  assert.ok(skillDmg > baseDmg, `剑气伤害(${skillDmg}) 应该高于普攻(${baseDmg})`);
+
+  // 3. 经验增加：初始 0，放空 1 + 命中 5 = 6
+  assert.equal(swordAfter.custom?.exp, 6, '施法并命中应该获得修为经验');
+});
+
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   // 2026-10-29 起溅射比例不再写死在 CONFIG 里：单位 `custom.splashRatio`
   // 存在就用它自己的。半径同理，交给扩展的 modifySplas。

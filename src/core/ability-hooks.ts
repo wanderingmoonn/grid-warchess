@@ -75,6 +75,7 @@ export interface AbilityApi {
   computeDamage(s: GameState, attacker: Unit, defender: any, isCounter?: boolean): number;
   /** 算一下这个单位现在的溅射半径 */
   splashRadiusOf(s: GameState, u: Unit): number;
+  attacksPerTurn(s: GameState, u: Unit): number;
 }
 
 /**

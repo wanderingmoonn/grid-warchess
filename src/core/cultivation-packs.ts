@@ -38,6 +38,97 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
   return isCultivatorDef(s.unitTypes[u.type]);
 }
 
+const SWORD_SWEEP_SKILL = {
+  id: 'sword-sweep',
+  name: '剑气纵横',
+  summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
+  effect: 'sword-sweep',
+  cooldown: 0,
+  range: 3, // 剑气延伸 3 格
+};
+registerSkillEffect('sword-sweep', (c) => {
+  // 1. 检查并扣除攻击次数（相当于这一发剑气占用了一次普攻）
+  if (c.self.attacksLeft === undefined) {
+    // 如果还没动过，先读取基础攻击次数（剑修 burst 设为 2）
+    c.self.attacksLeft = c.api.attacksPerTurn(c.state, c.self);
+  }
+  if (c.self.attacksLeft <= 0) {
+    c.result.ok = false;
+    c.result.reason = '本回合的攻击次数已经用光了，无法再挥剑';
+    return;
+  }
+  c.self.attacksLeft -= 1;
+  if (c.self.attacksLeft <= 0) {
+    c.self.acted = true; // 次数归零，彻底结束本回合
+  }
+
+  // 2. 决定挥剑方向（强制四方向吸附）
+  const reach = 3+c.api.splashRadiusOf(c.state, c.self);
+  let dx = 0;
+  let dy = 0;
+
+  if (c.target) {
+    const distX = c.target.x - c.self.x;
+    const distY = c.target.y - c.self.y;
+    dx = Math.sign(distX);
+    dy = Math.sign(distY);
+    // 如果是斜向，强制吸附到偏差较大的轴（实现“只有上下左右”）
+    if (Math.abs(distX) > Math.abs(distY)) {
+      dy = 0;
+    } else if (Math.abs(distY) > Math.abs(distX)) {
+      dx = 0;
+    } else {
+      // 如果正好是 45 度角，默认向 X 轴挥（或者你可以改为不合法报错，看策划意图）
+      dy = 0;
+    }
+    if (dx === 0 && dy === 0) dx = 1; // 点自己脚下，默认朝右
+  } else {
+    // AI 自动索敌逻辑（略，保持你原来的即可）
+    dx = 1;
+  }
+
+  // 3. 收集直线上的受害者
+  const victims: Unit[] = [];
+  for (let i = 1; i <= reach; i++) {
+    const tx = c.self.x + dx * i;
+    const ty = c.self.y + dy * i;
+    const target = c.state.units.find(u => u.owner !== c.self.owner && u.x === tx && u.y === ty);
+    if (target) victims.push(target);
+  }
+
+  // 4. 伤害结算（临时提升基础攻击力来实现 1.2 倍剑气）
+  let expGain = 1;
+  let logExtra = '';
+
+  if (victims.length > 0) {
+    expGain += victims.length * 5;
+    let totalDmg = 0;
+    
+    // 临时把物理基础攻击力提升 20%（比如 10 -> 12）
+    const baseAtk = c.api.utype(c.state, c.self.type).atk + (c.self.atkBonus ?? 0);
+    const skillBonus = Math.round(baseAtk * 0.2);
+    c.self.atkBonus = (c.self.atkBonus ?? 0) + skillBonus;
+
+    for (const v of victims) {
+      // 此时 computeDamage 会自动把这额外的 20% 算进物理段
+      const dmg = c.api.computeDamage(c.state, c.self, v);
+      v.hp -= dmg;
+      totalDmg += dmg;
+    }
+
+    // 还原攻击力（很重要，否则普攻就永久变强了）
+    c.self.atkBonus = (c.self.atkBonus ?? 0) - skillBonus;
+
+    logExtra = `，剑气斩中 ${victims.length} 人，造成 ${totalDmg} 伤害`;
+  } else {
+    logExtra = `，剑气落空（练剑）`;
+  }
+
+  // 5. 给经验并收尾
+  addExp(c.self, c.state, expGain);
+  c.result.log = `剑气纵横${logExtra}，修为 +${expGain}`;
+});
+
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
   id: 'qi-cultivator',
@@ -54,89 +145,7 @@ const CULTIVATOR: UnitTypeDef = {
   vision: 3,
   abilities: ['qi-true-damage'], 
 };
-
-// ── 剑修 ───────────────────────────────────────────
-const SWORD_SWEEP_SKILL = {
-  id: 'sword-sweep',
-  name: '剑气纵横',
-  summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
-  effect: 'sword-sweep',
-  cooldown: 1,
-  range: 3, // 剑气延伸 3 格
-};
-
-registerSkillEffect('sword-sweep', (c) => {
-  const reach = 3+c.api.splashRadiusOf(c.state, c.self);
-  let dx = 0;
-  let dy = 0;
-
-  // 1. 决定挥剑方向
-  if (c.target) {
-    const distX = c.target.x - c.self.x;
-    const distY = c.target.y - c.self.y;
-    dx = Math.sign(distX);
-    dy = Math.sign(distY);
-    // 只允许四方向，如果斜着点，取偏差较大的那个轴
-    if (Math.abs(distX) > Math.abs(distY)) dy = 0;
-    else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
-    // 如果点的是自己脚下，默认朝面向/右侧
-    if (dx === 0 && dy === 0) dx = 1;
-  } else {
-    // 如果没传坐标（比如 AI 或者直接点了技能按钮没点目标）
-    // 就自动找一个最近的敌人方向，没有敌人就朝右
-    const foes = c.state.units.filter(u => u.owner !== c.self.owner && u.hp > 0);
-    if (foes.length > 0) {
-      let nearest = foes[0]!;
-      let minD = 999;
-      for (const f of foes) {
-        const d = c.api.distance(c.self, f);
-        if (d < minD) { minD = d; nearest = f; }
-      }
-      const distX = nearest.x - c.self.x;
-      const distY = nearest.y - c.self.y;
-      dx = Math.sign(distX);
-      dy = Math.sign(distY);
-      if (Math.abs(distX) > Math.abs(distY)) dy = 0;
-      else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
-      if (dx === 0 && dy === 0) dx = 1;
-    } else {
-      dx = 1; // 空放默认朝右
-    }
-  }
-
-  // 2. 收集直线上的受害者（包含起点的前方）
-  const victims: Unit[] = [];
-  for (let i = 1; i <= reach; i++) {
-    const tx = c.self.x + dx * i;
-    const ty = c.self.y + dy * i;
-    const target = c.state.units.find(u => u.owner !== c.self.owner && u.x === tx && u.y === ty);
-    if (target) victims.push(target);
-  }
-
-  // 3. 空放：没有任何敌人也允许放，给个基础的 2 点经验，象征练剑
-  let expGain = 2;
-  let logExtra = '';
-
-  if (victims.length > 0) {
-    expGain += victims.length * 5; // 每击中一个 +5 经验
-    let totalDmg = 0;
-    for (const v of victims) {
-      // 技能伤害吃面板，可以来个 1.2 倍率的剑气加成
-      const raw = c.api.computeDamage(c.state, c.self, v);
-      const dmg = Math.max(1, Math.round(raw * 1.2));
-      v.hp -= dmg;
-      totalDmg += dmg;
-    }
-    logExtra = `，斩中 ${victims.length} 人共造成 ${totalDmg} 伤害`;
-  } else {
-    logExtra = `，剑气落空（练剑+${expGain}）`;
-  }
-
-  // 4. 给经验（调用扩展内部函数）
-  addExp(c.self, c.state, expGain);
-  c.result.log = `${c.self.type} 挥出剑气${logExtra}，修为 +${expGain}`;
-  // 技能不带普攻的主动扣血，这部分由 c.state 引擎去 sweepDead（你的 doHeroSkill 里如果没清场，需要检查一下，最好在 doHeroSkill 外层有统一的结算）
-});
+// 剑修
 const SWORD_CULTIVATOR: UnitTypeDef = {
   id: 'sword-cultivator',
   name: '剑修',
@@ -145,11 +154,11 @@ const SWORD_CULTIVATOR: UnitTypeDef = {
   category: 'combat',
   cost: 350, 
   move: 3,
-  atk: 8, // 普攻很低
+  atk: 8,
   armor: 1,
-  maxHp: 25,
-  range: 1, // 普攻近战
-  vision: 4,
+  maxHp: 20,
+  range: 1,
+  vision: 3,
   abilities: ['qi-true-damage'], 
   skills: [SWORD_SWEEP_SKILL],
 };
@@ -222,7 +231,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
     s.log.push({
       turn: s.turn,
       player: u.owner, 
-      text: `炼气士 突破至 ${_REAMLS[newRank]} 期！`,
+      text: `${u.type} 突破至 ${_REAMLS[newRank]} 期！`,
       open: true,
     });
   }

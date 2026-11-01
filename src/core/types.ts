@@ -168,6 +168,8 @@ export interface SkillDef {
   atkUp?: number;
   /** 永久生命上限提升，配套 atkUp */
   hpUp?: number;
+  /** 如果为 true，允许一回合放多次，由技能自己决定终止逻辑 */
+  multiCast?: boolean;
 }
 
 export interface Tile {

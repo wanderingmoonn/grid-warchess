@@ -155,6 +155,7 @@ const abilityApi: AbilityApi = {
   },
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
+  attacksPerTurn: (s, u) => attacksPerTurn(s, u),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -4418,9 +4419,8 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   const skill = (def.skills ?? []).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
 
-  // 每个英雄每回合最多放一个技能。以前这条靠"冷却至少 1"顺带成立，
-  // 充能型技能没有冷却，必须单独拦——否则三发能在同一回合全打出去。
-  if (u.skillTurn === s.turn) {
+  // 如果技能不允许连发，且这回合已经放过，就拦住
+  if (!skill.multiCast && u.skillTurn === s.turn) {
     return { ok: false, reason: '这个单位这一回合已经放过技能了' };
   }
 
