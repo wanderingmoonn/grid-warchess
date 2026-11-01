@@ -16,7 +16,7 @@ import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
-import { heatCells } from './core/heat.ts';
+import { visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
@@ -799,17 +799,15 @@ function render(): void {
       ? Array.from(threatTiles(state, selected))
       : [];
 
-  // 战况烈度：**上一次敌方回合**里，我方在这些格子上挨了多少下。
+  // 战况烈度：**上一次敌方回合**里，对方打过的那些格子（含溅射波及），按次数闪烁。
   //
-  // 轮到自己就生效，不依赖"选中了谁"——这是复盘上一个敌方回合的提示，
-  // 不是某个兵的风险预告。数字来自 core/heat.ts 的账本（挨打时记账），
-  // 所以它随回合自然刷新：新的一次敌方回合打完，这张表就换成新的了。
-  // 只在当前看得见的格子上画：看不见的地方不该泄露"那边刚才打过仗"。
-  const visibleNow = new Set(view.visible);
-  const heat =
-    state.current === me() && !spectating()
-      ? new Map([...heatCells(state, me())].filter(([i]) => visibleNow.has(i)))
-      : undefined;
+  // 轮到自己就生效，不依赖"选中了谁"；这一回合**出手一次之后就收起**——
+  // 它是"上回合的答卷"，看一眼就该让位给可达格与攻击目标。
+  const heat = visibleHeat(state, me(), {
+    visible: new Set(view.visible),
+    dismissed: heatDismissTurn === state.turn,
+    active: state.current === me() && !spectating(),
+  });
 
   // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
   const hpDrops = new Map(pendingDrops);
@@ -1885,6 +1883,14 @@ function toast(msg: string): void {
   window.setTimeout(() => el.remove(), 2200);
 }
 
+/**
+ * 战况烈度的红格在哪一回合已经被"出手"消费掉了。
+ *
+ * 记回合号而不是布尔：回合一变，旧值自然失效，不用额外挂钩子清理。
+ * 撤回不撤销这个标记——玩家已经看过那份情报了，撤一步不该把它又翻出来。
+ */
+let heatDismissTurn: number | null = null;
+
 function dispatch(action: Action): boolean {
   // AI 正在走这一方：玩家的点击一律不生效，不然会出现两边同时改同一个状态
   if (aiBusy()) {
@@ -1911,6 +1917,8 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
+  if (action.type !== 'END_TURN') heatDismissTurn = state.turn;
   noteHpDrops(before, state);
   if (action.type === 'ATTACK' || action.type === 'SIEGE') lastStrikerId = action.unitId;
   noteStep(actor, action);

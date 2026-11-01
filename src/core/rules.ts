@@ -2624,7 +2624,6 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 
       const dmg = computeDamage(s, b, target);
       target.hp -= dmg;
-      noteHeat(s, target);
       totalDmg += dmg;
       hits += 1;
       shots -= 1;
@@ -2634,7 +2633,6 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       const splashed = splashVictims(s, b, target);
       for (const v of splashed) {
         v.unit.hp -= v.dmg;
-        noteHeat(s, v.unit);
         splashNames.add(utype(s, v.unit.type).name);
       }
 
@@ -2987,7 +2985,6 @@ function doAttack(
   if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
     attacker.hp -= counterDmg;
-    noteHeat(s, attacker);
     
     // 消耗一次反击机会
     defender.countersLeft -= 1; 

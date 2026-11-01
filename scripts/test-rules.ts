@@ -63,7 +63,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop } from '../src/core/produce.ts';
-import { heatCells, heatStep, noteHeat } from '../src/core/heat.ts';
+import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) =>
@@ -9968,7 +9968,7 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
   assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
 
-  // 反击记在"出手方"那一格：贴身互殴时，A 的炮兵也会挨记一笔
+  // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
   const s2 = fresh();
   s2.current = 'A';
   s2.units = [];
@@ -9978,9 +9978,27 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   mine.hp = 200;
   const brawl = applyAction(s2, { type: 'ATTACK', unitId: mine.id, targetId: foe.id });
   assert.ok(brawl.ok, brawl.ok ? '' : brawl.reason);
-  // A 这一回合挨的那点反击，记在 A 名下（相当于"自己回合的账"）
-  assert.equal(heatCells(brawl.state, 'A').size, 0, '反击记在当前回合，不该出现在上一回合表里');
-  assert.equal(brawl.state.heat?.A?.[String(brawl.state.turn)]?.[idx(brawl.state, 8, 9)], 1, '反击要记账');
+  assert.equal(
+    brawl.state.heat?.A?.[String(brawl.state.turn)],
+    undefined,
+    '被打回来那一下不记：这一方的账只收"对方打出来的"',
+  );
+  assert.equal(
+    brawl.state.heat?.B?.[String(brawl.state.turn)]?.[idx(brawl.state, 8, 8)],
+    1,
+    'B 挨的那一下照常记在自己名下',
+  );
+
+  // 该不该显示：三条规则都在 visibleHeat 里
+  const board = fresh();
+  board.turn = 10;
+  board.heat = { A: { '9': { 5: 2 } } };
+  assert.equal(visibleHeat(board, 'A')?.get(5), 2, '轮到自己：显示上一回合那一份');
+  assert.equal(visibleHeat(board, 'A', { dismissed: true }), undefined, '出手之后收起');
+  assert.equal(visibleHeat(board, 'A', { active: false }), undefined, '不是自己的回合不显示');
+  assert.equal(visibleHeat(board, 'A', { visible: new Set([6]) }), undefined, '视野外连坐标都不给');
+  assert.equal(visibleHeat(board, 'A', { visible: new Set([5]) })?.get(5), 2, '看得见就照常');
+  assert.equal(visibleHeat(board, 'B'), undefined, 'B 这一回合没账可看');
 
   // 档位：0 不亮，1~5 依次，超过封顶
   assert.equal(heatStep(0), 0);

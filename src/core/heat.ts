@@ -71,3 +71,36 @@ export function heatStep(count: number): number {
   if (count <= 0) return 0;
   return Math.min(5, Math.max(1, Math.trunc(count)));
 }
+
+/** 什么时候该把红格画出来 */
+export interface HeatViewOpts {
+  /** 此刻看得见的格子（雾）。不传 = 全图可见 */
+  visible?: ReadonlySet<number>;
+  /** 这一回合已经出过手了：红格只留到第一次行动，之后收起来 */
+  dismissed?: boolean;
+  /** 现在是不是轮到"自己这一方"看（观战、对方回合都不算） */
+  active?: boolean;
+}
+
+/**
+ * 交给界面的那一份烈度表：没东西可显示时返回 undefined。
+ *
+ * 三条规则都在这里落地，界面只管画：
+ *   · 不是自己的回合 / 观战中 → 不显示；
+ *   · 这一回合已经出手 → 收起（红格是"上回合的答卷"，看完就该让位）；
+ *   · 视野外的格子 → 不显示，连坐标都不给。
+ */
+export function visibleHeat(
+  s: GameState,
+  player: PlayerId,
+  opts: HeatViewOpts = {},
+): Map<number, number> | undefined {
+  if (opts.active === false) return undefined;
+  if (opts.dismissed) return undefined;
+  const out = new Map<number, number>();
+  for (const [i, n] of heatCells(s, player)) {
+    if (opts.visible && !opts.visible.has(i)) continue;
+    out.set(i, n);
+  }
+  return out.size > 0 ? out : undefined;
+}
