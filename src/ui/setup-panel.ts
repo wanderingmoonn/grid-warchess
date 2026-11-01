@@ -289,7 +289,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const playerNote =
         playerCount === 2
           ? '两人局可以带 AI：人机对战、双 AI 观战都行。'
-          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。每方开局恰好一座城，城丢了就出局。`;
+          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。每方开局恰好一座城，城丢了就出局。${
+              config.size < 16 ? '人多地小会摆不开，建议至少 16 × 16。' : ''
+            }`;
 
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
@@ -764,6 +766,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           config.godMode = false;
           // 城门只有两个：多人局用不了固定地图，清掉免得带着上一局的选择进场
           config.fixedMap = undefined;
+          // 正好停在"这个时代的默认尺寸"上＝玩家还没自己挑过，就顺手放大到 16×16：
+          // 12×12 上四家各占一角，开局就走不动。玩家自己挑过的尺寸一律不动。
+          if (config.size === DEFAULT_SIZE_FOR_ERA(config.startEra)) {
+            config.size = Math.max(config.size, 16);
+          }
         }
         paint();
         return;

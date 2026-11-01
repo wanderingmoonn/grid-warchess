@@ -38,7 +38,7 @@ import {
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
-import { MAP_STYLES, generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
+import { MAP_STYLES, generateLayout, generateMultiLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
 import { BUILTIN_MAPS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
 import {
   clearUnits,
@@ -13206,6 +13206,118 @@ test('战报带上人数：两人局 2、四人局 4，两侧阵容都要齐', (
   for (const side of four.sides) {
     assert.equal(side.cities, 1, `${side.side} 应该报出一座城`);
     assert.ok(side.hp > 0, `${side.side} 的终局血量要算进来`);
+  }
+});
+
+test('四人图：逐格镜像对称（左右、上下、旋转都对得上）', () => {
+  for (const seed of [4242, 7, 99]) {
+    const L = generateMultiLayout(16, seed, ['militia'], { players: 4 });
+    assert.equal(L.rows.length, 16);
+    let bad = 0;
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const ch = L.rows[y]![x];
+        // 左右 / 上下 / 中心对称三者同时成立 = 旋转 90° 之后整张图重合
+        if (ch !== L.rows[y]![15 - x] || ch !== L.rows[15 - y]![x]) bad += 1;
+      }
+    }
+    assert.equal(bad, 0, `seed ${seed}：四家图必须严格对称，实际有 ${bad} 格对不上`);
+    // 四个城位各占一角，且互不相邻
+    const spots = [L.citiesA[0], L.citiesB[0], L.citiesC?.[0], L.citiesD?.[0]];
+    assert.ok(spots.every(Boolean), `seed ${seed}：四个席位都要有城位`);
+    for (let i = 0; i < 4; i++) {
+      for (let j = i + 1; j < 4; j++) {
+        const a = spots[i]!;
+        const b = spots[j]!;
+        const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+        assert.ok(d >= 6, `seed ${seed}：${i} 和 ${j} 的城挨太近了（${d} 格）`);
+      }
+    }
+  }
+});
+
+test('三人图：三家分到的地形数量基本一样', () => {
+  for (const seed of [12346, 999, 42]) {
+    const L = generateMultiLayout(16, seed, ['militia'], { players: 3 });
+    const anchors = [L.citiesA[0]!, L.citiesB[0]!, L.citiesC![0]!];
+    const near = (x: number, y: number) => {
+      let best = 0;
+      let bd = Infinity;
+      anchors.forEach((a, i) => {
+        const d = Math.abs(x - a.x) + Math.abs(y - a.y);
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      });
+      return best;
+    };
+    const tally = [0, 0, 0];
+    L.rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        const ch = row[x];
+        // 只数地形：平原 / 城郊不算，那是留白
+        if (ch === '.' || ch === undefined) continue;
+        tally[near(x, y)]! += 1;
+      }
+    });
+    const spread = Math.max(...tally) - Math.min(...tally);
+    assert.ok(
+      spread <= 6,
+      `seed ${seed}：三家的地形数量差得太多（${tally.join('/')}）——` +
+        '这就是"我这边的山比他多"的来源，不能只靠运气',
+    );
+    // 三家不能挤在一侧
+    const xs = anchors.map((a) => a.x);
+    assert.ok(Math.max(...xs) - Math.min(...xs) >= 8, `seed ${seed}：三座城要拉开，实际 x=${xs.join('/')}`);
+  }
+});
+
+test('三人四人图：各家陆路相通，不会被水隔成几个小局', () => {
+  // 水对陆军是不通的。中间那圈湖、随机长出来的水团只要连成一条线，
+  // 就会把某一家关在自己的角里——那不是"难打"，是根本打不起来。
+  const reachable = (L: { w: number; h: number; rows: string[] }, from: { x: number; y: number }): Set<number> => {
+    const w = L.w;
+    const h = L.h;
+    const ok = (x: number, y: number) => passable(terrainFromChar(L.rows[y]![x]!));
+    const seen = new Set<number>([from.y * w + from.x]);
+    const stack = [from];
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const k = y * w + x;
+        if (seen.has(k) || !ok(x, y)) continue;
+        seen.add(k);
+        stack.push({ x, y });
+      }
+    }
+    return seen;
+  };
+
+  for (const size of [12, 16, 20]) {
+    for (const players of [3, 4] as const) {
+      for (const seed of [1000, 1037, 2072]) {
+        const L = generateMultiLayout(size, seed, ['militia'], { players });
+        const spots = [L.citiesA[0], L.citiesB[0], L.citiesC?.[0], L.citiesD?.[0]].filter(
+          (p): p is { x: number; y: number } => !!p,
+        );
+        const seen = reachable(L, spots[0]!);
+        for (const s of spots) {
+          assert.ok(
+            seen.has(s.y * L.w + s.x),
+            `${size}×${size} seed ${seed} 的 ${players} 人图：(${s.x},${s.y}) 那家被水隔开了`,
+          );
+        }
+      }
+    }
   }
 });
 

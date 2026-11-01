@@ -1454,6 +1454,11 @@ await checkAsync('开始界面选三人：对手区换成说明，开局后顶�
   const body = doc.querySelector('.modal-body')!;
   assert.equal(body.querySelectorAll('[data-ai]').length, 0, '三人局不该还摆着「人机对战」这类开关');
   assert.equal(body.querySelectorAll('[data-role="god"]').length, 0, '三人局不摆上帝模式（沙盒是按两边写的）');
+  // 人数换了，说明也得跟着换：不许还写着两人局那套
+  assert.ok(
+    (body.textContent ?? '').includes('每家一座城'),
+    '选三人之后要写清"每家一座城"这条规则',
+  );
 
   click('[data-act="start"]');
   await new Promise((resolve) => setTimeout(resolve, 80));

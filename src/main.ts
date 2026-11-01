@@ -4016,8 +4016,9 @@ function renderGodShelf(): void {
     godEra,
     state.units.length,
     state.cities.length,
-    state.players.A.gold,
-    state.players.B.gold,
+    // 各席位的金币都进签名：沙盒现在是两人局专属，但按席位写一遍不会错，
+    // 也不会哪天"沙盒支持三家"时漏掉重画
+    ...seatsOf(state).map((p) => state.players[p].gold),
     // 战报条数进签名：这是唯一"局面没怎么变、但确实该重画"的东西。
     // 只认长度不认内容——一条新战报必然让长度 +1（战报只增不减）。
     state.log.length,
@@ -4233,10 +4234,22 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
 
 // ---------- 联机 ----------
 
+/**
+ * 「别人都进来了吗」。
+ *
+ * 两人局里它就是"对面入座了没有"，三家四家局里是"剩下几个位子都坐了"——
+ * 大厅那句"等待对手入座"、邀请链接上的状态、进房那一刻的初值都读它。
+ * 写死成 `seat === 'A' ? 'B' : 'A'` 的话，四人局会认为"只要 B 进来就能开局"。
+ */
+function peersAllSeated(snapshot: RoomSnapshot, me: PlayerId): boolean {
+  const others = seatsOf(snapshot.state).filter((p) => p !== me);
+  return others.length > 0 && others.every((p) => snapshot.seats[p] !== null);
+}
+
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   room = seat;
-  peerSeated = seat.spectator === true ? true : snapshot.seats[seat.seat === 'A' ? 'B' : 'A'] !== null;
+  peerSeated = seat.spectator === true ? true : peersAllSeated(snapshot, seat.seat);
   saveSeat(seat);
   rememberRoom(seat.code);
   setSaveScope(seat.code);
@@ -4398,10 +4411,9 @@ async function pollRoom(): Promise<void> {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
 
-    // "对面入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
+    // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
-      const other = seat.seat === 'A' ? 'B' : 'A';
-      const seated = snapshot.seats[other] !== null;
+      const seated = peersAllSeated(snapshot, seat.seat);
       if (seated !== peerSeated) {
         peerSeated = seated;
         // 进度号没变时下面会直接 return，所以这里得自己重画一次遮罩
