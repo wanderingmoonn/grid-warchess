@@ -9913,6 +9913,55 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
   }
 });
 
+test('群岛的高山不再是"每张图必有"：配额压低 + 真够高才长', () => {
+  let maps = 0;
+  let withMountain = 0;
+  let maxOnOneMap = 0;
+  let tiles = 0;
+  let mountains = 0;
+  let water = 0;
+  let shallow = 0;
+
+  for (const size of [12, 16, 20, 24]) {
+    for (let k = 1; k <= 10; k += 1) {
+      const s = createMatch(
+        { ...BASE, size, expansionIds: ['height-terrain'], mapStyle: 'isles' },
+        k * 97 + size,
+      );
+      let n = 0;
+      for (const t of s.tiles) {
+        if (t.terrain === 'mountain') n += 1;
+        if (t.terrain === 'water') water += 1;
+        if (t.terrain === 'shallow') shallow += 1;
+      }
+      maps += 1;
+      tiles += s.tiles.length;
+      mountains += n;
+      if (n > 0) withMountain += 1;
+      maxOnOneMap = Math.max(maxOnOneMap, n);
+    }
+  }
+
+  // ① 不再是"每张图都长山"：以前是配额 1%，40 张图里 27 张有山（68%）
+  assert.ok(
+    withMountain <= maps * 0.55,
+    `${maps} 张群岛图里有 ${withMountain} 张长了高山，还是"固定生成"`,
+  );
+  // ② 权重确实降下来了：高山占全部格子的比例要低到千分之三以内
+  assert.ok(
+    mountains / tiles < 0.003,
+    `高山占 ${((mountains / tiles) * 100).toFixed(2)}%，权重没降下来`,
+  );
+  // ③ 长也要长得像山脊，不是满图撒点
+  assert.ok(maxOnOneMap <= 6, `一张图上冒出了 ${maxOnOneMap} 座高山`);
+
+  // ④ 只动了高山那一档：海与浅滩的比例必须还在原来的区间里
+  const waterShare = water / tiles;
+  const shallowShare = shallow / tiles;
+  assert.ok(waterShare > 0.22 && waterShare < 0.34, `海占 ${(waterShare * 100).toFixed(1)}%`);
+  assert.ok(shallowShare > 0.05 && shallowShare < 0.11, `浅滩占 ${(shallowShare * 100).toFixed(1)}%`);
+});
+
 test('地貌选项跟着扩展开关增减', () => {
   const base = mapStylesFor([]).map((o) => o.id);
   assert.equal(base.includes('highland'), false, '没开扩展不该有高原');
