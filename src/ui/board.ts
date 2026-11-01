@@ -23,6 +23,7 @@
 import type { PlayerView } from '../core/fog.ts';
 import { buildProgress, cityName, footprintOf, isAirborne, underConstruction, utype } from '../core/rules.ts';
 import type { GameState, Unit } from '../core/types.ts';
+import { threatStep } from '../core/threat.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -38,6 +39,14 @@ export interface BoardUi {
   placeable: number[];
   /** 威胁范围：移动之后能打到哪些格 */
   threat: number[];
+  /**
+   * 敌情预警：这一格正被几个敌人瞄着（格索引 → 次数）。
+   *
+   * 和上面的 `threat` 正好相反：那个是"我打得到哪"，这个是"谁打得到我"。
+   * 有值的时候格子会按次数快慢闪红。视野外的格子不会出现在这里——
+   * 过滤在 core/threat.ts 里就做完了，界面不负责裁剪（否则坐标照样进了 DOM）。
+   */
+  danger?: Map<number, number>;
   /**
    * 这一步实际走的路线（单位 id → 格子串），只用来画移动动画。
    *
@@ -351,6 +360,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const reachSet = new Set(ui.reach);
   const placeSet = new Set(ui.placeable);
   const threatSet = new Set(ui.threat);
+  // 敌情预警：格索引 → 能被几个敌人打到。没选中「本回合还没动过」的单位时是 undefined
+  const dangerSet = ui.danger ?? null;
   const targetPositions = new Set<number>();
   for (const id of ui.targets) {
     const u = s.units.find((x) => x.id === id);
@@ -406,6 +417,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       else if (reachSet.has(i)) cls += ' reach';
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
+      // 敌情预警叠在可达层之上：既"走得到"又"会挨打"的格子，两个提示都要在
+      const dangerCount = dangerSet?.get(i) ?? 0;
+      if (dangerCount > 0) cls += ` danger d${threatStep(dangerCount)}`;
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
       if (layer.cls[i] !== cls) {
@@ -417,7 +431,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
       const hint = ui.incomeHints?.get(i);
-      const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
+      // 闪烁层单独占一个元素：`.tile::after` 是可攻击/可达高亮、
+      // `::before` 是地形纹理（山脊、树影），两个都被占了，再挤就会互相盖掉。
+      const flash = dangerCount > 0 ? '<i class="fx-danger"></i>' : '';
+      const badge = flash + (hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '');
       if (layer.badge[i] !== badge) {
         node.innerHTML = badge;
         layer.badge[i] = badge;

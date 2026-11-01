@@ -606,6 +606,64 @@ body {
   box-shadow: inset 0 0 0 1px rgba(200, 80, 60, 0.26);
 }
 
+/* 敌情预警：这一格正落在敌人的火线上。
+ *
+ * 用独立元素 `i.fx-danger` 而不是伪元素：`.tile::after` 是可达/可攻击/选中的
+ * 高亮层，`::before` 是地形纹理（山脊、树影、波纹），两个都占满了。
+ * 独立元素还有个好处——它可以和"可达"同时存在：既走得到又会挨打的格子，
+ * 两个提示得一起看得见。
+ *
+ * 闪烁快慢由 `.d1`~`.d5` 决定，JS 只负责把"几个敌人能打到"折成档位。
+ * 五档封顶：再快人眼也分不出来，只会变成一片乱闪。 */
+.tile .fx-danger {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(214, 60, 48, 0.4) 0%,
+    rgba(214, 60, 48, 0.16) 72%,
+    rgba(214, 60, 48, 0.05) 100%
+  );
+  box-shadow: inset 0 0 0 1px rgba(214, 60, 48, 0.5);
+  opacity: 0.35;
+  animation: fx-danger-pulse 1.5s ease-in-out infinite;
+}
+
+.tile.d1 .fx-danger {
+  animation-duration: 1.5s;
+}
+.tile.d2 .fx-danger {
+  animation-duration: 1.15s;
+}
+.tile.d3 .fx-danger {
+  animation-duration: 0.9s;
+}
+.tile.d4 .fx-danger {
+  animation-duration: 0.7s;
+}
+.tile.d5 .fx-danger {
+  animation-duration: 0.5s;
+}
+
+@keyframes fx-danger-pulse {
+  0%,
+  100% {
+    opacity: 0.16;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* 关掉动效的人看静态红罩：提示还在，只是不闪 */
+@media (prefers-reduced-motion: reduce) {
+  .tile .fx-danger {
+    animation: none;
+    opacity: 0.42;
+  }
+}
+
 /* 建造选址：可以落子的空地 */
 .tile.placeable::after {
   background: rgba(224, 163, 60, 0.26);

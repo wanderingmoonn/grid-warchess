@@ -63,6 +63,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop } from '../src/core/produce.ts';
+import { incomingThreat, threatStep } from '../src/core/threat.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) =>
@@ -9911,6 +9912,55 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
     assert.ok(water > 200, `${style} 四张图加起来才 ${water} 格水，说不上"横贯全图"`);
     assert.ok(shallow > 40, `${style} 的浅滩太少（${shallow} 格），陆军根本过不去`);
   }
+});
+
+test('敌情预警：算得出"谁能打到这一格"，视野外的不进表', () => {
+  const s = fresh();
+  s.current = 'A';
+  s.units = [];
+
+  // 一把弓（射程 3），一次溅射都没有
+  const archer = place(s, 'B', 'archer', 8, 8);
+  assert.equal(UNIT_TYPES.archer!.range, 3);
+  const map = incomingThreat(s, 'A');
+
+  assert.equal(map.get(idx(s, 8, 8)), 1, '它自己脚下也算挨打（贴身能打到）');
+  assert.equal(map.get(idx(s, 5, 8)), 1, '正左三格在射程内');
+  assert.equal(map.get(idx(s, 6, 7)), 1, '曼哈顿距离 3 也在');
+  assert.equal(map.get(idx(s, 4, 8)), undefined, '四格外打不到');
+  assert.equal(map.get(idx(s, 5, 7)), undefined, '距离 4 打不到');
+
+  // 第二把弓叠上来：重叠区次数变成 2，这就是"闪得更快"的依据
+  place(s, 'B', 'archer', 9, 8);
+  const two = incomingThreat(s, 'A');
+  assert.equal(two.get(idx(s, 8, 8)), 2, '两把弓都够得着');
+
+  // 溅射算子：射程 + 溅射半径的整条菱形都算在内
+  const bat = UNIT_TYPES.battery!;
+  s.units = [];
+  const battery = place(s, 'B', 'battery', 6, 6);
+  assert.ok((bat.splash ?? 0) > 0, '炮兵要有溅射，否则这条用例测不到东西');
+  const reach = (bat.range ?? 0) + (bat.splash ?? 0);
+  const splashMap = incomingThreat(s, 'A');
+  assert.equal(splashMap.get(idx(s, 6 + reach, 6)), 1, `溅射要到得了 ${reach} 格`);
+  assert.equal(splashMap.get(idx(s, 6 + reach + 1, 6)), undefined, '再远一格就出了射程+溅射');
+
+  // 视野：看不见的格子根本不会进表（射程伸进雾里也一样）
+  const visible = new Set([idx(s, 6, 6)]);
+  const fogged = incomingThreat(s, 'A', visible);
+  assert.deepEqual(Array.from(fogged.keys()), [idx(s, 6, 6)], '只剩看得见的那一格');
+
+  // 自己人不算威胁
+  s.units = [];
+  place(s, 'A', 'archer', 4, 4);
+  assert.equal(incomingThreat(s, 'A').size, 0, '我方弓手不该把自己人标红');
+  assert.equal(incomingThreat(s, 'B').size > 0, true, '换个视角就该看见它');
+
+  // 档位：0 不亮，1~5 依次，超过封顶
+  assert.equal(threatStep(0), 0);
+  assert.equal(threatStep(1), 1);
+  assert.equal(threatStep(4), 4);
+  assert.equal(threatStep(9), 5);
 });
 
 test('群岛的高山不再是"每张图必有"：配额压低 + 真够高才长', () => {
