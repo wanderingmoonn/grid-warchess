@@ -21,6 +21,7 @@ const SIZE = Number(argOf('size', '16'));
 const GAMES = Number(argOf('games', '4'));
 const CAP = Number(argOf('cap', '120'));
 const EXP = argOf('exp', '').split(',').filter(Boolean);
+const ERA = Number(argOf('era', '1'));
 
 const built: Record<string, { n: number; foeDist: number[]; gold: number[] }> = {};
 const kept: Record<string, number> = {};
@@ -28,7 +29,7 @@ const kept: Record<string, number> = {};
 for (let g = 0; g < GAMES; g += 1) {
   const seed = 8100 + g * 91;
   let s: GameState = createMatch(
-    { ...DEFAULT_CONFIG, size: SIZE, aiOpponent: true, aiAlly: true, aiLevel: 'advanced',
+    { ...DEFAULT_CONFIG, size: SIZE, startEra: ERA, aiOpponent: true, aiAlly: true, aiLevel: 'advanced',
       ...(EXP.length ? { expansionIds: EXP } : {}) } as never,
     seed,
   );

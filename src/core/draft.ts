@@ -683,20 +683,27 @@ export function aiDraftPick(state: GameState, side: PlayerId): string | null {
   /** 手里一张"现在就造得出"的卡都没有（开局第一签必然如此） */
   const noneReady = ![...mine].some((id) => (state.unitTypes[id]?.era ?? 9) <= startEra);
   /**
-   * 后段名额放宽"现在就得能用"这条。
+   * 这一签该往哪个时代挑（"时代梯子"）。
    *
-   * 全按"开局就能造"选，会得到一支很便宜、很早就成型的队伍，但整局没有上限——
-   * 中期以后每一波都是同样的兵，对面一旦升级就换不过。会玩的人是前几签买
-   * "现在能打的"，后几签买"以后很能打的"。所以名额过了六成之后，
-   * 时代折扣放松到三分之一，留一到两个位置给未来。
+   * 上一版把"开局就能造"当硬指标，结果走另一个极端：平均时代 1.38，
+   * 六个名额全买一级兵——开局是爽了，但整局没有上限，对面升一级就换不过。
+   * 会玩的人不是这么选的：前几签买"现在能打的"，往后逐签抬高时代，
+   * 最后留一两个位置给"决战用的东西"。**一支队伍的时代是阶梯，不是一个点。**
+   *
+   * 所以这里给每一签算一个目标时代：从 `startEra` 起，按名额进度往上爬，
+   * 爬升速度由 `DRAFT_ERA_CLIMB` 决定（0.4 意味着 8 个名额爬到 +3 代）。
+   * 然后按"离目标时代多远"打分，而不是按"比你低多少"单向打折——
+   * 这样既不会全买高级兵，也不会全买一级兵。
    */
-  const late = mine.size >= Math.ceil((state.draft?.pickSlots ?? 6) * 0.6);
+  const slots = state.draft?.pickSlots ?? 6;
+  const climb = Math.round(mine.size * DRAFT_ERA_CLIMB * Math.min(1, 8 / Math.max(1, slots)));
+  const targetEra = startEra + Math.min(4, climb);
 
   let best: { id: string; score: number } | null = null;
   for (const id of left) {
     const def = state.unitTypes[id];
     if (!def) continue;
-    let score = draftValueOf(def, startEra, late ? 0.35 : 1);
+    let score = draftValueOf(def, targetEra);
     if (def.category === 'building') {
       // 建筑只在"还没拿到塔"时值得选，而且不该抢在兵前面。
       // 已经有了就一票否决：线上 AI 的终局建筑里常年摆着两座塔，
@@ -711,8 +718,8 @@ export function aiDraftPick(state: GameState, side: PlayerId): string | null {
     // 旱地图上的船：占一个名额，整局开不出去。门槛和 ai.ts 的 WATER_MIN_SHARE /
     // WATER_GOOD_SHARE 对齐（<8% 旱地 / 8~14% 勉强能开 / ≥14% 水网）。
     if (def.domain === 'water') score *= water >= 0.14 ? 0.9 : water >= 0.08 ? 0.5 : 0.2;
-    // 一个便宜的身体。加得比上面几档都重：没有它，前二十回合连出门的东西都没有。
-    if (!has.cheap && def.category === 'combat' && (def.cost ?? 999) <= 70) score += 20;
+    // 一个便宜的身体。前二十回合总得有东西能出门，任何一个会玩的人都会留这一手。
+    if (!has.cheap && def.category === 'combat' && (def.cost ?? 999) <= 70) score += 16;
     // 手里一张"现在就造得出"的卡都没有：这一签必须落地，只在这个时代里挑。
     if (noneReady && def.category === 'combat' && def.era <= startEra) score += 26;
     if (!has.any && def.era <= 2) score += 8;
@@ -740,25 +747,26 @@ function waterShareOf(state: GameState): number {
  * 选卡时给一个兵种打多少分。
  *
  * 三件事，按乘法叠：
- *   1. **能不能马上用**：时代领先按平方折价。领先 1 级 ≈ 打到一半才用得上，
- *      领先 3 级这一局基本指望不上，折到两成以下。`startEra` 是开局城市等级，
- *      城市升级要钱要回合，不是"迟早能用"就能等价。
- *   2. **每金多少战力**：以 80 金为基准，贵的兵按"同样一笔钱能买几个"折一下。
- *      贵而强不如便宜够用——选卡是选"这一局我能反复造的东西"，不是选收藏品。
+ *   1. **离目标时代有多远**：`targetEra` 由名额进度决定（见 `aiDraftPick` 的时代梯子）。
+ *      这一条取代了上一版的"时代领先就平方折价"——那种写法只有一个方向，
+ *      结果把队伍压成清一色一级兵（平均时代 1.38），等于从一个极端走到另一个极端。
+ *      现在是双向的：比目标时代低也扣分，高了也扣分，队伍的时代才是一条阶梯。
+ *   2. **每金多少战力**：以 80 金为基准打折。贵而强不如便宜够用，但这一条只是微调，
+ *      指数 0.3——太狠的话又会把高时代兵一起压死。
  *   3. **数值本身**（`atk + 0.4×血 + 3×甲 + 3×射程`，和海军扩展那套 V 值同源）。
- *
- * 时代折扣用平方而不是线性：线性的话 5 级兵只掉 40%，还是压得住 1 级兵，
- * 而那正是这次要修的病。
  */
-function draftValueOf(def: UnitTypeDef | undefined, startEra = 1, patience = 1): number {
+function draftValueOf(def: UnitTypeDef | undefined, targetEra = 1): number {
   if (!def) return 0;
   const raw = def.atk + 0.4 * def.maxHp + 3 * def.armor + 3 * def.range;
   if (raw <= 0) return 0;
-  const lead = Math.max(0, (def.era ?? 1) - startEra);
-  const ready = 1 / (1 + 0.55 * patience * lead * lead);
-  const perGold = Math.pow(80 / Math.max(20, def.cost ?? 80), 0.45);
-  return raw * ready * perGold;
+  // 离目标时代每差一级折一半左右：一级之内几乎不罚，差三级基本淘汰
+  const eraFit = 1 / (1 + 0.85 * Math.abs((def.era ?? 1) - targetEra));
+  const perGold = Math.pow(80 / Math.max(20, def.cost ?? 80), 0.3);
+  return raw * eraFit * perGold;
 }
+
+/** 每往后一签，目标时代往上爬多少级（8 个名额 ≈ 爬 3 代） */
+const DRAFT_ERA_CLIMB = 0.4;
 
 /* ===========================================================================
  * 七、文案
