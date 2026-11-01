@@ -723,7 +723,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'scorched-earth',
     name: '死亡枕藉',
-    summary: '单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。',
+    summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害——砸不到空中的东西。',
     hooks: {
       onUnitKilled: ({ state, victim }) => {
         const dirs: ReadonlyArray<readonly [number, number]> = [
@@ -732,15 +732,60 @@ export const EXPANSIONS: Expansion[] = [
           [0, 1],
           [0, -1],
         ];
+        const w = state.w;
+        const spanOf = (type: string): number => (state.unitTypes[type]?.footprint === 2 ? 2 : 1);
+
+        /*
+         * 谁是"四周相邻"，要按**这个单位实际占的那几格**算，不能按它的锚点算。
+         *
+         * 以前这里只从锚点往四个方向各查一格。1×1 的单位那样是对的，
+         * 2×2 的（兵营、指挥所）就全错了：它的锚点在左上角，往右、往下的那两格
+         * 是它自己的身体，真正贴着它右边和下边的敌人一个都吃不到——
+         * 实测一座军营倒下只波及 1 个人，而围在它周围的通常有五六个。
+         *
+         * 现在先把身体摊开，再取围着这一圈的格子（去掉自己占的），
+         * 于是"相邻"就是玩家眼睛看到的那个相邻。
+         */
+        const body = new Set<number>();
+        const span = spanOf(victim.type);
+        for (let dy = 0; dy < span; dy++) {
+          for (let dx = 0; dx < span; dx++) body.add((victim.y + dy) * w + (victim.x + dx));
+        }
+        const ring = new Set<number>();
+        for (const k of body) {
+          const x = k % w;
+          const y = (k - x) / w;
+          for (const [dx, dy] of dirs) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= state.h) continue;
+            const nk = ny * w + nx;
+            if (!body.has(nk)) ring.add(nk);
+          }
+        }
+
         // 按"倒下这个人"的血量算，不是固定值：越厚重的单位倒下砸得越狠
         const blast = Math.max(1, Math.round(maxHpOf(state, victim.type) * 0.2));
         let hit = 0;
-        for (const [dx, dy] of dirs) {
-          const near = state.units.find((u) => u.x === victim.x + dx && u.y === victim.y + dy);
-          if (near) {
-            near.hp -= blast;
-            hit += 1;
+        for (const near of state.units) {
+          if (near.id === victim.id) continue;
+          // 空中单位飞在上面：地面塌下去，砸不到它们。
+          // 判据用 layer === 'air'，和自爆、区域防空同一个口径。
+          if (state.unitTypes[near.type]?.layer === 'air') continue;
+          // 挨着的那一方也可能是 2×2：身体有一格压在环上就算挨着
+          const ns = spanOf(near.type);
+          let touches = false;
+          for (let dy = 0; dy < ns && !touches; dy++) {
+            for (let dx = 0; dx < ns; dx++) {
+              if (ring.has((near.y + dy) * w + (near.x + dx))) {
+                touches = true;
+                break;
+              }
+            }
           }
+          if (!touches) continue;
+          near.hp -= blast;
+          hit += 1;
         }
         if (hit > 0) {
           log(state, victim.owner, `焦土：阵亡时波及 ${hit} 个临近单位，各 ${blast} 点`);

@@ -12917,5 +12917,73 @@ test('钻井平台：是经济建筑，由建筑队在海面上修', () => {
   assert.equal(y3.material ?? 0, 0, '海上平台不产建材');
 });
 
+test('死亡枕藉：砸不到空中，2×2 按身体算，够不着的不会挨打', () => {
+  const s = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 16,
+      startEra: 5,
+      expansionIds: ['scorched-earth', 'city-works', 'air-corps'],
+    },
+    6161,
+  );
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  // 军营占 2×2：(6,6)-(7,7)。锚点在左上角——这正是老代码算错的地方
+  const victim = place(s, 'B', 'camp', 6, 6);
+  victim.hp = 1;
+  const left = place(s, 'A', 'militia', 5, 6);
+  const right = place(s, 'A', 'militia', 8, 6);
+  const down = place(s, 'A', 'militia', 6, 8);
+  const up = place(s, 'A', 'militia', 7, 5);
+  // 距离 2：谁都够不着它
+  const far = place(s, 'A', 'militia', 10, 6);
+  // 悬在建筑体内的一架飞机：它离得最近，但飞在空中，砸不到
+  const hover = place(s, 'A', 'af_balloon', 7, 6);
+  const archer = place(s, 'A', 'archer', 5, 7);
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: archer.id, targetId: victim.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  const blast = Math.max(1, Math.round(s.unitTypes['camp']!.maxHp * 0.2));
+  assert.equal(after(victim.id), 0, '1 血的军营应该倒下');
+
+  // 贴着 2×2 身体的四个方向都该吃到（老代码只认锚点右侧/下侧，那几个方向全漏）
+  assert.equal(after(left.id), 28 - blast, '左边贴着身体的要吃到');
+  assert.equal(after(right.id), 28 - blast, '右边贴着身体的要吃到');
+  assert.equal(after(down.id), 28 - blast, '下边贴着身体的要吃到');
+  assert.equal(after(up.id), 28 - blast, '上边贴着身体的要吃到');
+  // 阵亡波及不分敌我：站得近的自己人也吃
+  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - blast, '凑太近的自己人也吃');
+  // 够不着 / 打不到的
+  assert.equal(after(far.id), s.unitTypes['militia']!.maxHp, '隔着两格的完全不该挨打');
+  assert.equal(after(hover.id), s.unitTypes['af_balloon']!.maxHp, '空中单位砸不到');
+});
+
+test('死亡枕藉：1×1 的亡语仍然只是四邻', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra: 3, expansionIds: ['scorched-earth'] }, 6162);
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  const victim = place(s, 'B', 'militia', 5, 5);
+  victim.hp = 1;
+  const adj = place(s, 'A', 'militia', 6, 5);
+  const diag = place(s, 'A', 'militia', 6, 4);
+  const killer = place(s, 'A', 'archer', 5, 6);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: victim.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  const blast = Math.max(1, Math.round(s.unitTypes['militia']!.maxHp * 0.2));
+  assert.equal(after(adj.id), 28 - blast, '正对着的一格要吃到');
+  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - blast, '另一边正对着的也要吃到');
+  assert.equal(after(diag.id), s.unitTypes['militia']!.maxHp, '斜角不算相邻');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
