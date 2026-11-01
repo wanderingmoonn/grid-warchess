@@ -70,6 +70,22 @@ import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) =>
   [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
+/**
+ * 全部水面单位：本体 + 所有扩展贡献的（雷击舰在「工业绞肉机」、驱逐舰在「二战合成兵」，
+ * 都是别的包顺手带的海军，光看海战包会漏掉它们）。
+ *
+ * 舰种盘点类用例都读这一份：只统计海军两包的话，"每代最便宜的船"会算错。
+ */
+const allWater: UnitTypeDef[] = (() => {
+  const seen = new Map<string, UnitTypeDef>();
+  for (const u of Object.values(UNIT_TYPES)) if (u.domain === 'water') seen.set(u.id, u);
+  for (const e of EXPANSIONS) {
+    for (const u of e.units ?? []) {
+      if (u.domain === 'water' && !seen.has(u.id)) seen.set(u.id, u);
+    }
+  }
+  return [...seen.values()];
+})();
 import {
   DRAFT_BAN_BASE,
   DRAFT_PICK_BASE,
@@ -11563,6 +11579,95 @@ test('海军：铁甲舰回 E4、重巡补 E5，两代之间不再断层', () =>
   assert.ok(ic > 0.48 && ic < 0.56, `铁甲舰的性价比 ${ic.toFixed(2)} 跑出 E4 的带子（0.50~0.54）`);
   const hc = ratio(heavy as unknown as Record<string, number>);
   assert.ok(hc > 0.40 && hc < 0.50, `重巡的性价比 ${hc.toFixed(2)} 跑出 E5 的带子（0.38~0.52）`);
+});
+
+test('海军：补进来的十三条船各就各位（年代、价位、分工）', () => {
+  // id / 时代 / 造价 / 攻击。数值钉在这里是故意的：这一批船是按"每代缺什么"
+  // 补的，一旦有人随手改价，分工会立刻塌（比如鱼雷艇涨到 250 就没人拿它当消耗品了）。
+  const want: Array<[string, number, number, number]> = [
+    ['nv_galley', 2, 110, 18],
+    ['nv_treasure_ship', 2, 180, 14],
+    ['nv_turtle_ship', 3, 245, 34],
+    ['nv_sailing_frigate', 3, 175, 30],
+    ['nv_torpedo_boat', 4, 150, 38],
+    ['nv_minelayer', 4, 240, 8],
+    ['nv_light_cruiser', 5, 430, 58],
+    ['nv_fleet_sub', 5, 420, 78],
+    ['nv_landing_ship', 5, 210, 5],
+    ['nv_fleet_carrier', 5, 950, 22],
+    ['nv_ssk', 6, 520, 74],
+    ['nv_lcs', 6, 520, 56],
+    ['nv_usv', 6, 240, 26],
+  ];
+  for (const [id, era, cost, atk] of want) {
+    const u = nvDef(id);
+    assert.ok(u, `缺 ${id}`);
+    assert.equal(u.era, era, `${u.name} 的时代`);
+    assert.equal(u.cost, cost, `${u.name} 的造价`);
+    assert.equal(u.atk, atk, `${u.name} 的攻击`);
+    assert.equal(u.domain, 'water', `${u.name} 应该只能待在水里`);
+    assert.equal(u.short.length, 1, `${u.name} 的图标只能一个字`);
+  }
+
+  // ── 每一代都得有"下水价"：能打的船里最便宜那条不能超过这条线 ──
+  // 没有这一条，海战就变成"攒到三百金才配下海"，前二十回合水上什么都没有。
+  const ceiling: Record<number, number> = { 2: 130, 3: 190, 4: 170, 5: 400, 6: 280 };
+  for (const era of [2, 3, 4, 5, 6]) {
+    // "能打的"门槛按 12 点攻算：E2 那几条帆船本来就只有 14~19 攻，
+    // 拿 20 去筛会把整个中世滤空。纯运输船（攻 5~6）仍然排除在外。
+    const fighters = allWater.filter((u) => u.era === era && u.atk >= 12);
+    assert.ok(fighters.length > 0, `E${era} 一条能打的船都没有`);
+    const cheapest = Math.min(...fighters.map((u) => u.cost));
+    assert.ok(
+      cheapest <= ceiling[era]!,
+      `E${era} 最便宜能打的船是 ${cheapest} 金，超过 ${ceiling[era]} 就没法在开局下海了`,
+    );
+  }
+});
+
+test('海军：舰队航母是 2×2、三机位；同代终于有潜艇可给潜母带', () => {
+  const carrier = nvDef('nv_fleet_carrier');
+  assert.equal(carrier.footprint, 2, '舰队航母是大型单位，占 2×2');
+  assert.equal(carrier.carry.deck.max, 3, '三机位（轻母 2、核动力航母 4）');
+  assert.equal(carrier.carry.deck.launchRange, 2);
+  // 甲板大小要成阶梯：轻母 2 < 舰队航母 3 < 核动力航母 4
+  assert.ok(nvDef('nv_light_carrier').carry.deck.max < carrier.carry.deck.max);
+  assert.ok(nvDef('nv_carrier').carry.deck.max > carrier.carry.deck.max);
+
+  // 潜母只奶潜艇。E5 原本一条潜艇都没有，"带子舰的母舰"是个空转的光环。
+  const tenders = allWater.filter((u) => (u.abilities ?? []).includes('nv-sub-tender'));
+  assert.ok(tenders.length > 0, '潜母还要在');
+  for (const t of tenders) {
+    const sameEraSubs = allWater.filter(
+      (u) => u.era === t.era && (u.abilities ?? []).includes('nv-submerge'),
+    );
+    assert.ok(
+      sameEraSubs.length > 0,
+      `${t.name} 在 E${t.era}，可这一代一条潜艇都没有——光环没东西可照`,
+    );
+  }
+});
+
+test('海军：布雷舰的水雷只咬船，贴身的敌舰每回合掉 10 点并被减速', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const minelayer = place(s, 'A', 'nv_minelayer', 5, 5);
+  const foe = place(s, 'B', 'gunboat', 5, 6);
+  // 岸边站一个陆军：雷区不该炸到岸上的人
+  putTerrain(s, 6, 5, 'plain');
+  const ashore = place(s, 'B', 'militia', 6, 5);
+  const foeHp = foe.hp;
+  const landHp = ashore.hp;
+
+  s.current = 'B';
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id);
+  assert.equal(after(foe.id)!.hp, foeHp - 10, '贴身的敌舰该吃 10 点水雷');
+  assert.equal(after(foe.id)!.status?.slow, 1, '还要被减速一回合');
+  assert.equal(after(ashore.id)!.hp, landHp, '陆军踩不到水里的雷');
+  assert.equal(after(minelayer.id)!.hp, minelayer.hp, '自己的雷不炸自己');
 });
 
 test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {
