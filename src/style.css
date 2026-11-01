@@ -611,13 +611,19 @@ body {
  * 整层压在棋子上面（DOM 里排在 .units / .cities 之后，见 board.ts）：
  * 红罩盖过棋子，才看得出"站在这里的这个人挨过打"。
  *
- * 三层设计，各管一件事：
- *   1. 底色：**常亮**的重红（0.42）＋ 2px 亮红描边 ＋ 外发光 —— 不闪也一眼看见"这格被打过"；
- *   2. 脉冲层 `::after`：在底色上再叠一层红，透明度 0 → 0.75 呼吸，这就是"闪"；
- *   3. 角标 `<b>`：右上角写挨了几下，闪烁只负责吸引注意，数字才是判断依据。
+ * 烈度用三个**互不依赖**的通道表达，任何一个单独看都能分辨：
+ *   1. 底色深浅：d1 的 0.34 红 → d5 的 0.60 红（越深＝挨得越多）
+ *   2. 描边粗细：1px → 3px，d5 还加一圈亮白内边
+ *   3. 闪烁速度：0.9s → 0.36s
+ * 前两条是静态的——**即使动画被系统关掉，也照样一眼分得出轻重**。
  *
- * 节奏（一周期）：0.9 / 0.72 / 0.58 / 0.46 / 0.36 秒。
- * 卡在 3Hz 以内——再快就是频闪，看着难受，也可能诱发不适。
+ * 闪烁用 `step-end` 硬开关，不是渐隐渐显：
+ * 渐隐看起来像"颜色在呼吸"，硬开关才像"在闪"。每档都有一半时间是亮着的，
+ * 所以不会出现"整片战场忽明忽暗"的观感。
+ *
+ * ⚠️ 这里**故意不写 `prefers-reduced-motion`**：
+ * 这一层本身就是"刚刚被打"的信号，关掉动画等于把这个信息关掉一半。
+ * 它是玩家主动看到的一瞬间提示（出手一次就收），不是常驻背景动画。
  */
 .heat {
   position: absolute;
@@ -629,74 +635,62 @@ body {
 }
 
 .fx-heat {
-  position: relative;
   border-radius: 4px;
-  background: rgba(198, 24, 16, 0.42);
+  background: rgba(206, 26, 18, 0.46);
   box-shadow:
-    inset 0 0 0 2px rgba(255, 46, 28, 0.95),
-    0 0 12px 3px rgba(255, 40, 24, 0.5);
+    inset 0 0 0 2px rgba(255, 56, 36, 0.95),
+    0 0 10px 2px rgba(255, 40, 24, 0.5);
+  animation: fx-heat-blink 0.9s step-end infinite;
 }
 
-/* 脉冲层：只是再叠一层红，底色一直在，所以"闪"不会变成"消失" */
-.fx-heat::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: rgba(255, 52, 32, 0.75);
-  animation: fx-heat-pulse 0.9s ease-in-out infinite;
+/* 硬开关：0% 起亮一半时间，50% 切暗 */
+@keyframes fx-heat-blink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.14;
+  }
 }
 
-/* 次数角标：白字 + 深红底，压在最上面 */
-.fx-heat b {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  z-index: 2;
-  min-width: 12px;
-  padding: 0 2px;
-  border-radius: 3px;
-  background: rgba(120, 6, 4, 0.92);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 12px;
-  text-align: center;
-}
-
-.fx-heat.d1::after {
+/* 五个档位：底色、描边、光晕、节奏一起加重 */
+.fx-heat.d1 {
+  background: rgba(200, 30, 22, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(255, 84, 64, 0.85);
   animation-duration: 0.9s;
 }
-.fx-heat.d2::after {
+
+.fx-heat.d2 {
+  background: rgba(202, 28, 20, 0.4);
+  box-shadow: inset 0 0 0 2px rgba(255, 70, 50, 0.9);
   animation-duration: 0.72s;
 }
-.fx-heat.d3::after {
+
+.fx-heat.d3 {
+  background: rgba(206, 26, 18, 0.47);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 58, 38, 0.95),
+    0 0 8px 2px rgba(255, 40, 24, 0.45);
   animation-duration: 0.58s;
 }
-.fx-heat.d4::after {
+
+.fx-heat.d4 {
+  background: rgba(212, 22, 14, 0.54);
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 50, 30, 1),
+    0 0 11px 3px rgba(255, 36, 20, 0.55);
   animation-duration: 0.46s;
 }
-.fx-heat.d5::after {
+
+.fx-heat.d5 {
+  background: rgba(222, 18, 10, 0.62);
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 122, 92, 1),
+    inset 0 0 0 5px rgba(255, 46, 26, 0.9),
+    0 0 14px 4px rgba(255, 30, 16, 0.65);
   animation-duration: 0.36s;
 }
 
-@keyframes fx-heat-pulse {
-  0%,
-  100% {
-    opacity: 0.05;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-/* 关掉动效的人：底色照旧，脉冲层按"中等强度常亮"，至少还能一眼看出被打过 */
-@media (prefers-reduced-motion: reduce) {
-  .fx-heat::after {
-    animation: none;
-    opacity: 0.5;
-  }
-}
 
 
 

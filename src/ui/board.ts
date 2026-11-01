@@ -456,11 +456,11 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (n <= 0) continue;
         const x = i % s.w;
         const y = (i - x) / s.w;
-        // 格子里带一个次数角标：闪烁是"注意"，数字是"证据"。
-        // 光靠动效解释不了"到底挨了几下"，而这几下正是判断该不该补人的依据。
+        // 只画色块，不写数字：血条已经把"伤得多重"说清楚了，
+        // 这里要回答的是"哪儿在打"，多一个数字只是噪声。
         cells.push(
           `<i class="fx-heat d${heatStep(n)}" data-x="${x}" data-y="${y}" ` +
-            `style="grid-column:${x + 1};grid-row:${y + 1}"><b>${n}</b></i>`,
+            `style="grid-column:${x + 1};grid-row:${y + 1}"></i>`,
         );
       }
     }

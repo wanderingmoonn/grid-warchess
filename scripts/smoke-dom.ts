@@ -663,9 +663,9 @@ check('挨过打的格子挂烈度层：档位、数量、收起都对', () => {
   assert.ok(at(a), '挨了一下的那格要有红罩');
   assert.ok(at(a)!.classList.contains('d1'), '档位应该是 d1');
   assert.ok(at(b)!.classList.contains('d3'), '挨了三下的档位更高');
-  // 角标写的是次数：光看闪烁分不出"两下"和"三下"，数字才是依据
-  assert.equal(at(a)!.querySelector('b')?.textContent, '1', '角标该写挨了几下');
-  assert.equal(at(b)!.querySelector('b')?.textContent, '3', '角标跟着次数走');
+  // 不写数字：烈度靠"闪多快 + 描边多粗 + 底色多深"表达，血条已经说明伤得多重
+  assert.equal(at(a)!.querySelector('b'), null, '红罩上不该有数字');
+  assert.equal(at(b)!.textContent?.trim(), '', '红罩里不该有文字');
 
   // 这一层必须排在棋子之后：否则兵站上去就把红盖掉了
   const order = Array.from(host.children).map((n) => n.className);
