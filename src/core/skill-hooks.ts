@@ -34,3 +34,19 @@ export const SKILL_READY_CHECKS: Record<string, (s: GameState, u: Unit) => boole
 export function registerSkillReadyCheck(id: string, check: (s: GameState, u: Unit) => boolean): void {
   SKILL_READY_CHECKS[id] = check;
 }
+
+export interface SkillPreviewCtx {
+  state: GameState;
+  self: Unit;
+  /** 玩家瞄准的落点或方向格 */
+  target: { x: number; y: number };
+}
+
+/** 返回这个技能打向 target 时，会波及的所有格子索引 (y * w + x) */
+export type SkillPreviewer = (c: SkillPreviewCtx) => number[];
+
+export const SKILL_PREVIEWERS: Record<string, SkillPreviewer> = {};
+
+export function registerSkillPreview(id: string, previewer: SkillPreviewer): void {
+  SKILL_PREVIEWERS[id] = previewer;
+}

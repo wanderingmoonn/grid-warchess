@@ -10,7 +10,7 @@ import type {
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
-import { registerSkillEffect, registerSkillReadyCheck } from './skill-hooks.ts';
+import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
 
 // 境界名称
 const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
@@ -47,12 +47,44 @@ const SWORD_SWEEP_SKILL:SkillDef = {
   effect: 'sword-sweep',
   cooldown: 0,
   multiCast: true,
+  targeting: 'direction', // 声明它需要选方向
   notReadyReason: '攻击次数不足',
 };
 registerSkillReadyCheck('sword-sweep', (s, u) => {
   const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
   return left > 0;
 });
+/** 算出剑气打向 (targetX, targetY) 时，覆盖的所有格子坐标 */
+function getSwordSweepCells(
+  s: GameState, 
+  self: Unit, 
+  targetX: number, 
+  targetY: number
+): Array<{ x: number; y: number }> {
+  const reach = 3;
+  let dx = 0;
+  let dy = 0;
+
+  const distX = targetX - self.x;
+  const distY = targetY - self.y;
+  dx = Math.sign(distX);
+  dy = Math.sign(distY);
+
+  // 四方向吸附
+  if (Math.abs(distX) > Math.abs(distY)) dy = 0;
+  else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
+  if (dx === 0 && dy === 0) dx = 1;
+
+  const cells: Array<{ x: number; y: number }> = []; // 👈 这里也要是对象数组
+  for (let i = 1; i <= reach; i++) {
+    const tx = self.x + dx * i;
+    const ty = self.y + dy * i;
+    if (tx >= 0 && ty >= 0 && tx < s.w && ty < s.h) {
+      cells.push({ x: tx, y: ty }); // 👈 推入对象，而不是数字
+    }
+  }
+  return cells;
+}
 registerSkillEffect('sword-sweep', (c) => {
   // 1. 检查并扣除攻击次数（相当于这一发剑气占用了一次普攻）
   if (c.self.attacksLeft === undefined) {
@@ -71,49 +103,27 @@ registerSkillEffect('sword-sweep', (c) => {
   // 放完技能即视为这一回合移动过了，不能放完再跑，不然太强
   c.self.moved = true; 
 
-  // 决定挥剑方向（强制四方向吸附）
-  const reach = 3+c.api.splashRadiusOf(c.state, c.self);
-  let dx = 0;
-  let dy = 0;
+  // 2. 算路径（用我们新抽出来的函数）
+  // 如果没有 target（AI 自动释放），默认朝右
+  const tx = c.target?.x ?? c.self.x + 1;
+  const ty = c.target?.y ?? c.self.y;
+  const hitCells = getSwordSweepCells(c.state, c.self, tx, ty);
 
-  if (c.target) {
-    const distX = c.target.x - c.self.x;
-    const distY = c.target.y - c.self.y;
-    dx = Math.sign(distX);
-    dy = Math.sign(distY);
-    // 如果是斜向，强制吸附到偏差较大的轴（实现“只有上下左右”）
-    if (Math.abs(distX) > Math.abs(distY)) {
-      dy = 0;
-    } else if (Math.abs(distY) > Math.abs(distX)) {
-      dx = 0;
-    } else {
-      // 如果正好是 45 度角，默认向 X 轴挥
-      dy = 0;
-    }
-    if (dx === 0 && dy === 0) dx = 1; // 点自己脚下，默认朝右
-  } else {
-    // AI 自动索敌逻辑
-    dx = 1;
-  }
+  // 找受害者（单位）
+  const victims = c.state.units.filter(u => 
+    u.owner !== c.self.owner && 
+    u.hp > 0 && 
+    hitCells.some(cell => cell.x === u.x && cell.y === u.y)
+  );
 
-  // 收集受害者（包含单位和城市）
-  const victims: Unit[] = [];
+  // 找受害者（城市）
   const cityVictims: City[] = [];
-
-  for (let i = 1; i <= reach; i++) {
-    const tx = c.self.x + dx * i;
-    const ty = c.self.y + dy * i;
-
-    // 找单位
-    const target = c.state.units.find(u => u.owner !== c.self.owner && u.x === tx && u.y === ty);
-    if (target) victims.push(target);
-
-    // 找城市（覆盖判定）
+  for (const cell of hitCells) {
     const city = c.state.cities.find(ct => 
       ct.owner !== c.self.owner && 
       !ct.ruined && 
-      tx >= ct.x && tx < ct.x + ct.size && 
-      ty >= ct.y && ty < ct.y + ct.size
+      cell.x >= ct.x && cell.x < ct.x + ct.size && 
+      cell.y >= ct.y && cell.y < ct.y + ct.size
     );
     if (city && !cityVictims.includes(city)) {
       cityVictims.push(city);
@@ -177,6 +187,10 @@ registerSkillEffect('sword-sweep', (c) => {
   // 收尾
   addExp(c.self, c.state, expGain);
   c.result.log = `剑气纵横${logExtra}，修为 +${expGain}`;
+});
+registerSkillPreview('sword-sweep', (c) => {
+  const cells = getSwordSweepCells(c.state, c.self, c.target.x, c.target.y);
+  return cells.map(cell => cell.y * c.state.w + cell.x);
 });
 
 // 炼气士

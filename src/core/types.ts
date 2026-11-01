@@ -172,6 +172,12 @@ export interface SkillDef {
   multiCast?: boolean;
   /** 如果没就绪，界面上显示的提示文字（不写默认显示"就绪"） */
   notReadyReason?: string;
+  /**
+   * 技能的目标类型：
+   * - 不填 或 'none'：对自己或自动索敌释放
+   * - 'point' / 'direction'：需要玩家点地图选点或选方向
+   */
+  targeting?: 'none' | 'point' | 'direction'; 
 }
 
 export interface Tile {
