@@ -44,12 +44,18 @@ const SWORD_SWEEP_SKILL = {
   summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
   effect: 'sword-sweep',
   cooldown: 0,
-  range: 3, // 剑气延伸 3 格
+  range: 3, // 基础延伸 3 格
+  multiCast: true,
+  readyCheck: (s:GameState, u:Unit) => {
+    const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
+    return left > 0;
+  },
+  notReadyReason: '攻击次数不足',
 };
 registerSkillEffect('sword-sweep', (c) => {
   // 1. 检查并扣除攻击次数（相当于这一发剑气占用了一次普攻）
   if (c.self.attacksLeft === undefined) {
-    // 如果还没动过，先读取基础攻击次数（剑修 burst 设为 2）
+    // 如果还没动过，先读取基础攻击次数
     c.self.attacksLeft = c.api.attacksPerTurn(c.state, c.self);
   }
   if (c.self.attacksLeft <= 0) {
@@ -78,12 +84,12 @@ registerSkillEffect('sword-sweep', (c) => {
     } else if (Math.abs(distY) > Math.abs(distX)) {
       dx = 0;
     } else {
-      // 如果正好是 45 度角，默认向 X 轴挥（或者你可以改为不合法报错，看策划意图）
+      // 如果正好是 45 度角，默认向 X 轴挥
       dy = 0;
     }
     if (dx === 0 && dy === 0) dx = 1; // 点自己脚下，默认朝右
   } else {
-    // AI 自动索敌逻辑（略，保持你原来的即可）
+    // AI 自动索敌逻辑
     dx = 1;
   }
 
@@ -96,7 +102,7 @@ registerSkillEffect('sword-sweep', (c) => {
     if (target) victims.push(target);
   }
 
-  // 4. 伤害结算（临时提升基础攻击力来实现 1.2 倍剑气）
+  // 4. 伤害结算（1.2 倍伤害）
   let expGain = 1;
   let logExtra = '';
 
@@ -108,17 +114,14 @@ registerSkillEffect('sword-sweep', (c) => {
     const baseAtk = c.api.utype(c.state, c.self.type).atk + (c.self.atkBonus ?? 0);
     const skillBonus = Math.round(baseAtk * 0.2);
     c.self.atkBonus = (c.self.atkBonus ?? 0) + skillBonus;
-
     for (const v of victims) {
       // 此时 computeDamage 会自动把这额外的 20% 算进物理段
       const dmg = c.api.computeDamage(c.state, c.self, v);
       v.hp -= dmg;
       totalDmg += dmg;
     }
-
-    // 还原攻击力（很重要，否则普攻就永久变强了）
+    // 还原攻击力
     c.self.atkBonus = (c.self.atkBonus ?? 0) - skillBonus;
-
     logExtra = `，剑气斩中 ${victims.length} 人，造成 ${totalDmg} 伤害`;
   } else {
     logExtra = `，剑气落空（练剑）`;

@@ -170,6 +170,14 @@ export interface SkillDef {
   hpUp?: number;
   /** 如果为 true，允许一回合放多次，由技能自己决定终止逻辑 */
   multiCast?: boolean;
+  /** 
+   * 自定义就绪检查（纯函数）。
+   * 如果冷却好了，核心会问一句“你还有其他限制吗？”
+   * 返回 false 则 UI 会置灰，AI 也不会选它。
+   */
+  readyCheck?: (s: GameState, u: Unit) => boolean;
+  /** 如果没就绪，界面上显示的提示文字（不写默认显示"就绪"） */
+  notReadyReason?: string;
 }
 
 export interface Tile {

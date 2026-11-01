@@ -4063,32 +4063,48 @@ export function heroSkillsOf(
   def: SkillDef;
   cd: number;
   ready: boolean;
-  /** 还剩几发（只有充能型技能有意义，其它是 0） */
   charge: number;
-  /** 充能上限（0 表示这个技能吃冷却，不吃充能） */
   chargeMax: number;
-  /** 还要几个自己的回合回下一发（满发时是 0） */
   toNext: number;
+  notReadyReason?: string; // 返回给 UI 的原因
 }> {
   const def = utype(s, u.type);
   return (def.skills ?? []).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
     const chargeMax = k.charges ?? 0;
+    
+    let ready = false;
+    let charge = 0;
+    let toNext = 0;
+
+    // 计算基础就绪状态
     if (chargeMax <= 0) {
-      return { def: k, cd, ready: cd <= 0, charge: 0, chargeMax: 0, toNext: 0 };
+      // 冷却
+      ready = cd <= 0;
+    } else {
+      // 充能技能
+      const box = u.skillCharge?.[k.id];
+      charge = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
+      const t = Math.max(0, box?.t ?? 0);
+      const regen = Math.max(1, k.regen ?? 2);
+      ready = charge > 0;
+      toNext = charge >= chargeMax ? 0 : Math.max(1, regen - t);
     }
-    // 没这个字段＝从没放过也没攒过 → 满发
-    const box = u.skillCharge?.[k.id];
-    const n = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
-    const t = Math.max(0, box?.t ?? 0);
-    const regen = Math.max(1, k.regen ?? 2);
+
+    // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
+    // 如果基础条件是“未就绪”（比如还在冷却），就不问了。
+    if (ready && k.readyCheck) {
+      ready = k.readyCheck(s, u);
+    }
+
     return {
       def: k,
       cd,
-      ready: n > 0,
-      charge: n,
+      ready,
+      charge,
       chargeMax,
-      toNext: n >= chargeMax ? 0 : Math.max(1, regen - t),
+      toNext,
+      notReadyReason: k.notReadyReason,
     };
   });
 }
@@ -4459,8 +4475,6 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
   if (c.result.log) pushLog(s, u.owner, c.result.log);
 
-  u.skillTurn = s.turn;
-
   if (chargeMax > 0) {
     // 充能型：扣一发，不动冷却。t 保留——"用完最后一发之后还要攒两回合"
     // 这件事必须从放的那一回合就开始算，否则连开两发能白赚两回合。
@@ -4468,9 +4482,13 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
     pushLog(s, u.owner, `${skill.name} 还剩 ${charge - 1}/${chargeMax} 发`);
   } else {
     // 进冷却
-    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 1 };
+    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 0 };
   }
+
+  u.skillTurn = s.turn;
+
   sweepDead(s);
+
   return { ok: true, state: s };
 }
 
