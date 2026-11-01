@@ -18,6 +18,9 @@
 
 import { hasAbility } from './abilities.ts';
 import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
+import { hasHold, holdOf, holdRoom } from './carry.ts';
+import { isProducer } from './produce.ts';
+import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
 import {
   armySize,
@@ -344,7 +347,7 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const earners = my.filter((u) => def(u).category === 'economy').length;
   const foeEco = foe.filter((u) => {
     const c = def(u).category;
-    return c === 'economy' || c === 'builder' || economicYield(def(u))>0 || def(u).barracks;
+    return c === 'economy' || c === 'builder' || economicYield(def(u))>0 || isProducer(def(u));
   }).length;
 
   const myIncome = Math.max(0, incomeResOf(s, me).gold ?? 0);
@@ -879,7 +882,7 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
     const danger = cityThreatUrgency(s,target,attacker.owner);
     score += danger * (25 + 75 * Math.min(1,preview.toDefender / Math.max(1,target.hp)));
     score += Math.min(target.hp,preview.toDefender)/targetDef.maxHp * unitValue(s,target)*0.12;
-    if (economicYield(targetDef)>0 || targetDef.barracks) score += 22*mood.drive.harass;
+    if (economicYield(targetDef)>0 || isProducer(targetDef)) score += 22*mood.drive.harass;
   }
 
   // 残血不硬拼
@@ -1439,6 +1442,22 @@ export function cityThreatUrgency(s: GameState, enemy: Unit, owner: PlayerId): n
   return urgency;
 }
 
+/**
+ * 这条船此刻封住了几座敌城（上限 3）。
+ *
+ * 规则在海军扩展里：船贴着敌城外港，那座城每回合少收 8 金，最多三座。
+ * 以前 AI 对这条一无所知——船只会去追敌人的船，海岸线空着也不去堵，
+ * 实测 20×20 群岛 8 局：1354 个"城-回合"里一次封锁都没有。
+ */
+function blockadeCount(s: GameState, at: { x: number; y: number }, owner: PlayerId): number {
+  let n = 0;
+  for (const c of s.cities) {
+    if (c.owner === owner || c.ruined) continue;
+    if (cityGap(c, at) <= 1) n += 1;
+  }
+  return Math.min(3, n);
+}
+
 function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: Fields, traits: AiTraits): number {
   const def = utype(s, unit.type);
   const moved = { ...unit, x, y, moved: true };
@@ -1492,7 +1511,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   if (w.harass > 0 && def.category === 'combat') {
     const prey = unitsOf(s,other(unit.owner)).filter(e => {
       const d = utype(s,e.type);
-      return economicYield(d)>0 || d.category==='builder' || d.barracks;
+      return economicYield(d)>0 || d.category==='builder' || isProducer(d);
     }).sort((a,b) => distance(unit,a)-distance(unit,b))[0];
     if (prey && distance(unit,prey)<=12) score += (distance(unit,prey)-distance(moved,prey))*4*w.harass;
   }
@@ -1507,6 +1526,15 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       score += (distToCity(unit,city)-distToCity(moved,city))*4;
       if (distToCity(moved,city)===0 && distToCity(unit,city)>0) score += 16;
     }
+  }
+  // 海军：把船开到敌城外港去封锁（每座城每回合少收 8 金，三座封顶）。
+  //
+  // 按"多封住一座"给分，所以已经在封着的船不会为了追一条敌船而解封；
+  // 反过来也成立：追敌船确实更值（能打死东西），但白放着一座城的收入不要
+  // 是纯粹的漏。权重取 16：约等于"一座城的日军费"，
+  // 但低于"能打死一个单位"（那一档在 25 以上）。
+  if (def.domain === 'water' && def.category === 'combat') {
+    score += (blockadeCount(s, moved, unit.owner) - blockadeCount(s, unit, unit.owner)) * 16;
   }
   return score;
 }
@@ -2086,11 +2114,11 @@ function rawBuildScore(
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
   // 位置讲究"不近不远"——贴着敌人下回合就被推平，缩在后方等于没造。
-  if (def.barracks) {
+  if (isProducer(def)) {
     const cities = citiesOf(s, unit.owner);
     // 军营的时代取最近城市，没有城市就产不出兵，那造它也没意义
     if (cities.length === 0) return -999;
-    const mine = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).barracks).length;
+    const mine = unitsOf(s, unit.owner).filter((u) => isProducer(utype(s, u.type))).length;
     // 上限从"最多三座"放宽到"每城一座、最多四座"。
     // 磨局统计里最刺眼的一条是"顶满 24 个单位、金库还压着几千金"——
     // 钱花不出去就等于没有压力，而军营是唯一能把钱直接变成"前线产兵点"的东西。
@@ -2171,10 +2199,10 @@ function rawBuildScore(
   // 以前这类单位落到最后的 return 10，等于"永远排最后"：五个时代的城墙
   // 招募数全是 0，加了跟没加一样。现在的规则是"挨打才砌墙"，而且总量有上限，
   // 免得两边对着垒墙、把对局拖回那个谁也推不动的拉锯。
-  if (!def.autoAttack && !def.barracks && !def.incomeByTerrain && !def.bridges) {
+  if (!def.autoAttack && !isProducer(def) && !def.incomeByTerrain && !def.bridges) {
     const mine = unitsOf(s, unit.owner).filter((u) => {
       const ud = utype(s, u.type);
-      return ud.category === 'building' && !ud.autoAttack && !ud.barracks && !ud.incomeByTerrain;
+      return ud.category === 'building' && !ud.autoAttack && !isProducer(ud) && !ud.incomeByTerrain;
     }).length;
     if (mine >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
     if (risky) return -999;
@@ -2219,7 +2247,7 @@ function scoreBuild(
   if (all.needBridge && canBridge && !s.unitTypes[buildId]?.bridges) {
     // 过河阶段压别的建造，但不能一刀切：军营是"过了河立刻用得上"的东西，
     // 压满 45 分等于整条河岸一个产兵点都没有，兵只能从老家一趟趟往前线跑。
-    return raw - (s.unitTypes[buildId]?.barracks ? 20 : 45);
+    return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
   return raw;
 }
@@ -2288,7 +2316,7 @@ function unitCandidates(
 
   // ── 海军：装卸 ──
   // 只对运输船生成；别的船走上面的开火/走位就够了
-  if (def.domain === 'water' && def.transport) {
+  if (def.domain === 'water' && hasHold(def)) {
     out.push(...navalTransferCandidates(s, unit, all));
   }
 
@@ -2336,7 +2364,6 @@ function navalTransferCandidates(s: GameState, unit: Unit, all: Fields): Candida
   const def = utype(s, unit.type);
   if (unit.acted) return out;
   const me = s.current;
-  const cap = def.capacity ?? 0;
   const cargo = unit.cargo ?? [];
 
   // ① 下船：旁边有能上岸的格，而且那一格已经在对面那侧
@@ -2368,7 +2395,7 @@ function navalTransferCandidates(s: GameState, unit: Unit, all: Fields): Candida
   // 总会留几串浅滩把两岸连起来（50 局里 50 局都能走过去），于是条件永远不成立，
   // 船一次都没运过人。改成比**两种到场**：船走水路几步、那个兵走陆路几步，
   // 水路明显更快才装船——这才是"运输"的意义，也对得上没有浅滩的地图。
-  if (cargo.length < cap) {
+  if (holdRoom(def, unit) > 0) {
     // 两家到场都只看城市、不看敌人：混进"到最近敌兵的距离"会把两个数算成不同的东西
     const seaAdv = advanceDistance(s, me, unit.x, unit.y, all.water, all.focusCityId, true);
     for (const u of unitsOf(s, me)) {
@@ -2386,7 +2413,7 @@ function navalTransferCandidates(s: GameState, unit: Unit, all: Fields): Candida
       out.push({
         action: { type: 'LOAD', unitId: unit.id, cargoId: u.id },
         // 比"往岸边挪一格"（通常十几分）高一档：装船是这一段路里唯一有意义的动作
-        score: 56 + Math.min(10, cap * 2),
+        score: 56 + Math.min(10, (holdOf(def)?.max ?? 0) * 2),
       });
     }
   }
@@ -2881,7 +2908,7 @@ function recruitCandidate(
     if (d.category === 'building') return false;
     // 运输船目前只给玩家用：AI 还没有"装船—渡河—上岸"这套计划能力，
     // 让它买一条自己不会用的船，等于白烧 60 金。
-    if (d.transport) return false;
+    if (hasHold(d)) return false;
     // 召唤物只认召唤者：AI 花 45 金买一个骷髅，等于给死灵法师的赠品单独付钱。
     if (d.summonedOnly) return false;
     // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
@@ -2941,7 +2968,7 @@ function recruitCandidate(
 
   const wet = waterShare(s);
   /** 现在手上有几条运输船：0 条时最该造，够用了就不再叠 */
-  const myTransports = unitsOf(s, me).filter((u) => utype(s, u.type).transport).length;
+  const myTransports = unitsOf(s, me).filter((u) => hasHold(utype(s, u.type))).length;
   // 编队模板要的"这支部队现在长什么样"。每次 candidate 都重算一遍，
   // 所以同一回合里连买三个近战后，第四次会看见"近战已经够了"。
   const rosterBonus = rosterBonuses(rosterOf(s, me));
@@ -3014,7 +3041,7 @@ function recruitCandidate(
         if (wet < WATER_GOOD_SHARE) score -= 10 * (1 - seaDemand);
         if (seaDemand >= 0.99) score += 10;
         // 运输船按 atk 算效率永远是 0（它不开炮），只能单独按"有没有船"给分
-        if (d.transport) {
+        if (hasHold(d)) {
           score += (myTransports === 0 ? 40 : myTransports < 3 ? 22 : 0) * seaDemand;
           // 没有船的时候先把船凑齐，再谈护航
           if (myTransports >= 3) score -= 6;
@@ -3255,7 +3282,7 @@ function ghostSpot(s: GameState): { x: number; y: number } {
     for (const t of cityTiles(c)) blocked.add(`${t.x},${t.y}`);
   }
   for (const u of s.units) {
-    if (!utype(s, u.type).barracks) continue;
+    if (!isProducer(utype(s, u.type))) continue;
     for (const [dx, dy] of DIRS) blocked.add(`${u.x + dx},${u.y + dy}`);
   }
   for (let y = 0; y < s.h; y++) {
@@ -3562,7 +3589,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     const own = citiesOf(view, me);
     if (own.length > 0) {
       for (const u of unitsOf(view, me)) {
-        if (!utype(view, u.type).barracks) continue;
+        if (!isProducer(utype(view, u.type))) continue;
         if (orderSite && u.id !== orderSite) continue;
         const era = u.era ?? supplyEraAt(view, me, u);
         const c = recruitCandidate(

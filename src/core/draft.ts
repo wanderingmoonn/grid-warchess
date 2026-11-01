@@ -28,6 +28,7 @@
  * 对方进房后看到的是已经定下来的名单（界面会写明这一点）。
  */
 
+import { isProducer } from './produce.ts';
 import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
@@ -181,7 +182,7 @@ export function draftBudget(state: GameState): DraftBudget {
 export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
   if (def.category === 'economy' || def.category === 'builder') return true;
   // 军营＝生产性建筑；桥是地形设施，选卡不该决定"这条河过不过得去"
-  return def.category === 'building' && (def.barracks === true || def.bridges === true);
+  return def.category === 'building' && (isProducer(def) === true || def.bridges === true);
 }
 
 /**

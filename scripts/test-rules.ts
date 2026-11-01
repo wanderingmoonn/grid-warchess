@@ -61,7 +61,13 @@ import {
   registerAirwingOps,
   stowPlane,
 } from '../src/core/naval-carrier.ts';
+import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
+import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop } from '../src/core/produce.ts';
+import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+/** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
+const nvDef = (id: string) =>
+  [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
 import {
   DRAFT_BAN_BASE,
   DRAFT_PICK_BASE,
@@ -274,7 +280,7 @@ function clearDecor(s: GameState): void {
  * 把城市钉回四角（A 在南、B 在北）。
  *
  * 城市位置现在是浮动的（见 mapgen.planCities），而规则测试里有一批写死的
- * 坐标——劳工站 (5,5)、河挖在 x=8、桥架在 (8,7)。新城飘到这些格子上，
+ * 坐标——奴隶站 (5,5)、河挖在 x=8、桥架在 (8,7)。新城飘到这些格子上，
  * 测试就会因为"那里是敌方城市"而不是"规则不允许"而失败。
  *
  * 规则测试不该受地图随机影响，所以这里统一把城挪回老的四角布局。
@@ -1584,7 +1590,7 @@ test('建筑必须由建造单位修建，普通兵不行', () => {
   );
 
   const r = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
-  assert.ok(r.ok, '劳工应该能建箭塔');
+  assert.ok(r.ok, '奴隶应该能建箭塔');
   const tower = r.state.units.find((u) => u.type === 'tower');
   assert.ok(tower, '塔应该出现在目标格');
   assert.equal(tower.x, 6);
@@ -1594,7 +1600,7 @@ test('建筑必须由建造单位修建，普通兵不行', () => {
 test('建造者不会建不属于它的建筑', () => {
   const s = fresh();
   const builder = addLaborer(s);
-  // 劳工只会建箭塔和磨坊，不会建石堡
+  // 奴隶只会建箭塔和磨坊，不会建石堡
   assert.equal(
     applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'keep', x: 6, y: 5 }).ok,
     false,
@@ -3421,12 +3427,12 @@ test('桥分三档，越高级越抗拆', () => {
     assert.ok(tiers[i]!.era > tiers[i - 1]!.era, '高一级的桥要更晚的时代才解锁');
   }
 
-  // 谁能盖哪一档：工程师起能盖石桥，建筑队起能盖钢桥
+  // 谁能盖哪一档：劳工起能盖石桥，建筑队起能盖钢桥
   const buildsOf = (id: string) => UNIT_TYPES[id as keyof typeof UNIT_TYPES].builds ?? [];
   assert.ok(buildsOf('laborer').includes('bridge'));
-  assert.ok(!buildsOf('laborer').includes('bridge2'), '劳工盖不了石桥');
+  assert.ok(!buildsOf('laborer').includes('bridge2'), '奴隶盖不了石桥');
   assert.ok(buildsOf('engineer').includes('bridge2'));
-  assert.ok(!buildsOf('engineer').includes('bridge3'), '工程师还盖不了钢桥');
+  assert.ok(!buildsOf('engineer').includes('bridge3'), '劳工还盖不了钢桥');
   assert.ok(buildsOf('crew').includes('bridge3'));
 
   // 钢桥要真的挡得住磨：民兵（13 攻）一回合只能啃掉 7 点，砸塌要 18 下
@@ -3461,6 +3467,80 @@ test('老兵：击杀累积攻击加成', () => {
   const r = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: weak.id });
   assert.ok(r.ok);
   assert.equal(r.state.units.find((n) => n.id === a.id)?.kills, 3);
+});
+
+test('老兵不死：己方城市地块上回合开始回 8%，有上限、不叠加、废墟与野外不算', () => {
+  const s = fresh({ expansionIds: ['veterans'] });
+  const cityA = citiesOf(s, 'A')[0]!;
+  const spot = cityTiles(cityA)[0]!;
+  const cx = spot.x;
+  const cy = spot.y;
+  const max = s.unitTypes['militia']!.maxHp;
+  const heal = Math.max(1, Math.round(max * 0.08));
+
+  // ① 站在自家城格、半血 → 回合开始回 8%
+  const holder = place(s, 'A', 'militia', cx, cy);
+  holder.hp = Math.floor(max * 0.5);
+  const hp0 = holder.hp;
+  let r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  const healed = r.state.units.find((u) => u.id === holder.id)!;
+  assert.equal(healed.hp, hp0 + heal, `应该回 ${heal} 点（8% 最大生命）`);
+  assert.ok(r.state.log.some((l) => l.text.includes('老兵不死')), '战报里要有一句休整');
+
+  // ② 不叠加：再走一轮还是只回一次（8%，不是 16%）
+  const hp1 = healed.hp;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, hp1 + heal, '每回合只结一次');
+
+  // ③ 有上限：满血不会溢出去
+  const full = r.state.units.find((u) => u.id === holder.id)!;
+  full.hp = max;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, max, '回血不超过上限');
+
+  // ④ 野外不回
+  const outIdx = s.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  const ox = outIdx % s.w;
+  const oy = (outIdx - ox) / s.w;
+  const stray = place(r.state, 'A', 'militia', ox, oy);
+  stray.hp = 10;
+  const strayId = stray.id;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === strayId)!.hp, 10, '野外不回血');
+
+  // ⑤ 废墟不算"城下"：站在原地被烧平的自家城里不回
+  const ruined = r.state.cities.find((c) => c.id === cityA.id)!;
+  ruined.ruined = true;
+  r.state.units.find((u) => u.id === holder.id)!.hp = 5;
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  r = applyAction(r.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+  assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, 5, '废墟不是补给点');
+});
+
+test('经济平衡（2026-11-01）：农民 45 / 工厂城 30 / 兵工厂城 40 / 农业公司 4 代', () => {
+  // 这一批是拿 540 局矩阵（3 时代 × 3 边长 × 60）校准出来的，
+  // 数值本身值得有一条用例钉住——否则某次重构把 cost 写回 55 没人会发现。
+  assert.equal(UNIT_TYPES.farmer.cost, 45, '农民造价 55 → 45');
+  assert.equal(UNIT_TYPES.farmer.incomeByTerrain?.plain, 7, '只动造价，产出没动');
+  assert.equal(UNIT_TYPES.factory.incomeByTerrain?.city, 30, '工厂城市产出 20 → 30');
+  assert.equal(UNIT_TYPES.factory.incomeByTerrain?.plain, 10, '工厂城外产出不变');
+  assert.equal(UNIT_TYPES.arsenal.incomeByTerrain?.city, 40, '兵工厂城市产出 30 → 40');
+  assert.equal(UNIT_TYPES.agribusiness.era, 4, '农业公司 5 代 → 4 代');
+  assert.equal(UNIT_TYPES.agribusiness.cost, 260, '农业公司造价这一轮没动');
 });
 
 test('堑壕战：森林和丘陵额外 +2 护甲', () => {
@@ -5413,7 +5493,7 @@ test('渡船有载员上限，而且只装陆军', () => {
   };
 
   const ferry = place(s, 'A', 'ferry', 8, 6);
-  const cap = UNIT_TYPES.ferry?.capacity ?? 0;
+  const cap = holdOf(UNIT_TYPES.ferry)?.max ?? 0;
   assert.ok(cap >= 1);
 
   // 两个相邻的岸格：(7,6) 和 (9,6)
@@ -5449,6 +5529,130 @@ test('渡船有载员上限，而且只装陆军', () => {
   const foe = place(ready, 'B', 'militia', 9, 7);
   const enemy = applyAction(ready, { type: 'LOAD', unitId: ferry.id, cargoId: foe.id });
   assert.equal(enemy.ok, false, '不能载别人的部队');
+});
+
+test('载具特性：装载写在兵种数据上，hold/deck 两个槽位各管各的', () => {
+  const ferry = UNIT_TYPES.ferry!;
+  // 渡船只有货舱
+  assert.equal(holdOf(ferry)?.max, 2, '渡船两个舱位');
+  assert.equal(deckCarryOf(ferry), null, '渡船没有甲板');
+
+  // 准入来自 DEFAULT_HOLD_ALLOW，不再硬写在 doLoad 里
+  assert.equal(canHold(ferry, UNIT_TYPES.militia!).ok, true, '陆军能上船');
+  assert.equal(canHold(ferry, UNIT_TYPES.boat!).ok, false, '船上装不了船');
+  assert.equal(canHold(ferry, UNIT_TYPES.tower!).ok, false, '建筑搬不上船');
+
+  // 具体兵种可以自己收紧：这条船只接地面层
+  const picky: UnitTypeDef = {
+    ...ferry,
+    id: 'picky-boat',
+    carry: { hold: { max: 1, allow: { layers: ['ground'] } } },
+  };
+  assert.equal(canHold(picky, UNIT_TYPES.militia!).ok, true, '地面单位照常上船');
+  const flyer: UnitTypeDef = { ...UNIT_TYPES.militia!, id: 'fake-flyer', layer: 'air' };
+  assert.deepEqual(canHold(picky, flyer).ok, false, 'allow.layers 挡住了空中单位');
+
+  // 白名单模式：只认列出来的兵种
+  const vip: UnitTypeDef = {
+    ...ferry,
+    id: 'vip-boat',
+    carry: { hold: { max: 1, allow: { types: ['militia'] } } },
+  };
+  assert.equal(canHold(vip, UNIT_TYPES.militia!).ok, true, '名单里的能上');
+  assert.equal(canHold(vip, UNIT_TYPES.archer!).ok, false, '名单外的被拒');
+});
+
+test('产兵能力：白名单、生产间隔、造价倍率都写在兵种数据上', () => {
+  // 默认：军营是产兵点，且全走默认值（不设白名单、当回合成型、原价）
+  assert.deepEqual(produceOf(UNIT_TYPES.camp), {}, '军营 = 产兵点 + 全默认');
+  assert.equal(produceEveryTurns(UNIT_TYPES.camp), 1);
+  assert.equal(produceCostScale(UNIT_TYPES.camp), 1);
+  assert.equal(producePop(UNIT_TYPES.camp), 0, '建筑默认不占编制');
+
+  // 前进基地是整条营线上唯一做了产能差异的一档
+  assert.equal(produceCostScale(UNIT_TYPES.camp5), 0.9, '前进基地产兵九折');
+
+  // 老写法照样认：barracks: true 等价于 produce: {}
+  const legacy = { ...UNIT_TYPES.tower!, barracks: true } as UnitTypeDef;
+  assert.equal(isProducer(legacy), true, '老字段被翻译成产兵能力');
+  assert.equal(isProducer(UNIT_TYPES.tower), false, '箭塔不是产兵点');
+  assert.deepEqual(canProduce(UNIT_TYPES.camp, UNIT_TYPES.militia!), { ok: true }, '没白名单就不设限');
+});
+
+test('产兵能力：白名单与造价按数据生效，不用改规则', () => {
+  // ① 白名单：这座营只认民兵
+  const a = fresh();
+  a.current = 'A';
+  a.players.A.gold = 5000;
+  a.units = a.units.filter((u) => u.y < 6);
+  const camp = place(a, 'A', 'camp', 8, 8);
+  a.unitTypes.camp = { ...a.unitTypes.camp!, produce: { units: ['militia'] } };
+
+  const out = applyAction(a, { type: 'RECRUIT', unitId: camp.id, unitType: 'archer' });
+  assert.equal(out.ok, false, '白名单外的兵造不出来');
+  const inside = applyAction(a, { type: 'RECRUIT', unitId: camp.id, unitType: 'militia' });
+  assert.ok(inside.ok, inside.ok ? '' : `白名单内的兵应该能造：${inside.reason}`);
+
+  // ② 造价倍率：同一批兵，在前线基地里产要便宜一成
+  const city = fresh();
+  city.current = 'A';
+  city.players.A.gold = 5000;
+  const ownCity = city.cities.find((c) => c.owner === 'A')!;
+  const g0 = city.players.A.gold;
+  const fromCity = applyAction(city, { type: 'RECRUIT', cityId: ownCity.id, unitType: 'militia' });
+  assert.ok(fromCity.ok, fromCity.ok ? '' : fromCity.reason);
+  const cityCost = g0 - fromCity.state.players.A.gold;
+
+  const b = fresh();
+  b.current = 'A';
+  b.players.A.gold = 5000;
+  b.units = b.units.filter((u) => u.y < 6);
+  const base = place(b, 'A', 'camp5', 8, 8);
+  const g1 = b.players.A.gold;
+  const fromBase = applyAction(b, { type: 'RECRUIT', unitId: base.id, unitType: 'militia' });
+  assert.ok(fromBase.ok, fromBase.ok ? '' : fromBase.reason);
+  const baseCost = g1 - fromBase.state.players.A.gold;
+  assert.equal(baseCost, Math.round(cityCost * 0.9), '前进基地按 90% 收钱');
+});
+
+test('产兵能力：生产间隔靠"上次产出回合"算冷却', () => {
+  const s = fresh();
+  const camp = place(s, 'A', 'camp4', 8, 8);
+  s.unitTypes.camp4 = { ...s.unitTypes.camp4!, produce: { everyTurns: 3 } };
+  const def = s.unitTypes.camp4!;
+
+  assert.equal(produceCooldownLeft(s, camp, def), 0, '没产过就没有冷却');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn };
+  assert.equal(produceCooldownLeft(s, camp, def), 3, '刚产完，等满三回合');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn - 2 };
+  assert.equal(produceCooldownLeft(s, camp, def), 1, '过了两回合还差一回合');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn - 3 };
+  assert.equal(produceCooldownLeft(s, camp, def), 0, '满三回合就能再造');
+});
+
+test('载具特性：老存档的 transport + capacity 仍然读得出来', () => {
+  const ferry = UNIT_TYPES.ferry!;
+  // 2026-11 之前的写法：没有 carry，只有 transport + capacity
+  const legacy = { ...ferry, carry: undefined, transport: true, capacity: 3 } as UnitTypeDef;
+  assert.equal(holdOf(legacy)?.max, 3, '旧字段被翻译成三个舱位');
+  assert.equal(carryOf(legacy)?.hold?.allow, undefined, '旧字段没有准入限制，走默认值');
+  // 新写法优先：两个都写时以 carry 为准
+  assert.equal(carryOf(ferry)?.hold?.max, 2, '有 carry 就不回头看 capacity');
+  // 什么都没有 = 不是载具
+  assert.equal(carryOf(UNIT_TYPES.militia!), null);
+});
+
+test('载具特性：航母甲板也是兵种数据，不再另存一张表', () => {
+  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const byId = (id: string) => ships.find((u) => u.id === id)!;
+
+  assert.deepEqual(carryOf(byId('nv_carrier'))?.deck, { max: 4, launchRange: 2 }, '舰队航母 4 机位');
+  assert.equal(holdOf(byId('nv_carrier')), null, '航母只有甲板、没有货舱');
+  // 两栖舰两种装法并存：舱里装陆战队，甲板上停直升机
+  assert.equal(holdOf(byId('nv_amphib'))?.max, 4, '两栖舰四个舱位');
+  assert.equal(deckCarryOf(byId('nv_amphib'))?.max, 2, '两栖舰还有两个机位');
+  // 没写 carry.deck 的船不能被当成航母
+  assert.equal(deckSpecOf(byId('nv_cruiser')), null, '巡洋舰没有甲板');
 });
 
 test('船被打沉，舱里的人一起没', () => {
@@ -5499,7 +5703,7 @@ test('高级军营按时代解锁，属性逐级变强', () => {
     const def = UNIT_TYPES[id];
     assert.ok(def, `缺少 ${id}`);
     assert.equal(def.category, 'building');
-    assert.equal(def.barracks, true, `${id} 应该是军营`);
+    assert.equal(isProducer(def), true, `${id} 应该是军营`);
     assert.equal(def.requiresWater, true, `${id} 应该要临水`);
     assert.ok(def.maxHp > prevHp, `${id} 的耐久应该比上一档高`);
     assert.ok(def.cost > prevCost, `${id} 的造价应该比上一档高`);
@@ -7070,7 +7274,7 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
     for (let i = 0; i < AI_MAX_STEPS; i++) {
       const a = aiNextAction(st,budget,rejected);
       if (!a) break;
-      if (a.type === 'BUILD' && st.unitTypes[a.unitType]?.barracks) built.push(a.unitType);
+      if (a.type === 'BUILD' && isProducer(st.unitTypes[a.unitType])) built.push(a.unitType);
       const r = applyAction(st, a);
       if (!r.ok) { rejected.add(JSON.stringify(a)); continue; }
       rejected.clear();
@@ -7789,7 +7993,7 @@ test('只开「现代」也能打完一整局：九个基本的兵一个不缺',
   assert.equal(byCategory('building').length, 3, '建筑：混凝土碉堡、产业园、联合作战中心');
 
   // 军营要在：没有它，第六时代的兵只能靠开局白送（而 era 6 不会被白送）
-  const camp = units.find((u) => u.barracks === true);
+  const camp = units.find((u) => isProducer(u));
   assert.ok(camp, '底座得带一座军营，否则第六代兵根本造不出来');
   assert.equal(camp.id, 'camp6', '军营链条的第六档');
 
@@ -8876,13 +9080,13 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
   assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
 });
 
-test('建材建筑按代分工兵：工程师只有砖窑，建筑队三样全会', () => {
+test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const builds = (id: string) => s.unitTypes[id]?.builds ?? [];
 
-  assert.ok(builds('engineer').includes('brickworks'), '工程师起手就是砖窑');
+  assert.ok(builds('engineer').includes('brickworks'), '劳工起手就是砖窑');
   assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是工业时代的东西');
-  assert.ok(builds('foreman').includes('cementworks'), '厂长会盖水泥厂');
+  assert.ok(builds('foreman').includes('cementworks'), '工程师会盖水泥厂');
   assert.equal(builds('foreman').includes('materialbase'), false, '建材基地要现代建筑队');
   for (const id of ['brickworks', 'cementworks', 'materialbase']) {
     assert.ok(builds('crew').includes(id), `建筑队应该会盖 ${id}`);
@@ -8916,7 +9120,7 @@ test('箭塔：两回合施工，工地开不了火', () => {
   const laborerPower = buildPowerOf(s.unitTypes.laborer!);
   assert.ok(
     buildCostOf(tower) > laborerPower,
-    `塔一回合修不完：${buildCostOf(tower)} 点 vs 劳工 ${laborerPower} 点`,
+    `塔一回合修不完：${buildCostOf(tower)} 点 vs 奴隶 ${laborerPower} 点`,
   );
   assert.equal(tower.garrison, true, '塔可以驻军');
 
@@ -9118,7 +9322,7 @@ test('建造点数：同一座粮仓，弱工兵先落工地、强工兵当回�
   const r1 = applyAction(s, { type: 'BUILD', unitId: a.id, unitType: 'granary', x: 6, y: 5 });
   assert.ok(r1.ok, r1.ok ? '' : r1.reason);
   const weakSite = r1.state.units.find((u) => u.type === 'granary')!;
-  assert.equal(underConstruction(weakSite), true, '劳工一回合修不完，先落工地');
+  assert.equal(underConstruction(weakSite), true, '奴隶一回合修不完，先落工地');
   assert.equal(weakSite.buildNeed, need, '工地记着总点数');
   assert.equal(weakSite.buildDone, weak, '这一下投进去的正好是这个工兵的能力');
 
@@ -9708,6 +9912,163 @@ test('横贯全图的水域：海和浅滩都真的出现，陆军能走到对�
     assert.ok(water > 200, `${style} 四张图加起来才 ${water} 格水，说不上"横贯全图"`);
     assert.ok(shallow > 40, `${style} 的浅滩太少（${shallow} 格），陆军根本过不去`);
   }
+});
+
+test('战况烈度：只记真实挨打的次数，按回合分开存', () => {
+  const s = fresh();
+  s.current = 'B'; // 让 B 先动手，A 挨打
+  s.units = [];
+
+  const a1 = place(s, 'A', 'militia', 8, 8);
+  a1.hp = 200; // 够扛几下，别一枪打死——死掉的兵会换格子记账
+  const a2 = place(s, 'A', 'militia', 8, 9);
+  a2.hp = 200;
+  const b1 = place(s, 'B', 'archer', 8, 10);
+  const b2 = place(s, 'B', 'archer', 9, 8);
+
+  const hit1 = applyAction(s, { type: 'ATTACK', unitId: b1.id, targetId: a1.id });
+  assert.ok(hit1.ok, hit1.ok ? '' : hit1.reason);
+  const hit2 = applyAction(hit1.state, { type: 'ATTACK', unitId: b2.id, targetId: a1.id });
+  assert.ok(hit2.ok, hit2.ok ? '' : hit2.reason);
+
+  // 这一回合还没走完：烈度表读的是"上一回合"，不该提前露出来
+  assert.equal(heatCells(hit2.state, 'A').size, 0, '当前回合的账不该提前显示');
+
+  const next = applyAction(hit2.state, { type: 'END_TURN' });
+  assert.ok(next.ok);
+  const cells = heatCells(next.state, 'A');
+  assert.equal(cells.get(idx(next.state, 8, 8)), 2, '同一格挨了两下，就该记两次');
+  assert.equal(cells.get(idx(next.state, 8, 9)), undefined, '旁边那格没挨打，不该亮');
+
+  // 再过一个回合：更早的账被清掉，不会残留成"上个回合还在打"
+  const next2 = applyAction(next.state, { type: 'END_TURN' });
+  assert.ok(next2.ok);
+  assert.equal(heatCells(next2.state, 'A').size, 0, '两个回合之后旧账要清干净');
+});
+
+test('战况烈度：溅射按人头各记一格，反击记在出手方那一格上', () => {
+  const s = fresh();
+  s.current = 'A';
+  s.units = [];
+
+  const target = place(s, 'B', 'militia', 8, 8);
+  target.hp = 200;
+  const beside = place(s, 'B', 'militia', 8, 9);
+  beside.hp = 200;
+  assert.ok((UNIT_TYPES.battery!.splash ?? 0) > 0, '这条用例靠炮兵的溅射');
+  const gun = place(s, 'A', 'battery', 6, 8);
+
+  const shot = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: target.id });
+  assert.ok(shot.ok, shot.ok ? '' : shot.reason);
+
+  // 换成 B 的视角看上一回合（A 刚打完）：主目标与溅射对象各算一格
+  const next = applyAction(shot.state, { type: 'END_TURN' });
+  assert.ok(next.ok);
+  const bHeat = heatCells(next.state, 'B');
+  assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
+  assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
+
+  // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
+  const s2 = fresh();
+  s2.current = 'A';
+  s2.units = [];
+  const foe = place(s2, 'B', 'militia', 8, 8);
+  foe.hp = 200;
+  const mine = place(s2, 'A', 'militia', 8, 9);
+  mine.hp = 200;
+  const brawl = applyAction(s2, { type: 'ATTACK', unitId: mine.id, targetId: foe.id });
+  assert.ok(brawl.ok, brawl.ok ? '' : brawl.reason);
+  assert.equal(
+    brawl.state.heat?.A?.[String(brawl.state.turn)],
+    undefined,
+    '被打回来那一下不记：这一方的账只收"对方打出来的"',
+  );
+  assert.equal(
+    brawl.state.heat?.B?.[String(brawl.state.turn)]?.[idx(brawl.state, 8, 8)],
+    1,
+    'B 挨的那一下照常记在自己名下',
+  );
+
+  // 该不该显示：三条规则都在 visibleHeat 里
+  const board = fresh();
+  board.turn = 10;
+  board.heat = { A: { '9': { 5: 2 } } };
+  assert.equal(visibleHeat(board, 'A')?.get(5), 2, '轮到自己：显示上一回合那一份');
+  assert.equal(visibleHeat(board, 'A', { dismissed: true }), undefined, '出手之后收起');
+  assert.equal(visibleHeat(board, 'A', { active: false }), undefined, '不是自己的回合不显示');
+  assert.equal(visibleHeat(board, 'A', { visible: new Set([6]) }), undefined, '视野外连坐标都不给');
+  assert.equal(visibleHeat(board, 'A', { visible: new Set([5]) })?.get(5), 2, '看得见就照常');
+  assert.equal(visibleHeat(board, 'B'), undefined, 'B 这一回合没账可看');
+
+  // 档位：0 不亮，1~5 依次，超过封顶
+  assert.equal(heatStep(0), 0);
+  assert.equal(heatStep(1), 1);
+  assert.equal(heatStep(4), 4);
+  assert.equal(heatStep(9), 5);
+
+  // 视图层只下发自己的账本：对手挨打的格子等于他的部队位置，不能漏出去
+  const foggy = fresh({ fog: true });
+  foggy.heat = { A: { [String(foggy.turn)]: { 5: 2 } }, B: { [String(foggy.turn)]: { 9: 3 } } };
+  const viewA = playerView(foggy, 'A');
+  assert.deepEqual(Object.keys(viewA.state.heat ?? {}), ['A'], '别人的烈度账本不该下发');
+  assert.equal(viewA.state.heat?.A?.[String(foggy.turn)]?.[5], 2, '自己的账要留着');
+
+  // 记账本身不该崩在"没有 heat 字段"的旧存档上
+  const old = fresh();
+  old.heat = undefined;
+  const u = old.units[0]!;
+  noteHeat(old, u);
+  assert.equal(old.heat?.[u.owner]?.[String(old.turn)]?.[u.y * old.w + u.x], 1);
+});
+
+
+test('群岛的高山不再是"每张图必有"：配额压低 + 真够高才长', () => {
+  let maps = 0;
+  let withMountain = 0;
+  let maxOnOneMap = 0;
+  let tiles = 0;
+  let mountains = 0;
+  let water = 0;
+  let shallow = 0;
+
+  for (const size of [12, 16, 20, 24]) {
+    for (let k = 1; k <= 10; k += 1) {
+      const s = createMatch(
+        { ...BASE, size, expansionIds: ['height-terrain'], mapStyle: 'isles' },
+        k * 97 + size,
+      );
+      let n = 0;
+      for (const t of s.tiles) {
+        if (t.terrain === 'mountain') n += 1;
+        if (t.terrain === 'water') water += 1;
+        if (t.terrain === 'shallow') shallow += 1;
+      }
+      maps += 1;
+      tiles += s.tiles.length;
+      mountains += n;
+      if (n > 0) withMountain += 1;
+      maxOnOneMap = Math.max(maxOnOneMap, n);
+    }
+  }
+
+  // ① 不再是"每张图都长山"：以前是配额 1%，40 张图里 27 张有山（68%）
+  assert.ok(
+    withMountain <= maps * 0.55,
+    `${maps} 张群岛图里有 ${withMountain} 张长了高山，还是"固定生成"`,
+  );
+  // ② 权重确实降下来了：高山占全部格子的比例要低到千分之三以内
+  assert.ok(
+    mountains / tiles < 0.003,
+    `高山占 ${((mountains / tiles) * 100).toFixed(2)}%，权重没降下来`,
+  );
+  // ③ 长也要长得像山脊，不是满图撒点
+  assert.ok(maxOnOneMap <= 6, `一张图上冒出了 ${maxOnOneMap} 座高山`);
+
+  // ④ 只动了高山那一档：海与浅滩的比例必须还在原来的区间里
+  const waterShare = water / tiles;
+  const shallowShare = shallow / tiles;
+  assert.ok(waterShare > 0.22 && waterShare < 0.34, `海占 ${(waterShare * 100).toFixed(1)}%`);
+  assert.ok(shallowShare > 0.05 && shallowShare < 0.11, `浅滩占 ${(shallowShare * 100).toFixed(1)}%`);
 });
 
 test('地貌选项跟着扩展开关增减', () => {
@@ -10505,6 +10866,36 @@ test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   assert.equal(hp(quarter.side.id), maxHp - expected, '旁边那格按 25% 结算，而不是默认的 50%');
 });
 
+test('石堡射程 2 → 3：三格外能还手，四格外打不到，其它防御建筑不受影响', () => {
+  // ① 数据：只有石堡动了一格
+  assert.equal(UNIT_TYPES.keep.range, 3, '石堡射程应该是 3');
+  assert.equal(UNIT_TYPES.fortress.range, 4, '要塞没动');
+  assert.equal(UNIT_TYPES.bunker.range, 4, '碉堡没动');
+  assert.equal(UNIT_TYPES.tower.range, 3, '箭塔本来就是 3，这次没动它');
+  assert.equal(UNIT_TYPES.keep.atk, 13, '只加射程，攻击力不动');
+  assert.equal(UNIT_TYPES.keep.cost, 100, '造价不动');
+
+  // ② 行为：自动开火真的按新射程算
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (const [x, y] of [[5, 5], [8, 5], [9, 5]]) {
+    s.tiles[idx(s, x, y)].terrain = 'plain';
+  }
+  place2(s, 'A', 'keep', 5, 5);
+  const near = place2(s, 'B', 'militia', 8, 5); // 距离 3：射程内
+  const far = place2(s, 'B', 'militia', 9, 5); // 距离 4：射程外
+  near.hp = 500;
+  far.hp = 500;
+  s.current = 'A';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const hpOf = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.ok(hpOf(near.id) < 500, '三格外的敌人应该挨打');
+  assert.equal(hpOf(far.id), 500, '四格外的敌人打不到（否则就不是"加一格"而是无限射程）');
+});
+
 test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
   // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。
@@ -11220,20 +11611,20 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     acted: false,
   };
 
-  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4, '航母应该有四个机位');
-  assert.equal(deckSpecOf('gunboat'), null, '没登记的船没有甲板');
+  assert.equal(deckSpecOf(nvDef('nv_carrier'))!.capacity, 4, '航母应该有四个机位');
+  assert.equal(deckSpecOf(nvDef('gunboat')), null, '没写 carry.deck 的船没有甲板');
 
   // 这条用例守的是**契约**，不是空军包本身：先把真实的实现摘掉，
   // 单独验"没人接入时面板怎么说"。不摘的话跑完空军那几条用例再跑这条，
   // 甲板上会挂着「舰载航空兵」，断言就变成在测另一件事了。
   const real = airwingOps();
   registerAirwingOps(null);
-  assert.equal(deckLine(carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
+  assert.equal(deckLine(nvDef('nv_carrier'), carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
 
   // 收两架进去
   const plane = (id: string) => ({ ...carrier, id, type: 'fake-plane', hp: 40, kills: 0 });
-  assert.ok(stowPlane(carrier, plane('p1')));
-  assert.ok(stowPlane(carrier, plane('p2')));
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane('p1')));
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane('p2')));
   assert.equal(deckUsed(carrier), 2);
   assert.equal(deckOf(carrier)[1]!.type, 'fake-plane');
 
@@ -11245,11 +11636,11 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     launch: () => ({ ok: true }),
     recover: () => ({ ok: true }),
   });
-  assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
+  assert.equal(deckLine(nvDef('nv_carrier'), carrier), '甲板 2 / 4 · 测试舰载航空兵');
 
   // 注销之后要退回"未接入"，不能残留；再还原成真实实现，别把后面几条用例弄脏
   registerAirwingOps(null);
-  assert.ok(deckLine(carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
+  assert.ok(deckLine(nvDef('nv_carrier'), carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
   registerAirwingOps(real);
 
   // 取下一架：按索引，取完就少一个
@@ -11407,9 +11798,9 @@ test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
   const byId = (id: string) => ships.find((u) => u.id === id)!;
 
   // 甲板：舰队航母 4 > 轻母 2 > 航战 1
-  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4);
-  assert.equal(deckSpecOf('nv_light_carrier')!.capacity, 2);
-  assert.equal(deckSpecOf('nv_aviation_battleship')!.capacity, 1);
+  assert.equal(deckSpecOf(byId('nv_carrier'))!.capacity, 4);
+  assert.equal(deckSpecOf(byId('nv_light_carrier'))!.capacity, 2);
+  assert.equal(deckSpecOf(byId('nv_aviation_battleship'))!.capacity, 1);
   assert.equal(byId('nv_light_carrier').cost < byId('nv_carrier').cost, true, '轻母应该更便宜');
 
   // 潜母只修潜艇，维修舰只修水面舰：两条船能力不同
@@ -11672,7 +12063,7 @@ test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过�
   // 手工把一架"带伤返航"的舰载机塞进甲板（正式流程见下一条）
   const plane = place(s, 'A', 'af_naval_plane', 10, 10);
   plane.hp = 40;
-  assert.ok(stowPlane(carrier, plane), '四个机位应该收得下第一架');
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane), '四个机位应该收得下第一架');
   s.units = s.units.filter((u) => u.id !== plane.id);
   assert.equal(deckUsed(carrier), 1);
 
@@ -11684,7 +12075,7 @@ test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过�
   assert.equal(flying!.hp, 40, '带伤起飞要带着伤，不能借起飞回血');
   assert.equal(flying!.moved, true, '起飞占掉这一回合的移动');
   assert.ok(
-    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf('nv_carrier')!.launchRange,
+    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf(nvDef('nv_carrier'))!.launchRange,
     '落点要在起飞半径之内',
   );
 
@@ -11705,7 +12096,7 @@ test('整备：轮到航母时先收、再修 8 点、后放一架', () => {
 
   const plane = place(s, 'A', 'af_naval_plane', 10, 10);
   plane.hp = 40;
-  stowPlane(carrier, plane);
+  stowPlane(nvDef('nv_carrier'), carrier, plane);
   s.units = s.units.filter((u) => u.id !== plane.id);
 
   s.current = 'B'; // 结束 B 的回合 → 轮到 A，触发整备
@@ -11776,8 +12167,8 @@ test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位
   for (const id of draft.pool) {
     const def = s.unitTypes[id]!;
     assert.ok(
-      def.category === 'combat' || (def.category === 'building' && !def.barracks && !def.bridges),
-      `${def.name} 不该进池子（${def.category}${def.barracks ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
+      def.category === 'combat' || (def.category === 'building' && !isProducer(def) && !def.bridges),
+      `${def.name} 不该进池子（${def.category}${isProducer(def) ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
     );
   }
   // 骨架一律不进池：经济、建造、军营、桥
@@ -12092,7 +12483,7 @@ test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () =>
   let s = fresh({ draftMode: true }, 7111);
   s = finishDraft(s);
   s.draft!.picks.A = [];
-  // 开局配给里没有劳工（只有战斗单位 + 两个经济单位），自己摆一个
+  // 开局配给里没有奴隶（只有战斗单位 + 两个经济单位），自己摆一个
   const laborer = place(s, 'A', 'laborer', 5, 5);
   const spot = { x: 6, y: 5 };
   putTerrain(s, 6, 5, 'plain');

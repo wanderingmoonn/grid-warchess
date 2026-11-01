@@ -316,8 +316,8 @@ const AIR_CORPS_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 6,
     ...AIRFRAME,
-    transport: true,
-    capacity: 2,
+    // 空运的舱位写在身上：改这一行就等于改了运力，不用再动规则。
+    carry: { hold: { max: 2 } },
     // 空运：两个舱位，能把兵丢到任何一块相邻的陆地上（越过海峡也算）。
     // 卸载的落点判定和运输船是同一条（`blockedFor`），所以不会把坦克丢进海里。
     // V = 4+54+15+3+20+9 = 105 → 0.35
@@ -511,8 +511,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 7,
     ...AIRFRAME,
-    transport: true,
-    capacity: 4,
+    carry: { hold: { max: 4 } },
     // 四个舱位、移动 10：一次能把半个小队丢到地图另一头。
     // 和运输舰的分工：船要港口、它不用；但船能停在海上等，它得落地。
     // V = 6+76.5+20+3+25+10.5 = 141 → 0.27
@@ -582,7 +581,7 @@ const AIRWING_OPS: AirwingOps = {
 
   launch: ({ state, carrier, plane }: LaunchCtx) => {
     if (!airEnabled(state)) return { ok: false as const, reason: '这一局没有开启空军扩展' };
-    const spec = deckSpecOf(carrier.type);
+    const spec = deckSpecOf(state.unitTypes[carrier.type]);
     if (!spec) return { ok: false as const, reason: '这艘船没有甲板' };
     const spot = findAirspace(state, carrier, spec.launchRange);
     if (!spot) return { ok: false as const, reason: '甲板周围没有空域了' };
@@ -609,11 +608,13 @@ const AIRWING_OPS: AirwingOps = {
   recover: ({ state, carrier, plane }: RecoverCtx) => {
     if (!airEnabled(state)) return { ok: false as const, reason: '这一局没有开启空军扩展' };
     if (!CARRIER_CAPABLE.has(plane.type)) return { ok: false as const, reason: '这种飞机上不了舰' };
-    if (deckFree(carrier) <= 0) return { ok: false as const, reason: '甲板满了' };
+    if (deckFree(state.unitTypes[carrier.type], carrier) <= 0) {
+      return { ok: false as const, reason: '甲板满了' };
+    }
     if (Math.abs(plane.x - carrier.x) + Math.abs(plane.y - carrier.y) > 2) {
       return { ok: false as const, reason: '离母舰太远，回不来' };
     }
-    stowPlane(carrier, plane);
+    stowPlane(state.unitTypes[carrier.type], carrier, plane);
     state.units = state.units.filter((u) => u.id !== plane.id);
     return { ok: true as const };
   },
@@ -628,7 +629,7 @@ const AIRWING_OPS: AirwingOps = {
    */
   onDeckTurnStart: ({ state, carrier }) => {
     if (!airEnabled(state)) return;
-    const spec = deckSpecOf(carrier.type);
+    const spec = deckSpecOf(state.unitTypes[carrier.type]);
     if (!spec) return;
 
     // 1) 返航：贴着母舰的舰载机自动收进甲板
@@ -636,7 +637,7 @@ const AIRWING_OPS: AirwingOps = {
       if (u.owner !== carrier.owner) continue;
       if (!CARRIER_CAPABLE.has(u.type)) continue;
       if (Math.abs(u.x - carrier.x) + Math.abs(u.y - carrier.y) > 1) continue;
-      if (deckFree(carrier) <= 0) break;
+      if (deckFree(state.unitTypes[carrier.type], carrier) <= 0) break;
       AIRWING_OPS.recover({ state, carrier, plane: u });
     }
 
@@ -647,7 +648,7 @@ const AIRWING_OPS: AirwingOps = {
     }
 
     // 3) 放飞：每回合最多一架，出不去就留着
-    if (deckFree(carrier) < spec.capacity) {
+    if (deckFree(state.unitTypes[carrier.type], carrier) < spec.capacity) {
       const first = deckOf(carrier)[0];
       if (first) AIRWING_OPS.launch({ state, carrier, plane: first });
     }

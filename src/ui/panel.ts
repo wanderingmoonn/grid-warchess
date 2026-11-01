@@ -17,6 +17,8 @@ import {
   passable,
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
+import { holdOf } from '../core/carry.ts';
+import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
 import { canUseType, eraWindowOk } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
@@ -585,10 +587,12 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                const dis = !canBuildNow || !canPay(s.players[me], price);
                const tag = b.bridges
                  ? '架在水上 · 双向通行'
-                 : b.barracks
-                   ? `能产兵 · ${(b.buildOn ?? []).map((t) => CONFIG.terrainName[t]).join('/')}${
-                       b.requiresWater ? ' · 必须临水' : ''
-                     }`
+                 : isProducer(b)
+                   ? `能产兵${produceEveryTurns(b) > 1 ? `（${produceEveryTurns(b)} 回合一批）` : ''} · ${(
+                       b.buildOn ?? []
+                     )
+                       .map((t) => CONFIG.terrainName[t])
+                       .join('/')}${b.requiresWater ? ' · 必须临水' : ''}`
                    : b.autoAttack
                      ? `自动开火 ${b.range} 格`
                      : b.incomeByTerrain || b.income || b.yield
@@ -620,8 +624,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
     // 运输船：装卸是它唯一会做的事，所以单独开一块，写清载了谁、还能装几个
     const cargo = selectedUnit.cargo ?? [];
-    const cap = def.capacity ?? 0;
-    const cargoBlock = !def.transport
+    // 舱位与准入都读兵种数据：面板不自己算"这条船能装几个"。
+    const hold = holdOf(def);
+    const cap = hold?.max ?? 0;
+    const cargoBlock = !hold
       ? ''
       : `<div class="card-title" style="margin-top:14px">货舱 ${cargo.length} / ${cap}</div>
          <div class="hint">${
@@ -651,7 +657,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const under = buildingAt(s, selectedUnit.x, selectedUnit.y);
     const underCampDef = under ? utype(s, under.type) : null;
     const underCamp =
-      under && !readOnly && under.owner === me && underCampDef?.barracks ? under : null;
+      under && !readOnly && under.owner === me && isProducer(underCampDef) ? under : null;
 
     // ── 真实数值 ──
     // 面板数字必须和结算同源：effectiveStats 把光环、击杀成长、威吓、
@@ -1229,7 +1235,9 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       d.category !== 'building' &&
       !d.summonedOnly &&
       eraWindowOk(s, d, era) &&
-      canUseType(s, camp.owner, d.id),
+      canUseType(s, camp.owner, d.id) &&
+      // 白名单读的是这座营的 produce.units：列在这里的，点下去一定造得出来
+      canProduce(def, d).ok,
   );
 
   const q = (input.recruitQuery ?? '').trim();

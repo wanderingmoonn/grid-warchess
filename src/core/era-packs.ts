@@ -433,7 +433,8 @@ const MEDIEVAL: UnitTypeDef[] = [
     abilities: ['shield-wall'],
   },
   {
-    // 主楼：城堡最后一道防线，射程比石堡远一格
+    // 主楼：城堡最后一道防线。石堡 2026-11-01 也升到射程 3 之后，
+    // 主楼的优势不再是"多一格"，而是同一射程下更硬、更疼（+3 攻 / +2 甲 / +2 视野）。
     id: 'med_donjon',
     name: '主楼',
     short: '楼',
@@ -496,8 +497,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     range: 2,
     vision: 4,
     domain: 'water',
-    transport: true,
-    capacity: 3,
+    carry: { hold: { max: 3 } },
   },
 ];
 

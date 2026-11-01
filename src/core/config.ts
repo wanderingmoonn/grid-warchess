@@ -13,7 +13,7 @@
  *   building 建筑，不能移动；军事建筑自动开火，经济建筑产金
  *
  * 注意：建筑不是凭空造出来的，是**由建造单位走过去盖**出来的。
- * 所以磨坊主不产金，"磨坊"才产金 —— 这更接近历史，也更有决策感。
+ * 所以民夫不产金，"磨坊"才产金 —— 这更接近历史，也更有决策感。
  */
 
 import type { Terrain, UnitCategory, UnitTypeDef } from './types.ts';
@@ -422,7 +422,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '农',
     era: 1,
     category: 'economy',
-    cost: 55,
+    // 55 → 45（2026-11-01）：和牧民同价，让"平地流 / 丘陵流"变成真选择。
+    // 180 局数据：牧民采用率 97.5%，农民只有 5.0%——它不是弱，是贵 10 金还少 1 点上限。
+    cost: 45,
     move: 2,
     atk: 3,
     armor: 1,
@@ -448,8 +450,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   laborer: {
     id: 'laborer',
-    name: '劳工',
-    short: '工',
+    name: '奴隶',
+    short: '奴',
     era: 1,
     category: 'builder',
     cost: 50,
@@ -556,8 +558,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   miller: {
     id: 'miller',
-    name: '磨坊主',
-    short: '坊',
+    name: '民夫',
+    short: '夫',
     era: 2,
     category: 'builder',
     cost: 85,
@@ -582,7 +584,10 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 13,
     armor: 7,
     maxHp: 42,
-    range: 2,
+    // 2 → 3（2026-11-01）：射程 2 意味着它必须贴着前线才打得到人，
+    // 而中世的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
+    // 加一格之后它终于能在自己被打之前先还手，其余数值一个没动。
+    range: 3,
     vision: 3,
     autoAttack: true,
   },
@@ -681,8 +686,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   engineer: {
     id: 'engineer',
-    name: '工程师',
-    short: '师',
+    name: '劳工',
+    short: '劳',
     era: 3,
     category: 'builder',
     cost: 130,
@@ -726,7 +731,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 40,
     range: 1,
     vision: 2,
-    incomeByTerrain: { city: 20, plain: 10, hill: 6, forest: 6 },
+    // 城市 20 → 30（2026-11-01）：火药档唯一"城里赚钱"的建筑。
+    // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
+    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
   },
 
   // ================= 时代 4 · 工业 =================
@@ -796,8 +803,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   foreman: {
     id: 'foreman',
-    name: '厂长',
-    short: '长',
+    name: '工程师',
+    short: '师',
     era: 4,
     category: 'builder',
     cost: 190,
@@ -840,7 +847,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 50,
     range: 1,
     vision: 2,
-    incomeByTerrain: { city: 30, plain: 14, hill: 9, forest: 9 },
+    // 城市 30 → 40（2026-11-01）：和工厂同一条理由，4 代这一档更依赖它回本
+    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
   },
 
   // ============ 时代 5 · 二战（第六时代在原版表里是空的） ============
@@ -893,7 +901,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     id: 'agribusiness',
     name: '农业公司',
     short: '司',
-    era: 5,
+    // 5 代 → 4 代（2026-11-01）：连唯一能造它的档都 0 次出场。
+    // 260 金、36/回合，等到 5 代解锁时对局已进入决战，回本窗口根本不存在。
+    era: 4,
     category: 'economy',
     cost: 260,
     move: 2,
@@ -986,8 +996,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 3,
     domain: 'water',
-    transport: true,
-    capacity: 2,
+    // 只有货舱、没有甲板：渡船运的是人和马，不是飞机。
+    carry: { hold: { max: 2 } },
   },
   bridge: {
     id: 'bridge',
@@ -1056,7 +1066,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 3,
     // 营里有哨兵，贴着营门的敌人每回合都会被敲一下
     autoAttack: true,
-    barracks: true,
+    // 产兵能力：这座营能造什么、多快、多贵，全在这一行。
+    // 空对象 = 不设白名单、当回合成型、原价——也就是 0.3.7 之前的行为。
+    produce: {},
     // 野战营地：只能在平地或丘陵上扎，森林里不行
     buildOn: ['plain', 'hill'],
     // 临水扎营：粮秣、饮水、船运都得靠河。这条同时是水军的存在理由——
@@ -1078,7 +1090,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 3,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1097,7 +1109,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 4,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1116,7 +1128,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 4,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1135,7 +1147,10 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 5,
     autoAttack: true,
-    barracks: true,
+    // 整条营线里唯一做了"产能差异"的一档：它把兵工厂和补给站搬到了前线，
+    // 在它这儿产兵便宜一成（0.3.7 之前五档营完全一样，差异只在攻/甲/血上）。
+    // 想给某一档加白名单或冷却，也只需要改这一行——规则层不用动。
+    produce: { costScale: 0.9 },
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },

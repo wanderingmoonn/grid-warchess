@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
+import { deckCarryOf, holdOf } from '../src/core/carry.ts';
+import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -120,8 +122,14 @@ const GENERIC_TERMS: Term[] = [
   {
     key: 'carry',
     name: '装载',
-    brief: '能把贴身的己方陆军装进货舱运过水面；船沉了，舱里的人一起没。',
+    brief: '能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。',
     more: '装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。',
+  },
+  {
+    key: 'produce',
+    name: '产兵',
+    brief: '这是一座产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。',
+    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。城市丢了，营就断了补给，产不出兵。',
   },
   {
     key: 'air',
@@ -357,6 +365,23 @@ function traitsOf(u: UnitTypeDef): string {
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
   if (u.burst) parts.push(ref('burst', `多动 ${u.burst} 次`));
   if (u.builds) parts.push(ref('builds', `可建 ${u.builds.length} 种建筑`));
+  // 载具：舱位与机位都是兵种数据上的数字，表里就该看得见——
+  // 以前这两样只写在属性卡的正文里，横向比船的时候要一艘艘点开。
+  const hold = holdOf(u);
+  if (hold) parts.push(ref('carry', `装载 ${hold.max}`));
+  const deck = deckCarryOf(u);
+  if (deck) parts.push(ref('carry', `甲板 ${deck.max}`));
+  // 产兵：写"产兵"再挂上产能差异（冷却 / 造价），数据里没写的就不显示
+  const prod = produceOf(u);
+  if (prod) {
+    const every = produceEveryTurns(u);
+    const scale = prod.costScale ?? 1;
+    const extra: string[] = [];
+    if (every > 1) extra.push(`${every} 回合一批`);
+    if (scale !== 1) extra.push(`造价 ${Math.round(scale * 100)}%`);
+    if ((prod.pop ?? 0) > 0) extra.push(`占 ${prod.pop} 编制`);
+    parts.push(ref('produce', extra.length > 0 ? `产兵（${extra.join(' · ')}）` : '产兵'));
+  }
   if (u.autoAttack) parts.push(ref('auto'));
   if (u.move === 0) parts.push(ref('immobile'));
   return parts.length > 0 ? parts.join(' · ') : '—';
@@ -1188,7 +1213,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
       <h3>机动与视野的整体下调</h3>
       <p>所有单位的<b>移动力和视野各削了一档</b>（视野最低 2 格）：</p>
       <ul>
-        <li>移动力 <b>5 → 4</b>（斥候、骠骑兵、装甲车、炮艇），<b>4 → 3</b>（骑士、坦克、牧民、舢板），<b>3 → 2</b>（民兵、弓手、农民、劳工……）。</li>
+        <li>移动力 <b>5 → 4</b>（斥候、骠骑兵、装甲车、炮艇），<b>4 → 3</b>（骑士、坦克、牧民、舢板），<b>3 → 2</b>（民兵、弓手、农民、奴隶……）。</li>
         <li>移动力 <b>2 的单位不再下调</b>。这不是手软：森林和丘陵的进入消耗是 2，再削一档就是"永远进不了林子"，整套地形系统会当场失效。</li>
         <li>视野全部 <b>−1</b>，下限 2。斥候仍是眼睛最好的单位，但"一眼看穿对面半场"结束了。</li>
         <li><b>射程没有跟着削</b>，反而要盯住"射程 − 移速"这个差值：移速降了，远程本来就该占更多便宜。
@@ -1251,6 +1276,27 @@ const CORE_BODY_MAIN = `    <section id="goal">
       <div class="callout">
         <b>调数值时的铁律：</b>护甲每 +1 不是"+1 防御"，而是直接砍掉一点伤害。基数是 8~14 的伤害，护甲 +3 就减了 30%。所以跨时代成长主要放在攻击和血量上，护甲要克制地涨。
       </div>
+
+      <h3>战况烈度：上一回合哪里打得最狠</h3>
+      <p>轮到你的时候，棋盘上会浮出红格——那是<b>上一个敌方回合里，对面打过的地方</b>：
+        被攻击的单位脚下，以及被溅射波及的每一格。它回答的是"刚才对面打了哪"，
+        不是"对面能打到哪"。</p>
+      <ul>
+        <li><b>挨了几下就记几次</b>：溅射打到三个人算三次（三个格子各记一笔），
+          多动兵连打同一格三下，那一格就是三次。</li>
+        <li><b>闪得越快，那里打得越凶</b>：三下比一下急，五下以上按最快档走。
+          扫一眼棋盘就知道该往哪儿补人。</li>
+        <li><b>你一出走就收起来</b>：这是"上回合的答卷"，看一眼就该让位。
+          这一回合你走第一步之后，红格全部消失——想看就趁现在。</li>
+        <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
+        <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
+        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
+          中毒灼烧这类持续掉血、天气扣血都不计入——混进来会让"哪里被打得最狠"失真。</li>
+      </ul>
+      <div class="callout">
+        用法：红格是"上一次的答卷"，不是"下一次的预言"。顺着它复盘——
+        被打穿的那一格要么补兵、要么放弃、要么先解决掉打它的那门炮。
+      </div>
     </section>
 
     <section id="siege">
@@ -1296,7 +1342,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         &nbsp;&nbsp;+ 相邻水域的额外 ${CONFIG.riverTradeBonus} 金<br />
         <span class="c">再过一个扩展钩子，最后取整</span>
       </div>
-      <p>经济单位的产出看它<b>站在哪儿</b>：农民在平原最赚、牧民在丘陵最赚、伐木工在森林最赚、厂长在城里最赚。城里对农民几乎是零产出，所以人必须撒到野外去。</p>
+      <p>经济单位的产出看它<b>站在哪儿</b>：农民在平原最赚、牧民在丘陵最赚、伐木工在森林最赚、工程师在城里最赚。城里对农民几乎是零产出，所以人必须撒到野外去。</p>
       <p>「临水 +${CONFIG.riverTradeBonus}」是一条通用规则，适用于所有经济单位和经济建筑——这是水利、灌溉、运输的抽象。所以河边的平原是整个地图上最值钱的地。</p>
       <div class="callout">
         经济单位很脆（护甲 1~4，血 16~30）。它创造了一个新玩法：<b>你的后方开始有必须保护的东西</b>，推进时得留人看家。
@@ -2056,7 +2102,7 @@ const PACK_NOTES: Record<string, string> = {
               工地开不了火、产不了兵，但看得见也拆得掉；成型后视野 +2，并<b>允许驻军</b>——
               友军站上去多 3 点护甲、还能借用它的视野。相应地，塔自己的攻击被削了三成。</li>
         </ul>
-        <p>时代 3 起的经济与工程兵种（工程师、厂长、建筑队，以及采石工、矿队、建材公司这类采集兵）
+        <p>时代 3 起的经济与工程兵种（劳工、工程师、建筑队，以及采石工、矿队、建材公司这类采集兵）
           攻击 +3、生命 +6，现代那一档再 +1 护甲——它们不该一上前线就是送人头。</p>
         <p class="era-meta">上面总表印的是兵种表里的<b>原始数值</b>。这个包在开局时会再叠一层：
           经济建筑护甲 −1、耐久 ×1.1；时代 3 起的经济与工程兵 +3 攻 +6 血（现代再 +1 甲）。
@@ -2412,8 +2458,8 @@ const BOOK_GROUPS: BookGroup[] = [
         所以任何一条船都做得到，不需要挂能力。</p>
       <p><b>航空母舰是大型单位</b>：占 2×2 四格、四格一起挡路，只在四格里挨一份溅射，
         也因此需要 2×2 的开阔水面才能停靠与生产——一格宽的河里开不进航母。
-        它的机位与起飞半径写在 <code>src/core/naval-carrier.ts</code> 的 <code>DECK_SPECS</code> 里，
-        是留给未来空军扩展的一道接口；空军没接入时，它是一艘视野 9 的指挥舰。</p>`,
+        它的机位与起飞半径是<b>它自己的兵种数据</b>（<code>carry.deck</code>），
+        不再另存到接口表里；空军没接入时，它是一艘视野 9 的指挥舰。</p>`,
   },
   {
     file: 'public/manual-pack-air.html',

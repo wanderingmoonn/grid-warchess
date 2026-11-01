@@ -481,7 +481,7 @@
       <h3>机动与视野的整体下调</h3>
       <p>所有单位的<b>移动力和视野各削了一档</b>（视野最低 2 格）：</p>
       <ul>
-        <li>移动力 <b>5 → 4</b>（斥候、骠骑兵、装甲车、炮艇），<b>4 → 3</b>（骑士、坦克、牧民、舢板），<b>3 → 2</b>（民兵、弓手、农民、劳工……）。</li>
+        <li>移动力 <b>5 → 4</b>（斥候、骠骑兵、装甲车、炮艇），<b>4 → 3</b>（骑士、坦克、牧民、舢板），<b>3 → 2</b>（民兵、弓手、农民、奴隶……）。</li>
         <li>移动力 <b>2 的单位不再下调</b>。这不是手软：森林和丘陵的进入消耗是 2，再削一档就是"永远进不了林子"，整套地形系统会当场失效。</li>
         <li>视野全部 <b>−1</b>，下限 2。斥候仍是眼睛最好的单位，但"一眼看穿对面半场"结束了。</li>
         <li><b>射程没有跟着削</b>，反而要盯住"射程 − 移速"这个差值：移速降了，远程本来就该占更多便宜。
@@ -544,6 +544,27 @@
       <div class="callout">
         <b>调数值时的铁律：</b>护甲每 +1 不是"+1 防御"，而是直接砍掉一点伤害。基数是 8~14 的伤害，护甲 +3 就减了 30%。所以跨时代成长主要放在攻击和血量上，护甲要克制地涨。
       </div>
+
+      <h3>战况烈度：上一回合哪里打得最狠</h3>
+      <p>轮到你的时候，棋盘上会浮出红格——那是<b>上一个敌方回合里，对面打过的地方</b>：
+        被攻击的单位脚下，以及被溅射波及的每一格。它回答的是"刚才对面打了哪"，
+        不是"对面能打到哪"。</p>
+      <ul>
+        <li><b>挨了几下就记几次</b>：溅射打到三个人算三次（三个格子各记一笔），
+          多动兵连打同一格三下，那一格就是三次。</li>
+        <li><b>闪得越快，那里打得越凶</b>：三下比一下急，五下以上按最快档走。
+          扫一眼棋盘就知道该往哪儿补人。</li>
+        <li><b>你一出走就收起来</b>：这是"上回合的答卷"，看一眼就该让位。
+          这一回合你走第一步之后，红格全部消失——想看就趁现在。</li>
+        <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
+        <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
+        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
+          中毒灼烧这类持续掉血、天气扣血都不计入——混进来会让"哪里被打得最狠"失真。</li>
+      </ul>
+      <div class="callout">
+        用法：红格是"上一次的答卷"，不是"下一次的预言"。顺着它复盘——
+        被打穿的那一格要么补兵、要么放弃、要么先解决掉打它的那门炮。
+      </div>
     </section>
 
     <section id="siege">
@@ -589,7 +610,7 @@
         &nbsp;&nbsp;+ 相邻水域的额外 3 金<br />
         <span class="c">再过一个扩展钩子，最后取整</span>
       </div>
-      <p>经济单位的产出看它<b>站在哪儿</b>：农民在平原最赚、牧民在丘陵最赚、伐木工在森林最赚、厂长在城里最赚。城里对农民几乎是零产出，所以人必须撒到野外去。</p>
+      <p>经济单位的产出看它<b>站在哪儿</b>：农民在平原最赚、牧民在丘陵最赚、伐木工在森林最赚、工程师在城里最赚。城里对农民几乎是零产出，所以人必须撒到野外去。</p>
       <p>「临水 +3」是一条通用规则，适用于所有经济单位和经济建筑——这是水利、灌溉、运输的抽象。所以河边的平原是整个地图上最值钱的地。</p>
       <div class="callout">
         经济单位很脆（护甲 1~4，血 16~30）。它创造了一个新玩法：<b>你的后方开始有必须保护的东西</b>，推进时得留人看家。
@@ -841,7 +862,7 @@
         <td class="num">3</td>
         <td class="num">0</td>
         <td class="num">3</td>
-        <td class="traits">—</td>
+        <td class="traits"><a class="ref" href="#t-carry">装载 2</a></td>
       </tr></tbody>
     </table>
     <h4>经济单位</h4>
@@ -851,7 +872,7 @@
       <tr data-unit="farmer">
         <td class="name">农民</td>
         <td class="glyph">农</td>
-        <td class="num">55</td>
+        <td class="num">45</td>
         <td class="num">3</td>
         <td class="num">1</td>
         <td class="num">16</td>
@@ -878,8 +899,8 @@
       <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
       <tbody>
       <tr data-unit="laborer">
-        <td class="name">劳工</td>
-        <td class="glyph">工</td>
+        <td class="name">奴隶</td>
+        <td class="glyph">奴</td>
         <td class="num">50</td>
         <td class="num">5</td>
         <td class="num">2</td>
@@ -940,7 +961,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1015,8 +1036,8 @@
       <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
       <tbody>
       <tr data-unit="miller">
-        <td class="name">磨坊主</td>
-        <td class="glyph">坊</td>
+        <td class="name">民夫</td>
+        <td class="glyph">夫</td>
         <td class="num">85</td>
         <td class="num">4</td>
         <td class="num">2</td>
@@ -1039,7 +1060,7 @@
         <td class="num">7</td>
         <td class="num">42</td>
         <td class="num">—</td>
-        <td class="num">2</td>
+        <td class="num">3</td>
         <td class="num">3</td>
         <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
@@ -1065,7 +1086,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1164,8 +1185,8 @@
       <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
       <tbody>
       <tr data-unit="engineer">
-        <td class="name">工程师</td>
-        <td class="glyph">师</td>
+        <td class="name">劳工</td>
+        <td class="glyph">劳</td>
         <td class="num">130</td>
         <td class="num">5</td>
         <td class="num">3</td>
@@ -1202,7 +1223,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-income">产出 城市 +20</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-income">产出 城市 +30</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="bridge2">
         <td class="name">石桥</td>
@@ -1226,7 +1247,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1279,13 +1300,30 @@
         <td class="traits"><a class="ref" href="#t-burst">多动 2 次</a></td>
       </tr></tbody>
     </table>
+    <h4>经济单位</h4>
+    <table>
+      <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+      <tbody>
+      <tr data-unit="agribusiness">
+        <td class="name">农业公司</td>
+        <td class="glyph">司</td>
+        <td class="num">260</td>
+        <td class="num">4</td>
+        <td class="num">4</td>
+        <td class="num">30</td>
+        <td class="num">2</td>
+        <td class="num">1</td>
+        <td class="num">3</td>
+        <td class="traits"><a class="ref" href="#t-income">产出 平原 +36</a></td>
+      </tr></tbody>
+    </table>
     <h4>建造单位</h4>
     <table>
       <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
       <tbody>
       <tr data-unit="foreman">
-        <td class="name">厂长</td>
-        <td class="glyph">长</td>
+        <td class="name">工程师</td>
+        <td class="glyph">师</td>
         <td class="num">190</td>
         <td class="num">4</td>
         <td class="num">3</td>
@@ -1322,7 +1360,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-income">产出 城市 +30</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-income">产出 城市 +40</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="camp4">
         <td class="name">兵站</td>
@@ -1334,7 +1372,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1411,23 +1449,6 @@
         <td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-siege-master">破城</a></td>
       </tr></tbody>
     </table>
-    <h4>经济单位</h4>
-    <table>
-      <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
-      <tbody>
-      <tr data-unit="agribusiness">
-        <td class="name">农业公司</td>
-        <td class="glyph">司</td>
-        <td class="num">260</td>
-        <td class="num">4</td>
-        <td class="num">4</td>
-        <td class="num">30</td>
-        <td class="num">2</td>
-        <td class="num">1</td>
-        <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-income">产出 平原 +36</a></td>
-      </tr></tbody>
-    </table>
     <h4>建造单位</h4>
     <table>
       <thead><tr><th>名称</th><th>图标</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
@@ -1495,7 +1516,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">5</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵（造价 90%）</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1931,7 +1952,7 @@
       <h2><span class="sec-num">21</span>机制词条</h2>
       <p>正文与兵种表里带<b>虚线下划线</b>的词，鼠标停上去会浮一句说明，点一下跳到这里。
         只收能力之外的机制；能力在第 13 章那张表里，每条都是一个可跳转的锚点。</p>
-      <dl class="terms"><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-burst">多动</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd></dl>
+      <dl class="terms"><dt id="t-carry">装载</dt><dd>能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。 <span class="more">装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-produce">产兵</dt><dd>这是一座产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。 <span class="more">括号里是这座营和&quot;默认产能&quot;不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。城市丢了，营就断了补给，产不出兵。</span></dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-burst">多动</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd></dl>
     </section>
 
 

@@ -7,6 +7,8 @@
 
 import './style.css';
 
+import { holdOf } from './core/carry.ts';
+import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
@@ -14,6 +16,7 @@ import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
+import { visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
@@ -269,14 +272,43 @@ let recruitEra = 0;
 /**
  * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
  *
- * 掉血靠前后两帧的血量差自己算出来，而不是在每处扣血的地方各喊一声——
- * 扣血路径有交战、反击、溅射、中毒、灼烧、攻城好几条，逐条挂必然漏；
- * "上一帧它是多少血"这件事只有渲染层知道，放这儿最省事也最不会漏。
+ * 掉血不能靠"渲染时和上一帧比"来推——渲染会因为顶栏、横幅、悔棋、
+ * 联机拉取、AI 连走被跳过或重放，那个比对会把旧伤当新伤，
+ * 表现为"打了一个兵，旁边几个老伤号一起演了一遍掉血"。
+ *
+ * 所以改成**动作前后对账**：`dispatch` / AI 每落地一个动作，就在
+ * `noteHpDrops` 里把"这一下真少了血的单位"记进 `pendingDrops`，
+ * 绘制时取走并清空。一次动作只可能标记它真正伤到的那几个。
  *
  * 出手那一侧算不出来（它自己没掉血），所以由 dispatch 记一笔，绘制时消费一次。
  */
-const hpSeen = new Map<string, number>();
+const pendingDrops = new Map<string, number>();
 let lastStrikerId: string | null = null;
+
+/**
+ * 对账：`after` 里哪些单位比 `before` 少血，以及少之前占最大生命的比例。
+ *
+ * 三条保守约定：
+ *   · 换型的（晋升/孵卵/聚合）不算掉血——maxHp 变了，比例不可比；
+ *   · 只见于一边的（新兵出生、阵亡）不算，它们没有"之前"；
+ *   · 比例差小于 0.1% 的忽略，避免浮点噪声把满血单位也标记成受击。
+ */
+function noteHpDrops(before: GameState, after: GameState): void {
+  const prev = new Map<string, { type: string; ratio: number }>();
+  for (const u of before.units) {
+    const def = before.unitTypes[u.type];
+    if (!def || def.maxHp <= 0) continue;
+    prev.set(u.id, { type: u.type, ratio: u.hp / def.maxHp });
+  }
+  for (const u of after.units) {
+    const was = prev.get(u.id);
+    if (!was || was.type !== u.type) continue;
+    const def = after.unitTypes[u.type];
+    if (!def || def.maxHp <= 0) continue;
+    const now = u.hp / def.maxHp;
+    if (now < was.ratio - 0.001) pendingDrops.set(u.id, was.ratio);
+  }
+}
 
 /**
  * 「允许上传对局数据」这个开关本身。
@@ -775,22 +807,25 @@ function render(): void {
       ? Array.from(threatTiles(state, selected))
       : [];
 
-  // 这一帧要抖谁：掉血的（强度 1）+ 刚出手的（0.55，往前一顿）
+  // 战况烈度：**上一次敌方回合**里，对方打过的那些格子（含溅射波及），按次数闪烁。
+  //
+  // 轮到自己就生效，不依赖"选中了谁"；这一回合**出手一次之后就收起**——
+  // 它是"上回合的答卷"，看一眼就该让位给可达格与攻击目标。
+  const heat = visibleHeat(state, me(), {
+    visible: new Set(view.visible),
+    dismissed: heatDismissTurn === state.turn,
+    active: state.current === me() && !spectating(),
+  });
+
+  // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
+  const hpDrops = new Map(pendingDrops);
+  pendingDrops.clear();
   const impacts = new Map<string, number>();
-  {
-    const alive = new Set<string>();
-    for (const u of view.state.units) {
-      alive.add(u.id);
-      const prev = hpSeen.get(u.id);
-      if (prev !== undefined && u.hp < prev) impacts.set(u.id, 1);
-      hpSeen.set(u.id, u.hp);
-    }
-    for (const id of Array.from(hpSeen.keys())) if (!alive.has(id)) hpSeen.delete(id);
-    if (lastStrikerId) {
-      // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
-      if (alive.has(lastStrikerId)) impacts.set(lastStrikerId, 0.55);
-      lastStrikerId = null;
-    }
+  for (const id of hpDrops.keys()) impacts.set(id, 1);
+  if (lastStrikerId) {
+    // 出手方可能已经死了（反击打死自己）：那就只抖挨打的那一侧
+    if (state.units.some((u) => u.id === lastStrikerId)) impacts.set(lastStrikerId, 0.55);
+    lastStrikerId = null;
   }
 
   renderBoard(boardEl, view, {
@@ -803,9 +838,11 @@ function render(): void {
     selectedCityId,
     placeable: computePlaceable(),
     threat,
+    heat,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
     impacts,
+    hpDrops,
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -1900,6 +1937,14 @@ function toast(msg: string): void {
   window.setTimeout(() => el.remove(), 2200);
 }
 
+/**
+ * 战况烈度的红格在哪一回合已经被"出手"消费掉了。
+ *
+ * 记回合号而不是布尔：回合一变，旧值自然失效，不用额外挂钩子清理。
+ * 撤回不撤销这个标记——玩家已经看过那份情报了，撤一步不该把它又翻出来。
+ */
+let heatDismissTurn: number | null = null;
+
 function dispatch(action: Action): boolean {
   // AI 正在走这一方：玩家的点击一律不生效，不然会出现两边同时改同一个状态
   if (aiBusy()) {
@@ -1916,6 +1961,7 @@ function dispatch(action: Action): boolean {
   const actor = state.current;
   const prevWinner = state.winner;
   planMovePath(state, action);
+  const before = state;
   const result = applyAction(state, action);
   if (!result.ok) {
     pendingMovePath = null;
@@ -1925,6 +1971,9 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
+  if (action.type !== 'END_TURN') heatDismissTurn = state.turn;
+  noteHpDrops(before, state);
   if (action.type === 'ATTACK' || action.type === 'SIEGE') lastStrikerId = action.unitId;
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
@@ -2121,7 +2170,7 @@ function inspectAt(coords: { x: number; y: number } | null): void {
   if (u) {
     // 自己的军营点开是产兵面板，只读的时候也一样：
     // "这座营还能出什么"是它身上最值得看的一条
-    if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
+    if (u.owner === me() && isProducer(utype(state, u.type))) selectCamp(u);
     else selectUnit(u);
     return;
   }
@@ -2480,7 +2529,7 @@ function onBoardClick(e: Event): void {
       // 沙盒例外：那边侧栏是货架，没有产兵面板可开，`selectCamp` 等于
       // "点了没反应"。改成普通选中——至少棋盘上会亮出一个选中框，
       // 让人知道这一下确实点到了东西。
-      if (u.owner === me() && utype(state, u.type).barracks && !godMode()) selectCamp(u);
+      if (u.owner === me() && isProducer(utype(state, u.type)) && !godMode()) selectCamp(u);
       else selectUnit(u);
       return;
     }
@@ -2760,7 +2809,7 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'load': {
       if (!selectedId) return;
       const ferry = state.units.find((u) => u.id === selectedId);
-      if (!ferry || !state.unitTypes[ferry.type]?.transport) return;
+      if (!ferry || !holdOf(state.unitTypes[ferry.type])) return;
       loadPlan = loadPlan ? null : ferry.id;
       unloadPlan = null;
       if (loadPlan) toast('点一个贴着船的己方陆军，让它上船');
@@ -3231,11 +3280,13 @@ async function runAiTurn(
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
+    const before = state;
     const result = applyAction(state, action);
     if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
     rejected.clear();
 
     state = result.state;
+    noteHpDrops(before, state);
     noteStep(actor, action);
     noteFinalFrame();
     if (action.type === 'RECRUIT') budget.recruited += 1;
@@ -3316,7 +3367,7 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
   }
   for (const u of unitsOf(state, me())) {
     const d = utype(state, u.type);
-    if (!d.barracks) continue;
+    if (!isProducer(d)) continue;
     const x = String.fromCharCode(65 + u.x);
     out.push({
       id: u.id,

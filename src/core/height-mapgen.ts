@@ -70,6 +70,19 @@ interface Recipe {
   /** 噪声网格密度：越大特征越碎（群岛要碎，高原要整块） */
   grid: [number, number];
   /**
+   * 高山的"准入门槛"：归一化**之前**的原始海拔要达到这个数，那一格才允许是高山。
+   *
+   * 为什么需要它：开了 normalize 之后，阶梯上的数字是**精确配额**——
+   * 不管这张图实际上有多平，排名最高的那 1% 一定会被切成高山。
+   * 高原/峡谷那种"真的有一整座山"的地貌没问题，但群岛的地势本来就是
+   * 一片平缓的岛，那个 1% 配额就会在随便哪座岛的坡上凭空戳出一两块高山，
+   * 而且每张图都有。加上这道门槛之后，高山只在"这座岛真的高出这么多"的地方长，
+   * 图平的时候一座都不长——这才是"随地形自然分布"。
+   *
+   * 没写这个字段的地貌完全不受影响（高原/峡谷的锥顶照旧是绝对高度给的）。
+   */
+  mountainGate?: number;
+  /**
    * 是否把高度场按排名摊平（默认开）。
    *
    * 开了以后阶梯里的数字就是精确的占比，地形比例不再随种子漂。
@@ -131,15 +144,19 @@ const RECIPES: Record<string, Recipe> = {
     base: 0,
     noise: 0.04,
     peaks: { count: 0, radius: 0.1, height: 0, sharp: 2 },
+    // 高山那一档压到 0.4%（原来 1%），并且还要过 mountainGate 那道门槛：
+    // 两个条件一起，高山从"每张图都有"变成"只有真的长出山脊的图上才有几块"。
+    // 门槛 0.72：约一半的群岛图会长山，且只长在海拔最高的那几格上。
     ladder: [
       [0.42, 'water'],
       [0.54, 'shallow'],
       [0.8, 'plain'],
       [0.93, 'hill'],
-      [0.99, 'plateau'],
+      [0.996, 'plateau'],
       [1, 'mountain'],
     ],
     grid: [3, 3],
+    mountainGate: 0.72,
   },
   // 大川：起伏平缓的丘陵地，稍后在中线上开一条横贯全图的河
   river: {
@@ -178,7 +195,11 @@ function pickCenter(c: MapBuildCtx, avoid: Pos[]): Pos | null {
  *
  * `kind` 决定山心的形状；`canyon` 与 `river` 另外把中线压下来。
  */
-function buildField(c: MapBuildCtx, recipe: Recipe, kind: string): Float32Array {
+function buildField(
+  c: MapBuildCtx,
+  recipe: Recipe,
+  kind: string,
+): { field: Float32Array; raw: Float32Array | null } {
   const { w, h } = c;
   const [gw, gh] = recipe.grid;
   const n1 = makeNoise(c.rng, gw, gh);
@@ -248,6 +269,10 @@ function buildField(c: MapBuildCtx, recipe: Recipe, kind: string): Float32Array 
     }
   }
 
+  // 高山门槛要的是"绝对高度"，所以归一化之前先留一份原始场。
+  // 只有配了 mountainGate 的地貌才留（其余地貌一个字节都不多花）。
+  const raw = recipe.mountainGate !== undefined ? Float32Array.from(field) : null;
+
   // 按排名把高度场摊平成 [0,1] 的均匀分布。
   //
   // 这一步是"配方可复用"的关键：噪声的均值随种子浮动（实测 0.5~0.6 都出现过），
@@ -271,13 +296,23 @@ function buildField(c: MapBuildCtx, recipe: Recipe, kind: string): Float32Array 
       field[i] = clamp01((field[i] ?? 0) + (c.rng() - 0.5) * 0.05);
     }
   }
-  return field;
+  return { field, raw };
 }
 
 /** 按阶梯把海拔切成地形 */
 function classify(recipe: Recipe, v: number): Terrain {
   for (const [upTo, t] of recipe.ladder) if (v < upTo) return t;
   return 'plain';
+}
+
+/** 阶梯里排在 `want` 前面那一档（用来把"不够高"的山降回台地） */
+function terrainBelow(recipe: Recipe, want: Terrain): Terrain {
+  let prev: Terrain = 'plain';
+  for (const [, t] of recipe.ladder) {
+    if (t === want) return prev;
+    prev = t;
+  }
+  return prev;
 }
 
 /**
@@ -412,6 +447,63 @@ function shoalBridge(c: MapBuildCtx, from: Pos, to: Pos): void {
  * 半径给到 2 而不是 1：群岛图上只清一圈的话，城是从水面里"抠"出来的一个方框，
  * 看着像贴图错误；清到 2 圈才像一个真的小岛。
  */
+/**
+ * 群岛：给每座城留一个出海口。
+ *
+ * `hugLand` 会把城周围的水填成陆地（否则城看起来像浮在水面上的一块方框），
+ * 代价是**群岛图上会出现内陆城**——周围一格水面都没有，船下不了水。
+ * 实测 16×16 群岛：48 座城里 14 座没有临水格（29%），而这些城永久失去
+ * 整条海军线（造船只认"城边一格水面"）。
+ *
+ * 所以填完再补一刀：没有临水格，就朝离现有水面最近的那一格开一条浅滩。
+ * 只动城外沿、不动城格，也不碰 `blocked`（桥/已有单位）。
+ */
+function ensureHarbor(c: MapBuildCtx): void {
+  const anchors = [...c.cities.A, ...c.cities.B];
+  for (const p of anchors) {
+    const perimeter: Pos[] = [];
+    for (let dy = -1; dy <= c.citySize; dy += 1) {
+      for (let dx = -1; dx <= c.citySize; dx += 1) {
+        const inside = dx >= 0 && dx < c.citySize && dy >= 0 && dy < c.citySize;
+        if (inside) continue;
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= c.w || y >= c.h) continue;
+        if (c.blocked.has(y * c.w + x)) continue;
+        perimeter.push({ x, y });
+      }
+    }
+    const navigableAt = (x: number, y: number): boolean => {
+      const t = c.at(x, y);
+      return t === 'water' || t === 'shallow';
+    };
+    if (perimeter.some((q) => navigableAt(q.x, q.y))) continue;
+
+    // 挑"离水面最近"的一格开港：距离用环扫，半径 8 以内没有水就退化成第一格
+    let best: Pos | null = null;
+    let bestD = Infinity;
+    for (const q of perimeter) {
+      let d = Infinity;
+      for (let r = 1; r <= 8 && r < d; r += 1) {
+        for (let dy = -r; dy <= r; dy += 1) {
+          for (let dx = -r; dx <= r; dx += 1) {
+            if (Math.abs(dx) + Math.abs(dy) !== r) continue;
+            const nx = q.x + dx;
+            const ny = q.y + dy;
+            if (nx < 0 || ny < 0 || nx >= c.w || ny >= c.h) continue;
+            if (navigableAt(nx, ny)) d = Math.min(d, r);
+          }
+        }
+      }
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    if (best) c.put(best.x, best.y, 'shallow');
+  }
+}
+
 function hugLand(c: MapBuildCtx): void {
   const anchors = [...c.cities.A, ...c.cities.B];
   const bad = (t: Terrain | undefined): boolean =>
@@ -443,13 +535,19 @@ export function buildContour(c: MapBuildCtx, kind: string): void {
   const recipe = RECIPES[kind];
   if (!recipe) return;
 
-  const field = buildField(c, recipe, kind);
+  const { field, raw } = buildField(c, recipe, kind);
+  // 配了门槛的地貌：排名挤进高山档、但原始海拔不够的格子，降回下一档。
+  // 这一步只碰"高山"这一种地形，水/浅滩/平原/丘陵/台地的比例一格不变。
+  const gate = recipe.mountainGate;
+  const below = gate === undefined ? null : terrainBelow(recipe, 'mountain');
 
   for (let y = 0; y < c.h; y += 1) {
     for (let x = 0; x < c.w; x += 1) {
       const i = y * c.w + x;
       if (c.blocked.has(i)) continue;
-      c.put(x, y, classify(recipe, field[i] ?? 0));
+      let t = classify(recipe, field[i] ?? 0);
+      if (t === 'mountain' && raw && below && (raw[i] ?? 0) < gate!) t = below;
+      c.put(x, y, t);
     }
   }
 
@@ -472,4 +570,6 @@ export function buildContour(c: MapBuildCtx, kind: string): void {
   }
 
   hugLand(c);
+  // 群岛再补一道：填地之后必须有出海口，否则这张图的两条海军线都是死的
+  if (kind === 'isles') ensureHarbor(c);
 }

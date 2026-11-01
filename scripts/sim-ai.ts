@@ -10,6 +10,7 @@
  * 运行：node --experimental-strip-types scripts/sim-ai.ts [回合数]
  */
 
+import { isProducer } from '../src/core/produce.ts';
 import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
 import { applyAction, citiesOf, distToCity } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -117,7 +118,7 @@ for (let turn = 1; turn <= TURNS; turn++) {
       buildByType[action.unitType] = (buildByType[action.unitType] ?? 0) + 1;
       const t = s.tiles[action.y * s.w + action.x];
       if (t && t.terrain === 'bridge') bridgesOk += 1;
-      if (s.unitTypes[action.unitType]?.barracks) campsOk += 1;
+      if (isProducer(s.unitTypes[action.unitType])) campsOk += 1;
     }
     if (action.type === 'UPGRADE') budget.upgraded += 1;
   }

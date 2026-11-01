@@ -57,6 +57,16 @@ import {
   passable,
 } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
+import { canHold, holdOf, holdRoom } from './carry.ts';
+import { noteHeat } from './heat.ts';
+import {
+  canProduce,
+  isProducer,
+  produceCooldownLeft,
+  produceCostScale,
+  producePop,
+  scaleCost,
+} from './produce.ts';
 import {
   applyDraftAction,
   canUseType,
@@ -522,12 +532,20 @@ export function armySize(s: GameState, p: PlayerId): number {
   // 召唤物不占编制：它们不是招募来的，用编制去卡它们只会让死灵法师
   // 反过来把自己的产线堵死（招满四个骷髅，城市就再也造不出兵）。
   // 它们的上限由召唤者自己的 summon.max 管。
-  return s.units.filter(
-    (u) =>
-      u.owner === p &&
-      utype(s, u.type).category !== 'building' &&
-      !utype(s, u.type).summonedOnly,
-  ).length;
+  let n = 0;
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    const d = utype(s, u.type);
+    if (d.category === 'building') {
+      // 建筑一般不计编制，但产兵点可以按数据吃编制（produce.pop）：
+      // 一座能就地补兵的前线基地，本来就该占掉你一格常备名额。
+      n += producePop(d);
+      continue;
+    }
+    if (d.summonedOnly) continue;
+    n += 1;
+  }
+  return n;
 }
 
 export function cityById(s: GameState, id: string): City | undefined {
@@ -2942,10 +2960,14 @@ function doAttack(
   // 删掉原来的 while 循环
   const dmg = computeDamage(s, attacker, defender);
   defender.hp -= dmg;
+  noteHeat(s, defender);
 
   // 溅射：主目标周围的人一起挨（按比例打折，只打敌人）
   const splashed = splashVictims(s, attacker, defender);
-  for (const v of splashed) v.unit.hp -= v.dmg;
+  for (const v of splashed) {
+    v.unit.hp -= v.dmg;
+    noteHeat(s, v.unit);
+  }
 
   const noCounter = hasFlag(atkDef, 'noCounter');
   let counterDmg = 0;
@@ -3234,7 +3256,9 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
   const ferryDef = utype(s, ferry.type);
-  if (!ferryDef.transport) return { ok: false, reason: '这条船不能载人' };
+  // "能不能装、能装谁、装几个"全在兵种数据的 carry.hold 上，这里只读不猜。
+  const hold = holdOf(ferryDef);
+  if (!hold) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
 
   const cargo = unitById(s, cargoId);
@@ -3242,14 +3266,17 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (cargo.owner !== s.current) return { ok: false, reason: '不能载别人的部队' };
 
   const cargoDef = utype(s, cargo.type);
-  if (cargoDef.domain === 'water') return { ok: false, reason: '船上装不了船' };
-  if (cargoDef.category === 'building') return { ok: false, reason: '建筑搬不上船' };
+  // 身份判定（水路/建筑/白名单……）也归数据：拒绝理由由 canHold 给，
+  // 这样面板、AI、规则书说的是同一句话。
+  const verdict = canHold(ferryDef, cargoDef);
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
   if (cargo.acted) return { ok: false, reason: '这个单位本回合已经行动过了' };
   if (distance(ferry, cargo) !== 1) return { ok: false, reason: '要贴着船才能上船' };
 
   const load = ferry.cargo ?? [];
-  const cap = ferryDef.capacity ?? 0;
-  if (load.length >= cap) return { ok: false, reason: `这条船装满了（${cap}）` };
+  if (holdRoom(ferryDef, ferry) <= 0) {
+    return { ok: false, reason: `这条船装满了（${hold.max}）` };
+  }
 
   // 上船：从棋盘上摘下来，整个对象存进货舱。
   //
@@ -3298,7 +3325,7 @@ function doUnload(
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
   const ferryDef = utype(s, ferry.type);
-  if (!ferryDef.transport) return { ok: false, reason: '这条船不能载人' };
+  if (!holdOf(ferryDef)) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
 
   const load = ferry.cargo ?? [];
@@ -3574,7 +3601,7 @@ function doBuild(
     // 军营动工那一刻就把时代钉下来：它靠后方军工供货，供货方是谁当场就定了。
     // 等它盖完之后再取一次，会让"同一座营，施工期间后方刚好升了时代"
     // 这种巧合决定它的档次——玩家看不见这种因果。
-    ...(def.barracks ? { era: supplyEraAt(s, s.current, { x, y }) } : {}),
+    ...(isProducer(def) ? { era: supplyEraAt(s, s.current, { x, y }) } : {}),
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
   });
 
@@ -3742,6 +3769,8 @@ function doRecruit(
 
   /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
   let era = 0;
+  /** 产兵点的造价倍率（produce.costScale）。城市永远是 1 */
+  let costScale = 1;
   let label = '';
   let slots: Array<{ x: number; y: number }> = [];
 
@@ -3749,9 +3778,18 @@ function doRecruit(
     const camp = unitById(s, campId);
     if (!camp) return { ok: false, reason: '产兵点不存在' };
     const campDef = utype(s, camp.type);
-    if (!campDef.barracks) return { ok: false, reason: '这不是军营' };
+    if (!isProducer(campDef)) return { ok: false, reason: '这不是军营' };
     if (underConstruction(camp)) return { ok: false, reason: `${campDef.name} 还在施工，营门都没立起来` };
     if (camp.owner !== s.current) return { ok: false, reason: '这不是你的军营' };
+
+    // 三件事全读产兵的兵种数据：这个营认不认这个兵、多久能出一个、造价打几折
+    const allowed = canProduce(campDef, def);
+    if (!allowed.ok) return { ok: false, reason: allowed.reason };
+    const wait = produceCooldownLeft(s, camp, campDef);
+    if (wait > 0) {
+      return { ok: false, reason: `${campDef.name}刚产出一批，还要 ${wait} 回合才能再产` };
+    }
+    costScale = produceCostScale(campDef);
 
     const own = citiesOf(s, s.current);
     if (own.length === 0) return { ok: false, reason: '没有城市，军营补给就断了' };
@@ -3798,7 +3836,8 @@ function doRecruit(
   // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
   // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
   const quote = recruitPriceOf(s, s.current, def);
-  const payCost = quote.total;
+  // 造价倍率只作用在兵价上，不解锁费（英雄解锁是全局一次的事，不该被营打折）
+  const payCost = scaleCost(quote.total, costScale);
   const unlockFee = quote.unlockFee;
 
   if (!canPay(player, payCost)) {
@@ -3852,6 +3891,12 @@ function doRecruit(
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
 
+  // 记一笔产出回合：produce.everyTurns > 1 的营靠它算冷却
+  if (campId) {
+    const camp = unitById(s, campId);
+    if (camp) camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn };
+  }
+
   pushLog(s, s.current, `${label}产出了${def.name}`);
   return { ok: true, state: s };
 }
@@ -3891,7 +3936,7 @@ export function orderSiteProblem(s: GameState, player: PlayerId, site: string): 
   const camp = s.units.find((u) => u.id === site);
   if (!camp) return '这个产兵点不存在了';
   if (camp.owner !== player) return '那座军营不是你的';
-  if (!utype(s, camp.type).barracks) return '指定的产兵点不是军营';
+  if (!isProducer(utype(s, camp.type))) return '指定的产兵点不是军营';
   return null;
 }
 

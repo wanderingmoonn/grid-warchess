@@ -10,6 +10,8 @@ import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
 import { heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
+import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
+import { isProducer, produceEveryTurns, produceOf } from './produce.ts';
 import { resourceShort } from './resources.ts';
 import { climateEffect, type Climate } from './climate.ts';
 import { ELEMENT_NAME } from './types.ts';
@@ -117,6 +119,8 @@ export function describeUnit(
   unit?: Unit,
 ): string[] {
   const lines: string[] = [];
+  // allow.types 里存的是兵种 id，写给人看得翻成名字（本局兵种表优先，原版表兜底）
+  const nameOf = (id: string): string => s.unitTypes[id]?.name ?? UNIT_TYPES[id]?.name ?? id;
 
   // 哀兵必胜：这条加成写在伤害结算里，面板上不写就等于没有——
   // 玩家只看到"我打它 13 点"，永远不知道为什么是 14。
@@ -221,15 +225,39 @@ export function describeUnit(
         `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }
-  if (def.transport) {
-    lines.push(`运输船：能把贴身的陆军装进货舱（容量 ${def.capacity ?? 0}），运过水面再放下来。`);
-    lines.push('自己不打架。船被打沉，舱里的人一起没——运兵就是拿人命过河。');
+  // 载具：说清"装什么、几个、装进去之后怎么存"，全部来自兵种数据的 carry。
+  const hold = holdOf(def);
+  if (hold) {
+    lines.push(
+      `货舱：能把贴身的${describeAllow(hold.allow, nameOf)}装进来，最多 ${hold.max} 个。` +
+        `装船占掉那个单位这一回合，运过去再放下来。`,
+    );
+    lines.push('舱里的人在棋盘上不存在：不占格、不挨打，也不能作战。船被打沉，里面的人一起没。');
+  }
+  const deck = deckCarryOf(def);
+  if (deck) {
+    lines.push(
+      `甲板：能停 ${deck.max} 架舰载机，起飞/回收半径 ${deck.launchRange} 格。` +
+        `停在甲板上的飞机仍然是一架能出击的单位（需要空军扩展接入）。`,
+    );
   }
   if (def.bridges) {
     lines.push('架在水面上：双向通行，谁都能从桥上走过（不能停留），船还能从桥下过。耐久归零就塌回水面。');
   }
-  if (def.barracks) {
+  if (isProducer(def)) {
+    const spec = produceOf(def) ?? {};
     lines.push('前线产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。城市丢了就产不出兵。');
+    if (spec.units?.length) {
+      lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
+    }
+    const every = produceEveryTurns(def);
+    if (every > 1) lines.push(`产能：每 ${every} 回合一兵，产完要等一个冷却。`);
+    const scale = spec.costScale ?? 1;
+    if (scale !== 1) {
+      const pct = Math.round((scale - 1) * 100);
+      lines.push(`造价：在这里产兵${pct < 0 ? '便宜' : '加价'} ${Math.abs(pct)}%。`);
+    }
+    if ((spec.pop ?? 0) > 0) lines.push(`占编制：这座营本身占 ${spec.pop} 格编制。`);
     const on = (def.buildOn ?? []).map((t) => TERRAIN_INFO[t].name).join('或');
     if (on) lines.push(`只能扎在${on}上`);
     if (def.requiresWater) lines.push('必须紧邻水域（靠水补给），所以它天然长在水边');

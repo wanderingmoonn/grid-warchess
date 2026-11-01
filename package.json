@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.4",
+  "version": "0.3.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -29,7 +29,9 @@
     "pack-report": "node --experimental-strip-types scripts/pack-report.ts",
     "fantasy": "node --experimental-strip-types scripts/dump-fantasy.ts",
     "fantasy:xlsx": "python scripts/export-fantasy-xlsx.py",
-    "probe:score": "node --experimental-strip-types scripts/probe-recruit-score.ts"
+    "probe:score": "node --experimental-strip-types scripts/probe-recruit-score.ts",
+    "balance:econ": "node --experimental-strip-types scripts/balance-econ.ts",
+    "balance:econ:report": "node --experimental-strip-types scripts/econ-report.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

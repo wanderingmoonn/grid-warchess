@@ -19,6 +19,7 @@
  *      产出平庸、耐久 +35%，于是最划算的用法是把它修在隘口上堵路。
  */
 
+import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
 import { isBioUnit } from './resources.ts';
@@ -277,11 +278,11 @@ const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
  * 每个建造单位该多会盖什么。
  *
  * 为什么要在这里打补丁而不是直接改 config.ts：`builds` 挂在**建造兵自己**身上，
- * 而本扩展不该改变"没开这个扩展时的工程师会什么"。开局时改本局的兵种表副本，
+ * 而本扩展不该改变"没开这个扩展时的劳工会什么"。开局时改本局的兵种表副本，
  * 效果只作用于这一局，原版数据一个字没动。
  *
  * 建材建筑按"谁能盖"分代，就是它的时代门槛：募兵只放本代和上一代，
- * 所以时代 5 的建筑队手上会有全部三种，而时代 3 的工程师只有砖窑。
+ * 所以时代 5 的建筑队手上会有全部三种，而时代 3 的劳工只有砖窑。
  */
 const EXTRA_BUILDS: Record<string, string[]> = {
   laborer: ['granary'],
@@ -388,7 +389,7 @@ export const CITY_WORKS: Expansion = {
 
         // 兵营类：营地画成 2×2 的营垒——原版的营只有一间房，一顶帐篷。
         // 占地是原版接口（UnitTypeDef.footprint），这里只是把它用起来。
-        if (def.barracks) {
+        if (isProducer(def)) {
           def.footprint = 2;
           continue;
         }

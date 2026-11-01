@@ -318,55 +318,90 @@ check('同一局面重画：格子、棋子、城市的节点身份不变', () =
   }
 });
 
-check('受击：血条立刻缩短，橙色残留随后淡出，同一帧会抖一下', () => {
+check('受击：只有这一次真掉血的那个兵演残留，老伤号不许跟着演', () => {
   const host = doc.createElement('div');
   host.className = 'board';
   doc.body.appendChild(host);
   const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 9091);
   try {
-    const u = st.units.find((x) => x.owner === 'A');
-    assert.ok(u, '开局应该有 A 方单位');
-
+    // 先让两个兵都带伤（模拟"上一轮被打过"），并且先画一帧
+    const hurt = st.units.filter((u) => u.owner === 'A').slice(0, 2);
+    assert.ok(hurt.length >= 2, '开局至少要有两个 A 方单位');
+    for (const u of hurt) u.hp = Math.max(1, Math.floor(st.unitTypes[u.type]!.maxHp / 2));
     renderBoard(host, playerView(st, 'A'), emptyUi);
-    const node = host.querySelector<HTMLElement>(`.unit[data-id="${u.id}"]`);
-    assert.ok(node, '第一帧应该有这个单位');
-    assert.ok(node.querySelector('.hp-now'), '血条要有"当前"这一层');
-    const lag0 = node.querySelector<HTMLElement>('.hp-lag');
-    assert.ok(lag0, '血条还要有"残留"这一层');
-    assert.equal(lag0.classList.contains('chipped'), false, '没挨打就不该有残留动画');
+    const chippedNow = () =>
+      Array.from(host.querySelectorAll('.unit .hp-lag.chipped'))
+        .map((n) => n.closest<HTMLElement>('.unit')?.dataset.id)
+        .filter((v): v is string => !!v);
+    assert.deepEqual(chippedNow(), [], '两个兵是"上一轮"受的伤：这一帧不该有人演残留');
 
-    // 掉到一半：绿条立刻变短，橙条从满血宽度开始追
-    u.hp = Math.max(1, Math.floor(st.unitTypes[u.type]!.maxHp / 2));
-    renderBoard(host, playerView(st, 'A'), emptyUi);
-    const node2 = host.querySelector<HTMLElement>(`.unit[data-id="${u.id}"]`);
-    assert.equal(node2, node, '节点还是同一个（增量补丁，不重建）');
-    const lag = node2!.querySelector<HTMLElement>('.hp-lag')!;
-    assert.ok(lag.classList.contains('chipped'), '掉血要触发橙色残留');
-    assert.equal(lag.style.getPropertyValue('--chip-from'), '100%', '残留从旧血量（满血）开始');
+    // 只打其中一个：只有它该演，另一个必须一动不动
+    const [target, bystander] = hurt as [typeof hurt[0], typeof hurt[0]];
+    const beforeRatio = target.hp / st.unitTypes[target.type]!.maxHp;
+    target.hp = Math.max(1, Math.floor(target.hp * 0.6));
+    renderBoard(host, playerView(st, 'A'), {
+      ...emptyUi,
+      hpDrops: new Map([[target.id, beforeRatio]]),
+      impacts: new Map([[target.id, 1]]),
+    });
+    assert.deepEqual(
+      chippedNow(),
+      [target.id],
+      `只该有被打的那个演残留（实际 ${JSON.stringify(chippedNow())}）`,
+    );
     assert.ok(
-      Math.abs(Number(lag.style.getPropertyValue('--chip-to').replace('%', '')) - 50) <= 1,
-      '残留的终点是新血量',
+      !chippedNow().includes(bystander.id),
+      '旁边那个老伤号不许跟着演一次——这就是这次要修的 bug',
     );
+    // 残留的起点是"掉之前的比例"，终点是当前比例
+    const lag = host.querySelector<HTMLElement>(`.unit[data-id="${target.id}"] .hp-lag`)!;
+    assert.equal(lag.style.getPropertyValue('--chip-from'), `${beforeRatio * 100}%`);
+    assert.ok(Number(lag.style.getPropertyValue('--chip-to').replace('%', '')) < beforeRatio * 100);
 
-    // 回血不该再演一遍残留（否则玩家会以为又挨了一下）
-    u.hp = st.unitTypes[u.type]!.maxHp;
-    renderBoard(host, playerView(st, 'A'), emptyUi);
-    assert.equal(
-      node!.querySelector<HTMLElement>('.hp-lag')!.classList.contains('chipped'),
-      false,
-      '回血不该出现残留条',
-    );
+    // 没有新动作的重绘不该再演第二次：换一次选中（这会让节点内容重建），
+    // 重建出来的残留条上不该再挂 chipped
+    renderBoard(host, playerView(st, 'A'), { ...emptyUi, selectedId: target.id });
+    assert.deepEqual(chippedNow(), [], '同一份状态重绘不该重播残留');
 
-    // impacts：同一帧里指定要抖的单位会被记账（jsdom 没有 animate，记账这一步仍要发生）
-    const stampBefore = node!.dataset.impactAt;
-    const bumped = new Map([[u.id, 1]]);
-    renderBoard(host, playerView(st, 'A'), { ...emptyUi, impacts: bumped });
-    assert.ok(node!.dataset.impactAt, '挨打要在这个单位上记一笔');
-    assert.notEqual(node!.dataset.impactAt, stampBefore, '新的一次绘制要重新记，不能沿用上一笔');
-    // 没有 impacts 的一帧不该再记：否则同一份状态重绘会一直抖
-    const stampAfter = node!.dataset.impactAt;
+    // 回血同样不演：那不是挨打
+    target.hp = st.unitTypes[target.type]!.maxHp;
+    renderBoard(host, playerView(st, 'A'), { ...emptyUi, hpDrops: new Map() });
+    assert.deepEqual(chippedNow(), [], '回血不该出现残留条');
+
+    // 打击记账照旧：给了 impacts 就要在节点上记一笔（jsdom 没有 animate，记账那一步仍在）
+    const stampBefore = host.querySelector<HTMLElement>(`.unit[data-id="${target.id}"]`)!.dataset.impactAt;
+    renderBoard(host, playerView(st, 'A'), { ...emptyUi, impacts: new Map([[target.id, 1]]) });
+    const node = host.querySelector<HTMLElement>(`.unit[data-id="${target.id}"]`)!;
+    assert.ok(node.dataset.impactAt, '挨打要在这个单位上记一笔');
+    assert.notEqual(node.dataset.impactAt, stampBefore, '新的一次绘制要重新记');
+  } finally {
+    host.remove();
+  }
+});
+
+check('地形底色：深水有自己的样式，不再被兜底成平原', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 2, expansionIds: [] }, 4242);
+  try {
+    const wi = st.tiles.findIndex((t) => t.terrain === 'water');
+    assert.ok(wi >= 0, '这张图上应该有水');
+    st.tiles[wi]!.terrain = 'deep';
+    const dx = wi % st.w;
+    const dy = (wi - dx) / st.w;
+    const pi = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+    assert.ok(pi >= 0, '这张图上应该有平原');
+
     renderBoard(host, playerView(st, 'A'), emptyUi);
-    assert.equal(node!.dataset.impactAt, stampAfter, '没有新的打击就不该再抖');
+    const deepNode = host.querySelector<HTMLElement>(`.tile[data-x="${dx}"][data-y="${dy}"]`)!;
+    assert.ok(deepNode.classList.contains('t-deep'), '深水要有自己的 class');
+    assert.ok(!deepNode.classList.contains('t-plain'), '深水不许再被兜底成平原色');
+
+    const px = pi % st.w;
+    const py = (pi - px) / st.w;
+    const plainNode = host.querySelector<HTMLElement>(`.tile[data-x="${px}"][data-y="${py}"]`)!;
+    assert.ok(plainNode.classList.contains('t-plain'), '平原照旧是平原（对照）');
   } finally {
     host.remove();
   }
@@ -593,7 +628,64 @@ check('没有浓雾的对局里，对面的金币照旧显示', () => {
   assert.ok((host.textContent ?? '').includes('金币 321'), '普通对局不遮');
 });
 
-console.log('\n单位交互');
+console.log('\n战况烈度');
+
+check('挨过打的格子挂烈度层：档位、数量、收起都对', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4242);
+  const view = playerView(st, 'A');
+  const vis = new Set(view.visible);
+  const shown = view.visible.slice(0, 2);
+  let hidden = -1;
+  for (let i = 0; i < st.w * st.h; i += 1) if (!vis.has(i)) { hidden = i; break; }
+  assert.ok(shown.length === 2 && hidden >= 0, '这条用例要有两格可见、一格不可见');
+
+  const host = doc.createElement('div');
+  const empty = {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+  };
+  const cell = (i: number) => ({ x: i % st.w, y: Math.floor(i / st.w) });
+  const [a, b] = shown as [number, number];
+
+  renderBoard(host, view, { ...empty, heat: new Map([[a, 1], [b, 3]]) });
+
+  const at = (i: number) =>
+    host.querySelector<HTMLElement>(
+      `.heat .fx-heat[data-x="${cell(i).x}"][data-y="${cell(i).y}"]`,
+    );
+  assert.ok(host.querySelector('.heat'), '棋盘里应该有一条独立的烈度层');
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 2, '只该画两个格子');
+  assert.ok(at(a), '挨了一下的那格要有红罩');
+  assert.ok(at(a)!.classList.contains('d1'), '档位应该是 d1');
+  assert.ok(at(b)!.classList.contains('d3'), '挨了三下的档位更高');
+  // 不写数字：烈度靠"闪多快 + 描边多粗 + 底色多深"表达，血条已经说明伤得多重
+  assert.equal(at(a)!.querySelector('b'), null, '红罩上不该有数字');
+  assert.equal(at(b)!.textContent?.trim(), '', '红罩里不该有文字');
+
+  // 这一层必须排在棋子之后：否则兵站上去就把红盖掉了
+  const order = Array.from(host.children).map((n) => n.className);
+  assert.ok(
+    order.indexOf('heat') > order.indexOf('units'),
+    `烈度层要压在棋子上面（实际顺序 ${order.join(' → ')}）`,
+  );
+
+  // 档位封顶：挨了九下也还是 d5
+  renderBoard(host, view, { ...empty, heat: new Map([[a, 9]]) });
+  assert.ok(at(a)!.classList.contains('d5'), '次数再多也只到第五档');
+
+  // 雾里的格子不画：调用方漏过滤，这一层也要兜住
+  renderBoard(host, view, { ...empty, heat: new Map([[hidden, 2]]) });
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '雾外的格子不该画红罩');
+
+  // 换回合 / 没挨打：整层清空
+  renderBoard(host, view, empty);
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '不给 heat 就该清干净');
+});
 
 check('点自己的单位会高亮可移动范围', () => {
   const unit = doc.querySelector<HTMLElement>('.unit.owner-A');
@@ -841,21 +933,21 @@ check('点产兵按钮会真的出兵并扣钱', () => {
 });
 
 check('选中建造单位后能看到它可建造什么', () => {
-  // 先造一个劳工
+  // 先造一个奴隶
   const buttons = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-btn'));
-  const laborerBtn = buttons.find((b) => (b.textContent ?? '').includes('劳工'));
-  assert.ok(laborerBtn, '城市里应该能造劳工');
+  const laborerBtn = buttons.find((b) => (b.textContent ?? '').includes('奴隶'));
+  assert.ok(laborerBtn, '城市里应该能造奴隶');
   laborerBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
   const units = Array.from(doc.querySelectorAll<HTMLElement>('.unit'));
-  const laborer = units.find((u) => (u.textContent ?? '').trim().startsWith('工'));
-  assert.ok(laborer, '场上应该出现劳工');
+  const laborer = units.find((u) => (u.textContent ?? '').trim().startsWith('奴'));
+  assert.ok(laborer, '场上应该出现奴隶');
   laborer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(html.includes('可建造'), '应该有可建造列表');
-  assert.ok(html.includes('箭塔'), '劳工应该能建箭塔');
-  assert.ok(html.includes('磨坊'), '劳工应该能建磨坊');
+  assert.ok(html.includes('箭塔'), '奴隶应该能建箭塔');
+  assert.ok(html.includes('磨坊'), '奴隶应该能建磨坊');
 });
 
 check('点敌方城市显示攻城提示', () => {
