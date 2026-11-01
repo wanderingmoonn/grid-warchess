@@ -139,7 +139,11 @@ function ensureStructure(el: HTMLElement): void {
   if (el.querySelector('.tiles')) return;
   // 城市层放在棋子之后：背景透明，所以只在视觉上叠一层边框和血条，
   // 不会挡住棋子，pointer-events 也穿过去，点格子照常生效。
-  el.innerHTML = '<div class="tiles"></div><div class="units"></div><div class="cities"></div>';
+  // 烈度层放在最后：它要压在棋子**上面**。
+  // 以前把红罩画在格子里，一个兵站在那格上就把红全挡住了——
+  // 看起来像"没生效"。现在它是一整层，红罩盖过棋子，一眼就能看见"这人挨了打"。
+  el.innerHTML =
+    '<div class="tiles"></div><div class="units"></div><div class="cities"></div><div class="heat"></div>';
 }
 
 /**
@@ -416,9 +420,6 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       else if (reachSet.has(i)) cls += ' reach';
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
-      // 战况烈度叠在可达层之上：既"走得到"又"刚挨过打"的格子，两个提示都要在
-      const heatCount = heatSet?.get(i) ?? 0;
-      if (heatCount > 0) cls += ` heat d${heatStep(heatCount)}`;
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
       if (layer.cls[i] !== cls) {
@@ -430,15 +431,38 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
       const hint = ui.incomeHints?.get(i);
-      // 闪烁层单独占一个元素：`.tile::after` 是可攻击/可达高亮、
-      // `::before` 是地形纹理（山脊、树影），两个都被占了，再挤就会互相盖掉。
-      const flash = heatCount > 0 ? '<i class="fx-heat"></i>' : '';
-      const badge = flash + (hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '');
+      const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
       if (layer.badge[i] !== badge) {
         node.innerHTML = badge;
         layer.badge[i] = badge;
       }
     }
+  }
+
+  // ---- 战况烈度层 ----
+  //
+  // 只画"有数的那几格"，用 grid-column/row 定位，不为整张图铺节点；
+  // 内容不变就不写 DOM（paintLayer 的老规矩），所以每帧几乎零开销。
+  //
+  // 这一层在棋子之上：红罩盖住棋子，才看得出"站在这里的这个人挨过打"。
+  // 雾里不画——main 已经按可见格过滤过，这里再兜一层，防调用方忘了传。
+  const heatEl = el.querySelector<HTMLElement>('.heat');
+  if (heatEl) {
+    const cells: string[] = [];
+    if (heatSet) {
+      for (const i of Array.from(heatSet.keys()).sort((a, b) => a - b)) {
+        if (!visibleSet.has(i)) continue;
+        const n = heatSet.get(i) ?? 0;
+        if (n <= 0) continue;
+        const x = i % s.w;
+        const y = (i - x) / s.w;
+        cells.push(
+          `<i class="fx-heat d${heatStep(n)}" data-x="${x}" data-y="${y}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1}"></i>`,
+        );
+      }
+    }
+    paintLayer(heatEl, cells.join(''));
   }
 
   // ---- 城市 ----

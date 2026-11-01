@@ -606,66 +606,72 @@ body {
   box-shadow: inset 0 0 0 1px rgba(200, 80, 60, 0.26);
 }
 
-/* 战况烈度：上一次敌方回合，这一格上我方挨了几下。
+/* ---------- 战况烈度层 ---------- */
+/*
+ * 整层压在棋子上面（DOM 里排在 .units / .cities 之后，见 board.ts）。
  *
- * 这是复盘图层，不是威胁预测——所以它是"打过的地方"，不是"能打到的地方"。
- * 次数越多闪得越快：一眼扫过去，闪得最急的那几格就是上回合的绞肉机。
+ * 为什么不再画在格子里：把红罩挂在 .tile 上时，一个兵站在那格上就把红色全挡住了，
+ * 看起来像"这个功能没生效"。现在红罩盖过棋子，一眼就知道"站在这里的这个人挨过打"。
  *
- * 用独立元素 `i.fx-heat` 而不是伪元素：`.tile::after` 是可达/可攻击/选中的
- * 高亮层，`::before` 是地形纹理（山脊、树影、波纹），两个都占满了。
- * 独立元素还有个好处——它可以和"可达"同时存在：既走得到又刚挨过打的格子，
- * 两个提示得一起看得见。
- *
- * 闪烁快慢由 `.d1`~`.d5` 决定，JS 只负责把"挨了几下"折成档位。
- * 五档封顶：再快人眼也分不出来，只会变成一片乱闪。 */
-.tile .fx-heat {
+ * 配色走的是"重红 + 高亮描边 + 外发光"三件套：
+ *   · 底色 0.34 的实心红——隔着棋子也看得出底色变了；
+ *   · 2px 亮红描边——格子边界清楚，扫一眼就能数出是哪几格；
+ *   · 外发光——小图上也能在余光里注意到。
+ * 节奏比上一版快一倍：最慢 0.8s，最快 0.24s。闪得越快＝挨得越多。
+ */
+.heat {
   position: absolute;
-  inset: 0;
+  inset: 6px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
   pointer-events: none;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(214, 60, 48, 0.4) 0%,
-    rgba(214, 60, 48, 0.16) 72%,
-    rgba(214, 60, 48, 0.05) 100%
-  );
-  box-shadow: inset 0 0 0 1px rgba(214, 60, 48, 0.5);
-  opacity: 0.35;
-  animation: fx-heat-pulse 1.5s ease-in-out infinite;
 }
 
-.tile.heat.d1 .fx-heat {
-  animation-duration: 1.5s;
+.fx-heat {
+  border-radius: 4px;
+  background: rgba(214, 38, 28, 0.34);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 74, 52, 0.95),
+    0 0 10px 2px rgba(255, 60, 40, 0.5);
+  opacity: 0.8;
+  animation: fx-heat-pulse 0.8s ease-in-out infinite;
 }
-.tile.heat.d2 .fx-heat {
-  animation-duration: 1.15s;
+
+.fx-heat.d1 {
+  animation-duration: 0.8s;
 }
-.tile.heat.d3 .fx-heat {
-  animation-duration: 0.9s;
+.fx-heat.d2 {
+  animation-duration: 0.6s;
 }
-.tile.heat.d4 .fx-heat {
-  animation-duration: 0.7s;
+.fx-heat.d3 {
+  animation-duration: 0.45s;
 }
-.tile.heat.d5 .fx-heat {
-  animation-duration: 0.5s;
+.fx-heat.d4 {
+  animation-duration: 0.33s;
+}
+.fx-heat.d5 {
+  animation-duration: 0.24s;
 }
 
 @keyframes fx-heat-pulse {
   0%,
   100% {
-    opacity: 0.16;
+    opacity: 0.55;
   }
   50% {
-    opacity: 0.7;
+    opacity: 1;
   }
 }
 
-/* 关掉动效的人看静态红罩：提示还在，只是不闪 */
+/* 关掉动效的人看静态红罩：颜色一样重，只是不闪 */
 @media (prefers-reduced-motion: reduce) {
-  .tile .fx-heat {
+  .fx-heat {
     animation: none;
-    opacity: 0.42;
+    opacity: 0.95;
   }
 }
+
 
 
 /* 建造选址：可以落子的空地 */

@@ -630,8 +630,15 @@ check('没有浓雾的对局里，对面的金币照旧显示', () => {
 
 console.log('\n战况烈度');
 
-check('挨过打的格子挂 heat 与闪烁层，次数决定档位', () => {
+check('挨过打的格子挂烈度层：档位、数量、收起都对', () => {
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4242);
+  const view = playerView(st, 'A');
+  const vis = new Set(view.visible);
+  const shown = view.visible.slice(0, 2);
+  let hidden = -1;
+  for (let i = 0; i < st.w * st.h; i += 1) if (!vis.has(i)) { hidden = i; break; }
+  assert.ok(shown.length === 2 && hidden >= 0, '这条用例要有两格可见、一格不可见');
+
   const host = doc.createElement('div');
   const empty = {
     selectedId: null,
@@ -642,42 +649,40 @@ check('挨过打的格子挂 heat 与闪烁层，次数决定档位', () => {
     placeable: [],
     threat: [],
   };
-  // 一格挨了一下、一格挨了三下，其余不在表里
-  const once = 5 * st.w + 5;
-  const thrice = 6 * st.w + 6;
-  renderBoard(host, playerView(st, 'A'), {
-    ...empty,
-    heat: new Map([
-      [once, 1],
-      [thrice, 3],
-    ]),
-  });
+  const cell = (i: number) => ({ x: i % st.w, y: Math.floor(i / st.w) });
+  const [a, b] = shown as [number, number];
 
-  const tileOnce = host.querySelector<HTMLElement>(`.tile[data-x="5"][data-y="5"]`)!;
-  const tileThrice = host.querySelector<HTMLElement>(`.tile[data-x="6"][data-y="6"]`)!;
-  const tileQuiet = host.querySelector<HTMLElement>(`.tile[data-x="7"][data-y="7"]`)!;
+  renderBoard(host, view, { ...empty, heat: new Map([[a, 1], [b, 3]]) });
 
-  assert.ok(tileOnce.classList.contains('heat'), '挨过一下的格子要标红');
-  assert.ok(tileOnce.classList.contains('d1'), '档位应该是 d1');
-  assert.ok(tileOnce.querySelector('.fx-heat'), '要有独立的闪烁层（伪元素已经被地形和高亮占了）');
-  assert.ok(tileThrice.classList.contains('d3'), '挨了三下的格子档位应该更高');
-  assert.ok(!tileQuiet.classList.contains('heat'), '没挨过打的格子不该亮');
-  assert.equal(host.querySelectorAll('.fx-heat').length, 2, '只该有两个闪烁层');
+  const at = (i: number) =>
+    host.querySelector<HTMLElement>(
+      `.heat .fx-heat[data-x="${cell(i).x}"][data-y="${cell(i).y}"]`,
+    );
+  assert.ok(host.querySelector('.heat'), '棋盘里应该有一条独立的烈度层');
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 2, '只该画两个格子');
+  assert.ok(at(a), '挨了一下的那格要有红罩');
+  assert.ok(at(a)!.classList.contains('d1'), '档位应该是 d1');
+  assert.ok(at(b)!.classList.contains('d3'), '挨了三下的档位更高');
 
-  // 档位封顶：挨了九下也还是 d5
-  renderBoard(host, playerView(st, 'A'), { ...empty, heat: new Map([[once, 9]]) });
+  // 这一层必须排在棋子之后：否则兵站上去就把红盖掉了
+  const order = Array.from(host.children).map((n) => n.className);
   assert.ok(
-    host.querySelector<HTMLElement>(`.tile[data-x="5"][data-y="5"]`)!.classList.contains('d5'),
-    '次数再多也只到第五档',
+    order.indexOf('heat') > order.indexOf('units'),
+    `烈度层要压在棋子上面（实际顺序 ${order.join(' → ')}）`,
   );
 
-  // 换到敌方回合（或者这一回合没挨打）：整层收起，class 和元素都不能残留
-  renderBoard(host, playerView(st, 'A'), empty);
-  assert.equal(host.querySelectorAll('.fx-heat').length, 0, '不给 heat 就不该留闪烁层');
-  assert.equal(host.querySelectorAll('.tile.heat').length, 0, 'class 也要一起清掉');
-});
+  // 档位封顶：挨了九下也还是 d5
+  renderBoard(host, view, { ...empty, heat: new Map([[a, 9]]) });
+  assert.ok(at(a)!.classList.contains('d5'), '次数再多也只到第五档');
 
-console.log('\n单位交互');
+  // 雾里的格子不画：调用方漏过滤，这一层也要兜住
+  renderBoard(host, view, { ...empty, heat: new Map([[hidden, 2]]) });
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '雾外的格子不该画红罩');
+
+  // 换回合 / 没挨打：整层清空
+  renderBoard(host, view, empty);
+  assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '不给 heat 就该清干净');
+});
 
 check('点自己的单位会高亮可移动范围', () => {
   const unit = doc.querySelector<HTMLElement>('.unit.owner-A');
