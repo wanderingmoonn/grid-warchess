@@ -274,7 +274,7 @@ function clearDecor(s: GameState): void {
  * 把城市钉回四角（A 在南、B 在北）。
  *
  * 城市位置现在是浮动的（见 mapgen.planCities），而规则测试里有一批写死的
- * 坐标——劳工站 (5,5)、河挖在 x=8、桥架在 (8,7)。新城飘到这些格子上，
+ * 坐标——奴隶站 (5,5)、河挖在 x=8、桥架在 (8,7)。新城飘到这些格子上，
  * 测试就会因为"那里是敌方城市"而不是"规则不允许"而失败。
  *
  * 规则测试不该受地图随机影响，所以这里统一把城挪回老的四角布局。
@@ -1584,7 +1584,7 @@ test('建筑必须由建造单位修建，普通兵不行', () => {
   );
 
   const r = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'tower', x: 6, y: 5 });
-  assert.ok(r.ok, '劳工应该能建箭塔');
+  assert.ok(r.ok, '奴隶应该能建箭塔');
   const tower = r.state.units.find((u) => u.type === 'tower');
   assert.ok(tower, '塔应该出现在目标格');
   assert.equal(tower.x, 6);
@@ -1594,7 +1594,7 @@ test('建筑必须由建造单位修建，普通兵不行', () => {
 test('建造者不会建不属于它的建筑', () => {
   const s = fresh();
   const builder = addLaborer(s);
-  // 劳工只会建箭塔和磨坊，不会建石堡
+  // 奴隶只会建箭塔和磨坊，不会建石堡
   assert.equal(
     applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'keep', x: 6, y: 5 }).ok,
     false,
@@ -3421,12 +3421,12 @@ test('桥分三档，越高级越抗拆', () => {
     assert.ok(tiers[i]!.era > tiers[i - 1]!.era, '高一级的桥要更晚的时代才解锁');
   }
 
-  // 谁能盖哪一档：工程师起能盖石桥，建筑队起能盖钢桥
+  // 谁能盖哪一档：劳工起能盖石桥，建筑队起能盖钢桥
   const buildsOf = (id: string) => UNIT_TYPES[id as keyof typeof UNIT_TYPES].builds ?? [];
   assert.ok(buildsOf('laborer').includes('bridge'));
-  assert.ok(!buildsOf('laborer').includes('bridge2'), '劳工盖不了石桥');
+  assert.ok(!buildsOf('laborer').includes('bridge2'), '奴隶盖不了石桥');
   assert.ok(buildsOf('engineer').includes('bridge2'));
-  assert.ok(!buildsOf('engineer').includes('bridge3'), '工程师还盖不了钢桥');
+  assert.ok(!buildsOf('engineer').includes('bridge3'), '劳工还盖不了钢桥');
   assert.ok(buildsOf('crew').includes('bridge3'));
 
   // 钢桥要真的挡得住磨：民兵（13 攻）一回合只能啃掉 7 点，砸塌要 18 下
@@ -8950,13 +8950,13 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
   assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
 });
 
-test('建材建筑按代分工兵：工程师只有砖窑，建筑队三样全会', () => {
+test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const builds = (id: string) => s.unitTypes[id]?.builds ?? [];
 
-  assert.ok(builds('engineer').includes('brickworks'), '工程师起手就是砖窑');
+  assert.ok(builds('engineer').includes('brickworks'), '劳工起手就是砖窑');
   assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是工业时代的东西');
-  assert.ok(builds('foreman').includes('cementworks'), '厂长会盖水泥厂');
+  assert.ok(builds('foreman').includes('cementworks'), '工程师会盖水泥厂');
   assert.equal(builds('foreman').includes('materialbase'), false, '建材基地要现代建筑队');
   for (const id of ['brickworks', 'cementworks', 'materialbase']) {
     assert.ok(builds('crew').includes(id), `建筑队应该会盖 ${id}`);
@@ -8990,7 +8990,7 @@ test('箭塔：两回合施工，工地开不了火', () => {
   const laborerPower = buildPowerOf(s.unitTypes.laborer!);
   assert.ok(
     buildCostOf(tower) > laborerPower,
-    `塔一回合修不完：${buildCostOf(tower)} 点 vs 劳工 ${laborerPower} 点`,
+    `塔一回合修不完：${buildCostOf(tower)} 点 vs 奴隶 ${laborerPower} 点`,
   );
   assert.equal(tower.garrison, true, '塔可以驻军');
 
@@ -9192,7 +9192,7 @@ test('建造点数：同一座粮仓，弱工兵先落工地、强工兵当回�
   const r1 = applyAction(s, { type: 'BUILD', unitId: a.id, unitType: 'granary', x: 6, y: 5 });
   assert.ok(r1.ok, r1.ok ? '' : r1.reason);
   const weakSite = r1.state.units.find((u) => u.type === 'granary')!;
-  assert.equal(underConstruction(weakSite), true, '劳工一回合修不完，先落工地');
+  assert.equal(underConstruction(weakSite), true, '奴隶一回合修不完，先落工地');
   assert.equal(weakSite.buildNeed, need, '工地记着总点数');
   assert.equal(weakSite.buildDone, weak, '这一下投进去的正好是这个工兵的能力');
 
@@ -12094,7 +12094,7 @@ test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () =>
   let s = fresh({ draftMode: true }, 7111);
   s = finishDraft(s);
   s.draft!.picks.A = [];
-  // 开局配给里没有劳工（只有战斗单位 + 两个经济单位），自己摆一个
+  // 开局配给里没有奴隶（只有战斗单位 + 两个经济单位），自己摆一个
   const laborer = place(s, 'A', 'laborer', 5, 5);
   const spot = { x: 6, y: 5 };
   putTerrain(s, 6, 5, 'plain');

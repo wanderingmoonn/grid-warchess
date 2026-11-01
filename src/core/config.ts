@@ -13,7 +13,7 @@
  *   building 建筑，不能移动；军事建筑自动开火，经济建筑产金
  *
  * 注意：建筑不是凭空造出来的，是**由建造单位走过去盖**出来的。
- * 所以磨坊主不产金，"磨坊"才产金 —— 这更接近历史，也更有决策感。
+ * 所以民夫不产金，"磨坊"才产金 —— 这更接近历史，也更有决策感。
  */
 
 import type { Terrain, UnitCategory, UnitTypeDef } from './types.ts';
@@ -450,8 +450,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   laborer: {
     id: 'laborer',
-    name: '劳工',
-    short: '工',
+    name: '奴隶',
+    short: '奴',
     era: 1,
     category: 'builder',
     cost: 50,
@@ -558,8 +558,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   miller: {
     id: 'miller',
-    name: '磨坊主',
-    short: '坊',
+    name: '民夫',
+    short: '夫',
     era: 2,
     category: 'builder',
     cost: 85,
@@ -686,8 +686,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   engineer: {
     id: 'engineer',
-    name: '工程师',
-    short: '师',
+    name: '劳工',
+    short: '劳',
     era: 3,
     category: 'builder',
     cost: 130,
@@ -803,8 +803,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   foreman: {
     id: 'foreman',
-    name: '厂长',
-    short: '长',
+    name: '工程师',
+    short: '师',
     era: 4,
     category: 'builder',
     cost: 190,

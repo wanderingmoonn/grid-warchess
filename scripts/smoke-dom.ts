@@ -876,21 +876,21 @@ check('点产兵按钮会真的出兵并扣钱', () => {
 });
 
 check('选中建造单位后能看到它可建造什么', () => {
-  // 先造一个劳工
+  // 先造一个奴隶
   const buttons = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-btn'));
-  const laborerBtn = buttons.find((b) => (b.textContent ?? '').includes('劳工'));
-  assert.ok(laborerBtn, '城市里应该能造劳工');
+  const laborerBtn = buttons.find((b) => (b.textContent ?? '').includes('奴隶'));
+  assert.ok(laborerBtn, '城市里应该能造奴隶');
   laborerBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
   const units = Array.from(doc.querySelectorAll<HTMLElement>('.unit'));
-  const laborer = units.find((u) => (u.textContent ?? '').trim().startsWith('工'));
-  assert.ok(laborer, '场上应该出现劳工');
+  const laborer = units.find((u) => (u.textContent ?? '').trim().startsWith('奴'));
+  assert.ok(laborer, '场上应该出现奴隶');
   laborer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(html.includes('可建造'), '应该有可建造列表');
-  assert.ok(html.includes('箭塔'), '劳工应该能建箭塔');
-  assert.ok(html.includes('磨坊'), '劳工应该能建磨坊');
+  assert.ok(html.includes('箭塔'), '奴隶应该能建箭塔');
+  assert.ok(html.includes('磨坊'), '奴隶应该能建磨坊');
 });
 
 check('点敌方城市显示攻城提示', () => {
