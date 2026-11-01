@@ -27,3 +27,10 @@ export function registerSkillEffect(id: string, handler: SkillHandler): void {
   }
   SKILL_EFFECTS[id] = handler;
 }
+
+/** 技能就绪检查的注册表（防止函数被放进可序列化的状态里） */
+export const SKILL_READY_CHECKS: Record<string, (s: GameState, u: Unit) => boolean> = {};
+
+export function registerSkillReadyCheck(id: string, check: (s: GameState, u: Unit) => boolean): void {
+  SKILL_READY_CHECKS[id] = check;
+}

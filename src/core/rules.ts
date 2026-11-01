@@ -88,7 +88,7 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
-import { SKILL_EFFECTS, registerSkillEffect } from './skill-hooks.ts';
+import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS} from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
@@ -4092,9 +4092,8 @@ export function heroSkillsOf(
     }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
-    // 如果基础条件是“未就绪”（比如还在冷却），就不问了。
-    if (ready && k.readyCheck) {
-      ready = k.readyCheck(s, u);
+    if (ready && SKILL_READY_CHECKS[k.id]) {
+      ready = SKILL_READY_CHECKS[k.id]!(s, u);
     }
 
     return {

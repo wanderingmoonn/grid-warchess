@@ -4,11 +4,13 @@ import type {
 import type { 
   GameState,
   UnitTypeDef,
-  Unit
+  Unit,
+  City,
+  SkillDef
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
-import { registerSkillEffect } from './skill-hooks.ts';
+import { registerSkillEffect, registerSkillReadyCheck } from './skill-hooks.ts';
 
 // 境界名称
 const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
@@ -38,20 +40,19 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
   return isCultivatorDef(s.unitTypes[u.type]);
 }
 
-const SWORD_SWEEP_SKILL = {
+const SWORD_SWEEP_SKILL:SkillDef = {
   id: 'sword-sweep',
   name: '剑气纵横',
   summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
   effect: 'sword-sweep',
   cooldown: 0,
-  range: 3, // 基础延伸 3 格
   multiCast: true,
-  readyCheck: (s:GameState, u:Unit) => {
-    const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
-    return left > 0;
-  },
   notReadyReason: '攻击次数不足',
 };
+registerSkillReadyCheck('sword-sweep', (s, u) => {
+  const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
+  return left > 0;
+});
 registerSkillEffect('sword-sweep', (c) => {
   // 1. 检查并扣除攻击次数（相当于这一发剑气占用了一次普攻）
   if (c.self.attacksLeft === undefined) {
@@ -67,8 +68,10 @@ registerSkillEffect('sword-sweep', (c) => {
   if (c.self.attacksLeft <= 0) {
     c.self.acted = true; // 次数归零，彻底结束本回合
   }
+  // 放完技能即视为这一回合移动过了，不能放完再跑，不然太强
+  c.self.moved = true; 
 
-  // 2. 决定挥剑方向（强制四方向吸附）
+  // 决定挥剑方向（强制四方向吸附）
   const reach = 3+c.api.splashRadiusOf(c.state, c.self);
   let dx = 0;
   let dy = 0;
@@ -93,41 +96,85 @@ registerSkillEffect('sword-sweep', (c) => {
     dx = 1;
   }
 
-  // 3. 收集直线上的受害者
+  // 收集受害者（包含单位和城市）
   const victims: Unit[] = [];
+  const cityVictims: City[] = [];
+
   for (let i = 1; i <= reach; i++) {
     const tx = c.self.x + dx * i;
     const ty = c.self.y + dy * i;
+
+    // 找单位
     const target = c.state.units.find(u => u.owner !== c.self.owner && u.x === tx && u.y === ty);
     if (target) victims.push(target);
+
+    // 找城市（覆盖判定）
+    const city = c.state.cities.find(ct => 
+      ct.owner !== c.self.owner && 
+      !ct.ruined && 
+      tx >= ct.x && tx < ct.x + ct.size && 
+      ty >= ct.y && ty < ct.y + ct.size
+    );
+    if (city && !cityVictims.includes(city)) {
+      cityVictims.push(city);
+    }
   }
 
-  // 4. 伤害结算（1.2 倍伤害）
+  // 伤害结算
   let expGain = 1;
   let logExtra = '';
+  let deadCount = 0;
 
-  if (victims.length > 0) {
-    expGain += victims.length * 5;
+  if (victims.length > 0 || cityVictims.length > 0) {
+    expGain += victims.length * 5 + cityVictims.length * 5;
     let totalDmg = 0;
     
-    // 临时把物理基础攻击力提升 20%（比如 10 -> 12）
+    // 临时攻击加成1.2
     const baseAtk = c.api.utype(c.state, c.self.type).atk + (c.self.atkBonus ?? 0);
     const skillBonus = Math.round(baseAtk * 0.2);
     c.self.atkBonus = (c.self.atkBonus ?? 0) + skillBonus;
+
+    // 打单位
     for (const v of victims) {
-      // 此时 computeDamage 会自动把这额外的 20% 算进物理段
       const dmg = c.api.computeDamage(c.state, c.self, v);
       v.hp -= dmg;
       totalDmg += dmg;
+      if (v.hp <= 0) deadCount++;
     }
-    // 还原攻击力
+
+    // 打城市
+    for (const ct of cityVictims) {
+      const fakeCity = {
+        type: '__city__',
+        __isCity: true,
+        __city: ct,
+        x: ct.x, y: ct.y,
+        status: {},
+      } as any;
+      const dmg = c.api.computeDamage(c.state, c.self, fakeCity);
+      ct.hp -= dmg;
+      totalDmg += dmg;
+      if (ct.hp <= 0) {
+        ct.hp = 0;
+        ct.ruined = true;
+        if (!c.state.firstCityLost) c.state.firstCityLost = ct.owner;
+      }
+    }
+
     c.self.atkBonus = (c.self.atkBonus ?? 0) - skillBonus;
-    logExtra = `，剑气斩中 ${victims.length} 人，造成 ${totalDmg} 伤害`;
+
+    logExtra = `，剑气斩中 ${victims.length} 人、${cityVictims.length} 城，造成 ${totalDmg} 伤害`;
+    
+    if (deadCount > 0) {
+      c.state.units = c.state.units.filter(u => u.hp > 0);
+      expGain += deadCount * 20;
+      logExtra += `，斩杀 ${deadCount} 人`;
+    }
   } else {
-    logExtra = `，剑气落空（练剑）`;
+    logExtra = `，剑气落空，练剑一轮`;
   }
 
-  // 5. 给经验并收尾
+  // 收尾
   addExp(c.self, c.state, expGain);
   c.result.log = `剑气纵横${logExtra}，修为 +${expGain}`;
 });
