@@ -146,6 +146,7 @@ const RECIPES: Record<string, Recipe> = {
     peaks: { count: 0, radius: 0.1, height: 0, sharp: 2 },
     // 高山那一档压到 0.4%（原来 1%），并且还要过 mountainGate 那道门槛：
     // 两个条件一起，高山从"每张图都有"变成"只有真的长出山脊的图上才有几块"。
+    // 门槛 0.72：约一半的群岛图会长山，且只长在海拔最高的那几格上。
     ladder: [
       [0.42, 'water'],
       [0.54, 'shallow'],
@@ -155,7 +156,7 @@ const RECIPES: Record<string, Recipe> = {
       [1, 'mountain'],
     ],
     grid: [3, 3],
-    mountainGate: 0.78,
+    mountainGate: 0.72,
   },
   // 大川：起伏平缓的丘陵地，稍后在中线上开一条横贯全图的河
   river: {
