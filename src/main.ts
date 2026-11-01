@@ -63,9 +63,6 @@ import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit } from './core/types.ts';
-import { MAP_MAX_BYTES, parseMapFile, registerUserMaps } from './core/fixed-maps.ts';
-import type { FixedMap } from './core/fixed-maps.ts';
-import { uploadSharedMap } from './net/maps.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
@@ -3043,38 +3040,6 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
-    // ── 地图工坊 ──
-    case 'god-map-file': {
-      pickMapFile();
-      return;
-    }
-
-    case 'god-map-cancel': {
-      godMapDraft = null;
-      godMapNote = '';
-      render();
-      return;
-    }
-
-    case 'god-map-ok': {
-      if (!godMapDraft) return;
-      const draft = godMapDraft;
-      godMapNote = '正在上传…';
-      render();
-      void uploadSharedMap(draft).then((res) => {
-        if (res.ok && res.map) {
-          // 登记进本机注册表：不用刷新页面，开局面板的画廊里立刻就有它
-          registerUserMaps([res.map]);
-          godMapDraft = null;
-          godMapNote = `已上传「${res.map.name}」：开局面板的「固定地图」里现在能选到它了`;
-        } else {
-          godMapNote = res.reason ?? '上传失败';
-        }
-        render();
-      });
-      return;
-    }
-
     case 'god-pick': {
       const type = el.dataset.unit ?? '';
       if (!type) return;
@@ -3846,14 +3811,6 @@ let godRunning = false;
 let godRound = 1;
 /** 上一次打完的一句话结论 */
 let godResult = '';
-/**
- * 地图工坊里"解析好了、还没传"的那一张，以及状态行。
- *
- * 两步走而不是解析完就直传：上传是公开且不可撤回的动作，作者至少该先看一眼
- * 缩略图，确认自己没选错文件。状态行同时承担"解析错在哪"和"传上去了"两种话。
- */
-let godMapDraft: FixedMap | null = null;
-let godMapNote = '';
 /** 工具栏上次重建时的局面签名：AI 跑起来时每一步都在变，靠它挡掉无谓重建 */
 let godSig = '';
 /**
@@ -3986,8 +3943,6 @@ function godUi() {
     selected: godSelectedNote(),
     // 侧栏那块「手上这支兵」要它本人：工具栏一行只能放血量，技能按钮放不下
     picked: selectedId ? (state.units.find((u) => u.id === selectedId) ?? null) : null,
-    mapDraft: godMapDraft,
-    mapNote: godMapNote,
   };
 }
 
@@ -4042,51 +3997,6 @@ function renderGodBar(): void {
   commanderEl.innerHTML = godBarHtml(godUi());
 }
 
-/**
- * 地图工坊的文件选择器。
- *
- * 只建一次、挂在 body 上，而不是画进侧栏的 innerHTML：
- * 侧栏是整块重绘的，`<input type=file>` 每重绘一次就会丢掉 `change` 监听，
- * 表现出来是"第二次选文件没反应"。所以这个节点要活过所有重绘。
- */
-let mapFileInput: HTMLInputElement | null = null;
-
-function pickMapFile(): void {
-  if (!mapFileInput) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,.txt,application/json,text/plain';
-    input.hidden = true;
-    input.addEventListener('change', () => {
-      const file = input.files?.[0];
-      // 先把 value 清掉：同一个文件改完再选一次，change 才会重新触发
-      input.value = '';
-      if (!file) return;
-      if (file.size > MAP_MAX_BYTES) {
-        godMapDraft = null;
-        godMapNote = `文件太大（${Math.round(file.size / 1024)}KB，上限 ${MAP_MAX_BYTES / 1024}KB）`;
-        render();
-        return;
-      }
-      void file.text().then((text) => {
-        const parsed = parseMapFile(text);
-        if (parsed.ok) {
-          godMapDraft = parsed.map;
-          godMapNote = '看一眼缩略图，确认是这个文件再上传';
-        } else {
-          godMapDraft = null;
-          // 最多三条：再多就不是"提示"，是把整个错误日志糊在侧栏上
-          godMapNote = parsed.errors.slice(0, 3).join('；');
-        }
-        render();
-      });
-    });
-    document.body.appendChild(input);
-    mapFileInput = input;
-  }
-  mapFileInput.click();
-}
-
 function renderGodShelf(): void {
   const pickedSig = godPickedSig();
   const sig = [
@@ -4112,9 +4022,6 @@ function renderGodShelf(): void {
     // 「手上这支兵」那块卡：id、血量、还能走/打、技能冷却。
     // 只放 id 是不够的——开完技能冷却变了，卡片却还停在"就绪"上。
     pickedSig,
-    // 地图工坊：解析好一张图 / 状态行变了，货架这块要跟着换
-    godMapDraft?.id ?? '-',
-    godMapNote,
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;

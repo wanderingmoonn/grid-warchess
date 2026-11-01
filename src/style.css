@@ -2688,79 +2688,225 @@ a.btn {
  * 所以这里只补它自己的那几个小组件：阵营/笔刷分组、战况计数、结论文字。
  */
 
-/* ---------- 上帝模式：地图工坊 ----------
+/* ---------- 开始界面：左侧两页 ----------
 
- * 它和上面那些"一行 chip"不一样：这里要放一张缩略图 + 两行说明 + 两颗按钮，
- * 所以单独给一块卡片的样子，别挤进 .god-group 的单行流里。
+ * 这些设置以前是一条长卷：从「数据收集」一路滚到「扩展规则」，最后才轮到
+ * 「固定地图」。现在拆成两页——战役管"怎么打"，地图管"在哪打"。
+ * 面板也从 560px 的对话框长成一张两栏的台面：地图那页要铺画廊，窄了放不下。
  */
-.god-maps {
+.modal.start-panel {
+  width: min(980px, 100%);
+  height: min(720px, 90dvh);
+  flex-direction: row;
+}
+
+.start-rail {
+  flex: 0 0 174px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
+  padding: 16px 12px;
+  background: var(--panel-2);
+  border-right: 1px solid var(--line);
+}
+
+.start-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 14px;
+}
+
+.start-brand b {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.start-brand span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.start-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.start-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.start-nav-item b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.start-nav-item span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.start-nav-item:hover {
+  background: var(--panel);
+}
+
+.start-nav-item.active {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  box-shadow: inset 2px 0 0 var(--a);
+}
+
+.start-rail-foot {
+  margin-top: auto;
+  padding: 8px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.start-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 只有内容区滚动：左边导航和底下那颗「开始对局」始终在视野里 */
+.start-col .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.start-foot {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.start-summary {
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.start-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* 待上传的那张图：缩略图 + 元信息 + 两颗按钮 */
+.map-draft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 10px;
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   background: var(--panel-2);
 }
 
-.god-map-preview {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-}
-
-.god-map-thumb {
+.map-draft-thumb {
   flex: 0 0 auto;
-  width: 72px;
-  height: 72px;
+  width: 84px;
+  height: 84px;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--plain);
 }
 
-.god-map-meta {
+.map-draft-thumb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.map-draft-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
   font-size: 12px;
   color: var(--text-2);
 }
 
-.god-map-meta > b {
+.map-draft-meta > b {
   font-size: 13px;
   color: var(--text);
   overflow-wrap: anywhere;
 }
 
-.god-map-note {
+.map-draft-act {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 上传状态行：错误信息里带行列号，长句也不许截断 */
+.map-note {
+  margin-top: 8px;
   font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-2);
-  /* 错误信息里有行列号，长句也不许截断 */
-  overflow-wrap: anywhere;
-}
-
-.god-hint {
-  font-size: 11px;
   line-height: 1.55;
-  color: var(--text-3);
+  overflow-wrap: anywhere;
+  color: var(--text-2);
 }
 
-.god-hint a {
-  color: var(--a);
-  text-decoration: underline;
+.map-note.is-bad {
+  color: #b8433a;
 }
 
-.god-hint code {
-  font-size: 11px;
-  padding: 0 3px;
-  border-radius: 4px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+.map-note.is-ok {
+  color: #3f7a54;
+}
+
+@media (max-width: 720px) {
+  .modal.start-panel {
+    height: min(760px, 94dvh);
+    flex-direction: column;
+  }
+
+  .start-rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .start-brand {
+    padding: 0 6px 0 0;
+  }
+
+  .start-brand span,
+  .start-rail-foot {
+    display: none;
+  }
+
+  .start-nav {
+    flex-direction: row;
+  }
+
+  .start-nav-item span {
+    display: none;
+  }
 }
 
 .god-group {

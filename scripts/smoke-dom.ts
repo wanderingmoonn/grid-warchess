@@ -34,7 +34,6 @@ import {
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
-import { BUILTIN_MAPS } from '../src/core/fixed-maps.ts';
 import { renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
@@ -1273,9 +1272,19 @@ check('新对局按选中的尺寸和扩展生成', () => {
   assert.ok(html.includes('老兵'), '侧栏应该显示已启用的扩展');
 });
 
-await checkAsync('固定地图：开局面板有画廊，选中/取消都能实时生效', async () => {
+await checkAsync('固定地图：开局界面有画廊，选中/取消都能实时生效', async () => {
   click('[data-act="new-game"]');
   await new Promise((resolve) => setTimeout(resolve, 60));
+
+  // 选图在「地图」页：和战役设置分开，一条长卷里不再既讲规则又挑地图
+  const mapsTab = doc.querySelector<HTMLElement>('[data-tab="maps"]');
+  assert.ok(mapsTab, '开始界面左侧要有「地图」这一页');
+  mapsTab!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(
+    doc.querySelector<HTMLElement>('[data-tab="maps"]')!.classList.contains('active'),
+    '点过之后「地图」要是选中态',
+  );
 
   const cards = [...doc.querySelectorAll<HTMLElement>('[data-map]')];
   assert.ok(cards.length >= 5, `内置四张 + 随机，实际 ${cards.length}`);
@@ -1317,33 +1326,25 @@ await checkAsync('固定地图：开局面板有画廊，选中/取消都能实�
   );
 });
 
-await checkAsync('地图工坊：上帝模式里有上传入口，没解析前不显示"待上传"', async () => {
-  // 上帝模式的货架是纯 HTML 生成，这里直接拿它验结构（真上传要走云端）
-  const st = createMatch({ ...DEFAULT_CONFIG, godMode: true }, 7, {});
-  const html = godShelfHtml({
-    state: st,
-    side: 'A',
-    brush: { kind: 'none' },
-    pack: '',
-    era: 0,
-    cityEra: 1,
-    running: false,
-    round: 1,
-    result: '',
-    speed: 0,
-    speedNames: ['慢'],
-    log: [],
-    play: null,
-    myTurn: true,
-    passing: false,
-    selected: '',
-    picked: null,
-  } as never);
-  assert.ok(html.includes('地图工坊'), '侧栏要有地图工坊');
-  assert.ok(html.includes('data-act="god-map-file"'), '要有选文件的按钮');
-  assert.ok(!html.includes('god-map-ok'), '还没解析出地图，不该有"上传"按钮');
+await checkAsync('地图页：选图和传图在同一页，没解析前只有"选文件"', async () => {
+  click('[data-act="new-game"]');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  doc.querySelector<HTMLElement>('[data-tab="maps"]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
 
-  const withDraft = godShelfHtml({
+  const body = doc.querySelector('.modal-body')!;
+  assert.ok(body.textContent!.includes('上传地图'), '地图页要有「上传地图」这一块');
+  assert.ok(body.querySelector('[data-act="map-file"]'), '要有「选择地图文件…」');
+  assert.ok(body.querySelector('input[data-field="map-file"]'), '要有一个隐藏的文件选择框');
+  assert.ok(
+    body.querySelector('a[href*="example-map"]'),
+    '要给一个能下载的模板，否则没人知道该画成什么样',
+  );
+  assert.ok(!body.querySelector('[data-act="map-upload"]'), '还没解析出地图，不该有「上传到地图库」');
+
+  // 上传入口只有这一处：上帝模式侧栏里那个已经撤掉，免得同一件事两个门
+  const st = createMatch({ ...DEFAULT_CONFIG, godMode: true }, 7, {});
+  const shelf = godShelfHtml({
     state: st,
     side: 'A',
     brush: { kind: 'none' },
@@ -1361,12 +1362,12 @@ await checkAsync('地图工坊：上帝模式里有上传入口，没解析前�
     passing: false,
     selected: '',
     picked: null,
-    mapDraft: BUILTIN_MAPS[0]!,
-    mapNote: '看一眼再传',
   } as never);
-  assert.ok(withDraft.includes('data-act="god-map-ok"'), '解析好之后要有上传按钮');
-  assert.ok(withDraft.includes('双河渡口'), '预览要写出地图名');
-  assert.ok(withDraft.includes('class="map-thumb"'), '预览要有缩略图');
+  assert.ok(!shelf.includes('地图工坊'), '上帝模式侧栏里不该再有地图工坊');
+
+  doc.querySelector<HTMLElement>('.modal-mask [data-act="cancel"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(doc.querySelector('.modal-mask'), null, '取消之后面板应该收起');
 });
 
 await checkAsync('32×32 大地图也能开局，并带出缩放条', async () => {

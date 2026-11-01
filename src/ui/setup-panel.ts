@@ -1,7 +1,16 @@
 /**
- * 开局设置面板。
+ * 开始界面。
  *
- * 这是给"每次开局想换个玩法"准备的：棋盘多大、开哪些扩展、用哪些兵种。
+ * 以前这里只有一页"新对局设置"，所有东西往下摞：规则、时代、兵种、扩展……
+ * 再加上后来的固定地图，一条长卷里既装"这一局怎么打"，也装"这局打哪张图"，
+ * 两件事混在一起。现在拆成左侧两页：
+ *
+ *   · 战役——一局怎么打（对手、时代、尺寸、兵种、扩展）；
+ *   · 地图——在哪张图上打（内置图、玩家上传的图、上传入口）。
+ *
+ * 地图那一页是**选**和**传**放在一起的：玩家在这里挑图，作者也在这里交图，
+ * 传完的那张立刻出现在同一个画廊里、并且自动被选中——不用再跑去别的面板。
+ *
  * 面板只负责收集选择，真正的校验和构建交给 createMatch。
  */
 
@@ -15,8 +24,18 @@ import {
   lockedEraPacks,
 } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
-import { allFixedMaps, fixedMapById, registerUserMaps } from '../core/fixed-maps.ts';
-import { cachedMaps, listSharedMaps } from '../net/maps.ts';
+import {
+  MAP_MAX_BYTES,
+  MAP_MAX_SIZE,
+  MAP_MIN_SIZE,
+  TERRAIN_LEGEND,
+  allFixedMaps,
+  fixedMapById,
+  parseMapFile,
+  registerUserMaps,
+  type FixedMap,
+} from '../core/fixed-maps.ts';
+import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -143,6 +162,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
       const d = el.dataset;
+      if (d.tab) return `[data-tab="${d.tab}"]`;
       if (d.unit) return `[data-unit="${d.unit}"]`;
       if (d.era) return `[data-era="${d.era}"]`;
       if (d.size) return `[data-size="${d.size}"]`;
@@ -155,6 +175,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       return null;
     };
 
+    /** 左侧两页：战役（怎么打）与地图（在哪打）。默认停在战役 */
+    let tab: 'battle' | 'maps' = 'battle';
+    /** 换页的时候把滚动条拨回顶部：留在上一页的位置会让人以为页面没换 */
+    let resetScroll = false;
+
+    /** 待上传的地图文件（本地解析完、还没发出去） */
+    let mapDraft: FixedMap | null = null;
+    let mapNote = '';
+    let mapBad = false;
+
     /*
      * 固定地图：内置四张 + 云端地图库里别人上传的那些。
      *
@@ -166,14 +196,48 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     registerUserMaps(cachedMaps());
     let cloudNote = '';
     let alive = true;
-    void listSharedMaps().then((res) => {
-      if (!alive) return;
-      if (res.maps.length > 0) registerUserMaps(res.maps);
-      cloudNote = res.ok ? '' : (res.reason ?? '');
-      if (res.ok) paint();
-      else if (res.maps.length > 0) paint();
-      else paint();
-    });
+
+    /** 拉一次地图库。地图页上的「刷新」也走这里，所以单独拎出来 */
+    const loadCloudMaps = (): void => {
+      void listSharedMaps().then((res) => {
+        if (!alive) return;
+        if (res.maps.length > 0) registerUserMaps(res.maps);
+        cloudNote = res.ok ? '' : (res.reason ?? '');
+        paint();
+      });
+    };
+
+    /**
+     * 读一个地图文件：体积 → 解析 → 预览。
+     *
+     * 顺序不能换：先看体积，省得把一个 10MB 的文件整个读进内存再拒；
+     * 解析失败就把错误留在原地（带行列号），不清空也不弹窗——
+     * 玩家要的是"第 3 行第 4 列那个字符不认识"，不是"上传失败"。
+     */
+    const readMapFile = (file: File): void => {
+      if (file.size > MAP_MAX_BYTES) {
+        mapDraft = null;
+        mapBad = true;
+        mapNote = `文件太大（${Math.round(file.size / 1024)}KB，上限 ${MAP_MAX_BYTES / 1024}KB）`;
+        paint();
+        return;
+      }
+      void file.text().then((text) => {
+        if (!alive) return;
+        const parsed = parseMapFile(text);
+        if (parsed.ok) {
+          mapDraft = parsed.map;
+          mapBad = false;
+          mapNote = '';
+        } else {
+          mapDraft = null;
+          mapBad = true;
+          // 最多三条：再多就不是"提示"，是把整个错误日志糊在界面上
+          mapNote = parsed.errors.slice(0, 3).join('；');
+        }
+        paint();
+      });
+    };
 
     /** 一张地图卡片：缩略图 + 名字 + 尺寸/来源 */
     const mapCard = (id: string, name: string, size: string, thumb: string, active: boolean, extra = '') =>
@@ -188,8 +252,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 兵种池在面板最下面，点一个兵种就"弹回顶部"就是这么来的——
       // 所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
-      const prevScrollTop = prevBody?.scrollTop ?? 0;
-      const prevScrollLeft = prevBody?.scrollLeft ?? 0;
+      // 换页时把滚动条拨回顶部：留在上一页的位置会让人以为"点错了、没反应"
+      const prevScrollTop = resetScroll ? 0 : (prevBody?.scrollTop ?? 0);
+      const prevScrollLeft = resetScroll ? 0 : (prevBody?.scrollLeft ?? 0);
+      resetScroll = false;
       const prevFocusEl = document.activeElement;
       const prevFocus =
         prevFocusEl instanceof HTMLElement && mask.contains(prevFocusEl)
@@ -228,9 +294,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
 
       /*
-       * 固定地图画廊。
+       * 地图数据：地图那一页要用。
        *
-       * 默认是「随机地形」——开局面板的默认值必须和"不选"一致，
+       * 默认是「随机地形」——开始界面的默认值必须和"不选"一致，
        * 否则每次开局都会被一张别人画好的图顶掉，玩家还得先学会怎么取消。
        * 选中的卡片加 `active`，靠一条主色描边和随机那张区分开；
        * 缩略图直接用同一份地形数据画，所见即所得。
@@ -238,26 +304,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const fixedMaps = allFixedMaps();
       const pickedMapId = config.fixedMap?.id ?? '';
       const thumbCity = Math.max(2, Math.min(3, Math.round(config.citySize ?? 2)));
-      const mapCards = [
-        `<button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
-           <span class="map-card-thumb is-random">随机</span>
-           <b>随机地形</b>
-           <i>按种子生成</i>
-         </button>`,
-        ...fixedMaps.map((m) =>
-          mapCard(
-            m.id,
-            esc(m.name),
-            `${m.w}×${m.h}`,
-            mapThumbSvg(m, thumbCity),
-            m.id === pickedMapId,
-            m.source === 'user' ? ' · 玩家地图' : '',
-          ),
-        ),
-      ].join('');
+      const builtinCards = fixedMaps.filter((m) => m.source !== 'user');
+      const userCards = fixedMaps.filter((m) => m.source === 'user');
       const mapHint = config.fixedMap
         ? `已选「${esc(config.fixedMap.name)}」：这一局的地貌、对称、尺寸与种子都不生效`
-        : `随机地形每局不同。选一张固定地图就照着它打——联机两边、复盘重开都是同一张${cloudNote ? `（${cloudNote}）` : ''}`;
+        : `随机地形每局不同。选一张固定地图就照着它打——联机两边、复盘重开都是同一张`;
 
       // 时代那一栏的提示要指出"还能往上开"：只写"从哪一级开始"的话，
       // 没勾过时代扩展的人根本不知道这游戏还有第六时代。
@@ -333,14 +384,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         </label>`,
       ).join('');
 
-      mask.innerHTML = `
-        <div class="modal">
-          <div class="modal-head">
-            <h2>新对局</h2>
-            <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>
-          </div>
-
-          <div class="modal-body">
+      /* ── 战役页：这一局怎么打 ── */
+      const battleView = `
             <section class="field">
               <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
@@ -464,13 +509,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                固定地图 <span class="field-hint">${mapHint}</span>
-              </div>
-              <div class="map-gallery">${mapCards}</div>
-            </section>
-
-            <section class="field">
-              <div class="field-label">
                 地形对称 <span class="field-hint">地势各异：两侧地形数量相同、分布不同</span>
               </div>
               <div class="chip-row">${symChips}</div>
@@ -495,12 +533,136 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <button class="btn btn-sm" data-act="reroll">换一张地图</button>
               </div>
               <div class="field-hint">同一个种子永远生成同一张地图，方便复盘和公平对战。</div>
-            </section>
-          </div>
+            </section>`;
 
-          <div class="modal-foot">
-            <button class="btn" data-act="cancel">取消</button>
-            <button class="btn btn-primary" data-act="start">开始对局</button>
+      /*
+       * 地图页：选图与传图是同一件事的两头。
+       *
+       * 之前"上传"藏在上帝模式侧栏里，而"选图"在开局面板里——同一条流水线的
+       * 两端被拆到两个互不相干的地方，玩家画完图得先想"我该去哪个面板"。
+       * 现在合成一页：上面挑，下面传，传完那张图直接出现在上面的画廊里并被选中。
+       */
+      const mapsView = `
+            <section class="field">
+              <div class="field-label">
+                这一局的地图 <span class="field-hint">${mapHint}</span>
+              </div>
+              <div class="map-gallery">
+                <button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
+                  <span class="map-card-thumb is-random">随机</span>
+                  <b>随机地形</b>
+                  <i>按种子生成</i>
+                </button>
+                ${builtinCards
+                  .map((m) =>
+                    mapCard(m.id, esc(m.name), `${m.w}×${m.h}`, mapThumbSvg(m, thumbCity), m.id === pickedMapId),
+                  )
+                  .join('')}
+              </div>
+              <div class="field-hint">内置图是手摆的对称图，两边条件一样，不随机、不可改。选了固定地图，战役页里的地貌 / 对称 / 尺寸 / 种子都不再起作用。</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
+                <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
+              </div>
+              ${
+                userCards.length > 0
+                  ? `<div class="map-gallery">${userCards
+                      .map((m) =>
+                        mapCard(
+                          m.id,
+                          esc(m.name),
+                          `${m.w}×${m.h}`,
+                          mapThumbSvg(m, thumbCity),
+                          m.id === pickedMapId,
+                          m.author ? ` · ${esc(m.author)}` : '',
+                        ),
+                      )
+                      .join('')}</div>`
+                  : `<div class="field-hint">还没有人传过。下面传一张上去，所有人都能在这里选到它。</div>`
+              }
+              ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                上传地图 <span class="field-hint">传上去的图，所有玩家开局都能选到</span>
+              </div>
+              ${
+                mapDraft
+                  ? `<div class="map-draft">
+                       <span class="map-draft-thumb">${mapThumbSvg(mapDraft, thumbCity)}</span>
+                       <div class="map-draft-meta">
+                         <b>${esc(mapDraft.name)}</b>
+                         <span>${mapDraft.w} × ${mapDraft.h} · 城 ${mapDraft.citiesA.length} : ${mapDraft.citiesB.length}</span>
+                         <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
+                       </div>
+                       <div class="map-draft-act">
+                         <button class="btn btn-sm btn-primary" data-act="map-upload">上传到地图库</button>
+                         <button class="btn btn-sm" data-act="map-cancel">取消</button>
+                       </div>
+                     </div>`
+                  : `<div class="chip-row">
+                       <button class="btn btn-sm" data-act="map-file">选择地图文件…</button>
+                       <a class="btn btn-sm" href="maps/example-map.txt" download="example-map.txt">下载一个模板</a>
+                     </div>
+                     <div class="field-hint">
+                       支持 <code>.json</code> 或纯文本网格${TERRAIN_LEGEND}，用 <code>A</code>/<code>B</code> 标两边城的左上角。
+                       单文件 ≤ ${Math.round(MAP_MAX_BYTES / 1024)}KB，${MAP_MIN_SIZE}~${MAP_MAX_SIZE} 格见方。
+                       先在本地解析校验，不合格的文件不会发出去。
+                     </div>`
+              }
+              ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
+            </section>
+
+            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
+
+      const summary = `${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
+        config.fixedMap ? esc(config.fixedMap.name) : '随机地形'
+      }`;
+
+      mask.innerHTML = `
+        <div class="modal start-panel">
+          <aside class="start-rail">
+            <div class="start-brand">
+              <b>时代与回旋镖</b>
+              <span>回合制战棋</span>
+            </div>
+            <nav class="start-nav">
+              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
+                <b>战役</b>
+                <span>规则 · 时代 · 兵种</span>
+              </button>
+              <button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
+                <b>地图</b>
+                <span>选图 · 上传</span>
+              </button>
+            </nav>
+            <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
+          </aside>
+
+          <div class="start-col">
+            <div class="modal-head">
+              ${
+                tab === 'battle'
+                  ? `<h2>战役</h2>
+                     <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
+                  : `<h2>地图</h2>
+                     <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
+              }
+            </div>
+
+            <div class="modal-body">${tab === 'battle' ? battleView : mapsView}</div>
+
+            <div class="modal-foot start-foot">
+              <div class="start-summary">${summary}</div>
+              <div class="start-actions">
+                <button class="btn" data-act="cancel">取消</button>
+                <button class="btn btn-primary" data-act="start">开始对局</button>
+              </div>
+            </div>
           </div>
         </div>
       `;
@@ -521,6 +683,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       if (target === mask) {
         close(null);
+        return;
+      }
+
+      // 左侧导航：换页就是换一屏内容，滚动位置跟着归零
+      const tabBtn = target.closest<HTMLElement>('[data-tab]');
+      if (tabBtn?.dataset.tab) {
+        const next = tabBtn.dataset.tab === 'maps' ? 'maps' : 'battle';
+        if (next === tab) return;
+        tab = next;
+        resetScroll = true;
+        paint();
         return;
       }
 
@@ -670,6 +843,51 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         currentSeed = randomSeed();
         paint();
       }
+
+      // ── 地图页：选文件 / 上传 / 取消 / 刷新 ──
+      if (act === 'map-file') {
+        mask.querySelector<HTMLInputElement>('[data-field="map-file"]')?.click();
+        return;
+      }
+      if (act === 'map-cancel') {
+        mapDraft = null;
+        mapNote = '';
+        paint();
+        return;
+      }
+      if (act === 'map-refresh') {
+        mapNote = '正在刷新地图库…';
+        mapBad = false;
+        paint();
+        loadCloudMaps();
+        return;
+      }
+      if (act === 'map-upload') {
+        if (!mapDraft) return;
+        const draft = mapDraft;
+        mapNote = '正在上传…';
+        mapBad = false;
+        paint();
+        void uploadSharedMap(draft).then((res) => {
+          if (!alive) return;
+          if (res.ok && res.map) {
+            const got = res.map;
+            // 登记进本机注册表，并**当场选中**：传完就该能直接用，
+            // 不该让人再去画廊里找一遍自己刚传的那张。
+            registerUserMaps([got]);
+            config.fixedMap = got;
+            config.size = got.w;
+            mapDraft = null;
+            mapNote = `已上传「${got.name}」，现在所有玩家都能在地图库里选到它（本局已选中）`;
+            mapBad = false;
+          } else {
+            mapNote = res.reason ?? '上传失败';
+            mapBad = true;
+          }
+          paint();
+        });
+        return;
+      }
     });
 
     /**
@@ -693,6 +911,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     });
     mask.addEventListener('change', (e) => {
       const input = e.target as HTMLInputElement;
+      if (input.dataset.field === 'map-file') {
+        const file = input.files?.[0];
+        // 先把 value 清掉：同一个文件改完再选一次，change 才会重新触发
+        input.value = '';
+        if (file) readMapFile(file);
+        return;
+      }
       if (input.dataset.field === 'size') {
         applySizeInput(input, true);
         return;
@@ -749,5 +974,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     paint();
     document.body.appendChild(mask);
+    loadCloudMaps();
   });
 }
