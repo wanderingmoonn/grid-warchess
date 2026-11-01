@@ -33,6 +33,10 @@ export interface BoardUi {
   targets: string[];
   /** 可攻城的城市 id */
   siegeTargets: string[];
+  /** 正在等待选方向的技能高亮格子 */
+  aimTiles?: number[];
+  /** 技能的波及范围格子 */
+  skillThreatTiles?: number[];
   /** 当前选中的城市 id */
   selectedCityId: string | null;
   /** 处于野外建造模式时，可以放置建筑的空格 */
@@ -361,6 +365,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   // 浓雾下"去过、此刻看不见"的格：按记忆里的样子画，压暗一档
   const rememberedTiles = view.rememberedTiles;
   const reachSet = new Set(ui.reach);
+  const aimSet = new Set(ui.aimTiles);
+  const skillThreatSet = new Set(ui.skillThreatTiles);
   const placeSet = new Set(ui.placeable);
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
@@ -418,6 +424,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       }
       if (targetPositions.has(i)) cls += ' attackable';
       else if (reachSet.has(i)) cls += ' reach';
+
+      if (aimSet.has(i)) cls += ' aim';
+      if (skillThreatSet.has(i)) cls += ' skill-threat'; 
+
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
       if (s.fog && !visibleSet.has(i)) cls += ' out';

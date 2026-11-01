@@ -10552,7 +10552,7 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
   );
 });
 
-console.log('\n修仙扩展：炼气士');
+console.log('\n修真扩展');
 
 test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
   const s = fresh({ expansionIds: ['cultivation'], godMode: true });
@@ -10566,13 +10566,13 @@ test('修士：衰老先减益，超龄 3 年进入回光返照', () => {
   const baseAtk = effectiveStats(s, qi).atk;
   const baseArmor = effectiveStats(s, qi).armor;
   
-  // 71岁：超 1 岁，攻击 -2，护甲 -1
-  qi.age = 71;
+  // 超 1 岁，攻击 -2，护甲 -1
+  qi.age = 65;
   assert.equal(effectiveStats(s, qi).atk, baseAtk - 2, '超 1 岁攻击减 2');
   assert.equal(effectiveStats(s, qi).armor, baseArmor - 1, '超 1 岁护甲减 1');
   
-  // 73 岁：超 3 岁，生命归 0 等待清场
-  qi.age = 73;
+  // 超 3 岁，生命归 0 等待清场
+  qi.age = 67;
   assert.equal(getAgingYears(qi), 3, '这里超龄 3 岁');
   
   // 模拟回合开始
@@ -10726,9 +10726,111 @@ test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   );
 });
 
+test('修仙：纯挂机曲线——炼气士靠打坐能撑到几级（设计锚点）', () => {
+  // 设计意图正常挂机应该在 5 级前坐化，
+  // 逼玩家靠别的方法续命（例如击杀 +10 经验）。
+  // 这条测试把"寿元 / 经验曲线"的效果量化下来：改动参数之后，
+  // 一眼就能看出"到第几级，用了几岁"，红了就知道设计意图被破坏了。
+  //
+  // 判定完全走真实规则：每轮走两次 END_TURN 等价于"我的回合开始一次"，
+  // turnStartSkills 会让 age +1、经验 +2（getExpGrowth 在当前等级的基础上）。
+  // 不调私有函数，只问"还在不在、hp 归没归零、rank 是几"。
+  const s = fresh({ expansionIds: ['cultivation'] }, 6201);
+  s.units = []; // 场上只留一个修士，两座城都留着（丢城会判负，测不到曲线）
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+
+  const milestones: Array<{ rank: number; age: number; exp: number }> = [
+    { rank: cultivationRank(qi), age: qi.age ?? 0, exp: 0 },
+  ];
+  let lastAlive = { ...milestones[0]! };
+  let died = false;
+  const MAX_ROUNDS = 200;
+
+  let cur = s;
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    // 一轮 = A 结束 → B 开始 → B 结束 → A 开始（A 的单位吃到"回合开始"）
+    const r1 = applyAction(cur, { type: 'END_TURN' });
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    const r2 = applyAction(r1.state, { type: 'END_TURN' });
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    cur = r2.state;
+
+    const still = cur.units.find((u) => u.id === qi.id);
+    if (!still) {
+      died = true; // 已经被 sweepDead 清掉，用上一步留下的 lastAlive 作为终点
+      break;
+    }
+    const rank = cultivationRank(still);
+    const age = still.age ?? 0;
+    const exp = (still.custom?.exp as number) ?? 0;
+    if (rank !== lastAlive.rank) milestones.push({ rank, age, exp });
+    lastAlive = { rank, age, exp };
+    if (still.hp <= 0) {
+      died = true; // 回光返照：hp 归零，下一步会被清场
+      break;
+    }
+  }
+
+  console.log('    ── 纯挂机里程碑 ──');
+  for (const m of milestones) {
+    console.log(`    rank ${m.rank}（年龄 ${m.age}，累计经验 ${m.exp}）`);
+  }
+  console.log(`    终点：rank ${lastAlive.rank}，年龄 ${lastAlive.age}`);
+
+  // 硬约束：得能坐化。挂 200 轮不死，说明寿元公式被改成了 Infinity 之类的东西。
+  assert.ok(
+    died,
+    `200 回合挂机没有坐化（当前 rank ${lastAlive.rank}、年龄 ${lastAlive.age}）——` +
+      `寿元公式里出现了 Infinity 或上限太高`,
+  );
+
+  // 设计意图：正常挂机在 5 级前坐化。这条红了说明"打坐变强"已经强到不需要战斗，
+  // 玩家的最优解会退化成"开局造个修士然后挂机"，那是这个包最不想要的样子。
+  assert.ok(
+    lastAlive.rank <= 5,
+    `纯挂机坐化于第 ${lastAlive.rank} 级（年龄 ${lastAlive.age}）——` +
+      `设计意图是 5 级前必须靠战斗续命，请调寿元或经验增长`,
+  );
+});
+
+test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  // 造一个剑修和靶子
+  const sword = place2(s, 'A', 'sword-cultivator', 5, 5);
+  const target = place2(s, 'B', 'militia', 5, 6);
+  s.current = 'A';
+
+  const baseDmg = computeDamage(s, sword, target); // 普攻伤害
+  const hpBefore = target.hp;
+
+  // 放技能（指向正下方）
+  const r = applyAction(s, { 
+    type: 'HERO_SKILL', 
+    unitId: sword.id, 
+    skillId: 'sword-sweep',
+    targetX: 5,
+    targetY: 8 // 指向正下方，命中 5,6 的靶子
+  });
+  
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state;
+  const swordAfter = after.units.find(u => u.id === sword.id)!;
+  const targetAfter = after.units.find(u => u.id === target.id)!;
+
+  // 1. 扣了次数：剑修 burst 1，放完还剩 0
+  assert.equal(swordAfter.attacksLeft, 0, '剑气应该消耗一次攻击次数');
+
+  // 2. 伤害更高：剑气伤害应该比普攻高（基础 +20%）
+  const skillDmg = hpBefore - targetAfter.hp;
+  assert.ok(skillDmg > baseDmg, `剑气伤害(${skillDmg}) 应该高于普攻(${baseDmg})`);
+
+  // 3. 经验增加：初始 0，放空 1 + 命中 5 = 6
+  assert.equal(swordAfter.custom?.exp, 6, '施法并命中应该获得修为经验');
+});
+
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   // 2026-10-29 起溅射比例不再写死在 CONFIG 里：单位 `custom.splashRatio`
-  // 存在就用它自己的。半径同理，交给扩展的 modifySplash（修士按境界）。
+  // 存在就用它自己的。半径同理，交给扩展的 modifySplas。
   const build = (ratio?: number) => {
     const s = fresh();
     s.current = 'A';

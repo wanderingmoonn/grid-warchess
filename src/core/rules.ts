@@ -98,6 +98,11 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
+import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS} from './skill-hooks.ts';
+import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
+// 重新导出，保持兼容
+export { SKILL_EFFECTS, registerSkillEffect };
+export type { SkillCtx, SkillHandler };
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -158,6 +163,9 @@ const abilityApi: AbilityApi = {
     st.burn = now + 1;
     return st.burn;
   },
+  computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
+  splashRadiusOf: (s, u) => splashRadiusOf(s, u),
+  attacksPerTurn: (s, u) => attacksPerTurn(s, u),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -882,19 +890,6 @@ export function registerStatus(def: StatusDef): void {
     throw new Error(`状态「${def.id}」已经注册过了`);
   }
   STATUS_REGISTRY[def.id] = def;
-}
-
-/**
- * 注册一种技能效果（给扩展用）。
- *
- * `effect` 是自由字符串：兵种表里写什么，就得有人接什么。接不上时
- * doHeroSkill 会当场拒掉并说"未实现的技能效果"，不会静默失败。
- */
-export function registerSkillEffect(id: string, handler: SkillHandler): void {
-  if (Object.prototype.hasOwnProperty.call(SKILL_EFFECTS, id)) {
-    throw new Error(`技能效果「${id}」已经注册过了`);
-  }
-  SKILL_EFFECTS[id] = handler;
 }
 
 /**
@@ -2820,7 +2815,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
-        return doHeroSkill(next, action.unitId, action.skillId);
+        return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
       case 'PLACE_EGG':
         return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
@@ -4113,59 +4108,52 @@ export function heroSkillsOf(
   def: SkillDef;
   cd: number;
   ready: boolean;
-  /** 还剩几发（只有充能型技能有意义，其它是 0） */
   charge: number;
-  /** 充能上限（0 表示这个技能吃冷却，不吃充能） */
   chargeMax: number;
-  /** 还要几个自己的回合回下一发（满发时是 0） */
   toNext: number;
+  notReadyReason?: string; // 返回给 UI 的原因
 }> {
   const def = utype(s, u.type);
   return (def.skills ?? []).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
     const chargeMax = k.charges ?? 0;
+    
+    let ready = false;
+    let charge = 0;
+    let toNext = 0;
+
+    // 计算基础就绪状态
     if (chargeMax <= 0) {
-      return { def: k, cd, ready: cd <= 0, charge: 0, chargeMax: 0, toNext: 0 };
+      // 冷却
+      ready = cd <= 0;
+    } else {
+      // 充能技能
+      const box = u.skillCharge?.[k.id];
+      charge = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
+      const t = Math.max(0, box?.t ?? 0);
+      const regen = Math.max(1, k.regen ?? 2);
+      ready = charge > 0;
+      toNext = charge >= chargeMax ? 0 : Math.max(1, regen - t);
     }
-    // 没这个字段＝从没放过也没攒过 → 满发
-    const box = u.skillCharge?.[k.id];
-    const n = Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax));
-    const t = Math.max(0, box?.t ?? 0);
-    const regen = Math.max(1, k.regen ?? 2);
+
+    // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
+    if (ready && SKILL_READY_CHECKS[k.id]) {
+      ready = SKILL_READY_CHECKS[k.id]!(s, u);
+    }
+
     return {
       def: k,
       cd,
-      ready: n > 0,
-      charge: n,
+      ready,
+      charge,
       chargeMax,
-      toNext: n >= chargeMax ? 0 : Math.max(1, regen - t),
+      toNext,
+      notReadyReason: k.notReadyReason,
     };
   });
 }
 
-/**
- * 放技能逻辑
- */
-
-// 1. 定义上下文接口
-export interface SkillCtx {
-  state: GameState;
-  self: Unit;
-  skill: SkillDef;
-  api: typeof abilityApi;
-  result: {
-    ok: boolean;
-    reason?: string;
-    log?: string;
-  };
-}
-
-// 2. 定义注册表和类型
-export type SkillHandler = (c: SkillCtx) => void;
-export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
-
-// 3. 把原来的 switch 里的逻辑搬过来
-// 原来写 s 和 u 的地方，换成 c.state 和 c.self
+//技能
 SKILL_EFFECTS['throw-axe'] = (c) => {
   c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
 };
@@ -4482,7 +4470,7 @@ SKILL_EFFECTS['fuse'] = (c) => {
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
 
-function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResult {
+function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
@@ -4491,9 +4479,8 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   const skill = (def.skills ?? []).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
 
-  // 每个英雄每回合最多放一个技能。以前这条靠"冷却至少 1"顺带成立，
-  // 充能型技能没有冷却，必须单独拦——否则三发能在同一回合全打出去。
-  if (u.skillTurn === s.turn) {
+  // 如果技能不允许连发，且这回合已经放过，就拦住
+  if (!skill.multiCast && u.skillTurn === s.turn) {
     return { ok: false, reason: '这个单位这一回合已经放过技能了' };
   }
 
@@ -4515,8 +4502,12 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
 
   const c: SkillCtx = {
-    state: s, self: u, skill, api: abilityApi,
-    result: { ok: true, log: `${def.name} 使用「${skill.name}」` } // 默认战报写这里
+    state: s, 
+    self: u, 
+    skill, 
+    api: abilityApi,
+    target: (typeof targetX === 'number' && typeof targetY === 'number') ? { x: targetX, y: targetY } : undefined,
+    result: { ok: true, log: `${def.name} 使用「${skill.name}」` }
   };
 
   handler(c);
@@ -4528,8 +4519,6 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
   if (c.result.log) pushLog(s, u.owner, c.result.log);
 
-  u.skillTurn = s.turn;
-
   if (chargeMax > 0) {
     // 充能型：扣一发，不动冷却。t 保留——"用完最后一发之后还要攒两回合"
     // 这件事必须从放的那一回合就开始算，否则连开两发能白赚两回合。
@@ -4537,8 +4526,12 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
     pushLog(s, u.owner, `${skill.name} 还剩 ${charge - 1}/${chargeMax} 发`);
   } else {
     // 进冷却
-    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 1 };
+    u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 0 };
   }
+
+  u.skillTurn = s.turn;
+
+  sweepDead(s);
 
   return { ok: true, state: s };
 }

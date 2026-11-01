@@ -2337,11 +2337,16 @@ const BOOK_GROUPS: BookGroup[] = [
     intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
     rulesHtml: `
       <h3>境界与修为</h3>
-      <p>炼气士不是“造出来就定型”的兵。它每回合打坐涨修为，击杀再额外拿一笔（击杀 10 点）。境界从<b>凡人</b>一路推到<b>渡劫</b>。境界越高，攻击、护甲、射程、神识、攻击次数、溅射半径一起涨。</p>
+      <p>本包的单位属性不固定，总修为达标即可晋升境界。境界从0到9级，从<b>凡人</b>一路升到<b>渡劫</b>。境界越高，全属性同步增加。</p>
+      
+      <h4>获取修为（经验）</h4>
+      <ul>
+        <li><b>自然打坐</b>：每回合开始时自动获得（当前境界 + 2）点经验。</li>  
+        <li><b>战斗击杀</b>：亲手击杀敌方单位时，额外获得 <b>10 点</b> 经验。</li>
+      </ul>
       
       <div class="formula">
-        升级所需总经验 = <b>10 + 10 × 境界 × (境界 + 1) + 0.05 × 4<sup>境界</sup></b><br />
-        <span class="c">（当前境界从 0 算起，最高为 9 级；每回合自动获得等于“当前境界 + 2”的经验）</span>
+        从当前境界升级所需总经验 = <b>10 + 10 × 境界 × (境界 + 1) + 0.05 × 4<sup>境界</sup></b><br />
       </div>
 
             <h3>各境界属性加成对照表</h3>
@@ -2351,13 +2356,13 @@ const BOOK_GROUPS: BookGroup[] = [
           <tr><th>属性</th><th>具体加成公式，小数向下取整</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">攻击力</td><td>（5 × 境界 + 2<sup>(境界 − 0.5)</sup>） + 境界<sup>0.2</sup></td></tr>
+          <tr><td class="name">攻击力</td><td>（ + 5 × 境界 + 2<sup>(境界 − 0.5)</sup>） ÷ （境界 + 1）<sup>0.2</sup></td></tr>
           <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> </td></tr>
-          <tr><td class="name">射程</td><td>境界 ÷ 2 </td></tr>
-          <tr><td class="name">视野（神识）</td><td>基础视野 + 境界</td></tr>
+          <tr><td class="name">射程</td><td> + 境界 ÷ 2 </td></tr>
+          <tr><td class="name">视野（神识）</td><td> + 境界</td></tr>
           <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（至少 1 次）</span></td></tr>
           <tr><td class="name">溅射半径</td><td>境界 ÷ 4 </td></tr>
-          <tr><td class="name">最大生命</td><td>突破时瞬间提升，见下方详情</td></tr>
+          <tr><td class="name">最大生命</td><td>见下方详情</td></tr>
         </tbody>
       </table>
 
@@ -2371,14 +2376,18 @@ const BOOK_GROUPS: BookGroup[] = [
       <p>为了免去心算的麻烦，各阶段突破时增加的生命值如下：</p>
       <table class="overview">
         <thead>
-          <tr><th>突破阶段</th><th>增加最大生命</th><th>突破阶段</th><th>增加最大生命</th></tr>
+          <tr><th>突破阶段</th><th>增加最大生命</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">凡人 → 炼气</td><td class="num">+8</td><td class="name">化神 → 返虚</td><td class="num">+349</td></tr>
-          <tr><td class="name">炼气 → 筑基</td><td class="num">+10</td><td class="name">返虚 → 合体</td><td class="num">+943</td></tr>
-          <tr><td class="name">筑基 → 金丹</td><td class="num">+17</td><td class="name">合体 → 大乘</td><td class="num">+2434</td></tr>
-          <tr><td class="name">金丹 → 元婴</td><td class="num">+43</td><td class="name">大乘 → 渡劫</td><td class="num">+6048</td></tr>
-          <tr><td class="name">元婴 → 化神</td><td class="num">+124</td><td class="name"></td><td class="num"></td></tr>
+          <tr><td class="name">凡人 → 炼气</td><td>+8</td></tr>
+          <tr><td class="name">炼气 → 筑基</td><td>+10</td></tr>
+          <tr><td class="name">筑基 → 金丹</td><td>+17</td></tr>
+          <tr><td class="name">金丹 → 元婴</td><td>+43</td></tr>
+          <tr><td class="name">元婴 → 化神</td><td>+124</td></tr>
+          <tr><td class="name">化神 → 返虚</td><td>+349</td></tr>
+          <tr><td class="name">返虚 → 合体</td><td>+943</td></tr>
+          <tr><td class="name">合体 → 大乘</td><td>+2434</td></tr>
+          <tr><td class="name">大乘 → 渡劫</td><td>+6048</td></tr>
         </tbody>
       </table>
       <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
@@ -2393,7 +2402,7 @@ const BOOK_GROUPS: BookGroup[] = [
       <p>凡人只有十年寿元。境界越高寿元越长（每级增加 10 年，渡劫期永生不死）。</p>
       <div class="callout">
         <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
-        超出寿元 <b>3 年</b>就会当场坐化。所以“养一个老祖宗”和“养一个速成的”是两条不同的路线。
+        超出寿元 <b>3 年</b>就会血量归零，此时任何风吹草动或者回合结束就会正式死亡。
       </div>
     `,
   },

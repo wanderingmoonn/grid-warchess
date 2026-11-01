@@ -168,6 +168,16 @@ export interface SkillDef {
   atkUp?: number;
   /** 永久生命上限提升，配套 atkUp */
   hpUp?: number;
+  /** 如果为 true，允许一回合放多次，由技能自己决定终止逻辑 */
+  multiCast?: boolean;
+  /** 如果没就绪，界面上显示的提示文字（不写默认显示"就绪"） */
+  notReadyReason?: string;
+  /**
+   * 技能的目标类型：
+   * - 不填 或 'none'：对自己或自动索敌释放
+   * - 'point' / 'direction'：需要玩家点地图选点或选方向
+   */
+  targeting?: 'none' | 'point' | 'direction'; 
 }
 
 export interface Tile {
@@ -1364,7 +1374,7 @@ export type Action =
    */
   | { type: 'DISBAND'; unitId: string }
   /** 英雄技能：谁放、放哪个 */
-  | { type: 'HERO_SKILL'; unitId: string; skillId: string }
+  | { type: 'HERO_SKILL'; unitId: string; skillId: string; targetX?: number; targetY?: number }
   /** 把待落位的蛋放到这一格（不死鸟） */
   | { type: 'PLACE_EGG'; x: number; y: number }
   /** 认输：直接把胜利判给对方，不用把棋盘走完 */
