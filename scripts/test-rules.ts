@@ -7229,6 +7229,43 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   );
 });
 
+test('兵临城下且兵力吃亏时，AI 只买战斗单位', () => {
+  let s = fresh({ size: 12, aiLevel: 'advanced' });
+  s.current = 'A';
+  s.units = [];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  s.players.A.gold = 900;
+
+  // 我：一个弓手；对面：六个战斗单位压到城墙三格内
+  place(s, 'A', 'archer', city.x + city.size + 1, city.y + city.size);
+  for (let i = 0; i < 6; i += 1) {
+    place(s, 'B', 'militia', city.x + i, Math.max(0, city.y - 2));
+  }
+  s.turn = 20;
+
+  const budget = { ...DEFAULT_BUDGET, recruited: 0, upgraded: 0 };
+  const bought: string[] = [];
+  for (let step = 0; step < 12; step += 1) {
+    const a = aiNextAction(s, budget);
+    if (!a) break;
+    if (a.type === 'RECRUIT') bought.push(a.unitType);
+    const r = applyAction(s, a);
+    if (!r.ok) break;
+    s = r.state;
+    if (a.type === 'RECRUIT') budget.recruited += 1;
+    if (a.type === 'UPGRADE') budget.upgraded += 1;
+  }
+
+  assert.ok(bought.length > 0, '这条用例要有采购发生，否则测不到东西');
+  for (const id of bought) {
+    assert.equal(
+      s.unitTypes[id]?.category,
+      'combat',
+      `打到门口又缺兵时还在买 ${s.unitTypes[id]?.name}（${s.unitTypes[id]?.category}）`,
+    );
+  }
+});
+
 test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   // 磨局统计里最刺眼的一条：一方顶满 24 个单位、金库还压着几千金。
   // 钱花不出去等于没有压力，而军营是唯一能把钱直接变成"前线产兵点"的东西。

@@ -1443,6 +1443,36 @@ export function cityThreatUrgency(s: GameState, enemy: Unit, owner: PlayerId): n
 }
 
 /**
+ * 最近的一座"有出海口的敌城"，距离按"贴到它旁边还要几步"算。
+ *
+ * 没有临水格的敌城对水军没有意义——船开过去也只能隔着陆地干瞪眼。
+ * 港口判定用的是 `cityGap <= 1`，所以这里是 `cityGap - 1`（贴上去记 0）。
+ */
+function nearestEnemyPort(
+  s: GameState,
+  at: { x: number; y: number },
+  owner: PlayerId,
+): number {
+  let best = Infinity;
+  for (const c of s.cities) {
+    if (c.owner === owner || c.ruined) continue;
+    // 这座城市有没有临水格：有才值得把船开过去
+    let hasPort = false;
+    for (let dy = -1; dy <= c.size && !hasPort; dy += 1) {
+      for (let dx = -1; dx <= c.size && !hasPort; dx += 1) {
+        const inside = dx >= 0 && dx < c.size && dy >= 0 && dy < c.size;
+        if (inside) continue;
+        const t = s.tiles[(c.y + dy) * s.w + (c.x + dx)];
+        if (t && navigable(t.terrain)) hasPort = true;
+      }
+    }
+    if (!hasPort) continue;
+    best = Math.min(best, Math.max(0, cityGap(c, at) - 1));
+  }
+  return best;
+}
+
+/**
  * 这条船此刻封住了几座敌城（上限 3）。
  *
  * 规则在海军扩展里：船贴着敌城外港，那座城每回合少收 8 金，最多三座。
@@ -1527,14 +1557,29 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       if (distToCity(moved,city)===0 && distToCity(unit,city)>0) score += 16;
     }
   }
-  // 海军：把船开到敌城外港去封锁（每座城每回合少收 8 金，三座封顶）。
+  // 海军的推进目标：**最近的临水敌城**，不是焦点城。
   //
-  // 按"多封住一座"给分，所以已经在封着的船不会为了追一条敌船而解封；
-  // 反过来也成立：追敌船确实更值（能打死东西），但白放着一座城的收入不要
-  // 是纯粹的漏。权重取 16：约等于"一座城的日军费"，
-  // 但低于"能打死一个单位"（那一档在 25 以上）。
+  // 焦点城常常在内陆，水路距离算不出来（Infinity），于是船的 progress 恒为 0——
+  // 实测 4 局里 9 条船只走了 33 步，基本在自家港口附近晃。换成"临水敌城"之后
+  // 船才有方向感，封港也才可能发生（之前 34,854 次走位评估里只有 15 次能封到）。
   if (def.domain === 'water' && def.category === 'combat') {
+    const portNow = nearestEnemyPort(s, unit, unit.owner);
+    const portNext = nearestEnemyPort(s, moved, unit.owner);
+    if (Number.isFinite(portNow) && Number.isFinite(portNext)) {
+      score += (portNow - portNext) * 5;
+    }
+
+    // 封港：多封住一座城 +16（一座城每回合少收 8 金，三座封顶）。
     score += (blockadeCount(s, moved, unit.owner) - blockadeCount(s, unit, unit.owner)) * 16;
+
+    // 护航：队里有载着人的运输船时，别让它一个人过海。
+    // 只看"载了货"的船——空船在港口等着，护航舰不该陪着一起发呆。
+    const convoy = unitsOf(s, unit.owner).find(
+      (u) => u.id !== unit.id && hasHold(utype(s, u.type)) && (u.cargo?.length ?? 0) > 0,
+    );
+    if (convoy) {
+      score += (distance(unit, convoy) - distance(moved, convoy)) * 3;
+    }
   }
   return score;
 }
@@ -2815,9 +2860,13 @@ function buildPlan(
     }
   }
   // Capture is the winning action. Reserve its fee before buying another unit.
+  //
+  // 但这条**不能压倒兵力**：它比上面那一档更凶——上面还守着 `!urgent && army>=armyGate`，
+  // 这里原来什么都没守，于是"城门口有座废墟、手上一个兵都没有"也会把采购冻住。
+  // 收废墟的前提是"我还有兵能走进去"，兵没了，攒的是别人的战利品。
   const nearbyRuin = foeRuins.filter(c => my.some(u => !u.moved && distToCity(u,c)<=Math.max(2,utype(s,u.type).move+1)))
     .sort((a,b) => rebuildCost(a)-rebuildCost(b))[0];
-  if (nearbyRuin && !threaten) {
+  if (nearbyRuin && !threaten && !urgent && army >= armyGate) {
     savingFor = 'rebuild'; targetCost = rebuildCost(nearbyRuin);
   }
   if (mood.abandonedCityId || developingRear) {
@@ -2853,6 +2902,37 @@ function buildPlan(
 
   return { stance, savingFor, targetCost, allowance, urgent: mood.abandonedCityId ? threaten : urgent };
 }
+
+/**
+ * 诊断用：把"这一方此刻的计划"摊开，和 `aiNextAction` 走同一套口径。
+ *
+ * 线上对局库里那十几局被打崩的人机局，AI 造了 43 个单位却一个战斗单位都没有。
+ * 光看终局快照推不出原因——真正要看的是**每一回合 `savingFor` 是什么**：
+ * 一旦它非空，采购就被"超出目标费用的那部分"冻住，而经济单位有
+ * 「回本 ≤8 回合不冻结」的例外，战斗单位没有。于是钱能变成农民，却永远变不成兵。
+ *
+ * 这个函数只读不写，给 `scripts/diag-plan.ts` 和人工排查用。
+ */
+export function aiDebugPlan(s: GameState, me: PlayerId): AiPlan {
+  const traits = aiTraits(s);
+  const mood = aiActiveMood(s, traits);
+  return buildPlan(s, me, unitsOf(s, me), unitsOf(s, other(me)), mood);
+}
+
+/**
+ * 诊断出口：`recruitCandidate` 每次"挑不出兵"时，往这里写一句原因。
+ *
+ * 线上那十几局被打崩的人机局，AI 账上还有几百金、产兵名额也没用完，却一整个回合
+ * 不造兵。这种"沉默的拒绝"在黑盒模拟里看不出来——胜负只有一个数字，
+ * 而钱花不出去的原因藏在七八个 `continue` 里。把原因写出来，排查就从"猜"变成"看"。
+ *
+ * 游戏运行时没人读它，默认 `last` 为空；只有 `scripts/diag-plan.ts` 会打开。
+ */
+export const aiRecruitTrace: { on: boolean; last: string | null } = {
+  /** 开着才会统计拒绝原因：采购是热路径，不排查的时候不该为它分配对象 */
+  on: false,
+  last: null,
+};
 
 function recruitCandidate(
   s: GameState,
@@ -2972,10 +3052,38 @@ function recruitCandidate(
   // 编队模板要的"这支部队现在长什么样"。每次 candidate 都重算一遍，
   // 所以同一回合里连买三个近战后，第四次会看见"近战已经够了"。
   const rosterBonus = rosterBonuses(rosterOf(s, me));
+  /**
+   * 已经被打到门口、而且兵力明显不如对面：这一回合只买战斗单位。
+   *
+   * 依据是线上对局库（warchess_reports）里被打崩的 13 局人机局：
+   * AI 累计阵亡 43 个单位，造过的是 16 个工程师、17 个劳工、9 个牧民、1 个农民——
+   * **一个战斗单位都没有**。它们出门就被杀，而每死一个农民就等于少买半个兵。
+   * 所以在这种局面下，先把钱全部投进战斗单位；等兵力追平再谈经济。
+   */
+  const foeCombatCount = unitsOf(s, other(me)).filter(
+    (u) => utype(s, u.type).category === 'combat',
+  ).length;
+  const desperate =
+    plan.urgent && combatCount * 2 < foeCombatCount && combatCount < 8;
+
+  const tracing = aiRecruitTrace.on;
+  if (tracing) aiRecruitTrace.last = null;
+  const why: Record<string, number> = {};
+  const deny = (k: string): void => {
+    if (tracing) why[k] = (why[k] ?? 0) + 1;
+  };
 
   let best: Candidate | null = null;
   for (const d of pool) {
-    if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) continue;
+    // 打到门口还缺兵：经济/建造单位这一回合一个都不买（见上面 desperate 的说明）
+    if (desperate && d.category !== 'combat') {
+      deny('desperate');
+      continue;
+    }
+    if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) {
+      deny('无出兵格');
+      continue;
+    }
     // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃。
     // 这笔钱和规则层、界面估价共用 recruitPriceOf 一份口径——三处各算一次，
     // 迟早会出现"AI 以为买得起、规则层说资源不足、这一格生产序列静默空转"。
@@ -2984,13 +3092,22 @@ function recruitCandidate(
     const price = recruitCost(s, me, d);
     // 多资源：粮食/建材不够时，光有金币也买不起。
     // 只看金币会让 AI 反复挑一个造不出来的兵，然后整回合卡在那里。
-    if (!canPay(s.players[me], quote.total)) continue;
+    if (!canPay(s.players[me], quote.total)) {
+      deny('粮食/建材不够');
+      continue;
+    }
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
     // 一个池塘边上也能造船，但它开不出去。
-    if (d.domain === 'water' && wet < WATER_MIN_SHARE) continue;
-    if (gold < quote.gold) continue;
+    if (d.domain === 'water' && wet < WATER_MIN_SHARE) {
+      deny('水域太少');
+      continue;
+    }
+    if (gold < quote.gold) {
+      deny('钱不够');
+      continue;
+    }
 
     // ── 攒钱 ──
     // 计划要用的那笔钱是**冻结差额**，不是"停掉产线"：买完这兵之后账上还剩得下
@@ -3008,7 +3125,10 @@ function recruitCandidate(
       const fastEco =
         (d.category === 'economy' && earners < Math.min(targetEarners,payback<=4 ? 6 : 4) && payback <= 8) ||
         (d.category === 'builder' && builders === 0);
-      if (!isTarget && (!fastEco || plan.savingFor==='rebuild') && price + unlockFee > plan.allowance) continue;
+      if (!isTarget && (!fastEco || plan.savingFor==='rebuild') && price + unlockFee > plan.allowance) {
+        deny(plan.savingFor === 'rebuild' ? '攒重建费' : '攒钱冻结');
+        continue;
+      }
       // 攒的是升时代：钱够了就把这一回合让给 UPGRADE（升完的兵比多一个兵值）。
       // 但要确认升级现在真的买得起——否则那条动作会被别的原因拒掉，这一回合白过。
       if (plan.savingFor === 'era' && !isTarget && gold >= plan.targetCost) {
@@ -3016,7 +3136,10 @@ function recruitCandidate(
           const cost = upgradeCostOf(s, c);
           return cost !== null && gold >= cost;
         });
-        if (canUpgradeNow) continue;
+        if (canUpgradeNow) {
+          deny('让位升级');
+          continue;
+        }
       }
     }
 
@@ -3141,7 +3264,10 @@ function recruitCandidate(
       const canLeave = slots.some((c) =>
         escapeRoutes(s, c.x, c.y, d.move, src.kind === 'city' ? src.id : null) > 0,
       );
-      if (!canLeave) continue;
+      if (!canLeave) {
+        deny('出不了城门');
+        continue;
+      }
       //    地图越糙，慢兵的处境越糟：不是"慢一点"，是"只能待在平原上"
       if (d.move <= 1) score -= 10 + rough * 130;
 
@@ -3215,6 +3341,9 @@ function recruitCandidate(
         : { type: 'RECRUIT', cityId: src.id, unitType: d.id };
 
     if (!best || score > best.score) best = { action, score };
+  }
+  if (tracing && !best) {
+    aiRecruitTrace.last = Object.entries(why).map(([k, n]) => `${k}×${n}`).join(' / ') || '池为空';
   }
   return best;
 }
