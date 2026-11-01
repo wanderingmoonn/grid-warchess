@@ -3525,6 +3525,18 @@ test('老兵不死：己方城市地块上回合开始回 8%，有上限、不�
   assert.equal(r.state.units.find((u) => u.id === holder.id)!.hp, 5, '废墟不是补给点');
 });
 
+test('经济平衡（2026-11-01）：农民 45 / 工厂城 30 / 兵工厂城 40 / 农业公司 4 代', () => {
+  // 这一批是拿 540 局矩阵（3 时代 × 3 边长 × 60）校准出来的，
+  // 数值本身值得有一条用例钉住——否则某次重构把 cost 写回 55 没人会发现。
+  assert.equal(UNIT_TYPES.farmer.cost, 45, '农民造价 55 → 45');
+  assert.equal(UNIT_TYPES.farmer.incomeByTerrain?.plain, 7, '只动造价，产出没动');
+  assert.equal(UNIT_TYPES.factory.incomeByTerrain?.city, 30, '工厂城市产出 20 → 30');
+  assert.equal(UNIT_TYPES.factory.incomeByTerrain?.plain, 10, '工厂城外产出不变');
+  assert.equal(UNIT_TYPES.arsenal.incomeByTerrain?.city, 40, '兵工厂城市产出 30 → 40');
+  assert.equal(UNIT_TYPES.agribusiness.era, 4, '农业公司 5 代 → 4 代');
+  assert.equal(UNIT_TYPES.agribusiness.cost, 260, '农业公司造价这一轮没动');
+});
+
 test('堑壕战：森林和丘陵额外 +2 护甲', () => {
   const s = fresh({ expansionIds: ['trench'] });
   const { a, b } = duel(s);

@@ -422,7 +422,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '农',
     era: 1,
     category: 'economy',
-    cost: 55,
+    // 55 → 45（2026-11-01）：和牧民同价，让"平地流 / 丘陵流"变成真选择。
+    // 180 局数据：牧民采用率 97.5%，农民只有 5.0%——它不是弱，是贵 10 金还少 1 点上限。
+    cost: 45,
     move: 2,
     atk: 3,
     armor: 1,
@@ -729,7 +731,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 40,
     range: 1,
     vision: 2,
-    incomeByTerrain: { city: 20, plain: 10, hill: 6, forest: 6 },
+    // 城市 20 → 30（2026-11-01）：火药档唯一"城里赚钱"的建筑。
+    // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
+    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
   },
 
   // ================= 时代 4 · 工业 =================
@@ -843,7 +847,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 50,
     range: 1,
     vision: 2,
-    incomeByTerrain: { city: 30, plain: 14, hill: 9, forest: 9 },
+    // 城市 30 → 40（2026-11-01）：和工厂同一条理由，4 代这一档更依赖它回本
+    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
   },
 
   // ============ 时代 5 · 二战（第六时代在原版表里是空的） ============
@@ -896,7 +901,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     id: 'agribusiness',
     name: '农业公司',
     short: '司',
-    era: 5,
+    // 5 代 → 4 代（2026-11-01）：连唯一能造它的档都 0 次出场。
+    // 260 金、36/回合，等到 5 代解锁时对局已进入决战，回本窗口根本不存在。
+    era: 4,
     category: 'economy',
     cost: 260,
     move: 2,
