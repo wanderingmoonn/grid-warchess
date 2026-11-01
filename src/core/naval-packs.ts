@@ -40,6 +40,7 @@ import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { navigable } from './config.ts';
+import { cityGap } from './geo.ts';
 import type { ResourceCost } from './resources.ts';
 import { airwingOps, deckLine, deckSpecOf } from './naval-carrier.ts';
 
@@ -743,11 +744,6 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
  * ======================================================================== */
 
 /** 城市矩形到某点的曼哈顿距离（在城内为 0）。和 rules 里那套算法同一个口径 */
-function cityGap(city: { x: number; y: number; size: number }, p: { x: number; y: number }): number {
-  const dx = Math.max(city.x - p.x, 0, p.x - (city.x + city.size - 1));
-  const dy = Math.max(city.y - p.y, 0, p.y - (city.y + city.size - 1));
-  return dx + dy;
-}
 
 /** 封锁的税额：每座 8 金，最多 24 */
 const BLOCKADE_PER_CITY = 8;

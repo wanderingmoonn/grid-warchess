@@ -20,6 +20,7 @@ import { hasAbility } from './abilities.ts';
 import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { hasHold, holdOf, holdRoom } from './carry.ts';
 import { isProducer } from './produce.ts';
+import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
 import {
   armySize,
@@ -1441,6 +1442,22 @@ export function cityThreatUrgency(s: GameState, enemy: Unit, owner: PlayerId): n
   return urgency;
 }
 
+/**
+ * 这条船此刻封住了几座敌城（上限 3）。
+ *
+ * 规则在海军扩展里：船贴着敌城外港，那座城每回合少收 8 金，最多三座。
+ * 以前 AI 对这条一无所知——船只会去追敌人的船，海岸线空着也不去堵，
+ * 实测 20×20 群岛 8 局：1354 个"城-回合"里一次封锁都没有。
+ */
+function blockadeCount(s: GameState, at: { x: number; y: number }, owner: PlayerId): number {
+  let n = 0;
+  for (const c of s.cities) {
+    if (c.owner === owner || c.ruined) continue;
+    if (cityGap(c, at) <= 1) n += 1;
+  }
+  return Math.min(3, n);
+}
+
 function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: Fields, traits: AiTraits): number {
   const def = utype(s, unit.type);
   const moved = { ...unit, x, y, moved: true };
@@ -1509,6 +1526,15 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       score += (distToCity(unit,city)-distToCity(moved,city))*4;
       if (distToCity(moved,city)===0 && distToCity(unit,city)>0) score += 16;
     }
+  }
+  // 海军：把船开到敌城外港去封锁（每座城每回合少收 8 金，三座封顶）。
+  //
+  // 按"多封住一座"给分，所以已经在封着的船不会为了追一条敌船而解封；
+  // 反过来也成立：追敌船确实更值（能打死东西），但白放着一座城的收入不要
+  // 是纯粹的漏。权重取 16：约等于"一座城的日军费"，
+  // 但低于"能打死一个单位"（那一档在 25 以上）。
+  if (def.domain === 'water' && def.category === 'combat') {
+    score += (blockadeCount(s, moved, unit.owner) - blockadeCount(s, unit, unit.owner)) * 16;
   }
   return score;
 }

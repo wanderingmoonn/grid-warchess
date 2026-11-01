@@ -447,6 +447,63 @@ function shoalBridge(c: MapBuildCtx, from: Pos, to: Pos): void {
  * 半径给到 2 而不是 1：群岛图上只清一圈的话，城是从水面里"抠"出来的一个方框，
  * 看着像贴图错误；清到 2 圈才像一个真的小岛。
  */
+/**
+ * 群岛：给每座城留一个出海口。
+ *
+ * `hugLand` 会把城周围的水填成陆地（否则城看起来像浮在水面上的一块方框），
+ * 代价是**群岛图上会出现内陆城**——周围一格水面都没有，船下不了水。
+ * 实测 16×16 群岛：48 座城里 14 座没有临水格（29%），而这些城永久失去
+ * 整条海军线（造船只认"城边一格水面"）。
+ *
+ * 所以填完再补一刀：没有临水格，就朝离现有水面最近的那一格开一条浅滩。
+ * 只动城外沿、不动城格，也不碰 `blocked`（桥/已有单位）。
+ */
+function ensureHarbor(c: MapBuildCtx): void {
+  const anchors = [...c.cities.A, ...c.cities.B];
+  for (const p of anchors) {
+    const perimeter: Pos[] = [];
+    for (let dy = -1; dy <= c.citySize; dy += 1) {
+      for (let dx = -1; dx <= c.citySize; dx += 1) {
+        const inside = dx >= 0 && dx < c.citySize && dy >= 0 && dy < c.citySize;
+        if (inside) continue;
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= c.w || y >= c.h) continue;
+        if (c.blocked.has(y * c.w + x)) continue;
+        perimeter.push({ x, y });
+      }
+    }
+    const navigableAt = (x: number, y: number): boolean => {
+      const t = c.at(x, y);
+      return t === 'water' || t === 'shallow';
+    };
+    if (perimeter.some((q) => navigableAt(q.x, q.y))) continue;
+
+    // 挑"离水面最近"的一格开港：距离用环扫，半径 8 以内没有水就退化成第一格
+    let best: Pos | null = null;
+    let bestD = Infinity;
+    for (const q of perimeter) {
+      let d = Infinity;
+      for (let r = 1; r <= 8 && r < d; r += 1) {
+        for (let dy = -r; dy <= r; dy += 1) {
+          for (let dx = -r; dx <= r; dx += 1) {
+            if (Math.abs(dx) + Math.abs(dy) !== r) continue;
+            const nx = q.x + dx;
+            const ny = q.y + dy;
+            if (nx < 0 || ny < 0 || nx >= c.w || ny >= c.h) continue;
+            if (navigableAt(nx, ny)) d = Math.min(d, r);
+          }
+        }
+      }
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    if (best) c.put(best.x, best.y, 'shallow');
+  }
+}
+
 function hugLand(c: MapBuildCtx): void {
   const anchors = [...c.cities.A, ...c.cities.B];
   const bad = (t: Terrain | undefined): boolean =>
@@ -513,4 +570,6 @@ export function buildContour(c: MapBuildCtx, kind: string): void {
   }
 
   hugLand(c);
+  // 群岛再补一道：填地之后必须有出海口，否则这张图的两条海军线都是死的
+  if (kind === 'isles') ensureHarbor(c);
 }
