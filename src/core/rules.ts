@@ -2802,7 +2802,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
-        return doHeroSkill(next, action.unitId, action.skillId);
+        return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
       case 'PLACE_EGG':
         return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
@@ -4108,6 +4108,8 @@ export interface SkillCtx {
   self: Unit;
   skill: SkillDef;
   api: typeof abilityApi;
+  /** 新增：如果玩家在 UI 上点了某个格子，传进来 */
+  target?: { x: number; y: number };
   result: {
     ok: boolean;
     reason?: string;
@@ -4437,7 +4439,7 @@ SKILL_EFFECTS['fuse'] = (c) => {
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
 
-function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResult {
+function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
@@ -4470,8 +4472,12 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string): ActionResul
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
 
   const c: SkillCtx = {
-    state: s, self: u, skill, api: abilityApi,
-    result: { ok: true, log: `${def.name} 使用「${skill.name}」` } // 默认战报写这里
+    state: s, 
+    self: u, 
+    skill, 
+    api: abilityApi,
+    target: (typeof targetX === 'number' && typeof targetY === 'number') ? { x: targetX, y: targetY } : undefined,
+    result: { ok: true, log: `${def.name} 使用「${skill.name}」` }
   };
 
   handler(c);

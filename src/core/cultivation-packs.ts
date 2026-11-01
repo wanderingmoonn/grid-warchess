@@ -12,6 +12,28 @@ import { DAMAGE_STAGE } from './ability-hooks.ts';
 // 境界名称
 const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
 
+// ── 修士身份判定 ────────────────────────────────────────────
+//
+// 这是本扩展里**唯一**"认识具体兵种"的地方。以前每个钩子里都写了一遍
+// `type === 'qi-cultivator'`，十二处硬编码：加一个流派要回来改十二次，
+// 漏一次就是"这个流派能修炼但不涨攻击"或"所有兵种都能修炼但不涨数值"。
+//
+// 判据用 id 集合，不用"带某条能力"：能力是机制（剑气、金身各有各的），
+// 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
+//
+// 加新流派 → 在 CULTIVATOR_IDS 里加一行 id；**别的钩子一个字都不用改**。
+const CULTIVATOR_IDS = new Set(['qi-cultivator']);
+
+/** 从兵种定义查。给"手里只有 def"的场合用。 */
+export function isCultivatorDef(def: UnitTypeDef | undefined | null): boolean {
+  return !!def && CULTIVATOR_IDS.has(def.id);
+}
+
+/** 从单位查。给钩子用——钩子里拿到的几乎都是 Unit。 */
+export function isCultivatorUnit(s: GameState, u: Unit): boolean {
+  return isCultivatorDef(s.unitTypes[u.type]);
+}
+
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
   id: 'qi-cultivator',
@@ -43,6 +65,7 @@ const QI_TRUE_DAMAGE: AbilityDef = {
         stage: DAMAGE_STAGE.trueDamage,
         apply: (c) => {
           if (c.side !== 'attacker') return;
+          if (!isCultivatorUnit(c.state, c.self)) return;
           const trueDmg = trueDamageOf(c.self);
           if (trueDmg > 0) c.damage += trueDmg;
         },
@@ -167,6 +190,11 @@ function moveModifier(u: Unit): number {
   return Math.floor(realmsModifier);
 }
 /** 溅射范围修正 */
+function SplashModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = rank/4;
+  return Math.floor(realmsModifier);
+}
 /** 射程修正 */
 function RangeModifier(u: Unit): number {
   const rank = getRank(u);
@@ -174,6 +202,12 @@ function RangeModifier(u: Unit): number {
   return Math.floor(realmsModifier);
 }
 /** 视野修正 */
+function VisionModifier(u: Unit): number {
+  const rank = getRank(u);
+  const aging = getAgingYears(u);
+  const realmsModifier = rank;
+  return Math.floor(realmsModifier-aging);
+}
 
 
 export const CULTIVATION_PACK: Expansion = {
@@ -185,64 +219,58 @@ export const CULTIVATION_PACK: Expansion = {
     //升级逻辑
     // 1. 击杀敌人获得经验
     onUnitKilled: (c) => {
-      if (c.killer && c.killer.type === 'qi-cultivator') {
+      if (c.killer && isCultivatorUnit(c.state, c.killer)) {
         addExp(c.killer, c.state, 10); 
       }
     },
-    modifyDamage: ({ attacker, damage }) => {
-      if (attacker.type !== 'qi-cultivator') return damage;
+    modifyDamage: ({ state, attacker, damage }) => {
+      if (!isCultivatorUnit(state, attacker)) return damage;
       return damage + atkModifier(attacker);
     },
     // 攻城加成
-    modifySiegeDamage: ({ attacker, damage }) => {
-      if (attacker.type !== 'qi-cultivator') return damage;
+    modifySiegeDamage: ({ state, attacker, damage }) => {
+      if (!isCultivatorUnit(state, attacker)) return damage;
       return Math.max(0, damage + atkModifier(attacker));
     },
     // 面板修正
-    modifyStatAtk: ({ unit, atk }) => {
-      if (unit.type !== 'qi-cultivator') return atk;
+    modifyStatAtk: ({ state, unit, atk }) => {
+      if (!isCultivatorUnit(state, unit)) return atk;
       return atk + atkModifier(unit);
     },
-    // 2. 护甲加成（每级 +1 护甲）
-    modifyArmor: ({ defender, armor }) => {
-      if (defender.type !== 'qi-cultivator') return armor;
+    // 护甲修正
+    modifyArmor: ({ state, defender, armor }) => {
+      if (!isCultivatorUnit(state, defender)) return armor;
       return Math.max(0, armor + armorModifier(defender));
     },
-    // 3. 射程加成（假设等级 2 以上，射程变远）
-    modifyRange: ({ unit, range }) => {
-      if (unit.type === 'qi-cultivator') {
-        return range + RangeModifier(unit);
-      }
-      return range;
+    // 射程修正
+    modifyRange: ({ state, unit, range }) => {
+      if (!isCultivatorUnit(state, unit)) return range;
+      return range + RangeModifier(unit);
     },
-    // ── 视野（神识）：随境界提升，随衰老枯竭 ─────────
-    modifyVision: ({ unit, base }) => {
-      if (!unit || unit.type !== 'qi-cultivator') return base;
-      const rank = getRank(unit);
-      const aging = getAgingYears(unit);
-      // 神识：随境界每级 +1 格；衰老：每超龄 1 岁 -1 格。
-      return Math.max(1, base + rank - aging);
+    // 视野修正
+    modifyVision: ({ state, unit, base }) => {
+      if (!unit || !isCultivatorUnit(state, unit)) return base;
+      return Math.max(1, base + VisionModifier(unit));
     },
-    // 一回合攻击次数。
-    modifyAttacks: ({ unit, attacks }) => {
-      if (unit.type !== 'qi-cultivator') return attacks;
+    // 攻击次数
+    modifyAttacks: ({ state, unit, attacks }) => {
+      if (!isCultivatorUnit(state, unit)) return attacks;
       return attTimesModifier(unit);
     },
-    // ── 溅射半径：floor(x/4) ────────────────────────
-    // x=0~3 -> 0，x=4~7 -> 1，x=8~9 -> 2
-    modifySplash: ({ attacker, splash }) => {
-      if (attacker.type !== 'qi-cultivator') return splash;
-      return Math.floor(getRank(attacker) / 4);
+    // 溅射半径
+    modifySplash: ({ state, attacker, splash }) => {
+      if (!isCultivatorUnit(state, attacker)) return splash;
+      return splash+SplashModifier(attacker);
     },
-    // ── 移动 ─────────────────────
-    modifyMove: ({ unit, move }) => {
-      if (unit.type !== 'qi-cultivator') return move;
+    // 移动修正
+    modifyMove: ({ state, unit, move }) => {
+      if (!isCultivatorUnit(state, unit)) return move;
       return move + moveModifier(unit);
     },
     // ── 回合开始：寿元判定 + 打坐 ──────────────────
     onTurnStart: ({ state, player }) => {
       for (const u of state.units) {
-        if (u.owner !== player || u.type !== 'qi-cultivator') continue;
+        if (u.owner !== player || !isCultivatorUnit(state, u)) continue;
         const age = u.age ?? 0;
         const lifespan = getLifespan(u);
 
@@ -252,7 +280,7 @@ export const CULTIVATION_PACK: Expansion = {
             state.log.push({
               turn: state.turn,
               player,
-              text: `炼气士 寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
+              text: `${state.unitTypes[u.type].name}寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
             });
           }
           // 把清场交给核心的 sweepDead。
@@ -260,7 +288,7 @@ export const CULTIVATION_PACK: Expansion = {
           continue;
         }
 
-        // 2. 刚跨过寿元：写一次警告
+        // 刚跨过寿元：写一次警告
         if (age === lifespan + 1) {
           state.log.push({
             turn: state.turn,
@@ -269,14 +297,14 @@ export const CULTIVATION_PACK: Expansion = {
           });
         }
 
-        // 3. 打坐：老死前照常修炼
+        // 打坐：老死前照常修炼
         addExp(u, state, getExpGrowth(u));
       }
     },
     
     // ── 面板信息 ───────────────────────────────────
-    getUnitPanelLines: ({ unit }) => {
-      if (unit.type !== 'qi-cultivator') return [];
+    getUnitPanelLines: ({ state, unit }) => {
+      if (!isCultivatorUnit(state, unit)) return [];
       const rank = getRank(unit);
       const exp = getExp(unit);
       const age = unit.age ?? 0;
@@ -287,7 +315,7 @@ export const CULTIVATION_PACK: Expansion = {
       const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
 
       const lines = [
-        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMLS[rank]} 期`,
+        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMLS[rank]}期`,
         nextExp !== null
           ? `修为经验：${exp} / ${nextExp}`
           : `修为经验：${exp}（已臻化境）`,

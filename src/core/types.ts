@@ -1233,7 +1233,7 @@ export type Action =
    */
   | { type: 'DISBAND'; unitId: string }
   /** 英雄技能：谁放、放哪个 */
-  | { type: 'HERO_SKILL'; unitId: string; skillId: string }
+  | { type: 'HERO_SKILL'; unitId: string; skillId: string; targetX?: number; targetY?: number }
   /** 把待落位的蛋放到这一格（不死鸟） */
   | { type: 'PLACE_EGG'; x: number; y: number }
   /** 认输：直接把胜利判给对方，不用把棋盘走完 */
