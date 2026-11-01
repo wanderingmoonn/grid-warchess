@@ -497,8 +497,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     range: 2,
     vision: 4,
     domain: 'water',
-    transport: true,
-    capacity: 3,
+    carry: { hold: { max: 3 } },
   },
 ];
 

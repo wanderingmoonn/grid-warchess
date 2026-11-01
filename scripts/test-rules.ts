@@ -61,7 +61,12 @@ import {
   registerAirwingOps,
   stowPlane,
 } from '../src/core/naval-carrier.ts';
+import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
+import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop } from '../src/core/produce.ts';
 import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+/** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
+const nvDef = (id: string) =>
+  [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
 import {
   DRAFT_BAN_BASE,
   DRAFT_PICK_BASE,
@@ -5487,7 +5492,7 @@ test('渡船有载员上限，而且只装陆军', () => {
   };
 
   const ferry = place(s, 'A', 'ferry', 8, 6);
-  const cap = UNIT_TYPES.ferry?.capacity ?? 0;
+  const cap = holdOf(UNIT_TYPES.ferry)?.max ?? 0;
   assert.ok(cap >= 1);
 
   // 两个相邻的岸格：(7,6) 和 (9,6)
@@ -5523,6 +5528,130 @@ test('渡船有载员上限，而且只装陆军', () => {
   const foe = place(ready, 'B', 'militia', 9, 7);
   const enemy = applyAction(ready, { type: 'LOAD', unitId: ferry.id, cargoId: foe.id });
   assert.equal(enemy.ok, false, '不能载别人的部队');
+});
+
+test('载具特性：装载写在兵种数据上，hold/deck 两个槽位各管各的', () => {
+  const ferry = UNIT_TYPES.ferry!;
+  // 渡船只有货舱
+  assert.equal(holdOf(ferry)?.max, 2, '渡船两个舱位');
+  assert.equal(deckCarryOf(ferry), null, '渡船没有甲板');
+
+  // 准入来自 DEFAULT_HOLD_ALLOW，不再硬写在 doLoad 里
+  assert.equal(canHold(ferry, UNIT_TYPES.militia!).ok, true, '陆军能上船');
+  assert.equal(canHold(ferry, UNIT_TYPES.boat!).ok, false, '船上装不了船');
+  assert.equal(canHold(ferry, UNIT_TYPES.tower!).ok, false, '建筑搬不上船');
+
+  // 具体兵种可以自己收紧：这条船只接地面层
+  const picky: UnitTypeDef = {
+    ...ferry,
+    id: 'picky-boat',
+    carry: { hold: { max: 1, allow: { layers: ['ground'] } } },
+  };
+  assert.equal(canHold(picky, UNIT_TYPES.militia!).ok, true, '地面单位照常上船');
+  const flyer: UnitTypeDef = { ...UNIT_TYPES.militia!, id: 'fake-flyer', layer: 'air' };
+  assert.deepEqual(canHold(picky, flyer).ok, false, 'allow.layers 挡住了空中单位');
+
+  // 白名单模式：只认列出来的兵种
+  const vip: UnitTypeDef = {
+    ...ferry,
+    id: 'vip-boat',
+    carry: { hold: { max: 1, allow: { types: ['militia'] } } },
+  };
+  assert.equal(canHold(vip, UNIT_TYPES.militia!).ok, true, '名单里的能上');
+  assert.equal(canHold(vip, UNIT_TYPES.archer!).ok, false, '名单外的被拒');
+});
+
+test('产兵能力：白名单、生产间隔、造价倍率都写在兵种数据上', () => {
+  // 默认：军营是产兵点，且全走默认值（不设白名单、当回合成型、原价）
+  assert.deepEqual(produceOf(UNIT_TYPES.camp), {}, '军营 = 产兵点 + 全默认');
+  assert.equal(produceEveryTurns(UNIT_TYPES.camp), 1);
+  assert.equal(produceCostScale(UNIT_TYPES.camp), 1);
+  assert.equal(producePop(UNIT_TYPES.camp), 0, '建筑默认不占编制');
+
+  // 前进基地是整条营线上唯一做了产能差异的一档
+  assert.equal(produceCostScale(UNIT_TYPES.camp5), 0.9, '前进基地产兵九折');
+
+  // 老写法照样认：barracks: true 等价于 produce: {}
+  const legacy = { ...UNIT_TYPES.tower!, barracks: true } as UnitTypeDef;
+  assert.equal(isProducer(legacy), true, '老字段被翻译成产兵能力');
+  assert.equal(isProducer(UNIT_TYPES.tower), false, '箭塔不是产兵点');
+  assert.deepEqual(canProduce(UNIT_TYPES.camp, UNIT_TYPES.militia!), { ok: true }, '没白名单就不设限');
+});
+
+test('产兵能力：白名单与造价按数据生效，不用改规则', () => {
+  // ① 白名单：这座营只认民兵
+  const a = fresh();
+  a.current = 'A';
+  a.players.A.gold = 5000;
+  a.units = a.units.filter((u) => u.y < 6);
+  const camp = place(a, 'A', 'camp', 8, 8);
+  a.unitTypes.camp = { ...a.unitTypes.camp!, produce: { units: ['militia'] } };
+
+  const out = applyAction(a, { type: 'RECRUIT', unitId: camp.id, unitType: 'archer' });
+  assert.equal(out.ok, false, '白名单外的兵造不出来');
+  const inside = applyAction(a, { type: 'RECRUIT', unitId: camp.id, unitType: 'militia' });
+  assert.ok(inside.ok, inside.ok ? '' : `白名单内的兵应该能造：${inside.reason}`);
+
+  // ② 造价倍率：同一批兵，在前线基地里产要便宜一成
+  const city = fresh();
+  city.current = 'A';
+  city.players.A.gold = 5000;
+  const ownCity = city.cities.find((c) => c.owner === 'A')!;
+  const g0 = city.players.A.gold;
+  const fromCity = applyAction(city, { type: 'RECRUIT', cityId: ownCity.id, unitType: 'militia' });
+  assert.ok(fromCity.ok, fromCity.ok ? '' : fromCity.reason);
+  const cityCost = g0 - fromCity.state.players.A.gold;
+
+  const b = fresh();
+  b.current = 'A';
+  b.players.A.gold = 5000;
+  b.units = b.units.filter((u) => u.y < 6);
+  const base = place(b, 'A', 'camp5', 8, 8);
+  const g1 = b.players.A.gold;
+  const fromBase = applyAction(b, { type: 'RECRUIT', unitId: base.id, unitType: 'militia' });
+  assert.ok(fromBase.ok, fromBase.ok ? '' : fromBase.reason);
+  const baseCost = g1 - fromBase.state.players.A.gold;
+  assert.equal(baseCost, Math.round(cityCost * 0.9), '前进基地按 90% 收钱');
+});
+
+test('产兵能力：生产间隔靠"上次产出回合"算冷却', () => {
+  const s = fresh();
+  const camp = place(s, 'A', 'camp4', 8, 8);
+  s.unitTypes.camp4 = { ...s.unitTypes.camp4!, produce: { everyTurns: 3 } };
+  const def = s.unitTypes.camp4!;
+
+  assert.equal(produceCooldownLeft(s, camp, def), 0, '没产过就没有冷却');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn };
+  assert.equal(produceCooldownLeft(s, camp, def), 3, '刚产完，等满三回合');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn - 2 };
+  assert.equal(produceCooldownLeft(s, camp, def), 1, '过了两回合还差一回合');
+  camp.custom = { ...(camp.custom ?? {}), lastProduceTurn: s.turn - 3 };
+  assert.equal(produceCooldownLeft(s, camp, def), 0, '满三回合就能再造');
+});
+
+test('载具特性：老存档的 transport + capacity 仍然读得出来', () => {
+  const ferry = UNIT_TYPES.ferry!;
+  // 2026-11 之前的写法：没有 carry，只有 transport + capacity
+  const legacy = { ...ferry, carry: undefined, transport: true, capacity: 3 } as UnitTypeDef;
+  assert.equal(holdOf(legacy)?.max, 3, '旧字段被翻译成三个舱位');
+  assert.equal(carryOf(legacy)?.hold?.allow, undefined, '旧字段没有准入限制，走默认值');
+  // 新写法优先：两个都写时以 carry 为准
+  assert.equal(carryOf(ferry)?.hold?.max, 2, '有 carry 就不回头看 capacity');
+  // 什么都没有 = 不是载具
+  assert.equal(carryOf(UNIT_TYPES.militia!), null);
+});
+
+test('载具特性：航母甲板也是兵种数据，不再另存一张表', () => {
+  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const byId = (id: string) => ships.find((u) => u.id === id)!;
+
+  assert.deepEqual(carryOf(byId('nv_carrier'))?.deck, { max: 4, launchRange: 2 }, '舰队航母 4 机位');
+  assert.equal(holdOf(byId('nv_carrier')), null, '航母只有甲板、没有货舱');
+  // 两栖舰两种装法并存：舱里装陆战队，甲板上停直升机
+  assert.equal(holdOf(byId('nv_amphib'))?.max, 4, '两栖舰四个舱位');
+  assert.equal(deckCarryOf(byId('nv_amphib'))?.max, 2, '两栖舰还有两个机位');
+  // 没写 carry.deck 的船不能被当成航母
+  assert.equal(deckSpecOf(byId('nv_cruiser')), null, '巡洋舰没有甲板');
 });
 
 test('船被打沉，舱里的人一起没', () => {
@@ -5573,7 +5702,7 @@ test('高级军营按时代解锁，属性逐级变强', () => {
     const def = UNIT_TYPES[id];
     assert.ok(def, `缺少 ${id}`);
     assert.equal(def.category, 'building');
-    assert.equal(def.barracks, true, `${id} 应该是军营`);
+    assert.equal(isProducer(def), true, `${id} 应该是军营`);
     assert.equal(def.requiresWater, true, `${id} 应该要临水`);
     assert.ok(def.maxHp > prevHp, `${id} 的耐久应该比上一档高`);
     assert.ok(def.cost > prevCost, `${id} 的造价应该比上一档高`);
@@ -7144,7 +7273,7 @@ test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
     for (let i = 0; i < AI_MAX_STEPS; i++) {
       const a = aiNextAction(st,budget,rejected);
       if (!a) break;
-      if (a.type === 'BUILD' && st.unitTypes[a.unitType]?.barracks) built.push(a.unitType);
+      if (a.type === 'BUILD' && isProducer(st.unitTypes[a.unitType])) built.push(a.unitType);
       const r = applyAction(st, a);
       if (!r.ok) { rejected.add(JSON.stringify(a)); continue; }
       rejected.clear();
@@ -7863,7 +7992,7 @@ test('只开「现代」也能打完一整局：九个基本的兵一个不缺',
   assert.equal(byCategory('building').length, 3, '建筑：混凝土碉堡、产业园、联合作战中心');
 
   // 军营要在：没有它，第六时代的兵只能靠开局白送（而 era 6 不会被白送）
-  const camp = units.find((u) => u.barracks === true);
+  const camp = units.find((u) => isProducer(u));
   assert.ok(camp, '底座得带一座军营，否则第六代兵根本造不出来');
   assert.equal(camp.id, 'camp6', '军营链条的第六档');
 
@@ -11222,20 +11351,20 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     acted: false,
   };
 
-  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4, '航母应该有四个机位');
-  assert.equal(deckSpecOf('gunboat'), null, '没登记的船没有甲板');
+  assert.equal(deckSpecOf(nvDef('nv_carrier'))!.capacity, 4, '航母应该有四个机位');
+  assert.equal(deckSpecOf(nvDef('gunboat')), null, '没写 carry.deck 的船没有甲板');
 
   // 这条用例守的是**契约**，不是空军包本身：先把真实的实现摘掉，
   // 单独验"没人接入时面板怎么说"。不摘的话跑完空军那几条用例再跑这条，
   // 甲板上会挂着「舰载航空兵」，断言就变成在测另一件事了。
   const real = airwingOps();
   registerAirwingOps(null);
-  assert.equal(deckLine(carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
+  assert.equal(deckLine(nvDef('nv_carrier'), carrier), '甲板 0 / 4 · 空军扩展未接入（航母暂时只当指挥舰）');
 
   // 收两架进去
   const plane = (id: string) => ({ ...carrier, id, type: 'fake-plane', hp: 40, kills: 0 });
-  assert.ok(stowPlane(carrier, plane('p1')));
-  assert.ok(stowPlane(carrier, plane('p2')));
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane('p1')));
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane('p2')));
   assert.equal(deckUsed(carrier), 2);
   assert.equal(deckOf(carrier)[1]!.type, 'fake-plane');
 
@@ -11247,11 +11376,11 @@ test('航母甲板：没接入空军时明说，接入之后收放计数正确',
     launch: () => ({ ok: true }),
     recover: () => ({ ok: true }),
   });
-  assert.equal(deckLine(carrier), '甲板 2 / 4 · 测试舰载航空兵');
+  assert.equal(deckLine(nvDef('nv_carrier'), carrier), '甲板 2 / 4 · 测试舰载航空兵');
 
   // 注销之后要退回"未接入"，不能残留；再还原成真实实现，别把后面几条用例弄脏
   registerAirwingOps(null);
-  assert.ok(deckLine(carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
+  assert.ok(deckLine(nvDef('nv_carrier'), carrier)!.includes('未接入'), '注销之后要退回"未接入"，不能残留');
   registerAirwingOps(real);
 
   // 取下一架：按索引，取完就少一个
@@ -11409,9 +11538,9 @@ test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
   const byId = (id: string) => ships.find((u) => u.id === id)!;
 
   // 甲板：舰队航母 4 > 轻母 2 > 航战 1
-  assert.equal(deckSpecOf('nv_carrier')!.capacity, 4);
-  assert.equal(deckSpecOf('nv_light_carrier')!.capacity, 2);
-  assert.equal(deckSpecOf('nv_aviation_battleship')!.capacity, 1);
+  assert.equal(deckSpecOf(byId('nv_carrier'))!.capacity, 4);
+  assert.equal(deckSpecOf(byId('nv_light_carrier'))!.capacity, 2);
+  assert.equal(deckSpecOf(byId('nv_aviation_battleship'))!.capacity, 1);
   assert.equal(byId('nv_light_carrier').cost < byId('nv_carrier').cost, true, '轻母应该更便宜');
 
   // 潜母只修潜艇，维修舰只修水面舰：两条船能力不同
@@ -11674,7 +11803,7 @@ test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过�
   // 手工把一架"带伤返航"的舰载机塞进甲板（正式流程见下一条）
   const plane = place(s, 'A', 'af_naval_plane', 10, 10);
   plane.hp = 40;
-  assert.ok(stowPlane(carrier, plane), '四个机位应该收得下第一架');
+  assert.ok(stowPlane(nvDef('nv_carrier'), carrier, plane), '四个机位应该收得下第一架');
   s.units = s.units.filter((u) => u.id !== plane.id);
   assert.equal(deckUsed(carrier), 1);
 
@@ -11686,7 +11815,7 @@ test('甲板起降：起飞后棋盘多一架、甲板少一架，返航反过�
   assert.equal(flying!.hp, 40, '带伤起飞要带着伤，不能借起飞回血');
   assert.equal(flying!.moved, true, '起飞占掉这一回合的移动');
   assert.ok(
-    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf('nv_carrier')!.launchRange,
+    Math.abs(flying!.x - carrier.x) + Math.abs(flying!.y - carrier.y) <= deckSpecOf(nvDef('nv_carrier'))!.launchRange,
     '落点要在起飞半径之内',
   );
 
@@ -11707,7 +11836,7 @@ test('整备：轮到航母时先收、再修 8 点、后放一架', () => {
 
   const plane = place(s, 'A', 'af_naval_plane', 10, 10);
   plane.hp = 40;
-  stowPlane(carrier, plane);
+  stowPlane(nvDef('nv_carrier'), carrier, plane);
   s.units = s.units.filter((u) => u.id !== plane.id);
 
   s.current = 'B'; // 结束 B 的回合 → 轮到 A，触发整备
@@ -11778,8 +11907,8 @@ test('选卡：原版池子 20 个、各禁 1、各选 6，且只收战斗单位
   for (const id of draft.pool) {
     const def = s.unitTypes[id]!;
     assert.ok(
-      def.category === 'combat' || (def.category === 'building' && !def.barracks && !def.bridges),
-      `${def.name} 不该进池子（${def.category}${def.barracks ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
+      def.category === 'combat' || (def.category === 'building' && !isProducer(def) && !def.bridges),
+      `${def.name} 不该进池子（${def.category}${isProducer(def) ? '/军营' : ''}${def.bridges ? '/桥' : ''}）`,
     );
   }
   // 骨架一律不进池：经济、建造、军营、桥

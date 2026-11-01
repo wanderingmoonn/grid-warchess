@@ -281,8 +281,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     range: 2,
     vision: 4,
     domain: 'water',
-    transport: true,
-    capacity: 4,
+    carry: { hold: { max: 4 } },
     // 和齿轮帆船（98 金、容量 3）分工：卡拉克贵一半，换来 4 个舱位和 6 点甲。
     // 跨海投送是"一次运四个"还是"分两趟运两个"，在 20×20 的图上差一整回合。
   },
@@ -325,8 +324,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     range: 3,
     vision: 5,
     domain: 'water',
-    transport: true,
-    capacity: 3,
+    carry: { hold: { max: 3 } },
     // 远洋主力：打得过炮艇（130 金 25 攻），又能运三个兵。
     // 它是"海军独立成军"的起点——从这一代开始，海权不再只是过河的工具。
     // V = 33+36.9+40+9+10+7.5 = 136 → 0.57
@@ -403,8 +401,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 5,
     domain: 'water',
-    transport: true,
-    capacity: 5,
+    carry: { hold: { max: 5 } },
     // 纯运输：五个舱位、几乎不还手。和第六时代的两栖攻击舰分工明确——
     // 两栖能带直升机、能防空、能自保；运输舰只负责"一次把五个人送过去"，
     // 便宜一半，但必须有人护航。V = 6+49.5+40+3+12.5+7.5 = 119 → 0.40
@@ -484,6 +481,8 @@ const FLEET_UNITS: UnitTypeDef[] = [
     range: 3,
     vision: 8,
     domain: 'water',
+    // 两个机位、起飞半径 1：船小甲板短，只能把飞机放到贴身一格。
+    carry: { deck: { max: 2, launchRange: 1 } },
     abilities: ['nv-aa-cover'],
     // 独立级 / 护航航母：用巡洋舰船体改出来的应急航母。两个机位、
     // 视野 8、能防空，自己几乎不打人。和第六时代的舰队航母分工：
@@ -505,6 +504,8 @@ const FLEET_UNITS: UnitTypeDef[] = [
     vision: 7,
     domain: 'water',
     splash: 1,
+    // 拆了后主炮换来的一个机位，只能起降一架（半径 1）。
+    carry: { deck: { max: 1, launchRange: 1 } },
     abilities: ['armor-pierce', 'nv-shore-bombard'],
     // 伊势级那种"拆了后主炮换飞行甲板"的混血。它存在的意义不是强，
     // 而是**告诉你专精更划算**：炮不如战列舰（95→70）、机位只有一个、
@@ -570,10 +571,14 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     // 2×2：占四格、四格都挡路、只在四格里挨一份伤害（见 rules 的 distBetweenUnits）。
     // 这是引擎里"大型单位"的唯一表达方式，也是城市与兵营在用的那套。
     footprint: 2,
+    // 四个机位、起飞半径 2（够到相邻格之外）。
+    // 甲板规格以前写在 DECK_SPECS 那张表里，现在就在这一行上——
+    // 加一艘能带飞机的船，只改这里，不用再去改接口文件。
+    carry: { deck: { max: 4, launchRange: 2 } },
     abilities: ['nv-fleet-command', 'nv-aa-cover'],
     // 全图视野最好的船，自己几乎不打人。**它是 `naval-carrier.ts` 那道接口的宿主**：
-    // 机位 4、起飞半径 2 写在 DECK_SPECS 里，不写在这儿——甲板规格属于"接口"，
-    // 不属于数值表，改它的人应该先看到那份契约。
+    // 机位 4、起飞半径 2 就写在上面那行 `carry.deck` 里——
+    // 甲板是这条船的属性，不再另存一份到接口表。
     //
     // **大型单位**（footprint 2，占 2×2 四格）：
     //   · 好处：四格一起挡路，是一条能封锁航道的船；只在四格里挨一份溅射；
@@ -659,10 +664,10 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     range: 2,
     vision: 6,
     domain: 'water',
-    transport: true,
-    capacity: 4,
+    // 两种装法并存：舱里的陆战队，甲板上的直升机。
+    carry: { hold: { max: 4 }, deck: { max: 2, launchRange: 1 } },
     abilities: ['nv-aa-cover'],
-    // 登陆作战的核心：4 个舱位 + 2 个直升机位（DECK_SPECS 里登记）。
+    // 登陆作战的核心：4 个舱位 + 2 个直升机位（就写在上面那行 carry 里）。
     // 火力很弱（22 攻），它存在的意义是把四个兵送到对岸的城市旁边。
     // 和「运输舰」的分工：运输舰只运（容量 5、更便宜），两栖能自保、能防空、
     // 能带直升机——贵一倍多。
@@ -811,7 +816,7 @@ function deckUpkeep(state: GameState, player: PlayerId): void {
   if (!ops?.onDeckTurnStart) return;
   for (const u of state.units) {
     if (u.owner !== player) continue;
-    if (!deckSpecOf(u.type)) continue;
+    if (!deckSpecOf(state.unitTypes[u.type])) continue;
     if (u.custom?.deckUpkeepTurn === state.turn) continue;
     u.custom = { ...(u.custom ?? {}), deckUpkeepTurn: state.turn };
     ops.onDeckTurnStart({ state, carrier: u });
@@ -826,7 +831,7 @@ function navalPanelLines(state: GameState, unit: Unit): string[] {
   if (state.unitTypes[unit.type]?.footprint === 2) {
     lines.push('占地 2×2：四格一起挡路，起飞/停泊都要 2×2 的开阔水面');
   }
-  const deck = deckLine(unit);
+  const deck = deckLine(state.unitTypes[unit.type], unit);
   if (deck) lines.push(deck);
   const def = state.unitTypes[unit.type];
   if (def?.domain === 'water') {
@@ -986,7 +991,7 @@ export const MODERN_NAVAL: Expansion = {
     '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、超巡、防空巡洋舰、' +
     '攻击核潜艇（潜航）、两栖攻击舰、导弹快艇、舰队补给舰、海上钻井平台。' +
     '**第六时代没有战列舰**——它停在第五时代（二战），1945 年之后再没有国家开工建过一级。' +
-    '航母的机位与起飞半径写在 naval-carrier.ts 的 DECK_SPECS 里，不在这张数值表上。',
+    '航母的机位与起飞半径写在兵种数据的 carry.deck 上（见 naval-packs 的舰队航母那一行）。',
   abilities: MODERN_ABILITIES,
   units: MODERN_FLEET_UNITS,
   // 只开「现代海军」也想要深水（钻井平台的产出靠它）——两个包都登记一次，

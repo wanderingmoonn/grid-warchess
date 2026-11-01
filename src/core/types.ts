@@ -178,6 +178,98 @@ export interface Tile {
 
 export type UnitCategory = 'combat' | 'economy' | 'builder' | 'building';
 
+/* ---------------------------------------------------------------------------
+ * 载具特性（carry）：一个兵种能把别的兵种装进自己身上
+ *
+ * 这套类型只描述**数据**，判定逻辑在 core/carry.ts，一行都不写在规则里。
+ * 分成 hold（货舱）与 deck（甲板）两个槽位，是因为它们的存法不一样：
+ *   · 货舱里的兵从 state.units 摘走，只剩一条记录，途中不能打仗；
+ *   · 甲板上的飞机仍然是一架单位，随时能起飞出击。
+ * 把两者塞进同一个 `capacity` 数字，实际是把"怎么存"这件事留给规则层猜。
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 载具：谁可以进来、最多几个。
+ *
+ * 两个槽位独立存在——两栖攻击舰同时有货舱和甲板，渡船只填 hold，
+ * 航母只填 deck。只填一个的载具占绝大多数。
+ */
+export interface CarrySpec {
+  /** 货舱：地面部队装进来之后从棋盘上摘掉，随船走，途中不能作战 */
+  hold?: CarryHold;
+  /** 甲板：战机停驻在这里，仍然是一架能起飞作战的单位 */
+  deck?: CarryDeck;
+}
+
+export interface CarryHold {
+  /** 舱位上限（≥1 才有意义；0 等于没有货舱） */
+  max: number;
+  /** 谁能进来。缺省＝地面、非建筑、非空中（见 carry.DEFAULT_HOLD_ALLOW） */
+  allow?: CarryAllow;
+}
+
+export interface CarryDeck {
+  /** 机位上限 */
+  max: number;
+  /**
+   * 起飞/回收时允许落脚的半径（格）。
+   *
+   * 航母大、两栖舰小；直升机可以垂直起降，固定翼要跑道——
+   * 这条只给"最远能放到几个格之外"，具体能不能起由甲板作业方说了算。
+   */
+  launchRange: number;
+  /**
+   * 谁能落上来。**缺省＝不表态**，交给甲板作业方（空军扩展的 `canBoard`）判断：
+   * 飞机能不能上舰要看跑道、垂直起降、重量，那是空军的知识，不该写死在船的数值里。
+   * 写明 allow 时两边都要放行（数据是上限，作业方还要过自己那一关）。
+   */
+  allow?: CarryAllow;
+}
+
+/**
+ * 谁能被装：条件之间是"与"，写几个就同时满足几个。
+ *
+ * 全都不写 = 不设限（但 hold 仍然会套用 DEFAULT_HOLD_ALLOW 的兜底）。
+ * 这是**白名单式**表达：先按 types/categories/domains/layers 圈池子，
+ * 再用 except 抠掉特例。想表达"除了船和建筑之外都能上"，
+ * 不用列一份长长的黑名单，靠 domains/categories 两条就够。
+ */
+export interface CarryAllow {
+  /** 白名单：具体兵种 id。写了就只认这些 */
+  types?: string[];
+  /** 按类别（战斗/经济/建造/建筑） */
+  categories?: UnitCategory[];
+  /** 按域（陆上/水上） */
+  domains?: UnitDomain[];
+  /** 按层（地面/空中） */
+  layers?: UnitLayer[];
+  /** 黑名单：从上面的池子里再抠掉这些 id */
+  except?: string[];
+}
+
+/**
+ * 产兵能力：一座建筑把"造兵"这件事的参数化表达。
+ *
+ * 四个字段都可以不写，不写就是"和以前一样"：
+ *   · `units`      不写 = 不设白名单（能造什么仍由时代与城市供给决定）
+ *   · `everyTurns` 不写 = 1（当回合成型）
+ *   · `costScale`  不写 = 1（原价）
+ *   · `pop`        不写 = 0（建筑不占编制，这是本作一直以来的口径）
+ *
+ * 只写 `produce: {}` 也有意义：它的意思是"这是一座产兵点"，
+ * 这正是老字段 `barracks: true` 的全部含义。
+ */
+export interface ProduceSpec {
+  /** 能生产的兵种 id 白名单。不写 = 不设限 */
+  units?: string[];
+  /** 生产间隔：每几回合能出一个（默认 1 = 当回合） */
+  everyTurns?: number;
+  /** 造价倍率（默认 1）。0.9 = 便宜一成，1.2 = 加价两成 */
+  costScale?: number;
+  /** 这座营占用几格编制（默认 0） */
+  pop?: number;
+}
+
 export interface UnitTypeDef {
   id: string;
   name: string;
@@ -323,8 +415,21 @@ export interface UnitTypeDef {
    */
   bridges?: boolean;
   /**
-   * 这类建筑是军营：能像城市一样出兵，但自己没有科技，
-   * 用的是最近己方城市的时代。
+   * 产兵能力：这座建筑能像城市一样出兵——**产什么、多快、多贵，全由这里说了算**。
+   *
+   * 以前它只是一个 `barracks: true` 的布尔开关，于是所有兵营长得一模一样：
+   * 能造的东西完全由"时代 + 城市供给"决定，出一个兵永远当回合成型、
+   * 永远原价。想加一座"只出轻步兵、但便宜"的前哨营，只能去规则里加 if。
+   * 现在这些差异都是数据（读法见 core/produce.ts）。
+   *
+   * 它和 `carry` 是同一种思路：**能力写在兵种自己身上，规则层只读不猜**。
+   */
+  produce?: ProduceSpec;
+  /**
+   * @deprecated 老存档兼容用，等价于 `produce: {}`（全部走默认值）。
+   *
+   * 新代码一律用 `isProducer(def)` / `produceOf(def)` 判断，它们会把这个
+   * 旧写法翻译过来。**新增产兵建筑请写 `produce`**，写了就以 `produce` 为准。
    */
   barracks?: boolean;
   /**
@@ -383,11 +488,29 @@ export interface UnitTypeDef {
    */
   buildOn?: Terrain[];
   /**
-   * 运输单位：能把相邻的陆军装进货舱运过水面。
-   * 它自己不打架（atk 0），存在的意义就是"让陆军过河"。
+   * 载具：这个兵种自己就是一个容器（渡船、运输舰、运输机、航母、两栖舰……）。
+   *
+   * **"能装谁、装几个"是兵种自己的属性**，不是规则层按类型猜的：
+   * 以前这里只有一个 `transport` 布尔 + `capacity` 数字，规则层再硬写
+   * "水军不能上船、建筑不能上船"，航母的机位另存在一张表里——
+   * 三处各说一部分，加一种载具就要改三处。现在统一收在这一个字段里，
+   * 规则层只按数据判定，UI/AI/规则书都读同一份（见 core/carry.ts）。
+   *
+   * 两个槽位互相独立，可以只填一个，也可以都填：
+   *   · `hold` 货舱——陆军装进来之后从棋盘上摘掉，随船走，途中不能作战；
+   *   · `deck` 甲板——战机停驻在这里，仍然是一架能起飞作战的单位。
+   * 两栖攻击舰就是"货舱 4 + 甲板 2"，渡船只填 `hold`，航母只填 `deck`。
+   */
+  carry?: CarrySpec;
+  /**
+   * @deprecated 老存档兼容用，等价于 `carry.hold.max`。
+   *
+   * 新代码一律读 `carryOf(def)`（它会把这个旧写法翻译过来），
+   * 这里保留声明只是为了让一年前的存档/房间快照读进来不至于"船突然不能载人"。
+   * **新增载具不要写这两个字段**，写了 `carry` 就以 `carry` 为准。
    */
   transport?: boolean;
-  /** 货舱容量（transport 用） */
+  /** @deprecated 老存档兼容用，等价于 `carry.hold.max`。见上。 */
   capacity?: number;
   /**
    * 必须紧邻水域才能建（军营靠水补给）。

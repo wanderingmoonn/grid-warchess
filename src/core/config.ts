@@ -996,8 +996,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 3,
     domain: 'water',
-    transport: true,
-    capacity: 2,
+    // 只有货舱、没有甲板：渡船运的是人和马，不是飞机。
+    carry: { hold: { max: 2 } },
   },
   bridge: {
     id: 'bridge',
@@ -1066,7 +1066,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 3,
     // 营里有哨兵，贴着营门的敌人每回合都会被敲一下
     autoAttack: true,
-    barracks: true,
+    // 产兵能力：这座营能造什么、多快、多贵，全在这一行。
+    // 空对象 = 不设白名单、当回合成型、原价——也就是 0.3.7 之前的行为。
+    produce: {},
     // 野战营地：只能在平地或丘陵上扎，森林里不行
     buildOn: ['plain', 'hill'],
     // 临水扎营：粮秣、饮水、船运都得靠河。这条同时是水军的存在理由——
@@ -1088,7 +1090,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 3,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1107,7 +1109,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 4,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1126,7 +1128,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 4,
     autoAttack: true,
-    barracks: true,
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },
@@ -1145,7 +1147,10 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 5,
     autoAttack: true,
-    barracks: true,
+    // 整条营线里唯一做了"产能差异"的一档：它把兵工厂和补给站搬到了前线，
+    // 在它这儿产兵便宜一成（0.3.7 之前五档营完全一样，差异只在攻/甲/血上）。
+    // 想给某一档加白名单或冷却，也只需要改这一行——规则层不用动。
+    produce: { costScale: 0.9 },
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },

@@ -12,7 +12,7 @@
  * ── 职责边界（这一段是这道接口存在的全部理由）──────────────────────────
  *
  * 海军包（`naval-packs.ts`）负责：
- *   · 船本身：数值、造价、`capacity` 个机位、起飞半径；
+ *   · 船本身：数值、造价、兵种数据上 `carry.deck` 写着的机位与起飞半径；
  *   · **容器**：把飞机从棋盘上摘下来存进 `carrier.custom.airwing`，
  *     以及反过来放回棋盘（见 `stowPlane` / `popPlane`）；
  *   · 回合开始时把"轮到你整备了"这个时机转告给空军扩展；
@@ -39,7 +39,8 @@
  * 也就不可能在两个包里各写一套互不兼容的存储。
  */
 
-import type { GameState, Unit } from './types.ts';
+import type { GameState, Unit, UnitTypeDef } from './types.ts';
+import { deckCarryOf } from './carry.ts';
 
 /** 停在甲板上的飞机。存字段而不是存整个 Unit：卸船时要重新编号、重摆位 */
 export interface StowedPlane {
@@ -51,7 +52,13 @@ export interface StowedPlane {
   kills?: number;
 }
 
-/** 一类船的甲板规格 */
+/**
+ * 一类船的甲板规格。
+ *
+ * 数值来源是**兵种自己的 `carry.deck`**（见 core/carry.ts），不是这张表：
+ * 这张接口只负责把 `{ max, launchRange }` 翻成甲板这边的说法，
+ * 好让空军扩展不必知道"载具特性"长什么样。
+ */
 export interface DeckSpec {
   /** 机位数量 */
   capacity: number;
@@ -65,24 +72,17 @@ export interface DeckSpec {
 }
 
 /**
- * 哪些船有甲板。
+ * 哪些船有甲板：**看兵种数据**，不看登记表。
  *
- * 只登记"确实能带飞机"的船，没登记的船 `deckSpecOf` 返回 null，
- * 空军扩展据此拒绝上舰——比在空军包里抄一份船名表更不容易走散。
+ * 以前这里是一张 `DECK_SPECS` 常量表，船名和机位数在 naval-packs 之外
+ * 又抄了一份——加一艘能带飞机的船要改两个文件，改漏了就是"面板说 4 个机位、
+ * 实际收不下第二架"。现在机位就写在兵的 `carry.deck` 上，
+ * 这里只是把它翻译成甲板视图；没写 `carry.deck` 的船自然返回 null。
  */
-export const DECK_SPECS: Readonly<Record<string, DeckSpec>> = {
-  // 航空母舰：四个机位，起飞半径 2（够到相邻格之外）
-  nv_carrier: { capacity: 4, launchRange: 2 },
-  // 轻型航母：两个机位，起飞半径 1——船小，甲板短
-  nv_light_carrier: { capacity: 2, launchRange: 1 },
-  // 航空战列舰：拆了后主炮换来的一个机位，只能起降一架
-  nv_aviation_battleship: { capacity: 1, launchRange: 1 },
-  // 两栖攻击舰：两个机位，主要带直升机
-  nv_amphib: { capacity: 2, launchRange: 1 },
-};
-
-export function deckSpecOf(typeId: string): DeckSpec | null {
-  return DECK_SPECS[typeId] ?? null;
+export function deckSpecOf(def: UnitTypeDef | undefined | null): DeckSpec | null {
+  const deck = deckCarryOf(def);
+  if (!deck || deck.max <= 0) return null;
+  return { capacity: deck.max, launchRange: deck.launchRange };
 }
 
 /**
@@ -100,8 +100,8 @@ export function deckUsed(carrier: Unit): number {
   return deckOf(carrier).length;
 }
 
-export function deckFree(carrier: Unit): number {
-  const spec = deckSpecOf(carrier.type);
+export function deckFree(def: UnitTypeDef | undefined | null, carrier: Unit): number {
+  const spec = deckSpecOf(def);
   return spec ? Math.max(0, spec.capacity - deckUsed(carrier)) : 0;
 }
 
@@ -113,8 +113,12 @@ export function deckFree(carrier: Unit): number {
  * 那是规则层的活；扩展里对 `state.units` 做过滤是既有惯例（焦土就这么干），
  * 但**删谁**只有空军扩展知道（它可能还要处理飞行员、载具残骸之类）。
  */
-export function stowPlane(carrier: Unit, plane: Unit): boolean {
-  if (deckFree(carrier) <= 0) return false;
+export function stowPlane(
+  def: UnitTypeDef | undefined | null,
+  carrier: Unit,
+  plane: Unit,
+): boolean {
+  if (deckFree(def, carrier) <= 0) return false;
   const list = deckOf(carrier).slice();
   list.push({ type: plane.type, hp: plane.hp, ...(plane.kills > 0 ? { kills: plane.kills } : {}) });
   carrier.custom = { ...(carrier.custom ?? {}), airwing: list };
@@ -204,8 +208,8 @@ export function airwingOps(): AirwingOps | null {
 }
 
 /** 面板那一行：「甲板 2/4」或者「甲板空置（空军扩展未接入）」 */
-export function deckLine(carrier: Unit): string | null {
-  const spec = deckSpecOf(carrier.type);
+export function deckLine(def: UnitTypeDef | undefined | null, carrier: Unit): string | null {
+  const spec = deckSpecOf(def);
   if (!spec) return null;
   const used = deckUsed(carrier);
   const ops = airwingOps();

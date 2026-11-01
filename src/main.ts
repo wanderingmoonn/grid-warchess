@@ -7,6 +7,8 @@
 
 import './style.css';
 
+import { holdOf } from './core/carry.ts';
+import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
@@ -2092,7 +2094,7 @@ function inspectAt(coords: { x: number; y: number } | null): void {
   if (u) {
     // 自己的军营点开是产兵面板，只读的时候也一样：
     // "这座营还能出什么"是它身上最值得看的一条
-    if (u.owner === me() && utype(state, u.type).barracks) selectCamp(u);
+    if (u.owner === me() && isProducer(utype(state, u.type))) selectCamp(u);
     else selectUnit(u);
     return;
   }
@@ -2424,7 +2426,7 @@ function onBoardClick(e: Event): void {
       // 沙盒例外：那边侧栏是货架，没有产兵面板可开，`selectCamp` 等于
       // "点了没反应"。改成普通选中——至少棋盘上会亮出一个选中框，
       // 让人知道这一下确实点到了东西。
-      if (u.owner === me() && utype(state, u.type).barracks && !godMode()) selectCamp(u);
+      if (u.owner === me() && isProducer(utype(state, u.type)) && !godMode()) selectCamp(u);
       else selectUnit(u);
       return;
     }
@@ -2688,7 +2690,7 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'load': {
       if (!selectedId) return;
       const ferry = state.units.find((u) => u.id === selectedId);
-      if (!ferry || !state.unitTypes[ferry.type]?.transport) return;
+      if (!ferry || !holdOf(state.unitTypes[ferry.type])) return;
       loadPlan = loadPlan ? null : ferry.id;
       unloadPlan = null;
       if (loadPlan) toast('点一个贴着船的己方陆军，让它上船');
@@ -3246,7 +3248,7 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
   }
   for (const u of unitsOf(state, me())) {
     const d = utype(state, u.type);
-    if (!d.barracks) continue;
+    if (!isProducer(d)) continue;
     const x = String.fromCharCode(65 + u.x);
     out.push({
       id: u.id,

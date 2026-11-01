@@ -19,6 +19,7 @@
  *      产出平庸、耐久 +35%，于是最划算的用法是把它修在隘口上堵路。
  */
 
+import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
 import { isBioUnit } from './resources.ts';
@@ -388,7 +389,7 @@ export const CITY_WORKS: Expansion = {
 
         // 兵营类：营地画成 2×2 的营垒——原版的营只有一间房，一顶帐篷。
         // 占地是原版接口（UnitTypeDef.footprint），这里只是把它用起来。
-        if (def.barracks) {
+        if (isProducer(def)) {
           def.footprint = 2;
           continue;
         }

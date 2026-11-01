@@ -291,7 +291,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     range: 1,
     vision: 6,
     autoAttack: true,
-    barracks: true,
+    // 现代的前线基地：沿用产兵点默认值（不设白名单、当回合成型、原价）
+    produce: {},
     buildOn: ['plain', 'hill'],
     requiresWater: true,
   },

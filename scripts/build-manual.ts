@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
+import { deckCarryOf, holdOf } from '../src/core/carry.ts';
+import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -120,8 +122,14 @@ const GENERIC_TERMS: Term[] = [
   {
     key: 'carry',
     name: '装载',
-    brief: '能把贴身的己方陆军装进货舱运过水面；船沉了，舱里的人一起没。',
+    brief: '能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。',
     more: '装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。',
+  },
+  {
+    key: 'produce',
+    name: '产兵',
+    brief: '这是一座产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。',
+    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。城市丢了，营就断了补给，产不出兵。',
   },
   {
     key: 'air',
@@ -357,6 +365,23 @@ function traitsOf(u: UnitTypeDef): string {
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
   if (u.burst) parts.push(ref('burst', `多动 ${u.burst} 次`));
   if (u.builds) parts.push(ref('builds', `可建 ${u.builds.length} 种建筑`));
+  // 载具：舱位与机位都是兵种数据上的数字，表里就该看得见——
+  // 以前这两样只写在属性卡的正文里，横向比船的时候要一艘艘点开。
+  const hold = holdOf(u);
+  if (hold) parts.push(ref('carry', `装载 ${hold.max}`));
+  const deck = deckCarryOf(u);
+  if (deck) parts.push(ref('carry', `甲板 ${deck.max}`));
+  // 产兵：写"产兵"再挂上产能差异（冷却 / 造价），数据里没写的就不显示
+  const prod = produceOf(u);
+  if (prod) {
+    const every = produceEveryTurns(u);
+    const scale = prod.costScale ?? 1;
+    const extra: string[] = [];
+    if (every > 1) extra.push(`${every} 回合一批`);
+    if (scale !== 1) extra.push(`造价 ${Math.round(scale * 100)}%`);
+    if ((prod.pop ?? 0) > 0) extra.push(`占 ${prod.pop} 编制`);
+    parts.push(ref('produce', extra.length > 0 ? `产兵（${extra.join(' · ')}）` : '产兵'));
+  }
   if (u.autoAttack) parts.push(ref('auto'));
   if (u.move === 0) parts.push(ref('immobile'));
   return parts.length > 0 ? parts.join(' · ') : '—';
@@ -2403,8 +2428,8 @@ const BOOK_GROUPS: BookGroup[] = [
         所以任何一条船都做得到，不需要挂能力。</p>
       <p><b>航空母舰是大型单位</b>：占 2×2 四格、四格一起挡路，只在四格里挨一份溅射，
         也因此需要 2×2 的开阔水面才能停靠与生产——一格宽的河里开不进航母。
-        它的机位与起飞半径写在 <code>src/core/naval-carrier.ts</code> 的 <code>DECK_SPECS</code> 里，
-        是留给未来空军扩展的一道接口；空军没接入时，它是一艘视野 9 的指挥舰。</p>`,
+        它的机位与起飞半径是<b>它自己的兵种数据</b>（<code>carry.deck</code>），
+        不再另存到接口表里；空军没接入时，它是一艘视野 9 的指挥舰。</p>`,
   },
   {
     file: 'public/manual-pack-air.html',
