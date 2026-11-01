@@ -3547,10 +3547,15 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
       assert.ok(d.range >= 4, `${d.name} 是时代 ${d.era} 的远程，射程 ${d.range} 还不如长弓手`);
     }
   }
-  // 顶级火力要真的压过后排：火炮与铁甲舰 5 格，长弓手 4 格
+  // 顶级火力要真的压过后排：火炮 5 格，长弓手 4 格。
+  // 水面上负责这一档的是 E5 的那几条钢铁舰队（重巡/战列舰），
+  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在工业时代算远的，
+  // 但不该和火炮/战列舰同格。
   assert.equal(UNIT_TYPES.longbow.range, 4);
   assert.equal(UNIT_TYPES.artillery.range, 5);
-  assert.equal(UNIT_TYPES.ironclad.range, 5);
+  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是工业时代的船，射程不该追平火炮');
+  assert.equal(nvDef('nv_heavy_cruiser').range, 5, '重巡的 8 吋炮要打到 5 格');
+  assert.equal(nvDef('nv_battleship').range, 5);
   // 载具也上了一个台阶：射程 3 意味着能站在近战够不到的地方开火
   assert.equal(UNIT_TYPES.tank.range, 3);
   assert.equal(UNIT_TYPES.armoredcar.range, 3);
@@ -3575,7 +3580,7 @@ test('关键数值按方案落定', () => {
     ['spearman', { maxHp: 40 }],
     ['tower', { range: 3 }],
     ['gunboat', { atk: 25, maxHp: 46 }],
-    ['ironclad', { atk: 47, armor: 11, maxHp: 90 }],
+    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 4 }],
     ['tank', { atk: 56, maxHp: 88 }],
     ['artillery', { atk: 47, maxHp: 54 }],
     ['squad', { atk: 47, maxHp: 48 }],
@@ -11515,6 +11520,49 @@ test('海军：两个包都注册上，兵种全是水面单位', () => {
   const era6 = (modern!.units ?? []).filter((u) => u.era === 6);
   assert.ok(era6.length >= 5, `现代海军应该补出至少 5 条六代船，现在 ${era6.length} 条`);
   assert.ok(era6.some((u) => u.id === 'nv_carrier'), '六代船里必须有航母');
+});
+
+test('海军：铁甲舰回 E4、重巡补 E5，两代之间不再断层', () => {
+  // ── 年代 ──
+  // 铁甲舰（Gloire 1859 → 定远 1885）是工业时代的船。以前它在 E5，
+  // 于是 1860 年代的装甲舰和二战战列舰同场，而 E4 那一代只剩浅水重炮舰。
+  assert.equal(UNIT_TYPES.ironclad!.era, 4, '铁甲舰属于工业时代');
+  const heavy = nvDef('nv_heavy_cruiser');
+  assert.equal(heavy.era, 5, '重巡（条约型，1930s）补在第五时代');
+  assert.equal(heavy.domain, 'water');
+  assert.equal(heavy.short.length, 1, '图标只能一个字');
+  // 装巡 400 → 重巡 480 → 战巡 660 → 战列舰 780：中型舰那一档不再是个空档
+  const ladder = ['nv_cruiser', 'nv_heavy_cruiser', 'nv_battlecruiser', 'nv_battleship'].map((id) => nvDef(id));
+  for (let i = 1; i < ladder.length; i++) {
+    assert.ok(ladder[i]!.cost > ladder[i - 1]!.cost, `${ladder[i]!.name} 该比 ${ladder[i - 1]!.name} 贵`);
+  }
+
+  // ── 分工 ──
+  // 装巡带岸轰、重巡不带：能轰岸的中型舰有一条就够了，
+  // 再来一条会把浅水重炮舰和装巡一起挤掉。
+  assert.ok(nvDef('nv_cruiser').abilities.includes('nv-shore-bombard'));
+  assert.ok(!heavy.abilities.includes('nv-shore-bombard'), '重巡不抢岸轰的活');
+  assert.ok(heavy.abilities.includes('armor-pierce'), '8 吋炮要能破甲');
+  // 铁甲舰交出破城：同一个时代不需要两条攻城船，攻城归浅水重炮舰
+  assert.ok(!(UNIT_TYPES.ironclad!.abilities ?? []).includes('siege-master'));
+  assert.ok(UNIT_TYPES.ironclad!.abilities.includes('armor-pierce'), '铁甲舰仍然是破甲船');
+
+  // ── 和同代那条重炮舰不互相压死 ──
+  const monitor = nvDef('nv_monitor');
+  assert.ok(UNIT_TYPES.ironclad!.cost < monitor.cost, '铁甲舰更便宜');
+  assert.ok(UNIT_TYPES.ironclad!.move > monitor.move, '铁甲舰更快（远洋 vs 近岸浮炮台）');
+  assert.ok(UNIT_TYPES.ironclad!.atk < monitor.atk, '但炮更小');
+  assert.ok(UNIT_TYPES.ironclad!.vision > monitor.vision, '视野也正常，不靠岸上的人给眼睛');
+  assert.ok(monitor.abilities.includes('nv-shore-bombard'), '攻城仍然归浅水重炮舰');
+
+  // ── 价值带（naval-packs 顶上那条 V/造价 口径）──
+  const V = (u: Record<string, number>) =>
+    u.atk + 0.45 * u.maxHp + 5 * u.armor + 3 * u.range + 2.5 * u.move + 1.5 * u.vision + 4 * (u.splash ?? 0);
+  const ratio = (u: Record<string, number>) => V(u) / u.cost;
+  const ic = ratio(UNIT_TYPES.ironclad as unknown as Record<string, number>);
+  assert.ok(ic > 0.48 && ic < 0.56, `铁甲舰的性价比 ${ic.toFixed(2)} 跑出 E4 的带子（0.50~0.54）`);
+  const hc = ratio(heavy as unknown as Record<string, number>);
+  assert.ok(hc > 0.40 && hc < 0.50, `重巡的性价比 ${hc.toFixed(2)} 跑出 E5 的带子（0.38~0.52）`);
 });
 
 test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {
