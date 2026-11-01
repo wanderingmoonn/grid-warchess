@@ -27,6 +27,7 @@ import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
+  airLayer,
   attacksLeftOf,
   attacksPerTurn,
   splashRadiusOf,
@@ -46,6 +47,7 @@ import {
   magicAtkOf,
   magicResOf,
   heroSkillsOf,
+  isAirborne,
   ordersOf,
   recruitResCost,
   recruitSpawnCells,
@@ -849,9 +851,16 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = city.hp / city.maxHp;
   const era = eraDef(city.era);
-  const garrison = unitsOf(s, city.owner).filter((u) =>
-    cityTiles(city).some((t) => t.x === u.x && t.y === u.y),
-  ).length;
+  // 驻军只数**地面**单位。
+  //
+  // 空中单位和地面单位是一格站两个（见 rules 的 sameLayerAt），
+  // 所以"城里有几个人"和"城里还空着几格"是两个数：
+  //   · 四架飞机悬在城上空，地面四个位置一个没占，照样能出四个兵；
+  //   · 城里塞满四个步兵，天上还是一片空白，照样能出飞机。
+  // 以前这两件事共用一个数，于是"人口满了造不出飞机"和"飞机悬着造不出步兵"
+  // 两个方向都错。
+  const onCityTiles = (u: Unit) => cityTiles(city).some((t) => t.x === u.x && t.y === u.y);
+  const garrison = unitsOf(s, city.owner).filter((u) => !isAirborne(s, u) && onCityTiles(u)).length;
   const freeSlots = city.size * city.size - garrison;
   const gold = s.players[me].gold;
 
@@ -894,8 +903,24 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   );
   const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
 
+  // 地面坐满时还起得来几款空军：底部那句提示用得上。
+  // 它只回答"是不是真的什么都造不了"，所以按"确实有落点"算，不是按兵种表里有几架。
+  const airReady = buildable.filter(
+    (d) => airLayer(d) && recruitSpawnCells(s, city.id, undefined, d.id).length > 0,
+  ).length;
+
   const unitButton = (def: UnitTypeDef) => {
-    const slotsOk = def.domain === 'water' ? hasPort : freeSlots > 0;
+    // 三种兵各有各的"有没有地方放"：
+    //   水军 → 城边有没有空水面；
+    //   空军 → 直接问规则层（它可以悬在地面单位头顶上，所以"地面空位 0"不影响它）；
+    //   陆军 → 城里还剩几个地面位置。
+    // 前两条不能拿 freeSlots 代替：那个数是按地面算的，空军照着它会被误判成没地方。
+    const slotsOk =
+      def.domain === 'water'
+        ? hasPort
+        : airLayer(def)
+          ? recruitSpawnCells(s, city.id, undefined, def.id).length > 0
+          : freeSlots > 0;
     // 下单模式下"城里有没有空位 / 现在轮不轮得到你"都不作数：那些是 AI 执行那一回合才面对的事
     const disabled = ordering ? queueFull : !myTurn || !slotsOk;
 
@@ -995,7 +1020,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                  ? '排进队列的是「这座城 · 这个兵」，AI 执行那一回合才扣钱出兵；队列可以在顶部随时删。'
                  : freeSlots > 0
                    ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
-                   : '城内已站满，先让部队挪一挪。'
+                   : airReady > 0
+                     ? '城内地面位已站满，先让部队挪一挪——空军还能起飞（悬在地面单位上方不占位置）。'
+                     : '城内已站满，先让部队挪一挪。'
              }
              ${
                locked.length > 0

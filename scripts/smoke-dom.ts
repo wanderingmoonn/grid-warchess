@@ -27,6 +27,7 @@ import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import {
   applyAction,
+  cityTiles,
   effectiveStats,
   reachableTiles,
   refreshMemory,
@@ -899,6 +900,50 @@ check('产兵按钮上写着血量', () => {
 check('城市里不再直接产建筑', () => {
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(!html.includes('自动开火'), '建筑不该出现在城市生产列表里');
+});
+
+check('城内地面位站满时，空军按钮还能点（人口满了不等于造不出飞机）', () => {
+  const st = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    6120,
+  );
+  st.fog = false;
+  st.units = [];
+  const city = st.cities.find((c) => c.owner === 'A')!;
+  // 城内每一格都站一个地面单位：也就是面板上说的"城内已站满"
+  for (const t of cityTiles(city)) {
+    st.units.push({
+      id: `occ-${t.x}-${t.y}`,
+      type: 'militia',
+      owner: 'A',
+      x: t.x,
+      y: t.y,
+      hp: 10,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+  }
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const btns = Array.from(host.querySelectorAll<HTMLElement>('.recruit-btn'));
+  const air = btns.find((b) => (b.textContent ?? '').includes('气球'));
+  assert.ok(air, '这一档应该能造侦察气球');
+  assert.ok(!air!.hasAttribute('disabled'), '地面位满了，空军照样该能起飞');
+  const land = btns.find((b) => (b.textContent ?? '').includes('民兵'));
+  assert.ok(land?.hasAttribute('disabled'), '陆军确实造不出来了，按钮该是灰的');
+  assert.ok(
+    (host.textContent ?? '').includes('空军还能起飞'),
+    '提示要告诉玩家"占满的只是地面位"',
+  );
 });
 
 check('输入法组字期间不重建搜索框（"chuan船"不会被敲两遍）', () => {

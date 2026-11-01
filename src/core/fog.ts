@@ -72,6 +72,29 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     (u) => u.owner === p || (visibleSet.has(idx(s, u.x, u.y)) && !isHiddenFrom(s, u, p)),
   );
 
+  /*
+   * 桥是"修出来的地形"，跟着视野走。
+   *
+   * 地形本身是公开的（基础规则的雾只遮单位），但桥不是地形，是人盖的东西：
+   * 对面趁夜在下游架了一座桥，第二天这边就多出一条过河的路——这件事没有理由
+   * 凭空可见。所以凡是有桥单位站着的桥面、又不在自己视野里，一律按水面画。
+   *
+   * 两条边界：
+   *   · 自己修的桥一直知道自己修了，不遮；
+   *   · 地图自带的路桥（固定地图里的 `=`）下面没有桥单位，照常当普通地形显示。
+   */
+  if (!reveal) {
+    for (const u of s.units) {
+      if (!s.unitTypes[u.type]?.bridges) continue;
+      if (u.owner === p) continue;
+      const i = idx(s, u.x, u.y);
+      if (visibleSet.has(i)) continue;
+      const tile = cloned.tiles[i];
+      // 桥只能架在水面上（见 buildSiteError 的 buildOn），看不见就退回水面
+      if (tile && tile.terrain === 'bridge') tile.terrain = 'water';
+    }
+  }
+
   // 战况烈度账本只留自己的那一份。
   //
   // 对方的账本里记着"他的哪些格子挨了打"——那等于把他部队的位置和交火点

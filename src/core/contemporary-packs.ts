@@ -233,7 +233,10 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     buildPower: 36,
-    builds: ['ct_pillbox', 'ct_industrial', 'bridge', 'bridge2', 'bridge3', 'camp6'],
+    // 海上钻井平台也归它：那是第六时代唯一一座"盖在海面上"的经济建筑。
+    // 挂在这一位（底座工程兵）而不是「工程兵团」，是因为「现代海军」只要求
+    // 「现代」——挂到需要「现代战争」的那一位身上，会有整整一档玩家修不了自己的平台。
+    builds: ['ct_pillbox', 'ct_industrial', 'bridge', 'bridge2', 'bridge3', 'camp6', 'nv_oil_platform'],
   },
 
   // ---- 建筑 ----

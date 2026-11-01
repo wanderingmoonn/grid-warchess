@@ -212,6 +212,7 @@ import {
   registerStatus,
   SKILL_EFFECTS,
   STATUS_REGISTRY,
+  buildSiteError,
   stepCostBetween,
   stepCostInto,
   strikeDistance,
@@ -12706,6 +12707,214 @@ test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
   assert.ok(pickId, 'AI 应该能给出一个选人');
   assert.ok(s.draft!.pool.includes(pickId!), 'AI 的选人必须在池子里');
   assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
+});
+
+/* ===========================================================================
+ * 五项修复（2026-11-01）：自爆 / 满员造空军 / 雾里的桥 / 飞行过深水 / 钻井平台
+ * ======================================================================== */
+
+test('自爆：打不到空中的东西，地面照吃不误', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 4, expansionIds: ['air-corps'] },
+    5151,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.cities = [];
+  grantAbility(s, 'militia', 'kamikaze');
+
+  const bomb = place(s, 'B', 'militia', 5, 5);
+  bomb.hp = 1;
+  // 同一格上站一对：地面一个、空中一个。自爆只该动地面那个。
+  // 注意顺序——先摆到两格上再合并，`place` 会清掉同一格上的旧单位。
+  const ground = place(s, 'B', 'archer', 6, 5);
+  ground.hp = 100;
+  const flyer = place(s, 'B', 'af_balloon', 6, 6);
+  flyer.hp = 100;
+  flyer.x = 6;
+  flyer.y = 5;
+  const killer = place(s, 'A', 'militia', 5, 4);
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.equal(after(bomb.id), 0, '1 血的民兵应该被打开自爆');
+  const blast = Math.max(1, Math.round(s.unitTypes['militia']!.atk / 2));
+  assert.equal(after(ground.id), 100 - blast, `同一格的陆军该吃 ${blast} 点`);
+  assert.equal(after(flyer.id), 100, '悬在上面的气球一点血都不该掉');
+});
+
+test('城市：地面位站满时，空军照样能起飞', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5252,
+  );
+  s.fog = false;
+  s.units = [];
+  const city = citiesOf(s, 'A')[0]!;
+  // 城内每一格都塞一个地面单位 —— 也就是玩家说的"人口满了"
+  for (const t of cityTiles(city)) place(s, 'A', 'militia', t.x, t.y);
+  assert.equal(
+    recruitSpawnCells(s, city.id, undefined, 'militia').length,
+    0,
+    '地面位已经一个不剩，陆军确实造不出来',
+  );
+  assert.ok(
+    recruitSpawnCells(s, city.id, undefined, 'af_balloon').length > 0,
+    '空军应该还能找到落脚的位置（悬在地面单位上方）',
+  );
+
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'af_balloon' });
+  assert.ok(r.ok, r.ok ? '' : `满员时造空军被拒：${r.reason}`);
+  const born = r.state.units.filter((u) => u.type === 'af_balloon' && u.owner === 'A');
+  assert.equal(born.length, 1, '应该真的多出一架');
+  // 新兵和城里的步兵叠在同一格：这是空中层的意义，不是 bug
+  assert.ok(
+    cityTiles(city).some((t) => t.x === born[0]!.x && t.y === born[0]!.y),
+    '新飞机应该出现在城内',
+  );
+
+  // 反过来也要成立：四架飞机悬在城上空，不该占掉地面位置
+  const s2 = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5253,
+  );
+  s2.fog = false;
+  s2.units = [];
+  const city2 = citiesOf(s2, 'A')[0]!;
+  for (const t of cityTiles(city2)) place(s2, 'A', 'af_balloon', t.x, t.y);
+  assert.ok(
+    recruitSpawnCells(s2, city2.id, undefined, 'militia').length > 0,
+    '天上停满了，地上的位置还是空的',
+  );
+});
+
+test('迷雾：对手架在视野外的桥，看不见就是看不见', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 5353);
+  s.fog = true;
+  s.units = [];
+  // 找一个 A 此刻绝对看不见的空格：城市的视野也算数，不能随手挑角落
+  const vis = visibleTilesOf(s, 'A');
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 0; y < s.h && !spot; y++) {
+    for (let x = 0; x + 1 < s.w; x++) {
+      const t = s.tiles[idx(s, x, y)]!;
+      if (t.cityId || vis.has(idx(s, x, y))) continue;
+      spot = { x, y };
+      break;
+    }
+  }
+  assert.ok(spot, '总得有一格看不见');
+  putTerrain(s, spot!.x, spot!.y, 'water');
+  s.tiles[idx(s, spot!.x, spot!.y)]!.terrain = 'bridge';
+  place(s, 'B', 'bridge', spot!.x, spot!.y);
+
+  const i = idx(s, spot!.x, spot!.y);
+  assert.equal(
+    playerView(s, 'A').state.tiles[i]!.terrain,
+    'water',
+    '自己这边看不见的敌桥，应该退回水面',
+  );
+  // 自己修的桥自己一直知道
+  assert.equal(
+    playerView(s, 'B').state.tiles[i]!.terrain,
+    'bridge',
+    '自己架的桥对自己不该隐身',
+  );
+  // 把眼线摆到旁边就该看见了
+  place(s, 'A', 'militia', spot.x + 1, spot.y);
+  refreshMemory(s);
+  assert.equal(
+    playerView(s, 'A').state.tiles[i]!.terrain,
+    'bridge',
+    '看得见的时候桥要照实画',
+  );
+
+  // 地图自带的路桥（下面没有桥单位）不受影响
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 5354);
+  s2.fog = true;
+  s2.units = [];
+  const j = idx(s2, 1, 14);
+  s2.tiles[j]!.terrain = 'bridge';
+  assert.equal(playerView(s2, 'A').state.tiles[j]!.terrain, 'bridge', '地形桥不该被藏起来');
+});
+
+test('飞行：掠空的单位可以飞到深水上', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5454,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  putTerrain(s, 6, 5, 'deep');
+  const plane = place(s, 'A', 'af_balloon', 5, 5);
+  // 气球慢，换成能飞得动的侦察机/战斗机
+  plane.type = 'af_scout';
+  plane.moved = false;
+  plane.acted = false;
+  const reach = reachableTiles(s, plane);
+  assert.ok(reach.has(idx(s, 6, 5)), '深水对天上的东西和普通水面没有区别');
+  // 陆军照旧过不去：这条修复只放行飞行
+  const walker = place(s, 'B', 'militia', 5, 6);
+  putTerrain(s, 6, 6, 'deep');
+  // 先把 (5,6) 还原成平地以外的东西会干扰，这里只看深水那一格
+  assert.ok(!reachableTiles(s, walker).has(idx(s, 6, 6)), '步兵不能走进深水');
+});
+
+test('钻井平台：是经济建筑，由建筑队在海面上修', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    5555,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  const def = s.unitTypes['nv_oil_platform']!;
+  assert.equal(def.category, 'building', '它是一座平台，不是一艘船');
+  assert.equal(def.domain, 'water');
+  assert.ok((def.incomeByTerrain?.deep ?? 0) > 0, '收入还挂在深水上');
+
+  // 产兵点不再生产它（建筑只能盖）
+  const city = citiesOf(s, 'A')[0]!;
+  s.current = 'A';
+  s.players.A.gold = 9000;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'nv_oil_platform' });
+  assert.equal(r.ok, false, '建筑不该从城里凭空刷出来');
+
+  // 工程兵会修，而且够得着离岸几格的深水
+  const eng = s.unitTypes['ct_sapper']!;
+  assert.ok(eng.builds?.includes('nv_oil_platform'), '工程兵要会修平台');
+  const builder = place(s, 'A', 'ct_sapper', 4, 8);
+  putTerrain(s, 9, 8, 'deep');
+  assert.equal(
+    buildSiteError(s, def, builder, 9, 8),
+    null,
+    `离岸 5 格的深水应该能修（buildRange ${def.buildRange}）`,
+  );
+  putTerrain(s, 15, 8, 'deep');
+  assert.ok(buildSiteError(s, def, builder, 15, 8), '太远的地方仍然不算数');
+  putTerrain(s, 5, 8, 'mountain');
+  assert.ok(buildSiteError(s, def, builder, 5, 8), '山上修不了平台');
+
+  // 「城郭」会把经济建筑的金币折成粮/材，但海上平台不在城市补给链上，不该被折
+  const s3 = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['city-works', 'pack-contemporary', 'naval-modern'] },
+    5556,
+  );
+  s3.fog = false;
+  s3.units = [];
+  for (let y = 0; y < s3.h; y++) for (let x = 0; x < s3.w; x++) putTerrain(s3, x, y, 'plain');
+  putTerrain(s3, 8, 8, 'deep');
+  const plat = place(s3, 'A', 'nv_oil_platform', 8, 8);
+  const y3 = unitYield(s3, plat);
+  assert.ok((y3.gold ?? 0) >= 50, `城郭不该把平台的收入折走（实际 ${JSON.stringify(y3)}）`);
+  assert.equal(y3.material ?? 0, 0, '海上平台不产建材');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

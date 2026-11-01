@@ -717,8 +717,16 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     name: '海上钻井平台',
     short: '井',
     era: 6,
-    category: 'economy',
+    // 经济类**建筑**：它是海面上的一座平台，不是一艘会自己开过去、也不是
+    // 在港里下单就能刷出来的船。所以类型是 building —— 和磨坊、粮仓同一个口径，
+    // 由建筑队在海上选址修起来（见下面的 buildOn / buildRange）。
+    category: 'building',
     cost: 480,
+    buildCost: 36,
+    buildOn: ['water', 'deep', 'shallow'],
+    // 平台的价值在深水，而深水通常离岸三格以上：按默认的 2 格，建筑队站在
+    // 滩头永远够不着自己最想盖的地方。给到 6 格，地形与占位条件一条不松。
+    buildRange: 6,
     move: 0,
     atk: 0,
     armor: 6,
@@ -902,7 +910,10 @@ const deepenWater: NonNullable<Expansion['afterTerrain']> = (g, w, h) => {
  */
 function platformYield(state: GameState, unit: Unit, yields: ResourceCost): ResourceCost {
   const def = state.unitTypes[unit.type];
-  if (def?.category !== 'economy' || def.domain !== 'water') return yields;
+  // 钻井平台从「经济单位」改成「经济建筑」之后，这里的口径要跟着放宽：
+  // 判的是"这条船贴着的那座东西挣不挣钱"，不是它在兵种表里挂哪个分类。
+  const earning = def?.category === 'economy' || def?.category === 'building';
+  if (!def || !earning || def.domain !== 'water') return yields;
   const cut = state.units.some((u) => {
     if (u.owner === unit.owner) return false;
     if (state.unitTypes[u.type]?.domain !== 'water') return false;

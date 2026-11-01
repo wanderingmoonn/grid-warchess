@@ -1748,7 +1748,11 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     for (const c of cellsAt(ax, ay)) {
       if (!blockedFor(s, c.x, c.y, unit)) continue;
       const ft = tileAt(s, c.x, c.y);
-      if (flyer && ft && ft.terrain === 'water') continue;
+      // 飞行放行水面与深水：深水只是"船才敢去"的水，对天上的东西和普通水面
+      // 没有区别。以前这里只写了 `water`，于是飞过整条河没问题、飞进外海却被
+      // 拦住——而 tileStandsOk 那边认的是 water + deep，两处口径不一致，
+      // 表现就是"能停在深水上，却飞不进去"。
+      if (flyer && ft && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
       return false;
     }
     return true;
@@ -3491,10 +3495,14 @@ export function buildSiteError(
     }
   }
 
-  if (distance(builder, { x, y }) > CONFIG.buildRange && !(overWater && bridgeChainOk(builder, x, y, s))) {
+  // 距离：绝大多数建筑按 CONFIG.buildRange 算；少数"本来就要盖在远处"的
+  // （海上钻井平台）在兵种数据里自己写一个更大的数——放宽的只是距离，
+  // 选址条件照旧一条不少。
+  const reach = def.buildRange ?? CONFIG.buildRange;
+  if (distance(builder, { x, y }) > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
     return overWater
-      ? `建造者离得太远（最多 ${CONFIG.buildRange} 格；桥可以沿已有的桥面再往外接两节）`
-      : `建造者离得太远（最多 ${CONFIG.buildRange} 格）`;
+      ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
+      : `建造者离得太远（最多 ${reach} 格）`;
   }
 
   return null;
