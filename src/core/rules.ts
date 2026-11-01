@@ -2324,7 +2324,9 @@ function splashVictims(
  */
 function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
   s.log.push({ turn: s.turn, player: p, text, ...(open ? { open: true } : {}) });
-  if (s.log.length > 80) s.log.splice(0, s.log.length - 80);
+  // 80 → 120：每一次交火现在双方各记一条（见 doAttack 里那段说明），
+  // 条数翻倍而窗口不变的话，玩家回头查"我这一下是怎么挨的"时已经翻不到了。
+  if (s.log.length > 120) s.log.splice(0, s.log.length - 120);
 }
 
 /** 通知所有扩展：有单位阵亡了 */
@@ -2676,6 +2678,13 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       s,
       owner,
       `${def.name} 自动开火${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
+    );
+    // 挨打的一方也要有一条：塔和营是在**对面回合结束时**自己开火的，
+    // 不写这一条，防守方看到的就是"我的兵凭空掉血"（理由同 doAttack 里那段）。
+    pushLog(
+      s,
+      other(owner),
+      `${def.name} 对 ${[...hitNames].join('、')} 开火，共造成 ${totalDmg} 点伤害${splashText}`,
     );
   }
 }
@@ -3053,6 +3062,26 @@ function doAttack(
       ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
       : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
   );
+  /*
+   * 挨打的那一方也要有一条战报。
+   *
+   * 上面那条是按出手方写的（`pushLog` 不传 `open` 就只有他自己看得见）。
+   * 于是防守方遇到的是：血量掉了，战报里一个字都没有——远程单位尤其明显，
+   * 一门射程 5、溅射 2 的火炮能把「离它 7 格」的人一起打到，
+   * 而挨打的人那边连"我被打了"都没记一笔，看起来就像凭空掉血。
+   *
+   * 写什么：打中谁、掉多少、波及了谁。**不写攻击者站哪**——
+   * 那是迷雾该管的事。只有隐匿（潜行 / 刺客大师）中的袭击者才连名字都不给，
+   * 否则"是谁打的我"这条信息就把隐匿本身废掉了。
+   */
+  if (dmg > 0 || splashed.length > 0) {
+    const unseen = isHiddenFrom(s, attacker, defender.owner);
+    pushLog(
+      s,
+      defender.owner,
+      `${unseen ? '视野外的一击' : atName} 打在 ${dfName} 身上，造成 ${dmg} 伤害${splashText}${statusText}${pushText}`,
+    );
+  }
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
   // 投斧那一类是"技能白送的一下"：它不写 acted/moved，扔完还能再正常打一次。

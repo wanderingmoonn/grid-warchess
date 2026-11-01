@@ -12985,5 +12985,51 @@ test('死亡枕藉：1×1 的亡语仍然只是四邻', () => {
   assert.equal(after(diag.id), s.unitTypes['militia']!.maxHp, '斜角不算相邻');
 });
 
+test('战报：挨打的一方也能看到自己为什么掉血', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5 }, 7171);
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  // 火炮：射程 5、溅射 2 —— 一发能影响到离它 7 格的人
+  const gun = place(s, 'A', 'artillery', 2, 2);
+  const hit = place(s, 'B', 'militia', 7, 2); // 正好在射程上
+  const splash = place(s, 'B', 'militia', 9, 2); // 主目标旁边 2 格，被溅射
+  const far = place(s, 'B', 'militia', 11, 2); // 更远，够不着
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: hit.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.find((u) => u.id === far.id)?.hp, 28, '够不着的不该掉血');
+
+  const mine = r.state.log.filter((l) => l.player === 'A').map((l) => l.text);
+  const theirs = r.state.log.filter((l) => l.player === 'B').map((l) => l.text);
+  assert.ok(mine.some((t) => t.includes('火炮') && t.includes('攻击')), '出手方有自己的战报');
+  // 关键：防守方也必须有一条。以前这条只发给出手的人，
+  // 挨打的人看到的就是"血量掉了、战报里什么都没有"
+  const notice = theirs.find((t) => t.includes('伤害'));
+  assert.ok(notice, `防守方要能看到自己被谁打了，实际：${JSON.stringify(theirs)}`);
+  assert.ok(notice!.includes('火炮'), '要写出是什么打过来的');
+  assert.ok(notice!.includes('溅射'), '被溅射到的人也要写清楚');
+
+  // 隐匿中的袭击者不给名字：否则"是谁打的我"这条信息把隐匿本身废掉了
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5 }, 7172);
+  s2.fog = true;
+  s2.units = [];
+  s2.cities = [];
+  for (let y = 0; y < s2.h; y++) for (let x = 0; x < s2.w; x++) putTerrain(s2, x, y, 'plain');
+  // 要隔开：隐匿只在"不贴脸"时成立，贴身是被看见的
+  const assassin = place(s2, 'A', 'artillery', 2, 2);
+  assassin.heroBuff = { hidden: true };
+  const prey = place(s2, 'B', 'militia', 7, 2);
+  s2.current = 'A';
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: assassin.id, targetId: prey.id });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const seen = r2.state.log.filter((l) => l.player === 'B').map((l) => l.text).join(' ');
+  assert.ok(seen.includes('视野外的一击'), `隐匿单位出手不该报名字，实际：${seen}`);
+  assert.ok(!seen.includes('火炮 打在'), '不该出现具体兵种名');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);
