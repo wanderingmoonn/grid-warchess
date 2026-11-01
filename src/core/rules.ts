@@ -88,6 +88,11 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
+import { SKILL_EFFECTS, registerSkillEffect } from './skill-hooks.ts';
+import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
+// 重新导出，保持兼容
+export { SKILL_EFFECTS, registerSkillEffect };
+export type { SkillCtx, SkillHandler };
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -148,6 +153,8 @@ const abilityApi: AbilityApi = {
     st.burn = now + 1;
     return st.burn;
   },
+  computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
+  splashRadiusOf: (s, u) => splashRadiusOf(s, u),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -864,19 +871,6 @@ export function registerStatus(def: StatusDef): void {
     throw new Error(`状态「${def.id}」已经注册过了`);
   }
   STATUS_REGISTRY[def.id] = def;
-}
-
-/**
- * 注册一种技能效果（给扩展用）。
- *
- * `effect` 是自由字符串：兵种表里写什么，就得有人接什么。接不上时
- * doHeroSkill 会当场拒掉并说"未实现的技能效果"，不会静默失败。
- */
-export function registerSkillEffect(id: string, handler: SkillHandler): void {
-  if (Object.prototype.hasOwnProperty.call(SKILL_EFFECTS, id)) {
-    throw new Error(`技能效果「${id}」已经注册过了`);
-  }
-  SKILL_EFFECTS[id] = handler;
 }
 
 /**
@@ -4098,31 +4092,7 @@ export function heroSkillsOf(
   });
 }
 
-/**
- * 放技能逻辑
- */
-
-// 1. 定义上下文接口
-export interface SkillCtx {
-  state: GameState;
-  self: Unit;
-  skill: SkillDef;
-  api: typeof abilityApi;
-  /** 新增：如果玩家在 UI 上点了某个格子，传进来 */
-  target?: { x: number; y: number };
-  result: {
-    ok: boolean;
-    reason?: string;
-    log?: string;
-  };
-}
-
-// 2. 定义注册表和类型
-export type SkillHandler = (c: SkillCtx) => void;
-export const SKILL_EFFECTS: Record<string, SkillHandler> = {};
-
-// 3. 把原来的 switch 里的逻辑搬过来
-// 原来写 s 和 u 的地方，换成 c.state 和 c.self
+//技能
 SKILL_EFFECTS['throw-axe'] = (c) => {
   c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
 };
@@ -4500,7 +4470,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
     // 进冷却
     u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 1 };
   }
-
+  sweepDead(s);
   return { ok: true, state: s };
 }
 

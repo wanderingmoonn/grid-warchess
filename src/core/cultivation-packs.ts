@@ -8,6 +8,7 @@ import type {
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
+import { registerSkillEffect } from './skill-hooks.ts';
 
 // 境界名称
 const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
@@ -22,7 +23,10 @@ const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神"
 // 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
 //
 // 加新流派 → 在 CULTIVATOR_IDS 里加一行 id；**别的钩子一个字都不用改**。
-const CULTIVATOR_IDS = new Set(['qi-cultivator']);
+const CULTIVATOR_IDS = new Set([
+  'qi-cultivator', 
+  'sword-cultivator'
+]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
 export function isCultivatorDef(def: UnitTypeDef | undefined | null): boolean {
@@ -49,6 +53,105 @@ const CULTIVATOR: UnitTypeDef = {
   range: 1,
   vision: 3,
   abilities: ['qi-true-damage'], 
+};
+
+// ── 剑修 ───────────────────────────────────────────
+const SWORD_SWEEP_SKILL = {
+  id: 'sword-sweep',
+  name: '剑气纵横',
+  summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
+  effect: 'sword-sweep',
+  cooldown: 1,
+  range: 3, // 剑气延伸 3 格
+};
+
+registerSkillEffect('sword-sweep', (c) => {
+  const reach = 3+c.api.splashRadiusOf(c.state, c.self);
+  let dx = 0;
+  let dy = 0;
+
+  // 1. 决定挥剑方向
+  if (c.target) {
+    const distX = c.target.x - c.self.x;
+    const distY = c.target.y - c.self.y;
+    dx = Math.sign(distX);
+    dy = Math.sign(distY);
+    // 只允许四方向，如果斜着点，取偏差较大的那个轴
+    if (Math.abs(distX) > Math.abs(distY)) dy = 0;
+    else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
+    // 如果点的是自己脚下，默认朝面向/右侧
+    if (dx === 0 && dy === 0) dx = 1;
+  } else {
+    // 如果没传坐标（比如 AI 或者直接点了技能按钮没点目标）
+    // 就自动找一个最近的敌人方向，没有敌人就朝右
+    const foes = c.state.units.filter(u => u.owner !== c.self.owner && u.hp > 0);
+    if (foes.length > 0) {
+      let nearest = foes[0]!;
+      let minD = 999;
+      for (const f of foes) {
+        const d = c.api.distance(c.self, f);
+        if (d < minD) { minD = d; nearest = f; }
+      }
+      const distX = nearest.x - c.self.x;
+      const distY = nearest.y - c.self.y;
+      dx = Math.sign(distX);
+      dy = Math.sign(distY);
+      if (Math.abs(distX) > Math.abs(distY)) dy = 0;
+      else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
+      if (dx === 0 && dy === 0) dx = 1;
+    } else {
+      dx = 1; // 空放默认朝右
+    }
+  }
+
+  // 2. 收集直线上的受害者（包含起点的前方）
+  const victims: Unit[] = [];
+  for (let i = 1; i <= reach; i++) {
+    const tx = c.self.x + dx * i;
+    const ty = c.self.y + dy * i;
+    const target = c.state.units.find(u => u.owner !== c.self.owner && u.x === tx && u.y === ty);
+    if (target) victims.push(target);
+  }
+
+  // 3. 空放：没有任何敌人也允许放，给个基础的 2 点经验，象征练剑
+  let expGain = 2;
+  let logExtra = '';
+
+  if (victims.length > 0) {
+    expGain += victims.length * 5; // 每击中一个 +5 经验
+    let totalDmg = 0;
+    for (const v of victims) {
+      // 技能伤害吃面板，可以来个 1.2 倍率的剑气加成
+      const raw = c.api.computeDamage(c.state, c.self, v);
+      const dmg = Math.max(1, Math.round(raw * 1.2));
+      v.hp -= dmg;
+      totalDmg += dmg;
+    }
+    logExtra = `，斩中 ${victims.length} 人共造成 ${totalDmg} 伤害`;
+  } else {
+    logExtra = `，剑气落空（练剑+${expGain}）`;
+  }
+
+  // 4. 给经验（调用扩展内部函数）
+  addExp(c.self, c.state, expGain);
+  c.result.log = `${c.self.type} 挥出剑气${logExtra}，修为 +${expGain}`;
+  // 技能不带普攻的主动扣血，这部分由 c.state 引擎去 sweepDead（你的 doHeroSkill 里如果没清场，需要检查一下，最好在 doHeroSkill 外层有统一的结算）
+});
+const SWORD_CULTIVATOR: UnitTypeDef = {
+  id: 'sword-cultivator',
+  name: '剑修',
+  short: '剑',
+  era: 2,
+  category: 'combat',
+  cost: 350, 
+  move: 3,
+  atk: 8, // 普攻很低
+  armor: 1,
+  maxHp: 25,
+  range: 1, // 普攻近战
+  vision: 4,
+  abilities: ['qi-true-damage'], 
+  skills: [SWORD_SWEEP_SKILL],
 };
 
 /**
@@ -126,6 +229,10 @@ function addExp(u: Unit, s: GameState, amount: number): void {
 }
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
+  // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
+  if (u.type === 'sword-cultivator') {
+    return Math.max(1, Math.floor((getRank(u) + 2) / 2));
+  }
   return getRank(u) + 2;
 }
 
@@ -220,7 +327,11 @@ export const CULTIVATION_PACK: Expansion = {
     // 1. 击杀敌人获得经验
     onUnitKilled: (c) => {
       if (c.killer && isCultivatorUnit(c.state, c.killer)) {
-        addExp(c.killer, c.state, 10); 
+        let killexp=10;
+        if (c.killer.type === 'sword-cultivator'){
+          killexp = killexp * 2;
+        }
+        addExp(c.killer, c.state, killexp); 
       }
     },
     modifyDamage: ({ state, attacker, damage }) => {
@@ -341,7 +452,7 @@ export const CULTIVATION_PACK: Expansion = {
       return lines;
     },
   },
-  units: [CULTIVATOR],
+  units: [CULTIVATOR, SWORD_CULTIVATOR],
   abilities: [QI_TRUE_DAMAGE], 
 };
 

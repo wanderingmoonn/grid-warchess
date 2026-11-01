@@ -71,6 +71,10 @@ export interface AbilityApi {
   putStatus(target: Unit, key: 'poison' | 'burn' | 'slow' | 'curse', turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
+  /** 算一下这个单位打那个单位能造成多少伤害 */
+  computeDamage(s: GameState, attacker: Unit, defender: any, isCounter?: boolean): number;
+  /** 算一下这个单位现在的溅射半径 */
+  splashRadiusOf(s: GameState, u: Unit): number;
 }
 
 /**
