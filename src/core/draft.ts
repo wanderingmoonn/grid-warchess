@@ -635,8 +635,16 @@ export function draftView(state: GameState): {
  *   · 禁用：优先 ban 掉池子里**同代最贵**的战斗单位（贵的就是对面的核心）；
  *   · 选人：优先补自己还缺的生态位（经济/攻城/远程/坦克），同生态位里挑评分最高的。
  *
- * 评分用 `攻 + 0.4×血 + 3×甲 + 3×射程`——和海军扩展那套 V 值同源，
- * 但丢掉移动/视野：选卡选的是"这兵值不值得占一个名额"，不是走位。
+ * ── 2026-11-01：选人这一半重写 ──
+ *
+ * 老评分是 `攻 + 0.4×血 + 3×甲 + 3×射程`，也就是"数值越大越好"。数值和时代几乎
+ * 单调相关，于是 AI 每次把六个名额全砸在最高时代的大件上——而**选到 ≠ 造得出**：
+ * 城市从 1 级升到 5 级要几十个回合，这几十回合里它的产兵表里全是"还造不出来"的兵。
+ * 线上对局库（`warchess_reports`）里 AI 的开局阵容常年是 0~2 个单位、人类一整队，
+ * 差距在 BP 那一屏就已经拉开了。所以选人改成按"能不能马上用 / 每金多少战力 /
+ * 这支队伍缺不缺"三件事打分，见 `draftValueOf` 与下面的职能覆盖。
+ *
+ * 禁用那半不变：ban 掉对面最贵的核心本来就是正确打法，贵＝对面指望它。
  */
 export function aiDraftBan(state: GameState, side: PlayerId): string | null {
   const left = remainingUnits(state).filter((id) => {
@@ -655,36 +663,101 @@ export function aiDraftPick(state: GameState, side: PlayerId): string | null {
   const left = remainingUnits(state);
   if (left.length === 0) return null;
   const mine = new Set(state.draft?.picks[side] ?? []);
+  const startEra = Math.max(1, state.config.startEra ?? 1);
+  // 水军只在真有水的地图上才值一个名额。地图在这一步已经生成好了（createMatch
+  // 先建图再建选卡），所以直接看水面占比，别让 AI 在旱地图上选两条船。
+  const water = waterShareOf(state);
 
   // 生态位：手里没有的那一类加权重
   const has = {
     siege: [...mine].some((id) => (state.unitTypes[id]?.splash ?? 0) > 0),
     ranged: [...mine].some((id) => (state.unitTypes[id]?.range ?? 0) >= 3),
     tank: [...mine].some((id) => (state.unitTypes[id]?.maxHp ?? 0) >= 140),
+    // 便宜的身体：开局那二十回合真正能用来占点、看家、挡路的东西
+    cheap: [...mine].some((id) => {
+      const d = state.unitTypes[id];
+      return !!d && d.category === 'combat' && (d.cost ?? 999) <= 70;
+    }),
     any: mine.size > 0,
   };
+  /** 手里一张"现在就造得出"的卡都没有（开局第一签必然如此） */
+  const noneReady = ![...mine].some((id) => (state.unitTypes[id]?.era ?? 9) <= startEra);
+  /**
+   * 后段名额放宽"现在就得能用"这条。
+   *
+   * 全按"开局就能造"选，会得到一支很便宜、很早就成型的队伍，但整局没有上限——
+   * 中期以后每一波都是同样的兵，对面一旦升级就换不过。会玩的人是前几签买
+   * "现在能打的"，后几签买"以后很能打的"。所以名额过了六成之后，
+   * 时代折扣放松到三分之一，留一到两个位置给未来。
+   */
+  const late = mine.size >= Math.ceil((state.draft?.pickSlots ?? 6) * 0.6);
 
   let best: { id: string; score: number } | null = null;
   for (const id of left) {
     const def = state.unitTypes[id];
     if (!def) continue;
-    let score = draftValueOf(def);
+    let score = draftValueOf(def, startEra, late ? 0.35 : 1);
     if (def.category === 'building') {
-      // 建筑只在"还没拿到塔"时值得选，而且不该抢在兵前面
+      // 建筑只在"还没拿到塔"时值得选，而且不该抢在兵前面。
+      // 已经有了就一票否决：线上 AI 的终局建筑里常年摆着两座塔，
+      // 而它在同一局里连一支能出门的部队都凑不出来。
+      const hasBuilding = [...mine].some((x) => state.unitTypes[x]?.category === 'building');
+      if (hasBuilding) continue;
       score *= 0.55;
     }
     if (!has.siege && (def.splash ?? 0) > 0) score += 18;
     if (!has.ranged && (def.range ?? 0) >= 3) score += 14;
     if (!has.tank && (def.maxHp ?? 0) >= 140) score += 12;
+    // 旱地图上的船：占一个名额，整局开不出去。门槛和 ai.ts 的 WATER_MIN_SHARE /
+    // WATER_GOOD_SHARE 对齐（<8% 旱地 / 8~14% 勉强能开 / ≥14% 水网）。
+    if (def.domain === 'water') score *= water >= 0.14 ? 0.9 : water >= 0.08 ? 0.5 : 0.2;
+    // 一个便宜的身体。加得比上面几档都重：没有它，前二十回合连出门的东西都没有。
+    if (!has.cheap && def.category === 'combat' && (def.cost ?? 999) <= 70) score += 20;
+    // 手里一张"现在就造得出"的卡都没有：这一签必须落地，只在这个时代里挑。
+    if (noneReady && def.category === 'combat' && def.era <= startEra) score += 26;
     if (!has.any && def.era <= 2) score += 8;
     if (!best || score > best.score) best = { id, score };
   }
   return best?.id ?? left[0]!;
 }
 
-function draftValueOf(def: UnitTypeDef | undefined): number {
+/**
+ * 这张图上水面占多少（0~1）。
+ *
+ * 选卡发生在建图之后，所以这一步拿得到真实地形。以前选卡完全不看地图，
+ * AI 在一条小河边也会把两个名额花在船和运输船上——那两条船整局都开不出港口。
+ */
+function waterShareOf(state: GameState): number {
+  const tiles = state.tiles;
+  if (!tiles || tiles.length === 0) return 0;
+  let n = 0;
+  // 口径和 ai.ts 的 waterShare 对齐：只数 deep water，浅滩是能蹚过去的，不算航道
+  for (const t of tiles) if (t.terrain === 'water') n += 1;
+  return n / tiles.length;
+}
+
+/**
+ * 选卡时给一个兵种打多少分。
+ *
+ * 三件事，按乘法叠：
+ *   1. **能不能马上用**：时代领先按平方折价。领先 1 级 ≈ 打到一半才用得上，
+ *      领先 3 级这一局基本指望不上，折到两成以下。`startEra` 是开局城市等级，
+ *      城市升级要钱要回合，不是"迟早能用"就能等价。
+ *   2. **每金多少战力**：以 80 金为基准，贵的兵按"同样一笔钱能买几个"折一下。
+ *      贵而强不如便宜够用——选卡是选"这一局我能反复造的东西"，不是选收藏品。
+ *   3. **数值本身**（`atk + 0.4×血 + 3×甲 + 3×射程`，和海军扩展那套 V 值同源）。
+ *
+ * 时代折扣用平方而不是线性：线性的话 5 级兵只掉 40%，还是压得住 1 级兵，
+ * 而那正是这次要修的病。
+ */
+function draftValueOf(def: UnitTypeDef | undefined, startEra = 1, patience = 1): number {
   if (!def) return 0;
-  return def.atk + 0.4 * def.maxHp + 3 * def.armor + 3 * def.range;
+  const raw = def.atk + 0.4 * def.maxHp + 3 * def.armor + 3 * def.range;
+  if (raw <= 0) return 0;
+  const lead = Math.max(0, (def.era ?? 1) - startEra);
+  const ready = 1 / (1 + 0.55 * patience * lead * lead);
+  const perGold = Math.pow(80 / Math.max(20, def.cost ?? 80), 0.45);
+  return raw * ready * perGold;
 }
 
 /* ===========================================================================

@@ -905,6 +905,7 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
     // 已经残血还去打一个打不死的：这是在给对方送击杀
     if (attacker.hp / selfDef.maxHp < 0.3 && !kill) score -= 12 * Math.min(3, myValue / 80);
 
+
     // 高机动突击队偏爱后排：摸得到火力单位就优先打，能白打（对方够不着）更值。
     // 和移动那边是一套逻辑的两半——移动负责"绕到能打后排的位置"，
     // 这里负责"真到了别又去打最前面那个肉盾"。
@@ -913,6 +914,16 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
       if (preview.toAttacker === 0) score += 8;
     }
   }
+
+  /*
+   * 集火：打的是这一回合全军约好的那个目标，就加分。
+   *
+   * 这一条不改"该不该打"，只改"先打谁"。分数取 26：高于"能打死一个单位"的
+   * 120 那档之下、明显高于普通的掉血收益，但**不会**把"打不死"的仗变成"值得打"——
+   * 一个本来就该被拒掉的糟糕交换，加 26 之后照样是负分。
+   * 目标由 `pickFocusTarget` 每回合选一次，全军共用，这就是"成建制"的全部含义。
+   */
+  if (all.focusTargetId && target.id === all.focusTargetId) score += 26;
 
   // ── 战术倾向 ──
   // 一条攻击值多少分，取决于这一局想怎么赢：速攻要的是"城下这条路清干净"，
@@ -1131,6 +1142,42 @@ function distanceFields(
  * `wade` 单独留着量"桥的另一头离敌方城市多远"——架桥选址必须跨过水面看，
  * 用严格旱路图的话对岸永远是 Infinity，AI 就永远找不到该架桥的地方。
  */
+/**
+ * 这一回合全军该集火的那一个敌人。
+ *
+ * 判据只有一条朴素的原则：**算"几刀能砍死"，再乘"有几个人够得着"**。
+ *   · 越容易死（残血）越该先集火——打死一个就少一份输出；
+ *   · 越值钱越该先集火——打掉一个法师等于打掉对面一半伤害；
+ *   · 够得着的人越多越该集火——"四个人一起上"和"一个人上去换"是两种结局。
+ *
+ * 只在**看得见的**敌人里挑（`s` 是迷雾视图），不偷看。
+ * 一个够得着的都没有就返回 null，攻击评分退回原来的"各自挑最优"。
+ */
+function pickFocusTarget(s: GameState, me: PlayerId): string | null {
+  const foes = unitsOf(s, other(me)).filter((u) => utype(s, u.type).category === 'combat');
+  if (foes.length === 0) return null;
+  const mine = unitsOf(s, me).filter(
+    (u) => utype(s, u.type).category === 'combat' && !u.acted,
+  );
+  if (mine.length === 0) return null;
+
+  let best: { id: string; score: number } | null = null;
+  for (const f of foes) {
+    const def = utype(s, f.type);
+    let reach = 0;
+    for (const u of mine) {
+      const ud = utype(s, u.type);
+      // 这一步能不能扑上去打：移动力 + 射程 +1 的余量
+      if (distance(u, f) <= Math.max(1, ud.move) + (ud.range ?? 1) + 1) reach += 1;
+    }
+    if (reach === 0) continue;
+    const worth = (def.cost ?? 50) * (1 + Math.max(0, 1 - f.hp / Math.max(1, def.maxHp)) * 1.5);
+    const score = (worth * reach) / Math.max(1, f.hp);
+    if (!best || score > best.score) best = { id: f.id, score };
+  }
+  return best?.id ?? null;
+}
+
 interface Fields {
   tactical: TacticalMap;
   land: Map<string, number[]>;
@@ -1185,7 +1232,18 @@ interface Fields {
    * 真正该做的是往桥头集结、把桥铺过去。
    */
   needBridge: boolean;
+  /**
+   * 这一回合全军该集火的那一个敌人（见 `pickFocusTarget`）。
+   *
+   * 成建制不是"站在一起"，是**打在一个点上**。AI 缺的正是这一步：
+   * 每个兵各自挑一个"自己这一刀最划算"的目标，于是五个人打五个目标，
+   * 每个都打到半血，对面回一轮血、换一个目标，全程没人被击杀。
+   * 线上 15 局人机局里 AI 造 432 个兵死了 375 个（87%），人类同期只死 114 个——
+   * 交换比难看成这样，很大一部分不是伤害不够，是伤害散了。
+   */
+  focusTargetId: string | null;
 }
+
 
 /**
  * 我方能不能纯走旱路摸到敌方城市（贴到城墙一圈就算摸到）。
@@ -1530,6 +1588,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + w.harass*0.4);
   if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
+
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
   for (const city of s.cities) {
     if (!city.ruined || city.id === all.mood.abandonedCityId) continue;
@@ -2107,10 +2166,28 @@ function rawBuildScore(
   spot: { x: number; y: number; terrain: Terrain },
   land: Map<string, number[]>,
   mood?: AiMood,
+  /** 涉水推进距离图：判断"这座桥到底缩不短路"，见下面架桥那一段 */
+  advance?: Map<string, number[]>,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
   const w = mood ? mood.drive : { rush: 0, harass: 0, boom: 0 };
+
+  /*
+   * 建筑总量上限：每城 4 座，最多 16 座（桥不算——桥是路，不是设施）。
+   *
+   * 各兵种自己已经有上限（经济每城 2、塔每城 1+1、军营 4、工事每城 2），
+   * 那些上限加起来能把一座城的"设施区"撑到十几座：线上对局里出现过
+   * 31 座建筑的局（id=54），产能全在盖房子，前线一个兵没有。
+   * 这一层是**总闸**，不是替代上面那些细分上限。
+   */
+  if (!def.bridges) {
+    const cities = Math.max(1, citiesOf(s, unit.owner).length);
+    const built = unitsOf(s, unit.owner).filter(
+      (u) => utype(s, u.type).category === 'building',
+    ).length;
+    if (built >= Math.min(16, cities * 4)) return -999;
+  }
 
   // 工地会不会被下回合拆掉。建造者死在这里的概率远高于野战单位：
   // 他站在空地上、没护甲加成、还刚把整回合花掉。
@@ -2141,6 +2218,29 @@ function rawBuildScore(
     const back = unitAt(s, spot.x - gap.dir[0], spot.y - gap.dir[1]);
     if (back && back.owner === unit.owner && utype(s, back.type).bridges) chain = 1;
     if (near >= 5 && !chain) return -999;
+
+    /*
+     * 这座桥**到底缩不短路**。
+     *
+     * 老判据只看"对岸离目标够不够近"（`24 - farDist`），于是任何一座通向地图中间
+     * 的桥都能拿十来分——包括架在自己后院的池塘上、或者架在一条"绕过去也就多走两步"
+     * 的小河上。实测 3 局 AI 一共架了 49 座桥，占它全部建造的 66%：
+     * 地图上横七竖八全是桥，前线还是没人。
+     *
+     * 现在的判据是"站在这边到目标的距离"和"过桥之后到目标的距离"比较：
+     * 过桥几乎不省路，就不该为一个建造回合付钱。`advance` 拿不到时（老调用点）
+     * 跳过这条，行为回到原来那样。
+     */
+    if (advance) {
+      const here = unit.y * s.w + unit.x;
+      let nearDist = Infinity;
+      for (const field of advance.values()) {
+        const d = field[here];
+        if (d !== undefined && d < nearDist) nearDist = d;
+      }
+      // nearDist 无限 = 旱路根本摸不到目标，那这座桥是唯一的通道，不改判
+      if (Number.isFinite(nearDist) && gap.farDist >= nearDist - gap.steps) return -999;
+    }
 
     // 少铺几座优先；对岸越靠近敌方城市越值。
     // 档位加成：钢桥 120 耐久 / 6 护甲，被打塌要磨很久——同样一个建造回合，
@@ -2217,6 +2317,8 @@ function rawBuildScore(
     if (sameKind >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
     const probe: Unit={id:'ai-production-site',type:def.id,owner:unit.owner,x:spot.x,y:spot.y,hp:def.maxHp,kills:0,moved:true,acted:true};
     const inc=resourceValue(s,unit.owner,unitYield(s,probe));
+    // 一格产出都没有的地盖上磨坊，产的是 0：这一回合纯亏
+    if (inc <= 0) return -999;
     return inc * 4 - resourceValue(s,unit.owner,recruitResCost(s,unit.owner,def)) * 0.03;
   }
 
@@ -2256,8 +2358,12 @@ function rawBuildScore(
     for (const e of unitsOf(s, other(unit.owner))) {
       nearestFoe = Math.min(nearestFoe, distance(spot, e));
     }
-    // 敌人还没到门口，砌墙就是浪费一个建造回合
-    if (!Number.isFinite(nearestFoe) || nearestFoe > 7) return 4;
+    // 敌人还没到门口，砌墙就是浪费一个建造回合。
+    //
+    // 这里以前返回 4——不是"不建"，是"分数很低"。可建筑候选和走位候选是在
+    // 同一个池子里比大小的：一步普通行军往往只有几分，于是 4 分常常真的能赢，
+    // AI 于是会在平静的后方一块一块地砌墙。要表达"别建"就得给 -999。
+    if (!Number.isFinite(nearestFoe) || nearestFoe > 7) return -999;
     return 26 + (7 - nearestFoe) * 4 - def.cost * 0.03 - mine * 6;
   }
 
@@ -2277,7 +2383,7 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood);
+  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood, all.wade);
   if (raw <= -900) return raw;
 
   const canBridge = (utype(s, unit.type).builds ?? []).includes('bridge');
@@ -3658,6 +3764,8 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     commit: false,
     // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
+    // 集火目标：整回合算一次，所有单位的攻击候选都看它
+    focusTargetId: pickFocusTarget(view, me),
   };
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
