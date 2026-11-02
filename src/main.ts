@@ -834,6 +834,8 @@ function render(): void {
     incomeHints: computeIncomeHints(selected),
     impacts,
     hpDrops,
+    // 地上的东西（水雷/地雷）要按"这是谁的视角"分实心/空心
+    me: me(),
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;

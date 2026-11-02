@@ -59,6 +59,11 @@ import {
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import { canHold, holdOf, holdRoom } from './carry.ts';
 import { noteHeat } from './heat.ts';
+// 格子上留下的东西（水雷/地雷/火场……）。注册表要在这里 import 一次：
+// 它的副作用就是把各扩展声明的种类登记进全局表，没这两行 marks 一条都查不到。
+import { enterTile, marksOf, tickMarks } from './marks.ts';
+import type { MarkApi } from './marks.ts';
+import './mark-registry.ts';
 import {
   canProduce,
   isProducer,
@@ -2998,6 +3003,29 @@ function syncBridges(s: GameState): void {
   s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
+/**
+ * 留痕种类能用的那几件东西。
+ *
+ * 为什么不把 `pushLog` / `utype` 直接传给 kind：marks.ts 只依赖类型，
+ * 一旦它 import 规则层就是循环。给一个小接口，扩展拿到的能力和
+ * 兵种能力的钩子（`c.api`）是同一套语义，写起来不用换脑子。
+ *
+ * 雷炸出来的伤害**不走进攻公式**（无护甲、无地形、无反击）：
+ * 地雷不跟你讲武德，扣血就是扣血。这也是它和"一次正常攻击"最清楚的分界。
+ */
+function markApi(s: GameState): MarkApi {
+  return {
+    utype: (typeId) => utype(s, typeId),
+    log: (owner, text, open = true) => pushLog(s, owner, text, open),
+    hurt: (unit, amount, text) => {
+      const dmg = Math.max(0, Math.round(amount));
+      if (dmg <= 0) return;
+      unit.hp -= dmg;
+      pushLog(s, unit.owner, text, true);
+    },
+  };
+}
+
 function doMove(s: GameState, unitId: string, x: number, y: number): ActionResult {
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
@@ -3022,6 +3050,18 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   unit.x = x;
   unit.y = y;
   unit.moved = true;
+
+  // 落脚之后再算雷：**先站上去，再挨炸**。
+  // 顺序不能反——反过来的话"能不能进这一格"要先去问一遍地上的东西，
+  // 于是"踩雷"变成"这一步走不成"，雷就从陷阱变成了空气墙。
+  if (marksOf(s).length > 0) {
+    enterTile(s, unit, markApi(s));
+    // 炸死的就地清场：不清的话，下一步"入驻废墟"会由一个 0 血的单位执行
+    if (unit.hp <= 0) {
+      sweepDead(s);
+      return { ok: true, state: s };
+    }
+  }
 
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
@@ -4036,6 +4076,14 @@ function doRecruit(
     acted: true,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
+
+  // 新兵也可能直接落在雷上：这一格如果被人布过东西，照样触发。
+  // 不这么做的后果很具体：把城门口铺满雷，就能让对面永远造不出水军。
+  const fresh = s.units[s.units.length - 1];
+  if (fresh && fresh.type === def.id && marksOf(s).length > 0) {
+    enterTile(s, fresh, markApi(s));
+    if (fresh.hp <= 0) sweepDead(s);
+  }
 
   // 记一笔产出回合：produce.everyTurns > 1 的营靠它算冷却
   if (campId) {
@@ -5087,6 +5135,14 @@ function doEndTurn(s: GameState): ActionResult {
 
   for (const e of activeExpansions(s)) {
     e.hooks.onTurnStart?.({ state: s, player: nextPlayer });
+  }
+
+  // 地上的东西也在"回合开始"这一刻结算（火场、毒雾、自爆引信……）。
+  // 放在扩展钩子之后：扩展先把局面改完（比如涨潮把浅滩变成水），
+  // 再由留痕按最终地形判断，省得同一步里两种效果各算一次地形。
+  if (marksOf(s).length > 0) {
+    tickMarks(s, nextPlayer, markApi(s));
+    sweepDead(s);
   }
 
   return { ok: true, state: s };

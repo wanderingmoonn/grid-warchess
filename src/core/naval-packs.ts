@@ -39,6 +39,8 @@
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
+import { addMark, markCountOf, marksAt } from './marks.ts';
+import type { MarkKindDef } from './marks.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { navigable } from './config.ts';
 import { cityGap } from './geo.ts';
@@ -77,44 +79,96 @@ const SHORE_BOMBARD: AbilityDef = {
 };
 
 /**
- * 水雷区：布雷舰停在哪儿，脚下一片就没人敢贴。
+ * 水雷：留在一格水面上的东西（engine 层见 core/marks.ts）。
  *
- * 为什么做成"跟着船走的光环"而不是在地图上撒雷：引擎里没有"格子上留东西"
- * 这个概念（部队、城市、工地之外，一格只能有地形）。要做真雷区，得先有
- * 可长期停留的隐藏物件、以及"谁踩上去"的判定——那是另一个工程。
+ * 它**不是单位**：不占格、不挡路、不行动、不进迷雾的单位名单。
+ * 谁踩谁挨，踩完就没——这才是"雷"，而不是"一条站在那儿咬人的船"。
  *
- * 这一版的取舍是**雷区跟着船走**：布雷舰一沉，雷区就没了。
- * 好处是它立刻能玩（封水道、卡港口、逼对方绕路），坏处也写在这里：
- * 它做不到"船走了雷还在"。要的正是这条边界——不假装自己做到了。
- *
- * 数值参照奇想包那条陆地「布雷」（陷阱）：贴身的敌人每回合掉血 + 减速。
- * 海上的雷更大，所以 6 → 10 点；但只有船会踩（陆军在浅滩涉水不触发）。
+ * 几条刻意的设定：
+ *   · 只炸敌人（`trigger: 'enemy'`）：布雷舰自己的航线必须能穿过自己的雷区，
+ *     不然它连"布完雷往外走"都做不到；
+ *   · 只认水面（`on`）：陆军在浅滩涉水不会被水雷炸；
+ *   · 默认隐藏、`detect: 1`：贴脸才发现。于是"派一条快船趟一遍"成了唯一的破法——
+ *     这也是历史上扫雷/探雷的样子（先探后清，只是这里探到就等于踩到边缘）；
+ *   · 伤害 14 点**不走进攻公式**：不加护甲、不算地形、不触发反击。
+ *     地雷不跟你讲武德，扣血就是扣血。
  */
-const MINE_ZONE: AbilityDef = {
-  id: 'nv-minefield',
-  name: '水雷区',
-  summary: '回合开始时，贴身的敌舰受 10 点伤害并减速 1 回合。布雷舰沉了，雷区就散了。',
+const NAVAL_MINE: MarkKindDef = {
+  id: 'nv-mine',
+  name: '水雷',
+  summary: '敌舰踩上来就炸 14 点（无视护甲），炸完就没。自己的船踩不到自己的雷。',
+  hidden: true,
+  on: ['water', 'deep', 'shallow', 'bridge'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    c.api.hurt(c.unit, 14, `${def.name} 撞上水雷，损失 14 点生命`);
+    c.api.log(c.mark.owner, `水雷命中 ${def.name}`);
+  },
+};
+
+/**
+ * 布雷：每回合在自己相邻的一格水面上放一枚水雷。
+ *
+ * 为什么是"自动布"而不是"点一下放一枚"：这个游戏的操作全压在
+ * "选中 → 点目标"上，多一个主动技能就要多一套按钮、冷却和 AI 判断；
+ * 而布雷本身就是一种**等敌人送上门**的动作，自动反而更像它。
+ *
+ * 上限 6 枚（按布设者算）：不设上限的话，一条船蹲在港口外面闷头布雷，
+ * 二十回合后整片海都是雷，游戏会退化成排雷模拟器。
+ */
+const LAY_MINES: AbilityDef = {
+  id: 'nv-lay-mines',
+  name: '布雷',
+  summary: '自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。',
   group: 'support',
   hooks: {
     onTurnStart: [
       {
         stage: TURN_START.support,
         apply: (c) => {
-          const mineDef = c.api.utype(c.state, c.self.type);
-          for (const v of c.state.units) {
-            if (v.owner === c.owner || v.hp <= 0 || v.id === c.self.id) continue;
-            if (c.api.distance(v, c.self) > 1) continue;
-            // 只有水上单位会踩雷：陆军的脚不在水里
-            if (c.api.utype(c.state, v.type).domain !== 'water') continue;
-            v.hp -= 10;
-            const st = (v.status ??= {});
-            st.slow = Math.max(st.slow ?? 0, 1);
-            c.api.pushLog(
-              c.state,
-              c.owner,
-              `${mineDef.name} 的水雷咬住了 ${c.api.utype(c.state, v.type).name}`,
-            );
+          const CAP = 6;
+          if (markCountOf(c.state, 'nv-mine', c.owner) >= CAP) return;
+          const s = c.state;
+          const spots: Array<{ x: number; y: number }> = [];
+          // 半径 2（不含自己这一格）：布雷舰布的是"一片雷区"，不是"脚边一枚"。
+          // 只布四邻的话，一条船蹲住最多铺 4 枚，然后就没地方了——
+          // 那不是雷区，是个包围圈。
+          for (let dy = -2; dy <= 2; dy += 1) {
+            for (let dx = -2; dx <= 2; dx += 1) {
+              if (dx === 0 && dy === 0) continue;
+              if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+              const x = c.self.x + dx;
+              const y = c.self.y + dy;
+              if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+              const tile = s.tiles[y * s.w + x];
+              if (!tile || !['water', 'deep', 'shallow', 'bridge'].includes(tile.terrain)) continue;
+              // 那一格上已经有东西（自己的雷、别人的雷、或者一条船）就跳过：
+              // 雷叠雷没有意义，把雷布到别人的船底下等于白送一次位移
+              if (marksAt(s, x, y).length > 0) continue;
+              if (s.units.some((u) => u.x === x && u.y === y && u.hp > 0)) continue;
+              spots.push({ x, y });
+            }
           }
+          if (spots.length === 0) return;
+          // 挑哪一格：按回合号轮转，而不是永远挑"第一个"。
+          // 永远挑第一个的话，一条船蹲着不动就会把雷全堆在北边一格上。
+          const pick = spots[(s.turn + c.self.x + c.self.y) % spots.length]!;
+          addMark(s, {
+            kind: 'nv-mine',
+            owner: c.owner,
+            x: pick.x,
+            y: pick.y,
+            charges: 1,
+            hidden: true,
+          });
+          c.api.pushLog(
+            s,
+            c.owner,
+            `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 布下一枚水雷`,
+          );
         },
       },
     ],
@@ -279,7 +333,7 @@ const FLEET_OILER: AbilityDef = {
  * 能力表是**全局合并**的（不看这一局勾了哪些包），所以现代包引用基础包的
  * 能力 id 完全没问题——但反过来"两个包各声明一份"会直接踩测试。
  */
-const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD, SUBMERGE, FLEET_REPAIR, SUB_TENDER, MINE_ZONE];
+const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD, SUBMERGE, FLEET_REPAIR, SUB_TENDER, LAY_MINES];
 const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
 
 /* ===========================================================================
@@ -546,11 +600,12 @@ const FLEET_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 3,
     domain: 'water',
-    abilities: ['nv-minefield'],
-    // 移动 3、几乎不还手，全部价值在那片雷区上：它蹲在一条水道上，
-    // 对面的船要么绕一大圈，要么贴着它挨 10 点/回合。
-    // 血 110 是为了撑住"被集火也得站两轮"——它一沉，雷区就散（见能力说明）。
-    // V = 8+49.5+40+3+7.5+4.5 = 112.5 → 0.47（光环不进公式，和维修舰同理偏低）
+    abilities: ['nv-lay-mines'],
+    // 移动 3、几乎不还手，全部价值在它布下的那些雷上：
+    // 它蹲在一条水道上布几天，对面的船要么绕一大圈，要么一条条去趟。
+    // 血 110 是为了撑住"被集火也得站两轮"——但**雷不属于它**：
+    // 它沉了，之前布下的水雷还在那儿（这就是"格子上留东西"这一层的意思）。
+    // V = 8+49.5+40+3+7.5+4.5 = 112.5 → 0.47（雷不进公式，和维修舰同理偏低）
   },
   {
     id: 'nv_submarine',
@@ -1351,6 +1406,14 @@ export const NAVAL_FLEET: Expansion = {
     '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +
     '（离岸两格以上的外海，只有船进得去，大舰吃水深进不了浅流）。',
   abilities: FLEET_ABILITIES,
+  /**
+   * 这个包带来的"格子上留东西"的种类：水雷。
+   *
+   * 引擎（core/marks.ts）只管"谁踩上来、什么时候结算"，水雷长什么样、
+   * 炸多少，全在这个包里。以后做地雷、火场、雷区标记，各写一个 kind 挂到
+   * 对应扩展的 `marks` 上就行，规则层一行都不用改。
+   */
+  marks: [NAVAL_MINE],
   units: FLEET_UNITS,
   terrains: ['deep'],
   afterTerrain: deepenWater,

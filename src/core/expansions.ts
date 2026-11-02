@@ -21,6 +21,9 @@ import type { ResourceCost } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
 import type { AbilityDef } from './abilities.ts';
+// 留痕种类（水雷/地雷……）的接口。同样只 import type：实现在 core/marks.ts，
+// 那边只依赖 types.ts，不会绕回来。
+import type { MarkKindDef } from './marks.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_PACKS } from './era-packs.ts';
@@ -367,6 +370,15 @@ export interface Expansion {
    * "开了某个包，盾墙就换了个算法"，玩家永远查不清自己漏了什么）。
    */
   abilities?: AbilityDef[];
+  /**
+   * 这个扩展带来的**格子上留东西**的种类（水雷、地雷、火场……）。
+   *
+   * 和 `abilities` 同一个道理：实现跟着扩展走，合并进全局表由
+   * mark-registry.ts 做。引擎（core/marks.ts）只管"什么时候触发"，
+   * 不管"触发之后发生什么"——所以删掉一个扩展，它的留痕种类也跟着消失，
+   * 不用回规则层一行行找。
+   */
+  marks?: MarkKindDef[];
   /**
    * 这个扩展额外带来的兵种。
    * 不勾选这个扩展，这些兵种就不会出现在本局的兵种表里。

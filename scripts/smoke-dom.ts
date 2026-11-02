@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { addMark } from '../src/core/marks.ts';
 import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { remainingUnits } from '../src/core/draft.ts';
@@ -223,6 +224,48 @@ check('浓雾扩展：视野外的地形和敌城都不渲染', () => {
     // 多留两块板会让它们一起变红（第一次跑就是这么崩的）
     base.remove();
     dark.remove();
+  }
+});
+
+check('地上的东西：自己的雷画实心，敌方已发现的画空心', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 4, expansionIds: ['naval-fleet'] }, 909);
+  // 一格自己的、一格敌人的（都摆在视野里，否则按迷雾规则根本不该画）
+  const mine = addMark(st, { kind: 'nv-mine', owner: 'A', x: 2, y: 2, charges: 1, hidden: true });
+  const foe = addMark(st, { kind: 'nv-mine', owner: 'B', x: 3, y: 2, charges: 1, hidden: false });
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedCities: new Map(),
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+  try {
+    const marks = host.querySelectorAll('.fx-mark');
+    assert.equal(marks.length, 2, `两条留痕都该画出来，实际 ${marks.length}`);
+    assert.ok(host.querySelector('.fx-mark.mine'), '自己布的应该是实心（.mine）');
+    assert.ok(host.querySelector('.fx-mark.seen'), '敌方已发现的应该是空心（.seen）');
+    assert.equal(host.querySelector(`.fx-mark[title="水雷"]`) !== null, true, '要有名字，悬停能看出来是什么');
+    // 它不该混进棋子层：雷不是单位
+    assert.equal(host.querySelectorAll('.unit').length, st.units.length);
+    assert.ok(mine.id !== foe.id, '两枚雷的 id 不能撞');
+  } finally {
+    host.remove();
   }
 });
 

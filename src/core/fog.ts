@@ -12,6 +12,7 @@
  */
 
 import { CONFIG } from './config.ts';
+import { visibleMarks } from './marks.ts';
 import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
 import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
 
@@ -71,6 +72,18 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   cloned.units = cloned.units.filter(
     (u) => u.owner === p || (visibleSet.has(idx(s, u.x, u.y)) && !isHiddenFrom(s, u, p)),
   );
+
+  /*
+   * 格子上留的东西（水雷、地雷……）同样要按"该不该让他知道"裁一遍。
+   *
+   * 两条边界，别写反：
+   *   · 自己布的永远看得见——不然埋完就忘了，等于给自己也埋了；
+   *   · 别人布的默认看不见，只有"自己的单位贴到规定距离以内、且那一格在视野里"
+   *     才算发现。视野外一律不给（否则按 F12 就是一整张雷区地图）。
+   */
+  if (cloned.marks) {
+    cloned.marks = visibleMarks(s, p, (i) => visibleSet.has(i));
+  }
 
   /*
    * 桥是"修出来的地形"，跟着视野走。

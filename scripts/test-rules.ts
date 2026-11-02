@@ -253,6 +253,8 @@ import {
   hasQuit,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
+import { addMark, marksOf, registerMarkKind } from '../src/core/marks.ts';
+import { exportMatch, importMatch } from '../src/storage/save.ts';
 import { GOLD } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
@@ -11648,26 +11650,135 @@ test('海军：舰队航母是 2×2、三机位；同代终于有潜艇可给潜
   }
 });
 
-test('海军：布雷舰的水雷只咬船，贴身的敌舰每回合掉 10 点并被减速', () => {
+console.log('\n格子上留东西（Mark）');
+
+test('留痕：布雷舰每回合在自己旁边布一枚水雷，布到 6 枚就停', () => {
   const s = fresh({ expansionIds: ['naval-fleet'] });
   for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
   s.units = [];
-  const minelayer = place(s, 'A', 'nv_minelayer', 5, 5);
-  const foe = place(s, 'B', 'gunboat', 5, 6);
-  // 岸边站一个陆军：雷区不该炸到岸上的人
-  putTerrain(s, 6, 5, 'plain');
-  const ashore = place(s, 'B', 'militia', 6, 5);
-  const foeHp = foe.hp;
-  const landHp = ashore.hp;
+  const ship = place(s, 'A', 'nv_minelayer', 5, 5);
 
-  s.current = 'B';
+  s.current = 'B'; // 结束 B 的回合 → A 的回合开始，触发布雷
   const r = applyAction(s, { type: 'END_TURN' });
   assert.ok(r.ok, r.ok ? '' : r.reason);
-  const after = (id: string) => r.state.units.find((u) => u.id === id);
-  assert.equal(after(foe.id)!.hp, foeHp - 10, '贴身的敌舰该吃 10 点水雷');
-  assert.equal(after(foe.id)!.status?.slow, 1, '还要被减速一回合');
-  assert.equal(after(ashore.id)!.hp, landHp, '陆军踩不到水里的雷');
-  assert.equal(after(minelayer.id)!.hp, minelayer.hp, '自己的雷不炸自己');
+  const first = marksOf(r.state);
+  assert.equal(first.length, 1, '自己回合开始应该布下一枚');
+  const mine = first[0]!;
+  assert.equal(mine.kind, 'nv-mine');
+  assert.equal(mine.owner, 'A');
+  assert.equal(
+    Math.abs(mine.x - ship.x) + Math.abs(mine.y - ship.y) <= 2 &&
+      (mine.x !== ship.x || mine.y !== ship.y),
+    true,
+    '雷要布在自己两格以内的水面上（不是船底下）',
+  );
+  assert.equal(mine.charges, 1, '一枚雷只炸一次');
+
+  // 连走十来个回合：上限 6 枚，不能无限铺
+  let cur = r.state;
+  for (let i = 0; i < 10; i++) {
+    cur.current = 'B';
+    const x = applyAction(cur, { type: 'END_TURN' });
+    assert.ok(x.ok, x.ok ? '' : x.reason);
+    cur = x.state;
+  }
+  assert.equal(marksOf(cur).length, 6, `上限应该是 6 枚，实际 ${marksOf(cur).length}`);
+  // 雷不占格、不当单位：棋盘上的兵还是一个
+  assert.equal(cur.units.length, 1, '水雷不是单位，不该出现在 units 里');
+});
+
+test('留痕：敌舰踩上去才炸（炸完就没了），自己的船踩不到自己的雷', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  // 两枚雷：一枚给自己人试、一枚给敌人踩（免得两边的船抢同一格）
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 5, y: 5, charges: 1, hidden: true });
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 9, y: 5, charges: 1, hidden: true });
+
+  // 自己人先走一遍：不该炸
+  const own = place(s, 'A', 'gunboat', 4, 5);
+  s.current = 'A';
+  const r1 = applyAction(s, { type: 'MOVE', unitId: own.id, x: 5, y: 5 });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  assert.equal(r1.state.units.find((u) => u.id === own.id)!.hp, own.hp, '自己的雷不炸自己');
+  assert.equal(marksOf(r1.state).length, 2, '没被踩响，雷还在');
+
+  // 敌人走上来：14 点、无视护甲，然后雷消失
+  const foe = place(r1.state, 'B', 'gunboat', 10, 5);
+  r1.state.current = 'B';
+  const r2 = applyAction(r1.state, { type: 'MOVE', unitId: foe.id, x: 9, y: 5 });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const hit = r2.state.units.find((u) => u.id === foe.id)!;
+  assert.equal(hit.hp, foe.hp - 14, '水雷 14 点，不走进攻公式');
+  assert.equal(marksOf(r2.state).length, 1, '踩掉的那一枚消失，另一枚还在');
+  // 战报双方都要有：挨炸的一方得知道自己是怎么没的
+  assert.ok(
+    r2.state.log.some((l) => l.player === 'B' && l.text.includes('水雷')),
+    '挨炸的一方要有战报',
+  );
+});
+
+test('留痕：敌方水雷默认看不见，贴到一格以内才"发现"', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  s.fog = true;
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const mine = addMark(s, { kind: 'nv-mine', owner: 'A', x: 10, y: 10, charges: 1, hidden: true });
+  place(s, 'B', 'gunboat', 2, 2);
+
+  assert.equal((playerView(s, 'B', false).state.marks ?? []).length, 0, '隔着半张图不该知道那儿有雷');
+  assert.equal(
+    (playerView(s, 'A', false).state.marks ?? []).length,
+    1,
+    '自己布的永远看得见，不然埋完就忘了',
+  );
+
+  // 摸到隔壁：发现
+  place(s, 'B', 'gunboat', 10, 9);
+  const near = playerView(s, 'B', false).state.marks ?? [];
+  assert.ok(near.some((m) => m.id === mine.id), '贴到一格以内就该看见');
+  // 无雾/观战视角全都能看见
+  assert.equal((playerView(s, 'B', true).state.marks ?? []).length, 1);
+});
+
+test('留痕引擎：回合开始的种类按次数自己减，减完就消失', () => {
+  // 这条不测水雷，测的是引擎那一层：`charges` 的增减不该由每个种类自己管。
+  registerMarkKind({
+    id: 'test-ember',
+    name: '余烬',
+    summary: '测试用：每个回合开始烧一下，烧两次就熄',
+    hidden: false,
+    onTurnStart: (c) => {
+      c.api.log(c.mark.owner, '余烬烧了一下');
+    },
+  });
+  const s = fresh();
+  s.units = [];
+  addMark(s, { kind: 'test-ember', owner: 'A', x: 3, y: 3, charges: 2 });
+
+  s.current = 'B';
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  assert.equal(marksOf(r1.state)[0]?.charges, 1, '响过一次还剩一次');
+
+  r1.state.current = 'B';
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  assert.equal(marksOf(r2.state).length, 0, '次数用完就该消失（别指望每个种类自己删）');
+});
+
+test('留痕：跟着存档走（导出/导入之后雷还在原来的格子上）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  s.units = [];
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 7, y: 9, charges: 1, hidden: true });
+  const back = importMatch(exportMatch(s));
+  assert.ok(back, '导出的存档应该能读回来');
+  const mine = marksOf(back!)[0];
+  assert.ok(mine, '雷要跟着存档走');
+  assert.equal(mine!.kind, 'nv-mine');
+  assert.equal(mine!.x, 7);
+  assert.equal(mine!.y, 9);
+  assert.equal(mine!.owner, 'A');
 });
 
 test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {

@@ -1374,9 +1374,49 @@ export interface GameState {
    * 动作后不在册的，就是这一下没的。只留当前回合，回合走完自然作废。
    */
   fallen?: FallenRecord[];
+  /**
+   * 留在格子上的东西（水雷、地雷、火场……）。见 `Mark` 与 core/marks.ts。
+   *
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"棋盘上什么都没有"。
+   * 引擎里统一用 `marksOf(s)` 读，不要在别处直接 `s.marks ?? []`——
+   * 那样迟早有一处忘了兜底。
+   */
+  marks?: Mark[];
+  /** 下一个 Mark 的序号。和 nextUnitSeq 一样是"可复现"的一部分 */
+  nextMarkSeq?: number;
 }
 
 /** 一条"谁在什么时候倒下了"。只记复活需要的字段，不存整个单位对象。 */
+/**
+ * 留在地格上的一件东西（水雷、地雷、火场、遗迹……）。
+ *
+ * 为什么不塞进 `Tile`：`Tile` 是"地形"——它整局基本不变、每格都有、
+ * 是地图本身；而这些东西是**战场上被放上去的**，可以没有、可以消失、
+ * 可以被一方看见而另一方看不见。两者的生命周期和可见性都不一样，
+ * 混进同一张表会让迷雾和存档都变复杂（见 core/marks.ts 的说明）。
+ *
+ * 不占地、不行动、没有回合，只是"这一格上有一件东西"：
+ * 单位走进来时由它的 kind 决定发生什么，回合开始时也可以由 kind 结算。
+ */
+export interface Mark {
+  id: string;
+  /** 种类 id（core/marks.ts 的注册表；实现跟着扩展走） */
+  kind: string;
+  /** 谁放的。放过的人永远看得见自己的；别人要看"是否已发现" */
+  owner: PlayerId;
+  x: number;
+  y: number;
+  /**
+   * 还能生效几次。不填 = 一直留着（比如火场、遗迹）。
+   * 触发一次就 −1，减到 0 由引擎删掉——"删不删"不该让每个 kind 各自判断。
+   */
+  charges?: number;
+  /** 对敌方隐藏。不填按 kind 的默认值 */
+  hidden?: boolean;
+  /** kind 自己的小数据（伤害、半径、回合数……），解释权归 kind */
+  data?: Record<string, number>;
+}
+
 export interface FallenRecord {
   owner: PlayerId;
   /** 兵种 id */

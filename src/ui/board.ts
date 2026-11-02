@@ -21,8 +21,9 @@
  */
 
 import type { PlayerView } from '../core/fog.ts';
+import { markKindOf } from '../core/mark-registry.ts';
 import { buildProgress, cityName, footprintOf, isAirborne, underConstruction, utype } from '../core/rules.ts';
-import type { GameState, Unit } from '../core/types.ts';
+import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { heatStep } from '../core/heat.ts';
 
 export interface BoardUi {
@@ -79,6 +80,14 @@ export interface BoardUi {
    * 一次动作只给出这一次真的少血的单位——棋盘只画它给的，不再自己猜。
    */
   hpDrops?: ReadonlyMap<string, number>;
+  /**
+   * 这个视角是谁的（渲染"地上的东西"要用）。
+   *
+   * 只影响一件事：自己布的那几件画成实心、敌方已发现的画成空心虚线框。
+   * 不给也照样画，只是不分这两种——脚本里的屏幕快照、性能基准都走这条路，
+   * 不该为了一个装饰性差别去补一个座位号。
+   */
+  me?: PlayerId;
 }
 
 /**
@@ -143,7 +152,7 @@ function ensureStructure(el: HTMLElement): void {
   // 以前把红罩画在格子里，一个兵站在那格上就把红全挡住了——
   // 看起来像"没生效"。现在它是一整层，红罩盖过棋子，一眼就能看见"这人挨了打"。
   el.innerHTML =
-    '<div class="tiles"></div><div class="units"></div><div class="cities"></div><div class="heat"></div>';
+    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div>';
 }
 
 /**
@@ -437,6 +446,31 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         layer.badge[i] = badge;
       }
     }
+  }
+
+  // ---- 地上的东西（水雷/地雷……）----
+  //
+  // 排在格子之上、棋子之下：它是"这一格的状态"，不该盖住站在上面的人。
+  // 只画视图里给到的那几条——可见性在 playerView 里已经裁过了，
+  // 这里再兜一次"视野外不画"，防调用方忘了传 fog 视图。
+  //
+  // 自己布的画成实心，敌方已发现的画成空心 + 虚线框：
+  // 一眼分得出"这是我埋的"还是"这是刚蹚出来的"。
+  const marksEl = el.querySelector<HTMLElement>('.marks');
+  if (marksEl) {
+    const cells: string[] = [];
+    for (const m of view.state.marks ?? []) {
+      const i = m.y * s.w + m.x;
+      if (s.fog && !visibleSet.has(i)) continue;
+      const kind = markKindOf(m.kind);
+      const mine = ui.me === undefined ? undefined : m.owner === ui.me;
+      cells.push(
+        `<i class="fx-mark ${mine === undefined ? '' : mine ? 'mine' : 'seen'} own-${m.owner}" ` +
+          `data-kind="${m.kind}" title="${kind?.name ?? m.kind}" ` +
+          `style="grid-column:${m.x + 1};grid-row:${m.y + 1}"></i>`,
+      );
+    }
+    paintLayer(marksEl, cells.join(''));
   }
 
   // ---- 战况烈度层 ----
