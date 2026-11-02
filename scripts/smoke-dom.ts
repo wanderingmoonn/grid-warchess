@@ -17,6 +17,7 @@
 import { build } from 'esbuild';
 import { JSDOM } from 'jsdom';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
@@ -187,6 +188,57 @@ check('侧栏渲染出卡片和结束按钮', () => {
 
 check('迷雾开启时视野外格子被标记', () => {
   assert.ok(doc.querySelectorAll('.tile.out').length > 0, '应该有视野外的格子');
+});
+
+/**
+ * 布局契约：开局面板在窄屏 / 矮屏里必须"滚得动"。
+ *
+ * jsdom 不做布局，这里能验证的只有**样式表里的那几条关键声明还在**。
+ * 但这就够了——2026-11-02 那次"手机上点新对局拉不下去"的根因正是这三条：
+ *
+ *   1. `.modal-mask` 只有一个隐式 grid 列（auto）→ 被内容撑到 980px，
+ *      面板比屏幕还宽，右边直接切出屏幕；
+ *   2. `.start-col` 没写 `min-height: 0`（纵向排列时它是 flex 子项，
+ *      默认 min-height:auto 会撑到内容那么高，里面的滚动区就没有可缩小的余地）；
+ *   3. 手机档把高度写成 `min(760px, 94dvh)`，矮窗口里仍然顶出去。
+ *
+ * 三条任意一条被删掉，这个 bug 就会回来，所以在样式表上钉住。
+ */
+check('布局契约：窄屏/矮屏的开局面板能滚（样式表里那三条关键声明）', () => {
+  const css = readFileSync('src/style.css', 'utf8');
+  /** 取某条选择器的声明块（够用：这些选择器在文件里只出现一次） */
+  const block = (sel: string): string => {
+    const i = css.indexOf(sel);
+    if (i < 0) return '';
+    const open = css.indexOf('{', i);
+    const close = css.indexOf('}', open);
+    return open < 0 || close < 0 ? '' : css.slice(open + 1, close);
+  };
+
+  assert.ok(
+    /grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(block('.modal-mask')),
+    '遮罩必须把网格列钉成 minmax(0,1fr)，否则面板会被内容撑得比屏幕宽',
+  );
+  assert.ok(
+    /min-height:\s*0/.test(block('.start-col')),
+    '.start-col 少了 min-height:0，窄屏下面板就滚不动',
+  );
+
+  // 同一个选择器在文件里出现两次（基础 + 窄屏档），取"声明块里写了 100%"的那一条
+  const panelBlocks: string[] = [];
+  for (let i = css.indexOf('.modal.start-panel'); i >= 0; i = css.indexOf('.modal.start-panel', i + 1)) {
+    const open = css.indexOf('{', i);
+    const close = css.indexOf('}', open);
+    if (open > 0 && close > open) panelBlocks.push(css.slice(open + 1, close));
+  }
+  assert.ok(
+    panelBlocks.some((b) => /height:\s*100%/.test(b)),
+    '窄屏档的面板高度要用 100%（跟着遮罩走），别再写死 dvh',
+  );
+  assert.ok(
+    css.includes('@media (max-height: 560px)'),
+    '矮窗口（横屏手机 / 被压扁的预览区）要有单独一档',
+  );
 });
 
 check('浓雾扩展：视野外的地形和敌城都不渲染', () => {

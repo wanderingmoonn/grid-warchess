@@ -72,6 +72,8 @@ body {
 .app {
   display: flex;
   flex-direction: column;
+  /* 老 WebView 不认 dvh：先给 vh，再让 dvh 覆盖，否则整条声明作废、高度变成 auto */
+  height: 100vh;
   height: 100dvh;
   /* 顶栏/参谋部栏再高也不许子元素顶出去压到棋盘上 */
   overflow: hidden;
@@ -1906,6 +1908,16 @@ a.btn {
   inset: 0;
   z-index: 100;
   display: grid;
+  /*
+   * 这一行看着多余，其实是"面板比屏幕还宽"的根因。
+   *
+   * grid 只有一列时，那条隐式列是 `auto`：它先按内容的最大宽度去算，
+   * 装不下才退到最小宽度——而最小宽度是被内容决定的（一排 chip、一行长标题）。
+   * 于是手机上面板被撑到 900 多像素，右边直接切出屏幕，里面的滚动区也就无从谈起。
+   * 用 `minmax(0, 1fr)` 把这一列钉成"容器多宽就多宽"，子元素的
+   * `width: min(980px, 100%)` 才真的按屏幕算。
+   */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 24px;
   background: rgba(30, 28, 24, 0.42);
@@ -1914,6 +1926,8 @@ a.btn {
 
 .modal {
   width: min(560px, 100%);
+  /* 两行：老 WebView 不认 dvh 时退回 vh，否则 max-height 整条失效、面板会顶穿屏幕 */
+  max-height: 88vh;
   max-height: 88dvh;
   display: flex;
   flex-direction: column;
@@ -1944,6 +1958,9 @@ a.btn {
 .modal-body {
   padding: 18px 24px;
   overflow-y: auto;
+  /* iOS 上滑动要有惯性；滑动到底不要把整页一起带着滚 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -2771,7 +2788,9 @@ a.btn {
  */
 .modal.start-panel {
   width: min(980px, 100%);
-  height: min(720px, 90dvh);
+  /* 高度要给遮罩的 24px 内边距留出余量：写 90dvh 的话，矮窗口里上下会被各切一刀 */
+  height: min(720px, calc(100vh - 48px));
+  height: min(720px, calc(100dvh - 48px));
   flex-direction: row;
 }
 
@@ -2855,6 +2874,16 @@ a.btn {
 .start-col {
   flex: 1 1 auto;
   min-width: 0;
+  /*
+   * 这一行是手机端能不能滚动的**唯一关键**。
+   *
+   * 窄屏下整个面板改成纵向排列（rail 在上、这一列在下），此时 .start-col 是
+   * 一个纵向 flex 子项，`min-height` 默认是 auto —— 它会撑到内容那么高，
+   * 于是里面那个 `flex:1 + min-height:0` 的 .modal-body 根本没有"可缩小"的
+   * 余地：面板被 .modal 的 overflow:hidden 直接剪掉，看起来就是"新对局拉不下去"。
+   * 横向排列时高度由父容器拉伸给出，所以桌面端一直没暴露这个问题。
+   */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -2950,18 +2979,46 @@ a.btn {
   color: #3f7a54;
 }
 
+/*
+ * 手机、以及"被压窄的预览面板"（agents 的预览区就是这种）：
+ * 面板占满可用高度，只有中间的设置区滚动，导航和「开始对局」始终在视野里。
+ *
+ * 三件事必须同时成立，少一条就滚不动：
+ *   1) 遮罩留的边距够小，否则面板比屏幕高，上下被各切一刀；
+ *   2) 面板高度用一个**有确定值**的 100%（父级 inset:0 撑出来的），
+ *      不再写死 min(760px, 94dvh)——矮窗口里那个 94dvh 依然会顶出去；
+ *   3) .start-col 的 min-height:0（见上面那条注释），否则内容撑开、无处可滚。
+ */
 @media (max-width: 720px) {
+  .modal-mask {
+    padding: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+  }
+
   .modal.start-panel {
-    height: min(760px, 94dvh);
+    height: 100%;
+    max-height: 100%;
     flex-direction: column;
+    border-radius: 14px;
+  }
+
+  .modal-head {
+    padding: 14px 16px 0;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+    gap: 14px;
   }
 
   .start-rail {
     flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-right: none;
     border-bottom: 1px solid var(--line);
   }
@@ -2977,10 +3034,78 @@ a.btn {
 
   .start-nav {
     flex-direction: row;
+    flex: 0 0 auto;
+  }
+
+  .start-nav-item {
+    padding: 7px 10px;
   }
 
   .start-nav-item span {
     display: none;
+  }
+
+  .modal-foot {
+    padding: 10px 12px;
+  }
+
+  /* 底部：摘要一行、按钮一行。挤在一行里的时候按钮会被挤出屏幕右侧 */
+  .start-foot {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .start-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+
+  /* 手指按得准：36px 的按钮在手机上太薄 */
+  .start-foot .btn {
+    min-height: 40px;
+  }
+
+  /*
+   * chip 也一样：桌面 28px 的高度是"鼠标能点"，手机上就是"老是点错"。
+   * 这里只放大内边距和字号，不碰布局——多出来的宽度由 chip-row 自己换行吸收。
+   */
+  .chip {
+    padding: 9px 14px;
+    font-size: 13px;
+  }
+}
+
+/*
+ * 矮窗口（横屏手机、被压扁的预览面板）。
+ *
+ * 这一档和宽度无关：一个 1200×480 的预览区宽度够、高度不够，
+ * 上面那套"占满 100%"是对的，但顶部那条说明和品牌名会把内容区压到只剩两行。
+ */
+@media (max-height: 560px) {
+  .modal-mask {
+    padding: 6px;
+  }
+
+  .start-brand {
+    display: none;
+  }
+
+  .modal-head {
+    padding: 10px 14px 0;
+  }
+
+  /* 副标题在矮屏上是纯占地方：标题已经把这一页说清楚了 */
+  .modal-head p {
+    display: none;
+  }
+
+  .modal-body {
+    padding: 10px 14px;
+    gap: 12px;
+  }
+
+  .modal-foot {
+    padding: 8px 12px;
   }
 }
 
