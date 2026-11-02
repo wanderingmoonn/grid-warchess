@@ -54,6 +54,16 @@ registerSkillReadyCheck('sword-sweep', (s, u) => {
   const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
   return left > 0;
 });
+/** 计算剑气纵横的直线长度（距离） */
+export function getSwordSweepReach(s: GameState, u: Unit): number {
+  // 如果它是修士，就按境界加成算
+  if (isCultivatorUnit(s, u)) {
+    const rank = getRank(u);
+    return 3 + Math.ceil(rank / 3);
+  }
+  // 如果是别的兵种（未来扩展）借用了这个技能，默认给个基础值 3
+  return 3; 
+}
 /** 算出剑气打向 (targetX, targetY) 时，覆盖的所有格子坐标 */
 function getSwordSweepCells(
   s: GameState, 
@@ -61,7 +71,7 @@ function getSwordSweepCells(
   targetX: number, 
   targetY: number
 ): Array<{ x: number; y: number }> {
-  const reach = 3;
+  const reach = getSwordSweepReach(s, self);
   let dx = 0;
   let dy = 0;
 
@@ -403,7 +413,7 @@ function VisionModifier(u: Unit): number {
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
   name: '修真',
-  summary: '带来了会修炼成长的炼气士。',
+  summary: '带来了会修炼成长的各种修士。',
   scale: 'large',  
   hooks: {
     //升级逻辑
@@ -523,8 +533,16 @@ export const CULTIVATION_PACK: Expansion = {
           : `修为经验：${exp}（已臻化境）`,
         `寿元：${age} / ${Number.isFinite(lifespan) ? lifespan : '∞'}`,
       ];
+
       if (unit.type === 'sword-cultivator') {
         lines.push(`剑修：境界加成在普攻时 ×0.8，剑气纵横时 ×1.2`);
+      }
+
+      const def = state.unitTypes[unit.type];
+      const hasSwordSweep = def?.skills?.some((sk) => sk.id === 'sword-sweep');
+      if (hasSwordSweep) {
+        const reach = getSwordSweepReach(state, unit);
+        lines.push(`剑气纵横：向指定方向挥出 ${reach} 格直线剑气，伤害受境界加成`);
       }
 
       if (rank > 0) {
