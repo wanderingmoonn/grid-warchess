@@ -3195,6 +3195,17 @@ const ERA_TIME_DISCOUNT = 0.5;
 const SWAP_GAIN = 1.35;
 
 /**
+ * 攒升级时的咬住窗口（默认 `SAVE_TIGHT_TURNS = 4`）。
+ *
+ * 为什么升级要单给一个更长的窗口：升级费是本局最大的一笔固定支出（4 代以上 540~780），
+ * 而 AI 的现金流是"每回合花到只剩一两百"。4 回合的窗口意味着**它必须在
+ * 差距还很大时就开始停手**，否则永远差一口气——实测一局真人对抗里，
+ * 人类升了 8 次城、AI 只升了 2 次，差价是整局输赢的主因（见 REVIEW-2026-11-02-report-88.md）。
+ * 8 回合是量出来的：60 局对上一版 +8.6 点（58.6%，z=1.31）。
+ */
+const ERA_TIGHT_TURNS = 8;
+
+/**
  * 攒钱意向的记忆时长（回合）与"换目标的门槛"。
  *
  * 时长：一个攒钱目标从立下到兑现，实测中位数在 3~6 回合（升时代 4 个回合左右、
@@ -3267,6 +3278,14 @@ export function savingAllowance(
   keepLine: boolean,
   /** 轮流出手的相位：0 出兵、1 纯攒（按"轮"算，见上） */
   phase: number,
+  /**
+   * 咬住窗口：离目标还有几个回合的收入时开始一分不花。
+   *
+   * 默认 `SAVE_TIGHT_TURNS`。攒**升级**时用更长的 `ERA_TIGHT_TURNS`——
+   * 实测（`docs/UPDATE-2026-11-02-patches.md`）把升级的窗口从 4 放到 8，
+   * 升级次数从 2.3 次/局升到 2.7，对上一版胜率 +8.6 点（60 局）。
+   */
+  tight = SAVE_TIGHT_TURNS,
 ): number {
   if (targetCost <= 0 || gold >= targetCost) return Infinity;
   if (!keepLine) return 0;
@@ -3275,7 +3294,7 @@ export function savingAllowance(
    * 短暂停手（一两回合）是划算的，长停（五个回合以上）才是要修的病——
    * 这一条把它限制在前者。
    */
-  if ((targetCost - gold) / Math.max(1, inc) <= SAVE_TIGHT_TURNS) return 0;
+  if ((targetCost - gold) / Math.max(1, inc) <= tight) return 0;
   if (phase !== 0) return 0;
   /*
    * 额度是"这一回合的产出预算"，不是"每个兵都能花这么多"：
@@ -3652,7 +3671,10 @@ function buildPlan(
       const phase = Math.floor(s.turn / Math.max(1, seatsOf(s).length)) % 2;
       // 建筑照旧只吃"留够目标价之后的那部分"：囤摊子比补兵慢得多
       buildAllowance = Math.max(0, gold - targetCost);
-      allowance = savingAllowance(gold, inc, targetCost, myCities.length, !abandonMode, phase);
+      allowance = savingAllowance(
+        gold, inc, targetCost, myCities.length, !abandonMode, phase,
+        pick.kind === 'era' ? ERA_TIGHT_TURNS : SAVE_TIGHT_TURNS,
+      );
     }
   }
 
@@ -3682,7 +3704,10 @@ function buildPlan(
       goalNote = revive.note;
       const phase = Math.floor(s.turn / Math.max(1, seatsOf(s).length)) % 2;
       buildAllowance = Math.max(0, gold - targetCost);
-      allowance = savingAllowance(gold, inc, targetCost, myCities.length, !abandonMode, phase);
+      allowance = savingAllowance(
+        gold, inc, targetCost, myCities.length, !abandonMode, phase,
+        prev.goal === 'era' ? ERA_TIGHT_TURNS : SAVE_TIGHT_TURNS,
+      );
     }
   }
 

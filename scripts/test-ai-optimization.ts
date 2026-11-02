@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
+import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
 import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
@@ -493,6 +493,14 @@ test('换家：身价没差那么多就老实守着，别动不动就弃城',()=
   for(const c of s.cities) if(c.owner==='A') c.hp = Math.floor(c.maxHp*0.4);
   const p = aiDebugPlan(s,'A');
   assert.notEqual(p.stance,'trade', '势均力敌的时候不该弃城');
+});
+
+test('攒升级：咬住窗口放到 8 回合时，差 6 个回合也一分不花',()=>{
+  // 目标 900、余额 300、收入 100、两座产兵城 → 差 6 个回合的收入
+  assert.equal(savingAllowance(300, 100, 900, 2, true, 0), 50, '默认窗口 4：还放得开，偶数回合给一半收入');
+  assert.equal(savingAllowance(300, 100, 900, 2, true, 0, 8), 0, '升级窗口 8：咬住，一分不花');
+  // 更远的目标准则不变：超过窗口就照常放额度
+  assert.equal(savingAllowance(100, 100, 2000, 2, true, 0, 8), 50, '差 19 个回合：超过窗口，照常放');
 });
 
 console.log(`${passed} AI optimization tests passed`);
