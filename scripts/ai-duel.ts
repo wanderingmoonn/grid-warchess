@@ -41,6 +41,10 @@ const has = (name: string): boolean => args.includes(`--${name}`);
 // 那一刻的 src/core/ai.ts"原样抄一份（只改导入路径）。想量"这一批改动本身值多少"，
 // 就得跟**上一版**比，而不是跟几轮之前的基线比——否则前后几批改动的收益会混在一起。
 const OLD_AI_FILE = argOf('old', './baseline-ai.ts');
+const SCRIPT = has('script');
+const scriptAi = SCRIPT
+  ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
+  : null;
 const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
   ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
 ) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
@@ -57,6 +61,9 @@ const CAP = Number(argOf('cap', '160'));
  * 跑出来就是"除战术外的一切改动"的净效果。
  */
 const LEVEL = argOf('level', 'tactic') as 'basic' | 'advanced' | 'tactic';
+/**
+ * `--script` 见下面 SCRIPT 那一行：把"新版"那一侧换成 scripts/script-ai.ts 的剧本。
+ */
 /** 同一颗种子两边各打一局：paired，方差最小 */
 const SWAP = !has('no-swap');
 /** 空扩展开关：只在排查"是不是规则把对局拖进拉锯"时才用 */
@@ -75,7 +82,7 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
     seed,
   );
 
-  const aiFor = (p: PlayerId): Ai => (p === 'A') === aIsNew ? newAi : oldAi;
+  const aiFor = (p: PlayerId): Ai => ((p === 'A') === aIsNew ? (scriptAi ?? newAi) : oldAi);
 
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
