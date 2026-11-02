@@ -4822,7 +4822,7 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
 
   // 卡片排序：时代为主、扩展为辅（同一代里再来比包）
   const order = cards().map((c) => c.dataset.draft ?? '');
-  const eras = order.map((id) => UNIT_TYPES[id]?.era ?? 0);
+  const eras = order.map((id) => UNIT_TYPES[id]?.era ?? 1);
   for (let i = 1; i < eras.length; i++) {
     assert.ok(
       eras[i]! >= eras[i - 1]!,

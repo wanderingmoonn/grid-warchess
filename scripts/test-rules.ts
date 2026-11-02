@@ -10590,6 +10590,8 @@ test('旧的自定义兵种：整数抗性要折成倍率', () => {
   const legacy = {
     id: 'c_1',
     name: '旧兵',
+    era: 1,
+    category: 'combat',
     resist: { water: 4, fire: 0.8 },
   } as unknown as Parameters<typeof normalizeUnitResist>[0];
   const fixed = normalizeUnitResist(legacy);
