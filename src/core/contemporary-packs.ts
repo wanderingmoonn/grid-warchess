@@ -129,43 +129,52 @@ const MODERN_ABILITIES: AbilityDef[] = [
 const CONTEMPORARY_BASE: UnitTypeDef[] = [
   // ---- 战斗 ----
   {
-    // 步兵班：这一代的"民兵位置"。什么都行、什么都不突出。
-    // 射程 3（二战步兵班是 4，但那一代的步兵班本来就是"带机枪的班"，
-    // 这里给 3 是为了给「现代战争」的机械化步兵留出升级空间）。
+    // 摩托化步兵：这一代的"民兵位置"。什么都行、什么都不突出。
+    //
+    // 2026-11-02 改名（原「步兵班」）：和二战的 `squad` 撞名，招募面板和任何
+    // 报表里都分不出是哪一代。这里按"摩托化 → 机械化（现代战争包）"的台阶命名。
+    // 同一天集体上调：攻 50→55、射程 3→4、视野 4→5。
+    // 射程原本压到 3 是为了给「现代战争」留升级空间，现在底座整体抬一档，
+    // 那一档改为由 `cnt_mechinf` 的射程 4 + 攻坚能力来体现。
     id: 'ct_infantry',
-    name: '步兵班',
+    name: '摩托化步兵',
     short: '班',
     era: 6,
     category: 'combat',
     cost: 340,
     move: 2,
-    atk: 50,
+    atk: 55,
     armor: 5,
     maxHp: 52,
-    range: 3,
-    vision: 4,
+    range: 4,
+    vision: 5,
   },
   {
-    // 坦克：这一代的主力装甲。护甲 12 比二战坦克（10）厚一档，
+    // 中型坦克：这一代的主力装甲。护甲 12 比二战坦克（10）厚一档，
     // 但破甲与攻坚都在「现代战争」的主战坦克那里——底座只保证"能顶正面"。
+    //
+    // 2026-11-02 改名（原「坦克」）：和二战的 `tank` 撞名。台阶是
+    // 中型坦克（底座）→ 主战坦克（现代战争）。
+    // 同一天集体上调：攻 60→66、射程 3→4、视野 3→4。
     id: 'ct_tank',
-    name: '坦克',
+    name: '中型坦克',
     short: '坦',
     era: 6,
     category: 'combat',
     cost: 450,
     move: 3,
-    atk: 60,
+    atk: 66,
     armor: 12,
     maxHp: 96,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['shield-wall', 'siege-master'],
     bio: false,
   },
   {
-    // 榴弹炮：射程 5 + 溅射 2，和二战的火炮同一个位置，只是各项都高一档。
-    // 视野 2：它打的是"友军报来的坐标"。
+    // 榴弹炮：射程 6 + 溅射 2，和二战的火炮同一个位置，只是各项都高一档。
+    // 视野 3：它打的是"友军报来的坐标"，但比原来多看一眼。
+    // 2026-11-02 集体上调：攻 50→55、射程 5→6、视野 2→3。
     id: 'ct_howitzer',
     name: '榴弹炮',
     short: '炮',
@@ -173,18 +182,19 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     category: 'combat',
     cost: 360,
     move: 2,
-    atk: 50,
+    atk: 55,
     armor: 5,
     maxHp: 56,
-    range: 5,
-    vision: 2,
+    range: 6,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
     bio: false,
   },
   {
-    // 装甲侦察车：视野 5 是这个底座唯一的"眼睛"。
-    // 攻低（34）、血薄，价值全在"看得见"——原版到二战为止视野都没超过 3。
+    // 装甲侦察车：视野 6 是这个底座唯一的"眼睛"。
+    // 攻低、血薄，价值全在"看得见"——原版到二战为止视野都没超过 3。
+    // 2026-11-02 集体上调：攻 34→38、射程 2→3、视野 5→6。
     id: 'ct_recon',
     name: '装甲侦察车',
     short: '侦',
@@ -192,11 +202,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     category: 'combat',
     cost: 320,
     move: 4,
-    atk: 34,
+    atk: 38,
     armor: 6,
     maxHp: 44,
-    range: 2,
-    vision: 5,
+    range: 3,
+    vision: 6,
     bio: false,
   },
 
@@ -210,11 +220,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     category: 'economy',
     cost: 300,
     move: 2,
-    atk: 4,
+    atk: 5,
     armor: 4,
     maxHp: 32,
-    range: 1,
-    vision: 3,
+    range: 2,
+    vision: 4,
     incomeByTerrain: { plain: 38, city: 26, forest: 15, hill: 13 },
   },
   {
@@ -227,11 +237,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     category: 'builder',
     cost: 300,
     move: 2,
-    atk: 4,
+    atk: 5,
     armor: 4,
     maxHp: 32,
-    range: 1,
-    vision: 2,
+    range: 2,
+    vision: 3,
     buildPower: 36,
     // 海上钻井平台也归它：那是第六时代唯一一座"盖在海面上"的经济建筑。
     // 挂在这一位（底座工程兵）而不是「工程兵团」，是因为「现代海军」只要求
@@ -241,8 +251,9 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
 
   // ---- 建筑 ----
   {
-    // 混凝土碉堡：底座的固定火力。自动开火、射程 4，
+    // 混凝土碉堡：底座的固定火力。自动开火、射程 5，
     // 比二战碉堡（36 攻 / 13 甲 / 86 血）各项各高一档。
+    // 2026-11-02 集体上调：攻 34→38、射程 4→5、视野 3→4。
     id: 'ct_pillbox',
     name: '混凝土碉堡',
     short: '碉',
@@ -251,11 +262,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     cost: 370,
     buildCost: 64,
     move: 0,
-    atk: 34,
+    atk: 38,
     armor: 13,
     maxHp: 88,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     autoAttack: true,
   },
   {
@@ -269,11 +280,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     cost: 420,
     buildCost: 60,
     move: 0,
-    atk: 5,
+    atk: 6,
     armor: 9,
     maxHp: 64,
-    range: 1,
-    vision: 2,
+    range: 2,
+    vision: 3,
     incomeByTerrain: { city: 26, plain: 24, forest: 10, hill: 10 },
   },
   {
@@ -288,11 +299,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     cost: 380,
     buildCost: 40,
     move: 0,
-    atk: 22,
+    atk: 25,
     armor: 10,
     maxHp: 92,
-    range: 1,
-    vision: 6,
+    range: 2,
+    vision: 7,
     autoAttack: true,
     // 现代的前线基地：沿用产兵点默认值（不设白名单、当回合成型、原价）
     produce: {},

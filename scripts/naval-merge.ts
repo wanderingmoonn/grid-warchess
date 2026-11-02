@@ -19,6 +19,7 @@ import path from 'node:path';
 
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { unitSourceIdOf } from '../src/core/expansions.ts';
+import { eraDef } from '../src/core/config.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -249,7 +250,7 @@ const lines: string[] = [];
 lines.push(`# 海军阵营批量对局 · 合并报表`);
 lines.push('');
 lines.push(
-  `时代 **${head.era}**（火药）· 地貌 **${(head as unknown as { mapStyle?: string }).mapStyle ?? 'isles'}** · ` +
+  `时代 **${head.era}**（${eraDef(head.era).name}）· 地貌 **${(head as unknown as { mapStyle?: string }).mapStyle ?? 'isles'}** · ` +
   `扩展 \`${EXPANSIONS.join('`, `')}\` · **${games} 局**（种子 ${merged.seeds[0]}..${merged.seeds.at(-1)}）· ` +
   `回合上限 ${cap}`,
 );

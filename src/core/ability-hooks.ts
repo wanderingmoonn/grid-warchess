@@ -68,7 +68,7 @@ export interface AbilityApi {
   /** 能不能被治疗（机械单位不行） */
   canBeHealed(s: GameState, u: Unit): boolean;
   /** 贴一层持续状态；返回是否新贴上（战报只报真正发生的事） */
-  putStatus(target: Unit, key: 'poison' | 'burn' | 'slow' | 'curse', turns: number): boolean;
+  putStatus(target: Unit, key: 'poison' | 'burn' | 'slow' | 'curse' | 'curse-deep', turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */
@@ -410,6 +410,18 @@ export interface AbilityHooks {
   statAttack?: Staged<HookCtx>[];
   /** 面板上的护甲修正（林地之主） */
   statArmor?: Staged<HookCtx>[];
+  /**
+   * 脚下这块地的护甲加成，**声明式**写在这里。
+   *
+   * 为什么不能只在 statArmor 里写：那是"结算时算一遍"，AI 读不到。
+   * 2026-11-02 之前 AI 对地形的估值是一个与兵种无关的常数，
+   * 于是"树人站丘陵 +3 甲"这件事只存在于伤害公式里，决策层完全不知道——
+   * 它会为了 0.5 分的推进把树人从丘陵上挪到平地。
+   *
+   * 同一份数据现在有两个消费者（statArmor 用它对账面板、ai.ts 用它估地形），
+   * 所以必须写在数据里，不能两边各写一个 3。
+   */
+  terrainArmor?: Array<{ terrains: Terrain[]; bonus: number }>;
   /** 伤害公式里的护甲阶段（穿隙、林地之主、破甲） */
   armorPhase?: Staged<HookCtx>[];
   /** 伤害公式里的伤害阶段（见 DAMAGE_STAGE） */

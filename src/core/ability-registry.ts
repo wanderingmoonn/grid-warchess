@@ -14,7 +14,7 @@ import { CORE_ABILITIES, hasAbility } from './abilities.ts';
 import type { AbilityDef } from './abilities.ts';
 import type { AbilityHooks, Staged } from './ability-hooks.ts';
 import { EXPANSIONS } from './expansions.ts';
-import type { UnitTypeDef } from './types.ts';
+import type { Terrain, UnitTypeDef } from './types.ts';
 
 const byId = new Map<string, AbilityDef>();
 // 核心优先：同 id 的条目以本体为准，扩展重复声明不会盖掉它
@@ -72,6 +72,33 @@ export function hooksFor(def: UnitTypeDef | undefined): AbilityHooks[] {
   }
   const frozen = list.length === 0 ? EMPTY : list;
   cache.set(key, frozen);
+  return frozen;
+}
+
+/**
+ * 这个兵种站在各种地形上能多拿多少护甲（来自 terrainArmor 声明）。
+ *
+ * 只读声明、不跑结算，所以便宜到可以在每步走位评估里调用。
+ * 合并规则取最大值：同一块地有两条能力都给加成时，不叠加（和数据里的
+ * 光环同一条约定——叠乘最容易变成"某个组合意外破表"）。
+ */
+const terrainArmorCache = new Map<string, Map<Terrain, number>>();
+const EMPTY_TERRAIN = new Map<Terrain, number>();
+
+export function terrainArmorOf(def: UnitTypeDef | undefined): Map<Terrain, number> {
+  const ids = def?.abilities;
+  if (!ids || ids.length === 0) return EMPTY_TERRAIN;
+  const key = ids.join('|');
+  const hit = terrainArmorCache.get(key);
+  if (hit) return hit;
+  const out = new Map<Terrain, number>();
+  for (const hooks of hooksFor(def)) {
+    for (const entry of hooks.terrainArmor ?? []) {
+      for (const t of entry.terrains) out.set(t, Math.max(out.get(t) ?? 0, entry.bonus));
+    }
+  }
+  const frozen = out.size === 0 ? EMPTY_TERRAIN : out;
+  terrainArmorCache.set(key, frozen);
   return frozen;
 }
 

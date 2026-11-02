@@ -98,8 +98,26 @@ def resist_of(u, elements):
 
 
 def mechanic_of(u):
-    """特性列装不下的东西：召唤、弹药、自损、分裂、英雄解锁、召唤物"""
+    """特性列装不下的东西：飞行、障碍、建造、孵化、合体、召唤、弹药、自损、分裂、英雄解锁、召唤物"""
     parts = []
+    # 飞行要放第一位：14 个兵会飞，而"它能不能越过地形和阵型"是最影响战局的一条。
+    # 空中层还有一条隐性代价（地面护甲不生效），必须一起说，否则读表的人会以为白赚。
+    # 两条是独立的规则（见 rules.ts）：
+    #   flight  → crossesWater，能过水
+    #   layer:'air' → 空中层，能和地面单位同格；地面打它要多算 1 格（rules.ts:775），
+    #                 且不吃地形护甲（rules.ts:1449）
+    if u.get('flight'):
+        parts.append('可选掠过水面')
+    if u.get('layer') == 'air':
+        parts.append('掠空：与地面单位同格（地面打它多算 1 格），不吃地形护甲')
+    if u.get('obstacle'):
+        parts.append('障碍：不可通行，只能拆')
+    if u.get('buildsText'):
+        parts.append(f"可建造：{u['buildsText']}")
+    if u.get('hatchText'):
+        parts.append(f"倒计时结束孵化为 {u['hatchText']}")
+    if u.get('mergeText'):
+        parts.append(f"与同类合体为 {u['mergeText']}")
     if u.get('summon'):
         s = u['summon']
         parts.append(f"每 {s.get('every', 1)} 回合召唤 1 个{u.get('summonText', '')}（同时最多 {s.get('max', 1)}）")
@@ -115,7 +133,21 @@ def mechanic_of(u):
         parts.append('只能被召唤，不占编制')
     if u.get('splash'):
         parts.append(f"溅射 {u['splash']} 格（溅射到的目标吃 {int(SPLASH * 100)}%）")
+    if u.get('splashLine'):
+        parts.append('直线穿透（一线上的目标都吃伤害）')
     return '；'.join(parts) if parts else '—'
+
+
+def ability_detail_of(u):
+    """能力说明：和"特性"列同序，一条一行。
+
+    只列名字等于把机制留在了别处，读表的人得来回翻「能力对照」。
+    这里把 summary 直接摊开——要查"这个词是谁都有"再去那张表反查。
+    """
+    names = u.get('abilityNames') or []
+    sums = u.get('abilitySummary') or []
+    lines = [f"· {n}：{s}" if s else f"· {n}" for n, s in zip(names, sums)]
+    return '\n'.join(lines) if lines else '—'
 
 
 COLUMNS = [
@@ -138,12 +170,13 @@ COLUMNS = [
     ('弱点（倍乘）', 12, None),
     ('抗性（平减）', 12, None),
     ('特性', 26, lambda u, p: ' · '.join(u['abilityNames']) or '—'),
+    ('能力说明', 40, None),
     ('英雄技能', 34, lambda u, p: u.get('skillText') or '—'),
     ('其他机制', 30, None),
 ]
 
-# 需要换行 + 左对齐的长文本列（特性 / 技能 / 其他机制）
-LONG_COLS = {19, 20, 21}
+# 需要换行 + 左对齐的长文本列（特性 / 能力说明 / 技能 / 其他机制）
+LONG_COLS = {19, 20, 21, 22}
 
 
 def make_sheet(wb, title, units, elements, tab_color=ACCENT):
@@ -161,7 +194,8 @@ def make_sheet(wb, title, units, elements, tab_color=ACCENT):
             u.get('magicAtk') or '—', u['armor'], u.get('magicRes', 0), u['maxHp'],
             u['move'] if u['move'] else '—', u['range'], u['vision'],
             element_of(u, elements), weak_of(u, elements), resist_of(u, elements),
-            ' · '.join(u['abilityNames']) or '—', u.get('skillText') or '—', mechanic_of(u),
+            ' · '.join(u['abilityNames']) or '—', ability_detail_of(u),
+            u.get('skillText') or '—', mechanic_of(u),
         ]
         ws.append(row)
 
@@ -173,7 +207,7 @@ def make_sheet(wb, title, units, elements, tab_color=ACCENT):
     for r in range(2, last + 1):
         # 行高按最长的那两列算：写死 34 的话，至尊法师那种"英雄 + 溅射"两行挤一起会被裁掉
         lines = 1
-        for c, width in ((19, 26), (20, 34), (21, 30)):
+        for c, width in ((19, 26), (20, 40), (21, 34), (22, 30)):
             text = str(ws.cell(row=r, column=c).value or '')
             for seg in text.split('\n'):
                 lines = max(lines, -(-len(seg) // int(width * 0.95)))
@@ -214,10 +248,14 @@ def overview(wb, data):
     style_body(ws, head_row + 1, row - 1, len(head), center_from=4)
 
     row += 1
-    ws.cell(row=row, column=1, value='四条新规则').font = Font(
+    ws.cell(row=row, column=1, value='规则速查（表里那几列怎么读）').font = Font(
         name='微软雅黑', size=11, bold=True, color=ACCENT)
     row += 1
     notes = [
+        ('列说明',
+         '"特性"只列能力名，"能力说明"把每条能力的原文摊开（一条一行）；'
+         '"其他机制"放的是数据字段里的硬机制——飞行/掠空、障碍、可建造、孵化、合体、召唤、弹药、'
+         '自损、分裂、英雄解锁、溅射。这三列合起来才是一张完整的机制表，别只看"特性"。'),
         ('魔法攻击 / 魔法抗性',
          '魔攻是独立结算的第二段伤害：不吃护甲、不吃地形、不吃破甲，只被目标的魔抗平减。'
          '所以法师打重甲划算，打在魔抗单位身上像挠痒。数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。'),

@@ -147,8 +147,12 @@ const abilityApi: AbilityApi = {
   strikeDistance,
   canStandAt,
   freeNeighbor,
+  // 所有"凭空出现"的单位都从这条路走（召唤 / 分裂 / 孵化 / 裂殖 / 聚合）。
+  // 在这里统一打标记，比让五个调用点各自记得打要可靠。
   spawn: (s, owner, type, x, y) => {
-    s.units.push(makeUnit(s, owner, type, x, y));
+    const u = makeUnit(s, owner, type, x, y);
+    u.summoned = true;
+    s.units.push(u);
   },
   pushLog,
   citiesOf,
@@ -605,7 +609,7 @@ export function armySize(s: GameState, p: PlayerId): number {
       n += producePop(d);
       continue;
     }
-    if (d.summonedOnly) continue;
+    if (d.summonedOnly || u.summoned) continue;
     n += 1;
   }
   return n;
@@ -928,8 +932,27 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     id: 'curse',
     name: '诅咒',
     summary: '护甲 −2',
-    // 原逻辑：只要 curse > 0，就扣 2 点护甲
-    modifyArmor: (_s, _u, val, armor) => (val > 0 ? armor - 2 : armor),
+    /*
+     * 只要 curse > 0 就扣 2 点护甲（不看剩余回合——它是"诅咒还在"的二值判断）。
+     *
+     * 身上同时有「咒缚」时这里让位：两个减甲状态叠着算会变成 −6，
+     * 而咒缚本来就是"更强的诅咒"，不是"再叠一层"。取强不取叠，
+     * 玩家也不会因为被同一套技能打两下就突然多掉 4 点甲。
+     */
+    modifyArmor: (_s, u, val, armor) =>
+      val > 0 && !(u.status?.['curse-deep'] ? u.status['curse-deep'] > 0 : false) ? armor - 2 : armor,
+  },
+  /*
+   * 咒缚：2026-11-02 从"护甲 −2"上调为"护甲 −4"，单独成一个状态。
+   *
+   * 为什么不直接把 curse 改成 −4：curse 还被暗属性命中、诅咒师等一堆地方用着，
+   * 改它等于给所有暗属性攻击白送一倍。这里只让「咒缚」这条能力变强。
+   */
+  'curse-deep': {
+    id: 'curse-deep',
+    name: '咒缚',
+    summary: '护甲 −4',
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? armor - 4 : armor),
   },
 };
 
@@ -940,7 +963,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
  * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
  * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
  */
-const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse'];
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse', 'curse-deep'];
 
 /** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
 export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
@@ -4286,6 +4309,15 @@ function doDisband(s: GameState, unitId: string): ActionResult {
 export function disbandRefundOf(s: GameState, u: Unit): number {
   const def = utype(s, u.type);
   if (u.hp < maxHpOf(s, u)) return 0;
+  /*
+   * 召唤物一分钱不退。
+   *
+   * 这一条是 2026-11-02 查出来的漏洞：四元素、大史莱姆能造也能召，
+   * 而"能造"就意味着它们有 cost —— 召唤师每几回合白送一个，满血解散还能拿
+   * 40% 的钱（风元素 165 金 → 66 金）。这不叫"整理阵型"，这是印钞机。
+   * 只堵解散、不堵召唤：召唤出来的兵照样能打，只是不能变现。
+   */
+  if (u.summoned) return 0;
   return Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
 }
 

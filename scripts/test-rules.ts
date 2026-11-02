@@ -50,7 +50,7 @@ import {
 } from '../src/core/sandbox.ts';
 // 能力表现在是"核心 + 各扩展贡献"合并出来的，测试跟着合并后的表走：
 // 扩展兵种引用自家能力时，不该因为"本体表里没有"就报不存在。
-import { allAbilities } from '../src/core/ability-registry.ts';
+import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
@@ -188,6 +188,8 @@ import {
   cityRegenOf,
   cityTiles,
   armySize,
+  effectiveStats,
+  disbandRefundOf,
   canStandAt,
   canStrike,
   computeDamage,
@@ -197,7 +199,6 @@ import {
   distToCity,
   effectiveRange,
   effectiveRangeAgainst,
-  effectiveStats,
   eggSpots,
   fearPenalty,
   footprintOf,
@@ -2770,6 +2771,39 @@ test('减速扣 1 点移动、诅咒扣 2 点护甲', () => {
   assert.equal(computeDamage(s, atk, cav) - before, 2, '诅咒相当于少 2 点护甲');
 });
 
+test('咒缚：护甲 −4，且不和普通诅咒叠成 −6', () => {
+  // 2026-11-02 把「咒缚」从 −2 上调到 −4。它单独占一个状态键（curse-deep），
+  // 因为 curse 还被暗属性命中和诅咒师用着，改 curse 等于给所有暗属性白送一倍。
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const victim = place2(s, 'A', 'royal-cavalry', 5, 5);
+  const atk = place2(s, 'B', 'swordsman', 5, 4);
+  const clean = computeDamage(s, atk, victim);
+
+  victim.status = { 'curse-deep': 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 4, '咒缚相当于少 4 点护甲');
+
+  // 普通诅咒 + 咒缚同时在场：只算强的那个，不能 −6
+  victim.status = { curse: 3, 'curse-deep': 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 4, '两个减甲状态取强不取叠');
+
+  // 只剩普通诅咒时退回 −2
+  victim.status = { curse: 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 2, '咒缚过期后普通诅咒仍然生效');
+
+  // 回合结束要能自然衰减掉，否则「3 回合」等于永久。
+  // 状态是在**自己回合开始**结算并 −1 的（tickStatuses），两人局要走完两圈。
+  const u = place2(s, 'A', 'militia', 6, 6);
+  u.status = { 'curse-deep': 1 };
+  const step1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(step1.ok);
+  const step2 = applyAction(step1.state, { type: 'END_TURN' });
+  assert.ok(step2.ok);
+  const after = step2.state.units.find((x) => x.id === u.id);
+  assert.equal(after?.status?.['curse-deep'] ?? 0, 0, '最后一回合结束后咒缚要消失');
+});
+
 test('冲锋 / 威吓 / 吸血 / 再生 在奇想包里仍然按原规则走', () => {
   const s = fresh({ expansionIds: FANTASY });
   s.tiles[idx(s, 5, 5)].terrain = 'plain';
@@ -3453,6 +3487,53 @@ test('英雄：同方场上只能一个，解锁费只收第一次', () => {
   const r3 = applyAction(after, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
   assert.ok(r3.ok);
   assert.equal(r3.state.players.A.gold, 1000 - price);
+});
+
+test('召唤出来的单位不占编制、解散不退钱（标记落在实例上）', () => {
+  // 四元素既能造也能召：只看兵种的 summonedOnly 分不出来路，所以 2026-11-02
+  // 把标记挪到单位实例上。这条守的是它带来的两个修正：
+  //   1. 召唤出来的元素不该吃掉 24 编制里的一格；
+  //   2. 召唤物满血解散不该退钱（否则"免费召唤 + 满血解散"就是印钞机）。
+  const s = fresh({ expansionIds: FANTASY });
+  const base = armySize(s, 'A');
+
+  const bought = stackOn(s, 'A', 'air-elemental', 8, 8);
+  assert.equal(armySize(s, 'A'), base + 1, '花钱造的元素要占编制');
+
+  const conjured = stackOn(s, 'A', 'air-elemental', 9, 8);
+  conjured.summoned = true;
+  assert.equal(armySize(s, 'A'), base + 1, '召唤出来的元素不占编制');
+
+  assert.ok(disbandRefundOf(s, bought) > 0, '自己造的元素满血解散能退钱');
+  assert.equal(disbandRefundOf(s, conjured), 0, '召唤物解散一分不退');
+});
+
+test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各 2 只', () => {
+  // random 四选一的召唤者，上限若按"这一次抽中的那种"数，实际能养到 4×max。
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 9, 9)].terrain = 'plain';
+  const master = stackOn(s, 'A', 'elementalist', 9, 9);
+  // every=3：让下一次回合开始正好轮到一个召唤周期
+  master.age = 2;
+  s.tiles[idx(s, 8, 9)].terrain = 'plain';
+  s.tiles[idx(s, 10, 9)].terrain = 'plain';
+
+  stackOn(s, 'A', 'fire-elemental', 8, 9).summoned = true;
+  stackOn(s, 'A', 'water-elemental', 10, 9).summoned = true;
+
+  const count = (): number =>
+    s.units.filter((u) => u.owner === 'A' && u.summoned === true).length;
+  assert.equal(count(), 2);
+
+  // 走完两圈回到 A 的回合开始，召唤钩子会跑；已经满了就不该再加
+  const step1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(step1.ok);
+  const step2 = applyAction(step1.state, { type: 'END_TURN' });
+  assert.ok(step2.ok);
+  const after = step2.state.units.filter(
+    (u) => u.owner === 'A' && ['fire-elemental', 'water-elemental', 'earth-elemental', 'air-elemental'].includes(u.type),
+  );
+  assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
 test('召唤物不占编制，也不能从产线招募', () => {
@@ -6026,6 +6107,59 @@ function runAiSteps(s: GameState, limit = 8): Action[] {
   }
   return acts;
 }
+
+test('地形加成是数据：树人站在森林/丘陵上多 3 甲', () => {
+  // 2026-11-02：把「林地之主」的 +3 从硬编码挪进 hooks.terrainArmor，
+  // 好让 AI 和结算读同一份数据。这条守的是"两边不会各写一个数"。
+  const s = fresh({ expansionIds: FANTASY });
+  const def = s.unitTypes['treant']!;
+  const map = terrainArmorOf(def);
+  assert.equal(map.get('forest'), 3, '森林 +3');
+  assert.equal(map.get('hill'), 3, '丘陵 +3');
+  assert.equal(map.get('plain'), undefined, '平地没有加成');
+
+  // 面板上必须真的加：站丘陵 vs 站平地
+  const t = stackOn(s, 'A', 'treant', 6, 6);
+  s.tiles[idx(s, 6, 6)]!.terrain = 'hill';
+  const onHill = effectiveStats(s, t).armor;
+  s.tiles[idx(s, 6, 6)]!.terrain = 'plain';
+  const onPlain = effectiveStats(s, t).armor;
+  assert.equal(
+    onHill - onPlain,
+    (CONFIG.terrainDef.hill ?? 0) + 3,
+    '丘陵掩体 + 林地之主 3 甲（掩体值是配置，别在测试里写死）',
+  );
+});
+
+test('AI 会让树人守在丘陵上，不为了推进挪到平地', () => {
+  // 这是"一夫当关"的最小场景：树人在丘陵、敌人在 3 格外。
+  // 改动前 AI 的走位候选里没有"不动"，它一定会挪走，白丢 5 点甲。
+  const s = fresh({ expansionIds: FANTASY, size: 16 }, 7781);
+  // 自己造一块丘陵：不能指望随机地图刚好给一块，否则这条测试时灵时不灵。
+  const hx = 8;
+  const hy = 8;
+  s.tiles[idx(s, hx, hy)]!.terrain = 'hill';
+
+  // 清场，只留一个树人（站丘陵）和 3 格外的一个敌人
+  const treant = stackOn(s, 'A', 'treant', hx, hy);
+  const foe = stackOn(s, 'B', 'militia', hx + 3, hy);
+  s.units = [treant, foe];
+  s.tiles[idx(s, foe.x, foe.y)]!.terrain = 'plain';
+  treant.moved = false;
+  treant.acted = false;
+  foe.moved = false;
+  foe.acted = false;
+  s.current = 'A';
+
+  runAiSteps(s, 2);
+  const after = s.units.find((u) => u.id === treant.id);
+  assert.ok(after, '树人不能凭空消失');
+  const terrain = s.tiles[idx(s, after!.x, after!.y)]?.terrain;
+  assert.ok(
+    terrain === 'hill' || terrain === 'forest',
+    `树人应当留在可守地形上，实际站到了 ${terrain}（${after!.x},${after!.y}）`,
+  );
+});
 
 test('AI 会走进去接管废墟（并且有钱的时候才走）', () => {
   // 这条补的是新规则：城打空之后不再易主，只是变成废墟，
