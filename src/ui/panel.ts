@@ -57,7 +57,7 @@ import {
   upgradeCostOf,
   utype,
 } from '../core/rules.ts';
-import { seatsOf } from '../core/types.ts';
+import { seatsOf, skillsOf } from '../core/types.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
@@ -465,7 +465,7 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
   let anyCharge = false;
   for (const u of units) {
     const def = utype(s, u.type);
-    if (!def.skills || def.skills.length === 0) continue;
+    if (!skillsOf(s, u) || skillsOf(s, u).length === 0) continue;
     for (const k of heroSkillsOf(s, u)) {
       // 充能型技能要把"还剩几发"写在脸上：写成"就绪/冷却"会让人以为
       // 只能一次一次地等，而它其实是"攒着可以连开"的那一类。
@@ -831,9 +831,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   }
 
   // 没选中任何东西时的默认页：把自己的英雄技能摆出来。
-  // "每回合像建造那样给一个选择"——不去点单位也能看到今天能开什么。
   const myHeroes =
-    input.spectator !== true && myTurn ? unitsOf(s, me).filter((u) => utype(s, u.type).skills) : [];
+    input.spectator !== true && myTurn ? unitsOf(s, me).filter((u) => skillsOf(s, u)) : [];
   const heroBlock = heroSkillBlock(s, myHeroes);
 
   return `

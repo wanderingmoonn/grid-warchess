@@ -153,6 +153,29 @@ export type UnitLayer = 'ground' | 'air';
  */
 export type SkillEffect = string;
 
+/**
+ * 这个单位现在拥有哪些技能：天赋（兵种表）+ 学会的（extraSkills）− 遗忘的。
+ * 同 id 以实例为准（允许学会一个覆盖天赋同名技能的新版本）。
+ * 
+ * 放在 types.ts 是为了让 core 和 extensions 都能直接调用，避免循环依赖。
+ */
+export function skillsOf(
+  s: { unitTypes: Record<string, UnitTypeDef> }, 
+  u: Unit
+): SkillDef[] {
+  const base = s.unitTypes[u.type]?.skills ?? [];
+  const lost = u.lostSkillIds ?? [];
+  const kept = base.filter((k) => !lost.includes(k.id));
+  const out: SkillDef[] = [];
+  const seen = new Set<string>();
+  for (const k of [...kept, ...(u.extraSkills ?? [])]) {
+    if (seen.has(k.id)) continue;
+    seen.add(k.id);
+    out.push(k);
+  }
+  return out;
+}
+
 export interface SkillDef {
   id: string;
   name: string;
@@ -928,6 +951,16 @@ export interface Unit {
    * 消耗到 0 后无法继续反击，要等下一个大回合开始才会重置。
    */
   countersLeft?: number;
+
+  /** 实例层：覆盖兵种定义的 layer。undefined = 跟随兵种 */
+  layer?: UnitLayer;
+  /** 本回合已消耗的移动力（御空这类能力扣的）。自己回合开始时清空 */
+  moveSpent?: number;
+
+  /** 后天学会的技能，追加在兵种自带的「天赋技能」之后。学习 = push，遗忘 = 从数组移除 */
+  extraSkills?: SkillDef[];
+  /** 被封印/遗忘的天赋技能 id（从兵种表 skills 里剔除） */
+  lostSkillIds?: string[];
 
   /** 
    * 扩展专用的自定义数据沙盒，一些其他扩展不会共用的数据就丢这里。
