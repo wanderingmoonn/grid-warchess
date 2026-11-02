@@ -1288,9 +1288,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   );
   const era = camp.era ?? (supply ? supply.era : 0);
 
-  // 兵从四邻出来，所以"能出兵"取决于四邻有多少空地 / 空水面
-  const landSlots: Array<{ x: number; y: number }> = [];
+  // 兵从四邻出来。这两个数字只给下面的提示文案用，**能不能造**一律问规则层：
+  // 判据按兵种分（飞行兵能停在水面上），自己数一遍 landSlots 必然和
+  // doRecruit 走样——飞过的兵曾经就是这样被判成"没地方出兵"、按钮变灰。
   const waterSlots: Array<{ x: number; y: number }> = [];
+  let landOpen = 0;
   for (const [dx, dy] of DIRS_4) {
     const x = camp.x + dx;
     const y = camp.y + dy;
@@ -1298,8 +1300,10 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     if (!t) continue;
     if (s.units.some((u) => u.x === x && u.y === y)) continue;
     if (navigable(t.terrain)) waterSlots.push({ x, y });
-    else if (passable(t.terrain)) landSlots.push({ x, y });
+    else if (passable(t.terrain)) landOpen += 1;
   }
+  /** 这个兵种能不能从这座营出来（和 doRecruit 同一条判据） */
+  const slotsOf = (d: { id: string }): number => recruitSpawnCells(s, undefined, camp.id, d.id).length;
 
   const buildable = Object.values(s.unitTypes).filter(
     (d) =>
@@ -1324,7 +1328,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
         <div class="recruit-list">${items
           .map((d) => {
-            const slotsOk = d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
+            const slotsOk = slotsOf(d) > 0;
             const extra =
               d.domain === 'water'
                 ? waterSlots.length > 1
@@ -1391,7 +1395,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                : ''
            }
            <div class="hint" style="margin-top:10px">
-             兵从营门四邻的空地出来（当前 ${landSlots.length} 个空位${
+             兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
              <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。

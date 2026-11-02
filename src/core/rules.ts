@@ -1159,10 +1159,28 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
  * （"蜘蛛能过河，但 AI 算不出它能过河"）。
  */
-function crossesWater(def: UnitTypeDef): boolean {
+export function crossesWater(def: UnitTypeDef): boolean {
   // 空中层当然过水；其余的看能力（跳跃、旧版「飞行」）。
   // `flight` 字段不再单独出现在这里——它已经是空中层了（见 airLayer）。
   return airLayer(def) || hasFlag(def, 'crossesWater');
+}
+
+/**
+ * 这个兵种能不能**走进**这一格——只看地形，不看占位与城市归属。
+ *
+ * 存在的理由：外面（AI 的出城判定、各种"走不走得过去"的估算）到处在写
+ * `passable(tile.terrain)`，而 `passable` 说的是"**陆军**能不能走"：
+ * 对它来说水永远是墙。于是水军（本来就活在水上）和掠水/飞行的兵
+ * 在每个这样写的地方都会被判成"过不去"。
+ *
+ * 规则层的 `reachableTiles` 早就按兵种判了（`terrainOk`），所以这类 bug
+ * 只出现在**旁路判断**上：能走，但 AI 和预览都说不能走。
+ */
+export function terrainWalkable(def: UnitTypeDef, terrain: Terrain): boolean {
+  if (def.domain === 'water') return navigable(terrain);
+  if (passable(terrain)) return true;
+  // 掠水/飞行：水面、深水都能过（空中层连山都能过，这里只回答"水"这一档）
+  return crossesWater(def) && (terrain === 'water' || terrain === 'deep');
 }
 
 /**
@@ -1799,24 +1817,23 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
 /**
  * 这一格对某个单位来说能不能进。
  *
- * 行动域是这里最要紧的分支：陆军进不了水，水军上不了岸（桥面算岸），
- * 高山谁都不能进。城市格按归属判定。
+ * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
+ * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
 function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId }): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return true;
 
-  const water = utype(s, unit.type).domain === 'water';
-  if (water) {
-    // 桥架在水面上，船从桥下过：能穿过去，但桥自己占着那一格，停不下来。
-    // 浅滩同理——船能滑过去，而且停得下（见 navigable）。
-    if (!navigable(tile.terrain)) return true;
+  const def = utype(s, unit.type);
+  // 地形这一关只有一处判据：`terrainWalkable`。以前这里分了两支——水军看
+  // navigable()、其余一律 `passable()`——于是飞行兵在"下船落点"这类地方
+  // 会被当成陆军，明明站得住的水面反而进不去。现在两支合并成一句按兵种问。
+  if (!terrainWalkable(def, tile.terrain)) return true;
+  if (def.domain === 'water') {
     // 吃水：占地 2×2 的大舰进不了浅流，会搁浅。
     // 这是「浅水 vs 深水」这一对地形真正的分工——否则浅流对舰队只是"另一片水"。
     // 判据用 footprint 而不是船名表：以后再加巨舰不用回来改这里。
     if (tile.terrain === 'shallow' && footprintOf(s, unit.type) > 1) return true;
-  } else if (!passable(tile.terrain)) {
-    return true;
   }
 
   if (tile.cityId) {
@@ -1939,7 +1956,8 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
         if (!city || city.owner === unit.owner || city.ruined) continue;
         return false;
       }
-      if (flyer && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
+      // 掠水（不是空中层）曾经在这里单独放行水面——那条豁免现在在
+      // `blockedFor` 里（它按兵种判地形），所以这里只剩"被挡住就是挡住"。
       return false;
     }
     return true;
@@ -4138,7 +4156,10 @@ export function recruitSpawnCells(
         if (self.has(k) || seen.has(k)) continue;
         const t = tileAt(s, x, y);
         if (!t) continue;
-        if (def.domain === 'water' ? !navigable(t.terrain) : !passable(t.terrain)) continue;
+        // 判据必须是**这个兵种**的，不是"陆军能不能走"。
+        // 这里以前写 `passable()`，于是军营一圈全是水时，飞行兵也算"没地方出兵"——
+        // 而它明明能停在水面上（canStandAt 放行）。规则层自己把兵卡在了产线上。
+        if (!terrainWalkable(def, t.terrain)) continue;
         if (!canStandAt(s, x, y, unitTypeId)) continue;
         seen.add(k);
         out.push({ x, y });

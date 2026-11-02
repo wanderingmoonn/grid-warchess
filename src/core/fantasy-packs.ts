@@ -840,7 +840,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   },
   {
     /*
-     * 布雷：回合开始时，在自己**相邻的一圈**陆地上埋一枚地雷。
+     * 布雷：回合开始时，在自己**相邻的一圈**陆地上埋一枚哥布林陷阱。
      *
      * 2026-11-03 之前它不是"布雷"，是"贴着就每回合扣 6 血"——那和"埋了一枚雷"
      * 是两件事：它跟人走、跟着人一起动、还永远只作用在贴脸的那一个身上。
@@ -854,7 +854,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
      */
     id: 'trap',
     name: '布雷',
-    summary: '自己回合开始时，在相邻一圈的陆地上埋一枚地雷（全场最多 6 枚，只炸敌人）。',
+    summary: '自己回合开始时，在相邻一圈的陆地上埋一枚哥布林陷阱（全场最多 6 枚，只炸敌人）。',
     group: 'support',
     hooks: {
       onTurnStart: [
@@ -895,7 +895,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             c.api.pushLog(
               s,
               c.owner,
-              `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 埋下一枚地雷`,
+              `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 埋下一枚哥布林陷阱`,
             );
           },
         },
@@ -1332,7 +1332,7 @@ const KNIGHTS: Expansion = {
 };
 
 /**
- * 地雷：哥布林陷阱师埋下的东西（留痕层，不是单位）。
+ * 哥布林陷阱：哥布林陷阱师埋下的东西（留痕层，不是单位）。
  *
  * 三条刻意的选择：
  *   · **只认陆地**：水面/浅滩/桥都不埋。桥面是最想埋的地方，但那会让
@@ -1343,8 +1343,10 @@ const KNIGHTS: Expansion = {
  *     10 点：4 代之前一个兵 24~40 血，一枚雷约等于三成血，踩两枚就得回城。
  */
 const LAND_MINE: MarkKindDef = {
+  // id 仍叫 `gb-mine`：它已经进了存档与战报，改名会让老存档里的陷阱查不到种类。
+  // 改的只是显示名——玩家看到的是"哥布林陷阱"。
   id: 'gb-mine',
-  name: '地雷',
+  name: '哥布林陷阱',
   summary: '敌人踩上来就炸 10 点（无视护甲）并减速 1 回合，炸完就没。自己人踩不到。',
   tags: ['mine', 'land'],
   hidden: true,
@@ -1354,10 +1356,10 @@ const LAND_MINE: MarkKindDef = {
   onEnter: (c) => {
     if (!c.unit) return;
     const def = c.api.utype(c.unit.type);
-    c.api.hurt(c.unit, 10, `${def.name} 踩响地雷，损失 10 点生命`);
+    c.api.hurt(c.unit, 10, `${def.name} 踩响哥布林陷阱，损失 10 点生命`);
     const st = (c.unit.status ??= {});
     st.slow = Math.max(st.slow ?? 0, 1);
-    c.api.log(c.mark.owner, `地雷命中 ${def.name}`);
+    c.api.log(c.mark.owner, `哥布林陷阱命中 ${def.name}`);
   },
 };
 
@@ -1648,7 +1650,7 @@ const BEASTS: Expansion = {
       abilities: ['siege-master'],
     },
   ],
-  // 地雷是"荒兽"这一家带来的格子上的东西（哥布林陷阱师埋的）
+  // 哥布林陷阱是"荒兽"这一家带来的格子上的东西（陷阱师埋的）
   marks: [LAND_MINE],
 };
 

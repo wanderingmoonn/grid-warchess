@@ -26,6 +26,7 @@ import {
   buildSiteError,
   canAttack,
   canMove,
+  canStandAt,
   cityAt,
   citiesOf,
   cityName,
@@ -46,6 +47,7 @@ import {
   refreshMemory,
   siegeTargets,
   supplyEraAt,
+  terrainWalkable,
   threatTiles,
   unitIncomeAt,
   unitsAt,
@@ -504,7 +506,7 @@ function planMovePath(before: GameState, action: Action): void {
   const u = before.units.find((x) => x.id === action.unitId);
   if (!u) return;
   pendingMovePath = new Map([
-    [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y })],
+    [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y }, u.type)],
   ]);
 }
 
@@ -513,13 +515,20 @@ function planMovePath(before: GameState, action: Action): void {
  *
  * 这是**画动画用的**，不是规则：它不看移动力、不看单位阻挡，所以不能拿去
  * 判断"这一步合不合法"。规则层算出来的可达格是另一套（reachableTiles）。
- * 走不通（比如飞行单位直接飞过河）时退化成"起点直连终点"。
+ *
+ * `typeId` 是走路那个兵种，用来决定"什么算不可走"：
+ * 以前这里一律按陆军判（`passable`），于是船沿岸线绕行时画出来的路
+ * 一步都过不了水，只能退化成一跳一跳到终点——看着像"寻路被水挡住了"。
+ * 飞行单位同理：它能掠水，路径就该跨过水面画出来。
  */
 function pathCells(
   s: GameState,
   from: { x: number; y: number },
   to: { x: number; y: number },
+  typeId?: string,
 ): Array<{ x: number; y: number }> {
+  const def = typeId ? utype(s, typeId) : null;
+  const walkable = (t: Terrain): boolean => (def ? terrainWalkable(def, t) : passable(t));
   const w = s.w;
   const start = from.y * w + from.x;
   const goal = to.y * w + to.x;
@@ -542,7 +551,7 @@ function pathCells(
       const ni = ny * w + nx;
       if (seen.has(ni)) continue;
       const tile = s.tiles[ni];
-      if (!tile || !passable(tile.terrain)) continue;
+      if (!tile || !walkable(tile.terrain)) continue;
       seen.add(ni);
       prev.set(ni, cur);
       queue.push(ni);
@@ -1300,10 +1309,13 @@ function computePlaceable(): number[] {
       for (let x = 0; x < state.w; x++) {
         if (distance(ferry, { x, y }) !== 1) continue;
         const tile = state.tiles[y * state.w + x];
-        if (!tile || !passable(tile.terrain)) continue;
-        if (state.units.some((u) => u.x === x && u.y === y)) continue;
+        if (!tile) continue;
+        // 落点问规则层（canStandAt 按**货舱里那个兵**判）：自己数一遍地形的话，
+        // 飞行兵下船落水这类合法落点会被界面吞掉——高亮了点下去被拒，
+        // 或者反过来（点了没反应）。
+        if (!(ferry.cargo ?? []).some((c) => canStandAt(state, x, y, c.type))) continue;
         const city = tile.cityId ? state.cities.find((c) => c.id === tile.cityId) : null;
-        if (city && city.owner !== ferry.owner) continue;
+        if (city && city.owner !== ferry.owner && !city.ruined) continue;
         out.push(y * state.w + x);
       }
     }
@@ -2144,11 +2156,14 @@ function moveRefusal(coords: { x: number; y: number }): string {
   const mover = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   if (mover && mover.x === coords.x && mover.y === coords.y) return '它已经站在这了';
   const tile = state.tiles[idx(state, coords.x, coords.y)];
-  const onFoot = mover ? utype(state, mover.type).domain !== 'water' : true;
-  // 地形拒绝是强制移动里最常见的一种。只回一句"不在移动范围内"，玩家会当成
-  // 走位问题，于是挨个试旁边的格子——而它其实一步都进不去。
-  if (tile?.terrain === 'water' && onFoot) {
-    return '水面对陆军不通：要么从桥上过，要么换成水军';
+  const moverDef = mover ? utype(state, mover.type) : null;
+  // "水挡不挡它"要按兵种问：飞行/掠水的兵点水面时，以前也会被告一句
+  // "水面对陆军不通"——它明明过得去，只是这一格不在移动力范围内。
+  const canEnterWater = moverDef ? terrainWalkable(moverDef, 'water') : false;
+  if ((tile?.terrain === 'water' || tile?.terrain === 'deep') && !canEnterWater) {
+    return tile.terrain === 'deep'
+      ? '深水架不了桥：陆军过不去，只能靠船或飞行'
+      : '水面对陆军不通：要么从桥上过，要么换成水军';
   }
   if (tile?.terrain === 'mountain') return '高山进不去，得绕开';
   return '这一格不在移动范围内';

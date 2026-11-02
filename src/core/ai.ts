@@ -34,6 +34,8 @@ import {
   citiesOf,
   canStrike,
   computeDamage,
+  crossesWater,
+  terrainWalkable,
   damageToCity,
   disbandRefundOf,
   distance,
@@ -732,20 +734,35 @@ function escapeRoutes(
   y: number,
   move: number,
   excludeCityId?: string | null,
+  /** 要出门的是哪个兵种：水军活在水上、飞行兵能掠水，判据不一样 */
+  typeId?: string,
 ): number {
   if (move <= 0) return 1;
+  const def = typeId ? utype(s, typeId) : null;
+  const waterUnit = def?.domain === 'water';
+  const walker = def ? crossesWater(def) : false;
   let open = 0;
   for (const [dx, dy] of DIRS) {
     const nx = x + dx;
     const ny = y + dy;
     if (!inBounds(s, nx, ny)) continue;
     const tile = s.tiles[ny * s.w + nx];
-    if (!tile || !passable(tile.terrain)) continue;
+    if (!tile) continue;
+    /*
+     * 判据不能再写 `passable()`：那是"陆军能不能走"。
+     *
+     * 这一句以前是 `!passable(tile.terrain) → 跳过`，于是水军的四邻全是水时
+     * 它被判成"出不了城门"——一条船在开阔水面上没有一格"出口"，
+     * 而这整段判断跟它能不能动毫无关系。飞行兵同理。
+     */
+    if (def && !terrainWalkable(def, tile.terrain)) continue;
+    if (!def && !passable(tile.terrain)) continue;
     if (excludeCityId && tile.cityId === excludeCityId) continue;
     // 别的地方可能站着人，但那是暂时的；地形才是永久性的墙。
     // 出城要按"从城里往外走"的真实价算：往高处走还要加爬坡费。
     const from = s.tiles[y * s.w + x]?.terrain ?? null;
-    if (stepCostBetween(s, from, tile.terrain) <= move) open += 1;
+    const step = waterUnit || walker ? 1 : stepCostBetween(s, from, tile.terrain);
+    if (step <= move) open += 1;
   }
   return open;
 }
@@ -3952,8 +3969,18 @@ function recruitCandidate(
     return null;
   }
 
-  /** 这个产兵点能往哪些格子出兵（跟 rules 里的 doRecruit 保持一致） */
-  const slotsFor = (water: boolean): Array<{ x: number; y: number }> => {
+  /**
+   * 这个产兵点能往哪些格子出兵（跟 rules 里的 doRecruit 保持一致）。
+   *
+   * 判据按**兵种**问（`terrainWalkable`），不按"陆军能不能走"。
+   * 以前这里只有 water / 非 water 两档，非 water 一律 `passable()`：
+   * 一圈是水的军营里，飞行兵被算成"无出兵格"，AI 于是压根不会考虑它。
+   */
+  const slotCache = new Map<string, Array<{ x: number; y: number }>>();
+  const slotsFor = (def: UnitTypeDef): Array<{ x: number; y: number }> => {
+    const hit = slotCache.get(def.id);
+    if (hit) return hit;
+    const water = def.domain === 'water';
     let cells: Array<{ x: number; y: number }> = [];
     if (src.kind === 'city') {
       const city = cityById(s, src.id);
@@ -3970,16 +3997,17 @@ function recruitCandidate(
     for (const cell of cells) {
       const tile = tileAt(s, cell.x, cell.y);
       if (!tile) continue;
-      if (water ? !navigable(tile.terrain) : !passable(tile.terrain)) continue;
+      if (!terrainWalkable(def, tile.terrain)) continue;
       if (unitAt(s, cell.x, cell.y)) continue;
       out.push(cell);
     }
+    slotCache.set(def.id, out);
     return out;
   };
 
-  const landSlots = slotsFor(false);
-  const waterSlots = slotsFor(true);
-  if (landSlots.length === 0 && waterSlots.length === 0) return null;
+  // 没有"这座城一格都出不了兵"的快速判定了：判据现在是按兵种的，
+  // 只有问过具体兵种才知道它出不出来。候选表里的每一项各自问（结果缓存），
+  // 全都被拒时下面的 `pool.length === 0` 照旧把这一回合让给别的事。
 
   const choices = Object.values(s.unitTypes).filter((d) => {
     const reject = (reason: string): false => {
@@ -3999,7 +4027,7 @@ function recruitCandidate(
     // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
     if (!eraWindowOk(s, d, src.era)) return reject('时代未解锁');
     if (!canUseType(s, me, d.id)) return reject('选卡未收录');
-    return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
+    return slotsFor(d).length > 0;
   });
 
   // 指挥官模式：玩家点名了兵种，就只在这个兵种里挑产兵点。
@@ -4280,9 +4308,9 @@ function recruitCandidate(
       //    move 1 进不了丘陵和森林（进门 2 点），出生点四邻要是全这种地形，
       //    它这辈子走不到前线，还占着产兵格 —— 产兵格被占，城里就再也造不出兵，
       //    整支军队当场停摆。高时代最容易踩这个坑：重机枪组正好 move 1。
-      const slots = d.domain === 'water' ? waterSlots : landSlots;
+      const slots = slotsFor(d);
       const canLeave = slots.some((c) =>
-        escapeRoutes(s, c.x, c.y, d.move, src.kind === 'city' ? src.id : null) > 0,
+        escapeRoutes(s, c.x, c.y, d.move, src.kind === 'city' ? src.id : null, d.id) > 0,
       );
       if (!canLeave) {
         deny('出不了城门', d.id);

@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 指挥光环 `aura-command`（吟游诗人） | 范围 / 数值 | 相邻 / 攻击 +2 | **2 格 / 攻击 +4** |
 | 守护光环 `aura-armor`（国王、圣骑士） | 范围 | 相邻 | **2 格**（数值仍 +2） |
-| 布雷 `trap`（哥布林陷阱师） | 机制 | 回合开始对**贴身**敌军扣 6 血 + 减速 | **在相邻一圈埋一枚地雷**（留痕层，敌人踩上才炸） |
+| 布雷 `trap`（哥布林陷阱师） | 机制 | 回合开始对**贴身**敌军扣 6 血 + 减速 | **在相邻一圈埋一枚哥布林陷阱**（留痕层，敌人踩上才炸） |
 
 ---
 
@@ -57,7 +57,7 @@ for (const ally of s.units) {
 
 ```ts
 const LAND_MINE: MarkKindDef = {
-  id: 'gb-mine', name: '地雷', tags: ['mine', 'land'],
+  id: 'gb-mine', name: '哥布林陷阱', tags: ['mine', 'land'],
   hidden: true, trigger: 'enemy', detect: 1,
   on: ['plain', 'forest', 'hill', 'mountain', 'plateau', 'valley', 'marsh', 'dune'],
   onEnter: (c) => { hurt(c.unit, 10); slow 1 回合; },

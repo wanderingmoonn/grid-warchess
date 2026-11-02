@@ -5730,6 +5730,35 @@ test('渡船能把陆军运过水面', () => {
   assert.ok(step.ok, step.ok ? '' : `下船后应该还能走：${step.reason}`);
 });
 
+test('下船落点按兵种判：飞行兵能卸在水面上，陆军不能', () => {
+  // doUnload 的落点判据原来是 `blockedFor` 里那两支：水军看 navigable、
+  // 其余一律 passable —— 于是"能停在水面上"的飞行兵下船时被判成陆军，
+  // 落点里所有水面都不合法。现在两边共用 terrainWalkable，这条钉住它。
+  const s = fresh({ expansionIds: ['air-corps'] });
+  digRiver(s, 8, 3, 12);
+  s.current = 'A';
+  s.players.A.gold = 900;
+
+  const ferry = place(s, 'A', 'ferry', 8, 6);
+  // 直接把飞机塞进货舱：这条测的是**落点判据**，不是"能不能上船"
+  const plane = place(s, 'A', 'af_scout', 6, 6);
+  s.units = s.units.filter((u) => u.id !== plane.id);
+  ferry.cargo = [plane];
+  const air = applyAction(s, { type: 'UNLOAD', unitId: ferry.id, cargoId: plane.id, x: 8, y: 7 });
+  assert.ok(air.ok, air.ok ? '' : `飞行兵该能卸在水面上：${air.reason}`);
+
+  // 陆军照旧：同一格卸不下来
+  const s2 = fresh();
+  digRiver(s2, 8, 3, 12);
+  s2.current = 'A';
+  const ferry2 = place(s2, 'A', 'ferry', 8, 6);
+  const crew = place(s2, 'A', 'militia', 6, 6);
+  s2.units = s2.units.filter((u) => u.id !== crew.id);
+  ferry2.cargo = [crew];
+  const land = applyAction(s2, { type: 'UNLOAD', unitId: ferry2.id, cargoId: crew.id, x: 8, y: 7 });
+  assert.equal(land.ok, false, '陆军不该能卸到水面上');
+});
+
 test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻击次数、一回合只免一次', () => {
   // 装船和下船各占船的一次"装卸"，所以现实流程一定是"这回合装、下回合卸"。
   // 这个 helper 就是走那条路：装完过两轮，回到同一方。
@@ -13177,6 +13206,31 @@ test('掠水：飞机能停在深水上，陆军进不去', () => {
   assert.equal(canStandAt(s, 3, 3, 'militia'), false, '陆军进不了深水');
 });
 
+test('四面环水的军营：飞行兵出得来，陆军出不来（出兵位按兵种判）', () => {
+  // 这条守的是"旁路判断拿 passable() 当通用地形判据"这一类 bug：
+  // recruitSpawnCells 的军营分支原来写的是 `def.domain === 'water' ? navigable : passable`，
+  // 非水军一律按陆军判，于是营门四邻全是水时，**飞行兵也被算成"无出兵格"**——
+  // 规则层自己把这个兵种从产线上掐掉了，AI 的候选表跟着一起少一行。
+  const s = fresh({ expansionIds: ['air-corps'] });
+  for (const t of s.tiles) {
+    t.terrain = 'water';
+    t.cityId = undefined;
+  }
+  s.units = [];
+  s.cities = [];
+  const cx = 5;
+  const cy = 5;
+  s.tiles[cy * s.w + cx].terrain = 'plain';
+  const placed = placeUnit(s, 'A', 'camp', cx, cy);
+  assert.ok(placed.ok, placed.ok ? '' : placed.reason);
+  const st = placed.state;
+  const campId = st.units[st.units.length - 1]!.id;
+
+  assert.equal(recruitSpawnCells(st, undefined, campId, 'af_scout').length, 4, '飞行兵该能在四面空水上落位');
+  assert.equal(recruitSpawnCells(st, undefined, campId, 'militia').length, 0, '陆军在四面环水的营里一格都出不来');
+  assert.equal(recruitSpawnCells(st, undefined, campId, 'boat').length, 4, '水军该能从营边下水');
+});
+
 
 console.log('\n选卡模式');
 
@@ -14442,9 +14496,9 @@ test('守护光环：2 格内友军护甲 +2，3 格外吃不到', () => {
   assert.ok(aNear >= base + 2, '光环确实加上了');
 });
 
-test('布雷：陷阱师回合开始埋一枚地雷，敌人踩上去掉 10 血并减速', () => {
+test('布雷：陷阱师回合开始埋一枚哥布林陷阱，敌人踩上去掉 10 血并减速', () => {
   const s = fresh({ startEra: 3, expansionIds: FANTASY });
-  // 整张图铺平原：地雷只认陆地，也让"埋在哪"可预期
+  // 整张图铺平原：陷阱只认陆地，也让"埋在哪"可预期
   for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
   s.units = [];
   const trap = place2(s, 'A', 'goblin-trapper', 5, 5);
@@ -14455,14 +14509,14 @@ test('布雷：陷阱师回合开始埋一枚地雷，敌人踩上去掉 10 血�
   const laid = marksOf(r.state);
   assert.equal(laid.length, 1, '自己回合开始应该埋下一枚');
   const mine = laid[0]!;
-  assert.equal(mine.kind, 'gb-mine', '埋的应该是地雷');
+  assert.equal(mine.kind, 'gb-mine', '埋的应该是哥布林陷阱');
   assert.equal(mine.owner, 'A');
   assert.ok(
     Math.abs(mine.x - trap.x) <= 1 && Math.abs(mine.y - trap.y) <= 1 && (mine.x !== trap.x || mine.y !== trap.y),
     '雷要埋在相邻一圈',
   );
   assert.equal(mine.charges, 1, '一枚雷只炸一次');
-  assert.equal(r.state.units.length, 1, '地雷不是单位，不该出现在 units 里');
+  assert.equal(r.state.units.length, 1, '陷阱不是单位，不该出现在 units 里');
 
   // 敌人踩上去：10 点、无视护甲、减速 1 回合，雷消失
   let cur = r.state;
