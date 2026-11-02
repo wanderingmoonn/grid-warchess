@@ -4718,6 +4718,43 @@ check('结算卡：上传失败要说清是哪一步不对，并给下一步', (
   }
 });
 
+check('反馈：对局打到一半也能拍下现场（不必等打完）', () => {
+  // 结算卡只在打完时出现，而 bug 恰恰出在"打不下去"的时候。
+  // 这条守的是"入口一直在"和"隐私口径写在脸上"这两件事。
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 20261102, {});
+  st.players.A.name = '阿甲';
+  st.players.B.name = '阿乙';
+  st.turn = 9;
+
+  const w = bootWith(st);
+  const d = w.document;
+
+  const btn = d.querySelector<HTMLElement>('[data-act="feedback"]');
+  assert.ok(btn, '顶栏要一直有个「反馈」入口');
+  btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+  const modal = d.querySelector<HTMLElement>('.feedback-modal');
+  assert.ok(modal, '点了就该弹出面板');
+  assert.ok(modal!.querySelector<HTMLTextAreaElement>('[data-field="note"]'), '要能写一句"发生了什么"');
+  assert.ok(modal!.querySelector('[data-act="upload"]'), '要有上传按钮');
+  assert.ok(modal!.querySelector('[data-act="copy"]'), '传不上去时得能复制出来自己发');
+
+  const text = modal!.textContent ?? '';
+  assert.ok(text.includes('第 9 回合'), `面板上要显示拍的是哪一刻，实际：${text.slice(0, 80)}`);
+  // 这一份带名字带坐标，和结算那份匿名数据是两张表：必须当面说清
+  for (const must of ['完整局面', '位置', '玩家名', '坐标']) {
+    assert.ok(text.includes(must), `隐私说明要写明「${must}」`);
+  }
+  assert.ok(!modal!.querySelector('.fb-privacy[hidden]'), '隐私说明不能折叠或藏起来');
+
+  // 这一局没开「记录详细数据」：勾选框不该出现，而要说明为什么没有
+  assert.equal(modal!.querySelector('[data-field="with-timeline"]'), null, '没有摘要就别给一个勾不动的框');
+  assert.ok(text.includes('记录详细数据'), '要告诉玩家下次怎么才能带上曲线');
+
+  modal!.querySelector<HTMLElement>('[data-act="close"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(d.querySelector('.feedback-modal'), null, '关闭要把面板收干净');
+});
+
 
 console.log('\n选卡模式');
 

@@ -97,6 +97,7 @@ import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
+import { openFeedbackPanel } from './ui/feedback.ts';
 import {
   adoptDecision,
   claimSeat,
@@ -2944,6 +2945,15 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'unit-editor': {
       openUnitEditor(() => render());
+      return;
+    }
+
+    case 'feedback': {
+      // 随时可拍：这时候棋可能还没打完，找 bug 要的就是"当时那一刻"
+      openFeedbackPanel({
+        current: () => state,
+        timeline: () => (recorder ? sealTimeline(recorder) : null),
+      });
       return;
     }
 

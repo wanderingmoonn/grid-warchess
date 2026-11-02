@@ -1539,6 +1539,7 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
       <button class="btn btn-sm" data-act="manual">规则书</button>
+      <button class="btn btn-sm" data-act="feedback" title="拍下当前局面，报个 bug">反馈</button>
       <button class="btn btn-sm" data-act="unit-editor">兵种编辑器</button>
       <button class="btn btn-sm" data-act="export">导出对局</button>
       <button class="btn btn-sm" data-act="import">导入对局</button>

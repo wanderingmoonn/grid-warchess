@@ -106,9 +106,11 @@ import {
 } from '../src/core/draft.ts';
 import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
+  TIMELINE_VERSION,
   newTimeline,
   noteAction,
   noteDeaths,
+  sampleOf,
   sampleTurn,
   sealTimeline,
   timelineSummary,
@@ -255,6 +257,14 @@ import {
 import { playerView } from '../src/core/fog.ts';
 import { addMark, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
+import { BUILD_VERSION } from '../src/core/build-info.ts';
+import {
+  SNAPSHOT_VERSION,
+  buildSnapshot,
+  snapshotFileName,
+  snapshotJson,
+  snapshotSignature,
+} from '../src/core/snapshot.ts';
 import { GOLD } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
@@ -10376,6 +10386,15 @@ test('对局报告：只留棋局，不留人', () => {
 
   assert.equal(rep.v, REPORT_VERSION);
   assert.equal(rep.seed, s.seed);
+  // 版本号与 AI 席位：拿到一批报告，第一件事是"这是哪个版本、哪一局是对 AI 的"。
+  // 只看 at（时间）会把它和同一天的另一个构建混在一起。
+  assert.equal(rep.build, BUILD_VERSION, '报告要记下构建版本');
+  assert.deepEqual(rep.aiSides, [], '人打人没有 AI 席位');
+  assert.deepEqual(
+    buildMatchReport(fresh({ aiOpponent: true }), at).aiSides,
+    ['B'],
+    '人机局要标出 AI 坐的是哪一边——不然"人赢 AI 的比例"就得靠猜',
+  );
   assert.equal(rep.board.w, s.w);
   assert.equal(rep.turns, s.turn);
   assert.equal(rep.sides.length, 2, '两边各一份，缺一边就没法比');
@@ -10429,8 +10448,10 @@ test('逐回合摘要：按回合采帧、按方计数、封顶之后抽稀', ()
   assert.equal(tl.samples[0]?.t, 1, '第一帧是开局');
   const last = tl.samples[tl.samples.length - 1];
   assert.ok(last, '最后一帧应该在');
-  assert.equal(last.A.length, 5, '每方五个数：兵/建筑/城/金/血');
-  assert.ok(last.va >= 0 && last.vb >= 0, '身价不可能是负数');
+  // v2 起按席位记：每席一行五元组，两人局就只有 A/B 两个键
+  assert.equal(last.sides.A?.length, 5, '每方五个数：兵/建筑/城/金/血');
+  assert.equal(last.sides.B?.length, 5, '对面那席也要有，不能只记一家');
+  assert.ok((last.value.A ?? -1) >= 0 && (last.value.B ?? -1) >= 0, '身价不可能是负数');
 
   noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
   noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
@@ -10682,8 +10703,8 @@ test('战损：靠单位集合差分，拆除不算', () => {
   sampleTurn(s, tl);
   const last = tl.samples[tl.samples.length - 1];
   assert.ok(last);
-  assert.equal(last.lostB, cost, '样本里要带上这个累计损失');
-  assert.equal(last.deadB, 1);
+  assert.equal(last.lost.B, cost, '样本里要带上这个累计损失');
+  assert.equal(last.dead.B, 1);
 
   // 拆除是主动回收，不算战损
   const own = s.units.find(
@@ -10700,6 +10721,141 @@ test('战损：靠单位集合差分，拆除不算', () => {
   assert.equal(sealed.samples.length, tl.samples.length, 'seal 不能丢样本');
   assert.ok(sealed.lost, '累计损失要留着');
   assert.ok(timelineSummary(sealed).includes('战损'), '一句话摘要要能看见战损');
+});
+
+test('逐回合摘要 v2：四席都采，活跃数不全零', () => {
+  // v1 只写 A/B 两行，三人四人局里 C/D 的曲线等于白采。v2 起按席位记。
+  const s = freshMulti(4);
+  const tl = newTimeline(1);
+  assert.equal(tl.v, TIMELINE_VERSION, '新建的摘要就是当前版本');
+  noteDeaths(tl, s);
+  sampleTurn(s, tl, true);
+
+  const first = tl.samples[0];
+  assert.ok(first);
+  assert.deepEqual(Object.keys(first.sides).sort(), ['A', 'B', 'C', 'D'], '四个席位都要有');
+  assert.deepEqual(Object.keys(first.value).sort(), ['A', 'B', 'C', 'D'], '身价也要四席');
+  for (const p of ['A', 'B', 'C', 'D'] as const) {
+    assert.equal(first.sides[p]?.length, 5, `${p} 那行要是五个数`);
+    assert.ok((first.sides[p]?.[0] ?? 0) > 0, `${p} 开局得有兵`);
+  }
+
+  // 活跃数：把 A 的一个兵标成"动过"，下一帧就该记到 1。
+  // 这条断言是钉 resetUnitsFor 的时机——如果哪天把重置挪到"自己回合结束"，
+  // 采样时标记已经清干净了，这个数会一律变成 0，而界面上一切正常。
+  const u = s.units.find((x) => x.owner === 'A' && s.unitTypes[x.type]?.category !== 'building');
+  assert.ok(u);
+  u.moved = true;
+  s.turn = 2;
+  sampleTurn(s, tl);
+  const second = tl.samples[1];
+  assert.ok(second);
+  assert.equal(second.active.A, 1, '动过的那个兵要被数进来');
+  assert.equal(second.active.B, 0, '没动过的阵营是 0，不是 undefined');
+});
+
+test('伤害归因：打出去的血记在出手的兵种上，挨打记在对方兵种上', () => {
+  const s = fresh();
+  const tl = newTimeline(1);
+  noteDeaths(tl, s); // 基线
+
+  const atk = s.units.find((x) => x.owner === 'A' && x.type && s.unitTypes[x.type]?.category !== 'building');
+  const vic = s.units.find((x) => x.owner === 'B' && s.unitTypes[x.type]?.category === 'combat');
+  assert.ok(atk && vic, '两边都得有兵才打得起');
+
+  // 别把血打到 0 以下：那会被 clamp 成 1，实际掉的血就不是 30 了
+  const hit = Math.min(30, Math.max(1, vic.hp - 1));
+  vic.hp -= hit;
+  noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+  assert.equal(tl.takenByType.B[vic.type], hit, '挨的那几十点记在被打的兵种上');
+  assert.equal(tl.dealtByType.A[atk.type], hit, '同一笔账要记在出手的兵种另一头');
+
+  // 打死：战损按兵种 +1，死前剩下的血也算挨过打
+  const cost = s.unitTypes[vic.type]?.cost ?? 0;
+  s.units = s.units.filter((x) => x.id !== vic.id);
+  noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+  assert.equal(tl.lostByType.B[vic.type], 1, '死掉的兵种要单独记一个');
+  assert.equal(tl.lost?.B.value, cost);
+  assert.equal(tl.takenByType.B[vic.type], hit + vic.hp, '残血也要算进承受，不能凭空消失');
+
+  // 建筑两头都不算：它的存在感在"城/塔"里，不在"兵有多脆"里
+  const wall = s.units.find((x) => x.owner === 'B' && s.unitTypes[x.type]?.category === 'building');
+  if (wall) {
+    noteDeaths(tl, s);
+    s.units = s.units.filter((x) => x.id !== wall.id);
+    noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+    assert.equal(tl.lostByType.B[wall.type], undefined, '拆掉的建筑不算兵力战损');
+    assert.equal(tl.lost?.B.count, 1, '兵死了 1 个，建筑不进来');
+  }
+});
+
+test('sampleOf：v1 的帧和 v2 的帧用同一个函数读', () => {
+  const v2 = {
+    t: 3,
+    sides: { A: [1, 2, 3, 4, 5] as [number, number, number, number, number] },
+    value: {},
+    lost: {},
+    dead: {},
+    active: {},
+  };
+  assert.deepEqual(sampleOf(v2, 'A'), [1, 2, 3, 4, 5]);
+  assert.equal(sampleOf(v2, 'B'), undefined, 'v2 里没坐的席位就是没有');
+
+  const v1 = {
+    t: 3,
+    A: [6, 7, 8, 9, 10] as [number, number, number, number, number],
+    B: [1, 1, 1, 1, 1] as [number, number, number, number, number],
+    va: 100,
+    vb: 80,
+    lostA: 0,
+    lostB: 0,
+    deadA: 0,
+    deadB: 0,
+  };
+  assert.deepEqual(sampleOf(v1, 'A'), [6, 7, 8, 9, 10], '老数据的 A 行读得出来');
+  assert.deepEqual(sampleOf(v1, 'B'), [1, 1, 1, 1, 1], '老数据的 B 行读得出来');
+  assert.equal(sampleOf(v1, 'C'), undefined, 'v1 根本没有第三人，不能编一行出来');
+});
+
+test('局面快照：同一份局面拍两次完全一样，能当存档导回去', () => {
+  const s = fresh();
+  s.turn = 37;
+  s.log.push({ turn: 37, player: 'A', text: '建造了 步兵' });
+  const now = new Date('2026-11-02T10:20:30.000Z');
+  const a = buildSnapshot(s, { now, note: '  兵卡在桥头不动  ' });
+  const b = buildSnapshot(s, { now, note: '  兵卡在桥头不动  ' });
+
+  assert.deepEqual(a, b, '同样的输入必须拍出同一张快照（时间从外面传就是为了这个）');
+  assert.equal(a.kind, 'snapshot');
+  assert.equal(a.v, SNAPSHOT_VERSION);
+  assert.equal(a.build, BUILD_VERSION, '必须记下是哪个版本报的');
+  assert.equal(a.turns, 37);
+  assert.equal(a.playerCount, 2);
+  assert.equal(a.note, '兵卡在桥头不动', '首尾空白要去掉');
+  assert.ok(a.log.length >= 1);
+  assert.ok(a.log[a.log.length - 1]?.includes('建造了 步兵'), '日志要摊平成一行一条');
+  assert.ok(a.headline.includes('第 37 回合'), '摘要得能当工单标题');
+
+  // 一句话太长就截断：数据库那一列不是无底洞
+  const long = buildSnapshot(s, { now, note: 'x'.repeat(600) });
+  assert.equal(long.note.length, 500);
+
+  // 同一秒同一句话 → 同一个指纹（防止手滑连点传两条）
+  assert.equal(snapshotSignature(a), snapshotSignature(b));
+  const later = buildSnapshot(s, { now: new Date('2026-11-02T10:21:30.000Z'), note: a.note });
+  assert.notEqual(snapshotSignature(a), snapshotSignature(later), '换一分钟就是另一条');
+
+  // 文件名只留 ASCII：中文描述不能跑进文件名，下载到别的系统会乱码
+  const name = snapshotFileName(a);
+  assert.match(name, /^[A-Za-z0-9._-]+$/, `文件名必须全 ASCII，实际 ${name}`);
+  assert.ok(name.endsWith('.json'));
+
+  // 快照本身要能被「导入对局」吃回去——不然"复现"只是句空话
+  const back = importMatch(snapshotJson(a));
+  assert.ok(back, '快照应当是可以导入的');
+  assert.equal(back.turn, 37);
+  assert.equal(back.seed, s.seed);
+  assert.equal(back.units.length, s.units.length);
 });
 
 test('状态与技能注册表：本体表里的每一条都得有人接', () => {

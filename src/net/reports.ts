@@ -124,12 +124,18 @@ export async function uploadReport(report: MatchReport): Promise<UploadResult> {
       payload: report,
       // 3/4 人局要靠这一列分组；老表没这列时下面会退回不带它的写法
       player_count: report.playerCount,
+      // 版本与 AI 庄家也单独列出来：分析时最常见的两个切法是"这个版本变强了没有"
+      // 和"人打 AI 到底赢多少"。放在 payload 里也能查，但每次都要拆 jsonb。
+      build: report.build,
+      ai_sides: report.aiSides,
     };
 
     let res = await db.from(TABLE).insert(row);
     if (res?.error && isMissingColumn(res.error)) {
-      // 表还没跑 2026-11-01 那条迁移：把新列摘掉再试，
+      // 表还没跑后面那几条迁移：把新列逐次摘掉再试，
       // 少一列不影响报告本身（payload 里整份都在），总比"因为少一列就传不上去"好。
+      delete row.ai_sides;
+      delete row.build;
       delete row.player_count;
       res = await db.from(TABLE).insert(row);
     }
