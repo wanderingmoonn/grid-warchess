@@ -123,6 +123,7 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  chatSeatOf,
   shouldAutoExpand,
   chatWhoLabel,
   trimChatBody,
@@ -2697,6 +2698,40 @@ test('中毒：打中让其中毒三回合，每回合掉 6% 生命上限', () =
   const ticked = r2.state.units.find((u) => u.id === target.id)!;
   assert.equal(ticked.hp, hpAfterHit - Math.ceil(maxHp * 0.06));
   assert.equal(ticked.status?.poison, 2, '结算一次之后剩两回合');
+
+  /*
+   * 这一笔要进战报，而且要**公开**。
+   *
+   * 毒是在受害者自己的回合开始时结算的，日志挂在受害者名下；不给 open，
+   * 施毒的一方永远读不到自己造成的这点伤害（血条变了、战报里没有一笔），
+   * 复盘时就只能看到"对面莫名其妙少了血"。
+   */
+  const line = [...r2.state.log].reverse().find((e) => e.text.includes('中毒'));
+  assert.ok(line, '毒伤要写进战报');
+  assert.equal(line!.player, 'B', '这笔记在中毒的一方名下');
+  assert.equal(line!.open, true, '公开：施毒方也要看得见');
+  assert.ok(/\d+ 点生命/.test(line!.text), `要写清掉了多少血，实际：${line!.text}`);
+});
+
+test('自身损耗（土墙、临时召唤物）也要写进战报', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  // 找一个 decays > 0 的兵种：土墙是最常见的那一个
+  const wall = Object.values(s.unitTypes).find((d) => (d.decays ?? 0) > 0);
+  assert.ok(wall, '扩展里应该至少有一个会自我损耗的兵种');
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const u = place2(s, 'A', wall!.id, 5, 5);
+  const before = u.hp;
+  // 交回合走一圈，回到 A 的时候它的回合开始结算里会有一次损耗
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok);
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  const after = r2.state.units.find((x) => x.id === u.id);
+  assert.ok(after, '损耗一次还不该倒');
+  assert.ok(after!.hp < before, '损耗要真的扣血');
+  const line = [...r2.state.log].reverse().find((e) => e.text.includes('自身损耗'));
+  assert.ok(line, '扣血要有一笔战报，不然血条自己变短');
+  assert.equal(line!.open, true, '棋面上看得见的事不需要藏');
 });
 
 test('净化只清一层，大净化清全部', () => {
@@ -11560,11 +11595,17 @@ test('投降同步：云端说终局了，本机就算没轮到自己、还有�
   });
   assert.equal(withDraft.take, true, '终局压倒未提交的草稿');
 
-  // 平时怎么挡还是怎么挡
+  /*
+   * 只挡草稿，不挡"轮不到我"。
+   *
+   * 以前这里写着"没轮到我就不拉"，代价是：交完回合之后，对面走完的那一整轮
+   * 你一次都看不到——棋盘、顶栏的当前行动方、战报全停在你自己交回合那一刻，
+   * 直到下一次轮到你才整块跳过去。三个人打时更明显：B 和 C 的来回，A 看不见。
+   */
   assert.equal(
     adoptDecision(head(8, 'A', null), head(7, 'A', null), { seat: 'B' }).take,
-    false,
-    '没轮到我就不拉',
+    true,
+    '别人走完一轮也要装：不然棋盘和行动方停在上一次自己交回合的样子',
   );
   assert.equal(
     adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B', draft: true }).take,
@@ -11575,6 +11616,16 @@ test('投降同步：云端说终局了，本机就算没轮到自己、还有�
     adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B' }).take,
     true,
     '轮到我、没草稿、回合变了：就该拉',
+  );
+  assert.equal(
+    adoptDecision(head(7, 'B', null), head(7, 'A', null), { seat: 'C' as never }).take,
+    true,
+    '三人局：回合没变、只是换了行动方，也要装（认输就是这么交的）',
+  );
+  assert.equal(
+    adoptDecision(head(7, 'A', null), head(7, 'A', null), { seat: 'A' }).take,
+    false,
+    '什么都没变就别重绘',
   );
 
   // 观战位没有"轮到我"这回事，只看有没有新东西
@@ -11622,6 +11673,32 @@ test('聊天记录：转义、三种归属、空态', () => {
 
   const empty = chatLinesHtml([], 'A');
   assert.ok(empty.includes('chat-empty'), '空的时候要有一句话，不要留一块空白');
+});
+
+test('聊天色条跟说话人坐哪，不跟"我方/对方"', () => {
+  /*
+   * 病：色条以前只按 mine / foe 上色（蓝方玩家看红方说话，那条线是蓝的），
+   * 三人四人局的 C、D 还会被并成 A 座。两处都改成"谁就是谁的颜色"。
+   */
+  assert.equal(chatSeatOf('A'), 'A');
+  assert.equal(chatSeatOf('C'), 'C', 'C 座不能塌成 A 座');
+  assert.equal(chatSeatOf('D'), 'D', 'D 座不能塌成 A 座');
+  assert.equal(chatSeatOf('watch'), 'watch');
+  assert.equal(chatSeatOf('写坏了的值'), 'A', '认不出来的老数据退回 A 座，别让消息消失');
+
+  const lines: ChatLine[] = [
+    { id: 1, seat: 'A', name: '红方', body: '我先走', at: '2026-11-02T20:00:00Z' },
+    { id: 2, seat: 'C', name: '绿方', body: '等等我', at: '2026-11-02T20:01:00Z' },
+  ];
+  // 站在蓝方（B）的角度：A 说的话色条仍然该是红的
+  const asB = chatLinesHtml(lines, 'B');
+  assert.ok(asB.includes('seat-a'), '红方说话，色条要是红的（不能因为"对面"就画成蓝）');
+  assert.ok(asB.includes('foe'), '"对方"这个文字标签照旧要有');
+  assert.ok(asB.includes('seat-c'), '三号席位有自己的颜色，不能并进 A');
+  // 三人局里 C 看自己那条：色条 seat-c，标签 mine
+  const asC = chatLinesHtml(lines, 'C');
+  assert.ok(asC.includes('seat-c'), 'C 座说的话仍然用 C 的颜色');
+  assert.ok(asC.includes('mine'), 'C 座自己那条要标"我方"');
 });
 
 test('超长消息不发出去，而不是截一半发出去', () => {

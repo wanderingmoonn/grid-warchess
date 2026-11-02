@@ -21,6 +21,7 @@ import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
   mergeDraftStep,
+  aliveSeats,
   attackableTargets,
   buildSiteError,
   canAttack,
@@ -2019,9 +2020,19 @@ function dispatch(action: Action): boolean {
   //
   // 不提交的话，对面要等到"轮到我"才去拉云端，而认输既不换人也不推进回合，
   // 于是赢的那一边一直停在旧局面上——输了的人已经看见结算卡，赢的人还在等下家。
-  if (room && !prevWinner && state.winner) {
+  //
+  // 三人四人局还有第二种情况：认输**不判胜负**（剩下的人接着打），所以
+  // `state.winner` 是空的，上面这条根本不会触发——认输那一下从来没交上去过。
+  // 表现就是：认输的人自己退出了，另外两家还当他在打，行动权一直卡在他身上，
+  // 整个房间等到超时。所以退出名单变长也要立刻提交。
+  const quitNow = (state.out ?? []).length > (before.out ?? []).length;
+  if (room && (quitNow || (!prevWinner && state.winner))) {
     dirty = false;
-    void pushTurn(room, prevTurn, '这一局已结束，结果已经同步给对方');
+    void pushTurn(
+      room,
+      prevTurn,
+      quitNow ? '你已认输，剩下的两家接着打' : '这一局已结束，结果已经同步给对方',
+    );
   }
 
   refreshSelection();
@@ -4642,6 +4653,8 @@ async function pollRoom(): Promise<void> {
     }
 
     const fog = state.fog;
+    // 认输不推进回合、只换行动方，所以"谁退出了"要拿退出名单的条数来判
+    const wasOut = (state.out ?? []).length;
     state = snapshot.state;
     state.aiControl = { A: false, B: false };
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
@@ -4665,7 +4678,23 @@ async function pollRoom(): Promise<void> {
     clearSelection();
     saveMatch(state);
     render();
-    toast('对方已提交，轮到你');
+    /*
+     * 提示语要按"现在到底轮到谁"来说。
+     *
+     * 以前这里固定是"对方已提交，轮到你"——因为旧判据只在自己回合才装状态，
+     * 能走到这一行就等于轮到自己了。现在三个人打的时候，别人交回合、
+     * 或者干脆认输退出，也会把新局面装进来，那句话就全是错的：
+     * B 认输、轮到 C，A 却看见"轮到你"。
+     */
+    const quitters = (state.out ?? []).slice(wasOut);
+    if (quitters.length > 0) {
+      const names = quitters.map((q) => state.players[q].name).join('、');
+      toast(`${names} 认输退出，还剩 ${aliveSeats(state).length} 家`);
+    } else if (state.current === seat.seat) {
+      toast('对方已提交，轮到你');
+    } else {
+      toast(`轮到 ${state.players[state.current].name} 了`);
+    }
   } catch {
     // 轮询失败不打扰人：下次再问就是了
   }

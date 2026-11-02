@@ -149,9 +149,21 @@ export function chatLinesHtml(lines: readonly ChatLine[], mine: ChatSeat): strin
   }
   return lines
     .map((l) => {
-      const cls = l.seat === 'watch' ? 'watch' : l.seat === mine ? 'mine' : 'foe';
+      const who = l.seat === 'watch' ? 'watch' : l.seat === mine ? 'mine' : 'foe';
+      /*
+       * 颜色跟**说话人坐哪**，不跟"我方/对方"。
+       *
+       * 以前只有 mine / foe 两个类，CSS 拿 --team-a / --team-b 上色——
+       * 也就是"我永远是红的、对面永远是蓝的"。红方玩家看到自己那句是红的
+       * 没问题，可蓝方玩家看红方说话，那条线是 `foe`，画出来是**蓝的**：
+       * 一个红方玩家顶着蓝条说话。三人四人局更糟，席位直接塌成两种颜色。
+       *
+       * 所以拆成两层：`seat-*` 决定色条（谁就是谁的颜色），
+       * `mine/foe/watch` 只决定文字标签和灰度。
+       */
+      const seatCls = l.seat === 'watch' ? '' : ` seat-${l.seat.toLowerCase()}`;
       const time = chatTimeLabel(l.at);
-      return `<div class="chat-line ${cls}">
+      return `<div class="chat-line ${who}${seatCls}">
         <span class="chat-meta">${escapeHtml(l.name)} · ${chatWhoLabel(l.seat, mine)}${
           time ? ` · ${time}` : ''
         }</span>
@@ -315,9 +327,29 @@ interface Row {
   created_at: string;
 }
 
+/**
+ * 一行记录里的席位字符串 → 界面用的席位。
+ *
+ * 必须原样保留 C / D。以前这里是 `row.seat === 'B' ? 'B' : 'A'`：
+ * 三人四人局里 C、D 一整就塌成 A 座——他们说的话顶着红方的色条出现，
+ * "我方/对方"的标签也跟着算错（C 座玩家看到自己那条被标成"对方"）。
+ * 抽成函数是为了能测：这段逻辑埋在云端读写的回调里，平时只能靠开两个浏览器看。
+ */
+export function chatSeatOf(raw: string): ChatSeat {
+  if (raw === 'watch') return 'watch';
+  if (raw === 'A' || raw === 'B' || raw === 'C' || raw === 'D') return raw;
+  // 认不出来的（老数据、被手改过的行）当 A 座：总比整条消息消失好
+  return 'A';
+}
+
 function toLine(row: Row): ChatLine {
-  const seat: ChatSeat = row.seat === 'B' ? 'B' : row.seat === 'watch' ? 'watch' : 'A';
-  return { id: Number(row.id), seat, name: row.name, body: row.body, at: row.created_at };
+  return {
+    id: Number(row.id),
+    seat: chatSeatOf(row.seat),
+    name: row.name,
+    body: row.body,
+    at: row.created_at,
+  };
 }
 
 /** 取 `afterId` 之后的消息（增量）。失败时不抛，返回空数组 + 原因由界面决定怎么处理 */

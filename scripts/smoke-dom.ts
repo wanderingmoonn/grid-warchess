@@ -5098,5 +5098,73 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
 });
 
+
+check('状态栏：中毒/灼烧/减速挂在兵身上时要看得见', () => {
+  /*
+   * 这些状态以前只活在结算里：血条自己变短、护甲自己变小，面板一个字不提。
+   * 状态栏就是那笔账——挂的是什么、还剩几回合。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 4242);
+  const u = st.units.find((x) => x.owner === 'A')!;
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  assert.equal(host.querySelector('.status-row'), null, '身上没状态时不该留一排空壳');
+
+  u.status = { poison: 3, burn: 2, slow: 1 };
+  paint();
+  const row = host.querySelector('.status-row');
+  assert.ok(row, '挂上状态就要有状态栏');
+  const chips = [...row!.querySelectorAll('.status-chip')];
+  assert.equal(chips.length, 3, `三个状态应该三个徽标，实际 ${chips.length}`);
+  const text = row!.textContent ?? '';
+  assert.ok(text.includes('中毒'), '要写名字');
+  assert.ok(text.includes('3 回合'), `中毒报剩余回合，实际：${text}`);
+  assert.ok(text.includes('2 层'), `灼烧报层数（不是回合），实际：${text}`);
+  assert.ok(row!.querySelector('.st-poison'), '中毒要有自己的样式钩子');
+  assert.ok(row!.querySelector('.st-burn'), '灼烧要有自己的样式钩子');
+  // 顺序固定：中毒先于灼烧——战报和面板对同一件事得用同一个顺序
+  assert.ok(
+    text.indexOf('中毒') < text.indexOf('灼烧'),
+    `状态顺序该是中毒→灼烧，实际：${text}`,
+  );
+});
+
+
+check('三人局认输之后：顶栏要说"你已认输"，按钮不再假装还能走', () => {
+  /*
+   * 认输在三人四人局里只退出自己（剩下的人接着打），所以界面必须换一种说法。
+   * 以前它继续写"等待 XXX"、结束回合按钮写着"等待对方行动中"——
+   * 认输的人看着像在等一个永远不会轮到的回合。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, playerCount: 3 }, 5150);
+  st.out = ['A'];
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('你已认输'), `顶栏要说清已经退出，实际：${text.slice(0, 120)}`);
+  const endTurn = host.querySelector('[data-act="end-turn"]') as HTMLButtonElement | null;
+  assert.ok(endTurn, '侧栏还是要有那颗按钮（用来显示状态）');
+  assert.equal(endTurn!.disabled, true, '已退出就不能再结束回合');
+  const surrender = host.querySelector('[data-act="surrender"]') as HTMLButtonElement | null;
+  assert.equal(surrender!.disabled, true, '认输过一次就不该还能再点');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

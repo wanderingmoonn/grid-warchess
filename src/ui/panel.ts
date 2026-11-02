@@ -47,6 +47,8 @@ import {
   magicAtkOf,
   magicResOf,
   hasQuit,
+  orderedStatuses,
+  STATUS_REGISTRY,
   heroSkillsOf,
   isAirborne,
   ordersOf,
@@ -241,16 +243,27 @@ function panelHtml(input: PanelInput): string {
     return parts.join(' · ');
   };
   const spectator = input.spectator === true;
-  /** 只看不给动：观战位和指挥官模式都算，后面所有 `mine` 都挂在它上面 */
-  const readOnly = spectator || input.commander === true;
-  const myTurn = !spectator && s.current === me && !s.winner;
+  /**
+   * 这一席是不是已经认输退出。
+   *
+   * 三人四人局里认输只退出自己，对局还在继续打（见 rules 的 doSurrender），
+   * 所以界面必须能说出"你已经不在这局里了"。以前这块什么都不说：
+   * 认输之后顶栏继续写"等待 XXX"，兵和城还在棋盘上（那是对手的战利品），
+   * 看上去像卡住了。
+   */
+  const quit = !spectator && hasQuit(s, me);
+  /** 只看不给动：观战位、已退出、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
+  const readOnly = spectator || quit || input.commander === true;
+  const myTurn = !spectator && !quit && s.current === me && !s.winner;
 
 
   const turnBadge = s.winner
     ? `<span class="turn-badge">对局结束</span>`
     : spectator
       ? `<span class="turn-badge watching">观战中 · 全图视角</span>`
-      : `<span class="turn-badge active-${s.current}">
+      : quit
+        ? `<span class="turn-badge watching">你已认输 · 观战中</span>`
+        : `<span class="turn-badge active-${s.current}">
          ${s.current === me ? '轮到你行动' : `等待 ${s.players[s.current].name}`}
        </span>`;
 
@@ -350,12 +363,22 @@ function panelHtml(input: PanelInput): string {
                }
              </button>`
           : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-               ${myTurn ? '结束行动，交给对方' : spectator ? '观战中 · 只能看' : '等待对方行动中'}
+               ${
+                 myTurn
+                   ? '结束行动，交给对方'
+                   : spectator
+                     ? '观战中 · 只能看'
+                     : quit
+                       ? '你已认输 · 只能看'
+                       : '等待对方行动中'
+               }
              </button>`
       }
       <div class="side-actions">
         <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
-        <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>认输</button>
+        <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
+          ${quit ? '已认输' : '认输'}
+        </button>
       </div>
       <button class="btn btn-sm btn-block" data-act="chime">${chimeLabel(input.chimeVolume ?? 0.6)}</button>
       <div class="hint" style="text-align:center">
@@ -732,6 +755,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
       <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(s, selectedUnit)}</b></div>
+      ${statusRow(selectedUnit)}
       <div class="info-row">
         <span>攻击 / 护甲</span>
         <b>${eff.atk} / ${eff.armor}${baseNote}</b>
@@ -1413,6 +1437,33 @@ function renderLog(input: PanelInput): string {
       return `<div class="log-item ${side}${open ? ' open' : ''}"><span class="who">${label}</span>${escapeHtml(e.text)}</div>`;
     })
     .join('')}</div>`;
+}
+
+/**
+ * 状态栏：身上挂着什么、还剩几回合。
+ *
+ * 为什么非得有：中毒/灼烧/减速/诅咒在结算里是看不见的（效果发生在自己回合
+ * 开始的那一刻，玩家只看到"血少了""走不动了"），而诅咒和咒缚还会改护甲，
+ * 面板上的护甲数字变了却不知道是谁改的。这一段就是那笔账。
+ *
+ * 数值口径：`burn` 的值是**层数**，其余状态是**剩余回合**——两者在数据里都是
+ * 一个整数，只能按 key 区分。写错单位比不写更糟：一个"中毒 3 层"会让人
+ * 以为伤害要乘三。
+ */
+function statusRow(u: Unit): string {
+  const list = orderedStatuses(u.status);
+  if (list.length === 0) return '';
+  const chips = list
+    .map(([key, val]) => {
+      const def = STATUS_REGISTRY[key];
+      const name = def?.name ?? key;
+      const unit = key === 'burn' ? '层' : '回合';
+      return `<span class="status-chip st-${key}" title="${escapeHtml(def?.summary ?? name)}">
+        <b>${escapeHtml(name)}</b><i>${val} ${unit}</i>
+      </span>`;
+    })
+    .join('');
+  return `<div class="status-row">${chips}</div>`;
 }
 
 function escapeHtml(t: string): string {

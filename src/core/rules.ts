@@ -5064,7 +5064,15 @@ function tickStatuses(s: GameState, p: PlayerId): void {
       const def = STATUS_REGISTRY[key];
       if (def?.onTurnStart) {
         const logText = def.onTurnStart(s, u, val);
-        if (logText) pushLog(s, p, logText);
+        /*
+         * 掉血这条要标成公开。
+         *
+         * 中毒、灼烧是在**挨打那一方的回合开始时**结算的，所以战报挂在受害者的
+         * 名下——不给 open 的话，自己毒了对面，对面掉血那一条只有对面看得见，
+         * 施法者这边从头到尾读不到一笔"毒伤"。而血条就在棋盘上摆着，
+         * 这条本来也不是秘密。
+         */
+        if (logText) pushLog(s, p, logText, true);
       }
     }
 
@@ -5079,13 +5087,19 @@ function tickStatuses(s: GameState, p: PlayerId): void {
   sweepDead(s);
 }
 
-/** 自我消耗：土墙、临时召唤物每回合掉血，掉完自己消失 */
+/**
+ * 自我消耗：土墙、临时召唤物每回合掉血，掉完自己消失。
+ *
+ * 以前这里一声不响地扣血：棋盘上血条自己变短，战报一个字没有，
+ * 玩家只会觉得"这个兵怎么莫名其妙少了血"。掉多少、为什么掉，得写出来。
+ */
 function decayUnits(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
     const d = utype(s, u.type).decays ?? 0;
     if (d <= 0) continue;
     u.hp -= d;
+    pushLog(s, p, `${utype(s, u.type).name} 自身损耗 ${d} 点生命`, true);
   }
   sweepDead(s);
 }
