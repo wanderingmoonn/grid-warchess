@@ -5166,5 +5166,88 @@ check('三人局认输之后：顶栏要说"你已认输"，按钮不再假装�
   assert.equal(surrender!.disabled, true, '认输过一次就不该还能再点');
 });
 
+
+check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也不重播', () => {
+  /*
+   * 病根不在我们自己的调用次数，而在浏览器：`paintUnits` 为了对齐顺序会
+   * `insertBefore`，节点被摘下再插回时**正在跑的 CSS 动画会从头再来**。
+   * 而顺序变化最常发生在"这一下有单位死了"的那一帧——正好和掉血同帧。
+   * 所以上一版"按动作对账"只能堵住渲染重放，堵不住浏览器自己的重播。
+   *
+   * 现在残留条走 Web Animations（挂在元素上，重插入不重播），
+   * 再加一个绘制序号防止同一次绘制里演两遍。这条用例数 `animate` 的调用次数。
+   */
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 771);
+  const ui = {
+    selectedId: null,
+    reach: [] as number[],
+    targets: [] as string[],
+    siegeTargets: [] as string[],
+    selectedCityId: null,
+    placeable: [] as number[],
+    threat: [] as number[],
+    me: 'A' as const,
+  };
+  const allVisible = {
+    state: st,
+    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    ghosts: [] as never[],
+    rememberedTiles: new Map(),
+    rememberedCities: new Map(),
+  };
+
+  const calls: string[] = [];
+  const proto = (dom.window as unknown as { HTMLElement: { prototype: Record<string, unknown> } })
+    .HTMLElement.prototype;
+  const orig = proto.animate;
+  proto.animate = function (this: HTMLElement, frames: Keyframe[]) {
+    calls.push(String((frames[0] as { width?: string }).width ?? ''));
+    return { cancel() {}, finished: Promise.resolve() } as unknown as Animation;
+  };
+
+  try {
+    const victim = st.units.find((u) => u.owner === 'B')!;
+    const maxHp = st.unitTypes[victim.type]!.maxHp;
+    const before = victim.hp / maxHp;
+    victim.hp = Math.max(1, Math.floor(maxHp / 2));
+    const after = victim.hp / maxHp;
+
+    renderBoard(host, allVisible, { ...ui, hpDrops: new Map([[victim.id, before]]) });
+    assert.equal(calls.length, 1, `一次掉血只该演一遍，实际 ${calls.length} 次`);
+    // 起点是"掉血前"的比例：没有这句，橙条会从新血线开始，等于没演
+    assert.equal(calls[0], `${Math.max(2, before * 100)}%`, '橙条要从掉血前的宽度起跑');
+
+    // 走的是 Web Animations，不是 CSS 类：类动画会被 DOM 重排从头再播
+    assert.equal(
+      host.querySelector('.hp-lag.chipped'),
+      null,
+      '有 animate 时不该再退回会被重排打断的 CSS 类动画',
+    );
+
+    // 同一笔掉血再画一遍（顶栏 / 缩放 / 轮询都会触发）：不该再演
+    renderBoard(host, allVisible, { ...ui });
+    assert.equal(calls.length, 1, '重复渲染不该重播');
+    void after;
+
+    // 有人倒下 → 后面的节点要前移（insertBefore）。以前 CSS 动画会因此从头再来
+    const dead = st.units.find((u) => u.owner === 'A' && u.id !== victim.id)!;
+    st.units = st.units.filter((u) => u.id !== dead.id);
+    renderBoard(host, allVisible, { ...ui });
+    assert.equal(calls.length, 1, 'DOM 重排不该让已经播过的掉血动画重播');
+
+    // 老环境（没有 animate）：退回 CSS 类，至少还能看见——这条路径不能被删掉
+    delete (proto as { animate?: unknown }).animate;
+    victim.hp = Math.max(1, victim.hp - 3);
+    renderBoard(host, allVisible, { ...ui, hpDrops: new Map([[victim.id, after]]) });
+    assert.ok(host.querySelector('.hp-lag.chipped'), '没有 animate 时要用类动画兜底');
+  } finally {
+    proto.animate = orig;
+    host.remove();
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

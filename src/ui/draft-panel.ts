@@ -13,6 +13,7 @@
 import { eraDef, isPseudoUnit } from '../core/config.ts';
 import { draftMsOf, draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
 import { abilityById } from '../core/ability-registry.ts';
+import { airLayer } from '../core/rules.ts';
 import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
 import { resourceName } from '../core/resources.ts';
 import type { ResourceId } from '../core/types.ts';
@@ -297,9 +298,19 @@ function pickedCard(def: UnitTypeDef, index: number): string {
   ];
   if (def.hero) tags.push('<span class="dp-tag is-hero">英雄</span>');
   if (def.domain && DOMAIN_LABEL[def.domain]) tags.push(`<span class="dp-tag">${DOMAIN_LABEL[def.domain]}</span>`);
-  // 空中层：掠空和飞行是两种手感（前者能和地面叠格），所以分开写
-  if (def.layer === 'air') tags.push(`<span class="dp-tag is-air">${def.flight ? '掠空' : '空中'}</span>`);
-  else if (def.flight) tags.push('<span class="dp-tag is-air">飞行</span>');
+  /*
+   * 空中层只有一种标签。
+   *
+   * 以前这里分「掠空 / 空中 / 飞行」三种写法：`layer==='air'` 的看 flight 决定
+   * 叫掠空还是空中，只写了 flight 的叫"飞行"。可那三种写法背后是同一件事
+   * （见 rules.airLayer），同一个能力被标成三个名字，玩家根本分不出差别。
+   * 真正需要区分的是"能不能和地面同格"——那是空中层本身，现在一律叫「空中」；
+   * 只掠水、仍在地面的（蜘蛛骑士的「跳跃」）另给一个标签。
+   */
+  if (airLayer(def)) tags.push('<span class="dp-tag is-air">空中</span>');
+  else if ((def.abilities ?? []).some((a) => a === 'leap' || a === 'fly')) {
+    tags.push('<span class="dp-tag is-air">掠水</span>');
+  }
   if (def.summonedOnly) tags.push('<span class="dp-tag">召唤物</span>');
 
   const stats: string[] = [statCell('攻', def.atk), statCell('甲', def.armor), statCell('血', def.maxHp)];

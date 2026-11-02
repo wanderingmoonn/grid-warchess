@@ -199,6 +199,7 @@ import {
   damageToCity,
   distance,
   distToCity,
+  airLayer,
   effectiveRange,
   effectiveRangeAgainst,
   eggSpots,
@@ -9369,7 +9370,8 @@ test('空中层无视地形：深水和高山都能飞，也都停得下', () =>
    */
   const s = arena(fresh({ godMode: true }));
   testType(s, 'test-jet', { layer: 'air', flight: true, move: 6 });
-  testType(s, 'test-gull', { flight: true, move: 6 });
+  // 对照：**只掠水、没写 flight** 的地面单位（蜘蛛骑士那种"跳"）
+  testType(s, 'test-jumper', { abilities: ['leap'], move: 6 });
 
   // 在第 7、8 列铺一条竖墙：深水 + 高山
   for (let y = 0; y < s.h; y++) {
@@ -9385,12 +9387,43 @@ test('空中层无视地形：深水和高山都能飞，也都停得下', () =>
   assert.equal(canStandAt(s, 7, 6, 'test-jet'), true, '深水上空也能停');
   assert.equal(canStandAt(s, 8, 6, 'test-jet'), true, '高山顶上也能停');
 
-  // 对照：只有 flight、不是空中层的单位，能过水但爬不了山
-  const gull = place2(s, 'A', 'test-gull', 5, 8);
-  const greach = reachableTiles(s, gull);
-  assert.ok(greach.has(idx(s, 7, 8)), '掠水单位能进深水');
-  assert.equal(greach.has(idx(s, 8, 8)), false, '掠水单位爬不了高山');
-  assert.equal(canStandAt(s, 8, 8, 'test-gull'), false, '山上也停不下');
+  // 对照：靠「跳跃」掠水的地面单位，能过水但爬不了山
+  const jumper = place2(s, 'A', 'test-jumper', 5, 8);
+  const jreach = reachableTiles(s, jumper);
+  assert.ok(jreach.has(idx(s, 7, 8)), '跳跃能越过深水');
+  assert.equal(jreach.has(idx(s, 8, 8)), false, '跳跃爬不了高山');
+  assert.equal(canStandAt(s, 8, 8, 'test-jumper'), false, '山上也停不下');
+});
+
+test('守卫：会飞一定在空中层，数据里不许出现"能飞的地面兵"', () => {
+  /*
+   * 这条不是测某一次改动，是**堵住这一类数据**。
+   *
+   * 历史上"会飞"有三种写法：`layer: 'air'`、`flight: true`、能力 `fly`/`fly-over`。
+   * 而 `airLayer()` 早先只读 layer 和能力，不读 flight —— 于是只要谁写漏了 layer，
+   * 那个兵就成了"能飞过河、却按地面兵算"的怪胎：占地面格、被近战按普通单位打、
+   * 面板上还标着"飞行"。规则里现在把 flight 并进 airLayer，这条用例守住它，
+   * 顺便把全部扩展的兵种扫一遍。
+   */
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: EXPANSIONS.map((e) => e.id) },
+    4321,
+  );
+  const all = Object.values(s.unitTypes) as UnitTypeDef[];
+  assert.ok(all.length > 100, `扩展全开时的兵种数不对劲：${all.length}`);
+
+  for (const def of all) {
+    if (def.flight === true) {
+      assert.equal(airLayer(def), true, `${def.id}（${def.name}）写了 flight，却不是空中层`);
+    }
+    if (def.layer === 'air') {
+      assert.equal(def.flight, true, `${def.id}（${def.name}）在空中层，却没写 flight —— 两者是一回事`);
+    }
+  }
+  // 反向：只掠水的地面单位必须**没有** flight（它们靠能力过水）
+  const jumpers = all.filter((d) => !airLayer(d) && (d.abilities ?? []).includes('leap'));
+  assert.ok(jumpers.length > 0, '至少该有一个"跳跃"单位（蜘蛛骑士）当对照');
+  for (const d of jumpers) assert.equal(d.flight ?? false, false, `${d.id} 是地面兵，不该写 flight`);
 });
 
 test('空中层的推进图不把深水当墙：AI 的飞机会飞过海', () => {

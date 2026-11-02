@@ -729,7 +729,22 @@ export function cloneState(s: GameState): GameState {
  * 新数据则应该直接写 `layer: 'air'`。
  */
 export function airLayer(def: UnitTypeDef): boolean {
-  return def.layer === 'air' || hasFlag(def, 'airLayer');
+  /*
+   * 三条判据，其实是同一件事的三种写法：
+   *   · `layer: 'air'` —— 现在所有飞行单位都写这个；
+   *   · `flight: true` —— 早先只有"能过水"这一个字段，没有层这个概念；
+   *   · 能力钩子 `airLayer` —— 「掠空」和兵种编辑器捏出来的旧数据。
+   *
+   * `flight` 这一条是后补的，补它是因为**两个字段各说各话**会长出真 bug：
+   * 只写 `flight: true`、忘写 `layer: 'air'` 的单位会变成"能飞过河、
+   * 却是地面层"的怪胎——它会占地面格、被地面近战按普通单位打、
+   * 面板上还标着"飞行"。数据里目前一个都没有（见 test-rules 的守卫用例），
+   * 但只要规则允许这种状态存在，下一个人就会写出来。
+   *
+   * 所以现在：**会飞就是空中层**。想表达"能过水但仍在地面"（蜘蛛骑士那一跃），
+   * 只能用能力（`leap` / `fly` 的 crossesWater 钩子），不能用 `flight` 字段。
+   */
+  return def.layer === 'air' || def.flight === true || hasFlag(def, 'airLayer');
 }
 
 /** 空中层：能飞，并且可以和地面单位同格 */
@@ -1145,7 +1160,9 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * （"蜘蛛能过河，但 AI 算不出它能过河"）。
  */
 function crossesWater(def: UnitTypeDef): boolean {
-  return def.flight === true || hasFlag(def, 'crossesWater');
+  // 空中层当然过水；其余的看能力（跳跃、旧版「飞行」）。
+  // `flight` 字段不再单独出现在这里——它已经是空中层了（见 airLayer）。
+  return airLayer(def) || hasFlag(def, 'crossesWater');
 }
 
 /**
