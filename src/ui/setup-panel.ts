@@ -14,8 +14,9 @@
  * 面板只负责收集选择，真正的校验和构建交给 createMatch。
  */
 
-import { ERAS, eraDef, isPseudoUnit } from '../core/config.ts';
+import { ERAS, UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
 import {
   EXPANSIONS,
   availableExpansions,
@@ -44,7 +45,7 @@ import {
   clampBoardSize,
   randomSeed,
 } from '../core/setup.ts';
-import type { MatchConfig } from '../core/types.ts';
+import type { MatchConfig, UnitTypeDef } from '../core/types.ts';
 
 export interface SetupResult {
   config: MatchConfig;
@@ -110,6 +111,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       fixedMap: initial.fixedMap,
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
+      // 关掉的兵种是"上一局的选择"的一部分：不抄过来的话，每次开新局
+      // 兵种池都会回到"扩展兵全开"的默认状态，那个开关等于一次性的。
+      disabledUnits: [...(initial.disabledUnits ?? [])],
       commanderMode: initial.commanderMode === true,
       godMode: initial.godMode === true,
       draftMode: initial.draftMode === true,
@@ -150,16 +154,90 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       resolve(result);
     };
 
-    const toggleUnit = (id: string) => {
-      // 新增：每次点击前先强制去重，保证 length 统计的准确性
-      config.enabledUnits = Array.from(new Set(config.enabledUnits));
-      if (config.enabledUnits.includes(id)) {
-        if (config.enabledUnits.length <= 1) return;
-        config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
-      } else {
-        config.enabledUnits.push(id);
+    /*
+     * ── 兵种池：一张"这一局能造什么"的全表 ──
+     *
+     * 名单有三路来源，合成一张表：
+     *   1. 本体兵种（UNIT_TYPES）——「勾选」由 enabledUnits 记，默认只开一部分；
+     *   2. 自定义兵种（本机编辑器里捏的）——默认就在池子里；
+     *   3. 已开扩展带来的兵种——同样默认就在池子里（勾了海军就该有那十几条船）。
+     *
+     * 后两路是"默认开"，所以它们的关闭状态必须另外记一笔（disabledUnits），
+     * 不能只靠"不在 enabledUnits 里"表达——那会把"玩家关掉了它"和
+     * "这一版还不认识这个 id"混成一件事，老存档读进来整支舰队都会消失。
+     *
+     * 这张表按扩展勾选缓存一份：面板一重绘就要用，两百多个兵种现算两遍不值得。
+     */
+    interface UnitPoolView {
+      key: string;
+      catalog: Record<string, UnitTypeDef>;
+      /** 默认就在池子里的那些（自定义 + 扩展兵） */
+      extras: Set<string>;
+      /** id → 出处（扩展名 / 自定义），写进 chip 的 title */
+      source: Map<string, string>;
+    }
+    let poolView: UnitPoolView | null = null;
+
+    const unitPool = (): UnitPoolView => {
+      const key = config.expansionIds.join('|');
+      if (poolView && poolView.key === key) return poolView;
+      const base = allAvailableUnits();
+      const fromPacks = expansionUnitsFor(config.expansionIds);
+      const catalog: Record<string, UnitTypeDef> = { ...base, ...fromPacks };
+      const extras = new Set(Object.keys(catalog).filter((id) => !UNIT_TYPES[id]));
+      const source = new Map<string, string>();
+      for (const e of EXPANSIONS) {
+        for (const u of e.units ?? []) if (fromPacks[u.id]) source.set(u.id, e.name);
+      }
+      for (const id of Object.keys(base)) if (!UNIT_TYPES[id]) source.set(id, '自定义');
+      poolView = { key, catalog, extras, source };
+      return poolView;
+    };
+
+    /** 这个兵种这一局开着吗。默认进场的那些看 disabledUnits，本体兵种看 enabledUnits */
+    const isUnitOn = (id: string): boolean => {
+      const { extras } = unitPool();
+      return extras.has(id)
+        ? !(config.disabledUnits ?? []).includes(id)
+        : config.enabledUnits.includes(id);
+    };
+
+    /** 开着的兵种总数（伪单位不算：那是攻城结算的壳） */
+    const onUnitCount = (): number =>
+      Object.keys(unitPool().catalog).filter((id) => !isPseudoUnit(id) && isUnitOn(id)).length;
+
+    const setUnitOn = (id: string, on: boolean): void => {
+      const { extras } = unitPool();
+      const isExtra = extras.has(id);
+      // 先把两张表里的记录都擦掉，下面只负责"在需要的地方补一笔"——
+      // 两条记录同时存在时，isUnitOn 读哪个都说不清。
+      config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
+      config.disabledUnits = (config.disabledUnits ?? []).filter((x) => x !== id);
+      if (on) {
+        // 默认进场的那些，开回来＝把那笔"关掉"的记录擦掉就够了，
+        // 不必再塞进 enabledUnits：塞进去会在换扩展之后留下一串孤儿 id。
+        if (!isExtra) config.enabledUnits.push(id);
+      } else if (isExtra) {
+        config.disabledUnits.push(id);
       }
     };
+
+    /** 弹层开着的时候，两处"已选 N"要跟着就地更新，不用整块重绘 */
+    const paintPoolCount = (): void => {
+      const n = String(onUnitCount());
+      mask.querySelectorAll<HTMLElement>('[data-pool-count]').forEach((el) => {
+        el.textContent = n;
+      });
+    };
+
+    /*
+     * 兵种池弹层开没开。
+     *
+     * 以前这一大块是直接铺在战役页最下面的：两百多个 chip 把整页撑成一长卷，
+     * 想改一下"要不要带船"得先滚过时代、尺寸、扩展。收进一层弹层之后，
+     * 战役页只剩一行摘要，而全表照旧在——只是要按一下才出来。
+     */
+    let poolOpen = false;
 
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
@@ -251,12 +329,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     const paint = () => {
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
-      // 兵种池在面板最下面，点一个兵种就"弹回顶部"就是这么来的——
-      // 所以先把两者记下来，画完再搬回去。
+      // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
       // 换页时把滚动条拨回顶部：留在上一页的位置会让人以为"点错了、没反应"
       const prevScrollTop = resetScroll ? 0 : (prevBody?.scrollTop ?? 0);
       const prevScrollLeft = resetScroll ? 0 : (prevBody?.scrollLeft ?? 0);
+      // 兵种池弹层有自己的滚动区，而且它盖在上面——不单独记一份的话，
+      // 在弹层里点「全选」这种会重绘的操作会把两百多个兵种弹回第一行。
+      const prevPoolScroll = mask.querySelector<HTMLElement>('.pool-body')?.scrollTop ?? 0;
       resetScroll = false;
       const prevFocusEl = document.activeElement;
       const prevFocus =
@@ -365,28 +445,51 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
       ).join('');
 
-      // 兵种按时代分组展示：一眼看出哪些是开局就有、哪些要升级城市才能造。
-      // 只列到天花板：第六代的兵在没开「现代战争」的局里永远不会出现在兵表上，
-      // 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
-      const catalog = allAvailableUnits();
-      const unitGroups = eras.map((era) => {
-        const units = Object.values(catalog).filter(
-          (u) => u.era === era.level && !isPseudoUnit(u.id),
-        );
-        if (units.length === 0) return '';
-        const chips = units
-          .map(
-            (u) =>
-              `<button class="chip ${config.enabledUnits.includes(u.id) ? 'active' : ''}" data-unit="${u.id}">
+      /*
+       * 兵种池：按时代分组，一眼看出哪些开局就有、哪些要升级城市才能造。
+       *
+       * 只列到天花板：第六代的兵在没开「现代战争」的局里永远不会出现在兵表上，
+       * 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
+       *
+       * 组内先本体、后扩展（虚线框），各自按造价从小到大——玩家找"骑兵在哪"
+       * 时眼睛是顺着名录扫的，混在一起排就变成了随机顺序。
+       */
+      const { catalog, extras, source } = unitPool();
+      const allUnits = Object.values(catalog).filter((u) => !isPseudoUnit(u.id));
+      const unitGroups = eras
+        .map((era) => {
+          const units = allUnits
+            .filter((u) => u.era === era.level)
+            .sort(
+              (a, b) =>
+                Number(extras.has(a.id)) - Number(extras.has(b.id)) || a.cost - b.cost,
+            );
+          if (units.length === 0) return '';
+          const chips = units
+            .map((u) => {
+              const from = source.get(u.id);
+              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}`;
+              return `<button class="chip ${isUnitOn(u.id) ? 'active' : ''} ${
+                from ? 'is-extra' : ''
+              }" data-unit="${u.id}" title="${esc(title)}">
                  ${u.short} ${u.name}
-               </button>`,
-          )
-          .join('');
-        return `<div class="era-group">
-          <span class="era-tag">${era.name}</span>
-          <div class="chip-row">${chips}</div>
-        </div>`;
-      }).join('');
+               </button>`;
+            })
+            .join('');
+          return `<div class="era-group">
+            <span class="era-tag">${era.name}</span>
+            <div class="chip-row">${chips}</div>
+          </div>`;
+        })
+        .join('');
+
+      const poolTotal = allUnits.length;
+      const extraTotal = allUnits.filter((u) => extras.has(u.id)).length;
+      const onTotal = allUnits.filter((u) => isUnitOn(u.id)).length;
+      // 数字单独套一层，点开弹层里勾选时只改这一格，不重绘按钮
+      const poolHint = `已选 <span data-pool-count>${onTotal}</span> / ${poolTotal}${
+        extraTotal > 0 ? ` · 其中 ${extraTotal} 个来自扩展或自定义` : ''
+      }`;
 
       // 前置关系直接写在卡片上：一个"勾了却不生效"的开关比没有这个开关更糟
       const reqLine = (id: string): string => {
@@ -562,9 +665,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                兵种池 <span class="field-hint">至少留一个；高时代兵种要城市升级后才能生产</span>
+                兵种池 <span class="field-hint">这一局能造什么，扩展兵种也在这里开关</span>
               </div>
-              ${unitGroups}
+              <button type="button" class="pool-open" data-act="unit-pool">
+                <span class="pool-open-text">
+                  <b>调整兵种池</b>
+                  <i>${poolHint}${config.draftMode ? ' · 本局开了选卡，名单由 BP 决定' : ''}</i>
+                </span>
+                <span class="pool-open-go">展开</span>
+              </button>
+              <div class="field-hint">至少留一个；高时代兵种要城市升级后才能生产。带「扩」的是扩展 / 自定义兵种，默认就开着。</div>
             </section>
 
             <section class="field">
@@ -717,6 +827,26 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
             </div>
           </div>
+
+          ${
+            poolOpen
+              ? `<div class="pool-layer" role="dialog" aria-modal="true" aria-label="兵种池">
+                   <div class="pool-head">
+                     <div class="pool-head-text">
+                       <b>兵种池</b>
+                       <span>${poolHint} —— 关掉的兵这一局造不出来</span>
+                     </div>
+                     <button class="btn btn-sm btn-primary" data-act="unit-pool-close">完成</button>
+                   </div>
+                   <div class="pool-body">${unitGroups}</div>
+                   <div class="pool-foot">
+                     <button class="btn btn-sm" data-act="unit-pool-all">全选</button>
+                     <button class="btn btn-sm" data-act="unit-pool-base">只留本体</button>
+                     <span class="field-hint">带「扩」的是扩展 / 自定义兵种：勾了对应的包就自动在池子里，不想用才在这里关；虚线框＝这一局关掉了。</span>
+                   </div>
+                 </div>`
+              : ''
+          }
         </div>
       `;
 
@@ -726,6 +856,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         nextBody.scrollTop = prevScrollTop;
         nextBody.scrollLeft = prevScrollLeft;
       }
+      const nextPool = mask.querySelector<HTMLElement>('.pool-body');
+      if (nextPool) nextPool.scrollTop = prevPoolScroll;
       if (prevFocus) {
         mask.querySelector<HTMLElement>(prevFocus)?.focus({ preventScroll: true });
       }
@@ -735,6 +867,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const target = e.target as HTMLElement;
 
       if (target === mask) {
+        // 兵种池盖在面板上：这时候点外面是"关掉这一层"，而不是把整个开局
+        // 设置也一起关掉——两百多个兵种还没看完就被弹出去，得重来一遍。
+        if (poolOpen) {
+          poolOpen = false;
+          paint();
+          return;
+        }
         close(null);
         return;
       }
@@ -893,14 +1032,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const unitBtn = target.closest<HTMLElement>('[data-unit]');
       if (unitBtn?.dataset.unit) {
         const id = unitBtn.dataset.unit;
-        const before = config.enabledUnits.length;
-        toggleUnit(id);
-        // 只翻转这一颗 chip 的样式，不重绘整个面板。
-        // 兵种池在面板最底下，重绘会把滚动位置清零，点一下就像被弹回顶部；
-        // 而且全部重绘还会让 chip 闪一下。和上面扩展勾选是同一套做法。
-        if (config.enabledUnits.length !== before) {
-          unitBtn.classList.toggle('active', config.enabledUnits.includes(id));
-        }
+        const wasOn = isUnitOn(id);
+        // 至少留一个：一个兵都没有的池子开不了局，而"开局才发现造不了兵"
+        // 比"这一下点不动"难解释得多。弹层里就这么一下的静默拒绝。
+        if (wasOn && onUnitCount() <= 1) return;
+        setUnitOn(id, !wasOn);
+        // 只翻转这一颗 chip 的样式，不重绘整个弹层：
+        // 两百多个 chip 重绘会闪，滚动位置也得再搬一次。
+        unitBtn.classList.toggle('active', !wasOn);
+        paintPoolCount();
         return;
       }
 
@@ -921,6 +1061,30 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (act === 'reroll') {
         currentSeed = randomSeed();
         paint();
+      }
+
+      // ── 兵种池弹层：展开 / 收起 / 全选 / 只留本体 ──
+      if (act === 'unit-pool') {
+        poolOpen = true;
+        paint();
+        return;
+      }
+      if (act === 'unit-pool-close') {
+        poolOpen = false;
+        paint();
+        return;
+      }
+      if (act === 'unit-pool-all' || act === 'unit-pool-base') {
+        // 两颗都是"一次改一整套"，改完必须重绘——不像单点一颗那样能就地翻转。
+        // 「只留本体」不会把池子清空（本体兵种全部留下），所以过得了"至少留一个"。
+        const onlyBase = act === 'unit-pool-base';
+        const { catalog, extras } = unitPool();
+        for (const id of Object.keys(catalog)) {
+          if (isPseudoUnit(id)) continue;
+          setUnitOn(id, onlyBase ? !extras.has(id) : true);
+        }
+        paint();
+        return;
       }
 
       // ── 地图页：选文件 / 上传 / 取消 / 刷新 ──
@@ -1015,6 +1179,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const stylesBefore = mapStylesFor(config.expansionIds).length;
       // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「现代」这一格。
       const erasBefore = ERAS.filter((e) => e.level <= eraCeilingFor(config.expansionIds)).length;
+      // 兵种池同样是扩展的函数：这一包带的兵会多出来 / 少掉十几格。
+      const unitsBefore = Object.keys(unitPool().catalog).length;
       if (input.checked) {
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
         // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
@@ -1029,6 +1195,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         }
       } else {
         config.expansionIds = config.expansionIds.filter((x) => x !== id);
+        // 这一包的兵从名单里消失了，那些"关掉"的记录也就没了意义——
+        // 留着的话，下次再把这一包勾回来，玩家会发现几条船还是关着的，
+        // 而他上次关它们可能已经是好几局以前的事。
+        const gone = new Set((expansionById(id)?.units ?? []).map((u) => u.id));
+        if (gone.size > 0) {
+          config.disabledUnits = (config.disabledUnits ?? []).filter((x) => !gone.has(x));
+        }
       }
       // 关掉「地形高差」之后，原来选中的高原/峡谷必须退回"随机"——
       // 不然会画出一张满地图台地、但规则里没有高度的图。
@@ -1042,8 +1215,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const ceilingNow = eraCeilingFor(config.expansionIds);
       if (config.startEra > ceilingNow) config.startEra = ceilingNow;
       const erasAfter = ERAS.filter((e) => e.level <= ceilingNow).length;
-      // 选项数变了就重绘（地貌 chip 与时代按钮要增删）。其余情况只改边框，避免 checkbox 闪。
-      if (available.length !== stylesBefore || erasAfter !== erasBefore) {
+      // 选项数变了就重绘（地貌 chip、时代按钮、兵种池的格子都要增删）。
+      // 其余情况只改边框，避免 checkbox 闪。
+      if (
+        available.length !== stylesBefore ||
+        erasAfter !== erasBefore ||
+        Object.keys(unitPool().catalog).length !== unitsBefore
+      ) {
         paint();
         return;
       }

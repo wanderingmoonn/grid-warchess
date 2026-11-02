@@ -13819,5 +13819,42 @@ test('多人局的顺序、名单、金币都不认识"对方"这个概念', () 
   assert.equal(unitsOf(s, 'D').length, 0);
 });
 
+console.log('\n兵种池：谁能进场');
+
+test('勾了扩展，它带的兵默认进场（不用一个个去勾）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  assert.ok(s.unitTypes.nv_galley, '「海战」勾上，桨帆船就该在兵表里');
+  assert.ok(s.config.enabledUnits.includes('nv_galley'), '写回 config 的名单里也要有它');
+});
+
+test('关掉的扩展兵种真的不进场，其它船照旧', () => {
+  // 这条是这次改动的核心：以前扩展兵是"无条件并入池子"的，面板上关不掉。
+  const s = fresh({ expansionIds: ['naval-fleet'], disabledUnits: ['nv_galley'] });
+  assert.equal(s.unitTypes.nv_galley, undefined, '关掉的桨帆船不该进兵表');
+  assert.equal(s.config.enabledUnits.includes('nv_galley'), false, '写回的名单里也不该有它');
+  assert.ok(s.unitTypes.nv_carrack, '同一包里的其它船不该被牵连');
+  assert.deepEqual(s.config.disabledUnits, ['nv_galley'], '这一笔要活进 config，下一局才记得住');
+});
+
+test('关掉的是一个不存在的 id：不报错，也不影响别人', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'], disabledUnits: ['no-such-ship'] });
+  assert.ok(s.unitTypes.nv_galley, '写错的 id 不该顺手把同包其它船带走');
+  assert.deepEqual(s.config.disabledUnits, [], '不存在的兵种不留进名录');
+});
+
+test('全关光了也不给一个空池：退回本体兵种', () => {
+  // 面板上有"至少留一个"的关，但配置也会从存档、分享链接、联机房间进来，
+  // 那种路径不经过面板。空池子的局连产线都起不来，只能退回本体。
+  const everything = [
+    ...Object.keys(UNIT_TYPES),
+    ...Object.keys(createMatch({ ...DEFAULT_CONFIG, expansionIds: ['naval-fleet'] }, 7).unitTypes),
+  ];
+  const s = fresh({ expansionIds: ['naval-fleet'], enabledUnits: [], disabledUnits: everything });
+  assert.ok(s.config.enabledUnits.length > 0, '不该是空池');
+  for (const id of s.config.enabledUnits) {
+    assert.ok(UNIT_TYPES[id], `${id} 应该是本体兵种`);
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

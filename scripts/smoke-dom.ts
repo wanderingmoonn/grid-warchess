@@ -239,6 +239,17 @@ check('布局契约：窄屏/矮屏的开局面板能滚（样式表里那三条
     css.includes('@media (max-height: 560px)'),
     '矮窗口（横屏手机 / 被压扁的预览区）要有单独一档',
   );
+
+  // 兵种池是盖在面板上的一层：它得照着 .modal 定位，而且里面那块要能自己滚，
+  // 否则两百多个 chip 会把弹层顶穿、底下两颗批量按钮跑出屏幕。
+  assert.ok(
+    /position:\s*absolute/.test(block('.pool-layer')) && /inset:\s*0/.test(block('.pool-layer')),
+    '兵种池弹层要 position:absolute + inset:0 才盖得住面板',
+  );
+  assert.ok(
+    /min-height:\s*0/.test(block('.pool-body')) && /overflow-y:\s*auto/.test(block('.pool-body')),
+    '.pool-body 少了 min-height:0 / overflow-y:auto，兵种池就滚不动',
+  );
 });
 
 check('浓雾扩展：视野外的地形和敌城都不渲染', () => {
@@ -1146,11 +1157,80 @@ check('点新对局会打开设置面板', () => {
   assert.ok(doc.querySelector('.modal-mask'), '应该弹出设置面板');
   assert.ok(doc.querySelectorAll('.expansion-item').length >= 6, '应该列出全部扩展规则');
   assert.ok(doc.querySelectorAll('[data-size]').length >= 3, '应该能选棋盘大小');
-  assert.ok(doc.querySelectorAll('[data-unit]').length >= 4, '应该能选参战兵种');
+  // 兵种池不再直接铺在页面上：战役页只有一行摘要 + 一颗「调整兵种池」
+  assert.ok(doc.querySelector('[data-act="unit-pool"]'), '应该有兵种池入口');
+  assert.equal(doc.querySelectorAll('[data-unit]').length, 0, '收起来了：没点开之前不该有 chip');
   assert.ok(doc.querySelector('[data-ai="1"]'), '应该能选人机对战');
   assert.ok(doc.querySelectorAll('[data-era]').length >= 5, '应该能选起始时代');
   // 双人热座的时候选"AI 有多聪明"是没有意义的，这一行不该出现
   assert.equal(doc.querySelector('[data-ailevel]'), null, '热座模式不该有难度选项');
+});
+
+/** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */
+function openPool(): void {
+  if (!doc.querySelector('.pool-layer')) click('[data-act="unit-pool"]');
+}
+
+function closePool(): void {
+  if (doc.querySelector('.pool-layer')) click('[data-act="unit-pool-close"]');
+}
+
+check('兵种池收进一层弹层：点开才出现全表，按时代分组', () => {
+  openPool();
+  assert.ok(doc.querySelector('.pool-layer'), '应该盖出一层兵种池');
+  assert.ok(doc.querySelectorAll('[data-unit]').length >= 4, '应该能选参战兵种');
+  assert.ok(doc.querySelectorAll('.pool-body .era-group').length >= 3, '按时代分组');
+  // 点外面（遮罩）只关这一层，不把整个开局设置一起关掉
+  doc.querySelector<HTMLElement>('.modal-mask')!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(doc.querySelector('.pool-layer'), null, '点遮罩应该只收起兵种池');
+  assert.ok(doc.querySelector('.start-panel'), '开局设置还在');
+});
+
+/** 勾/取消一个扩展。**每次都要重新取一次节点**：勾选会整块重绘面板，
+ *  上一次抓到的那个 checkbox 已经是野节点了，事件根本冒不到遮罩上。 */
+function setExpansion(id: string, on: boolean): void {
+  const box = doc.querySelector<HTMLInputElement>(`[data-exp="${id}"]`);
+  assert.ok(box, `开局面板里应有「${id}」这一项`);
+  box!.checked = on;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+
+check('扩展兵种也在兵种池里，而且真的关得掉', () => {
+  // 这一条是这次改动的正题：以前扩展带的兵是"无条件并入池子"的，
+  // 面板上根本看不到它们，更别说关掉。
+  setExpansion('naval-fleet', true);
+
+  openPool();
+  const chips = [...doc.querySelectorAll<HTMLElement>('[data-unit]')];
+  const galley = chips.find((el) => el.dataset.unit === 'nv_galley');
+  assert.ok(galley, '「海战」勾上之后，桨帆船应该出现在兵种池里');
+  assert.ok(galley!.classList.contains('is-extra'), '扩展兵种要能和本体兵种区分开');
+  assert.ok(galley!.classList.contains('active'), '扩展兵种默认是开着的');
+
+  // 关掉它：chip 就地翻转，数字要跟着变
+  const before = Number(doc.querySelector('[data-pool-count]')?.textContent ?? '0');
+  galley!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.ok(!galley!.classList.contains('active'), '点一下应该关掉');
+  const after = Number(doc.querySelector('[data-pool-count]')?.textContent ?? '0');
+  assert.equal(after, before - 1, '「已选」要跟着少一个');
+
+  // 收起来之后，摘要里的数字也是关着的那个
+  closePool();
+  assert.equal(
+    Number(doc.querySelector('[data-pool-count]')?.textContent ?? '0'),
+    after,
+    '收起弹层后摘要要接着显示关掉之后的数',
+  );
+
+  // 换一回：把「海战」关掉，这一包的兵不该留着"关掉"的记录
+  setExpansion('naval-fleet', false);
+  openPool();
+  assert.equal(
+    doc.querySelector('[data-unit="nv_galley"]'),
+    null,
+    '扩展关掉之后，它带的兵种要整批离开名单',
+  );
+  closePool();
 });
 
 check('选了人机对战才出现三档 AI：初级 / 中级 / 高级，默认高级', () => {
@@ -1298,9 +1378,10 @@ check('扩展规则可以勾选并高亮', () => {
 });
 
 check('兵种至少保留一个，不能全取消', () => {
+  openPool();
   const total = doc.querySelectorAll('[data-unit]').length;
   assert.ok(total >= 4);
-  // 兵种 chip 是就地翻转的（不重绘面板），所以还能抓住同一个节点
+  // 兵种 chip 是就地翻转的（不重绘弹层），所以还能抓住同一个节点
   for (let i = 0; i < total + 2; i++) {
     const on = doc.querySelector<HTMLElement>('[data-unit].active');
     if (!on) break;
@@ -1309,12 +1390,19 @@ check('兵种至少保留一个，不能全取消', () => {
   assert.equal(doc.querySelectorAll('[data-unit].active').length, 1, '最后应该强制留下一个兵种');
 });
 
-check('兵种池按时代分组展示', () => {
-  assert.ok(doc.querySelectorAll('.era-group').length >= 3, '三个时代各一组');
-  const tags = Array.from(doc.querySelectorAll('.era-tag')).map((n) => n.textContent?.trim());
-  // 第五时代叫「二战」（第六时代「现代」的兵全在「现代战争」包里，
-  // 而兵种池只列原版 + 自定义兵，所以这里到二战为止）
-  assert.deepEqual(tags, ['古典', '中世', '火药', '工业', '二战']);
+check('兵种池的两颗批量按钮：全选 / 只留本体', () => {
+  click('[data-act="unit-pool-all"]');
+  const total = doc.querySelectorAll('[data-unit]').length;
+  assert.equal(doc.querySelectorAll('[data-unit].active').length, total, '全选＝一格不落');
+  click('[data-act="unit-pool-base"]');
+  assert.equal(
+    doc.querySelectorAll('[data-unit].is-extra.active').length,
+    0,
+    '只留本体＝扩展 / 自定义兵全部关掉',
+  );
+  assert.ok(doc.querySelectorAll('[data-unit].active').length >= 4, '本体兵种一个不少');
+  click('[data-act="unit-pool-all"]');
+  closePool();
 });
 
 check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
@@ -1359,20 +1447,26 @@ check('起始时代只摆到这一局的上限：勾上「现代」才多出第�
   assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
 });
 
-check('点兵种不重绘面板，不会把页面弹回顶部', () => {
-  const body = doc.querySelector<HTMLElement>('.modal-body');
-  assert.ok(body, '找不到面板滚动区');
-  // 模拟"已经滚到兵种池那一屏"
+check('点兵种不重绘弹层，不会把列表弹回顶部', () => {
+  openPool();
+  const body = doc.querySelector<HTMLElement>('.pool-body');
+  assert.ok(body, '找不到兵种池滚动区');
+  // 模拟"已经滚到第五时代那一屏"
   body.scrollTop = 240;
 
-  const chip = doc.querySelector<HTMLElement>('[data-unit]:not(.active)');
-  assert.ok(chip, '需要一个未选中的兵种');
+  const chip = doc.querySelector<HTMLElement>('[data-unit].active');
+  assert.ok(chip, '需要一个选中的兵种');
   chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
-  // 重建 .modal-body 会把 scrollTop 清零，这就是"弹回顶部"的根因
-  assert.equal(doc.querySelector<HTMLElement>('.modal-body'), body, '点兵种不该重建滚动区');
+  // 重建 .pool-body 会把 scrollTop 清零，这就是"弹回顶部"的根因
+  assert.equal(doc.querySelector<HTMLElement>('.pool-body'), body, '点兵种不该重建滚动区');
   assert.equal(body.scrollTop, 240, '滚动位置不该被重置');
-  assert.ok(chip.classList.contains('active'), 'chip 应该就地点亮');
+  assert.ok(!chip.classList.contains('active'), 'chip 应该就地熄灭');
+
+  // 点回来，后面的对局还需要完整兵种池
+  chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.ok(chip.classList.contains('active'), '再点一下应该亮回来');
+  closePool();
 });
 
 check('确实要重绘的按钮，滚动位置也会被搬回来', () => {
@@ -1395,11 +1489,9 @@ check('确实要重绘的按钮，滚动位置也会被搬回来', () => {
 });
 
 // 把兵种全部勾回来，后面的对局才有完整兵种可造
-for (let i = 0; i < 20; i++) {
-  const off = doc.querySelector<HTMLElement>('[data-unit]:not(.active)');
-  if (!off) break;
-  off.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-}
+openPool();
+click('[data-act="unit-pool-all"]');
+closePool();
 
 click('[data-size="20"]');
 click('[data-act="start"]');

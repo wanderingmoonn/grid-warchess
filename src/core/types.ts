@@ -1109,6 +1109,15 @@ export interface MatchConfig {
   expansionIds: string[];
   /** 启用的兵种 id */
   enabledUnits: string[];
+  /**
+   * 被显式关掉的兵种（只记"本来会自己进场"的那些：自定义兵、已开扩展带的兵）。
+   *
+   * 为什么要和 `enabledUnits` 分两张表：这两类兵**默认就在池子里**——
+   * 勾了海军包就该有那十六条船，不用玩家再一条条勾。如果只靠"在不在 enabledUnits 里"
+   * 表达开关，那"没勾"和"这一版还不认识这个 id"就分不开了，老存档一读出来
+   * 整支舰队都会静默消失。这张表只记"玩家主动关掉的"，没记的一律算开。
+   */
+  disabledUnits?: string[];
 }
 
 export interface PlayerState {

@@ -2131,6 +2131,20 @@ a.btn {
   color: #fff;
 }
 
+/*
+ * 扩展 / 自定义兵种：名字后面挂一个淡淡的「扩」。
+ *
+ * 它是"勾了包才在名单里"的——和本体兵种不是一回事：本体兵种关掉只是这一局
+ * 不造，扩展兵关掉更接近"这一包的东西我不想要"。用一颗字标出来，比让玩家
+ * 自己去猜"这条船哪来的"省事。
+ */
+.chip.is-extra::after {
+  content: '扩';
+  margin-left: 4px;
+  font-size: 9.5px;
+  opacity: 0.6;
+}
+
 .expansion-list {
   display: flex;
   flex-direction: column;
@@ -2912,6 +2926,187 @@ a.btn {
   flex: 0 0 auto;
 }
 
+/* ---------- 兵种池：一行入口 + 一层全表 ----------
+
+ * 两百多个兵种直接铺在战役页最下面时，这一页变成了一条长卷：想改"要不要带
+ * 那几条船"得先滚过人数、时代、尺寸、选卡、地貌。所以收成一行摘要 + 一颗按钮，
+ * 全表挪进一层盖在面板上的弹层——名单一格没少，只是要点一下才出来。
+ */
+.pool-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.pool-open:hover {
+  border-color: var(--a);
+  background: var(--a-soft);
+}
+
+.pool-open-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pool-open-text b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pool-open-text i {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.pool-open-go {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--a);
+}
+
+/* 弹层要相对 .modal 定位，否则它会照着遮罩铺满整屏 */
+.modal.start-panel {
+  position: relative;
+}
+
+.pool-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: inherit;
+}
+
+.pool-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pool-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pool-head-text b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pool-head-text span {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.pool-head .btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* 只有这一块滚：标题与底部两颗批量按钮始终在视野里 */
+.pool-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 12px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 一组 chip 换行之后，时代标签要对齐第一行而不是整组的中线 */
+.pool-body .era-group {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+
+.pool-body .era-tag {
+  padding-top: 7px;
+}
+
+.pool-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.pool-foot .field-hint {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+/*
+ * 兵种池里的 chip 是**开关**，不是"从一排里挑一个"。
+ *
+ * 所以这里不套用「选中＝黑底反白」那身衣服：一屏四五十个黑药丸，看着像整页都
+ * 高亮了，反而读不出哪个是关的。改成一张开关表——
+ *   开＝浅底 + 前面一颗实心圆点；关＝虚线框 + 文字压暗。
+ * 一眼扫过去，"关着的"是那一小撮不一样的，这正是玩家要找的东西。
+ */
+.pool-body .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* 圆点：开关的把手 */
+.pool-body .chip::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--text-3);
+  background: transparent;
+}
+
+.pool-body .chip.active {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.pool-body .chip.active::before {
+  border-color: var(--a);
+  background: var(--a);
+}
+
+.pool-body .chip:not(.active) {
+  border-style: dashed;
+  color: var(--text-3);
+}
+
 /* 待上传的那张图：缩略图 + 元信息 + 两颗按钮 */
 .map-draft {
   display: flex;
@@ -3072,6 +3267,19 @@ a.btn {
   .chip {
     padding: 9px 14px;
     font-size: 13px;
+  }
+
+  /* 兵种池：手机上留白收一档，把高度还给那两百多个 chip */
+  .pool-head {
+    padding: 12px 14px 10px;
+  }
+
+  .pool-body {
+    padding: 12px 14px;
+  }
+
+  .pool-foot {
+    padding: 8px 14px;
   }
 }
 

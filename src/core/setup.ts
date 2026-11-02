@@ -130,6 +130,30 @@ export function normalizePlayerNames(s: GameState): boolean {
   return touched;
 }
 
+/**
+ * 这组扩展一共带来哪些兵种。
+ *
+ * 抽成独立函数是因为现在有**两处**要问这个问题，而它们必须给出同一个答案：
+ *   · createMatch——决定这一局的 `state.unitTypes` 里有什么；
+ *   · 开局面板的兵种池弹层——决定列表里该出现哪些格子。
+ * 两边各写一遍的话，面板上勾着的船在进局后"造不出来"只是时间问题。
+ *
+ * 前置两条都要查：包级 `enabledExpansionIds`（前置包没开就不算），
+ * 以及单位级 `requiresPack`（圣剑勇者要「现代」那套才成立）。
+ */
+export function expansionUnitsFor(expansionIds: string[]): Record<string, UnitTypeDef> {
+  const live = enabledExpansionIds(expansionIds);
+  const out: Record<string, UnitTypeDef> = {};
+  for (const id of expansionIds) {
+    if (!live.has(id)) continue;
+    for (const u of expansionById(id)?.units ?? []) {
+      if (u.requiresPack && !live.has(u.requiresPack)) continue;
+      out[u.id] = { ...u };
+    }
+  }
+  return out;
+}
+
 export function createMatch(
   config: MatchConfig,
   seed: number,
@@ -140,18 +164,12 @@ export function createMatch(
   // 注意这里用的是 enabledExpansionIds 而不是 config.expansionIds：
   // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
   // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
+  const extraUnits: Record<string, UnitTypeDef> = {
+    ...customUnits,
+    ...expansionUnitsFor(config.expansionIds),
+  };
+  // 城市边长那边还要按包查一次，所以这份集合留着
   const liveExpansions = enabledExpansionIds(config.expansionIds);
-  const extraUnits: Record<string, UnitTypeDef> = { ...customUnits };
-  for (const id of config.expansionIds) {
-    if (!liveExpansions.has(id)) continue;
-    for (const u of expansionById(id)?.units ?? []) {
-      // 单位级的额外前置（`requiresPack`）：圣剑勇者、邪龙王要「现代」那一套才成立。
-      // 这里直接不收，而不是收进来再在产线上标灰——不存在的兵种不该在选卡池、
-      // AI 报价、规则书里各留下一个"看着能买、点了没反应"的影子。
-      if (u.requiresPack && !liveExpansions.has(u.requiresPack)) continue;
-      extraUnits[u.id] = { ...u };
-    }
-  }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
   // 城市边长：扩展可以要求更大的主城（「城郭与物料」要 3×3）。
@@ -205,6 +223,27 @@ export function createMatch(
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
   for (const id of Object.keys(extraUnits)) {
     if (!pool.includes(id)) pool.push(id);
+  }
+  /**
+   * 显式关掉的兵种从这里剔出去。
+   *
+   * 这一步必须放在"扩展兵默认进场"**之后**：默认进场是规则，关掉是玩家在这条
+   * 规则上开的一个口子。顺序反过来，被关掉的船会在下一行又被加回池子里——
+   * 面板上看着是关的，进局照样能造。
+   */
+  const disabled = new Set(config.disabledUnits ?? []);
+  if (disabled.size > 0) {
+    for (let i = pool.length - 1; i >= 0; i--) {
+      if (disabled.has(pool[i])) pool.splice(i, 1);
+    }
+  }
+  // 全关掉了（配置从存档/链接进来，没经过面板那道"至少留一个"的关）：
+  // 退回本体兵种，别拿一个空池去开局——那样连产线都起不来。
+  // 这一次连 disabled 也不看了：空池比"不听你的"更糟。
+  if (pool.length === 0) {
+    for (const id of Object.keys(UNIT_TYPES)) {
+      if (!isPseudoUnit(id)) pool.push(id);
+    }
   }
 
   // 开局部队只给时代 1 的**陆军**战斗单位：
@@ -380,6 +419,9 @@ export function createMatch(
       // 在存档里显示成一句谎话。
       expansionIds: EXPANSIONS.filter((e) => liveExpansions.has(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
+      // 关掉的那些也要活进 config：兵种池弹层靠它把"关着"的格子画回去，
+      // 少了这一行，下一局打开面板会看到整排船又亮了起来。
+      disabledUnits: Array.from(disabled).filter((id) => catalog[id]),
       // 人数必须活进 state.config：席位（谁上场、轮到谁、谁还活着）全靠它，
       // 和上面那些开关一样，这个是逐个白名单抄的，漏一个就等于被吃掉。
       playerCount,
