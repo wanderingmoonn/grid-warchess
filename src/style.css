@@ -594,7 +594,7 @@ body {
 
 .tile.aim::after {
   /* 叠加一层浅红色底 */
-  background-color: rgba(191, 28, 16, 0.15);
+  background-color: rgba(191, 28, 16, 0.628);
   background: repeating-linear-gradient(
     45deg,
     rgba(200, 80, 60, 0.13) 0 4px,

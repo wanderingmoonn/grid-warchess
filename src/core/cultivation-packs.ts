@@ -13,7 +13,7 @@ import { DAMAGE_STAGE } from './ability-hooks.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
 
 // 境界名称
-const _REAMLS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
+const _REALMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
 
 // ── 修士身份判定 ────────────────────────────────────────────
 //
@@ -86,9 +86,8 @@ function getSwordSweepCells(
   return cells;
 }
 registerSkillEffect('sword-sweep', (c) => {
-  // 1. 检查并扣除攻击次数（相当于这一发剑气占用了一次普攻）
+  // 1. 扣除攻击次数
   if (c.self.attacksLeft === undefined) {
-    // 如果还没动过，先读取基础攻击次数
     c.self.attacksLeft = c.api.attacksPerTurn(c.state, c.self);
   }
   if (c.self.attacksLeft <= 0) {
@@ -98,31 +97,28 @@ registerSkillEffect('sword-sweep', (c) => {
   }
   c.self.attacksLeft -= 1;
   if (c.self.attacksLeft <= 0) {
-    c.self.acted = true; // 次数归零，彻底结束本回合
+    c.self.acted = true;
   }
-  // 放完技能即视为这一回合移动过了，不能放完再跑，不然太强
-  c.self.moved = true; 
+  c.self.moved = true;
 
-  // 2. 算路径（用我们新抽出来的函数）
-  // 如果没有 target（AI 自动释放），默认朝右
+  // 2. 算路径
   const tx = c.target?.x ?? c.self.x + 1;
   const ty = c.target?.y ?? c.self.y;
   const hitCells = getSwordSweepCells(c.state, c.self, tx, ty);
 
-  // 找受害者（单位）
-  const victims = c.state.units.filter(u => 
-    u.owner !== c.self.owner && 
-    u.hp > 0 && 
+  // 3. 找受害者
+  const victims = c.state.units.filter(u =>
+    u.owner !== c.self.owner &&
+    u.hp > 0 &&
     hitCells.some(cell => cell.x === u.x && cell.y === u.y)
   );
 
-  // 找受害者（城市）
   const cityVictims: City[] = [];
   for (const cell of hitCells) {
-    const city = c.state.cities.find(ct => 
-      ct.owner !== c.self.owner && 
-      !ct.ruined && 
-      cell.x >= ct.x && cell.x < ct.x + ct.size && 
+    const city = c.state.cities.find(ct =>
+      ct.owner !== c.self.owner &&
+      !ct.ruined &&
+      cell.x >= ct.x && cell.x < ct.x + ct.size &&
       cell.y >= ct.y && cell.y < ct.y + ct.size
     );
     if (city && !cityVictims.includes(city)) {
@@ -130,7 +126,10 @@ registerSkillEffect('sword-sweep', (c) => {
     }
   }
 
-  // 伤害结算
+  // 4. 记起始修为：用来在战报里报本次总增长（命中基础 + onUnitKilled 给的斩杀经验）
+  const expBefore = getExp(c.self);
+
+  // 5. 伤害结算
   let expGain = 1;
   let logExtra = '';
   let deadCount = 0;
@@ -138,55 +137,66 @@ registerSkillEffect('sword-sweep', (c) => {
   if (victims.length > 0 || cityVictims.length > 0) {
     expGain += victims.length * 5 + cityVictims.length * 5;
     let totalDmg = 0;
-    
-    // 临时攻击加成1.2
-    const baseAtk = c.api.utype(c.state, c.self.type).atk + (c.self.atkBonus ?? 0);
-    const skillBonus = Math.round(baseAtk * 0.2);
-    c.self.atkBonus = (c.self.atkBonus ?? 0) + skillBonus;
 
-    // 打单位
-    for (const v of victims) {
-      const dmg = c.api.computeDamage(c.state, c.self, v);
-      v.hp -= dmg;
-      totalDmg += dmg;
-      if (v.hp <= 0) deadCount++;
-    }
-
-    // 打城市
-    for (const ct of cityVictims) {
-      const fakeCity = {
-        type: '__city__',
-        __isCity: true,
-        __city: ct,
-        x: ct.x, y: ct.y,
-        status: {},
-      } as any;
-      const dmg = c.api.computeDamage(c.state, c.self, fakeCity);
-      ct.hp -= dmg;
-      totalDmg += dmg;
-      if (ct.hp <= 0) {
-        ct.hp = 0;
-        ct.ruined = true;
-        if (!c.state.firstCityLost) c.state.firstCityLost = ct.owner;
+    // 剑修技能模式：境界加成从普攻 ×0.8 切到 ×1.2
+    c.self.custom ??= {};
+    c.self.custom.swordSweepActive = true;
+    try {
+      for (const v of victims) {
+        const dmg = c.api.computeDamage(c.state, c.self, v);
+        v.hp -= dmg;
+        totalDmg += dmg;
       }
+      for (const ct of cityVictims) {
+        const fakeCity = {
+          type: '__city__',
+          __isCity: true,
+          __city: ct,
+          x: ct.x, y: ct.y,
+          status: {},
+        } as any;
+        const dmg = c.api.computeDamage(c.state, c.self, fakeCity);
+        ct.hp -= dmg;
+        totalDmg += dmg;
+        if (ct.hp <= 0) {
+          // 调用核心统一接口：处理变废墟、挤人、写战报
+          c.api.destroyCity(c.state, ct, c.self.owner);
+        }
+      }
+    } finally {
+      delete c.self.custom.swordSweepActive;
     }
 
-    c.self.atkBonus = (c.self.atkBonus ?? 0) - skillBonus;
+    // 命中基础经验（可能触发突破）
+    addExp(c.self, c.state, expGain);
 
-    logExtra = `，剑气斩中 ${victims.length} 人、${cityVictims.length} 城，造成 ${totalDmg} 伤害`;
-    
-    if (deadCount > 0) {
-      c.state.units = c.state.units.filter(u => u.hp > 0);
-      expGain += deadCount * 20;
-      logExtra += `，斩杀 ${deadCount} 人`;
+    // 逐人走完整死亡流程：onDeath、onUnitKilled 会依次触发。
+    // 剑修的斩杀经验（20/人）由 onUnitKilled 给，这里不重复加。
+    for (const v of victims) {
+      if (v.hp > 0) continue;
+      c.api.killUnit(c.state, v, c.self, `${c.api.utype(c.state, v.type).name} 被剑气斩杀`);
+      deadCount++;
     }
+
+    // 组装战报
+    const hitTexts: string[] = [];
+    if (victims.length > 0) hitTexts.push(`${victims.length} 人`);
+    if (cityVictims.length > 0) hitTexts.push(`${cityVictims.length} 城`);
+
+    const parts: string[] = [];
+    if (hitTexts.length > 0) parts.push(`命中 ${hitTexts.join('、')}`);
+    if (deadCount > 0) parts.push(`斩杀 ${deadCount} 人`);
+    parts.push(totalDmg > 0 ? `造成 ${totalDmg} 伤害` : `未造成伤害`);
+    logExtra = `，${parts.join('，')}`;
   } else {
-    logExtra = `，剑气落空，练剑一轮`;
+    // 落空也给一点基础修为（原有设计：练剑一轮）
+    addExp(c.self, c.state, expGain);
+    logExtra = `，剑气落空`;
   }
 
-  // 收尾
-  addExp(c.self, c.state, expGain);
-  c.result.log = `剑气纵横${logExtra}，修为 +${expGain}`;
+  // 6. 战报：修为报本次总增长（命中基础 + onUnitKilled 给的斩杀经验）
+  const totalExp = getExp(c.self) - expBefore;
+  c.result.log = `剑气纵横${logExtra}，修为 +${totalExp}`;
 });
 registerSkillPreview('sword-sweep', (c) => {
   const cells = getSwordSweepCells(c.state, c.self, c.target.x, c.target.y);
@@ -295,7 +305,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
     s.log.push({
       turn: s.turn,
       player: u.owner, 
-      text: `${u.type} 突破至 ${_REAMLS[newRank]} 期！`,
+      text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${_REALMS[newRank]} 期！`,
       open: true,
     });
   }
@@ -409,17 +419,25 @@ export const CULTIVATION_PACK: Expansion = {
     },
     modifyDamage: ({ state, attacker, damage }) => {
       if (!isCultivatorUnit(state, attacker)) return damage;
-      return damage + atkModifier(attacker);
+      // 剑修：境界加成按模式缩放（普攻 ×0.8 / 剑气纵横 ×1.2）
+      const mul = attacker.type === 'sword-cultivator'
+        ? (attacker.custom?.swordSweepActive === true ? 1.2 : 0.8)
+        : 1.0;
+      return damage + Math.floor(atkModifier(attacker) * mul);
     },
     // 攻城加成
     modifySiegeDamage: ({ state, attacker, damage }) => {
       if (!isCultivatorUnit(state, attacker)) return damage;
-      return Math.max(0, damage + atkModifier(attacker));
+      const mul = attacker.type === 'sword-cultivator'
+        ? (attacker.custom?.swordSweepActive === true ? 1.2 : 0.8)
+        : 1.0;
+      return Math.max(0, damage + Math.floor(atkModifier(attacker) * mul));
     },
     // 面板修正
     modifyStatAtk: ({ state, unit, atk }) => {
       if (!isCultivatorUnit(state, unit)) return atk;
-      return atk + atkModifier(unit);
+      const mul = unit.type === 'sword-cultivator' ? 0.8 : 1.0;
+      return atk + Math.floor(atkModifier(unit) * mul);
     },
     // 护甲修正
     modifyArmor: ({ state, defender, armor }) => {
@@ -499,12 +517,15 @@ export const CULTIVATION_PACK: Expansion = {
       const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
 
       const lines = [
-        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REAMLS[rank]}期`,
+        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REALMS[rank]}期`,
         nextExp !== null
           ? `修为经验：${exp} / ${nextExp}`
           : `修为经验：${exp}（已臻化境）`,
         `寿元：${age} / ${Number.isFinite(lifespan) ? lifespan : '∞'}`,
       ];
+      if (unit.type === 'sword-cultivator') {
+        lines.push(`剑修：境界加成在普攻时 ×0.8，剑气纵横时 ×1.2`);
+      }
 
       if (rank > 0) {
         const trueDmg = trueDamageOf(unit);

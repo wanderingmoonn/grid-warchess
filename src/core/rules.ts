@@ -166,6 +166,19 @@ const abilityApi: AbilityApi = {
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
   attacksPerTurn: (s, u) => attacksPerTurn(s, u),
+  killUnit: (s, victim, killer, logText) => {
+    if (!s.units.some((u) => u.id === victim.id)) return; // 幂等
+    s.units = s.units.filter((u) => u.id !== victim.id);
+    pushLog(
+      s,
+      killer?.owner ?? other(victim.owner),
+      logText ?? `${utype(s, victim.type).name} 被消灭`,
+      true,
+    );
+    drownCargo(s, victim);
+    fireKilled(s, victim, killer);
+  },
+  destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -2632,17 +2645,14 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       }
 
       if (target.hp <= 0) {
-        s.units = s.units.filter((u) => u.id !== target.id);
-        pushLog(s, owner, `${utype(s, target.type).name} 被击毁`, true);
-        fireKilled(s, target, b);
+        // 走完整死亡流程：删除 + 战报 + 沉船 + onDeath / onUnitKilled
+        abilityApi.killUnit(s, target, b, `${utype(s, target.type).name} 被击毁`);
       }
 
       for (const v of splashed) {
         if (v.unit.hp > 0) continue;
         if (!s.units.some((u) => u.id === v.unit.id)) continue;
-        s.units = s.units.filter((u) => u.id !== v.unit.id);
-        pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-        fireKilled(s, v.unit, b);
+        abilityApi.killUnit(s, v.unit, b, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
       }
     }
 
@@ -3105,6 +3115,57 @@ function doAttack(
   return { ok: true, state: s };
 }
 
+/**
+ * 攻破城市：将城市变为废墟，并挤出城内的守军。
+ * 
+ * 这个函数是所有攻城行为的唯一真相来源。无论是物理攻城、剑修剑气还是天降陨石，
+ * 只要城市耐久归零，都必须走这里。
+ * 
+ * 注意：这里只负责“破城”，不负责“接管”。接管依然需要派陆军走进废墟。
+ */
+export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void {
+  if (city.ruined) return; // 幂等：已经是废墟就不重复结算
+
+  const prevOwner = city.owner;
+  if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
+
+  // 破城 ≠ 易主。城墙打塌，城市变废墟
+  city.ruined = true;
+  city.hp = 0;
+  city.capturedTurn = s.turn;
+
+  // 城破了，守军不该跟着一起没。把他们挤出城外。
+  const tiles = cityTiles(city);
+  const garrison = s.units.filter(
+    (u) => u.owner === prevOwner && tiles.some((t) => t.x === u.x && t.y === u.y),
+  );
+  
+  let spilled = 0;
+  let stuck = 0;
+  
+  for (const g of garrison) {
+    // 因为城市已经置为 ruined，canStandAt 会把城内格子排除，
+    // 所以 freeNeighbor 只会往城外找位置。
+    const spot = freeNeighbor(s, g, g.type);
+    if (!spot) {
+      stuck += 1;
+      continue;
+    }
+    g.x = spot.x;
+    g.y = spot.y;
+    spilled += 1;
+  }
+  
+  if (garrison.length > 0) {
+    const parts: string[] = [];
+    if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
+    if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
+    pushLog(s, attackerOwner, `破城，${parts.join('，')}`, true);
+  }
+
+  pushLog(s, attackerOwner, `${cityName(city)} 被攻破——派兵入驻才能接管`, true);
+}
+
 function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   const attacker = unitById(s, unitId);
   const city = cityById(s, cityId);
@@ -3160,50 +3221,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   markManualFire(s, attacker);
 
   if (city.hp <= 0) {
-    const prevOwner = city.owner;
-    // 「谁先丢城」只记第一次：城会被抢回来，但"先吃亏"这件事不该被撤销。
-    if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
-
-    // 破城 ≠ 易主。城墙打塌、守军打光，但城还在原主名下，只是成了废墟：
-    // 想真正拿到它，得派兵走进去并掏钱重建（见 doMove 里的接管分支）。
-    // 这样"砸开城墙"和"拿到城市"是两件事，攻城方必须留一支部队去占。
-    city.ruined = true;
-    city.hp = 0;
-    // 当回合这条产线是瘫的（废墟本来就不产兵，这里保留是为了兼容旧存档逻辑）
-    city.capturedTurn = s.turn;
-
-    // 城破了，守军不该跟着一起没。
-    //
-    // 以前这里是"城中守军随城陷落"——整队直接清掉。问题是它把两件不相干的事
-    // 绑在了一起：城墙塌了，人为什么死？玩家把主力屯在城里守城，城一破整支
-    // 军队蒸发，这既没道理也没法预判——你会因为"守城"而输得比"不守"更惨。
-    // 现在改成把人挤到城外去：城是他们守丢的，不是他们的棺材。
-    //
-    // 挤不出去（四邻全被围死）就原地留一口气：活着是硬约束，站位可以妥协。
-    const tiles = cityTiles(city);
-    const garrison = s.units.filter(
-      (u) => u.owner === prevOwner && tiles.some((t) => t.x === u.x && t.y === u.y),
-    );
-    let spilled = 0;
-    let stuck = 0;
-    for (const g of garrison) {
-      const spot = freeNeighbor(s, g, g.type);
-      if (!spot) {
-        stuck += 1;
-        continue;
-      }
-      g.x = spot.x;
-      g.y = spot.y;
-      spilled += 1;
-    }
-    if (garrison.length > 0) {
-      const parts: string[] = [];
-      if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
-      if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
-      pushLog(s, attacker.owner, `破城，${parts.join('，')}`, true);
-    }
-
-    pushLog(s, attacker.owner, `${cityName(city)} 被攻破——派兵入驻才能接管`, true);
+    destroyCity(s, city, attacker.owner);
   }
 
   s.winner = checkWinner(s);
