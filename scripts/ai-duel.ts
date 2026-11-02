@@ -41,10 +41,28 @@ const has = (name: string): boolean => args.includes(`--${name}`);
 // 那一刻的 src/core/ai.ts"原样抄一份（只改导入路径）。想量"这一批改动本身值多少"，
 // 就得跟**上一版**比，而不是跟几轮之前的基线比——否则前后几批改动的收益会混在一起。
 const OLD_AI_FILE = argOf('old', './baseline-ai.ts');
-const SCRIPT = has('script');
-const scriptAi = SCRIPT
-  ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
-  : null;
+/**
+ * `--policy <名字>`：把"新版"那一侧换成固定打法脚本（不参与任何评分）。
+ *
+ *   greedy  scripts/script-ai.ts   六条常识的通用脚本（见该文件头）
+ *   hold    scripts/script-hold.ts  弃城发育流：放弃一座城、攒钱升城、守到四代再总攻
+ *
+ * `--script` 是 `--policy greedy` 的旧写法，留着不破坏已有命令。
+ */
+const POLICY = argOf('policy', has('script') ? 'greedy' : '');
+/**
+ * `--vs-new`：对手直接用**当前** AI，而不是冻结副本。
+ *
+ * 量"某条打法 vs 现在的 AI"时用它：冻结副本会随着代码演进变成"上一版"，
+ * 拿它当对手，结论会悄悄变成"vs 上一版"。
+ */
+const VS_NEW = has('vs-new');
+const scriptAi =
+  POLICY === 'hold'
+    ? ((await import('./script-hold.ts')).holdNextAction as unknown as typeof newAi)
+    : POLICY === 'greedy' || POLICY === 'script'
+      ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
+      : null;
 const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
   ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
 ) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
@@ -82,7 +100,8 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
     seed,
   );
 
-  const aiFor = (p: PlayerId): Ai => ((p === 'A') === aIsNew ? (scriptAi ?? newAi) : oldAi);
+  const aiFor = (p: PlayerId): Ai =>
+    (p === 'A') === aIsNew ? (scriptAi ?? newAi) : VS_NEW ? newAi : oldAi;
 
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
