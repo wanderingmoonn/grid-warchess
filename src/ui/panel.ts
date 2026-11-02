@@ -470,11 +470,18 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
       // 充能型技能要把"还剩几发"写在脸上：写成"就绪/冷却"会让人以为
       // 只能一次一次地等，而它其实是"攒着可以连开"的那一类。
       const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
-      const status = k.ready
-        ? '就绪'
-        : k.chargeMax > 0
-          ? `${k.toNext} 回合回一发`
-          : `${k.cd} 回合`;
+      let status = '就绪';
+      if (!k.ready) {
+        if (k.notReadyReason) {
+          status = k.notReadyReason; // 优先显示扩展给的原因（比如：攻击次数不足）
+        } else if (k.chargeMax > 0 && k.charge <= 0) {
+          status = `${k.toNext} 回合回一发`;
+        } else if (k.cd > 0) {
+          status = `${k.cd} 回合`;
+        } else {
+          status = '未就绪';
+        }
+      }
       if (k.chargeMax > 0) anyCharge = true;
       rows.push(
         `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>

@@ -137,6 +137,10 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
+import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+
+/** 非空时表示某个英雄正在等玩家选技能方向 */
+let pendingSkill: { unitId: string; skillId: string } | null = null;
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -424,6 +428,10 @@ function markReportSent(sig: string): void {
 
 let reach: number[] = [];
 let targets: string[] = [];
+/** 非空时表示技能正在选方向，里面是四周四个格子的坐标 */
+let aimTiles: number[] = [];
+/** 技能波及范围格子 */
+let skillThreatTiles: number[] = [];
 let siege: string[] = [];
 /** 非空时表示某个建造单位正在选址 */
 let buildPlan: { unitId: string; type: string } | null = null;
@@ -796,7 +804,7 @@ function render(): void {
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   const threat =
-    selected && selected.owner === state.current && !selected.acted
+    selected && selected.owner === state.current && !selected.acted && !pendingSkill
       ? Array.from(threatTiles(state, selected))
       : [];
 
@@ -825,6 +833,8 @@ function render(): void {
     selectedId,
     reach,
     targets,
+    aimTiles,
+    skillThreatTiles, 
     siegeTargets: siege,
     selectedCityId,
     placeable: computePlaceable(),
@@ -1133,6 +1143,47 @@ function syncTopbarScroll(): void {
 }
 /** 根据当前选中单位重算可达、可攻击、可攻城集合 */
 function refreshSelection(): void {
+  if (pendingSkill) {
+    reach = [];
+    targets = [];
+    siege = [];
+    aimTiles = []; 
+    skillThreatTiles = [];
+
+    const caster = state.units.find(u => u.id === pendingSkill?.unitId);
+    const skillId = pendingSkill.skillId;
+    const previewer = SKILL_PREVIEWERS[skillId];
+
+    if (caster) {
+      // 1. 依然是四周四个方向作为点击热区（这符合战棋习惯）
+      const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+      const threatSet = new Set<number>();
+
+      for (const [dx, dy] of dirs) {
+        const aimX = caster.x + dx;
+        const aimY = caster.y + dy;
+        
+        if (aimX >= 0 && aimY >= 0 && aimX < state.w && aimY < state.h) {
+          aimTiles.push(aimY * state.w + aimX);
+
+          // 2. 如果有预览器，就问一下这个方向会打到哪
+          if (previewer) {
+            const cells = previewer({ state, self: caster, target: { x: aimX, y: aimY } });
+            for (const cell of cells) {
+              // 把自己脚下和起点的 aim 格剔除
+              if (cell !== caster.y * state.w + caster.x && !aimTiles.includes(cell)) {
+                threatSet.add(cell);
+              }
+            }
+          }
+        }
+      }
+      skillThreatTiles = Array.from(threatSet);
+    }
+    return;
+  }
+  aimTiles = [];
+  skillThreatTiles = [];
   if (!selectedId) {
     reach = [];
     targets = [];
@@ -1187,11 +1238,14 @@ function clearSelection(): void {
   selectedTile = null;
   buildPlan = null;
   spawnPlan = null;
+  pendingSkill = null;
   loadPlan = null;
   unloadPlan = null;
   reach = [];
   targets = [];
   siege = [];
+  aimTiles = [];
+  skillThreatTiles = [];
 }
 
 /**
@@ -2174,6 +2228,33 @@ function onBoardClick(e: Event): void {
 
   const coords = coordsFromEvent(e);
 
+  // 0.1) 正在等待技能选点
+  if (pendingSkill && coords) {
+    const cell = idx(state, coords.x, coords.y);
+
+    // 如果点的是这4个高亮格之一，说明选定了方向
+    if (aimTiles.includes(cell)) {
+      const ok = dispatch({
+        type: 'HERO_SKILL',
+        unitId: pendingSkill.unitId,
+        skillId: pendingSkill.skillId,
+        targetX: coords.x,
+        targetY: coords.y,
+      });
+      
+      if (ok) {
+        pendingSkill = null; // 释放成功，清除状态
+      }
+    } else {
+      // 点到 4 格之外：取消施法
+      pendingSkill = null;
+      toast('已取消施法');
+    }
+    refreshSelection(); // 恢复常规的移动/攻击高亮
+    render();
+    return; // 阻断后续的逻辑
+  }
+
   // AI 正在行动：不许下子，但"看"必须留着。
   //
   // 对手思考、走子、开火，这一段能持续十几秒；以前整块 return，
@@ -2651,6 +2732,22 @@ function handleAction(act: string, el: HTMLElement): void {
       const unitId = el.dataset.id;
       const skillId = el.dataset.skill;
       if (!unitId || !skillId) return;
+
+      // 去兵种表里查出这个技能的原始数据
+      const unit = state.units.find(u => u.id === unitId);
+      const def = unit ? state.unitTypes[unit.type] : null;
+      const skillDef = def?.skills?.find(s => s.id === skillId);
+
+      // 如果数据里声明了需要选点/选方向，就进入等待状态
+      if (skillDef && (skillDef.targeting === 'point' || skillDef.targeting === 'direction')) {
+        pendingSkill = { unitId, skillId };
+        refreshSelection(); // 刷新高亮
+        toast('请在地图上点击要施放的方向或位置');
+        render();
+        return;
+      }
+
+      // 没声明需要选点，或者找不到数据，维持原来的直接释放
       dispatch({ type: 'HERO_SKILL', unitId, skillId });
       render();
       return;

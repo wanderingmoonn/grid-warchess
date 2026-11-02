@@ -592,6 +592,28 @@ body {
   box-shadow: inset 0 0 0 2px rgba(184, 67, 58, 0.85);
 }
 
+.tile.aim::after {
+  /* 叠加一层浅红色底 */
+  background-color: rgba(191, 28, 16, 0.15);
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(200, 80, 60, 0.13) 0 4px,
+    rgba(200, 80, 60, 0) 4px 8px
+  );
+  box-shadow: inset 0 0 0 2px rgba(184, 67, 58, 0.9), 
+              inset 0 0 8px rgba(184, 67, 58, 0.5);
+  cursor: crosshair;
+}
+
+.tile.skill-threat::after {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(200, 80, 60, 0.13) 0 4px,
+    rgba(200, 80, 60, 0) 4px 8px
+  );
+  box-shadow: inset 0 0 0 1px rgba(218, 106, 14, 0.814);
+}
+
 .tile.selected::after {
   box-shadow: inset 0 0 0 3px #e0a33c;
 }
