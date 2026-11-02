@@ -116,6 +116,12 @@ registerSkillEffect('sword-sweep', (c) => {
   const ty = c.target?.y ?? c.self.y;
   const hitCells = getSwordSweepCells(c.state, c.self, tx, ty);
 
+  // 战况烈度：剑气扫过的每一格都记，含空格——这才是"范围"的完整口径。
+  // noteHeatCell 默认记到"当前行动方的对手"账上，正好是"对方阵地上的弹坑"。
+  for (const cell of hitCells) {
+    c.api.noteHeat(c.state, cell.x, cell.y);
+  }
+
   // 3. 找受害者
   const victims = c.state.units.filter(u =>
     u.owner !== c.self.owner &&

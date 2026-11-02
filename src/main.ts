@@ -32,6 +32,7 @@ import {
   disbandRefundOf,
   eggSpots,
   heroBlocked,
+  heroSkillsOf,
   idx,
   incomeOf,
   isAirborne,
@@ -2155,6 +2156,27 @@ function forceSource(): string | null {
 }
 
 /**
+ * 放完一次技能之后，还能不能接着放同一个。
+ *
+ * 两个条件缺一不可：
+ *   · 技能声明了 `multiCast` —— 没声明的技能，`doHeroSkill` 的 `skillTurn`
+ *     会拒掉同一回合的第二次；
+ *   · `heroSkillsOf` 说它 `ready` —— 冷却、充能、`SKILL_READY_CHECKS`
+ *     全都走这一条。剑气纵横就靠最后那一项：攻击次数没打完才 ready。
+ *
+ * 修的是"每次放完技能都掉回普通操作"这件事。高等级剑修一回合能挥好几下，
+ * 每下都要重新点技能按钮再点方向，太碎了。放完还 ready 就留在瞄准模式里，
+ * 下一发直接点方向。
+ */
+function canRepeatSkill(unitId: string, skillId: string): boolean {
+  const u = state.units.find((x) => x.id === unitId);
+  if (!u) return false;
+  const info = heroSkillsOf(state, u).find((k) => k.def.id === skillId);
+  if (!info) return false;
+  return info.def.multiCast === true && info.ready;
+}
+
+/**
  * 只读查看：点这一格能看什么就看什么（单位 → 城市 → 地形），一个动词都不给。
  *
  * 用于"轮不到我"的三种场合：对方在联机里行动、AI 正在思考、自己这一手已经提交。
@@ -2231,16 +2253,21 @@ function onBoardClick(e: Event): void {
 
     // 如果点的是这4个高亮格之一，说明选定了方向
     if (aimTiles.includes(cell)) {
+      const { unitId, skillId } = pendingSkill;
       const ok = dispatch({
         type: 'HERO_SKILL',
-        unitId: pendingSkill.unitId,
-        skillId: pendingSkill.skillId,
+        unitId,
+        skillId,
         targetX: coords.x,
         targetY: coords.y,
       });
-      
-      if (ok) {
-        pendingSkill = null; // 释放成功，清除状态
+
+      // 放完之后还放不放得出去：
+      //   · 成功 + 还能连发（multiCast）→ 留在瞄准模式，下一发直接点方向
+      //   · 成功 + 次数/冷却已经不够     → 退出，回到普通操作
+      //   · 失败（dispatch 已经 toast 了原因）→ 也退出，别让玩家困在一个必然失败的模式里
+      if (!(ok && canRepeatSkill(unitId, skillId))) {
+        pendingSkill = null;
       }
     } else {
       // 点到 4 格之外：取消施法
@@ -2308,7 +2335,13 @@ function onBoardClick(e: Event): void {
     // 所以这里的顺序是先目标、后走位。
     const hit = stackAt(coords.x, coords.y).find((u) => targets.includes(u.id));
     if (hit) {
-      dispatch({ type: 'ATTACK', unitId: forcedFrom, targetId: hit.id });
+      dispatch({
+        type: 'ATTACK',
+        unitId: forcedFrom,
+        targetId: hit.id,
+        x: coords.x,
+        y: coords.y,
+      });
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -2467,14 +2500,26 @@ function onBoardClick(e: Event): void {
       (u) => u.x === coords.x && u.y === coords.y && targets.includes(u.id),
     );
     if (stacked) {
-      dispatch({ type: 'ATTACK', unitId: selectedId, targetId: stacked.id });
+      dispatch({
+        type: 'ATTACK',
+        unitId: selectedId,
+        targetId: stacked.id,
+        x: coords.x,
+        y: coords.y,
+      });
       return;
     }
   }
 
   // 1) 点到了攻击目标
   if (clickedUnitId && selectedId && targets.includes(clickedUnitId)) {
-    dispatch({ type: 'ATTACK', unitId: selectedId, targetId: clickedUnitId });
+    dispatch({
+      type: 'ATTACK',
+      unitId: selectedId,
+      targetId: clickedUnitId,
+      x: coords?.x,
+      y: coords?.y,
+    });
     return;
   }
 
@@ -2553,7 +2598,13 @@ function onBoardClick(e: Event): void {
 
   // 3) 城市格：攻城优先（单位不可能站在敌城格上，所以和移动不冲突）
   if (city && selectedId && siege.includes(city.id)) {
-    dispatch({ type: 'SIEGE', unitId: selectedId, cityId: city.id });
+    dispatch({
+      type: 'SIEGE',
+      unitId: selectedId,
+      cityId: city.id,
+      x: coords.x,
+      y: coords.y,
+    });
     return;
   }
 
@@ -2737,6 +2788,14 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 如果数据里声明了需要选点/选方向，就进入等待状态
       if (skillDef && (skillDef.targeting === 'point' || skillDef.targeting === 'direction')) {
+        // 先确认它现在放得出去，再进瞄准模式。
+        // 旧代码直接进——攻击次数用完之后点技能按钮，会进到一个"点哪都失败"
+        // 的模式里。以前这个问题很轻（点一次失败就退回普通操作），现在
+        // 连发模式要和它共存，就必须把这道门先关上。
+        if (unit && !heroSkillsOf(state, unit).find(k => k.def.id === skillId)?.ready) {
+          toast(skillDef.notReadyReason ?? `${skillDef.name} 现在还不能放`);
+          return;
+        }
         pendingSkill = { unitId, skillId };
         refreshSelection(); // 刷新高亮
         toast('请在地图上点击要施放的方向或位置');

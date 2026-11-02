@@ -88,6 +88,8 @@ export interface AbilityApi {
   killUnit(s: GameState, victim: Unit, killer: Unit | undefined, logText?: string): void;
   /** 摧毁一座城市：变废墟、挤出守军、写战报。幂等（已废墟的再打不生效）。 */
   destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void;
+  /** 把这一格记进战斗烈度（供被攻击方下回合闪红） */
+  noteHeat(s: GameState, x: number, y: number): void;
 }
 
 /**
