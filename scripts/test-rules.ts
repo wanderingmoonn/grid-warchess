@@ -11583,7 +11583,7 @@ test('海军：铁甲舰回 E4、重巡补 E5，两代之间不再断层', () =>
   assert.ok(hc > 0.40 && hc < 0.50, `重巡的性价比 ${hc.toFixed(2)} 跑出 E5 的带子（0.38~0.52）`);
 });
 
-test('海军：补进来的十三条船各就各位（年代、价位、分工）', () => {
+test('海军：补进来的十四条船各就各位（年代、价位、分工）', () => {
   // id / 时代 / 造价 / 攻击。数值钉在这里是故意的：这一批船是按"每代缺什么"
   // 补的，一旦有人随手改价，分工会立刻塌（比如鱼雷艇涨到 250 就没人拿它当消耗品了）。
   const want: Array<[string, number, number, number]> = [
@@ -11592,6 +11592,7 @@ test('海军：补进来的十三条船各就各位（年代、价位、分工�
     ['nv_turtle_ship', 3, 245, 34],
     ['nv_sailing_frigate', 3, 175, 30],
     ['nv_torpedo_boat', 4, 150, 38],
+    ['nv_minesweeper', 4, 220, 22],
     ['nv_minelayer', 4, 240, 8],
     ['nv_light_cruiser', 5, 430, 58],
     ['nv_fleet_sub', 5, 420, 78],
@@ -11779,6 +11780,101 @@ test('留痕：跟着存档走（导出/导入之后雷还在原来的格子上�
   assert.equal(mine!.x, 7);
   assert.equal(mine!.y, 9);
   assert.equal(mine!.owner, 'A');
+});
+
+test('扫雷舰：回合开始清掉相邻的敌方水雷，自己的和远处的都不动', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 5, 5);
+  const near = addMark(s, { kind: 'nv-mine', owner: 'B', x: 6, y: 5, charges: 1, hidden: true });
+  const far = addMark(s, { kind: 'nv-mine', owner: 'B', x: 9, y: 5, charges: 1, hidden: true });
+  const own = addMark(s, { kind: 'nv-mine', owner: 'A', x: 4, y: 5, charges: 1, hidden: true });
+
+  s.current = 'B'; // 结束 B 的回合 → A 的回合开始 → 扫雷
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const ids = marksOf(r.state).map((m) => m.id);
+  assert.ok(!ids.includes(near.id), '贴身的敌方水雷应该被扫掉');
+  assert.ok(ids.includes(far.id), '三格外的雷不该被顺手扫掉');
+  assert.ok(ids.includes(own.id), '自己的雷留着挡路，不扫');
+  assert.ok(
+    r.state.log.some((l) => l.player === 'A' && l.text.includes('扫掉')),
+    '扫掉了要有战报',
+  );
+  assert.equal(r.state.units.find((u) => u.id === sweeper.id)!.hp, sweeper.hp, '扫雷不掉血');
+});
+
+test('扫雷舰：自己踩到水雷只受 4 点（它先切断雷索）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 4, 5);
+  addMark(s, { kind: 'nv-mine', owner: 'B', x: 5, y: 5, charges: 1, hidden: true });
+  s.current = 'A';
+  const r = applyAction(s, { type: 'MOVE', unitId: sweeper.id, x: 5, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === sweeper.id)!;
+  assert.equal(after.hp, sweeper.hp - 4, '扫雷舰踩雷只吃 4 点，不是 14 点');
+  assert.equal(marksOf(r.state).length, 0, '雷还是被引爆了');
+});
+
+test('反潜：扫雷舰两格内就能看见潜艇，普通船两格看不见；也不顺带照出刺客', () => {
+  const build = (watcher: string) => {
+    const s = fresh({ expansionIds: ['naval-fleet'] });
+    s.fog = true;
+    for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+    s.units = [];
+    place(s, 'A', watcher, 5, 5);
+    const sub = place(s, 'B', 'nv_submarine', 7, 5); // 距离 2
+    return { s, sub };
+  };
+
+  const normal = build('gunboat');
+  assert.equal(
+    playerView(normal.s, 'A', false).state.units.some((u) => u.id === normal.sub.id),
+    false,
+    '普通炮艇两格外看不见潜艇',
+  );
+  const asw = build('nv_minesweeper');
+  assert.equal(
+    playerView(asw.s, 'A', false).state.units.some((u) => u.id === asw.sub.id),
+    true,
+    '反潜舰两格外就该看见潜艇',
+  );
+
+  // 反潜只探潜艇：同一距离上藏起来的刺客不该被声纳照出来
+  const sneak = build('nv_minesweeper');
+  const assassin = place(sneak.s, 'B', 'militia', 7, 6);
+  assassin.heroBuff = { hidden: true };
+  assert.equal(
+    playerView(sneak.s, 'A', false).state.units.some((u) => u.id === assassin.id),
+    false,
+    '声纳探的是潜艇，不是树林里的刺客',
+  );
+});
+
+test('海战：反潜对潜航单位伤害翻倍', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 5, 5);
+  const sub = place(s, 'B', 'nv_submarine', 5, 6);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: sweeper.id, targetId: sub.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  // 对照：同一条船打一条同样护甲的普通船，伤害不该翻倍
+  const s2 = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s2.h; y++) for (let x = 0; x < s2.w; x++) putTerrain(s2, x, y, 'water');
+  s2.units = [];
+  const sweeper2 = place(s2, 'A', 'nv_minesweeper', 5, 5);
+  const boat = place(s2, 'B', 'gunboat', 5, 6);
+  s2.current = 'A';
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: sweeper2.id, targetId: boat.id });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const dmgSub = sub.hp - (r.state.units.find((u) => u.id === sub.id)?.hp ?? 0);
+  const dmgBoat = boat.hp - (r2.state.units.find((u) => u.id === boat.id)?.hp ?? 0);
+  assert.ok(dmgSub > dmgBoat, `打潜艇（${dmgSub}）应该比打普通船（${dmgBoat}）更狠`);
 });
 
 test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {

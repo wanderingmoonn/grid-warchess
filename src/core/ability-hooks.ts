@@ -364,6 +364,23 @@ export interface HiddenCtx {
 }
 
 /**
+ * "我能不能发现它"：反潜声纳那类能力用的上下文。
+ *
+ * `self` 是**搜索方**的单位，`target` 是要被发现的那个（潜航的潜艇、藏起来的刺客）。
+ * 默认的发现距离是贴脸一格（见 rules.isHiddenFrom），这里返回的值是**额外加几格**。
+ *
+ * 为什么要让它按 `target` 来判断，而不是给一个固定的"视野 +2"：
+ * 声纳探的是潜艇，不是藏在树林里的刺客。写死成"全类型 +1"的话，
+ * 一条扫雷舰会顺手把对面的刺客也照出来——那不是反潜，是开图。
+ */
+export interface DetectCtx {
+  state: GameState;
+  self: Unit;
+  target: Unit;
+  api: AbilityApi;
+}
+
+/**
  * 光环：只写数据，不写代码。
  *
  * 光环的效果就是"贴着我的友军/敌军加减几点"，没有第二种形态，
@@ -420,6 +437,14 @@ export interface AbilityHooks {
   airLayer?: boolean;
   /** 藏不藏得住（潜行、隐匿） */
   hidden?: (c: HiddenCtx) => boolean;
+  /**
+   * 额外的发现距离（反潜声纳）。
+   *
+   * 返回值是"几格之外我也能看见它"，0 表示不比别人强。
+   * 只影响**隐匿/潜航单位**在视野里现不现形，不改普通视野——
+   * 后者是 `vision` 字段的事，两者别混。
+   */
+  detect?: (c: DetectCtx) => number;
   /** 免疫溅射 */
   immuneSplash?: boolean;
   /** false = 不能被治疗（机械） */

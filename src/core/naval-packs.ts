@@ -39,7 +39,7 @@
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
-import { addMark, markCountOf, marksAt } from './marks.ts';
+import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { navigable } from './config.ts';
@@ -97,6 +97,9 @@ const NAVAL_MINE: MarkKindDef = {
   id: 'nv-mine',
   name: '水雷',
   summary: '敌舰踩上来就炸 14 点（无视护甲），炸完就没。自己的船踩不到自己的雷。',
+  // `mine` 这个标签是给扫雷舰用的：以后加磁性雷、音响雷，只要也打上它，
+  // 扫雷舰就照样扫得掉——判定不能写死成"只认 nv-mine"。
+  tags: ['mine', 'naval'],
   hidden: true,
   on: ['water', 'deep', 'shallow', 'bridge'],
   trigger: 'enemy',
@@ -104,8 +107,91 @@ const NAVAL_MINE: MarkKindDef = {
   onEnter: (c) => {
     if (!c.unit) return;
     const def = c.api.utype(c.unit.type);
-    c.api.hurt(c.unit, 14, `${def.name} 撞上水雷，损失 14 点生命`);
+    // 扫雷舰切断了雷索：它踩响的雷只剩个响，4 点意思一下。
+    // 这条写在"雷"这一边而不是"船"那一边，是因为它是雷的命中规则，
+    // 换一条船来踩就该吃满 14 点。
+    const swept = (def.abilities ?? []).includes('nv-sweep');
+    const dmg = swept ? 4 : 14;
+    c.api.hurt(
+      c.unit,
+      dmg,
+      swept ? `${def.name} 切断了雷索，只受 ${dmg} 点` : `${def.name} 撞上水雷，损失 ${dmg} 点生命`,
+    );
     c.api.log(c.mark.owner, `水雷命中 ${def.name}`);
+  },
+};
+
+/**
+ * 扫雷：把相邻的敌方水雷清掉。
+ *
+ * 为什么不给"主动点一下扫一格"的按钮：这个游戏的操作全是"选中 → 点目标"，
+ * 而扫雷本来就是**跟着船往前挪、一路扫过去**的动作，做成回合开始自动结算，
+ * 玩家做的事就变成"把船开到雷区边上"——那正是扫雷舰该做的事。
+ *
+ * 只扫带 `mine` 标签的、只扫相邻一格、不扫自己的（自己的雷留着挡路）。
+ */
+const SWEEP: AbilityDef = {
+  id: 'nv-sweep',
+  name: '扫雷',
+  summary: '自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const s = c.state;
+          let cleared = 0;
+          for (const m of marksOf(s)) {
+            if (m.owner === c.owner) continue;
+            const kind = markKindOf(m.kind);
+            if (!kind?.tags?.includes('mine')) continue;
+            if (c.api.distance(m, c.self) > 1) continue;
+            removeMark(s, m.id);
+            cleared += 1;
+          }
+          if (cleared > 0) {
+            c.api.pushLog(
+              s,
+              c.owner,
+              `${c.api.utype(s, c.self.type).name} 扫掉 ${cleared} 枚水雷`,
+            );
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 反潜：声纳能探到两格外的潜艇，对潜航单位的攻击翻倍。
+ *
+ * 两条一起给，是因为单给一条都不成立：
+ *   · 只给发现距离——探到了也打不疼（22 攻打潜航 8 甲就是挠痒）；
+ *   · 只给伤害翻倍——根本看不见它，翻倍也白搭（潜艇贴脸才现形）。
+ *
+ * 判定用"目标身上有没有 `nv-submerge`"，而不是"是不是某一条船"：
+ * 以后加核潜艇、AIP 潜艇，只要带潜航就都算潜艇。
+ */
+const ASW: AbilityDef = {
+  id: 'nv-asw',
+  name: '反潜',
+  summary: '潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。',
+  group: 'attack',
+  hooks: {
+    detect: (c) =>
+      (c.api.utype(c.state, c.target.type).abilities ?? []).includes('nv-submerge') ? 1 : 0,
+    damage: [
+      {
+        stage: DAMAGE_STAGE.attackMul,
+        apply: (c) => {
+          // "我打潜艇更疼"，不是"我被潜艇打更疼"
+          if (c.side !== 'attacker' || !c.foe) return;
+          if (!(c.api.utype(c.state, c.foe.type).abilities ?? []).includes('nv-submerge')) return;
+          c.damage = Math.round(c.damage * 2);
+        },
+      },
+    ],
   },
 };
 
@@ -333,7 +419,15 @@ const FLEET_OILER: AbilityDef = {
  * 能力表是**全局合并**的（不看这一局勾了哪些包），所以现代包引用基础包的
  * 能力 id 完全没问题——但反过来"两个包各声明一份"会直接踩测试。
  */
-const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD, SUBMERGE, FLEET_REPAIR, SUB_TENDER, LAY_MINES];
+const FLEET_ABILITIES: AbilityDef[] = [
+  SHORE_BOMBARD,
+  SUBMERGE,
+  FLEET_REPAIR,
+  SUB_TENDER,
+  LAY_MINES,
+  SWEEP,
+  ASW,
+];
 const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
 
 /* ===========================================================================
@@ -347,7 +441,8 @@ const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
  *      前者买"快"，后者买"一次运四个还沉不了"
  *   E3 舷侧炮列（盖伦）+ 纵火（火船）+ 风帆巡航舰（追得上跑得掉）+ 龟船（顶到跟前）
  *   E4 蒸汽与装甲（护卫舰、浅水重炮舰、潜艇、运输舰）
- *      + 水军的**入口价**：鱼雷艇 150、布雷舰 240（水雷区封水道）——
+ *      + 水军的**入口价**：鱼雷艇 150、布雷舰 240（在水雷上留东西）、
+ *      扫雷舰 220（扫雷 + 反潜，这一代唯一能破"看不见的东西"的船）——
  *      本体那条**铁甲舰**也在这一代（1859–1890 的舰种，2026-11-02 从 E5 挪下来）
  *   E5 1900–1945 的钢铁舰队：装巡（老式远洋主力）→ 重巡（条约型）→
  *      轻巡（舰队的眼睛）→ 战巡（薄皮大炮）→ 战列舰（顶线）；
@@ -606,6 +701,38 @@ const FLEET_UNITS: UnitTypeDef[] = [
     // 血 110 是为了撑住"被集火也得站两轮"——但**雷不属于它**：
     // 它沉了，之前布下的水雷还在那儿（这就是"格子上留东西"这一层的意思）。
     // V = 8+49.5+40+3+7.5+4.5 = 112.5 → 0.47（雷不进公式，和维修舰同理偏低）
+  },
+  {
+    id: 'nv_minesweeper',
+    name: '扫雷舰',
+    short: '扫',
+    era: 4,
+    category: 'combat',
+    cost: 220,
+    move: 4,
+    atk: 22,
+    armor: 6,
+    maxHp: 76,
+    range: 3,
+    vision: 6,
+    domain: 'water',
+    abilities: ['nv-sweep', 'nv-asw'],
+    /*
+     * 扫雷舰：一战护航队里那种又小又慢、专门走在最前面的船。
+     *
+     * 它是这一版里唯一"能反制水雷"的东西，也是唯一"能反潜"的东西：
+     *   · 扫雷：回合开始时清掉相邻的敌方水雷，自己踩雷只受 4 点；
+     *   · 反潜：潜航单位在两格内就现形，打潜航单位伤害翻倍。
+     *
+     * 为什么两件事放在同一条船上：历史上它们是同一条船（minesweeper 兼
+     * 护航/反潜），而且在这个游戏里它们面对的是同一个问题——**
+     * "看不见的东西"**。雷是藏起来的格子，潜艇是藏起来的单位，
+     * 一条船同时解决两者，玩家才有一张"我该怎么破"的答案。
+     *
+     * 代价写得很清楚：攻 22、甲 6、血 76，正面打不过任何一条正经战舰。
+     * 它必须有人护航才有用——这恰好也是它历史上的处境。
+     * V = 22+34.2+30+9+10+9 = 114.2 → 0.52
+     */
   },
   {
     id: 'nv_submarine',
@@ -1400,7 +1527,7 @@ export const NAVAL_FLEET: Expansion = {
   scale: 'large',
   summary:
     '补上第二到第五时代的水上力量：桨帆船、宝船、德罗蒙、卡拉克、火船、龟船、盖伦、风帆巡航舰、' +
-    '护卫舰、鱼雷艇、布雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，工业时代）、' +
+    '护卫舰、鱼雷艇、布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，工业时代）、' +
     '装甲巡洋舰、重巡洋舰、轻巡洋舰、战列巡洋舰、战列舰、远洋潜艇、登陆舰、舰队航母、' +
     '轻型航母、航空战列舰、潜母、维修舰二十多条船，从桨到航母一整条线；' +
     '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +

@@ -1759,10 +1759,25 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
   }
   if (!skillHidden && !byAbility) return false;
 
+  // 贴脸就能看见——这是所有隐匿效果共同的破法。
+  // 「反潜」这类能力可以把这一格往外推（`detect` 钩子），推几格由能力自己按
+  // 目标类型决定：声纳探的是潜艇，不该顺手把树林里的刺客一起照出来。
   for (const v of unitsOf(s, viewer)) {
-    if (distance(v, unit) <= 1) return false;
+    if (distance(v, unit) <= 1 + detectBonus(s, v, unit)) return false;
   }
   return true;
+}
+
+/** 这个单位对"目标"的额外发现距离（多条能力取最大的那条，不叠加） */
+function detectBonus(s: GameState, viewerUnit: Unit, target: Unit): number {
+  const hooks = hooksFor(utype(s, viewerUnit.type));
+  let best = 0;
+  for (const h of hooks) {
+    if (!h.detect) continue;
+    const v = h.detect({ state: s, self: viewerUnit, target, api: abilityApi });
+    if (v > best) best = v;
+  }
+  return best;
 }
 
 /**
