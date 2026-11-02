@@ -58,7 +58,11 @@ import {
 } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
 import { canHold, holdOf, holdRoom } from './carry.ts';
-import { noteHeat } from './heat.ts';
+import {
+  noteHeatAt, 
+  noteHeatCell, 
+  strikeCoverCells 
+} from './heat.ts';
 // 格子上留下的东西（水雷/地雷/火场……）。注册表要在这里 import 一次：
 // 它的副作用就是把各扩展声明的种类登记进全局表，没这两行 marks 一条都查不到。
 import { enterTile, marksOf, tickMarks } from './marks.ts';
@@ -173,6 +177,20 @@ const abilityApi: AbilityApi = {
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
   attacksPerTurn: (s, u) => attacksPerTurn(s, u),
+  killUnit: (s, victim, killer, logText) => {
+    if (!s.units.some((u) => u.id === victim.id)) return; // 幂等
+    s.units = s.units.filter((u) => u.id !== victim.id);
+    pushLog(
+      s,
+      killer?.owner ?? other(victim.owner),
+      logText ?? `${utype(s, victim.type).name} 被消灭`,
+      true,
+    );
+    drownCargo(s, victim);
+    fireKilled(s, victim, killer);
+  },
+  destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
+  noteHeat: (s, x, y) => noteHeatCell(s, x, y),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -2347,15 +2365,40 @@ export function splashRatioOf(u: Unit): number {
  * 用锚点算而不是身体最近边——直线是瞄准线，不是覆盖面积，
  * 2×2 单位挡在线上时按它自己那一格算反而更符合直觉。
  */
-function onStrikeLine(a: Unit, d: Unit, v: Unit): boolean {
+function onStrikeLine(a: Unit, d: Unit, vx: number, vy: number): boolean {
   const dx = Math.sign(d.x - a.x);
   const dy = Math.sign(d.y - a.y);
   if (dx === 0 && dy === 0) return true;
-  const vx = v.x - a.x;
-  const vy = v.y - a.y;
-  if (dx === 0) return vx === 0 && Math.sign(vy) === dy;
-  if (dy === 0) return vy === 0 && Math.sign(vx) === dx;
-  return vx * dy === vy * dx && Math.sign(vx) === dx && Math.sign(vy) === dy;
+  const x = vx - a.x;
+  const y = vy - a.y;
+  if (dx === 0) return x === 0 && Math.sign(y) === dy;
+  if (dy === 0) return y === 0 && Math.sign(x) === dx;
+  return x * dy === y * dx && Math.sign(x) === dx && Math.sign(y) === dy;
+}
+
+/**
+ * 这一下溅射**波及**的所有格索引（含空格、含免疫格、含多格目标全部格子）。
+ * 和 splashVictims 的分工：那个回答"谁挨打"，这个回答"地上哪几片红了"。
+ * 两者判据一致（多格单位按到矩形最近距离算），否则视觉和数值会各说各话。
+ */
+export function splashTilesOf(s: GameState, attacker: Unit, defender: Unit): number[] {
+  const radius = splashRadiusOf(s, attacker);
+  if (radius <= 0) return [];
+  const line = utype(s, attacker.type).splashLine === true;
+  const n = footprintOf(s, defender);
+  const out: number[] = [];
+  for (let ty = defender.y - radius; ty <= defender.y + n - 1 + radius; ty++) {
+    for (let tx = defender.x - radius; tx <= defender.x + n - 1 + radius; tx++) {
+      if (!inBounds(s, tx, ty)) continue;
+      const cx = Math.min(Math.max(tx, defender.x), defender.x + n - 1);
+      const cy = Math.min(Math.max(ty, defender.y), defender.y + n - 1);
+      const d = Math.abs(tx - cx) + Math.abs(ty - cy);
+      if (d > radius) continue;
+      if (line && !onStrikeLine(attacker, defender, tx, ty)) continue;
+      out.push(idx(s, tx, ty));
+    }
+  }
+  return out;
 }
 
 function splashVictims(
@@ -2376,7 +2419,7 @@ function splashVictims(
     // 已经结算过的（主目标，或者同一格被扫到两次）不再收
     if (seen.has(v.id)) continue;
     if (distBetweenUnits(s, defender, v) > radius) continue;
-    if (line && !onStrikeLine(attacker, defender, v)) continue;
+    if (line && !onStrikeLine(attacker, defender, v.x, v.y)) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
@@ -2749,7 +2792,22 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       hits += 1;
       shots -= 1;
       hitNames.add(utype(s, target.type).name);
-      noteVictim(target, dmg);
+
+      // 塔/炮台的自动开火也算一次攻势——但它在"接手方回合开始"那一刻结算，
+      // 所以要显式落到"上一个回合"的账上（s.turn - 1），否则接手方看不到。
+      const prevTurn = s.turn - 1;
+      const victimSide = other(owner);
+      const tn = footprintOf(s, target);
+      const center = {
+        x: Math.min(Math.max(b.x, target.x), target.x + tn - 1),
+        y: Math.min(Math.max(b.y, target.y), target.y + tn - 1),
+      };
+      for (const i of strikeCoverCells(
+        s, b, center, splashRadiusOf(s, b), utype(s, b.type).splashLine === true,
+      )) {
+        const { x, y } = xyOf(s, i);
+        noteHeatAt(s, victimSide, prevTurn, x, y);
+      }
 
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
       const splashed = splashVictims(s, b, target);
@@ -2760,17 +2818,14 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       }
 
       if (target.hp <= 0) {
-        s.units = s.units.filter((u) => u.id !== target.id);
-        pushLog(s, owner, `${utype(s, target.type).name} 被击毁`, true);
-        fireKilled(s, target, b);
+        // 走完整死亡流程：删除 + 战报 + 沉船 + onDeath / onUnitKilled
+        abilityApi.killUnit(s, target, b, `${utype(s, target.type).name} 被击毁`);
       }
 
       for (const v of splashed) {
         if (v.unit.hp > 0) continue;
         if (!s.units.some((u) => u.id === v.unit.id)) continue;
-        s.units = s.units.filter((u) => u.id !== v.unit.id);
-        pushLog(s, owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-        fireKilled(s, v.unit, b);
+        abilityApi.killUnit(s, v.unit, b, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
       }
     }
 
@@ -2922,9 +2977,9 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId);
+        return doAttack(next, action.unitId, action.targetId, action.x, action.y);
       case 'SIEGE':
-        return doSiege(next, action.unitId, action.cityId);
+        return doSiege(next, action.unitId, action.cityId, action.x, action.y);
       case 'RECRUIT':
         return doRecruit(
           next,
@@ -3087,10 +3142,56 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   return { ok: true, state: s };
 }
 
+/**
+ * 决定"主命中格"：鼠标点了哪一格就用哪一格；没点（AI / 旧存档）就退到
+ * "矩形上离攻击者最近的那一格"——那是玩家如果点鼠标一定会点的位置。
+ * `hit` 必须落在矩形内，否则当作没点。
+ */
+function pickHitCell(
+  attacker: Unit,
+  rect: { x: number; y: number; n: number },
+  hit?: { x?: number; y?: number },
+): { x: number; y: number } {
+  if (typeof hit?.x === 'number' && typeof hit?.y === 'number') {
+    const inRect =
+      hit.x >= rect.x && hit.x < rect.x + rect.n &&
+      hit.y >= rect.y && hit.y < rect.y + rect.n;
+    if (inRect) return { x: hit.x, y: hit.y };
+  }
+  return {
+    x: Math.min(Math.max(attacker.x, rect.x), rect.x + rect.n - 1),
+    y: Math.min(Math.max(attacker.y, rect.y), rect.y + rect.n - 1),
+  };
+}
+
+/**
+ * 一次攻击的战况烈度记录：几何覆盖的所有格子各记一次。
+ *
+ * 攻击单位 / 攻城 / 塔自动开火共用——"打了哪儿"必须同一套几何。
+ * 以前三处各写各的（doAttack 用了旧签名的 noteHeat、doSiege 压根没写），
+ * 症状就是"打到城的这一面，整个城都红"和"溅射覆盖到的城外空地不红"。
+ */
+function noteStrikeHeat(
+  s: GameState,
+  attacker: Unit,
+  rect: { x: number; y: number; n: number },
+  hit?: { x?: number; y?: number },
+): void {
+  const center = pickHitCell(attacker, rect, hit);
+  const radius = splashRadiusOf(s, attacker);
+  const line = utype(s, attacker.type).splashLine === true;
+  for (const i of strikeCoverCells(s, attacker, center, radius, line)) {
+    const { x, y } = xyOf(s, i);
+    noteHeatCell(s, x, y);
+  }
+}
+
 function doAttack(
   s: GameState,
   unitId: string,
   targetId: string,
+  hitX?: number,
+  hitY?: number,
 ): ActionResult {
   const attacker = unitById(s, unitId);
   const defender = unitById(s, targetId);
@@ -3129,16 +3230,20 @@ function doAttack(
   if (attacker.attacksLeft <= 0) {
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
   }
-  // 删掉原来的 while 循环
   const dmg = computeDamage(s, attacker, defender);
   defender.hp -= dmg;
-  noteHeat(s, defender);
 
-  // 溅射：主目标周围的人一起挨（按比例打折，只打敌人）
+    // 战况烈度：一次攻击覆盖到的所有格，纯几何
+  // （主命中格 = 鼠标点的格；溅射 = 以它为圆心扩 radius 格）
+  noteStrikeHeat(
+    s, attacker,
+    { x: defender.x, y: defender.y, n: footprintOf(s, defender) },
+    { x: hitX, y: hitY },
+  );
+
   const splashed = splashVictims(s, attacker, defender);
   for (const v of splashed) {
     v.unit.hp -= v.dmg;
-    noteHeat(s, v.unit);
   }
 
   const noCounter = hasFlag(atkDef, 'noCounter');
@@ -3297,7 +3402,64 @@ function doAttack(
   return { ok: true, state: s };
 }
 
-function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
+/**
+ * 攻破城市：将城市变为废墟，并挤出城内的守军。
+ * 
+ * 这个函数是所有攻城行为的唯一真相来源。无论是物理攻城、剑修剑气还是天降陨石，
+ * 只要城市耐久归零，都必须走这里。
+ * 
+ * 注意：这里只负责“破城”，不负责“接管”。接管依然需要派陆军走进废墟。
+ */
+export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void {
+  if (city.ruined) return; // 幂等：已经是废墟就不重复结算
+
+  const prevOwner = city.owner;
+  if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
+
+  // 破城 ≠ 易主。城墙打塌，城市变废墟
+  city.ruined = true;
+  city.hp = 0;
+  city.capturedTurn = s.turn;
+
+  // 城破了，守军不该跟着一起没。把他们挤出城外。
+  const tiles = cityTiles(city);
+  const garrison = s.units.filter(
+    (u) => u.owner === prevOwner && tiles.some((t) => t.x === u.x && t.y === u.y),
+  );
+  
+  let spilled = 0;
+  let stuck = 0;
+  
+  for (const g of garrison) {
+    // 因为城市已经置为 ruined，canStandAt 会把城内格子排除，
+    // 所以 freeNeighbor 只会往城外找位置。
+    const spot = freeNeighbor(s, g, g.type);
+    if (!spot) {
+      stuck += 1;
+      continue;
+    }
+    g.x = spot.x;
+    g.y = spot.y;
+    spilled += 1;
+  }
+  
+  if (garrison.length > 0) {
+    const parts: string[] = [];
+    if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
+    if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
+    pushLog(s, attackerOwner, `破城，${parts.join('，')}`, true);
+  }
+
+  pushLog(s, attackerOwner, `${cityName(city)} 被攻破——派兵入驻才能接管`, true);
+}
+
+function doSiege(
+  s: GameState,
+  unitId: string,
+  cityId: string,
+  hitX?: number,
+  hitY?: number,
+): ActionResult {
   const attacker = unitById(s, unitId);
   const city = cityById(s, cityId);
   if (!attacker) return { ok: false, reason: '单位不存在' };
@@ -3320,6 +3482,9 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);
   city.hp -= dmg;
+
+  // 战况烈度：攻城按几何覆盖记，和攻击单位走同一套
+  noteStrikeHeat(s, attacker, { x: city.x, y: city.y, n: city.size }, { x: hitX, y: hitY });
 
   // 窃掠：砸墙还能顺手捞一笔。上限按对方金库算，
   // 不然一个盗贼反复敲同一座城就成了印钞机。
@@ -3352,50 +3517,7 @@ function doSiege(s: GameState, unitId: string, cityId: string): ActionResult {
   markManualFire(s, attacker);
 
   if (city.hp <= 0) {
-    const prevOwner = city.owner;
-    // 「谁先丢城」只记第一次：城会被抢回来，但"先吃亏"这件事不该被撤销。
-    if (s.firstCityLost === undefined) s.firstCityLost = prevOwner;
-
-    // 破城 ≠ 易主。城墙打塌、守军打光，但城还在原主名下，只是成了废墟：
-    // 想真正拿到它，得派兵走进去并掏钱重建（见 doMove 里的接管分支）。
-    // 这样"砸开城墙"和"拿到城市"是两件事，攻城方必须留一支部队去占。
-    city.ruined = true;
-    city.hp = 0;
-    // 当回合这条产线是瘫的（废墟本来就不产兵，这里保留是为了兼容旧存档逻辑）
-    city.capturedTurn = s.turn;
-
-    // 城破了，守军不该跟着一起没。
-    //
-    // 以前这里是"城中守军随城陷落"——整队直接清掉。问题是它把两件不相干的事
-    // 绑在了一起：城墙塌了，人为什么死？玩家把主力屯在城里守城，城一破整支
-    // 军队蒸发，这既没道理也没法预判——你会因为"守城"而输得比"不守"更惨。
-    // 现在改成把人挤到城外去：城是他们守丢的，不是他们的棺材。
-    //
-    // 挤不出去（四邻全被围死）就原地留一口气：活着是硬约束，站位可以妥协。
-    const tiles = cityTiles(city);
-    const garrison = s.units.filter(
-      (u) => u.owner === prevOwner && tiles.some((t) => t.x === u.x && t.y === u.y),
-    );
-    let spilled = 0;
-    let stuck = 0;
-    for (const g of garrison) {
-      const spot = freeNeighbor(s, g, g.type);
-      if (!spot) {
-        stuck += 1;
-        continue;
-      }
-      g.x = spot.x;
-      g.y = spot.y;
-      spilled += 1;
-    }
-    if (garrison.length > 0) {
-      const parts: string[] = [];
-      if (spilled > 0) parts.push(`${spilled} 个守军被逐出城外`);
-      if (stuck > 0) parts.push(`${stuck} 个被围在废墟里无路可退`);
-      pushLog(s, attacker.owner, `破城，${parts.join('，')}`, true);
-    }
-
-    pushLog(s, attacker.owner, `${cityName(city)} 被攻破——派兵入驻才能接管`, true);
+    destroyCity(s, city, attacker.owner);
   }
 
   s.winner = checkWinner(s);

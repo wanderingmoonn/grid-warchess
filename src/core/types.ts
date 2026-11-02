@@ -1452,8 +1452,8 @@ export interface FallenRecord {
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */
 export type Action =
   | { type: 'MOVE'; unitId: string; x: number; y: number }
-  | { type: 'ATTACK'; unitId: string; targetId: string }
-  | { type: 'SIEGE'; unitId: string; cityId: string }
+  | { type: 'ATTACK'; unitId: string; targetId: string; x?: number; y?: number }
+  | { type: 'SIEGE'; unitId: string; cityId: string; x?: number; y?: number }
   /**
    * 产兵。source 是城市（cityId）或军营（unitId），两者选其一。
    * 军营是"前线的产兵点"，用的还是最近城市的时代科技。

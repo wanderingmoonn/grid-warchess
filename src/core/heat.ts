@@ -29,19 +29,97 @@
 
 import type { GameState, PlayerId, Unit } from './types.ts';
 
+/**
+ * 一次攻击"几何上覆盖到的所有格子"。
+ *
+ * 圆心就是**主命中格**（鼠标点的那一格），不是目标矩形。上一版按矩形
+ * 往外扩是错的：那会把"打城的右下角"扩散成"围绕整座城一圈"。
+ *
+ *   · 主命中格无条件记录——"这一下确实贴上了"；
+ *   · 溅射 = 以主命中格为中心、曼哈顿半径 <= radius 的所有格
+ *     （和 splashTilesOf 的距离度量保持一致，视觉上才是"半径"）；
+ *   · 主命中格与溅射格去重（一次攻击计一次）。
+ *
+ * `line=true`：溅射只取"攻击者 → 主命中格"这条直线上
+ * 的格。方向由鼠标点的那一格决定，不由矩形锚点决定——点城的右侧，
+ * 剑气就往右侧穿过去。
+ */
+export function strikeCoverCells(
+  s: GameState,
+  attacker: { x: number; y: number },
+  hit: { x: number; y: number },
+  radius: number,
+  line: boolean,
+): number[] {
+  if (hit.x < 0 || hit.y < 0 || hit.x >= s.w || hit.y >= s.h) return [];
+  const out: number[] = [hit.y * s.w + hit.x];
+  if (radius <= 0) return out;
+
+  const seen = new Set<number>(out);
+  for (let ty = hit.y - radius; ty <= hit.y + radius; ty++) {
+    for (let tx = hit.x - radius; tx <= hit.x + radius; tx++) {
+      if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) continue;
+      const d = Math.abs(tx - hit.x) + Math.abs(ty - hit.y);
+      if (d > radius) continue;
+      if (line && !onStrikeRay(attacker, hit, tx, ty)) continue;
+      const i = ty * s.w + tx;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+/** 直线判定：从攻击者到主命中格这条线上（含对角） */
+function onStrikeRay(
+  a: { x: number; y: number },
+  hit: { x: number; y: number },
+  vx: number,
+  vy: number,
+): boolean {
+  const dx = Math.sign(hit.x - a.x);
+  const dy = Math.sign(hit.y - a.y);
+  if (dx === 0 && dy === 0) return true;
+  const x = vx - a.x;
+  const y = vy - a.y;
+  if (dx === 0) return x === 0 && Math.sign(y) === dy;
+  if (dy === 0) return y === 0 && Math.sign(x) === dx;
+  return x * dy === y * dx && Math.sign(x) === dx && Math.sign(y) === dy;
+}
+
 /** 在某一格上给某个玩家记一次挨打 */
-export function noteHeat(s: GameState, victim: Unit): void {
-  const perPlayer = ((s.heat ??= {})[victim.owner] ??= {});
-  const key = String(s.turn);
+export function noteHeatAt(
+  s: GameState,
+  owner: PlayerId,   // 这一格算谁的账（挨打方）
+  turn: number,      // 落在哪一轮（大多数时候就是 s.turn）
+  x: number,
+  y: number,
+): void {
+  if (x < 0 || y < 0 || x >= s.w || y >= s.h) return;
+  const perPlayer = ((s.heat ??= {})[owner] ??= {});
+  const key = String(turn);
   const cells = (perPlayer[key] ??= {});
-  const i = victim.y * s.w + victim.x;
+  const i = y * s.w + x;
   cells[i] = (cells[i] ?? 0) + 1;
 
-  // 只留"这一回合"和"上一回合"：界面只会读上一回合那一份，
-  // 更早的是死账，留着只会让存档和联机快照慢慢变胖。
   for (const k of Object.keys(perPlayer)) {
     if (Number(k) < s.turn - 1) delete perPlayer[k];
   }
+}
+
+/** 兼容旧签名：把一个单位的锚点记一次（内部走 noteHeatAt） */
+export function noteHeat(s: GameState, victim: Unit): void {
+  noteHeatAt(s, victim.owner, s.turn, victim.x, victim.y);
+}
+
+/**
+ * 便捷版：默认"当前行动方打到对手"——记到对手账上、当前回合。
+ * 攻击流程、技能、扩展能力实现默认走这条。
+ */
+export function noteHeatCell(s: GameState, x: number, y: number): void {
+  const victim: PlayerId = s.current === 'A' ? 'B' : 'A';
+  noteHeatAt(s, victim, s.turn, x, y);
 }
 
 /**
