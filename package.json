@@ -25,6 +25,7 @@
     "bench": "node --experimental-strip-types scripts/bench.ts",
     "perf": "node --experimental-strip-types --expose-gc scripts/perf.ts",
     "ablate": "node --experimental-strip-types scripts/ablate.ts",
+    "ladder": "node --experimental-strip-types scripts/probe-ladder.ts",
     "balance": "node --experimental-strip-types scripts/balance-report.ts",
     "pack-report": "node --experimental-strip-types scripts/pack-report.ts",
     "fantasy": "node --experimental-strip-types scripts/dump-fantasy.ts",
