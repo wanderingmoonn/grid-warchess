@@ -13,19 +13,19 @@
  * 用法：
  *   node --experimental-strip-types scripts/ai-duel.ts --era 1 --games 40 --seed 900
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
  * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
+ *
+ * `--old` 换对手：默认 ./baseline-ai.ts（冻结于 b36619a，几轮改动之前）。
+ * 只想量"这一批改动本身值多少"时，用 `git show <当前 HEAD>:src/core/ai.ts` 抄一份
+ * 到 scripts/baselines/ai-<sha>.ts（把 `./x.ts` 改成 `../../src/core/x.ts`），
+ * 再 `--old` 指过去——拿几轮之前的基线比，前几批的收益会算进这一批里。
  */
 
 import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction as newAi } from '../src/core/ai.ts';
-// 冻结的旧版 AI：用变量做 specifier，别让 tsc 把它拉进类型检查
-// （它是两人局的旧代码，`players: { A, B }` 和现在的四键定义对不上）。
-const OLD_AI_FILE = './baseline-ai.ts';
-const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
-  ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
-) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -33,6 +33,17 @@ const argOf = (name: string, dflt: string): string => {
   return i >= 0 && args[i + 1] ? (args[i + 1] as string) : dflt;
 };
 const has = (name: string): boolean => args.includes(`--${name}`);
+
+// 冻结的旧版 AI：用变量做 specifier，别让 tsc 把它拉进类型检查
+// （它是两人局的旧代码，`players: { A, B }` 和现在的四键定义对不上）。
+//
+// `--old` 可以换成别的冻结副本：`scripts/baselines/ai-<sha>.ts` 是"动手之前
+// 那一刻的 src/core/ai.ts"原样抄一份（只改导入路径）。想量"这一批改动本身值多少"，
+// 就得跟**上一版**比，而不是跟几轮之前的基线比——否则前后几批改动的收益会混在一起。
+const OLD_AI_FILE = argOf('old', './baseline-ai.ts');
+const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
+  ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
+) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
 
 const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));

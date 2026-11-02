@@ -1260,6 +1260,26 @@ export interface DraftState {
   skipped?: boolean;
 }
 
+/**
+ * AI 攒钱目标的跨回合记忆（见 `GameState.aiIntent`）。
+ *
+ * 只记"在攒什么、为谁攒、几回合前立的"，不记分值：分值是每一回合重算的，
+ * 记下来只会让昨天的局面决定今天的判断。
+ */
+export interface AiIntent {
+  goal: 'unit' | 'hero' | 'era' | 'rebuild';
+  /** `goal === 'unit'` 时攒的是哪个兵种 */
+  unitId?: string;
+  /** `goal === 'era'` 时的城、`goal === 'rebuild'` 时的废墟 */
+  cityId?: string;
+  /** 立下这个目标时算出的价格：每回合按它重新问"还差多少"，不沿用旧账面 */
+  cost: number;
+  /** 哪一回合立的 */
+  since: number;
+  /** 最近一次确认"还值得接着攒"是哪一回合 */
+  seen: number;
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1308,6 +1328,19 @@ export interface GameState {
    * 旧存档没有这个字段，读出来是 undefined，语义正好等于"全部不指定"。
    */
   orderSites?: Partial<Record<PlayerId, string[]>>;
+  /**
+   * AI 的跨回合意图：**这一方正在攒什么**。
+   *
+   * 为什么必须进状态：AI 的每一个判断都是"看着当前局面现算"的，攒钱目标也一样。
+   * 于是 mood 一抖（放弃的那座城被拆掉了、战线推过去了、算出来更适合骚扰了），
+   * 目标就从"攒英雄"变成 null，攒到一半的钱当场散回产线——人不会这样，
+   * 人会说"我这一路就是要攒英雄"。这条记忆补的就是这中间缺的那一格。
+   *
+   * 只由 AI 自己读写，玩家和规则层都不看它：它不改变任何合法动作，
+   * 只改变"这一回合要不要停手攒钱"。旧存档没有这个字段，读出来是 undefined，
+   * 语义正好等于"没有正在攒的目标"，不影响继续玩。
+   */
+  aiIntent?: Partial<Record<PlayerId, AiIntent>>;
   /**
    * 指挥官模式（双人热座）：这一批计划谁已经交了。
    *

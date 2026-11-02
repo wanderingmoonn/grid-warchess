@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
+import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
-import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory } from '../src/core/rules.ts';
+import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
 
@@ -343,6 +343,156 @@ test('海军：陆路走得通时，船不会无脑来回运人',()=>{
   foot.acted = false; foot.moved = false;
   const act = aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
   assert.notEqual(act?.type,'LOAD', '路通的时候不该装船');
+});
+
+test('换血：编制满了会解散最差的那个，换更好的兵',()=>{
+  const s = arena();
+  // 把英雄从兵种表里摘掉：英雄的"攒钱"优先级会盖住换血（见 buildPlan 的 savingFor），
+  // 这一条要单独量换血本身，别让攒英雄把它挤掉。
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.fog = false; s.current='A'; s.turn=40;
+  // 编制塞满：24 个民兵，全是火药时代的旧货
+  const N = 24;
+  for(let i=0;i<N;i++) unit(s,'A','militia',1+(i%4),5+Math.floor(i/4));
+  // 主城升到能造现代兵，账上有够买一个的钱
+  for(const c of s.cities) if(c.owner==='A') c.era=6;
+  s.players.A.gold=420;
+  s.players.B.gold=0;
+  const act = aiNextAction(s,{maxRecruit:2,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.equal(act?.type,'DISBAND', `编制满应先把旧兵换掉，实际 ${act?.type}`);
+  const who = s.units.find(u=>u.id===(act as {unitId?:string}).unitId);
+  assert.ok(who && utype(s,who.type).category==='combat', '解散的应该是一个战斗单位');
+  assert.ok(applyAction(s,act!).ok, '解散动作要被规则层接受');
+});
+test('换血：编制没满时不会去拆自己的兵',()=>{
+  const s = arena();
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.fog=false; s.current='A'; s.turn=40;
+  for(let i=0;i<10;i++) unit(s,'A','militia',1+(i%3),5+Math.floor(i/3));
+  for(const c of s.cities) if(c.owner==='A') c.era=6;
+  s.players.A.gold=420;
+  const act = aiNextAction(s,{maxRecruit:2,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.notEqual(act?.type,'DISBAND', '有空位的时候不该拆兵');
+});
+
+test('攒钱意向：跨回合记住，兵力掉下去也不会把钱散回产线',()=>{
+  const s = arena();
+  s.fog=false; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  const first = aiDebugPlan(s,'A');
+  assert.equal(first.savingFor,'hero', `这个局面该决定攒英雄，实际 ${first.savingFor}`);
+  assert.ok(first.targetCost > s.players.A.gold, '要真的还买不起，不然这条测的是别的东西');
+  assert.ok(s.aiIntent?.A, '意向要写进状态');
+  const since = s.aiIntent!.A!.since;
+  // 兵掉到 3 个：攒钱门槛（army >= 4~6）整段被跳过——这正是那个 bug 的现场
+  s.units = s.units.filter(u => u.owner!=='A' || u.id==='test-0' || u.id==='test-1' || u.id==='test-2');
+  s.turn = 17;
+  const again = aiDebugPlan(s,'A');
+  assert.equal(again.urgent, false, '3 个兵不算急事，不然这条会被急事那条拦掉');
+  assert.equal(again.savingFor,'hero', `两回合后不该忘掉（原来会变成 null），实际 ${again.savingFor}`);
+  assert.equal(s.aiIntent!.A!.since, since, 'since 要保持，不能每回合重置');
+});
+test('攒钱意向：目标没了就换，不会抱着死目标',()=>{
+  const s = arena();
+  s.fog=false; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  aiDebugPlan(s,'A');
+  assert.equal(s.aiIntent?.A?.goal,'hero','先立一个攒英雄的意向');
+  // 英雄从兵种表里没了（关掉那个包 / 选卡没收录）：这一条必须接得住
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.turn=17;
+  const p = aiDebugPlan(s,'A');
+  assert.notEqual(s.aiIntent?.A?.goal,'hero', `英雄没了还在攒英雄，实际 ${s.aiIntent?.A?.goal}`);
+  assert.equal(p.savingFor, s.aiIntent?.A?.goal ?? null, '计划和记忆要一致');
+});
+test('攒钱意向：走 aiNextAction 时落在真状态上',()=>{
+  const s = arena();
+  s.fog=true; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.ok(s.aiIntent?.A, '雾图副本上的记忆要搬回真状态，否则下一回合又忘了');
+});
+
+test('两回合威胁：够得着但还没到的人算进 soon，不算进 exposure',()=>{
+  const s = arena();
+  const t = unit(s,'A','militia',4,4);
+  const e = unit(s,'B','militia',11,4,{move:4,range:1,atk:20});
+  const map = tacticalMap(s,'A');
+  assert.equal(map.exposure(t).damage, 0, '这回合还够不着，不算眼前那一刀');
+  assert.ok(map.soon(t).damage > 0, '两回合的移动力够扑上来，要预警');
+  // 走不动的同一批人：两回合也到不了，就不该预警
+  e.type = 'slow';
+  s.unitTypes.slow = {...s.unitTypes.militia!, id:'slow', move:1};
+  const slow = tacticalMap(s,'A');
+  assert.equal(slow.soon(t).damage, 0, '两回合走不到的人不算威胁');
+});
+test('对手最强一手：按"最贵的那一刀"计价，不看最近的那个',()=>{
+  const s = arena();
+  const cheap = unit(s,'A','militia',6,6);
+  const pricey = unit(s,'A','militia',6,8,{maxHp:200,cost:400});
+  unit(s,'B','archer',6,10,{move:0,range:4,atk:30});
+  const a = foeOutput(s,'A');
+  assert.ok(a > 0, '有人在射程里，就该算出一笔');
+  // 把便宜的挪到射程外：威胁值应该几乎不掉——真正值钱的是那台贵的
+  cheap.y = 0;
+  const b = foeOutput(s,'A');
+  assert.ok(b >= a * 0.95, `打贵的那一刀才是主体（${a.toFixed(1)} → ${b.toFixed(1)}）`);
+  // 把贵的打掉，威胁值要塌下来
+  s.units = s.units.filter(u=>u.id!==pricey.id);
+  assert.ok(foeOutput(s,"A") < a * 0.6, '摘掉贵的目标，威胁值要跟着掉');
+});
+test('两翼：分出去的那一路不超过全军三分之一，去打另一座城',()=>{
+  const s = arena();
+  s.fog=false;
+  // 上边一撮 3 个、下边一撮 6 个；两座敌城分别在右上与右下
+  for(const [x,y] of [[9,2],[10,2],[9,3]]) unit(s,'A','militia',x,y);
+  for(const [x,y] of [[9,10],[10,10],[9,11],[10,11],[9,12],[10,12]]) unit(s,'A','militia',x,y);
+  const b1 = s.cities.find(c=>c.id==='city2')!; // (12,1) 右上
+  const b2 = s.cities.find(c=>c.id==='city3')!; // (12,12) 右下
+  const land = new Map<string,number[]>([
+    [b1.id, cityDistanceField(s,b1,'land')],
+    [b2.id, cityDistanceField(s,b2,'land')],
+  ]);
+  // 主攻定在右上那座：下边那一撮自然该走另一翼
+  const split = flankSplit(s,'A',land,b1.id);
+  assert.equal(split.flankCityId, b2.id, '佯攻要走离主攻最远的那座');
+  assert.equal(split.flank.size, 3, '上限是全军九人的三分之一');
+  for(const id of split.flank){
+    const u = s.units.find(u=>u.id===id)!;
+    assert.ok(u.y >= 10, `分到佯攻的该是下边那一撮，实际 (${u.x},${u.y})`);
+  }
+});
+test('两翼：兵太少不分兵',()=>{
+  const s = arena(); s.fog=false;
+  for(let i=0;i<4;i++) unit(s,'A','militia',9,4+i);
+  const b1 = s.cities.find(c=>c.id==='city2')!;
+  const b2 = s.cities.find(c=>c.id==='city3')!;
+  const land = new Map<string,number[]>([
+    [b1.id, cityDistanceField(s,b1,'land')],
+    [b2.id, cityDistanceField(s,b2,'land')],
+  ]);
+  assert.equal(flankSplit(s,'A',land,b1.id).flankCityId, null, '四个兵分两路等于送');
+});
+test('换家：兵力和城墙都崩了，就该弃守去打对面的城',()=>{
+  const s = arena(); s.fog=false; s.current='A'; s.turn=40;
+  // 我 4 个民兵缩在野地里，对面 10 个重装已经贴到城下
+  for(let i=0;i<4;i++) unit(s,'A','militia',7,7+i);
+  for(let i=0;i<10;i++) unit(s,'B','militia',3+(i%2),3+Math.floor(i/2),{maxHp:220,atk:40,cost:400});
+  // 我那两座城都半血、都在敌人嘴边
+  for(const c of s.cities) if(c.owner==='A') c.hp = Math.floor(c.maxHp*0.4);
+  const p = aiDebugPlan(s,'A');
+  assert.equal(p.stance,'trade', `应该换家，实际 ${p.stance}`);
+});
+test('换家：身价没差那么多就老实守着，别动不动就弃城',()=>{
+  const s = arena(); s.fog=false; s.current='A'; s.turn=40;
+  for(let i=0;i<4;i++) unit(s,'A','militia',7,7+i);
+  for(let i=0;i<3;i++) unit(s,'B','militia',3+(i%2),3+Math.floor(i/2));
+  for(const c of s.cities) if(c.owner==='A') c.hp = Math.floor(c.maxHp*0.4);
+  const p = aiDebugPlan(s,'A');
+  assert.notEqual(p.stance,'trade', '势均力敌的时候不该弃城');
 });
 
 console.log(`${passed} AI optimization tests passed`);
