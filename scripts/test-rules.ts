@@ -14357,5 +14357,53 @@ test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯�
   assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
+test('奇想平衡（2026-11-03）：狂战士攻击 24、蛇人 8 甲 30 血、女巫换特性', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  assert.equal(s.unitTypes['berserker']!.atk, 24, '狂战士基础攻击 19 → 24');
+  const serpent = s.unitTypes['serpent-man']!;
+  assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
+  assert.equal(serpent.maxHp, 30, '蛇人生命 34 → 30');
+  const witch = s.unitTypes['witch']!;
+  assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
+  assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
+});
+
+test('虚咒：3 格内敌军攻击力 −25%，4 格外不生效，两道不叠乘', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  s.units = [];
+  const witch = place2(s, 'B', 'witch', 5, 5);
+  const near = place2(s, 'A', 'swordsman', 8, 5);   // 离女巫 3 格：刚好在虚咒内
+  const far = place2(s, 'A', 'swordsman', 9, 5);    // 4 格：出圈
+  const base = s.unitTypes['swordsman']!.atk;
+
+  assert.equal(effectiveStats(s, far).atk, base, '4 格外不吃虚咒');
+  assert.equal(effectiveStats(s, near).atk, Math.round(base * 0.75), '3 格内攻击力 −25%');
+  // 面板上的减项要能说清来源，否则玩家只会看到"攻击力掉了"
+  assert.ok(
+    effectiveStats(s, near).atkItems.some((i) => i.label === '虚咒'),
+    '面板要标出「虚咒」这一项',
+  );
+
+  // 伤害也吃这一刀（和面板同一个口径，见 computeDamage 那一行）
+  const hurtFar = computeDamage(s, far, witch);
+  const hurtNear = computeDamage(s, near, witch);
+  assert.ok(hurtNear < hurtFar, `虚咒要真的削伤害：${hurtNear} 应小于 ${hurtFar}`);
+
+  // 再多一个女巫贴着打：取强不叠乘，不能变成 −50%
+  place2(s, 'B', 'witch', 7, 4);
+  assert.equal(effectiveStats(s, near).atk, Math.round(base * 0.75), '两道虚咒不叠乘');
+});
+
+test('掠空：女巫在空中层，能和地面单位共占一格', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  s.units = [];
+  const witch = place2(s, 'B', 'witch', 5, 5);
+  assert.equal(airLayer(s.unitTypes['witch']!), true, '掠空 = 空中层');
+  assert.equal(isAirborne(s, witch), true);
+  const foot = stackOn(s, 'A', 'swordsman', 5, 5);
+  assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
+  assert.ok(unitsAt(s, 5, 5).some((u) => u.id === foot.id), '地面那一个还在');
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

@@ -1318,14 +1318,37 @@ export function fearPenalty(s: GameState, unit: Unit): number {
   let hit = 0;
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
-    if (distance(foe, unit) !== 1) continue;
     for (const a of aurasOf(utype(s, foe.type))) {
       if (!a.foeAtk || a.foeAtk >= 0) continue;
+      // 半径默认 1（相邻）：威吓/咒域都是"贴上去才算"，只有显式写了 radius 的才放大
+      if (distance(foe, unit) > (a.radius ?? 1)) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeAtk;
       hit = Math.min(cap, hit - a.foeAtk);
     }
   }
   return hit;
+}
+
+/**
+ * 虚咒：范围内敌军攻击力按**比例**降低（`foeAtkPct`），取最强的一条，不叠乘。
+ *
+ * 和 `fearPenalty` 并存而不是合并：一个是减法、一个是比例，语义不同
+ * （见 ability-hooks 的 AuraSpec 注释）。返回值是 0~0.9 的比例，0 表示没人罩着。
+ *
+ * 上限 0.9：数据里写错一个 1.5 不会让某个兵直接打出负伤害，
+ * 也挡住"三个女巫叠到 −75%"这种连锁——光环取强不取叠。
+ */
+export function hexWeakPct(s: GameState, unit: Unit): number {
+  let pct = 0;
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    for (const a of aurasOf(utype(s, foe.type))) {
+      if (!a.foeAtkPct || a.foeAtkPct <= 0) continue;
+      if (distance(foe, unit) > (a.radius ?? 1)) continue;
+      if (a.foeAtkPct > pct) pct = a.foeAtkPct;
+    }
+  }
+  return Math.min(0.9, pct);
 }
 
 /** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
@@ -1468,6 +1491,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (fear !== 0) {
     atk -= fear;
     atkItems.push({ label: '被威吓', delta: -fear });
+  }
+  // 虚咒：范围内的敌军攻击力按比例降低（取最强的一条，见 hexWeakPct）。
+  // 放在威吓之后、乘法类修正之前：它说的是"我这一刀本来该多狠"，减法类先结清。
+  const hex = hexWeakPct(s, u);
+  if (hex > 0) {
+    const before = atk;
+    atk = Math.round(atk * (1 - hex));
+    atkItems.push({ label: '虚咒', delta: atk - before });
   }
   // 面板上的攻击力修正（狂暴，以及以后任何"现在就成立"的攻击加成）。
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
@@ -2253,6 +2284,9 @@ export function computeDamage(
 
   // 威吓
   ctx.damage -= fearPenalty(s, attacker);
+  // 虚咒：按比例削这一刀的底子，和面板 effectiveStats 同一处口径
+  const hexPct = hexWeakPct(s, attacker);
+  if (hexPct > 0) ctx.damage = Math.round(ctx.damage * (1 - hexPct));
 
   // 长短皆可：隔着一格以上打，只有六成伤害。近身才是本职。
   //
