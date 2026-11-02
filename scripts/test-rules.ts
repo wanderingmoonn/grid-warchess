@@ -165,6 +165,7 @@ import {
   mergeAdvanceField,
   rosterBonuses,
   rosterRoleOf,
+  savingAllowance,
 } from '../src/core/ai.ts';
 import {
   MAX_BOARD_SIZE,
@@ -14150,6 +14151,26 @@ test('全关光了也不给一个空池：退回本体兵种', () => {
   for (const id of s.config.enabledUnits) {
     assert.ok(UNIT_TYPES[id], `${id} 应该是本体兵种`);
   }
+});
+
+test('攒钱期不再"一分钱都不能花"：远目标隔回合还能补一个兵', () => {
+  // 目标 900、手上 200、每回合进 220、两座城产兵：老公式给 0（一分不能花），
+  // 于是"攒升级费的六个回合"和"产线停摆的六个回合"是同一段时间。
+  const inc = 220;
+  const sites = 2;
+  const spend = savingAllowance(200, inc, 1400, sites, true, 0);
+  assert.equal(spend, 110, '出手的回合放出半个回合的收入（两座城分）');
+  assert.equal(savingAllowance(200, inc, 1400, sites, true, 1), 0, '攒的回合不该放款');
+  // 一个周期（两回合）里最多花掉 gas 的量不能达到两回合的收入，否则永远攒不到目标
+  assert.ok(spend * sites < inc * 2, `一个周期花超了：${spend * sites} vs ${inc * 2}`);
+});
+
+test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯预留', () => {
+  assert.equal(savingAllowance(1000, 200, 900, 2, true, 0), Infinity, '目标到手就别冻结了');
+  // 只差几个回合收入时咬住目标：这时候补兵等于把到手的东西又推远
+  assert.equal(savingAllowance(700, 200, 1300, 2, true, 0), 0, '贴身攒钱时不放款');
+  // 弃城期的战术定义就是"停手换档"，这一档保持纯预留（和老口径一致）
+  assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

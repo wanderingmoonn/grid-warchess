@@ -72,6 +72,7 @@ import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
+import { seatsOf } from './types.ts';
 import type { Action, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
@@ -3049,13 +3050,148 @@ export interface AiPlan {
   /** savingFor === 'unit' 时，攒的是哪一个兵种 */
   targetUnitId: string | null;
   targetCost: number;
-  /** 攒钱期可动用的现金：当前余额减去目标费用，最低为零 */
+  /**
+   * 攒钱期可动用的现金（每回合）。
+   *
+   * 2026-11-02 改：原来是 `余额 − 目标费用`，也就是**二值**——差一截就一点都不能花，
+   * 产线整条停住。现在按收入折算，见 `savingAllowance`。
+   */
   allowance: number;
+  /**
+   * 建造（建筑）能用的额度：仍然是老口径 `余额 − 目标价`。
+   *
+   * 为什么要和 allowance 分开：囤建筑是"慢慢回本"的钱，攒钱期里它抢的是
+   * 升级费/重建费这种一次性的关键支出，回本速度根本追不上。实测把建筑物的冻结
+   * 一起放开之后，AI 把钱全铺成磨坊，重建费和升时代反而攒不出来了。
+   * 可以边打边补兵，但不能边攒边铺摊子。
+   */
+  buildAllowance: number;
+  /** 选中这个目标的性价比评分（每金战力），诊断用；不攒钱时为 0 */
+  goalScore: number;
+  /** 攒钱目标的一句话说明，诊断用；不攒钱时为空串 */
+  goalNote: string;
+  /**
+   * 这一回合参与比较的**全部**攒钱候选，按分数从高到低，诊断用。
+   *
+   * 为什么要把它留在计划里：`savingFor` 只告诉你结果，看不出"为什么不是那一个"。
+   * 排查"AI 为什么一直不升时代"时，需要的正是另外几个候选的分数——
+   * 是英雄压过了它，还是根本够不着。`scripts/diag-plan.ts --goals` 会把它打出来。
+   */
+  goalOptions: Array<{ kind: string; cost: number; score: number; note: string }>;
   urgent: boolean;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
 const SAVE_HORIZON = 6;
+
+/**
+ * 还差几个回合的收入以内就"咬住"目标、一分不花。
+ *
+ * 短停是划算的：四五个回合的停手换一整代兵，实测比"边打边攒"赢得多。
+ * 长停才是要修的病——那种"再攒十个回合也够不着"的远目标（重建费、远处的升级），
+ * 一直冻着的话整局产线就废了。所以只有超过这个窗口的目标才允许边打边攒。
+ *
+ * 4 这个数是量出来的：同一个新目标选择下，贴身阈值 2 → 对战 46.9%（160 局，
+ * 对手是上一版冻结的 AI），4 → 50.0%（160 局）。阈值越小越接近"老硬停"，
+ * 而那恰恰是打得更赢的那一侧——所以放宽到 4，只在够不着的远目标上才放开产线。
+ */
+const SAVE_TIGHT_TURNS = 4;
+
+/**
+ * 投资视野（回合）：AI 估"这笔钱以后还能滚出多少"。
+ *
+ * 升时代和收废墟的收益都不是一次性的：前者让**以后每一个产兵名额**更值钱，
+ * 后者多出一份**每回合的收入**。要把这两种收益和一个兵的价格排在同一张表上，
+ * 就得先估"以后还有多少回合可打"。20×20、火药开局、200 回合上限的实测里，
+ * 分出胜负的中位数在 25~35 回合，取一半偏保守：宁可低估长期收益，
+ * 也不要把 AI 推成"整局只顾攒升级、一个兵不造"。
+ */
+const INVEST_HORIZON = 15;
+
+/**
+ * 英雄溢价：同样一笔钱，英雄除了数值还带技能和"场上只能有一个"的独占性。
+ * 不给这一档，纯按性价比算，英雄会永远排在便宜的戟兵后面——
+ * 而实际对局里"有没有英雄"是整支部队的档位差别。
+ */
+const HERO_PREMIUM = 1.6;
+
+/**
+ * 升时代的战力折扣：升级换回来的战力是在十几个回合里慢慢兑现的，
+ * 而一个兵是**现在**就能顶到城门口的。折半是个粗估，方向比精度重要——
+ * 不打这个折扣，升时代会永远碾压一切，AI 又回到"整局只顾升城、一个兵不造"。
+ */
+const ERA_TIME_DISCOUNT = 0.5;
+
+/**
+ * 攒钱期"这一回合能动用多少现金"。
+ *
+ * 老公式是 `余额 − 目标费用`：手里留够目标价，多出来的才能花。它的问题不在保守，
+ * 而在**二值**——只要还差一截，额度就是 0，整回合一个兵都造不出来。目标越大
+ * （升时代、重建费）停得越久，而对面在这几个回合里照常出兵。第一版硬停采购
+ * 实测胜率掉到 38.8%（见 buildPlan 顶部那段注释），掉的就是这个。
+ *
+ * 想修就得先看清一个约束：**这个棋里一个兵的价格本来就接近一回合的收入**。
+ * 于是"每回合都买得起"和"攒得下钱"是互斥的——收入全变成兵，余额永远上不去；
+ * 而任何按比例（比如收入的 40%）给的额度都小于一个兵的价格，等于还是 0。
+ * 人类的做法很清楚：**隔一个回合补一个兵**，剩下的收入攒着。
+ *
+ * 所以这里按回合轮流出兵：
+ *   · 相位 0 的回合：放出"一个回合的收入"这一档额度，够买一个正常的兵；
+ *   · 相位 1 的回合：一分不动，纯攒。
+ * 相位按**轮**算，不按 `s.turn` 的奇偶——两人局里 s.turn 是一人一格轮着走的，
+ * 直接取奇偶会变成"主队永远出兵、客队永远不动"，一边倒的不是 AI 是发牌。
+ * 净存款每回合还有约一半收入，目标照样到期兑现；产线速率掉一半，但不断。
+ * 用回合奇偶而不是"记住上回合买没买"，是因为 AI 没有跨回合状态
+ * （refreshMemory 只管战争迷雾）——同样的局面必须推出同样的结论。
+ *
+ * 两个例外：
+ *   · 目标已经够得着 → 不冻结（目标本身由 isTarget 的加分保证会被买走）；
+ *   · 弃城期 → 额度为 0。那一档的战术定义就是"停手换档"：用一座城换一代科技，
+ *     中间还在补便宜兵等于两头都不占，它要的是纯粹的预留（和老口径一致）。
+ */
+export function savingAllowance(
+  gold: number,
+  inc: number,
+  targetCost: number,
+  /** 同时能产兵的产兵点数量：额度是"一回合的产出预算"，几家分 */
+  sites: number,
+  /** 是否保留产线（弃城期关掉，见上面最后一句） */
+  keepLine: boolean,
+  /** 轮流出手的相位：0 出兵、1 纯攒（按"轮"算，见上） */
+  phase: number,
+): number {
+  if (targetCost <= 0 || gold >= targetCost) return Infinity;
+  if (!keepLine) return 0;
+  /*
+   * 就差一两个回合的收入了：这时候还去补兵，等于把马上到手的目标又推远。
+   * 短暂停手（一两回合）是划算的，长停（五个回合以上）才是要修的病——
+   * 这一条把它限制在前者。
+   */
+  if ((targetCost - gold) / Math.max(1, inc) <= SAVE_TIGHT_TURNS) return 0;
+  if (phase !== 0) return 0;
+  /*
+   * 额度是"这一回合的产出预算"，不是"每个兵都能花这么多"：
+   * 采购是逐候选比的，两座城就能在同一个回合各买一个——不除产兵点数量，
+   * 一个回合能花掉两回合的收入，攒的钱永远追不上目标。
+   */
+  return Math.max(1, Math.floor(inc / Math.max(1, sites)));
+}
+
+/**
+ * 一个攒钱目标：攒什么、多少钱、值不值。
+ *
+ * `score` 和采购评分共用一把尺子（`combatEfficiency`：战力 ÷ 价格^0.8），
+ * 只是"战力"的口径按目标换算——一个兵是它自己的战力，升时代是"以后每个名额
+ * 多产多少战力"折算出来的增量，收废墟是"多一份每回合收入"折算出来的增量。
+ * 这样四个目标可以直接排大小，"为什么攒这个"就有据可查，而不是四条 if 的先后。
+ */
+interface SaveGoal {
+  kind: 'hero' | 'era' | 'rebuild' | 'unit';
+  targetUnitId: string | null;
+  cost: number;
+  score: number;
+  note: string;
+}
 
 function buildPlan(
   s: GameState,
@@ -3100,7 +3236,6 @@ function buildPlan(
   // 所以这一条不是"更聪明的经济"，是把平局变成胜局的那一步。
   const foeCities = s.cities.filter((c) => !c.ruined && c.owner !== me);
   const foeRuins = s.cities.filter((c) => c.ruined && c.owner !== me);
-  const ruinCost = foeRuins.length > 0 ? Math.min(...foeRuins.map((c) => rebuildCost(c))) : null;
   // 对面只剩这一座（还成了废墟）：收回来就直接结束对局，这时候攒多久都值得
   const winningReclaim = foeRuins.length > 0 && foeCities.length <= 1;
 
@@ -3139,72 +3274,213 @@ function buildPlan(
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
   let targetUnitId: string | null = null;
+  let goalScore = 0;
+  let goalNote = '';
+  let goalOptions: AiPlan['goalOptions'] = [];
   // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
   // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
   const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
-  if (!urgent && army >= armyGate) {
-    // 6 个回合的收入之内够得着，才值得为它停手。收废墟例外：那是终局，
-    // 视野放宽到 14 个回合——攒不够就永远赢不了，慢一点总比平局好。
-    if (ruinCost !== null && gold + inc * (winningReclaim ? 14 : SAVE_HORIZON) >= ruinCost) {
-      savingFor = 'rebuild';
-      targetCost = ruinCost;
-    } else if (heroDef && heroCost > 0 && gold + inc * SAVE_HORIZON >= heroCost) {
-      savingFor = 'hero';
-      targetCost = heroCost;
-    } else if (eraCost !== null && gold + inc * SAVE_HORIZON >= eraCost) {
-      savingFor = 'era';
-      targetCost = eraCost;
-    }
-  }
-  // Capture is the winning action. Reserve its fee before buying another unit.
-  //
-  // 但这条**不能压倒兵力**：它比上面那一档更凶——上面还守着 `!urgent && army>=armyGate`，
-  // 这里原来什么都没守，于是"城门口有座废墟、手上一个兵都没有"也会把采购冻住。
-  // 收废墟的前提是"我还有兵能走进去"，兵没了，攒的是别人的战利品。
-  const nearbyRuin = foeRuins.filter(c => my.some(u => !u.moved && distToCity(u,c)<=Math.max(2,utype(s,u.type).move+1)))
-    .sort((a,b) => rebuildCost(a)-rebuildCost(b))[0];
-  if (nearbyRuin && !threaten && !urgent && army >= armyGate) {
-    savingFor = 'rebuild'; targetCost = rebuildCost(nearbyRuin);
-  }
-  if (mood.abandonedCityId || developingRear) {
-    const retained = myCities.filter(c => !c.ruined && c.id!==mood.abandonedCityId);
-    const costs = retained.map(c => upgradeCostOf(s,c)).filter((c): c is number => c!==null);
-    const nextEra = costs.length ? Math.min(...costs) : null;
-    if (heroDef && gold+inc*4 >= heroCost) { savingFor='hero'; targetCost=heroCost; }
-    else if (nextEra!==null && gold+inc*SAVE_HORIZON>=nextEra) { savingFor='era'; targetCost=nextEra; }
-  }
+
+  // 收废墟的可执行性：隔壁没兵走过去，攒的是别人的战利品。
+  const nearbyRuin = foeRuins
+    .filter((c) =>
+      my.some((u) => !u.moved && distToCity(u, c) <= Math.max(2, utype(s, u.type).move + 1)),
+    )
+    .sort((a, b) => rebuildCost(a) - rebuildCost(b))[0];
 
   /*
-   * ── 大件：把"攒钱买贵的"接进同一套预留机制 ──
+   * ── 攒什么：交给 AI 自己那把尺子来排 ──
    *
-   * 只在高优先级目标（英雄 / 升时代 / 收废墟）都不成立时才考虑：
-   * 升时代是质变（解锁整代兵池），一个大件只是量变，不该抢它的钱。
+   * 原来的顺序是写死的四条 if：收废墟 > 英雄 > 升时代 > 大件。顺序本身有道理
+   * （越靠前越接近"质变"），但它不是**算**出来的，所以永远回答不了
+   * "这个 700 金的英雄，和把主城升到下一代，哪个更值"。
    *
-   * 挑选方式必须是**确定性的**：同样的局面永远挑出同一个兵种。
-   * AI 没有跨回合状态（refreshMemory 只管战争迷雾），
-   * 想让它"连攒三个回合"，只能靠"同样的输入推出同样的目标"。
+   * 现在四个目标排在一张表上比，尺子和采购评分共用同一条公式
+   * （`combatEfficiency`：战力 ÷ 价格^0.8），"战力"的口径按目标换算：
+   *   · 一个兵   → 它自己的战力
+   *   · 英雄     → 自己的战力 × HERO_PREMIUM（独占性）
+   *   · 升时代   → 每个出生名额更值钱 → 战力增量 × 视野内还能造几个兵 × 时间折扣
+   *   · 收废墟   → 多一份每回合收入 → 视野内收入 × 当前每金战力
+   * 于是"攒钱"是一次 argmax，而不是四条 if 的先后，理由可以逐条摊开看。
+   *
+   * 唯一保留的硬规则是收废墟的终局判断：对面只剩最后一座（还是废墟）时，
+   * 那不是性价比问题，是胜负问题，直接给到最高分。
+   *
+   * 挑选必须是**确定性的**：同样的局面永远挑出同一个目标。AI 没有跨回合状态
+   * （refreshMemory 只管战争迷雾），想让它"连攒三个回合"，只能靠
+   * "同样的输入推出同样的目标"。
    */
-  if (!savingFor && !urgent && army >= armyGate) {
-    const maxEra = Math.max(...myCities.map((c) => c.era), 1);
-    const pool = Object.values(s.unitTypes)
-      .filter((d) => d.category === 'combat' && !d.summonedOnly && eraWindowOk(s, d, maxEra))
-      .map((d) => ({ d, price: recruitCost(s, me, d) }))
-      .filter((x) => x.price > 0 && x.price <= gold + inc * SAVE_HORIZON);
-    const eff = (x: { d: UnitTypeDef; price: number }): number => combatEfficiency(x.d, x.price);
-    const bestNow = pool.filter((x) => x.price <= gold).sort((a, b) => eff(b) - eff(a))[0];
-    const bestAny = [...pool].sort((a, b) => eff(b) - eff(a))[0];
-    // 只有"更好的那个现在买不起、且性价比明显更高"才值得为它停手；
-    // 1.25 倍是门槛：只强一点点的大件不值得牺牲一个回合的产线。
-    if (bestAny && bestAny.price > gold && (!bestNow || eff(bestAny) > eff(bestNow) * 1.25)) {
-      savingFor = 'unit';
-      targetCost = bestAny.price;
-      targetUnitId = bestAny.d.id;
+  /*
+   * 攒钱的门槛：兵太少时不攒（urgent 那条线同理），但**弃城期例外**。
+   *
+   * 弃城期的整条路线就是"兵少、放弃前线、把钱全押在换代上"，这时候还要求
+   * "手上至少四个兵才准攒钱"，等于这一档永远开不起来——它本来就是兵力劣势时的选择。
+   * 原来那段代码写在门槛外面，所以能跑；搬进统一的目标比较之后，这个例外得明写出来。
+   */
+  const abandonMode = Boolean(mood.abandonedCityId) || developingRear;
+  /*
+   * 兵池只在这个分支里枚举：buildPlan 是**每个动作**都要跑一次的，
+   * 全兵种扫一遍（一百多个兵 × 每个算一次报价）放在外面，一局下来是白烧的时间。
+   */
+  let allowance = Infinity;
+  let buildAllowance = Infinity;
+  if (!urgent && (abandonMode || army >= armyGate)) {
+    const makeablePool = Object.values(s.unitTypes).filter(
+      (d) =>
+        d.category === 'combat' &&
+        !d.summonedOnly &&
+        canUseType(s, me, d.id) &&
+        eraWindowOk(s, d, maxEra),
+    );
+    const goldOf = (d: UnitTypeDef): number => recruitPriceOf(s, me, d).gold;
+    const effOf = (d: UnitTypeDef): number => combatEfficiency(d, goldOf(d));
+    const perGoldOf = (d: UnitTypeDef): number => combatPower(d) / Math.max(1, goldOf(d));
+
+    // 弃城期算的是"留在手里的那几座城"：那座已经放弃的城，升级费不该再进计划
+    const eraCity: City | null = abandonMode
+      ? (myCities
+          .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
+          .map((c) => ({ c, cost: upgradeCostOf(s, c) }))
+          .filter((x): x is { c: City; cost: number } => x.cost !== null)
+          .sort((a, b) => a.cost - b.cost)[0]?.c ?? null)
+      : (mainCity ?? null);
+    const eraTarget = eraCity ? upgradeCostOf(s, eraCity) : eraCost;
+    const heroHorizon = abandonMode ? 4 : SAVE_HORIZON;
+    /** 视野之内够得着才值得停手：攒不到头的目标只会让 AI 整局不出兵 */
+    const reach = (cost: number, horizon: number): boolean => gold + inc * horizon >= cost;
+
+    // "现在就买得到的最好那个"：攒钱得和它比，才谈得上"值不值得等"
+    const bestNow = makeablePool
+      .filter((d) => goldOf(d) > 0 && goldOf(d) <= gold)
+      .sort((a, b) => effOf(b) - effOf(a))[0];
+    const nowEff = bestNow ? effOf(bestNow) : 0;
+    // 每金战力：把"以后每一笔军费"折成战力时的汇率（用最强的那一档，不用平均值——
+    // 攒钱本来就是为了以后买得起那一档，拿平均去折会把长期收益算低）
+    const bestPerGold = makeablePool.reduce((m, d) => Math.max(m, perGoldOf(d)), 0);
+    const foeEra = Math.max(
+      0,
+      ...s.cities.filter((c) => !c.ruined && c.owner !== me).map((c) => c.era),
+    );
+
+    const goals: SaveGoal[] = [];
+
+    // 收废墟：多一座城 = 多一份每回合收入。
+    //
+    // 弃城期不排它：那条路线的定义就是"用前线换科技"，收一座废墟等于把钱又押回前线，
+    // 和"放弃这座城"是两件事。（以前这也是硬写死的，现在只是把理由说明白。）
+    const ruinTarget = winningReclaim
+      ? [...foeRuins].sort((a, b) => rebuildCost(a) - rebuildCost(b))[0]
+      : abandonMode
+        ? undefined
+        : nearbyRuin;
+    if (ruinTarget && reach(rebuildCost(ruinTarget), winningReclaim ? 14 : 8)) {
+      const cost = rebuildCost(ruinTarget);
+      const perCityInc = inc / Math.max(1, myCities.length);
+      const gain = perCityInc * INVEST_HORIZON * bestPerGold;
+      goals.push({
+        kind: 'rebuild',
+        targetUnitId: null,
+        cost,
+        score: winningReclaim ? 1e9 : gain / Math.max(20, cost) ** 0.8,
+        note: winningReclaim
+          ? '收回对面最后一座城 = 赢'
+          : `多一座城，${INVEST_HORIZON} 回合多约 ${Math.round(perCityInc * INVEST_HORIZON)} 金`,
+      });
+    }
+
+    // 英雄：数值之外的独占性按 HERO_PREMIUM 折进来
+    if (heroDef && heroCost > 0 && reach(heroCost, heroHorizon)) {
+      goals.push({
+        kind: 'hero',
+        targetUnitId: null,
+        cost: heroCost,
+        score: effOf(heroDef) * HERO_PREMIUM,
+        note: `${heroDef.name}（英雄，场上仅此一只）`,
+      });
+    }
+
+    /*
+     * 升时代：换回来的不是"多一个兵"，是**每个出生名额更值钱**。
+     *
+     * 为什么按名额算、不按金币算：金币会被收入追平（每回合都在进），
+     * 名额追不平——每座城每回合只能出一个兵，AI 的编制上限还压着 24 个。
+     * 真正的稀缺资源是名额，所以升时代的价值是"以后每一个名额多产多少战力"。
+     *
+     * 两个折扣都要打明白：
+     *   · 未来才到手的战力要折半（兵是现在就能用的，升级是十五个回合里慢慢兑现的）；
+     *   · 视野内造不了几个兵（名额 + 钱谁先卡住算谁），最多按 5 个算。
+     * 不打这两个折扣，升时代会永远碾压一切，AI 就又回到"整局只顾升城"。
+     */
+    if (eraCity && eraTarget !== null && reach(eraTarget, SAVE_HORIZON)) {
+      const nextPool = Object.values(s.unitTypes).filter(
+        (d) =>
+          d.category === 'combat' &&
+          !d.summonedOnly &&
+          canUseType(s, me, d.id) &&
+          d.era === eraCity.era + 1,
+      );
+      const curPower = makeablePool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
+      const nextPower = nextPool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
+      const delta = Math.max(0, nextPower - curPower);
+      const priceNow = bestNow ? goldOf(bestNow) : eraTarget;
+      const futureUnits = Math.max(
+        1,
+        Math.min(5, Math.round((inc * INVEST_HORIZON) / Math.max(1, priceNow))),
+      );
+      const gain = delta * futureUnits * ERA_TIME_DISCOUNT;
+      if (gain > 0) {
+        goals.push({
+          kind: 'era',
+          targetUnitId: null,
+          cost: eraTarget,
+          score: gain / Math.max(20, eraTarget) ** 0.8,
+          note:
+            `升到第 ${eraCity.era + 1} 代：每个名额 +${Math.round(delta)} 战力` +
+            ` ×${futureUnits} 个名额${foeEra > maxEra ? '（对面已领先）' : ''}`,
+        });
+      }
+    }
+
+    // 大件：只有"明显比现在能买的更值"才值得为它停手。
+    // 1.2 倍是门槛——只强一点点的大件不值得牺牲一个回合的产线。
+    // 弃城期不排大件：这一档要的是换代，不是再补一个兵。
+    const big = abandonMode
+      ? undefined
+      : makeablePool
+          .filter((d) => goldOf(d) > gold && reach(goldOf(d), SAVE_HORIZON))
+          .sort((a, b) => effOf(b) - effOf(a))[0];
+    if (big && (nowEff <= 0 || effOf(big) > nowEff * 1.2)) {
+      goals.push({
+        kind: 'unit',
+        targetUnitId: big.id,
+        cost: goldOf(big),
+        score: effOf(big),
+        note: `${big.name}（${goldOf(big)} 金，现在买不起）`,
+      });
+    }
+
+    const pick = goals.sort((a, b) => b.score - a.score)[0];
+    goalOptions = goals.map((g) => ({ kind: g.kind, cost: g.cost, score: g.score, note: g.note }));
+    if (pick) {
+      savingFor = pick.kind;
+      targetCost = pick.cost;
+      targetUnitId = pick.targetUnitId;
+      goalScore = pick.score;
+      goalNote = pick.note;
+      /*
+       * 攒钱期每回合能动用多少现金（见 savingAllowance）。
+       *
+       * 相位按"轮"算，不按 s.turn 的奇偶：两人局里 s.turn 是一人一格轮着走的，
+       * 直接取奇偶会变成"先手方永远出兵、后手方永远不动"——那不是 AI 的差别，是发牌。
+       */
+      const phase = Math.floor(s.turn / Math.max(1, seatsOf(s).length)) % 2;
+      // 建筑照旧只吃"留够目标价之后的那部分"：囤摊子比补兵慢得多
+      buildAllowance = Math.max(0, gold - targetCost);
+      allowance = savingAllowance(gold, inc, targetCost, myCities.length, !abandonMode, phase);
     }
   }
 
-  // 只花超过目标费用的现金。未来收入用于判断目标能否实现，不能当作当前预算。
-  // 短期回本的有限增产，以及危城以外的紧急防守，另有例外。
-  const allowance = savingFor ? Math.max(0,gold - targetCost) : Infinity;
+
 
   // 兵力明显不如对面、对面又已经压到门口：收缩固守，把人留在城里。
   //
@@ -3225,7 +3501,18 @@ function buildPlan(
   const stance: AiPlan['stance'] =
     weaker && army >= 3 && atGate ? 'turtle' : elite ? 'elite' : 'push';
 
-  return { stance, savingFor, targetCost, targetUnitId, allowance, urgent: mood.abandonedCityId ? threaten : urgent };
+  return {
+    stance,
+    savingFor,
+    targetCost,
+    targetUnitId,
+    allowance,
+    buildAllowance,
+    goalScore,
+    goalNote,
+    goalOptions,
+    urgent: mood.abandonedCityId ? threaten : urgent,
+  };
 }
 
 /**
@@ -3267,18 +3554,29 @@ export const aiRecruitTrace: {
 } = { on: false, last: null, detail: null };
 
 /**
- * 一个战斗单位的"性价比"：攻（含魔攻折算）× sqrt(血) × 射程系数，按价格开 0.8 次方。
+ * 一个兵种的"战力"：攻（含魔攻折算）× sqrt(血) × 射程系数。
  *
- * 原先这段公式只活在评分里一行。2026-11-02 抽出来，是因为"为大件攒钱"
- * 需要拿它比较"现在能买的"和"再攒一回合能买的"——同一件事不能有两份算法。
+ * 这是 AI 自己那把尺子的分子，抽出来是给"攒钱目标"用的：升时代和收废墟换回来的
+ * 不是某一个兵，而是"以后每一笔军费更值 / 每回合多一份收入"，得先把它们折算成
+ * 战力，才能和一个兵的价格放在同一张表上比（见 SaveGoal）。
+ */
+function combatPower(d: UnitTypeDef): number {
+  return (
+    (d.atk + (d.magicAtk ?? 0) * 1.2) *
+    Math.sqrt(d.maxHp) *
+    (1 + Math.min(4, Math.max(0, d.range - 1)) * 0.45)
+  );
+}
+
+/**
+ * 一个战斗单位的"性价比"：战力按价格开 0.8 次方。
+ *
+ * 价格指数故意小于 1：贵的兵换算下来的性价比会被压一点，但不会被压死
+ * （线性的话 400 金的坦克永远排在 150 金的戟兵后面，而坦克的价值在护甲和破城上，
+ * 那个公式里没有）。攒钱目标也用这把尺子，见 SaveGoal。
  */
 function combatEfficiency(d: UnitTypeDef, price: number): number {
-  return (
-    ((d.atk + (d.magicAtk ?? 0) * 1.2) *
-      Math.sqrt(d.maxHp) *
-      (1 + Math.min(4, Math.max(0, d.range - 1)) * 0.45)) /
-    Math.max(20, price) ** 0.8
-  );
+  return combatPower(d) / Math.max(20, price) ** 0.8;
 }
 
 function recruitCandidate(
@@ -3914,7 +4212,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, urgent: true },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
         null,
         mood,
       );
@@ -4197,7 +4495,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
-      if (cost>plan.allowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
+      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
     }
   }
   if (candidates.length === 0) return null;
