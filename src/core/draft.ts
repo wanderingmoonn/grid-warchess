@@ -199,6 +199,10 @@ export function draftCandidates(state: GameState): string[] {
       if (isPseudoUnit(def.id)) return false;
       if (draftAlwaysAllowed(def)) return false;
       if (def.summonedOnly) return false;
+      // 强行拦截残缺数据 / 测试残留 / 玩家乱改的本地自定义兵种
+      // 如果没有写时代，或者时代小于 1，直接踢出池子，免得把排序搞炸
+      if (typeof def.era !== 'number' || def.era < 1) return false;
+      
       if (def.category === 'combat') return true;
       return def.category === 'building';
     })
@@ -240,7 +244,7 @@ export function sampleDraftPool(
   for (const id of draftCandidates(state)) {
     const def = state.unitTypes[id];
     if (!def) continue;
-    const era = Math.max(1, Math.round(def.era));
+    const era = Math.max(1, Math.round(def.era || 1));
     const list = buckets.get(era) ?? [];
     list.push(id);
     buckets.set(era, list);

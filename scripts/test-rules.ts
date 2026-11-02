@@ -10724,6 +10724,8 @@ test('旧的自定义兵种：整数抗性要折成倍率', () => {
   const legacy = {
     id: 'c_1',
     name: '旧兵',
+    era: 1,
+    category: 'combat',
     resist: { water: 4, fire: 0.8 },
   } as unknown as Parameters<typeof normalizeUnitResist>[0];
   const fixed = normalizeUnitResist(legacy);
@@ -11325,6 +11327,10 @@ test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
   // 造一个剑修和靶子
   const sword = place2(s, 'A', 'sword-cultivator', 5, 5);
   const target = place2(s, 'B', 'militia', 5, 6);
+  
+  // 新增：给剑修15点经验，让他到达1级境界，让境界加成生效（atkModifier 从 0 变成 5）
+  sword.custom = { exp: 15 }; 
+  
   s.current = 'A';
 
   const baseDmg = computeDamage(s, sword, target); // 普攻伤害
@@ -11347,12 +11353,12 @@ test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
   // 1. 扣了次数：剑修 burst 1，放完还剩 0
   assert.equal(swordAfter.attacksLeft, 0, '剑气应该消耗一次攻击次数');
 
-  // 2. 伤害更高：剑气伤害应该比普攻高（基础 +20%）
+  // 2. 伤害更高：剑气伤害应该比普攻高（1级境界下，技能基础数值是 1.2倍，普攻是 0.8倍）
   const skillDmg = hpBefore - targetAfter.hp;
   assert.ok(skillDmg > baseDmg, `剑气伤害(${skillDmg}) 应该高于普攻(${baseDmg})`);
 
-  // 3. 经验增加：初始 0，放空 1 + 命中 5 = 6
-  assert.equal(swordAfter.custom?.exp, 6, '施法并命中应该获得修为经验');
+  // 3. 经验增加：初始 15（我们手动设的），放技能命中基础 +5 + 落空/施法的基础 1 = 21
+  assert.equal(swordAfter.custom?.exp, 21, '施法并命中应该获得修为经验');
 });
 
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {

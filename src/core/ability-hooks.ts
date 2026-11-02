@@ -76,6 +76,20 @@ export interface AbilityApi {
   /** 算一下这个单位现在的溅射半径 */
   splashRadiusOf(s: GameState, u: Unit): number;
   attacksPerTurn(s: GameState, u: Unit): number;
+  /**
+   * 走完整的死亡流程：从棋盘删除、写战报、沉船、触发 onDeath 和 onUnitKilled。
+   *
+   * `logText` 是可选的战报文字（不同死法说不同的话，比如"被剑气斩杀" vs
+   * "被炮火波及消灭"）。不填就用通用文案 `${name} 被消灭`。
+   *
+   * 如果 target 已经在 s.units 里不存在了（被别的死亡链波及删掉），
+   * 这个调用是幂等的空操作，不会抛错。
+   */
+  killUnit(s: GameState, victim: Unit, killer: Unit | undefined, logText?: string): void;
+  /** 摧毁一座城市：变废墟、挤出守军、写战报。幂等（已废墟的再打不生效）。 */
+  destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void;
+  /** 把这一格记进战斗烈度（供被攻击方下回合闪红） */
+  noteHeat(s: GameState, x: number, y: number): void;
 }
 
 /**
