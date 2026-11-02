@@ -1036,7 +1036,7 @@ function scoreSiege(
 export function cityDistanceField(
   s: GameState,
   city: City,
-  mode: 'land' | 'advance' | 'water' = 'land',
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): number[] {
   const size = s.w * s.h;
   const dist: number[] = new Array(size).fill(Infinity);
@@ -1066,7 +1066,18 @@ export function cityDistanceField(
       const tile = s.tiles[ny * s.w + nx];
       if (!tile) continue;
 
-      if (mode === 'water') {
+      if (mode === 'air') {
+        /*
+         * 空中的图：**没有地形**，每一格都是一步。
+         *
+         * 这一张图是"飞机为什么不出门"的答案。以前飞行单位借的是陆军的
+         * 旱路图（山是墙、水是墙），于是在海岸线上 `advanceDistance` 前后都是
+         * 无穷远，走一格"推进分"永远是 0——可达格明明白白列着 68 格深水，
+         * 它就是一格都不去，看着像"飞机不能飞过深水"，其实是它算不出该往哪飞。
+         *
+         * 敌方城市仍然是目标本身，照旧进图（不然所有距离都是无穷远）。
+         */
+      } else if (mode === 'water') {
         // 水军的图只走水面：深水、桥面、浅滩都算
         // （浅滩是水军抄近路的地方，不是只有陆军能过）
         if (!navigable(tile.terrain)) continue;
@@ -1083,7 +1094,7 @@ export function cityDistanceField(
       const backCost = stepCostBetween(s, tile.terrain, fromT);
       const cost =
         cur.cost +
-        (mode === 'water'
+        (mode === 'water' || mode === 'air'
           ? 1
           : tile.terrain === 'water'
             ? WADE_COST
@@ -1129,7 +1140,7 @@ export function mergeAdvanceField(land: number[], wade: number[]): number[] {
 function distanceFields(
   s: GameState,
   me: PlayerId,
-  mode: 'land' | 'advance' | 'water' = 'land',
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): Map<string, number[]> {
   const out = new Map<string, number[]>();
   for (const c of s.cities) {
@@ -1236,6 +1247,13 @@ interface Fields {
   land: Map<string, number[]>;
   wade: Map<string, number[]>;
   water: Map<string, number[]>;
+  /**
+   * 空中的距离图：地形不存在，每格一步。
+   *
+   * 飞行单位必须用它量推进——借陆军的图会得到"对岸永远无穷远"，
+   * 于是飞机宁可原地待命也不出海（可达格其实是有的）。见 cityDistanceField。
+   */
+  air: Map<string, number[]>;
   bridgeSite: { x: number; y: number } | null;
   /**
    * 本回合的主攻方向：血最少的那座敌方城市。
@@ -1682,7 +1700,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       - futureThreat.damage * 1.5 - (futureThreat.lethal ? 100 : 0);
   }
   const w = all.mood.drive;
-  const fields = def.domain === 'water' ? all.water : all.land;
+  const fields = airLayer(def) ? all.air : def.domain === 'water' ? all.water : all.land;
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,all.focusCityId,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
@@ -1705,6 +1723,9 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     !all.commit &&
     def.category === 'combat' &&
     def.domain !== 'water' &&
+    // 空中的距离是"每格一步"，和地面的战线长度不是一个量纲：
+    // 拿它去比 lineRef，飞机几乎永远算"在战线前面"，推进分反而被砍到 15%。
+    !airLayer(def) &&
     // 英雄和攻城器不吃这条：它们本来就是"单点突破"的工具，跟着队形走反而不会打仗。
     // 实测英雄档从 15 胜 1 负掉到 11 胜 5 负，就是被这条拦住的原因。
     def.hero !== true &&
@@ -1827,7 +1848,8 @@ function scoreMove(
   }
 
   // 水军要按"水路的距离"算，否则它的起点在图上是无穷远，永远算不出方向
-  const fields = def.domain === 'water' ? all.water : all.land;
+  // 飞机按空中的图算（地形不存在），水军按水路，其余按旱路
+  const fields = airLayer(def) ? all.air : def.domain === 'water' ? all.water : all.land;
 
   // 经济单位：哪儿赚得多去哪儿
   if (def.incomeByTerrain || typeof def.income === 'number') {
@@ -4388,6 +4410,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     land,
     wade,
     water: distanceFields(view, me, 'water'),
+    air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
     focusCityId: mood.focusCityId,
     mood,

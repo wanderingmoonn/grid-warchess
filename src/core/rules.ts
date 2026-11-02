@@ -1167,12 +1167,17 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
   if (def.domain === 'water') {
     if (!navigable(tile.terrain)) return false;
   } else if (!passable(tile.terrain)) {
-    // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
-    // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
-    // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
-    // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
-    // （浅流本来就可通行，不用单列。）
-    if (!((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def))) {
+    // 空中层：地形对它不存在，停哪儿都行（高山顶上也一样）。
+    // 和 reachableTiles 的 terrainOk 是同一条判据——那两处一旦不一致，
+    // 就会出现"飞得进去、停不下来"或者反过来。
+    if (airLayer(def)) {
+      // 不拦
+    } else if ((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def)) {
+      // 掠水（不是空中层）：能停在水面上，但爬不了山。
+      // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
+      // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
+      // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
+    } else {
       return false;
     }
   }
@@ -1857,16 +1862,31 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     return out;
   };
 
-  /** 地形与城市：四格全部合规才算过；飞行只给"水面"开一个例外（下同） */
+  /**
+   * 地形与城市：四格全部合规才算过。
+   *
+   * 两条豁免，粗细不同，别再混成一条：
+   *   · **空中层（`layer: 'air'`）没有地形这回事**——河、深水、高山、火山
+   *     一律从上面过，唯一还挡得住它的是**敌方城市**（那是防空，不是地形）。
+   *   · **掠水（`flight` 但不是空中层）**只放行水面与深水：一只鹰能贴水飞，
+   *     但它仍然爬不过高山。
+   *
+   * 以前这里只写了水面和深水，于是飞机飞得进外海、飞不过山；更早的版本
+   * 连深水都没写，表现是"能停在深水，却飞不进去"。这类"两处口径不一致"
+   * 的 bug 每次都长得一样：能站的地方进不去，或进得去的地方站不住。
+   */
   const terrainOk = (ax: number, ay: number): boolean => {
     for (const c of cellsAt(ax, ay)) {
       if (!blockedFor(s, c.x, c.y, unit)) continue;
       const ft = tileAt(s, c.x, c.y);
-      // 飞行放行水面与深水：深水只是"船才敢去"的水，对天上的东西和普通水面
-      // 没有区别。以前这里只写了 `water`，于是飞过整条河没问题、飞进外海却被
-      // 拦住——而 tileStandsOk 那边认的是 water + deep，两处口径不一致，
-      // 表现就是"能停在深水上，却飞不进去"。
-      if (flyer && ft && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
+      if (!ft) return false;
+      if (air) {
+        // 敌方（未成废墟的）城市仍然拦：那一段是防空火力，不是地形
+        const city = ft.cityId ? cityById(s, ft.cityId) : null;
+        if (!city || city.owner === unit.owner || city.ruined) continue;
+        return false;
+      }
+      if (flyer && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
       return false;
     }
     return true;
@@ -1928,7 +1948,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       //
       // 多格单位按**锚点那一格**付账：四格取最大或取和，都会让"贴着岸横挪一格"
       // 在玩家眼里突然贵一倍，而界面上高亮的正是锚点格。口径跟肉眼一致优先。
-      let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer });
+      // 空中层一律 1 步：它连高山都过得去（见 terrainOk），没理由在那上面
+      // 按地形的 99 点收费。写成 `flyer || air` 而不是只写 flyer，是因为
+      // 这两件事本来就该分家：一只鹰能掠水但爬不了山，飞机两样都能。
+      let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer: flyer || air });
       const moveCtx = { state: s, unit, def, terrain: tile.terrain, cost: stepCost };
       for (const h of hooks) {
         if (!h.moveCost) continue;

@@ -9359,6 +9359,80 @@ test('飞行层是类型字段：air 能和地面同格，flight 能停在水上
   assert.equal(canStandAt(s, 6, 6, 'militia'), false, '但地面层自己不能再叠一个');
 });
 
+test('空中层无视地形：深水和高山都能飞，也都停得下', () => {
+  /*
+   * 这一条被反复修过三次，每次都是"某一处口径窄了一格"：
+   *   · 先是只认水面 → 飞得进河、飞不进外海（深水）；
+   *   · 然后是认了水面 + 深水，但高山仍然是墙 → 飞机绕着山走；
+   *   · 顺带还漏了 AI 的距离图（见下一条用例）。
+   * 现在的规则一句话：**空中层没有地形，只有敌方城市拦得住它**。
+   */
+  const s = arena(fresh({ godMode: true }));
+  testType(s, 'test-jet', { layer: 'air', flight: true, move: 6 });
+  testType(s, 'test-gull', { flight: true, move: 6 });
+
+  // 在第 7、8 列铺一条竖墙：深水 + 高山
+  for (let y = 0; y < s.h; y++) {
+    s.tiles[idx(s, 7, y)] = { terrain: 'deep', cityId: null };
+    s.tiles[idx(s, 8, y)] = { terrain: 'mountain', cityId: null };
+  }
+
+  const jet = place2(s, 'A', 'test-jet', 5, 6);
+  const reach = reachableTiles(s, jet);
+  assert.ok(reach.has(idx(s, 7, 6)), '空中层要能飞进深水');
+  assert.ok(reach.has(idx(s, 8, 6)), '空中层要能飞过高山');
+  assert.ok(reach.has(idx(s, 10, 6)), '要能一路飞过整条墙（不只是贴边一格）');
+  assert.equal(canStandAt(s, 7, 6, 'test-jet'), true, '深水上空也能停');
+  assert.equal(canStandAt(s, 8, 6, 'test-jet'), true, '高山顶上也能停');
+
+  // 对照：只有 flight、不是空中层的单位，能过水但爬不了山
+  const gull = place2(s, 'A', 'test-gull', 5, 8);
+  const greach = reachableTiles(s, gull);
+  assert.ok(greach.has(idx(s, 7, 8)), '掠水单位能进深水');
+  assert.equal(greach.has(idx(s, 8, 8)), false, '掠水单位爬不了高山');
+  assert.equal(canStandAt(s, 8, 8, 'test-gull'), false, '山上也停不下');
+});
+
+test('空中层的推进图不把深水当墙：AI 的飞机会飞过海', () => {
+  /*
+   * 规则层早就放行了，可 AI 一格都不飞——它借的是陆军的旱路图（水是墙、山是墙），
+   * 于是在海岸线上"前后都是无穷远"，推进分恒为 0，飞机宁可原地待命。
+   * 这条用例盯的就是那张图：空中必须有自己的距离图（每格一步）。
+   */
+  // 城市要留着：AI 的推进目标是它们，清空的局面它连动作都不给（试过，返回 null）。
+  // 而且只能留"隔着海的那一座"——同侧还有一座敌城的话，飞机会往近的那座去，
+  // 这条用例就测不到"过海"了（第一版就是这么挂的：它掉头去围西岸的城）。
+  const s = fresh({ size: 14 });
+  s.units = [];
+  const keep = s.cities.filter(
+    (c) => (c.owner === 'A' && c.x === 1) || (c.owner === 'B' && c.x === s.w - 3),
+  );
+  for (const t of s.tiles) t.cityId = null;
+  s.cities = keep;
+  for (const c of keep) {
+    for (let dy = 0; dy < c.size; dy++) {
+      for (let dx = 0; dx < c.size; dx++) {
+        s.tiles[idx(s, c.x + dx, c.y + dy)] = { terrain: 'city', cityId: c.id };
+      }
+    }
+  }
+  testType(s, 'test-jet', { layer: 'air', flight: true, move: 9 });
+  // 中间一条 4 格宽的深水，把两岸彻底隔开
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 6; x <= 9; x++) s.tiles[idx(s, x, y)] = { terrain: 'deep', cityId: null };
+  }
+  const jet = place2(s, 'A', 'test-jet', 5, 7);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const acts = runAiSteps(s, 6);
+  const flew = acts.some((a) => a.type === 'MOVE' && a.unitId === jet.id && a.x >= 6);
+  assert.ok(
+    flew,
+    `飞机会朝对岸推、落点进深水带，实际动作：${JSON.stringify(acts)}`,
+  );
+});
+
 test('多资源：活人吃粮、建筑耗材，缺粮就造不出来', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const militia = s.unitTypes.militia!;
