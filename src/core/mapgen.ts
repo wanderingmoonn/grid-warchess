@@ -134,8 +134,19 @@ export interface MapLayout {
   rows: string[];
   citiesA: Array<{ x: number; y: number }>;
   citiesB: Array<{ x: number; y: number }>;
+  /**
+   * 第三、第四家的城位。只有三人/四人局才有内容。
+   *
+   * 为什么不把 A/B 也并成 `cities: Record<PlayerId, Pos[]>`：两人局的地图生成
+   * 是被反复调过的（河、渡口、公平性），那条路径一个字都不该动。多出来的两家
+   * 走另一条生成器（generateMultiLayout），字段也就各留各的。
+   */
+  citiesC?: Array<{ x: number; y: number }>;
+  citiesD?: Array<{ x: number; y: number }>;
   spawnsA: SpawnDef[];
   spawnsB: SpawnDef[];
+  spawnsC?: SpawnDef[];
+  spawnsD?: SpawnDef[];
   /** 本局实际用的地貌（random 会被落成具体的一种） */
   style: Exclude<MapStyle, 'random'>;
   symmetry: MapSymmetry;
@@ -1279,6 +1290,77 @@ function spawnsAround(
 }
 
 /* ------------------------------------------------------------------ */
+/* 固定地图（手绘 / 玩家上传）                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 用手绘的字符地形直接拼出一份 MapLayout。
+ *
+ * 和 `generateLayout` 的关系：生成器负责"从种子变出地形"，这条负责
+ * "地形已经有人画好了，别乱动"。两条最后都要交出一份同样的 MapLayout，
+ * 所以建局之后的所有流程（摆城、判临水、估出生点、算通行）完全共用一套。
+ *
+ * 刻意只做三件事：
+ *   1. 把字符还原成地形；城市格（citiesA/B 覆盖的方块）强制写成 `city`，
+ *      免得作者画漏一格，出现"城边上缺一角"的怪图；
+ *   2. 用 `spawnsAround` 按同样的规则撒开局部队——手绘图不该自己定"谁站哪"，
+ *      那部分规则一旦两处各写一份，改一处就会漂；
+ *   3. 其余字段填默认值（style/symmetry/layout 只用于显示，`fordless` 永远 false：
+ *      手绘图的河道由作者负责，不该被"无渡口"这条随机规则二次加工）。
+ */
+export function layoutFromRows(
+  rows: string[],
+  citiesA: Pos[],
+  citiesB: Pos[],
+  unitPool: string[] = [],
+  citySize = 2,
+): MapLayout {
+  const h = rows.length;
+  const w = rows[0]?.length ?? 0;
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
+  for (let y = 0; y < h; y += 1) {
+    const row = rows[y] ?? '';
+    for (let x = 0; x < w; x += 1) {
+      const t = terrainFromChar(row[x] ?? '.');
+      put(c, x, y, t);
+    }
+  }
+  const blocked = new Set<number>();
+  for (const city of [...citiesA, ...citiesB]) {
+    for (let dy = 0; dy < citySize; dy += 1) {
+      for (let dx = 0; dx < citySize; dx += 1) {
+        put(c, city.x + dx, city.y + dy, 'city');
+        blocked.add((city.y + dy) * w + (city.x + dx));
+      }
+    }
+  }
+
+  const pool = unitPool.length > 0 ? unitPool : ['infantry'];
+  const used = new Set<number>(blocked);
+  const spawnsA: SpawnDef[] = [];
+  const spawnsB: SpawnDef[] = [];
+  citiesA.forEach((city, i) => spawnsA.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+  citiesB.forEach((city, i) => spawnsB.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+
+  return {
+    w,
+    h,
+    rows: Array.from({ length: h }, (_, y) =>
+      Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
+    ),
+    citiesA,
+    citiesB,
+    spawnsA,
+    spawnsB,
+    // 固定地图没有"风格"可言：`style` 只用于界面显示，给它一个中性值
+    style: 'open',
+    symmetry: 'fair',
+    layout: 'diagonal',
+    fordless: false,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* 主入口                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1693,5 +1775,278 @@ export function generateLayout(
     symmetry,
     layout,
     fordless,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 三人 / 四人图                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 三家或四家的地图。
+ *
+ * 为什么另起一条而不是给 `generateLayout` 加个参数：两人局那张图是被反复
+ * 调过的（河怎么走、渡口留几个、公平性怎么算），把它参数化成 N 方，等于
+ * 每加一种人数就重调一次。这条只管"多方地图的最低要求"：
+ *
+ *   · **四家**：左上四分之一画好，旋转 90° 铺三遍——三家地形与四家严格同形，
+ *     中心天然对称，这是能做到的**完全公平**；
+ *   · **三家**：方格棋盘没有 120° 旋转对称（转 120° 落在半格上），所以只能
+ *     做到"数量公平"——按离谁最近把棋盘分成三块，每块的森林 / 丘陵 / 水**数量
+ *     完全相同**，位置各自随机。中心的水面是圆心圆，三家等距。
+ *
+ * 共同点：开局位置在三个 / 四个方向上等距，城郊一圈永远清空（城门口要能站人），
+ * 出生部队走和两人局同一个 `spawnsAround`。
+ */
+export function generateMultiLayout(
+  size: number,
+  seed: number,
+  unitPool: string[] = ['infantry', 'archer'],
+  opts: { players: 3 | 4; citySize?: number; style?: MapStyle },
+): MapLayout {
+  const w = size;
+  const h = size;
+  const n = opts.players;
+  const citySize = Math.max(2, Math.min(Math.round(opts.citySize ?? 2), Math.max(2, Math.floor(size / 5))));
+  const style: Exclude<MapStyle, 'random'> = opts.style && opts.style !== 'random' ? opts.style : 'open';
+  const rng = makeRng(seed ^ (n * 7919));
+  const c: Ctx = { w, h, g: new Array(w * h).fill('plain'), citySize };
+  /**
+   * 城与棋盘边的间距：只留一格。
+   *
+   * 一开始写的是 `1 + citySize`（城往后缩三格）。16×16 上四家时，一格象限只有 8×8，
+   * 而城郊还要清出一圈——留给地形的地方被吃得干干净净，生成出来的四家图是一片光板。
+   * 城贴着角放，反而更像"四角开局"，中间也真的有了地形。
+   */
+  const margin = 1;
+
+  /** 把角度换算成城位（锚点＝左上角） */
+  const fromAngle = (deg: number, radius: number): Pos => {
+    const cx = (w - 1) / 2;
+    const cy = (h - 1) / 2;
+    const t = (deg * Math.PI) / 180;
+    const ax = Math.round(cx + Math.cos(t) * radius - (citySize - 1) / 2);
+    const ay = Math.round(cy + Math.sin(t) * radius - (citySize - 1) / 2);
+    return {
+      x: Math.max(margin, Math.min(w - margin - citySize, ax)),
+      y: Math.max(margin, Math.min(h - margin - citySize, ay)),
+    };
+  };
+
+  const anchors: Pos[] =
+    n === 4
+      ? // 四角：矩形四等分，旋转 90° 之后完全重合
+        [
+          { x: margin, y: margin },
+          { x: w - margin - citySize, y: margin },
+          { x: w - margin - citySize, y: h - margin - citySize },
+          { x: margin, y: h - margin - citySize },
+        ]
+      : // 三家：内切圆三等分，顶点朝上
+        [-90, 30, 150].map((deg) => fromAngle(deg, Math.min(w, h) * 0.34));
+
+  /**
+   * 城郊一圈：城本体 + 外面一格。
+   *
+   * 这一圈里什么都不长（树林、山、水都不行）——城门口要能站人、能出兵，
+   * 上来就被一圈山围住的城市是没法玩的。四个分支共用同一份，不再各写一遍。
+   */
+  const apron = new Set<number>();
+  for (const a of anchors) {
+    for (let dy = -1; dy <= citySize; dy++) {
+      for (let dx = -1; dx <= citySize; dx++) {
+        const x = a.x + dx;
+        const y = a.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        apron.add(y * w + x);
+      }
+    }
+  }
+
+  /** 离哪座城最近（Voronoi）。三家图用它划区，四家图用不到 */
+  const regionOf = (x: number, y: number): number => {
+    let best = 0;
+    let bd = Infinity;
+    anchors.forEach((a, i) => {
+      const d = Math.abs(x - a.x) + Math.abs(y - a.y);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+
+  /**
+   * 一团地形：从种子点随机游走 k 步。walk 保证"连成一团"而不是一堆散点。
+   *
+   * 返回**真正画上去的格数**：三家图靠它数"每区各长了多少地形"，
+   * 只有这样三家才真的配平（而不是"撒了同样多的团，落点一个都没踩上"）。
+   * 只往平原上画——重复覆盖会让计数和实际地貌对不上。
+   */
+  const blob = (sx: number, sy: number, terrain: Terrain, k: number, ok: (x: number, y: number) => boolean): number => {
+    let x = sx;
+    let y = sy;
+    let painted = 0;
+    for (let i = 0; i < k; i += 1) {
+      if (x >= 0 && y >= 0 && x < w && y < h && ok(x, y) && at(c, x, y) === 'plain') {
+        put(c, x, y, terrain);
+        painted += 1;
+      }
+      const [dx, dy] = DIRS[Math.floor(rng() * 4)]!;
+      x = Math.max(1, Math.min(w - 2, x + dx));
+      y = Math.max(1, Math.min(h - 2, y + dy));
+    }
+    return painted;
+  };
+
+  if (n === 4) {
+    // 四分之一画好，旋转三次铺满
+    const qw = Math.floor(w / 2);
+    const qh = Math.floor(h / 2);
+    /** 象限内的地形 -> 四个象限（绕中心转 90°） */
+    const paint = (x: number, y: number, t: Terrain) => {
+      put(c, x, y, t);
+      put(c, w - 1 - x, y, t);
+      put(c, w - 1 - x, h - 1 - y, t);
+      put(c, x, h - 1 - y, t);
+    };
+    const inQuadrant = (x: number, y: number) => x > 0 && y > 0 && x < qw && y < qh;
+
+    /*
+     * 目标：每个象限大约三成地形。
+     *
+     * 和三家那边同一个道理——"撒几团"不等于"长出来多少"：游走出界、撞上城郊、
+     * 和上一团重叠都会被扣掉，写死团数会让不同种子之间疏密差一倍
+     * （实测出现过整张图一棵树都没有的种子）。所以数**画上去的格数**，不够就接着撒。
+     *
+     * 地形种类按固定顺序轮换、不掷骰子：四个象限本来就是同一份地貌旋转出来的，
+     * 这样至少保证"林子、山、水各有一点"，不会整张图只剩山。
+     */
+    const quadGoal = Math.round(qw * qh * 0.34);
+    const KINDS: Terrain[] = ['forest', 'forest', 'hill', 'water', 'hill', 'forest'];
+    let painted = 0;
+    let guard = 0;
+    let k = 0;
+    while (painted < quadGoal && guard < 400) {
+      guard += 1;
+      const sx = 1 + Math.floor(rng() * Math.max(1, qw - 2));
+      const sy = 1 + Math.floor(rng() * Math.max(1, qh - 2));
+      // 起点落进城郊就重扔：城角那一圈是留白的，不该再长树
+      if (apron.has(sy * w + sx)) continue;
+      const t = KINDS[k % KINDS.length]!;
+      k += 1;
+      // 水团小一点：水连成片会把象限切断，四家都过不去
+      const size2 = t === 'water' ? 2 + Math.floor(rng() * 2) : 3 + Math.floor(rng() * 4);
+      let x = sx;
+      let y = sy;
+      for (let step = 0; step < size2; step += 1) {
+        if (inQuadrant(x, y) && !apron.has(y * w + x) && at(c, x, y) === 'plain') {
+          paint(x, y, t);
+          painted += 1;
+        }
+        const [dx, dy] = DIRS[Math.floor(rng() * 4)]!;
+        x = Math.max(1, Math.min(qw - 1, x + dx));
+        y = Math.max(1, Math.min(qh - 1, y + dy));
+      }
+    }
+  } else {
+    /*
+     * 三家：把棋盘按"离谁最近"划成三块，每块长**一样多**的地形。
+     *
+     * 早先的写法是"每区撒 5 个团、每团 4 格"，看着配平，实际不是：
+     * 团是随机游走出来的，走到界外、走到城郊、和上一团重叠都会被丢掉，
+     * 于是三家实际长出来的格数能差一倍（实测出现过一边全是树、另一边光板）。
+     * 现在反过来：**先数每区画成了多少格**，谁不够就接着撒，直到三家一样多。
+     */
+    const perRegion = 6;
+    const blobSize = 4;
+    const goal = perRegion * blobSize;
+
+    const regions: number[][] = Array.from({ length: n }, () => []);
+    for (let y = 1; y < h - 1; y += 1) {
+      for (let x = 1; x < w - 1; x += 1) {
+        const i = y * w + x;
+        if (apron.has(i)) continue;
+        // 城门口再留一圈：开局谁也不该被山挡在家里
+        if (anchors.some((a) => Math.abs(x - a.x) + Math.abs(y - a.y) <= citySize + 2)) continue;
+        regions[regionOf(x, y)]!.push(i);
+      }
+    }
+    // 洗牌：同一个种子洗出同一个顺序，可复现
+    for (const list of regions) {
+      for (let i = list.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(rng() * (i + 1));
+        [list[i], list[j]] = [list[j]!, list[i]!];
+      }
+    }
+
+    const KINDS: Terrain[] = ['forest', 'hill', 'water'];
+    regions.forEach((list, r) => {
+      let cursor = 0;
+      let tiles = 0;
+      let k = 0;
+      while (tiles < goal && cursor < list.length) {
+        const i = list[cursor++]!;
+        const x = i % w;
+        const y = Math.floor(i / w);
+        if (at(c, x, y) !== 'plain') continue;
+        const t = KINDS[k % KINDS.length]!;
+        // 水只给两格：连成一片就成了海，三家会被水隔开
+        const size2 = t === 'water' ? 2 : blobSize;
+        tiles += blob(x, y, t, size2, (bx, by) => regionOf(bx, by) === r && !apron.has(by * w + bx));
+        k += 1;
+      }
+    });
+
+    // 中心一小片水：三家等距，谁也别想独占
+    const cx = Math.floor(w / 2);
+    const cy = Math.floor(h / 2);
+    const rad = Math.max(1, Math.floor(Math.min(w, h) / 12));
+    for (let dy = -rad; dy <= rad; dy += 1) {
+      for (let dx = -rad; dx <= rad; dx += 1) {
+        if (dx * dx + dy * dy > rad * rad) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (apron.has(y * w + x)) continue;
+        put(c, x, y, 'water');
+      }
+    }
+  }
+
+  // 城位与城郊永远踩实：城要放得下、门口要能出兵
+  for (const a of anchors) {
+    for (let dy = -1; dy <= citySize; dy += 1) {
+      for (let dx = -1; dx <= citySize; dx += 1) put(c, a.x + dx, a.y + dy, 'plain');
+    }
+  }
+
+  // ---- 出生点 ----
+  const pool = unitPool.length > 0 ? unitPool : ['infantry'];
+  // 出生点不能和城郊、也不能和彼此抢格子（`used` 会被 spawnsAround 逐格追加）
+  const used = new Set<number>(apron);
+  const spawnsFor = anchors.map((a, i) => spawnsAround(c, a, 3, used, pool, i * 3));
+
+  const rows = Array.from({ length: h }, (_, y) =>
+    Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
+  );
+
+  const citiesAB = (i: number): Pos[] | undefined => (anchors[i] ? [anchors[i]!] : undefined);
+  return {
+    w,
+    h,
+    rows,
+    citiesA: citiesAB(0) ?? [],
+    citiesB: citiesAB(1) ?? [],
+    citiesC: citiesAB(2),
+    citiesD: citiesAB(3),
+    spawnsA: spawnsFor[0] ?? [],
+    spawnsB: spawnsFor[1] ?? [],
+    spawnsC: n >= 3 ? (spawnsFor[2] ?? []) : undefined,
+    spawnsD: n >= 4 ? (spawnsFor[3] ?? []) : undefined,
+    style,
+    symmetry: n === 4 ? 'fair' : 'fair',
+    layout: 'diagonal',
+    fordless: false,
   };
 }

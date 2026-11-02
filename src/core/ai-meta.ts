@@ -16,6 +16,7 @@
  * 不要在这里 import 任何会再引回 `ai.ts` 的东西，否则就是循环。
  */
 
+import { seatsOf } from './types.ts';
 import type { AiLevel, GameState, PlayerId } from './types.ts';
 
 export interface AiBudget {
@@ -73,7 +74,9 @@ export function isAiSide(s: GameState, p: PlayerId): boolean {
   return p === 'B' ? s.config.aiOpponent : s.config.aiAlly;
 }
 
-/** 有一方是 AI 就不需要"把设备交给对方"的遮罩了 */
+/** 有一方是 AI 就不需要"把设备交给下一位"的遮罩了 */
 export function anyAiSide(s: GameState): boolean {
-  return isAiSide(s, 'A') || isAiSide(s, 'B');
+  // 三人四人局里 AI 一律不进场（见 setup.ts 的 twoSeats），但这里仍按席位全查一遍：
+  // 万一 AI 的托管开关从存档/联机里被带进来，遮罩的显示条件也不能算错。
+  return seatsOf(s).some((p) => isAiSide(s, p));
 }

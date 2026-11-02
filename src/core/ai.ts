@@ -905,6 +905,7 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
     // 已经残血还去打一个打不死的：这是在给对方送击杀
     if (attacker.hp / selfDef.maxHp < 0.3 && !kill) score -= 12 * Math.min(3, myValue / 80);
 
+
     // 高机动突击队偏爱后排：摸得到火力单位就优先打，能白打（对方够不着）更值。
     // 和移动那边是一套逻辑的两半——移动负责"绕到能打后排的位置"，
     // 这里负责"真到了别又去打最前面那个肉盾"。
@@ -913,6 +914,16 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
       if (preview.toAttacker === 0) score += 8;
     }
   }
+
+  /*
+   * 集火：打的是这一回合全军约好的那个目标，就加分。
+   *
+   * 这一条不改"该不该打"，只改"先打谁"。分数取 26：高于"能打死一个单位"的
+   * 120 那档之下、明显高于普通的掉血收益，但**不会**把"打不死"的仗变成"值得打"——
+   * 一个本来就该被拒掉的糟糕交换，加 26 之后照样是负分。
+   * 目标由 `pickFocusTarget` 每回合选一次，全军共用，这就是"成建制"的全部含义。
+   */
+  if (all.focusTargetId && target.id === all.focusTargetId) score += 26;
 
   // ── 战术倾向 ──
   // 一条攻击值多少分，取决于这一局想怎么赢：速攻要的是"城下这条路清干净"，
@@ -1131,6 +1142,93 @@ function distanceFields(
  * `wade` 单独留着量"桥的另一头离敌方城市多远"——架桥选址必须跨过水面看，
  * 用严格旱路图的话对岸永远是 Infinity，AI 就永远找不到该架桥的地方。
  */
+/**
+ * 战线在哪：我方最靠前的那四分之一战斗单位推到哪了。
+ *
+ * 只算陆军（水军的推进是另一套：目标是临水敌城，见 `nearestEnemyPort`）。
+ * 取 25% 分位而不是最小值，是为了"让**部分**军队停下来"——只拦最冒尖的那几个，
+ * 后面的人还照常往前压，整条线才会收拢，而不是全体原地立正。
+ *
+ * 少于 3 个兵时返回 -Infinity（谁都不拦）：两三个兵还互相等，这一局就不用打了。
+ */
+function frontLineRef(
+  s: GameState,
+  owner: PlayerId,
+  fields: Map<string, number[]>,
+  focusCityId: string | null,
+): number {
+  const ds: number[] = [];
+  for (const u of unitsOf(s, owner)) {
+    const def = utype(s, u.type);
+    if (def.category !== 'combat' || def.domain === 'water') continue;
+    const d = advanceDistance(s, owner, u.x, u.y, fields, focusCityId);
+    if (Number.isFinite(d)) ds.push(d);
+  }
+  if (ds.length < 3) return -Infinity;
+  ds.sort((a, b) => a - b);
+  const i = Math.min(ds.length - 1, Math.max(0, Math.floor(ds.length * 0.25)));
+  return ds[i] ?? -Infinity;
+}
+
+/**
+ * 站位密度图：每格相邻 8 格里有几个我方战斗单位。
+ *
+ * 不把自己算进去（否则一个兵站在哪儿哪儿就"挤"），所以每次只在 8 邻格上记一笔。
+ */
+function crowdField(s: GameState, owner: PlayerId): Uint8Array {
+  const out = new Uint8Array(s.w * s.h);
+  for (const u of unitsOf(s, owner)) {
+    if (utype(s, u.type).category !== 'combat') continue;
+    for (let dy = -1; dy <= 1; dy += 1) {
+      const y = u.y + dy;
+      if (y < 0 || y >= s.h) continue;
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const x = u.x + dx;
+        if (x < 0 || x >= s.w) continue;
+        out[y * s.w + x] += 1;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 这一回合全军该集火的那一个敌人。
+ *
+ * 判据只有一条朴素的原则：**算"几刀能砍死"，再乘"有几个人够得着"**。
+ *   · 越容易死（残血）越该先集火——打死一个就少一份输出；
+ *   · 越值钱越该先集火——打掉一个法师等于打掉对面一半伤害；
+ *   · 够得着的人越多越该集火——"四个人一起上"和"一个人上去换"是两种结局。
+ *
+ * 只在**看得见的**敌人里挑（`s` 是迷雾视图），不偷看。
+ * 一个够得着的都没有就返回 null，攻击评分退回原来的"各自挑最优"。
+ */
+function pickFocusTarget(s: GameState, me: PlayerId): string | null {
+  const foes = unitsOf(s, other(me)).filter((u) => utype(s, u.type).category === 'combat');
+  if (foes.length === 0) return null;
+  const mine = unitsOf(s, me).filter(
+    (u) => utype(s, u.type).category === 'combat' && !u.acted,
+  );
+  if (mine.length === 0) return null;
+
+  let best: { id: string; score: number } | null = null;
+  for (const f of foes) {
+    const def = utype(s, f.type);
+    let reach = 0;
+    for (const u of mine) {
+      const ud = utype(s, u.type);
+      // 这一步能不能扑上去打：移动力 + 射程 +1 的余量
+      if (distance(u, f) <= Math.max(1, ud.move) + (ud.range ?? 1) + 1) reach += 1;
+    }
+    if (reach === 0) continue;
+    const worth = (def.cost ?? 50) * (1 + Math.max(0, 1 - f.hp / Math.max(1, def.maxHp)) * 1.5);
+    const score = (worth * reach) / Math.max(1, f.hp);
+    if (!best || score > best.score) best = { id: f.id, score };
+  }
+  return best?.id ?? null;
+}
+
 interface Fields {
   tactical: TacticalMap;
   land: Map<string, number[]>;
@@ -1185,7 +1283,36 @@ interface Fields {
    * 真正该做的是往桥头集结、把桥铺过去。
    */
   needBridge: boolean;
+  /**
+   * 战线：我方**最前面那一批**战斗单位推到哪了（推进距离，越小越靠前）。
+   *
+   * "集结"不是让所有人挤成一团——挤在一起正好被溅射一锅端。真正的集结是
+   * **队形**：最前面那几个人停下来等，后面的人往上补，整条线一起压过去。
+   * 所以需要的不是"距离队友多近"，而是"我比战线还靠前多少"。
+   * 没有战线（少于 3 个兵、或算不出来）时取 -Infinity，也就是"谁都不许停"。
+   */
+  lineRef: number;
+  /**
+   * 站位密度：每格相邻 8 格里站了几个我方战斗单位（不含自己）。
+   *
+   * 溅射是这片战场上最贵的伤害形式，而"两个人挨着站"等于主动把一份伤害变成两份。
+   * 这个图就是用来让部队保持间隔的——**集成度靠战线，间隔靠它**，两件事分开管。
+   */
+  crowd: Uint8Array;
+  /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
+  foeSplash: number;
+  /**
+   * 这一回合全军该集火的那一个敌人（见 `pickFocusTarget`）。
+   *
+   * 成建制不是"站在一起"，是**打在一个点上**。AI 缺的正是这一步：
+   * 每个兵各自挑一个"自己这一刀最划算"的目标，于是五个人打五个目标，
+   * 每个都打到半血，对面回一轮血、换一个目标，全程没人被击杀。
+   * 线上 15 局人机局里 AI 造 432 个兵死了 375 个（87%），人类同期只死 114 个——
+   * 交换比难看成这样，很大一部分不是伤害不够，是伤害散了。
+   */
+  focusTargetId: string | null;
 }
+
 
 /**
  * 我方能不能纯走旱路摸到敌方城市（贴到城墙一圈就算摸到）。
@@ -1443,6 +1570,36 @@ export function cityThreatUrgency(s: GameState, enemy: Unit, owner: PlayerId): n
 }
 
 /**
+ * 最近的一座"有出海口的敌城"，距离按"贴到它旁边还要几步"算。
+ *
+ * 没有临水格的敌城对水军没有意义——船开过去也只能隔着陆地干瞪眼。
+ * 港口判定用的是 `cityGap <= 1`，所以这里是 `cityGap - 1`（贴上去记 0）。
+ */
+function nearestEnemyPort(
+  s: GameState,
+  at: { x: number; y: number },
+  owner: PlayerId,
+): number {
+  let best = Infinity;
+  for (const c of s.cities) {
+    if (c.owner === owner || c.ruined) continue;
+    // 这座城市有没有临水格：有才值得把船开过去
+    let hasPort = false;
+    for (let dy = -1; dy <= c.size && !hasPort; dy += 1) {
+      for (let dx = -1; dx <= c.size && !hasPort; dx += 1) {
+        const inside = dx >= 0 && dx < c.size && dy >= 0 && dy < c.size;
+        if (inside) continue;
+        const t = s.tiles[(c.y + dy) * s.w + (c.x + dx)];
+        if (t && navigable(t.terrain)) hasPort = true;
+      }
+    }
+    if (!hasPort) continue;
+    best = Math.min(best, Math.max(0, cityGap(c, at) - 1));
+  }
+  return best;
+}
+
+/**
  * 这条船此刻封住了几座敌城（上限 3）。
  *
  * 规则在海军扩展里：船贴着敌城外港，那座城每回合少收 8 金，最多三座。
@@ -1473,9 +1630,47 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,all.focusCityId,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
-  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35));
+
+  /*
+   * ── 集结：让跑得最前的那几个停下来等 ──
+   *
+   * 这一段替代了我上一版写错的东西。上一版做的是"往队友身边靠"，也就是奖励
+   * `距离队友变近`——那是把部队揉成一团，正好送给对方一发溅射。而且实测是负收益
+   * （48 局子集 60.4%，不如不加）。
+   *
+   * 真正的集结是**队形**：整条线一起压过去，不是谁跑得快谁先死。所以判据换成
+   * "我比战线还靠前多少"——已经在战线前面的那几个，这一回合不再拿推进分，
+   * 于是它们会停下来找掩护、拉间隔、等能打的目标；后面的人照常推进，线自然收拢。
+   *
+   * 只在**没有压城**（`!commit`）时生效：全军已经决定强攻的时候还互相等，
+   * 等于把优势让回去。水域单位不参与（它们的战线是另一套）。
+   */
+  const aheadOfLine =
+    !all.commit &&
+    def.category === 'combat' &&
+    def.domain !== 'water' &&
+    // 英雄和攻城器不吃这条：它们本来就是"单点突破"的工具，跟着队形走反而不会打仗。
+    // 实测英雄档从 15 胜 1 负掉到 11 胜 5 负，就是被这条拦住的原因。
+    def.hero !== true &&
+    !(def.abilities ?? []).includes('siege-master') &&
+    Number.isFinite(all.lineRef) &&
+    before < all.lineRef;
+  const advanceWeight = aheadOfLine ? 0.15 : 1;
+  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35)) * advanceWeight;
   // 空中单位不吃地形掩体，AI 也就不该为了"站高地"去挪它
   score += airLayer(def) ? 0 : CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
+
+  /*
+   * ── 间隔：别挨着站 ──
+   *
+   * 和"集结"是两件事，分开管：上面管"别跑太快"，这里管"别贴太紧"。
+   * 对面有溅射单位时罚得重（一发下去两份伤害），没有时也留一点——
+   * 挤在一起还会互相挡路：能打到人的格子被自己人占了。
+   */
+  if (def.category === 'combat' && all.foeSplash > 0) {
+    const crowd = all.crowd[y * s.w + x] ?? 0;
+    if (crowd > 0) score -= crowd * 3;
+  }
   let nextAttack = 0, nowAttack = 0;
   let killed: string | undefined;
   if (canAttack(unit)) {
@@ -1500,6 +1695,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + w.harass*0.4);
   if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
+
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
   for (const city of s.cities) {
     if (!city.ruined || city.id === all.mood.abandonedCityId) continue;
@@ -1527,14 +1723,29 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       if (distToCity(moved,city)===0 && distToCity(unit,city)>0) score += 16;
     }
   }
-  // 海军：把船开到敌城外港去封锁（每座城每回合少收 8 金，三座封顶）。
+  // 海军的推进目标：**最近的临水敌城**，不是焦点城。
   //
-  // 按"多封住一座"给分，所以已经在封着的船不会为了追一条敌船而解封；
-  // 反过来也成立：追敌船确实更值（能打死东西），但白放着一座城的收入不要
-  // 是纯粹的漏。权重取 16：约等于"一座城的日军费"，
-  // 但低于"能打死一个单位"（那一档在 25 以上）。
+  // 焦点城常常在内陆，水路距离算不出来（Infinity），于是船的 progress 恒为 0——
+  // 实测 4 局里 9 条船只走了 33 步，基本在自家港口附近晃。换成"临水敌城"之后
+  // 船才有方向感，封港也才可能发生（之前 34,854 次走位评估里只有 15 次能封到）。
   if (def.domain === 'water' && def.category === 'combat') {
+    const portNow = nearestEnemyPort(s, unit, unit.owner);
+    const portNext = nearestEnemyPort(s, moved, unit.owner);
+    if (Number.isFinite(portNow) && Number.isFinite(portNext)) {
+      score += (portNow - portNext) * 5;
+    }
+
+    // 封港：多封住一座城 +16（一座城每回合少收 8 金，三座封顶）。
     score += (blockadeCount(s, moved, unit.owner) - blockadeCount(s, unit, unit.owner)) * 16;
+
+    // 护航：队里有载着人的运输船时，别让它一个人过海。
+    // 只看"载了货"的船——空船在港口等着，护航舰不该陪着一起发呆。
+    const convoy = unitsOf(s, unit.owner).find(
+      (u) => u.id !== unit.id && hasHold(utype(s, u.type)) && (u.cargo?.length ?? 0) > 0,
+    );
+    if (convoy) {
+      score += (distance(unit, convoy) - distance(moved, convoy)) * 3;
+    }
   }
   return score;
 }
@@ -2067,6 +2278,22 @@ function rawBuildScore(
   if (!def) return -999;
   const w = mood ? mood.drive : { rush: 0, harass: 0, boom: 0 };
 
+  /*
+   * 建筑总量上限：每城 4 座，最多 16 座（桥不算——桥是路，不是设施）。
+   *
+   * 各兵种自己已经有上限（经济每城 2、塔每城 1+1、军营 4、工事每城 2），
+   * 那些上限加起来能把一座城的"设施区"撑到十几座：线上对局里出现过
+   * 31 座建筑的局（id=54），产能全在盖房子，前线一个兵没有。
+   * 这一层是**总闸**，不是替代上面那些细分上限。
+   */
+  if (!def.bridges) {
+    const cities = Math.max(1, citiesOf(s, unit.owner).length);
+    const built = unitsOf(s, unit.owner).filter(
+      (u) => utype(s, u.type).category === 'building',
+    ).length;
+    if (built >= Math.min(16, cities * 4)) return -999;
+  }
+
   // 工地会不会被下回合拆掉。建造者死在这里的概率远高于野战单位：
   // 他站在空地上、没护甲加成、还刚把整回合花掉。
   const risky = inDanger(s, unit.owner, spot.x, spot.y);
@@ -2097,6 +2324,23 @@ function rawBuildScore(
     if (back && back.owner === unit.owner && utype(s, back.type).bridges) chain = 1;
     if (near >= 5 && !chain) return -999;
 
+    /*
+     * 全局桥数上限：每城 3 座，最多 10 座。
+     *
+     * 这里本来是"这座桥到底缩不短路"的距离判据，第一版写错了，删掉换成了这一条。
+     * 错在哪：它拿 `advance` 图（水量按"很贵但有限"计价）比较"站在我这儿"和
+     * "过桥之后"——那张图**本来就能涉水过去**，所以对岸永远比脚下远一点，
+     * 判据几乎恒真，等于"除非完全走不通，否则不许架桥"。实测中世纪档因此
+     * 从 7 胜 5 负掉到 4 胜 8 负（同一批种子，`results/ab-mi-*.json`）。
+     *
+     * 现在退回"按数量管"：不判断某座桥值不值，只限制总量。一座城市的设施区
+     * 撑得住三座桥，再多就是在河上摆家具了。
+     */
+    {
+      const cities = Math.max(1, citiesOf(s, unit.owner).length);
+      const total = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).bridges).length;
+      if (total >= Math.min(10, cities * 3)) return -999;
+    }
     // 少铺几座优先；对岸越靠近敌方城市越值。
     // 档位加成：钢桥 120 耐久 / 6 护甲，被打塌要磨很久——同样一个建造回合，
     // 产出的是"不会下回合就被拆掉的路"，这才是打破"你拆我建"死循环的东西。
@@ -2172,6 +2416,8 @@ function rawBuildScore(
     if (sameKind >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
     const probe: Unit={id:'ai-production-site',type:def.id,owner:unit.owner,x:spot.x,y:spot.y,hp:def.maxHp,kills:0,moved:true,acted:true};
     const inc=resourceValue(s,unit.owner,unitYield(s,probe));
+    // 一格产出都没有的地盖上磨坊，产的是 0：这一回合纯亏
+    if (inc <= 0) return -999;
     return inc * 4 - resourceValue(s,unit.owner,recruitResCost(s,unit.owner,def)) * 0.03;
   }
 
@@ -2211,8 +2457,12 @@ function rawBuildScore(
     for (const e of unitsOf(s, other(unit.owner))) {
       nearestFoe = Math.min(nearestFoe, distance(spot, e));
     }
-    // 敌人还没到门口，砌墙就是浪费一个建造回合
-    if (!Number.isFinite(nearestFoe) || nearestFoe > 7) return 4;
+    // 敌人还没到门口，砌墙就是浪费一个建造回合。
+    //
+    // 这里以前返回 4——不是"不建"，是"分数很低"。可建筑候选和走位候选是在
+    // 同一个池子里比大小的：一步普通行军往往只有几分，于是 4 分常常真的能赢，
+    // AI 于是会在平静的后方一块一块地砌墙。要表达"别建"就得给 -999。
+    if (!Number.isFinite(nearestFoe) || nearestFoe > 7) return -999;
     return 26 + (7 - nearestFoe) * 4 - def.cost * 0.03 - mine * 6;
   }
 
@@ -2815,9 +3065,13 @@ function buildPlan(
     }
   }
   // Capture is the winning action. Reserve its fee before buying another unit.
+  //
+  // 但这条**不能压倒兵力**：它比上面那一档更凶——上面还守着 `!urgent && army>=armyGate`，
+  // 这里原来什么都没守，于是"城门口有座废墟、手上一个兵都没有"也会把采购冻住。
+  // 收废墟的前提是"我还有兵能走进去"，兵没了，攒的是别人的战利品。
   const nearbyRuin = foeRuins.filter(c => my.some(u => !u.moved && distToCity(u,c)<=Math.max(2,utype(s,u.type).move+1)))
     .sort((a,b) => rebuildCost(a)-rebuildCost(b))[0];
-  if (nearbyRuin && !threaten) {
+  if (nearbyRuin && !threaten && !urgent && army >= armyGate) {
     savingFor = 'rebuild'; targetCost = rebuildCost(nearbyRuin);
   }
   if (mood.abandonedCityId || developingRear) {
@@ -2853,6 +3107,37 @@ function buildPlan(
 
   return { stance, savingFor, targetCost, allowance, urgent: mood.abandonedCityId ? threaten : urgent };
 }
+
+/**
+ * 诊断用：把"这一方此刻的计划"摊开，和 `aiNextAction` 走同一套口径。
+ *
+ * 线上对局库里那十几局被打崩的人机局，AI 造了 43 个单位却一个战斗单位都没有。
+ * 光看终局快照推不出原因——真正要看的是**每一回合 `savingFor` 是什么**：
+ * 一旦它非空，采购就被"超出目标费用的那部分"冻住，而经济单位有
+ * 「回本 ≤8 回合不冻结」的例外，战斗单位没有。于是钱能变成农民，却永远变不成兵。
+ *
+ * 这个函数只读不写，给 `scripts/diag-plan.ts` 和人工排查用。
+ */
+export function aiDebugPlan(s: GameState, me: PlayerId): AiPlan {
+  const traits = aiTraits(s);
+  const mood = aiActiveMood(s, traits);
+  return buildPlan(s, me, unitsOf(s, me), unitsOf(s, other(me)), mood);
+}
+
+/**
+ * 诊断出口：`recruitCandidate` 每次"挑不出兵"时，往这里写一句原因。
+ *
+ * 线上那十几局被打崩的人机局，AI 账上还有几百金、产兵名额也没用完，却一整个回合
+ * 不造兵。这种"沉默的拒绝"在黑盒模拟里看不出来——胜负只有一个数字，
+ * 而钱花不出去的原因藏在七八个 `continue` 里。把原因写出来，排查就从"猜"变成"看"。
+ *
+ * 游戏运行时没人读它，默认 `last` 为空；只有 `scripts/diag-plan.ts` 会打开。
+ */
+export const aiRecruitTrace: { on: boolean; last: string | null } = {
+  /** 开着才会统计拒绝原因：采购是热路径，不排查的时候不该为它分配对象 */
+  on: false,
+  last: null,
+};
 
 function recruitCandidate(
   s: GameState,
@@ -2972,10 +3257,38 @@ function recruitCandidate(
   // 编队模板要的"这支部队现在长什么样"。每次 candidate 都重算一遍，
   // 所以同一回合里连买三个近战后，第四次会看见"近战已经够了"。
   const rosterBonus = rosterBonuses(rosterOf(s, me));
+  /**
+   * 已经被打到门口、而且兵力明显不如对面：这一回合只买战斗单位。
+   *
+   * 依据是线上对局库（warchess_reports）里被打崩的 13 局人机局：
+   * AI 累计阵亡 43 个单位，造过的是 16 个工程师、17 个劳工、9 个牧民、1 个农民——
+   * **一个战斗单位都没有**。它们出门就被杀，而每死一个农民就等于少买半个兵。
+   * 所以在这种局面下，先把钱全部投进战斗单位；等兵力追平再谈经济。
+   */
+  const foeCombatCount = unitsOf(s, other(me)).filter(
+    (u) => utype(s, u.type).category === 'combat',
+  ).length;
+  const desperate =
+    plan.urgent && combatCount * 2 < foeCombatCount && combatCount < 8;
+
+  const tracing = aiRecruitTrace.on;
+  if (tracing) aiRecruitTrace.last = null;
+  const why: Record<string, number> = {};
+  const deny = (k: string): void => {
+    if (tracing) why[k] = (why[k] ?? 0) + 1;
+  };
 
   let best: Candidate | null = null;
   for (const d of pool) {
-    if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) continue;
+    // 打到门口还缺兵：经济/建造单位这一回合一个都不买（见上面 desperate 的说明）
+    if (desperate && d.category !== 'combat') {
+      deny('desperate');
+      continue;
+    }
+    if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) {
+      deny('无出兵格');
+      continue;
+    }
     // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃。
     // 这笔钱和规则层、界面估价共用 recruitPriceOf 一份口径——三处各算一次，
     // 迟早会出现"AI 以为买得起、规则层说资源不足、这一格生产序列静默空转"。
@@ -2984,13 +3297,22 @@ function recruitCandidate(
     const price = recruitCost(s, me, d);
     // 多资源：粮食/建材不够时，光有金币也买不起。
     // 只看金币会让 AI 反复挑一个造不出来的兵，然后整回合卡在那里。
-    if (!canPay(s.players[me], quote.total)) continue;
+    if (!canPay(s.players[me], quote.total)) {
+      deny('粮食/建材不够');
+      continue;
+    }
 
     // 水军看地图：干地上造出来的船只是八十金的靶子。
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
     // 一个池塘边上也能造船，但它开不出去。
-    if (d.domain === 'water' && wet < WATER_MIN_SHARE) continue;
-    if (gold < quote.gold) continue;
+    if (d.domain === 'water' && wet < WATER_MIN_SHARE) {
+      deny('水域太少');
+      continue;
+    }
+    if (gold < quote.gold) {
+      deny('钱不够');
+      continue;
+    }
 
     // ── 攒钱 ──
     // 计划要用的那笔钱是**冻结差额**，不是"停掉产线"：买完这兵之后账上还剩得下
@@ -3008,7 +3330,10 @@ function recruitCandidate(
       const fastEco =
         (d.category === 'economy' && earners < Math.min(targetEarners,payback<=4 ? 6 : 4) && payback <= 8) ||
         (d.category === 'builder' && builders === 0);
-      if (!isTarget && (!fastEco || plan.savingFor==='rebuild') && price + unlockFee > plan.allowance) continue;
+      if (!isTarget && (!fastEco || plan.savingFor==='rebuild') && price + unlockFee > plan.allowance) {
+        deny(plan.savingFor === 'rebuild' ? '攒重建费' : '攒钱冻结');
+        continue;
+      }
       // 攒的是升时代：钱够了就把这一回合让给 UPGRADE（升完的兵比多一个兵值）。
       // 但要确认升级现在真的买得起——否则那条动作会被别的原因拒掉，这一回合白过。
       if (plan.savingFor === 'era' && !isTarget && gold >= plan.targetCost) {
@@ -3016,7 +3341,10 @@ function recruitCandidate(
           const cost = upgradeCostOf(s, c);
           return cost !== null && gold >= cost;
         });
-        if (canUpgradeNow) continue;
+        if (canUpgradeNow) {
+          deny('让位升级');
+          continue;
+        }
       }
     }
 
@@ -3141,7 +3469,10 @@ function recruitCandidate(
       const canLeave = slots.some((c) =>
         escapeRoutes(s, c.x, c.y, d.move, src.kind === 'city' ? src.id : null) > 0,
       );
-      if (!canLeave) continue;
+      if (!canLeave) {
+        deny('出不了城门');
+        continue;
+      }
       //    地图越糙，慢兵的处境越糟：不是"慢一点"，是"只能待在平原上"
       if (d.move <= 1) score -= 10 + rough * 130;
 
@@ -3215,6 +3546,9 @@ function recruitCandidate(
         : { type: 'RECRUIT', cityId: src.id, unitType: d.id };
 
     if (!best || score > best.score) best = { action, score };
+  }
+  if (tracing && !best) {
+    aiRecruitTrace.last = Object.entries(why).map(([k, n]) => `${k}×${n}`).join(' / ') || '池为空';
   }
   return best;
 }
@@ -3329,7 +3663,13 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
     current: player,
     cities: s.cities.map((c) => ({ ...c })),
     units: [...s.units],
-    players: { A: { ...s.players.A }, B: { ...s.players.B } },
+    // 四个席位都拷一份：AI 只在两人局出场，但 GameState 的字段是四键的
+    players: {
+      A: { ...s.players.A },
+      B: { ...s.players.B },
+      C: { ...s.players.C },
+      D: { ...s.players.D },
+    },
     unlocked: unlockedCopy,
   };
   const traits = aiTraits(proj);
@@ -3450,6 +3790,15 @@ export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
  */
 export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, rejected: ReadonlySet<string> = new Set()): Action | null {
   if (s.winner) return null;
+  /*
+   * 三人四人局没有 AI。
+   *
+   * 这套 AI 的每一个判断都建立在"只有一个对手"上：威胁场只算一家、推进方向
+   * 只朝一家、集火只认一个目标。让它打多方不是加个循环的事，而是把目标选择
+   * 整个重写（先打谁？谁在领先？两家夹击怎么办？）。
+   * 所以 3/4 人局一律全真人：这里直接返回 null，界面那边也会禁掉 AI 选项。
+   */
+  if ((s.config.playerCount ?? 2) > 2) return null;
 
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息
@@ -3529,6 +3878,12 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     commit: false,
     // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
+    // 集火目标：整回合算一次，所有单位的攻击候选都看它
+    focusTargetId: pickFocusTarget(view, me),
+    // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
+    lineRef: frontLineRef(view, me, land, mood.focusCityId),
+    crowd: crowdField(view, me),
+    foeSplash: unitsOf(view, other(me)).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
   };
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。

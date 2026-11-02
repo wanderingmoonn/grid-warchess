@@ -72,6 +72,8 @@ body {
 .app {
   display: flex;
   flex-direction: column;
+  /* 老 WebView 不认 dvh：先给 vh，再让 dvh 覆盖，否则整条声明作废、高度变成 auto */
+  height: 100vh;
   height: 100dvh;
   /* 顶栏/参谋部栏再高也不许子元素顶出去压到棋盘上 */
   overflow: hidden;
@@ -631,6 +633,59 @@ body {
     rgba(198, 148, 46, 0) 4px 8px
   );
   box-shadow: inset 0 0 0 1px rgba(198, 148, 46, 0.34);
+}
+
+/* ---------- 地上的东西（水雷 / 地雷 / 火场……） ---------- */
+/*
+ * 一层和烈度层同构的网格：只给"有东西的那几格"建节点，用 grid-column/row
+ * 定位，不为整张图铺 1000 个空 div。
+ *
+ * 排在棋子**下面**（DOM 里在 .units 之前）：它描述的是"这一格有什么"，
+ * 不该盖住站在上面的人；盖住的只有地形，那正是要的效果。
+ *
+ * 两种样子一眼分得开，靠的是形状而不是颜色（色弱也认得出）：
+ *   · `.mine`  —— 自己布的：实心菱形；
+ *   · `.seen`  —— 敌方已发现的：空心菱形 + 虚线边。
+ * 颜色仍然跟着阵营走（own-A/B/C/D），因为它同时回答"这是谁布的"。
+ */
+.marks {
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  pointer-events: none;
+}
+
+.fx-mark {
+  width: 9px;
+  height: 9px;
+  margin: auto;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.fx-mark.own-A {
+  color: var(--team-a);
+}
+.fx-mark.own-B {
+  color: var(--team-b);
+}
+.fx-mark.own-C {
+  color: var(--team-c);
+}
+.fx-mark.own-D {
+  color: var(--team-d);
+}
+
+.fx-mark.mine {
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
+}
+
+.fx-mark.seen {
+  background: transparent;
+  border: 1.5px dashed currentColor;
 }
 
 /* ---------- 战况烈度层 ---------- */
@@ -1858,6 +1913,16 @@ a.btn {
   inset: 0;
   z-index: 100;
   display: grid;
+  /*
+   * 这一行看着多余，其实是"面板比屏幕还宽"的根因。
+   *
+   * grid 只有一列时，那条隐式列是 `auto`：它先按内容的最大宽度去算，
+   * 装不下才退到最小宽度——而最小宽度是被内容决定的（一排 chip、一行长标题）。
+   * 于是手机上面板被撑到 900 多像素，右边直接切出屏幕，里面的滚动区也就无从谈起。
+   * 用 `minmax(0, 1fr)` 把这一列钉成"容器多宽就多宽"，子元素的
+   * `width: min(980px, 100%)` 才真的按屏幕算。
+   */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 24px;
   background: rgba(30, 28, 24, 0.42);
@@ -1866,6 +1931,8 @@ a.btn {
 
 .modal {
   width: min(560px, 100%);
+  /* 两行：老 WebView 不认 dvh 时退回 vh，否则 max-height 整条失效、面板会顶穿屏幕 */
+  max-height: 88vh;
   max-height: 88dvh;
   display: flex;
   flex-direction: column;
@@ -1896,6 +1963,9 @@ a.btn {
 .modal-body {
   padding: 18px 24px;
   overflow-y: auto;
+  /* iOS 上滑动要有惯性；滑动到底不要把整页一起带着滚 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1923,6 +1993,92 @@ a.btn {
 .field-hint {
   font-size: 11.5px;
   font-weight: 400;
+  color: var(--text-3);
+}
+
+
+/* ---------- 开局设置：固定地图画廊 ----------
+
+ * 三列小卡：缩略图在上，名字和尺寸在下。
+ * 缩略图是内联 SVG（一格一个 rect），所以它和进局后看到的地形**同源**——
+ * 这里长得像水的，进局就是水，不存在"预览图是另一套画法"。
+ */
+.map-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.map-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+.map-card:hover {
+  border-color: var(--a);
+  transform: translateY(-1px);
+}
+
+.map-card.active {
+  border-color: var(--a);
+  background: var(--a-soft);
+  box-shadow: inset 0 0 0 1px var(--a);
+}
+
+.map-card-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--plain);
+  border: 1px solid var(--line);
+}
+
+/* 随机地形没有缩略图，给一块"问号"质感的占位 */
+.map-card-thumb.is-random {
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--text-3);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel-2) 0 6px,
+    var(--panel) 6px 12px
+  );
+}
+
+.map-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* 缩略图是"地图"不是"图片"：放大时不要插值糊成一片 */
+  shape-rendering: crispEdges;
+}
+
+.map-card > b {
+  font-size: 12px;
+  font-weight: 600;
+  /* 名字长也不许截断，允许两行 */
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.map-card > i {
+  font-style: normal;
+  font-size: 11px;
   color: var(--text-3);
 }
 
@@ -1978,6 +2134,20 @@ a.btn {
   background: var(--text);
   border-color: var(--text);
   color: #fff;
+}
+
+/*
+ * 扩展 / 自定义兵种：名字后面挂一个淡淡的「扩」。
+ *
+ * 它是"勾了包才在名单里"的——和本体兵种不是一回事：本体兵种关掉只是这一局
+ * 不造，扩展兵关掉更接近"这一包的东西我不想要"。用一颗字标出来，比让玩家
+ * 自己去猜"这条船哪来的"省事。
+ */
+.chip.is-extra::after {
+  content: '扩';
+  margin-left: 4px;
+  font-size: 9.5px;
+  opacity: 0.6;
 }
 
 .expansion-list {
@@ -2628,6 +2798,642 @@ a.btn {
  * 工具栏和参谋部共用同一条 .commander-bar（位置一样、都在棋盘上方），
  * 所以这里只补它自己的那几个小组件：阵营/笔刷分组、战况计数、结论文字。
  */
+
+/* ---------- 开始界面：左侧两页 ----------
+
+ * 这些设置以前是一条长卷：从「数据收集」一路滚到「扩展规则」，最后才轮到
+ * 「固定地图」。现在拆成两页——战役管"怎么打"，地图管"在哪打"。
+ * 面板也从 560px 的对话框长成一张两栏的台面：地图那页要铺画廊，窄了放不下。
+ */
+.modal.start-panel {
+  width: min(980px, 100%);
+  /* 高度要给遮罩的 24px 内边距留出余量：写 90dvh 的话，矮窗口里上下会被各切一刀 */
+  height: min(720px, calc(100vh - 48px));
+  height: min(720px, calc(100dvh - 48px));
+  flex-direction: row;
+}
+
+.start-rail {
+  flex: 0 0 174px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 12px;
+  background: var(--panel-2);
+  border-right: 1px solid var(--line);
+}
+
+.start-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 14px;
+}
+
+.start-brand b {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.start-brand span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.start-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.start-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.start-nav-item b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.start-nav-item span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.start-nav-item:hover {
+  background: var(--panel);
+}
+
+.start-nav-item.active {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  box-shadow: inset 2px 0 0 var(--a);
+}
+
+.start-rail-foot {
+  margin-top: auto;
+  padding: 8px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.start-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  /*
+   * 这一行是手机端能不能滚动的**唯一关键**。
+   *
+   * 窄屏下整个面板改成纵向排列（rail 在上、这一列在下），此时 .start-col 是
+   * 一个纵向 flex 子项，`min-height` 默认是 auto —— 它会撑到内容那么高，
+   * 于是里面那个 `flex:1 + min-height:0` 的 .modal-body 根本没有"可缩小"的
+   * 余地：面板被 .modal 的 overflow:hidden 直接剪掉，看起来就是"新对局拉不下去"。
+   * 横向排列时高度由父容器拉伸给出，所以桌面端一直没暴露这个问题。
+   */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 只有内容区滚动：左边导航和底下那颗「开始对局」始终在视野里 */
+.start-col .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.start-foot {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.start-summary {
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.start-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* ---------- 兵种池：一行入口 + 一层全表 ----------
+
+ * 两百多个兵种直接铺在战役页最下面时，这一页变成了一条长卷：想改"要不要带
+ * 那几条船"得先滚过人数、时代、尺寸、选卡、地貌。所以收成一行摘要 + 一颗按钮，
+ * 全表挪进一层盖在面板上的弹层——名单一格没少，只是要点一下才出来。
+ */
+.pool-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.pool-open:hover {
+  border-color: var(--a);
+  background: var(--a-soft);
+}
+
+.pool-open-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pool-open-text b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pool-open-text i {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.pool-open-go {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--a);
+}
+
+/* 弹层要相对 .modal 定位，否则它会照着遮罩铺满整屏 */
+.modal.start-panel {
+  position: relative;
+}
+
+.pool-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: inherit;
+}
+
+.pool-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pool-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pool-head-text b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pool-head-text span {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.pool-head .btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* 只有这一块滚：标题与底部两颗批量按钮始终在视野里 */
+.pool-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 12px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 一组 chip 换行之后，时代标签要对齐第一行而不是整组的中线 */
+.pool-body .era-group {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+
+.pool-body .era-tag {
+  padding-top: 7px;
+}
+
+.pool-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.pool-foot .field-hint {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+/*
+ * 兵种池里的 chip 是**开关**，不是"从一排里挑一个"。
+ *
+ * 所以这里不套用「选中＝黑底反白」那身衣服：一屏四五十个黑药丸，看着像整页都
+ * 高亮了，反而读不出哪个是关的。改成一张开关表——
+ *   开＝浅底 + 前面一颗实心圆点；关＝虚线框 + 文字压暗。
+ * 一眼扫过去，"关着的"是那一小撮不一样的，这正是玩家要找的东西。
+ */
+.pool-body .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* 圆点：开关的把手 */
+.pool-body .chip::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--text-3);
+  background: transparent;
+}
+
+.pool-body .chip.active {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.pool-body .chip.active::before {
+  border-color: var(--a);
+  background: var(--a);
+}
+
+.pool-body .chip:not(.active) {
+  border-style: dashed;
+  color: var(--text-3);
+}
+
+/* ---------- 反馈面板（随时拍一张局面报 bug） ----------
+ *
+ * 三块内容：当前局面摘要、一句描述、隐私口径。
+ * 隐私说明刻意放在正文里而不是折叠起来——这份快照带名字和坐标，
+ * 和结算时那份匿名数据不是一回事，玩家得看得见才谈得上同意。
+ */
+.feedback-modal {
+  width: min(600px, 100%);
+}
+
+.fb-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.fb-summary b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fb-summary span {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.fb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fb-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.fb-text {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.fb-text:focus {
+  outline: none;
+  border-color: var(--a);
+}
+
+.fb-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.fb-check input {
+  margin-top: 2px;
+  accent-color: var(--a);
+}
+
+.fb-hint {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+
+.fb-privacy {
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.fb-privacy b {
+  color: var(--text-2);
+}
+
+.fb-result {
+  padding: 9px 11px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.fb-result.is-ok {
+  border: 1px solid #cfe3d4;
+  background: #f1f7f2;
+  color: #3f7a54;
+}
+
+.fb-result.is-bad {
+  border: 1px solid #f0d6d3;
+  background: #fdf2f1;
+  color: #b8433a;
+}
+
+/* 待上传的那张图：缩略图 + 元信息 + 两颗按钮 */
+.map-draft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.map-draft-thumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--plain);
+}
+
+.map-draft-thumb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.map-draft-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.map-draft-meta > b {
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.map-draft-act {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 上传状态行：错误信息里带行列号，长句也不许截断 */
+.map-note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+
+.map-note.is-bad {
+  color: #b8433a;
+}
+
+.map-note.is-ok {
+  color: #3f7a54;
+}
+
+/*
+ * 手机、以及"被压窄的预览面板"（agents 的预览区就是这种）：
+ * 面板占满可用高度，只有中间的设置区滚动，导航和「开始对局」始终在视野里。
+ *
+ * 三件事必须同时成立，少一条就滚不动：
+ *   1) 遮罩留的边距够小，否则面板比屏幕高，上下被各切一刀；
+ *   2) 面板高度用一个**有确定值**的 100%（父级 inset:0 撑出来的），
+ *      不再写死 min(760px, 94dvh)——矮窗口里那个 94dvh 依然会顶出去；
+ *   3) .start-col 的 min-height:0（见上面那条注释），否则内容撑开、无处可滚。
+ */
+@media (max-width: 720px) {
+  .modal-mask {
+    padding: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+  }
+
+  .modal.start-panel {
+    height: 100%;
+    max-height: 100%;
+    flex-direction: column;
+    border-radius: 14px;
+  }
+
+  .modal-head {
+    padding: 14px 16px 0;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+    gap: 14px;
+  }
+
+  .start-rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .start-brand {
+    padding: 0 6px 0 0;
+  }
+
+  .start-brand span,
+  .start-rail-foot {
+    display: none;
+  }
+
+  .start-nav {
+    flex-direction: row;
+    flex: 0 0 auto;
+  }
+
+  .start-nav-item {
+    padding: 7px 10px;
+  }
+
+  .start-nav-item span {
+    display: none;
+  }
+
+  .modal-foot {
+    padding: 10px 12px;
+  }
+
+  /* 底部：摘要一行、按钮一行。挤在一行里的时候按钮会被挤出屏幕右侧 */
+  .start-foot {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .start-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+
+  /* 手指按得准：36px 的按钮在手机上太薄 */
+  .start-foot .btn {
+    min-height: 40px;
+  }
+
+  /*
+   * chip 也一样：桌面 28px 的高度是"鼠标能点"，手机上就是"老是点错"。
+   * 这里只放大内边距和字号，不碰布局——多出来的宽度由 chip-row 自己换行吸收。
+   */
+  .chip {
+    padding: 9px 14px;
+    font-size: 13px;
+  }
+
+  /* 兵种池：手机上留白收一档，把高度还给那两百多个 chip */
+  .pool-head {
+    padding: 12px 14px 10px;
+  }
+
+  .pool-body {
+    padding: 12px 14px;
+  }
+
+  .pool-foot {
+    padding: 8px 14px;
+  }
+}
+
+/*
+ * 矮窗口（横屏手机、被压扁的预览面板）。
+ *
+ * 这一档和宽度无关：一个 1200×480 的预览区宽度够、高度不够，
+ * 上面那套"占满 100%"是对的，但顶部那条说明和品牌名会把内容区压到只剩两行。
+ */
+@media (max-height: 560px) {
+  .modal-mask {
+    padding: 6px;
+  }
+
+  .start-brand {
+    display: none;
+  }
+
+  .modal-head {
+    padding: 10px 14px 0;
+  }
+
+  /* 副标题在矮屏上是纯占地方：标题已经把这一页说清楚了 */
+  .modal-head p {
+    display: none;
+  }
+
+  .modal-body {
+    padding: 10px 14px;
+    gap: 12px;
+  }
+
+  .modal-foot {
+    padding: 8px 12px;
+  }
+}
+
 .god-group {
   display: flex;
   align-items: center;
@@ -3684,6 +4490,217 @@ a.btn {
   }
 }
 
+/* ---------- 选卡：底部"我已选"对照区 ----------
+
+ * 这一块是**档案**，不是候选列表：池子里的卡追求"一屏能扫完 20 张"，
+ * 所以那批卡只写一行 meta、详情靠悬停。这里相反——选卡期最常做的判断是
+ * "我已经拿了这三个，下一签补什么"，靠悬停一张张看是做不了这个判断的。
+ *
+ * 因此这里有两条硬约束，改样式时别破坏：
+ *   ① **任何文本都不许截断**：没有 text-overflow、没有 nowrap、没有 max-height，
+ *      能力说明和技能说明整段铺开（`overflow-wrap: anywhere` 只管长英文不撑破格子）；
+ *   ② **列数跟着数量走**：auto-fill + minmax，2 张两列、8 张四列，
+ *      每张卡自己长高，整块跟着长——`.draft-mask` 本来就是 overflow:auto。
+ */
+.draft-picked {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  /* 和右边槽位栏用同一条主色，一眼能对上是哪一方 */
+  border-top: 3px solid var(--line-strong);
+}
+
+.draft-picked.is-a {
+  border-top-color: var(--team-a);
+}
+
+.draft-picked.is-b {
+  border-top-color: var(--team-b);
+}
+
+.draft-picked-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 10px;
+}
+
+.draft-picked-head > b {
+  font-size: 14px;
+}
+
+.draft-picked-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--a);
+}
+
+.draft-picked-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  flex: 1 1 220px;
+}
+
+.draft-picked-grid {
+  display: grid;
+  /* 232px 是"一行数值 + 一段能力说明"能读舒服的下限；窄了就只能折行成三行 */
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.draft-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.dp-head {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.dp-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--a-soft);
+  color: var(--a);
+  font-weight: 700;
+}
+
+.dp-head-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.dp-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dp-index {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-name {
+  font-size: 14px;
+  /* 名字长也不许截断，允许换行 */
+  overflow-wrap: anywhere;
+}
+
+.dp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.dp-tag {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+.dp-tag.is-hero {
+  border-color: var(--city);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dp-tag.is-air {
+  border-color: var(--a);
+  color: var(--a);
+}
+
+.dp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 3px 8px;
+}
+
+.dp-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-stat i {
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.dp-stat b {
+  font-weight: 600;
+}
+
+.dp-cost {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  overflow-wrap: anywhere;
+}
+
+.dp-traits {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dp-trait {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.dp-trait > b {
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.dp-trait > span {
+  /* 说明整段铺开：不截断、不省略、不做..."展开" */
+  overflow-wrap: anywhere;
+}
+
+.dp-trait.is-skill > b {
+  color: var(--a);
+}
+
+.dp-trait.is-element > b {
+  color: var(--text);
+}
+
+@media (max-width: 860px) {
+  .draft-picked-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
 /* ---------- 选卡：顶栏按钮与等待开局 ---------- */
 
 .draft-head-actions {
@@ -3942,4 +4959,104 @@ a.btn {
   .cmd-queue::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* ---------- 第三、第四席位（三人 / 四人局） ----------
+
+ * 两人的配色是红蓝；三家四家再加绿、黄。中国棋盘上的习惯顺序。
+ * 单独追加一份而不是改上面那套：上面那些规则都被大量选择器引用，
+ * 动它们等于给所有旧界面做一次回归，而这里只需要"多两套颜色"。
+ */
+:root {
+  --team-c: #3f8a5c;
+  --team-c-soft: #e0efe4;
+  --team-d: #a8791b;
+  --team-d-soft: #f6ecd4;
+}
+
+.unit.owner-C .unit-inner {
+  background: var(--team-c);
+}
+
+.unit.owner-D .unit-inner {
+  background: var(--team-d);
+}
+
+.tile.t-city.own-C {
+  background: #dcecdf;
+}
+
+.tile.t-city.own-D {
+  background: #f3e8cc;
+}
+
+.vs-dot.c {
+  background: var(--team-c);
+}
+
+.vs-dot.d {
+  background: var(--team-d);
+}
+
+.turn-badge.active-C {
+  background: var(--team-c-soft);
+  border-color: rgba(63, 138, 92, 0.35);
+  color: var(--team-c);
+}
+
+.turn-badge.active-D {
+  background: var(--team-d-soft);
+  border-color: rgba(168, 121, 27, 0.35);
+  color: var(--team-d);
+}
+
+/* 交接遮罩上的「轮到 X」徽章：两人局一直是 a/b，三家四家要用上 c/d */
+.handoff-badge.c {
+  background: var(--team-c-soft);
+  color: var(--team-c);
+}
+
+.handoff-badge.d {
+  background: var(--team-d-soft);
+  color: var(--team-d);
+}
+
+/* 席位条：一行一席。行数就是人数，轮到的加亮，出局的划掉 */
+.seat-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+
+.seat-row + .seat-row {
+  margin-top: 3px;
+}
+
+.seat-row b {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.seat-row .seat-stats {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.seat-row.active {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+}
+
+.seat-row.quit {
+  opacity: 0.45;
+  text-decoration: line-through;
 }

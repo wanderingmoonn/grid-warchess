@@ -32,11 +32,13 @@ export function setSaveScope(roomCode: string | null): void {
   scopedKey = roomCode ? `${KEY_MATCH}:room:${roomCode}` : KEY_MATCH;
 }
 
+import type { PlayerId } from '../core/types.ts';
+
 export interface MatchMeta {
   createdAt: number;
   updatedAt: number;
   /** 当前应该由谁操作 */
-  pendingFor: 'A' | 'B';
+  pendingFor: PlayerId;
 }
 
 export function saveMatch(s: GameState): void {
@@ -113,10 +115,19 @@ export function exportMatch(s: GameState): string {
   return JSON.stringify({ kind: 'warchess-match', version: 1, state: s });
 }
 
+/**
+ * 读一段存档文本。
+ *
+ * 除了「导出对局」那种 `warchess-match`，也收 `kind: 'snapshot'`——
+ * 那是「反馈」面板拍下来的 bug 快照（见 core/snapshot.ts）。它的 `state`
+ * 就是同一个完整局面，所以收到别人发来的一份快照，直接粘进来就能站到那一格上，
+ * 不用先写脚本把 state 抠出来。
+ */
 export function importMatch(text: string): GameState | null {
   try {
     const parsed = JSON.parse(text) as { kind?: string; state?: GameState };
-    if (parsed.kind !== 'warchess-match' || !parsed.state) return null;
+    if (parsed.kind !== 'warchess-match' && parsed.kind !== 'snapshot') return null;
+    if (!parsed.state) return null;
     if (!isValidState(parsed.state)) return null;
     normalizePlayerNames(parsed.state);
     return parsed.state;

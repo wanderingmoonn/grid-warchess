@@ -30,6 +30,7 @@ import {
 } from '../src/core/config.ts';
 import {
   BLOOD_TURN,
+  bloodTurnOf,
   EXPANSIONS,
   LEGACY_UPGRADE_COST,
   availableExpansions,
@@ -37,7 +38,8 @@ import {
   expansionById,
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
-import { MAP_STYLES, generateLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
+import { MAP_STYLES, generateLayout, generateMultiLayout, mapStylesFor, terrainFromChar } from '../src/core/mapgen.ts';
+import { BUILTIN_MAPS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -68,6 +70,22 @@ import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) =>
   [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
+/**
+ * 全部水面单位：本体 + 所有扩展贡献的（雷击舰在「工业绞肉机」、驱逐舰在「二战合成兵」，
+ * 都是别的包顺手带的海军，光看海战包会漏掉它们）。
+ *
+ * 舰种盘点类用例都读这一份：只统计海军两包的话，"每代最便宜的船"会算错。
+ */
+const allWater: UnitTypeDef[] = (() => {
+  const seen = new Map<string, UnitTypeDef>();
+  for (const u of Object.values(UNIT_TYPES)) if (u.domain === 'water') seen.set(u.id, u);
+  for (const e of EXPANSIONS) {
+    for (const u of e.units ?? []) {
+      if (u.domain === 'water' && !seen.has(u.id)) seen.set(u.id, u);
+    }
+  }
+  return [...seen.values()];
+})();
 import {
   DRAFT_BAN_BASE,
   DRAFT_PICK_BASE,
@@ -88,9 +106,11 @@ import {
 } from '../src/core/draft.ts';
 import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
+  TIMELINE_VERSION,
   newTimeline,
   noteAction,
   noteDeaths,
+  sampleOf,
   sampleTurn,
   sealTimeline,
   timelineSummary,
@@ -154,8 +174,7 @@ import {
   DEFAULT_CONFIG,
   normalizePlayerNames,
   startGoldFor,
-} from '../src/core/setup.ts';
-import {
+} from '../src/core/setup.ts';import {
   applyAction,
   mergeDraftStep,
   adjacentToWater,
@@ -186,6 +205,8 @@ import {
   isAirborne,
   isHiddenFrom,
   magicDamageOf,
+  magicAtkOf,
+  magicResOf,
   idx,
   incomeOf,
   incomeResOf,
@@ -209,6 +230,7 @@ import {
   registerStatus,
   SKILL_EFFECTS,
   STATUS_REGISTRY,
+  buildSiteError,
   stepCostBetween,
   stepCostInto,
   strikeDistance,
@@ -225,11 +247,28 @@ import {
   utype,
   visionOf,
   visibleTilesOf,
+  // 三/四人局：席位轮转与出局判定
+  others,
+  nextSeat,
+  aliveSeats,
+  isEliminated,
+  hasQuit,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
+import { addMark, marksOf, registerMarkKind } from '../src/core/marks.ts';
+import { exportMatch, importMatch } from '../src/storage/save.ts';
+import { BUILD_VERSION } from '../src/core/build-info.ts';
+import {
+  SNAPSHOT_VERSION,
+  buildSnapshot,
+  snapshotFileName,
+  snapshotJson,
+  snapshotSignature,
+} from '../src/core/snapshot.ts';
 import { GOLD } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
+import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
 import type {
   Action,
   City,
@@ -287,6 +326,8 @@ function clearDecor(s: GameState): void {
  * 地图本身的多样性由下面那些直接调 generateLayout 的用例负责。
  */
 function pinCities(s: GameState): void {
+  // 一家一个角。两人局每家两座城，所以 A/B 各有两个位；
+  // 三人四人局每家只有一座（这正是那个模式的定义），C/D 就落在剩下两个角上。
   const spots: Record<PlayerId, Array<{ x: number; y: number }>> = {
     A: [
       { x: 1, y: s.h - 3 },
@@ -296,8 +337,16 @@ function pinCities(s: GameState): void {
       { x: 1, y: 1 },
       { x: s.w - 3, y: 1 },
     ],
+    C: [
+      { x: s.w - 3, y: s.h - 3 },
+      { x: 1, y: s.h - 3 },
+    ],
+    D: [
+      { x: s.w - 3, y: 1 },
+      { x: 1, y: 1 },
+    ],
   };
-  const used: Record<PlayerId, number> = { A: 0, B: 0 };
+  const used: Record<PlayerId, number> = { A: 0, B: 0, C: 0, D: 0 };
 
   // 必须两遍：先全部清空，再全部放置。
   // 一遍到底的话，后一座城"清自己的旧位置"会抹掉前一座城刚放下的格子——
@@ -348,6 +397,21 @@ function fresh(extra?: Partial<MatchConfig>, seed = 12345): GameState {
   const s = createMatch({ ...BASE, ...extra }, seed);
   clearDecor(s);
   pinCities(s);
+  refreshMemory(s);
+  return s;
+}
+
+/**
+ * 三/四人局的开局：只清装饰地形，**不钉城市**。
+ *
+ * 钉城市那一步是给两人局里那些写死坐标的用例（奴隶站 (5,5)、河在 x=8）准备的，
+ * 它会把城硬挪到四角——而四人局的兵本来就摆在自己城外，一挪城就有几家被"清掉
+ * 站在别人城里的单位"这条规则带走，四家兵力立刻不齐。多方局的对称性必须从
+ * 生成器出来的原样去验，所以在那一批用例里不钉。
+ */
+function freshMulti(n: 3 | 4, extra?: Partial<MatchConfig>, seed = 12345): GameState {
+  const s = createMatch({ ...BASE, ...extra, playerCount: n }, seed);
+  clearDecor(s);
   refreshMemory(s);
   return s;
 }
@@ -2240,6 +2304,147 @@ test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', ()
   assert.ok(up.hp > 60, '同时回血');
 });
 
+test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且掠空、陨卵半径 9', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+
+  const egg = s.unitTypes['dragon-egg']!;
+  assert.equal(egg.armor, 25, '魔龙卵护甲 25');
+  assert.equal(egg.magicRes, 12, '魔龙卵魔抗 12');
+  assert.equal(egg.maxHp, 140, '魔龙卵生命 140');
+
+  const dragon = s.unitTypes['evil-dragon-king']!;
+  assert.equal(dragon.vision, 9, '邪龙王视野 9');
+  assert.equal(dragon.layer, 'air', '邪龙王在空中层');
+  assert.equal(dragon.flight, true, '掠空同时要能掠水，所以 flight 一起写');
+  const skill = (dragon.skills ?? []).find((k) => k.id === 'dragon-egg');
+  assert.equal(skill?.radius, 9, '陨卵半径 9');
+
+  // 掠空的实际含义：能和地面单位叠在同一格（见 layer 的说明）
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  const mate = stackOn(s, 'A', 'militia', 5, 5);
+  const air = stackOn(s, 'A', 'evil-dragon-king', 5, 5);
+  assert.equal(isAirborne(s, air), true);
+  assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
+  assert.ok(unitsAt(s, 5, 5).some((u) => u.id === mate.id), '地面那一个还在');
+});
+
+test('奇想平衡：圣剑觉醒的魔攻 / 魔抗会真的进伤害结算', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 6, 5, 'plain');
+  const hero = place(s, 'A', 'sword-saint', 5, 5);
+  const target = place(s, 'B', 'militia', 6, 5);
+
+  // 先摆一层"上一次觉醒留下的加成"：觉醒必须是**累加**，不是覆盖成 +8
+  hero.magicAtkBonus = 4;
+  hero.magicResBonus = 1;
+  const magic0 = magicAtkOf(s, hero);
+  const res0 = magicResOf(s, hero);
+  const dmg0 = magicDamageOf(s, hero, target);
+
+  const r = applyAction(s, { type: 'HERO_SKILL', unitId: hero.id, skillId: 'ascend' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const up = r.state.units.find((u) => u.id === hero.id)!;
+  const foe = r.state.units.find((u) => u.id === target.id)!;
+
+  assert.equal(magicAtkOf(r.state, up), magic0 + 8, '魔攻 +8（叠在旧的那一层上）');
+  assert.equal(magicResOf(r.state, up), res0 + 2, '魔抗 +2（同样是累加）');
+  // 面板涨了，结算也必须跟着涨：民兵魔抗 0，所以这一发正好多 8 点
+  assert.equal(magicDamageOf(r.state, up, foe), dmg0 + 8, '魔法段的伤害真的变高了');
+});
+
+test('固定地图：内置图能开成局，地形与数据逐格一致', () => {
+  for (const m of BUILTIN_MAPS) {
+    const v = validateFixedMap(m);
+    assert.ok(v.ok, `${m.name} 校验不过：${v.ok ? '' : v.errors.join('；')}`);
+    const s = createMatch({ ...DEFAULT_CONFIG, size: m.w, fixedMap: m }, 1);
+    assert.equal(s.w, m.w, `${m.name} 宽度`);
+    assert.equal(s.h, m.h, `${m.name} 高度`);
+    // 逐格核对：这张图存在的唯一意义就是"画的是什么就是什么"
+    for (let y = 0; y < m.h; y += 1) {
+      for (let x = 0; x < m.w; x += 1) {
+        const ch = m.rows[y]![x]!;
+        const terrain = s.tiles[y * s.w + x]!.terrain;
+        // 城格在数据里画的是地形，进局会被城盖掉；只核对非城格
+        if (terrain === 'city') continue;
+        assert.equal(
+          terrain,
+          { '.': 'plain', f: 'forest', h: 'hill', '~': 'water', '^': 'mountain', '=': 'bridge' }[ch],
+          `${m.name} (${x},${y}) 应该是 ${ch}`,
+        );
+      }
+    }
+    assert.equal(s.cities.filter((c) => c.owner === 'A').length, m.citiesA.length);
+    assert.equal(s.cities.filter((c) => c.owner === 'B').length, m.citiesB.length);
+    // 两边都得有开局部队，否则一开局就是空棋盘
+    assert.ok(s.units.some((u) => u.owner === 'A'), `${m.name} 甲方没有开局部队`);
+    assert.ok(s.units.some((u) => u.owner === 'B'), `${m.name} 乙方没有开局部队`);
+  }
+});
+
+test('固定地图：坏数据被挡住，报错要指出是哪一处', () => {
+  const base = { name: '测试', rows: Array.from({ length: 10 }, () => '..........'), citiesA: [{ x: 1, y: 1 }], citiesB: [{ x: 6, y: 6 }] };
+  assert.ok(validateFixedMap(base).ok, '基线数据应该是合法的');
+
+  const tooSmall = validateFixedMap({ ...base, rows: ['...', '...'] });
+  assert.equal(tooSmall.ok, false);
+  assert.ok(!tooSmall.ok && tooSmall.errors.some((e) => e.includes('高度')), '太小的图要拒');
+
+  const badChar = validateFixedMap({ ...base, rows: base.rows.map((r, i) => (i === 2 ? '...X......' : r)) });
+  assert.equal(badChar.ok, false);
+  assert.ok(!badChar.ok && badChar.errors.some((e) => e.includes('第 3 行第 4 列')), '要指出行列');
+
+  const noCity = validateFixedMap({ ...base, citiesB: [] });
+  assert.equal(noCity.ok, false);
+
+  const edge = validateFixedMap({ ...base, citiesA: [{ x: 0, y: 0 }] });
+  assert.equal(edge.ok, false, '贴边的城要拒');
+
+  // 扩展地形不许进共享地图：没开那个扩展的局里它会变成平原
+  const expanded = validateFixedMap({ ...base, rows: base.rows.map((r, i) => (i === 0 ? 'P.........' : r)) });
+  assert.equal(expanded.ok, false, '台地（P）属于扩展地形，不该收');
+});
+
+test('固定地图：纯文本格式能直接画，A/B 标出城位', () => {
+  const text = [
+    'name: 手画的小图',
+    '....h....',
+    '..A...B..',
+    '....~....',
+    '..ff..hh.',
+    '.........',
+    '...~~....',
+    '..f......',
+    '...h.....',
+    '.........',
+  ].join('\n');
+  const parsed = parseMapFile(text);
+  assert.ok(parsed.ok, parsed.ok ? '' : parsed.errors.join('；'));
+  const map = parsed.ok ? parsed.map : null;
+  assert.ok(map);
+  assert.equal(map!.name, '手画的小图');
+  assert.equal(map!.w, 9);
+  assert.equal(map!.h, 9);
+  assert.deepEqual(map!.citiesA, [{ x: 2, y: 1 }]);
+  assert.deepEqual(map!.citiesB, [{ x: 6, y: 1 }]);
+  // 城位字母本身不是地形，落地时要变回平原
+  assert.equal(map!.rows[1]![2], '.');
+  assert.equal(map!.rows[1]![6], '.');
+
+  // JSON 也认，而且和文本走同一套校验
+  const asJson = parseMapFile(JSON.stringify(map));
+  assert.ok(asJson.ok);
+
+  // 坏文件必须给一句人话
+  const empty = parseMapFile('   ');
+  assert.equal(empty.ok, false);
+  const broken = parseMapFile('{ "name": "x" ');
+  assert.equal(broken.ok, false);
+  assert.ok(!broken.ok && broken.errors[0]!.includes('JSON'));
+});
+
 test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', () => {
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
   s.units = [];
@@ -3370,10 +3575,15 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
       assert.ok(d.range >= 4, `${d.name} 是时代 ${d.era} 的远程，射程 ${d.range} 还不如长弓手`);
     }
   }
-  // 顶级火力要真的压过后排：火炮与铁甲舰 5 格，长弓手 4 格
+  // 顶级火力要真的压过后排：火炮 5 格，长弓手 4 格。
+  // 水面上负责这一档的是 E5 的那几条钢铁舰队（重巡/战列舰），
+  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在工业时代算远的，
+  // 但不该和火炮/战列舰同格。
   assert.equal(UNIT_TYPES.longbow.range, 4);
   assert.equal(UNIT_TYPES.artillery.range, 5);
-  assert.equal(UNIT_TYPES.ironclad.range, 5);
+  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是工业时代的船，射程不该追平火炮');
+  assert.equal(nvDef('nv_heavy_cruiser').range, 5, '重巡的 8 吋炮要打到 5 格');
+  assert.equal(nvDef('nv_battleship').range, 5);
   // 载具也上了一个台阶：射程 3 意味着能站在近战够不到的地方开火
   assert.equal(UNIT_TYPES.tank.range, 3);
   assert.equal(UNIT_TYPES.armoredcar.range, 3);
@@ -3398,7 +3608,7 @@ test('关键数值按方案落定', () => {
     ['spearman', { maxHp: 40 }],
     ['tower', { range: 3 }],
     ['gunboat', { atk: 25, maxHp: 46 }],
-    ['ironclad', { atk: 47, armor: 11, maxHp: 90 }],
+    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 4 }],
     ['tank', { atk: 56, maxHp: 88 }],
     ['artillery', { atk: 47, maxHp: 54 }],
     ['squad', { atk: 47, maxHp: 48 }],
@@ -7229,6 +7439,43 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   );
 });
 
+test('兵临城下且兵力吃亏时，AI 只买战斗单位', () => {
+  let s = fresh({ size: 12, aiLevel: 'advanced' });
+  s.current = 'A';
+  s.units = [];
+  const city = s.cities.find((c) => c.owner === 'A')!;
+  s.players.A.gold = 900;
+
+  // 我：一个弓手；对面：六个战斗单位压到城墙三格内
+  place(s, 'A', 'archer', city.x + city.size + 1, city.y + city.size);
+  for (let i = 0; i < 6; i += 1) {
+    place(s, 'B', 'militia', city.x + i, Math.max(0, city.y - 2));
+  }
+  s.turn = 20;
+
+  const budget = { ...DEFAULT_BUDGET, recruited: 0, upgraded: 0 };
+  const bought: string[] = [];
+  for (let step = 0; step < 12; step += 1) {
+    const a = aiNextAction(s, budget);
+    if (!a) break;
+    if (a.type === 'RECRUIT') bought.push(a.unitType);
+    const r = applyAction(s, a);
+    if (!r.ok) break;
+    s = r.state;
+    if (a.type === 'RECRUIT') budget.recruited += 1;
+    if (a.type === 'UPGRADE') budget.upgraded += 1;
+  }
+
+  assert.ok(bought.length > 0, '这条用例要有采购发生，否则测不到东西');
+  for (const id of bought) {
+    assert.equal(
+      s.unitTypes[id]?.category,
+      'combat',
+      `打到门口又缺兵时还在买 ${s.unitTypes[id]?.name}（${s.unitTypes[id]?.category}）`,
+    );
+  }
+});
+
 test('AI 会往前线扎军营，不是把钱全堆在城里', () => {
   // 磨局统计里最刺眼的一条：一方顶满 24 个单位、金库还压着几千金。
   // 钱花不出去等于没有压力，而军营是唯一能把钱直接变成"前线产兵点"的东西。
@@ -10139,6 +10386,15 @@ test('对局报告：只留棋局，不留人', () => {
 
   assert.equal(rep.v, REPORT_VERSION);
   assert.equal(rep.seed, s.seed);
+  // 版本号与 AI 席位：拿到一批报告，第一件事是"这是哪个版本、哪一局是对 AI 的"。
+  // 只看 at（时间）会把它和同一天的另一个构建混在一起。
+  assert.equal(rep.build, BUILD_VERSION, '报告要记下构建版本');
+  assert.deepEqual(rep.aiSides, [], '人打人没有 AI 席位');
+  assert.deepEqual(
+    buildMatchReport(fresh({ aiOpponent: true }), at).aiSides,
+    ['B'],
+    '人机局要标出 AI 坐的是哪一边——不然"人赢 AI 的比例"就得靠猜',
+  );
   assert.equal(rep.board.w, s.w);
   assert.equal(rep.turns, s.turn);
   assert.equal(rep.sides.length, 2, '两边各一份，缺一边就没法比');
@@ -10192,8 +10448,10 @@ test('逐回合摘要：按回合采帧、按方计数、封顶之后抽稀', ()
   assert.equal(tl.samples[0]?.t, 1, '第一帧是开局');
   const last = tl.samples[tl.samples.length - 1];
   assert.ok(last, '最后一帧应该在');
-  assert.equal(last.A.length, 5, '每方五个数：兵/建筑/城/金/血');
-  assert.ok(last.va >= 0 && last.vb >= 0, '身价不可能是负数');
+  // v2 起按席位记：每席一行五元组，两人局就只有 A/B 两个键
+  assert.equal(last.sides.A?.length, 5, '每方五个数：兵/建筑/城/金/血');
+  assert.equal(last.sides.B?.length, 5, '对面那席也要有，不能只记一家');
+  assert.ok((last.value.A ?? -1) >= 0 && (last.value.B ?? -1) >= 0, '身价不可能是负数');
 
   noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
   noteAction(tl, 'A', { type: 'RECRUIT', cityId: 'c1', unitType: 'militia' });
@@ -10445,8 +10703,8 @@ test('战损：靠单位集合差分，拆除不算', () => {
   sampleTurn(s, tl);
   const last = tl.samples[tl.samples.length - 1];
   assert.ok(last);
-  assert.equal(last.lostB, cost, '样本里要带上这个累计损失');
-  assert.equal(last.deadB, 1);
+  assert.equal(last.lost.B, cost, '样本里要带上这个累计损失');
+  assert.equal(last.dead.B, 1);
 
   // 拆除是主动回收，不算战损
   const own = s.units.find(
@@ -10463,6 +10721,141 @@ test('战损：靠单位集合差分，拆除不算', () => {
   assert.equal(sealed.samples.length, tl.samples.length, 'seal 不能丢样本');
   assert.ok(sealed.lost, '累计损失要留着');
   assert.ok(timelineSummary(sealed).includes('战损'), '一句话摘要要能看见战损');
+});
+
+test('逐回合摘要 v2：四席都采，活跃数不全零', () => {
+  // v1 只写 A/B 两行，三人四人局里 C/D 的曲线等于白采。v2 起按席位记。
+  const s = freshMulti(4);
+  const tl = newTimeline(1);
+  assert.equal(tl.v, TIMELINE_VERSION, '新建的摘要就是当前版本');
+  noteDeaths(tl, s);
+  sampleTurn(s, tl, true);
+
+  const first = tl.samples[0];
+  assert.ok(first);
+  assert.deepEqual(Object.keys(first.sides).sort(), ['A', 'B', 'C', 'D'], '四个席位都要有');
+  assert.deepEqual(Object.keys(first.value).sort(), ['A', 'B', 'C', 'D'], '身价也要四席');
+  for (const p of ['A', 'B', 'C', 'D'] as const) {
+    assert.equal(first.sides[p]?.length, 5, `${p} 那行要是五个数`);
+    assert.ok((first.sides[p]?.[0] ?? 0) > 0, `${p} 开局得有兵`);
+  }
+
+  // 活跃数：把 A 的一个兵标成"动过"，下一帧就该记到 1。
+  // 这条断言是钉 resetUnitsFor 的时机——如果哪天把重置挪到"自己回合结束"，
+  // 采样时标记已经清干净了，这个数会一律变成 0，而界面上一切正常。
+  const u = s.units.find((x) => x.owner === 'A' && s.unitTypes[x.type]?.category !== 'building');
+  assert.ok(u);
+  u.moved = true;
+  s.turn = 2;
+  sampleTurn(s, tl);
+  const second = tl.samples[1];
+  assert.ok(second);
+  assert.equal(second.active.A, 1, '动过的那个兵要被数进来');
+  assert.equal(second.active.B, 0, '没动过的阵营是 0，不是 undefined');
+});
+
+test('伤害归因：打出去的血记在出手的兵种上，挨打记在对方兵种上', () => {
+  const s = fresh();
+  const tl = newTimeline(1);
+  noteDeaths(tl, s); // 基线
+
+  const atk = s.units.find((x) => x.owner === 'A' && x.type && s.unitTypes[x.type]?.category !== 'building');
+  const vic = s.units.find((x) => x.owner === 'B' && s.unitTypes[x.type]?.category === 'combat');
+  assert.ok(atk && vic, '两边都得有兵才打得起');
+
+  // 别把血打到 0 以下：那会被 clamp 成 1，实际掉的血就不是 30 了
+  const hit = Math.min(30, Math.max(1, vic.hp - 1));
+  vic.hp -= hit;
+  noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+  assert.equal(tl.takenByType.B[vic.type], hit, '挨的那几十点记在被打的兵种上');
+  assert.equal(tl.dealtByType.A[atk.type], hit, '同一笔账要记在出手的兵种另一头');
+
+  // 打死：战损按兵种 +1，死前剩下的血也算挨过打
+  const cost = s.unitTypes[vic.type]?.cost ?? 0;
+  s.units = s.units.filter((x) => x.id !== vic.id);
+  noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+  assert.equal(tl.lostByType.B[vic.type], 1, '死掉的兵种要单独记一个');
+  assert.equal(tl.lost?.B.value, cost);
+  assert.equal(tl.takenByType.B[vic.type], hit + vic.hp, '残血也要算进承受，不能凭空消失');
+
+  // 建筑两头都不算：它的存在感在"城/塔"里，不在"兵有多脆"里
+  const wall = s.units.find((x) => x.owner === 'B' && s.unitTypes[x.type]?.category === 'building');
+  if (wall) {
+    noteDeaths(tl, s);
+    s.units = s.units.filter((x) => x.id !== wall.id);
+    noteDeaths(tl, s, { type: 'ATTACK', unitId: atk.id });
+    assert.equal(tl.lostByType.B[wall.type], undefined, '拆掉的建筑不算兵力战损');
+    assert.equal(tl.lost?.B.count, 1, '兵死了 1 个，建筑不进来');
+  }
+});
+
+test('sampleOf：v1 的帧和 v2 的帧用同一个函数读', () => {
+  const v2 = {
+    t: 3,
+    sides: { A: [1, 2, 3, 4, 5] as [number, number, number, number, number] },
+    value: {},
+    lost: {},
+    dead: {},
+    active: {},
+  };
+  assert.deepEqual(sampleOf(v2, 'A'), [1, 2, 3, 4, 5]);
+  assert.equal(sampleOf(v2, 'B'), undefined, 'v2 里没坐的席位就是没有');
+
+  const v1 = {
+    t: 3,
+    A: [6, 7, 8, 9, 10] as [number, number, number, number, number],
+    B: [1, 1, 1, 1, 1] as [number, number, number, number, number],
+    va: 100,
+    vb: 80,
+    lostA: 0,
+    lostB: 0,
+    deadA: 0,
+    deadB: 0,
+  };
+  assert.deepEqual(sampleOf(v1, 'A'), [6, 7, 8, 9, 10], '老数据的 A 行读得出来');
+  assert.deepEqual(sampleOf(v1, 'B'), [1, 1, 1, 1, 1], '老数据的 B 行读得出来');
+  assert.equal(sampleOf(v1, 'C'), undefined, 'v1 根本没有第三人，不能编一行出来');
+});
+
+test('局面快照：同一份局面拍两次完全一样，能当存档导回去', () => {
+  const s = fresh();
+  s.turn = 37;
+  s.log.push({ turn: 37, player: 'A', text: '建造了 步兵' });
+  const now = new Date('2026-11-02T10:20:30.000Z');
+  const a = buildSnapshot(s, { now, note: '  兵卡在桥头不动  ' });
+  const b = buildSnapshot(s, { now, note: '  兵卡在桥头不动  ' });
+
+  assert.deepEqual(a, b, '同样的输入必须拍出同一张快照（时间从外面传就是为了这个）');
+  assert.equal(a.kind, 'snapshot');
+  assert.equal(a.v, SNAPSHOT_VERSION);
+  assert.equal(a.build, BUILD_VERSION, '必须记下是哪个版本报的');
+  assert.equal(a.turns, 37);
+  assert.equal(a.playerCount, 2);
+  assert.equal(a.note, '兵卡在桥头不动', '首尾空白要去掉');
+  assert.ok(a.log.length >= 1);
+  assert.ok(a.log[a.log.length - 1]?.includes('建造了 步兵'), '日志要摊平成一行一条');
+  assert.ok(a.headline.includes('第 37 回合'), '摘要得能当工单标题');
+
+  // 一句话太长就截断：数据库那一列不是无底洞
+  const long = buildSnapshot(s, { now, note: 'x'.repeat(600) });
+  assert.equal(long.note.length, 500);
+
+  // 同一秒同一句话 → 同一个指纹（防止手滑连点传两条）
+  assert.equal(snapshotSignature(a), snapshotSignature(b));
+  const later = buildSnapshot(s, { now: new Date('2026-11-02T10:21:30.000Z'), note: a.note });
+  assert.notEqual(snapshotSignature(a), snapshotSignature(later), '换一分钟就是另一条');
+
+  // 文件名只留 ASCII：中文描述不能跑进文件名，下载到别的系统会乱码
+  const name = snapshotFileName(a);
+  assert.match(name, /^[A-Za-z0-9._-]+$/, `文件名必须全 ASCII，实际 ${name}`);
+  assert.ok(name.endsWith('.json'));
+
+  // 快照本身要能被「导入对局」吃回去——不然"复现"只是句空话
+  const back = importMatch(snapshotJson(a));
+  assert.ok(back, '快照应当是可以导入的');
+  assert.equal(back.turn, 37);
+  assert.equal(back.seed, s.seed);
+  assert.equal(back.units.length, s.units.length);
 });
 
 test('状态与技能注册表：本体表里的每一条都得有人接', () => {
@@ -11407,6 +11800,343 @@ test('海军：两个包都注册上，兵种全是水面单位', () => {
   const era6 = (modern!.units ?? []).filter((u) => u.era === 6);
   assert.ok(era6.length >= 5, `现代海军应该补出至少 5 条六代船，现在 ${era6.length} 条`);
   assert.ok(era6.some((u) => u.id === 'nv_carrier'), '六代船里必须有航母');
+});
+
+test('海军：铁甲舰回 E4、重巡补 E5，两代之间不再断层', () => {
+  // ── 年代 ──
+  // 铁甲舰（Gloire 1859 → 定远 1885）是工业时代的船。以前它在 E5，
+  // 于是 1860 年代的装甲舰和二战战列舰同场，而 E4 那一代只剩浅水重炮舰。
+  assert.equal(UNIT_TYPES.ironclad!.era, 4, '铁甲舰属于工业时代');
+  const heavy = nvDef('nv_heavy_cruiser');
+  assert.equal(heavy.era, 5, '重巡（条约型，1930s）补在第五时代');
+  assert.equal(heavy.domain, 'water');
+  assert.equal(heavy.short.length, 1, '图标只能一个字');
+  // 装巡 400 → 重巡 480 → 战巡 660 → 战列舰 780：中型舰那一档不再是个空档
+  const ladder = ['nv_cruiser', 'nv_heavy_cruiser', 'nv_battlecruiser', 'nv_battleship'].map((id) => nvDef(id));
+  for (let i = 1; i < ladder.length; i++) {
+    assert.ok(ladder[i]!.cost > ladder[i - 1]!.cost, `${ladder[i]!.name} 该比 ${ladder[i - 1]!.name} 贵`);
+  }
+
+  // ── 分工 ──
+  // 装巡带岸轰、重巡不带：能轰岸的中型舰有一条就够了，
+  // 再来一条会把浅水重炮舰和装巡一起挤掉。
+  assert.ok(nvDef('nv_cruiser').abilities.includes('nv-shore-bombard'));
+  assert.ok(!heavy.abilities.includes('nv-shore-bombard'), '重巡不抢岸轰的活');
+  assert.ok(heavy.abilities.includes('armor-pierce'), '8 吋炮要能破甲');
+  // 铁甲舰交出破城：同一个时代不需要两条攻城船，攻城归浅水重炮舰
+  assert.ok(!(UNIT_TYPES.ironclad!.abilities ?? []).includes('siege-master'));
+  assert.ok(UNIT_TYPES.ironclad!.abilities.includes('armor-pierce'), '铁甲舰仍然是破甲船');
+
+  // ── 和同代那条重炮舰不互相压死 ──
+  const monitor = nvDef('nv_monitor');
+  assert.ok(UNIT_TYPES.ironclad!.cost < monitor.cost, '铁甲舰更便宜');
+  assert.ok(UNIT_TYPES.ironclad!.move > monitor.move, '铁甲舰更快（远洋 vs 近岸浮炮台）');
+  assert.ok(UNIT_TYPES.ironclad!.atk < monitor.atk, '但炮更小');
+  assert.ok(UNIT_TYPES.ironclad!.vision > monitor.vision, '视野也正常，不靠岸上的人给眼睛');
+  assert.ok(monitor.abilities.includes('nv-shore-bombard'), '攻城仍然归浅水重炮舰');
+
+  // ── 价值带（naval-packs 顶上那条 V/造价 口径）──
+  const V = (u: Record<string, number>) =>
+    u.atk + 0.45 * u.maxHp + 5 * u.armor + 3 * u.range + 2.5 * u.move + 1.5 * u.vision + 4 * (u.splash ?? 0);
+  const ratio = (u: Record<string, number>) => V(u) / u.cost;
+  const ic = ratio(UNIT_TYPES.ironclad as unknown as Record<string, number>);
+  assert.ok(ic > 0.48 && ic < 0.56, `铁甲舰的性价比 ${ic.toFixed(2)} 跑出 E4 的带子（0.50~0.54）`);
+  const hc = ratio(heavy as unknown as Record<string, number>);
+  assert.ok(hc > 0.40 && hc < 0.50, `重巡的性价比 ${hc.toFixed(2)} 跑出 E5 的带子（0.38~0.52）`);
+});
+
+test('海军：补进来的十四条船各就各位（年代、价位、分工）', () => {
+  // id / 时代 / 造价 / 攻击。数值钉在这里是故意的：这一批船是按"每代缺什么"
+  // 补的，一旦有人随手改价，分工会立刻塌（比如鱼雷艇涨到 250 就没人拿它当消耗品了）。
+  const want: Array<[string, number, number, number]> = [
+    ['nv_galley', 2, 110, 18],
+    ['nv_treasure_ship', 2, 180, 14],
+    ['nv_turtle_ship', 3, 245, 34],
+    ['nv_sailing_frigate', 3, 175, 30],
+    ['nv_torpedo_boat', 4, 150, 38],
+    ['nv_minesweeper', 4, 220, 22],
+    ['nv_minelayer', 4, 240, 8],
+    ['nv_light_cruiser', 5, 430, 58],
+    ['nv_fleet_sub', 5, 420, 78],
+    ['nv_landing_ship', 5, 210, 5],
+    ['nv_fleet_carrier', 5, 950, 22],
+    ['nv_ssk', 6, 520, 74],
+    ['nv_lcs', 6, 520, 56],
+    ['nv_usv', 6, 240, 26],
+  ];
+  for (const [id, era, cost, atk] of want) {
+    const u = nvDef(id);
+    assert.ok(u, `缺 ${id}`);
+    assert.equal(u.era, era, `${u.name} 的时代`);
+    assert.equal(u.cost, cost, `${u.name} 的造价`);
+    assert.equal(u.atk, atk, `${u.name} 的攻击`);
+    assert.equal(u.domain, 'water', `${u.name} 应该只能待在水里`);
+    assert.equal(u.short.length, 1, `${u.name} 的图标只能一个字`);
+  }
+
+  // ── 每一代都得有"下水价"：能打的船里最便宜那条不能超过这条线 ──
+  // 没有这一条，海战就变成"攒到三百金才配下海"，前二十回合水上什么都没有。
+  const ceiling: Record<number, number> = { 2: 130, 3: 190, 4: 170, 5: 400, 6: 280 };
+  for (const era of [2, 3, 4, 5, 6]) {
+    // "能打的"门槛按 12 点攻算：E2 那几条帆船本来就只有 14~19 攻，
+    // 拿 20 去筛会把整个中世滤空。纯运输船（攻 5~6）仍然排除在外。
+    const fighters = allWater.filter((u) => u.era === era && u.atk >= 12);
+    assert.ok(fighters.length > 0, `E${era} 一条能打的船都没有`);
+    const cheapest = Math.min(...fighters.map((u) => u.cost));
+    assert.ok(
+      cheapest <= ceiling[era]!,
+      `E${era} 最便宜能打的船是 ${cheapest} 金，超过 ${ceiling[era]} 就没法在开局下海了`,
+    );
+  }
+});
+
+test('海军：舰队航母是 2×2、三机位；同代终于有潜艇可给潜母带', () => {
+  const carrier = nvDef('nv_fleet_carrier');
+  assert.equal(carrier.footprint, 2, '舰队航母是大型单位，占 2×2');
+  assert.equal(carrier.carry.deck.max, 3, '三机位（轻母 2、核动力航母 4）');
+  assert.equal(carrier.carry.deck.launchRange, 2);
+  // 甲板大小要成阶梯：轻母 2 < 舰队航母 3 < 核动力航母 4
+  assert.ok(nvDef('nv_light_carrier').carry.deck.max < carrier.carry.deck.max);
+  assert.ok(nvDef('nv_carrier').carry.deck.max > carrier.carry.deck.max);
+
+  // 潜母只奶潜艇。E5 原本一条潜艇都没有，"带子舰的母舰"是个空转的光环。
+  const tenders = allWater.filter((u) => (u.abilities ?? []).includes('nv-sub-tender'));
+  assert.ok(tenders.length > 0, '潜母还要在');
+  for (const t of tenders) {
+    const sameEraSubs = allWater.filter(
+      (u) => u.era === t.era && (u.abilities ?? []).includes('nv-submerge'),
+    );
+    assert.ok(
+      sameEraSubs.length > 0,
+      `${t.name} 在 E${t.era}，可这一代一条潜艇都没有——光环没东西可照`,
+    );
+  }
+});
+
+console.log('\n格子上留东西（Mark）');
+
+test('留痕：布雷舰每回合在自己旁边布一枚水雷，布到 6 枚就停', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const ship = place(s, 'A', 'nv_minelayer', 5, 5);
+
+  s.current = 'B'; // 结束 B 的回合 → A 的回合开始，触发布雷
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const first = marksOf(r.state);
+  assert.equal(first.length, 1, '自己回合开始应该布下一枚');
+  const mine = first[0]!;
+  assert.equal(mine.kind, 'nv-mine');
+  assert.equal(mine.owner, 'A');
+  assert.equal(
+    Math.abs(mine.x - ship.x) + Math.abs(mine.y - ship.y) <= 2 &&
+      (mine.x !== ship.x || mine.y !== ship.y),
+    true,
+    '雷要布在自己两格以内的水面上（不是船底下）',
+  );
+  assert.equal(mine.charges, 1, '一枚雷只炸一次');
+
+  // 连走十来个回合：上限 6 枚，不能无限铺
+  let cur = r.state;
+  for (let i = 0; i < 10; i++) {
+    cur.current = 'B';
+    const x = applyAction(cur, { type: 'END_TURN' });
+    assert.ok(x.ok, x.ok ? '' : x.reason);
+    cur = x.state;
+  }
+  assert.equal(marksOf(cur).length, 6, `上限应该是 6 枚，实际 ${marksOf(cur).length}`);
+  // 雷不占格、不当单位：棋盘上的兵还是一个
+  assert.equal(cur.units.length, 1, '水雷不是单位，不该出现在 units 里');
+});
+
+test('留痕：敌舰踩上去才炸（炸完就没了），自己的船踩不到自己的雷', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  // 两枚雷：一枚给自己人试、一枚给敌人踩（免得两边的船抢同一格）
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 5, y: 5, charges: 1, hidden: true });
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 9, y: 5, charges: 1, hidden: true });
+
+  // 自己人先走一遍：不该炸
+  const own = place(s, 'A', 'gunboat', 4, 5);
+  s.current = 'A';
+  const r1 = applyAction(s, { type: 'MOVE', unitId: own.id, x: 5, y: 5 });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  assert.equal(r1.state.units.find((u) => u.id === own.id)!.hp, own.hp, '自己的雷不炸自己');
+  assert.equal(marksOf(r1.state).length, 2, '没被踩响，雷还在');
+
+  // 敌人走上来：14 点、无视护甲，然后雷消失
+  const foe = place(r1.state, 'B', 'gunboat', 10, 5);
+  r1.state.current = 'B';
+  const r2 = applyAction(r1.state, { type: 'MOVE', unitId: foe.id, x: 9, y: 5 });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const hit = r2.state.units.find((u) => u.id === foe.id)!;
+  assert.equal(hit.hp, foe.hp - 14, '水雷 14 点，不走进攻公式');
+  assert.equal(marksOf(r2.state).length, 1, '踩掉的那一枚消失，另一枚还在');
+  // 战报双方都要有：挨炸的一方得知道自己是怎么没的
+  assert.ok(
+    r2.state.log.some((l) => l.player === 'B' && l.text.includes('水雷')),
+    '挨炸的一方要有战报',
+  );
+});
+
+test('留痕：敌方水雷默认看不见，贴到一格以内才"发现"', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  s.fog = true;
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const mine = addMark(s, { kind: 'nv-mine', owner: 'A', x: 10, y: 10, charges: 1, hidden: true });
+  place(s, 'B', 'gunboat', 2, 2);
+
+  assert.equal((playerView(s, 'B', false).state.marks ?? []).length, 0, '隔着半张图不该知道那儿有雷');
+  assert.equal(
+    (playerView(s, 'A', false).state.marks ?? []).length,
+    1,
+    '自己布的永远看得见，不然埋完就忘了',
+  );
+
+  // 摸到隔壁：发现
+  place(s, 'B', 'gunboat', 10, 9);
+  const near = playerView(s, 'B', false).state.marks ?? [];
+  assert.ok(near.some((m) => m.id === mine.id), '贴到一格以内就该看见');
+  // 无雾/观战视角全都能看见
+  assert.equal((playerView(s, 'B', true).state.marks ?? []).length, 1);
+});
+
+test('留痕引擎：回合开始的种类按次数自己减，减完就消失', () => {
+  // 这条不测水雷，测的是引擎那一层：`charges` 的增减不该由每个种类自己管。
+  registerMarkKind({
+    id: 'test-ember',
+    name: '余烬',
+    summary: '测试用：每个回合开始烧一下，烧两次就熄',
+    hidden: false,
+    onTurnStart: (c) => {
+      c.api.log(c.mark.owner, '余烬烧了一下');
+    },
+  });
+  const s = fresh();
+  s.units = [];
+  addMark(s, { kind: 'test-ember', owner: 'A', x: 3, y: 3, charges: 2 });
+
+  s.current = 'B';
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+  assert.equal(marksOf(r1.state)[0]?.charges, 1, '响过一次还剩一次');
+
+  r1.state.current = 'B';
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  assert.equal(marksOf(r2.state).length, 0, '次数用完就该消失（别指望每个种类自己删）');
+});
+
+test('留痕：跟着存档走（导出/导入之后雷还在原来的格子上）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  s.units = [];
+  addMark(s, { kind: 'nv-mine', owner: 'A', x: 7, y: 9, charges: 1, hidden: true });
+  const back = importMatch(exportMatch(s));
+  assert.ok(back, '导出的存档应该能读回来');
+  const mine = marksOf(back!)[0];
+  assert.ok(mine, '雷要跟着存档走');
+  assert.equal(mine!.kind, 'nv-mine');
+  assert.equal(mine!.x, 7);
+  assert.equal(mine!.y, 9);
+  assert.equal(mine!.owner, 'A');
+});
+
+test('扫雷舰：回合开始清掉相邻的敌方水雷，自己的和远处的都不动', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 5, 5);
+  const near = addMark(s, { kind: 'nv-mine', owner: 'B', x: 6, y: 5, charges: 1, hidden: true });
+  const far = addMark(s, { kind: 'nv-mine', owner: 'B', x: 9, y: 5, charges: 1, hidden: true });
+  const own = addMark(s, { kind: 'nv-mine', owner: 'A', x: 4, y: 5, charges: 1, hidden: true });
+
+  s.current = 'B'; // 结束 B 的回合 → A 的回合开始 → 扫雷
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const ids = marksOf(r.state).map((m) => m.id);
+  assert.ok(!ids.includes(near.id), '贴身的敌方水雷应该被扫掉');
+  assert.ok(ids.includes(far.id), '三格外的雷不该被顺手扫掉');
+  assert.ok(ids.includes(own.id), '自己的雷留着挡路，不扫');
+  assert.ok(
+    r.state.log.some((l) => l.player === 'A' && l.text.includes('扫掉')),
+    '扫掉了要有战报',
+  );
+  assert.equal(r.state.units.find((u) => u.id === sweeper.id)!.hp, sweeper.hp, '扫雷不掉血');
+});
+
+test('扫雷舰：自己踩到水雷只受 4 点（它先切断雷索）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 4, 5);
+  addMark(s, { kind: 'nv-mine', owner: 'B', x: 5, y: 5, charges: 1, hidden: true });
+  s.current = 'A';
+  const r = applyAction(s, { type: 'MOVE', unitId: sweeper.id, x: 5, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === sweeper.id)!;
+  assert.equal(after.hp, sweeper.hp - 4, '扫雷舰踩雷只吃 4 点，不是 14 点');
+  assert.equal(marksOf(r.state).length, 0, '雷还是被引爆了');
+});
+
+test('反潜：扫雷舰两格内就能看见潜艇，普通船两格看不见；也不顺带照出刺客', () => {
+  const build = (watcher: string) => {
+    const s = fresh({ expansionIds: ['naval-fleet'] });
+    s.fog = true;
+    for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+    s.units = [];
+    place(s, 'A', watcher, 5, 5);
+    const sub = place(s, 'B', 'nv_submarine', 7, 5); // 距离 2
+    return { s, sub };
+  };
+
+  const normal = build('gunboat');
+  assert.equal(
+    playerView(normal.s, 'A', false).state.units.some((u) => u.id === normal.sub.id),
+    false,
+    '普通炮艇两格外看不见潜艇',
+  );
+  const asw = build('nv_minesweeper');
+  assert.equal(
+    playerView(asw.s, 'A', false).state.units.some((u) => u.id === asw.sub.id),
+    true,
+    '反潜舰两格外就该看见潜艇',
+  );
+
+  // 反潜只探潜艇：同一距离上藏起来的刺客不该被声纳照出来
+  const sneak = build('nv_minesweeper');
+  const assassin = place(sneak.s, 'B', 'militia', 7, 6);
+  assassin.heroBuff = { hidden: true };
+  assert.equal(
+    playerView(sneak.s, 'A', false).state.units.some((u) => u.id === assassin.id),
+    false,
+    '声纳探的是潜艇，不是树林里的刺客',
+  );
+});
+
+test('海战：反潜对潜航单位伤害翻倍', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'water');
+  s.units = [];
+  const sweeper = place(s, 'A', 'nv_minesweeper', 5, 5);
+  const sub = place(s, 'B', 'nv_submarine', 5, 6);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: sweeper.id, targetId: sub.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  // 对照：同一条船打一条同样护甲的普通船，伤害不该翻倍
+  const s2 = fresh({ expansionIds: ['naval-fleet'] });
+  for (let y = 0; y < s2.h; y++) for (let x = 0; x < s2.w; x++) putTerrain(s2, x, y, 'water');
+  s2.units = [];
+  const sweeper2 = place(s2, 'A', 'nv_minesweeper', 5, 5);
+  const boat = place(s2, 'B', 'gunboat', 5, 6);
+  s2.current = 'A';
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: sweeper2.id, targetId: boat.id });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const dmgSub = sub.hp - (r.state.units.find((u) => u.id === sub.id)?.hp ?? 0);
+  const dmgBoat = boat.hp - (r2.state.units.find((u) => u.id === boat.id)?.hp ?? 0);
+  assert.ok(dmgSub > dmgBoat, `打潜艇（${dmgSub}）应该比打普通船（${dmgBoat}）更狠`);
 });
 
 test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改动的锚点）', () => {
@@ -12631,6 +13361,659 @@ test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
   assert.ok(pickId, 'AI 应该能给出一个选人');
   assert.ok(s.draft!.pool.includes(pickId!), 'AI 的选人必须在池子里');
   assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
+});
+
+/* ===========================================================================
+ * 五项修复（2026-11-01）：自爆 / 满员造空军 / 雾里的桥 / 飞行过深水 / 钻井平台
+ * ======================================================================== */
+
+test('自爆：打不到空中的东西，地面照吃不误', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 4, expansionIds: ['air-corps'] },
+    5151,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.cities = [];
+  grantAbility(s, 'militia', 'kamikaze');
+
+  const bomb = place(s, 'B', 'militia', 5, 5);
+  bomb.hp = 1;
+  // 同一格上站一对：地面一个、空中一个。自爆只该动地面那个。
+  // 注意顺序——先摆到两格上再合并，`place` 会清掉同一格上的旧单位。
+  const ground = place(s, 'B', 'archer', 6, 5);
+  ground.hp = 100;
+  const flyer = place(s, 'B', 'af_balloon', 6, 6);
+  flyer.hp = 100;
+  flyer.x = 6;
+  flyer.y = 5;
+  const killer = place(s, 'A', 'militia', 5, 4);
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.equal(after(bomb.id), 0, '1 血的民兵应该被打开自爆');
+  const blast = Math.max(1, Math.round(s.unitTypes['militia']!.atk / 2));
+  assert.equal(after(ground.id), 100 - blast, `同一格的陆军该吃 ${blast} 点`);
+  assert.equal(after(flyer.id), 100, '悬在上面的气球一点血都不该掉');
+});
+
+test('城市：地面位站满时，空军照样能起飞', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5252,
+  );
+  s.fog = false;
+  s.units = [];
+  const city = citiesOf(s, 'A')[0]!;
+  // 城内每一格都塞一个地面单位 —— 也就是玩家说的"人口满了"
+  for (const t of cityTiles(city)) place(s, 'A', 'militia', t.x, t.y);
+  assert.equal(
+    recruitSpawnCells(s, city.id, undefined, 'militia').length,
+    0,
+    '地面位已经一个不剩，陆军确实造不出来',
+  );
+  assert.ok(
+    recruitSpawnCells(s, city.id, undefined, 'af_balloon').length > 0,
+    '空军应该还能找到落脚的位置（悬在地面单位上方）',
+  );
+
+  s.current = 'A';
+  s.players.A.gold = 5000;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'af_balloon' });
+  assert.ok(r.ok, r.ok ? '' : `满员时造空军被拒：${r.reason}`);
+  const born = r.state.units.filter((u) => u.type === 'af_balloon' && u.owner === 'A');
+  assert.equal(born.length, 1, '应该真的多出一架');
+  // 新兵和城里的步兵叠在同一格：这是空中层的意义，不是 bug
+  assert.ok(
+    cityTiles(city).some((t) => t.x === born[0]!.x && t.y === born[0]!.y),
+    '新飞机应该出现在城内',
+  );
+
+  // 反过来也要成立：四架飞机悬在城上空，不该占掉地面位置
+  const s2 = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5253,
+  );
+  s2.fog = false;
+  s2.units = [];
+  const city2 = citiesOf(s2, 'A')[0]!;
+  for (const t of cityTiles(city2)) place(s2, 'A', 'af_balloon', t.x, t.y);
+  assert.ok(
+    recruitSpawnCells(s2, city2.id, undefined, 'militia').length > 0,
+    '天上停满了，地上的位置还是空的',
+  );
+});
+
+test('迷雾：对手架在视野外的桥，看不见就是看不见', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 5353);
+  s.fog = true;
+  s.units = [];
+  // 找一个 A 此刻绝对看不见的空格：城市的视野也算数，不能随手挑角落
+  const vis = visibleTilesOf(s, 'A');
+  let spot: { x: number; y: number } | null = null;
+  for (let y = 0; y < s.h && !spot; y++) {
+    for (let x = 0; x + 1 < s.w; x++) {
+      const t = s.tiles[idx(s, x, y)]!;
+      if (t.cityId || vis.has(idx(s, x, y))) continue;
+      spot = { x, y };
+      break;
+    }
+  }
+  assert.ok(spot, '总得有一格看不见');
+  putTerrain(s, spot!.x, spot!.y, 'water');
+  s.tiles[idx(s, spot!.x, spot!.y)]!.terrain = 'bridge';
+  place(s, 'B', 'bridge', spot!.x, spot!.y);
+
+  const i = idx(s, spot!.x, spot!.y);
+  assert.equal(
+    playerView(s, 'A').state.tiles[i]!.terrain,
+    'water',
+    '自己这边看不见的敌桥，应该退回水面',
+  );
+  // 自己修的桥自己一直知道
+  assert.equal(
+    playerView(s, 'B').state.tiles[i]!.terrain,
+    'bridge',
+    '自己架的桥对自己不该隐身',
+  );
+  // 把眼线摆到旁边就该看见了
+  place(s, 'A', 'militia', spot.x + 1, spot.y);
+  refreshMemory(s);
+  assert.equal(
+    playerView(s, 'A').state.tiles[i]!.terrain,
+    'bridge',
+    '看得见的时候桥要照实画',
+  );
+
+  // 地图自带的路桥（下面没有桥单位）不受影响
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 5354);
+  s2.fog = true;
+  s2.units = [];
+  const j = idx(s2, 1, 14);
+  s2.tiles[j]!.terrain = 'bridge';
+  assert.equal(playerView(s2, 'A').state.tiles[j]!.terrain, 'bridge', '地形桥不该被藏起来');
+});
+
+test('飞行：掠空的单位可以飞到深水上', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
+    5454,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  putTerrain(s, 6, 5, 'deep');
+  const plane = place(s, 'A', 'af_balloon', 5, 5);
+  // 气球慢，换成能飞得动的侦察机/战斗机
+  plane.type = 'af_scout';
+  plane.moved = false;
+  plane.acted = false;
+  const reach = reachableTiles(s, plane);
+  assert.ok(reach.has(idx(s, 6, 5)), '深水对天上的东西和普通水面没有区别');
+  // 陆军照旧过不去：这条修复只放行飞行
+  const walker = place(s, 'B', 'militia', 5, 6);
+  putTerrain(s, 6, 6, 'deep');
+  // 先把 (5,6) 还原成平地以外的东西会干扰，这里只看深水那一格
+  assert.ok(!reachableTiles(s, walker).has(idx(s, 6, 6)), '步兵不能走进深水');
+});
+
+test('钻井平台：是经济建筑，由建筑队在海面上修', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    5555,
+  );
+  s.fog = false;
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  const def = s.unitTypes['nv_oil_platform']!;
+  assert.equal(def.category, 'building', '它是一座平台，不是一艘船');
+  assert.equal(def.domain, 'water');
+  assert.ok((def.incomeByTerrain?.deep ?? 0) > 0, '收入还挂在深水上');
+
+  // 产兵点不再生产它（建筑只能盖）
+  const city = citiesOf(s, 'A')[0]!;
+  s.current = 'A';
+  s.players.A.gold = 9000;
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'nv_oil_platform' });
+  assert.equal(r.ok, false, '建筑不该从城里凭空刷出来');
+
+  // 工程兵会修，而且够得着离岸几格的深水
+  const eng = s.unitTypes['ct_sapper']!;
+  assert.ok(eng.builds?.includes('nv_oil_platform'), '工程兵要会修平台');
+  const builder = place(s, 'A', 'ct_sapper', 4, 8);
+  putTerrain(s, 9, 8, 'deep');
+  assert.equal(
+    buildSiteError(s, def, builder, 9, 8),
+    null,
+    `离岸 5 格的深水应该能修（buildRange ${def.buildRange}）`,
+  );
+  putTerrain(s, 15, 8, 'deep');
+  assert.ok(buildSiteError(s, def, builder, 15, 8), '太远的地方仍然不算数');
+  putTerrain(s, 5, 8, 'mountain');
+  assert.ok(buildSiteError(s, def, builder, 5, 8), '山上修不了平台');
+
+  // 「城郭」会把经济建筑的金币折成粮/材，但海上平台不在城市补给链上，不该被折
+  const s3 = createMatch(
+    { ...DEFAULT_CONFIG, size: 16, startEra: 6, expansionIds: ['city-works', 'pack-contemporary', 'naval-modern'] },
+    5556,
+  );
+  s3.fog = false;
+  s3.units = [];
+  for (let y = 0; y < s3.h; y++) for (let x = 0; x < s3.w; x++) putTerrain(s3, x, y, 'plain');
+  putTerrain(s3, 8, 8, 'deep');
+  const plat = place(s3, 'A', 'nv_oil_platform', 8, 8);
+  const y3 = unitYield(s3, plat);
+  assert.ok((y3.gold ?? 0) >= 50, `城郭不该把平台的收入折走（实际 ${JSON.stringify(y3)}）`);
+  assert.equal(y3.material ?? 0, 0, '海上平台不产建材');
+});
+
+test('死亡枕藉：砸不到空中，2×2 按身体算，够不着的不会挨打', () => {
+  const s = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 16,
+      startEra: 5,
+      expansionIds: ['scorched-earth', 'city-works', 'air-corps'],
+    },
+    6161,
+  );
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  // 军营占 2×2：(6,6)-(7,7)。锚点在左上角——这正是老代码算错的地方
+  const victim = place(s, 'B', 'camp', 6, 6);
+  victim.hp = 1;
+  const left = place(s, 'A', 'militia', 5, 6);
+  const right = place(s, 'A', 'militia', 8, 6);
+  const down = place(s, 'A', 'militia', 6, 8);
+  const up = place(s, 'A', 'militia', 7, 5);
+  // 距离 2：谁都够不着它
+  const far = place(s, 'A', 'militia', 10, 6);
+  // 悬在建筑体内的一架飞机：它离得最近，但飞在空中，砸不到
+  const hover = place(s, 'A', 'af_balloon', 7, 6);
+  const archer = place(s, 'A', 'archer', 5, 7);
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: archer.id, targetId: victim.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  const blast = Math.max(1, Math.round(s.unitTypes['camp']!.maxHp * 0.2));
+  assert.equal(after(victim.id), 0, '1 血的军营应该倒下');
+
+  // 贴着 2×2 身体的四个方向都该吃到（老代码只认锚点右侧/下侧，那几个方向全漏）
+  assert.equal(after(left.id), 28 - blast, '左边贴着身体的要吃到');
+  assert.equal(after(right.id), 28 - blast, '右边贴着身体的要吃到');
+  assert.equal(after(down.id), 28 - blast, '下边贴着身体的要吃到');
+  assert.equal(after(up.id), 28 - blast, '上边贴着身体的要吃到');
+  // 阵亡波及不分敌我：站得近的自己人也吃
+  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - blast, '凑太近的自己人也吃');
+  // 够不着 / 打不到的
+  assert.equal(after(far.id), s.unitTypes['militia']!.maxHp, '隔着两格的完全不该挨打');
+  assert.equal(after(hover.id), s.unitTypes['af_balloon']!.maxHp, '空中单位砸不到');
+});
+
+test('死亡枕藉：1×1 的亡语仍然只是四邻', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra: 3, expansionIds: ['scorched-earth'] }, 6162);
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  const victim = place(s, 'B', 'militia', 5, 5);
+  victim.hp = 1;
+  const adj = place(s, 'A', 'militia', 6, 5);
+  const diag = place(s, 'A', 'militia', 6, 4);
+  const killer = place(s, 'A', 'archer', 5, 6);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: victim.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  const blast = Math.max(1, Math.round(s.unitTypes['militia']!.maxHp * 0.2));
+  assert.equal(after(adj.id), 28 - blast, '正对着的一格要吃到');
+  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - blast, '另一边正对着的也要吃到');
+  assert.equal(after(diag.id), s.unitTypes['militia']!.maxHp, '斜角不算相邻');
+});
+
+test('战报：挨打的一方也能看到自己为什么掉血', () => {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5 }, 7171);
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+
+  // 火炮：射程 5、溅射 2 —— 一发能影响到离它 7 格的人
+  const gun = place(s, 'A', 'artillery', 2, 2);
+  const hit = place(s, 'B', 'militia', 7, 2); // 正好在射程上
+  const splash = place(s, 'B', 'militia', 9, 2); // 主目标旁边 2 格，被溅射
+  const far = place(s, 'B', 'militia', 11, 2); // 更远，够不着
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: hit.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.find((u) => u.id === far.id)?.hp, 28, '够不着的不该掉血');
+
+  const mine = r.state.log.filter((l) => l.player === 'A').map((l) => l.text);
+  const theirs = r.state.log.filter((l) => l.player === 'B').map((l) => l.text);
+  assert.ok(mine.some((t) => t.includes('火炮') && t.includes('攻击')), '出手方有自己的战报');
+  // 关键：防守方也必须有一条。以前这条只发给出手的人，
+  // 挨打的人看到的就是"血量掉了、战报里什么都没有"
+  const notice = theirs.find((t) => t.includes('伤害'));
+  assert.ok(notice, `防守方要能看到自己被谁打了，实际：${JSON.stringify(theirs)}`);
+  assert.ok(notice!.includes('火炮'), '要写出是什么打过来的');
+  assert.ok(notice!.includes('溅射'), '被溅射到的人也要写清楚');
+
+  // 隐匿中的袭击者不给名字：否则"是谁打的我"这条信息把隐匿本身废掉了
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5 }, 7172);
+  s2.fog = true;
+  s2.units = [];
+  s2.cities = [];
+  for (let y = 0; y < s2.h; y++) for (let x = 0; x < s2.w; x++) putTerrain(s2, x, y, 'plain');
+  // 要隔开：隐匿只在"不贴脸"时成立，贴身是被看见的
+  const assassin = place(s2, 'A', 'artillery', 2, 2);
+  assassin.heroBuff = { hidden: true };
+  const prey = place(s2, 'B', 'militia', 7, 2);
+  s2.current = 'A';
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: assassin.id, targetId: prey.id });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  const seen = r2.state.log.filter((l) => l.player === 'B').map((l) => l.text).join(' ');
+  assert.ok(seen.includes('视野外的一击'), `隐匿单位出手不该报名字，实际：${seen}`);
+  assert.ok(!seen.includes('火炮 打在'), '不该出现具体兵种名');
+});
+
+/* ===========================================================================
+ * 三/四人对局
+ *
+ * 这一组盯的是"多出来的席位真的被照顾到了"，不是"能不能跑起来"：
+ *   · 每家**只有一座城**（两人局是两座）——这是模式的定义，不是巧合；
+ *   · 行动权按座位环转，出局的座位会被跳过；
+ *   · 认输只是这一家退出，不是整局结束；
+ *   · AI / 选卡 / 固定地图在多方局一律不进场（它们都是按两边写的）。
+ * ========================================================================= */
+
+console.log('\n三/四人对局');
+
+test('三人局：三个席位，每家一座城，AI 不进多方局', () => {
+  const s = freshMulti(3);
+  assert.deepEqual(seatsOf(s), ['A', 'B', 'C'], '三个席位按 A/B/C 排');
+  assert.equal(s.config.playerCount, 3, '人数必须活进 config，否则席位会退回两个');
+  for (const p of seatsOf(s)) {
+    assert.equal(citiesOf(s, p).length, 1, `${p} 应该正好一座城`);
+    assert.ok(unitsOf(s, p).length > 0, `${p} 开局得有兵`);
+  }
+  assert.equal(s.cities.length, 3, '棋盘上一共三座城');
+  // AI 的两个开关是按"两边"写的，多方局里必须一直是关的
+  assert.equal(s.config.aiOpponent, false);
+  assert.equal(s.config.aiAlly, false);
+});
+
+test('四人局：四个席位，四座城，开局对等', () => {
+  const s = freshMulti(4);
+  assert.deepEqual(seatsOf(s), ['A', 'B', 'C', 'D']);
+  assert.equal(s.cities.length, 4);
+  const golds = seatsOf(s).map((p) => s.players[p].gold);
+  const arms = seatsOf(s).map((p) => unitsOf(s, p).length);
+  for (const p of seatsOf(s)) assert.equal(citiesOf(s, p).length, 1, `${p} 应该正好一座城`);
+  // 先手补偿会让 A 的金币多一点，所以只比后三家；兵力四家必须一样多
+  assert.equal(new Set(arms).size, 1, `四家开局兵力该一样，实际 ${arms.join('/')}`);
+  assert.equal(new Set(golds.slice(1)).size, 1, `后三家金币该一样，实际 ${golds.join('/')}`);
+  assert.ok(golds[0]! >= golds[1]!, '先手只会多给、不会少给');
+});
+
+test('三人四人不认固定地图：固定地图只有两个城位，硬套会有一家没城', () => {
+  const map = BUILTIN_MAPS[0];
+  assert.ok(map, '要有一张内置图才谈得上这条');
+  const s = freshMulti(4, { fixedMap: map.id });
+  assert.equal(s.cities.length, 4, '四家局仍然要生成四座城，而不是套那张两城位的图');
+  for (const p of seatsOf(s)) assert.equal(citiesOf(s, p).length, 1);
+  // 两人局还是照样用固定地图（不作为反例，只确认这条改动没有波及它）
+  const two = fresh({ fixedMap: map.id });
+  assert.equal(two.cities.length, 4, '两人局：每家两座城，一共四座');
+});
+
+test('行动权按座位环转，出局的座位被跳过', () => {
+  const s = freshMulti(4);
+  assert.equal(s.current, 'A');
+  assert.deepEqual(aliveSeats(s), ['A', 'B', 'C', 'D']);
+  assert.equal(nextSeat(s, 'A'), 'B');
+  assert.equal(nextSeat(s, 'D'), 'A', '最后一家走完回到第一家');
+
+  // 记一笔"B 已经退出了"，轮到 A 之后就该直接跳到 C
+  s.out = ['B'];
+  assert.equal(nextSeat(s, 'A'), 'C');
+  assert.equal(nextSeat(s, 'C'), 'D');
+  assert.deepEqual(aliveSeats(s), ['A', 'C', 'D']);
+  assert.equal(isEliminated(s, 'B'), true);
+  assert.equal(hasQuit(s, 'B'), true);
+});
+
+test('四人局走完一圈：A→B→C→D→A，行动序号跟着涨四次', () => {
+  let s = freshMulti(4);
+  const seen: PlayerId[] = [];
+  for (let i = 0; i < 4; i++) {
+    assert.equal(s.current, PLAYER_ORDER[i], `第 ${i + 1} 手该轮到 ${PLAYER_ORDER[i]}`);
+    seen.push(s.current);
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    s = r.state;
+  }
+  assert.deepEqual(seen, ['A', 'B', 'C', 'D']);
+  assert.equal(s.current, 'A', '一圈走完回到第一家');
+  // `turn` 数的是**行动次数**，不是"每家各走过几次"：两人局里两者差一倍，
+  // 四人局里差四倍。血战阈值（BLOOD_TURN = 50）读的也是它，
+  // 所以四人局到血战大约是 12 轮、两人局是 25 轮——这条口径记在这里，
+  // 别哪天有人误以为"四人局的第 50 回合"还是二十多轮。
+  assert.equal(s.turn, 5, '四次行动之后序号是 5');
+});
+
+test('三人局认输：只退出这一家，剩下两家继续打', () => {
+  const s = freshMulti(3);
+  s.current = 'B';
+  const r = applyAction(s, { type: 'SURRENDER' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state;
+  assert.equal(after.winner, null, '还剩两家，这局没结束');
+  assert.deepEqual(after.out, ['B']);
+  assert.equal(unitsOf(after, 'B').length, 0, '退了的人不能留一群打不还手的靶子');
+  // 城**留在原地**（地形必须还是 city，别人打下来就是战利品），
+  // 只是这一家已经不在活着的席位里了——判负、轮转、顶栏都按席位算
+  assert.equal(isEliminated(after, 'B'), true, '退出的席位算已出局');
+  assert.deepEqual(aliveSeats(after), ['A', 'C'], '活着的只剩两家');
+  assert.equal(after.current, 'C', '行动权要交给下一位，不能停在已退出的席位上');
+});
+
+test('四人局只剩一家：那一家才算赢', () => {
+  const s = freshMulti(4);
+  // B、C 都退出，D 还在：这一局还没完
+  s.out = ['B', 'C'];
+  s.units = s.units.filter((u) => u.owner !== 'B' && u.owner !== 'C');
+  s.cities = s.cities.filter((c) => c.owner !== 'B' && c.owner !== 'C');
+  s.current = 'A';
+  const mid = applyAction(s, { type: 'END_TURN' });
+  assert.ok(mid.ok, mid.ok ? '' : mid.reason);
+  assert.equal(mid.state.winner, null, 'A 和 D 都还在，不能判胜');
+
+  // D 也退出：只剩 A
+  mid.state.out = ['B', 'C', 'D'];
+  mid.state.units = mid.state.units.filter((u) => u.owner !== 'D');
+  mid.state.cities = mid.state.cities.filter((c) => c.owner !== 'D');
+  mid.state.current = 'A';
+  const done = applyAction(mid.state, { type: 'END_TURN' });
+  assert.ok(done.ok, done.ok ? '' : done.reason);
+  assert.equal(done.state.winner, 'A', '只剩一家就该结束，赢的是最后活着的那家');
+});
+
+test('两人局不受影响：认输仍然直接定胜负', () => {
+  const s = fresh();
+  s.current = 'B';
+  const r = applyAction(s, { type: 'SURRENDER' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.winner, 'A', '两人局认输就是对面赢，和以前一样');
+  assert.equal(r.state.out, undefined, '两人局不该有"退出的席位"这种东西');
+});
+
+test('战报带上人数：两人局 2、四人局 4，两侧阵容都要齐', () => {
+  const two = buildMatchReport(fresh());
+  assert.equal(two.playerCount, 2);
+  assert.equal(two.sides.length, 2);
+
+  const four = buildMatchReport(freshMulti(4));
+  assert.equal(four.playerCount, 4);
+  assert.equal(four.sides.length, 4, '四家局的报告要有四条阵容，少一条就没法按家看数据');
+  assert.deepEqual(four.sides.map((x) => x.side), ['A', 'B', 'C', 'D']);
+  for (const side of four.sides) {
+    assert.equal(side.cities, 1, `${side.side} 应该报出一座城`);
+    assert.ok(side.hp > 0, `${side.side} 的终局血量要算进来`);
+  }
+});
+
+test('四人图：逐格镜像对称（左右、上下、旋转都对得上）', () => {
+  for (const seed of [4242, 7, 99]) {
+    const L = generateMultiLayout(16, seed, ['militia'], { players: 4 });
+    assert.equal(L.rows.length, 16);
+    let bad = 0;
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const ch = L.rows[y]![x];
+        // 左右 / 上下 / 中心对称三者同时成立 = 旋转 90° 之后整张图重合
+        if (ch !== L.rows[y]![15 - x] || ch !== L.rows[15 - y]![x]) bad += 1;
+      }
+    }
+    assert.equal(bad, 0, `seed ${seed}：四家图必须严格对称，实际有 ${bad} 格对不上`);
+    // 四个城位各占一角，且互不相邻
+    const spots = [L.citiesA[0], L.citiesB[0], L.citiesC?.[0], L.citiesD?.[0]];
+    assert.ok(spots.every(Boolean), `seed ${seed}：四个席位都要有城位`);
+    for (let i = 0; i < 4; i++) {
+      for (let j = i + 1; j < 4; j++) {
+        const a = spots[i]!;
+        const b = spots[j]!;
+        const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+        assert.ok(d >= 6, `seed ${seed}：${i} 和 ${j} 的城挨太近了（${d} 格）`);
+      }
+    }
+  }
+});
+
+test('三人图：三家分到的地形数量基本一样', () => {
+  for (const seed of [12346, 999, 42]) {
+    const L = generateMultiLayout(16, seed, ['militia'], { players: 3 });
+    const anchors = [L.citiesA[0]!, L.citiesB[0]!, L.citiesC![0]!];
+    const near = (x: number, y: number) => {
+      let best = 0;
+      let bd = Infinity;
+      anchors.forEach((a, i) => {
+        const d = Math.abs(x - a.x) + Math.abs(y - a.y);
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      });
+      return best;
+    };
+    const tally = [0, 0, 0];
+    L.rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        const ch = row[x];
+        // 只数地形：平原 / 城郊不算，那是留白
+        if (ch === '.' || ch === undefined) continue;
+        tally[near(x, y)]! += 1;
+      }
+    });
+    const spread = Math.max(...tally) - Math.min(...tally);
+    assert.ok(
+      spread <= 6,
+      `seed ${seed}：三家的地形数量差得太多（${tally.join('/')}）——` +
+        '这就是"我这边的山比他多"的来源，不能只靠运气',
+    );
+    // 三家不能挤在一侧
+    const xs = anchors.map((a) => a.x);
+    assert.ok(Math.max(...xs) - Math.min(...xs) >= 8, `seed ${seed}：三座城要拉开，实际 x=${xs.join('/')}`);
+  }
+});
+
+test('三人四人图：各家陆路相通，不会被水隔成几个小局', () => {
+  // 水对陆军是不通的。中间那圈湖、随机长出来的水团只要连成一条线，
+  // 就会把某一家关在自己的角里——那不是"难打"，是根本打不起来。
+  const reachable = (L: { w: number; h: number; rows: string[] }, from: { x: number; y: number }): Set<number> => {
+    const w = L.w;
+    const h = L.h;
+    const ok = (x: number, y: number) => passable(terrainFromChar(L.rows[y]![x]!));
+    const seen = new Set<number>([from.y * w + from.x]);
+    const stack = [from];
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const x = p.x + dx;
+        const y = p.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const k = y * w + x;
+        if (seen.has(k) || !ok(x, y)) continue;
+        seen.add(k);
+        stack.push({ x, y });
+      }
+    }
+    return seen;
+  };
+
+  for (const size of [12, 16, 20]) {
+    for (const players of [3, 4] as const) {
+      for (const seed of [1000, 1037, 2072]) {
+        const L = generateMultiLayout(size, seed, ['militia'], { players });
+        const spots = [L.citiesA[0], L.citiesB[0], L.citiesC?.[0], L.citiesD?.[0]].filter(
+          (p): p is { x: number; y: number } => !!p,
+        );
+        const seen = reachable(L, spots[0]!);
+        for (const s of spots) {
+          assert.ok(
+            seen.has(s.y * L.w + s.x),
+            `${size}×${size} seed ${seed} 的 ${players} 人图：(${s.x},${s.y}) 那家被水隔开了`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test('血战按人数顺延：四人局第 60 次行动还没开打，两人局早就开了', () => {
+  // `turn` 数的是行动次数，两人局 50 次 ≈ 每家 25 轮；四人局一圈 4 次行动，
+  // 直接沿用 50 会提前到第 12 轮。所以刻度按人数等比放大。
+  assert.equal(bloodTurnOf(freshMulti(2)), BLOOD_TURN, '两人局一个数都不能变');
+  assert.equal(bloodTurnOf(freshMulti(3)), 75);
+  assert.equal(bloodTurnOf(freshMulti(4)), 100);
+
+  const four = freshMulti(4, { expansionIds: ['bloodbath'] });
+  four.turn = 60;
+  const city4 = citiesOf(four, 'A')[0]!;
+  assert.equal(
+    upgradeCostOf(four, city4),
+    ERAS[1].upgradeCost,
+    '四人局第 60 次行动还在开局，升级照现价（没提前打折）',
+  );
+  assert.equal(
+    movePower(four, unitsOf(four, 'A')[0]!),
+    utype(four, unitsOf(four, 'A')[0]!.type).move,
+    '机动也还没提速',
+  );
+
+  const two = fresh({ expansionIds: ['bloodbath'] });
+  two.turn = 60;
+  const city2 = citiesOf(two, 'A')[0]!;
+  assert.equal(upgradeCostOf(two, city2), LEGACY_UPGRADE_COST[1], '两人局第 60 次行动已经在血战里了');
+});
+
+test('多人局的顺序、名单、金币都不认识"对方"这个概念', () => {
+  const s = freshMulti(3);
+  assert.deepEqual(others(s, 'A'), ['B', 'C'], '除了我，其余几家都是别人');
+  assert.deepEqual(others(s, 'C'), ['A', 'B']);
+  // 未坐的 D 不该被当成"一个还有兵的玩家"
+  assert.equal(s.players.D.gold, 0, '没坐人的席位不该有开局金币');
+  assert.equal(unitsOf(s, 'D').length, 0);
+});
+
+console.log('\n兵种池：谁能进场');
+
+test('勾了扩展，它带的兵默认进场（不用一个个去勾）', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'] });
+  assert.ok(s.unitTypes.nv_galley, '「海战」勾上，桨帆船就该在兵表里');
+  assert.ok(s.config.enabledUnits.includes('nv_galley'), '写回 config 的名单里也要有它');
+});
+
+test('关掉的扩展兵种真的不进场，其它船照旧', () => {
+  // 这条是这次改动的核心：以前扩展兵是"无条件并入池子"的，面板上关不掉。
+  const s = fresh({ expansionIds: ['naval-fleet'], disabledUnits: ['nv_galley'] });
+  assert.equal(s.unitTypes.nv_galley, undefined, '关掉的桨帆船不该进兵表');
+  assert.equal(s.config.enabledUnits.includes('nv_galley'), false, '写回的名单里也不该有它');
+  assert.ok(s.unitTypes.nv_carrack, '同一包里的其它船不该被牵连');
+  assert.deepEqual(s.config.disabledUnits, ['nv_galley'], '这一笔要活进 config，下一局才记得住');
+});
+
+test('关掉的是一个不存在的 id：不报错，也不影响别人', () => {
+  const s = fresh({ expansionIds: ['naval-fleet'], disabledUnits: ['no-such-ship'] });
+  assert.ok(s.unitTypes.nv_galley, '写错的 id 不该顺手把同包其它船带走');
+  assert.deepEqual(s.config.disabledUnits, [], '不存在的兵种不留进名录');
+});
+
+test('全关光了也不给一个空池：退回本体兵种', () => {
+  // 面板上有"至少留一个"的关，但配置也会从存档、分享链接、联机房间进来，
+  // 那种路径不经过面板。空池子的局连产线都起不来，只能退回本体。
+  const everything = [
+    ...Object.keys(UNIT_TYPES),
+    ...Object.keys(createMatch({ ...DEFAULT_CONFIG, expansionIds: ['naval-fleet'] }, 7).unitTypes),
+  ];
+  const s = fresh({ expansionIds: ['naval-fleet'], enabledUnits: [], disabledUnits: everything });
+  assert.ok(s.config.enabledUnits.length > 0, '不该是空池');
+  for (const id of s.config.enabledUnits) {
+    assert.ok(UNIT_TYPES[id], `${id} 应该是本体兵种`);
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

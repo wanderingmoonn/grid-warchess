@@ -1,12 +1,22 @@
 /**
- * 开局设置面板。
+ * 开始界面。
  *
- * 这是给"每次开局想换个玩法"准备的：棋盘多大、开哪些扩展、用哪些兵种。
+ * 以前这里只有一页"新对局设置"，所有东西往下摞：规则、时代、兵种、扩展……
+ * 再加上后来的固定地图，一条长卷里既装"这一局怎么打"，也装"这局打哪张图"，
+ * 两件事混在一起。现在拆成左侧两页：
+ *
+ *   · 战役——一局怎么打（对手、时代、尺寸、兵种、扩展）；
+ *   · 地图——在哪张图上打（内置图、玩家上传的图、上传入口）。
+ *
+ * 地图那一页是**选**和**传**放在一起的：玩家在这里挑图，作者也在这里交图，
+ * 传完的那张立刻出现在同一个画廊里、并且自动被选中——不用再跑去别的面板。
+ *
  * 面板只负责收集选择，真正的校验和构建交给 createMatch。
  */
 
-import { ERAS, eraDef, isPseudoUnit } from '../core/config.ts';
+import { ERAS, UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
 import {
   EXPANSIONS,
   availableExpansions,
@@ -16,13 +26,26 @@ import {
 } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
 import {
+  MAP_MAX_BYTES,
+  MAP_MAX_SIZE,
+  MAP_MIN_SIZE,
+  TERRAIN_LEGEND,
+  allFixedMaps,
+  fixedMapById,
+  parseMapFile,
+  registerUserMaps,
+  type FixedMap,
+} from '../core/fixed-maps.ts';
+import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
+import { mapThumbSvg } from './map-thumb.ts';
+import {
   BOARD_SIZES,
   MAX_BOARD_SIZE,
   MIN_BOARD_SIZE,
   clampBoardSize,
   randomSeed,
 } from '../core/setup.ts';
-import type { MatchConfig } from '../core/types.ts';
+import type { MatchConfig, UnitTypeDef } from '../core/types.ts';
 
 export interface SetupResult {
   config: MatchConfig;
@@ -59,6 +82,11 @@ function loadRecordPref(): boolean | null {
   }
 }
 
+/** 转义进 HTML 的东西：地图名来自玩家上传，不能直接插进 DOM */
+function esc(raw: string): string {
+  return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function saveRecordPref(on: boolean): void {
   try {
     localStorage.setItem(RECORD_PREF_KEY, on ? '1' : '0');
@@ -75,10 +103,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiOpponent: initial.aiOpponent,
       aiAlly: initial.aiAlly,
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
+      // 人数跟着上一局走：连着开三人局是常态
+      playerCount: initial.playerCount ?? 2,
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
+      // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
+      fixedMap: initial.fixedMap,
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
+      // 关掉的兵种是"上一局的选择"的一部分：不抄过来的话，每次开新局
+      // 兵种池都会回到"扩展兵全开"的默认状态，那个开关等于一次性的。
+      disabledUnits: [...(initial.disabledUnits ?? [])],
       commanderMode: initial.commanderMode === true,
       godMode: initial.godMode === true,
       draftMode: initial.draftMode === true,
@@ -114,24 +149,100 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     mask.className = 'modal-mask';
 
     const close = (result: SetupResult | null) => {
+      alive = false;
       mask.remove();
       resolve(result);
     };
 
-    const toggleUnit = (id: string) => {
-      // 新增：每次点击前先强制去重，保证 length 统计的准确性
-      config.enabledUnits = Array.from(new Set(config.enabledUnits));
-      if (config.enabledUnits.includes(id)) {
-        if (config.enabledUnits.length <= 1) return;
-        config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
-      } else {
-        config.enabledUnits.push(id);
+    /*
+     * ── 兵种池：一张"这一局能造什么"的全表 ──
+     *
+     * 名单有三路来源，合成一张表：
+     *   1. 本体兵种（UNIT_TYPES）——「勾选」由 enabledUnits 记，默认只开一部分；
+     *   2. 自定义兵种（本机编辑器里捏的）——默认就在池子里；
+     *   3. 已开扩展带来的兵种——同样默认就在池子里（勾了海军就该有那十几条船）。
+     *
+     * 后两路是"默认开"，所以它们的关闭状态必须另外记一笔（disabledUnits），
+     * 不能只靠"不在 enabledUnits 里"表达——那会把"玩家关掉了它"和
+     * "这一版还不认识这个 id"混成一件事，老存档读进来整支舰队都会消失。
+     *
+     * 这张表按扩展勾选缓存一份：面板一重绘就要用，两百多个兵种现算两遍不值得。
+     */
+    interface UnitPoolView {
+      key: string;
+      catalog: Record<string, UnitTypeDef>;
+      /** 默认就在池子里的那些（自定义 + 扩展兵） */
+      extras: Set<string>;
+      /** id → 出处（扩展名 / 自定义），写进 chip 的 title */
+      source: Map<string, string>;
+    }
+    let poolView: UnitPoolView | null = null;
+
+    const unitPool = (): UnitPoolView => {
+      const key = config.expansionIds.join('|');
+      if (poolView && poolView.key === key) return poolView;
+      const base = allAvailableUnits();
+      const fromPacks = expansionUnitsFor(config.expansionIds);
+      const catalog: Record<string, UnitTypeDef> = { ...base, ...fromPacks };
+      const extras = new Set(Object.keys(catalog).filter((id) => !UNIT_TYPES[id]));
+      const source = new Map<string, string>();
+      for (const e of EXPANSIONS) {
+        for (const u of e.units ?? []) if (fromPacks[u.id]) source.set(u.id, e.name);
+      }
+      for (const id of Object.keys(base)) if (!UNIT_TYPES[id]) source.set(id, '自定义');
+      poolView = { key, catalog, extras, source };
+      return poolView;
+    };
+
+    /** 这个兵种这一局开着吗。默认进场的那些看 disabledUnits，本体兵种看 enabledUnits */
+    const isUnitOn = (id: string): boolean => {
+      const { extras } = unitPool();
+      return extras.has(id)
+        ? !(config.disabledUnits ?? []).includes(id)
+        : config.enabledUnits.includes(id);
+    };
+
+    /** 开着的兵种总数（伪单位不算：那是攻城结算的壳） */
+    const onUnitCount = (): number =>
+      Object.keys(unitPool().catalog).filter((id) => !isPseudoUnit(id) && isUnitOn(id)).length;
+
+    const setUnitOn = (id: string, on: boolean): void => {
+      const { extras } = unitPool();
+      const isExtra = extras.has(id);
+      // 先把两张表里的记录都擦掉，下面只负责"在需要的地方补一笔"——
+      // 两条记录同时存在时，isUnitOn 读哪个都说不清。
+      config.enabledUnits = config.enabledUnits.filter((x) => x !== id);
+      config.disabledUnits = (config.disabledUnits ?? []).filter((x) => x !== id);
+      if (on) {
+        // 默认进场的那些，开回来＝把那笔"关掉"的记录擦掉就够了，
+        // 不必再塞进 enabledUnits：塞进去会在换扩展之后留下一串孤儿 id。
+        if (!isExtra) config.enabledUnits.push(id);
+      } else if (isExtra) {
+        config.disabledUnits.push(id);
       }
     };
+
+    /** 弹层开着的时候，两处"已选 N"要跟着就地更新，不用整块重绘 */
+    const paintPoolCount = (): void => {
+      const n = String(onUnitCount());
+      mask.querySelectorAll<HTMLElement>('[data-pool-count]').forEach((el) => {
+        el.textContent = n;
+      });
+    };
+
+    /*
+     * 兵种池弹层开没开。
+     *
+     * 以前这一大块是直接铺在战役页最下面的：两百多个 chip 把整页撑成一长卷，
+     * 想改一下"要不要带船"得先滚过时代、尺寸、扩展。收进一层弹层之后，
+     * 战役页只剩一行摘要，而全表照旧在——只是要按一下才出来。
+     */
+    let poolOpen = false;
 
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
       const d = el.dataset;
+      if (d.tab) return `[data-tab="${d.tab}"]`;
       if (d.unit) return `[data-unit="${d.unit}"]`;
       if (d.era) return `[data-era="${d.era}"]`;
       if (d.size) return `[data-size="${d.size}"]`;
@@ -144,13 +255,89 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       return null;
     };
 
+    /** 左侧两页：战役（怎么打）与地图（在哪打）。默认停在战役 */
+    let tab: 'battle' | 'maps' = 'battle';
+    /** 换页的时候把滚动条拨回顶部：留在上一页的位置会让人以为页面没换 */
+    let resetScroll = false;
+
+    /** 待上传的地图文件（本地解析完、还没发出去） */
+    let mapDraft: FixedMap | null = null;
+    let mapNote = '';
+    let mapBad = false;
+
+    /*
+     * 固定地图：内置四张 + 云端地图库里别人上传的那些。
+     *
+     * 三件事按这个顺序发生，界面上不会闪：
+     *   1. 同步登记**本机缓存**里上一次拉到的地图——断网也能立刻选；
+     *   2. 异步拉云端，回来了再重绘一次（`alive` 保证关闭面板后不再碰 DOM）；
+     *   3. 失败只写一行提示，不挡开局：地图拉不到，随机地形照样能打。
+     */
+    registerUserMaps(cachedMaps());
+    let cloudNote = '';
+    let alive = true;
+
+    /** 拉一次地图库。地图页上的「刷新」也走这里，所以单独拎出来 */
+    const loadCloudMaps = (): void => {
+      void listSharedMaps().then((res) => {
+        if (!alive) return;
+        if (res.maps.length > 0) registerUserMaps(res.maps);
+        cloudNote = res.ok ? '' : (res.reason ?? '');
+        paint();
+      });
+    };
+
+    /**
+     * 读一个地图文件：体积 → 解析 → 预览。
+     *
+     * 顺序不能换：先看体积，省得把一个 10MB 的文件整个读进内存再拒；
+     * 解析失败就把错误留在原地（带行列号），不清空也不弹窗——
+     * 玩家要的是"第 3 行第 4 列那个字符不认识"，不是"上传失败"。
+     */
+    const readMapFile = (file: File): void => {
+      if (file.size > MAP_MAX_BYTES) {
+        mapDraft = null;
+        mapBad = true;
+        mapNote = `文件太大（${Math.round(file.size / 1024)}KB，上限 ${MAP_MAX_BYTES / 1024}KB）`;
+        paint();
+        return;
+      }
+      void file.text().then((text) => {
+        if (!alive) return;
+        const parsed = parseMapFile(text);
+        if (parsed.ok) {
+          mapDraft = parsed.map;
+          mapBad = false;
+          mapNote = '';
+        } else {
+          mapDraft = null;
+          mapBad = true;
+          // 最多三条：再多就不是"提示"，是把整个错误日志糊在界面上
+          mapNote = parsed.errors.slice(0, 3).join('；');
+        }
+        paint();
+      });
+    };
+
+    /** 一张地图卡片：缩略图 + 名字 + 尺寸/来源 */
+    const mapCard = (id: string, name: string, size: string, thumb: string, active: boolean, extra = '') =>
+      `<button type="button" class="map-card ${active ? 'active' : ''}" data-map="${id}" title="${name}">
+         <span class="map-card-thumb">${thumb}</span>
+         <b>${name}</b>
+         <i>${size}${extra}</i>
+       </button>`;
+
     const paint = () => {
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
-      // 兵种池在面板最下面，点一个兵种就"弹回顶部"就是这么来的——
-      // 所以先把两者记下来，画完再搬回去。
+      // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
-      const prevScrollTop = prevBody?.scrollTop ?? 0;
-      const prevScrollLeft = prevBody?.scrollLeft ?? 0;
+      // 换页时把滚动条拨回顶部：留在上一页的位置会让人以为"点错了、没反应"
+      const prevScrollTop = resetScroll ? 0 : (prevBody?.scrollTop ?? 0);
+      const prevScrollLeft = resetScroll ? 0 : (prevBody?.scrollLeft ?? 0);
+      // 兵种池弹层有自己的滚动区，而且它盖在上面——不单独记一份的话，
+      // 在弹层里点「全选」这种会重绘的操作会把两百多个兵种弹回第一行。
+      const prevPoolScroll = mask.querySelector<HTMLElement>('.pool-body')?.scrollTop ?? 0;
+      resetScroll = false;
       const prevFocusEl = document.activeElement;
       const prevFocus =
         prevFocusEl instanceof HTMLElement && mask.contains(prevFocusEl)
@@ -164,6 +351,28 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 城里一件六代兵都造不出来，还得自己猜为什么。
       //
       // 天花板每次重绘现算，所以勾上/取消那个包，按钮会当场增减，不用重启面板。
+      /*
+       * 人数：两家 / 三家 / 四家。
+       *
+       * 三家四家一律**全真人**（AI 的目标选择是"只有一个对手"写的，见 ai.ts），
+       * 所以选了三家/四家之后，下面那栏"对手"会整块收起——不留一个点了没反应的开关。
+       */
+      const playerCount = config.playerCount ?? 2;
+      const playerChips = [2, 3, 4]
+        .map(
+          (n) =>
+            `<button class="chip ${playerCount === n ? 'active' : ''}" data-players="${n}">${n} 人</button>`,
+        )
+        .join('');
+      const playerHint =
+        playerCount === 2 ? '红蓝对峙，敌我分明' : `${playerCount} 家各自为战，每家一座城`;
+      const playerNote =
+        playerCount === 2
+          ? '两人局可以带 AI：人机对战、双 AI 观战都行。'
+          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。每方开局恰好一座城，城丢了就出局。${
+              config.size < 16 ? '人多地小会摆不开，建议至少 16 × 16。' : ''
+            }`;
+
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
       const eraChips = eras.map(
@@ -187,6 +396,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         extraStyles > 0
           ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
           : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
+
+      /*
+       * 地图数据：地图那一页要用。
+       *
+       * 默认是「随机地形」——开始界面的默认值必须和"不选"一致，
+       * 否则每次开局都会被一张别人画好的图顶掉，玩家还得先学会怎么取消。
+       * 选中的卡片加 `active`，靠一条主色描边和随机那张区分开；
+       * 缩略图直接用同一份地形数据画，所见即所得。
+       */
+      const fixedMaps = allFixedMaps();
+      const pickedMapId = config.fixedMap?.id ?? '';
+      const thumbCity = Math.max(2, Math.min(3, Math.round(config.citySize ?? 2)));
+      const builtinCards = fixedMaps.filter((m) => m.source !== 'user');
+      const userCards = fixedMaps.filter((m) => m.source === 'user');
+      const mapHint = config.fixedMap
+        ? `已选「${esc(config.fixedMap.name)}」：这一局的地貌、对称、尺寸与种子都不生效`
+        : `随机地形每局不同。选一张固定地图就照着它打——联机两边、复盘重开都是同一张`;
 
       // 时代那一栏的提示要指出"还能往上开"：只写"从哪一级开始"的话，
       // 没勾过时代扩展的人根本不知道这游戏还有第六时代。
@@ -219,28 +445,51 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
       ).join('');
 
-      // 兵种按时代分组展示：一眼看出哪些是开局就有、哪些要升级城市才能造。
-      // 只列到天花板：第六代的兵在没开「现代战争」的局里永远不会出现在兵表上，
-      // 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
-      const catalog = allAvailableUnits();
-      const unitGroups = eras.map((era) => {
-        const units = Object.values(catalog).filter(
-          (u) => u.era === era.level && !isPseudoUnit(u.id),
-        );
-        if (units.length === 0) return '';
-        const chips = units
-          .map(
-            (u) =>
-              `<button class="chip ${config.enabledUnits.includes(u.id) ? 'active' : ''}" data-unit="${u.id}">
+      /*
+       * 兵种池：按时代分组，一眼看出哪些开局就有、哪些要升级城市才能造。
+       *
+       * 只列到天花板：第六代的兵在没开「现代战争」的局里永远不会出现在兵表上，
+       * 把它们摆在池子里只会让玩家勾一个点了没反应的选项。
+       *
+       * 组内先本体、后扩展（虚线框），各自按造价从小到大——玩家找"骑兵在哪"
+       * 时眼睛是顺着名录扫的，混在一起排就变成了随机顺序。
+       */
+      const { catalog, extras, source } = unitPool();
+      const allUnits = Object.values(catalog).filter((u) => !isPseudoUnit(u.id));
+      const unitGroups = eras
+        .map((era) => {
+          const units = allUnits
+            .filter((u) => u.era === era.level)
+            .sort(
+              (a, b) =>
+                Number(extras.has(a.id)) - Number(extras.has(b.id)) || a.cost - b.cost,
+            );
+          if (units.length === 0) return '';
+          const chips = units
+            .map((u) => {
+              const from = source.get(u.id);
+              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}`;
+              return `<button class="chip ${isUnitOn(u.id) ? 'active' : ''} ${
+                from ? 'is-extra' : ''
+              }" data-unit="${u.id}" title="${esc(title)}">
                  ${u.short} ${u.name}
-               </button>`,
-          )
-          .join('');
-        return `<div class="era-group">
-          <span class="era-tag">${era.name}</span>
-          <div class="chip-row">${chips}</div>
-        </div>`;
-      }).join('');
+               </button>`;
+            })
+            .join('');
+          return `<div class="era-group">
+            <span class="era-tag">${era.name}</span>
+            <div class="chip-row">${chips}</div>
+          </div>`;
+        })
+        .join('');
+
+      const poolTotal = allUnits.length;
+      const extraTotal = allUnits.filter((u) => extras.has(u.id)).length;
+      const onTotal = allUnits.filter((u) => isUnitOn(u.id)).length;
+      // 数字单独套一层，点开弹层里勾选时只改这一格，不重绘按钮
+      const poolHint = `已选 <span data-pool-count>${onTotal}</span> / ${poolTotal}${
+        extraTotal > 0 ? ` · 其中 ${extraTotal} 个来自扩展或自定义` : ''
+      }`;
 
       // 前置关系直接写在卡片上：一个"勾了却不生效"的开关比没有这个开关更糟
       const reqLine = (id: string): string => {
@@ -262,14 +511,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         </label>`,
       ).join('');
 
-      mask.innerHTML = `
-        <div class="modal">
-          <div class="modal-head">
-            <h2>新对局</h2>
-            <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>
-          </div>
-
-          <div class="modal-body">
+      /* ── 战役页：这一局怎么打 ── */
+      const battleView = `
             <section class="field">
               <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
@@ -290,9 +533,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
+              <div class="field-label">
+                人数 <span class="field-hint">${playerHint}</span>
+              </div>
+              <div class="chip-row">${playerChips}</div>
+              <div class="field-hint">${playerNote}</div>
+            </section>
+
+            <section class="field">
               <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
               ${
-                config.godMode
+                playerCount > 2
+                  ? `<div class="field-hint">${playerCount} 人局固定为「全真人」：可以本地热座轮流操作，也可以建房联机。AI 不进多方局。</div>`
+                  : config.godMode
                   ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
                   : `<div class="chip-row">
                 <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
@@ -329,8 +582,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               <div class="chip-row">
                 <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
-                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
-                <button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>
+                ${
+                  playerCount > 2
+                    ? ''
+                    : `<button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>`
+                }
+                ${
+                  playerCount > 2
+                    ? ''
+                    : `<button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
+                }
               </div>
               <div class="field-hint">${
                 config.godMode
@@ -343,10 +604,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">
                 选卡 <span class="field-hint">开局先禁用与选人，双方只用选到的兵</span>
               </div>
-              <div class="chip-row">
+              ${
+                playerCount > 2
+                  ? `<div class="field-hint">多人局暂不支持选卡：禁选是"双方互相看不见"设计的，三家四家一桌要改的是整套 BP 界面，不是加两行。这一局直接按下方勾选的兵种池开局。</div>`
+                  : `<div class="chip-row">
                 <button class="chip ${config.draftMode ? '' : 'active'}" data-draft-mode="off" title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
                 <button class="chip ${config.draftMode ? 'active' : ''}" data-draft-mode="on" title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
-              </div>
+              </div>`
+              }
               <div class="field-hint">${
                 config.draftMode
                   ? '开局先停在「等待开局」：那里可以建房、把邀请链接发给朋友，也可以直接本机开打；点「开始选卡」之后双方同时禁用（互相看不见），再按蛇形顺序轮流选人。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补；右上角可随时跳过或退出。'
@@ -400,9 +665,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                兵种池 <span class="field-hint">至少留一个；高时代兵种要城市升级后才能生产</span>
+                兵种池 <span class="field-hint">这一局能造什么，扩展兵种也在这里开关</span>
               </div>
-              ${unitGroups}
+              <button type="button" class="pool-open" data-act="unit-pool">
+                <span class="pool-open-text">
+                  <b>调整兵种池</b>
+                  <i>${poolHint}${config.draftMode ? ' · 本局开了选卡，名单由 BP 决定' : ''}</i>
+                </span>
+                <span class="pool-open-go">展开</span>
+              </button>
+              <div class="field-hint">至少留一个；高时代兵种要城市升级后才能生产。带「扩」的是扩展 / 自定义兵种，默认就开着。</div>
             </section>
 
             <section class="field">
@@ -417,13 +689,164 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <button class="btn btn-sm" data-act="reroll">换一张地图</button>
               </div>
               <div class="field-hint">同一个种子永远生成同一张地图，方便复盘和公平对战。</div>
+            </section>`;
+
+      /*
+       * 地图页：选图与传图是同一件事的两头。
+       *
+       * 之前"上传"藏在上帝模式侧栏里，而"选图"在开局面板里——同一条流水线的
+       * 两端被拆到两个互不相干的地方，玩家画完图得先想"我该去哪个面板"。
+       * 现在合成一页：上面挑，下面传，传完那张图直接出现在上面的画廊里并被选中。
+       */
+      const mapsView = `
+            ${
+              (config.playerCount ?? 2) > 2
+                ? `<section class="field">
+                     <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
+                     <div class="field-hint">多人局不用固定地图：一张手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。</div>
+                   </section>`
+                : `<section class="field">
+              <div class="field-label">
+                这一局的地图 <span class="field-hint">${mapHint}</span>
+              </div>
+              <div class="map-gallery">
+                <button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
+                  <span class="map-card-thumb is-random">随机</span>
+                  <b>随机地形</b>
+                  <i>按种子生成</i>
+                </button>
+                ${builtinCards
+                  .map((m) =>
+                    mapCard(m.id, esc(m.name), `${m.w}×${m.h}`, mapThumbSvg(m, thumbCity), m.id === pickedMapId),
+                  )
+                  .join('')}
+              </div>
+              <div class="field-hint">内置图是手摆的对称图，两边条件一样，不随机、不可改。选了固定地图，战役页里的地貌 / 对称 / 尺寸 / 种子都不再起作用。</div>
+            </section>`
+            }
+
+            <section class="field">
+              <div class="field-label">
+                玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
+                <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
+              </div>
+              ${
+                userCards.length > 0
+                  ? `<div class="map-gallery">${userCards
+                      .map((m) =>
+                        mapCard(
+                          m.id,
+                          esc(m.name),
+                          `${m.w}×${m.h}`,
+                          mapThumbSvg(m, thumbCity),
+                          m.id === pickedMapId,
+                          m.author ? ` · ${esc(m.author)}` : '',
+                        ),
+                      )
+                      .join('')}</div>`
+                  : `<div class="field-hint">还没有人传过。下面传一张上去，所有人都能在这里选到它。</div>`
+              }
+              ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
             </section>
+
+            <section class="field">
+              <div class="field-label">
+                上传地图 <span class="field-hint">传上去的图，所有玩家开局都能选到</span>
+              </div>
+              ${
+                mapDraft
+                  ? `<div class="map-draft">
+                       <span class="map-draft-thumb">${mapThumbSvg(mapDraft, thumbCity)}</span>
+                       <div class="map-draft-meta">
+                         <b>${esc(mapDraft.name)}</b>
+                         <span>${mapDraft.w} × ${mapDraft.h} · 城 ${mapDraft.citiesA.length} : ${mapDraft.citiesB.length}</span>
+                         <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
+                       </div>
+                       <div class="map-draft-act">
+                         <button class="btn btn-sm btn-primary" data-act="map-upload">上传到地图库</button>
+                         <button class="btn btn-sm" data-act="map-cancel">取消</button>
+                       </div>
+                     </div>`
+                  : `<div class="chip-row">
+                       <button class="btn btn-sm" data-act="map-file">选择地图文件…</button>
+                       <a class="btn btn-sm" href="maps/example-map.txt" download="example-map.txt">下载一个模板</a>
+                     </div>
+                     <div class="field-hint">
+                       支持 <code>.json</code> 或纯文本网格${TERRAIN_LEGEND}，用 <code>A</code>/<code>B</code> 标两边城的左上角。
+                       单文件 ≤ ${Math.round(MAP_MAX_BYTES / 1024)}KB，${MAP_MIN_SIZE}~${MAP_MAX_SIZE} 格见方。
+                       先在本地解析校验，不合格的文件不会发出去。
+                     </div>`
+              }
+              ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
+            </section>
+
+            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
+
+      const summary = `${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
+        (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
+      }${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
+
+      mask.innerHTML = `
+        <div class="modal start-panel">
+          <aside class="start-rail">
+            <div class="start-brand">
+              <b>时代与回旋镖</b>
+              <span>回合制战棋</span>
+            </div>
+            <nav class="start-nav">
+              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
+                <b>战役</b>
+                <span>规则 · 时代 · 兵种</span>
+              </button>
+              <button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
+                <b>地图</b>
+                <span>选图 · 上传</span>
+              </button>
+            </nav>
+            <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
+          </aside>
+
+          <div class="start-col">
+            <div class="modal-head">
+              ${
+                tab === 'battle'
+                  ? `<h2>战役</h2>
+                     <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
+                  : `<h2>地图</h2>
+                     <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
+              }
+            </div>
+
+            <div class="modal-body">${tab === 'battle' ? battleView : mapsView}</div>
+
+            <div class="modal-foot start-foot">
+              <div class="start-summary">${summary}</div>
+              <div class="start-actions">
+                <button class="btn" data-act="cancel">取消</button>
+                <button class="btn btn-primary" data-act="start">开始对局</button>
+              </div>
+            </div>
           </div>
 
-          <div class="modal-foot">
-            <button class="btn" data-act="cancel">取消</button>
-            <button class="btn btn-primary" data-act="start">开始对局</button>
-          </div>
+          ${
+            poolOpen
+              ? `<div class="pool-layer" role="dialog" aria-modal="true" aria-label="兵种池">
+                   <div class="pool-head">
+                     <div class="pool-head-text">
+                       <b>兵种池</b>
+                       <span>${poolHint} —— 关掉的兵这一局造不出来</span>
+                     </div>
+                     <button class="btn btn-sm btn-primary" data-act="unit-pool-close">完成</button>
+                   </div>
+                   <div class="pool-body">${unitGroups}</div>
+                   <div class="pool-foot">
+                     <button class="btn btn-sm" data-act="unit-pool-all">全选</button>
+                     <button class="btn btn-sm" data-act="unit-pool-base">只留本体</button>
+                     <span class="field-hint">带「扩」的是扩展 / 自定义兵种：勾了对应的包就自动在池子里，不想用才在这里关；虚线框＝这一局关掉了。</span>
+                   </div>
+                 </div>`
+              : ''
+          }
         </div>
       `;
 
@@ -433,6 +856,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         nextBody.scrollTop = prevScrollTop;
         nextBody.scrollLeft = prevScrollLeft;
       }
+      const nextPool = mask.querySelector<HTMLElement>('.pool-body');
+      if (nextPool) nextPool.scrollTop = prevPoolScroll;
       if (prevFocus) {
         mask.querySelector<HTMLElement>(prevFocus)?.focus({ preventScroll: true });
       }
@@ -442,7 +867,51 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const target = e.target as HTMLElement;
 
       if (target === mask) {
+        // 兵种池盖在面板上：这时候点外面是"关掉这一层"，而不是把整个开局
+        // 设置也一起关掉——两百多个兵种还没看完就被弹出去，得重来一遍。
+        if (poolOpen) {
+          poolOpen = false;
+          paint();
+          return;
+        }
         close(null);
+        return;
+      }
+
+      // 左侧导航：换页就是换一屏内容，滚动位置跟着归零
+      const tabBtn = target.closest<HTMLElement>('[data-tab]');
+      if (tabBtn?.dataset.tab) {
+        const next = tabBtn.dataset.tab === 'maps' ? 'maps' : 'battle';
+        if (next === tab) return;
+        tab = next;
+        resetScroll = true;
+        paint();
+        return;
+      }
+
+      // 人数：三家四家一律全真人，顺手把互斥的开关关掉——
+      // 留一个"开着但不生效"的开关，比没有这个开关更让人费解。
+      const playersBtn = target.closest<HTMLElement>('[data-players]');
+      if (playersBtn?.dataset.players) {
+        const n = Number(playersBtn.dataset.players);
+        config.playerCount = n === 3 ? 3 : n === 4 ? 4 : 2;
+        if (config.playerCount > 2) {
+          config.aiOpponent = false;
+          config.aiAlly = false;
+          config.commanderMode = false;
+          config.draftMode = false;
+          // 沙盒面板是按"两边"写的（摆给红方/摆给蓝方、交给 AI 同时操两边），
+          // 三家四家局里没有对应物，索性一起关掉
+          config.godMode = false;
+          // 城门只有两个：多人局用不了固定地图，清掉免得带着上一局的选择进场
+          config.fixedMap = undefined;
+          // 正好停在"这个时代的默认尺寸"上＝玩家还没自己挑过，就顺手放大到 16×16：
+          // 12×12 上四家各占一角，开局就走不动。玩家自己挑过的尺寸一律不动。
+          if (config.size === DEFAULT_SIZE_FOR_ERA(config.startEra)) {
+            config.size = Math.max(config.size, 16);
+          }
+        }
+        paint();
         return;
       }
 
@@ -540,6 +1009,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return;
       }
 
+      const mapBtn = target.closest<HTMLElement>('[data-map]');
+      if (mapBtn) {
+        // 空字符串＝"随机地形"：必须能取消，否则选了固定图就再也回不去了
+        const id = mapBtn.dataset.map ?? '';
+        const picked = id ? fixedMapById(id) : null;
+        config.fixedMap = picked ?? undefined;
+        // 尺寸跟着地图走：面板上那排尺寸按钮显示的是"这一局多大"，
+        // 选了 16×16 的图却还亮着 20×20，就是在说一句和事实相反的话。
+        if (picked) config.size = picked.w;
+        paint();
+        return;
+      }
+
       const symBtn = target.closest<HTMLElement>('[data-symmetry]');
       if (symBtn?.dataset.symmetry) {
         config.mapSymmetry = symBtn.dataset.symmetry as NonNullable<MatchConfig['mapSymmetry']>;
@@ -550,14 +1032,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const unitBtn = target.closest<HTMLElement>('[data-unit]');
       if (unitBtn?.dataset.unit) {
         const id = unitBtn.dataset.unit;
-        const before = config.enabledUnits.length;
-        toggleUnit(id);
-        // 只翻转这一颗 chip 的样式，不重绘整个面板。
-        // 兵种池在面板最底下，重绘会把滚动位置清零，点一下就像被弹回顶部；
-        // 而且全部重绘还会让 chip 闪一下。和上面扩展勾选是同一套做法。
-        if (config.enabledUnits.length !== before) {
-          unitBtn.classList.toggle('active', config.enabledUnits.includes(id));
-        }
+        const wasOn = isUnitOn(id);
+        // 至少留一个：一个兵都没有的池子开不了局，而"开局才发现造不了兵"
+        // 比"这一下点不动"难解释得多。弹层里就这么一下的静默拒绝。
+        if (wasOn && onUnitCount() <= 1) return;
+        setUnitOn(id, !wasOn);
+        // 只翻转这一颗 chip 的样式，不重绘整个弹层：
+        // 两百多个 chip 重绘会闪，滚动位置也得再搬一次。
+        unitBtn.classList.toggle('active', !wasOn);
+        paintPoolCount();
         return;
       }
 
@@ -578,6 +1061,75 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (act === 'reroll') {
         currentSeed = randomSeed();
         paint();
+      }
+
+      // ── 兵种池弹层：展开 / 收起 / 全选 / 只留本体 ──
+      if (act === 'unit-pool') {
+        poolOpen = true;
+        paint();
+        return;
+      }
+      if (act === 'unit-pool-close') {
+        poolOpen = false;
+        paint();
+        return;
+      }
+      if (act === 'unit-pool-all' || act === 'unit-pool-base') {
+        // 两颗都是"一次改一整套"，改完必须重绘——不像单点一颗那样能就地翻转。
+        // 「只留本体」不会把池子清空（本体兵种全部留下），所以过得了"至少留一个"。
+        const onlyBase = act === 'unit-pool-base';
+        const { catalog, extras } = unitPool();
+        for (const id of Object.keys(catalog)) {
+          if (isPseudoUnit(id)) continue;
+          setUnitOn(id, onlyBase ? !extras.has(id) : true);
+        }
+        paint();
+        return;
+      }
+
+      // ── 地图页：选文件 / 上传 / 取消 / 刷新 ──
+      if (act === 'map-file') {
+        mask.querySelector<HTMLInputElement>('[data-field="map-file"]')?.click();
+        return;
+      }
+      if (act === 'map-cancel') {
+        mapDraft = null;
+        mapNote = '';
+        paint();
+        return;
+      }
+      if (act === 'map-refresh') {
+        mapNote = '正在刷新地图库…';
+        mapBad = false;
+        paint();
+        loadCloudMaps();
+        return;
+      }
+      if (act === 'map-upload') {
+        if (!mapDraft) return;
+        const draft = mapDraft;
+        mapNote = '正在上传…';
+        mapBad = false;
+        paint();
+        void uploadSharedMap(draft).then((res) => {
+          if (!alive) return;
+          if (res.ok && res.map) {
+            const got = res.map;
+            // 登记进本机注册表，并**当场选中**：传完就该能直接用，
+            // 不该让人再去画廊里找一遍自己刚传的那张。
+            registerUserMaps([got]);
+            config.fixedMap = got;
+            config.size = got.w;
+            mapDraft = null;
+            mapNote = `已上传「${got.name}」，现在所有玩家都能在地图库里选到它（本局已选中）`;
+            mapBad = false;
+          } else {
+            mapNote = res.reason ?? '上传失败';
+            mapBad = true;
+          }
+          paint();
+        });
+        return;
       }
     });
 
@@ -602,6 +1154,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     });
     mask.addEventListener('change', (e) => {
       const input = e.target as HTMLInputElement;
+      if (input.dataset.field === 'map-file') {
+        const file = input.files?.[0];
+        // 先把 value 清掉：同一个文件改完再选一次，change 才会重新触发
+        input.value = '';
+        if (file) readMapFile(file);
+        return;
+      }
       if (input.dataset.field === 'size') {
         applySizeInput(input, true);
         return;
@@ -620,6 +1179,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const stylesBefore = mapStylesFor(config.expansionIds).length;
       // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「现代」这一格。
       const erasBefore = ERAS.filter((e) => e.level <= eraCeilingFor(config.expansionIds)).length;
+      // 兵种池同样是扩展的函数：这一包带的兵会多出来 / 少掉十几格。
+      const unitsBefore = Object.keys(unitPool().catalog).length;
       if (input.checked) {
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
         // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
@@ -634,6 +1195,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         }
       } else {
         config.expansionIds = config.expansionIds.filter((x) => x !== id);
+        // 这一包的兵从名单里消失了，那些"关掉"的记录也就没了意义——
+        // 留着的话，下次再把这一包勾回来，玩家会发现几条船还是关着的，
+        // 而他上次关它们可能已经是好几局以前的事。
+        const gone = new Set((expansionById(id)?.units ?? []).map((u) => u.id));
+        if (gone.size > 0) {
+          config.disabledUnits = (config.disabledUnits ?? []).filter((x) => !gone.has(x));
+        }
       }
       // 关掉「地形高差」之后，原来选中的高原/峡谷必须退回"随机"——
       // 不然会画出一张满地图台地、但规则里没有高度的图。
@@ -647,8 +1215,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const ceilingNow = eraCeilingFor(config.expansionIds);
       if (config.startEra > ceilingNow) config.startEra = ceilingNow;
       const erasAfter = ERAS.filter((e) => e.level <= ceilingNow).length;
-      // 选项数变了就重绘（地貌 chip 与时代按钮要增删）。其余情况只改边框，避免 checkbox 闪。
-      if (available.length !== stylesBefore || erasAfter !== erasBefore) {
+      // 选项数变了就重绘（地貌 chip、时代按钮、兵种池的格子都要增删）。
+      // 其余情况只改边框，避免 checkbox 闪。
+      if (
+        available.length !== stylesBefore ||
+        erasAfter !== erasBefore ||
+        Object.keys(unitPool().catalog).length !== unitsBefore
+      ) {
         paint();
         return;
       }
@@ -658,5 +1231,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     paint();
     document.body.appendChild(mask);
+    loadCloudMaps();
   });
 }

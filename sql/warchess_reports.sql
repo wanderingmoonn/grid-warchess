@@ -110,6 +110,19 @@ alter table public.warchess_reports add column if not exists campaign text;
 alter table public.warchess_reports add column if not exists consent text;
 alter table public.warchess_reports add column if not exists verdict text not null default 'unverified';
 
+-- 2026-11-02 补：多人局人数、构建版本、AI 庄家
+--
+-- 三列都在 payload 里也有一份，单独列出来只是为了能直接在 SQL 里分组：
+--   `select build, count(*), avg((winner='A')::int) from warchess_reports group by 1`
+-- 每次都要拆 jsonb 太慢，而且漏写 where 就会把老数据混进来。
+-- 老行这些列是 null，含义是"那天还没记这个"，不是 0 也不是空局。
+alter table public.warchess_reports add column if not exists player_count smallint;
+alter table public.warchess_reports add column if not exists build text;
+alter table public.warchess_reports add column if not exists ai_sides text[];
+
+create index if not exists warchess_reports_build_idx
+  on public.warchess_reports (build, created_at desc);
+
 -- 约束用 drop + add 保证可重复执行（add constraint if not exists 语法在 PG 里没有）
 alter table public.warchess_reports drop constraint if exists warchess_reports_payload_size;
 alter table public.warchess_reports add constraint warchess_reports_payload_size

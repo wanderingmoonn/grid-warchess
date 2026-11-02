@@ -21,8 +21,9 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { ACTION_LABEL, type MatchTimeline } from '../src/core/timeline.ts';
+import { ACTION_LABEL, type MatchTimeline, type SideSample } from '../src/core/timeline.ts';
 import type { MatchReport, ReportSide } from '../src/core/report.ts';
+import type { PlayerId } from '../src/core/types.ts';
 
 interface Row {
   id?: number;
@@ -131,15 +132,45 @@ const side = (r: Row, p: 'A' | 'B'): ReportSide | undefined =>
 const timelineOf = (r: Row): MatchTimeline | undefined => r.payload?.timeline;
 
 /**
- * 老版本客户端上传的帧里没有 lostA/lostB（战损是后补的字段）。
- * 这里放宽成可选，读的时候按"没有就是没有"处理，别拿 0 冒充。
+ * 帧的形状比 TS 里那个 `TurnSample` 松：库里同时躺着 v1 和 v2 两种数据，
+ * 而 v1 的字段在 v2 类型里根本不存在。所以这里全部按可选读，
+ * "没有就是没有"——别拿 0 冒充，否则中位数会被老数据拽偏。
+ *
+ * v1（2026-10-28 ~ 11-01）：A/B 两行 + va/vb + lostA/lostB + deadA/deadB
+ * v2（2026-11-02 起）：     sides/value/lost/dead 都是"席位 → 数字"的散表
  */
 interface LooseSample {
   t: number;
+  /** v1 */
+  va?: number;
+  vb?: number;
   lostA?: number;
   lostB?: number;
   deadA?: number;
   deadB?: number;
+  /** v2 */
+  value?: Partial<Record<PlayerId, number>>;
+  lost?: Partial<Record<PlayerId, number>>;
+  dead?: Partial<Record<PlayerId, number>>;
+  active?: Partial<Record<PlayerId, number>>;
+  sides?: Partial<Record<PlayerId, SideSample>>;
+}
+
+const sumMap = (m: Partial<Record<PlayerId, number>> | undefined): number =>
+  m ? Object.values(m).reduce((a, b) => a + (b ?? 0), 0) : 0;
+
+/** 一帧里"全场军队身价"。v1 的 va+vb 和 v2 的 value 求和是同一件事 */
+const frameValue = (x: LooseSample): number => (x.value ? sumMap(x.value) : (x.va ?? 0) + (x.vb ?? 0));
+
+/** 取某一席的累计战损：v2 读散表，v1 读那两列。undefined = 这帧没记 */
+function lostAt(x: LooseSample, p: 'A' | 'B'): number | undefined {
+  if (x.lost) return x.lost[p] ?? 0;
+  return p === 'A' ? x.lostA : x.lostB;
+}
+
+function deadAt(x: LooseSample, p: 'A' | 'B'): number {
+  if (x.dead) return x.dead[p] ?? 0;
+  return (p === 'A' ? x.deadA : x.deadB) ?? 0;
 }
 
 interface LossStat {
@@ -162,24 +193,29 @@ function lossOf(r: Row): LossStat | null {
   const tl = timelineOf(r);
   const samples = (tl?.samples ?? []) as unknown as LooseSample[];
   const last = samples[samples.length - 1];
-  if (!last || typeof last.lostA !== 'number' || typeof last.lostB !== 'number') return null;
+  if (!last) return null;
+  const lastA = lostAt(last, 'A');
+  const lastB = lostAt(last, 'B');
+  if (typeof lastA !== 'number' || typeof lastB !== 'number') return null;
 
   let crash: LossStat['crash'] = null;
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1];
     const cur = samples[i];
     if (!prev || !cur) continue;
-    const dA = (cur.lostA ?? 0) - (prev.lostA ?? 0);
-    const dB = (cur.lostB ?? 0) - (prev.lostB ?? 0);
+    const curA = lostAt(cur, 'A') ?? 0;
+    const curB = lostAt(cur, 'B') ?? 0;
+    const dA = curA - (lostAt(prev, 'A') ?? 0);
+    const dB = curB - (lostAt(prev, 'B') ?? 0);
     const pick = dA >= dB ? { side: 'A' as const, value: dA } : { side: 'B' as const, value: dB };
     if (pick.value > 0 && (!crash || pick.value > crash.value)) crash = { t: cur.t, side: pick.side, value: pick.value };
   }
 
   return {
-    lostA: last.lostA,
-    lostB: last.lostB,
-    deadA: last.deadA ?? 0,
-    deadB: last.deadB ?? 0,
+    lostA: lastA,
+    lostB: lastB,
+    deadA: deadAt(last, 'A'),
+    deadB: deadAt(last, 'B'),
     crash,
   };
 }
@@ -358,11 +394,12 @@ if (withTl.length > 0) {
     if (!tl) continue;
     const first = tl.samples[0];
     const last = tl.samples[tl.samples.length - 1];
-    if (first) openVa.push(first.va + first.vb);
-    if (last) endVa.push(last.va + last.vb);
+    if (first) openVa.push(frameValue(first as unknown as LooseSample));
+    if (last) endVa.push(frameValue(last as unknown as LooseSample));
     const winnerSide = r.winner === 'A' || r.winner === 'B' ? side(r, r.winner) : undefined;
     if (winnerSide) goldSpare.push(winnerSide.gold);
-    for (const p of ['A', 'B'] as const) {
+    // 遍历实际有记录的席位，不要钉死 A/B：四人局的 C/D 也一样有行动可看
+    for (const p of Object.keys(tl.acts ?? {}) as PlayerId[]) {
       for (const [k, n] of Object.entries(tl.acts[p] ?? {})) {
         if (k === 'END_TURN') continue;
         actMix.set(k, (actMix.get(k) ?? 0) + n);
@@ -423,6 +460,114 @@ if (withTl.length > 0) {
     say('> 这批摘要里没有战损字段（旧版客户端上传的），换新版打一局就能看到。');
     say();
   }
+
+  /*
+   * 逐兵种杀伤：v2 才有的三张表。
+   *
+   * 这一段的用处和上面的"总战损"不同：总量只说"这局打了多少"，说不了
+   * "哪个兵种一上场就死"。把 造/死/打出/承受 摆在同一行，偏强偏脆一眼能看出来——
+   * 造了 20 个活下来 2 个还打了 3 倍伤害，那就是偏强；反之就是白给。
+   */
+  const per = new Map<string, { made: number; lost: number; dealt: number; taken: number }>();
+  let v2Games = 0;
+  for (const r of withTl) {
+    const tl = timelineOf(r);
+    if (!tl?.dealtByType || !tl.takenByType || !tl.lostByType) continue;
+    v2Games += 1;
+    const bump = (k: 'made' | 'lost' | 'dealt' | 'taken', type: string, n: number): void => {
+      if (!Number.isFinite(n) || n <= 0) return;
+      const row = per.get(type) ?? { made: 0, lost: 0, dealt: 0, taken: 0 };
+      row[k] += n;
+      per.set(type, row);
+    };
+    for (const p of Object.keys(tl.acts ?? {}) as PlayerId[]) {
+      for (const [type, n] of Object.entries(tl.made?.[p] ?? {})) bump('made', type, n);
+      for (const [type, n] of Object.entries(tl.lostByType[p] ?? {})) bump('lost', type, n);
+      for (const [type, n] of Object.entries(tl.dealtByType[p] ?? {})) bump('dealt', type, n);
+      for (const [type, n] of Object.entries(tl.takenByType[p] ?? {})) bump('taken', type, n);
+    }
+  }
+  if (per.size > 0) {
+    say('## 逐兵种：造了多少、死了多少、打出去多少血');
+    say();
+    say(`（${v2Games} 局带 v2 摘要；表里只列造过或打过仗的兵种，按"打出的血"排序）`);
+    say();
+    say('| 兵种 | 造 | 死 | 存活率 | 打出伤害 | 承受伤害 | 杀/伤比 |');
+    say('|---|---|---|---|---|---|---|');
+    const rows2 = [...per.entries()]
+      .sort((a, b) => b[1].dealt - a[1].dealt)
+      .slice(0, 20);
+    for (const [type, v] of rows2) {
+      const alive = v.made > 0 ? v.made - v.lost : 0;
+      const keep = v.made > 0 ? pct(Math.max(0, alive), v.made) : '—';
+      const ratio = v.taken > 0 ? `${f1(v.dealt / v.taken)} : 1` : v.dealt > 0 ? '∞' : '—';
+      say(`| ${type} | ${v.made || '—'} | ${v.lost || '—'} | ${keep} | ${Math.round(v.dealt)} | ${Math.round(v.taken)} | ${ratio} |`);
+    }
+    say();
+    say('> 杀/伤比 = 这个兵种打出去的血 ÷ 它挨的血。低于 1 不代表弱：');
+    say('> 肉盾本来就是拿来挨的（它的价值在"别人没挨打"）。要连着看的还有存活率——');
+    say('> 造得多、死得快、还打不出伤害，那才是真的没用。');
+    say();
+  }
+
+  /*
+   * 闲置率：兵在场上，但这一回合没动也没出手。
+   *
+   * 这是"兵很多"这个数字看不出来的事：二十个兵只有三个在动，等于把一半金币
+   * 钉在原地。AI 和人都可能是这个毛病，只是原因不同（AI 是不知所措，
+   * 人是懒得点）。
+   *
+   * 坑：采样发生在"某一家结束回合"的那一刻，而 `moved/acted` 标记要到
+   * **下一家回合开始**才重置。于是同一帧里只有刚走完的那一家有标记，
+   * 其余席位一律是 0——那不是"闲置"，那是"还没轮到"。按两边平均，
+   * 两人局会凭空多出 50% 的假闲置，四人局更夸张。
+   *
+   * 所以这里每帧只认"唯一有标记的那一席"。代价是：真的一个兵都没动的那家
+   * 和"还没轮到"长得一模一样，判不出来，只能跳过。也就是说这个数是**下限**。
+   */
+  const idle: number[] = [];
+  let idleUnits = 0;
+  let idleFrames = 0;
+  let skippedFrames = 0;
+  for (const r of withTl) {
+    const tl = timelineOf(r);
+    if (!tl) continue;
+    for (const x of tl.samples as unknown as LooseSample[]) {
+      if (!x.active || !x.sides) continue;
+      let who: PlayerId | null = null;
+      let most = 0;
+      for (const p of ['A', 'B'] as const) {
+        const n = x.active[p] ?? 0;
+        if (n > most) {
+          most = n;
+          who = p;
+        }
+      }
+      if (!who) {
+        skippedFrames += 1;
+        continue;
+      }
+      const units = x.sides[who]?.[0] ?? 0;
+      if (units < 3) continue; // 只剩两三个兵的时候"没动"很正常，别拉低结论
+      idle.push(1 - Math.min(1, most / units));
+      idleUnits += units;
+      idleFrames += 1;
+    }
+  }
+  if (idle.length > 0) {
+    const m = median(idle);
+    say(
+      `闲置率中位 **${pct(m, 1)}**：刚走完回合的那一家，平均有这么多兵没动也没出手` +
+        `（${idleFrames} 帧 / ${idleUnits} 个兵·回合）。`,
+    );
+    say('> 口径说明：同一帧里只有"刚走完的那一家"标记是完整的，其余席位是"还没轮到"而不是闲置，');
+    say(
+      `> 所以每帧只算一席。一个兵都没动的那一帧和"还没轮到"判不出区别，只能跳过` +
+        `（这批跳了 ${skippedFrames} 帧）——换句话说这个数是**下限**，真实闲置只会更多。兵少于 3 个的时刻也不计。`,
+    );
+    say();
+  }
+
   const total = [...actMix.values()].reduce((a, b) => a + b, 0);
   if (total > 0) {
     say('行动构成：' + [...actMix.entries()]
@@ -468,11 +613,12 @@ if (bad.length > 0) {
 say('## 这套数据算不出什么（别硬算）');
 say();
 say('- **每百金杀伤**：要逐次伤害流水（谁打了谁、多少点），报告里没有。要这个用 `npm run balance` 跑模拟。');
-say('- **兵种级战损**（哪个兵种死得最惨）：摘要只记"掉了多少金"，不记掉的是哪个型号。');
-say('  想补这个字段，代价是每条死亡记录多带上 type id——体积和隐私面都会变大，先攒够样本再说。');
+say('  （v2 摘要里的"打出伤害"是同一回合内的汇总，能算强弱比值，但算不出单次交火。）');
+say('- **兵种级战损**：v2 起有了（`lostByType`），但只对 2026-11-02 之后打的局有效。');
+say('  早于那天的报告只记"这一方掉了多少金"，不记掉的是哪个型号——那段历史补不回来了。');
 say('- **单回合增量的精确值**：摘要按回合采样，同一回合内多次交战会并成一格，只能给下限。');
 say('- **兵种强弱**：终局阵容只说明"活到最后的有谁"，活下来的往往是赢家，因果是反的。');
-say('  真要评强弱，看 `timeline.made`（真实产出）加胜负分组，别单看阵容。');
+say('  真要评强弱，看 `timeline.made`（真实产出）配 `dealtByType/takenByType`，别单看阵容。');
 say('- **玩家水平**：没有账号体系，也没有对局时长与操作速度。');
 say();
 

@@ -22,6 +22,7 @@
 import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
+import { seatsOf } from './types.ts';
 import { isBioUnit } from './resources.ts';
 
 /**
@@ -336,6 +337,13 @@ export const CITY_WORKS: Expansion = {
       const ecoUnit = def.category === 'economy';
       const ecoBuilding = isEcoBuilding(def);
       if (!ecoUnit && !ecoBuilding) return yields;
+      // 海上的经济建筑不参与这一套折算。
+      //
+      // 「城郭」说的是城市的补给链：把金币换成粮/材，喂给城里的人和工事。
+      // 钻井平台不在这个链条上——它离岸好几格，产的是原油，卖的是钱。
+      // 而且它是海战包的核心收入点（回本按 50 金/回合算的），
+      // 折成建材等于把这一格的经济设计推倒重来。
+      if (def.domain === 'water') return yields;
 
       const tile = state.tiles[unit.y * state.w + unit.x];
       const terrain = tile?.terrain ?? 'plain';
@@ -447,7 +455,7 @@ export const CITY_WORKS: Expansion = {
       // 6) 起步的一点粮和材：不然第一个兵都造不出来（造价已经不是纯金币了）。
       //    按时代给，是因为高时代开局的兵更贵、吃粮更多：
       //    固定 60 粮在古典够用五六个民兵，在工业连一个步枪兵都不够。
-      for (const p of ['A', 'B'] as const) {
+      for (const p of seatsOf(state)) {
         const player = state.players[p];
         player.res = { ...(player.res ?? {}) };
         player.res.food = (player.res.food ?? 0) + 80 + state.config.startEra * 60;

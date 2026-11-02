@@ -78,7 +78,7 @@ const reports: TurnReport[] = [];
 const recruitByCat: Record<string, number> = {};
 const buildByType: Record<string, number> = {};
 /** 每方最后一次能算出来的战线（灭国后 frontOf 会给 NaN） */
-const lastFront: Record<PlayerId, number> = { A: NaN, B: NaN };
+const lastFront: Record<PlayerId, number> = { A: NaN, B: NaN, C: NaN, D: NaN };
 let bridges = 0;
 let bridgesOk = 0;
 let campsOk = 0;

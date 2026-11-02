@@ -30,14 +30,17 @@
  *   V = 攻 + 0.45×血 + 5×甲 + 3×射程 + 2.5×移 + 1.5×视野（溅射每级 +4）
  *
  * 现有水军的 V/造价：舢板 1.03、三层桨 0.98、齿轮帆船 0.84、炮艇 0.70、
- * 风帆战列舰 0.67、雷击舰 0.50、铁甲舰 0.58、驱逐舰 0.52、导弹驱逐舰 0.36。
+ * 风帆战列舰 0.67、雷击舰 0.50、铁甲舰 0.52（2026-11-02 挪回 E4 后重算）、
+ * 驱逐舰 0.52、重巡洋舰 0.45、导弹驱逐舰 0.36。
  * 新船就按这条线上落位：E2 0.75~0.80、E3 0.57~0.87（火船是玻璃炮，给高一点）、
- * E4 0.50~0.54、E5 0.49、E6 0.24~0.37。
+ * E4 0.50~0.54、E5 0.38~0.52、E6 0.24~0.37。
  */
 
 import type { AbilityDef } from './abilities.ts';
 import { DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
+import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
+import type { MarkKindDef } from './marks.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { navigable } from './config.ts';
 import { cityGap } from './geo.ts';
@@ -69,6 +72,189 @@ const SHORE_BOMBARD: AbilityDef = {
         stage: 1,
         apply: (c) => {
           c.damage = Math.round(c.damage * 1.25);
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 水雷：留在一格水面上的东西（engine 层见 core/marks.ts）。
+ *
+ * 它**不是单位**：不占格、不挡路、不行动、不进迷雾的单位名单。
+ * 谁踩谁挨，踩完就没——这才是"雷"，而不是"一条站在那儿咬人的船"。
+ *
+ * 几条刻意的设定：
+ *   · 只炸敌人（`trigger: 'enemy'`）：布雷舰自己的航线必须能穿过自己的雷区，
+ *     不然它连"布完雷往外走"都做不到；
+ *   · 只认水面（`on`）：陆军在浅滩涉水不会被水雷炸；
+ *   · 默认隐藏、`detect: 1`：贴脸才发现。于是"派一条快船趟一遍"成了唯一的破法——
+ *     这也是历史上扫雷/探雷的样子（先探后清，只是这里探到就等于踩到边缘）；
+ *   · 伤害 14 点**不走进攻公式**：不加护甲、不算地形、不触发反击。
+ *     地雷不跟你讲武德，扣血就是扣血。
+ */
+const NAVAL_MINE: MarkKindDef = {
+  id: 'nv-mine',
+  name: '水雷',
+  summary: '敌舰踩上来就炸 14 点（无视护甲），炸完就没。自己的船踩不到自己的雷。',
+  // `mine` 这个标签是给扫雷舰用的：以后加磁性雷、音响雷，只要也打上它，
+  // 扫雷舰就照样扫得掉——判定不能写死成"只认 nv-mine"。
+  tags: ['mine', 'naval'],
+  hidden: true,
+  on: ['water', 'deep', 'shallow', 'bridge'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    // 扫雷舰切断了雷索：它踩响的雷只剩个响，4 点意思一下。
+    // 这条写在"雷"这一边而不是"船"那一边，是因为它是雷的命中规则，
+    // 换一条船来踩就该吃满 14 点。
+    const swept = (def.abilities ?? []).includes('nv-sweep');
+    const dmg = swept ? 4 : 14;
+    c.api.hurt(
+      c.unit,
+      dmg,
+      swept ? `${def.name} 切断了雷索，只受 ${dmg} 点` : `${def.name} 撞上水雷，损失 ${dmg} 点生命`,
+    );
+    c.api.log(c.mark.owner, `水雷命中 ${def.name}`);
+  },
+};
+
+/**
+ * 扫雷：把相邻的敌方水雷清掉。
+ *
+ * 为什么不给"主动点一下扫一格"的按钮：这个游戏的操作全是"选中 → 点目标"，
+ * 而扫雷本来就是**跟着船往前挪、一路扫过去**的动作，做成回合开始自动结算，
+ * 玩家做的事就变成"把船开到雷区边上"——那正是扫雷舰该做的事。
+ *
+ * 只扫带 `mine` 标签的、只扫相邻一格、不扫自己的（自己的雷留着挡路）。
+ */
+const SWEEP: AbilityDef = {
+  id: 'nv-sweep',
+  name: '扫雷',
+  summary: '自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const s = c.state;
+          let cleared = 0;
+          for (const m of marksOf(s)) {
+            if (m.owner === c.owner) continue;
+            const kind = markKindOf(m.kind);
+            if (!kind?.tags?.includes('mine')) continue;
+            if (c.api.distance(m, c.self) > 1) continue;
+            removeMark(s, m.id);
+            cleared += 1;
+          }
+          if (cleared > 0) {
+            c.api.pushLog(
+              s,
+              c.owner,
+              `${c.api.utype(s, c.self.type).name} 扫掉 ${cleared} 枚水雷`,
+            );
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 反潜：声纳能探到两格外的潜艇，对潜航单位的攻击翻倍。
+ *
+ * 两条一起给，是因为单给一条都不成立：
+ *   · 只给发现距离——探到了也打不疼（22 攻打潜航 8 甲就是挠痒）；
+ *   · 只给伤害翻倍——根本看不见它，翻倍也白搭（潜艇贴脸才现形）。
+ *
+ * 判定用"目标身上有没有 `nv-submerge`"，而不是"是不是某一条船"：
+ * 以后加核潜艇、AIP 潜艇，只要带潜航就都算潜艇。
+ */
+const ASW: AbilityDef = {
+  id: 'nv-asw',
+  name: '反潜',
+  summary: '潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。',
+  group: 'attack',
+  hooks: {
+    detect: (c) =>
+      (c.api.utype(c.state, c.target.type).abilities ?? []).includes('nv-submerge') ? 1 : 0,
+    damage: [
+      {
+        stage: DAMAGE_STAGE.attackMul,
+        apply: (c) => {
+          // "我打潜艇更疼"，不是"我被潜艇打更疼"
+          if (c.side !== 'attacker' || !c.foe) return;
+          if (!(c.api.utype(c.state, c.foe.type).abilities ?? []).includes('nv-submerge')) return;
+          c.damage = Math.round(c.damage * 2);
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 布雷：每回合在自己相邻的一格水面上放一枚水雷。
+ *
+ * 为什么是"自动布"而不是"点一下放一枚"：这个游戏的操作全压在
+ * "选中 → 点目标"上，多一个主动技能就要多一套按钮、冷却和 AI 判断；
+ * 而布雷本身就是一种**等敌人送上门**的动作，自动反而更像它。
+ *
+ * 上限 6 枚（按布设者算）：不设上限的话，一条船蹲在港口外面闷头布雷，
+ * 二十回合后整片海都是雷，游戏会退化成排雷模拟器。
+ */
+const LAY_MINES: AbilityDef = {
+  id: 'nv-lay-mines',
+  name: '布雷',
+  summary: '自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const CAP = 6;
+          if (markCountOf(c.state, 'nv-mine', c.owner) >= CAP) return;
+          const s = c.state;
+          const spots: Array<{ x: number; y: number }> = [];
+          // 半径 2（不含自己这一格）：布雷舰布的是"一片雷区"，不是"脚边一枚"。
+          // 只布四邻的话，一条船蹲住最多铺 4 枚，然后就没地方了——
+          // 那不是雷区，是个包围圈。
+          for (let dy = -2; dy <= 2; dy += 1) {
+            for (let dx = -2; dx <= 2; dx += 1) {
+              if (dx === 0 && dy === 0) continue;
+              if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+              const x = c.self.x + dx;
+              const y = c.self.y + dy;
+              if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+              const tile = s.tiles[y * s.w + x];
+              if (!tile || !['water', 'deep', 'shallow', 'bridge'].includes(tile.terrain)) continue;
+              // 那一格上已经有东西（自己的雷、别人的雷、或者一条船）就跳过：
+              // 雷叠雷没有意义，把雷布到别人的船底下等于白送一次位移
+              if (marksAt(s, x, y).length > 0) continue;
+              if (s.units.some((u) => u.x === x && u.y === y && u.hp > 0)) continue;
+              spots.push({ x, y });
+            }
+          }
+          if (spots.length === 0) return;
+          // 挑哪一格：按回合号轮转，而不是永远挑"第一个"。
+          // 永远挑第一个的话，一条船蹲着不动就会把雷全堆在北边一格上。
+          const pick = spots[(s.turn + c.self.x + c.self.y) % spots.length]!;
+          addMark(s, {
+            kind: 'nv-mine',
+            owner: c.owner,
+            x: pick.x,
+            y: pick.y,
+            charges: 1,
+            hidden: true,
+          });
+          c.api.pushLog(
+            s,
+            c.owner,
+            `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 布下一枚水雷`,
+          );
         },
       },
     ],
@@ -233,7 +419,15 @@ const FLEET_OILER: AbilityDef = {
  * 能力表是**全局合并**的（不看这一局勾了哪些包），所以现代包引用基础包的
  * 能力 id 完全没问题——但反过来"两个包各声明一份"会直接踩测试。
  */
-const FLEET_ABILITIES: AbilityDef[] = [SHORE_BOMBARD, SUBMERGE, FLEET_REPAIR, SUB_TENDER];
+const FLEET_ABILITIES: AbilityDef[] = [
+  SHORE_BOMBARD,
+  SUBMERGE,
+  FLEET_REPAIR,
+  SUB_TENDER,
+  LAY_MINES,
+  SWEEP,
+  ASW,
+];
 const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
 
 /* ===========================================================================
@@ -243,9 +437,19 @@ const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
  *   E1 只有舢板/三层桨（撞击与接舷）—— 本体与「古典」已经有，不重复
  *   E2 帆桨并用 + 第一代运输船（德罗蒙、卡拉克）
  *   E3 舷侧炮列（盖伦）+ 纵火（火船）
- *   E4 蒸汽与装甲的过渡（护卫舰、浅水重炮舰）
- *   E5 装甲巡洋舰（无畏舰之前的远洋主力）
- *   E6 航母、战列舰、区域防空巡洋舰、核潜艇、两栖舰、导弹艇、补给舰
+ *   E2 帆桨并用（德罗蒙、卡拉克）+ 桨帆船（勒班陀那种）与宝船（郑和那种）——
+ *      前者买"快"，后者买"一次运四个还沉不了"
+ *   E3 舷侧炮列（盖伦）+ 纵火（火船）+ 风帆巡航舰（追得上跑得掉）+ 龟船（顶到跟前）
+ *   E4 蒸汽与装甲（护卫舰、浅水重炮舰、潜艇、运输舰）
+ *      + 水军的**入口价**：鱼雷艇 150、布雷舰 240（在水雷上留东西）、
+ *      扫雷舰 220（扫雷 + 反潜，这一代唯一能破"看不见的东西"的船）——
+ *      本体那条**铁甲舰**也在这一代（1859–1890 的舰种，2026-11-02 从 E5 挪下来）
+ *   E5 1900–1945 的钢铁舰队：装巡（老式远洋主力）→ 重巡（条约型）→
+ *      轻巡（舰队的眼睛）→ 战巡（薄皮大炮）→ 战列舰（顶线）；
+ *      水下一支远洋潜艇（补上潜母终于有子可带），天上一艘舰队航母（三机位、2×2），
+ *      外加登陆舰、轻母、潜母、维修舰、航空战列舰
+ *   E6 航母、超巡、区域防空巡洋舰、核潜艇与常规潜艇、两栖舰、导弹艇、
+ *      濒海战斗舰、无人艇、补给舰
  * ======================================================================== */
 
 const FLEET_UNITS: UnitTypeDef[] = [
@@ -285,6 +489,46 @@ const FLEET_UNITS: UnitTypeDef[] = [
     carry: { hold: { max: 4 } },
     // 和齿轮帆船（98 金、容量 3）分工：卡拉克贵一半，换来 4 个舱位和 6 点甲。
     // 跨海投送是"一次运四个"还是"分两趟运两个"，在 20×20 的图上差一整回合。
+  },
+  {
+    id: 'nv_galley',
+    name: '桨帆船',
+    short: '桨',
+    era: 2,
+    category: 'combat',
+    cost: 110,
+    move: 5,
+    atk: 18,
+    armor: 4,
+    maxHp: 52,
+    range: 2,
+    vision: 3,
+    domain: 'water',
+    // 勒班陀（1571）那种地中海主力：一排桨手，快、便宜、撞角 + 接舷。
+    // 中世海战的主角是它，不是横帆船——横帆船在顺风时漂亮，逆风时只能等。
+    // 所以它的移动力是全 E2 最高的 5，代价是视野 3、射程 2（桨帆船的炮很小）。
+    // V = 18+23.4+20+6+12.5+4.5 = 84.4 → 0.77
+  },
+  {
+    id: 'nv_treasure_ship',
+    name: '宝船',
+    short: '宝',
+    era: 2,
+    category: 'combat',
+    cost: 180,
+    move: 3,
+    atk: 14,
+    armor: 7,
+    maxHp: 120,
+    range: 2,
+    vision: 4,
+    domain: 'water',
+    carry: { hold: { max: 4 } },
+    // 郑和船队那种九桅大舶（1405–1433）：慢、笨、几乎不能打，但一次能把
+    // 四个人送到对岸，而且血厚到不怕几轮乱箭。和卡拉克（150 金、4 舱位）
+    // 分工：卡拉克"能打能运"，宝船"只运、但运得稳"——血多 48、甲多 1，
+    // 移动少 1，正好是"从河港出发的巨舰"该有的样子。
+    // V = 14+54+35+6+7.5+6 = 122.5 → 0.68（舱位不进公式，和卡拉克同档）
   },
   {
     id: 'nv_fireship',
@@ -331,6 +575,46 @@ const FLEET_UNITS: UnitTypeDef[] = [
     // V = 33+36.9+40+9+10+7.5 = 136 → 0.57
   },
   {
+    id: 'nv_turtle_ship',
+    name: '龟船',
+    short: '龟',
+    era: 3,
+    category: 'combat',
+    cost: 245,
+    move: 4,
+    atk: 34,
+    armor: 10,
+    maxHp: 88,
+    range: 1,
+    vision: 3,
+    domain: 'water',
+    // 朝鲜的龟船（1592 鸣梁）：背上有钉板、船头有龙头喷烟，靠撞和贴。
+    // 射程只有 1 是刻意的——它必须冲进去，那个"顶着炮火冲到跟前"的
+    // 过程就是它的代价。换来的是 E3 最高的护甲 10（盖伦 8、风帆战列舰 8）：
+    // 钉板让接舷的人无从下手，这一条只能表达成甲。
+    // V = 34+39.6+50+3+10+4.5 = 141.1 → 0.58
+  },
+  {
+    id: 'nv_sailing_frigate',
+    name: '风帆巡航舰',
+    short: '帆',
+    era: 3,
+    category: 'combat',
+    cost: 175,
+    move: 6,
+    atk: 30,
+    armor: 5,
+    maxHp: 62,
+    range: 3,
+    vision: 5,
+    domain: 'water',
+    // 风帆时代的 frigate（宪法号那一级）：战列舰的活它干不了，
+    // 但"追得上、看得远、跑得掉"这三件事它全占了。移动 6、视野 5 是 E3 顶格，
+    // 甲只有 5——被战列舰逮住就没了。破交、侦察、抓运输船是它的活。
+    // 和本体的炮艇（130 金、攻 25、射 4、带破甲）分工：炮艇打正面，它打侧翼。
+    // V = 30+27.9+25+9+15+7.5 = 114.4 → 0.65
+  },
+  {
     id: 'nv_frigate',
     name: '护卫舰',
     short: '护',
@@ -368,6 +652,87 @@ const FLEET_UNITS: UnitTypeDef[] = [
     // 内河与近岸的浮动炮台：慢、笨、打城墙特别狠（岸轰 + 溅射）。
     // 视野只有 3，离开己方侦察就是瞎子——这是它的代价。
     // V = 50+36.9+50+12+7.5+4.5+4 = 165 → 0.50
+  },
+  {
+    id: 'nv_torpedo_boat',
+    name: '鱼雷艇',
+    short: '雷',
+    era: 4,
+    category: 'combat',
+    cost: 150,
+    move: 6,
+    atk: 38,
+    armor: 3,
+    maxHp: 38,
+    range: 2,
+    vision: 3,
+    domain: 'water',
+    abilities: ['armor-pierce'],
+    /*
+     * 鱼雷艇（TB）：一条小艇扛一根鱼雷管，赌的是"贴上去换掉大船"。
+     *
+     * 这一档是**水军的入口价**：在此之前最便宜能打的船是 285 的雷击舰，
+     * 开局根本下不了海。150 金让"三条艇围一条战列舰"成为可执行的方案。
+     *
+     * 代价写在数值里：射程 2（必须进到别人 4~5 格的炮口下）、血 38、
+     * 甲 3——被溅射蹭一下就没了。带破甲是因为鱼雷本来就不吃装甲。
+     *
+     * V = 38+17.1+15+6+15+4.5 = 95.6 → 0.64。比值偏高是故意的，和火船同一个口径：
+     * 价值模型算不出"它活不过一轮"。
+     */
+  },
+  {
+    id: 'nv_minelayer',
+    name: '布雷舰',
+    short: '布',
+    era: 4,
+    category: 'combat',
+    cost: 240,
+    move: 3,
+    atk: 8,
+    armor: 8,
+    maxHp: 110,
+    range: 1,
+    vision: 3,
+    domain: 'water',
+    abilities: ['nv-lay-mines'],
+    // 移动 3、几乎不还手，全部价值在它布下的那些雷上：
+    // 它蹲在一条水道上布几天，对面的船要么绕一大圈，要么一条条去趟。
+    // 血 110 是为了撑住"被集火也得站两轮"——但**雷不属于它**：
+    // 它沉了，之前布下的水雷还在那儿（这就是"格子上留东西"这一层的意思）。
+    // V = 8+49.5+40+3+7.5+4.5 = 112.5 → 0.47（雷不进公式，和维修舰同理偏低）
+  },
+  {
+    id: 'nv_minesweeper',
+    name: '扫雷舰',
+    short: '扫',
+    era: 4,
+    category: 'combat',
+    cost: 220,
+    move: 4,
+    atk: 22,
+    armor: 6,
+    maxHp: 76,
+    range: 3,
+    vision: 6,
+    domain: 'water',
+    abilities: ['nv-sweep', 'nv-asw'],
+    /*
+     * 扫雷舰：一战护航队里那种又小又慢、专门走在最前面的船。
+     *
+     * 它是这一版里唯一"能反制水雷"的东西，也是唯一"能反潜"的东西：
+     *   · 扫雷：回合开始时清掉相邻的敌方水雷，自己踩雷只受 4 点；
+     *   · 反潜：潜航单位在两格内就现形，打潜航单位伤害翻倍。
+     *
+     * 为什么两件事放在同一条船上：历史上它们是同一条船（minesweeper 兼
+     * 护航/反潜），而且在这个游戏里它们面对的是同一个问题——**
+     * "看不见的东西"**。雷是藏起来的格子，潜艇是藏起来的单位，
+     * 一条船同时解决两者，玩家才有一张"我该怎么破"的答案。
+     *
+     * 代价写得很清楚：攻 22、甲 6、血 76，正面打不过任何一条正经战舰。
+     * 它必须有人护航才有用——这恰好也是它历史上的处境。
+     * V = 22+34.2+30+9+10+9 = 114.2 → 0.52
+     */
   },
   {
     id: 'nv_submarine',
@@ -422,8 +787,151 @@ const FLEET_UNITS: UnitTypeDef[] = [
     vision: 5,
     domain: 'water',
     abilities: ['armor-pierce', 'nv-shore-bombard'],
-    // 无畏舰之前的远洋主力：射程 5、带破甲，专门去啃铁甲舰（甲 11）。
+    // 无畏舰之前的远洋主力：射程 5、带破甲，专门去啃装了装甲的主力舰。
     // V = 56+45+60+15+12.5+7.5 = 196 → 0.49
+  },
+  {
+    id: 'nv_heavy_cruiser',
+    name: '重巡洋舰',
+    short: '重',
+    era: 5,
+    category: 'combat',
+    cost: 480,
+    move: 5,
+    atk: 70,
+    armor: 12,
+    maxHp: 110,
+    range: 5,
+    vision: 5,
+    domain: 'water',
+    abilities: ['armor-pierce'],
+    /*
+     * 条约型重巡（8 吋炮、一万海里、装甲只够挡 6 吋）：
+     * 装巡上面、战巡下面那一格，补的是"中型舰太薄、主力舰太贵"的缝。
+     *
+     * 和装巡的分工不是单纯数值高低，而是**打谁**：
+     *   · 装巡（400，带岸轰）—— 1890 年代的老船，跟着舰队去轰岸；
+     *   · 重巡（480，只有破甲）—— 1930 年代的新船，去追、去护、去破交，
+     *     便宜到可以豁出去换掉对面的驱逐舰，但撞上战列舰甲 18 一样白搭。
+     * 所以它**不给岸轰**：能轰岸的中型舰已经有一条了，再加一条只会让
+     * 浅水重炮舰和装巡同时失去位置。
+     *
+     * V = 70+49.5+60+15+12.5+7.5 = 214.5 → 0.45（E5 的带子 0.38~0.52）
+     */
+  },
+  {
+    id: 'nv_light_cruiser',
+    name: '轻巡洋舰',
+    short: '巡',
+    era: 5,
+    category: 'combat',
+    cost: 430,
+    move: 6,
+    atk: 58,
+    armor: 11,
+    maxHp: 100,
+    range: 5,
+    vision: 6,
+    domain: 'water',
+    abilities: ['armor-pierce'],
+    /*
+     * 轻巡（利安得 / 最上 / 布鲁克林）：6 吋炮、三万马力、能跟着驱逐舰跑。
+     *
+     * 它补的是"驱逐舰 360 → 重巡 480"之间那一格，但分工不靠数值靠**眼睛**：
+     * 视野 6 是全海军最高的（战列舰 5、航母之外没人比它看得远），
+     * 移动 6 跟得上驱逐舰队。它是舰队的侦察与护航——
+     * 迷雾局里"谁先看见谁"往往比"谁炮大"更决定胜负。
+     *
+     * 名字里带「轻」，但它不是"更弱的重巡"：重巡 480 是去换船的打手，
+     * 这条 430 是去发现对方、然后把战列舰叫过来的。
+     * V = 58+45+55+15+15+9 = 197 → 0.46
+     */
+  },
+  {
+    id: 'nv_fleet_sub',
+    name: '远洋潜艇',
+    short: '潜',
+    era: 5,
+    category: 'combat',
+    cost: 420,
+    move: 5,
+    atk: 78,
+    armor: 8,
+    maxHp: 78,
+    range: 3,
+    vision: 4,
+    domain: 'water',
+    abilities: ['nv-submerge'],
+    /*
+     * U 艇 / 伊号：二战那一代远洋潜艇，射程 3、甲 8、一发够狠。
+     *
+     * 补的是一个明摆着的洞：E4 有潜艇、E6 有核潜艇，中间的 E5 反而没有——
+     * 于是「潜母」（只给潜艇回血）在这一代成了没有孩子的母舰。
+     * 现在三者的关系是：E4 潜艇便宜但脆、E5 远洋潜艇能真的破交、
+     * E6 核潜艇快且不用上浮。
+     *
+     * 射程只有 3：它必须摸到船队跟前，而反潜的驱逐舰射程 5——
+     * 被发现就是死，这正是 U 艇在 1943 年之后的处境。
+     * V = 78+35.1+40+9+12.5+6 = 180.6 → 0.43
+     */
+  },
+  {
+    id: 'nv_landing_ship',
+    name: '登陆舰',
+    short: '登',
+    era: 5,
+    category: 'combat',
+    cost: 210,
+    move: 4,
+    atk: 5,
+    armor: 6,
+    maxHp: 100,
+    range: 1,
+    vision: 3,
+    domain: 'water',
+    carry: { hold: { max: 3 } },
+    /*
+     * LST：船头能直接顶到滩上放跳板。
+     *
+     * 和运输舰（300 金、5 舱位）分工：一次运三个、但便宜九十金，
+     * 而且血 100、甲 6，挨一轮岸防炮还开得回去。抢滩这种事本来就是
+     * "多跑几趟、每趟少装点"——大船一次装满，沉一次就全没了。
+     *
+     * 它是 1×1，所以能进浅流（2×2 的大舰进不去，见吃水那条规则）：
+     * 这一条不是新机制，是"小船"这个属性本来带来的。
+     * V = 5+45+30+3+10+4.5 = 97.5 → 0.46（舱位不进公式）
+     */
+  },
+  {
+    id: 'nv_fleet_carrier',
+    name: '舰队航母',
+    short: '航',
+    era: 5,
+    category: 'combat',
+    cost: 950,
+    move: 4,
+    atk: 22,
+    armor: 12,
+    maxHp: 190,
+    range: 3,
+    vision: 9,
+    domain: 'water',
+    // 2×2（和第六时代那条核动力航母同一套"大型单位"表达）：占四格、四格挡路、
+    // 只在四格里挨一份溅射；代价是要 2×2 开阔水面，一寸宽的河开不进去。
+    footprint: 2,
+    // 三个机位、起飞半径 2：比轻母多一个机位、多一格起飞距离。
+    carry: { deck: { max: 3, launchRange: 2 } },
+    abilities: ['nv-aa-cover'],
+    /*
+     * 翔鹤 / 埃塞克斯那一级：二战真正的主角。
+     *
+     * 之前 E5 只有轻母（2 机位、起飞 1 格）和航空战列舰（半吊子），
+     * 正经的舰队航母要等到 E6 的核动力航母——中间空了整整一代。
+     *
+     * 它自己几乎不打人（攻 22、射 3），全部价值在甲板、视野 9 和那四格航道上。
+     * 没开空军扩展时它是一艘"眼睛 + 防空平台"，不是废铁。
+     * V = 22+85.5+60+9+10+13.5 = 200 → 0.21（甲板不进公式，和核动力航母同口径）
+     */
   },
   {
     id: 'nv_battlecruiser',
@@ -647,9 +1155,36 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     domain: 'water',
     abilities: ['nv-submerge'],
     // 水下刺客：迷雾局里贴脸才现形，先手不被反击。
-    // 它是第四时代那艘「潜艇」的**升级而不是重复**：射程 3→4、攻 62→92、
-    // 血 70→100，价格翻三倍。差别在"能不能单挑一支护航队"。
+    // 这条线现在有三段：E4 潜艇（便宜、射 3）→ E5 远洋潜艇（能真破交）
+    // → 它（射 4、攻 92、不用频繁上浮）。价格翻三倍，差的是"能不能单挑一支护航队"。
     // V = 92+45+45+12+12.5+7.5 = 214 → 0.24（潜航的价值不在公式里）
+  },
+  {
+    id: 'nv_ssk',
+    name: '常规潜艇',
+    short: '潜',
+    era: 6,
+    category: 'combat',
+    cost: 520,
+    move: 5,
+    atk: 74,
+    armor: 7,
+    maxHp: 72,
+    range: 4,
+    vision: 4,
+    domain: 'water',
+    abilities: ['nv-submerge'],
+    /*
+     * AIP 常规潜艇（基洛 / 苍龙）：不开核反应堆也能在水下憋两周。
+     *
+     * 补的是第六时代的**价位**：能潜的船原本只有 900 金的核潜艇，
+     * 于是"穷的时候怎么办"没有答案。520 金这条能做的事和核潜艇很像，
+     * 只是慢一点、脆一点——够用了，敢沉。
+     *
+     * 和核潜艇的分工不是"弱化版"：核潜艇 900 金可以跟着航母编队跑半个地图，
+     * 这条只适合守家门口的水道（移 5、血 72，被发现就危险）。
+     * V = 74+32.4+35+12+12.5+6 = 171.9 → 0.33
+     */
   },
   {
     id: 'nv_amphib',
@@ -693,6 +1228,57 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     // V = 58+26.1+25+12+17.5+7.5 = 146 → 0.37（略高于同代，靠脆换来的）
   },
   {
+    id: 'nv_lcs',
+    name: '濒海战斗舰',
+    short: '濒',
+    era: 6,
+    category: 'combat',
+    cost: 520,
+    move: 7,
+    atk: 56,
+    armor: 10,
+    maxHp: 100,
+    range: 5,
+    vision: 5,
+    domain: 'water',
+    abilities: ['armor-pierce'],
+    /*
+     * 濒海战斗舰 / 现代护卫舰（自由级、054A 那一档）：小、快、够用。
+     *
+     * 第六时代原来只有 620 的导弹驱逐舰和 880 的防空巡洋舰，
+     * 中间缺"能干活但不心疼"的那一条。它比导弹快艇能扛（甲 10、血 100），
+     * 比驱逐舰便宜一百金、快两格——适合贴着自家海岸线巡逻、反潜、护渔。
+     *
+     * 移 7 是全场并列最快（只有导弹快艇能比）：跑得掉，才敢去试探。
+     * V = 56+45+50+15+17.5+7.5 = 191 → 0.37
+     */
+  },
+  {
+    id: 'nv_usv',
+    name: '无人艇',
+    short: '无',
+    era: 6,
+    category: 'combat',
+    cost: 240,
+    move: 8,
+    atk: 26,
+    armor: 2,
+    maxHp: 26,
+    range: 4,
+    vision: 3,
+    domain: 'water',
+    /*
+     * 无人水面艇（USV）：不载人，所以敢冲、敢死、敢贴近。
+     *
+     * 第六时代的水军一片"贵"，240 金这条是唯一的消耗品：
+     * 移 8（全场最快）、射 4、血 26 甲 2——挨一下就散。
+     * 用途是"先去探一下那片水域有没有雷/有没有潜艇"，或者凑数占航道。
+     * 不带破甲：它那点火力本来就不指望打穿军舰，打商船和落单快艇就行。
+     *
+     * V = 26+11.7+10+12+20+4.5 = 84.2 → 0.35
+     */
+  },
+  {
     id: 'nv_oiler',
     name: '舰队补给舰',
     short: '补',
@@ -717,8 +1303,16 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     name: '海上钻井平台',
     short: '井',
     era: 6,
-    category: 'economy',
+    // 经济类**建筑**：它是海面上的一座平台，不是一艘会自己开过去、也不是
+    // 在港里下单就能刷出来的船。所以类型是 building —— 和磨坊、粮仓同一个口径，
+    // 由建筑队在海上选址修起来（见下面的 buildOn / buildRange）。
+    category: 'building',
     cost: 480,
+    buildCost: 36,
+    buildOn: ['water', 'deep', 'shallow'],
+    // 平台的价值在深水，而深水通常离岸三格以上：按默认的 2 格，建筑队站在
+    // 滩头永远够不着自己最想盖的地方。给到 6 格，地形与占位条件一条不松。
+    buildRange: 6,
     move: 0,
     atk: 0,
     armor: 6,
@@ -902,7 +1496,10 @@ const deepenWater: NonNullable<Expansion['afterTerrain']> = (g, w, h) => {
  */
 function platformYield(state: GameState, unit: Unit, yields: ResourceCost): ResourceCost {
   const def = state.unitTypes[unit.type];
-  if (def?.category !== 'economy' || def.domain !== 'water') return yields;
+  // 钻井平台从「经济单位」改成「经济建筑」之后，这里的口径要跟着放宽：
+  // 判的是"这条船贴着的那座东西挣不挣钱"，不是它在兵种表里挂哪个分类。
+  const earning = def?.category === 'economy' || def?.category === 'building';
+  if (!def || !earning || def.domain !== 'water') return yields;
   const cut = state.units.some((u) => {
     if (u.owner === unit.owner) return false;
     if (state.unitTypes[u.type]?.domain !== 'water') return false;
@@ -929,11 +1526,21 @@ export const NAVAL_FLEET: Expansion = {
   name: '海战',
   scale: 'large',
   summary:
-    '补上第二到第五时代的水上力量：德罗蒙、卡拉克、火船、盖伦、护卫舰、浅水重炮舰、潜艇、运输舰、' +
-    '装甲巡洋舰、战列巡洋舰、战列舰、轻型航母、航空战列舰、潜母、维修舰十五条船；' +
+    '补上第二到第五时代的水上力量：桨帆船、宝船、德罗蒙、卡拉克、火船、龟船、盖伦、风帆巡航舰、' +
+    '护卫舰、鱼雷艇、布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，工业时代）、' +
+    '装甲巡洋舰、重巡洋舰、轻巡洋舰、战列巡洋舰、战列舰、远洋潜艇、登陆舰、舰队航母、' +
+    '轻型航母、航空战列舰、潜母、维修舰二十多条船，从桨到航母一整条线；' +
     '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +
     '（离岸两格以上的外海，只有船进得去，大舰吃水深进不了浅流）。',
   abilities: FLEET_ABILITIES,
+  /**
+   * 这个包带来的"格子上留东西"的种类：水雷。
+   *
+   * 引擎（core/marks.ts）只管"谁踩上来、什么时候结算"，水雷长什么样、
+   * 炸多少，全在这个包里。以后做地雷、火场、雷区标记，各写一个 kind 挂到
+   * 对应扩展的 `marks` 上就行，规则层一行都不用改。
+   */
+  marks: [NAVAL_MINE],
   units: FLEET_UNITS,
   terrains: ['deep'],
   afterTerrain: deepenWater,
@@ -985,9 +1592,10 @@ export const MODERN_NAVAL: Expansion = {
   scale: 'large',
   summary:
     '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、超巡、防空巡洋舰、' +
-    '攻击核潜艇（潜航）、两栖攻击舰、导弹快艇、舰队补给舰、海上钻井平台。' +
+    '攻击核潜艇与常规潜艇（潜航）、濒海战斗舰、无人艇、两栖攻击舰、导弹快艇、' +
+    '舰队补给舰、海上钻井平台。' +
     '**第六时代没有战列舰**——它停在第五时代（二战），1945 年之后再没有国家开工建过一级。' +
-    '航母的机位与起飞半径写在兵种数据的 carry.deck 上（见 naval-packs 的舰队航母那一行）。',
+    '航母的机位与起飞半径写在兵种数据的 carry.deck 上（见本文件里的「航空母舰」那一行）。',
   abilities: MODERN_ABILITIES,
   units: MODERN_FLEET_UNITS,
   // 只开「现代海军」也想要深水（钻井平台的产出靠它）——两个包都登记一次，

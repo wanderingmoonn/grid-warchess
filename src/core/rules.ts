@@ -63,6 +63,11 @@ import {
   noteHeatCell, 
   strikeCoverCells 
 } from './heat.ts';
+// 格子上留下的东西（水雷/地雷/火场……）。注册表要在这里 import 一次：
+// 它的副作用就是把各扩展声明的种类登记进全局表，没这两行 marks 一条都查不到。
+import { enterTile, marksOf, tickMarks } from './marks.ts';
+import type { MarkApi } from './marks.ts';
+import './mark-registry.ts';
 import {
   canProduce,
   isProducer,
@@ -102,7 +107,9 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
-import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS} from './skill-hooks.ts';
+import { seatsOf } from './types.ts';
+export { seatsOf };
+import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
@@ -241,8 +248,64 @@ function runBound<C extends { self: Unit; foe?: Unit; side: Side }>(
   }
 }
 
+/**
+ * 两人局专用：取另一个席位。
+ *
+ * 三人以上不要用它——那时候"敌人"不唯一，问 `others(s, p)` 或 `aliveSeats(s)`。
+ * AI 的整套判断（威胁场、推进方向、集火目标）都建立在"只有一个对手"上，
+ * 所以它只在 2 人局里出场（见 ai.ts 顶部那段），`other` 也就只服务于它。
+ */
 export function other(p: PlayerId): PlayerId {
   return p === 'A' ? 'B' : 'A';
+}
+
+
+/** 除自己以外的全部席位（含已出局的：战报、统计要看得见全场） */
+export function others(s: GameState, p: PlayerId): PlayerId[] {
+  return seatsOf(s).filter((x) => x !== p);
+}
+
+/**
+ * 这一席是不是已经出局了。
+ *
+ * 两条：城被打光（胜负判定里的第一条），或者主动退出（认输 / 判弃权）。
+ *
+ * **上帝模式不算**：沙盒里"没城"是常态——玩家就摆几个兵在空地上试兵种，
+ * 按城判出局会让回合推都推不动（这条以前是藏在 checkWinner 里的同一个特例，
+ * 现在抽出来给回合轮转也用）。
+ */
+export function isEliminated(s: GameState, p: PlayerId): boolean {
+  if (hasQuit(s, p)) return true;
+  if (s.config.godMode === true) return false;
+  return citiesOf(s, p).length === 0;
+}
+
+/** 还没出局的席位 */
+export function aliveSeats(s: GameState): PlayerId[] {
+  return seatsOf(s).filter((p) => !isEliminated(s, p));
+}
+
+/** 这一席是不是已经退出（认输 / 判弃权）。两人局里通常没人会走到这儿 */
+export function hasQuit(s: GameState, p: PlayerId): boolean {
+  return (s.out ?? []).includes(p);
+}
+
+/**
+ * 下一个该行动的席位：按 PLAYER_ORDER 环转，跳过已经出局的。
+ *
+ * 三个人打，一个人出局之后，剩下两家的回合要接得上，不能空转到出局者身上。
+ * 全部出局（或只剩自己）时返回自己——调用方（doEndTurn）在那之前就判完胜负了。
+ */
+export function nextSeat(s: GameState, from: PlayerId): PlayerId {
+  const seats = seatsOf(s);
+  const start = Math.max(0, seats.indexOf(from));
+  for (let k = 1; k <= seats.length; k += 1) {
+    const cand = seats[(start + k) % seats.length]!;
+    if (cand === from) break;
+    if (isEliminated(s, cand)) continue;
+    return cand;
+  }
+  return from;
 }
 
 /** 从本局的兵种表里取定义（不是全局表，因为对局可能只启用了部分兵种） */
@@ -732,6 +795,21 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
 }
 
 /**
+ * 这个单位现在的魔法攻击 / 魔法抗性。
+ *
+ * 兵种表上的值是"这一局这类兵的基础值"，而圣剑觉醒那类加成属于**这一个单位**
+ * （和 atkBonus / armorBonus 同一个道理，见 types 里的注释）。
+ * 魔法段是唯一一条只看魔抗、不看护甲的结算，两处各读各的话就会出现
+ * "面板涨了、打出去的伤害没变"——所以取值只能有这两个函数。
+ */
+export function magicAtkOf(s: GameState, u: Unit): number {
+  return (utype(s, u.type).magicAtk ?? 0) + (u.magicAtkBonus ?? 0);
+}
+export function magicResOf(s: GameState, u: Unit): number {
+  return (utype(s, u.type).magicRes ?? 0) + (u.magicResBonus ?? 0);
+}
+
+/**
  * 这一下能打出多少魔法伤害。
  * 魔法段本身只被魔抗平减，
  * 不需要目标是个单位；只有「属性精研·暗」那种"按对手放大"的钩子需要它，
@@ -745,7 +823,7 @@ export function magicSegment(
 ): number {
   if (outOfAmmo(s, attacker)) return 0;
   const def = utype(s, attacker.type);
-  const magic = def.magicAtk ?? 0;
+  const magic = magicAtkOf(s, attacker);
   if (magic <= 0) return 0;
   const out = Math.max(0, magic - magicRes);
   // 魔法段的倍率交给能力自己（现在只有「属性精研·暗」用它）。
@@ -765,7 +843,7 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
   // 攻城时传进来的是一条"伪单位"壳（把 City 包成 Unit 的形状喂给结算）。
   // 它不在这局的兵种表里——也不该在：城市不是一个能造、能选、能上场的兵种。
   // 城市没有魔法抗性可言，按 0 算；绝不能因为"查不到这个 id"把整条结算打断。
-  const base = isPseudoUnit(defender.type) ? 0 : (utype(s, defender.type).magicRes ?? 0);
+  const base = isPseudoUnit(defender.type) ? 0 : magicResOf(s, defender);
   // 圣旗之类"临时加魔抗"的增益在这条线上生效：魔法段是唯一一条
   // 只看魔抗、不看护甲的伤害，把增益挂在别处就等于没加。
   const ward = defender.buff?.magicRes ?? 0;
@@ -1694,10 +1772,25 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
   }
   if (!skillHidden && !byAbility) return false;
 
+  // 贴脸就能看见——这是所有隐匿效果共同的破法。
+  // 「反潜」这类能力可以把这一格往外推（`detect` 钩子），推几格由能力自己按
+  // 目标类型决定：声纳探的是潜艇，不该顺手把树林里的刺客一起照出来。
   for (const v of unitsOf(s, viewer)) {
-    if (distance(v, unit) <= 1) return false;
+    if (distance(v, unit) <= 1 + detectBonus(s, v, unit)) return false;
   }
   return true;
+}
+
+/** 这个单位对"目标"的额外发现距离（多条能力取最大的那条，不叠加） */
+function detectBonus(s: GameState, viewerUnit: Unit, target: Unit): number {
+  const hooks = hooksFor(utype(s, viewerUnit.type));
+  let best = 0;
+  for (const h of hooks) {
+    if (!h.detect) continue;
+    const v = h.detect({ state: s, self: viewerUnit, target, api: abilityApi });
+    if (v > best) best = v;
+  }
+  return best;
 }
 
 /**
@@ -1746,7 +1839,11 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     for (const c of cellsAt(ax, ay)) {
       if (!blockedFor(s, c.x, c.y, unit)) continue;
       const ft = tileAt(s, c.x, c.y);
-      if (flyer && ft && ft.terrain === 'water') continue;
+      // 飞行放行水面与深水：深水只是"船才敢去"的水，对天上的东西和普通水面
+      // 没有区别。以前这里只写了 `water`，于是飞过整条河没问题、飞进外海却被
+      // 拦住——而 tileStandsOk 那边认的是 water + deep，两处口径不一致，
+      // 表现就是"能停在深水上，却飞不进去"。
+      if (flyer && ft && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
       return false;
     }
     return true;
@@ -2343,7 +2440,9 @@ function splashVictims(
  */
 function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
   s.log.push({ turn: s.turn, player: p, text, ...(open ? { open: true } : {}) });
-  if (s.log.length > 80) s.log.splice(0, s.log.length - 80);
+  // 80 → 120：每一次交火现在双方各记一条（见 doAttack 里那段说明），
+  // 条数翻倍而窗口不变的话，玩家回头查"我这一下是怎么挨的"时已经翻不到了。
+  if (s.log.length > 120) s.log.splice(0, s.log.length - 120);
 }
 
 /** 通知所有扩展：有单位阵亡了 */
@@ -2357,7 +2456,7 @@ function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
 function drownCargo(s: GameState, dead: Unit): void {
   if (!dead.cargo || dead.cargo.length === 0) return;
   const names = dead.cargo.map((u) => utype(s, u.type).name).join('、');
-  pushLog(s, other(dead.owner), `随船沉没：${names}`, true);
+  pushLog(s, dead.owner, `随船沉没：${names}`, true);
 }
 
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
@@ -2374,7 +2473,13 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
   if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
 
-  const killerOwner = killer ? killer.owner : other(victim.owner);
+  // 没有凶手（毒死、烧死、桥塌）时，两人局记在对面头上；三人以上没有"对面"
+  // 这回事，就记在自己头上——宁可少给一份击杀奖励，也不能凭空发给出局的人。
+  const killerOwner = killer
+    ? killer.owner
+    : seatsOf(s).length === 2
+      ? other(victim.owner)
+      : victim.owner;
   for (const e of activeExpansions(s)) {
     e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner });
   }
@@ -2399,22 +2504,28 @@ function checkWinner(s: GameState): PlayerId | null {
     }
   }
 
-  for (const p of ['A', 'B'] as PlayerId[]) {
-    // 1.失去所有城市
-    if (citiesOf(s, p).length === 0) return other(p);
-
-    // 2.造不出任何兵
-    const alive = unitsOf(s, p).length;
-    if (alive === 0) {
-      const canField = Object.values(s.unitTypes).some(
-        (d) =>
-          d.category !== 'building' &&
-          !d.summonedOnly &&
-          canPay(s.players[p], recruitResCost(s, p, d)),
-      );
-      if (!canField) return other(p);
-    }
-  }
+  /*
+   * 出局判定，只剩一家时结束。
+   *
+   * 两人局和以前完全一样：一方出局 = 另一方赢。三人四人局里"一方出局"只是
+   * 少了一个人，剩下的人接着打——所以这里先算清楚谁还活着，再决定要不要收场。
+   * 两条出局条件：城被打光，或者一个兵都没有且连一个都造不起。
+   */
+  const seats = seatsOf(s);
+  const alive = seats.filter((p) => {
+    if (isEliminated(s, p)) return false;
+    if (unitsOf(s, p).length > 0) return true;
+    return Object.values(s.unitTypes).some(
+      (d) =>
+        d.category !== 'building' &&
+        !d.summonedOnly &&
+        canPay(s.players[p], recruitResCost(s, p, d)),
+    );
+  });
+  if (alive.length === seats.length) return null;
+  if (alive.length === 1) return alive[0]!;
+  // 一家都没了（同归于尽）：判给第一个还站着的……没有，那就平局
+  if (alive.length === 0) return null;
   return null;
 }
 
@@ -2652,6 +2763,21 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     let totalDmg = 0;
     const hitNames = new Set<string>();
     const splashNames = new Set<string>();
+    /**
+     * 按"挨打的是谁家"分账。
+     *
+     * 两人局里挨打的必然只有一家，可以写死 `other(owner)`；三人四人局里
+     * 一座塔的射程可能同时覆盖两家的人，一条战报发给一边就成了漏报。
+     * 所以先按主人分组，打完之后各自收自己那一条。
+     */
+    const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
+    const noteVictim = (u: Unit, dmg: number) => {
+      if (u.owner === owner) return;
+      const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
+      box.names.add(utype(s, u.type).name);
+      box.dmg += dmg;
+      byVictim.set(u.owner, box);
+    };
 
     while (shots > 0) {
       const inRange = s.units
@@ -2688,6 +2814,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       for (const v of splashed) {
         v.unit.hp -= v.dmg;
         splashNames.add(utype(s, v.unit.type).name);
+        noteVictim(v.unit, v.dmg);
       }
 
       if (target.hp <= 0) {
@@ -2709,6 +2836,15 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       owner,
       `${def.name} 自动开火${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
     );
+    // 挨打的一方也要有一条：塔和营是在**对面回合开始时**自己开火的，
+    // 不写这一条，防守方看到的就是"我的兵凭空掉血"（理由同 doAttack 里那段）。
+    for (const [who, box] of byVictim) {
+      pushLog(
+        s,
+        who,
+        `${def.name} 对 ${[...box.names].join('、')} 开火，共造成 ${box.dmg} 点伤害`,
+      );
+    }
   }
 }
 
@@ -2932,6 +3068,29 @@ function syncBridges(s: GameState): void {
   s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
+/**
+ * 留痕种类能用的那几件东西。
+ *
+ * 为什么不把 `pushLog` / `utype` 直接传给 kind：marks.ts 只依赖类型，
+ * 一旦它 import 规则层就是循环。给一个小接口，扩展拿到的能力和
+ * 兵种能力的钩子（`c.api`）是同一套语义，写起来不用换脑子。
+ *
+ * 雷炸出来的伤害**不走进攻公式**（无护甲、无地形、无反击）：
+ * 地雷不跟你讲武德，扣血就是扣血。这也是它和"一次正常攻击"最清楚的分界。
+ */
+function markApi(s: GameState): MarkApi {
+  return {
+    utype: (typeId) => utype(s, typeId),
+    log: (owner, text, open = true) => pushLog(s, owner, text, open),
+    hurt: (unit, amount, text) => {
+      const dmg = Math.max(0, Math.round(amount));
+      if (dmg <= 0) return;
+      unit.hp -= dmg;
+      pushLog(s, unit.owner, text, true);
+    },
+  };
+}
+
 function doMove(s: GameState, unitId: string, x: number, y: number): ActionResult {
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
@@ -2956,6 +3115,18 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   unit.x = x;
   unit.y = y;
   unit.moved = true;
+
+  // 落脚之后再算雷：**先站上去，再挨炸**。
+  // 顺序不能反——反过来的话"能不能进这一格"要先去问一遍地上的东西，
+  // 于是"踩雷"变成"这一步走不成"，雷就从陷阱变成了空气墙。
+  if (marksOf(s).length > 0) {
+    enterTile(s, unit, markApi(s));
+    // 炸死的就地清场：不清的话，下一步"入驻废墟"会由一个 0 血的单位执行
+    if (unit.hp <= 0) {
+      sweepDead(s);
+      return { ok: true, state: s };
+    }
+  }
 
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
@@ -3135,6 +3306,26 @@ function doAttack(
       ? `${atName} 攻击 ${dfName}，${hitText}造成 ${dmg} 伤害${splashText}${statusText}${pushText}${counterDmg > 0 ? `，遭到 ${counterDmg} 反击` : ''}`
       : `${atName} 攻击 ${dfName}，穿不透护甲，没有造成伤害${splashText}${pushText}`,
   );
+  /*
+   * 挨打的那一方也要有一条战报。
+   *
+   * 上面那条是按出手方写的（`pushLog` 不传 `open` 就只有他自己看得见）。
+   * 于是防守方遇到的是：血量掉了，战报里一个字都没有——远程单位尤其明显，
+   * 一门射程 5、溅射 2 的火炮能把「离它 7 格」的人一起打到，
+   * 而挨打的人那边连"我被打了"都没记一笔，看起来就像凭空掉血。
+   *
+   * 写什么：打中谁、掉多少、波及了谁。**不写攻击者站哪**——
+   * 那是迷雾该管的事。只有隐匿（潜行 / 刺客大师）中的袭击者才连名字都不给，
+   * 否则"是谁打的我"这条信息就把隐匿本身废掉了。
+   */
+  if (dmg > 0 || splashed.length > 0) {
+    const unseen = isHiddenFrom(s, attacker, defender.owner);
+    pushLog(
+      s,
+      defender.owner,
+      `${unseen ? '视野外的一击' : atName} 打在 ${dfName} 身上，造成 ${dmg} 伤害${splashText}${statusText}${pushText}`,
+    );
+  }
   if (healed > 0) pushLog(s, attacker.owner, `${atName} 吸取 ${healed} 点生命`);
 
   // 投斧那一类是"技能白送的一下"：它不写 acted/moved，扔完还能再正常打一次。
@@ -3202,7 +3393,7 @@ function doAttack(
   }
   if (attacker.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== attacker.id);
-    pushLog(s, other(attacker.owner), `${atName} 在反击中阵亡`, true);
+    pushLog(s, attacker.owner, `${atName} 在反击中阵亡`, true);
     drownCargo(s, attacker);
     fireKilled(s, attacker, undefined);
   }
@@ -3594,10 +3785,14 @@ export function buildSiteError(
     }
   }
 
-  if (distance(builder, { x, y }) > CONFIG.buildRange && !(overWater && bridgeChainOk(builder, x, y, s))) {
+  // 距离：绝大多数建筑按 CONFIG.buildRange 算；少数"本来就要盖在远处"的
+  // （海上钻井平台）在兵种数据里自己写一个更大的数——放宽的只是距离，
+  // 选址条件照旧一条不少。
+  const reach = def.buildRange ?? CONFIG.buildRange;
+  if (distance(builder, { x, y }) > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
     return overWater
-      ? `建造者离得太远（最多 ${CONFIG.buildRange} 格；桥可以沿已有的桥面再往外接两节）`
-      : `建造者离得太远（最多 ${CONFIG.buildRange} 格）`;
+      ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
+      : `建造者离得太远（最多 ${reach} 格）`;
   }
 
   return null;
@@ -4013,6 +4208,14 @@ function doRecruit(
     acted: true,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
+
+  // 新兵也可能直接落在雷上：这一格如果被人布过东西，照样触发。
+  // 不这么做的后果很具体：把城门口铺满雷，就能让对面永远造不出水军。
+  const fresh = s.units[s.units.length - 1];
+  if (fresh && fresh.type === def.id && marksOf(s).length > 0) {
+    enterTile(s, fresh, markApi(s));
+    if (fresh.hp <= 0) sweepDead(s);
+  }
 
   // 记一笔产出回合：produce.everyTurns > 1 的营靠它算冷却
   if (campId) {
@@ -4450,15 +4653,21 @@ SKILL_EFFECTS['ascend'] = (c) => {
   const atkUp = c.skill.atkUp ?? 8;
   const armorUp = c.skill.armorUp ?? 2;
   const hpUp = c.skill.hpUp ?? 30;
+  const magicAtkUp = c.skill.magicAtkUp ?? 0;
+  const magicResUp = c.skill.magicResUp ?? 0;
   const heal = c.skill.power ?? 0.3;
   c.self.atkBonus = (c.self.atkBonus ?? 0) + atkUp;
   c.self.armorBonus = (c.self.armorBonus ?? 0) + armorUp;
   c.self.maxHpBonus = (c.self.maxHpBonus ?? 0) + hpUp;
+  // 魔法段的两项：只在这条技能真的配了值时才写，免得老数据平白多出 0 字段
+  if (magicAtkUp) c.self.magicAtkBonus = (c.self.magicAtkBonus ?? 0) + magicAtkUp;
+  if (magicResUp) c.self.magicResBonus = (c.self.magicResBonus ?? 0) + magicResUp;
   // 上限涨了，回血按**新的**上限算：先加上限再回血，这一口才吃得到自己刚长出来的那截
   const max = maxHpOf(c.state, c.self);
   const healed = Math.max(1, Math.round(max * heal)) + hpUp;
   c.self.hp = Math.min(max, c.self.hp + healed);
-  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}、生命上限 +${hpUp}，回复 ${healed} 点`;
+  const extra = (magicAtkUp ? `、魔攻 +${magicAtkUp}` : '') + (magicResUp ? `、魔抗 +${magicResUp}` : '');
+  c.result.log = `圣剑觉醒：攻 +${atkUp}、甲 +${armorUp}${extra}、生命上限 +${hpUp}，回复 ${healed} 点`;
 };
 
 /**
@@ -4726,8 +4935,24 @@ function autoPlaceEgg(s: GameState): void {
 /** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
-  s.winner = other(me);
-  pushLog(s, me, `${s.players[me].name} 认输`, true);
+  if (seatsOf(s).length === 2) {
+    // 两人局：认输就是这局结束，对面赢（和以前一模一样）
+    s.winner = other(me);
+    pushLog(s, me, `${s.players[me].name} 认输`, true);
+    return { ok: true, state: s };
+  }
+  /*
+   * 三人四人局：认输只是**我**退出，剩下的人接着打。
+   *
+   * 两条要落实：把这家的兵从盘上撤走（留着就是一群打不还手的靶子，
+   * 还会一直被别人的自动开火当成目标），以及把当前行动权交给下一位——
+   * 否则 `current` 停在一个已经退出的席位上，局面就卡住了。
+   */
+  s.out = [...(s.out ?? []), me];
+  s.units = s.units.filter((u) => u.owner !== me);
+  pushLog(s, me, `${s.players[me].name} 认输，退出这局`, true);
+  s.winner = checkWinner(s);
+  if (!s.winner) s.current = nextSeat(s, me);
   return { ok: true, state: s };
 }
 
@@ -4743,7 +4968,7 @@ function sweepDead(s: GameState): void {
     if (u.hp > 0) continue;
     if (!s.units.some((x) => x.id === u.id)) continue;
     s.units = s.units.filter((x) => x.id !== u.id);
-    pushLog(s, other(u.owner), `${utype(s, u.type).name} 倒下了`, true);
+    pushLog(s, u.owner, `${utype(s, u.type).name} 倒下了`, true);
     drownCargo(s, u);
     fireKilled(s, u, undefined);
   }
@@ -4973,7 +5198,7 @@ function doEndTurn(s: GameState): ActionResult {
   const prevSites = s.orderSites?.[prevPlayer];
   if (prevSites && prevSites.length > 0) prevSites.shift();
 
-  const nextPlayer = other(s.current);
+  const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
   s.turn += 1;
 
@@ -5042,6 +5267,14 @@ function doEndTurn(s: GameState): ActionResult {
     e.hooks.onTurnStart?.({ state: s, player: nextPlayer });
   }
 
+  // 地上的东西也在"回合开始"这一刻结算（火场、毒雾、自爆引信……）。
+  // 放在扩展钩子之后：扩展先把局面改完（比如涨潮把浅滩变成水），
+  // 再由留痕按最终地形判断，省得同一步里两种效果各算一次地形。
+  if (marksOf(s).length > 0) {
+    tickMarks(s, nextPlayer, markApi(s));
+    sweepDead(s);
+  }
+
   return { ok: true, state: s };
 }
 
@@ -5097,7 +5330,7 @@ export function refreshMemory(s: GameState): void {
   // 走过的地方必须留下个样子，否则第二次经过等于第一次来。
   const keepMap = s.config.expansionIds.includes('blackout');
 
-  for (const p of ['A', 'B'] as PlayerId[]) {
+  for (const p of seatsOf(s)) {
     const vis = visibleTilesOf(s, p);
     const mem = s.memory[p];
     const aliveIds = new Set(s.units.map((u) => u.id));

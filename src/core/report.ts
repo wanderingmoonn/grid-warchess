@@ -15,12 +15,21 @@
  * "里面不许出现某个名字"。真发不发，由界面那边问玩家。
  */
 
+import { BUILD_VERSION } from './build-info.ts';
 import { underConstruction } from './rules.ts';
 import { timelineSummary, type MatchTimeline } from './timeline.ts';
-import type { GameState, PlayerId } from './types.ts';
+import { seatsOf, type GameState, type PlayerId } from './types.ts';
 
-/** 报告格式版本。加字段不一定动它，改语义一定要动 */
-export const REPORT_VERSION = 1;
+/**
+ * 报告格式版本。加字段不一定动它，改语义一定要动。
+ *
+ * 1 = 2026-10-28 那版（终局快照 + 可选 timeline v1）
+ * 2 = 2026-11-02：加 `build` / `aiSides`，timeline 换成 v2（按席位、逐兵种战损与伤害）
+ *
+ * 为什么必须升：`timeline.samples` 的形状变了（A/B 两行 → sides 按席位）。
+ * 光看 v 还是 1，分析脚本会拿新数据按老形状读，读出一片 undefined。
+ */
+export const REPORT_VERSION = 2;
 
 /**
  * 玩家点"上传"时同意的那份说明的版本。
@@ -54,13 +63,34 @@ export interface MatchReport {
   v: number;
   /** 生成时间（ISO）。只用来判断"这批数据是不是同一波版本打的" */
   at: string;
+  /**
+   * 构建版本（package.json 的 version，构建时注入）。
+   *
+   * `at` 只能告诉你"什么时候打的"，告诉不了"打的哪一版"。10-28 到 11-02 之间
+   * 改过海军、留痕、剑修、AI，三十几局混在一起做趋势是错的——切数据要按这个切。
+   */
+  build: string;
   seed: number;
   board: { w: number; h: number; terrain: Record<string, number> };
   startEra: number;
+  /**
+   * 几个人在打（2/3/4）。
+   *
+   * 单独存一层，是因为 sides 的长度已经能看出来但**老数据看不出来**：
+   * v1 时代的 sides 一律是两条，混进新数据后没法区分"两人局"和"三人局里有一家被吃掉"。
+   */
+  playerCount: number;
   expansions: string[];
   /** 兵种表的规模：装了几套自定义兵种，两批数据就没法直接比 */
   packSize: number;
   ai: { opponent: boolean; ally: boolean; level: string; commander: boolean; godMode: boolean };
+  /**
+   * AI 坐哪几席。
+   *
+   * 只有 opponent/ally 两个布尔时，"A 座赢了 22 局"这句话没法读：AI 在 B 座
+   * 是人赢 AI，双 AI 观战就变成"先手 AI 赢了"。名单写明白，这类误读才不可能发生。
+   */
+  aiSides: PlayerId[];
   /** 打了多少次行动（不是"回合数"，一步一步数才对得上） */
   turns: number;
   winner: PlayerId | null;
@@ -102,7 +132,8 @@ export function buildMatchReport(
   now: Date = new Date(),
   timeline?: MatchTimeline | null,
 ): MatchReport {
-  const sides: ReportSide[] = (['A', 'B'] as PlayerId[]).map((side) => {
+  const seats = seatsOf(s);
+  const sides: ReportSide[] = seats.map((side) => {
     const mine = s.units.filter((u) => u.owner === side);
     const roster: Record<string, number> = {};
     let buildings = 0;
@@ -136,9 +167,11 @@ export function buildMatchReport(
   return {
     v: REPORT_VERSION,
     at: now.toISOString(),
+    build: BUILD_VERSION,
     seed: s.seed,
     board: { w: s.w, h: s.h, terrain: countTerrain(s) },
     startEra: s.config.startEra,
+    playerCount: seats.length,
     expansions: [...s.config.expansionIds],
     packSize: Object.keys(s.unitTypes).length,
     ai: {
@@ -148,6 +181,9 @@ export function buildMatchReport(
       commander: s.config.commanderMode === true,
       godMode: s.config.godMode === true,
     },
+    // AI 代打哪几席：ally 表示"A 由 AI 代打"，opponent 表示"对面是 AI"。
+    // 双 AI 观战时两个都真，于是名单是 ['A','B']——这正是 v1 分不出来的那种局。
+    aiSides: [...(s.config.aiAlly === true ? ['A' as PlayerId] : []), ...(s.config.aiOpponent === true ? ['B' as PlayerId] : [])],
     turns: s.turn,
     winner: s.winner,
     sites: s.units.filter((u) => underConstruction(u)).length,
@@ -165,8 +201,9 @@ export function buildMatchReport(
 export function reportSignature(r: MatchReport): string {
   const tally = r.sides.map((x) => `${x.cities}-${x.units}-${x.hp}`).join('_');
   // 有没有逐回合摘要进指纹：同一局"详细版"和"精简版"是两份不同的东西，
-  // 先传了精简版再传详细版不该被当成重复。
-  const detail = r.timeline ? `+t${r.timeline.samples.length}` : '';
+  // 先传了精简版再传详细版不该被当成重复。摘要的**格式版本**也要进去——
+  // v1 的 26 帧和 v2 的 26 帧是两套字段，混成一条会让分析时读出一半 undefined。
+  const detail = r.timeline ? `+v${r.timeline.v}t${r.timeline.samples.length}` : '';
   return `${r.seed}:${r.turns}:${r.winner ?? '-'}:${tally}${detail}`;
 }
 

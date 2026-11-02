@@ -103,7 +103,7 @@ export const CORE_ABILITIES: AbilityDef[] = [
   {
     id: 'kamikaze',
     name: '自爆',
-    summary: '阵亡时对四周相邻单位各造成自身攻击一半的伤害。',
+    summary: '阵亡时对四周相邻的地面单位各造成自身攻击一半的伤害——打不到空中的东西。',
     group: 'attack',
     hooks: {
       onDeath: (c) => {
@@ -116,10 +116,16 @@ export const CORE_ABILITIES: AbilityDef[] = [
           [0, 1],
           [0, -1],
         ] as const) {
-          const near = c.state.units.find((u) => u.x === c.victim.x + dx && u.y === c.victim.y + dy);
-          if (!near) continue;
-          near.hp -= blast;
-          hit += 1;
+          // 一格可以同时站着地面和空中各一个，所以这里要找"邻近的所有单位"，
+          // 只取四邻那一格的 find 会漏掉叠在上面的那个。
+          for (const near of c.state.units) {
+            if (near.x !== c.victim.x + dx || near.y !== c.victim.y + dy) continue;
+            // 自爆是贴地的冲击波：掠空的东西飞在上面，扫不到。
+            // 判据用 layer === 'air'，和「区域防空」同一个口径（见 air-packs）。
+            if (c.api.utype(c.state, near.type).layer === 'air') continue;
+            near.hp -= blast;
+            hit += 1;
+          }
         }
         if (hit > 0) {
           c.api.pushLog(c.state, c.victim.owner, `${def.name} 自爆，波及 ${hit} 个单位`);

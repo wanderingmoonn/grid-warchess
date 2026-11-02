@@ -1,4 +1,15 @@
 import { defineConfig } from 'vite';
+import { readFileSync } from 'node:fs';
+
+/**
+ * 构建版本号：报告里要带它，否则跨版本的数据混在一起比。
+ *
+ * 从 package.json 读，而不是读 git —— 发布产物是从 `_publish/` 发出去的，
+ * 工作区和线上跑的东西不一定对得上；version 至少是个人工承诺过的标签。
+ */
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version?: string;
+};
 
 /**
  * 发布环境会注入 PORT，反向代理按这个端口找服务，
@@ -16,6 +27,10 @@ const host = inSandbox ? '0.0.0.0' : '127.0.0.1';
 export default defineConfig({
   // 相对路径：部署到任何子目录都不会 404
   base: './',
+  define: {
+    // 用法见 src/core/build-info.ts：那边会兜底成 'dev'
+    __APP_VERSION__: JSON.stringify(pkg.version ?? 'dev'),
+  },
   server: {
     host,
     port,

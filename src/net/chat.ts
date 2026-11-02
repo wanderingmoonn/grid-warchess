@@ -30,7 +30,10 @@ export const CHAT_MAX_LEN = 120;
 /** 一次拉多少条 */
 const PAGE = 50;
 
-export type ChatSeat = 'A' | 'B' | 'watch';
+/** 聊天里的身份：某一席，或者观战。席位跟着人数走（见 core/types 的 PlayerId） */
+import type { PlayerId } from '../core/types.ts';
+
+export type ChatSeat = PlayerId | 'watch';
 
 export interface ChatLine {
   id: number;

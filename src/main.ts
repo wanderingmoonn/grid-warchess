@@ -62,7 +62,8 @@ import {
 } from './core/sandbox.ts';
 import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
-import { createMatch, DEFAULT_CONFIG, normalizePlayerNames, randomSeed } from './core/setup.ts';
+import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
+import { seatsOf } from './core/types.ts';
 import type { Action, GameState, PlayerId, Terrain, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
@@ -97,6 +98,7 @@ import { openSetupPanel } from './ui/setup-panel.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
+import { openFeedbackPanel } from './ui/feedback.ts';
 import {
   adoptDecision,
   claimSeat,
@@ -666,8 +668,8 @@ function me(): PlayerId {
 function logScope(): PlayerId | null {
   // 观战位 / 双 AI 观战：本来就没有"我方"
   if (watching() || spectating()) return null;
-  // 热座：一台机器两个人轮流玩，谁都别装看不见
-  if (!room && !isAiSide(state, 'A') && !isAiSide(state, 'B')) return null;
+  // 热座：一台机器几个人轮流玩，谁都别装看不见
+  if (!room && !anyAiSide(state)) return null;
   return me();
 }
 
@@ -844,6 +846,8 @@ function render(): void {
     incomeHints: computeIncomeHints(selected),
     impacts,
     hpDrops,
+    // 地上的东西（水雷/地雷）要按"这是谁的视角"分实心/空心
+    me: me(),
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -2941,7 +2945,13 @@ function handleAction(act: string, el: HTMLElement): void {
       const p = state.current;
       const nowAi = !isAiSide(state, p);
       // 两边都写一遍，避免"收回 A 的托管"时 B 的托管状态被顺手抹掉
-      const next = { A: isAiSide(state, 'A'), B: isAiSide(state, 'B') };
+      // 四个席位都写一遍：这一局没坐人的席位也留着 false，别让 AI 接管空座
+      const next = {
+        A: isAiSide(state, 'A'),
+        B: isAiSide(state, 'B'),
+        C: isAiSide(state, 'C'),
+        D: isAiSide(state, 'D'),
+      };
       next[p] = nowAi;
       state.aiControl = next;
       // 收回操作权要立刻掐掉正在跑的循环，否则它会把这一回合走完
@@ -2994,6 +3004,15 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'unit-editor': {
       openUnitEditor(() => render());
+      return;
+    }
+
+    case 'feedback': {
+      // 随时可拍：这时候棋可能还没打完，找 bug 要的就是"当时那一刻"
+      openFeedbackPanel({
+        current: () => state,
+        timeline: () => (recorder ? sealTimeline(recorder) : null),
+      });
       return;
     }
 
@@ -4165,8 +4184,9 @@ function renderGodShelf(): void {
     godEra,
     state.units.length,
     state.cities.length,
-    state.players.A.gold,
-    state.players.B.gold,
+    // 各席位的金币都进签名：沙盒现在是两人局专属，但按席位写一遍不会错，
+    // 也不会哪天"沙盒支持三家"时漏掉重画
+    ...seatsOf(state).map((p) => state.players[p].gold),
     // 战报条数进签名：这是唯一"局面没怎么变、但确实该重画"的东西。
     // 只认长度不认内容——一条新战报必然让长度 +1（战报只增不减）。
     state.log.length,
@@ -4356,7 +4376,7 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   // 被「停止」打断：令牌已经换人，收尾交给停止那一下，这里不许再报结论
   if (token !== aiToken) return;
 
-  const wiped = (['A', 'B'] as PlayerId[]).filter((p) => !godHasArmy(p));
+  const wiped = seatsOf(state).filter((p) => !godHasArmy(p));
   if (wiped.length > 0) {
     godResult = `${state.players[wiped[0]!].name}的部队打光了`;
   } else if (state.pendingEgg) {
@@ -4382,10 +4402,22 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
 
 // ---------- 联机 ----------
 
+/**
+ * 「别人都进来了吗」。
+ *
+ * 两人局里它就是"对面入座了没有"，三家四家局里是"剩下几个位子都坐了"——
+ * 大厅那句"等待对手入座"、邀请链接上的状态、进房那一刻的初值都读它。
+ * 写死成 `seat === 'A' ? 'B' : 'A'` 的话，四人局会认为"只要 B 进来就能开局"。
+ */
+function peersAllSeated(snapshot: RoomSnapshot, me: PlayerId): boolean {
+  const others = seatsOf(snapshot.state).filter((p) => p !== me);
+  return others.length > 0 && others.every((p) => snapshot.seats[p] !== null);
+}
+
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   room = seat;
-  peerSeated = seat.spectator === true ? true : snapshot.seats[seat.seat === 'A' ? 'B' : 'A'] !== null;
+  peerSeated = seat.spectator === true ? true : peersAllSeated(snapshot, seat.seat);
   saveSeat(seat);
   rememberRoom(seat.code);
   setSaveScope(seat.code);
@@ -4547,10 +4579,9 @@ async function pollRoom(): Promise<void> {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
 
-    // "对面入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
+    // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
-      const other = seat.seat === 'A' ? 'B' : 'A';
-      const seated = snapshot.seats[other] !== null;
+      const seated = peersAllSeated(snapshot, seat.seat);
       if (seated !== peerSeated) {
         peerSeated = seated;
         // 进度号没变时下面会直接 return，所以这里得自己重画一次遮罩
@@ -4662,17 +4693,22 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       return;
     }
     const token = mine?.token ?? newToken();
-    const order: PlayerId[] = mine ? [mine.seat] : ['A', 'B'];
+    // 自己记着座位就先去抢回原位；没记着（换了设备/清了缓存）就从第一个空座开始试。
+    // 三人、四人桌的座位数由这一局的 config 决定，不能再写死 A/B 两个。
+    const tableSeats = seatsOf(snapshot.state);
+    const order: PlayerId[] = mine
+      ? [mine.seat, ...tableSeats.filter((x) => x !== mine.seat)]
+      : tableSeats;
     for (const seat of order) {
       const result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
-        toast(`已进入房间 ${code}，你执${seat === 'A' ? '红方' : '蓝方'}`);
+        toast(`已进入房间 ${code}，你执${DEFAULT_PLAYER_NAMES[seat]}`);
         return;
       }
     }
     applyRoom({ code, seat: 'A', token, spectator: true }, snapshot);
-    toast(`两个席位都有人了，已切到观战视角（全图）`);
+    toast('席位都满了，已切到观战视角（全图）');
   } catch (err) {
     toast(err instanceof Error ? err.message : '进入房间失败');
   }
@@ -5099,9 +5135,12 @@ function openHandoff(): void {
   closeHandoff();
   handoffOpen = true;
   const nextPlayer = state.current;
-  const side = nextPlayer === 'A' ? 'a' : 'b';
+  // 徽章配色跟着席位走：A/B 是老配色，C/D 是多人局新加的
+  const side = nextPlayer.toLowerCase();
   const name = state.players[nextPlayer].name;
   const gold = state.players[nextPlayer].gold;
+  // 三人四人局里"对方"不是一个东西：剩下几家都可能是下一个拿设备的人
+  const rivals = seatsOf(state).filter((p) => p !== nextPlayer).length;
 
   const el = document.createElement('div');
   el.className = 'handoff';
@@ -5109,8 +5148,10 @@ function openHandoff(): void {
   el.innerHTML = `
     <div class="handoff-card">
       <div class="handoff-badge ${side}">轮到 ${name}</div>
-      <h2>把设备交给对方</h2>
-      <p>当前金币 ${gold}。点开始之后，屏幕上只会显示你视野内的对方单位。<br />其余看不见的单位会以虚框标记在最后已知的位置。</p>
+      <h2>把设备交给下一位</h2>
+      <p>当前金币 ${gold}。点开始之后，屏幕上只会显示你视野内的${
+        rivals > 1 ? '别家单位（另外几家都算别人）' : '对方单位'
+      }。<br />其余看不见的单位会以虚框标记在最后已知的位置。</p>
       <button class="btn btn-primary btn-block" data-act="handoff-start">我是 ${name}，开始行动</button>
     </div>
   `;

@@ -14,6 +14,7 @@
  *      所以扩展加一种新资源只需要在这里注册一行。
  */
 
+import { PLAYER_ORDER } from './types.ts';
 import type { PlayerId, ResourceId, UnitTypeDef } from './types.ts';
 
 /** 主资源的 id。写死成常量，避免各处手打字符串。 */
@@ -172,9 +173,9 @@ export function normalizePlayerResources(p: { gold: number; res?: Partial<Record
   p.res = {};
 }
 
-/** 便于测试与调试：把玩家的资源打成一行 */
+/** 便于测试与调试：把玩家的资源打成一行（有几个席位打几段） */
 export function resourceSnapshot(players: Record<PlayerId, PlayerResources>): string {
-  return (['A', 'B'] as PlayerId[])
+  return PLAYER_ORDER.filter((p) => players[p])
     .map((p) => {
       const extra = Object.entries(players[p].res ?? {})
         .filter(([, n]) => (n ?? 0) > 0)

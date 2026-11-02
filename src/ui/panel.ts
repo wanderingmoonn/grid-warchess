@@ -27,6 +27,7 @@ import type { PlayerView } from '../core/fog.ts';
 import { CLIMATE_ICON, climateEffectLines, describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
 import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
+  airLayer,
   attacksLeftOf,
   attacksPerTurn,
   splashRadiusOf,
@@ -43,7 +44,11 @@ import {
   effectiveStats,
   elementOf,
   maxHpOf, 
+  magicAtkOf,
+  magicResOf,
+  hasQuit,
   heroSkillsOf,
+  isAirborne,
   ordersOf,
   recruitResCost,
   recruitSpawnCells,
@@ -52,6 +57,7 @@ import {
   upgradeCostOf,
   utype,
 } from '../core/rules.ts';
+import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
@@ -237,11 +243,8 @@ function panelHtml(input: PanelInput): string {
   const spectator = input.spectator === true;
   /** 只看不给动：观战位和指挥官模式都算，后面所有 `mine` 都挂在它上面 */
   const readOnly = spectator || input.commander === true;
-  const other: PlayerId = me === 'A' ? 'B' : 'A';
   const myTurn = !spectator && s.current === me && !s.winner;
 
-  const myCities = s.cities.filter((c) => c.owner === me).length;
-  const otherCities = s.cities.filter((c) => c.owner === other).length;
 
   const turnBadge = s.winner
     ? `<span class="turn-badge">对局结束</span>`
@@ -274,6 +277,27 @@ function panelHtml(input: PanelInput): string {
     .filter((n): n is string => !!n);
   const expansionText = activeNames.length > 0 ? activeNames.join(' · ') : '无';
 
+  /*
+   * 席位条：两家时是两行，三家四家时就是三行四行。
+   *
+   * 以前这里是硬编码的"A vs B"——三人局里第三个人根本不会出现在这一栏里。
+   * 换成按席位遍历之后，"这一局有几个人"在界面上是一眼可见的：
+   * 行数就是人数，轮到的那个加亮，出局的划掉。
+   */
+  const seatRows = seatsOf(s)
+    .map((p) => {
+      const mine = p === me;
+      const cities = citiesOf(s, p).length;
+      const quit = hasQuit(s, p);
+      const on = p === s.current;
+      return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
+        <span class="vs-dot ${p.toLowerCase()}"></span>
+        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : ''}</b>
+        <span class="seat-stats">${resLine(p)} · 城 ${cities}</span>
+      </div>`;
+    })
+    .join('');
+
   return `
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -281,17 +305,7 @@ function panelHtml(input: PanelInput): string {
         <span class="hint">第 ${s.turn} 次行动</span>
       </div>
       <div style="margin-top:12px">
-        <div class="versus">
-          <div class="vs-side">
-            <div class="vs-name"><span class="vs-dot a"></span>${s.players.A.name}</div>
-            <div class="vs-stats">${resLine('A')}<br />城市 ${me === 'A' ? myCities : otherCities}</div>
-          </div>
-          <div class="vs-mid">VS</div>
-          <div class="vs-side right">
-            <div class="vs-name">${s.players.B.name}<span class="vs-dot b"></span></div>
-            <div class="vs-stats">${resLine('B')}<br />城市 ${me === 'B' ? myCities : otherCities}</div>
-          </div>
-        </div>
+        ${seatRows}
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
       <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
@@ -369,7 +383,12 @@ function panelHtml(input: PanelInput): string {
 function renderReport(s: GameState, info: PanelInput['report']): string {
   if (!info) return '';
   const rep = buildMatchReport(s);
-  const winnerText = rep.winner ? `${rep.winner} 方胜` : '还没有胜者';
+  // 这里**只写席位字母，不写玩家名**：这张卡列的是"点上传之后真的会发出去的东西"，
+  // 而报告里刻意不带名字（见 report.ts 顶上那段）。写名字等于告诉玩家
+  // "名字会被上传"——那是假话，也会让"匿名"这条承诺变得不可信。
+  const winnerText = rep.winner
+    ? `${rep.winner} 方胜${rep.playerCount > 2 ? `（${rep.playerCount} 人局）` : ''}`
+    : '还没有胜者';
   const roster = (x: ReportSide): string => {
     const list = Object.entries(x.roster)
       .sort((a, b) => b[1] - a[1])
@@ -401,7 +420,7 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
       （不会公开单条记录）。勾上只是"允许"，点下面的按钮才真的发出去。
     </div>
     <ul class="report-list">
-      <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.turns} 次行动 · ${winnerText}</li>
+      <li>地图种子 ${rep.seed} · ${rep.board.w}×${rep.board.h} · ${rep.playerCount} 人 · ${rep.turns} 次行动 · ${winnerText}</li>
       <li>${rep.expansions.length > 0 ? `扩展 ${rep.expansions.length} 个` : '没有开扩展'} · 兵种表 ${rep.packSize} 个${
         rep.ai.opponent || rep.ai.ally ? ` · AI ${rep.ai.level === 'basic' ? '初级' : '高级'}` : ''
       }</li>
@@ -721,10 +740,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${
         // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
         // 只写"攻击 0"等于告诉玩家这个兵不会打人。
-        def.magicAtk
-          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${def.magicAtk} / ${
-              def.magicRes ?? 0
-            }</b></div>`
+        // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
+        // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
+        magicAtkOf(s, selectedUnit) > 0
+          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
+              s,
+              selectedUnit,
+            )} / ${magicResOf(s, selectedUnit)}</b></div>`
           : ''
       }
       ${
@@ -851,9 +873,16 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = city.hp / city.maxHp;
   const era = eraDef(city.era);
-  const garrison = unitsOf(s, city.owner).filter((u) =>
-    cityTiles(city).some((t) => t.x === u.x && t.y === u.y),
-  ).length;
+  // 驻军只数**地面**单位。
+  //
+  // 空中单位和地面单位是一格站两个（见 rules 的 sameLayerAt），
+  // 所以"城里有几个人"和"城里还空着几格"是两个数：
+  //   · 四架飞机悬在城上空，地面四个位置一个没占，照样能出四个兵；
+  //   · 城里塞满四个步兵，天上还是一片空白，照样能出飞机。
+  // 以前这两件事共用一个数，于是"人口满了造不出飞机"和"飞机悬着造不出步兵"
+  // 两个方向都错。
+  const onCityTiles = (u: Unit) => cityTiles(city).some((t) => t.x === u.x && t.y === u.y);
+  const garrison = unitsOf(s, city.owner).filter((u) => !isAirborne(s, u) && onCityTiles(u)).length;
   const freeSlots = city.size * city.size - garrison;
   const gold = s.players[me].gold;
 
@@ -896,8 +925,24 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   );
   const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
 
+  // 地面坐满时还起得来几款空军：底部那句提示用得上。
+  // 它只回答"是不是真的什么都造不了"，所以按"确实有落点"算，不是按兵种表里有几架。
+  const airReady = buildable.filter(
+    (d) => airLayer(d) && recruitSpawnCells(s, city.id, undefined, d.id).length > 0,
+  ).length;
+
   const unitButton = (def: UnitTypeDef) => {
-    const slotsOk = def.domain === 'water' ? hasPort : freeSlots > 0;
+    // 三种兵各有各的"有没有地方放"：
+    //   水军 → 城边有没有空水面；
+    //   空军 → 直接问规则层（它可以悬在地面单位头顶上，所以"地面空位 0"不影响它）；
+    //   陆军 → 城里还剩几个地面位置。
+    // 前两条不能拿 freeSlots 代替：那个数是按地面算的，空军照着它会被误判成没地方。
+    const slotsOk =
+      def.domain === 'water'
+        ? hasPort
+        : airLayer(def)
+          ? recruitSpawnCells(s, city.id, undefined, def.id).length > 0
+          : freeSlots > 0;
     // 下单模式下"城里有没有空位 / 现在轮不轮得到你"都不作数：那些是 AI 执行那一回合才面对的事
     const disabled = ordering ? queueFull : !myTurn || !slotsOk;
 
@@ -997,7 +1042,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                  ? '排进队列的是「这座城 · 这个兵」，AI 执行那一回合才扣钱出兵；队列可以在顶部随时删。'
                  : freeSlots > 0
                    ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
-                   : '城内已站满，先让部队挪一挪。'
+                   : airReady > 0
+                     ? '城内地面位已站满，先让部队挪一挪——空军还能起飞（悬在地面单位上方不占位置）。'
+                     : '城内已站满，先让部队挪一挪。'
              }
              ${
                locked.length > 0
@@ -1492,6 +1539,7 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
       <button class="btn btn-sm" data-act="manual">规则书</button>
+      <button class="btn btn-sm" data-act="feedback" title="拍下当前局面，报个 bug">反馈</button>
       <button class="btn btn-sm" data-act="unit-editor">兵种编辑器</button>
       <button class="btn btn-sm" data-act="export">导出对局</button>
       <button class="btn btn-sm" data-act="import">导入对局</button>

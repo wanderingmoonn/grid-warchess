@@ -15,9 +15,12 @@ import {
   expansionById,
 } from './expansions.ts';
 import { createDraft } from './draft.ts';
-import { generateLayout, terrainFromChar } from './mapgen.ts';
+import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar } from './mapgen.ts';
+import { validateFixedMap } from './fixed-maps.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
+import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
+import type { SpawnDef } from './mapgen.ts';
 
 
 /**
@@ -99,19 +102,56 @@ export function startGoldFor(startEra: number): number {
  * 不能只改这一处——旧存档、云端房间、导入的对局里都还躺着老字符串。
  * 这里只在"名字还等于旧默认值"时才替换，玩家自己改过的名字一律不动。
  */
-const LEGACY_PLAYER_NAMES: Record<PlayerId, string> = { A: '我方', B: '敌方' };
-const DEFAULT_PLAYER_NAMES: Record<PlayerId, string> = { A: '红方', B: '蓝方' };
+// C/D 从来没有过"我方/敌方"这种旧默认名，所以它们的旧值就等于新值——
+// 这条迁移只对 A/B 生效，写成同一份只是为了满足 Record 的四个键。
+const LEGACY_PLAYER_NAMES: Record<PlayerId, string> = { A: '我方', B: '敌方', C: '绿方', D: '黄方' };
+/**
+ * 默认名字跟着席位走：红 / 蓝 / 绿 / 黄。
+ *
+ * 三家四家局里光看"我方/敌方"是分不清的，所以默认名直接用颜色——
+ * 棋盘上的配色、血条、战报名字用的也是同一套（见 style.css 的 own-*）。
+ */
+export const DEFAULT_PLAYER_NAMES: Record<PlayerId, string> = { A: '红方', B: '蓝方', C: '绿方', D: '黄方' };
 
 /** 就地把旧默认名换成新默认名；返回是否动过（调用方据此决定要不要回存） */
 export function normalizePlayerNames(s: GameState): boolean {
   let touched = false;
-  for (const p of ['A', 'B'] as PlayerId[]) {
-    if (s.players?.[p]?.name === LEGACY_PLAYER_NAMES[p]) {
+  for (const p of PLAYER_ORDER) {
+    // 老存档只有两个席位，别为不存在的 C/D 造一条出来
+    if (!s.players?.[p]) continue;
+    // C/D 的"旧默认名"就等于新默认名：拿它去比会得出"改过了"的假结论，
+    // 于是每次读档都白回存一次。名字本来就一样的席位直接跳过。
+    if (LEGACY_PLAYER_NAMES[p] === DEFAULT_PLAYER_NAMES[p]) continue;
+    if (s.players[p].name === LEGACY_PLAYER_NAMES[p]) {
       s.players[p].name = DEFAULT_PLAYER_NAMES[p];
       touched = true;
     }
   }
   return touched;
+}
+
+/**
+ * 这组扩展一共带来哪些兵种。
+ *
+ * 抽成独立函数是因为现在有**两处**要问这个问题，而它们必须给出同一个答案：
+ *   · createMatch——决定这一局的 `state.unitTypes` 里有什么；
+ *   · 开局面板的兵种池弹层——决定列表里该出现哪些格子。
+ * 两边各写一遍的话，面板上勾着的船在进局后"造不出来"只是时间问题。
+ *
+ * 前置两条都要查：包级 `enabledExpansionIds`（前置包没开就不算），
+ * 以及单位级 `requiresPack`（圣剑勇者要「现代」那套才成立）。
+ */
+export function expansionUnitsFor(expansionIds: string[]): Record<string, UnitTypeDef> {
+  const live = enabledExpansionIds(expansionIds);
+  const out: Record<string, UnitTypeDef> = {};
+  for (const id of expansionIds) {
+    if (!live.has(id)) continue;
+    for (const u of expansionById(id)?.units ?? []) {
+      if (u.requiresPack && !live.has(u.requiresPack)) continue;
+      out[u.id] = { ...u };
+    }
+  }
+  return out;
 }
 
 export function createMatch(
@@ -124,18 +164,12 @@ export function createMatch(
   // 注意这里用的是 enabledExpansionIds 而不是 config.expansionIds：
   // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
   // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
+  const extraUnits: Record<string, UnitTypeDef> = {
+    ...customUnits,
+    ...expansionUnitsFor(config.expansionIds),
+  };
+  // 城市边长那边还要按包查一次，所以这份集合留着
   const liveExpansions = enabledExpansionIds(config.expansionIds);
-  const extraUnits: Record<string, UnitTypeDef> = { ...customUnits };
-  for (const id of config.expansionIds) {
-    if (!liveExpansions.has(id)) continue;
-    for (const u of expansionById(id)?.units ?? []) {
-      // 单位级的额外前置（`requiresPack`）：圣剑勇者、邪龙王要「现代」那一套才成立。
-      // 这里直接不收，而不是收进来再在产线上标灰——不存在的兵种不该在选卡池、
-      // AI 报价、规则书里各留下一个"看着能买、点了没反应"的影子。
-      if (u.requiresPack && !liveExpansions.has(u.requiresPack)) continue;
-      extraUnits[u.id] = { ...u };
-    }
-  }
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
   // 城市边长：扩展可以要求更大的主城（「城郭与物料」要 3×3）。
@@ -148,6 +182,28 @@ export function createMatch(
   );
   const citySize = Math.max(CITY.size, Math.round(config.citySize ?? declaredCitySize));
 
+  /**
+   * 这一局几家。
+   *
+   * 固定地图只有两个城位（`citiesA/B`），所以三人四人局一律走生成器——
+   * 与其让玩家上传的图在四人局里"有一家没城"，不如在选图那一步就不给选
+   * （开始界面里那块会置灰，这里再把一道关）。
+   */
+  const playerCount = (config.playerCount ?? 2) as 2 | 3 | 4;
+  /**
+   * 三人四人局只支持"全真人"。
+   *
+   * 两个 AI 开关和选卡 BP 都是按"两个席位"写的（AI 的目标选择、先后手补偿、
+   * BP 界面只有两栏）。让它们在三家四家局里生效，会造出"蓝方有兵、但没人操作"
+   * 这种既不能玩也说不清的局面——所以在这一层直接关掉，而不是指望每个入口
+   * 都记得先关一遍。`config` 是调用方的对象，不改它，用局部量往下传。
+   */
+  const twoSeats = playerCount === 2;
+  const draftMode = twoSeats && config.draftMode === true;
+  const aiOpponent = twoSeats && config.aiOpponent === true;
+  const aiAlly = twoSeats && config.aiAlly === true;
+  const commanderMode = twoSeats && config.commanderMode === true;
+
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
   /**
    * 选卡模式下池子必须是**全部兵种**。
@@ -158,7 +214,7 @@ export function createMatch(
    * 开局面板里逐个勾兵的开关在这个模式下没有意义（名单由 BP 决定），所以直接全开。
    */
   const pool = (
-    config.draftMode === true
+    draftMode
       ? Object.keys(catalog)
       : enabled.length > 0
         ? enabled
@@ -167,6 +223,27 @@ export function createMatch(
   // 勾了某个扩展，它带的兵种就默认进场，不用再单独勾
   for (const id of Object.keys(extraUnits)) {
     if (!pool.includes(id)) pool.push(id);
+  }
+  /**
+   * 显式关掉的兵种从这里剔出去。
+   *
+   * 这一步必须放在"扩展兵默认进场"**之后**：默认进场是规则，关掉是玩家在这条
+   * 规则上开的一个口子。顺序反过来，被关掉的船会在下一行又被加回池子里——
+   * 面板上看着是关的，进局照样能造。
+   */
+  const disabled = new Set(config.disabledUnits ?? []);
+  if (disabled.size > 0) {
+    for (let i = pool.length - 1; i >= 0; i--) {
+      if (disabled.has(pool[i])) pool.splice(i, 1);
+    }
+  }
+  // 全关掉了（配置从存档/链接进来，没经过面板那道"至少留一个"的关）：
+  // 退回本体兵种，别拿一个空池去开局——那样连产线都起不来。
+  // 这一次连 disabled 也不看了：空池比"不听你的"更糟。
+  if (pool.length === 0) {
+    for (const id of Object.keys(UNIT_TYPES)) {
+      if (!isPseudoUnit(id)) pool.push(id);
+    }
   }
 
   // 开局部队只给时代 1 的**陆军**战斗单位：
@@ -179,19 +256,36 @@ export function createMatch(
   const spawnPool = (startingPool.length > 0 ? startingPool : pool).filter(
     (id) => catalog[id]?.domain !== 'water',
   );
-  const layout = generateLayout(
-    clampBoardSize(config.size),
-    seed,
-    spawnPool,
-    {
-      style: config.mapStyle ?? 'random',
-      symmetry: config.mapSymmetry ?? 'fair',
-      citySize,
-      // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
-      // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
-      expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
-    },
-  );
+  /*
+   * 地图：要么是玩家选定的固定地图，要么按种子生成。
+   *
+   * 固定地图在**这里再校验一遍**，而不是信调用方：`config` 会跟着存档、
+   * 联机房间、分享链接一路传，谁都能改它。校验不过就退回随机生成——
+   * 一张坏图不该让整局建不起来，但也不能让它带着半张地形进场。
+   */
+  const fixed = config.fixedMap ? validateFixedMap(config.fixedMap) : null;
+  const layout =
+    fixed && fixed.ok && twoSeats
+      ? layoutFromRows(fixed.map.rows, fixed.map.citiesA, fixed.map.citiesB, spawnPool, citySize)
+      : playerCount > 2
+        ? generateMultiLayout(clampBoardSize(config.size), seed, spawnPool, {
+            players: playerCount === 3 ? 3 : 4,
+            citySize,
+            style: config.mapStyle,
+          })
+        : generateLayout(
+            clampBoardSize(config.size),
+            seed,
+            spawnPool,
+            {
+              style: config.mapStyle ?? 'random',
+              symmetry: config.mapSymmetry ?? 'fair',
+              citySize,
+              // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
+              // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
+              expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+            },
+          );
   const w = layout.w;
   const h = layout.h;
 
@@ -243,8 +337,23 @@ export function createMatch(
     }
   };
 
-  for (const c of layout.citiesA) placeCity('A', c.x, c.y);
-  for (const c of layout.citiesB) placeCity('B', c.x, c.y);
+  /** 这一局实际坐人的席位，按行动顺序 */
+  const seats = PLAYER_ORDER.slice(0, playerCount);
+  /** 布局里某一家分到的城位（两家局只有 A/B，三家四家才多出来） */
+  const layoutCities: Record<PlayerId, Array<{ x: number; y: number }>> = {
+    A: layout.citiesA,
+    B: layout.citiesB,
+    C: layout.citiesC ?? [],
+    D: layout.citiesD ?? [],
+  };
+  const layoutSpawns: Record<PlayerId, SpawnDef[]> = {
+    A: layout.spawnsA,
+    B: layout.spawnsB,
+    C: layout.spawnsC ?? [],
+    D: layout.spawnsD ?? [],
+  };
+
+  for (const p of seats) for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
 
   // ---- 单位 ----
   const units: Unit[] = [];
@@ -267,8 +376,7 @@ export function createMatch(
     });
   };
 
-  for (const s of layout.spawnsA) pushUnit('A', s.type, s.x, s.y);
-  for (const s of layout.spawnsB) pushUnit('B', s.type, s.x, s.y);
+  for (const p of seats) for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
 
   // 开局送两个经济单位，摆在自家城外的空地上——
   // 农民要站在平原才有产出，所以不能塞进城里
@@ -277,7 +385,7 @@ export function createMatch(
     return d?.era === 1 && d.category === 'economy';
   });
   if (econPool.length > 0) {
-    for (const owner of ['A', 'B'] as PlayerId[]) {
+    for (const owner of seats) {
       const ownCity = cities.find((c) => c.owner === owner);
       if (!ownCity) continue;
       for (let k = 0; k < 2; k++) {
@@ -298,8 +406,8 @@ export function createMatch(
       mapSymmetry: config.mapSymmetry ?? 'fair',
       // 城市边长要存进存档：读档之后建城、上帝模式摆城、界面画城都读它
       citySize,
-      aiOpponent: config.aiOpponent,
-      aiAlly: config.aiAlly,
+      aiOpponent,
+      aiAlly,
       aiLevel:
         config.aiLevel === 'basic'
           ? 'basic'
@@ -311,10 +419,16 @@ export function createMatch(
       // 在存档里显示成一句谎话。
       expansionIds: EXPANSIONS.filter((e) => liveExpansions.has(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
-      commanderMode: config.commanderMode === true,
+      // 关掉的那些也要活进 config：兵种池弹层靠它把"关着"的格子画回去，
+      // 少了这一行，下一局打开面板会看到整排船又亮了起来。
+      disabledUnits: Array.from(disabled).filter((id) => catalog[id]),
+      // 人数必须活进 state.config：席位（谁上场、轮到谁、谁还活着）全靠它，
+      // 和上面那些开关一样，这个是逐个白名单抄的，漏一个就等于被吃掉。
+      playerCount,
+      commanderMode,
       godMode: config.godMode === true,
       // 选卡模式要活进 config：读档/联机之后界面才知道"这一局有 BP"
-      draftMode: config.draftMode === true,
+      draftMode,
       // 两档选卡时限同样要活进 config：规则写 deadline 和界面倒计时都读这里。
       // 没填就不写字段，读出来自然回落 DRAFT_BAN_MS / DRAFT_PICK_MS 的默认值。
       ...(config.draftBanMs !== undefined ? { draftBanMs: config.draftBanMs } : {}),
@@ -333,9 +447,13 @@ export function createMatch(
     tiles,
     cities,
     units,
+    // 四个席位都建出来（这一局没坐人的席位名字和金币留着也没人读：
+    // 所有遍历都走 seatsOf，不会碰它们）。这样 `players[p]` 永远是定义好的。
     players: {
-      A: { id: 'A', name: '红方', gold: startGoldFor(startEra) },
-      B: { id: 'B', name: '蓝方', gold: startGoldFor(startEra) },
+      A: { id: 'A', name: DEFAULT_PLAYER_NAMES.A, gold: startGoldFor(startEra) },
+      B: { id: 'B', name: DEFAULT_PLAYER_NAMES.B, gold: seats.includes('B') ? startGoldFor(startEra) : 0 },
+      C: { id: 'C', name: DEFAULT_PLAYER_NAMES.C, gold: seats.includes('C') ? startGoldFor(startEra) : 0 },
+      D: { id: 'D', name: DEFAULT_PLAYER_NAMES.D, gold: seats.includes('D') ? startGoldFor(startEra) : 0 },
     },
     nextUnitSeq: unitSeq,
     // 上帝模式一律关雾。
@@ -352,11 +470,13 @@ export function createMatch(
     memory: {
       A: { known: [] },
       B: { known: [] },
+      C: { known: [] },
+      D: { known: [] },
     },
   };
 
   // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
-  if (config.draftMode === true) {
+  if (draftMode) {
     state.draft = createDraft(state);
     state.log.push({
       turn: state.turn,
@@ -395,12 +515,19 @@ export function createMatch(
   const override = config.secondGoldBonus ?? 0;
   if (override > 0) bonusRatio = override;
   if (bonusRatio > 0) {
-    const extra = Math.round(state.players.B.gold * bonusRatio);
-    if (extra > 0) {
-      state.players.B.gold += extra;
+    /*
+     * 补偿发给**除了第一个行动者之外的所有人**。
+     *
+     * 两人局里就是 B——和以前一模一样。三人四人局里，第二个之后的每个人都有
+     * "先手已经动过一轮"的劣势，所以都给同样的比例；先手那位一分不补。
+     */
+    for (const p of seats.slice(1)) {
+      const extra = Math.round(state.players[p].gold * bonusRatio);
+      if (extra <= 0) continue;
+      state.players[p].gold += extra;
       state.log.push({
         turn: 1,
-        player: 'B',
+        player: p,
         text: `先后手补偿：开局金币 +${extra}（${Math.round(bonusRatio * 1000) / 10}%）`,
       });
     }

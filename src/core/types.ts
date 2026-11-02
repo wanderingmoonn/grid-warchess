@@ -6,7 +6,33 @@
  * 这样存档、回放、联机、AI 都能直接复用同一份结构。
  */
 
-export type PlayerId = 'A' | 'B';
+/**
+ * 席位。
+ *
+ * 一局最多四家，各自为战（不做组队）。人数由 `MatchConfig.playerCount` 决定，
+ * 用的是这个顺序的前几个：2 人 = A/B，3 人 = A/B/C，4 人 = A/B/C/D。
+ *
+ * 为什么序号而不是队伍色：席位同时是**行动顺序**、配色索引、联机座位和存档键，
+ * 四个身份共用一套编号，加一种玩法就不用再对齐四个表。
+ * 取颜色名（红/蓝/绿/黄）在 ui 层做，规则层只管 A/B/C/D。
+ */
+export type PlayerId = 'A' | 'B' | 'C' | 'D';
+/**
+ * 这一局用到的席位，按行动顺序。
+ *
+ * 放在 types.ts 而不是 rules.ts：它只读 `config.playerCount` 和一个常量表，
+ * 而扩展层（expansions.ts / city-works.ts）也要用它按席位遍历——那些文件
+ * 在 rules 的上游，从 rules 拿会造成循环依赖。
+ */
+export function seatsOf(s: { config: { playerCount?: number } }): PlayerId[] {
+  const n = s.config.playerCount ?? 2;
+  const count = Math.max(2, Math.min(PLAYER_ORDER.length, Math.round(n)));
+  return PLAYER_ORDER.slice(0, count);
+}
+
+
+/** 席位的固定顺序。人数决定取前几个，行动顺序也照它环转 */
+export const PLAYER_ORDER: readonly PlayerId[] = ['A', 'B', 'C', 'D'] as const;
 
 /**
  * 资源种类。
@@ -168,6 +194,14 @@ export interface SkillDef {
   atkUp?: number;
   /** 永久生命上限提升，配套 atkUp */
   hpUp?: number;
+  /**
+   * 永久魔法攻击提升（圣剑觉醒的「魔攻 +8」）。
+   *
+   * 为什么单开一个而不是并进 atkUp：魔法段只被魔抗挡、物理段只被护甲挡，
+   * 两个数在结算里从来不参与同一道算式。并进 atkUp 会让「打重甲」和
+   * 「打高魔抗」变成同一件事，圣剑勇者也就没有性格了。
+   */
+  magicAtkUp?: number;
   /** 如果为 true，允许一回合放多次，由技能自己决定终止逻辑 */
   multiCast?: boolean;
   /** 如果没就绪，界面上显示的提示文字（不写默认显示"就绪"） */
@@ -177,7 +211,7 @@ export interface SkillDef {
    * - 不填 或 'none'：对自己或自动索敌释放
    * - 'point' / 'direction'：需要玩家点地图选点或选方向
    */
-  targeting?: 'none' | 'point' | 'direction'; 
+  targeting?: 'none' | 'point' | 'direction';
 }
 
 export interface Tile {
@@ -497,6 +531,14 @@ export interface UnitTypeDef {
    * 军营要平地或丘陵，桥要水面。
    */
   buildOn?: Terrain[];
+  /**
+   * 这个建筑能从多远的地方修。缺省用 CONFIG.buildRange（2 格）。
+   *
+   * 只有"盖在离岸好几格的水面上"的东西需要它：海上钻井平台的价值就在深水，
+   * 而站在岸上的建筑队按 2 格的默认射程根本够不到——那不是平衡，是够不着。
+   * 放宽的是**距离**，不是选址条件：地形、占位、敌方领土那几条照旧一条不少。
+   */
+  buildRange?: number;
   /**
    * 载具：这个兵种自己就是一个容器（渡船、运输舰、运输机、航母、两栖舰……）。
    *
@@ -852,6 +894,15 @@ export interface Unit {
   /** 永久护甲加成，和 atkBonus 同一套理由 */
   armorBonus?: number;
   /**
+   * 永久魔法攻击加成（圣剑觉醒里的「魔攻 +8」）。
+   *
+   * 和 atkBonus 并列单独存一份，而不是加进 atkBonus：这两笔走的是两条
+   * 完全不同的结算（魔法段只看魔抗、不看护甲），合并就再也拆不开了。
+   */
+  magicAtkBonus?: number;
+  /** 永久魔法抗性加成，和 magicAtkBonus 配套 */
+  magicResBonus?: number;
+  /**
    * 孵化还剩几个自己的回合（只有写 `hatch` 的兵种有）。
    *
    * 出场时按兵种表初始化，之后每次自己回合开始 −1，归零就换型。
@@ -937,6 +988,14 @@ export interface MatchConfig {
   size: number;
   /** 开局城市的时代等级（1-5），用来缩短或拉长一局的节奏 */
   startEra: number;
+  /**
+   * 这一局几家：2（缺省）/ 3 / 4。
+   *
+   * 取值就是"用 PLAYER_ORDER 的前几个席位"，各自为战、每家恰好一座城。
+   * 缺省 2 而不是必填：老存档、老房间、分享链接读回来一个字都不用改，
+   * 而它们全部都是两人局。
+   */
+  playerCount?: 2 | 3 | 4;
   /** B 方是否由 AI 接管 */
   aiOpponent: boolean;
   /** A 方是否也由 AI 接管（双 AI 观战，用来观察平衡） */
@@ -995,6 +1054,15 @@ export interface MatchConfig {
   /** 地形对称方式：fair = 两侧配额相同分布不同（默认）；mirror = 完全镜像 */
   mapSymmetry?: 'fair' | 'mirror';
   /**
+   * 固定地图：选了它就**忽略** `mapStyle` 与棋盘尺寸，地形完全按这份数据来。
+   *
+   * 为什么整份地图内嵌在配置里，而不是只存一个 id：这一份 config 会跟着存档、
+   * 联机房间、分享链接一路传下去，而地图可能是别人上传的——对方的客户端
+   * 未必拉过那张图。只存 id 就会出现"建局时地图没同步到 → 两边各打一张不同的图"，
+   * 而且这种错不会报错，只会让人以为对方作弊。
+   */
+  fixedMap?: import('./fixed-maps.ts').FixedMap;
+  /**
    * 城市边长（占 size × size 格），缺省 2。
    *
    * 写在 config 里而不是只从扩展读：地图生成要知道城占多大，
@@ -1041,6 +1109,15 @@ export interface MatchConfig {
   expansionIds: string[];
   /** 启用的兵种 id */
   enabledUnits: string[];
+  /**
+   * 被显式关掉的兵种（只记"本来会自己进场"的那些：自定义兵、已开扩展带的兵）。
+   *
+   * 为什么要和 `enabledUnits` 分两张表：这两类兵**默认就在池子里**——
+   * 勾了海军包就该有那十六条船，不用玩家再一条条勾。如果只靠"在不在 enabledUnits 里"
+   * 表达开关，那"没勾"和"这一版还不认识这个 id"就分不开了，老存档一读出来
+   * 整支舰队都会静默消失。这张表只记"玩家主动关掉的"，没记的一律算开。
+   */
+  disabledUnits?: string[];
 }
 
 export interface PlayerState {
@@ -1240,6 +1317,14 @@ export interface GameState {
   nextUnitSeq: number;
   fog: boolean;
   winner: PlayerId | null;
+  /**
+   * 已经退出的席位（认输 / 判弃权）。
+   *
+   * 两人局里认输直接判对方赢，用不到这张表；三人四人局里"我认输"只是
+   * 我不打了——剩下的人得接着打，所以需要一个地方记着谁已经不在场上了。
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"还没有人退出"。
+   */
+  out?: PlayerId[];
   log: LogEntry[];
   memory: Record<PlayerId, PlayerMemory>;
   /**
@@ -1308,9 +1393,49 @@ export interface GameState {
    * 动作后不在册的，就是这一下没的。只留当前回合，回合走完自然作废。
    */
   fallen?: FallenRecord[];
+  /**
+   * 留在格子上的东西（水雷、地雷、火场……）。见 `Mark` 与 core/marks.ts。
+   *
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"棋盘上什么都没有"。
+   * 引擎里统一用 `marksOf(s)` 读，不要在别处直接 `s.marks ?? []`——
+   * 那样迟早有一处忘了兜底。
+   */
+  marks?: Mark[];
+  /** 下一个 Mark 的序号。和 nextUnitSeq 一样是"可复现"的一部分 */
+  nextMarkSeq?: number;
 }
 
 /** 一条"谁在什么时候倒下了"。只记复活需要的字段，不存整个单位对象。 */
+/**
+ * 留在地格上的一件东西（水雷、地雷、火场、遗迹……）。
+ *
+ * 为什么不塞进 `Tile`：`Tile` 是"地形"——它整局基本不变、每格都有、
+ * 是地图本身；而这些东西是**战场上被放上去的**，可以没有、可以消失、
+ * 可以被一方看见而另一方看不见。两者的生命周期和可见性都不一样，
+ * 混进同一张表会让迷雾和存档都变复杂（见 core/marks.ts 的说明）。
+ *
+ * 不占地、不行动、没有回合，只是"这一格上有一件东西"：
+ * 单位走进来时由它的 kind 决定发生什么，回合开始时也可以由 kind 结算。
+ */
+export interface Mark {
+  id: string;
+  /** 种类 id（core/marks.ts 的注册表；实现跟着扩展走） */
+  kind: string;
+  /** 谁放的。放过的人永远看得见自己的；别人要看"是否已发现" */
+  owner: PlayerId;
+  x: number;
+  y: number;
+  /**
+   * 还能生效几次。不填 = 一直留着（比如火场、遗迹）。
+   * 触发一次就 −1，减到 0 由引擎删掉——"删不删"不该让每个 kind 各自判断。
+   */
+  charges?: number;
+  /** 对敌方隐藏。不填按 kind 的默认值 */
+  hidden?: boolean;
+  /** kind 自己的小数据（伤害、半径、回合数……），解释权归 kind */
+  data?: Record<string, number>;
+}
+
 export interface FallenRecord {
   owner: PlayerId;
   /** 兵种 id */

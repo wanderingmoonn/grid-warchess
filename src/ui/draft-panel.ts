@@ -16,6 +16,7 @@ import { abilityById } from '../core/ability-registry.ts';
 import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
 import { resourceName } from '../core/resources.ts';
 import type { ResourceId } from '../core/types.ts';
+import { ELEMENT_NAME } from '../core/types.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
 import type { DraftState } from '../core/types.ts';
 
@@ -221,6 +222,147 @@ function esc(raw: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/* ===========================================================================
+ * 已选卡牌（底部对照区）
+ *
+ * 为什么单独做一块而不是塞进右边那栏：右边那栏是**槽位**（第几个选了谁），
+ * 用它复盘一场 BP 够用，用它**读一个兵**不够——选卡期最常发生的动作是
+ * "我已经拿了这三个，下一签该补什么"，这件事需要同时看见：
+ *   ① 三个兵各自的面板（攻甲血、射程、溅射、魔抗……）
+ *   ② 它们各自的特性（能力、技能、属性弱点）
+ * 而这两样在 20 张卡的池子卡片里是**故意省略**的（那批卡是用来扫的，
+ * 一行 meta 就够）。所以这里不省：数值一行不落，特性一条不藏，
+ * 也不做"悬停才显示"——玩家要能把选卡面板当草稿纸看。
+ *
+ * 版面按"数量自适应"排：`auto-fill` 的网格，2 张时两列、8 张时四列，
+ * 每张卡自己长高，整块跟着长，页面本来就能滚（`.draft-mask` 是 overflow:auto）。
+ * ========================================================================= */
+
+/** 一个数值格：只有真的有意义时才出现（攻甲血永远出现） */
+function statCell(label: string, value: number | string): string {
+  return `<span class="dp-stat"><i>${label}</i><b>${value}</b></span>`;
+}
+
+/** 这张卡上该写的全部特性（能力 + 技能 + 属性），一条都不折叠 */
+function traitBlocks(def: UnitTypeDef): string {
+  const out: string[] = [];
+
+  const abilities = (def.abilities ?? [])
+    .map((id) => abilityById(id))
+    .filter((a): a is NonNullable<typeof a> => !!a);
+  if (abilities.length > 0) {
+    out.push(
+      `<div class="dp-traits">${abilities
+        .map(
+          (a) =>
+            `<div class="dp-trait"><b>${a.name}</b><span>${a.summary}</span></div>`,
+        )
+        .join('')}</div>`,
+    );
+  }
+
+  for (const sk of def.skills ?? []) {
+    out.push(
+      `<div class="dp-trait is-skill"><b>${sk.name}${
+        sk.cooldown ? `（冷却 ${sk.cooldown}）` : sk.charges ? `（${sk.charges} 发）` : ''
+      }</b><span>${sk.summary}</span></div>`,
+    );
+  }
+
+  // 属性与克制关系：这一条在池子卡片上从来不写，可它决定"这个兵该拿去打谁"
+  if (def.element) {
+    const bits = [ELEMENT_NAME[def.element]];
+    for (const [el, mul] of Object.entries(def.weak ?? {})) {
+      if (typeof mul === 'number' && mul > 1) bits.push(`弱 ${ELEMENT_NAME[el as keyof typeof ELEMENT_NAME]} ×${mul}`);
+    }
+    for (const [el, mul] of Object.entries(def.resist ?? {})) {
+      if (typeof mul === 'number' && mul < 1) bits.push(`抗 ${ELEMENT_NAME[el as keyof typeof ELEMENT_NAME]} ×${mul}`);
+    }
+    out.push(`<div class="dp-trait is-element"><b>属性</b><span>${bits.join(' · ')}</span></div>`);
+  }
+
+  return out.join('');
+}
+
+/**
+ * 一张"已选卡"的完整信息卡。
+ *
+ * 刻意不用 `.draft-card`：那个是按钮、是**候选**，参数是"能扫"；
+ * 这里是**档案**，参数是"能读"。两者混用迟早会为了池子的密度去砍这里的文字。
+ */
+function pickedCard(def: UnitTypeDef, index: number): string {
+  const tags: string[] = [
+    `<span class="dp-tag">${eraDef(def.era).name}</span>`,
+    `<span class="dp-tag">${CATEGORY_LABEL[def.category] ?? def.category}</span>`,
+  ];
+  if (def.hero) tags.push('<span class="dp-tag is-hero">英雄</span>');
+  if (def.domain && DOMAIN_LABEL[def.domain]) tags.push(`<span class="dp-tag">${DOMAIN_LABEL[def.domain]}</span>`);
+  // 空中层：掠空和飞行是两种手感（前者能和地面叠格），所以分开写
+  if (def.layer === 'air') tags.push(`<span class="dp-tag is-air">${def.flight ? '掠空' : '空中'}</span>`);
+  else if (def.flight) tags.push('<span class="dp-tag is-air">飞行</span>');
+  if (def.summonedOnly) tags.push('<span class="dp-tag">召唤物</span>');
+
+  const stats: string[] = [statCell('攻', def.atk), statCell('甲', def.armor), statCell('血', def.maxHp)];
+  if (def.move > 0) stats.push(statCell('移', def.move));
+  stats.push(statCell('射', def.range), statCell('视', def.vision));
+  if (def.magicAtk) stats.push(statCell('魔攻', def.magicAtk));
+  if (def.magicRes) stats.push(statCell('魔抗', def.magicRes));
+  if (def.splash) stats.push(statCell('溅射', `${def.splash}${def.splashLine ? '（直线）' : ''}`));
+  if (def.burst && def.burst > 1) stats.push(statCell('连击', def.burst));
+  if (def.ammo) stats.push(statCell('弹药', def.ammo));
+  if (def.income) stats.push(statCell('产出', `${def.income} 金/回合`));
+
+  const src = unitSourceOf(def.id);
+  const costBits = [`${def.cost} 金`];
+  for (const [id, n] of Object.entries(def.costRes ?? {})) {
+    if (typeof n === 'number' && n > 0) costBits.push(`${n} ${resourceName(id as ResourceId)}`);
+  }
+  if (def.hero && def.unlockCost) costBits.push(`解锁 ${def.unlockCost} 金`);
+
+  return `<article class="draft-pick">
+    <header class="dp-head">
+      <span class="dp-icon">${def.short}</span>
+      <div class="dp-head-body">
+        <div class="dp-name-row"><span class="dp-index">${index}</span><b class="dp-name">${def.name}</b></div>
+        <div class="dp-tags">${tags.join('')}</div>
+      </div>
+    </header>
+    <div class="dp-stats">${stats.join('')}</div>
+    <div class="dp-cost">${costBits.join(' + ')}${src ? ` · 来自「${src}」` : ''}</div>
+    ${traitBlocks(def)}
+  </article>`;
+}
+
+/**
+ * 底部对照区：本地这一方**已经选到**的全部卡。
+ *
+ * 只放自己那一方。对面拿了什么，右边槽位和禁用条已经写清楚；
+ * 把两边的完整面板都铺在下面，等于把一屏变成两屏，反而难对照。
+ */
+function pickedPanel(s: GameState, seat: PlayerId): string {
+  const draft = s.draft!;
+  const picks = (draft.picks[seat] ?? []).filter((id) => !!s.unitTypes[id]);
+  const cards = picks.map((id, i) => pickedCard(s.unitTypes[id]!, i + 1)).join('');
+  const empty = picks.length === 0;
+
+  return `<section class="draft-picked is-${seat === 'A' ? 'a' : 'b'}">
+    <div class="draft-picked-head">
+      <b>我已选 · ${sideName(s, seat)}</b>
+      <span class="draft-picked-count">${picks.length} / ${draft.pickSlots}</span>
+      <span class="draft-picked-hint">${
+        empty
+          ? '禁用阶段还没有人选卡；选到的兵会带着完整面板出现在这里'
+          : '完整数值与特性都摊开写着，挑下一签时直接对照，不用再悬停'
+      }</span>
+    </div>
+    ${
+      empty
+        ? ''
+        : `<div class="draft-picked-grid">${cards}</div>`
+    }
+  </section>`;
+}
+
 /**
  * 等待开局（lobby）。
  *
@@ -422,6 +564,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         <ul class="draft-log">${log}</ul>
       </aside>
     </div>
+    ${pickedPanel(s, seat)}
   </div>`;
 }
 

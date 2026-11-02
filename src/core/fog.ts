@@ -12,6 +12,7 @@
  */
 
 import { CONFIG } from './config.ts';
+import { visibleMarks } from './marks.ts';
 import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
 import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
 
@@ -71,6 +72,41 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   cloned.units = cloned.units.filter(
     (u) => u.owner === p || (visibleSet.has(idx(s, u.x, u.y)) && !isHiddenFrom(s, u, p)),
   );
+
+  /*
+   * 格子上留的东西（水雷、地雷……）同样要按"该不该让他知道"裁一遍。
+   *
+   * 两条边界，别写反：
+   *   · 自己布的永远看得见——不然埋完就忘了，等于给自己也埋了；
+   *   · 别人布的默认看不见，只有"自己的单位贴到规定距离以内、且那一格在视野里"
+   *     才算发现。视野外一律不给（否则按 F12 就是一整张雷区地图）。
+   */
+  if (cloned.marks) {
+    cloned.marks = visibleMarks(s, p, (i) => visibleSet.has(i));
+  }
+
+  /*
+   * 桥是"修出来的地形"，跟着视野走。
+   *
+   * 地形本身是公开的（基础规则的雾只遮单位），但桥不是地形，是人盖的东西：
+   * 对面趁夜在下游架了一座桥，第二天这边就多出一条过河的路——这件事没有理由
+   * 凭空可见。所以凡是有桥单位站着的桥面、又不在自己视野里，一律按水面画。
+   *
+   * 两条边界：
+   *   · 自己修的桥一直知道自己修了，不遮；
+   *   · 地图自带的路桥（固定地图里的 `=`）下面没有桥单位，照常当普通地形显示。
+   */
+  if (!reveal) {
+    for (const u of s.units) {
+      if (!s.unitTypes[u.type]?.bridges) continue;
+      if (u.owner === p) continue;
+      const i = idx(s, u.x, u.y);
+      if (visibleSet.has(i)) continue;
+      const tile = cloned.tiles[i];
+      // 桥只能架在水面上（见 buildSiteError 的 buildOn），看不见就退回水面
+      if (tile && tile.terrain === 'bridge') tile.terrain = 'water';
+    }
+  }
 
   // 战况烈度账本只留自己的那一份。
   //

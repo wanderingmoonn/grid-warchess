@@ -15,11 +15,15 @@
  */
 
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { ResourceCost } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
 import type { AbilityDef } from './abilities.ts';
+// 留痕种类（水雷/地雷……）的接口。同样只 import type：实现在 core/marks.ts，
+// 那边只依赖 types.ts，不会绕回来。
+import type { MarkKindDef } from './marks.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_PACKS } from './era-packs.ts';
@@ -367,6 +371,15 @@ export interface Expansion {
    */
   abilities?: AbilityDef[];
   /**
+   * 这个扩展带来的**格子上留东西**的种类（水雷、地雷、火场……）。
+   *
+   * 和 `abilities` 同一个道理：实现跟着扩展走，合并进全局表由
+   * mark-registry.ts 做。引擎（core/marks.ts）只管"什么时候触发"，
+   * 不管"触发之后发生什么"——所以删掉一个扩展，它的留痕种类也跟着消失，
+   * 不用回规则层一行行找。
+   */
+  marks?: MarkKindDef[];
+  /**
    * 这个扩展额外带来的兵种。
    * 不勾选这个扩展，这些兵种就不会出现在本局的兵种表里。
    */
@@ -508,6 +521,22 @@ function log(state: GameState, player: PlayerId, text: string): void {
  * 之后再提速就不会把开局的手感改掉。
  */
 export const BLOOD_TURN = 50;
+
+/**
+ * 这一局的血战刻度。
+ *
+ * `state.turn` 数的是**行动次数**（一次「结束回合」+1），而 50 是按两人局定的
+ * ——那是每家各走 25 轮的位置。三家四家局里走完一圈要 3/4 次行动，
+ * 直接沿用 50 会把血战提前到第 12/16 轮，正好卡在"开局还没摆完、城市还没升过"的时候。
+ *
+ * 所以按 `人数 / 2` 等比顺延：两人局严格等于 50（老行为一个字都不变），
+ * 三人局 75、四人局 100——三家四家局里每家走过的**轮数**仍然是 25。
+ */
+export function bloodTurnOf(s: { config: { playerCount?: number } }): number {
+  const n = s.config.playerCount ?? 2;
+  if (n <= 2) return BLOOD_TURN;
+  return Math.round((BLOOD_TURN * n) / 2);
+}
 
 /**
  * 涨价之前的升级费用表（下标 = 要升到的时代）。
@@ -689,7 +718,7 @@ export const EXPANSIONS: Expansion[] = [
       modifyCost: ({ unitType, cost }) =>
         unitType.category === 'combat' ? Math.max(5, Math.round(cost * 0.8)) : cost,
       onMatchStart: ({ state }) => {
-        for (const p of ['A', 'B'] as PlayerId[]) {
+        for (const p of seatsOf(state)) {
           state.players[p].gold = Math.max(0, Math.round(state.players[p].gold * 0.5));
         }
       },
@@ -723,7 +752,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'scorched-earth',
     name: '死亡枕藉',
-    summary: '单位阵亡时，对它四周相邻的单位各造成它最大生命 20% 的伤害。',
+    summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害——砸不到空中的东西。',
     hooks: {
       onUnitKilled: ({ state, victim }) => {
         const dirs: ReadonlyArray<readonly [number, number]> = [
@@ -732,15 +761,60 @@ export const EXPANSIONS: Expansion[] = [
           [0, 1],
           [0, -1],
         ];
+        const w = state.w;
+        const spanOf = (type: string): number => (state.unitTypes[type]?.footprint === 2 ? 2 : 1);
+
+        /*
+         * 谁是"四周相邻"，要按**这个单位实际占的那几格**算，不能按它的锚点算。
+         *
+         * 以前这里只从锚点往四个方向各查一格。1×1 的单位那样是对的，
+         * 2×2 的（兵营、指挥所）就全错了：它的锚点在左上角，往右、往下的那两格
+         * 是它自己的身体，真正贴着它右边和下边的敌人一个都吃不到——
+         * 实测一座军营倒下只波及 1 个人，而围在它周围的通常有五六个。
+         *
+         * 现在先把身体摊开，再取围着这一圈的格子（去掉自己占的），
+         * 于是"相邻"就是玩家眼睛看到的那个相邻。
+         */
+        const body = new Set<number>();
+        const span = spanOf(victim.type);
+        for (let dy = 0; dy < span; dy++) {
+          for (let dx = 0; dx < span; dx++) body.add((victim.y + dy) * w + (victim.x + dx));
+        }
+        const ring = new Set<number>();
+        for (const k of body) {
+          const x = k % w;
+          const y = (k - x) / w;
+          for (const [dx, dy] of dirs) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= state.h) continue;
+            const nk = ny * w + nx;
+            if (!body.has(nk)) ring.add(nk);
+          }
+        }
+
         // 按"倒下这个人"的血量算，不是固定值：越厚重的单位倒下砸得越狠
         const blast = Math.max(1, Math.round(maxHpOf(state, victim.type) * 0.2));
         let hit = 0;
-        for (const [dx, dy] of dirs) {
-          const near = state.units.find((u) => u.x === victim.x + dx && u.y === victim.y + dy);
-          if (near) {
-            near.hp -= blast;
-            hit += 1;
+        for (const near of state.units) {
+          if (near.id === victim.id) continue;
+          // 空中单位飞在上面：地面塌下去，砸不到它们。
+          // 判据用 layer === 'air'，和自爆、区域防空同一个口径。
+          if (state.unitTypes[near.type]?.layer === 'air') continue;
+          // 挨着的那一方也可能是 2×2：身体有一格压在环上就算挨着
+          const ns = spanOf(near.type);
+          let touches = false;
+          for (let dy = 0; dy < ns && !touches; dy++) {
+            for (let dx = 0; dx < ns; dx++) {
+              if (ring.has((near.y + dy) * w + (near.x + dx))) {
+                touches = true;
+                break;
+              }
+            }
           }
+          if (!touches) continue;
+          near.hp -= blast;
+          hit += 1;
         }
         if (hit > 0) {
           log(state, victim.owner, `焦土：阵亡时波及 ${hit} 个临近单位，各 ${blast} 点`);
@@ -770,23 +844,32 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'bloodbath',
     name: '血战',
-    summary: `第 ${BLOOD_TURN} 回合起：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。`,
+    summary: `第 ${BLOOD_TURN} 回合起（三/四人局按人数等比顺延）：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。`,
     hooks: {
       // 第 17～20 轮为了压节奏加的三样东西（机动/视野削减、城市回血、升级涨价）
       // 确实把对局从 30 多回合拉到了 100 回合，代价是后期变成谁都推不动的拉锯。
       // 血战给它们一个到期日：前 50 回合照常磨，之后全线提速，逼出一个结果。
-      modifyCityRegen: ({ state, regen }) => (state.turn >= BLOOD_TURN ? 0 : regen),
+      modifyCityRegen: ({ state, regen }) => (state.turn >= bloodTurnOf(state) ? 0 : regen),
       modifyUpgradeCost: ({ state, cost, nextEra }) => {
         if (cost === null) return null;
-        return state.turn >= BLOOD_TURN ? (LEGACY_UPGRADE_COST[nextEra - 1] ?? cost) : cost;
+        return state.turn >= bloodTurnOf(state) ? (LEGACY_UPGRADE_COST[nextEra - 1] ?? cost) : cost;
       },
       // 只给移动力 ≥ 2 的加：机枪队那种 move 1 的单位本来就没被削过
-      modifyMove: ({ state, move }) => (state.turn >= BLOOD_TURN && move >= 2 ? move + 1 : move),
-      modifyVision: ({ state, base }) => (state.turn >= BLOOD_TURN ? base + 1 : base),
+      modifyMove: ({ state, move }) => (state.turn >= bloodTurnOf(state) && move >= 2 ? move + 1 : move),
+      modifyVision: ({ state, base }) => (state.turn >= bloodTurnOf(state) ? base + 1 : base),
       onTurnStart: ({ state, player }) => {
-        if (state.turn === BLOOD_TURN && player === 'A') {
-          log(state, 'A', `血战开始：城市不再回血、升级恢复原价、全军移动与视野各 +1`);
+        const mark = bloodTurnOf(state);
+        if (state.turn !== mark) return;
+        const note = '血战开始：城市不再回血、升级恢复原价、全军移动与视野各 +1';
+        const seats = seatsOf(state);
+        if (seats.length <= 2) {
+          // 两人局的老路：这一条只写给 A（照原样，别顺手改了行动方的语义）
+          if (player === 'A') log(state, 'A', note);
+          return;
         }
+        // 三家四家局里这条消息对每个人都要紧，而战报是按席位过滤的——
+        // 只写一份的话，除了那一个席位，别人永远看不到"血战开了"
+        for (const p of seats) log(state, p, note);
       },
     },
   },

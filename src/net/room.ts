@@ -25,10 +25,19 @@
  */
 import type { createWorkBuddyCloud } from '@tencent-ai/workbuddy-cloud-sdk';
 
+import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId } from '../core/types.ts';
 import { CLOUD_CONFIG } from './cloud-config.ts';
 
 export type Seat = PlayerId;
+
+/** 席位 → 房间表的列名。加人只改这一张表 */
+export const SEAT_COLUMN: Record<Seat, string> = {
+  A: 'seat_a',
+  B: 'seat_b',
+  C: 'seat_c',
+  D: 'seat_d',
+};
 
 /** 一次拉取拿到的房间快照 */
 export interface RoomSnapshot {
@@ -113,6 +122,21 @@ interface DbError {
 }
 
 /**
+ * "这一列不存在"。
+ *
+ * 用在两处：房间表的 seat_c/seat_d、战报表的 player_count——都是**后加的列**，
+ * 而线上库可能还没跑迁移。认得出它，才能"少写一列先跑起来"，
+ * 而不是让玩家看到一句 `column "seat_c" does not exist`。
+ *
+ * Postgres 是 42703 + `column "x" does not exist`；PostgREST 有时候把话放在
+ * message 里（`Could not find the 'x' column of ... in the schema cache`）。
+ */
+export function isMissingColumn(err: DbError | null | undefined): boolean {
+  const text = `${err?.code ?? ''} ${err?.message ?? ''}`;
+  return /42703|column .* does not exist|could not find the '.*' column/i.test(text);
+}
+
+/**
  * 表操作入口。
  *
  * 返回的是一个**普通对象** `{ q }`，不是查询本身。原因：SDK 的查询对象是
@@ -153,6 +177,8 @@ interface Row {
   current: PlayerId;
   seat_a: string | null;
   seat_b: string | null;
+  seat_c?: string | null;
+  seat_d?: string | null;
   updated_at: string;
 }
 
@@ -163,7 +189,8 @@ function toSnapshot(row: Row): RoomSnapshot {
     turn: row.turn,
     current: row.current,
     updatedAt: row.updated_at,
-    seats: { A: row.seat_a, B: row.seat_b },
+    // C/D 是后加的两列：老房间没有它们，读出来就是 undefined → null
+    seats: { A: row.seat_a, B: row.seat_b, C: row.seat_c ?? null, D: row.seat_d ?? null },
   };
 }
 
@@ -176,24 +203,47 @@ function toSnapshot(row: Row): RoomSnapshot {
 
 export async function createRoom(state: GameState, seat: Seat, token: string): Promise<RoomSeat> {
   let lastError: unknown = null;
+  /**
+   * 线上库可能还没跑 `sql/warchess_rooms_seats.sql`（seat_c / seat_d 两列）。
+   *
+   * 两人局的房间不需要那两列，所以第一次撞上"列不存在"时把新列摘掉重写一遍，
+   * 让老房间照旧能用；三人四人局没有那两列就是**真的坐不下**，这时只能说实话，
+   * 让作者去跑那条 alter——含糊成"创建失败"只会让人反复重试。
+   */
+  let legacy = false;
 
   for (let attempt = 0; attempt < 6; attempt++) {
     const code = newCode();
+    const row: Record<string, unknown> = {
+      code,
+      state,
+      turn: state.draft && state.draft.phase !== 'done' ? state.draft.seq : state.turn,
+      current: state.current,
+      seat_a: seat === 'A' ? token : null,
+      seat_b: seat === 'B' ? token : null,
+      ...(legacy
+        ? {}
+        : { seat_c: seat === 'C' ? token : null, seat_d: seat === 'D' ? token : null }),
+    };
     const { error } = await (await table()).q
-      .insert({
-        code,
-        state,
-        turn: state.draft && state.draft.phase !== 'done' ? state.draft.seq : state.turn,
-        current: state.current,
-        seat_a: seat === 'A' ? token : null,
-        seat_b: seat === 'B' ? token : null,
-      })
+      .insert(row)
       // 让 PostgREST 回报实际写入的行：没有 .select() 就分不清"写成功"和"被策略挡了"
       .select();
 
     if (!error) return { code, seat, token };
     // 主键冲突就是代码撞车了，换一个再来
     if (error.code === '23505') {
+      lastError = error;
+      continue;
+    }
+    if (isMissingColumn(error)) {
+      if (seatsOf(state).length > 2) {
+        throw new Error(
+          '云端这张房间表还没有 seat_c / seat_d 两列，三/四人局坐不下：' +
+            '在云数据库里跑一次 sql/warchess_rooms_seats.sql（两人局不受影响）。',
+        );
+      }
+      legacy = true;
       lastError = error;
       continue;
     }
@@ -233,7 +283,7 @@ export async function claimSeat(
   if (current === token) return 'ok';
   if (current) return 'taken';
 
-  const column = seat === 'A' ? 'seat_a' : 'seat_b';
+  const column = SEAT_COLUMN[seat];
   // 加 is(column, null) 是为了原子性：两个人同时抢占时只有一个人能写进去
   const { data, error } = await (await table()).q
     .update({ [column]: token })

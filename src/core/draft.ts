@@ -32,6 +32,7 @@ import { isProducer } from './produce.ts';
 import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
+import { seatsOf } from './types.ts';
 import type { Action, ActionResult, DraftState, GameState, PlayerId, UnitTypeDef } from './types.ts';
 
 /* ===========================================================================
@@ -280,15 +281,23 @@ export function sampleDraftPool(
  * 摊平就是 A,B,B,A,A,B,B,A…。这样各有 6 次机会、各有 3 次"这一轮我先挑"，
  * 先手优势被摊成"先动一步"，而不是"先挑三个"。
  */
-export function draftPickOrder(picks: number): PlayerId[] {
-  const total = Math.max(0, picks) * 2;
+export function draftPickOrderFor(seats: PlayerId[], picks: number): PlayerId[] {
+  const total = Math.max(0, picks) * seats.length;
   const out: PlayerId[] = [];
   for (let round = 0; out.length < total; round++) {
-    const first: PlayerId = round % 2 === 0 ? 'A' : 'B';
-    out.push(first);
-    if (out.length < total) out.push(first === 'A' ? 'B' : 'A');
+    // 蛇形：偶数轮正着走、奇数轮倒着走，名额在两端的人永远连着拿两次
+    const order = round % 2 === 0 ? seats : [...seats].reverse();
+    for (const p of order) {
+      if (out.length >= total) break;
+      out.push(p);
+    }
   }
   return out;
+}
+
+/** 两人局的选卡顺序（老接口，测试和复盘在用） */
+export function draftPickOrder(picks: number): PlayerId[] {
+  return draftPickOrderFor(['A', 'B'], picks);
 }
 
 /**
@@ -306,9 +315,10 @@ export function createDraft(state: GameState): DraftState {
     pool: sampled.pool,
     banSlots: budget.bans,
     pickSlots: budget.picks,
-    bans: { A: [], B: [] },
-    picks: { A: [], B: [] },
-    order: draftPickOrder(budget.picks),
+    // 四个席位都开出来：三人四人局的 BP 也走同一套蛇形
+    bans: { A: [], B: [], C: [], D: [] },
+    picks: { A: [], B: [], C: [], D: [] },
+    order: draftPickOrderFor(seatsOf(state), budget.picks),
     step: 0,
     // 联机锁从 1 起：房间那一行建出来时 turn 也是 1，第一笔 BP 提交正好对得上
     seq: 1,
@@ -383,7 +393,7 @@ export function draftSideToAct(state: GameState): PlayerId | null {
 export function pendingBans(state: GameState): PlayerId[] {
   const draft = state.draft;
   if (!draft || draft.phase !== 'ban') return [];
-  return (['A', 'B'] as PlayerId[]).filter((s) => draft.bans[s].length < draft.banSlots);
+  return seatsOf(state).filter((s) => draft.bans[s].length < draft.banSlots);
 }
 
 /** 这一局选卡是否还没打完（界面据此决定要不要盖住棋盘） */
@@ -635,8 +645,16 @@ export function draftView(state: GameState): {
  *   · 禁用：优先 ban 掉池子里**同代最贵**的战斗单位（贵的就是对面的核心）；
  *   · 选人：优先补自己还缺的生态位（经济/攻城/远程/坦克），同生态位里挑评分最高的。
  *
- * 评分用 `攻 + 0.4×血 + 3×甲 + 3×射程`——和海军扩展那套 V 值同源，
- * 但丢掉移动/视野：选卡选的是"这兵值不值得占一个名额"，不是走位。
+ * ── 2026-11-01：选人这一半重写 ──
+ *
+ * 老评分是 `攻 + 0.4×血 + 3×甲 + 3×射程`，也就是"数值越大越好"。数值和时代几乎
+ * 单调相关，于是 AI 每次把六个名额全砸在最高时代的大件上——而**选到 ≠ 造得出**：
+ * 城市从 1 级升到 5 级要几十个回合，这几十回合里它的产兵表里全是"还造不出来"的兵。
+ * 线上对局库（`warchess_reports`）里 AI 的开局阵容常年是 0~2 个单位、人类一整队，
+ * 差距在 BP 那一屏就已经拉开了。所以选人改成按"能不能马上用 / 每金多少战力 /
+ * 这支队伍缺不缺"三件事打分，见 `draftValueOf` 与下面的职能覆盖。
+ *
+ * 禁用那半不变：ban 掉对面最贵的核心本来就是正确打法，贵＝对面指望它。
  */
 export function aiDraftBan(state: GameState, side: PlayerId): string | null {
   const left = remainingUnits(state).filter((id) => {
@@ -655,37 +673,110 @@ export function aiDraftPick(state: GameState, side: PlayerId): string | null {
   const left = remainingUnits(state);
   if (left.length === 0) return null;
   const mine = new Set(state.draft?.picks[side] ?? []);
+  const startEra = Math.max(1, state.config.startEra ?? 1);
+  // 水军只在真有水的地图上才值一个名额。地图在这一步已经生成好了（createMatch
+  // 先建图再建选卡），所以直接看水面占比，别让 AI 在旱地图上选两条船。
+  const water = waterShareOf(state);
 
   // 生态位：手里没有的那一类加权重
   const has = {
     siege: [...mine].some((id) => (state.unitTypes[id]?.splash ?? 0) > 0),
     ranged: [...mine].some((id) => (state.unitTypes[id]?.range ?? 0) >= 3),
     tank: [...mine].some((id) => (state.unitTypes[id]?.maxHp ?? 0) >= 140),
+    // 便宜的身体：开局那二十回合真正能用来占点、看家、挡路的东西
+    cheap: [...mine].some((id) => {
+      const d = state.unitTypes[id];
+      return !!d && d.category === 'combat' && (d.cost ?? 999) <= 70;
+    }),
     any: mine.size > 0,
   };
+  /** 手里一张"现在就造得出"的卡都没有（开局第一签必然如此） */
+  const noneReady = ![...mine].some((id) => (state.unitTypes[id]?.era ?? 9) <= startEra);
+  /**
+   * 这一签该往哪个时代挑（"时代梯子"）。
+   *
+   * 上一版把"开局就能造"当硬指标，结果走另一个极端：平均时代 1.38，
+   * 六个名额全买一级兵——开局是爽了，但整局没有上限，对面升一级就换不过。
+   * 会玩的人不是这么选的：前几签买"现在能打的"，往后逐签抬高时代，
+   * 最后留一两个位置给"决战用的东西"。**一支队伍的时代是阶梯，不是一个点。**
+   *
+   * 所以这里给每一签算一个目标时代：从 `startEra` 起，按名额进度往上爬，
+   * 爬升速度由 `DRAFT_ERA_CLIMB` 决定（0.4 意味着 8 个名额爬到 +3 代）。
+   * 然后按"离目标时代多远"打分，而不是按"比你低多少"单向打折——
+   * 这样既不会全买高级兵，也不会全买一级兵。
+   */
+  const slots = state.draft?.pickSlots ?? 6;
+  const climb = Math.round(mine.size * DRAFT_ERA_CLIMB * Math.min(1, 8 / Math.max(1, slots)));
+  const targetEra = startEra + Math.min(4, climb);
 
   let best: { id: string; score: number } | null = null;
   for (const id of left) {
     const def = state.unitTypes[id];
     if (!def) continue;
-    let score = draftValueOf(def);
+    let score = draftValueOf(def, targetEra);
     if (def.category === 'building') {
-      // 建筑只在"还没拿到塔"时值得选，而且不该抢在兵前面
+      // 建筑只在"还没拿到塔"时值得选，而且不该抢在兵前面。
+      // 已经有了就一票否决：线上 AI 的终局建筑里常年摆着两座塔，
+      // 而它在同一局里连一支能出门的部队都凑不出来。
+      const hasBuilding = [...mine].some((x) => state.unitTypes[x]?.category === 'building');
+      if (hasBuilding) continue;
       score *= 0.55;
     }
     if (!has.siege && (def.splash ?? 0) > 0) score += 18;
     if (!has.ranged && (def.range ?? 0) >= 3) score += 14;
     if (!has.tank && (def.maxHp ?? 0) >= 140) score += 12;
+    // 旱地图上的船：占一个名额，整局开不出去。门槛和 ai.ts 的 WATER_MIN_SHARE /
+    // WATER_GOOD_SHARE 对齐（<8% 旱地 / 8~14% 勉强能开 / ≥14% 水网）。
+    if (def.domain === 'water') score *= water >= 0.14 ? 0.9 : water >= 0.08 ? 0.5 : 0.2;
+    // 一个便宜的身体。前二十回合总得有东西能出门，任何一个会玩的人都会留这一手。
+    if (!has.cheap && def.category === 'combat' && (def.cost ?? 999) <= 70) score += 16;
+    // 手里一张"现在就造得出"的卡都没有：这一签必须落地，只在这个时代里挑。
+    if (noneReady && def.category === 'combat' && def.era <= startEra) score += 26;
     if (!has.any && def.era <= 2) score += 8;
     if (!best || score > best.score) best = { id, score };
   }
   return best?.id ?? left[0]!;
 }
 
-function draftValueOf(def: UnitTypeDef | undefined): number {
-  if (!def) return 0;
-  return def.atk + 0.4 * def.maxHp + 3 * def.armor + 3 * def.range;
+/**
+ * 这张图上水面占多少（0~1）。
+ *
+ * 选卡发生在建图之后，所以这一步拿得到真实地形。以前选卡完全不看地图，
+ * AI 在一条小河边也会把两个名额花在船和运输船上——那两条船整局都开不出港口。
+ */
+function waterShareOf(state: GameState): number {
+  const tiles = state.tiles;
+  if (!tiles || tiles.length === 0) return 0;
+  let n = 0;
+  // 口径和 ai.ts 的 waterShare 对齐：只数 deep water，浅滩是能蹚过去的，不算航道
+  for (const t of tiles) if (t.terrain === 'water') n += 1;
+  return n / tiles.length;
 }
+
+/**
+ * 选卡时给一个兵种打多少分。
+ *
+ * 三件事，按乘法叠：
+ *   1. **离目标时代有多远**：`targetEra` 由名额进度决定（见 `aiDraftPick` 的时代梯子）。
+ *      这一条取代了上一版的"时代领先就平方折价"——那种写法只有一个方向，
+ *      结果把队伍压成清一色一级兵（平均时代 1.38），等于从一个极端走到另一个极端。
+ *      现在是双向的：比目标时代低也扣分，高了也扣分，队伍的时代才是一条阶梯。
+ *   2. **每金多少战力**：以 80 金为基准打折。贵而强不如便宜够用，但这一条只是微调，
+ *      指数 0.3——太狠的话又会把高时代兵一起压死。
+ *   3. **数值本身**（`atk + 0.4×血 + 3×甲 + 3×射程`，和海军扩展那套 V 值同源）。
+ */
+function draftValueOf(def: UnitTypeDef | undefined, targetEra = 1): number {
+  if (!def) return 0;
+  const raw = def.atk + 0.4 * def.maxHp + 3 * def.armor + 3 * def.range;
+  if (raw <= 0) return 0;
+  // 离目标时代每差一级折一半左右：一级之内几乎不罚，差三级基本淘汰
+  const eraFit = 1 / (1 + 0.85 * Math.abs((def.era ?? 1) - targetEra));
+  const perGold = Math.pow(80 / Math.max(20, def.cost ?? 80), 0.3);
+  return raw * eraFit * perGold;
+}
+
+/** 每往后一签，目标时代往上爬多少级（8 个名额 ≈ 爬 3 代） */
+const DRAFT_ERA_CLIMB = 0.4;
 
 /* ===========================================================================
  * 七、文案

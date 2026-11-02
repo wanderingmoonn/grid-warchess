@@ -6,12 +6,27 @@ import { fileURLToPath } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { performance } from 'node:perf_hooks';
 import { aiNextAction, aiActiveMood, aiActionKey, DEFAULT_BUDGET, AI_MAX_STEPS } from '../src/core/ai.ts';
-import * as original from './baselines/ai-004d48a.ts';
-import * as upstream from './baselines/ai-5fb8e5b.ts';
+/*
+ * 冻结基线用**动态**导入。
+ *
+ * 那两个文件是"当年的 ai.ts 原样抄一份"，里面有 `players: { A, B }` 这种
+ * 两人局写法；而 GameState 的 players 现在是四键（三人四人局要用）。
+ * 它们必须逐字不变（有 sha256 校验），所以只能把它们挪出类型检查的范围——
+ * 动态 specifier 不会被 tsc 拉进程序，运行时照旧按路径加载。
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+async function loadBaseline(file: string): Promise<any> {
+  // 用**变量**做 specifier：字面量会被 tsc 解析并拉进类型检查，而这两个文件
+  // 是冻结的两人局代码（`players: { A, B }`），不该跟着新类型一起改。
+  return import(file);
+}
+const original = await loadBaseline('./baselines/ai-004d48a.ts');
+const upstream = await loadBaseline('./baselines/ai-5fb8e5b.ts');
 import { playerView } from '../src/core/fog.ts';
 import { applyAction, incomeOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { AiLevel, MatchConfig, PlayerId } from '../src/core/types.ts';
+
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const digest = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
@@ -55,7 +70,9 @@ function game(task: Task, newSide: PlayerId) {
     const who = s.current === newSide ? 'new' : 'old';
     const choose = who === 'new' && !task.self ? aiNextAction : baselines[task.baseline].choose;
     if (who === 'new') {
-      const mood = (task.self ? baselines[task.baseline].mood : aiActiveMood)(playerView(s, s.current).state);
+      const mood = ((task.self ? baselines[task.baseline].mood : aiActiveMood)(
+        playerView(s, s.current).state,
+      ) as ReturnType<typeof aiActiveMood>);
       doctrine[mood.lead]++;
       if (previous) {
         if (previous.lead !== mood.lead) switches++;

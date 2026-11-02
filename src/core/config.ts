@@ -1176,17 +1176,29 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     id: 'ironclad',
     name: '铁甲舰',
     short: '舰',
-    era: 5,
+    // E5 → E4：铁甲舰是 1859（Gloire）到 1890 年代（定远、镇远）的舰种，
+    // 属于"工业"这一档。以前它被放在第五时代，等于让 1860 年代的船和
+    // 二战的战列舰同场；而真正接它班的前无畏/无畏要到 E5 才出现。
+    //
+    // 挪下来的代价必须一起付：原数值（47/11/90、射 5）是按 E5 的天花板给的，
+    // 直接搬到 E4 会压死整条工业水军（护卫舰 30/8、浅水重炮舰 50/10）。
+    // 现在它是"海上正面"：比浅水重炮舰快一格、多一格视野，但少 10 点攻、
+    // 也没有「岸轰」——攻城那件事仍然归浅水重炮舰（monitor）。
+    // 破城（siege-master）一并交出去，同一个时代不需要两条攻城船。
+    //
+    // V = 40 + 0.45×82 + 5×10 + 3×4 + 2.5×4 + 1.5×4 = 154.9 → 0.52，
+    // 落在 E4 那条 0.50~0.54 的带子里。
+    era: 4,
     category: 'combat',
     cost: 300,
     move: 4,
-    atk: 47,
-    armor: 11,
-    maxHp: 90,
-    range: 5,
-    vision: 5,
+    atk: 40,
+    armor: 10,
+    maxHp: 82,
+    range: 4,
+    vision: 4,
     domain: 'water',
-    abilities: ['armor-pierce', 'siege-master'],
+    abilities: ['armor-pierce'],
   },
 };
 
