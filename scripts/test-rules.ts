@@ -190,6 +190,7 @@ import {
   cityRegenOf,
   cityTiles,
   armySize,
+  auraBonus,
   effectiveStats,
   disbandRefundOf,
   canStandAt,
@@ -2662,8 +2663,11 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   assert.equal(computeDamage(s, mage, paladin), 14);
 
   // 对照：同样攻击力全走物理的弓手，被 8 甲吃掉一大半
+  // 重骑要**重新摆回去**：上一步 place2 已经把它换成了圣骑士，而圣骑士带着
+  // 守护光环（半径 2）——留着它的话，这个"8 甲目标"会平白多 2 甲。
+  const heavyAgain = place2(s, 'B', 'cataphract', 5, 4);
   const elf = place2(s, 'A', 'elf-archer', 6, 5);
-  assert.equal(computeDamage(s, elf, heavy), 22 - 8);
+  assert.equal(computeDamage(s, elf, heavyAgain), 22 - 8);
 });
 
 test('属性弱点：巨魔怕火，同一个火属性攻击打它翻倍', () => {
@@ -4567,7 +4571,7 @@ test('休整：动过手就不回血', () => {
   assert.equal(after?.hp, 10, '动过的单位不该回血');
 });
 
-test('指挥光环：相邻友军攻击 +2', () => {
+test('指挥光环：2 格内友军攻击 +4', () => {
   const s = fresh();
   grantAbility(s, 'militia', 'aura-command');
   const leader = findUnit(s, 'A', 'militia');
@@ -4585,11 +4589,13 @@ test('指挥光环：相邻友军攻击 +2', () => {
   s.tiles[idx(s, 5, 7)].terrain = 'plain';
 
   const buffed = computeDamage(s, follower, target);
-  // 把队长挪远，光环应该失效
-  leader.x = 1;
-  leader.y = 1;
+  // 把队长挪到 3 格外，光环应该失效（半径 2）
+  leader.x = 5;
+  leader.y = 9; // 离 follower（5,6）3 格：出圈
   const plain = computeDamage(s, follower, target);
-  assert.equal(buffed - plain, 2);
+  assert.equal(buffed - plain, 4);
+  // 2 格外仍然吃得到：挪到 (5,8) 是 2 格，光环还在
+  assert.ok(plain > 0, '远处那一下照样打得出伤害');
 });
 
 test('破城：攻城伤害 ×1.5', () => {
@@ -9055,10 +9061,10 @@ test('effectiveStats：老兵不死的击杀成长进了真实攻击力', () => 
 test('effectiveStats：指挥光环来自相邻友军，面板上单独列一条', () => {
   const s = arena(fresh({ expansionIds: ['pack-antiquity'] }));
   const mate = place2(s, 'A', 'militia', 6, 6);
-  place2(s, 'A', 'anc_legionary', 7, 6);
+  place2(s, 'A', 'anc_legionary', 8, 6); // 2 格：2026-11-03 起半径是 2
   const eff = effectiveStats(s, mate);
-  assert.equal(eff.atk, utype(s, 'militia').atk + 2);
-  assert.ok(eff.atkItems.some((it) => it.label === '指挥光环' && it.delta === 2));
+  assert.equal(eff.atk, utype(s, 'militia').atk + 4);
+  assert.ok(eff.atkItems.some((it) => it.label === '指挥光环' && it.delta === 4));
 });
 
 test('effectiveStats：哀兵必胜让先丢城的一方全军 +10%', () => {
@@ -14403,6 +14409,98 @@ test('掠空：女巫在空中层，能和地面单位共占一格', () => {
   const foot = stackOn(s, 'A', 'swordsman', 5, 5);
   assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
   assert.ok(unitsAt(s, 5, 5).some((u) => u.id === foot.id), '地面那一个还在');
+});
+
+test('指挥光环：2 格内友军攻击 +4，3 格外吃不到', () => {
+  const s = fresh({ startEra: 4, expansionIds: FANTASY });
+  s.units = [];
+  place2(s, 'A', 'bard', 5, 5);
+  const near = place2(s, 'A', 'swordsman', 7, 5); // 2 格
+  const far = place2(s, 'A', 'swordsman', 8, 5); // 3 格
+  const base = s.unitTypes['swordsman']!.atk;
+  assert.equal(effectiveStats(s, near).atk, base + 4, '2 格内 +4');
+  assert.equal(effectiveStats(s, far).atk, base, '3 格外没有光环');
+  // 半径是写在 aura 自己身上的：别的光环（威吓/咒域）仍然是相邻
+  assert.equal(
+    auraBonus(s, near).atk,
+    4,
+    'auraBonus 同一口径（面板与结算不能各算一套）',
+  );
+});
+
+test('守护光环：2 格内友军护甲 +2，3 格外吃不到', () => {
+  const s = fresh({ startEra: 4, expansionIds: FANTASY });
+  s.units = [];
+  place2(s, 'A', 'royal-king', 5, 5);
+  const near = place2(s, 'A', 'swordsman', 7, 5); // 2 格
+  const far = place2(s, 'A', 'swordsman', 8, 6); // 3 格
+  const base = s.unitTypes['swordsman']!.armor;
+  // effectiveStats 的护甲含地形：站在同一种地形上比，差的只有光环
+  const aNear = effectiveStats(s, near).armor;
+  const aFar = effectiveStats(s, far).armor;
+  assert.equal(aNear - aFar, 2, '2 格内比 3 格外多 2 甲（其余条件一致）');
+  assert.ok(aNear >= base + 2, '光环确实加上了');
+});
+
+test('布雷：陷阱师回合开始埋一枚地雷，敌人踩上去掉 10 血并减速', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  // 整张图铺平原：地雷只认陆地，也让"埋在哪"可预期
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.units = [];
+  const trap = place2(s, 'A', 'goblin-trapper', 5, 5);
+
+  s.current = 'B'; // 结束 B 的回合 → A 的回合开始，触发布雷
+  const r = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const laid = marksOf(r.state);
+  assert.equal(laid.length, 1, '自己回合开始应该埋下一枚');
+  const mine = laid[0]!;
+  assert.equal(mine.kind, 'gb-mine', '埋的应该是地雷');
+  assert.equal(mine.owner, 'A');
+  assert.ok(
+    Math.abs(mine.x - trap.x) <= 1 && Math.abs(mine.y - trap.y) <= 1 && (mine.x !== trap.x || mine.y !== trap.y),
+    '雷要埋在相邻一圈',
+  );
+  assert.equal(mine.charges, 1, '一枚雷只炸一次');
+  assert.equal(r.state.units.length, 1, '地雷不是单位，不该出现在 units 里');
+
+  // 敌人踩上去：10 点、无视护甲、减速 1 回合，雷消失
+  let cur = r.state;
+  const enemy = place2(cur, 'B', 'swordsman', mine.x === 0 ? mine.x + 1 : mine.x - 1, mine.y);
+  cur.current = 'B';
+  const step = applyAction(cur, { type: 'MOVE', unitId: enemy.id, x: mine.x, y: mine.y });
+  assert.ok(step.ok, step.ok ? '' : step.reason);
+  const hurt = step.state.units.find((u) => u.id === enemy.id)!;
+  assert.equal(hurt.hp, enemy.hp - 10, `踩雷应该掉 10 点，实际 ${enemy.hp - hurt.hp}`);
+  assert.equal(hurt.status?.slow ?? 0, 1, '踩雷还要减速 1 回合');
+  assert.equal(marksOf(step.state).length, 0, '炸完就没了');
+});
+
+test('布雷：自己的雷炸不到自己人，上限 6 枚', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.units = [];
+  const trap = place2(s, 'A', 'goblin-trapper', 5, 5);
+  addMark(s, { kind: 'gb-mine', owner: 'A', x: 6, y: 5, charges: 1, hidden: true });
+
+  const own = place2(s, 'A', 'swordsman', 7, 5);
+  s.current = 'A';
+  const walk = applyAction(s, { type: 'MOVE', unitId: own.id, x: 6, y: 5 });
+  assert.ok(walk.ok, walk.ok ? '' : walk.reason);
+  assert.equal(walk.state.units.find((u) => u.id === own.id)!.hp, own.hp, '自己人的雷不炸自己');
+  assert.equal(marksOf(walk.state).length, 1, '没被踩响，雷还在');
+
+  // 连走十来个回合：上限 6 枚
+  let cur = walk.state;
+  for (let i = 0; i < 12; i++) {
+    cur.current = 'B';
+    const x = applyAction(cur, { type: 'END_TURN' });
+    if (!x.ok) break;
+    cur = x.state;
+  }
+  const n = marksOf(cur).filter((m) => m.kind === 'gb-mine').length;
+  assert.equal(n, 6, `上限应该是 6 枚，实际 ${n}`);
+  assert.equal(cur.units.some((u) => u.id === trap.id), true, '埋雷的陷阱师还站着');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

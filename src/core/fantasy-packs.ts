@@ -39,6 +39,8 @@ import {
 } from './ability-hooks.ts';
 import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
+import { addMark, markCountOf, marksAt } from './marks.ts';
+import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /**
@@ -165,9 +167,11 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'aura-armor',
     name: '守护光环',
-    summary: '相邻的友军护甲 +2。',
+    summary: '2 格内的友军护甲 +2。',
     group: 'support',
-    hooks: { aura: { allyArmor: 2 } },
+    // 2026-11-03：相邻 → 2 格。国王这类"阵眼"不该为了发光环而挤进一线，
+    // 2 格刚好是"后排压阵、前排吃满"的距离。
+    hooks: { aura: { allyArmor: 2, radius: 2 } },
   },
   {
     id: 'kill-rush',
@@ -835,29 +839,64 @@ const FANTASY_ABILITIES: AbilityDef[] = [
     },
   },
   {
+    /*
+     * 布雷：回合开始时，在自己**相邻的一圈**陆地上埋一枚地雷。
+     *
+     * 2026-11-03 之前它不是"布雷"，是"贴着就每回合扣 6 血"——那和"埋了一枚雷"
+     * 是两件事：它跟人走、跟着人一起动、还永远只作用在贴脸的那一个身上。
+     * 真正的雷应该是**留在格子上**的：埋完你可以走，敌人自己踩上去。
+     *
+     * 现在走的是 `core/marks.ts` 那层留痕（水雷已经用同一套，见 naval-packs 的
+     * `nv-mine`）：引擎负责"什么时候触发、扣不扣次数"，这里只负责"埋在哪"。
+     *
+     * 上限 6 枚（按布设者算）：不封顶的话，一个陷阱师蹲在原地二十回合，
+     * 半张地图都会变成雷区。
+     */
     id: 'trap',
     name: '布雷',
-    summary: '回合开始时，对贴身的敌军造成 6 点伤害并让其减速 1 回合。走着走着就踩上了。',
+    summary: '自己回合开始时，在相邻一圈的陆地上埋一枚地雷（全场最多 6 枚，只炸敌人）。',
     group: 'support',
     hooks: {
       onTurnStart: [
         {
           stage: TURN_START.support,
           apply: (c) => {
-            const def = c.api.utype(c.state, c.self.type);
-            const victims = c.state.units.filter(
-              (v) => v.owner !== c.owner && v.hp > 0 && c.api.distance(v, c.self) <= 1,
-            );
-            for (const v of victims) {
-              v.hp -= 6;
-              const st = (v.status ??= {});
-              st.slow = Math.max(st.slow ?? 0, 1);
-              c.api.pushLog(
-                c.state,
-                c.owner,
-                `${def.name} 的陷阱咬住了 ${c.api.utype(c.state, v.type).name}`,
-              );
+            const CAP = 6;
+            if (markCountOf(c.state, 'gb-mine', c.owner) >= CAP) return;
+            const s = c.state;
+            const spots: Array<{ x: number; y: number }> = [];
+            for (let dy = -1; dy <= 1; dy += 1) {
+              for (let dx = -1; dx <= 1; dx += 1) {
+                if (dx === 0 && dy === 0) continue;
+                const x = c.self.x + dx;
+                const y = c.self.y + dy;
+                if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+                const tile = s.tiles[y * s.w + x];
+                if (!tile || !LAND_MINE.on!.includes(tile.terrain)) continue;
+                if (tile.cityId) continue; // 城里不埋：那是别人的地板
+                if (marksAt(s, x, y).length > 0) continue; // 一格只放一件
+                // 已经站人的格子也能埋（"脚下有雷"是最自然的一种），
+                // 但埋伏在友军脚下永远炸不到人，所以跳过自己人站着的那格。
+                if (s.units.some((u) => u.x === x && u.y === y && u.owner === c.owner)) continue;
+                spots.push({ x, y });
+              }
             }
+            if (spots.length === 0) return;
+            // 轮转着挑：永远挑第一个的话，蹲在原地会把雷全堆在同一格
+            const pick = spots[(s.turn + c.self.x + c.self.y) % spots.length]!;
+            addMark(s, {
+              kind: 'gb-mine',
+              owner: c.owner,
+              x: pick.x,
+              y: pick.y,
+              charges: 1,
+              hidden: true,
+            });
+            c.api.pushLog(
+              s,
+              c.owner,
+              `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 埋下一枚地雷`,
+            );
           },
         },
       ],
@@ -1292,6 +1331,36 @@ const KNIGHTS: Expansion = {
   ],
 };
 
+/**
+ * 地雷：哥布林陷阱师埋下的东西（留痕层，不是单位）。
+ *
+ * 三条刻意的选择：
+ *   · **只认陆地**：水面/浅滩/桥都不埋。桥面是最想埋的地方，但那会让
+ *     "过桥"变成一个纯掷骰子行为，而且桥本身会被踩塌——两件事叠在一起太吵。
+ *   · **只炸敌人**：自己的雷区自己人走过去天经地义，这也是 `trigger: 'enemy'`
+ *     存在的原因（水雷同理）。
+ *   · **伤害不走进攻公式**：不加护甲、不算地形、不触发反击。雷不跟你讲武德。
+ *     10 点：4 代之前一个兵 24~40 血，一枚雷约等于三成血，踩两枚就得回城。
+ */
+const LAND_MINE: MarkKindDef = {
+  id: 'gb-mine',
+  name: '地雷',
+  summary: '敌人踩上来就炸 10 点（无视护甲）并减速 1 回合，炸完就没。自己人踩不到。',
+  tags: ['mine', 'land'],
+  hidden: true,
+  on: ['plain', 'forest', 'hill', 'mountain', 'plateau', 'valley', 'marsh', 'dune'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    c.api.hurt(c.unit, 10, `${def.name} 踩响地雷，损失 10 点生命`);
+    const st = (c.unit.status ??= {});
+    st.slow = Math.max(st.slow ?? 0, 1);
+    c.api.log(c.mark.owner, `地雷命中 ${def.name}`);
+  },
+};
+
 const BEASTS: Expansion = {
   id: 'fantasy-beasts',
   scale: 'large',
@@ -1579,6 +1648,8 @@ const BEASTS: Expansion = {
       abilities: ['siege-master'],
     },
   ],
+  // 地雷是"荒兽"这一家带来的格子上的东西（哥布林陷阱师埋的）
+  marks: [LAND_MINE],
 };
 
 const ARCANE: Expansion = {

@@ -1288,17 +1288,22 @@ export function canAttack(u: Unit): boolean {
 }
 
 /**
- * 相邻友军提供的光环加成。
+ * 友军提供的光环加成。
  *
- * 只加不乘，也不递归——否则两个指挥光环互相加成会失控。
+ * 只加不乘，也不递归——否则两个光环互相加成会失控。
+ *
+ * 半径写在 aura 自己身上（`radius`，默认 1 = 相邻）：指挥光环这类"站远了也带得动"
+ * 的效果要 2 格，而威吓、咒域这类"贴上去才算"的仍然是 1。把半径放在**外面**
+ * （先判距离再看能力）的写法，加一个 2 格光环就等于把全兵种的光环都放大到 2 格。
  */
 export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: number } {
   let atk = 0;
   let armor = 0;
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    if (distance(ally, unit) !== 1) continue;
+    const gap = distance(ally, unit);
     for (const a of aurasOf(utype(s, ally.type))) {
+      if (gap > (a.radius ?? 1)) continue;
       if (a.allyAtk) atk += a.allyAtk;
       if (a.allyArmor) armor += a.allyArmor;
     }
