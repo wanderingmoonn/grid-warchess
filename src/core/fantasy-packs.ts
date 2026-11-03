@@ -41,6 +41,15 @@ import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
 import type { UnitTypeDef } from './types.ts';
 
+/**
+ * 林地之主的护甲加成。
+ *
+ * 定义成常量是因为它有两个消费者：能力自己（statArmor 算实际护甲）和
+ * AI 的地形估价（terrainArmor 声明 → terrainArmorOf）。以前两边各写一个 3，
+ * 改一处就会悄悄不一致。
+ */
+const WOODLAND_ARMOR = 3;
+
 /** 召唤物与临时建筑。它们不进产线、不占编制，所以单独放一个数组。 */
 export const SUMMONED_UNITS: UnitTypeDef[] = [
   {
@@ -342,14 +351,17 @@ const FANTASY_ABILITIES: AbilityDef[] = [
     summary: '站在森林或丘陵上时护甲 +3。把它赶出林子，它就没那么难打了。',
     group: 'defense',
     hooks: {
+      // AI 读这一条来给地形估价（terrainArmorOf），statArmor 读同一个常量来算实际护甲。
+      // 两处必须同源，否则"AI 以为值 3、结算只给 1"这种事会静悄悄地发生。
+      terrainArmor: [{ terrains: ['forest', 'hill'], bonus: WOODLAND_ARMOR }],
       statArmor: [
         {
           stage: STAT_STAGE.base,
           apply: (c) => {
             const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
             if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
-            c.armor += 3;
-            c.items.push({ label: '林地之主', delta: 3 });
+            c.armor += WOODLAND_ARMOR;
+            c.items.push({ label: '林地之主', delta: WOODLAND_ARMOR });
           },
         },
       ],
@@ -584,14 +596,14 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'curse-hit',
     name: '咒缚',
-    summary: '打中就让其被诅咒 3 回合，护甲 −2。',
+    summary: '打中就让其被咒缚 3 回合，护甲 −4。和普通诅咒不叠加，取强的那一个。',
     group: 'attack',
     hooks: {
       onHit: [
         {
           stage: HIT_STAGE.status,
           apply: (c) => {
-            if (c.api.putStatus(c.target, 'curse', 3)) c.touched.push('诅咒');
+            if (c.api.putStatus(c.target, 'curse-deep', 3)) c.touched.push('咒缚');
           },
         },
       ],
@@ -853,7 +865,17 @@ const FANTASY_ABILITIES: AbilityDef[] = [
                 ? spec.random[c.api.hashPick(c.state, c.self.x * 37 + c.self.y * 7, spec.random.length)]
                 : spec.type;
             if (!type || !c.state.unitTypes[type]) return;
-            const alive = c.state.units.filter((u) => u.owner === c.owner && u.type === type).length;
+            /*
+             * 上限按"这个召唤者产出的所有类型合起来"算，不是按每一种分开算。
+             *
+             * 2026-11-02 修：原来只数这一次随机抽中的那种，于是「元素召唤师」
+             * （random 四种、max 2）实际能养到 4×2=8 只，而它的说明写的是
+             * "同时最多 2"。四元素还都不是 summonedOnly，等于把 24 编制吃掉三分之一。
+             */
+            const outputs = spec.random && spec.random.length > 0 ? spec.random : [type];
+            const alive = c.state.units.filter(
+              (u) => u.owner === c.owner && outputs.includes(u.type),
+            ).length;
             if (alive >= spec.max) return;
             const spot = c.api.freeNeighbor(c.state, c.self, type);
             if (!spot) return;
@@ -1296,6 +1318,8 @@ const BEASTS: Expansion = {
       abilities: ['leap'],
     },
     {
+      // 蛇人：2026-11-02 护甲 3→6。它只有一个中毒、没有任何减伤手段，
+      // 95 金这个价位上原本被 65 金的长枪兵全面压住。
       id: 'serpent-man',
       name: '蛇人',
       short: '蛇',
@@ -1304,7 +1328,7 @@ const BEASTS: Expansion = {
       cost: 95,
       move: 3,
       atk: 15,
-      armor: 3,
+      armor: 6,
       maxHp: 34,
       range: 1,
       vision: 3,
@@ -1347,6 +1371,8 @@ const BEASTS: Expansion = {
     },
     // 史莱姆：打死它要花两下，因为第一下只把它变成两只小的。
     {
+      // 史莱姆：2026-11-02 生命 36→50。它是"打死要花两下"的单位，
+      // 但 36 血连第一下都扛不住——两只小史莱姆还没落地就先没了一个。
       id: 'slime',
       name: '史莱姆',
       short: '史',
@@ -1356,7 +1382,7 @@ const BEASTS: Expansion = {
       move: 2,
       atk: 9,
       armor: 1,
-      maxHp: 36,
+      maxHp: 50,
       range: 1,
       vision: 2,
       abilities: ['split'],
@@ -1637,6 +1663,8 @@ const ARCANE: Expansion = {
     },
     // 女巫：一片伤害 + 诅咒 + 一点魔攻。三种频率压在同一格上。
     {
+      // 女巫：2026-11-02 护甲 1→2、生命 26→30（之前是所有法师里最脆的一个，
+      // 而她的价值要靠"贴上去打三格"才能兑现，站不住就什么都做不了）。
       id: 'witch',
       name: '女巫',
       short: '女',
@@ -1645,8 +1673,8 @@ const ARCANE: Expansion = {
       cost: 160,
       move: 2,
       atk: 7,
-      armor: 1,
-      maxHp: 26,
+      armor: 2,
+      maxHp: 30,
       range: 3,
       vision: 5,
       magicAtk: 13,

@@ -28,6 +28,8 @@ const EXP = argOf('exp', 'bloodbath,turn-order-comp').split(',').filter(Boolean)
 const SEED = Number(argOf('seed', '7000'));
 /** 每回合给对手补多少金：人为制造"对面比我会花钱"的压力，用来看 AI 被压时的计划 */
 const FEED = Number(argOf('feed', '0'));
+/** 把"这一回合比较过的全部攒钱候选"摊开：只看到结果，看不出为什么不是那一个 */
+const SHOW_GOALS = args.includes('--goals');
 
 aiRecruitTrace.on = true;
 
@@ -73,6 +75,14 @@ while (!ended && round < CAP) {
           `${String(plan.allowance === Infinity ? '∞' : plan.allowance).padStart(8)}  ` +
           `${plan.stance.padStart(6)}  ${plan.urgent ? 'Y' : '.'}`,
       );
+      if (SHOW_GOALS) {
+        for (const g of plan.goalOptions) {
+          console.log(
+            `${' '.repeat(30)}· ${g.kind.padEnd(7)} ${String(g.cost).padStart(5)} 金` +
+              ` 评分 ${g.score.toFixed(2)}  ${g.note}`,
+          );
+        }
+      }
     }
 
     const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };

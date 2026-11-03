@@ -32,6 +32,16 @@ const packs = FANTASY_PACKS.map((p) => ({
         : `随机（${(u.summon.random ?? []).map((id) => names.get(id) ?? id).join(' / ')}）`
       : '',
     splitText: u.splitInto ? (names.get(u.splitInto) ?? u.splitInto) : '',
+    /**
+     * 下面三个和 summonText 同理：存货里存的是 id，表里要的是名字。
+     *
+     * 补它们是因为 2026-11-02 审表时发现「机制总表」缺了口子：
+     * 14 个会飞的兵一个字都没写飞行，土元素能盖土墙、魔龙卵两回合孵化、
+     * 大史莱姆由小史莱姆合体——这些在表格里全看不见。
+     */
+    buildsText: (u.builds ?? []).map((id) => names.get(id) ?? id).join(' / '),
+    hatchText: u.hatch ? `${names.get(u.hatch.into) ?? u.hatch.into}（${u.hatch.turns} 回合）` : '',
+    mergeText: u.mergeInto ? (names.get(u.mergeInto) ?? u.mergeInto) : '',
     abilityNames: (u.abilities ?? []).map((id) => abilityById(id)?.name ?? id),
     abilitySummary: (u.abilities ?? []).map((id) => abilityById(id)?.summary ?? ''),
     // 技能表也倒出来：表格里要能给"每回合能开什么"单独一列

@@ -50,7 +50,7 @@ import {
 } from '../src/core/sandbox.ts';
 // 能力表现在是"核心 + 各扩展贡献"合并出来的，测试跟着合并后的表走：
 // 扩展兵种引用自家能力时，不该因为"本体表里没有"就报不存在。
-import { allAbilities } from '../src/core/ability-registry.ts';
+import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
@@ -123,6 +123,7 @@ import {
   chatBodyLength,
   chatBodyOverflows,
   chatLinesHtml,
+  chatSeatOf,
   shouldAutoExpand,
   chatWhoLabel,
   trimChatBody,
@@ -165,6 +166,7 @@ import {
   mergeAdvanceField,
   rosterBonuses,
   rosterRoleOf,
+  savingAllowance,
 } from '../src/core/ai.ts';
 import {
   MAX_BOARD_SIZE,
@@ -188,6 +190,8 @@ import {
   cityRegenOf,
   cityTiles,
   armySize,
+  effectiveStats,
+  disbandRefundOf,
   canStandAt,
   canStrike,
   computeDamage,
@@ -195,9 +199,9 @@ import {
   damageToCity,
   distance,
   distToCity,
+  airLayer,
   effectiveRange,
   effectiveRangeAgainst,
-  effectiveStats,
   eggSpots,
   fearPenalty,
   footprintOf,
@@ -2695,6 +2699,40 @@ test('中毒：打中让其中毒三回合，每回合掉 6% 生命上限', () =
   const ticked = r2.state.units.find((u) => u.id === target.id)!;
   assert.equal(ticked.hp, hpAfterHit - Math.ceil(maxHp * 0.06));
   assert.equal(ticked.status?.poison, 2, '结算一次之后剩两回合');
+
+  /*
+   * 这一笔要进战报，而且要**公开**。
+   *
+   * 毒是在受害者自己的回合开始时结算的，日志挂在受害者名下；不给 open，
+   * 施毒的一方永远读不到自己造成的这点伤害（血条变了、战报里没有一笔），
+   * 复盘时就只能看到"对面莫名其妙少了血"。
+   */
+  const line = [...r2.state.log].reverse().find((e) => e.text.includes('中毒'));
+  assert.ok(line, '毒伤要写进战报');
+  assert.equal(line!.player, 'B', '这笔记在中毒的一方名下');
+  assert.equal(line!.open, true, '公开：施毒方也要看得见');
+  assert.ok(/\d+ 点生命/.test(line!.text), `要写清掉了多少血，实际：${line!.text}`);
+});
+
+test('自身损耗（土墙、临时召唤物）也要写进战报', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  // 找一个 decays > 0 的兵种：土墙是最常见的那一个
+  const wall = Object.values(s.unitTypes).find((d) => (d.decays ?? 0) > 0);
+  assert.ok(wall, '扩展里应该至少有一个会自我损耗的兵种');
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const u = place2(s, 'A', wall!.id, 5, 5);
+  const before = u.hp;
+  // 交回合走一圈，回到 A 的时候它的回合开始结算里会有一次损耗
+  const r1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(r1.ok);
+  const r2 = applyAction(r1.state, { type: 'END_TURN' });
+  assert.ok(r2.ok);
+  const after = r2.state.units.find((x) => x.id === u.id);
+  assert.ok(after, '损耗一次还不该倒');
+  assert.ok(after!.hp < before, '损耗要真的扣血');
+  const line = [...r2.state.log].reverse().find((e) => e.text.includes('自身损耗'));
+  assert.ok(line, '扣血要有一笔战报，不然血条自己变短');
+  assert.equal(line!.open, true, '棋面上看得见的事不需要藏');
 });
 
 test('净化只清一层，大净化清全部', () => {
@@ -2768,6 +2806,39 @@ test('减速扣 1 点移动、诅咒扣 2 点护甲', () => {
   const before = computeDamage(s, atk, cav);
   cav.status = { curse: 2 };
   assert.equal(computeDamage(s, atk, cav) - before, 2, '诅咒相当于少 2 点护甲');
+});
+
+test('咒缚：护甲 −4，且不和普通诅咒叠成 −6', () => {
+  // 2026-11-02 把「咒缚」从 −2 上调到 −4。它单独占一个状态键（curse-deep），
+  // 因为 curse 还被暗属性命中和诅咒师用着，改 curse 等于给所有暗属性白送一倍。
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  s.tiles[idx(s, 5, 4)].terrain = 'plain';
+  const victim = place2(s, 'A', 'royal-cavalry', 5, 5);
+  const atk = place2(s, 'B', 'swordsman', 5, 4);
+  const clean = computeDamage(s, atk, victim);
+
+  victim.status = { 'curse-deep': 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 4, '咒缚相当于少 4 点护甲');
+
+  // 普通诅咒 + 咒缚同时在场：只算强的那个，不能 −6
+  victim.status = { curse: 3, 'curse-deep': 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 4, '两个减甲状态取强不取叠');
+
+  // 只剩普通诅咒时退回 −2
+  victim.status = { curse: 3 };
+  assert.equal(computeDamage(s, atk, victim) - clean, 2, '咒缚过期后普通诅咒仍然生效');
+
+  // 回合结束要能自然衰减掉，否则「3 回合」等于永久。
+  // 状态是在**自己回合开始**结算并 −1 的（tickStatuses），两人局要走完两圈。
+  const u = place2(s, 'A', 'militia', 6, 6);
+  u.status = { 'curse-deep': 1 };
+  const step1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(step1.ok);
+  const step2 = applyAction(step1.state, { type: 'END_TURN' });
+  assert.ok(step2.ok);
+  const after = step2.state.units.find((x) => x.id === u.id);
+  assert.equal(after?.status?.['curse-deep'] ?? 0, 0, '最后一回合结束后咒缚要消失');
 });
 
 test('冲锋 / 威吓 / 吸血 / 再生 在奇想包里仍然按原规则走', () => {
@@ -3453,6 +3524,53 @@ test('英雄：同方场上只能一个，解锁费只收第一次', () => {
   const r3 = applyAction(after, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
   assert.ok(r3.ok);
   assert.equal(r3.state.players.A.gold, 1000 - price);
+});
+
+test('召唤出来的单位不占编制、解散不退钱（标记落在实例上）', () => {
+  // 四元素既能造也能召：只看兵种的 summonedOnly 分不出来路，所以 2026-11-02
+  // 把标记挪到单位实例上。这条守的是它带来的两个修正：
+  //   1. 召唤出来的元素不该吃掉 24 编制里的一格；
+  //   2. 召唤物满血解散不该退钱（否则"免费召唤 + 满血解散"就是印钞机）。
+  const s = fresh({ expansionIds: FANTASY });
+  const base = armySize(s, 'A');
+
+  const bought = stackOn(s, 'A', 'air-elemental', 8, 8);
+  assert.equal(armySize(s, 'A'), base + 1, '花钱造的元素要占编制');
+
+  const conjured = stackOn(s, 'A', 'air-elemental', 9, 8);
+  conjured.summoned = true;
+  assert.equal(armySize(s, 'A'), base + 1, '召唤出来的元素不占编制');
+
+  assert.ok(disbandRefundOf(s, bought) > 0, '自己造的元素满血解散能退钱');
+  assert.equal(disbandRefundOf(s, conjured), 0, '召唤物解散一分不退');
+});
+
+test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各 2 只', () => {
+  // random 四选一的召唤者，上限若按"这一次抽中的那种"数，实际能养到 4×max。
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 9, 9)].terrain = 'plain';
+  const master = stackOn(s, 'A', 'elementalist', 9, 9);
+  // every=3：让下一次回合开始正好轮到一个召唤周期
+  master.age = 2;
+  s.tiles[idx(s, 8, 9)].terrain = 'plain';
+  s.tiles[idx(s, 10, 9)].terrain = 'plain';
+
+  stackOn(s, 'A', 'fire-elemental', 8, 9).summoned = true;
+  stackOn(s, 'A', 'water-elemental', 10, 9).summoned = true;
+
+  const count = (): number =>
+    s.units.filter((u) => u.owner === 'A' && u.summoned === true).length;
+  assert.equal(count(), 2);
+
+  // 走完两圈回到 A 的回合开始，召唤钩子会跑；已经满了就不该再加
+  const step1 = applyAction(s, { type: 'END_TURN' });
+  assert.ok(step1.ok);
+  const step2 = applyAction(step1.state, { type: 'END_TURN' });
+  assert.ok(step2.ok);
+  const after = step2.state.units.filter(
+    (u) => u.owner === 'A' && ['fire-elemental', 'water-elemental', 'earth-elemental', 'air-elemental'].includes(u.type),
+  );
+  assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
 test('召唤物不占编制，也不能从产线招募', () => {
@@ -6026,6 +6144,59 @@ function runAiSteps(s: GameState, limit = 8): Action[] {
   }
   return acts;
 }
+
+test('地形加成是数据：树人站在森林/丘陵上多 3 甲', () => {
+  // 2026-11-02：把「林地之主」的 +3 从硬编码挪进 hooks.terrainArmor，
+  // 好让 AI 和结算读同一份数据。这条守的是"两边不会各写一个数"。
+  const s = fresh({ expansionIds: FANTASY });
+  const def = s.unitTypes['treant']!;
+  const map = terrainArmorOf(def);
+  assert.equal(map.get('forest'), 3, '森林 +3');
+  assert.equal(map.get('hill'), 3, '丘陵 +3');
+  assert.equal(map.get('plain'), undefined, '平地没有加成');
+
+  // 面板上必须真的加：站丘陵 vs 站平地
+  const t = stackOn(s, 'A', 'treant', 6, 6);
+  s.tiles[idx(s, 6, 6)]!.terrain = 'hill';
+  const onHill = effectiveStats(s, t).armor;
+  s.tiles[idx(s, 6, 6)]!.terrain = 'plain';
+  const onPlain = effectiveStats(s, t).armor;
+  assert.equal(
+    onHill - onPlain,
+    (CONFIG.terrainDef.hill ?? 0) + 3,
+    '丘陵掩体 + 林地之主 3 甲（掩体值是配置，别在测试里写死）',
+  );
+});
+
+test('AI 会让树人守在丘陵上，不为了推进挪到平地', () => {
+  // 这是"一夫当关"的最小场景：树人在丘陵、敌人在 3 格外。
+  // 改动前 AI 的走位候选里没有"不动"，它一定会挪走，白丢 5 点甲。
+  const s = fresh({ expansionIds: FANTASY, size: 16 }, 7781);
+  // 自己造一块丘陵：不能指望随机地图刚好给一块，否则这条测试时灵时不灵。
+  const hx = 8;
+  const hy = 8;
+  s.tiles[idx(s, hx, hy)]!.terrain = 'hill';
+
+  // 清场，只留一个树人（站丘陵）和 3 格外的一个敌人
+  const treant = stackOn(s, 'A', 'treant', hx, hy);
+  const foe = stackOn(s, 'B', 'militia', hx + 3, hy);
+  s.units = [treant, foe];
+  s.tiles[idx(s, foe.x, foe.y)]!.terrain = 'plain';
+  treant.moved = false;
+  treant.acted = false;
+  foe.moved = false;
+  foe.acted = false;
+  s.current = 'A';
+
+  runAiSteps(s, 2);
+  const after = s.units.find((u) => u.id === treant.id);
+  assert.ok(after, '树人不能凭空消失');
+  const terrain = s.tiles[idx(s, after!.x, after!.y)]?.terrain;
+  assert.ok(
+    terrain === 'hill' || terrain === 'forest',
+    `树人应当留在可守地形上，实际站到了 ${terrain}（${after!.x},${after!.y}）`,
+  );
+});
 
 test('AI 会走进去接管废墟（并且有钱的时候才走）', () => {
   // 这条补的是新规则：城打空之后不再易主，只是变成废墟，
@@ -9189,6 +9360,112 @@ test('飞行层是类型字段：air 能和地面同格，flight 能停在水上
   assert.equal(canStandAt(s, 6, 6, 'militia'), false, '但地面层自己不能再叠一个');
 });
 
+test('空中层无视地形：深水和高山都能飞，也都停得下', () => {
+  /*
+   * 这一条被反复修过三次，每次都是"某一处口径窄了一格"：
+   *   · 先是只认水面 → 飞得进河、飞不进外海（深水）；
+   *   · 然后是认了水面 + 深水，但高山仍然是墙 → 飞机绕着山走；
+   *   · 顺带还漏了 AI 的距离图（见下一条用例）。
+   * 现在的规则一句话：**空中层没有地形，只有敌方城市拦得住它**。
+   */
+  const s = arena(fresh({ godMode: true }));
+  testType(s, 'test-jet', { layer: 'air', flight: true, move: 6 });
+  // 对照：**只掠水、没写 flight** 的地面单位（蜘蛛骑士那种"跳"）
+  testType(s, 'test-jumper', { abilities: ['leap'], move: 6 });
+
+  // 在第 7、8 列铺一条竖墙：深水 + 高山
+  for (let y = 0; y < s.h; y++) {
+    s.tiles[idx(s, 7, y)] = { terrain: 'deep', cityId: null };
+    s.tiles[idx(s, 8, y)] = { terrain: 'mountain', cityId: null };
+  }
+
+  const jet = place2(s, 'A', 'test-jet', 5, 6);
+  const reach = reachableTiles(s, jet);
+  assert.ok(reach.has(idx(s, 7, 6)), '空中层要能飞进深水');
+  assert.ok(reach.has(idx(s, 8, 6)), '空中层要能飞过高山');
+  assert.ok(reach.has(idx(s, 10, 6)), '要能一路飞过整条墙（不只是贴边一格）');
+  assert.equal(canStandAt(s, 7, 6, 'test-jet'), true, '深水上空也能停');
+  assert.equal(canStandAt(s, 8, 6, 'test-jet'), true, '高山顶上也能停');
+
+  // 对照：靠「跳跃」掠水的地面单位，能过水但爬不了山
+  const jumper = place2(s, 'A', 'test-jumper', 5, 8);
+  const jreach = reachableTiles(s, jumper);
+  assert.ok(jreach.has(idx(s, 7, 8)), '跳跃能越过深水');
+  assert.equal(jreach.has(idx(s, 8, 8)), false, '跳跃爬不了高山');
+  assert.equal(canStandAt(s, 8, 8, 'test-jumper'), false, '山上也停不下');
+});
+
+test('守卫：会飞一定在空中层，数据里不许出现"能飞的地面兵"', () => {
+  /*
+   * 这条不是测某一次改动，是**堵住这一类数据**。
+   *
+   * 历史上"会飞"有三种写法：`layer: 'air'`、`flight: true`、能力 `fly`/`fly-over`。
+   * 而 `airLayer()` 早先只读 layer 和能力，不读 flight —— 于是只要谁写漏了 layer，
+   * 那个兵就成了"能飞过河、却按地面兵算"的怪胎：占地面格、被近战按普通单位打、
+   * 面板上还标着"飞行"。规则里现在把 flight 并进 airLayer，这条用例守住它，
+   * 顺便把全部扩展的兵种扫一遍。
+   */
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: EXPANSIONS.map((e) => e.id) },
+    4321,
+  );
+  const all = Object.values(s.unitTypes) as UnitTypeDef[];
+  assert.ok(all.length > 100, `扩展全开时的兵种数不对劲：${all.length}`);
+
+  for (const def of all) {
+    if (def.flight === true) {
+      assert.equal(airLayer(def), true, `${def.id}（${def.name}）写了 flight，却不是空中层`);
+    }
+    if (def.layer === 'air') {
+      assert.equal(def.flight, true, `${def.id}（${def.name}）在空中层，却没写 flight —— 两者是一回事`);
+    }
+  }
+  // 反向：只掠水的地面单位必须**没有** flight（它们靠能力过水）
+  const jumpers = all.filter((d) => !airLayer(d) && (d.abilities ?? []).includes('leap'));
+  assert.ok(jumpers.length > 0, '至少该有一个"跳跃"单位（蜘蛛骑士）当对照');
+  for (const d of jumpers) assert.equal(d.flight ?? false, false, `${d.id} 是地面兵，不该写 flight`);
+});
+
+test('空中层的推进图不把深水当墙：AI 的飞机会飞过海', () => {
+  /*
+   * 规则层早就放行了，可 AI 一格都不飞——它借的是陆军的旱路图（水是墙、山是墙），
+   * 于是在海岸线上"前后都是无穷远"，推进分恒为 0，飞机宁可原地待命。
+   * 这条用例盯的就是那张图：空中必须有自己的距离图（每格一步）。
+   */
+  // 城市要留着：AI 的推进目标是它们，清空的局面它连动作都不给（试过，返回 null）。
+  // 而且只能留"隔着海的那一座"——同侧还有一座敌城的话，飞机会往近的那座去，
+  // 这条用例就测不到"过海"了（第一版就是这么挂的：它掉头去围西岸的城）。
+  const s = fresh({ size: 14 });
+  s.units = [];
+  const keep = s.cities.filter(
+    (c) => (c.owner === 'A' && c.x === 1) || (c.owner === 'B' && c.x === s.w - 3),
+  );
+  for (const t of s.tiles) t.cityId = null;
+  s.cities = keep;
+  for (const c of keep) {
+    for (let dy = 0; dy < c.size; dy++) {
+      for (let dx = 0; dx < c.size; dx++) {
+        s.tiles[idx(s, c.x + dx, c.y + dy)] = { terrain: 'city', cityId: c.id };
+      }
+    }
+  }
+  testType(s, 'test-jet', { layer: 'air', flight: true, move: 9 });
+  // 中间一条 4 格宽的深水，把两岸彻底隔开
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 6; x <= 9; x++) s.tiles[idx(s, x, y)] = { terrain: 'deep', cityId: null };
+  }
+  const jet = place2(s, 'A', 'test-jet', 5, 7);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const acts = runAiSteps(s, 6);
+  const flew = acts.some((a) => a.type === 'MOVE' && a.unitId === jet.id && a.x >= 6);
+  assert.ok(
+    flew,
+    `飞机会朝对岸推、落点进深水带，实际动作：${JSON.stringify(acts)}`,
+  );
+});
+
 test('多资源：活人吃粮、建筑耗材，缺粮就造不出来', () => {
   const s = fresh({ expansionIds: ['city-works'] });
   const militia = s.unitTypes.militia!;
@@ -11425,11 +11702,17 @@ test('投降同步：云端说终局了，本机就算没轮到自己、还有�
   });
   assert.equal(withDraft.take, true, '终局压倒未提交的草稿');
 
-  // 平时怎么挡还是怎么挡
+  /*
+   * 只挡草稿，不挡"轮不到我"。
+   *
+   * 以前这里写着"没轮到我就不拉"，代价是：交完回合之后，对面走完的那一整轮
+   * 你一次都看不到——棋盘、顶栏的当前行动方、战报全停在你自己交回合那一刻，
+   * 直到下一次轮到你才整块跳过去。三个人打时更明显：B 和 C 的来回，A 看不见。
+   */
   assert.equal(
     adoptDecision(head(8, 'A', null), head(7, 'A', null), { seat: 'B' }).take,
-    false,
-    '没轮到我就不拉',
+    true,
+    '别人走完一轮也要装：不然棋盘和行动方停在上一次自己交回合的样子',
   );
   assert.equal(
     adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B', draft: true }).take,
@@ -11440,6 +11723,16 @@ test('投降同步：云端说终局了，本机就算没轮到自己、还有�
     adoptDecision(head(8, 'B', null), head(7, 'A', null), { seat: 'B' }).take,
     true,
     '轮到我、没草稿、回合变了：就该拉',
+  );
+  assert.equal(
+    adoptDecision(head(7, 'B', null), head(7, 'A', null), { seat: 'C' as never }).take,
+    true,
+    '三人局：回合没变、只是换了行动方，也要装（认输就是这么交的）',
+  );
+  assert.equal(
+    adoptDecision(head(7, 'A', null), head(7, 'A', null), { seat: 'A' }).take,
+    false,
+    '什么都没变就别重绘',
   );
 
   // 观战位没有"轮到我"这回事，只看有没有新东西
@@ -11487,6 +11780,32 @@ test('聊天记录：转义、三种归属、空态', () => {
 
   const empty = chatLinesHtml([], 'A');
   assert.ok(empty.includes('chat-empty'), '空的时候要有一句话，不要留一块空白');
+});
+
+test('聊天色条跟说话人坐哪，不跟"我方/对方"', () => {
+  /*
+   * 病：色条以前只按 mine / foe 上色（蓝方玩家看红方说话，那条线是蓝的），
+   * 三人四人局的 C、D 还会被并成 A 座。两处都改成"谁就是谁的颜色"。
+   */
+  assert.equal(chatSeatOf('A'), 'A');
+  assert.equal(chatSeatOf('C'), 'C', 'C 座不能塌成 A 座');
+  assert.equal(chatSeatOf('D'), 'D', 'D 座不能塌成 A 座');
+  assert.equal(chatSeatOf('watch'), 'watch');
+  assert.equal(chatSeatOf('写坏了的值'), 'A', '认不出来的老数据退回 A 座，别让消息消失');
+
+  const lines: ChatLine[] = [
+    { id: 1, seat: 'A', name: '红方', body: '我先走', at: '2026-11-02T20:00:00Z' },
+    { id: 2, seat: 'C', name: '绿方', body: '等等我', at: '2026-11-02T20:01:00Z' },
+  ];
+  // 站在蓝方（B）的角度：A 说的话色条仍然该是红的
+  const asB = chatLinesHtml(lines, 'B');
+  assert.ok(asB.includes('seat-a'), '红方说话，色条要是红的（不能因为"对面"就画成蓝）');
+  assert.ok(asB.includes('foe'), '"对方"这个文字标签照旧要有');
+  assert.ok(asB.includes('seat-c'), '三号席位有自己的颜色，不能并进 A');
+  // 三人局里 C 看自己那条：色条 seat-c，标签 mine
+  const asC = chatLinesHtml(lines, 'C');
+  assert.ok(asC.includes('seat-c'), 'C 座说的话仍然用 C 的颜色');
+  assert.ok(asC.includes('mine'), 'C 座自己那条要标"我方"');
 });
 
 test('超长消息不发出去，而不是截一半发出去', () => {
@@ -14016,6 +14335,26 @@ test('全关光了也不给一个空池：退回本体兵种', () => {
   for (const id of s.config.enabledUnits) {
     assert.ok(UNIT_TYPES[id], `${id} 应该是本体兵种`);
   }
+});
+
+test('攒钱期不再"一分钱都不能花"：远目标隔回合还能补一个兵', () => {
+  // 目标 900、手上 200、每回合进 220、两座城产兵：老公式给 0（一分不能花），
+  // 于是"攒升级费的六个回合"和"产线停摆的六个回合"是同一段时间。
+  const inc = 220;
+  const sites = 2;
+  const spend = savingAllowance(200, inc, 1400, sites, true, 0);
+  assert.equal(spend, 110, '出手的回合放出半个回合的收入（两座城分）');
+  assert.equal(savingAllowance(200, inc, 1400, sites, true, 1), 0, '攒的回合不该放款');
+  // 一个周期（两回合）里最多花掉 gas 的量不能达到两回合的收入，否则永远攒不到目标
+  assert.ok(spend * sites < inc * 2, `一个周期花超了：${spend * sites} vs ${inc * 2}`);
+});
+
+test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯预留', () => {
+  assert.equal(savingAllowance(1000, 200, 900, 2, true, 0), Infinity, '目标到手就别冻结了');
+  // 只差几个回合收入时咬住目标：这时候补兵等于把到手的东西又推远
+  assert.equal(savingAllowance(700, 200, 1300, 2, true, 0), 0, '贴身攒钱时不放款');
+  // 弃城期的战术定义就是"停手换档"，这一档保持纯预留（和老口径一致）
+  assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

@@ -1379,6 +1379,64 @@ body {
   font-weight: 600;
 }
 
+/* 状态栏：中毒 / 灼烧 / 减速 / 诅咒 / 咒缚。
+   颜色只做区分，不做强度暗示；剩余回合写成一个小小的角标，
+   因为它每回合都在变，写进正文会让人误以为是固定属性。 */
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--panel-2);
+}
+
+.status-chip b {
+  font-weight: 600;
+}
+
+.status-chip i {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* 中毒：绿里带一点黄，和森林/草地的绿区分开 */
+.status-chip.st-poison {
+  color: #6f8a2f;
+}
+
+/* 灼烧：橙红 */
+.status-chip.st-burn {
+  color: #b45a1f;
+}
+
+/* 减速：冷蓝 */
+.status-chip.st-slow {
+  color: #3f6f96;
+}
+
+/* 诅咒 / 咒缚：紫，咒缚深一档 */
+.status-chip.st-curse {
+  color: #7a5aa0;
+}
+
+.status-chip.st-curse-deep {
+  color: #5b3a86;
+  border-width: 2px;
+}
+
 /* 单位与地形的"说明书" */
 .unit-notes {
   margin-top: 10px;
@@ -3981,20 +4039,38 @@ a.btn {
   word-break: break-word;
 }
 
-/* 我方 / 对方 / 观众：用左侧一道细色条分，比给整条上底色安静得多 */
-.chat-line.mine {
-  border-left: 2px solid var(--team-a);
-  padding-left: 6px;
-}
-
-.chat-line.foe {
-  border-left: 2px solid var(--team-b);
-  padding-left: 6px;
-}
-
+/*
+ * 左侧一道细色条分人，比给整条上底色安静得多。
+ *
+ * 色条的颜色跟**说话人坐哪**（seat-a/b/c/d），不跟"我方/对方"：
+ * 以前只按 mine/foe 上色，等于"我永远红、对面永远蓝"——蓝方看红方说话，
+ * 那条线是蓝的。三人四人局更是把两个席位压成两种颜色。
+ * "我方/对方/观众"现在只决定文字色调和灰条。
+ */
+.chat-line.mine,
+.chat-line.foe,
 .chat-line.watch {
   border-left: 2px solid var(--line-strong);
   padding-left: 6px;
+}
+
+.chat-line.seat-a {
+  border-left-color: var(--team-a);
+}
+
+.chat-line.seat-b {
+  border-left-color: var(--team-b);
+}
+
+.chat-line.seat-c {
+  border-left-color: var(--team-c);
+}
+
+.chat-line.seat-d {
+  border-left-color: var(--team-d);
+}
+
+.chat-line.watch {
   color: var(--text-2);
 }
 

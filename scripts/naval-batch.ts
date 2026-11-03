@@ -35,6 +35,13 @@ const STYLE = argOf('style', 'isles');
 const EXPANSIONS = argOf('expansions', 'bloodbath,height-terrain,naval-fleet');
 const OUT = argOf('out', 'results/naval');
 const CAP = argOf('cap', '200');
+/**
+ * 棋盘边长，0 = 按时代默认（火药及以后 20）。
+ *
+ * 转发这一项是为了把"这批到底是多大图"钉住：默认值哪天跟着时代表改了，
+ * 存下来的历史结果就会和当时的表头对不上，而跑批结果是要跨月对比的。
+ */
+const SIZE = Number(argOf('size', '0'));
 /** 并发上限：默认按逻辑核数，给 0 就串行（对账用） */
 const PARALLEL = Number(argOf('parallel', String(os.cpus().length)));
 const TAG = argOf('tag', 'run');
@@ -74,6 +81,7 @@ function runJob(job: Job): Promise<{ ok: boolean; ms: number; why?: string }> {
         '--expansions', EXPANSIONS,
         '--cap', CAP,
         '--out', job.file,
+        ...(SIZE > 0 ? ['--size', String(SIZE)] : []),
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );

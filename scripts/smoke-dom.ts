@@ -5098,5 +5098,156 @@ await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完',
   assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
 });
 
+
+check('状态栏：中毒/灼烧/减速挂在兵身上时要看得见', () => {
+  /*
+   * 这些状态以前只活在结算里：血条自己变短、护甲自己变小，面板一个字不提。
+   * 状态栏就是那笔账——挂的是什么、还剩几回合。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 4242);
+  const u = st.units.find((x) => x.owner === 'A')!;
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: u,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  assert.equal(host.querySelector('.status-row'), null, '身上没状态时不该留一排空壳');
+
+  u.status = { poison: 3, burn: 2, slow: 1 };
+  paint();
+  const row = host.querySelector('.status-row');
+  assert.ok(row, '挂上状态就要有状态栏');
+  const chips = [...row!.querySelectorAll('.status-chip')];
+  assert.equal(chips.length, 3, `三个状态应该三个徽标，实际 ${chips.length}`);
+  const text = row!.textContent ?? '';
+  assert.ok(text.includes('中毒'), '要写名字');
+  assert.ok(text.includes('3 回合'), `中毒报剩余回合，实际：${text}`);
+  assert.ok(text.includes('2 层'), `灼烧报层数（不是回合），实际：${text}`);
+  assert.ok(row!.querySelector('.st-poison'), '中毒要有自己的样式钩子');
+  assert.ok(row!.querySelector('.st-burn'), '灼烧要有自己的样式钩子');
+  // 顺序固定：中毒先于灼烧——战报和面板对同一件事得用同一个顺序
+  assert.ok(
+    text.indexOf('中毒') < text.indexOf('灼烧'),
+    `状态顺序该是中毒→灼烧，实际：${text}`,
+  );
+});
+
+
+check('三人局认输之后：顶栏要说"你已认输"，按钮不再假装还能走', () => {
+  /*
+   * 认输在三人四人局里只退出自己（剩下的人接着打），所以界面必须换一种说法。
+   * 以前它继续写"等待 XXX"、结束回合按钮写着"等待对方行动中"——
+   * 认输的人看着像在等一个永远不会轮到的回合。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, playerCount: 3 }, 5150);
+  st.out = ['A'];
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('你已认输'), `顶栏要说清已经退出，实际：${text.slice(0, 120)}`);
+  const endTurn = host.querySelector('[data-act="end-turn"]') as HTMLButtonElement | null;
+  assert.ok(endTurn, '侧栏还是要有那颗按钮（用来显示状态）');
+  assert.equal(endTurn!.disabled, true, '已退出就不能再结束回合');
+  const surrender = host.querySelector('[data-act="surrender"]') as HTMLButtonElement | null;
+  assert.equal(surrender!.disabled, true, '认输过一次就不该还能再点');
+});
+
+
+check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也不重播', () => {
+  /*
+   * 病根不在我们自己的调用次数，而在浏览器：`paintUnits` 为了对齐顺序会
+   * `insertBefore`，节点被摘下再插回时**正在跑的 CSS 动画会从头再来**。
+   * 而顺序变化最常发生在"这一下有单位死了"的那一帧——正好和掉血同帧。
+   * 所以上一版"按动作对账"只能堵住渲染重放，堵不住浏览器自己的重播。
+   *
+   * 现在残留条走 Web Animations（挂在元素上，重插入不重播），
+   * 再加一个绘制序号防止同一次绘制里演两遍。这条用例数 `animate` 的调用次数。
+   */
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 771);
+  const ui = {
+    selectedId: null,
+    reach: [] as number[],
+    targets: [] as string[],
+    siegeTargets: [] as string[],
+    selectedCityId: null,
+    placeable: [] as number[],
+    threat: [] as number[],
+    me: 'A' as const,
+  };
+  const allVisible = {
+    state: st,
+    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    ghosts: [] as never[],
+    rememberedTiles: new Map(),
+    rememberedCities: new Map(),
+  };
+
+  const calls: string[] = [];
+  const proto = (dom.window as unknown as { HTMLElement: { prototype: Record<string, unknown> } })
+    .HTMLElement.prototype;
+  const orig = proto.animate;
+  proto.animate = function (this: HTMLElement, frames: Keyframe[]) {
+    calls.push(String((frames[0] as { width?: string }).width ?? ''));
+    return { cancel() {}, finished: Promise.resolve() } as unknown as Animation;
+  };
+
+  try {
+    const victim = st.units.find((u) => u.owner === 'B')!;
+    const maxHp = st.unitTypes[victim.type]!.maxHp;
+    const before = victim.hp / maxHp;
+    victim.hp = Math.max(1, Math.floor(maxHp / 2));
+    const after = victim.hp / maxHp;
+
+    renderBoard(host, allVisible, { ...ui, hpDrops: new Map([[victim.id, before]]) });
+    assert.equal(calls.length, 1, `一次掉血只该演一遍，实际 ${calls.length} 次`);
+    // 起点是"掉血前"的比例：没有这句，橙条会从新血线开始，等于没演
+    assert.equal(calls[0], `${Math.max(2, before * 100)}%`, '橙条要从掉血前的宽度起跑');
+
+    // 走的是 Web Animations，不是 CSS 类：类动画会被 DOM 重排从头再播
+    assert.equal(
+      host.querySelector('.hp-lag.chipped'),
+      null,
+      '有 animate 时不该再退回会被重排打断的 CSS 类动画',
+    );
+
+    // 同一笔掉血再画一遍（顶栏 / 缩放 / 轮询都会触发）：不该再演
+    renderBoard(host, allVisible, { ...ui });
+    assert.equal(calls.length, 1, '重复渲染不该重播');
+    void after;
+
+    // 有人倒下 → 后面的节点要前移（insertBefore）。以前 CSS 动画会因此从头再来
+    const dead = st.units.find((u) => u.owner === 'A' && u.id !== victim.id)!;
+    st.units = st.units.filter((u) => u.id !== dead.id);
+    renderBoard(host, allVisible, { ...ui });
+    assert.equal(calls.length, 1, 'DOM 重排不该让已经播过的掉血动画重播');
+
+    // 老环境（没有 animate）：退回 CSS 类，至少还能看见——这条路径不能被删掉
+    delete (proto as { animate?: unknown }).animate;
+    victim.hp = Math.max(1, victim.hp - 3);
+    renderBoard(host, allVisible, { ...ui, hpDrops: new Map([[victim.id, after]]) });
+    assert.ok(host.querySelector('.hp-lag.chipped'), '没有 animate 时要用类动画兜底');
+  } finally {
+    proto.animate = orig;
+    host.remove();
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

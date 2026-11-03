@@ -151,8 +151,12 @@ const abilityApi: AbilityApi = {
   strikeDistance,
   canStandAt,
   freeNeighbor,
+  // 所有"凭空出现"的单位都从这条路走（召唤 / 分裂 / 孵化 / 裂殖 / 聚合）。
+  // 在这里统一打标记，比让五个调用点各自记得打要可靠。
   spawn: (s, owner, type, x, y) => {
-    s.units.push(makeUnit(s, owner, type, x, y));
+    const u = makeUnit(s, owner, type, x, y);
+    u.summoned = true;
+    s.units.push(u);
   },
   pushLog,
   citiesOf,
@@ -626,7 +630,7 @@ export function armySize(s: GameState, p: PlayerId): number {
       n += producePop(d);
       continue;
     }
-    if (d.summonedOnly) continue;
+    if (d.summonedOnly || u.summoned) continue;
     n += 1;
   }
   return n;
@@ -728,7 +732,22 @@ export function cloneState(s: GameState): GameState {
  * 新数据则应该直接写 `layer: 'air'`。
  */
 export function airLayer(def: UnitTypeDef): boolean {
-  return def.layer === 'air' || hasFlag(def, 'airLayer');
+  /*
+   * 三条判据，其实是同一件事的三种写法：
+   *   · `layer: 'air'` —— 现在所有飞行单位都写这个；
+   *   · `flight: true` —— 早先只有"能过水"这一个字段，没有层这个概念；
+   *   · 能力钩子 `airLayer` —— 「掠空」和兵种编辑器捏出来的旧数据。
+   *
+   * `flight` 这一条是后补的，补它是因为**两个字段各说各话**会长出真 bug：
+   * 只写 `flight: true`、忘写 `layer: 'air'` 的单位会变成"能飞过河、
+   * 却是地面层"的怪胎——它会占地面格、被地面近战按普通单位打、
+   * 面板上还标着"飞行"。数据里目前一个都没有（见 test-rules 的守卫用例），
+   * 但只要规则允许这种状态存在，下一个人就会写出来。
+   *
+   * 所以现在：**会飞就是空中层**。想表达"能过水但仍在地面"（蜘蛛骑士那一跃），
+   * 只能用能力（`leap` / `fly` 的 crossesWater 钩子），不能用 `flight` 字段。
+   */
+  return def.layer === 'air' || def.flight === true || hasFlag(def, 'airLayer');
 }
 
 /** 空中层：能飞，并且可以和地面单位同格 */
@@ -950,8 +969,27 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     id: 'curse',
     name: '诅咒',
     summary: '护甲 −2',
-    // 原逻辑：只要 curse > 0，就扣 2 点护甲
-    modifyArmor: (_s, _u, val, armor) => (val > 0 ? armor - 2 : armor),
+    /*
+     * 只要 curse > 0 就扣 2 点护甲（不看剩余回合——它是"诅咒还在"的二值判断）。
+     *
+     * 身上同时有「咒缚」时这里让位：两个减甲状态叠着算会变成 −6，
+     * 而咒缚本来就是"更强的诅咒"，不是"再叠一层"。取强不取叠，
+     * 玩家也不会因为被同一套技能打两下就突然多掉 4 点甲。
+     */
+    modifyArmor: (_s, u, val, armor) =>
+      val > 0 && !(u.status?.['curse-deep'] ? u.status['curse-deep'] > 0 : false) ? armor - 2 : armor,
+  },
+  /*
+   * 咒缚：2026-11-02 从"护甲 −2"上调为"护甲 −4"，单独成一个状态。
+   *
+   * 为什么不直接把 curse 改成 −4：curse 还被暗属性命中、诅咒师等一堆地方用着，
+   * 改它等于给所有暗属性攻击白送一倍。这里只让「咒缚」这条能力变强。
+   */
+  'curse-deep': {
+    id: 'curse-deep',
+    name: '咒缚',
+    summary: '护甲 −4',
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? armor - 4 : armor),
   },
 };
 
@@ -962,7 +1000,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
  * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
  * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
  */
-const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse'];
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse', 'curse-deep'];
 
 /** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
 export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
@@ -1126,7 +1164,9 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * （"蜘蛛能过河，但 AI 算不出它能过河"）。
  */
 function crossesWater(def: UnitTypeDef): boolean {
-  return def.flight === true || hasFlag(def, 'crossesWater');
+  // 空中层当然过水；其余的看能力（跳跃、旧版「飞行」）。
+  // `flight` 字段不再单独出现在这里——它已经是空中层了（见 airLayer）。
+  return airLayer(def) || hasFlag(def, 'crossesWater');
 }
 
 /**
@@ -1148,12 +1188,17 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
   if (def.domain === 'water') {
     if (!navigable(tile.terrain)) return false;
   } else if (!passable(tile.terrain)) {
-    // 飞行单位可以停在水面上：它们不是"过河"，是"栖息"。
-    // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
-    // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
-    // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
-    // （浅流本来就可通行，不用单列。）
-    if (!((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def))) {
+    // 空中层：地形对它不存在，停哪儿都行（高山顶上也一样）。
+    // 和 reachableTiles 的 terrainOk 是同一条判据——那两处一旦不一致，
+    // 就会出现"飞得进去、停不下来"或者反过来。
+    if (airLayer(def)) {
+      // 不拦
+    } else if ((tile.terrain === 'water' || tile.terrain === 'deep') && crossesWater(def)) {
+      // 掠水（不是空中层）：能停在水面上，但爬不了山。
+      // 河防对飞行本来就不成立，如果连落脚都不许，飞行就只是"绕着水走"，
+      // 反而比走路更别扭——一只鹰停在桅杆上，没人会觉得这需要一条规则解释。
+      // 深水同理：海上空域也是空域，不让飞机停在航母头顶上说不通。
+    } else {
       return false;
     }
   }
@@ -1844,16 +1889,31 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
     return out;
   };
 
-  /** 地形与城市：四格全部合规才算过；飞行只给"水面"开一个例外（下同） */
+  /**
+   * 地形与城市：四格全部合规才算过。
+   *
+   * 两条豁免，粗细不同，别再混成一条：
+   *   · **空中层（`layer: 'air'`）没有地形这回事**——河、深水、高山、火山
+   *     一律从上面过，唯一还挡得住它的是**敌方城市**（那是防空，不是地形）。
+   *   · **掠水（`flight` 但不是空中层）**只放行水面与深水：一只鹰能贴水飞，
+   *     但它仍然爬不过高山。
+   *
+   * 以前这里只写了水面和深水，于是飞机飞得进外海、飞不过山；更早的版本
+   * 连深水都没写，表现是"能停在深水，却飞不进去"。这类"两处口径不一致"
+   * 的 bug 每次都长得一样：能站的地方进不去，或进得去的地方站不住。
+   */
   const terrainOk = (ax: number, ay: number): boolean => {
     for (const c of cellsAt(ax, ay)) {
       if (!blockedFor(s, c.x, c.y, unit)) continue;
       const ft = tileAt(s, c.x, c.y);
-      // 飞行放行水面与深水：深水只是"船才敢去"的水，对天上的东西和普通水面
-      // 没有区别。以前这里只写了 `water`，于是飞过整条河没问题、飞进外海却被
-      // 拦住——而 tileStandsOk 那边认的是 water + deep，两处口径不一致，
-      // 表现就是"能停在深水上，却飞不进去"。
-      if (flyer && ft && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
+      if (!ft) return false;
+      if (air) {
+        // 敌方（未成废墟的）城市仍然拦：那一段是防空火力，不是地形
+        const city = ft.cityId ? cityById(s, ft.cityId) : null;
+        if (!city || city.owner === unit.owner || city.ruined) continue;
+        return false;
+      }
+      if (flyer && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
       return false;
     }
     return true;
@@ -1915,7 +1975,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       //
       // 多格单位按**锚点那一格**付账：四格取最大或取和，都会让"贴着岸横挪一格"
       // 在玩家眼里突然贵一倍，而界面上高亮的正是锚点格。口径跟肉眼一致优先。
-      let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer });
+      // 空中层一律 1 步：它连高山都过得去（见 terrainOk），没理由在那上面
+      // 按地形的 99 点收费。写成 `flyer || air` 而不是只写 flyer，是因为
+      // 这两件事本来就该分家：一只鹰能掠水但爬不了山，飞机两样都能。
+      let stepCost = stepCostInto(s, unit, cur.i, idx(s, nx, ny), { waterUnit, flyer: flyer || air });
       const moveCtx = { state: s, unit, def, terrain: tile.terrain, cost: stepCost };
       for (const h of hooks) {
         if (!h.moveCost) continue;
@@ -4423,6 +4486,15 @@ function doDisband(s: GameState, unitId: string): ActionResult {
 export function disbandRefundOf(s: GameState, u: Unit): number {
   const def = utype(s, u.type);
   if (u.hp < maxHpOf(s, u)) return 0;
+  /*
+   * 召唤物一分钱不退。
+   *
+   * 这一条是 2026-11-02 查出来的漏洞：四元素、大史莱姆能造也能召，
+   * 而"能造"就意味着它们有 cost —— 召唤师每几回合白送一个，满血解散还能拿
+   * 40% 的钱（风元素 165 金 → 66 金）。这不叫"整理阵型"，这是印钞机。
+   * 只堵解散、不堵召唤：召唤出来的兵照样能打，只是不能变现。
+   */
+  if (u.summoned) return 0;
   return Math.round(recruitCost(s, u.owner, def) * CONFIG.disbandRefund);
 }
 
@@ -5055,7 +5127,15 @@ function tickStatuses(s: GameState, p: PlayerId): void {
       const def = STATUS_REGISTRY[key];
       if (def?.onTurnStart) {
         const logText = def.onTurnStart(s, u, val);
-        if (logText) pushLog(s, p, logText);
+        /*
+         * 掉血这条要标成公开。
+         *
+         * 中毒、灼烧是在**挨打那一方的回合开始时**结算的，所以战报挂在受害者的
+         * 名下——不给 open 的话，自己毒了对面，对面掉血那一条只有对面看得见，
+         * 施法者这边从头到尾读不到一笔"毒伤"。而血条就在棋盘上摆着，
+         * 这条本来也不是秘密。
+         */
+        if (logText) pushLog(s, p, logText, true);
       }
     }
 
@@ -5070,13 +5150,19 @@ function tickStatuses(s: GameState, p: PlayerId): void {
   sweepDead(s);
 }
 
-/** 自我消耗：土墙、临时召唤物每回合掉血，掉完自己消失 */
+/**
+ * 自我消耗：土墙、临时召唤物每回合掉血，掉完自己消失。
+ *
+ * 以前这里一声不响地扣血：棋盘上血条自己变短，战报一个字没有，
+ * 玩家只会觉得"这个兵怎么莫名其妙少了血"。掉多少、为什么掉，得写出来。
+ */
 function decayUnits(s: GameState, p: PlayerId): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
     const d = utype(s, u.type).decays ?? 0;
     if (d <= 0) continue;
     u.hp -= d;
+    pushLog(s, p, `${utype(s, u.type).name} 自身损耗 ${d} 点生命`, true);
   }
   sweepDead(s);
 }

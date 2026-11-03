@@ -367,11 +367,26 @@ export async function submitDraft(
  *   1. 云端说这局已经结束、而本机还不知道 → 装（终局压倒一切，
  *      认输不推进回合、也不换行动方，只按轮次判断会漏掉它）；
  *   2. 观战位：回合/行动方/胜负任一变就装（它没有"轮到我"这回事）；
- *   3. 参赛者：不是我的回合、或者回合没变 → 不装；
- *   4. 本机还有没提交的草稿 → 不装（否则会把人刚摆好的兵清掉）。
+ *   3. 本机还有没提交的草稿 → 不装（否则会把人刚摆好的兵清掉）；
+ *   4. 其余参赛者：**回合或行动方任一变就装**。
+ *
+ * 第 4 条改过两回，两次都是"只在自己回合才更新"的病：
+ *
+ *   · 三人局 A 认输：认输只换行动方、不推进回合（见 doSurrender），
+ *     旧判据"回合没变 → 不装"于是把 B、C 都卡在原地——局面停在 A 认输前，
+ *     没人知道自己该走了，这局就死在那儿。两人局因为会直接判出胜负
+ *     （`finished` 那条接住）才看不出问题。
+ *   · 更普遍的一种：只要"不是我的回合"就不装。于是你交完回合之后，
+ *     对面走完的那一整轮你都看不见——棋盘、顶栏的当前行动方、战报，
+ *     全部停在你自己交回合那一刻，直到下一次轮到你才"刷"地跳到新局面。
+ *     三个人打的时候更明显：B 和 C 之间的来回，A 一次都看不到。
+ *
+ * 云端的 state 只会在"交回合"时写入（submitTurn），所以这里装进来的永远是
+ * **已经走完的一轮**，不存在偷看对面半回合的问题。真正要防的只有一件事：
+ * 本机还有没交上去的走法（`draft`），那条仍然挡在最前面。
  */
 export type AdoptDecision =
-  | { take: false; why: 'same' | 'not-my-turn' | 'draft' }
+  | { take: false; why: 'same' | 'draft' }
   | { take: true; why: 'finished' | 'turn' };
 
 export interface RemoteHead {
@@ -393,10 +408,12 @@ export function adoptDecision(
       !!remote.winner !== !!local.winner;
     return changed ? { take: true, why: 'turn' } : { take: false, why: 'same' };
   }
-  if (remote.current !== seat.seat) return { take: false, why: 'not-my-turn' };
-  if (remote.turn === local.turn) return { take: false, why: 'same' };
   if (seat.draft) return { take: false, why: 'draft' };
-  return { take: true, why: 'turn' };
+  // 回合或行动方变了就装：认输不推进回合，只换人
+  if (remote.turn !== local.turn || remote.current !== local.current) {
+    return { take: true, why: 'turn' };
+  }
+  return { take: false, why: 'same' };
 }
 
 /* ---------- 本机的席位记忆 ---------- */

@@ -262,16 +262,61 @@ function writeUnitNode(node: HTMLElement, it: UnitItem): void {
   else node.dataset.ghost = '1';
   if (it.fp !== undefined) node.dataset.fp = String(it.fp);
   node.innerHTML = it.inner;
-  // 残留条只在"这一次动作里真的掉了血"时演：起点由调用方给的旧比例决定，
-  // 不是从节点上猜的（猜的那一版会在渲染重放时让老伤号再抖一次）。
-  if (it.chipFrom !== undefined && it.hpRatio !== undefined && it.chipFrom > it.hpRatio + 0.001) {
+  /*
+   * 残留条只在"这一次动作里真的掉了血"时演：起点由调用方给的旧比例决定，
+   * 不是从节点上猜的（猜的那一版会在渲染重放时让老伤号再抖一次）。
+   *
+   * 再加一道"这一次绘制已经演过"的记号：写节点可能因为别的原因被调用两次，
+   * 没有记号就会给同一笔掉血叠第二遍动画。
+   */
+  if (
+    it.chipFrom !== undefined &&
+    it.hpRatio !== undefined &&
+    it.chipFrom > it.hpRatio + 0.001 &&
+    node.dataset.chipAt !== String(paintStamp)
+  ) {
     const lag = node.querySelector<HTMLElement>('.hp-lag');
     if (lag) {
-      lag.style.setProperty('--chip-from', `${Math.max(2, it.chipFrom * 100)}%`);
-      lag.style.setProperty('--chip-to', `${Math.max(2, it.hpRatio * 100)}%`);
-      lag.classList.add('chipped');
+      node.dataset.chipAt = String(paintStamp);
+      playChip(lag, Math.max(2, it.chipFrom * 100), Math.max(2, it.hpRatio * 100));
     }
   }
+}
+
+/**
+ * 血条残留动画。
+ *
+ * 为什么不用 class + CSS 动画（那正是"掉血动画重复播放"活下来的原因）：
+ * `paintUnits` 会为了对齐 DOM 顺序调用 `insertBefore`——一个节点从父节点上被
+ * 摘下再插回去时，浏览器会把**正在跑的 CSS 动画从头再来一遍**。而顺序变化最常
+ * 发生在"这一下有单位死了"的那一帧，正好和掉血同帧：于是橙条播完一遍，
+ * 被前移的节点又播一遍。上一版只堵了"渲染重放"（靠调用方对账），
+ * 堵不住浏览器自己的重播。
+ *
+ * Web Animations 挂在元素上，重新插入不会重播；再配一个绘制序号，
+ * 同一次绘制里也不会演两遍。老环境没有 `animate` 就退回 CSS 类（能动就行）。
+ */
+function playChip(lag: HTMLElement, fromPct: number, toPct: number): void {
+  const frames: Keyframe[] = [
+    { width: `${fromPct}%`, opacity: 0.95, offset: 0 },
+    { width: `${fromPct}%`, opacity: 0.95, offset: 0.4 },
+    { width: `${toPct}%`, opacity: 0.72, offset: 0.82 },
+    { width: `${toPct}%`, opacity: 0, offset: 1 },
+  ];
+  const animate = (lag as HTMLElement & {
+    animate?: (k: Keyframe[], o?: KeyframeAnimationOptions) => unknown;
+  }).animate;
+  if (typeof animate === 'function') {
+    animate.call(lag, frames, {
+      duration: 620,
+      easing: 'cubic-bezier(0.22, 0.75, 0.3, 1)',
+      fill: 'forwards',
+    });
+    return;
+  }
+  lag.style.setProperty('--chip-from', `${fromPct}%`);
+  lag.style.setProperty('--chip-to', `${toPct}%`);
+  lag.classList.add('chipped');
 }
 
 /**

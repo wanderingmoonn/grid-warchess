@@ -67,10 +67,12 @@ import {
   xyOf,
 } from './rules.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
-import { canPay, payRes, resOf } from './resources.ts';
+import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
+import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
+import { seatsOf } from './types.ts';
 import type { Action, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
@@ -1034,7 +1036,7 @@ function scoreSiege(
 export function cityDistanceField(
   s: GameState,
   city: City,
-  mode: 'land' | 'advance' | 'water' = 'land',
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): number[] {
   const size = s.w * s.h;
   const dist: number[] = new Array(size).fill(Infinity);
@@ -1064,7 +1066,18 @@ export function cityDistanceField(
       const tile = s.tiles[ny * s.w + nx];
       if (!tile) continue;
 
-      if (mode === 'water') {
+      if (mode === 'air') {
+        /*
+         * 空中的图：**没有地形**，每一格都是一步。
+         *
+         * 这一张图是"飞机为什么不出门"的答案。以前飞行单位借的是陆军的
+         * 旱路图（山是墙、水是墙），于是在海岸线上 `advanceDistance` 前后都是
+         * 无穷远，走一格"推进分"永远是 0——可达格明明白白列着 68 格深水，
+         * 它就是一格都不去，看着像"飞机不能飞过深水"，其实是它算不出该往哪飞。
+         *
+         * 敌方城市仍然是目标本身，照旧进图（不然所有距离都是无穷远）。
+         */
+      } else if (mode === 'water') {
         // 水军的图只走水面：深水、桥面、浅滩都算
         // （浅滩是水军抄近路的地方，不是只有陆军能过）
         if (!navigable(tile.terrain)) continue;
@@ -1081,7 +1094,7 @@ export function cityDistanceField(
       const backCost = stepCostBetween(s, tile.terrain, fromT);
       const cost =
         cur.cost +
-        (mode === 'water'
+        (mode === 'water' || mode === 'air'
           ? 1
           : tile.terrain === 'water'
             ? WADE_COST
@@ -1127,7 +1140,7 @@ export function mergeAdvanceField(land: number[], wade: number[]): number[] {
 function distanceFields(
   s: GameState,
   me: PlayerId,
-  mode: 'land' | 'advance' | 'water' = 'land',
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): Map<string, number[]> {
   const out = new Map<string, number[]>();
   for (const c of s.cities) {
@@ -1234,6 +1247,13 @@ interface Fields {
   land: Map<string, number[]>;
   wade: Map<string, number[]>;
   water: Map<string, number[]>;
+  /**
+   * 空中的距离图：地形不存在，每格一步。
+   *
+   * 飞行单位必须用它量推进——借陆军的图会得到"对岸永远无穷远"，
+   * 于是飞机宁可原地待命也不出海（可达格其实是有的）。见 cityDistanceField。
+   */
+  air: Map<string, number[]>;
   bridgeSite: { x: number; y: number } | null;
   /**
    * 本回合的主攻方向：血最少的那座敌方城市。
@@ -1615,6 +1635,60 @@ function blockadeCount(s: GameState, at: { x: number; y: number }, owner: Player
   return Math.min(3, n);
 }
 
+/**
+ * 这块地**对这个兵**值多少护甲。
+ *
+ * 和以前那句 `CONFIG.terrainDef[terrain] * k` 的区别是主语：
+ * 老写法问的是"丘陵值多少"，新写法问的是"树人站丘陵值多少"。
+ * 后者 = 地形本身的掩体 + 这个兵种自己的地形加成（林地之主 +3）。
+ *
+ * 空中单位一律 0：它不吃地形掩体（rules 的 effectiveStats 同一条规则），
+ * 让 AI 为"站高地"去挪一架飞机是纯浪费。
+ */
+function tileDefenseValue(def: UnitTypeDef, terrain: Terrain): number {
+  if (airLayer(def)) return 0;
+  return (CONFIG.terrainDef[terrain] ?? 0) + (terrainArmorOf(def).get(terrain) ?? 0);
+}
+
+/**
+ * 「守点」分值：这一格现在值不值得站着不动。
+ *
+ * 为什么需要它：走位候选里只有"去哪"，**从来没有"不动"**。只要还能走一步，
+ * AI 就一定会挪——于是树人从丘陵挪到平地，白丢 3 点甲（6→9 甲变 6 甲），
+ * 而它换来的往往只是 0.5 分的地图推进。这就是"树人不会一夫当关"的根因。
+ *
+ * 判据三条，缺一不可：
+ *   1. 脚下这格对这个兵**确实有防御价值**（≥2 甲）。平地一律不守，否则全军躺平。
+ *   2. 它是守得住的兵：慢（移动 ≤2）、近战（射程 1）、甲厚（≥5）。
+ *      骑兵和远程该去拉扯，钉在点上反而浪费机动。
+ *   3. 附近（4 格内）真有敌人要来，而且现在站得住（不是必死）。
+ *
+ * 另外压两条：全军压城（commit）时不守——那时候要的是破城不是对峙；
+ * 隘口（能站人的邻格 ≤2）额外加权，这才是"一夫当关"的形状。
+ */
+function holdScore(s: GameState, unit: Unit, all: Fields, traits: AiTraits): number {
+  const def = utype(s, unit.type);
+  if (def.category !== 'combat' || def.domain === 'water') return -Infinity;
+  if (all.commit) return -Infinity;
+  const tile = tileAt(s, unit.x, unit.y);
+  if (!tile) return -Infinity;
+  const guard = tileDefenseValue(def, tile.terrain);
+  if (guard < 2) return -Infinity;
+  if (def.move > 2 || def.range > 1 || def.armor < 5) return -Infinity;
+  const exposure = all.tactical.exposure(unit);
+  if (exposure.lethal) return -Infinity;
+  const foe = unitsOf(s, other(unit.owner));
+  if (!foe.some((e) => distance(e, unit) <= 4)) return -Infinity;
+  let open = 0;
+  for (const [dx, dy] of DIRS) {
+    const t = tileAt(s, unit.x + dx, unit.y + dy);
+    if (t && passable(t.terrain)) open += 1;
+  }
+  const choke = open <= 2 ? 1.7 : open <= 3 ? 1.25 : 0.7;
+  const adjacent = foe.some((e) => distance(e, unit) <= 1);
+  return guard * 3.4 * choke * traits.appetite * (adjacent ? 1.3 : 1) + (exposure.damage === 0 ? 5 : 0);
+}
+
 function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: Fields, traits: AiTraits): number {
   const def = utype(s, unit.type);
   const moved = { ...unit, x, y, moved: true };
@@ -1626,7 +1700,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
       - futureThreat.damage * 1.5 - (futureThreat.lethal ? 100 : 0);
   }
   const w = all.mood.drive;
-  const fields = def.domain === 'water' ? all.water : all.land;
+  const fields = airLayer(def) ? all.air : def.domain === 'water' ? all.water : all.land;
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,all.focusCityId,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,all.focusCityId,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
@@ -1649,6 +1723,9 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     !all.commit &&
     def.category === 'combat' &&
     def.domain !== 'water' &&
+    // 空中的距离是"每格一步"，和地面的战线长度不是一个量纲：
+    // 拿它去比 lineRef，飞机几乎永远算"在战线前面"，推进分反而被砍到 15%。
+    !airLayer(def) &&
     // 英雄和攻城器不吃这条：它们本来就是"单点突破"的工具，跟着队形走反而不会打仗。
     // 实测英雄档从 15 胜 1 负掉到 11 胜 5 负，就是被这条拦住的原因。
     def.hero !== true &&
@@ -1657,8 +1734,13 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     before < all.lineRef;
   const advanceWeight = aheadOfLine ? 0.15 : 1;
   let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35)) * advanceWeight;
-  // 空中单位不吃地形掩体，AI 也就不该为了"站高地"去挪它
-  score += airLayer(def) ? 0 : CONFIG.terrainDef[tileAt(s,x,y)!.terrain] * 1.5 - 1;
+  /*
+   * 地形分：**这一格对这个兵**值多少护甲，而不是"这一格值多少"。
+   *
+   * 老写法是全兵种共用一个数，于是"树人站丘陵（6 甲 +3 林地之主 +2 丘陵 = 9 甲）"
+   * 和"民兵站丘陵（2+2）"在决策层是同一个分数——AI 自然学不会把树人放进林子里。
+   */
+  score += tileDefenseValue(def, tileAt(s, x, y)!.terrain) * 1.5 - 1;
 
   /*
    * ── 间隔：别挨着站 ──
@@ -1766,7 +1848,8 @@ function scoreMove(
   }
 
   // 水军要按"水路的距离"算，否则它的起点在图上是无穷远，永远算不出方向
-  const fields = def.domain === 'water' ? all.water : all.land;
+  // 飞机按空中的图算（地形不存在），水军按水路，其余按旱路
+  const fields = airLayer(def) ? all.air : def.domain === 'water' ? all.water : all.land;
 
   // 经济单位：哪儿赚得多去哪儿
   if (def.incomeByTerrain || typeof def.income === 'number') {
@@ -1889,8 +1972,8 @@ function scoreMove(
     score += (before - after) * 3.5;
   }
 
-  // 站高地（空中单位无意义）
-  score += airLayer(utype(s, unit.type)) ? 0 : CONFIG.terrainDef[tile.terrain] * 2;
+  // 站高地：按"这个兵站上去能多多少甲"算（空中单位在 tileDefenseValue 里已是 0）
+  score += tileDefenseValue(utype(s, unit.type), tile.terrain) * 2;
 
   // 挪过去就能打到人 → 很值（这就是"接敌"的全部意义）。
   // 已经接上火的就不再给这份奖励，否则"往敌人方向平移一格"永远比开火划算。
@@ -2561,7 +2644,18 @@ function unitCandidates(
         best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
       }
     }
-    if (best) out.push(best);
+    /*
+     * 「不动」也是一个候选。
+     *
+     * 2026-11-02 补：在这之前走位候选里只有"去哪"，没有任何一条代表"留在原地"。
+     * 后果是哪怕脚下这格是丘陵+树林（树人 9 甲），只要还有一个能走的格子、
+     * 那个格子的推进分比 0 高一点点，它就一定会挪走——把 3 点甲换成 0.5 分推进。
+     *
+     * 守点分够高的时候，这里什么都不推，这一回合它就站着。开火是另一组候选，
+     * 所以"站着"不等于"不还手"。
+     */
+    const stay = holdScore(s, unit, all, traits);
+    if (best && best.score >= stay) out.push(best);
   }
 
   // ── 海军：装卸 ──
@@ -2968,15 +3062,158 @@ function eggPlacement(view: GameState, me: PlayerId): { x: number; y: number } |
  */
 export interface AiPlan {
   stance: 'push' | 'turtle' | 'elite';
-  savingFor: 'hero' | 'era' | 'rebuild' | null;
+  /**
+   * 正在为什么攒钱。
+   *
+   * 2026-11-02 新增 `'unit'`：人类会"停手攒钱买一个大件"，而原来的三种目标
+   * 只有英雄 / 升时代 / 收废墟，普通兵种永远吃不到这套预留机制。
+   */
+  savingFor: 'hero' | 'era' | 'rebuild' | 'unit' | null;
+  /** savingFor === 'unit' 时，攒的是哪一个兵种 */
+  targetUnitId: string | null;
   targetCost: number;
-  /** 攒钱期可动用的现金：当前余额减去目标费用，最低为零 */
+  /**
+   * 攒钱期可动用的现金（每回合）。
+   *
+   * 2026-11-02 改：原来是 `余额 − 目标费用`，也就是**二值**——差一截就一点都不能花，
+   * 产线整条停住。现在按收入折算，见 `savingAllowance`。
+   */
   allowance: number;
+  /**
+   * 建造（建筑）能用的额度：仍然是老口径 `余额 − 目标价`。
+   *
+   * 为什么要和 allowance 分开：囤建筑是"慢慢回本"的钱，攒钱期里它抢的是
+   * 升级费/重建费这种一次性的关键支出，回本速度根本追不上。实测把建筑物的冻结
+   * 一起放开之后，AI 把钱全铺成磨坊，重建费和升时代反而攒不出来了。
+   * 可以边打边补兵，但不能边攒边铺摊子。
+   */
+  buildAllowance: number;
+  /** 选中这个目标的性价比评分（每金战力），诊断用；不攒钱时为 0 */
+  goalScore: number;
+  /** 攒钱目标的一句话说明，诊断用；不攒钱时为空串 */
+  goalNote: string;
+  /**
+   * 这一回合参与比较的**全部**攒钱候选，按分数从高到低，诊断用。
+   *
+   * 为什么要把它留在计划里：`savingFor` 只告诉你结果，看不出"为什么不是那一个"。
+   * 排查"AI 为什么一直不升时代"时，需要的正是另外几个候选的分数——
+   * 是英雄压过了它，还是根本够不着。`scripts/diag-plan.ts --goals` 会把它打出来。
+   */
+  goalOptions: Array<{ kind: string; cost: number; score: number; note: string }>;
   urgent: boolean;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
 const SAVE_HORIZON = 6;
+
+/**
+ * 还差几个回合的收入以内就"咬住"目标、一分不花。
+ *
+ * 短停是划算的：四五个回合的停手换一整代兵，实测比"边打边攒"赢得多。
+ * 长停才是要修的病——那种"再攒十个回合也够不着"的远目标（重建费、远处的升级），
+ * 一直冻着的话整局产线就废了。所以只有超过这个窗口的目标才允许边打边攒。
+ *
+ * 4 这个数是量出来的：同一个新目标选择下，贴身阈值 2 → 对战 46.9%（160 局，
+ * 对手是上一版冻结的 AI），4 → 50.0%（160 局）。阈值越小越接近"老硬停"，
+ * 而那恰恰是打得更赢的那一侧——所以放宽到 4，只在够不着的远目标上才放开产线。
+ */
+const SAVE_TIGHT_TURNS = 4;
+
+/**
+ * 投资视野（回合）：AI 估"这笔钱以后还能滚出多少"。
+ *
+ * 升时代和收废墟的收益都不是一次性的：前者让**以后每一个产兵名额**更值钱，
+ * 后者多出一份**每回合的收入**。要把这两种收益和一个兵的价格排在同一张表上，
+ * 就得先估"以后还有多少回合可打"。20×20、火药开局、200 回合上限的实测里，
+ * 分出胜负的中位数在 25~35 回合，取一半偏保守：宁可低估长期收益，
+ * 也不要把 AI 推成"整局只顾攒升级、一个兵不造"。
+ */
+const INVEST_HORIZON = 15;
+
+/**
+ * 英雄溢价：同样一笔钱，英雄除了数值还带技能和"场上只能有一个"的独占性。
+ * 不给这一档，纯按性价比算，英雄会永远排在便宜的戟兵后面——
+ * 而实际对局里"有没有英雄"是整支部队的档位差别。
+ */
+const HERO_PREMIUM = 1.6;
+
+/**
+ * 升时代的战力折扣：升级换回来的战力是在十几个回合里慢慢兑现的，
+ * 而一个兵是**现在**就能顶到城门口的。折半是个粗估，方向比精度重要——
+ * 不打这个折扣，升时代会永远碾压一切，AI 又回到"整局只顾升城、一个兵不造"。
+ */
+const ERA_TIME_DISCOUNT = 0.5;
+
+/**
+ * 攒钱期"这一回合能动用多少现金"。
+ *
+ * 老公式是 `余额 − 目标费用`：手里留够目标价，多出来的才能花。它的问题不在保守，
+ * 而在**二值**——只要还差一截，额度就是 0，整回合一个兵都造不出来。目标越大
+ * （升时代、重建费）停得越久，而对面在这几个回合里照常出兵。第一版硬停采购
+ * 实测胜率掉到 38.8%（见 buildPlan 顶部那段注释），掉的就是这个。
+ *
+ * 想修就得先看清一个约束：**这个棋里一个兵的价格本来就接近一回合的收入**。
+ * 于是"每回合都买得起"和"攒得下钱"是互斥的——收入全变成兵，余额永远上不去；
+ * 而任何按比例（比如收入的 40%）给的额度都小于一个兵的价格，等于还是 0。
+ * 人类的做法很清楚：**隔一个回合补一个兵**，剩下的收入攒着。
+ *
+ * 所以这里按回合轮流出兵：
+ *   · 相位 0 的回合：放出"一个回合的收入"这一档额度，够买一个正常的兵；
+ *   · 相位 1 的回合：一分不动，纯攒。
+ * 相位按**轮**算，不按 `s.turn` 的奇偶——两人局里 s.turn 是一人一格轮着走的，
+ * 直接取奇偶会变成"主队永远出兵、客队永远不动"，一边倒的不是 AI 是发牌。
+ * 净存款每回合还有约一半收入，目标照样到期兑现；产线速率掉一半，但不断。
+ * 用回合奇偶而不是"记住上回合买没买"，是因为 AI 没有跨回合状态
+ * （refreshMemory 只管战争迷雾）——同样的局面必须推出同样的结论。
+ *
+ * 两个例外：
+ *   · 目标已经够得着 → 不冻结（目标本身由 isTarget 的加分保证会被买走）；
+ *   · 弃城期 → 额度为 0。那一档的战术定义就是"停手换档"：用一座城换一代科技，
+ *     中间还在补便宜兵等于两头都不占，它要的是纯粹的预留（和老口径一致）。
+ */
+export function savingAllowance(
+  gold: number,
+  inc: number,
+  targetCost: number,
+  /** 同时能产兵的产兵点数量：额度是"一回合的产出预算"，几家分 */
+  sites: number,
+  /** 是否保留产线（弃城期关掉，见上面最后一句） */
+  keepLine: boolean,
+  /** 轮流出手的相位：0 出兵、1 纯攒（按"轮"算，见上） */
+  phase: number,
+): number {
+  if (targetCost <= 0 || gold >= targetCost) return Infinity;
+  if (!keepLine) return 0;
+  /*
+   * 就差一两个回合的收入了：这时候还去补兵，等于把马上到手的目标又推远。
+   * 短暂停手（一两回合）是划算的，长停（五个回合以上）才是要修的病——
+   * 这一条把它限制在前者。
+   */
+  if ((targetCost - gold) / Math.max(1, inc) <= SAVE_TIGHT_TURNS) return 0;
+  if (phase !== 0) return 0;
+  /*
+   * 额度是"这一回合的产出预算"，不是"每个兵都能花这么多"：
+   * 采购是逐候选比的，两座城就能在同一个回合各买一个——不除产兵点数量，
+   * 一个回合能花掉两回合的收入，攒的钱永远追不上目标。
+   */
+  return Math.max(1, Math.floor(inc / Math.max(1, sites)));
+}
+
+/**
+ * 一个攒钱目标：攒什么、多少钱、值不值。
+ *
+ * `score` 和采购评分共用一把尺子（`combatEfficiency`：战力 ÷ 价格^0.8），
+ * 只是"战力"的口径按目标换算——一个兵是它自己的战力，升时代是"以后每个名额
+ * 多产多少战力"折算出来的增量，收废墟是"多一份每回合收入"折算出来的增量。
+ * 这样四个目标可以直接排大小，"为什么攒这个"就有据可查，而不是四条 if 的先后。
+ */
+interface SaveGoal {
+  kind: 'hero' | 'era' | 'rebuild' | 'unit';
+  targetUnitId: string | null;
+  cost: number;
+  score: number;
+  note: string;
+}
 
 function buildPlan(
   s: GameState,
@@ -3021,7 +3258,6 @@ function buildPlan(
   // 所以这一条不是"更聪明的经济"，是把平局变成胜局的那一步。
   const foeCities = s.cities.filter((c) => !c.ruined && c.owner !== me);
   const foeRuins = s.cities.filter((c) => c.ruined && c.owner !== me);
-  const ruinCost = foeRuins.length > 0 ? Math.min(...foeRuins.map((c) => rebuildCost(c))) : null;
   // 对面只剩这一座（还成了废墟）：收回来就直接结束对局，这时候攒多久都值得
   const winningReclaim = foeRuins.length > 0 && foeCities.length <= 1;
 
@@ -3043,48 +3279,230 @@ function buildPlan(
   const eraCosts = myCities
     .map((c) => upgradeCostOf(s, c))
     .filter((x): x is number => x !== null);
-  const eraCost = eraCosts.length > 0 ? Math.min(...eraCosts) : null;
+  /*
+   * 攒时代要攒**主城**的升级费，不是最便宜的那座。
+   *
+   * 2026-11-02 修：原来这里是 `Math.min(...eraCosts)` —— 也就是最低代那座城的价。
+   * 于是"攒钱升时代"这个机制本身在推着 AI 往副城上花钱：副城便宜、先够得着、
+   * 先升上去，主城永远差一口气。人集中升一座城是有道理的（只有到顶那座能造新兵，
+   * 见 rules 的 eraWindowOk），而这个 min 恰好把 AI 推向了反面。
+   */
+  const mainCity = myCities
+    .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
+    .sort((a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0))[0];
+  const mainEraCost = mainCity ? upgradeCostOf(s, mainCity) : null;
+  const eraCost = mainEraCost ?? (eraCosts.length > 0 ? Math.min(...eraCosts) : null);
 
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
+  let targetUnitId: string | null = null;
+  let goalScore = 0;
+  let goalNote = '';
+  let goalOptions: AiPlan['goalOptions'] = [];
   // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
   // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
   const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
-  if (!urgent && army >= armyGate) {
-    // 6 个回合的收入之内够得着，才值得为它停手。收废墟例外：那是终局，
-    // 视野放宽到 14 个回合——攒不够就永远赢不了，慢一点总比平局好。
-    if (ruinCost !== null && gold + inc * (winningReclaim ? 14 : SAVE_HORIZON) >= ruinCost) {
-      savingFor = 'rebuild';
-      targetCost = ruinCost;
-    } else if (heroDef && heroCost > 0 && gold + inc * SAVE_HORIZON >= heroCost) {
-      savingFor = 'hero';
-      targetCost = heroCost;
-    } else if (eraCost !== null && gold + inc * SAVE_HORIZON >= eraCost) {
-      savingFor = 'era';
-      targetCost = eraCost;
+
+  // 收废墟的可执行性：隔壁没兵走过去，攒的是别人的战利品。
+  const nearbyRuin = foeRuins
+    .filter((c) =>
+      my.some((u) => !u.moved && distToCity(u, c) <= Math.max(2, utype(s, u.type).move + 1)),
+    )
+    .sort((a, b) => rebuildCost(a) - rebuildCost(b))[0];
+
+  /*
+   * ── 攒什么：交给 AI 自己那把尺子来排 ──
+   *
+   * 原来的顺序是写死的四条 if：收废墟 > 英雄 > 升时代 > 大件。顺序本身有道理
+   * （越靠前越接近"质变"），但它不是**算**出来的，所以永远回答不了
+   * "这个 700 金的英雄，和把主城升到下一代，哪个更值"。
+   *
+   * 现在四个目标排在一张表上比，尺子和采购评分共用同一条公式
+   * （`combatEfficiency`：战力 ÷ 价格^0.8），"战力"的口径按目标换算：
+   *   · 一个兵   → 它自己的战力
+   *   · 英雄     → 自己的战力 × HERO_PREMIUM（独占性）
+   *   · 升时代   → 每个出生名额更值钱 → 战力增量 × 视野内还能造几个兵 × 时间折扣
+   *   · 收废墟   → 多一份每回合收入 → 视野内收入 × 当前每金战力
+   * 于是"攒钱"是一次 argmax，而不是四条 if 的先后，理由可以逐条摊开看。
+   *
+   * 唯一保留的硬规则是收废墟的终局判断：对面只剩最后一座（还是废墟）时，
+   * 那不是性价比问题，是胜负问题，直接给到最高分。
+   *
+   * 挑选必须是**确定性的**：同样的局面永远挑出同一个目标。AI 没有跨回合状态
+   * （refreshMemory 只管战争迷雾），想让它"连攒三个回合"，只能靠
+   * "同样的输入推出同样的目标"。
+   */
+  /*
+   * 攒钱的门槛：兵太少时不攒（urgent 那条线同理），但**弃城期例外**。
+   *
+   * 弃城期的整条路线就是"兵少、放弃前线、把钱全押在换代上"，这时候还要求
+   * "手上至少四个兵才准攒钱"，等于这一档永远开不起来——它本来就是兵力劣势时的选择。
+   * 原来那段代码写在门槛外面，所以能跑；搬进统一的目标比较之后，这个例外得明写出来。
+   */
+  const abandonMode = Boolean(mood.abandonedCityId) || developingRear;
+  /*
+   * 兵池只在这个分支里枚举：buildPlan 是**每个动作**都要跑一次的，
+   * 全兵种扫一遍（一百多个兵 × 每个算一次报价）放在外面，一局下来是白烧的时间。
+   */
+  let allowance = Infinity;
+  let buildAllowance = Infinity;
+  if (!urgent && (abandonMode || army >= armyGate)) {
+    const makeablePool = Object.values(s.unitTypes).filter(
+      (d) =>
+        d.category === 'combat' &&
+        !d.summonedOnly &&
+        canUseType(s, me, d.id) &&
+        eraWindowOk(s, d, maxEra),
+    );
+    const goldOf = (d: UnitTypeDef): number => recruitPriceOf(s, me, d).gold;
+    const effOf = (d: UnitTypeDef): number => combatEfficiency(d, goldOf(d));
+    const perGoldOf = (d: UnitTypeDef): number => combatPower(d) / Math.max(1, goldOf(d));
+
+    // 弃城期算的是"留在手里的那几座城"：那座已经放弃的城，升级费不该再进计划
+    const eraCity: City | null = abandonMode
+      ? (myCities
+          .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
+          .map((c) => ({ c, cost: upgradeCostOf(s, c) }))
+          .filter((x): x is { c: City; cost: number } => x.cost !== null)
+          .sort((a, b) => a.cost - b.cost)[0]?.c ?? null)
+      : (mainCity ?? null);
+    const eraTarget = eraCity ? upgradeCostOf(s, eraCity) : eraCost;
+    const heroHorizon = abandonMode ? 4 : SAVE_HORIZON;
+    /** 视野之内够得着才值得停手：攒不到头的目标只会让 AI 整局不出兵 */
+    const reach = (cost: number, horizon: number): boolean => gold + inc * horizon >= cost;
+
+    // "现在就买得到的最好那个"：攒钱得和它比，才谈得上"值不值得等"
+    const bestNow = makeablePool
+      .filter((d) => goldOf(d) > 0 && goldOf(d) <= gold)
+      .sort((a, b) => effOf(b) - effOf(a))[0];
+    const nowEff = bestNow ? effOf(bestNow) : 0;
+    // 每金战力：把"以后每一笔军费"折成战力时的汇率（用最强的那一档，不用平均值——
+    // 攒钱本来就是为了以后买得起那一档，拿平均去折会把长期收益算低）
+    const bestPerGold = makeablePool.reduce((m, d) => Math.max(m, perGoldOf(d)), 0);
+    const foeEra = Math.max(
+      0,
+      ...s.cities.filter((c) => !c.ruined && c.owner !== me).map((c) => c.era),
+    );
+
+    const goals: SaveGoal[] = [];
+
+    // 收废墟：多一座城 = 多一份每回合收入。
+    //
+    // 弃城期不排它：那条路线的定义就是"用前线换科技"，收一座废墟等于把钱又押回前线，
+    // 和"放弃这座城"是两件事。（以前这也是硬写死的，现在只是把理由说明白。）
+    const ruinTarget = winningReclaim
+      ? [...foeRuins].sort((a, b) => rebuildCost(a) - rebuildCost(b))[0]
+      : abandonMode
+        ? undefined
+        : nearbyRuin;
+    if (ruinTarget && reach(rebuildCost(ruinTarget), winningReclaim ? 14 : 8)) {
+      const cost = rebuildCost(ruinTarget);
+      const perCityInc = inc / Math.max(1, myCities.length);
+      const gain = perCityInc * INVEST_HORIZON * bestPerGold;
+      goals.push({
+        kind: 'rebuild',
+        targetUnitId: null,
+        cost,
+        score: winningReclaim ? 1e9 : gain / Math.max(20, cost) ** 0.8,
+        note: winningReclaim
+          ? '收回对面最后一座城 = 赢'
+          : `多一座城，${INVEST_HORIZON} 回合多约 ${Math.round(perCityInc * INVEST_HORIZON)} 金`,
+      });
+    }
+
+    // 英雄：数值之外的独占性按 HERO_PREMIUM 折进来
+    if (heroDef && heroCost > 0 && reach(heroCost, heroHorizon)) {
+      goals.push({
+        kind: 'hero',
+        targetUnitId: null,
+        cost: heroCost,
+        score: effOf(heroDef) * HERO_PREMIUM,
+        note: `${heroDef.name}（英雄，场上仅此一只）`,
+      });
+    }
+
+    /*
+     * 升时代：换回来的不是"多一个兵"，是**每个出生名额更值钱**。
+     *
+     * 为什么按名额算、不按金币算：金币会被收入追平（每回合都在进），
+     * 名额追不平——每座城每回合只能出一个兵，AI 的编制上限还压着 24 个。
+     * 真正的稀缺资源是名额，所以升时代的价值是"以后每一个名额多产多少战力"。
+     *
+     * 两个折扣都要打明白：
+     *   · 未来才到手的战力要折半（兵是现在就能用的，升级是十五个回合里慢慢兑现的）；
+     *   · 视野内造不了几个兵（名额 + 钱谁先卡住算谁），最多按 5 个算。
+     * 不打这两个折扣，升时代会永远碾压一切，AI 就又回到"整局只顾升城"。
+     */
+    if (eraCity && eraTarget !== null && reach(eraTarget, SAVE_HORIZON)) {
+      const nextPool = Object.values(s.unitTypes).filter(
+        (d) =>
+          d.category === 'combat' &&
+          !d.summonedOnly &&
+          canUseType(s, me, d.id) &&
+          d.era === eraCity.era + 1,
+      );
+      const curPower = makeablePool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
+      const nextPower = nextPool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
+      const delta = Math.max(0, nextPower - curPower);
+      const priceNow = bestNow ? goldOf(bestNow) : eraTarget;
+      const futureUnits = Math.max(
+        1,
+        Math.min(5, Math.round((inc * INVEST_HORIZON) / Math.max(1, priceNow))),
+      );
+      const gain = delta * futureUnits * ERA_TIME_DISCOUNT;
+      if (gain > 0) {
+        goals.push({
+          kind: 'era',
+          targetUnitId: null,
+          cost: eraTarget,
+          score: gain / Math.max(20, eraTarget) ** 0.8,
+          note:
+            `升到第 ${eraCity.era + 1} 代：每个名额 +${Math.round(delta)} 战力` +
+            ` ×${futureUnits} 个名额${foeEra > maxEra ? '（对面已领先）' : ''}`,
+        });
+      }
+    }
+
+    // 大件：只有"明显比现在能买的更值"才值得为它停手。
+    // 1.2 倍是门槛——只强一点点的大件不值得牺牲一个回合的产线。
+    // 弃城期不排大件：这一档要的是换代，不是再补一个兵。
+    const big = abandonMode
+      ? undefined
+      : makeablePool
+          .filter((d) => goldOf(d) > gold && reach(goldOf(d), SAVE_HORIZON))
+          .sort((a, b) => effOf(b) - effOf(a))[0];
+    if (big && (nowEff <= 0 || effOf(big) > nowEff * 1.2)) {
+      goals.push({
+        kind: 'unit',
+        targetUnitId: big.id,
+        cost: goldOf(big),
+        score: effOf(big),
+        note: `${big.name}（${goldOf(big)} 金，现在买不起）`,
+      });
+    }
+
+    const pick = goals.sort((a, b) => b.score - a.score)[0];
+    goalOptions = goals.map((g) => ({ kind: g.kind, cost: g.cost, score: g.score, note: g.note }));
+    if (pick) {
+      savingFor = pick.kind;
+      targetCost = pick.cost;
+      targetUnitId = pick.targetUnitId;
+      goalScore = pick.score;
+      goalNote = pick.note;
+      /*
+       * 攒钱期每回合能动用多少现金（见 savingAllowance）。
+       *
+       * 相位按"轮"算，不按 s.turn 的奇偶：两人局里 s.turn 是一人一格轮着走的，
+       * 直接取奇偶会变成"先手方永远出兵、后手方永远不动"——那不是 AI 的差别，是发牌。
+       */
+      const phase = Math.floor(s.turn / Math.max(1, seatsOf(s).length)) % 2;
+      // 建筑照旧只吃"留够目标价之后的那部分"：囤摊子比补兵慢得多
+      buildAllowance = Math.max(0, gold - targetCost);
+      allowance = savingAllowance(gold, inc, targetCost, myCities.length, !abandonMode, phase);
     }
   }
-  // Capture is the winning action. Reserve its fee before buying another unit.
-  //
-  // 但这条**不能压倒兵力**：它比上面那一档更凶——上面还守着 `!urgent && army>=armyGate`，
-  // 这里原来什么都没守，于是"城门口有座废墟、手上一个兵都没有"也会把采购冻住。
-  // 收废墟的前提是"我还有兵能走进去"，兵没了，攒的是别人的战利品。
-  const nearbyRuin = foeRuins.filter(c => my.some(u => !u.moved && distToCity(u,c)<=Math.max(2,utype(s,u.type).move+1)))
-    .sort((a,b) => rebuildCost(a)-rebuildCost(b))[0];
-  if (nearbyRuin && !threaten && !urgent && army >= armyGate) {
-    savingFor = 'rebuild'; targetCost = rebuildCost(nearbyRuin);
-  }
-  if (mood.abandonedCityId || developingRear) {
-    const retained = myCities.filter(c => !c.ruined && c.id!==mood.abandonedCityId);
-    const costs = retained.map(c => upgradeCostOf(s,c)).filter((c): c is number => c!==null);
-    const nextEra = costs.length ? Math.min(...costs) : null;
-    if (heroDef && gold+inc*4 >= heroCost) { savingFor='hero'; targetCost=heroCost; }
-    else if (nextEra!==null && gold+inc*SAVE_HORIZON>=nextEra) { savingFor='era'; targetCost=nextEra; }
-  }
 
-  // 只花超过目标费用的现金。未来收入用于判断目标能否实现，不能当作当前预算。
-  // 短期回本的有限增产，以及危城以外的紧急防守，另有例外。
-  const allowance = savingFor ? Math.max(0,gold - targetCost) : Infinity;
+
 
   // 兵力明显不如对面、对面又已经压到门口：收缩固守，把人留在城里。
   //
@@ -3105,7 +3523,18 @@ function buildPlan(
   const stance: AiPlan['stance'] =
     weaker && army >= 3 && atGate ? 'turtle' : elite ? 'elite' : 'push';
 
-  return { stance, savingFor, targetCost, allowance, urgent: mood.abandonedCityId ? threaten : urgent };
+  return {
+    stance,
+    savingFor,
+    targetCost,
+    targetUnitId,
+    allowance,
+    buildAllowance,
+    goalScore,
+    goalNote,
+    goalOptions,
+    urgent: mood.abandonedCityId ? threaten : urgent,
+  };
 }
 
 /**
@@ -3133,11 +3562,44 @@ export function aiDebugPlan(s: GameState, me: PlayerId): AiPlan {
  *
  * 游戏运行时没人读它，默认 `last` 为空；只有 `scripts/diag-plan.ts` 会打开。
  */
-export const aiRecruitTrace: { on: boolean; last: string | null } = {
-  /** 开着才会统计拒绝原因：采购是热路径，不排查的时候不该为它分配对象 */
-  on: false,
-  last: null,
-};
+export const aiRecruitTrace: {
+  on: boolean;
+  last: string | null;
+  /**
+   * 按兵种记的拒绝原因：type → reason → 次数。
+   *
+   * `last` 只给汇总（"这一回合为什么一个都没买"），定位不到**具体哪个兵被谁挡住的**。
+   * 2026-11-02 查"数据好却没人造"时才发现缺这一层：汇总里写着"钱不够×3"，
+   * 但看不出是天使被钱挡住还是炼金术士被时代挡住。
+   */
+  detail: Map<string, Map<string, number>> | null;
+} = { on: false, last: null, detail: null };
+
+/**
+ * 一个兵种的"战力"：攻（含魔攻折算）× sqrt(血) × 射程系数。
+ *
+ * 这是 AI 自己那把尺子的分子，抽出来是给"攒钱目标"用的：升时代和收废墟换回来的
+ * 不是某一个兵，而是"以后每一笔军费更值 / 每回合多一份收入"，得先把它们折算成
+ * 战力，才能和一个兵的价格放在同一张表上比（见 SaveGoal）。
+ */
+function combatPower(d: UnitTypeDef): number {
+  return (
+    (d.atk + (d.magicAtk ?? 0) * 1.2) *
+    Math.sqrt(d.maxHp) *
+    (1 + Math.min(4, Math.max(0, d.range - 1)) * 0.45)
+  );
+}
+
+/**
+ * 一个战斗单位的"性价比"：战力按价格开 0.8 次方。
+ *
+ * 价格指数故意小于 1：贵的兵换算下来的性价比会被压一点，但不会被压死
+ * （线性的话 400 金的坦克永远排在 150 金的戟兵后面，而坦克的价值在护甲和破城上，
+ * 那个公式里没有）。攒钱目标也用这把尺子，见 SaveGoal。
+ */
+function combatEfficiency(d: UnitTypeDef, price: number): number {
+  return combatPower(d) / Math.max(20, price) ** 0.8;
+}
 
 function recruitCandidate(
   s: GameState,
@@ -3157,8 +3619,31 @@ function recruitCandidate(
   const w = moodw;
   const me = s.current;
   const gold = s.players[me].gold;
+  /*
+   * 追踪设施放在过滤器**之前**：这些"候选池级"的拒绝（时代不够、英雄已有一个、
+   * 没出兵格）以前根本没进统计，于是"某个兵没人造"永远查不到原因——
+   * 汇总里只会看到"池为空"或者一个都不 deny。
+   */
+  const tracing = aiRecruitTrace.on;
+  if (tracing) {
+    aiRecruitTrace.last = null;
+    aiRecruitTrace.detail ??= new Map();
+  }
+  const why: Record<string, number> = {};
+  const deny = (k: string, type?: string): void => {
+    if (!tracing) return;
+    why[k] = (why[k] ?? 0) + 1;
+    if (!type) return;
+    const bag = aiRecruitTrace.detail!.get(type) ?? new Map<string, number>();
+    bag.set(k, (bag.get(k) ?? 0) + 1);
+    aiRecruitTrace.detail!.set(type, bag);
+  };
+
   // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
-  if (armySize(s, me) >= CONFIG.maxUnits) return null;
+  if (armySize(s, me) >= CONFIG.maxUnits) {
+    deny('编制已满', '*');
+    return null;
+  }
 
   /** 这个产兵点能往哪些格子出兵（跟 rules 里的 doRecruit 保持一致） */
   const slotsFor = (water: boolean): Array<{ x: number; y: number }> => {
@@ -3190,19 +3675,23 @@ function recruitCandidate(
   if (landSlots.length === 0 && waterSlots.length === 0) return null;
 
   const choices = Object.values(s.unitTypes).filter((d) => {
-    if (d.category === 'building') return false;
+    const reject = (reason: string): false => {
+      deny(reason, d.id);
+      return false;
+    };
+    if (d.category === 'building') return reject('建筑不归采购管');
     // 运输船目前只给玩家用：AI 还没有"装船—渡河—上岸"这套计划能力，
     // 让它买一条自己不会用的船，等于白烧 60 金。
-    if (hasHold(d)) return false;
+    if (hasHold(d)) return reject('AI 不会用运输船');
     // 召唤物只认召唤者：AI 花 45 金买一个骷髅，等于给死灵法师的赠品单独付钱。
-    if (d.summonedOnly) return false;
+    if (d.summonedOnly) return reject('召唤物不采购');
     // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
-    if (heroBlocked(s, me, d)) return false;
+    if (heroBlocked(s, me, d)) return reject('英雄已在场');
     // 时代窗口与选卡名单走 core/draft 的同一套判据：
     // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
-    if (!eraWindowOk(s, d, src.era)) return false;
-    if (!canUseType(s, me, d.id)) return false;
+    if (!eraWindowOk(s, d, src.era)) return reject('时代未解锁');
+    if (!canUseType(s, me, d.id)) return reject('选卡未收录');
     return d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
   });
 
@@ -3271,18 +3760,12 @@ function recruitCandidate(
   const desperate =
     plan.urgent && combatCount * 2 < foeCombatCount && combatCount < 8;
 
-  const tracing = aiRecruitTrace.on;
-  if (tracing) aiRecruitTrace.last = null;
-  const why: Record<string, number> = {};
-  const deny = (k: string): void => {
-    if (tracing) why[k] = (why[k] ?? 0) + 1;
-  };
-
   let best: Candidate | null = null;
+  const scored: string[] = [];
   for (const d of pool) {
     // 打到门口还缺兵：经济/建造单位这一回合一个都不买（见上面 desperate 的说明）
     if (desperate && d.category !== 'combat') {
-      deny('desperate');
+      deny('desperate', d.id);
       continue;
     }
     if (!recruitSpawnCells(s,src.kind==='city' ? src.id : undefined,src.kind==='camp' ? src.id : undefined,d.id).length) {
@@ -3295,10 +3778,18 @@ function recruitCandidate(
     const quote = recruitPriceOf(s, me, d);
     const unlockFee = quote.unlockFee;
     const price = recruitCost(s, me, d);
-    // 多资源：粮食/建材不够时，光有金币也买不起。
-    // 只看金币会让 AI 反复挑一个造不出来的兵，然后整回合卡在那里。
-    if (!canPay(s.players[me], quote.total)) {
-      deny('粮食/建材不够');
+    /*
+     * 多资源：粮食/建材不够时，光有金币也买不起。
+     *
+     * 2026-11-02 修：这里原本判的是 `quote.total`，而 total **包含金币**，
+     * 于是"差 30 金"也被记成「粮食/建材不够」。查"好兵没人造"时，
+     * 90% 的拒绝理由都是这四个字——顺着它去找粮材产出，方向完全是错的。
+     * 金币有自己的闸门（下面那句 `gold < quote.gold`），这里只该管非金币资源。
+     */
+    const nonGold: ResourceCost = { ...quote.total };
+    delete nonGold[GOLD];
+    if (!canPay(s.players[me], nonGold)) {
+      deny('粮食/建材不够', d.id);
       continue;
     }
 
@@ -3306,11 +3797,11 @@ function recruitCandidate(
     // 干湿两张图差得非常多（开阔 2% / 双河 25%），所以这条不能靠"有没有邻水格"判断——
     // 一个池塘边上也能造船，但它开不出去。
     if (d.domain === 'water' && wet < WATER_MIN_SHARE) {
-      deny('水域太少');
+      deny('水域太少', d.id);
       continue;
     }
     if (gold < quote.gold) {
-      deny('钱不够');
+      deny('钱不够', d.id);
       continue;
     }
 
@@ -3321,7 +3812,9 @@ function recruitCandidate(
     // 城下再也没站起来过。攒钱的意义是"为了一件大事忍一手"，不是"把自己饿死"。
     if (plan.savingFor && !plan.urgent && !order) {
       // 目标本身就是它（攒英雄）：到店就买，别被自己的冻结额度挡住
-      const isTarget = plan.savingFor === 'hero' && d.hero;
+      const isTarget =
+        (plan.savingFor === 'hero' && d.hero) ||
+        (plan.savingFor === 'unit' && plan.targetUnitId === d.id);
       // 回本 ≤8 回合的经济单位不冻结：它是"以后每回合多几金"，停了等于
       // 把攒钱速度砍掉一半。工匠（现在一个都没有时）同理，第一座磨坊/粮仓
       // 的边际收益比任何一个兵都高。
@@ -3342,7 +3835,7 @@ function recruitCandidate(
           return cost !== null && gold >= cost;
         });
         if (canUpgradeNow) {
-          deny('让位升级');
+          deny('让位升级', d.id);
           continue;
         }
       }
@@ -3352,9 +3845,7 @@ function recruitCandidate(
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
       if (aiLevelOf(s)!=='basic') {
-        const efficiency = (d.atk + (d.magicAtk??0)*1.2) * Math.sqrt(d.maxHp)
-          * (1+Math.min(4,Math.max(0,d.range-1))*0.45) / Math.max(20,resourceValue(s,me,quote.price)+unlockFee*0.4)**0.8;
-        score += Math.min(26,efficiency*3);
+        score += Math.min(26, combatEfficiency(d, resourceValue(s,me,quote.price)+unlockFee*0.4) * 3);
         if (plan.urgent) score += 15;
       }
       if (d.domain === 'water') {
@@ -3390,6 +3881,23 @@ function recruitCandidate(
         // 上面的单价惩罚是线性的，对大件不公平：一辆坦克的战场价值不是三倍步兵班，是它的护甲和破城。
         // 这里按"超出常规单价的溢价"补一点分，8 分封顶，不至于让它压过一切。
         score += Math.min(8, Math.max(0, price - 180) * 0.03);
+      }
+
+      /*
+       * ── 地形契合：这张图上它吃不吃得开 ──
+       *
+       * 只对"自己有地形加成"的兵生效（现在就是林地之主这一类）。
+       * 权重按图上森林+丘陵的占比缩放：一片平原的图上，+3 甲的地形能力
+       * 等于不存在，不该因为面板上写着 +3 就多给它分。
+       *
+       * 3 甲 × 三成糙地 ≈ +9 分；实测这一个量级能把树人从"几乎不造"拉到
+       * 会零星出现的程度，又不至于让它盖过同价位的通用兵。
+       */
+      if (d.category === 'combat') {
+        const affinity = terrainArmorOf(d);
+        const perTile = Math.max(affinity.get('forest') ?? 0, affinity.get('hill') ?? 0);
+        const rough = roughShare(s);
+        if (perTile > 0 && rough > 0.2) score += Math.min(12, perTile * rough * 10);
       }
 
       // 高级：兵种搭配（见上面 rangedShare 的说明）
@@ -3470,7 +3978,7 @@ function recruitCandidate(
         escapeRoutes(s, c.x, c.y, d.move, src.kind === 'city' ? src.id : null) > 0,
       );
       if (!canLeave) {
-        deny('出不了城门');
+        deny('出不了城门', d.id);
         continue;
       }
       //    地图越糙，慢兵的处境越糟：不是"慢一点"，是"只能待在平原上"
@@ -3535,6 +4043,17 @@ function recruitCandidate(
     // 高级的随机幅度更小：选择更"有主意"，不会因为噪声去造一个明显不合适的兵
     score += (aiNoise(s, d.id.length * 31 + d.id.charCodeAt(0)) - 0.5) * (aiLevelOf(s) !== 'basic' ? 4 : 8);
 
+    /*
+     * 攒钱的目标到店了就该买它，而不是又拿去买便宜的。
+     *
+     * 这一条是"预留"能成立的关键：光冻结额度（allowance）不够——
+     * 钱攒够那一回合，大件仍然要和其他候选比分数，而线性单价惩罚会让它输。
+     * 之前那版实验就是这么白攒的：钱攒到了，兵没买成。
+     */
+    if (plan.savingFor === 'unit' && plan.targetUnitId === d.id && gold >= price + unlockFee) {
+      score += 40;
+    }
+
     // 指挥官点名的兵种优先落地。
     // 产兵是这个模式里玩家唯一的杠杆，必须赶在 AI 把钱花到建筑/升级之前执行，
     // 否则"我排了三个坦克，一个都没出来"——而且玩家看不出是被什么吃掉的。
@@ -3545,7 +4064,15 @@ function recruitCandidate(
         ? { type: 'RECRUIT', unitId: src.id, unitType: d.id }
         : { type: 'RECRUIT', cityId: src.id, unitType: d.id };
 
+    if (tracing) scored.push(d.id);
     if (!best || score > best.score) best = { action, score };
+  }
+
+  if (tracing) {
+    // 走到了评分这一步、但没被选中的，记成"分数偏低"——它和"被过滤器挡住"是两回事，
+    // 混在一起看就会把"时代没解锁"和"够强但打不过同价位的选择"搞混。
+    const winner = best?.action.type === 'RECRUIT' ? best.action.unitType : null;
+    for (const id of scored) if (id !== winner) deny('分数偏低', id);
   }
   if (tracing && !best) {
     aiRecruitTrace.last = Object.entries(why).map(([k, n]) => `${k}×${n}`).join(' / ') || '池为空';
@@ -3553,12 +4080,25 @@ function recruitCandidate(
   return best;
 }
 
-function upgradeCandidate(s: GameState, city: City, mood?: AiMood): Candidate | null {
+function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;
   if (gold < cost) return null;
+  /*
+   * 攒钱升时代的那几个回合，只许升主城。
+   *
+   * 少了这一条，预留就是漏的：钱攒到一半，副城的升级（便宜）在同一轮 argmax 里
+   * 赢过采购，把这笔钱花掉——主城又回到"差一口气"。人类的"集中升一座"能成立，
+   * 一半靠的是"这笔钱我不动"，而 AI 以前连"这笔钱是留给谁的"都没记。
+   */
+  if (plan?.savingFor === 'era' && gold < (plan.targetCost ?? 0)) {
+    const top = [...citiesOf(s, city.owner)]
+      .filter((c) => !c.ruined)
+      .sort((a, b) => b.era - a.era)[0];
+    if (top && top.id !== city.id) return null;
+  }
 
   // 留足造兵的钱再考虑升级，否则会变成裸城升级
   const spare = gold - cost;
@@ -3585,8 +4125,8 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood): Candidate | 
   //
   // 幅度只有 6/4：升级的底分本来就比招兵高（见上面 88/52/14），再叠一个大数
   // 会把"产线"整条挤掉——实测 900 金的局面里 AI 连着十二回合只顾升城、一个兵不造。
-  if (city.era >= myEra) score += 6;
-  else score -= 4;
+  if (city.era >= myEra) score += 18;
+  else score -= 10;
 
   // 战术倾向：弃城期升级是**兑现**（攒那几个回合就是为了这一下），
   // 速攻期升级是"顺便"，骚扰期同样的钱更愿意换成两三个能到处跑的兵。
@@ -3694,7 +4234,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, allowance: Infinity, urgent: true },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
         null,
         mood,
       );
@@ -3870,6 +4410,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     land,
     wade,
     water: distanceFields(view, me, 'water'),
+    air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
     focusCityId: mood.focusCityId,
     mood,
@@ -3967,7 +4508,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
       // 「升级时代」那一格也能指定城市：玩家常想"先升那座靠前的主城"。
       // 指定的是军营时不匹配任何城市，这一格就空转（营不会升级）。
       if (orderSite && city.id !== orderSite) continue;
-      const c = upgradeCandidate(view, city, mood);
+      const c = upgradeCandidate(view, city, mood, plan);
       if (c) candidates.push({ ...c,score:c.score+(commander && head===ORDER_UPGRADE ? 1000 : 0) });
     }
   }
@@ -3977,7 +4518,7 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
-      if (cost>plan.allowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
+      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
     }
   }
   if (candidates.length === 0) return null;
