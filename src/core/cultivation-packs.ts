@@ -9,6 +9,8 @@ import type {
   SkillDef
 } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
+import type { AbilityApi } from './ability-hooks.ts';
+import { skillsOf } from './types.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
 
@@ -39,6 +41,47 @@ export function isCultivatorDef(def: UnitTypeDef | undefined | null): boolean {
 export function isCultivatorUnit(s: GameState, u: Unit): boolean {
   return isCultivatorDef(s.unitTypes[u.type]);
 }
+
+const SKY_STEP_SKILL: SkillDef = {
+  id: 'sky-step',
+  name: '御空',
+  summary: '在低空与地面之间切换。消耗 1 点移动力，每回合一次。',
+  effect: 'sky-step',
+  cooldown: 0,
+  multiCast: true,
+};
+
+function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
+  if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
+  if (getRank(u) < 2) return '境界不足（需要 2 级）';
+  if ((u.custom?.skyStepTurn as number) === s.turn) return '御空每回合只能一次';
+  if (api.movePower(s, u) <= 0) return '剩余移动力不足';
+  return null;
+}
+
+registerSkillReadyCheck('sky-step', (s, u, api) => canSkyStep(s, u, api!) ?? true);
+
+registerSkillEffect('sky-step', (c) => {
+  const why = canSkyStep(c.state, c.self, c.api);
+  if (why) { c.result.ok = false; c.result.reason = why; return; }
+
+  const targetAir = !c.api.isAirborne(c.state, c.self);
+  const blockers = c.api
+    .unitsAt(c.state, c.self.x, c.self.y)
+    .filter((u) => u.id !== c.self.id && c.api.isAirborne(c.state, u) === targetAir);
+  if (blockers.length > 0) {
+    c.result.ok = false;
+    c.result.reason = targetAir ? '同一格已有其他空中单位' : '同一格已有其他地面单位';
+    return;
+  }
+
+  if (targetAir) c.self.layer = 'air';
+  else delete c.self.layer;
+
+  c.self.moveSpent = (c.self.moveSpent ?? 0) + 1;
+  c.self.custom = { ...(c.self.custom ?? {}), skyStepTurn: c.state.turn };
+  c.result.log = `${c.api.utype(c.state, c.self.type).name} ${targetAir ? '升空' : '落地'}`;
+});
 
 const SWORD_SWEEP_SKILL:SkillDef = {
   id: 'sword-sweep',
@@ -219,6 +262,38 @@ registerSkillPreview('sword-sweep', (c) => {
   return cells.map(cell => cell.y * c.state.w + cell.x);
 });
 
+/**
+ * 让单位学会一个后天技能。如果已经学过，什么都不做。
+ * 返回 true 表示这是一次「新学会」，方便调用方写战报。
+ */
+export function learnSkill(u: Unit, skill: SkillDef): boolean {
+  u.extraSkills ??= [];
+  if (u.extraSkills.some((k) => k.id === skill.id)) return false;
+  u.extraSkills.push(skill);
+  return true;
+}
+
+/** 境界达到对应等级时自动领悟的技能 */
+const CULTIVATOR_SKILL_UNLOCKS: Array<{ rank: number; skill: SkillDef }> = [
+  { rank: 2, skill: SKY_STEP_SKILL },
+];
+
+/** 检查并领悟所有达标的新技能 */
+function checkSkillUnlocks(u: Unit, s: GameState): void {
+  for (const { rank, skill } of CULTIVATOR_SKILL_UNLOCKS) {
+    if (getRank(u) >= rank) {
+      if (learnSkill(u, skill)) {
+        s.log.push({
+          turn: s.turn,
+          player: u.owner,
+          text: `${s.unitTypes[u.type]?.name ?? u.type} 领悟了「${skill.name}」`,
+          open: true,
+        });
+      }
+    }
+  }
+}
+
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
   id: 'qi-cultivator',
@@ -324,6 +399,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
       text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${_REALMS[newRank]} 期！`,
       open: true,
     });
+    checkSkillUnlocks(u, s);
   }
 }
 // 自然经验增长
@@ -544,8 +620,7 @@ export const CULTIVATION_PACK: Expansion = {
         lines.push(`剑修：境界加成在普攻时 ×0.8，剑气纵横时 ×1.2`);
       }
 
-      const def = state.unitTypes[unit.type];
-      const hasSwordSweep = def?.skills?.some((sk) => sk.id === 'sword-sweep');
+      const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
       if (hasSwordSweep) {
         const reach = getSwordSweepReach(state, unit);
         lines.push(`剑气纵横：向指定方向挥出 ${reach} 格直线剑气，伤害受境界加成`);

@@ -107,7 +107,7 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
-import { seatsOf } from './types.ts';
+import { seatsOf, skillsOf } from './types.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
@@ -195,6 +195,9 @@ const abilityApi: AbilityApi = {
   },
   destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
   noteHeat: (s, x, y) => noteHeatCell(s, x, y),
+  isAirborne: (s, u) => isAirborne(s, u),
+  unitsAt: (s, x, y) => unitsAt(s, x, y),
+  movePower: (s, u) => movePower(s, u),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -749,6 +752,7 @@ export function airLayer(def: UnitTypeDef): boolean {
 
 /** 空中层：能飞，并且可以和地面单位同格 */
 export function isAirborne(s: GameState, u: Unit): boolean {
+  if (u.layer) return u.layer === 'air';
   return airLayer(utype(s, u.type));
 }
 
@@ -1360,7 +1364,8 @@ export function movePower(s: GameState, unit: Unit): number {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
   }
   // 钩子返回 0 = 这一回合动不了（封冻的海军）。
-  return move <= 0 ? 0 : move;
+  move -= unit.moveSpent ?? 0; 
+  return Math.max(0, move);
 }
 
 /** 算上扩展规则后的视野半径 */
@@ -1607,6 +1612,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
         moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
+    }
+    const spent = u.moveSpent ?? 0;
+    if (spent > 0) {
+      moveNow = Math.max(0, moveNow - spent);
+      moveItems.push({ label: '已消耗', delta: -spent });
     }
   }
 
@@ -1863,7 +1873,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
   // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
   const flyer = crossesWater(def);
-  const air = airLayer(def);
+  const air = isAirborne(s, unit);
   // 穿行：可以穿过敌军，只是不能停在上面
   const phasing = hasFlag(def, 'passThrough');
   // 水面地形代价是 99（对陆军而言就是"走不了"），所以水军必须单独给价格：
@@ -2963,6 +2973,7 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
       u.acted = false;
       u.manualFired = false;
       delete u.attacksLeft;
+      delete u.moveSpent;
     }
   }
 }
@@ -3163,6 +3174,10 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
 
   const reach = reachableTiles(s, unit);
   if (!reach.has(idx(s, x, y))) return { ok: false, reason: '目标格不可达' };
+
+  // 把到达目标格的真实消耗加进 moveSpent
+  const cost = reach.get(idx(s, x, y))!;
+  unit.moveSpent = (unit.moveSpent ?? 0) + cost;
 
   // 走进废墟 = 接管。钱要在动之前就查：走到一半发现掏不起重建费，
   // 会留下一个"已经站在城里但城市还是别人的"的中间态，很难收拾。
@@ -4511,8 +4526,7 @@ export function heroSkillsOf(
   toNext: number;
   notReadyReason?: string; // 返回给 UI 的原因
 }> {
-  const def = utype(s, u.type);
-  return (def.skills ?? []).map((k) => {
+  return skillsOf(s, u).map((k) => {
     const cd = u.skillCd?.[k.id] ?? 0;
     const chargeMax = k.charges ?? 0;
     
@@ -4534,9 +4548,18 @@ export function heroSkillsOf(
       toNext = charge >= chargeMax ? 0 : Math.max(1, regen - t);
     }
 
+    let notReadyReason = k.notReadyReason; // 默认用静态配置
+
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
     if (ready && SKILL_READY_CHECKS[k.id]) {
-      ready = SKILL_READY_CHECKS[k.id]!(s, u);
+      const checkResult = SKILL_READY_CHECKS[k.id]!(s, u, abilityApi);
+      if (checkResult !== true) {
+        ready = false;
+        // 如果扩展返回了字符串，说明是具体的动态原因（比如“移动力不足”）
+        if (typeof checkResult === 'string') {
+          notReadyReason = checkResult;
+        }
+      }
     }
 
     return {
@@ -4546,7 +4569,7 @@ export function heroSkillsOf(
       charge,
       chargeMax,
       toNext,
-      notReadyReason: k.notReadyReason,
+      notReadyReason,
     };
   });
 }
@@ -4880,7 +4903,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
 
   const def = utype(s, u.type);
-  const skill = (def.skills ?? []).find((k) => k.id === skillId);
+  const skill = skillsOf(s, u).find((k) => k.id === skillId);
   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
 
   // 如果技能不允许连发，且这回合已经放过，就拦住
@@ -5199,7 +5222,7 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
     // 充能型技能：满发时计时归零（攒着不浪费），没满就往前走一格，
     // 走够 regen 回合回一发。按"自己的回合"数，不按全局 turn——
     // 全局回合两边共用，先手方永远只碰到奇数回合，周期 2 就成了永不触发。
-    for (const k of utype(s, u.type).skills ?? []) {
+    for (const k of skillsOf(s, u)) {
       const max = k.charges ?? 0;
       if (max <= 0) continue;
       const regen = Math.max(1, k.regen ?? 2);
