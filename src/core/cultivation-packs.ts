@@ -3,15 +3,12 @@ import type {
  } from './expansions.ts';
 import type { 
   GameState,
-  UnitTypeDef,
   Unit,
   City,
   SkillDef
 } from './types.ts';
-import type { AbilityDef } from './abilities.ts';
 import type { AbilityApi } from './ability-hooks.ts';
 import { skillsOf } from './types.ts';
-import { DAMAGE_STAGE } from './ability-hooks.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
 import {
   isCultivatorUnit,
@@ -27,18 +24,14 @@ import {
   moveModifier, SplashModifier, RangeModifier, VisionModifier 
 } from './cultivation/stats.ts';
 
+import { SKY_STEP_SKILL } from './cultivation/skills.ts';
+import { SPIRIT_CULTIVATOR, CULTIVATOR, SWORD_CULTIVATOR } from './cultivation/units.ts';
+import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
+
 export { 
   getAgingYears 
 } from './cultivation/progression.ts';
 
-const SKY_STEP_SKILL: SkillDef = {
-  id: 'sky-step',
-  name: '御空',
-  summary: '在低空与地面之间切换。消耗 1 点移动力，每回合一次。',
-  effect: 'sky-step',
-  cooldown: 0,
-  multiCast: true,
-};
 
 function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
   if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
@@ -72,16 +65,6 @@ registerSkillEffect('sky-step', (c) => {
   c.result.log = `${c.api.utype(c.state, c.self.type).name} ${targetAir ? '升空' : '落地'}`;
 });
 
-const SWORD_SWEEP_SKILL:SkillDef = {
-  id: 'sword-sweep',
-  name: '剑气纵横',
-  summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
-  effect: 'sword-sweep',
-  cooldown: 0,
-  multiCast: true,
-  targeting: 'direction', // 声明它需要选方向
-  notReadyReason: '攻击次数不足',
-};
 registerSkillReadyCheck('sword-sweep', (s, u) => {
   const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
   return left > 0;
@@ -251,15 +234,6 @@ registerSkillPreview('sword-sweep', (c) => {
   return cells.map(cell => cell.y * c.state.w + cell.x);
 });
 
-const SPIRIT_REBIRTH_SKILL: SkillDef = {
-  id: 'spirit-rebirth',
-  name: '重生',
-  summary: '重塑肉身：失去一半修为并强制降一境，恢复 10% 最大生命。',
-  effect: 'spirit-rebirth',
-  cooldown: 0,
-  multiCast: false,
-};
-
 registerSkillReadyCheck('spirit-rebirth', (_s, u) => {
   if (u.type !== 'cultivator-spirit') return '只有灵体能重生';
   if (!u.custom?.originType) return '本源已散失，无法重生';
@@ -380,145 +354,7 @@ function cleanupAfterRankDrop(u: Unit, newRank: number): void {
   }
 }
 
-//各种单位
-//灵体
-const SPIRIT_CULTIVATOR: UnitTypeDef = {
-  id: 'cultivator-spirit',
-  name: '灵体',
-  short: '灵',
-  era: 1,
-  category: 'combat',
-  cost: 0,
-  move: 3,
-  atk: 0,
-  armor: 0,
-  maxHp: 1,
-  range: 1,
-  vision: 3,
-  layer: 'air',
-  flight: true, 
-  summonedOnly: true,
-  abilities: ['qi-true-damage'],
-  skills: [SPIRIT_REBIRTH_SKILL],
-};
-// 炼气士
-const CULTIVATOR: UnitTypeDef = {
-  id: 'qi-cultivator',
-  name: '炼气士',
-  short: '炼',
-  era: 1,
-  category: 'combat',
-  cost: 150,
-  move: 2,
-  atk: 10,
-  armor: 0,
-  maxHp: 20,
-  range: 1,
-  vision: 3,
-  abilities: ['qi-true-damage'], 
-};
-// 剑修
-const SWORD_CULTIVATOR: UnitTypeDef = {
-  id: 'sword-cultivator',
-  name: '剑修',
-  short: '剑',
-  era: 2,
-  category: 'combat',
-  cost: 270, 
-  move: 3,
-  atk: 8,
-  armor: 1,
-  maxHp: 20,
-  range: 1,
-  vision: 3,
-  abilities: ['qi-true-damage'], 
-  skills: [SWORD_SWEEP_SKILL],
-};
 
-/**
- * 真元：真实伤害
- */
-const QI_TRUE_DAMAGE: AbilityDef = {
-  id: 'qi-true-damage',
-  name: '真元',
-  summary: '每次攻击附带随境界提升的、无视护甲的真实伤害。',
-  group: 'attack',
-  hooks: {
-    damage: [
-      {
-        stage: DAMAGE_STAGE.trueDamage,
-        apply: (c) => {
-          if (c.side !== 'attacker') return;
-          if (!isCultivatorUnit(c.state, c.self)) return;
-          const trueDmg = trueDamageOf(c.self);
-          if (trueDmg > 0) c.damage += trueDmg;
-        },
-      },
-    ],
-  },
-};
-
-const SPIRIT_ASCENSION: AbilityDef = {
-  id: 'spirit-ascension',
-  name: '灵体道果',
-  summary: '境界达到炼气期（≥ 4 级）时，肉身死亡会化作灵体，可主动重生。',
-  group: 'defense',
-  hooks: {
-    onDeath: (c) => {
-      const { state, victim, api } = c;
-      if (!isCultivatorUnit(state, victim)) return;
-      if (victim.type === 'cultivator-spirit') return;// 灵体死了就真死
-      if (victim.custom?.spiritForm === true) return;
-      if (isDoomed(victim)) return;// 老死 → 真死
-      if (getRank(victim) < 4) return;
-      const spiritDef = state.unitTypes['cultivator-spirit'];
-      if (!spiritDef) return;
-
-      // 落脚点：原地优先，若 air 层同格冲突则找相邻空格
-      let x = victim.x, y = victim.y;
-      if (!api.canStandAt(state, x, y, 'cultivator-spirit')) {
-        const spot = api.freeNeighbor(state, victim, 'cultivator-spirit');
-        if (!spot) return;// 无处落脚，真死
-        x = spot.x; y = spot.y;
-      }
-
-      // 暂存与过滤
-      const savedExtraSkills = victim.extraSkills ?? [];
-      const savedExtraAbilities = victim.extraAbilities ?? [];
-      const soulBound = savedExtraSkills.filter((k) => k.custom?.soulBound === true);
-      const otherAbilities = savedExtraAbilities.filter((id) => id !== 'spirit-ascension');
-
-      const originMaxHpBonus = victim.maxHpBonus ?? 0;
-      const originType = victim.type;
-      const originName = state.unitTypes[originType]?.name ?? originType;
-      const rankNow = getRank(victim);
-
-      victim.custom = {
-        ...(victim.custom ?? {}),
-        spiritForm: true,
-        originType,
-        savedExtraSkills,
-        savedExtraAbilities,
-        originMaxHpBonus,
-      };
-      victim.type = 'cultivator-spirit';
-      victim.x = x; victim.y = y;
-      victim.maxHpBonus = Math.floor(originMaxHpBonus * 0.3);
-      victim.hp = 1 + victim.maxHpBonus;
-      victim.moved = true;
-      victim.acted = true;
-      victim.status = {};
-      delete victim.heroBuff;
-      delete victim.countersLeft;
-      victim.extraSkills = soulBound;
-      victim.extraAbilities = otherAbilities;
-
-      state.units.push(victim);
-      api.pushLog(state, victim.owner,
-        `${originName} 肉身崩碎，化作灵体（境界 ${REALMS[rankNow]} 期）`, true);
-    },
-  },
-};
 
 const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
   { rank: 4, abilityId: 'spirit-ascension', name: '灵体道果' },
