@@ -4125,7 +4125,10 @@ test('血战：第 50 回合起，回血、涨价、机动、视野削减全部�
   );
   assert.equal(movePower(s, findUnit(s, 'A', 'militia')), UNIT_TYPES.militia.move + 1);
   assert.equal(visionOf(s, findUnit(s, 'A', 'militia')), UNIT_TYPES.militia.vision + 1);
-  assert.equal(movePower(s, mg), UNIT_TYPES.mg.move, 'move 1 的机枪队本来就没被削过');
+  // 2026-11-03：机枪队移 1 → 2 之后，本体已经没有"移 1 的战斗单位"了，
+  // 所以这里改成断言通用规则：解除血战后所有能动单位 +1，且不会掉到 0。
+  assert.equal(movePower(s, mg), UNIT_TYPES.mg.move + 1, '解除后机枪队也 +1');
+  assert.ok(movePower(s, mg) >= 1, '移速下限是 1，不能被减成 0');
 });
 
 test('血战真的会改变 AI 的升级决策', () => {
@@ -7484,7 +7487,15 @@ test('AI 会一直铺到对岸，而不是每回合换个地方重来', () => {
   const crumbs: string[] = [];
   for (let round = 0; round < 30 && !ok; round++) {
     for (let step = 0; step < 40; step++) {
-      const a = aiNextAction(st);
+      /*
+       * 只许架桥：把"招兵"和"升城"的名额掐掉。
+       *
+       * 这条用例的主题是"会不会在同一处接着铺"，不是"钱该花在桥还是升级上"。
+       * 1500 金 + 一座能升的城，AI 会先升城再回头架桥（那是对的选择，但把
+       * 这条用例测的东西换掉了）。预算掐掉之后，它手里只剩两个工程队，
+       * 除了架桥没有别的事可做。
+       */
+      const a = aiNextAction(st, { maxRecruit: 0, maxUpgrade: 0, recruited: 0, upgraded: 0 });
       if (!a) break;
       const r = applyAction(st, a);
       if (!r.ok) break;
@@ -14423,7 +14434,7 @@ test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血
   assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
-  assert.equal(serpent.maxHp, 30, '蛇人生命 34 → 30');
+  assert.equal(serpent.maxHp, 34, '蛇人生命 34（2026-11-03 复核：先压到 30，又补回 34）');
   const witch = s.unitTypes['witch']!;
   assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
@@ -14438,6 +14449,7 @@ test('狂战士：一次出手打两段，每段各自减一次护甲', () => {
   // 木桩挑蛇人（8 甲）：护甲高到"每段各减一次"和"只减一次"能看出差别
   const dummy = place2(s, 'B', 'serpent-man', 6, 5);
   const armor = s.unitTypes['serpent-man']!.armor;
+  const fullHp = s.unitTypes['serpent-man']!.maxHp;
   assert.equal(computeDamage(s, zerk, dummy), 15 - armor, '一段 = 15 − 8 甲');
 
   const first = applyAction(s, { type: 'ATTACK', unitId: zerk.id, targetId: dummy.id });
@@ -14447,7 +14459,7 @@ test('狂战士：一次出手打两段，每段各自减一次护甲', () => {
   const d1 = first.state.units.find((u) => u.id === dummy.id)!;
   assert.equal(attacksLeftOf(first.state, z1), 1, '打了一段，还剩一段');
   assert.equal(z1.acted, false, '还剩一段时不算行动结束');
-  assert.equal(30 - d1.hp, 15 - armor, '第一段只打掉一段的伤害');
+  assert.equal(fullHp - d1.hp, 15 - armor, '第一段只打掉一段的伤害');
 
   const second = applyAction(first.state, { type: 'ATTACK', unitId: zerk.id, targetId: dummy.id });
   assert.ok(second.ok, second.ok ? '' : second.reason);
@@ -14457,7 +14469,7 @@ test('狂战士：一次出手打两段，每段各自减一次护甲', () => {
   assert.equal(z2.acted, true, '两段打完这一回合就结束了');
   // 合计正好是"两段各自减甲"，不是"一刀 30 减一次甲"
   const d2 = second.state.units.find((u) => u.id === dummy.id)!;
-  assert.equal(d2.hp, 30 - (15 - armor) * 2, '两段合计 = 2 × (15 − 8 甲)');
+  assert.equal(d2.hp, fullHp - (15 - armor) * 2, '两段合计 = 2 × (15 − 8 甲)');
 });
 
 test('虚咒：3 格内敌军攻击力 −25%，4 格外不生效，两道不叠乘', () => {

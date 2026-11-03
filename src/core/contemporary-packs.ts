@@ -185,8 +185,11 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     atk: 55,
     armor: 5,
     maxHp: 56,
-    range: 6,
-    vision: 3,
+    // 2026-11-03 数值复核：射程 6 → 5，视野 3 → 4。
+    // 交换比 19.55、每百金承伤 1.4，是全表最"够不着"的一个；
+    // 视野补到 4 是为了让"射程 > 视野"这条冲突在这里先收掉一格。
+    range: 5,
+    vision: 4,
     splash: 2,
     abilities: ['siege-master'],
     bio: false,
