@@ -990,6 +990,16 @@ export interface Unit {
   /** 被封印/遗忘的天赋技能 id（从兵种表 skills 里剔除） */
   lostSkillIds?: string[];
 
+  /**
+   * 后天挂上的能力 id，追加在兵种定义的 `abilities` 之后。
+   *
+   * 和 `extraSkills` 同一套模式：动态追加、按 id 去重、undefined 等于没挂。
+   * 谁读它：`ability-registry.ts` 的 5 个 lookup 函数、`rules.ts` 里
+   * `hooksOfUnit / hasFlagOn / stagedOfUnit / aurasOfUnit` 这一组 helper。
+   * 规则层**不认识任何具体能力 id**，只负责合并查找。
+   */
+  extraAbilities?: string[];
+
   /** 
    * 扩展专用的自定义数据沙盒，一些其他扩展不会共用的数据就丢这里。
    * 核心引擎永远不会读取或修改这里的任何字段，

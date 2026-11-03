@@ -25,6 +25,21 @@ for (const e of EXPANSIONS) {
   }
 }
 
+/**
+ * 把 `def.abilities` 和实例挂的 `extraAbilities` 合并成一个 id 列表。
+ *
+ * 顺序规则：先 def（兵种天赋），再 extra（后天挂的）——和 `abilities` 数组
+ * 决定同 stage 钩子先后的语义一致：天赋先跑、后天后跑。
+ * 按 id 去重：一个能力不该因为同时出现在天赋和 extra 里跑两遍。
+ */
+function mergedIds(def: UnitTypeDef | undefined, extra?: string[]): string[] {
+  const base = def?.abilities ?? [];
+  if (!extra || extra.length === 0) return base;
+  const out = [...base];
+  for (const id of extra) if (!out.includes(id)) out.push(id);
+  return out;
+}
+
 /** 全部能力（核心在前，扩展按注册顺序跟在后面） */
 export function allAbilities(): AbilityDef[] {
   return Array.from(byId.values());
@@ -32,6 +47,18 @@ export function allAbilities(): AbilityDef[] {
 
 export function abilityById(id: string): AbilityDef | undefined {
   return byId.get(id);
+}
+
+/**
+ * 这个兵种（含实例挂的 extraAbilities）有没有某条能力。
+ *
+ * 和文件末尾重导出的 `hasAbility(def, id)` 的差别只在于第二参：
+ * 那个是"只看兵种天赋"，这个是"天赋 + 后天"。
+ * 规则层所有"手里已经有 Unit"的场合都该走这个；"手里只有 def"
+ * （比如 canStandAt / recruitSpawnCells）继续走 hasAbility 即可。
+ */
+export function hasAbilityIn(def: UnitTypeDef | undefined, id: string, extra?: string[]): boolean {
+  return mergedIds(def, extra).includes(id);
 }
 
 /**
@@ -59,10 +86,10 @@ const cache = new Map<string, AbilityHooks[]>();
  * 按 abilities 数组的顺序返回（同 stage 的钩子靠它决定先后），
  * 并以 id 串为键缓存：computeDamage 每回合要跑几十次，逐个查表太浪费。
  */
-export function hooksFor(def: UnitTypeDef | undefined): AbilityHooks[] {
-  const ids = def?.abilities;
-  if (!ids || ids.length === 0) return EMPTY;
-  const key = ids.join('|');
+export function hooksFor(def: UnitTypeDef | undefined, extra?: string[]): AbilityHooks[] {
+  const ids = mergedIds(def, extra);
+  if (ids.length === 0) return EMPTY;
+  const key = ids.join('|');   // ← 合并后的 id 串做 key，缓存天然按 extra 区分
   const hit = cache.get(key);
   if (hit) return hit;
   const list: AbilityHooks[] = [];
@@ -85,9 +112,9 @@ export function hooksFor(def: UnitTypeDef | undefined): AbilityHooks[] {
 const terrainArmorCache = new Map<string, Map<Terrain, number>>();
 const EMPTY_TERRAIN = new Map<Terrain, number>();
 
-export function terrainArmorOf(def: UnitTypeDef | undefined): Map<Terrain, number> {
-  const ids = def?.abilities;
-  if (!ids || ids.length === 0) return EMPTY_TERRAIN;
+export function terrainArmorOf(def: UnitTypeDef | undefined, extra?: string[]): Map<Terrain, number> {
+  const ids = mergedIds(def, extra);
+  if (ids.length === 0) return EMPTY_TERRAIN;
   const key = ids.join('|');
   const hit = terrainArmorCache.get(key);
   if (hit) return hit;
@@ -103,8 +130,12 @@ export function terrainArmorOf(def: UnitTypeDef | undefined): Map<Terrain, numbe
 }
 
 /** 有没有哪条能力带了这个布尔标记 */
-export function hasFlag(def: UnitTypeDef | undefined, flag: 'passThrough' | 'crossesWater' | 'airLayer' | 'immuneSplash' | 'noCounter'): boolean {
-  return hooksFor(def).some((h) => h[flag] === true);
+export function hasFlag(
+  def: UnitTypeDef | undefined,
+  flag: 'passThrough' | 'crossesWater' | 'airLayer' | 'immuneSplash' | 'noCounter',
+  extra?: string[],
+): boolean {
+  return hooksFor(def, extra).some((h) => h[flag] === true);
 }
 
 /** 带时机的钩子字段名 */
@@ -131,9 +162,9 @@ const stagedCache = new Map<string, unknown[]>();
  * 结果缓存到 id 串上：computeDamage 一回合要跑几十次，
  * 每次重新拼一遍数组既浪费又容易在热循环里掉帧。
  */
-export function stagedFor<C>(def: UnitTypeDef | undefined, key: StagedKey): Staged<C>[] {
-  const ids = def?.abilities;
-  if (!ids || ids.length === 0) return NONE;
+export function stagedFor<C>(def: UnitTypeDef | undefined, key: StagedKey, extra?: string[]): Staged<C>[] {
+  const ids = mergedIds(def, extra);
+  if (ids.length === 0) return NONE;
   const ck = `${ids.join('|')}#${key}`;
   const hit = stagedCache.get(ck);
   if (hit) return hit as Staged<C>[];
@@ -147,14 +178,14 @@ export function stagedFor<C>(def: UnitTypeDef | undefined, key: StagedKey): Stag
 }
 
 /** 能不能被治疗：只要有一条能力写着 healable: false，就不行（机械） */
-export function canBeHealed(def: UnitTypeDef | undefined): boolean {
-  return !hooksFor(def).some((h) => h.healable === false);
+export function canBeHealed(def: UnitTypeDef | undefined, extra?: string[]): boolean {
+  return !hooksFor(def, extra).some((h) => h.healable === false);
 }
 
 /** 所有声明了光环的能力，按注册顺序（多条光环会叠加） */
-export function aurasOf(def: UnitTypeDef | undefined): NonNullable<AbilityHooks['aura']>[] {
+export function aurasOf(def: UnitTypeDef | undefined, extra?: string[]): NonNullable<AbilityHooks['aura']>[] {
   const out: NonNullable<AbilityHooks['aura']>[] = [];
-  for (const h of hooksFor(def)) if (h.aura) out.push(h.aura);
+  for (const h of hooksFor(def, extra)) if (h.aura) out.push(h.aura);
   return out;
 }
 

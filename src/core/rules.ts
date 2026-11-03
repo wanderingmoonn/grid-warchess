@@ -28,6 +28,7 @@ import {
   runStaged,
 } from './ability-hooks.ts';
 import type {
+  AbilityHooks,
   AbilityApi,
   DeathCtx,
   HitCtx,
@@ -41,7 +42,8 @@ import type {
   StrikeCtx,
   TurnStartCtx,
 } from './ability-hooks.ts';
-import { aurasOf, canBeHealed, hasAbility, hasFlag, hooksFor, stagedFor } from './ability-registry.ts';
+import { aurasOf, canBeHealed, hasAbilityIn, hasFlag, hooksFor, stagedFor } from './ability-registry.ts';
+import type { StagedKey } from './ability-registry.ts';
 import {
   CITY,
   CONFIG,
@@ -137,6 +139,34 @@ export function adjacentToWater(s: GameState, x: number, y: number): boolean {
   });
 }
 
+// ── 能力查找的"带实例"版本 ────────────────────────────
+//
+// ability-registry 的 hooksFor/hasFlag/stagedFor/aurasOf/canBeHealed 只吃 def，
+// 但实例上可能动态挂了能力（如修士 rank 4 自动获得的「灵体道果」）。这一组
+// helper 把"实例的 extraAbilities"合并进去，让规则层各处统一使用。
+//
+// 只在这些地方调用：手里**已经有 Unit 对象**时。手里只有 def 的场合
+// （canStandAt / recruitSpawnCells / eggSpots 等"还没生成单位"的判定）
+// 继续走原函数——那些地方的 extra 必然为空，合并也没意义。
+function hooksOfUnit(s: GameState, u: Unit): AbilityHooks[] {
+  return hooksFor(utype(s, u.type), u.extraAbilities);
+}
+function stagedOfUnit<C>(s: GameState, u: Unit, key: StagedKey): Staged<C>[] {
+  return stagedFor<C>(utype(s, u.type), key, u.extraAbilities);
+}
+function hasAbilityOn(s: GameState, u: Unit, id: string): boolean {
+  return hasAbilityIn(utype(s, u.type), id, u.extraAbilities);
+}
+function hasFlagOn(s: GameState, u: Unit, flag: 'passThrough' | 'crossesWater' | 'airLayer' | 'immuneSplash' | 'noCounter'): boolean {
+  return hasFlag(utype(s, u.type), flag, u.extraAbilities);
+}
+function aurasOfUnit(s: GameState, u: Unit): NonNullable<AbilityHooks['aura']>[] {
+  return aurasOf(utype(s, u.type), u.extraAbilities);
+}
+function canBeHealedOn(s: GameState, u: Unit): boolean {
+  return canBeHealed(utype(s, u.type), u.extraAbilities);
+}
+
 /**
  * 注入给能力实现的那套工具。
  *
@@ -163,8 +193,8 @@ const abilityApi: AbilityApi = {
   distToCity,
   cityName,
   hashPick,
-  hasAbility: (s, u, id) => hasAbility(utype(s, u.type), id),
-  canBeHealed: (s, u) => canBeHealed(utype(s, u.type)),
+  hasAbility: (s, u, id) => hasAbilityIn(utype(s, u.type), id, u.extraAbilities),
+  canBeHealed: (s, u) => canBeHealed(utype(s, u.type), u.extraAbilities), 
   putStatus: (target, key, turns) => {
     const st = (target.status ??= {});
     if ((st[key] ?? 0) >= turns) return false;
@@ -218,9 +248,10 @@ function bindHooks<C>(
   foe: Unit | undefined,
   side: Side,
   key: 'armorPhase' | 'damage',
+  extra?: string[],
 ): BoundHook<C>[] {
   const out: BoundHook<C>[] = [];
-  for (const h of stagedFor<C>(def, key)) out.push({ stage: h.stage, self, foe, side, hook: h });
+  for (const h of stagedFor<C>(def, key, extra)) out.push({ stage: h.stage, self, foe, side, hook: h });
   return out;
 }
 
@@ -853,7 +884,7 @@ export function magicSegment(
   // 先减魔抗再放大——"打穿"和"放大"是两件事，顺序反过来对高魔抗目标会变成白送。
   let dmgMagic = out;
   if (!foe) return dmgMagic;
-  for (const h of hooksFor(def)) {
+  for (const h of hooksOfUnit(s, attacker)) {
     if (h.magicMul) {
       dmgMagic = h.magicMul({ state: s, self: attacker, foe, magic: dmgMagic, api: abilityApi });
     }
@@ -923,7 +954,7 @@ export function curseAuraPenalty(s: GameState, unit: Unit): number {
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
     if (distance(foe, unit) !== 1) continue;
-    for (const a of aurasOf(utype(s, foe.type))) {
+    for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeArmor || a.foeArmor >= 0) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeArmor;
       hit = Math.min(cap, hit - a.foeArmor);
@@ -1071,7 +1102,7 @@ function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: numbe
   };
 
   const hitCtx: HitCtx = { state: s, self: attacker, target, damage: dmg, api: abilityApi, touched };
-  const hitHooks = stagedFor<HitCtx>(def, 'onHit');
+  const hitHooks = stagedOfUnit<HitCtx>(s, attacker, 'onHit');
 
   // 先跑"命中即贴"那批（淬毒/燃焰/霜缚/咒缚）
   runStaged(hitHooks, hitCtx, { to: HIT_STAGE.postStatus });
@@ -1302,7 +1333,7 @@ export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: numbe
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
     if (distance(ally, unit) !== 1) continue;
-    for (const a of aurasOf(utype(s, ally.type))) {
+    for (const a of aurasOfUnit(s, ally)) {
       if (a.allyAtk) atk += a.allyAtk;
       if (a.allyArmor) armor += a.allyArmor;
     }
@@ -1323,7 +1354,7 @@ export function fearPenalty(s: GameState, unit: Unit): number {
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
     if (distance(foe, unit) !== 1) continue;
-    for (const a of aurasOf(utype(s, foe.type))) {
+    for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeAtk || a.foeAtk >= 0) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeAtk;
       hit = Math.min(cap, hit - a.foeAtk);
@@ -1352,7 +1383,7 @@ export function movePower(s: GameState, unit: Unit): number {
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
     if (distance(ally, unit) !== 1) continue;
-    for (const a of aurasOf(utype(s, ally.type))) if (a.allyMove) move += a.allyMove;
+    for (const a of aurasOfUnit(s, ally)) if (a.allyMove) move += a.allyMove;
   }
 
   // 先保底 1：减速、光环这些加减法算完，最少留一格移动力。
@@ -1492,7 +1523,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     distance: 0,
     api: abilityApi,
   };
-  runStaged(stagedFor<HookCtx>(def, 'statAttack'), atkCtx);
+  runStaged(stagedOfUnit<HookCtx>(s, u, 'statAttack'), atkCtx);
   atk = atkCtx.atk;
   // 哀兵必胜：先丢过城的一方全军 +10%，取整规则与 lastStandDamage 同源
   if (s.firstCityLost === u.owner) {
@@ -1535,7 +1566,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     distance: 0,
     api: abilityApi,
   };
-  runStaged(stagedFor<HookCtx>(def, 'statArmor'), armorCtx);
+  runStaged(stagedOfUnit<HookCtx>(s, u, 'statArmor'), armorCtx);
   armor = armorCtx.armor;
   const garrison = garrisonBonus(s, u);
   if (garrison !== 0) {
@@ -1595,7 +1626,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     for (const ally of s.units) {
       if (ally.id === u.id || ally.owner !== u.owner) continue;
       if (distance(ally, u) !== 1) continue;
-      for (const a of aurasOf(utype(s, ally.type))) {
+      for (const a of aurasOfUnit(s, ally)) {
         if (a.allyMove) {
           moveNow += a.allyMove;
           moveItems.push({ label: '疾行光环', delta: a.allyMove });
@@ -1818,7 +1849,7 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
   // 能力带来的隐匿：各自说自己的成立条件（潜行要看地形，隐匿要看这回合动没动）。
   // 一条兵种挂了几条隐匿就都问一遍，任一成立就算藏住了。
   let byAbility = false;
-  for (const h of hooksFor(def)) {
+  for (const h of hooksOfUnit(s, unit)) {
     if (!h.hidden) continue;
     if (h.hidden({ state: s, self: unit, viewer, api: abilityApi })) {
       byAbility = true;
@@ -1838,7 +1869,7 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
 
 /** 这个单位对"目标"的额外发现距离（多条能力取最大的那条，不叠加） */
 function detectBonus(s: GameState, viewerUnit: Unit, target: Unit): number {
-  const hooks = hooksFor(utype(s, viewerUnit.type));
+  const hooks = hooksOfUnit(s, viewerUnit);
   let best = 0;
   for (const h of hooks) {
     if (!h.detect) continue;
@@ -1868,7 +1899,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const n = footprintOf(s, unit);
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
-  const hooks = hooksFor(def);
+  const hooks = hooksOfUnit(s, unit);
   // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
   // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
   // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
@@ -2207,9 +2238,9 @@ export function computeDamage(
 
   // 护甲阶段的钩子：攻方和守方的都进同一张表，
   // 按 stage 排；每条跑的时候 ctx.self 临时指向它自己的主人。
-  const armorHooks = isCity ? []:[
-    ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'armorPhase'),
-    ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'armorPhase'),
+  const armorHooks = isCity ? [] : [
+    ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'armorPhase', attacker.extraAbilities),
+    ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'armorPhase', defender.extraAbilities),
   ];
 
   // 地形掩护之前，穿隙
@@ -2252,9 +2283,9 @@ export function computeDamage(
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.postPierce });
 
   // ── 伤害计算 ──
-  const damageHooks = isCity ? [] :[
-    ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'damage'),
-    ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'damage'),
+  const damageHooks = isCity ? [] : [
+    ...bindHooks<HookCtx>(at, attacker, defender, 'attacker', 'damage', attacker.extraAbilities),
+    ...bindHooks<HookCtx>(dt, defender, attacker, 'defender', 'damage', defender.extraAbilities),
   ];
 
   // ── 物理加成阶段 ──
@@ -2298,7 +2329,7 @@ export function computeDamage(
       damage: ctx.damage,
       api: abilityApi,
     };
-    runStaged(stagedFor<SiegeDamageCtx>(at, 'siegeDamage'), sctx);
+    runStaged(stagedOfUnit<SiegeDamageCtx>(s, attacker, 'siegeDamage'), sctx);
     ctx.damage = sctx.damage;
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifySiegeDamage) {
@@ -2383,7 +2414,7 @@ export function previewAttack(
   // 这次打完还吃不吃得到反击：看防守方剩余的反击次数
   const countersLeft = defender.countersLeft ?? Math.max(0, attacksPerTurn(s, defender));
   // 修改反击判定条件
-  const counter = survives && !hasFlag(def, 'noCounter') && countersLeft > 0 && canStrike(s, defender, attacker);
+  const counter = survives && !hasFlagOn(s, attacker, 'noCounter') && countersLeft > 0 && canStrike(s, defender, attacker);
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
@@ -2494,7 +2525,7 @@ function splashVictims(
     if (distBetweenUnits(s, defender, v) > radius) continue;
     if (line && !onStrikeLine(attacker, defender, v.x, v.y)) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
-    if (hasFlag(utype(s, v.type), 'immuneSplash')) continue;
+    if (hasFlagOn(s, v, 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
     if (v.buff?.splashImmune) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
@@ -2533,8 +2564,6 @@ function drownCargo(s: GameState, dead: Unit): void {
 }
 
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
-  const victimDef = utype(s, victim.type);
-
   // 没有凶手（毒死、烧死、桥塌）时，两人局记在对面头上；三人以上没有"对面"
   // 这回事，就记在自己头上——宁可少给一份击杀奖励，也不能凭空发给出局的人。
   const killerOwner = killer
@@ -2557,7 +2586,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 以及通知扩展"亡语跑完了"。清场放在这里而不是各能力里自己删，
   // 是为了避免两段能力交叉删列表、把刚分裂出来的小史莱姆一起删掉。
   const dctx: DeathCtx = { state: s, victim, killer, api: abilityApi, result: { blasts: 0 } };
-  for (const h of hooksFor(victimDef)) h.onDeath?.(dctx);
+  for (const h of hooksOfUnit(s, victim)) h.onDeath?.(dctx);
   // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
   if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
@@ -3329,7 +3358,7 @@ function doAttack(
     v.unit.hp -= v.dmg;
   }
 
-  const noCounter = hasFlag(atkDef, 'noCounter');
+  const noCounter = hasFlagOn(s, attacker, 'noCounter');
   let counterDmg = 0;
   // 防守方的反击次数也按"一回合能攻击几次"算，第一次挨打时填满
   if (defender.countersLeft === undefined) {
@@ -3355,7 +3384,7 @@ function doAttack(
     api: abilityApi,
     result: { healed: 0, pushed: false },
   };
-  const strikeHooks = stagedFor<StrikeCtx>(atkDef, 'onStrike');
+  const strikeHooks = stagedOfUnit<StrikeCtx>(s, attacker, 'onStrike');
 
   // 吸血：把这一下真打出来的伤害换成血。放在反击之后结算
   runStaged(strikeHooks, sctx, { to: STRIKE_STAGE.postDamage });
@@ -3457,7 +3486,7 @@ function doAttack(
     // 死在反击里的情况（attacker.hp <= 0）不给：人都倒了，走给谁看。
     if (attacker.hp > 0 && s.units.some((u) => u.id === attacker.id)) {
       const kctx: KillCtx = { state: s, self: attacker, victim: defender, api: abilityApi, result: { moveBack: false } };
-      for (const h of hooksFor(atkDef)) h.onKill?.(kctx);
+      for (const h of hooksOfUnit(s, attacker)) h.onKill?.(kctx);
       if (kctx.result.moveBack) {
         attacker.moved = false;
         pushLog(s, attacker.owner, `${atName} 斩杀得手，本回合还能再走一次`);
@@ -3575,7 +3604,7 @@ function doSiege(
   // 但"从谁身上扣、扣多少"必须留在规则里——钱是真的会少的。
   let loot = 0;
   const lctx: SiegeLootCtx = { state: s, self: attacker, city, damage: dmg, api: abilityApi, result: { loot: 0 } };
-  for (const h of hooksFor(utype(s, attacker.type))) h.siegeLoot?.(lctx);
+  for (const h of hooksOfUnit(s, attacker)) h.siegeLoot?.(lctx);
   if (lctx.result.loot > 0) {
     loot = Math.min(s.players[city.owner].gold, lctx.result.loot);
     if (loot > 0) {
@@ -5279,11 +5308,11 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
 function runTurnStart(s: GameState, u: Unit, p: PlayerId, from: number, to: number, rested: boolean): void {
   if (u.owner !== p) return;
   const def = utype(s, u.type);
-  const hooks = stagedFor<TurnStartCtx>(def, 'onTurnStart');
+  const hooks = stagedOfUnit<TurnStartCtx>(s, u, 'onTurnStart');
   if (hooks.length === 0) return;
   runStaged(
     hooks,
-    { state: s, self: u, owner: p, rested, healable: canBeHealed(def), api: abilityApi },
+    { state: s, self: u, owner: p, rested, healable: canBeHealedOn(s, u), api: abilityApi },
     { from, to },
   );
 }
