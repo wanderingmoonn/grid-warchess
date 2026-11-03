@@ -64,6 +64,38 @@ export function canProduce(
   return { ok: true };
 }
 
+/**
+ * 这座产兵点在 `era` 这个时代落成之后，白名单里**还剩几个造得出来的兵**。
+ *
+ * 为什么需要这一条：产兵点落成那一刻会把时代钉死（见 doRecruit 的 camp 分支），
+ * 之后**永远不会**自己换代。军营这样写没问题——它的白名单是空的，
+ * "按时代与城市供给放开"，什么时代落成都能出那一代的兵。
+ * 但**带白名单**的产兵点（船坞、造船厂、海军船台）不是：
+ * 二代建一座海军船台，白名单里全是六代的船，它这辈子一艘都下不了水。
+ * 那不是"贵一点"，那是 460 金买一块石头。
+ *
+ * 返回值约定：
+ *   · `null` —— 没写白名单，不设限（军营、以及一切 `produce: {}`）
+ *   · `0`    —— 落成即废，规则层直接拒绝这种建造
+ *   · `>0`   —— 现在建起来是真能出货的
+ */
+export function produceUsableCount(
+  producer: UnitTypeDef | undefined | null,
+  types: Record<string, UnitTypeDef>,
+  era: number,
+): number | null {
+  const spec = produceOf(producer);
+  if (!spec?.units) return null;
+  let n = 0;
+  for (const id of spec.units) {
+    const def = types[id];
+    // `def.era <= era` 就是 draft.eraWindowOk 的全部内容。这里不 import 它，
+    // 是为了不让 produce（纯数据模块）反向依赖 draft（对局流程）。
+    if (def && def.era <= era) n += 1;
+  }
+  return n;
+}
+
 /** 生产间隔（至少 1 回合） */
 export function produceEveryTurns(def: UnitTypeDef | undefined | null): number {
   return Math.max(1, Math.trunc(produceOf(def)?.everyTurns ?? PRODUCE_DEFAULTS.everyTurns));

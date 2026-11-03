@@ -37,7 +37,7 @@ import {
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
-import { renderBoard } from '../src/ui/board.ts';
+import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -5245,6 +5245,69 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     assert.ok(host.querySelector('.hp-lag.chipped'), '没有 animate 时要用类动画兜底');
   } finally {
     proto.animate = orig;
+    host.remove();
+  }
+});
+
+/*
+ * 点地图这件事的命中检测。
+ *
+ * 线上报过两个现象："放大地图之后点格子没反应"、"地图右下角一块怎么点都没用"。
+ * 前者是 `pointerdown` 里无条件 `setPointerCapture`，把随后派生的 click
+ * 整个改到了 `.board-scroll` 上；后者是缩放条/聊天停靠区压在棋盘上吃掉了点击。
+ * 前者的后果正好落在 `coordsFromEvent` 这一层——拿到的事件目标根本不是格子。
+ * 所以这里守两件事：目标不是格子时能不能算出来，以及别把键盘触发的点击算成假命中。
+ */
+check('点地图：落点不在格子上，也要能算出是哪一格', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 606);
+  renderBoard(host, playerView(s2, 'A'), {
+    selectedId: null, reach: [], targets: [], siegeTargets: [],
+    selectedCityId: null, placeable: [], threat: [],
+  });
+  const tiles = host.querySelector<HTMLElement>('.tiles')!;
+  assert.ok(tiles, '棋盘里应该有 .tiles 这一层');
+  // jsdom 没有布局：把格栅层的矩形钉死成 400×400，左上角在 (100, 50)
+  Object.defineProperty(tiles, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 100, top: 50, width: 400, height: 400, right: 500, bottom: 450, x: 100, y: 50 }),
+  });
+  const view = doc.defaultView!;
+  const clickAt = (target: Element, x: number, y: number): Event => {
+    const ev = new view.MouseEvent('click', { clientX: x, clientY: y, bubbles: true });
+    target.dispatchEvent(ev);
+    return ev;
+  };
+
+  try {
+    // 1) 老路径：事件目标就是格子本身，照旧按 data-x 走
+    const one = host.querySelector<HTMLElement>('.tile[data-x="5"][data-y="7"]');
+    assert.ok(one, '应该有 5,7 这一格');
+    assert.deepEqual(coordsFromEvent(clickAt(one, 0, 0)), { x: 5, y: 7 }, '点在格子上还是按格子算');
+
+    // 2) 兜底：目标不是格子，但落在格栅范围内 → 按几何换算
+    //    16 格 / 400px = 每格 25px。取第 3 列、第 2 行的中心
+    assert.deepEqual(
+      coordsFromEvent(clickAt(host, 100 + 25 * 3.5, 50 + 25 * 2.5)),
+      { x: 3, y: 2 },
+      '点在棋盘内边距（没有 data-x）上，也要换算到对应格子',
+    );
+
+    // 3) 兜底：点在棋盘左边缘的留白里（格栅外）→ 夹到 0，不返回 null
+    assert.deepEqual(
+      coordsFromEvent(clickAt(host, 98, 60)),
+      { x: 0, y: 0 },
+      '点在内边距最外侧，夹到边界格，而不是整下作废',
+    );
+
+    // 4) 键盘触发的 click 坐标是 0,0：不能算成"点了左上角"
+    assert.equal(coordsFromEvent(clickAt(host, 0, 0)), null, '0,0 是键盘点击的默认坐标，不算命中');
+
+    // 5) 棋盘之外一律 null
+    assert.equal(coordsFromEvent(clickAt(doc.body, 10, 10)), null, '棋盘外面点不到格子');
+  } finally {
     host.remove();
   }
 });

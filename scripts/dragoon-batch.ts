@@ -27,6 +27,21 @@ const BASE_SEED = Number(argOf('seed', '9500'));
 const CAP = Number(argOf('cap', '200'));
 const PARALLEL = Number(argOf('parallel', String(os.cpus().length)));
 const OUT = argOf('out', 'results/dragoon');
+/** 这一批"无脑堆"的是哪个兵（默认龙骑兵；毒蝙蝠用 poison-bat） */
+const TYPE = argOf('type', 'dragoon-rider');
+const ERA = Number(argOf('era', '3'));
+const SIZE = Number(argOf('size', '20'));
+const AI_PATH = argOf('ai', '');
+const LABEL = argOf(
+  'label',
+  ({
+    'poison-bat': '毒蝙蝠',
+    'dragoon-rider': '龙骑兵',
+    'griffin-rider': '狮鹫骑士',
+    harpy: '鹰身女妖',
+    'spider-rider': '蜘蛛骑士',
+  } as Record<string, string>)[TYPE] ?? TYPE,
+);
 
 mkdirSync(OUT, { recursive: true });
 
@@ -54,6 +69,10 @@ function runJob(job: Job): Promise<{ ok: boolean; ms: number; why?: string }> {
         '--seed', String(job.seed),
         '--seat', job.seat,
         '--cap', String(CAP),
+        '--era', String(ERA),
+        '--size', String(SIZE),
+        '--type', TYPE,
+        ...(AI_PATH ? ['--ai', AI_PATH] : []),
         '--out', job.file,
       ],
       { stdio: ['ignore', 'ignore', 'pipe'] },
@@ -77,7 +96,7 @@ async function main(): Promise<void> {
   let done = 0;
   let failed = 0;
   console.log(
-    `龙骑兵流 vs 标准 AI：${jobs.length} 局（${SEEDS} 颗种子 × 2 个座位）· 并发 ${limit} · ` +
+    `${LABEL}流 vs 标准 AI：${jobs.length} 局（${SEEDS} 颗种子 × 2 个座位）· ${ERA} 代 ${SIZE}×${SIZE} · 并发 ${limit} · ` +
       `种子 ${BASE_SEED}..${BASE_SEED + SEEDS - 1} · 火药 20×20`,
   );
 
@@ -155,32 +174,32 @@ async function main(): Promise<void> {
   const B = seatRate('B');
 
   const lines: string[] = [];
-  lines.push('# 龙骑兵流 20 局 · 结果');
+  lines.push(`# ${LABEL}速攻 · ${rows.length} 局结果`);
   lines.push('');
-  lines.push('> 打法：全力攒钱只买龙骑兵（265 金），直冲对面经济单位 → 战斗单位；');
+  lines.push(`> 打法：全力攒钱只买${LABEL}，直冲对面经济单位 → 战斗单位；`);
   lines.push('> 白送的战斗单位守家，白送的农民继续赚钱。对手是标准 AI（高级）。');
-  lines.push('> 一颗种子跑两局（龙骑兵坐 A / 坐 B），抵消先手与地图偏好。');
+  lines.push(`> ${ERA} 代开局 ${SIZE}×${SIZE}，一颗种子跑两局（${LABEL}坐 A / 坐 B），抵消先手与地图偏好。`);
   lines.push('');
   lines.push('## 总体');
   lines.push('');
   lines.push('| 指标 | 值 |');
   lines.push('|---|---|');
   lines.push(`| 对局 | ${rows.length} 局（${SEEDS} 颗种子 × 2 座位） |`);
-  lines.push(`| 龙骑兵方胜 | **${wins} / ${rows.length}（${pct(wins, rows.length)}）** |`);
+  lines.push(`| ${LABEL}方胜 | **${wins} / ${rows.length}（${pct(wins, rows.length)}）** |`);
   lines.push(`| 负 | ${losses}（${pct(losses, rows.length)}） |`);
   lines.push(`| 未决（打满 ${CAP} 回合） | ${draws} |`);
   lines.push(`| 坐 A 时胜率 | ${A.w}/${A.n}（${pct(A.w, A.n)}） |`);
   lines.push(`| 坐 B 时胜率 | ${B.w}/${B.n}（${pct(B.w, B.n)}） |`);
   lines.push(`| 平均回合 | ${avg((r) => r.turns).toFixed(1)} |`);
   lines.push('');
-  lines.push('## 龙骑兵的账（每局平均）');
+  lines.push(`## ${LABEL}的账（每局平均）`);
   lines.push('');
   lines.push('| 指标 | 值 |');
   lines.push('|---|---|');
   lines.push(`| 造出 | ${avg((r) => r.dragoonsBuilt).toFixed(1)} 个（合计 ${sum((r) => r.dragoonsBuilt)}） |`);
   lines.push(`| 阵亡 | ${avg((r) => r.dragoonsLost).toFixed(1)} 个 |`);
   lines.push(`| 终局存活 | ${avg((r) => r.dragoonsAlive).toFixed(1)} 个（峰值 ${avg((r) => r.peakDragoons).toFixed(1)}） |`);
-  lines.push(`| 花在龙骑兵上的金 | ${Math.round(avg((r) => r.goldOnDragoons)).toLocaleString('en-US')} |`);
+  lines.push(`| 花在${LABEL}上的金 | ${Math.round(avg((r) => r.goldOnDragoons)).toLocaleString('en-US')} |`);
   lines.push(`| 打出的伤害 | ${Math.round(avg((r) => r.dmgDealt))} |`);
   lines.push(`| 承受的伤害 | ${Math.round(avg((r) => r.dmgTaken))} |`);
   lines.push(`| 交换比（输出/承伤） | ${(totDealt / Math.max(1, totTaken)).toFixed(2)} |`);

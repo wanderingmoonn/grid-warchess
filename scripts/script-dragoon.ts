@@ -44,6 +44,19 @@ import type { AiBudget } from '../src/core/ai-meta.ts';
 /** 这一版只买它 */
 export const DRAGOON = 'dragoon-rider';
 
+/**
+ * 这一局冲的是哪个兵。
+ *
+ * 原来是写死的龙骑兵，2026-11-03 起用 `setRushUnit()` 换兵种，好复用它去测
+ * "无脑堆某一个兵"的其他版本（毒蝙蝠、狼骑士……）。一个进程只跑一局，
+ * 所以模块级的可变状态是安全的。
+ */
+let RUSH = DRAGOON;
+export const setRushUnit = (id: string): void => {
+  RUSH = id;
+};
+export const rushUnit = (): string => RUSH;
+
 function other(p: PlayerId): PlayerId {
   return p === 'A' ? 'B' : 'A';
 }
@@ -80,7 +93,7 @@ function unblockCity(s: GameState, me: PlayerId, city: City): Action | null {
 function dragoonAttack(s: GameState, me: PlayerId): Action | null {
   let best: { u: Unit; t: Unit; score: number } | null = null;
   for (const u of unitsOf(s, me)) {
-    if (u.type !== DRAGOON || u.acted || !canAttack(u)) continue;
+    if (u.type !== RUSH || u.acted || !canAttack(u)) continue;
     for (const t of attackableTargets(s, u)) {
       const kill = previewAttack(s, u, t).toDefender >= t.hp;
       const score =
@@ -159,9 +172,9 @@ export function dragoonNextAction(full: GameState, budget: AiBudget): Action | n
   const s = playerView(full, full.current).state;
   const me = s.current;
   const mine = unitsOf(s, me);
-  const dragoons = mine.filter((u) => u.type === DRAGOON);
+  const dragoons = mine.filter((u) => u.type === RUSH);
   const cities = citiesOf(s, me).filter((c) => !c.ruined);
-  const def = s.unitTypes[DRAGOON];
+  const def = s.unitTypes[RUSH];
   const gold = s.players[me].gold;
 
   /*
@@ -185,8 +198,8 @@ export function dragoonNextAction(full: GameState, budget: AiBudget): Action | n
     for (const city of [...cities].sort((a, b) => b.era - a.era || a.hp - b.hp)) {
       const blocked = unblockCity(s, me, city);
       if (blocked) return blocked;
-      if (recruitSpawnCells(s, city.id, undefined, DRAGOON).length === 0) continue;
-      return { type: 'RECRUIT', cityId: city.id, unitType: DRAGOON };
+      if (recruitSpawnCells(s, city.id, undefined, RUSH).length === 0) continue;
+      return { type: 'RECRUIT', cityId: city.id, unitType: RUSH };
     }
   }
 
@@ -247,7 +260,7 @@ export function dragoonNextAction(full: GameState, budget: AiBudget): Action | n
   const home = [...cities].sort((a, b) => b.era - a.era)[0];
   if (home) {
     for (const u of mine) {
-      if (utype(s, u.type).category !== 'combat' || u.type === DRAGOON || u.moved) continue;
+      if (utype(s, u.type).category !== 'combat' || u.type === RUSH || u.moved) continue;
       if (distance(u, home) <= 3) continue;
       const step = stepToward(s, u, home.x, home.y);
       if (step) return step;

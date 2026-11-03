@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.20",
+  "version": "0.3.21",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -39,7 +39,10 @@
     "probe:score": "node --experimental-strip-types scripts/probe-recruit-score.ts",
     "balance:econ": "node --experimental-strip-types scripts/balance-econ.ts",
     "balance:econ:report": "node --experimental-strip-types scripts/econ-report.ts",
-    "calibrate:k": "node --experimental-strip-types scripts/calibrate-k.ts"
+    "calibrate:k": "node --experimental-strip-types scripts/calibrate-k.ts",
+    "fantasy:table": "node --experimental-strip-types scripts/fantasy-table.ts",
+    "duel:batch": "node --experimental-strip-types scripts/ai-duel-batch.ts",
+    "era:table": "node --experimental-strip-types scripts/era-table.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

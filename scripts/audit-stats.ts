@@ -26,7 +26,7 @@
  */
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { availableExpansions } from '../src/core/expansions.ts';
-import { abilityValue, effectiveHp } from '../src/core/unit-value.ts';
+import { abilityValue, combatCore } from '../src/core/unit-value.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
 
 /**
@@ -40,9 +40,14 @@ const rangeT = (r: number): number => 1 + Math.min(5, Math.max(0, r - 1)) * 0.3;
 const moveT = (m: number): number => 1 + Math.max(0, m - 2) * 0.12;
 const visionT = (v: number): number => 1 + Math.max(-2, Math.min(6, v - 3)) * 0.04;
 
-const dprOf = (d: UnitTypeDef): number => (d.atk + (d.magicAtk ?? 0) * 1.2) * Math.max(1, d.burst ?? 1);
+/**
+ * 输出与等效血都问 `combatCore`：物理/魔法分通道、破甲砍半甲、威胁谱带魔抗。
+ * 上一版这里算的是 `(攻 + 魔攻×1.2) × 段数`——把魔法塞进物理通道再一起减甲，
+ * 正是模型里刚修掉的那个错，回归特征没理由再用一遍。
+ */
+const dprOf = (d: UnitTypeDef): number => combatCore(d).dps;
 /** 等效血直接问模型：单一「20 攻」那条曲线在厚甲段是发散的，别在回归里再用一遍 */
-const ehpOf = (d: UnitTypeDef): number => effectiveHp(d.maxHp, d.armor);
+const ehpOf = (d: UnitTypeDef): number => combatCore(d).ehp;
 
 /** 最小二乘：正规方程 + 高斯消元（特征只有 6 列，不值得引库） */
 function solve(A: number[][], y: number[]): number[] {

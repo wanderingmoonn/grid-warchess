@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
-import { abilityValue, effectiveHp, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
+import { abilityValue, combatCore, effectiveHp, raidPremium, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
 import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
@@ -566,6 +566,55 @@ test('等效血：护甲 ≤ 6 时，"20 攻"单点假设仍然够用（差 < 20
     const diff = Math.abs(spectrum - single) / single;
     assert.ok(diff < 0.2, `护甲 ${a} 两套口径差 ${(diff*100).toFixed(0)}%，单点假设在这里就不该用了`);
   }
+});
+
+test('等效血：魔抗越高越耐打，且不吃护甲那条线',()=>{
+  const base = effectiveHp(100, 10, 0);
+  assert.ok(effectiveHp(100, 10, 6) > base, '加魔抗之后等效血没涨');
+  assert.ok(effectiveHp(100, 10, 14) > effectiveHp(100, 10, 6), '魔抗的收益不单调');
+  // 法师那一档不吃护甲：纯堆甲对魔法伤害没有半点用，涨幅必须小于"物理独大"的世界
+  const armorGain = effectiveHp(100, 18, 0) / effectiveHp(100, 0, 0);
+  assert.ok(armorGain < 6, `护甲 0→18 的等效血涨了 ${armorGain.toFixed(1)} 倍，说明魔法通道没算进去`);
+});
+
+test('输出：魔法不吃护甲，破甲对厚甲更值钱',()=>{
+  const s = arena();
+  const base = s.unitTypes['militia']!;
+  // 同一个兵：物攻 20 与 魔攻 20，在厚甲靶子面前该由魔法赢
+  const phys = {...base, id:'t-phys', atk:20, magicAtk:0, abilities:[]};
+  const mag = {...base, id:'t-mag', atk:0, magicAtk:20, abilities:[]};
+  const pierce = {...base, id:'t-pierce', atk:20, magicAtk:0, abilities:['armor-pierce']};
+  assert.ok(combatCore(mag).dps > combatCore(phys).dps * 0.9 - 1, '魔法 20 反而比物攻 20 弱很多');
+  assert.ok(combatCore(pierce).dps > combatCore(phys).dps, '破甲没有提高输出');
+});
+
+test('骚扰复利：能反复上门的兵才有溢价，走不快的没有',()=>{
+  const s = arena();
+  const mk = (id: string, over: Record<string, unknown>) => ({ ...s.unitTypes[id]!, ...over });
+  // 龙骑兵（移 5 + 飞行 + 溅射）应该有明显溢价
+  const dragoon = s.unitTypes['dragoon-rider'] ?? mk('militia', { move: 5, flight: true, layer: 'air', atk: 26, maxHp: 58, armor: 6, splash: 1, cost: 265 });
+  const premium = raidPremium(dragoon as never, NEUTRAL_CONTEXT);
+  assert.ok(premium > 0.05, `龙骑兵的骚扰溢价只有 ${(premium*100).toFixed(1)}%，几乎等于没算`);
+  // 不能动的民兵没有
+  assert.equal(raidPremium(s.unitTypes['militia']!, NEUTRAL_CONTEXT), 0, '移 1 的民兵不该有骚扰溢价');
+  // 脆皮快兵即使够得着，溢价也该明显更低
+  const glass = mk('militia', { move: 6, flight: true, layer: 'air', atk: 15, maxHp: 24, armor: 1, cost: 120 });
+  assert.ok(raidPremium(glass as never, NEUTRAL_CONTEXT) < premium, '脆皮飞行兵的溢价不该高于龙骑兵');
+});
+
+test('等效血：同一件甲，在低代比在高代值钱（对手更弱）',()=>{
+  const early = effectiveHp(100, 6, 0, 2);
+  const late = effectiveHp(100, 6, 0, 6);
+  assert.ok(early > late * 1.15, `甲 6 在 2 代 ×${(early/100).toFixed(2)}、6 代 ×${(late/100).toFixed(2)}，差别太小——谱可能没按时代取`);
+});
+
+test('跨代：2 代兵放到 6 代的谱下，输出和生存都会掉',()=>{
+  const s = arena();
+  const bat = s.unitTypes['militia']!;   // 拿一个 1 代兵当样本
+  const own = combatCore(bat, {era: bat.era});
+  const inSix = combatCore(bat, {era: 6});
+  assert.ok(inSix.dps < own.dps, `低代兵在 6 代谱下输出没掉：${inSix.dps.toFixed(1)} vs ${own.dps.toFixed(1)}`);
+  assert.ok(inSix.ehp < own.ehp, `低代兵在 6 代谱下等效血没掉：${inSix.ehp.toFixed(0)} vs ${own.ehp.toFixed(0)}`);
 });
 
 test('掠空：速攻比均势值钱，均势又比龟缩值钱',()=>{

@@ -19,7 +19,7 @@
 import { hasAbility } from './abilities.ts';
 import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { hasHold, holdOf, holdRoom } from './carry.ts';
-import { isProducer } from './produce.ts';
+import { isProducer, produceUsableCount } from './produce.ts';
 import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
 import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
@@ -1368,6 +1368,21 @@ interface Fields {
    * 交换比难看成这样，很大一部分不是伤害不够，是伤害散了。
    */
   focusTargetId: string | null;
+  /**
+   * 这张图值不值得养海军（0~1，见 `seaDemand`）。
+   *
+   * 建造评分要用它：船坞造不造，取决于"船是不是唯一的路"，而不是"离敌人多近"。
+   * 放进 Fields 是因为 `seaDemand` 里有一趟全图连通性搜索——每个候选格子
+   * 各算一次，等于拿几百次洪泛去换一个每回合都不变的数。
+   */
+  sea: number;
+  /**
+   * 局势现在打在第几代（见 `eraNowOf`）。
+   *
+   * 建造也要问这一句：带白名单的产兵点（船坞三代 / 造船厂五代 / 海军船台七代）
+   * 落成时会把时代钉死，提前修就是一块石头。AI 不该提一个注定白费的建造。
+   */
+  era: number;
 }
 
 
@@ -2411,6 +2426,10 @@ function rawBuildScore(
   spot: { x: number; y: number; terrain: Terrain },
   land: Map<string, number[]>,
   mood?: AiMood,
+  /** 这张图值不值得养海军（Fields.sea），只有水上产兵点读它 */
+  sea = 0,
+  /** 局势现在打在第几代（Fields.era），只有带白名单的产兵点读它 */
+  era = 0,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
@@ -2492,6 +2511,63 @@ function rawBuildScore(
       def.cost * 0.04 -
       (risky ? 8 : 0)
     );
+  }
+
+  /*
+   * 水上产兵点（船坞 / 造船厂 / 海军船台）：**不跟军营共用一条线**。
+   *
+   * 这两件事的价值来源不一样，混在一起会有两个后果，每一个都足以让它永远造不出来：
+   *
+   *   · **抢额度**。军营是"每城一座、最多四座"，河道图上 AI 的营早就顶满了。
+   *     船坞一进来就是 -999：玩家能用、AI 一次不造。实测 4 局 20×20 海军包，
+   *     造船厂出现 0 次（`scripts/diag-build.ts`）。
+   *   · **量错了尺子**。军营的分数按"离敌人多近"给，可船坞跟敌人远近几乎无关，
+   *     它只跟"这张图有多少水、我能不能靠陆路摸到对面"有关（`seaDemand`）。
+   *
+   * 判据写在数据里（buildOn 里有水），不写死 id：以后再加一档船坞不用回来改这里。
+   */
+  const onWater = (def.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
+  if (isProducer(def) && onWater) {
+    // 船是奢侈品的时候造船坞，等于把钱埋进水里
+    if (sea <= 0) return -999;
+    // 落成即废的那几档：白名单里全是更高代的船，现在修好也下不了水。
+    // 规则层（doBuild）也会拒，这里先拦是不让 AI 提一个必被拒的动作——
+    // 执行方遇到非法动作会中断整回合。
+    const usable = produceUsableCount(def, s.unitTypes, era || def.era);
+    if (usable !== null && usable <= 0) return -999;
+
+    const cities = citiesOf(s, unit.owner);
+    if (cities.length === 0) return -999;
+
+    // 自己的水上产兵点单独计数，不占军营的额度。
+    // 上限按城市数给、最多两座：一座船坞够一支舰队出门，两座是"两线同时下水"。
+    const docks = unitsOf(s, unit.owner).filter((u) => {
+      const ud = utype(s, u.type);
+      return isProducer(ud) && (ud.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
+    }).length;
+    if (docks >= Math.min(2, Math.max(1, Math.floor(cities.length / 2)))) return -999;
+
+    // 离自家城市太远就没有意义：船是要拿来保交通线、抢滩头的，
+    // 在没人去的水塘里修一座船坞，只是多一个被顺手拆掉的目标。
+    let nearOwn = Infinity;
+    for (const c of cities) nearOwn = Math.min(nearOwn, distance(spot, c));
+    if (nearOwn > 10) return -999;
+
+    // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
+    /*
+     * 基准分给到 70：这一档必须**一次就建起来**。
+     *
+     * 标定过程（4 局 20×20 纵河图，水域 12.8%，脚本 `diag-build.ts --map river-v`）：
+     *   · 44 分（沿用军营的量级）→ 0 次。它不是被规则拒掉的，是永远当不上最优动作：
+     *     建造候选和走位候选在同一个池子里比大小，工程兵一步"朝桥头挪一格"就有四五十分，
+     *     而船坞只值四十几——于是那座船坞连一次都没被选中过（候选生成进了 1819 次）。
+     *   · 244 分 → 2 局建 5 座，机制确认无误，但显然过头了。
+     *   · 70 分 → 每局一座左右，抢在桥和营前面动手，之后被 `docks × 45` 迅速压下去。
+     *
+     * 为什么敢让它压过桥的 58 分基准：真需要过河时 `scoreBuild` 会给非桥建造扣 20 分，
+     * 桥那条路有自己的护栏（见 needBridge 分支），不会被一座船坞挡死。
+     */
+    return 70 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
   }
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
@@ -2620,7 +2696,7 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood);
+  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood, all.sea, all.era);
   if (raw <= -900) return raw;
 
   const canBridge = (utype(s, unit.type).builds ?? []).includes('bridge');
@@ -3902,8 +3978,44 @@ export const aiTrace = {
  * 而它在人手里是 95% 胜率打法的核心。公式和审计脚本现在是同一份实现，
  * 不会再出现"审计说它便宜、AI 说它贵"的自相矛盾。
  */
-const combatPower = unitPower;
-const combatEfficiency = unitEfficiency;
+/*
+ * 两把尺子并存：**决策**用哪一把，是可以用开关切的。
+ *
+ * 起因是"镜子对局"的读数：新尺子（兰彻斯特 + 时代谱 + 复利）在 3 代打不过旧尺子
+ * 那套 `攻×√血×射程`。而旧尺子并不"更对"——它只是偏向便宜、量大、带射程，
+ * 恰好和这套 AI 目前**只会打的那种仗**合拍：堆人、平推、不撤不集火。
+ *
+ * 所以把选择权留成开关，而不是把结论写死：
+ *   WB_OLD_RULER=1 时采购用旧尺子（新模型照旧供报表/审计用）。
+ * 这样"报表说 A 好、AI 买 B"的矛盾是显式的，而不是藏在代码里。
+ */
+/*
+ * 默认走旧尺子（2026-11-03 定）：新尺子的估价更讲道理，但采购换过去之后
+ * 镜子对局从 50% 掉到 35%——因为贵兵需要一套 AI 还没有的战术。
+ * 想用新尺子跑实验：`WB_RULER=new`。
+ */
+const OLD_RULER =
+  (typeof process === 'undefined' ? '' : process.env.WB_RULER) !== 'new';
+const oldPower = (d: UnitTypeDef): number =>
+  (d.atk + (d.magicAtk ?? 0) * 1.2) *
+  Math.sqrt(d.maxHp) *
+  (1 + Math.min(4, Math.max(0, (d.range ?? 1) - 1)) * 0.45);
+const oldEfficiency = (d: UnitTypeDef, price: number): number =>
+  oldPower(d) / Math.max(20, price) ** 0.8;
+
+const combatPower: typeof unitPower = OLD_RULER ? oldPower : unitPower;
+const combatEfficiency: typeof unitEfficiency = OLD_RULER ? oldEfficiency : unitEfficiency;
+
+/**
+ * 局势现在打在第几代：取**场上已经出现的最高城代**（下限是开局时代）。
+ *
+ * 单拎出来是因为有两个地方要问它，而它们必须得到同一个答案：
+ * 估价（valueContextOf 的时代谱）和建造（判断一座产兵点落成之后造不造得出东西）。
+ * 两处各写一遍，就会在某天只改了一处。
+ */
+function eraNowOf(s: GameState): number {
+  return Math.max(s.config.startEra, ...s.cities.filter((c) => !c.ruined).map((c) => c.era));
+}
 
 /**
  * 这一刻"值多少钱"要看局面：移速在防守时打折、压上时加价；
@@ -3918,7 +4030,16 @@ function valueContextOf(s: GameState, me: PlayerId, plan: AiPlan): ValueContext 
     mine.length === 0
       ? 0
       : Math.min(1, mine.reduce((n, u) => n + utype(s, u.type).vision, 0) / (6 * Math.max(1, mine.length)));
-  return { tempo, visionCoverage: coverage, fog: s.fog !== false };
+  /*
+   * 打在"第几代"：取**场上已经出现的最高城代**。
+   *
+   * 这一项以前没有，于是 6 代的对局里 AI 还在拿 3 代的威胁谱估价——
+   * 厚甲被高估、低代兵不显废。局势在哪一代，就该用哪一代的谱，
+   * "低代兵在高代无力"这件事才会体现在采购里（而不是靠额外的惩罚项）。
+   */
+  const eraNow = eraNowOf(s);
+  // 水的占比决定"船能不能到场"：模型按可作战面积给水军打折（见 unit-value 的 domainFactor）
+  return { tempo, visionCoverage: coverage, fog: s.fog !== false, waterShare: waterShare(s), era: eraNow };
 }
 
 function recruitCandidate(
@@ -4978,6 +5099,9 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
     // 集火目标：整回合算一次，所有单位的攻击候选都看它
     focusTargetId: pickFocusTarget(view, me),
+    // 海军需求 / 局势时代：同样整回合算一次，建造评分每个候选格都要读
+    sea: seaDemand(view, me),
+    era: eraNowOf(view),
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),

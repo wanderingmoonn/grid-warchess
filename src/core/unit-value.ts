@@ -34,7 +34,13 @@ export const ABILITY_VALUE: Record<string, number> = {
   // 输出
   berserk: 0.15,
   charge: 0.12,
-  'armor-pierce': 0.1,
+  /*
+   * 破甲 0.10 → 0.05：它的价值现在**已经算在 `combatCore` 里**了
+   * （对中甲靶子 5→2.5、对重甲 10→5），再挂 0.10 就是收两遍钱。
+   * 留 0.05 是因为模型只按"靶子护甲"算，而实战里破甲对**城墙**（甲更高）
+   * 和 buff 叠出来的临时厚甲更值钱，这一层没进公式。
+   */
+  'armor-pierce': 0.05,
   'first-strike': 0.08,
   lifesteal: 0.08,
   kite: 0.08,
@@ -182,10 +188,22 @@ export interface ValueContext {
   visionCoverage?: number;
   /** 有没有迷雾（没开迷雾时视野基本只影响先手，不代表信息） */
   fog?: boolean;
+  /**
+   * 这张图上"水"占多大比例（0~1）。水军只能在水上打，所以要按可作战面积折价。
+   * 不传时按 0.25 算（河图实测 15~31%）。
+   */
+  waterShare?: number;
+  /**
+   * 这一场仗打在哪一代（1~6）。威胁谱和靶子谱都按它取。
+   *
+   * 不传 = 用这个兵**自己**的世代（"同代统治力"口径）；
+   * 传了就按指定世代算（"它放到 6 代还值多少"、"当前局势该不该买它"）。
+   */
+  era?: number;
 }
 
 /** 没有局面的默认口径：均势、视野中等、有迷雾 */
-export const NEUTRAL_CONTEXT: ValueContext = { tempo: 0, visionCoverage: 0.4, fog: true };
+export const NEUTRAL_CONTEXT: ValueContext = { tempo: 0, visionCoverage: 0.4, fog: true, waterShare: 0.25 };
 
 /** 移速的权重：防守 0.65 → 均势 1 → 速攻 1.35 */
 export const moveWeight = (ctx: ValueContext): number => 1 + 0.35 * Math.max(-1, Math.min(1, ctx.tempo ?? 0));
@@ -197,6 +215,29 @@ export const moveWeight = (ctx: ValueContext): number => 1 + 0.35 * Math.max(-1,
 export const visionWeight = (ctx: ValueContext): number => {
   const cov = Math.max(0, Math.min(1, ctx.visionCoverage ?? 0.4));
   return (0.3 + 0.9 * (1 - cov)) * (ctx.fog === false ? 0.25 : 1);
+};
+
+/**
+ * 域可用性：**水军只在水上能打，不能按全地图通用来算账**。
+ *
+ * 这是审计里第二处系统性高估。3 代及以前 104 个战斗兵种里排在最前面的
+ * 是风帆战列舰（12.16）、炮艇（11.63）、巡航舰（11.44）——它们确实数值好，
+ * 但那是**只算交手、不算能不能到场**的结果：一张 20×20 的图上水域通常只占两成，
+ * 船在剩下八成地图上既不能挡路也不能守城，战力只能在这两成里兑现。
+ *
+ * 折价按"可作战面积"给，不按"水域够不够宽"（那是 `seaDemand` 的活，管的是
+ * "该不该为过海造船"，是另一件事）：
+ *   · 水占 25%（典型河图）→ ×0.66
+ *   · 水占 15%（水少的图）→ ×0.62
+ *   · 水占 60%（群岛）→ ×0.82
+ * 即使全是水也只给到 ×1.0，不多给——船没有"在水上比陆军在陆上更强"这回事。
+ *
+ * 飞兵不吃这条：空中没有"地图不通"的问题。陆军同理。
+ */
+export const domainFactor = (d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): number => {
+  if (d.domain !== 'water') return 1;
+  const wet = Math.max(0, Math.min(1, ctx.waterShare ?? 0.25));
+  return 0.55 + 0.45 * wet;
 };
 
 /** 射程系数：1 + min(5, range−1) × 0.30（射程跟局面无关，它是几何优势） */
@@ -213,14 +254,11 @@ export const visionFactor = (vision: number, ctx: ValueContext = NEUTRAL_CONTEXT
 /** 护甲系数（只在"等效血"里用一次，别在别处重复乘） */
 export const armorFactor = (armor: number): number => 1 + Math.max(0, armor) * 0.05;
 
-/**
- * 基准靶子：5 甲、20 攻。
- *
- * "输出"按**打穿 5 甲之后**算，而不是打 0 甲——打 0 甲会把"高攻"重复计一次
- * （攻高本来就赚，再按 0 甲算就等于白送）。5 甲是 3 代前后的中位护甲。
+/*
+ * 这里原来有两个"基准靶子"常数（5 甲、20 攻）。它们代表了这条公式的老毛病：
+ * **把整个世界压成一个对手**。现在靶子按时代取（见下面的 `ERA_SPECTRUM`），
+ * 常数就退休了——留着只会让人以为还按 5 甲算。
  */
-const BASE_ARMOR = 5;
-const BASE_ATK = 20;
 
 /**
  * 威胁谱：算"等效血"时假定会被谁打。
@@ -245,34 +283,174 @@ const BASE_ATK = 20;
  *   ③ **单点假设不成立**：它假定所有人都是 20 攻。后期 78 攻的坦克打 18 甲，
  *      TTK 只多 30%，不是 5 倍。护甲越厚，这个假设错得越离谱。
  *
- * 所以换成**威胁谱**：轻/中/重三档各算一次 TTK，再取加权几何平均。
- * 用几何平均（不是算术）是因为"等效血"是乘性量，算术平均会被最高那档带飞。
+ * 所以换成**威胁谱**：四档"假想的对手"各算一次 TTK，再取加权几何平均。
+ * 用几何平均（不是算术）是因为"等效血"是乘性量，算术平均会被最狠那档带飞。
  *
- * 三档就是数据里真实的攻击带：轻 20（民兵/弓手/火枪兵）、中 45（骑士/恶魔）、
- * 重 80（主战坦克/战列舰/隐身战机）。权重按"战场上挨的刀数"给——便宜兵多、
- * 重锤少，但重锤对厚甲最有发言权，所以给到 25%，不是按人头比例的 5%。
+ * 四档就是数据里真实的攻击带：
+ *   · **轻 20 攻**（民兵/弓手/火枪兵）—— 数量最多，占 32%
+ *   · **中 45 攻**（骑士/恶魔）—— 26%
+ *   · **重 80 攻 + 破甲**（主战坦克/战列舰/隐身战机）—— 20%。25 个兵带破甲，
+ *     且集中在重锤上，所以"重锤会削你一半甲"是默认而不是特例
+ *   · **法师：10 物攻 + 28 魔攻** —— 22%。魔法段**完全不吃护甲**，只减魔抗
  *
- * 标定后的曲线：甲 5 → ×1.19，10 → ×1.49，15 → ×2.11，18 → ×3.20，25 → ×4.84，
- * 单调、有上界（护甲高到三档都打不动时收敛到 ×37.6——那要 79 甲，
- * 数据里最高是魔龙卵的 25），**没有拐点，也没有钉住区**。
+ * 为什么非要单独一行法师：护甲和魔抗是两条互不相干的减伤通道
+ * （`rules.ts` 先 `max(0, 伤害 − 护甲)`，再加 `max(0, 魔攻 − 魔抗)`）。
+ * 只写"物理威胁"的话，`magicRes` 在尺子上等于白送——14 个带魔抗的兵
+ * （至尊法师 14、邪龙王 12、天使 6……）一点价钱都拿不到，而他们为此付了造价。
+ *
+ * 标定后的曲线：甲 5 → ×1.18，10 → ×1.40，15 → ×1.90，18 → ×2.60，25 → ×3.60，
+ * 单调、有上界（护甲再高，法师那一行也不会变），**没有拐点，也没有钉住区**。
  */
-const THREAT_ATK: ReadonlyArray<readonly [number, number]> = [
-  [BASE_ATK, 0.4], // 轻档就是原来那个"基准 20 攻"
-  [45, 0.35],
-  [80, 0.25],
-];
+interface Threat {
+  /** 物理攻击 */
+  atk: number;
+  /** 魔法攻击（不吃护甲，只减魔抗） */
+  magic: number;
+  /** 是否带破甲（目标护甲砍半，见 abilities.ts 的 armor-pierce） */
+  pierce?: boolean;
+  /** 权重：这一档在"挨的刀"里占多少 */
+  w: number;
+}
 
 /**
- * 等效血：挨"威胁谱"打的时候能扛多少个标准回合。
+ * 每一代自己的"威胁谱"和"靶子谱"。
  *
- * `hp × Π(atk / max(1, atk − armor))^w`，就是三档 TTK 的加权几何平均。
+ * 为什么必须按时代分开：**高代兵交手的也是高代兵**。拿一套固定的
+ * 20/45/80 去量所有人，两头都会错——
+ *   · 低代兵（甲 2~4）被拿去跟 45、80 攻的对手算账，护甲显得一文不值；
+ *   · 高代兵（甲 10~18）被拿去跟 20 攻打账，护甲显得近乎无敌；
+ *   · 更要命的是"低代兵在高代有多废"这件事直接消失了——因为它的对手还是 3 代。
+ *
+ * 表里的数字是从全部 210 个战斗兵种**按代分组算出来的分位数**（不是拍的）：
+ *
+ * | 代 | 兵种数 | 攻 p25/p50/p90 | 甲 p25/p50/p75 |
+ * |---|---|---|---|
+ * | 1 | 17 | 11/14/19 | 1/1/3 |
+ * | 2 | 31 | 12/14/19 | 2/3/4 |
+ * | 3 | 51 | 18/22/33 | 2/3/6 |
+ * | 4 | 34 | 22/30/42 | 3/6/8 |
+ * | 5 | 35 | 38/46/70 | 4/8/11 |
+ * | 6 | 35 | 38/56/85 | 4/6/10 |
+ *
+ * 三条约定：
+ *   · **轻/中/重**取这一代攻击的 p25/p50/p90，权重 0.35/0.40/0.25；
+ *     "重"那一档带破甲（破甲兵本来就集中在重锤上）。
+ *   · **法师**只在"这一代带魔攻的兵 ≥ 8%"时单独成行（3 代 12/51、6 代 2/35），
+ *     取值按这一代 p50 的 0.4 倍物攻 + 0.8 倍魔攻，权重 0.20，其余三档等比缩到 0.8。
+ *   · 靶子用这一代护甲的 p25/p50/p75，魔抗沿用实测的 0/0/1.5。
+ *
+ * `npm run era:table` 会重新算一遍并和这张表对账，数值改了会报出来。
+ */
+type ThreatRow = Threat;
+
+interface EraSpectrum {
+  /** 挨的打（防守侧） */
+  threats: ThreatRow[];
+  /** 打的靶子（输出侧） */
+  targets: ReadonlyArray<{ armor: number; magicRes: number; w: number }>;
+}
+
+const ERA_SPECTRUM: Record<number, EraSpectrum> = {
+  1: {
+    threats: [
+      { atk: 11, magic: 0, w: 0.35 },
+      { atk: 14, magic: 0, w: 0.4 },
+      { atk: 19, magic: 0, pierce: true, w: 0.25 },
+    ],
+    targets: [
+      { armor: 1, magicRes: 0, w: 0.35 },
+      { armor: 1, magicRes: 0, w: 0.4 },
+      { armor: 3, magicRes: 1, w: 0.25 },
+    ],
+  },
+  2: {
+    threats: [
+      { atk: 12, magic: 0, w: 0.35 },
+      { atk: 14, magic: 0, w: 0.4 },
+      { atk: 19, magic: 0, pierce: true, w: 0.25 },
+    ],
+    targets: [
+      { armor: 2, magicRes: 0, w: 0.35 },
+      { armor: 3, magicRes: 0, w: 0.4 },
+      { armor: 4, magicRes: 1, w: 0.25 },
+    ],
+  },
+  3: {
+    threats: [
+      { atk: 18, magic: 0, w: 0.28 },
+      { atk: 22, magic: 0, w: 0.32 },
+      { atk: 33, magic: 0, pierce: true, w: 0.2 },
+      { atk: 9, magic: 18, w: 0.2 },
+    ],
+    targets: [
+      { armor: 2, magicRes: 0, w: 0.35 },
+      { armor: 3, magicRes: 0, w: 0.4 },
+      { armor: 6, magicRes: 1.5, w: 0.25 },
+    ],
+  },
+  4: {
+    threats: [
+      { atk: 22, magic: 0, w: 0.35 },
+      { atk: 30, magic: 0, w: 0.4 },
+      { atk: 42, magic: 0, pierce: true, w: 0.25 },
+    ],
+    targets: [
+      { armor: 3, magicRes: 0, w: 0.35 },
+      { armor: 6, magicRes: 0, w: 0.4 },
+      { armor: 8, magicRes: 1.5, w: 0.25 },
+    ],
+  },
+  5: {
+    threats: [
+      { atk: 38, magic: 0, w: 0.35 },
+      { atk: 46, magic: 0, w: 0.4 },
+      { atk: 70, magic: 0, pierce: true, w: 0.25 },
+    ],
+    targets: [
+      { armor: 4, magicRes: 0, w: 0.35 },
+      { armor: 8, magicRes: 0, w: 0.4 },
+      { armor: 11, magicRes: 1.5, w: 0.25 },
+    ],
+  },
+  6: {
+    threats: [
+      { atk: 38, magic: 0, w: 0.35 },
+      { atk: 56, magic: 0, w: 0.4 },
+      { atk: 85, magic: 0, pierce: true, w: 0.25 },
+    ],
+    targets: [
+      { armor: 4, magicRes: 0, w: 0.35 },
+      { armor: 6, magicRes: 0, w: 0.4 },
+      { armor: 10, magicRes: 1.5, w: 0.25 },
+    ],
+  },
+};
+
+/** 没指定时代时按 3 代算（中位；也是"两军刚接触"最常见的年代） */
+export const NEUTRAL_ERA = 3;
+
+/** 取某一代的谱；越界就夹到 1~6 */
+export function eraSpectrum(era: number | undefined): EraSpectrum {
+  const e = Math.max(1, Math.min(6, Math.round(era ?? NEUTRAL_ERA)));
+  return ERA_SPECTRUM[e]!;
+}
+
+/**
+ * 等效血：挨**这一代**的威胁谱打的时候能扛多少个标准回合。
+ *
+ * 每一档先算它**每回合真能打进来的伤害**（物理减护甲、魔法减魔抗、破甲砍半甲），
+ * 再和"它名义上的攻击力"比，得到这一档的 TTK 倍率，最后按权重取几何平均。
+ *
  * 分母保底 1，是因为伤害本身保底 0（见 rules 的 `max(0, dmg − armor)`）——
  * 保底 1 相当于"一回合至少推进一点"，否则厚甲会算出真正的无穷大。
  */
-export function effectiveHp(hp: number, armor: number): number {
+export function effectiveHp(hp: number, armor: number, magicRes = 0, era = NEUTRAL_ERA): number {
   let logSum = 0;
-  for (const [atk, w] of THREAT_ATK) {
-    logSum += w * Math.log(atk / Math.max(1, atk - armor));
+  for (const t of eraSpectrum(era).threats) {
+    const armorEff = t.pierce ? armor / 2 : armor;
+    const dealt = Math.max(0, t.atk - armorEff) + Math.max(0, t.magic - Math.max(0, magicRes));
+    const nominal = t.atk + t.magic;
+    logSum += t.w * Math.log(nominal / Math.max(1, dealt));
   }
   return Math.max(1, hp) * Math.exp(logSum);
 }
@@ -319,29 +497,137 @@ export const LANCHESTER_EXP = numFromEnv('WB_UNIT_EXP', 0.55);
  * 的中位就在这一档），这样采购分里 0~26 那一段的上下限才对得上。
  * **换压缩指数必须重标**：`npm run calibrate:k -- <exp>` 会给对应的 K。
  */
-export const POWER_K = numFromEnv('WB_POWER_K', 8.94);
+export const POWER_K = numFromEnv('WB_POWER_K', 1.03);
 
 /**
- * 价格指数：价格越贵，同样的属性越"便宜"一点点。
+ * 价格指数：**金币在排序里占多大的话语权**。
  *
- * 小于 1 是因为造价里含了**规模成本**（训练营、出兵格、补给线），
- * 这些东西不随兵的强弱变化，所以高价兵的单位属性价格天然更低。
+ * 这一条原来写 0.95，等于"按每金币战力排序"——听着天经地义，但对**这个 AI** 是错的：
+ * 它的瓶颈不是金币，是它自己身上那两道闸——
+ *   · `CONFIG.maxUnits = 24` 的编制上限（**这条只对 AI 生效**，规则层没有）；
+ *   · 每回合最多买 `DEFAULT_BUDGET.maxRecruit = 2` 个。
+ * 真人对局里这两道闸都不存在：通常模式一座城一回合能连出到 8 个兵，
+ * （"一城一兵"是指挥官模式的限制），所以人的瓶颈才是金币，AI 的瓶颈是名额与回合数。
+ * 拿"每金币战力"给 AI 排序，等于按人的瓶颈去优化 AI 的瓶颈。
+ *
+ * 后果很具体：10 个民兵（250 金、10 个名额、**5 个回合**）战力合计 1740，
+ * 1 个龙骑兵（265 金、1 个名额、1 个回合）战力 1073。按每金币算民兵赢；
+ * 按"每名额、每回合能上多少战力"算，龙骑兵是民兵的六倍多。旧口径把前者
+ * 排进前八、把后者排到 36/104，于是 AI 一路堆便宜兵，265 金的突击兵
+ * 永远"平平无奇"——不是它弱，是尺子量错了瓶颈。
+ *
+ * 0.55 是把话语权调回来：贵的兵仍然要为多花的钱打折，但打不到"一金一金算"。
+ * 标定后的效果（3 代及以前 104 个战斗兵种）：龙骑兵 36 → **13**，
+ * 民兵 8 → **70**。这也和实战对得上——真人用龙骑兵、以及真人之间对局，
+ * 它都是统治级的存在。
  */
-export const PRICE_EXP = numFromEnv('WB_PRICE_EXP', 0.95);
+export const PRICE_EXP = numFromEnv('WB_PRICE_EXP', 0.55);
 
+/** 复利溢价的总体强度（见 raidPremium）；0.35 让龙骑兵在 3 代从 6.25 抬到 8 附近 */
+export const RAID_K = numFromEnv('WB_RAID_K', 0.35);
+
+/**
+ * 靶子谱：算"输出"时假定打在谁身上。
+ *
+ * 和威胁谱是同一个道理的另一半：**输出也不能只看一个靶子**。
+ * 原来写的是"打穿 5 甲"，于是法师的魔攻被 1.2 的系数硬塞进物理通道、
+ * 再一起减 5 甲——可规则里魔法段根本不吃护甲。按 5 甲算，法师的伤害
+ * 被系统性地算小了；按 0 甲算，物理兵又被算大了。
+ *
+ * 三档靶子按"战场上遇到的护甲分布"给权重，中甲那档仍然是 5 甲
+ * （这样"打轻甲/打重甲"各占一头的结构，和原来那句话是接得上的）。
+ *
+ * 靶子的**魔抗按实测期望填**，不要拍：全表 210 个战斗兵里只有 14 个带魔抗，
+ * 按护甲分段算出来的期望值是 甲 0-2 → 0.15、甲 3-5 → **0.08**、甲 6-9 → 0.56、
+ * 甲 10+ → **1.50**。所以轻/中甲靶子的魔抗基本就是 0，只有重甲靶子带一点。
+ * （第一版这里拍了 0/2/4，等于假设"人人都有两点魔抗"，
+ * 结果法师的输出被系统性压掉一成多，女巫的采购量当场腰斩。）
+ */
 /**
  * 战力的"核心两项"：每回合输出、等效血。
  *
  * 单独导出来是因为标定脚本要拿它去试别的压缩指数——**必须和 unitPower 同源**。
  * 之前 `calibrate-k.ts` 自己抄了一份 `hp × 20/(20−armor)`，阈值一改两边就对不上，
  * 算出来的 K 会把标定带偏。抄件就是下一个 bug。
+ *
+ * 输出走两条通道：
+ *   · 物理：`max(0, 攻击 − 靶子护甲)`，带破甲则靶子护甲砍半；
+ *   · 魔法：`max(0, 魔攻 − 靶子魔抗)`，**不减护甲**（见 rules 的 magicSegment）。
+ * 两条加起来再乘多段系数——多段折扣本来是给"每段各减一次甲"打的折，
+ * 用在整个和上略保守（魔法段其实不扣甲），但带多段的兵里没有纯法师，误差可以忽略。
  */
-export function combatCore(d: UnitTypeDef): { dps: number; ehp: number } {
-  const atk = d.atk + (d.magicAtk ?? 0) * 1.2;
+export function combatCore(
+  d: UnitTypeDef,
+  ctx: ValueContext = NEUTRAL_CONTEXT,
+): { dps: number; ehp: number } {
+  // 默认按**这个兵自己那一代**算：这样量出来的是"它在自己那一代有多能打"。
+  // 想看"它放到别的代还值多少"，显式传 ctx.era 覆盖即可（见 6 代衰减表）。
+  const era = ctx.era ?? d.era;
+  const spec = eraSpectrum(era);
+  const pierce = (d.abilities ?? []).includes('armor-pierce');
+  const phys = d.atk;
+  const magic = d.magicAtk ?? 0;
+  let dps = 0;
+  for (const t of spec.targets) {
+    const armorEff = pierce ? t.armor / 2 : t.armor;
+    dps += t.w * (Math.max(0, phys - armorEff) + Math.max(0, magic - t.magicRes));
+  }
   return {
-    dps: Math.max(1, atk - BASE_ARMOR) * burstFactor(d),
-    ehp: effectiveHp(d.maxHp, d.armor),
+    dps: Math.max(1, dps) * burstFactor(d),
+    ehp: effectiveHp(d.maxHp, d.armor, d.magicRes ?? 0, era),
   };
+}
+
+/**
+ * 后排软目标：农民那一档（45 金、24 血、0 甲）。
+ *
+ * 骚扰的收益全在这些单位身上，而它们**不在**威胁谱/靶子谱里（那两张表算的是
+ * "两军对砍"）。所以要单独把这块价值算出来。
+ */
+const SOFT_TARGET_HP = 24;
+const SOFT_TARGET_VALUE = 45;
+
+/**
+ * 骚扰复利率：这个兵**反复上门**能多赚多少。
+ *
+ * 为什么必须有这一项：`(输出 × 生存)^0.55` 量的是一次公平交换，而这游戏里
+ * "只买一种兵、专杀经济"赢的是**复利**——每次回来还能再去一次。
+ * 实测五个飞行突击兵在同一个脚本下：龙骑兵 90% 胜（每次上门生还 50%）、
+ * 狮鹫骑士 10%（12%）、鹰身女妖 0%（3%）、毒蝙蝠 0%（4%）、蜘蛛骑士 0%（14%）。
+ * 面板只差两三成，胜率差出九十个点——差的就是"能打几波"。
+ *
+ * 三项相乘，各自有明确含义：
+ *   · **够不够得着**（reach）：移速 + 飞行/跳跃判定的"能不能绕到后排"。
+ *   · **生还率 p**：`ehp / (ehp + D)`，D 是后排两个守卫一回合能打进来的伤害。
+ *     这里没有用任何对局数据拟合——它只读模型自己的等效血和这一代的攻击谱。
+ *   · **每回合拆掉多少经济**：`dps / 软目标血量 × 软目标价值 ÷ 自身造价`。
+ * 最后 `p/(1−p)` 就是复利因子：p=50% → ×1，p=12% → ×0.14，p=4% → ×0.04。
+ *
+ * 它乘在战力上，但**不是**战力：它是"这个兵换算成经济破坏力之后，再折回战力"的溢价。
+ * 所以封顶（2.5 倍复利、1.2 倍经济效率），不让它盖过生存与输出的基本盘。
+ */
+export function raidPremium(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): number {
+  const era = ctx.era ?? d.era;
+  const spec = eraSpectrum(era);
+  const bypass =
+    d.flight || d.layer === 'air'
+      ? 2
+      : (d.abilities ?? []).some((a) => a === 'leap' || a === 'fly-over' || a === 'phase')
+        ? 1.2
+        : 0;
+  const reach = Math.max(0, Math.min(1, (d.move + bypass - 4) / 3));
+  if (reach <= 0) return 0;
+
+  const { dps, ehp } = combatCore(d, ctx);
+  const physRows = spec.threats.filter((t) => t.magic === 0);
+  const midAtk = physRows[1]?.atk ?? 20;
+  // 后排是两个守卫在还手，不是一支军队：按两下算，且不低于 1
+  const threatPerTurn = 2 * Math.max(1, midAtk - d.armor);
+  const p = ehp / (ehp + threatPerTurn);
+  const ecoPerTurn = (dps / SOFT_TARGET_HP) * SOFT_TARGET_VALUE;
+  const compounding = Math.min(2.5, p / Math.max(0.01, 1 - p));
+  const ecoRatio = Math.min(1.2, ecoPerTurn / Math.max(1, d.cost));
+  return RAID_K * reach * compounding * ecoRatio;
 }
 
 /**
@@ -356,15 +642,17 @@ export function combatCore(d: UnitTypeDef): { dps: number; ehp: number } {
  * 而且移速/视野/护甲/能力全都不计价（龙骑兵因此被 AI 判成废卡）。
  */
 export function unitPower(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): number {
-  const { dps, ehp } = combatCore(d);
+  const { dps, ehp } = combatCore(d, ctx);
   const core = (dps * ehp) ** LANCHESTER_EXP;
   return (
     core *
     POWER_K *
     rangeFactor(d.range ?? 1) *
+    domainFactor(d, ctx) *
     moveFactor(d.move, ctx) *
     visionFactor(d.vision, ctx) *
-    (1 + abilityValue(d, ctx))
+    (1 + abilityValue(d, ctx)) *
+    (1 + raidPremium(d, ctx))
   );
 }
 

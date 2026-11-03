@@ -36,7 +36,11 @@
  * 故意不做经济单位，免得把农民/牧民挤出开局。
  */
 
+import type { AbilityDef } from './abilities.ts';
+import { TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
+import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
+import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /* ================================================================== */
@@ -504,6 +508,223 @@ const MEDIEVAL: UnitTypeDef[] = [
 /* ================================================================== */
 /* 时代 3 · 火药（原版 11 个 → 模组 13 个）                            */
 /* ================================================================== */
+
+/**
+ * ── 地雷：把"布一片、逼你绕"这件事做进时代军备 ─────────────────────────
+ *
+ * 引擎里已经有两套现成的东西：留痕（`core/marks.ts`）和回合开始钩子。
+ * 海军包的水雷、奇想包的哥布林陷阱都走这条路，这里只是把"陆地上的雷"
+ * 补上——而且**分轻雷/重雷两种**，因为它对应两种不同的战术：
+ *
+ *   · **轻雷（16 点）**：便宜、能铺、封路口。踩一发不致命，但足够让对面
+ *     绕远道或者先派人趟雷，那一两个回合就是你要的。
+ *   · **重雷（30 点）**：贵、上限低（4 枚），专门用来挡装甲和攻城器。
+ *     一个 100 血的坦克踩两发就得回城修，攻城槌这种慢速单位基本等于被钉住。
+ *
+ * 两条能力的实现几乎一样，所以共用 `makeMineLayer`——差别全在参数里。
+ */
+const LAND_MINE_KIND: MarkKindDef = {
+  id: 'era-mine',
+  name: '地雷',
+  summary: '敌人踩上来就炸 16 点（无视护甲），炸完就没。自己人踩不到。',
+  tags: ['mine', 'land'],
+  hidden: true,
+  // 能埋的地面：平地、林间、丘陵、沙丘、谷地、台地。
+  // 高山和城市排除：前者上不去，后者是别人的地板。
+  on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    // 扫雷兵踩上去只挨一半：它知道怎么踩。判定挂在"雷"这一边，
+    // 换一个兵来踩就该吃满伤害（和海军的水雷同一个写法）。
+    const swept = (def.abilities ?? []).includes('clear-mines');
+    const dmg = swept ? 8 : 16;
+    c.api.hurt(c.unit, dmg, `${def.name} 踩中地雷，损失 ${dmg} 点生命`);
+    c.api.log(c.mark.owner, `地雷命中 ${def.name}`);
+  },
+};
+
+const AT_MINE_KIND: MarkKindDef = {
+  id: 'era-at-mine',
+  name: '反装甲雷',
+  summary: '敌人踩上来就炸 30 点（无视护甲），炸完就没。专治重甲与攻城器。',
+  tags: ['mine', 'land'],
+  hidden: true,
+  on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    const swept = (def.abilities ?? []).includes('clear-mines');
+    const dmg = swept ? 15 : 30;
+    c.api.hurt(c.unit, dmg, `${def.name} 触发了反装甲雷，损失 ${dmg} 点生命`);
+    c.api.log(c.mark.owner, `反装甲雷命中 ${def.name}`);
+  },
+};
+
+/**
+ * 布雷：自己回合开始时，在两格以内埋一枚，全场上限 `cap` 枚。
+ *
+ * 三条细节都是踩过坑的（海军包的布雷舰先踩过一遍）：
+ *   · 半径 2 而不是四邻——四邻只能围出一个圈，围不出"雷区"；
+ *   · 挑格按回合号轮转——永远挑第一个的话，蹲着不动会把雷全堆在同一格；
+ *   · 有自己人站着的格子跳过——埋在自己人脚下永远炸不到人。
+ */
+function makeMineLayer(kind: string, cap: number, label: string): AbilityDef {
+  return {
+    id: kind === 'era-mine' ? 'lay-mines' : 'lay-at-mines',
+    name: label,
+    summary: `自己回合开始时，在两格以内埋一枚${label.replace('布', '')}（全场最多 ${cap} 枚，只炸敌人）。`,
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.support,
+          apply: (c) => {
+            const s = c.state;
+            if (markCountOf(s, kind, c.owner) >= cap) return;
+            const kinds = markKindOf(kind);
+            const terrenos = kinds?.on ?? [];
+            const spots: Array<{ x: number; y: number }> = [];
+            for (let dy = -2; dy <= 2; dy += 1) {
+              for (let dx = -2; dx <= 2; dx += 1) {
+                if (dx === 0 && dy === 0) continue;
+                if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+                const x = c.self.x + dx;
+                const y = c.self.y + dy;
+                if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+                const tile = s.tiles[y * s.w + x];
+                if (!tile || !terrenos.includes(tile.terrain)) continue;
+                if (tile.cityId) continue; // 城里是别人的地板
+                if (marksAt(s, x, y).length > 0) continue; // 一格只放一件
+                const stack = s.units.filter((u) => u.x === x && u.y === y && u.owner === c.owner && u.hp > 0);
+                if (stack.length > 0) continue; // 自己人脚下埋了也白搭
+                spots.push({ x, y });
+              }
+            }
+            if (spots.length === 0) return;
+            const pick = spots[(s.turn + c.self.x + c.self.y) % spots.length]!;
+            addMark(s, { kind, owner: c.owner, x: pick.x, y: pick.y, charges: 1, hidden: true });
+            c.api.pushLog(
+              s,
+              c.owner,
+              `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 埋下一枚${label.replace('布', '')}`,
+            );
+          },
+        },
+      ],
+    },
+  };
+}
+
+const LAY_MINES: AbilityDef = makeMineLayer('era-mine', 6, '布雷');
+const LAY_AT_MINES: AbilityDef = makeMineLayer('era-at-mine', 4, '布反装甲雷');
+
+/** 扫雷兵：回合开始清掉相邻的敌方雷，自己踩雷只吃一半 */
+const CLEAR_MINES: AbilityDef = {
+  id: 'clear-mines',
+  name: '扫雷',
+  summary: '自己回合开始时清掉相邻的敌方地雷；自己踩雷只受一半伤害。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const s = c.state;
+          let cleared = 0;
+          for (const m of marksOf(s)) {
+            if (m.owner === c.owner) continue;
+            if (!markKindOf(m.kind)?.tags?.includes('mine')) continue;
+            if (c.api.distance(m, c.self) > 1) continue;
+            removeMark(s, m.id);
+            cleared += 1;
+          }
+          if (cleared > 0) {
+            c.api.pushLog(s, c.owner, `${c.api.utype(s, c.self.type).name} 排掉 ${cleared} 枚地雷`);
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 三个布雷/扫雷单位。
+ *
+ * 放在"谁的时代"里是有讲究的：
+ *   · **工兵（3 代）**：火药时代的堑壕战就是这么开场的——先挖、再埋、最后才上。
+ *     它自己打得很难看（10 攻），价值全在那片地上。
+ *   · **扫雷兵（4 代）**：有雷就得有解法，否则地雷会变成单向的作弊。
+ *     它的攻击也很弱，定位是"给部队开路"，不是输出。
+ *   · **布雷车（5 代）**：机械化布雷，重雷一次一片，专门用来废掉对面的装甲矛头。
+ */
+/*
+ * 每个包只登记**自己用得到的那一条**：
+ *   火药包 → 布雷（lay-mines）+ 地雷；工业包 → 扫雷（clear-mines）+ 地雷；二战包 → 反装甲雷。
+ * 三条都往三个包里塞会撞上 test-rules 的「能力各归各家」——那条用例守的就是
+ * "同一条能力不许在两处各写一份"（重复的那份会静默失效，改的人还以为生效了）。
+ *
+ * 代价是：只开工业包时，游戏里既没有布雷的兵、也没有雷可扫，扫雷兵是空转的。
+ * 这是**接受**的——单开工业包本来就没有地雷战这条线。
+ */
+
+const MINE_UNITS_GUNPOWDER: UnitTypeDef[] = [
+  {
+    id: 'combat-engineer',
+    name: '工兵',
+    short: '工',
+    era: 3,
+    category: 'combat',
+    cost: 130,
+    move: 3,
+    atk: 10,
+    armor: 2,
+    maxHp: 32,
+    range: 1,
+    vision: 4,
+    abilities: ['lay-mines'],
+  },
+];
+
+const MINE_UNITS_INDUSTRY: UnitTypeDef[] = [
+  {
+    id: 'mine-sweeper',
+    name: '扫雷兵',
+    short: '扫',
+    era: 4,
+    category: 'combat',
+    cost: 110,
+    move: 3,
+    atk: 12,
+    armor: 3,
+    maxHp: 34,
+    range: 1,
+    vision: 5,
+    abilities: ['clear-mines'],
+  },
+];
+
+const MINE_UNITS_MODERN: UnitTypeDef[] = [
+  {
+    id: 'minelayer-truck',
+    name: '布雷车',
+    short: '雷',
+    era: 5,
+    category: 'combat',
+    cost: 260,
+    move: 4,
+    atk: 14,
+    armor: 6,
+    maxHp: 60,
+    range: 1,
+    vision: 5,
+    abilities: ['lay-at-mines'],
+  },
+];
 
 const GUNPOWDER: UnitTypeDef[] = [
   {
@@ -1266,18 +1487,24 @@ export const ERA_PACKS: Expansion[] = [
 
     scale: 'large',
     name: '火药列国',
-    summary: '线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。',
+    summary: '线列步兵、胸甲骑兵、猎兵、工兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰；' +
+      '工兵能在两格内布雷（一片最多 6 枚，踩上炸 16 点、无视护甲）。',
     hooks: {},
-    units: GUNPOWDER,
+    abilities: [LAY_MINES],
+    marks: [LAND_MINE_KIND],
+    units: [...GUNPOWDER, ...MINE_UNITS_GUNPOWDER],
   },
   {
     id: 'pack-industry',
 
     scale: 'large',
     name: '工业绞肉机',
-    summary: '堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。',
+    summary: '堑壕突击队、火焰喷射器、毒气兵、扫雷兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克；' +
+      '扫雷兵替部队开雷区（顺带自己踩雷只吃一半）。',
     hooks: {},
-    units: INDUSTRY,
+    abilities: [CLEAR_MINES],
+    marks: [LAND_MINE_KIND],
+    units: [...INDUSTRY, ...MINE_UNITS_INDUSTRY],
   },
   {
     id: 'pack-modern',
@@ -1288,8 +1515,11 @@ export const ERA_PACKS: Expansion[] = [
     // 一个叫"现代"的二战包和一个叫"现代"的现代包，光看名字分不出谁是谁。
     // id 不动（存档里存的是 id），只改显示名。
     name: '二战合成兵',
-    summary: '伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。',
+    summary: '伞兵、突击队、反坦克炮、布雷车，配喀秋莎、重型坦克、机枪地堡与掩体墙；' +
+      '布雷车撒的是反装甲雷，一发 30 点。',
     hooks: {},
-    units: MODERN,
+    abilities: [LAY_AT_MINES],
+    marks: [AT_MINE_KIND],
+    units: [...MODERN, ...MINE_UNITS_MODERN],
   },
 ];

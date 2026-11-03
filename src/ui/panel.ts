@@ -47,6 +47,7 @@ import {
   magicAtkOf,
   magicResOf,
   hasQuit,
+  isEliminated,
   orderedStatuses,
   STATUS_REGISTRY,
   heroSkillsOf,
@@ -252,9 +253,17 @@ function panelHtml(input: PanelInput): string {
    * 看上去像卡住了。
    */
   const quit = !spectator && hasQuit(s, me);
-  /** 只看不给动：观战位、已退出、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
-  const readOnly = spectator || quit || input.commander === true;
-  const myTurn = !spectator && !quit && s.current === me && !s.winner;
+  /*
+   * 出局的另一种：最后一座城被人接管了。盘上的兵会被规则层撤走（见 rules 的
+   * `retireLostSeat`），但界面以前什么也不说——顶栏继续写"等待 XXX"，
+   * 玩家盯着一支已经不属于自己的军队，不知道自己在看什么。
+   *
+   * 只在多人局认这条：两人局城破就是终局，结算画面照旧。
+   */
+  const lostAll = !spectator && !quit && seatsOf(s).length > 2 && isEliminated(s, me);
+  /** 只看不给动：观战位、已退出、城全丢光、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
+  const readOnly = spectator || quit || lostAll || input.commander === true;
+  const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
 
   const turnBadge = s.winner
@@ -263,7 +272,9 @@ function panelHtml(input: PanelInput): string {
       ? `<span class="turn-badge watching">观战中 · 全图视角</span>`
       : quit
         ? `<span class="turn-badge watching">你已认输 · 观战中</span>`
-        : `<span class="turn-badge active-${s.current}">
+        : lostAll
+          ? `<span class="turn-badge watching">你的城全丢了 · 观战中</span>`
+          : `<span class="turn-badge active-${s.current}">
          ${s.current === me ? '轮到你行动' : `等待 ${s.players[s.current].name}`}
        </span>`;
 
@@ -301,7 +312,11 @@ function panelHtml(input: PanelInput): string {
     .map((p) => {
       const mine = p === me;
       const cities = citiesOf(s, p).length;
-      const quit = hasQuit(s, p);
+      /*
+       * 出局有两张脸：主动认输，和最后一座城被人接管。
+       * 席位栏只认 `hasQuit` 的话，后一种会一直亮着、显示"城 0"，看上去像还在打。
+       */
+      const quit = hasQuit(s, p) || isEliminated(s, p);
       const on = p === s.current;
       return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
         <span class="vs-dot ${p.toLowerCase()}"></span>

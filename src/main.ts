@@ -5220,6 +5220,15 @@ let panning = false;
 let panMoved = false;
 let panFrom = { x: 0, y: 0, left: 0, top: 0 };
 let suppressClick = false;
+/**
+ * 拖动结束后，"吞掉下一次点击"这个开关的有效期。
+ *
+ * 它只该吃掉**这次拖动**甩出来的那一下 click。以前没有任何期限，
+ * 于是拖完松手若没换来一个点击（触点被系统手势吃掉、在窗口外松手、
+ * 触摸被浏览器 `pointercancel` 掐断），这个标记就一直挂着，
+ * 把后面第一次真正的点格子吃掉——表现就是"放大之后，有时候点格子没反应"。
+ */
+let suppressTimer = 0;
 
 boardScrollEl.addEventListener('pointerdown', (e) => {
   if (boardZoom <= 1) return;
@@ -5227,8 +5236,22 @@ boardScrollEl.addEventListener('pointerdown', (e) => {
   panning = true;
   panMoved = false;
   panFrom = { x: e.clientX, y: e.clientY, left: boardScrollEl.scrollLeft, top: boardScrollEl.scrollTop };
+  // 上一轮遗留的"吞点击"到这里就过期了：新手势开始时它还挂着，只可能是泄漏
+  suppressClick = false;
+  /*
+   * 这里**不抓指针**。
+   *
+   * 指针捕获除了改写 pointer 事件的目标，还会把随后的鼠标事件（mouseup）和
+   * 由它派生的 `click` 一起改到捕获元素上。而这段代码以前是无条件捕获的——
+   * 于是一放大，每一次普通点击的 target 都变成了 `.board-scroll` 本身，
+   * `closest('[data-x]')` 当然找不到格子，整张地图**点不动了**。
+   * 浏览器实测（Edge/Chromium，2× 档）：点在任何一格上，click 的 target 都是
+   * `board-scroll`；缩回 1× 立刻恢复正常——这就是"放大之后点击失效"。
+   *
+   * 现在改成"手真的开始拖了才抓"（见 pointermove）。单纯点一下不碰捕获，
+   * 事件目标照旧是那一格。
+   */
   boardScrollEl.classList.add('dragging');
-  boardScrollEl.setPointerCapture?.(e.pointerId);
 });
 
 boardScrollEl.addEventListener('pointermove', (e) => {
@@ -5236,21 +5259,49 @@ boardScrollEl.addEventListener('pointermove', (e) => {
   const dx = e.clientX - panFrom.x;
   const dy = e.clientY - panFrom.y;
   if (!panMoved && Math.abs(dx) + Math.abs(dy) < 6) return;
-  panMoved = true;
+  if (!panMoved) {
+    panMoved = true;
+    // 这一步才算"拖"，此时才抓指针：手指/鼠标滑出视口也还能继续拖。
+    // 抓在 pointerup 之前就释放（见 endPan），不会影响那之后派生的 click。
+    boardScrollEl.setPointerCapture?.(e.pointerId);
+  }
   boardScrollEl.scrollLeft = panFrom.left - dx;
   boardScrollEl.scrollTop = panFrom.top - dy;
   e.preventDefault();
 });
 
-const endPan = (): void => {
+const endPan = (e?: Event): void => {
   if (!panning) return;
   panning = false;
   boardScrollEl.classList.remove('dragging');
-  if (panMoved) suppressClick = true;
+  // 松手就把捕获还回去：留着的话，这一下 pointerup 之后派生的 click
+  // 仍会被改到 .board-scroll 上，拖动尾巴那次点击就会落到别的地方
+  const pid = (e as PointerEvent | undefined)?.pointerId;
+  if (pid !== undefined && boardScrollEl.hasPointerCapture?.(pid)) {
+    boardScrollEl.releasePointerCapture(pid);
+  }
+  if (panMoved) {
+    suppressClick = true;
+    // 400ms 够覆盖"松手→click"这一小段；再长就是在冤枉下一次点击了
+    window.clearTimeout(suppressTimer);
+    suppressTimer = window.setTimeout(() => {
+      suppressClick = false;
+    }, 400);
+  }
 };
 boardScrollEl.addEventListener('pointerup', endPan);
 boardScrollEl.addEventListener('pointercancel', endPan);
-boardScrollEl.addEventListener('pointerleave', endPan);
+boardScrollEl.addEventListener('pointerleave', (e) => {
+  /*
+   * 已经抓住指针了就别再因为"离开元素边界"收工。
+   *
+   * 抓指针的意思正是"拖出这块地方也还算数"——横向拖到视口边上再往外，
+   * 边界事件一响就把拖动掐了，手感就是"拖到一半突然卡住"。
+   * 没抓住（比如这一下根本没拖起来）才按老规矩收。
+   */
+  if (boardScrollEl.hasPointerCapture?.(e.pointerId)) return;
+  endPan(e);
+});
 
 // 选卡遮罩上的"悬停看详情"：卡片一多，光看名字和攻血根本判断不了禁它值不值
 bindDraftTips();

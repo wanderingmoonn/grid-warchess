@@ -17,7 +17,7 @@ import { DEFAULT_BUDGET } from '../src/core/ai-meta.ts';
 import { applyAction, citiesOf, recruitPriceOf, unitsOf, utype } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { Action, GameState, PlayerId } from '../src/core/types.ts';
-import { DRAGOON, dragoonNextAction } from './script-dragoon.ts';
+import { dragoonNextAction, setRushUnit } from './script-dragoon.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -29,8 +29,21 @@ const SEED = Number(argOf('seed', '9500'));
 const SEAT = (argOf('seat', 'A') as PlayerId);
 const CAP = Number(argOf('cap', '200'));
 const ERA = Number(argOf('era', '3'));
+/** 这一局要无脑堆的是哪个兵（默认龙骑兵；换成 poison-bat 就是毒蝙蝠速攻） */
+const TYPE = argOf('type', 'dragoon-rider');
+setRushUnit(TYPE);
 const SIZE = Number(argOf('size', '20'));
 const OUT = argOf('out', '');
+/**
+ * 对手用哪一版 AI：留空 = 当前版本；给个路径 = 冻结副本（`--ai ./baselines/ai-76f49ed.ts`）。
+ *
+ * 为什么要这个开关：同一个速攻脚本打新 AI 和打旧 AI，胜率差就是"这一版 AI 的防守
+ * 变好/变坏了多少"的直接度量——比 AI 互殴更能说明问题，因为进攻方是固定的。
+ */
+const AI_PATH = argOf('ai', '');
+const aiFn = AI_PATH
+  ? ((await import(AI_PATH)).aiNextAction as typeof aiNextAction)
+  : aiNextAction;
 const EXPANSIONS = [
   'pack-contemporary',
   'fantasy-core',
@@ -107,7 +120,7 @@ function step(action: Action): boolean {
 
   // ① 龙骑兵挨的伤害：所有龙骑兵实例的血量下降（含阵亡的那一个）
   for (const [id, b] of before) {
-    if (b.owner !== SEAT || b.type !== DRAGOON) continue;
+    if (b.owner !== SEAT || b.type !== TYPE) continue;
     const now = s.units.find((u) => u.id === id);
     if (!now) {
       stats.dmgTaken += b.hp;
@@ -119,7 +132,7 @@ function step(action: Action): boolean {
 
   // ② 龙骑兵打出去的伤害与击杀（只算直接目标；溅射这类本兵种没有）
   if (action.type === 'ATTACK' && actor === SEAT) {
-    const isDragoon = before.get(action.unitId)?.type === DRAGOON;
+    const isDragoon = before.get(action.unitId)?.type === TYPE;
     const t = before.get(action.targetId);
     if (isDragoon && t) {
       const now = s.units.find((u) => u.id === action.targetId);
@@ -141,9 +154,9 @@ function step(action: Action): boolean {
   }
 
   // ③ 招募记账
-  if (action.type === 'RECRUIT' && action.unitType === DRAGOON) {
+  if (action.type === 'RECRUIT' && action.unitType === TYPE) {
     stats.dragoonsBuilt += 1;
-    const def = s.unitTypes[DRAGOON];
+    const def = s.unitTypes[TYPE];
     if (def) stats.goldOnDragoons += recruitPriceOf(s, SEAT, def).gold;
   }
 
@@ -152,14 +165,14 @@ function step(action: Action): boolean {
     if (utype(s, u.type).category === 'economy' && !seenEconomy.has(u.id)) seenEconomy.add(u.id);
   }
   stats.enemyEconomyTotal = seenEconomy.size;
-  stats.peakDragoons = Math.max(stats.peakDragoons, unitsOf(s, SEAT).filter((u) => u.type === DRAGOON).length);
+  stats.peakDragoons = Math.max(stats.peakDragoons, unitsOf(s, SEAT).filter((u) => u.type === TYPE).length);
   return true;
 }
 
 while (!s.winner && s.turn <= CAP) {
   const budget = { ...DEFAULT_BUDGET };
   for (let k = 0; k < AI_MAX_STEPS && !s.winner; k += 1) {
-    const action = s.current === SEAT ? dragoonNextAction(s, budget) : aiNextAction(s, budget);
+    const action = s.current === SEAT ? dragoonNextAction(s, budget) : aiFn(s, budget);
     if (!action) break;
     if (!step(action)) break;
     if (action.type === 'RECRUIT') budget.recruited += 1;
@@ -172,7 +185,7 @@ while (!s.winner && s.turn <= CAP) {
 stats.winner = s.winner ?? null;
 stats.dragoonWon = s.winner === SEAT;
 stats.turns = s.turn;
-stats.dragoonsAlive = unitsOf(s, SEAT).filter((u) => u.type === DRAGOON).length;
+stats.dragoonsAlive = unitsOf(s, SEAT).filter((u) => u.type === TYPE).length;
 (stats as unknown as { cities: { mine: number; foe: number } }).cities = {
   mine: citiesOf(s, SEAT).filter((c) => !c.ruined).length,
   foe: citiesOf(s, foe).filter((c) => !c.ruined).length,

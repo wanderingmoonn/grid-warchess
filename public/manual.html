@@ -393,6 +393,36 @@
           <tr><td class="name">开阔</td><td>没有天险，只有零散的林子和丘陵</td><td>纯拼兵力与走位，没有可以赖的地形</td></tr>
         </tbody>
       </table>
+      <p><b>三人 / 四人图用的是同一套地貌，形状按人数变。</b>四家图按 90° 旋转对称排城，
+      一条直线河在这里只能把棋盘切成"两对"——同岸的两家不用过河、隔岸的才要，那是位置不平等。
+      所以河长成<b>十字</b>：每家守一个象限，去见谁都得过水。三家图按 120° 等分，
+      任何直线都会切成 1 对 2，所以河沿着三家分界线长成 <b>Y 形</b>，每家左右各一条。
+      横河 / 纵河在多人图上的区别落在"过河难不难"：横河河窄、渡口宽，纵河河宽、渡口窄还带一片中心湖。
+      山岭同样按这个骨架长：中间山脊、两侧山脚，隘口处降成丘陵。</p>
+      <p>扩展带来的地貌（高原 / 峡谷 / 沼泽 / 群岛 / 大川）<b>三人和四人图也能用</b>，
+      但要知道代价：那几套生成器是为"两家 + 点对称"写的，落到多家图上时按
+      "离哪座城最近"临时分成 A/B 两半来跑，所以等高线<b>不保证逐家对称</b>——
+      山心落在谁那边由种子决定。多人局的定位是"一起玩一局有意思的图"，
+      这一点是有意接受的；要严格配平就选本体那四种。</p>
+      <p><b>双城市开局（三家 / 四家可选）</b>：每家开局两座城。丢一座不算出局，
+      两座都丢才出局；两座城<b>不保证陆路连通</b>——要连就自己修桥。</p>
+      <ul>
+        <li><b>三家</b>：城摆在外圈八个格点上（四角 + 四边中点），按顺序每家取相邻两点，
+        同一家的两座城互为犄角、各自朝外，<b>中间那片才是主战场</b>。</li>
+        <li><b>四家</b>：整张图切成<b>田字四区</b>，每家认领一个象限，两座基地在<b>自家那块地里随机生成</b>。
+        基地不会贴边（离区域边界至少留一格），两座城之间至少留两格空档，不会撞在一起。
+        每个象限各抽各的，所以四家图的双城布局<b>逐局都不同</b>；抽出的一对总是"区内最分得开"的，
+        于是一家一城靠自家外角、一城靠近地图中央——<b>后方稳固，前方就是十字路口</b>。</li>
+      </ul>
+      <p>两条硬约束对两种人数都成立：任意两座城之间至少隔「城本体 + 城郊各一格 + 两格过道」（四家的田字因为区域更紧凑，
+      放宽到"城郊不相接"）；同一家的两座城连成的线段<b>互不交叉</b>——三家图靠"凸多边形上取相邻两点"
+      （那条线就是多边形的边，边与边永不相交），四家图的连线全部落在各自的象限里，天生不可能跨区相交。
+      四家的象限方案还带来一个好处：<b>每家背后都是自己的角，正前方才是邻居</b>，
+      "谁挨着谁"由象限位置直接决定，不再靠抽签。棋盘三家至少要 16×16、四家要 20×20，不够会自动抬上去。</p>
+      <p>还有另一条四人局专属的宽容：<b>地图不再为水面强行开凿通道</b>。
+      水挡路可以造桥、可以飞，所以四条河臂上有几处渡口就够了；
+      唯一的硬保证是"没有哪一家被山彻底封死"——桥架不过山，那才是真的走不出去。
+      三家局仍然保证陆路走得通（三家等分，一家出不去这局就打不起来）。</p>
       <p>城市的摆法<b>单独抽签</b>，和河的走向无关：</p>
       <ul>
         <li><b>对峙</b>：双方各占同一条边的两角——隔着河对峙，正面冲突。</li>
@@ -778,7 +808,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-heal"><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr id="t-ab-aura-command"><td class="name">指挥光环</td><td>2 格内的友军攻击 +4。</td><td class="traits">—</td></tr><tr id="t-ab-aura-armor"><td class="name">守护光环</td><td>2 格内的友军护甲 +2。</td><td class="traits">—</td></tr><tr id="t-ab-royal-decree"><td class="name">王命</td><td>回合开始时，半径 2 内所有「精英骑兵」晋升为「皇家骑兵」（按血量比例换装，上限不超过新兵种的生命）。每名骑兵只会晋升一次。</td><td class="traits">—</td></tr><tr id="t-ab-fear"><td class="name">威吓</td><td>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</td><td class="traits">—</td></tr><tr id="t-ab-hex-weak"><td class="name">虚咒</td><td>3 格内的敌军攻击力 −25%（多道虚咒取最强的一条，不叠乘）。</td><td class="traits">—</td></tr><tr id="t-ab-aura-speed"><td class="name">疾行光环</td><td>相邻友军移动力 +1。</td><td class="traits">—</td></tr><tr id="t-ab-curse-aura"><td class="name">咒域</td><td>相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。</td><td class="traits">—</td></tr><tr id="t-ab-heal-aura"><td class="name">治疗光环</td><td>回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。</td><td class="traits">—</td></tr><tr id="t-ab-purge"><td class="name">净化</td><td>回合开始时，自己和相邻友军各移除<b>一层</b>负面状态（中毒→点燃→减速→诅咒的顺序）。</td><td class="traits">—</td></tr><tr id="t-ab-purge-greater"><td class="name">大净化</td><td>回合开始时，半径 2 内友军的负面状态<b>全部</b>清空（小净化只解一层，它全解）。</td><td class="traits">—</td></tr><tr id="t-ab-repair"><td class="name">修缮</td><td>回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。</td><td class="traits">—</td></tr><tr id="t-ab-build-wall"><td class="name">筑墙</td><td>回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。</td><td class="traits">—</td></tr><tr id="t-ab-trap"><td class="name">布雷</td><td>自己回合开始时，在相邻一圈的陆地上埋一枚哥布林陷阱（全场最多 6 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-summoner"><td class="name">召唤</td><td>每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-repair"><td class="name">海上补给</td><td>每回合开始时，相邻的友方水面单位回复 3 点生命。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sub-tender"><td class="name">潜母</td><td>每回合开始时，相邻的友方潜艇回复 6 点生命（只对潜艇有效）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sweep"><td class="name">扫雷</td><td>自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-command"><td class="name">旗舰</td><td>相邻的友军 +2 攻击、+2 护甲。航母在空军接入前靠它站住脚。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-oiler"><td class="name">远洋补给</td><td>相邻的友方水面单位 +1 移动力。</td><td class="traits">—</td></tr><tr id="t-ab-af-command"><td class="name">空中指挥</td><td>相邻的友军 +2 攻击。预警机的价值不在自己开火。</td><td class="traits">—</td></tr><tr id="t-ab-af-jam"><td class="name">电子压制</td><td>相邻的敌军 −2 攻击。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-heal"><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr id="t-ab-aura-command"><td class="name">指挥光环</td><td>2 格内的友军攻击 +4。</td><td class="traits">—</td></tr><tr id="t-ab-aura-armor"><td class="name">守护光环</td><td>2 格内的友军护甲 +2。</td><td class="traits">—</td></tr><tr id="t-ab-royal-decree"><td class="name">王命</td><td>回合开始时，半径 2 内所有「精英骑兵」晋升为「皇家骑兵」（按血量比例换装，上限不超过新兵种的生命）。每名骑兵只会晋升一次。</td><td class="traits">—</td></tr><tr id="t-ab-fear"><td class="name">威吓</td><td>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</td><td class="traits">—</td></tr><tr id="t-ab-hex-weak"><td class="name">虚咒</td><td>3 格内的敌军攻击力 −25%（多道虚咒取最强的一条，不叠乘）。</td><td class="traits">—</td></tr><tr id="t-ab-aura-speed"><td class="name">疾行光环</td><td>相邻友军移动力 +1。</td><td class="traits">—</td></tr><tr id="t-ab-curse-aura"><td class="name">咒域</td><td>相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。</td><td class="traits">—</td></tr><tr id="t-ab-heal-aura"><td class="name">治疗光环</td><td>回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。</td><td class="traits">—</td></tr><tr id="t-ab-purge"><td class="name">净化</td><td>回合开始时，自己和相邻友军各移除<b>一层</b>负面状态（中毒→点燃→减速→诅咒的顺序）。</td><td class="traits">—</td></tr><tr id="t-ab-purge-greater"><td class="name">大净化</td><td>回合开始时，半径 2 内友军的负面状态<b>全部</b>清空（小净化只解一层，它全解）。</td><td class="traits">—</td></tr><tr id="t-ab-repair"><td class="name">修缮</td><td>回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。</td><td class="traits">—</td></tr><tr id="t-ab-build-wall"><td class="name">筑墙</td><td>回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。</td><td class="traits">—</td></tr><tr id="t-ab-trap"><td class="name">布雷</td><td>自己回合开始时，在相邻一圈的陆地上埋一枚哥布林陷阱（全场最多 6 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-summoner"><td class="name">召唤</td><td>每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。</td><td class="traits">—</td></tr><tr id="t-ab-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内埋一枚雷（全场最多 6 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-clear-mines"><td class="name">扫雷</td><td>自己回合开始时清掉相邻的敌方地雷；自己踩雷只受一半伤害。</td><td class="traits">—</td></tr><tr id="t-ab-lay-at-mines"><td class="name">布反装甲雷</td><td>自己回合开始时，在两格以内埋一枚反装甲雷（全场最多 4 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-repair"><td class="name">海上补给</td><td>每回合开始时，相邻的友方水面单位回复 3 点生命。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sub-tender"><td class="name">潜母</td><td>每回合开始时，相邻的友方潜艇回复 6 点生命（只对潜艇有效）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sweep"><td class="name">扫雷</td><td>自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-command"><td class="name">旗舰</td><td>相邻的友军 +2 攻击、+2 护甲。航母在空军接入前靠它站住脚。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-oiler"><td class="name">远洋补给</td><td>相邻的友方水面单位 +1 移动力。</td><td class="traits">—</td></tr><tr id="t-ab-af-command"><td class="name">空中指挥</td><td>相邻的友军 +2 攻击。预警机的价值不在自己开火。</td><td class="traits">—</td></tr><tr id="t-ab-af-jam"><td class="name">电子压制</td><td>相邻的敌军 −2 攻击。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
       <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在能力的主人那里加一条定义（本体兵种写在 <code>abilities.ts</code>，扩展兵种写在扩展自己的文件里），再让兵种写上它的 id。<code>rules.ts</code> 不用改——它只负责在正确的时机问一句。</p>
@@ -1785,6 +1815,10 @@
         <li>为什么要这个按钮：这游戏的判定是"城全丢才输"，残局里两边都没了进攻能力、
           靠回合上限耗完，剩下的几十分钟谁也不享受。认输是给这种局面的一条出路。</li>
         <li>不可撤销，所以要确认一次。联机里认输同样会被提交上去。</li>
+        <li><b>认输之后，你留在盘上的部队会一起撤走</b>。三人四人局里认输只是"我退出"，
+          对局还在继续——留下来的兵既不受你指挥、也不会还手，只会变成对手刷伤害的靶子，
+          所以规则上直接清场（战报记一句"退出这局"）。<b>城被打光的处理完全相同</b>：
+          最后一座城被人接管的那一刻，你的部队同样撤场。</li>
       </ul>
 
       <h3>撤回一步</h3>

@@ -73,7 +73,9 @@ import {
   isProducer,
   produceCooldownLeft,
   produceCostScale,
+  produceOf,
   producePop,
+  produceUsableCount,
   scaleCost,
 } from './produce.ts';
 import {
@@ -3025,6 +3027,24 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
 }
 
 /**
+ * 把一个"干净的回合"交到 `to` 手上：行动力、反击次数都归零重来。
+ *
+ * 抽出来是因为**交接有两条路**，而它们必须给出同一个结果：
+ *   · `doEndTurn` —— 正常打完这一回合，轮到下一家；
+ *   · `doSurrender` —— 一家退出，把它剩下的回合让给下一位。
+ *
+ * 第二条以前没走这一步，只把 `current` 改了个名字。后果是接手的那一家带着
+ * **自己上回合用剩的** moved/acted 进场：顶栏写着"轮到你"，可点哪个兵都动不了，
+ * 那是它上一轮留下的标记。反击次数同理会少一截（`countersLeft` 是防守时
+ * 一个个扣掉的，只有"新回合"才清零）。
+ */
+function grantTurnTo(s: GameState, to: PlayerId): void {
+  // 新回合开始，所有单位的反击次数重置（不分敌我：这是"每回合一次"的额度）
+  for (const u of s.units) delete u.countersLeft;
+  resetUnitsFor(s, to);
+}
+
+/**
  * 记一笔"这一炮是人点的"。
  *
  * 只对能自动开火的建筑有意义——它们一回合只该有一段火力：
@@ -3250,6 +3270,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
 
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
+    const prevOwner = destCity.owner;
     s.players[unit.owner].gold -= price;
     destCity.owner = unit.owner;
     destCity.ruined = false;
@@ -3257,6 +3278,8 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     destCity.capturedTurn = s.turn;
     pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`, true);
     s.winner = checkWinner(s);
+    // 这是全代码里**唯一**一处城市易手，所以"丢掉最后一座城"也只可能发生在这里
+    retireLostSeat(s, prevOwner);
   }
 
   return { ok: true, state: s };
@@ -3968,6 +3991,30 @@ function doBuild(
   // 选卡模式：建筑也在名单里（塔、堡、城墙都是要选的东西）
   if (!canUseType(s, builder.owner, unitTypeId)) {
     return { ok: false, reason: `${def.name} 不在本局的选用名单里` };
+  }
+
+  /*
+   * 落成即废的产兵点不许修。
+   *
+   * 产兵点的时代**落成那一刻就钉死**了（见 doRecruit 的 camp 分支、下面建造结算里
+   * 那句 `era: supplyEraAt(...)`），之后不会跟着城市换代。带白名单的产兵点
+   * （船坞三代 / 造船厂五代 / 海军船台七代）如果提前修，白名单里的船一条都出不来——
+   * 玩家花了 460 金买到一块石头，而界面上不会告诉他这一点。
+   *
+   * 判据放在这里而不是各个包里：包只管数据，规则管"这笔钱花得对不对"。
+   * 军营不受影响——它的白名单是空的，什么时代落成都能出那一代的兵。
+   */
+  const supplyEra = supplyEraAt(s, s.current, { x, y });
+  const usable = produceUsableCount(def, s.unitTypes, supplyEra);
+  if (usable === 0) {
+    const need = (produceOf(def)?.units ?? [])
+      .map((id) => s.unitTypes[id])
+      .filter((u): u is UnitTypeDef => !!u)
+      .reduce((m, u) => Math.min(m, u.era), 99);
+    return {
+      ok: false,
+      reason: `${def.name}现在建起来一艘都造不出来（要到「${eraDef(need).name}」）。先升时代，或者改修低一档的。`,
+    };
   }
 
   // 续建：目标格上是自家的同型工地。
@@ -5064,6 +5111,51 @@ function autoPlaceEgg(s: GameState): void {
   doPlaceEgg(s, best.x, best.y);
 }
 
+/**
+ * 把某一家的单位从盘上撤干净，返回撤走了几个。
+ *
+ * 认输和"城被打光"在盘面上必须是同一个样子，所以两条路共用这里。
+ * 单位是一棵树（船、运输队里还坐着人），按 owner 过滤等于连货舱一起扔掉；
+ * 车里的人算不算"死"？不算——他们既没进战报，也不进阵亡名单，
+ * 就是随主人一起离场，和认输时一模一样。
+ */
+function withdrawUnits(s: GameState, p: PlayerId): number {
+  const gone = s.units.filter((u) => u.owner === p).length;
+  if (gone > 0) s.units = s.units.filter((u) => u.owner !== p);
+  return gone;
+}
+
+/**
+ * 某一家的最后一座城被人接管之后：撤兵，必要时交棒。
+ *
+ * `isEliminated` 早就把"没有城"判成出局了，但那只管回合轮转（`nextSeat` 跳过去）——
+ * **盘上的兵还留着**。于是出局者的部队变成一群永远不动、打不还手的靶子：
+ * 对手的自动开火照样拿它们刷伤害，结算画面照样把它们数进兵力，
+ * 界面上还能看见一支"没人指挥的军队"杵在那儿。认输那条路一直是清干净的
+ * （见 `doSurrender`），破城判负这条路漏了，这里补上。
+ *
+ * 几处刻意的边界：
+ *   · **两人局不处理**：城破就是终局，胜负已定，留着兵是战报的一部分；
+ *   · **上帝模式不处理**：沙盒里"没城"是常态（和 `isEliminated` 同一条理由）；
+ *   · **认输的不重复处理**：`doSurrender` 自己撤过了。这也是幂等的关键——
+ *     已经撤空的席位再来一次是 0 个，连战报都不会重复写；
+ *   · **交棒只在它自己正轮到时做**：正常路径下夺城发生在对手回合，
+ *     `current` 不是它，这条只是兜底（比如扩展在它的回合里改了城）。
+ */
+function retireLostSeat(s: GameState, p: PlayerId): void {
+  if (seatsOf(s).length === 2) return;
+  if (s.config.godMode === true) return;
+  if (hasQuit(s, p)) return;
+  if (citiesOf(s, p).length > 0) return;
+  const gone = withdrawUnits(s, p);
+  if (gone === 0) return;
+  pushLog(s, p, `${s.players[p].name} 的城市全部失守，${gone} 个单位撤离战场`, true);
+  if (!s.winner && s.current === p) {
+    s.current = nextSeat(s, p);
+    grantTurnTo(s, s.current);
+  }
+}
+
 /** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
@@ -5081,10 +5173,22 @@ function doSurrender(s: GameState): ActionResult {
    * 否则 `current` 停在一个已经退出的席位上，局面就卡住了。
    */
   s.out = [...(s.out ?? []), me];
-  s.units = s.units.filter((u) => u.owner !== me);
+  withdrawUnits(s, me);
   pushLog(s, me, `${s.players[me].name} 认输，退出这局`, true);
   s.winner = checkWinner(s);
-  if (!s.winner) s.current = nextSeat(s, me);
+  if (!s.winner) {
+    s.current = nextSeat(s, me);
+    /*
+     * 交接必须走 `grantTurnTo`，不能只改 `current`。
+     *
+     * 只改名字的话，接手的那一家带着自己上回合用剩的 moved/acted 进场：
+     * 顶栏说"轮到你"，但点哪个兵都是"已经行动过"——这就是
+     * "一方投降之后，其中一方上回合行动过的单位无法行动"那条报障。
+     * 认定它是一段**新的回合**（而不是"接着用完别人剩下的半个回合"），
+     * 是因为等待它的人看到的本来就是一次完整的轮到。
+     */
+    grantTurnTo(s, s.current);
+  }
   return { ok: true, state: s };
 }
 
@@ -5373,12 +5477,8 @@ function doEndTurn(s: GameState): ActionResult {
     s.units.filter((u) => u.owner === nextPlayer && !u.moved && !u.acted).map((u) => u.id),
   );
 
-  // 新回合开始，所有单位的反击次数重置
-  for (const u of s.units) {
-    delete u.countersLeft;
-  }
-
-  resetUnitsFor(s, nextPlayer);
+  // 新回合开始，所有单位的反击次数重置 + 行动力满血（见 grantTurnTo）
+  grantTurnTo(s, nextPlayer);
   advanceConstruction(s, nextPlayer);
 
   for (const u of s.units) {

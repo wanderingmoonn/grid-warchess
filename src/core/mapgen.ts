@@ -79,6 +79,63 @@ export const MAP_STYLES: MapStyleOption[] = [
   { id: 'open', name: '开阔', note: '没有天险，纯靠正面硬碰' },
 ];
 
+/** 本体那四种地貌（不含 `random`） */
+const BASE_STYLE_IDS: Array<Exclude<MapStyle, 'random'>> = MAP_STYLES.map((o) => o.id).filter(
+  (id): id is Exclude<MapStyle, 'random'> => id !== 'random',
+);
+
+/**
+ * "随机"到底随机到什么：从地貌池里按权重抽一种。
+ *
+ * **双人和三人四人共用这一份**——这本该是一开始就做成的事。
+ * 以前双人有一整套袋子逻辑（下面那段注释里的权重），而三/四人图在
+ * `generateMultiLayout` 里写的是 `style !== 'random' ? style : 'open'`，
+ * 等于"随机"在多人图里恒等于开阔：开三次三人局，三张图一模一样的地貌配方。
+ *
+ * 权重（原样保留双人的口径）：
+ *   · 河道与山岭各两次——这两种最耐打，多抽一点；
+ *   · 扩展地貌进两次，但它们只有在**没有本体重叠**时才享这个待遇
+ *     （见下面 `extCount`），否则"随机"会变成"每局都在打火山"。
+ *
+ * 之所以给扩展地貌加倍：它们才是"勾了这个扩展"的理由。只进一次的话，
+ * 本体四种占 6/14，四成对局拿到的图跟没开扩展时一模一样
+ * （同种子同地貌时甚至逐格相同），等于白勾。
+ */
+export function pickRandomStyle(
+  styles: ReadonlyArray<Exclude<MapStyle, 'random'>>,
+  rng: () => number,
+): Exclude<MapStyle, 'random'> {
+  const baseIds = new Set<string>(BASE_STYLE_IDS);
+  const extCount = styles.filter((id) => !baseIds.has(id)).length;
+  const bag: Array<Exclude<MapStyle, 'random'>> = [];
+  for (const id of styles) {
+    const isExt = !baseIds.has(id);
+    bag.push(id);
+    if (isExt) bag.push(id);
+    else if (extCount === 0 && (id === 'river-h' || id === 'ridge')) bag.push(id);
+  }
+  return bag[Math.floor(rng() * bag.length)] ?? 'river-h';
+}
+
+/**
+ * 把"玩家想要的地貌"落成一个真能画出来的地貌。
+ *
+ * 两条规则，双人和多人共用：
+ *   1. 明确点了某一种、但它不在**这一局可用的池子**里（扩展被关掉了、
+ *      或者多人图用不了那种双向生成器）→ 退回 `random`，不画一张残图；
+ *   2. `random` → 按 `pickRandomStyle` 的袋子抽。
+ */
+export function resolveMapStyle(
+  wanted: MapStyle | undefined,
+  styles: ReadonlyArray<Exclude<MapStyle, 'random'>>,
+  rng: () => number,
+): Exclude<MapStyle, 'random'> {
+  let style = wanted ?? 'random';
+  if (style !== 'random' && !styles.includes(style)) style = 'random';
+  if (style === 'random') return pickRandomStyle(styles, rng);
+  return style;
+}
+
 /**
  * 这一局能选的地貌：本体五种 + 已启用扩展自带的地貌。
  *
@@ -1471,27 +1528,7 @@ export function generateLayout(
   const styles = mapStylesFor(opts.expansions ?? [])
     .map((o) => o.id)
     .filter((id): id is Exclude<MapStyle, 'random'> => id !== 'random');
-  let style = opts.style ?? 'random';
-  if (style !== 'random' && !styles.includes(style)) style = 'random';
-  if (style === 'random') {
-    // 随机袋：河道与山岭各两次（这两种最耐打），其余各一次。
-    // 扩展地貌进了 styles 才会进袋——不然"随机"会变成"每局都在打火山"。
-    //
-    // 反过来也要管：**扩展自带的地貌进两次**。它们才是"勾了这个扩展"的理由——
-    // 只进一次的话，本体四种地貌占 6/14，四成对局拿到的图跟没开扩展时
-    // 一模一样（同种子同地貌时甚至逐格相同），等于白勾。
-    // 本体那两条"进两次"的优惠也只留给没开扩展的时候。
-    const baseIds = new Set<string>(MAP_STYLES.map((o) => o.id));
-    const extCount = styles.filter((id) => !baseIds.has(id)).length;
-    const bag: Array<Exclude<MapStyle, 'random'>> = [];
-    for (const id of styles) {
-      const isExt = !baseIds.has(id);
-      bag.push(id);
-      if (isExt) bag.push(id);
-      else if (extCount === 0 && (id === 'river-h' || id === 'ridge')) bag.push(id);
-    }
-    style = bag[Math.floor(rngStyle() * bag.length)] ?? 'river-h';
-  }
+  const style = resolveMapStyle(opts.style, styles, rngStyle);
 
   // 布局与河的走向解耦：同样是横河，也可能两边各占一对对角
   const layout: CityLayout = rngCity() < 0.5 ? 'split' : 'diagonal';
@@ -1798,17 +1835,78 @@ export function generateLayout(
  * 共同点：开局位置在三个 / 四个方向上等距，城郊一圈永远清空（城门口要能站人），
  * 出生部队走和两人局同一个 `spawnsAround`。
  */
+/**
+ * 双城市开局至少要多大一块棋盘。
+ *
+ * 两种排法各解一次：
+ *   · **三家**走外圈八点，相邻两点间距是 `(size - 2 - citySize) / 2`，
+ *     要求它不小于"城本体 + 城郊各一格 + 两格过道"（`citySize + 4`）→ `3*citySize + 10`；
+ *   · **四家**走田字四区，每区要独立装下一对基地：边距 1 + 城 + 空档 + 城 + 边距 1，
+ *     空档取 `citySize + 2`（城郊不相接）→ 单区 `3*citySize + 4`，整图两倍 → `6*citySize + 8`。
+ *
+ * 2×2 的城：三家 16×16，四家 20×20。
+ * 四家比三家大一圈是**故意的**——田字把棋盘切成四块之后，每块都要单独放得下一对
+ * 基地；按 16×16 算，单区只有 8×8，两座 2×2 的城加上城郊一圈就占掉大半，
+ * "随机生成"退化成"只能摆在对角"。20×20 单区 10×10，落点才真有腾挪余地。
+ *
+ * 导出给开局面板和 setup 用：**约束不满足就不让开局**，而不是悄悄摆出两座贴脸的城。
+ */
+export function twoCityMinSize(citySize = 2, players: 3 | 4 = 3): number {
+  const cs = Math.max(2, Math.round(citySize));
+  return players === 4 ? 6 * cs + 8 : 3 * cs + 10;
+}
+
+/**
+ * 同一家的两座城至少要隔几格（切比雪夫，锚点到锚点）。
+ *
+ * 三家（外圈环）和四家（田字四区）用的是两条不同的式子：环上要留过道给人走，
+ * 田字里两座城是背靠背的自家兄弟，只要求"城郊不贴脸"。
+ */
+export const TWO_CITY_GAP = (citySize: number, players: 3 | 4 = 3): number =>
+  players === 4 ? Math.max(2, Math.round(citySize)) + 2 : Math.max(2, Math.round(citySize)) + 4;
+
+/** 两座城之间至少要隔几格（切比雪夫，锚点到锚点） */
+export const CITY_MIN_GAP = (citySize: number): number => Math.max(2, Math.round(citySize)) + 4;
+
 export function generateMultiLayout(
   size: number,
   seed: number,
   unitPool: string[] = ['infantry', 'archer'],
-  opts: { players: 3 | 4; citySize?: number; style?: MapStyle },
+  opts: {
+    players: 3 | 4;
+    citySize?: number;
+    style?: MapStyle;
+    /**
+     * 本局启用的扩展：决定**地貌池**里有没有高原/峡谷/沼泽/群岛/大川。
+     *
+     * 不传就等于一张干净的图：只有本体四种。这和双人那边同一个口径
+     * （`generateLayout` 也读 `expansions`）——扩展关了，那几种地貌就不该出现。
+     */
+    expansions?: readonly string[];
+    /** 每家两座城（见 types.ts 的 twoCities）。只影响城位，地貌照旧 */
+    twoCities?: boolean;
+  },
 ): MapLayout {
   const w = size;
   const h = size;
   const n = opts.players;
   const citySize = Math.max(2, Math.min(Math.round(opts.citySize ?? 2), Math.max(2, Math.floor(size / 5))));
-  const style: Exclude<MapStyle, 'random'> = opts.style && opts.style !== 'random' ? opts.style : 'open';
+  /*
+   * 地貌：和双人**同一个袋子、同一条选择规则**（`resolveMapStyle`）。
+   *
+   * 以前这一行是 `opts.style !== 'random' ? opts.style : 'open'`：
+   * "随机"在三人四人图里恒等于开阔，而且 `style` 之后**再没被读过**
+   * （只原样写进返回值的 label 里）——也就是说多人图根本没有地貌这回事，
+   * 顶栏写着"横河"，画出来的还是那套随机团块。
+   *
+   * 池子 = 本体四种 + 本局扩展带来的地貌，和双人**完全同一份**
+   * （`mapStylesFor(opts.expansions)`）。扩展那几套生成器是给"两家 + 点对称"写的，
+   * 多家图的套法见下面 `extBuild` 那段——借一份虚拟的 A/B 分区让它跑起来。
+   */
+  const styles = mapStylesFor(opts.expansions ?? [])
+    .map((o) => o.id)
+    .filter((id): id is Exclude<MapStyle, 'random'> => id !== 'random');
+  const style = resolveMapStyle(opts.style, styles, makeRng(seed * 2654435761 + size * 7919 + 11));
   const rng = makeRng(seed ^ (n * 7919));
   const c: Ctx = { w, h, g: new Array(w * h).fill('plain'), citySize };
   /**
@@ -1833,8 +1931,114 @@ export function generateMultiLayout(
     };
   };
 
-  const anchors: Pos[] =
-    n === 4
+  /*
+   * ---- 城位 ----
+   *
+   * 每家的城数由 `twoCities` 决定。两家城的排法是一条**环形**：
+   * 在外圈的八个格点上按顺序取 2N 个，同一家拿相邻的两个。
+   *
+   * 为什么非得是环：需求里有一条"任意两家的连线不得交叉"。把城摆成凸多边形
+   * （外圈八点就是凸的），再让每家拿**相邻**的两个，那每家的连线都是多边形的边，
+   * 边与边永不相交——这条不变量是构造出来的，不用事后去验。
+   * 反过来，如果给每家配"对角"两个，连线立刻变成两条对角线、必然打叉。
+   *
+   * 起点按种子错开：同一张图每局落点不同，但"相邻配对"这条永远成立。
+   * 于是同一家的两座城互为犄角、各自朝外，中间那片留作主战场。
+   */
+  const perPlayer = opts.twoCities ? 2 : 1;
+  const totalCities = n * perPlayer;
+
+  /** 外圈八个格点，按顺时针排（凸位置），供双城市开局取用 */
+  const outerRing = (): Pos[] => {
+    const bx0 = margin;
+    const by0 = margin;
+    const bx1 = w - margin - citySize;
+    const by1 = h - margin - citySize;
+    const mx = Math.round((bx0 + bx1) / 2);
+    const my = Math.round((by0 + by1) / 2);
+    return [
+      { x: bx0, y: by0 },
+      { x: mx, y: by0 },
+      { x: bx1, y: by0 },
+      { x: bx1, y: my },
+      { x: bx1, y: by1 },
+      { x: mx, y: by1 },
+      { x: bx0, y: by1 },
+      { x: bx0, y: my },
+    ];
+  };
+
+  /*
+   * 四人双城：**田字四区**，每家两个基地都落在自己那块里。
+   *
+   * 和"外圈环"的区别不只是好看：环是四家共处一条外圈，谁都能沿着边绕到别人背后；
+   * 田字则是"每家一个角"，自己的后方是自己的，接火只可能发生在两条区域边界上。
+   * 代价是同一家的两座城不再"互为犄角面向外"，而是**背靠背**——一起守得住，
+   * 一旦被人从中间切开就各自为战。
+   *
+   * 三个约束：
+   *   · 基地不能压区域边界（留 `border` 格），否则会出现"半座城在这个区、半个在隔壁"；
+   *   · 同一家的两座城至少隔 `citySize + 2`：城本体 + 城郊各一格，正好不贴脸；
+   *   · 位置在区内**随机**取（种子决定），不是写死的角点。
+   * 两点在同一个凸区域里，连线自然整条都留在区内，所以"同家连线不交叉"自动成立。
+   */
+  const quadAnchors = (): Pos[] => {
+    const border = 1;
+    const gap = citySize + 2;
+    /** 四块：左上 → 右上 → 右下 → 左下，和单城四人图的席位顺序一致 */
+    const boxes = [
+      { x0: 0, y0: 0, w: Math.floor(w / 2), h: Math.floor(h / 2) },
+      { x0: Math.floor(w / 2), y0: 0, w: w - Math.floor(w / 2), h: Math.floor(h / 2) },
+      { x0: Math.floor(w / 2), y0: Math.floor(h / 2), w: w - Math.floor(w / 2), h: h - Math.floor(h / 2) },
+      { x0: 0, y0: Math.floor(h / 2), w: Math.floor(w / 2), h: h - Math.floor(h / 2) },
+    ];
+    const out: Pos[] = [];
+    for (const b of boxes) {
+      const lo = { x: b.x0 + border, y: b.y0 + border };
+      const hi = { x: b.x0 + b.w - border - citySize, y: b.y0 + b.h - border - citySize };
+      // 区太小（棋盘被压到极限）时先把落点夹回区里，绝不越界
+      const x1 = Math.max(lo.x, hi.x);
+      const y1 = Math.max(lo.y, hi.y);
+      /*
+       * 掷 32 对，取"合格里最开"的那一对。
+       *
+       * `bestD` 必须从 -1 起：一开始把它写成"对角线的距离"的话，随机采样永远
+       * 追不上那个初值，结果就是**每局都摆成对角**——"随机生成"成了句空话
+       * （这个坑当场就是这么踩进去的，用例也是靠"把种子写进 key"才假装通过的）。
+       */
+      const roll = () => ({
+        x: lo.x + Math.floor(rng() * (x1 - lo.x + 1)),
+        y: lo.y + Math.floor(rng() * (y1 - lo.y + 1)),
+      });
+      let best: [Pos, Pos] | null = null;
+      let bestD = -1;
+      for (let k = 0; k < 32; k += 1) {
+        const a = roll();
+        const c = roll();
+        const d = Math.max(Math.abs(a.x - c.x), Math.abs(a.y - c.y));
+        if (d >= gap && d > bestD) {
+          best = [a, c];
+          bestD = d;
+        }
+      }
+      // 区太小、一对合格的都掷不出来：退到对角线，保证"不重叠"这条底线
+      const pair: [Pos, Pos] = best ?? [
+        { x: lo.x, y: lo.y },
+        { x: x1, y: y1 },
+      ];
+      out.push(pair[0], pair[1]);
+    }
+    return out;
+  };
+
+  const anchors: Pos[] = (() => {
+    if (perPlayer === 2 && n === 4) return quadAnchors();
+    if (perPlayer === 2) {
+      const ring = outerRing();
+      const off = Math.floor(rng() * ring.length);
+      return Array.from({ length: totalCities }, (_, i) => ring[(off + i) % ring.length]!);
+    }
+    return n === 4
       ? // 四角：矩形四等分，旋转 90° 之后完全重合
         [
           { x: margin, y: margin },
@@ -1844,6 +2048,7 @@ export function generateMultiLayout(
         ]
       : // 三家：内切圆三等分，顶点朝上
         [-90, 30, 150].map((deg) => fromAngle(deg, Math.min(w, h) * 0.34));
+  })();
 
   /**
    * 城郊一圈：城本体 + 外面一格。
@@ -1863,7 +2068,12 @@ export function generateMultiLayout(
     }
   }
 
-  /** 离哪座城最近（Voronoi）。三家图用它划区，四家图用不到 */
+  /**
+   * 离**哪一家**最近（Voronoi）。
+   *
+   * 返回的是"第几家"（0 起），不是"第几座城"：双城市开局时每家两座城，
+   * 按城下标划区会得到 6/8 个区，而下游（三家图的配平、扩展地貌的 A/B）只认"家"。
+   */
   const regionOf = (x: number, y: number): number => {
     let best = 0;
     let bd = Infinity;
@@ -1874,7 +2084,7 @@ export function generateMultiLayout(
         best = i;
       }
     });
-    return best;
+    return Math.floor(best / perPlayer);
   };
 
   /**
@@ -1900,7 +2110,50 @@ export function generateMultiLayout(
     return painted;
   };
 
-  if (n === 4) {
+  /** 城本体占的格子：扩展地貌不许长到城上，连通性开凿也靠它认城 */
+  const cityCells = new Set<number>();
+  for (const a of anchors) {
+    for (let dy = 0; dy < citySize; dy += 1) {
+      for (let dx = 0; dx < citySize; dx += 1) cityCells.add((a.y + dy) * w + (a.x + dx));
+    }
+  }
+
+  /*
+   * ---- 扩展地貌（高原 / 峡谷 / 沼泽 / 群岛 / 大川）----
+   *
+   * 这几套生成器是给"两家"写的：`MapBuildCtx` 只有 A/B 两个分区、山心靠点镜像复制。
+   * 多家图套上去的办法是**给它一份虚拟的两家模型**：按"离哪座城最近"分区，
+   * 下标奇偶分到 A / B。四家图上 A 是对角那两家，点镜像正好把 A 映回 A、B 映回 B，
+   * 所以生成器内部那套"一侧长山心、另一侧镜像"仍然自洽。
+   *
+   * 代价说清楚：三家图上 A 是两座城、B 是一座，四家图上 A/B 是对角两家——
+   * 生成出来的等高线**不再逐家对称**，山心落在谁那边由种子决定。
+   * 这是有意接受的：多人局要的是"一起玩一局有意思的图"，不是公平竞技
+   * （用户原话：趣味优先、公平为辅）。要严格对称就用本体那四种地貌。
+   */
+  const extBuild = mapStylesFor(opts.expansions ?? []).find((st) => st.id === style)?.build;
+  if (extBuild) {
+    // 按"第几家"分 A/B（不是按"第几座城"）：双城市开局时一家两城必须落在同一侧，
+    // 否则 `cities.A / cities.B` 会把同一家的两座城拆到两边去
+    const zoneOf2 = (x: number, y: number): 'A' | 'B' => (regionOf(x, y) % 2 === 0 ? 'A' : 'B');
+    extBuild({
+      w,
+      h,
+      citySize,
+      zoneOf: zoneOf2,
+      cities: {
+        A: anchors.filter((_, i) => Math.floor(i / perPlayer) % 2 === 0),
+        B: anchors.filter((_, i) => Math.floor(i / perPlayer) % 2 === 1),
+      },
+      blocked: cityCells,
+      rng,
+      put: (x, y, t) => put(c, x, y, t),
+      at: (x, y) => at(c, x, y),
+      mirror: (x, y) => ({ x: w - 1 - x, y: h - 1 - y }),
+      grow: (x, y, t, area) => growRegion(c, rng, { x, y }, t, area, cityCells),
+      pick: (zone) => pickSeed(c, rng, zoneOf2, zone, cityCells),
+    });
+  } else if (n === 4) {
     // 四分之一画好，旋转三次铺满
     const qw = Math.floor(w / 2);
     const qh = Math.floor(h / 2);
@@ -1912,6 +2165,115 @@ export function generateMultiLayout(
       put(c, x, h - 1 - y, t);
     };
     const inQuadrant = (x: number, y: number) => x > 0 && y > 0 && x < qw && y < qh;
+    /** 撒点缀用：四个旋转格里只填还空着的，不覆盖已画好的天险 */
+    const paintPlain = (x: number, y: number, t: Terrain) => {
+      for (const p2 of [
+        { x, y },
+        { x: w - 1 - x, y },
+        { x: w - 1 - x, y: h - 1 - y },
+        { x, y: h - 1 - y },
+      ]) {
+        if (apron.has(p2.y * w + p2.x)) continue;
+        if (at(c, p2.x, p2.y) !== 'plain') continue;
+        put(c, p2.x, p2.y, t);
+      }
+    };
+
+    /*
+     * ---- 天险：十字形的河 / 山脊 ----
+     *
+     * 四人图必须是 90° 旋转对称的（见 `paint`：一格写四次）。横河/纵河在两家
+     * 图里是一条贯穿全图的带子，照搬到四家图上只把棋盘分成"上下两对"：
+     * 同岸的两家之间不用过河，隔岸的才要——自由混战里这就是位置不平等。
+     * 所以多人图把两条带子**叠成十字**：每家都在一个象限里，去见谁都要过河/翻山。
+     *
+     * 只在 16 以上画十字。12×12 上两条两格宽的带子要吃掉三成面积，
+     * 四家的城郊再各占一圈，剩下的地方不够摆阵——小图退回单带（仍是对称的）。
+     */
+    if (style !== 'open') {
+      const isRidge = style === 'ridge';
+      const hazard: Terrain = isRidge ? 'mountain' : 'water';
+      const cross = Math.min(w, h) >= 16;
+      /*
+       * 四家图上"横河"和"纵河"不能再按朝向区分。
+       *
+       * 保持 90° 旋转对称（这是四人图公平性的来源）的话，十字的两条臂必须等长等宽：
+       * 谁粗一点，转 90° 之后就自相矛盾了。所以两者的区别落到**河的形态**上，
+       * 而且和地貌说明对得上：
+       *   · 横河 = 河窄、**渡口宽**（三格），一翻就过去；
+       *   · 纵河 = 河身连着中心一片大湖、**渡口只留一格**——
+       *     "贯通"在这里的含义是"这条水真的把图分开"，不是"多画一条"。
+       * 两种都在每半个象限各留一个口子（`paint` 会把口子对称复制），
+       * 所以"少"指的是宽度，不是数量：四家都得出得去。
+       */
+      const oneFord = style === 'river-v';
+      const lakeR = style === 'river-v' ? Math.max(1, Math.round(Math.min(w, h) / 12)) : 0;
+      /** 口子（渡口 / 隘口）：位置在象限里偏城的一侧，`paint` 会转出另外三个 */
+      const fordRow = Math.max(2, Math.round(qh * 0.45));
+      const fordCol = Math.max(2, Math.round(qw * 0.45));
+      /**
+       * 横河开三格宽的口子，纵河只开一格——"贯通全图"要的是能过的口子更少。
+       *
+       * 判据要看**两边**：`paint` 会把 x 映射到 w-1-x，只放过左侧那几格的话，
+       * 右侧的镜像格照样会把水补回去（第一版就是这样，渡口一格都没开出来，
+       * 横河和纵河画出来一模一样）。
+       */
+      const isGap = (v: number, at2: number) => {
+        const hit = (u: number) => (oneFord ? Math.abs(u - at2) === 0 : Math.abs(u - at2) <= 1);
+        return hit(v) || hit(w - 1 - v);
+      };
+      /** 画一格就同时画它的三次旋转——四人图的对称全靠这一步 */
+      const band = (x: number, y: number, t: Terrain = hazard) => {
+        if (x <= 0 || y <= 0 || x >= w - 1 || y >= h - 1) return;
+        if (apron.has(y * w + x)) return;
+        paint(x, y, t);
+      };
+      /*
+       * 山岭要和双人那边同一个长相：中间一条山脊，两边各一条山脚（丘陵），
+       * 隘口处山脊降成丘陵。只画一条纯山带的话，"山岭"和"一堵墙"没有区别，
+       * 而双人图上的山岭是可以贴着山脚绕的。
+       */
+      // 横带：中线上下各一格（`paint` 的上下镜像正好把这一行补成两行）
+      const midY = Math.floor(h / 2) - 1;
+      for (let x = 1; x < w - 1; x += 1) {
+        const gap = isGap(x, fordCol);
+        if (gap) {
+          if (isRidge) paintPlain(x, midY, 'hill'); // 隘口：山脊降成丘陵
+        } else {
+          band(x, midY);
+        }
+        // 山脚只画**一侧**：核心是两格宽（midY 与它的上下镜像），
+        // 两侧都画的话 midY+1 正好镜像回 midY，把山脊自己盖成丘陵
+        if (isRidge) paintPlain(x, midY - 1, 'hill');
+      }
+      // 纵带：只在够大的图上画，和横带组成十字
+      if (cross) {
+        const midX = Math.floor(w / 2) - 1;
+        for (let y = 1; y < h - 1; y += 1) {
+          const gap = isGap(y, fordRow);
+          if (gap) {
+            if (isRidge) paintPlain(midX, y, 'hill');
+          } else {
+            band(midX, y);
+          }
+          if (isRidge) paintPlain(midX - 1, y, 'hill');
+        }
+      }
+      // 纵河：中心连成一片湖（`paint` 会把半径复制到四个象限的角上，仍是 4 重对称）
+      if (lakeR > 0) {
+        const ccx = Math.floor(w / 2);
+        const ccy = Math.floor(h / 2);
+        for (let dy = -lakeR; dy <= lakeR; dy += 1) {
+          for (let dx = -lakeR; dx <= lakeR; dx += 1) {
+            if (dx * dx + dy * dy > lakeR * lakeR) continue;
+            const x = ccx + dx;
+            const y = ccy + dy;
+            if (x <= 0 || y <= 0 || x >= w - 1 || y >= h - 1) continue;
+            band(x, y);
+          }
+        }
+      }
+    }
 
     /*
      * 目标：每个象限大约三成地形。
@@ -1922,9 +2284,14 @@ export function generateMultiLayout(
      *
      * 地形种类按固定顺序轮换、不掷骰子：四个象限本来就是同一份地貌旋转出来的，
      * 这样至少保证"林子、山、水各有一点"，不会整张图只剩山。
+     *
+     * 河/山那两档已经把主要地貌画完了（见上面的十字），这里只撒**点缀**：
+     * 目标从三成降到一成，而且不再撒水团——否则图上既有十字河又有一堆池塘，
+     * 陆军走两步就被挡一次，那不是"有水"，是"没路"。
      */
-    const quadGoal = Math.round(qw * qh * 0.34);
-    const KINDS: Terrain[] = ['forest', 'forest', 'hill', 'water', 'hill', 'forest'];
+    const quadGoal = Math.round(qw * qh * (style === 'open' ? 0.34 : 0.1));
+    const KINDS: Terrain[] =
+      style === 'open' ? ['forest', 'forest', 'hill', 'water', 'hill', 'forest'] : ['forest', 'hill', 'forest'];
     let painted = 0;
     let guard = 0;
     let k = 0;
@@ -1942,7 +2309,12 @@ export function generateMultiLayout(
       let y = sy;
       for (let step = 0; step < size2; step += 1) {
         if (inQuadrant(x, y) && !apron.has(y * w + x) && at(c, x, y) === 'plain') {
-          paint(x, y, t);
+          /*
+           * 只往**空地**上撒：`paint` 一次写四格，四个旋转格里只要有一格已经是水/山，
+           * 硬写就把十字河凿出个缺口（实测横带中段被一丛树盖成了丘陵）。
+           * 判据逐格看，只落空地。
+           */
+          paintPlain(x, y, t);
           painted += 1;
         }
         const [dx, dy] = DIRS[Math.floor(rng() * 4)]!;
@@ -1973,6 +2345,67 @@ export function generateMultiLayout(
         regions[regionOf(x, y)]!.push(i);
       }
     }
+
+    /*
+     * ---- 天险：沿着"三家分界"长出来的 Y 形河 / 山脊 ----
+     *
+     * 三家图画不出一条公平的直线河：任何一条线都把三家切成 1 对 2，
+     * 落单那家天然被水护着，另外两家却要跨河互殴。
+     *
+     * 第一版试过"三条按 120° 射出去的支流"，结果更糟：`regionOf` 用的是曼哈顿距离，
+     * 三个分区并不是规整的 120° 扇形，按角度画出来的带子会整条落进某一家，
+     * 三家地形数量直接变成 15/30/18。所以改成**按真正的分界线画**：
+     * 一条格子的四邻里出现了别家的分区，它就是边界——三条边界在中心汇成 Y，
+     * 每家左右各一条，走哪边都要过河，而自家后方是完整的一片。
+     * 边界格天然被两家平摊，配平不用额外做。
+     */
+    if (style !== 'open') {
+      const hazard: Terrain = style === 'ridge' ? 'mountain' : 'water';
+      const ccx = Math.floor(w / 2);
+      const ccy = Math.floor(h / 2);
+      /*
+       * 三家图上"横河"和"纵河"也按形态区分，不按朝向。
+       *
+       * 三条分界线是 120° 等分的，转不出"横"和"纵"两种朝向（转 120° 就等于没转）。
+       * 所以和四家图同一个办法：
+       *   · 横河 = 细河 + 宽渡口；
+       *   · 纵河 = 宽河（边界连同左右各一格）+ 窄渡口 + 中心连片水。
+       */
+      const wide = style === 'river-v';
+      const isRidge = style === 'ridge';
+      /** 渡口/隘口：三条边界都在同一个半径上开口，位置一样才公平 */
+      const fordR = Math.round(Math.min(w, h) * 0.34);
+      const isEdge = (x: number, y: number): boolean => {
+        const r = regionOf(x, y);
+        return (
+          regionOf(x + 1, y) !== r ||
+          regionOf(x - 1, y) !== r ||
+          regionOf(x, y + 1) !== r ||
+          regionOf(x, y - 1) !== r
+        );
+      };
+      const isGapAt = (x: number, y: number): boolean => {
+        const d = Math.hypot(x - ccx, y - ccy);
+        const gap = wide ? 0.6 : 1.6;
+        return d >= fordR - gap && d <= fordR + gap;
+      };
+      for (let y = 1; y < h - 1; y += 1) {
+        for (let x = 1; x < w - 1; x += 1) {
+          if (apron.has(y * w + x)) continue;
+          const onEdge = isEdge(x, y);
+          const fringe = isEdge(x + 1, y) || isEdge(x - 1, y) || isEdge(x, y + 1) || isEdge(x, y - 1);
+          if (!onEdge && !(wide && fringe) && !(isRidge && fringe)) continue;
+          if (isGapAt(x, y)) {
+            // 隘口：山脊降成丘陵；河就干脆不画（留一条能过的口子）
+            if (isRidge && onEdge && at(c, x, y) === 'plain') put(c, x, y, 'hill');
+            continue;
+          }
+          if (onEdge) put(c, x, y, hazard);
+          else if (at(c, x, y) === 'plain') put(c, x, y, isRidge ? 'hill' : hazard);
+        }
+      }
+    }
+
     // 洗牌：同一个种子洗出同一个顺序，可复现
     for (const list of regions) {
       for (let i = list.length - 1; i > 0; i -= 1) {
@@ -1981,12 +2414,15 @@ export function generateMultiLayout(
       }
     }
 
-    const KINDS: Terrain[] = ['forest', 'hill', 'water'];
+    const KINDS: Terrain[] =
+      style === 'open' ? ['forest', 'hill', 'water'] : ['forest', 'hill', 'forest'];
     regions.forEach((list, r) => {
       let cursor = 0;
       let tiles = 0;
       let k = 0;
-      while (tiles < goal && cursor < list.length) {
+      // 河/山那两档已经把主体画完了，这里只补点缀（同上：四家那边的注释）
+      const cap = style === 'open' ? goal : Math.round(goal * 0.4);
+      while (tiles < cap && cursor < list.length) {
         const i = list[cursor++]!;
         const x = i % w;
         const y = Math.floor(i / w);
@@ -1999,10 +2435,11 @@ export function generateMultiLayout(
       }
     });
 
-    // 中心一小片水：三家等距，谁也别想独占
+    // 中心一小片水：三家等距，谁也别想独占。纵河那一档把它放宽一格——
+    // "贯通全图"这条说明落到三家图上，就是"河宽、中心连成一片"
     const cx = Math.floor(w / 2);
     const cy = Math.floor(h / 2);
-    const rad = Math.max(1, Math.floor(Math.min(w, h) / 12));
+    const rad = Math.max(1, Math.floor(Math.min(w, h) / 12) + (style === 'river-v' ? 1 : 0));
     for (let dy = -rad; dy <= rad; dy += 1) {
       for (let dx = -rad; dx <= rad; dx += 1) {
         if (dx * dx + dy * dy > rad * rad) continue;
@@ -2010,6 +2447,85 @@ export function generateMultiLayout(
         const y = cy + dy;
         if (apron.has(y * w + x)) continue;
         put(c, x, y, 'water');
+      }
+    }
+  }
+
+  /*
+   * ---- 连通性：每家都得能靠陆路走到中间 ----
+   *
+   * 加进十字河/放射河之后这条从"保险"变成了"必须"：水面一横，某一家可能被
+   * 整条河关在自己的角里——那不是"难打"，是这局根本打不起来（顶栏写着轮到你，
+   * 可你一个兵都出不了门）。
+   *
+   * 和双人那边同一个办法：找一条最省事的路线，把路上的水凿成浅滩、山开出隘口。
+   * 四家图额外把这条路线**旋转四次**一起凿——不然凿出来的那一条会破坏
+   * 90° 对称，"四角同势"就成了空话。
+   */
+  {
+    // 城格集合在上面统一算过了（扩展地貌也要用同一份），这里不再抄一遍
+    const isCity = (x: number, y: number) => cityCells.has(y * w + x);
+    /**
+     * 开一条口子。`rock` 为真时**只平山、不动水**。
+     *
+     * 水是"可以靠桥和飞行解决"的障碍，山不是——桥架不过山，飞行也不是每个种族都有。
+     * 所以四人局只保证"没有被山彻底封死"，水面留给人自己想办法（用户原话：
+     * 四人别太在意连通性，大不了修桥用飞行）。
+     */
+    const cut = (x: number, y: number, rock = false) => {
+      if (x <= 0 || y <= 0 || x >= w - 1 || y >= h - 1) return;
+      if (apron.has(y * w + x)) return;
+      const t = at(c, x, y);
+      if (t === 'water') {
+        if (rock) return;
+        put(c, x, y, c.shallowOk ? 'shallow' : 'plain');
+      } else if (t === 'mountain') {
+        put(c, x, y, 'hill');
+      }
+    };
+    /*
+     * 终点是**另一家**，不是地图中心。
+     *
+     * 拿中心当终点看着更"居中"，实际是错的：十字河的中心就在水里，
+     * 于是"打通到中心"会把整片交叉口凿成平地——四条河臂在正中间连成一个大口子，
+     * 谁都能从那儿走过去，天险等于没画（第一版就是这样，横带只剩两头两截）。
+     *
+     * 家与家之间本来就该走渡口：`cheapestPath` 给水 40 分、平地 1 分，
+     * 有现成的口子它一定走口子，只有真的没口子才凿一格。
+     */
+    if (n === 4) {
+      /*
+       * 四人局：**只给山开口，不为水挖口**。
+       *
+       * 一开始这里和三家一样"陆路必须通"，结果是在十字河上凿出好几条随机通道，
+       * 渡口就成了摆设（玩家分不清哪儿是设计好的口子、哪儿是凿出来的）。
+       * 而四人局的定位本来就是"好玩"，水挡路修桥、飞行就过去了，不必替玩家铺平。
+       *
+       * 山不一样：桥架不过山，所以只在**山**上开隘口。两条走廊（上路 A→B、左路 A→D）
+       * 各自按 `paint` 那组镜像凿四次——只凿一条的话，四个像只在上、下各给一条，
+       * 连出来是 A–B 和 C–D 两对，两对之间还是隔着（实测 120 组里 17 组断开）。
+       */
+      const cutSym = (path: Pos[] | null): void => {
+        for (const p of path ?? []) {
+          cut(p.x, p.y, true);
+          cut(w - 1 - p.x, p.y, true);
+          cut(w - 1 - p.x, h - 1 - p.y, true);
+          cut(p.x, h - 1 - p.y, true);
+        }
+      };
+      const at2 = (i: number) => ({ x: anchors[i]!.x, y: anchors[i]!.y + 1 });
+      cutSym(cheapestPath(c, at2(0), at2(1), isCity)); // 上路
+      cutSym(cheapestPath(c, at2(0), at2(3), isCity)); // 左路
+    } else {
+      // 三家：0 号连到另外两家就够了（连通关系是传递的）
+      for (const b of [1, 2]) {
+        const path = cheapestPath(
+          c,
+          { x: anchors[0]!.x, y: anchors[0]!.y + 1 },
+          { x: anchors[b]!.x, y: anchors[b]!.y + 1 },
+          isCity,
+        );
+        for (const p of path ?? []) cut(p.x, p.y);
       }
     }
   }
@@ -2031,19 +2547,27 @@ export function generateMultiLayout(
     Array.from({ length: w }, (_, x) => CHAR[at(c, x, y) ?? 'plain']).join(''),
   );
 
-  const citiesAB = (i: number): Pos[] | undefined => (anchors[i] ? [anchors[i]!] : undefined);
+  /** 第 i 家分到的城位（双城市开局时是两座，顺序就是外圈上的顺序） */
+  const citiesOfPlayer = (i: number): Pos[] =>
+    anchors.slice(i * perPlayer, (i + 1) * perPlayer);
+  /** 第 i 家的出生点：两座城各自的出生点按顺序接起来 */
+  const spawnsOfPlayer = (i: number): SpawnDef[] => {
+    const out: SpawnDef[] = [];
+    for (let k = 0; k < perPlayer; k += 1) out.push(...(spawnsFor[i * perPlayer + k] ?? []));
+    return out;
+  };
   return {
     w,
     h,
     rows,
-    citiesA: citiesAB(0) ?? [],
-    citiesB: citiesAB(1) ?? [],
-    citiesC: citiesAB(2),
-    citiesD: citiesAB(3),
-    spawnsA: spawnsFor[0] ?? [],
-    spawnsB: spawnsFor[1] ?? [],
-    spawnsC: n >= 3 ? (spawnsFor[2] ?? []) : undefined,
-    spawnsD: n >= 4 ? (spawnsFor[3] ?? []) : undefined,
+    citiesA: citiesOfPlayer(0),
+    citiesB: citiesOfPlayer(1),
+    citiesC: n >= 3 ? citiesOfPlayer(2) : undefined,
+    citiesD: n >= 4 ? citiesOfPlayer(3) : undefined,
+    spawnsA: spawnsOfPlayer(0),
+    spawnsB: spawnsOfPlayer(1),
+    spawnsC: n >= 3 ? spawnsOfPlayer(2) : undefined,
+    spawnsD: n >= 4 ? spawnsOfPlayer(3) : undefined,
     style,
     symmetry: n === 4 ? 'fair' : 'fair',
     layout: 'diagonal',

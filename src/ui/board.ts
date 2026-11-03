@@ -823,10 +823,44 @@ export function coordsFromEvent(e: Event): { x: number; y: number } | null {
   const target = e.target as HTMLElement | null;
   if (!target) return null;
   const node = target.closest<HTMLElement>('[data-x]');
-  if (!node) return null;
-  const x = Number(node.dataset.x);
-  const y = Number(node.dataset.y);
-  if (Number.isNaN(x) || Number.isNaN(y)) return null;
+  if (node) {
+    const x = Number(node.dataset.x);
+    const y = Number(node.dataset.y);
+    if (Number.isNaN(x) || Number.isNaN(y)) return null;
+    return { x, y };
+  }
+
+  /*
+   * 兜底：点在棋盘上、但没落在任何一格上。
+   *
+   * 这些地方以前是**整片死区**，因为命中完全靠"事件目标是不是一个 `[data-x]` 节点"：
+   *   · `.board` 有 6px 内边距，那一圈只是背景色，不是格子；
+   *   · 放大时 `fitBoard` 写的是 `Math.round(基准 × 档位)`，格子是按百分比分的，
+   *     除不尽时最后一列/行会留下不到一像素的缝；
+   *   · 以后谁再往棋盘上盖一层装饰（不写 data-x），也会一起变成死区。
+   *
+   * 于是"点地图边缘没反应"会被当成偶发 bug 报上来，而每次都只是差了几像素。
+   * 现在退化成一次几何换算：拿 `.tiles` 的真实矩形和行列数反推序号，
+   * 越界就夹到边界格。宁可点歪到相邻格，也比整块区域点了没动静好——
+   * 玩家能看出"点歪了"，看不出"这里没实现"。
+   */
+  const board = target.closest<HTMLElement>('.board');
+  const tiles = board?.querySelector<HTMLElement>('.tiles');
+  if (!board || !tiles) return null;
+
+  const cols = Number(board.style.getPropertyValue('--cols')) || 0;
+  const rows = Number(board.style.getPropertyValue('--rows')) || 0;
+  const box = tiles.getBoundingClientRect();
+  if (cols <= 0 || rows <= 0 || box.width <= 0 || box.height <= 0) return null;
+
+  // 只认鼠标/触摸那类带坐标的事件：键盘触发的 click 坐标是 0,0，换算出来是假命中
+  const ev = e as MouseEvent;
+  if (typeof ev.clientX !== 'number' || typeof ev.clientY !== 'number') return null;
+  if (ev.clientX === 0 && ev.clientY === 0) return null;
+
+  const clamp = (v: number, hi: number): number => Math.min(hi, Math.max(0, v));
+  const x = clamp(Math.floor(((ev.clientX - box.left) / box.width) * cols), cols - 1);
+  const y = clamp(Math.floor(((ev.clientY - box.top) / box.height) * rows), rows - 1);
   return { x, y };
 }
 

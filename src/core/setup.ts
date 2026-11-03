@@ -15,7 +15,7 @@ import {
   expansionById,
 } from './expansions.ts';
 import { createDraft } from './draft.ts';
-import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar } from './mapgen.ts';
+import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
@@ -268,11 +268,27 @@ export function createMatch(
     fixed && fixed.ok && twoSeats
       ? layoutFromRows(fixed.map.rows, fixed.map.citiesA, fixed.map.citiesB, spawnPool, citySize)
       : playerCount > 2
-        ? generateMultiLayout(clampBoardSize(config.size), seed, spawnPool, {
-            players: playerCount === 3 ? 3 : 4,
-            citySize,
-            style: config.mapStyle,
-          })
+        ? generateMultiLayout(
+            /*
+             * 双城市开局：棋盘**不许小于约束要求**。
+             *
+             * 八座城要摆在外圈八个格点上，间距是 (边长 - 2 - 城边)/2；
+             * 不够大就直接抬到最小边长，而不是摆出两座贴脸的城——
+             * "所有城市之间的最低间距"是这条选项的硬条件，不能靠玩家自己发现。
+             */
+            config.twoCities ? Math.max(clampBoardSize(config.size), twoCityMinSize(citySize, playerCount === 3 ? 3 : 4)) : clampBoardSize(config.size),
+            seed,
+            spawnPool,
+            {
+              players: playerCount === 3 ? 3 : 4,
+              citySize,
+              style: config.mapStyle,
+              twoCities: config.twoCities === true,
+              // 和双人同一个口径：只有本局真正启用的扩展才能贡献地貌
+              // （高原/峡谷/沼泽/群岛/大川）。扩展关掉，这几种就不该出现。
+              expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+            },
+          )
         : generateLayout(
             clampBoardSize(config.size),
             seed,
