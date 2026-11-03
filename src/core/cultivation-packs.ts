@@ -356,16 +356,65 @@ const QI_TRUE_DAMAGE: AbilityDef = {
 function getExp(u: Unit): number {
   return (u.custom?.exp as number) ?? 0;
 }
-// 根据经验算等级
+
+/**
+ * 从 `rank` 级升到 `rank + 1` 级所需的总经验门槛。
+ *
+ * 语义直接来自旧 `getRank` 的 while 循环在 `rank = r` 时的检查
+ * `exp >= expForRank(r)`，所以它天然是"从 r 升到 r+1 的门槛"：
+ *   expForRank(0) = 10  → 0 级升 1 级
+ *   expForRank(1) = 30  → 1 级升 2 级（累计）
+ *   expForRank(2) = 70  → 2 级升 3 级（累计）
+ */
+function expForRank(rank: number): number {
+  return Math.floor(10 + 10 * rank * (rank + 1) + 0.05 * 4 ** rank);
+}
+
+/**
+ * 从 `fromRank` 升到 `toRank` 一次性加多少生命上限。
+ *
+ * 用 `to³ - from³` 的**差**而不是逐级累加：两者数值等价（telescoping sum），
+ * 但写成一跳的形态和 `addExp` 原有的"跨级只回一次血"保持完全一致——
+ * 改写成逐级的话，`Math.floor` 在每级都会丢一次精度，回血量会和以前不同。
+ */
+function maxHpDeltaBetween(fromRank: number, toRank: number): number {
+  return Math.floor(
+    8.5 * (toRank - fromRank) +
+    0.0685 * (toRank ** 3 * 1.8 ** toRank - fromRank ** 3 * 1.8 ** fromRank),
+  );
+}
+
+/** 等级上限。原来叫 MAX_RANK，位置不变 */
 const MAX_RANK = 9;
+/**
+ * 读境界等级。
+ *
+ * 2026-11-04 起，等级是**存在 `custom.rank` 上的显式字段**，不再每次
+ * 现场反推。理由有三个：
+ *   1. 「灵体重生」要强制降 1 级，而经验是被减半的——两者不联动，
+ *      用 while 反推做不到"exp 掉一半但等级只掉一级"；
+ *   2. 未来的「燃烧修为」要"消耗经验但不掉级"，同样要求解耦；
+ *   3. `addExp` 的升级判定需要知道"当前是不是真的升了级"，
+ *      反推版本里 `newRank > rank` 的比较口径和 exp 减少后的反推混在一起，
+ *      一旦 exp 能被外部减少就会误判。
+ *
+ * 老存档没有这个字段：反推一次并写回。反推是确定性的，写回不改变任何
+ * 面板可见数字，所以即使被 UI 的 `effectiveStats` 触发（它承诺纯查询）
+ * 也不会出现"看一眼面板规则就变了"。
+ *
+ * 反推后，如果外部只改 `custom.exp` 而不改 `custom.rank`，下次读仍是
+ * 反推那一次的值——这正是"经验和等级解耦"的语义。
+ */
 function getRank(u: Unit): number {
+  const cached = u.custom?.rank;
+  if (typeof cached === 'number') return cached;
   const exp = getExp(u);
   let rank = 0;
-  while (rank < MAX_RANK && exp >= Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank)) {
-    rank++;
-  }
+  while (rank < MAX_RANK && exp >= expForRank(rank)) rank++;
+  u.custom = { ...(u.custom ?? {}), rank };
   return rank;
 }
+
 /** 导出给测试用 */
 export function cultivationRank(u: Unit): number {
   return getRank(u);
@@ -377,31 +426,49 @@ function getMaxHp(s: GameState, u: Unit): number {
   return (s.unitTypes[u.type]?.maxHp ?? 0) + (u.maxHpBonus ?? 0);
 }
 
-// 增加经验并即时判断升级
+/**
+ * 增加经验并即时判断升级。
+ *
+ * **只升不降**：exp 减少时 `custom.rank` 不动。这是 2026-11-04 的语义变更——
+ * 以前等级是 exp 的纯函数，"exp 掉一半"就等于"掉级"。现在两者解耦：
+ *    · 「灵体重生」会**显式**写回降一级的 rank（见未来的 spirit-rebirth）；
+ *    · 「燃烧修为」只减 exp，不动 rank。
+ * `addExp` 本身只负责"加经验、判定升级"，不再承担"降级"职责——
+ * 这件事由调用方按各自的语义处理，正是这次重构的核心目的。
+ */
 function addExp(u: Unit, s: GameState, amount: number): void {
-  u.custom ??= {}; 
-  const rank = getRank(u);
+  u.custom ??= {};
+  const oldRank = getRank(u);   // 触发反推（老存档）或读字段
   u.custom.exp = ((u.custom.exp as number) ?? 0) + amount;
-  const newRank = getRank(u);
-  
-  // 如果升级了，立刻结算加成并写战报
-  // 用公开信息模拟升级时的天地异象，给对手及时出击打断成长的反应时间
-  if (newRank > rank) {
-    const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
+
+  // 只升不降：从 oldRank 往上走
+  let newRank = oldRank;
+  while (newRank < MAX_RANK && (u.custom.exp as number) >= expForRank(newRank)) {
+    newRank++;
+  }
+
+  if (newRank > oldRank) {
+    // 跨级只回一次血，delta 用两端差（和旧版 addExp 完全一致）
+    const deltaMaxHp = maxHpDeltaBetween(oldRank, newRank);
     // 升级瞬间按照比例回血
-    const r = u.hp / getMaxHp(s,u);
+    const r = u.hp / getMaxHp(s, u);
     u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
-    u.hp += Math.floor(deltaMaxHp * r); 
-    
+    u.hp += Math.floor(deltaMaxHp * r);
+
+    // 显式写回新等级：这一步取代了旧版 `const newRank = getRank(u)`
+    // 的反推结果，也是"等级不再由 exp 自动推出"的落点
+    u.custom.rank = newRank;
+
     s.log.push({
       turn: s.turn,
-      player: u.owner, 
+      player: u.owner,
       text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${_REALMS[newRank]} 期！`,
       open: true,
     });
     checkSkillUnlocks(u, s);
   }
 }
+
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
   // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
