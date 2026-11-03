@@ -14417,15 +14417,47 @@ test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯�
   assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
-test('奇想平衡（2026-11-03）：狂战士攻击 24、蛇人 8 甲 30 血、女巫换特性', () => {
+test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血 / 女巫换特性', () => {
   const s = fresh({ startEra: 3, expansionIds: FANTASY });
-  assert.equal(s.unitTypes['berserker']!.atk, 24, '狂战士基础攻击 19 → 24');
+  assert.equal(s.unitTypes['berserker']!.atk, 15, '狂战士每段 15（原 24 单发）');
+  assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
   assert.equal(serpent.maxHp, 30, '蛇人生命 34 → 30');
   const witch = s.unitTypes['witch']!;
   assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
+});
+
+test('狂战士：一次出手打两段，每段各自减一次护甲', () => {
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  s.units = [];
+  putTerrain(s, 5, 5, 'plain');
+  putTerrain(s, 6, 5, 'plain');
+  const zerk = place2(s, 'A', 'berserker', 5, 5);
+  // 木桩挑蛇人（8 甲）：护甲高到"每段各减一次"和"只减一次"能看出差别
+  const dummy = place2(s, 'B', 'serpent-man', 6, 5);
+  const armor = s.unitTypes['serpent-man']!.armor;
+  assert.equal(computeDamage(s, zerk, dummy), 15 - armor, '一段 = 15 − 8 甲');
+
+  const first = applyAction(s, { type: 'ATTACK', unitId: zerk.id, targetId: dummy.id });
+  assert.ok(first.ok, first.ok ? '' : first.reason);
+  if (!first.ok) return;
+  const z1 = first.state.units.find((u) => u.id === zerk.id)!;
+  const d1 = first.state.units.find((u) => u.id === dummy.id)!;
+  assert.equal(attacksLeftOf(first.state, z1), 1, '打了一段，还剩一段');
+  assert.equal(z1.acted, false, '还剩一段时不算行动结束');
+  assert.equal(30 - d1.hp, 15 - armor, '第一段只打掉一段的伤害');
+
+  const second = applyAction(first.state, { type: 'ATTACK', unitId: zerk.id, targetId: dummy.id });
+  assert.ok(second.ok, second.ok ? '' : second.reason);
+  if (!second.ok) return;
+  const z2 = second.state.units.find((u) => u.id === zerk.id)!;
+  assert.equal(attacksLeftOf(second.state, z2), 0);
+  assert.equal(z2.acted, true, '两段打完这一回合就结束了');
+  // 合计正好是"两段各自减甲"，不是"一刀 30 减一次甲"
+  const d2 = second.state.units.find((u) => u.id === dummy.id)!;
+  assert.equal(d2.hp, 30 - (15 - armor) * 2, '两段合计 = 2 × (15 − 8 甲)');
 });
 
 test('虚咒：3 格内敌军攻击力 −25%，4 格外不生效，两道不叠乘', () => {
