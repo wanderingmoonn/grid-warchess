@@ -193,6 +193,7 @@ const abilityApi: AbilityApi = {
   noteHeat: (s, x, y) => noteHeatCell(s, x, y),
   isAirborne: (s, u) => isAirborne(s, u),
   unitsAt: (s, x, y) => unitsAt(s, x, y),
+  movePower: (s, u) => movePower(s, u),
 };
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -3111,6 +3112,10 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const reach = reachableTiles(s, unit);
   if (!reach.has(idx(s, x, y))) return { ok: false, reason: '目标格不可达' };
 
+  // 把到达目标格的真实消耗加进 moveSpent
+  const cost = reach.get(idx(s, x, y))!;
+  unit.moveSpent = (unit.moveSpent ?? 0) + cost;
+
   // 走进废墟 = 接管。钱要在动之前就查：走到一半发现掏不起重建费，
   // 会留下一个"已经站在城里但城市还是别人的"的中间态，很难收拾。
   const destTile = tileAt(s, x, y);
@@ -4471,9 +4476,18 @@ export function heroSkillsOf(
       toNext = charge >= chargeMax ? 0 : Math.max(1, regen - t);
     }
 
+    let notReadyReason = k.notReadyReason; // 默认用静态配置
+
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
     if (ready && SKILL_READY_CHECKS[k.id]) {
-      ready = SKILL_READY_CHECKS[k.id]!(s, u);
+      const checkResult = SKILL_READY_CHECKS[k.id]!(s, u, abilityApi);
+      if (checkResult !== true) {
+        ready = false;
+        // 如果扩展返回了字符串，说明是具体的动态原因（比如“移动力不足”）
+        if (typeof checkResult === 'string') {
+          notReadyReason = checkResult;
+        }
+      }
     }
 
     return {
@@ -4483,7 +4497,7 @@ export function heroSkillsOf(
       charge,
       chargeMax,
       toNext,
-      notReadyReason: k.notReadyReason,
+      notReadyReason,
     };
   });
 }

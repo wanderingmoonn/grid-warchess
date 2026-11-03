@@ -92,6 +92,8 @@ export interface AbilityApi {
   noteHeat(s: GameState, x: number, y: number): void;
   isAirborne(s: GameState, u: Unit): boolean;
   unitsAt(s: GameState, x: number, y: number): Unit[];
+  /** 算上扩展规则后的剩余移动力（已扣除 moveSpent） */
+  movePower(s: GameState, u: Unit): number;
 }
 
 /**

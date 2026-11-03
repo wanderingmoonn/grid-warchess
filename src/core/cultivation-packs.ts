@@ -8,8 +8,9 @@ import type {
   City,
   SkillDef
 } from './types.ts';
-import { skillsOf } from './types.ts';
 import type { AbilityDef } from './abilities.ts';
+import type { AbilityApi } from './ability-hooks.ts';
+import { skillsOf } from './types.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
 
@@ -47,21 +48,21 @@ const SKY_STEP_SKILL: SkillDef = {
   summary: '在低空与地面之间切换。消耗 1 点移动力，每回合一次。',
   effect: 'sky-step',
   cooldown: 0,
-  multiCast: true,   // 不占"每回合一个技能"的名额，由 custom.skyStepTurn 自己拦
+  multiCast: true,
 };
 
-/** 能不能御空：UI 就绪检查和效果执行共用这一份，避免对不上 */
-function canSkyStep(s: GameState, u: Unit): string | null {
+function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
   if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
   if (getRank(u) < 2) return '境界不足（需要 2 级）';
   if ((u.custom?.skyStepTurn as number) === s.turn) return '御空每回合只能一次';
+  if (api.movePower(s, u) <= 0) return '剩余移动力不足';
   return null;
 }
 
-registerSkillReadyCheck('sky-step', (s, u) => canSkyStep(s, u) === null);
+registerSkillReadyCheck('sky-step', (s, u, api) => canSkyStep(s, u, api!) ?? true);
 
 registerSkillEffect('sky-step', (c) => {
-  const why = canSkyStep(c.state, c.self);
+  const why = canSkyStep(c.state, c.self, c.api);
   if (why) { c.result.ok = false; c.result.reason = why; return; }
 
   const targetAir = !c.api.isAirborne(c.state, c.self);
@@ -275,8 +276,6 @@ export function learnSkill(u: Unit, skill: SkillDef): boolean {
 /** 境界达到对应等级时自动领悟的技能 */
 const CULTIVATOR_SKILL_UNLOCKS: Array<{ rank: number; skill: SkillDef }> = [
   { rank: 2, skill: SKY_STEP_SKILL },
-  // 以后加新技能：
-  // { rank: 5, skill: SWORD_MASTERY_SKILL },
 ];
 
 /** 检查并领悟所有达标的新技能 */
@@ -284,7 +283,6 @@ function checkSkillUnlocks(u: Unit, s: GameState): void {
   for (const { rank, skill } of CULTIVATOR_SKILL_UNLOCKS) {
     if (getRank(u) >= rank) {
       if (learnSkill(u, skill)) {
-        // 领悟新技能是个大事件，公开给对手看（给对手反应时间）
         s.log.push({
           turn: s.turn,
           player: u.owner,
