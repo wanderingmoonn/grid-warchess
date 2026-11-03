@@ -30,6 +30,7 @@
     "probe:water": "node --experimental-strip-types scripts/probe-water.ts",
     "arena": "node --experimental-strip-types scripts/arena-duel.ts",
     "dragoon": "node --experimental-strip-types scripts/dragoon-batch.ts",
+    "adoption": "node --experimental-strip-types scripts/probe-adoption.ts",
     "duel": "node --experimental-strip-types scripts/ai-duel.ts",
     "balance": "node --experimental-strip-types scripts/balance-report.ts",
     "pack-report": "node --experimental-strip-types scripts/pack-report.ts",
