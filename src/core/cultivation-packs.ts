@@ -459,6 +459,31 @@ function addExp(u: Unit, s: GameState, amount: number): void {
     // 的反推结果，也是"等级不再由 exp 自动推出"的落点
     u.custom.rank = newRank;
 
+    // 寿元增量：只加"该加的那一段"，不重设整个值。
+    //
+    // 为什么不用 `u.custom.lifespan = baseLifespanOf(newRank)`：
+    // 未来的「燃烧寿元」要让寿元**永久**减少（暗伤、透支）。若升级时重设，
+    // 减掉的那几年会在下一次升级被洗掉，"永久损失"就只是"延迟损失"。
+    // 用增量则与"燃烧"天然共存：升级加 base 增量，燃烧减 N，两者叠加。
+    //
+    // oldBase 必为有限值：addExp 只升不降，oldRank < newRank ≤ MAX_RANK，
+    // 所以 oldRank < MAX_RANK，baseLifespanOf(oldRank) 有限。
+    const oldBase = baseLifespanOf(oldRank);
+    const newBase = baseLifespanOf(newRank);
+    if (!Number.isFinite(newBase)) {
+      // rank 9：Infinity 不落库，见 baseLifespanOf
+      delete u.custom.lifespan;
+    } else {
+      const cached = u.custom.lifespan;
+      if (typeof cached === 'number' && Number.isFinite(cached)) {
+        // 已落库：只加增量，燃烧掉的不会回来
+        u.custom.lifespan = cached + (newBase - oldBase);
+      } else {
+        // 老存档（没有 custom.lifespan）：等价于 base(oldRank)，升到 newRank 即 newBase
+        u.custom.lifespan = newBase;
+      }
+    }
+
     s.log.push({
       turn: s.turn,
       player: u.owner,
@@ -466,7 +491,37 @@ function addExp(u: Unit, s: GameState, amount: number): void {
       open: true,
     });
     checkSkillUnlocks(u, s);
+
+    // 寿元随等级上涨：显式落库，让降级时不回退（见 getLifespan 的说明）。
+    // rank 9 是 Infinity，不落库（见 baseLifespanOf 的说明）。
+    // 注意：外部若强行指定过 custom.lifespan（测试场景），这里会覆盖它——
+    // 若需固定寿元同时又要触发升级，请直接操纵 custom 而不要走 addExp。
+    const newLifespan = baseLifespanOf(newRank);
+    if (Number.isFinite(newLifespan)) {
+      u.custom.lifespan = newLifespan;
+    } else {
+      delete u.custom.lifespan;
+    }
   }
+}
+
+/**
+ * 设置经验并重算等级。
+ *
+ * 用于"扮演特定等级"的场景：测试、调试、未来的读档导入/回合回放。
+ * 和 `addExp` 的差别：
+ *   · `addExp` 走升级流程（回血、战报、技能领悟），只能升不降；
+ *   · 这里**只设置数值**，不触发任何副作用——正是"我想让这个单位处于
+ *     rank=x、exp=y 的状态"该用的入口。
+ *
+ * 不重置 `custom.rank` 的话，`getRank` 会继续读旧缓存。这是 2026-11-04
+ * 等级显式化之后的设计：exp 和 rank 解耦，改 exp 不代表改 rank。
+ * 想"按 exp 反推等级"就调这个函数；想"只减经验不掉级"就只改 `custom.exp`。
+ */
+export function setCultivationExp(u: Unit, exp: number): void {
+  u.custom = { ...(u.custom ?? {}), exp };
+  delete u.custom.rank;
+  getRank(u);   // 触发反推并写回
 }
 
 // 自然经验增长
@@ -482,17 +537,63 @@ function getExpGrowth(u: Unit): number {
 // 规则：age > lifespan 开始减益，age - lifespan >= AGING_DEATH_AGE 才老死。
 /** 寿元耗尽后还能撑几年才真正老死 */
 const AGING_DEATH_AGE = 3;
-function getLifespan(u: Unit): number {
-  // 允许外部或测试强行指定寿元
-  if (u.custom?.lifespan !== undefined) return u.custom.lifespan as number; 
-  
-  const rank = getRank(u);
+
+/**
+ * 从 rank 推出的基础寿元。rank 9（渡劫）是 Infinity——渡劫成功后寿元不再
+ * 约束你，这是既定的设计。
+ *
+ * Infinity **不能**写进 `custom.lifespan`：JSON 序列化会把它变成 null，
+ * 存档读回来就成了"没有字段"，又要走 fallback，来回折腾只是噪音。
+ * 所以 rank 9 一律走"没有 custom.lifespan → 按 rank 反推 Infinity"这条路，
+ * 不落库。
+ */
+function baseLifespanOf(rank: number): number {
   if (rank >= MAX_RANK) return Infinity;
   return 10 + rank * 9;
 }
+
+/**
+ * 读寿元（纯查询，不写 state）。
+ *
+ * 优先级：`custom.lifespan`（显式落库值，降级时不随之回退）→ 按 rank 反推。
+ *
+ * 老存档没有 `custom.lifespan` 时按 rank 反推，读到的数和写回后一致，
+ * 所以"看一眼面板"不会改变可观察的数值。
+ */
+function getLifespan(u: Unit): number {
+  const cached = u.custom?.lifespan;
+  if (typeof cached === 'number' && Number.isFinite(cached)) return cached;
+  return baseLifespanOf(getRank(u));
+}
+
+/**
+ * 确保寿元已经落库，返回当前值。
+ *
+ * 和 `getLifespan` 的差别只在于**写回**：老存档第一次被回合开始触碰时，
+ * 把反推值写进 `custom.lifespan`，之后降级就不会回退了。
+ * UI 面板走 `getLifespan`，读到的数字和写回后完全一致——"看一眼面板"
+ * 不改状态。
+ *
+ * rank 9 不落库（Infinity 无法 JSON 序列化），走 rank 反推兜底，
+ * 行为与 getLifespan 在该分支下等价。
+ *
+ * 顺带：`getRank` 在这里被调用时，若 `custom.rank` 也是 undefined 会一并落库，
+ * 所以老存档第一次回合开始会把 rank 和 lifespan 一起初始化。
+ */
+function ensureLifespan(u: Unit): number {
+  const cached = u.custom?.lifespan;
+  if (typeof cached === 'number' && Number.isFinite(cached)) return cached;
+  const rank = getRank(u);
+  const value = baseLifespanOf(rank);
+  if (Number.isFinite(value)) {
+    u.custom = { ...(u.custom ?? {}), lifespan: value };
+  }
+  return value;
+}
+
 /**
  * 超出寿元多少岁。
- * 必须有 Math.max(0, ...)，否则负的“超龄”会变成攻击力加成，导致伤害爆炸。
+ * 必须有 Math.max(0, ...)，否则负的"超龄"会变成攻击力加成，导致伤害爆炸。
  */
 export function getAgingYears(u: Unit): number {
   return Math.max(0, (u.age ?? 0) - getLifespan(u));
@@ -633,7 +734,8 @@ export const CULTIVATION_PACK: Expansion = {
       for (const u of state.units) {
         if (u.owner !== player || !isCultivatorUnit(state, u)) continue;
         const age = u.age ?? 0;
-        const lifespan = getLifespan(u);
+        // 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
+        const lifespan = ensureLifespan(u);
 
         if (isDoomed(u)) {
           if (u.hp > 0) {

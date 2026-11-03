@@ -285,7 +285,8 @@ import type {
 } from '../src/core/types.ts';
 import { 
   cultivationRank,
-  getAgingYears
+  getAgingYears,
+  setCultivationExp,
 } from '../src/core/cultivation-packs.ts';
 
 let passed = 0;
@@ -11361,7 +11362,7 @@ test('修士：移动力随境界提升（2 + floor(x/3)）', () => {
   ];
 
   for (const [rank, exp, expectedMove] of table) {
-    qi.custom.exp = exp;
+    setCultivationExp(qi, exp);
     assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
     assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
   }
@@ -11383,11 +11384,12 @@ test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
 
   // 9 级：基础 3 + 境界 9 = 12
-  qi.custom.exp = 4006;
+  setCultivationExp(qi, 4006);
   assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
 
   // 衰老测试用 8 级（exp=1389），寿元照旧由 custom 钉死，免得跟着曲线漂
-  qi.custom = { exp: 1389, lifespan: 45 };
+  setCultivationExp(qi, 1389);
+  qi.custom = { ...(qi.custom ?? {}), lifespan: 45 };
   assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
 
   qi.age = 47; // 超龄 2 岁
