@@ -38,7 +38,8 @@
     "fantasy:xlsx": "python scripts/export-fantasy-xlsx.py",
     "probe:score": "node --experimental-strip-types scripts/probe-recruit-score.ts",
     "balance:econ": "node --experimental-strip-types scripts/balance-econ.ts",
-    "balance:econ:report": "node --experimental-strip-types scripts/econ-report.ts"
+    "balance:econ:report": "node --experimental-strip-types scripts/econ-report.ts",
+    "calibrate:k": "node --experimental-strip-types scripts/calibrate-k.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

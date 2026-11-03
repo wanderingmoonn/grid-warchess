@@ -22,6 +22,8 @@ import { hasHold, holdOf, holdRoom } from './carry.ts';
 import { isProducer } from './produce.ts';
 import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
+import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
+import type { ValueContext } from './unit-value.ts';
 import {
   armySize,
   applyAction,
@@ -3324,7 +3326,7 @@ export function savingAllowance(
 /**
  * 一个攒钱目标：攒什么、多少钱、值不值。
  *
- * `score` 和采购评分共用一把尺子（`combatEfficiency`：战力 ÷ 价格^0.8），
+ * `score` 和采购评分共用一把尺子（`combatEfficiency`：战力 ÷ 价格^PRICE_EXP），
  * 只是"战力"的口径按目标换算——一个兵是它自己的战力，升时代是"以后每个名额
  * 多产多少战力"折算出来的增量，收废墟是"多一份每回合收入"折算出来的增量。
  * 这样四个目标可以直接排大小，"为什么攒这个"就有据可查，而不是四条 if 的先后。
@@ -3490,7 +3492,7 @@ function buildPlan(
    * "这个 700 金的英雄，和把主城升到下一代，哪个更值"。
    *
    * 现在四个目标排在一张表上比，尺子和采购评分共用同一条公式
-   * （`combatEfficiency`：战力 ÷ 价格^0.8），"战力"的口径按目标换算：
+   * （`combatEfficiency`：战力 ÷ 价格^PRICE_EXP），"战力"的口径按目标换算：
    *   · 一个兵   → 它自己的战力
    *   · 英雄     → 自己的战力 × HERO_PREMIUM（独占性）
    *   · 升时代   → 每个出生名额更值钱 → 战力增量 × 视野内还能造几个兵 × 时间折扣
@@ -3892,29 +3894,31 @@ export const aiTrace = {
 };
 
 /**
- * 一个兵种的"战力"：攻（含魔攻折算）× sqrt(血) × 射程系数。
+ * 兵种战力 / 性价比：**实现在 core/unit-value.ts**，这里只做转发。
  *
- * 这是 AI 自己那把尺子的分子，抽出来是给"攒钱目标"用的：升时代和收废墟换回来的
- * 不是某一个兵，而是"以后每一笔军费更值 / 每回合多一份收入"，得先把它们折算成
- * 战力，才能和一个兵的价格放在同一张表上比（见 SaveGoal）。
+ * 为什么搬走：这两把尺子原来只读 `攻 / √血 / 射程`，于是
+ * **移速、视野、多段、能力全都不算钱**——龙骑兵（移 5、冲锋）在 AI 眼里
+ * 只值 2.28 的性价比，排在所有同代兵种的最后，100 局只被造 3 个；
+ * 而它在人手里是 95% 胜率打法的核心。公式和审计脚本现在是同一份实现，
+ * 不会再出现"审计说它便宜、AI 说它贵"的自相矛盾。
  */
-function combatPower(d: UnitTypeDef): number {
-  return (
-    (d.atk + (d.magicAtk ?? 0) * 1.2) *
-    Math.sqrt(d.maxHp) *
-    (1 + Math.min(4, Math.max(0, d.range - 1)) * 0.45)
-  );
-}
+const combatPower = unitPower;
+const combatEfficiency = unitEfficiency;
 
 /**
- * 一个战斗单位的"性价比"：战力按价格开 0.8 次方。
- *
- * 价格指数故意小于 1：贵的兵换算下来的性价比会被压一点，但不会被压死
- * （线性的话 400 金的坦克永远排在 150 金的戟兵后面，而坦克的价值在护甲和破城上，
- * 那个公式里没有）。攒钱目标也用这把尺子，见 SaveGoal。
+ * 这一刻"值多少钱"要看局面：移速在防守时打折、压上时加价；
+ * 己方视野已经很开阔时，再买一双眼睛的边际价值下降。
+ * 具体权重在 `core/unit-value.ts`，这里只负责把局面翻译成 `ValueContext`。
  */
-function combatEfficiency(d: UnitTypeDef, price: number): number {
-  return combatPower(d) / Math.max(20, price) ** 0.8;
+function valueContextOf(s: GameState, me: PlayerId, plan: AiPlan): ValueContext {
+  const tempo = plan.stance === 'push' || plan.stance === 'trade' ? 1 : plan.stance === 'turtle' ? -1 : 0;
+  const mine = unitsOf(s, me);
+  // 视野冗余度：全军平均视野 / 6（6 格算"够开阔"）
+  const coverage =
+    mine.length === 0
+      ? 0
+      : Math.min(1, mine.reduce((n, u) => n + utype(s, u.type).vision, 0) / (6 * Math.max(1, mine.length)));
+  return { tempo, visionCoverage: coverage, fog: s.fog !== false };
 }
 
 function recruitCandidate(
@@ -4180,7 +4184,10 @@ function recruitCandidate(
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
       if (aiLevelOf(s)!=='basic') {
-        score += Math.min(26, combatEfficiency(d, resourceValue(s,me,quote.price)+unlockFee*0.4) * 3);
+        score += Math.min(
+          26,
+          combatEfficiency(d, resourceValue(s, me, quote.price) + unlockFee * 0.4, valueContextOf(s, me, plan)) * EFF_SCALE,
+        );
         if (plan.urgent) score += 15;
       }
       if (d.domain === 'water') {
@@ -4564,10 +4571,18 @@ function swapOutCandidate(
   const worst = pool[0]!;
   const worstDef = utype(s, worst.type);
 
-  // ③ 值不值：性价比不到 SWAP_GAIN 倍就不折腾
-  const targetEff = combatEfficiency(targetDef, recruitPriceOf(s, me, targetDef).gold);
-  const worstEff = combatEfficiency(worstDef, Math.max(20, worstDef.cost ?? 0));
-  if (targetEff < worstEff * SWAP_GAIN) return bail('提升不够大');
+  /*
+   * ③ 值不值：**比"名额能装多少战力"，不比"每金币的性价比"**。
+   *
+   * 原来比的是性价比（power / price^0.8），于是"25 金的民兵换 300 金的步兵班"
+   * 这个明显该换的动作会被判成"提升不够大"——因为按金币摊，步兵班的性价比
+   * 只比民兵高 1.35 倍，刚好卡在门槛上。可名额才是稀缺资源（见上面第 3600 行
+   * 的说明）：满编时你换的不是钱，是**一个位置**。所以拿两个兵的战力直接比。
+   */
+  const ctx = valueContextOf(s, me, plan);
+  const targetPower = combatPower(targetDef, ctx);
+  const worstPower = combatPower(worstDef, ctx) * Math.max(0.2, worst.hp / Math.max(1, worstDef.maxHp));
+  if (targetPower < worstPower * SWAP_GAIN) return bail('提升不够大');
 
   // ④ 钱够不够：解散能退回一部分（满血才退，见 rules.disbandRefundOf）
   const refund = disbandRefundOf(s, worst);

@@ -18,6 +18,7 @@ import { aiNextAction, aiRecruitTrace, AI_MAX_STEPS } from '../src/core/ai.ts';
 import { DEFAULT_BUDGET } from '../src/core/ai-meta.ts';
 import { applyAction, recruitPriceOf, recruitSpawnCells, unitsOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { unitEfficiency, unitPower, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../src/core/types.ts';
 
 const args = process.argv.slice(2);
@@ -39,13 +40,16 @@ const EXPANSIONS = [
   'fantasy-heroes',
 ];
 
-/** AI 那把尺子的抄件（见 ai.ts 的 combatPower / combatEfficiency） */
-const combatPower = (d: UnitTypeDef): number =>
-  (d.atk + (d.magicAtk ?? 0) * 1.2) *
-  Math.sqrt(d.maxHp) *
-  (1 + Math.min(4, Math.max(0, (d.range ?? 1) - 1)) * 0.45);
+/**
+ * AI 那把尺子：**直接 import，不再抄一份**。
+ *
+ * 原来这里是一份抄件（`攻 × √血 × 射程系数`）。抄件的下场和任何复制品一样：
+ * 尺子换成兰彻斯特乘积之后，体检报告的 ④ 段还在用旧公式算"性价比 2.28"，
+ * 而 AI 实际早就按新尺子打了 5.40——报告本身成了误导源。现在同源。
+ */
+const combatPower = (d: UnitTypeDef): number => unitPower(d, NEUTRAL_CONTEXT);
 const combatEfficiency = (d: UnitTypeDef, price: number): number =>
-  combatPower(d) / Math.max(20, price) ** 0.8;
+  unitEfficiency(d, price, NEUTRAL_CONTEXT);
 
 const reasons = new Map<string, number>();
 const winnersBought = new Map<string, number>();
@@ -144,7 +148,7 @@ for (const [type, n] of top) {
 }
 
 if (def) {
-  console.log('\n④ AI 的尺子怎么算它（`combatPower = 攻 × √血 × 射程系数`，`性价比 = 战力 / 价格^0.8`）');
+  console.log('\n④ AI 的尺子怎么算它（`combatPower = (输出×生存)^0.55 × 射程 × 移速 × 视野 × 能力`，`性价比 = 战力 / 价格^0.95`）');
   const peers = ['halberdier', 'druid', 'musketeer', 'rifleman', 'paladin', 'royal-cavalry', TARGET];
   const rows = peers
     .map((id) => table.unitTypes[id])
