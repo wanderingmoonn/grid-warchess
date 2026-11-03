@@ -169,8 +169,13 @@ interface Row {
   seen: number;
   /** 造过它的参战方数（一局 2 方） */
   adopted: number;
-  /** 采用率 = adopted / (2 × 局数) */
-  adoption: number;
+  /**
+   * 采用率 = adopted / (2 × 局数)。
+   *
+   * **建筑是 null**：逐局结果只存了"征募清单"（RECRUIT），修桥盖房走的是 BUILD，
+   * 不在里面。给建筑算一个 0% 会让人读成"没人盖"，那是错的——它们该看 `建造` 列。
+   */
+  adoption: number | null;
   spend: number;
   share: number;
   goldShare: number;
@@ -210,7 +215,7 @@ for (const [type, t] of total) {
     built: t.built,
     seen: t.seen,
     adopted: adopted.get(type) ?? 0,
-    adoption: games > 0 ? (adopted.get(type) ?? 0) / (games * 2) : 0,
+    adoption: def?.category === 'building' || !def ? null : games > 0 ? (adopted.get(type) ?? 0) / (games * 2) : 0,
     spend: t.spend,
     share: seenSum > 0 ? t.seen / seenSum : 0,
     goldShare: spendSum > 0 ? t.spend / spendSum : 0,
@@ -342,7 +347,8 @@ function table(title: string, list: Row[], keys: Array<keyof Row>, headers: stri
     const cells = keys.map((k) => {
       const v = r[k];
       if (k === 'ratio') return dec(v as number | null);
-      if (k === 'share' || k === 'goldShare' || k === 'killShare' || k === 'adoption') return pct(v as number);
+      if (k === 'adoption') return v === null ? '—' : pct(v as number);
+      if (k === 'share' || k === 'goldShare' || k === 'killShare') return pct(v as number);
       if (k === 'per100' || k === 'per100Taken') return (v as number).toFixed(1);
       if (k === 'dealt' || k === 'taken' || k === 'spend' || k === 'kills' || k === 'built' || k === 'seen' || k === 'cost' || k === 'adopted') return num(v as number);
       return String(v);
