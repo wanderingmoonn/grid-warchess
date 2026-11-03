@@ -22,7 +22,15 @@
 
 import type { PlayerView } from '../core/fog.ts';
 import { markKindOf } from '../core/mark-registry.ts';
-import { buildProgress, cityName, footprintOf, isAirborne, underConstruction, utype } from '../core/rules.ts';
+import { 
+  buildProgress, 
+  cityName, 
+  footprintOf, 
+  isAirborne, 
+  underConstruction, 
+  utype,
+  maxHpOf
+} from '../core/rules.ts';
 import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { heatStep } from '../core/heat.ts';
 
@@ -733,7 +741,7 @@ function tileRect(s: GameState, x: number, y: number, n = 1): string {
 
 function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const def = utype(s, u.type);
-  const ratio = u.hp / def.maxHp;
+  const ratio = u.hp / maxHpOf(s,u);
   const isSpent = u.owner === s.current && u.moved && u.acted;
   const isSelected = ui.selectedId === u.id;
   const isTarget = ui.targets.includes(u.id);

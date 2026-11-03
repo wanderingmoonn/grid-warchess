@@ -90,6 +90,10 @@ export interface AbilityApi {
   destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void;
   /** 把这一格记进战斗烈度（供被攻击方下回合闪红） */
   noteHeat(s: GameState, x: number, y: number): void;
+  isAirborne(s: GameState, u: Unit): boolean;
+  unitsAt(s: GameState, x: number, y: number): Unit[];
+  /** 算上扩展规则后的剩余移动力（已扣除 moveSpent） */
+  movePower(s: GameState, u: Unit): number;
 }
 
 /**

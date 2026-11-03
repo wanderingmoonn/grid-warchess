@@ -3,53 +3,68 @@ import type {
  } from './expansions.ts';
 import type { 
   GameState,
-  UnitTypeDef,
   Unit,
   City,
   SkillDef
 } from './types.ts';
-import type { AbilityDef } from './abilities.ts';
-import { DAMAGE_STAGE } from './ability-hooks.ts';
+import type { AbilityApi } from './ability-hooks.ts';
+import { skillsOf } from './types.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview} from './skill-hooks.ts';
+import {
+  isCultivatorUnit,
+} from './cultivation/identity.ts';
+import { 
+  REALMS, MAX_RANK, getExp, getRank, getMaxHp, expForRank, getLifespan, ensureLifespan, 
+  getAgingYears, isDoomed, sumDeltaMaxHpUpTo, AGING_DEATH_AGE, addExp, 
+  onRankUp
+} from './cultivation/progression.ts';
 
-// 境界名称
-const _REALMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
+import { 
+  atkModifier, trueDamageOf, attTimesModifier, armorModifier, 
+  moveModifier, SplashModifier, RangeModifier, VisionModifier 
+} from './cultivation/stats.ts';
 
-// ── 修士身份判定 ────────────────────────────────────────────
-//
-// 这是本扩展里**唯一**"认识具体兵种"的地方。以前每个钩子里都写了一遍
-// `type === 'qi-cultivator'`，十二处硬编码：加一个流派要回来改十二次，
-// 漏一次就是"这个流派能修炼但不涨攻击"或"所有兵种都能修炼但不涨数值"。
-//
-// 判据用 id 集合，不用"带某条能力"：能力是机制（剑气、金身各有各的），
-// 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
-//
-// 加新流派 → 在 CULTIVATOR_IDS 里加一行 id；**别的钩子一个字都不用改**。
-const CULTIVATOR_IDS = new Set([
-  'qi-cultivator', 
-  'sword-cultivator'
-]);
+import { SKY_STEP_SKILL } from './cultivation/skills.ts';
+import { SPIRIT_CULTIVATOR, CULTIVATOR, SWORD_CULTIVATOR } from './cultivation/units.ts';
+import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
 
-/** 从兵种定义查。给"手里只有 def"的场合用。 */
-export function isCultivatorDef(def: UnitTypeDef | undefined | null): boolean {
-  return !!def && CULTIVATOR_IDS.has(def.id);
+export { 
+  getAgingYears 
+} from './cultivation/progression.ts';
+
+
+function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
+  if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
+  if (getRank(u) < 2) return '境界不足（需要 2 级）';
+  if ((u.custom?.skyStepTurn as number) === s.turn) return '御空每回合只能一次';
+  if (api.movePower(s, u) <= 0) return '剩余移动力不足';
+  return null;
 }
 
-/** 从单位查。给钩子用——钩子里拿到的几乎都是 Unit。 */
-export function isCultivatorUnit(s: GameState, u: Unit): boolean {
-  return isCultivatorDef(s.unitTypes[u.type]);
-}
+registerSkillReadyCheck('sky-step', (s, u, api) => canSkyStep(s, u, api!) ?? true);
 
-const SWORD_SWEEP_SKILL:SkillDef = {
-  id: 'sword-sweep',
-  name: '剑气纵横',
-  summary: '向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。',
-  effect: 'sword-sweep',
-  cooldown: 0,
-  multiCast: true,
-  targeting: 'direction', // 声明它需要选方向
-  notReadyReason: '攻击次数不足',
-};
+registerSkillEffect('sky-step', (c) => {
+  const why = canSkyStep(c.state, c.self, c.api);
+  if (why) { c.result.ok = false; c.result.reason = why; return; }
+
+  const targetAir = !c.api.isAirborne(c.state, c.self);
+  const blockers = c.api
+    .unitsAt(c.state, c.self.x, c.self.y)
+    .filter((u) => u.id !== c.self.id && c.api.isAirborne(c.state, u) === targetAir);
+  if (blockers.length > 0) {
+    c.result.ok = false;
+    c.result.reason = targetAir ? '同一格已有其他空中单位' : '同一格已有其他地面单位';
+    return;
+  }
+
+  if (targetAir) c.self.layer = 'air';
+  else delete c.self.layer;
+
+  c.self.moveSpent = (c.self.moveSpent ?? 0) + 1;
+  c.self.custom = { ...(c.self.custom ?? {}), skyStepTurn: c.state.turn };
+  c.result.log = `${c.api.utype(c.state, c.self.type).name} ${targetAir ? '升空' : '落地'}`;
+});
+
 registerSkillReadyCheck('sword-sweep', (s, u) => {
   const left = u.attacksLeft ?? (s.unitTypes[u.type].burst ?? 1);
   return left > 0;
@@ -219,113 +234,184 @@ registerSkillPreview('sword-sweep', (c) => {
   return cells.map(cell => cell.y * c.state.w + cell.x);
 });
 
-// 炼气士
-const CULTIVATOR: UnitTypeDef = {
-  id: 'qi-cultivator',
-  name: '炼气士',
-  short: '炼',
-  era: 1,
-  category: 'combat',
-  cost: 200,
-  move: 2,
-  atk: 10,
-  armor: 0,
-  maxHp: 20,
-  range: 1,
-  vision: 3,
-  abilities: ['qi-true-damage'], 
-};
-// 剑修
-const SWORD_CULTIVATOR: UnitTypeDef = {
-  id: 'sword-cultivator',
-  name: '剑修',
-  short: '剑',
-  era: 2,
-  category: 'combat',
-  cost: 350, 
-  move: 3,
-  atk: 8,
-  armor: 1,
-  maxHp: 20,
-  range: 1,
-  vision: 3,
-  abilities: ['qi-true-damage'], 
-  skills: [SWORD_SWEEP_SKILL],
-};
+registerSkillReadyCheck('spirit-rebirth', (_s, u) => {
+  if (u.type !== 'cultivator-spirit') return '只有灵体能重生';
+  if (!u.custom?.originType) return '本源已散失，无法重生';
+  return true;
+});
+
+registerSkillEffect('spirit-rebirth', (c) => {
+  const { self, state } = c;
+  if (self.type !== 'cultivator-spirit') {
+    c.result.ok = false;
+    c.result.reason = '只有灵体能重生';
+    return;
+  }
+  // 这里先判 originType
+  const originType = self.custom?.originType as string | undefined;
+  if (!originType) {
+    c.result.ok = false;
+    c.result.reason = '本源已散失，无法重生';
+    return;
+  }
+
+  // 此时 TS 已经知道 originType 是 string
+  const originDef = state.unitTypes[originType];
+  if (!originDef) {
+    c.result.ok = false;
+    c.result.reason = '本源已散失，无法重生';
+    return;
+  }
+
+  const oldRank = getRank(self);
+  const newRank = Math.max(0, oldRank - 1);
+  // 新经验：原 "x-1 升 x 门槛" 的一半（绝对量）
+  const newExp = Math.floor(expForRank(newRank) / 2);
+
+  // 合并技能（saved ∪ current，按 id 去重）
+  const savedExtraSkills = (self.custom?.savedExtraSkills as SkillDef[]) ?? [];
+  const currentExtraSkills = self.extraSkills ?? [];
+  const mergedExtraSkills = [...savedExtraSkills];
+  for (const k of currentExtraSkills) {
+    if (!mergedExtraSkills.some((m) => m.id === k.id)) mergedExtraSkills.push(k);
+  }
+  // 合并能力
+  const savedExtraAbilities = (self.custom?.savedExtraAbilities as string[]) ?? [];
+  const currentExtraAbilities = self.extraAbilities ?? [];
+  const mergedExtraAbilities = [...savedExtraAbilities];
+  for (const id of currentExtraAbilities) {
+    if (!mergedExtraAbilities.includes(id)) mergedExtraAbilities.push(id);
+  }
+
+  // 清 custom 上的灵体暂存字段，保留 rank / lifespan / exp
+  const cachedLifespan = self.custom?.lifespan;
+  self.custom = { rank: newRank, exp: newExp };
+  if (typeof cachedLifespan === 'number') (self.custom as any).lifespan = cachedLifespan;
+
+  self.type = originType;
+  self.extraSkills = mergedExtraSkills;
+  self.extraAbilities = mergedExtraAbilities;
+  // maxHpBonus 按降级后 rank 重算（当前包内唯一来源是升级，安全）
+  self.maxHpBonus = sumDeltaMaxHpUpTo(newRank);
+
+  // 血量 10% 上限
+  self.hp = Math.max(1, Math.ceil(getMaxHp(state, self) * 0.1));
+  // 行动状态：本回合不能再行动
+  self.moved = true;
+  self.acted = true;
+  // 清技能状态
+  delete self.skillCd;
+  delete self.skillCharge;
+  delete self.skillTurn;
+
+  // 降级清理（掉 < 4 时移除 spirit-ascension）
+  cleanupAfterRankDrop(self, newRank);
+
+  c.result.log = `${originDef.name} 从灵体重塑肉身（降为 ${REALMS[newRank]} 期，恢复 ${self.hp} 点生命）`;
+});
 
 /**
- * 真元：真实伤害
+ * 让单位学会一个后天技能。如果已经学过，什么都不做。
+ * 返回 true 表示这是一次「新学会」，方便调用方写战报。
  */
-const QI_TRUE_DAMAGE: AbilityDef = {
-  id: 'qi-true-damage',
-  name: '真元',
-  summary: '每次攻击附带随境界提升的、无视护甲的真实伤害。',
-  group: 'attack',
-  hooks: {
-    damage: [
-      {
-        stage: DAMAGE_STAGE.trueDamage,
-        apply: (c) => {
-          if (c.side !== 'attacker') return;
-          if (!isCultivatorUnit(c.state, c.self)) return;
-          const trueDmg = trueDamageOf(c.self);
-          if (trueDmg > 0) c.damage += trueDmg;
-        },
-      },
-    ],
-  },
-};
+export function learnSkill(u: Unit, skill: SkillDef): boolean {
+  u.extraSkills ??= [];
+  if (u.extraSkills.some((k) => k.id === skill.id)) return false;
+  u.extraSkills.push(skill);
+  return true;
+}
 
-// ── 经验与境界 ───────────────────────
-// 读取当前经验，如果没有初始化就返回 0
-function getExp(u: Unit): number {
-  return (u.custom?.exp as number) ?? 0;
-}
-// 根据经验算等级
-const MAX_RANK = 9;
-function getRank(u: Unit): number {
-  const exp = getExp(u);
-  let rank = 0;
-  while (rank < MAX_RANK && exp >= Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank)) {
-    rank++;
+/** 境界达到对应等级时自动领悟的技能 */
+const CULTIVATOR_SKILL_UNLOCKS: Array<{ rank: number; skill: SkillDef }> = [
+  { rank: 2, skill: SKY_STEP_SKILL },
+];
+
+/** 检查并领悟所有达标的新技能 */
+function checkSkillUnlocks(u: Unit, s: GameState): void {
+  for (const { rank, skill } of CULTIVATOR_SKILL_UNLOCKS) {
+    if (getRank(u) >= rank) {
+      if (learnSkill(u, skill)) {
+        s.log.push({
+          turn: s.turn,
+          player: u.owner,
+          text: `${s.unitTypes[u.type]?.name ?? u.type} 领悟了「${skill.name}」`,
+          open: true,
+        });
+      }
+    }
   }
-  return rank;
 }
+
+/**
+ * 降级后清理：删掉所有"需要更高境界才能维持"的能力和技能。
+ *
+ * 目前唯一的一条：掉到 rank < 4 后不再拥有「灵体道果」——再死就真死。
+ * 未来若有其它 rank 门槛的能力/技能，在这里按同一条规则追加。
+ */
+function cleanupAfterRankDrop(u: Unit, newRank: number): void {
+  if (newRank < 4 && u.extraAbilities?.includes('spirit-ascension')) {
+    u.extraAbilities = u.extraAbilities.filter((id) => id !== 'spirit-ascension');
+  }
+}
+
+
+
+const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
+  { rank: 4, abilityId: 'spirit-ascension', name: '灵体道果' },
+];
+
+/**
+ * 检查并挂上所有达标的新能力。
+ *
+ * 和 `checkSkillUnlocks` 的区别：技能学一次就不再补（`learnSkill` 有幂等），
+ * 能力则可能**被清理**——比如灵体重生降级后 `spirit-ascension` 被移除，
+ * 如果这个修士之后又修炼回 rank 4，这里要能把它重新挂上。
+ * 所以没有"学过就不动"的标记，每次调用都检查 id 是否在 `extraAbilities` 里。
+ */
+function checkAbilityUnlocks(u: Unit, s: GameState): void {
+  u.extraAbilities ??= [];
+  for (const { rank, abilityId, name } of CULTIVATOR_ABILITY_UNLOCKS) {
+    if (getRank(u) < rank) continue;
+    if (u.extraAbilities.includes(abilityId)) continue;
+    u.extraAbilities.push(abilityId);
+    s.log.push({
+      turn: s.turn,
+      player: u.owner,
+      text: `${s.unitTypes[u.type]?.name ?? u.type} 感悟「${name}」`,
+      open: true,
+    });
+  }
+}
+
+onRankUp((u, s) => {
+  checkSkillUnlocks(u, s);
+  checkAbilityUnlocks(u, s);
+});
+
 /** 导出给测试用 */
 export function cultivationRank(u: Unit): number {
   return getRank(u);
 }
 
-// 本地算最大血量的函数（核心规则里的 maxHpOf 也是这么写的）
-function getMaxHp(s: GameState, u: Unit): number {
-  // 从本局兵种表里取基础血量，然后加上单位自己积累的额外血量
-  return (s.unitTypes[u.type]?.maxHp ?? 0) + (u.maxHpBonus ?? 0);
+/**
+ * 设置经验并重算等级。
+ *
+ * 用于"扮演特定等级"的场景：测试、调试、未来的读档导入/回合回放。
+ * 和 `addExp` 的差别：
+ *   · `addExp` 走升级流程（回血、战报、技能领悟），只能升不降；
+ *   · 这里**只设置数值**，不触发任何副作用——正是"我想让这个单位处于
+ *     rank=x、exp=y 的状态"该用的入口。
+ *
+ * 不重置 `custom.rank` 的话，`getRank` 会继续读旧缓存。这是 2026-11-04
+ * 等级显式化之后的设计：exp 和 rank 解耦，改 exp 不代表改 rank。
+ * 想"按 exp 反推等级"就调这个函数；想"只减经验不掉级"就只改 `custom.exp`。
+ */
+export function setCultivationExp(u: Unit, exp: number): void {
+  u.custom = { ...(u.custom ?? {}), exp };
+  delete u.custom.rank;
+  getRank(u);   // 触发反推并写回
 }
 
-// 增加经验并即时判断升级
-function addExp(u: Unit, s: GameState, amount: number): void {
-  u.custom ??= {}; 
-  const rank = getRank(u);
-  u.custom.exp = ((u.custom.exp as number) ?? 0) + amount;
-  const newRank = getRank(u);
-  
-  // 如果升级了，立刻结算加成并写战报
-  // 用公开信息模拟升级时的天地异象，给对手及时出击打断成长的反应时间
-  if (newRank > rank) {
-    const deltaMaxHp = Math.floor(8.5*(newRank-rank)+0.0685*(newRank**3 * 1.8**newRank - rank**3 * 1.8**rank));
-    // 升级瞬间按照比例回血
-    const r = u.hp / getMaxHp(s,u);
-    u.maxHpBonus = (u.maxHpBonus ?? 0) + deltaMaxHp;
-    u.hp += Math.floor(deltaMaxHp * r); 
-    
-    s.log.push({
-      turn: s.turn,
-      player: u.owner, 
-      text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${_REALMS[newRank]} 期！`,
-      open: true,
-    });
-  }
-}
 // 自然经验增长
 function getExpGrowth(u: Unit): number {
   // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
@@ -334,87 +420,6 @@ function getExpGrowth(u: Unit): number {
   }
   return getRank(u) + 2;
 }
-
-// ── 寿元与衰老 ─────────────────────────────────────
-// 规则：age > lifespan 开始减益，age - lifespan >= AGING_DEATH_AGE 才老死。
-/** 寿元耗尽后还能撑几年才真正老死 */
-const AGING_DEATH_AGE = 3;
-function getLifespan(u: Unit): number {
-  // 允许外部或测试强行指定寿元
-  if (u.custom?.lifespan !== undefined) return u.custom.lifespan as number; 
-  
-  const rank = getRank(u);
-  if (rank >= MAX_RANK) return Infinity;
-  return 10 + rank * 9;
-}
-/**
- * 超出寿元多少岁。
- * 必须有 Math.max(0, ...)，否则负的“超龄”会变成攻击力加成，导致伤害爆炸。
- */
-export function getAgingYears(u: Unit): number {
-  return Math.max(0, (u.age ?? 0) - getLifespan(u));
-}
-
-/** 超出 AGING_DEATH_AGE 岁就坐化 */
-function isDoomed(u: Unit): boolean {
-  return getAgingYears(u) >= AGING_DEATH_AGE;
-}
-
-// ── 属性修正 ───────────────────────
-// 返回的是增量
-/** 攻击力修正：境界，衰老 −2/岁 */
-// 由于攻击次数和溅射太强，这里的基础数值略为削弱
-function atkModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = (5 * rank + 2**(rank-0.5))/((rank+1)**0.2);
-  return Math.floor(realmsModifier - getAgingYears(u) * 2);
-}
-/** 真伤修正 */
-function trueDamageOf(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = (rank*rank)/4+rank*(1.2**rank);
-  return Math.floor(realmsModifier);
-}
-/** 攻击次数修正 */
-// x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
-function attTimesModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = (rank + 1) / 2;
-  return Math.max(1, Math.floor(realmsModifier));
-}
-/** 生命修正 */
-/** 护甲修正：境界，衰老 −1/岁 */
-function armorModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = -1 + rank * rank + 1.5**rank;
-  return Math.floor(realmsModifier - getAgingYears(u));
-}
-/** 移动修正 */
-function moveModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = rank/3;
-  return Math.floor(realmsModifier);
-}
-/** 溅射范围修正 */
-function SplashModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = rank/4;
-  return Math.floor(realmsModifier);
-}
-/** 射程修正 */
-function RangeModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = rank/2;
-  return Math.floor(realmsModifier);
-}
-/** 视野修正 */
-function VisionModifier(u: Unit): number {
-  const rank = getRank(u);
-  const aging = getAgingYears(u);
-  const realmsModifier = rank;
-  return Math.floor(realmsModifier-aging);
-}
-
 
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
@@ -490,7 +495,8 @@ export const CULTIVATION_PACK: Expansion = {
       for (const u of state.units) {
         if (u.owner !== player || !isCultivatorUnit(state, u)) continue;
         const age = u.age ?? 0;
-        const lifespan = getLifespan(u);
+        // 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
+        const lifespan = ensureLifespan(u);
 
         if (isDoomed(u)) {
           if (u.hp > 0) {
@@ -533,7 +539,7 @@ export const CULTIVATION_PACK: Expansion = {
       const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
 
       const lines = [
-        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${_REALMS[rank]}期`,
+        `当前境界：第 ${rank} / ${MAX_RANK} 层   ${REALMS[rank]}期`,
         nextExp !== null
           ? `修为经验：${exp} / ${nextExp}`
           : `修为经验：${exp}（已臻化境）`,
@@ -544,8 +550,7 @@ export const CULTIVATION_PACK: Expansion = {
         lines.push(`剑修：境界加成在普攻时 ×0.8，剑气纵横时 ×1.2`);
       }
 
-      const def = state.unitTypes[unit.type];
-      const hasSwordSweep = def?.skills?.some((sk) => sk.id === 'sword-sweep');
+      const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
       if (hasSwordSweep) {
         const reach = getSwordSweepReach(state, unit);
         lines.push(`剑气纵横：向指定方向挥出 ${reach} 格直线剑气，伤害受境界加成`);
@@ -570,7 +575,7 @@ export const CULTIVATION_PACK: Expansion = {
       return lines;
     },
   },
-  units: [CULTIVATOR, SWORD_CULTIVATOR],
-  abilities: [QI_TRUE_DAMAGE], 
+  abilities: [QI_TRUE_DAMAGE, SPIRIT_ASCENSION],
+  units: [CULTIVATOR, SWORD_CULTIVATOR, SPIRIT_CULTIVATOR],
 };
 

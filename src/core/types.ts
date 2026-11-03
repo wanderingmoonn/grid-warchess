@@ -153,6 +153,29 @@ export type UnitLayer = 'ground' | 'air';
  */
 export type SkillEffect = string;
 
+/**
+ * 这个单位现在拥有哪些技能：天赋（兵种表）+ 学会的（extraSkills）− 遗忘的。
+ * 同 id 以实例为准（允许学会一个覆盖天赋同名技能的新版本）。
+ * 
+ * 放在 types.ts 是为了让 core 和 extensions 都能直接调用，避免循环依赖。
+ */
+export function skillsOf(
+  s: { unitTypes: Record<string, UnitTypeDef> }, 
+  u: Unit
+): SkillDef[] {
+  const base = s.unitTypes[u.type]?.skills ?? [];
+  const lost = u.lostSkillIds ?? [];
+  const kept = base.filter((k) => !lost.includes(k.id));
+  const out: SkillDef[] = [];
+  const seen = new Set<string>();
+  for (const k of [...kept, ...(u.extraSkills ?? [])]) {
+    if (seen.has(k.id)) continue;
+    seen.add(k.id);
+    out.push(k);
+  }
+  return out;
+}
+
 export interface SkillDef {
   id: string;
   name: string;
@@ -212,6 +235,25 @@ export interface SkillDef {
    * - 'point' / 'direction'：需要玩家点地图选点或选方向
    */
   targeting?: 'none' | 'point' | 'direction';
+
+  /**
+   * 技能的自定义数据。引擎**不读取**，只透传。
+   *
+   * 为什么放在这里而不是给 `SkillDef` 开一堆具体字段：技能的效果千差万别，
+   * 引擎只需要认识 `effect / cooldown / charges / radius / power` 这一小撮
+   * 通用参数；剩下的"这个技能是不是魂法""它是不是消耗寿元""它是不是
+   * 只有某流派能放"——都是**扩展自己**的约定。开着一个个具名字段，
+   * 等于让核心为每一个扩展都破一次口子。
+   *
+   * 修真包的约定（写在这里是因为跨文件引用）：
+   *   · `custom.soulBound === true` 表示「魂法」——修士化作灵体时，
+   *     学习来的这条技能**不被清除**（天赋技能随兵种自动恢复，
+   *     不受此标记影响）。
+   *
+   * 和 `Unit.custom` 一个道理：只存不读、只透传不解释，
+   * 让扩展在自己的 `SKILL_EFFECTS` 里自行判定。
+   */
+  custom?: Record<string, unknown>;
 }
 
 export interface Tile {
@@ -937,6 +979,26 @@ export interface Unit {
    * 消耗到 0 后无法继续反击，要等下一个大回合开始才会重置。
    */
   countersLeft?: number;
+
+  /** 实例层：覆盖兵种定义的 layer。undefined = 跟随兵种 */
+  layer?: UnitLayer;
+  /** 本回合已消耗的移动力（御空这类能力扣的）。自己回合开始时清空 */
+  moveSpent?: number;
+
+  /** 后天学会的技能，追加在兵种自带的「天赋技能」之后。学习 = push，遗忘 = 从数组移除 */
+  extraSkills?: SkillDef[];
+  /** 被封印/遗忘的天赋技能 id（从兵种表 skills 里剔除） */
+  lostSkillIds?: string[];
+
+  /**
+   * 后天挂上的能力 id，追加在兵种定义的 `abilities` 之后。
+   *
+   * 和 `extraSkills` 同一套模式：动态追加、按 id 去重、undefined 等于没挂。
+   * 谁读它：`ability-registry.ts` 的 5 个 lookup 函数、`rules.ts` 里
+   * `hooksOfUnit / hasFlagOn / stagedOfUnit / aurasOfUnit` 这一组 helper。
+   * 规则层**不认识任何具体能力 id**，只负责合并查找。
+   */
+  extraAbilities?: string[];
 
   /** 
    * 扩展专用的自定义数据沙盒，一些其他扩展不会共用的数据就丢这里。
