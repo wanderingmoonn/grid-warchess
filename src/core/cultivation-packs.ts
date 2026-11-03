@@ -351,6 +351,47 @@ const QI_TRUE_DAMAGE: AbilityDef = {
   },
 };
 
+const SPIRIT_ASCENSION: AbilityDef = {
+  id: 'spirit-ascension',
+  name: '灵体道果',
+  summary: '境界达到炼气期（≥ 4 级）时，肉身死亡会化作灵体，可主动重生。',
+  group: 'defense',
+  hooks: {
+    onDeath: (c) => {
+      // ★ Commit 3 里填实现；Commit 2 只挂空壳，让面板和挂载逻辑先跑通。
+      // 留一个 empty 也不影响什么，fireKilled 会遍历每个 hook 的 onDeath，
+      // 没有就是 undefined 跳过。
+    },
+  },
+};
+
+const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
+  { rank: 4, abilityId: 'spirit-ascension', name: '灵体道果' },
+];
+
+/**
+ * 检查并挂上所有达标的新能力。
+ *
+ * 和 `checkSkillUnlocks` 的区别：技能学一次就不再补（`learnSkill` 有幂等），
+ * 能力则可能**被清理**——比如灵体重生降级后 `spirit-ascension` 被移除，
+ * 如果这个修士之后又修炼回 rank 4，这里要能把它重新挂上。
+ * 所以没有"学过就不动"的标记，每次调用都检查 id 是否在 `extraAbilities` 里。
+ */
+function checkAbilityUnlocks(u: Unit, s: GameState): void {
+  u.extraAbilities ??= [];
+  for (const { rank, abilityId, name } of CULTIVATOR_ABILITY_UNLOCKS) {
+    if (getRank(u) < rank) continue;
+    if (u.extraAbilities.includes(abilityId)) continue;
+    u.extraAbilities.push(abilityId);
+    s.log.push({
+      turn: s.turn,
+      player: u.owner,
+      text: `${s.unitTypes[u.type]?.name ?? u.type} 感悟「${name}」`,
+      open: true,
+    });
+  }
+}
+
 // ── 经验与境界 ───────────────────────
 // 读取当前经验，如果没有初始化就返回 0
 function getExp(u: Unit): number {
@@ -491,6 +532,7 @@ function addExp(u: Unit, s: GameState, amount: number): void {
       open: true,
     });
     checkSkillUnlocks(u, s);
+    checkAbilityUnlocks(u, s); 
 
     // 寿元随等级上涨：显式落库，让降级时不回退（见 getLifespan 的说明）。
     // rank 9 是 Infinity，不落库（见 baseLifespanOf 的说明）。

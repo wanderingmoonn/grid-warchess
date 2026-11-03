@@ -876,7 +876,6 @@ export function magicSegment(
   foe: Unit | null,
 ): number {
   if (outOfAmmo(s, attacker)) return 0;
-  const def = utype(s, attacker.type);
   const magic = magicAtkOf(s, attacker);
   if (magic <= 0) return 0;
   const out = Math.max(0, magic - magicRes);
@@ -1087,7 +1086,6 @@ export { BURN_MAX_LAYERS };
  */
 function applyOnHitStatus(s: GameState, attacker: Unit, target: Unit, dmg: number): string[] {
   if (dmg <= 0 || target.hp <= 0) return [];
-  const def = utype(s, attacker.type);
   const touched: string[] = [];
   // 即使一条状态都没贴上，也要把 status 建出来：老实现在这里 `??= {}`，
   // 一旦哪天不建了，"空对象"和"没有字段"的区别会从存档和战报里漏出来。
@@ -1842,7 +1840,6 @@ function blockedFor(s: GameState, x: number, y: number, unit: { type: string; ow
 export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolean {
   if (!s.fog) return false;
   if (unit.owner === viewer) return false;
-  const def = utype(s, unit.type);
   // 技能带来的隐匿（刺客大师）：不挑地形、也不看"动没动过"——
   // 它是主动藏起来的，藏到自己的下个回合开始（见 turnStartSkills 清 heroBuff）。
   const skillHidden = unit.heroBuff?.hidden === true;
@@ -2405,8 +2402,6 @@ export function previewAttack(
   hits: number; // 保留字段防 UI 报错，但固定为 1
   toSplash: number;
 } {
-  const def = utype(s, attacker.type);
-
   // 单次伤害
   const toDefender = computeDamage(s, attacker, defender);
 
@@ -5307,7 +5302,6 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
  */
 function runTurnStart(s: GameState, u: Unit, p: PlayerId, from: number, to: number, rested: boolean): void {
   if (u.owner !== p) return;
-  const def = utype(s, u.type);
   const hooks = stagedOfUnit<TurnStartCtx>(s, u, 'onTurnStart');
   if (hooks.length === 0) return;
   runStaged(
