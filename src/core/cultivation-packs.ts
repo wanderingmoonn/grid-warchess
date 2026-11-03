@@ -294,6 +294,39 @@ function checkSkillUnlocks(u: Unit, s: GameState): void {
   }
 }
 
+/**
+ * 降级后清理：删掉所有"需要更高境界才能维持"的能力和技能。
+ *
+ * 目前唯一的一条：掉到 rank < 4 后不再拥有「灵体道果」——再死就真死。
+ * 未来若有其它 rank 门槛的能力/技能，在这里按同一条规则追加。
+ */
+function cleanupAfterRankDrop(u: Unit, newRank: number): void {
+  if (newRank < 4 && u.extraAbilities?.includes('spirit-ascension')) {
+    u.extraAbilities = u.extraAbilities.filter((id) => id !== 'spirit-ascension');
+  }
+}
+
+//各种单位
+//灵体
+const SPIRIT_CULTIVATOR: UnitTypeDef = {
+  id: 'cultivator-spirit',
+  name: '灵体',
+  short: '灵',
+  era: 1,
+  category: 'combat',
+  cost: 0,
+  move: 3,
+  atk: 0,
+  armor: 0,
+  maxHp: 1,
+  range: 1,
+  vision: 3,
+  layer: 'air',
+  flight: true, 
+  summonedOnly: true,
+  abilities: ['qi-true-damage'],
+  skills: [],
+};
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
   id: 'qi-cultivator',
@@ -358,9 +391,57 @@ const SPIRIT_ASCENSION: AbilityDef = {
   group: 'defense',
   hooks: {
     onDeath: (c) => {
-      // ★ Commit 3 里填实现；Commit 2 只挂空壳，让面板和挂载逻辑先跑通。
-      // 留一个 empty 也不影响什么，fireKilled 会遍历每个 hook 的 onDeath，
-      // 没有就是 undefined 跳过。
+      const { state, victim, api } = c;
+      if (!isCultivatorUnit(state, victim)) return;
+      if (victim.type === 'cultivator-spirit') return;// 灵体死了就真死
+      if (victim.custom?.spiritForm === true) return;
+      if (isDoomed(victim)) return;// 老死 → 真死
+      if (getRank(victim) < 4) return;
+      const spiritDef = state.unitTypes['cultivator-spirit'];
+      if (!spiritDef) return;
+
+      // 落脚点：原地优先，若 air 层同格冲突则找相邻空格
+      let x = victim.x, y = victim.y;
+      if (!api.canStandAt(state, x, y, 'cultivator-spirit')) {
+        const spot = api.freeNeighbor(state, victim, 'cultivator-spirit');
+        if (!spot) return;// 无处落脚，真死
+        x = spot.x; y = spot.y;
+      }
+
+      // 暂存与过滤
+      const savedExtraSkills = victim.extraSkills ?? [];
+      const savedExtraAbilities = victim.extraAbilities ?? [];
+      const soulBound = savedExtraSkills.filter((k) => k.custom?.soulBound === true);
+      const otherAbilities = savedExtraAbilities.filter((id) => id !== 'spirit-ascension');
+
+      const originMaxHpBonus = victim.maxHpBonus ?? 0;
+      const originType = victim.type;
+      const originName = state.unitTypes[originType]?.name ?? originType;
+      const rankNow = getRank(victim);
+
+      victim.custom = {
+        ...(victim.custom ?? {}),
+        spiritForm: true,
+        originType,
+        savedExtraSkills,
+        savedExtraAbilities,
+        originMaxHpBonus,
+      };
+      victim.type = 'cultivator-spirit';
+      victim.x = x; victim.y = y;
+      victim.maxHpBonus = Math.floor(originMaxHpBonus * 0.3);
+      victim.hp = 1 + victim.maxHpBonus;
+      victim.moved = true;
+      victim.acted = true;
+      victim.status = {};
+      delete victim.heroBuff;
+      delete victim.countersLeft;
+      victim.extraSkills = soulBound;
+      victim.extraAbilities = otherAbilities;
+
+      state.units.push(victim);
+      api.pushLog(state, victim.owner,
+        `${originName} 肉身崩碎，化作灵体（境界 ${_REALMS[rankNow]} 期）`, true);
     },
   },
 };
@@ -856,7 +937,7 @@ export const CULTIVATION_PACK: Expansion = {
       return lines;
     },
   },
-  units: [CULTIVATOR, SWORD_CULTIVATOR],
-  abilities: [QI_TRUE_DAMAGE], 
+  abilities: [QI_TRUE_DAMAGE, SPIRIT_ASCENSION],
+  units: [CULTIVATOR, SWORD_CULTIVATOR, SPIRIT_CULTIVATOR],
 };
 
