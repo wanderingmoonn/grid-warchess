@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
+import { abilityValue, effectiveHp, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
 import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
@@ -523,6 +524,71 @@ test('攒升级：咬住窗口放到 8 回合时，差 6 个回合也一分不�
   assert.equal(savingAllowance(300, 100, 900, 2, true, 0, 8), 0, '升级窗口 8：咬住，一分不花');
   // 更远的目标准则不变：超过窗口就照常放额度
   assert.equal(savingAllowance(100, 100, 2000, 2, true, 0, 8), 50, '差 19 个回合：超过窗口，照常放');
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 估值模型本身的性质（有效血量曲线、能力的局面相性）
+ *
+ * 这些不是"某个玩法对不对"，而是尺子的**结构性约束**：
+ * 曲线只要有一个地方不单调、或者能算出无穷大，AI 的采购就会在那一档抽风，
+ * 而抽风的表现是"某些兵永远不买"——从对局数据里几乎查不出来。
+ * ══════════════════════════════════════════════════════════════════ */
+
+test('等效血：护甲 0~40 全段单调递增，且不会爆到无穷',()=>{
+  let prev = 0;
+  for(let a=0;a<=40;a++){
+    const v = effectiveHp(100, a);
+    assert.ok(Number.isFinite(v), `护甲 ${a} 算出了非有限值：${v}`);
+    assert.ok(v > prev, `护甲 ${a} 的等效血（${v.toFixed(1)}）没有比护甲 ${a-1}（${prev.toFixed(1)}）更高`);
+    prev = v;
+  }
+  // 上界：三档都打不动时收敛，不会无限放大
+  assert.ok(effectiveHp(100, 60) < 100 * 25, `护甲 60 的等效血 ${(effectiveHp(100,60)/100).toFixed(1)}× 已经失控`);
+});
+
+test('等效血：护甲 19 不再是"一刀腰斩"——旧曲线在 18→19 会翻倍',()=>{
+  const at18 = effectiveHp(100,18);
+  const at19 = effectiveHp(100,19);
+  assert.ok(at19 / at18 < 1.5, `18→19 一点护甲涨了 ${((at19/at18-1)*100).toFixed(0)}%，仍然过陡`);
+  // 旧口径（挨 20 攻）在 19 → 20 完全钉住，新口径必须还能继续涨
+  assert.ok(effectiveHp(100,20) > at19, '20 甲反而没有比 19 甲更硬：又钉住了');
+});
+
+test('等效血：护甲 ≤ 6 时，"20 攻"单点假设仍然够用（差 < 20%）',()=>{
+  /*
+   * 两套口径的偏差（新/旧 − 1）：甲 0 → 0%，甲 4 → −9%，甲 6 → −15%，
+   * 甲 8 → −24%，甲 12 → −50%。所以"单一 20 攻"只在**薄甲段**成立，
+   * 这就是它该被写成"适用范围"而不是"公式"的原因。
+   */
+  for(const a of [0,4,6]){
+    const single = 100 * (20 / Math.max(1, 20 - a));
+    const spectrum = effectiveHp(100, a);
+    const diff = Math.abs(spectrum - single) / single;
+    assert.ok(diff < 0.2, `护甲 ${a} 两套口径差 ${(diff*100).toFixed(0)}%，单点假设在这里就不该用了`);
+  }
+});
+
+test('掠空：速攻比均势值钱，均势又比龟缩值钱',()=>{
+  const s = arena();
+  // 拿民兵当底子捏一个"只差掠空"的兵，避免依赖某个扩展包的兵种表
+  const base = s.unitTypes['militia']!;
+  const d = {...base, id:'t-overfly', abilities:['fly-over']};
+  const push = abilityValue(d, {tempo:1, visionCoverage:0.4, fog:true});
+  const flat = abilityValue(d, {tempo:0, visionCoverage:0.4, fog:true});
+  const hold = abilityValue(d, {tempo:-1, visionCoverage:0.4, fog:true});
+  assert.ok(push > flat && flat > hold, `掠空没有随局面倾斜：速攻 ${push} / 均势 ${flat} / 龟缩 ${hold}`);
+  assert.equal(flat, 0.18, `均势下掠空应值 0.18，实际 ${flat}`);
+  assert.ok(push - flat >= 0.05, `速攻只比均势多 ${(push-flat).toFixed(3)}，倾斜幅度不够看`);
+});
+
+test('掠空必须比飞行贵：它是飞行的超集',()=>{
+  const s = arena();
+  const base = s.unitTypes['militia']!;
+  const flying = {...base, id:'t-fly', flight:true};
+  const overfly = {...base, id:'t-overfly', abilities:['fly-over']};
+  const a = abilityValue(flying, NEUTRAL_CONTEXT);
+  const b = abilityValue(overfly, NEUTRAL_CONTEXT);
+  assert.ok(b > a, `掠空 ${b} 不比飞行 ${a} 贵——加强版反而更便宜`);
 });
 
 console.log(`${passed} AI optimization tests passed`);

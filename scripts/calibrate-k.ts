@@ -19,6 +19,7 @@ import {
   LANCHESTER_EXP,
   PRICE_EXP,
   POWER_K,
+  combatCore,
   rangeFactor,
   moveFactor,
   visionFactor,
@@ -27,40 +28,35 @@ import {
 } from '../src/core/unit-value.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
 
-const BASE_ARMOR = 5;
-const BASE_ATK = 20;
-
 const ids = availableExpansions().map((e) => e.id);
 const s = createMatch({ ...DEFAULT_CONFIG, startEra: 6, expansionIds: ids }, 1);
 const units = Object.values(s.unitTypes).filter(
   (d) => d.category === 'combat' && d.cost > 0,
 );
 
-const burstOf = (d: UnitTypeDef): number => Math.max(1, d.burst ?? 1);
-const dprOf = (d: UnitTypeDef): number =>
-  Math.max(1, d.atk + (d.magicAtk ?? 0) * 1.2 - BASE_ARMOR) * burstOf(d);
-const ehpOf = (d: UnitTypeDef): number =>
-  Math.max(1, d.maxHp) * (BASE_ATK / Math.max(1, BASE_ATK - d.armor));
+/**
+ * 输出与等效血**直接问 `combatCore`**，不在这里抄公式。
+ *
+ * 这里抄过一份 `hp × 20/(20−armor)`，后来等效血改成"威胁谱"时忘了同步——
+ * 标定脚本于是拿着旧曲线算 K，算出来的建议值会把整个量级带偏。
+ * 标定脚本的职责是"试不同的指数"，不是"重新实现一遍模型"。
+ */
+const coreOf = (d: UnitTypeDef): number => {
+  const { dps, ehp } = combatCore(d);
+  return dps * ehp;
+};
 
 /** 与 unitPower 一致的"除 K 与压缩指数之外"那一坨 */
 const shapeOf = (d: UnitTypeDef): number =>
   rangeFactor(d.range ?? 1) *
   moveFactor(d.move, NEUTRAL_CONTEXT) *
   visionFactor(d.vision, NEUTRAL_CONTEXT) *
-  (1 + abilityValueOf(d));
-
-/**
- * 能力权重直接问 AI 那把尺子：`abilityValue` 是导出的，
- * 不在这里抄第二份表——抄了就会和采购口径分叉。
- */
+  (1 + abilityValueOf(d, NEUTRAL_CONTEXT));
 
 /** 某个 (exp, priceExp) 下，K = 1 时的效率分布 */
 function effsAt(exp: number, priceExp: number): number[] {
   return units
-    .map((d) => {
-      const core = (dprOf(d) * ehpOf(d)) ** exp;
-      return (core * shapeOf(d)) / Math.max(20, d.cost) ** priceExp;
-    })
+    .map((d) => (coreOf(d) ** exp * shapeOf(d)) / Math.max(20, d.cost) ** priceExp)
     .sort((x, y) => x - y);
 }
 

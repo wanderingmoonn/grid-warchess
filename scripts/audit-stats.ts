@@ -26,7 +26,7 @@
  */
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { availableExpansions } from '../src/core/expansions.ts';
-import { abilityValue } from '../src/core/unit-value.ts';
+import { abilityValue, effectiveHp } from '../src/core/unit-value.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
 
 /**
@@ -41,7 +41,8 @@ const moveT = (m: number): number => 1 + Math.max(0, m - 2) * 0.12;
 const visionT = (v: number): number => 1 + Math.max(-2, Math.min(6, v - 3)) * 0.04;
 
 const dprOf = (d: UnitTypeDef): number => (d.atk + (d.magicAtk ?? 0) * 1.2) * Math.max(1, d.burst ?? 1);
-const ehpOf = (d: UnitTypeDef): number => d.maxHp * (20 / Math.max(1, 20 - d.armor));
+/** 等效血直接问模型：单一「20 攻」那条曲线在厚甲段是发散的，别在回归里再用一遍 */
+const ehpOf = (d: UnitTypeDef): number => effectiveHp(d.maxHp, d.armor);
 
 /** 最小二乘：正规方程 + 高斯消元（特征只有 6 列，不值得引库） */
 function solve(A: number[][], y: number[]): number[] {

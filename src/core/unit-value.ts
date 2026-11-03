@@ -56,7 +56,13 @@ export const ABILITY_VALUE: Record<string, number> = {
   'af-stealth': 0.08,
   phase: 0.06,
   // 机动
-  'fly-over': 0.14,
+  /*
+   * 掠空 0.18：**必须比 `flight`（0.15）贵**，因为它严格包含飞行——
+   * 掠空 = 掠水 + 林丘各 1 步（= 飞行）+ 空中层（能和地面单位共格、地面近战够不着）。
+   * 同一个东西，加强版反而更便宜，是上一轮定价里最直白的一处自相矛盾。
+   * 速攻时还要再高一截，见下面的 `ABILITY_TEMPO`。
+   */
+  'fly-over': 0.18,
   leap: 0.1,
   'forest-walk': 0.05,
   woodland: 0.05,
@@ -95,12 +101,60 @@ const FLIGHT_VALUE = 0.15;
 const SPLASH_PER_RADIUS = 0.05;
 const SPLASH_CAP = 0.15;
 
-/** 这个兵种的能力总共值多少（0 ~ 0.6） */
-export function abilityValue(d: UnitTypeDef): number {
+/**
+ * 能力与"局面"的相性：**同一个能力，速攻和龟缩不一定同价**。
+ *
+ * 移速已经按 `tempo` 在 0.65~1.35 之间摆了，但能力还是常数——于是
+ * "掠空"（穿人堆贴后排）和"守护"（站桩减伤）在速攻时一个价、龟缩时也一个价。
+ * 这张表只做一件事：给每条能力一个**随 tempo 倾斜的系数**，
+ * `1 + tilt × tempo`（tempo ∈ [−1, 1]，于是在防守/均势/速攻下是 1−tilt、1、1+tilt）。
+ *
+ * 判据只有一条：**这条能力兑现的是"位置"还是"耐久"**。
+ *   · 位置类（穿过去、先手、追击）——速攻时翻倍也不多，因为那时候你只有一两个回合
+ *     把伤害落到后排；龟缩时几乎兑现不了。
+ *   · 耐久类（回血、护甲光环、免溅射）——反过来，守城时才是它的主场。
+ *   · 数值类（破甲、真伤）与局面无关，不进表。
+ *
+ * 幅度参考移速：移速 ±35%，能力这里给到 ±20%~±60%，因为能力的"兑现条件"
+ * 比移速更极端——掠空在龟缩时不是"弱一点"，是**根本用不上**（你自己就在防线上，
+ * 没有人堆要穿）。
+ */
+export const ABILITY_TEMPO: Record<string, number> = {
+  // 位置类：速攻更值钱
+  'fly-over': 0.6,
+  charge: 0.5,
+  leap: 0.4,
+  kite: 0.4,
+  'first-strike': 0.3,
+  'kill-rush': 0.3,
+  'slow-hit': 0.2,
+  'siege-master': 0.3,
+  // 耐久类：守更值钱
+  'shield-wall': -0.4,
+  'regenerate-plus': -0.3,
+  regenerate: -0.3,
+  'aoe-immune': -0.25,
+  'heal-aura': -0.25,
+  'aura-armor': -0.3,
+  'hex-weak': -0.2,
+};
+
+/**
+ * 这个兵种的能力总共值多少（0 ~ 0.6）。
+ *
+ * `ctx.tempo` 会按 `ABILITY_TEMPO` 调整每条能力的权重；不传就是均势。
+ */
+export function abilityValue(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): number {
+  const tempo = Math.max(-1, Math.min(1, ctx.tempo ?? 0));
   let v = 0;
-  for (const a of d.abilities ?? []) v += ABILITY_VALUE[a] ?? 0.05;
+  for (const a of d.abilities ?? []) {
+    const base = ABILITY_VALUE[a] ?? 0.05;
+    v += base * (1 + (ABILITY_TEMPO[a] ?? 0) * tempo);
+  }
   for (const _ of d.skills ?? []) v += 0.08; // 有技能表（主动技）也是钱
-  if (d.flight) v += FLIGHT_VALUE;
+  // 飞行也是"位置类"：它兑现的是"能不能绕过地形贴上去"，速攻时更贵一点。
+  if (d.flight) v += FLIGHT_VALUE * (1 + 0.35 * tempo);
+  // 溅射兑现的是"对面挤不挤"，和速攻无关——它既可能发生在进攻，也可能发生在守城。
   if ((d.splash ?? 0) > 0) v += Math.min(SPLASH_CAP, (d.splash as number) * SPLASH_PER_RADIUS);
   return Math.min(0.6, v);
 }
@@ -169,6 +223,61 @@ const BASE_ARMOR = 5;
 const BASE_ATK = 20;
 
 /**
+ * 威胁谱：算"等效血"时假定会被谁打。
+ *
+ * 这里原来只有一个数 `20`，写成 `hp × 20 / max(1, 20 − armor)`。它在
+ * **护甲 ≥ 19 时彻底失效**，而且失效方式很隐蔽（分母被 `max(1,…)` 兜住，
+ * 所以不崩、不 NaN，只是把结果钉死在 20 倍上）：
+ *
+ * | 护甲 | 模型给的等效血 | 每点护甲边际 | 实际每回合吃到的伤害（20 攻） |
+ * |---|---|---|---|
+ * | 10 | ×2.0 | +10% | 10 点，对得上 |
+ * | 15 | ×4.0 | +20% | 5 点，开始夸张 |
+ * | 18 | ×10.0 | +50% | 2 点，明显过头 |
+ * | 19 | ×20.0 | **+100%** | 1 点 |
+ * | 20~25 | ×20.0（钉住，边际 0） | 0 | **0 点：物理免疫** |
+ *
+ * 三个问题叠在一起：
+ *   ① **上界是假的**：19 → 25 全给 20 倍，模型认为魔龙卵（甲 25）和战列舰（甲 18）
+ *      一样硬。前者不吃物理伤害，后者还吃 2 点。
+ *   ② **边际收益倒挂**：18→19 一点护甲值 +100%，5→6 只值 +7%。可护甲是
+ *      "每次挨打减一次"，本该近似**线性**加等效血，不该是双曲线。
+ *   ③ **单点假设不成立**：它假定所有人都是 20 攻。后期 78 攻的坦克打 18 甲，
+ *      TTK 只多 30%，不是 5 倍。护甲越厚，这个假设错得越离谱。
+ *
+ * 所以换成**威胁谱**：轻/中/重三档各算一次 TTK，再取加权几何平均。
+ * 用几何平均（不是算术）是因为"等效血"是乘性量，算术平均会被最高那档带飞。
+ *
+ * 三档就是数据里真实的攻击带：轻 20（民兵/弓手/火枪兵）、中 45（骑士/恶魔）、
+ * 重 80（主战坦克/战列舰/隐身战机）。权重按"战场上挨的刀数"给——便宜兵多、
+ * 重锤少，但重锤对厚甲最有发言权，所以给到 25%，不是按人头比例的 5%。
+ *
+ * 标定后的曲线：甲 5 → ×1.19，10 → ×1.49，15 → ×2.11，18 → ×3.20，25 → ×4.84，
+ * 单调、有上界（护甲高到三档都打不动时收敛到 ×37.6——那要 79 甲，
+ * 数据里最高是魔龙卵的 25），**没有拐点，也没有钉住区**。
+ */
+const THREAT_ATK: ReadonlyArray<readonly [number, number]> = [
+  [BASE_ATK, 0.4], // 轻档就是原来那个"基准 20 攻"
+  [45, 0.35],
+  [80, 0.25],
+];
+
+/**
+ * 等效血：挨"威胁谱"打的时候能扛多少个标准回合。
+ *
+ * `hp × Π(atk / max(1, atk − armor))^w`，就是三档 TTK 的加权几何平均。
+ * 分母保底 1，是因为伤害本身保底 0（见 rules 的 `max(0, dmg − armor)`）——
+ * 保底 1 相当于"一回合至少推进一点"，否则厚甲会算出真正的无穷大。
+ */
+export function effectiveHp(hp: number, armor: number): number {
+  let logSum = 0;
+  for (const [atk, w] of THREAT_ATK) {
+    logSum += w * Math.log(atk / Math.max(1, atk - armor));
+  }
+  return Math.max(1, hp) * Math.exp(logSum);
+}
+
+/**
  * 跑批实验钩子：**只给对照实验用，正式行为由下面的默认值决定**。
  *
  * 为什么要读环境变量：A/B 两组口径要跑同一棵树，而分片跑批是"边跑边 spawn"——
@@ -210,7 +319,7 @@ export const LANCHESTER_EXP = numFromEnv('WB_UNIT_EXP', 0.55);
  * 的中位就在这一档），这样采购分里 0~26 那一段的上下限才对得上。
  * **换压缩指数必须重标**：`npm run calibrate:k -- <exp>` 会给对应的 K。
  */
-export const POWER_K = numFromEnv('WB_POWER_K', 8.3);
+export const POWER_K = numFromEnv('WB_POWER_K', 8.94);
 
 /**
  * 价格指数：价格越贵，同样的属性越"便宜"一点点。
@@ -221,20 +330,33 @@ export const POWER_K = numFromEnv('WB_POWER_K', 8.3);
 export const PRICE_EXP = numFromEnv('WB_PRICE_EXP', 0.95);
 
 /**
+ * 战力的"核心两项"：每回合输出、等效血。
+ *
+ * 单独导出来是因为标定脚本要拿它去试别的压缩指数——**必须和 unitPower 同源**。
+ * 之前 `calibrate-k.ts` 自己抄了一份 `hp × 20/(20−armor)`，阈值一改两边就对不上，
+ * 算出来的 K 会把标定带偏。抄件就是下一个 bug。
+ */
+export function combatCore(d: UnitTypeDef): { dps: number; ehp: number } {
+  const atk = d.atk + (d.magicAtk ?? 0) * 1.2;
+  return {
+    dps: Math.max(1, atk - BASE_ARMOR) * burstFactor(d),
+    ehp: effectiveHp(d.maxHp, d.armor),
+  };
+}
+
+/**
  * 一个兵种的"战力"。
  *
  * 三步：
  *   1. 输出 = 打穿 5 甲后的每回合伤害（多段打折）；
- *   2. 生存 = 挨 20 攻时的等效血量；
- *   3. 战力 = (输出 × 生存)^LANCHESTER_EXP × 射程 × 移速 × 视野 × 能力。
+ *   2. 生存 = 挨**威胁谱**（20/45/80 攻）打时的等效血量；
+ *   3. 战力 = (输出 × 生存)^LANCHESTER_EXP × 射程 × 移速 × 视野 × (1 + 能力)。
  *
  * 旧版是 `攻 × √血 × 射程`——两个毛病：血量开根号把"血厚"的价值压掉一半，
  * 而且移速/视野/护甲/能力全都不计价（龙骑兵因此被 AI 判成废卡）。
  */
 export function unitPower(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): number {
-  const atk = d.atk + (d.magicAtk ?? 0) * 1.2;
-  const dps = Math.max(1, atk - BASE_ARMOR) * burstFactor(d);
-  const ehp = Math.max(1, d.maxHp) * (BASE_ATK / Math.max(1, BASE_ATK - d.armor));
+  const { dps, ehp } = combatCore(d);
   const core = (dps * ehp) ** LANCHESTER_EXP;
   return (
     core *
@@ -242,7 +364,7 @@ export function unitPower(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT): 
     rangeFactor(d.range ?? 1) *
     moveFactor(d.move, ctx) *
     visionFactor(d.vision, ctx) *
-    (1 + abilityValue(d))
+    (1 + abilityValue(d, ctx))
   );
 }
 
