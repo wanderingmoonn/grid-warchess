@@ -5166,6 +5166,38 @@ check('三人局认输之后：顶栏要说"你已认输"，按钮不再假装�
   assert.equal(surrender!.disabled, true, '认输过一次就不该还能再点');
 });
 
+check('三人局城被打光：顶栏说"你的城全丢了"，席位栏把这一家划掉', () => {
+  /*
+   * 出局有两种：自己认输，和最后一座城被人接管。规则层对两者的处理已经一样了
+   * （兵都会撤场，见 rules 的 retireLostSeat），但界面以前只认"认输"——
+   * 城全丢的那家，顶栏还在写"等待 XXX"，席位栏也照样亮着、显示"城 0"，
+   * 玩家看不出自己已经出局，只觉得自己点什么都不响应。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, playerCount: 3 }, 5151);
+  st.cities = st.cities.filter((c) => c.owner !== 'A');
+  st.current = 'B';
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('你的城全丢了'), `顶栏要说清已经出局，实际：${text.slice(0, 120)}`);
+
+  const endTurn = host.querySelector('[data-act="end-turn"]') as HTMLButtonElement | null;
+  assert.equal(endTurn?.disabled, true, '城全丢了就不能再结束回合');
+
+  const rows = [...host.querySelectorAll('.seat-row')];
+  assert.equal(rows.length, 3, '三家人三行');
+  const out = rows.filter((r) => r.classList.contains('quit'));
+  assert.equal(out.length, 1, `只有出局的那一家该被划掉，实际划掉 ${out.length} 行`);
+  assert.ok((out[0]!.textContent ?? '').includes('城 0'), '划掉的应该是没城的那一家');
+});
+
 
 check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也不重播', () => {
   /*
