@@ -2535,17 +2535,6 @@ function drownCargo(s: GameState, dead: Unit): void {
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
   const victimDef = utype(s, victim.type);
 
-  // 亡语（自爆、重生、分裂）：谁家的兵谁家写。
-  //
-  // 主流程只做两件通用的事：把 result 里的"要不要清场"落实下去，
-  // 以及通知扩展"有单位阵亡了"。清场放在这里而不是各能力里自己删，
-  // 是为了避免两段能力交叉删列表、把刚分裂出来的小史莱姆一起删掉。
-  const dctx: DeathCtx = { state: s, victim, killer, api: abilityApi, result: { blasts: 0 } };
-  for (const h of hooksFor(victimDef)) h.onDeath?.(dctx);
-  // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
-  // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
-  if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
-
   // 没有凶手（毒死、烧死、桥塌）时，两人局记在对面头上；三人以上没有"对面"
   // 这回事，就记在自己头上——宁可少给一份击杀奖励，也不能凭空发给出局的人。
   const killerOwner = killer
@@ -2553,9 +2542,25 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
     : seatsOf(s).length === 2
       ? other(victim.owner)
       : victim.owner;
+
+  // 1) 先通知击杀方：此刻 victim 还是死前那一刻的形态。
+  //
+  // 先告诉世界"谁死了、死时是什么"，再处理"死后变成了什么"。
+  // 亡语属于后者——它是死亡之后发生的事，不该污染死亡这件事本身。
   for (const e of activeExpansions(s)) {
     e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner });
   }
+
+  // 2) 再执行亡语/转化（自爆、重生、分裂、灵体化）。
+  //
+  // 主流程只做两件通用的事：把 result 里的"要不要清场"落实下去，
+  // 以及通知扩展"亡语跑完了"。清场放在这里而不是各能力里自己删，
+  // 是为了避免两段能力交叉删列表、把刚分裂出来的小史莱姆一起删掉。
+  const dctx: DeathCtx = { state: s, victim, killer, api: abilityApi, result: { blasts: 0 } };
+  for (const h of hooksFor(victimDef)) h.onDeath?.(dctx);
+  // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
+  // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
+  if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
 }
 
 function checkWinner(s: GameState): PlayerId | null {

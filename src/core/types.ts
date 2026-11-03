@@ -235,6 +235,25 @@ export interface SkillDef {
    * - 'point' / 'direction'：需要玩家点地图选点或选方向
    */
   targeting?: 'none' | 'point' | 'direction';
+
+  /**
+   * 技能的自定义数据。引擎**不读取**，只透传。
+   *
+   * 为什么放在这里而不是给 `SkillDef` 开一堆具体字段：技能的效果千差万别，
+   * 引擎只需要认识 `effect / cooldown / charges / radius / power` 这一小撮
+   * 通用参数；剩下的"这个技能是不是魂法""它是不是消耗寿元""它是不是
+   * 只有某流派能放"——都是**扩展自己**的约定。开着一个个具名字段，
+   * 等于让核心为每一个扩展都破一次口子。
+   *
+   * 修真包的约定（写在这里是因为跨文件引用）：
+   *   · `custom.soulBound === true` 表示「魂法」——修士化作灵体时，
+   *     学习来的这条技能**不被清除**（天赋技能随兵种自动恢复，
+   *     不受此标记影响）。
+   *
+   * 和 `Unit.custom` 一个道理：只存不读、只透传不解释，
+   * 让扩展在自己的 `SKILL_EFFECTS` 里自行判定。
+   */
+  custom?: Record<string, unknown>;
 }
 
 export interface Tile {
