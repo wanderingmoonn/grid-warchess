@@ -193,7 +193,7 @@ const abilityApi: AbilityApi = {
   distToCity,
   cityName,
   hashPick,
-  hasAbility: (s, u, id) => hasAbilityIn(utype(s, u.type), id, u.extraAbilities),
+  hasAbility: (s, u, id) => hasAbilityOn(s, u, id),
   canBeHealed: (s, u) => canBeHealed(utype(s, u.type), u.extraAbilities), 
   putStatus: (target, key, turns) => {
     const st = (target.status ??= {});

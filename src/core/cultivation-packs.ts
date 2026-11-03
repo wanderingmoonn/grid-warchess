@@ -262,6 +262,101 @@ registerSkillPreview('sword-sweep', (c) => {
   return cells.map(cell => cell.y * c.state.w + cell.x);
 });
 
+const SPIRIT_REBIRTH_SKILL: SkillDef = {
+  id: 'spirit-rebirth',
+  name: '重生',
+  summary: '重塑肉身：失去一半修为并强制降一境，恢复 10% 最大生命。',
+  effect: 'spirit-rebirth',
+  cooldown: 0,
+  multiCast: false,
+};
+
+registerSkillReadyCheck('spirit-rebirth', (_s, u) => {
+  if (u.type !== 'cultivator-spirit') return '只有灵体能重生';
+  if (!u.custom?.originType) return '本源已散失，无法重生';
+  return true;
+});
+
+registerSkillEffect('spirit-rebirth', (c) => {
+  const { self, state } = c;
+  if (self.type !== 'cultivator-spirit') {
+    c.result.ok = false;
+    c.result.reason = '只有灵体能重生';
+    return;
+  }
+  // 这里先判 originType
+  const originType = self.custom?.originType as string | undefined;
+  if (!originType) {
+    c.result.ok = false;
+    c.result.reason = '本源已散失，无法重生';
+    return;
+  }
+
+  // 此时 TS 已经知道 originType 是 string
+  const originDef = state.unitTypes[originType];
+  if (!originDef) {
+    c.result.ok = false;
+    c.result.reason = '本源已散失，无法重生';
+    return;
+  }
+
+  const oldRank = getRank(self);
+  const newRank = Math.max(0, oldRank - 1);
+  // 新经验：原 "x-1 升 x 门槛" 的一半（绝对量）
+  const newExp = Math.floor(expForRank(newRank) / 2);
+
+  // 合并技能（saved ∪ current，按 id 去重）
+  const savedExtraSkills = (self.custom?.savedExtraSkills as SkillDef[]) ?? [];
+  const currentExtraSkills = self.extraSkills ?? [];
+  const mergedExtraSkills = [...savedExtraSkills];
+  for (const k of currentExtraSkills) {
+    if (!mergedExtraSkills.some((m) => m.id === k.id)) mergedExtraSkills.push(k);
+  }
+  // 合并能力
+  const savedExtraAbilities = (self.custom?.savedExtraAbilities as string[]) ?? [];
+  const currentExtraAbilities = self.extraAbilities ?? [];
+  const mergedExtraAbilities = [...savedExtraAbilities];
+  for (const id of currentExtraAbilities) {
+    if (!mergedExtraAbilities.includes(id)) mergedExtraAbilities.push(id);
+  }
+
+  // 清 custom 上的灵体暂存字段，保留 rank / lifespan / exp
+  const cachedLifespan = self.custom?.lifespan;
+  self.custom = { rank: newRank, exp: newExp };
+  if (typeof cachedLifespan === 'number') (self.custom as any).lifespan = cachedLifespan;
+
+  self.type = originType;
+  self.extraSkills = mergedExtraSkills;
+  self.extraAbilities = mergedExtraAbilities;
+  // maxHpBonus 按降级后 rank 重算（当前包内唯一来源是升级，安全）
+  self.maxHpBonus = sumDeltaMaxHpUpTo(newRank);
+
+  // 血量 10% 上限
+  self.hp = Math.max(1, Math.ceil(getMaxHp(state, self) * 0.1));
+  // 行动状态：本回合不能再行动
+  self.moved = true;
+  self.acted = true;
+  // 清技能状态
+  delete self.skillCd;
+  delete self.skillCharge;
+  delete self.skillTurn;
+
+  // 降级清理（掉 < 4 时移除 spirit-ascension）
+  cleanupAfterRankDrop(self, newRank);
+
+  c.result.log = `${originDef.name} 从灵体重塑肉身（降为 ${_REALMS[newRank]} 期，恢复 ${self.hp} 点生命）`;
+});
+function isSpirit(u: Unit): boolean {
+  return u.type === 'cultivator-spirit';
+}
+/** 未来魂修集合：化灵后不吃削弱 */
+const SOUL_MASTER_IDS = new Set<string>();
+function isSoulMasterSpirit(u: Unit): boolean {
+  if (!isSpirit(u)) return false;
+  const origin = u.custom?.originType as string | undefined;
+  return !!origin && SOUL_MASTER_IDS.has(origin);
+}
+
 /**
  * 让单位学会一个后天技能。如果已经学过，什么都不做。
  * 返回 true 表示这是一次「新学会」，方便调用方写战报。
@@ -325,7 +420,7 @@ const SPIRIT_CULTIVATOR: UnitTypeDef = {
   flight: true, 
   summonedOnly: true,
   abilities: ['qi-true-damage'],
-  skills: [],
+  skills: [SPIRIT_REBIRTH_SKILL],
 };
 // 炼气士
 const CULTIVATOR: UnitTypeDef = {
@@ -505,8 +600,13 @@ function maxHpDeltaBetween(fromRank: number, toRank: number): number {
     0.0685 * (toRank ** 3 * 1.8 ** toRank - fromRank ** 3 * 1.8 ** fromRank),
   );
 }
+function sumDeltaMaxHpUpTo(rank: number): number {
+  let total = 0;
+  for (let r = 1; r <= rank; r++) total += maxHpDeltaBetween(r - 1, r);
+  return total;
+}
 
-/** 等级上限。原来叫 MAX_RANK，位置不变 */
+/** 等级上限 */
 const MAX_RANK = 9;
 /**
  * 读境界等级。
@@ -733,8 +833,11 @@ function isDoomed(u: Unit): boolean {
 // 由于攻击次数和溅射太强，这里的基础数值略为削弱
 function atkModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = (5 * rank + 2**(rank-0.5))/((rank+1)**0.2);
-  return Math.floor(realmsModifier - getAgingYears(u) * 2);
+  const realmsModifier = (5 * rank + 2 ** (rank - 0.5)) / ((rank + 1) ** 0.2);
+  const aging = getAgingYears(u) * 2;
+  let scaled = realmsModifier;
+  if (isSpirit(u) && !isSoulMasterSpirit(u)) scaled *= 0.1;
+  return Math.ceil(scaled) - aging;
 }
 /** 真伤修正 */
 function trueDamageOf(u: Unit): number {
@@ -753,14 +856,17 @@ function attTimesModifier(u: Unit): number {
 /** 护甲修正：境界，衰老 −1/岁 */
 function armorModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = -1 + rank * rank + 1.5**rank;
-  return Math.floor(realmsModifier - getAgingYears(u));
+  const realm = -1 + rank * rank + 1.5 ** rank;
+  const aging = getAgingYears(u);
+  let scaled = realm;
+  if (isSpirit(u) && !isSoulMasterSpirit(u)) scaled *= 10;
+  return Math.ceil(scaled) - aging;
 }
 /** 移动修正 */
 function moveModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = rank/3;
-  return Math.floor(realmsModifier);
+  const realm = getRank(u) / 3;
+  if (isSpirit(u) && !isSoulMasterSpirit(u)) return Math.ceil(realm * 1.2);
+  return Math.floor(realm);
 }
 /** 溅射范围修正 */
 function SplashModifier(u: Unit): number {
@@ -770,9 +876,9 @@ function SplashModifier(u: Unit): number {
 }
 /** 射程修正 */
 function RangeModifier(u: Unit): number {
-  const rank = getRank(u);
-  const realmsModifier = rank/2;
-  return Math.floor(realmsModifier);
+  const realm = getRank(u) / 2;
+  if (isSpirit(u) && !isSoulMasterSpirit(u)) return Math.ceil(realm * 0.5);
+  return Math.floor(realm);
 }
 /** 视野修正 */
 function VisionModifier(u: Unit): number {
