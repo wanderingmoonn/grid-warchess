@@ -283,6 +283,7 @@ import type {
   Unit,
   UnitTypeDef,
 } from '../src/core/types.ts';
+import { skillsOf } from '../src/core/types.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -11400,7 +11401,7 @@ test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
   );
 });
 
-test('修仙：纯挂机曲线——炼气士靠打坐能撑到几级（设计锚点）', () => {
+test('修仙：纯挂机曲线——炼气士靠打坐能撑到几级', () => {
   // 设计意图正常挂机应该在 5 级前坐化，
   // 逼玩家靠别的方法续命（例如击杀 +10 经验）。
   // 这条测试把"寿元 / 经验曲线"的效果量化下来：改动参数之后，
@@ -11504,6 +11505,60 @@ test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
 
   // 3. 经验增加：初始 15（我们手动设的），放技能命中基础 +5 + 落空/施法的基础 1 = 21
   assert.equal(swordAfter.custom?.exp, 21, '施法并命中应该获得修为经验');
+});
+
+test('修士：死亡化作灵体，可主动重生', () => {
+  // 1. 初始化沙盒环境
+  let s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  
+  // 2. 造一个 5 级修士，并强行给他 100 点额外血量
+  const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+  setCultivationExp(qi, 222); // 222 经验 = 5 级
+  qi.maxHpBonus = 100;
+  qi.hp = 120;
+  qi.custom = { ...qi.custom, lifespan: 100 };
+  qi.extraAbilities = ['spirit-ascension']; // 手动挂载能力
+
+  // 3. 造一个一刀秒杀敌人的杀手（B方）
+  const killer = place2(s, 'B', 'militia', 6, 5);
+  killer.atkBonus = 1000; 
+  s.current = 'B'; // 轮到 B 行动
+  
+  // 4. B 攻击 A 的修士（触发死亡）
+  let res = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: qi.id });
+  assert.ok(res.ok);
+  if (!res.ok) return; // TS 类型收窄
+  s = res.state;       // ★ 必须接收新的 state
+
+  // 5. 验证是否变成了灵体
+  const spirit = s.units.find(u => u.custom?.spiritForm === true);
+  assert.ok(spirit, '修士应该化作灵体存活');
+  assert.equal(spirit.type, 'cultivator-spirit');
+  assert.equal(spirit.custom?.originType, 'qi-cultivator');
+  assert.equal(spirit.maxHpBonus, 30, '100 额外生命 × 0.3 应得 30');
+  assert.equal(spirit.hp, 31, '基础生命 1 + 额外 30 = 31');
+  assert.equal(spirit.extraAbilities?.includes('spirit-ascension'), false, '灵体不该有灵体道果');
+  assert.ok(skillsOf(s, spirit).some(k => k.id === 'spirit-rebirth'), '灵体应该有重生技能');
+
+  // 6. 轮到 A 行动，释放重生技能
+  s.current = 'A';
+  res = applyAction(s, { type: 'HERO_SKILL', unitId: spirit.id, skillId: 'spirit-rebirth' });
+  assert.ok(res.ok, '重生技能释放失败: ' + (res as any).reason);
+  if (!res.ok) return;
+  s = res.state;       // ★ 必须接收新的 state
+
+  // 7. 验证重生后的状态
+  const rebornQi = s.units.find(u => u.id === spirit.id);
+  assert.ok(rebornQi);
+  assert.equal(rebornQi.type, 'qi-cultivator', '恢复为原修士形态');
+  assert.equal(cultivationRank(rebornQi), 4, '5 级降为 4 级');
+  // 5级的经验门槛是222（4级升5级），减半后是 111
+  assert.equal(rebornQi.custom?.exp, 111, '修为减半'); 
+  assert.equal(rebornQi.moved, true, '重生后本回合不能再移动');
+  assert.equal(rebornQi.acted, true, '重生后本回合不能再攻击');
+  
+  const max = maxHpOf(s, rebornQi);
+  assert.equal(rebornQi.hp, Math.max(1, Math.ceil(max * 0.1)), '恢复 10% 生命');
 });
 
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
