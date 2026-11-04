@@ -3642,14 +3642,21 @@ function slotProblem(unitId: string, site: string): string {
   if (!unitId) return '';
   // 「空过」是玩家亲口排的一个决定，不是"排不出来"：它没有任何前置条件
   if (unitId === ORDER_IDLE) return '';
-  const def = state.unitTypes[unitId];
-  if (!def) return '没有这个兵种';
+  /*
+   * 哨兵要先于兵种表判断。
+   *
+   * 原来的顺序是"先查 state.unitTypes[unitId]、查不到就报没有这个兵种"，
+   * 而「升级时代」这一格存的是 `@upgrade` 这个哨兵——它当然不在兵种表里，
+   * 于是每次点升级都弹「没有这个兵种」，明明这一格本来是合法的。
+   */
   if (unitId === ORDER_UPGRADE) {
     if (!site) return '';
     const city = state.cities.find((c) => c.id === site);
     if (!city) return '营不升级';
     return upgradeCostOf(state, city) === null ? '升不上去了' : '';
   }
+  const def = state.unitTypes[unitId];
+  if (!def) return '没有这个兵种';
   if (heroBlocked(state, me(), def)) return '已在场';
   // 没指定产兵点时按"最高级那座城"算：AI 会自己挑能造的那一座
   const eras = citiesOf(state, me()).map((c) => c.era);
@@ -3842,8 +3849,17 @@ function renderCommander(): void {
   // 热座：这一格按钮是"交计划"，而且要显示"对面交了没有"
   const hotseat = commanderHotseat();
   const mineReady = state.orderReady?.[me()] === true;
-  const foeSeat: PlayerId = me() === 'A' ? 'B' : 'A';
-  const foeReady = state.orderReady?.[foeSeat] === true;
+  // 三家四家局里"对面"不止一个：只报"还差几家"，不再写死 A/B
+  const others = seatsOf(state).filter((x) => x !== me());
+  const waiting = others.filter((x) => state.orderReady?.[x] !== true);
+  const foeLabel =
+    others.length <= 1
+      ? waiting.length === 0
+        ? '对方已提交'
+        : '等对方排'
+      : waiting.length === 0
+        ? '都交齐了'
+        : `还差 ${waiting.length} 家`;
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
@@ -3857,7 +3873,7 @@ function renderCommander(): void {
       }</span>
       <span class="cmd-count">${
         hotseat
-          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeReady ? '对方已提交' : '等对方排'}`
+          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeLabel}`
           : `已排 ${queue.length} / ${slots}`
       }</span>
     </div>
@@ -3997,7 +4013,8 @@ async function runCommanderResolve(): Promise<void> {
 
   try {
     for (let r = 0; r < CONFIG.commanderSlots; r++) {
-      for (let half = 0; half < 2; half++) {
+      // 一"轮"= 每一席各走一次。两家局就是两半回合，三家四家局跟着席位走。
+      for (let half = 0; half < seatsOf(state).length; half++) {
         if (token !== aiToken || state.winner || room) break;
         commanderRound = r + 1;
         commanderSig = '';

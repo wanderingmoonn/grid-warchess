@@ -4550,19 +4550,21 @@ function doPlanCommit(s: GameState): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
   const me = s.current;
-  const foe = other(me);
   const ready = { ...(s.orderReady ?? {}), [me]: true };
   s.orderReady = ready;
   // 第一批：记下"从谁开始"，推进时以此为准
   s.planStart = s.planStart ?? me;
 
-  if (ready[foe] === true) {
-    // 两边都交齐：拨回这一批的开局方，界面开始轮流推进
-    s.current = s.planStart;
-  } else {
-    // 还差对面那一份：只换人，不动回合
-    s.current = foe;
-  }
+  /*
+   * 交完把机器交给"下一个还没交的人"。
+   *
+   * 这里原来写的是 `other(me)`——只有两个席位。三人四家局里那样写会造出
+   * "A、B 都交完了，C 还没排，但 A 已经开推"的死局：C 这一批根本没有序列，
+   * AI 只能自己乱造。改成"按席位顺序找下一个没交的"，两边局下行为不变。
+   * 已经被淘汰的席位不用等（等它等于永远开不了推）。
+   */
+  const pending = seatsOf(s).filter((x) => ready[x] !== true && !isEliminated(s, x));
+  s.current = pending.length === 0 ? s.planStart : pending[0]!;
   return { ok: true, state: s };
 }
 
@@ -4574,10 +4576,16 @@ function doPlanEnd(s: GameState): ActionResult {
   return { ok: true, state: s };
 }
 
-/** 两边都交了没有（界面据此决定"还差谁"还是"可以开推"） */
+/**
+ * 该交的都交了没有（界面据此决定"还差谁"还是"可以开推"）。
+ *
+ * 不再写死 A/B：三人四家局里每一席都要排自己那份。被淘汰的席位不算
+ * （它没有兵、也没有产线，等它等于永远开不了推）。
+ */
 export function planBothReady(s: GameState): boolean {
-  const r = s.orderReady;
-  return s.config.commanderMode === true && r?.A === true && r?.B === true;
+  if (s.config.commanderMode !== true) return false;
+  const r = s.orderReady ?? {};
+  return seatsOf(s).every((x) => r[x] === true || isEliminated(s, x));
 }
 
 /**

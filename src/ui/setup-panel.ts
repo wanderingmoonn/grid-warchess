@@ -613,11 +613,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               <div class="chip-row">
                 <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
-                ${
-                  playerCount > 2
-                    ? ''
-                    : `<button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>`
-                }
+                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
                 ${
                   playerCount > 2
                     ? ''
@@ -627,7 +623,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">${
                 config.godMode
                   ? '上帝模式下棋盘全图可见：点兵种→点棋盘落子，摆完点「交给 AI · 一回合」看一回合，或者「接管 · 打到全灭」看完整场。'
-                  : '指挥官模式下棋盘只看不碰：点自己的城 → 在右侧点兵种，就排进顶端的生产队列，点一次执行交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
+                  : config.commanderMode && playerCount > 2
+                    ? '多人局也能用指挥官模式：每一方（包括你自己）只排生产序列，走位、建造、攻击、升级全部由 AI 执行。三家四家局里 AI 会按"所有敌人"打仗，但主攻方向只认最强的那一家。'
+                    : '指挥官模式下棋盘只看不碰：点自己的城 → 在右侧点兵种，就排进顶端的生产队列，点一次执行交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
               }</div>
             </section>
 
@@ -934,7 +932,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         if (config.playerCount > 2) {
           config.aiOpponent = false;
           config.aiAlly = false;
-          config.commanderMode = false;
+          // 指挥官模式**留着**：多人局也能用（每一方只排生产序列，其余交给 AI）。
+          // 以前这里一起关掉，是因为 AI 只认一个对手——那条限制已经放开。
           config.draftMode = false;
           // 沙盒面板是按"两边"写的（摆给红方/摆给蓝方、交给 AI 同时操两边），
           // 三家四家局里没有对应物，索性一起关掉
@@ -1017,8 +1016,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const role = roleBtn.dataset.role;
         config.commanderMode = role === 'commander';
         config.godMode = role === 'god';
-        // 指挥官模式必须对着 AI 打：热座两边都是人，就没人执行战术了
-        if (config.commanderMode) {
+        /*
+         * 两人局：指挥官模式必须对着 AI 打——热座两边都是人，就没人执行战术了。
+         * 多人局不一样：AI 只替**排了队列的那一方**执行，其余席位照旧由人操作，
+         * 所以这里不能顺手把 aiOpponent 打开（那会在面板上留下一个不生效的开关）。
+         */
+        if (config.commanderMode && (config.playerCount ?? 2) <= 2) {
           config.aiOpponent = true;
           config.aiAlly = false;
         }

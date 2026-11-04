@@ -2609,6 +2609,16 @@ check('「升级时代」也能排进队列；队列满了按钮就禁用', () =
     (bar().querySelector('.cmd-chip:not(.is-empty)')?.textContent ?? '').includes('升级时代'),
     '队列里应该写着「升级时代」',
   );
+  /*
+   * 这一条守的是 slotProblem 的判断顺序。
+   *
+   * 「升级时代」这一格存的是哨兵 `@upgrade`，它当然不在兵种表里；以前的实现
+   * 先查兵种表、查不到就报「没有这个兵种」，于是每点一次升级都在估价后面
+   * 挂一句红字。哨兵必须先判、再查兵种表。
+   */
+  const est = bar().querySelector<HTMLElement>('[data-est="0"]')?.textContent ?? '';
+  assert.ok(est.includes('≈'), `这一格应该写着估价，实际是「${est}」`);
+  assert.ok(!est.includes('没有这个兵种'), `升级那一格不该报"没有这个兵种"，实际是「${est}」`);
 
   // 排满 5 格：按钮置灰，再点也排不进去
   for (let i = 0; i < 6; i++) {

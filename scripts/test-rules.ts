@@ -7990,6 +7990,39 @@ test('不存在的兵种会被拒绝', () => {
   assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['no-such-unit'] }).ok, false);
 });
 
+test('指挥官模式：三人/四人局里每一席都排产、都提交，AI 替当前这一方行动', () => {
+  for (const count of [3, 4] as const) {
+    const s0 = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 1, playerCount: count, commanderMode: true, draftMode: false },
+      4242,
+    );
+    assert.equal(s0.config.commanderMode, true, `${count} 人局现在也能开指挥官模式`);
+    assert.equal(s0.config.aiOpponent, false, `${count} 人局里"整方托管"的 AI 开关仍然不生效`);
+
+    const seats = seatsOf(s0);
+    let cur = s0;
+    for (let i = 0; i < seats.length; i++) {
+      assert.equal(cur.current, seats[i], `该轮到第 ${i + 1} 席（${seats[i]}）排产`);
+      const r = applyAction(cur, { type: 'SET_ORDERS', queue: ['militia'] });
+      assert.ok(r.ok, r.ok ? '' : `第 ${i + 1} 席排产失败：${r.reason}`);
+      cur = r.state;
+      const c = applyAction(cur, { type: 'PLAN_COMMIT' });
+      assert.ok(c.ok, c.ok ? '' : `第 ${i + 1} 席提交失败：${c.reason}`);
+      cur = c.state;
+      assert.equal(
+        planBothReady(cur),
+        i === seats.length - 1,
+        '交齐之前不能开推，交齐之后立刻可推',
+      );
+    }
+    assert.equal(cur.current, seats[0], '交齐后拨回这一批的先手');
+
+    // 前提条件：AI 在多人局里真的给得出动作（否则指挥官模式等于把那一方锁死）
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
+    assert.ok(a, `${count} 人局里 AI 应该给得出动作`);
+  }
+});
+
 test('指挥官热座：双方各交一批计划，交齐后才按回合轮流推进', () => {
   // 热座 = 一台机器两个人、对面不是 AI。三条边界：
   //   ① 交计划不推进回合（turn / 序列都不动），只换"轮到谁排"；

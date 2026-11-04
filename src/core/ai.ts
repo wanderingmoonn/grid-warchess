@@ -53,7 +53,6 @@ import {
   ordersOf,
   orderSitesOf,
   airLayer,
-  other,
   previewAttack,
   reachableTiles,
   rebuildCost,
@@ -327,11 +326,64 @@ function doomedCity(
  * 而不是 `if (lead === 'rush')` 地分叉：这样两种战术交接的那一两个回合，
  * 部队会同时带着两边的心思（比如一边收拢一边还在摸经济），过渡才不突兀。
  */
+
+/* ===========================================================================
+ * 多席位：谁是"对面"
+ * ======================================================================== */
+/**
+ * 玩家 p 的所有敌人。
+ *
+ * 这套 AI 原本只服务双人局，满篇都是 `other(me)`。三人四人局要开起来（指挥官模式
+ * 需要在多人局里替某一方操作），就把"对面"从**一个人**放宽成**一群人**：
+ * 打架、算威胁、看对面经济，全部按"所有人"来；只有"往哪个方向推"这种
+ * 必须挑一家的事，才用 `primaryFoe` 挑最强的那家。
+ *
+ * 双人局下这几个函数和 `other` 完全等价，所以既有对局的行为一点没变。
+ */
+function enemySeats(s: GameState, p: PlayerId): PlayerId[] {
+  return seatsOf(s).filter((x) => x !== p);
+}
+
+function enemyUnitsOf(s: GameState, p: PlayerId): Unit[] {
+  const out: Unit[] = [];
+  for (const x of enemySeats(s, p)) out.push(...unitsOf(s, x));
+  return out;
+}
+
+function enemyCitiesOf(s: GameState, p: PlayerId): City[] {
+  const out: City[] = [];
+  for (const x of enemySeats(s, p)) out.push(...citiesOf(s, x));
+  return out;
+}
+
+/**
+ * 主攻方向：挑兵力值最高的那个敌人。
+ *
+ * 多人局里"打谁"是要选的，但整套推进/威胁场只支持一个方向。这里不假装能同时
+ * 规划两个方向——挑最强的那家当主攻，其余照打不误（战斗目标走 `enemyUnitsOf`）。
+ */
+function primaryFoe(s: GameState, p: PlayerId): PlayerId {
+  const list = enemySeats(s, p);
+  if (list.length <= 1) return list[0] ?? p;
+  let best = list[0]!;
+  let bestVal = -1;
+  for (const x of list) {
+    let v = 0;
+    for (const u of unitsOf(s, x)) v += unitValue(s, u);
+    for (const c of citiesOf(s, x)) v += c.hp * 0.15;
+    if (v > bestVal) {
+      bestVal = v;
+      best = x;
+    }
+  }
+  return best;
+}
+
 export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const me = s.current;
-  const foeId = other(me);
   const my = unitsOf(s, me);
-  const foe = unitsOf(s, foeId);
+  // 多人局里"对面"是一群人，mood 关心的是"我打不打得过他们加起来"，所以求和
+  const foe = enemyUnitsOf(s, me);
   const def = (u: Unit) => utype(s, u.type);
   const value = (us: Unit[]): number =>
     us.reduce((n, u) => {
@@ -347,7 +399,7 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const myCombat = my.filter((u) => def(u).category === 'combat');
   const foeCombat = foe.filter((u) => def(u).category === 'combat');
   const myCities = citiesOf(s, me).filter((c) => !c.ruined);
-  const foeCities = citiesOf(s, foeId).filter((c) => !c.ruined);
+  const foeCities = enemyCitiesOf(s, me).filter((c) => !c.ruined);
   const army = myCombat.length;
   const raiders = myCombat.filter((u) => isRaider(def(u))).length;
   const ranged = myCombat.filter((u) => (def(u).range ?? 1) >= 3).length;
@@ -360,7 +412,11 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   }).length;
 
   const myIncome = Math.max(0, incomeResOf(s, me).gold ?? 0);
-  const foeIncome = Math.max(0, incomeResOf(s, foeId).gold ?? 0);
+  // 多人局：对面几家的收入加起来，才是他们一共能出多少兵
+  const foeIncome = enemySeats(s, me).reduce(
+    (n, x) => n + Math.max(0, incomeResOf(s, x).gold ?? 0),
+    0,
+  );
   const era = myCities.length > 0 ? Math.max(...myCities.map((c) => c.era)) : 1;
   const foeEra = foeCities.length > 0 ? Math.max(...foeCities.map((c) => c.era)) : era;
 
@@ -659,7 +715,7 @@ function resourceValue(s: GameState, owner: PlayerId, resources: Record<string,n
 /** (x,y) 会不会被敌方下回合打到（AI 只看得到的敌人） */
 function inDanger(s: GameState, owner: PlayerId, x: number, y: number): boolean {
   const target = { x, y };
-  for (const e of unitsOf(s, other(owner))) {
+  for (const e of enemyUnitsOf(s, owner)) {
     const def = utype(s, e.type);
     if (distance(e, target) <= def.range) return true;
     for (const i of reachableTiles(s, e).keys()) {
@@ -809,7 +865,7 @@ function enemyThreatAt(
 ): { n: number; dmg: number } {
   let n = 0;
   let dmg = 0;
-  for (const e of unitsOf(s, other(owner))) {
+  for (const e of enemyUnitsOf(s, owner)) {
     const def = utype(s, e.type);
     if (def.category !== 'combat') continue;
     const reach = def.move + Math.max(0, def.range);
@@ -866,7 +922,7 @@ function scoreBridgeAttack(s: GameState, attacker: Unit, bridge: Unit, all: Fiel
   const at = { x: bridge.x, y: bridge.y };
   const me = attacker.owner;
   const mine = nearestCityGap(s, me, at, all.mood.abandonedCityId);
-  const foe = nearestCityGap(s, other(me), at, null);
+  const foe = nearestCityGap(s, primaryFoe(s, me), at, null);
   if (mine === null) return 0;
 
   // 一、死守
@@ -1240,7 +1296,7 @@ function crowdField(s: GameState, owner: PlayerId): Uint8Array {
  * 一个够得着的都没有就返回 null，攻击评分退回原来的"各自挑最优"。
  */
 function pickFocusTarget(s: GameState, me: PlayerId): string | null {
-  const foes = unitsOf(s, other(me)).filter((u) => utype(s, u.type).category === 'combat');
+  const foes = enemyUnitsOf(s, me).filter((u) => utype(s, u.type).category === 'combat');
   if (foes.length === 0) return null;
   const mine = unitsOf(s, me).filter(
     (u) => utype(s, u.type).category === 'combat' && !u.acted,
@@ -1588,7 +1644,7 @@ function advanceDistance(
     best = Math.min(best, d * weight);
   }
   if (ignoreFoes) return best;
-  for (const e of unitsOf(s, other(owner))) {
+  for (const e of enemyUnitsOf(s, owner)) {
     best = Math.min(best, distance({ x, y }, e) * 1.15);
   }
   return best;
@@ -1729,7 +1785,7 @@ function holdScore(s: GameState, unit: Unit, all: Fields, traits: AiTraits): num
   if (def.move > 2 || def.range > 1 || def.armor < 5) return -Infinity;
   const exposure = all.tactical.exposure(unit);
   if (exposure.lethal) return -Infinity;
-  const foe = unitsOf(s, other(unit.owner));
+  const foe = enemyUnitsOf(s, unit.owner);
   if (!foe.some((e) => distance(e, unit) <= 4)) return -Infinity;
   let open = 0;
   for (const [dx, dy] of DIRS) {
@@ -1857,7 +1913,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     if (b===0) score += affordable ? (city.owner===unit.owner ? 150 : 220) : -200;
   }
   if (w.harass > 0 && def.category === 'combat') {
-    const prey = unitsOf(s,other(unit.owner)).filter(e => {
+    const prey = enemyUnitsOf(s, unit.owner).filter(e => {
       const d = utype(s,e.type);
       return economicYield(d)>0 || d.category==='builder' || isProducer(d);
     }).sort((a,b) => distance(unit,a)-distance(unit,b))[0];
@@ -2001,7 +2057,7 @@ function scoreMove(
       attackableTargets(s, moved).length + siegeTargets(s, moved).length;
     if (afterTargets === 0) return -999;
 
-    const foes = unitsOf(s, other(unit.owner));
+    const foes = enemyUnitsOf(s, unit.owner);
     const nowAdjacent = foes.some((e) => distance(unit, e) <= 1);
     const nextAdjacent = foes.some((e) => distance({ x, y }, e) <= 1);
     if (nextAdjacent && !nowAdjacent) return -999;
@@ -2136,7 +2192,7 @@ function scoreMove(
       score += step * 7;
     }
     if (def.range <= 1) {
-      const brawlers = unitsOf(s, other(unit.owner)).filter(
+      const brawlers = enemyUnitsOf(s, unit.owner).filter(
         (e) => (utype(s, e.type).range ?? 1) <= 1 && (utype(s, e.type).atk ?? 0) >= 15,
       );
       if (brawlers.some((e) => distance({ x, y }, e) <= 1)) score -= 14;
@@ -2155,7 +2211,7 @@ function scoreMove(
   if (w.harass > 0.12 && def.category === 'combat' && def.domain !== 'water') {
     let prey: Unit | null = null;
     let pd = Infinity;
-    for (const e of unitsOf(s, other(unit.owner))) {
+    for (const e of enemyUnitsOf(s, unit.owner)) {
       const ed = utype(s, e.type);
       if (ed.category !== 'economy' && ed.category !== 'builder') continue;
       const d0 = distance(unit, e);
@@ -2334,7 +2390,7 @@ export function rosterOf(s: GameState, owner: PlayerId): RosterShare {
     counts[rosterRoleOf(def)] += 1;
     total += 1;
   }
-  const foes = citiesOf(s, other(owner));
+  const foes = enemyCitiesOf(s, owner);
   const siegeAtWall = unitsOf(s, owner).some((u) => foes.some((c) => distance(u, c) <= 4));
   return { counts, total, siegeAtWall };
 }
@@ -2373,7 +2429,7 @@ export function rosterBonuses(share: RosterShare): Record<RosterRole, number> {
 function nearestPrey(s: GameState, unit: Unit, def: UnitTypeDef): Unit | null {
   let best: Unit | null = null;
   let bestD = Infinity;
-  for (const e of unitsOf(s, other(unit.owner))) {
+  for (const e of enemyUnitsOf(s, unit.owner)) {
     const ed = s.unitTypes[e.type];
     if (!ed) continue;
     if (!(ed.range >= 3 || ed.cost >= def.cost * 1.2)) continue;
@@ -2587,7 +2643,7 @@ function rawBuildScore(
     if (nearOwn > 12) return -999;
 
     let nearFoe = Infinity;
-    for (const e of unitsOf(s, other(unit.owner))) {
+    for (const e of enemyUnitsOf(s, unit.owner)) {
       nearFoe = Math.min(nearFoe, distance(spot, e));
     }
     // 视野里一个敌人都没有：换敌方城市当"纵深参照物"。
@@ -2646,7 +2702,7 @@ function rawBuildScore(
     if (sameKind >= cityCount + 1) return -999;
 
     let nearest = Infinity;
-    for (const e of unitsOf(s, other(unit.owner))) {
+    for (const e of enemyUnitsOf(s, unit.owner)) {
       nearest = Math.min(nearest, distance(spot, e));
     }
     const near = Number.isFinite(nearest) ? Math.max(0, 20 - nearest * 2) : 10;
@@ -2668,7 +2724,7 @@ function rawBuildScore(
     if (risky) return -999;
 
     let nearestFoe = Infinity;
-    for (const e of unitsOf(s, other(unit.owner))) {
+    for (const e of enemyUnitsOf(s, unit.owner)) {
       nearestFoe = Math.min(nearestFoe, distance(spot, e));
     }
     // 敌人还没到门口，砌墙就是浪费一个建造回合。
@@ -2931,7 +2987,7 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
   const skills = def.skills ?? [];
   if (skills.length === 0) return null;
 
-  const foes = unitsOf(view, other(u.owner)).filter(
+  const foes = enemyUnitsOf(view, u.owner).filter(
     (f) => utype(view, f.type).category === 'combat',
   );
   const hpRatio = u.hp / def.maxHp;
@@ -3150,7 +3206,7 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
 function eggPlacement(view: GameState, me: PlayerId): { x: number; y: number } | null {
   const spots = eggSpots(view);
   if (spots.length === 0) return null;
-  const foes = unitsOf(view, other(me)).filter((f) => utype(view, f.type).category === 'combat');
+  const foes = enemyUnitsOf(view, me).filter((f) => utype(view, f.type).category === 'combat');
   const own = citiesOf(view, me);
 
   let best: { x: number; y: number } | null = null;
@@ -3911,7 +3967,7 @@ function buildPlan(
 export function aiDebugPlan(s: GameState, me: PlayerId): AiPlan {
   const traits = aiTraits(s);
   const mood = aiActiveMood(s, traits);
-  return buildPlan(s, me, unitsOf(s, me), unitsOf(s, other(me)), mood);
+  return buildPlan(s, me, unitsOf(s, me), enemyUnitsOf(s, me), mood);
 }
 
 /**
@@ -4220,7 +4276,7 @@ function recruitCandidate(
    * **一个战斗单位都没有**。它们出门就被杀，而每死一个农民就等于少买半个兵。
    * 所以在这种局面下，先把钱全部投进战斗单位；等兵力追平再谈经济。
    */
-  const foeCombatCount = unitsOf(s, other(me)).filter(
+  const foeCombatCount = enemyUnitsOf(s, me).filter(
     (u) => utype(s, u.type).category === 'combat',
   ).length;
   const desperate =
@@ -4383,7 +4439,7 @@ function recruitCandidate(
         // 以前它们一律排最后，五个时代的攻城器械招募数全是 0——
         // 破城 1.5 倍这件事，AI 从来没有为它付过钱。
         if ((d.abilities ?? []).includes('siege-master')) {
-          const foeCities = citiesOf(s, other(me));
+          const foeCities = enemyCitiesOf(s, me);
           const atWall = myUnits.some((u) => foeCities.some((c) => distance(u, c) <= 4));
           if (atWall) score += 16;
         }
@@ -4652,7 +4708,7 @@ function swapOutCandidate(
   if (plan.savingFor && plan.savingFor !== 'unit') return bail('正在攒别的目标');
 
   // 有急事就不换：救城、补兵、门口有敌人都比整理编成重要
-  const foe = unitsOf(s, other(me));
+  const foe = enemyUnitsOf(s, me);
   if (plan.urgent) return bail('局面吃紧');
   const myCities = citiesOf(s, me).filter((c) => !c.ruined);
   if (foe.some((u) => myCities.some((c) => distToCity(u, c) <= 6))) return bail('敌人压到城下');
@@ -4749,7 +4805,7 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan
 
   // 落后就要补课：对面时代比我高的时候，升级的紧迫感是加倍的。
   // 没有这一条，AI 会一直"先造兵、兵造不完"，永远追不上对面的科技。
-  const foe = citiesOf(s, other(city.owner));
+  const foe = enemyCitiesOf(s, city.owner);
   const myEra = Math.max(...citiesOf(s, city.owner).map((c) => c.era));
   const foeEra = foe.length > 0 ? Math.max(...foe.map((c) => c.era)) : myEra;
   if (foeEra > myEra) score += 26;
@@ -5109,7 +5165,7 @@ export function positionValue(s: GameState, me: PlayerId): number {
   const army = unitsOf(s, me).reduce((n, u) => n + unitValue(s, u) * hpFactor(u), 0);
   const era = cities.reduce((m, c) => Math.max(m, c.era), 0);
   let foe = 0;
-  for (const e of unitsOf(s, other(me))) {
+  for (const e of enemyUnitsOf(s, me)) {
     if (underConstruction(e)) continue;
     foe += unitValue(s, e) * hpFactor(e);
   }
@@ -5139,8 +5195,8 @@ export function positionValue(s: GameState, me: PlayerId): number {
    * "多囤一个便宜兵"（约 30~50），又不至于把整盘棋变成只看这一项。
    */
   const TEMPO_W = 0.25;
-  const threatOnMe = foeOutput(s, me);
-  const threatOnFoe = foeOutput(s, other(me));
+  const threatOnMe = outputFrom(s, enemyUnitsOf(s, me), unitsOf(s, me));
+  const threatOnFoe = outputFrom(s, unitsOf(s, me), enemyUnitsOf(s, me));
   return (
     cities.length * 120 +
     army -
@@ -5152,10 +5208,21 @@ export function positionValue(s: GameState, me: PlayerId): number {
 }
 
 export function foeOutput(s: GameState, me: PlayerId): number {
-  const mine = unitsOf(s, me);
+  return outputFrom(s, enemyUnitsOf(s, me), unitsOf(s, me));
+}
+
+/**
+ * `shooters` 一轮能对 `targets` 打出多少"价值"。
+ *
+ * 抽出来是为了多人局：既要算"对面能打我多少"，也要算"我能打对面多少"，
+ * 而后者没法用 `foeOutput(s, 对面某一家)` 表达（那个函数算的是"那一家挨多少打"，
+ * 在三人局里会把另一家的输出也算进去）。所以把两端都摆到参数上。
+ */
+function outputFrom(s: GameState, shooters: Unit[], targets: Unit[]): number {
+  const mine = targets;
   if (mine.length === 0) return 0;
   let total = 0;
-  for (const e of unitsOf(s, other(me))) {
+  for (const e of shooters) {
     if (underConstruction(e)) continue;
     const ed = utype(s, e.type);
     if ((ed.atk + (ed.magicAtk ?? 0)) <= 0) continue;
@@ -5182,14 +5249,17 @@ export function aiNextAction(
 ): Action | null {
   if (s.winner) return null;
   /*
-   * 三人四人局没有 AI。
+   * 三人四人局：能打，但不是"多人专用 AI"。
    *
-   * 这套 AI 的每一个判断都建立在"只有一个对手"上：威胁场只算一家、推进方向
-   * 只朝一家、集火只认一个目标。让它打多方不是加个循环的事，而是把目标选择
-   * 整个重写（先打谁？谁在领先？两家夹击怎么办？）。
-   * 所以 3/4 人局一律全真人：这里直接返回 null，界面那边也会禁掉 AI 选项。
+   * 2026-11-04 之前这里直接 return null——理由是这套 AI 的每个判断都建立在
+   * "只有一个对手"上。现在为了指挥官模式能进多人局，把"对面"从一家放宽成一群：
+   *   · 打架、算威胁、看对面经济：按**所有敌人**（`enemyUnitsOf` / `enemyCitiesOf`）；
+   *   · 推进方向、桥头距离这类必须挑一家的：按**最强的那家**（`primaryFoe`）。
+   * 双人局下这两条和原来的 `other(me)` 完全等价，所以既有对局行为不变。
+   *
+   * 已知的短板（诚实说明）：它**不会**同时规划两条战线，也不会"远交近攻"——
+   * 谁是最大的那个就当主要对手，跟第二家打是顺手的事。多人局里它比双人局弱。
    */
-  if ((s.config.playerCount ?? 2) > 2) return null;
 
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息
@@ -5254,7 +5324,7 @@ export function aiNextAction(
   // 老方向推、走位已经收回来了"的撕裂。
   const traits = aiTraits(view);
   const mood = aiActiveMood(view, traits);
-  const foeUnits = unitsOf(view, other(me));
+  const foeUnits = enemyUnitsOf(view, me);
   /** 两翼分工：主攻方向定了才能分第二路 */
   const flank = flankSplit(view, me, land, mood.focusCityId);
 
@@ -5282,7 +5352,7 @@ export function aiNextAction(
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
-    foeSplash: unitsOf(view, other(me)).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
+    foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
   };
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
@@ -5329,7 +5399,7 @@ export function aiNextAction(
   const myVal = unitsOf(view, me)
     .filter((u) => utype(view, u.type).category === 'combat')
     .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
-  const foeVal = unitsOf(view, other(me))
+  const foeVal = enemyUnitsOf(view, me)
     .filter((u) => utype(view, u.type).category === 'combat')
     .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
   // 压城门槛：速攻更早认定"我现在打得穿"（它整局的胜负压在这一次围城上），

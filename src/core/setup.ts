@@ -202,18 +202,20 @@ export function createMatch(
    */
   const playerCount = (config.playerCount ?? 2) as 2 | 3 | 4;
   /**
-   * 三人四人局只支持"全真人"。
+   * 三人四人局：只有"指挥官模式"放行，托管整方的两个 AI 开关仍按两席关掉。
    *
-   * 两个 AI 开关和选卡 BP 都是按"两个席位"写的（AI 的目标选择、先后手补偿、
-   * BP 界面只有两栏）。让它们在三家四家局里生效，会造出"蓝方有兵、但没人操作"
-   * 这种既不能玩也说不清的局面——所以在这一层直接关掉，而不是指望每个入口
-   * 都记得先关一遍。`config` 是调用方的对象，不改它，用局部量往下传。
+   * 选卡 BP 和"AI 当对手/队友"都是按两个席位写的（BP 界面只有两栏、先后手补偿
+   * 只算两家），放进三家四家局会造出"蓝方有兵、但没人操作"这种说不清的局面。
+   *
+   * 指挥官模式不一样：它托管的正是**玩家自己这一方**。AI 的多人目标选择
+   * 在 2026-11-04 已经放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf / primaryFoe），
+   * 所以三家四家局里也能替某一方走完。`config` 是调用方的对象，不改它，用局部量往下传。
    */
   const twoSeats = playerCount === 2;
   const draftMode = twoSeats && config.draftMode === true;
   const aiOpponent = twoSeats && config.aiOpponent === true;
   const aiAlly = twoSeats && config.aiAlly === true;
-  const commanderMode = twoSeats && config.commanderMode === true;
+  const commanderMode = config.commanderMode === true;
 
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
   /**
