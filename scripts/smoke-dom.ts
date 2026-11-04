@@ -291,6 +291,69 @@ check('浓雾扩展：视野外的地形和敌城都不渲染', () => {
   }
 });
 
+check('大地图（>1024 格）才进轻量渲染：64×64 带 big，12×12 不带', () => {
+  /*
+   * 这条守的是"玩家开雾跑 64×64 闪退"那起事故的**规模判据**。
+   * 4096 格上，逐格的过渡/滤镜会把合成器压垮；小图上这些东西便宜得很。
+   * 所以判据只能挂在"格子数"上，不能挂"有没有雾"——关雾的 64×64
+   * 一样是 4096 个节点，只是少了压暗那层。
+   */
+  const mk = (size: number) => {
+    const host = doc.createElement('div');
+    host.className = 'board';
+    doc.body.appendChild(host);
+    const s2 = createMatch({ ...DEFAULT_CONFIG, size }, 20261104);
+    renderBoard(host, playerView(s2, 'A'), {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+    });
+    return host;
+  };
+
+  const small = mk(12);
+  const big = mk(64);
+  try {
+    assert.equal(small.classList.contains('big'), false, '12×12 不该进大地图模式');
+    assert.equal(big.classList.contains('big'), true, '64×64 要进大地图模式');
+    assert.equal(big.querySelectorAll('.tile').length, 4096, '64×64 是 4096 格');
+    assert.ok(
+      big.querySelectorAll('.tile.out').length > 3000,
+      '开雾时绝大多数格子是视野外——正是这一格数把渲染压垮的',
+    );
+  } finally {
+    small.remove();
+    big.remove();
+  }
+});
+
+check('迷雾压暗改成盖层，不再逐格挂 CSS filter', () => {
+  /*
+   * 事故根因：`filter: brightness() saturate()` 挂在一格一个元素上，
+   * 4096 格 = 4096 个离屏合成层，显存顶穿 → 标签页直接崩。
+   * 换成 `::after` 纯色盖层（只走绘制）。这条用例把"别改回去"钉死：
+   * 谁要是图省事把 filter 写回逐格规则上，这里立刻红。
+   */
+  const css = readFileSync('src/style.css', 'utf8');
+  assert.ok(css.includes('.board.fog .tile.out::after'), '视野外压暗应该走 ::after 盖层');
+  assert.ok(
+    css.includes('.board.blackout .tile.remembered::after'),
+    '浓雾的"记得但看不见"也应该走 ::after 盖层',
+  );
+  assert.ok(
+    !/\.board\.fog \.tile\.out\s*\{[^}]*filter\s*:/.test(css),
+    '逐格的 .board.fog .tile.out 上不能再出现 filter',
+  );
+  assert.ok(
+    !/\.board\.blackout \.tile\.remembered\s*\{[^}]*filter\s*:/.test(css),
+    '逐格的 .board.blackout .tile.remembered 上不能再出现 filter',
+  );
+});
+
 check('地上的东西：自己的雷画实心，敌方已发现的画空心', () => {
   const host = doc.createElement('div');
   host.className = 'board';

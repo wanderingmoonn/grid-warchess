@@ -849,8 +849,22 @@ body {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
-.board.fog .tile.out {
-  filter: brightness(0.74) saturate(0.55);
+/*
+ * 迷雾：视野外的格子压暗。
+ *
+ * 这里**不用** `filter: brightness() saturate()` ——那是 2026-11-04 修的一起事故：
+ * 玩家开雾跑 64×64 会闪退，关雾就正常，两者差的就是下面这一条规则。
+ *
+ * 原因不是"filter 慢"，是它**逐元素建合成层**：64×64 有 4096 格，开雾时
+ * 四千个格子同时带 filter，浏览器要为每一格单独开离屏缓冲；再叠上 64×64
+ * 必然要放大滚动（`.board-scroll.zoomed` 开 overflow）和每帧整盘重绘，
+ * 显存与合成器队列就顶穿了——表现是标签页直接崩掉，而不是变卡。
+ *
+ * 换成"盖一层半透明灰"：`::after` 本来就是高亮层，纯色填充只走绘制、
+ * 不进合成器。混的是灰不是黑，所以除了变暗，颜色也被冲淡，观感接近原样。
+ */
+.board.fog .tile.out::after {
+  background: rgba(74, 70, 62, 0.52);
 }
 
 /* 浓雾扩展（blackout）：视野外连地形都不显示，只剩一块暗面。
@@ -862,13 +876,31 @@ body {
 
 /* 去过、但此刻看不见的格：按记忆里的地形画，比"眼前"暗一档、比"没去过"亮。
    这三档必须一眼分得开，否则玩家会以为自己压根没走过这里。
-   放在 .out 之后：两条规则权重一样，靠顺序压过 brightness(0.74)。 */
-.board.blackout .tile.remembered {
-  filter: brightness(0.62) saturate(0.36);
+   同样是纯色盖层，比 .out 更重一档；放在 .out 之后，
+   两条规则权重一样，靠顺序压过。 */
+.board.blackout .tile.remembered::after {
+  background: rgba(70, 66, 60, 0.56);
 }
 .board.blackout .tile.unknown.reach,
 .board.blackout .tile.unknown.threat {
   background: #2c2822;
+}
+
+/*
+ * 大地图（> 1024 格，见 board.ts 的 `big`）：逐格的过渡与闪烁一律关掉。
+ *
+ * 过渡本身不贵，贵在"同时"。每帧重绘时会有成百上千个格子换 class，
+ * 如果每个 `::after` 都带 0.12s 过渡，浏览器就要同时跑成百上千条动画，
+ * 每条都要自己的一份状态——这正是 64×64 上最容易把合成器压垮的地方。
+ *
+ * 小图上这几条动画是"好看"，大图上它们只是"看不见的账"：格子只有 18px，
+ * 淡入淡出根本分辨不出来。
+ */
+.board.big .tile::after {
+  transition: none;
+}
+.board.big .tile.placeable::after {
+  animation: none;
 }
 
 /* ---------- 棋子层 ---------- */
