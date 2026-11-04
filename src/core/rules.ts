@@ -2806,11 +2806,11 @@ export function incomeOf(s: GameState, p: PlayerId): number {
 }
 
 /** 回合结束时给当前玩家结算收入：基础 + 每座城 + 每个经济单位按其所在地形 */
-function settleIncome(s: GameState, p: PlayerId): number {
+function settleIncome(s: GameState, p: PlayerId): ResourceCost {
   const income = incomeResOf(s, p);
   const player = s.players[p];
   for (const [id, n] of Object.entries(income)) addRes(player, id, n ?? 0);
-  return income[GOLD] ?? 0;
+  return income;
 }
 
 /**
@@ -2823,9 +2823,10 @@ function settleIncome(s: GameState, p: PlayerId): number {
  * 两边都拿，等于谁都没占便宜；这比"让 B 也别拿"更好，因为开局就有钱
  * 才能在第一回合做出有意义的选择（造第二个兵、升级、架桥）。
  */
-export function grantOpeningIncome(s: GameState): number {
+export function grantOpeningIncome(s: GameState): ResourceCost {
   const income = settleIncome(s, 'A');
-  pushLog(s, 'A', `开局结算：第一回合收入 ${income} 金币`);
+  const label = Object.keys(income).length > 0 ? costLabel(income) : '没有收入';
+  pushLog(s, 'A', `开局结算：第一回合收入 ${label}`);
   return income;
 }
 
@@ -5562,7 +5563,8 @@ function doEndTurn(s: GameState): ActionResult {
   // 再让城市在"自己的回合开始"这一刻修好城墙。
   recoverCities(s, nextPlayer);
 
-  pushLog(s, nextPlayer, `回合开始，获得 ${income} 金币`);
+  const label = Object.keys(income).length > 0 ? costLabel(income) : '没有收入';
+  pushLog(s, nextPlayer, `回合开始，获得 ${label}`);
 
   for (const e of activeExpansions(s)) {
     e.hooks.onTurnStart?.({ state: s, player: nextPlayer });
