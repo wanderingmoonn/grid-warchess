@@ -95,6 +95,7 @@ import {
   missingLabel,
   payRes,
   type ResourceCost,
+  incomeLabel
 } from './resources.ts';
 import type {
   ActionResult,
@@ -115,9 +116,11 @@ import { seatsOf, skillsOf } from './types.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
+import { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
 export type { SkillCtx, SkillHandler };
+export { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -355,18 +358,6 @@ export function utype(s: GameState, id: string): UnitTypeDef {
   return def;
 }
 
-export function idx(s: GameState, x: number, y: number): number {
-  return y * s.w + x;
-}
-
-export function inBounds(s: GameState, x: number, y: number): boolean {
-  return x >= 0 && y >= 0 && x < s.w && y < s.h;
-}
-
-export function xyOf(s: GameState, i: number): { x: number; y: number } {
-  return { x: i % s.w, y: Math.floor(i / s.w) };
-}
-
 export function tileAt(s: GameState, x: number, y: number): Tile | null {
   if (!inBounds(s, x, y)) return null;
   return s.tiles[idx(s, x, y)] ?? null;
@@ -463,39 +454,11 @@ export function effectiveRangeAgainst(
   return Math.max(1, range);
 }
 
-// ── 占地：一格与多格 ──────────────────────────────────────────────────
-//
-// 单位/建筑以**左上角为锚点**占 n×n 格（n = 1 或 2）。为什么不做成
-// "中心点 + 半径"：锚点语义下 `u.x/u.y` 只需要读一次，所有既有的
-// 存档、AI 打分、渲染定位都不用改形状；而 2×2 的"中心"其实是 2.5 格，
-// 半格坐标会污染每一个距离计算。
-//
-// 三件事必须一致，否则会出现"看着在这儿、规则说在那儿"：
-//   1. 判定（unitAt / unitsAt / sameLayerAt / blockedFor）
-//   2. 距离（distToUnit / distToUnitRect）
-//   3. 落子（canStandAt / buildSiteError / 产兵位）
 
-/** 占地边长：1（缺省）或 2。传单位或兵种 id 都行。 */
-export function footprintOf(s: GameState, u: Unit | string): number {
-  const type = typeof u === 'string' ? u : u.type;
-  return s.unitTypes[type]?.footprint === 2 ? 2 : 1;
-}
 
-/** 这一格是不是被它占着。锚点左上，占 n×n。 */
-export function coversTile(s: GameState, u: Unit, x: number, y: number): boolean {
-  const n = footprintOf(s, u);
-  return x >= u.x && x < u.x + n && y >= u.y && y < u.y + n;
-}
 
-/** 它占的那几格（渲染、存档校验、AI 打分都用得上） */
-export function tilesOfUnit(s: GameState, u: Unit): Array<{ x: number; y: number }> {
-  const n = footprintOf(s, u);
-  const out: Array<{ x: number; y: number }> = [];
-  for (let dy = 0; dy < n; dy++) {
-    for (let dx = 0; dx < n; dx++) out.push({ x: u.x + dx, y: u.y + dy });
-  }
-  return out;
-}
+
+
 
 /**
  * 一个坐标到某个单位的距离：到它**覆盖范围**的最近一格。
@@ -570,18 +533,7 @@ export function buildingAt(s: GameState, x: number, y: number): Unit | undefined
   );
 }
 
-/**
- * 这个单位还在施工吗（有建造点数的建筑）。
- *
- * 工地不是"半个建筑"：它挡路、能被打、看得见，但不能开火、不能产兵、不能动手。
- * 这样"塔要两回合才立起来"才是一个真实的窗口——对手看得见你在修，
- * 也有机会在它成型之前拆掉它。
- */
-export function underConstruction(u: Unit): boolean {
-  if ((u.buildNeed ?? 0) > 0) return (u.buildDone ?? 0) < (u.buildNeed ?? 0);
-  // 旧存档的写法：只剩回合数
-  return (u.buildLeft ?? 0) > 0;
-}
+
 
 export interface BuildProgress {
   /** 已投入的点数 */
@@ -734,9 +686,7 @@ export function supplyEraAt(
   return own.reduce((a, b) => (distToCity(at, a) <= distToCity(at, b) ? a : b)).era;
 }
 
-/** 曼哈顿距离。移动和攻击统一用它，避免"能斜着打但斜着走不过去"的怪事。 */export function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
+
 
 export function cloneState(s: GameState): GameState {
   return structuredClone(s);
@@ -2825,7 +2775,7 @@ function settleIncome(s: GameState, p: PlayerId): ResourceCost {
  */
 export function grantOpeningIncome(s: GameState): ResourceCost {
   const income = settleIncome(s, 'A');
-  const label = Object.keys(income).length > 0 ? costLabel(income) : '没有收入';
+  const label = Object.keys(income).length > 0 ? incomeLabel(income) : '没有收入';
   pushLog(s, 'A', `开局结算：第一回合收入 ${label}`);
   return income;
 }
@@ -5563,7 +5513,7 @@ function doEndTurn(s: GameState): ActionResult {
   // 再让城市在"自己的回合开始"这一刻修好城墙。
   recoverCities(s, nextPlayer);
 
-  const label = Object.keys(income).length > 0 ? costLabel(income) : '没有收入';
+  const label = Object.keys(income).length > 0 ? incomeLabel(income) : '没有收入';
   pushLog(s, nextPlayer, `回合开始，获得 ${label}`);
 
   for (const e of activeExpansions(s)) {

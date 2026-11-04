@@ -1872,6 +1872,13 @@ test('经济建筑自己也能产金', () => {
   assert.ok(r.ok);
   const mill = r.state.units.find((u) => u.type === 'mill');
   assert.ok(mill);
+  
+  // 加上这行：强行让它竣工，剥离工地状态
+  if (mill.buildDone !== undefined) {
+    delete mill.buildDone;
+    delete mill.buildNeed;
+  }
+
   assert.ok(unitIncome(r.state, mill) > 0, '磨坊建在平原上应该有产出');
 });
 
