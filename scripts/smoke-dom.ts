@@ -1411,7 +1411,7 @@ check('起始时代只摆到这一局的上限：勾上「信息化」才多出�
   // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
   const erasNow = () =>
     Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
-  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '不勾包时五格封顶');
+  assert.deepEqual(erasNow(), ['青铜时代', '铁器时代', '火器时代', '蒸汽时代', '机械化时代'], '不勾包时五格封顶');
 
   const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
   assert.ok(warBox, '开局面板里应有「现代战争」这一项');
@@ -1422,7 +1422,7 @@ check('起始时代只摆到这一局的上限：勾上「信息化」才多出�
   // 这一步顺带守住了"勾了兵却造不出来"那个坑。
   assert.deepEqual(
     erasNow(),
-    ['青铜', '铁器', '火器', '蒸汽', '机械化', '现代'],
+    ['青铜时代', '铁器时代', '火器时代', '蒸汽时代', '机械化时代', '信息化时代'],
     '加料包会把前置「信息化」一起勾上，第六格随之出现',
   );
   const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
@@ -1435,7 +1435,7 @@ check('起始时代只摆到这一局的上限：勾上「信息化」才多出�
   again.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(
     erasNow(),
-    ['青铜', '铁器', '火器', '蒸汽', '机械化', '现代'],
+    ['青铜时代', '铁器时代', '火器时代', '蒸汽时代', '机械化时代', '信息化时代'],
     '加料包取消之后，底座还开着——这一代仍然打得完一整局',
   );
 
@@ -1444,7 +1444,7 @@ check('起始时代只摆到这一局的上限：勾上「信息化」才多出�
   assert.ok(baseAgain);
   baseAgain.checked = false;
   baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '关掉之后第六格要收回去');
+  assert.deepEqual(erasNow(), ['青铜时代', '铁器时代', '火器时代', '蒸汽时代', '机械化时代'], '关掉之后第六格要收回去');
 });
 
 check('点兵种不重绘弹层，不会把列表弹回顶部', () => {

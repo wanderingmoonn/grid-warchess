@@ -31,6 +31,7 @@
     "probe:quad": "node --experimental-strip-types scripts/probe-quad.ts",
     "probe:composition": "node --experimental-strip-types scripts/probe-composition.ts",
     "audit:human": "node --experimental-strip-types scripts/audit-human-games.ts",
+    "audit:era": "node --experimental-strip-types scripts/audit-era-units.ts",
     "upload:report": "node --experimental-strip-types scripts/upload-report.ts",
     "sample:reports": "node --experimental-strip-types scripts/make-sample-reports.ts",
     "arena": "node --experimental-strip-types scripts/arena-duel.ts",

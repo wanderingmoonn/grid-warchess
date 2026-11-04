@@ -26,18 +26,19 @@ const onlySrc = argOf('only', '');
 
 interface Row { src: string; def: UnitTypeDef }
 const rows: Row[] = [];
-const push = (src: string, units: Record<string, UnitTypeDef> | undefined) => {
-  for (const def of Object.values(units ?? {})) rows.push({ src, def });
+// 包的 units 可能是数组也可能是字典，统一按 Object.values 走（两种都能拿到定义）
+const push = (src: string, units: unknown) => {
+  for (const def of Object.values((units ?? {}) as Record<string, UnitTypeDef>)) rows.push({ src, def });
 };
 push('core', UNIT_TYPES);
-for (const e of ERA_PACKS) push('pack:' + e.id.replace('pack-', ''), e.units as Record<string, UnitTypeDef>);
-push('naval', NAVAL_FLEET.units as Record<string, UnitTypeDef>);
-push('naval6', MODERN_NAVAL.units as Record<string, UnitTypeDef>);
-push('air', AIR_CORPS.units as Record<string, UnitTypeDef>);
-push('air6', MODERN_AIR.units as Record<string, UnitTypeDef>);
+for (const e of ERA_PACKS) push('pack:' + e.id.replace('pack-', ''), e.units);
+push('naval', NAVAL_FLEET.units);
+push('naval6', MODERN_NAVAL.units);
+push('air', AIR_CORPS.units);
+push('air6', MODERN_AIR.units);
 // 第六时代的底座兵种不在 ERA_PACKS 里（那是前五代的包），单列出来
-push('era6', CONTEMPORARY_BASE_PACK.units as Record<string, UnitTypeDef>);
-push('era6x', MODERN_WARFARE.units as Record<string, UnitTypeDef>);
+push('era6', CONTEMPORARY_BASE_PACK.units);
+push('era6x', MODERN_WARFARE.units);
 
 const byEra = new Map<number, Row[]>();
 for (const r of rows) {
