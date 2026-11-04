@@ -56,39 +56,42 @@ export const SWORD_CULTIVATOR: UnitTypeDef = {
   abilities: ['qi-true-damage'], 
   skills: [SWORD_SWEEP_SKILL],
 };
+
 export const SERVANT: UnitTypeDef = {
   id: 'cultivation-servant',
   name: '仆役',
   short: '仆',
   era: 2,
   category: 'builder',
-  cost: 50,
+  cost: 75,
   move: 2,
-  atk: 0,
-  armor: 0,
+  atk: 4,
+  armor: 2,
   maxHp: 20,
-  range: 0,
+  range: 1,
   vision: 2,
   builds: ['cultivation-spirit-field', 'cultivation-spirit-mine'],
   buildPower: 10,
 };
+
 export const SPIRIT_FIELD: UnitTypeDef = {
   id: 'cultivation-spirit-field',
   name: '灵田',
   short: '田',
   era: 2,
   category: 'building',
-  cost: 80, // 纯金币消耗
+  cost: 90,
+  buildCost: 20,
   move: 0,
-  atk: 0,
-  armor: 1,
-  maxHp: 40,
-  range: 0,
-  vision: 1,
-  yield: { [GOLD]: 2, [SPIRIT_STONE]: 1 },
+  atk: 2,
+  armor: 2,
+  maxHp: 30,
+  range: 1,
+  vision: 2,
+  yield: { [GOLD]: 6, [SPIRIT_STONE]: 1 },
   yieldByTerrain: {
-    plain: { [GOLD]: 5, [SPIRIT_STONE]: 1 },
-    forest: { [GOLD]: 2, [SPIRIT_STONE]: 3 },
+    plain:  { [GOLD]: 11, [SPIRIT_STONE]: 1 }, // 平原偏金币
+    forest: { [GOLD]: 6,  [SPIRIT_STONE]: 4 }, // 森林偏灵石
   },
 };
 export const SPIRIT_MINE: UnitTypeDef = {
@@ -97,16 +100,17 @@ export const SPIRIT_MINE: UnitTypeDef = {
   short: '矿',
   era: 3,
   category: 'building',
-  cost: 60,
-  costRes: { [SPIRIT_STONE]: 30 },
+  cost: 120,
+  costRes: { 'spirit-stone': 20 },
+  buildCost: 30,
   move: 0,
-  atk: 0,
-  armor: 2,
-  maxHp: 60,
-  range: 0,
-  vision: 1,
-  yield: { [GOLD]: 3, [SPIRIT_STONE]: 2 },
+  atk: 3,
+  armor: 4,
+  maxHp: 45,
+  range: 1,
+  vision: 2,
+  yield: { [GOLD]: 5, [SPIRIT_STONE]: 1 },
   yieldByTerrain: {
-    hill: { [GOLD]: 3, [SPIRIT_STONE]: 4 }, // 丘陵加灵石
+    hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
   },
 };
