@@ -26,6 +26,7 @@ import {
   buildSiteError,
   canAttack,
   canMove,
+  canStandAt,
   cityAt,
   citiesOf,
   cityName,
@@ -46,6 +47,7 @@ import {
   refreshMemory,
   siegeTargets,
   supplyEraAt,
+  terrainWalkable,
   threatTiles,
   unitIncomeAt,
   unitsAt,
@@ -269,7 +271,7 @@ let recruitPack = '';
  * 产兵列表按时代筛选：0 = 全部，其它是时代等级。
  *
  * 和 recruitPack 同一套：空值＝不筛，两个维度是"与"。同样**不随换城清空**——
- * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
+ * "我只想看青铜的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
 
@@ -504,7 +506,7 @@ function planMovePath(before: GameState, action: Action): void {
   const u = before.units.find((x) => x.id === action.unitId);
   if (!u) return;
   pendingMovePath = new Map([
-    [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y })],
+    [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y }, u.type)],
   ]);
 }
 
@@ -513,13 +515,20 @@ function planMovePath(before: GameState, action: Action): void {
  *
  * 这是**画动画用的**，不是规则：它不看移动力、不看单位阻挡，所以不能拿去
  * 判断"这一步合不合法"。规则层算出来的可达格是另一套（reachableTiles）。
- * 走不通（比如飞行单位直接飞过河）时退化成"起点直连终点"。
+ *
+ * `typeId` 是走路那个兵种，用来决定"什么算不可走"：
+ * 以前这里一律按陆军判（`passable`），于是船沿岸线绕行时画出来的路
+ * 一步都过不了水，只能退化成一跳一跳到终点——看着像"寻路被水挡住了"。
+ * 飞行单位同理：它能掠水，路径就该跨过水面画出来。
  */
 function pathCells(
   s: GameState,
   from: { x: number; y: number },
   to: { x: number; y: number },
+  typeId?: string,
 ): Array<{ x: number; y: number }> {
+  const def = typeId ? utype(s, typeId) : null;
+  const walkable = (t: Terrain): boolean => (def ? terrainWalkable(def, t) : passable(t));
   const w = s.w;
   const start = from.y * w + from.x;
   const goal = to.y * w + to.x;
@@ -542,7 +551,7 @@ function pathCells(
       const ni = ny * w + nx;
       if (seen.has(ni)) continue;
       const tile = s.tiles[ni];
-      if (!tile || !passable(tile.terrain)) continue;
+      if (!tile || !walkable(tile.terrain)) continue;
       seen.add(ni);
       prev.set(ni, cur);
       queue.push(ni);
@@ -1300,10 +1309,13 @@ function computePlaceable(): number[] {
       for (let x = 0; x < state.w; x++) {
         if (distance(ferry, { x, y }) !== 1) continue;
         const tile = state.tiles[y * state.w + x];
-        if (!tile || !passable(tile.terrain)) continue;
-        if (state.units.some((u) => u.x === x && u.y === y)) continue;
+        if (!tile) continue;
+        // 落点问规则层（canStandAt 按**货舱里那个兵**判）：自己数一遍地形的话，
+        // 飞行兵下船落水这类合法落点会被界面吞掉——高亮了点下去被拒，
+        // 或者反过来（点了没反应）。
+        if (!(ferry.cargo ?? []).some((c) => canStandAt(state, x, y, c.type))) continue;
         const city = tile.cityId ? state.cities.find((c) => c.id === tile.cityId) : null;
-        if (city && city.owner !== ferry.owner) continue;
+        if (city && city.owner !== ferry.owner && !city.ruined) continue;
         out.push(y * state.w + x);
       }
     }
@@ -2144,11 +2156,14 @@ function moveRefusal(coords: { x: number; y: number }): string {
   const mover = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   if (mover && mover.x === coords.x && mover.y === coords.y) return '它已经站在这了';
   const tile = state.tiles[idx(state, coords.x, coords.y)];
-  const onFoot = mover ? utype(state, mover.type).domain !== 'water' : true;
-  // 地形拒绝是强制移动里最常见的一种。只回一句"不在移动范围内"，玩家会当成
-  // 走位问题，于是挨个试旁边的格子——而它其实一步都进不去。
-  if (tile?.terrain === 'water' && onFoot) {
-    return '水面对陆军不通：要么从桥上过，要么换成水军';
+  const moverDef = mover ? utype(state, mover.type) : null;
+  // "水挡不挡它"要按兵种问：飞行/掠水的兵点水面时，以前也会被告一句
+  // "水面对陆军不通"——它明明过得去，只是这一格不在移动力范围内。
+  const canEnterWater = moverDef ? terrainWalkable(moverDef, 'water') : false;
+  if ((tile?.terrain === 'water' || tile?.terrain === 'deep') && !canEnterWater) {
+    return tile.terrain === 'deep'
+      ? '深水架不了桥：陆军过不去，只能靠船或飞行'
+      : '水面对陆军不通：要么从桥上过，要么换成水军';
   }
   if (tile?.terrain === 'mountain') return '高山进不去，得绕开';
   return '这一格不在移动范围内';
@@ -4114,7 +4129,7 @@ function godUi() {
     brush: godBrush,
     pack: godPack,
     era: godEra,
-    // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
+    // 没挑过时代就按这一局的起始时代：从青铜开局的人摆出来的城，
     // 没有理由默认成另一个时代
     cityEra: godCityEra || state.config.startEra,
     running: godRunning,
@@ -5205,6 +5220,15 @@ let panning = false;
 let panMoved = false;
 let panFrom = { x: 0, y: 0, left: 0, top: 0 };
 let suppressClick = false;
+/**
+ * 拖动结束后，"吞掉下一次点击"这个开关的有效期。
+ *
+ * 它只该吃掉**这次拖动**甩出来的那一下 click。以前没有任何期限，
+ * 于是拖完松手若没换来一个点击（触点被系统手势吃掉、在窗口外松手、
+ * 触摸被浏览器 `pointercancel` 掐断），这个标记就一直挂着，
+ * 把后面第一次真正的点格子吃掉——表现就是"放大之后，有时候点格子没反应"。
+ */
+let suppressTimer = 0;
 
 boardScrollEl.addEventListener('pointerdown', (e) => {
   if (boardZoom <= 1) return;
@@ -5212,8 +5236,22 @@ boardScrollEl.addEventListener('pointerdown', (e) => {
   panning = true;
   panMoved = false;
   panFrom = { x: e.clientX, y: e.clientY, left: boardScrollEl.scrollLeft, top: boardScrollEl.scrollTop };
+  // 上一轮遗留的"吞点击"到这里就过期了：新手势开始时它还挂着，只可能是泄漏
+  suppressClick = false;
+  /*
+   * 这里**不抓指针**。
+   *
+   * 指针捕获除了改写 pointer 事件的目标，还会把随后的鼠标事件（mouseup）和
+   * 由它派生的 `click` 一起改到捕获元素上。而这段代码以前是无条件捕获的——
+   * 于是一放大，每一次普通点击的 target 都变成了 `.board-scroll` 本身，
+   * `closest('[data-x]')` 当然找不到格子，整张地图**点不动了**。
+   * 浏览器实测（Edge/Chromium，2× 档）：点在任何一格上，click 的 target 都是
+   * `board-scroll`；缩回 1× 立刻恢复正常——这就是"放大之后点击失效"。
+   *
+   * 现在改成"手真的开始拖了才抓"（见 pointermove）。单纯点一下不碰捕获，
+   * 事件目标照旧是那一格。
+   */
   boardScrollEl.classList.add('dragging');
-  boardScrollEl.setPointerCapture?.(e.pointerId);
 });
 
 boardScrollEl.addEventListener('pointermove', (e) => {
@@ -5221,21 +5259,49 @@ boardScrollEl.addEventListener('pointermove', (e) => {
   const dx = e.clientX - panFrom.x;
   const dy = e.clientY - panFrom.y;
   if (!panMoved && Math.abs(dx) + Math.abs(dy) < 6) return;
-  panMoved = true;
+  if (!panMoved) {
+    panMoved = true;
+    // 这一步才算"拖"，此时才抓指针：手指/鼠标滑出视口也还能继续拖。
+    // 抓在 pointerup 之前就释放（见 endPan），不会影响那之后派生的 click。
+    boardScrollEl.setPointerCapture?.(e.pointerId);
+  }
   boardScrollEl.scrollLeft = panFrom.left - dx;
   boardScrollEl.scrollTop = panFrom.top - dy;
   e.preventDefault();
 });
 
-const endPan = (): void => {
+const endPan = (e?: Event): void => {
   if (!panning) return;
   panning = false;
   boardScrollEl.classList.remove('dragging');
-  if (panMoved) suppressClick = true;
+  // 松手就把捕获还回去：留着的话，这一下 pointerup 之后派生的 click
+  // 仍会被改到 .board-scroll 上，拖动尾巴那次点击就会落到别的地方
+  const pid = (e as PointerEvent | undefined)?.pointerId;
+  if (pid !== undefined && boardScrollEl.hasPointerCapture?.(pid)) {
+    boardScrollEl.releasePointerCapture(pid);
+  }
+  if (panMoved) {
+    suppressClick = true;
+    // 400ms 够覆盖"松手→click"这一小段；再长就是在冤枉下一次点击了
+    window.clearTimeout(suppressTimer);
+    suppressTimer = window.setTimeout(() => {
+      suppressClick = false;
+    }, 400);
+  }
 };
 boardScrollEl.addEventListener('pointerup', endPan);
 boardScrollEl.addEventListener('pointercancel', endPan);
-boardScrollEl.addEventListener('pointerleave', endPan);
+boardScrollEl.addEventListener('pointerleave', (e) => {
+  /*
+   * 已经抓住指针了就别再因为"离开元素边界"收工。
+   *
+   * 抓指针的意思正是"拖出这块地方也还算数"——横向拖到视口边上再往外，
+   * 边界事件一响就把拖动掐了，手感就是"拖到一半突然卡住"。
+   * 没抓住（比如这一下根本没拖起来）才按老规矩收。
+   */
+  if (boardScrollEl.hasPointerCapture?.(e.pointerId)) return;
+  endPan(e);
+});
 
 // 选卡遮罩上的"悬停看详情"：卡片一多，光看名字和攻血根本判断不了禁它值不值
 bindDraftTips();

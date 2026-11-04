@@ -393,6 +393,36 @@
           <tr><td class="name">开阔</td><td>没有天险，只有零散的林子和丘陵</td><td>纯拼兵力与走位，没有可以赖的地形</td></tr>
         </tbody>
       </table>
+      <p><b>三人 / 四人图用的是同一套地貌，形状按人数变。</b>四家图按 90° 旋转对称排城，
+      一条直线河在这里只能把棋盘切成"两对"——同岸的两家不用过河、隔岸的才要，那是位置不平等。
+      所以河长成<b>十字</b>：每家守一个象限，去见谁都得过水。三家图按 120° 等分，
+      任何直线都会切成 1 对 2，所以河沿着三家分界线长成 <b>Y 形</b>，每家左右各一条。
+      横河 / 纵河在多人图上的区别落在"过河难不难"：横河河窄、渡口宽，纵河河宽、渡口窄还带一片中心湖。
+      山岭同样按这个骨架长：中间山脊、两侧山脚，隘口处降成丘陵。</p>
+      <p>扩展带来的地貌（高原 / 峡谷 / 沼泽 / 群岛 / 大川）<b>三人和四人图也能用</b>，
+      但要知道代价：那几套生成器是为"两家 + 点对称"写的，落到多家图上时按
+      "离哪座城最近"临时分成 A/B 两半来跑，所以等高线<b>不保证逐家对称</b>——
+      山心落在谁那边由种子决定。多人局的定位是"一起玩一局有意思的图"，
+      这一点是有意接受的；要严格配平就选本体那四种。</p>
+      <p><b>双城市开局（三家 / 四家可选）</b>：每家开局两座城。丢一座不算出局，
+      两座都丢才出局；两座城<b>不保证陆路连通</b>——要连就自己修桥。</p>
+      <ul>
+        <li><b>三家</b>：城摆在外圈八个格点上（四角 + 四边中点），按顺序每家取相邻两点，
+        同一家的两座城互为犄角、各自朝外，<b>中间那片才是主战场</b>。</li>
+        <li><b>四家</b>：整张图切成<b>田字四区</b>，每家认领一个象限，两座基地在<b>自家那块地里随机生成</b>。
+        基地不会贴边（离区域边界至少留一格），两座城之间至少留两格空档，不会撞在一起。
+        每个象限各抽各的，所以四家图的双城布局<b>逐局都不同</b>；抽出的一对总是"区内最分得开"的，
+        于是一家一城靠自家外角、一城靠近地图中央——<b>后方稳固，前方就是十字路口</b>。</li>
+      </ul>
+      <p>两条硬约束对两种人数都成立：任意两座城之间至少隔「城本体 + 城郊各一格 + 两格过道」（四家的田字因为区域更紧凑，
+      放宽到"城郊不相接"）；同一家的两座城连成的线段<b>互不交叉</b>——三家图靠"凸多边形上取相邻两点"
+      （那条线就是多边形的边，边与边永不相交），四家图的连线全部落在各自的象限里，天生不可能跨区相交。
+      四家的象限方案还带来一个好处：<b>每家背后都是自己的角，正前方才是邻居</b>，
+      "谁挨着谁"由象限位置直接决定，不再靠抽签。棋盘三家至少要 16×16、四家要 20×20，不够会自动抬上去。</p>
+      <p>还有另一条四人局专属的宽容：<b>地图不再为水面强行开凿通道</b>。
+      水挡路可以造桥、可以飞，所以四条河臂上有几处渡口就够了；
+      唯一的硬保证是"没有哪一家被山彻底封死"——桥架不过山，那才是真的走不出去。
+      三家局仍然保证陆路走得通（三家等分，一家出不去这局就打不起来）。</p>
       <p>城市的摆法<b>单独抽签</b>，和河的走向无关：</p>
       <ul>
         <li><b>对峙</b>：双方各占同一条边的两角——隔着河对峙，正面冲突。</li>
@@ -618,7 +648,7 @@
 
       <h3>时代升级为什么这么贵</h3>
       <div class="formula">
-        升级费用：中世 220 · 火药 360 · 工业 540 · 二战 780<br />
+        升级费用：铁器时代 220 · 火器时代 360 · 蒸汽时代 540 · 机械化时代 780<br />
         <span class="c">开局 120 金起步，先结一次收入后手上有两百出头</span>
       </div>
       <p>升级一次性给你三样东西：<b>更好的兵、更硬的城市、更高的城市收入</b>。三样叠在一起就是滚雪球——
@@ -647,7 +677,7 @@
         <li><b>水军要临水</b>：城市旁边必须有一格空水面，船就下在那儿。内陆城市造不了船。</li>
         <li><b>军营</b>是第二个产兵点：兵从营门四邻的空地出来，规则和城市完全一样，唯一的区别是<b>它自己没有时代</b>——时代取离它最近的己方城市。军营不用升级，所以前线的兵种水平跟着后方那座城走。</li>
         <li><b>军营必须扎在水边</b>：脚下要是平地或丘陵，四邻还要有一格水面（桥面也算，桥下就是河）。粮秣、饮水、船运都得靠水，这条同时给了水军存在的理由——补给点必然在水上，也就必然会被船盯上。</li>
-        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（古典）→ 寨垒（中世）→ 堡寨（火药）→ 兵站（工业）→ 前进基地（二战）</b>。越高档耐久越高、哨兵火力越强，产兵规则完全一样（时代取最近的城市）。所以"把补给点往前推"这件事，是可以跟着时代一起升级的。第六档<b>联合作战中心</b>在扩展「现代」里，和这一代的其他建筑一样是那个包带进来的。</li>
+        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（青铜）→ 寨垒（铁器）→ 堡寨（火器）→ 兵站（蒸汽）→ 前进基地（机械化）</b>。越高档耐久越高、哨兵火力越强，产兵规则完全一样（时代取最近的城市）。所以"把补给点往前推"这件事，是可以跟着时代一起升级的。第六档<b>联合作战中心</b>在扩展「信息化」里，和这一代的其他建筑一样是那个包带进来的。</li>
         <li><b>兵种多了有搜索框</b>：一屏超过 6 种兵时，生产列表顶上会出现一个输入框，敲名字、代号、职能（战斗 / 经济 / 建造）、
           时代或<b>扩展包名</b>都能过滤，多个词按"且"算（"奇想 弓"）。它只过滤列表，不改变能买什么。</li>
         <li><b>带徽标的就是扩展兵</b>：名字旁边那个小圆标写着它来自哪个包。原版兵不挂——
@@ -689,24 +719,24 @@
           <tr><th>时代</th><th>升级费</th><th>城市耐久</th><th>城市护甲</th><th>城市收入</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">古典</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">30</td></tr><tr><td class="name">中世</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">35</td></tr><tr><td class="name">火药</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">41</td></tr><tr><td class="name">工业</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">48</td></tr><tr><td class="name">二战</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">56</td></tr>
+          <tr><td class="name">青铜时代</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">30</td></tr><tr><td class="name">铁器时代</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">35</td></tr><tr><td class="name">火器时代</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">41</td></tr><tr><td class="name">蒸汽时代</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">48</td></tr><tr><td class="name">机械化时代</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">56</td></tr>
         </tbody>
       </table>
       <p>升级会同时提升耐久、护甲、收入，并解锁新兵种。升级用<b>增量</b>而非覆盖，所以扩展规则（比如「要塞」）给城市加的属性不会被升级抹掉。</p>
-      <p><b>表里还有第六时代「现代」（升级费 1080，城市耐久 96，城市护甲 14），但基础规则升不上去</b>：
-        它的开关是扩展「现代」——和原版每一代一样，那个包既开这一级科技，也带<b>这一代最基本的九个兵</b>
+      <p><b>表里还有第六时代「信息化」（升级费 1080，城市耐久 96，城市护甲 14），但基础规则升不上去</b>：
+        它的开关是扩展「信息化」——和原版每一代一样，那个包既开这一级科技，也带<b>这一代最基本的九个兵</b>
         （步兵班、坦克、榴弹炮、装甲侦察车、物流中心、工程兵、混凝土碉堡、产业园、联合作战中心），
         只勾它就能打完一整局。想再要这一代的专精兵（直升机、无人机、反坦克导弹、火箭炮、防空导弹……），
-        另勾「现代战争」（它 <code>requires</code> 「现代」，单独勾会整包不进场）。
-        没开「现代」时，升级按钮到第五时代就停了，提示会明确写出"没开「现代」，科技线到二战封顶"。</p>
+        另勾「现代战争」（它 <code>requires</code> 「信息化」，单独勾会整包不进场）。
+        没开「信息化」时，升级按钮到第五时代就停了，提示会明确写出"没开「信息化」，科技线到机械化封顶"。</p>
       <h3>标准对局：时代和棋盘是配套的</h3>
       <table>
         <thead><tr><th>起始时代</th><th>棋盘</th><th>为什么这么配</th></tr></thead>
         <tbody>
-          <tr><td class="name">古典（默认）</td><td>12×12</td><td>兵走得慢、打得近，小图才能在十几回合里接上火</td></tr>
-          <tr><td class="name">中世</td><td>16×16</td><td>长弓和骑兵把战线拉开了一档</td></tr>
-          <tr><td class="name">火药 / 工业 / 二战</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
-          <tr><td class="name">现代（需「现代」）</td><td>20×20</td><td>远程火箭炮与自行榴弹炮封顶 5 格、防空导弹要够得着直升机——再小就变成一开局就被隔河点名</td></tr>
+          <tr><td class="name">青铜（默认）</td><td>12×12</td><td>兵走得慢、打得近，小图才能在十几回合里接上火</td></tr>
+          <tr><td class="name">铁器</td><td>16×16</td><td>长弓和骑兵把战线拉开了一档</td></tr>
+          <tr><td class="name">火器 / 蒸汽 / 机械化</td><td>20×20</td><td>射程 3~4 格、火炮能隔山打牛，图小了根本摆不开</td></tr>
+          <tr><td class="name">现代（需「信息化」）</td><td>20×20</td><td>远程火箭炮与自行榴弹炮封顶 5 格、防空导弹要够得着直升机——再小就变成一开局就被隔河点名</td></tr>
           <tr><td class="name">长期局（手动选）</td><td>32×32</td><td>五级链条全开也不嫌挤；一格只有二十来像素，配合缩放看</td></tr>
           <tr><td class="name">自定义</td><td>4×4 ~ 64×64</td><td>任意边长，面板里直接填数字</td></tr>
         </tbody>
@@ -726,12 +756,12 @@
         超出的部分用滚动看，缩放时会自动把视口挪到地图中间。</p>
       <p>为什么要它：32×32 的图"适应屏幕"之后一格约 20 像素，认得出棋子、看不清位置。
         这也正是大地图不能只靠"图更大"来做多线的原因——看得见全图和在某一处看得清，是两件事。</p>
-      <p>开局时可以选起始时代（1~5；勾了「现代」还能选第 6 时代）。越高，一局越短：</p>
+      <p>开局时可以选起始时代（1~5；勾了「信息化」还能选第 6 时代）。越高，一局越短：</p>
       <ul>
-        <li>古典开局：完整五级链条，适合打整晚</li>
-        <li>火药开局：跳过冷兵器，直接进入排队枪毙</li>
-        <li>二战开局：纯装甲对抗，二十分钟一局</li>
-        <li>现代开局（勾「现代」）：榴弹炮与装甲侦察车，打的是视野和正面厚度，十来分钟一局</li>
+        <li>青铜开局：完整五级链条，适合打整晚</li>
+        <li>火器开局：跳过冷兵器，直接进入排队枪毙</li>
+        <li>机械化开局：纯装甲对抗，二十分钟一局</li>
+        <li>信息化开局（勾「信息化」）：榴弹炮与装甲侦察车，打的是视野和正面厚度，十来分钟一局</li>
         <li>现代 + 「现代战争」：再上一层专精兵，导弹、直升机、无人机，打的是射程差和克制</li>
       </ul>
     </section>
@@ -757,7 +787,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻的地面单位各造成自身攻击一半的伤害——打不到空中的东西。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被咒缚 3 回合，护甲 −4。和普通诅咒不叠加，取强的那一个。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr><tr id="t-ab-qi-true-damage"><td class="name">真元</td><td>每次攻击附带随境界提升的、无视护甲的真实伤害。</td><td class="traits">—</td></tr><tr id="t-ab-anti-air"><td class="name">对空</td><td>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</td><td class="traits">—</td></tr><tr id="t-ab-nv-shore-bombard"><td class="name">岸轰</td><td>攻城伤害 ×1.25。舰炮支援登陆，和「破城」可以叠。</td><td class="traits">—</td></tr><tr id="t-ab-nv-asw"><td class="name">反潜</td><td>潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。</td><td class="traits">—</td></tr><tr id="t-ab-af-superiority"><td class="name">制空</td><td>对空中层目标造成 +12 伤害。战斗机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-ground-strike"><td class="name">对地攻击</td><td>对地面层目标造成 +14 伤害。强击机与攻击机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-anti-ship"><td class="name">反舰</td><td>对水面单位造成 +12 伤害。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。远程狙击手的核心。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。对付重甲和城池的解法。</td><td class="traits">戈兵、弩兵、火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻的地面单位各造成自身攻击一半的伤害——打不到空中的东西。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被咒缚 3 回合，护甲 −4。和普通诅咒不叠加，取强的那一个。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr><tr id="t-ab-qi-true-damage"><td class="name">真元</td><td>每次攻击附带随境界提升的、无视护甲的真实伤害。</td><td class="traits">—</td></tr><tr id="t-ab-anti-air"><td class="name">对空</td><td>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</td><td class="traits">—</td></tr><tr id="t-ab-nv-shore-bombard"><td class="name">岸轰</td><td>攻城伤害 ×1.25。舰炮支援登陆，和「破城」可以叠。</td><td class="traits">—</td></tr><tr id="t-ab-nv-asw"><td class="name">反潜</td><td>潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。</td><td class="traits">—</td></tr><tr id="t-ab-af-superiority"><td class="name">制空</td><td>对空中层目标造成 +12 伤害。战斗机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-ground-strike"><td class="name">对地攻击</td><td>对地面层目标造成 +14 伤害。强击机与攻击机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-anti-ship"><td class="name">反舰</td><td>对水面单位造成 +12 伤害。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>防御</h4>
@@ -778,7 +808,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-heal"><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr id="t-ab-aura-command"><td class="name">指挥光环</td><td>相邻的友军攻击 +2。</td><td class="traits">—</td></tr><tr id="t-ab-aura-armor"><td class="name">守护光环</td><td>相邻的友军护甲 +2。</td><td class="traits">—</td></tr><tr id="t-ab-royal-decree"><td class="name">王命</td><td>回合开始时，半径 2 内所有「精英骑兵」晋升为「皇家骑兵」（按血量比例换装，上限不超过新兵种的生命）。每名骑兵只会晋升一次。</td><td class="traits">—</td></tr><tr id="t-ab-fear"><td class="name">威吓</td><td>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</td><td class="traits">—</td></tr><tr id="t-ab-aura-speed"><td class="name">疾行光环</td><td>相邻友军移动力 +1。</td><td class="traits">—</td></tr><tr id="t-ab-curse-aura"><td class="name">咒域</td><td>相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。</td><td class="traits">—</td></tr><tr id="t-ab-heal-aura"><td class="name">治疗光环</td><td>回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。</td><td class="traits">—</td></tr><tr id="t-ab-purge"><td class="name">净化</td><td>回合开始时，自己和相邻友军各移除<b>一层</b>负面状态（中毒→点燃→减速→诅咒的顺序）。</td><td class="traits">—</td></tr><tr id="t-ab-purge-greater"><td class="name">大净化</td><td>回合开始时，半径 2 内友军的负面状态<b>全部</b>清空（小净化只解一层，它全解）。</td><td class="traits">—</td></tr><tr id="t-ab-repair"><td class="name">修缮</td><td>回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。</td><td class="traits">—</td></tr><tr id="t-ab-build-wall"><td class="name">筑墙</td><td>回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。</td><td class="traits">—</td></tr><tr id="t-ab-trap"><td class="name">布雷</td><td>回合开始时，对贴身的敌军造成 6 点伤害并让其减速 1 回合。走着走着就踩上了。</td><td class="traits">—</td></tr><tr id="t-ab-summoner"><td class="name">召唤</td><td>每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-repair"><td class="name">海上补给</td><td>每回合开始时，相邻的友方水面单位回复 3 点生命。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sub-tender"><td class="name">潜母</td><td>每回合开始时，相邻的友方潜艇回复 6 点生命（只对潜艇有效）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sweep"><td class="name">扫雷</td><td>自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-command"><td class="name">旗舰</td><td>相邻的友军 +2 攻击、+2 护甲。航母在空军接入前靠它站住脚。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-oiler"><td class="name">远洋补给</td><td>相邻的友方水面单位 +1 移动力。</td><td class="traits">—</td></tr><tr id="t-ab-af-command"><td class="name">空中指挥</td><td>相邻的友军 +2 攻击。预警机的价值不在自己开火。</td><td class="traits">—</td></tr><tr id="t-ab-af-jam"><td class="name">电子压制</td><td>相邻的敌军 −2 攻击。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-heal"><td class="name">休整</td><td>上回合没有移动也没有攻击时，回合开始恢复 15% 生命上限。想回血就得让出这一拍。</td><td class="traits">—</td></tr><tr id="t-ab-aura-command"><td class="name">指挥光环</td><td>2 格内的友军攻击 +4。</td><td class="traits">—</td></tr><tr id="t-ab-aura-armor"><td class="name">守护光环</td><td>2 格内的友军护甲 +2。</td><td class="traits">—</td></tr><tr id="t-ab-royal-decree"><td class="name">王命</td><td>回合开始时，半径 2 内所有「精英骑兵」晋升为「皇家骑兵」（按血量比例换装，上限不超过新兵种的生命）。每名骑兵只会晋升一次。</td><td class="traits">—</td></tr><tr id="t-ab-fear"><td class="name">威吓</td><td>相邻的敌军攻击 −2，最多叠两层。破解办法是拉开距离，或者先把它射掉。</td><td class="traits">—</td></tr><tr id="t-ab-hex-weak"><td class="name">虚咒</td><td>3 格内的敌军攻击力 −25%（多道虚咒取最强的一条，不叠乘）。</td><td class="traits">—</td></tr><tr id="t-ab-aura-speed"><td class="name">疾行光环</td><td>相邻友军移动力 +1。</td><td class="traits">—</td></tr><tr id="t-ab-curse-aura"><td class="name">咒域</td><td>相邻敌军护甲 −2。和威吓是同一类：贴上去让对面变弱，破解办法都是拉开。</td><td class="traits">—</td></tr><tr id="t-ab-heal-aura"><td class="name">治疗光环</td><td>回合开始时，自己和相邻友军各恢复 10% 生命上限（机械单位除外）。</td><td class="traits">—</td></tr><tr id="t-ab-purge"><td class="name">净化</td><td>回合开始时，自己和相邻友军各移除<b>一层</b>负面状态（中毒→点燃→减速→诅咒的顺序）。</td><td class="traits">—</td></tr><tr id="t-ab-purge-greater"><td class="name">大净化</td><td>回合开始时，半径 2 内友军的负面状态<b>全部</b>清空（小净化只解一层，它全解）。</td><td class="traits">—</td></tr><tr id="t-ab-repair"><td class="name">修缮</td><td>回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。</td><td class="traits">—</td></tr><tr id="t-ab-build-wall"><td class="name">筑墙</td><td>回合开始时，在相邻空格立一道土墙（耐久 20，四回合后自己塌）。用来堵路，或者挡一下冲锋。</td><td class="traits">—</td></tr><tr id="t-ab-trap"><td class="name">布雷</td><td>自己回合开始时，在相邻一圈的陆地上埋一枚哥布林陷阱（全场最多 6 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-summoner"><td class="name">召唤</td><td>每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。</td><td class="traits">—</td></tr><tr id="t-ab-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内埋一枚雷（全场最多 6 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-clear-mines"><td class="name">扫雷</td><td>自己回合开始时清掉相邻的敌方地雷；自己踩雷只受一半伤害。</td><td class="traits">—</td></tr><tr id="t-ab-lay-at-mines"><td class="name">布反装甲雷</td><td>自己回合开始时，在两格以内埋一枚反装甲雷（全场最多 4 枚，只炸敌人）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-repair"><td class="name">海上补给</td><td>每回合开始时，相邻的友方水面单位回复 3 点生命。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sub-tender"><td class="name">潜母</td><td>每回合开始时，相邻的友方潜艇回复 6 点生命（只对潜艇有效）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-lay-mines"><td class="name">布雷</td><td>自己回合开始时，在两格以内的水面上布一枚水雷（全场最多 6 枚，只炸敌舰）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-sweep"><td class="name">扫雷</td><td>自己回合开始时，清掉相邻的敌方水雷；自己踩到水雷只受 4 点。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-command"><td class="name">旗舰</td><td>相邻的友军 +2 攻击、+2 护甲。航母在空军接入前靠它站住脚。</td><td class="traits">—</td></tr><tr id="t-ab-nv-fleet-oiler"><td class="name">远洋补给</td><td>相邻的友方水面单位 +1 移动力。</td><td class="traits">—</td></tr><tr id="t-ab-af-command"><td class="name">空中指挥</td><td>相邻的友军 +2 攻击。预警机的价值不在自己开火。</td><td class="traits">—</td></tr><tr id="t-ab-af-jam"><td class="name">电子压制</td><td>相邻的敌军 −2 攻击。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
       <p>可以在兵种编辑器里给自定义兵种勾选任意组合。加一个新能力只需要两步：在能力的主人那里加一条定义（本体兵种写在 <code>abilities.ts</code>，扩展兵种写在扩展自己的文件里），再让兵种写上它的 id。<code>rules.ts</code> 不用改——它只负责在正确的时机问一句。</p>
@@ -787,13 +817,13 @@
 
     <section id="roster">
       <h2><span class="sec-num">14</span>兵种全表</h2>
-      <p>原版 50 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
+      <p>原版 53 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
         扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备七包一本（点顶栏「规则书」会按这一局开了什么列出来）。
-        第六时代「现代」在基础规则里是空的，所以它和原版每一代一样拆成"底座 + 加料"两个包：
-        「现代」带这一代最基本的九个兵，「现代战争」再往上加十五个专精兵。不勾「现代」，这里只有五节。</p>
+        第六时代「信息化」在基础规则里是空的，所以它和原版每一代一样拆成"底座 + 加料"两个包：
+        「信息化」带这一代最基本的九个兵，「现代战争」再往上加十五个专精兵。不勾「信息化」，这里只有五节。</p>
       
       <div class="era-block">
-        <h3 id="era-1">时代 I · 古典</h3>
+        <h3 id="era-1">时代 I · 青铜时代</h3>
         <p class="era-meta">
           短兵相接 ·
           升级费 — ·
@@ -839,6 +869,18 @@
         <td class="num">1</td>
         <td class="num">4</td>
         <td class="traits"><a class="ref" href="#t-ab-stealth">潜行</a></td>
+      </tr>
+      <tr data-unit="ge">
+        <td class="name">戈兵</td>
+        <td class="glyph">戈</td>
+        <td class="num">30</td>
+        <td class="num">12</td>
+        <td class="num">1</td>
+        <td class="num">30</td>
+        <td class="num">2</td>
+        <td class="num">1</td>
+        <td class="num">2</td>
+        <td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td>
       </tr>
       <tr data-unit="boat">
         <td class="name">舢板</td>
@@ -966,7 +1008,7 @@
     </table>
       </div>
       <div class="era-block">
-        <h3 id="era-2">时代 II · 中世</h3>
+        <h3 id="era-2">时代 II · 铁器时代</h3>
         <p class="era-meta">
           甲胄与长弓 ·
           升级费 220 金 ·
@@ -1004,12 +1046,36 @@
       <tr data-unit="knight">
         <td class="name">骑士</td>
         <td class="glyph">骑</td>
-        <td class="num">110</td>
+        <td class="num">95</td>
         <td class="num">17</td>
         <td class="num">4</td>
         <td class="num">40</td>
         <td class="num">3</td>
         <td class="num">1</td>
+        <td class="num">3</td>
+        <td class="traits">—</td>
+      </tr>
+      <tr data-unit="crossbow">
+        <td class="name">弩兵</td>
+        <td class="glyph">弩</td>
+        <td class="num">82</td>
+        <td class="num">16</td>
+        <td class="num">1</td>
+        <td class="num">24</td>
+        <td class="num">2</td>
+        <td class="num">3</td>
+        <td class="num">3</td>
+        <td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td>
+      </tr>
+      <tr data-unit="tower_ship">
+        <td class="name">楼船</td>
+        <td class="glyph">楼</td>
+        <td class="num">130</td>
+        <td class="num">15</td>
+        <td class="num">3</td>
+        <td class="num">85</td>
+        <td class="num">3</td>
+        <td class="num">2</td>
         <td class="num">3</td>
         <td class="traits">—</td>
       </tr></tbody>
@@ -1091,7 +1157,7 @@
     </table>
       </div>
       <div class="era-block">
-        <h3 id="era-3">时代 III · 火药</h3>
+        <h3 id="era-3">时代 III · 火器时代</h3>
         <p class="era-meta">
           排队枪毙 ·
           升级费 360 金 ·
@@ -1252,7 +1318,7 @@
     </table>
       </div>
       <div class="era-block">
-        <h3 id="era-4">时代 IV · 工业</h3>
+        <h3 id="era-4">时代 IV · 蒸汽时代</h3>
         <p class="era-meta">
           钢铁与堑壕 ·
           升级费 540 金 ·
@@ -1282,7 +1348,7 @@
         <td class="num">20×3</td>
         <td class="num">3</td>
         <td class="num">32</td>
-        <td class="num">1</td>
+        <td class="num">2</td>
         <td class="num">4</td>
         <td class="num">2</td>
         <td class="traits"><a class="ref" href="#t-burst">多动 3 次</a></td>
@@ -1389,7 +1455,7 @@
     </table>
       </div>
       <div class="era-block">
-        <h3 id="era-5">时代 V · 二战</h3>
+        <h3 id="era-5">时代 V · 机械化时代</h3>
         <p class="era-meta">
           内燃机与总动员 ·
           升级费 780 金 ·
@@ -1407,7 +1473,7 @@
         <td class="num">17×4</td>
         <td class="num">3</td>
         <td class="num">32</td>
-        <td class="num">1</td>
+        <td class="num">2</td>
         <td class="num">4</td>
         <td class="num">2</td>
         <td class="traits"><a class="ref" href="#t-burst">多动 4 次</a></td>
@@ -1439,13 +1505,13 @@
       <tr data-unit="artillery">
         <td class="name">火炮</td>
         <td class="glyph">炮</td>
-        <td class="num">320</td>
+        <td class="num">380</td>
         <td class="num">47</td>
         <td class="num">5</td>
         <td class="num">54</td>
         <td class="num">2</td>
         <td class="num">5</td>
-        <td class="num">2</td>
+        <td class="num">3</td>
         <td class="traits"><a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-splash">溅射 2</a></td>
       </tr></tbody>
     </table>
@@ -1578,7 +1644,7 @@
           主攻方向取"血最少的那座，同血取最近的"。</li>
         <li><b>水军看地图造</b>：水域占比不到 8%（开阔、山岭图）就干脆不造船——
           一个池塘里转圈的舢板只是四十五金的靶子；河图上才正经下水。</li>
-        <li><b>高时代会换装</b>：工业/现代单位在打分里有额外权重，造价惩罚也放宽——
+        <li><b>高时代会换装</b>：蒸汽/信息化单位在打分里有额外权重，造价惩罚也放宽——
           否则它算下来永远觉得"三个火枪兵比一辆坦克划算"，一辈子不换代。</li>
         <li><b>按编队模板配兵</b>：招兵不是每次都挑"分最高的那个"，而是先看这支部队缺哪一档职能——
           <b>前排 / 近战输出 / 远程 / 支援</b>，目标配比 30 : 25 : 30 : 15。缺得越多，那一档加的分越多（最多 +12），
@@ -1678,7 +1744,7 @@
             再点一次已经选中的那颗＝取消它。哪一排只对应一个包或一个时代时，那一排直接不出现——
             按下去筛不掉任何东西的按钮，比没有这颗按钮更让人困惑。</li>
         <li>筛选<b>不影响已经排好的格子</b>：格子里那个即使被筛掉了也照旧显示、照旧生效。
-            一个都没命中时会写明生效了哪几个条件（「（只看「奇想·荒兽」「古典时代」）」），不是列表面坏了。</li>
+            一个都没命中时会写明生效了哪几个条件（「（只看「奇想·荒兽」「青铜时代」）」），不是列表面坏了。</li>
         <li>每格下面写着「≈ N 金」——那是<b>那一回合手上大概有多少钱</b>：
             现有金币 ＋ 中间几次收入 − 前面几格的花费。预算不够、或者那座城的时代造不了这个兵，数字变红并写明原因。</li>
         <li>点一次「执行 5 回合」，AI 把这 5 个回合（连同对手的 5 个回合）一起打完；中途可以按「中断」。
@@ -1785,6 +1851,10 @@
         <li>为什么要这个按钮：这游戏的判定是"城全丢才输"，残局里两边都没了进攻能力、
           靠回合上限耗完，剩下的几十分钟谁也不享受。认输是给这种局面的一条出路。</li>
         <li>不可撤销，所以要确认一次。联机里认输同样会被提交上去。</li>
+        <li><b>认输之后，你留在盘上的部队会一起撤走</b>。三人四人局里认输只是"我退出"，
+          对局还在继续——留下来的兵既不受你指挥、也不会还手，只会变成对手刷伤害的靶子，
+          所以规则上直接清场（战报记一句"退出这局"）。<b>城被打光的处理完全相同</b>：
+          最后一座城被人接管的那一刻，你的部队同样撤场。</li>
       </ul>
 
       <h3>撤回一步</h3>

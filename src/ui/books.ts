@@ -59,7 +59,7 @@ const GROUP_BOOKS: Array<{ prefix: string; file: string; title: string; note: st
     prefix: 'pack-',
     file: 'manual-pack-eras.html',
     title: '时代兵备',
-    note: '六个时代的兵种扩充合册——古典、中世、火药、工业、二战、现代（底座 + 现代战争）：一张总表看全',
+    note: '六个时代的兵种扩充合册——青铜、铁器、火器、蒸汽、机械化、现代（底座 + 现代战争）：一张总表看全',
   },
 ];
 

@@ -24,7 +24,7 @@ import {
   expansionById,
   lockedEraPacks,
 } from '../core/expansions.ts';
-import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor } from '../core/mapgen.ts';
+import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor, twoCityMinSize } from '../core/mapgen.ts';
 import {
   MAP_MAX_BYTES,
   MAP_MAX_SIZE,
@@ -55,7 +55,7 @@ export interface SetupResult {
 /**
  * 起始时代对应的标准棋盘尺寸。
  *
- * 这是"标准对局"的默认组合：古典配小图打快棋，火药之后配大图拉开战线。
+ * 这是"标准对局"的默认组合：青铜配小图打快棋，火器之后配大图拉开战线。
  * 玩家当然可以手动改尺寸——这里只是把默认值调成匹配的。
  */
 export function DEFAULT_SIZE_FOR_ERA(era: number): number {
@@ -105,6 +105,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
       // 人数跟着上一局走：连着开三人局是常态
       playerCount: initial.playerCount ?? 2,
+      // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）
+      twoCities: initial.twoCities === true,
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
@@ -364,25 +366,48 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             `<button class="chip ${playerCount === n ? 'active' : ''}" data-players="${n}">${n} 人</button>`,
         )
         .join('');
+      const twoCities = config.twoCities === true && playerCount > 2;
       const playerHint =
-        playerCount === 2 ? '红蓝对峙，敌我分明' : `${playerCount} 家各自为战，每家一座城`;
+        playerCount === 2
+          ? '红蓝对峙，敌我分明'
+          : `${playerCount} 家各自为战，每家${twoCities ? '两' : '一'}座城`;
       const playerNote =
         playerCount === 2
           ? '两人局可以带 AI：人机对战、双 AI 观战都行。'
-          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。每方开局恰好一座城，城丢了就出局。${
-              config.size < 16 ? '人多地小会摆不开，建议至少 16 × 16。' : ''
-            }`;
+          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。${
+              twoCities
+                ? '双城市开局：每家两座城，丢一座不算出局，全丢才出局。'
+                : '每方开局恰好一座城，城丢了就出局。'
+            }${config.size < 16 ? '人多地小会摆不开，建议至少 16 × 16。' : ''}`;
+
+      /*
+       * 双城市开局的开关：只在三人四人局出现。
+       *
+       * 两家局本来就是"每家两座城"（对峙 / 对角两种布局），这个开关对它没有意义，
+       * 留着只会让人以为点了会有变化。棋盘太小也摆不开八座城（间距是硬条件），
+       * 开关上直接把最小边长写出来，点了会自动把尺寸抬上去。
+       */
+      const twoCityToggle =
+        playerCount === 2
+          ? ''
+          : `<button class="chip ${twoCities ? 'active' : ''}" data-two-cities="1"
+               title="每家两座城，摆在外圈、两两相邻；两城之间不保证连通。连线不交叉、城市间距有下限">
+               ${twoCities ? '双城市开局：开' : '双城市开局：关'}
+             </button>`;
 
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
       const eraChips = eras.map(
         (e) =>
-          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
+          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}" title="${e.name}">${e.short}</button>`,
       ).join('');
 
-      // 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 火山群 / 沼泽 / 群岛 / 大川。
-      // 这里每次都按当前勾选重算，所以开关扩展时列表会立刻增减——
-      // "勾了才有这些按钮"，不需要另外判断，列表本身就是扩展开关的镜子。
+      /*
+       * 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 沼泽 / 群岛 / 大川。
+       * 这里每次都按当前勾选重算，所以开关扩展时列表会立刻增减——
+       * "勾了才有这些按钮"，列表本身就是扩展开关的镜子。**双人和多人同一份列表**。
+       */
+      const multi = (config.playerCount ?? 2) > 2;
       const styles = mapStylesFor(config.expansionIds);
       const styleChips = styles
         .map(
@@ -392,8 +417,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         .join('');
       // 提示也跟着变：没勾扩展时说清"多出来的地貌去哪了"，勾了就说现在是几种
       const extraStyles = styles.length - MAP_STYLES.length;
-      const styleHint =
-        extraStyles > 0
+      const styleHint = multi
+        ? `共 ${styles.length} 种，双人多人同一份；随机＝每局抽一种。` +
+          '多人图上这几套扩展地貌只保证"有山有水有意思"，不保证逐家对称——要严格配平选本体那四种'
+        : extraStyles > 0
           ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
           : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
 
@@ -536,7 +563,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">
                 人数 <span class="field-hint">${playerHint}</span>
               </div>
-              <div class="chip-row">${playerChips}</div>
+              <div class="chip-row">${playerChips}${twoCityToggle}</div>
               <div class="field-hint">${playerNote}</div>
             </section>
 
@@ -658,9 +685,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                地形对称 <span class="field-hint">地势各异：两侧地形数量相同、分布不同</span>
+                地形对称
+                <span class="field-hint">${
+                  multi
+                    ? '三人四人图按旋转等分自动配平（四家 90°、三家三块等量），没有"地势各异 / 完全镜像"这两档'
+                    : '地势各异：两侧地形数量相同、分布不同'
+                }</span>
               </div>
-              <div class="chip-row">${symChips}</div>
+              ${multi ? '' : `<div class="chip-row">${symChips}</div>`}
             </section>
 
             <section class="field">
@@ -910,6 +942,30 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           if (config.size === DEFAULT_SIZE_FOR_ERA(config.startEra)) {
             config.size = Math.max(config.size, 16);
           }
+          /*
+           * 双城市开局开着的时候再抬一道：三家的最小边是 16、四家是 20（四家走田字，
+           * 每块都得单独放下一对基地）。这里不抬的话，面板上写着 16×16、
+           * 实际开局被 setup 悄悄拉成 20×20——尺寸显示和真打的那张图对不上。
+           */
+          if (config.twoCities) {
+            const need = twoCityMinSize(2, config.playerCount === 4 ? 4 : 3);
+            if (config.size < need) config.size = need;
+          }
+        }
+        // 回到两人局：双城市开局这个开关不适用（两家本来就两座城），顺手关掉
+        if (config.playerCount === 2) config.twoCities = false;
+        paint();
+        return;
+      }
+
+      // 双城市开局：切换 + 自动把棋盘抬到能放下八座城的尺寸
+      const twoBtn = target.closest<HTMLElement>('[data-two-cities]');
+      if (twoBtn) {
+        config.twoCities = !(config.twoCities === true);
+        if (config.twoCities) {
+          // 最小边长跟"几家"有关（三家走外圈环、四家走田字四区），式子只有 mapgen 那一份
+          const need = twoCityMinSize(2, config.playerCount === 4 ? 4 : 3);
+          if (config.size < need) config.size = need;
         }
         paint();
         return;
@@ -987,9 +1043,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (eraBtn?.dataset.era) {
         config.startEra = Number(eraBtn.dataset.era);
         // 选时代会顺手把棋盘换成这个时代的"标准尺寸"：
-        // 古典 12×12、中世 16×16、火药/工业/现代 20×20。
-        // 理由是实测出来的——小图配现代开局，摆不下几个兵就打成一团；
-        // 大图配古典开局，两边要走十个回合才照面。
+        // 青铜 12×12、铁器 16×16、火器/蒸汽/现代 20×20。
+        // 理由是实测出来的——小图配信息化开局，摆不下几个兵就打成一团；
+        // 大图配青铜开局，两边要走十个回合才照面。
         config.size = DEFAULT_SIZE_FOR_ERA(config.startEra);
         paint();
         return;
@@ -1177,7 +1233,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
       // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
       const stylesBefore = mapStylesFor(config.expansionIds).length;
-      // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「现代」这一格。
+      // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「信息化」这一格。
       const erasBefore = ERAS.filter((e) => e.level <= eraCeilingFor(config.expansionIds)).length;
       // 兵种池同样是扩展的函数：这一包带的兵会多出来 / 少掉十几格。
       const unitsBefore = Object.keys(unitPool().catalog).length;

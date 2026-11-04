@@ -43,3 +43,9 @@ after.json
 
 # 线上发布的静态产物：由 npm run build:static 生成，线上只发这几个文件
 _publish/
+
+# 复盘脚本的样本产物（npm run sample:reports 随时重造）
+/reports-sample.json
+/reports-sample.csv
+/reports*.json
+/reports*.csv

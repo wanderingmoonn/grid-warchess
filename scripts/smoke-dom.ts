@@ -37,7 +37,7 @@ import {
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
-import { renderBoard } from '../src/ui/board.ts';
+import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -139,8 +139,8 @@ function unitsCount(): number {
 
 console.log('\n首屏渲染');
 
-check('默认棋盘是古典标准尺寸 12×12，铺满 144 格', () => {
-  // 时代和棋盘尺寸是配套的：古典 12×12、中世 16×16、火药及以后 20×20
+check('默认棋盘是青铜标准尺寸 12×12，铺满 144 格', () => {
+  // 时代和棋盘尺寸是配套的：青铜 12×12、铁器 16×16、火器及以后 20×20
   assert.equal(doc.querySelectorAll('.tile').length, 144);
 });
 
@@ -1263,11 +1263,11 @@ check('选起始时代会顺手换成配套的棋盘尺寸', () => {
     doc.querySelector<HTMLElement>('[data-size].active')?.dataset.size ?? '';
 
   click('[data-era="1"]');
-  assert.equal(activeSize(), '12', '古典应该配 12×12');
+  assert.equal(activeSize(), '12', '青铜应该配 12×12');
   click('[data-era="2"]');
-  assert.equal(activeSize(), '16', '中世应该配 16×16');
+  assert.equal(activeSize(), '16', '铁器应该配 16×16');
   click('[data-era="3"]');
-  assert.equal(activeSize(), '20', '火药应该配 20×20');
+  assert.equal(activeSize(), '20', '火器应该配 20×20');
   click('[data-era="1"]');
 });
 
@@ -1405,28 +1405,28 @@ check('兵种池的两颗批量按钮：全选 / 只留本体', () => {
   closePool();
 });
 
-check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
-  // 第六时代是两个包：'pack-contemporary'「现代」开时代 + 带九个最基本的兵，
+check('起始时代只摆到这一局的上限：勾上「信息化」才多出第六格', () => {
+  // 第六时代是两个包：'pack-contemporary'「信息化」开时代 + 带九个最基本的兵，
   // 'pack-contemporary-war'「现代战争」在它之上加十五个专精兵（requires 前者）。
   // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
   const erasNow = () =>
     Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
-  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '不勾包时五格封顶');
+  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '不勾包时五格封顶');
 
   const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
   assert.ok(warBox, '开局面板里应有「现代战争」这一项');
   warBox.checked = true;
   warBox.dispatchEvent(new window.Event('change', { bubbles: true }));
 
-  // 勾加料包会自动补上它的前置「现代」——所以时代按钮当场多一格。
+  // 勾加料包会自动补上它的前置「信息化」——所以时代按钮当场多一格。
   // 这一步顺带守住了"勾了兵却造不出来"那个坑。
   assert.deepEqual(
     erasNow(),
-    ['古典', '中世', '火药', '工业', '二战', '现代'],
-    '加料包会把前置「现代」一起勾上，第六格随之出现',
+    ['青铜', '铁器', '火器', '蒸汽', '机械化', '信息化'],
+    '加料包会把前置「信息化」一起勾上，第六格随之出现',
   );
   const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
-  assert.ok(baseBox?.checked, '前置「现代」应该被自动勾上');
+  assert.ok(baseBox?.checked, '前置「信息化」应该被自动勾上');
 
   // 单独取消加料包：时代还在（底座是独立的一包），第六格不该消失
   const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
@@ -1435,7 +1435,7 @@ check('起始时代只摆到这一局的上限：勾上「现代」才多出第�
   again.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(
     erasNow(),
-    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    ['青铜', '铁器', '火器', '蒸汽', '机械化', '信息化'],
     '加料包取消之后，底座还开着——这一代仍然打得完一整局',
   );
 
@@ -1444,7 +1444,7 @@ check('起始时代只摆到这一局的上限：勾上「现代」才多出第�
   assert.ok(baseAgain);
   baseAgain.checked = false;
   baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
+  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '关掉之后第六格要收回去');
 });
 
 check('点兵种不重绘弹层，不会把列表弹回顶部', () => {
@@ -1715,7 +1715,7 @@ check('攒够钱之后，可以升级城市时代', () => {
   assert.notEqual(after, before, '时代标记应该变了');
   assert.equal(after, 'II', '应该升到时代 II');
   const html = doc.querySelector('.side')?.innerHTML ?? '';
-  assert.ok(html.includes('中世'), '面板应该显示已升到中世时代');
+  assert.ok(html.includes('铁器'), '面板应该显示已升到铁器时代');
 });
 
 check('升级后城市更硬，产兵列表也多出二级兵', () => {
@@ -1860,7 +1860,7 @@ check('军营面板列出兵种，并写清补给来自哪座城', () => {
   const html = host.innerHTML;
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
   assert.ok(html.includes('补给来自'), '应该写清补给来自哪座城市');
-  assert.ok(html.includes('中世'), '补给时代应该跟着最近的城走（这里升到了中世）');
+  assert.ok(html.includes('铁器'), '补给时代应该跟着最近的城走（这里升到了铁器）');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 二级兵种也能造：军营的时代取最近那座二级城
@@ -3017,11 +3017,11 @@ check('筛选把整页清空时，筛选栏与「清掉筛选」都必须还在�
     });
   const count = () => host.querySelectorAll('[data-act="recruit"]').length;
 
-  // 把城压到古典：骑士团一个能造的都没有（它的兵都在 2 代以上）
+  // 把城压到青铜：骑士团一个能造的都没有（它的兵都在 2 代以上）
   city!.era = 1;
   paint();
   const before = count();
-  assert.ok(before > 0, '古典城市本来是有兵可造的');
+  assert.ok(before > 0, '青铜城市本来是有兵可造的');
 
   // 复现：筛一个这座城市造不了的包 → 空列表
   paint('fantasy-knights');
@@ -3039,7 +3039,7 @@ check('筛选把整页清空时，筛选栏与「清掉筛选」都必须还在�
 
   // 时代那一维同理：筛一个城造不出的时代，也要留按钮
   paint('', 6);
-  assert.equal(count(), 0, '前提：六代兵在这座古典城里造不出来');
+  assert.equal(count(), 0, '前提：六代兵在这座青铜城里造不出来');
   assert.ok(
     host.querySelector('[data-act="recruit-era"][data-era="6"]'),
     '生效中的时代筛选必须留在筛选栏里',
@@ -3092,7 +3092,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   assert.ok(host.querySelector('[data-act="recruit-era"]'), '第二维：时代 chip');
   const all = count();
 
-  // 时代这一维单独用：切到古典，出来的必须全是古典兵
+  // 时代这一维单独用：切到青铜，出来的必须全是青铜兵
   const eraChips = Array.from(
     host.querySelectorAll<HTMLElement>('[data-act="recruit-era"]'),
   ).map((el) => Number(el.dataset.era));
@@ -3101,10 +3101,10 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   assert.ok(levels.length >= 2, `两行 chip 至少要能选两个时代，实际 ${levels.join(',')}`);
 
   paint('', '', levels[0]!);
-  assert.ok(count() > 0, '古典那一档不该是空的');
+  assert.ok(count() > 0, '青铜那一档不该是空的');
   assert.ok(
     erasShown().every((e) => e === levels[0]),
-    `筛了古典就只该有古典兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
+    `筛了青铜就只该有青铜兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
   );
   assert.equal(
     host.querySelector<HTMLElement>(`[data-act="recruit-era"][data-era="${levels[0]}"]`)?.className.includes('active'),
@@ -3149,7 +3149,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   if (count() === 0) {
     assert.ok(host.innerHTML.includes('这一档没有能造的兵'), '空态要给一句人话');
     assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
-    assert.ok(host.innerHTML.includes('古典'), '空态要写清生效了时代筛选');
+    assert.ok(host.innerHTML.includes('青铜'), '空态要写清生效了时代筛选');
   }
 });
 
@@ -3204,7 +3204,7 @@ check('热座指挥官：底栏是「提交作战计划」，交完就变「已�
 });
 
 check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {
-  // 这条以前是反的：城市 era 5，面板里连一个古典兵都不剩。
+  // 这条以前是反的：城市 era 5，面板里连一个青铜兵都不剩。
   const st = createMatch(
     { size: 14, startEra: 5, aiOpponent: false, aiAlly: false, expansionIds: [], enabledUnits: Object.keys(UNIT_TYPES) },
     507,
@@ -5166,6 +5166,38 @@ check('三人局认输之后：顶栏要说"你已认输"，按钮不再假装�
   assert.equal(surrender!.disabled, true, '认输过一次就不该还能再点');
 });
 
+check('三人局城被打光：顶栏说"你的城全丢了"，席位栏把这一家划掉', () => {
+  /*
+   * 出局有两种：自己认输，和最后一座城被人接管。规则层对两者的处理已经一样了
+   * （兵都会撤场，见 rules 的 retireLostSeat），但界面以前只认"认输"——
+   * 城全丢的那家，顶栏还在写"等待 XXX"，席位栏也照样亮着、显示"城 0"，
+   * 玩家看不出自己已经出局，只觉得自己点什么都不响应。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, playerCount: 3 }, 5151);
+  st.cities = st.cities.filter((c) => c.owner !== 'A');
+  st.current = 'B';
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('你的城全丢了'), `顶栏要说清已经出局，实际：${text.slice(0, 120)}`);
+
+  const endTurn = host.querySelector('[data-act="end-turn"]') as HTMLButtonElement | null;
+  assert.equal(endTurn?.disabled, true, '城全丢了就不能再结束回合');
+
+  const rows = [...host.querySelectorAll('.seat-row')];
+  assert.equal(rows.length, 3, '三家人三行');
+  const out = rows.filter((r) => r.classList.contains('quit'));
+  assert.equal(out.length, 1, `只有出局的那一家该被划掉，实际划掉 ${out.length} 行`);
+  assert.ok((out[0]!.textContent ?? '').includes('城 0'), '划掉的应该是没城的那一家');
+});
+
 
 check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也不重播', () => {
   /*
@@ -5245,6 +5277,69 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     assert.ok(host.querySelector('.hp-lag.chipped'), '没有 animate 时要用类动画兜底');
   } finally {
     proto.animate = orig;
+    host.remove();
+  }
+});
+
+/*
+ * 点地图这件事的命中检测。
+ *
+ * 线上报过两个现象："放大地图之后点格子没反应"、"地图右下角一块怎么点都没用"。
+ * 前者是 `pointerdown` 里无条件 `setPointerCapture`，把随后派生的 click
+ * 整个改到了 `.board-scroll` 上；后者是缩放条/聊天停靠区压在棋盘上吃掉了点击。
+ * 前者的后果正好落在 `coordsFromEvent` 这一层——拿到的事件目标根本不是格子。
+ * 所以这里守两件事：目标不是格子时能不能算出来，以及别把键盘触发的点击算成假命中。
+ */
+check('点地图：落点不在格子上，也要能算出是哪一格', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const s2 = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 606);
+  renderBoard(host, playerView(s2, 'A'), {
+    selectedId: null, reach: [], targets: [], siegeTargets: [],
+    selectedCityId: null, placeable: [], threat: [],
+  });
+  const tiles = host.querySelector<HTMLElement>('.tiles')!;
+  assert.ok(tiles, '棋盘里应该有 .tiles 这一层');
+  // jsdom 没有布局：把格栅层的矩形钉死成 400×400，左上角在 (100, 50)
+  Object.defineProperty(tiles, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 100, top: 50, width: 400, height: 400, right: 500, bottom: 450, x: 100, y: 50 }),
+  });
+  const view = doc.defaultView!;
+  const clickAt = (target: Element, x: number, y: number): Event => {
+    const ev = new view.MouseEvent('click', { clientX: x, clientY: y, bubbles: true });
+    target.dispatchEvent(ev);
+    return ev;
+  };
+
+  try {
+    // 1) 老路径：事件目标就是格子本身，照旧按 data-x 走
+    const one = host.querySelector<HTMLElement>('.tile[data-x="5"][data-y="7"]');
+    assert.ok(one, '应该有 5,7 这一格');
+    assert.deepEqual(coordsFromEvent(clickAt(one, 0, 0)), { x: 5, y: 7 }, '点在格子上还是按格子算');
+
+    // 2) 兜底：目标不是格子，但落在格栅范围内 → 按几何换算
+    //    16 格 / 400px = 每格 25px。取第 3 列、第 2 行的中心
+    assert.deepEqual(
+      coordsFromEvent(clickAt(host, 100 + 25 * 3.5, 50 + 25 * 2.5)),
+      { x: 3, y: 2 },
+      '点在棋盘内边距（没有 data-x）上，也要换算到对应格子',
+    );
+
+    // 3) 兜底：点在棋盘左边缘的留白里（格栅外）→ 夹到 0，不返回 null
+    assert.deepEqual(
+      coordsFromEvent(clickAt(host, 98, 60)),
+      { x: 0, y: 0 },
+      '点在内边距最外侧，夹到边界格，而不是整下作废',
+    );
+
+    // 4) 键盘触发的 click 坐标是 0,0：不能算成"点了左上角"
+    assert.equal(coordsFromEvent(clickAt(host, 0, 0)), null, '0,0 是键盘点击的默认坐标，不算命中');
+
+    // 5) 棋盘之外一律 null
+    assert.equal(coordsFromEvent(clickAt(doc.body, 10, 10)), null, '棋盘外面点不到格子');
+  } finally {
     host.remove();
   }
 });

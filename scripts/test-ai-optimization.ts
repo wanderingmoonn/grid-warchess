@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
+import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
-import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory } from '../src/core/rules.ts';
+import { abilityValue, combatCore, effectiveHp, raidPremium, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
+import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
 
@@ -343,6 +344,300 @@ test('海军：陆路走得通时，船不会无脑来回运人',()=>{
   foot.acted = false; foot.moved = false;
   const act = aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
   assert.notEqual(act?.type,'LOAD', '路通的时候不该装船');
+});
+
+test('换血：编制满了会解散最差的那个，换更好的兵',()=>{
+  const s = arena();
+  // 把英雄从兵种表里摘掉：英雄的"攒钱"优先级会盖住换血（见 buildPlan 的 savingFor），
+  // 这一条要单独量换血本身，别让攒英雄把它挤掉。
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.fog = false; s.current='A'; s.turn=40;
+  /*
+   * 编制塞满：20 个民兵（火器时代的旧货）+ 6 个农民。
+   *
+   * 为什么要放农民：编制满的时候 AI 会问"如果有一个空位，这一回合想买谁"。
+   * 经济线没铺满时，那个问题的答案是农民——于是换血这条直接判"想买的不是战斗力"，
+   * 用例就测不到换血了（真实对局里这是对的：缺农民时先补农民）。
+   * 把经济线喂饱，才量得到"该不该拿旧兵换新兵"。
+   *
+   * 为什么是 6 个而不是"够用就行"：目标农民数是
+   * `min(10, 城数×2 + 3×boom)`，两座城就是 6。少一个，AI 就还有理由先补农民。
+   */
+  for(let i=0;i<6;i++) unit(s,'A','farmer',1+(i%2),11+Math.floor(i/2));
+  const N = 20;
+  for(let i=0;i<N;i++) unit(s,'A','militia',1+(i%4),5+Math.floor(i/4));
+  // 主城升到能造现代兵，账上有够买一个的钱
+  for(const c of s.cities) if(c.owner==='A') c.era=6;
+  s.players.A.gold=420;
+  s.players.B.gold=0;
+  const act = aiNextAction(s,{maxRecruit:2,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.equal(act?.type,'DISBAND', `编制满应先把旧兵换掉，实际 ${act?.type}`);
+  const who = s.units.find(u=>u.id===(act as {unitId?:string}).unitId);
+  assert.ok(who && utype(s,who.type).category==='combat', '解散的应该是一个战斗单位');
+  assert.ok(applyAction(s,act!).ok, '解散动作要被规则层接受');
+});
+test('换血：编制没满时不会去拆自己的兵',()=>{
+  const s = arena();
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.fog=false; s.current='A'; s.turn=40;
+  for(let i=0;i<10;i++) unit(s,'A','militia',1+(i%3),5+Math.floor(i/3));
+  for(const c of s.cities) if(c.owner==='A') c.era=6;
+  s.players.A.gold=420;
+  const act = aiNextAction(s,{maxRecruit:2,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.notEqual(act?.type,'DISBAND', '有空位的时候不该拆兵');
+});
+
+test('攒钱意向：跨回合记住，兵力掉下去也不会把钱散回产线',()=>{
+  const s = arena();
+  s.fog=false; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  const first = aiDebugPlan(s,'A');
+  /*
+   * 原来这里写死 'hero'。2026-11-03 换成新战力公式之后，这个局面（6 个民兵、
+   * 300 金、3 代城）算出来的最优目标是"升第 4 代"：中位战力 575 → 931（+62%），
+   * 每个名额都值的时代跃迁确实压过一只英雄。
+   * 这条用例的真正主题是**跨回合记住**，不是"必须攒英雄"，所以断言改成
+   * "记住自己当时选的那个目标"，别把某一个具体结论钉死在这。
+   */
+  assert.ok(first.savingFor, `这个局面应该有个攒钱目标，实际 ${String(first.savingFor)}`);
+  assert.ok(first.targetCost > s.players.A.gold, '要真的还买不起，不然这条测的是别的东西');
+  assert.ok(s.aiIntent?.A, '意向要写进状态');
+  const since = s.aiIntent!.A!.since;
+  // 兵掉到 3 个：攒钱门槛（army >= 4~6）整段被跳过——这正是那个 bug 的现场
+  s.units = s.units.filter(u => u.owner!=='A' || u.id==='test-0' || u.id==='test-1' || u.id==='test-2');
+  s.turn = 17;
+  const again = aiDebugPlan(s,'A');
+  assert.equal(again.urgent, false, '3 个兵不算急事，不然这条会被急事那条拦掉');
+  assert.equal(again.savingFor, first.savingFor, `两回合后不该忘掉（原来会变成 null），实际 ${again.savingFor}`);
+  assert.equal(s.aiIntent!.A!.since, since, 'since 要保持，不能每回合重置');
+});
+test('攒钱意向：目标没了就换，不会抱着死目标',()=>{
+  const s = arena();
+  s.fog=false; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  aiDebugPlan(s,'A');
+  // 同上：这个局面现在的目标是"升时代"，不再写死 hero。
+  const firstGoal = s.aiIntent?.A?.goal;
+  assert.ok(firstGoal, '先立一个攒钱意向');
+  // 英雄从兵种表里没了（关掉那个包 / 选卡没收录）：这一条必须接得住
+  for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
+  s.turn=17;
+  const p = aiDebugPlan(s,'A');
+  if (firstGoal === 'hero') {
+    assert.notEqual(s.aiIntent?.A?.goal, 'hero', `英雄没了还在攒英雄，实际 ${s.aiIntent?.A?.goal}`);
+  }
+  assert.equal(p.savingFor, s.aiIntent?.A?.goal ?? null, '计划和记忆要一致');
+});
+test('攒钱意向：走 aiNextAction 时落在真状态上',()=>{
+  const s = arena();
+  s.fog=true; s.current='A'; s.turn=15;
+  for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
+  s.players.A.gold=300;
+  aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
+  assert.ok(s.aiIntent?.A, '雾图副本上的记忆要搬回真状态，否则下一回合又忘了');
+});
+
+test('两回合威胁：够得着但还没到的人算进 soon，不算进 exposure',()=>{
+  const s = arena();
+  const t = unit(s,'A','militia',4,4);
+  const e = unit(s,'B','militia',11,4,{move:4,range:1,atk:20});
+  const map = tacticalMap(s,'A');
+  assert.equal(map.exposure(t).damage, 0, '这回合还够不着，不算眼前那一刀');
+  assert.ok(map.soon(t).damage > 0, '两回合的移动力够扑上来，要预警');
+  // 走不动的同一批人：两回合也到不了，就不该预警
+  e.type = 'slow';
+  s.unitTypes.slow = {...s.unitTypes.militia!, id:'slow', move:1};
+  const slow = tacticalMap(s,'A');
+  assert.equal(slow.soon(t).damage, 0, '两回合走不到的人不算威胁');
+});
+test('对手最强一手：按"最贵的那一刀"计价，不看最近的那个',()=>{
+  const s = arena();
+  const cheap = unit(s,'A','militia',6,6);
+  const pricey = unit(s,'A','militia',6,8,{maxHp:200,cost:400});
+  unit(s,'B','archer',6,10,{move:0,range:4,atk:30});
+  const a = foeOutput(s,'A');
+  assert.ok(a > 0, '有人在射程里，就该算出一笔');
+  // 把便宜的挪到射程外：威胁值应该几乎不掉——真正值钱的是那台贵的
+  cheap.y = 0;
+  const b = foeOutput(s,'A');
+  assert.ok(b >= a * 0.95, `打贵的那一刀才是主体（${a.toFixed(1)} → ${b.toFixed(1)}）`);
+  // 把贵的打掉，威胁值要塌下来
+  s.units = s.units.filter(u=>u.id!==pricey.id);
+  assert.ok(foeOutput(s,"A") < a * 0.6, '摘掉贵的目标，威胁值要跟着掉');
+});
+test('两翼：分出去的那一路不超过全军三分之一，去打另一座城',()=>{
+  const s = arena();
+  s.fog=false;
+  // 上边一撮 3 个、下边一撮 6 个；两座敌城分别在右上与右下
+  for(const [x,y] of [[9,2],[10,2],[9,3]]) unit(s,'A','militia',x,y);
+  for(const [x,y] of [[9,10],[10,10],[9,11],[10,11],[9,12],[10,12]]) unit(s,'A','militia',x,y);
+  const b1 = s.cities.find(c=>c.id==='city2')!; // (12,1) 右上
+  const b2 = s.cities.find(c=>c.id==='city3')!; // (12,12) 右下
+  const land = new Map<string,number[]>([
+    [b1.id, cityDistanceField(s,b1,'land')],
+    [b2.id, cityDistanceField(s,b2,'land')],
+  ]);
+  // 主攻定在右上那座：下边那一撮自然该走另一翼
+  const split = flankSplit(s,'A',land,b1.id);
+  assert.equal(split.flankCityId, b2.id, '佯攻要走离主攻最远的那座');
+  assert.equal(split.flank.size, 3, '上限是全军九人的三分之一');
+  for(const id of split.flank){
+    const u = s.units.find(u=>u.id===id)!;
+    assert.ok(u.y >= 10, `分到佯攻的该是下边那一撮，实际 (${u.x},${u.y})`);
+  }
+});
+test('两翼：兵太少不分兵',()=>{
+  const s = arena(); s.fog=false;
+  for(let i=0;i<4;i++) unit(s,'A','militia',9,4+i);
+  const b1 = s.cities.find(c=>c.id==='city2')!;
+  const b2 = s.cities.find(c=>c.id==='city3')!;
+  const land = new Map<string,number[]>([
+    [b1.id, cityDistanceField(s,b1,'land')],
+    [b2.id, cityDistanceField(s,b2,'land')],
+  ]);
+  assert.equal(flankSplit(s,'A',land,b1.id).flankCityId, null, '四个兵分两路等于送');
+});
+test('换家：兵力和城墙都崩了，就该弃守去打对面的城',()=>{
+  const s = arena(); s.fog=false; s.current='A'; s.turn=40;
+  // 我 4 个民兵缩在野地里，对面 10 个重装已经贴到城下
+  for(let i=0;i<4;i++) unit(s,'A','militia',7,7+i);
+  for(let i=0;i<10;i++) unit(s,'B','militia',3+(i%2),3+Math.floor(i/2),{maxHp:220,atk:40,cost:400});
+  // 我那两座城都半血、都在敌人嘴边
+  for(const c of s.cities) if(c.owner==='A') c.hp = Math.floor(c.maxHp*0.4);
+  const p = aiDebugPlan(s,'A');
+  assert.equal(p.stance,'trade', `应该换家，实际 ${p.stance}`);
+});
+test('换家：身价没差那么多就老实守着，别动不动就弃城',()=>{
+  const s = arena(); s.fog=false; s.current='A'; s.turn=40;
+  for(let i=0;i<4;i++) unit(s,'A','militia',7,7+i);
+  for(let i=0;i<3;i++) unit(s,'B','militia',3+(i%2),3+Math.floor(i/2));
+  for(const c of s.cities) if(c.owner==='A') c.hp = Math.floor(c.maxHp*0.4);
+  const p = aiDebugPlan(s,'A');
+  assert.notEqual(p.stance,'trade', '势均力敌的时候不该弃城');
+});
+
+test('攒升级：咬住窗口放到 8 回合时，差 6 个回合也一分不花',()=>{
+  // 目标 900、余额 300、收入 100、两座产兵城 → 差 6 个回合的收入
+  assert.equal(savingAllowance(300, 100, 900, 2, true, 0), 50, '默认窗口 4：还放得开，偶数回合给一半收入');
+  assert.equal(savingAllowance(300, 100, 900, 2, true, 0, 8), 0, '升级窗口 8：咬住，一分不花');
+  // 更远的目标准则不变：超过窗口就照常放额度
+  assert.equal(savingAllowance(100, 100, 2000, 2, true, 0, 8), 50, '差 19 个回合：超过窗口，照常放');
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 估值模型本身的性质（有效血量曲线、能力的局面相性）
+ *
+ * 这些不是"某个玩法对不对"，而是尺子的**结构性约束**：
+ * 曲线只要有一个地方不单调、或者能算出无穷大，AI 的采购就会在那一档抽风，
+ * 而抽风的表现是"某些兵永远不买"——从对局数据里几乎查不出来。
+ * ══════════════════════════════════════════════════════════════════ */
+
+test('等效血：护甲 0~40 全段单调递增，且不会爆到无穷',()=>{
+  let prev = 0;
+  for(let a=0;a<=40;a++){
+    const v = effectiveHp(100, a);
+    assert.ok(Number.isFinite(v), `护甲 ${a} 算出了非有限值：${v}`);
+    assert.ok(v > prev, `护甲 ${a} 的等效血（${v.toFixed(1)}）没有比护甲 ${a-1}（${prev.toFixed(1)}）更高`);
+    prev = v;
+  }
+  // 上界：三档都打不动时收敛，不会无限放大
+  assert.ok(effectiveHp(100, 60) < 100 * 25, `护甲 60 的等效血 ${(effectiveHp(100,60)/100).toFixed(1)}× 已经失控`);
+});
+
+test('等效血：护甲 19 不再是"一刀腰斩"——旧曲线在 18→19 会翻倍',()=>{
+  const at18 = effectiveHp(100,18);
+  const at19 = effectiveHp(100,19);
+  assert.ok(at19 / at18 < 1.5, `18→19 一点护甲涨了 ${((at19/at18-1)*100).toFixed(0)}%，仍然过陡`);
+  // 旧口径（挨 20 攻）在 19 → 20 完全钉住，新口径必须还能继续涨
+  assert.ok(effectiveHp(100,20) > at19, '20 甲反而没有比 19 甲更硬：又钉住了');
+});
+
+test('等效血：护甲 ≤ 6 时，"20 攻"单点假设仍然够用（差 < 20%）',()=>{
+  /*
+   * 两套口径的偏差（新/旧 − 1）：甲 0 → 0%，甲 4 → −9%，甲 6 → −15%，
+   * 甲 8 → −24%，甲 12 → −50%。所以"单一 20 攻"只在**薄甲段**成立，
+   * 这就是它该被写成"适用范围"而不是"公式"的原因。
+   */
+  for(const a of [0,4,6]){
+    const single = 100 * (20 / Math.max(1, 20 - a));
+    const spectrum = effectiveHp(100, a);
+    const diff = Math.abs(spectrum - single) / single;
+    assert.ok(diff < 0.2, `护甲 ${a} 两套口径差 ${(diff*100).toFixed(0)}%，单点假设在这里就不该用了`);
+  }
+});
+
+test('等效血：魔抗越高越耐打，且不吃护甲那条线',()=>{
+  const base = effectiveHp(100, 10, 0);
+  assert.ok(effectiveHp(100, 10, 6) > base, '加魔抗之后等效血没涨');
+  assert.ok(effectiveHp(100, 10, 14) > effectiveHp(100, 10, 6), '魔抗的收益不单调');
+  // 法师那一档不吃护甲：纯堆甲对魔法伤害没有半点用，涨幅必须小于"物理独大"的世界
+  const armorGain = effectiveHp(100, 18, 0) / effectiveHp(100, 0, 0);
+  assert.ok(armorGain < 6, `护甲 0→18 的等效血涨了 ${armorGain.toFixed(1)} 倍，说明魔法通道没算进去`);
+});
+
+test('输出：魔法不吃护甲，破甲对厚甲更值钱',()=>{
+  const s = arena();
+  const base = s.unitTypes['militia']!;
+  // 同一个兵：物攻 20 与 魔攻 20，在厚甲靶子面前该由魔法赢
+  const phys = {...base, id:'t-phys', atk:20, magicAtk:0, abilities:[]};
+  const mag = {...base, id:'t-mag', atk:0, magicAtk:20, abilities:[]};
+  const pierce = {...base, id:'t-pierce', atk:20, magicAtk:0, abilities:['armor-pierce']};
+  assert.ok(combatCore(mag).dps > combatCore(phys).dps * 0.9 - 1, '魔法 20 反而比物攻 20 弱很多');
+  assert.ok(combatCore(pierce).dps > combatCore(phys).dps, '破甲没有提高输出');
+});
+
+test('骚扰复利：能反复上门的兵才有溢价，走不快的没有',()=>{
+  const s = arena();
+  const mk = (id: string, over: Record<string, unknown>) => ({ ...s.unitTypes[id]!, ...over });
+  // 龙骑兵（移 5 + 飞行 + 溅射）应该有明显溢价
+  const dragoon = s.unitTypes['dragoon-rider'] ?? mk('militia', { move: 5, flight: true, layer: 'air', atk: 26, maxHp: 58, armor: 6, splash: 1, cost: 265 });
+  const premium = raidPremium(dragoon as never, NEUTRAL_CONTEXT);
+  assert.ok(premium > 0.05, `龙骑兵的骚扰溢价只有 ${(premium*100).toFixed(1)}%，几乎等于没算`);
+  // 不能动的民兵没有
+  assert.equal(raidPremium(s.unitTypes['militia']!, NEUTRAL_CONTEXT), 0, '移 1 的民兵不该有骚扰溢价');
+  // 脆皮快兵即使够得着，溢价也该明显更低
+  const glass = mk('militia', { move: 6, flight: true, layer: 'air', atk: 15, maxHp: 24, armor: 1, cost: 120 });
+  assert.ok(raidPremium(glass as never, NEUTRAL_CONTEXT) < premium, '脆皮飞行兵的溢价不该高于龙骑兵');
+});
+
+test('等效血：同一件甲，在低代比在高代值钱（对手更弱）',()=>{
+  const early = effectiveHp(100, 6, 0, 2);
+  const late = effectiveHp(100, 6, 0, 6);
+  assert.ok(early > late * 1.15, `甲 6 在 2 代 ×${(early/100).toFixed(2)}、6 代 ×${(late/100).toFixed(2)}，差别太小——谱可能没按时代取`);
+});
+
+test('跨代：2 代兵放到 6 代的谱下，输出和生存都会掉',()=>{
+  const s = arena();
+  const bat = s.unitTypes['militia']!;   // 拿一个 1 代兵当样本
+  const own = combatCore(bat, {era: bat.era});
+  const inSix = combatCore(bat, {era: 6});
+  assert.ok(inSix.dps < own.dps, `低代兵在 6 代谱下输出没掉：${inSix.dps.toFixed(1)} vs ${own.dps.toFixed(1)}`);
+  assert.ok(inSix.ehp < own.ehp, `低代兵在 6 代谱下等效血没掉：${inSix.ehp.toFixed(0)} vs ${own.ehp.toFixed(0)}`);
+});
+
+test('掠空：速攻比均势值钱，均势又比龟缩值钱',()=>{
+  const s = arena();
+  // 拿民兵当底子捏一个"只差掠空"的兵，避免依赖某个扩展包的兵种表
+  const base = s.unitTypes['militia']!;
+  const d = {...base, id:'t-overfly', abilities:['fly-over']};
+  const push = abilityValue(d, {tempo:1, visionCoverage:0.4, fog:true});
+  const flat = abilityValue(d, {tempo:0, visionCoverage:0.4, fog:true});
+  const hold = abilityValue(d, {tempo:-1, visionCoverage:0.4, fog:true});
+  assert.ok(push > flat && flat > hold, `掠空没有随局面倾斜：速攻 ${push} / 均势 ${flat} / 龟缩 ${hold}`);
+  assert.equal(flat, 0.18, `均势下掠空应值 0.18，实际 ${flat}`);
+  assert.ok(push - flat >= 0.05, `速攻只比均势多 ${(push-flat).toFixed(3)}，倾斜幅度不够看`);
+});
+
+test('掠空必须比飞行贵：它是飞行的超集',()=>{
+  const s = arena();
+  const base = s.unitTypes['militia']!;
+  const flying = {...base, id:'t-fly', flight:true};
+  const overfly = {...base, id:'t-overfly', abilities:['fly-over']};
+  const a = abilityValue(flying, NEUTRAL_CONTEXT);
+  const b = abilityValue(overfly, NEUTRAL_CONTEXT);
+  assert.ok(b > a, `掠空 ${b} 不比飞行 ${a} 贵——加强版反而更便宜`);
 });
 
 console.log(`${passed} AI optimization tests passed`);

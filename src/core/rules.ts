@@ -75,7 +75,9 @@ import {
   isProducer,
   produceCooldownLeft,
   produceCostScale,
+  produceOf,
   producePop,
+  produceUsableCount,
   scaleCost,
 } from './produce.ts';
 import {
@@ -1192,10 +1194,28 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
  * （"蜘蛛能过河，但 AI 算不出它能过河"）。
  */
-function crossesWater(def: UnitTypeDef): boolean {
+export function crossesWater(def: UnitTypeDef): boolean {
   // 空中层当然过水；其余的看能力（跳跃、旧版「飞行」）。
   // `flight` 字段不再单独出现在这里——它已经是空中层了（见 airLayer）。
   return airLayer(def) || hasFlag(def, 'crossesWater');
+}
+
+/**
+ * 这个兵种能不能**走进**这一格——只看地形，不看占位与城市归属。
+ *
+ * 存在的理由：外面（AI 的出城判定、各种"走不走得过去"的估算）到处在写
+ * `passable(tile.terrain)`，而 `passable` 说的是"**陆军**能不能走"：
+ * 对它来说水永远是墙。于是水军（本来就活在水上）和掠水/飞行的兵
+ * 在每个这样写的地方都会被判成"过不去"。
+ *
+ * 规则层的 `reachableTiles` 早就按兵种判了（`terrainOk`），所以这类 bug
+ * 只出现在**旁路判断**上：能走，但 AI 和预览都说不能走。
+ */
+export function terrainWalkable(def: UnitTypeDef, terrain: Terrain): boolean {
+  if (def.domain === 'water') return navigable(terrain);
+  if (passable(terrain)) return true;
+  // 掠水/飞行：水面、深水都能过（空中层连山都能过，这里只回答"水"这一档）
+  return crossesWater(def) && (terrain === 'water' || terrain === 'deep');
 }
 
 /**
@@ -1321,17 +1341,23 @@ export function canAttack(u: Unit): boolean {
 }
 
 /**
- * 相邻友军提供的光环加成。
+ * 友军提供的光环加成。
  *
- * 只加不乘，也不递归——否则两个指挥光环互相加成会失控。
+ * 只加不乘，也不递归——否则两个光环互相加成会失控。
+ *
+ * 半径写在 aura 自己身上（`radius`，默认 1 = 相邻）：指挥光环这类"站远了也带得动"
+ * 的效果要 2 格，而威吓、咒域这类"贴上去才算"的仍然是 1。把半径放在**外面**
+ * （先判距离再看能力）的写法，加一个 2 格光环就等于把全兵种的光环都放大到 2 格。
  */
 export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: number } {
   let atk = 0;
   let armor = 0;
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    if (distance(ally, unit) !== 1) continue;
+    const gap = distance(ally, unit);
+    // aurasOfUnit：兵种自带 + 动态挂上的能力（修士随境界解锁的技能）都要算
     for (const a of aurasOfUnit(s, ally)) {
+      if (gap > (a.radius ?? 1)) continue;
       if (a.allyAtk) atk += a.allyAtk;
       if (a.allyArmor) armor += a.allyArmor;
     }
@@ -1351,14 +1377,39 @@ export function fearPenalty(s: GameState, unit: Unit): number {
   let hit = 0;
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
-    if (distance(foe, unit) !== 1) continue;
+    // aurasOfUnit：动态挂上的威吓（比如修士的技能）也要算；距离在下面按 radius 判
     for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeAtk || a.foeAtk >= 0) continue;
+      // 半径默认 1（相邻）：威吓/咒域都是"贴上去才算"，只有显式写了 radius 的才放大
+      if (distance(foe, unit) > (a.radius ?? 1)) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeAtk;
       hit = Math.min(cap, hit - a.foeAtk);
     }
   }
   return hit;
+}
+
+/**
+ * 虚咒：范围内敌军攻击力按**比例**降低（`foeAtkPct`），取最强的一条，不叠乘。
+ *
+ * 和 `fearPenalty` 并存而不是合并：一个是减法、一个是比例，语义不同
+ * （见 ability-hooks 的 AuraSpec 注释）。返回值是 0~0.9 的比例，0 表示没人罩着。
+ *
+ * 上限 0.9：数据里写错一个 1.5 不会让某个兵直接打出负伤害，
+ * 也挡住"三个女巫叠到 −75%"这种连锁——光环取强不取叠。
+ */
+export function hexWeakPct(s: GameState, unit: Unit): number {
+  let pct = 0;
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    // aurasOfUnit：动态挂上的虚咒也要算
+    for (const a of aurasOfUnit(s, foe)) {
+      if (!a.foeAtkPct || a.foeAtkPct <= 0) continue;
+      if (distance(foe, unit) > (a.radius ?? 1)) continue;
+      if (a.foeAtkPct > pct) pct = a.foeAtkPct;
+    }
+  }
+  return Math.min(0.9, pct);
 }
 
 /** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
@@ -1502,6 +1553,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (fear !== 0) {
     atk -= fear;
     atkItems.push({ label: '被威吓', delta: -fear });
+  }
+  // 虚咒：范围内的敌军攻击力按比例降低（取最强的一条，见 hexWeakPct）。
+  // 放在威吓之后、乘法类修正之前：它说的是"我这一刀本来该多狠"，减法类先结清。
+  const hex = hexWeakPct(s, u);
+  if (hex > 0) {
+    const before = atk;
+    atk = Math.round(atk * (1 - hex));
+    atkItems.push({ label: '虚咒', delta: atk - before });
   }
   // 面板上的攻击力修正（狂暴，以及以后任何"现在就成立"的攻击加成）。
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
@@ -1802,24 +1861,23 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
 /**
  * 这一格对某个单位来说能不能进。
  *
- * 行动域是这里最要紧的分支：陆军进不了水，水军上不了岸（桥面算岸），
- * 高山谁都不能进。城市格按归属判定。
+ * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
+ * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
 function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId }): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return true;
 
-  const water = utype(s, unit.type).domain === 'water';
-  if (water) {
-    // 桥架在水面上，船从桥下过：能穿过去，但桥自己占着那一格，停不下来。
-    // 浅滩同理——船能滑过去，而且停得下（见 navigable）。
-    if (!navigable(tile.terrain)) return true;
+  const def = utype(s, unit.type);
+  // 地形这一关只有一处判据：`terrainWalkable`。以前这里分了两支——水军看
+  // navigable()、其余一律 `passable()`——于是飞行兵在"下船落点"这类地方
+  // 会被当成陆军，明明站得住的水面反而进不去。现在两支合并成一句按兵种问。
+  if (!terrainWalkable(def, tile.terrain)) return true;
+  if (def.domain === 'water') {
     // 吃水：占地 2×2 的大舰进不了浅流，会搁浅。
     // 这是「浅水 vs 深水」这一对地形真正的分工——否则浅流对舰队只是"另一片水"。
     // 判据用 footprint 而不是船名表：以后再加巨舰不用回来改这里。
     if (tile.terrain === 'shallow' && footprintOf(s, unit.type) > 1) return true;
-  } else if (!passable(tile.terrain)) {
-    return true;
   }
 
   if (tile.cityId) {
@@ -1941,7 +1999,8 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
         if (!city || city.owner === unit.owner || city.ruined) continue;
         return false;
       }
-      if (flyer && (ft.terrain === 'water' || ft.terrain === 'deep')) continue;
+      // 掠水（不是空中层）曾经在这里单独放行水面——那条豁免现在在
+      // `blockedFor` 里（它按兵种判地形），所以这里只剩"被挡住就是挡住"。
       return false;
     }
     return true;
@@ -2291,6 +2350,9 @@ export function computeDamage(
 
   // 威吓
   ctx.damage -= fearPenalty(s, attacker);
+  // 虚咒：按比例削这一刀的底子，和面板 effectiveStats 同一处口径
+  const hexPct = hexWeakPct(s, attacker);
+  if (hexPct > 0) ctx.damage = Math.round(ctx.damage * (1 - hexPct));
 
   // 长短皆可：隔着一格以上打，只有六成伤害。近身才是本职。
   //
@@ -2591,7 +2653,7 @@ function checkWinner(s: GameState): PlayerId | null {
   // 上帝模式不判负。
   //
   // 沙盒里"城"只是可以摆上来挨打的靶子，不是根：有人就想试"二十个长弓手
-  // 能不能啃下一座中世纪城"，这种局里没城的那一方恰恰是正常状态。
+  // 能不能啃下一座铁器时代城"，这种局里没城的那一方恰恰是正常状态。
   // 按城判负会让第一回合就弹出"你赢了"，沙盒直接没法用。
   // 真正的停止条件是"一方没兵了"，由界面来判（main.ts 的 runGodFight）。
   if (s.config.godMode === true) return null;
@@ -3008,6 +3070,24 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
 }
 
 /**
+ * 把一个"干净的回合"交到 `to` 手上：行动力、反击次数都归零重来。
+ *
+ * 抽出来是因为**交接有两条路**，而它们必须给出同一个结果：
+ *   · `doEndTurn` —— 正常打完这一回合，轮到下一家；
+ *   · `doSurrender` —— 一家退出，把它剩下的回合让给下一位。
+ *
+ * 第二条以前没走这一步，只把 `current` 改了个名字。后果是接手的那一家带着
+ * **自己上回合用剩的** moved/acted 进场：顶栏写着"轮到你"，可点哪个兵都动不了，
+ * 那是它上一轮留下的标记。反击次数同理会少一截（`countersLeft` 是防守时
+ * 一个个扣掉的，只有"新回合"才清零）。
+ */
+function grantTurnTo(s: GameState, to: PlayerId): void {
+  // 新回合开始，所有单位的反击次数重置（不分敌我：这是"每回合一次"的额度）
+  for (const u of s.units) delete u.countersLeft;
+  resetUnitsFor(s, to);
+}
+
+/**
  * 记一笔"这一炮是人点的"。
  *
  * 只对能自动开火的建筑有意义——它们一回合只该有一段火力：
@@ -3237,6 +3317,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
 
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
+    const prevOwner = destCity.owner;
     s.players[unit.owner].gold -= price;
     destCity.owner = unit.owner;
     destCity.ruined = false;
@@ -3244,6 +3325,8 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     destCity.capturedTurn = s.turn;
     pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`, true);
     s.winner = checkWinner(s);
+    // 这是全代码里**唯一**一处城市易手，所以"丢掉最后一座城"也只可能发生在这里
+    retireLostSeat(s, prevOwner);
   }
 
   return { ok: true, state: s };
@@ -3957,6 +4040,30 @@ function doBuild(
     return { ok: false, reason: `${def.name} 不在本局的选用名单里` };
   }
 
+  /*
+   * 落成即废的产兵点不许修。
+   *
+   * 产兵点的时代**落成那一刻就钉死**了（见 doRecruit 的 camp 分支、下面建造结算里
+   * 那句 `era: supplyEraAt(...)`），之后不会跟着城市换代。带白名单的产兵点
+   * （船坞三代 / 造船厂五代 / 海军船台七代）如果提前修，白名单里的船一条都出不来——
+   * 玩家花了 460 金买到一块石头，而界面上不会告诉他这一点。
+   *
+   * 判据放在这里而不是各个包里：包只管数据，规则管"这笔钱花得对不对"。
+   * 军营不受影响——它的白名单是空的，什么时代落成都能出那一代的兵。
+   */
+  const supplyEra = supplyEraAt(s, s.current, { x, y });
+  const usable = produceUsableCount(def, s.unitTypes, supplyEra);
+  if (usable === 0) {
+    const need = (produceOf(def)?.units ?? [])
+      .map((id) => s.unitTypes[id])
+      .filter((u): u is UnitTypeDef => !!u)
+      .reduce((m, u) => Math.min(m, u.era), 99);
+    return {
+      ok: false,
+      reason: `${def.name}现在建起来一艘都造不出来（要到「${eraDef(need).name}」）。先升时代，或者改修低一档的。`,
+    };
+  }
+
   // 续建：目标格上是自家的同型工地。
   //
   // 两个工兵一起修一座塔，就是把两次 BUILD 叠在同一个工地上：rate 相加、
@@ -4143,7 +4250,10 @@ export function recruitSpawnCells(
         if (self.has(k) || seen.has(k)) continue;
         const t = tileAt(s, x, y);
         if (!t) continue;
-        if (def.domain === 'water' ? !navigable(t.terrain) : !passable(t.terrain)) continue;
+        // 判据必须是**这个兵种**的，不是"陆军能不能走"。
+        // 这里以前写 `passable()`，于是军营一圈全是水时，飞行兵也算"没地方出兵"——
+        // 而它明明能停在水面上（canStandAt 放行）。规则层自己把兵卡在了产线上。
+        if (!terrainWalkable(def, t.terrain)) continue;
         if (!canStandAt(s, x, y, unitTypeId)) continue;
         seen.add(k);
         out.push({ x, y });
@@ -5056,6 +5166,51 @@ function autoPlaceEgg(s: GameState): void {
   doPlaceEgg(s, best.x, best.y);
 }
 
+/**
+ * 把某一家的单位从盘上撤干净，返回撤走了几个。
+ *
+ * 认输和"城被打光"在盘面上必须是同一个样子，所以两条路共用这里。
+ * 单位是一棵树（船、运输队里还坐着人），按 owner 过滤等于连货舱一起扔掉；
+ * 车里的人算不算"死"？不算——他们既没进战报，也不进阵亡名单，
+ * 就是随主人一起离场，和认输时一模一样。
+ */
+function withdrawUnits(s: GameState, p: PlayerId): number {
+  const gone = s.units.filter((u) => u.owner === p).length;
+  if (gone > 0) s.units = s.units.filter((u) => u.owner !== p);
+  return gone;
+}
+
+/**
+ * 某一家的最后一座城被人接管之后：撤兵，必要时交棒。
+ *
+ * `isEliminated` 早就把"没有城"判成出局了，但那只管回合轮转（`nextSeat` 跳过去）——
+ * **盘上的兵还留着**。于是出局者的部队变成一群永远不动、打不还手的靶子：
+ * 对手的自动开火照样拿它们刷伤害，结算画面照样把它们数进兵力，
+ * 界面上还能看见一支"没人指挥的军队"杵在那儿。认输那条路一直是清干净的
+ * （见 `doSurrender`），破城判负这条路漏了，这里补上。
+ *
+ * 几处刻意的边界：
+ *   · **两人局不处理**：城破就是终局，胜负已定，留着兵是战报的一部分；
+ *   · **上帝模式不处理**：沙盒里"没城"是常态（和 `isEliminated` 同一条理由）；
+ *   · **认输的不重复处理**：`doSurrender` 自己撤过了。这也是幂等的关键——
+ *     已经撤空的席位再来一次是 0 个，连战报都不会重复写；
+ *   · **交棒只在它自己正轮到时做**：正常路径下夺城发生在对手回合，
+ *     `current` 不是它，这条只是兜底（比如扩展在它的回合里改了城）。
+ */
+function retireLostSeat(s: GameState, p: PlayerId): void {
+  if (seatsOf(s).length === 2) return;
+  if (s.config.godMode === true) return;
+  if (hasQuit(s, p)) return;
+  if (citiesOf(s, p).length > 0) return;
+  const gone = withdrawUnits(s, p);
+  if (gone === 0) return;
+  pushLog(s, p, `${s.players[p].name} 的城市全部失守，${gone} 个单位撤离战场`, true);
+  if (!s.winner && s.current === p) {
+    s.current = nextSeat(s, p);
+    grantTurnTo(s, s.current);
+  }
+}
+
 /** 认输：直接判负。磨局里除了城破，总得有个体面的出口 */
 function doSurrender(s: GameState): ActionResult {
   const me = s.current;
@@ -5073,10 +5228,22 @@ function doSurrender(s: GameState): ActionResult {
    * 否则 `current` 停在一个已经退出的席位上，局面就卡住了。
    */
   s.out = [...(s.out ?? []), me];
-  s.units = s.units.filter((u) => u.owner !== me);
+  withdrawUnits(s, me);
   pushLog(s, me, `${s.players[me].name} 认输，退出这局`, true);
   s.winner = checkWinner(s);
-  if (!s.winner) s.current = nextSeat(s, me);
+  if (!s.winner) {
+    s.current = nextSeat(s, me);
+    /*
+     * 交接必须走 `grantTurnTo`，不能只改 `current`。
+     *
+     * 只改名字的话，接手的那一家带着自己上回合用剩的 moved/acted 进场：
+     * 顶栏说"轮到你"，但点哪个兵都是"已经行动过"——这就是
+     * "一方投降之后，其中一方上回合行动过的单位无法行动"那条报障。
+     * 认定它是一段**新的回合**（而不是"接着用完别人剩下的半个回合"），
+     * 是因为等待它的人看到的本来就是一次完整的轮到。
+     */
+    grantTurnTo(s, s.current);
+  }
   return { ok: true, state: s };
 }
 
@@ -5364,12 +5531,8 @@ function doEndTurn(s: GameState): ActionResult {
     s.units.filter((u) => u.owner === nextPlayer && !u.moved && !u.acted).map((u) => u.id),
   );
 
-  // 新回合开始，所有单位的反击次数重置
-  for (const u of s.units) {
-    delete u.countersLeft;
-  }
-
-  resetUnitsFor(s, nextPlayer);
+  // 新回合开始，所有单位的反击次数重置 + 行动力满血（见 grantTurnTo）
+  grantTurnTo(s, nextPlayer);
   advanceConstruction(s, nextPlayer);
 
   for (const u of s.units) {

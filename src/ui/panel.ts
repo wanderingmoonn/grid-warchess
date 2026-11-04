@@ -47,6 +47,7 @@ import {
   magicAtkOf,
   magicResOf,
   hasQuit,
+  isEliminated,
   orderedStatuses,
   STATUS_REGISTRY,
   heroSkillsOf,
@@ -252,9 +253,17 @@ function panelHtml(input: PanelInput): string {
    * 看上去像卡住了。
    */
   const quit = !spectator && hasQuit(s, me);
-  /** 只看不给动：观战位、已退出、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
-  const readOnly = spectator || quit || input.commander === true;
-  const myTurn = !spectator && !quit && s.current === me && !s.winner;
+  /*
+   * 出局的另一种：最后一座城被人接管了。盘上的兵会被规则层撤走（见 rules 的
+   * `retireLostSeat`），但界面以前什么也不说——顶栏继续写"等待 XXX"，
+   * 玩家盯着一支已经不属于自己的军队，不知道自己在看什么。
+   *
+   * 只在多人局认这条：两人局城破就是终局，结算画面照旧。
+   */
+  const lostAll = !spectator && !quit && seatsOf(s).length > 2 && isEliminated(s, me);
+  /** 只看不给动：观战位、已退出、城全丢光、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
+  const readOnly = spectator || quit || lostAll || input.commander === true;
+  const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
 
   const turnBadge = s.winner
@@ -263,7 +272,9 @@ function panelHtml(input: PanelInput): string {
       ? `<span class="turn-badge watching">观战中 · 全图视角</span>`
       : quit
         ? `<span class="turn-badge watching">你已认输 · 观战中</span>`
-        : `<span class="turn-badge active-${s.current}">
+        : lostAll
+          ? `<span class="turn-badge watching">你的城全丢了 · 观战中</span>`
+          : `<span class="turn-badge active-${s.current}">
          ${s.current === me ? '轮到你行动' : `等待 ${s.players[s.current].name}`}
        </span>`;
 
@@ -301,7 +312,11 @@ function panelHtml(input: PanelInput): string {
     .map((p) => {
       const mine = p === me;
       const cities = citiesOf(s, p).length;
-      const quit = hasQuit(s, p);
+      /*
+       * 出局有两张脸：主动认输，和最后一座城被人接管。
+       * 席位栏只认 `hasQuit` 的话，后一种会一直亮着、显示"城 0"，看上去像还在打。
+       */
+      const quit = hasQuit(s, p) || isEliminated(s, p);
       const on = p === s.current;
       return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
         <span class="vs-dot ${p.toLowerCase()}"></span>
@@ -1287,9 +1302,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   );
   const era = camp.era ?? (supply ? supply.era : 0);
 
-  // 兵从四邻出来，所以"能出兵"取决于四邻有多少空地 / 空水面
-  const landSlots: Array<{ x: number; y: number }> = [];
+  // 兵从四邻出来。这两个数字只给下面的提示文案用，**能不能造**一律问规则层：
+  // 判据按兵种分（飞行兵能停在水面上），自己数一遍 landSlots 必然和
+  // doRecruit 走样——飞过的兵曾经就是这样被判成"没地方出兵"、按钮变灰。
   const waterSlots: Array<{ x: number; y: number }> = [];
+  let landOpen = 0;
   for (const [dx, dy] of DIRS_4) {
     const x = camp.x + dx;
     const y = camp.y + dy;
@@ -1297,8 +1314,10 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     if (!t) continue;
     if (s.units.some((u) => u.x === x && u.y === y)) continue;
     if (navigable(t.terrain)) waterSlots.push({ x, y });
-    else if (passable(t.terrain)) landSlots.push({ x, y });
+    else if (passable(t.terrain)) landOpen += 1;
   }
+  /** 这个兵种能不能从这座营出来（和 doRecruit 同一条判据） */
+  const slotsOf = (d: { id: string }): number => recruitSpawnCells(s, undefined, camp.id, d.id).length;
 
   const buildable = Object.values(s.unitTypes).filter(
     (d) =>
@@ -1323,7 +1342,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
         <div class="recruit-list">${items
           .map((d) => {
-            const slotsOk = d.domain === 'water' ? waterSlots.length > 0 : landSlots.length > 0;
+            const slotsOk = slotsOf(d) > 0;
             const extra =
               d.domain === 'water'
                 ? waterSlots.length > 1
@@ -1390,7 +1409,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
                : ''
            }
            <div class="hint" style="margin-top:10px">
-             兵从营门四邻的空地出来（当前 ${landSlots.length} 个空位${
+             兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
              <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。

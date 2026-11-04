@@ -184,9 +184,11 @@ export const CORE_ABILITIES: AbilityDef[] = [
   {
     id: 'aura-command',
     name: '指挥光环',
-    summary: '相邻的友军攻击 +2。',
+    summary: '2 格内的友军攻击 +4。',
     group: 'support',
-    hooks: { aura: { allyAtk: 2 } },
+    // 2026-11-03：相邻 +2 → 2 格 +4。原来必须贴着才吃得到，等于逼着"光环兵"
+    // 站到最前面去送；而 +2 在 3 代之后连"隔一层护甲的差别"都补不回来。
+    hooks: { aura: { allyAtk: 4, radius: 2 } },
   },
   {
     id: 'fly',

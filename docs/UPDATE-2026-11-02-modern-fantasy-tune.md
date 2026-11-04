@@ -10,8 +10,8 @@
 
 | id | 改前 | 改后 | 冲突对象 |
 |---|---|---|---|
-| `ct_infantry` | 步兵班 | **摩托化步兵** | `squad`（二战步兵班，era5，300 金） |
-| `ct_tank` | 坦克 | **中型坦克** | `tank`（二战坦克，era5，400 金） |
+| `ct_infantry` | 步兵班 | **摩托化步兵** | `squad`（机械化步兵班，era5，300 金） |
+| `ct_tank` | 坦克 | **中型坦克** | `tank`（机械化坦克，era5，400 金） |
 
 命名按台阶走：摩托化 → 机械化（`cnt_mechinf`）、中型坦克 → 主战坦克（`cnt_mbt`）。存档存的是 id，改名不影响旧档。
 
@@ -158,7 +158,7 @@ node --experimental-strip-types scripts/naval-merge.ts --dir results/bf-modern6b
 node --experimental-strip-types scripts/balance-advice.ts results/bf-modern6b/merged-era6.json \
   --md results/bf-modern6b/advice-era6.md --json results/bf-modern6b/advice-era6.json
 
-# 火药开局同上去掉 --era 6，输出目录换 results/bf-era3b、tag 换 era3
+# 火器开局同上去掉 --era 6，输出目录换 results/bf-era3b、tag 换 era3
 ```
 
 产出：`results/bf-modern6b/`、`results/bf-era3b/`（merged / report / advice）。`advice-*.md` 现在比之前多两节：**召唤师归账**（把召唤物输出并回召唤师，给"含召唤"的每百金）与**召唤物打标**（全表里召唤物的每百金是分母假象）。

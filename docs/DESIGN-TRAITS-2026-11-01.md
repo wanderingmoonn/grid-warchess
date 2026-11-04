@@ -68,7 +68,7 @@ allow?: {
 | 兵种 | 数据 | 说明 |
 |---|---|---|
 | 渡船 ferry | `hold: { max: 2 }` | 最基础的过河工具 |
-| 齿轮帆船 med_cog | `hold: { max: 3 }` | 中世唯一能运兵的船 |
+| 齿轮帆船 med_cog | `hold: { max: 3 }` | 铁器唯一能运兵的船 |
 | 卡拉克帆船 nv_carrack | `hold: { max: 4 }` | |
 | 盖伦帆船 nv_galleon | `hold: { max: 3 }` | |
 | 运输舰 nv_transport | `hold: { max: 5 }` | 纯运，不还手 |

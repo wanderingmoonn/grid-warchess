@@ -434,7 +434,7 @@ const MODERN_ABILITIES: AbilityDef[] = [AA_COVER, FLEET_COMMAND, FLEET_OILER];
  * 二、兵种
  *
  * 全部参照真实历史舰型，按"这个时代的海战在解决什么问题"来定位：
- *   E1 只有舢板/三层桨（撞击与接舷）—— 本体与「古典」已经有，不重复
+ *   E1 只有舢板/三层桨（撞击与接舷）—— 本体与「青铜」已经有，不重复
  *   E2 帆桨并用 + 第一代运输船（德罗蒙、卡拉克）
  *   E3 舷侧炮列（盖伦）+ 纵火（火船）
  *   E2 帆桨并用（德罗蒙、卡拉克）+ 桨帆船（勒班陀那种）与宝船（郑和那种）——
@@ -476,13 +476,13 @@ const FLEET_UNITS: UnitTypeDef[] = [
     id: 'nv_carrack',
     name: '卡拉克帆船',
     short: '卡',
-    era: 2,
+    era: 3,
     category: 'combat',
-    cost: 150,
+    cost: 210,
     move: 4,
-    atk: 17,
+    atk: 22,
     armor: 6,
-    maxHp: 72,
+    maxHp: 84,
     range: 2,
     vision: 4,
     domain: 'water',
@@ -505,7 +505,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     vision: 3,
     domain: 'water',
     // 勒班陀（1571）那种地中海主力：一排桨手，快、便宜、撞角 + 接舷。
-    // 中世海战的主角是它，不是横帆船——横帆船在顺风时漂亮，逆风时只能等。
+    // 铁器海战的主角是它，不是横帆船——横帆船在顺风时漂亮，逆风时只能等。
     // 所以它的移动力是全 E2 最高的 5，代价是视野 3、射程 2（桨帆船的炮很小）。
     // V = 18+23.4+20+6+12.5+4.5 = 84.4 → 0.77
   },
@@ -513,13 +513,13 @@ const FLEET_UNITS: UnitTypeDef[] = [
     id: 'nv_treasure_ship',
     name: '宝船',
     short: '宝',
-    era: 2,
+    era: 3,
     category: 'combat',
-    cost: 180,
+    cost: 235,
     move: 3,
-    atk: 14,
+    atk: 18,
     armor: 7,
-    maxHp: 120,
+    maxHp: 135,
     range: 2,
     vision: 4,
     domain: 'water',
@@ -545,7 +545,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     vision: 3,
     domain: 'water',
     splash: 1,
-    // 纵火船：装满火药和沥青冲进敌阵。攻高、血薄、移动快，溅射 1 让它
+    // 纵火船：装满火器和沥青冲进敌阵。攻高、血薄、移动快，溅射 1 让它
     // 贴上去就有交换价值。V = 40+15.3+10+3+15+4.5+4 = 92 → 0.87。
     // 这个比值偏高是故意的：它只活一回合，价值模型算不出"活不过一轮"。
     //
@@ -863,7 +863,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     domain: 'water',
     abilities: ['nv-submerge'],
     /*
-     * U 艇 / 伊号：二战那一代远洋潜艇，射程 3、甲 8、一发够狠。
+     * U 艇 / 伊号：机械化那一代远洋潜艇，射程 3、甲 8、一发够狠。
      *
      * 补的是一个明摆着的洞：E4 有潜艇、E6 有核潜艇，中间的 E5 反而没有——
      * 于是「潜母」（只给潜艇回血）在这一代成了没有孩子的母舰。
@@ -923,7 +923,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     carry: { deck: { max: 3, launchRange: 2 } },
     abilities: ['nv-aa-cover'],
     /*
-     * 翔鹤 / 埃塞克斯那一级：二战真正的主角。
+     * 翔鹤 / 埃塞克斯那一级：机械化真正的主角。
      *
      * 之前 E5 只有轻母（2 机位、起飞 1 格）和航空战列舰（半吊子），
      * 正经的舰队航母要等到 E6 的核动力航母——中间空了整整一代。
@@ -969,9 +969,9 @@ const FLEET_UNITS: UnitTypeDef[] = [
     domain: 'water',
     splash: 2,
     abilities: ['armor-pierce', 'siege-master', 'nv-shore-bombard'],
-    // **无畏舰**，历史定位落在第五时代（二战），不是第六时代。
+    // **无畏舰**，历史定位落在第五时代（机械化），不是第六时代。
     // 全部三项攻城加成（破甲 + 破城 + 岸轰）都在它身上，射程 5、溅射 2——
-    // 它是一战到二战之间"大舰巨炮"这条路的终点。
+    // 它是一战到机械化之间"大舰巨炮"这条路的终点。
     // 第六时代没有战列舰：1945 年之后没有任何国家再开工建一级，
     // 原因写在 docs/NAVAL-PACK.md（导弹、航母、成本三件事各补一刀）。
     // V = 95+81+90+15+10+7.5+8 = 306 → 0.39
@@ -1521,13 +1521,158 @@ function platformYield(state: GameState, unit: Unit, yields: ResourceCost): Reso
  * 城都算——再写一遍就是同一条规则的两份实现，看着像新机制，其实什么都不做。
  * 所以改成断收入：三座城被堵各自少 8 金，一回合少 24，这才是"海权"该有的疼。
  */
+/**
+ * 造船设施：把"船只能从沿海城市出"这条限制解开。
+ *
+ * ── 问题 ──────────────────────────────────────────────────────────────
+ *
+ * 水军的出生格是"城边那一格水面"（rules.recruitSpawnCells 的 water 分支）。
+ * 这意味着两个条件同时成立才造得出船：**城的落点靠水**，而且**那一圈水面空着**。
+ * 二十格图里，内陆城根本没法参与海战；玩家想做海军，先得赌开局城的位置。
+ * 军营（camp）也产兵，但它只能扎在平地/丘陵上，靠水那条 `requiresWater`
+ * 只是"挨着水盖"，兵还是从岸上出来，船一条也出不了。
+ *
+ * ── 解法 ──────────────────────────────────────────────────────────────
+ *
+ * 造船设施**直接盖在水面上**（`buildOn: ['shallow','water']`），自己就是产兵点：
+ * 船从它四周的水面下水，和城在哪没关系。代价是它是个不动的靶子
+ * （护甲有、血不厚），而且只能盖在会架桥的工程兵手上——开一条水道、修一座船坞，
+ * 本来就是同一批人的活。
+ *
+ * 分三档，对应船的三个世代。白名单是显式列出来的 id：这样"哪一档能造什么"
+ * 在数据里一眼看得见，不需要读规则去推。
+ */
+const SHIPYARDS: UnitTypeDef[] = [
+  {
+    id: 'nv-dock',
+    name: '船坞',
+    short: '坞',
+    era: 2,
+    category: 'building',
+    cost: 120,
+    move: 0,
+    atk: 0,
+    armor: 4,
+    maxHp: 80,
+    range: 0,
+    vision: 4,
+    buildCost: 10,
+    buildOn: ['shallow', 'water'],
+    // 二代的四条船。三代以后的不在这一档——想造大帆船得先把造船厂升起来。
+    produce: {
+      units: ['nv_galley', 'nv_dromon', 'nv_carrack', 'nv_treasure_ship'],
+      costScale: 0.95,
+    },
+  },
+  {
+    id: 'nv-shipyard',
+    name: '造船厂',
+    short: '厂',
+    era: 4,
+    category: 'building',
+    cost: 260,
+    move: 0,
+    atk: 0,
+    armor: 6,
+    maxHp: 130,
+    range: 0,
+    vision: 5,
+    buildCost: 26,
+    buildOn: ['shallow', 'water'],
+    produce: {
+      units: [
+        'nv_fireship',
+        'nv_galleon',
+        'nv_turtle_ship',
+        'nv_sailing_frigate',
+        'nv_frigate',
+        'nv_monitor',
+        'nv_torpedo_boat',
+        'nv_minelayer',
+        'nv_minesweeper',
+        'nv_submarine',
+        'nv_transport',
+      ],
+      costScale: 0.9,
+    },
+  },
+];
+
+/**
+ * 六代的海军船台：主力舰两回合下水一艘。
+ *
+ * `everyTurns: 2` 不是"削弱"，是**节奏**：一艘 780 金的战列舰如果当回合就成型，
+ * 那"攒钱等它"这件事就不存在了，海战退化成"谁先攒够谁立刻多一条船"。
+ * 两回合给对面一个反应窗口（布雷、封港、派潜艇），也让"同时开两条产线"有意义。
+ */
+const MODERN_SHIPYARDS: UnitTypeDef[] = [
+  {
+    id: 'nv-naval-yard',
+    name: '海军船台',
+    short: '台',
+    era: 6,
+    category: 'building',
+    cost: 460,
+    move: 0,
+    atk: 0,
+    armor: 8,
+    maxHp: 190,
+    range: 0,
+    vision: 6,
+    buildCost: 44,
+    buildOn: ['shallow', 'water'],
+    produce: {
+      units: [
+        'nv_cruiser',
+        'nv_heavy_cruiser',
+        'nv_light_cruiser',
+        'nv_battlecruiser',
+        'nv_battleship',
+        'nv_fleet_carrier',
+        'nv_light_carrier',
+        'nv_aviation_battleship',
+        'nv_landing_ship',
+        'nv_fleet_sub',
+        'nv_sub_tender',
+        'nv_repair_ship',
+        'nv_carrier',
+        'nv_large_cruiser',
+        'nv_aegis',
+        'nv_attack_sub',
+        'nv_ssk',
+        'nv_amphib',
+        'nv_missile_boat',
+        'nv_lcs',
+        'nv_usv',
+        'nv_oiler',
+      ],
+      everyTurns: 2,
+      costScale: 0.85,
+    },
+  },
+];
+
+/**
+ * 把造船设施挂到"会架桥的工程兵"手上。
+ *
+ * 判据是"builds 里有 bridge"而不是写死 id 列表：能开一条水道的人，就能修一座船坞。
+ * 这样基础版、时代兵备包、城郭与物料包里的各级工程兵会自动都拿到，
+ * 以后再加工程兵也不用回来改这里。
+ */
+function attachShipyards(state: GameState, ids: readonly string[]): void {
+  for (const def of Object.values(state.unitTypes)) {
+    if (!def.builds || !def.builds.includes('bridge')) continue;
+    for (const id of ids) if (!def.builds.includes(id)) def.builds.push(id);
+  }
+}
+
 export const NAVAL_FLEET: Expansion = {
   id: 'naval-fleet',
   name: '海战',
   scale: 'large',
   summary:
     '补上第二到第五时代的水上力量：桨帆船、宝船、德罗蒙、卡拉克、火船、龟船、盖伦、风帆巡航舰、' +
-    '护卫舰、鱼雷艇、布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，工业时代）、' +
+    '护卫舰、鱼雷艇、布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，蒸汽时代）、' +
     '装甲巡洋舰、重巡洋舰、轻巡洋舰、战列巡洋舰、战列舰、远洋潜艇、登陆舰、舰队航母、' +
     '轻型航母、航空战列舰、潜母、维修舰二十多条船，从桨到航母一整条线；' +
     '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +
@@ -1541,10 +1686,12 @@ export const NAVAL_FLEET: Expansion = {
    * 对应扩展的 `marks` 上就行，规则层一行都不用改。
    */
   marks: [NAVAL_MINE],
-  units: FLEET_UNITS,
+  units: [...FLEET_UNITS, ...SHIPYARDS],
   terrains: ['deep'],
   afterTerrain: deepenWater,
   hooks: {
+    /** 开局：会架桥的工程兵多会一样东西——修造船设施 */
+    onMatchStart: ({ state }) => attachShipyards(state, SHIPYARDS.map((d) => d.id)),
     /** 钻井平台：敌舰贴着就停产（海战包先开，现代海军再开也不会叠加出错） */
     modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
     /**
@@ -1579,11 +1726,11 @@ export const NAVAL_FLEET: Expansion = {
 };
 
 /**
- * 「现代海军」：第六时代的七条船，**依赖「现代」**。
+ * 「现代海军」：第六时代的七条船，**依赖「信息化」**。
  *
- * 为什么一定要 `requires`：第六时代是「现代」这个包开出来的（`unlockEra: 6`）。
+ * 为什么一定要 `requires`：第六时代是「信息化」这个包开出来的（`unlockEra: 6`）。
  * 单勾「现代海军」的话，城市永远升不到 6 级，这批船一条都造不出来——
- * 在玩家眼里就是"这个包坏了"。写上依赖之后，开局面板会把「现代」一起补上。
+ * 在玩家眼里就是"这个包坏了"。写上依赖之后，开局面板会把「信息化」一起补上。
  */
 export const MODERN_NAVAL: Expansion = {
   id: 'naval-modern',
@@ -1594,15 +1741,17 @@ export const MODERN_NAVAL: Expansion = {
     '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、超巡、防空巡洋舰、' +
     '攻击核潜艇与常规潜艇（潜航）、濒海战斗舰、无人艇、两栖攻击舰、导弹快艇、' +
     '舰队补给舰、海上钻井平台。' +
-    '**第六时代没有战列舰**——它停在第五时代（二战），1945 年之后再没有国家开工建过一级。' +
+    '**第六时代没有战列舰**——它停在第五时代（机械化），1945 年之后再没有国家开工建过一级。' +
     '航母的机位与起飞半径写在兵种数据的 carry.deck 上（见本文件里的「航空母舰」那一行）。',
   abilities: MODERN_ABILITIES,
-  units: MODERN_FLEET_UNITS,
+  units: [...MODERN_FLEET_UNITS, ...MODERN_SHIPYARDS],
   // 只开「现代海军」也想要深水（钻井平台的产出靠它）——两个包都登记一次，
   // 沙箱画笔那边会去重，afterTerrain 也是幂等的。
   terrains: ['deep'],
   afterTerrain: deepenWater,
   hooks: {
+    /** 开局：会架桥的工程兵能修海军船台 */
+    onMatchStart: ({ state }) => attachShipyards(state, MODERN_SHIPYARDS.map((d) => d.id)),
     /** 钻井平台：敌舰贴着就停产 */
     modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
     // 封锁与抢修是海军共同的规则，两个包各写一份就会走散（改一处忘一处），

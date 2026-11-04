@@ -38,7 +38,14 @@ interface Raw {
   expansions: string[];
   summary: { aWins: number; bWins: number; draws: number; turnsAvg: number; recruitsPerGame: number; spendPerGame: number };
   stats: Array<Record<string, number | string | null>>;
-  results: Array<{ seed: number; winner: string | null; turns: number }>;
+  results: Array<{
+    seed: number;
+    winner: string | null;
+    turns: number;
+    /** 双方这一局各招了哪些兵、各几个——采用率只能从这里算 */
+    picksA?: Record<string, number>;
+    picksB?: Record<string, number>;
+  }>;
 }
 
 const files = readdirSync(DIR)
@@ -69,6 +76,8 @@ interface Tally {
 }
 
 const total = new Map<string, Tally>();
+/** type → 造过它的参战方数（一局最多 2 个：A 方、B 方） */
+const adopted = new Map<string, number>();
 const results: Raw['results'] = [];
 let aWins = 0;
 let bWins = 0;
@@ -92,6 +101,19 @@ for (const p of parts) {
   for (const r of p.results) {
     results.push(r);
     seeds.push(r.seed);
+    /*
+     * 采用率 = "造过至少一个这个兵种的参战方 / 全部参战方"。
+     *
+     * 不能用 `seen / 总出场` 代替：那是**出场占比**，回答的是"战场上这些兵里
+     * 它占多少"，一个只在优势局补一个的贵兵会显得毫无存在感，而它其实每局都有。
+     * 两个数一起给，读者才分得清"没人用"和"用得少"。
+     */
+    for (const side of [r.picksA ?? {}, r.picksB ?? {}]) {
+      for (const [type, n] of Object.entries(side)) {
+        if (n <= 0) continue;
+        adopted.set(type, (adopted.get(type) ?? 0) + 1);
+      }
+    }
     if (r.turns > cap) {
       capped++;
     } else {
@@ -118,6 +140,17 @@ for (const p of parts) {
 let seenSum = 0;
 let builtSum = 0;
 let spendSum = 0;
+/*
+ * 报告必须覆盖**全部兵种**：一次都没人造的兵也要占一行（`built = 0`）。
+ *
+ * 只列"有建造记录"的会把最要紧的结论藏掉——"没人用"本身就是一条结论，
+ * 而且是所有平衡问题里最常见的那一条。补齐只发生在合并这一层：
+ * 分片里的原始计数一个都不动，补进来的行全是 0。
+ */
+for (const type of Object.keys(defs)) {
+  if (total.has(type)) continue;
+  total.set(type, { built: 0, seen: 0, spend: 0, dealt: 0, taken: 0, kills: 0, initCount: 0, initDealt: 0, initTaken: 0 });
+}
 for (const t of total.values()) {
   seenSum += t.seen;
   builtSum += t.built;
@@ -134,6 +167,15 @@ interface Row {
   cost: number;
   built: number;
   seen: number;
+  /** 造过它的参战方数（一局 2 方） */
+  adopted: number;
+  /**
+   * 采用率 = adopted / (2 × 局数)。
+   *
+   * **建筑是 null**：逐局结果只存了"征募清单"（RECRUIT），修桥盖房走的是 BUILD，
+   * 不在里面。给建筑算一个 0% 会让人读成"没人盖"，那是错的——它们该看 `建造` 列。
+   */
+  adoption: number | null;
   spend: number;
   share: number;
   goldShare: number;
@@ -142,6 +184,15 @@ interface Row {
   ratio: number | null;
   per100: number;
   per100Taken: number;
+  /**
+   * 每次出场打出的伤害 / 吃到的伤害。
+   *
+   * 为什么每百金之外还要这一对：召唤物（元素、骷髅）**不走采购**，
+   * built 是 0，每百金输出的分母是 0 —— 要么是 0、要么被三五个真金白银
+   * 买来的个体放大成几百。那个数字不能读。出场口径对谁都成立。
+   */
+  perSeen: number;
+  takenPerSeen: number;
   kills: number;
   killShare: number;
 }
@@ -163,6 +214,8 @@ for (const [type, t] of total) {
     cost,
     built: t.built,
     seen: t.seen,
+    adopted: adopted.get(type) ?? 0,
+    adoption: def?.category === 'building' || !def ? null : games > 0 ? (adopted.get(type) ?? 0) / (games * 2) : 0,
     spend: t.spend,
     share: seenSum > 0 ? t.seen / seenSum : 0,
     goldShare: spendSum > 0 ? t.spend / spendSum : 0,
@@ -171,6 +224,8 @@ for (const [type, t] of total) {
     ratio: t.taken > 0 ? t.dealt / t.taken : t.dealt > 0 ? null : 0,
     per100: inv > 0 ? (t.dealt / inv) * 100 : 0,
     per100Taken: inv > 0 ? (t.taken / inv) * 100 : 0,
+    perSeen: t.seen > 0 ? t.dealt / t.seen : 0,
+    takenPerSeen: t.seen > 0 ? t.taken / t.seen : 0,
     kills: t.kills,
     killShare: killSum > 0 ? t.kills / killSum : 0,
   });
@@ -247,13 +302,29 @@ const num = (v: number): string => Math.round(v).toLocaleString('en-US');
 const dec = (v: number | null, d = 2): string => (v === null ? '∞' : v.toFixed(d));
 
 const lines: string[] = [];
-lines.push(`# 海军阵营批量对局 · 合并报表`);
+lines.push(`# 批量对局 · 合并报表`);
 lines.push('');
 lines.push(
   `时代 **${head.era}**（${eraDef(head.era).name}）· 地貌 **${(head as unknown as { mapStyle?: string }).mapStyle ?? 'isles'}** · ` +
   `扩展 \`${EXPANSIONS.join('`, `')}\` · **${games} 局**（种子 ${merged.seeds[0]}..${merged.seeds.at(-1)}）· ` +
   `回合上限 ${cap}`,
 );
+lines.push('');
+lines.push('## 0. 口径');
+lines.push('');
+lines.push('| 指标 | 定义 |');
+lines.push('|---|---|');
+lines.push('| 建造 | 这一批对局里这个兵种被**采购/建造**的总次数（= 样本量） |');
+lines.push('| 采用率 | 造过至少一个它的参战方 ÷ 全部参战方（100 局 × 2 方 = 200 方） |');
+lines.push('| 出场占比 | 它的出场人次 ÷ 全场所有兵种出场人次（召唤、分裂、开局白送都算） |');
+lines.push('| 输出 / 承伤 | 只统计野战单位交换：攻城伤害不算，溅射算开火方，反击算防守方 |');
+lines.push('| 交换比 | 输出 ÷ 承伤（承伤 0 记 ∞） |');
+lines.push('| 每百金输出 / 承伤 | 输出（承伤）÷（建造数 × 造价）× 100 |');
+lines.push('');
+lines.push('> **两个坑，读表前先看**：');
+lines.push('> 1. **召唤物**（元素、骷髅、小史莱姆……）不走采购，`建造` 是 0 而 `出场` 上百，');
+lines.push('>    于是"每百金"这一列对它们没有意义（分母是零或几个样本）——看 JSON 里的 `perSeen`（每次出场输出）。');
+lines.push('> 2. `建造` 就是样本量。个位数建造的行，比率列全部是噪声，不要拿来排名。');
 lines.push('');
 lines.push(`## 1. 总体`);
 lines.push('');
@@ -276,23 +347,29 @@ function table(title: string, list: Row[], keys: Array<keyof Row>, headers: stri
     const cells = keys.map((k) => {
       const v = r[k];
       if (k === 'ratio') return dec(v as number | null);
+      if (k === 'adoption') return v === null ? '—' : pct(v as number);
       if (k === 'share' || k === 'goldShare' || k === 'killShare') return pct(v as number);
       if (k === 'per100' || k === 'per100Taken') return (v as number).toFixed(1);
-      if (k === 'dealt' || k === 'taken' || k === 'spend' || k === 'kills' || k === 'built' || k === 'seen' || k === 'cost') return num(v as number);
+      if (k === 'dealt' || k === 'taken' || k === 'spend' || k === 'kills' || k === 'built' || k === 'seen' || k === 'cost' || k === 'adopted') return num(v as number);
       return String(v);
     });
     lines.push(`| ${cells.join(' | ')} |`);
   }
 }
 
-const unitKeys: Array<keyof Row> = ['name', 'era', 'category', 'cost', 'built', 'share', 'dealt', 'taken', 'ratio', 'per100', 'per100Taken', 'kills'];
-const unitHeaders = ['单位', '代', '类别', '造价', '建造', '采用率', '输出', '承伤', '交换比', '每百金输出', '每百金承伤', '击杀'];
+const unitKeys: Array<keyof Row> = ['name', 'era', 'category', 'cost', 'built', 'adoption', 'share', 'dealt', 'taken', 'ratio', 'per100', 'per100Taken', 'kills'];
+const unitHeaders = ['单位', '代', '类别', '造价', '建造', '采用率', '出场占比', '输出', '承伤', '交换比', '每百金输出', '每百金承伤', '击杀'];
 
 lines.push('');
-lines.push(`## 2. 单位表（按总输出排序，只列真的有建造记录的）`);
-table(`全部单位`, rows.filter((r) => r.built > 0), unitKeys, unitHeaders);
-table(`海军（水域）`, water.filter((r) => r.built > 0), unitKeys, unitHeaders);
-table(`陆军 / 建筑`, land.filter((r) => r.built > 0), unitKeys, unitHeaders);
+lines.push(`## 2. 单位表（按总输出排序，**全部兵种都列**，含一次没造的）`);
+lines.push('');
+lines.push(
+  `> 这一局池子里共 ${rows.length} 个兵种/建筑，其中 ${rows.filter((r) => r.built === 0).length} 个一次都没人造。` +
+  `建造数就是样本量，比率列只对造过的更有意义——0 样本的行不要当成"弱"，它是"没被选中"。`,
+);
+table(`全部单位`, rows, unitKeys, unitHeaders);
+table(`海军（水域）`, water, unitKeys, unitHeaders);
+table(`陆军 / 建筑`, land, unitKeys, unitHeaders);
 
 lines.push('');
 lines.push('## 3. 阵容维度');

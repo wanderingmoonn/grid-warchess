@@ -15,7 +15,7 @@ import {
   expansionById,
 } from './expansions.ts';
 import { createDraft } from './draft.ts';
-import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar } from './mapgen.ts';
+import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
@@ -28,7 +28,7 @@ import type { SpawnDef } from './mapgen.ts';
  *
  * 32 是"长期局"档：五级链条全开、打到第六时代也不嫌挤，但一格只有二十来像素，
  * 所以界面上配了缩放（见 main.ts 的 fitBoard / zoom）。
- * 它不跟任何时代绑定——20×20 仍是火药及以后的标准图。
+ * 它不跟任何时代绑定——20×20 仍是火器及以后的标准图。
  *
  * 预设之外还能自己填边长：**4 ~ 64**，见 clampBoardSize。
  */
@@ -53,10 +53,10 @@ export function clampBoardSize(n: unknown): number {
 }
 
 /**
- * 标准对局的默认组合：古典时代 + 12×12。
+ * 标准对局的默认组合：青铜时代 + 12×12。
  *
- * 时代和尺寸是配套的（古典 12×12 / 中世 16×16 / 火药及以后 20×20）：
- * 古典兵走得慢、打得近，图大了两边要磨十个回合才照面；
+ * 时代和尺寸是配套的（青铜 12×12 / 铁器 16×16 / 火器及以后 20×20）：
+ * 青铜兵走得慢、打得近，图大了两边要磨十个回合才照面；
  * 现代图小了又摆不开坦克和火炮。开局面板选时代时会自动换成对应尺寸。
  */
 export const DEFAULT_CONFIG: MatchConfig = {
@@ -69,7 +69,7 @@ export const DEFAULT_CONFIG: MatchConfig = {
   mapSymmetry: 'fair',
   // 血战默认开：第 50 回合起城市不再回血、升级回原价、全军移动视野各 +1。
   // 关着它跑出来的对局，后半段全在互相推不动的拉锯里耗到回合上限
-  // （实测未决率 5.8%→0.8%、中世 17.5%→10.0%，平均少打 15~19 回合）。
+  // （实测未决率 5.8%→0.8%、铁器 17.5%→10.0%，平均少打 15~19 回合）。
   // 想玩回老节奏，在新对局面板里把它取消勾选就行。
   //
   // 先后手补偿默认开：后手开局多拿一笔起始金（12×12 补 20%、16×16 补 5%）。
@@ -85,7 +85,7 @@ export const DEFAULT_CONFIG: MatchConfig = {
  * 开局金币随起始时代一起涨。
  *
  * 一万个理由：时代越高，兵越贵（民兵 25、坦克 380）。如果开局金币还是 120，
- * 从现代开局的第一回合你连一个兵都造不出来，只能干等收入——那不叫"快节奏开局"，
+ * 从信息化开局的第一回合你连一个兵都造不出来，只能干等收入——那不叫"快节奏开局"，
  * 那叫"开局罚站"。
  *
  * 每级 +240 是按"买得起差不多数量的兵"定的：120 能买 4~5 个民兵，
@@ -139,7 +139,7 @@ export function normalizePlayerNames(s: GameState): boolean {
  * 两边各写一遍的话，面板上勾着的船在进局后"造不出来"只是时间问题。
  *
  * 前置两条都要查：包级 `enabledExpansionIds`（前置包没开就不算），
- * 以及单位级 `requiresPack`（圣剑勇者要「现代」那套才成立）。
+ * 以及单位级 `requiresPack`（圣剑勇者要「信息化」那套才成立）。
  */
 export function expansionUnitsFor(expansionIds: string[]): Record<string, UnitTypeDef> {
   const live = enabledExpansionIds(expansionIds);
@@ -268,11 +268,27 @@ export function createMatch(
     fixed && fixed.ok && twoSeats
       ? layoutFromRows(fixed.map.rows, fixed.map.citiesA, fixed.map.citiesB, spawnPool, citySize)
       : playerCount > 2
-        ? generateMultiLayout(clampBoardSize(config.size), seed, spawnPool, {
-            players: playerCount === 3 ? 3 : 4,
-            citySize,
-            style: config.mapStyle,
-          })
+        ? generateMultiLayout(
+            /*
+             * 双城市开局：棋盘**不许小于约束要求**。
+             *
+             * 八座城要摆在外圈八个格点上，间距是 (边长 - 2 - 城边)/2；
+             * 不够大就直接抬到最小边长，而不是摆出两座贴脸的城——
+             * "所有城市之间的最低间距"是这条选项的硬条件，不能靠玩家自己发现。
+             */
+            config.twoCities ? Math.max(clampBoardSize(config.size), twoCityMinSize(citySize, playerCount === 3 ? 3 : 4)) : clampBoardSize(config.size),
+            seed,
+            spawnPool,
+            {
+              players: playerCount === 3 ? 3 : 4,
+              citySize,
+              style: config.mapStyle,
+              twoCities: config.twoCities === true,
+              // 和双人同一个口径：只有本局真正启用的扩展才能贡献地貌
+              // （高原/峡谷/沼泽/群岛/大川）。扩展关掉，这几种就不该出现。
+              expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+            },
+          )
         : generateLayout(
             clampBoardSize(config.size),
             seed,

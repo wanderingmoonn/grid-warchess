@@ -1,8 +1,8 @@
 /**
  * 全部可调数值集中在这里。
  *
- * 基础兵种严格按真实历史线走：古典 → 中世 → 火药 → 工业 → 二战。
- * 第六时代「现代」不在这里——它整套兵种都在「现代战争」扩展包里，
+ * 基础兵种严格按真实历史线走：青铜时代 → 铁器时代 → 火器时代 → 蒸汽时代 → 机械化时代。
+ * 第六时代「信息化」不在这里——它整套兵种都在「现代战争」扩展包里，
  * 基础规则只把时代那一行数值先摆好（见 BASE_MAX_ERA 的说明）。
  * 奇想类兵种在 expansions.ts 的「奇想兵种包」里，不勾选就不会出现。
  *
@@ -228,7 +228,16 @@ export function navigable(t: Terrain): boolean {
 
 export interface EraDef {
   level: number;
+  /** 正式名（"青铜时代"）：规则书、结算、提示里用它 */
   name: string;
+  /**
+   * 按钮上的短标（"青铜"）。
+   *
+   * 单独一个字段而不是从 name 里切掉"时代"两个字：切字符串看起来省事，
+   * 但"青铜时代"和"铁器时代"这类名字一眼能看出规律，"信息化时代"以后要是改成
+   * 别的叫法，切出来的短标就会莫名其妙。写死在这里，改的时候改一处。
+   */
+  short: string;
   hint: string;
   /** 从上一个时代升到这个时代要花的金币；1 级为 0 */
   upgradeCost: number;
@@ -237,11 +246,12 @@ export interface EraDef {
   cityIncome: number;
 }
 
-/** 时代：从冷兵器推到二战。城市各自的属性，攻陷会连时代一起接收。 */
+/** 时代：从冷兵器推到机械化。城市各自的属性，攻陷会连时代一起接收。 */
 export const ERAS: EraDef[] = [
   {
     level: 1,
-    name: '古典',
+    name: '青铜时代',
+    short: '青铜',
     hint: '短兵相接',
     upgradeCost: 0,
     cityMaxHp: 30,
@@ -250,7 +260,8 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 2,
-    name: '中世',
+    name: '铁器时代',
+    short: '铁器',
     hint: '甲胄与长弓',
     upgradeCost: 220,
     cityMaxHp: 42,
@@ -259,7 +270,8 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 3,
-    name: '火药',
+    name: '火器时代',
+    short: '火器',
     hint: '排队枪毙',
     upgradeCost: 360,
     cityMaxHp: 54,
@@ -268,7 +280,8 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 4,
-    name: '工业',
+    name: '蒸汽时代',
+    short: '蒸汽',
     hint: '钢铁与堑壕',
     upgradeCost: 540,
     cityMaxHp: 66,
@@ -277,7 +290,8 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 5,
-    name: '二战',
+    name: '机械化时代',
+    short: '机械化',
     hint: '内燃机与总动员',
     upgradeCost: 780,
     cityMaxHp: 80,
@@ -286,7 +300,8 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 6,
-    name: '现代',
+    name: '信息化时代',
+    short: '信息化',
     hint: '信息化与精确打击',
     upgradeCost: 1080,
     cityMaxHp: 96,
@@ -298,7 +313,7 @@ export const ERAS: EraDef[] = [
 /**
  * 不开"加时代"扩展时的时代上限。
  *
- * 第 6 时代「现代」在表里，但**基础规则升不上去**：它没有原版兵种，
+ * 第 6 时代「信息化」在表里，但**基础规则升不上去**：它没有原版兵种，
  * 升上去只会花一千多金换来一座更厚的空城。真正把它打开的是
  * 「现代战争」扩展（`Expansion.unlockEra`）——那边带了一整套第六代兵种。
  *
@@ -372,7 +387,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 0,
     autoAttack: true,
   } as UnitTypeDef, 
-  // ================= 时代 1 · 古典 =================
+  // ================= 时代 1 · 青铜 =================
   militia: {
     id: 'militia',
     name: '民兵',
@@ -497,7 +512,30 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0 },
   },
 
-  // ================= 时代 2 · 中世 =================
+  /*
+   * 戈兵（商周）。
+   *
+   * 补它就是因为它把"青铜时代"从地图上只有欧洲变回它本来的样子：戈是
+   * 中国青铜时代的主战兵器，钩、啄、拉，专治甲片之间的缝——所以给的是破甲，
+   * 而不是再加一个"攻更高的民兵"。民兵 25 金 13 攻，它 30 金 12 攻、多一格甲
+   * 和破甲：同一档里买它不是为了打得狠，是为了打得穿。
+   */
+  ge: {
+    id: 'ge',
+    name: '戈兵',
+    short: '戈',
+    era: 1,
+    category: 'combat',
+    cost: 30,
+    move: 2,
+    atk: 12,
+    armor: 1,
+    maxHp: 30,
+    range: 1,
+    vision: 2,
+    abilities: ['armor-pierce'],
+  },
+  // ================= 时代 2 · 铁器 =================
   spearman: {
     id: 'spearman',
     name: '长枪兵',
@@ -533,7 +571,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '骑',
     era: 2,
     category: 'combat',
-    cost: 110,
+    // 2026-11-03 数值复核：110 → 95。
+    // 100 局零建造。它和戟兵同价时，攻击低 4、护甲低 1、射程少 1，
+    // 只有移速多 1——没有理由被选中。降到 95 让它成为"便宜一点的机动前排"，
+    // 和 110 的戟兵分工（一个守线、一个绕侧）。
+    cost: 95,
     move: 3,
     atk: 17,
     armor: 4,
@@ -585,7 +627,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 7,
     maxHp: 42,
     // 2 → 3（2026-11-01）：射程 2 意味着它必须贴着前线才打得到人，
-    // 而中世的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
+    // 而铁器的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
     // 加一格之后它终于能在自己被打之前先还手，其余数值一个没动。
     range: 3,
     vision: 3,
@@ -608,7 +650,52 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4 },
   },
 
-  // ================= 时代 3 · 火药 =================
+  /*
+   * 弩兵（战国—汉）。
+   *
+   * 和长弓的分工：长弓（90 金 / 射 4）靠射程压制，弩（82 金 / 射 3）靠**破甲**。
+   * 弩的拉力大、装填慢，所以移动和血量都比长弓差一点——它不是"更好的弓"，
+   * 是"拉得开重甲的那把"。铁器时代的主力远程从这一格开始分成两条路。
+   */
+  crossbow: {
+    id: 'crossbow',
+    name: '弩兵',
+    short: '弩',
+    era: 2,
+    category: 'combat',
+    cost: 82,
+    move: 2,
+    atk: 16,
+    armor: 1,
+    maxHp: 24,
+    range: 3,
+    vision: 3,
+    abilities: ['armor-pierce'],
+  },
+  /*
+   * 楼船（汉）。
+   *
+   * 原版的海面在舢板（1 代 34 血）和炮艇（3 代）之间是空的，两代之间没有一条
+   * 能扛能打的船——水图打到铁器时代只能继续开舢板。楼船补的就是这一格：
+   * 慢（移 3）、厚（85 血）、射 2 格，是"水上的活动堡垒"，不是快船。
+   * 快船仍然是海军扩展里那几条（桨帆船 / 德罗蒙，移 4~5）。
+   */
+  tower_ship: {
+    id: 'tower_ship',
+    name: '楼船',
+    short: '楼',
+    era: 2,
+    category: 'combat',
+    cost: 130,
+    move: 3,
+    atk: 15,
+    armor: 3,
+    maxHp: 85,
+    range: 2,
+    vision: 3,
+    domain: 'water',
+  },
+  // ================= 时代 3 · 火器 =================
   musketeer: {
     id: 'musketeer',
     name: '火枪兵',
@@ -647,6 +734,16 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '戟',
     era: 3,
     category: 'combat',
+    /*
+     * 2026-11-03 数值复核：**暂不调价**（仍是 100）。
+     *
+     * 数据上它是偏强的（采用率 75%、每百金输出 22.8、等金对决 14:0 碾狂战士），
+     * 抬到 110 是最直接的对策。但实测这一改会连带改掉 AI 的另一条行为：
+     * 在"两格宽河道"的造桥用例里，它从"30 轮内架通"变成"80 轮也架不通"——
+     * 链路是 价格 → 采购排序 → 工程队的站位 → 架桥点选址，属于典型的蝴蝶效应。
+     * 一处价格改动能把另一条不相关的能力打掉，说明这条链路还没有被理解，
+     * 不该顺手带进这一批。留作单独一批（连同"盾墙/阵型"一起）再验。
+     */
     cost: 100,
     move: 2,
     atk: 21,
@@ -731,12 +828,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 40,
     range: 1,
     vision: 2,
-    // 城市 20 → 30（2026-11-01）：火药档唯一"城里赚钱"的建筑。
+    // 城市 20 → 30（2026-11-01）：火器档唯一"城里赚钱"的建筑。
     // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
     incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
   },
 
-  // ================= 时代 4 · 工业 =================
+  // ================= 时代 4 · 蒸汽 =================
   rifleman: {
     id: 'rifleman',
     name: '步枪兵',
@@ -759,7 +856,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     era: 4,
     category: 'combat',
     cost: 175,
-    move: 1,
+    // 2026-11-03 数值复核：移 1 → 2。
+    // 移 1 在 AI 的账本里有硬惩罚（`score -= 10 + rough×130`），而且"移 1 + 射 4"
+    // 意味着它必须出生在平原上、否则一辈子到不了射程内——100 局零建造。
+    // 移 2 仍是最慢的一档（重步兵同档），但至少能跟着战线挪。
+    move: 2,
     // 多动 3 次：一回合打三发完整的，总输出是单发的三倍。
     // 下面这个 atk 只是"一发"的数，动 burst 等于把整条输出线乘上去——两个要一起调。
     atk: 20,
@@ -776,7 +877,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     era: 5,
     category: 'combat',
     cost: 215,
-    move: 1,
+    // 同上：移 1 → 2（理由见机枪队）。四段输出已经够强，卡死的只是走位。
+    move: 2,
     atk: 17,
     armor: 3,
     maxHp: 32,
@@ -851,7 +953,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
   },
 
-  // ============ 时代 5 · 二战（第六时代在原版表里是空的） ============
+  // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
   squad: {
     id: 'squad',
     name: '步兵班',
@@ -887,14 +989,23 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '炮',
     era: 5,
     category: 'combat',
-    cost: 320,
+    // 2026-11-03 数值复核：320 → 380，射程**保持 5**。
+    //
+    // 数据上它的交换比 9.13、每百金承伤 5.1，是"没人够得着"的典型。
+    // 第一反应是砍射程，但射程有一条设计不变式撑着：
+    // 「时代越靠后、站桩远程射程越长」——火炮 5 格是这条线的天花板（有测试钉着），
+    // 砍成 4 就等于让 5 代火力追平 2 代长弓。所以改成"用钱换那一格"：
+    // 价格 +60，每百金输出从 46.2 掉到 38.7，仍然高效，但不再是"顺手就买"。
+    cost: 380,
     move: 2,
     atk: 47,
     armor: 5,
     maxHp: 54,
     range: 5,
     splash: 2,
-    vision: 2,
+    // 视野 2 → 3：射程 5 却只能看 2 格，等于自己 60% 的射程要别人点灯。
+    // 不改射程，就把"看得见"补回来一格；最后一格仍然需要前排。
+    vision: 3,
     abilities: ['siege-master'],
   },
   agribusiness: {
@@ -1177,11 +1288,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     name: '铁甲舰',
     short: '舰',
     // E5 → E4：铁甲舰是 1859（Gloire）到 1890 年代（定远、镇远）的舰种，
-    // 属于"工业"这一档。以前它被放在第五时代，等于让 1860 年代的船和
-    // 二战的战列舰同场；而真正接它班的前无畏/无畏要到 E5 才出现。
+    // 属于"蒸汽"这一档。以前它被放在第五时代，等于让 1860 年代的船和
+    // 机械化的战列舰同场；而真正接它班的前无畏/无畏要到 E5 才出现。
     //
     // 挪下来的代价必须一起付：原数值（47/11/90、射 5）是按 E5 的天花板给的，
-    // 直接搬到 E4 会压死整条工业水军（护卫舰 30/8、浅水重炮舰 50/10）。
+    // 直接搬到 E4 会压死整条蒸汽水军（护卫舰 30/8、浅水重炮舰 50/10）。
     // 现在它是"海上正面"：比浅水重炮舰快一格、多一格视野，但少 10 点攻、
     // 也没有「岸轰」——攻城那件事仍然归浅水重炮舰（monitor）。
     // 破城（siege-master）一并交出去，同一个时代不需要两条攻城船。

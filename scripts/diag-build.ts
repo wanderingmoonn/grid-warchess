@@ -22,18 +22,25 @@ const GAMES = Number(argOf('games', '4'));
 const CAP = Number(argOf('cap', '120'));
 const EXP = argOf('exp', '').split(',').filter(Boolean);
 const ERA = Number(argOf('era', '1'));
+// 地貌：验海军内容必须能指定有水的地图。缺省 random 在 20×20 上常常只有 5% 水，
+// 而 AI 的 seaDemand 在水域 < 8% 时判 0——那时候"不造造船厂"是对的，
+// 拿这种图去证明"造船厂没人用"会得出完全错误的结论。
+const MAP = argOf('map', '');
 
 const built: Record<string, { n: number; foeDist: number[]; gold: number[] }> = {};
 const kept: Record<string, number> = {};
+let wetSum = 0;
 
 for (let g = 0; g < GAMES; g += 1) {
   const seed = 8100 + g * 91;
   let s: GameState = createMatch(
     { ...DEFAULT_CONFIG, size: SIZE, startEra: ERA, aiOpponent: true, aiAlly: true, aiLevel: 'advanced',
+      ...(MAP ? { mapStyle: MAP } : {}),
       ...(EXP.length ? { expansionIds: EXP } : {}) } as never,
     seed,
   );
   let ended = false;
+  wetSum += s.tiles.filter((t) => t.terrain === 'water').length / Math.max(1, s.tiles.length);
   while (!ended && s.turn <= CAP) {
     const me: PlayerId = s.current;
     const budget = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
@@ -65,7 +72,7 @@ for (let g = 0; g < GAMES; g += 1) {
 
 const rows = Object.entries(built).sort((a, b) => b[1].n - a[1].n);
 const total = rows.reduce((n, [, r]) => n + r.n, 0);
-console.log(`共 ${GAMES} 局 × ${SIZE}×${SIZE}：BUILD ${total} 次\n`);
+console.log(`共 ${GAMES} 局 × ${SIZE}×${SIZE}：BUILD ${total} 次（水域 ${((wetSum / Math.max(1, GAMES)) * 100).toFixed(1)}%）\n`);
 console.log('兵种                 次数  平均敌距  远于8格  平均余额');
 for (const [id, r] of rows) {
   const far = r.foeDist.filter((d) => d > 8).length;

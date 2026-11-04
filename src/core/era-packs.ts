@@ -2,7 +2,7 @@
  * 时代兵种扩展包（大型模组）。
  *
  * 五个时代各出一套，取材自该时代真实存在的兵种、攻城器械与防御工事。
- * 每套的单位数量都**超过原版同期**（原版：古典 12 / 中世 8 / 火药 11 / 工业 7 / 现代 11），
+ * 每套的单位数量都**超过原版同期**（原版：青铜 13 / 铁器 10 / 火器 11 / 蒸汽 7 / 现代 11），
  * 目的是让"同一代"里出现真正的兵种选择，而不是"挑最贵那个"。
  *
  * ---------------------------------------------------------------
@@ -16,8 +16,8 @@
  *     段数系数：burst 取 burst；splash 取 1 + 0.5 × splash（溅射只吃一半伤害）
  *
  * 原版同代的每金耐久带（EHP / cost），本文件所有单位都落在带内或略低：
- *   古典 0.60~1.28　中世 0.29~0.71　火药 0.17~0.44
- *   工业 0.22~0.38　现代 0.16~0.32
+ *   青铜 0.60~1.28　铁器 0.29~0.71　火器 0.17~0.44
+ *   蒸汽 0.22~0.38　现代 0.16~0.32
  *
  * 也就是说：**新单位不是"更强"，而是"更专"**。重甲的每金输出低、远程的每金
  * 耐久低、攻城器离开了城墙几乎是废铁——换来的才是在某个场景里明显好用。
@@ -28,19 +28,23 @@
  * 一条硬约束：era 1 的战斗单位会被开局白送
  * ---------------------------------------------------------------
  * setup.ts 的开局部队只从 `era === 1 && category === 'combat'` 的池子里取，
- * 而且不看价钱——池子里有战象，开局就白送战象。所以古典包里的战斗单位
+ * 而且不看价钱——池子里有战象，开局就白送战象。所以青铜包里的战斗单位
  * 一律压在 60 金以内（这也是战象被压到 60、而真实的战象应该更贵的原因：
  * 宁可牺牲一点"贵气"，也不要让开局白送的东西打破基准）。
  *
- * 另外：开局的 2 个经济单位也是从 era 1 的 economy 里轮取的，所以古典包
+ * 另外：开局的 2 个经济单位也是从 era 1 的 economy 里轮取的，所以青铜包
  * 故意不做经济单位，免得把农民/牧民挤出开局。
  */
 
+import type { AbilityDef } from './abilities.ts';
+import { TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
+import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
+import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /* ================================================================== */
-/* 时代 1 · 古典（原版 12 个 → 模组 14 个）                            */
+/* 时代 1 · 青铜（原版 13 个 → 模组 14 个）                            */
 /* ================================================================== */
 
 const ANTIQUITY: UnitTypeDef[] = [
@@ -75,38 +79,8 @@ const ANTIQUITY: UnitTypeDef[] = [
     range: 2,
     vision: 3,
   },
-  {
-    // 希腊重装步兵：方阵的核心。攻击不高，但 5 点护甲让民兵几乎打不动
-    id: 'anc_hoplite',
-    name: '重装步兵',
-    short: '重',
-    era: 1,
-    category: 'combat',
-    cost: 42,
-    move: 2,
-    atk: 14,
-    armor: 5,
-    maxHp: 40,
-    range: 1,
-    vision: 2,
-    abilities: ['shield-wall'],
-  },
-  {
-    // 罗马军团兵：站住就有光环，是"阵型"这个概念的第一次兑现
-    id: 'anc_legionary',
-    name: '军团兵',
-    short: '团',
-    era: 1,
-    category: 'combat',
-    cost: 49,
-    move: 2,
-    atk: 17,
-    armor: 4,
-    maxHp: 36,
-    range: 1,
-    vision: 2,
-    abilities: ['shield-wall', 'aura-command'],
-  },
+
+
   {
     // 蛮族战斧手：没有甲，只有一下狠的。用得起、死得快
     id: 'anc_axeman',
@@ -139,7 +113,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     abilities: ['stealth'],
   },
   {
-    // 埃及/赫梯战车：古典唯一的"高机动打击力量"，代价是脆
+    // 埃及/赫梯战车：青铜唯一的"高机动打击力量"，代价是脆
     id: 'anc_chariot',
     name: '战车',
     short: '车',
@@ -153,22 +127,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     range: 1,
     vision: 3,
   },
-  {
-    // 印度/迦太基战象：一堵会走的墙。kamikaze 表示溃散时会踩自己人
-    id: 'anc_elephant',
-    name: '战象',
-    short: '象',
-    era: 1,
-    category: 'combat',
-    cost: 54,
-    move: 2,
-    atk: 22,
-    armor: 4,
-    maxHp: 50,
-    range: 1,
-    vision: 2,
-    abilities: ['kamikaze'],
-  },
+
   {
     // 攻城槌：唯一的用途是撞门，野战里几乎打不动人
     id: 'anc_ram',
@@ -185,26 +144,11 @@ const ANTIQUITY: UnitTypeDef[] = [
     vision: 1,
     abilities: ['siege-master'],
   },
-  {
-    // 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵
-    id: 'anc_ballista',
-    name: '弩炮',
-    short: '弩',
-    era: 1,
-    category: 'combat',
-    cost: 48,
-    move: 1,
-    atk: 15,
-    armor: 1,
-    maxHp: 22,
-    range: 4,
-    vision: 2,
-    abilities: ['armor-pierce'],
-  },
+
 
   // ---- 工事 ----
   {
-    // 瞭望塔：古典的"眼睛"。
+    // 瞭望塔：青铜的"眼睛"。
     // 第一版 atk 12 / 视野 5 / 75 金，实测每百金杀伤 72.7（原版箭塔 37.0）——
     // 视野 5 在 12×12 上等于半个棋盘，它永远先手开火。现在视野收到 4、攻击 12→10、
     // 价格提到 85：仍然是最好的侦察塔，但不再是"造了就赢"。
@@ -275,7 +219,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     builds: ['anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'bridge', 'camp'],
   },
   {
-    // 三层桨战船：古典海权的象征，撞角为主。
+    // 三层桨战船：青铜海权的象征，撞角为主。
     // 实测每百金 49.5，是舢板（23.3）的两倍，攻击收到 14 压一压。
     id: 'anc_trireme',
     name: '三层桨战船',
@@ -291,10 +235,64 @@ const ANTIQUITY: UnitTypeDef[] = [
     vision: 3,
     domain: 'water',
   },
+
+  /*
+   * 下面三个补的是"青铜时代只有希腊罗马"这个偏科。
+   *
+   * 青铜时代的战场在埃及、两河、商周同样热闹，而且各自有一套成熟兵种：
+   * 努比亚弓手（埃及新王国，前 2000 年起就是雇佣弓手）、青铜剑士（商周与
+   * 迈锡尼都有的近战精锐）、旌旗车（商周的战车指挥位）。旌旗车尤其重要——
+   * 它是**第一代唯一的支援兵**，编制模板里那 15% 支援份额终于有东西可买。
+   */
+  {
+    id: 'anc_nubian',
+    name: '努比亚弓手',
+    short: '努',
+    era: 1,
+    category: 'combat',
+    cost: 38,
+    move: 3,
+    atk: 9,
+    armor: 0,
+    maxHp: 18,
+    range: 4,
+    vision: 4,
+    abilities: ['stealth'],
+  },
+  {
+    id: 'anc_bronzesword',
+    name: '青铜剑士',
+    short: '剑',
+    era: 1,
+    category: 'combat',
+    cost: 36,
+    move: 2,
+    atk: 15,
+    armor: 2,
+    maxHp: 32,
+    range: 1,
+    vision: 2,
+  },
+  {
+    id: 'anc_standard',
+    name: '旌旗车',
+    short: '旌',
+    era: 1,
+    category: 'combat',
+    cost: 44,
+    move: 3,
+    atk: 2,
+    armor: 1,
+    maxHp: 30,
+    range: 1,
+    vision: 4,
+    abilities: ['aura-command'],
+  },
+
 ];
 
 /* ================================================================== */
-/* 时代 2 · 中世（原版 8 个 → 模组 12 个）                             */
+/* 时代 2 · 铁器（原版 8 个 → 模组 12 个）                             */
 /* ================================================================== */
 
 const MEDIEVAL: UnitTypeDef[] = [
@@ -316,7 +314,7 @@ const MEDIEVAL: UnitTypeDef[] = [
   },
   {
     // 热那亚弩手：射程和破甲都在长弓之上，代价是慢。
-    // 第一版 100 金 atk 18，打出场均每百金 55.3（长弓 31.7）——破甲在"人人有甲"的中世
+    // 第一版 100 金 atk 18，打出场均每百金 55.3（长弓 31.7）——破甲在"人人有甲"的铁器
     // 太值钱。攻击收到 16、价格提到 110，让它变成"贵一点的解甲方案"而不是全面替代长弓。
     id: 'med_crossbow',
     name: '弩手',
@@ -337,7 +335,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     // 实测每百金只有 20.1——AI 不会"打了就跑"，先手在它手里换不成价值。
     // 所以补偿的是纯数值（攻击 15→17、价格 120→110），而不是再加机制。
     // 第三轮反过来了：AI 学会绕后之后，first-strike 配"永远站在安全位置"等于无风险输出，
-    // 采用率冲到 32.9%、成为中世绝对主力（ratio 1.40）。攻击 17→13、价格 110→125 收回。
+    // 采用率冲到 32.9%、成为铁器绝对主力（ratio 1.40）。攻击 17→13、价格 110→125 收回。
     id: 'med_horsearcher',
     name: '骑射手',
     short: '射',
@@ -353,7 +351,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     abilities: ['first-strike'],
   },
   {
-    // 瑞士长矛兵：中世的"反骑兵"答案，正面极硬
+    // 瑞士长矛兵：铁器的"反骑兵"答案，正面极硬
     id: 'med_pikeman',
     name: '瑞士长矛兵',
     short: '矛',
@@ -384,7 +382,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     vision: 2,
   },
   {
-    // 配重投石机：中世攻城的标准答案，射程 5 压过所有塔
+    // 配重投石机：铁器攻城的标准答案，射程 5 压过所有塔
     id: 'med_trebuchet',
     name: '投石机',
     short: '投',
@@ -417,7 +415,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     abilities: ['siege-master'],
   },
   {
-    // 胡斯战车：把车连成车堡，是中世少见的"移动工事"
+    // 胡斯战车：把车连成车堡，是铁器少见的"移动工事"
     id: 'med_wagon',
     name: '战车堡',
     short: '堡',
@@ -450,7 +448,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     autoAttack: true,
   },
   {
-    // 城墙：中世这一段是石砌幕墙。名字从"城墙段"改成"城墙"——
+    // 城墙：铁器这一段是石砌幕墙。名字从"城墙段"改成"城墙"——
     // 它是城墙这条线（夯土 → 石砌 → 土垒 → 混凝土 → 掩体墙）的第二环，不该只被读成"一段"。
     id: 'med_wall',
     name: '城墙',
@@ -467,7 +465,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     obstacle: true,
   },
   {
-    // 掘城兵：负责把城墙/主楼/寨垒立起来（中世纪 sapper 的本义就是挖地道）
+    // 掘城兵：负责把城墙/主楼/寨垒立起来（铁器时代 sapper 的本义就是挖地道）
     id: 'med_sapper',
     name: '掘城兵',
     short: '掘',
@@ -483,7 +481,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     builds: ['med_wall', 'med_donjon', 'bridge', 'camp2'],
   },
   {
-    // 齿轮帆船：中世唯一能运兵过河的船，运 3 个
+    // 齿轮帆船：铁器唯一能运兵过河的船，运 3 个
     id: 'med_cog',
     name: '齿轮帆船',
     short: '帆',
@@ -499,11 +497,292 @@ const MEDIEVAL: UnitTypeDef[] = [
     domain: 'water',
     carry: { hold: { max: 3 } },
   },
+  {
+    // 希腊重装步兵：方阵的核心。攻击不高，但 5 点护甲让民兵几乎打不动
+    id: 'anc_hoplite',
+    name: '重装步兵',
+    short: '重',
+    era: 2,
+    category: 'combat',
+    cost: 58,
+    move: 2,
+    atk: 16,
+    armor: 5,
+    maxHp: 46,
+    range: 1,
+    vision: 2,
+    abilities: ['shield-wall'],
+  },
+  {
+    // 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵
+    id: 'anc_ballista',
+    name: '弩炮',
+    short: '弩',
+    era: 2,
+    category: 'combat',
+    cost: 64,
+    move: 1,
+    atk: 17,
+    armor: 1,
+    maxHp: 24,
+    range: 4,
+    vision: 2,
+    abilities: ['armor-pierce'],
+  },
+  {
+    // 罗马军团兵：站住就有光环，是"阵型"这个概念的第一次兑现
+    id: 'anc_legionary',
+    name: '军团兵',
+    short: '团',
+    era: 2,
+    category: 'combat',
+    cost: 62,
+    move: 2,
+    atk: 19,
+    armor: 4,
+    maxHp: 42,
+    range: 1,
+    vision: 2,
+    abilities: ['shield-wall', 'aura-command'],
+  },
+  {
+    // 印度/迦太基战象：一堵会走的墙。kamikaze 表示溃散时会踩自己人
+    id: 'anc_elephant',
+    name: '战象',
+    short: '象',
+    era: 2,
+    category: 'combat',
+    cost: 72,
+    move: 2,
+    atk: 24,
+    armor: 4,
+    maxHp: 58,
+    range: 1,
+    vision: 2,
+    abilities: ['kamikaze'],
+  },
 ];
 
 /* ================================================================== */
-/* 时代 3 · 火药（原版 11 个 → 模组 13 个）                            */
+/* 时代 3 · 火器（原版 11 个 → 模组 13 个）                            */
 /* ================================================================== */
+
+/**
+ * ── 地雷：把"布一片、逼你绕"这件事做进时代军备 ─────────────────────────
+ *
+ * 引擎里已经有两套现成的东西：留痕（`core/marks.ts`）和回合开始钩子。
+ * 海军包的水雷、奇想包的哥布林陷阱都走这条路，这里只是把"陆地上的雷"
+ * 补上——而且**分轻雷/重雷两种**，因为它对应两种不同的战术：
+ *
+ *   · **轻雷（16 点）**：便宜、能铺、封路口。踩一发不致命，但足够让对面
+ *     绕远道或者先派人趟雷，那一两个回合就是你要的。
+ *   · **重雷（30 点）**：贵、上限低（4 枚），专门用来挡装甲和攻城器。
+ *     一个 100 血的坦克踩两发就得回城修，攻城槌这种慢速单位基本等于被钉住。
+ *
+ * 两条能力的实现几乎一样，所以共用 `makeMineLayer`——差别全在参数里。
+ */
+const LAND_MINE_KIND: MarkKindDef = {
+  id: 'era-mine',
+  name: '地雷',
+  summary: '敌人踩上来就炸 16 点（无视护甲），炸完就没。自己人踩不到。',
+  tags: ['mine', 'land'],
+  hidden: true,
+  // 能埋的地面：平地、林间、丘陵、沙丘、谷地、台地。
+  // 高山和城市排除：前者上不去，后者是别人的地板。
+  on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    // 扫雷兵踩上去只挨一半：它知道怎么踩。判定挂在"雷"这一边，
+    // 换一个兵来踩就该吃满伤害（和海军的水雷同一个写法）。
+    const swept = (def.abilities ?? []).includes('clear-mines');
+    const dmg = swept ? 8 : 16;
+    c.api.hurt(c.unit, dmg, `${def.name} 踩中地雷，损失 ${dmg} 点生命`);
+    c.api.log(c.mark.owner, `地雷命中 ${def.name}`);
+  },
+};
+
+const AT_MINE_KIND: MarkKindDef = {
+  id: 'era-at-mine',
+  name: '反装甲雷',
+  summary: '敌人踩上来就炸 30 点（无视护甲），炸完就没。专治重甲与攻城器。',
+  tags: ['mine', 'land'],
+  hidden: true,
+  on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh'],
+  trigger: 'enemy',
+  detect: 1,
+  onEnter: (c) => {
+    if (!c.unit) return;
+    const def = c.api.utype(c.unit.type);
+    const swept = (def.abilities ?? []).includes('clear-mines');
+    const dmg = swept ? 15 : 30;
+    c.api.hurt(c.unit, dmg, `${def.name} 触发了反装甲雷，损失 ${dmg} 点生命`);
+    c.api.log(c.mark.owner, `反装甲雷命中 ${def.name}`);
+  },
+};
+
+/**
+ * 布雷：自己回合开始时，在两格以内埋一枚，全场上限 `cap` 枚。
+ *
+ * 三条细节都是踩过坑的（海军包的布雷舰先踩过一遍）：
+ *   · 半径 2 而不是四邻——四邻只能围出一个圈，围不出"雷区"；
+ *   · 挑格按回合号轮转——永远挑第一个的话，蹲着不动会把雷全堆在同一格；
+ *   · 有自己人站着的格子跳过——埋在自己人脚下永远炸不到人。
+ */
+function makeMineLayer(kind: string, cap: number, label: string): AbilityDef {
+  return {
+    id: kind === 'era-mine' ? 'lay-mines' : 'lay-at-mines',
+    name: label,
+    summary: `自己回合开始时，在两格以内埋一枚${label.replace('布', '')}（全场最多 ${cap} 枚，只炸敌人）。`,
+    group: 'support',
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.support,
+          apply: (c) => {
+            const s = c.state;
+            if (markCountOf(s, kind, c.owner) >= cap) return;
+            const kinds = markKindOf(kind);
+            const terrenos = kinds?.on ?? [];
+            const spots: Array<{ x: number; y: number }> = [];
+            for (let dy = -2; dy <= 2; dy += 1) {
+              for (let dx = -2; dx <= 2; dx += 1) {
+                if (dx === 0 && dy === 0) continue;
+                if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+                const x = c.self.x + dx;
+                const y = c.self.y + dy;
+                if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+                const tile = s.tiles[y * s.w + x];
+                if (!tile || !terrenos.includes(tile.terrain)) continue;
+                if (tile.cityId) continue; // 城里是别人的地板
+                if (marksAt(s, x, y).length > 0) continue; // 一格只放一件
+                const stack = s.units.filter((u) => u.x === x && u.y === y && u.owner === c.owner && u.hp > 0);
+                if (stack.length > 0) continue; // 自己人脚下埋了也白搭
+                spots.push({ x, y });
+              }
+            }
+            if (spots.length === 0) return;
+            const pick = spots[(s.turn + c.self.x + c.self.y) % spots.length]!;
+            addMark(s, { kind, owner: c.owner, x: pick.x, y: pick.y, charges: 1, hidden: true });
+            c.api.pushLog(
+              s,
+              c.owner,
+              `${c.api.utype(s, c.self.type).name} 在 ${String.fromCharCode(65 + pick.x)}${pick.y + 1} 埋下一枚${label.replace('布', '')}`,
+            );
+          },
+        },
+      ],
+    },
+  };
+}
+
+const LAY_MINES: AbilityDef = makeMineLayer('era-mine', 6, '布雷');
+const LAY_AT_MINES: AbilityDef = makeMineLayer('era-at-mine', 4, '布反装甲雷');
+
+/** 扫雷兵：回合开始清掉相邻的敌方雷，自己踩雷只吃一半 */
+const CLEAR_MINES: AbilityDef = {
+  id: 'clear-mines',
+  name: '扫雷',
+  summary: '自己回合开始时清掉相邻的敌方地雷；自己踩雷只受一半伤害。',
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const s = c.state;
+          let cleared = 0;
+          for (const m of marksOf(s)) {
+            if (m.owner === c.owner) continue;
+            if (!markKindOf(m.kind)?.tags?.includes('mine')) continue;
+            if (c.api.distance(m, c.self) > 1) continue;
+            removeMark(s, m.id);
+            cleared += 1;
+          }
+          if (cleared > 0) {
+            c.api.pushLog(s, c.owner, `${c.api.utype(s, c.self.type).name} 排掉 ${cleared} 枚地雷`);
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 三个布雷/扫雷单位。
+ *
+ * 放在"谁的时代"里是有讲究的：
+ *   · **工兵（3 代）**：火器时代的堑壕战就是这么开场的——先挖、再埋、最后才上。
+ *     它自己打得很难看（10 攻），价值全在那片地上。
+ *   · **扫雷兵（4 代）**：有雷就得有解法，否则地雷会变成单向的作弊。
+ *     它的攻击也很弱，定位是"给部队开路"，不是输出。
+ *   · **布雷车（5 代）**：机械化布雷，重雷一次一片，专门用来废掉对面的装甲矛头。
+ */
+/*
+ * 每个包只登记**自己用得到的那一条**：
+ *   火器包 → 布雷（lay-mines）+ 地雷；蒸汽包 → 扫雷（clear-mines）+ 地雷；机械化包 → 反装甲雷。
+ * 三条都往三个包里塞会撞上 test-rules 的「能力各归各家」——那条用例守的就是
+ * "同一条能力不许在两处各写一份"（重复的那份会静默失效，改的人还以为生效了）。
+ *
+ * 代价是：只开蒸汽包时，游戏里既没有布雷的兵、也没有雷可扫，扫雷兵是空转的。
+ * 这是**接受**的——单开蒸汽包本来就没有地雷战这条线。
+ */
+
+const MINE_UNITS_GUNPOWDER: UnitTypeDef[] = [
+  {
+    id: 'combat-engineer',
+    name: '工兵',
+    short: '工',
+    era: 3,
+    category: 'combat',
+    cost: 130,
+    move: 3,
+    atk: 10,
+    armor: 2,
+    maxHp: 32,
+    range: 1,
+    vision: 4,
+    abilities: ['lay-mines'],
+  },
+];
+
+const MINE_UNITS_INDUSTRY: UnitTypeDef[] = [
+  {
+    id: 'mine-sweeper',
+    name: '扫雷兵',
+    short: '扫',
+    era: 4,
+    category: 'combat',
+    cost: 110,
+    move: 3,
+    atk: 12,
+    armor: 3,
+    maxHp: 34,
+    range: 1,
+    vision: 5,
+    abilities: ['clear-mines'],
+  },
+];
+
+const MINE_UNITS_MODERN: UnitTypeDef[] = [
+  {
+    id: 'minelayer-truck',
+    name: '布雷车',
+    short: '雷',
+    era: 5,
+    category: 'combat',
+    cost: 260,
+    move: 4,
+    atk: 14,
+    armor: 6,
+    maxHp: 60,
+    range: 1,
+    vision: 5,
+    abilities: ['lay-at-mines'],
+  },
+];
 
 const GUNPOWDER: UnitTypeDef[] = [
   {
@@ -539,7 +818,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     splash: 1,
   },
   {
-    // 胸甲骑兵：火药时代最后的骑兵冲锋，甲厚、贵、怕枪
+    // 胸甲骑兵：火器时代最后的骑兵冲锋，甲厚、贵、怕枪
     id: 'gp_cuirassier',
     name: '胸甲骑兵',
     short: '胸',
@@ -588,7 +867,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     abilities: ['stealth'],
   },
   {
-    // 攻城加农炮：火药时代的攻城核心，两格溅射
+    // 攻城加农炮：火器时代的攻城核心，两格溅射
     id: 'gp_siegecannon',
     name: '攻城加农炮',
     short: '加',
@@ -689,7 +968,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     obstacle: true,
   },
   {
-    // 军需官：火药时代军队规模爆炸，后勤本身成了兵种
+    // 军需官：火器时代军队规模爆炸，后勤本身成了兵种
     id: 'gp_quartermaster',
     name: '军需官',
     short: '需',
@@ -721,7 +1000,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     builds: ['gp_chevaux', 'gp_earthwork', 'gp_bastion', 'bridge2', 'camp3'],
   },
   {
-    // 风帆战列舰：三层甲板、一百门炮，火药时代的海上霸主
+    // 风帆战列舰：三层甲板、一百门炮，火器时代的海上霸主
     id: 'gp_shipofline',
     name: '风帆战列舰',
     short: '战',
@@ -739,15 +1018,15 @@ const GUNPOWDER: UnitTypeDef[] = [
 ];
 
 /* ================================================================== */
-/* 时代 4 · 工业（原版 7 个 → 模组 13 个）                             */
+/* 时代 4 · 蒸汽（原版 7 个 → 模组 13 个）                             */
 /* ================================================================== */
 
 const INDUSTRY: UnitTypeDef[] = [
   {
     // 战壕迫击炮（斯托克斯式，1915）：堑壕战的产物，曲射、轻便、跟着步兵走。
-    // 这里原本是「骑兵」——工业化时代还让骑兵当主力太违和（一战骑兵确实存在，
+    // 这里原本是「骑兵」——蒸汽化时代还让骑兵当主力太违和（一战骑兵确实存在，
     // 但只在战争初期和东线还有用，本作没法表达"被机枪压制"这件事）。
-    // 换成迫击炮之后，这一档正好补上工业包缺失的"步兵伴随火力"：
+    // 换成迫击炮之后，这一档正好补上蒸汽包缺失的"步兵伴随火力"：
     // 射程比榴弹炮近、比手榴弹远，价格只有榴弹炮的七成。
     id: 'ind_trenchmortar',
     name: '战壕迫击炮',
@@ -938,7 +1217,7 @@ const INDUSTRY: UnitTypeDef[] = [
     obstacle: true,
   },
   {
-    // 钢厂：工业时代的经济建筑，站在城里最赚
+    // 钢厂：蒸汽时代的经济建筑，站在城里最赚
     id: 'ind_steelworks',
     name: '钢厂',
     short: '钢',
@@ -970,7 +1249,7 @@ const INDUSTRY: UnitTypeDef[] = [
     builds: ['ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bridge2', 'camp4'],
   },
   {
-    // 驱逐舰：工业时代的海上多面手，带一点溅射
+    // 驱逐舰：蒸汽时代的海上多面手，带一点溅射
     id: 'ind_destroyer',
     name: '雷击舰',
     short: '雷',
@@ -1247,8 +1526,9 @@ export const ERA_PACKS: Expansion[] = [
     id: 'pack-antiquity',
 
     scale: 'large',
-    name: '古典会战',
-    summary: '希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。',
+    name: '青铜会战',
+    summary: '投石兵、标枪兵、轻盾兵、战车、努比亚弓手与青铜剑士，配攻城槌、瞭望塔、'
+      + '夯土城墙与旌旗车（第一代唯一的光环支援）。',
     hooks: {},
     units: ANTIQUITY,
   },
@@ -1256,8 +1536,9 @@ export const ERA_PACKS: Expansion[] = [
     id: 'pack-medieval',
 
     scale: 'large',
-    name: '中世兵备',
-    summary: '重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。',
+    name: '铁器兵备',
+    summary: '瑞士长矛兵、重装军士、双手剑士、希腊重装步兵与罗马军团，配战象、弩炮、'
+      + '投石机、攻城塔与城墙。',
     hooks: {},
     units: MEDIEVAL,
   },
@@ -1265,31 +1546,40 @@ export const ERA_PACKS: Expansion[] = [
     id: 'pack-gunpowder',
 
     scale: 'large',
-    name: '火药列国',
-    summary: '线列步兵、胸甲骑兵、猎兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰。',
+    name: '火器列国',
+    summary: '线列步兵、胸甲骑兵、猎兵、工兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰；' +
+      '工兵能在两格内布雷（一片最多 6 枚，踩上炸 16 点、无视护甲）。',
     hooks: {},
-    units: GUNPOWDER,
+    abilities: [LAY_MINES],
+    marks: [LAND_MINE_KIND],
+    units: [...GUNPOWDER, ...MINE_UNITS_GUNPOWDER],
   },
   {
     id: 'pack-industry',
 
     scale: 'large',
-    name: '工业绞肉机',
-    summary: '堑壕突击队、火焰喷射器、毒气兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克。',
+    name: '蒸汽绞肉机',
+    summary: '堑壕突击队、火焰喷射器、毒气兵、扫雷兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克；' +
+      '扫雷兵替部队开雷区（顺带自己踩雷只吃一半）。',
     hooks: {},
-    units: INDUSTRY,
+    abilities: [CLEAR_MINES],
+    marks: [LAND_MINE_KIND],
+    units: [...INDUSTRY, ...MINE_UNITS_INDUSTRY],
   },
   {
     id: 'pack-modern',
 
     scale: 'large',
-    // 名字从「现代合成兵」改成「二战合成兵」：第五时代本身已经改叫「二战」，
-    // 而真正的第六时代叫「现代」（见 contemporary-packs.ts）。
-    // 一个叫"现代"的二战包和一个叫"现代"的现代包，光看名字分不出谁是谁。
+    // 名字从「现代合成兵」改成「机械化合成兵」：第五时代本身已经改叫「机械化」，
+    // 而真正的第六时代叫「信息化」（见 contemporary-packs.ts）。
+    // 一个叫"现代"的机械化包和一个叫"现代"的现代包，光看名字分不出谁是谁。
     // id 不动（存档里存的是 id），只改显示名。
-    name: '二战合成兵',
-    summary: '伞兵、突击队、反坦克炮，配喀秋莎、重型坦克、机枪地堡与掩体墙。',
+    name: '机械化合成兵',
+    summary: '伞兵、突击队、反坦克炮、布雷车，配喀秋莎、重型坦克、机枪地堡与掩体墙；' +
+      '布雷车撒的是反装甲雷，一发 30 点。',
     hooks: {},
-    units: MODERN,
+    abilities: [LAY_AT_MINES],
+    marks: [AT_MINE_KIND],
+    units: [...MODERN, ...MINE_UNITS_MODERN],
   },
 ];
