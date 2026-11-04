@@ -117,6 +117,15 @@ export function cultivationRank(u: Unit): number {
   return getRank(u);
 }
 
+// 自然经验增长
+export function getExpGrowth(u: Unit): number {
+  // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
+  if (u.type === 'sword-cultivator') {
+    return Math.max(1, Math.floor((getRank(u) + 2) / 2));
+  }
+  return getRank(u) + 2;
+}
+
 /**
  * 增加经验并即时判断升级。
  *
@@ -195,6 +204,18 @@ export function addExp(u: Unit, s: GameState, amount: number): void {
     } else {
       delete u.custom.lifespan;
     }
+  }
+}
+
+/**
+ * 降级后清理：删掉所有"需要更高境界才能维持"的能力和技能。
+ *
+ * 目前唯一的一条：掉到 rank < 4 后不再拥有「灵体道果」——再死就真死。
+ * 未来若有其它 rank 门槛的能力/技能，在这里按同一条规则追加。
+ */
+export function cleanupAfterRankDrop(u: Unit, newRank: number): void {
+  if (newRank < 4 && u.extraAbilities?.includes('spirit-ascension')) {
+    u.extraAbilities = u.extraAbilities.filter((id) => id !== 'spirit-ascension');
   }
 }
 
