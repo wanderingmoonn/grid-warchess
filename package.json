@@ -29,6 +29,7 @@
     "probe:five": "node --experimental-strip-types scripts/probe-ai-five.ts",
     "probe:water": "node --experimental-strip-types scripts/probe-water.ts",
     "probe:quad": "node --experimental-strip-types scripts/probe-quad.ts",
+    "probe:composition": "node --experimental-strip-types scripts/probe-composition.ts",
     "arena": "node --experimental-strip-types scripts/arena-duel.ts",
     "dragoon": "node --experimental-strip-types scripts/dragoon-batch.ts",
     "adoption": "node --experimental-strip-types scripts/probe-adoption.ts",

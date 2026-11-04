@@ -30,6 +30,14 @@ const PARALLEL = Number(argOf('parallel', String(Math.min(25, os.cpus().length))
 const OLD = argOf('old', './baselines/ai-76f49ed.ts');
 const LEVEL = argOf('level', 'tactic');
 const CAP = argOf('cap', '160');
+/**
+ * `--policy greedy|hold`：把"新"那一侧换成固定打法脚本。
+ *
+ * 以前这里没转发，于是"AI 打人类套路"只能串行跑（5 秒一局，200 局十七分钟），
+ * 而串行正是每次验证都被拖成一次长跑的原因。加一行转发之后，
+ * 同一个问题从"要不要测"变成了"顺手测一下"。
+ */
+const POLICY = argOf('policy', '');
 
 const SEEDS = Math.ceil(GAMES / 2);
 /** 每片分几颗种子：尽量均分，末尾的片少一点 */
@@ -74,6 +82,7 @@ function run(slice: Slice): Promise<{ ok: boolean; win: number; lose: number; dr
         '--old', OLD,
         '--level', LEVEL,
         '--cap', CAP,
+        ...(POLICY ? ['--policy', POLICY] : []),
         ...(has('bare') ? ['--bare'] : []),
         ...(has('vs-new') ? ['--vs-new'] : []),
       ],
