@@ -55,6 +55,12 @@ export const RESOURCES: ResourceDef[] = [
   },
 ];
 
+/** 注册一种新资源。同 id 重复注册直接跳过——多局、HMR、多次 import 都安全。 */
+export function registerResource(def: ResourceDef): void {
+  if (RESOURCES.some((r) => r.id === def.id)) return;
+  RESOURCES.push(def);
+}
+
 export function resourceById(id: ResourceId): ResourceDef | undefined {
   return RESOURCES.find((r) => r.id === id);
 }
@@ -183,4 +189,19 @@ export function resourceSnapshot(players: Record<PlayerId, PlayerResources>): st
       return `${p}: 金 ${players[p].gold}${extra.length ? ' ' + extra.join(' ') : ''}`;
     })
     .join(' | ');
+}
+
+/** 
+ * 收入战报的格式化。
+ * 和 costLabel 的区别：价格要极简（金），收入要明确（金币），
+ * 并且多个资源之间用顿号隔开更符合中文语境。
+ */
+export function incomeLabel(income: ResourceCost): string {
+  const parts: string[] = [];
+  for (const [id, n] of Object.entries(income)) {
+    if (!n || n <= 0) continue;
+    // 战报里用全名（金币、粮食、灵石）
+    parts.push(`${n} ${resourceName(id)}`);
+  }
+  return parts.length > 0 ? parts.join('、') : '没有收入';
 }

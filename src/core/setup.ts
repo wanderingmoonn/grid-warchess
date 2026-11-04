@@ -22,7 +22,7 @@ import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
-
+import { registerResource } from './resources.ts';
 
 /**
  * 开局界面里的预设棋盘尺寸
@@ -192,6 +192,13 @@ export function createMatch(
       .map((id) => expansionById(id)?.citySize ?? 0),
   );
   const citySize = Math.max(CITY.size, Math.round(config.citySize ?? declaredCitySize));
+
+  // 本局启用的扩展带来的资源：注册到全局表，resourceById / costLabel / missingLabel 才认得出名字。
+  // 幂等，多局重复注册无害；没启用的包不注册，它的资源不会凭空出现名字。
+  for (const id of config.expansionIds) {
+    if (!liveExpansions.has(id)) continue;
+    for (const r of expansionById(id)?.resources ?? []) registerResource(r);
+  }
 
   /**
    * 这一局几家。

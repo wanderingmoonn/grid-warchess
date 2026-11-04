@@ -6,6 +6,8 @@ import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview } fr
 import { isCultivatorUnit } from './identity.ts';
 import { getExp, getRank, expForRank, getMaxHp, sumDeltaMaxHpUpTo, addExp, cleanupAfterRankDrop, REALMS } from './progression.ts';
 import { getSwordSweepReach } from './skills.ts';
+import { resOf, addRes } from '../resources.ts';
+import { SPIRIT_STONE } from './resources.ts';
 
 function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
   if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
@@ -273,4 +275,29 @@ registerSkillEffect('spirit-rebirth', (c) => {
   cleanupAfterRankDrop(self, newRank);
 
   c.result.log = `${originDef.name} 从灵体重塑肉身（降为 ${REALMS[newRank]} 期，恢复 ${self.hp} 点生命）`;
+});
+
+registerSkillReadyCheck('spirit-tower-shot', (s, u) => {
+  const p = s.players[u.owner];
+  if (resOf(p, SPIRIT_STONE) < 5) {
+    return '灵石不足（需要 5 灵石）';
+  }
+  return true;
+});
+
+registerSkillEffect('spirit-tower-shot', (c) => {
+  const cost = 5;
+  const p = c.state.players[c.self.owner];
+  if (resOf(p, SPIRIT_STONE) < cost) {
+    c.result.ok = false;
+    c.result.reason = `需要 ${cost} 灵石才能释放灵气`;
+    return;
+  }
+  
+  addRes(p, SPIRIT_STONE, -cost);
+  // 用 custom 存一个本回合的标记，过了这回合 state.turn 变了，条件自然失效
+  c.self.custom = { ...(c.self.custom ?? {}), burstBuffTurn: c.state.turn };
+  
+  const name = c.api.utype(c.state, c.self.type).name;
+  c.result.log = `${name} 消耗 ${cost} 灵石，灵气激荡，本回合获得 +3 次攻击次数`;
 });
