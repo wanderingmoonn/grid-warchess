@@ -1,7 +1,17 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import { isCultivatorUnit } from './identity.ts';
 import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
-import { atkModifier, armorModifier, RangeModifier, VisionModifier, attTimesModifier, SplashModifier, moveModifier } from './stats.ts';
+import { 
+  atkModifier, 
+  armorModifier, 
+  RangeModifier, 
+  VisionModifier, 
+  attTimesModifier, 
+  SplashModifier, 
+  moveModifier,
+  swordMul,
+  SWORD_BASE_MUL
+} from './stats.ts';
 import { getCultivationPanelLines } from './panel.ts';
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
@@ -16,27 +26,20 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		}
 	},
 	modifyDamage: ({ state, attacker, damage }) => {
-		if (!isCultivatorUnit(state, attacker)) return damage;
-		// 剑修：境界加成按模式缩放（普攻 ×0.8 / 剑气纵横 ×1.2）
-		const mul = attacker.type === 'sword-cultivator'
-		? (attacker.custom?.swordSweepActive === true ? 1.2 : 0.8)
-		: 1.0;
-		return damage + Math.floor(atkModifier(attacker) * mul);
-	},
-	// 攻城加成
+    if (!isCultivatorUnit(state, attacker)) return damage;
+    return damage + Math.floor(atkModifier(attacker) * swordMul(attacker));
+  },
 	modifySiegeDamage: ({ state, attacker, damage }) => {
-		if (!isCultivatorUnit(state, attacker)) return damage;
-		const mul = attacker.type === 'sword-cultivator'
-		? (attacker.custom?.swordSweepActive === true ? 1.2 : 0.8)
-		: 1.0;
-		return Math.max(0, damage + Math.floor(atkModifier(attacker) * mul));
-	},
-	// 面板修正
-	modifyStatAtk: ({ state, unit, atk }) => {
-		if (!isCultivatorUnit(state, unit)) return atk;
-		const mul = unit.type === 'sword-cultivator' ? 0.8 : 1.0;
-		return atk + Math.floor(atkModifier(unit) * mul);
-	},
+    if (!isCultivatorUnit(state, attacker)) return damage;
+    return Math.max(0, damage + Math.floor(atkModifier(attacker) * swordMul(attacker)));
+  },
+	// 面板显示的是「普攻期望」：不随剑气纵横开关跳动，所以固定用 SWORD_BASE_MUL，
+  // 不走 swordMul。这是策划决定，不是遗漏——改之前先确认需求。
+  modifyStatAtk: ({ state, unit, atk }) => {
+    if (!isCultivatorUnit(state, unit)) return atk;
+    const mul = unit.type === 'sword-cultivator' ? SWORD_BASE_MUL : 1.0;
+    return atk + Math.floor(atkModifier(unit) * mul);
+  },
 	// 护甲修正
 	modifyArmor: ({ state, defender, armor }) => {
 		if (!isCultivatorUnit(state, defender)) return armor;
@@ -55,7 +58,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 攻击次数
 	modifyAttacks: ({ state, unit, attacks }) => {
 		if (!isCultivatorUnit(state, unit)) return attacks;
-		return attTimesModifier(unit);
+		return attacks + attTimesModifier(unit);
 	},
 	// 溅射半径
 	modifySplash: ({ state, attacker, splash }) => {
@@ -94,7 +97,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			state.log.push({
 			turn: state.turn,
 			player,
-			text: `炼气士 寿元将尽，身体每况愈下。`,
+			text: `${state.unitTypes[u.type].name}寿元将尽，身体每况愈下。`,
 			});
 		}
 

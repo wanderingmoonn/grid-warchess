@@ -11475,7 +11475,7 @@ test('剑修：剑气纵横消耗攻击次数，伤害高于普攻', () => {
   const target = place2(s, 'B', 'militia', 5, 6);
   
   // 新增：给剑修15点经验，让他到达1级境界，让境界加成生效（atkModifier 从 0 变成 5）
-  sword.custom = { exp: 15 }; 
+  setCultivationExp(sword, 15); 
   
   s.current = 'A';
 

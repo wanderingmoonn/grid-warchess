@@ -4,7 +4,12 @@ import type { GameState, Unit } from '../types.ts';
 import { skillsOf } from '../types.ts';
 import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE } from './progression.ts';
 import { isCultivatorUnit } from './identity.ts';
-import { trueDamageOf } from './stats.ts';
+import { 
+  trueDamageOf,
+  SWORD_BASE_MUL,
+  SWORD_SWEEP_MUL,
+  attTimesModifier
+} from './stats.ts';
 import { getSwordSweepReach } from './skills.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
@@ -28,8 +33,8 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	];
 
 	if (unit.type === 'sword-cultivator') {
-	lines.push(`剑修：境界加成在普攻时 ×0.8，剑气纵横时 ×1.2`);
-	}
+    lines.push(`剑修：境界加成在普攻时 ×${SWORD_BASE_MUL}，剑气纵横时 ×${SWORD_SWEEP_MUL}`);
+  }
 
 	const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
 	if (hasSwordSweep) {
@@ -40,7 +45,11 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	if (rank > 0) {
 	const trueDmg = trueDamageOf(unit);
 	lines.push(
-			`境界加成：攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 攻击次数 ${Math.max(1, Math.floor((rank + 1) / 2))}`,
+			`境界加成：
+      攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 
+      护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 
+      射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 
+      攻击次数 +${attTimesModifier(unit)}`,
 	);
 	if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
 	}

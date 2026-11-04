@@ -14,7 +14,15 @@ const rankUpListeners: RankUpListener[] = [];
 export function onRankUp(fn: RankUpListener) {
   rankUpListeners.push(fn);
 }
-// -----------------------
+
+/**
+ * 【仅限测试/调试使用】
+ * 清空所有升级监听器，防止测试用例或热更新（HMR）时重复注册。
+ * 游戏正常运行中绝不要调用此函数。
+ */
+export function _resetRankUpListenersForTest(): void {
+  rankUpListeners.length = 0;
+}
 
 // 境界名称
 export const REALMS: string[] = ["凡人","炼气","筑基","金丹","元婴","化神","返虚","合体","大乘","渡劫"];
