@@ -5028,20 +5028,45 @@ export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
  * 它买到的是"我三步之后接不接得上"，不是"我能不能赢人"。
  */
 /**
- * 总开关。
+ * 总开关。**默认关**——不是因为它有害，是因为三次实测都没量出收益。
  *
- * 2026-11-04 实测：400 局配对 A/B 对"动手前那一版"是 **49.5%（z=-0.20）**——
- * 中性。机制在跑（34% 的决策进计划、15% 被翻盘），但换算不成胜率。
+ * | 配置 | 局数 | 计分胜率（对手＝动手前那一版） |
+ * |---|---:|---:|
+ * | K=2 / 1 轮 / 3 步 | 400 | 49.5%（z=-0.20） |
+ * | K=3 / 1 轮 / 6 步 | 240 | 49.6%（z=-0.13） |
+ * | 上一行 + 节奏项（位置估值） | 200 | 49.8%（z=-0.07） |
  *
- * 所以这一层的定位要写清楚：**它不是"变强的一刀"，是搜索的地基**。
- * 估值、克隆预算、确定性、门控都在这里做完了，下一步（更深的搜索 / 对手模型）
- * 从这儿往下接，而不是再发明一套。关掉它只需要把这里改成 false：
- * 一步决策从 ~80 ms 回到 ~7 ms，AI 自对弈快 5 倍。
+ * 三臂合计 840 局、49.6%。**深度翻倍、判据换掉，都没赢。**
+ * 唯一的确定性事实是成本：一条决策从 ~7 ms 涨到 80~250 ms，自对弈慢 5~20 倍。
+ *
+ * 所以：**留着当搜索的地基，默认关着**。估值、克隆预算、确定性、门控、
+ * 探针都在这里做完了，将来接 MCTS / 对手模型从这里往下走。
+ * 打开它：把下面这行改成 true（或按 docs/AI-2026-11-04-plan.md 调参）。
  */
-const PLAN_ON = true;
-const PLAN_K = 2;
-/** 每段模拟最多走几步：3 步够看出"兵死没死、城掉没掉"，再长就是在算走位细节 */
-const PLAN_STEPS = 3;
+const PLAN_ON = false;
+/**
+ * 候选几个、推多深。
+ *
+ * 2026-11-04 第一版是 K=2 / 1 轮 / 3 步，400 局中性（49.5%）。当时的判断是"太浅"，
+ * 因为一个回合真打起来十几步，3 步常常停在"部队还在路上"。
+ * 这一版加到 K=3 / 2 轮 / 6 步，同时把模拟里的 lookahead 关掉（那是重复付钱），
+ * 用省下来的时间换深度。
+ */
+const PLAN_K = 3;
+/** 每一轮里两侧各走几步 */
+const PLAN_STEPS = 6;
+/**
+ * 推几个"我→对面→我"的来回。
+ *
+ * 这里有个实测出来的天花板：**每多一轮，成本翻倍**，而成本的大头不在克隆
+ * （0.52 ms）也不在 lookahead（模拟里已经关掉），而在"每个模拟步都要把候选
+ * 全枚举一遍"——30 个单位、每单位十几种走法，一次就是几毫秒。
+ *
+ * 所以深度只能这么换：2 轮 × 6 步 = 单局 2.5 分钟（不可接受），
+ * 1 轮 × 6 步 = 单局约 1 分钟。先用后者把"深度到底有没有用"量出来，
+ * 再决定要不要为更深的搜索重写模拟策略（见文档第七节）。
+ */
+const PLAN_ROUNDS = 1;
 /**
  * 哪些动作值得付深推的钱。
  *
@@ -5097,7 +5122,33 @@ export function positionValue(s: GameState, me: PlayerId): number {
    * 保住自己一个兵，价值本来就该同权；0.9 是给"攻方略占便宜"留的一点余量。
    */
   const FOE_W = 0.9;
-  return cities.length * 120 + army - foe * FOE_W + s.players[me].gold * 0.35 + era * 40;
+  /*
+   * ── 节奏项：谁会先被打死 ──
+   *
+   * 上面四项都是"我现在有多少"，可这套规则里输赢是"谁的城先全丢"。
+   * 真实对局数据指得很清楚：AI 输的局里 打出的伤害 ÷ 承受的伤害 ≈ 0.25
+   * （三局明细：89/534、242/890、286/1119，见 docs/AI-2026-11-04-composition.md 第九节）。
+   * 它不是"兵不够"，是**站位让它一直在挨打而打不到人**。
+   *
+   * 而"我囤了多少"这个口径看不见这件事：一支站在对面刀口上的部队，
+   * 材料价值和一支安全的一样高。所以加一项：**对面下一回合能打掉我多少**，
+   * 减去**我下一回合能打掉它多少**。`foeOutput` 本来就有（采购那条线在用），
+   * 这里直接复用，不新造一套。
+   *
+   * 系数 0.25：一次完整对拼的价值量级是几十到一百多，0.25 让它足以压过
+   * "多囤一个便宜兵"（约 30~50），又不至于把整盘棋变成只看这一项。
+   */
+  const TEMPO_W = 0.25;
+  const threatOnMe = foeOutput(s, me);
+  const threatOnFoe = foeOutput(s, other(me));
+  return (
+    cities.length * 120 +
+    army -
+    foe * FOE_W +
+    s.players[me].gold * 0.35 +
+    era * 40 +
+    (threatOnFoe - threatOnMe) * TEMPO_W
+  );
 }
 
 export function foeOutput(s: GameState, me: PlayerId): number {
@@ -5413,7 +5464,13 @@ export function aiNextAction(
    * 剩下的差别只在前几名之间。初级档不推演——它连"谁更贵"都不算，
    * 给它这一层等于把两档的差距抹平。
    */
-  const lookahead = aiLevelOf(s) !== 'basic' && candidates.length > 1;
+  /*
+   * 模拟里不做这一步（`depth > 0`）：lookahead 是"这一步之后对面最狠的一刀"，
+   * 它的价值在于**单步决策**时补上对手反应；而在模拟里，外层的深推已经把
+   * 对面整回合走了一遍，这一层就是重复付钱——而且是最贵的那一笔
+   * （每个候选要 applyAction + foeOutput 各一次）。
+   */
+  const lookahead = depth === 0 && aiLevelOf(s) !== 'basic' && candidates.length > 1;
   const reply0 = lookahead ? foeOutput(view, me) : 0;
   const K = lookahead ? LOOKAHEAD_K : LOOKAHEAD_K * 2;
   const shortlist: Array<{ c: Candidate; v: number }> = [];
@@ -5464,12 +5521,15 @@ export function aiNextAction(
     const vals = probe.map((e) => {
       const a1 = applyAction(view, e.c.action);
       if (!a1.ok) return -Infinity;
-      // 我这一回合剩下的 + 对面一整回合 + 我下一回合的头几步
-      const s2 = simRound(a1.state, PLAN_STEPS, depth + 1);
-      if (s2.winner) return s2.winner === me ? 1e6 : -1e6;
-      const s3 = simSteps(s2, PLAN_STEPS, depth + 1);
-      if (s3.winner) return s3.winner === me ? 1e6 : -1e6;
-      return positionValue(s3, me) - base;
+      let st = a1.state;
+      // 我这一步 → （对面一整回合 → 我下一回合）× PLAN_ROUNDS
+      for (let r = 0; r < PLAN_ROUNDS; r += 1) {
+        st = simRound(st, PLAN_STEPS, depth + 1);
+        if (st.winner) return st.winner === me ? 1e6 : -1e6;
+        st = simSteps(st, PLAN_STEPS, depth + 1);
+        if (st.winner) return st.winner === me ? 1e6 : -1e6;
+      }
+      return positionValue(st, me) - base;
     });
     let bi = 0;
     for (let i = 1; i < vals.length; i += 1) if ((vals[i] ?? -Infinity) > (vals[bi] ?? -Infinity)) bi = i;
