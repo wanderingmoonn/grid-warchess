@@ -79,6 +79,21 @@ function classify(err: DbFailure | undefined): UploadResult {
     };
   }
 
+  // 触发器的结构校验没过（`warchess: …` 开头）。
+  //
+  // 2026-11-04 之前这里落到最后那条兜底，玩家看到的是
+  // "上传没成功：warchess: at most 2 sides"——一句纯给开发者看的话。
+  // 那次的原因正是校验函数按两人局写死：四人局的报告全被拒，而玩家完全不知道
+  // 是自己那份有问题还是网络有事。现在至少说清"是报告结构被拒"，并且明确
+  // "不是你打错了、也不是网断了"。
+  if (/^warchess: /.test(err?.message ?? '')) {
+    return {
+      ok: false,
+      reason: '这份报告没过服务端的结构校验，没能入库',
+      howTo: '报告本身不会被改坏，先「下载 .json」留着；把文件发给开发者时附上这句话就行。',
+    };
+  }
+
   return {
     ok: false,
     reason: `上传没成功：${err?.message ?? '网络不通'}`,

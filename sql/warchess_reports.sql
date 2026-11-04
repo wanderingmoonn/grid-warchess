@@ -153,8 +153,11 @@ begin
   if jsonb_typeof(new.sides) <> 'array' then
     raise exception 'warchess: sides must be a JSON array';
   end if;
-  if jsonb_array_length(new.sides) > 2 then
-    raise exception 'warchess: at most 2 sides';
+  -- 3/4 人局：2026-11-04 之前这里写死 2，导致三人四人局的报告**从来没传上来过**
+  -- （触发器直接 raise 'at most 2 sides'，玩家只看到"上传没成功"）。
+  -- 上限跟着 PLAYER_ORDER 走（A/B/C/D 四席）。
+  if jsonb_array_length(new.sides) > 4 then
+    raise exception 'warchess: at most 4 sides';
   end if;
 
   for i in 0 .. jsonb_array_length(new.sides) - 1 loop
@@ -187,8 +190,9 @@ begin
     raise exception 'warchess: bad expansion id %', left(k, 40);
   end if;
 
-  if new.winner is not null and new.winner not in ('A', 'B') then
-    raise exception 'warchess: winner must be A, B or null';
+  -- 同一处两人假设：C / D 赢了也要能入库
+  if new.winner is not null and new.winner not in ('A', 'B', 'C', 'D') then
+    raise exception 'warchess: winner must be A, B, C, D or null';
   end if;
 
   new.verdict := 'plausible';

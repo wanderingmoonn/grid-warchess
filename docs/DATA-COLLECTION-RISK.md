@@ -298,3 +298,34 @@ P0 五项已完成并上线（数据库改动先于客户端上线，顺序不�
 **还没做（P1）**：令牌桶全局限流、一次性邀请码、管理员隔离脚本、定期导出备份。
 **待你定稿**：《数据贡献说明》正式文案（当前 UI 那段是草稿，定稿后要把
 `REPORT_CONSENT_VERSION` 一起改版本号）。
+
+---
+
+## 2026-11-04：3 / 4 人局的报告从来没进过库（已修）
+
+**症状**：一局 4 人局上传失败，界面只显示"上传没成功"。库里 43 条报告里
+`player_count` 全是 2 或空，**一条 3/4 人局都没有**。
+
+**根因**：`warchess_reports_validate` 这个结构校验触发器是 2026-10-28 写的，
+当时只有两人局，于是两处写死：
+
+```sql
+if jsonb_array_length(new.sides) > 2 then raise exception 'warchess: at most 2 sides'; end if;
+if new.winner is not null and new.winner not in ('A','B') then raise exception ... end if;
+```
+
+而三人四人局是 10-29 才上线的——**上线之后每一份 3/4 人局报告都被这两句话直接拒掉**，
+玩家看到的是兜底文案"上传没成功：warchess: at most 2 sides"。
+
+**修法**（`sql/warchess_reports.sql`，已用 migrate 角色改到线上）：
+
+- 席位数上限 2 → 4（跟着 `PLAYER_ORDER` 走）；
+- 胜者白名单 `A,B` → `A,B,C,D`；
+- 客户端 `classify()` 补一条：`warchess:` 开头的错误单独归类成
+  "这份报告没过服务端的结构校验"，不再混进"网络不通"里。
+
+**验证**：把失败的那份（seed 1823152318，4 席 / 141 次行动 / 36 帧）用
+`npm run upload:report -- <file>.json` 补传，落库为 id=102、`verdict=plausible`。
+
+**代价**：10-29 到 11-04 之间所有 3/4 人局的数据都丢了，没法补。
+这段窗口内的多人局平衡分析只能重打。
