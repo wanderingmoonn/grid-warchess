@@ -58,21 +58,63 @@ if (!path) {
 const sinceIdx = process.argv.indexOf('--since');
 const since = sinceIdx > 0 ? process.argv[sinceIdx + 1] : undefined;
 
+/** 一个最简 RFC4180 切分：JSON 里全是逗号和引号，不做引号状态机一定切坏 */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i += 1; }
+        else quoted = false;
+      } else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * 三种格式都吃：
+ *   · JSON 数组（本地保存的 payload 列表，或 Supabase 导出的行）
+ *   · NDJSON（一行一条）
+ *   · CSV（Supabase 表格页右上角 Export → CSV；找 `payload` 那一列）
+ *
+ * CSV 之所以要单独处理：Supabase 把 jsonb 原样塞进一格，里面的引号会翻倍成 ""，
+ * 直接 JSON.parse 会报错。这里按引号状态机切列再还原，比"假装它是 JSON"可靠。
+ */
 function load(file: string): Report[] {
-  const raw = readFileSync(file, 'utf8').trim();
+  const raw = readFileSync(file, 'utf8').replace(/^\uFEFF/, '').trim();
   const out: Report[] = [];
   if (raw.startsWith('[')) {
     for (const row of JSON.parse(raw) as Array<Record<string, unknown>>) {
-      // Supabase 导出的是行；本地保存的是 payload 本身
       out.push((row.payload as Report) ?? (row as unknown as Report));
     }
     return out;
   }
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  // CSV：表头里必须有 payload 列
+  const head = splitCsvLine(lines[0] ?? '');
+  const col = head.findIndex((h) => h.trim() === 'payload');
+  if (col >= 0) {
+    for (const line of lines.slice(1)) {
+      const cells = splitCsvLine(line);
+      const cell = cells[col];
+      if (!cell) continue;
+      try { out.push(JSON.parse(cell) as Report); } catch { /* 跳过切坏的行 */ }
+    }
+    return out;
+  }
   // NDJSON
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const row = JSON.parse(line) as Record<string, unknown>;
-    out.push((row.payload as Report) ?? (row as unknown as Report));
+  for (const line of lines) {
+    try {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      out.push((row.payload as Report) ?? (row as unknown as Report));
+    } catch { /* 跳过 */ }
   }
   return out;
 }
