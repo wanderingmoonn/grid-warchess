@@ -1267,14 +1267,14 @@ export function canMove(u: Unit): boolean {
 }
 
 /**
- * 这个单位一回合能攻击几次（多动的次数）。
+ * 这个单位一回合能攻击几次。
  *
  * 兵种的 burst 是基数，扩展的 modifyAttacks 在它上面改。攻击次数、
  * 反击次数、界面上的显示都走这一个函数——三处各写一遍的话，
  * 以后改 hook 只改到两处，玩家就会看到"面板说 2 次，实际只打 1 次"。
  */
 export function attacksPerTurn(s: GameState, u: Unit): number {
-  let attacks = Math.max(1, utype(s, u.type).burst ?? 1);
+  let attacks = Math.max(0, utype(s, u.type).burst ?? 1);
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyAttacks) attacks = e.hooks.modifyAttacks({ state: s, unit: u, attacks });
   }
@@ -2874,7 +2874,8 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     const def = utype(s, b.type);
     // 多动：自动开火也要把这一回合的攻击次数打满。
     // 每一发都重新挑"最近的、血最少的"，所以打死一个会自动转火下一个。
-    let shots = Math.max(1, def.burst ?? 1);
+    let shots = attacksPerTurn(s, b);
+    if (shots <= 0) continue;
     let hits = 0;
     let totalDmg = 0;
     const hitNames = new Set<string>();

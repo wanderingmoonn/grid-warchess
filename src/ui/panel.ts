@@ -830,10 +830,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
         // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
         attacksPerTurn(s, selectedUnit) > 1
-          ? `<div class="info-row"><span>多动</span><b>还剩 ${attacksLeftOf(
+          ? `<div class="info-row"><span>攻击次数</span><b>还剩 ${attacksLeftOf(
               s,
               selectedUnit,
-            )} / ${attacksPerTurn(s, selectedUnit)} 次 · 每次各算一击</b></div>`
+            )} / ${attacksPerTurn(s, selectedUnit)} 次</b></div>`
           : ''
       }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}

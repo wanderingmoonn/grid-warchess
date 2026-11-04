@@ -70,8 +70,53 @@ export const SERVANT: UnitTypeDef = {
   maxHp: 20,
   range: 1,
   vision: 2,
-  builds: ['cultivation-spirit-field', 'cultivation-spirit-mine'],
+  builds: ['cultivation-spirit-field', 'cultivation-spirit-tower'],
   buildPower: 10,
+};
+export const DEACON: UnitTypeDef = {
+  id: 'cultivation-deacon',
+  name: '执事',
+  short: '执',
+  era: 3,
+  category: 'builder',
+  cost: 110,
+  move: 2,
+  atk: 6,
+  armor: 3,
+  maxHp: 25,
+  range: 1,
+  vision: 2,
+  builds: ['cultivation-spirit-field', 'cultivation-spirit-tower', 'cultivation-spirit-mine'],
+  buildPower: 18,
+};
+
+export const SPIRIT_TOWER: UnitTypeDef = {
+  id: 'cultivation-spirit-tower',
+  name: '灵石塔',
+  short: '灵',
+  era: 2,
+  category: 'building',
+  cost: 60,
+  costRes: { 'spirit-stone': 10 },
+  buildCost: 15,
+  move: 0,
+  atk: 12,
+  armor: 2,
+  maxHp: 28,
+  range: 4,
+  vision: 5,
+  autoAttack: true,
+  burst: 0,
+  skills: [
+    {
+      id: 'tower-charge',
+      name: '释放灵气',
+      summary: '本回合获得 +3 次攻击次数，消耗 5 灵石',
+      effect: 'spirit-tower-shot',
+      cooldown: 0,
+      multiCast: false, // 一回合只能开一次
+    }
+  ]
 };
 
 export const SPIRIT_FIELD: UnitTypeDef = {

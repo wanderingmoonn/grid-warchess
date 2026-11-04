@@ -58,8 +58,14 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	},
 	// 攻击次数
 	modifyAttacks: ({ state, unit, attacks }) => {
-		if (!isCultivatorUnit(state, unit)) return attacks;
-		return attacks + attTimesModifier(unit);
+    if (unit.type === 'cultivation-spirit-tower') {
+      if (unit.custom?.burstBuffTurn === state.turn) return 3;
+      return 0; 
+    }
+		if (isCultivatorUnit(state, unit)) {
+		  return attacks + attTimesModifier(unit);
+    }
+    return attacks;
 	},
 	// 溅射半径
 	modifySplash: ({ state, attacker, splash }) => {
