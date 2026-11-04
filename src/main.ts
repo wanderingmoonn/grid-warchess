@@ -38,6 +38,7 @@ import {
   idx,
   incomeOf,
   isAirborne,
+  orderDirectiveOf,
   ordersOf,
   orderSitesOf,
   planBothReady,
@@ -67,7 +68,7 @@ import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import { seatsOf } from './core/types.ts';
-import type { Action, GameState, PlayerId, Terrain, Unit } from './core/types.ts';
+import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
@@ -3761,6 +3762,54 @@ function refreshEstimates(): void {
  * 重建只在"队列内容 / 产兵点 / 在线与否 / 当前行动方"变化时发生：AI 每走一步
  * 都会 render()，无脑重建会把这排按钮在玩家点到一半时抽走。
  */
+/**
+ * 指挥官栏里的"策略 / 进攻方向"这一行。
+ *
+ * 为什么不和排产序列放一起：序列回答"造什么"，这里回答"怎么打"。两者改的频率也
+ * 不一样——序列每回合都在动，策略开局定一次、想起来才改。混在一行里，玩家会
+ * 以为策略也是"排一格"。
+ *
+ * 两处都从 `orderDirectiveOf` 读，所以刷新、读档、联机同步之后显示不会和实际行为脱节。
+ */
+function strategyRow(): string {
+  const dir = orderDirectiveOf(state, me());
+  const strat = dir.strategy;
+  const chip = (key: string, label: string, title: string) =>
+    `<button class="chip ${strat === key ? 'active' : ''}" data-cmd="strategy" data-strategy="${key}" title="${title}">${label}</button>`;
+
+  // 方向：自动 / 打某一家（多人局才有意义）/ 八向。两家局也留"打某一家"，
+  // 让两种模式的界面完全一致——它在那里的含义就是"盯着对面推"。
+  const t = dir.target;
+  const value = !t ? 'auto' : 'seat' in t ? `seat:${t.seat}` : `dir:${t.dx},${t.dy}`;
+  const seatOpts = seatsOf(state)
+    .filter((x) => x !== me())
+    .map((x) => `<option value="seat:${x}" ${value === `seat:${x}` ? 'selected' : ''}>只打 ${x} 方</option>`)
+    .join('');
+  const dirs: Array<[number, number, string]> = [
+    [0, -1, '北'], [1, -1, '东北'], [1, 0, '东'], [1, 1, '东南'],
+    [0, 1, '南'], [-1, 1, '西南'], [-1, 0, '西'], [-1, -1, '西北'],
+  ];
+  const dirOpts = dirs
+    .map(([dx, dy, label]) => `<option value="dir:${dx},${dy}" ${value === `dir:${dx},${dy}` ? 'selected' : ''}>朝${label}推</option>`)
+    .join('');
+
+  return `
+    <span class="cmd-plan-label">策略</span>
+    <span class="cmd-plan-chips">
+      ${chip('auto', '自动', '交给 AI 自己判断打还是发展')}
+      ${chip('rush', '猛攻', '全力进攻：不管经营，兵一出来就往前压')}
+      ${chip('boom', '经营', '先发展：攒钱、升城、补经济，只在必要时接战')}
+      ${chip('hold', '屯兵不动', '不出击：只在自己城下迎击，兵攒着，生产照常')}
+    </span>
+    <label class="cmd-plan-dir">方向
+      <select data-cmd="dir" aria-label="进攻方向">
+        <option value="auto" ${value === 'auto' ? 'selected' : ''}>自动</option>
+        ${seatOpts}
+        ${dirOpts}
+      </select>
+    </label>`;
+}
+
 function renderCommander(): void {
   if (!commanderActive()) {
     commanderEl.hidden = true;
@@ -3796,10 +3845,18 @@ function renderCommander(): void {
   const sites = orderSitesOf(state, me());
   const slots = CONFIG.commanderSlots;
   const online = room !== null;
-  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态
-  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${
-    state.orderReady?.A === true ? 'A' : ''
-  }${state.orderReady?.B === true ? 'B' : ''}`;
+  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态。
+  // 策略与方向也要进：改了策略却不重画，玩家点了"屯兵不动"界面还停在"自动"。
+  const curDir = orderDirectiveOf(state, me());
+  const dirKey = !curDir.target
+    ? 'auto'
+    : 'seat' in curDir.target
+      ? `s${curDir.target.seat}`
+      : `d${curDir.target.dx},${curDir.target.dy}`;
+  const readyKey = seatsOf(state)
+    .map((x) => (state.orderReady?.[x] === true ? x : '-'))
+    .join('');
+  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${curDir.strategy}|${dirKey}|${readyKey}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -3877,6 +3934,7 @@ function renderCommander(): void {
           : `已排 ${queue.length} / ${slots}`
       }</span>
     </div>
+    <div class="cmd-plan">${strategyRow()}</div>
     <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
@@ -3931,6 +3989,38 @@ commanderEl.addEventListener('click', (e) => {
   if (cmd === 'clear') {
     dispatch({ type: 'SET_ORDERS', queue: [], sites: [] });
   }
+  if (cmd === 'strategy') {
+    const key = el.closest<HTMLElement>('[data-strategy]')?.dataset.strategy;
+    if (!key) return;
+    const cur = orderDirectiveOf(state, me());
+    // 只改策略、保留已选的进攻方向：这两件事是分开定的，改一个不该把另一个清掉
+    dispatch({
+      type: 'SET_DIRECTIVE',
+      directive: { strategy: key as OrderDirective['strategy'], ...(cur.target ? { target: cur.target } : {}) },
+    });
+  }
+});
+
+/*
+ * 进攻方向用下拉框，所以走 change 而不是 click。
+ *
+ * 下拉是原生控件：点它不会触发按钮那套 `[data-cmd]` 逻辑，混在一起会互相吞事件。
+ */
+commanderEl.addEventListener('change', (e) => {
+  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-cmd="dir"]');
+  if (!sel) return;
+  const cur = orderDirectiveOf(state, me());
+  const v = sel.value;
+  let target: OrderDirective['target'];
+  if (v.startsWith('seat:')) target = { seat: v.slice(5) as PlayerId };
+  else if (v.startsWith('dir:')) {
+    const [dx, dy] = v.slice(4).split(',').map(Number);
+    target = { dx: dx ?? 0, dy: dy ?? 0 };
+  }
+  dispatch({
+    type: 'SET_DIRECTIVE',
+    directive: { strategy: cur.strategy, ...(target ? { target } : {}) },
+  });
 });
 
 /**

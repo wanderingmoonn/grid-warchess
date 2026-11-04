@@ -73,6 +73,7 @@ import {
   xyOf,
 } from './rules.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
+import { orderDirectiveOf } from './rules.ts';
 import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
@@ -381,6 +382,11 @@ function primaryFoe(s: GameState, p: PlayerId): PlayerId {
 
 export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const me = s.current;
+  /*
+   * 指挥官模式里人类定的策略与进攻方向。普通对局恒为 `{ strategy: 'auto' }`，
+   * 下面所有覆盖分支都不会走，行为与这个机制上线前完全一致。
+   */
+  const directive = orderDirectiveOf(s, me);
   const my = unitsOf(s, me);
   // 多人局里"对面"是一群人，mood 关心的是"我打不打得过他们加起来"，所以求和
   const foe = enemyUnitsOf(s, me);
@@ -431,7 +437,38 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   //  看同一个目标——两边各算一次的话，boom 收兵回防了、打分还在往老方向推。）
   const nearestOwn = (c: City): number =>
     my.reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
-  const focusCity = foeCities.reduce<City | null>((best, c) => {
+  /*
+   * 进攻方向：玩家点了"打某一家"或"朝某个方向推"时，先把目标城收窄成那一批，
+   * 再走原来的"血最少、最近"规则。收窄之后一座都不剩就退回全量——
+   * 宁可打偏，也不能让"方向猜错了"把整支军队钉在原地不动。
+   */
+  const focusPool = (() => {
+    const t = directive.target;
+    if (!t) return foeCities;
+    if ('seat' in t) {
+      const mine = foeCities.filter((c) => c.owner === t.seat);
+      return mine.length > 0 ? mine : foeCities;
+    }
+    // 以我方各城的重心为原点，只留下落在该方向 ±60° 内的敌城
+    const origin = myCities.length > 0
+      ? {
+          x: myCities.reduce((n, c) => n + c.x, 0) / myCities.length,
+          y: myCities.reduce((n, c) => n + c.y, 0) / myCities.length,
+        }
+      : my.length > 0
+        ? { x: my[0]!.x, y: my[0]!.y }
+        : null;
+    if (!origin) return foeCities;
+    const dlen = Math.hypot(t.dx, t.dy) || 1;
+    const along = foeCities.filter((c) => {
+      const vx = c.x - origin.x;
+      const vy = c.y - origin.y;
+      const len = Math.hypot(vx, vy) || 1;
+      return (vx * t.dx + vy * t.dy) / (len * dlen) >= 0.5;
+    });
+    return along.length > 0 ? along : foeCities;
+  })();
+  const focusCity = focusPool.reduce<City | null>((best, c) => {
     if (!best) return c;
     if (c.hp !== best.hp) return c.hp < best.hp ? c : best;
     return nearestOwn(c) < nearestOwn(best) ? c : best;
@@ -585,11 +622,24 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
     boom: raw.boom ** 1.7,
   };
   const sum = sharp.rush + sharp.harass + sharp.boom;
-  const weight: Record<AiDoctrine, number> = {
+  let weight: Record<AiDoctrine, number> = {
     rush: sum > 0 ? sharp.rush / sum : 1 / 3,
     harass: sum > 0 ? sharp.harass / sum : 1 / 3,
     boom: sum > 0 ? sharp.boom / sum : 1 / 3,
   };
+  /*
+   * 人类点名的策略**压过** AI 自己的判断。
+   *
+   * 这就是这个机制存在的意义：AI 的判断是概率性的权重，玩家要的是"我说打就打"。
+   * 所以不叠加、不折中——直接换成硬权重，剩下的一点余量留给 harass，
+   * 免得"猛攻"变成"一根筋冲正面"。
+   *
+   * hold（屯兵不动）落在 boom 上：生产、升级、攒钱照常，只是不出击；
+   * 出击与否由 `aiNextAction` 的过滤层管，两支笔分开写，各自都能读。
+   */
+  if (directive.strategy === 'rush') weight = { rush: 0.85, harass: 0.1, boom: 0.05 };
+  else if (directive.strategy === 'boom') weight = { rush: 0.05, harass: 0.05, boom: 0.9 };
+  else if (directive.strategy === 'hold') weight = { rush: 0, harass: 0, boom: 1 };
   // 平手时按底色断：这就是"没有信号时按性格来"
   const lead = DOCTRINES.reduce<AiDoctrine>(
     (best, d) => (weight[d] > weight[best] ? d : best),
@@ -639,7 +689,10 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   const doomKeptSafe = !doom || keptMinDist(doom.id)>=4;
   const gambitArmed = gambitOk && canCashIn && !doom && weight.boom>=0.5 && !!sacrifice && !sacrifice.core;
   const abandonedCityId =
-    weight.boom >= 0.42 && doom && !doom.core && canCashIn && trulyLost
+    // 屯兵不动 = 死守，不弃城：这条是玩家亲口定的，优先于 AI 的弃城判断
+    directive.strategy === 'hold'
+      ? null
+      : weight.boom >= 0.42 && doom && !doom.core && canCashIn && trulyLost
       && doomKeptSafe
       ? doom.id
       : gambitArmed
@@ -5137,7 +5190,7 @@ function simSteps(s: GameState, steps: number, depth: number): GameState {
   let cur = s;
   for (let i = 0; i < steps; i += 1) {
     if (cur.winner) break;
-    const a = aiNextAction(cur, { ...DEFAULT_BUDGET, maxRecruit: 1, maxUpgrade: 0 }, new Set(), depth);
+    const a = aiNextActionCore(cur, { ...DEFAULT_BUDGET, maxRecruit: 1, maxUpgrade: 0 }, new Set(), depth);
     if (!a) break;
     const r = applyAction(cur, a);
     if (!r.ok) break;
@@ -5240,7 +5293,7 @@ function outputFrom(s: GameState, shooters: Unit[], targets: Unit[]): number {
   return total;
 }
 
-export function aiNextAction(
+function aiNextActionCore(
   s: GameState,
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
@@ -5636,6 +5689,62 @@ export function aiNextAction(
     if (pick) return pick.c.action;
   }
   return best.c.action;
+}
+
+/**
+ * 屯兵不动的"守家半径"：单位离自家城超过这么远就算出击。
+ *
+ * 4 格是这么定的：远程兵（射程 3）站在城下能覆盖到 4~5 格，再往外走就是
+ * 拿肉身去换视野了。屯兵不动要的是"不送"，不是"缩在城里一兵不出"——
+ * 敌人贴着城墙打，该还手还是要还手。
+ */
+const HOLD_RADIUS = 4;
+
+/** 这个动作算不算"出击"（屯兵不动模式下要否掉的那些） */
+function isOffensive(s: GameState, me: PlayerId, a: Action): boolean {
+  const myCities = citiesOf(s, me).filter((c) => !c.ruined);
+  if (myCities.length === 0) return false;
+  const nearHome = (x: number, y: number): boolean =>
+    myCities.some((c) => Math.hypot(c.x - x, c.y - y) <= HOLD_RADIUS);
+  if (a.type === 'MOVE') return !nearHome(a.x, a.y);
+  if (a.type === 'ATTACK') {
+    const t = s.units.find((u) => u.id === a.targetId);
+    return !!t && !nearHome(t.x, t.y);
+  }
+  if (a.type === 'SIEGE') {
+    const c = s.cities.find((x) => x.id === a.cityId);
+    return !!c && !nearHome(c.x, c.y);
+  }
+  // 建造/产兵/升级/结束回合都不算出击
+  return false;
+}
+
+/**
+ * AI 的对外入口：先让 core 决定这一手，再按玩家点的策略过一道闸。
+ *
+ * 目前只有 `hold` 需要这道闸——它是**否定式**的规则（"别干这个"），
+ * 塞进评分里要在每个评分点上写一遍，而否定式天然适合放在出口处。
+ * 做法是借 core 已有的 `rejected` 机制：否掉一个、再问一次，直到它给出一个守家的动作。
+ */
+export function aiNextAction(
+  s: GameState,
+  budget: AiBudget = DEFAULT_BUDGET,
+  rejected: ReadonlySet<string> = new Set(),
+  depth = 0,
+): Action | null {
+  const me = s.current;
+  if (orderDirectiveOf(s, me).strategy !== 'hold') {
+    return aiNextActionCore(s, budget, rejected, depth);
+  }
+  const blocked = new Set(rejected);
+  for (let i = 0; i < 24; i++) {
+    const a = aiNextActionCore(s, budget, blocked, depth);
+    if (!a) return null;
+    if (a.type === 'END_TURN' || !isOffensive(s, me, a)) return a;
+    blocked.add(aiActionKey(a));
+  }
+  // 全都算出击动作：这一回合不打了，直接交棒（屯兵不动宁可空过也不送）
+  return { type: 'END_TURN' };
 }
 
 export { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiLevelLabel, isAiSide, anyAiSide } from './ai-meta.ts';

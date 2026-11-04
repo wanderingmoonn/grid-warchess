@@ -1353,6 +1353,23 @@ export interface AiIntent {
   seen: number;
 }
 
+/**
+ * 指挥官模式里人类下达的"怎么打"。
+ *
+ * 和 `orders`（造什么）分开：那个是一格一格的排期，这个是整场的一句话。
+ * 两者都是玩家的决定，都由 AI 执行，因此都要进状态。
+ */
+export interface OrderDirective {
+  /** auto = 交给 AI 判断；rush = 猛攻；boom = 经营；hold = 屯兵不动 */
+  strategy: 'auto' | 'rush' | 'boom' | 'hold';
+  /**
+   * 进攻方向。不填＝AI 自己挑目标（默认）。
+   *   · `seat`：只朝这一家的城推（多人局里"先打谁"）；
+   *   · `dx/dy`：八向之一，取 -1/0/1，两个不能同时为 0。
+   */
+  target?: { seat: PlayerId } | { dx: number; dy: number };
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1401,6 +1418,19 @@ export interface GameState {
    * 旧存档没有这个字段，读出来是 undefined，语义正好等于"全部不指定"。
    */
   orderSites?: Partial<Record<PlayerId, string[]>>;
+  /**
+   * 指挥官模式：人类给这一方定的**策略**与**进攻方向**。
+   *
+   * 和 `orders` 是两回事：序列说"造什么"，这里说"怎么打"。
+   *   · strategy：auto = 让 AI 自己判断；rush = 猛攻；boom = 经营；
+   *     hold = 屯兵不动（不主动出击，只在自己城下迎击，生产照常）；
+   *   · target：不填 = AI 自己挑目标；`{ seat }` = 专打某一家（多人局）；
+   *     `{ dx, dy }` = 朝某个罗盘方向推。
+   *
+   * 为什么也进状态：它直接改变 AI 的行为，而 AI 的每一步都要能重放/联机同步；
+   * 放在界面里会让"刷新一下打法就忘了"。普通对局没有这个字段。
+   */
+  orderDirectives?: Partial<Record<PlayerId, OrderDirective>>;
   /**
    * AI 的跨回合意图：**这一方正在攒什么**。
    *
@@ -1606,6 +1636,14 @@ export type Action =
    * 它指的是"升这一座城"。
    */
   | { type: 'SET_ORDERS'; queue: string[]; sites?: string[] }
+  /**
+   * 指挥官模式：定这一方"怎么打"——策略与进攻方向。
+   *
+   * 和 SET_ORDERS 分开，是因为两者改的节奏不一样：序列是逐格调整（点一次加一格），
+   * 策略是整场一句话（开局定一次、想起来才改）。合成一个动作的话，改策略要连带
+   * 把整条序列重发一遍，联机时等于每次改策略都覆盖一次对面的进度。
+   */
+  | { type: 'SET_DIRECTIVE'; directive: OrderDirective }
   /**
    * 遣散/拆除：把自己场上的一个单位或建筑清掉，回收一部分造价。
    *

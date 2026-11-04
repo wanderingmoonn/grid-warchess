@@ -2771,6 +2771,56 @@ a.btn {
   display: none;
 }
 
+/*
+ * 指挥官栏的"策略 / 进攻方向"这一行。
+ *
+ * 和下面那排队列格分开：队列是"造什么"，这一行是"怎么打"，中间留一道细线，
+ * 免得玩家以为策略也是一格排期。小屏上会折行，所以用 flex-wrap 而不是 nowrap。
+ */
+.cmd-plan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.cmd-plan-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cmd-plan-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cmd-plan-chips .chip {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.cmd-plan-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.cmd-plan-dir select {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .cmd-head {
   display: flex;
   align-items: baseline;

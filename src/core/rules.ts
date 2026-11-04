@@ -103,6 +103,7 @@ import type {
   Element,
   FallenRecord,
   GameState,
+  OrderDirective,
   SkillDef,
   PlayerId,
   ResourceId,
@@ -3183,6 +3184,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doUpgrade(next, action.cityId);
       case 'SET_ORDERS':
         return doSetOrders(next, action.queue, action.sites);
+      case 'SET_DIRECTIVE':
+        return doSetDirective(next, action.directive);
       case 'PLAN_COMMIT':
         return doPlanCommit(next);
       case 'PLAN_END':
@@ -4447,6 +4450,17 @@ function doRecruit(
 /**
  * 指挥官模式下这一方的生产序列（只读副本）。普通对局返回空数组。
  */
+/**
+ * 指挥官模式下这一方"怎么打"：策略 + 进攻方向。
+ *
+ * 普通对局、或者玩家没定过，一律返回 `{ strategy: 'auto' }`——也就是"AI 按自己的
+ * 判断来"，和这个机制上线之前的行为完全一致。所以老存档、旧回放读出来都不变。
+ */
+export function orderDirectiveOf(s: GameState, player: PlayerId): OrderDirective {
+  if (!s.config.commanderMode) return { strategy: 'auto' };
+  return s.orderDirectives?.[player] ?? { strategy: 'auto' };
+}
+
 export function ordersOf(s: GameState, player: PlayerId): string[] {
   return [...(s.orders?.[player] ?? [])];
 }
@@ -4498,6 +4512,44 @@ export function orderSiteProblem(s: GameState, player: PlayerId, site: string): 
  * `sites` 与 `queue` 逐格对齐。空位上的 `sites` 一律抹成空串：那一格既然
  * "这回合什么都不造"，留着产兵点只会在界面回显时对不上。
  */
+/**
+ * 定这一方的作战策略与进攻方向。
+ *
+ * 三件事要挡住：
+ *   ① 普通对局没有这套东西（和 SET_ORDERS 同一道闸，理由一样）；
+ *   ② 方向不能朝自己（"专打自己"没有意义，多半是界面传错了）；
+ *   ③ 方向与目标只能填一种——两个都填的话，AI 不知道听哪个。
+ */
+function doSetDirective(s: GameState, directive: OrderDirective): ActionResult {
+  if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战策略' };
+
+  const strategy = directive?.strategy ?? 'auto';
+  if (strategy !== 'auto' && strategy !== 'rush' && strategy !== 'boom' && strategy !== 'hold') {
+    return { ok: false, reason: `不认识的策略：${String(strategy)}` };
+  }
+
+  let target = directive?.target;
+  if (target) {
+    if ('seat' in target) {
+      if (!seatsOf(s).includes(target.seat)) return { ok: false, reason: '没有这个席位' };
+      if (target.seat === s.current) return { ok: false, reason: '进攻方向不能定成自己' };
+    } else {
+      const dx = Math.sign(target.dx ?? 0);
+      const dy = Math.sign(target.dy ?? 0);
+      if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+        return { ok: false, reason: '方向得有一个朝向（八个方向之一）' };
+      }
+      target = { dx, dy };
+    }
+  }
+
+  s.orderDirectives = {
+    ...(s.orderDirectives ?? {}),
+    [s.current]: target ? { strategy, target } : { strategy },
+  };
+  return { ok: true, state: s };
+}
+
 function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionResult {
   if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有生产序列' };
 

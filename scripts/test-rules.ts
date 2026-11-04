@@ -218,6 +218,7 @@ import {
   incomeResOf,
   movePower,
   orderSitesOf,
+  orderDirectiveOf,
   ordersOf,
   planBothReady,
   heroBlocked,
@@ -7953,6 +7954,82 @@ function commandPost(extra?: Partial<MatchConfig>): GameState {
   s.players.A.gold = 1000;
   return s;
 }
+
+test('指挥官策略：只能挑对手当目标，方向必须有一个朝向，普通局不接受', () => {
+  const s = commandPost();
+  // 合法：只改策略
+  const ok = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'rush' } });
+  assert.ok(ok.ok, ok.ok ? '' : ok.reason);
+  assert.equal(orderDirectiveOf(ok.state, 'A').strategy, 'rush', '策略要落到状态里');
+
+  // 合法：只打对手（两家局里对手只有一个）
+  const seat = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { seat: 'B' } } });
+  assert.ok(seat.ok, seat.ok ? '' : seat.reason);
+  assert.deepEqual(orderDirectiveOf(seat.state, 'A').target, { seat: 'B' });
+
+  // 合法：八向之一
+  const dir = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { dx: -1, dy: 0 } } });
+  assert.ok(dir.ok, dir.ok ? '' : dir.reason);
+  assert.deepEqual(orderDirectiveOf(dir.state, 'A').target, { dx: -1, dy: 0 }, '方向要归一化成 -1/0/1');
+
+  // 不合法：打自己、方向全零、没开指挥官模式的局
+  assert.equal(
+    applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { seat: 'A' } } }).ok,
+    false,
+    '不能把进攻方向定成自己',
+  );
+  assert.equal(
+    applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { dx: 0, dy: 0 } } }).ok,
+    false,
+    '方向得有一个朝向',
+  );
+  assert.equal(
+    applyAction(fresh(), { type: 'SET_DIRECTIVE', directive: { strategy: 'rush' } }).ok,
+    false,
+    '普通对局没有这套东西',
+  );
+});
+
+test('指挥官策略「屯兵不动」：远处的部队不会被派出去送', () => {
+  /*
+   * 造反例：把唯一的兵放到贴着敌城的远处。
+   *   · auto：它会去打（这正是"自己判断"的样子）；
+   *   · hold：它一步都不走——远处任何一个动作都算出击，宁可空过。
+   * 两条放在一起比，"屯兵不动"是不是真的生效才看得出来；
+   * 只断言 hold 不越界的话，部队本来就待在城下时那条断言是白给的。
+   */
+  const stage = (strategy: 'auto' | 'hold') => {
+    const s0 = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 1, commanderMode: true, aiOpponent: true },
+      9101,
+    );
+    const foeCity = s0.cities.find((c) => c.owner === 'B')!;
+    s0.units = s0.units.filter((u) => u.owner !== 'A');
+    s0.units.push({
+      id: 'ua1',
+      type: 'archer',
+      owner: 'A',
+      x: foeCity.x + 1,
+      y: foeCity.y,
+      hp: 22,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+    const set = applyAction(s0, { type: 'SET_DIRECTIVE', directive: { strategy } });
+    assert.ok(set.ok, set.ok ? '' : set.reason);
+    return set.state;
+  };
+
+  const auto = aiNextAction(stage('auto'), DEFAULT_BUDGET);
+  assert.ok(auto && auto.type !== 'END_TURN', 'auto 策略下它会主动出手');
+
+  const hold = aiNextAction(stage('hold'), DEFAULT_BUDGET);
+  assert.ok(
+    hold === null || hold.type === 'END_TURN',
+    `屯兵不动不该把远处的部队派出去，实际给了 ${hold?.type}`,
+  );
+});
 
 test('普通对局不接受生产序列', () => {
   const s = fresh();

@@ -2455,8 +2455,13 @@ check('指挥官模式开局后，顶端是一条生产队列（初始 5 个空�
   assert.ok((bar.textContent ?? '').includes('参谋部'), '标题应该是参谋部');
   assert.equal(bar.querySelectorAll('.cmd-chip.is-empty').length, 5, '应该有 5 个空位');
   assert.ok(bar.querySelector('[data-cmd="run"]'), '应该有执行按钮');
-  // 旧那套下拉编辑器已经拆掉：两条入口并存只会让人犹豫该用哪个
-  assert.equal(bar.querySelectorAll('select').length, 0, '顶端不该再有下拉框');
+  // 旧那套 5×2 的下拉编辑器已经拆掉：两条入口并存只会让人犹豫该用哪个。
+  // 只留「进攻方向」这一个下拉——它是给 AI 下命令，不是排产。
+  assert.equal(
+    bar.querySelectorAll('select:not([data-cmd="dir"])').length,
+    0,
+    '除了进攻方向，顶端不该再有下拉框',
+  );
   assert.equal(bar.querySelectorAll('[data-act="cmd-pack"]').length, 0, '顶端也不该再有包筛选');
 });
 
@@ -2638,6 +2643,55 @@ check('「升级时代」也能排进队列；队列满了按钮就禁用', () =
     doc.querySelector<HTMLButtonElement>('#side .upgrade-btn')?.disabled,
     '升级按钮也要一起禁掉：它排的也是同一批格子',
   );
+});
+
+check('指挥官栏能定「策略」与「进攻方向」，并且落到 state 里', () => {
+  const bar = () => doc.querySelector<HTMLElement>('#commander')!;
+  const chip = (key: string) =>
+    bar().querySelector<HTMLElement>(`[data-cmd="strategy"][data-strategy="${key}"]`);
+  const read = () =>
+    JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+      orderDirectives?: Record<string, { strategy?: string; target?: unknown }>;
+    };
+
+  for (const key of ['auto', 'rush', 'boom', 'hold']) {
+    assert.ok(chip(key), `应该有「${key}」这颗策略按钮`);
+  }
+
+  // 点「屯兵不动」：状态要落盘，界面要跟上选中态
+  chip('hold')!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(read().orderDirectives?.A?.strategy, 'hold', '策略要写进 state（AI 执行时读的就是它）');
+  assert.ok(chip('hold')!.classList.contains('active'), '选中态要跟着切过去');
+
+  // 改进攻方向：下拉走 change 事件
+  const sel = bar().querySelector<HTMLSelectElement>('select[data-cmd="dir"]');
+  assert.ok(sel, '应该有进攻方向下拉');
+  sel!.value = 'seat:B';
+  sel!.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(
+    read().orderDirectives?.A?.target,
+    { seat: 'B' },
+    '方向要写进 state；两家局里这一项就是"盯着对面推"',
+  );
+  assert.equal(
+    read().orderDirectives?.A?.strategy,
+    'hold',
+    '改方向不该把已经选好的策略清掉——两件事分开定',
+  );
+
+  // 换一个八向，确认枚举值也是同一条路
+  const sel2 = bar().querySelector<HTMLSelectElement>('select[data-cmd="dir"]')!;
+  sel2.value = 'dir:-1,0';
+  sel2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(read().orderDirectives?.A?.target, { dx: -1, dy: 0 }, '八向也要能存');
+
+  // 收尾：改回自动，免得影响后面几条用例
+  chip('auto')!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const sel3 = bar().querySelector<HTMLSelectElement>('select[data-cmd="dir"]')!;
+  sel3.value = 'auto';
+  sel3.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.equal(read().orderDirectives?.A?.strategy, 'auto');
+  assert.equal(read().orderDirectives?.A?.target, undefined, '自动＝不带方向');
 });
 
 await checkAsync('点「执行 5 回合」先进进度态，可以中断', async () => {
