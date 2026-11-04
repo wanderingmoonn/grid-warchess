@@ -13,6 +13,7 @@ import {
   SWORD_BASE_MUL
 } from './stats.ts';
 import { getCultivationPanelLines } from './panel.ts';
+import { SPIRIT_STONE } from './resources.ts';
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
   // 1. 击杀敌人获得经验
@@ -70,6 +71,23 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		if (!isCultivatorUnit(state, unit)) return move;
 		return move + moveModifier(unit);
 	},
+  modifyYield: ({ state, unit, yields }) => {
+    if (unit.type !== 'cultivation-spirit-mine') return yields;
+    let mountainCount = 0;
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const [dx, dy] of dirs) {
+      const tile = state.tiles[(unit.y + dy) * state.w + (unit.x + dx)];
+      if (tile && tile.terrain === 'mountain') {
+        mountainCount++;
+      }
+    }
+    if (mountainCount > 0) {
+      // 每相邻一座高山，额外 +2 灵石
+      const bonus = mountainCount * 2;
+      yields[SPIRIT_STONE] = (yields[SPIRIT_STONE] ?? 0) + bonus;
+    }
+    return yields;
+  },
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
 		for (const u of state.units) {

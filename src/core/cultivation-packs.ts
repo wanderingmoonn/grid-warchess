@@ -12,7 +12,14 @@
 import type { Expansion } from './expansions.ts';
 
 import { getSwordSweepReach } from './cultivation/skills.ts';
-import { SPIRIT_CULTIVATOR, CULTIVATOR, SWORD_CULTIVATOR } from './cultivation/units.ts';
+import { 
+  SPIRIT_CULTIVATOR, 
+  CULTIVATOR, 
+  SWORD_CULTIVATOR,
+  SERVANT,
+  SPIRIT_FIELD,
+  SPIRIT_MINE
+} from './cultivation/units.ts';
 import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
 import { SPIRIT_STONE_DEF } from './cultivation/resources.ts';
@@ -29,7 +36,14 @@ export const CULTIVATION_PACK: Expansion = {
   scale: 'large',
   hooks: CULTIVATION_HOOKS,
   abilities: [QI_TRUE_DAMAGE, SPIRIT_ASCENSION],
-  units: [CULTIVATOR, SWORD_CULTIVATOR, SPIRIT_CULTIVATOR],
+  units: [
+    CULTIVATOR, 
+    SWORD_CULTIVATOR, 
+    SPIRIT_CULTIVATOR,
+    SERVANT, 
+    SPIRIT_FIELD, 
+    SPIRIT_MINE
+  ],
   resources: [SPIRIT_STONE_DEF],
 };
 
