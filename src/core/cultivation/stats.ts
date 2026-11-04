@@ -26,8 +26,8 @@ export function trueDamageOf(u: Unit): number {
 // x=0~2 -> 1次，x=3~4 -> 2次，x=5~6 -> 3次，x=7~8 -> 4次，x=9 -> 5次。
 export function attTimesModifier(u: Unit): number {
   const rank = getRank(u);
-  const realmsModifier = (rank + 1) / 2;
-  return Math.max(1, Math.floor(realmsModifier));
+  const realmsModifier = (rank - 1) / 2;
+  return Math.max(0, Math.floor(realmsModifier));
 }
 
 /** 生命修正 */
@@ -69,4 +69,15 @@ export function VisionModifier(u: Unit): number {
   const aging = getAgingYears(u);
   const realmsModifier = rank;
   return Math.floor(realmsModifier-aging);
+}
+
+// ── 剑修伤害倍率 ──────────────────────────────────
+// 普攻 ×0.8，剑气纵横期间 ×1.2；非剑修 ×1.0。
+// 抽在这里是为了让 hooks.ts（伤害/攻城/面板修正）和 panel.ts（文案）
+// 共用同一份规则，改倍率只改这里。
+export const SWORD_BASE_MUL = 0.8;
+export const SWORD_SWEEP_MUL = 1.2;
+export function swordMul(u: Unit): number {
+  if (u.type !== 'sword-cultivator') return 1.0;
+  return u.custom?.swordSweepActive === true ? SWORD_SWEEP_MUL : SWORD_BASE_MUL;
 }

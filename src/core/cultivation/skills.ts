@@ -1,6 +1,8 @@
 // 天赋、技能与法术
 
-import type { SkillDef } from '../types.ts';
+import type { GameState, Unit, SkillDef } from '../types.ts';
+import { isCultivatorUnit } from './identity.ts';
+import { getRank } from './progression.ts';
 
 export const SKY_STEP_SKILL: SkillDef = {
   id: 'sky-step',
@@ -30,3 +32,14 @@ export const SPIRIT_REBIRTH_SKILL: SkillDef = {
   cooldown: 0,
   multiCast: false,
 };
+
+/** 计算剑气纵横的直线长度（距离） */
+export function getSwordSweepReach(s: GameState, u: Unit): number {
+  // 如果它是修士，就按境界加成算
+  if (isCultivatorUnit(s, u)) {
+    const rank = getRank(u);
+    return 3 + Math.ceil(rank / 3);
+  }
+  // 如果是别的兵种（未来扩展）借用了这个技能，默认给个基础值 3
+  return 3; 
+}
