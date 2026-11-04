@@ -9907,8 +9907,50 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
     assert.ok(material > prev, `${id} 的建材产出 ${material} 应该高于上一代 ${prev}`);
     prev = material;
   }
-  // 时代 5 单支建材兵得顶得上半座建材基地，否则"换人"这件事没有意义
-  assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
+  // 时代 5 单支建材兵得顶得上小半座建材基地，否则"换人"这件事没有意义。
+  // 门槛 2026-11-04 从 24 降到 19：那天把平原/丘陵/森林上的"粮材 vs 金币"
+  // 比例对调了（六成折成粮材 → 四成），所以最高一代的建材产出跟着掉三分之一，
+  // 换来的是同一个人现在能留下六成金币（升级城市只吃金币）。
+  assert.ok(prev >= 19, `时代 5 的建材兵该有 19 材以上，实际 ${prev}`);
+});
+
+test('城郭：平原/丘陵/森林上的经济单位，粮材与金币的分配是对调过的', () => {
+  /*
+   * 2026-11-04 的调整：这三种地形上，经济单位的产出从"六成折成粮/材、四成留金"
+   * 对调成"六成留金、四成折成粮/材"。
+   *
+   * 为什么要钉死：这一条**看不出来**——玩家只看到"这块地给我 16 金 10 材"，
+   * 不会去反推背后的比例；而一旦谁把它改回去，唯一的症状是"升级总是差一口气"，
+   * 那种 bug 没人能复现。所以直接把三种地形的数写进用例。
+   *
+   * 城郊（city）故意不在这条里：那次只动了三种"种地地形"。
+   */
+  const s = fresh({ expansionIds: ['city-works'] });
+  const at = (id: string, terrain: string): Record<string, number> => {
+    const u = place2(s, 'A', id, 5, 5);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain as never;
+    return unitYield(s, u) as Record<string, number>;
+  };
+
+  // 采石工：丘陵 26 金 → 16 金 + 10 材（对调前是 10 金 + 16 材）
+  const hill = at('quarrier', 'hill');
+  assert.equal(hill.gold, 16, '丘陵上该留下六成金币');
+  assert.equal(hill.material, 10, '丘陵上该只剩四成建材');
+
+  // 平原：6 金 → 4 金 + 2 粮
+  const plain = at('quarrier', 'plain');
+  assert.equal(plain.gold, 4, '平原上该留下六成金币');
+  assert.equal(plain.food, 2, '平原上该只剩四成粮');
+
+  // 森林：14 金 → 8 金 + 6 材
+  const forest = at('quarrier', 'forest');
+  assert.equal(forest.gold, 8, '森林上该留下六成金币');
+  assert.equal(forest.material, 6, '森林上该只剩四成建材');
+
+  // 城郊不参与这次对调：还是四成留金、六成折粮
+  const city = at('quarrier', 'city');
+  assert.equal(city.gold, 2, '城郊不该被这次对调波及');
+  assert.equal(city.food, 4, '城郊还是六成折成粮');
 });
 
 test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {

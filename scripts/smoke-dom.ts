@@ -354,6 +354,85 @@ check('迷雾压暗改成盖层，不再逐格挂 CSS filter', () => {
   );
 });
 
+check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要一起压暗', () => {
+  /*
+   * 症状：开雾之后，视野外那片区域看起来像"一张亮线织的网格"，格子越小越刺眼。
+   *
+   * 根因是**盖层盖不到边框**：`.out::after` 是绝对定位的子元素，`inset: 0` 对齐的是
+   * 父元素的 padding box，而 `border-right/bottom` 在它外面。于是格心被灰盖暗了、
+   * 那 1px 边线还留着地形原色（只叠了 4.5% 黑）——一暗一亮挨着，边线就成了亮线。
+   *
+   * 修法：把 `.out` / `.remembered` 的边框也刷成同一个半透明灰。边框画在地形色之上，
+   * 混出来的值和格心一致，网格自然消失。这条用例把"别只压 background"钉住。
+   */
+  const css = readFileSync('src/style.css', 'utf8');
+  const ruleOf = (sel: string): string => {
+    const i = css.indexOf(sel);
+    return i < 0 ? '' : css.slice(css.indexOf('{', i) + 1, css.indexOf('}', i));
+  };
+
+  const outTile = ruleOf('.board.fog .tile.out {');
+  assert.ok(outTile.length > 0, '视野外的格子要有一条自己的边框规则');
+  /** 把声明块压成一行，再按字面量判断——正则里全是反斜杠，难读也难改 */
+  const flat = (block: string): string =>
+    block
+      .split('\n')
+      .map((l) => l.trim())
+      .join(' ')
+      .replace(/ +/g, ' ');
+  assert.ok(
+    flat(outTile).includes('border-color: rgba(74, 70, 62, 0.52)'),
+    '边框色必须和盖层同一个灰，否则边框会亮成一张网格',
+  );
+
+  const outAfter = ruleOf('.board.fog .tile.out::after');
+  assert.ok(
+    flat(outAfter).includes('background: rgba(74, 70, 62, 0.52)'),
+    '盖层底色被改掉了',
+  );
+  assert.ok(
+    flat(outAfter).includes('animation: none'),
+    '视野外的格子要按掉 placeable 的呼吸动画——动画的优先级会盖过迷雾灰',
+  );
+
+  const memTile = ruleOf('.board.blackout .tile.remembered {');
+  assert.ok(/border-color:/.test(memTile), '记忆里的格子同样要压边框，否则记忆区也是一张亮线网格');
+
+  // 老规矩：修法不能退回逐格 filter（那条路会把 64×64 的标签页压垮）
+  assert.ok(
+    !/\.board\.fog \.tile\.out\s*\{[^}]*filter\s*:/.test(css),
+    '不能为了压边框把 filter 写回来',
+  );
+});
+
+check('地形不许决定鼠标光标：水/深水/山/火山上不该再有禁止符号', () => {
+  /*
+   * 缺陷：鼠标移到任何一片水（含深水）上都是"禁止"光标。
+   *
+   * 原因不是逻辑写错，是**样式表里一句过期的断言**：`.tile.t-water` /
+   * `.tile.t-deep` / `.tile.t-mountain` / `.tile.t-volcano` 各写了一句
+   * `cursor: not-allowed`，那是"水 = 走不过去"的年代留下的。后来船能下水、
+   * 飞行能掠水过山，这句话就变成了纯粹的谎话——哪怕此刻选中的是一架飞机、
+   * 那一格正在可达高亮里，光标还是禁止。
+   *
+   * 现在的分工：地形只管颜色，光标只由交互状态决定（.reach / .attackable / .aim）。
+   * 这条用例盯的就是"别再把 cursor 写回地形规则里"。
+   */
+  const css = readFileSync('src/style.css', 'utf8');
+  for (const t of ['water', 'deep', 'mountain', 'volcano', 'shallow', 'plateau', 'valley', 'marsh', 'dune']) {
+    const i = css.indexOf(`.tile.t-${t} {`);
+    if (i < 0) continue;
+    const block = css.slice(css.indexOf('{', i) + 1, css.indexOf('}', i));
+    assert.ok(
+      !/cursor\s*:/.test(block),
+      `.tile.t-${t} 里又写了 cursor——地形不该决定光标，能不能去由可达高亮表达`,
+    );
+  }
+  // 基线还在：格子本身是可点的（点一下看信息、选中单位）
+  const base = css.slice(css.indexOf('.tile {'), css.indexOf('}', css.indexOf('.tile {')));
+  assert.ok(/cursor:\s*pointer/.test(base), '格子基线光标应该是 pointer');
+});
+
 check('地上的东西：自己的雷画实心，敌方已发现的画空心', () => {
   const host = doc.createElement('div');
   host.className = 'board';
@@ -5085,6 +5164,34 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   assert.ok(doc.querySelector('#draft .draft-side.is-a'), '要显示甲方那一栏');
   assert.ok(doc.querySelector('#draft .draft-side.is-b'), '要显示乙方那一栏');
   assert.ok(doc.querySelector('#draft [data-ref="draft-timer"]'), '要有倒计时');
+
+  /*
+   * 地图预览：选卡时**双方看到的是同一张图**。
+   *
+   * 以前只有 AI 能看：`aiDraftBan` / `aiDraftPick` 拿 `waterShareOf(state)` 给
+   * 水军加权（"这张图水多，选两条船"），而真人手上只有兵种表，图被遮罩挡着。
+   * 同一件决定一边有情报一边没有，所以补了这块预览。
+   *
+   * 断言三件事：一格不落、水域占比和 state 算出来的一致、城的归属能看出来。
+   */
+  const saved = JSON.parse(window.localStorage.getItem('warchess:match:v1') ?? '{}') as {
+    w?: number;
+    h?: number;
+    tiles?: Array<{ terrain: string; cityId: string | null }>;
+    cities?: Array<{ owner: string }>;
+  };
+  const mp = [...doc.querySelectorAll<HTMLElement>('#draft .draft-map-grid .mp')];
+  assert.equal(mp.length, (saved.w ?? 0) * (saved.h ?? 0), '预览要一格不落地铺完整张图');
+  const tiles = saved.tiles ?? [];
+  const wet = tiles.filter((t) => t.terrain === 'water' || t.terrain === 'deep').length;
+  const share = Math.round((wet / Math.max(1, tiles.length)) * 100);
+  const facts = doc.querySelector('#draft .draft-map-facts')?.textContent ?? '';
+  assert.ok(facts.includes(`水域 ${share}%`), `水域占比要和 state 一致（该是 ${share}%）：${facts}`);
+  assert.ok(facts.includes(`${saved.w}×${saved.h}`), `要写出地图尺寸：${facts}`);
+  assert.ok(
+    doc.querySelectorAll('#draft .draft-map-grid .mp.own-A, #draft .draft-map-grid .mp.own-B').length > 0,
+    '城的归属要在缩略图上标出来，否则"选船还是选马"还是没法判断',
+  );
 
   /*
    * 一进禁用就该是满格倒计时，而且**不该**有任何"超时"记录。

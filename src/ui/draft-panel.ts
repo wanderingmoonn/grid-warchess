@@ -442,6 +442,61 @@ function lobbyHtml(s: GameState, ctx: DraftScreenCtx): string {
  * 只画"能看见的东西"：禁用期双方同时进行、互不可见，所以池子里**不显示**
  * 对面禁了谁——只显示"已提交 / 未提交"。两边都交完，禁用列表才一起出现。
  */
+/**
+ * 地图预览：选卡时双方都看得见这张图。
+ *
+ * ── 为什么必须有这一块 ────────────────────────────────────────────────
+ *
+ * 选卡发生在开局之前，但地图**已经生成好了**（`createMatch` 先建图再建选卡）。
+ * AI 的选卡函数一直在读它：`aiDraftBan` / `aiDraftPick` 都拿 `waterShareOf(state)`
+ * 给水军加权——"这张图有的是水，选两条船"。
+ *
+ * 而真人这边只有一层不透明的遮罩：手上有兵种表，看不到图。同一件决定，
+ * 一边有情报、一边没有，这不叫"AI 聪明"，叫规则不公平。所以补上这块预览：
+ * **要么两边都看得见，要么两边都别看**，而看得见显然更好玩——选船还是选马，
+ * 本来就该是看着地形做的决定。
+ *
+ * ── 为什么不是把整张棋盘搬进来 ────────────────────────────────────────
+ *
+ * 棋盘那套 DOM 是给"能点的格子"用的（每一格带高亮层、交互类名），
+ * 1024 格铺进来既慢又没法点。这里只画**地形和城的归属**：一格一个空 `<i>`，
+ * 颜色直接取地形变量，不建伪元素、不加动画——和 64×64 那次"逐格 filter 把标签页
+ * 压垮"的教训是同一件事：缩略图只该有颜色。
+ */
+function mapPreviewHtml(s: GameState): string {
+  const W = s.w;
+  // 城市格单独标出来：地形是 city，但要能看出是谁的城
+  const cityOwner = new Map<number, PlayerId>();
+  for (const c of s.cities) {
+    for (let dy = 0; dy < c.size; dy++) {
+      for (let dx = 0; dx < c.size; dx++) {
+        const x = c.x + dx;
+        const y = c.y + dy;
+        if (x < 0 || y < 0 || x >= W || y >= s.h) continue;
+        cityOwner.set(y * W + x, c.owner);
+      }
+    }
+  }
+  const cells: string[] = [];
+  let wet = 0;
+  for (let i = 0; i < s.tiles.length; i++) {
+    const terrain = s.tiles[i]?.terrain ?? 'plain';
+    if (terrain === 'water' || terrain === 'deep') wet += 1;
+    const own = cityOwner.get(i);
+    cells.push(`<i class="mp t-${terrain}${own ? ` own-${own}` : ''}"></i>`);
+  }
+  const share = s.tiles.length > 0 ? Math.round((wet / s.tiles.length) * 100) : 0;
+  const cities = s.cities.filter((c) => !c.ruined).length;
+  return `<section class="draft-map" data-ref="draft-map">
+    <div class="draft-map-head">
+      <span>本局地图</span>
+      <span class="draft-map-facts">${W}×${s.h} · 水域 ${share}% · 城市 ${cities} 座</span>
+    </div>
+    <div class="draft-map-grid" style="--cols:${W};--rows:${s.h}">${cells.join('')}</div>
+    <p class="draft-map-note">双方看到的是同一张图（AI 选卡时也在看它）</p>
+  </section>`;
+}
+
 export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const view = draftView(s);
   if (!view) return '';
@@ -570,6 +625,7 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
         <div class="draft-grid">${cards || '<p class="draft-empty">池子空了</p>'}</div>
       </section>
       <aside class="draft-sides">
+        ${mapPreviewHtml(s)}
         ${sideBlock(s, 'A', { seat, toAct: view.toAct, myTurnHere: seat === 'A' })}
         ${sideBlock(s, 'B', { seat, toAct: view.toAct, myTurnHere: seat === 'B' })}
         <ul class="draft-log">${log}</ul>
