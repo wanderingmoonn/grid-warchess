@@ -13986,6 +13986,95 @@ test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
   assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
 });
 
+/**
+ * 池子按起始时代配比。
+ *
+ * 以前是纯轮转（时代 1、2、3、4、5 各代机会均等），可一局只有一个起始时代：
+ * 起始第 1 代时，四、五代的兵要升三、四档城才造得出来，占了十格却一局都用不上。
+ */
+test('选卡池：起始那一代占最重，离得越远越少', () => {
+  const census = (startEra: number) => {
+    const s = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true }, 7301);
+    const tally = new Map<number, number>();
+    for (const id of s.draft!.pool) {
+      const era = Math.max(1, Math.round(s.unitTypes[id]!.era || 1));
+      tally.set(era, (tally.get(era) ?? 0) + 1);
+    }
+    return { s, tally };
+  };
+
+  // 配额不吞格子：抽出来的池子必须正好是预算那么多张
+  for (const startEra of [1, 2, 3, 4, 5]) {
+    const { s, tally } = census(startEra);
+    assert.equal(s.draft!.pool.length, draftBudget(s).pool, `起始第 ${startEra} 代：池子没抽满`);
+    const sum = [...tally.values()].reduce((a, b) => a + b, 0);
+    assert.equal(sum, s.draft!.pool.length, '分桶统计必须和池子对得上');
+  }
+
+  // 每一代在"自己就是起始时代"时拿到的格子最多（并列也算），
+  // 并且严格多于离自己最远的那种起始时代。
+  for (const era of [1, 2, 3, 4, 5]) {
+    const mine = census(era).tally.get(era) ?? 0;
+    const far = census(era <= 3 ? 5 : 1).tally.get(era) ?? 0;
+    assert.ok(mine > 0, `起始第 ${era} 代时，这一代自己都抽不到——保底被吃掉了`);
+    for (const other of [1, 2, 3, 4, 5]) {
+      const n = census(other).tally.get(era) ?? 0;
+      assert.ok(mine >= n, `第 ${era} 代在起始 ${era} 时应该最多，实际 ${mine} < 起始 ${other} 的 ${n}`);
+    }
+    assert.ok(mine > far, `第 ${era} 代：起始 ${era} 只拿到 ${mine}，远端 ${far}——配比没跟着起始时代走`);
+  }
+
+  // 保底仍在：每个有货的时代都抽得到（小池子也不许整代消失）
+  const { s, tally } = census(1);
+  for (const era of [1, 2, 3, 4, 5]) {
+    const has = draftCandidates(s).some((id) => s.unitTypes[id]!.era === era);
+    if (!has) continue;
+    assert.ok((tally.get(era) ?? 0) >= 2, `第 ${era} 代有货却不到 2 格，小池子被吃空了`);
+  }
+});
+
+/**
+ * 禁用判据：看顺位，不再恒定。
+ *
+ * 老实现取池内 `draftValueOf` 最大的那张，而那个函数默认 `targetEra = 1`、
+ * 还带"越便宜分越高"——100 局实测里每局都是先禁民兵、再禁弓手，禁用组合
+ * 一次没变过。民兵本来就不是任何人会先拿的卡，那等于白禁。
+ */
+test('选卡：禁用看顺位（先手禁第二好、后手禁最好），且随起始时代变', () => {
+  const mk = (startEra: number, seed = 7301) =>
+    createMatch({ ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true }, seed);
+
+  // 同一个池子上两边不该禁同一张：先手要保住自己的第一选，后手要掐掉对面那一手
+  const one = mk(1);
+  const banA1 = aiDraftBan(one, 'A')!;
+  const banB1 = aiDraftBan(one, 'B')!;
+  assert.ok(one.draft!.pool.includes(banA1), '先手的禁用必须在池子里');
+  assert.ok(one.draft!.pool.includes(banB1), '后手的禁用必须在池子里');
+  assert.notEqual(banA1, banB1, '同一个池子上，先手和后手不该禁同一张');
+
+  // 起始时代换了，禁的东西就该换——不再是永恒的"民兵 + 弓手"
+  const five = mk(5);
+  const banA5 = aiDraftBan(five, 'A')!;
+  const banB5 = aiDraftBan(five, 'B')!;
+  const seen = new Set([banA1, banB1, banA5, banB5]);
+  assert.ok(seen.size >= 3, `四手禁用只出现了 ${seen.size} 种，判据还是死的`);
+
+  // 起始第 1 代时禁的是"这一代就能打"的东西（评分里 targetEra = 起始时代），
+  // 第 5 代时禁的是第 5 代的东西——别把一级兵当宝贝。
+  assert.ok(one.unitTypes[banA1]!.era <= 2, '先手在第 1 代不该去禁高代卡');
+  assert.ok(five.unitTypes[banA5]!.era >= 4, `第 5 代却禁了第 ${five.unitTypes[banA5]!.era} 代的卡`);
+});
+
+test('选卡：旱地图上禁用不禁船（船在旱地本来就不值钱）', () => {
+  // seed 2002 / 14×14：水面 6%，一局开不出港口
+  const dry = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra: 3, draftMode: true }, 2002);
+  for (const side of ['A', 'B'] as const) {
+    const id = aiDraftBan(dry, side)!;
+    assert.ok(dry.draft!.pool.includes(id), `${side} 的禁用必须在池子里`);
+    assert.notEqual(dry.unitTypes[id]!.domain, 'water', `${side} 在旱地图上禁了一条船`);
+  }
+});
+
 /* ===========================================================================
  * 五项修复（2026-11-01）：自爆 / 满员造空军 / 雾里的桥 / 飞行过深水 / 钻井平台
  * ======================================================================== */
