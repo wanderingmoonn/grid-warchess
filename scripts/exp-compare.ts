@@ -197,7 +197,7 @@ for (const era of ERAS) {
   say();
 }
 
-// 两个时代合并的排名：同一扩展在古典 + 中世的配对回合差取平均，
+// 两个时代合并的排名：同一扩展在青铜 + 铁器的配对回合差取平均，
 // 用来回答"这个扩展到底拖不拖时间"，而不是被某个时代的特例带偏。
 if (ERAS.length > 1) {
   const ids = rowsByEra.get(ERAS[0]!)?.map((r) => r.id) ?? [];
@@ -213,7 +213,7 @@ if (ERAS.length > 1) {
 
   say('## 两时代合并：谁在拖时间');
   say();
-  say('| 扩展 | 古典 Δ回合 | 中世 Δ回合 | 平均 Δ | 未决率变化 |');
+  say('| 扩展 | 青铜 Δ回合 | 铁器 Δ回合 | 平均 Δ | 未决率变化 |');
   say('| --- | --- | --- | --- | --- |');
   for (const p of pooled) {
     const per = ERAS.map((e) => rowsByEra.get(e)?.find((r) => r.id === p.id));

@@ -1,7 +1,7 @@
 /**
  * 平衡基准跑分。
  *
- * 跑标准对局组合（古典 12×12 / 中世 16×16 / 火药 20×20 / 工业 20×20 / 二战 20×20），
+ * 跑标准对局组合（青铜 12×12 / 铁器 16×16 / 火器 20×20 / 蒸汽 20×20 / 机械化 20×20），
  * 每个组合若干种子，双 AI 对打，统计：
  *   · 结束回合数（没打完就记上限）
  *   · 场上最高时代（城市时代的最大值）
@@ -40,11 +40,11 @@ interface Combo {
 }
 
 const COMBOS: Combo[] = [
-  { era: 1, size: 12, name: '古典' },
-  { era: 2, size: 16, name: '中世' },
-  { era: 3, size: 20, name: '火药' },
-  { era: 4, size: 20, name: '工业' },
-  { era: 5, size: 20, name: '二战' },
+  { era: 1, size: 12, name: '青铜' },
+  { era: 2, size: 16, name: '铁器' },
+  { era: 3, size: 20, name: '火器' },
+  { era: 4, size: 20, name: '蒸汽' },
+  { era: 5, size: 20, name: '机械化' },
 ]
   .filter((c) => ONLY === null || ONLY.includes(c.era))
   .map((c) => {

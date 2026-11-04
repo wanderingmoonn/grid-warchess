@@ -353,7 +353,7 @@ test('换血：编制满了会解散最差的那个，换更好的兵',()=>{
   for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
   s.fog = false; s.current='A'; s.turn=40;
   /*
-   * 编制塞满：20 个民兵（火药时代的旧货）+ 6 个农民。
+   * 编制塞满：20 个民兵（火器时代的旧货）+ 6 个农民。
    *
    * 为什么要放农民：编制满的时候 AI 会问"如果有一个空位，这一回合想买谁"。
    * 经济线没铺满时，那个问题的答案是农民——于是换血这条直接判"想买的不是战斗力"，

@@ -271,7 +271,7 @@ let recruitPack = '';
  * 产兵列表按时代筛选：0 = 全部，其它是时代等级。
  *
  * 和 recruitPack 同一套：空值＝不筛，两个维度是"与"。同样**不随换城清空**——
- * "我只想看古典的兵"是这一局的口味，不是对某座城的一时好奇。
+ * "我只想看青铜的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
 
@@ -4129,7 +4129,7 @@ function godUi() {
     brush: godBrush,
     pack: godPack,
     era: godEra,
-    // 没挑过时代就按这一局的起始时代：从古典开局的人摆出来的城，
+    // 没挑过时代就按这一局的起始时代：从青铜开局的人摆出来的城，
     // 没有理由默认成另一个时代
     cityEra: godCityEra || state.config.startEra,
     running: godRunning,

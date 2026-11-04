@@ -1,8 +1,8 @@
 /**
  * 全部可调数值集中在这里。
  *
- * 基础兵种严格按真实历史线走：古典 → 中世 → 火药 → 工业 → 二战。
- * 第六时代「现代」不在这里——它整套兵种都在「现代战争」扩展包里，
+ * 基础兵种严格按真实历史线走：青铜时代 → 铁器时代 → 火器时代 → 蒸汽时代 → 机械化时代。
+ * 第六时代「信息化」不在这里——它整套兵种都在「现代战争」扩展包里，
  * 基础规则只把时代那一行数值先摆好（见 BASE_MAX_ERA 的说明）。
  * 奇想类兵种在 expansions.ts 的「奇想兵种包」里，不勾选就不会出现。
  *
@@ -237,11 +237,11 @@ export interface EraDef {
   cityIncome: number;
 }
 
-/** 时代：从冷兵器推到二战。城市各自的属性，攻陷会连时代一起接收。 */
+/** 时代：从冷兵器推到机械化。城市各自的属性，攻陷会连时代一起接收。 */
 export const ERAS: EraDef[] = [
   {
     level: 1,
-    name: '古典',
+    name: '青铜时代',
     hint: '短兵相接',
     upgradeCost: 0,
     cityMaxHp: 30,
@@ -250,7 +250,7 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 2,
-    name: '中世',
+    name: '铁器时代',
     hint: '甲胄与长弓',
     upgradeCost: 220,
     cityMaxHp: 42,
@@ -259,7 +259,7 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 3,
-    name: '火药',
+    name: '火器时代',
     hint: '排队枪毙',
     upgradeCost: 360,
     cityMaxHp: 54,
@@ -268,7 +268,7 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 4,
-    name: '工业',
+    name: '蒸汽时代',
     hint: '钢铁与堑壕',
     upgradeCost: 540,
     cityMaxHp: 66,
@@ -277,7 +277,7 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 5,
-    name: '二战',
+    name: '机械化时代',
     hint: '内燃机与总动员',
     upgradeCost: 780,
     cityMaxHp: 80,
@@ -286,7 +286,7 @@ export const ERAS: EraDef[] = [
   },
   {
     level: 6,
-    name: '现代',
+    name: '信息化时代',
     hint: '信息化与精确打击',
     upgradeCost: 1080,
     cityMaxHp: 96,
@@ -298,7 +298,7 @@ export const ERAS: EraDef[] = [
 /**
  * 不开"加时代"扩展时的时代上限。
  *
- * 第 6 时代「现代」在表里，但**基础规则升不上去**：它没有原版兵种，
+ * 第 6 时代「信息化」在表里，但**基础规则升不上去**：它没有原版兵种，
  * 升上去只会花一千多金换来一座更厚的空城。真正把它打开的是
  * 「现代战争」扩展（`Expansion.unlockEra`）——那边带了一整套第六代兵种。
  *
@@ -372,7 +372,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 0,
     autoAttack: true,
   } as UnitTypeDef, 
-  // ================= 时代 1 · 古典 =================
+  // ================= 时代 1 · 青铜 =================
   militia: {
     id: 'militia',
     name: '民兵',
@@ -497,7 +497,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0 },
   },
 
-  // ================= 时代 2 · 中世 =================
+  // ================= 时代 2 · 铁器 =================
   spearman: {
     id: 'spearman',
     name: '长枪兵',
@@ -589,7 +589,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 7,
     maxHp: 42,
     // 2 → 3（2026-11-01）：射程 2 意味着它必须贴着前线才打得到人，
-    // 而中世的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
+    // 而铁器的攻城火力（投石/火炮）恰恰在三格外就能点掉它——一座"守不住自己"的堡。
     // 加一格之后它终于能在自己被打之前先还手，其余数值一个没动。
     range: 3,
     vision: 3,
@@ -612,7 +612,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4 },
   },
 
-  // ================= 时代 3 · 火药 =================
+  // ================= 时代 3 · 火器 =================
   musketeer: {
     id: 'musketeer',
     name: '火枪兵',
@@ -745,12 +745,12 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 40,
     range: 1,
     vision: 2,
-    // 城市 20 → 30（2026-11-01）：火药档唯一"城里赚钱"的建筑。
+    // 城市 20 → 30（2026-11-01）：火器档唯一"城里赚钱"的建筑。
     // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
     incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
   },
 
-  // ================= 时代 4 · 工业 =================
+  // ================= 时代 4 · 蒸汽 =================
   rifleman: {
     id: 'rifleman',
     name: '步枪兵',
@@ -870,7 +870,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
   },
 
-  // ============ 时代 5 · 二战（第六时代在原版表里是空的） ============
+  // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
   squad: {
     id: 'squad',
     name: '步兵班',
@@ -1205,11 +1205,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     name: '铁甲舰',
     short: '舰',
     // E5 → E4：铁甲舰是 1859（Gloire）到 1890 年代（定远、镇远）的舰种，
-    // 属于"工业"这一档。以前它被放在第五时代，等于让 1860 年代的船和
-    // 二战的战列舰同场；而真正接它班的前无畏/无畏要到 E5 才出现。
+    // 属于"蒸汽"这一档。以前它被放在第五时代，等于让 1860 年代的船和
+    // 机械化的战列舰同场；而真正接它班的前无畏/无畏要到 E5 才出现。
     //
     // 挪下来的代价必须一起付：原数值（47/11/90、射 5）是按 E5 的天花板给的，
-    // 直接搬到 E4 会压死整条工业水军（护卫舰 30/8、浅水重炮舰 50/10）。
+    // 直接搬到 E4 会压死整条蒸汽水军（护卫舰 30/8、浅水重炮舰 50/10）。
     // 现在它是"海上正面"：比浅水重炮舰快一格、多一格视野，但少 10 点攻、
     // 也没有「岸轰」——攻城那件事仍然归浅水重炮舰（monitor）。
     // 破城（siege-master）一并交出去，同一个时代不需要两条攻城船。

@@ -71,7 +71,7 @@ import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
 const nvDef = (id: string) =>
   [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
 /**
- * 全部水面单位：本体 + 所有扩展贡献的（雷击舰在「工业绞肉机」、驱逐舰在「二战合成兵」，
+ * 全部水面单位：本体 + 所有扩展贡献的（雷击舰在「蒸汽绞肉机」、驱逐舰在「机械化合成兵」，
  * 都是别的包顺手带的海军，光看海战包会漏掉它们）。
  *
  * 舰种盘点类用例都读这一份：只统计海军两包的话，"每代最便宜的船"会算错。
@@ -453,14 +453,14 @@ test('默认 16×16，双方各 5 个单位、2 座城市', () => {
 });
 
 test('标准对局：时代和棋盘尺寸是配套的', () => {
-  // 古典 12×12、中世 16×16、火药/工业/二战 20×20
+  // 青铜 12×12、铁器 16×16、火器/蒸汽/机械化 20×20
   assert.equal(eraSize(1), 12);
   assert.equal(eraSize(2), 16);
   assert.equal(eraSize(3), 20);
   assert.equal(eraSize(4), 20);
   assert.equal(eraSize(5), 20);
 
-  // 默认配置就是"古典 + 12×12"
+  // 默认配置就是"青铜 + 12×12"
   assert.equal(DEFAULT_CONFIG.startEra, 1);
   assert.equal(DEFAULT_CONFIG.size, eraSize(1));
 });
@@ -1873,7 +1873,7 @@ test('经济建筑自己也能产金', () => {
   assert.ok(unitIncome(r.state, mill) > 0, '磨坊建在平原上应该有产出');
 });
 
-test('时代窗口只剩上界：三代城能造古典兵，但造不了还没解锁的兵', () => {
+test('时代窗口只剩上界：三代城能造青铜兵，但造不了还没解锁的兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
@@ -1892,26 +1892,26 @@ test('时代窗口只剩上界：三代城能造古典兵，但造不了还没�
   );
   assert.ok(
     applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'archer' }).ok,
-    '同代的古典兵一样能造',
+    '同代的青铜兵一样能造',
   );
 
   // 上界不动：还没解锁的时代仍然拒绝，而且要说清差在哪一级
   const future = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'rifleman' });
-  assert.ok(!future.ok, '工业时代的兵不该在火药城里造出来');
-  assert.match(future.reason, /工业/);
+  assert.ok(!future.ok, '蒸汽时代的兵不该在火器城里造出来');
+  assert.match(future.reason, /蒸汽/);
 });
 
 console.log('\n时代链');
 
 test('时代表五级打底、第六级留给「现代战争」，升级费递增', () => {
-  // 表长 6，但**基础规则**只认前 5 级（BASE_MAX_ERA）：第六时代「现代」
+  // 表长 6，但**基础规则**只认前 5 级（BASE_MAX_ERA）：第六时代「信息化」
   // 是「现代战争」包用 unlockEra 打开的，不勾那个包就永远升不上去。
   // 所以这里查两件事：表本身够长，且"不勾包的上限"正好是第五级。
   assert.equal(ERAS.length, 6);
   assert.equal(BASE_MAX_ERA, 5);
-  assert.equal(ERAS[0].name, '古典');
-  assert.equal(ERAS[4].name, '二战');
-  assert.equal(ERAS[5].name, '现代');
+  assert.equal(ERAS[0].name, '青铜时代');
+  assert.equal(ERAS[4].name, '机械化时代');
+  assert.equal(ERAS[5].name, '信息化时代');
   for (let i = 2; i < ERAS.length; i++) {
     const prev = ERAS[i - 1];
     const cur = ERAS[i];
@@ -1948,7 +1948,7 @@ test('内置兵种全是真实历史线，奇想兵种只在扩展里', () => {
 console.log('\n奇想兵种包：前置、机制、数值');
 
 const FANTASY = ['fantasy-core', 'fantasy-knights', 'fantasy-beasts', 'fantasy-arcane', 'fantasy-heroes'];
-/** 奇想全开 + 现代：圣剑勇者、邪龙王只在「现代」在场时才是这一局的兵种 */
+/** 奇想全开 + 现代：圣剑勇者、邪龙王只在「信息化」在场时才是这一局的兵种 */
 const FANTASY_WITH_MODERN = [...FANTASY, 'pack-contemporary'];
 
 /** 摆一个本局存在的兵种（含扩展包），会清掉这一格上的所有单位 */
@@ -2102,18 +2102,18 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     assert.ok(u.maxHp >= 72, `${u.name} 只有 ${u.maxHp} 血，没吃到 ×1.2 这一档`);
     // 上限 650：至尊法师这一档（攻 -10 → 魔法 +10、甲 +4、魔抗 +4、射程 +1、
     // 视野 +1）的价格按 +50 走，640 仍在"英雄"这一档里；再往上就该另算。
-    // 下限 300：暗夜死灵法师 2026-10-31 降到火药时代，价 320——它是"靠技能吃饭"
-    // 的便宜英雄，不该被这条按工业/现代英雄写的下限卡住。
+    // 下限 300：暗夜死灵法师 2026-10-31 降到火器时代，价 320——它是"靠技能吃饭"
+    // 的便宜英雄，不该被这条按蒸汽/现代英雄写的下限卡住。
     assert.ok(u.cost >= 300 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
-    // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火药时代（320 金），
+    // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火器时代（320 金），
     // 这一条"涨"的规则对它不成立。
     if (u.id === 'night-necromancer') continue;
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
 });
 
-test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪到火药时代', () => {
+test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪到火器时代', () => {
   const pack = (id: string) => EXPANSIONS.find((e) => e.id === id)!;
   const knights = pack('fantasy-knights').units ?? [];
   const beasts = pack('fantasy-beasts').units ?? [];
@@ -2133,14 +2133,14 @@ test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪�
   const elite = find(knights, 'elite-cavalry');
   assert.ok(elite, '应该有精英骑兵');
   assert.equal(elite!.name, '精英骑兵');
-  assert.equal(elite!.era, 2, '精英骑兵留在中世');
+  assert.equal(elite!.era, 2, '精英骑兵留在铁器');
   assert.equal(elite!.cost, 125, '改的是名字，不是数值');
 
-  // 新皇家骑兵：火药时代 + 面板大幅提升
+  // 新皇家骑兵：火器时代 + 面板大幅提升
   const royal = find(knights, 'royal-cavalry');
   assert.ok(royal, '应该有皇家骑兵');
   assert.equal(royal!.name, '皇家骑兵');
-  assert.equal(royal!.era, 3, '皇家骑兵改到火药时代');
+  assert.equal(royal!.era, 3, '皇家骑兵改到火器时代');
   assert.ok(royal!.atk >= elite!.atk * 2, `皇家骑兵攻击 ${royal!.atk} 没到精英骑兵的两倍`);
   assert.ok(royal!.maxHp >= elite!.maxHp * 2, `皇家骑兵 ${royal!.maxHp} 血没到精英骑兵的两倍`);
   assert.ok(
@@ -2148,11 +2148,11 @@ test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪�
     '晋升之后仍然是冲锋骑兵，别把机制一起丢了',
   );
 
-  // 国王：工业时代，带王命这条被动
+  // 国王：蒸汽时代，带王命这条被动
   const king = find(knights, 'royal-king');
   assert.ok(king, '应该有国王');
   assert.equal(king!.name, '国王');
-  assert.equal(king!.era, 4, '国王在工业时代');
+  assert.equal(king!.era, 4, '国王在蒸汽时代');
   assert.ok((king!.abilities ?? []).includes('royal-decree'), '国王要带王命');
 });
 
@@ -2223,12 +2223,12 @@ test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自�
   assert.equal(effectiveStats(t2.state, expired).armor, armorBefore, '护甲回到原位');
 });
 
-test('奇想数值调整：死灵法师降到火药并降价、骑士长 +2 甲、牢大 +22 血', () => {
+test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲、牢大 +22 血', () => {
   const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []);
   const of = (id: string) => heroes.find((u) => u.id === id)!;
 
   const necro = of('night-necromancer');
-  assert.equal(necro.era, 3, '暗夜死灵法师改到火药时代');
+  assert.equal(necro.era, 3, '暗夜死灵法师改到火器时代');
   assert.equal(necro.cost, 320, '造价降到 320');
   // 整体下调：攻/血/甲/魔攻/视野都比上一版低
   assert.ok(necro.atk < 22 && necro.maxHp < 88 && necro.armor < 4, '面板整体下调');
@@ -2239,7 +2239,7 @@ test('奇想数值调整：死灵法师降到火药并降价、骑士长 +2 甲�
   assert.equal(of('slime-boss').maxHp, 222, '史莱姆牢大 200 → 222');
 });
 
-test('圣剑勇者与邪龙王：只在同时开了「现代」时收录', () => {
+test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', () => {
   const without = fresh({ startEra: 6, expansionIds: ['fantasy-core', 'fantasy-heroes'] });
   assert.equal(without.unitTypes['sword-saint'], undefined, '没开现代时不该有圣剑勇者');
   assert.equal(without.unitTypes['evil-dragon-king'], undefined, '没开现代时不该有邪龙王');
@@ -2251,14 +2251,14 @@ test('圣剑勇者与邪龙王：只在同时开了「现代」时收录', () =>
   const saint = withModern.unitTypes['sword-saint'];
   const dragon = withModern.unitTypes['evil-dragon-king'];
   assert.ok(saint && dragon, '开了现代，两位都该在');
-  assert.equal(saint!.era, 6, '圣剑勇者是现代时代');
+  assert.equal(saint!.era, 6, '圣剑勇者是信息化时代');
   assert.equal(saint!.element, 'light', '光属性');
   assert.equal(saint!.move, 4, '移速 4');
   assert.equal(saint!.range, 2, '射程 2');
   assert.equal(saint!.splashLine, true, '攻击是直线形溅射');
   assert.ok(saint!.maxHp >= 120 && saint!.atk >= 40 && saint!.armor >= 10, '高血高攻高甲');
 
-  assert.equal(dragon!.era, 6, '邪龙王也是现代时代');
+  assert.equal(dragon!.era, 6, '邪龙王也是信息化时代');
   assert.equal(dragon!.move, 2, '低移速');
   assert.ok(dragon!.maxHp >= 180, '高血量');
   assert.ok((dragon!.magicRes ?? 0) >= 10, '高魔抗');
@@ -3106,7 +3106,7 @@ test('窃掠：攻城顺手偷走"伤害 ×2"的金币', () => {
   s.players.B.gold = 100;
   const mine = s.players.A.gold;
   const dmg = damageToCity(thief, city, s);
-  assert.ok(dmg > 0, '盗贼应该打得动古典城墙');
+  assert.ok(dmg > 0, '盗贼应该打得动青铜城墙');
 
   const r = applyAction(s, { type: 'SIEGE', unitId: thief.id, cityId: city.id });
   assert.ok(r.ok);
@@ -3701,11 +3701,11 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
   }
   // 顶级火力要真的压过后排：火炮 5 格，长弓手 4 格。
   // 水面上负责这一档的是 E5 的那几条钢铁舰队（重巡/战列舰），
-  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在工业时代算远的，
+  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在蒸汽时代算远的，
   // 但不该和火炮/战列舰同格。
   assert.equal(UNIT_TYPES.longbow.range, 4);
   assert.equal(UNIT_TYPES.artillery.range, 5);
-  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是工业时代的船，射程不该追平火炮');
+  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是蒸汽时代的船，射程不该追平火炮');
   assert.equal(nvDef('nv_heavy_cruiser').range, 5, '重巡的 8 吋炮要打到 5 格');
   assert.equal(nvDef('nv_battleship').range, 5);
   // 载具也上了一个台阶：射程 3 意味着能站在近战够不到的地方开火
@@ -4167,7 +4167,7 @@ test('每个内置扩展都被注册且带说明', () => {
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
     // 时代开关也算"干了事"：它没有钩子、没有兵种，但改了能升到第几级
-    // （「现代」就是这样——它只把时代上限抬到 6，兵全在「现代战争」里）
+    // （「信息化」就是这样——它只把时代上限抬到 6，兵全在「现代战争」里）
     const opensEra = typeof e.unlockEra === 'number';
     // 纯表现层扩展（比如"浓雾"把地形也遮掉）没有钩子是正常的，
     // 但它必须自己声明过 presentationOnly，否则就是"注册了个什么都不干的包"
@@ -6450,7 +6450,7 @@ test('水域太少的地图，AI 不再造水军', () => {
 });
 
 test('高时代 AI 会把高时代兵用起来，不是一辈子造火枪兵', () => {
-  // 改之前：60 局只造出 1 辆坦克、10 门火炮，中世以后清一色火枪兵。
+  // 改之前：60 局只造出 1 辆坦克、10 门火炮，铁器以后清一色火枪兵。
   // 根因不是它们弱（交换比 3+），是"贵"在打分里被折了两次。
   for (const level of ['basic', 'advanced'] as const) {
     const s = fresh({ startEra: 4, size: 20, aiLevel: level }, 4242);
@@ -7192,7 +7192,7 @@ test('先后手补偿可以关掉，跑批旋钮也能压过它给的比例', ()
 });
 
 test('先手第一回合可以不结算收入，后手照常', () => {
-  // 这是"结构性配平"的开关：先手白拿一回合收入（古典约 91 金）是先后手差距里
+  // 这是"结构性配平"的开关：先手白拿一回合收入（青铜约 91 金）是先后手差距里
   // 最硬的一块，关掉之后先手只剩"先动一步"。
   const off = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 99);
   const on = createMatch({ ...DEFAULT_CONFIG, expansionIds: [], noFirstIncome: true }, 99);
@@ -7529,7 +7529,7 @@ test('AI 会一直铺到对岸，而不是每回合换个地方重来', () => {
 
 test('按兵种搭配买兵：真远程的预算不会被长兵器挤掉', () => {
   // 戟兵射程改 2 之后，上一版把它当成"远程"来奖励：既拿远程的 +9，
-  // 又把远程占比撑虚，结果火药局戟兵采用率 23.7%、火枪兵只剩 6.8%。
+  // 又把远程占比撑虚，结果火器局戟兵采用率 23.7%、火枪兵只剩 6.8%。
   const s = fresh({ startEra: 3, size: 16, aiLevel: 'advanced' }, 9090);
   s.units = s.units.filter((u) => u.owner !== 'A');
   s.players.A.gold = 2400;
@@ -7924,7 +7924,7 @@ test('「升级时代」能排进序列，同样占一格', () => {
 });
 
 test('排了「升级时代」，AI 这一回合真的会去升级', () => {
-  const s = commandPost(); // 1000 金，够升到中世
+  const s = commandPost(); // 1000 金，够升到铁器
   s.orders = { A: [ORDER_UPGRADE] }; // Explicit order: this test is not about auto-planning.
   const budget = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 1, order: null };
   let cur = s;
@@ -8336,7 +8336,7 @@ test('英雄的唯一性：蛋还没孵出来，也不能再造一只', () => {
 
 /**
  * 这几条守的是"设计约束"，不是"规则正确"：
- * 单位数据一旦被人手改坏（改错时代、抄重复 id、把古典贵兵塞进开局池），
+ * 单位数据一旦被人手改坏（改错时代、抄重复 id、把青铜贵兵塞进开局池），
  * 平衡报告会立刻失真，但游戏本身照样能跑——所以必须靠测试拦住。
  */
 const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
@@ -8387,9 +8387,9 @@ test('时代包的兵种字段合法（能力存在、数值为正、建筑不�
   }
 });
 
-test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白送）', () => {
+test('青铜包的 era 1 陆军战斗单位造价不超过 60（开局会被白送）', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'pack-antiquity');
-  assert.ok(pack, '古典包必须存在');
+  assert.ok(pack, '青铜包必须存在');
   for (const u of pack.units ?? []) {
     // 水军不进开局池（setup.ts 的 spawnPool 会把 domain=water 剔掉），所以不受这条约束
     if (u.era === 1 && u.category === 'combat' && u.domain !== 'water') {
@@ -8404,18 +8404,18 @@ test('古典包的 era 1 陆军战斗单位造价不超过 60（开局会被白�
 console.log('\n第六时代 · 现代');
 
 /**
- * 「现代」做了一件别的包没做的事：它把**时代上限**往后推了一格。
+ * 「信息化」做了一件别的包没做的事：它把**时代上限**往后推了一格。
  *
  * 所以这一组测的不是"数值好不好"，而是"那道闸是不是真的装了"：
- * 时代 6 在 ERAS 里，但没开「现代」时城市升不上去、按钮不出现、上帝模式也造不出；
+ * 时代 6 在 ERAS 里，但没开「信息化」时城市升不上去、按钮不出现、上帝模式也造不出；
  * 开了之后能升、能造兵，而且升到表底就停。
  *
  * 第六时代拆成两个包，和"原版给底座、扩展往上加料"的分法对齐：
- *   「现代」`pack-contemporary`     开时代 + 9 个最基本的兵
+ *   「信息化」`pack-contemporary`     开时代 + 9 个最基本的兵
  *   「现代战争」`pack-contemporary-war` 在底座上加 15 个专精兵（requires 前者）
  * 所以这里也要分别验：上限只在底座那一处，光有加料包既抬不动时代、也造不出兵。
  */
-test('只有「现代」能把时代上限抬到第六级，「现代战争」自己抬不动', () => {
+test('只有「信息化」能把时代上限抬到第六级，「现代战争」自己抬不动', () => {
   assert.equal(BASE_MAX_ERA, 5, '不勾任何扩展时，基础规则停在第五时代');
   assert.equal(eraCeilingFor([]), 5);
   assert.equal(eraCeilingFor(['pack-modern']), 5, '普通时代兵种包不该顺手抬高上限');
@@ -8426,7 +8426,7 @@ test('只有「现代」能把时代上限抬到第六级，「现代战争」�
   assert.equal(eraCeilingFor(['pack-modern', 'pack-contemporary']), 6);
 
   const base = expansionById('pack-contemporary');
-  assert.ok(base, '「现代」必须注册在 EXPANSIONS 里');
+  assert.ok(base, '「信息化」必须注册在 EXPANSIONS 里');
   assert.equal(base.unlockEra, 6, '开关就是这一条字段');
   assert.equal(base.scale, 'large', '带一整套底座兵的包归大型，单独成册');
   assert.equal((base.units ?? []).length, 9, '底座就是这一代最基本的九个兵');
@@ -8443,7 +8443,7 @@ test('只有「现代」能把时代上限抬到第六级，「现代战争」�
   assert.equal(eraCeilingFor(['pack-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
 });
 
-test('只开「现代」也能打完一整局：九个基本的兵一个不缺', () => {
+test('只开「信息化」也能打完一整局：九个基本的兵一个不缺', () => {
   // 这条守的是"底座必须自洽"。用户要的就是"现代扩展也和前几个时代一样有
   // 几个最基本的兵"——那么只勾它、不勾「现代战争」，这一代也得是一个完整的代际：
   // 打得动（战斗兵）、养得起（经济）、盖得出（工程兵 + 建筑）、造得出兵（军营）。
@@ -8477,7 +8477,7 @@ test('只开「现代」也能打完一整局：九个基本的兵一个不缺',
   }
 });
 
-test('不开「现代」：城市升到二战就封顶，拒绝理由要点出那个包', () => {
+test('不开「信息化」：城市升到机械化就封顶，拒绝理由要点出那个包', () => {
   const s = fresh({ startEra: 5, size: 12 }, 9901);
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
@@ -8489,11 +8489,11 @@ test('不开「现代」：城市升到二战就封顶，拒绝理由要点出�
   const r = applyAction(s, { type: 'UPGRADE', cityId: city.id });
   assert.equal(r.ok, false);
   // 只说"已经是最高时代"会让玩家以为游戏到此为止；要说清是哪一层没打开
-  assert.ok(!r.ok && r.reason.includes('「现代」'), `理由要指出能打开它的是哪个包：${!r.ok ? r.reason : ''}`);
-  assert.ok(!r.ok && r.reason.includes('二战'), '顺带把封顶在哪一代讲出来');
+  assert.ok(!r.ok && r.reason.includes('「信息化」'), `理由要指出能打开它的是哪个包：${!r.ok ? r.reason : ''}`);
+  assert.ok(!r.ok && r.reason.includes('机械化'), '顺带把封顶在哪一代讲出来');
 });
 
-test('开了「现代」和「现代战争」：能升到第六时代，并且造得出第六代兵', () => {
+test('开了「信息化」和「现代战争」：能升到第六时代，并且造得出第六代兵', () => {
   const ids = ['pack-contemporary', 'pack-contemporary-war', 'pack-modern'];
   // 先看第五时代的城能不能造六代兵：不能（招募门槛按城市时代判）
   const before = fresh({ startEra: 5, size: 12, expansionIds: ids }, 9902);
@@ -9657,7 +9657,7 @@ test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会',
   const builds = (id: string) => s.unitTypes[id]?.builds ?? [];
 
   assert.ok(builds('engineer').includes('brickworks'), '劳工起手就是砖窑');
-  assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是工业时代的东西');
+  assert.equal(builds('engineer').includes('cementworks'), false, '水泥厂是蒸汽时代的东西');
   assert.ok(builds('foreman').includes('cementworks'), '工程师会盖水泥厂');
   assert.equal(builds('foreman').includes('materialbase'), false, '建材基地要现代建筑队');
   for (const id of ['brickworks', 'cementworks', 'materialbase']) {
@@ -12242,9 +12242,9 @@ test('海军：两个包都注册上，兵种全是水面单位', () => {
 
 test('海军：铁甲舰回 E4、重巡补 E5，两代之间不再断层', () => {
   // ── 年代 ──
-  // 铁甲舰（Gloire 1859 → 定远 1885）是工业时代的船。以前它在 E5，
-  // 于是 1860 年代的装甲舰和二战战列舰同场，而 E4 那一代只剩浅水重炮舰。
-  assert.equal(UNIT_TYPES.ironclad!.era, 4, '铁甲舰属于工业时代');
+  // 铁甲舰（Gloire 1859 → 定远 1885）是蒸汽时代的船。以前它在 E5，
+  // 于是 1860 年代的装甲舰和机械化战列舰同场，而 E4 那一代只剩浅水重炮舰。
+  assert.equal(UNIT_TYPES.ironclad!.era, 4, '铁甲舰属于蒸汽时代');
   const heavy = nvDef('nv_heavy_cruiser');
   assert.equal(heavy.era, 5, '重巡（条约型，1930s）补在第五时代');
   assert.equal(heavy.domain, 'water');
@@ -12317,7 +12317,7 @@ test('海军：补进来的十四条船各就各位（年代、价位、分工�
   const ceiling: Record<number, number> = { 2: 130, 3: 190, 4: 170, 5: 400, 6: 280 };
   for (const era of [2, 3, 4, 5, 6]) {
     // "能打的"门槛按 12 点攻算：E2 那几条帆船本来就只有 14~19 攻，
-    // 拿 20 去筛会把整个中世滤空。纯运输船（攻 5~6）仍然排除在外。
+    // 拿 20 去筛会把整个铁器滤空。纯运输船（攻 5~6）仍然排除在外。
     const fighters = allWater.filter((u) => u.era === era && u.atk >= 12);
     assert.ok(fighters.length > 0, `E${era} 一条能打的船都没有`);
     const cheapest = Math.min(...fighters.map((u) => u.cost));
@@ -12617,7 +12617,7 @@ test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改
   assert.equal(UNIT_TYPES.gunboat!.domain, 'water');
 });
 
-test('海军：现代海军依赖「现代」，单勾它一条船都造不出来', () => {
+test('海军：现代海军依赖「信息化」，单勾它一条船都造不出来', () => {
   const modern = expansionById('naval-modern')!;
   assert.deepEqual(modern.requires, ['pack-contemporary']);
 
@@ -12631,7 +12631,7 @@ test('海军：现代海军依赖「现代」，单勾它一条船都造不出�
     { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
     5151,
   );
-  assert.ok(withBase.unitTypes['nv_carrier'], '开了「现代」之后航母才该在');
+  assert.ok(withBase.unitTypes['nv_carrier'], '开了「信息化」之后航母才该在');
 });
 
 test('海战：封锁让被堵的城少收 8 金，三座封顶', () => {
@@ -12950,7 +12950,7 @@ test('钻井平台：深水最肥，敌舰贴着就停产', () => {
 test('战列舰停在第五时代，第六时代由超巡接位', () => {
   const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
   const bb = ships.find((u) => u.id === 'nv_battleship')!;
-  assert.equal(bb.era, 5, '战列舰的历史定位应该落在第五时代（二战）');
+  assert.equal(bb.era, 5, '战列舰的历史定位应该落在第五时代（机械化）');
   assert.ok(
     !ships.some((u) => u.era === 6 && u.name.includes('战列舰')),
     '第六时代不该再有战列舰（1945 年后没有任何国家开工建过）',
@@ -13049,7 +13049,7 @@ test('空军：两包都注册上，18 个兵种全在空气层', () => {
   assert.ok(!planes.some((u) => u.domain === 'water'), '飞机不该被登记成水面单位');
 });
 
-test('空军：现代空军依赖「现代」与基础空军，单勾它什么都没有', () => {
+test('空军：现代空军依赖「信息化」与基础空军，单勾它什么都没有', () => {
   assert.deepEqual(MODERN_AIR.requires, ['pack-contemporary', 'air-corps']);
 
   const alone = createMatch(
@@ -13514,7 +13514,7 @@ test('选卡：时代军备 +1 禁 +2 选，且能和海空叠加', () => {
   assert.equal(all.picks, 10);
   assert.ok(all.pool <= 60, '池子有上限');
 
-  // 「现代海军」这条线要带「现代」，而「现代」本身就是时代军备的一包——
+  // 「现代海军」这条线要带「信息化」，而「信息化」本身就是时代军备的一包——
   // 于是它同时点亮两个体系：禁 1+1=2、选 6+1（单海军）+2（时代军备）=9。
   // 规则按**实际在场的体系**算，不按玩家"本来想开哪一类"算，
   // 这样联机两边看到的数字永远一致。

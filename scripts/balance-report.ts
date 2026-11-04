@@ -61,7 +61,7 @@ const EXPANSIONS = (() => {
   return v.split(',').map((x) => x.trim()).filter(Boolean);
 })();
 /**
- * 棋盘边长：不给就按时代默认（古典 12、中世 16、火药以上 20）。
+ * 棋盘边长：不给就按时代默认（青铜 12、铁器 16、火器以上 20）。
  * 要测"同一尺寸下不同时代的先后手差距"时，必须能把这个变量按住。
  */
 const SIZE = Number(argOf('size', '0'));

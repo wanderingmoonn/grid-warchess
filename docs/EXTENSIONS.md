@@ -37,7 +37,7 @@
 | 文件 | 内容 |
 |---|---|
 | `src/core/expansions.ts` | 12 个纯规则扩展（战争经济、堑壕战……） |
-| `src/core/era-packs.ts` | 5 个时代兵备包（古典 → 现代） |
+| `src/core/era-packs.ts` | 5 个时代兵备包（青铜 → 现代） |
 | `src/core/fantasy-packs.ts` | 5 个奇想兵种包（法则、骑士团、荒兽、秘术、英雄） |
 | `src/core/city-works.ts` | 1 个大改款（城郭与物料：大城、多资源、施工、驻军；经济建筑只做经济，建材产线按时代排到现代） |
 | `src/core/seasons.ts` | 1 个气候包（季节与气候：四季轮换，天气改移动、视野与射程） |

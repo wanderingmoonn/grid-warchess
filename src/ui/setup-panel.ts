@@ -55,7 +55,7 @@ export interface SetupResult {
 /**
  * 起始时代对应的标准棋盘尺寸。
  *
- * 这是"标准对局"的默认组合：古典配小图打快棋，火药之后配大图拉开战线。
+ * 这是"标准对局"的默认组合：青铜配小图打快棋，火器之后配大图拉开战线。
  * 玩家当然可以手动改尺寸——这里只是把默认值调成匹配的。
  */
 export function DEFAULT_SIZE_FOR_ERA(era: number): number {
@@ -1043,9 +1043,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (eraBtn?.dataset.era) {
         config.startEra = Number(eraBtn.dataset.era);
         // 选时代会顺手把棋盘换成这个时代的"标准尺寸"：
-        // 古典 12×12、中世 16×16、火药/工业/现代 20×20。
-        // 理由是实测出来的——小图配现代开局，摆不下几个兵就打成一团；
-        // 大图配古典开局，两边要走十个回合才照面。
+        // 青铜 12×12、铁器 16×16、火器/蒸汽/现代 20×20。
+        // 理由是实测出来的——小图配信息化开局，摆不下几个兵就打成一团；
+        // 大图配青铜开局，两边要走十个回合才照面。
         config.size = DEFAULT_SIZE_FOR_ERA(config.startEra);
         paint();
         return;
@@ -1233,7 +1233,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
       // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
       const stylesBefore = mapStylesFor(config.expansionIds).length;
-      // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「现代」这一格。
+      // 时代按钮也一样是扩展的函数：「现代战争」勾上就多出「信息化」这一格。
       const erasBefore = ERAS.filter((e) => e.level <= eraCeilingFor(config.expansionIds)).length;
       // 兵种池同样是扩展的函数：这一包带的兵会多出来 / 少掉十几格。
       const unitsBefore = Object.keys(unitPool().catalog).length;

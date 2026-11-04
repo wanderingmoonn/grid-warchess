@@ -74,7 +74,7 @@ return Math.floor(inc / sites);                                // 否则每回�
 |---|---|
 | 量法 | `scripts/ai-duel.ts`：同一颗种子两边各执一次先手（抵消先手与地图不对称），对手是**冻结的当前 AI**（`scripts/baselines/ai-current.ts`，即改动前的 `src/core/ai.ts`） |
 | 每臂局数 | 30 颗种子 × 2 = **60 局** |
-| 配置 | era3（火药）、20×20、随机图、`bloodbath` + `turn-order-comp` |
+| 配置 | era3（火器）、20×20、随机图、`bloodbath` + `turn-order-comp` |
 | 对照臂 | `base`：**原样** AI 打同一个冻结对手，用来验证量具本身无偏（应当 50%） |
 | 行为指标 | `scripts/probe-econ.ts`：6 局自对弈，统计战斗兵均价 / 升级次数 / 平均持金 / 攻走比 / 阵亡 |
 | 并行方式 | 每个方案一份仓库副本（`.ab/<arm>/`），互不干扰，同时跑 |

@@ -36,7 +36,7 @@ const EXPANSIONS = argOf('expansions', 'bloodbath,height-terrain,naval-fleet');
 const OUT = argOf('out', 'results/naval');
 const CAP = argOf('cap', '200');
 /**
- * 棋盘边长，0 = 按时代默认（火药及以后 20）。
+ * 棋盘边长，0 = 按时代默认（火器及以后 20）。
  *
  * 转发这一项是为了把"这批到底是多大图"钉住：默认值哪天跟着时代表改了，
  * 存下来的历史结果就会和当时的表头对不上，而跑批结果是要跨月对比的。

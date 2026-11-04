@@ -241,7 +241,7 @@ const AIR_CORPS_UNITS: UnitTypeDef[] = [
     vision: 7,
     ...AIRFRAME,
     abilities: ['af-superiority'],
-    // 二战制空主力：射程 3 + 制空 +12，空战里稳吃轰炸机和强击机。
+    // 机械化制空主力：射程 3 + 制空 +12，空战里稳吃轰炸机和强击机。
     // V = 44+36+20+9+22.5+10.5 = 142 → 0.42
   },
   {
@@ -681,7 +681,7 @@ export function recoverToCarrier(state: GameState, carrier: Unit, plane: Unit): 
 /**
  * 「空军」：第四、第五时代。
  *
- * 为什么从第四时代开始：第三时代（火药）之前没有"飞机"这种东西，
+ * 为什么从第四时代开始：第三时代（火器）之前没有"飞机"这种东西，
  * 硬塞进来就得编；而气球、双翼机、二战机群正好填第四、第五两代。
  */
 export const AIR_CORPS: Expansion = {
@@ -700,7 +700,7 @@ export const AIR_CORPS: Expansion = {
 /**
  * 「现代空军」：第六时代，`requires: ['pack-contemporary', 'air-corps']`。
  *
- * 第六时代是「现代」开出来的，单勾这个包会得到一堆造不出来的飞机——
+ * 第六时代是「信息化」开出来的，单勾这个包会得到一堆造不出来的飞机——
  * 那是"包坏了"，不是设计。所以写上前置，开局面板会自动补上。
  *
  * 为什么还要依赖 `air-corps`：现代机用的 `af-superiority` / `af-ground-strike`

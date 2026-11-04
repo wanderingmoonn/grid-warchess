@@ -1,6 +1,6 @@
 # 海军阵营批量对局 · 平衡数据与 AI 改动
 
-- 场景：**火药时代开局（era 3）· 群岛地貌（`isles`）· 20×20**，双 AI（`advanced`）对打
+- 场景：**火器时代开局（era 3）· 群岛地貌（`isles`）· 20×20**，双 AI（`advanced`）对打
 - 扩展：`bloodbath`、`height-terrain`（群岛地形由它提供）、`naval-fleet`，加上这一轮要求的现代组
   `pack-contemporary`、`pack-contemporary-war`、`naval-modern`
 - 局数：**50 局 × 2 轮**（改动前 = `base`，改动后 = `v2`），同种子 `900..949`

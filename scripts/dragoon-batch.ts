@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   let failed = 0;
   console.log(
     `${LABEL}流 vs 标准 AI：${jobs.length} 局（${SEEDS} 颗种子 × 2 个座位）· ${ERA} 代 ${SIZE}×${SIZE} · 并发 ${limit} · ` +
-      `种子 ${BASE_SEED}..${BASE_SEED + SEEDS - 1} · 火药 20×20`,
+      `种子 ${BASE_SEED}..${BASE_SEED + SEEDS - 1} · 火器 20×20`,
   );
 
   const worker = async (): Promise<void> => {

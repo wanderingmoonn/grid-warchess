@@ -122,7 +122,7 @@ for (let g = 0; g < GAMES; g += 1) {
 const def = createMatch({ ...DEFAULT_CONFIG, startEra: 3, expansionIds: EXPANSIONS }, BASE_SEED).unitTypes[TARGET];
 const price = def ? recruitPriceOf(createMatch({ ...DEFAULT_CONFIG, startEra: 3, expansionIds: EXPANSIONS }, BASE_SEED), 'A', def).gold : 0;
 
-console.log(`\n体检对象：${def?.name ?? TARGET}（${TARGET}）· ${GAMES} 局标准 AI 对局（火药 / 20×20）`);
+console.log(`\n体检对象：${def?.name ?? TARGET}（${TARGET}）· ${GAMES} 局标准 AI 对局（火器 / 20×20）`);
 console.log(`造价 ${def?.cost} · 攻 ${def?.atk} · 血 ${def?.maxHp} · 移 ${def?.move} · 射 ${def?.range} · 能力 ${(def?.abilities ?? []).join('/') || '—'}`);
 console.log(`\n① 实际采购：${bought} 次（每局 ${(bought / GAMES).toFixed(2)}）`);
 console.log(`   观察到的"一方一回合"共 ${turnsObserved} 次，其中金库 ≥ ${price} 的有 ${turnsAffordable} 次` +

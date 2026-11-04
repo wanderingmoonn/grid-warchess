@@ -139,8 +139,8 @@ function unitsCount(): number {
 
 console.log('\n首屏渲染');
 
-check('默认棋盘是古典标准尺寸 12×12，铺满 144 格', () => {
-  // 时代和棋盘尺寸是配套的：古典 12×12、中世 16×16、火药及以后 20×20
+check('默认棋盘是青铜标准尺寸 12×12，铺满 144 格', () => {
+  // 时代和棋盘尺寸是配套的：青铜 12×12、铁器 16×16、火器及以后 20×20
   assert.equal(doc.querySelectorAll('.tile').length, 144);
 });
 
@@ -1263,11 +1263,11 @@ check('选起始时代会顺手换成配套的棋盘尺寸', () => {
     doc.querySelector<HTMLElement>('[data-size].active')?.dataset.size ?? '';
 
   click('[data-era="1"]');
-  assert.equal(activeSize(), '12', '古典应该配 12×12');
+  assert.equal(activeSize(), '12', '青铜应该配 12×12');
   click('[data-era="2"]');
-  assert.equal(activeSize(), '16', '中世应该配 16×16');
+  assert.equal(activeSize(), '16', '铁器应该配 16×16');
   click('[data-era="3"]');
-  assert.equal(activeSize(), '20', '火药应该配 20×20');
+  assert.equal(activeSize(), '20', '火器应该配 20×20');
   click('[data-era="1"]');
 });
 
@@ -1405,28 +1405,28 @@ check('兵种池的两颗批量按钮：全选 / 只留本体', () => {
   closePool();
 });
 
-check('起始时代只摆到这一局的上限：勾上「现代」才多出第六格', () => {
-  // 第六时代是两个包：'pack-contemporary'「现代」开时代 + 带九个最基本的兵，
+check('起始时代只摆到这一局的上限：勾上「信息化」才多出第六格', () => {
+  // 第六时代是两个包：'pack-contemporary'「信息化」开时代 + 带九个最基本的兵，
   // 'pack-contemporary-war'「现代战争」在它之上加十五个专精兵（requires 前者）。
   // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
   const erasNow = () =>
     Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
-  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '不勾包时五格封顶');
+  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '不勾包时五格封顶');
 
   const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
   assert.ok(warBox, '开局面板里应有「现代战争」这一项');
   warBox.checked = true;
   warBox.dispatchEvent(new window.Event('change', { bubbles: true }));
 
-  // 勾加料包会自动补上它的前置「现代」——所以时代按钮当场多一格。
+  // 勾加料包会自动补上它的前置「信息化」——所以时代按钮当场多一格。
   // 这一步顺带守住了"勾了兵却造不出来"那个坑。
   assert.deepEqual(
     erasNow(),
-    ['古典', '中世', '火药', '工业', '二战', '现代'],
-    '加料包会把前置「现代」一起勾上，第六格随之出现',
+    ['青铜', '铁器', '火器', '蒸汽', '机械化', '现代'],
+    '加料包会把前置「信息化」一起勾上，第六格随之出现',
   );
   const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
-  assert.ok(baseBox?.checked, '前置「现代」应该被自动勾上');
+  assert.ok(baseBox?.checked, '前置「信息化」应该被自动勾上');
 
   // 单独取消加料包：时代还在（底座是独立的一包），第六格不该消失
   const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
@@ -1435,7 +1435,7 @@ check('起始时代只摆到这一局的上限：勾上「现代」才多出第�
   again.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(
     erasNow(),
-    ['古典', '中世', '火药', '工业', '二战', '现代'],
+    ['青铜', '铁器', '火器', '蒸汽', '机械化', '现代'],
     '加料包取消之后，底座还开着——这一代仍然打得完一整局',
   );
 
@@ -1444,7 +1444,7 @@ check('起始时代只摆到这一局的上限：勾上「现代」才多出第�
   assert.ok(baseAgain);
   baseAgain.checked = false;
   baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert.deepEqual(erasNow(), ['古典', '中世', '火药', '工业', '二战'], '关掉之后第六格要收回去');
+  assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '关掉之后第六格要收回去');
 });
 
 check('点兵种不重绘弹层，不会把列表弹回顶部', () => {
@@ -1715,7 +1715,7 @@ check('攒够钱之后，可以升级城市时代', () => {
   assert.notEqual(after, before, '时代标记应该变了');
   assert.equal(after, 'II', '应该升到时代 II');
   const html = doc.querySelector('.side')?.innerHTML ?? '';
-  assert.ok(html.includes('中世'), '面板应该显示已升到中世时代');
+  assert.ok(html.includes('铁器'), '面板应该显示已升到铁器时代');
 });
 
 check('升级后城市更硬，产兵列表也多出二级兵', () => {
@@ -1860,7 +1860,7 @@ check('军营面板列出兵种，并写清补给来自哪座城', () => {
   const html = host.innerHTML;
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
   assert.ok(html.includes('补给来自'), '应该写清补给来自哪座城市');
-  assert.ok(html.includes('中世'), '补给时代应该跟着最近的城走（这里升到了中世）');
+  assert.ok(html.includes('铁器'), '补给时代应该跟着最近的城走（这里升到了铁器）');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 二级兵种也能造：军营的时代取最近那座二级城
@@ -3017,11 +3017,11 @@ check('筛选把整页清空时，筛选栏与「清掉筛选」都必须还在�
     });
   const count = () => host.querySelectorAll('[data-act="recruit"]').length;
 
-  // 把城压到古典：骑士团一个能造的都没有（它的兵都在 2 代以上）
+  // 把城压到青铜：骑士团一个能造的都没有（它的兵都在 2 代以上）
   city!.era = 1;
   paint();
   const before = count();
-  assert.ok(before > 0, '古典城市本来是有兵可造的');
+  assert.ok(before > 0, '青铜城市本来是有兵可造的');
 
   // 复现：筛一个这座城市造不了的包 → 空列表
   paint('fantasy-knights');
@@ -3039,7 +3039,7 @@ check('筛选把整页清空时，筛选栏与「清掉筛选」都必须还在�
 
   // 时代那一维同理：筛一个城造不出的时代，也要留按钮
   paint('', 6);
-  assert.equal(count(), 0, '前提：六代兵在这座古典城里造不出来');
+  assert.equal(count(), 0, '前提：六代兵在这座青铜城里造不出来');
   assert.ok(
     host.querySelector('[data-act="recruit-era"][data-era="6"]'),
     '生效中的时代筛选必须留在筛选栏里',
@@ -3092,7 +3092,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   assert.ok(host.querySelector('[data-act="recruit-era"]'), '第二维：时代 chip');
   const all = count();
 
-  // 时代这一维单独用：切到古典，出来的必须全是古典兵
+  // 时代这一维单独用：切到青铜，出来的必须全是青铜兵
   const eraChips = Array.from(
     host.querySelectorAll<HTMLElement>('[data-act="recruit-era"]'),
   ).map((el) => Number(el.dataset.era));
@@ -3101,10 +3101,10 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   assert.ok(levels.length >= 2, `两行 chip 至少要能选两个时代，实际 ${levels.join(',')}`);
 
   paint('', '', levels[0]!);
-  assert.ok(count() > 0, '古典那一档不该是空的');
+  assert.ok(count() > 0, '青铜那一档不该是空的');
   assert.ok(
     erasShown().every((e) => e === levels[0]),
-    `筛了古典就只该有古典兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
+    `筛了青铜就只该有青铜兵，实际混进了 ${[...new Set(erasShown())].join(',')}`,
   );
   assert.equal(
     host.querySelector<HTMLElement>(`[data-act="recruit-era"][data-era="${levels[0]}"]`)?.className.includes('active'),
@@ -3149,7 +3149,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   if (count() === 0) {
     assert.ok(host.innerHTML.includes('这一档没有能造的兵'), '空态要给一句人话');
     assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
-    assert.ok(host.innerHTML.includes('古典'), '空态要写清生效了时代筛选');
+    assert.ok(host.innerHTML.includes('青铜'), '空态要写清生效了时代筛选');
   }
 });
 
@@ -3204,7 +3204,7 @@ check('热座指挥官：底栏是「提交作战计划」，交完就变「已�
 });
 
 check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () => {
-  // 这条以前是反的：城市 era 5，面板里连一个古典兵都不剩。
+  // 这条以前是反的：城市 era 5，面板里连一个青铜兵都不剩。
   const st = createMatch(
     { size: 14, startEra: 5, aiOpponent: false, aiAlly: false, expansionIds: [], enabledUnits: Object.keys(UNIT_TYPES) },
     507,

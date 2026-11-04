@@ -51,7 +51,7 @@ const EXP = argOf('exp', DEFAULT_CONFIG.expansionIds.join(',')).split(',').filte
  *
  * 照抄 doUpgrade 的那几步（era / maxHp / armor / hp），不另写一套：
  * 让子的本质就是"这一次升级白送"，别的地方不该有任何差别。
- * 封顶按 eraCeilingOf 走，所以没开现代包时最多追到二战。
+ * 封顶按 eraCeilingOf 走，所以没开现代包时最多追到机械化。
  */
 function giveEra(s: GameState, p: PlayerId, n: number): number {
   const cap = eraCeilingOf(s);
