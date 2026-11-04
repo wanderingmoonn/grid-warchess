@@ -6,7 +6,11 @@ import type { GameState, Unit } from '../types.ts';
 type RankUpListener = (u: Unit, s: GameState) => void;
 const rankUpListeners: RankUpListener[] = [];
 
-/** 注册一个升级时的监听函数（由外部文件调用） */
+/** 
+ * 注册升级监听器。
+ * 【警告】不要在 progression.ts 里直接 import 技能或能力！
+ * 必须通过这里注册回调，否则会导致循环依赖，游戏直接卡死。
+ */
 export function onRankUp(fn: RankUpListener) {
   rankUpListeners.push(fn);
 }

@@ -1,3 +1,14 @@
+/**
+ * ── 修真扩展包入口（组装车间） ──────────────────────────────
+ * 注意：本文件只负责把各个零件拼装成最终的 Expansion 对象。
+ * 业务逻辑已经被拆分到了 cultivation/ 目录下，详见 cultivation/README.md。
+ * 
+ * 架构核心原则：
+ * 1. 升级发技能 -> 走 onRankUp 事件广播，绝不反向 import。
+ * 2. 技能数据 -> skills.ts；技能执行 -> skill-effects.ts。
+ * 3. 如果外部模块 import 本文件报错，请检查底部的 re-export 桥接。
+ */
+
 import type { 
   Expansion
  } from './expansions.ts';
@@ -20,10 +31,6 @@ import { CULTIVATION_HOOKS } from './cultivation/hooks.ts';
 import './cultivation/skill-effects.ts';
 
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
-
-export { 
-  getAgingYears 
-} from './cultivation/progression.ts';
 
 /**
  * 让单位学会一个后天技能。如果已经学过，什么都不做。
@@ -100,3 +107,7 @@ export const CULTIVATION_PACK: Expansion = {
 };
 
 export { cultivationRank, setCultivationExp, getSwordSweepReach };
+
+export { 
+  getAgingYears 
+} from './cultivation/progression.ts';
