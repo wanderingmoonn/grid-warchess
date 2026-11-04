@@ -9103,7 +9103,8 @@ test('effectiveStats：老兵不死的击杀成长进了真实攻击力', () => 
 test('effectiveStats：指挥光环来自相邻友军，面板上单独列一条', () => {
   const s = arena(fresh({ expansionIds: ['pack-antiquity'] }));
   const mate = place2(s, 'A', 'militia', 6, 6);
-  place2(s, 'A', 'anc_legionary', 8, 6); // 2 格：2026-11-03 起半径是 2
+  // 光环源用旌旗车：军团兵在 2026-11-04 的"青铜→铁器"改动里挪到了中世包
+  place2(s, 'A', 'anc_standard', 8, 6); // 2 格：2026-11-03 起半径是 2
   const eff = effectiveStats(s, mate);
   assert.equal(eff.atk, utype(s, 'militia').atk + 4);
   assert.ok(eff.atkItems.some((it) => it.label === '指挥光环' && it.delta === 4));
@@ -12288,7 +12289,7 @@ test('海军：补进来的十四条船各就各位（年代、价位、分工�
   // 补的，一旦有人随手改价，分工会立刻塌（比如鱼雷艇涨到 250 就没人拿它当消耗品了）。
   const want: Array<[string, number, number, number]> = [
     ['nv_galley', 2, 110, 18],
-    ['nv_treasure_ship', 2, 180, 14],
+    ['nv_treasure_ship', 3, 235, 18],
     ['nv_turtle_ship', 3, 245, 34],
     ['nv_sailing_frigate', 3, 175, 30],
     ['nv_torpedo_boat', 4, 150, 38],

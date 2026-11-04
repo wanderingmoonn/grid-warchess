@@ -2,7 +2,7 @@
  * 时代兵种扩展包（大型模组）。
  *
  * 五个时代各出一套，取材自该时代真实存在的兵种、攻城器械与防御工事。
- * 每套的单位数量都**超过原版同期**（原版：青铜 12 / 铁器 8 / 火器 11 / 蒸汽 7 / 现代 11），
+ * 每套的单位数量都**超过原版同期**（原版：青铜 13 / 铁器 10 / 火器 11 / 蒸汽 7 / 现代 11），
  * 目的是让"同一代"里出现真正的兵种选择，而不是"挑最贵那个"。
  *
  * ---------------------------------------------------------------
@@ -44,7 +44,7 @@ import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /* ================================================================== */
-/* 时代 1 · 青铜（原版 12 个 → 模组 14 个）                            */
+/* 时代 1 · 青铜（原版 13 个 → 模组 14 个）                            */
 /* ================================================================== */
 
 const ANTIQUITY: UnitTypeDef[] = [
@@ -79,38 +79,8 @@ const ANTIQUITY: UnitTypeDef[] = [
     range: 2,
     vision: 3,
   },
-  {
-    // 希腊重装步兵：方阵的核心。攻击不高，但 5 点护甲让民兵几乎打不动
-    id: 'anc_hoplite',
-    name: '重装步兵',
-    short: '重',
-    era: 1,
-    category: 'combat',
-    cost: 42,
-    move: 2,
-    atk: 14,
-    armor: 5,
-    maxHp: 40,
-    range: 1,
-    vision: 2,
-    abilities: ['shield-wall'],
-  },
-  {
-    // 罗马军团兵：站住就有光环，是"阵型"这个概念的第一次兑现
-    id: 'anc_legionary',
-    name: '军团兵',
-    short: '团',
-    era: 1,
-    category: 'combat',
-    cost: 49,
-    move: 2,
-    atk: 17,
-    armor: 4,
-    maxHp: 36,
-    range: 1,
-    vision: 2,
-    abilities: ['shield-wall', 'aura-command'],
-  },
+
+
   {
     // 蛮族战斧手：没有甲，只有一下狠的。用得起、死得快
     id: 'anc_axeman',
@@ -157,22 +127,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     range: 1,
     vision: 3,
   },
-  {
-    // 印度/迦太基战象：一堵会走的墙。kamikaze 表示溃散时会踩自己人
-    id: 'anc_elephant',
-    name: '战象',
-    short: '象',
-    era: 1,
-    category: 'combat',
-    cost: 54,
-    move: 2,
-    atk: 22,
-    armor: 4,
-    maxHp: 50,
-    range: 1,
-    vision: 2,
-    abilities: ['kamikaze'],
-  },
+
   {
     // 攻城槌：唯一的用途是撞门，野战里几乎打不动人
     id: 'anc_ram',
@@ -189,22 +144,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     vision: 1,
     abilities: ['siege-master'],
   },
-  {
-    // 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵
-    id: 'anc_ballista',
-    name: '弩炮',
-    short: '弩',
-    era: 1,
-    category: 'combat',
-    cost: 48,
-    move: 1,
-    atk: 15,
-    armor: 1,
-    maxHp: 22,
-    range: 4,
-    vision: 2,
-    abilities: ['armor-pierce'],
-  },
+
 
   // ---- 工事 ----
   {
@@ -295,6 +235,60 @@ const ANTIQUITY: UnitTypeDef[] = [
     vision: 3,
     domain: 'water',
   },
+
+  /*
+   * 下面三个补的是"青铜时代只有希腊罗马"这个偏科。
+   *
+   * 青铜时代的战场在埃及、两河、商周同样热闹，而且各自有一套成熟兵种：
+   * 努比亚弓手（埃及新王国，前 2000 年起就是雇佣弓手）、青铜剑士（商周与
+   * 迈锡尼都有的近战精锐）、旌旗车（商周的战车指挥位）。旌旗车尤其重要——
+   * 它是**第一代唯一的支援兵**，编制模板里那 15% 支援份额终于有东西可买。
+   */
+  {
+    id: 'anc_nubian',
+    name: '努比亚弓手',
+    short: '努',
+    era: 1,
+    category: 'combat',
+    cost: 38,
+    move: 3,
+    atk: 9,
+    armor: 0,
+    maxHp: 18,
+    range: 4,
+    vision: 4,
+    abilities: ['stealth'],
+  },
+  {
+    id: 'anc_bronzesword',
+    name: '青铜剑士',
+    short: '剑',
+    era: 1,
+    category: 'combat',
+    cost: 36,
+    move: 2,
+    atk: 15,
+    armor: 2,
+    maxHp: 32,
+    range: 1,
+    vision: 2,
+  },
+  {
+    id: 'anc_standard',
+    name: '旌旗车',
+    short: '旌',
+    era: 1,
+    category: 'combat',
+    cost: 44,
+    move: 3,
+    atk: 2,
+    armor: 1,
+    maxHp: 30,
+    range: 1,
+    vision: 4,
+    abilities: ['aura-command'],
+  },
+
 ];
 
 /* ================================================================== */
@@ -502,6 +496,70 @@ const MEDIEVAL: UnitTypeDef[] = [
     vision: 4,
     domain: 'water',
     carry: { hold: { max: 3 } },
+  },
+  {
+    // 希腊重装步兵：方阵的核心。攻击不高，但 5 点护甲让民兵几乎打不动
+    id: 'anc_hoplite',
+    name: '重装步兵',
+    short: '重',
+    era: 2,
+    category: 'combat',
+    cost: 58,
+    move: 2,
+    atk: 16,
+    armor: 5,
+    maxHp: 46,
+    range: 1,
+    vision: 2,
+    abilities: ['shield-wall'],
+  },
+  {
+    // 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵
+    id: 'anc_ballista',
+    name: '弩炮',
+    short: '弩',
+    era: 2,
+    category: 'combat',
+    cost: 64,
+    move: 1,
+    atk: 17,
+    armor: 1,
+    maxHp: 24,
+    range: 4,
+    vision: 2,
+    abilities: ['armor-pierce'],
+  },
+  {
+    // 罗马军团兵：站住就有光环，是"阵型"这个概念的第一次兑现
+    id: 'anc_legionary',
+    name: '军团兵',
+    short: '团',
+    era: 2,
+    category: 'combat',
+    cost: 62,
+    move: 2,
+    atk: 19,
+    armor: 4,
+    maxHp: 42,
+    range: 1,
+    vision: 2,
+    abilities: ['shield-wall', 'aura-command'],
+  },
+  {
+    // 印度/迦太基战象：一堵会走的墙。kamikaze 表示溃散时会踩自己人
+    id: 'anc_elephant',
+    name: '战象',
+    short: '象',
+    era: 2,
+    category: 'combat',
+    cost: 72,
+    move: 2,
+    atk: 24,
+    armor: 4,
+    maxHp: 58,
+    range: 1,
+    vision: 2,
+    abilities: ['kamikaze'],
   },
 ];
 
@@ -1469,7 +1527,8 @@ export const ERA_PACKS: Expansion[] = [
 
     scale: 'large',
     name: '青铜会战',
-    summary: '希腊方阵、罗马军团、战车与战象，加上攻城槌、弩炮、瞭望塔与夯土城墙。',
+    summary: '投石兵、标枪兵、轻盾兵、战车、努比亚弓手与青铜剑士，配攻城槌、瞭望塔、'
+      + '夯土城墙与旌旗车（第一代唯一的光环支援）。',
     hooks: {},
     units: ANTIQUITY,
   },
@@ -1478,7 +1537,8 @@ export const ERA_PACKS: Expansion[] = [
 
     scale: 'large',
     name: '铁器兵备',
-    summary: '重装军士、热那亚弩手、蒙古骑射手、瑞士长矛兵，配投石机、攻城塔与城墙。',
+    summary: '瑞士长矛兵、重装军士、双手剑士、希腊重装步兵与罗马军团，配战象、弩炮、'
+      + '投石机、攻城塔与城墙。',
     hooks: {},
     units: MEDIEVAL,
   },

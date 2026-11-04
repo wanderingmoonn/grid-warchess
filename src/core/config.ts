@@ -228,7 +228,16 @@ export function navigable(t: Terrain): boolean {
 
 export interface EraDef {
   level: number;
+  /** 正式名（"青铜时代"）：规则书、结算、提示里用它 */
   name: string;
+  /**
+   * 按钮上的短标（"青铜"）。
+   *
+   * 单独一个字段而不是从 name 里切掉"时代"两个字：切字符串看起来省事，
+   * 但"青铜时代"和"铁器时代"这类名字一眼能看出规律，"信息化时代"以后要是改成
+   * 别的叫法，切出来的短标就会莫名其妙。写死在这里，改的时候改一处。
+   */
+  short: string;
   hint: string;
   /** 从上一个时代升到这个时代要花的金币；1 级为 0 */
   upgradeCost: number;
@@ -242,6 +251,7 @@ export const ERAS: EraDef[] = [
   {
     level: 1,
     name: '青铜时代',
+    short: '青铜',
     hint: '短兵相接',
     upgradeCost: 0,
     cityMaxHp: 30,
@@ -251,6 +261,7 @@ export const ERAS: EraDef[] = [
   {
     level: 2,
     name: '铁器时代',
+    short: '铁器',
     hint: '甲胄与长弓',
     upgradeCost: 220,
     cityMaxHp: 42,
@@ -260,6 +271,7 @@ export const ERAS: EraDef[] = [
   {
     level: 3,
     name: '火器时代',
+    short: '火器',
     hint: '排队枪毙',
     upgradeCost: 360,
     cityMaxHp: 54,
@@ -269,6 +281,7 @@ export const ERAS: EraDef[] = [
   {
     level: 4,
     name: '蒸汽时代',
+    short: '蒸汽',
     hint: '钢铁与堑壕',
     upgradeCost: 540,
     cityMaxHp: 66,
@@ -278,6 +291,7 @@ export const ERAS: EraDef[] = [
   {
     level: 5,
     name: '机械化时代',
+    short: '机械化',
     hint: '内燃机与总动员',
     upgradeCost: 780,
     cityMaxHp: 80,
@@ -287,6 +301,7 @@ export const ERAS: EraDef[] = [
   {
     level: 6,
     name: '信息化时代',
+    short: '信息化',
     hint: '信息化与精确打击',
     upgradeCost: 1080,
     cityMaxHp: 96,
@@ -497,6 +512,29 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0 },
   },
 
+  /*
+   * 戈兵（商周）。
+   *
+   * 补它就是因为它把"青铜时代"从地图上只有欧洲变回它本来的样子：戈是
+   * 中国青铜时代的主战兵器，钩、啄、拉，专治甲片之间的缝——所以给的是破甲，
+   * 而不是再加一个"攻更高的民兵"。民兵 25 金 13 攻，它 30 金 12 攻、多一格甲
+   * 和破甲：同一档里买它不是为了打得狠，是为了打得穿。
+   */
+  ge: {
+    id: 'ge',
+    name: '戈兵',
+    short: '戈',
+    era: 1,
+    category: 'combat',
+    cost: 30,
+    move: 2,
+    atk: 12,
+    armor: 1,
+    maxHp: 30,
+    range: 1,
+    vision: 2,
+    abilities: ['armor-pierce'],
+  },
   // ================= 时代 2 · 铁器 =================
   spearman: {
     id: 'spearman',
@@ -612,6 +650,51 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4 },
   },
 
+  /*
+   * 弩兵（战国—汉）。
+   *
+   * 和长弓的分工：长弓（90 金 / 射 4）靠射程压制，弩（82 金 / 射 3）靠**破甲**。
+   * 弩的拉力大、装填慢，所以移动和血量都比长弓差一点——它不是"更好的弓"，
+   * 是"拉得开重甲的那把"。铁器时代的主力远程从这一格开始分成两条路。
+   */
+  crossbow: {
+    id: 'crossbow',
+    name: '弩兵',
+    short: '弩',
+    era: 2,
+    category: 'combat',
+    cost: 82,
+    move: 2,
+    atk: 16,
+    armor: 1,
+    maxHp: 24,
+    range: 3,
+    vision: 3,
+    abilities: ['armor-pierce'],
+  },
+  /*
+   * 楼船（汉）。
+   *
+   * 原版的海面在舢板（1 代 34 血）和炮艇（3 代）之间是空的，两代之间没有一条
+   * 能扛能打的船——水图打到铁器时代只能继续开舢板。楼船补的就是这一格：
+   * 慢（移 3）、厚（85 血）、射 2 格，是"水上的活动堡垒"，不是快船。
+   * 快船仍然是海军扩展里那几条（桨帆船 / 德罗蒙，移 4~5）。
+   */
+  tower_ship: {
+    id: 'tower_ship',
+    name: '楼船',
+    short: '楼',
+    era: 2,
+    category: 'combat',
+    cost: 130,
+    move: 3,
+    atk: 15,
+    armor: 3,
+    maxHp: 85,
+    range: 2,
+    vision: 3,
+    domain: 'water',
+  },
   // ================= 时代 3 · 火器 =================
   musketeer: {
     id: 'musketeer',

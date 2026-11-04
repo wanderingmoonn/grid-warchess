@@ -399,7 +399,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const eras = ERAS.filter((e) => e.level <= ceiling);
       const eraChips = eras.map(
         (e) =>
-          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}">${e.name}</button>`,
+          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}" title="${e.name}">${e.short}</button>`,
       ).join('');
 
       /*
