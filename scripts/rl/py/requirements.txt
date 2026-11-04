@@ -1,0 +1,5 @@
+# Python 侧只依赖两个东西：算矩阵的 numpy，和算梯度的 torch。
+# Windows / CPU：
+#   .venv/Scripts/python.exe -m pip install -r scripts/rl/py/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+numpy>=2.0
+torch>=2.6

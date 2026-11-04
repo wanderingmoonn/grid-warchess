@@ -176,6 +176,13 @@ export interface Decision {
   value: number;
   /** 实际参与比较的动作数（= min(topK, 动作数)），诊断用 */
   considered: number;
+  /**
+   * 参与比较的那批候选动作下标（按分数降序）。
+   *
+   * 训练侧要它：PPO 更新时算 `π_new(a|s)` 必须在**同一批候选**上算，
+   * 否则新旧两个分布的分母都不一样，ratio 就没意义了。
+   */
+  candidates: number[];
 }
 
 /**
@@ -369,6 +376,7 @@ export class Policy {
       logp: Math.log(this.logits[pick]! / sum),
       value,
       considered: this.candN,
+      candidates: Array.from(this.cand.subarray(0, this.candN)),
     };
   }
 
