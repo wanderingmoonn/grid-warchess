@@ -203,9 +203,7 @@ export function addExp(u: Unit, s: GameState, amount: number): void {
     // 注意：外部若强行指定过 custom.lifespan（测试场景），这里会覆盖它——
     // 若需固定寿元同时又要触发升级，请直接操纵 custom 而不要走 addExp。
     const newLifespan = baseLifespanOf(newRank);
-    if (Number.isFinite(newLifespan)) {
-      u.custom.lifespan = newLifespan;
-    } else {
+    if (!Number.isFinite(newLifespan)) {
       delete u.custom.lifespan;
     }
   }
