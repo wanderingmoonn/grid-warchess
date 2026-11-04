@@ -36,6 +36,7 @@ import {
   unitIncomeAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { openTitle } from '../src/ui/title-screen.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -1403,6 +1404,42 @@ check('兵种池的两颗批量按钮：全选 / 只留本体', () => {
   assert.ok(doc.querySelectorAll('[data-unit].active').length >= 4, '本体兵种一个不少');
   click('[data-act="unit-pool-all"]');
   closePool();
+});
+
+check('开始页面：没有存档时「继续」是灰的，点「开始对局」会交回控制权', () => {
+  /*
+   * 首页是玩家看见的第一屏。以前第一屏是**一张已经开局的随机棋盘**，
+   * 没有标题、没有下一步提示——这条守的是"它至少把门面这件事做对了"。
+   *
+   * 三个断言：主按钮存在且在焦点上、没有存档时「继续」不可点、
+   * 点「开始对局」会关掉这一层并把控制权交回去。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let started = false;
+  const close = openTitle(host, {
+    hasSave: false,
+    version: '0.0.0-test',
+    onNew: () => { started = true; },
+    onContinue: () => {},
+    onOnline: () => {},
+    onManual: () => {},
+  });
+
+  const box = host.querySelector('.title-screen');
+  assert.ok(box, '首页应该挂上来');
+  assert.ok((host.textContent ?? '').includes('时代与回旋镖'), '要有游戏名');
+  const cont = host.querySelector<HTMLButtonElement>('[data-act="continue"]')!;
+  assert.equal(cont.disabled, true, '没有存档时「继续上一局」不该能点');
+
+  const start = host.querySelector<HTMLButtonElement>('[data-act="new"]')!;
+  assert.equal(doc.activeElement, start, '焦点应在主按钮上（键盘两下开局）');
+  start.click();
+  assert.equal(started, true, '点「开始对局」要交回控制权');
+  assert.ok(!host.querySelector('.title-screen'), '点完要把这一层撤掉');
+
+  close();
+  host.remove();
 });
 
 check('起始时代只摆到这一局的上限：勾上「信息化」才多出第六格', () => {

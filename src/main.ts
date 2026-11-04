@@ -98,6 +98,8 @@ import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
+import { openTitle } from './ui/title-screen.ts';
+import { BUILD_VERSION } from './core/build-info.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
@@ -229,6 +231,8 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
   }
 }
 
+/** 开机时本机有没有存档：有＝老玩家，直接落回棋盘；没有＝第一次来，先给首页 */
+const hadSavedMatch = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
 
@@ -3130,23 +3134,7 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'new-game': {
-      // 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
-      // 只有点了"开始对局"才会覆盖当前存档。
-      void openSetupPanel(state.config, randomSeed()).then((result) => {
-        if (!result) return;
-        state = createMatch(result.config, result.seed, loadCustomUnits());
-        detachRoom();
-        resetZoom();
-        clearSelection();
-        resetRecorder();
-        // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
-        // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
-        if (result.config.recordDetail === true) saveReportOptIn(true);
-        saveMatch(state);
-        render();
-        toast('新对局开始');
-        kickAiIfNeeded();
-      });
+      newGameFlow();
       return;
     }
 
@@ -3469,6 +3457,58 @@ async function runAiTurn(
   saveMatch(state);
   render();
   await sleep(delay);
+}
+
+/**
+ * 打开开局面板、确认后换一局。
+ *
+ * 抽成函数是因为入口有两个：顶栏的「新对局」和开始页面上的「开始对局」。
+ * 抄一份的话，两处迟早会走岔（比如只在一处记得关掉房间、重置记录器）。
+ *
+ * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
+ * 只有点了面板里的"开始对局"才会覆盖当前存档。
+ */
+/**
+ * 每次打开都给首页。
+ *
+ * 一开始写的是"只在没有存档时显示"，但那样**只有全新的人见过它**——
+ * 而门面恰恰是给回头客确认"我回来了、东西还在"用的。所以改成每次启动都出，
+ * 有存档时「继续上一局」可点：点一下原地撤掉这一层，下面那局本来就已经画好了。
+ */
+function showTitleOnLaunch(): void {
+  const host = document.getElementById('app');
+  if (!host) return;
+  openTitle(host, {
+    hasSave: hadSavedMatch,
+    version: BUILD_VERSION,
+    latest: '新：对局数据可重放',
+    onNew: newGameFlow,
+    onContinue: () => {},
+    onOnline: () => {
+      const btn = document.querySelector<HTMLButtonElement>('[data-act="online"]');
+      if (btn) btn.click();
+      else toast('联机面板没打开，先用「开始对局」打一局本机的');
+    },
+    onManual: () => {},
+  });
+}
+
+function newGameFlow(): void {
+  void openSetupPanel(state.config, randomSeed()).then((result) => {
+    if (!result) return;
+    state = createMatch(result.config, result.seed, loadCustomUnits());
+    detachRoom();
+    resetZoom();
+    clearSelection();
+    resetRecorder();
+    // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
+    // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
+    if (result.config.recordDetail === true) saveReportOptIn(true);
+    saveMatch(state);
+    render();
+    toast('新对局开始');
+    kickAiIfNeeded();
+  });
 }
 
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
@@ -4520,6 +4560,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   saveMatch(state);
   render();
   startRoomPolling();
+  showTitleOnLaunch();
 }
 
 function leaveRoom(): void {
