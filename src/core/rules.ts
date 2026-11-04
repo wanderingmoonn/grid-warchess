@@ -2705,6 +2705,7 @@ function checkWinner(s: GameState): PlayerId | null {
  * 这两个老字段，所以原版两百多个兵种条目一个字都不用改。
  */
 export function unitYield(s: GameState, u: Unit): ResourceCost {
+  if (underConstruction(u)) return {};
   const def = utype(s, u.type);
   const tile = tileAt(s, u.x, u.y);
   const out: ResourceCost = {};

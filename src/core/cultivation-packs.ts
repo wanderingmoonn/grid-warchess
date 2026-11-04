@@ -15,7 +15,7 @@ import { getSwordSweepReach } from './cultivation/skills.ts';
 import { SPIRIT_CULTIVATOR, CULTIVATOR, SWORD_CULTIVATOR } from './cultivation/units.ts';
 import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
-
+import { SPIRIT_STONE_DEF } from './cultivation/resources.ts';
 import { CULTIVATION_HOOKS } from './cultivation/hooks.ts';
 
 // 副作用注册：import 一次即触发模块内的注册逻辑
@@ -30,6 +30,7 @@ export const CULTIVATION_PACK: Expansion = {
   hooks: CULTIVATION_HOOKS,
   abilities: [QI_TRUE_DAMAGE, SPIRIT_ASCENSION],
   units: [CULTIVATOR, SWORD_CULTIVATOR, SPIRIT_CULTIVATOR],
+  resources: [SPIRIT_STONE_DEF],
 };
 
 export { cultivationRank, setCultivationExp, getSwordSweepReach };

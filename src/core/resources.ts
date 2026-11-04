@@ -55,6 +55,12 @@ export const RESOURCES: ResourceDef[] = [
   },
 ];
 
+/** 注册一种新资源。同 id 重复注册直接跳过——多局、HMR、多次 import 都安全。 */
+export function registerResource(def: ResourceDef): void {
+  if (RESOURCES.some((r) => r.id === def.id)) return;
+  RESOURCES.push(def);
+}
+
 export function resourceById(id: ResourceId): ResourceDef | undefined {
   return RESOURCES.find((r) => r.id === id);
 }

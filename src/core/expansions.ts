@@ -17,7 +17,10 @@
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
-import type { ResourceCost } from './resources.ts';
+import type { 
+  ResourceCost,
+  ResourceDef
+} from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
 import type { AbilityDef } from './abilities.ts';
@@ -497,6 +500,8 @@ export interface Expansion {
     /** 不该动的格子（城市及其一环）：补山脚不能把城门口抬成台地 */
     keep?: ReadonlySet<number>,
   ) => void;
+  /** 这个扩展带来的新资源（灵石、法力……）。注册由 setup 统一做。 */
+  resources?: ResourceDef[];
 }
 
 function nameOf(state: GameState, typeId: string): string {
