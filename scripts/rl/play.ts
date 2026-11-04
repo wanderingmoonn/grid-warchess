@@ -64,6 +64,14 @@ export interface MatchOutcome {
   rejected: number;
   /** 超时判平 */
   timeout: boolean;
+  /**
+   * 终局状态。
+   *
+   * 加它是因为"重放要拿终局对账"：录制方手里必须有**那一局**的终局，
+   * 而不是自己再跑一遍（再跑一遍等于把"同一局"换成"我算的那一局"，
+   * 一旦有分叉，两边都不知道该信谁）。
+   */
+  finalState: GameState;
 }
 
 /**
@@ -101,6 +109,8 @@ export function playMatch(o: MatchOptions): MatchOutcome {
     stepsBySeat: { A: 0, B: 0, C: 0, D: 0 },
     rejected: 0,
     timeout: false,
+    // 下面循环结束时会被替换成真正的终局；这里的占位不会被任何人读到
+    finalState: s,
   };
 
   let turnSeat: PlayerId | null = null;
@@ -109,6 +119,33 @@ export function playMatch(o: MatchOptions): MatchOutcome {
   // 预算必须**一整个回合共用一份**：maxRecruit/maxUpgrade 是"这一回合还能造几个"，
   // 每次出招都新建一份等于把上限重置，AI 会一路造到步数上限（界面里是每回合新建一份）
   let budget: AiBudget = { ...DEFAULT_BUDGET };
+
+  /**
+   * 应用一个动作并**记账**。
+   *
+   * 为什么要包一层：这个循环里有三种"替玩家收手"的地方（步数到顶、AI 交白卷、
+   * 没有合法动作），它们都会补一个 END_TURN。以前那几处直接 `applyAction`，
+   * 不经 `onStep`——于是录下来的动作序列**缺了这些回合切换**，
+   * 重放时走到第 23 步就发现"该轮到 B 了，可记录里还是 A"。
+   * 录制器的第一条规矩：凡是改了状态的，都得留下痕迹。
+   */
+  const applyAndNote = (
+    seat: PlayerId,
+    action: Action,
+    decision: Decision | undefined,
+    step: number,
+  ): boolean => {
+    o.onStep?.({ state: s, seat, action, decision, step });
+    const r = applyAction(s, action);
+    if (!r.ok) {
+      outcome.rejected += 1;
+      return false;
+    }
+    s = r.state;
+    outcome.steps += 1;
+    outcome.stepsBySeat[seat] = (outcome.stepsBySeat[seat] ?? 0) + 1;
+    return true;
+  };
 
   while (!s.winner && s.turn <= cap) {
     const seat = s.current;
@@ -119,10 +156,9 @@ export function playMatch(o: MatchOptions): MatchOutcome {
       budget = { ...DEFAULT_BUDGET };
     }
     if (inTurn >= maxSteps) {
-      // 手写 AI 有"这一回合不再动了"的判断；策略没有，所以只能在这里兜底
-      const r = applyAction(s, { type: 'END_TURN' });
-      if (!r.ok) break;
-      s = r.state;
+      // 手写 AI 有"这一回合不再动了"的判断；策略没有，所以只能在这里兜底。
+      // 这个 END_TURN 也要记账——它是这一回合的收尾，漏了它重放就接不上。
+      if (!applyAndNote(seat, { type: 'END_TURN' }, undefined, inTurn)) break;
       continue;
     }
 
@@ -133,9 +169,7 @@ export function playMatch(o: MatchOptions): MatchOutcome {
     if (driver.kind === 'ai') {
       action = aiNextAction(s, budget, rejectedAi);
       if (!action) {
-        const r = applyAction(s, { type: 'END_TURN' });
-        if (!r.ok) break;
-        s = r.state;
+        if (!applyAndNote(seat, { type: 'END_TURN' }, undefined, inTurn)) break;
         continue;
       }
     } else if (driver.kind === 'random') {
@@ -160,10 +194,8 @@ export function playMatch(o: MatchOptions): MatchOutcome {
       decision = d;
     }
 
-    o.onStep?.({ state: s, seat, action, decision, step: inTurn });
-    const r = applyAction(s, action);
-    if (!r.ok) {
-      outcome.rejected += 1;
+    const applied = applyAndNote(seat, action, decision, inTurn);
+    if (!applied) {
       // 手写 AI 偶尔会给出被规则否掉的动作（界面里也是这样处理的：记下来重试）
       if (driver.kind === 'ai') {
         rejectedAi.add(aiActionKey(action));
@@ -172,9 +204,6 @@ export function playMatch(o: MatchOptions): MatchOutcome {
       // 策略给出非法动作 = 枚举与规则漂了，直接掐掉这局，别让它污染统计
       break;
     }
-    s = r.state;
-    outcome.steps += 1;
-    outcome.stepsBySeat[seat] = (outcome.stepsBySeat[seat] ?? 0) + 1;
     inTurn += 1;
     // 和界面一致：动作被接受了，之前那些"被否掉"的记录就没用了
     rejectedAi.clear();
@@ -185,5 +214,6 @@ export function playMatch(o: MatchOptions): MatchOutcome {
   outcome.winner = s.winner ?? null;
   outcome.turns = s.turn;
   outcome.timeout = !s.winner && s.turn > cap;
+  outcome.finalState = s;
   return outcome;
 }
