@@ -763,8 +763,6 @@ export function draftView(state: GameState): {
  * "我禁的这张，正是我要是他就一定会拿的那张"。
  */
 
-
-
 /** 这一签的目标时代（时代梯子）：从起始时代起，按已拿张数往上爬 */
 function targetEraOf(state: GameState, handSize: number): number {
   const startEra = Math.max(1, state.config.startEra ?? 1);
@@ -893,8 +891,8 @@ export function aiDraftBan(state: GameState, side: PlayerId): string | null {
 /**
  * 选人：按 `draftScoreOf` 取最高分。
  *
- * 判据全部搬进了 `draftScoreOf`（禁用共用同一个函数），这里只负责两件
- * 选人特有的事：算这一签的目标时代（时代梯子）、把手里已有的卡传进去。
+ * 判据全在 `draftScoreOf` 里（禁用共用同一个函数），这里只负责把"手里已有的卡"
+ * 交给 `rankByPick`——生态位缺口和时代梯子都靠它算。
  */
 export function aiDraftPick(state: GameState, side: PlayerId): string | null {
   const left = remainingUnits(state);
