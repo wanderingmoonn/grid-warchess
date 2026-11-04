@@ -1186,7 +1186,8 @@ async function main(): Promise<void> {
     const fs2 = await import('node:fs');
     const path2 = await import('node:path');
     const sizeN = SIZE > 0 ? SIZE : DEFAULT_SIZE_FOR_ERA(ERA);
-    const packName = EXPANSIONS.filter((id) => id.startsWith('pack-')).join('+');
+    // 2026-11-04 之后时代军备是一个包，id 不再有 pack- 前缀，按 id 点名
+    const packName = EXPANSIONS.filter((id) => id === 'era-arms' || id === 'pack-contemporary').join('+');
     const lines: string[] = [];
     lines.push(`#### ${eraDef(ERA).name}${packName ? `（${packName}）` : ''}`);
     lines.push('');

@@ -86,7 +86,7 @@ import type { UnitTypeDef } from './types.ts';
  */
 const ANTI_AIR = 1.6;
 
-const MODERN_ABILITIES: AbilityDef[] = [
+export const MODERN_ABILITIES: AbilityDef[] = [
   {
     id: 'anti-air',
     name: '对空',
@@ -319,7 +319,7 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
 /* 时代 6 · 现代 · 加料（15 个专精兵）                                 */
 /* ================================================================== */
 
-const CONTEMPORARY_WAR: UnitTypeDef[] = [
+export const CONTEMPORARY_WAR: UnitTypeDef[] = [
   // ---- 陆军：步兵与装甲 ----
   {
     // 机械化步兵：坐在步兵战车里行军、下车作战的步兵班。

@@ -118,10 +118,22 @@ export interface DraftBonus {
 }
 
 export function draftBonus(expansionIds: readonly string[]): DraftBonus {
-  const naval = expansionIds.some((id) => id.startsWith('naval-'));
-  const air = expansionIds.some((id) => id.startsWith('air-'));
-  // 时代军备＝「青铜/铁器/火器/蒸汽/机械化/现代」那一组，id 都是 pack- 开头
-  const era = expansionIds.some((id) => id.startsWith('pack-'));
+  /*
+   * 2026-11-04 之后按**包 id 精确判断**，不再用前缀。
+   *
+   * 以前是 `startsWith('naval-')` / `startsWith('pack-')`：那时海战有 naval-fleet /
+   * naval-modern 两个包，时代军备有五个 pack-*。合并之后它们分别叫 naval / air /
+   * era-arms，前缀规则一个都匹配不上——表现是"开了海军，选卡名额没涨"。
+   *
+   * 这里刻意不写成"前缀 + 新 id 都算"：那种写法会在下次改名时再坏一次，
+   * 而且旧 id 早已在 config 迁移里被换掉（normalizeExpansionIds），
+   * 运行期看不到旧写法。
+   */
+  const naval = expansionIds.includes('naval');
+  const air = expansionIds.includes('air');
+  // 时代军备＝「青铜/铁器/火器/蒸汽/机械化」五组 + 第六代那批专精兵。
+  // 「信息化」也算：它自己带九个兵、还把科技线推高一格，是同一类"整代军备"。
+  const era = expansionIds.includes('era-arms') || expansionIds.includes('pack-contemporary');
 
   let bans = 0;
   let picks = 0;

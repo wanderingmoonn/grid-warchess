@@ -78,7 +78,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
 
-      <p class="title-foot">v${opts.version} · 支持三 / 四人局 · 三十余个扩展包 · AI 可调档</p>
+      <p class="title-foot">v${opts.version} · 支持三 / 四人局 · 二十余个扩展包 · AI 可调档</p>
     </div>
   `;
 

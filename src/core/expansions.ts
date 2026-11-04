@@ -26,20 +26,20 @@ import type { AbilityDef } from './abilities.ts';
 import type { MarkKindDef } from './marks.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
-import { ERA_PACKS } from './era-packs.ts';
-import { FANTASY_PACKS } from './fantasy-packs.ts';
+import { ERA_ARMS } from './era-packs.ts';
+import { FANTASY } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
-import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from './contemporary-packs.ts';
+import { CONTEMPORARY_BASE_PACK } from './contemporary-packs.ts';
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
 // 航母甲板那道"留给空军扩展"的接口在 naval-carrier.ts。这里只负责注册。
-import { NAVAL_FLEET, MODERN_NAVAL } from './naval-packs.ts';
+import { NAVAL } from './naval-packs.ts';
 // 空军两包（空军 / 现代空军）。兵种与能力在 air-packs.ts，
 // 航母甲板的空军侧实现在同一个文件的 AIRWING_OPS 里（模块加载即注册）。
-import { AIR_CORPS, MODERN_AIR } from './air-packs.ts';
+import { AIR } from './air-packs.ts';
 // 行动点：把移动/攻击/驻扎/上下船/技能统一成"行动"，各自扣 E。
 // 它只用一个新文件（action-points.ts），这里加一行注册，rules.ts 依然一行不动。
 import { ACTION_POINTS } from './action-points.ts';
@@ -837,10 +837,9 @@ export const EXPANSIONS: Expansion[] = [
       },
     },
   },
-  // 五个奇想兵种包（奇想·法则 / 骑士团 / 荒兽 / 秘法 / 英雄）。
-  // 兵种数据在 fantasy-packs.ts 里——六十个单位摆在这里会把钩子表淹掉。
-  // 法则包是另外四个的前置（见 Expansion.requires）。
-  ...FANTASY_PACKS,
+  // 「奇想」：法则 + 骑士团 + 荒兽 + 秘法 + 英雄，一个包（2026-11-04 合并）。
+  // 兵种数据在 fantasy-packs.ts 里——七十多个单位摆在这里会把钩子表淹掉。
+  FANTASY,
   {
     id: 'bloodbath',
     name: '血战',
@@ -895,25 +894,22 @@ export const EXPANSIONS: Expansion[] = [
   // 地形高差：给地形加"高度"，并让高差影响射程与机动。
   // 放在兵种包之前，因为它只动地形规则，不动兵种表。
   HEIGHT_TERRAIN,
-  // 五个时代兵种包（大型模组）。放在最后是为了不改动既有扩展的注册顺序——
-  // 顺序会进存档，也影响钩子叠加次序。
-  ...ERA_PACKS,
+  // 「时代军备」：五个时代各一组兵 + 第六代的 15 个专精兵，一个包
+  // （2026-11-04 由 pack-antiquity…pack-modern 五包 + pack-contemporary-war 合并）。
+  // 第六代那批靠兵种级 requiresPack 门控，不开「信息化」不进场。
+  ERA_ARMS,
   CITY_WORKS,
   SEASONS,
   CULTIVATION_PACK,
-  // 第六时代拆成两包，和"原版给底座、扩展往上加料"的分法对齐：
-  //   「信息化」开时代 + 9 个最基本的兵，「现代战争」再加 15 个专精兵（requires 前者）。
-  // 底座排在前：加料包的前置必须先在场，读配置的人一眼能看出这个先后。
+  // 「信息化」：第六时代的底座——解锁这一级科技 + 9 个最基本的兵。
+  // 它是「时代军备」「海军」「空军」里那批第六代兵种的兵种级前置（requiresPack）。
   CONTEMPORARY_BASE_PACK,
-  MODERN_WARFARE,
-  // 海军：先「海战」（E2~E5 + 海权规则），再「现代海军」（E6，依赖「信息化」）。
-  // 顺序靠后不影响任何东西——这两个包的钩子只读地形与城，不参与伤害公式。
-  NAVAL_FLEET,
-  MODERN_NAVAL,
-  // 空军排在海军之后：它会往海里放飞机，而海军是那片海的规则。
+  // 「海军」：第二到第六代的船 + 两条海权规则 + 深水地形 + 水雷（一个包）。
+  // 钩子只读地形与城，不参与伤害公式，所以排哪儿都不影响平衡。
+  NAVAL,
+  // 「空军」排在海军之后：它会往海里放飞机，而海军是那片海的规则。
   // 注册顺序不影响行为（两边只通过 AirwingOps 接口通信），这样排只是读起来顺。
-  AIR_CORPS,
-  MODERN_AIR,
+  AIR,
   // 行动点：一整条"行动经济"规则，排在最后——
   // 它的 modifyMove / modifyAttacks 只做"取更小的那个"，不关心别人先给了多少，
   // 所以放在钩子链末尾既不影响老扩展，也不会被它们绕过去。
@@ -923,8 +919,66 @@ export const EXPANSIONS: Expansion[] = [
   HIGH_MOBILITY,
 ];
 
+/**
+ * 合并过的旧扩展 id → 现在那个包的 id。
+ *
+ * ---------------------------------------------------------------
+ * 为什么要留这张表
+ * ---------------------------------------------------------------
+ * 2026-11-04 把 16 个包并成了 4 个（时代军备 / 奇想 / 海军 / 空军）。
+ * 但 id 是会**进存档、进对局报告、进联机快照**的东西：玩家本机存着上个月的对局、
+ * 云端库里躺着几百份老报告、朋友之间还在转发旧版本的"导出对局"文本。
+ * 直接改 id 等于让这些数据在打开时变成"一堆本机没有的规则"——兵种没了、规则不生效，
+ * 而玩家看到的是"我的存档坏了"。
+ *
+ * 所以旧 id 一律当别名：读进来先过这张表，之后运行期只认新 id。
+ * 表可以永远留着——它只影响读取，不影响任何新写入的数据。
+ */
+const MERGED_INTO: Readonly<Record<string, string>> = {
+  // 五个时代包 + 第六代的「现代战争」→ 时代军备
+  'pack-antiquity': 'era-arms',
+  'pack-medieval': 'era-arms',
+  'pack-gunpowder': 'era-arms',
+  'pack-industry': 'era-arms',
+  'pack-modern': 'era-arms',
+  'pack-contemporary-war': 'era-arms',
+  // 五个奇想包（法则/骑士团/荒兽/秘法/英雄）→ 奇想
+  'fantasy-core': 'fantasy',
+  'fantasy-knights': 'fantasy',
+  'fantasy-beasts': 'fantasy',
+  'fantasy-arcane': 'fantasy',
+  'fantasy-heroes': 'fantasy',
+  // 海战 + 现代海军 → 海军
+  'naval-fleet': 'naval',
+  'naval-modern': 'naval',
+  // 空军 + 现代空军 → 空军
+  'air-corps': 'air',
+  'air-modern': 'air',
+};
+
+/**
+ * 把一串（可能含旧 id 的）扩展 id 迁移成现在的写法。
+ *
+ * 去重是必须的：老配置里可能同时有 naval-fleet 和 naval-modern，两个都会变成 naval，
+ * 不去重就会在数组里出现两次，进而让"按注册顺序排好"的那份 config 出现重复项。
+ */
+export function normalizeExpansionIds(ids: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    const next = MERGED_INTO[id] ?? id;
+    if (!out.includes(next)) out.push(next);
+  }
+  return out;
+}
+
+/** 这个 id 是不是旧写法（给"要不要回存存档"这类判断用） */
+export function isLegacyExpansionId(id: string): boolean {
+  return MERGED_INTO[id] !== undefined;
+}
+
 export function expansionById(id: string): Expansion | undefined {
-  return EXPANSIONS.find((e) => e.id === id);
+  const canon = MERGED_INTO[id] ?? id;
+  return EXPANSIONS.find((e) => e.id === canon);
 }
 
 /**
@@ -954,7 +1008,9 @@ let lastActive: Expansion[] = [];
 
 /** 按配置里勾选的顺序取出启用的扩展（顺序固定，保证确定性） */
 export function activeExpansions(state: GameState): Expansion[] {
-  const ids = state.config.expansionIds;
+  // 先过别名表：老存档里写的是合并前的 id，不迁移的话这里会一个包都取不到，
+  // 表现就是"读档之后所有扩展规则突然都不生效了"
+  const ids = normalizeExpansionIds(state.config.expansionIds);
   const key = ids.join('|');
   if (key === lastIdsKey) return lastActive;
   const out: Expansion[] = [];
@@ -977,7 +1033,9 @@ export function activeExpansions(state: GameState): Expansion[] {
  * "C 被剔掉"和"B 要 C"之间随机出结果——取决于数组顺序，那是不可接受的。
  */
 export function enabledExpansionIds(ids: readonly string[]): Set<string> {
-  const on = new Set(ids.filter((id) => !!expansionById(id)));
+  // 同样是先迁移再判前置：`requires` 里写的都是新 id，
+  // 老配置带着旧 id 进来时若不迁移，"前置没满足"会把整个包剔掉
+  const on = new Set(normalizeExpansionIds(ids).filter((id) => !!expansionById(id)));
   for (;;) {
     let changed = false;
     for (const id of Array.from(on)) {

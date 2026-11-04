@@ -27,7 +27,7 @@ const ERAS = (process.argv[3] ?? '1,2,3').split(',').map(Number);
 /** 奇想系兵种：id → { 名字, 是不是英雄 } */
 const PACK = new Map<string, { name: string; hero: boolean; era: number }>();
 for (const e of EXPANSIONS) {
-  if (!e.id.startsWith('fantasy-')) continue;
+  if (e.id !== 'fantasy') continue;
   for (const u of e.units ?? []) {
     PACK.set(u.id, { name: u.name, hero: u.hero === true, era: u.era });
   }

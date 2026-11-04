@@ -2630,7 +2630,39 @@ const HEROES: Expansion = {
   units: HERO_UNITS,
 };
 
-export const FANTASY_PACKS: Expansion[] = [CORE, KNIGHTS, BEASTS, ARCANE, HEROES];
+/**
+ * 「奇想」：把原来五个包并成一个（2026-11-04）。
+ *
+ * 以前是「法则 / 骑士团 / 荒兽 / 秘法 / 英雄」五包，靠 `requires: ['fantasy-core']`
+ * 串成一串——勾一个兵种包，开局面板会自动把法则包补上。那套机制本身没问题，
+ * 问题是**它把这个体系切成了五道选择题**：玩家想玩奇想，得先看懂"法则"是什么、
+ * 再决定要不要骑士团/荒兽/秘法/英雄，而其中四个都依赖第一个。
+ * 结果就是"我勾了奇想啊，怎么没有龙？"——这种问题在群里出现过不止一次。
+ *
+ * 现在一个包、一个勾，四个兵种组按 骑士团 → 荒兽 → 秘法 → 英雄 的顺序并进兵种表
+ * （和原来的注册顺序一致，所以面板里的排列、选卡池的分层都没变）。
+ *
+ * 下面这五个对象现在只是**内容切片**，不再各自注册成扩展：
+ * 法则包贡献能力表与那条开局战报，其余四个只贡献 units。
+ */
+export const FANTASY: Expansion = {
+  id: 'fantasy',
+  scale: 'large',
+  name: '奇想',
+  summary:
+    '一整套奇想军备：法则（魔法攻击/魔抗、属性克制、负面状态、空中层）+ 人类的骑士团 + ' +
+    '荒兽 + 秘法 + 十一个全场唯一的英雄。开这一个包就有全部 72 个兵种，不再分五个勾。' +
+    '英雄第一次招募要额外付解锁费，解锁后永久开放；圣剑勇者与邪龙王需要同时开「信息化」。',
+  // 只有法则包有钩子（开局写一条战报，让玩家确认法则生效）。
+  // 合并之后它就是整包的钩子——四组兵种本来就没有钩子。
+  hooks: CORE.hooks,
+  abilities: CORE.abilities,
+  // 留痕种类也必须一起并进来：哥布林陷阱（gb-mine）原来挂在荒兽包上。
+  // 漏了它不会报错，只会"陷阱师埋了雷、敌人踩上去什么也不发生"——
+  // 因为 mark-registry 是从各扩展的 marks 里合并的，没登记就等于这个 kind 不存在。
+  marks: BEASTS.marks,
+  units: [...(KNIGHTS.units ?? []), ...(BEASTS.units ?? []), ...(ARCANE.units ?? []), ...(HEROES.units ?? [])],
+};
 
 /** 英雄 id 列表，给"英雄包只装英雄"这条测试用 */
 export const FANTASY_HERO_IDS: readonly string[] = HERO_IDS;

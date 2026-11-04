@@ -10,10 +10,9 @@
  * 用法：node --experimental-strip-types scripts/audit-era-units.ts [--era 3] [--only core|naval|air|pack]
  */
 import { ERAS, UNIT_TYPES } from '../src/core/config.ts';
-import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
-import { AIR_CORPS, MODERN_AIR } from '../src/core/air-packs.ts';
-import { ERA_PACKS } from '../src/core/era-packs.ts';
-import { CONTEMPORARY_BASE_PACK, MODERN_WARFARE } from '../src/core/contemporary-packs.ts';
+// 2026-11-04 之后包都合并了（时代军备 / 奇想 / 海军 / 空军），
+// 所以这里不再逐个 import 包，而是按"注册表里的 id"取——顺带保证体检覆盖到新包。
+import { EXPANSIONS, expansionById } from '../src/core/expansions.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
 
 const args = process.argv.slice(2);
@@ -31,14 +30,10 @@ const push = (src: string, units: unknown) => {
   for (const def of Object.values((units ?? {}) as Record<string, UnitTypeDef>)) rows.push({ src, def });
 };
 push('core', UNIT_TYPES);
-for (const e of ERA_PACKS) push('pack:' + e.id.replace('pack-', ''), e.units);
-push('naval', NAVAL_FLEET.units);
-push('naval6', MODERN_NAVAL.units);
-push('air', AIR_CORPS.units);
-push('air6', MODERN_AIR.units);
-// 第六时代的底座兵种不在 ERA_PACKS 里（那是前五代的包），单列出来
-push('era6', CONTEMPORARY_BASE_PACK.units);
-push('era6x', MODERN_WARFARE.units);
+// 每个扩展一组：源标签就用包 id，方便 --only 过滤（--only era-arms / naval / air / fantasy）
+for (const e of EXPANSIONS) push(e.id, e.units);
+// 第六时代底座（信息化）也算一组，上面的循环已经带上了；这里留一行说明它现在的位置
+void expansionById('pack-contemporary');
 
 const byEra = new Map<number, Row[]>();
 for (const r of rows) {

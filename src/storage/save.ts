@@ -11,6 +11,9 @@
  */
 
 import { normalizeUnitTypes } from '../core/customUnits.ts';
+// 扩展 id 会被合并/改名（2026-11-04 十六个包并成四个），老存档读进来必须先迁移，
+// 否则 config 里留着旧 id，运行期按新 id 查不到包——表现就是"读档后扩展全失效"
+import { normalizeExpansionIds } from '../core/expansions.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
 import type { GameState } from '../core/types.ts';
 
@@ -67,6 +70,10 @@ export function loadMatch(): GameState | null {
     // 老存档里内嵌的兵种表用的是"整数抗性"，按倍率语义重新折算一次。
     // 只改内存里的这一份，下次落盘自然就是新格式——存档不必为了格式单独迁移。
     if (parsed.unitTypes) normalizeUnitTypes(parsed.unitTypes);
+    // 旧扩展 id 迁移（只改内存这份，下次落盘自然写成新格式）
+    if (parsed.config?.expansionIds) {
+      parsed.config.expansionIds = normalizeExpansionIds(parsed.config.expansionIds);
+    }
     return parsed;
   } catch {
     return null;

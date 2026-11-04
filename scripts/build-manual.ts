@@ -21,7 +21,7 @@ import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
-import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
+import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
 import { resourceShort } from '../src/core/resources.ts';
@@ -460,9 +460,7 @@ function eraSection(): string {
 
 /** 全部奇想兵的 id → 名字，用来把"召唤出 skeleton"写成"召唤出 骷髅" */
 const FANTASY_NAMES = new Map<string, string>();
-for (const p of FANTASY_PACKS) {
-  for (const u of p.units ?? []) FANTASY_NAMES.set(u.id, u.name);
-}
+for (const u of FANTASY.units ?? []) FANTASY_NAMES.set(u.id, u.name);
 
 function elementLabel(u: UnitTypeDef): string {
   if (u.cycle && u.cycle.length > 0) {
@@ -1532,9 +1530,11 @@ const CORE_BODY_MAIN = `    <section id="goal">
     <section id="roster">
       <h2><span class="sec-num">14</span>兵种全表</h2>
       <p>原版 ${Object.keys(UNIT_TYPES).length} 个兵种，按时代分组。「特性」列里的能力和产出都是由数据自动生成的，改了配置这里会跟着变。
-        扩展包带来的兵在<b>扩展合册</b>里：奇想五包一本、时代兵备七包一本（点顶栏「规则书」会按这一局开了什么列出来）。
-        第六时代「信息化」在基础规则里是空的，所以它和原版每一代一样拆成"底座 + 加料"两个包：
-        「信息化」带这一代最基本的九个兵，「现代战争」再往上加十五个专精兵。不勾「信息化」，这里只有五节。</p>
+        扩展包带来的兵在<b>扩展合册</b>里：奇想一本、时代兵备一本、海军一本、空军一本
+        （点顶栏「规则书」会按这一局开了什么列出来）。
+        第六时代「信息化」在基础规则里是空的，所以要开「信息化」这个包：它解锁这一级科技，
+        并给出这一代最基本的九个兵；那 15 个专精兵在「时代军备」里，但要同时开「信息化」才进场。
+        不勾「信息化」，这里只有五节。</p>
       ${eraSection()}
     </section>
 
@@ -2337,7 +2337,7 @@ interface BookGroup {
   title: string;
   subtitle: string;
   /** 归属判据：扩展 id 以它开头，并且 scale 是 large */
-  prefix: string;
+  ids: readonly string[];
   kind: 'fantasy' | 'era';
   /** 开篇导读：这一册为什么这样编 */
   intro: string;
@@ -2351,23 +2351,23 @@ const BOOK_GROUPS: BookGroup[] = [
     title: '时代与回旋镖 · 奇幻扩展',
     subtitle:
       '奇想五包的合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
-    prefix: 'fantasy-',
+    ids: ['fantasy'],
     kind: 'fantasy',
     rulesHtml: () => fantasyRules(), 
-    intro: `<p>这一册收了<b>五个包</b>，但它们不是五选一，而是"一套底座 + 四队兵"：
-        「奇想·法则」只带机制（魔法、属性、状态、空中层），一个兵都不带；
-        另外四包各补一队兵，全部<b>依赖</b>它。所以想玩奇幻，最少要勾两个包——
-        只勾兵种包，配置里那条记录会被剔掉，什么都不发生。</p>
+    intro: `<p>这一册只有<b>一个包</b>：2026-11-04 之前是「法则 / 骑士团 / 荒兽 / 秘法 / 英雄」
+        五个包（后四个依赖第一个），现在合成一个「奇想」，勾一次就全在。</p>
       <p>四队兵的分工不是"越来越强"，而是四种打法：骑士团是<b>阵型与冲锋</b>，
         荒兽是<b>机动与毒</b>，秘法是<b>远程与召唤</b>，英雄是<b>单体质量</b>。
-        它们可以同时开，但那是给"我想看大乱斗"的人准备的——四个包一起开，
-        一场战斗要过四层修正，没人能心算平衡。</p>`,
+        它们同时在场，是"我想看大乱斗"的玩法——一场战斗要过四层修正，没人能心算平衡，
+        所以数值表按"每队各自能打什么"分栏写，不按"合起来多强"写。</p>
+      <p>唯一还留着的一道门是时代：圣剑勇者与邪龙王是第六代的兵，
+        要同时开「信息化」才会出现（兵种级 <code>requiresPack</code>）。</p>`,
   },
   {
     file: 'public/manual-pack-cultivation.html',
     title: '时代与回旋镖 · 修真扩展',
     subtitle: '修真系列合册',
-    prefix: 'cultivation',
+    ids: ['cultivation'],
     kind: 'era',  
     intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
     rulesHtml: `
@@ -2509,33 +2509,32 @@ const BOOK_GROUPS: BookGroup[] = [
     file: 'public/manual-pack-eras.html',
     title: '时代与回旋镖 · 时代兵备',
     subtitle:
-      '七个包的兵种扩充合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
-    prefix: 'pack-',
+      '一个包的兵种扩充合册（另附「信息化」底座）· 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
+    ids: ['era-arms', 'pack-contemporary'],
     kind: 'era',
-    intro: `<p>这一册收了<b>七个包</b>。前五个是"一个时代一队兵"：青铜、铁器、火器、蒸汽、机械化，
-        各补 12~17 个兵；第六时代在基础规则里是空的，所以它按原版的样子拆成<b>底座 + 加料</b>两包——
-        「信息化」带这一代最基本的九个兵（步兵班、坦克、榴弹炮、装甲侦察车、物流中心、工程兵、
-        混凝土碉堡、产业园、联合作战中心），顺便把科技线开到第六级；
-        「现代战争」在它之上再加十五个专精兵。除「现代战争」依赖「信息化」之外，其余各包互不依赖，
-        可以全勾，也可以只勾你现在这个时代那一本——勾了以后生产面板里会多出这批兵，原版兵一个不少。</p>
-      <p>这些包放在一册，是为了回答一个原来查不了的问题：<b>同一档价钱，这几个时代各给了什么解法</b>。
-        总表按时代排序，一眼能看出"青铜用方阵顶、蒸汽用射程压、机械化用装甲推、现代用射程差清"这条路子。</p>
-      <p>为什么第六代要两个包：原版每一代都是"<b>基础规则给几个最基本的兵，时代兵种包再加一队专精兵</b>"
-        （原版机械化那七个 + 「机械化合成兵」那十四个）。第六代在基础规则里是空的，照同样的形状补出来，
-        玩家就不用记两套规矩：只勾「信息化」，它是一个能自己打完一整局的完整代际；再勾「现代战争」，
-        这一代才多出直升机、无人机、反坦克导弹、防空导弹这些"专精解法"。
-        「现代战争」写了 <code>requires: ['pack-contemporary']</code>——单独勾它不会生效，
-        开局面板会把「信息化」一起补上（一个"勾了却造不出来"的兵种包，在玩家眼里就是坏了）。</p>`,
+    intro: `<p>这一册只有<b>一个包</b>：<b>「时代军备」</b>。前五个时代各补一队兵——
+        青铜、铁器、火器、蒸汽、机械化，各 12~17 个；第六时代再加 15 个专精兵。
+        第六代那批要同时开「信息化」才会出现（见下）。</p>
+      <p>总表按时代排序，回答的是一个原来查不了的问题：<b>同一档价钱，这几个时代各给了什么解法</b>。
+        一眼能看出"青铜用方阵顶、蒸汽用射程压、机械化用装甲推、信息化用射程差清"这条路子。</p>
+      <p>2026-11-04 之前这里是七个包（五个时代 + 第六代的底座与加料）。分七个勾的代价很实际：
+        玩家每开一局都要在开局面板里把它们找六遍，而且很容易只勾一两个就以为"军备包开完了"。
+        现在一个勾——勾上就是"每一代都有额外的兵"，不想用就不勾。</p>
+      <p><b>第六代的开关只有一处</b>：「信息化」的 <code>unlockEra: 6</code> 把科技线推到第六级。
+        时代军备里那 15 个第六代兵（机械化步兵、主战坦克、反坦克导弹、自行榴弹炮、远程火箭炮、
+        防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、前进指挥所、
+        物流集团、工程兵团、特种部队）靠兵种级 <code>requiresPack</code> 挂在那上面：
+        没勾「信息化」时它们不进本局兵种表——造不出来的兵，等于没有。</p>`,
   },
   {
     file: 'public/manual-pack-naval.html',
     title: '时代与回旋镖 · 海战扩展',
     subtitle:
-      '海上力量两包合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
-    prefix: 'naval-',
+      '海上力量合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
+    ids: ['naval'],
     kind: 'era',
-    intro: `<p>这一册收了<b>两个包</b>，按"水面力量缺了哪一段"来分：
-        「海战」补第二到第五时代——从桨帆（德罗蒙、卡拉克、<b>桨帆船</b>）、
+    intro: `<p>这一册只有<b>一个包</b>：<b>「海军」</b>（2026-11-04 之前是「海战」+「现代海军」两个）。
+        它按"水面力量缺了哪一段"来补：第二到第五时代——从桨帆（德罗蒙、卡拉克、<b>桨帆船</b>）、
         远洋投送（<b>宝船</b>）、纵火（火船）、舷侧炮列（盖伦）、追猎（<b>风帆巡航舰</b>）、
         贴身硬顶（<b>龟船</b>）、蒸汽装甲（护卫舰、浅水重炮舰、潜艇、运输舰），
         到<b>鱼雷艇</b>（水军的入口价）、<b>布雷舰</b>（在水面上留雷，谁踩谁挨）
@@ -2544,8 +2543,9 @@ const BOOK_GROUPS: BookGroup[] = [
         航空战列舰、远洋潜艇、登陆舰、舰队航母、轻型航母、潜母、维修舰）。
         本体那条<b>铁甲舰</b>（1859 年的 Gloire 到定远、镇远）落在蒸汽时代，
         正好接在护卫舰和装巡之间；
-        「现代海军」补第六时代——航母、超巡、防空巡洋舰、核潜艇与常规潜艇、
-        濒海战斗舰、无人艇、两栖攻击舰、导弹快艇、补给舰，外加海上钻井平台。</p>
+        第六时代补航母、超巡、防空巡洋舰、核潜艇与常规潜艇、濒海战斗舰、无人艇、
+        两栖攻击舰、导弹快艇、补给舰，外加海上钻井平台——<b>这一批要同时开「信息化」</b>，
+        因为第六时代是那个包开出来的。</p>
       <p><b>水雷是留在格子上的东西，不是一条船</b>：布雷舰每回合在自己两格以内布一枚，
         布完就开走；它沉了，雷还在。敌舰开上来才炸（14 点，无视护甲），炸一枚少一枚，
         自己的船踩不到自己的雷。对面唯一的破法是派条快船去趟——贴到一格以内雷就现形，
@@ -2574,15 +2574,16 @@ const BOOK_GROUPS: BookGroup[] = [
     file: 'public/manual-pack-air.html',
     title: '时代与回旋镖 · 空军扩展',
     subtitle:
-      '空中力量两包合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
-    prefix: 'air-',
+      '空中力量合册 · 本文件由 npm run manual 从配置自动生成，数值与代码一致。行内虚线词可悬停看说明。',
+    ids: ['air'],
     kind: 'era',
-    intro: `<p>这一册收了<b>两个包</b>，一共十八种飞机：</p>
+    intro: `<p>这一册只有<b>一个包</b>：<b>「空军」</b>（2026-11-04 之前是「空军」+「现代空军」两个），
+        一共十八种飞机：</p>
         <ul class="bullets">
-          <li><b>「空军」</b>（第四、第五时代）——侦察气球、侦察机、双翼战斗机、活塞战斗机、
+          <li><b>第四、第五时代</b>——侦察气球、侦察机、双翼战斗机、活塞战斗机、
               俯冲轰炸机、强击机、重型轰炸机、运输机、舰载机；</li>
-          <li><b>「现代空军」</b>（第六时代）——喷气战斗机、隐身战斗机、攻击机、武装直升机、无人机、
-              战略轰炸机、预警机、电子战机、重型运输机。</li>
+          <li><b>第六时代</b>——喷气战斗机、隐身战斗机、攻击机、武装直升机、无人机、
+              战略轰炸机、预警机、电子战机、重型运输机（这批要同时开「信息化」）。</li>
         </ul>
         <p>为什么从第四时代开始：第三时代（火器）之前没有"飞机"这种东西，硬塞进来只能靠编。
         气球、双翼机、二战机群正好填满第四、第五两代；第六代本来就该是一整代喷气与电子战。</p>
@@ -2628,8 +2629,16 @@ const BOOK_GROUPS: BookGroup[] = [
 ];
 
 /** 这一册该收哪些包 */
+/**
+ * 这一册收哪几个包。
+ *
+ * 2026-11-04 之前这里按 id 前缀分组（'fantasy-' / 'naval-' / 'pack-'），
+ * 因为那时一个系列就是好几个 id 前缀相同的包。合并之后一个系列只剩一个 id，
+ * 前缀规则全部失效（'fantasy' 不以 'fantasy-' 开头），所以改成显式 id 列表：
+ * 分组是**编辑决定**，写死比猜前缀稳。
+ */
 function groupMembers(g: BookGroup): Exp[] {
-  return EXPANSIONS.filter((e) => e.scale === 'large' && e.id.startsWith(g.prefix));
+  return EXPANSIONS.filter((e) => e.scale === 'large' && g.ids.includes(e.id));
 }
 
 function groupBook(g: BookGroup, packs: readonly Exp[]): Book {

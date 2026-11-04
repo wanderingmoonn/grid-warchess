@@ -1294,12 +1294,12 @@ function setExpansion(id: string, on: boolean): void {
 check('扩展兵种也在兵种池里，而且真的关得掉', () => {
   // 这一条是这次改动的正题：以前扩展带的兵是"无条件并入池子"的，
   // 面板上根本看不到它们，更别说关掉。
-  setExpansion('naval-fleet', true);
+  setExpansion('naval', true);
 
   openPool();
   const chips = [...doc.querySelectorAll<HTMLElement>('[data-unit]')];
   const galley = chips.find((el) => el.dataset.unit === 'nv_galley');
-  assert.ok(galley, '「海战」勾上之后，桨帆船应该出现在兵种池里');
+  assert.ok(galley, '「海军」勾上之后，桨帆船应该出现在兵种池里');
   assert.ok(galley!.classList.contains('is-extra'), '扩展兵种要能和本体兵种区分开');
   assert.ok(galley!.classList.contains('active'), '扩展兵种默认是开着的');
 
@@ -1318,8 +1318,8 @@ check('扩展兵种也在兵种池里，而且真的关得掉', () => {
     '收起弹层后摘要要接着显示关掉之后的数',
   );
 
-  // 换一回：把「海战」关掉，这一包的兵不该留着"关掉"的记录
-  setExpansion('naval-fleet', false);
+  // 换一回：把「海军」关掉，这一包的兵不该留着"关掉"的记录
+  setExpansion('naval', false);
   openPool();
   assert.equal(
     doc.querySelector('[data-unit="nv_galley"]'),
@@ -1565,45 +1565,49 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
 });
 
 check('起始时代只摆到这一局的上限：勾上「信息化」才多出第六格', () => {
-  // 第六时代是两个包：'pack-contemporary'「信息化」开时代 + 带九个最基本的兵，
-  // 'pack-contemporary-war'「现代战争」在它之上加十五个专精兵（requires 前者）。
-  // 所以"多出一格"只认底座那个包，加料包自己抬不动上限。
+  /*
+   * 2026-11-04 之后第六代只剩一道门：「信息化」的 unlockEra。
+   * 「现代战争」不再是独立的一个勾（它并进了「时代军备」），
+   * 所以这条用例从"加料包自动补前置"改成"分清谁是开关、谁只是带兵"。
+   */
   const erasNow = () =>
     Array.from(doc.querySelectorAll('[data-era]')).map((n) => n.textContent?.trim());
   assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '不勾包时五格封顶');
 
-  const warBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
-  assert.ok(warBox, '开局面板里应有「现代战争」这一项');
-  warBox.checked = true;
-  warBox.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const arms = doc.querySelector<HTMLInputElement>('[data-exp="era-arms"]');
+  assert.ok(arms, '开局面板里应有「时代军备」这一项');
+  arms.checked = true;
+  arms.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.deepEqual(
+    erasNow(),
+    ['青铜', '铁器', '火器', '蒸汽', '机械化'],
+    '时代军备带来的是兵，不是时代——第六格不该因为勾了它出现',
+  );
 
-  // 勾加料包会自动补上它的前置「信息化」——所以时代按钮当场多一格。
-  // 这一步顺带守住了"勾了兵却造不出来"那个坑。
+  const base = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
+  assert.ok(base, '开局面板里应有「信息化」这一项');
+  base.checked = true;
+  base.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(
     erasNow(),
     ['青铜', '铁器', '火器', '蒸汽', '机械化', '信息化'],
-    '加料包会把前置「信息化」一起勾上，第六格随之出现',
-  );
-  const baseBox = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
-  assert.ok(baseBox?.checked, '前置「信息化」应该被自动勾上');
-
-  // 单独取消加料包：时代还在（底座是独立的一包），第六格不该消失
-  const again = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary-war"]');
-  assert.ok(again);
-  again.checked = false;
-  again.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert.deepEqual(
-    erasNow(),
-    ['青铜', '铁器', '火器', '蒸汽', '机械化', '信息化'],
-    '加料包取消之后，底座还开着——这一代仍然打得完一整局',
+    '「信息化」才是第六时代的开关',
   );
 
-  // 把底座也取消：第六格收回去，而且起手时代不能停在一个已经关掉的时代上
-  const baseAgain = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]');
-  assert.ok(baseAgain);
+  // 把开关关掉：第六格收回去，军备包还在（它不依赖信息化）。
+  // 注意要**重新查一次**节点：勾上信息化会让面板整块重绘，
+  // 上面抓的 base 已经是一个摘下来的旧节点，对它的修改不会进配置。
+  const baseAgain = doc.querySelector<HTMLInputElement>('[data-exp="pack-contemporary"]')!;
   baseAgain.checked = false;
   baseAgain.dispatchEvent(new window.Event('change', { bubbles: true }));
   assert.deepEqual(erasNow(), ['青铜', '铁器', '火器', '蒸汽', '机械化'], '关掉之后第六格要收回去');
+  assert.ok(
+    doc.querySelector<HTMLInputElement>('[data-exp="era-arms"]')?.checked,
+    '信息化关掉不该连带关掉时代军备',
+  );
+  const armsAgain = doc.querySelector<HTMLInputElement>('[data-exp="era-arms"]');
+  armsAgain!.checked = false;
+  armsAgain!.dispatchEvent(new window.Event('change', { bubbles: true }));
 });
 
 check('点兵种不重绘弹层，不会把列表弹回顶部', () => {
@@ -3158,16 +3162,16 @@ check('产兵搜索框：按名字/包名过滤，兵种带扩展包徽标', () 
   // 按扩展包切一刀：原版那一档全是没徽标的，奇想那一档全是带徽标的
   paint('');
   const packChips = host.querySelectorAll('[data-act="recruit-pack"]');
-  assert.ok(packChips.length >= 3, `应该有"全部/原版/各奇想包"这几档，实际 ${packChips.length}`);
+  assert.ok(packChips.length >= 3, `应该有"全部/原版/各扩展包"这几档，实际 ${packChips.length}`);
 
   paint('', 'core');
   const core = host.querySelectorAll('[data-act="recruit"]');
   assert.ok(core.length > 0, '原版那一档不该是空的');
   assert.equal(host.querySelectorAll('.recruit-src').length, 0, '原版兵种头上不该有包名徽标');
 
-  paint('', 'fantasy-beasts');
+  paint('', 'fantasy');
   const beasts = host.querySelectorAll('[data-act="recruit"]');
-  assert.ok(beasts.length > 0, '奇想·野兽那一档不该是空的');
+  assert.ok(beasts.length > 0, '奇想那一档不该是空的');
   assert.equal(
     host.querySelectorAll('.recruit-src').length,
     beasts.length,
@@ -3247,7 +3251,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
       startEra: 4,
       aiOpponent: false,
       aiAlly: false,
-      expansionIds: ['fantasy-core', 'fantasy-beasts', 'fantasy-arcane'],
+      expansionIds: ['fantasy'],
       enabledUnits: Object.keys(UNIT_TYPES),
     },
     506,
@@ -3311,11 +3315,11 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
 
   // 叠两个维度：包 + 时代，结果只会更少，而且仍然是"且"
   const oneLevel = levels[levels.length - 1]!;
-  paint('', 'fantasy-beasts', 0);
+  paint('', 'fantasy', 0);
   const onlyPack = count();
   paint('', '', oneLevel);
   const onlyEra = count();
-  paint('', 'fantasy-beasts', oneLevel);
+  paint('', 'fantasy', oneLevel);
   const both = count();
   assert.ok(both <= onlyPack && both <= onlyEra, '两个条件是"与"：叠起来不该比任何一边多');
   assert.ok(
@@ -3327,7 +3331,7 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
     '叠了包之后仍然只能有那个包的兵',
   );
   // 再叠搜索：三个条件一起收窄
-  paint('龙骑', 'fantasy-beasts', oneLevel);
+  paint('龙骑', 'fantasy', oneLevel);
   assert.ok(count() <= both, '再叠一个搜索词只会更少');
 
   // 回到全部：三个维度全清，兵数是全量
@@ -3335,10 +3339,10 @@ check('产兵双筛选：扩展包 + 时代，两维是"与"，再点一次回�
   assert.equal(count(), all, '清掉筛选应该回到全量');
 
   // 没命中时要把**生效的每一维**都写出来，否则玩家不知道该清哪一个
-  paint('', 'fantasy-beasts', levels[0]!);
+  paint('', 'fantasy', levels[0]!);
   if (count() === 0) {
     assert.ok(host.innerHTML.includes('这一档没有能造的兵'), '空态要给一句人话');
-    assert.ok(host.innerHTML.includes('奇想·荒兽'), '空态要写清生效了包筛选');
+    assert.ok(host.innerHTML.includes('奇想'), '空态要写清生效了包筛选');
     assert.ok(host.innerHTML.includes('青铜'), '空态要写清生效了时代筛选');
   }
 });
@@ -3559,9 +3563,9 @@ check('沙盒货架也能按扩展包切一刀', () => {
   assert.ok(picks(all) > 10, '全部那一档应该有一屏兵');
 
   const coreOnly = picks(shelf('core'));
-  const packOnly = picks(shelf('fantasy-beasts'));
+  const packOnly = picks(shelf('fantasy'));
   assert.ok(coreOnly > 0, '原版那一档不该是空的');
-  assert.ok(packOnly > 0, '奇想·野兽那一档不该是空的');
+  assert.ok(packOnly > 0, '奇想那一档不该是空的');
   assert.equal(coreOnly + packOnly, picks(all), '两档加起来应该正好等于全部（互斥且不重不漏）');
 
   // 时代这一维：单独用、和包叠用，结果都必须是"且"
@@ -4175,25 +4179,35 @@ check('书单跟着已开的扩展走，核心规则书永远在', () => {
   const withBlood = manualBooks(DEFAULT_CONFIG.expansionIds);
   assert.deepEqual(withBlood.map((b) => b.file), ['manual.html', 'manual-small.html']);
 
-  // 同系列合册：开两个奇想包，出来的仍然只有一本
-  const fantasy = manualBooks(['bloodbath', 'fantasy-core', 'fantasy-heroes']);
+  // 奇想已经是一个包：勾它就只多一本合册（旧 id 走别名，结果一样）
+  const fantasy = manualBooks(['bloodbath', 'fantasy']);
   assert.deepEqual(fantasy.map((b) => b.file), [
     'manual.html',
     'manual-small.html',
     'manual-pack-fantasy.html',
   ]);
   assert.ok(
-    (fantasy[2]!.note ?? '').includes('骑士团') && (fantasy[2]!.note ?? '').includes('法则'),
-    '合册的说明要写清这一局开的是哪几个包',
+    (fantasy[2]!.note ?? '').includes('奇想'),
+    '合册的说明要写清这一册收的是什么',
+  );
+  assert.deepEqual(
+    manualBooks(['bloodbath', 'fantasy-core', 'fantasy-heroes']).map((b) => b.file),
+    fantasy.map((b) => b.file),
+    '旧的两个奇想 id 迁成一个之后，书单不该多出一本',
   );
 
   // 两个系列同时开：各出一本，不重复
-  const both = manualBooks(['fantasy-knights', 'pack-medieval', 'pack-modern']);
+  const both = manualBooks(['fantasy', 'era-arms']);
   assert.deepEqual(both.map((b) => b.file), [
     'manual.html',
     'manual-pack-fantasy.html',
     'manual-pack-eras.html',
   ]);
+  assert.deepEqual(
+    manualBooks(['fantasy-knights', 'pack-medieval', 'pack-modern']).map((b) => b.file),
+    both.map((b) => b.file),
+    '旧 id 组合也要落在同样的两本上',
+  );
 
   // 不属于任何系列的包仍然各自一本
   const solo = manualBooks(['city-works', 'seasons']);

@@ -14,7 +14,7 @@
  * 书单天然一致——规则以 id 记进存档，这是同一份事实。
  */
 
-import { EXPANSIONS } from '../core/expansions.ts';
+import { EXPANSIONS, normalizeExpansionIds } from '../core/expansions.ts';
 
 export interface ManualBook {
   /** 相对路径，从 index.html 所在目录起 */
@@ -31,35 +31,39 @@ const SMALL_FILE = 'manual-small.html';
 /**
  * 合册：开了其中任一包，这本就上架。
  *
- * `prefix` 必须和 build-manual.ts 里的 BOOK_GROUPS 对齐。两边各写一份是刻意的：
+ * `ids` 必须和 build-manual.ts 里的 BOOK_GROUPS 对齐。两边各写一份是刻意的：
  * 生成器决定"哪些包印进哪本"，这里决定"什么时候把这本书列出来"。
  * 合成一个常量会把两件事绑死，而分开写时最坏的情况只是多列一本——
  * 生成器已经保证不会产出空册。
+ *
+ * 2026-11-04 之前这里是 `prefix`（'fantasy-' / 'naval-' / 'pack-'）。
+ * 包合并成四个之后一个系列只剩一个 id，前缀规则全部失效
+ * （'fantasy' 不以 'fantasy-' 开头），所以改成显式 id 列表。
  */
-const GROUP_BOOKS: Array<{ prefix: string; file: string; title: string; note: string }> = [
+const GROUP_BOOKS: Array<{ ids: readonly string[]; file: string; title: string; note: string }> = [
   {
-    prefix: 'fantasy-',
+    ids: ['fantasy'],
     file: 'manual-pack-fantasy.html',
     title: '奇幻扩展',
-    note: '奇想五包合册——法则、骑士团、荒兽、秘法、英雄：兵种总表 + 机制词条',
+    note: '奇想合册（法则 + 骑士团 + 荒兽 + 秘法 + 英雄）：兵种总表 + 机制词条',
   },
   {
-    prefix: 'naval-',
+    ids: ['naval'],
     file: 'manual-pack-naval.html',
     title: '海战扩展',
-    note: '海上力量两包合册——海战（E2~E5）+ 现代海军（E6）：船种总表、封锁与抢修、航母甲板接口',
+    note: '海上力量合册（E2~E6，第六代要同时开「信息化」）：船种总表、封锁与抢修、航母甲板接口',
   },
   {
-    prefix: 'air-',
+    ids: ['air'],
     file: 'manual-pack-air.html',
     title: '空军扩展',
-    note: '空中力量两包合册——空军（E4~E5）+ 现代空军（E6）：机种总表、制空与对地、航母甲板接口',
+    note: '空中力量合册（E4~E6，第六代要同时开「信息化」）：机种总表、制空与对地、航母甲板接口',
   },
   {
-    prefix: 'pack-',
+    ids: ['era-arms', 'pack-contemporary'],
     file: 'manual-pack-eras.html',
     title: '时代兵备',
-    note: '六个时代的兵种扩充合册——青铜、铁器、火器、蒸汽、机械化、现代（底座 + 现代战争）：一张总表看全',
+    note: '六个时代的兵种扩充合册——青铜、铁器、火器、蒸汽、机械化，外加「信息化」底座与第六代专精兵',
   },
 ];
 
@@ -72,8 +76,11 @@ export function manualBooks(enabled: string[]): ManualBook[] {
     },
   ];
 
-  // 只认配置里真有的 id：存档可能带着一个已经删掉的扩展
-  const active = EXPANSIONS.filter((e) => enabled.includes(e.id));
+  // 只认配置里真有的 id：存档可能带着一个已经删掉的扩展。
+  // 先过别名表再比对——老存档里写的是合并前的 id（fantasy-core / naval-fleet……），
+  // 不迁移的话书单会少掉整册，而玩家不会知道"规则书去哪了"。
+  const live = normalizeExpansionIds(enabled);
+  const active = EXPANSIONS.filter((e) => live.includes(e.id));
 
   const small = active.filter((e) => e.scale !== 'large');
   if (small.length > 0) {
@@ -87,7 +94,7 @@ export function manualBooks(enabled: string[]): ManualBook[] {
   // 合册：一本顶原来好几本，所以 note 要写清"你这局开的是哪几个包"
   const grouped = new Set<string>();
   for (const g of GROUP_BOOKS) {
-    const on = active.filter((e) => e.scale === 'large' && e.id.startsWith(g.prefix));
+    const on = active.filter((e) => e.scale === 'large' && g.ids.includes(e.id));
     if (on.length === 0) continue;
     for (const e of on) grouped.add(e.id);
     books.push({
