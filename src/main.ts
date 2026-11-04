@@ -381,11 +381,40 @@ let reportSentSigs = loadSentReports();
  */
 let recorder: MatchTimeline | null = null;
 
+/**
+ * 动作序列：和 `recorder` 同生共死（同一份"要不要记详细数据"的选择）。
+ *
+ * 为什么单独存而不塞进 timeline：timeline 是**统计量**（每回合采样、逐兵种计数），
+ * 动作序列是**过程**。两者的采样节奏、体积、消费者都不一样——
+ * 混在一起会让"只想看曲线"的分析被几十 KB 的动作对象拖累。
+ *
+ * 上限 1500 步：一局通常 400~1000 步；超了就从尾部截断并计数（`actionsDropped`），
+ * 让"这份日志不全"这件事在报告里自己说出来，而不是重放时对不上再让人去猜。
+ */
+let actionLog: Action[] | null = null;
+let actionDropped = 0;
+let actionBytes = 0;
+/** 步数上限 */
+const ACTION_LOG_CAP = 1500;
+/**
+ * 字节上限（估算，按紧凑 JSON 计）。
+ *
+ * 数据库那边有条硬约束 `pg_column_size(payload) < 256 KB`。实测一局 1176 步的
+ * 报告缩进后有 232 KB 文本——虽然 jsonb 落盘会压缩、实际远低于上限，但这条线
+ * **不能靠"应该压得下"来赌**：一局打满 1500 步就会贴边。
+ *
+ * 120 KB 是留了一半余量的位置：超过就停止追加并计数（`actionsDropped`），
+ * 让"这份日志被截断了"写在报告里，而不是等重放到一半对不上再去猜。
+ */
+const ACTION_LOG_BYTES = 120_000;
+
 /** 按当前对局的配置决定要不要记；换局 / 读档之后调一次 */
 function resetRecorder(): void {
-  recorder = state.config.recordDetail === true && state.config.godMode !== true
-    ? newTimeline(state.turn)
-    : null;
+  const wantDetail = state.config.recordDetail === true && state.config.godMode !== true;
+  recorder = wantDetail ? newTimeline(state.turn) : null;
+  actionLog = wantDetail ? [] : null;
+  actionDropped = 0;
+  actionBytes = 0;
   if (recorder) {
     // 先把"开局有哪些单位"记下来，后面才能靠差分认出谁死了
     noteDeaths(recorder, state);
@@ -397,6 +426,15 @@ function resetRecorder(): void {
 
 /** 记一步（AI 和玩家都走这里） */
 function noteStep(actor: PlayerId, action: Action): void {
+  if (actionLog) {
+    if (actionLog.length < ACTION_LOG_CAP && actionBytes < ACTION_LOG_BYTES) {
+      actionLog.push(action);
+      // 粗算就够：这里的用途只是"别撞上限"，不需要精确
+      actionBytes += JSON.stringify(action).length + 1;
+    } else {
+      actionDropped += 1;
+    }
+  }
   if (!recorder) return;
   noteAction(recorder, actor, action);
   // 死亡是在这一步里发生的，所以每次动作后都要比一次单位集合
@@ -746,7 +784,7 @@ function panelInput(known?: PlayerView): PanelInput {
  * （sealTimeline 会去掉内部用来做差分的单位表）。两处各建一次很容易漂。
  */
 function currentReport(): MatchReport {
-  return buildMatchReport(state, new Date(), recorder ? sealTimeline(recorder) : null);
+  return buildMatchReport(state, new Date(), recorder ? sealTimeline(recorder) : null, actionLog, actionDropped);
 }
 
 /**
@@ -3414,8 +3452,19 @@ async function runAiTurn(
   }
 
   if (!alive()) return;
+  /*
+   * 结束回合也要记一笔（2026-11-04）。
+   *
+   * 人类那边走的是 dispatch → noteStep，AI 这边原来是直接 apply，于是
+   * **动作日志里缺了 AI 的每一次 END_TURN**——重放到那里就卡在同一方，
+   * 后面全部对不上。补上之后，日志才是一份能重放的完整动作序列。
+   */
+  const endActor = state.current;
   const end = applyAction(state, { type: 'END_TURN' });
-  if (end.ok) state = end.state;
+  if (end.ok) {
+    state = end.state;
+    noteStep(endActor, { type: 'END_TURN' });
+  }
   if (end.ok) noteTurnEnd();
   saveMatch(state);
   render();

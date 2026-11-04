@@ -7596,6 +7596,56 @@ test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
   );
 });
 
+test('动作日志：写进报告的动作序列能原样重放，逐帧一致', () => {
+  /*
+   * 这是"数据能不能用来优化 AI"的分水岭。没有动作序列，报告只能算比例；
+   * 有了它，一局真实对局能在本地逐帧重建，输掉的那一手能定位到具体步数。
+   *
+   * 所以这条用例守的是**可重放性**：报告里存的动作序列，拿 seed + 配置重新开一局，
+   * 从头放一遍必须走到同一个局面。引擎是确定性的，这里只要有一处漏记
+   * （比如 AI 的 END_TURN 不记账——就是实际踩过的坑）就会当场对不上。
+   */
+  const cfg = { ...BASE, size: 12, startEra: 1, aiOpponent: true, aiAlly: true, aiLevel: 'advanced' as const };
+  let s = createMatch(cfg, 4321);
+  const log: Action[] = [];
+  for (let turn = 0; turn < 6 && !s.winner; turn += 1) {
+    for (let i = 0; i < AI_MAX_STEPS && !s.winner; i += 1) {
+      const a = aiNextAction(s, { ...DEFAULT_BUDGET });
+      if (!a) break;
+      const r = applyAction(s, a);
+      if (!r.ok) break;
+      log.push(a);
+      s = r.state;
+    }
+    if (s.winner) break;
+    const e = applyAction(s, { type: 'END_TURN' });
+    if (!e.ok) break;
+    log.push({ type: 'END_TURN' });
+    s = e.state;
+  }
+  assert.ok(log.length > 20, `这段样本太短，测不出什么：${log.length} 步`);
+
+  const rep = buildMatchReport(s, new Date(0), null, log);
+  assert.equal(rep.v, 3, '报告版本要跟上（动作序列是 v3 才有的）');
+  assert.equal(rep.actions?.length, log.length, '动作序列要完整进报告');
+
+  // 从头重放
+  let again = createMatch(cfg, 4321);
+  for (const a of rep.actions ?? []) {
+    const r = applyAction(again, a);
+    assert.ok(r.ok, r.ok ? '' : `重放被拒：${r.reason}`);
+    again = r.state;
+  }
+  assert.equal(again.turn, s.turn, '重放后的行动数要和原局一致');
+  assert.equal(again.winner, s.winner, '胜者要一致');
+  assert.equal(again.units.length, s.units.length, '单位数要一致');
+  assert.deepEqual(
+    again.units.map((u) => `${u.id}:${u.x},${u.y}:${u.hp}`).sort(),
+    s.units.map((u) => `${u.id}:${u.x},${u.y}:${u.hp}`).sort(),
+    '每个单位的位置和血量都要一致',
+  );
+});
+
 test('局面估值：多一座城更值钱、对面兵多更不值钱、打掉对面一个兵算加分', () => {
   /*
    * 三回合计划全靠这一个读数。它错了，深推就会朝错的方向优化——
