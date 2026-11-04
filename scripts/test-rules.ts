@@ -2985,15 +2985,23 @@ test('狂暴：掉到半血以下才加攻，50%', () => {
   assert.equal(mad, Math.round(baseAtk * 1.5) - armor, `半血该多一半：${plain} → ${mad}`);
 });
 
-test('追猎：和目标每拉开一格 +2（最多 +6）', () => {
+test('撕咬：对残血目标 +8，满血/正好一半都没有', () => {
   const s = fresh({ expansionIds: FANTASY });
-  for (const [x, y] of [[5, 5], [5, 8], [5, 7]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  for (const [x, y] of [[5, 5], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const hound = place2(s, 'A', 'hellhound', 5, 5);
-  const far = place2(s, 'B', 'swordsman', 5, 8);
-  const withTracker = computeDamage(s, hound, far);
-  delete s.unitTypes.hellhound!.abilities;
-  const without = computeDamage(s, hound, far);
-  assert.equal(withTracker - without, 4, '距离 3 应该 +4');
+  const target = place2(s, 'B', 'swordsman', 6, 5);
+  const full = computeDamage(s, hound, target);
+
+  const maxHp = s.unitTypes['swordsman']!.maxHp;
+  target.hp = Math.ceil(maxHp / 2);
+  assert.equal(computeDamage(s, hound, target), full, '正好一半还不算残血');
+
+  target.hp = Math.ceil(maxHp / 2) - 1;
+  assert.equal(computeDamage(s, hound, target) - full, 8, '不足一半：这一口 +8');
+
+  // 摘掉能力就回到基准，确认这 8 点是撕咬给的
+  delete s.unitTypes['hellhound']!.abilities;
+  assert.equal(computeDamage(s, hound, target), full, '没有撕咬就没有加成');
 });
 
 test('群势：牛头人身边每个友军 +2 攻击，最多 +6', () => {
@@ -15218,10 +15226,39 @@ test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血
   assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
-  assert.equal(serpent.maxHp, 34, '蛇人生命 34（2026-11-03 复核：先压到 30，又补回 34）');
+  assert.equal(serpent.maxHp, 26, '蛇人生命 26（2026-11-04 下放到一代时压下来的）');
+  assert.equal(serpent.era, 1, '蛇人已经下放到第 1 代');
   const witch = s.unitTypes['witch']!;
   assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
+});
+
+test('奇想调整（2026-11-04）：蛇人与僵尸下放第 1 代，地狱犬换掉追猎', () => {
+  const s = fresh({ expansionIds: FANTASY });
+
+  // 蛇人：95/15/34 → 72/12/26，时代 2 → 1（8 甲不动，那是它唯一卖点）
+  const serpent = s.unitTypes['serpent-man']!;
+  assert.equal(serpent.era, 1, '蛇人下放到第 1 代');
+  assert.equal(serpent.cost, 72, '蛇人造价 95 → 72');
+  assert.equal(serpent.atk, 12, '蛇人攻击 15 → 12');
+  assert.equal(serpent.maxHp, 26, '蛇人生命 34 → 26');
+  assert.equal(serpent.armor, 8, '蛇人护甲保持 8');
+  assert.deepEqual(serpent.abilities, ['poison-hit'], '蛇人的淬毒不变');
+
+  // 僵尸：70/13/52 → 45/9/42，时代 2 → 1，一回合一步不变
+  const zombie = s.unitTypes['zombie']!;
+  assert.equal(zombie.era, 1, '僵尸下放到第 1 代');
+  assert.equal(zombie.cost, 45, '僵尸造价 70 → 45');
+  assert.equal(zombie.atk, 9, '僵尸攻击 13 → 9');
+  assert.equal(zombie.maxHp, 42, '僵尸生命 52 → 42');
+  assert.equal(zombie.move, 1, '僵尸还是一回合一步');
+  assert.deepEqual(zombie.abilities, ['shield-wall'], '僵尸的盾墙不变');
+
+  // 地狱犬：射程 1 吃不到「追猎」（那要拉开距离），换成「撕咬」
+  const hound = s.unitTypes['hellhound']!;
+  assert.equal(hound.range, 1, '地狱犬还是射程 1——正因为如此才不能带追猎');
+  assert.deepEqual(hound.abilities, ['maul'], '地狱犬：追猎 → 撕咬');
+  assert.ok(!(hound.abilities ?? []).includes('tracker'), '不能再挂追猎');
 });
 
 test('狂战士：一次出手打两段，每段各自减一次护甲', () => {

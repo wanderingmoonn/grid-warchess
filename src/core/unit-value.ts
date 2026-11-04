@@ -52,6 +52,8 @@ export const ABILITY_VALUE: Record<string, number> = {
   'slow-hit': 0.05,
   'curse-hit': 0.05,
   knockback: 0.05,
+  // 撕咬：只在目标残血时生效，比无条件的 +8 便宜
+  maul: 0.06,
   // 生存
   'shield-wall': 0.12,
   'regenerate-plus': 0.1,
