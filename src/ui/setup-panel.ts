@@ -526,13 +526,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return `<span class="expansion-req">需先开：${names}</span>`;
       };
       // 隐藏的扩展（规则在跑但玩家还选不到）不列出来
+      //
+      // 每条只印一句 `blurb`，不印 `summary`。
+      // summary 是写给规则书看的：动辄一百多字，还爱把十几个兵种名一口气列完
+      // （"桨帆船、德罗蒙、卡拉克、盖伦……"）。这个面板只回答"勾不勾"，
+      // 想读细则的人点规则书——那里每册都有专章。没写 blurb 的退回 summary，
+      // 免得将来新加的包在面板上变成一行空白。
       const expItems = availableExpansions().map(
         (e) => `
         <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
           <input type="checkbox" data-exp="${e.id}" ${config.expansionIds.includes(e.id) ? 'checked' : ''} />
           <span class="expansion-body">
             <b>${e.name}</b>
-            <span>${e.summary}</span>
+            <span>${e.blurb ?? e.summary}</span>
             ${reqLine(e.id)}
           </span>
         </label>`,
@@ -549,12 +555,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <span class="expansion-body">
                   <b>结束后上传这局的详细数据</b>
                   <span>
-                    每回合记一行压缩数字（双方兵力 / 城防 / 金币 / 军队身价），
-                    外加双方的出兵与行动次数——只交终局快照看不出"这局是怎么崩的"。
-                    不记玩家名、房间码；**会记每一步的动作**（哪个兵走到哪、打了谁），
-                    这样这一局能在本地逐帧重放，才定位得到"哪一手错了"。
-                    勾一次就记住了，之后每次开新局都沿用；想改随时再点一下。
-                    勾上之后结算卡的「允许上传」会自动打勾，但实际发送仍然要你点一下。
+                    记每回合的兵力 / 城防 / 金币，以及双方的出兵与行动次数，
+                    还有每一步的动作——这局能在本地逐帧重放。
+                    不记玩家名与房间码。勾一次就记住；结算卡会自动打勾，但发送仍要你点一下。
                   </span>
                 </span>
               </label>

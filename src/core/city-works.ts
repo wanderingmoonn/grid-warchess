@@ -296,6 +296,7 @@ const EXTRA_BUILDS: Record<string, string[]> = {
 export const CITY_WORKS: Expansion = {
   id: 'city-works',
   name: '城郭与物料',
+  blurb: '更大的主城，多出粮食与建材。',
   summary:
     '主城扩成 3×3；兵要吃粮、楼要耗材（金币只占零头）；经济单位按脚下地形出粮或出材，经济建筑只产一种资源；' +
     '建材产线一路排到现代（采石工→矿队→建材公司，砖窑→水泥厂→建材基地）；' +

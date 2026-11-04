@@ -28,6 +28,7 @@ function defOf(s: GameState, u: Unit) {
 export const SEASONS: Expansion = {
   id: 'seasons',
   name: '季节与气候',
+  blurb: '四季轮换，气候改这一格的数值。',
   summary:
     '春夏秋冬每 10 回合轮换。每格的气候由地形与海陆距离决定，再改这一格上的移动、护甲、视野、射程与产出。气候不影响城市。',
   scale: 'large',

@@ -621,6 +621,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
 export const CONTEMPORARY_BASE_PACK: Expansion = {
   id: 'pack-contemporary',
   name: '信息化',
+  blurb: '解锁第六时代与它的基础兵。',
   scale: 'large',
   summary:
     '第六时代「信息化」的底座：解锁这一级科技（升级费 1080，城市耐久 96、护甲 14、收入 62），' +

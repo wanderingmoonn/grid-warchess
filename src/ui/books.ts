@@ -110,8 +110,8 @@ export function manualBooks(enabled: string[]): ManualBook[] {
     books.push({
       file: `manual-pack-${e.id}.html`,
       title: e.name,
-      // summary 可能是一整段，列表里放不下；截到第一个句号
-      note: e.summary.split('。')[0] ?? e.summary,
+      // 优先用一句话的 blurb：summary 是写给规则书看的，列表里塞一整段没人读
+      note: e.blurb ?? e.summary.split('。')[0] ?? e.summary,
     });
   }
 

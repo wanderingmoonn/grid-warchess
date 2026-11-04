@@ -352,7 +352,22 @@ export interface ExpansionHooks {
 export interface Expansion {
   id: string;
   name: string;
-  /** 一句话说清它改变了什么 */
+  /**
+   * 给**开局面板**的一句话（一行以内）。
+   *
+   * 面板上原来直接印 `summary`，而 summary 是写给规则书看的：一条扩展动辄
+   * 一百多字、还爱把十几个兵种名一口气列完（"桨帆船、德罗蒙、卡拉克、盖伦……"）。
+   * 面板是"勾或不勾"的地方，玩家在这里只需要判断**这东西大概改了什么**；
+   * 具体数值、名单、例外，规则书里都有专章。
+   *
+   * 写这一行的规矩：一句话、不列名单、不带括号补充、不超过三十来个字。
+   * 想解释清楚某个机制时，去写 `summary`（它会印进规则书的合册开头）。
+   */
+  blurb?: string;
+  /**
+   * 一段话的完整说明：**规则书**用（合册开头的总表、单册的导语）。
+   * 面板不印它——面板印 `blurb`。
+   */
   summary: string;
   hooks: ExpansionHooks;
   /**
@@ -624,6 +639,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'war-economy',
     name: '战争经济',
+    blurb: '击杀敌人当场拿赏金。',
     summary: '每消灭一个对方单位，立刻获得 15 金币。',
     hooks: {
       onUnitKilled: ({ state, victim, killerOwner }) => {
@@ -635,6 +651,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'veterans',
     name: '老兵不死',
+    blurb: '老兵越打越强，回城能补血。',
     summary:
       '单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。',
     hooks: {
@@ -688,6 +705,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'trench',
     name: '堑壕战',
+    blurb: '森林与丘陵上防守更硬。',
     summary: '站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。',
     hooks: {
       modifyArmor: ({ state, defender, armor }) => {
@@ -702,6 +720,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'blitz',
     name: '闪电战',
+    blurb: '快速单位跑得更快，但更贵。',
     summary: '所有移动力 3 以上的快速单位移动 +2、造价 +10%。',
     hooks: {
       modifyMove: ({ state, unit, move }) =>
@@ -713,6 +732,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'conscription',
     name: '大征兵',
+    blurb: '兵更便宜，起始金更少。',
     summary: '所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。',
     hooks: {
       modifyCost: ({ unitType, cost }) =>
@@ -727,6 +747,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'night-raid',
     name: '大雾来了',
+    blurb: '全场视野 −1，撞上才知道是谁。',
     summary: '大雾一起，所有单位视野 −1。撞上了才知道对面是谁。',
     hooks: {
       modifyVision: ({ base }) => Math.max(1, base - 1),
@@ -735,6 +756,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'blackout',
     name: '浓雾蔽野',
+    blurb: '连地图也遮住，走过才记得。',
     summary:
       '基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：没去过的格连地形和城市都不画，只剩一片黑。走过的地方会留在记忆里——地形按上次看到的样子画（压暗），城画成虚线框的"旧情报"，敌人的位置停在最后被看见的那一格。而且迷雾锁定开启、不能关掉；对面的金币也看不见（HUD 上只有一个「?」）。',
     // 纯表现层扩展：不改任何规则数值，只让渲染层把"没去过"画成空白，
@@ -752,6 +774,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'scorched-earth',
     name: '死亡枕藉',
+    blurb: '单位阵亡时波及周围。',
     summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害——砸不到空中的东西。',
     hooks: {
       onUnitKilled: ({ state, victim }) => {
@@ -826,6 +849,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'fortress',
     name: '固若金汤',
+    blurb: '城市更耐打、更硬。',
     summary: '所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。',
     hooks: {
       onMatchStart: ({ state }) => {
@@ -843,6 +867,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'bloodbath',
     name: '血战',
+    blurb: '第 50 回合起全面提速。',
     summary: `第 ${BLOOD_TURN} 回合起（三/四人局按人数等比顺延）：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。`,
     hooks: {
       // 第 17～20 轮为了压节奏加的三样东西（机动/视野削减、城市回血、升级涨价）
@@ -875,6 +900,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'turn-order-comp',
     name: '先后手补偿',
+    blurb: '后手多拿一笔起始金。',
     summary:
       '后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。',
     hooks: {
@@ -885,6 +911,7 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'last-stand',
     name: '哀兵必胜',
+    blurb: '先丢城的一方攻击更高。',
     summary: `先丢掉一座城的一方，全军攻击 +${Math.round(LAST_STAND_BONUS * 100)}%——野战、反击、攻城都算。城没了，气还在。`,
     hooks: {
       modifyDamage: ({ state, attacker, damage }) => lastStandDamage(state, attacker.owner, damage),

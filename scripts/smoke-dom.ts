@@ -1262,6 +1262,21 @@ check('顶栏「首页」回到门面，再点「开始对局」才打开设置�
   assert.equal(doc.querySelector('[data-ailevel]'), null, '热座模式不该有难度选项');
 });
 
+check('扩展条目只印一句话，规则细则留给规则书', () => {
+  /*
+   * 2026-11-04：面板原来直接印 `summary`。一条扩展动辄一百多字，
+   * 有的干脆把十几个兵种名一口气列完（"桨帆船、德罗蒙、卡拉克、盖伦……"），
+   * 二十几条挤在一屏里，玩家读完才知道自己该不该勾。
+   * 现在面板只印 `blurb`（一句话），summary 留在规则书的合册总表里。
+   */
+  const item = doc.querySelector<HTMLElement>('[data-exp="naval"]')?.closest('.expansion-item');
+  assert.ok(item, '面板里应该有「海军」这一条');
+  const text = item!.textContent ?? '';
+  assert.ok(text.includes('从桨帆船到航母'), `面板该印那句 blurb，实际是：${text.trim()}`);
+  assert.ok(!text.includes('德罗蒙'), '整串船名不该搬进面板——那些在规则书里');
+  assert.ok(text.trim().length <= 40, `一条扩展的说明在面板上不该超过一行，实际 ${text.trim().length} 字`);
+});
+
 /** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */
 function openPool(): void {
   if (!doc.querySelector('.pool-layer')) click('[data-act="unit-pool"]');

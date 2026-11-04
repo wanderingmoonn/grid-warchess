@@ -389,6 +389,7 @@ export function apLedger(s: GameState, u: Unit): ApLedger {
 export const ACTION_POINTS: Expansion = {
   id: 'action-points',
   name: '行动点',
+  blurb: '每个动作都改成花行动点。',
   summary:
     '移动、攻击、上下船、释放技能统一成"行动"，每次从单位自己的行动点（E）里扣：' +
     `移动/上下船 ${AP_COST.move}E、攻击每段 ${AP_COST.attack}/段数 E、技能 ${AP_COST.skill}E；` +

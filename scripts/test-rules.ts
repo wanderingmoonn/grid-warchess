@@ -4166,6 +4166,21 @@ test('每个内置扩展都被注册且带说明', () => {
   assert.ok(EXPANSIONS.length >= 6);
   for (const e of EXPANSIONS) {
     assert.ok(e.id && e.name && e.summary, `${e.id} 缺少必要字段`);
+    /*
+     * 开局面板上印的是 `blurb`，不是 `summary`（2026-11-04 改的）。
+     *
+     * 这条守两件事：
+     *   1. 每个包都得有一句 blurb——不然面板上要么空白、要么退回印一整个 summary；
+     *   2. 它必须真的短（≤ 30 字）。面板是"勾不勾"的地方，把规则细则写进去，
+     *      玩家就得在一屏里读完二十几条说明才知道自己该勾什么。
+     *      细则属于规则书：那里每册都有专章，summary 也印在合册的总表里。
+     */
+    assert.ok(e.blurb && e.blurb.length > 0, `${e.id} 缺 blurb（开局面板那一行）`);
+    assert.ok(
+      (e.blurb ?? '').length <= 30,
+      `${e.id} 的 blurb 有 ${e.blurb?.length} 字，面板上放不下——细则写进 summary/规则书`,
+    );
+    assert.ok(e.summary.length > (e.blurb ?? '').length, `${e.id} 的 summary 不该比 blurb 还短`);
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
     // 时代开关也算"干了事"：它没有钩子、没有兵种，但改了能升到第几级

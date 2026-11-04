@@ -55,6 +55,7 @@ export function scaledVision(vision: number): number {
 export const HIGH_MOBILITY: Expansion = {
   id: 'high-mobility',
   name: '高机动性',
+  blurb: '移动、射程、视野全部 ×1.5。',
   summary:
     '全场的移动力、射程、视野一律 ×1.5：移动向上取整（2 → 3），视野向上取整（2 → 3），' +
     '射程向下取整（3 → 4、5 → 7），近战仍然是射程 1。' +

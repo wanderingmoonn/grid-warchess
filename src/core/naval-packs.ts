@@ -1688,6 +1688,7 @@ function attachShipyards(state: GameState, ids: readonly string[]): void {
 export const NAVAL: Expansion = {
   id: 'naval',
   name: '海军',
+  blurb: '从桨帆船到航母，加水雷与海权规则。',
   scale: 'large',
   summary:
     '第二到第六时代的水上力量：桨帆船、德罗蒙、卡拉克、盖伦、风帆巡航舰、护卫舰、鱼雷艇、' +

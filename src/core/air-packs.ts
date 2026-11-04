@@ -705,6 +705,7 @@ export function recoverToCarrier(state: GameState, carrier: Unit, plane: Unit): 
 export const AIR: Expansion = {
   id: 'air',
   name: '空军',
+  blurb: '从侦察气球到喷气机，能上航母甲板。',
   scale: 'large',
   summary:
     '第四到第六时代的空中力量：侦察气球、侦察机、双翼战斗机、活塞战斗机、俯冲轰炸机、' +
