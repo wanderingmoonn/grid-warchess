@@ -33,6 +33,7 @@
     "audit:human": "node --experimental-strip-types scripts/audit-human-games.ts",
     "audit:era": "node --experimental-strip-types scripts/audit-era-units.ts",
     "probe:plan": "node --experimental-strip-types scripts/probe-plan.ts",
+    "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "bench:clone": "node --experimental-strip-types scripts/bench-clone.ts",
     "upload:report": "node --experimental-strip-types scripts/upload-report.ts",
     "sample:reports": "node --experimental-strip-types scripts/make-sample-reports.ts",

@@ -46,6 +46,7 @@ const OLD_AI_FILE = argOf('old', './baseline-ai.ts');
  *
  *   greedy  scripts/script-ai.ts   六条常识的通用脚本（见该文件头）
  *   hold    scripts/script-hold.ts  弃城发育流：放弃一座城、攒钱升城、守到四代再总攻
+ *   raid    scripts/script-raid.ts  抢经济：不围城、不抢时代，只杀对方工人
  *
  * `--script` 是 `--policy greedy` 的旧写法，留着不破坏已有命令。
  */
@@ -60,8 +61,12 @@ const VS_NEW = has('vs-new');
 const scriptAi =
   POLICY === 'hold'
     ? ((await import('./script-hold.ts')).holdNextAction as unknown as typeof newAi)
-    : POLICY === 'greedy' || POLICY === 'script'
-      ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
+    : POLICY === 'raid'
+      ? // 抢经济：两个 AI 都不打经济（自对弈里经济单位只吃 5.9% 伤害），
+        // 所以"护经济"这类结构改动只有它能测出来。见 script-raid.ts 文件头。
+        ((await import('./script-raid.ts')).raidNextAction as unknown as typeof newAi)
+      : POLICY === 'greedy' || POLICY === 'script'
+        ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
       : null;
 const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
   ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
