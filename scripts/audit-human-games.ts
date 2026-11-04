@@ -159,7 +159,17 @@ const builds = new Map<string, number>();
 let skipped = 0;
 
 for (const r of reports) {
-  const aiSides = r.aiSides ?? [];
+  /*
+   * AI 坐哪一席：`aiSides` 是 0.3.20 才加的字段，**之前那批报告只有 ai.opponent**。
+   * 只认 aiSides 的话，库里的老局会被整批当成"没有 AI"跳过——真实数据里
+   * 43 条报告有 32 条是人机局，其中 29 条是老格式。这个坑是拿真数据踩出来的。
+   *
+   * 老格式的约定：A 席 = 人（或 aiAlly 代打），B 席 = 对手 AI。
+   */
+  const aiSides =
+    r.aiSides && r.aiSides.length > 0
+      ? r.aiSides
+      : [...(r.ai?.ally ? ['A'] : []), ...(r.ai?.opponent ? ['B'] : [])];
   if (aiSides.length === 0) { skipped++; continue; }   // 双人对人局：没有 AI 可分析
   if (!r.timeline?.made) { skipped++; continue; }      // 没勾"上传详细数据"
   builds.set(r.build ?? 'dev', (builds.get(r.build ?? 'dev') ?? 0) + 1);
