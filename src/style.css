@@ -5185,7 +5185,21 @@ a.btn {
 .title-screen {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /*
+   * 层级要压在**所有钉在窗口上的小控件**之上，否则它们会从首页底下透出来。
+   * 实测踩到的就是 `.zoom-bar`（右下角「适应 − ＋」，fixed、z-index 60）：
+   * 首页盖住棋盘却漏了它，右下角浮着三个不反应的按钮。
+   *
+   * 取 80 是量过的，不是随手写大：
+   *   60 zoom-bar / toast ── 要在下面
+   *   70 draft-mask       ── 下面（首页开着时抽卡层本来就不该出现）
+   *   90 draft-tip        ── 上面（它只在抽卡层里出，首页挡着也无所谓）
+   *  100 modal-mask       ── 必须**在上面**：首页点「开始对局」是先撤层再开
+   *                          开局面板，但将来若有人直接在首页弹面板，100 才
+   *                          盖得住这一层
+   * 所以不能图省事写到 999，那样会把开局面板和结算卡一起压掉。
+   */
+  z-index: 80;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -5287,7 +5301,9 @@ a.btn {
 .title-links {
   margin-top: 16px;
   display: flex;
-  gap: 8px;
+  /* 四个入口 + 分隔点 + 一句"最近更新"：窄屏上必然换行，不许横向溢出 */
+  flex-wrap: wrap;
+  gap: 4px 8px;
   justify-content: center;
   align-items: center;
   font-size: 13px;
@@ -5305,6 +5321,15 @@ a.btn {
 .title-links button:hover {
   color: var(--a);
   border-bottom-color: var(--a);
+}
+
+/* 「最近更新」单独一行：和四个入口挤在一行时，窄屏换行会在行尾留下一个
+   孤零零的「·」，看着像"后面还有内容被切掉了"。 */
+.title-latest {
+  margin: 9px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .title-era {

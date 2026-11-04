@@ -45,6 +45,9 @@ const doc = window.document;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 doc.querySelector<HTMLElement>('[data-act="new-game"]')?.click();
+await sleep(30);
+// 2026-11-04 起「新对局」只回首页，面板要从首页的「开始对局」进去
+doc.querySelector<HTMLElement>('[data-title="new"]')?.click();
 await sleep(80);
 const battle = doc.querySelector('.modal-mask')?.innerHTML ?? '';
 

@@ -231,8 +231,17 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
   }
 }
 
-/** 开机时本机有没有存档：有＝老玩家，直接落回棋盘；没有＝第一次来，先给首页 */
-const hadSavedMatch = loadMatch() !== null;
+/**
+ * 本机有没有**真的打过**的一局。
+ *
+ * 不能直接拿 `loadMatch() !== null` 现查：启动流程末尾无条件 `saveMatch()`
+ * （新建的那局当场就落盘），于是第一次来的人也会看到亮着的「继续上一局」——
+ * 点了接着打的其实是一张谁都没动过的随机棋盘。
+ *
+ * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
+ * 导入一局、进房间接手一局，都把它置 true。
+ */
+let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
 
@@ -1631,6 +1640,8 @@ function takeSnapshot(snapshot: RoomSnapshot): void {
   state.fog = fog;
   clearSelection();
   saveMatch(state);
+  // 从房间接手的那一局也是"真的打过"的：回首页之后应该能接着打
+  hasRealSave = true;
   render();
 }
 
@@ -3059,18 +3070,13 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'manual': {
-      // 只有核心规则书相关时直接打开，别为形式多问一次；
-      // 开了扩展才可能出现"看哪本"这个选择。
-      const books = manualBooks(state.config.expansionIds);
-      if (books.length === 1) {
-        window.open(`./${books[0]!.file}`, '_blank', 'noopener');
-        return;
-      }
-      openManualChooser(books);
+      openManualFlow();
       return;
     }
 
     case 'unit-editor': {
+      // 顶栏这颗按钮已经挪到首页（2026-11-04）。分支留着：首页的入口
+      // 走的是同一个 openUnitEditor，两处语义必须一致。
       openUnitEditor(() => render());
       return;
     }
@@ -3105,36 +3111,15 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'import': {
-      const text = window.prompt('粘贴对方发来的对局内容：');
-      if (!text) return;
-      const imported = importMatch(text);
-      if (!imported) {
-        toast('这段内容不是有效的对局存档，或来自旧版本');
-        return;
-      }
-
-      // 存档里只有扩展 id，本机没注册的规则会静默失效——必须先告诉用户，
-      // 否则两边算出来的结果会不一样，谁都不知道为什么。
-      const missing = imported.config.expansionIds.filter((id) => !expansionById(id));
-      if (missing.length > 0) {
-        toast(`注意：这局用了本机没有的规则（${missing.join('、')}），它们不会生效`);
-      }
-
-      state = imported;
-      detachRoom(); // 换了一局，房间就对不上了
-      resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
-      clearSelection();
-      // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
-      // 否则会把上一局的摘要记到这一局头上
-      resetRecorder();
-      saveMatch(state);
-      render();
-      kickAiIfNeeded();
+      // 顶栏这颗按钮也挪到首页了，分支留作同一条实现（见 importMatchFlow）
+      importMatchFlow();
       return;
     }
 
     case 'new-game': {
-      newGameFlow();
+      // 不再直接换一局：回家，由首页的「开始对局」统一开门。
+      // 顺手暂停 AI——棋盘还在下面，别让它在没人看的时候接着下。
+      showTitle({ pauseAi: true });
       return;
     }
 
@@ -3460,39 +3445,67 @@ async function runAiTurn(
 }
 
 /**
- * 打开开局面板、确认后换一局。
+ * 回到首页。
  *
- * 抽成函数是因为入口有两个：顶栏的「新对局」和开始页面上的「开始对局」。
- * 抄一份的话，两处迟早会走岔（比如只在一处记得关掉房间、重置记录器）。
- *
- * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
- * 只有点了面板里的"开始对局"才会覆盖当前存档。
+ * 三个入口共用它：启动时、顶栏「新对局」、以及「继续上一局」被误触后想找回门口。
+ * 2026-11-04 之前顶栏那颗「新对局」是直接换一局（跳过门面），结果是
+ * "开局"这件事有两个门：一个有选项、一个没有。现在它只负责回门口。
  */
-/**
- * 每次打开都给首页。
- *
- * 一开始写的是"只在没有存档时显示"，但那样**只有全新的人见过它**——
- * 而门面恰恰是给回头客确认"我回来了、东西还在"用的。所以改成每次启动都出，
- * 有存档时「继续上一局」可点：点一下原地撤掉这一层，下面那局本来就已经画好了。
- */
-function showTitleOnLaunch(): void {
-  const host = document.getElementById('app');
+function showTitle(opts: { pauseAi?: boolean } = {}): void {
+  /*
+   * 挂到 body，不挂 #app：`appEl.innerHTML` 在启动时会被整块写一次，
+   * 之后各处面板还会局部换 innerHTML。挂 body 就与这些渲染彻底无关，
+   * 不会出现"第一屏刚出现又被谁刷没了"。
+   */
+  const host = document.body;
   if (!host) return;
+  // 回首页时首页可能已经在了（顶栏按钮连点两下）：再 append 一次就是两层叠着，
+  // 撤掉上面那层下面那层还在——"点了开始对局却还是首页"这种 bug 最难查。
+  if (host.querySelector('.title-screen')) return;
+
+  /*
+   * 只有"打对局打到一半、被按了首页"才暂停 AI。
+   *
+   * 棋盘还在下面（这是「继续上一局」能瞬开的前提）。如果这局正轮到 AI，
+   * 它会在没人看的时候自己往下走——玩家盯着门面，回来发现丢了两个城。
+   * 暂停是现成的机制；点「继续上一局」时 kickAiIfNeeded 会把它重新点起来。
+   *
+   * **启动时不暂停**：开机本来就没有循环在跑（没人调 kickAiIfNeeded），
+   * 而存档可能正停在 AI 的回合上——那里暂停等于把一局活棋冻住，
+   * 上帝模式那条"对面真由 AI 接手"的用例就是这么红的。
+   */
+  if (opts.pauseAi) aiPaused = true;
+
   openTitle(host, {
-    hasSave: hadSavedMatch,
+    // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
+    hasSave: hasRealSave,
     version: BUILD_VERSION,
-    latest: '新：对局数据可重放',
+    latest: '新：开始页面 + 对局可重放',
     onNew: newGameFlow,
-    onContinue: () => {},
+    onContinue: () => {
+      render();
+      kickAiIfNeeded();
+    },
     onOnline: () => {
       const btn = document.querySelector<HTMLButtonElement>('[data-act="online"]');
       if (btn) btn.click();
       else toast('联机面板没打开，先用「开始对局」打一局本机的');
     },
-    onManual: () => {},
+    onManual: openManualFlow,
+    onEditor: () => openUnitEditor(() => render()),
+    onImport: importMatchFlow,
   });
 }
 
+/**
+ * 打开开局面板、确认后换一局。
+ *
+ * 抽成函数是因为它不止一个调用方（首页的「开始对局」、导入失败后的兜底）。
+ * 抄一份的话，两处迟早会走岔（比如只在一处记得关掉房间、重置记录器）。
+ *
+ * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
+ * 只有点了面板里的"开始对局"才会覆盖当前存档。
+ */
 function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
@@ -3505,6 +3518,7 @@ function newGameFlow(): void {
     // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
     if (result.config.recordDetail === true) saveReportOptIn(true);
     saveMatch(state);
+    hasRealSave = true;
     render();
     toast('新对局开始');
     kickAiIfNeeded();
@@ -3515,6 +3529,57 @@ function newGameFlow(): void {
 function kickAiIfNeeded(): void {
   aiPaused = false;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
+}
+
+/**
+ * 导入对局：把对方发来的一串文本变成当前这局。
+ *
+ * 从 `handleAction` 的 case 里抽出来的，因为首页也要用（2026-11-04 起
+ * 「导入对局」只在首页出现）。抽出来之后那段"换局要重置哪些东西"的清单
+ * 只有一份，不会在两侧走岔。
+ */
+function importMatchFlow(): void {
+  const text = window.prompt('粘贴对方发来的对局内容：');
+  if (!text) return;
+  const imported = importMatch(text);
+  if (!imported) {
+    toast('这段内容不是有效的对局存档，或来自旧版本');
+    return;
+  }
+
+  // 存档里只有扩展 id，本机没注册的规则会静默失效——必须先告诉用户，
+  // 否则两边算出来的结果会不一样，谁都不知道为什么。
+  const missing = imported.config.expansionIds.filter((id) => !expansionById(id));
+  if (missing.length > 0) {
+    toast(`注意：这局用了本机没有的规则（${missing.join('、')}），它们不会生效`);
+  }
+
+  state = imported;
+  detachRoom(); // 换了一局，房间就对不上了
+  resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
+  clearSelection();
+  // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
+  // 否则会把上一局的摘要记到这一局头上
+  resetRecorder();
+  saveMatch(state);
+  hasRealSave = true;
+  render();
+  kickAiIfNeeded();
+}
+
+/**
+ * 打开规则手册。
+ *
+ * 只有核心那一本时直接开，别为形式多问一次；开了扩展才可能出现"看哪本"。
+ * 首页和顶栏的「规则书」共用这一条。
+ */
+function openManualFlow(): void {
+  const books = manualBooks(state.config.expansionIds);
+  if (books.length === 1) {
+    window.open(`./${books[0]!.file}`, '_blank', 'noopener');
+    return;
+  }
+  openManualChooser(books);
 }
 
 // ---------- 指挥官模式 ----------
@@ -4560,7 +4625,6 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   saveMatch(state);
   render();
   startRoomPolling();
-  showTitleOnLaunch();
 }
 
 function leaveRoom(): void {
@@ -5721,3 +5785,18 @@ if (drift) {
       '修法：把 src/net/cloud-config.ts 的 endpoint 和 publishableKey 换成这个应用当前下发的 publicConfig。',
   );
 }
+
+/*
+ * 第一屏。
+ *
+ * 位置很重要：这一行必须在**启动流程的最末尾**——上面那一大段才是
+ * "读存档 / 修存档 / 首次渲染 / 让 AI 跑起来"。我第一次把调用写进了
+ * `applyRoom()`（那是以联机入房为入口的函数），于是正常打开页面根本走不到，
+ * 表现就是"首页做完了但看不见"。教训：给"启动时的东西"找位置，要认
+ * 模块末尾的初始化代码，而不是随便找一个 startRoomPolling 的邻居。
+ *
+ * 带邀请链接（?room=CODE）直接进房间，不让门面挡路；
+ * 想看门面又不想清存档，就在地址后面加 ?home=1。
+ */
+const forceHome = new URLSearchParams(location.search).get('home') === '1';
+if (forceHome || invited.length < 4) showTitle();

@@ -26,6 +26,10 @@ export interface TitleOptions {
   onContinue: () => void;
   onOnline: () => void;
   onManual: () => void;
+  /** 兵种编辑器：原来在顶栏，现在只留在这里 */
+  onEditor: () => void;
+  /** 导入对局：同上 */
+  onImport: () => void;
 }
 
 /** 六个时代的色带：和棋盘里的地形色同一套语言，不用另造一套配色 */
@@ -55,16 +59,20 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       <p class="title-sub">从青铜到信息化：六个时代的产兵、经济与攻城</p>
 
       <div class="title-actions">
-        <button class="title-btn primary" data-act="new">开始对局</button>
-        <button class="title-btn" data-act="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>
+        <button class="title-btn primary" data-title="new">开始对局</button>
+        <button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>
       </div>
 
       <div class="title-links">
-        <button data-act="online">联机对战</button>
+        <button data-title="online">联机对战</button>
         <span>·</span>
-        <button data-act="manual">规则手册</button>
-        ${opts.latest ? '<span>·</span><span class="title-latest"></span>' : ''}
+        <button data-title="manual">规则手册</button>
+        <span>·</span>
+        <button data-title="editor">兵种编辑器</button>
+        <span>·</span>
+        <button data-title="import">导入对局</button>
       </div>
+      ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
       <ol class="title-era" aria-label="六个时代">
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
@@ -89,9 +97,9 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   win.addEventListener('keydown', onKey);
 
   layer.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-title]');
     if (!btn || (btn as HTMLButtonElement).disabled) return;
-    switch (btn.dataset.act) {
+    switch (btn.dataset.title) {
       case 'new':
         close();
         opts.onNew();
@@ -105,8 +113,22 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         opts.onOnline();
         break;
       case 'manual':
-        // 规则手册是 public/ 下的静态页，新开一个标签，别把对局页顶掉
-        win.open('manual.html', '_blank', 'noopener');
+        // 不撤层：规则手册在新标签页里打开，看完回来还应该站在原地
+        opts.onManual();
+        break;
+      case 'editor':
+        /*
+         * 同样不撤层，而且是有意的：兵种编辑器是**模态框**（z-index 100），
+         * 盖在首页之上；关掉编辑器会回到首页，玩家可以接着改、也可以直接开局。
+         * 第一版是先撤层再开编辑器——改完兵种落在一张已经开局的棋盘上，
+         * 想再改一个数值就得从头摸回入口。
+         */
+        opts.onEditor();
+        break;
+      case 'import':
+        // 导入是"进入某一局"，和开始/继续同级：先撤层
+        close();
+        opts.onImport();
         break;
     }
   });

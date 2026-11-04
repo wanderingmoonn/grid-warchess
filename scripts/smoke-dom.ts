@@ -1151,10 +1151,42 @@ check('关掉迷雾后双方单位全部出现', () => {
   assert.equal(doc.querySelectorAll('.tile.out').length, 0, '关掉迷雾后不该再有暗格');
 });
 
+check('第一次来：首页的「继续上一局」是灰的（开机自动存档不算"打过"）', () => {
+  /*
+   * 启动流程末尾会无条件 saveMatch() 一次——新建的这局当场落盘。
+   * 如果「继续」直接看 loadMatch()，第一次来的人会看到一个亮着的按钮，
+   * 点下去接着打的是一张谁都没动过的随机棋盘。这条钉住那个判据。
+   */
+  const home = doc.querySelector('.title-screen');
+  assert.ok(home, '启动就应该出首页');
+  const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
+  assert.ok(cont, '首页要有「继续上一局」');
+  assert.equal(cont!.disabled, true, '第一次来没有可接着打的一局');
+});
+
 console.log('\n开局设置');
 
-check('点新对局会打开设置面板', () => {
+/**
+ * 打开开局面板。
+ *
+ * 2026-11-04 起「开局」只剩首页一个门口：顶栏那颗按钮（现在叫「首页」）
+ * 只负责回到门面，真正的配置面板由首页的「开始对局」打开。
+ * 用例里凡是"要开一局"的地方都走这里，别各自拼两步点击——
+ * 将来入口再挪一次，只需要改这一个函数。
+ */
+function openSetup(): void {
   click('[data-act="new-game"]');
+  assert.ok(doc.querySelector('.title-screen'), '顶栏那颗按钮应该先把人送回首页');
+  click('[data-title="new"]');
+}
+
+check('顶栏「首页」回到门面，再点「开始对局」才打开设置面板', () => {
+  click('[data-act="new-game"]');
+  const home = doc.querySelector('.title-screen');
+  assert.ok(home, '顶栏那颗按钮应该打开首页');
+  assert.ok(!doc.querySelector('.modal-mask'), '回首页这一步不该顺手弹出设置面板');
+
+  click('[data-title="new"]');
   assert.ok(doc.querySelector('.modal-mask'), '应该弹出设置面板');
   assert.ok(doc.querySelectorAll('.expansion-item').length >= 6, '应该列出全部扩展规则');
   assert.ok(doc.querySelectorAll('[data-size]').length >= 3, '应该能选棋盘大小');
@@ -1417,6 +1449,8 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
   const host = doc.createElement('div');
   doc.body.appendChild(host);
   let started = false;
+  let imported = false;
+  let edited = false;
   const close = openTitle(host, {
     hasSave: false,
     version: '0.0.0-test',
@@ -1424,21 +1458,46 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
+    onEditor: () => { edited = true; },
+    onImport: () => { imported = true; },
   });
 
   const box = host.querySelector('.title-screen');
   assert.ok(box, '首页应该挂上来');
   assert.ok((host.textContent ?? '').includes('时代与回旋镖'), '要有游戏名');
-  const cont = host.querySelector<HTMLButtonElement>('[data-act="continue"]')!;
+  const cont = host.querySelector<HTMLButtonElement>('[data-title="continue"]')!;
   assert.equal(cont.disabled, true, '没有存档时「继续上一局」不该能点');
 
-  const start = host.querySelector<HTMLButtonElement>('[data-act="new"]')!;
+  const start = host.querySelector<HTMLButtonElement>('[data-title="new"]')!;
   assert.equal(doc.activeElement, start, '焦点应在主按钮上（键盘两下开局）');
+
+  // 「兵种编辑器」和「导入对局」搬到了这一行（2026-11-04）。编辑兵种不撤层：
+  // 改完还要接着改，或者直接开局；导入则和开始/继续同级，等于进入某一局。
+  host.querySelector<HTMLElement>('[data-title="editor"]')!.click();
+  assert.equal(edited, true, '首页的「兵种编辑器」要交回控制权');
+  assert.ok(host.querySelector('.title-screen'), '开编辑器不该把首页撤掉');
+
   start.click();
   assert.equal(started, true, '点「开始对局」要交回控制权');
   assert.ok(!host.querySelector('.title-screen'), '点完要把这一层撤掉');
 
+  // 重新挂一层来试导入：它是会撤层的
+  const close2 = openTitle(host, {
+    hasSave: true,
+    version: '0.0.0-test',
+    onNew: () => {},
+    onContinue: () => {},
+    onOnline: () => {},
+    onManual: () => {},
+    onEditor: () => {},
+    onImport: () => { imported = true; },
+  });
+  host.querySelector<HTMLElement>('[data-title="import"]')!.click();
+  assert.equal(imported, true, '首页的「导入对局」要交回控制权');
+  assert.ok(!host.querySelector('.title-screen'), '导入是进入某一局，这层要撤掉');
+
   close();
+  close2();
   host.remove();
 });
 
@@ -1542,7 +1601,7 @@ check('新对局按选中的尺寸和扩展生成', () => {
 });
 
 await checkAsync('固定地图：开局界面有画廊，选中/取消都能实时生效', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
 
   // 选图在「地图」页：和战役设置分开，一条长卷里不再既讲规则又挑地图
@@ -1596,7 +1655,7 @@ await checkAsync('固定地图：开局界面有画廊，选中/取消都能实�
 });
 
 await checkAsync('地图页：选图和传图在同一页，没解析前只有"选文件"', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
   doc.querySelector<HTMLElement>('[data-tab="maps"]')!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1640,7 +1699,7 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
 });
 
 await checkAsync('32×32 大地图也能开局，并带出缩放条', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 30));
   click('[data-size="32"]');
   click('[data-act="start"]');
@@ -1650,7 +1709,7 @@ await checkAsync('32×32 大地图也能开局，并带出缩放条', async () =
   assert.ok(doc.querySelector('[data-act="zoom-in"]'), '大地图要有放大按钮');
 
   // 后面的用例按 20×20 的布局写的，这里换回来
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 30));
   click('[data-size="20"]');
   click('[data-act="start"]');
@@ -1661,7 +1720,7 @@ await checkAsync('32×32 大地图也能开局，并带出缩放条', async () =
 console.log('\n三/四人对局');
 
 await checkAsync('开始界面选三人：对手区换成说明，开局后顶栏三条席位、每家一座城', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
 
   const players = [...doc.querySelectorAll<HTMLElement>('[data-players]')];
@@ -1700,7 +1759,7 @@ await checkAsync('开始界面选三人：对手区换成说明，开局后顶�
   assert.equal(doc.querySelectorAll('.tile.t-city.own-D').length, 0, '三人局没有黄方');
 
   // 换回两人局 20×20，后面的用例都按那个布局写的
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
   const two = doc.querySelector<HTMLElement>('[data-players="2"]');
   assert.ok(two, '人数里要能选回两人');
@@ -1763,12 +1822,37 @@ check('升级后城市更硬，产兵列表也多出二级兵', () => {
   assert.ok(!html.includes('升级后可解锁：长枪兵'), '长枪兵应该已经从锁定变成可选');
 });
 
+check('打过一局之后回首页，「继续上一局」就亮了', () => {
+  // 上面已经开过好几局，所以这里应该能接着打——与"第一次来"那条正好成对
+  click('[data-act="new-game"]');
+  const home = doc.querySelector('.title-screen');
+  assert.ok(home, '先回首页');
+  const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
+  assert.equal(cont!.disabled, false, '打过一局之后应该能接着打');
+
+  // 点「继续」= 原地撤层回到棋盘，不该弹面板、也不该换局
+  const tiles = doc.querySelectorAll('.tile').length;
+  cont!.click();
+  assert.equal(doc.querySelector('.title-screen'), null, '继续之后首页应该收起');
+  assert.equal(doc.querySelector('.modal-mask'), null, '继续不该弹开局面板');
+  assert.equal(doc.querySelectorAll('.tile').length, tiles, '继续应该回到原来那一局，而不是新开一张图');
+});
+
 console.log('\n兵种编辑器');
 
-check('顶栏能打开兵种编辑器', () => {
-  click('[data-act="unit-editor"]');
+check('兵种编辑器在首页，顶栏不再有这颗按钮', () => {
+  assert.equal(doc.querySelector('[data-act="unit-editor"]'), null, '顶栏不该还留着兵种编辑器');
+  assert.equal(doc.querySelector('[data-act="import"]'), null, '顶栏也不该留着导入对局');
+
+  click('[data-act="new-game"]');
+  assert.ok(doc.querySelector('.title-screen'), '先回首页');
+  assert.ok(doc.querySelector('[data-title="editor"]'), '首页应该有兵种编辑器入口');
+  assert.ok(doc.querySelector('[data-title="import"]'), '首页应该有导入对局入口');
+
+  click('[data-title="editor"]');
   assert.ok(doc.querySelector('.modal-mask'), '应该打开编辑器');
   assert.ok(doc.querySelectorAll('.editor-row').length >= 10, '应该列出内置兵种');
+  assert.ok(doc.querySelector('.title-screen'), '编辑器是模态框，首页该在它下面等着');
 });
 
 check('复制内置兵种会进入编辑表单', () => {
@@ -1791,9 +1875,15 @@ check('改完保存会出现在自定义列表', () => {
   assert.ok(html.includes('测试兵'), '自定义列表应该出现新兵种');
 });
 
-check('关掉编辑器回到对局', () => {
+check('关掉编辑器会回到首页（首页还站在原地）', () => {
   click('[data-act="close"]');
   assert.equal(doc.querySelector('.modal-mask'), null);
+  assert.ok(doc.querySelector('.title-screen'), '编辑器是从首页开的，关掉之后首页还在');
+
+  // 把首页撤掉，让后面的用例回到"在对局里"的状态。用 Esc（首页自带的出口），
+  // 不点「继续」——后者会顺手把 AI 点起来，后面的托管用例就不再从人类回合开始。
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.equal(doc.querySelector('.title-screen'), null, 'Esc 应该能撤掉首页');
 });
 
 console.log('\nAI 托管');
@@ -2022,7 +2112,7 @@ check('渡船面板有货舱、装载和卸载', () => {
 
 console.log('\n双 AI 观战');
 
-click('[data-act="new-game"]');
+openSetup();
 click('[data-ai="2"]');
 // 顺手把这一局走成初级档：验证难度真的从面板传进了对局状态，
 // 而不只是面板上高亮了一个按钮
@@ -2221,7 +2311,7 @@ check('普通对局不显示指挥官栏', () => {
   assert.equal(bar.hidden, true, '非指挥官模式不该出现');
 });
 
-click('[data-act="new-game"]');
+openSetup();
 await wait(40);
 
 check('开局面板能选角色', () => {
@@ -2257,7 +2347,7 @@ await checkAsync('数据收集排在最前面，而且会记住上次的选择',
   click('[data-act="cancel"]');
   await wait(20);
 
-  click('[data-act="new-game"]');
+  openSetup();
   await wait(40);
   const again = doc.querySelector<HTMLInputElement>('[data-field="record"]');
   assert.equal(again?.checked, true, '上次勾了，这次开面板就该自动沿用（只勾一次）');
@@ -2267,7 +2357,7 @@ await checkAsync('数据收集排在最前面，而且会记住上次的选择',
   again!.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   click('[data-act="cancel"]');
   await wait(20);
-  click('[data-act="new-game"]');
+  openSetup();
   await wait(40);
   const third = doc.querySelector<HTMLInputElement>('[data-field="record"]');
   assert.equal(third?.checked, false, '取消勾选也要记住，不能只记"开"');
@@ -2634,7 +2724,7 @@ await checkAsync('换一局之后缩放必须回到「适应」，而且还能�
   assert.ok(board.classList.contains('zoomed'), '2× 时棋盘该带着 zoomed');
 
   // 开一局新的（面板里什么都不改，直接开始）
-  click('[data-act="new-game"]');
+  openSetup();
   await new Promise((resolve) => setTimeout(resolve, 30));
   click('[data-act="start"]');
   await new Promise((resolve) => setTimeout(resolve, 60));
@@ -3278,7 +3368,7 @@ check('旧兵不再被时代下限吃掉：五代城照样列得出民兵', () =
 });
 
 console.log('\n上帝模式');
-click('[data-act="new-game"]');
+openSetup();
 await wait(40);
 
 check('开局面板多了"上帝模式"这一档', () => {
@@ -4798,7 +4888,7 @@ console.log('\n选卡模式');
 const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
 
 await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一个才进入选人', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   click('[data-draft-mode="on"]');
   const on = doc.querySelector<HTMLElement>('[data-draft-mode="on"]');
   assert.ok(on?.classList.contains('active'), '"开启选卡模式"要能选中');
@@ -5070,7 +5160,7 @@ check('选卡：底部「我已选」区把每张卡的完整面板都摊开，�
 });
 
 await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   click('[data-draft-mode="on"]');
   click('[data-act="start"]');
   await tick(60);
@@ -5086,23 +5176,31 @@ await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起',
   await tick(40);
 });
 
-await checkAsync('选卡可以退出：退出后回到开局设置面板', async () => {
-  click('[data-act="new-game"]');
+await checkAsync('选卡可以退出：退出后回到首页，想重开再走一遍「开始对局」', async () => {
+  openSetup();
   click('[data-draft-mode="on"]');
   click('[data-act="start"]');
   await tick(60);
   assert.equal(doc.querySelector<HTMLElement>('#draft')!.hidden, false, '先要有遮罩');
 
+  // 退出选卡走的是和顶栏「首页」同一条路（2026-11-04 起它不再直接弹面板）
   click('#draft [data-draft-act="exit"]');
   await tick(80);
-  assert.ok(doc.querySelector('.modal-mask'), '退出之后应该弹出开局设置面板');
-  // 收掉面板，别把后面的用例挡在模态框外面
+  assert.ok(doc.querySelector('.title-screen'), '退出之后应该回到首页');
+  assert.equal(doc.querySelector('.modal-mask'), null, '不该顺手弹出设置面板');
+
+  // 门口还在：从首页重新开一局，面板照样弹得出来
+  click('[data-title="new"]');
+  assert.ok(doc.querySelector('.modal-mask'), '从首页应该能打开设置面板');
   doc.querySelector<HTMLElement>('.modal-mask [data-act="cancel"]')?.click();
   await tick(40);
+  // 收掉首页，别把后面的用例留在"站在门口"的状态
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  await tick(20);
 });
 
 await checkAsync('选卡 + 对战 AI：AI 自己把它的禁位与选位走完', async () => {
-  click('[data-act="new-game"]');
+  openSetup();
   click('[data-ai="1"]');
   click('[data-draft-mode="on"]');
   click('[data-act="start"]');
