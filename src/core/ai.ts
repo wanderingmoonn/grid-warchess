@@ -3958,6 +3958,10 @@ export const aiTrace = {
   flankUnits: 0,
   /** 一层推演把首选动作换掉了的次数 */
   lookaheadFlip: 0,
+  /** 三回合计划把启发式第一名换掉了几次 */
+  planFlip: 0,
+  /** 三回合计划实际跑了几次（够不够用、有没有被门控挡住） */
+  planRuns: 0,
   swapWhy: new Map<string, number>(),
   reset(): void {
     this.swapWhy.clear();
@@ -3966,6 +3970,8 @@ export const aiTrace = {
     this.revive = 0;
     this.flankUnits = 0;
     this.lookaheadFlip = 0;
+    this.planFlip = 0;
+    this.planRuns = 0;
   },
 };
 
@@ -4980,6 +4986,120 @@ export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
  * 只看"站着能打到谁"，不看对面的移动：移动的可能性已经在 exposure 里算过
  * 一遍了，这里再来一遍是重复计算，而且会让"逼近"这个动作被罚两次。
  */
+/**
+ * 局面的静态估值（站在 me 的角度，越大越好）。
+ *
+ * 深推要一个"三回合之后这盘棋怎么样"的读数，而这个读数不能是"我已经很熟的那套
+ * 采购评分"——那套是给单个动作打分的，拿它评局面会把"便宜"当成"好"。
+ *
+ * 四项，权重是照着"什么真的会决定胜负"给的：
+ *
+ *   · **城**：120 分一座。这是这套规则里唯一通向胜利的东西（城全丢才输），
+ *     所以它必须压过其他所有项——三回合里多拿一座城，比多存两百金重要得多。
+ *   · **军队**：按 `unitValue` 计价（和采购、换血用的是同一把尺子，不另造一套）。
+ *   · **金**：0.35 系数。金是"还没变成兵"的兵，但它打折——因为三回合内花不出去的钱
+ *     就是数字，而 AI 的常见死法恰恰是"钱在账上、人在坟里"。
+ *   · **时代**：每级 40 分。时代差是复利：同样的钱，晚一代的兵就是更强。
+ *
+ * 再减一项**威胁**：贴在我城下的敌军价值越大，这个局面越糟。不减去它，
+ * 深推会得出"我多造了一个兵所以变好了"这种结论，而那个兵正站在敌人嘴边。
+ */
+/**
+ * ── 三回合计划：把候选落到局面上再打分 ──
+ *
+ * 为什么必须"落子"而不是"打分"：现在的评分是给**单个动作**打的分，它看不见
+ * "这一步之后对面会怎么还手、我还接不接得上"。文档里量过：决策层早就饱和了
+ * （高级 vs 中级 +0 点、五条结构性改动 46%），原因就在这里——一层贪心打分
+ * 再往上加权重也不会变成"会下棋"。
+ *
+ * 架构上只有两件事要交代清楚：
+ *
+ *   1. **克隆开销**。`applyAction` 自带深拷贝，16×16、30 个兵的中局**0.55 ms** 一次
+ *      （`scripts/bench-clone.ts` 实测）。真正贵的是模拟里的**打分**：一次
+ *      `aiNextAction` 6.6 ms。所以宽度不能按"克隆几次"定，得按"模拟几次打分"定：
+ *      `PLAN_K=2` 组候选 × 2 段模拟 × `PLAN_STEPS=3` 步 ≈ 12 次打分 ≈ 80 ms。
+ *      这个数只在**战略动作**上付（见 `planWorthy`），一次走位不值得。
+ *   2. **确定性**。全程不碰 `Math.random`：模拟用的还是这套 AI 自己（`depth=1`
+ *      关掉深推，不会递归），随机性只有 `aiNoise(seed, …)` 这一条既有通路，
+ *      所以"同一局面永远同样应对"仍然成立——存档、复盘、联机都还站得住。
+ *
+ * 还差一层诚实的说明：模拟对手用的是**我们自己**的决策函数（"假设对面也这么打"）。
+ * 这不是对手模型，是自模型；真实的人类会犯错也会出怪招，这一层看不见。
+ * 它买到的是"我三步之后接不接得上"，不是"我能不能赢人"。
+ */
+/**
+ * 总开关。
+ *
+ * 2026-11-04 实测：400 局配对 A/B 对"动手前那一版"是 **49.5%（z=-0.20）**——
+ * 中性。机制在跑（34% 的决策进计划、15% 被翻盘），但换算不成胜率。
+ *
+ * 所以这一层的定位要写清楚：**它不是"变强的一刀"，是搜索的地基**。
+ * 估值、克隆预算、确定性、门控都在这里做完了，下一步（更深的搜索 / 对手模型）
+ * 从这儿往下接，而不是再发明一套。关掉它只需要把这里改成 false：
+ * 一步决策从 ~80 ms 回到 ~7 ms，AI 自对弈快 5 倍。
+ */
+const PLAN_ON = true;
+const PLAN_K = 2;
+/** 每段模拟最多走几步：3 步够看出"兵死没死、城掉没掉"，再长就是在算走位细节 */
+const PLAN_STEPS = 3;
+/**
+ * 哪些动作值得付深推的钱。
+ *
+ * 走位（MOVE）不进去：一步走位三回合后几乎看不出差别，却要把 80 ms 花在
+ * 每一格里——一回合几十步，直接就卡了。真要看走位的后果，靠的是 ATTACK/SIEGE
+ * 这两个"落子即分胜负"的动作。
+ */
+const PLAN_WORTHY: ReadonlySet<string> = new Set(['RECRUIT', 'UPGRADE', 'ATTACK', 'SIEGE']);
+
+/** 当前行动方走 steps 步（不结束回合） */
+function simSteps(s: GameState, steps: number, depth: number): GameState {
+  let cur = s;
+  for (let i = 0; i < steps; i += 1) {
+    if (cur.winner) break;
+    const a = aiNextAction(cur, { ...DEFAULT_BUDGET, maxRecruit: 1, maxUpgrade: 0 }, new Set(), depth);
+    if (!a) break;
+    const r = applyAction(cur, a);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  return cur;
+}
+
+/** 结束当前行动方的回合、让对面走完一回合、再结束它的回合 —— 回到"我"的时刻 */
+function simRound(s: GameState, steps: number, depth: number): GameState {
+  let cur = s;
+  const end = applyAction(cur, { type: 'END_TURN' });
+  if (!end.ok) return cur;
+  cur = end.state;
+  if (cur.winner) return cur;
+  cur = simSteps(cur, steps, depth);
+  if (cur.winner) return cur;
+  const back = applyAction(cur, { type: 'END_TURN' });
+  return back.ok ? back.state : cur;
+}
+
+export function positionValue(s: GameState, me: PlayerId): number {
+  const hpFactor = (u: Unit): number => u.hp / Math.max(1, utype(s, u.type).maxHp);
+  const cities = citiesOf(s, me);
+  const army = unitsOf(s, me).reduce((n, u) => n + unitValue(s, u) * hpFactor(u), 0);
+  const era = cities.reduce((m, c) => Math.max(m, c.era), 0);
+  let foe = 0;
+  for (const e of unitsOf(s, other(me))) {
+    if (underConstruction(e)) continue;
+    foe += unitValue(s, e) * hpFactor(e);
+  }
+  /*
+   * 对面那项的系数必须**单独给**，不能和"我的兵"一样。
+   *
+   * 第一版只算了"我的兵值多少"，于是"打他一刀、自己挨一下"在估值上是净亏——
+   * 深推立刻学会了一件事：**谁都别打，绕着走**。测试「贴脸的矮人王照样扔斧头」
+   * 就是这么红的（第二手从 ATTACK 翻成了 MOVE）。战棋里打掉对面一个兵和
+   * 保住自己一个兵，价值本来就该同权；0.9 是给"攻方略占便宜"留的一点余量。
+   */
+  const FOE_W = 0.9;
+  return cities.length * 120 + army - foe * FOE_W + s.players[me].gold * 0.35 + era * 40;
+}
+
 export function foeOutput(s: GameState, me: PlayerId): number {
   const mine = unitsOf(s, me);
   if (mine.length === 0) return 0;
@@ -5002,7 +5122,13 @@ export function foeOutput(s: GameState, me: PlayerId): number {
   return total;
 }
 
-export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, rejected: ReadonlySet<string> = new Set()): Action | null {
+export function aiNextAction(
+  s: GameState,
+  budget: AiBudget = DEFAULT_BUDGET,
+  rejected: ReadonlySet<string> = new Set(),
+  /** 深推层号：>0 表示这是模拟里的一次决策，**不再往下推**，防止递归 */
+  depth = 0,
+): Action | null {
   if (s.winner) return null;
   /*
    * 三人四人局没有 AI。
@@ -5303,8 +5429,62 @@ export function aiNextAction(s: GameState, budget: AiBudget = DEFAULT_BUDGET, re
   if (shortlist.length === 0) return null;
   shortlist.sort((a, b) => b.v - a.v);
 
-  const best = shortlist[0]!;
-  if (best.v <= 0) return null;
+  /*
+   * 三回合计划：对前 PLAN_K 名各落一次子，把"我这一步 → 对面一回合 → 我下一步"
+   * 真的走一遍，再用 `positionValue` 比这盘棋变成什么样。
+   *
+   * 三个刻意的限制：
+   *   · 只在 `depth === 0` 跑——模拟里的决策不再深推，否则就是指数爆炸；
+   *   · 只对战略动作跑（`PLAN_WORTHY`），走位不值这 80 ms；
+   *   · 换掉启发式第一名要**过线**（`PLAN_MARGIN`），差一点就不翻——
+   *     深推的结果本身有噪声（模拟只走 3 步），贴着边翻来翻去只会让 AI 抽风。
+   */
+  let best = shortlist[0]!;
+  let planned = false;
+  const shape = best.c.action.type;
+  /*
+   * 指挥官模式 / 玩家点名的那一格**不深推**：那一格是玩家的决定，不是 AI 的。
+   * 深推在这里只会做一件事——把"升这座城"换成"它觉得更划算的那个"，
+   * 而玩家明明已经指定了。用例「「升级时代」那一格也能指定升哪座城」就是被这个打红的。
+   */
+  const planAllowed =
+    PLAN_ON &&
+    depth === 0 &&
+    !commander &&
+    !order &&
+    !orderSite &&
+    // 沙盒里没有城，"多一座城 120 分"那套估值不成立；而且那里是拿来试单个兵的地方
+    s.config.godMode !== true &&
+    shortlist.length > 1 &&
+    PLAN_WORTHY.has(shape);
+  if (planAllowed) {
+    aiTrace.planRuns += 1;
+    const base = positionValue(view, me);
+    const probe = shortlist.slice(0, PLAN_K);
+    const vals = probe.map((e) => {
+      const a1 = applyAction(view, e.c.action);
+      if (!a1.ok) return -Infinity;
+      // 我这一回合剩下的 + 对面一整回合 + 我下一回合的头几步
+      const s2 = simRound(a1.state, PLAN_STEPS, depth + 1);
+      if (s2.winner) return s2.winner === me ? 1e6 : -1e6;
+      const s3 = simSteps(s2, PLAN_STEPS, depth + 1);
+      if (s3.winner) return s3.winner === me ? 1e6 : -1e6;
+      return positionValue(s3, me) - base;
+    });
+    let bi = 0;
+    for (let i = 1; i < vals.length; i += 1) if ((vals[i] ?? -Infinity) > (vals[bi] ?? -Infinity)) bi = i;
+    const margin = Math.max(40, Math.abs(vals[0] ?? 0) * 0.05);
+    if (bi > 0 && (vals[bi] ?? -Infinity) > (vals[0] ?? -Infinity) + margin) {
+      best = probe[bi]!;
+      planned = true;
+      if (aiTrace.on) aiTrace.planFlip += 1;
+    }
+  }
+  /*
+   * 分数 ≤0 就不要这一步——但**计划翻上来的候选除外**：它的启发式分本来就低
+   * （正因为低才需要深推来翻案），拿那个分来否决它等于白推一遍。
+   */
+  if (!planned && best.v <= 0) return null;
   // 推演把纯评分的第一名换掉了：这一条用来量"这一层到底有没有在起作用"
   if (aiTrace.on && lookahead && candidates[0] && best.c !== candidates[0]) aiTrace.lookaheadFlip += 1;
 

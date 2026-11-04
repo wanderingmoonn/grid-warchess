@@ -165,6 +165,8 @@ import {
   isAiSide,
   mergeAdvanceField,
   rosterBonuses,
+  positionValue,
+  aiTrace,
   rosterRoleOf,
   savingAllowance,
 } from '../src/core/ai.ts';
@@ -7592,6 +7594,69 @@ test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
     }),
     { tank: 0, melee: 0, ranged: 0, support: 0, siege: 0 },
   );
+});
+
+test('局面估值：多一座城更值钱、对面兵多更不值钱、打掉对面一个兵算加分', () => {
+  /*
+   * 三回合计划全靠这一个读数。它错了，深推就会朝错的方向优化——
+   * 第一版忘了减"敌方军队"，深推当场学会了"谁都别打、绕着走"
+   * （用例「贴脸的矮人王照样扔斧头」就是这么红的）。
+   */
+  const s = fresh({ size: 16 }, 4242);
+  const me = 'A';
+  const base = positionValue(s, me);
+
+  // ① 少一座城必须更差（城是这套规则里唯一通向胜利的东西）
+  const mine = s.cities.filter((c) => c.owner === me);
+  assert.ok(mine.length >= 2, '这局得让我有两座城才测得出来');
+  assert.ok(positionValue({ ...s, cities: s.cities.filter((c) => c !== mine[0]) }, me) < base, '少一座城必须更差');
+
+  // ② 对面多一个兵必须更差
+  const foeMore = {
+    ...s,
+    units: [...s.units, { ...s.units[0]!, id: 'zz-extra', owner: 'B' as const }],
+  };
+  assert.ok(positionValue(foeMore, me) < base, '对面多一个兵要扣分');
+
+  // ③ 打掉对面一个兵（同一局面少一个敌兵）必须加分——这条是上面那个坑的守门人
+  const foeUnits = s.units.filter((u) => u.owner === 'B');
+  assert.ok(foeUnits.length > 0, '得有敌兵才能测');
+  const fewerFoe = { ...s, units: s.units.filter((u) => u !== foeUnits[0]) };
+  assert.ok(positionValue(fewerFoe, me) > base, '打掉对面一个兵要加分，不能只在"我少挨打"时才算');
+
+  // ④ 自己的兵掉血要扣分（血量为权）
+  const hurt = { ...s, units: s.units.map((u) => (u.owner === me ? { ...u, hp: Math.max(1, Math.floor(u.hp / 2)) } : u)) };
+  assert.ok(positionValue(hurt, me) < base, '自己掉血要扣分');
+});
+
+test('三回合计划：同一局面两次决策必须一模一样（确定性）', () => {
+  /*
+   * 深推会克隆局面、跑几百次模拟。这条守的是"能不能复现"：
+   * 一旦里面混进 Math.random，存档、复盘、联机对账全部失效。
+   */
+  const s = fresh({ size: 16, startEra: 2 }, 777);
+  s.current = 'A';
+  const a = aiNextAction(s, { ...DEFAULT_BUDGET });
+  const b = aiNextAction(s, { ...DEFAULT_BUDGET });
+  assert.deepEqual(a, b, '同一局面必须给出同一个动作');
+});
+
+test('三回合计划不在沙盒里跑：godMode 是拿来看单个兵的，不做局面推演', () => {
+  const s = fresh({ size: 16, godMode: true }, 31337);
+  s.units = s.units.filter((u) => u.owner === 'A');
+  s.current = 'A';
+  aiTrace.reset();
+  aiTrace.on = true;
+  // 连续问几次：只要有一次跑过计划，planRuns 就会 > 0
+  for (let i = 0; i < 5; i += 1) {
+    const a = aiNextAction(s, { ...DEFAULT_BUDGET });
+    if (!a) break;
+    const r = applyAction(s, a);
+    if (!r.ok) break;
+    Object.assign(s, r.state);
+  }
+  assert.equal(aiTrace.planRuns, 0, '沙盒里不该跑深推');
+  aiTrace.on = false;
 });
 
 test('编队模板：一屋子近战之后，AI 会去补远程和支援', () => {
