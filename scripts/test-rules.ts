@@ -14075,6 +14075,47 @@ test('选卡：旱地图上禁用不禁船（船在旱地本来就不值钱）',
   }
 });
 
+/**
+ * 先手的禁位不许落在"我自己要拿的那张"上。
+ *
+ * 老规则（禁评分最高的那张）等于先手自断第一手；改成"禁第二好的"也一样糟：
+ * 对面十有八九也在禁榜首，两下一撞，我这局的前两手一起没了。
+ * 所以这里守两条：先手禁的不是榜首（那是后手的活），也不是自己最后真正拿到的第一张。
+ */
+test('选卡：先手不 ban 榜首，也不 ban 自己第一手', () => {
+  for (const startEra of [1, 3, 5]) {
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true, expansionIds: ['fantasy'] },
+      7301,
+    );
+    const banB = aiDraftBan(s, 'B')!; // 后手 = 禁榜首
+    const banA = aiDraftBan(s, 'A')!;
+    assert.ok(s.draft!.pool.includes(banA), '先手的禁用必须在池子里');
+    assert.notEqual(banA, banB, `起始第 ${startEra} 代：先手不该去禁榜首（那是后手的禁位）`);
+    // 先手自己第一手会拿的那张，不能是被自己禁掉的那张
+    const firstPick = aiDraftPick(s, 'A')!;
+    assert.notEqual(banA, firstPick, `起始第 ${startEra} 代：先手把自己的第一手禁掉了`);
+  }
+});
+
+/**
+ * 生态位加成必须跟着时代折价。
+ *
+ * 曾经是平加（缺攻城 +18、缺远程 +14）：起始第 1 代那一签上，唯一的那张
+ * 第五代火炮靠这 32 分硬压过一级兵，AI 会在开局第二手去选一张要升到五级城
+ * 才造得出来的卡，禁用判据也跟着去 ban 它。
+ */
+test('选卡：第五代的攻城车不该在起始第 1 代压过一级兵', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 1, draftMode: true, expansionIds: ['era-arms', 'fantasy'] },
+    7301,
+  );
+  // 把池子缩到两张：一张一级民兵、一张五代火炮
+  s.draft!.pool = ['militia', 'artillery'];
+  const picked = aiDraftPick(s, 'A');
+  assert.equal(picked, 'militia', `起始第 1 代该先拿现在就造得出的那张，实际拿了 ${picked}`);
+});
+
 /* ===========================================================================
  * 五项修复（2026-11-01）：自爆 / 满员造空军 / 雾里的桥 / 飞行过深水 / 钻井平台
  * ======================================================================== */
