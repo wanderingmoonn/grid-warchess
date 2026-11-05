@@ -1,7 +1,7 @@
 // 面板
 
 import type { GameState, Unit } from '../types.ts';
-import { skillsOf } from '../types.ts';
+import { skillsOf } from '../query.ts';
 import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE } from './progression.ts';
 import { isCultivatorUnit } from './identity.ts';
 import { 
