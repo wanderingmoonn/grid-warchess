@@ -113,7 +113,8 @@ import type {
   Unit,
   UnitTypeDef,
 } from './types.ts';
-import { seatsOf, skillsOf } from './types.ts';
+import { seatsOf } from './types.ts';
+import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';

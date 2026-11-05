@@ -1,7 +1,12 @@
 //对 GameState / Unit / 坐标的纯查询：不改变状态、不调用扩展钩子、不依赖 rules.ts 的其他函数，只依赖 types.ts 和基础数据。
 
 // query.ts
-import type { GameState, Unit } from './types.ts';
+import type { 
+  GameState, 
+  UnitTypeDef, 
+  SkillDef, 
+  Unit 
+} from './types.ts';
 
 // ── 几何 ──
 export function idx(s: GameState, x: number, y: number): number {
@@ -33,6 +38,27 @@ export function underConstruction(u: Unit): boolean {
   if ((u.buildNeed ?? 0) > 0) return (u.buildDone ?? 0) < (u.buildNeed ?? 0);
   // 旧存档的写法：只剩回合数
   return (u.buildLeft ?? 0) > 0;
+}
+
+/**
+ * 这个单位现在拥有哪些技能：天赋（兵种表）+ 学会的（extraSkills）− 遗忘的。
+ * 同 id 以实例为准（允许学会一个覆盖天赋同名技能的新版本）。
+ */
+export function skillsOf(
+  s: { unitTypes: Record<string, UnitTypeDef> }, 
+  u: Unit
+): SkillDef[] {
+  const base = s.unitTypes[u.type]?.skills ?? [];
+  const lost = u.lostSkillIds ?? [];
+  const kept = base.filter((k) => !lost.includes(k.id));
+  const out: SkillDef[] = [];
+  const seen = new Set<string>();
+  for (const k of [...kept, ...(u.extraSkills ?? [])]) {
+    if (seen.has(k.id)) continue;
+    seen.add(k.id);
+    out.push(k);
+  }
+  return out;
 }
 
 // ── 占地：一格与多格 ──────────────────────────────────────────────────

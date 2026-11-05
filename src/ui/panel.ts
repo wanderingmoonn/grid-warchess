@@ -60,7 +60,8 @@ import {
   upgradeCostOf,
   utype,
 } from '../core/rules.ts';
-import { seatsOf, skillsOf } from '../core/types.ts';
+import { seatsOf } from '../core/types.ts';
+import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';

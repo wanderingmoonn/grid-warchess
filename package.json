@@ -12,6 +12,7 @@
     "test:ai-optimization": "node --experimental-strip-types scripts/test-ai-optimization.ts && node --experimental-strip-types scripts/test-ai-evaluation.ts",
     "evaluate:ai": "node --experimental-strip-types scripts/evaluate-ai.ts",
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
+    "test:cultivation": "node --experimental-strip-types scripts/tests/packs/cultivation.test.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
     "test:serve": "node --experimental-strip-types scripts/smoke-serve.ts",
     "rl:test": "node --experimental-strip-types scripts/rl/test-m1.ts",
