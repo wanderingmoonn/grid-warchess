@@ -59,8 +59,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 攻击次数
 	modifyAttacks: ({ state, unit, attacks }) => {
     if (unit.type === 'cultivation-spirit-tower') {
-      if (unit.custom?.burstBuffTurn === state.turn) return 3;
-      return 0; 
+      return (unit.custom?.burstCharges as number) ?? 0;
     }
 		if (isCultivatorUnit(state, unit)) {
 		  return attacks + attTimesModifier(unit);
@@ -97,36 +96,40 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
 		for (const u of state.units) {
-		if (u.owner !== player || !isCultivatorUnit(state, u)) continue;
-		const age = u.age ?? 0;
-		// 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
-		const lifespan = ensureLifespan(u);
+      if (u.owner !== player) continue;
+      if (u.owner === player && u.type === 'cultivation-spirit-tower' && u.custom?.burstCharges) {
+        delete u.custom.burstCharges;
+      }
+      if (!isCultivatorUnit(state, u)) continue;
+      const age = u.age ?? 0;
+      // 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
+      const lifespan = ensureLifespan(u);
 
-		if (isDoomed(u)) {
-			if (u.hp > 0) {
-			u.hp = 0;
-			state.log.push({
-					turn: state.turn,
-					player,
-					text: `${state.unitTypes[u.type].name}寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
-			});
-			}
-			// 把清场交给核心的 sweepDead。
-			// 玩家可以在清场前打出最后一击或者寻找保命手段。
-			continue;
-		}
+      if (isDoomed(u)) {
+        if (u.hp > 0) {
+        u.hp = 0;
+        state.log.push({
+            turn: state.turn,
+            player,
+            text: `${state.unitTypes[u.type].name}寿元耗尽，油尽灯枯，只待最后一丝生机散去。`,
+        });
+        }
+        // 把清场交给核心的 sweepDead。
+        // 玩家可以在清场前打出最后一击或者寻找保命手段。
+        continue;
+      }
 
-		// 刚跨过寿元：写一次警告
-		if (age === lifespan + 1) {
-			state.log.push({
-			turn: state.turn,
-			player,
-			text: `${state.unitTypes[u.type].name}寿元将尽，身体每况愈下。`,
-			});
-		}
+      // 刚跨过寿元：写一次警告
+      if (age === lifespan + 1) {
+        state.log.push({
+        turn: state.turn,
+        player,
+        text: `${state.unitTypes[u.type].name}寿元将尽，身体每况愈下。`,
+        });
+      }
 
-		// 打坐：老死前照常修炼
-		addExp(u, state, getExpGrowth(u));
+      // 打坐：老死前照常修炼
+      addExp(u, state, getExpGrowth(u));
 		}
 	},
 
