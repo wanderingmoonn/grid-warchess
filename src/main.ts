@@ -81,7 +81,7 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -3168,6 +3168,14 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'god-quick': {
+      saveGodQuick(!godQuick);
+      // 签名作废，否则那一行提示（"空格 = 结束回合" / "打开后可用…"）不会跟着变
+      godSig = '';
+      render();
+      return;
+    }
+
     case 'god-brush': {
       const b = el.dataset.brush;
       godBrush =
@@ -4246,15 +4254,19 @@ let godCityEra = 0;
 /**
  * 玩家亲手操控哪一方。
  *
- *   · `null`    只摆放：点棋盘＝落子，两边都只有按按钮才动（这个模式原来的样子）
- *   · `'me'`    我打「摆给」那一边，对面交给 AI
- *   · `'both'`  两边都由我走：摆完自己演一遍，不劳烦 AI
+ * 现在界面上的三档 chip 撤掉了，默认就是 `'both'`：沙盒的用途是自己演一遍，
+ * 想歇手的时候有「交给 AI · 一回合」和「接管 · 打到全灭」两颗按钮，那才是正解。
+ * 保留这两个取值是因为"我打一边、对面补一手"这条代码路径（`godAfterTurn`）还有用，
+ * 只是暂时没有入口——别在没验证的情况下删掉它。
+ *
+ *   · `'me'`    我打「摆给」那一边，对面交给 AI（一步一交）
+ *   · `'both'`  两边都由我走（默认）
  *
  * 为什么不复用 `state.aiControl`：那个开关是"这一方**永久**托管"，一个回合接一个
  * 回合地自己往下跑，沙盒里会跑到你摆不下子。这里的交接是**一步一交**——对面走完
  * 一个回合就停住，等你。两者的区别在 AI 那半边看得很清楚：那边是循环，这边是一回合。
  */
-let godPlay: 'me' | 'both' | null = null;
+let godPlay: 'me' | 'both' | null = 'both';
 /**
  * AI 正在替对面走那一个回合。
  *
@@ -4267,6 +4279,40 @@ let godPassing = false;
 let godPack = '';
 /** 货架按时代筛选（0 = 全部）。理由同上：沙盒里想看的是"这一代有什么" */
 let godEra = 0;
+/**
+ * 货架的按字搜索词。
+ *
+ * 和产兵面板那个 `recruitQuery` 分开存：两边在找的东西不一样，
+ * 在货架里搜完「弓」再回去造兵，不该发现产兵列表也被筛了。
+ */
+let godQuery = '';
+/**
+ * 快捷模式：开着的时候按空格直接结束回合。
+ *
+ * 记进 localStorage——这是个"手感"偏好，不是每局都要重新做一次的决定。
+ * 读取放在启动时（下面的 QUICK_KEY），写回放在切换那一刻。
+ */
+const GOD_QUICK_KEY = 'warchess.god.quick';
+/** 读偏好。注意 key 必须声明在它上面——`const` 在初始化前被访问是 TDZ 报错，
+ *  而这条报错会把整个模块初始化掀掉（表现是首页一堆测试连锁失败）。 */
+function loadGodQuick(): boolean {
+  try {
+    return localStorage.getItem(GOD_QUICK_KEY) === '1';
+  } catch {
+    // 隐私模式 / 禁用存储：读不到就当没开，不影响使用
+    return false;
+  }
+}
+let godQuick = loadGodQuick();
+/** 写回开关：和读同一份 key，刷新之后手感不变 */
+function saveGodQuick(v: boolean): void {
+  godQuick = v;
+  try {
+    localStorage.setItem(GOD_QUICK_KEY, v ? '1' : '0');
+  } catch {
+    /* 存不上就算了，这一次会话里仍然生效 */
+  }
+}
 /** AI 正在同时操控两边 */
 let godRunning = false;
 /** 打到第几个回合（工具栏上那个"第 N 回合"）。1 是"正在打第一轮"，不是 0 */
@@ -4403,8 +4449,11 @@ function godUi() {
     myTurn: godMyTurn(),
     passing: godPassing,
     selected: godSelectedNote(),
-    // 侧栏那块「手上这支兵」要它本人：工具栏一行只能放血量，技能按钮放不下
-    picked: selectedId ? (state.units.find((u) => u.id === selectedId) ?? null) : null,
+    // 侧栏顶上那块属性卡：直接拿正常面板那一份（含光环/规则加成/技能按钮），
+    // 没选中任何东西时是空串
+    detail: godDetailHtml(),
+    query: godQuery,
+    quick: godQuick,
   };
 }
 
@@ -4421,6 +4470,23 @@ function godPickedSig(): string {
   return `${u.id}:${u.hp}:${u.moved ? 'm' : '-'}${u.acted ? 'a' : '-'}:${
     u.attacksLeft ?? ''
   }:${JSON.stringify(u.skillCd ?? {})}`;
+}
+
+/**
+ * 侧栏顶上那块属性卡。
+ *
+ * 直接复用正常面板的 `panelInput()` + `detailCardHtml()`——**不另写一份**。
+ * 理由：属性卡里那套东西（光环、规则加成后的真实数值、击杀成长、技能按钮、上下船）
+ * 全都挂在 `renderDetail` 上，重写一遍等于把"沙盒和实战数字不一致"这件事
+ * 写进代码里。而 `panelInput()` 在上帝模式里本来就是对的：
+ * `me()` 返回当前行动方、`spectating()` 返回 true 给全图视角。
+ *
+ * 唯一的额外判断是"什么都没选中时不要摆一个空卡片"。
+ */
+function godDetailHtml(): string {
+  if (state.config.godMode !== true) return '';
+  if (!selectedId && !selectedCityId && !selectedCampId && !selectedTile) return '';
+  return detailCardHtml(panelInput(), godMyTurn());
 }
 
 function renderGodBar(): void {
@@ -4444,6 +4510,8 @@ function renderGodBar(): void {
     // 血量/行动力/技能冷却任何一项变了都得重写这一行
     godPickedSig(),
     godRunning ? `run${godRound}` : '-',
+    // 快捷模式改的是「结束回合」那一行的提示，必须进签名
+    godQuick ? 'q' : '-',
     godResult,
     state.units.length,
     state.cities.length,
@@ -4457,6 +4525,15 @@ function renderGodBar(): void {
   // 沙盒的签名去比，面板原地不动
   commanderSig = '';
   commanderEl.innerHTML = godBarHtml(godUi());
+}
+
+/** 属性卡的内容指纹：进签名用，避免每帧都白比一遍长字符串 */
+function godDetailSig(): string {
+  if (state.config.godMode !== true) return '-';
+  if (!selectedId && !selectedCityId && !selectedCampId && !selectedTile) return '-';
+  const h = godDetailHtml();
+  // 长度 + 前 64 字足够区分"换了一张卡"，又不用把整块 HTML 塞进签名比
+  return `${h.length}:${h.slice(0, 64)}`;
 }
 
 function renderGodShelf(): void {
@@ -4485,6 +4562,12 @@ function renderGodShelf(): void {
     // 「手上这支兵」那块卡：id、血量、还能走/打、技能冷却。
     // 只放 id 是不够的——开完技能冷却变了，卡片却还停在"就绪"上。
     pickedSig,
+    // 货架的搜索词：不放进签名的话，敲字之后列表根本不会重排
+    godQuery,
+    // 属性卡整块内容进签名。它比上面那串签名更"粗"，但胜在不会漏：
+    // 光环、地形加成、天气、上下船入口，任何一样变了它都跟着变。
+    // 面板本来每帧就整块重建，这里多比一次字符串不算成本。
+    godDetailSig(),
   ].join('|');
   if (sig === godShelfSig) return;
   godShelfSig = sig;
@@ -4615,12 +4698,18 @@ async function godAfterTurn(): Promise<void> {
   if (godResult) toast(godResult);
 }
 
-/** 让 AI 同时操控两边打。
+/** 让 AI 操控当前这一方打。
  *
- * mode='round' 只推两方各一个回合（正好是一个完整的"回合"），然后把棋盘
- * 还给玩家；mode='dead' 一直打到一方没有能打的部队，中途可以按停止。
+ * mode='round' 只推**一个回合**——这里说的"回合"就是顶栏那个「第 N 回合」，
+ * 一方的一次行动算一个。走完立刻把棋盘还给你；mode='dead' 一直打到一方
+ * 没有能打的部队，中途可以按停止。
  *
- * 为什么两边都交给 AI：沙盒的看点就是"这两支部队对撞会怎样"。玩家亲自
+ * 早先 round 是"两边各推一回合"（`maxTurns = 2`），于是按一下按钮、
+ * 顶栏的回合数跳 2——按钮写着"一回合"，账却记了两回合。`state.turn`
+ * 在每次 END_TURN 时 +1（rules.ts 的 doEndTurn），界面又直接把它印成
+ * 「第 N 回合」，所以"一回合"在这局游戏里只有一个意思，不能有两种口径。
+ *
+ * 为什么要 AI 来走：沙盒的看点就是"这两支部队对撞会怎样"。玩家亲自
  * 走一边，结果就带上了自己的水平，试数值这件事也就没意义了。
  */
 async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
@@ -4639,7 +4728,7 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   godSig = '';
   render();
 
-  const maxTurns = mode === 'round' ? 2 : GOD_MAX_TURNS;
+  const maxTurns = mode === 'round' ? 1 : GOD_MAX_TURNS;
   let turns = 0;
 
   try {
@@ -4651,8 +4740,8 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
       if (!godHasArmy('A') || !godHasArmy('B')) break;
       await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70, () => !godHasArmy('A') || !godHasArmy('B'));
       turns += 1;
-      // 刚走完的那一步属于第几轮：走完 1 次还是第一轮（另一方还没走）
-      godRound = Math.floor(turns / 2) + 1;
+      // 顶栏那句「第 N 回合」要和实际走的一致：每走完一个回合，下一个就是 N+1
+      godRound = turns + 1;
       render();
     }
   } finally {
@@ -4673,7 +4762,9 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   } else if (mode === 'dead') {
     godResult = `打了 ${turns} 次行动，两边都还有兵`;
   } else {
-    godResult = '一回合打完，接着摆，或者让 AI 继续';
+    // 交还的那一方要点名：只走了一个回合，回合方翻过面了，
+    // 不说清楚就得自己盯顶栏才知道现在轮到谁
+    godResult = `这一回合走完了，轮到${state.players[state.current].name}`;
   }
   saveMatch(state);
   render();
@@ -4684,7 +4775,12 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   // 「打到全灭」可能正好停在**对面那一方**的回合上（谁先没兵是随机的）。
   // 操控档下那一方归 AI，而 AI 这时已经停了——不在这里接一下，棋盘就永远
   // 停在"轮到 X（AI）"，按钮也是灰的，看着像卡死。
-  if (godPlay === 'me' && !state.winner && state.current !== godSide) void godAfterTurn();
+  //
+  // 只对 'dead' 接：'round' 按设计就只走一个回合，走完轮到对面是**应该的**，
+  // 在这里补一手等于偷偷把"一回合"变回两回合——那正是这次修掉的毛病。
+  if (mode === 'dead' && godPlay === 'me' && !state.winner && state.current !== godSide) {
+    void godAfterTurn();
+  }
 }
 
 // ---------- 联机 ----------
@@ -5634,17 +5730,36 @@ topbarEl.addEventListener('scroll', () => syncTopbarScroll(), { passive: true })
  * 这也意味着组字期间列表不跟着筛——反正那时候框里是拼音，筛了也没有意义。
  * 英文/数字输入没有 composition 事件，仍然是逐字实时过滤。
  */
-const isRecruitSearch = (el: EventTarget | null): el is HTMLInputElement =>
-  el instanceof HTMLInputElement && el.dataset.act === 'recruit-search';
+/**
+ * 带搜索框的地方（产兵面板、上帝的兵种货架）。
+ *
+ * 这份逻辑**必须只有一份**：它里面那几条全是从"输入法把字打成乱码"里换来的，
+ * 复制一遍就等于把同一个 bug 复制一遍。两个搜索框共用同一个 input 元素生命周期。
+ */
+const SEARCH_ACTS: ReadonlySet<string> = new Set(['recruit-search', 'god-search']);
+
+const isSearchInput = (el: EventTarget | null): el is HTMLInputElement =>
+  el instanceof HTMLInputElement && SEARCH_ACTS.has(el.dataset.act ?? '');
 
 /** 输入法正在组字（分词的临时状态挂在这个 input 节点上，不能动它） */
-let recruitComposing = false;
+let searchComposing = false;
 
-/** 重绘侧栏并把焦点、光标还回搜索框 */
-function repaintRecruitPanel(): void {
-  keepSideScroll(() => renderPanel(sideEl, panelInput()));
+/**
+ * 重绘侧栏并把焦点、光标还回搜索框。
+ *
+ * `act` 决定重画哪一块：产兵列表走正常面板，货架走上帝模式那一份。
+ * 光标一律落在**末尾**——这两个框都是"边打边筛"，没有人在中间插入。
+ */
+function repaintSearchPanel(act: string): void {
+  if (act === 'god-search') {
+    // 货架有签名缓存，不清掉的话重画会被跳过，敲字看着像没反应
+    godShelfSig = '';
+    renderGodShelf();
+  } else {
+    keepSideScroll(() => renderPanel(sideEl, panelInput()));
+  }
 
-  const again = sideEl.querySelector<HTMLInputElement>('[data-act="recruit-search"]');
+  const again = sideEl.querySelector<HTMLInputElement>(`[data-act="${act}"]`);
   if (!again) return;
   again.focus({ preventScroll: true });
   const end = again.value.length;
@@ -5655,26 +5770,65 @@ function repaintRecruitPanel(): void {
   }
 }
 
+/** 把输入框里的字写回它对应的那份状态（产兵面板和货架各存一份） */
+function applySearchQuery(act: string, value: string): void {
+  if (act === 'god-search') godQuery = value;
+  else recruitQuery = value;
+}
+
 appEl.addEventListener('compositionstart', (e) => {
-  if (isRecruitSearch(e.target)) recruitComposing = true;
+  if (isSearchInput(e.target)) searchComposing = true;
 });
 
 appEl.addEventListener('compositionend', (e) => {
-  if (!isRecruitSearch(e.target)) return;
-  recruitComposing = false;
-  recruitQuery = e.target.value;
-  repaintRecruitPanel();
+  if (!isSearchInput(e.target)) return;
+  searchComposing = false;
+  const act = e.target.dataset.act ?? '';
+  applySearchQuery(act, e.target.value);
+  repaintSearchPanel(act);
 });
 
 appEl.addEventListener('input', (e) => {
   const el = e.target as HTMLInputElement | null;
-  if (!isRecruitSearch(el)) return;
-  recruitQuery = el.value;
+  if (!isSearchInput(el)) return;
+  const act = el.dataset.act ?? '';
+  applySearchQuery(act, el.value);
 
   // 组字中（包括没拿到 composition 事件、只在 input 上标了 isComposing 的内核）
-  if (recruitComposing || (e as InputEvent).isComposing === true) return;
+  if (searchComposing || (e as InputEvent).isComposing === true) return;
 
-  repaintRecruitPanel();
+  repaintSearchPanel(act);
+});
+
+/**
+ * 快捷模式：空格 = 结束回合。
+ *
+ * 为什么单独挂在 window 上而不是 appEl：焦点可能在任何地方（刚点完棋盘、
+ * 刚切完时代 chip），而"结束回合"是个全局动作。挂了三个守卫：
+ *
+ *   1. 正在输入时绝不抢（搜索框、聊天、改名框）——空格在那里是"打一个空格"；
+ *   2. 焦点在按钮上时也不抢——空格本来是"激活这个按钮"，抢了就成了
+ *      "想按 A 结果结束了回合"；
+ *   3. 按住不放（e.repeat）只认第一下，否则连发会把好几个回合一起交出去。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!godQuick || state.config.godMode !== true) return;
+  if (godRunning || godPassing) return;
+  if (e.key !== ' ' && e.code !== 'Space') return;
+  if (e.repeat) return;
+  const t = e.target as HTMLElement | null;
+  if (
+    t &&
+    (t instanceof HTMLInputElement ||
+      t instanceof HTMLTextAreaElement ||
+      t instanceof HTMLButtonElement ||
+      t.isContentEditable)
+  ) {
+    return;
+  }
+  if (!godMyTurn() || state.winner) return;
+  e.preventDefault();
+  dispatch({ type: 'END_TURN' });
 });
 
 // 悬停可移动格时加深高亮

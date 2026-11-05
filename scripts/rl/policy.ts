@@ -176,6 +176,13 @@ export interface Decision {
   value: number;
   /** 实际参与比较的动作数（= min(topK, 动作数)），诊断用 */
   considered: number;
+  /**
+   * 参与比较的那批候选动作下标（按分数降序）。
+   *
+   * 训练侧要它：PPO 更新时算 `π_new(a|s)` 必须在**同一批候选**上算，
+   * 否则新旧两个分布的分母都不一样，ratio 就没意义了。
+   */
+  candidates: number[];
 }
 
 /**
@@ -218,6 +225,24 @@ export class Policy {
     this.scoreBuf = new Float64Array(this.topK * 4);
     this.logits = new Float64Array(this.topK * 2);
     this.hidden2 = new Float32Array(this.spec.hidden);
+  }
+
+  /**
+   * 上一次 `decide` / `evaluate` 用过的**状态**与**动作特征**（复用缓冲）。
+   *
+   * 存在的理由只有一个：采样器要把"这一步看到的局面和候选"落盘当训练样本，
+   * 而这两样 `decide` 内部已经算过了。不暴露出来，调用方就得再算一遍——
+   * 实测那是每步 0.4ms（encodeState + encodeActions 各一次），
+   * 而且是**两次 actionContext**（一次在 encodeActions 里、一次在 decide 里）。
+   *
+   * 返回值是内部缓冲，**用完立刻用掉**，下一次 decide 会原地覆盖。
+   */
+  get lastState(): Float32Array {
+    return this.stateBuf;
+  }
+
+  get lastFeats(): Float32Array {
+    return this.actionBuf;
   }
 
   /** 编码状态（可复用缓冲）。调用方要留着做训练样本时必须自己拷一份 */
@@ -369,6 +394,61 @@ export class Policy {
       logp: Math.log(this.logits[pick]! / sum),
       value,
       considered: this.candN,
+      candidates: Array.from(this.cand.subarray(0, this.candN)),
+    };
+  }
+
+  /**
+   * 当前策略会考虑的候选（预筛 top-K），外加"必须包含"的那一个。
+   *
+   * 模仿学习要拿"老师选了哪个"当标签，而老师的动作未必在预筛的 top-K 里——
+   * 那就把它塞进去（顶掉最后一名）。这样训练用的候选集**就是推理时那批**，
+   * 只多了一个标签所在的位置，不会出现"练的和考的不是一张卷子"。
+   *
+   * 预筛走的是和 `decide` 同一条路径（不是另写一份点积），所以两边不会漂。
+   */
+  candidateSet(
+    s: GameState,
+    seat: PlayerId,
+    actions: readonly Action[],
+    mustInclude = -1,
+  ): {
+    state: Float32Array;
+    feats: Float32Array;
+    candidates: number[];
+    kUsed: number;
+    index: number;
+    /**
+     * 全部合法动作的预筛分数（长度 = actions.length，顺序同 actions）。
+     *
+     * 为什么要把内部缓冲拷出来：训练预筛时既要按同一份分布算 softmax 梯度，
+     * 又要用同一套并列规则统计召回率。让调用方自己再算一遍分数，
+     * 就会在两处 float 累加顺序不同的地方冒出"指标说 60%、实际只有 15%"这种分歧
+     * （这已经发生过一次，排查花了很久）。这里多拷 n 个 float64，换掉一整类错误。
+     */
+    scores: Float64Array;
+  } {
+    const state = this.encode(s, seat);
+    if (this.actionBuf.length < actions.length * this.spec.action) {
+      this.actionBuf = new Float32Array(actions.length * this.spec.action);
+    }
+    this.ctx = actionContext(s, seat, this.ctx ?? undefined);
+    const feats = encodeActions(s, seat, actions, this.actionBuf, this.ctx);
+    this.prescreen(state, feats, actions.length);
+    const candidates: number[] = Array.from(this.cand.subarray(0, this.candN));
+    let index = candidates.indexOf(mustInclude);
+    if (mustInclude >= 0 && index < 0) {
+      if (candidates.length >= this.topK) candidates[candidates.length - 1] = mustInclude;
+      else candidates.push(mustInclude);
+      index = candidates.length - 1;
+    }
+    return {
+      state,
+      feats,
+      candidates,
+      kUsed: candidates.length,
+      index,
+      scores: Float64Array.from(this.scoreBuf.subarray(0, actions.length)),
     };
   }
 

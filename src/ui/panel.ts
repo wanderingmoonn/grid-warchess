@@ -539,6 +539,18 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
     }冷却中的按钮会显示还要等几回合。</div>`;
 }
 
+/**
+ * 给上帝模式：把"这一格/这支兵"的**完整**属性卡原样吐出来。
+ *
+ * 沙盒原来点一下只弹一句"名字 血量"，光环、规则加成、真实数值、技能按钮
+ * 全都看不见——而"某支兵站在某条光环里到底剩多少攻"恰恰是摆沙盒最想验证的事。
+ * 所以这里不另写一份精简版：**直接复用**正常对局的 renderDetail，
+ * 让两个界面的数字天生同源（否则迟早会出现"沙盒说 12、实战打出来是 15"）。
+ */
+export function detailCardHtml(input: PanelInput, myTurn: boolean): string {
+  return `<div class="card">${renderDetail(input, myTurn)}</div>`;
+}
+
 function renderDetail(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedUnit, selectedCityId, selectedCampId, selectedTile } = input;
   const s = view.state;
@@ -1130,7 +1142,7 @@ function sourceTag(def: UnitTypeDef): string {
  * 刻意不去搜数值（"攻 20"）：那是筛选器，不是搜索框，两件事混在一起
  * 会让"为什么搜 20 出来一堆"变成新的困惑。
  */
-function matchRecruit(def: UnitTypeDef, q: string): boolean {
+export function matchRecruit(def: UnitTypeDef, q: string): boolean {
   if (!q) return true;
   const hay = [
     def.name,

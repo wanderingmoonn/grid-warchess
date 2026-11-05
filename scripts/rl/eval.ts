@@ -42,7 +42,7 @@ import os from 'node:os';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { playMatch, type Driver, type MatchOutcome } from './play.ts';
-import type { PlayerId } from '../../src/core/types.ts';
+import type { AiLevel, PlayerId } from '../../src/core/types.ts';
 import { EVAL } from './config.ts';
 import { wilson } from './stats.ts';
 import { Policy, weightsFromJson } from './policy.ts';
@@ -71,6 +71,10 @@ const OUT = argOf('out', '');
 const WORKERS = Number(argOf('workers', String(Math.max(1, Math.round(os.cpus().length / 2)))));
 // 训练与评估用同一套规则：扩展包名单从命令行进来（'none' 表示只开基础包）
 const EXPANSIONS = argOf('expansions', EVAL.expansions.join(',') || 'none');
+/** 手写 AI 坐哪一档。课程学习期间训练用的档位和最终目标档必须分开报 */
+const AI_LEVEL = argOf('ai-level', EVAL.aiLevel) as AiLevel;
+/** 手写 AI 的削弱概率（0 = 原样）。用来量"胜率从哪一档开始不为 0" */
+const AI_HANDICAP = Number(argOf('ai-handicap', '0'));
 const expIds = EXPANSIONS === 'none' || EXPANSIONS === '' ? [] : EXPANSIONS.split(',');
 /** 一次派给 worker 几局。1 = 最细的粒度（尾巴最短），再小就得靠 worker 常驻来抵启动成本 */
 const CHUNK = Number(argOf('chunk', '1'));
@@ -141,7 +145,15 @@ function runGames(from: number, count: number): GameRecord[] {
   for (let i = from; i < from + count; i++) {
     const { seed, seat } = gameAt(i);
     const drivers: [Driver, Driver] = seat === 'A' ? [driver, foe] : [foe, driver];
-    const r: MatchOutcome = playMatch({ seed, size: SIZE, capTurns: CAP, drivers, expansionIds: expIds });
+    const r: MatchOutcome = playMatch({
+      seed,
+      size: SIZE,
+      capTurns: CAP,
+      drivers,
+      expansionIds: expIds,
+      aiLevel: AI_LEVEL,
+      aiHandicap: AI_HANDICAP,
+    });
     out.push({
       seed,
       candidateSeat: seat,
@@ -237,6 +249,10 @@ if (SERVE) {
       String(CAP),
       '--expansions',
       EXPANSIONS,
+      '--ai-level',
+      AI_LEVEL,
+      '--ai-handicap',
+      String(AI_HANDICAP),
       '--temp',
       String(TEMP),
       ...(WEIGHTS ? ['--weights', WEIGHTS] : []),
