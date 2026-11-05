@@ -14,6 +14,8 @@ import type { AbilityDef } from '../../abilities.ts';
 import type { AbilityHooks } from '../../ability-hooks.ts';
 import { distBetweenUnits } from '../../query.ts';
 import { isCultivatorUnit } from '../identity.ts';
+import { TURN_START } from '../../ability-hooks.ts';
+import { addExp } from '../progression.ts';
 
 export const SPIRIT_AURA_ID = 'spirit-aura';
 export const SPIRIT_AURA_LABEL = '灵气滋养';
@@ -50,6 +52,25 @@ export const SPIRIT_AURA: AbilityDef = {
   name: SPIRIT_AURA_LABEL,
   summary: `回合开始时，半径 ${SPIRIT_AURA_RADIUS} 格内的修士获得 ${SPIRIT_AURA_EXP} 点修为经验（不分阵营，可叠加）。`,
   group: 'support',
-  // Commit 2 在这里补 onTurnStart
-  hooks: {} as AbilityHooks,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.aura,
+        apply: (c) => {
+          const def = c.api.utype(c.state, c.self.type);
+          let count = 0;
+          for (const t of c.state.units) {
+            if (t.id === c.self.id) continue;
+            if (!isCultivatorUnit(c.state, t)) continue;
+            if (distBetweenUnits(c.state, t, c.self) > SPIRIT_AURA_RADIUS) continue;
+            addExp(t, c.state, SPIRIT_AURA_EXP);
+            count += 1;
+          }
+          if (count > 0) {
+            c.api.pushLog(c.state, c.owner, `${def.name} 滋养了 ${count} 名修士`, false);
+          }
+        },
+      },
+    ],
+  } satisfies AbilityHooks,
 };
