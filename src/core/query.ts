@@ -68,3 +68,29 @@ export function tilesOfUnit(s: GameState, u: Unit): Array<{ x: number; y: number
   }
   return out;
 }
+
+/**
+ * 一个坐标到某个单位的距离：到它**覆盖范围**的最近一格。
+ *
+ * 打一座 2×2 的兵营，站在它右下角旁边就该是一格，而不是"到左上角三格"。
+ * 距离只认锚点的话，大建筑会显得比它看起来更难打——玩家没法从画面推出射程。
+ */
+export function distToUnit(s: GameState, from: { x: number; y: number }, u: Unit): number {
+  const n = footprintOf(s, u);
+  const cx = Math.min(Math.max(from.x, u.x), u.x + n - 1);
+  const cy = Math.min(Math.max(from.y, u.y), u.y + n - 1);
+  return Math.abs(from.x - cx) + Math.abs(from.y - cy);
+}
+
+/** 两个单位之间的距离：两个矩形的最近距离（锚点对小单位等价于曼哈顿距离） */
+export function distBetweenUnits(s: GameState, a: Unit, b: Unit): number {
+  const na = footprintOf(s, a);
+  const nb = footprintOf(s, b);
+  const ax2 = a.x + na - 1;
+  const ay2 = a.y + na - 1;
+  const bx2 = b.x + nb - 1;
+  const by2 = b.y + nb - 1;
+  const dx = Math.max(0, Math.max(b.x - ax2, a.x - bx2));
+  const dy = Math.max(0, Math.max(b.y - ay2, a.y - by2));
+  return dx + dy;
+}

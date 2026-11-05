@@ -12,7 +12,11 @@
 
 import { CORE_ABILITIES, hasAbility } from './abilities.ts';
 import type { AbilityDef } from './abilities.ts';
-import type { AbilityHooks, Staged } from './ability-hooks.ts';
+import type { 
+  AbilityHooks, 
+  AuraSpec,
+  Staged 
+} from './ability-hooks.ts';
 import { EXPANSIONS } from './expansions.ts';
 import type { Terrain, UnitTypeDef } from './types.ts';
 
@@ -182,10 +186,22 @@ export function canBeHealed(def: UnitTypeDef | undefined, extra?: string[]): boo
   return !hooksFor(def, extra).some((h) => h.healable === false);
 }
 
-/** 所有声明了光环的能力，按注册顺序（多条光环会叠加） */
-export function aurasOf(def: UnitTypeDef | undefined, extra?: string[]): NonNullable<AbilityHooks['aura']>[] {
-  const out: NonNullable<AbilityHooks['aura']>[] = [];
-  for (const h of hooksFor(def, extra)) if (h.aura) out.push(h.aura);
+/**
+ * 所有声明了光环的能力，按注册顺序展开成一条条 AuraSpec。
+ *
+ * 兵种数据里 `aura` 可以写单条也可以写数组，这里统一摊平成数组：
+ * 下游（auras.ts）只认数组，不用每处都写 `Array.isArray`。
+ *
+ * 返回值是**每一条独立的光环**，不是"每个能力一条"——一个能力声明了
+ * 三条光环，这里就吐三条。合并是 auras.ts 的事，注册表只管收集。
+ */
+export function aurasOf(def: UnitTypeDef | undefined, extra?: string[]): AuraSpec[] {
+  const out: AuraSpec[] = [];
+  for (const h of hooksFor(def, extra)) {
+    if (!h.aura) continue;
+    if (Array.isArray(h.aura)) out.push(...h.aura);
+    else out.push(h.aura);
+  }
   return out;
 }
 
