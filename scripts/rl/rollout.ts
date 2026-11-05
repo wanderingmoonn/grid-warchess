@@ -50,7 +50,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction } from '../../src/core/ai.ts
 import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
 import type { AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
-import { TRAIN } from './config.ts';
+import { TRAIN, trainSizeFor } from './config.ts';
 import { ACTION_DIM, INTENT_NAMES, STATE_DIM } from './features.ts';
 import type { Intent } from './features.ts';
 import { legalActions } from './legal.ts';
@@ -190,6 +190,8 @@ function modeOf(g: number, seed: number): Mode {
 interface GameRow {
   seed: number;
   mode: Mode;
+  /** 这一局的边长。混尺寸训练之后"这一轮到底抽到几张 12×12"要能查 */
+  size: number;
   steps: number;
   winner: PlayerId | null;
   turns: number;
@@ -229,7 +231,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   let s: GameState = createMatch(
     {
       ...DEFAULT_CONFIG,
-      size: TRAIN.size,
+      size: trainSizeFor(g),
       startEra: TRAIN.startEra,
       playerCount: 2,
       draftMode: false,
@@ -419,6 +421,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     meta: {
       seed,
       mode,
+      size: s.w,
       steps: buf.n,
       winner: s.winner ?? null,
       turns: s.turn,
@@ -550,6 +553,7 @@ async function main(): Promise<void> {
     games: GAMES,
     seed0: SEED0,
     size: TRAIN.size,
+    sizes: TRAIN.sizes,
     expansions: TRAIN.expansions,
     weights: WEIGHTS,
     opponent: OPPONENT,

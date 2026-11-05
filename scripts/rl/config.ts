@@ -13,7 +13,18 @@
 import type { AiLevel } from '../../src/core/types.ts';
 
 export interface TrainConfig {
+  /** 主口径边长：评估默认、play.ts 默认、报告里写"这是多大图"都用它 */
   size: number;
+  /**
+   * 混合训练用哪几种边长。第一个就是 `size`。
+   *
+   * 为什么要混合：一份只在 10×10 上训过的权重，换到 12×12 上得分率从 54.4%
+   * 掉到 **19.1%**——那不是"弱一点"，是没学会"棋盘有多大"这件事。
+   * 而 12×12 是产品默认尺寸，分开训两套权重就是两倍成本，
+   * 所以一份权重得同时覆盖两种，靠观测里的尺寸格（`describeEnv` 的第 23 格）
+   * 和这里按局轮换尺寸来学会条件化。
+   */
+  sizes: number[];
   expansions: string[];
   startEra: number;
   /** 回合上限。血战口径下一局约 84 回合，150 是"够长但不会白跑"的位置 */
@@ -31,11 +42,24 @@ export interface TrainConfig {
 
 export const TRAIN: TrainConfig = {
   size: 10,
+  sizes: [10, 12],
   expansions: ['bloodbath'],
   startEra: 1,
   capTurns: 150,
   aiLevel: 'advanced',
 };
+
+/**
+ * 这一局用多大图。
+ *
+ * 按**局号交替**，不按种子哈希：一轮 64 局正好各一半，采样成本可预测。
+ * 用哈希的话小样本下会偏（某一轮 60/40），而"这一轮的样本偏小图"会直接
+ * 污染温度计——它读的是胜率，胜率又强烈依赖图的大小。
+ */
+export function trainSizeFor(game: number): number {
+  const sizes = TRAIN.sizes.length > 0 ? TRAIN.sizes : [TRAIN.size];
+  return sizes[game % sizes.length] ?? TRAIN.size;
+}
 
 /** 课程学习的阶梯：从弱到强，和 `aiLevelOf` 的三档一一对应 */
 export const AI_LEVELS: readonly AiLevel[] = ['basic', 'tactic', 'advanced'];

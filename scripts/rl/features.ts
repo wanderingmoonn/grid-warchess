@@ -599,6 +599,15 @@ export interface ActionContext {
   seat: PlayerId;
   income: number;
   gold: number;
+  /**
+   * 棋盘边长（max(w, h)）。
+   *
+   * 动作特征里所有"距离"一律除以它。原来写的是常数（`/10`、`/12`），
+   * 在 10×10 上碰巧对、换个尺寸就废：12×12 最远 22 格，`/10` 之后 10 以上
+   * 全被 clip 压成 4.0，等于把大半张地图折叠成一个值——网络分不出
+   * "隔 10 格"和"隔 20 格"，而这在 12×12 上是完全不同的两件事。
+   */
+  span: number;
   /** 我还没塌的城 */
   myCities: City[];
   /** 对手还没塌的城（攻城目标池） */
@@ -667,6 +676,7 @@ export function actionContext(s: GameState, seat: PlayerId, reuse?: ActionContex
   return {
     seat,
     income: incomeResOf(s, seat).gold ?? 0,
+    span: Math.max(1, s.w, s.h),
     gold: s.players[seat].gold,
     myCities,
     foeCities,
@@ -762,9 +772,9 @@ function encodeOne(s: GameState, ctx: ActionContext, a: Action, f: Float32Array,
   put(u ? u.y / h : 0);
 
   // 离我最近城的距离：AI 的"离家多远"直觉，网络也该有
-  put(u ? (ctx.homeDist.get(u.id) ?? 12) / 12 : 1);
+  put(u ? (ctx.homeDist.get(u.id) ?? ctx.span) / ctx.span : 1);
   // 离最近敌人的距离
-  put(u ? (ctx.foeDist.get(u.id) ?? 12) / 12 : 1);
+  put(u ? (ctx.foeDist.get(u.id) ?? ctx.span) / ctx.span : 1);
   put(u ? (ctx.valueOf.get(u.id) ?? 0) / UNIT_VALUE_SCALE : 0);
 
   // ── 目标：各种动作指向不同的东西，统一到同一组槽位 ──────────────────
@@ -801,7 +811,7 @@ function encodeOne(s: GameState, ctx: ActionContext, a: Action, f: Float32Array,
 
   put(tile || tDef ? 1 : 0);
   put(tgt && tDef ? tgt.hp / Math.max(1, tDef.maxHp) : 0);
-  put(u && tile ? distance(u, tile) / 10 : 0);
+  put(u && tile ? distance(u, tile) / ctx.span : 0);
   {
     const t = tile ? tileAt(s, tile.x, tile.y) : null;
     put(t ? (TERRAIN_VALUE[t.terrain] ?? 0.5) : 0);
@@ -841,7 +851,7 @@ function encodeOne(s: GameState, ctx: ActionContext, a: Action, f: Float32Array,
     put(city ? city.era / 5 : 0);
     put(city ? city.hp / Math.max(1, city.maxHp) : 0);
     // 城离我最近单位的距离：攻城是不是"够得着"
-    put(city ? (ctx.cityGuard.get(city.id) ?? 12) / 12 : 1);
+    put(city ? (ctx.cityGuard.get(city.id) ?? ctx.span) / ctx.span : 1);
   }
   put(ctx.gold / 150);
   put(ctx.income / 30);
