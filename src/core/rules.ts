@@ -126,7 +126,6 @@ import {
   footprintOf, 
   coversTile, 
   tilesOfUnit,
-  distToUnit, 
   distBetweenUnits,
 } from './query.ts';
 // 重新导出，保持兼容
@@ -895,9 +894,10 @@ export function curseAuraPenalty(s: GameState, unit: Unit): number {
   let hit = 0;
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
-    if (distance(foe, unit) !== 1) continue;
+    const gap = distBetweenUnits(s, foe, unit);
     for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeArmor || a.foeArmor >= 0) continue;
+      if (gap > (a.radius ?? 1)) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeArmor;
       hit = Math.min(cap, hit - a.foeArmor);
     }
@@ -1295,7 +1295,7 @@ export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: numbe
   let armor = 0;
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    const gap = distance(ally, unit);
+    const gap = distBetweenUnits(s, ally, unit);
     // aurasOfUnit：兵种自带 + 动态挂上的能力（修士随境界解锁的技能）都要算
     for (const a of aurasOfUnit(s, ally)) {
       if (gap > (a.radius ?? 1)) continue;
@@ -1318,11 +1318,10 @@ export function fearPenalty(s: GameState, unit: Unit): number {
   let hit = 0;
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
-    // aurasOfUnit：动态挂上的威吓（比如修士的技能）也要算；距离在下面按 radius 判
+    const gap = distBetweenUnits(s, foe, unit);
     for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeAtk || a.foeAtk >= 0) continue;
-      // 半径默认 1（相邻）：威吓/咒域都是"贴上去才算"，只有显式写了 radius 的才放大
-      if (distance(foe, unit) > (a.radius ?? 1)) continue;
+      if (gap > (a.radius ?? 1)) continue;
       const cap = (a.maxLayers ?? Infinity) * -a.foeAtk;
       hit = Math.min(cap, hit - a.foeAtk);
     }
@@ -1343,10 +1342,10 @@ export function hexWeakPct(s: GameState, unit: Unit): number {
   let pct = 0;
   for (const foe of s.units) {
     if (foe.owner === unit.owner) continue;
-    // aurasOfUnit：动态挂上的虚咒也要算
+    const gap = distBetweenUnits(s, foe, unit);
     for (const a of aurasOfUnit(s, foe)) {
       if (!a.foeAtkPct || a.foeAtkPct <= 0) continue;
-      if (distance(foe, unit) > (a.radius ?? 1)) continue;
+      if (gap > (a.radius ?? 1)) continue;
       if (a.foeAtkPct > pct) pct = a.foeAtkPct;
     }
   }
@@ -1369,11 +1368,15 @@ export function movePower(s: GameState, unit: Unit): number {
     if (def?.modifyMove) move = def.modifyMove(s, unit, val, move);
   }
 
-  // 疾行光环：相邻友军各 +1，可以叠（吟游诗人多了确实快）
+  // 疾行光环：半径内的友军各 +1，可以叠（吟游诗人多了确实快）
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    if (distance(ally, unit) !== 1) continue;
-    for (const a of aurasOfUnit(s, ally)) if (a.allyMove) move += a.allyMove;
+    const gap = distBetweenUnits(s, ally, unit);
+    for (const a of aurasOfUnit(s, ally)) {
+      if (!a.allyMove) continue;
+      if (gap > (a.radius ?? 1)) continue;
+      move += a.allyMove;
+    }
   }
 
   // 先保底 1：减速、光环这些加减法算完，最少留一格移动力。
@@ -1623,12 +1626,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     }
     for (const ally of s.units) {
       if (ally.id === u.id || ally.owner !== u.owner) continue;
-      if (distance(ally, u) !== 1) continue;
+      const gap = distBetweenUnits(s, ally, u);
       for (const a of aurasOfUnit(s, ally)) {
-        if (a.allyMove) {
-          moveNow += a.allyMove;
-          moveItems.push({ label: '疾行光环', delta: a.allyMove });
-        }
+        if (!a.allyMove) continue;
+        if (gap > (a.radius ?? 1)) continue;
+        moveNow += a.allyMove;
+        moveItems.push({ label: '疾行光环', delta: a.allyMove });
       }
     }
     const beforeClamp = moveNow;
