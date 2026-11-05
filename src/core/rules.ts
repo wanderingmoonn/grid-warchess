@@ -117,11 +117,33 @@ import { seatsOf, skillsOf } from './types.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
-import { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
+import {
+  idx, 
+  xyOf, 
+  inBounds, 
+  distance, 
+  underConstruction, 
+  footprintOf, 
+  coversTile, 
+  tilesOfUnit,
+  distToUnit, 
+  distBetweenUnits,
+} from './query.ts';
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
 export type { SkillCtx, SkillHandler };
-export { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
+export {
+  idx, 
+  xyOf, 
+  inBounds, 
+  distance, 
+  underConstruction, 
+  footprintOf, 
+  coversTile, 
+  tilesOfUnit,
+  distToUnit,
+  distBetweenUnits,
+} from './query.ts';
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -453,38 +475,6 @@ export function effectiveRangeAgainst(
     range = e.hooks.modifyRangeAgainst({ state: s, unit: attacker, targetTerrain, range });
   }
   return Math.max(1, range);
-}
-
-
-
-
-
-
-
-/**
- * 一个坐标到某个单位的距离：到它**覆盖范围**的最近一格。
- *
- * 打一座 2×2 的兵营，站在它右下角旁边就该是一格，而不是"到左上角三格"。
- * 距离只认锚点的话，大建筑会显得比它看起来更难打——玩家没法从画面推出射程。
- */
-export function distToUnit(s: GameState, from: { x: number; y: number }, u: Unit): number {
-  const n = footprintOf(s, u);
-  const cx = Math.min(Math.max(from.x, u.x), u.x + n - 1);
-  const cy = Math.min(Math.max(from.y, u.y), u.y + n - 1);
-  return Math.abs(from.x - cx) + Math.abs(from.y - cy);
-}
-
-/** 两个单位之间的距离：两个矩形的最近距离（锚点对小单位等价于曼哈顿距离） */
-export function distBetweenUnits(s: GameState, a: Unit, b: Unit): number {
-  const na = footprintOf(s, a);
-  const nb = footprintOf(s, b);
-  const ax2 = a.x + na - 1;
-  const ay2 = a.y + na - 1;
-  const bx2 = b.x + nb - 1;
-  const by2 = b.y + nb - 1;
-  const dx = Math.max(0, Math.max(b.x - ax2, a.x - bx2));
-  const dy = Math.max(0, Math.max(b.y - ay2, a.y - by2));
-  return dx + dy;
 }
 
 /**
