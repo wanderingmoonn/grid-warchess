@@ -412,6 +412,8 @@ export interface DetectCtx {
  * 完全不需要知道"哪条能力叫威吓"。
  */
 export interface AuraSpec {
+  /** 面板显示用的名字。不写就按属性派生一个兜底名。 */
+  label?: string;
   /** 给相邻友军 */
   allyAtk?: number;
   allyArmor?: number;
@@ -442,6 +444,11 @@ export interface AuraSpec {
 
 /** 一条能力能挂的全部钩子。没实现的部分留空即可。 */
 export interface AbilityHooks {
+  /**
+   * 面板显示用的名字。不写就按属性派生一个兜底名。
+   * 数据里写了就用数据的——"将军光环"和"指挥光环"可以各自显示。
+   */
+  label?: string;
   /** 面板上的攻击力修正（狂暴那种"现在就成立"的） */
   statAttack?: Staged<HookCtx>[];
   /** 面板上的护甲修正（林地之主） */

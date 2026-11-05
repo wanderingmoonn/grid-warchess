@@ -54,13 +54,22 @@ export function foeAuras(s: GameState, self: Unit, radius: number): Unit[] {
 }
 
 /**
- * 友军光环的标签。Commit 5 会改成读 AuraSpec.label，这里先保留硬编码，
- * 保证面板文字和 Commit 2 一模一样。
+ * 属性到兜底显示名的映射。
+ *
+ * 这是"attr 的命名"，不是"具体光环的名字"：引擎知道"攻击光环"这一类
+ * 默认叫什么，不知道某个兵种的光环叫"威吓"还是"恐吓"。后者写在
+ * 兵种数据的 AuraSpec.label 上。
+ *
+ * 所有现有兵种都不写 label，所以面板文字和以前完全一样。
+ * 未来给某个光环起新名字，在数据里写 label 即可，这张表不用改。
  */
-const ALLY_LABELS = {
+const ATTR_LABELS = {
   allyAtk: '指挥光环',
   allyArmor: '守护光环',
   allyMove: '疾行光环',
+  foeAtk: '被威吓',
+  foeAtkPct: '虚咒',
+  foeArmor: '咒域',
 } as const;
 
 export interface AuraSource {
@@ -80,8 +89,10 @@ export function auraSourcesOf(
   unit: Unit,
   kind: 'allyAtk' | 'allyArmor' | 'allyMove',
 ): AuraSource[] {
-  let total = 0;
-  let firstSource = '';
+  // 按 label 分组：两条都叫"指挥光环"就合并成一条 +N，
+  // 一条"指挥光环"一条"将军光环"就各显示一行。
+  // 数据里没写 label 时，所有源都用兜底名，于是合并成一条——和以前一样。
+  const groups = new Map<string, { value: number; sourceId: string }>();
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
     const gap = distBetweenUnits(s, ally, unit);
@@ -89,12 +100,17 @@ export function auraSourcesOf(
       const v = a[kind];
       if (!v) continue;
       if (gap > (a.radius ?? 1)) continue;
-      total += v;
-      if (!firstSource) firstSource = ally.id;
+      const label = a.label ?? ATTR_LABELS[kind];
+      const g = groups.get(label);
+      if (g) g.value += v;
+      else groups.set(label, { value: v, sourceId: ally.id });
     }
   }
-  if (total === 0) return [];
-  return [{ label: ALLY_LABELS[kind], value: total, sourceId: firstSource }];
+  return [...groups.entries()].map(([label, g]) => ({
+    label,
+    value: g.value,
+    sourceId: g.sourceId,
+  }));
 }
 
 /** 数值型友军光环的总和：攻击 / 护甲 / 移动力 */
@@ -149,4 +165,22 @@ export function curseAuraPenaltyOf(s: GameState, unit: Unit): number {
     }
   }
   return hit;
+}
+
+export function fearSourcesOf(s: GameState, unit: Unit): AuraSource[] {
+  const penalty = fearPenaltyOf(s, unit);
+  if (penalty === 0) return [];
+  return [{ label: ATTR_LABELS.foeAtk, value: penalty, sourceId: '' }];
+}
+
+export function hexSourcesOf(s: GameState, unit: Unit): AuraSource[] {
+  const pct = hexWeakPctOf(s, unit);
+  if (pct === 0) return [];
+  return [{ label: ATTR_LABELS.foeAtkPct, value: pct, sourceId: '' }];
+}
+
+export function curseSourcesOf(s: GameState, unit: Unit): AuraSource[] {
+  const penalty = curseAuraPenaltyOf(s, unit);
+  if (penalty === 0) return [];
+  return [{ label: ATTR_LABELS.foeArmor, value: penalty, sourceId: '' }];
 }

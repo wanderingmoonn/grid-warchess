@@ -128,7 +128,16 @@ import {
   tilesOfUnit,
   distBetweenUnits,
 } from './query.ts';
-import { auraSourcesOf, auraBonusOf, fearPenaltyOf, hexWeakPctOf, curseAuraPenaltyOf } from './auras.ts';
+import { 
+  auraSourcesOf, 
+  auraBonusOf, 
+  fearPenaltyOf, 
+  hexWeakPctOf, 
+  curseAuraPenaltyOf,
+  fearSourcesOf, 
+  hexSourcesOf, 
+  curseSourcesOf
+} from './auras.ts';
 
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
@@ -1406,18 +1415,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       }
     }
   }
-  const fear = fearPenalty(s, u);
-  if (fear !== 0) {
-    atk -= fear;
-    atkItems.push({ label: '被威吓', delta: -fear });
+  for (const src of fearSourcesOf(s, u)) {
+    atk -= src.value;
+    atkItems.push({ label: src.label, delta: -src.value });
   }
-  // 虚咒：范围内的敌军攻击力按比例降低（取最强的一条，见 hexWeakPct）。
-  // 放在威吓之后、乘法类修正之前：它说的是"我这一刀本来该多狠"，减法类先结清。
-  const hex = hexWeakPct(s, u);
-  if (hex > 0) {
+  for (const src of hexSourcesOf(s, u)) {
     const before = atk;
-    atk = Math.round(atk * (1 - hex));
-    atkItems.push({ label: '虚咒', delta: atk - before });
+    atk = Math.round(atk * (1 - src.value));
+    atkItems.push({ label: src.label, delta: atk - before });
   }
   // 面板上的攻击力修正（狂暴，以及以后任何"现在就成立"的攻击加成）。
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
@@ -1503,10 +1508,9 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += u.buff.armor;
     armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
   }
-  const curseAura = curseAuraPenalty(s, u);
-  if (curseAura !== 0) {
-    armor -= curseAura;
-    armorItems.push({ label: '咒域', delta: -curseAura });
+  for (const src of curseSourcesOf(s, u)) {
+    armor -= src.value;
+    armorItems.push({ label: src.label, delta: -src.value });
   }
 
   // 扩展改甲（堑壕战等）：一条钩子一行，标签用扩展名
