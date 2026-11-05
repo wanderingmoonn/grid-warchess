@@ -131,7 +131,7 @@ export function godBarHtml(ui: GodUi): string {
     return `
       <div class="cmd-head">
         <b>上帝模式</b>
-        <span class="cmd-hint">AI 正在同时操控两边 · 第 ${ui.round} 回合</span>
+        <span class="cmd-hint">AI 正在走第 ${ui.round} 回合</span>
       </div>
       <div class="god-group">
         <div class="god-live">
@@ -233,7 +233,7 @@ export function godBarHtml(ui: GodUi): string {
     ${speedRow(ui)}
     <div class="god-group">
       <div class="chip-row">
-        <button class="btn btn-primary" data-act="god-run-round" title="AI 操控两边各走一回合，然后交还给你">交给 AI · 一回合</button>
+        <button class="btn btn-primary" data-act="god-run-round" title="AI 替当前这一方走完这一回合（顶栏那个「第 N 回合」只加 1），然后交还给你">交给 AI · 一回合</button>
         <button class="btn" data-act="god-run-dead" title="AI 一直打到一方没兵为止，随时可以按停止">接管 · 打到全灭</button>
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
       </div>

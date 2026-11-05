@@ -4077,10 +4077,11 @@ check('上帝模式：手上捏着笔刷时，点棋盘仍然是落子', () => {
   assert.equal(units.find((u) => u.id === 'p1')!.x, 3, '原来那个兵不该被顺手挪走');
 });
 
-await checkAsync('上帝模式：「交给 AI · 一回合」跑完一轮就把棋盘交还', async () => {
-  // 「我打一边、对面补一手」那一档现在没有界面入口了，但它和「交给 AI · 一回合」
-  // 走的是同一条交割路径（godAfterTurn），所以这条用例改成从按钮走——
-  // 用户真正会按的是这颗，而不是那个已经撤掉的 chip。
+await checkAsync('上帝模式：「交给 AI · 一回合」只推一个回合，不是两个', async () => {
+  // 这颗按钮的账必须和顶栏那个「第 N 回合」对得上：写着一回合，就走一回合。
+  // 早先它推两方各一回合（`maxTurns = 2`），按一下回合数跳 2——按钮在撒谎。
+  // 「我打一边、对面补一手」那一档现在没有界面入口了，但它和这里走的是同一条
+  // 交割路径（godAfterTurn），所以用例从按钮走：用户真正会按的是这颗。
   // 交还失败的样子很难看：停在"轮到蓝方（AI）"、按钮全灰、谁也不动，
   // 而界面上没有任何东西会说"卡住了"。
   const st = godArena(424245);
@@ -4093,14 +4094,29 @@ await checkAsync('上帝模式：「交给 AI · 一回合」跑完一轮就把�
   const saved = () =>
     JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
 
+  const startTurn = saved().turn;
+  // 「正在打」那条会把按钮换成"停止"，所以要等到它回来才算是真交还了
+  const waitIdle = async () => {
+    const until = Date.now() + 8000;
+    while (Date.now() < until && !d.querySelector('[data-act="god-run-round"]')) await wait(25);
+  };
   click('[data-act="god-run-round"]');
 
   const deadline = Date.now() + 8000;
-  while (Date.now() < deadline && saved().turn < 3) await wait(25);
+  while (Date.now() < deadline && saved().turn <= startTurn) await wait(25);
+  await waitIdle();
 
-  assert.ok(saved().turn >= 3, `跑完一轮回合数该往前走，实际 ${saved().turn}`);
-  assert.equal(saved().current, 'A', 'AI 跑完这一轮之后必须把棋盘交还给你');
+  assert.equal(saved().turn, startTurn + 1, `一次「一回合」只该加 1，实际 ${saved().turn - startTurn}`);
+  assert.equal(saved().current, 'B', 'A 方走完就翻到 B，棋盘立刻交还');
   assert.equal(d.querySelector('#handoff'), null, '全程不该出现「把设备交给对方」');
+
+  // 再按一次 = 另一方的这一回合。两下才是一整轮，这正是按钮名称的意思
+  click('[data-act="god-run-round"]');
+  const deadline2 = Date.now() + 8000;
+  while (Date.now() < deadline2 && saved().turn <= startTurn + 1) await wait(25);
+  await waitIdle();
+  assert.equal(saved().turn, startTurn + 2, '第二次也只有 +1');
+  assert.equal(saved().current, 'A', '两边各走一次之后轮回 A');
 });
 
 check('上帝模式：货架的按字搜索能筛兵，且框里的字不会被重绘吃掉', () => {

@@ -4698,12 +4698,18 @@ async function godAfterTurn(): Promise<void> {
   if (godResult) toast(godResult);
 }
 
-/** 让 AI 同时操控两边打。
+/** 让 AI 操控当前这一方打。
  *
- * mode='round' 只推两方各一个回合（正好是一个完整的"回合"），然后把棋盘
- * 还给玩家；mode='dead' 一直打到一方没有能打的部队，中途可以按停止。
+ * mode='round' 只推**一个回合**——这里说的"回合"就是顶栏那个「第 N 回合」，
+ * 一方的一次行动算一个。走完立刻把棋盘还给你；mode='dead' 一直打到一方
+ * 没有能打的部队，中途可以按停止。
  *
- * 为什么两边都交给 AI：沙盒的看点就是"这两支部队对撞会怎样"。玩家亲自
+ * 早先 round 是"两边各推一回合"（`maxTurns = 2`），于是按一下按钮、
+ * 顶栏的回合数跳 2——按钮写着"一回合"，账却记了两回合。`state.turn`
+ * 在每次 END_TURN 时 +1（rules.ts 的 doEndTurn），界面又直接把它印成
+ * 「第 N 回合」，所以"一回合"在这局游戏里只有一个意思，不能有两种口径。
+ *
+ * 为什么要 AI 来走：沙盒的看点就是"这两支部队对撞会怎样"。玩家亲自
  * 走一边，结果就带上了自己的水平，试数值这件事也就没意义了。
  */
 async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
@@ -4722,7 +4728,7 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   godSig = '';
   render();
 
-  const maxTurns = mode === 'round' ? 2 : GOD_MAX_TURNS;
+  const maxTurns = mode === 'round' ? 1 : GOD_MAX_TURNS;
   let turns = 0;
 
   try {
@@ -4734,8 +4740,8 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
       if (!godHasArmy('A') || !godHasArmy('B')) break;
       await runAiTurn(token, GOD_BUDGET, AI_SPEED_MS[godSpeed] ?? 70, () => !godHasArmy('A') || !godHasArmy('B'));
       turns += 1;
-      // 刚走完的那一步属于第几轮：走完 1 次还是第一轮（另一方还没走）
-      godRound = Math.floor(turns / 2) + 1;
+      // 顶栏那句「第 N 回合」要和实际走的一致：每走完一个回合，下一个就是 N+1
+      godRound = turns + 1;
       render();
     }
   } finally {
@@ -4756,7 +4762,9 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   } else if (mode === 'dead') {
     godResult = `打了 ${turns} 次行动，两边都还有兵`;
   } else {
-    godResult = '一回合打完，接着摆，或者让 AI 继续';
+    // 交还的那一方要点名：只走了一个回合，回合方翻过面了，
+    // 不说清楚就得自己盯顶栏才知道现在轮到谁
+    godResult = `这一回合走完了，轮到${state.players[state.current].name}`;
   }
   saveMatch(state);
   render();
@@ -4767,7 +4775,12 @@ async function runGodFight(mode: 'round' | 'dead'): Promise<void> {
   // 「打到全灭」可能正好停在**对面那一方**的回合上（谁先没兵是随机的）。
   // 操控档下那一方归 AI，而 AI 这时已经停了——不在这里接一下，棋盘就永远
   // 停在"轮到 X（AI）"，按钮也是灰的，看着像卡死。
-  if (godPlay === 'me' && !state.winner && state.current !== godSide) void godAfterTurn();
+  //
+  // 只对 'dead' 接：'round' 按设计就只走一个回合，走完轮到对面是**应该的**，
+  // 在这里补一手等于偷偷把"一回合"变回两回合——那正是这次修掉的毛病。
+  if (mode === 'dead' && godPlay === 'me' && !state.winner && state.current !== godSide) {
+    void godAfterTurn();
+  }
 }
 
 // ---------- 联机 ----------
