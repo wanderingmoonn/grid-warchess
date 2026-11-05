@@ -118,6 +118,11 @@ def main() -> int:
         help="自博弈占比的上限。实际占比按上一轮胜率爬坡：<5%% 不给，25%% 给满",
     )
     ap.add_argument(
+        "--snap-share", type=float, default=-1,
+        help="冻结快照的占比（>=0 时生效）。默认跟自博弈占比走；"
+             "想把自博弈提到 0.5 以上又保留 20%% 打 AI 的锚，就得单独钉它。",
+    )
+    ap.add_argument(
         "--self-fixed", type=float, default=-1,
         help="直接钉死自博弈占比（>=0 时生效，绕过爬坡）。"
              "为什么需要它：爬坡的准入条件原来是「能赢不削弱的 AI」，那个条件太严——"
@@ -155,6 +160,7 @@ def main() -> int:
             "--opponent", args.opponent, "--snapshots", snap_dir,
             "--self-share", f"{self_share:.2f}", "--ai-level", args.ai_level,
             "--ai-handicap", level,
+            *(["--snap-share", str(args.snap_share)] if args.snap_share >= 0 else []),
         ])
         roll = json.load(open(f"{data}.json", encoding="utf-8"))
 

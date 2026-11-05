@@ -114,8 +114,13 @@ const POOL_SELF = Number(argOf('self-share', '0.6'));
  * 是"打上上轮的自己"——而两个不会打架的策略互相下，结果就是 4000 步的平局（零信号）。
  * 实测第二轮 40 局里有一半是这种局，522 秒才采完，比打 AI 慢十倍。
  * 现在 self-share=0 就是"全打 AI"，池子随准入线一起开。
+ *
+ * 但"快照跟着自博弈走"在自博弈占比要往上提时又成了束缚：公式是
+ * 自博弈 + 快照 + AI = 1，快照默认等于自博弈，于是自博弈一超过 0.5 就
+ * 没有 AI 的份了 —— 而那个 20% 的 AI 局是防止策略在自博弈里漂走的锚，
+ * 不能丢。所以快照占比单独可配（`--snap-share`），默认仍是跟着自博弈。
  */
-const POOL_SNAP = POOL_SELF;
+const POOL_SNAP = Number(argOf('snap-share', String(POOL_SELF)));
 const POOL_AI = Math.max(0, 1 - POOL_SELF - POOL_SNAP);
 
 const WORKERS = Number(
