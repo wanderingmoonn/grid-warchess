@@ -504,7 +504,14 @@ export interface AbilityHooks {
   healable?: boolean;
   /** 不引发反击（先手） */
   noCounter?: boolean;
-  aura?: AuraSpec;
+    /**
+   * 光环。可以写一条，也可以写一组——一组里每条自带 radius，
+   * 于是"攻 +2 只覆盖相邻、移动 +1 覆盖两格"这种兵种可以写成两条。
+   *
+   * 数组顺序不重要：数值型光环由 auras.ts 合并，效果型光环
+   * （治愈、灼烧……）根本不走这个字段。
+   */
+  aura?: AuraSpec | AuraSpec[];
 }
 
 /**

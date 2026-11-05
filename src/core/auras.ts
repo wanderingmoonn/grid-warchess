@@ -3,11 +3,11 @@
 
 // 只需要从 allyAuras / foeAuras 拿“范围内的人”。
 import type { GameState, Unit, UnitTypeDef } from './types.ts';
-import type { AbilityHooks } from './ability-hooks.ts';
+import type {
+  AuraSpec
+} from './ability-hooks.ts';
 import { distBetweenUnits } from './query.ts';
 import { aurasOf } from './ability-registry.ts';
-
-type Aura = NonNullable<AbilityHooks['aura']>;
 
 /** 本局兵种表。和 rules.ts 的 utype 同一口径，这里不抛新错。 */
 function defOf(s: GameState, u: Unit): UnitTypeDef {
@@ -17,7 +17,7 @@ function defOf(s: GameState, u: Unit): UnitTypeDef {
 }
 
 /** 合并 extraAbilities 的 aurasOf，和 rules.ts 原来的私有版本同一口径 */
-export function aurasOfUnit(s: GameState, u: Unit): Aura[] {
+export function aurasOfUnit(s: GameState, u: Unit): AuraSpec[] {
   return aurasOf(defOf(s, u), u.extraAbilities);
 }
 
