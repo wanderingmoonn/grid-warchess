@@ -76,6 +76,15 @@ const OPPONENT = argOf('opponent', 'ai'); // ai | pool
  */
 const AI_LEVEL = argOf('ai-level', TRAIN.aiLevel) as AiLevel;
 /**
+ * 手写 AI 的"手感削弱"：每一步有这个概率随便走一个合法动作（0 = 原样）。
+ *
+ * 这是课程学习真正好用的那一档旋钮。三档 `aiLevel` 之间的距离太远——实测
+ * 初始策略对初级档是 0:40，行为克隆到 50% 一致率了对三档还是 0:60。
+ * 而按这个概率连续调，同一个策略的得分率是：0.15 → 0%，0.5 → 3.8%，0.9 → 87.5%。
+ * 也就是说它能给出"刚好够难"的那一档，而这正是"有胜负对比"的前提。
+ */
+const AI_HANDICAP = Number(argOf('ai-handicap', '0'));
+/**
  * 撞上回合上限（= 没打完）时给双方的奖励。
  *
  * 默认 0，但**训练时会被整局丢掉**（见 ppo.load_rollout 的 drop_timeouts）。
@@ -234,6 +243,16 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     }
     return r;
   };
+  // 削弱用的随机流单独一份：混进策略那条流里，"改不改削弱"就会改变策略那一侧的采样
+  const shuffles = new Map<PlayerId, () => number>();
+  const shuffleOf = (seat: PlayerId) => {
+    let r = shuffles.get(seat);
+    if (!r) {
+      r = mulberry32(hashSeed(seed, seat, 'handicap'));
+      shuffles.set(seat, r);
+    }
+    return r;
+  };
 
   const buf = new RowBuf();
   let turnSeat: PlayerId | null = null;
@@ -254,7 +273,16 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     const d = policySeat(seat);
     if (!d) {
       // 对手是手写 AI：不为它记账
-      const picked = inTurn < AI_MAX_STEPS ? aiNextAction(s, budget, rejected) : null;
+      let picked = inTurn < AI_MAX_STEPS ? aiNextAction(s, budget, rejected) : null;
+      if (AI_HANDICAP > 0 && inTurn < AI_MAX_STEPS) {
+        const hr = shuffleOf(seat);
+        if (hr() < AI_HANDICAP) {
+          // 削弱：不看局面，随便挑一个合法动作。用 legalActions 保证它一定合法，
+          // 否则会掉到下面"被拒绝就结束回合"的分支，等于把削弱变成"少一步"
+          const hacts = legalActions(s, seat);
+          if (hacts.length > 0) picked = hacts[Math.floor(hr() * hacts.length)]!;
+        }
+      }
       if (picked) {
         if (picked.type === 'RECRUIT') budget.recruited += 1;
         if (picked.type === 'UPGRADE') budget.upgraded += 1;
@@ -463,6 +491,7 @@ async function main(): Promise<void> {
     weights: WEIGHTS,
     opponent: OPPONENT,
     aiLevel: AI_LEVEL,
+    aiHandicap: AI_HANDICAP,
     snapshots: snaps.length,
     modeCounts: { self: byMode('self').length, ai: byMode('ai').length, snap: byMode('snap').length },
     stats: {
@@ -525,10 +554,16 @@ function runPool(lanes: number, sink: Sink): Promise<void> {
       String(TIMEOUT_REWARD),
       '--ai-level',
       AI_LEVEL,
+      '--ai-handicap',
+      String(AI_HANDICAP),
     ];
     const kids = Array.from({ length: lanes }, () =>
       spawn(process.execPath, childArgs, { stdio: ['pipe', 'pipe', 'inherit'] }),
     );
+    // worker 崩掉（OOM 最常见）之后，父进程下一次 write 会拿到 EPIPE 并作为
+    // 'error' 事件抛出——没人接就整个进程崩，一次崩溃会把整轮采样白扔。
+    // 吞掉它：那个 worker 的 `close` 回调会照常触发，缺的局由 Sink 的最后检查报出来。
+
     let next = 0;
     let issued = 0;
     let got = 0;
@@ -568,6 +603,9 @@ function runPool(lanes: number, sink: Sink): Promise<void> {
     kids.forEach((kid, i) => {
       // 不用 readline：一帧 = 一行头 + 一段原始字节，按行切会把这堆字节当文本掰碎
       let acc: Buffer = Buffer.alloc(0);
+      kid.stdin.on('error', () => {
+        /* EPIPE：worker 已经死了，交给 close 分支处理 */
+      });
       kid.stdout.on('data', (chunk: Buffer) => {
         acc = acc.length === 0 ? chunk : Buffer.concat([acc, chunk]);
         for (;;) {

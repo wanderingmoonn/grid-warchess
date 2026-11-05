@@ -73,6 +73,8 @@ const WORKERS = Number(argOf('workers', String(Math.max(1, Math.round(os.cpus().
 const EXPANSIONS = argOf('expansions', EVAL.expansions.join(',') || 'none');
 /** 手写 AI 坐哪一档。课程学习期间训练用的档位和最终目标档必须分开报 */
 const AI_LEVEL = argOf('ai-level', EVAL.aiLevel) as AiLevel;
+/** 手写 AI 的削弱概率（0 = 原样）。用来量"胜率从哪一档开始不为 0" */
+const AI_HANDICAP = Number(argOf('ai-handicap', '0'));
 const expIds = EXPANSIONS === 'none' || EXPANSIONS === '' ? [] : EXPANSIONS.split(',');
 /** 一次派给 worker 几局。1 = 最细的粒度（尾巴最短），再小就得靠 worker 常驻来抵启动成本 */
 const CHUNK = Number(argOf('chunk', '1'));
@@ -150,6 +152,7 @@ function runGames(from: number, count: number): GameRecord[] {
       drivers,
       expansionIds: expIds,
       aiLevel: AI_LEVEL,
+      aiHandicap: AI_HANDICAP,
     });
     out.push({
       seed,
@@ -248,6 +251,8 @@ if (SERVE) {
       EXPANSIONS,
       '--ai-level',
       AI_LEVEL,
+      '--ai-handicap',
+      String(AI_HANDICAP),
       '--temp',
       String(TEMP),
       ...(WEIGHTS ? ['--weights', WEIGHTS] : []),

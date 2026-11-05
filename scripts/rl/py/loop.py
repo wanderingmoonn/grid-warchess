@@ -75,9 +75,10 @@ def main() -> int:
         "--opponent", default="pool", choices=["ai", "pool"],
         help="ai=只打手写 AI；pool=自博弈/打 AI/打快照",
     )
+    ap.add_argument("--ai-level", default="advanced", help="手写 AI 的难度档（basic/tactic/advanced）")
     ap.add_argument(
-        "--levels", default="basic,tactic,advanced",
-        help="课程阶梯，从弱到强。只写一个就是固定在这一档。",
+        "--levels", default="0.9,0.7,0.5,0.3,0.15,0",
+        help="课程阶梯：从强削弱到不削弱，写的是 ai-handicap 的取值。只写一个就是固定。",
     )
     ap.add_argument("--advance-win", type=float, default=60.0, help="当前档得分率到这个数就抬一档")
     ap.add_argument(
@@ -89,7 +90,7 @@ def main() -> int:
     levels = [x.strip() for x in args.levels.split(",") if x.strip()]
     if not levels:
         raise SystemExit("--levels 不能为空")
-    target = levels[-1]
+    target = levels[-1]  # 阶梯的最后一级 = 目标口径（默认 0 = 不削弱）
 
     os.makedirs(args.work, exist_ok=True)
     snap_dir = os.path.join(args.work, "snapshots")
@@ -99,7 +100,7 @@ def main() -> int:
     open(log_path, "w", encoding="utf-8").close()
 
     print(
-        f"{'轮':>3} {'档位':>9} {'步数':>6} {'采样胜':>7} {'win@档':>7} {'win@高':>7} "
+        f"{'轮':>3} {'削弱':>5} {'步数':>6} {'采样胜':>7} {'win@档':>7} {'win@0':>7} "
         f"{'logp':>8} {'KL':>9} {'熵':>7} {'用时':>6}"
     )
     self_share = 0.0  # 第一轮：一次自博弈都不安排（见 rollout.ts 里那段说明）
@@ -114,7 +115,8 @@ def main() -> int:
             "--games", str(args.games), "--seed0", str(args.seed0 + it * 1000),
             "--weights", weights, "--out", data,
             "--opponent", args.opponent, "--snapshots", snap_dir,
-            "--self-share", f"{self_share:.2f}", "--ai-level", level,
+            "--self-share", f"{self_share:.2f}", "--ai-level", args.ai_level,
+            "--ai-handicap", level,
         ])
         roll = json.load(open(f"{data}.json", encoding="utf-8"))
 
@@ -154,16 +156,19 @@ def main() -> int:
             ev = run([
                 "node", "--experimental-strip-types", "scripts/rl/eval.ts",
                 "--mode", "policy", "--weights", nxt, "--games", str(args.eval_games),
-                "--seed0", str(args.eval_seed0), "--ai-level", level,
+                "--seed0", str(args.eval_seed0), "--ai-level", args.ai_level,
+                "--ai-handicap", level,
             ])
             win_cur = score_of(ev)
             if level == target:
                 win_tgt = win_cur
             else:
+                # 目标档永远是"不削弱"：课程只是通往它的路，不能拿削弱档的成绩当进步
                 ev2 = run([
                     "node", "--experimental-strip-types", "scripts/rl/eval.ts",
                     "--mode", "policy", "--weights", nxt, "--games", str(args.eval_games),
-                    "--seed0", str(args.eval_seed0), "--ai-level", target,
+                    "--seed0", str(args.eval_seed0), "--ai-level", args.ai_level,
+                    "--ai-handicap", target,
                 ])
                 win_tgt = score_of(ev2)
 
@@ -195,11 +200,18 @@ def main() -> int:
         # 同一档位来回横跳会让"这一轮的成绩"失去可比性，而退档的收益只是省点时间。
         if level_i + 1 < len(levels) and win_cur == win_cur and win_cur >= args.advance_win:
             level_i += 1
-            print(f"    ↳ 升档：{level} → {levels[level_i]}（得分率 {win_cur:.1f}% ≥ {args.advance_win:.0f}%）")
+            print(
+                f"    ↳ 升档：削弱 {level} → {levels[level_i]}"
+                f"（得分率 {win_cur:.1f}% ≥ {args.advance_win:.0f}%）"
+            )
         # 自博弈的准入线：得分率不到 5% 说明还不会打架，两个自己互相下只会全平局（没有信号）；
         # 到 25% 说明已经能互相打死，自博弈可以占满配额。线性爬坡，避免突然切换。
-        if args.opponent == "pool" and win_cur == win_cur:  # nan 检查
-            self_share = max(0.0, min(args.self_max, (win_cur - 5.0) / 20.0 * args.self_max))
+        #
+        # **必须用 win_tgt（不削弱那一档）而不是 win_cur**：课程期的 win_cur 是"削弱之后的 AI"，
+        # 那个数再高也不代表策略会打架。踩过这个坑——削弱 0.9 时 win_cur 90.6%，
+        # 准入线当场拉满到 60%，于是 13 局自博弈全部 2500 步以上、撞上限、白烧 866MB。
+        if args.opponent == "pool" and win_tgt == win_tgt:  # nan 检查
+            self_share = max(0.0, min(args.self_max, (win_tgt - 5.0) / 20.0 * args.self_max))
         # 把这一轮的权重冻成快照给下一轮的对手池用；只留最近三份，
         # 免得二十轮之后"随机挑一个快照"其实在挑二十轮前的古董
         shutil.copyfile(nxt, os.path.join(snap_dir, f"iter-{it + 1}.json"))

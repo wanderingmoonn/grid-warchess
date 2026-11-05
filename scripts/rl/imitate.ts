@@ -355,6 +355,10 @@ function runPool(lanes: number, sink: Sink): Promise<void> {
     const kids = Array.from({ length: lanes }, () =>
       spawn(process.execPath, childArgs, { stdio: ['pipe', 'pipe', 'inherit'] }),
     );
+    // worker 崩掉（OOM 最常见）之后，父进程下一次 write 会拿到 EPIPE 并作为
+    // 'error' 事件抛出——没人接就整个进程崩，一次崩溃会把整轮采样白扔。
+    // 吞掉它：那个 worker 的 `close` 回调会照常触发，缺的局由 Sink 的最后检查报出来。
+
     let next = 0;
     let issued = 0;
     let got = 0;
@@ -393,6 +397,9 @@ function runPool(lanes: number, sink: Sink): Promise<void> {
 
     kids.forEach((kid, i) => {
       let acc: Buffer = Buffer.alloc(0);
+      kid.stdin.on('error', () => {
+        /* EPIPE：worker 已经死了，交给 close 分支处理 */
+      });
       kid.stdout.on('data', (chunk: Buffer) => {
         acc = acc.length === 0 ? chunk : Buffer.concat([acc, chunk]);
         for (;;) {

@@ -53,6 +53,17 @@ export interface MatchOptions {
    * 才谈得上"从胜负里学"。
    */
   aiLevel?: AiLevel;
+  /**
+   * 手写 AI 的"手感削弱"：每一步有这个概率**不看局面、随便走一个合法动作**。
+   *
+   * 为什么除了难度档还要这个：三档 AI 之间的距离太远。实测初始策略对初级档也是 0:40，
+   * 行为克隆到 50% 一致率了对三档还是 0:60——「初级」只是"少想一步"，
+   * 并不是"能打」。要让胜率从 0 爬起来，就得有连续的、可调的削弱。
+   *
+   * 0 = 原样不动（默认）。0.1 已经能明显打乱它的连招节奏；0.5 以上基本是在跟半随机对手下。
+   * 注意这是**评估/课程学习**的口径，和用户实际面对的 AI 无关：正式对局永远走 0。
+   */
+  aiHandicap?: number;
   /** 每步回调。训练时在这里写轨迹 */
   onStep?: (info: StepInfo) => void;
   /** 单回合最多几步（防死循环），默认跟界面一致 */
@@ -110,6 +121,8 @@ export function playMatch(o: MatchOptions): MatchOutcome {
   const cap = o.capTurns ?? TRAIN.capTurns;
   const maxSteps = o.maxStepsPerTurn ?? AI_MAX_STEPS;
   const rands = new Map<PlayerId, () => number>();
+  // 削弱用的随机流单独一份：和策略的流混在一起，会让"改不改削弱"改变策略那一侧的采样
+  const handicapRands = new Map<PlayerId, () => number>();
   const outcome: MatchOutcome = {
     winner: null,
     turns: 0,
@@ -175,10 +188,25 @@ export function playMatch(o: MatchOptions): MatchOutcome {
     let decision: Decision | undefined;
 
     if (driver.kind === 'ai') {
-      action = aiNextAction(s, budget, rejectedAi);
+      const h = o.aiHandicap ?? 0;
+      if (h > 0) {
+        let hr = handicapRands.get(seat);
+        if (!hr) {
+          hr = mulberry32(hashSeed(o.seed, seat, 'handicap'));
+          handicapRands.set(seat, hr);
+        }
+        if (hr() < h) {
+          const hacts = legalActions(s, seat);
+          if (hacts.length === 0) break;
+          action = hacts[Math.floor(hr() * hacts.length)]!;
+        }
+      }
       if (!action) {
-        if (!applyAndNote(seat, { type: 'END_TURN' }, undefined, inTurn)) break;
-        continue;
+        action = aiNextAction(s, budget, rejectedAi);
+        if (!action) {
+          if (!applyAndNote(seat, { type: 'END_TURN' }, undefined, inTurn)) break;
+          continue;
+        }
       }
     } else if (driver.kind === 'random') {
       const acts = legalActions(s, seat);

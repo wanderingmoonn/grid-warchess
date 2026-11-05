@@ -56,7 +56,11 @@ def main() -> int:
     stats = ppo.update(model, roll, cfg)
 
     dev = stats.pop("ratio_dev_max", float("nan"))
-    print(f"前向一致性：ratio 与 1 的最大偏差 {dev:.2e}（应 < 1e-6，否则两侧前向不一致）")
+    # 阈值 1e-5：logp 是两个 204 维点积的和，float32 累加本身的绝对误差就在 1e-6 量级，
+    # 而 TS 与 torch 的求和顺序不同。K=16 时实测 2e-7，K=64 时到 1.2e-6——变的是候选数，
+    # 不是两侧的公式。真正的"不一致"会表现为 ratio 偏离到 1e-2 以上，那种一眼就看出来。
+    tol = 1e-5
+    print(f"前向一致性：ratio 与 1 的最大偏差 {dev:.2e}（应 < {tol:.0e}；再大就是两侧前向真的不一致）")
     print(
         "更新："
         + " · ".join(
@@ -72,7 +76,7 @@ def main() -> int:
     with open(args.out.replace(".json", ".meta.json"), "w", encoding="utf-8") as fh:
         json.dump({"data": args.data, "steps": steps, "games": games, "stats": stats}, fh, indent=2)
     print(f"权重 → {args.out}")
-    return 0 if dev < 1e-6 else 1
+    return 0 if dev < tol else 1
 
 
 if __name__ == "__main__":
