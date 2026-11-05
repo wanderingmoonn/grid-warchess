@@ -100,6 +100,9 @@ import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
+import { buildReplayFromText } from './core/replay-file.ts';
+import type { ReplaySession } from './core/replay-file.ts';
+import { replayBarHtml, syncReplayBar, type ReplayUi } from './ui/replay-bar.ts';
 import { BUILD_VERSION } from './core/build-info.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
@@ -126,6 +129,7 @@ import {
   loadMatch,
   saveMatch,
   setSaveScope,
+  suspendSaves,
 } from './storage/save.ts';
 import {
   CHAT_MAX_LEN,
@@ -175,6 +179,7 @@ appEl.innerHTML = `
   <div class="app">
     <header class="topbar" id="topbar"></header>
     <div class="commander-bar" id="commander" hidden></div>
+    <div class="replay-bar" id="replay" hidden></div>
     <div class="main">
       <div class="board-wrap" id="board-wrap">
         <div class="force-flag" id="force-flag" hidden></div>
@@ -216,6 +221,7 @@ const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
+const replayEl = pick<HTMLElement>(appEl, '#replay');
 
 // 顶栏骨架只插一次。之后每一步只改文字/class/hidden，绝不重建按钮节点——
 // 否则 AI 连续行动时 click 会在 mousedown 与 mouseup 之间丢掉目标（按钮点不动）。
@@ -245,6 +251,36 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
 let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
+
+// ---------- 复盘 ----------
+
+/**
+ * 正在看的复盘（null = 没在看）。
+ *
+ * 复盘的做法是**把 `state` 换掉**，而不是另养一套渲染管线：棋盘、属性卡、地形提示
+ * 全都读 `state`，换掉它之后这些一次都不用改。代价是必须在几个地方把闸门关上——
+ * 见 `dispatch` / `onBoardClick` / `saveMatch` 的暂停。三处，不多不少。
+ */
+let replay: ReplaySession | null = null;
+/** 现在停在第几步（0 = 开局） */
+let replayIndex = 0;
+let replayPlaying = false;
+/** 播放倍速：1 / 2 / 4 */
+let replaySpeed = 1;
+let replayName = '';
+/** 播放定时器。用 setTimeout 链而不是 setInterval：每步的重绘时长不一样，定长会越拖越后 */
+let replayTimer: ReturnType<typeof setTimeout> | null = null;
+/** 进复盘之前那一局。退出时必须原样还回去 */
+let liveState: GameState | null = null;
+/** 复盘里每步的重绘最小间隔（毫秒），按倍速折算 */
+const REPLAY_STEP_MS = 260;
+/**
+ * 玩家正在拖进度条。
+ *
+ * 拖动期间**不许写回 slider.value**：手指按住的时候把它改成一个和手指不一样的值，
+ * 滑块会当场跳回去。这是浏览器在跟输入打架，不是样式问题。
+ */
+let replaySeeking = false;
 
 /**
  * 撤回栈：每一步成功的操作之前，把旧 state 存进来。
@@ -858,17 +894,243 @@ function keepSideScroll(paint: () => void): void {
   });
 }
 
+
+// ---------- 复盘 ----------
+
+/** 复盘条要的全部数据。每次重绘现算：都是标量，比维护一份副本便宜 */
+function replayUiOf(): ReplayUi {
+  const s = replay!;
+  const m = s.meta;
+  const parts = [`${m.size}×${m.size}`, `${m.players} 人`, m.expansionsText, `种子 ${m.seed}`];
+  if (m.build) parts.push(`v${m.build}`);
+  const winner = state.winner ? state.players[state.winner].name : null;
+  return {
+    name: replayName,
+    index: replayIndex,
+    total: s.applied,
+    turn: state.turn,
+    current: state.players[state.current].name,
+    winner,
+    playing: replayPlaying,
+    speed: replaySpeed,
+    metaLine: parts.join(' · '),
+    exact: m.exact,
+    warnings: s.warnings,
+  };
+}
+
+/**
+ * 进入复盘。
+ *
+ * 只有在**没有联机房**的时候才允许：联机时 `state` 会被对端的提交覆盖
+ * （`applyRoom`），复盘到一半被人顶掉，看到的就是两份棋搅在一起。
+ */
+function enterReplay(text: string, name: string): boolean {
+  if (room) {
+    toast('复盘要在本机看：先从联机房间里退出来');
+    return false;
+  }
+  const built = buildReplayFromText(text);
+  if (!built.ok) {
+    toast(built.reason);
+    return false;
+  }
+  // 已经在复盘里又拖进来一份：只换这一份，别把 liveState 覆盖成上一份复盘的状态
+  if (!replay) liveState = state;
+  replayStopTimer();
+  replay = built.session;
+  replayName = name;
+  replayIndex = 0;
+  replayPlaying = false;
+  replaySpeed = 1;
+  // 存档必须停：main.ts 里二十多个地方会顺手 saveMatch(state)，
+  // 不拦的话"看一次别人的复盘"= 把自己没打完那局覆盖掉
+  suspendSaves(true);
+  state = replay.stateAt(0);
+  clearSelection();
+  // 外壳先建一次，之后每帧只改数字
+  replayEl.innerHTML = replayBarHtml(replayUiOf());
+  replayEl.hidden = false;
+  render();
+  if (built.session.stopReason) toast(`复盘只能走到第 ${built.session.applied} 步，原因见上方提示`);
+  return true;
+}
+
+/** 退出复盘：把进之前那一局原样还回去 */
+function exitReplay(): void {
+  if (!replay) return;
+  replayStopTimer();
+  replay = null;
+  replayPlaying = false;
+  replayIndex = 0;
+  replayName = '';
+  replayEl.hidden = true;
+  replayEl.innerHTML = '';
+  suspendSaves(false);
+  // 原来那局可能在复盘期间被别处清掉了（换局、清存档）。真没了就开一局新的——
+  // 崩在这里比丢一局更糟。
+  state = liveState ?? loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+  liveState = null;
+  resetZoom();
+  clearSelection();
+  render();
+  kickAiIfNeeded();
+}
+
+/** 跳到第 index 步（会被夹到 [0, 真的走到的那一步]） */
+function replayGoto(index: number): void {
+  if (!replay) return;
+  const target = Math.max(0, Math.min(replay.applied, Math.round(index)));
+  if (target === replayIndex) return;
+  replayIndex = target;
+  state = replay.stateAt(target);
+  render();
+}
+
+/** 复盘条上的按钮。和 `handleAction` 分开，是因为它不碰对局规则 */
+function handleReplayAction(act: string, el: HTMLElement): void {
+  if (!replay) return;
+  switch (act) {
+    case 'rp-first':
+      replayStopTimer();
+      replayPlaying = false;
+      replayGoto(0);
+      return;
+    case 'rp-prev':
+      replayStepBy(-1);
+      return;
+    case 'rp-next':
+      replayStepBy(1);
+      return;
+    case 'rp-last':
+      replayStopTimer();
+      replayPlaying = false;
+      replayGoto(replay.applied);
+      return;
+    case 'rp-toggle':
+      replayTogglePlay();
+      return;
+    case 'rp-speed': {
+      const n = Number(el.dataset.speed);
+      replaySpeed = n === 2 || n === 4 ? n : 1;
+      // 正在放就按新倍速重排下一帧，别等这一帧睡完
+      if (replayPlaying) {
+        replayStopTimer();
+        replayTimer = setTimeout(replayTick, Math.round(REPLAY_STEP_MS / replaySpeed));
+      }
+      render();
+      return;
+    }
+    case 'rp-exit':
+      exitReplay();
+      return;
+  }
+}
+
+function replayStepBy(delta: number): void {
+  if (!replay) return;
+  replayStopTimer();
+  replayPlaying = false;
+  replayGoto(replayIndex + delta);
+}
+
+function replayStopTimer(): void {
+  if (replayTimer !== null) {
+    clearTimeout(replayTimer);
+    replayTimer = null;
+  }
+}
+
+/**
+ * 播放。
+ *
+ * 用 setTimeout 链而不是 setInterval：每步的重绘耗时不一样（残局兵多就慢），
+ * 定长间隔会在慢帧上堆积，最后变成"越放越快、还夹着卡顿"。
+ */
+function replayTick(): void {
+  replayTimer = null;
+  if (!replay || !replayPlaying) return;
+  if (replayIndex >= replay.applied) {
+    replayPlaying = false;
+    render();
+    return;
+  }
+  replayIndex += 1;
+  state = replay.stateAt(replayIndex);
+  render();
+  replayTimer = setTimeout(replayTick, Math.max(16, Math.round(REPLAY_STEP_MS / replaySpeed)));
+}
+
+function replayTogglePlay(): void {
+  if (!replay) return;
+  if (replayPlaying) {
+    replayPlaying = false;
+    replayStopTimer();
+    render();
+    return;
+  }
+  // 已经放到尾巴了：再按一次当"从头放"，不然按钮点了没反应
+  if (replayIndex >= replay.applied) {
+    replayIndex = 0;
+    state = replay.stateAt(0);
+  }
+  replayPlaying = true;
+  render();
+  replayTimer = setTimeout(replayTick, Math.round(REPLAY_STEP_MS / replaySpeed));
+}
+
+/** 读文件 → 复盘。文件读失败和"不是对局报告"要分开说 */
+async function importReplayFile(file: File): Promise<void> {
+  let text = '';
+  try {
+    text = typeof file.text === 'function' ? await file.text() : await readAsText(file);
+  } catch {
+    toast('这个文件读不出来（不是文本，或者被占用）');
+    return;
+  }
+  enterReplay(text, file.name || '未命名.json');
+}
+
+function readAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result ?? ''));
+    fr.onerror = () => reject(new Error('read failed'));
+    fr.readAsText(file);
+  });
+}
+
+/** 选文件。首页的「复盘」和拖放走同一条路 */
+function pickReplayFile(): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) void importReplayFile(file);
+  });
+  input.click();
+}
+
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
-  const view = playerView(state, me(), spectating());
+  /*
+   * 复盘时换一副眼镜：**旁观 + 全信息**。
+   *
+   * `state` 已经是复盘里那一帧，而迷雾挡的是"当时谁看得见"——复盘要回答的是
+   * "整局到底发生了什么"，所以这里直接给全局视野。不这么做还会撞上第二个问题：
+   * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
+   */
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+  // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
   const threat =
-    selected && selected.owner === state.current && !selected.acted && !pendingSkill
+    !replay && selected && selected.owner === state.current && !selected.acted && !pendingSkill
       ? Array.from(threatTiles(state, selected))
       : [];
 
@@ -876,11 +1138,13 @@ function render(): void {
   //
   // 轮到自己就生效，不依赖"选中了谁"；这一回合**出手一次之后就收起**——
   // 它是"上回合的答卷"，看一眼就该让位给可达格与攻击目标。
-  const heat = visibleHeat(state, me(), {
-    visible: new Set(view.visible),
-    dismissed: heatDismissTurn === state.turn,
-    active: state.current === me() && !spectating(),
-  });
+  const heat = replay
+    ? new Map<number, number>()
+    : visibleHeat(state, me(), {
+        visible: new Set(view.visible),
+        dismissed: heatDismissTurn === state.turn,
+        active: state.current === me() && !spectating(),
+      });
 
   // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
   const hpDrops = new Map(pendingDrops);
@@ -929,7 +1193,7 @@ function render(): void {
     forceFlagEl.hidden = true;
   }
 
-  if (state.config.godMode === true) {
+  if (state.config.godMode === true && !replay) {
     // 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
     // 兵是自己一手摆上去的，摆的时候就知道它是谁。
     renderGodShelf();
@@ -946,6 +1210,7 @@ function render(): void {
   // 换人了就"叮"一声：手机放在桌上等对手的人，靠这一声回神。
   // AI 之间互打不响（会变成每秒一声），观战也不响。
   if (
+    !replay &&
     lastTurnPlayer !== null &&
     lastTurnPlayer !== state.current &&
     !state.winner &&
@@ -986,6 +1251,14 @@ function render(): void {
 
   // 聊天入口跟着房间走：进房间才出现，退出去就收起
   renderChatDock();
+
+  // 复盘条：只改数字，不重建节点（重建会把正在拖的滑块抽走）
+  if (replay) {
+    replayEl.hidden = false;
+    syncReplayBar(replayEl, replayUiOf(), replaySeeking);
+  } else if (!replayEl.hidden) {
+    replayEl.hidden = true;
+  }
 }
 
 /**
@@ -2018,6 +2291,11 @@ function toast(msg: string): void {
 let heatDismissTurn: number | null = null;
 
 function dispatch(action: Action): boolean {
+  // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
+  if (replay) {
+    toast('复盘里只能看，要接着下先点「退出复盘」');
+    return false;
+  }
   // AI 正在走这一方：玩家的点击一律不生效，不然会出现两边同时改同一个状态
   if (aiBusy()) {
     toast('这一方正由 AI 行动');
@@ -2293,6 +2571,25 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 }
 
 function onBoardClick(e: Event): void {
+  /*
+   * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
+   *
+   * 走子/开火那条路整段跳过——`state` 是历史帧，改它就等于篡改别人的对局。
+   * 只保留选中，因为"这一步它为什么这么走"十有八九要从属性卡上的
+   * 光环、加成、剩余行动次数里找答案。
+   */
+  if (replay) {
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const here = stackAt(at.x, at.y);
+    selectedId = here.length > 0 ? here[here.length - 1]!.id : null;
+    // 只换选中，不重算可达格/目标：那两样会让棋盘看起来像能操作
+    reach = [];
+    targets = [];
+    siege = [];
+    render();
+    return;
+  }
   if (state.config.godMode === true) {
     // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
     // 这格可达吗、能不能开火）在纯沙盒里一条都不成立，整块交出去。
@@ -2765,6 +3062,29 @@ function downloadMatchReport(): void {
 }
 
 function handleAction(act: string, el: HTMLElement): void {
+  // 复盘控件先处理：它在"对局已经结束/不该能操作"的时候仍然要能按，
+  // 所以不能跟着下面那堆对局动作一起被挡掉
+  if (act.startsWith('rp-')) {
+    handleReplayAction(act, el);
+    return;
+  }
+  /*
+   * 复盘里除了"看"，别的对局动作一律不接。
+   *
+   * 不能只靠 `dispatch` 那道闸：侧栏里有一半按钮根本不走 dispatch
+   * （撤回直接弹 undoStack、联机直接换 state、参谋部直接排队列）。
+   * 逐个去堵必然漏，所以在这儿统一拦——只放行三件和"改这一局"无关的事：
+   * 规则书、反馈、回首页。
+   */
+  if (replay) {
+    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game';
+    if (!harmless) {
+      toast('复盘里只能看，要接着下先点「退出复盘」');
+      return;
+    }
+    // 回首页之前先把那一局还回去：不还原的话，首页后面躲着的是一份别人棋的副本
+    if (act === 'new-game') exitReplay();
+  }
   switch (act) {
     case 'force-move':
     case 'force-attack': {
@@ -3503,6 +3823,7 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     onManual: openManualFlow,
     onEditor: () => openUnitEditor(() => render()),
     onImport: importMatchFlow,
+    onReplay: pickReplayFile,
   });
 }
 
@@ -5830,6 +6151,104 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   dispatch({ type: 'END_TURN' });
 });
+
+/*
+ * 复盘：拖文件进来。
+ *
+ * 挂在 window 上而不是棋盘上，因为玩家的第一反应是"把文件拖到窗口里"，
+ * 不会先去找一块指定区域。代价是要自己判断"现在该不该接"：
+ *   · 进房间了就不接（复盘会和对端提交抢 state）；
+ *   · 拖的不是文件（拖的是选中的文字、图片）就放行，别抢浏览器的默认行为。
+ */
+let dragDepth = 0;
+const hasFiles = (e: DragEvent): boolean => !!e.dataTransfer && Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e) || room) return;
+  dragDepth += 1;
+  appEl.classList.add('dropping');
+});
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e) || room) return;
+  // 不 preventDefault 的话浏览器会拿文件当导航（直接打开那个 json），页面就没了
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) appEl.classList.remove('dropping');
+});
+window.addEventListener('drop', (e) => {
+  dragDepth = 0;
+  appEl.classList.remove('dropping');
+  if (!hasFiles(e) || room) return;
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (file) void importReplayFile(file);
+});
+
+/*
+ * 复盘快捷键。
+ *
+ * 单独一个监听、而且在**复盘时才接管**：左/右/空格/Home/End 在别的地方
+ * 各有各的用处（比如空格是上帝模式的"结束回合"），不能全局抢。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!replay) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)) return;
+  switch (e.key) {
+    case 'ArrowLeft':
+      e.preventDefault();
+      replayStepBy(-1);
+      return;
+    case 'ArrowRight':
+      e.preventDefault();
+      replayStepBy(1);
+      return;
+    case ' ':
+    case 'Spacebar':
+      // 焦点在按钮上时空格是"按这个按钮"，不是"播放"——那条规矩和上帝模式一致
+      if (t instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      replayTogglePlay();
+      return;
+    case 'Home':
+      e.preventDefault();
+      replayStepBy(-replay.applied);
+      return;
+    case 'End':
+      e.preventDefault();
+      replayStepBy(replay.applied);
+      return;
+    case 'Escape':
+      e.preventDefault();
+      exitReplay();
+      return;
+  }
+});
+
+/*
+ * 复盘进度条。
+ *
+ * `input` 是拖动过程中连续触发的（跟手），`change` 是松手那一下。
+ * 拖动期间把 `replaySeeking` 立起来，render 就不再去改 slider.value——
+ * 不然每一帧都会把滑块拽回上一格，手感是"拖不动"。
+ */
+replayEl.addEventListener('input', (e) => {
+  const el = e.target as HTMLInputElement | null;
+  if (!replay || !el || el.dataset.act !== 'rp-seek') return;
+  replaySeeking = true;
+  replayStopTimer();
+  replayPlaying = false;
+  replayGoto(Number(el.value));
+});
+const endSeek = (): void => {
+  replaySeeking = false;
+};
+replayEl.addEventListener('change', endSeek);
+replayEl.addEventListener('pointerup', endSeek);
+replayEl.addEventListener('pointercancel', endSeek);
 
 // 悬停可移动格时加深高亮
 boardEl.addEventListener('mouseover', (e) => {

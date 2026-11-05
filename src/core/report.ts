@@ -18,7 +18,7 @@
 import { BUILD_VERSION } from './build-info.ts';
 import { underConstruction } from './rules.ts';
 import { timelineSummary, type MatchTimeline } from './timeline.ts';
-import { seatsOf, type Action, type GameState, type PlayerId } from './types.ts';
+import { seatsOf, type Action, type GameState, type MatchConfig, type PlayerId } from './types.ts';
 
 /**
  * 报告格式版本。加字段不一定动它，改语义一定要动。
@@ -136,6 +136,28 @@ export interface MatchReport {
    */
   actions?: Action[];
   /**
+   * 开局那一份**完整配置**（v3 追加，可选）。
+   *
+   * 为什么非要有它：`seed` 只能重建"地图 + 城 + 开局兵"，重建不了"这一局都能造什么"。
+   * 而复盘要把动作序列原样重放一遍，兵种表差一个 id，第 N 步的 `RECRUIT` 就会被拒，
+   * 整条重放从此歪掉。
+   *
+   * 加字段不动 REPORT_VERSION：老分析脚本按已知字段读，多一个键不影响它们；
+   * 而少了它只会让复盘退回"按种子重建"，那种情况下 `replay-file.ts` 会明说
+   * "这是重建不是还原"，不会假装准确。
+   *
+   * 内容里没有任何"人"的信息——`MatchConfig` 是规则参数（尺寸、时代、扩展开关、
+   * 兵种名单），玩家名在 `GameState.players`，从来不在这里。
+   */
+  config?: MatchConfig;
+  /**
+   * 开局有没有开迷雾。
+   *
+   * 它不在 `MatchConfig` 里（是 `GameState` 上的字段），但复盘要不要"只给一方视角"
+   * 取决于它，所以单独记一格。
+   */
+  fog?: boolean;
+  /**
    * 因为超过上限被丢掉的动作数。0 / 未设＝完整。
    *
    * 不静默截断：截断了要能从报告本身看出来，否则重放到一半对不上，
@@ -226,6 +248,15 @@ export function buildMatchReport(
     // （"有 timeline 字段"会被当成"有曲线"）。真丢了就让它缺着，
     // 和 recordRequested 一对照就知道是"要求了却没记上"。
     ...(timeline && timeline.samples.length > 0 ? { timeline } : {}),
+    // 完整配置：复盘靠它还原兵种池与全部规则开关。
+    // 数组都浅拷一份——报告是会被序列化存下来的，别让它和活着的 config 共用一个引用
+    config: {
+      ...s.config,
+      expansionIds: [...s.config.expansionIds],
+      enabledUnits: [...s.config.enabledUnits],
+      ...(s.config.disabledUnits ? { disabledUnits: [...s.config.disabledUnits] } : {}),
+    },
+    fog: s.fog === true,
     // 动作序列：没有就不带（没开详细记录时本来也记不到）
     ...(actions && actions.length > 0 ? { actions } : {}),
     ...(actions && actions.length > 0 && actionsDropped > 0 ? { actionsDropped } : {}),

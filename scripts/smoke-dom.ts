@@ -27,6 +27,7 @@ import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { remainingUnits } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { buildMatchReport } from '../src/core/report.ts';
 import {
   applyAction,
   cityTiles,
@@ -1608,6 +1609,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
   let started = false;
   let imported = false;
   let edited = false;
+  let replayed = false;
   const close = openTitle(host, {
     hasSave: false,
     version: '0.0.0-test',
@@ -1617,6 +1619,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     onManual: () => {},
     onEditor: () => { edited = true; },
     onImport: () => { imported = true; },
+    onReplay: () => { replayed = true; },
   });
 
   const box = host.querySelector('.title-screen');
@@ -1648,10 +1651,27 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     onManual: () => {},
     onEditor: () => {},
     onImport: () => { imported = true; },
+    onReplay: () => { replayed = true; },
   });
   host.querySelector<HTMLElement>('[data-title="import"]')!.click();
   assert.equal(imported, true, '首页的「导入对局」要交回控制权');
   assert.ok(!host.querySelector('.title-screen'), '导入是进入某一局，这层要撤掉');
+
+  // 复盘：同级的第三个入口，也是会撤层的那种（选完文件要看见棋盘）
+  openTitle(host, {
+    hasSave: true,
+    version: '0.0.0-test',
+    onNew: () => {},
+    onContinue: () => {},
+    onOnline: () => {},
+    onManual: () => {},
+    onEditor: () => {},
+    onImport: () => {},
+    onReplay: () => { replayed = true; },
+  });
+  host.querySelector<HTMLElement>('[data-title="replay"]')!.click();
+  assert.equal(replayed, true, '首页的「复盘」要交回控制权');
+  assert.ok(!host.querySelector('.title-screen'), '复盘要看见棋盘，这层要撤掉');
 
   close();
   close2();
@@ -5820,6 +5840,120 @@ check('点地图：落点不在格子上，也要能算出是哪一格', () => {
   } finally {
     host.remove();
   }
+});
+
+
+await checkAsync('复盘：把一份对局数据拖进页面就能逐帧回看，退出后本机那局原样还在', async () => {
+  /*
+   * 这条守的是整条链路，而不是某个函数：拖放 → 读文件 → 重建开局 → 走动作 →
+   * 换成复盘视角 → 退出还原。中间任何一环断了，玩家看到的是"拖进去没反应"。
+   *
+   * 还有一个必须验的副作用：**复盘不能动本机存档**。
+   * main.ts 里二十多个地方会顺手 saveMatch(state)，而复盘期间 state 是别人的棋——
+   * 漏拦一处，玩家看一次复盘就把自己没打完那局覆盖了。
+   */
+  const seed = 909090;
+  const base = createMatch({ ...DEFAULT_CONFIG, size: 8 }, seed);
+  base.fog = false;
+  const w = bootWith(base);
+  const d = w.document;
+  const turnText = (): string => d.querySelector('[data-ref="turn"]')?.textContent ?? '';
+
+  // 造一份"真报告"：同一个配置和种子，走三步结束回合
+  let s2 = createMatch(base.config, seed);
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    assert.ok(r.ok, '造数据时这一步就没走通');
+    s2 = r.state;
+  }
+  const report = buildMatchReport(s2, new Date('2026-11-05T00:00:00Z'), null, acts);
+
+  assert.equal(turnText().includes('第 1 回合'), true, `开局应当是第 1 回合，实际「${turnText()}」`);
+
+  // 拖进来
+  const file = new w.File([JSON.stringify(report)], 'warchess-2026-11-05-909090-a.json', {
+    type: 'application/json',
+  });
+  const drop = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(drop);
+
+  const bar = () => d.querySelector<HTMLElement>('#replay');
+  const until = Date.now() + 4000;
+  while (Date.now() < until && (!bar() || bar()!.hidden)) await wait(20);
+  assert.ok(bar() && !bar()!.hidden, '拖进来之后复盘条应该出现');
+  assert.ok((bar()!.textContent ?? '').includes('复盘'), '复盘条上要写清楚这是复盘');
+  assert.ok((bar()!.textContent ?? '').includes('/3 步'), `要显示总步数，实际「${bar()!.textContent}」`);
+  assert.ok(turnText().includes('第 1 回合'), '进来时停在开局那一帧');
+
+  const click = (sel: string): void => {
+    const el = d.querySelector<HTMLElement>(sel);
+    assert.ok(el, `找不到 ${sel}`);
+    el!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  };
+
+  // 下一步
+  click('[data-act="rp-next"]');
+  assert.ok(turnText().includes('第 2 回合'), `走一步应当到第 2 回合，实际「${turnText()}」`);
+
+  // 跳终局
+  click('[data-act="rp-last"]');
+  assert.ok(turnText().includes('第 4 回合'), `跳终局应当到第 4 回合，实际「${turnText()}」`);
+
+  // 拖进度条（input 事件就是拖动过程本身）
+  const slider = d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!;
+  assert.equal(slider.max, '3', '滑块上限应当是"真的走通的步数"');
+  slider.value = '1';
+  slider.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.ok(turnText().includes('第 2 回合'), `拖回第 1 步应当是第 2 回合，实际「${turnText()}」`);
+
+  // 复盘里点棋盘不能走子（只能选中看属性）
+  const tiles = d.querySelectorAll<HTMLElement>('.tile');
+  const before = JSON.parse(w.localStorage.getItem('warchess:match:v1')!);
+  tiles[0]!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!).turn,
+    before.turn,
+    '复盘里点棋盘不许改动任何东西',
+  );
+
+  // 退出：回到原来那局，而且存档里还是原来那局
+  click('[data-act="rp-exit"]');
+  assert.ok(bar()!.hidden, '退出之后复盘条要收起来');
+  assert.ok(turnText().includes('第 1 回合'), `退出要回到本机那局（第 1 回合），实际「${turnText()}」`);
+  const saved = JSON.parse(w.localStorage.getItem('warchess:match:v1')!);
+  assert.equal(saved.turn, 1, '复盘期间不许把别人的棋写进本机存档');
+  assert.equal(saved.seed, seed, '本机存档的种子不该被换掉');
+});
+
+await checkAsync('复盘：拖进来的不是对局数据时，要说清是什么问题', async () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 8 }, 919191);
+  const w = bootWith(st);
+  const d = w.document;
+  const drop = (body: string): void => {
+    const file = new w.File([body], 'x.json', { type: 'application/json' });
+    const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+    w.dispatchEvent(ev);
+  };
+
+  // 不是 JSON：不该进复盘模式，只弹一句提示
+  drop('这不是 json');
+  await wait(150);
+  const bar = d.querySelector<HTMLElement>('#replay');
+  assert.ok(!bar || bar.hidden, '读不了的文件不该进复盘模式');
+  const toastText = (d.querySelector('#toast')?.textContent ?? '') + (d.body.textContent ?? '');
+  assert.ok(toastText.includes('JSON') || toastText.includes('json'), '提示里要说清不是 JSON');
+
+  // 是 JSON 但没有动作序列（老报告）：提示要指出缺的是"动作序列"
+  drop(JSON.stringify({ seed: 1, board: { w: 8, h: 8 } }));
+  await wait(150);
+  assert.ok(!bar || bar.hidden, '没有动作序列也不该进复盘模式');
+  assert.ok(
+    (d.body.textContent ?? '').includes('动作序列'),
+    '缺动作序列时要说清缺的是这个，而不是笼统说"文件不对"',
+  );
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
