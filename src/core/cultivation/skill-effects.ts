@@ -295,9 +295,10 @@ registerSkillEffect('spirit-tower-shot', (c) => {
   }
   
   addRes(p, SPIRIT_STONE, -cost);
-  // 用 custom 存一个本回合的标记，过了这回合 state.turn 变了，条件自然失效
-  c.self.custom = { ...(c.self.custom ?? {}), burstBuffTurn: c.state.turn };
+  
+  // 存“灵气充能层数”
+  c.self.custom = { ...(c.self.custom ?? {}), burstCharges: 3 };
   
   const name = c.api.utype(c.state, c.self.type).name;
-  c.result.log = `${name} 消耗 ${cost} 灵石，灵气激荡，本回合获得 +3 次攻击次数`;
+  c.result.log = `${name} 消耗 ${cost} 灵石，灵气激荡，本回合获得 3 次攻击次数`;
 });
