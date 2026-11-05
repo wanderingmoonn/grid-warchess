@@ -9,16 +9,17 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { CONFIG, ERAS } from '../src/core/config.ts';
-import { FANTASY_PACKS } from '../src/core/fantasy-packs.ts';
+import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { BURN_MAX_LAYERS, BURN_PER_LAYER } from '../src/core/rules.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
 
 const OUT = new URL('../_build/fantasy-units.json', import.meta.url);
 
 const names = new Map<string, string>();
-for (const p of FANTASY_PACKS) for (const u of p.units ?? []) names.set(u.id, u.name);
+for (const u of FANTASY.units ?? []) names.set(u.id, u.name);
 
-const packs = FANTASY_PACKS.map((p) => ({
+// 合并成一个包之后，导出表里只有一节；id/name 仍写出来，表格按它分页
+const packs = [FANTASY].map((p) => ({
   id: p.id,
   name: p.name,
   requires: p.requires ?? [],

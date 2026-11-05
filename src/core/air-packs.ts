@@ -535,11 +535,16 @@ const CARRIER_CAPABLE: ReadonlySet<string> = new Set([
   'af_awacs', // 预警机（E-2 那类）本来就是舰载的
 ]);
 
-/** 这些扩展开着时，甲板才归空军管 */
-const AIR_PACKS = ['air-corps', 'air-modern'];
-
+/**
+ * 这一局有没有空军（合并后只有一个包，见文件末尾的 AIR）。
+ *
+ * 为什么这里只认一个 id、不再列 ['air-corps','air-modern']：旧存档里的两个旧 id
+ * 会在读档/建局时被迁移成 'air'（见 expansions.ts 的 normalizeExpansionIds），
+ * 所以运行期只需要认合并后的那一个。本文件因此不需要反过来 import expansions.ts，
+ * 那条运行时回指会把模块初始化顺序变成一个坑。
+ */
 function airEnabled(state: GameState): boolean {
-  return (state.config.expansionIds ?? []).some((id) => AIR_PACKS.includes(id));
+  return (state.config.expansionIds ?? []).includes('air');
 }
 
 /** 在母舰周围找一个能停飞机的空格（空中层不占地面格，但一格只能有一架飞机） */
@@ -679,47 +684,41 @@ export function recoverToCarrier(state: GameState, carrier: Unit, plane: Unit): 
  * ======================================================================== */
 
 /**
- * 「空军」：第四、第五时代。
+ * 「空军」：第四到第六时代的空中力量，一个包。
+ *
+ * ---------------------------------------------------------------
+ * 为什么从一个包变一个包（2026-11-04）
+ * ---------------------------------------------------------------
+ * 以前是「空军」（第四、第五代，9 个）和「现代空军」（第六代，9 个，
+ * `requires: ['pack-contemporary', 'air-corps']`）。两个包拆开的唯一理由是
+ * "现代机要等第六时代"，而那件事 `requiresPack` 一个字段就能表达——
+ * 现代包当年必须依赖基础包，还有个更具体的原因：它引用了基础包声明的
+ * `af-superiority` / `af-ground-strike` 等能力，能力表是全局合并的，
+ * 同一条不许在两处各写一份。合成一个包之后这个约束自然消失。
+ *
+ * 现在：勾一个「空军」，第四、第五代的飞机全部到场；第六代那 9 个
+ * 挂 `requiresPack: 'pack-contemporary'`——开了「信息化」自动出现。
  *
  * 为什么从第四时代开始：第三时代（火器）之前没有"飞机"这种东西，
  * 硬塞进来就得编；而气球、双翼机、二战机群正好填第四、第五两代。
  */
-export const AIR_CORPS: Expansion = {
-  id: 'air-corps',
+export const AIR: Expansion = {
+  id: 'air',
   name: '空军',
+  blurb: '从侦察气球到喷气机，能上航母甲板。',
   scale: 'large',
   summary:
-    '补上第四、第五时代的空中力量：侦察气球、侦察机、双翼战斗机、活塞战斗机、俯冲轰炸机、' +
-    '强击机、重型轰炸机、运输机、舰载机九个兵种。空军不是免伤——地面单位射程 ≥2 就能打到' +
-    '相邻的飞机；飞行买的是机动与视野。舰载机能上航空母舰（海军扩展）。',
+    '第四到第六时代的空中力量：侦察气球、侦察机、双翼战斗机、活塞战斗机、俯冲轰炸机、' +
+    '强击机、重型轰炸机、运输机、舰载机；第六代再加喷气战斗机、隐身战斗机、攻击机、' +
+    '武装直升机、无人机、战略轰炸机、预警机、电子战机、重型运输机——**第六代这批要同时开「信息化」**。' +
+    '空军不是免伤：地面单位射程 ≥2 就能打到相邻的飞机，飞行买的是机动与视野。' +
+    '舰载机（含喷气战斗机、攻击机、预警机）能上航空母舰的甲板（海军扩展）。',
   abilities: AIR_ABILITIES,
-  units: AIR_CORPS_UNITS,
-  hooks: {},
-};
-
-/**
- * 「现代空军」：第六时代，`requires: ['pack-contemporary', 'air-corps']`。
- *
- * 第六时代是「信息化」开出来的，单勾这个包会得到一堆造不出来的飞机——
- * 那是"包坏了"，不是设计。所以写上前置，开局面板会自动补上。
- *
- * 为什么还要依赖 `air-corps`：现代机用的 `af-superiority` / `af-ground-strike`
- * 这些能力声明在空军基础包里。能力表是全局合并的，同一条**不许在两处各写一份**
- * （重复的那份会被核心静默覆盖，改它等于白改），所以现代包只能引用、不能重发。
- * 既然引用，就得保证那份一定在场——把基础包写进前置是唯一诚实的写法。
- */
-export const MODERN_AIR: Expansion = {
-  id: 'air-modern',
-  name: '现代空军',
-  requires: ['pack-contemporary', 'air-corps'],
-  scale: 'large',
-  summary:
-    '第六时代的空中力量：喷气战斗机、隐身战斗机、攻击机、武装直升机、无人机、战略轰炸机、' +
-    '预警机、电子战机、重型运输机九个兵种。' +
-    '和海军扩展的航母联动：喷气战斗机、攻击机、预警机属于舰载机，能上甲板起飞与返航。',
-  // 能力表是全局合并的，现代包直接引用基础包里那几条，不重复声明
-  abilities: [],
-  units: MODERN_AIR_UNITS,
+  units: [
+    ...AIR_CORPS_UNITS,
+    // 第六代：靠 requiresPack 门控，不开「信息化」就不进本局兵种表
+    ...MODERN_AIR_UNITS.map((u) => ({ ...u, requiresPack: 'pack-contemporary' })),
+  ],
   hooks: {},
 };
 

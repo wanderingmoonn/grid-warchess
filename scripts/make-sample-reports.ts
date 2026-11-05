@@ -27,6 +27,7 @@ function playOne(seed: number): ReturnType<typeof buildMatchReport> {
     seed,
   );
   const tl = newTimeline(s.turn);
+  const log: Parameters<typeof buildMatchReport>[3] = [];
   noteDeaths(tl, s);
   sampleTurn(s, tl, true);
 
@@ -35,6 +36,7 @@ function playOne(seed: number): ReturnType<typeof buildMatchReport> {
       const a = aiNextAction(s, { ...DEFAULT_BUDGET });
       if (!a) break;
       noteAction(tl, s.current, a);
+      log!.push(a);
       const r = applyAction(s, a);
       if (!r.ok) break;
       s = r.state;
@@ -44,10 +46,11 @@ function playOne(seed: number): ReturnType<typeof buildMatchReport> {
     if (s.winner) break;
     const e = applyAction(s, { type: 'END_TURN' });
     if (!e.ok) break;
+    log!.push({ type: 'END_TURN' });
     s = e.state;
   }
   sampleTurn(s, tl, true);
-  return buildMatchReport(s, new Date('2026-11-04T02:00:00Z'), sealTimeline(tl));
+  return buildMatchReport(s, new Date('2026-11-04T02:00:00Z'), sealTimeline(tl), log);
 }
 
 const reports = [playOne(900), playOne(901)];

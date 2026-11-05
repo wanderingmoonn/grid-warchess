@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { UNIT_TYPES } from '../src/core/config.ts';
-import { ERA_PACKS } from '../src/core/era-packs.ts';
+import { ERA_ARMS } from '../src/core/era-packs.ts';
 
 const DIR = 'results/packs';
 const OUT = path.join(DIR, 'report.md');
@@ -204,7 +204,9 @@ for (const p of PACKS) {
 // 第 1 节的单位数是**算出来的**，不是手写的：之前手写过一次，漏了蒸汽包的装甲列车，
 // 表格写 13、实际 12，报告和代码对不上还是靠导出数据才发现的。
 const packTable = PACKS.map((p) => {
-  const n = ERA_PACKS.find((e) => e.id === p.id)?.units?.length ?? 0;
+  // 2026-11-04 五个时代包并成一个「时代军备」：这里按"时代"回到那一组兵去数，
+  // 口径仍然是"这一代多了几个可造的兵"，只是不再按包 id 查。
+  const n = (ERA_ARMS.units ?? []).filter((u) => u.era === p.era && !u.requiresPack).length;
   const vanilla = Object.values(UNIT_TYPES).filter((d) => d.era === p.era).length;
   return `| ${p.eraName} | \`${p.id}\` | ${n} | ${vanilla} | ${n + vanilla} | ${p.theme} |`;
 }).join('\n');

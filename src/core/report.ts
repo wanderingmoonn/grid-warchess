@@ -18,7 +18,7 @@
 import { BUILD_VERSION } from './build-info.ts';
 import { underConstruction } from './rules.ts';
 import { timelineSummary, type MatchTimeline } from './timeline.ts';
-import { seatsOf, type GameState, type PlayerId } from './types.ts';
+import { seatsOf, type Action, type GameState, type PlayerId } from './types.ts';
 
 /**
  * 报告格式版本。加字段不一定动它，改语义一定要动。
@@ -29,7 +29,7 @@ import { seatsOf, type GameState, type PlayerId } from './types.ts';
  * 为什么必须升：`timeline.samples` 的形状变了（A/B 两行 → sides 按席位）。
  * 光看 v 还是 1，分析脚本会拿新数据按老形状读，读出一片 undefined。
  */
-export const REPORT_VERSION = 2;
+export const REPORT_VERSION = 3;
 
 /**
  * 玩家点"上传"时同意的那份说明的版本。
@@ -39,7 +39,15 @@ export const REPORT_VERSION = 2;
  * 否则事后无法说清"这条数据是他按哪一版说明同意的"。
  * 形状跟着数据库的 CHECK：YYYY-MM-DD.vN。
  */
-export const REPORT_CONSENT_VERSION = '2026-10-28.v1';
+/*
+ * 同意书版本。**改了记录范围就必须换版本号**，否则事后说不清"他当时同意的是哪一版"。
+ *
+ * v1（2026-10-28）：终局快照 + 逐回合压缩摘要（兵力/城防/金币/身价）、出兵与行动次数。
+ * v2（2026-11-04）：加上**动作序列**（每一步: 哪个兵走到哪、打了谁），
+ *   目的是让这一局能在本地逐帧重放——报告从此可以回答"哪一手错了"，而不只是"比例是多少"。
+ *   仍然不含玩家名、房间码、聊天内容。
+ */
+export const REPORT_CONSENT_VERSION = '2026-11-04.v2';
 
 export interface ReportSide {
   /** 只写 A/B，不写名字 */
@@ -113,6 +121,27 @@ export interface MatchReport {
    * 报告里少一块，不影响其余字段的可比性（version 一样就能比）。
    */
   timeline?: MatchTimeline;
+  /**
+   * 动作序列（v3 起）。**这是整份报告里唯一能"重放"的东西**。
+   *
+   * 为什么非要有它：v2 之前的报告只有聚合量（造了什么、死了什么、伤害多少），
+   * 能算"比例"，算不出"第 32 回合它干的那一手是不是错的"。于是数据分析只能
+   * 产出猜测——2026-11-04 那次"经济单位吃三成伤害"的结论就是拿 3 局明细推的，
+   * 照着改完反而更差。
+   *
+   * 有了它：seed + 配置 + 动作序列 = 完整一局，本地逐帧重放（引擎是确定性的），
+   * 输掉的那一手可以直接定位、那个局面可以直接变成回归用例。
+   *
+   * 体积：一步约 50 字节，一局 800 步约 40 KB（库里有 256 KB 上限）。
+   */
+  actions?: Action[];
+  /**
+   * 因为超过上限被丢掉的动作数。0 / 未设＝完整。
+   *
+   * 不静默截断：截断了要能从报告本身看出来，否则重放到一半对不上，
+   * 会让人以为是重放器坏了（而不是这份日志本来就不全）。
+   */
+  actionsDropped?: number;
 }
 
 function countTerrain(s: GameState): Record<string, number> {
@@ -131,6 +160,9 @@ export function buildMatchReport(
   s: GameState,
   now: Date = new Date(),
   timeline?: MatchTimeline | null,
+  /** 动作序列（见 `MatchReport.actions`）：不传就不带这一块 */
+  actions?: Action[] | null,
+  actionsDropped = 0,
 ): MatchReport {
   const seats = seatsOf(s);
   const sides: ReportSide[] = seats.map((side) => {
@@ -194,6 +226,9 @@ export function buildMatchReport(
     // （"有 timeline 字段"会被当成"有曲线"）。真丢了就让它缺着，
     // 和 recordRequested 一对照就知道是"要求了却没记上"。
     ...(timeline && timeline.samples.length > 0 ? { timeline } : {}),
+    // 动作序列：没有就不带（没开详细记录时本来也记不到）
+    ...(actions && actions.length > 0 ? { actions } : {}),
+    ...(actions && actions.length > 0 && actionsDropped > 0 ? { actionsDropped } : {}),
   } satisfies MatchReport;
 }
 

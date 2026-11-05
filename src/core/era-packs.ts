@@ -37,6 +37,10 @@
  */
 
 import type { AbilityDef } from './abilities.ts';
+// 第六时代的 15 个专精兵和他们那一套能力仍然定义在 contemporary-packs.ts 里
+// （那边有按 EHP 校准过的数值口径），这里只负责把它们并进同一个包。
+// 依赖方向是单向的：era-packs → contemporary-packs，反过来没有引用。
+import { CONTEMPORARY_WAR, MODERN_ABILITIES } from './contemporary-packs.ts';
 import { TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
@@ -1516,70 +1520,54 @@ const MODERN: UnitTypeDef[] = [
 /* ================================================================== */
 
 /**
- * 五个时代包。
+ * 「时代军备」：五个时代各一组兵，外加第六时代的专精兵。
  *
- * 每个包都是一个普通扩展：勾选才生效，units 会并进本局兵种表，
- * 不勾选就完全不存在——不影响原版的任何平衡基线。
+ * ---------------------------------------------------------------
+ * 为什么从一个包变一个包（2026-11-04）
+ * ---------------------------------------------------------------
+ * 以前这里是五个包（青铜会战 / 铁器兵备 / 火器列国 / 蒸汽绞肉机 / 机械化合成兵），
+ * 第六时代的「现代战争」是第六个。六个包说的是同一件事：**这一代还有哪些兵可选**。
+ * 但玩家每开一局都要在开局面板里把它们找六遍，而且很容易只勾一两个就以为
+ * "军备包开完了"——那是个界面问题，不是设计意图。
+ *
+ * 合并之后只剩一个勾：勾上就是"每一代都有额外的兵"。
+ *
+ * ---------------------------------------------------------------
+ * 第六时代那 15 个专精兵为什么还留着条件
+ * ---------------------------------------------------------------
+ * 它们的 `requiresPack` 是「信息化」：那一代是「信息化」这个包开出来的
+ * （`unlockEra: 6`），不勾它城市永远升不到 6 级，这批兵一个都造不出来。
+ * 挂在同一个包里、靠 `requiresPack` 门控，好处是玩家不用理解"第六代还有两个包"，
+ * 坏处是勾了这个包却没勾「信息化」时，兵种池里会少一截——所以开局面板的
+ * 兵种池弹层用的是 `expansionUnitsFor`，和真正开局**同一套判据**，两边不会打架。
  */
-export const ERA_PACKS: Expansion[] = [
-  {
-    id: 'pack-antiquity',
-
-    scale: 'large',
-    name: '青铜会战',
-    summary: '投石兵、标枪兵、轻盾兵、战车、努比亚弓手与青铜剑士，配攻城槌、瞭望塔、'
-      + '夯土城墙与旌旗车（第一代唯一的光环支援）。',
-    hooks: {},
-    units: ANTIQUITY,
-  },
-  {
-    id: 'pack-medieval',
-
-    scale: 'large',
-    name: '铁器兵备',
-    summary: '瑞士长矛兵、重装军士、双手剑士、希腊重装步兵与罗马军团，配战象、弩炮、'
-      + '投石机、攻城塔与城墙。',
-    hooks: {},
-    units: MEDIEVAL,
-  },
-  {
-    id: 'pack-gunpowder',
-
-    scale: 'large',
-    name: '火器列国',
-    summary: '线列步兵、胸甲骑兵、猎兵、工兵，配攻城加农炮、棱堡、土垒胸墙与风帆战列舰；' +
-      '工兵能在两格内布雷（一片最多 6 枚，踩上炸 16 点、无视护甲）。',
-    hooks: {},
-    abilities: [LAY_MINES],
-    marks: [LAND_MINE_KIND],
-    units: [...GUNPOWDER, ...MINE_UNITS_GUNPOWDER],
-  },
-  {
-    id: 'pack-industry',
-
-    scale: 'large',
-    name: '蒸汽绞肉机',
-    summary: '堑壕突击队、火焰喷射器、毒气兵、扫雷兵，配榴弹炮、列车炮、装甲列车与马克 I 坦克；' +
-      '扫雷兵替部队开雷区（顺带自己踩雷只吃一半）。',
-    hooks: {},
-    abilities: [CLEAR_MINES],
-    marks: [LAND_MINE_KIND],
-    units: [...INDUSTRY, ...MINE_UNITS_INDUSTRY],
-  },
-  {
-    id: 'pack-modern',
-
-    scale: 'large',
-    // 名字从「现代合成兵」改成「机械化合成兵」：第五时代本身已经改叫「机械化」，
-    // 而真正的第六时代叫「信息化」（见 contemporary-packs.ts）。
-    // 一个叫"现代"的机械化包和一个叫"现代"的现代包，光看名字分不出谁是谁。
-    // id 不动（存档里存的是 id），只改显示名。
-    name: '机械化合成兵',
-    summary: '伞兵、突击队、反坦克炮、布雷车，配喀秋莎、重型坦克、机枪地堡与掩体墙；' +
-      '布雷车撒的是反装甲雷，一发 30 点。',
-    hooks: {},
-    abilities: [LAY_AT_MINES],
-    marks: [AT_MINE_KIND],
-    units: [...MODERN, ...MINE_UNITS_MODERN],
-  },
-];
+export const ERA_ARMS: Expansion = {
+  id: 'era-arms',
+  scale: 'large',
+  name: '时代军备',
+  blurb: '每一代都多一批可选兵种。',
+  summary:
+    '每一代都多出一批可选兵种：青铜的投石兵/战车/攻城槌/旌旗车，铁器的瑞士长矛兵/重装军士/' +
+    '战象/弩炮/攻城塔，火器的线列步兵/胸甲骑兵/猎兵/棱堡，蒸汽的堑壕突击队/火焰喷射器/' +
+    '列车炮/马克 I 坦克，机械化的伞兵/突击队/喀秋莎/重型坦克；布雷与扫雷的能力也在这一包里。' +
+    '另含第六时代的 15 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
+    '远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、' +
+    '前进指挥所、物流集团、工程兵团）——**这批要同时开「信息化」才会出现**，' +
+    '因为第六时代是那个包开出来的。',
+  hooks: {},
+  abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ...MODERN_ABILITIES],
+  // 两个雷种各来自不同时代：反装甲雷是机械化那一档的布雷车撒的
+  marks: [LAND_MINE_KIND, AT_MINE_KIND],
+  units: [
+    ...ANTIQUITY,
+    ...MEDIEVAL,
+    ...GUNPOWDER,
+    ...MINE_UNITS_GUNPOWDER,
+    ...INDUSTRY,
+    ...MINE_UNITS_INDUSTRY,
+    ...MODERN,
+    ...MINE_UNITS_MODERN,
+    // 第六代的兵：靠 requiresPack 门控，不开「信息化」就不进本局兵种表
+    ...CONTEMPORARY_WAR.map((u) => ({ ...u, requiresPack: 'pack-contemporary' })),
+  ],
+};

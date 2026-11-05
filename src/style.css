@@ -379,6 +379,18 @@ body {
   overflow: hidden;
 }
 
+/*
+ * 格子的光标**只由交互状态决定，不由地形决定**。
+ *
+ * 这里以前给水、深水、高山、火山四类地形各写了一句 `cursor: not-allowed`，
+ * 那是"水 = 走不过去"时代的产物。后来船能下水、飞行能掠水过山，
+ * 那句话就变成了纯粹的谎话：把鼠标移到任何一片海上都是禁止符号，
+ * 哪怕此刻选中的是一架飞机、那一格明明在可达高亮里。
+ *
+ * 所以现在只剩基线的 `pointer`（点格子 = 看信息/选中），
+ * "能不能去"由 `.reach` / `.attackable` / `.aim` 这些按局面算出来的类表达。
+ * 加新地形时别在 `.tile.t-*` 里写 cursor——那一定会和可达性打架。
+ */
 .tile {
   position: relative;
   border-right: 1px solid rgba(0, 0, 0, 0.045);
@@ -397,7 +409,6 @@ body {
 }
 .tile.t-water {
   background: var(--water);
-  cursor: not-allowed;
 }
 
 /* 深水（外海/大河心）：深蓝底 + 稀疏波纹 + 内阴影。
@@ -407,7 +418,6 @@ body {
 .tile.t-deep {
   background: var(--deep);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), inset 0 -2px 4px rgba(0, 0, 0, 0.18);
-  cursor: not-allowed;
 }
 .tile.t-deep::before {
   content: '';
@@ -431,7 +441,6 @@ body {
   background: var(--mountain);
   /* 冷灰底 + 深色尖山，和沙色的丘陵在缩略图里也拉得开 */
   box-shadow: inset 0 0 0 1px rgba(72, 78, 94, 0.32);
-  cursor: not-allowed;
 }
 
 .tile.t-mountain::before {
@@ -545,7 +554,6 @@ body {
     rgba(226, 108, 48, 0.95) 0 8%,
     transparent 9%
   );
-  cursor: not-allowed;
 }
 .tile.t-volcano::before {
   content: '';
@@ -849,8 +857,46 @@ body {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
+/*
+ * 迷雾：视野外的格子压暗。
+ *
+ * 这里**不用** `filter: brightness() saturate()` ——那是 2026-11-04 修的一起事故：
+ * 玩家开雾跑 64×64 会闪退，关雾就正常，两者差的就是下面这一条规则。
+ *
+ * 原因不是"filter 慢"，是它**逐元素建合成层**：64×64 有 4096 格，开雾时
+ * 四千个格子同时带 filter，浏览器要为每一格单独开离屏缓冲；再叠上 64×64
+ * 必然要放大滚动（`.board-scroll.zoomed` 开 overflow）和每帧整盘重绘，
+ * 显存与合成器队列就顶穿了——表现是标签页直接崩掉，而不是变卡。
+ *
+ * 换成"盖一层半透明灰"：`::after` 本来就是高亮层，纯色填充只走绘制、
+ * 不进合成器。混的是灰不是黑，所以除了变暗，颜色也被冲淡，观感接近原样。
+ */
+/*
+ * 雾里"格子边框发亮"的根因（2026-11-04）。
+ *
+ * `::after` 是**绝对定位的子元素**，`inset: 0` 对齐的是父元素的 **padding box**
+ * ——那 1px 的 `border-right/bottom` 在它**外面**，压根盖不到。于是：
+ *   格心 = 地形色 + 52% 灰（暗下去了）；
+ *   边线 = 地形色 + 4.5% 黑（几乎就是原亮度）。
+ * 一暗一亮挨在一起，整张雾区就变成"一张亮线织的网格"，格子越小越刺眼
+ * （64×64 上是 4096 条边，看着像满屏白格）。
+ *
+ * 修法：把边框也刷成同一个半透明灰。边框是画在地形色**之上**的，
+ * 混出来的值和格心完全一致，网格自然消失——不用动布局、不用加元素，
+ * 也没有 filter（上面那条"逐格 filter 把标签页压垮"的教训不能踩回去）。
+ */
 .board.fog .tile.out {
-  filter: brightness(0.74) saturate(0.55);
+  border-color: rgba(74, 70, 62, 0.52);
+}
+
+.board.fog .tile.out::after {
+  background: rgba(74, 70, 62, 0.52);
+  /*
+   * 另外把 `.tile.placeable` 那条**无限动画**按掉：CSS 里动画的优先级高于任何
+   * 普通声明，place-pulse 的琥珀色背景会把迷雾灰整个盖掉——表现为"雾里有一格
+   * 在一鼓一鼓地发光"。而它确实可能落在视野外：建造范围最大 6 格，视野常常只有 2~3 格。
+   */
+  animation: none;
 }
 
 /* 浓雾扩展（blackout）：视野外连地形都不显示，只剩一块暗面。
@@ -862,13 +908,37 @@ body {
 
 /* 去过、但此刻看不见的格：按记忆里的地形画，比"眼前"暗一档、比"没去过"亮。
    这三档必须一眼分得开，否则玩家会以为自己压根没走过这里。
-   放在 .out 之后：两条规则权重一样，靠顺序压过 brightness(0.74)。 */
+   同样是纯色盖层，比 .out 更重一档；放在 .out 之后，
+   两条规则权重一样，靠顺序压过。 */
 .board.blackout .tile.remembered {
-  filter: brightness(0.62) saturate(0.36);
+  /* 同 `.out`：边框必须和格心一起压暗，否则记忆区也是一张亮线网格 */
+  border-color: rgba(70, 66, 60, 0.56);
+}
+
+.board.blackout .tile.remembered::after {
+  background: rgba(70, 66, 60, 0.56);
+  animation: none;
 }
 .board.blackout .tile.unknown.reach,
 .board.blackout .tile.unknown.threat {
   background: #2c2822;
+}
+
+/*
+ * 大地图（> 1024 格，见 board.ts 的 `big`）：逐格的过渡与闪烁一律关掉。
+ *
+ * 过渡本身不贵，贵在"同时"。每帧重绘时会有成百上千个格子换 class，
+ * 如果每个 `::after` 都带 0.12s 过渡，浏览器就要同时跑成百上千条动画，
+ * 每条都要自己的一份状态——这正是 64×64 上最容易把合成器压垮的地方。
+ *
+ * 小图上这几条动画是"好看"，大图上它们只是"看不见的账"：格子只有 18px，
+ * 淡入淡出根本分辨不出来。
+ */
+.board.big .tile::after {
+  transition: none;
+}
+.board.big .tile.placeable::after {
+  animation: none;
 }
 
 /* ---------- 棋子层 ---------- */
@@ -2739,6 +2809,56 @@ a.btn {
   display: none;
 }
 
+/*
+ * 指挥官栏的"策略 / 进攻方向"这一行。
+ *
+ * 和下面那排队列格分开：队列是"造什么"，这一行是"怎么打"，中间留一道细线，
+ * 免得玩家以为策略也是一格排期。小屏上会折行，所以用 flex-wrap 而不是 nowrap。
+ */
+.cmd-plan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.cmd-plan-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cmd-plan-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cmd-plan-chips .chip {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.cmd-plan-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.cmd-plan-dir select {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .cmd-head {
   display: flex;
   align-items: baseline;
@@ -4483,6 +4603,87 @@ a.btn {
   gap: 10px;
 }
 
+/*
+ * 选卡时的地图预览（见 draft-panel.ts 的 mapPreviewHtml）。
+ *
+ * 它存在的理由只有一条：AI 选卡时会看这张图（水多就加权水军），
+ * 真人以前只有一层不透明遮罩——同一件决定，一边有情报一边没有。
+ * 现在两边都看得见。
+ *
+ * 渲染上刻意"最省"：一格一个空 <i>，只填背景色，没有伪元素、没有过渡、没有动画。
+ * 64×64 的图上这是 4096 个色块，加任何逐格效果都会重演"开雾闪退"那一幕。
+ */
+.draft-map {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.draft-map-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.draft-map-facts {
+  font-weight: 500;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.draft-map-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  gap: 1px;
+  background: var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  /* 缩略图不该抢戏：最宽 240px，双方一眼能看出海在哪、城在哪就够了 */
+  max-width: 240px;
+  margin: 0 auto;
+}
+
+.draft-map-grid .mp {
+  display: block;
+  aspect-ratio: 1 / 1;
+  background: var(--plain);
+}
+
+.draft-map-grid .mp.t-forest { background: var(--forest); }
+.draft-map-grid .mp.t-hill { background: var(--hill); }
+.draft-map-grid .mp.t-water { background: var(--water); }
+.draft-map-grid .mp.t-deep { background: var(--deep); }
+.draft-map-grid .mp.t-shallow { background: var(--shallow); }
+.draft-map-grid .mp.t-mountain { background: var(--mountain); }
+.draft-map-grid .mp.t-plateau { background: var(--plateau); }
+.draft-map-grid .mp.t-valley { background: var(--valley); }
+.draft-map-grid .mp.t-marsh { background: var(--marsh); }
+.draft-map-grid .mp.t-dune { background: var(--dune); }
+.draft-map-grid .mp.t-lava { background: var(--lava); }
+.draft-map-grid .mp.t-volcano { background: var(--volcano); }
+.draft-map-grid .mp.t-bridge { background: var(--bridge); }
+.draft-map-grid .mp.t-city { background: var(--city); }
+
+/* 城格按归属描边：缩略图里 4 格一块色太细，描边比填色更容易认出来 */
+.draft-map-grid .mp.own-A { box-shadow: inset 0 0 0 2px var(--team-a); }
+.draft-map-grid .mp.own-B { box-shadow: inset 0 0 0 2px var(--team-b); }
+.draft-map-grid .mp.own-C { box-shadow: inset 0 0 0 2px #4b8a52; }
+.draft-map-grid .mp.own-D { box-shadow: inset 0 0 0 2px #9a6a2f; }
+
+.draft-map-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+}
+
 .draft-side {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -5173,4 +5374,199 @@ a.btn {
 .seat-row.quit {
   opacity: 0.45;
   text-decoration: line-through;
+}
+
+/* ============================================================
+ * 开始页面
+ *
+ * 一层全屏覆盖。它压在棋盘之上而不是替换 #app，理由很实际：
+ * 点击「继续」时可以原地撤掉这一层，棋盘已经在下面画好了，
+ * 不用再走一遍 createMatch/render——那会白掉一帧。
+ * ============================================================ */
+.title-screen {
+  position: fixed;
+  inset: 0;
+  /*
+   * 层级要压在**所有钉在窗口上的小控件**之上，否则它们会从首页底下透出来。
+   * 实测踩到的就是 `.zoom-bar`（右下角「适应 − ＋」，fixed、z-index 60）：
+   * 首页盖住棋盘却漏了它，右下角浮着三个不反应的按钮。
+   *
+   * 取 80 是量过的，不是随手写大：
+   *   60 zoom-bar / toast ── 要在下面
+   *   70 draft-mask       ── 下面（首页开着时抽卡层本来就不该出现）
+   *   90 draft-tip        ── 上面（它只在抽卡层里出，首页挡着也无所谓）
+   *  100 modal-mask       ── 必须**在上面**：首页点「开始对局」是先撤层再开
+   *                          开局面板，但将来若有人直接在首页弹面板，100 才
+   *                          盖得住这一层
+   * 所以不能图省事写到 999，那样会把开局面板和结算卡一起压掉。
+   */
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 640px at 50% -10%, #fbf9f4 0%, rgba(251, 249, 244, 0) 60%),
+    var(--bg);
+  overflow: hidden;
+}
+
+/* 背景：一片慢慢呼吸的方格。它唯一的作用是"这游戏是方格战棋"，
+   所以只用两个色、不加阴影、不加描边。 */
+.title-bg {
+  position: absolute;
+  inset: -10%;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.title-bg i {
+  border-radius: 3px;
+  margin: 3px;
+  background: color-mix(in srgb, var(--a) calc(8% + var(--d) * 14%), transparent);
+  animation: title-pulse 9s ease-in-out infinite;
+  animation-delay: calc(var(--r) * -0.09s);
+}
+@keyframes title-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-bg i { animation: none; opacity: 0.5; }
+}
+
+.title-inner {
+  position: relative;
+  width: min(560px, 100%);
+  padding: 40px 36px 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: 0 24px 60px -32px rgba(43, 40, 35, 0.45);
+  text-align: center;
+}
+
+.title-kicker {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: var(--text-3);
+}
+.title-name {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+.title-sub {
+  margin: 10px 0 26px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.title-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.title-btn {
+  min-width: 132px;
+  padding: 12px 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.title-btn:hover:not(:disabled) {
+  border-color: var(--a);
+  color: var(--a);
+}
+.title-btn.primary {
+  border-color: var(--a);
+  background: var(--a);
+  color: #fff;
+}
+.title-btn.primary:hover {
+  background: color-mix(in srgb, var(--a) 88%, #000);
+  color: #fff;
+}
+.title-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.title-links {
+  margin-top: 16px;
+  display: flex;
+  /* 四个入口 + 分隔点 + 一句"最近更新"：窄屏上必然换行，不许横向溢出 */
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  justify-content: center;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.title-links button {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--text-2);
+  font: inherit;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.title-links button:hover {
+  color: var(--a);
+  border-bottom-color: var(--a);
+}
+
+/* 「最近更新」单独一行：和四个入口挤在一行时，窄屏换行会在行尾留下一个
+   孤零零的「·」，看着像"后面还有内容被切掉了"。 */
+.title-latest {
+  margin: 9px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.title-era {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.title-era li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.title-era i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.title-foot {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+@media (max-width: 520px) {
+  .title-inner { padding: 30px 22px 22px; }
+  .title-name { font-size: 30px; }
+  .title-actions { flex-direction: column; }
+  .title-btn { width: 100%; }
 }

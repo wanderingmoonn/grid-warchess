@@ -151,17 +151,35 @@ for (const breached of [false,true]) test(`A viable retreat delivers development
   const mood=aiMood(s);
   assert.equal(mood.lead,'boom'); assert.equal(mood.abandonedCityId,'city0');
   let economy=0, upgrades=0, heroes=0;
-  for(let turn=0;turn<6&&!s.winner;turn++) {
+  // 窗口从 6 个自己的回合放宽到 8 个：2026-11-04 把奇想五包并成一个之后，
+  // 这个局面里 AI 的兵种候选从 14 个变成 72 个，"先铺经济、再谈英雄"的顺序没变，
+  // 但第一次买英雄落到了第 7 个自己的回合（实测：第 6 个回合时还差一手钱）。
+  // 守的东西不变——撤退要继续发展，而不是躺平；只是别把窗口卡在旧编成的边界上。
+  for(let turn=0;turn<8&&!s.winner;turn++) {
     const budget={...DEFAULT_BUDGET};
     for(let step=0;step<50&&!s.winner;step++) {
+      /*
+       * 「不许往弃城里投钱」这条判据要**每一步现算**。
+       *
+       * 它原来是把开局那个 city0 钉死用六回合。这个窗口一旦放宽就会误报：
+       *   · 城被打成废墟之后就不再是"弃城"（abandonedCityId 只认自己还占着的城），
+       *     之后再投兵是"打回来"，正当；
+       *   · 更常见的是威胁在半路解除——对面撤了，弃城决定当场作废。
+       * 所以判据跟着 AI 自己每一步看到的那个 mood 走（aiActiveMood，档位过滤后）。
+       */
+      const abandoned = aiActiveMood(s).abandonedCityId;
       const a=aiNextAction(s,budget); if(!a)break;
       if(a.type==='RECRUIT') {
-        assert.notEqual(a.cityId,'city0'); budget.recruited++;
+        if (abandoned) assert.notEqual(a.cityId,abandoned,`不该往弃城 ${abandoned} 里投兵`);
+        budget.recruited++;
         const d=s.unitTypes[a.unitType]!;
         if(d.category==='economy')economy++;
         if(d.hero)heroes++;
       }
-      if(a.type==='UPGRADE') { assert.notEqual(a.cityId,'city0'); budget.upgraded++; upgrades++; }
+      if(a.type==='UPGRADE') {
+        if (abandoned) assert.notEqual(a.cityId,abandoned,`不该升级弃城 ${abandoned}`);
+        budget.upgraded++; upgrades++;
+      }
       const r=applyAction(s,a); assert.ok(r.ok,r.ok?'':r.reason); s=r.state;
     }
     let end=applyAction(s,{type:'END_TURN'}); assert.ok(end.ok); s=end.state;
@@ -173,7 +191,7 @@ for (const breached of [false,true]) test(`A viable retreat delivers development
     end=applyAction(s,{type:'END_TURN'}); assert.ok(end.ok); s=end.state;
   }
   assert.ok(economy>0,'Retreat should build its economy');
-  assert.ok(upgrades+heroes>0,'Retreat should deliver an upgrade or hero within six own turns');
+  assert.ok(upgrades+heroes>0,'Retreat should deliver an upgrade or hero within eight own turns');
 });
 
 test('Retreat cannot rely on an obsolete hero or an unavailable city upgrade',()=>{

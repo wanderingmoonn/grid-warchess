@@ -33,6 +33,7 @@ import './cultivation/unlocks.ts';
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
   name: '修真',
+  blurb: '会修炼、能长境界的修士。',
   summary: '带来了会修炼成长的各种修士。',
   scale: 'large',
   hooks: CULTIVATION_HOOKS,

@@ -66,12 +66,11 @@ import {
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
 import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
-import { NAVAL_FLEET, MODERN_NAVAL } from '../src/core/naval-packs.ts';
+import { NAVAL } from '../src/core/naval-packs.ts';
 import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
 
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
-const nvDef = (id: string) =>
-  [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])].find((u) => u.id === id)!;
+const nvDef = (id: string) => (NAVAL.units ?? []).find((u) => u.id === id)!;
 /**
  * 全部水面单位：本体 + 所有扩展贡献的（雷击舰在「蒸汽绞肉机」、驱逐舰在「机械化合成兵」，
  * 都是别的包顺手带的海军，光看海战包会漏掉它们）。
@@ -106,7 +105,7 @@ import {
   eraWindowOk,
   remainingUnits,
 } from '../src/core/draft.ts';
-import { AIR_CORPS, MODERN_AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
+import { AIR, launchFromCarrier, recoverToCarrier } from '../src/core/air-packs.ts';
 import {
   TIMELINE_VERSION,
   newTimeline,
@@ -221,6 +220,7 @@ import {
   incomeResOf,
   movePower,
   orderSitesOf,
+  orderDirectiveOf,
   ordersOf,
   planBothReady,
   heroBlocked,
@@ -2014,47 +2014,51 @@ function stackOn(s: GameState, owner: 'A' | 'B', type: string, x: number, y: num
   return u;
 }
 
-test('前置包没开时，依赖它的兵种包整包不进場', () => {
-  // 只勾骑士团、不勾法则：兵一个都不该出现，配置里也不该留着这条谎话
-  const alone = fresh({ expansionIds: ['fantasy-knights'] });
-  assert.equal(alone.unitTypes.swordsman, undefined, '法则没开，骑士团不该进场');
-  assert.equal(alone.config.expansionIds.includes('fantasy-knights'), false);
+test('奇想合并成一个包：勾一个全在，旧 id 按别名迁进来', () => {
+  // 2026-11-04 之前是「法则 + 骑士团/荒兽/秘法/英雄」五个包，后四个 requires 法则。
+  // 合并之后没有前置链了，但这几条**行为**必须还在：
+  //   · 勾 fantasy → 四组兵全在；
+  //   · 只勾一个旧 id（fantasy-heroes）→ 也得到整套（别名迁移，不是"半个包"）；
+  //   · 存档里写的旧 id 会被换成 'fantasy'，不留谎话。
+  const all = fresh({ expansionIds: ['fantasy'] });
+  assert.ok(all.unitTypes.swordsman, '骑士团的剑士要在');
+  assert.ok(all.unitTypes.mage, '秘法的法师要在');
+  assert.ok(all.unitTypes['bone-dragon'], '荒兽的骷髅飞龙要在');
+  assert.ok(all.unitTypes['royal-king'], '英雄包里的国王也要在');
 
-  const both = fresh({ expansionIds: ['fantasy-core', 'fantasy-knights'] });
-  assert.ok(both.unitTypes.swordsman, '两个都开才进场');
-  assert.ok(both.unitTypes.mage);
-  assert.equal(both.unitTypes.boneDragon, undefined);
-  assert.equal(both.unitTypes['bone-dragon'], undefined, '荒兽没勾，骷髅飞龙不该在');
+  const legacy = fresh({ expansionIds: ['fantasy-heroes'] });
+  assert.ok(legacy.unitTypes.swordsman, '旧 id 也要拿到整套奇想');
+  assert.deepEqual(legacy.config.expansionIds, ['fantasy'], '配置里存的应该是新 id');
+
+  const legacyMixed = fresh({ expansionIds: ['fantasy-core', 'fantasy-knights', 'fantasy-heroes'] });
+  assert.deepEqual(legacyMixed.config.expansionIds, ['fantasy'], '三个旧 id 迁成一个，且不重复');
 });
 
-test('五个奇想包齐了，兵种 id 不重复，能力 id 都真实存在', () => {
-  const packs = EXPANSIONS.filter((e) => e.id.startsWith('fantasy-'));
-  assert.equal(packs.length, 5, '法则 + 骑士团 + 荒兽 + 秘法 + 英雄');
-  const core = packs.find((e) => e.id === 'fantasy-core')!;
-  assert.equal(core.units, undefined, '法则包只带机制，不带兵');
-  for (const p of packs) {
-    if (p.id === 'fantasy-core') continue;
-    assert.deepEqual(p.requires, ['fantasy-core'], `${p.name} 应该依赖法则包`);
-  }
+test('奇想只有一个包，兵种 id 不重复，能力 id 都真实存在', () => {
+  const packs = EXPANSIONS.filter((e) => e.id === 'fantasy');
+  assert.equal(packs.length, 1, '法则 + 骑士团 + 荒兽 + 秘法 + 英雄 已经并成一个');
+  const pack = packs[0]!;
+  assert.equal(pack.name, '奇想');
+  // 法则包原来是"只带机制不带上兵"的那个，合并之后能力表跟着整包走。
+  // 这条：能力表不能因为合并而丢掉（42 条魔法/状态/飞行相关的钩子）。
+  assert.ok((pack.abilities ?? []).length >= 40, `奇想应该带着法则那套能力，现在 ${pack.abilities?.length ?? 0} 条`);
 
   const seen = new Set<string>();
-  for (const p of packs) {
-    for (const u of p.units ?? []) {
-      assert.ok(!seen.has(u.id), `兵种 id 重复：${u.id}`);
-      seen.add(u.id);
-      for (const a of u.abilities ?? []) {
-        assert.ok(allAbilities().some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
-      }
-      assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
-      assert.ok(u.cost > 0, `${u.name} 的造价必须为正`);
-      if (u.category === 'building') assert.equal(u.move, 0, `${u.name} 是建筑，不能动`);
+  for (const u of pack.units ?? []) {
+    assert.ok(!seen.has(u.id), `兵种 id 重复：${u.id}`);
+    seen.add(u.id);
+    for (const a of u.abilities ?? []) {
+      assert.ok(allAbilities().some((d) => d.id === a), `${u.name} 引用了不存在的能力 ${a}`);
     }
+    assert.ok(u.era >= 1 && u.era <= ERAS.length, `${u.name} 的时代越界`);
+    assert.ok(u.cost > 0, `${u.name} 的造价必须为正`);
+    if (u.category === 'building') assert.equal(u.move, 0, `${u.name} 是建筑，不能动`);
   }
   assert.ok(seen.size >= 55, `奇想兵种应该有五十多个，现在 ${seen.size}`);
 });
 
 test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
-  const packs = EXPANSIONS.filter((e) => e.id.startsWith('fantasy-'));
+  const packs = EXPANSIONS.filter((e) => e.id === 'fantasy');
   for (const p of packs) {
     for (const u of p.units ?? []) {
       // 召唤物不受这条管：骷髅、小史莱姆、小恶魔、幻影就是"一次性的数值块"，
@@ -2083,7 +2087,7 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
 });
 
 test('英雄包装十一个英雄，外加跟班的召唤物', () => {
-  const pack = EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!;
+  const pack = EXPANSIONS.find((e) => e.id === 'fantasy')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
   assert.equal(heroes.length, 11);
@@ -2092,18 +2096,18 @@ test('英雄包装十一个英雄，外加跟班的召唤物', () => {
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
   }
   // 跟班的召唤物：大史莱姆（牢大的碎片）、魔龙卵与魔龙（邪龙王那条链）。
-  // 三者都住在英雄包里，但绝不能进产线。
-  const minions = units.filter((u) => u.hero !== true);
-  assert.deepEqual(
-    minions.map((u) => u.id).sort(),
-    ['dragon-egg', 'magic-dragon', 'slime-giant'],
-    '英雄包里的非英雄单位只有这三只',
-  );
-  for (const m of minions) assert.equal(m.summonedOnly, true, `${m.name} 只能被召唤/孵化出来`);
+  // 合并之后它们和七十个兵混在一个包里，所以口径改成"这几只必须在、必须不可造"；
+  // 而"不可造"这件事本身由 selected 那一层兜（draftCandidates 会剔掉 summonedOnly，
+  // 产兵面板也不会列出它们），这里只守"数据上确实标了"。
+  for (const id of ['slime-giant', 'dragon-egg', 'magic-dragon']) {
+    const minion = units.find((u) => u.id === id);
+    assert.ok(minion, `英雄的跟班 ${id} 应该在奇想包里`);
+    assert.equal(minion!.summonedOnly, true, `${minion!.name} 只能被召唤/孵化出来`);
+  }
 });
 
 test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
-  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []).filter(
+  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy')!.units ?? []).filter(
     (u) => u.hero === true,
   );
   // 只卡下限和上限，不锁具体数字：以后微调面板不该让这条测试变红，
@@ -2124,31 +2128,28 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
   }
 });
 
-test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪到火器时代', () => {
-  const pack = (id: string) => EXPANSIONS.find((e) => e.id === id)!;
-  const knights = pack('fantasy-knights').units ?? [];
-  const beasts = pack('fantasy-beasts').units ?? [];
-  const arcane = pack('fantasy-arcane').units ?? [];
+test('奇想并包之后：三个迁移过来的兵各一份，皇家骑兵仍在火器时代', () => {
+  const pack = EXPANSIONS.find((e) => e.id === 'fantasy')!;
+  const all = pack.units ?? [];
 
-  const find = (list: typeof knights, id: string) => list.find((u) => u.id === id);
-
-  // 三个兵从荒兽/秘法搬进骑士团：只在骑士团里出现一次，老包里不再有
+  // 2026-11-02 把狮鹫骑士/龙骑兵/炼金术士从荒兽、秘法搬进骑士团。
+  // 合并成一个包之后"在哪个子包"这件事已经不存在了，唯一还要守的是
+  // **各有一份、没有因为并包重复**——重复的 id 会让后一个静默覆盖前一个。
   for (const id of ['griffin-rider', 'dragoon-rider', 'alchemist']) {
-    assert.ok(find(knights, id), `${id} 应该在骑士团里`);
-    assert.ok(!find(beasts, id), `${id} 不该还留在荒兽`);
-    assert.ok(!find(arcane, id) || id === 'alchemist', `${id} 不该还留在秘法`);
+    assert.equal(all.filter((u) => u.id === id).length, 1, `${id} 在奇想包里应该只有一份`);
   }
-  assert.ok(!find(arcane, 'alchemist'), '炼金术士已经离开秘法');
+
+  const find = (list: typeof all, id: string) => list.find((u) => u.id === id);
 
   // 老皇家骑兵改名精英骑兵，位置和数值不动
-  const elite = find(knights, 'elite-cavalry');
+  const elite = find(all, 'elite-cavalry');
   assert.ok(elite, '应该有精英骑兵');
   assert.equal(elite!.name, '精英骑兵');
   assert.equal(elite!.era, 2, '精英骑兵留在铁器');
   assert.equal(elite!.cost, 125, '改的是名字，不是数值');
 
   // 新皇家骑兵：火器时代 + 面板大幅提升
-  const royal = find(knights, 'royal-cavalry');
+  const royal = find(all, 'royal-cavalry');
   assert.ok(royal, '应该有皇家骑兵');
   assert.equal(royal!.name, '皇家骑兵');
   assert.equal(royal!.era, 3, '皇家骑兵改到火器时代');
@@ -2160,7 +2161,7 @@ test('骑士团收下狮鹫骑士、龙骑兵、炼金术士；皇家骑兵挪�
   );
 
   // 国王：蒸汽时代，带王命这条被动
-  const king = find(knights, 'royal-king');
+  const king = find(all, 'royal-king');
   assert.ok(king, '应该有国王');
   assert.equal(king!.name, '国王');
   assert.equal(king!.era, 4, '国王在蒸汽时代');
@@ -2235,7 +2236,7 @@ test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自�
 });
 
 test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲、牢大 +22 血', () => {
-  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy-heroes')!.units ?? []);
+  const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy')!.units ?? []);
   const of = (id: string) => heroes.find((u) => u.id === id)!;
 
   const necro = of('night-necromancer');
@@ -2994,15 +2995,23 @@ test('狂暴：掉到半血以下才加攻，50%', () => {
   assert.equal(mad, Math.round(baseAtk * 1.5) - armor, `半血该多一半：${plain} → ${mad}`);
 });
 
-test('追猎：和目标每拉开一格 +2（最多 +6）', () => {
+test('撕咬：对残血目标 +8，满血/正好一半都没有', () => {
   const s = fresh({ expansionIds: FANTASY });
-  for (const [x, y] of [[5, 5], [5, 8], [5, 7]]) s.tiles[idx(s, x, y)].terrain = 'plain';
+  for (const [x, y] of [[5, 5], [6, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const hound = place2(s, 'A', 'hellhound', 5, 5);
-  const far = place2(s, 'B', 'swordsman', 5, 8);
-  const withTracker = computeDamage(s, hound, far);
-  delete s.unitTypes.hellhound!.abilities;
-  const without = computeDamage(s, hound, far);
-  assert.equal(withTracker - without, 4, '距离 3 应该 +4');
+  const target = place2(s, 'B', 'swordsman', 6, 5);
+  const full = computeDamage(s, hound, target);
+
+  const maxHp = s.unitTypes['swordsman']!.maxHp;
+  target.hp = Math.ceil(maxHp / 2);
+  assert.equal(computeDamage(s, hound, target), full, '正好一半还不算残血');
+
+  target.hp = Math.ceil(maxHp / 2) - 1;
+  assert.equal(computeDamage(s, hound, target) - full, 8, '不足一半：这一口 +8');
+
+  // 摘掉能力就回到基准，确认这 8 点是撕咬给的
+  delete s.unitTypes['hellhound']!.abilities;
+  assert.equal(computeDamage(s, hound, target), full, '没有撕咬就没有加成');
 });
 
 test('群势：牛头人身边每个友军 +2 攻击，最多 +6', () => {
@@ -4175,6 +4184,21 @@ test('每个内置扩展都被注册且带说明', () => {
   assert.ok(EXPANSIONS.length >= 6);
   for (const e of EXPANSIONS) {
     assert.ok(e.id && e.name && e.summary, `${e.id} 缺少必要字段`);
+    /*
+     * 开局面板上印的是 `blurb`，不是 `summary`（2026-11-04 改的）。
+     *
+     * 这条守两件事：
+     *   1. 每个包都得有一句 blurb——不然面板上要么空白、要么退回印一整个 summary；
+     *   2. 它必须真的短（≤ 30 字）。面板是"勾不勾"的地方，把规则细则写进去，
+     *      玩家就得在一屏里读完二十几条说明才知道自己该勾什么。
+     *      细则属于规则书：那里每册都有专章，summary 也印在合册的总表里。
+     */
+    assert.ok(e.blurb && e.blurb.length > 0, `${e.id} 缺 blurb（开局面板那一行）`);
+    assert.ok(
+      (e.blurb ?? '').length <= 30,
+      `${e.id} 的 blurb 有 ${e.blurb?.length} 字，面板上放不下——细则写进 summary/规则书`,
+    );
+    assert.ok(e.summary.length > (e.blurb ?? '').length, `${e.id} 的 summary 不该比 blurb 还短`);
     const hasHooks = Object.keys(e.hooks).length > 0;
     const hasUnits = (e.units?.length ?? 0) > 0;
     // 时代开关也算"干了事"：它没有钩子、没有兵种，但改了能升到第几级
@@ -4670,10 +4694,20 @@ test('能力各归各家：公共词汇在本体，扩展的能力写在扩展�
   for (const u of Object.values(UNIT_TYPES)) claim('core', u.abilities);
   for (const e of EXPANSIONS) for (const u of e.units ?? []) claim(e.id, u.abilities);
 
-  // 1) 本体只留公共词汇
+  /*
+   * 1) 本体只留公共词汇。
+   *
+   * 合并之后多了一条豁免：只被**一个伞包**用到的能力，不再判定为"该搬回去"。
+   * 原因很实在——「时代军备」一个包横跨六代九十多个兵，「奇想」七十多个兵，
+   * 它们内部复用某个能力（比如「先手」在好几代都有人用）恰恰说明那是**通用词汇**，
+   * 而不是某个小包专用的实现。合并前这些兵分散在五个包里，大小 >= 2 自动放行；
+   * 现在它们同属一个包，规则得跟着改口径，否则会逼着把通用能力搬进伞包。
+   */
+  const UMBRELLA = new Set(['era-arms', 'fantasy', 'naval', 'air']);
   for (const a of CORE_ABILITIES) {
     const who = owners.get(a.id);
     if (!who || EDITOR_ONLY.has(a.id)) continue;
+    if ([...who].every((id) => UMBRELLA.has(id))) continue;
     assert.ok(
       who.has('core') || who.size >= 2,
       `「${a.name}」（${a.id}）只被 ${[...who].join('、')} 用到，应该搬回那个扩展`,
@@ -6022,7 +6056,7 @@ test('载具特性：老存档的 transport + capacity 仍然读得出来', () =
 });
 
 test('载具特性：航母甲板也是兵种数据，不再另存一张表', () => {
-  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const ships = NAVAL.units ?? [];
   const byId = (id: string) => ships.find((u) => u.id === id)!;
 
   assert.deepEqual(carryOf(byId('nv_carrier'))?.deck, { max: 4, launchRange: 2 }, '舰队航母 4 机位');
@@ -7605,6 +7639,56 @@ test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
   );
 });
 
+test('动作日志：写进报告的动作序列能原样重放，逐帧一致', () => {
+  /*
+   * 这是"数据能不能用来优化 AI"的分水岭。没有动作序列，报告只能算比例；
+   * 有了它，一局真实对局能在本地逐帧重建，输掉的那一手能定位到具体步数。
+   *
+   * 所以这条用例守的是**可重放性**：报告里存的动作序列，拿 seed + 配置重新开一局，
+   * 从头放一遍必须走到同一个局面。引擎是确定性的，这里只要有一处漏记
+   * （比如 AI 的 END_TURN 不记账——就是实际踩过的坑）就会当场对不上。
+   */
+  const cfg = { ...BASE, size: 12, startEra: 1, aiOpponent: true, aiAlly: true, aiLevel: 'advanced' as const };
+  let s = createMatch(cfg, 4321);
+  const log: Action[] = [];
+  for (let turn = 0; turn < 6 && !s.winner; turn += 1) {
+    for (let i = 0; i < AI_MAX_STEPS && !s.winner; i += 1) {
+      const a = aiNextAction(s, { ...DEFAULT_BUDGET });
+      if (!a) break;
+      const r = applyAction(s, a);
+      if (!r.ok) break;
+      log.push(a);
+      s = r.state;
+    }
+    if (s.winner) break;
+    const e = applyAction(s, { type: 'END_TURN' });
+    if (!e.ok) break;
+    log.push({ type: 'END_TURN' });
+    s = e.state;
+  }
+  assert.ok(log.length > 20, `这段样本太短，测不出什么：${log.length} 步`);
+
+  const rep = buildMatchReport(s, new Date(0), null, log);
+  assert.equal(rep.v, 3, '报告版本要跟上（动作序列是 v3 才有的）');
+  assert.equal(rep.actions?.length, log.length, '动作序列要完整进报告');
+
+  // 从头重放
+  let again = createMatch(cfg, 4321);
+  for (const a of rep.actions ?? []) {
+    const r = applyAction(again, a);
+    assert.ok(r.ok, r.ok ? '' : `重放被拒：${r.reason}`);
+    again = r.state;
+  }
+  assert.equal(again.turn, s.turn, '重放后的行动数要和原局一致');
+  assert.equal(again.winner, s.winner, '胜者要一致');
+  assert.equal(again.units.length, s.units.length, '单位数要一致');
+  assert.deepEqual(
+    again.units.map((u) => `${u.id}:${u.x},${u.y}:${u.hp}`).sort(),
+    s.units.map((u) => `${u.id}:${u.x},${u.y}:${u.hp}`).sort(),
+    '每个单位的位置和血量都要一致',
+  );
+});
+
 test('局面估值：多一座城更值钱、对面兵多更不值钱、打掉对面一个兵算加分', () => {
   /*
    * 三回合计划全靠这一个读数。它错了，深推就会朝错的方向优化——
@@ -7880,6 +7964,82 @@ function commandPost(extra?: Partial<MatchConfig>): GameState {
   return s;
 }
 
+test('指挥官策略：只能挑对手当目标，方向必须有一个朝向，普通局不接受', () => {
+  const s = commandPost();
+  // 合法：只改策略
+  const ok = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'rush' } });
+  assert.ok(ok.ok, ok.ok ? '' : ok.reason);
+  assert.equal(orderDirectiveOf(ok.state, 'A').strategy, 'rush', '策略要落到状态里');
+
+  // 合法：只打对手（两家局里对手只有一个）
+  const seat = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { seat: 'B' } } });
+  assert.ok(seat.ok, seat.ok ? '' : seat.reason);
+  assert.deepEqual(orderDirectiveOf(seat.state, 'A').target, { seat: 'B' });
+
+  // 合法：八向之一
+  const dir = applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { dx: -1, dy: 0 } } });
+  assert.ok(dir.ok, dir.ok ? '' : dir.reason);
+  assert.deepEqual(orderDirectiveOf(dir.state, 'A').target, { dx: -1, dy: 0 }, '方向要归一化成 -1/0/1');
+
+  // 不合法：打自己、方向全零、没开指挥官模式的局
+  assert.equal(
+    applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { seat: 'A' } } }).ok,
+    false,
+    '不能把进攻方向定成自己',
+  );
+  assert.equal(
+    applyAction(s, { type: 'SET_DIRECTIVE', directive: { strategy: 'auto', target: { dx: 0, dy: 0 } } }).ok,
+    false,
+    '方向得有一个朝向',
+  );
+  assert.equal(
+    applyAction(fresh(), { type: 'SET_DIRECTIVE', directive: { strategy: 'rush' } }).ok,
+    false,
+    '普通对局没有这套东西',
+  );
+});
+
+test('指挥官策略「屯兵不动」：远处的部队不会被派出去送', () => {
+  /*
+   * 造反例：把唯一的兵放到贴着敌城的远处。
+   *   · auto：它会去打（这正是"自己判断"的样子）；
+   *   · hold：它一步都不走——远处任何一个动作都算出击，宁可空过。
+   * 两条放在一起比，"屯兵不动"是不是真的生效才看得出来；
+   * 只断言 hold 不越界的话，部队本来就待在城下时那条断言是白给的。
+   */
+  const stage = (strategy: 'auto' | 'hold') => {
+    const s0 = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 1, commanderMode: true, aiOpponent: true },
+      9101,
+    );
+    const foeCity = s0.cities.find((c) => c.owner === 'B')!;
+    s0.units = s0.units.filter((u) => u.owner !== 'A');
+    s0.units.push({
+      id: 'ua1',
+      type: 'archer',
+      owner: 'A',
+      x: foeCity.x + 1,
+      y: foeCity.y,
+      hp: 22,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+    const set = applyAction(s0, { type: 'SET_DIRECTIVE', directive: { strategy } });
+    assert.ok(set.ok, set.ok ? '' : set.reason);
+    return set.state;
+  };
+
+  const auto = aiNextAction(stage('auto'), DEFAULT_BUDGET);
+  assert.ok(auto && auto.type !== 'END_TURN', 'auto 策略下它会主动出手');
+
+  const hold = aiNextAction(stage('hold'), DEFAULT_BUDGET);
+  assert.ok(
+    hold === null || hold.type === 'END_TURN',
+    `屯兵不动不该把远处的部队派出去，实际给了 ${hold?.type}`,
+  );
+});
+
 test('普通对局不接受生产序列', () => {
   const s = fresh();
   assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['archer'] }).ok, false);
@@ -7914,6 +8074,39 @@ test('不能把建筑排进生产序列', () => {
 test('不存在的兵种会被拒绝', () => {
   const s = commandPost();
   assert.equal(applyAction(s, { type: 'SET_ORDERS', queue: ['no-such-unit'] }).ok, false);
+});
+
+test('指挥官模式：三人/四人局里每一席都排产、都提交，AI 替当前这一方行动', () => {
+  for (const count of [3, 4] as const) {
+    const s0 = createMatch(
+      { ...DEFAULT_CONFIG, size: 16, startEra: 1, playerCount: count, commanderMode: true, draftMode: false },
+      4242,
+    );
+    assert.equal(s0.config.commanderMode, true, `${count} 人局现在也能开指挥官模式`);
+    assert.equal(s0.config.aiOpponent, false, `${count} 人局里"整方托管"的 AI 开关仍然不生效`);
+
+    const seats = seatsOf(s0);
+    let cur = s0;
+    for (let i = 0; i < seats.length; i++) {
+      assert.equal(cur.current, seats[i], `该轮到第 ${i + 1} 席（${seats[i]}）排产`);
+      const r = applyAction(cur, { type: 'SET_ORDERS', queue: ['militia'] });
+      assert.ok(r.ok, r.ok ? '' : `第 ${i + 1} 席排产失败：${r.reason}`);
+      cur = r.state;
+      const c = applyAction(cur, { type: 'PLAN_COMMIT' });
+      assert.ok(c.ok, c.ok ? '' : `第 ${i + 1} 席提交失败：${c.reason}`);
+      cur = c.state;
+      assert.equal(
+        planBothReady(cur),
+        i === seats.length - 1,
+        '交齐之前不能开推，交齐之后立刻可推',
+      );
+    }
+    assert.equal(cur.current, seats[0], '交齐后拨回这一批的先手');
+
+    // 前提条件：AI 在多人局里真的给得出动作（否则指挥官模式等于把那一方锁死）
+    const a = aiNextAction(cur, DEFAULT_BUDGET);
+    assert.ok(a, `${count} 人局里 AI 应该给得出动作`);
+  }
 });
 
 test('指挥官热座：双方各交一批计划，交齐后才按回合轮流推进', () => {
@@ -8413,24 +8606,24 @@ test('英雄的唯一性：蛋还没孵出来，也不能再造一只', () => {
  * 单位数据一旦被人手改坏（改错时代、抄重复 id、把青铜贵兵塞进开局池），
  * 平衡报告会立刻失真，但游戏本身照样能跑——所以必须靠测试拦住。
  */
-const packs = EXPANSIONS.filter((e) => e.id.startsWith('pack-'));
+test('时代军备：每一代的兵数都多于原版同期（合并后按时代分组查）', () => {
+  /*
+   * 2026-11-04 之前这是七个包（五个时代 + 第六代的底座与加料），
+   * 所以"每个包只属于一个时代"是一条硬约束。合并成「时代军备」之后，
+   * 一个包里必然跨六个时代——于是这条用例改按**时代分组**查同一件事：
+   * 每一代多出来的兵，都要多于原版那一代的兵数。
+   */
+  const arms = EXPANSIONS.find((e) => e.id === 'era-arms')!;
+  const byEra = new Map<number, number>();
+  for (const u of arms.units ?? []) byEra.set(u.era, (byEra.get(u.era) ?? 0) + 1);
 
-test('七个包都在，且各自的兵种数多于原版同期', () => {
-  // 五个时代 + 第六代拆出来的两个：`pack-contemporary`（底座，开了才有第六时代）
-  // 与 `pack-contemporary-war`（在底座上加料）。第六代在 config.ts 里是空的，
-  // 所以那一代要两个包才凑成"原版一代 + 一代的兵种包"这个形状。
-  assert.equal(packs.length, 7, '应有七个时代包（五个时代 + 第六代的底座与加料）');
-  for (const e of packs) {
-    const units = e.units ?? [];
-    const eras = Array.from(new Set(units.map((u) => u.era)));
-    assert.equal(eras.length, 1, `${e.id} 的兵种应属于同一个时代`);
-    const era = eras[0] as number;
+  for (const era of [1, 2, 3, 4, 5]) {
     const vanilla = Object.values(UNIT_TYPES).filter((d) => d.era === era).length;
-    assert.ok(
-      units.length > vanilla,
-      `${e.id} 有 ${units.length} 个单位，应多于原版同期的 ${vanilla} 个`,
-    );
+    const mine = byEra.get(era) ?? 0;
+    assert.ok(mine > vanilla, `第 ${era} 代有 ${mine} 个扩展兵，应多于原版的 ${vanilla} 个`);
   }
+  // 第六代那 15 个专精兵也在同一个包里（靠 requiresPack 门控）
+  assert.equal(byEra.get(6), 15, '第六代专精兵应该并进时代军备，共十五个');
 });
 
 test('所有兵种 id 全局唯一（原版 + 全部扩展）', () => {
@@ -8444,9 +8637,9 @@ test('所有兵种 id 全局唯一（原版 + 全部扩展）', () => {
   }
 });
 
-test('时代包的兵种字段合法（能力存在、数值为正、建筑不能动）', () => {
+test('时代军备的兵种字段合法（能力存在、数值为正、建筑不能动）', () => {
   const abilityIds = new Set(allAbilities().map((a) => a.id));
-  for (const e of packs) {
+  for (const e of EXPANSIONS.filter((x) => x.id === 'era-arms' || x.id === 'pack-contemporary')) {
     for (const u of e.units ?? []) {
       assert.ok(u.name.length > 0 && u.short.length > 0, `${u.id} 缺名字或图标`);
       assert.ok(u.cost > 0, `${u.id} 造价必须为正`);
@@ -8461,9 +8654,9 @@ test('时代包的兵种字段合法（能力存在、数值为正、建筑不�
   }
 });
 
-test('青铜包的 era 1 陆军战斗单位造价不超过 60（开局会被白送）', () => {
-  const pack = EXPANSIONS.find((e) => e.id === 'pack-antiquity');
-  assert.ok(pack, '青铜包必须存在');
+test('青铜那一代的陆军战斗单位造价不超过 60（开局会被白送）', () => {
+  const pack = EXPANSIONS.find((e) => e.id === 'era-arms');
+  assert.ok(pack, '时代军备必须存在');
   for (const u of pack.units ?? []) {
     // 水军不进开局池（setup.ts 的 spawnPool 会把 domain=water 剔掉），所以不受这条约束
     if (u.era === 1 && u.category === 'combat' && u.domain !== 'water') {
@@ -8489,30 +8682,30 @@ console.log('\n第六时代 · 现代');
  *   「现代战争」`pack-contemporary-war` 在底座上加 15 个专精兵（requires 前者）
  * 所以这里也要分别验：上限只在底座那一处，光有加料包既抬不动时代、也造不出兵。
  */
-test('只有「信息化」能把时代上限抬到第六级，「现代战争」自己抬不动', () => {
+test('时代上限只有「信息化」能抬到第六级，军备包自己抬不动', () => {
   assert.equal(BASE_MAX_ERA, 5, '不勾任何扩展时，基础规则停在第五时代');
   assert.equal(eraCeilingFor([]), 5);
-  assert.equal(eraCeilingFor(['pack-modern']), 5, '普通时代兵种包不该顺手抬高上限');
+  // 军备包跨着前五代（外加第六代那批专精兵），但它**不是**时代开关：
+  // 开关只有一处，就是「信息化」的 unlockEra。写两份的话，改起来必然漏一个。
+  assert.equal(eraCeilingFor(['era-arms']), 5, '时代军备不该顺手抬高上限');
+  assert.equal(eraCeilingFor(['pack-modern']), 5, '旧 id 走别名，结论一样');
   assert.equal(eraCeilingFor(['pack-contemporary']), 6);
-  // 加料包单独勾选不生效：前置没满足，整包被剔掉（see enabledExpansionIds）
-  assert.equal(eraCeilingFor(['pack-contemporary-war']), 5, '只勾加料包，时代还是封在第五级');
-  assert.equal(eraCeilingFor(['pack-contemporary', 'pack-contemporary-war']), 6);
-  assert.equal(eraCeilingFor(['pack-modern', 'pack-contemporary']), 6);
+  assert.equal(eraCeilingFor(['pack-contemporary', 'era-arms']), 6);
+  assert.equal(eraCeilingFor(['pack-contemporary', 'pack-contemporary-war']), 6, '旧组合也要认得');
 
   const base = expansionById('pack-contemporary');
   assert.ok(base, '「信息化」必须注册在 EXPANSIONS 里');
   assert.equal(base.unlockEra, 6, '开关就是这一条字段');
   assert.equal(base.scale, 'large', '带一整套底座兵的包归大型，单独成册');
   assert.equal((base.units ?? []).length, 9, '底座就是这一代最基本的九个兵');
+  assert.ok((base.units ?? []).every((u) => u.era === 6), '底座的兵全是第六代');
 
-  const war = expansionById('pack-contemporary-war');
-  assert.ok(war, '「现代战争」必须注册在 EXPANSIONS 里');
-  assert.equal(war.scale, 'large', '带一整套兵的包归大型，单独成册');
-  assert.ok(war.requires?.includes('pack-contemporary'), '加料包要挂在底座上');
-  assert.equal(war.unlockEra, undefined, '时代开关只有一处，别写两份');
-  assert.equal((war.units ?? []).length, 15, '加料包该有十五个专精兵');
-  assert.ok((war.units ?? []).every((u) => u.era === 6), '这个包的兵全是第六代');
-  assert.ok((base.units ?? []).every((u) => u.era === 6), '底座的兵也全是第六代');
+  // 「现代战争」已经并进时代军备：那 15 个专精兵只剩"兵种级前置"这一道门。
+  const war = (expansionById('era-arms')!.units ?? []).filter((u) => u.requiresPack === 'pack-contemporary');
+  assert.equal(war.length, 15, '时代军备里该有十五个挂在「信息化」上的第六代兵');
+  assert.ok(war.every((u) => u.era === 6), '这批兵全是第六代');
+  assert.ok(!(expansionById('era-arms')!.unlockEra), '时代开关只有一处，别写两份');
+
   // 写超了也不许越过表长，否则 eraDef 会 clamp，升级成了"花一千金买同一座城"
   assert.equal(eraCeilingFor(['pack-contemporary']), ERAS.length, '上限永远夹在 ERAS.length 之内');
 });
@@ -9723,8 +9916,50 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
     assert.ok(material > prev, `${id} 的建材产出 ${material} 应该高于上一代 ${prev}`);
     prev = material;
   }
-  // 时代 5 单支建材兵得顶得上半座建材基地，否则"换人"这件事没有意义
-  assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
+  // 时代 5 单支建材兵得顶得上小半座建材基地，否则"换人"这件事没有意义。
+  // 门槛 2026-11-04 从 24 降到 19：那天把平原/丘陵/森林上的"粮材 vs 金币"
+  // 比例对调了（六成折成粮材 → 四成），所以最高一代的建材产出跟着掉三分之一，
+  // 换来的是同一个人现在能留下六成金币（升级城市只吃金币）。
+  assert.ok(prev >= 19, `时代 5 的建材兵该有 19 材以上，实际 ${prev}`);
+});
+
+test('城郭：平原/丘陵/森林上的经济单位，粮材与金币的分配是对调过的', () => {
+  /*
+   * 2026-11-04 的调整：这三种地形上，经济单位的产出从"六成折成粮/材、四成留金"
+   * 对调成"六成留金、四成折成粮/材"。
+   *
+   * 为什么要钉死：这一条**看不出来**——玩家只看到"这块地给我 16 金 10 材"，
+   * 不会去反推背后的比例；而一旦谁把它改回去，唯一的症状是"升级总是差一口气"，
+   * 那种 bug 没人能复现。所以直接把三种地形的数写进用例。
+   *
+   * 城郊（city）故意不在这条里：那次只动了三种"种地地形"。
+   */
+  const s = fresh({ expansionIds: ['city-works'] });
+  const at = (id: string, terrain: string): Record<string, number> => {
+    const u = place2(s, 'A', id, 5, 5);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain as never;
+    return unitYield(s, u) as Record<string, number>;
+  };
+
+  // 采石工：丘陵 26 金 → 16 金 + 10 材（对调前是 10 金 + 16 材）
+  const hill = at('quarrier', 'hill');
+  assert.equal(hill.gold, 16, '丘陵上该留下六成金币');
+  assert.equal(hill.material, 10, '丘陵上该只剩四成建材');
+
+  // 平原：6 金 → 4 金 + 2 粮
+  const plain = at('quarrier', 'plain');
+  assert.equal(plain.gold, 4, '平原上该留下六成金币');
+  assert.equal(plain.food, 2, '平原上该只剩四成粮');
+
+  // 森林：14 金 → 8 金 + 6 材
+  const forest = at('quarrier', 'forest');
+  assert.equal(forest.gold, 8, '森林上该留下六成金币');
+  assert.equal(forest.material, 6, '森林上该只剩四成建材');
+
+  // 城郊不参与这次对调：还是四成留金、六成折粮
+  const city = at('quarrier', 'city');
+  assert.equal(city.gold, 2, '城郊不该被这次对调波及');
+  assert.equal(city.food, 4, '城郊还是六成折成粮');
 });
 
 test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {
@@ -12730,21 +12965,35 @@ test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改
   assert.equal(UNIT_TYPES.gunboat!.domain, 'water');
 });
 
-test('海军：现代海军依赖「信息化」，单勾它一条船都造不出来', () => {
-  const modern = expansionById('naval-modern')!;
-  assert.deepEqual(modern.requires, ['pack-contemporary']);
-
+test('海军：第六代的船只在开了「信息化」时出现（兵种级门控）', () => {
+  // 2026-11-04 之后「海战」和「现代海军」并成一个「海军」包，原来那条
+  // `requires: ['pack-contemporary']` 换成了兵种级 requiresPack。
   const alone = createMatch(
-    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['naval-modern'] },
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['naval'] },
     5150,
   );
-  assert.ok(!alone.unitTypes['nv_carrier'], '前置没开时航母不该出现在兵种表里');
+  assert.ok(!alone.unitTypes['nv_carrier'], '没开「信息化」时航母不该出现在兵种表里');
+  assert.ok(alone.unitTypes['nv_battleship'], '第五代的战列舰不受「信息化」影响，该照常在');
+  assert.ok(alone.unitTypes['nv_frigate'], '第四、第五代的船应该照常在');
 
   const withBase = createMatch(
-    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['pack-contemporary', 'naval-modern'] },
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['pack-contemporary', 'naval'] },
     5151,
   );
   assert.ok(withBase.unitTypes['nv_carrier'], '开了「信息化」之后航母才该在');
+
+  // 旧组合（海战 + 现代海军）走别名，结果必须一模一样
+  const legacy = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      size: 12,
+      startEra: 6,
+      expansionIds: ['pack-contemporary', 'naval-fleet', 'naval-modern'],
+    },
+    5151,
+  );
+  assert.deepEqual(legacy.config.expansionIds, ['pack-contemporary', 'naval'], '旧 id 迁成一个');
+  assert.ok(legacy.unitTypes['nv_carrier'], '旧存档里的航母不能凭空消失');
 });
 
 test('海战：封锁让被堵的城少收 8 金，三座封顶', () => {
@@ -13061,7 +13310,7 @@ test('钻井平台：深水最肥，敌舰贴着就停产', () => {
 });
 
 test('战列舰停在第五时代，第六时代由超巡接位', () => {
-  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const ships = NAVAL.units ?? [];
   const bb = ships.find((u) => u.id === 'nv_battleship')!;
   assert.equal(bb.era, 5, '战列舰的历史定位应该落在第五时代（机械化）');
   assert.ok(
@@ -13079,7 +13328,7 @@ test('战列舰停在第五时代，第六时代由超巡接位', () => {
 });
 
 test('新舰种各司其职：甲板、潜母、补给舰互不重复', () => {
-  const ships = [...(NAVAL_FLEET.units ?? []), ...(MODERN_NAVAL.units ?? [])];
+  const ships = NAVAL.units ?? [];
   const byId = (id: string) => ships.find((u) => u.id === id)!;
 
   // 甲板：舰队航母 4 > 轻母 2 > 航战 1
@@ -13146,7 +13395,7 @@ const AIR_ALL = ['pack-contemporary', 'naval-fleet', 'naval-modern', 'air-corps'
 
 test('空军：两包都注册上，18 个兵种全在空气层', () => {
   const ids = new Set(allAbilities().map((a) => a.id));
-  const planes = [...(AIR_CORPS.units ?? []), ...(MODERN_AIR.units ?? [])];
+  const planes = AIR.units ?? [];
   assert.equal(planes.length, 18, `空军应该有 18 个兵种，现在 ${planes.length} 个`);
 
   for (const u of planes) {
@@ -13162,28 +13411,33 @@ test('空军：两包都注册上，18 个兵种全在空气层', () => {
   assert.ok(!planes.some((u) => u.domain === 'water'), '飞机不该被登记成水面单位');
 });
 
-test('空军：现代空军依赖「信息化」与基础空军，单勾它什么都没有', () => {
-  assert.deepEqual(MODERN_AIR.requires, ['pack-contemporary', 'air-corps']);
-
+test('空军：第六代飞机只在开了「信息化」时进场（合并后的兵种级门控）', () => {
+  /*
+   * 2026-11-04 之后「空军」和「现代空军」并成了一个包。原来靠
+   * `MODERN_AIR.requires = ['pack-contemporary','air-corps']` 表达的那件事，
+   * 现在落在兵种级 `requiresPack` 上：包只有一个，第六代的飞机要「信息化」在场。
+   *
+   * 这条用例从"包的前置"改成"兵种的门控"，守的是同一个事实：
+   * **没开信息化就造不出第六代飞机**。
+   */
   const alone = createMatch(
-    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['air-modern'] },
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['air'] },
     9101,
   );
-  assert.ok(!alone.unitTypes['af_jet'], '前置没开时喷气机不该出现在兵种表里');
+  assert.ok(!alone.unitTypes['af_jet'], '没开「信息化」时喷气机不该出现在兵种表里');
+  assert.ok(alone.unitTypes['af_fighter'], '第四、第五代的飞机应该照常在');
 
   const withBase = createMatch(
-    {
-      ...DEFAULT_CONFIG,
-      size: 12,
-      startEra: 6,
-      expansionIds: ['pack-contemporary', 'air-corps', 'air-modern'],
-    },
+    { ...DEFAULT_CONFIG, size: 12, startEra: 6, expansionIds: ['pack-contemporary', 'air'] },
     9102,
   );
-  assert.ok(withBase.unitTypes['af_jet'], '三个包都开了才有喷气机');
+  assert.ok(withBase.unitTypes['af_jet'], '开了「信息化」才有喷气机');
 
-  const era6 = (MODERN_AIR.units ?? []).filter((u) => u.era === 6);
+  const era6 = (AIR.units ?? []).filter((u) => u.era === 6);
   assert.ok(era6.length >= 8, `第六时代至少要补 8 种飞机，现在 ${era6.length} 种`);
+  for (const u of era6) {
+    assert.equal(u.requiresPack, 'pack-contemporary', `${u.name} 应该挂在「信息化」上`);
+  }
 });
 
 test('制空：战斗机打空中目标，比打同血同甲的地面目标更疼', () => {
@@ -13615,29 +13869,29 @@ test('选卡：时代军备 +1 禁 +2 选，且能和海空叠加', () => {
       7201,
     );
 
-  const era = draftBudget(mk(['pack-antiquity']));
+  const era = draftBudget(mk(['era-arms']));
   assert.equal(era.bans, 2, '时代军备：禁用 +1');
   assert.equal(era.picks, 8, '时代军备：选卡 +2');
+  // 旧 id 走别名，数字必须一模一样（老存档里的选卡局要靠这个继续）
+  assert.deepEqual(draftBudget(mk(['pack-antiquity'])), era, '旧写法和新写法要等价');
 
   // 三样同时在场：禁 1+1+1=3、选 6+2+2=10
-  const all = draftBudget(
-    mk(['pack-antiquity', 'naval-fleet', 'air-corps', 'pack-contemporary']),
-  );
+  const all = draftBudget(mk(['era-arms', 'naval', 'air', 'pack-contemporary']));
   assert.equal(all.bans, 3);
   assert.equal(all.picks, 10);
   assert.ok(all.pool <= 60, '池子有上限');
 
-  // 「现代海军」这条线要带「信息化」，而「信息化」本身就是时代军备的一包——
-  // 于是它同时点亮两个体系：禁 1+1=2、选 6+1（单海军）+2（时代军备）=9。
+  // 「信息化」+「海军」：信息化算时代体系（它自己带九个兵、还推高一代），
+  // 海军算海上体系 → 禁 1+1=2、选 6+1（单海军）+2（时代）=9。
   // 规则按**实际在场的体系**算，不按玩家"本来想开哪一类"算，
   // 这样联机两边看到的数字永远一致。
-  const navalModern = draftBudget(mk(['pack-contemporary', 'naval-modern']));
+  const navalModern = draftBudget(mk(['pack-contemporary', 'naval']));
   assert.equal(navalModern.bans, 2);
   assert.equal(navalModern.picks, 9);
-  // 单独勾「现代海军」不满足前置，整包不生效，也就不该有任何加成
-  const orphan = draftBudget(mk(['naval-modern']));
+  // 单勾海军：只有一个体系，禁 1、选 7
+  const orphan = draftBudget(mk(['naval']));
   assert.equal(orphan.bans, 1);
-  assert.equal(orphan.picks, 6);
+  assert.equal(orphan.picks, 7);
 });
 
 test('选卡：进度号每走一步 +1（联机靠它做乐观锁）', () => {
@@ -13937,6 +14191,136 @@ test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
   assert.ok(pickId, 'AI 应该能给出一个选人');
   assert.ok(s.draft!.pool.includes(pickId!), 'AI 的选人必须在池子里');
   assert.ok(canUseType(s, 'B', pickId!) === false, '还没选进名单之前不算"能用"');
+});
+
+/**
+ * 池子按起始时代配比。
+ *
+ * 以前是纯轮转（时代 1、2、3、4、5 各代机会均等），可一局只有一个起始时代：
+ * 起始第 1 代时，四、五代的兵要升三、四档城才造得出来，占了十格却一局都用不上。
+ */
+test('选卡池：起始那一代占最重，离得越远越少', () => {
+  const census = (startEra: number) => {
+    const s = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true }, 7301);
+    const tally = new Map<number, number>();
+    for (const id of s.draft!.pool) {
+      const era = Math.max(1, Math.round(s.unitTypes[id]!.era || 1));
+      tally.set(era, (tally.get(era) ?? 0) + 1);
+    }
+    return { s, tally };
+  };
+
+  // 配额不吞格子：抽出来的池子必须正好是预算那么多张
+  for (const startEra of [1, 2, 3, 4, 5]) {
+    const { s, tally } = census(startEra);
+    assert.equal(s.draft!.pool.length, draftBudget(s).pool, `起始第 ${startEra} 代：池子没抽满`);
+    const sum = [...tally.values()].reduce((a, b) => a + b, 0);
+    assert.equal(sum, s.draft!.pool.length, '分桶统计必须和池子对得上');
+  }
+
+  // 每一代在"自己就是起始时代"时拿到的格子最多（并列也算），
+  // 并且严格多于离自己最远的那种起始时代。
+  for (const era of [1, 2, 3, 4, 5]) {
+    const mine = census(era).tally.get(era) ?? 0;
+    const far = census(era <= 3 ? 5 : 1).tally.get(era) ?? 0;
+    assert.ok(mine > 0, `起始第 ${era} 代时，这一代自己都抽不到——保底被吃掉了`);
+    for (const other of [1, 2, 3, 4, 5]) {
+      const n = census(other).tally.get(era) ?? 0;
+      assert.ok(mine >= n, `第 ${era} 代在起始 ${era} 时应该最多，实际 ${mine} < 起始 ${other} 的 ${n}`);
+    }
+    assert.ok(mine > far, `第 ${era} 代：起始 ${era} 只拿到 ${mine}，远端 ${far}——配比没跟着起始时代走`);
+  }
+
+  // 保底仍在：每个有货的时代都抽得到（小池子也不许整代消失）
+  const { s, tally } = census(1);
+  for (const era of [1, 2, 3, 4, 5]) {
+    const has = draftCandidates(s).some((id) => s.unitTypes[id]!.era === era);
+    if (!has) continue;
+    assert.ok((tally.get(era) ?? 0) >= 2, `第 ${era} 代有货却不到 2 格，小池子被吃空了`);
+  }
+});
+
+/**
+ * 禁用判据：看顺位，不再恒定。
+ *
+ * 老实现取池内 `draftValueOf` 最大的那张，而那个函数默认 `targetEra = 1`、
+ * 还带"越便宜分越高"——100 局实测里每局都是先禁民兵、再禁弓手，禁用组合
+ * 一次没变过。民兵本来就不是任何人会先拿的卡，那等于白禁。
+ */
+test('选卡：禁用看顺位（先手禁第二好、后手禁最好），且随起始时代变', () => {
+  const mk = (startEra: number, seed = 7301) =>
+    createMatch({ ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true }, seed);
+
+  // 同一个池子上两边不该禁同一张：先手要保住自己的第一选，后手要掐掉对面那一手
+  const one = mk(1);
+  const banA1 = aiDraftBan(one, 'A')!;
+  const banB1 = aiDraftBan(one, 'B')!;
+  assert.ok(one.draft!.pool.includes(banA1), '先手的禁用必须在池子里');
+  assert.ok(one.draft!.pool.includes(banB1), '后手的禁用必须在池子里');
+  assert.notEqual(banA1, banB1, '同一个池子上，先手和后手不该禁同一张');
+
+  // 起始时代换了，禁的东西就该换——不再是永恒的"民兵 + 弓手"
+  const five = mk(5);
+  const banA5 = aiDraftBan(five, 'A')!;
+  const banB5 = aiDraftBan(five, 'B')!;
+  const seen = new Set([banA1, banB1, banA5, banB5]);
+  assert.ok(seen.size >= 3, `四手禁用只出现了 ${seen.size} 种，判据还是死的`);
+
+  // 起始第 1 代时禁的是"这一代就能打"的东西（评分里 targetEra = 起始时代），
+  // 第 5 代时禁的是第 5 代的东西——别把一级兵当宝贝。
+  assert.ok(one.unitTypes[banA1]!.era <= 2, '先手在第 1 代不该去禁高代卡');
+  assert.ok(five.unitTypes[banA5]!.era >= 4, `第 5 代却禁了第 ${five.unitTypes[banA5]!.era} 代的卡`);
+});
+
+test('选卡：旱地图上禁用不禁船（船在旱地本来就不值钱）', () => {
+  // seed 2002 / 14×14：水面 6%，一局开不出港口
+  const dry = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra: 3, draftMode: true }, 2002);
+  for (const side of ['A', 'B'] as const) {
+    const id = aiDraftBan(dry, side)!;
+    assert.ok(dry.draft!.pool.includes(id), `${side} 的禁用必须在池子里`);
+    assert.notEqual(dry.unitTypes[id]!.domain, 'water', `${side} 在旱地图上禁了一条船`);
+  }
+});
+
+/**
+ * 先手的禁位不许落在"我自己要拿的那张"上。
+ *
+ * 老规则（禁评分最高的那张）等于先手自断第一手；改成"禁第二好的"也一样糟：
+ * 对面十有八九也在禁榜首，两下一撞，我这局的前两手一起没了。
+ * 所以这里守两条：先手禁的不是榜首（那是后手的活），也不是自己最后真正拿到的第一张。
+ */
+test('选卡：先手不 ban 榜首，也不 ban 自己第一手', () => {
+  for (const startEra of [1, 3, 5]) {
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true, expansionIds: ['fantasy'] },
+      7301,
+    );
+    const banB = aiDraftBan(s, 'B')!; // 后手 = 禁榜首
+    const banA = aiDraftBan(s, 'A')!;
+    assert.ok(s.draft!.pool.includes(banA), '先手的禁用必须在池子里');
+    assert.notEqual(banA, banB, `起始第 ${startEra} 代：先手不该去禁榜首（那是后手的禁位）`);
+    // 先手自己第一手会拿的那张，不能是被自己禁掉的那张
+    const firstPick = aiDraftPick(s, 'A')!;
+    assert.notEqual(banA, firstPick, `起始第 ${startEra} 代：先手把自己的第一手禁掉了`);
+  }
+});
+
+/**
+ * 生态位加成必须跟着时代折价。
+ *
+ * 曾经是平加（缺攻城 +18、缺远程 +14）：起始第 1 代那一签上，唯一的那张
+ * 第五代火炮靠这 32 分硬压过一级兵，AI 会在开局第二手去选一张要升到五级城
+ * 才造得出来的卡，禁用判据也跟着去 ban 它。
+ */
+test('选卡：第五代的攻城车不该在起始第 1 代压过一级兵', () => {
+  const s = createMatch(
+    { ...DEFAULT_CONFIG, size: 14, startEra: 1, draftMode: true, expansionIds: ['era-arms', 'fantasy'] },
+    7301,
+  );
+  // 把池子缩到两张：一张一级民兵、一张五代火炮
+  s.draft!.pool = ['militia', 'artillery'];
+  const picked = aiDraftPick(s, 'A');
+  assert.equal(picked, 'militia', `起始第 1 代该先拿现在就造得出的那张，实际拿了 ${picked}`);
 });
 
 /* ===========================================================================
@@ -15041,10 +15425,39 @@ test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血
   assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
-  assert.equal(serpent.maxHp, 34, '蛇人生命 34（2026-11-03 复核：先压到 30，又补回 34）');
+  assert.equal(serpent.maxHp, 26, '蛇人生命 26（2026-11-04 下放到一代时压下来的）');
+  assert.equal(serpent.era, 1, '蛇人已经下放到第 1 代');
   const witch = s.unitTypes['witch']!;
   assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
+});
+
+test('奇想调整（2026-11-04）：蛇人与僵尸下放第 1 代，地狱犬换掉追猎', () => {
+  const s = fresh({ expansionIds: FANTASY });
+
+  // 蛇人：95/15/34 → 72/12/26，时代 2 → 1（8 甲不动，那是它唯一卖点）
+  const serpent = s.unitTypes['serpent-man']!;
+  assert.equal(serpent.era, 1, '蛇人下放到第 1 代');
+  assert.equal(serpent.cost, 72, '蛇人造价 95 → 72');
+  assert.equal(serpent.atk, 12, '蛇人攻击 15 → 12');
+  assert.equal(serpent.maxHp, 26, '蛇人生命 34 → 26');
+  assert.equal(serpent.armor, 8, '蛇人护甲保持 8');
+  assert.deepEqual(serpent.abilities, ['poison-hit'], '蛇人的淬毒不变');
+
+  // 僵尸：70/13/52 → 45/9/42，时代 2 → 1，一回合一步不变
+  const zombie = s.unitTypes['zombie']!;
+  assert.equal(zombie.era, 1, '僵尸下放到第 1 代');
+  assert.equal(zombie.cost, 45, '僵尸造价 70 → 45');
+  assert.equal(zombie.atk, 9, '僵尸攻击 13 → 9');
+  assert.equal(zombie.maxHp, 42, '僵尸生命 52 → 42');
+  assert.equal(zombie.move, 1, '僵尸还是一回合一步');
+  assert.deepEqual(zombie.abilities, ['shield-wall'], '僵尸的盾墙不变');
+
+  // 地狱犬：射程 1 吃不到「追猎」（那要拉开距离），换成「撕咬」
+  const hound = s.unitTypes['hellhound']!;
+  assert.equal(hound.range, 1, '地狱犬还是射程 1——正因为如此才不能带追猎');
+  assert.deepEqual(hound.abilities, ['maul'], '地狱犬：追猎 → 撕咬');
+  assert.ok(!(hound.abilities ?? []).includes('tracker'), '不能再挂追猎');
 });
 
 test('狂战士：一次出手打两段，每段各自减一次护甲', () => {

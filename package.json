@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.23",
+  "version": "0.3.34",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,10 @@
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
     "test:serve": "node --experimental-strip-types scripts/smoke-serve.ts",
+    "rl:test": "node --experimental-strip-types scripts/rl/test-m1.ts",
+    "rl:eval": "node --experimental-strip-types scripts/rl/eval.ts --mode policy --weights scripts/rl/weights/init.json",
+    "rl:selfcheck": "node --experimental-strip-types scripts/rl/eval.ts --mode selfcheck",
+    "rl:init": "node --experimental-strip-types scripts/rl/init-weights.ts",
     "manual": "node --experimental-strip-types scripts/build-manual.ts",
     "snapshot": "node --experimental-strip-types scripts/snapshot-behavior.ts",
     "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
@@ -34,6 +38,7 @@
     "audit:era": "node --experimental-strip-types scripts/audit-era-units.ts",
     "probe:plan": "node --experimental-strip-types scripts/probe-plan.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
+    "replay": "node --experimental-strip-types scripts/replay-report.ts",
     "bench:clone": "node --experimental-strip-types scripts/bench-clone.ts",
     "upload:report": "node --experimental-strip-types scripts/upload-report.ts",
     "sample:reports": "node --experimental-strip-types scripts/make-sample-reports.ts",

@@ -251,6 +251,7 @@ export function softenPeaks(g: Terrain[], w: number, h: number, keep?: ReadonlyS
 export const HEIGHT_TERRAIN: Expansion = {
   id: 'height-terrain',
   name: '地形高差',
+  blurb: '地形有高低：俯射占优，爬坡费步。',
   summary:
     '每类地形有自己的高度与脾气：站得高看得远（俯射 +1 格、视野 +1），仰攻吃亏，' +
     '往高处走每层多花 1 点移动力；熔岩会烧人、沼泽会陷脚、沙丘看得远但没掩体、' +

@@ -21,7 +21,7 @@
 
 import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
-import type { UnitTypeDef } from './types.ts';
+import type { Terrain, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import { isBioUnit } from './resources.ts';
 
@@ -30,14 +30,14 @@ import { isBioUnit } from './resources.ts';
  *
  * 7:3 —— 粮和材是主要成本，金币是零头。
  *
- * 上一版是 4:6（金币六成），实战里金币严重短缺。原因不在"收入太少"，
- * 而在**收入和支出是反着的**：经济单位的金币产出有六成被转换成了粮/材，
- * 留在手上的金币只剩四成；支出却要掏六成金币。等于一边把水舀出去，
- * 一边按原来的口径收水费。
+ * 上一版是 4:6（金币六成），实战里金币严重短缺——那时的解法是把**支出**改成
+ * 三成金币，而不是给收入加金币：加产出会把"经营"这件事抹平，玩家只要多盖几座
+ * 磨坊就完事，而粮和材本来才是这个扩展要人操心的东西。
  *
- * 调整的落点是让支出结构去贴合收入结构，而不是反过来给金币加产出——
- * 加产出会把"经营"这件事抹平，玩家只要多盖几座磨坊就完事，
- * 而粮和材本来才是这个扩展要人操心的东西。
+ * 2026-11-04 又按玩家的要求动了**收入**那一侧：平原/丘陵/森林上的经济单位，
+ * "折成粮材"和"留作金币"的比例对调（见 ECO_UNIT_OUTPUT_SHARE 与 modifyYield）。
+ * 于是这三种地形上金币变宽、粮材变紧，支出结构却没跟着变——这是一个刻意的
+ * 新平衡点，别再拿上面那段"收入四成"的旧结论去推它。
  */
 const RES_SHARE = 0.7;
 /** 金币那一份：剩下的三成 */
@@ -64,6 +64,15 @@ const GOLD_SHARE = 0.3;
 const ECO_RES_SHARE = 0.55;
 const ECO_GOLD_SHARE = 0.2;
 const ECO_OUTPUT_SHARE = 0.8;
+/**
+ * 经济**单位**把金币折成粮/材的比例。
+ *
+ * 0.6 是初版：六成折成粮/材、四成留金。后来在平原/丘陵/森林上"对调"成
+ * "六成留金、四成折算"——因为升级城市只吃金币（见 modifyYield 里的说明）。
+ * 写成一个常数而不是散在分支里，是为了让"对调"这件事只有一个开关：
+ * 想换回来，把 0.6 改成 0.4 就够了。
+ */
+const ECO_UNIT_OUTPUT_SHARE = 0.6;
 const EARLY_ECO_RES_SHARE = 0.6;
 /**
  * 经济建筑的耐久系数。
@@ -296,6 +305,7 @@ const EXTRA_BUILDS: Record<string, string[]> = {
 export const CITY_WORKS: Expansion = {
   id: 'city-works',
   name: '城郭与物料',
+  blurb: '更大的主城，多出粮食与建材。',
   summary:
     '主城扩成 3×3；兵要吃粮、楼要耗材（金币只占零头）；经济单位按脚下地形出粮或出材，经济建筑只产一种资源；' +
     '建材产线一路排到现代（采石工→矿队→建材公司，砖窑→水泥厂→建材基地）；' +
@@ -359,7 +369,18 @@ export const CITY_WORKS: Expansion = {
       // 建筑拆得比单位狠：0.8 对 0.6。建筑不会动、不会跑、也不用占编制，
       // 它唯一的用处就是把金币变成粮/材——那就把这件事做到极致，
       // 换取"它不能当墙"（见下面的耐久调整）。
-      const share = ecoBuilding ? ECO_OUTPUT_SHARE : 0.6;
+      //
+      // 单位这一档 2026-11-04 **对调过一次**：原来是"六成折成粮/材、四成留金"，
+      // 现在三种种地地形（平原 / 丘陵 / 森林）上是"六成留金、四成折成粮/材"。
+      // 理由是这套经济最硬的出口是**升级城市**，而升级只吃金币：折得太狠时，
+      // 一个只会种地的开局永远差那一笔升级钱，于是全程停在一代。
+      // 只动这三种地形——城郊、河谷、沙丘不在这句话里，保持原口径。
+      const FARM_TERRAINS: readonly Terrain[] = ['plain', 'hill', 'forest'];
+      const share = ecoBuilding
+        ? ECO_OUTPUT_SHARE
+        : FARM_TERRAINS.includes(terrain)
+          ? 1 - ECO_UNIT_OUTPUT_SHARE
+          : ECO_UNIT_OUTPUT_SHARE;
       const converted = Math.max(1, Math.round(gold * share));
       const out = { ...yields };
       out.gold = Math.max(0, gold - converted);

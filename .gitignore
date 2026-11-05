@@ -49,3 +49,10 @@ _publish/
 /reports-sample.csv
 /reports*.json
 /reports*.csv
+
+# 重放工具的临时产物
+/rep*.json
+
+# RL 训练用的 Python 环境（装 G 盘，不进仓库）
+.venv/
+__pycache__/

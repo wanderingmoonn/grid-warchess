@@ -1666,18 +1666,38 @@ function attachShipyards(state: GameState, ids: readonly string[]): void {
   }
 }
 
-export const NAVAL_FLEET: Expansion = {
-  id: 'naval-fleet',
-  name: '海战',
+/**
+ * 「海军」：第二到第六时代的水上力量，一个包。
+ *
+ * ---------------------------------------------------------------
+ * 为什么从一个包变一个包（2026-11-04）
+ * ---------------------------------------------------------------
+ * 以前是两个：「海战」（桨帆船到护卫舰，29 个单位）+「现代海军」（第六代 12 个，
+ * `requires: ['pack-contemporary']`）。分开的理由本来是"第六代要有前置"，
+ * 但这件事不需要一整个包来表达——兵种级 `requiresPack` 就够了。
+ * 分两个包的代价是"我要不要海军"多出一个中间答案：勾了「海战」没勾「现代海军」，
+ * 航母和核潜艇就不出现，玩家只会觉得漏了什么。
+ *
+ * 现在：勾一个「海军」，第二到第五代的船全部到场；第六代那 12 个
+ * 挂 `requiresPack: 'pack-contemporary'`——开了「信息化」自动出现，没开就不进场
+ * （判据在 setup.ts 的 expansionUnitsFor，和开局面板的兵种池是同一处）。
+ *
+ * 钩子原来两个包各写一份、内容几乎一样（封锁 / 抢修 / 甲板），合并成一份之后
+ * 不会再有"改一处忘一处"的问题，执行顺序也定死：先甲板整备，再港口抢修。
+ */
+export const NAVAL: Expansion = {
+  id: 'naval',
+  name: '海军',
+  blurb: '从桨帆船到航母，加水雷与海权规则。',
   scale: 'large',
   summary:
-    '补上第二到第五时代的水上力量：桨帆船、宝船、德罗蒙、卡拉克、火船、龟船、盖伦、风帆巡航舰、' +
-    '护卫舰、鱼雷艇、布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰（本体，蒸汽时代）、' +
-    '装甲巡洋舰、重巡洋舰、轻巡洋舰、战列巡洋舰、战列舰、远洋潜艇、登陆舰、舰队航母、' +
-    '轻型航母、航空战列舰、潜母、维修舰二十多条船，从桨到航母一整条线；' +
-    '两条海权规则（封锁港口断税收、贴着自家城抢修），以及**深水**地形' +
-    '（离岸两格以上的外海，只有船进得去，大舰吃水深进不了浅流）。',
-  abilities: FLEET_ABILITIES,
+    '第二到第六时代的水上力量：桨帆船、德罗蒙、卡拉克、盖伦、风帆巡航舰、护卫舰、鱼雷艇、' +
+    '布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰、装甲巡洋舰、战列巡洋舰、战列舰、' +
+    '舰队航母；第六代再加航空母舰、超巡、防空巡洋舰、攻击核潜艇、濒海战斗舰、无人艇、' +
+    '两栖攻击舰、导弹快艇、舰队补给舰、海上钻井平台——**第六代这批要同时开「信息化」**。' +
+    '两条海权规则（封锁港口断税收、贴着自家城抢修）、**深水**地形（离岸两格以上的外海，' +
+    '只有船进得去，大舰吃水深进不了浅流），以及水雷（布雷 / 扫雷 / 反潜）。',
+  abilities: [...FLEET_ABILITIES, ...MODERN_ABILITIES],
   /**
    * 这个包带来的"格子上留东西"的种类：水雷。
    *
@@ -1686,13 +1706,24 @@ export const NAVAL_FLEET: Expansion = {
    * 对应扩展的 `marks` 上就行，规则层一行都不用改。
    */
   marks: [NAVAL_MINE],
-  units: [...FLEET_UNITS, ...SHIPYARDS],
+  units: [
+    ...FLEET_UNITS,
+    ...SHIPYARDS,
+    // 第六代：靠 requiresPack 门控，不开「信息化」就不进本局兵种表
+    ...[...MODERN_FLEET_UNITS, ...MODERN_SHIPYARDS].map((u) => ({
+      ...u,
+      requiresPack: 'pack-contemporary',
+    })),
+  ],
   terrains: ['deep'],
   afterTerrain: deepenWater,
   hooks: {
-    /** 开局：会架桥的工程兵多会一样东西——修造船设施 */
-    onMatchStart: ({ state }) => attachShipyards(state, SHIPYARDS.map((d) => d.id)),
-    /** 钻井平台：敌舰贴着就停产（海战包先开，现代海军再开也不会叠加出错） */
+    /** 开局：会架桥的工程兵多会一样东西——修造船设施（两代的船台一起给） */
+    onMatchStart: ({ state }) => {
+      attachShipyards(state, SHIPYARDS.map((d) => d.id));
+      attachShipyards(state, MODERN_SHIPYARDS.map((d) => d.id));
+    },
+    /** 钻井平台：敌舰贴着就停产 */
     modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
     /**
      * 封锁：敌方水面单位贴着你的城，那座城这一回合的税收断掉。
@@ -1704,15 +1735,18 @@ export const NAVAL_FLEET: Expansion = {
     modifyIncome: ({ state, player, income }) => blockedIncome(state, player, income),
 
     /**
-     * 回合开始：港口抢修（+ 甲板整备，如果空军扩展接了进来）。
+     * 回合开始：先甲板整备、再港口抢修。
+     *
+     * 整备在前：空军扩展可能在这一步把飞机放回甲板/扣燃油，顺序固定下来，
+     * 海军空军同时开时行为一致。
      *
      * 抢修的数值（4 点）是照"回一趟港要两三个回合"定的：
-     * 一条 100 血的巡洋舰从残血修回来要十几回合，所以它只是"不用回城",
+     * 一条 100 血的巡洋舰从残血修回来要十几回合，所以它只是"不用回城"，
      * 不是"永不沉没"。真正让它沉的是被围住——围住就没有自家城可贴。
      */
     onTurnStart: ({ state, player }) => {
-      portRepair(state, player);
       deckUpkeep(state, player);
+      portRepair(state, player);
     },
 
     /**
@@ -1721,51 +1755,6 @@ export const NAVAL_FLEET: Expansion = {
      * 这一行是**接口的可见部分**：没有空军扩展时它明说"未接入"，
      * 而不是画一个空甲板让人以为飞机掉了。
      */
-    getUnitPanelLines: ({ state, unit }) => navalPanelLines(state, unit),
-  },
-};
-
-/**
- * 「现代海军」：第六时代的七条船，**依赖「信息化」**。
- *
- * 为什么一定要 `requires`：第六时代是「信息化」这个包开出来的（`unlockEra: 6`）。
- * 单勾「现代海军」的话，城市永远升不到 6 级，这批船一条都造不出来——
- * 在玩家眼里就是"这个包坏了"。写上依赖之后，开局面板会把「信息化」一起补上。
- */
-export const MODERN_NAVAL: Expansion = {
-  id: 'naval-modern',
-  name: '现代海军',
-  requires: ['pack-contemporary'],
-  scale: 'large',
-  summary:
-    '第六时代的海上力量：航空母舰（甲板接口，等空军扩展接进来）、超巡、防空巡洋舰、' +
-    '攻击核潜艇与常规潜艇（潜航）、濒海战斗舰、无人艇、两栖攻击舰、导弹快艇、' +
-    '舰队补给舰、海上钻井平台。' +
-    '**第六时代没有战列舰**——它停在第五时代（机械化），1945 年之后再没有国家开工建过一级。' +
-    '航母的机位与起飞半径写在兵种数据的 carry.deck 上（见本文件里的「航空母舰」那一行）。',
-  abilities: MODERN_ABILITIES,
-  units: [...MODERN_FLEET_UNITS, ...MODERN_SHIPYARDS],
-  // 只开「现代海军」也想要深水（钻井平台的产出靠它）——两个包都登记一次，
-  // 沙箱画笔那边会去重，afterTerrain 也是幂等的。
-  terrains: ['deep'],
-  afterTerrain: deepenWater,
-  hooks: {
-    /** 开局：会架桥的工程兵能修海军船台 */
-    onMatchStart: ({ state }) => attachShipyards(state, MODERN_SHIPYARDS.map((d) => d.id)),
-    /** 钻井平台：敌舰贴着就停产 */
-    modifyYield: ({ state, unit, yields }) => platformYield(state, unit, yields),
-    // 封锁与抢修是海军共同的规则，两个包各写一份就会走散（改一处忘一处），
-    // 所以这里直接复用同一套实现——封锁是纯函数（同样输入同样输出），
-    // 抢修带"这一回合修过"的哨兵，重合也不会有副作用。
-    modifyIncome: ({ state, player, income }) => blockedIncome(state, player, income),
-
-    onTurnStart: ({ state, player }) => {
-      // 先整备再修船：空军扩展可能在这一步把飞机放回甲板/扣燃油，
-      // 顺序固定下来，两个包同时开时行为一致
-      deckUpkeep(state, player);
-      portRepair(state, player);
-    },
-
     getUnitPanelLines: ({ state, unit }) => navalPanelLines(state, unit),
   },
 };

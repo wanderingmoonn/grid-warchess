@@ -13,6 +13,7 @@ import {
   enabledExpansionIds,
   eraCeilingFor,
   expansionById,
+  normalizeExpansionIds,
 } from './expansions.ts';
 import { createDraft } from './draft.ts';
 import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
@@ -164,19 +165,29 @@ export function createMatch(
   // 注意这里用的是 enabledExpansionIds 而不是 config.expansionIds：
   // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
   // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
+  /*
+   * 先把扩展 id 迁移成现在的写法（2026-11-04 十六个包并成四个）。
+   *
+   * 这一步必须在这里做，不能只做在 enabledExpansionIds 里面：下面好几处是
+   * "遍历玩家勾的那串 id、再去 canonical 集合里查在不在"（expansionUnitsFor、
+   * citySize、开局战报里的 extensions 列表）。集合里是新 id、数组里是旧 id 时，
+   * 每个都查不到——表现就是"勾了奇想包，兵种表里一个奇想兵都没有"。
+   */
+  const expansionIds = normalizeExpansionIds(config.expansionIds);
+
   const extraUnits: Record<string, UnitTypeDef> = {
     ...customUnits,
-    ...expansionUnitsFor(config.expansionIds),
+    ...expansionUnitsFor(expansionIds),
   };
   // 城市边长那边还要按包查一次，所以这份集合留着
-  const liveExpansions = enabledExpansionIds(config.expansionIds);
+  const liveExpansions = enabledExpansionIds(expansionIds);
   const catalog: Record<string, UnitTypeDef> = { ...UNIT_TYPES, ...extraUnits };
 
   // 城市边长：扩展可以要求更大的主城（「城郭与物料」要 3×3）。
   // 取所有启用扩展里最大的那个；没写就用 config 里的值，再没有就 2。
   const declaredCitySize = Math.max(
     CITY.size,
-    ...config.expansionIds
+    ...expansionIds
       .filter((id) => liveExpansions.has(id))
       .map((id) => expansionById(id)?.citySize ?? 0),
   );
@@ -198,18 +209,20 @@ export function createMatch(
    */
   const playerCount = (config.playerCount ?? 2) as 2 | 3 | 4;
   /**
-   * 三人四人局只支持"全真人"。
+   * 三人四人局：只有"指挥官模式"放行，托管整方的两个 AI 开关仍按两席关掉。
    *
-   * 两个 AI 开关和选卡 BP 都是按"两个席位"写的（AI 的目标选择、先后手补偿、
-   * BP 界面只有两栏）。让它们在三家四家局里生效，会造出"蓝方有兵、但没人操作"
-   * 这种既不能玩也说不清的局面——所以在这一层直接关掉，而不是指望每个入口
-   * 都记得先关一遍。`config` 是调用方的对象，不改它，用局部量往下传。
+   * 选卡 BP 和"AI 当对手/队友"都是按两个席位写的（BP 界面只有两栏、先后手补偿
+   * 只算两家），放进三家四家局会造出"蓝方有兵、但没人操作"这种说不清的局面。
+   *
+   * 指挥官模式不一样：它托管的正是**玩家自己这一方**。AI 的多人目标选择
+   * 在 2026-11-04 已经放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf / primaryFoe），
+   * 所以三家四家局里也能替某一方走完。`config` 是调用方的对象，不改它，用局部量往下传。
    */
   const twoSeats = playerCount === 2;
   const draftMode = twoSeats && config.draftMode === true;
   const aiOpponent = twoSeats && config.aiOpponent === true;
   const aiAlly = twoSeats && config.aiAlly === true;
-  const commanderMode = twoSeats && config.commanderMode === true;
+  const commanderMode = config.commanderMode === true;
 
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
   /**
@@ -293,7 +306,7 @@ export function createMatch(
               twoCities: config.twoCities === true,
               // 和双人同一个口径：只有本局真正启用的扩展才能贡献地貌
               // （高原/峡谷/沼泽/群岛/大川）。扩展关掉，这几种就不该出现。
-              expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+              expansions: expansionIds.filter((id) => liveExpansions.has(id)),
             },
           )
         : generateLayout(
@@ -306,7 +319,7 @@ export function createMatch(
               citySize,
               // 只能画本局真正启用的扩展带来的地形。关掉「地形高差」的局里
               // 一格台地/熔岩都不会出现——老规则、老存档不受影响。
-              expansions: config.expansionIds.filter((id) => liveExpansions.has(id)),
+              expansions: expansionIds.filter((id) => liveExpansions.has(id)),
             },
           );
   const w = layout.w;
@@ -334,7 +347,7 @@ export function createMatch(
   let citySeq = 1;
   // 开局时代也要按"这一局能走到第几级"夹住：不勾「现代战争」时，
   // 配置里写 startEra: 6 只该得到第五时代，而不是一座没有兵可用、也再造不出兵的城。
-  const startEra = Math.max(1, Math.min(eraCeilingFor(config.expansionIds), config.startEra));
+  const startEra = Math.max(1, Math.min(eraCeilingFor(expansionIds), config.startEra));
   const eraInfo = eraDef(startEra);
 
   const placeCity = (owner: PlayerId, left: number, top: number) => {

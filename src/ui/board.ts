@@ -417,6 +417,18 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
   el.classList.toggle('fog', s.fog);
 
+  /*
+   * 大地图模式。
+   *
+   * 32×32 是 1024 格，64×64 是 4096 格——四倍。每格身上挂的动效（迷雾压暗、
+   * 高亮淡入）在小图上是"顺手就画"，在 4096 格上就是几千个同时进行的合成层。
+   * 这个 class 只做一件事：让 CSS 把这些**逐格**的昂贵效果关掉（见 style.css
+   * 的 `.board.big` 段），换成纯色块。规则一行不动。
+   *
+   * 阈值选 1024：32×32 关雾打起来很流畅，64×64 才是需要保护的那一档。
+   */
+  el.classList.toggle('big', s.w * s.h > 1024);
+
   // 浓雾（blackout 扩展）：连地形都不给看。
   // 基础规则的雾只遮单位，地图本身永远可见；这个扩展把"地图"也遮掉——
   // 视野外只剩一片黑，城市要侦察到才画得出来。

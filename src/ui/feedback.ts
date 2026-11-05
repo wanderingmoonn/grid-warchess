@@ -95,7 +95,7 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
             hasTimeline
               ? `<label class="fb-check">
                    <input type="checkbox" data-field="with-timeline" ${withTimeline ? 'checked' : ''} />
-                   <span>连同逐回合摘要一起传（含双方兵力曲线、出兵与战损明细）</span>
+                   <span>连同逐回合摘要与动作序列一起传（兵力曲线、出兵战损，以及每一步动作——可在本地重放这局）</span>
                  </label>`
               : `<div class="fb-hint">这一局没开「记录详细数据」，所以只有当前局面，没有逐回合曲线。下次开新局时在战役页勾上就有。</div>`
           }

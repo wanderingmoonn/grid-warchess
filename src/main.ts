@@ -38,6 +38,7 @@ import {
   idx,
   incomeOf,
   isAirborne,
+  orderDirectiveOf,
   ordersOf,
   orderSitesOf,
   planBothReady,
@@ -67,7 +68,7 @@ import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import { seatsOf } from './core/types.ts';
-import type { Action, GameState, PlayerId, Terrain, Unit } from './core/types.ts';
+import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
@@ -98,6 +99,8 @@ import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
+import { openTitle } from './ui/title-screen.ts';
+import { BUILD_VERSION } from './core/build-info.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
@@ -229,6 +232,17 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
   }
 }
 
+/**
+ * 本机有没有**真的打过**的一局。
+ *
+ * 不能直接拿 `loadMatch() !== null` 现查：启动流程末尾无条件 `saveMatch()`
+ * （新建的那局当场就落盘），于是第一次来的人也会看到亮着的「继续上一局」——
+ * 点了接着打的其实是一张谁都没动过的随机棋盘。
+ *
+ * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
+ * 导入一局、进房间接手一局，都把它置 true。
+ */
+let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 let selectedId: string | null = null;
 
@@ -381,11 +395,40 @@ let reportSentSigs = loadSentReports();
  */
 let recorder: MatchTimeline | null = null;
 
+/**
+ * 动作序列：和 `recorder` 同生共死（同一份"要不要记详细数据"的选择）。
+ *
+ * 为什么单独存而不塞进 timeline：timeline 是**统计量**（每回合采样、逐兵种计数），
+ * 动作序列是**过程**。两者的采样节奏、体积、消费者都不一样——
+ * 混在一起会让"只想看曲线"的分析被几十 KB 的动作对象拖累。
+ *
+ * 上限 1500 步：一局通常 400~1000 步；超了就从尾部截断并计数（`actionsDropped`），
+ * 让"这份日志不全"这件事在报告里自己说出来，而不是重放时对不上再让人去猜。
+ */
+let actionLog: Action[] | null = null;
+let actionDropped = 0;
+let actionBytes = 0;
+/** 步数上限 */
+const ACTION_LOG_CAP = 1500;
+/**
+ * 字节上限（估算，按紧凑 JSON 计）。
+ *
+ * 数据库那边有条硬约束 `pg_column_size(payload) < 256 KB`。实测一局 1176 步的
+ * 报告缩进后有 232 KB 文本——虽然 jsonb 落盘会压缩、实际远低于上限，但这条线
+ * **不能靠"应该压得下"来赌**：一局打满 1500 步就会贴边。
+ *
+ * 120 KB 是留了一半余量的位置：超过就停止追加并计数（`actionsDropped`），
+ * 让"这份日志被截断了"写在报告里，而不是等重放到一半对不上再去猜。
+ */
+const ACTION_LOG_BYTES = 120_000;
+
 /** 按当前对局的配置决定要不要记；换局 / 读档之后调一次 */
 function resetRecorder(): void {
-  recorder = state.config.recordDetail === true && state.config.godMode !== true
-    ? newTimeline(state.turn)
-    : null;
+  const wantDetail = state.config.recordDetail === true && state.config.godMode !== true;
+  recorder = wantDetail ? newTimeline(state.turn) : null;
+  actionLog = wantDetail ? [] : null;
+  actionDropped = 0;
+  actionBytes = 0;
   if (recorder) {
     // 先把"开局有哪些单位"记下来，后面才能靠差分认出谁死了
     noteDeaths(recorder, state);
@@ -397,6 +440,15 @@ function resetRecorder(): void {
 
 /** 记一步（AI 和玩家都走这里） */
 function noteStep(actor: PlayerId, action: Action): void {
+  if (actionLog) {
+    if (actionLog.length < ACTION_LOG_CAP && actionBytes < ACTION_LOG_BYTES) {
+      actionLog.push(action);
+      // 粗算就够：这里的用途只是"别撞上限"，不需要精确
+      actionBytes += JSON.stringify(action).length + 1;
+    } else {
+      actionDropped += 1;
+    }
+  }
   if (!recorder) return;
   noteAction(recorder, actor, action);
   // 死亡是在这一步里发生的，所以每次动作后都要比一次单位集合
@@ -746,7 +798,7 @@ function panelInput(known?: PlayerView): PanelInput {
  * （sealTimeline 会去掉内部用来做差分的单位表）。两处各建一次很容易漂。
  */
 function currentReport(): MatchReport {
-  return buildMatchReport(state, new Date(), recorder ? sealTimeline(recorder) : null);
+  return buildMatchReport(state, new Date(), recorder ? sealTimeline(recorder) : null, actionLog, actionDropped);
 }
 
 /**
@@ -1589,6 +1641,8 @@ function takeSnapshot(snapshot: RoomSnapshot): void {
   state.fog = fog;
   clearSelection();
   saveMatch(state);
+  // 从房间接手的那一局也是"真的打过"的：回首页之后应该能接着打
+  hasRealSave = true;
   render();
 }
 
@@ -3017,18 +3071,13 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'manual': {
-      // 只有核心规则书相关时直接打开，别为形式多问一次；
-      // 开了扩展才可能出现"看哪本"这个选择。
-      const books = manualBooks(state.config.expansionIds);
-      if (books.length === 1) {
-        window.open(`./${books[0]!.file}`, '_blank', 'noopener');
-        return;
-      }
-      openManualChooser(books);
+      openManualFlow();
       return;
     }
 
     case 'unit-editor': {
+      // 顶栏这颗按钮已经挪到首页（2026-11-04）。分支留着：首页的入口
+      // 走的是同一个 openUnitEditor，两处语义必须一致。
       openUnitEditor(() => render());
       return;
     }
@@ -3063,52 +3112,15 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'import': {
-      const text = window.prompt('粘贴对方发来的对局内容：');
-      if (!text) return;
-      const imported = importMatch(text);
-      if (!imported) {
-        toast('这段内容不是有效的对局存档，或来自旧版本');
-        return;
-      }
-
-      // 存档里只有扩展 id，本机没注册的规则会静默失效——必须先告诉用户，
-      // 否则两边算出来的结果会不一样，谁都不知道为什么。
-      const missing = imported.config.expansionIds.filter((id) => !expansionById(id));
-      if (missing.length > 0) {
-        toast(`注意：这局用了本机没有的规则（${missing.join('、')}），它们不会生效`);
-      }
-
-      state = imported;
-      detachRoom(); // 换了一局，房间就对不上了
-      resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
-      clearSelection();
-      // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
-      // 否则会把上一局的摘要记到这一局头上
-      resetRecorder();
-      saveMatch(state);
-      render();
-      kickAiIfNeeded();
+      // 顶栏这颗按钮也挪到首页了，分支留作同一条实现（见 importMatchFlow）
+      importMatchFlow();
       return;
     }
 
     case 'new-game': {
-      // 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
-      // 只有点了"开始对局"才会覆盖当前存档。
-      void openSetupPanel(state.config, randomSeed()).then((result) => {
-        if (!result) return;
-        state = createMatch(result.config, result.seed, loadCustomUnits());
-        detachRoom();
-        resetZoom();
-        clearSelection();
-        resetRecorder();
-        // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
-        // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
-        if (result.config.recordDetail === true) saveReportOptIn(true);
-        saveMatch(state);
-        render();
-        toast('新对局开始');
-        kickAiIfNeeded();
-      });
+      // 不再直接换一局：回家，由首页的「开始对局」统一开门。
+      // 顺手暂停 AI——棋盘还在下面，别让它在没人看的时候接着下。
+      showTitle({ pauseAi: true });
       return;
     }
 
@@ -3414,18 +3426,161 @@ async function runAiTurn(
   }
 
   if (!alive()) return;
+  /*
+   * 结束回合也要记一笔（2026-11-04）。
+   *
+   * 人类那边走的是 dispatch → noteStep，AI 这边原来是直接 apply，于是
+   * **动作日志里缺了 AI 的每一次 END_TURN**——重放到那里就卡在同一方，
+   * 后面全部对不上。补上之后，日志才是一份能重放的完整动作序列。
+   */
+  const endActor = state.current;
   const end = applyAction(state, { type: 'END_TURN' });
-  if (end.ok) state = end.state;
+  if (end.ok) {
+    state = end.state;
+    noteStep(endActor, { type: 'END_TURN' });
+  }
   if (end.ok) noteTurnEnd();
   saveMatch(state);
   render();
   await sleep(delay);
 }
 
+/**
+ * 回到首页。
+ *
+ * 三个入口共用它：启动时、顶栏「新对局」、以及「继续上一局」被误触后想找回门口。
+ * 2026-11-04 之前顶栏那颗「新对局」是直接换一局（跳过门面），结果是
+ * "开局"这件事有两个门：一个有选项、一个没有。现在它只负责回门口。
+ */
+function showTitle(opts: { pauseAi?: boolean } = {}): void {
+  /*
+   * 挂到 body，不挂 #app：`appEl.innerHTML` 在启动时会被整块写一次，
+   * 之后各处面板还会局部换 innerHTML。挂 body 就与这些渲染彻底无关，
+   * 不会出现"第一屏刚出现又被谁刷没了"。
+   */
+  const host = document.body;
+  if (!host) return;
+  // 回首页时首页可能已经在了（顶栏按钮连点两下）：再 append 一次就是两层叠着，
+  // 撤掉上面那层下面那层还在——"点了开始对局却还是首页"这种 bug 最难查。
+  if (host.querySelector('.title-screen')) return;
+
+  /*
+   * 只有"打对局打到一半、被按了首页"才暂停 AI。
+   *
+   * 棋盘还在下面（这是「继续上一局」能瞬开的前提）。如果这局正轮到 AI，
+   * 它会在没人看的时候自己往下走——玩家盯着门面，回来发现丢了两个城。
+   * 暂停是现成的机制；点「继续上一局」时 kickAiIfNeeded 会把它重新点起来。
+   *
+   * **启动时不暂停**：开机本来就没有循环在跑（没人调 kickAiIfNeeded），
+   * 而存档可能正停在 AI 的回合上——那里暂停等于把一局活棋冻住，
+   * 上帝模式那条"对面真由 AI 接手"的用例就是这么红的。
+   */
+  if (opts.pauseAi) aiPaused = true;
+
+  openTitle(host, {
+    // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
+    hasSave: hasRealSave,
+    version: BUILD_VERSION,
+    latest: '新：开始页面 + 对局可重放',
+    onNew: newGameFlow,
+    onContinue: () => {
+      render();
+      kickAiIfNeeded();
+    },
+    onOnline: () => {
+      const btn = document.querySelector<HTMLButtonElement>('[data-act="online"]');
+      if (btn) btn.click();
+      else toast('联机面板没打开，先用「开始对局」打一局本机的');
+    },
+    onManual: openManualFlow,
+    onEditor: () => openUnitEditor(() => render()),
+    onImport: importMatchFlow,
+  });
+}
+
+/**
+ * 打开开局面板、确认后换一局。
+ *
+ * 抽成函数是因为它不止一个调用方（首页的「开始对局」、导入失败后的兜底）。
+ * 抄一份的话，两处迟早会走岔（比如只在一处记得关掉房间、重置记录器）。
+ *
+ * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
+ * 只有点了面板里的"开始对局"才会覆盖当前存档。
+ */
+function newGameFlow(): void {
+  void openSetupPanel(state.config, randomSeed()).then((result) => {
+    if (!result) return;
+    state = createMatch(result.config, result.seed, loadCustomUnits());
+    detachRoom();
+    resetZoom();
+    clearSelection();
+    resetRecorder();
+    // 开局时勾了"结束后上传详细数据"，等于对**这一局**点了头：
+    // 结算卡上的许可框跟着勾上，但那一下「匿名上传」仍然要玩家自己点。
+    if (result.config.recordDetail === true) saveReportOptIn(true);
+    saveMatch(state);
+    hasRealSave = true;
+    render();
+    toast('新对局开始');
+    kickAiIfNeeded();
+  });
+}
+
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
 function kickAiIfNeeded(): void {
   aiPaused = false;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
+}
+
+/**
+ * 导入对局：把对方发来的一串文本变成当前这局。
+ *
+ * 从 `handleAction` 的 case 里抽出来的，因为首页也要用（2026-11-04 起
+ * 「导入对局」只在首页出现）。抽出来之后那段"换局要重置哪些东西"的清单
+ * 只有一份，不会在两侧走岔。
+ */
+function importMatchFlow(): void {
+  const text = window.prompt('粘贴对方发来的对局内容：');
+  if (!text) return;
+  const imported = importMatch(text);
+  if (!imported) {
+    toast('这段内容不是有效的对局存档，或来自旧版本');
+    return;
+  }
+
+  // 存档里只有扩展 id，本机没注册的规则会静默失效——必须先告诉用户，
+  // 否则两边算出来的结果会不一样，谁都不知道为什么。
+  const missing = imported.config.expansionIds.filter((id) => !expansionById(id));
+  if (missing.length > 0) {
+    toast(`注意：这局用了本机没有的规则（${missing.join('、')}），它们不会生效`);
+  }
+
+  state = imported;
+  detachRoom(); // 换了一局，房间就对不上了
+  resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
+  clearSelection();
+  // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
+  // 否则会把上一局的摘要记到这一局头上
+  resetRecorder();
+  saveMatch(state);
+  hasRealSave = true;
+  render();
+  kickAiIfNeeded();
+}
+
+/**
+ * 打开规则手册。
+ *
+ * 只有核心那一本时直接开，别为形式多问一次；开了扩展才可能出现"看哪本"。
+ * 首页和顶栏的「规则书」共用这一条。
+ */
+function openManualFlow(): void {
+  const books = manualBooks(state.config.expansionIds);
+  if (books.length === 1) {
+    window.open(`./${books[0]!.file}`, '_blank', 'noopener');
+    return;
+  }
+  openManualChooser(books);
 }
 
 // ---------- 指挥官模式 ----------
@@ -3488,14 +3643,21 @@ function slotProblem(unitId: string, site: string): string {
   if (!unitId) return '';
   // 「空过」是玩家亲口排的一个决定，不是"排不出来"：它没有任何前置条件
   if (unitId === ORDER_IDLE) return '';
-  const def = state.unitTypes[unitId];
-  if (!def) return '没有这个兵种';
+  /*
+   * 哨兵要先于兵种表判断。
+   *
+   * 原来的顺序是"先查 state.unitTypes[unitId]、查不到就报没有这个兵种"，
+   * 而「升级时代」这一格存的是 `@upgrade` 这个哨兵——它当然不在兵种表里，
+   * 于是每次点升级都弹「没有这个兵种」，明明这一格本来是合法的。
+   */
   if (unitId === ORDER_UPGRADE) {
     if (!site) return '';
     const city = state.cities.find((c) => c.id === site);
     if (!city) return '营不升级';
     return upgradeCostOf(state, city) === null ? '升不上去了' : '';
   }
+  const def = state.unitTypes[unitId];
+  if (!def) return '没有这个兵种';
   if (heroBlocked(state, me(), def)) return '已在场';
   // 没指定产兵点时按"最高级那座城"算：AI 会自己挑能造的那一座
   const eras = citiesOf(state, me()).map((c) => c.era);
@@ -3600,6 +3762,54 @@ function refreshEstimates(): void {
  * 重建只在"队列内容 / 产兵点 / 在线与否 / 当前行动方"变化时发生：AI 每走一步
  * 都会 render()，无脑重建会把这排按钮在玩家点到一半时抽走。
  */
+/**
+ * 指挥官栏里的"策略 / 进攻方向"这一行。
+ *
+ * 为什么不和排产序列放一起：序列回答"造什么"，这里回答"怎么打"。两者改的频率也
+ * 不一样——序列每回合都在动，策略开局定一次、想起来才改。混在一行里，玩家会
+ * 以为策略也是"排一格"。
+ *
+ * 两处都从 `orderDirectiveOf` 读，所以刷新、读档、联机同步之后显示不会和实际行为脱节。
+ */
+function strategyRow(): string {
+  const dir = orderDirectiveOf(state, me());
+  const strat = dir.strategy;
+  const chip = (key: string, label: string, title: string) =>
+    `<button class="chip ${strat === key ? 'active' : ''}" data-cmd="strategy" data-strategy="${key}" title="${title}">${label}</button>`;
+
+  // 方向：自动 / 打某一家（多人局才有意义）/ 八向。两家局也留"打某一家"，
+  // 让两种模式的界面完全一致——它在那里的含义就是"盯着对面推"。
+  const t = dir.target;
+  const value = !t ? 'auto' : 'seat' in t ? `seat:${t.seat}` : `dir:${t.dx},${t.dy}`;
+  const seatOpts = seatsOf(state)
+    .filter((x) => x !== me())
+    .map((x) => `<option value="seat:${x}" ${value === `seat:${x}` ? 'selected' : ''}>只打 ${x} 方</option>`)
+    .join('');
+  const dirs: Array<[number, number, string]> = [
+    [0, -1, '北'], [1, -1, '东北'], [1, 0, '东'], [1, 1, '东南'],
+    [0, 1, '南'], [-1, 1, '西南'], [-1, 0, '西'], [-1, -1, '西北'],
+  ];
+  const dirOpts = dirs
+    .map(([dx, dy, label]) => `<option value="dir:${dx},${dy}" ${value === `dir:${dx},${dy}` ? 'selected' : ''}>朝${label}推</option>`)
+    .join('');
+
+  return `
+    <span class="cmd-plan-label">策略</span>
+    <span class="cmd-plan-chips">
+      ${chip('auto', '自动', '交给 AI 自己判断打还是发展')}
+      ${chip('rush', '猛攻', '全力进攻：不管经营，兵一出来就往前压')}
+      ${chip('boom', '经营', '先发展：攒钱、升城、补经济，只在必要时接战')}
+      ${chip('hold', '屯兵不动', '不出击：只在自己城下迎击，兵攒着，生产照常')}
+    </span>
+    <label class="cmd-plan-dir">方向
+      <select data-cmd="dir" aria-label="进攻方向">
+        <option value="auto" ${value === 'auto' ? 'selected' : ''}>自动</option>
+        ${seatOpts}
+        ${dirOpts}
+      </select>
+    </label>`;
+}
+
 function renderCommander(): void {
   if (!commanderActive()) {
     commanderEl.hidden = true;
@@ -3635,10 +3845,18 @@ function renderCommander(): void {
   const sites = orderSitesOf(state, me());
   const slots = CONFIG.commanderSlots;
   const online = room !== null;
-  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态
-  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${
-    state.orderReady?.A === true ? 'A' : ''
-  }${state.orderReady?.B === true ? 'B' : ''}`;
+  // 提交状态进签名：热座里"对面交了没有"会改变文案和按钮，不重画就一直显示旧状态。
+  // 策略与方向也要进：改了策略却不重画，玩家点了"屯兵不动"界面还停在"自动"。
+  const curDir = orderDirectiveOf(state, me());
+  const dirKey = !curDir.target
+    ? 'auto'
+    : 'seat' in curDir.target
+      ? `s${curDir.target.seat}`
+      : `d${curDir.target.dx},${curDir.target.dy}`;
+  const readyKey = seatsOf(state)
+    .map((x) => (state.orderReady?.[x] === true ? x : '-'))
+    .join('');
+  const sig = `${state.turn}|${queue.join(',')}|${sites.join(',')}|${online}|${state.current}|${curDir.strategy}|${dirKey}|${readyKey}`;
   if (sig === commanderSig) {
     refreshEstimates();
     return;
@@ -3688,8 +3906,17 @@ function renderCommander(): void {
   // 热座：这一格按钮是"交计划"，而且要显示"对面交了没有"
   const hotseat = commanderHotseat();
   const mineReady = state.orderReady?.[me()] === true;
-  const foeSeat: PlayerId = me() === 'A' ? 'B' : 'A';
-  const foeReady = state.orderReady?.[foeSeat] === true;
+  // 三家四家局里"对面"不止一个：只报"还差几家"，不再写死 A/B
+  const others = seatsOf(state).filter((x) => x !== me());
+  const waiting = others.filter((x) => state.orderReady?.[x] !== true);
+  const foeLabel =
+    others.length <= 1
+      ? waiting.length === 0
+        ? '对方已提交'
+        : '等对方排'
+      : waiting.length === 0
+        ? '都交齐了'
+        : `还差 ${waiting.length} 家`;
 
   commanderEl.innerHTML = `
     <div class="cmd-head">
@@ -3703,10 +3930,11 @@ function renderCommander(): void {
       }</span>
       <span class="cmd-count">${
         hotseat
-          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeReady ? '对方已提交' : '等对方排'}`
+          ? `已排 ${queue.length} / ${slots}　${mineReady ? '你已提交' : '你未提交'} · ${foeLabel}`
           : `已排 ${queue.length} / ${slots}`
       }</span>
     </div>
+    <div class="cmd-plan">${strategyRow()}</div>
     <div class="cmd-queue">${chips.join('')}</div>
     <div class="cmd-foot">
       <span class="cmd-total" data-est-total></span>
@@ -3761,6 +3989,38 @@ commanderEl.addEventListener('click', (e) => {
   if (cmd === 'clear') {
     dispatch({ type: 'SET_ORDERS', queue: [], sites: [] });
   }
+  if (cmd === 'strategy') {
+    const key = el.closest<HTMLElement>('[data-strategy]')?.dataset.strategy;
+    if (!key) return;
+    const cur = orderDirectiveOf(state, me());
+    // 只改策略、保留已选的进攻方向：这两件事是分开定的，改一个不该把另一个清掉
+    dispatch({
+      type: 'SET_DIRECTIVE',
+      directive: { strategy: key as OrderDirective['strategy'], ...(cur.target ? { target: cur.target } : {}) },
+    });
+  }
+});
+
+/*
+ * 进攻方向用下拉框，所以走 change 而不是 click。
+ *
+ * 下拉是原生控件：点它不会触发按钮那套 `[data-cmd]` 逻辑，混在一起会互相吞事件。
+ */
+commanderEl.addEventListener('change', (e) => {
+  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-cmd="dir"]');
+  if (!sel) return;
+  const cur = orderDirectiveOf(state, me());
+  const v = sel.value;
+  let target: OrderDirective['target'];
+  if (v.startsWith('seat:')) target = { seat: v.slice(5) as PlayerId };
+  else if (v.startsWith('dir:')) {
+    const [dx, dy] = v.slice(4).split(',').map(Number);
+    target = { dx: dx ?? 0, dy: dy ?? 0 };
+  }
+  dispatch({
+    type: 'SET_DIRECTIVE',
+    directive: { strategy: cur.strategy, ...(target ? { target } : {}) },
+  });
 });
 
 /**
@@ -3843,7 +4103,8 @@ async function runCommanderResolve(): Promise<void> {
 
   try {
     for (let r = 0; r < CONFIG.commanderSlots; r++) {
-      for (let half = 0; half < 2; half++) {
+      // 一"轮"= 每一席各走一次。两家局就是两半回合，三家四家局跟着席位走。
+      for (let half = 0; half < seatsOf(state).length; half++) {
         if (token !== aiToken || state.winner || room) break;
         commanderRound = r + 1;
         commanderSig = '';
@@ -5631,3 +5892,18 @@ if (drift) {
       '修法：把 src/net/cloud-config.ts 的 endpoint 和 publishableKey 换成这个应用当前下发的 publicConfig。',
   );
 }
+
+/*
+ * 第一屏。
+ *
+ * 位置很重要：这一行必须在**启动流程的最末尾**——上面那一大段才是
+ * "读存档 / 修存档 / 首次渲染 / 让 AI 跑起来"。我第一次把调用写进了
+ * `applyRoom()`（那是以联机入房为入口的函数），于是正常打开页面根本走不到，
+ * 表现就是"首页做完了但看不见"。教训：给"启动时的东西"找位置，要认
+ * 模块末尾的初始化代码，而不是随便找一个 startRoomPolling 的邻居。
+ *
+ * 带邀请链接（?room=CODE）直接进房间，不让门面挡路；
+ * 想看门面又不想清存档，就在地址后面加 ?home=1。
+ */
+const forceHome = new URLSearchParams(location.search).get('home') === '1';
+if (forceHome || invited.length < 4) showTitle();
