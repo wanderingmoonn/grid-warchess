@@ -52,6 +52,7 @@ import {
 // 扩展兵种引用自家能力时，不该因为"本体表里没有"就报不存在。
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
+import { auraTargets } from '../src/core/ability-hooks.ts';
 import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
 import {
   airwingOps,
@@ -67,6 +68,9 @@ import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
 import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
+import type { TurnStartCtx } from '../src/core/ability-hooks.ts';
+
+
 /** 甲板测试用：按 id 从真实的海军兵种表里取定义（读的就是发布用的那份数据） */
 const nvDef = (id: string) => (NAVAL.units ?? []).find((u) => u.id === id)!;
 /**
@@ -15761,6 +15765,133 @@ test('产兵点不许落成即废：二代的工程兵修不了四代的造船�
     true,
     '二代的船坞在二代：白名单里有货',
   );
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 光环系统重构专项测试
+ * ══════════════════════════════════════════════════════════════════ */
+
+test('光环：疾行光环（移动力）的半径正确生效', () => {
+  // 这条针对 Commit 2 的 bug 修复：移除了写死的 distance !== 1
+  const s = arena(fresh({ godMode: true }));
+  
+  // 借用现成的光环能力，临时把它的效果改成疾行光环
+  const ab = allAbilities().find(a => a.id === 'aura-command');
+  assert.ok(ab);
+  const originalAura = ab.hooks.aura;
+  ab.hooks.aura = { allyMove: 2, radius: 2 };
+  
+  try {
+    s.unitTypes['test-leader'] = { ...s.unitTypes.militia, id: 'test-leader', abilities: ['aura-command'] };
+    
+    place2(s, 'A', 'test-leader', 5, 5);
+    const mate1 = place2(s, 'A', 'militia', 5, 6); // 距离 1
+    const mate2 = place2(s, 'A', 'militia', 5, 7); // 距离 2
+    const mate3 = place2(s, 'A', 'militia', 5, 8); // 距离 3
+    
+    const baseMove = s.unitTypes['militia']!.move;
+    
+    assert.equal(movePower(s, mate1), baseMove + 2, '距离 1 吃满加成');
+    assert.equal(movePower(s, mate2), baseMove + 2, '距离 2 吃满加成（原 bug 这里吃不到）');
+    assert.equal(movePower(s, mate3), baseMove, '距离 3 在半径外');
+    
+    // 顺便验证一下面板同源
+    assert.equal(effectiveStats(s, mate2).move, baseMove + 2, '面板移动力要一致');
+    assert.ok(
+      effectiveStats(s, mate2).moveItems.some(i => i.label === '疾行光环' && i.delta === 2),
+      '面板上要显示出来'
+    );
+  } finally {
+    ab.hooks.aura = originalAura;
+  }
+});
+
+test('光环：数组格式允许多条不同半径的光环共存', () => {
+  // 针对 Commit 4：aura 字段支持数组
+  const s = arena(fresh({ godMode: true }));
+  
+  const ab = allAbilities().find(a => a.id === 'aura-command');
+  assert.ok(ab);
+  const originalAura = ab.hooks.aura;
+  ab.hooks.aura = [
+    { allyAtk: 3, radius: 1, label: '近战光环' },
+    { allyArmor: 2, radius: 2, label: '防御光环' }
+  ];
+  
+  try {
+    s.unitTypes['test-leader2'] = { ...s.unitTypes.militia, id: 'test-leader2', abilities: ['aura-command'] };
+    
+    place2(s, 'A', 'test-leader2', 5, 5);
+    const mate1 = place2(s, 'A', 'militia', 5, 6); // 距离 1
+    const mate2 = place2(s, 'A', 'militia', 6, 6); // 距离 2
+    
+    // mate1 在距离 1，两条光环都该吃到
+    assert.equal(effectiveStats(s, mate1).atk, s.unitTypes.militia!.atk + 3, '距离1吃到攻击光环');
+    assert.equal(effectiveStats(s, mate1).armor, s.unitTypes.militia!.armor + 2, '距离1吃到护甲光环');
+    
+    // mate2 在距离 2，只吃半径 2 的护甲光环
+    assert.equal(effectiveStats(s, mate2).atk, s.unitTypes.militia!.atk, '距离2吃不到攻击光环');
+    assert.equal(effectiveStats(s, mate2).armor, s.unitTypes.militia!.armor + 2, '距离2吃到护甲光环');
+    
+    // 针对 Commit 5：自定义 label 生效
+    assert.ok(
+      effectiveStats(s, mate1).atkItems.some(i => i.label === '近战光环' && i.delta === 3),
+      '面板显示自定义标签'
+    );
+  } finally {
+    ab.hooks.aura = originalAura;
+  }
+});
+
+test('光环：2×2 大单位提供的光环按体积最近边算距离', () => {
+  // 针对 Commit 1/2：使用了 distBetweenUnits 替代原始锚点距离
+  const s = arena(fresh({ godMode: true }));
+  
+  const ab = allAbilities().find(a => a.id === 'aura-command');
+  assert.ok(ab);
+  const originalAura = ab.hooks.aura;
+  ab.hooks.aura = { allyAtk: 5, radius: 1 };
+  
+  try {
+    s.unitTypes['test-big-leader'] = { 
+      ...s.unitTypes.militia, 
+      id: 'test-big-leader', 
+      footprint: 2, 
+      abilities: ['aura-command'] 
+    };
+    
+    place2(s, 'A', 'test-big-leader', 5, 5); // 占了(5,5)到(6,6)
+    
+    // mate 站在右下角旁边 (7,6)
+    // 如果按锚点(5,5)算，距离是 |7-5| + |6-5| = 3，吃不到半径 1 的光环
+    // 如果按 2×2 矩形最近边算，距离是 1，应该吃到
+    const mate = place2(s, 'A', 'militia', 7, 6);
+    
+    assert.equal(effectiveStats(s, mate).atk, s.unitTypes.militia!.atk + 5, '贴着身体边缘应该吃到半径1的光环');
+  } finally {
+    ab.hooks.aura = originalAura;
+  }
+});
+
+test('光环：动态效果型光环的半径传参生效', () => {
+  const s = arena(fresh({ godMode: true }));
+  const caster = place2(s, 'A', 'militia', 5, 5);
+  place2(s, 'A', 'militia', 7, 5); // 距离 2
+  
+  // 伪造一个 TurnStartCtx
+  const ctx = {
+    state: s,
+    self: caster,
+    owner: 'A',
+    rested: true,
+    healable: true,
+    api: {} as any,
+  } as TurnStartCtx;
+  
+  // 默认半径 1：取不到 2 格外的人
+  assert.equal(auraTargets(ctx, 1).length, 1, '默认半径 1 只能取到自己');
+  // 传半径 2：能取到 2 格外的人
+  assert.equal(auraTargets(ctx, 2).length, 2, '传半径 2 取到两个人');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
