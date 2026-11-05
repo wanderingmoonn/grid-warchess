@@ -68,6 +68,8 @@ import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
 import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
+import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
+
 import type { TurnStartCtx } from '../src/core/ability-hooks.ts';
 
 
@@ -11917,6 +11919,44 @@ test('修士：死亡化作灵体，可主动重生', () => {
   
   const max = maxHpOf(s, rebornQi);
   assert.equal(rebornQi.hp, Math.max(1, Math.ceil(max * 0.1)), '恢复 10% 生命');
+});
+
+test('散灵台：0攻基础、耗灵石开火、自动开火联动', () => {
+  const s = fresh({ expansionIds: ['cultivation'] });
+  s.fog = false; 
+  s.tiles[5 * s.w + 6] = { terrain: 'plain', cityId: null };
+
+  s.units.push({
+    id: 't-tower', type: 'cultivation-spirit-tower', owner: 'A' as const,
+    x: 5, y: 5, hp: 28, kills: 0, moved: true, acted: false,
+  });
+  s.units.push({
+    id: 't-target', type: 'militia', owner: 'B' as const,
+    x: 6, y: 5, hp: 100, kills: 0, moved: true, acted: true,
+  });
+
+  s.players.A.res = { [SPIRIT_STONE]: 10 };
+
+  const skillRes = applyAction(s, {
+    type: 'HERO_SKILL',
+    unitId: 't-tower',
+    skillId: 'tower-charge',
+  });
+  assert.ok(skillRes.ok, '应该能成功释放技能');
+  assert.equal(skillRes.state.players.A.res![SPIRIT_STONE], 5, '应该扣除 5 灵石');
+
+  // 👇 关键打印 1：看看放完技能后，塔的 custom 里到底存了什么
+  const towerAfterSkill = skillRes.state.units.find(u => u.id === 't-tower')!;
+  console.log('放完技能后的 custom：', towerAfterSkill.custom);
+
+  const r = applyAction(skillRes.state, { type: 'END_TURN' });
+  assert.ok(r.ok);
+
+  // 👇 关键打印 2：看看战报里是打了几次，还是根本没打
+  console.log('战斗日志：', r.state.log.map(l => l.text));
+
+  const target = r.state.units.find(u => u.id === 't-target')!;
+  assert.ok(target.hp <= 70, '塔应该开火并造成至少 30 点伤害');
 });
 
 test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
