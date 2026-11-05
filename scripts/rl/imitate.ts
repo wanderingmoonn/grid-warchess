@@ -146,7 +146,23 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   const rejected = new Set<string>();
   let skipped = 0;
 
+  /**
+   * 步数护栏。
+   *
+   * 这个循环原来是"没有赢家且没到回合上限就继续"，隐含假设是"每一步都会推进局面"。
+   * 实测打出过一局**不推进**的：16 个 worker 全部 100% CPU 转了十几分钟、一行输出都没有，
+   * 父进程那边看起来就是"卡住了"，连是哪一局都不知道。护栏把它变成一条带种子号的报错。
+   *
+   * 上限 20000 的依据：150 回合 × 每回合最多 AI_MAX_STEPS(50) 步 = 7500，留一倍余量。
+   */
+  let guard = 0;
   while (!s.winner && s.turn <= CAP) {
+    if (++guard > 20000) {
+      throw new Error(
+        `第 ${g} 局（种子 ${seed}）走了 ${guard} 步还没结束：第 ${s.turn} 回合、轮到 ${s.current}。` +
+          '这说明有动作没推进局面（重复施加同一个动作 / 回合没交接），是规则层或策略层的问题，不是慢。',
+      );
+    }
     const seat = s.current;
     if (seat !== turnSeat) {
       turnSeat = seat;

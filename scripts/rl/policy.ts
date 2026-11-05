@@ -227,6 +227,24 @@ export class Policy {
     this.hidden2 = new Float32Array(this.spec.hidden);
   }
 
+  /**
+   * 上一次 `decide` / `evaluate` 用过的**状态**与**动作特征**（复用缓冲）。
+   *
+   * 存在的理由只有一个：采样器要把"这一步看到的局面和候选"落盘当训练样本，
+   * 而这两样 `decide` 内部已经算过了。不暴露出来，调用方就得再算一遍——
+   * 实测那是每步 0.4ms（encodeState + encodeActions 各一次），
+   * 而且是**两次 actionContext**（一次在 encodeActions 里、一次在 decide 里）。
+   *
+   * 返回值是内部缓冲，**用完立刻用掉**，下一次 decide 会原地覆盖。
+   */
+  get lastState(): Float32Array {
+    return this.stateBuf;
+  }
+
+  get lastFeats(): Float32Array {
+    return this.actionBuf;
+  }
+
   /** 编码状态（可复用缓冲）。调用方要留着做训练样本时必须自己拷一份 */
   encode(s: GameState, seat: PlayerId): Float32Array {
     return encodeState(s, seat, this.stateBuf);

@@ -51,7 +51,7 @@ import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
 import type { AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
 import { TRAIN } from './config.ts';
-import { ACTION_DIM, STATE_DIM, encodeActions, encodeState } from './features.ts';
+import { ACTION_DIM, STATE_DIM } from './features.ts';
 import { legalActions } from './legal.ts';
 import { Policy, weightsFromJson } from './policy.ts';
 import { hashSeed, mulberry32 } from './rng.ts';
@@ -266,7 +266,23 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   const rejected = new Set<string>();
   const lastStored = new Map<PlayerId, number>();
 
+  /**
+   * 步数护栏。
+   *
+   * 这个循环原来是"没有赢家且没到回合上限就继续"，隐含假设是"每一步都会推进局面"。
+   * 实测打出过一局**不推进**的：16 个 worker 全部 100% CPU 转了十几分钟、一行输出都没有，
+   * 父进程那边看起来就是"卡住了"，连是哪一局都不知道。护栏把它变成一条带种子号的报错。
+   *
+   * 上限 20000 的依据：150 回合 × 每回合最多 AI_MAX_STEPS(50) 步 = 7500，留一倍余量。
+   */
+  let guard = 0;
   while (!s.winner && s.turn <= CAP) {
+    if (++guard > 20000) {
+      throw new Error(
+        `第 ${g} 局（种子 ${seed}）走了 ${guard} 步还没结束：第 ${s.turn} 回合、轮到 ${s.current}。` +
+          '这说明有动作没推进局面（重复施加同一个动作 / 回合没交接），是规则层或策略层的问题，不是慢。',
+      );
+    }
     const seat = s.current;
     if (seat !== turnSeat) {
       turnSeat = seat;
@@ -317,9 +333,13 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     }
 
     if (learnable(seat)) {
-      const state = encodeState(s, seat);
-      const feats = encodeActions(s, seat, acts);
+      // 先决策，再从策略内部把"它真正用过的"那份状态和动作特征取出来落盘。
+      // 自己再 encode 一遍不只是白费算力（每步约 0.4ms，含两次 actionContext），
+      // 更要紧的是那份和 dec.logp 对应的特征**必须和 decide 用的是同一份**，
+      // 否则训练时看到的东西和当时决策看到的东西会有细微差别。
       const dec = d.decide(s, seat, acts, randOf(seat));
+      const state = d.lastState;
+      const feats = d.lastFeats;
 
       const picked = dec.candidates;
       const slot = buf.slot();
@@ -410,6 +430,12 @@ class Sink {
       this.totalSteps += cur.rows.length / WIDTH;
       this.perGame[this.cursor] = cur.meta;
       this.cursor += 1;
+      // 每 8 局报一次进度。为什么值得多这一行：有一次一轮采样静默卡了十几分钟，
+      // 输出文件停在同一个字节数上，而父进程什么都不打印——分不清是"还在算"还是"死了"。
+      // 打到 stderr 是因为 stdout 已经被 loop.py 接管去解析了。
+      if (this.cursor % 8 === 0 && this.cursor < GAMES) {
+        process.stderr.write(`  …已完成 ${this.cursor}/${GAMES} 局（${this.totalSteps} 步）\n`);
+      }
     }
   }
 
