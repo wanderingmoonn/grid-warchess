@@ -245,13 +245,21 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
     const def = utype(s, u.type);
     if (!def.builds || def.builds.length === 0) continue;
     if (u.acted) continue;
-    const reach = def.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
     for (const buildId of def.builds) {
       const maybe = s.unitTypes[buildId];
       if (!maybe || maybe.category !== 'building') continue;
       if (!canUseType(s, seat, buildId)) continue;
       // 收窄之后存一份带类型的局部量：闭包里的类型收窄不可靠
       const bdef: UnitTypeDef = maybe;
+      /*
+       * 扫描半径看的是**要盖的那个东西**，不是工兵。
+       *
+       * 桥要多往外两格：三格宽的河心，站在岸上的工兵用 `buildRange` 够不到，
+       * 只能顺着已经铺好的桥面把下一段递出去（规则的 `bridgeChainOk` 允许 +2）。
+       * 这里原来读的是 `def.bridges`（工兵的），于是桥永远只扫 2 格——
+       * 实测剩下的 0.27% 跳过**全是桥**，769 步里没有例外。
+       */
+      const reach = bdef.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
       // doBuild 会先问一句"这个产兵点在当前时代建起来有没有用"，
       // 没用直接拒（提前修七代船坞 = 花 460 金买块石头）。
       // 注意问的是**落点**的时代供货，不是工兵脚下那格——doBuild 用的是
