@@ -24,6 +24,7 @@
  */
 
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import { distBetweenUnits } from './query.ts';
 
 /** 四邻方向。规则层到处都要用，放这里省得扩展自己再抄一份 */
 export const DIRS: ReadonlyArray<readonly [number, number]> = [
@@ -543,7 +544,7 @@ export function auraTargets(c: TurnStartCtx, radius = 1): Unit[] {
   return [
     self,
     ...c.state.units.filter(
-      (u) => u.owner === self.owner && u.id !== self.id && c.api.distance(u, self) <= radius,
+      (u) => u.owner === self.owner && u.id !== self.id && distBetweenUnits(c.state, u, self) <= radius,
     ),
   ];
 }
