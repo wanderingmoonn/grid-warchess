@@ -138,7 +138,7 @@ def main() -> int:
     open(log_path, "w", encoding="utf-8").close()
 
     print(
-        f"{'轮':>3} {'削弱':>5} {'步数':>6} {'采样胜':>7} {'win@档':>7} {'win@0':>7} "
+        f"{'轮':>3} {'削弱':>5} {'步数':>6} {'对AI胜':>7} {'自分胜':>7} {'win@档':>7} {'win@0':>7} "
         f"{'logp':>8} {'KL':>9} {'熵':>7} {'用时':>6}"
     )
     self_share = 0.0  # 第一轮：一次自博弈都不安排（见 rollout.ts 里那段说明）
@@ -186,9 +186,15 @@ def main() -> int:
             flat = np.fromfile(fh, dtype="<f4").reshape(-1, roll["width"])
         mean_logp = float(flat[:, roll["state"] + roll["k"] * roll["action"] + 0].mean())
 
-        # 采样这边的胜率是白送的课程信号：这一轮打的就是 level 这一档，不用额外评估
+        # 采样这边的胜率是白送的课程信号：这一轮打的就是 level 这一档，不用额外评估。
+        # 但**必须把自博弈剔出去**：两个自己下，A 胜天然接近 50%，混进来会把这个数
+        # 稀释成一个跟棋力无关的常数（第一版就是这么算的，自博弈一开就看不出来了）。
         played = roll.get("perGame", [])
-        sample_win = 100.0 * sum(1 for g in played if g.get("winner") == "A") / max(1, len(played))
+        ai_games = [g for g in played if g.get("mode") != "self"]
+        self_games = [g for g in played if g.get("mode") == "self"]
+        sample_win = 100.0 * sum(1 for g in ai_games if g.get("winner") == "A") / max(1, len(ai_games))
+        # 自博弈那一半报"分不分得出胜负"——分不出就是没信号，和胜率无关
+        self_dec = 100.0 * sum(1 for g in self_games if g.get("winner")) / max(1, len(self_games))
 
         win_cur = float("nan")
         win_tgt = float("nan")
@@ -222,6 +228,7 @@ def main() -> int:
             "modes": roll.get("modeCounts", {}),
             "steps": roll["steps"],
             "sample_win": sample_win,
+            "self_decisive": self_dec if self_games else float("nan"),
             "win_cur": win_cur,
             "win_target": win_tgt,
             "mean_logp": mean_logp,
@@ -237,9 +244,11 @@ def main() -> int:
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, default=float) + "\n")
         tgt_txt = f"{win_tgt:>6.1f}%" if win_tgt == win_tgt else "     —"
+        sdec_txt = f"{self_dec:>6.1f}%" if self_games else "     —"
         print(
-            f"{row['iter']:>3} {level:>5} {row['steps']:>6} {sample_win:>6.1f}% {win_cur:>6.1f}% "
-            f"{tgt_txt} {mean_logp:>8.3f} {row['kl']:>9.2e} {row['entropy']:>7.3f} {row['secs']:>5.0f}s"
+            f"{row['iter']:>3} {level:>5} {row['steps']:>6} {sample_win:>6.1f}% {sdec_txt} "
+            f"{win_cur:>6.1f}% {tgt_txt} {mean_logp:>8.3f} {row['kl']:>9.2e} {row['entropy']:>7.3f} "
+            f"{row['secs']:>5.0f}s"
         )
 
         # 温度计：赢了收紧、输了放松。中间 40~60 是死区，不动——
