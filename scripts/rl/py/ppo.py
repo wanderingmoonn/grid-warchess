@@ -264,15 +264,19 @@ def update(model: TorchPolicy, roll: Rollout, cfg: PpoConfig) -> dict[str, float
 # 每个桶报三件事：样本占比、平均优势（信号强弱）、平均 Δlogp（这一桶被推动了多少）。
 # 「优势大而 Δlogp 小」的那一桶，就是被别处梯度挤掉的地方。
 
-TYPE_NAMES = ["走子", "攻击", "攻城", "造城兵", "造营兵", "升级", "结束回合", "其他"]
+# 和 features.ts 的 ACTION_KINDS_NAMES 一一对应（v2 从 7 格扩到 13 格）
+TYPE_NAMES = [
+    "走子", "攻击", "攻城", "造城兵", "造营兵", "升级", "结束回合",
+    "盖建筑", "上船", "下船", "英雄技能", "遣散", "放蛋",
+]
 
 TURN_BUCKETS = [(0, 9, "开局 1-10"), (10, 29, "前中 11-30"), (30, 59, "中局 31-60"), (60, 10**9, "残局 60+")]
 
 
 def _action_types(roll: Rollout) -> np.ndarray:
-    """从候选特征的前 7 维（动作类型 one-hot）反推这一步选的是什么动作。"""
+    """从候选特征的前 13 维（动作类型 one-hot）反推这一步选的是什么动作。"""
     chosen = roll.cand[np.arange(len(roll)), np.clip(roll.idx, 0, roll.cand.shape[1] - 1)]
-    return np.argmax(chosen[:, :7], axis=1)
+    return np.argmax(chosen[:, : len(TYPE_NAMES)], axis=1)
 
 
 def diagnose(model: TorchPolicy, roll: Rollout, adv: np.ndarray, old_logp: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray, np.ndarray]]:

@@ -123,6 +123,11 @@ def main() -> int:
              "想把自博弈提到 0.5 以上又保留 20%% 打 AI 的锚，就得单独钉它。",
     )
     ap.add_argument(
+        "--intent", default="auto",
+        help="给策略的意图：auto / random / rush / harass / boom。"
+             "random 是训练'指令跟随'的口径（每一方按种子抽一个），auto 是 v1 的对照口径",
+    )
+    ap.add_argument(
         "--self-fixed", type=float, default=-1,
         help="直接钉死自博弈占比（>=0 时生效，绕过爬坡）。"
              "为什么需要它：爬坡的准入条件原来是「能赢不削弱的 AI」，那个条件太严——"
@@ -159,7 +164,7 @@ def main() -> int:
             "--weights", weights, "--out", data,
             "--opponent", args.opponent, "--snapshots", snap_dir,
             "--self-share", f"{self_share:.2f}", "--ai-level", args.ai_level,
-            "--ai-handicap", level,
+            "--ai-handicap", level, "--intent", args.intent,
             *(["--snap-share", str(args.snap_share)] if args.snap_share >= 0 else []),
         ])
         roll = json.load(open(f"{data}.json", encoding="utf-8"))

@@ -46,6 +46,9 @@ import type { AiLevel, PlayerId } from '../../src/core/types.ts';
 import { EVAL } from './config.ts';
 import { wilson } from './stats.ts';
 import { Policy, weightsFromJson } from './policy.ts';
+import { INTENT_NAMES } from './features.ts';
+import type { Intent } from './features.ts';
+import { hashSeed, mulberry32 } from './rng.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -75,6 +78,14 @@ const EXPANSIONS = argOf('expansions', EVAL.expansions.join(',') || 'none');
 const AI_LEVEL = argOf('ai-level', EVAL.aiLevel) as AiLevel;
 /** 手写 AI 的削弱概率（0 = 原样）。用来量"胜率从哪一档开始不为 0" */
 const AI_HANDICAP = Number(argOf('ai-handicap', '0'));
+/**
+ * 给策略什么意图。
+ *
+ * `auto`（默认）就是"不说打法，自己判断"，v1 的口径。
+ * `random` 按种子给每一局抽一个，用来验"它是不是真的会按口令换打法"——
+ * 以及最重要的那条：**同一批种子、不同意图，前 20 手要有明显差别**。
+ */
+const INTENT = argOf('intent', 'auto') as Intent | 'random';
 const expIds = EXPANSIONS === 'none' || EXPANSIONS === '' ? [] : EXPANSIONS.split(',');
 /** 一次派给 worker 几局。1 = 最细的粒度（尾巴最短），再小就得靠 worker 常驻来抵启动成本 */
 const CHUNK = Number(argOf('chunk', '1'));
@@ -121,7 +132,11 @@ function loadPolicy(): Policy {
 
 function candidateDriver(): Driver {
   if (MODE === 'random') return { kind: 'random' };
-  if (MODE === 'policy' || MODE === 'mirror') return { kind: 'policy', policy: loadPolicy() };
+  if (MODE === 'policy' || MODE === 'mirror') {
+    const p = loadPolicy();
+    if (INTENT !== 'random') p.intent = INTENT;
+    return { kind: 'policy', policy: p };
+  }
   return { kind: 'ai' };
 }
 
@@ -144,6 +159,11 @@ function runGames(from: number, count: number): GameRecord[] {
   const out: GameRecord[] = [];
   for (let i = from; i < from + count; i++) {
     const { seed, seat } = gameAt(i);
+    // 意图按种子定：同一批种子重跑会得到同一份意图分配
+    if (INTENT === 'random' && driver.kind === 'policy') {
+      const r = mulberry32(hashSeed(seed, seat, 'intent'))();
+      driver.policy.intent = INTENT_NAMES[Math.floor(r * INTENT_NAMES.length)] ?? 'auto';
+    }
     const drivers: [Driver, Driver] = seat === 'A' ? [driver, foe] : [foe, driver];
     const r: MatchOutcome = playMatch({
       seed,

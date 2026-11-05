@@ -46,6 +46,32 @@ const ID_FLAGS: ReadonlyArray<readonly [string, number]> = [
   ['action-points', 26],
 ];
 
+/**
+ * 地形高度的查表器（按"扩展组合 + 地形"记忆）。
+ *
+ * 为什么需要它：`heightOfTerrain` 每次都要遍历 activeExpansions 的钩子，
+ * 而编码要逐格查高度（12×12 就是 144 次）。实测这一条就吃掉了每步 0.2ms——
+ * 而高度是**地形类型**的属性，一张图上最多 13 种地形，查一次就够一辈子。
+ * 键里带扩展组合，是为了"同一进程里跑不同扩展的多局"不会互相污染。
+ */
+const HEIGHT_MEMO = new Map<string, Map<string, number>>();
+export function heightLookup(s: GameState): (t: string) => number {
+  const key = s.config.expansionIds.join(',');
+  let memo = HEIGHT_MEMO.get(key);
+  if (!memo) {
+    memo = new Map();
+    HEIGHT_MEMO.set(key, memo);
+  }
+  const m = memo;
+  return (t: string): number => {
+    const hit = m.get(t);
+    if (hit !== undefined) return hit;
+    const v = heightOfTerrain(s, t as never);
+    m.set(t, v);
+    return v;
+  };
+}
+
 /** 压进 [-4, 4]：和 features.ts 同一个口径，网络吃不了 inf */
 function clip(v: number): number {
   if (!Number.isFinite(v)) return 0;
@@ -134,7 +160,8 @@ export function describeEnv(s: GameState, out?: Float32Array): Float32Array {
   // 高度是**地形类型**的属性（`TERRAIN_HEIGHT`），不是每格的字段，所以要走 heightOfTerrain；
   // 扩展没开时它对所有地形都是 0，这一格自然就是 0，不需要认扩展 id。
   let withH = 0;
-  for (const t of s.tiles) if (heightOfTerrain(s, t.terrain) > 0) withH += 1;
+  const hOf = heightLookup(s);
+  for (const t of s.tiles) if (hOf(t.terrain) > 0) withH += 1;
   f[20] = s.tiles.length > 0 ? clip(withH / s.tiles.length) : 0;
   // [21] 非金币资源种类数：说明"经济不是单资源"。分母 4。
   f[21] = clip((ids.length - 1) / 4);

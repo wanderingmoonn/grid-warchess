@@ -23,12 +23,12 @@
  * base64 的 float32 字节串是精确的，Python 那边 `np.frombuffer` 一行就还原。
  */
 import { ACTION_DIM, STATE_DIM, actionContext, encodeActions, encodeState } from './features.ts';
-import type { ActionContext } from './features.ts';
+import type { ActionContext, Intent } from './features.ts';
 import { gauss, mulberry32 } from './rng.ts';
 import type { Action, GameState, PlayerId } from '../../src/core/types.ts';
 
 /** 权重文件的版本：结构一改就 +1，加载时对不上直接报错，不做兼容 */
-export const WEIGHTS_VERSION = 1;
+export const WEIGHTS_VERSION = 2;
 
 export interface NetSpec {
   state: number;
@@ -197,6 +197,14 @@ export class Policy {
   readonly topK: number;
   /** 采样温度：1 = 按概率采；<1 更贪心。评估时用 0.3 就能看出"最优解"是什么 */
   temperature: number;
+  /**
+   * 这一局按什么意图打（rush / harass / boom / auto）。
+   *
+   * 放在实例上而不是 `decide` 的参数里：意图是"这一局"的属性，不是"这一步"的属性，
+   * 每步都传一遍只会让调用点到处重复同一个值，而漏传一次就会得到
+   * "训练时按意图、推理时 auto" 的错位样本。
+   */
+  intent: Intent = 'auto';
 
   private stateBuf: Float32Array;
   private actionBuf: Float32Array;
@@ -247,7 +255,7 @@ export class Policy {
 
   /** 编码状态（可复用缓冲）。调用方要留着做训练样本时必须自己拷一份 */
   encode(s: GameState, seat: PlayerId): Float32Array {
-    return encodeState(s, seat, this.stateBuf);
+    return encodeState(s, seat, this.intent, this.stateBuf);
   }
 
   /** 价值头：state → tanh */

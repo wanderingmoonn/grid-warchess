@@ -14,33 +14,50 @@
  *
  * 硬测试在 `scripts/rl/verify-legal.ts`：**枚举出来的每个动作，applyAction 都必须接受**。
  *
- * ── 还没覆盖的 ──────────────────────────────────────────────────────────
+ * ── v2：补齐了六类动作（v1 只枚举 6 类）─────────────────────────────────
  *
- *   · BUILD（野外盖建筑）：落点合法性依赖 supplyEraAt / 地形 / 相邻规则，
- *     而且"盖在哪"本身是二维决策，留给第二版；
- *   · LOAD / UNLOAD（上下船）、HERO_SKILL、DISBAND、PLACE_EGG：低频动作。
+ * v1 只列 MOVE / ATTACK / SIEGE / RECRUIT / UPGRADE / END_TURN，后果是
+ * **老 AI 有 7.0% 的决策做不出来**（盖建筑、上下船、英雄技能、遣散、放蛋）——
+ * 这些步在模仿数据里只能整条丢掉，策略也就永远学不会"造塔"和"过河"。
+ * v2 补上了 BUILD / LOAD / UNLOAD / HERO_SKILL / DISBAND / PLACE_EGG。
  *
- * 这会让策略略弱于手写 AI（它会盖塔、会上下船）。**做基线对比时必须说明这个差异**，
- * 否则"PPO 打不过手写 AI"会被误读成算法不行。
+ * 三类仍然不枚举，理由写在各处：
+ *   · 需要**选点**的技能（`targeting: 'point' | 'direction'`）：一个技能乘上全图格子，
+ *     动作空间会炸开，而这类技能在现有兵种表里极少；
+ *   · 残血清空才划算的 DISBAND：只在"满血、真能回收钱"时列出，
+ *     否则每回合凭空多出十几个垃圾候选，把 softmax 的分母摊薄；
+ *   · 指挥官模式的 SET_ORDERS / 选卡的 DRAFT_*：它们不是"一步棋"，是另一套入口。
  */
 import {
+  SKILL_EFFECTS,
+  blockedFor,
+  buildSiteError,
   canStrike,
   cityById,
   citiesOf,
   coversTile,
+  distance,
   distToCity,
+  disbandRefundOf,
   effectiveRangeAgainst,
+  eggSpots,
   heroBlocked,
+  heroSkillsOf,
   reachableTiles,
   rebuildCost,
   recruitPriceOf,
+  recruitResCost,
   recruitSpawnCells,
+  supplyEraAt,
   tileAt,
   underConstruction,
+  unitAt,
   unitById,
   upgradeCostOf,
   utype,
 } from '../../src/core/rules.ts';
+import { CONFIG } from '../../src/core/config.ts';
+import { canHold, holdOf, holdRoom } from '../../src/core/carry.ts';
 import { canUseType, eraWindowOk } from '../../src/core/draft.ts';
 import { canPay } from '../../src/core/resources.ts';
 import {
@@ -48,20 +65,22 @@ import {
   isProducer,
   produceCooldownLeft,
   produceCostScale,
+  produceUsableCount,
   scaleCost,
 } from '../../src/core/produce.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../../src/core/types.ts';
 import type { ResourceCost } from '../../src/core/resources.ts';
 
-/** 这一格上有没有自己的单位挡着（规则允许穿过友军，但不能停在上面） */
-function blockedByAlly(s: GameState, self: Unit, x: number, y: number): boolean {
-  for (const u of s.units) {
-    if (u.id === self.id || u.owner !== self.owner) continue;
-    if (coversTile(s, u, x, y)) return true;
-  }
-  return false;
-}
-
+/*
+ * 这里本来有一个 `blockedByAlly`，自己扫一遍"格子上有没有友军"。删掉的原因值得记：
+ *
+ * `reachableTiles` 返回的**已经是**"能停下的格子"——它在内部按 `blockedAnchor` 过滤过，
+ * 而那套判据比"有没有友军"细得多：不同飞行层不占位、自家的塔/军营/桥可以站、
+ * 墙连自己人也停不上去、敌方建筑要先打掉。
+ *
+ * 自己再写一遍"有友军就挡"的后果是**过度过滤**：实测老师 4.0% 的 MOVE 落空，
+ * 98/99 都落在自家桥上——引擎允许站，枚举把它踢掉了。判据只能有一处。
+ */
 /** 还能不能攻击（`attacksLeft` 未初始化时按满额算，和 rules 一致） */
 function canStillAttack(u: Unit): boolean {
   if (u.acted) return false;
@@ -89,7 +108,6 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
         const y = Math.floor(i / s.w);
         const x = i - y * s.w;
         if (x === u.x && y === u.y) continue;
-        if (blockedByAlly(s, u, x, y)) continue;
         // 走进废墟 = 接管，得先掏重建费（doMove 的第一道钱关）。
         // 这条是 verify 用例逼出来的：不判的话每局都会枚举出一堆
         // "走进去但付不起"的动作。
@@ -214,6 +232,135 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
     if (cost === null) continue;
     if (s.players[seat].gold < cost) continue;
     out.push({ type: 'UPGRADE', cityId: city.id });
+  }
+
+  // ── 建造：工兵在附近盖建筑 ────────────────────────────────────────────
+  //
+  // 落点用 `buildSiteError` 判——和 doBuild 是同一份判据。以前 AI 那边复制过
+  // 一套"扫周围九格"的检查，规则一改它就过期，于是 AI 提了一个必被拒绝的
+  // BUILD，整回合中断。这里不重犯：位置合法性只问规则。
+  //
+  // 范围照 AI 的 `buildSpots`：桥要多往外两格（三格宽的河心，岸上的工兵够不着）。
+  for (const u of mine) {
+    const def = utype(s, u.type);
+    if (!def.builds || def.builds.length === 0) continue;
+    if (u.acted) continue;
+    for (const buildId of def.builds) {
+      const maybe = s.unitTypes[buildId];
+      if (!maybe || maybe.category !== 'building') continue;
+      if (!canUseType(s, seat, buildId)) continue;
+      // 收窄之后存一份带类型的局部量：闭包里的类型收窄不可靠
+      const bdef: UnitTypeDef = maybe;
+      /*
+       * 扫描半径看的是**要盖的那个东西**，不是工兵。
+       *
+       * 桥要多往外两格：三格宽的河心，站在岸上的工兵用 `buildRange` 够不到，
+       * 只能顺着已经铺好的桥面把下一段递出去（规则的 `bridgeChainOk` 允许 +2）。
+       * 这里原来读的是 `def.bridges`（工兵的），于是桥永远只扫 2 格——
+       * 实测剩下的 0.27% 跳过**全是桥**，769 步里没有例外。
+       */
+      const reach = bdef.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
+      // doBuild 会先问一句"这个产兵点在当前时代建起来有没有用"，
+      // 没用直接拒（提前修七代船坞 = 花 460 金买块石头）。
+      // 注意问的是**落点**的时代供货，不是工兵脚下那格——doBuild 用的是
+      // `supplyEraAt(s, s.current, { x, y })`，所以这一句必须放进格子循环里。
+      const eraOk = (x: number, y: number): boolean =>
+        produceUsableCount(bdef, s.unitTypes, supplyEraAt(s, seat, { x, y })) !== 0;
+      for (let dy = -reach; dy <= reach; dy++) {
+        for (let dx = -reach; dx <= reach; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const x = u.x + dx;
+          const y = u.y + dy;
+          if (!tileAt(s, x, y)) continue;
+          if (buildSiteError(s, bdef, u, x, y)) continue;
+          // 续建：目标格上是自家的同型工地时 doBuild 不收费（两个工兵叠进度）。
+          // 其余情况才要过钱关——漏了这一步会枚举出一堆"点下去说资源不足"。
+          const site = s.units.find(
+            (o) => o.type === buildId && o.owner === seat && underConstruction(o) && coversTile(s, o, x, y),
+          );
+          if (!eraOk(x, y)) continue;
+          if (!site && !canPay(s.players[seat], recruitResCost(s, seat, bdef))) continue;
+          out.push({ type: 'BUILD', unitId: u.id, unitType: buildId, x, y });
+        }
+      }
+    }
+  }
+
+  // ── 上船 / 下船 ───────────────────────────────────────────────────────
+  for (const ferry of mine) {
+    const fdef = utype(s, ferry.type);
+    if (!holdOf(fdef)) continue;
+    if (ferry.acted) continue; // 一条船一回合只能装卸一次
+
+    // 上船：贴着船的自家单位
+    if (holdRoom(fdef, ferry) > 0) {
+      for (const cargo of mine) {
+        if (cargo.id === ferry.id) continue;
+        if (cargo.acted) continue;
+        if (distance(ferry, cargo) !== 1) continue;
+        if (!canHold(fdef, utype(s, cargo.type)).ok) continue;
+        out.push({ type: 'LOAD', unitId: ferry.id, cargoId: cargo.id });
+      }
+    }
+
+    // 下船：货舱里的人放到相邻空地
+    for (const cargo of ferry.cargo ?? []) {
+      // 范围要按"船体最大边长 + 1"扫，再用 `distance(ferry, 格)` 判是不是真的贴着：
+      // 2×2 的大舰锚点在左上角，周围 3×3 里有一半是斜角、够不着，
+      // 只按锚点加减 1 会枚举出一堆"只能在船边一格下船"。
+      const spread = 3;
+      for (let dy = -spread; dy <= spread; dy++) {
+        for (let dx = -spread; dx <= spread; dx++) {
+          const x = ferry.x + dx;
+          const y = ferry.y + dy;
+          if (!tileAt(s, x, y)) continue;
+          if (distance(ferry, { x, y }) !== 1) continue;
+          if (unitAt(s, x, y)) continue;
+          if (blockedFor(s, x, y, cargo)) continue;
+          out.push({ type: 'UNLOAD', unitId: ferry.id, cargoId: cargo.id, x, y });
+        }
+      }
+    }
+  }
+
+  // ── 英雄技能 ──────────────────────────────────────────────────────────
+  //
+  // 只列**不需要选点**的（`targeting` 缺省或 'none'）：一个点地技能乘上全图格子，
+  // 动作空间会炸开。这条限制写在文件头，评估要跟着说明。
+  //
+  // 就绪判据走 `heroSkillsOf`：它已经把冷却、充能、以及扩展注册的
+  // `SKILL_READY_CHECKS` 都算进去了——界面上的按钮亮不亮也是它决定的，
+  // 三处读同一份，才不会出现"点了说没准备好"。
+  for (const u of mine) {
+    for (const info of heroSkillsOf(s, u)) {
+      if (!info.ready) continue;
+      const skill = info.def;
+      if (skill.targeting === 'point' || skill.targeting === 'direction') continue;
+      if (!skill.multiCast && u.skillTurn === s.turn) continue;
+      // doHeroSkill 最后一道关：效果没注册就直接拒
+      if (!SKILL_EFFECTS[skill.effect]) continue;
+      out.push({ type: 'HERO_SKILL', unitId: u.id, skillId: skill.id });
+    }
+  }
+
+  // ── 遣散 / 拆除 ───────────────────────────────────────────────────────
+  //
+  // 只在**满血、真能回收钱**时列：残血拆掉一分钱不给，而"每回合凭空多出
+  // 十几个垃圾候选"会把 softmax 的分母摊薄，学起来更慢。
+  for (const u of mine) {
+    if ((u.cargo?.length ?? 0) > 0) continue; // 船里还有人就别拆
+    const def = utype(s, u.type);
+    // 只给建筑和经济单位：它们的"拆了换钱"是真决策（塔挡路、农民没活干），
+    // 而给每个战斗单位都挂一条 DISBAND 会让动作空间平白多出两成垃圾候选
+    // （实测：不设限时 DISBAND 占全部枚举动作的 23%，战斗选项被挤出 top-K）。
+    if (def.category !== 'building' && def.category !== 'economy') continue;
+    if (disbandRefundOf(s, u) <= 0) continue;
+    out.push({ type: 'DISBAND', unitId: u.id });
+  }
+
+  // ── 放蛋（不死鸟倒下之后那一枚）────────────────────────────────────────
+  if (s.pendingEgg && s.pendingEgg.owner === seat) {
+    for (const spot of eggSpots(s)) out.push({ type: 'PLACE_EGG', x: spot.x, y: spot.y });
   }
 
   out.push({ type: 'END_TURN' });

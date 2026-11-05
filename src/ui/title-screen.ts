@@ -30,6 +30,8 @@ export interface TitleOptions {
   onEditor: () => void;
   /** 导入对局：同上 */
   onImport: () => void;
+  /** 复盘：把一份对局数据（结束上传的那个 json）拖/选进来逐帧回看 */
+  onReplay: () => void;
 }
 
 /** 六个时代的色带：和棋盘里的地形色同一套语言，不用另造一套配色 */
@@ -71,6 +73,8 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         <button data-title="editor">兵种编辑器</button>
         <span>·</span>
         <button data-title="import">导入对局</button>
+        <span>·</span>
+        <button data-title="replay" title="选一份对局数据（.json）逐帧回看">复盘</button>
       </div>
       ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
@@ -129,6 +133,12 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         // 导入是"进入某一局"，和开始/继续同级：先撤层
         close();
         opts.onImport();
+        break;
+      case 'replay':
+        // 复盘也是"进入某一局"（只读的那种），同样先撤层：
+        // 选完文件要看见棋盘，不能让首页盖在上面
+        close();
+        opts.onReplay();
         break;
     }
   });

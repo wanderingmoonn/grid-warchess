@@ -30,6 +30,22 @@ const KEY_META = 'warchess:meta:v1';
  */
 let scopedKey = KEY_MATCH;
 
+/**
+ * 存档暂停开关。
+ *
+ * 复盘时 `state` 会被临时换成"别人那一局"，而 main.ts 里二十多个地方都会
+ * 顺手 `saveMatch(state)`——不拦住的话，玩家看一次复盘就等于把自己没打完的那局
+ * 覆盖掉了，而且没有任何提示（下次打开就是别人的棋）。
+ *
+ * 为什么做在存档层而不是改那二十多个调用点：那种改法漏一处就出一次事故，
+ * 而且以后新加的动作路径还会再漏一次。**开关只该有一处**。
+ */
+let suspended = false;
+
+export function suspendSaves(on: boolean): void {
+  suspended = on;
+}
+
 /** 切到某个房间的草稿槽；传 null 回到本机对局 */
 export function setSaveScope(roomCode: string | null): void {
   scopedKey = roomCode ? `${KEY_MATCH}:room:${roomCode}` : KEY_MATCH;
@@ -45,6 +61,7 @@ export interface MatchMeta {
 }
 
 export function saveMatch(s: GameState): void {
+  if (suspended) return;
   try {
     localStorage.setItem(scopedKey, JSON.stringify(s));
     const prev = loadMeta();

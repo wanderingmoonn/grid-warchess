@@ -5570,3 +5570,158 @@ a.btn {
   .title-actions { flex-direction: column; }
   .title-btn { width: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+ * 复盘条
+ *
+ * 和指挥官栏同一个槽、同一套排版语言：它俩都是"顶栏下面那一条说明现状 + 下手"
+ * 的东西，长成两个样子只会让人以为它们是两种模式。
+ *
+ * 唯一的形态差别是多了一整行进度条：复盘的主操作是"往回拖"，那个控件必须够宽。
+ * ------------------------------------------------------------------------- */
+.replay-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px 18px 10px;
+  border-bottom: 1px solid var(--line);
+  /* 和普通对局区分开：复盘是"只读"，底色压暗一档，一眼就知道现在动的不是自己那局 */
+  background: linear-gradient(180deg, #eef1f5, var(--panel-2));
+}
+
+.replay-bar[hidden] {
+  display: none;
+}
+
+.rp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rp-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--a);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+
+.rp-name {
+  font-weight: 600;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-meta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.rp-pos {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.rp-pos b {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.rp-pos i {
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.rp-spacer {
+  flex: 1 1 auto;
+}
+
+.rp-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rp-chip {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rp-chip.active {
+  border-color: var(--a);
+  background: var(--a-soft);
+  color: var(--a);
+  font-weight: 600;
+}
+
+.rp-seek input[type='range'] {
+  width: 100%;
+  /* 滑块要粗一点：复盘是按步挪的，一年也点不到准位置，手指得能压住 */
+  height: 22px;
+  accent-color: var(--a);
+}
+
+.rp-warn {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #fdf3e7;
+  border: 1px solid #e8d5b8;
+  color: #7a5a2a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rp-warn b {
+  flex: 0 0 auto;
+  color: #a2651a;
+}
+
+/*
+ * 拖文件进来时的整页提示。
+ *
+ * 盖在棋盘上而不是只提示"拖到这儿"：玩家不知道哪块能接，所以能接的就是整页。
+ * 虚线框 + 半透明底，既不挡住局面也能一眼看出"现在松手就会接"。
+ */
+#app.dropping::after {
+  content: '松手就用这份对局数据复盘';
+  position: fixed;
+  inset: 12px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px dashed var(--a);
+  border-radius: 14px;
+  background: rgba(47, 110, 168, 0.08);
+  color: var(--a);
+  font-size: 17px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .replay-bar {
+    padding: 6px 12px 8px;
+  }
+
+  .rp-meta,
+  .rp-name {
+    max-width: 14ch;
+  }
+}

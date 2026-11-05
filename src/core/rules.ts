@@ -1720,7 +1720,7 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
  * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
  * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
-function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId }): boolean {
+export function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId }): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return true;
 

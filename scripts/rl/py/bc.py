@@ -47,15 +47,24 @@ def load_bc(base: str):
     slots = int(man["slots"])
     tail = s_dim + slots * a_dim
 
+    # state 直接拷出来（v2 是 289979 × 221 × 4B ≈ 256MB，值这个钱：每一步都要整份读）
     state = rows[:, :s_dim].copy()
-    cand = rows[:, s_dim:tail].reshape(-1, slots, a_dim).copy()
+    # 候选特征**不拷贝**，留成 memmap 的视图，按批取。
+    #
+    # 为什么改：v2 的候选是 65 槽 × 62 维，289979 行就是 4.68GB。整份 copy 出来
+    # 在这台 15.7GB 的机器上会直接把内存吃穿（只剩 5.5GB 可用，光这一项就 4.7GB），
+    # 然后开始换页 —— 训练看起来在跑，实际每秒一个 batch。
+    # 改成 `cand_mm[sel]` 之后，内存里只有当前这一批（4096 行 ≈ 66MB），
+    # 其余留给页缓存，操作系统想回收就回收。代价是每批多一次内存拷贝，
+    # 8 轮下来约 20 秒，比换页便宜得多。
+    cand_mm = rows[:, s_dim:tail]
     label = rows[:, tail + 0].astype(np.int64)
     kused = rows[:, tail + 1].astype(np.int64)
     vt = rows[:, tail + 2].astype(np.float32)
     # 局号一起带出来：main 里切验证集要用它，之前是在那里把整份 .bin **再读一遍**，
     # 150 局的数据光这一下就多啃 1GB —— 大文件上是会 OOM 的
     game = rows[:, tail + 3].astype(np.int64)
-    return state, cand, label, kused, vt, game, man
+    return state, cand_mm, label, kused, vt, game, man
 
 
 def main() -> int:
@@ -72,7 +81,7 @@ def main() -> int:
     ap.add_argument("--val-frac", type=float, default=0.1, help="留出多少做验证（按局切，不按步切）")
     args = ap.parse_args()
 
-    state, cand, label, kused, vt, game, man = load_bc(args.data)
+    state, cand_mm, label, kused, vt, game, man = load_bc(args.data)
     n = len(state)
     games = int(man["games"])
 
@@ -94,10 +103,12 @@ def main() -> int:
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     st = torch.from_numpy(state)
-    cd = torch.from_numpy(cand)
     lb = torch.from_numpy(label)
     ku = torch.from_numpy(kused)
     vt_t = torch.from_numpy(vt)
+
+    slots = int(man["slots"])
+    a_dim = int(man["action"])
 
     def run(idx: np.ndarray, train: bool) -> tuple[float, float, float, float]:
         """返回 (CE, top1 命中率, 价值 MSE, 熵)"""
@@ -110,7 +121,9 @@ def main() -> int:
             sel = order[start : start + args.batch]
             if len(sel) < 2:
                 continue
-            logits, value = model(st[sel], cd[sel], ku[sel])
+            # 候选按批从 memmap 取：`sel` 是乱序下标，fancy index 会把用到的页读进来
+            cd = torch.from_numpy(np.ascontiguousarray(cand_mm[sel]).reshape(len(sel), slots, a_dim))
+            logits, value = model(st[sel], cd, ku[sel])
             logp = torch.log_softmax(logits, dim=-1)
             # 标签平滑：目标分布 = (1-ε)·onehot + ε/k，防止把熵压到 0（探索死掉就没法继续 PPO）
             #
