@@ -17,10 +17,11 @@
 
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
-import { canAttack, canMove, heroSkillsOf } from '../core/rules.ts';
+
 import { paintTerrainsFor } from '../core/sandbox.ts';
-import type { GameState, LogEntry, PlayerId, Terrain, Unit } from '../core/types.ts';
+import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
 import { packOk, packRow, eraChipRow, eraOk } from './packs.ts';
+import { matchRecruit } from './panel.ts';
 
 export type GodBrush =
   | { kind: 'none' }
@@ -78,14 +79,28 @@ export interface GodUi {
    */
   selected: string;
   /**
-   * 手上那支兵本人（没选中就是 null）。
+   * 侧栏顶上那块「选中了什么」的完整属性卡（已经渲染好的 HTML，空串＝没选中）。
    *
-   * 工具栏上那句话只能放一行，技能按钮放不下——而"能不能开技能"恰恰是
-   * 操控档里最容易踩空的一件事：货架把侧栏整块占走了，属性卡和技能菜单
-   * 都不在，英雄站到对面脸上了也没有一个能按的按钮。所以侧栏要单独
-   * 给这支兵留一块地方，见 `pickedCard`。
+   * 为什么是"渲染好的字符串"而不是让这里自己画：属性卡里那套东西
+   * （光环、规则加成、真实数值、技能按钮、上下船）和正常对局是**同一份代码**。
+   * 沙盒里另画一份精简版的话，迟早会出现"沙盒说 12、实战打出来 15"。
+   * 所以由 main 那边调 `detailCardHtml()` 生成，这里只负责摆位置。
    */
-  picked: Unit | null;
+  detail: string;
+  /**
+   * 货架的按字搜索词（空串＝不过滤）。
+   *
+   * 和产兵面板用同一个匹配函数（`matchRecruit`）：名字、代号、职能、时代、包名都算，
+   * 多词按"且"处理。两个界面搜同一个词命中不同的东西，是最难解释的那种不一致。
+   */
+  query: string;
+  /**
+   * 快捷模式：开着的时候键盘上有快捷键直接结束回合，不用去点那颗按钮。
+   *
+   * 摆一场歼灭战要按十几次「结束回合」，鼠标每次都得横跨半个屏幕；
+   * 而沙盒本来就是键盘党在用的东西（摆兵、刷地形都是连点）。
+   */
+  quick: boolean;
 }
 
 const chip = (on: boolean, act: string, label: string, extra = ''): string =>
@@ -145,31 +160,10 @@ export function godBarHtml(ui: GodUi): string {
     .map((p) => chip(ui.side === p, 'god-side', s.players[p].name, `data-side="${p}"`))
     .join('');
 
-  // 操控档：摆完之后是自己下场，还是交给 AI。
-  //
-  // 和「摆给」挨着放，因为它俩是同一个问题的两半——一个说"这是谁的东西"，
-  // 一个说"这一边由谁动手"。分开摆的话，玩家会以为"摆给蓝方"就等于"蓝方归我走"。
-  const playName = s.players[ui.side].name;
-  const playChips = [
-    chip(
-      ui.play === null,
-      'god-play',
-      '只摆放',
-      'data-play="none" title="点棋盘只落子；两边都要按「交给 AI」才动"',
-    ),
-    chip(
-      ui.play === 'me',
-      'god-play',
-      `我打${playName}`,
-      'data-play="me" title="只操控这一边，对面交给 AI：你走一步、看它怎么应"',
-    ),
-    chip(
-      ui.play === 'both',
-      'god-play',
-      '两边我都打',
-      'data-play="both" title="摆完自己演一遍，两边都由你走"',
-    ),
-  ].join('');
+  // 操控档现在固定是"两边我都打"：沙盒的用途就是自己演一遍，
+  // 而"只摆放 / 我打一边"这两档和它抢的是同一个位置——想歇手的时候
+  // 下面那两颗「交给 AI」按钮才是正解（跑一回合 / 打到全灭）。
+  // 三颗 chip 留着只会让人以为"点了会换一种模式"，其实只是换谁来按鼠标。
 
   // 轮次条：只在操控档出现。它要回答的是一句话——"现在该谁动"。
   const turnRow =
@@ -180,6 +174,10 @@ export function godBarHtml(ui: GodUi): string {
            <div class="chip-row">${turnLabel(ui, s)}<button class="btn btn-sm${ui.myTurn ? ' btn-primary' : ''}" data-act="god-end-turn"${
              ui.myTurn ? '' : ' disabled'
            } title="这一回合走完了，交给对面">结束回合</button></div>
+           <div class="chip-row" style="margin-top:6px">
+             ${chip(ui.quick, 'god-quick', '快捷模式', 'data-quick="1" title="开着的时候按空格直接结束回合，不用去点上面那颗按钮"')}
+             <span class="hint">${ui.quick ? '空格 = 结束回合' : '打开后可用空格结束回合'}</span>
+           </div>
          </div>`;
 
   // 地形笔刷常驻显示，不折进"笔刷"那一组里。
@@ -209,7 +207,7 @@ export function godBarHtml(ui: GodUi): string {
     </div>
     <div class="god-group">
       <span class="god-label">操控</span>
-      <div class="chip-row">${playChips}</div>
+      <div class="chip-row"><span class="hint">两边都由你走 · 想歇手用下面的「交给 AI」</span></div>
     </div>
     ${turnRow}
     <div class="god-group">
@@ -287,84 +285,6 @@ function brushHint(ui: GodUi, s: GameState): string {
   }
 }
 
-/**
- * 侧栏顶上那块「手上这支兵」。
- *
- * 为什么必须单开一块：上帝模式的侧栏整块让给了兵种货架，正常对局里那张
- * 属性卡（含英雄技能菜单）在这个模式下根本不存在。于是操控档里
- * "选中英雄 → 按技能"这条路是断的——玩家看得见矮人王站在那儿，
- * 也看得见「投斧」两个字印在货架上，但棋盘上没有任何一个按钮能开它。
- *
- * 契约只有一条：**能按的按钮就是现在真能按的**。冷却中、不是自己这一方、
- * 没轮到自己，一律灰掉并写清原因——沙漠盒里最容易让人以为"坏了"的，
- * 就是一个亮着的按钮点下去什么都不发生。
- */
-function pickedCard(ui: GodUi): string {
-  const s = ui.state;
-  const u = ui.picked;
-  if (!u) return '';
-  const def = s.unitTypes[u.type];
-  if (!def) return '';
-
-  const mine = u.owner === s.current;
-  const canAct = ui.myTurn && mine;
-  const owner = s.players[u.owner].name;
-
-  const facts: string[] = [`${u.hp}/${def.maxHp} 血`];
-  if (def.atk > 0) facts.push(`攻 ${def.atk}${def.armor ? ` · 甲 ${def.armor}` : ''} · 射程 ${def.range}`);
-  facts.push(canMove(u) ? '还能走' : '走完了');
-  if (def.atk > 0) facts.push(canAttack(u) ? '还能打' : '打完了');
-
-  const skills = heroSkillsOf(s, u);
-  const rows = skills
-    .map((k) => {
-      const on = k.ready && canAct;
-      const why = !mine
-        ? '不是这一方'
-        : !ui.myTurn
-          ? '等它走完'
-          : k.ready
-            ? ''
-            : k.chargeMax > 0
-              ? `${k.toNext} 回合回一发`
-              : `${k.cd} 回合`;
-      // 充能型技能把"还剩几发"写在名字后面：只写"就绪/冷却"会丢掉
-      // "它其实攒着三发"这个信息，而那正是这个技能最要紧的一点
-      const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
-      return `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
-        on ? '' : 'disabled'
-      }>
-        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
-        <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
-        <span class="price">${on ? '就绪' : escapeHtml(why)}</span>
-      </button>`;
-    })
-    .join('');
-
-  const tail = skills.length === 0
-    ? '<div class="hint">这个兵没有主动技能。技能不占行动，冷却中的按钮会写还要等几回合。</div>'
-    : `<div class="recruit-list">${rows}</div>
-       <div class="hint">技能不占行动，每个英雄每回合最多一次。</div>`;
-
-  return `<div class="card">
-    <div class="card-title">手上这支兵</div>
-    <div class="unit-head">
-      <div class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
-      <div>
-        <div class="unit-title">${def.name}</div>
-        <div class="unit-sub">${owner} · ${def.era} 代${def.hero ? ' · 英雄' : ''}</div>
-      </div>
-    </div>
-    <div class="hint">${facts.join(' · ')}</div>
-    ${
-      ui.play === null
-        ? '<div class="hint">现在只是摆子，技能开不了。先选「我打…」或「两边我都打」。</div>'
-        : ''
-    }
-    ${tail}
-  </div>`;
-}
-
 function escapeHtml(t: string): string {
   return t.replace(/[&<>"']/g, (c) => {
     switch (c) {
@@ -380,6 +300,34 @@ function escapeHtml(t: string): string {
         return '&#39;';
     }
   });
+}
+
+/**
+ * 货架的搜索框。
+ *
+ * 样式和产兵面板那个**完全一样**（同 class `recruit-search`），因为它是同一件事：
+ * 在几十个兵种里找某一个。两处长得不一样只会让人以为功能不同。
+ *
+ * 输入法那套处理不在这个文件里——`main.ts` 里有一份 `data-act` 无关的组字保护，
+ * 两个搜索框共用它。之前那次"输入文字变成一串乱码"就是组字中途重绘导致的，
+ * 所以这里**绝不能**自己再挂一套 keydown/input。
+ */
+function godSearchBox(q: string, shown: number, total: number): string {
+  if (total < 6) return '';
+  const qq = q ?? '';
+  const count = qq ? `${shown}/${total}` : `共 ${total} 种`;
+  return `<div class="recruit-search">
+    <input
+      type="search"
+      class="recruit-search-input"
+      data-act="god-search"
+      value="${escapeHtml(qq)}"
+      placeholder="搜兵种：名字 / 代号 / 职能 / 包名"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <span class="recruit-search-count">${count}</span>
+  </div>`;
 }
 
 /** 最近这么几条战报。再多也读不过来，而且会把货架挤出屏幕 */
@@ -421,7 +369,11 @@ export function godShelfHtml(ui: GodUi): string {
   // 真能点到的按钮对得上，否则"全部 47"里会混进十几个摆不出来的兵。
   const ceiling = eraCeilingOf(s);
   const shelfDefs = Object.values(s.unitTypes).filter((u) => u.era <= ceiling);
-  const pool = shelfDefs.filter((u) => packOk(u, ui.pack) && eraOk(u, ui.era));
+  // 三个条件是**与**：包 / 时代 / 搜索词。搜出来的东西永远是"这一包这一代里的"，
+  // 不会因为搜索把范围悄悄放大——那会让人以为筛选没生效
+  const pool = shelfDefs.filter(
+    (u) => packOk(u, ui.pack) && eraOk(u, ui.era) && matchRecruit(u, ui.query),
+  );
   const groups = ERAS.filter((era) => era.level <= ceiling).map((era) => {
     const units = pool
       .filter((u) => u.era === era.level)
@@ -470,9 +422,14 @@ export function godShelfHtml(ui: GodUi): string {
          }</div>
          ${packRow(shelfDefs, ui.pack, 'god-pack')}
          ${eraChipRow(shelfDefs, ui.era, 'god-era')}
+         ${godSearchBox(ui.query, pool.length, shelfDefs.length)}
          <div class="god-shelf">${
            groups ||
-           `<div class="hint">这一档没有兵。换一个扩展包 / 时代，或者点「全部」回到完整货架。</div>`
+           `<div class="hint">${
+             ui.query
+               ? `没有匹配「${escapeHtml(ui.query)}」的兵。清掉搜索框，或者换一个扩展包 / 时代。`
+               : '这一档没有兵。换一个扩展包 / 时代，或者点「全部」回到完整货架。'
+           }</div>`
          }</div>
        </div>`;
 
@@ -484,7 +441,8 @@ export function godShelfHtml(ui: GodUi): string {
    * 是操控档里每一步都要看的。AI 在跑的时候整块收掉——那时候没有
    * "手上"这回事（点棋盘都不许）。
    */
-  const picked = ui.running ? '' : pickedCard(ui);
+  // AI 在跑的时候整块收掉：那时候点棋盘都不许，"选中了什么"没有意义
+  const picked = ui.running ? '' : ui.detail;
 
   return `
     ${picked}

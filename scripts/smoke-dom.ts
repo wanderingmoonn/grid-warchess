@@ -1850,7 +1850,9 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
     myTurn: true,
     passing: false,
     selected: '',
-    picked: null,
+    detail: '',
+    query: '',
+    quick: false,
   } as never);
   assert.ok(!shelf.includes('地图工坊'), '上帝模式侧栏里不该再有地图工坊');
 
@@ -3711,7 +3713,9 @@ check('沙盒货架也能按扩展包切一刀', () => {
       myTurn: false,
       passing: false,
       selected: '',
-      picked: null,
+      detail: '',
+      query: '',
+      quick: false,
     });
   const picks = (html: string) => (html.match(/data-act="god-pick"/g) ?? []).length;
 
@@ -3993,7 +3997,7 @@ function godPut(
   return u;
 }
 
-check('上帝模式：切到「我打这一方」后，点棋盘是走子不是落子', () => {
+check('上帝模式：默认两边我都打，点棋盘是走子不是落子', () => {
   const st = godArena(424242);
   godPut(st, 'p1', 'A', 'militia', 3, 3);
   const w = bootWith(st);
@@ -4005,21 +4009,21 @@ check('上帝模式：切到「我打这一方」后，点棋盘是走子不是�
       units: { id: string; x: number; y: number }[];
     };
 
-  assert.ok(
-    d.querySelector('[data-act="god-play"][data-play="none"]')?.classList.contains('active'),
-    '默认该停在「只摆放」——老玩家进来不该发现自己莫名其妙能走子了',
-  );
+  // 操控档的三颗 chip 已经撤掉：默认就是「两边我都打」，进来点棋盘就是走子。
+  // 想歇手只有「交给 AI · 一回合」和「接管 · 打到全灭」两颗按钮。
+  assert.equal(d.querySelector('[data-act="god-play"]'), null, '操控档 chip 已经撤掉');
 
-  click('[data-act="god-play"][data-play="me"]');
   click('.unit[data-id="p1"]');
   assert.ok(
     d.querySelector('.unit[data-id="p1"]')?.classList.contains('selected'),
     '切到操控档之后，点自己的兵要能选中',
   );
   assert.ok(d.querySelectorAll('.tile.reach').length > 0, '选中之后棋盘上要画出可达格');
-  // 沙盒没有属性卡：血量与"还剩不剩行动力"只能靠状态行报
-  const status = d.querySelector('.god-status')?.textContent ?? '';
-  assert.ok(status.includes('民兵') && status.includes('血'), `状态行该报出选中的是谁，实际是「${status}」`);
+  // 沙盒现在有完整属性卡了（和亲自指挥同一份），侧栏上能读到名字与血量
+  const side = d.querySelector('#side')?.textContent ?? '';
+  assert.ok(side.includes('民兵'), `侧栏该报出选中的是谁，实际是「${side.slice(0, 80)}」`);
+  // 属性卡里血量那一行的标题就是「生命」（和亲自指挥同一份），不是「血」
+  assert.ok(side.includes('生命'), '属性卡里该有生命那一行');
 
   // 点可达格：走过去。不是"在那一格再落一个兵"——那是两件完全不同的事，
   // 而这一档的整个意义就在这个区别上。
@@ -4030,7 +4034,7 @@ check('上帝模式：切到「我打这一方」后，点棋盘是走子不是�
   assert.equal(saved().units.length, 1, '这是走子，不该顺手在那一格又落一个兵');
 });
 
-check('上帝模式：结束回合交给对面，不弹「把设备交给对方」', () => {
+check('上帝模式：结束回合只把行动方翻过去，不叫 AI、不弹交接遮罩', () => {
   const st = godArena(424243);
   godPut(st, 'p1', 'A', 'militia', 3, 3);
   // 对面一个兵都不留：它走完一个空回合就会交还，整套交割是同步的，好断言
@@ -4041,13 +4045,11 @@ check('上帝模式：结束回合交给对面，不弹「把设备交给对方�
   const saved = () =>
     JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
 
-  click('[data-act="god-play"][data-play="me"]');
   click('[data-act="god-end-turn"]');
 
   assert.equal(d.querySelector('#handoff'), null, '沙盒里不该出现「把设备交给对方」那张遮罩');
-  assert.equal(saved().current, 'A', '对面没有兵，空回合走完就该交还给你');
-  // 手操那一下 + 对面空回合那一下 = 两次交割
-  assert.equal(saved().turn, 3, '两边各结束一次回合，回合数应该走两格');
+  assert.equal(saved().current, 'B', '两边都归你时，结束回合只是把行动方翻过去');
+  assert.equal(saved().turn, 2, '只交割了一次：这一下不叫 AI');
 });
 
 check('上帝模式：手上捏着笔刷时，点棋盘仍然是落子', () => {
@@ -4062,7 +4064,6 @@ check('上帝模式：手上捏着笔刷时，点棋盘仍然是落子', () => {
       units: { id: string; x: number; y: number }[];
     };
 
-  click('[data-act="god-play"][data-play="me"]');
   // 从货架上挑一个兵种：笔刷一上手，"点棋盘"就该回到"再摆一个"
   click('[data-act="god-pick"][data-unit="militia"]');
   click('.tile[data-x="7"][data-y="7"]');
@@ -4076,10 +4077,11 @@ check('上帝模式：手上捏着笔刷时，点棋盘仍然是落子', () => {
   assert.equal(units.find((u) => u.id === 'p1')!.x, 3, '原来那个兵不该被顺手挪走');
 });
 
-await checkAsync('上帝模式：对面那一方真由 AI 接手，走完一个回合就交还', async () => {
-  // 上一条只证明"交割不弹遮罩"，用的还是对面没兵的空回合。
-  // 这一条让对面真有兵：AI 得把它走完，棋盘才回得来。
-  // 交还失败的样子很难看——停在"轮到蓝方（AI）"、按钮全灰、谁也不动，
+await checkAsync('上帝模式：「交给 AI · 一回合」跑完一轮就把棋盘交还', async () => {
+  // 「我打一边、对面补一手」那一档现在没有界面入口了，但它和「交给 AI · 一回合」
+  // 走的是同一条交割路径（godAfterTurn），所以这条用例改成从按钮走——
+  // 用户真正会按的是这颗，而不是那个已经撤掉的 chip。
+  // 交还失败的样子很难看：停在"轮到蓝方（AI）"、按钮全灰、谁也不动，
   // 而界面上没有任何东西会说"卡住了"。
   const st = godArena(424245);
   godPut(st, 'p1', 'A', 'militia', 2, 2);
@@ -4091,15 +4093,79 @@ await checkAsync('上帝模式：对面那一方真由 AI 接手，走完一个�
   const saved = () =>
     JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
 
-  click('[data-act="god-play"][data-play="me"]');
-  click('[data-act="god-end-turn"]');
+  click('[data-act="god-run-round"]');
 
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline && saved().turn < 3) await wait(25);
 
-  assert.equal(saved().turn, 3, '回合数要往前走两格：你一下、对面一下');
-  assert.equal(saved().current, 'A', 'AI 走完对面那一个回合之后必须把棋盘交还给你');
+  assert.ok(saved().turn >= 3, `跑完一轮回合数该往前走，实际 ${saved().turn}`);
+  assert.equal(saved().current, 'A', 'AI 跑完这一轮之后必须把棋盘交还给你');
   assert.equal(d.querySelector('#handoff'), null, '全程不该出现「把设备交给对方」');
+});
+
+check('上帝模式：货架的按字搜索能筛兵，且框里的字不会被重绘吃掉', () => {
+  const st = godArena(424247);
+  godPut(st, 'p1', 'A', 'militia', 3, 3);
+  const w = bootWith(st);
+  const d = w.document;
+  const picks = () => d.querySelectorAll('[data-act="god-pick"]').length;
+  const input = () => d.querySelector<HTMLInputElement>('[data-act="god-search"]')!;
+
+  const before = picks();
+  assert.ok(before > 20, `货架上该有一屏兵，实际 ${before}`);
+
+  // 直接往框里塞字再抛 input：这就是"敲字"在 jsdom 里等价的那一下
+  const box = input();
+  box.value = '民兵';
+  box.dispatchEvent(new w.Event('input', { bubbles: true }));
+
+  const after = picks();
+  assert.ok(after < before, `搜"民兵"之后货架该变少，${before} → ${after}`);
+  assert.ok(after >= 1, '搜"民兵"至少该剩下它自己');
+  // 关键：重绘换掉了整个 input 元素，字必须被回填回来——这就是"输入变成空白/乱码"那个 bug
+  assert.equal(input().value, '民兵', '重绘之后搜索框里的字必须还在');
+
+  // 清空就回到全部
+  const box2 = input();
+  box2.value = '';
+  box2.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.equal(picks(), before, '清掉搜索词之后该回到完整货架');
+});
+
+check('上帝模式：快捷模式打开后，空格结束回合；焦点在搜索框里时不抢空格', () => {
+  const st = godArena(424248);
+  godPut(st, 'p1', 'A', 'militia', 3, 3);
+  godPut(st, 'e1', 'B', 'militia', 8, 8);
+  const w = bootWith(st);
+  const d = w.document;
+  const saved = () =>
+    JSON.parse(w.localStorage.getItem('warchess:match:v1')!) as { current: string; turn: number };
+  const click = (sel: string) =>
+    d.querySelector<HTMLElement>(sel)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const space = (target: EventTarget) =>
+    target.dispatchEvent(new w.KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+
+  const t0 = saved().turn;
+
+  // 默认是关的：按空格什么都不该发生（否则会在你打字时把回合交出去）
+  space(d.body);
+  assert.equal(saved().turn, t0, '快捷模式关着时，空格不该结束回合');
+
+  click('[data-act="god-quick"]');
+  assert.ok(
+    d.querySelector('[data-act="god-quick"]')?.classList.contains('active'),
+    '点一下之后开关该亮起来',
+  );
+
+  // 焦点在搜索框里：空格是"打一个空格"，绝不能结束回合
+  const box = d.querySelector<HTMLInputElement>('[data-act="god-search"]')!;
+  space(box);
+  assert.equal(saved().turn, t0, '搜索框里按空格不该结束回合');
+
+  // 焦点在棋盘/页面上：空格 = 结束回合
+  space(d.body);
+  assert.equal(saved().turn, t0 + 1, '打开快捷模式之后，空格该结束这一回合');
+  assert.equal(saved().current, 'B', '结束之后行动方翻到对面');
 });
 
 check('上帝模式：两边我都打——结束回合不叫 AI，另一边自己接着走', () => {
@@ -4117,7 +4183,6 @@ check('上帝模式：两边我都打——结束回合不叫 AI，另一边自�
       units: { id: string; x: number; y: number }[];
     };
 
-  click('[data-act="god-play"][data-play="both"]');
   click('[data-act="god-end-turn"]');
 
   // 关键：这一档不许把对面交给 AI。回合交割完就停在那儿，等你自己接着走。
@@ -4177,14 +4242,13 @@ check('上帝模式：操控档里选中英雄，侧栏能开技能', () => {
       units: { id: string; skillCd?: Record<string, number>; heroBuff?: Record<string, unknown> }[];
     };
 
-  // 只摆放的时候没有"手上这支兵"这回事：点棋盘是落子，不是选中
-  assert.equal(d.querySelector('[data-act="hero-skill"]'), null, '还没进操控档，不该有技能按钮');
+  // 还没选中任何东西时不该有技能按钮（属性卡整块都还没出现）
+  assert.equal(d.querySelector('[data-act="hero-skill"]'), null, '没选中时不该有技能按钮');
 
-  click('[data-act="god-play"][data-play="me"]');
   click('.unit[data-id="h1"]');
 
   const btn = d.querySelector<HTMLButtonElement>('[data-act="hero-skill"]');
-  assert.ok(btn, '操控档里选中英雄，侧栏就该出现技能按钮');
+  assert.ok(btn, '选中英雄，侧栏就该出现技能按钮');
   assert.equal(btn!.disabled, false, '冷却好了、轮到自己，就该能按');
   assert.ok(
     (d.querySelector('#side')?.textContent ?? '').includes('投斧'),
