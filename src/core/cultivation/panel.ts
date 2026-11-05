@@ -11,6 +11,7 @@ import {
   attTimesModifier
 } from './stats.ts';
 import { getSwordSweepReach } from './skills.ts';
+import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from './abilities/spirit-aura.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
 export function getCultivationPanelLines(state: GameState, unit: Unit): string[] {
@@ -52,6 +53,11 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
       攻击次数 +${attTimesModifier(unit)}`,
 	);
 	if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
+	}
+
+  const auraBonus = spiritAuraBonusOf(state, unit);
+	if (auraBonus > 0) {
+		lines.push(`${SPIRIT_AURA_LABEL}：每轮 +${auraBonus} 修为经验`);
 	}
 
 	if (aging > 0) {

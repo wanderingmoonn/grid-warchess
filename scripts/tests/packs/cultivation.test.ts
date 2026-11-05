@@ -9,6 +9,9 @@ import { trimChatBody, CHAT_MAX_LEN, chatWhoLabel, type ChatLine, chatLinesHtml,
 import { countWatchers, PRESENCE_TTL_MS, watchLabel, presenceFromRow } from '../../../src/net/presence.ts';
 import { adoptDecision } from '../../../src/net/room.ts';
 import { skillsOf } from '../../../src/core/query.ts';
+import { getExp } from '../../../src/core/cultivation/progression.ts';
+import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
+import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -377,11 +380,108 @@ export function run() {
     const r = applyAction(skillRes.state, { type: 'END_TURN' });
     assert.ok(r.ok);
 
-    // 👇 关键打印 2：看看战报里是打了几次，还是根本没打
     console.log('战斗日志：', r.state.log.map(l => l.text));
 
     const target = r.state.units.find(u => u.id === 't-target')!;
     assert.ok(target.hp <= 70, '塔应该开火并造成至少 30 点伤害');
+  });
+
+  // ── 灵气滋养 ──────────────────────────────────────────
+
+  const nextTurn = (s: GameState) => {
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, `END_TURN 失败: ${r.reason}`);
+    return r.state;
+  };
+  const unitOf = (s: GameState, type: string, owner: string) =>
+    s.units.find((u) => u.type === type && u.owner === owner)!;
+
+  // 纯查询：不走回合，直接测 spiritAuraBonusOf，最稳
+  test('灵气滋养：半径1内每个灵田 +1，可叠加', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    const mon = place2(s, 'A', 'qi-cultivator', 5, 6);
+    assert.equal(spiritAuraBonusOf(s, mon), 1);
+
+    place2(s, 'A', 'cultivation-spirit-field', 5, 7);
+    assert.equal(spiritAuraBonusOf(s, mon), 2);
+  });
+
+  test('灵气滋养：半径2不生效', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    const mon = place2(s, 'A', 'qi-cultivator', 5, 7);
+    assert.equal(spiritAuraBonusOf(s, mon), 0);
+  });
+
+  test('灵气滋养：资敌——不计阵营', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    const foe = place2(s, 'B', 'qi-cultivator', 5, 6);
+    assert.equal(spiritAuraBonusOf(s, foe), 1);
+  });
+
+  test('灵气滋养：非修士不吃光环，面板也不显示', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    const servant = place2(s, 'A', 'cultivation-servant', 5, 6);
+    assert.equal(spiritAuraBonusOf(s, servant), 0);
+    assert.ok(!getCultivationPanelLines(s, servant).some((l) => l.includes(SPIRIT_AURA_LABEL)));
+  });
+
+  test('灵气滋养：灵田被摧毁后不再提供', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    const field = place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    const mon = place2(s, 'A', 'qi-cultivator', 5, 6);
+    s.units = s.units.filter((u) => u.id !== field.id);
+    assert.equal(spiritAuraBonusOf(s, mon), 0);
+  });
+
+  test('灵气滋养：面板与查询一致，无灵田时不显示', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    const mon = place2(s, 'A', 'qi-cultivator', 5, 5);
+    assert.ok(!getCultivationPanelLines(s, mon).some((l) => l.includes(SPIRIT_AURA_LABEL)));
+
+    place2(s, 'A', 'cultivation-spirit-field', 5, 6);
+    const lines = getCultivationPanelLines(s, mon);
+    assert.ok(lines.some((l) => l.includes(SPIRIT_AURA_LABEL) && l.includes('+1')));
+  });
+
+  // 回合触发：只测战报存在性和私有性，不测精确经验增量（打坐会污染）
+  test('灵气滋养：灵田所属方回合开始写战报，且仅自己可见', () => {
+    let s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    place2(s, 'A', 'qi-cultivator', 5, 6);
+    for (let i = 0; i < 4; i++) s = nextTurn(s);
+    
+    const line = s.log.find((l) => l.text.includes('滋养了'));
+    assert.ok(line, '应有"滋养了 N 名修士"战报');
+    
+    // 核心引擎中 open 默认为 false，且仅在 true 时才向对象挂载该字段。
+    // 所以非公开战报的 open 字段为 undefined。
+    assert.ok(!line.open, '战报应仅自己可见'); 
+  });
+
+  // 回合触发：对比法，只断言"有灵田的修士经验更多"
+  test('灵气滋养：有灵田的修士经验多于无灵田（对比法）', () => {
+    const runSeq = (withField: boolean) => {
+      let s = fresh({ expansionIds: ['cultivation'] });
+      s.units = [];
+      if (withField) place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+      place2(s, 'A', 'qi-cultivator', 5, 6);
+      for (let i = 0; i < 4; i++) s = nextTurn(s);
+      return getExp(unitOf(s, 'qi-cultivator', 'A'));
+    };
+    const withExp = runSeq(true);
+    const withoutExp = runSeq(false);
+    assert.ok(withExp > withoutExp, `有灵田(${withExp})应多于无灵田(${withoutExp})`);
   });
 }
 

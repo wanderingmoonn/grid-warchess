@@ -14,7 +14,8 @@
 | `identity.ts` | **身份判定器**。判断谁是修士、灵体。 | 不依赖本包其他任何文件。 |
 | `progression.ts` | **境界/经验/寿元核心**。管升级、降级、寿元。 | **它不认识技能！** 升级时只通过 `onRankUp` 广播事件。 |
 | `stats.ts` | **属性计算器**。纯数学函数，按境界算攻/防/射程/次数等加成。 | 无副作用。**所有数值规则（如倍率、公式）的“单一真相”必须放这里。** |
-| `skills.ts` / `abilities.ts` / `units.ts` | **纯静态数据**。技能、能力、兵种的定义配置。 | 只有数据，没有逻辑。 |
+| `units.ts` / `skills.ts` | **纯静态数据**。兵种、技能的定义配置。 | 只有数据，没有逻辑。 |
+| `abilities/` | **能力实现**。每个能力一个文件，`index.ts` 负责统一导出并组装成数组。 | 包含效果型或光环型逻辑（如 `spirit-aura.ts`）。 |
 | `skill-effects.ts` | **技能执行逻辑**。ready check、效果执行、预览计算。 | 模块加载时 `registerSkillEffect` 自注册副作用。 |
 | `unlocks.ts` | **解锁系统**。分「机制层」和「触发源层」。 | 模块加载时 `onRankUp` 自注册副作用。详见第 3 节。 |
 | `hooks.ts` | **事件钩子**。`onUnitKilled`、`modifyDamage` 等 `ExpansionHooks` 的集合。 | 只放引擎回调，不含“给本包内部调用的 API”。 |
@@ -82,3 +83,50 @@ cultivation-packs.ts（组装车间，唯一对外入口）
 ### 5.5 注册副作用（极度关键）
 `skill-effects.ts` 和 `unlocks.ts` 依赖模块加载时自注册。
 **如果你新建了包含顶层副作用的文件，必须在 `cultivation-packs.ts` 里 import 一次，否则静默失效。**
+
+### 5.6 新增一个能力（含光环）
+1. 在 `cultivation/abilities/` 下新建文件（如 `my-aura.ts`），编写并 `export` 能力定义。
+2. 在 `cultivation/abilities/index.ts` 中 `import` 它、`export *` 它，并加入 `CULTIVATION_ABILITIES` 数组。
+3. 在 `units.ts` 中给对应兵种的 `abilities: [...]` 里加上该能力的 ID。
+
+## 6. 测试规范（给 AI 和开发者的红线）
+
+> **给 AI 的提示**：如果你被要求修改修真扩展的测试，**绝对不要**去修改 `scripts/test-rules.ts`。所有的修真测试都在独立文件中，请只修改 `scripts/tests/packs/cultivation.test.ts`。
+
+### 6.1 为什么是独立文件？
+以前所有的测试（500多项）全堆在 `scripts/test-rules.ts` 里，每次跑测试极慢，且只要动一个扩展的数值，一跑全量测试就到处飘红，难以定位问题。
+现在采用**“测试各回各家”**的策略，修真包的测试文件位于：
+`scripts/tests/packs/cultivation.test.ts`
+
+### 6.2 如何运行测试？
+- **只跑修真扩展包（开发时推荐，秒出结果）**：
+  `npm run test:cultivation`
+- **跑全量测试（提交代码前做最终检查）**：
+  `npm run test:rules`
+
+### 6.3 编写测试的模版
+新建或添加测试时，请严格参考以下结构：
+
+```ts
+// @ts-nocheck
+import { test, assert, stats, fresh, arena, place2 } from '../support.ts';
+import { applyAction } from '../../../src/core/rules.ts';
+import { cultivationRank } from '../../../src/core/cultivation-packs.ts';
+
+// 必须包裹在 run() 函数中，供总入口调用
+export function run() {
+  console.log('\n修真扩展');
+
+  test('测试用例名称：简短说明测什么', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    // ... 编写你的断言
+    assert.equal(cultivationRank(s.units[0]!), 0);
+  });
+}
+
+// 魔法代码：让这个文件可以被单跑（Node ESM 环境下区分被 import 还是被直接执行）
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run();
+  console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
+  if (stats.failed > 0) process.exit(1);
+}

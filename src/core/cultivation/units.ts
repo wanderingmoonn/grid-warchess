@@ -138,6 +138,7 @@ export const SPIRIT_FIELD: UnitTypeDef = {
     plain:  { [GOLD]: 11, [SPIRIT_STONE]: 1 }, // 平原偏金币
     forest: { [GOLD]: 6,  [SPIRIT_STONE]: 4 }, // 森林偏灵石
   },
+  abilities: ['spirit-aura'],
 };
 export const SPIRIT_MINE: UnitTypeDef = {
   id: 'cultivation-spirit-mine',
