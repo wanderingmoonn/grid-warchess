@@ -766,7 +766,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
           apply: (c) => {
             const def = c.api.utype(c.state, c.self.type);
             let healed = 0;
-            for (const t of auraTargets(c)) {
+            for (const t of auraTargets(c, 1)) {
               const td = c.api.utype(c.state, t.type);
               if (!c.api.canBeHealed(c.state, t) || t.hp >= td.maxHp) continue;
               t.hp = Math.min(td.maxHp, t.hp + Math.ceil(td.maxHp * 0.1));
@@ -790,7 +790,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
           apply: (c) => {
             const def = c.api.utype(c.state, c.self.type);
             let cleansed = 0;
-            for (const t of auraTargets(c)) {
+            for (const t of auraTargets(c, 1)) {
               if (!t.status) continue;
               for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
                 if ((t.status[k] ?? 0) > 0) {

@@ -519,6 +519,8 @@ export interface AbilityHooks {
    * （治愈、灼烧……）根本不走这个字段。
    */
   aura?: AuraSpec | AuraSpec[];
+  /** 这个能力涉及范围时的默认半径（供效果型光环等使用） */
+  radius?: number;
 }
 
 /**
