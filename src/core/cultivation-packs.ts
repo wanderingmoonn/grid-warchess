@@ -21,8 +21,7 @@ import {
   SPIRIT_MINE,
   SPIRIT_TOWER
 } from './cultivation/units.ts';
-import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
-import { SPIRIT_AURA } from './cultivation/abilities/index.ts';
+import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
 import { SPIRIT_STONE_DEF } from './cultivation/resources.ts';
 import { CULTIVATION_HOOKS } from './cultivation/hooks.ts';
@@ -38,7 +37,7 @@ export const CULTIVATION_PACK: Expansion = {
   summary: '带来了会修炼成长的各种修士。',
   scale: 'large',
   hooks: CULTIVATION_HOOKS,
-  abilities: [QI_TRUE_DAMAGE, SPIRIT_ASCENSION, SPIRIT_AURA],
+  abilities: CULTIVATION_ABILITIES,
   units: [
     CULTIVATOR, 
     SWORD_CULTIVATOR, 
