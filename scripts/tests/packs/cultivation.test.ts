@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { test, assert, stats, fresh, arena, place2 } from '../support.ts';
+import { test, assert, stats, fresh, arena, place, place2 } from '../support.ts';
 import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, idx, heroSkillsOf, refreshMemory, splashRadiusOf, splashRatioOf } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
@@ -8,7 +8,6 @@ import type { Unit } from '../../../src/core/types.ts';
 import { trimChatBody, CHAT_MAX_LEN, chatWhoLabel, type ChatLine, chatLinesHtml, chatSeatOf, chatBodyOverflows, chatBodyLength, type ChatSeat } from '../../../src/net/chat.ts';
 import { countWatchers, PRESENCE_TTL_MS, watchLabel, presenceFromRow } from '../../../src/net/presence.ts';
 import { adoptDecision } from '../../../src/net/room.ts';
-import { place, FANTASY } from '../../test-rules.ts';
 import { skillsOf } from '../../../src/core/query.ts';
 
 export function run() {

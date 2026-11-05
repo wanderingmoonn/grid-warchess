@@ -5,7 +5,7 @@ import { CITY, CONFIG, UNIT_TYPES, eraDef, isPseudoUnit, passable } from '../../
 import assert from 'node:assert/strict';
 import { cityTiles, idx, refreshMemory } from '../../src/core/rules.ts';
 import { createMatch } from '../../src/core/setup.ts';
-import type { MatchConfig, GameState, PlayerId } from '../../src/core/types.ts';
+import type { MatchConfig, GameState, PlayerId, Unit } from '../../src/core/types.ts';
 
 export const stats = { passed: 0, failed: 0 };
 
@@ -108,6 +108,28 @@ export function fresh(extra?: Partial<MatchConfig>, seed = 12345): GameState {
   pinCities(s);
   refreshMemory(s);
   return s;
+}
+
+/** 手动摆一个单位（开局编制里没有水军和工程队） */
+export function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  // 先查**本局**的兵种表，再退回原版表：扩展包的兵只存在于开了那个包的对局里，
+  // 拿 UNIT_TYPES 去找一律找不到。上限（hp）也从同一处读，别混用两张表。
+  const def = s.unitTypes[type] ?? UNIT_TYPES[type];
+  assert.ok(def, `没有 ${type} 这个兵种`);
+  const u: Unit = {
+    id: `t${s.units.length + 1}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  s.units = s.units.filter((k) => !(k.x === x && k.y === y));
+  s.units.push(u);
+  return u;
 }
 
 export function place2(s, owner, type, x, y) {
