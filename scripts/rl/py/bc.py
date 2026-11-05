@@ -33,7 +33,7 @@ import ppo
 
 
 def load_bc(base: str):
-    """读 `<base>.json` + `<base>.bin`，返回 (state, cand, label, kused, vt)"""
+    """读 `<base>.json` + `<base>.bin`，返回 (state, cand, label, kused, vt, game, manifest)"""
     man = json.load(open(f"{base}.json", encoding="utf-8"))
     width = int(man["width"])
     flat = np.fromfile(f"{base}.bin", dtype="<f4")
@@ -49,7 +49,10 @@ def load_bc(base: str):
     label = rows[:, tail + 0].astype(np.int64)
     kused = rows[:, tail + 1].astype(np.int64)
     vt = rows[:, tail + 2].astype(np.float32)
-    return state, cand, label, kused, vt, man
+    # 局号一起带出来：main 里切验证集要用它，之前是在那里把整份 .bin **再读一遍**，
+    # 150 局的数据光这一下就多啃 1GB —— 大文件上是会 OOM 的
+    game = rows[:, tail + 3].astype(np.int64)
+    return state, cand, label, kused, vt, game, man
 
 
 def main() -> int:
@@ -66,14 +69,14 @@ def main() -> int:
     ap.add_argument("--val-frac", type=float, default=0.1, help="留出多少做验证（按局切，不按步切）")
     args = ap.parse_args()
 
-    state, cand, label, kused, vt, man = load_bc(args.data)
+    state, cand, label, kused, vt, game, man = load_bc(args.data)
     n = len(state)
     games = int(man["games"])
 
     # 按**局**切验证集：同局的相邻步高度相关，按步随机切会让验证准确率虚高
     n_val = max(1, int(games * args.val_frac))
     val_games = set(range(games - n_val, games))
-    is_val = np.isin(np.fromfile(f"{args.data}.bin", dtype="<f4").reshape(-1, man["width"])[:, man["state"] + man["slots"] * man["action"] + 3].astype(np.int64), list(val_games))
+    is_val = np.isin(game, list(val_games))
     tr = np.where(~is_val)[0]
     va = np.where(is_val)[0]
 
