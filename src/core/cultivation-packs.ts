@@ -18,7 +18,8 @@ import {
   SWORD_CULTIVATOR,
   SERVANT,
   SPIRIT_FIELD,
-  SPIRIT_MINE
+  SPIRIT_MINE,
+  SPIRIT_TOWER
 } from './cultivation/units.ts';
 import { QI_TRUE_DAMAGE, SPIRIT_ASCENSION } from './cultivation/abilities.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
@@ -43,7 +44,8 @@ export const CULTIVATION_PACK: Expansion = {
     SPIRIT_CULTIVATOR,
     SERVANT, 
     SPIRIT_FIELD, 
-    SPIRIT_MINE
+    SPIRIT_MINE,
+    SPIRIT_TOWER
   ],
   resources: [SPIRIT_STONE_DEF],
 };

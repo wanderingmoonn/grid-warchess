@@ -42,7 +42,7 @@ import type {
   StrikeCtx,
   TurnStartCtx,
 } from './ability-hooks.ts';
-import { aurasOf, canBeHealed, hasAbilityIn, hasFlag, hooksFor, stagedFor } from './ability-registry.ts';
+import { canBeHealed, hasAbilityIn, hasFlag, hooksFor, stagedFor } from './ability-registry.ts';
 import type { StagedKey } from './ability-registry.ts';
 import {
   CITY,
@@ -117,11 +117,43 @@ import { seatsOf, skillsOf } from './types.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
-import { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
+import {
+  idx, 
+  xyOf, 
+  inBounds, 
+  distance, 
+  underConstruction, 
+  footprintOf, 
+  coversTile, 
+  tilesOfUnit,
+  distBetweenUnits,
+} from './query.ts';
+import { 
+  auraSourcesOf, 
+  auraBonusOf, 
+  fearPenaltyOf, 
+  hexWeakPctOf, 
+  curseAuraPenaltyOf,
+  fearSourcesOf, 
+  hexSourcesOf, 
+  curseSourcesOf
+} from './auras.ts';
+
 // 重新导出，保持兼容
 export { SKILL_EFFECTS, registerSkillEffect };
 export type { SkillCtx, SkillHandler };
-export { idx, xyOf, inBounds, distance, underConstruction, footprintOf, coversTile, tilesOfUnit } from './query.ts';
+export {
+  idx, 
+  xyOf, 
+  inBounds, 
+  distance, 
+  underConstruction, 
+  footprintOf, 
+  coversTile, 
+  tilesOfUnit,
+  distToUnit,
+  distBetweenUnits,
+} from './query.ts';
 
 // 四方向移动。不用八方向是为了让移动力有真实取舍，斜穿会削弱地形作用。
 // （DIRS 现在定义在 ability-hooks.ts：扩展写能力时也要用它遍历四邻，
@@ -165,9 +197,6 @@ function hasAbilityOn(s: GameState, u: Unit, id: string): boolean {
 }
 function hasFlagOn(s: GameState, u: Unit, flag: 'passThrough' | 'crossesWater' | 'airLayer' | 'immuneSplash' | 'noCounter'): boolean {
   return hasFlag(utype(s, u.type), flag, u.extraAbilities);
-}
-function aurasOfUnit(s: GameState, u: Unit): NonNullable<AbilityHooks['aura']>[] {
-  return aurasOf(utype(s, u.type), u.extraAbilities);
 }
 function canBeHealedOn(s: GameState, u: Unit): boolean {
   return canBeHealed(utype(s, u.type), u.extraAbilities);
@@ -453,38 +482,6 @@ export function effectiveRangeAgainst(
     range = e.hooks.modifyRangeAgainst({ state: s, unit: attacker, targetTerrain, range });
   }
   return Math.max(1, range);
-}
-
-
-
-
-
-
-
-/**
- * 一个坐标到某个单位的距离：到它**覆盖范围**的最近一格。
- *
- * 打一座 2×2 的兵营，站在它右下角旁边就该是一格，而不是"到左上角三格"。
- * 距离只认锚点的话，大建筑会显得比它看起来更难打——玩家没法从画面推出射程。
- */
-export function distToUnit(s: GameState, from: { x: number; y: number }, u: Unit): number {
-  const n = footprintOf(s, u);
-  const cx = Math.min(Math.max(from.x, u.x), u.x + n - 1);
-  const cy = Math.min(Math.max(from.y, u.y), u.y + n - 1);
-  return Math.abs(from.x - cx) + Math.abs(from.y - cy);
-}
-
-/** 两个单位之间的距离：两个矩形的最近距离（锚点对小单位等价于曼哈顿距离） */
-export function distBetweenUnits(s: GameState, a: Unit, b: Unit): number {
-  const na = footprintOf(s, a);
-  const nb = footprintOf(s, b);
-  const ax2 = a.x + na - 1;
-  const ay2 = a.y + na - 1;
-  const bx2 = b.x + nb - 1;
-  const by2 = b.y + nb - 1;
-  const dx = Math.max(0, Math.max(b.x - ax2, a.x - bx2));
-  const dy = Math.max(0, Math.max(b.y - ay2, a.y - by2));
-  return dx + dy;
 }
 
 /**
@@ -862,7 +859,7 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
  */
 export function attackPowerNow(s: GameState, attacker: Unit): number {
   // 圣剑勇者这类"永久变强"的加成记在单位身上，不进兵种表（见 types 的 atkBonus）
-  let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonus(s, attacker).atk;
+  let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonusOf(s, attacker).atk;
   for (const [key, val] of orderedStatuses(attacker.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
@@ -893,26 +890,6 @@ export function applyElementMul(
   const r = resist?.[el];
   if (r) out *= r;
   return out;
-}
-
-/**
- * 咒域：贴着几个带「咒域」的敌人，就少几点护甲（每层 2 点，最多两层）。
- *
- * 和威吓对称——威吓削攻击、咒域削护甲，两者都只惩罚"贴脸"，
- * 所以破解办法是同一个：拉开距离。一支只有咒域的部队打不赢，它只是让对面变脆。
- */
-export function curseAuraPenalty(s: GameState, unit: Unit): number {
-  let hit = 0;
-  for (const foe of s.units) {
-    if (foe.owner === unit.owner) continue;
-    if (distance(foe, unit) !== 1) continue;
-    for (const a of aurasOfUnit(s, foe)) {
-      if (!a.foeArmor || a.foeArmor >= 0) continue;
-      const cap = (a.maxLayers ?? Infinity) * -a.foeArmor;
-      hit = Math.min(cap, hit - a.foeArmor);
-    }
-  }
-  return hit;
 }
 
 import type { StatusDef } from './ability-hooks.ts';
@@ -1291,76 +1268,19 @@ export function canAttack(u: Unit): boolean {
   return !u.acted && (u.attacksLeft ?? 1) > 0;
 }
 
-/**
- * 友军提供的光环加成。
- *
- * 只加不乘，也不递归——否则两个光环互相加成会失控。
- *
- * 半径写在 aura 自己身上（`radius`，默认 1 = 相邻）：指挥光环这类"站远了也带得动"
- * 的效果要 2 格，而威吓、咒域这类"贴上去才算"的仍然是 1。把半径放在**外面**
- * （先判距离再看能力）的写法，加一个 2 格光环就等于把全兵种的光环都放大到 2 格。
- */
+//旧代码残留，现在已经移动到aura.ts，这里只保留薄包装
 export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: number } {
-  let atk = 0;
-  let armor = 0;
-  for (const ally of s.units) {
-    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    const gap = distance(ally, unit);
-    // aurasOfUnit：兵种自带 + 动态挂上的能力（修士随境界解锁的技能）都要算
-    for (const a of aurasOfUnit(s, ally)) {
-      if (gap > (a.radius ?? 1)) continue;
-      if (a.allyAtk) atk += a.allyAtk;
-      if (a.allyArmor) armor += a.allyArmor;
-    }
-  }
-  return { atk, armor };
+  const b = auraBonusOf(s, unit);
+  return { atk: b.atk, armor: b.armor };
 }
-
-/**
- * 威吓：贴着几个会吓人的敌人，就少几分攻击（每层 2 点，最多两层）。
- *
- * 做成"减法"而不是"禁攻"：禁攻会让一支靠威吓撑起来的阵型变成铁板，
- * 而减法只是让贴身换血变亏——破解办法仍然是玩家熟悉的那两条：拉开、或者先射掉它。
- *
- * 这里必须只依赖 state（computeDamage 要给 UI 的伤害预览复用），不能记录"谁被吓过"。
- */
 export function fearPenalty(s: GameState, unit: Unit): number {
-  let hit = 0;
-  for (const foe of s.units) {
-    if (foe.owner === unit.owner) continue;
-    // aurasOfUnit：动态挂上的威吓（比如修士的技能）也要算；距离在下面按 radius 判
-    for (const a of aurasOfUnit(s, foe)) {
-      if (!a.foeAtk || a.foeAtk >= 0) continue;
-      // 半径默认 1（相邻）：威吓/咒域都是"贴上去才算"，只有显式写了 radius 的才放大
-      if (distance(foe, unit) > (a.radius ?? 1)) continue;
-      const cap = (a.maxLayers ?? Infinity) * -a.foeAtk;
-      hit = Math.min(cap, hit - a.foeAtk);
-    }
-  }
-  return hit;
+  return fearPenaltyOf(s, unit);
 }
-
-/**
- * 虚咒：范围内敌军攻击力按**比例**降低（`foeAtkPct`），取最强的一条，不叠乘。
- *
- * 和 `fearPenalty` 并存而不是合并：一个是减法、一个是比例，语义不同
- * （见 ability-hooks 的 AuraSpec 注释）。返回值是 0~0.9 的比例，0 表示没人罩着。
- *
- * 上限 0.9：数据里写错一个 1.5 不会让某个兵直接打出负伤害，
- * 也挡住"三个女巫叠到 −75%"这种连锁——光环取强不取叠。
- */
 export function hexWeakPct(s: GameState, unit: Unit): number {
-  let pct = 0;
-  for (const foe of s.units) {
-    if (foe.owner === unit.owner) continue;
-    // aurasOfUnit：动态挂上的虚咒也要算
-    for (const a of aurasOfUnit(s, foe)) {
-      if (!a.foeAtkPct || a.foeAtkPct <= 0) continue;
-      if (distance(foe, unit) > (a.radius ?? 1)) continue;
-      if (a.foeAtkPct > pct) pct = a.foeAtkPct;
-    }
-  }
-  return Math.min(0.9, pct);
+  return hexWeakPctOf(s, unit);
+}
+export function curseAuraPenalty(s: GameState, unit: Unit): number {
+  return curseAuraPenaltyOf(s, unit);
 }
 
 /** 算上扩展规则后的移动力。建筑（move 0）永远是 0，也不吃加速。 */
@@ -1379,12 +1299,8 @@ export function movePower(s: GameState, unit: Unit): number {
     if (def?.modifyMove) move = def.modifyMove(s, unit, val, move);
   }
 
-  // 疾行光环：相邻友军各 +1，可以叠（吟游诗人多了确实快）
-  for (const ally of s.units) {
-    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
-    if (distance(ally, unit) !== 1) continue;
-    for (const a of aurasOfUnit(s, ally)) if (a.allyMove) move += a.allyMove;
-  }
+  // 疾行光环：半径内的友军各 +1，可以叠（吟游诗人多了确实快）
+  move += auraBonusOf(s, unit).move;
 
   // 先保底 1：减速、光环这些加减法算完，最少留一格移动力。
   // 这条要在钩子**之前**——否则"钩子把移动力压到 0"和"减速扣成 0"
@@ -1476,10 +1392,9 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   const atkItems: StatItem[] = [];
   let atk = atkBase;
   if (u.atkBonus) atkItems.push({ label: '圣剑觉醒', delta: u.atkBonus });
-  const aura = auraBonus(s, u);
-  if (aura.atk !== 0) {
-    atk += aura.atk;
-    atkItems.push({ label: '指挥光环', delta: aura.atk });
+  for (const src of auraSourcesOf(s, u, 'allyAtk')) {
+    atk += src.value;
+    atkItems.push({ label: src.label, delta: src.value });
   }
   // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
   // 状态修正攻击力面板：与 computeDamage 同一段逻辑，位置也在光环之后
@@ -1500,18 +1415,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       }
     }
   }
-  const fear = fearPenalty(s, u);
-  if (fear !== 0) {
-    atk -= fear;
-    atkItems.push({ label: '被威吓', delta: -fear });
+  for (const src of fearSourcesOf(s, u)) {
+    atk -= src.value;
+    atkItems.push({ label: src.label, delta: -src.value });
   }
-  // 虚咒：范围内的敌军攻击力按比例降低（取最强的一条，见 hexWeakPct）。
-  // 放在威吓之后、乘法类修正之前：它说的是"我这一刀本来该多狠"，减法类先结清。
-  const hex = hexWeakPct(s, u);
-  if (hex > 0) {
+  for (const src of hexSourcesOf(s, u)) {
     const before = atk;
-    atk = Math.round(atk * (1 - hex));
-    atkItems.push({ label: '虚咒', delta: atk - before });
+    atk = Math.round(atk * (1 - src.value));
+    atkItems.push({ label: src.label, delta: atk - before });
   }
   // 面板上的攻击力修正（狂暴，以及以后任何"现在就成立"的攻击加成）。
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
@@ -1546,9 +1457,9 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   let armor = armorBase;
   if (u.armorBonus) armorItems.push({ label: '圣剑觉醒', delta: u.armorBonus });
   const tile = tileAt(s, u.x, u.y);
-  if (aura.armor !== 0) {
-    armor += aura.armor;
-    armorItems.push({ label: '守护光环', delta: aura.armor });
+  for (const src of auraSourcesOf(s, u, 'allyArmor')) {
+    armor += src.value;
+    armorItems.push({ label: src.label, delta: src.value });
   }
   // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
   // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
@@ -1597,10 +1508,9 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += u.buff.armor;
     armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
   }
-  const curseAura = curseAuraPenalty(s, u);
-  if (curseAura !== 0) {
-    armor -= curseAura;
-    armorItems.push({ label: '咒域', delta: -curseAura });
+  for (const src of curseSourcesOf(s, u)) {
+    armor -= src.value;
+    armorItems.push({ label: src.label, delta: -src.value });
   }
 
   // 扩展改甲（堑壕战等）：一条钩子一行，标签用扩展名
@@ -1631,15 +1541,9 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
         if (moveNow !== before) moveItems.push({ label: sdef.name, delta: moveNow - before });
       }
     }
-    for (const ally of s.units) {
-      if (ally.id === u.id || ally.owner !== u.owner) continue;
-      if (distance(ally, u) !== 1) continue;
-      for (const a of aurasOfUnit(s, ally)) {
-        if (a.allyMove) {
-          moveNow += a.allyMove;
-          moveItems.push({ label: '疾行光环', delta: a.allyMove });
-        }
-      }
+    for (const src of auraSourcesOf(s, u, 'allyMove')) {
+      moveNow += src.value;
+      moveItems.push({ label: src.label, delta: src.value });
     }
     const beforeClamp = moveNow;
     moveNow = Math.max(1, moveNow);
@@ -2219,7 +2123,7 @@ export function computeDamage(
   // 2. 城市不吃地形和光环；空中单位同样不吃地形（见 effectiveStats 同一处注释）
   const tile = isCity ? null : tileAt(s, defender.x, defender.y);
   const terrainBonus = tile && !isAirborne(s, defender) ? CONFIG.terrainDef[tile.terrain] : 0;
-  const defenderAura = isCity ? { armor: 0 } : auraBonus(s, defender);
+  const defenderAura = isCity ? { atk: 0, armor: 0, move: 0 } : auraBonusOf(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
   const atkNow = attackPowerNow(s, attacker);

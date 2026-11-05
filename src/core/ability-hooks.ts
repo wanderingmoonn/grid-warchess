@@ -24,6 +24,7 @@
  */
 
 import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import { distBetweenUnits } from './query.ts';
 
 /** 四邻方向。规则层到处都要用，放这里省得扩展自己再抄一份 */
 export const DIRS: ReadonlyArray<readonly [number, number]> = [
@@ -411,6 +412,8 @@ export interface DetectCtx {
  * 完全不需要知道"哪条能力叫威吓"。
  */
 export interface AuraSpec {
+  /** 面板显示用的名字。不写就按属性派生一个兜底名。 */
+  label?: string;
   /** 给相邻友军 */
   allyAtk?: number;
   allyArmor?: number;
@@ -441,6 +444,11 @@ export interface AuraSpec {
 
 /** 一条能力能挂的全部钩子。没实现的部分留空即可。 */
 export interface AbilityHooks {
+  /**
+   * 面板显示用的名字。不写就按属性派生一个兜底名。
+   * 数据里写了就用数据的——"将军光环"和"指挥光环"可以各自显示。
+   */
+  label?: string;
   /** 面板上的攻击力修正（狂暴那种"现在就成立"的） */
   statAttack?: Staged<HookCtx>[];
   /** 面板上的护甲修正（林地之主） */
@@ -503,7 +511,16 @@ export interface AbilityHooks {
   healable?: boolean;
   /** 不引发反击（先手） */
   noCounter?: boolean;
-  aura?: AuraSpec;
+    /**
+   * 光环。可以写一条，也可以写一组——一组里每条自带 radius，
+   * 于是"攻 +2 只覆盖相邻、移动 +1 覆盖两格"这种兵种可以写成两条。
+   *
+   * 数组顺序不重要：数值型光环由 auras.ts 合并，效果型光环
+   * （治愈、灼烧……）根本不走这个字段。
+   */
+  aura?: AuraSpec | AuraSpec[];
+  /** 这个能力涉及范围时的默认半径（供效果型光环等使用） */
+  radius?: number;
 }
 
 /**
@@ -543,7 +560,7 @@ export function auraTargets(c: TurnStartCtx, radius = 1): Unit[] {
   return [
     self,
     ...c.state.units.filter(
-      (u) => u.owner === self.owner && u.id !== self.id && c.api.distance(u, self) <= radius,
+      (u) => u.owner === self.owner && u.id !== self.id && distBetweenUnits(c.state, u, self) <= radius,
     ),
   ];
 }

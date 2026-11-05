@@ -92,7 +92,7 @@ export const DEACON: UnitTypeDef = {
 
 export const SPIRIT_TOWER: UnitTypeDef = {
   id: 'cultivation-spirit-tower',
-  name: '灵石塔',
+  name: '散灵台',
   short: '灵',
   era: 2,
   category: 'building',
