@@ -1,0 +1,1 @@
+export { SPIRIT_AURA, SPIRIT_AURA_ID, SPIRIT_AURA_LABEL, SPIRIT_AURA_RADIUS, SPIRIT_AURA_EXP, spiritAuraBonusOf } from './spirit-aura.ts';

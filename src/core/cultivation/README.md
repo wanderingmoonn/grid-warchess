@@ -82,3 +82,45 @@ cultivation-packs.ts（组装车间，唯一对外入口）
 ### 5.5 注册副作用（极度关键）
 `skill-effects.ts` 和 `unlocks.ts` 依赖模块加载时自注册。
 **如果你新建了包含顶层副作用的文件，必须在 `cultivation-packs.ts` 里 import 一次，否则静默失效。**
+
+## 6. 测试规范（给 AI 和开发者的红线）
+
+> **给 AI 的提示**：如果你被要求修改修真扩展的测试，**绝对不要**去修改 `scripts/test-rules.ts`。所有的修真测试都在独立文件中，请只修改 `scripts/tests/packs/cultivation.test.ts`。
+
+### 6.1 为什么是独立文件？
+以前所有的测试（500多项）全堆在 `scripts/test-rules.ts` 里，每次跑测试极慢，且只要动一个扩展的数值，一跑全量测试就到处飘红，难以定位问题。
+现在采用**“测试各回各家”**的策略，修真包的测试文件位于：
+`scripts/tests/packs/cultivation.test.ts`
+
+### 6.2 如何运行测试？
+- **只跑修真扩展包（开发时推荐，秒出结果）**：
+  `npm run test:cultivation`
+- **跑全量测试（提交代码前做最终检查）**：
+  `npm run test:rules`
+
+### 6.3 编写测试的模版
+新建或添加测试时，请严格参考以下结构：
+
+```ts
+// @ts-nocheck
+import { test, assert, stats, fresh, arena, place2 } from '../support.ts';
+import { applyAction } from '../../../src/core/rules.ts';
+import { cultivationRank } from '../../../src/core/cultivation-packs.ts';
+
+// 必须包裹在 run() 函数中，供总入口调用
+export function run() {
+  console.log('\n修真扩展');
+
+  test('测试用例名称：简短说明测什么', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    // ... 编写你的断言
+    assert.equal(cultivationRank(s.units[0]!), 0);
+  });
+}
+
+// 魔法代码：让这个文件可以被单跑（Node ESM 环境下区分被 import 还是被直接执行）
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run();
+  console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
+  if (stats.failed > 0) process.exit(1);
+}
