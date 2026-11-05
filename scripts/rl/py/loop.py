@@ -117,6 +117,14 @@ def main() -> int:
         "--self-max", type=float, default=0.6,
         help="自博弈占比的上限。实际占比按上一轮胜率爬坡：<5%% 不给，25%% 给满",
     )
+    ap.add_argument(
+        "--self-fixed", type=float, default=-1,
+        help="直接钉死自博弈占比（>=0 时生效，绕过爬坡）。"
+             "为什么需要它：爬坡的准入条件原来是「能赢不削弱的 AI」，那个条件太严——"
+             "自博弈真正需要的是「两个自己下能分出胜负」，这是可以直接量的。"
+             "实测 BC(600局) 自博弈 16 局有 10 局见分晓（62.5%），已经够开，"
+             "但它对不削弱的 AI 仍是 0/160，所以按胜率爬坡永远开不了。",
+    )
     args = ap.parse_args()
 
     target = 0.0  # 目标口径恒为"不削弱"
@@ -252,7 +260,9 @@ def main() -> int:
         # 那个数再高也不代表策略会打架。踩过这个坑——削弱 0.9 时 win_cur 90.6%，
         # 准入线当场拉满到 60%，于是 13 局自博弈全部 2500 步以上、撞上限、白烧 866MB。
         ref = win_tgt if win_tgt == win_tgt else last_target
-        if args.opponent == "pool" and ref == ref:  # nan 检查
+        if args.self_fixed >= 0:
+            self_share = args.self_fixed
+        elif args.opponent == "pool" and ref == ref:  # nan 检查
             self_share = max(0.0, min(args.self_max, (ref - 5.0) / 20.0 * args.self_max))
         # 把这一轮的权重冻成快照给下一轮的对手池用；只留最近三份，
         # 免得二十轮之后"随机挑一个快照"其实在挑二十轮前的古董

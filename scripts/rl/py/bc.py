@@ -36,7 +36,10 @@ def load_bc(base: str):
     """读 `<base>.json` + `<base>.bin`，返回 (state, cand, label, kused, vt, game, manifest)"""
     man = json.load(open(f"{base}.json", encoding="utf-8"))
     width = int(man["width"])
-    flat = np.fromfile(f"{base}.bin", dtype="<f4")
+    # 用 memmap 而不是 fromfile：这个文件现在动辄几个 GB（600 局约 4GB），
+    # fromfile 会把它整个读进内存，紧接着再拷一份 state 和一份 cand，
+    # 峰值轻松翻三倍。memmap 只是把它当页缓存用，真正占内存的只有下面那两个副本。
+    flat = np.memmap(f"{base}.bin", dtype="<f4", mode="r")
     rows = flat.reshape(-1, width)
 
     s_dim = int(man["state"])
