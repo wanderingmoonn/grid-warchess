@@ -381,6 +381,60 @@ export class Policy {
   }
 
   /**
+   * 当前策略会考虑的候选（预筛 top-K），外加"必须包含"的那一个。
+   *
+   * 模仿学习要拿"老师选了哪个"当标签，而老师的动作未必在预筛的 top-K 里——
+   * 那就把它塞进去（顶掉最后一名）。这样训练用的候选集**就是推理时那批**，
+   * 只多了一个标签所在的位置，不会出现"练的和考的不是一张卷子"。
+   *
+   * 预筛走的是和 `decide` 同一条路径（不是另写一份点积），所以两边不会漂。
+   */
+  candidateSet(
+    s: GameState,
+    seat: PlayerId,
+    actions: readonly Action[],
+    mustInclude = -1,
+  ): {
+    state: Float32Array;
+    feats: Float32Array;
+    candidates: number[];
+    kUsed: number;
+    index: number;
+    /**
+     * 全部合法动作的预筛分数（长度 = actions.length，顺序同 actions）。
+     *
+     * 为什么要把内部缓冲拷出来：训练预筛时既要按同一份分布算 softmax 梯度，
+     * 又要用同一套并列规则统计召回率。让调用方自己再算一遍分数，
+     * 就会在两处 float 累加顺序不同的地方冒出"指标说 60%、实际只有 15%"这种分歧
+     * （这已经发生过一次，排查花了很久）。这里多拷 n 个 float64，换掉一整类错误。
+     */
+    scores: Float64Array;
+  } {
+    const state = this.encode(s, seat);
+    if (this.actionBuf.length < actions.length * this.spec.action) {
+      this.actionBuf = new Float32Array(actions.length * this.spec.action);
+    }
+    this.ctx = actionContext(s, seat, this.ctx ?? undefined);
+    const feats = encodeActions(s, seat, actions, this.actionBuf, this.ctx);
+    this.prescreen(state, feats, actions.length);
+    const candidates: number[] = Array.from(this.cand.subarray(0, this.candN));
+    let index = candidates.indexOf(mustInclude);
+    if (mustInclude >= 0 && index < 0) {
+      if (candidates.length >= this.topK) candidates[candidates.length - 1] = mustInclude;
+      else candidates.push(mustInclude);
+      index = candidates.length - 1;
+    }
+    return {
+      state,
+      feats,
+      candidates,
+      kUsed: candidates.length,
+      index,
+      scores: Float64Array.from(this.scoreBuf.subarray(0, actions.length)),
+    };
+  }
+
+  /**
    * 给定动作下标，重算 logp / value / 熵（PPO 更新与诊断用）。
    *
    * 注意：如果这个下标已经被挤出当前 top-K，`inTopK` 会是 false，logp 给一个

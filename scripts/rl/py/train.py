@@ -41,13 +41,18 @@ def main() -> int:
     steps = len(roll)
     games = int(len(set(roll.game.tolist())))
     rewards = roll.reward[roll.reward != 0]
-    print(f"采样：{steps} 步 / {games} 局 · 终局奖励 {rewards.tolist()}")
+    drop = roll.manifest.get("droppedGames", 0)
+    note = f"（已按'没打完'丢掉 {drop} 局 / {roll.manifest.get('droppedSteps', 0)} 步）" if drop else ""
+    print(f"采样：{steps} 步 / {games} 局 · 终局奖励 {rewards.tolist()}{note}")
 
     model = ppo.TorchPolicy(w)
     cfg = ppo.PpoConfig(
         lr=args.lr, clip=args.clip, epochs=args.epochs, batch=args.batch,
         vf_coef=args.vf_coef, ent_coef=args.ent_coef,
     )
+    # 先按采样时刻的优势算一份，用来做分桶诊断（update 内部会再算一遍，这里要的是"更新前"的口径）
+    adv_for_diag, _ = ppo.compute_gae(roll, cfg.gamma, cfg.lam)
+    adv_for_diag = (adv_for_diag - adv_for_diag.mean()) / (adv_for_diag.std() + 1e-8)
     stats = ppo.update(model, roll, cfg)
 
     dev = stats.pop("ratio_dev_max", float("nan"))
@@ -58,6 +63,8 @@ def main() -> int:
             f"{k} {v:.4f}" if abs(v) >= 1e-3 else f"{k} {v:.2e}" for k, v in sorted(stats.items())
         )
     )
+
+    ppo.print_diagnosis(ppo.diagnose(model, roll, adv_for_diag, roll.logp))
 
     out = model.to_weights(w)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

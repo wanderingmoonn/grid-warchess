@@ -13,7 +13,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction } from '../../s
 import type { AiBudget } from '../../src/core/ai-meta.ts';
 import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
-import type { Action, GameState, PlayerId } from '../../src/core/types.ts';
+import type { Action, AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
 import { TRAIN } from './config.ts';
 import { legalActions } from './legal.ts';
 import type { Decision, Policy } from './policy.ts';
@@ -46,6 +46,13 @@ export interface MatchOptions {
   drivers: [Driver, Driver];
   /** 每一方的扩展包（默认空：用全兵种开放的基础规则） */
   expansionIds?: string[];
+  /**
+   * 手写 AI 的难度档（只影响 `ai` 驾驶者）。默认跟 `TRAIN.aiLevel`。
+   *
+   * 课程学习靠它：初级档的 AI 不做 lookahead、不辨兵种，策略才可能赢下几局，
+   * 才谈得上"从胜负里学"。
+   */
+  aiLevel?: AiLevel;
   /** 每步回调。训练时在这里写轨迹 */
   onStep?: (info: StepInfo) => void;
   /** 单回合最多几步（防死循环），默认跟界面一致 */
@@ -93,6 +100,7 @@ export function playMatch(o: MatchOptions): MatchOutcome {
       aiOpponent: false,
       aiAlly: false,
       expansionIds: o.expansionIds ?? TRAIN.expansions,
+      aiLevel: o.aiLevel ?? TRAIN.aiLevel,
     },
     o.seed,
   );

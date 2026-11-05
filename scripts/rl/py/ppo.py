@@ -38,15 +38,23 @@ class Rollout:
     value: np.ndarray  # [n]
     reward: np.ndarray  # [n]
     game: np.ndarray  # [n]
+    turn: np.ndarray  # [n] 这一步是本回合第几手（用来分"开局/中局/残局"桶）
     kused: np.ndarray  # [n] 这一步真正有几个候选（不足 K 时尾巴是补零，必须屏蔽）
+    seat: np.ndarray  # [n] 0=A 1=B（自博弈时一局里有两条流，GAE 必须分开算）
     manifest: dict
 
     def __len__(self) -> int:
         return int(self.state.shape[0])
 
 
-def load_rollout(base: str) -> Rollout:
-    """读 `<base>.json` + `<base>.bin`。布局：每步 width 个 float32 平铺。"""
+def load_rollout(base: str, drop_timeouts: bool = True) -> Rollout:
+    """读 `<base>.json` + `<base>.bin`。布局：每步 width 个 float32 平铺。
+
+    `drop_timeouts`：把"撞上回合上限"的整局丢掉。
+    这个游戏里 `winner === null` 只可能是没打完，而"平局 0 分"比"输 −1 分"好，
+    于是那些步会被当成"干得不错"——策略因此学会了拖时间（实测中位数 22 → 40 回合）。
+    与其给它一个惩罚的数值，不如整局不要：没打完的棋不构成"这一步好不好"的证据。
+    """
     with open(f"{base}.json", "r", encoding="utf-8") as fh:
         man = json.load(fh)
     width = int(man["width"])
@@ -56,6 +64,17 @@ def load_rollout(base: str) -> Rollout:
     rows = flat.reshape(-1, width)
 
     s_dim, a_dim, k = int(man["state"]), int(man["action"]), int(man["k"])
+    if drop_timeouts and "perGame" in man:
+        dead = [g["seed"] for g in man["perGame"] if g.get("timedOut")]
+        # perGame 的下标就是局号（rollout 里 game 字段写的是 g），按 seed 反查太绕，直接用位置
+        dead_idx = {i for i, g in enumerate(man["perGame"]) if g.get("timedOut")}
+        keep = ~np.isin(rows[:, s_dim + k * a_dim + 4].astype(np.int64), list(dead_idx))
+        dropped = int((~keep).sum())
+        man["droppedSteps"] = dropped
+        man["droppedGames"] = len(dead_idx)
+        rows = rows[keep]
+        del dead
+
     state = rows[:, :s_dim].copy()
     cand = rows[:, s_dim : s_dim + k * a_dim].reshape(-1, k, a_dim).copy()
     tail = s_dim + k * a_dim
@@ -64,8 +83,10 @@ def load_rollout(base: str) -> Rollout:
     reward = rows[:, tail + 2].copy()
     idx = rows[:, tail + 3].astype(np.int64)
     game = rows[:, tail + 4].astype(np.int64)
-    kused = rows[:, tail + 6].astype(np.int64) if rows.shape[1] > tail + 6 else np.full(len(rows), k)
-    return Rollout(state, cand, idx, logp, value, reward, game, kused, man)
+    turn = rows[:, tail + 5].astype(np.int64)
+    kused = rows[:, tail + 6].astype(np.int64)
+    seat = rows[:, tail + 7].astype(np.int64) if rows.shape[1] > tail + 7 else np.zeros(len(rows), dtype=np.int64)
+    return Rollout(state, cand, idx, logp, value, reward, game, turn, kused, seat, man)
 
 
 def compute_gae(
@@ -79,8 +100,11 @@ def compute_gae(
     """
     adv = np.zeros(len(rollout), dtype=np.float32)
     ret = np.zeros(len(rollout), dtype=np.float32)
-    for g in np.unique(rollout.game):
-        sel = np.where(rollout.game == g)[0]
+    # 一局自博弈里有两条独立的流（A 的角度和 B 的角度），必须分开算：
+    # 把两边混成一条，等于让"我赢了"这个信号去解释"对手那几步为什么好"。
+    streams = np.unique(rollout.game * 2 + rollout.seat)
+    for key in streams:
+        sel = np.where(rollout.game * 2 + rollout.seat == key)[0]
         last_gae = 0.0
         next_value = 0.0  # 一局结束之后没有"下一步"
         for t in range(len(sel) - 1, -1, -1):
@@ -216,8 +240,8 @@ def update(model: TorchPolicy, roll: Rollout, cfg: PpoConfig) -> dict[str, float
             stats["policy_loss"] = float(policy_loss.detach())
             stats["value_loss"] = float(value_loss.detach())
             stats["entropy"] = float(entropy.detach())
-            stats["ratio_mean"] = float(ratio.mean())
-            stats["clip_frac"] = float(((ratio - 1).abs() > cfg.clip).float().mean())
+            stats["ratio_mean"] = float(ratio.mean().detach())
+            stats["clip_frac"] = float(((ratio - 1).abs() > cfg.clip).float().mean().detach())
 
     # 近似 KL（旧策略 || 新策略），PPO 调参最常看的那个数
     with torch.no_grad():
@@ -225,3 +249,71 @@ def update(model: TorchPolicy, roll: Rollout, cfg: PpoConfig) -> dict[str, float
         new_logp = torch.log_softmax(logits, dim=-1).gather(1, ix.unsqueeze(1)).squeeze(1)
         stats["approx_kl"] = float((old_logp - new_logp).mean())
     return stats
+
+
+# ── 分桶诊断：训练到底"在哪里"在动 ────────────────────────────────────
+#
+# 只报一个总 loss 是看不出问题的：它可能被某一类局面长期主导，
+# 其余局面几乎不更新，而曲线照样平滑下降。所以按两个维度拆开看：
+#
+#   · 回合位置：开局 / 中局 / 残局。如果只有开局在动，说明策略学的是"开局怎么摆"，
+#     而真正决定胜负的中后期没在被优化；
+#   · 动作类型：走子 / 攻击 / 攻城 / 造兵 / 升级 / 结束回合。如果"结束回合"占了绝大多数
+#     更新量，说明它在学"赶紧跳过这一回合"，那是典型的奖励稀疏病。
+#
+# 每个桶报三件事：样本占比、平均优势（信号强弱）、平均 Δlogp（这一桶被推动了多少）。
+# 「优势大而 Δlogp 小」的那一桶，就是被别处梯度挤掉的地方。
+
+TYPE_NAMES = ["走子", "攻击", "攻城", "造城兵", "造营兵", "升级", "结束回合", "其他"]
+
+TURN_BUCKETS = [(0, 9, "开局 1-10"), (10, 29, "前中 11-30"), (30, 59, "中局 31-60"), (60, 10**9, "残局 60+")]
+
+
+def _action_types(roll: Rollout) -> np.ndarray:
+    """从候选特征的前 7 维（动作类型 one-hot）反推这一步选的是什么动作。"""
+    chosen = roll.cand[np.arange(len(roll)), np.clip(roll.idx, 0, roll.cand.shape[1] - 1)]
+    return np.argmax(chosen[:, :7], axis=1)
+
+
+def diagnose(model: TorchPolicy, roll: Rollout, adv: np.ndarray, old_logp: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray, np.ndarray]]:
+    """算每个桶的 (样本数, 平均优势, 平均 Δlogp, 平均熵)。"""
+    with torch.no_grad():
+        logits, value = model(
+            torch.from_numpy(roll.state), torch.from_numpy(roll.cand), torch.from_numpy(roll.kused)
+        )
+        new_logp = torch.log_softmax(logits, dim=-1).gather(
+            1, torch.from_numpy(roll.idx).unsqueeze(1)
+        ).squeeze(1).numpy()
+        probs = torch.softmax(logits, dim=-1)
+        ent = -(probs * torch.log(probs + 1e-9)).sum(dim=-1).numpy()
+
+    delta = new_logp - old_logp
+    types = _action_types(roll)
+    groups: list[tuple[str, np.ndarray]] = []
+    for lo, hi, name in TURN_BUCKETS:
+        groups.append((f"回合 {name}", (roll.turn >= lo) & (roll.turn <= hi)))
+    for i, name in enumerate(TYPE_NAMES):
+        groups.append((f"动作 {name}", types == i))
+    groups.append(("席位 A", roll.seat == 0))
+    groups.append(("席位 B", roll.seat == 1))
+
+    out = []
+    for name, mask in groups:
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        out.append((name, np.array([n]), adv[mask].mean(keepdims=True), delta[mask].mean(keepdims=True), ent[mask].mean(keepdims=True)))
+    return out
+
+
+def print_diagnosis(rows: list[tuple]) -> None:
+    total = sum(float(r[1][0]) for r in rows if r[0].startswith("回合"))
+    if total <= 0:
+        return
+    print("\n分桶诊断（占比 · 平均优势 · Δlogp · 熵）")
+    for name, n, a, d, e in rows:
+        share = float(n[0]) / max(1.0, float(sum(float(r[1][0]) for r in rows if r[0].startswith("回合"))))
+        flag = ""
+        if abs(float(d[0])) < 1e-4 and abs(float(a[0])) > 0.2:
+            flag = "  ← 有信号但几乎没动"
+        print(f"  {name:<14} {share * 100:5.1f}%  adv {float(a[0]):+7.3f}  Δlogp {float(d[0]):+.2e}  H {float(e[0]):.3f}{flag}")
