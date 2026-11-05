@@ -19,6 +19,8 @@ import {
   ACTION_DIM,
   BOARD_DIM,
   BOARD_N,
+  BOARD_PLANES,
+  ENV_DIM,
   GLOBAL_DIM,
   STATE_DIM,
   encodeActions,
@@ -58,12 +60,13 @@ function allFinite(a: Float32Array): boolean {
 }
 
 // ── 维度 ────────────────────────────────────────────────────────────────
-test('维度常量自洽：状态 = 全局 + 粗化棋盘，联合 = 状态 + 动作', () => {
-  assert.equal(BOARD_DIM, BOARD_N * BOARD_N * 3);
-  assert.equal(STATE_DIM, GLOBAL_DIM + BOARD_DIM);
+test('维度常量自洽：状态 = 全局 + 环境描述 + 粗化棋盘，联合 = 状态 + 动作', () => {
+  assert.equal(BOARD_DIM, BOARD_N * BOARD_N * BOARD_PLANES);
+  assert.equal(STATE_DIM, GLOBAL_DIM + ENV_DIM + BOARD_DIM);
   assert.equal(DEFAULT_SPEC.state, STATE_DIM);
   assert.equal(DEFAULT_SPEC.action, ACTION_DIM);
   assert.equal(DEFAULT_SPEC.joint, STATE_DIM + ACTION_DIM);
+  assert.equal(ACTION_DIM, 13 + 49, '动作特征 = 13 格类型 one-hot + 49 格其余');
 });
 
 test('编码出来的长度就是声明的长度（改特征忘了改常量会在这里炸）', () => {
@@ -82,6 +85,33 @@ test('编码全是有限值，且不越界（网络吃不下 inf，也不该被�
   for (let i = 0; i < st.length; i++) assert.ok(Math.abs(st[i]!) <= 4.0001, `第 ${i} 维越界：${st[i]}`);
   const feats = encodeActions(s, 'A', legalActions(s, 'A'));
   assert.ok(allFinite(feats), '动作特征里出现了 NaN/Infinity');
+});
+
+test('意图只动末尾那 4 格：换打法不该把整份观测搅乱', () => {
+  const s = match(31415);
+  const base = encodeState(s, 'A', 'auto');
+  for (const intent of ['rush', 'harass', 'boom'] as const) {
+    const other = encodeState(s, 'A', intent);
+    let diff = 0;
+    for (let i = 0; i < STATE_DIM; i++) if (Math.abs(base[i]! - other[i]!) > 1e-9) diff += 1;
+    // one-hot 换一位 = 一格灭、一格亮，所以是 2 格而不是 4 格
+    assert.equal(diff, 2, `${intent} 改了 ${diff} 格，应当只改 2 格`);
+  }
+  // auto 也亮一格：四格全 0 会和"编码漏了"分不开
+  assert.equal(base.slice(40, 44).reduce((n, v) => n + v, 0), 1, '意图应当是 one-hot');
+});
+
+test('环境描述真的接进了状态：开血战和不开会读出不同的格子', () => {
+  const plain = match(2718, 10, { expansionIds: [] });
+  const bloody = match(2718, 10, { expansionIds: ['bloodbath'] });
+  const a = encodeState(plain, 'A');
+  const b = encodeState(bloody, 'A');
+  const envA = a.slice(GLOBAL_DIM, GLOBAL_DIM + ENV_DIM);
+  const envB = b.slice(GLOBAL_DIM, GLOBAL_DIM + ENV_DIM);
+  assert.ok(envB.some((v) => v !== 0), '开了血战，环境块不该整片是 0');
+  let diff = 0;
+  for (let i = 0; i < ENV_DIM; i++) if (Math.abs(envA[i]! - envB[i]!) > 1e-9) diff += 1;
+  assert.ok(diff > 0, '血战开了，环境块却一个数都没变');
 });
 
 test('打乱局面之后仍然是有限值：残局、空城、没有单位都不能炸', () => {
@@ -147,9 +177,11 @@ test('权重版本对不上就报错，不猜着读', () => {
   assert.throws(() => weightsFromJson(raw), /版本/);
 });
 
-test('参数总量在 3 万以内（小到 CPU 推理就够了，上 GPU 是浪费）', () => {
+// v2 把 state 从 148 加到 221、action 从 56 加到 62，参数量从 2.3 万涨到 3.3 万。
+// 上限跟着抬，但仍然要卡住——一旦破 10 万，单步推理就开始吃掉采样预算了。
+test('参数总量在 4 万以内（小到 CPU 推理就够了，上 GPU 是浪费）', () => {
   const n = paramCount(randomWeights(1));
-  assert.ok(n > 10000 && n < 30000, `参数量 ${n} 不在预期区间`);
+  assert.ok(n > 10000 && n < 40000, `参数量 ${n} 不在预期区间`);
 });
 
 test('换一套维度也能建网：spec 是参数而不是硬编码', () => {
@@ -284,7 +316,15 @@ test('Wilson 区间：全胜 / 全负都不会给出 [0,1] 这种没用的区间
 });
 
 // ── 成本 ────────────────────────────────────────────────────────────────
-test('编 + 采一步在 0.6 ms 以内（这是"算力不是障碍"那个结论的支撑）', () => {
+/**
+ * 预算从 0.6 抬到 0.85：v2 的 joint 从 204 涨到 283（state 148→221、action 56→62），
+ * 而重排那一步是 `16 × (joint × 64)` 次乘加——占整个 decide 的七成以上，
+ * 所以它单独就贵了 39%。实测 0.55 → 0.70ms，和这个算式的预测一致。
+ *
+ * 抬预算而不是缩网络：采样循环里真正的成本是 `legalActions`（47~60%），
+ * policy 这一侧的涨幅摊到每步只有 7% 左右，换来的是一整套扩展描述 + 意图输入。
+ */
+test('编 + 采一步在 0.85 ms 以内（这是"算力不是障碍"那个结论的支撑）', () => {
   const p = new Policy(randomWeights(71));
   const s = match(112233);
   const acts = legalActions(s, 'A');
@@ -301,7 +341,7 @@ test('编 + 采一步在 0.6 ms 以内（这是"算力不是障碍"那个结论�
     best = Math.min(best, (performance.now() - t0) / N);
   }
   console.log(`     · ${acts.length} 个动作 / ${best.toFixed(3)} ms 每步（取五批中最快的一批）`);
-  assert.ok(best < 0.6, `每步 ${best.toFixed(3)}ms，超出 0.6ms 预算`);
+  assert.ok(best < 0.85, `每步 ${best.toFixed(3)}ms，超出 0.85ms 预算`);
 });
 
 console.log(`\n${passed} 项 M1 自检通过`);

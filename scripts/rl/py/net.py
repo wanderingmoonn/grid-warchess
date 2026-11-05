@@ -29,8 +29,10 @@ from typing import Any
 
 import numpy as np
 
-WEIGHTS_VERSION = 1
-DEFAULT_SPEC = {"state": 148, "action": 56, "joint": 204, "hidden": 64, "topK": 16}
+# v2：观测加进"环境描述(27) + 意图(4) + 棋盘高度面(36)"，动作类型 one-hot 7 → 13。
+# 版本号必须跟着涨：v1 的权重形状对不上，硬读会得到一串静默错位的数。
+WEIGHTS_VERSION = 2
+DEFAULT_SPEC = {"state": 221, "action": 62, "joint": 283, "hidden": 64, "topK": 16}
 
 
 # ── 权重文件的读写 ──────────────────────────────────────────────────────

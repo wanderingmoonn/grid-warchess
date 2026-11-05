@@ -51,7 +51,8 @@ import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
 import type { AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
 import { TRAIN } from './config.ts';
-import { ACTION_DIM, STATE_DIM } from './features.ts';
+import { ACTION_DIM, INTENT_NAMES, STATE_DIM } from './features.ts';
+import type { Intent } from './features.ts';
 import { legalActions } from './legal.ts';
 import { Policy, weightsFromJson } from './policy.ts';
 import { hashSeed, mulberry32 } from './rng.ts';
@@ -122,6 +123,16 @@ const POOL_SELF = Number(argOf('self-share', '0.6'));
  */
 const POOL_SNAP = Number(argOf('snap-share', String(POOL_SELF)));
 const POOL_AI = Math.max(0, 1 - POOL_SELF - POOL_SNAP);
+
+/**
+ * 意图怎么给。
+ *
+ *   auto        —— 老行为：四格全 0（网络自己判断），v1 的对照组就是这个口径
+ *   random      —— 每一方随机挑一个（rush/harass/boom/auto 等概率）。这是**训练指令跟随**的口径：
+ *                  同一批棋局里四种打法都出现，网络才会学到"这句话说了要算数"
+ *   rush/harass/boom —— 写死，用于对照实验
+ */
+const INTENT_MODE = argOf('intent', 'auto');
 
 const WORKERS = Number(
   argOf('workers', String(Math.max(1, Math.round(os.cpus().length / 2)))),
@@ -259,6 +270,24 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     return r;
   };
 
+  // 每一方的意图：从种子派生，重跑同一批种子会得到同一份，不用 Math.random
+  const intents = new Map<PlayerId, Intent>();
+  const intentOf = (seat: PlayerId): Intent => {
+    let v = intents.get(seat);
+    if (v) return v;
+    if (INTENT_MODE === 'auto' || INTENT_MODE === 'random') {
+      if (INTENT_MODE === 'auto') v = 'auto';
+      else {
+        const r = mulberry32(hashSeed(seed, seat, 'intent'))();
+        v = INTENT_NAMES[Math.floor(r * INTENT_NAMES.length)] ?? 'auto';
+      }
+    } else {
+      v = (INTENT_NAMES as string[]).includes(INTENT_MODE) ? (INTENT_MODE as Intent) : 'auto';
+    }
+    intents.set(seat, v);
+    return v;
+  };
+
   const buf = new RowBuf();
   let turnSeat: PlayerId | null = null;
   let inTurn = 0;
@@ -337,6 +366,9 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
       // 自己再 encode 一遍不只是白费算力（每步约 0.4ms，含两次 actionContext），
       // 更要紧的是那份和 dec.logp 对应的特征**必须和 decide 用的是同一份**，
       // 否则训练时看到的东西和当时决策看到的东西会有细微差别。
+      // 意图是"这一方这一局"的属性，每步重新贴一次而不是开局贴一次：
+      // 自博弈里两边共用同一个 Policy 实例，隔一步就会被对方的值覆盖
+      d.intent = intentOf(seat);
       const dec = d.decide(s, seat, acts, randOf(seat));
       const state = d.lastState;
       const feats = d.lastFeats;

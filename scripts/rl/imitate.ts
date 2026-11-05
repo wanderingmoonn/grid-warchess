@@ -41,7 +41,7 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction } from '../../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActiveMood, aiNextAction } from '../../src/core/ai.ts';
 import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
 import type { Action, AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
@@ -103,6 +103,8 @@ interface GameRow {
   steps: number;
   /** 老师在合法动作列表里找不到的步数（BUILD / 上下船等，见文件头） */
   skipped: number;
+  /** 跳过的都是些什么动作：`{ 类型: 次数 }`。补枚举前后就靠它定位缺口 */
+  skipHist?: Record<string, number>;
   winner: PlayerId | null;
   turns: number;
 }
@@ -145,6 +147,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   let budget = { ...DEFAULT_BUDGET };
   const rejected = new Set<string>();
   let skipped = 0;
+  const skippedTypes: Record<string, number> = {};
 
   /**
    * 步数护栏。
@@ -199,6 +202,28 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     }
 
     if (label >= 0) {
+      /*
+       * 意图标签：**按局交替**，偶数局贴"证据指向的那套打法"，奇数局贴 auto。
+       *
+       * 为什么要交替，而不是一路贴到底：
+       *
+       *   1. auto 这一格必须是**见过的**。推理时默认就是 auto（"没给指令"），
+       *      如果训练集里它一次都没亮过，那一格就永远拿不到梯度，上线时等于
+       *      往一个没训过的输入上喂 1——这不是"泛化"，是漏了一格。
+       *   2. 但另一个极端（全 auto）也不行：那样意图四格全是死的，
+       *      想让策略"听懂口令"就完全要从零开始学。
+       *
+       * 还有一件必须写下来的事实：**高级档（advanced）根本没有战术层**。
+       * `moodFor` 会把三种权重压成均分、drive 清零、从不弃城（见 ai.ts），
+       * 三套 doctrine 只在**中级档（tactic）**上生效。所以在 advanced 下录出来的
+       * `lead` 只是"证据指向哪一边"的描述，**不是**"老师按它下了这一步"。
+       *
+       * 于是偶数局那半我们贴的是一个**状态的派生标签**（"这一步的局面像速攻"），
+       * 奇数局贴 auto（"没给指令"）。它教不出真正的意图跟随——那要用
+       * `--ai-level tactic` 另录一批——但至少 (a) auto 有覆盖，(b) 三个意图槽有信号。
+       * 到底学没学会，交给 `eval.ts --intent` 去答，不靠猜。
+       */
+      policy.intent = g % 2 === 0 ? aiActiveMood(s).lead : 'auto';
       const cs = policy.candidateSet(s, seat, acts, label);
       const slot = buf.slot();
       const base = slot * WIDTH;
@@ -220,6 +245,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
       list.push(slot);
     } else {
       skipped += 1;
+      skippedTypes[picked.type] = (skippedTypes[picked.type] ?? 0) + 1;
     }
 
     const r = applyAction(s, picked);
@@ -244,7 +270,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
 
   return {
     rows: buf.data.subarray(0, buf.n * WIDTH),
-    meta: { seed, steps: buf.n, skipped, winner: s.winner ?? null, turns: s.turn },
+    meta: { seed, steps: buf.n, skipped, skipHist: skippedTypes, winner: s.winner ?? null, turns: s.turn },
   };
 }
 
@@ -314,6 +340,11 @@ async function main(): Promise<void> {
   sink.close();
 
   const skipped = sink.perGame.reduce((a, b) => a + b.skipped, 0);
+  // 跳过按动作类型归并：缺口在这张表上，比"3.8%"这个数有用得多
+  const skipTotal: Record<string, number> = {};
+  for (const row of sink.perGame) {
+    for (const [k, n] of Object.entries(row.skipHist ?? {})) skipTotal[k] = (skipTotal[k] ?? 0) + n;
+  }
   const decisions = sink.totalRows;
   const decisive = sink.perGame.filter((p) => p.winner).length;
   const turns = sink.perGame.map((p) => p.turns).sort((a, b) => a - b);
@@ -348,6 +379,7 @@ async function main(): Promise<void> {
   console.log(
     `采样 ${GAMES} 局（AI 打 AI，${AI_LEVEL}）：${decisions} 条决策 · 跳过 ${skipped} 步` +
       `（${((skipped / Math.max(1, skipped + decisions)) * 100).toFixed(1)}%，动作不在合法枚举里）` +
+      (skipped > 0 ? ` · 缺口 ${JSON.stringify(skipTotal)}` : '') +
       ` · 分胜负 ${decisive} · ${secs.toFixed(1)}s → ${OUT}.bin`,
   );
 }

@@ -56,7 +56,7 @@ def main() -> int:
     stats = ppo.update(model, roll, cfg)
 
     dev = stats.pop("ratio_dev_max", float("nan"))
-    # 阈值 1e-5：logp 是两个 204 维点积的和，float32 累加本身的绝对误差就在 1e-6 量级，
+    # 阈值 1e-5：logp 是 joint 维（v2 = 283）点积的和，float32 累加本身的绝对误差就在 1e-6 量级，
     # 而 TS 与 torch 的求和顺序不同。K=16 时实测 2e-7，K=64 时到 1.2e-6——变的是候选数，
     # 不是两侧的公式。真正的"不一致"会表现为 ratio 偏离到 1e-2 以上，那种一眼就看出来。
     tol = 1e-5
