@@ -43,10 +43,23 @@ export const LIFESPAN_PER_RANK = 9;
 
 /** 打坐：每回合的保底经验（实际是 境界 + 这个数，剑修再打对折） */
 export const EXP_GROWTH_FLAT = 2;
-/** 亲手击杀一个敌人给多少修为（剑修另乘 SWORD_KILL_MUL） */
-export const KILL_EXP = 10;
-/** 剑修的击杀收益倍数 */
-export const SWORD_KILL_MUL = 2;
+
+/**
+ * 高境界的经验墙：从这一级起，突破门槛额外乘 HIGH_RANK_EXP_MUL。
+ *
+ * 存在理由：修士的寿元挂在境界上（升得慢 = 活得短），所以曲线**不能全局抬**——
+ * 整体抬会把"纯挂机到 4 级"一起打掉，那是双重惩罚。墙只立在 6 级以上，
+ * 就是只掐"能不能上 7 级"这一道坎。
+ *
+ * 现在 7/8/9 级的定位是"对标本体未来更高时代的内容"，本扩展不做过分数值膨胀，
+ * 所以干脆做成"比赢一局还难的成就"：常规路线（挂机 + 灵田）到 6 级为止，
+ * 只有剑修一路血战才可能在寿元耗尽前摸到 7 级。
+ *
+ * 1.65 是推演出来的，不是拍的：1.5 时炼气士满编 9 杀也能到 7 级，
+ * 1.7 时剑修 6 杀就到不了。见 stats.ts 的「战斗历练」。
+ */
+export const HIGH_RANK_EXP_FROM = 6;
+export const HIGH_RANK_EXP_MUL = 1.65;
 
 // 读取当前经验，如果没有初始化就返回 0
 export function getExp(u: Unit): number {
@@ -61,9 +74,13 @@ export function getExp(u: Unit): number {
  *   expForRank(0) = 10  → 0 级升 1 级
  *   expForRank(1) = 30  → 1 级升 2 级（累计）
  *   expForRank(2) = 70  → 2 级升 3 级（累计）
+ *
+ * 6 级以上额外乘 HIGH_RANK_EXP_MUL（见那里的说明）：那是一道刻意的墙，
+ * 不是曲线的一部分。
  */
 export function expForRank(rank: number): number {
-  return Math.floor(10 + 10 * rank * (rank + 1) + 0.05 * 4 ** rank);
+  const base = Math.floor(10 + 10 * rank * (rank + 1) + 0.05 * 4 ** rank);
+  return rank >= HIGH_RANK_EXP_FROM ? Math.round(base * HIGH_RANK_EXP_MUL) : base;
 }
 
 /**
