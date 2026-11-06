@@ -572,12 +572,31 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   ]);
 
   // 骚扰：正面打不穿（powerEdge 为负才算），但机动性压过对面，对面还有软目标。
-  const harassEv = blend([
+  //
+  // 2026-11-06 收紧。窄决策采集（720 局、tactic 档）给的三分：
+  //   rush 49.6% / harass 34.8% / boom 54.0%——harass 显著最差，比均分低 15 点。
+  // 问题不在打分公式，在**它被选中的场合**：原来四个信号全是斜坡，光"对面有几个
+  // 农民"就够把 harassEv 顶到 0.6，于是手里只有步兵的 AI 也会宣布自己在骚扰，
+  // 然后拿一把切不进去的兵去白换正面。
+  //
+  // 所以加的是两道**准备度**（0~1 的系数，不是新的打分项）：
+  //   ① 手里真有一支能出去跑的队伍（骑兵 + 远程）——否则"骚扰"只是把步兵送过去；
+  //   ② 对面真有值得切的软目标。
+  // 用连续系数而不是布尔闸门，是因为兵是一个一个造出来的：硬切会让战术在一回合
+  // 内翻脸，"切换是渐变的"那条用例盯的就是这个。
+  // 两道都不满足时 harassEv 落到 -0.55（evidence 0.22），保留底色，但不再主导。
+  //
+  // 另外乘了个 0.88 的全局折扣：三套战术里它实测最弱，而"最弱"不等于"禁用"——
+  // 折扣把它从"经常主导"降到"在真合适的局面里才主导"。
+  const strike = raiders + ranged * 0.6;
+  const harassReady = clamp01((strike - 1) / 2) * clamp01((foeEco - 1) / 1.5);
+  const harassRaw = blend([
     [1.0, bipolar(mobilityEdge, -2, 2)],
     [0.9, bipolar(foeEco, 0, 4)],
     [1.0, -powerEdge],
     [0.6, bipolar(foeIncome - myIncome, -4, 4)],
   ]);
+  const harassEv = harassRaw * 0.88 * harassReady - 0.55 * (1 - harassReady);
 
   // 弃城：身价落后、门口真有一座守不住的城、手里有能滚雪球的经济底子，
   // 而且兑现目标（升时代 / 解锁英雄）确实够得着。够不着就不算计划，叫许愿。
@@ -5062,14 +5081,21 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
 }
 
 /**
- * 战术层只挂在"中级 AI"这一档上。
+ * 战术层的档位门。
  *
- * 高级 AI 是留给玩家对局的稳版本：主攻方向照算（focusCityId 属于走位，
- * 不是战术），但三套战术不打——权重压成均分、drive 清零、也不弃城。
- * 这样同一局里能同时选到"稳"和"会换打法"两档，用真实对局做对照。
+ * 2026-11-06 之前，中级档吃完整战术层、高级档被压回"稳定版"（权重均分、
+ * drive 清零、不弃城）。那个对照做完了，结论是战术层对胜率 **+0**
+ * （高级 vs 中级同分，见 docs/AI-2026-11-04-plan.md 第九节）。
+ *
+ * 既然 +0，就没理由让**最高档**变成"永远只会一种打法"的那一档：玩家打高级
+ * AI 觉得单调，根子就在这里。现在高级档也吃 aiMood，档位差异只剩算路粗细
+ * （威胁图、换血、预算、前瞻）。
+ *
+ * 初级档仍然屏蔽战术层——那一档的意义就是"简单、可预测、给新手练手"，
+ * 给它加战术只会让新手挨打却看不出为什么。
  */
 function moodFor(s: GameState, mood: AiMood): AiMood {
-  if (aiLevelOf(s) === 'tactic') return mood;
+  if (aiLevelOf(s) !== 'basic') return mood;
   return {
     ...mood,
     weight: { rush: 1 / 3, harass: 1 / 3, boom: 1 / 3 },
@@ -5079,10 +5105,10 @@ function moodFor(s: GameState, mood: AiMood): AiMood {
 }
 
 /**
- * 这一回合真正生效的战术倾向（已按 AI 档位过滤）。
+ * 这一回合真正生效的战术倾向。
  *
- * 对外暴露是为了给规则用例留一个"档位隔离"的断言口：高级档必须是
- * 三战术全关，战术档才是原样的 aiMood。
+ * 对外暴露是为了给规则用例留一个观察口：初级档必须是三战术全关，
+ * 中级/高级档原样输出 aiMood。
  */
 export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
   return moodFor(s, traits ? aiMood(s, traits) : aiMood(s));

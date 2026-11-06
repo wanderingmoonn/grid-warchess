@@ -1,0 +1,8 @@
+{
+  "commit": "cef2888f6ae411114fc23c15ada1aa8def0276ec",
+  "path": "src/core/ai.ts",
+  "sha256": "2d9c4294e4accab4d879af09eada45436879907c141a1510e25eef31d8783766",
+  "importsRebased": true,
+  "frozenAt": "2026-11-06",
+  "note": "harass 收紧 + 高级档开战术层之前的基线；改写 22 处导入。"
+}
