@@ -7001,11 +7001,12 @@ test('战术：切换是渐变的，不会一回合翻脸', () => {
   assert.ok(worst < 0.45, `相邻回合的战术权重跳变太大：${worstAt}`);
 });
 
-test('档位：战术层两档都生效，档位只差算路', () => {
-  // 2026-11-06 之前，高级档会把 weight 压成均分、drive 清零、不弃城，用来做
-  // "同一局里一稳一活"的对照。对照做完了，结论是战术层对胜率 +0，于是这层
-  // 屏蔽被拆掉：高级档不该是"永远只会一种打法"的那一档。
-  // 现在两档的 aiMood 完全一致，档位差异只剩威胁图 / 换血 / 预算 / 前瞻。
+test('档位：只有中级档才打三套战术，高级档保持稳的那一版', () => {
+  // 同一局面下比两档的"生效倾向"：中级档原样输出 aiMood，
+  // 高级档权重均分、drive 清零、不弃城——但主攻方向要留着（那是走位，不是战术）。
+  //
+  // 2026-11-06 试过让高级档也吃战术层，800 局 A/B 是 43.3%（z=-3.82），显著更差，
+  // 已回滚（见 docs/AI-2026-11-04-plan.md 第十四节）。这条用例就是那个决定的上锁。
   const s = fresh({ startEra: 2, aiOpponent: true });
   const mine = citiesOf(s, 'A');
   assert.ok(mine.length >= 2, '这条用例需要两座城：一座可弃、一座留着');
@@ -7023,19 +7024,16 @@ test('档位：战术层两档都生效，档位只差算路', () => {
   assert.equal(aiLevelOf(s), 'tactic', '中级档要能识别出来');
   assert.equal(aiLevelLabel(aiLevelOf(s)), '中级', '界面上叫"中级"');
   assert.equal(tac.abandonedCityId, doomed.id, '中级档在这种情况下该弃城');
-  assert.ok(
-    tac.drive.rush + tac.drive.harass + tac.drive.boom > 0,
-    '中级档该有战术出力',
-  );
 
   s.config.aiLevel = 'advanced';
   const adv = aiActiveMood(s);
   assert.equal(aiLevelOf(s), 'advanced');
-  assert.deepEqual(adv, tac, '高级档的战术倾向必须和中级档完全一致——档位不再过滤战术');
-  assert.equal(adv.abandonedCityId, doomed.id, '高级档同样会弃城');
-  assert.ok(adv.drive.rush + adv.drive.harass + adv.drive.boom > 0, '高级档该有战术出力');
+  assert.equal(adv.abandonedCityId, null, '高级档不弃城');
+  assert.equal(adv.drive.rush + adv.drive.harass + adv.drive.boom, 0, '高级档不该有战术出力');
+  assert.equal(adv.weight.rush, 1 / 3, '高级档的权重应该是均分');
+  assert.equal(adv.focusCityId, tac.focusCityId, '主攻方向两档一致——那是走位');
 
-  // 中级档不做任何改写：它就是 aiMood 本身（高级档现在也是）
+  // 中级档不做任何改写：它就是 aiMood 本身
   s.config.aiLevel = 'tactic';
   assert.deepEqual(aiActiveMood(s), aiMood(s));
 });

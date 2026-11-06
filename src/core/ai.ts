@@ -5081,21 +5081,21 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
 }
 
 /**
- * 战术层的档位门。
+ * 战术层的档位门：只有中级档吃完整战术层。
  *
- * 2026-11-06 之前，中级档吃完整战术层、高级档被压回"稳定版"（权重均分、
- * drive 清零、不弃城）。那个对照做完了，结论是战术层对胜率 **+0**
- * （高级 vs 中级同分，见 docs/AI-2026-11-04-plan.md 第九节）。
+ * 2026-11-06 试过让高级档也吃（理由：最高档不该"永远只会一种打法"）。
+ * 高级档 800 局 A/B 打下来 **43.3%（z=-3.82）**——显著更差；同一批改动放在
+ * 中级档（战术层本来就在）是 49.1%（z=-0.49），说明伤害来自"把战术叠到
+ * 更完整的评估函数上"，而不是那一次的 harass 收紧。
  *
- * 既然 +0，就没理由让**最高档**变成"永远只会一种打法"的那一档：玩家打高级
- * AI 觉得单调，根子就在这里。现在高级档也吃 aiMood，档位差异只剩算路粗细
- * （威胁图、换血、预算、前瞻）。
+ * 结论：战术层是补丁，补的是中级档评估函数不够用的地方；高级档自己已经算得
+ * 出经济、威胁、换血，再叠一层 drive 就是双重计数，把好棋掰歪。
+ * 想给高级档加变化，得改评估函数本身，而不是把驱动层打开。
  *
- * 初级档仍然屏蔽战术层——那一档的意义就是"简单、可预测、给新手练手"，
- * 给它加战术只会让新手挨打却看不出为什么。
+ * 初级档同样屏蔽——那一档的意义是"简单、可预测、给新手练手"。
  */
 function moodFor(s: GameState, mood: AiMood): AiMood {
-  if (aiLevelOf(s) !== 'basic') return mood;
+  if (aiLevelOf(s) === 'tactic') return mood;
   return {
     ...mood,
     weight: { rush: 1 / 3, harass: 1 / 3, boom: 1 / 3 },
@@ -5105,10 +5105,10 @@ function moodFor(s: GameState, mood: AiMood): AiMood {
 }
 
 /**
- * 这一回合真正生效的战术倾向。
+ * 这一回合真正生效的战术倾向（已按 AI 档位过滤）。
  *
- * 对外暴露是为了给规则用例留一个观察口：初级档必须是三战术全关，
- * 中级/高级档原样输出 aiMood。
+ * 对外暴露是为了给规则用例留一个"档位隔离"的断言口：
+ * 中级档原样输出 aiMood，初级/高级档权重均分、drive 清零、不弃城。
  */
 export function aiActiveMood(s: GameState, traits?: AiTraits): AiMood {
   return moodFor(s, traits ? aiMood(s, traits) : aiMood(s));
