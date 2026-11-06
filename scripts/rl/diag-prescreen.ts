@@ -68,6 +68,11 @@ const bucket = (k: string) => {
 
 let decisions = 0;
 let legalTotal = 0;
+/** 经济行为：它会不会"攒钱不花"（吞钱）——看决策时的金币分布与"有钱却不造兵"的比例 */
+const goldAt: number[] = [];
+let richSteps = 0;       // 金币够最贵的常用兵（265 龙骑兵）的决策步数
+let richRecruit = 0;     // 其中这一步选了招募
+let richEndTurn = 0;     // 其中这一步直接结束回合
 
 /** 一局的策略可能坐 A 也可能坐 B——座位交替的口径，诊断也照做 */
 for (let i = 0; i < GAMES; i++) {
@@ -108,6 +113,14 @@ for (let i = 0; i < GAMES; i++) {
       }
       const chosenKind = info.action.type;
       bucket(chosenKind).chosen += 1;
+
+      const gold = info.state.players[info.seat].gold;
+      goldAt.push(gold);
+      if (gold >= 265) {
+        richSteps += 1;
+        if (chosenKind === 'RECRUIT') richRecruit += 1;
+        if (chosenKind === 'END_TURN') richEndTurn += 1;
+      }
       if (chosenKind === 'RECRUIT') {
         const id = (info.action as { unitType?: string }).unitType ?? '?';
         recruitUnits.set(id, (recruitUnits.get(id) ?? 0) + 1);
@@ -129,6 +142,19 @@ for (const [k, b] of rows) {
   console.log(
     `| ${k} | ${b.legal} | ${b.cand} | ${pct(b.cand, b.legal)} | ${b.chosen} | ${pct(b.chosen, decisions)} | ` +
       `${b.stepsWithLegal > 0 ? `${b.stepsNoneCand} 步（${pct(b.stepsNoneCand, b.stepsWithLegal)}）` : '—'} |`,
+  );
+}
+
+{
+  const sorted = [...goldAt].sort((a, b) => a - b);
+  const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? 0;
+  const mean = goldAt.length > 0 ? goldAt.reduce((a, b) => a + b, 0) / goldAt.length : 0;
+  console.log(
+    `\n金币（决策时刻）：均值 ${mean.toFixed(0)} · 中位 ${q(0.5)} · P25 ${q(0.25)} · P75 ${q(0.75)} · P95 ${q(0.95)}`,
+  );
+  console.log(
+    `  金币 ≥ 265（够造一个龙骑兵）的决策 ${richSteps} 步（${pct(richSteps, decisions)}）→ ` +
+      `其中招兵 ${richRecruit} 步（${pct(richRecruit, richSteps)}）、直接结束回合 ${richEndTurn} 步（${pct(richEndTurn, richSteps)}）`,
   );
 }
 
