@@ -76,6 +76,7 @@ import {
   killAuraBonusOf,
 } from '../src/core/cultivation/abilities/formation-kill.ts';
 import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from '../src/core/cultivation/abilities/formation-seal.ts';
+import { TELEPORT_COST, TELEPORT_RADIUS } from '../src/core/cultivation/skills/teleport-swap.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -2628,11 +2629,19 @@ function cultivationRules(): string {
           身边站着修士时，半径扩到 <b>${KILL_AURA_RADIUS_EMPOWERED}</b>，加成变成
           <b>1 + (守阵者境界 + 1) ÷ 10</b>——0 级修士守着仍是 ×${(1 + killAuraBonusOf(0)).toFixed(1)}，
           ${MAX_RANK} 级修士守着是 ×${(1 + killAuraBonusOf(MAX_RANK)).toFixed(1)}。</li>
-        <li><b>封印阵</b>：半径 ${SEAL_AURA_RADIUS} 内敌军移动力 <b>×${SEAL_MOVE_PCT}</b>（向下取整）。
-          只剩 1 格移动力的单位会被完全封住——走不了，但<b>还能攻击</b>。</li>
+        <li><b>封印阵</b>：半径 ${SEAL_AURA_RADIUS} 内敌军移动力 <b>×${SEAL_MOVE_PCT}</b>（向下取整），
+          再由守在阵边的修士<b>按其境界扣掉同样多的格数</b>。所以 0 级修士守着等于没加成，
+          1 级修士就能把 2 移的单位压到 0；<b>被压到 0 的单位这一回合完全无法行动</b>——
+          不能走、不能攻击、不能放技能。</li>
+        <li><b>传送阵</b>：主动技能「挪移」，全图选点，把阵周围 ${TELEPORT_RADIUS} 格内的单位
+          与落点周围 ${TELEPORT_RADIUS} 格内的单位<b>整体对调</b>，耗 ${TELEPORT_COST} 灵石，每回合一次。
+          占地超过一格的大单位不参与；地形站不住、落点被占满时整次作废——
+          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。</li>
       </ul>
-      <p class="era-meta">注：多个杀伐阵重叠不叠乘，取最强的一条；「守阵者」取相邻修士里<b>境界最高</b>的那个，
-        不是按人数算——一堆 0 级修士围上来不该比一个大修士更强。</p>
+      <p class="era-meta">注：多个阵法重叠不叠乘，取最强的一条；「守阵者」取相邻修士里<b>境界最高</b>的那个，
+        不是按人数算——一堆 0 级修士围上来不该比一个大修士更强。
+        传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
+        同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 
       <h3>突破与生命值</h3>
       <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——

@@ -3,7 +3,7 @@
 import type { UnitTypeDef } from '../types.ts';
 // 技能的 SkillDef 和数值常量都在 skills/ 下：一个技能一个文件。
 // 这里只负责把它们挂到兵种身上，不重复定义。
-import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL } from './skills/index.ts';
+import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { GOLD } from '../resources.ts';
@@ -218,7 +218,7 @@ export const FORMATION_MASTER_3: UnitTypeDef = {
   maxHp: 36,
   range: 1,
   vision: 3,
-  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION],
+  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION, UNIT_IDS.TELEPORT_FORMATION],
   buildPower: 18,
 };
 
@@ -256,4 +256,23 @@ export const SEAL_FORMATION: UnitTypeDef = {
   range: 1,
   vision: 2,
   abilities: ['formation-seal'],
+};
+
+export const TELEPORT_FORMATION: UnitTypeDef = {
+  id: UNIT_IDS.TELEPORT_FORMATION,
+  name: '传送阵',
+  short: '传',
+  era: 5,
+  category: 'building',
+  cost: 140,
+  costRes: { 'spirit-stone': 18 },
+  buildCost: 20,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 32,
+  range: 1,
+  vision: 3,
+  // 只有主动技能，没有被动光环：它的价值全在"能把兵搬到哪"
+  skills: [TELEPORT_SKILL],
 };

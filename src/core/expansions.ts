@@ -301,6 +301,20 @@ export interface ExpansionHooks {
    * 返回的是格索引（`y * w + x`），不是坐标对——调用方直接往 Set 里塞。
    */
   extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
+
+  /**
+   * 这个单位现在**能不能下命令**。返回字符串 = 不能，字符串是给玩家的理由。
+   *
+   * 和技能的 readyCheck 不是一层：那个说的是技能自身的冷却/资源，
+   * 这个说的是**单位被外力按住**——封印、眩晕、冰冻都该走这里。
+   *
+   * 规则层会在移动 / 攻击 / 攻城 / 放技能 / 建造这五个入口统一问一次，
+   * 扩展只要实现这一个钩子，不用去改每个动作的判定；漏掉一个入口就会变成
+   * "能走不能打"这种半封印的 bug，很难发现。
+   *
+   * 注意别在里面写 O(n²)：每次下命令都会问一遍。
+   */
+  canCommand?: (c: { state: GameState; unit: Unit }) => string | null;
   /** 纯函数：修正攻击范围 */
   modifyRange?: (c: RangeCtx) => number;
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */

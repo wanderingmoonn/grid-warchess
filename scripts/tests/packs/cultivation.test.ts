@@ -817,6 +817,127 @@ export function run() {
     }
   });
 
+  // ── 完全封印 + 传送阵（2026-11-06 第二期）──────────────
+
+  test('封印阵：守阵修士的境界越高，压得越狠；0 级等于没加成', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-seal-formation', 5, 5);
+    const foe = place2(s, 'B', 'militia', 7, 5); // 距离 2，在半径 3 内
+
+    assert.equal(movePower(s, foe), 1, '没人守阵：2 × 0.5 = 1');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 6); // 相邻守阵
+    assert.equal(cultivationRank(qi), 0);
+    assert.equal(movePower(s, foe), 1, '0 级修士守着等于没加成（他就是个凡人）');
+
+    setCultivationExp(qi, expForRank(0)); // 升到 1 级
+    assert.equal(cultivationRank(qi), 1);
+    assert.equal(movePower(s, foe), 0, '1 级修士守阵：1 − 1 = 0，封住');
+  });
+
+  test('封印阵：被压到 0 的单位不能攻击，也不能放技能', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-seal-formation', 5, 5);
+    const foe = place2(s, 'B', 'militia', 7, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 6);
+    setCultivationExp(qi, expForRank(0));
+
+    s.current = 'B';
+    const atk = applyAction(s, { type: 'ATTACK', unitId: foe.id, targetId: qi.id });
+    assert.equal(atk.ok, false, '被封印的单位不该能攻击');
+    assert.ok(
+      atk.ok ? '' : /封印/.test(atk.reason),
+      `拒绝理由要说清是被封印：${atk.ok ? '' : atk.reason}`,
+    );
+
+    // 移动本来就走不了（移动力 0），这里只确认它不是"能走但没走"
+    assert.equal(movePower(s, foe), 0);
+  });
+
+  test('传送阵：按矢量整体对调两侧的单位', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+    const mate = place2(s, 'A', 'militia', 6, 5); // 源侧
+    const foe = place2(s, 'B', 'militia', 10, 5); // 落点侧（落点 9,5 的距离 1）
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    // 矢量 = (9,5) − (5,5) = (4,0)
+    assert.deepEqual([at(arr.id).x, at(arr.id).y], [9, 5], '阵自己跟着挪到落点');
+    assert.deepEqual([at(mate.id).x, at(mate.id).y], [10, 5], '源侧 +矢量');
+    assert.deepEqual([at(foe.id).x, at(foe.id).y], [6, 5], '落点侧 −矢量');
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 90, '扣 10 灵石');
+  });
+
+  test('传送阵：失败也照扣灵石，而且这一回合不能再传', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+
+    // 落点出界 → 过载
+    const bad = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: -1,
+      targetY: 5,
+    });
+    assert.ok(bad.ok, '失败仍然算作一次施放（否则灵石白扣还不用付代价）');
+    assert.equal(bad.state.players.A.res![SPIRIT_STONE], 90, '失败照扣灵石');
+
+    const again = applyAction(bad.state, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.equal(again.ok, false, '同一回合不能再传');
+    assert.ok(
+      again.ok ? '' : /已经放过技能/.test(again.reason),
+      `拒绝理由要说清是本回合用过了：${again.ok ? '' : again.reason}`,
+    );
+  });
+
+  test('传送阵：2×2 大单位不参与；它挡在落点上就整体过载', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    s.unitTypes['test-big'] = {
+      ...s.unitTypes.militia,
+      id: 'test-big',
+      name: '巨兵',
+      footprint: 2,
+    };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+    const big = place2(s, 'B', 'test-big', 9, 5); // 正压在落点上
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.ok(r.ok, '过载也是施放成功的一种结果');
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    assert.deepEqual([at(arr.id).x, at(arr.id).y], [5, 5], '过载时谁都不该动');
+    assert.deepEqual([at(big.id).x, at(big.id).y], [9, 5], '大单位原地不动');
+  });
+
   // ── 灵气滋养 ──────────────────────────────────────────
 
   const nextTurn = (s: GameState) => {

@@ -22,6 +22,7 @@ export const UNIT_IDS = {
   FORMATION_MASTER_3: 'cultivation-formation-master-3',
   KILL_FORMATION: 'cultivation-kill-formation',
   SEAL_FORMATION: 'cultivation-seal-formation',
+  TELEPORT_FORMATION: 'cultivation-teleport-formation',
 } as const;
 
 // 修士身份判定

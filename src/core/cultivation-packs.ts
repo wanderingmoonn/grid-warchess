@@ -25,6 +25,7 @@ import {
   FORMATION_MASTER_3,
   KILL_FORMATION,
   SEAL_FORMATION,
+  TELEPORT_FORMATION,
   MINE_MOUNTAIN_STONE_BONUS,
 } from './cultivation/units.ts';
 import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
@@ -62,6 +63,7 @@ export const CULTIVATION_PACK: Expansion = {
     FORMATION_MASTER_3,
     KILL_FORMATION,
     SEAL_FORMATION,
+    TELEPORT_FORMATION,
   ],
   resources: [SPIRIT_STONE_DEF],
   // 下面几条都只活在钩子里（配置表没有对应字段），规则书靠这里才能印全。

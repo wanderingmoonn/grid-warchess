@@ -87,6 +87,7 @@ const ATTR_LABELS = {
   foeArmor: '咒域',
   allyAtkPct: '攻击加成',
   foeMovePct: '迟缓',
+  foeMoveFlat: '镇压',
 } as const;
 
 export interface AuraSource {
@@ -241,6 +242,30 @@ export function foeMovePctOf(s: GameState, unit: Unit): AuraSource {
       if (gap > (a.radius ?? 1)) continue;
       if (pct < best.value) {
         best = { label: a.label ?? ATTR_LABELS.foeMovePct, value: pct, sourceId: foe.id };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 盖在 unit 身上的**敌军移动力固定扣减**：取最大的一条（最强的那个封锁）。
+ *
+ * 和 foeMovePctOf 分开是刻意的：一个按比例、一个按固定值，
+ * 合并在一个函数里会让"该先乘还是先减"变得含糊。结算顺序由 rules 定：
+ * 先乘比例，再减固定值。
+ */
+export function foeMoveFlatOf(s: GameState, unit: Unit): AuraSource {
+  let best: AuraSource = { label: ATTR_LABELS.foeMoveFlat, value: 0, sourceId: '' };
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    const gap = distBetweenUnits(s, foe, unit);
+    for (const a of aurasOfUnit(s, foe)) {
+      const flat = a.foeMoveFlat;
+      if (!flat || flat <= 0) continue;
+      if (gap > (a.radius ?? 1)) continue;
+      if (flat > best.value) {
+        best = { label: a.label ?? ATTR_LABELS.foeMoveFlat, value: flat, sourceId: foe.id };
       }
     }
   }

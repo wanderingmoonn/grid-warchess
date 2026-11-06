@@ -16,9 +16,7 @@
  */
 import type { GameState, Unit } from '../../types.ts';
 import type { AbilityDef } from '../../abilities.ts';
-import { distBetweenUnits } from '../../query.ts';
-import { isCultivatorUnit } from '../identity.ts';
-import { getRank } from '../progression.ts';
+import { bestAdjacentCultivatorRank } from './formation-guard.ts';
 
 export const FORMATION_KILL_ID = 'formation-kill';
 /** 面板上的来源名。两条重叠时按它合并显示。 */
@@ -39,24 +37,6 @@ export const KILL_AURA_BASE_PCT = 0.1;
  */
 export function killAuraBonusOf(rank: number): number {
   return (rank + 1) / 10;
-}
-
-/**
- * 相邻修士里**最高的境界**。没有修士相邻时返回 null。
- *
- * 返回 null 而不是 0 是有意的：0 级修士相邻和"没人相邻"是两回事——
- * 前者会守阵（半径扩到 4），后者不会。用 null 才能把这两种情况分开。
- */
-export function bestAdjacentCultivatorRank(s: GameState, self: Unit): number | null {
-  let best: number | null = null;
-  for (const u of s.units) {
-    if (u.id === self.id) continue;
-    if (!isCultivatorUnit(s, u)) continue;
-    if (distBetweenUnits(s, u, self) > 1) continue;
-    const rank = getRank(u);
-    if (best === null || rank > best) best = rank;
-  }
-  return best;
 }
 
 /** 这个阵法此刻的光环参数（光环本身和面板文案共用同一份） */

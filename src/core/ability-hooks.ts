@@ -54,7 +54,20 @@ export interface AbilityApi {
   tileAt(s: GameState, x: number, y: number): { terrain: Terrain } | null;
   distance(a: { x: number; y: number }, b: { x: number; y: number }): number;
   strikeDistance(s: GameState, a: Unit, b: Unit): number;
-  canStandAt(s: GameState, x: number, y: number, type: string): boolean;
+  /**
+   * 这一格能不能站。
+   *
+   * `ignoreUnits: true` 只判地形与层，不管这一格有没有人——
+   * 传送这类"一群人同时换位置"的效果必须在**所有人都还没挪过去**的时候校验，
+   * 否则先校验的人会被后校验的人挡住。
+   */
+  canStandAt(
+    s: GameState,
+    x: number,
+    y: number,
+    type: string,
+    opts?: { ignoreUnits?: boolean },
+  ): boolean;
   freeNeighbor(s: GameState, u: Unit, type: string): { x: number; y: number } | null;
   /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它） */
   spawn(s: GameState, owner: PlayerId, type: string, x: number, y: number): void;
@@ -462,6 +475,15 @@ export interface AuraSpec {
    * 多条同样取最强，也就是取**最小**的留存率。
    */
   foeMovePct?: number;
+
+  /**
+   * 敌军**移动力的固定扣减**（0/1/2…）。和 foeMovePct 是两回事：
+   * 那个是按比例砍，这个是减固定值，而且**在比例之后**结算。
+   *
+   * 封印阵用它：基础只减半，有修士守阵时再减"守阵者的境界"点，
+   * 所以 0 级修士守阵等于没加成，1 级修士就能把 2 移的单位压到 0。
+   */
+  foeMoveFlat?: number;
 
   /**
    * 上面那几条"给敌军"的作用半径（格）。默认 1 = 相邻。

@@ -135,6 +135,7 @@ import {
   auraBonusOf, 
   allyAtkPctOf,
   foeMovePctOf,
+  foeMoveFlatOf,
   fearPenaltyOf, 
   hexWeakPctOf, 
   curseAuraPenaltyOf,
@@ -1224,7 +1225,14 @@ export function terrainWalkable(def: UnitTypeDef, terrain: Terrain): boolean {
  * 拆出来是因为 2×2 的单位/建筑要**逐格**过同一套判断：
  * 地形、城市归属、同层占位。写两份必然走样。
  */
-function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boolean {
+function tileStandsOk(
+  s: GameState,
+  x: number,
+  y: number,
+  def: UnitTypeDef,
+  /** 只看地形，不管这一格有没有人（传送落位校验用：人还没挪过去） */
+  ignoreUnits = false,
+): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return false;
   if (def.domain === 'water') {
@@ -1248,7 +1256,7 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
     const city = cityById(s, tile.cityId);
     if (city && city.ruined) return false;
   }
-  return !sameLayerAt(s, x, y, airLayer(def));
+  return ignoreUnits ? true : !sameLayerAt(s, x, y, airLayer(def));
 }
 
 /**
@@ -1257,12 +1265,18 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
  * 注意"能不能站"和"这一格有没有人"是两件事：前者是地形与层，
  * 后者由 sameLayerAt 逐格判（所以 2×2 的兵贴着一座 2×2 的建筑放不下）。
  */
-export function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+export function canStandAt(
+  s: GameState,
+  x: number,
+  y: number,
+  type: string,
+  opts: { ignoreUnits?: boolean } = {},
+): boolean {
   const def = utype(s, type);
   const n = footprintOf(s, type);
   for (let dy = 0; dy < n; dy++) {
     for (let dx = 0; dx < n; dx++) {
-      if (!tileStandsOk(s, x + dx, y + dy, def)) return false;
+      if (!tileStandsOk(s, x + dx, y + dy, def, opts.ignoreUnits)) return false;
     }
   }
   return true;
@@ -1380,6 +1394,9 @@ export function movePower(s: GameState, unit: Unit): number {
    */
   const sealMove = foeMovePctOf(s, unit);
   if (sealMove.value < 1) move = Math.floor(move * sealMove.value);
+  // 固定扣减排在比例之后，而且可以扣到 0（封印阵 + 守阵修士就靠这一步）。
+  const sealFlat = foeMoveFlatOf(s, unit);
+  if (sealFlat.value > 0) move = Math.max(0, move - sealFlat.value);
 
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
@@ -1671,6 +1688,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       const before = moveNow;
       moveNow = Math.floor(moveNow * sealSrc.value);
       if (moveNow !== before) moveItems.push({ label: sealSrc.label, delta: moveNow - before });
+    }
+    const sealFlatSrc = foeMoveFlatOf(s, u);
+    if (sealFlatSrc.value > 0) {
+      const before = moveNow;
+      moveNow = Math.max(0, moveNow - sealFlatSrc.value);
+      if (moveNow !== before) moveItems.push({ label: sealFlatSrc.label, delta: moveNow - before });
     }
 
     for (const e of activeExpansions(s)) {
@@ -3104,6 +3127,34 @@ export function mergeDraftStep(
   return applyAction(remote, action, actor);
 }
 
+/**
+ * 这条指令是不是被"外力"挡住了（封印、眩晕、冰冻……）。
+ *
+ * 只问五类**主动命令**：移动、攻击、攻城、放技能、建造。像"结束回合""上船"
+ * 这种不该被一并封掉——被封印的单位总得还能放弃行动。
+ *
+ * 统一在动作分发之前挡一次，而不是在 doMove / doAttack 里各写一遍：
+ * 漏掉一个入口就是"能走不能打"这种半封印的 bug，而且很难发现。
+ */
+function commandBlockedBy(s: GameState, action: Action): string | null {
+  if (
+    action.type !== 'MOVE' &&
+    action.type !== 'ATTACK' &&
+    action.type !== 'SIEGE' &&
+    action.type !== 'HERO_SKILL' &&
+    action.type !== 'BUILD'
+  ) {
+    return null;
+  }
+  const unit = s.units.find((x) => x.id === action.unitId);
+  if (!unit) return null;
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.canCommand?.({ state: s, unit });
+    if (reason) return reason;
+  }
+  return null;
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -3136,6 +3187,9 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   const next = cloneState(s);
   // 招魂要读"本回合谁没了"，所以每一个动作前后各数一次人头（见 recordDeaths）
   const rosterBefore = rosterOf(next);
+
+  const blocked = commandBlockedBy(next, action);
+  if (blocked) return { ok: false, reason: blocked };
 
   const result: ActionResult = (() => {
     switch (action.type) {
