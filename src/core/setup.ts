@@ -484,6 +484,16 @@ export function createMatch(
       // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，
       // 因为 resetRecorder() 读到的是 undefined。
       recordDetail: config.recordDetail === true,
+      /*
+       * 脚本强制的战术（窄决策采集用）。产品界面不出这两个字段。
+       *
+       * 写在这里是因为这个对象是**逐个白名单抄的**——2026-11-06 漏过一次：
+       * 加完字段没抄进来，`createMatch` 之后 `state.config.aiDoctrine` 是 undefined，
+       * 三组"不同战术"跑出了完全相同的对局，白跑一批。
+       * 没值时不写字段，读档老存档不会多出两个空键。
+       */
+      ...(config.aiDoctrine ? { aiDoctrine: config.aiDoctrine } : {}),
+      ...(config.aiDoctrineSeat ? { aiDoctrineSeat: config.aiDoctrineSeat } : {}),
     },
     unitTypes,
     turn: 1,

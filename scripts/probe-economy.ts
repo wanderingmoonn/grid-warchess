@@ -26,7 +26,7 @@ const USE_OLD = args.includes('--old');
  * 换成一个专门杀工人的对手，才能量出"经济单位挨打的比例有没有降"。
  */
 const USE_RAID = args.includes('--raid');
-const OLD_AI_FILE = './baselines/ai-87b9829.ts';
+const OLD_AI_FILE = process.env.BASELINE ?? './baselines/ai-b54e247.ts';
 
 const oldMod = USE_OLD
   ? ((await import(OLD_AI_FILE)) as { aiNextAction: typeof aiNextAction })
