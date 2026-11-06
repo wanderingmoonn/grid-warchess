@@ -10,6 +10,7 @@
  *   · 8×8 先手 94.7% —— 策略在那儿只能学"怎么当先手"，不能用来训练；
  *   · 12×12 默认规则 60% 打不完，开了血战还有 40% 打不完，一局还要多花一倍时间。
  */
+import { TURN_CAP } from '../../src/rl/features.ts';
 import type { AiLevel } from '../../src/core/types.ts';
 
 export interface TrainConfig {
@@ -27,7 +28,12 @@ export interface TrainConfig {
   sizes: number[];
   expansions: string[];
   startEra: number;
-  /** 回合上限。血战口径下一局约 84 回合，150 是"够长但不会白跑"的位置 */
+  /**
+   * 回合上限。血战口径下一局约 84 回合，150 是"够长但不会白跑"的位置。
+   *
+   * 数本身定在 `src/rl/features.ts` 的 `TURN_CAP`：编码器要拿它当 f[0] 的分母，
+   * 而编码器现在要打进产品包、不能反过来依赖训练脚本。所以两边读同一个常量。
+   */
   capTurns: number;
   /**
    * 手写 AI 的难度档（`src/core/ai-meta.ts` 的 `aiLevelOf`）。
@@ -45,7 +51,7 @@ export const TRAIN: TrainConfig = {
   sizes: [10, 12],
   expansions: ['bloodbath'],
   startEra: 1,
-  capTurns: 150,
+  capTurns: TURN_CAP,
   aiLevel: 'advanced',
 };
 

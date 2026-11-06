@@ -61,6 +61,21 @@ export function aiLevelLabel(lv: AiLevel): string {
   return lv === 'basic' ? '初级' : lv === 'tactic' ? '中级' : '高级';
 }
 
+/** 这一局的 AI 用的是哪个内核（缺省＝手写那套） */
+export function aiBrainOf(s: GameState): 'script' | 'net' {
+  return s.config.aiBrain === 'net' ? 'net' : 'script';
+}
+
+/**
+ * 界面上该把这个 AI 叫什么。
+ *
+ * 网络那一档必须**单独一个名字**，不能写成"高级 AI"之类——玩家有权知道
+ * 对面换了个东西，尤其因为它不受迷雾限制（见 rl/brain.ts 的说明）。
+ */
+export function aiNameOf(s: GameState): string {
+  return aiBrainOf(s) === 'net' ? '测试 AI' : `${aiLevelLabel(aiLevelOf(s))} AI`;
+}
+
 /**
  * 这一方现在是 AI 在走吗？
  *

@@ -1448,6 +1448,48 @@ check('选了人机对战才出现三档 AI：初级 / 中级 / 高级，默认�
   assert.equal(doc.querySelector('[data-ailevel]'), null, '切回热座应该收起来');
 });
 
+check('测试 AI 和三个档位排在同一行，并且写明自带全视野', () => {
+  /*
+   * 2026-11-06 上线：自博弈练出来的策略网络进了「AI」这一栏。
+   *
+   * 三条要在界面上钉住：
+   *   1. 它在同一行（玩家是在"给对面挑个对手"的时候看见它的）；
+   *   2. 它和三个档位互斥——选了它就等于换内核，不该同时亮着「高级 AI」；
+   *   3. 它的说明必须写清"自带全视野"。这不是文案洁癖：手写 AI 只吃
+   *      迷雾过滤后的视图，而它直接读盘面，开雾也看得见你——不写出来
+   *      就是拿一个不公平的对手当公平的用。
+   */
+  click('[data-ai="1"]');
+  const net = () => doc.querySelector<HTMLElement>('[data-aibrain="net"]');
+  assert.ok(net(), '人机对战时应该能选到测试 AI');
+  assert.ok((net()!.textContent ?? '').includes('全视野'), '按钮上要直接写着全视野');
+  assert.equal(net()!.closest('.ai-level-row'), doc.querySelector('.ai-level-row'), '它和三个档位是同一行');
+
+  click('[data-aibrain="net"]');
+  assert.ok(net()!.classList.contains('active'), '点它应该亮起来');
+  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了测试 AI 就不该同时亮着档位');
+
+  // 说明文案要写明全视野，否则玩家只会以为它是"第四档"
+  const section = net()!.closest('section')!;
+  assert.ok((section.textContent ?? '').includes('自带全视野'), '这一栏要有一句"自带全视野"的说明');
+
+  click('[data-ailevel="advanced"]');
+  assert.equal(net()!.classList.contains('active'), false, '点档位应该切回手写引擎');
+  assert.equal(
+    doc.querySelector<HTMLElement>('[data-ailevel].active')?.dataset.ailevel,
+    'advanced',
+    '切回来应该落在高级 AI',
+  );
+
+  // 指挥官模式的 AI 只执行玩家排的队列，网络内核不认队列——这一档不提供
+  click('[data-role="commander"]');
+  assert.equal(net(), null, '指挥官模式下不该出现测试 AI');
+  click('[data-role="full"]');
+
+  click('[data-ai="0"]');
+  assert.equal(net(), null, '切回热座应该收起来');
+});
+
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
   // 开局面板这时候已经开着（首屏在没有存档时会自动弹出），不再重复打开
   const activeSize = () =>

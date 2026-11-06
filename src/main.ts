@@ -12,7 +12,7 @@ import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
-import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
@@ -1229,7 +1229,7 @@ function render(): void {
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),
-    aiLevelName: aiLevelLabel(aiLevelOf(state)) + ' AI',
+    aiLevelName: aiNameOf(state),
     aiAny: anyAiSide(state),
     paused: aiPaused,
     speedName: AI_SPEED_NAME[aiSpeed] ?? '快',
@@ -3360,10 +3360,9 @@ function handleAction(act: string, el: HTMLElement): void {
       clearSelection();
       saveMatch(state);
       render();
-      const lv = aiLevelLabel(aiLevelOf(state));
       toast(
         nowAi
-          ? `${state.players[p].name}交给 ${lv} AI 托管`
+          ? `${state.players[p].name}交给 ${aiNameOf(state)}托管`
           : `${state.players[p].name}改由你操作`,
       );
       if (nowAi) void runAiLoop();
@@ -3693,6 +3692,40 @@ function aiEngine(): Promise<typeof import('./core/ai.ts')> {
   return aiEnginePromise;
 }
 
+/**
+ * 测试 AI 的内核（策略网络）。
+ *
+ * 和手写引擎一样按需加载，但**分成两块**：
+ *   · 代码（编码器 + 合法动作枚举 + 前向）约 40KB，跟着 `import()` 走；
+ *   · 权重 175KB，第一次真要用它走子时才 fetch。
+ * 绝大多数玩家一辈子用不到测试 AI，那 215KB 就不该进首屏。
+ */
+let netBrainPromise: Promise<typeof import('./rl/brain.ts')> | null = null;
+function netBrain(): Promise<typeof import('./rl/brain.ts')> {
+  netBrainPromise ??= import('./rl/brain.ts');
+  return netBrainPromise;
+}
+
+/**
+ * 网络那一侧的随机流：**一局一家一条**，从种子派生。
+ *
+ * 不能每回合新建一条：那样每个回合的第一个采样都会拿到同一个随机数，
+ * 策略会稳定地偏爱同一个分支。也不能用 Math.random：存档、回放、
+ * 双 AI 观战都得重跑出同一局。
+ */
+const netRands = new Map<string, () => number>();
+function netRandFor(seed: number, seat: 'A' | 'B', make: (n: number) => () => number): () => number {
+  const key = `${seed}:${seat}`;
+  let r = netRands.get(key);
+  if (!r) {
+    // 只留最近两局：长会话里一直往里塞会慢慢吃内存
+    if (netRands.size > 8) netRands.clear();
+    r = make((seed * 2654435761 + (seat === 'A' ? 1 : 2)) >>> 0);
+    netRands.set(key, r);
+  }
+  return r;
+}
+
 async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
@@ -3713,12 +3746,42 @@ async function runAiTurn(
   const rejected = new Set<string>();
   const engine = await aiEngine();
 
+  /*
+   * 网络内核：只在 `config.aiBrain === 'net'` 时加载。
+   *
+   * 加载失败**不中断这一局**——退回手写 AI 并说明一句。让玩家在"点了测试 AI"
+   * 之后面对一局卡死的棋，比"这一局先用普通 AI"糟得多。
+   *
+   * 指挥官模式**不认**它：那个模式的核心是"玩家点名这一格造哪个兵、在哪造"，
+   * 而策略网络只认局面，不认 `budget.order`（训练口径里根本没有这个字段）。
+   * 让它上，队列就变成了摆设，玩家排的计划一条也不会被执行。
+   */
+  let brain: typeof import('./rl/brain.ts') | null = null;
+  let netPolicy: import('./rl/policy.ts').Policy | null = null;
+  if (state.config.aiBrain === 'net' && !state.config.commanderMode) {
+    brain = await netBrain();
+    netPolicy = await brain.loadNetPolicy();
+    if (!netPolicy) {
+      toast(`测试 AI 没加载起来（${brain.netLoadError() ?? '未知原因'}），这一局先用普通 AI`);
+    }
+  }
+
   for (let step = 0; step < engine.AI_MAX_STEPS; step++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
     if (stopWhen?.()) break;
-    const action = engine.aiNextAction(state, budget, rejected);
+    // 有网络内核就用它；没有（或加载失败）就退回手写 AI
+    const action =
+      brain && netPolicy
+        ? brain.netNextAction(
+            state,
+            player,
+            netRandFor(state.seed, player === 'A' ? 'A' : 'B', brain.mulberry32),
+            netPolicy,
+            rejected,
+          )
+        : engine.aiNextAction(state, budget, rejected);
     if (!action) break;
 
     planMovePath(state, action);
