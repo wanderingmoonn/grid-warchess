@@ -517,6 +517,21 @@ export interface Expansion {
   ) => void;
   /** 这个扩展带来的新资源（灵石、法力……）。注册由 setup 统一做。 */
   resources?: ResourceDef[];
+  /**
+   * 给规则书用的"补充规则"，一条一句，生成器原样印到「特殊规则」末尾。
+   *
+   * 存在的理由：有些规则**只在钩子里活着**，配置表里根本没有对应字段——
+   * 比如「灵矿相邻高山多产灵石」写在 modifyYield 里、「散灵台要先充能才能开火」
+   * 写在 modifyAttacks 里。这类规则生成器看不见，于是手册里要么漏掉、要么写错，
+   * 而写错的地方离代码很远，改数值的人永远想不起来。
+   *
+   * 放进这里，至少让它和实现待在同一份文件、同一个 PR 里；而且这里可以引用
+   * 常量（`+${MINE_MOUNTAIN_STONE_BONUS} 灵石`），不必手打数字。
+   *
+   * **只写"代码里查不到"的那部分**：兵种数值、能力说明、造价这些生成器已经
+   * 会从数据里印，别在这里重复一遍。
+   */
+  manualNotes?: string[];
 }
 
 function nameOf(state: GameState, typeId: string): string {

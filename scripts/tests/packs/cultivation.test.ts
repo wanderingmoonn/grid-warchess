@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, arena, place, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, idx, heroSkillsOf, refreshMemory, splashRadiusOf, splashRatioOf } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, idx, heroSkillsOf, refreshMemory, splashRadiusOf, splashRatioOf, unitYield } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 import { CONFIG, UNIT_TYPES } from '../../../src/core/config.ts';
@@ -384,6 +384,71 @@ export function run() {
 
     const target = r.state.units.find(u => u.id === 't-target')!;
     assert.ok(target.hp <= 70, '塔应该开火并造成至少 30 点伤害');
+  });
+
+  // ── 回归（2026-11-06）────────────────────────────────
+
+  // 灵矿的"每相邻一座高山 +2 灵石"曾经直接算 (y+dy)*w+(x+dx)，
+  // 漏了 x 边界：站在最左列的灵矿，会把**上一行最右格**的山算成邻居。
+  // 这条用例就是把"棋盘几何"和"内存索引"这两件事分开钉住。
+  test('灵矿：相邻高山的加成不做跨行串格（左边缘）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    for (const t of s.tiles) t.terrain = 'plain';
+
+    // (w-1, 4) 是 (0,6) 的"左上"在索引上相邻、棋盘上隔着一整行的格子
+    s.tiles[4 * s.w + (s.w - 1)] = { terrain: 'mountain', cityId: null };
+    const mine = place2(s, 'A', 'cultivation-spirit-mine', 0, 6);
+    assert.equal(
+      unitYield(s, mine)[SPIRIT_STONE], 1,
+      '左边缘不该白拿上一行最右格的 2 灵石',
+    );
+
+    // 真正的相邻格要照算，否则就是把 bug 改成"加成失效"
+    s.tiles[6 * s.w + 1] = { terrain: 'mountain', cityId: null };
+    assert.equal(unitYield(s, mine)[SPIRIT_STONE], 3, '右边真相邻是山时 +2 仍生效');
+  });
+
+  // 散灵台的就绪检查一度注册在 effect 名 'spirit-tower-shot' 上，
+  // 而引擎是按 skill.id（'tower-charge'）查表的，于是这个检查从来没跑过——
+  // 表现为"0 灵石时按钮照样是亮的，点下去才报错"。
+  test('散灵台：灵石不足时「释放灵气」应提前显示为不可用', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.fog = false;
+    s.units.push({
+      id: 't-tower', type: 'cultivation-spirit-tower', owner: 'A' as const,
+      x: 5, y: 5, hp: 28, kills: 0, moved: true, acted: false,
+    });
+    const tower = s.units.find((u) => u.id === 't-tower')!;
+    const skillOf = () => heroSkillsOf(s, tower).find((k) => k.def.id === 'tower-charge')!;
+
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.equal(skillOf().ready, false, '0 灵石时不该显示为可放');
+    assert.ok(skillOf().notReadyReason?.includes('灵石'), '应给出"灵石不足"的具体理由');
+
+    s.players.A.res = { [SPIRIT_STONE]: 5 };
+    assert.equal(skillOf().ready, true, '攒够 5 灵石就该亮起来');
+  });
+
+  // 面板那行「境界加成」的语义是"修到这一层本身给了多少"：
+  // 不乘流派系数、不扣衰老。它一度硬编码了旧公式（漏了 /(rank+1)^0.2），
+  // 9 级时印 "+407" 而实际只有 +257。
+  // 期望值由 stats.ts 的 realm*Base 反推：
+  //   攻击 ceil((45 + 2^8.5) / 10^0.2) = ceil(256.82) = 257
+  //   护甲 ceil(-1 + 81 + 1.5^9)      = ceil(118.44) = 119
+  //   射程 floor(9/2) = 4      神识 9
+  test('面板「境界加成」印的是纯境界值（不乘系数、不扣衰老）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    setCultivationExp(qi, 4006);                  // 9 级
+    qi.custom = { ...qi.custom, lifespan: 999 };  // 钉死寿元，排除衰老干扰
+
+    const line = getCultivationPanelLines(s, qi).find((l) => l.includes('境界加成'))!;
+    assert.ok(line, '9 级应该有「境界加成」这一行');
+    assert.ok(line.includes('攻击 +257'), `攻击应为 257（旧公式印 407）：${line}`);
+    assert.ok(line.includes('护甲 +119'), `护甲应为 119：${line}`);
+    assert.ok(line.includes('射程 +4'), `射程应为 4：${line}`);
+    assert.ok(line.includes('神识 +9'), `神识应为 9：${line}`);
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

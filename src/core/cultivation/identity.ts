@@ -29,6 +29,17 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
 export function isSpirit(u: Unit): boolean {
   return u.type === 'cultivator-spirit';
 }
+
+/**
+ * 「灵体道果」的最低境界：达到它才会"死而不灭"，跌破它就会失去这份道果。
+ *
+ * 放在 identity.ts 是因为它有四个消费者，而且分属三层：
+ *   · unlocks.ts（几级解锁）、abilities/spirit-ascension.ts（几级才能化灵）、
+ *     progression.ts 的 cleanupAfterRankDrop（几级以下要收回去）、规则书正文。
+ * 以前这四处各写一个 `4`，改一次要回来找四遍——正是文档和代码对不上的典型来源。
+ */
+export const SPIRIT_ASCENSION_RANK = 4;
+
 /** 未来魂修集合：化灵后不吃削弱 */
 const SOUL_MASTER_IDS = new Set<string>();
 

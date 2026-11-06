@@ -8,7 +8,11 @@ import {
   trueDamageOf,
   SWORD_BASE_MUL,
   SWORD_SWEEP_MUL,
-  attTimesModifier
+  attTimesModifier,
+  realmAtkBase,
+  realmArmorBase,
+  realmRangeBase,
+  realmVisionBase,
 } from './stats.ts';
 import { getSwordSweepReach } from './skills.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from './abilities/spirit-aura.ts';
@@ -45,11 +49,13 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 
 	if (rank > 0) {
 	const trueDmg = trueDamageOf(unit);
+	// 这一行印的是"修到这一层本身给了多少"：**不乘流派系数、不扣衰老**。
+	// 超龄的惩罚在下面的「油尽灯枯」单独一行，灵体/剑修的系数由各自的说明行交代。
 	lines.push(
 			`境界加成：
-      攻击 +${Math.floor(5 * rank + 2**(rank-0.5))} · 
-      护甲 +${Math.floor(-1 + rank * rank + 1.5**rank)} · 
-      射程 +${Math.floor(rank/2)} · 神识 +${Math.floor(rank)} · 
+      攻击 +${realmAtkBase(rank)} · 
+      护甲 +${realmArmorBase(rank)} · 
+      射程 +${realmRangeBase(rank)} · 神识 +${realmVisionBase(rank)} · 
       攻击次数 +${attTimesModifier(unit)}`,
 	);
 	if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);

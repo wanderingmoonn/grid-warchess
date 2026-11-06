@@ -1,6 +1,6 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import { isCultivatorUnit } from './identity.ts';
-import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
+import { addExp, getExpGrowth, ensureLifespan, isDoomed, KILL_EXP, SWORD_KILL_MUL } from './progression.ts';
 import { 
   atkModifier, 
   armorModifier, 
@@ -14,15 +14,15 @@ import {
 } from './stats.ts';
 import { getCultivationPanelLines } from './panel.ts';
 import { SPIRIT_STONE } from './resources.ts';
+import { MINE_MOUNTAIN_STONE_BONUS } from './units.ts';
+// query.ts 只 import type，不会和 rules.ts 形成环。
+import { idx, inBounds } from '../query.ts';
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
   // 1. 击杀敌人获得经验
 	onUnitKilled: (c) => {
 		if (c.killer && isCultivatorUnit(c.state, c.killer)) {
-		let killexp=5;
-		if (c.killer.type === 'sword-cultivator'){
-				killexp = killexp * 2;
-		}
+		const killexp = c.killer.type === 'sword-cultivator' ? KILL_EXP * SWORD_KILL_MUL : KILL_EXP;
 		addExp(c.killer, c.state, killexp); 
 		}
 	},
@@ -81,14 +81,20 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
     let mountainCount = 0;
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const [dx, dy] of dirs) {
-      const tile = state.tiles[(unit.y + dy) * state.w + (unit.x + dx)];
+      const nx = unit.x + dx;
+      const ny = unit.y + dy;
+      // 必须显式判边界：直接写 (y+dy)*w+(x+dx) 的话，x 越界会绕到相邻行的
+      // 另一头——灵矿站在最左列时，会把**上一行最右格**的山当成自己旁边，
+      // 白拿 2 灵石（实测过）。
+      if (!inBounds(state, nx, ny)) continue;
+      const tile = state.tiles[idx(state, nx, ny)];
       if (tile && tile.terrain === 'mountain') {
         mountainCount++;
       }
     }
     if (mountainCount > 0) {
       // 每相邻一座高山，额外 +2 灵石
-      const bonus = mountainCount * 2;
+      const bonus = mountainCount * MINE_MOUNTAIN_STONE_BONUS;
       yields[SPIRIT_STONE] = (yields[SPIRIT_STONE] ?? 0) + bonus;
     }
     return yields;
