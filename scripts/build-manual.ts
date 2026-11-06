@@ -24,24 +24,30 @@ import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansi
 import {
   AGING_DEATH_AGE,
   EXP_GROWTH_FLAT,
-  KILL_EXP,
   LIFESPAN_BASE,
   LIFESPAN_PER_RANK,
   MAX_RANK,
   REALMS,
-  SWORD_KILL_MUL,
   expForRank,
   maxHpDeltaBetween,
   sumDeltaMaxHpUpTo,
 } from '../src/core/cultivation/progression.ts';
 import {
+  KILL_EXP_BASE,
+  KILL_EXP_CAP_BASE,
+  KILL_EXP_CAP_PER_RANK,
+  KILL_EXP_MIN_ATK_BY_RANK,
+  KILL_EXP_RANK_FACTOR,
   SPIRIT_ARMOR_MUL,
   SPIRIT_ATK_MUL,
   SPIRIT_MOVE_MUL,
   SPIRIT_RANGE_MUL,
   SWORD_BASE_MUL,
+  SWORD_KILL_EXP_MUL,
   SWORD_SWEEP_MUL,
   extraAttacksForRank,
+  killExpCapOfRank,
+  killExpForRank,
   moveForRank,
   realmArmorBase,
   realmAtkBase,
@@ -2484,6 +2490,16 @@ function pct(x: number): number {
 function cultivationRules(): string {
   const unlocks = cultivationUnlocksByRank();
 
+  // 「战斗历练」表里的参照目标：三代戟兵。
+  // 代价是规则书会跟着本体数值走——戟兵改攻击力，"单次"那两列自动变。
+  const refKillUnit = UNIT_TYPES['halberdier'];
+  const REF_KILL_ATK = refKillUnit?.atk ?? 21;
+  const REF_KILL_NAME = refKillUnit?.name ?? '戟兵';
+
+  // 系数归零的境界：从这一级起战斗不再给历练。
+  // 从表里找而不是写死 7，改系数时这句话不会骗人。
+  const KILL_EXP_ZERO_RANK = KILL_EXP_RANK_FACTOR.findIndex((f) => f === 0);
+
   // 「各境界对照表」：0~9 逐行跑出来
   const rankRows = Array.from({ length: MAX_RANK + 1 }, (_, rank) => `
           <tr>
@@ -2531,10 +2547,32 @@ function cultivationRules(): string {
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
           <span class="c">炼气士：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
         </li>
-        <li><b>战斗击杀</b>：亲手击杀敌方单位时获得。<br/>
-          <span class="c">炼气士：${KILL_EXP} 点。 剑修：${KILL_EXP * SWORD_KILL_MUL} 点（${SWORD_KILL_MUL} 倍收益）。</span>
+        <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
+          <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
         </li>
       </ul>
+
+      <h4>战斗历练明细</h4>
+      <p>修士的成长主要靠打坐，出去历练是<b>另一条路</b>——它更快，但极其凶险，而且是唯一能摸到高境界的路。</p>
+      <ul>
+        <li><b>看攻击力，不看造价</b>：目标的基础攻击力必须<b>高于</b>表里的门槛。召唤物没有造价，所以不能按价钱算；更难打的召唤物攻击力自然更高，一样能算出历练。</li>
+        <li><b>越往上越不值钱</b>：同一个敌人在你弱的时候是磨刀石，在你强的时候只是数字。${KILL_EXP_ZERO_RANK >= 0 ? `${KILL_EXP_ZERO_RANK} 级（${REALMS[KILL_EXP_ZERO_RANK]}期）起` : '最高境界时'}击杀不再给任何历练。</li>
+        <li><b>每回合封顶</b>：防止一波清屏直接跳级。上限 = ${KILL_EXP_CAP_BASE} + ${KILL_EXP_CAP_PER_RANK} × 境界，见最后一列。</li>
+      </ul>
+      <table>
+        <thead><tr><th>境界</th><th>系数</th><th>值得一战的最低攻击</th><th>单次·炼气士</th><th>单次·剑修</th><th>每回合上限</th></tr></thead>
+        <tbody>
+          ${[...Array(MAX_RANK + 1).keys()].map((r) => `<tr>
+            <td class="name">${r} ${REALMS[r]}</td>
+            <td>${KILL_EXP_RANK_FACTOR[r] ?? 0}</td>
+            <td>${(KILL_EXP_RANK_FACTOR[r] ?? 0) === 0 ? '—' : `> ${KILL_EXP_MIN_ATK_BY_RANK[r]}`}</td>
+            <td>${(KILL_EXP_RANK_FACTOR[r] ?? 0) === 0 ? '—' : killExpForRank(r, REF_KILL_ATK, false)}</td>
+            <td>${(KILL_EXP_RANK_FACTOR[r] ?? 0) === 0 ? '—' : killExpForRank(r, REF_KILL_ATK, true)}</td>
+            <td>${killExpCapOfRank(r)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <p class="c">「单次」按攻击力 ${REF_KILL_ATK} 的目标（${REF_KILL_NAME}）计算；打更硬的敌人不会更多——系数只看你的境界，不看对面多强，但太弱的敌人直接不给。</p>
 
       <h4>升级门槛</h4>
       <p>下表是"从这一境突破到下一境"所需的<b>累计</b>修为（不是本境新增）：</p>
