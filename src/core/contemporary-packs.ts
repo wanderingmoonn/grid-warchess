@@ -59,6 +59,7 @@
  *         加固地堡（连发机关炮）/ 前进指挥所 / 物流集团 / 工程兵团
  */
 
+import { WATER_TERRAINS } from './config.ts';
 import { DAMAGE_STAGE } from './ability-hooks.ts';
 import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
@@ -311,7 +312,7 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     // 现代的前线基地：沿用产兵点默认值（不设白名单、当回合成型、原价）
     produce: {},
     buildOn: ['plain', 'hill'],
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
 ];
 

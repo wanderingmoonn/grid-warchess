@@ -165,6 +165,13 @@
   table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
   table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
   table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
+     那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
+     数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
+  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
+  table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
+  table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
   td.glyph {
     text-align: center;
     font-weight: 600;
@@ -450,43 +457,24 @@
       </table>
       <p class="c">「单次」按攻击力 21 的目标（戟兵）计算；打更硬的敌人不会更多——系数只看你的境界，不看对面多强，但太弱的敌人直接不给。</p>
 
-      <h4>升级门槛</h4>
-      <p>下表是"从这一境突破到下一境"所需的<b>累计</b>修为（不是本境新增）：</p>
-      <div class="formula">
-        凡人 → 炼气：10<br />炼气 → 筑基：30<br />筑基 → 金丹：70<br />金丹 → 元婴：133<br />元婴 → 化神：222<br />化神 → 返虚：361<br />返虚 → 合体：1046<br />合体 → 大乘：2292<br />大乘 → 渡劫：6610
-      </div>
-
       <div class="callout">
         <b>境界顿悟：</b>境界提升不仅是数值的暴涨，更是对天地法则的明悟。修士达到特定境界时会自动领悟新的技能、获得新的能力——具体几级解锁什么，见下一张表的最后一列。
       </div>
 
-      <h3>各境界属性加成对照表</h3>
-      <p>除「攻击次数」外，表里都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
+      <h3>各境界一览表</h3>
+      <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
+        其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
         剑修的增量还要再乘 0.8（施展剑气纵横时 1.2）；灵体另有折算，见后面「灵体形态」。</p>
-      <table class="overview">
-        <thead>
-          <tr>
-            <th>境界</th><th>名称</th><th>生命上限</th><th>护甲</th><th>物理攻击</th><th>真元</th>
-            <th>攻击次数</th><th>溅射半径</th><th>射程</th><th>移动力</th><th>视野</th><th>特殊能力</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="name">0</td>
-            <td>凡人</td>
-            <td>+0</td>
-            <td>+0</td>
-            <td>+1</td>
-            <td>0</td>
-            <td>1</td>
-            <td>+0</td>
-            <td>+0</td>
-            <td>+0</td>
-            <td>+0</td>
-            <td>—</td>
-          </tr>
+      <div class="scroll-x">
+        <table class="rank-table">
+          <colgroup><col style="width:5%"><col style="width:8%"><col style="width:6%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:6%"><col style="width:6%"><col style="width:7%"><col style="width:6%"><col style="width:7%"><col style="width:6%"><col style="width:19%"></colgroup>
+          <thead>
+            <tr><th>境界</th><th>修为</th><th>名称</th><th>生命</th><th>护甲</th><th>攻击</th><th>真元</th><th>次数</th><th>溅射</th><th>射程</th><th>移动</th><th>视野</th><th>特殊能力</th></tr>
+          </thead>
+          <tbody>
           <tr>
             <td class="name">1</td>
+            <td>10</td>
             <td>炼气</td>
             <td>+8</td>
             <td>+2</td>
@@ -501,6 +489,7 @@
           </tr>
           <tr>
             <td class="name">2</td>
+            <td>30</td>
             <td>筑基</td>
             <td>+18</td>
             <td>+6</td>
@@ -515,6 +504,7 @@
           </tr>
           <tr>
             <td class="name">3</td>
+            <td>70</td>
             <td>金丹</td>
             <td>+35</td>
             <td>+12</td>
@@ -529,6 +519,7 @@
           </tr>
           <tr>
             <td class="name">4</td>
+            <td>133</td>
             <td>元婴</td>
             <td>+78</td>
             <td>+21</td>
@@ -543,6 +534,7 @@
           </tr>
           <tr>
             <td class="name">5</td>
+            <td>222</td>
             <td>化神</td>
             <td>+202</td>
             <td>+32</td>
@@ -557,6 +549,7 @@
           </tr>
           <tr>
             <td class="name">6</td>
+            <td>361</td>
             <td>返虚</td>
             <td>+551</td>
             <td>+47</td>
@@ -571,6 +564,7 @@
           </tr>
           <tr>
             <td class="name">7</td>
+            <td>1046</td>
             <td>合体</td>
             <td>+1494</td>
             <td>+66</td>
@@ -585,6 +579,7 @@
           </tr>
           <tr>
             <td class="name">8</td>
+            <td>2292</td>
             <td>大乘</td>
             <td>+3928</td>
             <td>+89</td>
@@ -599,6 +594,7 @@
           </tr>
           <tr>
             <td class="name">9</td>
+            <td>6610</td>
             <td>渡劫</td>
             <td>+9976</td>
             <td>+119</td>
@@ -611,10 +607,11 @@
             <td>+9</td>
             <td>—</td>
           </tr>
-        </tbody>
-      </table>
-      <p class="era-meta">注：「生命上限」是从 0 级一路突破上来的累计值（一次跨多级突破按两端差算，会和逐级累计差一两点）。
-        「攻击次数」写的是总数，已含基础的 1 次。「真元」「溅射半径」见下方各自的段落。</p>
+          </tbody>
+        </table>
+      </div>
+      <p class="era-meta">注：「次数」写的是总数，已含基础的 1 次。「真元」「溅射」见下方各自的段落。
+        0 级（凡人）没有列出：那一行几乎全是 0，只有「次数」是 1。</p>
 
       <h3>异象</h3>
       <p>修士突破时天象外泄，藏不住。带「异象」的修士（<b>1 级</b>起自动获得，也就是获得它的下一次突破起）
@@ -648,27 +645,11 @@
       </ul>
 
       <h3>突破与生命值</h3>
-      <p>每次境界突破，生命上限按"新旧境界之差"增加一次，并按当前血量比例回血。各阶段增加量：</p>
-      <table class="overview">
-        <thead>
-          <tr><th>突破阶段</th><th>增加最大生命</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="name">凡人 → 炼气</td><td>+8</td></tr>
-          <tr><td class="name">炼气 → 筑基</td><td>+10</td></tr>
-          <tr><td class="name">筑基 → 金丹</td><td>+17</td></tr>
-          <tr><td class="name">金丹 → 元婴</td><td>+43</td></tr>
-          <tr><td class="name">元婴 → 化神</td><td>+124</td></tr>
-          <tr><td class="name">化神 → 返虚</td><td>+349</td></tr>
-          <tr><td class="name">返虚 → 合体</td><td>+943</td></tr>
-          <tr><td class="name">合体 → 大乘</td><td>+2434</td></tr>
-          <tr><td class="name">大乘 → 渡劫</td><td>+6048</td></tr>
-        </tbody>
-      </table>
-      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
+      <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——
+        初期增长平缓，踏入化神以上会爆发式地涨，成为真正的战场巨兽。</p>
 
       <h3>真元（真实伤害）</h3>
-      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见对照表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
+      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见上表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
 
       <h3>寿元与衰老</h3>
       <p>凡人只有 10 年寿元，境界每高一级多 9 年；到 9 级（渡劫）寿元不再是限制。</p>

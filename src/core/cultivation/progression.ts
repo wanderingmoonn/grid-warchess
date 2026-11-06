@@ -119,22 +119,37 @@ export function getMaxHp(s: GameState, u: Unit): number {
 }
 
 /**
- * 从 `fromRank` 升到 `toRank` 一次性加多少生命上限。
+ * 生命上限曲线。单一真相是「每一级给多少」，累计值由它求和得出。
  *
- * 用 `to³ - from³` 的**差**而不是逐级累加：两者数值等价（telescoping sum），
- * 但写成一跳的形态和 `addExp` 原有的"跨级只回一次血"保持完全一致——
- * 改写成逐级的话，`Math.floor` 在每级都会丢一次精度，回血量会和以前不同。
+ * 以前是一句闭式函数作差：`floor(8.5·Δr + 0.0685·(F(to) − F(from)))`。
+ * 那个写法短，但它和累计值成了两条路径——跨级算 `floor(F(to) − F(from))`、
+ * 逐级算 `Σ floor(单级)`，取整点不同。实测 2→4 / 3→5 / 4→6 / 5→7 / 6→8 / 7→9
+ * 六档会差 1 点：**同样多的经验，一次跳两级比连升两次少 1 点血**。
+ * 剑气纵横一次给几百经验、直接跳级时就会命中这个分支。
+ *
+ * 现在统一成「逐级增量求和」：跳级就是分几步走，天然一致；要调「每级加多少血」
+ * 也只改 hpGainForRank 一处，累计值、灵体重生的重置、规则书全跟着走。
  */
-export function maxHpDeltaBetween(fromRank: number, toRank: number): number {
-  return Math.floor(
-    8.5 * (toRank - fromRank) +
-    0.0685 * (toRank ** 3 * 1.8 ** toRank - fromRank ** 3 * 1.8 ** fromRank),
-  );
+
+/** 从 rank-1 升到 rank 时，生命上限增加多少（rank ≤ 0 恒为 0） */
+export function hpGainForRank(rank: number): number {
+  if (rank <= 0) return 0;
+  const shape = (r: number) => r ** 3 * 1.8 ** r;
+  // 8.5 是每级的固定部分，0.0685·r³·1.8^r 是越往后越陡的指数部分
+  return Math.floor(8.5 + 0.0685 * (shape(rank) - shape(rank - 1)));
 }
-export function sumDeltaMaxHpUpTo(rank: number): number {
+
+/** 0 级升到 rank 级，一共加了多少生命上限 */
+export function totalHpBonusForRank(rank: number): number {
   let total = 0;
-  for (let r = 1; r <= rank; r++) total += maxHpDeltaBetween(r - 1, r);
+  for (let r = 1; r <= rank; r++) total += hpGainForRank(r);
   return total;
+}
+
+/** 从 fromRank 升到 toRank 加多少（跨级 = 逐级累加，和连升几次完全一致） */
+export function maxHpDeltaBetween(fromRank: number, toRank: number): number {
+  if (toRank <= fromRank) return 0;
+  return totalHpBonusForRank(toRank) - totalHpBonusForRank(fromRank);
 }
 
 /**

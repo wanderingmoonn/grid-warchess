@@ -21,6 +21,7 @@ import {
   ORDER_IDLE,
   ORDER_UPGRADE,
   UNIT_TYPES,
+  WATER_TERRAINS,
   buildCostOf,
   buildPowerOf,
   eraDef,
@@ -238,12 +239,14 @@ import {
   recruitResCost,
   recruitSpawnCells,
   orderedStatuses,
+  abilityApi,
   refreshMemory,
   registerSkillEffect,
   registerStatus,
   SKILL_EFFECTS,
   STATUS_REGISTRY,
   buildSiteError,
+  adjacentRequirementOf,
   stepCostBetween,
   stepCostInto,
   strikeDistance,
@@ -5156,6 +5159,70 @@ test('军营能扎在桥头：桥面也算临水', () => {
   assert.equal(noWater.ok, false, '一格水都没有的时候仍然不许扎营');
 });
 
+test('选址：邻里要求可以是地形或建筑，占地整圈和脚下都算', () => {
+  // 军营的「必须临水」只是这条规则的一个特例。炼丹炉那种"山边或灵田边都行"
+  // 不需要往核心再加一个布尔开关——加一个 adjacent 就够了。
+  //
+  // 同时守住"脚下那几格也算"：2×2 的炉子一半压在山脊上时，只扫锚点四邻
+  // 会判"不挨着山"，而玩家看到的是"我这炉子明明靠着山"。
+  const s = fresh();
+  const builder = place(s, 'A', 'laborer', 5, 5);
+  s.current = 'A';
+  for (let y = 3; y <= 8; y++)
+    for (let x = 3; x <= 9; x++) s.tiles[idx(s, x, y)] = { terrain: 'plain', cityId: null };
+  const setT = (x: number, y: number, terrain: Terrain) => {
+    s.tiles[idx(s, x, y)] = { terrain, cityId: null };
+  };
+  const kiln = (extra: Record<string, unknown>) => {
+    const def = {
+      ...s.unitTypes.tower,
+      id: 'test-kiln',
+      name: '试验炉',
+      short: '炉',
+      footprint: 1,
+      buildOn: ['plain', 'mountain'],
+      requiresWater: undefined,
+      adjacent: undefined,
+      ...extra,
+    } as any;
+    // footprintOf 是按 id 去兵种表里查的：临时建筑也得先登记，
+    // 否则 2×2 会被当成 1×1，正好把这条用例要测的"整圈"测没了。
+    s.unitTypes[def.id] = def;
+    return def;
+  };
+
+  // 1) 平地上、周围既没山也没灵田 → 拒绝，理由里要带着要求本身
+  const byMountain = kiln({ adjacent: { terrain: ['mountain'] } });
+  const no = buildSiteError(s, byMountain, builder, 6, 5);
+  assert.ok(no && no.includes('必须紧邻'), `不挨着山应该拒绝，实际：${no}`);
+
+  // 2) 隔壁一格是山 → 通过
+  setT(7, 5, 'mountain');
+  assert.equal(buildSiteError(s, byMountain, builder, 6, 5), null, '挨着山应该可以');
+  setT(7, 5, 'plain');
+
+  // 3) 自己就压在山头上也算（脚下那几格）
+  setT(6, 5, 'mountain');
+  assert.equal(buildSiteError(s, byMountain, builder, 6, 5), null, '建在山上也算挨着山');
+  setT(6, 5, 'plain');
+
+  // 4) 占 2×2 时按整圈外墙算：山贴着侧墙根，离锚点有三格远
+  const big = kiln({ footprint: 2, adjacent: { terrain: ['mountain'] } });
+  setT(8, 6, 'mountain');
+  assert.equal(
+    buildSiteError(s, big, builder, 6, 5),
+    null,
+    '2×2 的山贴在侧墙根也算，不能只看锚点四邻',
+  );
+  setT(8, 6, 'plain');
+
+  // 5) 挨着指定建筑也算，和地形是"或"的关系
+  const byMill = kiln({ adjacent: { terrain: ['mountain'], unit: ['mill'] } });
+  assert.ok(buildSiteError(s, byMill, builder, 6, 5), '既没山也没磨坊应该拒绝');
+  place(s, 'A', 'mill', 7, 5);
+  assert.equal(buildSiteError(s, byMill, builder, 6, 5), null, '挨着磨坊应该可以');
+});
+
 test('军营能像城市一样产兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
@@ -6110,7 +6177,12 @@ test('高级军营按时代解锁，属性逐级变强', () => {
     assert.ok(def, `缺少 ${id}`);
     assert.equal(def.category, 'building');
     assert.equal(isProducer(def), true, `${id} 应该是军营`);
-    assert.equal(def.requiresWater, true, `${id} 应该要临水`);
+    // 临水改成通用的邻里要求（adjacent）之后，不能再读旧字段
+    const site = adjacentRequirementOf(def);
+    assert.ok(
+      site && site.terrain.some((t) => WATER_TERRAINS.includes(t)),
+      `${id} 应该要临水`,
+    );
     assert.ok(def.maxHp > prevHp, `${id} 的耐久应该比上一档高`);
     assert.ok(def.cost > prevCost, `${id} 的造价应该比上一档高`);
     prevHp = def.maxHp;
@@ -11573,6 +11645,66 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
     /已经注册过/,
     '重复注册技能效果要报错',
   );
+});
+
+test('状态：扩展注册的状态能贴上、能改视野，也会被回合结算清掉', () => {
+  /*
+   * 这条守的是"扩展状态 API 的半成品"：
+   *
+   * putStatus 的参数原本是 5 个内置状态名组成的联合类型，而 registerStatus
+   * 一直是对外开放的。于是扩展写了 registerStatus(...) 之后，**没有任何办法
+   * 把状态贴到单位身上**——类型上过不去，绕过类型则什么都不发生。丹药那种
+   * "吃一颗、身上挂两回合"的效果正好卡在这里。
+   *
+   * 顺便守住第二件事：StatusDef.modifyVision 从注册表存在那天起就没被调用过，
+   * 六处派发点没有一处是视野。这里同时断言"实际视野"和"面板明细"都 +2——
+   * 两处不同的地方最容易漂。
+   */
+  registerStatus({
+    id: 'test-farsight',
+    name: '明目',
+    summary: '视野 +2（用例专用）',
+    modifyVision: (_s, _u, val, vision) => (val > 0 ? vision + 2 : vision),
+  });
+  try {
+    const flat = fresh();
+    clearArea(flat, 3, 2, 4, 4);
+    const s = unitOn(flat, 'A', 'militia', 3, 3);
+    const me = s.units.find((u) => u.owner === 'A' && u.type === 'militia')!;
+    const baseVision = visionOf(s, me);
+
+    assert.equal(abilityApi.putStatus(me, 'test-farsight', 2), true, '自定义状态应该贴得上');
+    assert.equal(me.status?.['test-farsight'], 2);
+
+    assert.equal(visionOf(s, me), baseVision + 2, '实际视野要 +2');
+    const item = effectiveStats(s, me).visionItems.find((i) => i.label === '明目');
+    assert.ok(item && item.delta === 2, `面板明细也要 +2，实际是 ${JSON.stringify(item)}`);
+
+    // 更短的时长不该覆盖更长的：返回 false，调用方据此不写战报
+    assert.equal(abilityApi.putStatus(me, 'test-farsight', 1), false, '时长不该被缩短');
+
+    // 没注册过的 id 当场抛错，而不是静默什么都不发生
+    assert.throws(
+      () => abilityApi.putStatus(me, 'test-not-registered', 1),
+      /未注册的状态/,
+      '贴一个没注册的状态要报错',
+    );
+
+    // 自己回合开始时 −1、到 0 消失。一圈 = A 结束 → B 开始 → B 结束 → A 开始。
+    let cur = s;
+    const roundTrip = () => {
+      for (let i = 0; i < 2; i++) {
+        const r = applyAction(cur, { type: 'END_TURN' });
+        assert.ok(r.ok, r.ok ? '' : r.reason);
+        cur = r.state;
+      }
+      return cur.units.find((u) => u.id === me.id)!;
+    };
+    assert.equal(roundTrip().status?.['test-farsight'], 1, '过一个自己的回合应该 −1');
+    assert.equal(roundTrip().status?.['test-farsight'], undefined, '归零后应该从身上消失');
+  } finally {
+    delete STATUS_REGISTRY['test-farsight'];
+  }
 });
 
 runCultivation();

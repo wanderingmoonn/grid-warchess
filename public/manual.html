@@ -165,6 +165,13 @@
   table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
   table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
   table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
+     那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
+     数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
+  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
+  table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
+  table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
   td.glyph {
     text-align: center;
     font-weight: 600;
