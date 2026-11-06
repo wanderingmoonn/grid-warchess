@@ -1,27 +1,30 @@
 import type { AbilityDef } from '../../abilities.ts';
-import { isCultivatorUnit } from '../identity.ts';
+import { isCultivatorUnit, isSpirit, SPIRIT_ASCENSION_RANK, UNIT_IDS } from '../identity.ts';
 import { getRank, isDoomed, REALMS } from '../progression.ts';
+
+/** 化灵时保留原境界生命加成的比例 */
+export const SPIRIT_HP_BONUS_KEEP = 0.3;
 
 export const SPIRIT_ASCENSION: AbilityDef = {
   id: 'spirit-ascension',
   name: '灵体道果',
-  summary: '境界达到炼气期（≥ 4 级）时，肉身死亡会化作灵体，可主动重生。',
+  summary: `境界达到 ${REALMS[SPIRIT_ASCENSION_RANK]}期（${SPIRIT_ASCENSION_RANK} 级）时，肉身死亡会化作灵体，可主动重生。`,
   group: 'defense',
   hooks: {
     onDeath: (c) => {
       const { state, victim, api } = c;
       if (!isCultivatorUnit(state, victim)) return;
-      if (victim.type === 'cultivator-spirit') return;// 灵体死了就真死
+      if (isSpirit(victim)) return;// 灵体死了就真死
       if (victim.custom?.spiritForm === true) return;
       if (isDoomed(victim)) return;// 老死 → 真死
-      if (getRank(victim) < 4) return;
-      const spiritDef = state.unitTypes['cultivator-spirit'];
+      if (getRank(victim) < SPIRIT_ASCENSION_RANK) return;
+      const spiritDef = state.unitTypes[UNIT_IDS.SPIRIT];
       if (!spiritDef) return;
 
       // 落脚点：原地优先，若 air 层同格冲突则找相邻空格
       let x = victim.x, y = victim.y;
-      if (!api.canStandAt(state, x, y, 'cultivator-spirit')) {
-        const spot = api.freeNeighbor(state, victim, 'cultivator-spirit');
+      if (!api.canStandAt(state, x, y, UNIT_IDS.SPIRIT)) {
+        const spot = api.freeNeighbor(state, victim, UNIT_IDS.SPIRIT);
         if (!spot) return;// 无处落脚，真死
         x = spot.x; y = spot.y;
       }
@@ -45,9 +48,9 @@ export const SPIRIT_ASCENSION: AbilityDef = {
         savedExtraAbilities,
         originMaxHpBonus,
       };
-      victim.type = 'cultivator-spirit';
+      victim.type = UNIT_IDS.SPIRIT;
       victim.x = x; victim.y = y;
-      victim.maxHpBonus = Math.floor(originMaxHpBonus * 0.3);
+      victim.maxHpBonus = Math.floor(originMaxHpBonus * SPIRIT_HP_BONUS_KEEP);
       victim.hp = 1 + victim.maxHpBonus;
       victim.moved = true;
       victim.acted = true;

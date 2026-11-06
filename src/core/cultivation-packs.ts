@@ -5,30 +5,33 @@
  * 
  * 架构核心原则：
  * 1. 升级发技能 -> 走 onRankUp 事件广播，绝不反向 import。
- * 2. 技能数据 -> skills.ts；技能执行 -> skill-effects.ts。
+ * 2. 一个技能一个文件，数据 + 数值 + 实现在一起（见 cultivation/skills/）。
  * 3. 如果外部模块 import 本文件报错，请检查底部的 re-export 桥接。
  */
 
 import type { Expansion } from './expansions.ts';
 
-import { getSwordSweepReach } from './cultivation/skills.ts';
 import { 
   SPIRIT_CULTIVATOR, 
   CULTIVATOR, 
   SWORD_CULTIVATOR,
   SERVANT,
+  DEACON,
   SPIRIT_FIELD,
   SPIRIT_MINE,
-  SPIRIT_TOWER
+  SPIRIT_TOWER,
+  MINE_MOUNTAIN_STONE_BONUS,
 } from './cultivation/units.ts';
 import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
 import { SPIRIT_STONE_DEF } from './cultivation/resources.ts';
 import { CULTIVATION_HOOKS } from './cultivation/hooks.ts';
+import { TOWER_CHARGE_COST, TOWER_BURST_CHARGES } from './cultivation/skills/index.ts';
 
-// 副作用注册：import 一次即触发模块内的注册逻辑
-import './cultivation/skill-effects.ts';
-import './cultivation/unlocks.ts';
+// 副作用注册：技能/解锁都是模块加载时自注册，必须 import 一次。
+// 技能那一侧由 skills/index.ts 统一拉起（每个技能文件 + unlocks），
+// 能力解锁已经在 abilities/index.ts 里带进来了。
+import './cultivation/skills/index.ts';
 
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
@@ -43,14 +46,21 @@ export const CULTIVATION_PACK: Expansion = {
     SWORD_CULTIVATOR, 
     SPIRIT_CULTIVATOR,
     SERVANT, 
+    DEACON,
     SPIRIT_FIELD, 
     SPIRIT_MINE,
     SPIRIT_TOWER
   ],
   resources: [SPIRIT_STONE_DEF],
+  // 下面几条都只活在钩子里（配置表没有对应字段），规则书靠这里才能印全。
+  manualNotes: [
+    `灵矿每相邻一座高山，额外产出 ${MINE_MOUNTAIN_STONE_BONUS} 灵石（四方向，不含斜角）。`,
+    `散灵台基础攻击次数为 0：必须先花 ${TOWER_CHARGE_COST} 灵石「释放灵气」，才有 ${TOWER_BURST_CHARGES} 次开火机会，` +
+      `而且那几发是在**对手回合开始、建筑自动开火**时打出去的，不是在自己回合里点。`,
+  ],
 };
 
-export { cultivationRank, setCultivationExp, getSwordSweepReach };
+export { cultivationRank, setCultivationExp };
 
 export {
   getAgingYears,

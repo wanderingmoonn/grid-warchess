@@ -286,6 +286,21 @@ export interface ExpansionHooks {
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
   modifyVision?: (c: VisionCtx) => number;
+  /**
+   * 纯函数：这个玩家此刻被**强行点亮**的格子（格索引数组）。
+   *
+   * 和 `modifyVision` 分工不同：那个改的是"我的兵能看多远"，
+   * 这个改的是"有些地方我本来不该看见，但现在看见了"。
+   * 异象、照明弹、侦察机都是这一类。
+   *
+   * 这个钩子挂在 `visibleTilesOf` 里，所以**规则层和 AI 一起认**：
+   * 被点亮的格子，敌方不但看得见，还能据此寻路、开火、判断威胁圈。
+   * 想只改画面不影响决策，就别用这个钩子（那是 fog.ts 的事）。
+   *
+   * 必须是纯函数：视图渲染、记忆刷新、AI 推演都会反复调它。
+   * 返回的是格索引（`y * w + x`），不是坐标对——调用方直接往 Set 里塞。
+   */
+  extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
   /** 纯函数：修正攻击范围 */
   modifyRange?: (c: RangeCtx) => number;
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */
@@ -517,6 +532,21 @@ export interface Expansion {
   ) => void;
   /** 这个扩展带来的新资源（灵石、法力……）。注册由 setup 统一做。 */
   resources?: ResourceDef[];
+  /**
+   * 给规则书用的"补充规则"，一条一句，生成器原样印到「特殊规则」末尾。
+   *
+   * 存在的理由：有些规则**只在钩子里活着**，配置表里根本没有对应字段——
+   * 比如「灵矿相邻高山多产灵石」写在 modifyYield 里、「散灵台要先充能才能开火」
+   * 写在 modifyAttacks 里。这类规则生成器看不见，于是手册里要么漏掉、要么写错，
+   * 而写错的地方离代码很远，改数值的人永远想不起来。
+   *
+   * 放进这里，至少让它和实现待在同一份文件、同一个 PR 里；而且这里可以引用
+   * 常量（`+${MINE_MOUNTAIN_STONE_BONUS} 灵石`），不必手打数字。
+   *
+   * **只写"代码里查不到"的那部分**：兵种数值、能力说明、造价这些生成器已经
+   * 会从数据里印，别在这里重复一遍。
+   */
+  manualNotes?: string[];
 }
 
 function nameOf(state: GameState, typeId: string): string {

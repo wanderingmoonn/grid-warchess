@@ -1531,7 +1531,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     const heroMove = u.heroBuff?.moveBonus ?? 0;
     if (heroMove !== 0) {
       moveNow += heroMove;
-      moveItems.push({ label: '英雄技能', delta: heroMove });
+      moveItems.push({ label: '技能', delta: heroMove });
     }
     for (const [key, val] of Object.entries(u.status ?? {})) {
       if (typeof val !== 'number' || val <= 0) continue;
@@ -1593,7 +1593,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     rangeNow = 1;
   } else {
     if (u.heroBuff?.range !== undefined && u.heroBuff.range !== rangeBase) {
-      rangeItems.push({ label: '英雄技能', delta: u.heroBuff.range - rangeBase });
+      rangeItems.push({ label: '技能', delta: u.heroBuff.range - rangeBase });
       rangeNow = u.heroBuff.range;
     }
     for (const e of activeExpansions(s)) {
@@ -5531,6 +5531,23 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
   for (const city of s.cities) {
     if (city.owner !== p) continue;
     for (const t of cityTiles(city)) addRadius(t.x, t.y, CONFIG.cityVision);
+  }
+
+  /*
+   * 扩展的"额外视野"。
+   *
+   * 放在这里而不是视图层（fog.ts）是有意的：这条规则**连 AI 一起生效**——
+   * 修真修士突破时点的"异象"要让对面不但看得见，还能据此派兵去劫杀。
+   * 只改画面不改决策的话，单机打 AI 这个机制就等于不存在。
+   *
+   * 代价是它进了热路径（寻路、威胁圈、记忆刷新都会调这个函数），
+   * 所以钩子必须是纯函数且尽早返回；扩展那边先判 `s.current !== player`
+   * 再遍历单位，空手而归的时候只花一次比较。
+   */
+  for (const e of activeExpansions(s)) {
+    const extra = e.hooks.extraVision?.({ state: s, player: p });
+    if (!extra || extra.length === 0) continue;
+    for (const i of extra) out.add(i);
   }
 
   return out;

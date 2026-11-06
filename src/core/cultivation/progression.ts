@@ -1,6 +1,7 @@
 // 境界、经验、寿元、生命
 
 import type { GameState, Unit } from '../types.ts';
+import { ANOMALY_ABILITY_ID, SPIRIT_ASCENSION_RANK, isSwordCultivatorType } from './identity.ts';
 
 // --- 升级事件监听机制 ---
 type RankUpListener = (u: Unit, s: GameState) => void;
@@ -32,6 +33,20 @@ export const MAX_RANK = 9;
 
 /** 寿元耗尽后还能撑几年才真正老死 */
 export const AGING_DEATH_AGE = 3;
+
+/**
+ * 寿元：凡人的基础年数，以及每一级加多少。
+ * 规则书里"凡人只有十年寿元 / 每级增加 9 年"就是这两个数，别再手打。
+ */
+export const LIFESPAN_BASE = 10;
+export const LIFESPAN_PER_RANK = 9;
+
+/** 打坐：每回合的保底经验（实际是 境界 + 这个数，剑修再打对折） */
+export const EXP_GROWTH_FLAT = 2;
+/** 亲手击杀一个敌人给多少修为（剑修另乘 SWORD_KILL_MUL） */
+export const KILL_EXP = 10;
+/** 剑修的击杀收益倍数 */
+export const SWORD_KILL_MUL = 2;
 
 // 读取当前经验，如果没有初始化就返回 0
 export function getExp(u: Unit): number {
@@ -132,10 +147,10 @@ export function cultivationRank(u: Unit): number {
 // 自然经验增长
 export function getExpGrowth(u: Unit): number {
   // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
-  if (u.type === 'sword-cultivator') {
-    return Math.max(1, Math.floor((getRank(u) + 2) / 2));
+  if (isSwordCultivatorType(u.type)) {
+    return Math.max(1, Math.floor((getRank(u) + EXP_GROWTH_FLAT) / 2));
   }
-  return getRank(u) + 2;
+  return getRank(u) + EXP_GROWTH_FLAT;
 }
 
 /**
@@ -196,23 +211,30 @@ export function addExp(u: Unit, s: GameState, amount: number): void {
       }
     }
 
+    /*
+     * 突破战报默认只给自己看——"我升了一级"是对面没理由知道的事。
+     *
+     * 例外是「异象」：那个能力的效果就是把位置暴露给对面，所以带着它的修士
+     * 突破时，这条战报必须公开——不然对面只看见地图上亮了一格，却不知道
+     * 那是"有人突破了"，还是别的东西。
+     *
+     * 这里只问"身上有没有这个标记"，不知道异象是什么、怎么生效（那在
+     * abilities/anomaly.ts）。用 id 字符串而不是 import 那个模块，是因为
+     * progression 比 abilities 底层，反过来 import 会成环。
+     *
+     * 时序上有个细节：0→1 那次突破时，异象是刚在 rankUp 监听里发给它的，
+     * 那一刻 extraAbilities 还没有它，所以战报不公开——和"异象从下一次
+     * 突破才点亮"的口径一致（见 anomaly.ts 文件头）。
+     */
+    const hasAnomaly = (u.extraAbilities ?? []).includes(ANOMALY_ABILITY_ID);
     s.log.push({
       turn: s.turn,
       player: u.owner,
       text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${REALMS[newRank]} 期！`,
-      open: true,
+      ...(hasAnomaly ? { open: true } : {}),
     });
     for (const fn of rankUpListeners) {
       fn(u, s);
-    }
-
-    // 寿元随等级上涨：显式落库，让降级时不回退（见 getLifespan 的说明）。
-    // rank 9 是 Infinity，不落库（见 baseLifespanOf 的说明）。
-    // 注意：外部若强行指定过 custom.lifespan（测试场景），这里会覆盖它——
-    // 若需固定寿元同时又要触发升级，请直接操纵 custom 而不要走 addExp。
-    const newLifespan = baseLifespanOf(newRank);
-    if (!Number.isFinite(newLifespan)) {
-      delete u.custom.lifespan;
     }
   }
 }
@@ -224,7 +246,7 @@ export function addExp(u: Unit, s: GameState, amount: number): void {
  * 未来若有其它 rank 门槛的能力/技能，在这里按同一条规则追加。
  */
 export function cleanupAfterRankDrop(u: Unit, newRank: number): void {
-  if (newRank < 4 && u.extraAbilities?.includes('spirit-ascension')) {
+  if (newRank < SPIRIT_ASCENSION_RANK && u.extraAbilities?.includes('spirit-ascension')) {
     u.extraAbilities = u.extraAbilities.filter((id) => id !== 'spirit-ascension');
   }
 }
@@ -240,7 +262,7 @@ export function cleanupAfterRankDrop(u: Unit, newRank: number): void {
  */
 export function baseLifespanOf(rank: number): number {
   if (rank >= MAX_RANK) return Infinity;
-  return 10 + rank * 9;
+  return LIFESPAN_BASE + rank * LIFESPAN_PER_RANK;
 }
 
 /**

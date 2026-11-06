@@ -1,17 +1,22 @@
 // @ts-nocheck
-import { test, assert, stats, fresh, arena, place, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, idx, heroSkillsOf, refreshMemory, splashRadiusOf, splashRatioOf } from '../../../src/core/rules.ts';
+import { test, assert, stats, fresh, place2 } from '../support.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
-import { CONFIG, UNIT_TYPES } from '../../../src/core/config.ts';
-import type { Unit } from '../../../src/core/types.ts';
-import { trimChatBody, CHAT_MAX_LEN, chatWhoLabel, type ChatLine, chatLinesHtml, chatSeatOf, chatBodyOverflows, chatBodyLength, type ChatSeat } from '../../../src/net/chat.ts';
-import { countWatchers, PRESENCE_TTL_MS, watchLabel, presenceFromRow } from '../../../src/net/presence.ts';
-import { adoptDecision } from '../../../src/net/room.ts';
+// GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
+// 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
+import type { GameState } from '../../../src/core/types.ts';
 import { skillsOf } from '../../../src/core/query.ts';
-import { getExp } from '../../../src/core/cultivation/progression.ts';
+import { getExp, addExp } from '../../../src/core/cultivation/progression.ts';
+import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
+import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
+import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
+import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
+import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
+import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
+import { SKILL_EFFECTS } from '../../../src/core/skill-hooks.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -384,6 +389,186 @@ export function run() {
 
     const target = r.state.units.find(u => u.id === 't-target')!;
     assert.ok(target.hp <= 70, '塔应该开火并造成至少 30 点伤害');
+  });
+
+  // ── 回归（2026-11-06）────────────────────────────────
+
+  // 灵矿的"每相邻一座高山 +2 灵石"曾经直接算 (y+dy)*w+(x+dx)，
+  // 漏了 x 边界：站在最左列的灵矿，会把**上一行最右格**的山算成邻居。
+  // 这条用例就是把"棋盘几何"和"内存索引"这两件事分开钉住。
+  test('灵矿：相邻高山的加成不做跨行串格（左边缘）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    for (const t of s.tiles) t.terrain = 'plain';
+
+    // (w-1, 4) 是 (0,6) 的"左上"在索引上相邻、棋盘上隔着一整行的格子
+    s.tiles[4 * s.w + (s.w - 1)] = { terrain: 'mountain', cityId: null };
+    const mine = place2(s, 'A', 'cultivation-spirit-mine', 0, 6);
+    assert.equal(
+      unitYield(s, mine)[SPIRIT_STONE], 1,
+      '左边缘不该白拿上一行最右格的 2 灵石',
+    );
+
+    // 真正的相邻格要照算，否则就是把 bug 改成"加成失效"
+    s.tiles[6 * s.w + 1] = { terrain: 'mountain', cityId: null };
+    assert.equal(unitYield(s, mine)[SPIRIT_STONE], 3, '右边真相邻是山时 +2 仍生效');
+  });
+
+  // 散灵台的就绪检查一度注册在 effect 名 'spirit-tower-shot' 上，
+  // 而引擎是按 skill.id（'tower-charge'）查表的，于是这个检查从来没跑过——
+  // 表现为"0 灵石时按钮照样是亮的，点下去才报错"。
+  test('散灵台：灵石不足时「释放灵气」应提前显示为不可用', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.fog = false;
+    s.units.push({
+      id: 't-tower', type: 'cultivation-spirit-tower', owner: 'A' as const,
+      x: 5, y: 5, hp: 28, kills: 0, moved: true, acted: false,
+    });
+    const tower = s.units.find((u) => u.id === 't-tower')!;
+    const skillOf = () => heroSkillsOf(s, tower).find((k) => k.def.id === 'tower-charge')!;
+
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.equal(skillOf().ready, false, '0 灵石时不该显示为可放');
+    assert.ok(skillOf().notReadyReason?.includes('灵石'), '应给出"灵石不足"的具体理由');
+
+    s.players.A.res = { [SPIRIT_STONE]: 5 };
+    assert.equal(skillOf().ready, true, '攒够 5 灵石就该亮起来');
+  });
+
+  // 面板那行「境界加成」的语义是"修到这一层本身给了多少"：
+  // 不乘流派系数、不扣衰老。它一度硬编码了旧公式（漏了 /(rank+1)^0.2），
+  // 9 级时印 "+407" 而实际只有 +257。
+  // 期望值由 stats.ts 的 realm*Base 反推：
+  //   攻击 ceil((45 + 2^8.5) / 10^0.2) = ceil(256.82) = 257
+  //   护甲 ceil(-1 + 81 + 1.5^9)      = ceil(118.44) = 119
+  //   射程 floor(9/2) = 4      神识 9
+  test('面板「境界加成」印的是纯境界值（不乘系数、不扣衰老）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    setCultivationExp(qi, 4006);                  // 9 级
+    qi.custom = { ...qi.custom, lifespan: 999 };  // 钉死寿元，排除衰老干扰
+
+    const line = getCultivationPanelLines(s, qi).find((l) => l.includes('境界加成'))!;
+    assert.ok(line, '9 级应该有「境界加成」这一行');
+    assert.ok(line.includes('攻击 +257'), `攻击应为 257（旧公式印 407）：${line}`);
+    assert.ok(line.includes('护甲 +119'), `护甲应为 119：${line}`);
+    assert.ok(line.includes('射程 +4'), `射程应为 4：${line}`);
+    assert.ok(line.includes('神识 +9'), `神识应为 9：${line}`);
+  });
+
+  // ── 守卫：把"漏登记"这一类 bug 变成红灯 ────────────────
+  //
+  // 这个包反复踩同一个形状：某个东西在 A 处定义了、B 处没登记，于是它安静地
+  // 永远不生效——灵矿造不出来（执事没进包）、散灵台灰显失效（键名对不上）都是。
+  // 下面这几条断言不测玩法，只测"表和表之间对得上"。
+  test('守卫：兵种 id / builds / 技能实现 / 能力 id 全部对得上', () => {
+    const pack = CULTIVATION_PACK;
+    const ids = new Set(Object.values(UNIT_IDS));
+    const inPack = new Set((pack.units ?? []).map((u) => u.id));
+    const abilityIds = new Set((pack.abilities ?? []).map((a) => a.id));
+
+    for (const u of pack.units ?? []) {
+      assert.ok(ids.has(u.id), `${u.name} 的 id「${u.id}」没登记进 UNIT_IDS`);
+
+      for (const b of u.builds ?? []) {
+        assert.ok(inPack.has(b), `${u.name} 要建的「${b}」不在包里——就是灵矿那个 bug 的形状`);
+      }
+      for (const sk of u.skills ?? []) {
+        assert.ok(
+          SKILL_EFFECTS[sk.effect],
+          `${u.name} 的技能「${sk.name}」指向的 effect「${sk.effect}」没有实现`,
+        );
+      }
+      for (const id of u.abilities ?? []) {
+        assert.ok(abilityIds.has(id), `${u.name} 的能力「${id}」不在 CULTIVATION_ABILITIES 里`);
+      }
+    }
+
+    // 反向：登记了 id 却没进包 = 这东西在游戏里永远出不来（执事当初就是这样）
+    for (const id of ids) {
+      assert.ok(inPack.has(id), `UNIT_IDS 里的「${id}」没进 CULTIVATION_PACK.units，造不出来`);
+    }
+
+    // 升级自动领悟的技能也要有实现
+    for (const { skill } of CULTIVATOR_SKILL_UNLOCKS) {
+      assert.ok(SKILL_EFFECTS[skill.effect], `升级领悟的「${skill.name}」没有实现`);
+    }
+
+    // 升级自动获得的能力：id 必须真的注册进 CULTIVATION_ABILITIES，
+    // 否则它会挂到单位身上、然后什么也不发生（最难查的一种"漏登记"）。
+    for (const { abilityId, name } of CULTIVATOR_ABILITY_UNLOCKS) {
+      assert.ok(abilityIds.has(abilityId), `解锁表里的能力「${name}」不在 CULTIVATION_ABILITIES 里`);
+    }
+  });
+
+  // ── 异象（2026-11-06）────────────────────────────────
+  //
+  // 修士突破时天象外泄：下一个敌方回合，突破时那一格被塞进敌方可见集。
+  // 引擎里"被看见"只有一条通路（fog.ts 会把视野外的敌方单位整个裁掉），
+  // 所以这里测的就是"那一格进没进 visibleSet、单位有没有被下发"。
+  const anomalySetup = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.fog = true;
+    s.units = [];
+    // 摆在自己半场：离 B 的两座城很远，B 本来绝对看不见
+    const qi = place2(s, 'A', 'qi-cultivator', 8, 9);
+    s.current = 'A';
+    return { s, qi };
+  };
+
+  test('异象：1 级挂上，0→1 那次不点亮，1→2 才记下位置', () => {
+    const { s, qi } = anomalySetup();
+
+    addExp(qi, s, 10); // 0 → 1
+    assert.equal(cultivationRank(qi), 1);
+    assert.ok((qi.extraAbilities ?? []).includes('anomaly'), '1 级应该自动挂上异象');
+    assert.equal(qi.custom?.anomaly, undefined, '刚获得异象的那次突破不该点亮');
+
+    addExp(qi, s, 20); // 1 → 2
+    assert.equal(cultivationRank(qi), 2);
+    assert.deepEqual(qi.custom?.anomaly, { x: 8, y: 9 }, '记的是突破时所在格');
+  });
+
+  test('异象：只在敌方自己的回合点亮，我方回合里看不到', () => {
+    const { s, qi } = anomalySetup();
+    addExp(qi, s, 10);
+    addExp(qi, s, 20); // → 2 级，异象记在 (8,9)
+
+    // 先确认这个位置本来在 B 的视野之外——否则这条用例什么都没测到
+    const mine = playerView(s, 'B'); // s.current 还是 A
+    assert.ok(!mine.visible.includes(idx(s, 8, 9)), '这一格本来不该在 B 的视野里');
+
+    s.current = 'B';
+    const enemy = playerView(s, 'B');
+    assert.ok(enemy.visible.includes(idx(s, 8, 9)), 'B 的回合里那一格应该被点亮');
+    assert.ok(
+      enemy.state.units.some((u) => u.id === qi.id),
+      '画出来了就该看得见人：单位要一起下发',
+    );
+  });
+
+  test('异象：敌方回合结束就熄灭', () => {
+    const { s, qi } = anomalySetup();
+    addExp(qi, s, 10);
+    addExp(qi, s, 20);
+    s.current = 'B';
+
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(after.custom?.anomaly, undefined, 'B 的回合结束，灯该灭了');
+  });
+
+  test('异象：带着异象的突破战报公开，没有的只给自己看', () => {
+    const { s, qi } = anomalySetup();
+
+    addExp(qi, s, 10); // 0→1：异象是这次突破才发给它的，战报仍私有
+    const first = [...s.log].reverse().find((l) => l.text.includes('突破至'))!;
+    assert.ok(!first.open, '还没有异象的时候，突破只有自己知道');
+
+    addExp(qi, s, 20); // 1→2：身上有异象了，战报公开
+    const second = [...s.log].reverse().find((l) => l.text.includes('突破至'))!;
+    assert.equal(second.open, true, '有异象时突破是公开战报');
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

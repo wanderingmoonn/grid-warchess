@@ -20,6 +20,52 @@ import { deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
 import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
+// 修真那一册的正文要从这些地方取数字，一个都不许在文案里手打。
+import {
+  AGING_DEATH_AGE,
+  EXP_GROWTH_FLAT,
+  KILL_EXP,
+  LIFESPAN_BASE,
+  LIFESPAN_PER_RANK,
+  MAX_RANK,
+  REALMS,
+  SWORD_KILL_MUL,
+  expForRank,
+  maxHpDeltaBetween,
+  sumDeltaMaxHpUpTo,
+} from '../src/core/cultivation/progression.ts';
+import {
+  SPIRIT_ARMOR_MUL,
+  SPIRIT_ATK_MUL,
+  SPIRIT_MOVE_MUL,
+  SPIRIT_RANGE_MUL,
+  SWORD_BASE_MUL,
+  SWORD_SWEEP_MUL,
+  extraAttacksForRank,
+  moveForRank,
+  realmArmorBase,
+  realmAtkBase,
+  realmRangeBase,
+  realmVisionBase,
+  splashForRank,
+  trueDamageForRank,
+} from '../src/core/cultivation/stats.ts';
+import { SPIRIT_ASCENSION_RANK } from '../src/core/cultivation/identity.ts';
+import {
+  SKY_STEP_RANK,
+  SWEEP_BASE_REACH,
+  SWEEP_EXP_CAST,
+  SWEEP_EXP_PER_HIT,
+  SWEEP_REACH_STEP,
+  SPIRIT_REBIRTH_EXP_DIV,
+  SPIRIT_REBIRTH_HP_RATIO,
+  SPIRIT_REBIRTH_RANK_DROP,
+  sweepReachForRank,
+} from '../src/core/cultivation/skills/index.ts';
+import { SPIRIT_HP_BONUS_KEEP } from '../src/core/cultivation/abilities/spirit-ascension.ts';
+import { ANOMALY_MIN_RANK } from '../src/core/cultivation/abilities/anomaly.ts';
+import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
+import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
 import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -195,8 +241,13 @@ const GENERIC_TERMS: Term[] = [
   },
   {
     key: 'skill',
-    name: '英雄技能',
-    brief: '每回合一次的主动技，不占移动与攻击——开完还能照常行动。',
+    name: '技能',
+    // 这条原来叫「英雄技能」，只描述奇想那套"不占行动"的主动技。
+    // 现在修士的御空（耗 1 移动力）、剑气纵横（出手即定身）、
+    // 散灵台的释放灵气（耗灵石）都走同一套 UI，一句话概括不了，
+    // 所以只说"代价各不相同，看面板"。
+    brief: '兵种自带的主动技。代价各不相同（有的占移动、有的耗资源、有的能连发），'
+      + '能不能用、为什么不能用，见面板上那颗按钮。',
   },
   {
     key: 'summoned-only',
@@ -257,7 +308,7 @@ function resetTerms(): void {
   termSink = [];
 }
 
-/** 运行时才知道的词条（英雄技能这类：每条都是兵种自己带的，没有全局表） */
+/** 运行时才知道的词条（技能这类：每条都是兵种自己带的，没有全局表） */
 function dynamicTerm(key: string, name: string, brief: string, more?: string): string {
   if (!TERM_BY_KEY.has(key)) TERM_BY_KEY.set(key, { key, name, brief, more });
   return noteTerm(key);
@@ -2400,6 +2451,200 @@ interface BookGroup {
   rulesHtml?: string | (() => string); 
 }
 
+/* ---------------------------------------------------------------------------
+ * 修真那一册的正文。
+ *
+ * 这段以前是一大坨手写死的 HTML，于是"改数值的人想不起来还有这段文字"就成了
+ * 固定节目——手册上写着"4 级（金丹期）"，而 REALMS[4] 是元婴；写着"每 3 级 +1 格"，
+ * 而代码是向上取整、1 级就 +1。
+ *
+ * 现在改成函数，一个数字都不手打：境界名取 REALMS，加成取 stats.ts 的
+ * realm*Base / *ForRank，门槛取 expForRank，解锁位置直接读 unlocks.ts 的两张表。
+ * 调完公式重跑 npm run manual 就同步，忘了重跑 CI 会红。
+ * ------------------------------------------------------------------------- */
+
+/** 境界 → 这一级解锁了什么（御空、灵体道果…） */
+function cultivationUnlocksByRank(): Map<number, string[]> {
+  const out = new Map<number, string[]>();
+  const put = (rank: number, name: string) => {
+    const box = out.get(rank) ?? [];
+    box.push(name);
+    out.set(rank, box);
+  };
+  for (const { rank, skill } of CULTIVATOR_SKILL_UNLOCKS) put(rank, skill.name);
+  for (const { rank, name } of CULTIVATOR_ABILITY_UNLOCKS) put(rank, name);
+  return out;
+}
+
+/** 0.3 → 30，避开 0.3*100 = 30.000000000000004 这种浮点毛刺 */
+function pct(x: number): number {
+  return Math.round(x * 100);
+}
+
+function cultivationRules(): string {
+  const unlocks = cultivationUnlocksByRank();
+
+  // 「各境界对照表」：0~9 逐行跑出来
+  const rankRows = Array.from({ length: MAX_RANK + 1 }, (_, rank) => `
+          <tr>
+            <td class="name">${rank}</td>
+            <td>${REALMS[rank]}</td>
+            <td>+${sumDeltaMaxHpUpTo(rank)}</td>
+            <td>+${realmArmorBase(rank)}</td>
+            <td>+${realmAtkBase(rank)}</td>
+            <td>${trueDamageForRank(rank)}</td>
+            <td>${1 + extraAttacksForRank(rank)}</td>
+            <td>+${splashForRank(rank)}</td>
+            <td>+${realmRangeBase(rank)}</td>
+            <td>+${moveForRank(rank)}</td>
+            <td>+${realmVisionBase(rank)}</td>
+            <td>${(unlocks.get(rank) ?? []).join(' · ') || '—'}</td>
+          </tr>`).join('');
+
+  // 升级门槛：REALMS[r] → REALMS[r+1] 的累计修为
+  const thresholdLine = Array.from(
+    { length: MAX_RANK },
+    (_, r) => `${REALMS[r]} → ${REALMS[r + 1]}：${expForRank(r)}`,
+  ).join('<br />');
+
+  // 每次突破加多少血（增量口径；对照表里的「生命上限」是累计口径）
+  const hpRows = Array.from({ length: MAX_RANK }, (_, i) => {
+    const r = i + 1;
+    return `
+          <tr><td class="name">${REALMS[r - 1]} → ${REALMS[r]}</td><td>+${maxHpDeltaBetween(r - 1, r)}</td></tr>`;
+  }).join('');
+
+  return `
+      <h3>修士流派</h3>
+      <p>修士是一类特殊的单位，他们不依赖时代的科技，而是靠自身修为的提升获得力量。所有修士都共享<b>境界加成</b>、<b>真元</b>与<b>寿元限制</b>，但不同的流派在获取修为和战斗方式上大相径庭。</p>
+      <ul>
+        <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
+        <li><b>剑修（时代 2）</b>：以杀证道的新流派。他们极度擅长战斗，普攻的境界加成只有 ${SWORD_BASE_MUL} 倍，但能通过施展剑技和击杀敌人快速成长。</li>
+      </ul>
+
+      <h3>境界与修为</h3>
+      <p>修士的属性不固定，总修为达标即可自动晋升境界。境界从 0 级（${REALMS[0]}）一路升到 ${MAX_RANK} 级（${REALMS[MAX_RANK]}）。境界越高，全属性同步增加。</p>
+
+      <h4>如何获取修为（经验）</h4>
+      <p>不同流派获取修为的途径不同：</p>
+      <ul>
+        <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
+          <span class="c">炼气士：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
+        </li>
+        <li><b>战斗击杀</b>：亲手击杀敌方单位时获得。<br/>
+          <span class="c">炼气士：${KILL_EXP} 点。 剑修：${KILL_EXP * SWORD_KILL_MUL} 点（${SWORD_KILL_MUL} 倍收益）。</span>
+        </li>
+      </ul>
+
+      <h4>升级门槛</h4>
+      <p>下表是"从这一境突破到下一境"所需的<b>累计</b>修为（不是本境新增）：</p>
+      <div class="formula">
+        ${thresholdLine}
+      </div>
+
+      <div class="callout">
+        <b>境界顿悟：</b>境界提升不仅是数值的暴涨，更是对天地法则的明悟。修士达到特定境界时会自动领悟新的技能、获得新的能力——具体几级解锁什么，见下一张表的最后一列。
+      </div>
+
+      <h3>各境界属性加成对照表</h3>
+      <p>除「攻击次数」外，表里都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
+        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。</p>
+      <table class="overview">
+        <thead>
+          <tr>
+            <th>境界</th><th>名称</th><th>生命上限</th><th>护甲</th><th>物理攻击</th><th>真元</th>
+            <th>攻击次数</th><th>溅射半径</th><th>射程</th><th>移动力</th><th>视野</th><th>特殊能力</th>
+          </tr>
+        </thead>
+        <tbody>${rankRows}
+        </tbody>
+      </table>
+      <p class="era-meta">注：「生命上限」是从 0 级一路突破上来的累计值（一次跨多级突破按两端差算，会和逐级累计差一两点）。
+        「攻击次数」写的是总数，已含基础的 1 次。「真元」「溅射半径」见下方各自的段落。</p>
+
+      <h3>异象</h3>
+      <p>修士突破时天象外泄，藏不住。带「异象」的修士（<b>${ANOMALY_MIN_RANK} 级</b>起自动获得，也就是获得它的下一次突破起）
+        每突破一次，<b>下一个敌方回合</b>它的位置会在地图上被点亮一格：</p>
+      <ul>
+        <li><b>点亮的是哪一格</b>：突破时所在的那一格。突破后原地不动，对面就连人带位置一起看见；
+          挪走了，那一格只剩"刚才有人在这儿"的信息——异象是痕迹，不是雷达。</li>
+        <li><b>只亮一个敌方回合</b>：轮到对面时亮起，对面回合结束就熄。</li>
+        <li><b>战报也会公开</b>：带异象的修士突破时，「突破至某期」这条战报对面也看得见；
+          不带异象的修士突破，只有自己知道。</li>
+        <li><b>为什么要有这个</b>：修士越打越强，前期必须给对手一个"来劫杀"的理由。
+          你每突破一次，就等于向全场报一次坐标。</li>
+      </ul>
+
+      <h3>御空</h3>
+      <p>当修士到达 <b>${SKY_STEP_RANK} 级（${REALMS[SKY_STEP_RANK]}期）</b> 时，即可初步掌控灵力，实现低空悬浮。</p>
+      <ul>
+        <li><b>释放方式</b>：主动切换，不占用本回合的攻击次数。</li>
+        <li><b>释放条件</b>：每次切换消耗 <b>1 点移动力</b>，且每回合只能使用一次。</li>
+        <li><b>技能效果</b>：在空中与地面切换。</li>
+      </ul>
+
+      <h3>剑气纵横</h3>
+      <p>向正方向释放一道剑气。</p>
+      <ul>
+        <li><b>释放方式</b>：点击一个方向，挥出一道直线剑气（四方向吸附，斜着点也会自动归到最近的正方向）。</li>
+        <li><b>释放条件</b>：消耗 <b>1 次攻击次数</b>。</li>
+        <li><b>攻击范围</b>：基础 ${SWEEP_BASE_REACH} 格，境界每满 ${SWEEP_REACH_STEP} 级再 +1 格——<b>向上取整</b>，所以 1 级就已经是 ${sweepReachForRank(1)} 格，${MAX_RANK} 级是 ${sweepReachForRank(MAX_RANK)} 格。</li>
+        <li><b>伤害效果</b>：对路径上的所有敌人和城市造成一次完整伤害，境界加成按 ${SWORD_SWEEP_MUL} 倍结算。</li>
+        <li><b>修为获取</b>：挥剑本身 +${SWEEP_EXP_CAST} 修为（落空也给），每命中一个目标（人或城）再 +${SWEEP_EXP_PER_HIT}。</li>
+      </ul>
+
+      <h3>突破与生命值</h3>
+      <p>每次境界突破，生命上限按"新旧境界之差"增加一次，并按当前血量比例回血。各阶段增加量：</p>
+      <table class="overview">
+        <thead>
+          <tr><th>突破阶段</th><th>增加最大生命</th></tr>
+        </thead>
+        <tbody>${hpRows}
+        </tbody>
+      </table>
+      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
+
+      <h3>真元（真实伤害）</h3>
+      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见对照表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
+
+      <h3>寿元与衰老</h3>
+      <p>凡人只有 ${LIFESPAN_BASE} 年寿元，境界每高一级多 ${LIFESPAN_PER_RANK} 年；到 ${MAX_RANK} 级（${REALMS[MAX_RANK]}）寿元不再是限制。</p>
+      <div class="callout">
+        <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
+        超出寿元 <b>${AGING_DEATH_AGE} 年</b>就会血量归零，此时任何风吹草动或者回合结束就会正式死亡。
+      </div>
+
+      <h3>灵体道果与重生</h3>
+      <p>当修士的境界达到 <b>${SPIRIT_ASCENSION_RANK} 级（${REALMS[SPIRIT_ASCENSION_RANK]}期）</b> 时，他们将初步参悟“灵体道果”。此时若他们在战场上被击杀（非寿元耗尽坐化），强大的元神会强行挣脱肉体的束缚，化作<b>灵体</b>存活下来，等待重塑肉身的机会。</p>
+
+      <div class="callout">
+        <b>注意：</b>若是由于寿元耗尽（坐化）而死亡，修士的元神同样会枯竭，无法化作灵体。
+      </div>
+
+      <h4>灵体形态</h4>
+      <p>化作灵体后，修士失去肉身，处于极度脆弱但又极难被物理手段杀伤的状态（下面说的"加成"都指<b>境界带来的那部分</b>）：</p>
+      <ul>
+        <li><b>生命与防御</b>：基础生命值降为 <b>1 点</b>（原境界带来的生命上限加成只保留 ${pct(SPIRIT_HP_BONUS_KEEP)}%）。但由于失去实体，境界提供的护甲加成将 <b>放大 ${SPIRIT_ARMOR_MUL} 倍</b>（几乎免疫物理伤害）。</li>
+        <li><b>虚弱与敏捷</b>：物理攻击加成削弱为 <b>${pct(SPIRIT_ATK_MUL)}%</b>；射程加成按 <b>${SPIRIT_RANGE_MUL} 倍</b>算；移动力加成改按 <b>${SPIRIT_MOVE_MUL} 倍</b>算（都向上取整）。攻击次数、溅射半径、视野以及<b>真元（真实伤害）</b>完全不变。</li>
+        <li><b>灵魂飞行</b>：灵体视作飞行单位，可越过水面与地形。</li>
+        <li><b>记忆封存</b>：化作灵体时，后天习得的普通技能会被暂时封存，只有特殊的<b>“魂法”</b>能保留。同时会暂时失去「灵体道果」特性——若灵体再次阵亡，将彻底消散。</li>
+      </ul>
+
+      <h4>主动重生</h4>
+      <p>灵体形态下，单位将获得主动技能<b>「重生」</b>，消耗行动机会重塑肉身：</p>
+      <ul>
+        <li><b>代价</b>：重塑肉身会透支本源，修为按"降至那一境升回来的门槛 ÷ ${SPIRIT_REBIRTH_EXP_DIV}"重算，且<b>强制跌落 ${SPIRIT_REBIRTH_RANK_DROP} 个境界</b>（若因此跌破 ${SPIRIT_ASCENSION_RANK} 级，将彻底失去「灵体道果」）。</li>
+        <li><b>恢复</b>：变回原本的修士形态，并恢复 <b>${pct(SPIRIT_REBIRTH_HP_RATIO)}%</b> 的最大生命值。寿元不会因降级而减少。</li>
+        <li><b>虚弱</b>：重生当回合肉身虚弱，无法移动和攻击。</li>
+      </ul>
+
+      <div class="formula">
+        灵体生命上限 = <b>1 + (原境界生命加成 × ${pct(SPIRIT_HP_BONUS_KEEP)}%)</b>（向下取整）<br />
+        重生后修为经验 = <b>(降至那一境升回原等级所需的总修为) ÷ ${SPIRIT_REBIRTH_EXP_DIV}</b>（向下取整）
+      </div>
+    `;
+}
+
 const BOOK_GROUPS: BookGroup[] = [
   {
     file: 'public/manual-pack-fantasy.html',
@@ -2425,140 +2670,7 @@ const BOOK_GROUPS: BookGroup[] = [
     ids: ['cultivation'],
     kind: 'era',  
     intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
-    rulesHtml: `
-      <h3>修士流派</h3>
-      <p>修士是一类特殊的单位，他们不依赖时代的科技，而是靠自身修为的提升获得力量。所有修士都共享<b>境界加成</b>、<b>真元</b>与<b>寿元限制</b>，但不同的流派在获取修为和战斗方式上大相径庭。</p>
-      <ul>
-        <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
-        <li><b>剑修（时代 2）</b>：以杀证道的新流派。他们极度擅长战斗，普攻的基础境界加成只有 0.8 倍，但能通过施展剑技和击杀敌人快速成长。</li>
-      </ul>
-
-      <h3>境界与修为</h3>
-      <p>修士的属性不固定，总修为达标即可自动晋升境界。境界从 0 级（凡人）一路升到 9 级（渡劫）。境界越高，全属性同步增加。</p>
-      
-      <h4>如何获取修为（经验）</h4>
-      <p>不同流派获取修为的途径不同：</p>
-      <ul>
-        <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士：境界 + 2 点。 剑修： (境界 + 2) ÷ 2 点（向下取整）。剑修更注重实战。</span>
-        </li>  
-        <li><b>战斗击杀</b>：亲手击杀敌方单位时获得。<br/>
-          <span class="c">炼气士：10 点。 剑修：20 点（击杀收益翻倍）。</span>
-        </li>
-      </ul>
-      
-      <div class="formula">
-        从当前境界升级所需总经验 = <b>10 + 10 × 境界 × (境界 + 1) + 0.05 × 4<sup>境界</sup></b><br />
-      </div>
-
-      <div class="callout">
-        <b>境界顿悟：</b>境界的提升不仅是数值的暴涨，更是对天地法则的明悟。修士达到特定境界时，会自动领悟新的技能。获得新的能力。
-      </div>
-
-      <h3>各境界属性加成对照表</h3>
-      <p>境界提升时，会立刻按以下公式结算加成，并回复相应血量：</p>
-      <table>
-        <thead>
-          <tr><th>属性</th><th>具体加成公式，小数向下取整</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="name">攻击力</td><td>（ + 5 × 境界 + 2<sup>(境界 − 0.5)</sup>） ÷ （境界 + 1）<sup>0.2</sup></td></tr>
-          <tr><td class="name">护甲</td><td>−1 + 境界² + 1.5<sup>境界</sup> </td></tr>
-          <tr><td class="name">射程</td><td> + 境界 ÷ 2 </td></tr>
-          <tr><td class="name">视野（神识）</td><td> + 境界</td></tr>
-          <tr><td class="name">攻击次数</td><td>(境界 + 1) ÷ 2 <span class="c">（至少 1 次）</span></td></tr>
-          <tr><td class="name">溅射半径</td><td>境界 ÷ 4 </td></tr>
-          <tr><td class="name">最大生命</td><td>见下方详情</td></tr>
-        </tbody>
-      </table>
-      <p class="era-meta">注：剑修在普通攻击时，境界提供的攻击力加成只有 0.8 倍。但施展“剑气纵横”时，该加成会提升至 1.2 倍。</p>
-
-      <h3>御空</h3>
-      <p>当修士到达 <b>2 级（炼气期）</b> 时，即可初步掌控灵力，实现低空悬浮。</p>
-      <ul>
-        <li><b>释放方式</b>：主动切换，不占用本回合的攻击次数。</li>
-        <li><b>释放条件</b>：每次切换消耗 <b>1 点移动力</b>，且每回合只能使用一次。</li>
-        <li><b>技能效果</b>：在空中与地面切换。</li>
-      </ul>
-
-      <h3>剑气纵横</h3>
-      <p>向正方向释放一道剑气。</p>
-      <ul>
-        <li><b>释放方式</b>：点击一个方向，挥出一道直线剑气。</li>
-        <li><b>释放条件</b>：消耗 <b>1 次攻击次数</b>。</li>
-        <li><b>攻击范围</b>：基础 3 格，境界每提高 3 级，射程额外 +1 格。</li>
-        <li><b>伤害效果</b>：对路径上的所有敌人和城市造成 100% 的技能伤害，受境界加成 1.2 倍修正。</li>
-        <li><b>修为获取</b>：释放技能本身+1修为，每命中目标额外+5修为。</li>
-      </ul>
-
-      <h3>突破与生命值</h3>
-      <p>每次境界突破，修士的生命上限会迎来一次<b>指数级暴涨</b>，并按照损失比例回复生命值。</p>
-      
-      <div class="formula">
-        单次突破增加生命 = <b>8.5 + 0.0685 × (新境界<sup>3</sup> × 1.8<sup>新境界</sup> − 旧境界<sup>3</sup> × 1.8<sup>旧境界</sup>)</b><br />
-      </div>
-
-      <p>为了免去心算的麻烦，各阶段突破时增加的生命值如下：</p>
-      <table class="overview">
-        <thead>
-          <tr><th>突破阶段</th><th>增加最大生命</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="name">凡人 → 炼气</td><td>+8</td></tr>
-          <tr><td class="name">炼气 → 筑基</td><td>+10</td></tr>
-          <tr><td class="name">筑基 → 金丹</td><td>+17</td></tr>
-          <tr><td class="name">金丹 → 元婴</td><td>+43</td></tr>
-          <tr><td class="name">元婴 → 化神</td><td>+124</td></tr>
-          <tr><td class="name">化神 → 返虚</td><td>+349</td></tr>
-          <tr><td class="name">返虚 → 合体</td><td>+943</td></tr>
-          <tr><td class="name">合体 → 大乘</td><td>+2434</td></tr>
-          <tr><td class="name">大乘 → 渡劫</td><td>+6048</td></tr>
-        </tbody>
-      </table>
-      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
-
-      <h3>真元（真实伤害）</h3>
-      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害。它是修士打重甲单位的唯一手段。</p>
-      <div class="formula">
-        真实伤害 = <b>境界² ÷ 4 + 境界 × 1.2<sup>境界</sup></b> <span class="c"></span>
-      </div>
-
-      <h3>寿元与衰老</h3>
-      <p>凡人只有十年寿元。境界越高寿元越长（每级增加 9 年，渡劫期永生不死）。</p>
-      <div class="callout">
-        <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
-        超出寿元 <b>3 年</b>就会血量归零，此时任何风吹草动或者回合结束就会正式死亡。
-      </div>
-
-            <h3>灵体道果与重生</h3>
-      <p>当修士的境界达到 <b>4 级（金丹期）</b> 时，他们将初步参悟“灵体道果”。此时若他们在战场上被击杀（非寿元耗尽坐化），强大的元神会强行挣脱肉体的束缚，化作<b>灵体</b>存活下来，等待重塑肉身的机会。</p>
-
-      <div class="callout">
-        <b>注意：</b>若是由于寿元耗尽（坐化）而死亡，修士的元神同样会枯竭，无法化作灵体。
-      </div>
-
-      <h4>灵体形态</h4>
-      <p>化作灵体后，修士失去肉身，处于极度脆弱但又极难被物理手段杀伤的状态：</p>
-      <ul>
-        <li><b>生命与防御</b>：基础生命值降为 <b>1 点</b>（原境界带来的生命上限加成只保留 30%）。但由于失去实体，境界提供的护甲加成将 <b>放大 10 倍</b>（几乎免疫物理伤害）。</li>
-        <li><b>虚弱与敏捷</b>：物理攻击力大幅削弱为原本的 <b>10%</b>，射程减半，但移动力提升 <b>20%</b>。攻击次数、溅射半径、视野以及境界提供的<b>真元（真实伤害）</b>完全不变。</li>
-        <li><b>灵魂飞行</b>：灵体视作飞行单位，可越过水面与地形。</li>
-        <li><b>记忆封存</b>：化作灵体时，后天习得的普通技能会被暂时封存，只有特殊的<b>“魂法”</b>能保留。同时会暂时失去「灵体道果」特性——若灵体再次阵亡，将彻底消散。</li>
-      </ul>
-
-      <h4>主动重生</h4>
-      <p>灵体形态下，单位将获得主动技能<b>「重生」</b>，消耗行动机会重塑肉身：</p>
-      <ul>
-        <li><b>代价</b>：重塑肉身会透支本源，总修为减半，且<b>强制跌落 1 个境界</b>（若因此跌破 4 级，将彻底失去「灵体道果」）。</li>
-        <li><b>恢复</b>：变回原本的修士形态，并恢复 <b>10%</b> 的最大生命值。寿元不会因降级而减少。</li>
-        <li><b>虚弱</b>：重生当回合肉身虚弱，无法移动和攻击。</li>
-      </ul>
-
-      <div class="formula">
-        灵体生命上限 = <b>1 + (原境界生命加成 × 30%)</b>（向下取整）<br />
-        重生后修为经验 = <b>(降至等级升回原等级所需的总经验) ÷ 2</b>
-      </div>
-    `,
+    rulesHtml: () => cultivationRules(),
   },
   {
     file: 'public/manual-pack-eras.html',
@@ -2714,6 +2826,28 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       .map((p) => `<h3 id="n-${esc(p.id)}">${esc(p.name)}</h3>${PACK_NOTES[p.id]}`)
       .join('');
 
+  /**
+   * 各包自己登记的「补充规则」（Expansion.manualNotes）。
+   *
+   * 这些规则只活在钩子里——"灵矿相邻高山多产灵石"写在 modifyYield 里、
+   * "散灵台要先充能才开火"写在 modifyAttacks 里——生成器从数据表读不到，
+   * 只能由扩展在自己文件里写一句话。放在这里印，是为了让它离实现近一点，
+   * 而不是散落在本文件的某个 HTML 字符串里没人认领。
+   */
+  const notesFromPacks = packs
+    .filter((p) => (p.manualNotes ?? []).length > 0)
+    .map(
+      (p) => `
+      <h3 id="mn-${esc(p.id)}">${esc(p.name)}：补充规则</h3>
+      <ul>
+        ${(p.manualNotes ?? []).map((n) => `<li>${rich(n)}</li>`).join('\n        ')}
+      </ul>`,
+    )
+    .join('');
+
+  /** 有没有「特殊规则」这一节：正文或补充规则，有一样就算 */
+  const hasRules = Boolean(g.rulesHtml) || notesFromPacks.length > 0;
+
   const nav = `
     <a href="#g-intro">1. 基础信息</a>
     <a href="#g-units">2. 兵种总表</a>
@@ -2721,8 +2855,8 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       .filter((p) => (p.units ?? []).length > 0)
       .map((p) => `<a class="sub" href="#p-${esc(p.id)}">${esc(shortPackName(p))}</a>`)
       .join('\n    ')}
-    <a href="#g-notes">3. 各包要点</a>${g.rulesHtml ? '\n    <a href="#g-rules">4. 特殊规则</a>' : ''}
-    <a href="#g-terms">${g.rulesHtml ? '5' : '4'}. 机制词条</a>
+    <a href="#g-notes">3. 各包要点</a>${hasRules ? '\n    <a href="#g-rules">4. 特殊规则</a>' : ''}
+    <a href="#g-terms">${hasRules ? '5' : '4'}. 机制词条</a>
   `;
 
   const body = `
@@ -2751,16 +2885,17 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       ${notesHtml() || '<p class="era-meta">这几个包没有额外的玩法说明，看总表即可。</p>'}
     </section>
     ${
-      g.rulesHtml
+      g.rulesHtml || notesFromPacks
         ? `<section id="g-rules">
       <h2><span class="sec-num">04</span>特殊规则</h2>
-      ${typeof g.rulesHtml === 'function' ? g.rulesHtml() : g.rulesHtml}
+      ${typeof g.rulesHtml === 'function' ? g.rulesHtml() : (g.rulesHtml ?? '')}
+      ${notesFromPacks}
     </section>`
         : ''
     }
 
     <section id="g-terms">
-      <h2><span class="sec-num">${g.rulesHtml ? '05' : '04'}</span>机制词条</h2>
+      <h2><span class="sec-num">${hasRules ? '05' : '04'}</span>机制词条</h2>
       <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
       ${termTable(takeTerms())}
     </section>
