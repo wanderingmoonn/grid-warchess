@@ -86,6 +86,14 @@ const AI_HANDICAP = Number(argOf('ai-handicap', '0'));
  * 以及最重要的那条：**同一批种子、不同意图，前 20 手要有明显差别**。
  */
 const INTENT = argOf('intent', 'auto') as Intent | 'random';
+/**
+ * 开局时代。
+ *
+ * 单独开一个口子，是因为它是**和棋盘尺寸同一类的变量**：观测里有
+ * （`describeEnv` 第 25 格 = `startEra/5`），但训练时只喂过一个值（第 1 代）。
+ * "编码里有"和"见过"是两件事——12×12 那次已经用 35 个点教过一遍了。
+ */
+const START_ERA = Number(argOf('start-era', String(EVAL.startEra)));
 const expIds = EXPANSIONS === 'none' || EXPANSIONS === '' ? [] : EXPANSIONS.split(',');
 /** 一次派给 worker 几局。1 = 最细的粒度（尾巴最短），再小就得靠 worker 常驻来抵启动成本 */
 const CHUNK = Number(argOf('chunk', '1'));
@@ -168,6 +176,7 @@ function runGames(from: number, count: number): GameRecord[] {
     const r: MatchOutcome = playMatch({
       seed,
       size: SIZE,
+      startEra: START_ERA,
       capTurns: CAP,
       drivers,
       expansionIds: expIds,
@@ -255,10 +264,34 @@ if (SERVE) {
   } else {
     const self = fileURLToPath(import.meta.url);
     const lanes = Math.min(WORKERS, Math.ceil(total / CHUNK));
+    /*
+     * 子进程参数：**把父进程的整份 argv 转发下去**，只摘掉和分片有关的几个。
+     *
+     * 以前这里是手写白名单，于是每加一个新参数（`--start-era`、`--intent`）
+     * 都只在父进程生效，worker 里静默退回默认值。症状极其难查：
+     * 命令改了、输出一个数都没变——我实测过 `--start-era 3` 和 `5` 跑出
+     * **逐位相同**的 32/27/1，因为两次其实都是第 1 代。
+     * 白名单这种写法，加参数的人永远会忘。
+     */
+    const DROP = new Set(['--serve', '--child', '--from', '--count', '--workers']);
+    const forwarded: string[] = [];
+    for (let i = 2; i < process.argv.length; i++) {
+      const a = process.argv[i]!;
+      if (DROP.has(a)) {
+        // --from / --count 带一个数字参数，一起跳过；其余是开关
+        if (a !== '--serve' && a !== '--child' && process.argv[i + 1] && !process.argv[i + 1]!.startsWith('--')) i += 1;
+        continue;
+      }
+      forwarded.push(a);
+    }
+
     const childArgs = [
       '--experimental-strip-types',
       self,
       '--serve',
+      '--workers',
+      '1',
+      ...forwarded,
       '--mode',
       MODE,
       '--size',

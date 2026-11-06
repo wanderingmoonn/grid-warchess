@@ -599,10 +599,30 @@ async function main(): Promise<void> {
 function runPool(lanes: number, sink: Sink): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const self = fileURLToPath(import.meta.url);
+    /*
+     * 同 eval.ts 的那条教训：**整份 argv 转发**，只摘掉和分片有关的。
+     *
+     * 白名单版本漏了 `--intent` 和 `--snap-share`——于是
+     * `loop.py --intent random` 会静默失效，worker 一律按 auto 采。
+     * 更坏的是它不报错：样本照采，只是没按你要的口径采。
+     */
+    const DROP = new Set(['--serve', '--games', '--out', '--workers']);
+    const forwarded: string[] = [];
+    for (let i = 2; i < process.argv.length; i++) {
+      const a = process.argv[i]!;
+      if (DROP.has(a)) {
+        // --games / --out 带一个值，一起跳过
+        if (a !== '--serve' && process.argv[i + 1] && !process.argv[i + 1]!.startsWith('--')) i += 1;
+        continue;
+      }
+      forwarded.push(a);
+    }
+
     const childArgs = [
       '--experimental-strip-types',
       self,
       '--serve',
+      ...forwarded,
       '--seed0',
       String(SEED0),
       '--cap',
