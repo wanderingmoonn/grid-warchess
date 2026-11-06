@@ -47,6 +47,7 @@ import type { StagedKey } from './ability-registry.ts';
 import {
   CITY,
   CONFIG,
+  WATER_TERRAINS,
   ERAS,
   ORDER_IDLE,
   ORDER_UPGRADE,
@@ -174,8 +175,43 @@ export function adjacentToWater(s: GameState, x: number, y: number): boolean {
     // 临水就是临水，不分深浅：浅流踩得过去、深水只有船能进，
     // 但"挨着水"这件事对贸易、港口、造船位是一回事。
     // 浅流漏判过一次（农民站在渡口边上拿不到河运加成），和桥那次是同一类错。
-    return t.terrain === 'water' || t.terrain === 'deep' || t.terrain === 'shallow' || t.terrain === 'bridge';
+    return WATER_TERRAINS.includes(t.terrain);
   });
+}
+
+/**
+ * 把"邻里要求"的两种写法归一。
+ *
+ * 新写法 `adjacent` 优先；旧存档里的 `requiresWater: true` 翻译成"紧邻水域"。
+ * 两者都写时以 adjacent 为准——取并集的话，"我只想临山"会莫名其妙也要求临水。
+ */
+export function adjacentRequirementOf(
+  def: UnitTypeDef,
+): { terrain: Terrain[]; unit: string[] } | null {
+  if (def.adjacent) {
+    const terrain = def.adjacent.terrain ?? [];
+    const unit = def.adjacent.unit ?? [];
+    if (terrain.length === 0 && unit.length === 0) return null;
+    return { terrain, unit };
+  }
+  if (def.requiresWater) return { terrain: WATER_TERRAINS, unit: [] };
+  return null;
+}
+
+/**
+ * 给界面/规则书用的一句话：`必须紧邻山脉或灵田`。
+ *
+ * 兵种名从外面传进来，是因为扩展兵种不在核心的 `UNIT_TYPES` 里——
+ * 只有开局后的 `state.unitTypes` 才认得它们。
+ */
+export function adjacentRequirementText(
+  def: UnitTypeDef,
+  nameOf: (id: string) => string,
+): string | null {
+  const adj = adjacentRequirementOf(def);
+  if (!adj) return null;
+  const names = [...adj.terrain.map((t) => CONFIG.terrainName[t]), ...adj.unit.map(nameOf)];
+  return `必须紧邻${names.join('或')}`;
 }
 
 // ── 能力查找的"带实例"版本 ────────────────────────────
@@ -3851,17 +3887,32 @@ export function buildSiteError(
     if (!touchesLand) return '这里四面都是水，架不了桥';
   }
 
-  // 临水要求（军营）：靠水补给，所以必须挨着水面。
-  // 占 2×2 的营按整圈外墙算——只看锚点四邻的话，水明明贴着右下角也会被判"不临水"，
-  // 而玩家在画面上看到的是"水就在墙根"。
+  // 邻里要求：军营的"必须临水"、炼丹炉的"山边或灵田边"都走这一条。
   //
-  // 判据必须走 `adjacentToWater`，**不要**在这里再写一遍 `terrain === 'water'`。
+  // 占地的每一格**连同它自己的四邻**一起看：2×2 的建筑可能一半压在山脊上、
+  // 一半落在平地，只扫外圈会把"山就在房子底下"漏掉，而玩家看到的是
+  // "我这炉子明明靠着山"。军营不受影响——它的 buildOn 本来就禁止建在水上。
+  //
+  // 判据必须走 adjacentRequirementOf，**不要**在这里再写一遍 `terrain === 'water'`。
   // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
   // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
-  // 桥是架在河上的，桥面那一格底下还是水——规则书里写的也是"桥面也算"。
-  if (def.requiresWater) {
-    const wet = tilesOfFootprint(x, y, n, (tx, ty) => adjacentToWater(s, tx, ty));
-    if (!wet) return `${def.name}必须扎在水边（四邻要有一格水面）`;
+  const adjacent = adjacentRequirementOf(def);
+  if (adjacent) {
+    const hit = (tx: number, ty: number): boolean => {
+      const tile = tileAt(s, tx, ty);
+      if (tile && adjacent.terrain.includes(tile.terrain)) return true;
+      const here = unitAt(s, tx, ty);
+      if (here && adjacent.unit.includes(here.type)) return true;
+      return DIRS.some(([dx, dy]) => {
+        const nb = tileAt(s, tx + dx, ty + dy);
+        if (nb && adjacent.terrain.includes(nb.terrain)) return true;
+        const nu = unitAt(s, tx + dx, ty + dy);
+        return !!nu && adjacent.unit.includes(nu.type);
+      });
+    };
+    if (!tilesOfFootprint(x, y, n, hit)) {
+      return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
+    }
   }
 
   // 别把自己堵死：城市格的出兵位是产线的命门。

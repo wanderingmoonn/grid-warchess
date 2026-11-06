@@ -21,6 +21,7 @@ import {
   ORDER_IDLE,
   ORDER_UPGRADE,
   UNIT_TYPES,
+  WATER_TERRAINS,
   buildCostOf,
   buildPowerOf,
   eraDef,
@@ -245,6 +246,7 @@ import {
   SKILL_EFFECTS,
   STATUS_REGISTRY,
   buildSiteError,
+  adjacentRequirementOf,
   stepCostBetween,
   stepCostInto,
   strikeDistance,
@@ -5157,6 +5159,70 @@ test('军营能扎在桥头：桥面也算临水', () => {
   assert.equal(noWater.ok, false, '一格水都没有的时候仍然不许扎营');
 });
 
+test('选址：邻里要求可以是地形或建筑，占地整圈和脚下都算', () => {
+  // 军营的「必须临水」只是这条规则的一个特例。炼丹炉那种"山边或灵田边都行"
+  // 不需要往核心再加一个布尔开关——加一个 adjacent 就够了。
+  //
+  // 同时守住"脚下那几格也算"：2×2 的炉子一半压在山脊上时，只扫锚点四邻
+  // 会判"不挨着山"，而玩家看到的是"我这炉子明明靠着山"。
+  const s = fresh();
+  const builder = place(s, 'A', 'laborer', 5, 5);
+  s.current = 'A';
+  for (let y = 3; y <= 8; y++)
+    for (let x = 3; x <= 9; x++) s.tiles[idx(s, x, y)] = { terrain: 'plain', cityId: null };
+  const setT = (x: number, y: number, terrain: Terrain) => {
+    s.tiles[idx(s, x, y)] = { terrain, cityId: null };
+  };
+  const kiln = (extra: Record<string, unknown>) => {
+    const def = {
+      ...s.unitTypes.tower,
+      id: 'test-kiln',
+      name: '试验炉',
+      short: '炉',
+      footprint: 1,
+      buildOn: ['plain', 'mountain'],
+      requiresWater: undefined,
+      adjacent: undefined,
+      ...extra,
+    } as any;
+    // footprintOf 是按 id 去兵种表里查的：临时建筑也得先登记，
+    // 否则 2×2 会被当成 1×1，正好把这条用例要测的"整圈"测没了。
+    s.unitTypes[def.id] = def;
+    return def;
+  };
+
+  // 1) 平地上、周围既没山也没灵田 → 拒绝，理由里要带着要求本身
+  const byMountain = kiln({ adjacent: { terrain: ['mountain'] } });
+  const no = buildSiteError(s, byMountain, builder, 6, 5);
+  assert.ok(no && no.includes('必须紧邻'), `不挨着山应该拒绝，实际：${no}`);
+
+  // 2) 隔壁一格是山 → 通过
+  setT(7, 5, 'mountain');
+  assert.equal(buildSiteError(s, byMountain, builder, 6, 5), null, '挨着山应该可以');
+  setT(7, 5, 'plain');
+
+  // 3) 自己就压在山头上也算（脚下那几格）
+  setT(6, 5, 'mountain');
+  assert.equal(buildSiteError(s, byMountain, builder, 6, 5), null, '建在山上也算挨着山');
+  setT(6, 5, 'plain');
+
+  // 4) 占 2×2 时按整圈外墙算：山贴着侧墙根，离锚点有三格远
+  const big = kiln({ footprint: 2, adjacent: { terrain: ['mountain'] } });
+  setT(8, 6, 'mountain');
+  assert.equal(
+    buildSiteError(s, big, builder, 6, 5),
+    null,
+    '2×2 的山贴在侧墙根也算，不能只看锚点四邻',
+  );
+  setT(8, 6, 'plain');
+
+  // 5) 挨着指定建筑也算，和地形是"或"的关系
+  const byMill = kiln({ adjacent: { terrain: ['mountain'], unit: ['mill'] } });
+  assert.ok(buildSiteError(s, byMill, builder, 6, 5), '既没山也没磨坊应该拒绝');
+  place(s, 'A', 'mill', 7, 5);
+  assert.equal(buildSiteError(s, byMill, builder, 6, 5), null, '挨着磨坊应该可以');
+});
+
 test('军营能像城市一样产兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
@@ -6111,7 +6177,12 @@ test('高级军营按时代解锁，属性逐级变强', () => {
     assert.ok(def, `缺少 ${id}`);
     assert.equal(def.category, 'building');
     assert.equal(isProducer(def), true, `${id} 应该是军营`);
-    assert.equal(def.requiresWater, true, `${id} 应该要临水`);
+    // 临水改成通用的邻里要求（adjacent）之后，不能再读旧字段
+    const site = adjacentRequirementOf(def);
+    assert.ok(
+      site && site.terrain.some((t) => WATER_TERRAINS.includes(t)),
+      `${id} 应该要临水`,
+    );
     assert.ok(def.maxHp > prevHp, `${id} 的耐久应该比上一档高`);
     assert.ok(def.cost > prevCost, `${id} 的造价应该比上一档高`);
     prevHp = def.maxHp;
