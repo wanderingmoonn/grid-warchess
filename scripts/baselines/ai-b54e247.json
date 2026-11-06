@@ -1,0 +1,8 @@
+{
+  "commit": "b54e247c94b93d6993e3c5de2b39f1affd0b10b5",
+  "path": "src/core/ai.ts",
+  "sha256": "3d418270618d3a491d043bde58de2a7a38d55832c5fb621ac778ebbfbd9ca16e",
+  "importsRebased": true,
+  "frozenAt": "2026-11-06",
+  "note": "冻结于 V2 收工当天；改动前基线。导入路径改写 22 处。"
+}
