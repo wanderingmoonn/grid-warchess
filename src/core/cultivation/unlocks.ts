@@ -4,7 +4,8 @@
 
 import type { GameState, Unit, SkillDef } from '../types.ts';
 import { getRank, onRankUp } from './progression.ts';
-import { SKY_STEP_SKILL } from './skills.ts';
+import { SKY_STEP_SKILL, SKY_STEP_RANK } from './skills.ts';
+import { SPIRIT_ASCENSION_RANK } from './identity.ts';
 
 /**
  * 让单位学会一个后天技能。如果已经学过，什么都不做。
@@ -17,9 +18,14 @@ export function learnSkill(u: Unit, skill: SkillDef): boolean {
   return true;
 }
 
-/** 境界达到对应等级时自动领悟的技能 */
-const CULTIVATOR_SKILL_UNLOCKS: Array<{ rank: number; skill: SkillDef }> = [
-  { rank: 2, skill: SKY_STEP_SKILL },
+/**
+ * 境界达到对应等级时自动领悟的技能。
+ *
+ * 导出是为了让规则书那张"各境界对照表"的「特殊能力」一列直接从这张表生成——
+ * 以前手册里的"2 级解锁御空"是手打的，改了门槛就两边不一致。
+ */
+export const CULTIVATOR_SKILL_UNLOCKS: Array<{ rank: number; skill: SkillDef }> = [
+  { rank: SKY_STEP_RANK, skill: SKY_STEP_SKILL },
 ];
 
 /** 检查并领悟所有达标的新技能 */
@@ -38,8 +44,9 @@ function checkSkillUnlocks(u: Unit, s: GameState): void {
   }
 }
 
-const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
-  { rank: 4, abilityId: 'spirit-ascension', name: '灵体道果' },
+/** 境界达到对应等级时自动获得的能力（同样导出给规则书用） */
+export const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
+  { rank: SPIRIT_ASCENSION_RANK, abilityId: 'spirit-ascension', name: '灵体道果' },
 ];
 
 /**

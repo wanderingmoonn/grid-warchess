@@ -90,6 +90,13 @@ export const DEACON: UnitTypeDef = {
   buildPower: 18,
 };
 
+/** 灵矿每相邻一座高山，额外产出多少灵石（钩子在 hooks.ts，规则书要引用） */
+export const MINE_MOUNTAIN_STONE_BONUS = 2;
+/** 散灵台「释放灵气」一次给几次攻击次数 */
+export const TOWER_BURST_CHARGES = 3;
+/** 散灵台「释放灵气」每次耗多少灵石 */
+export const TOWER_CHARGE_COST = 5;
+
 export const SPIRIT_TOWER: UnitTypeDef = {
   id: 'cultivation-spirit-tower',
   name: '散灵台',
@@ -111,7 +118,7 @@ export const SPIRIT_TOWER: UnitTypeDef = {
     {
       id: 'tower-charge',
       name: '释放灵气',
-      summary: '本回合获得 +3 次攻击次数，消耗 5 灵石',
+      summary: `充能：本回合获得 ${TOWER_BURST_CHARGES} 次攻击次数，消耗 ${TOWER_CHARGE_COST} 灵石`,
       effect: 'spirit-tower-shot',
       cooldown: 0,
       multiCast: false, // 一回合只能开一次

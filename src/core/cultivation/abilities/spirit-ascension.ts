@@ -1,11 +1,14 @@
 import type { AbilityDef } from '../../abilities.ts';
-import { isCultivatorUnit } from '../identity.ts';
+import { isCultivatorUnit, SPIRIT_ASCENSION_RANK } from '../identity.ts';
 import { getRank, isDoomed, REALMS } from '../progression.ts';
+
+/** 化灵时保留原境界生命加成的比例 */
+export const SPIRIT_HP_BONUS_KEEP = 0.3;
 
 export const SPIRIT_ASCENSION: AbilityDef = {
   id: 'spirit-ascension',
   name: '灵体道果',
-  summary: '境界达到炼气期（≥ 4 级）时，肉身死亡会化作灵体，可主动重生。',
+  summary: `境界达到 ${REALMS[SPIRIT_ASCENSION_RANK]}期（${SPIRIT_ASCENSION_RANK} 级）时，肉身死亡会化作灵体，可主动重生。`,
   group: 'defense',
   hooks: {
     onDeath: (c) => {
@@ -14,7 +17,7 @@ export const SPIRIT_ASCENSION: AbilityDef = {
       if (victim.type === 'cultivator-spirit') return;// 灵体死了就真死
       if (victim.custom?.spiritForm === true) return;
       if (isDoomed(victim)) return;// 老死 → 真死
-      if (getRank(victim) < 4) return;
+      if (getRank(victim) < SPIRIT_ASCENSION_RANK) return;
       const spiritDef = state.unitTypes['cultivator-spirit'];
       if (!spiritDef) return;
 
@@ -47,7 +50,7 @@ export const SPIRIT_ASCENSION: AbilityDef = {
       };
       victim.type = 'cultivator-spirit';
       victim.x = x; victim.y = y;
-      victim.maxHpBonus = Math.floor(originMaxHpBonus * 0.3);
+      victim.maxHpBonus = Math.floor(originMaxHpBonus * SPIRIT_HP_BONUS_KEEP);
       victim.hp = 1 + victim.maxHpBonus;
       victim.moved = true;
       victim.acted = true;

@@ -17,9 +17,13 @@ import {
   CULTIVATOR, 
   SWORD_CULTIVATOR,
   SERVANT,
+  DEACON,
   SPIRIT_FIELD,
   SPIRIT_MINE,
-  SPIRIT_TOWER
+  SPIRIT_TOWER,
+  MINE_MOUNTAIN_STONE_BONUS,
+  TOWER_CHARGE_COST,
+  TOWER_BURST_CHARGES,
 } from './cultivation/units.ts';
 import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
@@ -43,11 +47,19 @@ export const CULTIVATION_PACK: Expansion = {
     SWORD_CULTIVATOR, 
     SPIRIT_CULTIVATOR,
     SERVANT, 
+    // 执事是灵矿唯一的建造者：漏登记它就等于灵矿永远造不出来。
+    DEACON,
     SPIRIT_FIELD, 
     SPIRIT_MINE,
     SPIRIT_TOWER
   ],
   resources: [SPIRIT_STONE_DEF],
+  // 下面几条都只活在钩子里（配置表没有对应字段），规则书靠这里才能印全。
+  manualNotes: [
+    `灵矿每相邻一座高山，额外产出 ${MINE_MOUNTAIN_STONE_BONUS} 灵石（四方向，不含斜角）。`,
+    `散灵台基础攻击次数为 0：必须先花 ${TOWER_CHARGE_COST} 灵石「释放灵气」，才有 ${TOWER_BURST_CHARGES} 次开火机会，` +
+      `而且那几发是在**对手回合开始、建筑自动开火**时打出去的，不是在自己回合里点。`,
+  ],
 };
 
 export { cultivationRank, setCultivationExp, getSwordSweepReach };

@@ -5,13 +5,17 @@ import type {
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview } from '../skill-hooks.ts';
 import { isCultivatorUnit } from './identity.ts';
 import { getExp, getRank, expForRank, getMaxHp, sumDeltaMaxHpUpTo, addExp, cleanupAfterRankDrop, REALMS } from './progression.ts';
-import { getSwordSweepReach } from './skills.ts';
+import {
+  getSwordSweepReach, SKY_STEP_RANK, SWEEP_EXP_CAST, SWEEP_EXP_PER_HIT,
+  SPIRIT_REBIRTH_RANK_DROP, SPIRIT_REBIRTH_EXP_DIV, SPIRIT_REBIRTH_HP_RATIO,
+} from './skills.ts';
 import { resOf, addRes } from '../resources.ts';
 import { SPIRIT_STONE } from './resources.ts';
+import { TOWER_CHARGE_COST, TOWER_BURST_CHARGES } from './units.ts';
 
 function canSkyStep(s: GameState, u: Unit, api: AbilityApi): string | null {
   if (!isCultivatorUnit(s, u)) return '只有修士才能御空';
-  if (getRank(u) < 2) return '境界不足（需要 2 级）';
+  if (getRank(u) < SKY_STEP_RANK) return `境界不足（需要 ${SKY_STEP_RANK} 级）`;
   if ((u.custom?.skyStepTurn as number) === s.turn) return '御空每回合只能一次';
   if (api.movePower(s, u) <= 0) return '剩余移动力不足';
   return null;
@@ -128,12 +132,12 @@ registerSkillEffect('sword-sweep', (c) => {
   const expBefore = getExp(c.self);
 
   // 5. 伤害结算
-  let expGain = 1;
+  let expGain = SWEEP_EXP_CAST;
   let logExtra = '';
   let deadCount = 0;
 
   if (victims.length > 0 || cityVictims.length > 0) {
-    expGain += victims.length * 5 + cityVictims.length * 5;
+    expGain += (victims.length + cityVictims.length) * SWEEP_EXP_PER_HIT;
     let totalDmg = 0;
 
     // 剑修技能模式：境界加成从普攻 ×0.8 切到 ×1.2
@@ -231,9 +235,9 @@ registerSkillEffect('spirit-rebirth', (c) => {
   }
 
   const oldRank = getRank(self);
-  const newRank = Math.max(0, oldRank - 1);
+  const newRank = Math.max(0, oldRank - SPIRIT_REBIRTH_RANK_DROP);
   // 新经验：原 "x-1 升 x 门槛" 的一半（绝对量）
-  const newExp = Math.floor(expForRank(newRank) / 2);
+  const newExp = Math.floor(expForRank(newRank) / SPIRIT_REBIRTH_EXP_DIV);
 
   // 合并技能（saved ∪ current，按 id 去重）
   const savedExtraSkills = (self.custom?.savedExtraSkills as SkillDef[]) ?? [];
@@ -262,7 +266,7 @@ registerSkillEffect('spirit-rebirth', (c) => {
   self.maxHpBonus = sumDeltaMaxHpUpTo(newRank);
 
   // 血量 10% 上限
-  self.hp = Math.max(1, Math.ceil(getMaxHp(state, self) * 0.1));
+  self.hp = Math.max(1, Math.ceil(getMaxHp(state, self) * SPIRIT_REBIRTH_HP_RATIO));
   // 行动状态：本回合不能再行动
   self.moved = true;
   self.acted = true;
@@ -277,16 +281,20 @@ registerSkillEffect('spirit-rebirth', (c) => {
   c.result.log = `${originDef.name} 从灵体重塑肉身（降为 ${REALMS[newRank]} 期，恢复 ${self.hp} 点生命）`;
 });
 
-registerSkillReadyCheck('spirit-tower-shot', (s, u) => {
+// 注意：就绪检查按 **skill.id** 查（见 rules.ts 的 SKILL_READY_CHECKS[k.id]），
+// 不是按 effect 名。散灵台那个技能的 id 是 'tower-charge'，effect 才是
+// 'spirit-tower-shot'——键写成 effect 的话这个检查永远不会被调用，
+// 0 灵石时按钮照样是亮的。
+registerSkillReadyCheck('tower-charge', (s, u) => {
   const p = s.players[u.owner];
-  if (resOf(p, SPIRIT_STONE) < 5) {
-    return '灵石不足（需要 5 灵石）';
+  if (resOf(p, SPIRIT_STONE) < TOWER_CHARGE_COST) {
+    return `灵石不足（需要 ${TOWER_CHARGE_COST} 灵石）`;
   }
   return true;
 });
 
 registerSkillEffect('spirit-tower-shot', (c) => {
-  const cost = 5;
+  const cost = TOWER_CHARGE_COST;
   const p = c.state.players[c.self.owner];
   if (resOf(p, SPIRIT_STONE) < cost) {
     c.result.ok = false;
@@ -297,8 +305,8 @@ registerSkillEffect('spirit-tower-shot', (c) => {
   addRes(p, SPIRIT_STONE, -cost);
   
   // 存“灵气充能层数”
-  c.self.custom = { ...(c.self.custom ?? {}), burstCharges: 3 };
+  c.self.custom = { ...(c.self.custom ?? {}), burstCharges: TOWER_BURST_CHARGES };
   
   const name = c.api.utype(c.state, c.self.type).name;
-  c.result.log = `${name} 消耗 ${cost} 灵石，灵气激荡，本回合获得 3 次攻击次数`;
+  c.result.log = `${name} 消耗 ${cost} 灵石，灵气激荡，本回合获得 ${TOWER_BURST_CHARGES} 次攻击次数`;
 });
