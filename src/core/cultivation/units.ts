@@ -111,10 +111,9 @@ export const SPIRIT_TOWER: UnitTypeDef = {
     {
       id: 'tower-charge',
       name: '释放灵气',
-      summary: '本回合获得 +3 次攻击次数，消耗 5 灵石',
+      summary: '本回合获得 +5 次攻击次数，消耗 5 灵石',
       effect: 'spirit-tower-shot',
       cooldown: 0,
-      multiCast: false, // 一回合只能开一次
     }
   ]
 };

@@ -19,7 +19,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
   // 1. 击杀敌人获得经验
 	onUnitKilled: (c) => {
 		if (c.killer && isCultivatorUnit(c.state, c.killer)) {
-		let killexp=10;
+		let killexp=5;
 		if (c.killer.type === 'sword-cultivator'){
 				killexp = killexp * 2;
 		}
