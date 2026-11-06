@@ -585,7 +585,9 @@ async function main(): Promise<void> {
     games: GAMES,
     seed0: SEED0,
     size: TRAIN.size,
-    sizes: TRAIN.sizes,
+    // 去重：`TRAIN.sizes` 现在用重复值表达配比（[12, 12, 10]），
+    // 原样写进元数据会让"这一轮用了哪些尺寸"读起来像用了三个尺寸。
+    sizes: Array.from(new Set(TRAIN.sizes)),
     expansions: TRAIN.expansions,
     weights: WEIGHTS,
     opponent: OPPONENT,
