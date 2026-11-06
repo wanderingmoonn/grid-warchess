@@ -493,15 +493,18 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
 }
 
 /**
- * 英雄技能菜单。
+ * 技能菜单。
  *
  * 长得和"可建造""产兵"一样，因为它们回答的是同一类问题：
  * "这一回合，我手上这几个人能做什么"。冷却是灰按钮，不是不显示——
  * 玩家要知道"再等一回合"，而不是以为技能丢了。
+ *
+ * 名字里的 hero 是历史包袱：这套框架最早只服务奇想的英雄技能，
+ * 现在修士、建筑也在用。函数名没改（改起来牵连一堆调用点），
+ * 但**给玩家看的字里不许再出现"英雄"**。
  */
 function heroSkillBlock(s: GameState, units: Unit[]): string {
   const rows: string[] = [];
-  let anyCharge = false;
   for (const u of units) {
     const def = utype(s, u.type);
     if (!skillsOf(s, u) || skillsOf(s, u).length === 0) continue;
@@ -521,7 +524,6 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
           status = '未就绪';
         }
       }
-      if (k.chargeMax > 0) anyCharge = true;
       rows.push(
         `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
@@ -532,11 +534,11 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
     }
   }
   if (rows.length === 0) return '';
-  return `<div class="card-title" style="margin-top:14px">英雄技能</div>
-    <div class="recruit-list">${rows.join('')}</div>
-    <div class="hint" style="margin-top:8px">技能不占行动，每个英雄每回合最多一次。${
-      anyCharge ? '带「N/M 发」的是充能型：一池攒着用，用完还要等回充。' : ''
-    }冷却中的按钮会显示还要等几回合。</div>`;
+  // 菜单底下原来有一句"技能不占行动，每个英雄每回合最多一次"的总说明。
+  // 现在技能五花八门（有的占移动、有的耗灵石、有的能连发），一句话概括不了，
+  // 所以删掉——代价与冷却都写在每个按钮自己的小字上了。
+  return `<div class="card-title" style="margin-top:14px">技能</div>
+    <div class="recruit-list">${rows.join('')}</div>`;
 }
 
 /**

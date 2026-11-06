@@ -1,19 +1,37 @@
 // 各种身份认定
 import type { GameState, Unit, UnitTypeDef } from '../types.ts';
 
-// 修士身份判定 
+/**
+ * 本扩展所有兵种的 id。
+ *
+ * 以前这批字符串有两个副本：`units.ts` 里每个 `id:` 写一遍，这里再用一个 Set
+ * 写一遍。改 id 要记得改两处，漏一处就是"这个兵种既存在又不被当成修士"。
+ * 现在只有这一份，`units.ts` 的 `id:` / `builds:` 全部引用它。
+ */
+export const UNIT_IDS = {
+  QI_CULTIVATOR: 'qi-cultivator',
+  SWORD_CULTIVATOR: 'sword-cultivator',
+  SPIRIT: 'cultivator-spirit',
+  SERVANT: 'cultivation-servant',
+  DEACON: 'cultivation-deacon',
+  SPIRIT_FIELD: 'cultivation-spirit-field',
+  SPIRIT_MINE: 'cultivation-spirit-mine',
+  SPIRIT_TOWER: 'cultivation-spirit-tower',
+} as const;
+
+// 修士身份判定
 //
 // 这是本扩展里**唯一**"认识具体兵种"的地方。以前每个钩子里都写了一遍
-// `type === 'qi-cultivator'`，十二处硬编码：加一个流派要回来改十二次，
-// 漏一次就是"这个流派能修炼但不涨攻击"或"所有兵种都能修炼但不涨数值"。
+// `type === 'qi-cultivator'`，加一个流派要回来改十几处，漏一次就是
+// "这个流派能修炼但不涨攻击"或"所有兵种都能修炼但不涨数值"。
 //
 // 判据用 id 集合，不用"带某条能力"：能力是机制（剑气、金身各有各的），
 // 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
 //
-// 加新流派 → 在 CULTIVATOR_IDS 里加一行 id；**别的钩子一个字都不用改**。
-const CULTIVATOR_IDS = new Set([
-  'qi-cultivator', 
-  'sword-cultivator'
+// 加新流派 → 在 UNIT_IDS 加一行 id、在 CULTIVATOR_IDS 里也加一行；别的钩子一个字都不用改。
+const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
+  UNIT_IDS.QI_CULTIVATOR,
+  UNIT_IDS.SWORD_CULTIVATOR,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
@@ -26,8 +44,19 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
   return isCultivatorDef(s.unitTypes[u.type]);
 }
 
+/**
+ * 是不是剑修，只给 type 字符串的版本。
+ *
+ * 和 `isCultivatorUnit` 的区别：那个要 state 才能查兵种定义，而
+ * `getExpGrowth(u)` / `swordMul(u)` 手里只有 Unit，拿不到 state。
+ * 剑修这一支的特殊规则（打坐减半、击杀翻倍、境界加成 ×0.8/×1.2）全走它。
+ */
+export function isSwordCultivatorType(type: string): boolean {
+  return type === UNIT_IDS.SWORD_CULTIVATOR;
+}
+
 export function isSpirit(u: Unit): boolean {
-  return u.type === 'cultivator-spirit';
+  return u.type === UNIT_IDS.SPIRIT;
 }
 
 /**

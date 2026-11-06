@@ -2,8 +2,8 @@
 
 import type { GameState, Unit } from '../types.ts';
 import { skillsOf } from '../query.ts';
-import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE } from './progression.ts';
-import { isCultivatorUnit } from './identity.ts';
+import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank } from './progression.ts';
+import { isCultivatorUnit, isSwordCultivatorType } from './identity.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -14,7 +14,7 @@ import {
   realmRangeBase,
   realmVisionBase,
 } from './stats.ts';
-import { getSwordSweepReach } from './skills.ts';
+import { sweepReachForRank } from './skills/index.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from './abilities/spirit-aura.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
@@ -26,8 +26,8 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	const lifespan = getLifespan(unit);
 	const aging = getAgingYears(unit);
 
-	// 升级所需总经验
-	const nextExp = rank < MAX_RANK ? Math.floor(10 + 10 * rank * (rank+1) + 0.05 * 4 ** rank) : null;
+	// 升级所需总经验：走 progression 里那一份，别在这里再抄一遍公式
+	const nextExp = rank < MAX_RANK ? expForRank(rank) : null;
 
 	const lines = [
 	`当前境界：第 ${rank} / ${MAX_RANK} 层   ${REALMS[rank]}期`,
@@ -37,13 +37,13 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	`寿元：${age} / ${Number.isFinite(lifespan) ? lifespan : '∞'}`,
 	];
 
-	if (unit.type === 'sword-cultivator') {
+	if (isSwordCultivatorType(unit.type)) {
     lines.push(`剑修：境界加成在普攻时 ×${SWORD_BASE_MUL}，剑气纵横时 ×${SWORD_SWEEP_MUL}`);
   }
 
 	const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
 	if (hasSwordSweep) {
-	const reach = getSwordSweepReach(state, unit);
+	const reach = sweepReachForRank(getRank(unit));
 	lines.push(`剑气纵横：向指定方向挥出 ${reach} 格直线剑气，伤害受境界加成`);
 	}
 

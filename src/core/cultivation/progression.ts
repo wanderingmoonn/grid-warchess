@@ -1,7 +1,7 @@
 // 境界、经验、寿元、生命
 
 import type { GameState, Unit } from '../types.ts';
-import { SPIRIT_ASCENSION_RANK } from './identity.ts';
+import { SPIRIT_ASCENSION_RANK, isSwordCultivatorType } from './identity.ts';
 
 // --- 升级事件监听机制 ---
 type RankUpListener = (u: Unit, s: GameState) => void;
@@ -147,7 +147,7 @@ export function cultivationRank(u: Unit): number {
 // 自然经验增长
 export function getExpGrowth(u: Unit): number {
   // 剑修注重实战，打坐只能获得一半经验（向下取整，最少 1）
-  if (u.type === 'sword-cultivator') {
+  if (isSwordCultivatorType(u.type)) {
     return Math.max(1, Math.floor((getRank(u) + EXP_GROWTH_FLAT) / 2));
   }
   return getRank(u) + EXP_GROWTH_FLAT;
