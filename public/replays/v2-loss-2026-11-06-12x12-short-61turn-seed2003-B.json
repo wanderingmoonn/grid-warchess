@@ -1,0 +1,5440 @@
+{
+  "v": 3,
+  "at": "2026-11-06T02:23:11.204Z",
+  "build": "dev",
+  "seed": 2003,
+  "board": {
+    "w": 12,
+    "h": 12,
+    "terrain": {
+      "plain": 54,
+      "hill": 44,
+      "city": 16,
+      "water": 9,
+      "mountain": 9,
+      "forest": 11,
+      "bridge": 1
+    }
+  },
+  "startEra": 1,
+  "playerCount": 2,
+  "expansions": [
+    "bloodbath"
+  ],
+  "packSize": 52,
+  "ai": {
+    "opponent": false,
+    "ally": false,
+    "level": "advanced",
+    "commander": false,
+    "godMode": false
+  },
+  "aiSides": [],
+  "turns": 61,
+  "winner": "A",
+  "sites": 0,
+  "logLines": 120,
+  "sides": [
+    {
+      "side": "A",
+      "cities": 4,
+      "units": 23,
+      "buildings": 7,
+      "roster": {
+        "militia": 2,
+        "farmer": 3,
+        "spearman": 4,
+        "ge": 2,
+        "lumberjack": 1,
+        "archer": 1,
+        "crossbow": 3,
+        "longbow": 2,
+        "herder": 1,
+        "laborer": 1,
+        "rifleman": 2,
+        "armoredcar": 1
+      },
+      "gold": 251,
+      "res": {},
+      "eras": [
+        4,
+        3,
+        2,
+        1
+      ],
+      "hp": 699
+    },
+    {
+      "side": "B",
+      "cities": 0,
+      "units": 9,
+      "buildings": 0,
+      "roster": {
+        "militia": 2,
+        "archer": 7
+      },
+      "gold": 58,
+      "res": {},
+      "eras": [],
+      "hp": 186
+    }
+  ],
+  "recordRequested": false,
+  "config": {
+    "size": 12,
+    "startEra": 1,
+    "mapStyle": "random",
+    "mapSymmetry": "fair",
+    "citySize": 2,
+    "aiOpponent": false,
+    "aiAlly": false,
+    "aiLevel": "advanced",
+    "aiBrain": "script",
+    "expansionIds": [
+      "bloodbath"
+    ],
+    "enabledUnits": [
+      "militia",
+      "archer",
+      "scout",
+      "farmer",
+      "herder",
+      "laborer",
+      "tower",
+      "mill",
+      "ge",
+      "spearman",
+      "longbow",
+      "knight",
+      "lumberjack",
+      "miller",
+      "keep",
+      "watermill",
+      "crossbow",
+      "tower_ship",
+      "musketeer",
+      "mortar",
+      "halberdier",
+      "hussar",
+      "planter",
+      "engineer",
+      "battery",
+      "factory",
+      "rifleman",
+      "mg",
+      "hmg",
+      "armoredcar",
+      "foreman",
+      "fortress",
+      "arsenal",
+      "squad",
+      "tank",
+      "artillery",
+      "agribusiness",
+      "crew",
+      "bunker",
+      "industrialpark",
+      "boat",
+      "ferry",
+      "bridge",
+      "bridge2",
+      "bridge3",
+      "camp",
+      "camp2",
+      "camp3",
+      "camp4",
+      "camp5",
+      "gunboat",
+      "ironclad"
+    ],
+    "disabledUnits": [],
+    "playerCount": 2,
+    "commanderMode": false,
+    "godMode": false,
+    "draftMode": false,
+    "recordDetail": false
+  },
+  "fog": false,
+  "actions": [
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "farmer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 5,
+      "y": 8
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u4",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 1,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 8,
+      "y": 10
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 4,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u4",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 10,
+      "y": 9
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c2"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u15",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 1,
+      "y": 3
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 6,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u22",
+      "targetId": "u4"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u19",
+      "targetId": "u4"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u18",
+      "targetId": "u4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 4,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u15",
+      "cityId": "c4"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "spearman"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "ge"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 11,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 2,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u3",
+      "targetId": "u13"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u24",
+      "cityId": "c2"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 1,
+      "y": 10
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u19",
+      "targetId": "u15"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u21",
+      "targetId": "u12"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u12"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u10",
+      "targetId": "u15"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 2,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u13",
+      "targetId": "u3"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u3",
+      "targetId": "u13"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "longbow"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u25",
+      "targetId": "u24"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 1,
+      "y": 3
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u24",
+      "cityId": "c2"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u3"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u21",
+      "targetId": "u3"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u19",
+      "targetId": "u25"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u10",
+      "targetId": "u25"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 1,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 0,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u24"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 5,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u25",
+      "targetId": "u19"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "spearman"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "scout"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 2,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 2,
+      "y": 1
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u30",
+      "targetId": "u25"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 0,
+      "y": 11
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 2,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 6,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u21",
+      "targetId": "u12"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u25",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u27",
+      "x": 7,
+      "y": 9
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u27",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 2,
+      "y": 4
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "lumberjack"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 3,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u2",
+      "targetId": "u17"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 1,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 1,
+      "y": 3
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u18",
+      "targetId": "u32"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u21",
+      "targetId": "u2"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u2"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 1,
+      "y": 11
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 6,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 6,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u30",
+      "x": 3,
+      "y": 6
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u30",
+      "targetId": "u32"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u34",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u10"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 3,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u32",
+      "targetId": "u30"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u36",
+      "x": 10,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u28",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u28",
+      "targetId": "u30"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 0,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 0,
+      "y": 4
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u18",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u30",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u37",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 5,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 1,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u34",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 7,
+      "y": 6
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u32",
+      "targetId": "u30"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u39",
+      "x": 8,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u10"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "militia"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u18",
+      "cityId": "c4"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u22",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u37",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u34",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 8,
+      "y": 7
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "ge"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u32",
+      "targetId": "u18"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u9"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u39",
+      "targetId": "u9"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 8,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u5",
+      "targetId": "u9"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u22",
+      "cityId": "c4"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u18",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u21",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u34",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u37",
+      "x": 4,
+      "y": 1
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u37",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u32",
+      "targetId": "u18"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "scout"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u28",
+      "targetId": "u21"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u38",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u21"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u41",
+      "x": 3,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u41",
+      "targetId": "u37"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u27",
+      "x": 7,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u7"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u22",
+      "cityId": "c4"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u18",
+      "cityId": "c4"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u37",
+      "cityId": "c1"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u41"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u34",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u38",
+      "x": 2,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u32",
+      "targetId": "u18"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u41",
+      "targetId": "u37"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 1,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u31",
+      "targetId": "u22"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u34"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u28",
+      "x": 4,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u28",
+      "targetId": "u34"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 1,
+      "y": 4
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u22",
+      "cityId": "c4"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u41"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u7",
+      "targetId": "u28"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u46",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 7,
+      "y": 5
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u31",
+      "targetId": "u22"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u7"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "farmer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "miller"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 4,
+      "y": 7
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u41"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 6,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u29",
+      "targetId": "u28"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u46",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u8"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "bridge",
+      "x": 10,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u51",
+      "x": 0,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u39",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u39",
+      "targetId": "u8"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 2,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u35",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u35",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 7,
+      "y": 5
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u29",
+      "targetId": "u27"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u46",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "spearman"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u8"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u39",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u39",
+      "targetId": "u8"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "watermill",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u35"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 2,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u3",
+      "targetId": "u35"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 6,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u46",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u55",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u46"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u52",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u46",
+      "x": 7,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u46",
+      "targetId": "u27"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 4,
+      "y": 3
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u17",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u33",
+      "x": 5,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u33",
+      "targetId": "u38"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u55",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 5,
+      "y": 3
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u46"
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c4"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u17"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u47",
+      "x": 1,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u17"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "crossbow"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "militia"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u33"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u3",
+      "targetId": "u33"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u52",
+      "x": 8,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u50",
+      "targetId": "u3"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u56",
+      "targetId": "u52"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u55",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u61",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u62",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "scout"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "longbow"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "spearman"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u27",
+      "targetId": "u62"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u52",
+      "x": 6,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 5,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u62",
+      "x": 7,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u62",
+      "targetId": "u27"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u61",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u55",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "militia"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u14",
+      "cityId": "c1"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "crossbow"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u1",
+      "targetId": "u14"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u14"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u52",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u62",
+      "x": 7,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u62",
+      "targetId": "u39"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u55",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u55",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u61",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u70",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u39",
+      "targetId": "u62"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u55"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u55"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u47",
+      "x": 1,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u55"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u52",
+      "x": 5,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 0,
+      "y": 4
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u61",
+      "x": 8,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u5"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u70",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c1"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "watermill",
+      "x": 6,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u53",
+      "x": 4,
+      "y": 1
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u53",
+      "cityId": "c1"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u5"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 4,
+      "y": 3
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u20",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u50",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u50",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u29",
+      "x": 7,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u29",
+      "targetId": "u52"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u40",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u70",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u20"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u1",
+      "targetId": "u20"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u39",
+      "targetId": "u29"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u68",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u29"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u53"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u53"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "watermill",
+      "x": 5,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u76",
+      "x": 1,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u50",
+      "cityId": "c1"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u53",
+      "cityId": "c1"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u5"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u40",
+      "targetId": "u1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u70",
+      "x": 7,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u53"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "watermill",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u50"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u50"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 0,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u50",
+      "cityId": "c1"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u5"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u40",
+      "targetId": "u1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u70",
+      "x": 7,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u70",
+      "targetId": "u39"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u80",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u64",
+      "x": 4,
+      "y": 1
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u64",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u50"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "longbow"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "knight"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u52",
+      "unitType": "keep",
+      "x": 6,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u70"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u64"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u38",
+      "targetId": "u64"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u64",
+      "cityId": "c1"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u70",
+      "targetId": "u52"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u40",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u48",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u80",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u45",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u45",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u64"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u40"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u85",
+      "x": 5,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u85",
+      "targetId": "u40"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u70"
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c2"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 5
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u70",
+      "targetId": "u52"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u86"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u45",
+      "targetId": "u85"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u48",
+      "targetId": "u86"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u23",
+      "targetId": "u85"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u80",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u87",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u70"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c4",
+      "unitType": "laborer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u85",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u85",
+      "targetId": "u45"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u68",
+      "x": 7,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u45"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u60",
+      "targetId": "u85"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u87",
+      "targetId": "u85"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u73",
+      "targetId": "u85"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u88",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u48",
+      "targetId": "u85"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u23",
+      "targetId": "u85"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u78",
+      "targetId": "u85"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u61",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u80",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u71",
+      "x": 4,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u89",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "militia"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c2"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u61"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u61"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "crossbow"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u71"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u71"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u84",
+      "x": 0,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u71"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u36",
+      "x": 10,
+      "y": 11
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u90",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 1,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u69",
+      "x": 8,
+      "y": 11
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u80",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u87",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u67",
+      "x": 3,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u73",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u67",
+      "targetId": "u31"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u78",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u78",
+      "targetId": "u38"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u73",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u56",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u56",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u48",
+      "x": 8,
+      "y": 5
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u48",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u91",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u89",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 8,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u23",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u60",
+      "x": 5,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u88",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u73"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "rifleman"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u92",
+      "targetId": "u67"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u31",
+      "targetId": "u67"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u56"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u84",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u78"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u47",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u78"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u58",
+      "x": 4,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u58",
+      "targetId": "u56"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u44",
+      "x": 8,
+      "y": 6
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u44",
+      "targetId": "u48"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u90",
+      "x": 5,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u69",
+      "x": 8,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u60",
+      "targetId": "u58"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u83",
+      "targetId": "u11"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u48",
+      "targetId": "u44"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u23",
+      "targetId": "u86"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u75",
+      "targetId": "u44"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u80",
+      "targetId": "u44"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u89",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u49",
+      "x": 7,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u49",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u88",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u91",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u87",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u93",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u94",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "militia"
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u44",
+      "targetId": "u48"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u95",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u95",
+      "targetId": "u80"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u23"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u68",
+      "x": 6,
+      "y": 6
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u23"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u91"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u91"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u92",
+      "x": 2,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u92",
+      "targetId": "u91"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 0,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u90",
+      "x": 4,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u69",
+      "x": 9,
+      "y": 10
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u43",
+      "x": 8,
+      "y": 10
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u75",
+      "targetId": "u44"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u49",
+      "targetId": "u86"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u83",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u83",
+      "cityId": "c1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u60",
+      "targetId": "u92"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u97",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u93",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u93",
+      "targetId": "u68"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c3",
+      "unitType": "archer"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u87",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u89",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u96",
+      "x": 6,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u88",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u94",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u95",
+      "x": 9,
+      "y": 6
+    },
+    {
+      "type": "SIEGE",
+      "unitId": "u95",
+      "cityId": "c3"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 2,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u92",
+      "targetId": "u60"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u84",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "rifleman"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u47",
+      "x": 2,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 3,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 8,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u69",
+      "x": 9,
+      "y": 7
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c2",
+      "unitType": "armoredcar"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u43",
+      "x": 8,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u86",
+      "targetId": "u93"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u93"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u31",
+      "targetId": "u83"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u47",
+      "targetId": "u83"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u66",
+      "x": 3,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u96"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 4,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u57",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u49",
+      "targetId": "u86"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u96",
+      "targetId": "u66"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u42",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u42",
+      "targetId": "u69"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u89",
+      "x": 7,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u88",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u97",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u82",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u87",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u87",
+      "targetId": "u95"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 4
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u94",
+      "x": 7,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u98",
+      "x": 8,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u100",
+      "x": 10,
+      "y": 7
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u100",
+      "targetId": "u87"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u65",
+      "x": 7,
+      "y": 6
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u68",
+      "targetId": "u49"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u92",
+      "x": 4,
+      "y": 1
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u92",
+      "targetId": "u96"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u95",
+      "targetId": "u42"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u31",
+      "x": 5,
+      "y": 3
+    },
+    {
+      "type": "UPGRADE",
+      "cityId": "c4"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 7,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u32",
+      "x": 8,
+      "y": 5
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u84",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u72",
+      "x": 8,
+      "y": 8
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u89"
+    },
+    {
+      "type": "BUILD",
+      "unitId": "u90",
+      "unitType": "tower",
+      "x": 5,
+      "y": 5
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u69",
+      "x": 8,
+      "y": 6
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u99",
+      "x": 9,
+      "y": 7
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u26",
+      "x": 2,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 6,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 3,
+      "y": 3
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u66",
+      "x": 5,
+      "y": 1
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u47",
+      "x": 3,
+      "y": 1
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u98",
+      "targetId": "u32"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u74",
+      "x": 10,
+      "y": 4
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u94",
+      "targetId": "u92"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u74",
+      "targetId": "u100"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u82",
+      "targetId": "u84"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u89",
+      "targetId": "u31"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u88",
+      "targetId": "u66"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u75",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u75",
+      "targetId": "u1"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u63",
+      "x": 11,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u97",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "type": "END_TURN"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u84",
+      "targetId": "u89"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u1",
+      "x": 8,
+      "y": 2
+    }
+  ]
+}

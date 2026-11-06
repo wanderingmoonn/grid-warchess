@@ -101,6 +101,29 @@ test('报告里带上了能还原开局的那一份配置', () => {
   assert.ok((report.actions ?? []).length > 10, `动作序列太短：${(report.actions ?? []).length}`);
 });
 
+test('报告里关着雾，复盘出来的也得是关着雾', () => {
+  /*
+   * 这一条是补出来的坑：`createMatch` 默认开雾（`fogDefault: true`），
+   * 而复盘原来是**照着 config 重建**、不去读 `report.fog`。
+   * 于是"训练口径的两局"（`s.fog = false`）一拖进复盘就变成开雾局：
+   * 隐身 / 潜行那几条判定只认 `s.fog`，只要这局里有这类单位，
+   * 同一串动作就会走出不一样的结果——症状是"第 N 步走不下去"，根因却是开局参数被换了。
+   */
+  assert.equal(report.fog, false, '这一局（playSome）是关雾打的');
+  const built = buildReplayFromText(text);
+  assert.ok(built.ok, built.ok ? '' : built.reason);
+  if (!built.ok) return;
+  assert.equal(built.session.stateAt(0).fog, false, '第 0 帧就该是关雾');
+  assert.equal(built.session.finalState.fog, false, '终局也还是关雾');
+
+  // 反面：老报告没有 fog 字段时，保持 createMatch 的默认（开），别把旧数据改成关雾
+  const legacy = { ...report, fog: undefined } as typeof report;
+  const old = buildReplayFromText(JSON.stringify(legacy));
+  assert.ok(old.ok, old.ok ? '' : old.reason);
+  if (!old.ok) return;
+  assert.equal(old.session.stateAt(0).fog, true, '没有 fog 字段就按默认来');
+});
+
 test('完整走回来：步数一致、终局一致、兵力一致', () => {
   const built = buildReplayFromText(text);
   assert.ok(built.ok, built.ok ? '' : built.reason);
@@ -123,6 +146,8 @@ test('逐帧能对上：第 i 帧 == 手动走 i 步', () => {
   for (const i of [0, 1, 5, 12, 13, 24, 25, 3]) {
     const frame = built.session.stateAt(i);
     let manual = createMatch(report.config!, seed);
+    // 手动这一侧也要照报告还原迷雾，否则两边比的不是同一局
+    manual.fog = report.fog === true;
     for (let k = 0; k < i; k++) {
       const r = applyAction(manual, played.actions[k]!);
       assert.ok(r.ok, `手动第 ${k + 1} 步就失败了`);
