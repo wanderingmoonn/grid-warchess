@@ -29,7 +29,6 @@ import {
   MAX_RANK,
   REALMS,
   expForRank,
-  hpGainForRank,
   totalHpBonusForRank,
 } from '../src/core/cultivation/progression.ts';
 import {
@@ -838,6 +837,13 @@ const MANUAL_CSS = `
   table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
   table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
   table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
+     那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
+     数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
+  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
+  table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
+  table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
   td.glyph {
     text-align: center;
     font-weight: 600;
@@ -2476,10 +2482,27 @@ function cultivationRules(): string {
   // 从表里找而不是写死 7，改系数时这句话不会骗人。
   const KILL_EXP_ZERO_RANK = KILL_EXP_RANK_FACTOR.findIndex((f) => f === 0);
 
-  // 「各境界对照表」：0~9 逐行跑出来
-  const rankRows = Array.from({ length: MAX_RANK + 1 }, (_, rank) => `
+  // 「各境界一览表」：13 列，表头和数据行都从这张表生成，加列时不会漏改一边。
+  //
+  // 列宽必须固定：这张表原来借用兵种总表的 .overview，而那个类把第 1 列钉成 17%、
+  // 第 2 列 7%，结果「境界」只有一个数字却占了六分之一宽，看起来宽窄不一。
+  // 这里的百分比按内容定：单个数字的列窄（境界 5%），长文本的列宽（特殊能力 14%）。
+  const RANK_COLS: Array<[string, number]> = [
+    ['境界', 5], ['修为', 8], ['名称', 6], ['生命', 9], ['护甲', 7], ['攻击', 8],
+    ['真元', 6], ['次数', 6], ['溅射', 7], ['射程', 6], ['移动', 7], ['视野', 6],
+    ['特殊能力', 19],
+  ];
+  const rankCols = RANK_COLS.map(([, w]) => `<col style="width:${w}%">`).join('');
+  const rankHead = RANK_COLS.map(([name]) => `<th>${name}</th>`).join('');
+
+  // 从 1 级开始：0 级（凡人）那行几乎全是 0，没有阅读价值。
+  // 修为列 = 升到这一境所需的累计修为，即 expForRank(rank-1)。
+  const rankRows = Array.from({ length: MAX_RANK }, (_, i) => {
+    const rank = i + 1;
+    return `
           <tr>
             <td class="name">${rank}</td>
+            <td>${expForRank(rank - 1)}</td>
             <td>${REALMS[rank]}</td>
             <td>+${totalHpBonusForRank(rank)}</td>
             <td>+${realmArmorBase(rank)}</td>
@@ -2491,19 +2514,7 @@ function cultivationRules(): string {
             <td>+${moveForRank(rank)}</td>
             <td>+${realmVisionBase(rank)}</td>
             <td>${(unlocks.get(rank) ?? []).join(' · ') || '—'}</td>
-          </tr>`).join('');
-
-  // 升级门槛：REALMS[r] → REALMS[r+1] 的累计修为
-  const thresholdLine = Array.from(
-    { length: MAX_RANK },
-    (_, r) => `${REALMS[r]} → ${REALMS[r + 1]}：${expForRank(r)}`,
-  ).join('<br />');
-
-  // 每次突破加多少血（增量口径；对照表里的「生命上限」是累计口径）
-  const hpRows = Array.from({ length: MAX_RANK }, (_, i) => {
-    const r = i + 1;
-    return `
-          <tr><td class="name">${REALMS[r - 1]} → ${REALMS[r]}</td><td>+${hpGainForRank(r)}</td></tr>`;
+          </tr>`;
   }).join('');
 
   return `
@@ -2550,31 +2561,26 @@ function cultivationRules(): string {
       </table>
       <p class="c">「单次」按攻击力 ${REF_KILL_ATK} 的目标（${REF_KILL_NAME}）计算；打更硬的敌人不会更多——系数只看你的境界，不看对面多强，但太弱的敌人直接不给。</p>
 
-      <h4>升级门槛</h4>
-      <p>下表是"从这一境突破到下一境"所需的<b>累计</b>修为（不是本境新增）：</p>
-      <div class="formula">
-        ${thresholdLine}
-      </div>
-
       <div class="callout">
         <b>境界顿悟：</b>境界提升不仅是数值的暴涨，更是对天地法则的明悟。修士达到特定境界时会自动领悟新的技能、获得新的能力——具体几级解锁什么，见下一张表的最后一列。
       </div>
 
-      <h3>各境界属性加成对照表</h3>
-      <p>除「攻击次数」外，表里都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
+      <h3>各境界一览表</h3>
+      <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
+        其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
         剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。</p>
-      <table class="overview">
-        <thead>
-          <tr>
-            <th>境界</th><th>名称</th><th>生命上限</th><th>护甲</th><th>物理攻击</th><th>真元</th>
-            <th>攻击次数</th><th>溅射半径</th><th>射程</th><th>移动力</th><th>视野</th><th>特殊能力</th>
-          </tr>
-        </thead>
-        <tbody>${rankRows}
-        </tbody>
-      </table>
-      <p class="era-meta">注：「生命上限」是从 0 级一路突破上来的累计值（一次跨多级突破按两端差算，会和逐级累计差一两点）。
-        「攻击次数」写的是总数，已含基础的 1 次。「真元」「溅射半径」见下方各自的段落。</p>
+      <div class="scroll-x">
+        <table class="rank-table">
+          <colgroup>${rankCols}</colgroup>
+          <thead>
+            <tr>${rankHead}</tr>
+          </thead>
+          <tbody>${rankRows}
+          </tbody>
+        </table>
+      </div>
+      <p class="era-meta">注：「次数」写的是总数，已含基础的 1 次。「真元」「溅射」见下方各自的段落。
+        0 级（${REALMS[0]}）没有列出：那一行几乎全是 0，只有「次数」是 1。</p>
 
       <h3>异象</h3>
       <p>修士突破时天象外泄，藏不住。带「异象」的修士（<b>${ANOMALY_MIN_RANK} 级</b>起自动获得，也就是获得它的下一次突破起）
@@ -2608,18 +2614,11 @@ function cultivationRules(): string {
       </ul>
 
       <h3>突破与生命值</h3>
-      <p>每次境界突破，生命上限按"新旧境界之差"增加一次，并按当前血量比例回血。各阶段增加量：</p>
-      <table class="overview">
-        <thead>
-          <tr><th>突破阶段</th><th>增加最大生命</th></tr>
-        </thead>
-        <tbody>${hpRows}
-        </tbody>
-      </table>
-      <p class="era-meta">注：初期境界的血量增长较为平缓，但一旦踏入化神以上，生命值将呈现爆发式增长，成为真正的战场巨兽。</p>
+      <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——
+        初期增长平缓，踏入化神以上会爆发式地涨，成为真正的战场巨兽。</p>
 
       <h3>真元（真实伤害）</h3>
-      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见对照表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
+      <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见上表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
 
       <h3>寿元与衰老</h3>
       <p>凡人只有 ${LIFESPAN_BASE} 年寿元，境界每高一级多 ${LIFESPAN_PER_RANK} 年；到 ${MAX_RANK} 级（${REALMS[MAX_RANK]}）寿元不再是限制。</p>
