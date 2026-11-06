@@ -7,7 +7,14 @@ import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
 import type { GameState } from '../../../src/core/types.ts';
 import { skillsOf } from '../../../src/core/query.ts';
-import { getExp, addExp, expForRank } from '../../../src/core/cultivation/progression.ts';
+import {
+  getExp,
+  addExp,
+  expForRank,
+  hpGainForRank,
+  totalHpBonusForRank,
+  maxHpDeltaBetween,
+} from '../../../src/core/cultivation/progression.ts';
 import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
 import { TOWER_BURST_CHARGES, TOWER_CHARGE_COST } from '../../../src/core/cultivation/skills/spirit-tower-shot.ts';
@@ -173,6 +180,33 @@ export function run() {
       assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
       assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
     }
+  });
+
+  test('生命上限：跳级与逐级相加完全一致', () => {
+    // 老写法是 floor(F(to) − F(from))，而累计值走的是 Σ floor(单级)，取整点不同。
+    // 实测 2→4 / 3→5 / 4→6 / 5→7 / 6→8 / 7→9 六档会差 1 点：
+    // 同样多的经验，一次跳两级比连升两次少 1 点血（剑气纵横一次给几百经验，会命中）。
+    // 现在统一成"逐级增量求和"，跳级必须等于分几次升。
+    for (let from = 0; from < 8; from++) {
+      const jump = maxHpDeltaBetween(from, from + 2);
+      const steps =
+        maxHpDeltaBetween(from, from + 1) + maxHpDeltaBetween(from + 1, from + 2);
+      assert.equal(jump, steps, `${from}→${from + 2} 一次跳级应该等于连升两次`);
+    }
+
+    // 累计值也必须等于逐级增量之和：灵体重生就是用累计值重置 maxHpBonus 的
+    let sum = 0;
+    for (let r = 1; r <= 9; r++) {
+      sum += hpGainForRank(r);
+      assert.equal(totalHpBonusForRank(r), sum, `rank ${r} 的累计值应等于逐级增量之和`);
+    }
+
+    // 曲线本身没被这次重构改动：单级增量仍是 8 / 10 / 17
+    assert.deepEqual(
+      [1, 2, 3].map(hpGainForRank),
+      [8, 10, 17],
+      '逐级增量不该被这次重构改动',
+    );
   });
 
   test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {

@@ -29,8 +29,8 @@ import {
   MAX_RANK,
   REALMS,
   expForRank,
-  maxHpDeltaBetween,
-  sumDeltaMaxHpUpTo,
+  hpGainForRank,
+  totalHpBonusForRank,
 } from '../src/core/cultivation/progression.ts';
 import {
   KILL_EXP_BASE,
@@ -2481,7 +2481,7 @@ function cultivationRules(): string {
           <tr>
             <td class="name">${rank}</td>
             <td>${REALMS[rank]}</td>
-            <td>+${sumDeltaMaxHpUpTo(rank)}</td>
+            <td>+${totalHpBonusForRank(rank)}</td>
             <td>+${realmArmorBase(rank)}</td>
             <td>+${realmAtkBase(rank)}</td>
             <td>${trueDamageForRank(rank)}</td>
@@ -2503,7 +2503,7 @@ function cultivationRules(): string {
   const hpRows = Array.from({ length: MAX_RANK }, (_, i) => {
     const r = i + 1;
     return `
-          <tr><td class="name">${REALMS[r - 1]} → ${REALMS[r]}</td><td>+${maxHpDeltaBetween(r - 1, r)}</td></tr>`;
+          <tr><td class="name">${REALMS[r - 1]} → ${REALMS[r]}</td><td>+${hpGainForRank(r)}</td></tr>`;
   }).join('');
 
   return `
