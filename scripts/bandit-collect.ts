@@ -127,9 +127,21 @@ await Promise.all(
   chunks.map(
     (chunk) =>
       new Promise<void>((resolve) => {
-        const child = spawn(process.execPath, ['--experimental-strip-types', ...process.argv.slice(1, 2), '--worker'], {
-          stdio: ['pipe', 'pipe', 'inherit'],
-        });
+        /*
+         * 参数必须整份传给 worker。
+         *
+         * 2026-11-06 踩过一次：这里只传了脚本路径 + `--worker`，于是 worker
+         * 全用默认值（size 12 / era 1 / level **advanced**）。后果是父进程
+         * `--level tactic` 完全没生效，而 advanced 会把三套战术屏蔽掉
+         * （见 ai.ts 的 moodFor），三组"不同战术"因此跑出了一模一样的 99:99。
+         * 连跑两轮（advanced 和 tactic）都是同一批结果，才暴露出这里。
+         */
+        const passthrough = args.filter((a) => a !== '--worker');
+        const child = spawn(
+          process.execPath,
+          ['--experimental-strip-types', process.argv[1] as string, '--worker', ...passthrough],
+          { stdio: ['pipe', 'pipe', 'inherit'] },
+        );
         let out = '';
         child.stdout.on('data', (d: Buffer) => (out += d.toString()));
         child.on('close', () => {
