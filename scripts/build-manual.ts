@@ -240,8 +240,13 @@ const GENERIC_TERMS: Term[] = [
   },
   {
     key: 'skill',
-    name: '英雄技能',
-    brief: '每回合一次的主动技，不占移动与攻击——开完还能照常行动。',
+    name: '技能',
+    // 这条原来叫「英雄技能」，只描述奇想那套"不占行动"的主动技。
+    // 现在修士的御空（耗 1 移动力）、剑气纵横（出手即定身）、
+    // 散灵台的释放灵气（耗灵石）都走同一套 UI，一句话概括不了，
+    // 所以只说"代价各不相同，看面板"。
+    brief: '兵种自带的主动技。代价各不相同（有的占移动、有的耗资源、有的能连发），'
+      + '能不能用、为什么不能用，见面板上那颗按钮。',
   },
   {
     key: 'summoned-only',
@@ -302,7 +307,7 @@ function resetTerms(): void {
   termSink = [];
 }
 
-/** 运行时才知道的词条（英雄技能这类：每条都是兵种自己带的，没有全局表） */
+/** 运行时才知道的词条（技能这类：每条都是兵种自己带的，没有全局表） */
 function dynamicTerm(key: string, name: string, brief: string, more?: string): string {
   if (!TERM_BY_KEY.has(key)) TERM_BY_KEY.set(key, { key, name, brief, more });
   return noteTerm(key);
