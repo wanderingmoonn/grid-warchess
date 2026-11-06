@@ -532,7 +532,7 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
     }
   }
   if (rows.length === 0) return '';
-  return `<div class="card-title" style="margin-top:14px">英雄技能</div>
+  return `<div class="card-title" style="margin-top:14px">技能</div>
     <div class="recruit-list">${rows.join('')}</div>
     <div class="hint" style="margin-top:8px">技能不占行动，每个英雄每回合最多一次。${
       anyCharge ? '带「N/M 发」的是充能型：一池攒着用，用完还要等回充。' : ''

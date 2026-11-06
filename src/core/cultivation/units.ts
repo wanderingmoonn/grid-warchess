@@ -1,7 +1,9 @@
 // 单位
 
 import type { UnitTypeDef } from '../types.ts';
-import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL } from './skills.ts';
+// 技能的 SkillDef 和数值常量都在 skills/ 下：一个技能一个文件。
+// 这里只负责把它们挂到兵种身上，不重复定义。
+import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { GOLD } from '../resources.ts';
@@ -93,10 +95,6 @@ export const DEACON: UnitTypeDef = {
 
 /** 灵矿每相邻一座高山，额外产出多少灵石（钩子在 hooks.ts，规则书要引用） */
 export const MINE_MOUNTAIN_STONE_BONUS = 2;
-/** 散灵台「释放灵气」一次给几次攻击次数 */
-export const TOWER_BURST_CHARGES = 3;
-/** 散灵台「释放灵气」每次耗多少灵石 */
-export const TOWER_CHARGE_COST = 5;
 
 export const SPIRIT_TOWER: UnitTypeDef = {
   id: UNIT_IDS.SPIRIT_TOWER,
@@ -115,16 +113,7 @@ export const SPIRIT_TOWER: UnitTypeDef = {
   vision: 5,
   autoAttack: true,
   burst: 0,
-  skills: [
-    {
-      id: 'tower-charge',
-      name: '释放灵气',
-      summary: `充能：本回合获得 ${TOWER_BURST_CHARGES} 次攻击次数，消耗 ${TOWER_CHARGE_COST} 灵石`,
-      effect: 'spirit-tower-shot',
-      cooldown: 0,
-      multiCast: false, // 一回合只能开一次
-    }
-  ]
+  skills: [TOWER_CHARGE_SKILL]
 };
 
 export const SPIRIT_FIELD: UnitTypeDef = {

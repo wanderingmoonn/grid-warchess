@@ -10,6 +10,11 @@ import { skillsOf } from '../../../src/core/query.ts';
 import { getExp } from '../../../src/core/cultivation/progression.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
+import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
+import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
+import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
+import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
+import { SKILL_EFFECTS } from '../../../src/core/skill-hooks.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -447,6 +452,45 @@ export function run() {
     assert.ok(line.includes('护甲 +119'), `护甲应为 119：${line}`);
     assert.ok(line.includes('射程 +4'), `射程应为 4：${line}`);
     assert.ok(line.includes('神识 +9'), `神识应为 9：${line}`);
+  });
+
+  // ── 守卫：把"漏登记"这一类 bug 变成红灯 ────────────────
+  //
+  // 这个包反复踩同一个形状：某个东西在 A 处定义了、B 处没登记，于是它安静地
+  // 永远不生效——灵矿造不出来（执事没进包）、散灵台灰显失效（键名对不上）都是。
+  // 下面这几条断言不测玩法，只测"表和表之间对得上"。
+  test('守卫：兵种 id / builds / 技能实现 / 能力 id 全部对得上', () => {
+    const pack = CULTIVATION_PACK;
+    const ids = new Set(Object.values(UNIT_IDS));
+    const inPack = new Set((pack.units ?? []).map((u) => u.id));
+    const abilityIds = new Set((pack.abilities ?? []).map((a) => a.id));
+
+    for (const u of pack.units ?? []) {
+      assert.ok(ids.has(u.id), `${u.name} 的 id「${u.id}」没登记进 UNIT_IDS`);
+
+      for (const b of u.builds ?? []) {
+        assert.ok(inPack.has(b), `${u.name} 要建的「${b}」不在包里——就是灵矿那个 bug 的形状`);
+      }
+      for (const sk of u.skills ?? []) {
+        assert.ok(
+          SKILL_EFFECTS[sk.effect],
+          `${u.name} 的技能「${sk.name}」指向的 effect「${sk.effect}」没有实现`,
+        );
+      }
+      for (const id of u.abilities ?? []) {
+        assert.ok(abilityIds.has(id), `${u.name} 的能力「${id}」不在 CULTIVATION_ABILITIES 里`);
+      }
+    }
+
+    // 反向：登记了 id 却没进包 = 这东西在游戏里永远出不来（执事当初就是这样）
+    for (const id of ids) {
+      assert.ok(inPack.has(id), `UNIT_IDS 里的「${id}」没进 CULTIVATION_PACK.units，造不出来`);
+    }
+
+    // 升级自动领悟的技能也要有实现
+    for (const { skill } of CULTIVATOR_SKILL_UNLOCKS) {
+      assert.ok(SKILL_EFFECTS[skill.effect], `升级领悟的「${skill.name}」没有实现`);
+    }
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

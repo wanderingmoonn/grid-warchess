@@ -2988,7 +2988,7 @@ await checkAsync('换一局之后缩放必须回到「适应」，而且还能�
   assert.equal(Number.parseFloat(board.style.width), 646, '再缩回去');
 });
 
-check('英雄技能：面板列出技能，冷却中的置灰', () => {
+check('技能：面板列出技能，冷却中的置灰', () => {
   const st = createMatch(
     {
       size: 12,
@@ -3026,7 +3026,10 @@ check('英雄技能：面板列出技能，冷却中的置灰', () => {
     });
 
   paint();
-  assert.ok(host.innerHTML.includes('英雄技能'), '英雄详情里应该有一块技能菜单');
+  // 标题从「英雄技能」改成「技能」：这套框架是奇想的英雄技能演化来的，
+  // 但修士、散灵台也用同一套 UI，给它们挂个「英雄」是错的。
+  assert.ok(!host.innerHTML.includes('英雄技能'), '不该再出现「英雄技能」');
+  assert.ok(host.innerHTML.includes('>技能</div>'), '单位详情里应该有一块技能菜单');
   const btn = host.querySelector<HTMLElement>('[data-act="hero-skill"]');
   assert.ok(btn, '应该有技能按钮');
   assert.equal(btn!.dataset.skill, 'throw-axe', '矮人王的技能是投斧');

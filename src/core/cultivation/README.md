@@ -14,10 +14,10 @@
 | `identity.ts` | **身份判定器**。判断谁是修士、灵体、剑修。 | 不依赖本包其他任何文件。**兵种 id 的唯一来源**（`UNIT_IDS`）——`units.ts` 的 `id:` / `builds:` 也引用它，任何地方都不许再写字面量。 |
 | `progression.ts` | **境界/经验/寿元核心**。管升级、降级、寿元。 | **它不认识技能！** 升级时只通过 `onRankUp` 广播事件。 |
 | `stats.ts` | **属性计算器**。纯数学函数，按境界算攻/防/射程/次数等加成。 | 无副作用。**所有数值规则（如倍率、公式）的“单一真相”必须放这里。** |
-| `units.ts` / `skills.ts` | **纯静态数据**。兵种、技能的定义配置。 | 只有数据，没有逻辑。 |
-| `abilities/` | **能力实现**。每个能力一个文件，`index.ts` 负责统一导出并组装成数组。 | 包含效果型或光环型逻辑（如 `spirit-aura.ts`）。 |
-| `skill-effects.ts` | **技能执行逻辑**。ready check、效果执行、预览计算。 | 模块加载时 `registerSkillEffect` 自注册副作用。 |
-| `unlocks.ts` | **解锁系统**。分「机制层」和「触发源层」。 | 模块加载时 `onRankUp` 自注册副作用。详见第 3 节。 |
+| `units.ts` | **纯静态数据**。兵种的定义配置。 | 只有数据。技能的 `SkillDef` 从 `skills/` 取，别在这里内联。 |
+| `skills/` | **一个技能一个文件**：数值常量 + `SkillDef` + 就绪检查 + 效果 + 预览，全在一个文件里。 | `skills/index.ts` 负责 import 全部（触发注册）并汇总导出。**禁止 import `../units.ts`**，见第 2 节。 |
+| `abilities/` | **能力实现**。每个能力一个文件，`index.ts` 统一导出并组装成数组。 | 含效果型/光环型逻辑（如 `spirit-aura.ts`）。`unlocks.ts` 在这里，负责能力解锁。 |
+| `skills/unlocks.ts` | **技能解锁**。`learnSkill` + 技能触发表 + `onRankUp` 注册。 | 和能力解锁对称。详见第 4 节。 |
 | `hooks.ts` | **事件钩子**。`onUnitKilled`、`modifyDamage` 等 `ExpansionHooks` 的集合。 | 只放引擎回调，不含“给本包内部调用的 API”。 |
 | `panel.ts` | **UI 面板拼接**。拼成给玩家看的字符串。 | 纯查询。**禁止硬编码数值，必须引用 `stats.ts` 的常量。** |
 
@@ -30,14 +30,21 @@ identity.ts（不依赖本包任何文件）
     ↑
 progression.ts / stats.ts（状态与数学，不认识技能/能力）
     ↑
-unlocks.ts / skill-effects.ts / hooks.ts / panel.ts（业务逻辑）
+skills/*.ts  abilities/*.ts（每个技能/能力自己的数值与实现）
+    ↑
+skills/unlocks.ts  abilities/unlocks.ts  hooks.ts  panel.ts（业务逻辑）
     ↑
 cultivation-packs.ts（组装车间，唯一对外入口）
 ```
 
 规则：**箭头只能向上指，底层永远不 import 上层。**
 - `progression.ts` 绝对不允许 import 技能/能力。
-- `skill-effects.ts` 要查属性，只能 import `stats.ts`，**绝不能** import `hooks.ts`。
+- `skills/*.ts` 要查属性，只能 import `stats.ts`，**绝不能** import `hooks.ts`。
+
+⚠️ **最容易踩的一条环**：`units.ts` 要从 `skills/index.ts` 取 `SkillDef`，
+所以 `skills/` 下的文件**一律不许 import `../units.ts`**。
+需要"散灵台要花 5 灵石"这类数值，就写在技能文件自己头上，让 `units.ts` 反过来取。
+Node 的 ESM 环是**运行时**才炸（`undefined` 或 TDZ），`tsc` 看不出来。
 
 ## 3. 核心设计约定
 
@@ -54,21 +61,35 @@ cultivation-packs.ts（组装车间，唯一对外入口）
 
 ## 4. 解锁系统：机制层 vs 触发源层
 
-`unlocks.ts` 内部刻意分两层：
-- **机制层（对外公开）**：`learnSkill`（学技能）、`grantAbility`（获能力）。自带幂等判断和战报日志。
-- **触发源层（文件私有）**：`onRankUp` + 两张 `*_UNLOCKS` 表。仅处理升级。
+解锁拆成两个对称的文件，各自注册自己的 `onRankUp`：
 
-**如果要加一种新途径（如“读秘籍”），绝不要改触发源层！** 应该在 `skill-effects.ts` 里直接调用 `learnSkill`。
+| | 文件 | 机制层（对外公开） | 触发表 |
+|---|---|---|---|
+| 技能 | `skills/unlocks.ts` | `learnSkill` | `CULTIVATOR_SKILL_UNLOCKS` |
+| 能力 | `abilities/unlocks.ts` | `grantAbility` | `CULTIVATOR_ABILITY_UNLOCKS` |
+
+两边都是：
+- **机制层（对外公开）**：自带幂等判断，返回 `true` 表示"这次真的新获得了"。
+- **触发源层（文件私有）**：`onRankUp` + 那张 `*_UNLOCKS` 表，仅处理升级。
+
+两张表都 **导出** 了——规则书那张"各境界对照表"的「特殊能力」一列直接从它们生成。
+不导出的话，手册里那句"2 级解锁御空"就只能手打，改了门槛两边不一致。
+
+**如果要加一种新途径（如“读秘籍”），绝不要改触发源层！** 在那个技能的实现里直接调用 `learnSkill`。
 
 ## 5. 常见任务指引
 
-### 5.1 新增一个“升级自动领悟”的技能
-1. `skills.ts`：加数据。
-2. `skill-effects.ts`：加执行逻辑。
-3. `unlocks.ts`：在 `CULTIVATOR_SKILL_UNLOCKS` 加一行。
+### 5.1 新增一个技能（90% 的情况只看这一条）
+1. 在 `skills/` 下新建 `my-skill.ts`：数值常量 + `SkillDef` + `registerSkillReadyCheck` + `registerSkillEffect`（+ 需要预览就 `registerSkillPreview`）。**四样放同一个文件**。
+2. 在 `skills/index.ts` 里加一行 `export ... from './my-skill.ts'` —— 这一行同时负责"触发注册"和"给 `units.ts` 取用"。
+3. 要挂在兵种身上，就去 `units.ts` 的 `skills: [...]` 里加它。
+4. 要让"升级自动领悟"，去 `skills/unlocks.ts` 的 `CULTIVATOR_SKILL_UNLOCKS` 加一行。
+5. 改完跑 `npm run manual`：规则书的对照表会自动多出这一行。
+
+**别做的**：不要在 `units.ts` 里内联 `SkillDef`（散灵台当初就是内联的，后来不得不搬出来）；不要新建 `*effects.ts` 之类的集中注册表（那就是拆分前的老结构）。
 
 ### 5.2 新增一种“非升级”的解锁途径
-1. 在 `skill-effects.ts` 或其他监听里，直接 `import { learnSkill } from './unlocks.ts'` 并调用。
+1. 在那个技能的实现里，直接 `import { learnSkill } from './unlocks.ts'` 并调用。
 2. **不要**修改 `unlocks.ts` 的触发表。
 
 ### 5.3 新增属性计算或修改公式
@@ -81,13 +102,18 @@ cultivation-packs.ts（组装车间，唯一对外入口）
 `_resetRankUpListenersForTest()`（来自 `progression.ts`）。
 
 ### 5.5 注册副作用（极度关键）
-`skill-effects.ts` 和 `unlocks.ts` 依赖模块加载时自注册。
-**如果你新建了包含顶层副作用的文件，必须在 `cultivation-packs.ts` 里 import 一次，否则静默失效。**
+技能和能力都靠**模块加载时自注册**（`registerSkillEffect`、`onRankUp`）。
+**新建了带顶层副作用的文件，必须让它被 import 到一次，否则静默失效。**
+
+现在的链路是：`cultivation-packs.ts` → `skills/index.ts` → 每个技能文件 + `skills/unlocks.ts`；
+能力那一侧由 `abilities/index.ts` 统一带进来（它 `export * from './unlocks.ts'`）。
+所以你只要在对应的 `index.ts` 里加一行 export，就不会漏。
 
 ### 5.6 新增一个能力（含光环）
 1. 在 `cultivation/abilities/` 下新建文件（如 `my-aura.ts`），编写并 `export` 能力定义。
 2. 在 `cultivation/abilities/index.ts` 中 `import` 它、`export *` 它，并加入 `CULTIVATION_ABILITIES` 数组。
 3. 在 `units.ts` 中给对应兵种的 `abilities: [...]` 里加上该能力的 ID。
+4. 要让"升级自动获得"，去 `abilities/unlocks.ts` 的 `CULTIVATOR_ABILITY_UNLOCKS` 加一行。
 
 ## 6. 测试规范（给 AI 和开发者的红线）
 

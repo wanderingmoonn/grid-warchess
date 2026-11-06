@@ -1531,7 +1531,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     const heroMove = u.heroBuff?.moveBonus ?? 0;
     if (heroMove !== 0) {
       moveNow += heroMove;
-      moveItems.push({ label: '英雄技能', delta: heroMove });
+      moveItems.push({ label: '技能', delta: heroMove });
     }
     for (const [key, val] of Object.entries(u.status ?? {})) {
       if (typeof val !== 'number' || val <= 0) continue;
@@ -1593,7 +1593,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     rangeNow = 1;
   } else {
     if (u.heroBuff?.range !== undefined && u.heroBuff.range !== rangeBase) {
-      rangeItems.push({ label: '英雄技能', delta: u.heroBuff.range - rangeBase });
+      rangeItems.push({ label: '技能', delta: u.heroBuff.range - rangeBase });
       rangeNow = u.heroBuff.range;
     }
     for (const e of activeExpansions(s)) {

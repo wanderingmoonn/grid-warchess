@@ -61,12 +61,10 @@ import {
   SPIRIT_REBIRTH_HP_RATIO,
   SPIRIT_REBIRTH_RANK_DROP,
   sweepReachForRank,
-} from '../src/core/cultivation/skills.ts';
+} from '../src/core/cultivation/skills/index.ts';
 import { SPIRIT_HP_BONUS_KEEP } from '../src/core/cultivation/abilities/spirit-ascension.ts';
-import {
-  CULTIVATOR_ABILITY_UNLOCKS,
-  CULTIVATOR_SKILL_UNLOCKS,
-} from '../src/core/cultivation/unlocks.ts';
+import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
+import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
 import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';

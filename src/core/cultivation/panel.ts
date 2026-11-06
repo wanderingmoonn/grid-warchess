@@ -14,7 +14,7 @@ import {
   realmRangeBase,
   realmVisionBase,
 } from './stats.ts';
-import { getSwordSweepReach } from './skills.ts';
+import { sweepReachForRank } from './skills/index.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from './abilities/spirit-aura.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
@@ -43,7 +43,7 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 
 	const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
 	if (hasSwordSweep) {
-	const reach = getSwordSweepReach(state, unit);
+	const reach = sweepReachForRank(getRank(unit));
 	lines.push(`剑气纵横：向指定方向挥出 ${reach} 格直线剑气，伤害受境界加成`);
 	}
 
