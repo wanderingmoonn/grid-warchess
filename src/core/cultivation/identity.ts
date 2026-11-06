@@ -69,6 +69,16 @@ export function isSpirit(u: Unit): boolean {
  */
 export const SPIRIT_ASCENSION_RANK = 4;
 
+/**
+ * 「异象」的能力 id。
+ *
+ * 放在 identity.ts 而不是 abilities/anomaly.ts，是因为 **progression.ts 要用它**：
+ * 突破战报公开与否，取决于"身上有没有这个标记"。而 progression 比 abilities
+ * 更底层，反过来 import 会成环。这里只放一个字符串 id——progression 只问
+ * "有没有"，不知道异象是什么、怎么生效。
+ */
+export const ANOMALY_ABILITY_ID = 'anomaly';
+
 /** 未来魂修集合：化灵后不吃削弱 */
 const SOUL_MASTER_IDS = new Set<string>();
 

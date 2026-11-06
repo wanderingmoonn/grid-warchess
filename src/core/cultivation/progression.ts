@@ -1,7 +1,7 @@
 // 境界、经验、寿元、生命
 
 import type { GameState, Unit } from '../types.ts';
-import { SPIRIT_ASCENSION_RANK, isSwordCultivatorType } from './identity.ts';
+import { ANOMALY_ABILITY_ID, SPIRIT_ASCENSION_RANK, isSwordCultivatorType } from './identity.ts';
 
 // --- 升级事件监听机制 ---
 type RankUpListener = (u: Unit, s: GameState) => void;
@@ -211,11 +211,27 @@ export function addExp(u: Unit, s: GameState, amount: number): void {
       }
     }
 
+    /*
+     * 突破战报默认只给自己看——"我升了一级"是对面没理由知道的事。
+     *
+     * 例外是「异象」：那个能力的效果就是把位置暴露给对面，所以带着它的修士
+     * 突破时，这条战报必须公开——不然对面只看见地图上亮了一格，却不知道
+     * 那是"有人突破了"，还是别的东西。
+     *
+     * 这里只问"身上有没有这个标记"，不知道异象是什么、怎么生效（那在
+     * abilities/anomaly.ts）。用 id 字符串而不是 import 那个模块，是因为
+     * progression 比 abilities 底层，反过来 import 会成环。
+     *
+     * 时序上有个细节：0→1 那次突破时，异象是刚在 rankUp 监听里发给它的，
+     * 那一刻 extraAbilities 还没有它，所以战报不公开——和"异象从下一次
+     * 突破才点亮"的口径一致（见 anomaly.ts 文件头）。
+     */
+    const hasAnomaly = (u.extraAbilities ?? []).includes(ANOMALY_ABILITY_ID);
     s.log.push({
       turn: s.turn,
       player: u.owner,
       text: `${s.unitTypes[u.type]?.name ?? u.type} 突破至 ${REALMS[newRank]} 期！`,
-      open: true,
+      ...(hasAnomaly ? { open: true } : {}),
     });
     for (const fn of rankUpListeners) {
       fn(u, s);

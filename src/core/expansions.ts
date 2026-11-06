@@ -286,6 +286,21 @@ export interface ExpansionHooks {
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
   modifyVision?: (c: VisionCtx) => number;
+  /**
+   * 纯函数：这个玩家此刻被**强行点亮**的格子（格索引数组）。
+   *
+   * 和 `modifyVision` 分工不同：那个改的是"我的兵能看多远"，
+   * 这个改的是"有些地方我本来不该看见，但现在看见了"。
+   * 异象、照明弹、侦察机都是这一类。
+   *
+   * 这个钩子挂在 `visibleTilesOf` 里，所以**规则层和 AI 一起认**：
+   * 被点亮的格子，敌方不但看得见，还能据此寻路、开火、判断威胁圈。
+   * 想只改画面不影响决策，就别用这个钩子（那是 fog.ts 的事）。
+   *
+   * 必须是纯函数：视图渲染、记忆刷新、AI 推演都会反复调它。
+   * 返回的是格索引（`y * w + x`），不是坐标对——调用方直接往 Set 里塞。
+   */
+  extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
   /** 纯函数：修正攻击范围 */
   modifyRange?: (c: RangeCtx) => number;
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */

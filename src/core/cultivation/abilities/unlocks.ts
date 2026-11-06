@@ -8,7 +8,8 @@
  */
 import type { GameState, Unit } from '../../types.ts';
 import { getRank, onRankUp } from '../progression.ts';
-import { SPIRIT_ASCENSION_RANK } from '../identity.ts';
+import { ANOMALY_ABILITY_ID, SPIRIT_ASCENSION_RANK } from '../identity.ts';
+import { ANOMALY_MIN_RANK, ANOMALY_NAME } from './anomaly.ts';
 
 /**
  * 给单位挂上一个能力。已经有的就不动。
@@ -23,6 +24,8 @@ export function grantAbility(u: Unit, abilityId: string): boolean {
 
 /** 境界达到对应等级时自动获得的能力（导出给规则书用） */
 export const CULTIVATOR_ABILITY_UNLOCKS: Array<{ rank: number; abilityId: string; name: string }> = [
+  // 异象：1 级就挂上——它是**负面**能力，越早越好，正是给对手的劫杀理由
+  { rank: ANOMALY_MIN_RANK, abilityId: ANOMALY_ABILITY_ID, name: ANOMALY_NAME },
   { rank: SPIRIT_ASCENSION_RANK, abilityId: 'spirit-ascension', name: '灵体道果' },
 ];
 
