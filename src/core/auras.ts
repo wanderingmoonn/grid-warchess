@@ -7,7 +7,7 @@ import type {
   AuraSpec
 } from './ability-hooks.ts';
 import { distBetweenUnits } from './query.ts';
-import { aurasOf } from './ability-registry.ts';
+import { aurasOf, hooksFor } from './ability-registry.ts';
 
 /** 本局兵种表。和 rules.ts 的 utype 同一口径，这里不抛新错。 */
 function defOf(s: GameState, u: Unit): UnitTypeDef {
@@ -18,7 +18,22 @@ function defOf(s: GameState, u: Unit): UnitTypeDef {
 
 /** 合并 extraAbilities 的 aurasOf，和 rules.ts 原来的私有版本同一口径 */
 export function aurasOfUnit(s: GameState, u: Unit): AuraSpec[] {
-  return aurasOf(defOf(s, u), u.extraAbilities);
+  const def = defOf(s, u);
+  const out = aurasOf(def, u.extraAbilities);
+  /*
+   * 动态光环：半径/数值按"此刻场上有谁"现算（杀伐阵随相邻修士变半径）。
+   *
+   * 只在这里合并，所以攻击力面板、AI 威胁圈、实际伤害拿到的都是同一份——
+   * 各写一遍必然会出现"面板写着 +10%、打出来是 +0"那种偏差。
+   */
+  for (const h of hooksFor(def, u.extraAbilities)) {
+    if (!h.auraDynamic) continue;
+    const extra = h.auraDynamic({ state: s, self: u });
+    if (!extra) continue;
+    if (Array.isArray(extra)) out.push(...extra);
+    else out.push(extra);
+  }
+  return out;
 }
 
 /**
@@ -70,6 +85,8 @@ const ATTR_LABELS = {
   foeAtk: '被威吓',
   foeAtkPct: '虚咒',
   foeArmor: '咒域',
+  allyAtkPct: '攻击加成',
+  foeMovePct: '迟缓',
 } as const;
 
 export interface AuraSource {
@@ -183,4 +200,49 @@ export function curseSourcesOf(s: GameState, unit: Unit): AuraSource[] {
   const penalty = curseAuraPenaltyOf(s, unit);
   if (penalty === 0) return [];
   return [{ label: ATTR_LABELS.foeArmor, value: penalty, sourceId: '' }];
+}
+
+/**
+ * 盖在 unit 身上的**友军攻击百分比**加成：取最强的一条，不叠乘。
+ *
+ * 返回来源是为了面板能写清"这 +10% 是谁给的"。两个杀伐阵重叠时
+ * 仍然只有一个来源生效——和虚咒（foeAtkPct）同一条规矩。
+ */
+export function allyAtkPctOf(s: GameState, unit: Unit): AuraSource | null {
+  let best: AuraSource | null = null;
+  for (const ally of s.units) {
+    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
+    const gap = distBetweenUnits(s, ally, unit);
+    for (const a of aurasOfUnit(s, ally)) {
+      const pct = a.allyAtkPct;
+      if (!pct || pct <= 0) continue;
+      if (gap > (a.radius ?? 1)) continue;
+      if (!best || pct > best.value) {
+        best = { label: a.label ?? ATTR_LABELS.allyAtkPct, value: pct, sourceId: ally.id };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 盖在 unit 身上的**敌军移动力留存率**：取最小（最强的那个封锁），没有就是 1。
+ *
+ * 和 allyAtkPctOf 相反，这里比较的是"越小越强"，所以不能共用同一个比较器。
+ */
+export function foeMovePctOf(s: GameState, unit: Unit): AuraSource {
+  let best: AuraSource = { label: ATTR_LABELS.foeMovePct, value: 1, sourceId: '' };
+  for (const foe of s.units) {
+    if (foe.owner === unit.owner) continue;
+    const gap = distBetweenUnits(s, foe, unit);
+    for (const a of aurasOfUnit(s, foe)) {
+      const pct = a.foeMovePct;
+      if (!pct || pct >= 1) continue;
+      if (gap > (a.radius ?? 1)) continue;
+      if (pct < best.value) {
+        best = { label: a.label ?? ATTR_LABELS.foeMovePct, value: pct, sourceId: foe.id };
+      }
+    }
+  }
+  return best;
 }

@@ -157,3 +157,103 @@ export const SPIRIT_MINE: UnitTypeDef = {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
   },
 };
+
+// ── 阵法（2026-11-06）──────────────────────────────
+//
+// 阵法是**建筑**：不能动、会被打、会挡路。它们不靠攻击力吃饭，而是给周围的
+// 单位改数值，所以 atk 一律写 0——写个 5 反而会让玩家以为它能打。
+//
+// 建造它们的不是仆役，是专门的阵师；阵师自己也吃灵石造价，因为摆阵是修真的事，
+// 不该用金币从本体经济里买。
+//
+// 时代门槛靠 builds 白名单递增表达：三代的阵师只会杀伐阵，四代才会封印阵。
+
+export const FORMATION_MASTER: UnitTypeDef = {
+  id: UNIT_IDS.FORMATION_MASTER,
+  name: '阵师',
+  short: '阵',
+  era: 3,
+  category: 'builder',
+  cost: 120,
+  costRes: { 'spirit-stone': 6 },
+  move: 2,
+  atk: 6,
+  armor: 2,
+  maxHp: 24,
+  range: 1,
+  vision: 2,
+  builds: [UNIT_IDS.KILL_FORMATION],
+  buildPower: 10,
+};
+
+export const FORMATION_MASTER_2: UnitTypeDef = {
+  id: UNIT_IDS.FORMATION_MASTER_2,
+  name: '大阵师',
+  short: '阵',
+  era: 4,
+  category: 'builder',
+  cost: 170,
+  costRes: { 'spirit-stone': 9 },
+  move: 2,
+  atk: 8,
+  armor: 3,
+  maxHp: 30,
+  range: 1,
+  vision: 3,
+  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION],
+  buildPower: 14,
+};
+
+export const FORMATION_MASTER_3: UnitTypeDef = {
+  id: UNIT_IDS.FORMATION_MASTER_3,
+  name: '天阵师',
+  short: '阵',
+  era: 5,
+  category: 'builder',
+  cost: 220,
+  costRes: { 'spirit-stone': 12 },
+  move: 2,
+  atk: 10,
+  armor: 4,
+  maxHp: 36,
+  range: 1,
+  vision: 3,
+  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION],
+  buildPower: 18,
+};
+
+export const KILL_FORMATION: UnitTypeDef = {
+  id: UNIT_IDS.KILL_FORMATION,
+  name: '杀伐阵',
+  short: '杀',
+  era: 3,
+  category: 'building',
+  cost: 80,
+  costRes: { 'spirit-stone': 8 },
+  buildCost: 14,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 30,
+  range: 1,
+  vision: 2,
+  abilities: ['formation-kill'],
+};
+
+export const SEAL_FORMATION: UnitTypeDef = {
+  id: UNIT_IDS.SEAL_FORMATION,
+  name: '封印阵',
+  short: '封',
+  era: 4,
+  category: 'building',
+  cost: 100,
+  costRes: { 'spirit-stone': 12 },
+  buildCost: 16,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 34,
+  range: 1,
+  vision: 2,
+  abilities: ['formation-seal'],
+};

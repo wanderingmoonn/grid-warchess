@@ -69,6 +69,13 @@ import {
 } from '../src/core/cultivation/skills/index.ts';
 import { SPIRIT_HP_BONUS_KEEP } from '../src/core/cultivation/abilities/spirit-ascension.ts';
 import { ANOMALY_MIN_RANK } from '../src/core/cultivation/abilities/anomaly.ts';
+import {
+  KILL_AURA_BASE_PCT,
+  KILL_AURA_RADIUS,
+  KILL_AURA_RADIUS_EMPOWERED,
+  killAuraBonusOf,
+} from '../src/core/cultivation/abilities/formation-kill.ts';
+import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from '../src/core/cultivation/abilities/formation-seal.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -2612,6 +2619,20 @@ function cultivationRules(): string {
         <li><b>伤害效果</b>：对路径上的所有敌人和城市造成一次完整伤害，境界加成按 ${SWORD_SWEEP_MUL} 倍结算。</li>
         <li><b>修为获取</b>：挥剑本身 +${SWEEP_EXP_CAST} 修为（落空也给），每命中一个目标（人或城）再 +${SWEEP_EXP_PER_HIT}。</li>
       </ul>
+
+      <h3>阵法</h3>
+      <p>阵法是<b>建筑</b>：不能移动、会被摧毁、会挡路。它们的价值全在光环上，所以攻击力一律为 0，
+        靠身边的单位打出伤害。建造阵法要专门的阵师，阵师自己也要耗灵石。</p>
+      <ul>
+        <li><b>杀伐阵</b>：半径 ${KILL_AURA_RADIUS} 内友军攻击 <b>×${(1 + KILL_AURA_BASE_PCT).toFixed(1)}</b>。
+          身边站着修士时，半径扩到 <b>${KILL_AURA_RADIUS_EMPOWERED}</b>，加成变成
+          <b>1 + (守阵者境界 + 1) ÷ 10</b>——0 级修士守着仍是 ×${(1 + killAuraBonusOf(0)).toFixed(1)}，
+          ${MAX_RANK} 级修士守着是 ×${(1 + killAuraBonusOf(MAX_RANK)).toFixed(1)}。</li>
+        <li><b>封印阵</b>：半径 ${SEAL_AURA_RADIUS} 内敌军移动力 <b>×${SEAL_MOVE_PCT}</b>（向下取整）。
+          只剩 1 格移动力的单位会被完全封住——走不了，但<b>还能攻击</b>。</li>
+      </ul>
+      <p class="era-meta">注：多个杀伐阵重叠不叠乘，取最强的一条；「守阵者」取相邻修士里<b>境界最高</b>的那个，
+        不是按人数算——一堆 0 级修士围上来不该比一个大修士更强。</p>
 
       <h3>突破与生命值</h3>
       <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——

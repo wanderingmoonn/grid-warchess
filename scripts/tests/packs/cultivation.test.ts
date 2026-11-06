@@ -726,6 +726,97 @@ export function run() {
     assert.ok(run(false, 6) <= 6, '炼气士常规路线封顶 6 级');
   });
 
+  // ── 阵法（2026-11-06）──────────────────────────────────
+  //
+  // 杀伐阵是引擎里第一个**按比例**加攻击的光环（以前只有加法 +2）；
+  // 封印阵是第一个能把移动力压到 0 的光环。两者都要求"面板和实际同一个数"。
+
+  test('杀伐阵：半径 2 内友军攻击 +10%，面板与实际同源', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-kill-formation', 5, 5);
+    const mate = place2(s, 'A', 'militia', 7, 5); // 距离 2：在半径内
+    const far = place2(s, 'A', 'militia', 8, 5); // 距离 3：半径外
+
+    const st = effectiveStats(s, mate);
+    assert.equal(st.atk, Math.round(13 * 1.1), '13 × 1.1 = 14.3 → 四舍五入 14');
+    assert.ok(
+      st.atkItems.some((i) => i.label === '杀伐阵'),
+      '面板要写清这几点攻击是谁加的',
+    );
+    assert.equal(effectiveStats(s, far).atk, 13, '半径外不该吃加成');
+  });
+
+  test('杀伐阵：有修士守阵时半径扩到 4，加成按守阵者的境界算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-kill-formation', 5, 5);
+    const mate = place2(s, 'A', 'militia', 8, 5); // 距离 3
+
+    // 没人守阵：半径 2，够不到距离 3
+    assert.equal(effectiveStats(s, mate).atk, 13, '没有修士时只有半径 2');
+
+    // 贴一个 3 级修士：半径变 4，加成 1 + (3+1)/10 = 1.4
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 6);
+    setCultivationExp(qi, expForRank(2));
+    assert.equal(cultivationRank(qi), 3, '前置：这个修士应该是 3 级');
+    assert.equal(
+      effectiveStats(s, mate).atk,
+      Math.round(13 * 1.4),
+      '守阵修士的境界决定加成，不是人数',
+    );
+  });
+
+  test('杀伐阵：两个重叠不叠乘，取最强的一条', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-kill-formation', 5, 5);
+    place2(s, 'A', 'cultivation-kill-formation', 5, 6);
+    const mate = place2(s, 'A', 'militia', 7, 5);
+
+    assert.equal(
+      effectiveStats(s, mate).atk,
+      Math.round(13 * 1.1),
+      '两个 +10% 仍然是 +10%——叠乘会让"多摆一座"变成乘法收益',
+    );
+  });
+
+  test('封印阵：半径 3 内移动力减半向下取整，只剩 1 格会被完全封住', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    place2(s, 'A', 'cultivation-seal-formation', 5, 5);
+    const foe = place2(s, 'B', 'militia', 7, 5); // 距离 2：在半径 3 内
+    const far = place2(s, 'B', 'militia', 9, 5); // 距离 4：半径外
+
+    assert.equal(movePower(s, foe), 1, '移动力 2 → floor(1) = 1');
+    assert.equal(movePower(s, far), 2, '半径外不受影响');
+
+    // 移动力只有 1 的单位：floor(0.5) = 0，真的走不动。
+    // 这条是"保底 1 必须排在光环之前"的直接证据——排错了会永远封不住。
+    s.unitTypes.militia.move = 1;
+    assert.equal(movePower(s, foe), 0, '1 → 0，封住');
+    assert.equal(movePower(s, far), 1, '半径外仍然是 1');
+
+    // 面板要给出同一笔账
+    const items = effectiveStats(s, foe).moveItems;
+    assert.ok(items.some((i) => i.label === '封印阵'), '面板要写清是封印阵压的');
+  });
+
+  test('阵师：三个时代的建造白名单递增，而且都要花灵石', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const b1 = s.unitTypes['cultivation-formation-master'];
+    const b2 = s.unitTypes['cultivation-formation-master-2'];
+    const b3 = s.unitTypes['cultivation-formation-master-3'];
+
+    assert.deepEqual(b1.builds, ['cultivation-kill-formation'], '三代阵师只会杀伐阵');
+    assert.ok(b2.builds?.includes('cultivation-seal-formation'), '四代才会封印阵');
+    assert.ok(b3.builds?.includes('cultivation-seal-formation'), '五代同样会');
+
+    for (const b of [b1, b2, b3]) {
+      assert.ok((b.costRes?.[SPIRIT_STONE] ?? 0) > 0, `${b.name} 要花灵石`);
+    }
+  });
+
   // ── 灵气滋养 ──────────────────────────────────────────
 
   const nextTurn = (s: GameState) => {

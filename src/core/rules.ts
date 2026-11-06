@@ -133,6 +133,8 @@ import {
 import { 
   auraSourcesOf, 
   auraBonusOf, 
+  allyAtkPctOf,
+  foeMovePctOf,
   fearPenaltyOf, 
   hexWeakPctOf, 
   curseAuraPenaltyOf,
@@ -914,6 +916,15 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
 export function attackPowerNow(s: GameState, attacker: Unit): number {
   // 圣剑勇者这类"永久变强"的加成记在单位身上，不进兵种表（见 types 的 atkBonus）
   let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonusOf(s, attacker).atk;
+  /*
+   * 百分比光环（杀伐阵）：加在"基础 + 加法光环"之后、状态之前。
+   *
+   * 位置要和 effectiveStats 里那段一模一样——面板写 +10%、打出来 +0 是
+   * 这套代码里最难查的偏差（护甲那边专门留过一条注释讲同一个坑）。
+   * 取整用四舍五入，和另一处百分比（虚咒）一致。
+   */
+  const atkPct = allyAtkPctOf(s, attacker);
+  if (atkPct) atkNow = Math.round(atkNow * (1 + atkPct.value));
   for (const [key, val] of orderedStatuses(attacker.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
@@ -1361,6 +1372,15 @@ export function movePower(s: GameState, unit: Unit): number {
   // 会长得一模一样，而前者是规则（封冻），后者是 bug。
   move = Math.max(1, move);
 
+  /*
+   * 封印阵这类"按比例压速度"：必须在保底之后。
+   *
+   * 提在保底前面的话，移动力 1 的单位被砍成 0 又会被抬回 1，永远封不住；
+   * 放在这里则 0 是真的 0，和扩展钩子"返回 0 = 这回合动不了"是同一个语义。
+   */
+  const sealMove = foeMovePctOf(s, unit);
+  if (sealMove.value < 1) move = Math.floor(move * sealMove.value);
+
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
   }
@@ -1482,6 +1502,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const src of auraSourcesOf(s, u, 'allyAtk')) {
     atk += src.value;
     atkItems.push({ label: src.label, delta: src.value });
+  }
+  // 百分比光环要和 attackPowerNow 算在同一处，否则面板和实际会分家
+  const atkPctSrc = allyAtkPctOf(s, u);
+  if (atkPctSrc) {
+    const before = atk;
+    atk = Math.round(atk * (1 + atkPctSrc.value));
+    if (atk !== before) {
+      atkItems.push({ label: atkPctSrc.label, delta: atk - before });
+    }
   }
   // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
   // 状态修正攻击力面板：与 computeDamage 同一段逻辑，位置也在光环之后
@@ -1635,6 +1664,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     const beforeClamp = moveNow;
     moveNow = Math.max(1, moveNow);
     if (moveNow !== beforeClamp) moveItems.push({ label: '保底', delta: moveNow - beforeClamp });
+
+    // 封印阵：和 movePower 同一位置（保底之后）
+    const sealSrc = foeMovePctOf(s, u);
+    if (sealSrc.value < 1) {
+      const before = moveNow;
+      moveNow = Math.floor(moveNow * sealSrc.value);
+      if (moveNow !== before) moveItems.push({ label: sealSrc.label, delta: moveNow - before });
+    }
 
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyMove) {
