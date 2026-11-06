@@ -279,6 +279,15 @@ export interface AiMood {
    * 两项可以同时提供正向权重，因此过渡期间可以混合两种打法。
    */
   drive: Record<AiDoctrine, number>;
+  /**
+   * 未加增益的 drive（0~1）。**阈值与比例判断读这个**，加法打分读 drive。
+   *
+   * 2026-11-06 拆开的原因：要给战术层"补量级"，最省事的做法是把 drive 整体乘个
+   * 系数；但 `pushing = drive.boom < 0.5`、`if (w.harass > 0.12)`、`score *= 1-0.45*w.boom`
+   * 这类地方读的是**门槛和比例**，跟着一起放大会悄悄改语义（门槛变得形同虚设、
+   * 比例项失衡）。所以增益只作用于"加分/扣分"，判断仍看原始值。
+   */
+  driveRaw: Record<AiDoctrine, number>;
   /** 原始证据（未锐化、未加底色）：测试与复盘只看这一层 */
   evidence: Record<AiDoctrine, number>;
   /** 本回合的主攻方向（三种战术共用） */
@@ -290,6 +299,24 @@ export interface AiMood {
 
 const DOCTRINES: AiDoctrine[] = ['rush', 'harass', 'boom'];
 const ABANDON_AT = 0.42;
+
+/**
+ * 战术层增益：drive 在**加法打分**里的乘数。
+ *
+ * 为什么要有这个数：drive 减掉 1/3 再放大三倍，典型值只有 0~0.35；乘以 22~26 分的
+ * 系数之后，一次"主导战术"能搬动的分差是 5~9 分。而场上真正的判决量级是
+ * 击杀 120、威胁紧迫 25~100。于是战术层在 98.5% 的决策点上搬不动任何东西
+ * （2026-11-06 实测：同局面动作一致率 98.5%，n=20775）。
+ *
+ * 1 = 原样。改动这个数只用 `probe:agreement` 看动作变化率，不看胜率——
+ * 量级不够时胜率必然中性，跑胜率是浪费。
+ */
+let DOCTRINE_GAIN = 1;
+
+/** 只给探针/用例用：设定增益后跑同一批种子，看动作变化率 */
+export function setDoctrineGain(x: number): void {
+  DOCTRINE_GAIN = Math.max(0, x);
+}
 
 /**
  * 最危险的一座自家城：墙不满、敌人在门口。
@@ -736,18 +763,24 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
         ? sacrifice!.city.id
         : null;
 
-  const drive: Record<AiDoctrine, number> = {
+  const driveRaw: Record<AiDoctrine, number> = {
     rush: clamp01((weight.rush - 1 / 3) * 3),
     harass: clamp01((weight.harass - 1 / 3) * 3),
     // 保留连续的发展权重：前城失守后，安全后方仍需完成增产和科技兑现。
     // 非战术档由 aiActiveMood 统一屏蔽，现金预算与安全条件另行约束投资。
     boom: clamp01((weight.boom - 1 / 3) * 3),
   };
+  const drive: Record<AiDoctrine, number> = {
+    rush: driveRaw.rush * DOCTRINE_GAIN,
+    harass: driveRaw.harass * DOCTRINE_GAIN,
+    boom: driveRaw.boom * DOCTRINE_GAIN,
+  };
 
   return {
     lead,
     weight,
     drive,
+    driveRaw,
     evidence,
     focusCityId: focusCity?.id ?? null,
     abandonedCityId,
@@ -1022,7 +1055,7 @@ function scoreBridgeAttack(s: GameState, attacker: Unit, bridge: Unit, all: Fiel
   }
 
   // 二、进攻：桥已经在我推进的方向上（离对面的城更近），而且我没在收着打
-  const pushing = !all.hold && all.mood.abandonedCityId === null && all.mood.drive.boom < 0.5;
+  const pushing = !all.hold && all.mood.abandonedCityId === null && all.mood.driveRaw.boom < 0.5;
   if (pushing && foe !== null && foe < mine) return 20;
 
   return 0;
@@ -1112,7 +1145,7 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
   if (preview.toAttacker === 0) score += 7 * w.harass;
 
   // 弃城期的胜利条件在四五个回合之后，不在这一个兵身上
-  if (w.boom > 0.2 && mood.metrics.gate > 6) score -= 12 * w.boom;
+  if (mood.driveRaw.boom > 0.2 && mood.metrics.gate > 6) score -= 12 * w.boom;
 
   // 集中兵力：旁边每站一个能打的友军，这一拳就更值。
   //
@@ -1156,8 +1189,7 @@ function scoreSiege(
   // 听着有道理，实测是净亏：这游戏的胜利条件只有破城，一个不肯围城的 AI 只会
   // 把对局拖长，然后输在对方的第一次破城上。骚扰该做的是"少跟主力换命"，
   // 那一条在上面的野战评分里，不该跑到这儿来否定唯一的胜利路径。
-  const w = mood.drive;
-  score *= 1 - 0.45 * w.boom;
+  score *= 1 - 0.45 * mood.driveRaw.boom;
 
   // 破城专精（siege-master）本来就是为攻城而生的，不打城等于白拿这个能力
   if (hasAbility(attackerDef, 'siege-master')) score += 12;
@@ -1939,7 +1971,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     Number.isFinite(all.lineRef) &&
     before < all.lineRef;
   const advanceWeight = aheadOfLine ? 0.15 : 1;
-  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : w.rush*0.35)) * advanceWeight;
+  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush*0.35)) * advanceWeight;
   /*
    * 地形分：**这一格对这个兵**值多少护甲，而不是"这一格值多少"。
    *
@@ -1980,7 +2012,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const risk = all.tactical.exposure(moved,killed);
   const cost = unitValue(s,unit);
   const loss = risk.damage / Math.max(1,def.maxHp);
-  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + w.harass*0.4);
+  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4);
   if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
 
@@ -2177,7 +2209,7 @@ function scoreMove(
   // 让工程队被"往桥头挪一格"抢走整回合——桥的原始分本来只比挪一格高十几分，
   // 位移分再乘 1.45 就反超了，实测直接退化成"两座桥铺到河心就不动了"。
   const aggr = all.needBridge ? 0 : w.rush;
-  score *= 1 + 0.45 * aggr - 0.3 * w.boom;
+  score *= 1 + 0.45 * aggr - 0.3 * all.mood.driveRaw.boom;
 
   // 河把两家隔开的时候，"往前推"这件事在距离图上是平的：
   // 沿着河岸走，离敌方城市的涉水距离一点没变（进度 0 分），
@@ -2195,13 +2227,13 @@ function scoreMove(
   // 已经接上火的就不再给这份奖励，否则"往敌人方向平移一格"永远比开火划算。
   const moved = { ...unit, x, y };
   if (canAttack(unit) && !engagedNow && attackableTargets(s, moved).length > 0) {
-    score += 30 * (1 + 0.5 * w.rush);
+    score += 30 * (1 + 0.5 * all.mood.driveRaw.rush);
   }
 
   // 挪过去就能攻城 → 更值（攻城是唯一通向胜利的路，比多打掉一个兵重要）
   // 速攻对这条的溢价最高：它整局的胜负就压在一次成功的围城上。
   if (canAttack(unit) && !engagedNow && siegeTargets(s, moved).length > 0) {
-    score += 44 * (1 + 0.7 * w.rush);
+    score += 44 * (1 + 0.7 * all.mood.driveRaw.rush);
   }
 
   // 附近有待收的废墟时，朝它走这件事本身就值钱。
@@ -2298,7 +2330,7 @@ function scoreMove(
   // 两条坡度：往最近的敌方经济/工程单位靠（那是它整局的现金流），
   // 以及打完能站到对方够不着的地方——换血不划算，白打才划算。
   // 只给"方向"，不给"必须打"：能不能打由 scoreAttack 那一条决定。
-  if (w.harass > 0.12 && def.category === 'combat' && def.domain !== 'water') {
+  if (all.mood.driveRaw.harass > 0.12 && def.category === 'combat' && def.domain !== 'water') {
     let prey: Unit | null = null;
     let pd = Infinity;
     for (const e of enemyUnitsOf(s, unit.owner)) {
@@ -2324,7 +2356,7 @@ function scoreMove(
   //
   // 放弃的那座不往里填人（守城的加分在下面也把它排除了），已经在附近的人
   // 往回走——兵可以丢，但不能丢在一个已经决定不要的地方。
-  if (w.boom > 0.12 && def.category === 'combat' && def.domain !== 'water') {
+  if (all.mood.driveRaw.boom > 0.12 && def.category === 'combat' && def.domain !== 'water') {
     const keep = citiesOf(s, unit.owner).filter(
       (c) => !c.ruined && c.id !== all.mood.abandonedCityId,
     );
@@ -2579,7 +2611,6 @@ function rawBuildScore(
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
-  const w = mood ? mood.drive : { rush: 0, harass: 0, boom: 0 };
 
   /*
    * 建筑总量上限：每城 4 座，最多 16 座（桥不算——桥是路，不是设施）。
@@ -2754,15 +2785,15 @@ function rawBuildScore(
     // （兵都收回来守家了，营地在前面就是白送）。速攻不再前压——
     // "更凶"的那一版实测是净亏，营地的选择只按弃城姿态后撤。
     const style = 0;
-    const tooClose = Math.max(2, 4 - 1.6 * style + 1.2 * w.boom);
+    const tooClose = Math.max(2, 4 - 1.6 * style + 1.2 * (mood?.driveRaw.boom ?? 0));
     if (nearFoe < tooClose) return -999;
-    const peak = 7 - 2.2 * style + 2.4 * w.boom;
+    const peak = 7 - 2.2 * style + 2.4 * (mood?.driveRaw.boom ?? 0);
     const front = nearFoe <= 12 ? 34 - Math.abs(nearFoe - peak) * 3 : 6;
     // 高级营更贵，但要让它"贵得值"：耐久和火力都上一个台阶，
     // 在前线顶着的时候比多造一座廉价营有用
     const tier = (def.era - 1) * 5;
     return 52 + front + tier - nearOwn * 0.7 - mine * 16 - def.cost * 0.045
-      + 10 * style - 14 * w.boom;
+      + 10 * style - 14 * (mood?.driveRaw.boom ?? 0);
   }
 
   if (def.incomeByTerrain || def.income || def.yield || def.yieldByTerrain) {
@@ -4334,7 +4365,7 @@ function recruitCandidate(
   const cityCount = Math.max(1, citiesOf(s, me).length);
   // 弃城期把经济线的目标抬高：这一档赢在"三个回合之后我比你富一代"，
   // 所以它要的不是"够用的农民"，而是能把整座城的产线滚起来的人手。
-  const targetEarners = Math.min(10, cityCount * 2 + Math.round(3 * w.boom) + (mood?.abandonedCityId ? 2 : 0));
+  const targetEarners = Math.min(10, cityCount * 2 + Math.round(3 * (mood?.driveRaw.boom ?? 0)) + (mood?.abandonedCityId ? 2 : 0));
 
   // 高级：看现在这支部队的"远程占比"，缺什么补什么。
   //
@@ -4608,7 +4639,7 @@ function recruitCandidate(
 
       // ── 战术倾向：这一局到底要什么样的兵 ──
       // 骚扰要"跑得快、够得远"：它不指望打赢会战，只指望对面抓不到它。
-      if (w.harass > 0.1) {
+      if (w.harass / Math.max(1e-9, DOCTRINE_GAIN) > 0.1) {
         if (isRaider(d)) score += 14 * w.harass;
         if ((d.range ?? 1) >= 3 && d.move >= 3) score += 10 * w.harass;
         if (d.move <= 2) score -= 10 * w.harass;
@@ -5100,6 +5131,7 @@ function moodFor(s: GameState, mood: AiMood): AiMood {
     ...mood,
     weight: { rush: 1 / 3, harass: 1 / 3, boom: 1 / 3 },
     drive: { rush: 0, harass: 0, boom: 0 },
+    driveRaw: { rush: 0, harass: 0, boom: 0 },
     abandonedCityId: null,
   };
 }
@@ -5502,7 +5534,7 @@ function aiNextActionCore(
   // 压城门槛：速攻更早认定"我现在打得穿"（它整局的胜负压在这一次围城上），
   // 弃城期更晚——这时候全军压上去只是把攒的钱换成对面的击杀数。
   const commitAt =
-    1.3 - 0.18 * mood.drive.rush + 0.15 * mood.drive.boom;
+    1.3 - 0.18 * mood.driveRaw.rush + 0.15 * mood.driveRaw.boom;
   fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
 
   for (const u of unitsOf(view, me)) {
