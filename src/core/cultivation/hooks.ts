@@ -1,5 +1,5 @@
 import type { ExpansionHooks } from '../expansions.ts';
-import { isCultivatorUnit } from './identity.ts';
+import { isCultivatorUnit, isSwordCultivatorType, UNIT_IDS } from './identity.ts';
 import { addExp, getExpGrowth, ensureLifespan, isDoomed, KILL_EXP, SWORD_KILL_MUL } from './progression.ts';
 import { 
   atkModifier, 
@@ -22,7 +22,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
   // 1. 击杀敌人获得经验
 	onUnitKilled: (c) => {
 		if (c.killer && isCultivatorUnit(c.state, c.killer)) {
-		const killexp = c.killer.type === 'sword-cultivator' ? KILL_EXP * SWORD_KILL_MUL : KILL_EXP;
+		const killexp = isSwordCultivatorType(c.killer.type) ? KILL_EXP * SWORD_KILL_MUL : KILL_EXP;
 		addExp(c.killer, c.state, killexp); 
 		}
 	},
@@ -38,7 +38,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
   // 不走 swordMul。这是策划决定，不是遗漏——改之前先确认需求。
   modifyStatAtk: ({ state, unit, atk }) => {
     if (!isCultivatorUnit(state, unit)) return atk;
-    const mul = unit.type === 'sword-cultivator' ? SWORD_BASE_MUL : 1.0;
+    const mul = isSwordCultivatorType(unit.type) ? SWORD_BASE_MUL : 1.0;
     return atk + Math.floor(atkModifier(unit) * mul);
   },
 	// 护甲修正
@@ -58,7 +58,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	},
 	// 攻击次数
 	modifyAttacks: ({ state, unit, attacks }) => {
-    if (unit.type === 'cultivation-spirit-tower') {
+    if (unit.type === UNIT_IDS.SPIRIT_TOWER) {
       return (unit.custom?.burstCharges as number) ?? 0;
     }
 		if (isCultivatorUnit(state, unit)) {
@@ -77,7 +77,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		return move + moveModifier(unit);
 	},
   modifyYield: ({ state, unit, yields }) => {
-    if (unit.type !== 'cultivation-spirit-mine') return yields;
+    if (unit.type !== UNIT_IDS.SPIRIT_MINE) return yields;
     let mountainCount = 0;
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const [dx, dy] of dirs) {
@@ -103,7 +103,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	onTurnStart: ({ state, player }) => {
 		for (const u of state.units) {
       if (u.owner !== player) continue;
-      if (u.owner === player && u.type === 'cultivation-spirit-tower' && u.custom?.burstCharges) {
+      if (u.owner === player && u.type === UNIT_IDS.SPIRIT_TOWER && u.custom?.burstCharges) {
         delete u.custom.burstCharges;
       }
       if (!isCultivatorUnit(state, u)) continue;

@@ -1,13 +1,11 @@
 // @ts-nocheck
-import { test, assert, stats, fresh, arena, place, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, idx, heroSkillsOf, refreshMemory, splashRadiusOf, splashRatioOf, unitYield } from '../../../src/core/rules.ts';
+import { test, assert, stats, fresh, place2 } from '../support.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
-import { CONFIG, UNIT_TYPES } from '../../../src/core/config.ts';
-import type { Unit } from '../../../src/core/types.ts';
-import { trimChatBody, CHAT_MAX_LEN, chatWhoLabel, type ChatLine, chatLinesHtml, chatSeatOf, chatBodyOverflows, chatBodyLength, type ChatSeat } from '../../../src/net/chat.ts';
-import { countWatchers, PRESENCE_TTL_MS, watchLabel, presenceFromRow } from '../../../src/net/presence.ts';
-import { adoptDecision } from '../../../src/net/room.ts';
+// GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
+// 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
+import type { GameState } from '../../../src/core/types.ts';
 import { skillsOf } from '../../../src/core/query.ts';
 import { getExp } from '../../../src/core/cultivation/progression.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';

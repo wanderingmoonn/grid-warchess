@@ -2,7 +2,7 @@
 
 import type { Unit } from '../types.ts';
 import { getRank, getAgingYears } from './progression.ts';
-import { isSpirit, isSoulMasterSpirit } from './identity.ts';
+import { isSpirit, isSoulMasterSpirit, isSwordCultivatorType } from './identity.ts';
 
 // ── 境界基础加成：公式的单一真相 ──────────────────────────
 //
@@ -142,6 +142,6 @@ export function VisionModifier(u: Unit): number {
 export const SWORD_BASE_MUL = 0.8;
 export const SWORD_SWEEP_MUL = 1.2;
 export function swordMul(u: Unit): number {
-  if (u.type !== 'sword-cultivator') return 1.0;
+  if (!isSwordCultivatorType(u.type)) return 1.0;
   return u.custom?.swordSweepActive === true ? SWORD_SWEEP_MUL : SWORD_BASE_MUL;
 }

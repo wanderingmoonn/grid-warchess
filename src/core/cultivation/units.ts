@@ -3,13 +3,14 @@
 import type { UnitTypeDef } from '../types.ts';
 import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL } from './skills.ts';
 import { SPIRIT_STONE } from './resources.ts';
+import { UNIT_IDS } from './identity.ts';
 import { GOLD } from '../resources.ts';
 
 //灵体
 export const SPIRIT_CULTIVATOR: UnitTypeDef = {
-  id: 'cultivator-spirit',
+  id: UNIT_IDS.SPIRIT,
   name: '灵体',
-  short: '灵',
+  short: '魂',
   era: 1,
   category: 'combat',
   cost: 0,
@@ -26,7 +27,7 @@ export const SPIRIT_CULTIVATOR: UnitTypeDef = {
   skills: [SPIRIT_REBIRTH_SKILL],
 };
 export const CULTIVATOR: UnitTypeDef = {
-  id: 'qi-cultivator',
+  id: UNIT_IDS.QI_CULTIVATOR,
   name: '炼气士',
   short: '炼',
   era: 1,
@@ -41,7 +42,7 @@ export const CULTIVATOR: UnitTypeDef = {
   abilities: ['qi-true-damage'], 
 };
 export const SWORD_CULTIVATOR: UnitTypeDef = {
-  id: 'sword-cultivator',
+  id: UNIT_IDS.SWORD_CULTIVATOR,
   name: '剑修',
   short: '剑',
   era: 2,
@@ -58,7 +59,7 @@ export const SWORD_CULTIVATOR: UnitTypeDef = {
 };
 
 export const SERVANT: UnitTypeDef = {
-  id: 'cultivation-servant',
+  id: UNIT_IDS.SERVANT,
   name: '仆役',
   short: '仆',
   era: 2,
@@ -70,11 +71,11 @@ export const SERVANT: UnitTypeDef = {
   maxHp: 20,
   range: 1,
   vision: 2,
-  builds: ['cultivation-spirit-field', 'cultivation-spirit-tower'],
+  builds: [UNIT_IDS.SPIRIT_FIELD, UNIT_IDS.SPIRIT_TOWER],
   buildPower: 10,
 };
 export const DEACON: UnitTypeDef = {
-  id: 'cultivation-deacon',
+  id: UNIT_IDS.DEACON,
   name: '执事',
   short: '执',
   era: 3,
@@ -86,7 +87,7 @@ export const DEACON: UnitTypeDef = {
   maxHp: 25,
   range: 1,
   vision: 2,
-  builds: ['cultivation-spirit-field', 'cultivation-spirit-tower', 'cultivation-spirit-mine'],
+  builds: [UNIT_IDS.SPIRIT_FIELD, UNIT_IDS.SPIRIT_TOWER, UNIT_IDS.SPIRIT_MINE],
   buildPower: 18,
 };
 
@@ -98,7 +99,7 @@ export const TOWER_BURST_CHARGES = 3;
 export const TOWER_CHARGE_COST = 5;
 
 export const SPIRIT_TOWER: UnitTypeDef = {
-  id: 'cultivation-spirit-tower',
+  id: UNIT_IDS.SPIRIT_TOWER,
   name: '散灵台',
   short: '灵',
   era: 2,
@@ -127,7 +128,7 @@ export const SPIRIT_TOWER: UnitTypeDef = {
 };
 
 export const SPIRIT_FIELD: UnitTypeDef = {
-  id: 'cultivation-spirit-field',
+  id: UNIT_IDS.SPIRIT_FIELD,
   name: '灵田',
   short: '田',
   era: 2,
@@ -148,7 +149,7 @@ export const SPIRIT_FIELD: UnitTypeDef = {
   abilities: ['spirit-aura'],
 };
 export const SPIRIT_MINE: UnitTypeDef = {
-  id: 'cultivation-spirit-mine',
+  id: UNIT_IDS.SPIRIT_MINE,
   name: '灵矿',
   short: '矿',
   era: 3,

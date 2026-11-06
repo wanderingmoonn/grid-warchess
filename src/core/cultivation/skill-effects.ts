@@ -3,7 +3,7 @@ import type {
   AbilityApi,
 } from '../ability-hooks.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview } from '../skill-hooks.ts';
-import { isCultivatorUnit } from './identity.ts';
+import { isCultivatorUnit, isSpirit } from './identity.ts';
 import { getExp, getRank, expForRank, getMaxHp, sumDeltaMaxHpUpTo, addExp, cleanupAfterRankDrop, REALMS } from './progression.ts';
 import {
   getSwordSweepReach, SKY_STEP_RANK, SWEEP_EXP_CAST, SWEEP_EXP_PER_HIT,
@@ -206,14 +206,14 @@ registerSkillPreview('sword-sweep', (c) => {
 });
 
 registerSkillReadyCheck('spirit-rebirth', (_s, u) => {
-  if (u.type !== 'cultivator-spirit') return '只有灵体能重生';
+  if (!isSpirit(u)) return '只有灵体能重生';
   if (!u.custom?.originType) return '本源已散失，无法重生';
   return true;
 });
 
 registerSkillEffect('spirit-rebirth', (c) => {
   const { self, state } = c;
-  if (self.type !== 'cultivator-spirit') {
+  if (!isSpirit(self)) {
     c.result.ok = false;
     c.result.reason = '只有灵体能重生';
     return;
