@@ -209,8 +209,12 @@ function canBeHealedOn(s: GameState, u: Unit): boolean {
  * 扩展里的能力**不 import rules**：一是会形成运行时循环依赖（rules → 扩展 → rules），
  * 二是扩展一旦能手抓内核，它就会开始依赖内核内部细节，"写在扩展里"就只剩个位置。
  * 所以内核把自己的能力整理成这张小接口递过去，扩展只认这张接口。
+ *
+ * 导出它只为"让测试和工具直接走同一条路"（比如验证自定义状态贴得上去）。
+ * 扩展仍然应该用注入的 `c.api`，不要 import 这张表——那会绕开注入约定，
+ * 也把扩展绑死在这个文件上。
  */
-const abilityApi: AbilityApi = {
+export const abilityApi: AbilityApi = {
   utype,
   tileAt,
   distance,
@@ -232,6 +236,19 @@ const abilityApi: AbilityApi = {
   hasAbility: (s, u, id) => hasAbilityOn(s, u, id),
   canBeHealed: (s, u) => canBeHealed(utype(s, u.type), u.extraAbilities), 
   putStatus: (target, key, turns) => {
+    /*
+     * 只认已经注册过的状态。
+     *
+     * 这条校验是给扩展用的：`registerStatus` 一直是对外开放的，但这里以前把 key
+     * 写死成 5 个字面量，于是扩展注册了新状态、却没有任何办法把它贴到单位身上——
+     * 能注册、贴不上，而且 TypeScript 只在调用方报错，运行时什么都不会发生。
+     *
+     * 选择抛错而不是静默跳过：贴状态几乎都发生在能力/技能的效果里，一个拼错的
+     * id 如果只是"什么都没发生"，玩家看到的是"这个技能没效果"，排查成本极高。
+     */
+    if (!Object.prototype.hasOwnProperty.call(STATUS_REGISTRY, key)) {
+      throw new Error(`未注册的状态「${key}」：先用 registerStatus() 注册，再调用 putStatus()`);
+    }
     const st = (target.status ??= {});
     if ((st[key] ?? 0) >= turns) return false;
     st[key] = turns;
@@ -1316,6 +1333,36 @@ export function movePower(s: GameState, unit: Unit): number {
   return Math.max(0, move);
 }
 
+/**
+ * 状态对视野的修正：实际视野（`visionOf`）和面板明细（`effectiveStats`）共用这一段。
+ *
+ * `StatusDef.modifyVision` 从注册表存在那天起就没人调过——钩子写好了，
+ * 但六处派发点（攻击 / 移动 / 攻击面板 / 护甲×2 / 回合结算）没有一处是视野。
+ * 丹药的「明目」这类效果要改视野，得先把它接上。
+ *
+ * 抽成一个函数而不是在两处各写一遍：面板写"视野 +2"、实际却按原值算，
+ * 是这套代码里最难查的一类偏差（护甲那边就专门为它留过一条注释）。
+ */
+function applyStatusVision(
+  s: GameState,
+  u: Unit,
+  base: number,
+  items?: StatItem[],
+): number {
+  // 快路径：绝大多数单位身上没有任何状态。visionOf 会被迷雾每帧为每个单位调一次，
+  // 别为了一个空表去建数组。
+  if (!u.status) return base;
+  let r = base;
+  for (const [key, val] of orderedStatuses(u.status)) {
+    const def = STATUS_REGISTRY[key];
+    if (!def?.modifyVision) continue;
+    const before = r;
+    r = def.modifyVision(s, u, val, r);
+    if (items && r !== before) items.push({ label: def.name, delta: r - before });
+  }
+  return r;
+}
+
 /** 算上扩展规则后的视野半径 */
 export function visionOf(s: GameState, unit: Unit): number {
   const selfDef = utype(s, unit.type);
@@ -1338,6 +1385,9 @@ export function visionOf(s: GameState, unit: Unit): number {
    * 所以判据落在这里：兵种表写 0，就是真的没有视野。
    */
   if (selfDef.vision <= 0) return 0;
+  // 状态修正放在"本来就看"的判据之后：0 视野是真的不看（桥），
+  // 不该被一颗「明目丹」凭空点出眼睛来。
+  r = applyStatusVision(s, unit, r);
   return Math.max(1, r);
 }
 
@@ -1583,6 +1633,7 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (visionNow !== before) visionItems.push({ label: e.name, delta: visionNow - before });
     }
   }
+  visionNow = applyStatusVision(s, u, visionNow, visionItems);
 
   // ── 射程 ──
   const rangeBase = def.range;
@@ -5322,8 +5373,11 @@ function turnStartSkills(s: GameState, p: PlayerId): void {
       }
     }
     if (u.status) {
-      for (const k of ['poison', 'burn', 'slow', 'curse'] as const) {
-        if ((u.status[k] ?? 0) <= 0) delete u.status[k];
+      // 遍历全部 key，不写死内置状态清单。
+      // 原来只清 ['poison','burn','slow','curse'] 四个，连内置的「咒缚」
+      // （curse-deep）都漏在外面，扩展注册的状态更是一个都清不到。
+      for (const [k, v] of Object.entries(u.status)) {
+        if (typeof v !== 'number' || v <= 0) delete u.status[k];
       }
     }
     if (u.skillCd) {

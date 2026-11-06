@@ -68,8 +68,19 @@ export interface AbilityApi {
   hasAbility(s: GameState, u: Unit, id: string): boolean;
   /** 能不能被治疗（机械单位不行） */
   canBeHealed(s: GameState, u: Unit): boolean;
-  /** 贴一层持续状态；返回是否新贴上（战报只报真正发生的事） */
-  putStatus(target: Unit, key: 'poison' | 'burn' | 'slow' | 'curse' | 'curse-deep', turns: number): boolean;
+  /**
+   * 贴一层持续状态。
+   *
+   * `key` 是**任意已注册的状态 id**：内置的（中毒/灼烧/减速/诅咒/咒缚）和扩展用
+   * `registerStatus` 注册的都算。以前这里写死了 5 个字面量，导致扩展能注册状态
+   * 却贴不上去——注册表对外开着，入口却是关的。
+   *
+   * 没注册过的 id 会当场抛错，而不是静默什么都不发生：贴错一个名字查起来
+   * 比崩一次难得多。
+   *
+   * 返回是否真的贴上了（已有同等或更多的回合数时返回 false，战报就不要报了）。
+   */
+  putStatus(target: Unit, key: string, turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */

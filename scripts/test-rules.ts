@@ -238,6 +238,7 @@ import {
   recruitResCost,
   recruitSpawnCells,
   orderedStatuses,
+  abilityApi,
   refreshMemory,
   registerSkillEffect,
   registerStatus,
@@ -11573,6 +11574,66 @@ test('状态能改攻击力，面板与结算算的是同一个数', () => {
     /已经注册过/,
     '重复注册技能效果要报错',
   );
+});
+
+test('状态：扩展注册的状态能贴上、能改视野，也会被回合结算清掉', () => {
+  /*
+   * 这条守的是"扩展状态 API 的半成品"：
+   *
+   * putStatus 的参数原本是 5 个内置状态名组成的联合类型，而 registerStatus
+   * 一直是对外开放的。于是扩展写了 registerStatus(...) 之后，**没有任何办法
+   * 把状态贴到单位身上**——类型上过不去，绕过类型则什么都不发生。丹药那种
+   * "吃一颗、身上挂两回合"的效果正好卡在这里。
+   *
+   * 顺便守住第二件事：StatusDef.modifyVision 从注册表存在那天起就没被调用过，
+   * 六处派发点没有一处是视野。这里同时断言"实际视野"和"面板明细"都 +2——
+   * 两处不同的地方最容易漂。
+   */
+  registerStatus({
+    id: 'test-farsight',
+    name: '明目',
+    summary: '视野 +2（用例专用）',
+    modifyVision: (_s, _u, val, vision) => (val > 0 ? vision + 2 : vision),
+  });
+  try {
+    const flat = fresh();
+    clearArea(flat, 3, 2, 4, 4);
+    const s = unitOn(flat, 'A', 'militia', 3, 3);
+    const me = s.units.find((u) => u.owner === 'A' && u.type === 'militia')!;
+    const baseVision = visionOf(s, me);
+
+    assert.equal(abilityApi.putStatus(me, 'test-farsight', 2), true, '自定义状态应该贴得上');
+    assert.equal(me.status?.['test-farsight'], 2);
+
+    assert.equal(visionOf(s, me), baseVision + 2, '实际视野要 +2');
+    const item = effectiveStats(s, me).visionItems.find((i) => i.label === '明目');
+    assert.ok(item && item.delta === 2, `面板明细也要 +2，实际是 ${JSON.stringify(item)}`);
+
+    // 更短的时长不该覆盖更长的：返回 false，调用方据此不写战报
+    assert.equal(abilityApi.putStatus(me, 'test-farsight', 1), false, '时长不该被缩短');
+
+    // 没注册过的 id 当场抛错，而不是静默什么都不发生
+    assert.throws(
+      () => abilityApi.putStatus(me, 'test-not-registered', 1),
+      /未注册的状态/,
+      '贴一个没注册的状态要报错',
+    );
+
+    // 自己回合开始时 −1、到 0 消失。一圈 = A 结束 → B 开始 → B 结束 → A 开始。
+    let cur = s;
+    const roundTrip = () => {
+      for (let i = 0; i < 2; i++) {
+        const r = applyAction(cur, { type: 'END_TURN' });
+        assert.ok(r.ok, r.ok ? '' : r.reason);
+        cur = r.state;
+      }
+      return cur.units.find((u) => u.id === me.id)!;
+    };
+    assert.equal(roundTrip().status?.['test-farsight'], 1, '过一个自己的回合应该 −1');
+    assert.equal(roundTrip().status?.['test-farsight'], undefined, '归零后应该从身上消失');
+  } finally {
+    delete STATUS_REGISTRY['test-farsight'];
+  }
 });
 
 runCultivation();
