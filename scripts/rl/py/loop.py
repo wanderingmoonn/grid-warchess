@@ -208,7 +208,14 @@ def main() -> int:
         played = roll.get("perGame", [])
         ai_games = [g for g in played if g.get("mode") != "self"]
         self_games = [g for g in played if g.get("mode") == "self"]
-        sample_win = 100.0 * sum(1 for g in ai_games if g.get("winner") == "A") / max(1, len(ai_games))
+        # 按**策略坐的那一边**算，不能写死 A：2026-11-06 起座位按种子交替（rollout 的
+        # policySeatOf），写死 A 的话这个数会退化成"先手胜率"，跟棋力脱钩。
+        # 老数据没有 policy_seat 字段，退回 A（那时候确实只有 A 座是策略）。
+        sample_win = 100.0 * sum(
+            1
+            for g in ai_games
+            if g.get("winner") and g.get("winner") == g.get("policySeat", "A")
+        ) / max(1, len(ai_games))
         # 自博弈那一半报"分不分得出胜负"——分不出就是没信号，和胜率无关
         self_dec = 100.0 * sum(1 for g in self_games if g.get("winner")) / max(1, len(self_games))
 

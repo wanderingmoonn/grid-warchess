@@ -206,6 +206,14 @@ function summarise(records: GameRecord[]) {
   let steps = 0;
   let seatAWins = 0;
   let seatAGames = 0;
+  /*
+   * 按"候选坐哪一边"再拆一次。
+   *
+   * 配对口径是同一颗种子打两局、座位互换，于是 A/B 各占一半——只看总数会把
+   * "先手 62%、后手 46%" 抹成一个 54%，看上去挺好，实际上是两个人在打。
+   * 这个拆法就是 B1（座位偏差）的验收指标：差距要压到 5 个点以内。
+   */
+  const bySeat = { A: { games: 0, score: 0 }, B: { games: 0, score: 0 } };
   for (const r of records) {
     if (r.winner === null) draws += 1;
     else if (r.winner === r.candidateSeat) wins += 1;
@@ -214,6 +222,11 @@ function summarise(records: GameRecord[]) {
     rejected += r.rejected;
     turns += r.turns;
     steps += r.steps;
+    const bucket = bySeat[r.candidateSeat];
+    bucket.games += 1;
+    // 平局按半分算，和总数那一份同口径
+    if (r.winner === null) bucket.score += 0.5;
+    else if (r.winner === r.candidateSeat) bucket.score += 1;
     if (r.winner) {
       seatAGames += 1;
       if (r.winner === 'A') seatAWins += 1;
@@ -223,6 +236,7 @@ function summarise(records: GameRecord[]) {
   // 平局按半分算：既不算赢也不算输，比"直接丢掉"更保守（丢掉会虚高）
   const score = wins + draws * 0.5;
   const ci = wilson(score, n);
+  const rateOf = (b: { games: number; score: number }) => (b.games > 0 ? b.score / b.games : 0);
   return {
     games: n,
     wins,
@@ -233,6 +247,9 @@ function summarise(records: GameRecord[]) {
     winRate: n > 0 ? score / n : 0,
     ci95: [Number(ci.lo.toFixed(4)), Number(ci.hi.toFixed(4))] as [number, number],
     seatAWinRate: seatAGames > 0 ? seatAWins / seatAGames : 0,
+    /** 候选自己坐 A / 坐 B 时的得分率（各占一半局数） */
+    seatScore: { A: rateOf(bySeat.A), B: rateOf(bySeat.B) },
+    seatGames: { A: bySeat.A.games, B: bySeat.B.games },
     avgTurns: n > 0 ? turns / n : 0,
     avgSteps: n > 0 ? steps / n : 0,
   };
@@ -335,6 +352,22 @@ if (SERVE) {
   console.log(
     `  先手方胜率 ${(sum.seatAWinRate * 100).toFixed(1)}% · 平均 ${sum.avgTurns.toFixed(0)} 回合 / ${sum.avgSteps.toFixed(0)} 步`,
   );
+  /*
+   * 分座位那一行：B1 的验收就看这里。
+   *
+   * 注意口径——"A 座"是**候选自己坐先手**（不是"先手方赢了几成"）。
+   * 上面那行 `先手方胜率` 量的是这个游戏的先手优势，两行别读混。
+   */
+  {
+    const a = sum.seatScore.A;
+    const b = sum.seatScore.B;
+    const gap = Math.abs(a - b) * 100;
+    const flag = gap <= 5 ? '✓ 收敛' : gap <= 8 ? '· 还行' : '⚠ 座位偏差仍在';
+    console.log(
+      `  候选分座位：A 座 ${(a * 100).toFixed(1)}%（${sum.seatGames.A} 局） · ` +
+        `B 座 ${(b * 100).toFixed(1)}%（${sum.seatGames.B} 局） · 差 ${gap.toFixed(1)} 点 ${flag}`,
+    );
+  }
   if (sum.rejected > 0) console.log(`  ⚠ 引擎拒绝了 ${sum.rejected} 个动作（枚举与规则可能漂了）`);
 
   if (OUT) {

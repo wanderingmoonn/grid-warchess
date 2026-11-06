@@ -187,6 +187,17 @@ function modeOf(g: number, seed: number): Mode {
   return 'snap';
 }
 
+/**
+ * 这一局策略坐哪一边。
+ *
+ * 按**种子**派生，不按局号：局号在不同 worker 分片下会重排，而种子是这一局的身份证。
+ * 直接 `seed % 2` 不够——种子是连续的（8000、8001…），那会变成"奇偶严格交错"，
+ * 而种子本身和地图、出生点相关，交错反而可能和地图特性共振。哈希一次更省心。
+ */
+function policySeatOf(seed: number): PlayerId {
+  return hashSeed(seed, 'policy-seat') % 2 === 0 ? 'A' : 'B';
+}
+
 interface GameRow {
   seed: number;
   mode: Mode;
@@ -194,6 +205,14 @@ interface GameRow {
   size: number;
   steps: number;
   winner: PlayerId | null;
+  /**
+   * 这一局策略坐哪一边。
+   *
+   * 座位从 2026-11-06 起按种子交替（见 `policySeatOf`）。这一格必须落进元数据：
+   * 训练侧的"打 AI 胜率"要按**策略那一方**算，写死 `winner === 'A'` 的话，
+   * 座位一交替这个数就变成"先手胜率"，和棋力没关系。
+   */
+  policySeat: PlayerId;
   turns: number;
   /** 撞上回合上限：这种局在训练侧会被整局丢掉（见文件头的说明） */
   timedOut: boolean;
@@ -244,10 +263,21 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   );
   s.fog = false;
 
-  // 谁在开这一方：自博弈两边都是当前权重；其余情况 B 座是对手，A 座是策略
+  /*
+   * 谁在开这一方。
+   *
+   *   自博弈：两边都是当前权重，两边都记账；
+   *   打 AI / 打快照：**策略轮流坐** A 和 B（见 `policySeatOf`），另一席是对手。
+   *
+   * 2026-11-06 之前这里写死"策略永远坐 A"。代价量出来了：同一批 160 局按座位拆开，
+   * A 座 62.5%、B 座 46.2%（16 个点，z≈2.07）——B 座只在自博弈里练过，
+   * 从没跟手写 AI 对过，也没见过"先手是别人"的开局。而玩家永远坐 A（人机对战里
+   * 你是先手），所以这个偏差直接翻译成"它在你的椅子上比在你对面强 16 个点"。
+   */
+  const POLICY_SEAT = policySeatOf(seed);
   const policySeat = (seat: PlayerId): Policy | null => {
     if (mode === 'self') return policy;
-    if (seat === 'A') return policy;
+    if (seat === POLICY_SEAT) return policy;
     return opponent;
   };
   const learnable = (seat: PlayerId): boolean => policySeat(seat) === policy;
@@ -424,6 +454,8 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
       size: s.w,
       steps: buf.n,
       winner: s.winner ?? null,
+      // 训练侧按它算"策略那一方赢没赢"；写死 A 会在座位交替后变成"先手胜率"
+      policySeat: mode === 'self' ? 'A' : POLICY_SEAT,
       turns: s.turn,
       timedOut: s.winner === null,
     },
