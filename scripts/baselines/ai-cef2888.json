@@ -1,8 +1,8 @@
 {
   "commit": "cef2888f6ae411114fc23c15ada1aa8def0276ec",
   "path": "src/core/ai.ts",
-  "sha256": "2d9c4294e4accab4d879af09eada45436879907c141a1510e25eef31d8783766",
+  "sha256": "ce4c5b0738c9c6c28225f4d01919a7d38f9bf3c6d8857a310165e6f55dc71603",
   "importsRebased": true,
   "frozenAt": "2026-11-06",
-  "note": "harass 收紧 + 高级档开战术层之前的基线；改写 22 处导入。"
+  "note": "harass 收紧 + 高级档开战术层之前的基线；改写 22 处导入。sha256 是 src/core/ai.ts 在 cef2888 的 blob 指纹（副本另加了 11 行头注释，所以文件自身的 sha256 与之不同）。核对：git show cef2888:src/core/ai.ts | sha256sum"
 }
