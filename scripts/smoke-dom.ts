@@ -6081,6 +6081,144 @@ await checkAsync('复盘：把一份对局数据拖进页面就能逐帧回看�
   assert.equal(saved.seed, seed, '本机存档的种子不该被换掉');
 });
 
+await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西全部收起来', async () => {
+  /*
+   * 复盘把 `state` 换成了别人的那一帧，但界面原来还以为这是"我的局"：
+   * 侧栏顶着「轮到你行动」、城里有「生产」按钮、选中单位有强制移动/拆除/结束回合，
+   * 顶栏还摆着「暂停 AI」「交给 AI」「导出对局」。点下去都被 dispatch 的闸门挡住，
+   * 于是玩家看到的是一屏"能点但没反应"的按钮——这就是"棋局和 UI 打架"。
+   *
+   * 这一条从**界面成品**倒着验：复盘里不该有任何一颗可用的改局按钮。
+   */
+  const seed = 707070;
+  const base = createMatch({ ...DEFAULT_CONFIG, size: 8 }, seed);
+  base.fog = false;
+  const w = bootWith(base);
+  const d = w.document;
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    assert.ok(r.ok, '造数据时这一步就没走通');
+    s2 = r.state;
+  }
+  // 终局帧：报告里有 winner，最容易把"结算卡"带出来
+  const report = buildMatchReport({ ...s2, winner: 'A' }, new Date('2026-11-06T00:00:00Z'), null, acts);
+
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  const side = (): HTMLElement => d.querySelector<HTMLElement>('#side')!;
+  /*
+   * 打开一座城。
+   *
+   * 挑"城里没站兵"的那一格：兵压在城上时点下去选中的是兵（连点轮换那套只在
+   * 正常对局里跑），而复盘里最想看的恰恰是城——耐久多少、还剩几回合能被拆。
+   */
+  const cityTile = [...d.querySelectorAll<HTMLElement>('.tile.t-city.own-A')].find(
+    (t) => !t.querySelector('.unit'),
+  );
+  assert.ok(cityTile, 'A 方城里应该有一格是空的');
+  cityTile!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(80);
+  assert.ok(
+    (side().textContent ?? '').includes('城市'),
+    `复盘里点城要看得到城市卡（城不是单位，得单独认一下）：${(side().textContent ?? '').slice(0, 60)}`,
+  );
+  const afterCity = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(!afterCity.includes('生产'), '复盘里不该出现生产区——那是别人那局的城');
+
+  /** 侧栏里"能改局"的按钮：一个都不许是可用状态 */
+  const liveActs = ['end-turn', 'undo', 'surrender', 'force-move', 'force-attack', 'disband', 'upgrade', 'commander-run', 'plan-commit'];
+  const enabled = [...side().querySelectorAll<HTMLButtonElement>('button')].filter(
+    (b) => !b.hidden && !b.disabled && (liveActs.includes(b.dataset.act ?? '') || b.classList.contains('recruit-btn')),
+  );
+  assert.deepEqual(
+    enabled.map((b) => `${b.dataset.act ?? 'recruit'}:${(b.textContent ?? '').trim().slice(0, 8)}`),
+    [],
+    '复盘里不该有一颗可用的改局按钮',
+  );
+
+  // 抬头必须说"这是复盘"，不能假装轮到你
+  const sideText = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(sideText.includes('复盘'), `侧栏要说清这是复盘：${sideText.slice(0, 60)}`);
+  assert.ok(!sideText.includes('轮到你行动'), '复盘里没有"你"的回合');
+  assert.ok(!sideText.includes('（你）'), '席位栏不该把某一方标成"你"——复盘里两边都是别人');
+
+  // 顶栏：会改局的那五个必须收起来，纯看的留下
+  const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
+  for (const act of ['toggle-ai', 'export', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+    assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
+  }
+  for (const act of ['manual', 'feedback']) {
+    assert.ok(topBtn(act), `顶栏该留着 ${act}`);
+    assert.notEqual(topBtn(act)!.hidden, true, `${act} 不该被藏起来`);
+  }
+
+  // 结算卡：别人那局打完了，不该问"要不要捐出这局的数据"
+  assert.equal(d.querySelector('.report-card'), null, '复盘里不该冒出结算卡——上传的是别人那局');
+
+  // 退出之后一切复原
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(100);
+  assert.equal(topBtn('toggle-ai')?.hidden, false, '退出后顶栏要复原');
+  assert.equal(topBtn('export')?.hidden, false, '退出后导出对局要回来');
+  assert.equal(d.querySelector('.tile.t-city.own-A') !== null, true, '退出后还是本机那局');
+});
+
+await checkAsync('复盘：AI 正在走的时候把文件拖进来，回放不会自己往前跑', async () => {
+  /*
+   * `enterReplay` 换的是全局 `state`，而 AI 走子那两条循环（runAiTurn / runCommanderBatch）
+   * 只认自己的 `token`。不按停的话，它们会接着在**回放**上下子：
+   * 拖到自己想看的那一帧，过一会儿棋又变了，回合数还和进度条对不上。
+   */
+  const seed = 606060;
+  const base = createMatch(
+    { ...DEFAULT_CONFIG, size: 8, aiOpponent: true, aiAlly: true },
+    seed,
+  );
+  base.fog = false;
+  const w = bootWith(base); // 开机就会自己开打（kickAiIfNeeded）
+  const d = w.document;
+  await wait(400); // 让它走到一半
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    if (r.ok) s2 = r.state;
+  }
+  const report = buildMatchReport(s2, new Date('2026-11-06T00:00:00Z'), null, acts);
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  // 跳到最后一步，然后盯一会儿：回放是死的，画面不该变
+  d.querySelector<HTMLElement>('[data-act="rp-last"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const turnBefore = d.querySelector('[data-ref="turn"]')?.textContent ?? '';
+  const slider = d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!;
+  const posBefore = slider.value;
+  await wait(500);
+  assert.equal(d.querySelector('[data-ref="turn"]')?.textContent ?? '', turnBefore, '回放里的回合数不该自己往前走');
+  assert.equal(d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!.value, posBefore, '进度条位置不该自己动');
+
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  assert.ok(d.querySelector<HTMLElement>('#replay')!.hidden, '退出复盘');
+});
+
 await checkAsync('复盘：拖进来的不是对局数据时，要说清是什么问题', async () => {
   const st = createMatch({ ...DEFAULT_CONFIG, size: 8 }, 919191);
   const w = bootWith(st);
