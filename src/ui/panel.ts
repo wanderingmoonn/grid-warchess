@@ -20,7 +20,7 @@ import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { holdOf } from '../core/carry.ts';
 import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
-import { canUseType, eraWindowOk } from '../core/draft.ts';
+import { canUseType, eraWindowOk, upgradeUnlocks } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
@@ -974,7 +974,15 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       eraWindowOk(s, d, city.era) &&
       canUseType(s, city.owner, d.id),
   );
-  const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
+  /*
+   * 升级后会解锁什么。
+   *
+   * 判据在 core/draft.ts 的 `upgradeUnlocks`：它和产兵表共用 `canUseType`，
+   * 所以选卡模式下**没选到的卡不会出现**（以前的版本只判时代，于是会列出一串
+   * 玩家根本造不了的兵）；经济单位、建造单位、生产性建筑与桥不受选卡影响，
+   * 照旧列出来——伐木工、民夫、石桥这些升级解锁是真事。
+   */
+  const locked = upgradeUnlocks(s, city.owner, city.era);
 
   // 地面坐满时还起得来几款空军：底部那句提示用得上。
   // 它只回答"是不是真的什么都造不了"，所以按"确实有落点"算，不是按兵种表里有几架。

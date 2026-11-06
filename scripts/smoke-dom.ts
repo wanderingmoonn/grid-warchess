@@ -24,7 +24,7 @@ import { playerView } from '../src/core/fog.ts';
 import { addMark } from '../src/core/marks.ts';
 import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
-import { remainingUnits } from '../src/core/draft.ts';
+import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { buildMatchReport } from '../src/core/report.ts';
@@ -5411,6 +5411,118 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
   assert.ok(doc.querySelectorAll('#board .unit').length > 0, '战场上应该有单位');
 });
 
+
+check('选卡模式下，城市的「升级后可解锁」只列这一局真能造的兵', () => {
+  /*
+   * 2026-11-06：这句提示原来只判 `def.era > city.era`（`ui/panel.ts` 的 `locked`），
+   * 于是在选卡模式下把**池子里没选到的卡**整批列了出来——玩家看到
+   * "升级后可解锁：圣剑勇者、九头蛇……"，真升完级一个也造不了。
+   * 那句话比不写更糟：它把"没选到"说成了"再等等就有"。
+   *
+   * 现在判据在 `core/draft.ts` 的 `upgradeUnlocks`，和产兵表共用 `canUseType`。
+   * 两边都要钉住：
+   *   ① 没选到的高时代卡**不出现**；
+   *   ② 经济 / 建造单位、生产性建筑、桥**照旧出现**——它们本来就不用选，
+   *      而"升级解锁伐木工 / 民夫 / 石桥"是真事（用户特别点了这一条）。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch(
+      { ...DEFAULT_CONFIG, size: 12, startEra: 1, draftMode: true, expansionIds: [] },
+      777,
+      {},
+    );
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    st = started.state;
+
+    // 交完禁用
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        const id = remainingUnits(st)[0]!;
+        st.current = side;
+        const r = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (r.ok) st = r.state;
+      }
+    }
+    assert.equal(st.draft!.phase, 'pick', '交完禁用应该进入选人');
+
+    // 一路选满（AI 那边不需要好用，这里只要走到"选卡结束"）
+    for (let guard = 0; guard < 40; guard += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const id = remainingUnits(st)[0];
+      if (!id) break;
+      st.current = side;
+      const r = applyAction(st, { type: 'DRAFT_PICK', unitId: id, at: Date.now() }, side);
+      if (!r.ok) break;
+      st = r.state;
+    }
+    assert.equal(st.draft!.phase, 'done', '选满之后这一局应该已经开始');
+
+    const city = st.cities.find((c) => c.owner === 'A')!;
+    assert.ok(city, 'A 方应该有一座城');
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city.id,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+    const html = host.innerHTML;
+    const m = /升级后可解锁：([^<]*)</.exec(html);
+    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = m![1]!
+      .split('、')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    assert.ok(names.length > 0, '青铜开局升到二级肯定有东西解锁，不该是空的');
+
+    // ① 名单里的每一个，都必须是"这一局真能用"的
+    for (const name of names) {
+      const def = Object.values(st.unitTypes).find((d) => d.name === name);
+      assert.ok(def, `提示里出现了不认识的兵种名：${name}`);
+      assert.ok(
+        draftAlwaysAllowed(def!) || st.draft!.picks.A.includes(def!.id),
+        `「${name}」既没选到、也不是本来就能用的，不该出现在升级预览里`,
+      );
+    }
+
+    // ② 池子里确实存在"没选到的高时代卡"——不然这条用例测不出东西
+    const leakedPool = Object.values(st.unitTypes).filter(
+      (d) =>
+        d.era > city.era &&
+        !d.summonedOnly &&
+        !draftAlwaysAllowed(d) &&
+        !st.draft!.picks.A.includes(d.id),
+    );
+    assert.ok(leakedPool.length > 0, '这局该存在"没选到的高时代兵"，否则测不出漏卡');
+    const leaked = leakedPool.filter((d) => names.includes(d.name));
+    assert.equal(
+      leaked.length,
+      0,
+      `没选到的卡混进了升级预览：${leaked.map((d) => d.name).join('、')}`,
+    );
+
+    // ③ 反面：本来就不用选的那几类必须还在（用户点名的经济 / 建造单位）
+    assert.ok(names.includes('伐木工'), `二级的经济单位「伐木工」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('民夫'), `二级的建造单位「民夫」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('石桥'), `三级的桥「石桥」要还在（桥也不进池子），实际：${names.join('、')}`);
+
+    // ④ 函数本身和面板同源：面板里列的就是 upgradeUnlocks 的结果
+    assert.deepEqual(
+      names,
+      upgradeUnlocks(st, 'A', city.era).map((d) => d.name),
+      '面板该直接用 upgradeUnlocks 的结果，别再自己写一份判据',
+    );
+  } finally {
+    host.remove();
+  }
+});
 
 check('选卡池排序：同一代里，原版在扩展前面，扩展之间按声明顺序', () => {
   // 这条补的是"次要排序依据"：只按时代排的话，同一代里原版兵和扩展兵会混着排，
