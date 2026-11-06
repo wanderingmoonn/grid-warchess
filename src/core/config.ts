@@ -18,6 +18,15 @@
 
 import type { Terrain, UnitCategory, UnitTypeDef } from './types.ts';
 
+/**
+ * 算作「水」的四种地形。
+ *
+ * 桥面也算——桥底下就是河。军营要临水、地图生成要判港址、AI 要选登陆点，
+ * 用的都是这一份：各写一遍必然走偏（浅流漏判过一次，桥面漏判过一次，
+ * 两次的表现都是"画面高亮能建，点下去才说不临水"）。
+ */
+export const WATER_TERRAINS: Terrain[] = ['water', 'deep', 'shallow', 'bridge'];
+
 export const CONFIG = {
   boardW: 16,
   boardH: 16,
@@ -1184,7 +1193,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     buildOn: ['plain', 'hill'],
     // 临水扎营：粮秣、饮水、船运都得靠河。这条同时是水军的存在理由——
     // 军营必然出现在水边，水军就有东西可以打，也就必须有人护航。
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
   camp2: {
     id: 'camp2',
@@ -1203,7 +1212,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     autoAttack: true,
     produce: {},
     buildOn: ['plain', 'hill'],
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
   camp3: {
     id: 'camp3',
@@ -1222,7 +1231,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     autoAttack: true,
     produce: {},
     buildOn: ['plain', 'hill'],
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
   camp4: {
     id: 'camp4',
@@ -1241,7 +1250,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     autoAttack: true,
     produce: {},
     buildOn: ['plain', 'hill'],
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
   camp5: {
     id: 'camp5',
@@ -1263,7 +1272,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     // 想给某一档加白名单或冷却，也只需要改这一行——规则层不用动。
     produce: { costScale: 0.9 },
     buildOn: ['plain', 'hill'],
-    requiresWater: true,
+    adjacent: { terrain: WATER_TERRAINS },
   },
   gunboat: {
     id: 'gunboat',

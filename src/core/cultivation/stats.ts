@@ -153,20 +153,25 @@ export function swordMul(u: Unit): number {
 
 // ── 战斗历练（击杀经验）──────────────────────────
 // 规则单一真相：击杀经验只在这里算，hooks.ts 只负责读写额度。
-// 设计要点：
-//   · 目标不看造价/等级，只看基础攻击力是否达到当前境界的"值得一战"门槛；
-//     这样天然绕开召唤物无价、多资源换算、英雄无等级的问题。
-//   · 单次收益受击杀者境界系数调制，高阶清杂兵收益自然下降。
-//   · 单回合有硬上限，防止 AOE 清屏刷经验。
-//   · rank 7+ 系数为 0：纯战斗摸不到 7 级（剑修 rank 6 仍可磨，见下）。
+//
+// 设计目标：外出历练是**一条极其艰难的路**——给到 7 级是奖励，不是常规路线。
+// 实现上有三重闸：
+//   1. 目标要"值得一战"：基础攻击力必须高于当前境界的门槛，清杂兵没有收益；
+//   2. 收益随境界衰减：越往上，同一个人头越不值钱（rank 7+ 直接归零）；
+//   3. 每回合封顶：防止 AOE 清屏一夜暴富。
+//
+// 不看造价是有意的：召唤物没有造价，有些还很难打。
+//
+// 为什么数字长这样（2026-11-06 推演，W=1.65 的墙 + 这套系数）：
+//   · 炼气士就算每回合满编 9 杀 + 4 块灵田，6 级也差 49 点，老死在 6 级；
+//   · 剑修每回合 6 杀 + 4 田，能在 66 岁前后摸到 7 级（寿元 73）；
+//   · 纯挂机仍然是 4 级坐化。
+// 这三条的数值被 cultivation.test.ts 的"历练"用例钉住了，改系数会红。
 
-/** 单次击杀的名义历练基数（未乘境界系数） */
+/** 单次击杀的名义历练基数（未乘境界系数、未乘流派倍率） */
 export const KILL_EXP_BASE = 3;
 
-/** 单个修士单回合最多获得的击杀经验 */
-export const KILL_EXP_PER_TURN_CAP = 10;
-
-/** 下标 = 击杀者境界，值 = 名义历练系数。rank 7+ 为 0。 */
+/** 下标 = 击杀者境界，值 = 名义历练系数。rank 7+ 为 0：战斗摸不到更高境界。 */
 export const KILL_EXP_RANK_FACTOR = [1.8, 1.8, 1.5, 1.2, 0.8, 0.5, 0.15, 0, 0, 0];
 
 /**
@@ -176,12 +181,22 @@ export const KILL_EXP_RANK_FACTOR = [1.8, 1.8, 1.5, 1.2, 0.8, 0.5, 0.15, 0, 0, 0
  */
 export const KILL_EXP_MIN_ATK_BY_RANK = [0, 0, 1, 2, 3, 5, 8, 12, 99, 99];
 
-/**
- * 剑修实战历练倍率。配合 getExpGrowth 对剑修减半的人设。
- * rank 6 时 3 * 0.15 * 2 = 0.9 → round = 1，剑修理论上能靠血战磨到 7 级；
- * 非剑修 rank 6 是 0.45 → round = 0，磨不上去。
- */
+/** 剑修实战历练倍率。配合 getExpGrowth 对剑修减半的人设：打坐慢，杀人快。 */
 export const SWORD_KILL_EXP_MUL = 2;
+
+/**
+ * 每回合击杀经验上限 = KILL_EXP_CAP_BASE + KILL_EXP_CAP_PER_RANK × 境界。
+ *
+ * 为什么跟着境界长：封顶的目的是挡"低境界一波 AOE 刷穿前五级"，而不是挡
+ * 高境界正常打架。定值的话两头约束力差好几倍——rank 0 时两个头就顶格，
+ * rank 6 却要杀满十个。
+ *
+ * 早期上限必须给够（rank 0 = 6，是打坐的 3 倍），否则剑修的"以杀证道"
+ * 在前期就被上限抹平：他和炼气士拿一样多的封顶，却只有一半打坐收入。
+ * 这条是推演出来的，不是拍的——上限压到 rank+2 时，剑修反而比炼气士晚到 6 级。
+ */
+export const KILL_EXP_CAP_BASE = 6;
+export const KILL_EXP_CAP_PER_RANK = 3;
 
 /** 从按 rank 索引的表里取值，越界钳到两端，防止未来加 rank 时 undefined。 */
 function rankIndex(table: readonly number[], rank: number): number {
@@ -189,33 +204,43 @@ function rankIndex(table: readonly number[], rank: number): number {
   return table[i] ?? 0;
 }
 
-/**
- * 该目标是否"值得一战"：基础攻击力必须超过当前境界的门槛。
- * 用基础 atk（不做 effectiveStats 修正），纯查询、无副作用。
- */
+/** 该境界每回合最多拿到多少击杀经验 */
+export function killExpCapOfRank(rank: number): number {
+  return KILL_EXP_CAP_BASE + KILL_EXP_CAP_PER_RANK * Math.max(0, rank);
+}
+
+/** 该目标是否"值得一战"：基础攻击力必须超过当前境界的门槛。 */
 export function isWorthFighting(killerRank: number, victimAtk: number): boolean {
   return victimAtk > rankIndex(KILL_EXP_MIN_ATK_BY_RANK, killerRank);
 }
 
 /**
- * 单次击杀的"名义历练"，不含单回合封顶。
- * 不通过门槛（低攻靶子）返回 0。
- * `victimAtk` 由调用方从 state.unitTypes[victim.type].atk 取。
+ * 按境界查单次击杀的历练（纯函数，不碰 Unit）。
+ * 规则书那张"各境界历练表"直接用它，免得手打一份会过期的数字。
+ */
+export function killExpForRank(rank: number, victimAtk: number, sword: boolean): number {
+  if (!isWorthFighting(rank, victimAtk)) return 0;
+  const factor = rankIndex(KILL_EXP_RANK_FACTOR, rank);
+  return Math.round(KILL_EXP_BASE * factor * (sword ? SWORD_KILL_EXP_MUL : 1));
+}
+
+/**
+ * 单次击杀的"名义历练"，不含单回合封顶。不通过门槛（低攻靶子）返回 0。
+ * `victimAtk` 由调用方从 `state.unitTypes[victim.type].atk` 取（基础值）。
+ *
+ * 取整放在**最后一步**：先 round(基数 × 境界系数) 再乘剑修倍率会把小数吃掉——
+ * rank 6 的 0.45 先取整成 0，剑修就永远是 0 了。
  */
 export function killExpPerKill(killer: Unit, victimAtk: number): number {
-  const rank = getRank(killer);
-  if (!isWorthFighting(rank, victimAtk)) return 0;
-  const base = KILL_EXP_BASE * rankIndex(KILL_EXP_RANK_FACTOR, rank);
-  const mul = killer.type === 'sword-cultivator' ? SWORD_KILL_EXP_MUL : 1;
-  return Math.round(base * mul);
+  return killExpForRank(getRank(killer), victimAtk, isSwordCultivatorType(killer.type));
 }
 
 /**
  * 实际入账的击杀经验：名义值再受本回合剩余额度限制。
- * `usedThisTurn` 由调用方从 custom.killExpThisTurn 读出。
+ * `usedThisTurn` 由调用方从 `custom.killExpThisTurn` 读出。
  */
 export function calcKillExp(killer: Unit, usedThisTurn: number, victimAtk: number): number {
   const nominal = killExpPerKill(killer, victimAtk);
-  const left = Math.max(0, KILL_EXP_PER_TURN_CAP - usedThisTurn);
+  const left = Math.max(0, killExpCapOfRank(getRank(killer)) - usedThisTurn);
   return Math.min(nominal, left);
 }

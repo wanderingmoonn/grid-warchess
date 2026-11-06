@@ -68,8 +68,19 @@ export interface AbilityApi {
   hasAbility(s: GameState, u: Unit, id: string): boolean;
   /** 能不能被治疗（机械单位不行） */
   canBeHealed(s: GameState, u: Unit): boolean;
-  /** 贴一层持续状态；返回是否新贴上（战报只报真正发生的事） */
-  putStatus(target: Unit, key: 'poison' | 'burn' | 'slow' | 'curse' | 'curse-deep', turns: number): boolean;
+  /**
+   * 贴一层持续状态。
+   *
+   * `key` 是**任意已注册的状态 id**：内置的（中毒/灼烧/减速/诅咒/咒缚）和扩展用
+   * `registerStatus` 注册的都算。以前这里写死了 5 个字面量，导致扩展能注册状态
+   * 却贴不上去——注册表对外开着，入口却是关的。
+   *
+   * 没注册过的 id 会当场抛错，而不是静默什么都不发生：贴错一个名字查起来
+   * 比崩一次难得多。
+   *
+   * 返回是否真的贴上了（已有同等或更多的回合数时返回 false，战报就不要报了）。
+   */
+  putStatus(target: Unit, key: string, turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */
@@ -433,6 +444,20 @@ export interface AuraSpec {
    */
   foeAtkPct?: number;
   /**
+   * 给范围内友军的**攻击力百分比**加成（0.1 = +10%）。
+   *
+   * 和 `allyAtk` 的分工和敌方那边一样：`allyAtk` 是加法（+2 点），
+   * 这个字段是比例。多条**不叠乘**，取最强的一条——两个杀伐阵重叠不该变 ×1.21。
+   */
+  allyAtkPct?: number;
+  /**
+   * 范围内敌军的**移动力留存比例**（0.5 = 减半，向下取整）。
+   *
+   * 多条取最强，也就是取最小的留存率。作用点在"保底 1"**之后**，
+   * 所以它能把 1 点移动力压成 0——「封印」就是靠这个把对面钉死的。
+   */
+  foeMovePct?: number;
+  /**
    * 上面那几条"给敌军"的作用半径（格）。默认 1 = 相邻。
    *
    * 威吓、咒域都是 1（贴上去才算），「虚咒」是 3。
@@ -519,6 +544,18 @@ export interface AbilityHooks {
    * （治愈、灼烧……）根本不走这个字段。
    */
   aura?: AuraSpec | AuraSpec[];
+  /**
+   * 动态光环：每次被查询时现算，用来表达"光环取决于盘面"。
+   *
+   * `aura` 写的是兵种数据里固定的那一项；而「杀伐阵」的半径和加成要看它旁边
+   * 站着哪位修士、境界多高——那只有拿到盘面才算得出来。
+   *
+   * 返回 null 表示这一次没有光环。
+   *
+   * ⚠️ 这个函数在热路径上：算一次属性就要遍历一圈光环来源，每个来源都会调一次。
+   * 所以里面只做只读的轻量计算，不要写盘面，也不要遍历整个单位表。
+   */
+  auraDynamic?: (c: { state: GameState; self: Unit }) => AuraSpec | AuraSpec[] | null;
   /** 这个能力涉及范围时的默认半径（供效果型光环等使用） */
   radius?: number;
 }

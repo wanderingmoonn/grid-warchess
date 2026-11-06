@@ -43,10 +43,23 @@ export const LIFESPAN_PER_RANK = 9;
 
 /** 打坐：每回合的保底经验（实际是 境界 + 这个数，剑修再打对折） */
 export const EXP_GROWTH_FLAT = 2;
-/** 亲手击杀一个敌人给多少修为（剑修另乘 SWORD_KILL_MUL） */
-export const KILL_EXP = 10;
-/** 剑修的击杀收益倍数 */
-export const SWORD_KILL_MUL = 2;
+
+/**
+ * 高境界的经验墙：从这一级起，突破门槛额外乘 HIGH_RANK_EXP_MUL。
+ *
+ * 存在理由：修士的寿元挂在境界上（升得慢 = 活得短），所以曲线**不能全局抬**——
+ * 整体抬会把"纯挂机到 4 级"一起打掉，那是双重惩罚。墙只立在 6 级以上，
+ * 就是只掐"能不能上 7 级"这一道坎。
+ *
+ * 现在 7/8/9 级的定位是"对标本体未来更高时代的内容"，本扩展不做过分数值膨胀，
+ * 所以干脆做成"比赢一局还难的成就"：常规路线（挂机 + 灵田）到 6 级为止，
+ * 只有剑修一路血战才可能在寿元耗尽前摸到 7 级。
+ *
+ * 1.65 是推演出来的，不是拍的：1.5 时炼气士满编 9 杀也能到 7 级，
+ * 1.7 时剑修 6 杀就到不了。见 stats.ts 的「战斗历练」。
+ */
+export const HIGH_RANK_EXP_FROM = 6;
+export const HIGH_RANK_EXP_MUL = 1.65;
 
 // 读取当前经验，如果没有初始化就返回 0
 export function getExp(u: Unit): number {
@@ -61,9 +74,13 @@ export function getExp(u: Unit): number {
  *   expForRank(0) = 10  → 0 级升 1 级
  *   expForRank(1) = 30  → 1 级升 2 级（累计）
  *   expForRank(2) = 70  → 2 级升 3 级（累计）
+ *
+ * 6 级以上额外乘 HIGH_RANK_EXP_MUL（见那里的说明）：那是一道刻意的墙，
+ * 不是曲线的一部分。
  */
 export function expForRank(rank: number): number {
-  return Math.floor(10 + 10 * rank * (rank + 1) + 0.05 * 4 ** rank);
+  const base = Math.floor(10 + 10 * rank * (rank + 1) + 0.05 * 4 ** rank);
+  return rank >= HIGH_RANK_EXP_FROM ? Math.round(base * HIGH_RANK_EXP_MUL) : base;
 }
 
 /**
@@ -102,22 +119,37 @@ export function getMaxHp(s: GameState, u: Unit): number {
 }
 
 /**
- * 从 `fromRank` 升到 `toRank` 一次性加多少生命上限。
+ * 生命上限曲线。单一真相是「每一级给多少」，累计值由它求和得出。
  *
- * 用 `to³ - from³` 的**差**而不是逐级累加：两者数值等价（telescoping sum），
- * 但写成一跳的形态和 `addExp` 原有的"跨级只回一次血"保持完全一致——
- * 改写成逐级的话，`Math.floor` 在每级都会丢一次精度，回血量会和以前不同。
+ * 以前是一句闭式函数作差：`floor(8.5·Δr + 0.0685·(F(to) − F(from)))`。
+ * 那个写法短，但它和累计值成了两条路径——跨级算 `floor(F(to) − F(from))`、
+ * 逐级算 `Σ floor(单级)`，取整点不同。实测 2→4 / 3→5 / 4→6 / 5→7 / 6→8 / 7→9
+ * 六档会差 1 点：**同样多的经验，一次跳两级比连升两次少 1 点血**。
+ * 剑气纵横一次给几百经验、直接跳级时就会命中这个分支。
+ *
+ * 现在统一成「逐级增量求和」：跳级就是分几步走，天然一致；要调「每级加多少血」
+ * 也只改 hpGainForRank 一处，累计值、灵体重生的重置、规则书全跟着走。
  */
-export function maxHpDeltaBetween(fromRank: number, toRank: number): number {
-  return Math.floor(
-    8.5 * (toRank - fromRank) +
-    0.0685 * (toRank ** 3 * 1.8 ** toRank - fromRank ** 3 * 1.8 ** fromRank),
-  );
+
+/** 从 rank-1 升到 rank 时，生命上限增加多少（rank ≤ 0 恒为 0） */
+export function hpGainForRank(rank: number): number {
+  if (rank <= 0) return 0;
+  const shape = (r: number) => r ** 3 * 1.8 ** r;
+  // 8.5 是每级的固定部分，0.0685·r³·1.8^r 是越往后越陡的指数部分
+  return Math.floor(8.5 + 0.0685 * (shape(rank) - shape(rank - 1)));
 }
-export function sumDeltaMaxHpUpTo(rank: number): number {
+
+/** 0 级升到 rank 级，一共加了多少生命上限 */
+export function totalHpBonusForRank(rank: number): number {
   let total = 0;
-  for (let r = 1; r <= rank; r++) total += maxHpDeltaBetween(r - 1, r);
+  for (let r = 1; r <= rank; r++) total += hpGainForRank(r);
   return total;
+}
+
+/** 从 fromRank 升到 toRank 加多少（跨级 = 逐级累加，和连升几次完全一致） */
+export function maxHpDeltaBetween(fromRank: number, toRank: number): number {
+  if (toRank <= fromRank) return 0;
+  return totalHpBonusForRank(toRank) - totalHpBonusForRank(fromRank);
 }
 
 /**
