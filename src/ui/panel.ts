@@ -20,7 +20,7 @@ import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { holdOf } from '../core/carry.ts';
 import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
-import { canUseType, eraWindowOk } from '../core/draft.ts';
+import { canUseType, eraWindowOk, upgradeUnlocks } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
@@ -132,6 +132,14 @@ export interface PanelInput {
    * 点下去再被规则挡住，体验上等于一个坏掉的界面。
    */
   spectator?: boolean;
+  /**
+   * 复盘回放：这是在**看别人的棋**，不是在对局里。
+   *
+   * 行为上等价于观战（`readOnly` 全线生效），但文案要分开：
+   * 说"观战中"会让玩家以为有人在对面坐着；复盘里既没有对手也没有回合，
+   * 只有"这是第几步"。所以这一位只改提示语，不改权限。
+   */
+  replay?: boolean;
   /**
    * 指挥官模式：走位与开火归 AI，棋盘只剩"看"。
    *
@@ -270,7 +278,7 @@ function panelHtml(input: PanelInput): string {
   const turnBadge = s.winner
     ? `<span class="turn-badge">对局结束</span>`
     : spectator
-      ? `<span class="turn-badge watching">观战中 · 全图视角</span>`
+      ? `<span class="turn-badge watching">${input.replay ? '复盘 · 全图视角' : '观战中 · 全图视角'}</span>`
       : quit
         ? `<span class="turn-badge watching">你已认输 · 观战中</span>`
         : lostAll
@@ -311,7 +319,13 @@ function panelHtml(input: PanelInput): string {
    */
   const seatRows = seatsOf(s)
     .map((p) => {
-      const mine = p === me;
+      /*
+       * "（你）"只该标在**真的在玩的那一方**头上。
+       *
+       * 观战位和复盘都没有"你"：`me` 在那种场合仍然是 A（面板要有个主人才能算视野），
+       * 于是这一行一直把红方标成"（你）"——复盘别人的棋时，第一眼就以为自己是其中一方。
+       */
+      const mine = !spectator && p === me;
       const cities = citiesOf(s, p).length;
       /*
        * 出局有两张脸：主动认输，和最后一座城被人接管。
@@ -383,14 +397,16 @@ function panelHtml(input: PanelInput): string {
                  myTurn
                    ? '结束行动，交给对方'
                    : spectator
-                     ? '观战中 · 只能看'
+                     ? input.replay
+                       ? '复盘 · 只能看'
+                       : '观战中 · 只能看'
                      : quit
                        ? '你已认输 · 只能看'
                        : '等待对方行动中'
                }
              </button>`
       }
-      <div class="side-actions">
+      <div class="side-actions"${input.replay ? ' hidden' : ''}>
         <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}
@@ -399,9 +415,11 @@ function panelHtml(input: PanelInput): string {
       <button class="btn btn-sm btn-block" data-act="chime">${chimeLabel(input.chimeVolume ?? 0.6)}</button>
       <div class="hint" style="text-align:center">
         ${
-          spectator
-            ? '这是全图视角：双方的伏兵和金币都看得见。别在两个人还在打的时候念出来。'
-            : '每一步都会自动存档，随时可以关掉页面'
+          input.replay
+            ? '复盘是全图视角：当时被雾挡住的部队也画出来了。'
+            : spectator
+              ? '这是全图视角：双方的伏兵和金币都看得见。别在两个人还在打的时候念出来。'
+              : '每一步都会自动存档，随时可以关掉页面'
         }
       </div>
     </div>
@@ -892,7 +910,20 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   return `
     ${heroBlock}
     <div class="card-title"${heroBlock ? ' style="margin-top:14px"' : ''}>操作</div>
-    <div class="hint">
+    ${
+      /*
+       * 复盘：这一段原来照抄对局里的操作说明——"点自己的单位 → 蓝色格子是可移动范围"。
+       * 复盘里既没有"我的单位"，也不会画可达格，整段读下来只教人去做点不动的事。
+       * 这里换成这一屏真正能做的三件事。
+       */
+      input.replay
+        ? `<div class="hint">
+      拖顶部的进度条 → 停到任意一步；也可以用 <kbd>←</kbd> <kbd>→</kbd> 一步一步走，
+      <kbd>空格</kbd> 播放 / 暂停，<kbd>Home</kbd> <kbd>End</kbd> 跳两端。<br /><br />
+      点棋子、点城市 → 看它<b>在那一刻</b>的属性卡（光环、剩余行动、驻军都在）。<br /><br />
+      这里是回放，不能走子：要接着打那局，点复盘条右边的「退出复盘」。
+    </div>`
+        : `<div class="hint">
       点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
       点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
       点对方的城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
@@ -902,7 +933,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       <b>强制攻击</b>（<kbd>Shift</kbd>）—— 打身下的目标。<br />
       点按钮进入的模式会一直扣着，期间棋盘只认这一个动作，<b>再点一次按钮才退出</b>；
       按住修饰键则只对下一次点击生效。
-    </div>
+    </div>`
+    }
   `;
 }
 
@@ -976,7 +1008,15 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       eraWindowOk(s, d, city.era) &&
       canUseType(s, city.owner, d.id),
   );
-  const locked = Object.values(s.unitTypes).filter((d) => d.era > city.era);
+  /*
+   * 升级后会解锁什么。
+   *
+   * 判据在 core/draft.ts 的 `upgradeUnlocks`：它和产兵表共用 `canUseType`，
+   * 所以选卡模式下**没选到的卡不会出现**（以前的版本只判时代，于是会列出一串
+   * 玩家根本造不了的兵）；经济单位、建造单位、生产性建筑与桥不受选卡影响，
+   * 照旧列出来——伐木工、民夫、石桥这些升级解锁是真事。
+   */
+  const locked = upgradeUnlocks(s, city.owner, city.era);
 
   // 地面坐满时还起得来几款空军：底部那句提示用得上。
   // 它只回答"是不是真的什么都造不了"，所以按"确实有落点"算，不是按兵种表里有几架。
@@ -1549,6 +1589,16 @@ export interface TopbarState {
   waitingForPeer: boolean;
   /** 观战位：既不是等对方，也不是轮到我 */
   spectator?: boolean;
+  /**
+   * 正在复盘（看一份回放）。
+   *
+   * 和观战位不是一回事：观战位至少还是**一局活着的棋**，对面可能正在走；
+   * 复盘是一段被按停的历史，没有"轮到谁"这回事。所以顶栏要把所有会**改局**的
+   * 按钮收起来——暂停 AI / 速度 / 交给 AI / 联机 / 迷雾 / 导出对局。
+   * 最后那个尤其要紧：导出的是当前 `state`，而复盘期间 `state` 是别人的棋，
+   * 按下去等于把别人的对局当成自己的发出去。
+   */
+  replay?: boolean;
   /** 上帝模式：全图无雾，两边都归玩家摆，所以"轮到谁"不是重点 */
   god?: boolean;
   /** 指挥官模式：顶栏那颗"交给 AI"要换成"交给参谋部"（同一个动作的另一条入口） */
@@ -1620,11 +1670,11 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>
       <button class="btn btn-sm" data-act="ai-speed" data-ref="speed" hidden>速度</button>
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
-      <button class="btn btn-sm" data-act="online">联机</button>
+      <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
       <button class="btn btn-sm" data-act="manual">规则书</button>
       <button class="btn btn-sm" data-act="feedback" title="拍下当前局面，报个 bug">反馈</button>
-      <button class="btn btn-sm" data-act="export">导出对局</button>
+      <button class="btn btn-sm" data-act="export" data-ref="export">导出对局</button>
       <!--
         「兵种编辑器」「导入对局」搬去了开始页面（2026-11-04）：
         这两件事都不是"在对局里做的事"——编辑兵种是先改配置再开局，
@@ -1660,6 +1710,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     s.roomCode ?? '',
     s.waitingForPeer ? 1 : 0,
     s.spectator ? 1 : 0,
+    s.replay ? 1 : 0,
     s.god ? 1 : 0,
     s.fog ? 1 : 0,
     s.blackout ? 1 : 0,
@@ -1685,13 +1736,15 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
 
   const who = ref('who');
   if (who) {
-    who.textContent = s.god
-      ? '上帝模式 · 全图'
-      : s.spectator
-        ? '观战 · 全图'
-        : s.waitingForPeer
-          ? '等待对方提交'
-          : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
+    who.textContent = s.replay
+      ? '复盘 · 全图'
+      : s.god
+        ? '上帝模式 · 全图'
+        : s.spectator
+          ? '观战 · 全图'
+          : s.waitingForPeer
+            ? '等待对方提交'
+            : s.currentName + (s.aiCurrent ? ` · ${s.aiLevelName}` : '');
   }
 
   const room = ref('room');
@@ -1702,13 +1755,14 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
 
   const pause = ref('pause');
   if (pause) {
-    pause.hidden = !s.aiAny;
+    // 复盘里没有"AI 在走"这回事：那段棋已经下完了，按钮只剩误触
+    pause.hidden = !s.aiAny || s.replay === true;
     pause.textContent = s.paused ? '继续' : '暂停 AI';
   }
 
   const speed = ref('speed');
   if (speed) {
-    speed.hidden = !s.aiAny;
+    speed.hidden = !s.aiAny || s.replay === true;
     speed.textContent = `速度 ${s.speedName}`;
   }
 
@@ -1716,7 +1770,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   if (ai) {
     // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
     // 而顶栏这个按钮会把它变成"回合自动往前跑"，摆兵就摆不安稳了。
-    ai.hidden = s.god === true;
+    ai.hidden = s.god === true || s.replay === true;
     // 指挥官模式：这一方本来就在 AI 手里，"交给 AI / 收回操作权"没有第二种解释。
     // 这里的按钮改成同一件事的另一个入口——执行一批再交还，和参谋部那颗同源，
     // 顺手点错不会把对面也托管掉。
@@ -1737,7 +1791,21 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     // 允许关掉雾等于让它失效
     fog.textContent = s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`;
     fog.classList.toggle('is-locked', s.blackout);
+    // 复盘里这个开关改的是"别人那局"的雾：改了既存不下来，也会把画面调歪
+    fog.hidden = s.replay === true;
   }
+
+  /*
+   * 复盘：把所有会改局的入口收起来。
+   *
+   * 不是"禁用了但看得见"——那会让人反复去点。玩家在复盘里能做的事只有
+   * 看棋盘、看属性卡、拖进度条、退出，剩下的按钮在这一屏没有第二个意思。
+   * 「规则书」「反馈」「首页」留着：它们不碰这一局。
+   */
+  const online = ref('online');
+  if (online) online.hidden = s.replay === true;
+  const exp = ref('export');
+  if (exp) exp.hidden = s.replay === true;
   return true;
 }
 

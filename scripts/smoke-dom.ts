@@ -24,7 +24,7 @@ import { playerView } from '../src/core/fog.ts';
 import { addMark } from '../src/core/marks.ts';
 import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
-import { remainingUnits } from '../src/core/draft.ts';
+import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { buildMatchReport } from '../src/core/report.ts';
@@ -1446,6 +1446,48 @@ check('选了人机对战才出现三档 AI：初级 / 中级 / 高级，默认�
   // 切回热座，别把后面的"人对人"用例带成 AI 局
   click('[data-ai="0"]');
   assert.equal(doc.querySelector('[data-ailevel]'), null, '切回热座应该收起来');
+});
+
+check('测试 AI 和三个档位排在同一行，并且写明自带全视野', () => {
+  /*
+   * 2026-11-06 上线：自博弈练出来的策略网络进了「AI」这一栏。
+   *
+   * 三条要在界面上钉住：
+   *   1. 它在同一行（玩家是在"给对面挑个对手"的时候看见它的）；
+   *   2. 它和三个档位互斥——选了它就等于换内核，不该同时亮着「高级 AI」；
+   *   3. 它的说明必须写清"自带全视野"。这不是文案洁癖：手写 AI 只吃
+   *      迷雾过滤后的视图，而它直接读盘面，开雾也看得见你——不写出来
+   *      就是拿一个不公平的对手当公平的用。
+   */
+  click('[data-ai="1"]');
+  const net = () => doc.querySelector<HTMLElement>('[data-aibrain="net"]');
+  assert.ok(net(), '人机对战时应该能选到测试 AI');
+  assert.ok((net()!.textContent ?? '').includes('全视野'), '按钮上要直接写着全视野');
+  assert.equal(net()!.closest('.ai-level-row'), doc.querySelector('.ai-level-row'), '它和三个档位是同一行');
+
+  click('[data-aibrain="net"]');
+  assert.ok(net()!.classList.contains('active'), '点它应该亮起来');
+  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了测试 AI 就不该同时亮着档位');
+
+  // 说明文案要写明全视野，否则玩家只会以为它是"第四档"
+  const section = net()!.closest('section')!;
+  assert.ok((section.textContent ?? '').includes('自带全视野'), '这一栏要有一句"自带全视野"的说明');
+
+  click('[data-ailevel="advanced"]');
+  assert.equal(net()!.classList.contains('active'), false, '点档位应该切回手写引擎');
+  assert.equal(
+    doc.querySelector<HTMLElement>('[data-ailevel].active')?.dataset.ailevel,
+    'advanced',
+    '切回来应该落在高级 AI',
+  );
+
+  // 指挥官模式的 AI 只执行玩家排的队列，网络内核不认队列——这一档不提供
+  click('[data-role="commander"]');
+  assert.equal(net(), null, '指挥官模式下不该出现测试 AI');
+  click('[data-role="full"]');
+
+  click('[data-ai="0"]');
+  assert.equal(net(), null, '切回热座应该收起来');
 });
 
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
@@ -5373,6 +5415,118 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
 });
 
 
+check('选卡模式下，城市的「升级后可解锁」只列这一局真能造的兵', () => {
+  /*
+   * 2026-11-06：这句提示原来只判 `def.era > city.era`（`ui/panel.ts` 的 `locked`），
+   * 于是在选卡模式下把**池子里没选到的卡**整批列了出来——玩家看到
+   * "升级后可解锁：圣剑勇者、九头蛇……"，真升完级一个也造不了。
+   * 那句话比不写更糟：它把"没选到"说成了"再等等就有"。
+   *
+   * 现在判据在 `core/draft.ts` 的 `upgradeUnlocks`，和产兵表共用 `canUseType`。
+   * 两边都要钉住：
+   *   ① 没选到的高时代卡**不出现**；
+   *   ② 经济 / 建造单位、生产性建筑、桥**照旧出现**——它们本来就不用选，
+   *      而"升级解锁伐木工 / 民夫 / 石桥"是真事（用户特别点了这一条）。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch(
+      { ...DEFAULT_CONFIG, size: 12, startEra: 1, draftMode: true, expansionIds: [] },
+      777,
+      {},
+    );
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    st = started.state;
+
+    // 交完禁用
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        const id = remainingUnits(st)[0]!;
+        st.current = side;
+        const r = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (r.ok) st = r.state;
+      }
+    }
+    assert.equal(st.draft!.phase, 'pick', '交完禁用应该进入选人');
+
+    // 一路选满（AI 那边不需要好用，这里只要走到"选卡结束"）
+    for (let guard = 0; guard < 40; guard += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const id = remainingUnits(st)[0];
+      if (!id) break;
+      st.current = side;
+      const r = applyAction(st, { type: 'DRAFT_PICK', unitId: id, at: Date.now() }, side);
+      if (!r.ok) break;
+      st = r.state;
+    }
+    assert.equal(st.draft!.phase, 'done', '选满之后这一局应该已经开始');
+
+    const city = st.cities.find((c) => c.owner === 'A')!;
+    assert.ok(city, 'A 方应该有一座城');
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city.id,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+    const html = host.innerHTML;
+    const m = /升级后可解锁：([^<]*)</.exec(html);
+    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = m![1]!
+      .split('、')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    assert.ok(names.length > 0, '青铜开局升到二级肯定有东西解锁，不该是空的');
+
+    // ① 名单里的每一个，都必须是"这一局真能用"的
+    for (const name of names) {
+      const def = Object.values(st.unitTypes).find((d) => d.name === name);
+      assert.ok(def, `提示里出现了不认识的兵种名：${name}`);
+      assert.ok(
+        draftAlwaysAllowed(def!) || st.draft!.picks.A.includes(def!.id),
+        `「${name}」既没选到、也不是本来就能用的，不该出现在升级预览里`,
+      );
+    }
+
+    // ② 池子里确实存在"没选到的高时代卡"——不然这条用例测不出东西
+    const leakedPool = Object.values(st.unitTypes).filter(
+      (d) =>
+        d.era > city.era &&
+        !d.summonedOnly &&
+        !draftAlwaysAllowed(d) &&
+        !st.draft!.picks.A.includes(d.id),
+    );
+    assert.ok(leakedPool.length > 0, '这局该存在"没选到的高时代兵"，否则测不出漏卡');
+    const leaked = leakedPool.filter((d) => names.includes(d.name));
+    assert.equal(
+      leaked.length,
+      0,
+      `没选到的卡混进了升级预览：${leaked.map((d) => d.name).join('、')}`,
+    );
+
+    // ③ 反面：本来就不用选的那几类必须还在（用户点名的经济 / 建造单位）
+    assert.ok(names.includes('伐木工'), `二级的经济单位「伐木工」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('民夫'), `二级的建造单位「民夫」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('石桥'), `三级的桥「石桥」要还在（桥也不进池子），实际：${names.join('、')}`);
+
+    // ④ 函数本身和面板同源：面板里列的就是 upgradeUnlocks 的结果
+    assert.deepEqual(
+      names,
+      upgradeUnlocks(st, 'A', city.era).map((d) => d.name),
+      '面板该直接用 upgradeUnlocks 的结果，别再自己写一份判据',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
 check('选卡池排序：同一代里，原版在扩展前面，扩展之间按声明顺序', () => {
   // 这条补的是"次要排序依据"：只按时代排的话，同一代里原版兵和扩展兵会混着排，
   // 扫池子时看不出"这批是哪个包带来的"。
@@ -5928,6 +6082,144 @@ await checkAsync('复盘：把一份对局数据拖进页面就能逐帧回看�
   const saved = JSON.parse(w.localStorage.getItem('warchess:match:v1')!);
   assert.equal(saved.turn, 1, '复盘期间不许把别人的棋写进本机存档');
   assert.equal(saved.seed, seed, '本机存档的种子不该被换掉');
+});
+
+await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西全部收起来', async () => {
+  /*
+   * 复盘把 `state` 换成了别人的那一帧，但界面原来还以为这是"我的局"：
+   * 侧栏顶着「轮到你行动」、城里有「生产」按钮、选中单位有强制移动/拆除/结束回合，
+   * 顶栏还摆着「暂停 AI」「交给 AI」「导出对局」。点下去都被 dispatch 的闸门挡住，
+   * 于是玩家看到的是一屏"能点但没反应"的按钮——这就是"棋局和 UI 打架"。
+   *
+   * 这一条从**界面成品**倒着验：复盘里不该有任何一颗可用的改局按钮。
+   */
+  const seed = 707070;
+  const base = createMatch({ ...DEFAULT_CONFIG, size: 8 }, seed);
+  base.fog = false;
+  const w = bootWith(base);
+  const d = w.document;
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    assert.ok(r.ok, '造数据时这一步就没走通');
+    s2 = r.state;
+  }
+  // 终局帧：报告里有 winner，最容易把"结算卡"带出来
+  const report = buildMatchReport({ ...s2, winner: 'A' }, new Date('2026-11-06T00:00:00Z'), null, acts);
+
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  const side = (): HTMLElement => d.querySelector<HTMLElement>('#side')!;
+  /*
+   * 打开一座城。
+   *
+   * 挑"城里没站兵"的那一格：兵压在城上时点下去选中的是兵（连点轮换那套只在
+   * 正常对局里跑），而复盘里最想看的恰恰是城——耐久多少、还剩几回合能被拆。
+   */
+  const cityTile = [...d.querySelectorAll<HTMLElement>('.tile.t-city.own-A')].find(
+    (t) => !t.querySelector('.unit'),
+  );
+  assert.ok(cityTile, 'A 方城里应该有一格是空的');
+  cityTile!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(80);
+  assert.ok(
+    (side().textContent ?? '').includes('城市'),
+    `复盘里点城要看得到城市卡（城不是单位，得单独认一下）：${(side().textContent ?? '').slice(0, 60)}`,
+  );
+  const afterCity = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(!afterCity.includes('生产'), '复盘里不该出现生产区——那是别人那局的城');
+
+  /** 侧栏里"能改局"的按钮：一个都不许是可用状态 */
+  const liveActs = ['end-turn', 'undo', 'surrender', 'force-move', 'force-attack', 'disband', 'upgrade', 'commander-run', 'plan-commit'];
+  const enabled = [...side().querySelectorAll<HTMLButtonElement>('button')].filter(
+    (b) => !b.hidden && !b.disabled && (liveActs.includes(b.dataset.act ?? '') || b.classList.contains('recruit-btn')),
+  );
+  assert.deepEqual(
+    enabled.map((b) => `${b.dataset.act ?? 'recruit'}:${(b.textContent ?? '').trim().slice(0, 8)}`),
+    [],
+    '复盘里不该有一颗可用的改局按钮',
+  );
+
+  // 抬头必须说"这是复盘"，不能假装轮到你
+  const sideText = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(sideText.includes('复盘'), `侧栏要说清这是复盘：${sideText.slice(0, 60)}`);
+  assert.ok(!sideText.includes('轮到你行动'), '复盘里没有"你"的回合');
+  assert.ok(!sideText.includes('（你）'), '席位栏不该把某一方标成"你"——复盘里两边都是别人');
+
+  // 顶栏：会改局的那五个必须收起来，纯看的留下
+  const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
+  for (const act of ['toggle-ai', 'export', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+    assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
+  }
+  for (const act of ['manual', 'feedback']) {
+    assert.ok(topBtn(act), `顶栏该留着 ${act}`);
+    assert.notEqual(topBtn(act)!.hidden, true, `${act} 不该被藏起来`);
+  }
+
+  // 结算卡：别人那局打完了，不该问"要不要捐出这局的数据"
+  assert.equal(d.querySelector('.report-card'), null, '复盘里不该冒出结算卡——上传的是别人那局');
+
+  // 退出之后一切复原
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(100);
+  assert.equal(topBtn('toggle-ai')?.hidden, false, '退出后顶栏要复原');
+  assert.equal(topBtn('export')?.hidden, false, '退出后导出对局要回来');
+  assert.equal(d.querySelector('.tile.t-city.own-A') !== null, true, '退出后还是本机那局');
+});
+
+await checkAsync('复盘：AI 正在走的时候把文件拖进来，回放不会自己往前跑', async () => {
+  /*
+   * `enterReplay` 换的是全局 `state`，而 AI 走子那两条循环（runAiTurn / runCommanderBatch）
+   * 只认自己的 `token`。不按停的话，它们会接着在**回放**上下子：
+   * 拖到自己想看的那一帧，过一会儿棋又变了，回合数还和进度条对不上。
+   */
+  const seed = 606060;
+  const base = createMatch(
+    { ...DEFAULT_CONFIG, size: 8, aiOpponent: true, aiAlly: true },
+    seed,
+  );
+  base.fog = false;
+  const w = bootWith(base); // 开机就会自己开打（kickAiIfNeeded）
+  const d = w.document;
+  await wait(400); // 让它走到一半
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    if (r.ok) s2 = r.state;
+  }
+  const report = buildMatchReport(s2, new Date('2026-11-06T00:00:00Z'), null, acts);
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  // 跳到最后一步，然后盯一会儿：回放是死的，画面不该变
+  d.querySelector<HTMLElement>('[data-act="rp-last"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const turnBefore = d.querySelector('[data-ref="turn"]')?.textContent ?? '';
+  const slider = d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!;
+  const posBefore = slider.value;
+  await wait(500);
+  assert.equal(d.querySelector('[data-ref="turn"]')?.textContent ?? '', turnBefore, '回放里的回合数不该自己往前走');
+  assert.equal(d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!.value, posBefore, '进度条位置不该自己动');
+
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  assert.ok(d.querySelector<HTMLElement>('#replay')!.hidden, '退出复盘');
 });
 
 await checkAsync('复盘：拖进来的不是对局数据时，要说清是什么问题', async () => {

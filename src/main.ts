@@ -12,7 +12,7 @@ import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
-import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
@@ -778,12 +778,20 @@ function currentRoom(): RoomSeat | null {
 
 /** 联机时轮到我操作吗（本机对局恒为 true） */
 function myTurn(): boolean {
+  /*
+   * 复盘里没有"我的回合"。
+   *
+   * 这条读起来像废话，但它是好几处判断的源头：交接遮罩、「结束行动」按钮、
+   * 键盘快捷键、选中单位的动作按钮都挂在它上面。复盘期间 `state` 是别人那一局的
+   * 某一帧，`state.current` 恰好是 A 的时候，这一串全会亮起来——看起来能走子，
+   * 点下去被闸门挡住，这正是"棋局和界面各说各话"的来源。
+   */
+  if (replay) return false;
   if (!room) return true;
   // 观战位永远"不是我的回合"：这一个判断同时挡住了走子、产兵、提交、认输
   if (room.spectator) return false;
   return state.current === room.seat;
 }
-
 /**
  * 面板要的全部输入。
  *
@@ -813,9 +821,19 @@ function panelInput(known?: PlayerView): PanelInput {
     recruitEra,
     logSide: logScope(),
     spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
-    spectator: watching(),
-    // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样
-    commander: state.config.commanderMode === true,
+    /*
+     * 复盘时侧栏必须按"别人的棋"渲染。
+     *
+     * 原来只传 `watching()`（联机观战位），于是复盘里面板认为你就是甲方：
+     * 顶上一句「轮到你行动」，城里有「生产」按钮，选中单位还有强制移动 / 拆除 / 结束回合——
+     * 全都是死的（dispatch 那道闸会拦），但看上去每一颗都能点。
+     * 面板本身早就有"只读"这一档（`readOnly`），缺的只是把复盘也算进去。
+     */
+    spectator: watching() || replay !== null,
+    replay: replay !== null,
+    // 指挥官模式也走"只看"这条线：mine 关掉，但提示文案不一样。
+    // 复盘里哪怕这一局是 commanders 局，也不该出现"执行一批"的入口。
+    commander: replay === null && state.config.commanderMode === true,
     // 底栏那颗按钮在指挥官模式里是"执行一批再交还"的入口，得知道这批打几个回合
     commanderRunning,
     commanderRounds: room ? 1 : CONFIG.commanderSlots,
@@ -852,7 +870,14 @@ function currentReport(): MatchReport {
  * "开新局 / 读存档 / 联机同步"的地方各写一遍重置。
  */
 function reportPanel(): PanelReport | undefined {
-  if (!state.winner || state.config.godMode === true || watching()) return undefined;
+  /*
+   * 复盘里不给结算卡。
+   *
+   * 拖进来的那份报告**自己就有** `winner`，于是复盘一跳到终局帧，这块卡片就冒出来：
+   * "这局的数据要不要捐出来"。按下去传的是别人那局（`currentReport()` 读的是 `state`）——
+   * 等于替一个不知情的人签了同意书。这一条和观战位是同一条理由。
+   */
+  if (!state.winner || state.config.godMode === true || watching() || replay) return undefined;
   const sig = reportSignature(currentReport());
   if (sig !== reportSig) {
     reportSig = sig;
@@ -937,6 +962,20 @@ function enterReplay(text: string, name: string): boolean {
   }
   // 已经在复盘里又拖进来一份：只换这一份，别把 liveState 覆盖成上一份复盘的状态
   if (!replay) liveState = state;
+  /*
+   * 先把还在跑的 AI / 参谋部按停，再换 `state`。
+   *
+   * 两条循环（`runAiTurn` 与 `runCommanderBatch`）都盯着 `aiToken`，改它等于
+   * 让它们在下一个检查点退出。不按停的话：`enterReplay` 把 `state` 换成别人那一局，
+   * 而 AI 循环手里攥着它自己的 `player` 与 `token`，会接着在**回放**上下子——
+   * 表现就是"拖到自己那一帧，过一会儿棋又变了"，而且明显和侧栏/回合数对不上。
+   *
+   * `aiPaused` 也要置上：退出复盘时 `kickAiIfNeeded()` 会把它清掉并重新点起来。
+   */
+  aiToken += 1;
+  aiPaused = true;
+  // 热座交接遮罩：拖文件进来的时候它可能正盖在屏幕上（那层也是 window 级拖放能触发的）
+  closeHandoff();
   replayStopTimer();
   replay = built.session;
   replayName = name;
@@ -1229,13 +1268,14 @@ function render(): void {
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),
-    aiLevelName: aiLevelLabel(aiLevelOf(state)) + ' AI',
+    aiLevelName: aiNameOf(state),
     aiAny: anyAiSide(state),
     paused: aiPaused,
     speedName: AI_SPEED_NAME[aiSpeed] ?? '快',
     roomCode: room?.code ?? null,
-    waitingForPeer: !myTurn() && !state.winner,
+    waitingForPeer: replay === null && !myTurn() && !state.winner,
     spectator: watching(),
+    replay: replay !== null,
     god: state.config.godMode === true,
     commander: state.config.commanderMode === true,
     commanderRunning,
@@ -1936,7 +1976,14 @@ function afterDraft(): void {
 
 /** 画（或收起）遮罩。每次 render 都会问一次，但只有内容变了才重建 DOM */
 function renderDraft(): void {
-  if (!draftInProgress(state)) {
+  /*
+   * 复盘期间一律不铺选卡遮罩。
+   *
+   * 报告里的选卡名单没存（见 replay-file 的说明），重建出来的 `state.draft`
+   * 大概率停在"等待开局/禁用"——那层遮罩会盖在**回放**上面，还带着倒计时和
+   * 「开始选卡」按钮，看上去像这一局在等你选卡。回放里没有这一屏。
+   */
+  if (replay || !draftInProgress(state)) {
     if (!draftEl.hidden) draftEl.hidden = true;
     draftSig = '';
     stopDraftTicker();
@@ -2582,7 +2629,22 @@ function onBoardClick(e: Event): void {
     const at = coordsFromEvent(e);
     if (!at) return;
     const here = stackAt(at.x, at.y);
-    selectedId = here.length > 0 ? here[here.length - 1]!.id : null;
+    if (here.length > 0) {
+      selectedId = here[here.length - 1]!.id;
+      selectedCityId = null;
+    } else {
+      /*
+       * 城里没站兵的那几格要能点开城。
+       *
+       * 复盘最常问的一句是"这一步它为什么不敢压上去"，答案往往在城的耐久和
+       * 时代上（攻城伤害 = 攻击 − 护甲）。而城不是单位，不在这条 `stackAt` 里，
+       * 不单独认一下的话，城市卡在复盘里永远打不开。
+       */
+      const city = cityAt(state, at.x, at.y);
+      selectedId = null;
+      selectedCityId = city?.id ?? null;
+      selectedTile = city ? null : at;
+    }
     // 只换选中，不重算可达格/目标：那两样会让棋盘看起来像能操作
     reach = [];
     targets = [];
@@ -3360,10 +3422,9 @@ function handleAction(act: string, el: HTMLElement): void {
       clearSelection();
       saveMatch(state);
       render();
-      const lv = aiLevelLabel(aiLevelOf(state));
       toast(
         nowAi
-          ? `${state.players[p].name}交给 ${lv} AI 托管`
+          ? `${state.players[p].name}交给 ${aiNameOf(state)}托管`
           : `${state.players[p].name}改由你操作`,
       );
       if (nowAi) void runAiLoop();
@@ -3423,6 +3484,18 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'export': {
+      /*
+       * 复盘期间不许导出。
+       *
+       * `exportMatch(state)` 导的是**当前**局面，而复盘期间 `state` 是别人那一局的
+       * 某一帧。这条路径原来没有闸门，于是"看着别人的棋点导出"发出去的是别人那局，
+       * 而玩家以为那是自己的。顶栏那颗按钮在复盘里已经藏起来了，这里再拦一道：
+       * 入口将来多一个（快捷键、菜单），不会因为忘了藏就漏。
+       */
+      if (replay) {
+        toast('复盘里导出的是别人的棋：先点复盘条上的「退出」，回到你那局再导');
+        return;
+      }
       const text = exportMatch(state);
       void navigator.clipboard
         ?.writeText(text)
@@ -3438,6 +3511,9 @@ function handleAction(act: string, el: HTMLElement): void {
     }
 
     case 'new-game': {
+      // 复盘里先退出来：首页那层会把棋盘盖住，但 `replay` 还挂着，
+      // 点「继续上一局」回来时 `state` 和 `replayIndex` 就对不上了。
+      if (replay) exitReplay();
       // 不再直接换一局：回家，由首页的「开始对局」统一开门。
       // 顺手暂停 AI——棋盘还在下面，别让它在没人看的时候接着下。
       showTitle({ pauseAi: true });
@@ -3693,6 +3769,40 @@ function aiEngine(): Promise<typeof import('./core/ai.ts')> {
   return aiEnginePromise;
 }
 
+/**
+ * 测试 AI 的内核（策略网络）。
+ *
+ * 和手写引擎一样按需加载，但**分成两块**：
+ *   · 代码（编码器 + 合法动作枚举 + 前向）约 40KB，跟着 `import()` 走；
+ *   · 权重 175KB，第一次真要用它走子时才 fetch。
+ * 绝大多数玩家一辈子用不到测试 AI，那 215KB 就不该进首屏。
+ */
+let netBrainPromise: Promise<typeof import('./rl/brain.ts')> | null = null;
+function netBrain(): Promise<typeof import('./rl/brain.ts')> {
+  netBrainPromise ??= import('./rl/brain.ts');
+  return netBrainPromise;
+}
+
+/**
+ * 网络那一侧的随机流：**一局一家一条**，从种子派生。
+ *
+ * 不能每回合新建一条：那样每个回合的第一个采样都会拿到同一个随机数，
+ * 策略会稳定地偏爱同一个分支。也不能用 Math.random：存档、回放、
+ * 双 AI 观战都得重跑出同一局。
+ */
+const netRands = new Map<string, () => number>();
+function netRandFor(seed: number, seat: 'A' | 'B', make: (n: number) => () => number): () => number {
+  const key = `${seed}:${seat}`;
+  let r = netRands.get(key);
+  if (!r) {
+    // 只留最近两局：长会话里一直往里塞会慢慢吃内存
+    if (netRands.size > 8) netRands.clear();
+    r = make((seed * 2654435761 + (seat === 'A' ? 1 : 2)) >>> 0);
+    netRands.set(key, r);
+  }
+  return r;
+}
+
 async function runAiTurn(
   token: number,
   overrides?: Partial<AiBudget>,
@@ -3713,12 +3823,42 @@ async function runAiTurn(
   const rejected = new Set<string>();
   const engine = await aiEngine();
 
+  /*
+   * 网络内核：只在 `config.aiBrain === 'net'` 时加载。
+   *
+   * 加载失败**不中断这一局**——退回手写 AI 并说明一句。让玩家在"点了测试 AI"
+   * 之后面对一局卡死的棋，比"这一局先用普通 AI"糟得多。
+   *
+   * 指挥官模式**不认**它：那个模式的核心是"玩家点名这一格造哪个兵、在哪造"，
+   * 而策略网络只认局面，不认 `budget.order`（训练口径里根本没有这个字段）。
+   * 让它上，队列就变成了摆设，玩家排的计划一条也不会被执行。
+   */
+  let brain: typeof import('./rl/brain.ts') | null = null;
+  let netPolicy: import('./rl/policy.ts').Policy | null = null;
+  if (state.config.aiBrain === 'net' && !state.config.commanderMode) {
+    brain = await netBrain();
+    netPolicy = await brain.loadNetPolicy();
+    if (!netPolicy) {
+      toast(`测试 AI 没加载起来（${brain.netLoadError() ?? '未知原因'}），这一局先用普通 AI`);
+    }
+  }
+
   for (let step = 0; step < engine.AI_MAX_STEPS; step++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
     if (stopWhen?.()) break;
-    const action = engine.aiNextAction(state, budget, rejected);
+    // 有网络内核就用它；没有（或加载失败）就退回手写 AI
+    const action =
+      brain && netPolicy
+        ? brain.netNextAction(
+            state,
+            player,
+            netRandFor(state.seed, player === 'A' ? 'A' : 'B', brain.mulberry32),
+            netPolicy,
+            rejected,
+          )
+        : engine.aiNextAction(state, budget, rejected);
     if (!action) break;
 
     planMovePath(state, action);
@@ -3926,6 +4066,9 @@ const BATCH_DELAY = 40;
 
 /** 现在是不是"轮到玩家当指挥官" */
 function commanderActive(): boolean {
+  // 复盘里没有"参谋部"：那条横条会带着「执行 5 回合」的按钮一起出现，
+  // 而它推的是 `state`——也就是别人那局回放的某一帧。点下去等于拿回放当棋下。
+  if (replay) return false;
   return !!state.config.commanderMode && !state.winner && !spectating() && state.current === me();
 }
 
@@ -6134,6 +6277,9 @@ appEl.addEventListener('input', (e) => {
  */
 window.addEventListener('keydown', (e) => {
   if (!godQuick || state.config.godMode !== true) return;
+  // 复盘里空格归复盘（播放/暂停）：这里再拦一道，否则放一段沙盒回放时空格会被
+  // 这条抢去当"结束回合"——它 dispatch 不进去（闸门拦着），但 preventDefault 已经执行了。
+  if (replay) return;
   if (godRunning || godPassing) return;
   if (e.key !== ' ' && e.code !== 'Space') return;
   if (e.repeat) return;

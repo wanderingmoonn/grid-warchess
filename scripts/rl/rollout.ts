@@ -50,7 +50,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction } from '../../src/core/ai.ts
 import { applyAction } from '../../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../../src/core/setup.ts';
 import type { AiLevel, GameState, PlayerId } from '../../src/core/types.ts';
-import { TRAIN } from './config.ts';
+import { TRAIN, trainSizeFor } from './config.ts';
 import { ACTION_DIM, INTENT_NAMES, STATE_DIM } from './features.ts';
 import type { Intent } from './features.ts';
 import { legalActions } from './legal.ts';
@@ -187,11 +187,32 @@ function modeOf(g: number, seed: number): Mode {
   return 'snap';
 }
 
+/**
+ * 这一局策略坐哪一边。
+ *
+ * 按**种子**派生，不按局号：局号在不同 worker 分片下会重排，而种子是这一局的身份证。
+ * 直接 `seed % 2` 不够——种子是连续的（8000、8001…），那会变成"奇偶严格交错"，
+ * 而种子本身和地图、出生点相关，交错反而可能和地图特性共振。哈希一次更省心。
+ */
+function policySeatOf(seed: number): PlayerId {
+  return hashSeed(seed, 'policy-seat') % 2 === 0 ? 'A' : 'B';
+}
+
 interface GameRow {
   seed: number;
   mode: Mode;
+  /** 这一局的边长。混尺寸训练之后"这一轮到底抽到几张 12×12"要能查 */
+  size: number;
   steps: number;
   winner: PlayerId | null;
+  /**
+   * 这一局策略坐哪一边。
+   *
+   * 座位从 2026-11-06 起按种子交替（见 `policySeatOf`）。这一格必须落进元数据：
+   * 训练侧的"打 AI 胜率"要按**策略那一方**算，写死 `winner === 'A'` 的话，
+   * 座位一交替这个数就变成"先手胜率"，和棋力没关系。
+   */
+  policySeat: PlayerId;
   turns: number;
   /** 撞上回合上限：这种局在训练侧会被整局丢掉（见文件头的说明） */
   timedOut: boolean;
@@ -229,7 +250,7 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   let s: GameState = createMatch(
     {
       ...DEFAULT_CONFIG,
-      size: TRAIN.size,
+      size: trainSizeFor(g),
       startEra: TRAIN.startEra,
       playerCount: 2,
       draftMode: false,
@@ -242,10 +263,21 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
   );
   s.fog = false;
 
-  // 谁在开这一方：自博弈两边都是当前权重；其余情况 B 座是对手，A 座是策略
+  /*
+   * 谁在开这一方。
+   *
+   *   自博弈：两边都是当前权重，两边都记账；
+   *   打 AI / 打快照：**策略轮流坐** A 和 B（见 `policySeatOf`），另一席是对手。
+   *
+   * 2026-11-06 之前这里写死"策略永远坐 A"。代价量出来了：同一批 160 局按座位拆开，
+   * A 座 62.5%、B 座 46.2%（16 个点，z≈2.07）——B 座只在自博弈里练过，
+   * 从没跟手写 AI 对过，也没见过"先手是别人"的开局。而玩家永远坐 A（人机对战里
+   * 你是先手），所以这个偏差直接翻译成"它在你的椅子上比在你对面强 16 个点"。
+   */
+  const POLICY_SEAT = policySeatOf(seed);
   const policySeat = (seat: PlayerId): Policy | null => {
     if (mode === 'self') return policy;
-    if (seat === 'A') return policy;
+    if (seat === POLICY_SEAT) return policy;
     return opponent;
   };
   const learnable = (seat: PlayerId): boolean => policySeat(seat) === policy;
@@ -419,8 +451,11 @@ function runMatch(g: number, seed: number): { rows: Float32Array; meta: GameRow 
     meta: {
       seed,
       mode,
+      size: s.w,
       steps: buf.n,
       winner: s.winner ?? null,
+      // 训练侧按它算"策略那一方赢没赢"；写死 A 会在座位交替后变成"先手胜率"
+      policySeat: mode === 'self' ? 'A' : POLICY_SEAT,
       turns: s.turn,
       timedOut: s.winner === null,
     },
@@ -550,6 +585,9 @@ async function main(): Promise<void> {
     games: GAMES,
     seed0: SEED0,
     size: TRAIN.size,
+    // 去重：`TRAIN.sizes` 现在用重复值表达配比（[12, 12, 10]），
+    // 原样写进元数据会让"这一轮用了哪些尺寸"读起来像用了三个尺寸。
+    sizes: Array.from(new Set(TRAIN.sizes)),
     expansions: TRAIN.expansions,
     weights: WEIGHTS,
     opponent: OPPONENT,
@@ -595,10 +633,30 @@ async function main(): Promise<void> {
 function runPool(lanes: number, sink: Sink): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const self = fileURLToPath(import.meta.url);
+    /*
+     * 同 eval.ts 的那条教训：**整份 argv 转发**，只摘掉和分片有关的。
+     *
+     * 白名单版本漏了 `--intent` 和 `--snap-share`——于是
+     * `loop.py --intent random` 会静默失效，worker 一律按 auto 采。
+     * 更坏的是它不报错：样本照采，只是没按你要的口径采。
+     */
+    const DROP = new Set(['--serve', '--games', '--out', '--workers']);
+    const forwarded: string[] = [];
+    for (let i = 2; i < process.argv.length; i++) {
+      const a = process.argv[i]!;
+      if (DROP.has(a)) {
+        // --games / --out 带一个值，一起跳过
+        if (a !== '--serve' && process.argv[i + 1] && !process.argv[i + 1]!.startsWith('--')) i += 1;
+        continue;
+      }
+      forwarded.push(a);
+    }
+
     const childArgs = [
       '--experimental-strip-types',
       self,
       '--serve',
+      ...forwarded,
       '--seed0',
       String(SEED0),
       '--cap',

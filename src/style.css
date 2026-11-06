@@ -2246,6 +2246,14 @@ a.btn {
   margin-top: 8px;
 }
 
+/*
+ * 「测试 AI · 全视野」：它和三个档位排在同一行，但不是第四档——是换了一个内核
+ * （策略网络）。虚线边就是为这个：档位是"同一个脑子算多细"，它换的是脑子。
+ */
+.chip.is-brain {
+  border-style: dashed;
+}
+
 .era-group {
   display: flex;
   align-items: center;
