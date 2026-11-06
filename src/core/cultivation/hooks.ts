@@ -15,6 +15,7 @@ import {
 import { getCultivationPanelLines } from './panel.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { MINE_MOUNTAIN_STONE_BONUS } from './units.ts';
+import { anomalyCellsFor, clearAnomaliesOfOthers } from './abilities/anomaly.ts';
 // query.ts 只 import type，不会和 rules.ts 形成环。
 import { idx, inBounds } from '../query.ts';
 
@@ -51,6 +52,11 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		if (!isCultivatorUnit(state, unit)) return range;
 		return range + RangeModifier(unit);
 	},
+	// ── 额外视野：异象点亮的那一格 ──────────────────
+	// 这是**纯函数**，会被寻路、威胁圈、记忆刷新反复调用，所以
+	// anomalyCellsFor 第一行就是 `s.current !== player` 早退。
+	// 放进 visibleTilesOf 意味着 AI 也认：对面能据此派兵来劫杀。
+	extraVision: ({ state, player }) => anomalyCellsFor(state, player),
 	// 视野修正
 	modifyVision: ({ state, unit, base }) => {
 		if (!unit || !isCultivatorUnit(state, unit)) return base;
@@ -137,6 +143,13 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
       // 打坐：老死前照常修炼
       addExp(u, state, getExpGrowth(u));
 		}
+	},
+
+	// ── 回合结束：熄灭别人的异象 ──────────────────
+	// 只清"别人"的：突破发生在自己回合，如果自己回合结束也清，
+	// 那盏灯还没等到敌方回合就被自己掐了。
+	onTurnEnd: ({ state, player }) => {
+		clearAnomaliesOfOthers(state, player);
 	},
 
 	// ── 面板信息 ───────────────────────────────────

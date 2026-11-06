@@ -1,19 +1,21 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
 // 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
 import type { GameState } from '../../../src/core/types.ts';
 import { skillsOf } from '../../../src/core/query.ts';
-import { getExp } from '../../../src/core/cultivation/progression.ts';
+import { getExp, addExp } from '../../../src/core/cultivation/progression.ts';
+import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
+import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
 import { SKILL_EFFECTS } from '../../../src/core/skill-hooks.ts';
 
 export function run() {
@@ -491,6 +493,82 @@ export function run() {
     for (const { skill } of CULTIVATOR_SKILL_UNLOCKS) {
       assert.ok(SKILL_EFFECTS[skill.effect], `升级领悟的「${skill.name}」没有实现`);
     }
+
+    // 升级自动获得的能力：id 必须真的注册进 CULTIVATION_ABILITIES，
+    // 否则它会挂到单位身上、然后什么也不发生（最难查的一种"漏登记"）。
+    for (const { abilityId, name } of CULTIVATOR_ABILITY_UNLOCKS) {
+      assert.ok(abilityIds.has(abilityId), `解锁表里的能力「${name}」不在 CULTIVATION_ABILITIES 里`);
+    }
+  });
+
+  // ── 异象（2026-11-06）────────────────────────────────
+  //
+  // 修士突破时天象外泄：下一个敌方回合，突破时那一格被塞进敌方可见集。
+  // 引擎里"被看见"只有一条通路（fog.ts 会把视野外的敌方单位整个裁掉），
+  // 所以这里测的就是"那一格进没进 visibleSet、单位有没有被下发"。
+  const anomalySetup = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.fog = true;
+    s.units = [];
+    // 摆在自己半场：离 B 的两座城很远，B 本来绝对看不见
+    const qi = place2(s, 'A', 'qi-cultivator', 8, 9);
+    s.current = 'A';
+    return { s, qi };
+  };
+
+  test('异象：1 级挂上，0→1 那次不点亮，1→2 才记下位置', () => {
+    const { s, qi } = anomalySetup();
+
+    addExp(qi, s, 10); // 0 → 1
+    assert.equal(cultivationRank(qi), 1);
+    assert.ok((qi.extraAbilities ?? []).includes('anomaly'), '1 级应该自动挂上异象');
+    assert.equal(qi.custom?.anomaly, undefined, '刚获得异象的那次突破不该点亮');
+
+    addExp(qi, s, 20); // 1 → 2
+    assert.equal(cultivationRank(qi), 2);
+    assert.deepEqual(qi.custom?.anomaly, { x: 8, y: 9 }, '记的是突破时所在格');
+  });
+
+  test('异象：只在敌方自己的回合点亮，我方回合里看不到', () => {
+    const { s, qi } = anomalySetup();
+    addExp(qi, s, 10);
+    addExp(qi, s, 20); // → 2 级，异象记在 (8,9)
+
+    // 先确认这个位置本来在 B 的视野之外——否则这条用例什么都没测到
+    const mine = playerView(s, 'B'); // s.current 还是 A
+    assert.ok(!mine.visible.includes(idx(s, 8, 9)), '这一格本来不该在 B 的视野里');
+
+    s.current = 'B';
+    const enemy = playerView(s, 'B');
+    assert.ok(enemy.visible.includes(idx(s, 8, 9)), 'B 的回合里那一格应该被点亮');
+    assert.ok(
+      enemy.state.units.some((u) => u.id === qi.id),
+      '画出来了就该看得见人：单位要一起下发',
+    );
+  });
+
+  test('异象：敌方回合结束就熄灭', () => {
+    const { s, qi } = anomalySetup();
+    addExp(qi, s, 10);
+    addExp(qi, s, 20);
+    s.current = 'B';
+
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(after.custom?.anomaly, undefined, 'B 的回合结束，灯该灭了');
+  });
+
+  test('异象：带着异象的突破战报公开，没有的只给自己看', () => {
+    const { s, qi } = anomalySetup();
+
+    addExp(qi, s, 10); // 0→1：异象是这次突破才发给它的，战报仍私有
+    const first = [...s.log].reverse().find((l) => l.text.includes('突破至'))!;
+    assert.ok(!first.open, '还没有异象的时候，突破只有自己知道');
+
+    addExp(qi, s, 20); // 1→2：身上有异象了，战报公开
+    const second = [...s.log].reverse().find((l) => l.text.includes('突破至'))!;
+    assert.equal(second.open, true, '有异象时突破是公开战报');
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

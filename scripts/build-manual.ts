@@ -63,6 +63,7 @@ import {
   sweepReachForRank,
 } from '../src/core/cultivation/skills/index.ts';
 import { SPIRIT_HP_BONUS_KEEP } from '../src/core/cultivation/abilities/spirit-ascension.ts';
+import { ANOMALY_MIN_RANK } from '../src/core/cultivation/abilities/anomaly.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -2536,6 +2537,19 @@ function cultivationRules(): string {
       </table>
       <p class="era-meta">注：「生命上限」是从 0 级一路突破上来的累计值（一次跨多级突破按两端差算，会和逐级累计差一两点）。
         「攻击次数」写的是总数，已含基础的 1 次。「真元」「溅射半径」见下方各自的段落。</p>
+
+      <h3>异象</h3>
+      <p>修士突破时天象外泄，藏不住。带「异象」的修士（<b>${ANOMALY_MIN_RANK} 级</b>起自动获得，也就是获得它的下一次突破起）
+        每突破一次，<b>下一个敌方回合</b>它的位置会在地图上被点亮一格：</p>
+      <ul>
+        <li><b>点亮的是哪一格</b>：突破时所在的那一格。突破后原地不动，对面就连人带位置一起看见；
+          挪走了，那一格只剩"刚才有人在这儿"的信息——异象是痕迹，不是雷达。</li>
+        <li><b>只亮一个敌方回合</b>：轮到对面时亮起，对面回合结束就熄。</li>
+        <li><b>战报也会公开</b>：带异象的修士突破时，「突破至某期」这条战报对面也看得见；
+          不带异象的修士突破，只有自己知道。</li>
+        <li><b>为什么要有这个</b>：修士越打越强，前期必须给对手一个"来劫杀"的理由。
+          你每突破一次，就等于向全场报一次坐标。</li>
+      </ul>
 
       <h3>御空</h3>
       <p>当修士到达 <b>${SKY_STEP_RANK} 级（${REALMS[SKY_STEP_RANK]}期）</b> 时，即可初步掌控灵力，实现低空悬浮。</p>

@@ -56,7 +56,14 @@ Node 的 ESM 环是**运行时**才炸（`undefined` 或 TDZ），`tsc` 看不�
    - 唯一例外是 `attTimesModifier` 的旧版，现已修复为加法。
 3. **寿元落库**：
    - `custom.lifespan` 是第一优先级。`rank 9` 是 `Infinity`，不落库（JSON 不能存 Infinity）。
-4. **规则单一真相（DRY）**：
+4. **"被看见"只有一条通路**：
+   - 引擎会把不在 `visibleSet` 里的敌方单位整个裁掉（`fog.ts` 开头那句"不是自己的东西不下发"），
+     留痕也一样。所以想让敌人看见什么，**只能把格索引塞进视野**——
+     光加一个特效元素没用，对面手里连那一格的数据都没有。
+   - 本包通过 `ExpansionHooks.extraVision` 做这件事（异象）。它挂在 `visibleTilesOf` 里，
+     所以**规则层和 AI 一起认**：被点亮的格子，对面能据此寻路和开火。
+     代价是它进了热路径，钩子里要先 `s.current !== player` 早退。
+5. **规则单一真相（DRY）**：
    - 如果一个数值规则在三个地方用到（比如“剑修伤害倍率”），必须在 `stats.ts` 抽成函数或常量（如 `swordMul`、`SWORD_BASE_MUL`），在 `hooks.ts` 和 `panel.ts` 里统一调用。**严禁在各个文件里手写 `0.8` / `1.2` 等硬编码魔法数字。**
 
 ## 4. 解锁系统：机制层 vs 触发源层
