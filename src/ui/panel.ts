@@ -59,6 +59,7 @@ import {
   unitsOf,
   upgradeCostOf,
   utype,
+  adjacentRequirementText,
 } from '../core/rules.ts';
 import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
@@ -675,19 +676,26 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
              .map((b) => {
                const price = recruitResCost(s, me, b);
                const dis = !canBuildNow || !canPay(s.players[me], price);
-               const tag = b.bridges
-                 ? '架在水上 · 双向通行'
-                 : isProducer(b)
-                   ? `能产兵${produceEveryTurns(b) > 1 ? `（${produceEveryTurns(b)} 回合一批）` : ''} · ${(
-                       b.buildOn ?? []
-                     )
-                       .map((t) => CONFIG.terrainName[t])
-                       .join('/')}${b.requiresWater ? ' · 必须临水' : ''}`
-                   : b.autoAttack
-                     ? `自动开火 ${b.range} 格`
-                     : b.incomeByTerrain || b.income || b.yield
-                       ? `产出 ${yieldShort(b)}`
-                       : '工事';
+               // 选址要求（临水、山边、挨着灵田……）统一由数据生成，
+               // 不再为每种条件在这里写一个分支。
+               const siteNeed = adjacentRequirementText(
+                 b,
+                 (id) => s.unitTypes[id]?.name ?? id,
+               );
+               const tag =
+                 (b.bridges
+                   ? '架在水上 · 双向通行'
+                   : isProducer(b)
+                     ? `能产兵${produceEveryTurns(b) > 1 ? `（${produceEveryTurns(b)} 回合一批）` : ''} · ${(
+                         b.buildOn ?? []
+                       )
+                         .map((t) => CONFIG.terrainName[t])
+                         .join('/')}`
+                     : b.autoAttack
+                       ? `自动开火 ${b.range} 格`
+                       : b.incomeByTerrain || b.income || b.yield
+                         ? `产出 ${yieldShort(b)}`
+                         : '工事') + (siteNeed ? ` · ${siteNeed}` : '');
                // 建造难度和驻军是"看不见但决定怎么用"的两条，必须写在按钮上：
                // 一个要投两回合才成型的塔，玩家在第一回合就得知道它现在是块工地。
                // 点数后面跟的是"这个工兵要几回合"，因为玩家真正关心的是工期，

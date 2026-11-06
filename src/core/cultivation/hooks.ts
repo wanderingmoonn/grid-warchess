@@ -1,6 +1,6 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import { isCultivatorUnit, isSwordCultivatorType, UNIT_IDS } from './identity.ts';
-import { addExp, getExpGrowth, ensureLifespan, isDoomed, KILL_EXP, SWORD_KILL_MUL } from './progression.ts';
+import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
 import { 
   atkModifier, 
   armorModifier, 
@@ -10,7 +10,8 @@ import {
   SplashModifier, 
   moveModifier,
   swordMul,
-  SWORD_BASE_MUL
+  SWORD_BASE_MUL,
+  calcKillExp
 } from './stats.ts';
 import { getCultivationPanelLines } from './panel.ts';
 import { SPIRIT_STONE } from './resources.ts';
@@ -20,12 +21,26 @@ import { anomalyCellsFor, clearAnomaliesOfOthers } from './abilities/anomaly.ts'
 import { idx, inBounds } from '../query.ts';
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
-  // 1. 击杀敌人获得经验
+	// 1. 击杀敌人获得历练（规则在 stats.ts，这里只管读写额度）
+	//
+	// 额度记在击杀者身上（custom.killExpThisTurn），随存档走。
+	// "哪一回合"用 s.turn 判：跨回合自动归零，不用额外的清理钩子。
 	onUnitKilled: (c) => {
-		if (c.killer && isCultivatorUnit(c.state, c.killer)) {
-		const killexp = isSwordCultivatorType(c.killer.type) ? KILL_EXP * SWORD_KILL_MUL : KILL_EXP;
-		addExp(c.killer, c.state, killexp); 
-		}
+		const killer = c.killer;
+		if (!killer || !isCultivatorUnit(c.state, killer)) return;
+
+		// 目标基础攻击力：不看造价、不看等级（召唤物没造价，英雄没等级）
+		const victimAtk = c.state.unitTypes[c.victim.type]?.atk ?? 0;
+
+		const prev = killer.custom ?? {};
+		const used = prev['killExpTurn'] === c.state.turn ? ((prev['killExpThisTurn'] as number) ?? 0) : 0;
+		const gain = calcKillExp(killer, used, victimAtk);
+
+		// 不值得一战 / 额度用光：不写任何东西，免得 custom 天天被无意义地重写
+		if (gain <= 0) return;
+
+		killer.custom = { ...prev, killExpTurn: c.state.turn, killExpThisTurn: used + gain };
+		addExp(killer, c.state, gain);
 	},
 	modifyDamage: ({ state, attacker, damage }) => {
     if (!isCultivatorUnit(state, attacker)) return damage;

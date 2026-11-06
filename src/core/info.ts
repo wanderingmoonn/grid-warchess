@@ -9,7 +9,7 @@
 import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
-import { heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
+import { adjacentRequirementText, heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
 import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
 import { isProducer, produceEveryTurns, produceOf } from './produce.ts';
 import { resourceShort } from './resources.ts';
@@ -258,9 +258,14 @@ export function describeUnit(
     if ((spec.pop ?? 0) > 0) lines.push(`占编制：这座营本身占 ${spec.pop} 格编制。`);
     const on = (def.buildOn ?? []).map((t) => TERRAIN_INFO[t].name).join('或');
     if (on) lines.push(`只能扎在${on}上`);
-    if (def.requiresWater) lines.push('必须紧邻水域（靠水补给），所以它天然长在水边');
   }
   if (def.category === 'building') {
+    // 选址要求只有一处来源（rules.adjacentRequirementOf），文案也由它生成。
+    // 以前这句写死在"军营"那一段里，换成别的建筑就看不见了。
+    const siteNeed = adjacentRequirementText(def, nameOf);
+    if (siteNeed) {
+      lines.push(`${siteNeed}（占地那几格和它自己的四邻都算，所以建在山头上也算"挨着山"）`);
+    }
     const cost = buildCostOf(def);
     const power = buildPowerOf(def);
     lines.push(

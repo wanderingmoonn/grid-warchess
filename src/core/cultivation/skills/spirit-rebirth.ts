@@ -10,7 +10,7 @@ import {
   getRank,
   expForRank,
   getMaxHp,
-  sumDeltaMaxHpUpTo,
+  totalHpBonusForRank,
   cleanupAfterRankDrop,
   REALMS,
 } from '../progression.ts';
@@ -92,8 +92,10 @@ registerSkillEffect('spirit-rebirth', (c) => {
   self.type = originType;
   self.extraSkills = mergedExtraSkills;
   self.extraAbilities = mergedExtraAbilities;
-  // maxHpBonus 按降级后 rank 重算（当前包内唯一来源是升级，安全）
-  self.maxHpBonus = sumDeltaMaxHpUpTo(newRank);
+  // maxHpBonus 按降级后 rank 重算（当前包内唯一来源是升级，安全）。
+  // 用"累计值"而不是"逐级作差"：这样和升级路径（addExp 走 maxHpDeltaBetween）
+  // 读的是同一个数，重生再练回来不会多出或少掉几点。
+  self.maxHpBonus = totalHpBonusForRank(newRank);
 
   // 血量按比例恢复
   self.hp = Math.max(1, Math.ceil(getMaxHp(state, self) * SPIRIT_REBIRTH_HP_RATIO));

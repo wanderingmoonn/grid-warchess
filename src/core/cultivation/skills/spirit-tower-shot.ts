@@ -18,9 +18,9 @@ import { SPIRIT_STONE } from '../resources.ts';
 
 // ── 数值 ──────────────────────────────────────────
 /** 一次充能给几次攻击次数 */
-export const TOWER_BURST_CHARGES = 3;
+export const TOWER_BURST_CHARGES = 5;
 /** 每次充能耗多少灵石 */
-export const TOWER_CHARGE_COST = 5;
+export const TOWER_CHARGE_COST = 10;
 
 // ── 数据 ──────────────────────────────────────────
 export const TOWER_CHARGE_SKILL: SkillDef = {

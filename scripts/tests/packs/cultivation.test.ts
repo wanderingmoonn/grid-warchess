@@ -7,9 +7,26 @@ import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
 import type { GameState } from '../../../src/core/types.ts';
 import { skillsOf } from '../../../src/core/query.ts';
-import { getExp, addExp } from '../../../src/core/cultivation/progression.ts';
+import {
+  getExp,
+  addExp,
+  expForRank,
+  hpGainForRank,
+  totalHpBonusForRank,
+  maxHpDeltaBetween,
+} from '../../../src/core/cultivation/progression.ts';
 import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
+import { TOWER_BURST_CHARGES, TOWER_CHARGE_COST } from '../../../src/core/cultivation/skills/spirit-tower-shot.ts';
+import { CULTIVATION_HOOKS } from '../../../src/core/cultivation/hooks.ts';
+import {
+  KILL_EXP_CAP_BASE,
+  KILL_EXP_CAP_PER_RANK,
+  SWORD_KILL_EXP_MUL,
+  killExpCapOfRank,
+  killExpForRank,
+} from '../../../src/core/cultivation/stats.ts';
+import { baseLifespanOf, getExpGrowth } from '../../../src/core/cultivation/progression.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
@@ -102,7 +119,7 @@ export function run() {
 
     {
       const { s, qi, main, near, far } = setup();
-      qi.custom.exp = 8;
+      qi.custom.exp = expForRank(2); // 3 级：floor(3/4) = 0
       const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
       assert.ok(r.ok, r.ok ? '' : r.reason);
       assert.equal(r.state.units.find(u => u.id === near.id)!.hp, 1000, 'x=3 没有溅射');
@@ -110,7 +127,7 @@ export function run() {
 
     {
       const { s, qi, main, near, far } = setup();
-      qi.custom.exp = 250;
+      qi.custom.exp = expForRank(3); // 4 级：floor(4/4) = 1
       const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
       assert.ok(r.ok, r.ok ? '' : r.reason);
       assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=4 应该波及距离 1 的敌人');
@@ -120,7 +137,7 @@ export function run() {
     // 3. x=8，半径 2：near 和 far 全波及
     {
       const { s, qi, main, near, far } = setup();
-      qi.custom.exp = 2000;
+      qi.custom.exp = expForRank(7); // 8 级：floor(8/4) = 2
       const r = applyAction({ ...s, current: 'A', units: [qi, main, near, far] }, { type: 'ATTACK', unitId: qi.id, targetId: main.id });
       assert.ok(r.ok, r.ok ? '' : r.reason);
       assert.ok(r.state.units.find(u => u.id === near.id)!.hp < 1000, 'x=8 波及距离 1');
@@ -145,21 +162,51 @@ export function run() {
     const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
     qi.custom = { lifespan: 100 };
 
-    const table: Array<[rank: number, exp: number, expectedMove: number]> = [
-      [0, 0, 2],      // 0/3 = 0 -> 2
-      [2, 30, 2],     // 2/3 = 0 -> 2
-      [3, 70, 3],     // 3/3 = 1 -> 3
-      [5, 222, 3],    // 5/3 = 1 -> 3
-      [6, 361, 4],    // 6/3 = 2 -> 4
-      [8, 1389, 4],   // 8/3 = 2 -> 4
-      [9, 4006, 5],   // 9/3 = 3 -> 5
+    const table: Array<[rank: number, expectedMove: number]> = [
+      [0, 2], // 0/3 = 0 -> 2
+      [2, 2], // 2/3 = 0 -> 2
+      [3, 3], // 3/3 = 1 -> 3
+      [5, 3], // 5/3 = 1 -> 3
+      [6, 4], // 6/3 = 2 -> 4
+      [8, 4], // 8/3 = 2 -> 4
+      [9, 5], // 9/3 = 3 -> 5
     ];
 
-    for (const [rank, exp, expectedMove] of table) {
+    // 门槛一律问 expForRank，不写死数字：曲线已经加过一次"6 级以上翻倍"的墙，
+    // 手写的 1389 当场从 8 级掉成 7 级，用例却只报"移动力不对"，很难查。
+    for (const [rank, expectedMove] of table) {
+      const exp = rank === 0 ? 0 : expForRank(rank - 1);
       setCultivationExp(qi, exp);
       assert.equal(cultivationRank(qi), rank, `exp=${exp} 应该为 ${rank} 级`);
       assert.equal(movePower(s, qi), expectedMove, `x=${rank} 时移动力应为 ${expectedMove}`);
     }
+  });
+
+  test('生命上限：跳级与逐级相加完全一致', () => {
+    // 老写法是 floor(F(to) − F(from))，而累计值走的是 Σ floor(单级)，取整点不同。
+    // 实测 2→4 / 3→5 / 4→6 / 5→7 / 6→8 / 7→9 六档会差 1 点：
+    // 同样多的经验，一次跳两级比连升两次少 1 点血（剑气纵横一次给几百经验，会命中）。
+    // 现在统一成"逐级增量求和"，跳级必须等于分几次升。
+    for (let from = 0; from < 8; from++) {
+      const jump = maxHpDeltaBetween(from, from + 2);
+      const steps =
+        maxHpDeltaBetween(from, from + 1) + maxHpDeltaBetween(from + 1, from + 2);
+      assert.equal(jump, steps, `${from}→${from + 2} 一次跳级应该等于连升两次`);
+    }
+
+    // 累计值也必须等于逐级增量之和：灵体重生就是用累计值重置 maxHpBonus 的
+    let sum = 0;
+    for (let r = 1; r <= 9; r++) {
+      sum += hpGainForRank(r);
+      assert.equal(totalHpBonusForRank(r), sum, `rank ${r} 的累计值应等于逐级增量之和`);
+    }
+
+    // 曲线本身没被这次重构改动：单级增量仍是 8 / 10 / 17
+    assert.deepEqual(
+      [1, 2, 3].map(hpGainForRank),
+      [8, 10, 17],
+      '逐级增量不该被这次重构改动',
+    );
   });
 
   test('修士：神识（视野）随境界提升，且受衰老枯竭', () => {
@@ -178,11 +225,13 @@ export function run() {
     assert.equal(effectiveStats(s, qi).vision, 3, 'x=0 视野应为 3');
 
     // 9 级：基础 3 + 境界 9 = 12
-    setCultivationExp(qi, 4006);
+    setCultivationExp(qi, expForRank(8)); // 8→9 的门槛，也就是刚好 9 级
     assert.equal(effectiveStats(s, qi).vision, 12, 'x=9 神识全开，视野 12');
 
-    // 衰老测试用 8 级（exp=1389），寿元照旧由 custom 钉死，免得跟着曲线漂
-    setCultivationExp(qi, 1389);
+    // 衰老测试用 8 级，寿元照旧由 custom 钉死，免得跟着曲线漂。
+    // 这里走 expForRank(7) 而不是写死数字：曲线改过一次（6 级以上加了墙），
+    // 写死的 1389 会悄悄从"8 级"掉成"7 级"，用例却还在过。
+    setCultivationExp(qi, expForRank(7));
     qi.custom = { ...(qi.custom ?? {}), lifespan: 45 };
     assert.equal(effectiveStats(s, qi).vision, 11, 'x=8 且年轻，视野 11（3+8）');
 
@@ -368,7 +417,7 @@ export function run() {
       x: 6, y: 5, hp: 100, kills: 0, moved: true, acted: true,
     });
 
-    s.players.A.res = { [SPIRIT_STONE]: 10 };
+    s.players.A.res = { [SPIRIT_STONE]: TOWER_CHARGE_COST * 2 };
 
     const skillRes = applyAction(s, {
       type: 'HERO_SKILL',
@@ -376,10 +425,18 @@ export function run() {
       skillId: 'tower-charge',
     });
     assert.ok(skillRes.ok, '应该能成功释放技能');
-    assert.equal(skillRes.state.players.A.res![SPIRIT_STONE], 5, '应该扣除 5 灵石');
-
+    assert.equal(
+      skillRes.state.players.A.res![SPIRIT_STONE],
+      TOWER_CHARGE_COST,
+      `应该扣除 ${TOWER_CHARGE_COST} 灵石`,
+    );
     // 👇 关键打印 1：看看放完技能后，塔的 custom 里到底存了什么
     const towerAfterSkill = skillRes.state.units.find(u => u.id === 't-tower')!;
+    assert.equal(
+      towerAfterSkill.custom?.burstCharges,
+      TOWER_BURST_CHARGES,
+      `一次充能给 ${TOWER_BURST_CHARGES} 次开火机会`,
+    );
     console.log('放完技能后的 custom：', towerAfterSkill.custom);
 
     const r = applyAction(skillRes.state, { type: 'END_TURN' });
@@ -431,8 +488,8 @@ export function run() {
     assert.equal(skillOf().ready, false, '0 灵石时不该显示为可放');
     assert.ok(skillOf().notReadyReason?.includes('灵石'), '应给出"灵石不足"的具体理由');
 
-    s.players.A.res = { [SPIRIT_STONE]: 5 };
-    assert.equal(skillOf().ready, true, '攒够 5 灵石就该亮起来');
+    s.players.A.res = { [SPIRIT_STONE]: TOWER_CHARGE_COST };
+    assert.equal(skillOf().ready, true, `攒够 ${TOWER_CHARGE_COST} 灵石就该亮起来`);
   });
 
   // 面板那行「境界加成」的语义是"修到这一层本身给了多少"：
@@ -445,7 +502,7 @@ export function run() {
   test('面板「境界加成」印的是纯境界值（不乘系数、不扣衰老）', () => {
     const s = fresh({ expansionIds: ['cultivation'], godMode: true });
     const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
-    setCultivationExp(qi, 4006);                  // 9 级
+    setCultivationExp(qi, expForRank(8));         // 9 级
     qi.custom = { ...qi.custom, lifespan: 999 };  // 钉死寿元，排除衰老干扰
 
     const line = getCultivationPanelLines(s, qi).find((l) => l.includes('境界加成'))!;
@@ -569,6 +626,104 @@ export function run() {
     addExp(qi, s, 20); // 1→2：身上有异象了，战报公开
     const second = [...s.log].reverse().find((l) => l.text.includes('突破至'))!;
     assert.equal(second.open, true, '有异象时突破是公开战报');
+  });
+
+  // ── 战斗历练与经验墙（2026-11-06）─────────────────────
+  //
+  // 这一段钉的是"设计意图"，不是某个函数：
+  //   · 纯挂机到 4 级坐化（上面那条用例已经管了）；
+  //   · 常规路线（挂机 + 灵田）到 6 级为止；
+  //   · 只有剑修一路血战，才可能在寿元耗尽前摸到 7 级。
+  // 7/8/9 是对标本体未来更高时代的，本扩展不做过分数值膨胀——所以它们是
+  // "比赢一局还难的成就"，而不是练级路线。改了系数这里会红，那正是要的。
+
+  test('历练：不值得一战的目标不给经验', () => {
+    // 4 级门槛是 atk > 3：打 atk 3 的东西没有历练，atk 4 才有
+    assert.equal(killExpForRank(4, 3, false), 0, 'atk=3 不该过 4 级的门槛');
+    assert.equal(killExpForRank(4, 4, false), 2, 'atk=4 刚过门槛，3 × 0.8 = 2.4 → 2');
+  });
+
+  test('历练：取整在最后一步——6 级炼气 0 点，剑修仍有 1 点', () => {
+    // 3 × 0.15 = 0.45。先取整成 0 再乘 2 就永远是 0，剑修会被彻底归零。
+    assert.equal(killExpForRank(6, 21, false), 0, '炼气士 6 级清杂兵没有收益');
+    assert.equal(
+      killExpForRank(6, 21, true),
+      1,
+      `剑修 6 级还有 1 点（3 × 0.15 × ${SWORD_KILL_EXP_MUL} = 0.9 → 1）`,
+    );
+    assert.equal(killExpForRank(7, 99, true), 0, '7 级起战斗不再给历练');
+  });
+
+  test('历练：每回合封顶，杀再多也只拿一份', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    qi.custom = { exp: 0, rank: 0 };
+
+    // 直接驱动钩子：走真实引擎的话要摆一场能稳杀的仗，测的却是同一段代码
+    const kill = (id: string) => {
+      const victim = { id, type: 'militia', owner: 'B', x: 6, y: 5, hp: 0, kills: 0, moved: true, acted: true } as any;
+      CULTIVATION_HOOKS.onUnitKilled!({ state: s, victim, killer: qi, killerOwner: 'A' });
+    };
+
+    assert.equal(killExpForRank(0, 13, false), 5, '0 级杀民兵一次 5 点');
+    assert.equal(killExpCapOfRank(0), KILL_EXP_CAP_BASE, '0 级上限就是基数');
+    assert.equal(
+      killExpCapOfRank(3),
+      KILL_EXP_CAP_BASE + 3 * KILL_EXP_CAP_PER_RANK,
+      '上限随境界线性上涨',
+    );
+    kill('v1');
+    assert.equal(getExp(qi), 5, '第一杀全额入账');
+    kill('v2'); // 额度 6，只给 1
+    assert.equal(getExp(qi), killExpCapOfRank(0), `第二杀应该只补到上限 ${killExpCapOfRank(0)}`);
+    kill('v3');
+    assert.equal(getExp(qi), killExpCapOfRank(0), '额度用光后不再涨');
+
+    // 换回合（s.turn 变）额度重置
+    const before = getExp(qi);
+    s.turn += 1;
+    kill('v4');
+    assert.equal(getExp(qi), before + 5, '新回合额度应该重置');
+  });
+
+  test('经验墙：6 级起的门槛被单独抬高，前 6 级不动', () => {
+    // 曲线本身（不含墙）在 5→6 时是 361。墙只立在 6 级以上：
+    // 6→7 的门槛是 634 × 1.65，而不是 634。
+    assert.equal(expForRank(5), 361, '5→6 不该被墙影响');
+    assert.equal(expForRank(6), Math.round(634 * 1.65), '6→7 的门槛被抬高');
+    assert.ok(expForRank(6) > expForRank(5) * 2.5, '这是一道墙，不是平滑曲线');
+  });
+
+  test('设计预算：剑修血战能摸到 7 级，炼气士不能', () => {
+    // 纯粹按导出的常量推演，不跑引擎：每回合 = 打坐 + 4 块灵田 + 满编击杀（受封顶）。
+    // 参照目标是 atk 21 的戟兵（三代常规兵），比它更硬的敌人不会给更多。
+    const REF_ATK = 21;
+    const FIELD_BONUS = 4;
+    const run = (sword: boolean, killsPerTurn: number) => {
+      const u = {
+        type: sword ? 'sword-cultivator' : 'qi-cultivator',
+        custom: { exp: 0, rank: 0 },
+      } as any;
+      let peak = 0;
+      for (let age = 1; age <= 400; age++) {
+        const rank = u.custom.rank as number;
+        const perKill = killExpForRank(rank, REF_ATK, sword);
+        const gain = Math.min(perKill * killsPerTurn, killExpCapOfRank(rank));
+        u.custom.exp += getExpGrowth(u) + FIELD_BONUS + gain;
+        while (u.custom.rank < 9 && u.custom.exp >= expForRank(u.custom.rank)) u.custom.rank++;
+        peak = Math.max(peak, u.custom.rank);
+        // 寿元耗尽：超龄 3 年坐化（和 progression.ts 的 AGING_DEATH_AGE 一致）
+        if (Number.isFinite(baseLifespanOf(u.custom.rank)) && age - baseLifespanOf(u.custom.rank) >= 3) {
+          return peak;
+        }
+      }
+      return peak;
+    };
+
+    assert.ok(run(true, 6) >= 7, '剑修每回合 6 杀 + 4 块灵田，应该能摸到 7 级——这是给玩家的奖励');
+    assert.ok(run(false, 9) < 7, '炼气士哪怕每回合 9 杀 + 4 块灵田，也不该到 7 级');
+    assert.ok(run(false, 6) <= 6, '炼气士常规路线封顶 6 级');
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────
