@@ -640,6 +640,24 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   if (directive.strategy === 'rush') weight = { rush: 0.85, harass: 0.1, boom: 0.05 };
   else if (directive.strategy === 'boom') weight = { rush: 0.05, harass: 0.05, boom: 0.9 };
   else if (directive.strategy === 'hold') weight = { rush: 0, harass: 0, boom: 1 };
+
+  /*
+   * 脚本强制的战术（`config.aiDoctrine`）：和"人类点名"同一条路，直接换硬权重。
+   *
+   * 为什么压在最外层：窄决策那一层要量"这个局面用哪种打法更值"，
+   * 量的前提是**打法真的按指定执行**。让它和局势证据混合，量出来的就是
+   * "AI 想打的"而不是"我指定的"。
+   *
+   * 每种留一点余量给次优项，理由同上面那条注释：硬到 100% 会让"猛攻"
+   * 变成一根筋冲正面，连侧翼包抄都不做。
+   */
+  const forced = s.config.aiDoctrine;
+  const forcedSeat = s.config.aiDoctrineSeat;
+  if (forced && (!forcedSeat || forcedSeat === s.current)) {
+    if (forced === 'rush') weight = { rush: 0.85, harass: 0.1, boom: 0.05 };
+    else if (forced === 'harass') weight = { rush: 0.05, harass: 0.9, boom: 0.05 };
+    else if (forced === 'boom') weight = { rush: 0.05, harass: 0.05, boom: 0.9 };
+  }
   // 平手时按底色断：这就是"没有信号时按性格来"
   const lead = DOCTRINES.reduce<AiDoctrine>(
     (best, d) => (weight[d] > weight[best] ? d : best),
