@@ -6519,7 +6519,12 @@ check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来'
   /*
    * 用教程局走到底（它本身就是一局"破城获胜"的完整局），然后出卡。
    * 三个数各自有明确的来源，不能靠文案：
-   *   破城回合 → city.capturedTurn；MVP → 单位击杀累加；关键三步 → 局面事实。
+   *   破城回合 → city.capturedTurn；MVP → killTally（规则层记的按兵种人头账）；
+   *   关键三步 → 局面事实。
+   *
+   * MVP 这条以前是**只写在标题里、没人验**的：它读 `unit.kills`，而那个字段
+   * 只有「老兵不死」扩展在写，于是普通对局里恒为 0，卡面永远是"没有击杀"。
+   * 现在人头由 rules 的 creditKill 统一记，这条用例正好把它钉住。
    */
   let s = createTutorialMatch();
   const act = (a: Parameters<typeof applyAction>[1]): void => {
@@ -6551,7 +6556,68 @@ check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来'
   assert.equal(card.steps.length, 3, '关键三步就是三条');
   assert.ok(card.steps[1]!.includes('拿下第一座城'), '第二条讲破城');
   assert.equal(card.sides.length, 2, '两人局两张席位');
+  // 教程局那一刀没打死人（诱饵农民还剩 4 血），所以这里**该**是空 MVP。
+  // 反过来钉住"没击杀就别编一个 MVP 出来"——卡面会印成"没有击杀"。
+  assert.equal(card.mvp, null, '一局没打死过人就该是空 MVP，不能拿存活最多的兵充数');
+  assert.ok(battleCardText(card).includes('MVP：这一局没有击杀'), '文案要如实说没击杀');
   assert.ok(battleCardText(card).includes('战报'), '复制出去的文案要有抬头');
+});
+
+check('战报卡：MVP 来自规则层的人头账，不开「老兵不死」也有', () => {
+  /*
+   * 这条钉的就是这个字段最初坏掉的地方：MVP 原来只读 `unit.kills`，
+   * 而那个字段只有「老兵不死」扩展在维护——于是没开那个包的对局里，
+   * 卡面永远写"没有击杀"，而且连"杀了五个人之后自己倒下"的老兵也一起不算。
+   *
+   * 现在人头由 rules 的 creditKill 统一记（单位身上一份 + 局级 killTally 一份），
+   * 这里验三件事：记上了、按兵种合并、击杀者自己阵亡也不丢。
+   */
+  let s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 4321);
+  s.units = [];
+  const put = (owner: 'A' | 'B', type: string, x: number, y: number, hp?: number) => {
+    const def = s.unitTypes[type]!;
+    const u = {
+      id: `t-${owner}-${type}-${x}-${y}`,
+      type,
+      owner,
+      x,
+      y,
+      hp: hp ?? def.maxHp,
+      kills: 0,
+      atkBonus: 0,
+      moved: false,
+      acted: false,
+    };
+    s.units.push(u as never);
+    return u;
+  };
+
+  const hero = put('A', 'militia', 5, 5);
+  hero.atkBonus = 99; // 一刀一个，省得摆一串靶子
+  const prey = put('B', 'militia', 6, 5, 1);
+  s.current = 'A';
+  let r = applyAction(s, { type: 'ATTACK', unitId: hero.id, targetId: prey.id });
+  assert.ok(r.ok, r.ok ? '' : (r as { reason: string }).reason);
+  s = r.state;
+
+  let card = buildBattleCard(s, 'A', 'test');
+  assert.ok(card.mvp, '打死了人就必须有 MVP——以前这里恒为 null');
+  assert.equal(card.mvp!.type, 'militia');
+  assert.equal(card.mvp!.kills, 1, `MVP 该记 1 个人头，实际 ${card.mvp!.kills}`);
+  assert.ok(battleCardText(card).includes('MVP：民兵'), '文案和卡面读同一份数据');
+
+  // 击杀者自己倒下之后：单位身上那份跟着没了，局级账不能丢
+  const avenger = put('B', 'militia', 5, 6);
+  avenger.atkBonus = 99;
+  s.current = 'B';
+  r = applyAction(s, { type: 'ATTACK', unitId: avenger.id, targetId: hero.id });
+  assert.ok(r.ok, r.ok ? '' : (r as { reason: string }).reason);
+  s = r.state;
+  assert.equal(s.units.some((u) => u.id === hero.id), false, 'MVP 本人应该已经阵亡');
+  card = buildBattleCard(s, 'A', 'test');
+  assert.ok(card.mvp, '杀的兵死了，人头还得留在账上');
+  assert.equal(card.mvp!.kills, 1);
+  assert.equal(card.mvp!.alive, 0, '终局存活 0 也要如实写进卡面');
 });
 
 check('战报卡：卡片能打开、能关掉，画不出图时退回纯文字', () => {

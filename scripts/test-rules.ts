@@ -1161,6 +1161,41 @@ test('打死单位后从棋盘移除', () => {
   assert.equal(r.state.units.some((n) => n.id === b.id), false);
 });
 
+test('击杀账：不开「老兵不死」也要记人头，击杀者阵亡后照样留着', () => {
+  /*
+   * 这条守的是战报卡 MVP 的数据源。
+   *
+   * 以前人头只在「老兵不死」扩展的 onUnitKilled 里累加（那扩展拿它加攻击力），
+   * 于是没开那个包的对局里 `unit.kills` 恒为 0——战报卡的 MVP 永远算不出来。
+   * 现在由规则层在 fireKilled 里统一记两份：单位一份（给扩展读）、
+   * 局级 killTally 一份（给战报卡读，单位死了也不丢）。
+   */
+  const s = fresh({ expansionIds: [] });
+  s.units = [];
+  const killer = place(s, 'A', 'militia', 5, 5);
+  const prey = place(s, 'B', 'militia', 6, 5);
+  prey.hp = 1;
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: prey.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const st = r.state;
+  const k = st.units.find((u) => u.id === killer.id)!;
+  assert.equal(k.kills, 1, '单位自己的击杀数要涨（「老兵不死」按它加攻）');
+  assert.equal(st.killTally?.A?.militia, 1, '局级账按"击杀方 × 击杀者兵种"记');
+
+  // 击杀者自己倒下：单位身上那份随单位消失，局级账不能跟着没
+  const avenger = place(st, 'B', 'militia', 5, 4);
+  avenger.atkBonus = 999;
+  st.current = 'B';
+  const r2 = applyAction(st, { type: 'ATTACK', unitId: avenger.id, targetId: k.id });
+  assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+  assert.equal(r2.state.units.some((u) => u.id === k.id), false, '击杀者应该已经阵亡');
+  assert.equal(r2.state.killTally?.A?.militia, 1, '死人不该从人头账上消失');
+
+  // 没有凶手的死亡（毒死、桥塌、陷阱）记不到具体兵种头上，别凭空长出一条账
+  assert.deepEqual(Object.keys(r2.state.killTally?.A ?? {}), ['militia'], '只有出过手的兵种才在账上');
+});
+
 console.log('\n攻城');
 
 test('攻城伤害等于攻击减城市护甲', () => {

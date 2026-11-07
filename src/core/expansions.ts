@@ -729,10 +729,13 @@ export const EXPANSIONS: Expansion[] = [
     summary:
       '单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。',
     hooks: {
+      // 只**读** `unit.kills`，不自己累加。
+      //
+      // 累加已经上移到规则层（rules 的 creditKill，在 fireKilled 里调）：
+      // 击杀数是这局发生过的事实，不是这个扩展的属性。留在这里的话，
+      // 没开这个包的对局里所有击杀数都是 0，战报卡的 MVP 就永远是空的；
+      // 而两边都写一遍会变成一杀 +2 攻，等于偷偷把这包加强了一倍。
       modifyDamage: ({ attacker, damage }) => damage + attacker.kills,
-      onUnitKilled: ({ killer }) => {
-        if (killer) killer.kills += 1;
-      },
       // 新增：让老兵不死自己负责在面板上显示加成
       modifyStatAtk: ({ unit, atk }) => {
         // 如果这个兵有击杀数，面板上就加成

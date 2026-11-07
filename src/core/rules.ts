@@ -2803,7 +2803,34 @@ function drownCargo(s: GameState, dead: Unit): void {
   pushLog(s, dead.owner, `随船沉没：${names}`, true);
 }
 
+/**
+ * 记一个人头：单位自己的 `kills` + 局级 `killTally`。
+ *
+ * 两处都要记，因为它们回答的不是同一个问题：
+ *   · `unit.kills` 是"这个兵现在有多强"（「老兵不死」每杀一人 +1 攻），
+ *     它只对活着的单位有意义，所以随单位走；
+ *   · `killTally` 是"这局我哪个兵种最猛"（战报卡的 MVP），
+ *     死人也要算进去，所以必须落在局级状态里。
+ *
+ * 只认 `killer` 明确的击杀：毒死、烧死、桥塌、陷阱这些"没有凶手"的死亡
+ * 不记在人头账上——它们没法归到某个兵种，硬塞给对面会让 MVP 变成
+ * "谁清小兵清得多"。那些伤害由 timeline 的差分统计去管。
+ */
+function creditKill(s: GameState, killer: Unit): void {
+  killer.kills = (killer.kills ?? 0) + 1;
+  const tally = (s.killTally ??= {});
+  const side = (tally[killer.owner] ??= {});
+  side[killer.type] = (side[killer.type] ?? 0) + 1;
+}
+
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
+  // 1) 先记账：人头数进两处——单位自己的 `kills`（「老兵不死」的加成来源），
+  //    以及局级的 `killTally`（战报卡的 MVP 来源，单位死了也不丢）。
+  //
+  // 为什么不放在各扩展里各记一遍：以前只有「老兵不死」写 `kills`，
+  // 于是没开那个包的对局所有击杀数都是 0，战报卡的 MVP 永远是空的。
+  // 击杀是**事实**，不是那个扩展的属性，所以归规则层管。
+  if (killer) creditKill(s, killer);
   // 没有凶手（毒死、烧死、桥塌）时，两人局记在对面头上；三人以上没有"对面"
   // 这回事，就记在自己头上——宁可少给一份击杀奖励，也不能凭空发给出局的人。
   const killerOwner = killer
@@ -2812,7 +2839,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
       ? other(victim.owner)
       : victim.owner;
 
-  // 1) 先通知击杀方：此刻 victim 还是死前那一刻的形态。
+  // 2) 再通知击杀方：此刻 victim 还是死前那一刻的形态。
   //
   // 先告诉世界"谁死了、死时是什么"，再处理"死后变成了什么"。
   // 亡语属于后者——它是死亡之后发生的事，不该污染死亡这件事本身。
@@ -2820,7 +2847,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
     e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner });
   }
 
-  // 2) 再执行亡语/转化（自爆、重生、分裂、灵体化）。
+  // 3) 再执行亡语/转化（自爆、重生、分裂、灵体化）。
   //
   // 主流程只做两件通用的事：把 result 里的"要不要清场"落实下去，
   // 以及通知扩展"亡语跑完了"。清场放在这里而不是各能力里自己删，
