@@ -48,6 +48,15 @@ const SHARD = Number(argOf('shard', '0'));
 const SHARDS = Number(argOf('shards', '1'));
 const OUT = argOf('out', '');
 const MERGE = argOf('merge', '');
+/**
+ * 关掉选卡（默认开）。
+ *
+ * 为什么需要它：选卡模式下先手会先挑走最好的卡，"先手胜率高"到底是
+ * 先手本身的优势、还是"先手拿走了那张超模卡"，这两件事只有把选卡关掉
+ * 才分得开。同配置跑一遍 --no-draft，两边兵种表完全一样，剩下的差值
+ * 才是席位/地图本身带来的。
+ */
+const DRAFT = !args.includes('--no-draft');
 
 export interface GameRow {
   seed: number;
@@ -70,7 +79,7 @@ function playOne(seed: number): GameRow {
       aiLevel: LEVEL,
       aiOpponent: true,
       aiAlly: true,
-      draftMode: true,
+      draftMode: DRAFT,
       expansionIds: EXPANSIONS,
     },
     seed,
@@ -78,10 +87,10 @@ function playOne(seed: number): GameRow {
 
   // ── BP ──────────────────────────────────────────────────────────────
   // 从 lobby 开始：DRAFT_START 带一个计时起点（缺了会被判 NaN 超时，见 draft.ts）
-  const started = applyAction(s, { type: 'DRAFT_START', at: 0 });
+  const started = DRAFT ? applyAction(s, { type: 'DRAFT_START', at: 0 }) : { ok: false, state: s };
   if (started.ok) s = started.state;
 
-  for (let guard = 0; guard < 200; guard++) {
+  for (let guard = 0; DRAFT && guard < 200; guard++) {
     if (!s.draft || s.draft.phase === 'done') break;
     const view = draftView(s);
     if (!view) break;
@@ -223,7 +232,9 @@ function report(rows: GameRow[]): void {
   };
   const list = [...ledger.values()].sort((x, y) => y.solo - x.solo || y.picked - x.picked);
 
-  console.log(`\n选卡体检 · ${games} 局 · 双 AI（${LEVEL}）· 起始第 ${ERA} 代 · ${SIZE}×${SIZE}`);
+  console.log(
+    `\n${DRAFT ? '选卡体检' : '无选卡对照'} · ${games} 局 · 双 AI（${LEVEL}）· 起始第 ${ERA} 代 · ${SIZE}×${SIZE}`,
+  );
   console.log(`扩展：${EXPANSIONS.join('+') || '（无）'}`);
   console.log(
     `结果：A 胜 ${aWins} / B 胜 ${bWins} / 未决 ${draws} · 平均 ${avgTurns.toFixed(1)} 回合`,
@@ -233,6 +244,9 @@ function report(rows: GameRow[]): void {
       `选位 ${[...new Set(rows.map((r) => r.picksA.length + r.picksB.length))].join('/')} 张`,
   );
 
+  if (!DRAFT) {
+    console.log('\n（关闭选卡：没有池子/禁用/抓取，下面的表是空的，只看上面的胜负与回合数）');
+  }
   const inPool = new Set(list.filter((L) => L.pool > 0).map((L) => L.id));
   const everPicked = list.filter((L) => L.picked > 0).length;
   console.log(
