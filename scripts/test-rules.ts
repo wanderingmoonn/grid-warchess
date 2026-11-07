@@ -2664,7 +2664,7 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   s.tiles[idx(s, 5, 4)].terrain = 'plain';
   const mage = place2(s, 'A', 'mage', 5, 5);
 
-  // 超级重骑 8 甲：法师物理段 7−8=0，魔法段 18−0=18
+  // 超级重骑 9 甲：法师物理段 7−9=0，魔法段 18−0=18
   const heavy = place2(s, 'B', 'cataphract', 5, 4);
   assert.equal(computeDamage(s, mage, heavy), 18);
 
@@ -2672,12 +2672,14 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   const paladin = place2(s, 'B', 'paladin', 5, 4);
   assert.equal(computeDamage(s, mage, paladin), 14);
 
-  // 对照：同样攻击力全走物理的弓手，被 8 甲吃掉一大半
+  // 对照：同样攻击力全走物理的弓手，被重甲吃掉一大半。
+  // 甲数**从兵种定义里读**，不写字面量——这条测试要证明的是"物理吃甲、
+  // 魔法不吃甲"，和重骑具体几甲无关，写死一个 8 就变成"改数值要改测试"。
   // 重骑要**重新摆回去**：上一步 place2 已经把它换成了圣骑士，而圣骑士带着
-  // 守护光环（半径 2）——留着它的话，这个"8 甲目标"会平白多 2 甲。
+  // 守护光环（半径 2）——留着它的话，这个重甲目标会平白多 2 甲。
   const heavyAgain = place2(s, 'B', 'cataphract', 5, 4);
   const elf = place2(s, 'A', 'elf-archer', 6, 5);
-  assert.equal(computeDamage(s, elf, heavyAgain), 22 - 8);
+  assert.equal(computeDamage(s, elf, heavyAgain), 22 - s.unitTypes['cataphract']!.armor);
 });
 
 test('属性弱点：巨魔怕火，同一个火属性攻击打它翻倍', () => {
@@ -3474,7 +3476,7 @@ test('分裂：史莱姆死了变成两只小史莱姆', () => {
   for (const k of kids) assert.equal(k.owner, 'A');
 });
 
-test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
+test('修缮：符文守卫每回合给相邻的城补 10 点耐久', () => {
   const s = fresh({ expansionIds: FANTASY });
   const city = citiesOf(s, 'A')[0]!;
   city.hp = 10;
@@ -3485,7 +3487,7 @@ test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
     assert.ok(r.ok);
     st = r.state;
   }
-  assert.equal(cityById(st, city.id)!.hp, 16);
+  assert.equal(cityById(st, city.id)!.hp, 20);
 });
 
 test('筑墙：土元素会在自己旁边立一道墙', () => {

@@ -114,9 +114,9 @@ interface Group {
 }
 const GROUPS: Group[] = [
   {
-    title: 'G1 · 一代步兵',
-    ids: ['zombie', 'serpent-man'],
-    note: '一代只有这两个奇想兵。都卖不动——不是互相挤，是这一代整体不在 AI 的采购路径上（开局钱少、城少，优先买原版最便宜的兵）。',
+    title: 'G1 · 一代',
+    ids: ['poison-bat', 'zombie', 'serpent-man'],
+    note: '一代的三个奇想兵（蝙蝠 2026-11-07 从二代 90 金压到这里，35 金 / 10 血 / 去掉淬毒）。都卖不动——不是互相挤，是这一代整体不在 AI 的采购路径上（开局钱少、城少，优先买原版最便宜的兵）。',
   },
   {
     title: 'G2 · 二代步兵',
@@ -125,13 +125,13 @@ const GROUPS: Group[] = [
   },
   {
     title: 'G3 · 二代机动',
-    ids: ['wolf-rider', 'spider-rider', 'poison-bat', 'elite-cavalry'],
-    note: '整张表最刺眼的一组：狼骑士 55 金卖 838 次，精英骑兵 125 金卖 0 次。四者都是"高移动 + 贴身"，价格却跨了 2.3 倍。',
+    ids: ['wolf-rider', 'spider-rider', 'elite-cavalry'],
+    note: '整张表最刺眼的一组：狼骑士 55 金卖 838 次，精英骑兵 125 金卖 0 次。都是"高移动 + 贴身"，价格却跨了 2.3 倍。',
   },
   {
     title: 'G4 · 二代远程',
-    ids: ['ranger', 'centaur'],
-    note: '同价位的两个射 3。游侠进林子变强，半人马带游骑（打了就跑）。半人马 99 次对游侠 13 次。',
+    ids: ['ranger', 'centaur', 'witch'],
+    note: '同价位的射 3。游侠进林子变强，半人马带游骑（打了就跑），女巫带溅射 + 虚咒（2026-11-07 从三代 160 金降到二代 120 金）。半人马 99 次对游侠 13 次。',
   },
   {
     title: 'G5 · 二代光环位',
@@ -165,7 +165,6 @@ const GROUPS: Group[] = [
       'curser',
       'mage',
       'druid',
-      'witch',
       'illusionist',
       'alchemist',
       'necromancer',
@@ -240,6 +239,11 @@ push();
 push('> 由 `npm run fantasy:overlap` 生成（`scripts/fantasy-overlap.ts`），数字不手抄。');
 push('> 表里有两类数：**数值**来自当前代码（`unit-value.ts` 现算）；**出场 / 战斗**来自');
 push(`> 400 局双 AI 跑批（\`results/bf-modern*\`，200 局火药开局 + 200 局信息化开局，20×20）。`);
+push('>');
+push('> **这两类数的时点不同，读的时候要分开**：数值是现算的（含 2026-11-07 那批改动：');
+push('> 蝙蝠下放一代、女巫降到二代、超级重骑 +1 甲 +5 血、牛头人 −10 金、修缮 6→10），');
+push('> 而建造数和交换比来自 11-02/11-03 那几批跑批，**跑的是改动前的数值**。');
+push('> 所以"被挤掉"这一列的判定只对改动前成立；要看改动后的出场，得等新一批跑批。');
 push();
 push('## 口径');
 push();

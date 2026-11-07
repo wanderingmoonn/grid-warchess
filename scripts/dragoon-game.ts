@@ -29,7 +29,7 @@ const SEED = Number(argOf('seed', '9500'));
 const SEAT = (argOf('seat', 'A') as PlayerId);
 const CAP = Number(argOf('cap', '200'));
 const ERA = Number(argOf('era', '3'));
-/** 这一局要无脑堆的是哪个兵（默认龙骑兵；换成 poison-bat 就是毒蝙蝠速攻） */
+/** 这一局要无脑堆的是哪个兵（默认龙骑兵；换成 poison-bat 就是蝙蝠速攻） */
 const TYPE = argOf('type', 'dragoon-rider');
 setRushUnit(TYPE);
 const SIZE = Number(argOf('size', '20'));
