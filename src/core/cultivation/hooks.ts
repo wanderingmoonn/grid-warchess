@@ -1,4 +1,5 @@
 import type { ExpansionHooks } from '../expansions.ts';
+import type { GameState, Unit } from '../types.ts';
 import { isCultivatorUnit, isSwordCultivatorType, UNIT_IDS } from './identity.ts';
 import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
 import { 
@@ -17,8 +18,34 @@ import { getCultivationPanelLines } from './panel.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { MINE_MOUNTAIN_STONE_BONUS } from './units.ts';
 import { anomalyCellsFor, clearAnomaliesOfOthers } from './abilities/anomaly.ts';
+import { bestAdjacentCultivatorRank } from './abilities/formation-guard.ts';
+import { guardianFor } from './abilities/formation-guardian.ts';
+import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from './abilities/formation-seal.ts';
 // query.ts 只 import type，不会和 rules.ts 形成环。
-import { idx, inBounds } from '../query.ts';
+import { distBetweenUnits, idx, inBounds } from '../query.ts';
+
+/**
+ * 这个单位是不是被封印阵压住了。
+ *
+ * 判据和 `movePower` 里那两步保持一致：**先乘 0.5 向下取整、再减守阵者的境界**。
+ * 不能直接调 movePower——那在 rules.ts 里，而 hooks 在它下面，反过来 import 会成环。
+ * 所以这里只复算"封印阵造成的那部分"，其他减速（中毒、封冻）不参与判断：
+ * 被别的东西压住是另一回事，不该算到封印阵头上。
+ */
+function sealedReasonOf(s: GameState, unit: Unit): string | null {
+  const base = s.unitTypes[unit.type]?.move ?? 0;
+  if (base <= 0) return null; // 建筑本来就不动，谈不上被封
+  for (const f of s.units) {
+    if (f.owner === unit.owner) continue;
+    if (f.type !== UNIT_IDS.SEAL_FORMATION) continue;
+    if (distBetweenUnits(s, f, unit) > SEAL_AURA_RADIUS) continue;
+    const guard = bestAdjacentCultivatorRank(s, f) ?? 0;
+    if (Math.floor(base * SEAL_MOVE_PCT) - guard <= 0) {
+      return '被封印阵封住，这一回合无法行动';
+    }
+  }
+  return null;
+}
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 1. 击杀敌人获得历练（规则在 stats.ts，这里只管读写额度）
@@ -72,6 +99,11 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// anomalyCellsFor 第一行就是 `s.current !== player` 早退。
 	// 放进 visibleTilesOf 意味着 AI 也认：对面能据此派兵来劫杀。
 	extraVision: ({ state, player }) => anomalyCellsFor(state, player),
+	// ── 守御阵：把这一下伤害接到阵身上 ──────────────
+	// 只换"谁掉血"，不换"谁被命中"：命中状态、击退、反击全部留在原目标身上。
+	// 规则层的 hurtUnit 保证只问一次、接替者活着且在册、不会转给自己。
+	// 中毒/灼烧/自损不走这条路径（它们本来就不经过 hurtUnit）。
+	redirectDamage: ({ state, victim }) => guardianFor(state, victim),
 	// 视野修正
 	modifyVision: ({ state, unit, base }) => {
 		if (!unit || !isCultivatorUnit(state, unit)) return base;
@@ -168,5 +200,14 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	},
 
 	// ── 面板信息 ───────────────────────────────────
-	getUnitPanelLines: ({ state, unit }) => getCultivationPanelLines(state, unit),
+	// ── 完全封印：被压到 0 移动力的单位不能下任何命令 ──
+	// 规则层会在移动/攻击/攻城/放技能/建造五个入口统一问它。
+	// 面板上也要写一行，否则玩家只看到"点了没反应"。
+	canCommand: ({ state, unit }) => sealedReasonOf(state, unit),
+	getUnitPanelLines: ({ state, unit }) => {
+		const lines = getCultivationPanelLines(state, unit);
+		const sealed = sealedReasonOf(state, unit);
+		if (sealed) lines.push(`封印：${sealed}`);
+		return lines;
+	},
 };

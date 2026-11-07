@@ -30,6 +30,7 @@ import {
 import type {
   AbilityHooks,
   AbilityApi,
+  DamagedCtx,
   DeathCtx,
   HitCtx,
   HookCtx,
@@ -133,6 +134,9 @@ import {
 import { 
   auraSourcesOf, 
   auraBonusOf, 
+  allyAtkPctOf,
+  foeMovePctOf,
+  foeMoveFlatOf,
   fearPenaltyOf, 
   hexWeakPctOf, 
   curseAuraPenaltyOf,
@@ -297,6 +301,10 @@ export const abilityApi: AbilityApi = {
     st.burn = now + 1;
     return st.burn;
   },
+  hurt: (s, target, amount, opts) => {
+    hurtUnit(s, target, amount, opts);
+  },
+  maxHpOf: (s, u) => maxHpOf(s, u),
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
   attacksPerTurn: (s, u) => attacksPerTurn(s, u),
@@ -318,6 +326,93 @@ export const abilityApi: AbilityApi = {
   unitsAt: (s, x, y) => unitsAt(s, x, y),
   movePower: (s, u) => movePower(s, u),
 };
+
+/**
+ * 这一次伤害要不要换个人接（守御阵）。
+ *
+ * 只取**一个**答案：第一个返回非空、且合法的接替者就定下来，之后不再追问。
+ * 这条约束是防死循环的——A 转给 B、B 又转回 A 的话，这一下永远落不到地上。
+ *
+ * 三层合法性检查都是给扩展兜底的，扩展自己不用防：
+ * 接替者不能是原目标（等于没转）、不能已经倒下、必须在册。
+ */
+function redirectOf(s: GameState, victim: Unit, amount: number, source: Unit | undefined): Unit | null {
+  for (const e of activeExpansions(s)) {
+    const taker = e.hooks.redirectDamage?.({ state: s, victim, amount, source });
+    if (!taker) continue;
+    if (taker.id === victim.id) continue;
+    if (taker.hp <= 0) continue;
+    if (!s.units.some((u) => u.id === taker.id)) continue;
+    return taker;
+  }
+  return null;
+}
+
+/**
+ * 全引擎唯一的"扣血"出口。
+ *
+ * 以前 `hp -= dmg` 散在八处（普攻、溅射、反击、塔自动开火、地雷、技能直伤……），
+ * 于是任何"对伤害本身做手脚"的规则——转移、减伤、护盾——都得改八遍，
+ * 漏一处就是"普攻挡得住、溅射挡不住"这种半生效的 bug。
+ *
+ * 顺序是三件事，不能换：
+ *   1. 问钩子由谁接（`redirectDamage`）；
+ *   2. 扣血，然后跑受伤者的 `onDamaged`（守御阵在这里吸守阵修士的血补自己）；
+ *   3. **最后**才判死——所以被打成 −5 但吸回来 9 点的单位能活下来。
+ *
+ * 返回值是"实际承受者"，调用方要按它写战报（转移之后挨打的不是原来那个人）。
+ */
+function hurtUnit(
+  s: GameState,
+  target: Unit,
+  amount: number,
+  opts: { source?: Unit; logText?: string } = {},
+): { victim: Unit; amount: number; redirected: boolean } {
+  const dmg = Math.max(0, Math.round(amount));
+  if (dmg <= 0) return { victim: target, amount: 0, redirected: false };
+
+  const taker = redirectOf(s, target, dmg, opts.source);
+  const victim = taker ?? target;
+  const redirected = victim.id !== target.id;
+
+  victim.hp -= dmg;
+
+  /*
+   * 转移的战报必须写，而且默认公开。
+   *
+   * 不写的话，攻击方看到"造成 17 伤害"、防守方看到自己的兵血没掉，
+   * 两边都会以为是显示错误。这条也是"阵在替他挡"的唯一提示——
+   * 地图上只有一座建筑的血条在变短。
+   */
+  if (redirected) {
+    pushLog(
+      s,
+      target.owner,
+      `${utype(s, victim.type).name} 替 ${utype(s, target.type).name} 承受了 ${dmg} 点伤害`,
+      true,
+    );
+  } else if (opts.logText) {
+    pushLog(s, victim.owner, opts.logText, true);
+  }
+
+  const dctx: DamagedCtx = {
+    state: s, self: victim, amount: dmg, source: opts.source, api: abilityApi,
+  };
+  for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
+
+  /*
+   * 转移把接替者打死了，得由这里收场。
+   *
+   * 不能指望调用方：doAttack 只判 `defender.hp <= 0`，而接替者根本不是 defender，
+   * 于是那具「血量为 0 却还站在场上」的阵会挂到下一次 sweepDead 为止，
+   * 期间还能继续替人挡刀。非转移的情况仍由原调用方判死（各条路径的战报文案不同）。
+   */
+  if (redirected && victim.hp <= 0) {
+    abilityApi.killUnit(s, victim, opts.source, `${utype(s, victim.type).name} 被击毁`);
+  }
+
+  return { victim, amount: dmg, redirected };
+}
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
 interface BoundHook<C> {
@@ -914,6 +1009,15 @@ export function magicDamageOf(s: GameState, attacker: Unit, defender: Unit): num
 export function attackPowerNow(s: GameState, attacker: Unit): number {
   // 圣剑勇者这类"永久变强"的加成记在单位身上，不进兵种表（见 types 的 atkBonus）
   let atkNow = utype(s, attacker.type).atk + (attacker.atkBonus ?? 0) + auraBonusOf(s, attacker).atk;
+  /*
+   * 百分比光环（杀伐阵）：加在"基础 + 加法光环"之后、状态之前。
+   *
+   * 位置要和 effectiveStats 里那段一模一样——面板写 +10%、打出来 +0 是
+   * 这套代码里最难查的偏差（护甲那边专门留过一条注释讲同一个坑）。
+   * 取整用四舍五入，和另一处百分比（虚咒）一致。
+   */
+  const atkPct = allyAtkPctOf(s, attacker);
+  if (atkPct) atkNow = Math.round(atkNow * (1 + atkPct.value));
   for (const [key, val] of orderedStatuses(attacker.status)) {
     const sdef = STATUS_REGISTRY[key];
     if (sdef?.modifyAtk) atkNow = sdef.modifyAtk(s, attacker, val, atkNow);
@@ -1213,7 +1317,14 @@ export function terrainWalkable(def: UnitTypeDef, terrain: Terrain): boolean {
  * 拆出来是因为 2×2 的单位/建筑要**逐格**过同一套判断：
  * 地形、城市归属、同层占位。写两份必然走样。
  */
-function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boolean {
+function tileStandsOk(
+  s: GameState,
+  x: number,
+  y: number,
+  def: UnitTypeDef,
+  /** 只看地形，不管这一格有没有人（传送落位校验用：人还没挪过去） */
+  ignoreUnits = false,
+): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return false;
   if (def.domain === 'water') {
@@ -1237,7 +1348,7 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
     const city = cityById(s, tile.cityId);
     if (city && city.ruined) return false;
   }
-  return !sameLayerAt(s, x, y, airLayer(def));
+  return ignoreUnits ? true : !sameLayerAt(s, x, y, airLayer(def));
 }
 
 /**
@@ -1246,12 +1357,18 @@ function tileStandsOk(s: GameState, x: number, y: number, def: UnitTypeDef): boo
  * 注意"能不能站"和"这一格有没有人"是两件事：前者是地形与层，
  * 后者由 sameLayerAt 逐格判（所以 2×2 的兵贴着一座 2×2 的建筑放不下）。
  */
-export function canStandAt(s: GameState, x: number, y: number, type: string): boolean {
+export function canStandAt(
+  s: GameState,
+  x: number,
+  y: number,
+  type: string,
+  opts: { ignoreUnits?: boolean } = {},
+): boolean {
   const def = utype(s, type);
   const n = footprintOf(s, type);
   for (let dy = 0; dy < n; dy++) {
     for (let dx = 0; dx < n; dx++) {
-      if (!tileStandsOk(s, x + dx, y + dy, def)) return false;
+      if (!tileStandsOk(s, x + dx, y + dy, def, opts.ignoreUnits)) return false;
     }
   }
   return true;
@@ -1360,6 +1477,18 @@ export function movePower(s: GameState, unit: Unit): number {
   // 这条要在钩子**之前**——否则"钩子把移动力压到 0"和"减速扣成 0"
   // 会长得一模一样，而前者是规则（封冻），后者是 bug。
   move = Math.max(1, move);
+
+  /*
+   * 封印阵这类"按比例压速度"：必须在保底之后。
+   *
+   * 提在保底前面的话，移动力 1 的单位被砍成 0 又会被抬回 1，永远封不住；
+   * 放在这里则 0 是真的 0，和扩展钩子"返回 0 = 这回合动不了"是同一个语义。
+   */
+  const sealMove = foeMovePctOf(s, unit);
+  if (sealMove.value < 1) move = Math.floor(move * sealMove.value);
+  // 固定扣减排在比例之后，而且可以扣到 0（封印阵 + 守阵修士就靠这一步）。
+  const sealFlat = foeMoveFlatOf(s, unit);
+  if (sealFlat.value > 0) move = Math.max(0, move - sealFlat.value);
 
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
@@ -1482,6 +1611,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const src of auraSourcesOf(s, u, 'allyAtk')) {
     atk += src.value;
     atkItems.push({ label: src.label, delta: src.value });
+  }
+  // 百分比光环要和 attackPowerNow 算在同一处，否则面板和实际会分家
+  const atkPctSrc = allyAtkPctOf(s, u);
+  if (atkPctSrc) {
+    const before = atk;
+    atk = Math.round(atk * (1 + atkPctSrc.value));
+    if (atk !== before) {
+      atkItems.push({ label: atkPctSrc.label, delta: atk - before });
+    }
   }
   // 老兵不死：击杀数只在扩展开启时增长，kills > 0 就说明加成真实存在
   // 状态修正攻击力面板：与 computeDamage 同一段逻辑，位置也在光环之后
@@ -1635,6 +1773,20 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     const beforeClamp = moveNow;
     moveNow = Math.max(1, moveNow);
     if (moveNow !== beforeClamp) moveItems.push({ label: '保底', delta: moveNow - beforeClamp });
+
+    // 封印阵：和 movePower 同一位置（保底之后）
+    const sealSrc = foeMovePctOf(s, u);
+    if (sealSrc.value < 1) {
+      const before = moveNow;
+      moveNow = Math.floor(moveNow * sealSrc.value);
+      if (moveNow !== before) moveItems.push({ label: sealSrc.label, delta: moveNow - before });
+    }
+    const sealFlatSrc = foeMoveFlatOf(s, u);
+    if (sealFlatSrc.value > 0) {
+      const before = moveNow;
+      moveNow = Math.max(0, moveNow - sealFlatSrc.value);
+      if (moveNow !== before) moveItems.push({ label: sealFlatSrc.label, delta: moveNow - before });
+    }
 
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyMove) {
@@ -2897,7 +3049,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       if (!target) break;
 
       const dmg = computeDamage(s, b, target);
-      target.hp -= dmg;
+      hurtUnit(s, target, dmg, { source: b });
       totalDmg += dmg;
       hits += 1;
       shots -= 1;
@@ -2922,7 +3074,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
       const splashed = splashVictims(s, b, target);
       for (const v of splashed) {
-        v.unit.hp -= v.dmg;
+        hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
         noteVictim(v.unit, v.dmg);
       }
@@ -3067,6 +3219,34 @@ export function mergeDraftStep(
   return applyAction(remote, action, actor);
 }
 
+/**
+ * 这条指令是不是被"外力"挡住了（封印、眩晕、冰冻……）。
+ *
+ * 只问五类**主动命令**：移动、攻击、攻城、放技能、建造。像"结束回合""上船"
+ * 这种不该被一并封掉——被封印的单位总得还能放弃行动。
+ *
+ * 统一在动作分发之前挡一次，而不是在 doMove / doAttack 里各写一遍：
+ * 漏掉一个入口就是"能走不能打"这种半封印的 bug，而且很难发现。
+ */
+function commandBlockedBy(s: GameState, action: Action): string | null {
+  if (
+    action.type !== 'MOVE' &&
+    action.type !== 'ATTACK' &&
+    action.type !== 'SIEGE' &&
+    action.type !== 'HERO_SKILL' &&
+    action.type !== 'BUILD'
+  ) {
+    return null;
+  }
+  const unit = s.units.find((x) => x.id === action.unitId);
+  if (!unit) return null;
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.canCommand?.({ state: s, unit });
+    if (reason) return reason;
+  }
+  return null;
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -3099,6 +3279,9 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   const next = cloneState(s);
   // 招魂要读"本回合谁没了"，所以每一个动作前后各数一次人头（见 recordDeaths）
   const rosterBefore = rosterOf(next);
+
+  const blocked = commandBlockedBy(next, action);
+  if (blocked) return { ok: false, reason: blocked };
 
   const result: ActionResult = (() => {
     switch (action.type) {
@@ -3214,10 +3397,9 @@ function markApi(s: GameState): MarkApi {
     utype: (typeId) => utype(s, typeId),
     log: (owner, text, open = true) => pushLog(s, owner, text, open),
     hurt: (unit, amount, text) => {
-      const dmg = Math.max(0, Math.round(amount));
-      if (dmg <= 0) return;
-      unit.hp -= dmg;
-      pushLog(s, unit.owner, text, true);
+      // 地雷也走唯一出口：它是"敌方影响"，没理由绕过转移。
+      // 取整、非正数早退都交给 hurtUnit；原本那条战报作为 logText 传进去。
+      hurtUnit(s, unit, amount, { logText: text });
     },
   };
 }
@@ -3369,7 +3551,9 @@ function doAttack(
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
   }
   const dmg = computeDamage(s, attacker, defender);
-  defender.hp -= dmg;
+  // 走唯一出口：守御阵可能把这一下接走。注意 `defender` 仍然是他，
+  // 所以反击判定、命中状态、击退都还作用在他身上（只有伤害被转走）。
+  hurtUnit(s, defender, dmg, { source: attacker });
 
     // 战况烈度：一次攻击覆盖到的所有格，纯几何
   // （主命中格 = 鼠标点的格；溅射 = 以它为圆心扩 radius 格）
@@ -3381,7 +3565,8 @@ function doAttack(
 
   const splashed = splashVictims(s, attacker, defender);
   for (const v of splashed) {
-    v.unit.hp -= v.dmg;
+    // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
+    hurtUnit(s, v.unit, v.dmg, { source: attacker });
   }
 
   const noCounter = hasFlagOn(s, attacker, 'noCounter');
@@ -3394,7 +3579,8 @@ function doAttack(
   // 判断是否反击：不仅要活下来、不能先手，还要反击次数 > 0
   if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
-    attacker.hp -= counterDmg;
+    // 反击也会被守御阵接走——"替友军挨打"不该挑来源
+    hurtUnit(s, attacker, counterDmg, { source: defender });
     
     // 消耗一次反击机会
     defender.countersLeft -= 1; 
@@ -4984,7 +5170,8 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     const raw = magicDamageOf(c.state, c.self, f);
     const dmg = Math.max(0, Math.round(applyElementMul(raw, 'dark', fd.weak, fd.resist)));
     if (dmg <= 0) continue;
-    f.hp -= dmg;
+    // 扩展技能的直伤也算"敌人打过来的伤害"，走唯一出口才能被守御阵接走
+    hurtUnit(c.state, f, dmg, { source: c.self });
     hit += 1;
     dealt += dmg;
   }

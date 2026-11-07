@@ -141,7 +141,9 @@ registerSkillEffect('sword-sweep', (c) => {
     try {
       for (const v of victims) {
         const dmg = c.api.computeDamage(c.state, c.self, v);
-        v.hp -= dmg;
+        // 走唯一出口：剑气也是直接伤害，守御阵该能替友军接下这一道。
+        // 城池不在此列——它是 City，不是 Unit，转移钩子只认单位。
+        c.api.hurt(c.state, v, dmg, { source: c.self });
         totalDmg += dmg;
       }
       for (const ct of cityVictims) {

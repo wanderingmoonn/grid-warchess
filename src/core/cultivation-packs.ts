@@ -20,6 +20,13 @@ import {
   SPIRIT_FIELD,
   SPIRIT_MINE,
   SPIRIT_TOWER,
+  FORMATION_MASTER,
+  FORMATION_MASTER_2,
+  FORMATION_MASTER_3,
+  KILL_FORMATION,
+  SEAL_FORMATION,
+  TELEPORT_FORMATION,
+  GUARD_FORMATION,
   MINE_MOUNTAIN_STONE_BONUS,
 } from './cultivation/units.ts';
 import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
@@ -49,7 +56,15 @@ export const CULTIVATION_PACK: Expansion = {
     DEACON,
     SPIRIT_FIELD, 
     SPIRIT_MINE,
-    SPIRIT_TOWER
+    SPIRIT_TOWER,
+    // 阵法：阵师是唯一建造者，三个时代的白名单递增（见 units.ts）
+    FORMATION_MASTER,
+    FORMATION_MASTER_2,
+    FORMATION_MASTER_3,
+    KILL_FORMATION,
+    SEAL_FORMATION,
+    TELEPORT_FORMATION,
+    GUARD_FORMATION,
   ],
   resources: [SPIRIT_STONE_DEF],
   // 下面几条都只活在钩子里（配置表没有对应字段），规则书靠这里才能印全。

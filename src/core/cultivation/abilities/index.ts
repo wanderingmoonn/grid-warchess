@@ -5,11 +5,17 @@
 import type { AbilityDef } from '../../abilities.ts';
 
 import { ANOMALY } from './anomaly.ts';
+import { FORMATION_GUARDIAN } from './formation-guardian.ts';
+import { FORMATION_KILL } from './formation-kill.ts';
+import { FORMATION_SEAL } from './formation-seal.ts';
 import { QI_TRUE_DAMAGE } from './qi-true-damage.ts';
 import { SPIRIT_ASCENSION } from './spirit-ascension.ts';
 import { SPIRIT_AURA } from './spirit-aura.ts';
 
 export * from './anomaly.ts';
+export * from './formation-guardian.ts';
+export * from './formation-kill.ts';
+export * from './formation-seal.ts';
 export * from './qi-true-damage.ts';
 export * from './spirit-ascension.ts';
 export * from './spirit-aura.ts';
@@ -17,6 +23,9 @@ export * from './unlocks.ts';
 
 export const CULTIVATION_ABILITIES: AbilityDef[] = [
   ANOMALY,
+  FORMATION_KILL,
+  FORMATION_SEAL,
+  FORMATION_GUARDIAN,
   QI_TRUE_DAMAGE,
   SPIRIT_ASCENSION,
   SPIRIT_AURA,

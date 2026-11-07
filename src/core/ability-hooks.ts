@@ -54,7 +54,20 @@ export interface AbilityApi {
   tileAt(s: GameState, x: number, y: number): { terrain: Terrain } | null;
   distance(a: { x: number; y: number }, b: { x: number; y: number }): number;
   strikeDistance(s: GameState, a: Unit, b: Unit): number;
-  canStandAt(s: GameState, x: number, y: number, type: string): boolean;
+  /**
+   * 这一格能不能站。
+   *
+   * `ignoreUnits: true` 只判地形与层，不管这一格有没有人——
+   * 传送这类"一群人同时换位置"的效果必须在**所有人都还没挪过去**的时候校验，
+   * 否则先校验的人会被后校验的人挡住。
+   */
+  canStandAt(
+    s: GameState,
+    x: number,
+    y: number,
+    type: string,
+    opts?: { ignoreUnits?: boolean },
+  ): boolean;
   freeNeighbor(s: GameState, u: Unit, type: string): { x: number; y: number } | null;
   /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它） */
   spawn(s: GameState, owner: PlayerId, type: string, x: number, y: number): void;
@@ -83,6 +96,21 @@ export interface AbilityApi {
   putStatus(target: Unit, key: string, turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
+  /**
+   * 对一个单位造成直接伤害。**扩展里所有直伤都该走这里**，不要直接 `u.hp -= n`。
+   *
+   * 这条路径会经过：伤害转移（守御阵）、受伤钩子、以及转移致死时的清场。
+   * 自己改 hp 的话，这些规则对你这一下全部失效——表现就是
+   * "普攻打得到阵、剑气打不到"，而且不报错、很难发现。
+   */
+  hurt(
+    s: GameState,
+    target: Unit,
+    amount: number,
+    opts?: { source?: Unit; logText?: string },
+  ): void;
+  /** 这个单位现在的生命上限（已含境界加成、衰老等修正） */
+  maxHpOf(s: GameState, u: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */
   computeDamage(s: GameState, attacker: Unit, defender: any, isCounter?: boolean): number;
   /** 算一下这个单位现在的溅射半径 */
@@ -317,6 +345,25 @@ export interface DeathCtx {
   result: { blasts: number };
 }
 
+/**
+ * 挨了一下之后、判死之前。
+ *
+ * 这个时机是刻意的：**扣血已经发生、但还没清场**。所以在这里补血能救命——
+ * 守御阵被打成 −5 时会先把守阵修士的血吸过来补上，活下来；被打成 −100 时
+ * 补 9 点也无济于事，照样倒下。反过来，如果挂在"自己回合开始"回血，那就没有
+ * "硬撑"这回事了：血已经见底，回合还没轮到自己就死了。
+ */
+export interface DamagedCtx {
+  state: GameState;
+  /** 实际掉血的那个。注意它**可能不是攻击者最初选的目标**——伤害被转移过 */
+  self: Unit;
+  /** 这一下扣了多少（已含护甲/抗性减免） */
+  amount: number;
+  /** 谁打的。地雷、状态、自损这类没有来源，是 undefined */
+  source: Unit | undefined;
+  api: AbilityApi;
+}
+
 export interface KillCtx {
   state: GameState;
   /** 击杀者（攻方） */
@@ -444,19 +491,34 @@ export interface AuraSpec {
    */
   foeAtkPct?: number;
   /**
-   * 给范围内友军的**攻击力百分比**加成（0.1 = +10%）。
+   * 友军攻击力**百分比**加成（0.1 = +10%）。
    *
-   * 和 `allyAtk` 的分工和敌方那边一样：`allyAtk` 是加法（+2 点），
-   * 这个字段是比例。多条**不叠乘**，取最强的一条——两个杀伐阵重叠不该变 ×1.21。
+   * 和 allyAtk 的分工：那个是加法（+2 点）——对杂兵是翻倍，对高攻单位是零头；
+   * 这个是比例，对谁都是同一个百分比。"按比例统御"才像阵法，所以单独开一个字段，
+   * 而不是把 allyAtk 改成能写小数（那会让现存二十多个光环的含义全变）。
+   *
+   * 多条不叠乘，**取最强**：两个杀伐阵重叠不该变成 ×1.21。
    */
   allyAtkPct?: number;
+
   /**
-   * 范围内敌军的**移动力留存比例**（0.5 = 减半，向下取整）。
+   * 敌军**移动力留存比例**（0.5 = 只剩一半，向下取整）。
    *
-   * 多条取最强，也就是取最小的留存率。作用点在"保底 1"**之后**，
-   * 所以它能把 1 点移动力压成 0——「封印」就是靠这个把对面钉死的。
+   * 减到 0 就真的走不动了：movePower 里"保底 1"在光环之前，
+   * 所以这里的 0 不会被抬回 1（见 rules.movePower 的注释）。
+   * 多条同样取最强，也就是取**最小**的留存率。
    */
   foeMovePct?: number;
+
+  /**
+   * 敌军**移动力的固定扣减**（0/1/2…）。和 foeMovePct 是两回事：
+   * 那个是按比例砍，这个是减固定值，而且**在比例之后**结算。
+   *
+   * 封印阵用它：基础只减半，有修士守阵时再减"守阵者的境界"点，
+   * 所以 0 级修士守阵等于没加成，1 级修士就能把 2 移的单位压到 0。
+   */
+  foeMoveFlat?: number;
+
   /**
    * 上面那几条"给敌军"的作用半径（格）。默认 1 = 相邻。
    *
@@ -498,6 +560,13 @@ export interface AbilityHooks {
   onHit?: Staged<HitCtx>[];
   /** 阵亡时（自爆、重生、分裂） */
   onDeath?: (c: DeathCtx) => void;
+  /**
+   * 受到伤害之后、判死之前（吸血、反伤、受击狂暴）。
+   *
+   * 只在**真的掉了血**时触发（amount > 0）；被护甲完全挡住不会触发——
+   * "没打穿"和"打穿了但很硬"是两回事，受击类效果不该被白嫖。
+   */
+  onDamaged?: (c: DamagedCtx) => void;
   /** 亲手打死目标之后（收割） */
   onKill?: (c: KillCtx) => void;
   /** 攻击流程里的补充（见 STRIKE_STAGE：吸血、击退） */
@@ -544,16 +613,16 @@ export interface AbilityHooks {
    * （治愈、灼烧……）根本不走这个字段。
    */
   aura?: AuraSpec | AuraSpec[];
+
   /**
-   * 动态光环：每次被查询时现算，用来表达"光环取决于盘面"。
+   * 动态光环：数值和半径要按"此刻场上有谁"来算的，用这个。
    *
-   * `aura` 写的是兵种数据里固定的那一项；而「杀伐阵」的半径和加成要看它旁边
-   * 站着哪位修士、境界多高——那只有拿到盘面才算得出来。
+   * 静态 `aura` 是兵种数据里写死的一项，查询时原样返回；而「杀伐阵」要
+   * "相邻有几个修士 / 最高几级"决定半径和加成，只能每次现算。
    *
-   * 返回 null 表示这一次没有光环。
-   *
-   * ⚠️ 这个函数在热路径上：算一次属性就要遍历一圈光环来源，每个来源都会调一次。
-   * 所以里面只做只读的轻量计算，不要写盘面，也不要遍历整个单位表。
+   * 只在 `aurasOfUnit(s, u)` 里合并，所以面板、AI、伤害结算拿到的都是同一份。
+   * 代价是它进了每次光环查询的热路径（移动力、攻击力、护甲都要扫一遍），
+   * 里面别做 O(n²) 的事。
    */
   auraDynamic?: (c: { state: GameState; self: Unit }) => AuraSpec | AuraSpec[] | null;
   /** 这个能力涉及范围时的默认半径（供效果型光环等使用） */
