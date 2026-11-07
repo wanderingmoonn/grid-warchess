@@ -2238,6 +2238,9 @@ a.btn {
 .chip-row {
   display: flex;
   flex-wrap: wrap;
+  /* 竖着对齐：这一行里既有 12px 的说明文字，也有 22~30px 高的按钮，
+     不居中的话文字会贴着顶部，看起来像"按钮掉下来了"或"字浮上去了" */
+  align-items: center;
   gap: 7px;
 }
 

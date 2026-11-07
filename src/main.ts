@@ -5012,24 +5012,6 @@ function godHasArmy(p: PlayerId): boolean {
   return state.pendingEgg?.owner === p;
 }
 
-/**
- * 操控档下"手上这支兵还剩什么"的一句话。
- *
- * 沙盒没有属性卡（侧栏是货架），而自己下场走子时，"它还有没有行动力、
- * 这一下打不打得出去"是每一下都要看的东西。放到工具栏末尾那一行，
- * 比让人去悬停看 tooltip 快得多。
- */
-function godSelectedNote(): string {
-  const u = selectedId ? state.units.find((x) => x.id === selectedId) : null;
-  if (!u) return '';
-  const def = utype(state, u.type);
-  const bits = [`${def.name} ${u.hp}/${def.maxHp} 血`];
-  if (def.atk > 0) bits.push(`攻 ${def.atk}${def.armor ? ` · 甲 ${def.armor}` : ''}`);
-  bits.push(canMove(u) ? '还能走' : '走完了');
-  if (def.atk > 0) bits.push(canAttack(u) ? '还能打' : '打完了');
-  return bits.join(' · ');
-}
-
 function godUi() {
   return {
     state,
@@ -5049,7 +5031,6 @@ function godUi() {
     play: godPlay,
     myTurn: godMyTurn(),
     passing: godPassing,
-    selected: godSelectedNote(),
     // 侧栏顶上那块属性卡：直接拿正常面板那一份（含光环/规则加成/技能按钮），
     // 没选中任何东西时是空串
     detail: godDetailHtml(),
