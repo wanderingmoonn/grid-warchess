@@ -39,6 +39,7 @@ export const UNIT_IDS = {
 const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
+  UNIT_IDS.SPIRIT,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
