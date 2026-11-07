@@ -57,6 +57,20 @@ const MERGE = argOf('merge', '');
  * 才是席位/地图本身带来的。
  */
 const DRAFT = !args.includes('--no-draft');
+/**
+ * 禁用策略：auto（A targeted / B generic，线上默认）· targeted · generic。
+ * 两边用同一策略跑一遍，才能判断"先手优势"是不是禁用规则的不对称带来的。
+ */
+const BAN_MODE = argOf('ban-mode', 'auto') as 'auto' | 'targeted' | 'generic';
+/**
+ * 谁先选。`other` = 把蛇形顺序整体对调（B 先选、A 后选），但**开局仍然是 A 走**。
+ *
+ * 这一个开关能分开两件一直被混为一谈的事：
+ *   · "先手"是席位（谁先动棋子）；
+ *   · "先手"是选卡的第一签位。
+ * 只换签位、不换走棋顺序，就能看出优势到底跟着哪一个走。
+ */
+const FIRST_DRAFT = argOf('first-draft', 'default');
 
 export interface GameRow {
   seed: number;
@@ -89,6 +103,10 @@ function playOne(seed: number): GameRow {
   // 从 lobby 开始：DRAFT_START 带一个计时起点（缺了会被判 NaN 超时，见 draft.ts）
   const started = DRAFT ? applyAction(s, { type: 'DRAFT_START', at: 0 }) : { ok: false, state: s };
   if (started.ok) s = started.state;
+  if (DRAFT && FIRST_DRAFT === 'other' && s.draft) {
+    // 只对调签位，不碰开局谁先走
+    s.draft.order = s.draft.order.map((p) => (p === 'A' ? 'B' : 'A'));
+  }
 
   for (let guard = 0; DRAFT && guard < 200; guard++) {
     if (!s.draft || s.draft.phase === 'done') break;
@@ -99,7 +117,7 @@ function playOne(seed: number): GameRow {
         (sd) => !(sd === 'A' ? view.a : view.b).banDone,
       );
       if (!side) break;
-      const id = aiDraftBan(s, side);
+      const id = aiDraftBan(s, side, BAN_MODE);
       if (!id) break;
       const r = applyAction(s, { type: 'DRAFT_BAN', unitId: id, at: 1 }, side);
       // 失败要**当场炸**，不能 break：break 会让这一局带着空 list 进统计，
