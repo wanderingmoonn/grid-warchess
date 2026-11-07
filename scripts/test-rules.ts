@@ -68,7 +68,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
-import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
+import { heatCells, heatStep, newHeatCells, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
 import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
 
@@ -283,7 +283,7 @@ import {
   snapshotJson,
   snapshotSignature,
 } from '../src/core/snapshot.ts';
-import { GOLD } from '../src/core/resources.ts';
+import { GOLD, RESOURCES, registerResourceName, resourceName, resourceShort } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
@@ -466,6 +466,25 @@ test('建造名单：查不到中文名时退回 id，不抛错也不静默丢�
   const list = buildListOf({ id: 'probe', builds: ['a', 'b'] });
   assert.deepEqual(list.ids, ['a', 'b']);
   assert.deepEqual(list.names, ['a', 'b']);
+});
+
+test('资源名兜底：没有开局也能查到扩展资源的中文名，且不污染本局流通表', () => {
+  // 规则书生成、开局设置、联机加入、读档都不走 createMatch，
+  // 这些路径以前会把 spirit-stone 原样印给玩家。
+  assert.equal(resourceShort(SPIRIT_STONE), '灵', '没有一局游戏也要认得灵石简称');
+  assert.equal(resourceName(SPIRIT_STONE), '灵石');
+
+  // 兜底表本身：登记后能查到名字，但不会撑大 RESOURCES（RL 特征按它开槽）
+  registerResourceName({
+    id: 'probe-resource',
+    name: '试炼石',
+    short: '试',
+    color: '#000',
+    summary: '',
+  });
+  assert.equal(resourceShort('probe-resource'), '试');
+  assert.equal(resourceName('probe-resource'), '试炼石');
+  assert.ok(!RESOURCES.some((r) => r.id === 'probe-resource'), '兜底名字不该进本局流通表');
 });
 
 console.log('\n开局与地图');
@@ -11047,6 +11066,15 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   const bHeat = heatCells(next.state, 'B');
   assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
   assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
+
+  // 出手闪烁：动作前后的记账差 = 这一下打到哪
+  // 炮兵溅射半径 1（曼哈顿），所以是主目标 + 上下左右四格；开火者自己那格不该亮。
+  const flash = newHeatCells(s, shot.state);
+  assert.equal(flash.get(idx(shot.state, 8, 8)), 1, '主目标要闪');
+  assert.equal(flash.get(idx(shot.state, 8, 9)), 1, '溅射格也要闪');
+  assert.equal(flash.size, 5, '整片溅射范围都要闪（主目标 + 四邻）');
+  assert.ok(!flash.has(idx(shot.state, 6, 8)), '开火的那一格不闪：那是"我打到哪"，不是"我在哪"');
+  assert.equal(newHeatCells(shot.state, next.state).size, 0, '结束回合不记账，什么都不闪');
 
   // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
   const s2 = fresh();

@@ -193,8 +193,10 @@ export function createMatch(
   );
   const citySize = Math.max(CITY.size, Math.round(config.citySize ?? declaredCitySize));
 
-  // 本局启用的扩展带来的资源：注册到全局表，resourceById / costLabel / missingLabel 才认得出名字。
-  // 幂等，多局重复注册无害；没启用的包不注册，它的资源不会凭空出现名字。
+  // 本局启用的扩展带来的资源：登记进 RESOURCES（本局流通表）。
+  // 名字兜底已由 expansions.ts 在模块加载时全量登记（规则书 / 开局面板 /
+  // 联机加入 / 读档都不走 createMatch，也得查得到中文名），这里再调一次是幂等的。
+  // RESOURCES 的长度和顺序仍由本局决定——RL 特征向量按它开槽。
   for (const id of config.expansionIds) {
     if (!liveExpansions.has(id)) continue;
     for (const r of expansionById(id)?.resources ?? []) registerResource(r);

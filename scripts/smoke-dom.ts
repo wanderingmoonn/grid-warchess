@@ -956,6 +956,61 @@ check('挨过打的格子挂烈度层：档位、数量、收起都对', () => {
   assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '不给 heat 就该清干净');
 });
 
+check('出手闪烁层：打到哪就闪哪，用完即散', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4243);
+  const view = playerView(st, 'A');
+  const vis = new Set(view.visible);
+  const shown = view.visible.slice(0, 2);
+  let hidden = -1;
+  for (let i = 0; i < st.w * st.h; i += 1) if (!vis.has(i)) { hidden = i; break; }
+  assert.ok(shown.length === 2 && hidden >= 0, '这条用例要有两格可见、一格不可见');
+
+  const host = doc.createElement('div');
+  const empty = {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+  };
+  const cell = (i: number) => ({ x: i % st.w, y: Math.floor(i / st.w) });
+  const [a, b] = shown as [number, number];
+  const at = (i: number) =>
+    host.querySelector<HTMLElement>(
+      `.heat-flash .fx-heat[data-x="${cell(i).x}"][data-y="${cell(i).y}"]`,
+    );
+
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[a, 2], [b, 1]]), flashSeq: 1 });
+  assert.ok(host.querySelector('.heat-flash'), '棋盘里应该有一条独立的闪烁层');
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 2, '打到两格就闪两格');
+  assert.ok(at(a)!.classList.contains('flash'), '闪烁格要挂一次性动画的类');
+  assert.ok(at(a)!.classList.contains('d2'), '沿用烈度的分档：挨两下是 d2');
+  assert.equal(at(a)!.getAttribute('data-flash'), '1', '批次号要写到节点上');
+
+  // 闪烁层压在常驻烈度层之上：同一块地方同时出现时，是"刚刚这一下"更该被看见
+  const order = Array.from(host.children).map((n) => n.className);
+  assert.ok(
+    order.indexOf('heat-flash') > order.indexOf('heat'),
+    `闪烁层要排在烈度层之后（实际顺序 ${order.join(' → ')}）`,
+  );
+
+  // 同一批格子再挨一下：批次号变了就必须重写节点，否则动画不会重播
+  const before = at(a);
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[a, 2], [b, 1]]), flashSeq: 2 });
+  assert.equal(at(a)!.getAttribute('data-flash'), '2', '批次号要跟着更新');
+  assert.ok(before !== at(a), '同内容不同批次也要重建节点，动画才会从头播');
+
+  // 雾外不画：调用方漏过滤，这一层也要兜住
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[hidden, 1]]), flashSeq: 3 });
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 0, '雾外的格子不该闪');
+
+  // 时间到了调用方清空数据：这一层跟着空掉，不留一块红在地上
+  renderBoard(host, view, empty);
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 0, '不给数据就该清干净');
+});
+
 check('点自己的单位会高亮可移动范围', () => {
   const unit = doc.querySelector<HTMLElement>('.unit.owner-A');
   assert.ok(unit, '找不到 A 方棋子');

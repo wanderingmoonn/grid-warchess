@@ -61,8 +61,27 @@ export function registerResource(def: ResourceDef): void {
   RESOURCES.push(def);
 }
 
+/**
+ * 扩展资源的**名字兜底表**。
+ *
+ * `RESOURCES` 是"本局流通的资源"：只有在 `createMatch` 里按本局启用的扩展
+ * 才会 push 进来。可很多显示路径根本没有一局游戏——规则书生成脚本、开局设置、
+ * 兵种编辑器，以及**联机加入 / 读档**（这两种只恢复 state，不走 createMatch）。
+ * 那些地方 `resourceShort('spirit-stone')` 查不到定义，只能把原始 id 印给玩家。
+ *
+ * 所以名字单独存一份全量表，模块加载时由 expansions.ts 填好；查询时
+ * `RESOURCES` 优先、兜底补位。不直接塞进 `RESOURCES` 是有意的：那张表的
+ * 长度和顺序被 RL 特征向量当槽位用（`RESOURCE_SLOTS`），不能被没启用的资源撑大。
+ */
+const RESOURCE_NAME_FALLBACK = new Map<string, ResourceDef>();
+
+/** 登记扩展资源的名字（只管显示，不影响本局流通表）。同 id 重复登记无害。 */
+export function registerResourceName(def: ResourceDef): void {
+  if (!RESOURCE_NAME_FALLBACK.has(def.id)) RESOURCE_NAME_FALLBACK.set(def.id, def);
+}
+
 export function resourceById(id: ResourceId): ResourceDef | undefined {
-  return RESOURCES.find((r) => r.id === id);
+  return RESOURCES.find((r) => r.id === id) ?? RESOURCE_NAME_FALLBACK.get(id);
 }
 
 /** 资源名（给日志和提示用）；未注册的 id 原样返回，方便扩展自己带名字 */
