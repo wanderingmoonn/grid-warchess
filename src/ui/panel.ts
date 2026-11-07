@@ -57,7 +57,8 @@ import {
   ordersOf,
   recruitResCost,
   recruitSpawnCells,
-  unitIncome,
+  incomeResOf,
+  unitYield,
   unitsOf,
   upgradeCostOf,
   utype,
@@ -748,7 +749,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     // movePower/visionOf 则是移动力和视野的同一个真相源。
     // 面板再也不显示"裸装"数值——玩家对不上账，比没有数字更糟。
     const eff = effectiveStats(s, selectedUnit);
-    const income = unitIncome(s, selectedUnit);
+    /*
+     * 产出走 unitYield，不是 unitIncome：后者只取金币。
+     * unitYield 就是回合结算（settleIncome → incomeResOf）用的那个函数，
+     * 地形、临水、扩展的 modifyYield（灵矿邻山 +2 灵石、城郭包折算、海军平台被贴停产）
+     * 全都已经算在里面——面板和战报因此永远是同一笔账。
+     */
+    const yields = unitYield(s, selectedUnit);
     const signed = (n: number): string => (n > 0 ? `+${n}` : String(n));
     const modRow = (scope: string, it: { label: string; delta: number }): string =>
       `<div class="info-row stat-mod"><span>${scope} · ${it.label}</span><b class="${
@@ -841,7 +848,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
              ${weatherBlock(climateAt(s, selectedUnit.x, selectedUnit.y))}`
           : ''
       }
-      ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
+      ${
+        // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
+        // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
+        Object.keys(yields).length > 0
+          ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
+          : ''
+      }
       ${
         // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
         // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
@@ -1080,7 +1093,19 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
     <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-    <div class="info-row"><span>每回合收入</span><b>${era.cityIncome} 金</b></div>
+    <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+    ${
+      /*
+       * 本方总收入单独一行，且只在**自己的城**上显示。
+       *
+       * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
+       * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
+       * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
+       */
+      mine
+        ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(incomeResOf(s, city.owner))}</b></div>`
+        : ''
+    }
     <div class="info-row"><span>驻军休整</span><b>${regenText}</b></div>
     ${upgradeBlock}
     ${

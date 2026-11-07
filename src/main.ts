@@ -50,7 +50,7 @@ import {
   supplyEraAt,
   terrainWalkable,
   threatTiles,
-  unitIncomeAt,
+  unitYieldAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
@@ -67,6 +67,7 @@ import {
 import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
+import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { coordsFromEvent, renderBoard } from './ui/board.ts';
@@ -1588,21 +1589,22 @@ function clearSelection(): void {
 /**
  * 经济单位的移动产出预览。
  *
- * 选中带收入的经济单位、且它还有可达格时，把每一格站上去之后的收入
- * 都算出来（农民按地形、牧民按地形、临水一律 +河运）。
- * 固定收入的单位也参与：河边那格会多 3 金，这正是要给人看的差别。
- * reach 本身已经带上了"是谁的回合、动没动过"的口径，这里只补一条
- * 收入判空——没收入的东西没必要在几十个格子上各印一个 +0。
+ * 选中经济单位、且它还有可达格时，把每一格站上去之后的**全部产出**都算出来
+ * （农民按地形、牧民按地形、临水 +河运、扩展的 modifyYield 折算也一并算上）。
+ *
+ * 以前这里先看 `def.income` / `def.incomeByTerrain` 有没有写，没写就直接返回——
+ * 只产粮、材、灵石的单位（灵田、粮仓）因此永远没有预览，玩家挪它们时
+ * "去哪儿都一样"是错的。现在逐格算 unitYield，算出来是空表才跳过；
+ * reach 本身已经带上了"是谁的回合、动没动过"的口径。
  */
-function computeIncomeHints(unit: Unit | undefined): Map<number, number> {
-  const hints = new Map<number, number>();
+function computeIncomeHints(unit: Unit | undefined): Map<number, ResourceCost> {
+  const hints = new Map<number, ResourceCost>();
   if (!unit || reach.length === 0) return hints;
-  const def = utype(state, unit.type);
-  if (!def.incomeByTerrain && !def.income) return hints;
   for (const i of reach) {
     const x = i % state.w;
     const y = Math.floor(i / state.w);
-    hints.set(i, unitIncomeAt(state, unit, x, y));
+    const yields = unitYieldAt(state, unit, x, y);
+    if (Object.keys(yields).length > 0) hints.set(i, yields);
   }
   return hints;
 }
