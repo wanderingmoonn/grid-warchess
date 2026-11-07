@@ -172,6 +172,14 @@ export interface PanelInput {
    * 而且点之前得先看见"要交出去的是哪些东西"。
    */
   report?: PanelReport;
+  /**
+   * 这一局打完了，可以出战报卡。
+   *
+   * 为什么不复用 `report` 那个开关：结算卡有三条排除（沙盒 / 观战位 / 还在打），
+   * 其中「沙盒」正是上帝模式——那偏偏是自家玩得最多的地方。把战报卡挂在 `report`
+   * 上，等于"越常用的模式越看不到产出"。这两个区块的可见条件本来就不该是同一个。
+   */
+  battleCard?: boolean;
 }
 
 export interface PanelReport {
@@ -356,6 +364,14 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     ${eggBanner}
+
+    ${input.battleCard
+      ? `<div class="card">
+           <div class="card-title">战报卡</div>
+           <div class="hint">破城回合、MVP 兵种、关键三步——一张能存下来、也能发出去的卡。</div>
+           <button class="btn btn-sm btn-primary" data-act="battle-card">生成战报卡</button>
+         </div>`
+      : ''}
 
     ${renderReport(s, input.report)}
 

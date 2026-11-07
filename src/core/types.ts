@@ -1091,6 +1091,25 @@ export interface MatchConfig {
    */
   aiLevel?: AiLevel;
   /**
+   * 强制 AI 用某一种战术（rush / harass / boom），**只给脚本用**。
+   *
+   * 产品界面不出这个开关（玩家要的是"一个对手"，不是"给我指定打法的陪练"）。
+   * 它存在的唯一理由是窄决策那一层要采数据：随机派一个战术、跑一局、记胜负，
+   * 才知道"什么局面该用哪种打法"。没有这个入口，就只能靠改代码来切换，
+   * 那既不能并行也没法复现。
+   *
+   * 缺省（undefined）= AI 自己判断，行为和这个字段出现之前完全一致。
+   */
+  aiDoctrine?: 'rush' | 'harass' | 'boom';
+  /**
+   * 只强制**这一席**用 `aiDoctrine`，另一席按自己的判断（auto）。
+   *
+   * 为什么要分席：`config` 是全局一份，两边都读。不分席的话"强制 rush"等于
+   * 两边都 rush，量出来的是"rush 打 rush 谁先手赢"，不是"rush 好不好用"。
+   * 缺省 = 两边都按 `aiDoctrine`（同族对抗时才有意义）。
+   */
+  aiDoctrineSeat?: PlayerId;
+  /**
    * AI 用哪个内核：手写的那套（默认），还是训练出来的策略网络。
    *
    * 为什么单独一个字段而不是往 `AiLevel` 里塞第四档：`AiLevel` 是"同一套 AI 的

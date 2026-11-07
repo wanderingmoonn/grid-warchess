@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.40",
+  "version": "0.3.47",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -72,6 +72,8 @@
     "calibrate:k": "node --experimental-strip-types scripts/calibrate-k.ts",
     "fantasy:table": "node --experimental-strip-types scripts/fantasy-table.ts",
     "duel:batch": "node --experimental-strip-types scripts/ai-duel-batch.ts",
+    "duel:changed": "node --experimental-strip-types scripts/ai-duel-changed.ts",
+    "probe:doctrine": "node --experimental-strip-types scripts/probe-doctrine.ts",
     "era:table": "node --experimental-strip-types scripts/era-table.ts"
   },
   "devDependencies": {

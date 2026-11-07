@@ -23,6 +23,16 @@ export interface TitleOptions {
   /** 最近一版的一句话（可省） */
   latest?: string;
   onNew: () => void;
+  /** 新手教程：一条三分钟的固定局面，教选兵/移动/攻击/结束回合/攻城 */
+  onTutorial: () => void;
+  /**
+   * 第一次来（没打过一局、也没看过教程）。
+   *
+   * 这一档下把「新手教程」摆成主按钮：新手第一眼该看见的是"先学三分钟"，
+   * 而不是"开始对局"——后者会把他直接扔进两页开局面板。老玩家（打过一局）
+   * 仍然是「开始对局」主按钮，教程退成普通入口（想进去复习随时能点）。
+   */
+  firstVisit?: boolean;
   onContinue: () => void;
   onOnline: () => void;
   onManual: () => void;
@@ -61,8 +71,15 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       <p class="title-sub">从青铜到信息化：六个时代的产兵、经济与攻城</p>
 
       <div class="title-actions">
-        <button class="title-btn primary" data-title="new">开始对局</button>
-        <button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>
+        ${(() => {
+          const tut = '<button class="title-btn" data-title="tutorial">新手教程</button>';
+          const neu = '<button class="title-btn" data-title="new">开始对局</button>';
+          const cont = `<button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
+          // 第一次来：教程当主按钮、排第一；老玩家：开始对局在主位，教程退第二
+          return opts.firstVisit
+            ? tut.replace('class="title-btn"', 'class="title-btn primary"') + neu + cont
+            : neu.replace('class="title-btn"', 'class="title-btn primary"') + tut + cont;
+        })()}
       </div>
 
       <div class="title-links">
@@ -107,6 +124,10 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       case 'new':
         close();
         opts.onNew();
+        break;
+      case 'tutorial':
+        close();
+        opts.onTutorial();
         break;
       case 'continue':
         close();
