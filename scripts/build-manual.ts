@@ -2737,8 +2737,8 @@ function cultivationRules(): string {
           但<b>友军最低只被抽到 1 点血</b>，永远不会被自己人抽死——不然献祭自家杂兵就能刷
           「战争经济」「老兵不死」那类击杀奖励。</li>
         <li><b>修为</b>：按"实际打掉的伤害"折算。0 级每点伤害折
-          ${Math.round(bloodRiteExpMul(0) * 100)}%，境界每高 1 级按 1 ÷ (1 + ${BLOOD_RITE_EXP_DECAY} × 境界) 衰减——
-          ${MAX_RANK} 级只剩 ${Math.round(bloodRiteExpMul(MAX_RANK) * 100)}%。友军那部分伤害只按
+          ${Math.round(bloodRiteExpMul(0) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%，境界每高 1 级按 1 ÷ (1 + ${BLOOD_RITE_EXP_DECAY} × 境界) 衰减——
+          ${MAX_RANK} 级只剩 ${Math.round(bloodRiteExpMul(MAX_RANK) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%。友军那部分伤害只按
           ${Math.round(BLOOD_RITE_ALLY_EXP_MUL * 100)}% 折算。<b>这条修为绕过每回合击杀上限</b>，
           但伤害溢出的部分不算（打残血小兵不会更划算）。</li>
         <li><b>代价</b>：每次释放扣 ${BLOOD_RITE_LIFESPAN_COST} 年寿元。寿元就是这一支的油表：
