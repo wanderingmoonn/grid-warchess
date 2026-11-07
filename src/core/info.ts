@@ -220,7 +220,7 @@ export function describeUnit(
   }
   if (def.burst) {
     lines.push(
-      `多动：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
+      `攻击次数：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
         `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }

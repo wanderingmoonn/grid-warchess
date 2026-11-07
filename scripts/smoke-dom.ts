@@ -813,9 +813,10 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
 });
 
-check('多动兵的面板写"还剩几次"，不是"几段"', () => {
-  // 多动的次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
+check('多次攻击兵的面板写"还剩几次"，不是"几段"', () => {
+  // 攻击次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
   // 顺带钉住旧说法：面板上不能再出现"每段独立减甲"——那是被否掉的模型。
+  // 口径统一成「攻击次数」："多动"这个词已经不印在界面上了。
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 4, expansionIds: [] }, 917);
   st.current = 'A';
@@ -837,7 +838,8 @@ check('多动兵的面板写"还剩几次"，不是"几段"', () => {
 
   paint();
   let text = host.textContent ?? '';
-  assert.ok(text.includes('多动'), '多动兵的侧栏要写出这件事');
+  assert.ok(text.includes('攻击次数'), '多次攻击的兵，侧栏要写出这件事');
+  assert.ok(!text.includes('多动'), '"多动"这个旧词不该再出现在界面上');
   assert.ok(text.includes(`还剩 ${burst} / ${burst} 次`), '还没出手时应该显示满次数');
   assert.ok(!text.includes('每段'), '不能再出现"每段"这种旧口径');
 
