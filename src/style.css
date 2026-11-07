@@ -765,6 +765,77 @@ body {
   animation: fx-heat-pulse 2.4s ease-in-out infinite;
 }
 
+/*
+ * 出手闪烁层：和烈度层同一张网格、同一套色块，但**只活 0.7 秒**。
+ *
+ * 为什么单独一层而不是复用 `.heat`：两层的更新节奏正好相反——常驻层按格累积，
+ * 大多数帧内容不变，靠 `paintLayer` 的"一样就不写"省掉整层重写；这一层每次动作
+ * 都要重播动画，混在一起会把对方的 diff 缓存打断。
+ *
+ * 颜色和分档照抄常驻层：玩家已经认得"红块 = 这一片在打"，不必为"我打的"
+ * 再学一套颜色（而且暖色系已经被可攻击、威胁、技能瞄准占满了）。
+ */
+.heat-flash {
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  pointer-events: none;
+}
+
+/*
+ * 一次性闪烁：亮 → 暗 → 亮 → 淡出。
+ *
+ * 常驻层是"慢慢呼吸"（2.4s 无限循环），这里是"啪一下"。`both` 让末帧的透明
+ * 留在元素上——就算定时器因为主线程忙晚了几十毫秒，也不会有一块红停在地上。
+ */
+.fx-heat.flash {
+  animation: fx-heat-flash 0.7s ease-out both;
+}
+
+@keyframes fx-heat-flash {
+  0% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  42% {
+    opacity: 0.5;
+  }
+  66% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * 减弱动态偏好：脉冲换成一次淡出。
+ *
+ * 常驻层是故意不关的（它本身就是"刚挨打"的信号），但这一层是**新**加的一次性
+ * 效果，两下脉冲在 0.7 秒内落在光敏感的门槛附近，没有必要冒这个险——
+ * 信息一点没少，只是不再闪。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .fx-heat.flash {
+    animation: fx-heat-soft 0.5s ease-out both;
+  }
+}
+
+@keyframes fx-heat-soft {
+  from {
+    opacity: 0.9;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes fx-heat-pulse {
   0%,
   100% {

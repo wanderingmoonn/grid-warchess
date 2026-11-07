@@ -16,7 +16,7 @@ import { DEFAULT_BUDGET, aiLevelLabel, aiLevelOf, anyAiSide, isAiSide } from './
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
-import { visibleHeat } from './core/heat.ts';
+import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
@@ -1165,6 +1165,16 @@ function render(): void {
         active: state.current === me() && !spectating(),
       });
 
+  // 出手闪烁：和上面那层用同一套色块，区别是它只活在动作后的 0.7 秒里。
+  // 复盘不闪——那是别人的历史回放，没有"刚刚"可言；雾外不画，和红层同一口径。
+  let heatFlashView: Map<number, number> | undefined;
+  if (!replay && heatFlash && Date.now() < heatFlash.until) {
+    const seenNow = new Set(view.visible);
+    const out = new Map<number, number>();
+    for (const [i, n] of heatFlash.cells) if (seenNow.has(i)) out.set(i, n);
+    if (out.size > 0) heatFlashView = out;
+  }
+
   // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
   const hpDrops = new Map(pendingDrops);
   pendingDrops.clear();
@@ -1187,6 +1197,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
+    heatFlash: heatFlashView,
+    flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
     impacts,
@@ -1939,6 +1951,7 @@ async function pushDraft(
 /** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
 function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
+  dropHeatFlash();
   state = snapshot.state;
   state.aiControl = { A: false, B: false };
   state.fog = fog;
@@ -2332,6 +2345,57 @@ function toast(msg: string): void {
  */
 let heatDismissTurn: number | null = null;
 
+/**
+ * 刚刚这一手打出去的格子。
+ *
+ * 不另建账本：每次伤害本来就会被 `noteHeatCell` 记在**挨打方、当前回合**下
+ * （溅射逐格各记一次，多段各记一次）。所以动作前后各拍一张记账快照、取差值，
+ * 差出来的就是"这一下覆盖了哪"——普攻、溅射、攻城、剑气这类技能全自动覆盖，
+ * 不必按动作类型逐个特判。
+ *
+ * 只要"这一下"，不留"这一回合"：留着就会和常驻的复盘红格抢同一个视觉位置，
+ * 而那种"刚才打了哪"的复盘需求，回合结束后也一样没人看。
+ */
+let heatFlash: { cells: Map<number, number>; seq: number; until: number } | null = null;
+let heatFlashTimer = 0;
+let heatFlashSeq = 0;
+/** 闪烁时长，与 CSS 里 `.fx-heat.flash` 的动画时长保持一致 */
+const HEAT_FLASH_MS = 700;
+
+/**
+ * 对账：这一步比上一步多记了哪些格子。
+ *
+ * 差值本身由 `core/heat.ts` 的 `newHeatCells` 算（那边能直接测），
+ * 这里只负责把它变成一个 0.7 秒的视觉事件。
+ */
+function noteStrikeFlash(before: GameState, after: GameState): void {
+  const cells = newHeatCells(before, after);
+  if (cells.size === 0) return;
+
+  heatFlashSeq += 1;
+  heatFlash = { cells, seq: heatFlashSeq, until: Date.now() + HEAT_FLASH_MS };
+  if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
+  heatFlashTimer = window.setTimeout(() => {
+    heatFlashTimer = 0;
+    // 这期间又打了一下：那一手自己排了新的定时器，这里不要抢先收掉
+    if (!heatFlash || Date.now() < heatFlash.until) return;
+    heatFlash = null;
+    render();
+  }, HEAT_FLASH_MS + 16);
+}
+
+/**
+ * 直接抹掉闪烁状态（连同定时器）。
+ *
+ * 换局、进房、退房时要调用：那批格子属于**上一张棋盘**，留到新局上会凭空
+ * 亮一块红，看起来像是刚有人在那边挨了打。
+ */
+function dropHeatFlash(): void {
+  heatFlash = null;
+  if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
+  heatFlashTimer = 0;
+}
+
 function dispatch(action: Action): boolean {
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
@@ -2363,6 +2427,8 @@ function dispatch(action: Action): boolean {
   undoStack.push(state);
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   state = result.state;
+  // 这一下打到了哪：记账前后差出来的格子，闪一次就散（移动/招募差值为空，自然不闪）
+  noteStrikeFlash(before, state);
   // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
   if (action.type !== 'END_TURN') heatDismissTurn = state.turn;
   noteHpDrops(before, state);
@@ -2454,6 +2520,8 @@ function undoLast(): void {
     return;
   }
   state = prev;
+  // 撤回来的这一步没有"刚刚打过"这回事：闪着的格子跟着一起撤掉
+  dropHeatFlash();
   saveMatch(state);
   clearSelection();
   render();
@@ -3785,6 +3853,7 @@ async function runAiTurn(
 
     state = result.state;
     noteHpDrops(before, state);
+    noteStrikeFlash(before, state);
     noteStep(actor, action);
     noteFinalFrame();
     if (action.type === 'RECRUIT') budget.recruited += 1;
@@ -3894,6 +3963,7 @@ function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
     state = createMatch(result.config, result.seed, loadCustomUnits());
+    dropHeatFlash();
     detachRoom();
     resetZoom();
     clearSelection();
@@ -5181,6 +5251,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   setSaveScope(seat.code);
   // 迷雾是"我这边想不想看"的偏好，不该被对方的存档覆盖
   const fog = state.fog;
+  dropHeatFlash();
   state = snapshot.state;
   state.fog = fog;
   // 云端房间可能是老版本建的，"我方/敌方"这种旧默认名顺手换掉
@@ -5208,6 +5279,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
 function leaveRoom(): void {
   const wasWatching = watching();
   detachRoom();
+  dropHeatFlash();
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   resetRecorder();
@@ -5402,9 +5474,12 @@ async function pollRoom(): Promise<void> {
     const fog = state.fog;
     // 认输不推进回合、只换行动方，所以"谁退出了"要拿退出名单的条数来判
     const wasOut = (state.out ?? []).length;
+    // 联机没有"本地动作"可挂钩：对面这一回合打到哪，只能靠新旧两份状态的记账差
+    const beforeSync = state;
     state = snapshot.state;
     state.aiControl = { A: false, B: false };
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    if (decision.why !== 'finished') noteStrikeFlash(beforeSync, state);
     if (decision.why === 'finished') {
       dirty = false;
       clearSelection();

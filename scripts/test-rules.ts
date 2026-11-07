@@ -68,7 +68,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
-import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
+import { heatCells, heatStep, newHeatCells, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
 import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
 
@@ -10985,6 +10985,15 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   const bHeat = heatCells(next.state, 'B');
   assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
   assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
+
+  // 出手闪烁：动作前后的记账差 = 这一下打到哪
+  // 炮兵溅射半径 1（曼哈顿），所以是主目标 + 上下左右四格；开火者自己那格不该亮。
+  const flash = newHeatCells(s, shot.state);
+  assert.equal(flash.get(idx(shot.state, 8, 8)), 1, '主目标要闪');
+  assert.equal(flash.get(idx(shot.state, 8, 9)), 1, '溅射格也要闪');
+  assert.equal(flash.size, 5, '整片溅射范围都要闪（主目标 + 四邻）');
+  assert.ok(!flash.has(idx(shot.state, 6, 8)), '开火的那一格不闪：那是"我打到哪"，不是"我在哪"');
+  assert.equal(newHeatCells(shot.state, next.state).size, 0, '结束回合不记账，什么都不闪');
 
   // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
   const s2 = fresh();
