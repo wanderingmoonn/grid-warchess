@@ -151,9 +151,24 @@ import {
   heartbeat,
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { skillTargetPicked } from './ui/skill-aim.ts';
 
-/** 非空时表示某个英雄正在等玩家选技能方向 */
-let pendingSkill: { unitId: string; skillId: string } | null = null;
+/**
+ * 非空时表示某个英雄正在等玩家选技能目标。
+ *
+ * `targeting` 必须一起记下来：方向型技能只有四邻可以点，选点型（传送阵）
+ * 则是全图任意格。以前这里只存 unitId/skillId，所有技能都按"四邻热区"处理，
+ * 于是「挪移」只能往身边一格挪——技能数据里的 `targeting: 'point'` 白写了。
+ */
+let pendingSkill:
+  | { unitId: string; skillId: string; targeting: 'point' | 'direction' }
+  | null = null;
+
+/**
+ * 上一次悬停预览过的落点（"x,y"）。只在全图选点时用：同一格里反复 mousemove
+ * 不必重算一遍预览，棋盘也不用跟着重绘。
+ */
+let skillAimKey = '';
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -1116,6 +1131,9 @@ function pickReplayFile(): void {
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
+  // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
+  // 不逐格染红——`.tile.aim` 是红斜纹，铺满全图就没法看了。
+  boardEl.classList.toggle('aim-point', pendingSkill?.targeting === 'point');
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
@@ -1487,13 +1505,23 @@ function refreshSelection(): void {
     siege = [];
     aimTiles = []; 
     skillThreatTiles = [];
+    skillAimKey = '';
 
     const caster = state.units.find(u => u.id === pendingSkill?.unitId);
     const skillId = pendingSkill.skillId;
     const previewer = SKILL_PREVIEWERS[skillId];
 
     if (caster) {
-      // 1. 依然是四周四个方向作为点击热区（这符合战棋习惯）
+      /*
+       * 全图选点（传送阵「挪移」）：**不**逐格高亮。
+       *
+       * `.tile.aim` 是把整格铺成红色斜纹的样式，给"四选一方向"用的；
+       * 一千个格子全点亮会变成一片红海，什么也看不清。所以这里只清空高亮，
+       * 落点范围改由鼠标悬停时现算（见 boardEl 上的 skillAimPreview）。
+       */
+      if (pendingSkill.targeting === 'point') return;
+
+      // 方向型：四周四个方向作为点击热区（这符合战棋习惯）
       const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
       const threatSet = new Set<number>();
 
@@ -2645,10 +2673,17 @@ function onBoardClick(e: Event): void {
   // 0.1) 正在等待技能选点
   if (pendingSkill && coords) {
     const cell = idx(state, coords.x, coords.y);
+    const { unitId, skillId, targeting } = pendingSkill;
+    const caster = state.units.find((u) => u.id === unitId);
+    // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
+    // **照扣灵石**，玩家手一抖点到自家阵上就白亏 10 灵石，没必要。
+    const onSelf = !!caster && caster.x === coords.x && caster.y === coords.y;
 
-    // 如果点的是这4个高亮格之一，说明选定了方向
-    if (aimTiles.includes(cell)) {
-      const { unitId, skillId } = pendingSkill;
+    // 选点型技能（传送阵）：地图上任意一格都是合法落点；方向型只认四邻热区。
+    // 判定放在 skill-aim.ts 里，测试能直接把两种技能的规则钉住。
+    const picked = skillTargetPicked({ targeting, onSelf, aimTiles, cell });
+
+    if (picked) {
       const ok = dispatch({
         type: 'HERO_SKILL',
         unitId,
@@ -2665,7 +2700,7 @@ function onBoardClick(e: Event): void {
         pendingSkill = null;
       }
     } else {
-      // 点到 4 格之外：取消施法
+      // 方向型点到 4 格之外、或全图选点点到自己脚下：取消施法
       pendingSkill = null;
       toast('已取消施法');
     }
@@ -3214,9 +3249,14 @@ function handleAction(act: string, el: HTMLElement): void {
           toast(skillDef.notReadyReason ?? `${skillDef.name} 现在还不能放`);
           return;
         }
-        pendingSkill = { unitId, skillId };
+        const targeting = skillDef.targeting === 'point' ? 'point' : 'direction';
+        pendingSkill = { unitId, skillId, targeting };
         refreshSelection(); // 刷新高亮
-        toast('请在地图上点击要施放的方向或位置');
+        toast(
+          targeting === 'point'
+            ? '点击地图上任意位置作为落点（点自己脚下取消）'
+            : '请在地图上点击要施放的方向',
+        );
         render();
         return;
       }
@@ -6277,6 +6317,44 @@ boardEl.addEventListener('mouseover', (e) => {
 boardEl.addEventListener('mouseout', (e) => {
   const target = e.target as HTMLElement | null;
   target?.closest<HTMLElement>('.tile.reach')?.classList.remove('reach-hover');
+});
+
+/**
+ * 全图选点技能的落点预览（传送阵「挪移」）。
+ *
+ * 这类技能没有逐格高亮（见 render 里的 `aim-point`），所以改成"鼠标停在哪，
+ * 就预览那一格作为落点会把谁挪到哪"。只在 `pendingSkill` 且
+ * `targeting === 'point'` 时工作，其它时候这两个监听什么都不做。
+ *
+ * 换格才重算：同一格里 mousemove 会连发几十次，没必要每次都跑一遍预览再重绘。
+ */
+boardEl.addEventListener('mouseover', (e) => {
+  const pending = pendingSkill;
+  if (!pending || pending.targeting !== 'point') return;
+  const tile = (e.target as HTMLElement | null)?.closest<HTMLElement>('.tile');
+  if (!tile) return;
+  const x = Number(tile.dataset.x);
+  const y = Number(tile.dataset.y);
+  const key = `${x},${y}`;
+  if (key === skillAimKey) return;
+
+  const caster = state.units.find((u) => u.id === pending.unitId);
+  const previewer = SKILL_PREVIEWERS[pending.skillId];
+  if (!caster || !previewer) return;
+  skillAimKey = key;
+  skillThreatTiles = previewer({ state, self: caster, target: { x, y } });
+  render();
+});
+
+boardEl.addEventListener('mouseout', (e) => {
+  if (!pendingSkill || pendingSkill.targeting !== 'point') return;
+  // 在格子之间移动不算离开棋盘：relatedTarget 还在棋盘里，预览就该留着
+  const to = (e as MouseEvent).relatedTarget as Node | null;
+  if (to && boardEl.contains(to)) return;
+  if (skillThreatTiles.length === 0) return;
+  skillAimKey = '';
+  skillThreatTiles = [];
+  render();
 });
 
 let resizeTimer = 0;

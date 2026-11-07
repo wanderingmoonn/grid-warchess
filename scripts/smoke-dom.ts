@@ -37,6 +37,7 @@ import {
   unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
@@ -1073,6 +1074,31 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
   } finally {
     host.remove();
   }
+});
+
+check('技能选点：方向型只认四邻，选点型全图都算（自己脚下除外）', () => {
+  // 方向型：四邻热区之外一律不算，点了就是"取消施法"
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 11 }),
+    true,
+    '方向型点四邻之一 = 选定',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 47 }),
+    false,
+    '方向型点远处 = 不算（以前传送阵就是被这一条卡住了）',
+  );
+  // 选点型：任何格都算落点，唯独自己脚下当作取消（技能会判过载并照扣灵石）
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 899 }),
+    true,
+    '选点型要能点全图，不能被 aimTiles 拦住',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 0 }),
+    false,
+    '点自己脚下 = 取消，不能白扣灵石',
+  );
 });
 
 check('修真灵田的面板写全多资源收入，不只金币', () => {
