@@ -3961,6 +3961,8 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
   openTitle(host, {
     // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
     hasSave: hasRealSave,
+    // 第一次来（没打过一局、也没看过教程）：把教程摆成主按钮
+    firstVisit: !hasRealSave && !tutorialSeen(),
     version: BUILD_VERSION,
     latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
@@ -4016,6 +4018,31 @@ function newGameFlow(): void {
  * 都会调 saveMatch，不挂起的话玩家正在打的那局会被一张教学棋盘顶掉，
  * 而且没有任何提示——退出教程时再把存档读回来，他原来那局还在原地。
  */
+/**
+ * 看过教程了没有。
+ *
+ * 跳过也算看过——跳过一次的人不该每次回来都被摆一次"先学三分钟"。
+ * 这个标记和"打过一局"是两件事：看教程不产生存档（教程期间存档是挂起的），
+ * 所以只用 hasRealSave 判断的话，学完教程回首页还会被再推一次。
+ */
+const TUTORIAL_SEEN_KEY = 'warchess:tutorial-seen:v1';
+
+function tutorialSeen(): boolean {
+  try {
+    return localStorage.getItem(TUTORIAL_SEEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markTutorialSeen(): void {
+  try {
+    localStorage.setItem(TUTORIAL_SEEN_KEY, '1');
+  } catch {
+    /* 隐私模式下存不了：不影响这一局，下次还会提示一遍而已 */
+  }
+}
+
 function startTutorial(): void {
   suspendSaves(true);
   state = createTutorialMatch();
@@ -4048,6 +4075,7 @@ function tutorialStartHooks(): void {
  * 就现造一局默认的，和打开页面时的行为一致。
  */
 function exitTutorial(): void {
+  markTutorialSeen();
   tutorial.tutorialExit();
   suspendSaves(false);
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());

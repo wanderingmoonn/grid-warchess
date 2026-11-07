@@ -6264,6 +6264,50 @@ await checkAsync('复盘：拖进来的不是对局数据时，要说清是什�
   );
 });
 
+check('首页：第一次来把教程摆主位，老玩家仍是开始对局，教程入口一直在', () => {
+  /*
+   * 新手第一眼该看见「先学三分钟」，而不是「开始对局」——后者会把他直接扔进
+   * 两页开局面板。但教程入口不能对老玩家消失：那是"想进去复习"的唯一入口，
+   * 也是作者自己进去看的入口。
+   */
+  const base = {
+    hasSave: false,
+    version: '0.0.0-test',
+    onNew: () => {},
+    onTutorial: () => {},
+    onContinue: () => {},
+    onOnline: () => {},
+    onManual: () => {},
+    onEditor: () => {},
+    onImport: () => {},
+    onReplay: () => {},
+  };
+
+  // 第一次来
+  const h1 = doc.createElement('div');
+  doc.body.appendChild(h1);
+  const c1 = openTitle(h1, { ...base, firstVisit: true });
+  const acts1 = Array.from(h1.querySelectorAll<HTMLElement>('.title-actions .title-btn'));
+  assert.equal(acts1[0]?.dataset.title, 'tutorial', '第一次来：教程排第一');
+  assert.ok(acts1[0]?.classList.contains('primary'), '第一次来：教程是主按钮');
+  assert.equal(doc.activeElement, acts1[0], '焦点要落在主按钮上');
+  assert.equal(acts1[1]?.dataset.title, 'new', '「开始对局」退第二');
+  c1();
+
+  // 老玩家
+  const h2 = doc.createElement('div');
+  doc.body.appendChild(h2);
+  const c2 = openTitle(h2, { ...base, hasSave: true });
+  const acts2 = Array.from(h2.querySelectorAll<HTMLElement>('.title-actions .title-btn'));
+  assert.equal(acts2[0]?.dataset.title, 'new', '老玩家：开始对局在主位');
+  assert.ok(acts2[0]?.classList.contains('primary'));
+  assert.ok(
+    acts2.some((b) => b.dataset.title === 'tutorial'),
+    '老玩家也要留教程入口（复习、作者自己进去看都靠它）',
+  );
+  c2();
+});
+
 check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡片跟着出现', () => {
   /*
    * 这条测的是**接线**：入口在首屏、点了会换局、换出来的确实是教学局。
