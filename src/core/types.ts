@@ -214,6 +214,20 @@ export interface SkillDef {
   targeting?: 'none' | 'point' | 'direction';
 
   /**
+   * 这一下撤不回来（传送阵的「挪移」）。
+   *
+   * 界面的撤回是**整步快照回滚**：撤一下，这一步花掉的资源、打出的伤害、
+   * 涨的修为全都会退回去。对绝大多数动作这是好事——它就是"本回合还没做实"
+   * 的草稿。但传送阵的代价是"失败也照扣灵石、这一回合不能再传"，撤一下就
+   * 全退回来了，惩罚等于不存在。
+   *
+   * 所以给技能留一个数据开关：写了它的技能，一旦**真的施放出去**
+   * （灵石不足那种"根本没放成"不算），界面就把撤回栈清空——这一步做实了，
+   * 本回合之前攒的走子也一并封存。之后继续走子照旧可撤，只是撤不回这道坎。
+   */
+  irreversible?: boolean;
+
+  /**
    * 技能的自定义数据。引擎**不读取**，只透传。
    *
    * 为什么放在这里而不是给 `SkillDef` 开一堆具体字段：技能的效果千差万别，
@@ -1699,5 +1713,10 @@ export type Action =
 
 /** 规则引擎的返回结果：要么成功带新状态，要么失败带原因 */
 export type ActionResult =
-  | { ok: true; state: GameState }
+  | {
+      ok: true;
+      state: GameState;
+      /** 这一步把撤回封死了（见 SkillDef.irreversible）：界面据此清空撤回栈 */
+      irreversible?: boolean;
+    }
   | { ok: false; reason: string };

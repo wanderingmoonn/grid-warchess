@@ -5394,7 +5394,9 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
 
   sweepDead(s);
 
-  return { ok: true, state: s };
+  // 走到这里才算"真的放出去了"：灵石不足之类的拒绝在上面就返回了，
+  // 不会把撤回封死。界面拿这个字段清空撤回栈。
+  return { ok: true, state: s, irreversible: skill.irreversible === true };
 }
 
 /**

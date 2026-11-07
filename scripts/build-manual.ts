@@ -99,7 +99,7 @@ import {
   GUARDIAN_DRAIN_CAP_PER_RANK,
 } from '../src/core/cultivation/abilities/formation-guardian.ts';
 import { GUARD_FORMATION } from '../src/core/cultivation/units.ts';
-import { TELEPORT_COST, TELEPORT_RADIUS } from '../src/core/cultivation/skills/teleport-swap.ts';
+import { TELEPORT_COST, TELEPORT_RADIUS, TELEPORT_RIFT_LOG } from '../src/core/cultivation/skills/teleport-swap.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -2740,7 +2740,11 @@ function cultivationRules(): string {
         <li><b>传送阵</b>：主动技能「挪移」，全图选点，把阵周围 ${TELEPORT_RADIUS} 格内的单位
           与落点周围 ${TELEPORT_RADIUS} 格内的单位<b>整体对调</b>，耗 ${TELEPORT_COST} 灵石，每回合一次。
           占地超过一格的大单位不参与；地形站不住、落点被占满时整次作废——
-          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。</li>
+          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。
+          <b>而且这一步撤不回来</b>：只要落点按下去了，灵石和这一次施放就成了定局，
+          「撤回一步」也回不到传送之前——本回合之前走过的棋会一起定死
+          （之后继续走子仍然可撤）。不管成没成，战报都会留一句「${TELEPORT_RIFT_LOG}」，
+          看见它就知道这一步已经收不回去了。</li>
         <li><b>守御阵</b>（${GUARD_FORMATION.maxHp} 血 / ${GUARD_FORMATION.armor} 护甲）：
           半径 <b>${GUARDIAN_RADIUS}</b> 内的友军——<b>包括友军建筑</b>——受到伤害时，
           这一下改由守御阵承受。<b>只转伤害，不转移「被命中」这件事</b>：原目标一滴血不掉，

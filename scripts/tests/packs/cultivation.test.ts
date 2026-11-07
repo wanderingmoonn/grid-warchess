@@ -44,6 +44,7 @@ import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/i
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
 import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
+import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -889,6 +890,12 @@ export function run() {
     assert.deepEqual([at(mate.id).x, at(mate.id).y], [10, 5], '源侧 +矢量');
     assert.deepEqual([at(foe.id).x, at(foe.id).y], [6, 5], '落点侧 −矢量');
     assert.equal(r.state.players.A.res![SPIRIT_STONE], 90, '扣 10 灵石');
+    // 传送一旦放出去就收不回来了：界面靠这个字段清空撤回栈
+    assert.equal(r.irreversible, true, '成功的传送也要封死撤回');
+    assert.ok(
+      r.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '成败都该在战报里留一句「撼动了时空结构」',
+    );
   });
 
   test('传送阵：失败也照扣灵石，而且这一回合不能再传', () => {
@@ -907,6 +914,11 @@ export function run() {
     });
     assert.ok(bad.ok, '失败仍然算作一次施放（否则灵石白扣还不用付代价）');
     assert.equal(bad.state.players.A.res![SPIRIT_STONE], 90, '失败照扣灵石');
+    assert.equal(bad.irreversible, true, '失败的传送同样撤不回来，否则惩罚等于不存在');
+    assert.ok(
+      bad.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '失败时战报也要留一句「撼动了时空结构」',
+    );
 
     const again = applyAction(bad.state, {
       type: 'HERO_SKILL',
@@ -919,6 +931,29 @@ export function run() {
     assert.ok(
       again.ok ? '' : /已经放过技能/.test(again.reason),
       `拒绝理由要说清是本回合用过了：${again.ok ? '' : again.reason}`,
+    );
+  });
+
+  test('传送阵：灵石不足根本没放成，不扣钱也不封撤回', () => {
+    // "撤不回来"只对**真的放出去**的那一次成立。钱不够时技能被拒在门口，
+    // 什么都没发生——这时候还把撤回栈清掉就是白白惩罚手滑。
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: TELEPORT_COST - 1 };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.equal(r.ok, false, '灵石不够就该拒绝');
+    assert.equal(s.players.A.res![SPIRIT_STONE], TELEPORT_COST - 1, '没放成就不该扣钱');
+    assert.ok(
+      !s.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '没放成不该留「撼动了时空结构」的痕',
     );
   });
 
