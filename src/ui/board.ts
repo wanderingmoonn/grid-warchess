@@ -32,6 +32,8 @@ import {
   maxHpOf
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit } from '../core/types.ts';
+import { costLabel, resourceShort } from '../core/resources.ts';
+import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 
 export interface BoardUi {
@@ -78,13 +80,17 @@ export interface BoardUi {
    */
   movePath?: Map<string, Array<{ x: number; y: number }>>;
   /**
-   * 经济单位的移动产出预览：格索引 → 站上那格后的每回合收入。
+   * 经济单位的移动产出预览：格索引 → 站上那格后的**完整产出表**。
    *
-   * 只在"选中带收入的经济单位、且它还能动"时有值。数字印在可达格的
-   * 角上，玩家挪农民之前就能看到"去平原收 7、蹲河边多 3"——
-   * 收入本来就是按格子算的，不把数字放回格子上，这个机制就只活在说明书里。
+   * 只在"选中经济单位、且它还能动"时有值。数字印在可达格的角上，
+   * 玩家挪农民之前就能看到"去平原收 7、蹲河边多 3"——收入本来就是按格子
+   * 算的，不把数字放回格子上，这个机制就只活在说明书里。
+   *
+   * 存的是整张资源表而不是一个金币数：多资源扩展的单位（灵田、灵矿、粮仓）
+   * 金币可能没变、灵石变了很多，只传数字的话这一格和前几格看着一模一样。
+   * 徽标上仍只印金币（格子太小），其余资源挂在格子的原生悬停里。
    */
-  incomeHints?: Map<number, number>;
+  incomeHints?: Map<number, ResourceCost>;
   /**
    * 这一帧要"抖一下"的单位：id → 强度。
    *
@@ -403,6 +409,20 @@ function romanEra(era: number): string {
   return ['I', 'II', 'III', 'IV', 'V'][era - 1] ?? String(era);
 }
 
+/**
+ * 格子角上那枚产出徽标的文字。
+ *
+ * 只印金币：格子太小，三四样资源挤进去会盖住半个棋盘。金币为 0 的纯多资源
+ * 单位（粮仓这类）改成印第一项非金币资源，免得出现一个毫无意义的 `+0`。
+ * 完整清单在格子的原生悬停里（见 renderBoard 里的 title），那份不占地方。
+ */
+function incomeBadgeOf(cost: ResourceCost): string {
+  const gold = cost.gold ?? 0;
+  if (gold > 0) return `+${gold}`;
+  const first = Object.entries(cost).find(([, n]) => (n ?? 0) > 0);
+  return first ? `+${first[1]}${resourceShort(first[0])}` : '';
+}
+
 export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): void {
   ensureStructure(el);
   const s = view.state;
@@ -527,11 +547,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
       const hint = ui.incomeHints?.get(i);
-      const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
+      const badgeText = hint ? incomeBadgeOf(hint) : '';
+      const badge = badgeText ? `<span class="tile-income">${badgeText}</span>` : '';
       if (layer.badge[i] !== badge) {
         node.innerHTML = badge;
         layer.badge[i] = badge;
       }
+      /*
+       * 其余资源挂格子的原生悬停（方案乙）：徽标只留金币。
+       * 悬停必须挂在格子节点上，不能挂 `.tile-income`——那枚徽标是
+       * `pointer-events: none`，鼠标从它上面穿过去，浏览器根本不会弹 title。
+       */
+      const tip = hint ? `站在这里的每回合产出：${costLabel(hint)}` : '';
+      if (node.title !== tip) node.title = tip;
     }
   }
 

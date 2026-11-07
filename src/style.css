@@ -640,6 +640,14 @@ body {
   cursor: crosshair;
 }
 
+/* 全图选点（传送阵「挪移」）：这一整张图都是可点的落点。
+ *
+ * 不逐格染红——`.tile.aim` 那块红斜纹铺满一千格会盖住整个战场。
+ * 用十字光标说明"这里能点"，落点范围由鼠标悬停时现画（.skill-threat）。 */
+.board.aim-point .tile {
+  cursor: crosshair;
+}
+
 .tile.skill-threat::after {
   background: repeating-linear-gradient(
     45deg,

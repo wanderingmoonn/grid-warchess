@@ -35,9 +35,10 @@ import {
   reachableTiles,
   refreshMemory,
   unitsOf,
-  unitIncomeAt,
+  unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
@@ -698,9 +699,9 @@ check('高亮变了要真的变，节点还是同一个', () => {
     assert.equal(tile?.classList.contains('reach'), false, '取消选中后高亮要摘掉');
 
     // 产出角标：出现、换数字、消失，都以格子上的 span 为准
-    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 7]]) });
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, { gold: 7 }]]) });
     assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+7', '角标要写对数字');
-    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 9]]) });
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, { gold: 9 }]]) });
     assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+9', '角标数字变了要跟着变');
     renderBoard(host, view, emptyUi);
     assert.equal(host.querySelector(`.tile${sel} .tile-income`), null, '角标该消失');
@@ -994,7 +995,8 @@ check('选中农民会显示产出与临水加成', () => {
   assert.ok(farmer, '开局应该有农民');
   farmer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   const html = doc.querySelector('.side')?.innerHTML ?? '';
-  assert.ok(html.includes('每回合产出'), '应该显示产出说明');
+  assert.ok(html.includes('基础产出'), '应该显示产出说明（基础值）');
+  assert.ok(html.includes('每回合收入'), '当前实测产出要走属性卡那行');
   assert.ok(html.includes('相邻水域'), '应该显示临水加成');
 });
 
@@ -1038,9 +1040,10 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
 
   const reach = Array.from(reachableTiles(st, farmer).keys());
   assert.ok(reach.length > 0, '农民应该有可达格');
-  const hints = new Map<number, number>();
+  const hints = new Map<number, Record<string, number>>();
   for (const i of reach) {
-    hints.set(i, unitIncomeAt(st, farmer, i % st.w, Math.floor(i / st.w)));
+    const y = unitYieldAt(st, farmer, i % st.w, Math.floor(i / st.w));
+    if (Object.keys(y).length > 0) hints.set(i, y as Record<string, number>);
   }
 
   const host = doc.createElement('div');
@@ -1057,7 +1060,10 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
   });
   try {
     const badges = host.querySelectorAll('.tile-income');
-    assert.equal(badges.length, reach.length, '每个可达格都该有一个产出数字');
+    // 不再要求"每个可达格都有"：算出来是空表的格子（站上去什么都不产）
+    // 以前会印一个 +0，现在直接不印。有产出的格子一个都不能少。
+    assert.ok(hints.size > 0, '这个场景应该至少有一格有产出');
+    assert.equal(badges.length, hints.size, '有产出的可达格都该有一个产出数字');
     const text = badges[0]?.textContent ?? '';
     assert.ok(/^\+\d+$/, `${text} 应该是 +N`);
 
@@ -1070,14 +1076,90 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
       const tile = badge.parentElement;
       const idx = tile ? tiles.indexOf(tile) : -1;
       assert.ok(idx >= 0, '产出数字应该挂在格子里');
-      const shown = Number((badge.textContent ?? '+0').slice(1));
-      assert.equal(shown, hints.get(idx), `第 ${idx} 格印的是 ${shown}，真相源是 ${hints.get(idx)}`);
+      const truth = hints.get(idx);
+      assert.ok(truth, `第 ${idx} 格没有真相源`);
+      const gold = truth!.gold ?? 0;
+      // 徽标只印金币；纯非金币的单位印的是第一项资源，这里不按金币对账
+      if (gold <= 0) continue;
+      const shown = Number(/^\+(\d+)/.exec(badge.textContent ?? '')?.[1] ?? -1);
+      assert.equal(shown, gold, `第 ${idx} 格印的是 ${shown}，真相源是 ${gold}`);
       matched += 1;
     }
     assert.ok(matched > 0, '总得对上一格');
   } finally {
     host.remove();
   }
+});
+
+check('技能选点：方向型只认四邻，选点型全图都算（自己脚下除外）', () => {
+  // 方向型：四邻热区之外一律不算，点了就是"取消施法"
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 11 }),
+    true,
+    '方向型点四邻之一 = 选定',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 47 }),
+    false,
+    '方向型点远处 = 不算（以前传送阵就是被这一条卡住了）',
+  );
+  // 选点型：任何格都算落点，唯独自己脚下当作取消（技能会判过载并照扣灵石）
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 899 }),
+    true,
+    '选点型要能点全图，不能被 aimTiles 拦住',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 0 }),
+    false,
+    '点自己脚下 = 取消，不能白扣灵石',
+  );
+});
+
+check('修真灵田的面板写全多资源收入，不只金币', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [...Object.keys(UNIT_TYPES), 'cultivation-spirit-field'],
+    },
+    4242,
+  );
+  st.current = 'A';
+  const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  assert.ok(i >= 0, '应该有能站灵田的平原');
+  const field: Unit = {
+    id: 'field1',
+    type: 'cultivation-spirit-field',
+    owner: 'A',
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+    hp: st.unitTypes['cultivation-spirit-field']?.maxHp ?? 30,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(field);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: field,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const row = [...host.querySelectorAll<HTMLElement>('.info-row')].find((el) =>
+    (el.textContent ?? '').includes('每回合收入'),
+  );
+  assert.ok(row, '经济单位要有"每回合收入"这一行');
+  const text = row!.textContent ?? '';
+  assert.ok(/\d+ 金/.test(text), `要写金币：${text}`);
+  assert.ok(/\d+ 灵/.test(text), `也要写灵石，不能只剩金币：${text}`);
 });
 
 check('详情面板显示的是算上修正的真实数值', () => {
