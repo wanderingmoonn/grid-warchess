@@ -3717,7 +3717,7 @@ test('弹药：炼金术士打光六发之后射程掉到 1、魔法段归零', 
   const al = place2(s, 'A', 'alchemist', 5, 5);
   const tgt = place2(s, 'B', 'swordsman', 5, 4);
   al.ammoLeft = 1;
-  assert.equal(effectiveRange(s, al), 3);
+  assert.equal(effectiveRange(s, al), 4);
   const magicBefore = magicDamageOf(s, al, tgt);
   assert.ok(magicBefore > 0);
 
@@ -15510,6 +15510,56 @@ test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血
   // 2026-11-07：掠空删掉了（它在时代 1 让她"近战打不到"，胜率 87%），只剩虚咒
   assert.deepEqual(witch.abilities, ['hex-weak'], '女巫：只剩虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
+});
+
+test('数值调整（2026-11-07）：炼金术士升 4 代加价、龙骑兵升 4 代、弩兵 +3 攻', () => {
+  const s = fresh({ startEra: 6, expansionIds: FANTASY });
+
+  // 炼金术士：整套面板上调一档，价格跟着走到 4 代中位性价比
+  const alc = s.unitTypes['alchemist']!;
+  assert.equal(alc.era, 4, '炼金术士升到第 4 代');
+  assert.equal(alc.cost, 240, '造价 165 → 240（不然 4 代里性价比最高）');
+  assert.equal(alc.range, 4, '射程 3 → 4');
+  assert.equal(alc.vision, 5, '视野 4 → 5');
+  assert.equal(alc.armor, 3, '护甲 2 → 3');
+  assert.equal(alc.maxHp, 40, '生命 30 → 40');
+  assert.equal(alc.magicAtk, 23, '魔法攻击 15 → 23');
+  // 弹药是它的硬上限，加数值不能顺手把它拆了
+  assert.equal(alc.ammo, 6, '还是六发');
+  assert.deepEqual(alc.abilities, ['burn-hit'], '灼击不变');
+
+  // 龙骑兵：只升代，一个数值都不动（升代本身就会让时代谱把等效血压低）
+  const drg = s.unitTypes['dragoon-rider']!;
+  assert.equal(drg.era, 4, '龙骑兵升到第 4 代');
+  assert.equal(drg.cost, 265, '升代不动价');
+  assert.equal(drg.atk, 26, '攻击不变');
+  assert.equal(drg.maxHp, 58, '生命不变');
+  assert.equal(drg.armor, 6, '护甲不变');
+  assert.deepEqual(drg.abilities, ['charge'], '冲锋不变');
+  assert.equal(drg.flight, true, '还是飞行');
+  assert.equal(drg.splash, 1, '还是溅射');
+
+  // 弩兵：只加攻击，价格不动
+  const cb = s.unitTypes['crossbow']!;
+  assert.equal(cb.atk, 19, '弩兵攻击 16 → 19');
+  assert.equal(cb.cost, 82, '弩兵价格不动');
+  assert.equal(cb.range, 3, '射程不动');
+  assert.deepEqual(cb.abilities, ['armor-pierce'], '破甲不变');
+});
+
+test('数值调整（2026-11-07）：升代之后这两个兵要多升一级城才造得出来', () => {
+  // 升代**不会**把兵从低代池子里删掉——池子是按代加权抽样，高代兵在低代局里
+  // 仍然会出现，只是名额少、而且"选到 ≠ 造得出"。所以这里守的是真正的门槛：
+  // 三代城里造不出龙骑兵和炼金术士，四代才行。
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  for (const id of ['dragoon-rider', 'alchemist']) {
+    const def = s.unitTypes[id]!;
+    assert.equal(eraWindowOk(s, def, 3), false, `${def.name} 三代不该造得出来`);
+    assert.equal(eraWindowOk(s, def, 4), true, `${def.name} 四代应该解锁`);
+    assert.equal(eraWindowOk(s, def, 6), true, `${def.name} 六代当然还能造`);
+  }
+  // 对照：本来就该在三代就能造的东西，别被这条一起挡住
+  assert.equal(eraWindowOk(s, s.unitTypes['musketeer']!, 3), true, '火枪兵三代照常');
 });
 
 test('奇想调整（2026-11-04）：蛇人与僵尸下放第 1 代，地狱犬换掉追猎', () => {

@@ -71,6 +71,29 @@ const BAN_MODE = argOf('ban-mode', 'auto') as 'auto' | 'targeted' | 'generic';
  * 只换签位、不换走棋顺序，就能看出优势到底跟着哪一个走。
  */
 const FIRST_DRAFT = argOf('first-draft', 'default');
+/**
+ * 选人顺序的排法（实验用，不改产品默认）：
+ *   · snake      —— 现状：偶数轮正走、奇数轮倒走（A,B,B,A,A,B,B,A,A,B,B,A）
+ *   · mirror     —— 两两对称：后一半是前一半的镜像且**换边**，
+ *                   于是"第 i 签"和"倒数第 i 签"永远一人一个（A,B,B,A,A,B,A,B,B,A,A,B）。
+ *                   现状那版是回文，镜像对全是同一人——A 同时拿了第一签和最后一签。
+ *   · alternate  —— 纯交替（A,B,A,B,…），谁都不连拿两签。
+ */
+const PICK_ORDER = argOf('pick-order', 'snake') as 'snake' | 'mirror' | 'alternate';
+
+function rewriteOrder(order: PlayerId[], mode: string): PlayerId[] {
+  const n = order.length;
+  const other = (p: PlayerId): PlayerId => (p === 'A' ? 'B' : 'A');
+  if (mode === 'alternate') {
+    return Array.from({ length: n }, (_, i) => (i % 2 === 0 ? order[0]! : other(order[0]!)));
+  }
+  if (mode === 'mirror') {
+    const out = order.slice(0, Math.ceil(n / 2));
+    while (out.length < n) out.push(other(order[n - 1 - out.length]!));
+    return out;
+  }
+  return order;
+}
 
 export interface GameRow {
   seed: number;
@@ -106,6 +129,9 @@ function playOne(seed: number): GameRow {
   if (DRAFT && FIRST_DRAFT === 'other' && s.draft) {
     // 只对调签位，不碰开局谁先走
     s.draft.order = s.draft.order.map((p) => (p === 'A' ? 'B' : 'A'));
+  }
+  if (DRAFT && PICK_ORDER !== 'snake' && s.draft) {
+    s.draft.order = rewriteOrder(s.draft.order, PICK_ORDER);
   }
 
   for (let guard = 0; DRAFT && guard < 200; guard++) {

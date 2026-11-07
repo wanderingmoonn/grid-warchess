@@ -881,7 +881,9 @@ function simulatePicks(
  * 这条不对称来自规则本身（选人顺序 A,B,B,A…），不是偏心：盲禁 + 已知顺位时，
  * "掐掉对面那一手"和"别把自己的那一手一起掐掉"本来就是两件事。
  */
-export function aiDraftBan(state: GameState, side: PlayerId): string | null {
+export type BanMode = 'auto' | 'targeted' | 'generic';
+
+export function aiDraftBan(state: GameState, side: PlayerId, mode: BanMode = 'auto'): string | null {
   const pool = remainingUnits(state);
   const combat = pool.filter((id) => state.unitTypes[id]?.category === 'combat');
   const ids = combat.length > 0 ? combat : pool;
@@ -895,10 +897,21 @@ export function aiDraftBan(state: GameState, side: PlayerId): string | null {
   // 摇摆：35% 的局里，禁用从"第 1 张"退到第 2~3 张（见 swayOffset 的说明）
   const sway = swayOffset(state, side);
 
-  // 后手：掐掉对面第一手
-  if (side !== 'A') return ranked[Math.min(sway, ranked.length - 1)]!.id;
+  /*
+   * 两种禁用策略，默认按席位分：
+   *   · generic  —— 禁"全局第一名"（不分对面想不想要）；
+   *   · targeted —— 预演对面禁榜首，再禁掉**对面阵容里**最值钱的那张。
+   *
+   * 现在默认是 A 用 targeted、B 用 generic。这个不对称是历史遗留（先写的是
+   * 先手那套"预判对面"，后手那句是后来补的简化版），**没有经过任何平衡论证**。
+   * 2026-11-07 量出 20×20 选卡局先手 67% 而关掉选卡只有 47%，这块是主要嫌疑，
+   * 所以把它做成显式参数，方便跑"两边同一策略"的对照。
+   */
+  const strategy: 'targeted' | 'generic' =
+    mode === 'auto' ? (side === 'A' ? 'targeted' : 'generic') : mode;
+  if (strategy === 'generic') return ranked[Math.min(sway, ranked.length - 1)]!.id;
 
-  // 先手：预演"对面禁榜首"，再禁掉对面阵容里最值钱的那张
+  // targeted：预演"对面禁榜首"，再禁掉对面阵容里最值钱的那张
   const oppBan = ranked[0]!.id;
   const got = simulatePicks(state, ids, new Set([oppBan]), water);
   const oppPicks: Array<{ id: string; score: number }> = [];
