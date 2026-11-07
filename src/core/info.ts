@@ -10,6 +10,7 @@ import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
 import { adjacentRequirementText, heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
+import { buildListOf } from './build-list.ts';
 import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
 import { isProducer, produceEveryTurns, produceOf } from './produce.ts';
 import { resourceShort } from './resources.ts';
@@ -341,9 +342,14 @@ export function describeUnit(
     if (extra) lines.push(`另外要 ${extra}（金币之外的那份）`);
   }
 
-  if (def.builds && def.builds.length > 0) {
-    const names = def.builds.map((id) => s.unitTypes[id]?.name ?? id).join('、');
-    lines.push(`可建造：${names}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);
+  if ((def.builds ?? []).length > 0) {
+    // 走共用口径：和产兵按钮同一次过滤（本局没有的建筑不列），
+    // 名字用上面那个带双表兜底的 nameOf，不再冒出英文 id。
+    const { names } = buildListOf(def, {
+      nameOf,
+      exists: (id) => !!s.unitTypes[id],
+    });
+    lines.push(`可建造：${names.join('、')}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);
     lines.push('本身不产金，靠盖出来的东西挣钱或防守');
   }
 

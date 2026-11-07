@@ -123,7 +123,9 @@ export const CORE_ABILITIES: AbilityDef[] = [
             // 自爆是贴地的冲击波：掠空的东西飞在上面，扫不到。
             // 判据用 layer === 'air'，和「区域防空」同一个口径（见 air-packs）。
             if (c.api.utype(c.state, near.type).layer === 'air') continue;
-            near.hp -= blast;
+            // 自爆也是直接伤害，走唯一出口：转移、受伤钩子、致死清场一个不少。
+            // 清场本身仍由主流程按 result.blasts 统一 sweepDead。
+            c.api.hurt(c.state, near, blast, { source: c.victim });
             hit += 1;
           }
         }

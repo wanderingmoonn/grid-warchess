@@ -10,7 +10,8 @@
  *   （决定"现在该不该急"），底部是流水（回看谁禁了谁）。
  */
 
-import { eraDef, isPseudoUnit } from '../core/config.ts';
+import { UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
+import { buildListOf } from '../core/build-list.ts';
 import { draftMsOf, draftPhaseLabel, draftSecondsLeft, draftView } from '../core/draft.ts';
 import { abilityById } from '../core/ability-registry.ts';
 import { airLayer } from '../core/rules.ts';
@@ -24,6 +25,17 @@ import type { DraftState } from '../core/types.ts';
 /** 座位的中文名：红方/蓝方来自 players，这里只给"甲/乙"这种不依赖名字的短称 */
 function sideName(s: GameState, side: PlayerId): string {
   return s.players[side]?.name ?? (side === 'A' ? '红方' : '蓝方');
+}
+
+/**
+ * 悬停卡里查建筑中文名用的表：本体兵种 + 各扩展登记的兵种。
+ * 选卡时这一局还没真正开起来，手里只有静态数据，所以凑一张全量表；
+ * 名单本身仍由 buildListOf 生成，规则书和产兵按钮用的是同一份逻辑。
+ */
+const TIP_UNIT_NAMES = new Map<string, string>();
+for (const [id, u] of Object.entries(UNIT_TYPES)) TIP_UNIT_NAMES.set(id, u.name);
+for (const e of EXPANSIONS) {
+  for (const u of e.units ?? []) TIP_UNIT_NAMES.set(u.id, u.name);
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -73,11 +85,14 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
   const abil = (def.abilities ?? [])
     .map((id) => abilityById(id)?.name ?? id)
     .filter(Boolean);
-  return `<span class="draft-tip" hidden>
+  // 建造单位：把"能盖哪几样"也放进悬停卡，玩家在禁用/选用之前就能判断值不值
+  const builds = buildListOf(def, { nameOf: (id) => TIP_UNIT_NAMES.get(id) });
+  return `<span class="hover-tip" hidden>
       <span class="tip-title"><b>${def.name}</b><i>${meta.join(' · ')}</i></span>
       <span class="tip-row">${statLine(def)}</span>
       <span class="tip-row">${costLine(def)}</span>
       ${abil.length > 0 ? `<span class="tip-row tip-abil">能力：${abil.join(' · ')}</span>` : ''}
+      ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${builds.names.join('、')}（共 ${builds.names.length} 种）</span>` : ''}
       ${blocked && reason ? `<span class="tip-row tip-blocked">现在点不了：${reason}</span>` : ''}
     </span>`;
 }
@@ -97,7 +112,7 @@ function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   else bits.push('建筑');
   if (def.splash) bits.push(`溅射 ${def.splash}`);
   if (def.range >= 2) bits.push(`射程 ${def.range}`);
-  return `<span class="draft-card-wrap">
+  return `<span class="draft-card-wrap" data-hover-tip>
     <button type="button" class="draft-card ${def.category === 'building' ? 'is-building' : ''}${blocked ? ' is-blocked' : ''}"
       data-draft="${def.id}" ${blocked ? 'aria-disabled="true"' : ''}>
       <span class="dc-icon">${def.short}</span>

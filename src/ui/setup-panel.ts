@@ -17,6 +17,7 @@
 import { ERAS, UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
+import { buildListOf } from '../core/build-list.ts';
 import {
   EXPANSIONS,
   availableExpansions,
@@ -527,7 +528,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           const chips = units
             .map((u) => {
               const from = source.get(u.id);
-              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}`;
+              // 开局勾兵时就把"能盖什么"写在悬停里：玩家是在这里决定要不要
+              // 带上这个工兵的，等造出来再点属性卡已经晚了。
+              const builds = buildListOf(u, {
+                nameOf: (id) => catalog[id]?.name ?? id,
+                exists: (id) => !!catalog[id],
+              });
+              const buildTip = builds.names.length > 0 ? ` · 可建 ${builds.names.join('、')}` : '';
+              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}${buildTip}`;
               return `<button class="chip ${isUnitOn(u.id) ? 'active' : ''} ${
                 from ? 'is-extra' : ''
               }" data-unit="${u.id}" title="${esc(title)}">

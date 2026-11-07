@@ -17,6 +17,13 @@ export const UNIT_IDS = {
   SPIRIT_FIELD: 'cultivation-spirit-field',
   SPIRIT_MINE: 'cultivation-spirit-mine',
   SPIRIT_TOWER: 'cultivation-spirit-tower',
+  FORMATION_MASTER: 'cultivation-formation-master',
+  FORMATION_MASTER_2: 'cultivation-formation-master-2',
+  FORMATION_MASTER_3: 'cultivation-formation-master-3',
+  KILL_FORMATION: 'cultivation-kill-formation',
+  SEAL_FORMATION: 'cultivation-seal-formation',
+  TELEPORT_FORMATION: 'cultivation-teleport-formation',
+  GUARD_FORMATION: 'cultivation-guard-formation',
 } as const;
 
 // 修士身份判定
