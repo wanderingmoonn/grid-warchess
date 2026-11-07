@@ -74,7 +74,8 @@
     "duel:batch": "node --experimental-strip-types scripts/ai-duel-batch.ts",
     "duel:changed": "node --experimental-strip-types scripts/ai-duel-changed.ts",
     "probe:doctrine": "node --experimental-strip-types scripts/probe-doctrine.ts",
-    "era:table": "node --experimental-strip-types scripts/era-table.ts"
+    "era:table": "node --experimental-strip-types scripts/era-table.ts",
+    "fantasy:overlap": "node --experimental-strip-types scripts/fantasy-overlap.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
