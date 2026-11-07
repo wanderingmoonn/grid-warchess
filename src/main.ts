@@ -153,7 +153,7 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
-import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 
 /** 非空时表示某个英雄正在等玩家选技能方向 */
 let pendingSkill: { unitId: string; skillId: string } | null = null;
@@ -1606,7 +1606,20 @@ function refreshSelection(): void {
     const previewer = SKILL_PREVIEWERS[skillId];
 
     if (caster) {
-      // 1. 依然是四周四个方向作为点击热区（这符合战棋习惯）
+      const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
+      // 选点类（陨卵这种"在半径内挑一格落下"）：可点的格子由规则层给，
+      // 和"点下去会不会判失败"是同一套判断。四向热区是给"选方向"的技能留的，
+      // 两者不能叠加——把方向格混进选点里，玩家会点到一格"方向对、落点不合法"的地方。
+      const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
+      if (skillDef?.targeting === 'point' && cellsOf) {
+        for (const p of cellsOf({ state, self: caster, skill: skillDef })) {
+          aimTiles.push(idx(state, p.x, p.y));
+        }
+        skillThreatTiles = [];
+        return;
+      }
+
+      // 1. 其余情况：四周四个方向作为点击热区（这符合战棋习惯）
       const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
       const threatSet = new Set<number>();
 

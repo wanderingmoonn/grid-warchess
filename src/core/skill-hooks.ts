@@ -50,3 +50,28 @@ export const SKILL_PREVIEWERS: Record<string, SkillPreviewer> = {};
 export function registerSkillPreview(id: string, previewer: SkillPreviewer): void {
   SKILL_PREVIEWERS[id] = previewer;
 }
+
+/**
+ * "选点类技能"（`targeting: 'point'`）里，玩家**能点**的格子。
+ *
+ * key 是**效果 id**（`skill.effect`），不是技能 id：同一个效果可能挂在好几个
+ * 单位身上，界面不该认得具体是谁的技能。
+ *
+ * 为什么由规则层提供而不是界面自己算：
+ * 高亮的格子必须和"点下去会不会被判失败"是同一套判断，否则就会出现
+ * 最常见的那个 bug——"高亮成能点，点下去回一句'这里不行'"。
+ *
+ * 返回空数组 = 现在没有任何合法落点（界面照常进瞄准模式，点哪都会失败，
+ * 但至少不会高亮出一片假的可选格）。
+ */
+export type SkillTargetCells = (c: {
+  state: GameState;
+  self: Unit;
+  skill: any;
+}) => Array<{ x: number; y: number }>;
+
+export const SKILL_TARGET_CELLS: Record<string, SkillTargetCells> = {};
+
+export function registerSkillTargetCells(effect: string, fn: SkillTargetCells): void {
+  SKILL_TARGET_CELLS[effect] = fn;
+}

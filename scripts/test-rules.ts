@@ -274,6 +274,7 @@ import {
   hasQuit,
 } from '../src/core/rules.ts';
 import { playerView } from '../src/core/fog.ts';
+import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
 import { BUILD_VERSION } from '../src/core/build-info.ts';
@@ -2298,7 +2299,6 @@ test('圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列，到自�
 test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲、牢大 +22 血', () => {
   const heroes = (EXPANSIONS.find((e) => e.id === 'fantasy')!.units ?? []);
   const of = (id: string) => heroes.find((u) => u.id === id)!;
-
   const necro = of('night-necromancer');
   assert.equal(necro.era, 3, '暗夜死灵法师改到火器时代');
   assert.equal(necro.cost, 320, '造价降到 320');
@@ -2309,6 +2309,11 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
 
   assert.equal(of('holy-knight-lord').armor, 14, '神圣骑士长护甲 12 → 14');
   assert.equal(of('slime-boss').maxHp, 222, '史莱姆牢大 200 → 222');
+
+  // 2026-11-07 第二批：女巫继续降价削血、骑士长加血
+  assert.equal(of('witch').cost, 115, '女巫 120 → 115');
+  assert.equal(of('witch').maxHp, 19, '女巫 24 → 19（两发齐射必死，靠射程不靠血）');
+  assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
 test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', () => {
@@ -2556,6 +2561,59 @@ test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', ()
   const hatched = st.units.find((u) => u.id === egg!.id);
   assert.ok(hatched, '卵应该还在场上（或者已经变成龙）');
   assert.equal(hatched!.type, 'magic-dragon', '两回合后孵成魔龙');
+});
+
+test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () => {
+  /*
+   * 原来是引擎替玩家挑"伤害最高的一格"。现在声明成选点技能（targeting: 'point'），
+   * 界面把合法格子高亮、点哪落哪。
+   *
+   * 两个口径必须同源：高亮的格子就是"点下去不会失败"的格子，
+   * 否则玩家会遇到这个包里最烦人的那种挫败——格子亮着，点下去回一句"不行"。
+   */
+  const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
+  s.units = [];
+  for (let x = 3; x <= 14; x += 1) for (let y = 3; y <= 10; y += 1) putTerrain(s, x, y, 'plain');
+  const dragon = place(s, 'A', 'evil-dragon-king', 5, 5);
+  place(s, 'B', 'swordsman', 11, 5);
+
+  const skill = (s.unitTypes['evil-dragon-king']!.skills ?? []).find((k) => k.id === 'dragon-egg')!;
+  assert.equal(skill.targeting, 'point', '要声明成选点技能，界面才会进瞄准模式');
+
+  const cells = SKILL_TARGET_CELLS['dragon-egg']!({ state: s, self: dragon, skill });
+  assert.ok(cells.length > 0, '有敌人就该有落点');
+  assert.ok(cells.some((p) => p.x === 10 && p.y === 5), '(10,5) 贴着敌人，是合法落点');
+  assert.equal(cells.some((p) => p.x === 4 && p.y === 9), false, '砸不到人的空地不该高亮');
+
+  // 点哪落哪
+  const r = applyAction(s, {
+    type: 'HERO_SKILL',
+    unitId: dragon.id,
+    skillId: 'dragon-egg',
+    targetX: 10,
+    targetY: 5,
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const egg = r.state.units.find((u) => u.type === 'dragon-egg');
+  assert.equal(egg?.x, 10, '蛋要落在玩家点的那一格');
+  assert.equal(egg?.y, 5);
+
+  // 被拒绝的三种情况：各有各的说法，不能笼统回一句"不行"
+  const cases: Array<[{ x: number; y: number }, RegExp]> = [
+    [{ x: 18, y: 5 }, /格内/],
+    [{ x: 3, y: 9 }, /砸不到人/],
+  ];
+  for (const [t, re] of cases) {
+    const bad = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: dragon.id,
+      skillId: 'dragon-egg',
+      targetX: t.x,
+      targetY: t.y,
+    });
+    assert.equal(bad.ok, false, `(${t.x},${t.y}) 该被拒绝`);
+    assert.match((bad as { reason?: string }).reason ?? '', re, `拒绝理由要说清：${(bad as { reason?: string }).reason}`);
+  }
 });
 
 test('邪龙王的光/火抗性：同一发攻击，光翻倍、火减半', () => {

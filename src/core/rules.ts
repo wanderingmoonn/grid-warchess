@@ -118,7 +118,7 @@ import type {
 import { seatsOf } from './types.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
-import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS } from './skill-hooks.ts';
+import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
 import type { SkillCtx, SkillHandler } from './skill-hooks.ts';
 import {
   idx, 
@@ -5236,11 +5236,55 @@ SKILL_EFFECTS['ascend'] = (c) => {
 };
 
 /**
+ * 陨卵能落在哪些格：切比雪夫半径 `reach` 内、棋盘里、那一格放得下蛋。
+ *
+ * `blast` 给了就再多筛一层"砸得到人"——界面高亮用这个口径。
+ * 一处口径给两个消费者（界面高亮 / 效果实现兜底），避免"高亮了点下去说不行"。
+ */
+export function eggDropCells(
+  s: GameState,
+  self: Unit,
+  reach: number,
+  blast?: number,
+  eggType = 'dragon-egg',
+): Array<{ x: number; y: number }> {
+  const foes =
+    blast === undefined
+      ? []
+      : s.units.filter((u) => u.owner !== self.owner && u.hp > 0);
+  const out: Array<{ x: number; y: number }> = [];
+  for (let dy = -reach; dy <= reach; dy += 1) {
+    for (let dx = -reach; dx <= reach; dx += 1) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) continue;
+      const x = self.x + dx;
+      const y = self.y + dy;
+      if (!canStandAt(s, x, y, eggType)) continue;
+      if (blast !== undefined) {
+        const hits = foes.some((f) => Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) <= blast);
+        if (!hits) continue;
+      }
+      out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+// 界面：把"能落蛋、且砸得到人"的格子高亮出来（选点类技能的统一入口）
+registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
+  eggDropCells(state, self, skill.radius ?? 9, skill.power ?? 1),
+);
+
+/**
  * 陨卵（邪龙王）：在超大范围内落下一枚魔龙卵，落点周围吃一发暗属性魔法。
  *
- * 落点是**自动挑**的：引擎的 HERO_SKILL 没有"目标格"这个字段（所有技能都不带目标），
- * 所以按"这一发能打出最多伤害"来选——先算每个可站格子里能覆盖到多少敌人、
- * 各吃多少，再挑总和最高的那个；同样多时取离自己近的，让落点看起来"是它抬手砸下去的"。
+ * 落点**由玩家选**（技能声明了 `targeting: 'point'`，界面会把合法格子高亮，
+ * 点哪格就落哪格）。只有一种情况会退回自动挑：`c.target` 没传——
+ * AI 走这条（它不需要"看一眼再决定"的操作节奏），旧复盘也走这条，
+ * 所以老录像仍然能一模一样地重放。
+ *
+ * 自动挑的规则沿用原来的：按"这一发能打出最多伤害"选——先算每个可站格子里
+ * 能覆盖到多少敌人、各吃多少，再挑总和最高的那个；并列时取扫描顺序里的第一个
+ * （左上到右下），和改动前逐字一致，旧复盘才能重放成一模一样。
  *
  * 伤害走魔法段（不吃护甲、只被魔抗挡），再过一遍属性倍率——
  * 光属性的敌人会吃双倍，这正是邪龙王那条属性弱点的另一半。
@@ -5261,26 +5305,49 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     return;
   }
 
+  // 能落蛋、且砸得到人的格子。玩家只能从这里面挑。
+  const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
+  if (legal.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '没有能砸到敌人的落点';
+    return;
+  }
+
   let best: { x: number; y: number } | null = null;
-  let bestScore = -1;
-  for (let dy = -reach; dy <= reach; dy += 1) {
-    for (let dx = -reach; dx <= reach; dx += 1) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) continue;
-      const x = c.self.x + dx;
-      const y = c.self.y + dy;
-      if (!c.api.canStandAt(c.state, x, y, eggType)) continue;
+  if (c.target) {
+    const hit = legal.find((p) => p.x === c.target!.x && p.y === c.target!.y);
+    if (!hit) {
+      c.result.ok = false;
+      // 两种失败要分开说：射程外 / 那一格站不下 / 砸不到人
+      const inReach =
+        Math.max(Math.abs(c.target.x - c.self.x), Math.abs(c.target.y - c.self.y)) <= reach;
+      c.result.reason = !inReach
+        ? `陨卵只能落在 ${reach} 格内`
+        : !canStandAt(c.state, c.target.x, c.target.y, eggType)
+          ? '那一格放不下魔龙卵'
+          : '那一格周围没有敌人，砸不到人';
+      return;
+    }
+    best = hit;
+  } else {
+    // 自动挑（AI / 旧复盘）：从同一份 legal 里挑伤害最高的
+    let bestScore = -1;
+    for (const p of legal) {
       let score = 0;
       for (const f of foes) {
-        if (Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) > blast) continue;
+        if (Math.max(Math.abs(f.x - p.x), Math.abs(f.y - p.y)) > blast) continue;
         score += magicDamageOf(c.state, c.self, f);
       }
       if (score > bestScore) {
         bestScore = score;
-        best = { x, y };
+        best = p;
       }
     }
+    // 和旧行为对齐：自动挑的时候，"砸下去一个人都伤不到"不算找到落点。
+    // （手动选点不套这一条——玩家点的那一格，地是他自己挑的。）
+    if (bestScore <= 0) best = null;
   }
-  if (!best || bestScore <= 0) {
+  if (!best) {
     c.result.ok = false;
     c.result.reason = '没有能砸到敌人的落点';
     return;
