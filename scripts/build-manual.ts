@@ -246,7 +246,7 @@ const GENERIC_TERMS: Term[] = [
     key: 'summon',
     name: '召唤',
     brief: '每隔 N 回合在自己身边生成一个召唤物，同源同时最多若干个。',
-    more: '召唤物不占编制上限，所以不会把产线堵死；召唤师被杀，已经召出来的还留在场上。',
+    more: '召唤师被杀，已经召出来的还留在场上。',
   },
   {
     key: 'ammo',
@@ -470,9 +470,7 @@ function traitsOf(u: UnitTypeDef): string {
       key,
       `可建造 · ${u.name}`,
       `可建造：${names.join('、')}（共 ${names.length} 种）。` +
-        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`,
-      '这里列的是兵种自带的可建项目；有些扩展会在开局额外教建造单位几样新建筑' +
-        '（例如粮仓、船坞），实际清单随本局启用的扩展变化，以游戏内的产兵提示为准。',
+        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`
     );
     parts.push(ref(key, `可建 ${names.length} 种建筑`));
   }

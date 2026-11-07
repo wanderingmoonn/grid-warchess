@@ -3193,7 +3193,7 @@ test('召唤：死灵法师每两回合一个骷髅，到上限就停', () => {
   }
   const skels = st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton');
   assert.equal(skels.length, 4, '上限就是 4 个');
-  // 召唤物不占编制：编制里一个都数不到
+  // 召唤物不占ai编制：编制里一个都数不到
   assert.equal(
     st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton').length,
     skels.length,
@@ -3723,7 +3723,7 @@ test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各
   assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
-test('召唤物不占编制，也不能从产线招募', () => {
+test('召唤物不占ai编制，也不能从产线招募', () => {
   const s = fresh({ expansionIds: FANTASY });
   const before = armySize(s, 'A');
   for (let i = 0; i < 4; i += 1) stackOn(s, 'A', 'skeleton', 8 + i, 8);

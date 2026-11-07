@@ -665,7 +665,7 @@ export interface UnitTypeDef {
   /**
    * 只能被召唤，不能从产线生产。
    *
-   * 召唤物不占编制（它们不是招募来的），也不进 AI 的采购名单。
+   * 召唤物不进 AI 的采购名单。
    */
   summonedOnly?: boolean;
   /**

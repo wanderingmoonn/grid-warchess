@@ -749,9 +749,7 @@ export function unitsOf(s: GameState, p: PlayerId): Unit[] {
  * 建筑本来就不该住人：它是工地，不是部队。
  */
 export function armySize(s: GameState, p: PlayerId): number {
-  // 召唤物不占编制：它们不是招募来的，用编制去卡它们只会让死灵法师
-  // 反过来把自己的产线堵死（招满四个骷髅，城市就再也造不出兵）。
-  // 它们的上限由召唤者自己的 summon.max 管。
+  // 召唤物的上限由召唤者自己的 summon.max 管。
   let n = 0;
   for (const u of s.units) {
     if (u.owner !== p) continue;

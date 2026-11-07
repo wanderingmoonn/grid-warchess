@@ -174,7 +174,7 @@ export function describeUnit(
       ? '随机一种元素'
       : (def.summon.type ? '随从' : '随从');
     lines.push(
-      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。召唤物不占编制。`,
+      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。`,
     );
   }
   if (def.cycle && def.cycle.length > 0) {
