@@ -5244,6 +5244,81 @@ test('没武器的单位不能出手：桥不会"打人"', () => {
   assert.ok(hit.ok, hit.ok ? '' : `拆桥被误伤了：${hit.reason}`);
 });
 
+test('"没武器"的判定跨扩展：只有真能造成伤害的才算有武器', () => {
+  // 全兵种表（含扩展）里 atk 0 且没有 magicAtk 的一共 36 个：桥、渡船、各种墙、
+  // 生产建筑、支援舰、修真阵法、侦察气球……它们都不该能出手。
+  // 这里每个包挑一个代表：扩展包改了兵种表，本体用例管不到它们。
+  const cases: Array<[string[], string]> = [
+    [[], 'bridge'],
+    [[], 'ferry'],
+    [['fantasy'], 'earth-wall'],
+    [['era-arms'], 'anc_palisade'],
+    [['naval'], 'nv_repair_ship'],
+    [['city-works'], 'granary'],
+    [['cultivation'], 'cultivation-guard-formation'],
+    [['air'], 'af_balloon'],
+  ];
+  for (const [exps, type] of cases) {
+    const s = fresh({ expansionIds: exps });
+    assert.ok(s.unitTypes[type], `${type} 应该在开了 [${exps.join(',')}] 的局里`);
+    const u = place(s, 'A', type, 5, 5);
+    assert.equal(isArmed(s, u), false, `${type} 没有武器，不该能出手`);
+  }
+
+  // 反过来：面板 0 攻、伤害写在伤害阶段钩子里的不能一起封掉
+  const cult = fresh({ expansionIds: ['cultivation'] });
+  const spirit = place(cult, 'A', 'cultivator-spirit', 5, 5);
+  assert.equal(isArmed(cult, spirit), true, '灵体的伤害来自真元（damage 钩子），不能按 0 攻判死');
+
+  // 面板 0 攻、法攻拉满的也不能
+  const fan = fresh({ expansionIds: ['fantasy'] });
+  const mage = place(fan, 'A', 'archmage', 5, 5);
+  assert.equal(isArmed(fan, mage), true, '至尊法师 atk 0，但有 36 法攻');
+});
+
+test('陷阱不是单位：不会被当成攻击目标，踩上去照常炸', () => {
+  // 地雷 / 反装甲雷 / 哥布林陷阱 / 水雷都是 mark（marks.ts），不是 Unit。
+  // 这条用例守的是"以后有人把陷阱实现成单位"：一旦它进了 units，
+  // 它就会出现在 attackableTargets 里，变成能被打、也能被打死的怪东西。
+  const cases: Array<[string, string[], number]> = [
+    ['gb-mine', ['fantasy'], 10],
+    ['era-mine', ['era-arms'], 16],
+    ['era-at-mine', ['era-arms'], 30],
+  ];
+  for (const [kind, exps, dmg] of cases) {
+    const s = fresh({ startEra: 3, expansionIds: exps });
+    for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
+      s.tiles[idx(s, x, y)] = { terrain: 'plain', cityId: null };
+    }
+    s.units = [];
+    addMark(s, { kind, owner: 'A', x: 6, y: 5, charges: 1, hidden: true } as never);
+    const walker = place(s, 'B', 'militia', 5, 5);
+    s.current = 'B';
+
+    assert.equal(
+      s.units.some((u) => u.type === kind),
+      false,
+      `${kind} 不该出现在 units 里（陷阱是 mark，不是单位）`,
+    );
+    assert.equal(
+      attackableTargets(s, walker).some((u) => u.type === kind),
+      false,
+      `${kind} 不该被打——它根本不是单位`,
+    );
+
+    const step = applyAction(s, { type: 'MOVE', unitId: walker.id, x: 6, y: 5 });
+    assert.ok(step.ok, step.ok ? '' : step.reason);
+    const after = step.state.units.find((u) => u.id === walker.id);
+    if (after) {
+      assert.equal(after.hp, walker.hp - dmg, `${kind} 踩上去该掉 ${dmg} 点`);
+    } else {
+      // 反装甲雷 30 点对民兵是一发秒杀：没活下来也算"炸到了"
+      assert.ok(walker.hp <= dmg, `${kind} 只有一发秒杀才允许查不到尸体，实际 ${walker.hp} > ${dmg}`);
+    }
+    assert.equal(marksOf(step.state).length, 0, `${kind} 炸完就该没了`);
+  }
+});
+
 console.log('\n军营');
 
 test('军营只能扎在平地或丘陵上，而且必须临水', () => {

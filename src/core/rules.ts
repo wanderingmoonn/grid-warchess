@@ -1475,22 +1475,30 @@ export function canAttack(u: Unit): boolean {
 }
 
 /**
- * 这个单位有没有"武器"：物理攻和魔法攻至少有一项大于 0。
+ * 这个单位有没有"武器"：面板攻、法攻、或写在伤害阶段钩子里的伤害，至少有一项。
  *
- * 桥、渡船、土墙、魔龙卵都是 `atk: 0` 且没有 `magicAtk` 的东西，以前它们
- * 照样能下 ATTACK 指令——打不出伤害（`computeDamage` 归零），**但动作本身
- * 有副作用**：吃掉这回合的 `acted`、挨对面一次反击、朝战报里写一条
+ * 桥、渡船、土墙、魔龙卵、城墙、补给舰、灵体/阵法以外的支援单位……都是
+ * `atk: 0` 且没有 `magicAtk` 的东西（全兵种表里一共 36 个）。以前它们照样能下
+ * ATTACK / SIEGE 指令——打不出伤害（`computeDamage` 归零），**但动作本身有副作用**：
+ * 吃掉这回合的 `acted`、挨对面一次反击、朝战报里写一条
  * "木桥 攻击 民兵，穿不透护甲，没有造成伤害"。伤害为 0 不等于这个动作是空的，
  * 所以要在"能不能出手"这一层拦，而不是在伤害那一层拦。
  *
- * 判据看**面板**，不看 `attackPowerNow`：光环和状态能让一个本来没武器的单位
- * 凑出 1 点攻击，那不该让它"临时长出武器"。
+ * 判据的顺序和边界：
+ *   · 先看兵种表（`atk` / `magicAtk`）——99% 的兵种在这里就返回 true；
+ *   · 面板是 0 时，再看**伤害阶段**的钩子：修真包的灵体就是 `atk: 0`，伤害全部
+ *     来自「真元」（按境界算，不进兵种表）。只看面板会把这种"真能打"的兵种
+ *     一起封掉，所以有 damage 钩子就算有武器；
+ *   · **不看**光环和状态（`attackPowerNow` / `effectiveStats`）：那是临时加成，
+ *     一座桥挨着指挥光环不该"临时长出武器"。
  *
  * 只约束**出手方**。桥作为**目标**仍然能打——拆桥是正经战术，见 canStrike 的注释。
  */
 export function isArmed(s: GameState, u: Unit): boolean {
   const def = utype(s, u.type);
-  return (def.atk ?? 0) > 0 || (def.magicAtk ?? 0) > 0;
+  if ((def.atk ?? 0) > 0 || (def.magicAtk ?? 0) > 0) return true;
+  // stagedFor 的结果按"能力 id 串"缓存，热循环里不会反复拼数组
+  return stagedFor<HookCtx>(def, 'damage', u.extraAbilities).length > 0;
 }
 
 //旧代码残留，现在已经移动到aura.ts，这里只保留薄包装
