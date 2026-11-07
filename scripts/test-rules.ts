@@ -283,7 +283,7 @@ import {
   snapshotJson,
   snapshotSignature,
 } from '../src/core/snapshot.ts';
-import { GOLD } from '../src/core/resources.ts';
+import { GOLD, RESOURCES, registerResourceName, resourceName, resourceShort } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
@@ -466,6 +466,25 @@ test('建造名单：查不到中文名时退回 id，不抛错也不静默丢�
   const list = buildListOf({ id: 'probe', builds: ['a', 'b'] });
   assert.deepEqual(list.ids, ['a', 'b']);
   assert.deepEqual(list.names, ['a', 'b']);
+});
+
+test('资源名兜底：没有开局也能查到扩展资源的中文名，且不污染本局流通表', () => {
+  // 规则书生成、开局设置、联机加入、读档都不走 createMatch，
+  // 这些路径以前会把 spirit-stone 原样印给玩家。
+  assert.equal(resourceShort(SPIRIT_STONE), '灵', '没有一局游戏也要认得灵石简称');
+  assert.equal(resourceName(SPIRIT_STONE), '灵石');
+
+  // 兜底表本身：登记后能查到名字，但不会撑大 RESOURCES（RL 特征按它开槽）
+  registerResourceName({
+    id: 'probe-resource',
+    name: '试炼石',
+    short: '试',
+    color: '#000',
+    summary: '',
+  });
+  assert.equal(resourceShort('probe-resource'), '试');
+  assert.equal(resourceName('probe-resource'), '试炼石');
+  assert.ok(!RESOURCES.some((r) => r.id === 'probe-resource'), '兜底名字不该进本局流通表');
 });
 
 console.log('\n开局与地图');

@@ -3114,6 +3114,22 @@ for (const { b, html } of rendered) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * 资源名自检：正文里不该出现扩展资源的英文 id。
+ *
+ * 以前「产出 +1 spirit-stone」就这么印进了修真册——资源名字只在 createMatch
+ * 时注册，而生成手册时根本没有一局游戏。现在名字在模块加载时全量登记，
+ * 这里再兜一道：以后加了个没登记名字的资源，npm run manual 会直接报错，
+ * 而不是等玩家在规则书里看到一串英文。
+ * --------------------------------------------------------------------------- */
+const declaredResourceIds = EXPANSIONS.flatMap((e) => (e.resources ?? []).map((r) => r.id));
+for (const { b, html } of rendered) {
+  const leaked = declaredResourceIds.filter((id) => html.includes(id));
+  if (leaked.length > 0) {
+    throw new Error(`${b.file} 里出现未翻译的资源 id：${leaked.join('、')}`);
+  }
+}
+
 // 根目录留一份核心册，方便不开 dev server 直接看（不入库，见 CI 的仓库卫生检查）
 writeFileSync('manual.html', rendered[0]!.html, 'utf-8');
 console.log(
