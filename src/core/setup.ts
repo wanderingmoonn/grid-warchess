@@ -284,9 +284,28 @@ export function createMatch(
    * 一张坏图不该让整局建不起来，但也不能让它带着半张地形进场。
    */
   const fixed = config.fixedMap ? validateFixedMap(config.fixedMap) : null;
+  /*
+   * 城位可能"贴边"，而本局的城可能是 3×3（「城郭」扩展）。
+   *
+   * 地图里的城位只保证 2×2 框得进棋盘（见 validateFixedMap），开城郭之后
+   * 同一座贴边的城就会伸出棋盘外——那不是玩家的错，是这张图配这个扩展时
+   * 放不下。这里按棋盘边长**夹一次**（物理约束），而不是在导出/上传那一步
+   * 拒绝整张图：图本身没毛病，是这一局的城更大。
+   */
+  const fixedMap = fixed && fixed.ok ? fixed.map : null;
+  const clampCityInto = (c: { x: number; y: number }): { x: number; y: number } => ({
+    x: Math.max(0, Math.min(Math.max(0, (fixedMap?.w ?? 0) - citySize), c.x)),
+    y: Math.max(0, Math.min(Math.max(0, (fixedMap?.h ?? 0) - citySize), c.y)),
+  });
   const layout =
-    fixed && fixed.ok && twoSeats
-      ? layoutFromRows(fixed.map.rows, fixed.map.citiesA, fixed.map.citiesB, spawnPool, citySize)
+    fixedMap && twoSeats
+      ? layoutFromRows(
+          fixedMap.rows,
+          fixedMap.citiesA.map(clampCityInto),
+          fixedMap.citiesB.map(clampCityInto),
+          spawnPool,
+          citySize,
+        )
       : playerCount > 2
         ? generateMultiLayout(
             /*

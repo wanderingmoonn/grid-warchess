@@ -41,7 +41,7 @@ import {
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
 import { CITY_MIN_GAP, MAP_STYLES, generateLayout, generateMultiLayout, mapStylesFor, terrainFromChar, twoCityMinSize } from '../src/core/mapgen.ts';
-import { BUILTIN_MAPS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
+import { BUILTIN_MAPS, TERRAIN_CHARS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
 import { stateToFixedMap } from '../src/core/map-export.ts';
 import {
   clearUnits,
@@ -2486,12 +2486,24 @@ test('固定地图：坏数据被挡住，报错要指出是哪一处', () => {
   const noCity = validateFixedMap({ ...base, citiesB: [] });
   assert.equal(noCity.ok, false);
 
+  /*
+   * 城贴边/在角上：**放行**（2026-11-07 改）。
+   *
+   * 以前这条是"要拒"，理由是"城贴边开局部队没地方站"——站不住：贴边的城周围
+   * 照样有格站人，而角城是正经的地图设计。只拦真正不成立的：2×2 框不进棋盘。
+   */
   const edge = validateFixedMap({ ...base, citiesA: [{ x: 0, y: 0 }] });
-  assert.equal(edge.ok, false, '贴边的城要拒');
+  assert.equal(edge.ok, true, '城在角上应该放行');
 
-  // 扩展地形不许进共享地图：没开那个扩展的局里它会变成平原
+  const bw = base.rows[0]!.length;
+  const bh = base.rows.length;
+  const off = validateFixedMap({ ...base, citiesA: [{ x: bw - 1, y: bh - 1 }] });
+  assert.equal(off.ok, false, '2×2 框不进棋盘才该拒');
+  assert.ok(!off.ok && off.errors.some((e) => e.includes('超出棋盘')), '要说是超出棋盘');
+
+  // 扩展地形**收**（2026-11-07 改）：它是规则层的正式地形，扩展只决定生成器画不画
   const expanded = validateFixedMap({ ...base, rows: base.rows.map((r, i) => (i === 0 ? 'P.........' : r)) });
-  assert.equal(expanded.ok, false, '台地（P）属于扩展地形，不该收');
+  assert.equal(expanded.ok, true, '台地（P）应该收：没开扩展的局里它照样是台地，只是不会自然生成');
 });
 
 test('固定地图：纯文本格式能直接画，A/B 标出城位', () => {
@@ -16162,18 +16174,18 @@ test('补线：64×64 的对角线也不会漏（棋盘上限那档）', () => {
  * 扩展地形必须折成本体六种（否则没开扩展的局认不出来），折算过的格子数要
  * 明说给作者，城位不达标要报错而不是替他挪。
  */
-test('导出地图：沙盒 → 公开格式，扩展地形折成本体六种并说明折了几格', () => {
+test('导出地图：扩展地形原样保留，只提醒一句用了哪些', () => {
   const s = fresh({ size: 16, startEra: 1 });
   const set = (x: number, y: number, t: Terrain) => {
     s.tiles[idx(s, x, y)]!.terrain = t;
   };
-  // 一格一格地摆出每种扩展地形，再看导出成了什么
+  // 一格一格摆出每种扩展地形，再看导出成了什么
   set(4, 4, 'marsh');
   set(5, 4, 'shallow');
   set(6, 4, 'plateau');
   set(7, 4, 'dune');
   set(8, 4, 'valley');
-  set(9, 4, 'water');
+  set(9, 4, 'deep');
 
   const r = stateToFixedMap(s, '导出测试');
   assert.ok(r.ok, `应该能导出：${r.errors.join('；')}`);
@@ -16184,17 +16196,21 @@ test('导出地图：沙盒 → 公开格式，扩展地形折成本体六种并
   assert.equal(m.name, '导出测试');
   assert.ok(m.rows.every((row) => row.length === 16), '每行都该是 16 个字符');
 
-  // 折算规则：沼泽/谷地→平原，浅流→水域，台地/沙丘→丘陵，水本来就是水域
-  assert.equal(m.rows[4]![4], '.', '沼泽折成平原（它是能走的，折成水就成墙了）');
-  assert.equal(m.rows[4]![5], '~', '浅流折成水域');
-  assert.equal(m.rows[4]![6], 'h', '台地折成丘陵');
-  assert.equal(m.rows[4]![7], 'h', '沙丘折成丘陵');
-  assert.equal(m.rows[4]![8], '.', '谷地折成平原');
-  assert.equal(m.rows[4]![9], '~', '水域照旧');
+  /*
+   * 地形**一格都不许改**。以前这里会折成本体六种，代价是作者画了半天的沼泽
+   * 在别人那边变成平原——而且只在他那边变。扩展地形是规则层的正式成员，
+   * 渲染/移动/视野都无条件支持，没有理由折算。
+   */
+  assert.equal(m.rows[4]![4], 'w', '沼泽就是沼泽，不折');
+  assert.equal(m.rows[4]![5], 's', '浅流不折');
+  assert.equal(m.rows[4]![6], 'P', '台地不折');
+  assert.equal(m.rows[4]![7], 'd', '沙丘不折');
+  assert.equal(m.rows[4]![8], 'v', '谷地不折');
+  assert.equal(m.rows[4]![9], 'D', '深水不折');
 
-  // 折算说明必须点出名字和格数——作者得知道"我摆的图"和"传上去的图"哪里不一样
-  assert.ok(r.folded.includes('沼泽'), `折算说明该提到沼泽：${r.folded}`);
-  assert.ok(r.folded.includes('1 格'), `折算说明该给出格数：${r.folded}`);
+  // 提醒要有，但不改数据：说清用了哪几种、各几格
+  assert.ok(r.note.includes('沼泽'), `要提到沼泽：${r.note}`);
+  assert.ok(r.note.includes('1 格'), `要给出格数：${r.note}`);
 
   // 城位：只认 A/B，按归属分两堆
   assert.equal(m.citiesA.length, s.cities.filter((c) => c.owner === 'A').length, '红方城数对得上');
@@ -16205,37 +16221,147 @@ test('导出地图：沙盒 → 公开格式，扩展地形折成本体六种并
   assert.ok(again.ok, `导出的图应该能通过公开校验：${again.ok ? '' : again.errors.join('；')}`);
 });
 
-test('导出地图：城缺一边、尺寸越界、城贴边——三种都报错而不是替他改', () => {
-  // 缺蓝方的城
+test('导出地图：城贴边/在角上都放行，只有框不进棋盘才报错', () => {
+  // 贴边（含角）：这是正经的地图设计，不该拦
   const s1 = fresh({ size: 16, startEra: 1 });
-  s1.cities = s1.cities.filter((c) => c.owner !== 'B');
-  const r1 = stateToFixedMap(s1, '缺城');
-  assert.equal(r1.ok, false, '只有一边有城不该通过');
+  const a1 = s1.cities.find((c) => c.owner === 'A')!;
+  a1.x = 0;
+  a1.y = 0;
+  const r1 = stateToFixedMap(s1, '角落城');
+  assert.ok(r1.ok, `城在角上应该能导出：${r1.errors.join('；')}`);
+  assert.deepEqual(r1.map!.citiesA[0], { x: 0, y: 0 }, '城位原样带出去，不替他挪');
+
+  // 城缺一边
+  const s2 = fresh({ size: 16, startEra: 1 });
+  s2.cities = s2.cities.filter((c) => c.owner !== 'B');
+  const r2 = stateToFixedMap(s2, '缺城');
+  assert.equal(r2.ok, false, '只有一边有城不该通过');
   assert.ok(
-    r1.errors.some((e) => e.includes('乙方')),
-    `要明确说是乙方缺城：${r1.errors.join('；')}`,
+    r2.errors.some((e) => e.includes('乙方')),
+    `要明确说是乙方缺城：${r2.errors.join('；')}`,
   );
 
   // 尺寸越界：4×4 的沙盒摆得下两座城，但公开地图最小 8
-  const s2 = fresh({ size: 4, startEra: 1 });
-  const r2 = stateToFixedMap(s2, '太小');
-  assert.equal(r2.ok, false, '4×4 不该能导出');
+  const s3 = fresh({ size: 4, startEra: 1 });
+  const r3 = stateToFixedMap(s3, '太小');
+  assert.equal(r3.ok, false, '4×4 不该能导出');
   assert.ok(
-    r2.errors.some((e) => e.includes('8') && e.includes('40')),
-    `要把尺寸范围说出来：${r2.errors.join('；')}`,
+    r3.errors.some((e) => e.includes('8') && e.includes('40')),
+    `要把尺寸范围说出来：${r3.errors.join('；')}`,
   );
 
-  // 城贴边：把 A 城挪到 (0,0)，公开格式要求离边界至少一格
-  const s3 = fresh({ size: 16, startEra: 1 });
-  const a = s3.cities.find((c) => c.owner === 'A')!;
-  a.x = 0;
-  a.y = 0;
-  const r3 = stateToFixedMap(s3, '贴边');
-  assert.equal(r3.ok, false, '贴边的城不该通过');
+  // 框不进棋盘：2×2 的城左上角取到最后两格之外
+  const s4 = fresh({ size: 16, startEra: 1 });
+  const a4 = s4.cities.find((c) => c.owner === 'A')!;
+  a4.x = 15;
+  a4.y = 15;
+  const r4 = stateToFixedMap(s4, '出界');
+  assert.equal(r4.ok, false, '城伸出棋盘不该通过');
   assert.ok(
-    r3.errors.some((e) => e.includes('贴边')),
-    `要说是城贴边了：${r3.errors.join('；')}`,
+    r4.errors.some((e) => e.includes('超出棋盘')),
+    `要说是超出棋盘：${r4.errors.join('；')}`,
   );
+});
+
+test('地图字符：扩展地形在公开格式里也认（不再只有本体六种）', () => {
+  // 合法字符表是从 mapgen 的 CHAR 派生的：每种地形各一个字符
+  for (const ch of '.fh~^=PvwdsD') {
+    assert.ok(TERRAIN_CHARS.includes(ch), `${ch} 应该在可用字符里`);
+  }
+  // 纯文本写法要能把这些地形读回来（作者可以直接在记事本里画）
+  const text = [
+    'name: 沼泽试作',
+    '..w.....',
+    '..P.....',
+    '..s.....',
+    'A.......',
+    '........',
+    '........',
+    '......B.',
+    '........',
+  ].join('\n');
+  const parsed = parseMapFile(text);
+  assert.ok(parsed.ok, `应该能解析：${parsed.ok ? '' : parsed.errors.join('；')}`);
+  assert.equal(parsed.map!.rows[0]![2], 'w', '沼泽读回来还是 w');
+  assert.equal(parsed.map!.rows[1]![2], 'P', '台地读回来还是 P');
+  assert.equal(parsed.map!.rows[2]![2], 's', '浅流读回来还是 s');
+});
+
+test('地图字符：带扩展地形的地图，在没开扩展的对局里也原样落地', () => {
+  /*
+   * 这一条才是"扩展地形能不能进共享地图"的真正判据。
+   *
+   * 以前的做法是"干脆不让传"，理由是"没开扩展的局会认不出来"。这里直接把
+   * 一张含沼泽/深水/台地的图丢进**零扩展**的对局，看那几格还是不是原样：
+   * 是，就说明扩展只决定"生成器画不画"，不决定"这张图能不能有"。
+   */
+  const rows = [
+    '........',
+    '..w..D..',
+    '..P..s..',
+    '........',
+    '........',
+    '........',
+    '........',
+    '........',
+  ];
+  const s = createMatch(
+    {
+      ...BASE,
+      expansionIds: [],
+      size: 8,
+      startEra: 1,
+      fixedMap: { id: 'user:t', name: '扩展地形图', w: 8, h: 8, rows, citiesA: [{ x: 0, y: 4 }], citiesB: [{ x: 6, y: 4 }] },
+    },
+    5,
+  );
+  const at = (x: number, y: number) => s.tiles[y * 8 + x]!.terrain;
+  assert.equal(at(2, 1), 'marsh', '沼泽原样落地（零扩展的局也该认）');
+  assert.equal(at(5, 1), 'deep', '深水原样落地');
+  assert.equal(at(2, 2), 'plateau', '台地原样落地');
+  assert.equal(at(5, 2), 'shallow', '浅流原样落地');
+});
+
+test('固定地图：贴边城遇上 3×3 城郭，城被夹回棋盘内而不是伸出去', () => {
+  /*
+   * 地图只保证 2×2 放得下（见 validateFixedMap）。开了「城郭」变 3×3 之后，
+   * 同一座贴边的城就会伸到棋盘外面去——那是"这张图配这个扩展放不下"，
+   * 不是玩家画错了，所以在 setup 里按棋盘边长夹一次，而不是拒绝整张图。
+   */
+  const rows = [
+    '........',
+    '........',
+    '........',
+    '........',
+    '........',
+    '........',
+    '......p.',
+    '........',
+  ];
+  const s = createMatch(
+    {
+      ...BASE,
+      expansionIds: [],
+      size: 8,
+      startEra: 1,
+      citySize: 3,
+      fixedMap: {
+        id: 'user:edge',
+        name: '贴边城',
+        w: 8,
+        h: 8,
+        rows,
+        citiesA: [{ x: 6, y: 6 }],
+        citiesB: [{ x: 0, y: 0 }],
+      },
+    },
+    5,
+  );
+  assert.ok(s.cities.length >= 2, '两座城都要在');
+  for (const c of s.cities) {
+    assert.equal(c.size, 3, '这一局的城是 3×3');
+    assert.ok(c.x >= 0 && c.y >= 0 && c.x + c.size <= s.w && c.y + c.size <= s.h, `城 ${c.id} 伸到棋盘外了：${c.x},${c.y}`);
+  }
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);

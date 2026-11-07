@@ -257,6 +257,29 @@ export function terrainFromChar(ch: string): Terrain {
   return CHAR_TO_TERRAIN[ch] ?? 'plain';
 }
 
+/**
+ * 地形 → 行字符串里的字符。导出地图时用。
+ *
+ * 和 `terrainFromChar` **同一张表**。以前 `fixed-maps.ts` 自己抄了一份
+ * "只收六种本体地形"的白名单，于是上帝模式画好的沼泽/台地一导出就被拒——
+ * 两份表就是两个真相，这次把导出这边也接回这张表上。
+ */
+export function terrainCharOf(t: Terrain): string {
+  return CHAR[t] ?? '.';
+}
+
+/**
+ * 地图文本里允许出现的字符（去重后的一份）。
+ *
+ * 就是"每种地形各一个字符"：`.` 同时是平原，`'city'` 不单独占字符
+ * （格子是不是城由 cityId / citiesA-B 决定，字符只管地貌）。
+ *
+ * 扩展地形（P 台地 / v 谷地 / w 沼泽 / d 沙丘 / s 浅流 / D 深水）**照样收**：
+ * 它们是规则层的正式地形，渲染、移动、视野都无条件支持——扩展只决定
+ * "地图生成器会不会画它"，不决定"这张图能不能有它"。
+ */
+export const MAP_TERRAIN_CHARS: string = [...new Set(Object.values(CHAR))].join('');
+
 type Pos = { x: number; y: number };
 
 /** 线性同余，只要确定性，不要质量 */

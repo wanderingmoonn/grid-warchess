@@ -6,10 +6,14 @@
  *
  *   1. **要审核**。传上去不是立刻可见，先排队，放行之后才出现在「玩家上传地图」里。
  *      这句话不写，作者会以为"传完别人就能选"，然后来回问为什么看不到。
- *   2. **地形会被折算**。扩展地形（台地/沼泽/浅流…）不在公开地图的字符表里，
- *      导出时按"走法最接近"折成本体六种。折算了几格、折成什么，逐条列出来。
- *   3. **城的边距不达标就传不上去**。沙盒里城可以贴边摆，公开地图要求离边界
- *      至少一格。这里不替他挪城——挪了就不是他摆的那张图，报错让他自己改。
+ *   2. **地形原样上传，不改一格**。扩展地形（台地/沼泽/浅流…）也是合法地形，
+ *      渲染、移动、视野都支持；只提醒一句"这张图用了扩展地形"，
+ *      因为别人的对局里不会自然生成它们。
+ *   3. **城位照搬，不替他挪**。贴边、在角上都能传——那是正经的地图设计。
+ *      只有"2×2 框不进棋盘"这种数据不成立的情况才拦。
+ *
+ * 另外要说清地图里**没有兵**：地图只有地形和城，兵是开局后自己造的
+ * （能不能造某个兵取决于这一局开了哪些扩展，和地图无关）。
  */
 
 import { mapToText, registerUserMaps, type FixedMap } from '../core/fixed-maps.ts';
@@ -84,7 +88,7 @@ export function openMapUpload(opts: MapUploadOptions): void {
             <b>这张图还传不了</b>
             <ul>${built.errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>
           </div>
-          ${built.folded ? `<p class="field-hint">另外：${esc(built.folded)}（折算后仍可上传，先解决上面几条）</p>` : ''}
+          ${built.note ? `<p class="field-hint">${esc(built.note)}</p>` : ''}
           <label class="editor-field">
             <span>地图名</span>
             <input data-field="name" maxlength="24" value="${esc(name)}" placeholder="最多 24 个字" />
@@ -99,7 +103,7 @@ export function openMapUpload(opts: MapUploadOptions): void {
     return `
       <div class="modal-body">
         <p class="field-hint">${esc(statLine(map))}</p>
-        ${built.folded ? `<p class="field-hint">扩展地形已折算：${esc(built.folded)}。公开地图只收本体六种地形，否则没开对应扩展开的局会认不出来。</p>` : ''}
+        ${built.note ? `<p class="field-hint">${esc(built.note)}</p>` : ''}
         <label class="editor-field">
           <span>地图名</span>
           <input data-field="name" maxlength="24" value="${esc(name)}" placeholder="最多 24 个字" />
@@ -128,7 +132,8 @@ export function openMapUpload(opts: MapUploadOptions): void {
       <div class="modal">
         <div class="modal-head">
           <h2>上传这张地图</h2>
-          <p>把现在沙盒里的地形和城位交到云端地图库。兵种、金币、回合这些不进地图——地图只有地形和城。</p>
+          <p>把现在沙盒里的地形和城位交到云端地图库。地形原样带上去，一格都不改。</p>
+          <p>地图里<b>没有兵</b>：兵种是开局后自己造的，能不能造某个兵只取决于那一局开了哪些扩展，和这张图无关。</p>
         </div>
         ${body()}
       </div>`;

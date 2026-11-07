@@ -5,16 +5,18 @@
  * 就"能玩"——但它是这一局的存档，别人拿不到。要让它变成别人也能选的图，
  * 就必须落回 `FixedMap` 这个公开格式，并且**过一遍同一套校验**。
  *
- * 两条硬约束决定了这里不能"原样导出"：
+ * 两条口径（2026-11-07 改过，别按老印象理解）：
  *
- *   1. **只能有本体那六种地形**（`.fh~^=`）。扩展地形（台地/谷地/沼泽/沙丘/
- *      浅流/深水）在没开对应扩展的局里会还原成平原甚至未知格——一份"给所有人
- *      玩"的地图不该带着别人的扩展依赖。所以这里做折算，并把折算结果**明说**
- *      给作者听，而不是悄悄改掉他的地形。
+ *   1. **地形原样导出，不折算**。地形字符表现在从 `mapgen` 的 `CHAR` 派生
+ *      （见 `TERRAIN_CHARS`），扩展地形（台地/谷地/沼泽/沙丘/浅流/深水）
+ *      照样收。以前这里会把它们折成本体六种，理由是"别人没开扩展就认不出来"——
+ *      那是错的：地形是规则层的正式成员，渲染、移动、视野都无条件支持，
+ *      扩展只决定**生成器画不画**。折算的代价是作者画了半天的沼泽在别人
+ *      那边变成平原，而且**只在别人那边**变，最难解释。
+ *      现在只在 `note` 里提醒一句"这张图用了扩展地形"，不改数据。
  *
- *   2. **城位有边距要求**（离边界至少 1 格、每方 1~8 座、不许叠）。沙盒里
- *      城可以贴着边摆，导出时那条约束就会失败。这里不替作者挪城——
- *      挪了就是"我传的和我摆的不是同一张图"，报错让他自己改。
+ *   2. **城位放得下就行，不要求离边界留空**。贴边的城（含四个角）是正经的
+ *      地图设计。只有"2×2 框不进棋盘"才拦——那不是风格问题，是数据不成立。
  */
 
 import {
@@ -24,34 +26,37 @@ import {
   type FixedMap,
   type MapPoint,
 } from './fixed-maps.ts';
+import { terrainCharOf } from './mapgen.ts';
 import type { GameState, PlayerId, Terrain } from './types.ts';
 
-/** 本体六种地形对应的字符（和 `TERRAIN_CHARS` 一致） */
-const BASIC: Partial<Record<Terrain, string>> = {
-  plain: '.',
-  forest: 'f',
-  hill: 'h',
-  water: '~',
-  mountain: '^',
-  bridge: '=',
-};
-
 /**
- * 扩展地形 → 本体地形。
+ * "扩展地形"：地图生成器只有在开对应扩展时才会画出来的那几种。
  *
- * 按"走法最接近"折算，不按颜色：浅流本来就该是水（陆军涉水、小船能过），
- * 褶成平原会让一条河凭空消失；沼泽反过来——它是**能走的**地面，只是慢，
- * 折成水会把它变成墙。城格折成平原，因为城由 `citiesA/B` 单独记，
- * 地形层不该再画一遍。
+ * 收进地图**没有问题**（规则层无条件支持），但要提醒作者一句：
+ * 别人的对局里不会自然生成它们，看到这张图时会有点意外。
  */
-const FOLD: Partial<Record<Terrain, { ch: string; name: string }>> = {
-  plateau: { ch: 'h', name: '台地' },
-  dune: { ch: 'h', name: '沙丘' },
-  valley: { ch: '.', name: '谷地' },
-  marsh: { ch: '.', name: '沼泽' },
-  shallow: { ch: '~', name: '浅流' },
-  deep: { ch: '~', name: '深水' },
-  city: { ch: '.', name: '城格' },
+const EXPANSION_TERRAINS: ReadonlySet<string> = new Set([
+  'plateau',
+  'valley',
+  'marsh',
+  'dune',
+  'shallow',
+  'deep',
+]);
+
+const TERRAIN_NAME: Record<string, string> = {
+  plain: '平原',
+  forest: '森林',
+  hill: '丘陵',
+  water: '水域',
+  mountain: '高山',
+  bridge: '桥',
+  plateau: '台地',
+  valley: '谷地',
+  marsh: '沼泽',
+  dune: '沙丘',
+  shallow: '浅流',
+  deep: '深水',
 };
 
 export interface MapExportResult {
@@ -60,12 +65,11 @@ export interface MapExportResult {
   /** 校验没过的原因（直接给作者看） */
   errors: string[];
   /**
-   * 折算说明。空串＝一格都没改。
+   * 给作者看的一句提醒：这张图用了哪些扩展地形、多少格。空串＝全是本体地形。
    *
-   * 必须有：作者看到的图和传上去的图不一样，这件事得说在前面，
-   * 不能等他玩到一半发现"我的沼泽怎么变成平原了"。
+   * 只提醒、不改数据——地图里有沼泽就是沼泽，传上去之后在别人那边也是沼泽。
    */
-  folded: string;
+  note: string;
 }
 
 /**
@@ -76,40 +80,39 @@ export interface MapExportResult {
 export function stateToFixedMap(state: GameState, name: string): MapExportResult {
   const errors: string[] = [];
 
-  if (state.w < MAP_MIN_SIZE || state.w > MAP_MAX_SIZE || state.h < MAP_MIN_SIZE || state.h > MAP_MAX_SIZE) {
+  if (
+    state.w < MAP_MIN_SIZE ||
+    state.w > MAP_MAX_SIZE ||
+    state.h < MAP_MIN_SIZE ||
+    state.h > MAP_MAX_SIZE
+  ) {
     return {
       ok: false,
       errors: [
         `这张图是 ${state.w}×${state.h}，能分享的地图只收 ${MAP_MIN_SIZE}~${MAP_MAX_SIZE}`,
       ],
-      folded: '',
+      note: '',
     };
   }
 
-  // 地形层：逐格折成本体字符，顺手记下每一类折了多少格
-  const foldCount = new Map<string, number>();
+  // 地形层：逐格照搬，只统计"用了哪些扩展地形"用来提醒
+  const extras = new Map<string, number>();
+  const unknown = new Set<string>();
   const rows: string[] = [];
   for (let y = 0; y < state.h; y += 1) {
     let line = '';
     for (let x = 0; x < state.w; x += 1) {
-      const t = state.tiles[y * state.w + x]?.terrain ?? 'plain';
-      const basic = BASIC[t];
-      if (basic) {
-        line += basic;
+      const t = (state.tiles[y * state.w + x]?.terrain ?? 'plain') as Terrain;
+      // 城格在地形层是平原：这一格是不是城由 citiesA/B 记，字符只管地貌
+      if (t === 'city') {
+        line += '.';
         continue;
       }
-      const fold = FOLD[t];
-      if (fold) {
-        line += fold.ch;
-        const label = `${fold.name}→${fold.ch === '.' ? '平原' : fold.ch === 'h' ? '丘陵' : fold.ch === '~' ? '水域' : '?'}`;
-        foldCount.set(label, (foldCount.get(label) ?? 0) + 1);
-        continue;
-      }
-      // 认不出来的地形：按平原处理，但要说出来。这里不报错——
-      // 一格未知地形不该让整张图传不上去，而作者也该知道那一格被抹平了。
-      line += '.';
-      const label = `未知地形（${t}）→平原`;
-      foldCount.set(label, (foldCount.get(label) ?? 0) + 1);
+      line += terrainCharOf(t);
+      if (EXPANSION_TERRAINS.has(t)) extras.set(t, (extras.get(t) ?? 0) + 1);
+      // 老存档里可能还留着已删除的地形（lava / volcano），导出会按平原算：
+      // 不报错，但要说一句，别让作者以为图坏了
+      if (t !== 'plain' && terrainCharOf(t) === '.') unknown.add(t);
     }
     rows.push(line);
   }
@@ -127,16 +130,24 @@ export function stateToFixedMap(state: GameState, name: string): MapExportResult
   if (citiesA.length === 0) errors.push('甲方一座城都没有：先用「城市」笔刷给红方摆一座');
   if (citiesB.length === 0) errors.push('乙方一座城都没有：先用「城市」笔刷给蓝方摆一座');
 
-  const folded =
-    foldCount.size === 0
-      ? ''
-      : [...foldCount.entries()].map(([k, n]) => `${k} ${n} 格`).join('，');
+  const parts: string[] = [];
+  if (extras.size > 0) {
+    parts.push(
+      `用了扩展地形：${[...extras.entries()]
+        .map(([t, n]) => `${TERRAIN_NAME[t] ?? t} ${n} 格`)
+        .join('、')}（没开对应扩展的对局里它们照样是这些地形，只是不会自然生成）`,
+    );
+  }
+  if (unknown.size > 0) {
+    parts.push(`有 ${[...unknown].join('、')} 这类已不在游戏里的地形，导出后按平原算`);
+  }
+  const note = parts.join('；');
 
-  if (errors.length > 0) return { ok: false, errors, folded };
+  if (errors.length > 0) return { ok: false, errors, note };
 
-  // 最后过一遍公开格式的校验：城的边距、叠不叠、每方上限都在那里面
+  // 最后过一遍公开格式的校验：城放不放得下、叠不叠、每方上限都在那里面
   const checked = validateFixedMap({ name, rows, citiesA, citiesB });
-  if (!checked.ok) return { ok: false, errors: checked.errors, folded };
+  if (!checked.ok) return { ok: false, errors: checked.errors, note };
 
   return {
     ok: true,
@@ -144,6 +155,6 @@ export function stateToFixedMap(state: GameState, name: string): MapExportResult
     // 尚未上传/上传失败的图也能在本机注册表里占个位置
     map: { ...checked.map, id: `user:local-${Date.now().toString(36)}` },
     errors: [],
-    folded,
+    note,
   };
 }
