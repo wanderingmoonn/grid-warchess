@@ -24,19 +24,22 @@
  * 用法：node --experimental-strip-types scripts/fantasy-overlap.ts
  * 产出：docs/FANTASY-OVERLAP.md
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import { abilityById } from '../src/core/ability-registry.ts';
 import { availableExpansions } from '../src/core/expansions.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
 import { NEUTRAL_CONTEXT, unitEfficiency, unitPower } from '../src/core/unit-value.ts';
+import {
+  EMPTY_OBS,
+  GAMES_PER_BATCH,
+  observed,
+  oldEfficiency,
+  packMap,
+} from './lib/fantasy-observed.ts';
 
 const OUT = 'docs/FANTASY-OVERLAP.md';
-
-/** 四批跑批。前两批 era3 开局，后两批 era6 开局 */
-const BATCH_ERA3 = ['results/bf-modern/merged-era3.json', 'results/bf-era3b/merged-era3.json'];
-const BATCH_ERA6 = ['results/bf-modern6/merged-era6.json', 'results/bf-modern6b/merged-era6.json'];
 
 const expansions = availableExpansions();
 const fantasy = expansions.filter((e) => e.id.startsWith('fantasy'));
@@ -46,91 +49,12 @@ const s = createMatch(
   1,
 );
 
-/**
- * 兵种属于原五个子包里的哪一个。
- *
- * 2026-11-04 五个包并成了一个「奇想」，`expansion.units` 里已经看不出分组，
- * 但分组本身仍然有信息量（荒兽偏"厚"，秘法偏"法术"，骑士团偏"人"）。
- * 所以从源文件的分段里读回来——比在别处再维护一份 id 清单可靠。
- */
-function packMap(): Map<string, string> {
-  const src = readFileSync('src/core/fantasy-packs.ts', 'utf8').split(/\r?\n/);
-  const at = (re: RegExp): number => src.findIndex((l) => re.test(l));
-  const spans: [string, number, number][] = [
-    ['骑士团', at(/^const KNIGHTS: Expansion/), at(/^const BEASTS: Expansion/)],
-    ['荒兽', at(/^const BEASTS: Expansion/), at(/^const ARCANE: Expansion/)],
-    ['秘法', at(/^const ARCANE: Expansion/), at(/^const HERO_UNITS/)],
-    ['英雄', at(/^const HERO_UNITS/), at(/^export const FANTASY: Expansion/)],
-  ];
-  const out = new Map<string, string>();
-  for (const [name, a, b] of spans) {
-    for (let i = a; i < b; i++) {
-      const m = /^\s+id: '([a-z0-9-]+)',$/.exec(src[i] ?? '');
-      // 下一行必须是 name/cost/era，才认这是兵种定义（能力表里也有 id）
-      if (m && /^\s+(name|cost|era):/.test(src[i + 1] ?? '')) out.set(m[1]!, name);
-    }
-  }
-  return out;
-}
-
-interface Acc {
-  built: number;
-  seen: number;
-  dealt: number;
-  taken: number;
-  kills: number;
-}
-const EMPTY: Acc = { built: 0, seen: 0, dealt: 0, taken: 0, kills: 0 };
-
-function readBatches(files: string[]): Map<string, Acc> {
-  const m = new Map<string, Acc>();
-  for (const p of files) {
-    let j: { stats: { type: string; built?: number; seen?: number; dealt?: number; taken?: number; kills?: number }[] };
-    try {
-      j = JSON.parse(readFileSync(p, 'utf8'));
-    } catch {
-      continue; // 某批没跑过就跳过，下面按"样本 0"如实标注
-    }
-    for (const st of j.stats) {
-      const c = m.get(st.type) ?? { ...EMPTY };
-      c.built += st.built ?? 0;
-      c.seen += st.seen ?? 0;
-      c.dealt += st.dealt ?? 0;
-      c.taken += st.taken ?? 0;
-      c.kills += st.kills ?? 0;
-      m.set(st.type, c);
-    }
-  }
-  return m;
-}
-
-const G3 = readBatches(BATCH_ERA3);
-const G6 = readBatches(BATCH_ERA6);
-const GAMES_ERA3 = 200;
-const GAMES_ERA6 = 200;
+const OBS = observed();
+const GAMES_ERA3 = GAMES_PER_BATCH * 2;
+const GAMES_ERA6 = GAMES_PER_BATCH * 2;
 const GAMES = GAMES_ERA3 + GAMES_ERA6;
 
 type Unit = UnitTypeDef & { unlockCost?: number; summonedOnly?: boolean };
-
-/**
- * 旧尺子（`攻×√血×射程`）——**AI 采购默认用的就是这一把**，不是 `unit-value.ts`。
- *
- * 公式抄自 `ai.ts` 的 `oldPower` / `oldEfficiency`（那里没导出，只能复写一份）。
- * 抄它的理由：这张表要回答"为什么没人买"，而 AI 买不买看的是这一把尺子；
- * 表里只写新尺子，就会出现"性价比高却零出场"这种看着像 bug 的假象——
- * 其实是两把尺子不同源。改那把尺子时**这里要跟着改**，否则表会说谎。
- *
- * 它的三个特征决定了整张表的形状：
- *   · 只读 攻 / 魔攻 / 血 / 射程——**移速、视野、能力一概不算钱**；
- *   · 价格指数 0.8（新尺子是 0.55），贵一点就掉得更多；
- *   · 射程每格 +45%（封顶 4 格），所以远程兵天然占便宜。
- */
-const oldPower = (d: UnitTypeDef): number =>
-  (d.atk + (d.magicAtk ?? 0) * 1.2) *
-  Math.sqrt(d.maxHp) *
-  (1 + Math.min(4, Math.max(0, (d.range ?? 1) - 1)) * 0.45);
-const oldEfficiency = (d: UnitTypeDef, price: number): number =>
-  oldPower(d) / Math.max(20, price) ** 0.8;
 
 interface Row {
   d: Unit;
@@ -146,7 +70,7 @@ interface Row {
   ratio: number;
 }
 
-const packs = packMap();
+const PACKS = packMap();
 const rows = new Map<string, Row>();
 {
   const seen = new Set<string>();
@@ -156,22 +80,19 @@ const rows = new Map<string, Row>();
       seen.add(u.id);
       const d = s.unitTypes[u.id] as Unit | undefined;
       if (!d || d.category !== 'combat') continue;
-      const a3 = G3.get(d.id) ?? EMPTY;
-      const a6 = G6.get(d.id) ?? EMPTY;
-      const dealt = a3.dealt + a6.dealt;
-      const taken = a3.taken + a6.taken;
+      const o = OBS.get(d.id) ?? EMPTY_OBS;
       rows.set(d.id, {
         d,
-        pack: packs.get(d.id) ?? '召唤',
+        pack: PACKS.get(d.id) ?? '召唤',
         eff: unitEfficiency(d, d.cost),
         oldEff: oldEfficiency(d, d.cost),
         power: unitPower(d, NEUTRAL_CONTEXT),
-        b3: a3.built,
-        b6: a6.built,
-        built: a3.built + a6.built,
-        dealt,
-        taken,
-        ratio: taken > 0 ? dealt / taken : 0,
+        b3: o.b3,
+        b6: o.b6,
+        built: o.built,
+        dealt: o.dealt,
+        taken: o.taken,
+        ratio: o.ratio,
       });
     }
   }
