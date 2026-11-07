@@ -5896,6 +5896,66 @@ check('选卡：底部「我已选」区把每张卡的完整面板都摊开，�
   }
 });
 
+check('选卡：对面已经选中的兵，鼠标挪上去也要给完整面板', () => {
+  /*
+   * 选卡时最想研究的一件事就是"对面拿走了什么"——它是不是我打算禁的那张、
+   * 几甲几射程、带什么能力。以前槽位上只有一个名字，等于让人凭记忆打。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch({ ...DEFAULT_CONFIG, draftMode: true }, 4242, {});
+    let r = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(r.ok, r.ok ? '' : `进禁用失败：${r.reason}`);
+    st = r.state;
+
+    // 两边把禁用交完
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        const id = remainingUnits(st)[0]!;
+        st.current = side;
+        const rr = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (rr.ok) st = rr.state;
+      }
+    }
+    // 走四手：蛇形是 A,B,B,A，所以两边各有一张
+    for (let i = 0; i < 4; i += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const pickId = remainingUnits(st).find((id) => st.unitTypes[id]?.category === 'combat');
+      if (!pickId) break;
+      st.current = side;
+      const rr = applyAction(st, { type: 'DRAFT_PICK', unitId: pickId, at: Date.now() }, side);
+      if (!rr.ok) break;
+      st = rr.state;
+    }
+
+    host.innerHTML = draftScreenHtml(st, { seat: 'A', now: Date.now(), isAi: () => false });
+
+    const bSlot = host.querySelector<HTMLElement>('.draft-side.is-b .draft-slot.is-pick.is-filled');
+    assert.ok(bSlot, 'B 那边应该已经有一张选好的兵');
+    assert.ok(bSlot!.hasAttribute('data-hover-tip'), '已选槽位要能被悬停');
+    const tip = bSlot!.querySelector('.hover-tip');
+    assert.ok(tip, '槽位里要带完整详情');
+    const text = tip!.textContent ?? '';
+    for (const need of ['攻', '甲', '血', '射', '视']) {
+      assert.ok(text.includes(need), `对面那张的详情缺了「${need}」`);
+    }
+    // 详情里的数值要和这个兵对得上（不是拿池子里第一张糊弄）
+    const id = st.draft!.picks.B[0]!;
+    const def = st.unitTypes[id]!;
+    assert.ok(text.includes(def.name), '详情要是这一张');
+    assert.ok(text.includes(`血 ${def.maxHp}`), '血量要对得上');
+
+    // 自己那一侧同样有详情：没道理只有对面能看
+    const aSlot = host.querySelector<HTMLElement>('.draft-side.is-a .draft-slot.is-pick.is-filled');
+    assert.ok(aSlot?.querySelector('.hover-tip'), '自己已选的也要有详情');
+  } finally {
+    host.remove();
+  }
+});
+
 await checkAsync('选卡可以跳过：这一局用全部兵种，遮罩收起', async () => {
   openSetup();
   click('[data-draft-mode="on"]');

@@ -125,12 +125,29 @@ function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   </span>`;
 }
 
-/** 一个槽位：已经定了就显示名字，没定就显示虚线占位 */
-function slotChip(label: string, kind: 'ban' | 'pick', filled: string | null): string {
-  if (filled) {
-    return `<span class="draft-slot is-${kind} is-filled">${filled}</span>`;
-  }
-  return `<span class="draft-slot is-${kind}">${label}</span>`;
+/**
+ * 一个槽位：已经定了就显示名字，没定就显示虚线占位。
+ *
+ * 定下来的那一格**也带完整详情**（2026-11-07）。
+ *
+ * 原来这里只印一个名字。可是"对面拿走了什么"恰恰是选卡时最想研究的一件事：
+ * 要确认它是不是我打算禁的那张、要确认它几甲几射程、要确认它带着什么能力。
+ * 只给名字，等于让人凭记忆打——而池子有二十张卡，记忆是靠不住的。
+ * 既然池子里的卡都有详情，已经落到位置上的那一张没理由反而看不全。
+ *
+ * 注释里"点不动"这条对它不成立：这是**已经定了**的格子，本来就没有点击这回事，
+ * 所以 `unitTip` 的 blocked 一律传 false。
+ */
+function slotChip(
+  label: string,
+  kind: 'ban' | 'pick',
+  id: string | null,
+  s: GameState,
+): string {
+  if (!id) return `<span class="draft-slot is-${kind}">${label}</span>`;
+  const def = s.unitTypes[id];
+  if (!def) return `<span class="draft-slot is-${kind} is-filled">${id}</span>`;
+  return `<span class="draft-slot is-${kind} is-filled is-tippy" data-hover-tip>${def.name}${unitTip(def, false, '')}</span>`;
 }
 
 function sideBlock(
@@ -140,16 +157,17 @@ function sideBlock(
 ): string {
   const view = draftView(s)!;
   const mine = view[side === 'A' ? 'a' : 'b'];
-  const banned = mine.bans.map((id) => s.unitTypes[id]?.name ?? id);
-  const picked = mine.picks.map((id) => s.unitTypes[id]?.name ?? id);
+  // 传 id 而不是名字：槽位要自己查面板上的完整详情（见 slotChip）
+  const banned = mine.bans;
+  const picked = mine.picks;
 
   const banSlots: string[] = [];
   for (let i = 0; i < (s.draft?.banSlots ?? 0); i++) {
-    banSlots.push(slotChip('禁', 'ban', banned[i] ?? null));
+    banSlots.push(slotChip('禁', 'ban', banned[i] ?? null, s));
   }
   const pickSlots: string[] = [];
   for (let i = 0; i < (s.draft?.pickSlots ?? 0); i++) {
-    pickSlots.push(slotChip(String(i + 1), 'pick', picked[i] ?? null));
+    pickSlots.push(slotChip(String(i + 1), 'pick', picked[i] ?? null, s));
   }
 
   // 状态行：这一方现在在干什么。禁用期是"盲禁"，所以只报"交没交"，不报禁了什么。

@@ -4827,6 +4827,21 @@ a.btn {
   font-weight: 600;
 }
 
+/*
+ * 已经落到槽位上的那一格可以悬停看完整面板（对面拿了什么，是最想研究的）。
+ * 光靠"名字是个小圆角标签"看不出来它还能悬停，所以给个 help 光标 +
+ * 一条虚线底：一眼知道"这里能问"。
+ */
+.draft-slot.is-tippy {
+  cursor: help;
+  text-underline-offset: 3px;
+  text-decoration: underline dotted color-mix(in srgb, currentColor 35%, transparent);
+}
+.draft-slot.is-ban.is-tippy {
+  /* 禁用位本来就有删除线，再叠一条虚线下划线会糊成一团，只留光标 */
+  text-decoration: line-through;
+}
+
 .draft-log {
   list-style: none;
   margin: 0;
