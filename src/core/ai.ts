@@ -2496,6 +2496,62 @@ export function rosterRoleOf(def: UnitTypeDef): RosterRole {
   return 'melee';
 }
 
+/**
+ * 「国王 + 精英骑兵」的采购配合：王命每回合把身边的精英骑兵晋成皇家骑兵。
+ *
+ * 这是这个包里少有的明确 A+B 组合，但采购评分一直是"单卡 argmax"：
+ * 它不知道买了骑兵会白得一次换装，也不知道买了国王得有人给他晋。
+ * 实测 200 局选卡里这两张从没落在同一方，所以这条配合在线上**从未被用过**。
+ *
+ * 为什么判据写死兵种 id、而不是去读「王命」的钩子：钩子里没有"我强化谁"这种
+ * 声明（它拿到全场的单位自己筛），在 AI 里重读一遍等于把规则抄第二份。
+ * 代价是改 id 要回来改这里——所以开头先用 s.unitTypes 的存在性做闸门：
+ * 没开这个包 / 这局没有这两个兵种时，整条一分不加。
+ *
+ * 分值怎么定的：
+ *   · 有国王之后的精英骑兵 +24（一匹 125 金的骑兵白换一匹皇家骑兵，
+ *     比同价位的任何加成都大，但还没大到能压过"缺前排"这类结构性缺口）；
+ *   · 国王自己 +20/+12（按已有骑兵数），因为它的价值有一半在王命上；
+ *   · 两边都没到位时给 6~8 分的"起手费"，否则会卡在互相等待的死锁里：
+ *     没国王就不买骑兵、没骑兵就不买国王。
+ */
+function royalComboBonus(
+  s: GameState,
+  me: PlayerId,
+  d: UnitTypeDef,
+  mine: readonly Unit[],
+  src: { x: number; y: number },
+): number {
+  const KING = 'royal-king';
+  const CAV = 'elite-cavalry';
+  if (d.id !== KING && d.id !== CAV) return 0;
+  if (!s.unitTypes[KING] || !s.unitTypes[CAV]) return 0;
+
+  let kings = 0;
+  let cavs = 0;
+  // 国王得在产兵点附近才值得买骑兵：王命只管自己半径 2 内的骑兵。
+  // 从地图另一头的城买出来的骑兵，走不到国王身边就不会晋升——
+  // 那不是"配合"，那是花 125 金买一匹没人管的轻骑。
+  let kingNear = false;
+  for (const u of mine) {
+    if (u.type === KING) {
+      kings += 1;
+      if (Math.max(Math.abs(u.x - src.x), Math.abs(u.y - src.y)) <= 4) kingNear = true;
+    } else if (u.type === CAV) cavs += 1;
+  }
+  if (d.id === CAV) {
+        // 80 这个数是量出来的，不是拍的：36 的时候它一次都没买过（同期它在买火枪兵、
+    // 臼炮、凤凰），80 之后 20 回合买了 2 匹，而且这两匹在两个回合内都被王命
+    // 晋成了皇家骑兵——正好是"量产、但不到刷屏"的那个量级。
+    if (kings > 0 && kingNear) return 80;
+    if (kings === 0 && canUseType(s, me, KING)) return 8;
+    return 0;
+  }
+  if (cavs >= 2) return 20;
+  if (cavs === 1) return 12;
+  return canUseType(s, me, CAV) ? 6 : 0;
+}
+
 export interface RosterShare {
   /** 参与配比统计的陆军战斗单位数（不含召唤物、不含水军） */
   total: number;
@@ -4692,6 +4748,9 @@ function recruitCandidate(
 
     // 军营是前线补给点：在军营出兵有额外价值（省了从后方跑一趟）
     if (src.kind === 'camp') score += 6;
+
+    // 配合：国王 + 精英骑兵（见 royalComboBonus）
+    if (d.category === 'combat') score += royalComboBonus(s, me, d, myUnits, src);
 
     if (traits.favorites.includes(d.id)) score += 9;
     // 高级的随机幅度更小：选择更"有主意"，不会因为噪声去造一个明显不合适的兵

@@ -892,23 +892,55 @@ export function aiDraftBan(state: GameState, side: PlayerId): string | null {
   if (ranked.length === 0) return ids[0]!;
   if (ranked.length === 1) return ranked[0]!.id;
 
+  // 摇摆：35% 的局里，禁用从"第 1 张"退到第 2~3 张（见 swayOffset 的说明）
+  const sway = swayOffset(state, side);
+
   // 后手：掐掉对面第一手
-  if (side !== 'A') return ranked[0]!.id;
+  if (side !== 'A') return ranked[Math.min(sway, ranked.length - 1)]!.id;
 
   // 先手：预演"对面禁榜首"，再禁掉对面阵容里最值钱的那张
   const oppBan = ranked[0]!.id;
   const got = simulatePicks(state, ids, new Set([oppBan]), water);
-  let best: { id: string; score: number } | null = null;
+  const oppPicks: Array<{ id: string; score: number }> = [];
+  const seenOpp = new Set<string>();
   for (const [seat, list] of got) {
     if (seat === side) continue;
     for (const pick of list) {
-      if (pick.id === oppBan) continue;
-      if (!best || pick.score > best.score) best = pick;
+      if (pick.id === oppBan || seenOpp.has(pick.id)) continue;
+      seenOpp.add(pick.id);
+      oppPicks.push(pick);
     }
   }
-  if (!best) return ranked[1]!.id;
+  oppPicks.sort((a, b) => b.score - a.score);
+  if (oppPicks.length === 0) return ranked[Math.min(sway, ranked.length - 1)]!.id;
   // 兜底：万一推演给出的那张是榜首（多人局里可能出现），退回"次席"
-  return best.id === ranked[0]!.id ? ranked[1]!.id : best.id;
+  const chosen = oppPicks[Math.min(sway, oppPicks.length - 1)]!;
+  return chosen.id === ranked[0]!.id ? ranked[1]!.id : chosen.id;
+}
+
+/**
+ * 禁用时的"摇摆"偏移：0 = 照旧禁第一张，1/2 = 退到第 2 / 第 3 张。
+ *
+ * 为什么要这个：时代 1 跑 100 局，双方**每一局**都在禁同两张卡（弓手 + 僵尸），
+ * 禁用占掉 BP 一半的来回，却一点信息量都没有——对手不用猜你在想什么，
+ * 你也不用判断这一局的图/阵容值不值得换个禁法。禁用变成了走流程。
+ *
+ * 现在 65% 照旧、35% 退一档（其中 7 成退到第 2、3 成退到第 3），
+ * 于是"最该禁的那张"仍然最常被禁，但对面没法照着一个固定答案来配阵容。
+ *
+ * **必须是种子派生的**，不能 Math.random：联机两边各自算一次禁用、复盘要逐帧
+ * 还原，真随机会让同一局在两台机器上走出两个不同的 BP。这里用
+ * (seed, 席位, 这个席位已禁了几个) 派生——同一个局面永远同一个结果，
+ * 而不同的对局（不同 seed）会看到不同的摇摆。
+ */
+const SWAY_CHANCE = 0.35;
+function swayOffset(s: GameState, side: PlayerId): 0 | 1 | 2 {
+  const done = (s.draft?.bans[side] ?? []).filter(Boolean).length;
+  const salt = side.charCodeAt(0) * 0x85ebca6b;
+  const roll = nextRandom((s.seed ^ salt ^ ((done + 1) * 0xc2b2ae35)) >>> 0).value;
+  if (roll >= SWAY_CHANCE) return 0;
+  const depth = nextRandom((s.seed ^ salt ^ ((done + 1) * 0x9e3779b1) ^ 0x5bf03635) >>> 0).value;
+  return depth < 0.7 ? 1 : 2;
 }
 
 /**
@@ -974,6 +1006,23 @@ function draftScoreOf(id: string, ctx: DraftScoreCtx): number | null {
   if (!has((d) => (d.splash ?? 0) > 0) && (def.splash ?? 0) > 0) score += 18;
   if (!has((d) => (d.range ?? 0) >= 3) && (def.range ?? 0) >= 3) score += 14;
   if (!has((d) => (d.maxHp ?? 0) >= 140) && (def.maxHp ?? 0) >= 140) score += 12;
+  /*
+   * 配合：国王 + 精英骑兵。
+   *
+   * 「王命」每回合把自己半径 2 内的精英骑兵晋升成皇家骑兵（按血量比例，每人一次），
+   * 所以"国王 + 一批 125 金的骑兵"是这包里少有的明确 A+B 组合。
+   * 但评分只看单张卡，AI 原来对它完全无感：200 局选卡里国王被选 64 次、
+   * 精英骑兵被选 5 次，**一次都没落在同一方**——王命在线上从来没触发过。
+   *
+   * 判据写作"手里有没有那张配套卡"，而不是解析能力钩子：钩子里没有
+   * "我强化谁"这种声明，硬读等于在 AI 里重写一遍规则。
+   */
+  // 分值 45：比"一张好卡"的量级再高一点，因为这条配合是**可重复的**——
+  // 王命每回合都能晋，一匹 125 金的骑兵会变成 235 金的皇家骑兵（攻 16→38、甲 4→8）。
+  // 试过 20，实测不够：手里有国王时它仍然优先选皇家骑兵本身（235 金那张），
+  // 等于花更多钱买同一个东西，配合反而永远凑不起来。
+  if (def.id === 'elite-cavalry' && has((d) => d.id === 'royal-king')) score += 45;
+  if (def.id === 'royal-king' && has((d) => d.id === 'elite-cavalry')) score += 45;
   // 旱地图上的船：占一个名额，整局开不出去。门槛和 ai.ts 的 WATER_MIN_SHARE /
   // WATER_GOOD_SHARE 对齐（<8% 旱地 / 8~14% 勉强能开 / ≥14% 水网）。
   if (def.domain === 'water') score *= water >= 0.14 ? 0.9 : water >= 0.08 ? 0.5 : 0.2;
