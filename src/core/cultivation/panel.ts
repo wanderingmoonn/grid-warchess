@@ -2,8 +2,8 @@
 
 import type { GameState, Unit } from '../types.ts';
 import { skillsOf } from '../query.ts';
-import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp } from './progression.ts';
-import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType } from './identity.ts';
+import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
+import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -24,6 +24,13 @@ import {
 import { sweepReachForRank } from './skills/index.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from './abilities/spirit-aura.ts';
 import { bodyWardPct, BODY_WARD_LABEL } from './abilities/body-ward.ts';
+import {
+  bloodRiteRadiusForRank,
+  bloodRiteExpMul,
+  BLOOD_RITE_RADIUS_STEP,
+  BLOOD_RITE_ALLY_EXP_MUL,
+  BLOOD_RITE_LIFESPAN_COST,
+} from './skills/index.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
 export function getCultivationPanelLines(state: GameState, unit: Unit): string[] {
@@ -64,6 +71,19 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
     );
   }
 
+  if (isBloodCultivatorType(unit.type)) {
+    const r = getRank(unit);
+    lines.push(
+      `血祭：半径 ${bloodRiteRadiusForRank(r)} 格（每 ${BLOOD_RITE_RADIUS_STEP} 级 +1），` +
+        `每点伤害折 ${Math.round(bloodRiteExpMul(r) * 100)}% 修为（境界越高越低），` +
+        `友军伤害只算 ${Math.round(BLOOD_RITE_ALLY_EXP_MUL * 100)}%`,
+    );
+    lines.push(
+      `血祭代价：每次 −${BLOOD_RITE_LIFESPAN_COST} 年寿元；` +
+        `打坐每回合只 +${EXP_GROWTH_BLOOD} 点，且不吃击杀历练`,
+    );
+  }
+
 	const hasSwordSweep = skillsOf(state, unit).some((sk) => sk.id === 'sword-sweep');
 	if (hasSwordSweep) {
 	const reach = sweepReachForRank(getRank(unit));
@@ -84,8 +104,7 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	if (trueDmg > 0) lines.push(`真元：每次攻击附带 ${trueDmg} 点无视护甲的真实伤害`);
 	}
 
-  const auraBonus = spiritAuraBonusOf(state, unit);
-	if (auraBonus > 0) {
+  const auraBonus = spiritAuraBonusOf(state, unit);	if (auraBonus > 0) {
 		lines.push(`${SPIRIT_AURA_LABEL}：每轮 +${auraBonus} 修为经验`);
 	}
 

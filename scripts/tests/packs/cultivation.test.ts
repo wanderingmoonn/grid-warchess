@@ -29,7 +29,14 @@ import {
   trueDamageOf,
 } from '../../../src/core/cultivation/stats.ts';
 import { bodyWardPct, BODY_WARD_TIERS } from '../../../src/core/cultivation/abilities/body-ward.ts';
-import { baseLifespanOf, getExpGrowth } from '../../../src/core/cultivation/progression.ts';
+import { baseLifespanOf, getExpGrowth, getLifespan } from '../../../src/core/cultivation/progression.ts';
+import { EXP_GROWTH_BLOOD } from '../../../src/core/cultivation/progression.ts';
+import {
+  bloodRiteRadiusForRank,
+  bloodRiteExpMul,
+  BLOOD_RITE_ALLY_EXP_MUL,
+  BLOOD_RITE_LIFESPAN_COST,
+} from '../../../src/core/cultivation/skills/blood-rite.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
@@ -1347,6 +1354,118 @@ export function run() {
     const bodyAtk = effectiveStats(s, body).atk - s.unitTypes['body-cultivator'].atk;
     const qiAtk = effectiveStats(s, qi).atk - s.unitTypes['qi-cultivator'].atk;
     assert.ok(bodyAtk >= qiAtk, `体修境界攻击(${bodyAtk})不该低于炼气士(${qiAtk})`);
+  });
+
+  // ── 魔修（2026-11-07）──────────────────────────────────
+  /** 摆一个只有魔修的小场景：清空编制，方便数伤害 */
+  const mageScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const mage = place2(s, 'A', 'blood-cultivator', 5, 5);
+    return { s, mage };
+  };
+  const castRite = (s: GameState, mage: any) =>
+    applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'blood-rite' });
+
+  test('魔修：时代 3、带血祭、打坐只有 1 点', () => {
+    const { s, mage } = mageScene();
+    assert.equal(s.unitTypes['blood-cultivator'].era, 3, '魔修是时代 3');
+    assert.ok(
+      CULTIVATION_PACK.units.some((u) => u.id === UNIT_IDS.BLOOD_CULTIVATOR),
+      '包里要登记魔修',
+    );
+    assert.ok(
+      (s.unitTypes['blood-cultivator'].skills ?? []).some((k) => k.id === 'blood-rite'),
+      '魔修要自带血祭',
+    );
+    assert.equal(EXP_GROWTH_BLOOD, 1);
+    assert.equal(getExpGrowth(mage), EXP_GROWTH_BLOOD, '魔修打坐固定 1 点');
+  });
+
+  test('血祭：一圈之内不分敌我，友军被抽到 1 血为止', () => {
+    const { s, mage } = mageScene();
+    const foe = place2(s, 'B', 'militia', 6, 5);
+    const ally = place2(s, 'A', 'militia', 4, 5);
+    ally.hp = 3;
+    const outside = place2(s, 'B', 'militia', 8, 5);
+
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.ok(at(foe.id).hp < foe.hp, '敌人要掉血');
+    assert.equal(at(ally.id).hp, 1, '友军最低留 1 血——否则自残就能刷击杀奖励');
+    assert.equal(at(outside.id).hp, outside.hp, '半径外不动');
+  });
+
+  test('血祭：修为按伤害折算，而且绕过每回合击杀上限', () => {
+    const { s, mage } = mageScene();
+    const foes = [
+      place2(s, 'B', 'militia', 6, 5),
+      place2(s, 'B', 'militia', 4, 5),
+      place2(s, 'B', 'militia', 5, 4),
+    ];
+    const per = computeDamage(s, mage, foes[0]);
+
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const exp = getExp(r.state.units.find((u) => u.id === mage.id)!);
+
+    assert.equal(exp, Math.floor(per * 3 * bloodRiteExpMul(0)), '伤害 × 折算率');
+    assert.ok(exp > killExpCapOfRank(0), `血祭(${exp}) 要能超过击杀上限(${killExpCapOfRank(0)})`);
+  });
+
+  test('血祭：友军那部分只折四分之一修为', () => {
+    const runWith = (owner: 'A' | 'B') => {
+      const { s, mage } = mageScene();
+      place2(s, owner, 'militia', 6, 5);
+      const r = castRite(s, mage);
+      assert.ok(r.ok, r.ok ? '' : r.reason);
+      return getExp(r.state.units.find((u) => u.id === mage.id)!);
+    };
+    const foeExp = runWith('B');
+    const allyExp = runWith('A');
+    assert.ok(foeExp > 0);
+    assert.equal(allyExp, Math.floor(foeExp * BLOOD_RITE_ALLY_EXP_MUL), '友军伤害只算 25%');
+  });
+
+  test('血祭：每次扣 1 年寿元', () => {
+    const { s, mage } = mageScene();
+    place2(s, 'A', 'militia', 6, 5); // 只打友军，经验不足以升级
+    const before = getLifespan(mage);
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === mage.id)!;
+    assert.equal(getLifespan(after), before - BLOOD_RITE_LIFESPAN_COST, '寿元 −1');
+  });
+
+  test('血祭：半径随境界成长，折算率随境界下降', () => {
+    assert.equal(bloodRiteRadiusForRank(0), 1);
+    assert.equal(bloodRiteRadiusForRank(3), 2);
+    assert.equal(bloodRiteRadiusForRank(6), 3);
+    assert.equal(bloodRiteRadiusForRank(9), 4);
+
+    assert.equal(bloodRiteExpMul(0), 1);
+    assert.ok(bloodRiteExpMul(3) < bloodRiteExpMul(0), '境界越高越不值钱');
+    assert.ok(bloodRiteExpMul(9) < bloodRiteExpMul(3));
+  });
+
+  test('魔修：不吃击杀历练（血祭已经是绕过上限的那条路）', () => {
+    const { s, mage } = mageScene();
+    setCultivationExp(mage, expForRank(2)); // 3 级
+    const foe = place2(s, 'B', 'halberdier', 6, 5);
+
+    const before = getExp(mage);
+    CULTIVATION_HOOKS.onUnitKilled({ state: s, victim: foe, killer: mage, killerOwner: 'A' });
+    assert.equal(getExp(mage), before, '魔修不该从击杀里拿修为');
+
+    // 对照：炼气士照常吃
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    setCultivationExp(qi, expForRank(2));
+    const beforeQi = getExp(qi);
+    CULTIVATION_HOOKS.onUnitKilled({ state: s, victim: foe, killer: qi, killerOwner: 'A' });
+    assert.ok(getExp(qi) > beforeQi, '其他修士仍然吃击杀历练');
   });
 }
 

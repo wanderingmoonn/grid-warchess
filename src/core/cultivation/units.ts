@@ -3,7 +3,7 @@
 import type { UnitTypeDef } from '../types.ts';
 // 技能的 SkillDef 和数值常量都在 skills/ 下：一个技能一个文件。
 // 这里只负责把它们挂到兵种身上，不重复定义。
-import { SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
+import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { GOLD } from '../resources.ts';
@@ -87,6 +87,36 @@ export const BODY_CULTIVATOR: UnitTypeDef = {
   range: 1,
   vision: 3,
   abilities: ['qi-true-damage', 'body-ward'],
+};
+
+/**
+ * 魔修（时代 3）：靠血祭炼化生灵的一支。
+ *
+ * 它**不走常规修炼路**：打坐只有 1 点（见 progression.ts 的 getExpGrowth），
+ * 击杀历练也被关掉（hooks.ts 的 onUnitKilled），全部修为来自「血祭」——
+ * 那条路的经验绕过了每回合击杀上限，所以不能再叠一份击杀经验。
+ *
+ * 代价是实打实的：打坐几乎不涨，血祭每次减 1 年寿元，而且折算率随境界下降
+ * （= 越练越亏）。所以它是一支"快到中期很猛、后期必须靠战功续命"的兵。
+ *
+ * 时代 3 的定位：它是四条流派里唯一有主动 AOE 的一支，攻击基础值最低（6），
+ * 换来的是"每一拳都打一圈"——强度主要体现在清场，不是单挑。
+ */
+export const BLOOD_CULTIVATOR: UnitTypeDef = {
+  id: UNIT_IDS.BLOOD_CULTIVATOR,
+  name: '魔修',
+  short: '魔',
+  era: 3,
+  category: 'combat',
+  cost: 300,
+  move: 2,
+  atk: 6,
+  armor: 1,
+  maxHp: 22,
+  range: 1,
+  vision: 3,
+  abilities: ['qi-true-damage'],
+  skills: [BLOOD_RITE_SKILL],
 };
 
 export const SERVANT: UnitTypeDef = {

@@ -1,6 +1,6 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import type { GameState, Unit } from '../types.ts';
-import { isCultivatorUnit, isSwordCultivatorType, UNIT_IDS } from './identity.ts';
+import { isCultivatorUnit, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
 import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
 import { 
   atkModifier, 
@@ -55,6 +55,9 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	onUnitKilled: (c) => {
 		const killer = c.killer;
 		if (!killer || !isCultivatorUnit(c.state, killer)) return;
+		// 魔修不吃击杀历练：它的修为全部来自「血祭」，那条路已经绕过了每回合上限。
+		// 再叠一份击杀经验就是双通道，升级节奏会直接翻倍（见 skills/blood-rite.ts）。
+		if (isBloodCultivatorType(killer.type)) return;
 
 		// 目标基础攻击力：不看造价、不看等级（召唤物没造价，英雄没等级）
 		const victimAtk = c.state.unitTypes[c.victim.type]?.atk ?? 0;

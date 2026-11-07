@@ -12,6 +12,7 @@ export const UNIT_IDS = {
   QI_CULTIVATOR: 'qi-cultivator',
   SWORD_CULTIVATOR: 'sword-cultivator',
   BODY_CULTIVATOR: 'body-cultivator',
+  BLOOD_CULTIVATOR: 'blood-cultivator',
   SPIRIT: 'cultivator-spirit',
   SERVANT: 'cultivation-servant',
   DEACON: 'cultivation-deacon',
@@ -41,6 +42,7 @@ const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
   UNIT_IDS.BODY_CULTIVATOR,
+  UNIT_IDS.BLOOD_CULTIVATOR,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
@@ -72,6 +74,17 @@ export function isSwordCultivatorType(type: string): boolean {
  */
 export function isBodyCultivatorType(type: string): boolean {
   return type === UNIT_IDS.BODY_CULTIVATOR;
+}
+
+/**
+ * 是不是魔修。
+ *
+ * 魔修不吃"打坐"和"击杀历练"两条常规路（见 progression.ts 的 getExpGrowth
+ * 与 hooks.ts 的 onUnitKilled），全部修为来自「血祭」——那条路的经验绕过了
+ * 每回合击杀上限，所以它不能同时再吃一份击杀经验，否则节奏直接翻倍。
+ */
+export function isBloodCultivatorType(type: string): boolean {
+  return type === UNIT_IDS.BLOOD_CULTIVATOR;
 }
 
 export function isSpirit(u: Unit): boolean {
