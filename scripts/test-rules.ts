@@ -105,6 +105,7 @@ import {
   draftBanMsOf,
   draftBudget,
   draftCandidates,
+  draftAlwaysAllowed,
   draftMsOf,
   draftPickOrder,
   draftPickMsOf,
@@ -287,6 +288,7 @@ import {
   snapshotSignature,
 } from '../src/core/snapshot.ts';
 import { GOLD } from '../src/core/resources.ts';
+import { isEcoBuilding } from '../src/core/city-works.ts';
 import { lineBetween } from '../src/core/grid-line.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
@@ -16361,6 +16363,47 @@ test('固定地图：贴边城遇上 3×3 城郭，城被夹回棋盘内而不�
   for (const c of s.cities) {
     assert.equal(c.size, 3, '这一局的城是 3×3');
     assert.ok(c.x >= 0 && c.y >= 0 && c.x + c.size <= s.w && c.y + c.size <= s.h, `城 ${c.id} 伸到棋盘外了：${c.x},${c.y}`);
+  }
+});
+
+test('选卡：经济建筑不进卡池，改成"不选自带"（军营/桥那一路）', () => {
+  /*
+   * 2026-11-07：经济建筑（磨坊/水车/工厂/粮仓/采石场/砖窑/工业园…）从卡池里挪出来。
+   *
+   * 理由和军营、桥是同一类：**"这一局能不能盖磨坊"不该是选卡做的决定**。
+   * 它不参与战斗，选到它等于白占一格签位；漏选它就等于这一局少了一整套经济
+   * 玩法——那不是策略深度，是把玩法随机没收掉。
+   *
+   * 这条同时钉住"精确性"：挪走的只有经济建筑，**防御工事还在池子里**
+   * （箭塔/要塞/碉堡是正经的战术选择，不该一起消失）。
+   */
+  // 开一局带选卡的：这样 canUseType 才真的在按"选没选到"判，而不是走跳过分支
+  const s = fresh({ startEra: 6, expansionIds: FANTASY, draftMode: true }, 419);
+  assert.ok(s.draft, '这一局应该有选卡');
+  const pool = new Set(draftCandidates(s));
+
+  const eco = Object.values(s.unitTypes).filter((d) => isEcoBuilding(d));
+  // 只开了奇想包，所以这里的经济建筑是本体+奇想那一批；数量少不影响判据的有效性，
+  // 但要确认这一批里确实有那几个老面孔（否则这条测试是空转的）
+  assert.ok(eco.length >= 4, `应该有不少经济建筑，实际 ${eco.length}`);
+  const ecoIds = new Set(eco.map((d) => d.id));
+  for (const id of ['mill', 'watermill', 'factory']) {
+    assert.ok(ecoIds.has(id), `经济建筑里应该有 ${id}`);
+  }
+  for (const d of eco) {
+    assert.ok(!pool.has(d.id), `${d.name}（经济建筑）不该在卡池里`);
+    assert.ok(!s.draft!.pool.includes(d.id), `${d.name} 也不该被抽样抽进池子`);
+    assert.equal(draftAlwaysAllowed(d), true, `${d.name} 应该是不选自带`);
+    // 一格签都没选，它也该是能用的——这正是"不选自带"的意思
+    assert.equal(canUseType(s, 'A', d.id), true, `${d.name} 不选也该能用`);
+  }
+
+  // 防御工事仍然要选：它们是对局里的战术选择，不是"玩法开关"
+  for (const id of ['tower', 'keep', 'fortress', 'bunker']) {
+    const def = s.unitTypes[id];
+    if (!def) continue;
+    assert.equal(isEcoBuilding(def), false, `${def.name} 不是经济建筑`);
+    assert.ok(pool.has(id), `${def.name}（防御工事）应该还在卡池里`);
   }
 });
 

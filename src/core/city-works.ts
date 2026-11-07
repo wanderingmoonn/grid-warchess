@@ -82,8 +82,14 @@ const EARLY_ECO_RES_SHARE = 0.6;
  */
 const ECO_HP = 1.1;
 
-/** 经济建筑（产金币或产粮材的那种）——它们的"反击"最该被削 */
-function isEcoBuilding(def: UnitTypeDef): boolean {
+/**
+ * 经济建筑（产金币或产粮材的那种）——它们的"反击"最该被削。
+ *
+ * 导出是因为**选卡也要用它**：这类建筑不进卡池（见 `draftAlwaysAllowed`）。
+ * 两处必须共用同一个判据——"哪些算经济建筑"分成两份写，迟早会出现
+ * "选卡里还躺着一个磨坊"这种事。
+ */
+export function isEcoBuilding(def: UnitTypeDef): boolean {
   // 注意 yield：粮仓与采石场的产出不写成 income，只写 yield。
   // 早先漏了这一条，"经济建筑"的整套待遇（不还手、造价减免、削耐久）
   // 全都没落到这两个建筑身上——而它们恰恰是隘口堵路的主角。

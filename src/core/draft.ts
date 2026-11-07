@@ -32,6 +32,7 @@
  */
 
 import { isProducer } from './produce.ts';
+import { isEcoBuilding } from './city-works.ts';
 import { isPseudoUnit } from './config.ts';
 import { unitSourceIdOf } from './expansions.ts';
 import { nextRandom } from './rng.ts';
@@ -197,6 +198,18 @@ export function draftBudget(state: GameState): DraftBudget {
  */
 export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
   if (def.category === 'economy' || def.category === 'builder') return true;
+  /*
+   * 经济建筑（磨坊/水车/工厂/粮仓/采石场/砖窑/工业园…）不进卡池。
+   *
+   * 2026-11-07 挪出来的。理由和军营、桥是同一类，只是之前漏了：
+   * **"这一局能不能盖磨坊"不该是选卡做的决定**。它不参与战斗，选到它
+   * 等于白占一格签位；而漏选它就等于这一局少了一整套经济玩法，
+   * 那不是策略深度，是把玩法随机没收掉。
+   *
+   * 判据用 `isEcoBuilding`（产出写成 income / incomeByTerrain / yield），
+   * 和"经济建筑不还手、造价减免、耐久打折"是同一份——不另写一份。
+   */
+  if (isEcoBuilding(def)) return true;
   // 军营＝生产性建筑；桥是地形设施，选卡不该决定"这条河过不过得去"
   return def.category === 'building' && (isProducer(def) === true || def.bridges === true);
 }
@@ -214,8 +227,9 @@ export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
  * 那几句话比不写更糟——它把"没选到"说成了"再等等就有"。
  *
  * 两条例外照旧：
- *   · 经济单位 / 建造单位 / 生产性建筑 / 桥**本来就不用选**（`draftAlwaysAllowed`），
- *     升级解锁它们是真事，必须留着（伐木工、民夫、石桥都在这一档）；
+ *   · 经济单位 / 建造单位 / 生产性建筑 / 桥 / **经济建筑**本来就不用选
+ *     （`draftAlwaysAllowed`），升级解锁它们是真事，必须留着
+ *     （伐木工、民夫、石桥、磨坊、工厂都在这一档）；
  *   · 召唤物不算解锁——它们只能被召唤者带出来，谁也"解锁"不了。
  */
 export function upgradeUnlocks(state: GameState, side: PlayerId, era: number): UnitTypeDef[] {
