@@ -19,6 +19,7 @@ import { SPIRIT_STONE } from './resources.ts';
 import { MINE_MOUNTAIN_STONE_BONUS } from './units.ts';
 import { anomalyCellsFor, clearAnomaliesOfOthers } from './abilities/anomaly.ts';
 import { bestAdjacentCultivatorRank } from './abilities/formation-guard.ts';
+import { guardianFor } from './abilities/formation-guardian.ts';
 import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from './abilities/formation-seal.ts';
 // query.ts 只 import type，不会和 rules.ts 形成环。
 import { distBetweenUnits, idx, inBounds } from '../query.ts';
@@ -98,6 +99,11 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// anomalyCellsFor 第一行就是 `s.current !== player` 早退。
 	// 放进 visibleTilesOf 意味着 AI 也认：对面能据此派兵来劫杀。
 	extraVision: ({ state, player }) => anomalyCellsFor(state, player),
+	// ── 守御阵：把这一下伤害接到阵身上 ──────────────
+	// 只换"谁掉血"，不换"谁被命中"：命中状态、击退、反击全部留在原目标身上。
+	// 规则层的 hurtUnit 保证只问一次、接替者活着且在册、不会转给自己。
+	// 中毒/灼烧/自损不走这条路径（它们本来就不经过 hurtUnit）。
+	redirectDamage: ({ state, victim }) => guardianFor(state, victim),
 	// 视野修正
 	modifyVision: ({ state, unit, base }) => {
 		if (!unit || !isCultivatorUnit(state, unit)) return base;

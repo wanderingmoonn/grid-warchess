@@ -76,6 +76,12 @@ import {
   killAuraBonusOf,
 } from '../src/core/cultivation/abilities/formation-kill.ts';
 import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from '../src/core/cultivation/abilities/formation-seal.ts';
+import {
+  GUARDIAN_RADIUS,
+  GUARDIAN_HEAL_PER_HP,
+  GUARDIAN_DRAIN_CAP_PER_RANK,
+} from '../src/core/cultivation/abilities/formation-guardian.ts';
+import { GUARD_FORMATION } from '../src/core/cultivation/units.ts';
 import { TELEPORT_COST, TELEPORT_RADIUS } from '../src/core/cultivation/skills/teleport-swap.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
@@ -2622,8 +2628,8 @@ function cultivationRules(): string {
       </ul>
 
       <h3>阵法</h3>
-      <p>阵法是<b>建筑</b>：不能移动、会被摧毁、会挡路。它们的价值全在光环上，所以攻击力一律为 0，
-        靠身边的单位打出伤害。建造阵法要专门的阵师，阵师自己也要耗灵石。</p>
+      <p>阵法是<b>建筑</b>：不能移动、会被摧毁、会挡路。攻击力一律为 0，靠光环改数值、
+        或者干脆替友军挨打来发挥作用。建造阵法要专门的阵师，阵师自己也要耗灵石。</p>
       <ul>
         <li><b>杀伐阵</b>：半径 ${KILL_AURA_RADIUS} 内友军攻击 <b>×${(1 + KILL_AURA_BASE_PCT).toFixed(1)}</b>。
           身边站着修士时，半径扩到 <b>${KILL_AURA_RADIUS_EMPOWERED}</b>，加成变成
@@ -2637,9 +2643,23 @@ function cultivationRules(): string {
           与落点周围 ${TELEPORT_RADIUS} 格内的单位<b>整体对调</b>，耗 ${TELEPORT_COST} 灵石，每回合一次。
           占地超过一格的大单位不参与；地形站不住、落点被占满时整次作废——
           <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。</li>
+        <li><b>守御阵</b>（${GUARD_FORMATION.maxHp} 血 / ${GUARD_FORMATION.armor} 护甲）：
+          半径 <b>${GUARDIAN_RADIUS}</b> 内的友军——<b>包括友军建筑</b>——受到伤害时，
+          这一下改由守御阵承受。<b>只转伤害，不转移「被命中」这件事</b>：原目标一滴血不掉，
+          所以照常反击，中毒、减速、击退也仍然结算在他身上；中毒/灼烧这种"状态自己扣的血"、
+          单位自身损耗、以及对城池的攻城伤害都不转。有多座阵时取<b>最近</b>的一座，
+          且一次伤害<b>只转移一次</b>，不会在两座阵之间踢皮球。
+          阵被摧毁后，伤害就落回原目标自己身上。</li>
+        <li><b>守御阵的续航</b>：阵每掉一次血，立刻从<b>相邻的自家修士</b>中境界最高的那位抽血补自己——
+          每 <b>1 点修士生命</b>换 <b>${GUARDIAN_HEAL_PER_HP} × 境界</b> 点阵血；
+          每回合最多抽 <b>境界 × ${GUARDIAN_DRAIN_CAP_PER_RANK}</b> 点修士生命（0 级修士没有额度），
+          修士<b>至少留 1 点血，不会被吸死</b>。
+          举例：3 级修士守阵、阵挨 20 点，本回合最多抽 3 点、只回 9 点——<b>补不满，会持续磨损</b>，
+          所以得轮换守阵的人。没有「弃守」按钮，<b>把修士挪走，阵立刻断粮</b>。</li>
       </ul>
-      <p class="era-meta">注：多个阵法重叠不叠乘，取最强的一条；「守阵者」取相邻修士里<b>境界最高</b>的那个，
-        不是按人数算——一堆 0 级修士围上来不该比一个大修士更强。
+      <p class="era-meta">注：多个光环阵法重叠不叠乘，取最强的一条；「守阵者」取相邻的<b>自家</b>修士里
+        <b>境界最高</b>的那个（同境界取血量最多的），不是按人数算——一堆 0 级修士围上来不该比一个大修士更强，
+        敌方修士路过也不算替你守阵。
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 

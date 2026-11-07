@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -936,6 +936,203 @@ export function run() {
     const at = (id: string) => r.state.units.find((u) => u.id === id)!;
     assert.deepEqual([at(arr.id).x, at(arr.id).y], [5, 5], '过载时谁都不该动');
     assert.deepEqual([at(big.id).x, at(big.id).y], [9, 5], '大单位原地不动');
+  });
+
+  // ── 守御阵（第三期）──────────────────────────────────
+  //
+  // 核心是"只转伤害、不转命中"：原目标不掉血，但反击、状态、击退全留在他身上。
+  // 下面的用例按这个分界线一条条验，顺带把"阵靠修士的血硬撑"的三个数钉住。
+
+  /** 摆一个最标准的场面：A 的守御阵护着 A 的兵，B 的兵贴脸打 */
+  const guardScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const mate = place2(s, 'A', 'militia', 6, 5);
+    const foe = place2(s, 'B', 'militia', 6, 6);
+    s.current = 'B';
+    return { s, arr, mate, foe };
+  };
+
+  test('守御阵：伤害转到阵上，原目标不掉血也照常反击', () => {
+    const { s, arr, mate, foe } = guardScene();
+    const dmg = computeDamage(s, foe, mate);
+    const before = { arr: arr.hp, mate: mate.hp, foe: foe.hp };
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: foe.id, targetId: mate.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    assert.equal(at(arr.id).hp, before.arr - dmg, '阵替友军吃了这一下');
+    assert.equal(at(mate.id).hp, before.mate, '原目标一滴血没掉');
+    assert.ok(at(foe.id).hp < before.foe, '原目标血没掉 → 照常反击（反击是保留的）');
+    assert.ok(
+      r.state.log.some((l) => l.text.includes('承受了')),
+      '战报要写明"谁替谁承受"，否则两边都以为显示坏了',
+    );
+  });
+
+  test('守御阵：友军建筑受击也转；半径外的友军不转', () => {
+    const { s } = guardScene();
+    s.units = [];
+    const arr2 = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const building = place2(s, 'A', UNIT_IDS.KILL_FORMATION, 6, 5); // 也是建筑
+    const far = place2(s, 'A', 'militia', 9, 5);                      // 距离 4，半径外
+    const foe = place2(s, 'B', 'militia', 6, 6);
+    const enemy2 = place2(s, 'B', 'militia', 9, 6);
+    s.current = 'B';
+
+    const d1 = computeDamage(s, foe, building);
+    const r1 = applyAction(s, { type: 'ATTACK', unitId: foe.id, targetId: building.id });
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    const at1 = (id: string) => r1.state.units.find((u) => u.id === id)!;
+    assert.equal(at1(building.id).hp, s.unitTypes[UNIT_IDS.KILL_FORMATION].maxHp, '友军建筑也不掉血');
+    assert.equal(at1(arr2.id).hp, arr2.hp - d1, '这一下由守御阵接走');
+
+    const d2 = computeDamage(r1.state, enemy2, far);
+    const r2 = applyAction(r1.state, { type: 'ATTACK', unitId: enemy2.id, targetId: far.id });
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    assert.equal(
+      r2.state.units.find((u) => u.id === far.id)!.hp,
+      far.hp - d2,
+      '半径外只能自己挨',
+    );
+  });
+
+  test('守御阵：中毒/灼烧这类状态伤害不转，血仍从原目标身上掉', () => {
+    const { s, arr, mate } = guardScene();
+    const before = { arr: arr.hp, mate: mate.hp };
+    const dmg = Math.ceil(maxHpOf(s, mate) * 0.06);
+    STATUS_REGISTRY.poison.onTurnStart(s, mate, 1);
+    assert.equal(mate.hp, before.mate - dmg, '中毒扣的是中毒者自己的血');
+    assert.equal(arr.hp, before.arr, '阵不该替全军吃状态');
+  });
+
+  test('守御阵：自己挨打就吸守阵修士的血，每回合额度=境界', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 6); // 相邻守阵
+    setCultivationExp(qi, expForRank(2));
+    assert.equal(cultivationRank(qi), 3, '前置：3 级修士');
+    const qiHp = qi.hp;
+
+    // 挨 20 点：缺口 20，需要 ceil(20/3)=7 点修士血，但本回合额度只有 3
+    abilityApi.hurt(s, arr, 20);
+    assert.equal(qi.hp, qiHp - 3, '修士掉 3 点（额度）');
+    assert.equal(arr.hp, 80 - 20 + 9, '阵回 3 × 3 = 9 点，补不满 → 持续磨损');
+    assert.equal(arr.custom.guardDrainUsed, 3, '额度记在阵身上，随存档走');
+    assert.ok(s.log.some((l) => l.text.includes('吸取')), '要写明是谁的血被抽了');
+
+    // 同一回合再挨一下：额度已空，不再吸
+    abilityApi.hurt(s, arr, 10);
+    assert.equal(arr.hp, 69 - 10, '额度用光就只是一座普通建筑');
+    assert.equal(qi.hp, qiHp - 3, '修士不再掉血');
+
+    // 跨回合额度刷新
+    s.turn += 1;
+    abilityApi.hurt(s, arr, 10);
+    assert.ok(qi.hp < qiHp - 3, '新一回合重新有额度');
+  });
+
+  test('守御阵：不会把修士吸死，0 级修士当不了血包', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 6);
+    assert.equal(cultivationRank(qi), 0);
+
+    abilityApi.hurt(s, arr, 20);
+    assert.equal(qi.hp, s.unitTypes['qi-cultivator'].maxHp, '0 级修士一滴血都不掉');
+    assert.equal(arr.hp, 60, '没有血包，阵就是普通地挨打');
+
+    setCultivationExp(qi, expForRank(2)); // 升到 3 级
+    qi.hp = 2;
+    abilityApi.hurt(s, arr, 20);
+    assert.equal(qi.hp, 1, '只剩 2 血时最多抽 1 点，永远留 1');
+    assert.equal(arr.hp, 60 - 20 + 3, '上一发剩 60，再挨 20 → 40，抽 1 点换 3 点');
+  });
+
+  test('守御阵：多座取最近且只问一次；阵倒下后不再转移', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const near = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5); // 距离 1
+    const far = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 7, 5);  // 距离 1（同距，按 id 定）
+    const mate = place2(s, 'A', 'militia', 6, 5);
+    const foe = place2(s, 'B', 'militia', 6, 6);
+    s.current = 'B';
+    const dmg = computeDamage(s, foe, mate);
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: foe.id, targetId: mate.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    const taker = near.id < far.id ? near : far;
+    const other = near.id < far.id ? far : near;
+    assert.equal(at(taker.id).hp, taker.hp - dmg, '同距按 id 字典序，联机才不会算出两种结果');
+    assert.equal(at(other.id).hp, other.hp, '只问一次：接替者不会再被转一次');
+    assert.equal(at(mate.id).hp, mate.hp, '原目标照样不掉血');
+
+    // 阵倒下：不能继续替人挡刀。直接走伤害出口，避开"同一攻击者本回合已打过"
+    // 这种和本用例无关的干扰。
+    at(taker.id).hp = 0;
+    at(other.id).hp = 0;
+    const beforeMate = at(mate.id).hp;
+    abilityApi.hurt(r.state, at(mate.id), 7);
+    assert.equal(at(mate.id).hp, beforeMate - 7, '两座阵都没了，伤害落回原目标');
+    assert.equal(at(taker.id).hp, 0, '倒下的阵不会被拉起来当血包');
+  });
+
+  test('守御阵：剑气纵横这类扩展技能直伤也走同一个出口', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const mate = place2(s, 'A', 'militia', 6, 5);
+    const sword = place2(s, 'B', 'sword-cultivator', 6, 4);
+    s.current = 'B';
+    const before = { arr: arr.hp, mate: mate.hp };
+
+    // 从 (6,4) 往下挥：剑气扫过 (6,5) 的友军
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: sword.id,
+      skillId: 'sword-sweep',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    assert.equal(at(mate.id).hp, before.mate, '剑气也不能绕过守御阵');
+    assert.ok(at(arr.id).hp < before.arr, '这一道被阵接下了');
+  });
+
+  test('守御阵：敌方修士站旁边不算守阵，更不会被抽血', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const enemyQi = place2(s, 'B', 'qi-cultivator', 5, 6);
+    setCultivationExp(enemyQi, expForRank(2));
+    assert.equal(cultivationRank(enemyQi), 3);
+    const hp = enemyQi.hp;
+
+    abilityApi.hurt(s, arr, 20);
+    assert.equal(enemyQi.hp, hp, '敌人的血一滴都不能动');
+    assert.equal(arr.hp, 60, '没自家修士守阵，就是普通地挨打');
+  });
+
+  test('守御阵：阵法与兵种都登记进包里，阵师白名单含守御阵', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes[UNIT_IDS.GUARD_FORMATION];
+    assert.ok(def, '兵种要在包里登记，否则根本造不出来');
+    assert.equal(def.maxHp, 80);
+    assert.equal(def.armor, 6);
+    assert.equal(def.costRes?.[SPIRIT_STONE], 14);
+    assert.ok(s.unitTypes[UNIT_IDS.FORMATION_MASTER_2].builds?.includes(UNIT_IDS.GUARD_FORMATION));
+    assert.ok(s.unitTypes[UNIT_IDS.FORMATION_MASTER_3].builds?.includes(UNIT_IDS.GUARD_FORMATION));
+    assert.ok(
+      CULTIVATION_ABILITIES.some((a) => a.id === 'formation-guardian'),
+      '能力要注册，否则 onDamaged 静默失效',
+    );
+    assert.ok(CULTIVATION_HOOKS.redirectDamage, '转移钩子要接进扩展');
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

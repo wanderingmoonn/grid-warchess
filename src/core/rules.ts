@@ -30,6 +30,7 @@ import {
 import type {
   AbilityHooks,
   AbilityApi,
+  DamagedCtx,
   DeathCtx,
   HitCtx,
   HookCtx,
@@ -300,6 +301,10 @@ export const abilityApi: AbilityApi = {
     st.burn = now + 1;
     return st.burn;
   },
+  hurt: (s, target, amount, opts) => {
+    hurtUnit(s, target, amount, opts);
+  },
+  maxHpOf: (s, u) => maxHpOf(s, u),
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
   attacksPerTurn: (s, u) => attacksPerTurn(s, u),
@@ -321,6 +326,93 @@ export const abilityApi: AbilityApi = {
   unitsAt: (s, x, y) => unitsAt(s, x, y),
   movePower: (s, u) => movePower(s, u),
 };
+
+/**
+ * 这一次伤害要不要换个人接（守御阵）。
+ *
+ * 只取**一个**答案：第一个返回非空、且合法的接替者就定下来，之后不再追问。
+ * 这条约束是防死循环的——A 转给 B、B 又转回 A 的话，这一下永远落不到地上。
+ *
+ * 三层合法性检查都是给扩展兜底的，扩展自己不用防：
+ * 接替者不能是原目标（等于没转）、不能已经倒下、必须在册。
+ */
+function redirectOf(s: GameState, victim: Unit, amount: number, source: Unit | undefined): Unit | null {
+  for (const e of activeExpansions(s)) {
+    const taker = e.hooks.redirectDamage?.({ state: s, victim, amount, source });
+    if (!taker) continue;
+    if (taker.id === victim.id) continue;
+    if (taker.hp <= 0) continue;
+    if (!s.units.some((u) => u.id === taker.id)) continue;
+    return taker;
+  }
+  return null;
+}
+
+/**
+ * 全引擎唯一的"扣血"出口。
+ *
+ * 以前 `hp -= dmg` 散在八处（普攻、溅射、反击、塔自动开火、地雷、技能直伤……），
+ * 于是任何"对伤害本身做手脚"的规则——转移、减伤、护盾——都得改八遍，
+ * 漏一处就是"普攻挡得住、溅射挡不住"这种半生效的 bug。
+ *
+ * 顺序是三件事，不能换：
+ *   1. 问钩子由谁接（`redirectDamage`）；
+ *   2. 扣血，然后跑受伤者的 `onDamaged`（守御阵在这里吸守阵修士的血补自己）；
+ *   3. **最后**才判死——所以被打成 −5 但吸回来 9 点的单位能活下来。
+ *
+ * 返回值是"实际承受者"，调用方要按它写战报（转移之后挨打的不是原来那个人）。
+ */
+function hurtUnit(
+  s: GameState,
+  target: Unit,
+  amount: number,
+  opts: { source?: Unit; logText?: string } = {},
+): { victim: Unit; amount: number; redirected: boolean } {
+  const dmg = Math.max(0, Math.round(amount));
+  if (dmg <= 0) return { victim: target, amount: 0, redirected: false };
+
+  const taker = redirectOf(s, target, dmg, opts.source);
+  const victim = taker ?? target;
+  const redirected = victim.id !== target.id;
+
+  victim.hp -= dmg;
+
+  /*
+   * 转移的战报必须写，而且默认公开。
+   *
+   * 不写的话，攻击方看到"造成 17 伤害"、防守方看到自己的兵血没掉，
+   * 两边都会以为是显示错误。这条也是"阵在替他挡"的唯一提示——
+   * 地图上只有一座建筑的血条在变短。
+   */
+  if (redirected) {
+    pushLog(
+      s,
+      target.owner,
+      `${utype(s, victim.type).name} 替 ${utype(s, target.type).name} 承受了 ${dmg} 点伤害`,
+      true,
+    );
+  } else if (opts.logText) {
+    pushLog(s, victim.owner, opts.logText, true);
+  }
+
+  const dctx: DamagedCtx = {
+    state: s, self: victim, amount: dmg, source: opts.source, api: abilityApi,
+  };
+  for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
+
+  /*
+   * 转移把接替者打死了，得由这里收场。
+   *
+   * 不能指望调用方：doAttack 只判 `defender.hp <= 0`，而接替者根本不是 defender，
+   * 于是那具「血量为 0 却还站在场上」的阵会挂到下一次 sweepDead 为止，
+   * 期间还能继续替人挡刀。非转移的情况仍由原调用方判死（各条路径的战报文案不同）。
+   */
+  if (redirected && victim.hp <= 0) {
+    abilityApi.killUnit(s, victim, opts.source, `${utype(s, victim.type).name} 被击毁`);
+  }
+
+  return { victim, amount: dmg, redirected };
+}
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
 interface BoundHook<C> {
@@ -2957,7 +3049,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       if (!target) break;
 
       const dmg = computeDamage(s, b, target);
-      target.hp -= dmg;
+      hurtUnit(s, target, dmg, { source: b });
       totalDmg += dmg;
       hits += 1;
       shots -= 1;
@@ -2982,7 +3074,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
       const splashed = splashVictims(s, b, target);
       for (const v of splashed) {
-        v.unit.hp -= v.dmg;
+        hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
         noteVictim(v.unit, v.dmg);
       }
@@ -3305,10 +3397,9 @@ function markApi(s: GameState): MarkApi {
     utype: (typeId) => utype(s, typeId),
     log: (owner, text, open = true) => pushLog(s, owner, text, open),
     hurt: (unit, amount, text) => {
-      const dmg = Math.max(0, Math.round(amount));
-      if (dmg <= 0) return;
-      unit.hp -= dmg;
-      pushLog(s, unit.owner, text, true);
+      // 地雷也走唯一出口：它是"敌方影响"，没理由绕过转移。
+      // 取整、非正数早退都交给 hurtUnit；原本那条战报作为 logText 传进去。
+      hurtUnit(s, unit, amount, { logText: text });
     },
   };
 }
@@ -3460,7 +3551,9 @@ function doAttack(
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
   }
   const dmg = computeDamage(s, attacker, defender);
-  defender.hp -= dmg;
+  // 走唯一出口：守御阵可能把这一下接走。注意 `defender` 仍然是他，
+  // 所以反击判定、命中状态、击退都还作用在他身上（只有伤害被转走）。
+  hurtUnit(s, defender, dmg, { source: attacker });
 
     // 战况烈度：一次攻击覆盖到的所有格，纯几何
   // （主命中格 = 鼠标点的格；溅射 = 以它为圆心扩 radius 格）
@@ -3472,7 +3565,8 @@ function doAttack(
 
   const splashed = splashVictims(s, attacker, defender);
   for (const v of splashed) {
-    v.unit.hp -= v.dmg;
+    // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
+    hurtUnit(s, v.unit, v.dmg, { source: attacker });
   }
 
   const noCounter = hasFlagOn(s, attacker, 'noCounter');
@@ -3485,7 +3579,8 @@ function doAttack(
   // 判断是否反击：不仅要活下来、不能先手，还要反击次数 > 0
   if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
     counterDmg = computeDamage(s, defender, attacker, true);
-    attacker.hp -= counterDmg;
+    // 反击也会被守御阵接走——"替友军挨打"不该挑来源
+    hurtUnit(s, attacker, counterDmg, { source: defender });
     
     // 消耗一次反击机会
     defender.countersLeft -= 1; 
@@ -5075,7 +5170,8 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     const raw = magicDamageOf(c.state, c.self, f);
     const dmg = Math.max(0, Math.round(applyElementMul(raw, 'dark', fd.weak, fd.resist)));
     if (dmg <= 0) continue;
-    f.hp -= dmg;
+    // 扩展技能的直伤也算"敌人打过来的伤害"，走唯一出口才能被守御阵接走
+    hurtUnit(c.state, f, dmg, { source: c.self });
     hit += 1;
     dealt += dmg;
   }

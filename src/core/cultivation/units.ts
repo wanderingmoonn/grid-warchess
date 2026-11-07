@@ -200,7 +200,8 @@ export const FORMATION_MASTER_2: UnitTypeDef = {
   maxHp: 30,
   range: 1,
   vision: 3,
-  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION],
+  // 大阵师：杀伐 / 封印 / 守御。守御阵是他这一代才有的东西（阵要有人守才立得住）
+  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION, UNIT_IDS.GUARD_FORMATION],
   buildPower: 14,
 };
 
@@ -218,7 +219,12 @@ export const FORMATION_MASTER_3: UnitTypeDef = {
   maxHp: 36,
   range: 1,
   vision: 3,
-  builds: [UNIT_IDS.KILL_FORMATION, UNIT_IDS.SEAL_FORMATION, UNIT_IDS.TELEPORT_FORMATION],
+  builds: [
+    UNIT_IDS.KILL_FORMATION,
+    UNIT_IDS.SEAL_FORMATION,
+    UNIT_IDS.GUARD_FORMATION,
+    UNIT_IDS.TELEPORT_FORMATION,
+  ],
   buildPower: 18,
 };
 
@@ -275,4 +281,30 @@ export const TELEPORT_FORMATION: UnitTypeDef = {
   vision: 3,
   // 只有主动技能，没有被动光环：它的价值全在"能把兵搬到哪"
   skills: [TELEPORT_SKILL],
+};
+
+/**
+ * 守御阵：唯一的"替友军挨打"建筑。
+ *
+ * 80 血不是随手写的：三代戟兵 21 攻打 6 甲只有 15 点，能挡 5 下；
+ * 如果照着别的阵给 30 血，两下就没了，那不叫守御。
+ * 它自己没有攻击手段，续航全靠旁边那个修士的血（见 formation-guardian.ts）。
+ */
+export const GUARD_FORMATION: UnitTypeDef = {
+  id: UNIT_IDS.GUARD_FORMATION,
+  name: '守御阵',
+  short: '守',
+  era: 4,
+  category: 'building',
+  cost: 110,
+  costRes: { 'spirit-stone': 14 },
+  // 大阵师每回合投 14 点，所以要两回合立起来；天阵师 18 点一回合成型
+  buildCost: 18,
+  move: 0,
+  atk: 0,
+  armor: 6,
+  maxHp: 80,
+  range: 1,
+  vision: 2,
+  abilities: ['formation-guardian'],
 };

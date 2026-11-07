@@ -96,6 +96,21 @@ export interface AbilityApi {
   putStatus(target: Unit, key: string, turns: number): boolean;
   /** 点燃一层；返回当前层数，到顶就返回 0 */
   addBurnLayer(target: Unit): number;
+  /**
+   * 对一个单位造成直接伤害。**扩展里所有直伤都该走这里**，不要直接 `u.hp -= n`。
+   *
+   * 这条路径会经过：伤害转移（守御阵）、受伤钩子、以及转移致死时的清场。
+   * 自己改 hp 的话，这些规则对你这一下全部失效——表现就是
+   * "普攻打得到阵、剑气打不到"，而且不报错、很难发现。
+   */
+  hurt(
+    s: GameState,
+    target: Unit,
+    amount: number,
+    opts?: { source?: Unit; logText?: string },
+  ): void;
+  /** 这个单位现在的生命上限（已含境界加成、衰老等修正） */
+  maxHpOf(s: GameState, u: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */
   computeDamage(s: GameState, attacker: Unit, defender: any, isCounter?: boolean): number;
   /** 算一下这个单位现在的溅射半径 */
@@ -330,6 +345,25 @@ export interface DeathCtx {
   result: { blasts: number };
 }
 
+/**
+ * 挨了一下之后、判死之前。
+ *
+ * 这个时机是刻意的：**扣血已经发生、但还没清场**。所以在这里补血能救命——
+ * 守御阵被打成 −5 时会先把守阵修士的血吸过来补上，活下来；被打成 −100 时
+ * 补 9 点也无济于事，照样倒下。反过来，如果挂在"自己回合开始"回血，那就没有
+ * "硬撑"这回事了：血已经见底，回合还没轮到自己就死了。
+ */
+export interface DamagedCtx {
+  state: GameState;
+  /** 实际掉血的那个。注意它**可能不是攻击者最初选的目标**——伤害被转移过 */
+  self: Unit;
+  /** 这一下扣了多少（已含护甲/抗性减免） */
+  amount: number;
+  /** 谁打的。地雷、状态、自损这类没有来源，是 undefined */
+  source: Unit | undefined;
+  api: AbilityApi;
+}
+
 export interface KillCtx {
   state: GameState;
   /** 击杀者（攻方） */
@@ -526,6 +560,13 @@ export interface AbilityHooks {
   onHit?: Staged<HitCtx>[];
   /** 阵亡时（自爆、重生、分裂） */
   onDeath?: (c: DeathCtx) => void;
+  /**
+   * 受到伤害之后、判死之前（吸血、反伤、受击狂暴）。
+   *
+   * 只在**真的掉了血**时触发（amount > 0）；被护甲完全挡住不会触发——
+   * "没打穿"和"打穿了但很硬"是两回事，受击类效果不该被白嫖。
+   */
+  onDamaged?: (c: DamagedCtx) => void;
   /** 亲手打死目标之后（收割） */
   onKill?: (c: KillCtx) => void;
   /** 攻击流程里的补充（见 STRIKE_STAGE：吸血、击退） */
