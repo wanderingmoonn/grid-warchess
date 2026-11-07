@@ -177,10 +177,12 @@ export function buildBattleCard(s: GameState, me: PlayerId, build: string): Batt
 
 /** 卡面文案（复制到聊天框的那一份，和图上写的一致） */
 export function battleCardText(d: BattleCardData): string {
+  // 「胜利/失败」而不是「我赢了/我输了」：这段文字是拿去转发的，
+  // 第一人称在别人手里会被读成他自己赢了/输了。
   const head = d.winner
     ? d.iWon
-      ? `我赢了 · 第 ${d.winTurn ?? d.turns} 回合破城`
-      : `我输了 · 撑到第 ${d.turns} 回合`
+      ? `胜利 · 第 ${d.winTurn ?? d.turns} 回合破城`
+      : `失败 · 撑到第 ${d.turns} 回合`
     : `平局 · 打了 ${d.turns} 回合`;
   const lines = [
     `【战报】${head}`,

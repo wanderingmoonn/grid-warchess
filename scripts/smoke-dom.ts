@@ -6561,6 +6561,11 @@ check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来'
   assert.equal(card.mvp, null, '一局没打死过人就该是空 MVP，不能拿存活最多的兵充数');
   assert.ok(battleCardText(card).includes('MVP：这一局没有击杀'), '文案要如实说没击杀');
   assert.ok(battleCardText(card).includes('战报'), '复制出去的文案要有抬头');
+  assert.ok(
+    battleCardText(card).startsWith('【战报】胜利'),
+    `抬头要用「胜利」而不是「我赢了」，实际：${battleCardText(card).split('\n')[0]}`,
+  );
+  assert.ok(!battleCardText(card).includes('我赢'), '复制出去的文案也不许用第一人称');
 });
 
 check('战报卡：MVP 来自规则层的人头账，不开「老兵不死」也有', () => {
@@ -6735,6 +6740,7 @@ check('战报卡：卡面每一笔都画在卡片里，没顶出边', () => {
     assert.ok(draws.some((x) => x.text.includes('战报')), `${label}：抬头要有「战报」两个字`);
   };
   scan('平局那张');
+  assert.ok(draws.some((x) => x.text === '平局'), '平局那一档的标题就是「平局」');
 
   /*
    * 再画一张赢局：这一档才是最常见的样子（大号破城回合 + 右侧击杀数）。
@@ -6765,6 +6771,10 @@ check('战报卡：卡面每一笔都画在卡片里，没顶出边', () => {
     fakeDoc,
   );
   scan('赢局那张');
+  // 卡面是拿来转发的：标题用「胜利 / 失败」，不能写「我赢了 / 我输了」——
+  // 第一人称到了别人手里会被读成他自己赢了。
+  assert.ok(draws.some((x) => x.text === '胜利'), '赢局标题要用「胜利」');
+  assert.ok(!draws.some((x) => x.text.includes('我赢') || x.text.includes('我输')), '卡面不许出现第一人称的胜负');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

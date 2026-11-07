@@ -75,10 +75,11 @@ export function drawBattleCard(d: BattleCardData, doc: Document): HTMLCanvasElem
   g.font = '600 16px system-ui, "Microsoft YaHei", sans-serif';
   g.fillText('时代与回旋镖 · 战报', pad, 62);
 
-  // 标题：一句话说清结果
+  // 标题：一句话说清结果。用「胜利/失败」而不是「我赢了/我输了」——
+  // 这张卡是要转发出去的，别人看不到"我"是谁，第一人称在别人手里会读成他自己。
   g.fillStyle = '#2b2823';
   g.font = '800 40px system-ui, "Microsoft YaHei", sans-serif';
-  const head = d.winner ? (d.iWon ? '我赢了' : '我输了') : '打平了';
+  const head = d.winner ? (d.iWon ? '胜利' : '失败') : '平局';
   g.fillText(head, pad, 90);
 
   /*
