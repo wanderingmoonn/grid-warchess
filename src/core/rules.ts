@@ -2570,7 +2570,11 @@ export function previewAttack(
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
-  for (const v of splashVictims(s, attacker, defender)) toSplash += v.dmg;
+  for (const v of splashVictims(
+    s, attacker,
+    { x: defender.x, y: defender.y, n: footprintOf(s, defender) },
+    { excludeIds: [defender.id] },
+  )) toSplash += v.dmg;
 
   return { toDefender, toAttacker, counter, hits: 1, toSplash };
 }
@@ -2603,89 +2607,84 @@ export function splashRatioOf(u: Unit): number {
 }
 
 /**
+ * 这一下**实际覆盖到**的格索引：爆心 = 点中的那一格，按溅射半径铺开。
+ *
+ * 战况烈度的红格、出手闪烁、以及"谁挨溅射"必须用同一份格子表。
+ * 以前伤害用的是"目标矩形到受害者矩形"的距离、烈度用的是"爆心到格"，
+ * 2×2 的单位上两者会差一格——于是出现"红格明明盖住了他，血却一点没掉"。
+ * 现在只有一个几何来源：红格盖到哪几格，就按这几格找人。
+ *
+ * 半径 0（没有溅射）时返回的就是爆心那一格：烈度要记"挨了一下"，
+ * 但调用方得自己判"有没有溅射"，别把贴身砍的那一格当成溅射。
+ */
+function strikeCellsOf(
+  s: GameState,
+  attacker: Unit,
+  rect: { x: number; y: number; n: number },
+  hit?: { x?: number; y?: number },
+): number[] {
+  const center = pickHitCell(attacker, rect, hit);
+  const radius = splashRadiusOf(s, attacker);
+  const line = utype(s, attacker.type).splashLine === true;
+  return strikeCoverCells(s, attacker, center, radius, line);
+}
+
+/**
  * 溅射范围内的敌人：主目标周围的敌人各吃一份打折的伤害。
  *
  * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
  * 它只会变成"我不敢开炮"，而不是"我要算清楚再开炮"。
  *
- * 两条关于**大型目标**的约定（2026-10-29）：
- *   1. 距离按"身体最近的边"算（`distBetweenUnits`）。2×2 的大单位紧贴爆心时，
- *      它的四格都在范围内，用锚点算会把它误判成"离得远"。
- *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
- *      所以"直接伤害 + 溅射"加起来也只结算一次。
- */
-/**
- * 这一格是否落在"从攻击者指向主目标"的那条直线上（含对角线）。
+ * 判据只有一条：**身体占到被覆盖的任意一格**就算中弹。和棋盘上那片红是
+ * 同一份格子表（`strikeCellsOf`），所以玩家看见红格盖住了谁，谁就掉血；
+ * 2×2 的单位只要有任意一角在范围内就吃一份，不会因为锚点在圈外被漏掉。
  *
- * 只用来判直线溅射：方向由 `a → d` 决定，`v` 必须同方向、共线。
- * 用锚点算而不是身体最近边——直线是瞄准线，不是覆盖面积，
- * 2×2 单位挡在线上时按它自己那一格算反而更符合直觉。
+ * `excludeIds` 是已经被结算过的人（普攻的主目标已经吃过全额，不能再吃一份）。
+ * 城市也能当爆心：传城市的矩形即可，城里站着的守军距离 0，会一起挨炸。
  */
-function onStrikeLine(a: Unit, d: Unit, vx: number, vy: number): boolean {
-  const dx = Math.sign(d.x - a.x);
-  const dy = Math.sign(d.y - a.y);
-  if (dx === 0 && dy === 0) return true;
-  const x = vx - a.x;
-  const y = vy - a.y;
-  if (dx === 0) return x === 0 && Math.sign(y) === dy;
-  if (dy === 0) return y === 0 && Math.sign(x) === dx;
-  return x * dy === y * dx && Math.sign(x) === dx && Math.sign(y) === dy;
-}
-
-/**
- * 这一下溅射**波及**的所有格索引（含空格、含免疫格、含多格目标全部格子）。
- * 和 splashVictims 的分工：那个回答"谁挨打"，这个回答"地上哪几片红了"。
- * 两者判据一致（多格单位按到矩形最近距离算），否则视觉和数值会各说各话。
- */
-export function splashTilesOf(s: GameState, attacker: Unit, defender: Unit): number[] {
-  const radius = splashRadiusOf(s, attacker);
-  if (radius <= 0) return [];
-  const line = utype(s, attacker.type).splashLine === true;
-  const n = footprintOf(s, defender);
-  const out: number[] = [];
-  for (let ty = defender.y - radius; ty <= defender.y + n - 1 + radius; ty++) {
-    for (let tx = defender.x - radius; tx <= defender.x + n - 1 + radius; tx++) {
-      if (!inBounds(s, tx, ty)) continue;
-      const cx = Math.min(Math.max(tx, defender.x), defender.x + n - 1);
-      const cy = Math.min(Math.max(ty, defender.y), defender.y + n - 1);
-      const d = Math.abs(tx - cx) + Math.abs(ty - cy);
-      if (d > radius) continue;
-      if (line && !onStrikeLine(attacker, defender, tx, ty)) continue;
-      out.push(idx(s, tx, ty));
-    }
-  }
-  return out;
-}
-
 function splashVictims(
   s: GameState,
   attacker: Unit,
-  defender: Unit,
+  rect: { x: number; y: number; n: number },
+  opts: { hit?: { x?: number; y?: number }; excludeIds?: readonly string[] } = {},
 ): Array<{ unit: Unit; dmg: number }> {
-  const radius = splashRadiusOf(s, attacker);
-  if (radius <= 0) return [];
-  // 直线溅射（剑气、光束）：只扫那条线上的，不扫"周围一圈"
-  const line = utype(s, attacker.type).splashLine === true;
+  if (splashRadiusOf(s, attacker) <= 0) return [];
 
+  const covered = new Set(strikeCellsOf(s, attacker, rect, opts.hit));
+  if (covered.size === 0) return [];
+
+  const skip = new Set(opts.excludeIds ?? []);
   const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
-  const seen = new Set<string>([defender.id]);
   for (const v of s.units) {
     if (v.owner === attacker.owner) continue;
-    // 已经结算过的（主目标，或者同一格被扫到两次）不再收
-    if (seen.has(v.id)) continue;
-    if (distBetweenUnits(s, defender, v) > radius) continue;
-    if (line && !onStrikeLine(attacker, defender, v.x, v.y)) continue;
+    if (skip.has(v.id)) continue;
+    // 占到任意一格就算被覆盖：多格单位只挨一份（名单按单位去重）
+    if (!tilesOfUnit(s, v).some((t) => covered.has(idx(s, t.x, t.y)))) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlagOn(s, v, 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
     if (v.buff?.splashImmune) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
     if (dmg <= 0) continue;
-    seen.add(v.id);
     out.push({ unit: v, dmg });
   }
   return out;
+}
+
+/**
+ * 这一下溅射**波及**的所有格索引（含空格、含免疫格）。
+ *
+ * 和 splashVictims 的分工：那个回答"谁挨打"，这个回答"地上哪几片红了"。
+ * 但两边的格子表必须是同一份（都走 `strikeCellsOf`）——否则就会出现
+ * "红格盖住了他、血没掉"这种各说各话。这里也就是棋盘上那片红的来源。
+ */
+export function splashTilesOf(s: GameState, attacker: Unit, defender: Unit): number[] {
+  return strikeCellsOf(s, attacker, {
+    x: defender.x,
+    y: defender.y,
+    n: footprintOf(s, defender),
+  });
 }
 
 /**
@@ -3075,22 +3074,19 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 
       // 塔/炮台的自动开火也算一次攻势——但它在"接手方回合开始"那一刻结算，
       // 所以要显式落到"上一个回合"的账上（s.turn - 1），否则接手方看不到。
-      const prevTurn = s.turn - 1;
-      const victimSide = other(owner);
-      const tn = footprintOf(s, target);
-      const center = {
-        x: Math.min(Math.max(b.x, target.x), target.x + tn - 1),
-        y: Math.min(Math.max(b.y, target.y), target.y + tn - 1),
-      };
-      for (const i of strikeCoverCells(
-        s, b, center, splashRadiusOf(s, b), utype(s, b.type).splashLine === true,
-      )) {
-        const { x, y } = xyOf(s, i);
-        noteHeatAt(s, victimSide, prevTurn, x, y);
-      }
+      noteStrikeHeat(
+        s, b,
+        { x: target.x, y: target.y, n: footprintOf(s, target) },
+        undefined,
+        { owner: other(owner), turn: s.turn - 1 },
+      );
 
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
-      const splashed = splashVictims(s, b, target);
+      const splashed = splashVictims(
+        s, b,
+        { x: target.x, y: target.y, n: footprintOf(s, target) },
+        { excludeIds: [target.id] },
+      );
       for (const v of splashed) {
         hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
@@ -3505,7 +3501,8 @@ function pickHitCell(
 /**
  * 一次攻击的战况烈度记录：几何覆盖的所有格子各记一次。
  *
- * 攻击单位 / 攻城 / 塔自动开火共用——"打了哪儿"必须同一套几何。
+ * 攻击单位 / 攻城 / 塔自动开火共用——"打了哪儿"必须同一套几何，而且要和
+ * `splashVictims` 用**同一份格表**：玩家看见红格盖住了谁，谁就该掉血。
  * 以前三处各写各的（doAttack 用了旧签名的 noteHeat、doSiege 压根没写），
  * 症状就是"打到城的这一面，整个城都红"和"溅射覆盖到的城外空地不红"。
  */
@@ -3514,13 +3511,16 @@ function noteStrikeHeat(
   attacker: Unit,
   rect: { x: number; y: number; n: number },
   hit?: { x?: number; y?: number },
+  /**
+   * 记到谁的账上、哪一回合。塔/炮台的自动开火是在**接手方回合开始**时结算的，
+   * 要落到 `s.turn - 1` 才看得见，所以这里留个口子；不传就是"当前行动方打到对手"。
+   */
+  book?: { owner: PlayerId; turn: number },
 ): void {
-  const center = pickHitCell(attacker, rect, hit);
-  const radius = splashRadiusOf(s, attacker);
-  const line = utype(s, attacker.type).splashLine === true;
-  for (const i of strikeCoverCells(s, attacker, center, radius, line)) {
+  for (const i of strikeCellsOf(s, attacker, rect, hit)) {
     const { x, y } = xyOf(s, i);
-    noteHeatCell(s, x, y);
+    if (book) noteHeatAt(s, book.owner, book.turn, x, y);
+    else noteHeatCell(s, x, y);
   }
 }
 
@@ -3581,7 +3581,13 @@ function doAttack(
     { x: hitX, y: hitY },
   );
 
-  const splashed = splashVictims(s, attacker, defender);
+  // 溅射和上面那片红用同一份格表：红格盖住了谁，谁就掉一份。
+  // 主目标已经吃过全额，按 id 排掉——他脚下那几格当然也在覆盖范围里。
+  const splashed = splashVictims(
+    s, attacker,
+    { x: defender.x, y: defender.y, n: footprintOf(s, defender) },
+    { hit: { x: hitX, y: hitY }, excludeIds: [defender.id] },
+  );
   for (const v of splashed) {
     // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
     hurtUnit(s, v.unit, v.dmg, { source: attacker });
@@ -3825,6 +3831,23 @@ function doSiege(
   const dmg = damageToCity(attacker, city, s);
   city.hp -= dmg;
 
+  /*
+   * 溅射：炮火砸在城墙上，附近挨得近的敌兵一样吃一份。
+   *
+   * 以前这里只扣城的耐久，于是玩家看到的是"红格把城外那圈盖住了，
+   * 旁边的人一点血没掉"——红格和伤害各算各的。现在两边共用
+   * `strikeCellsOf`：爆心就是点中的那一格，红格盖到哪几格就按哪几格找人。
+   *
+   * 城里站着的守军距离是 0，一起挨；打谁不打谁全交给 `splashVictims`，
+   * 攻城这条路不再自己判一遍。
+   */
+  const splashed = splashVictims(
+    s, attacker,
+    { x: city.x, y: city.y, n: city.size },
+    { hit: { x: hitX, y: hitY } },
+  );
+  for (const v of splashed) hurtUnit(s, v.unit, v.dmg, { source: attacker });
+
   // 战况烈度：攻城按几何覆盖记，和攻击单位走同一套
   noteStrikeHeat(s, attacker, { x: city.x, y: city.y, n: city.size }, { x: hitX, y: hitY });
 
@@ -3843,13 +3866,46 @@ function doSiege(
     }
   }
 
+  const splashText =
+    splashed.length > 0
+      ? `，溅射 ${splashed.map((v) => utype(s, v.unit.type).name).join('、')}`
+      : '';
   pushLog(
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻城，城市损失 ${dmg} 点耐久${loot > 0 ? `，顺手偷走 ${loot} 金` : ''}`
-      : `${atName} 攻城，但打不动这座城的城墙`,
+      ? `${atName} 攻城，城市损失 ${dmg} 点耐久${loot > 0 ? `，顺手偷走 ${loot} 金` : ''}${splashText}`
+      : `${atName} 攻城，但打不动这座城的城墙${splashText}`,
   );
+
+  /*
+   * 被波及的一方也要有一条：不然他那边看到的是"城里挨了一下，我营长凭空少了 30 血"。
+   * 和 doAttack 同一个口径——只写"被谁打的、掉了多少"，不写袭击者站哪；
+   * 隐匿中的袭击者连名字都不给。
+   */
+  if (splashed.length > 0) {
+    const byOwner = new Map<PlayerId, string[]>();
+    for (const v of splashed) {
+      const list = byOwner.get(v.unit.owner) ?? [];
+      list.push(utype(s, v.unit.type).name);
+      byOwner.set(v.unit.owner, list);
+    }
+    for (const [owner, names] of byOwner) {
+      const unseen = isHiddenFrom(s, attacker, owner);
+      pushLog(s, owner, `${unseen ? '视野外的一击' : atName} 攻城，炮火波及 ${names.join('、')}`);
+    }
+  }
+
+  // 溅射打死的要走完整善后：删人、战报、沉船、击杀钩子。
+  // 少这一段就会留下"血量 0 还站在场上"的兵——收口到 hurtUnit 时踩过这个坑。
+  for (const v of splashed) {
+    if (v.unit.hp > 0) continue;
+    if (!s.units.some((u) => u.id === v.unit.id)) continue;
+    s.units = s.units.filter((u) => u.id !== v.unit.id);
+    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
+    drownCargo(s, v.unit);
+    fireKilled(s, v.unit, attacker);
+  }
 
   attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
   attacker.moved = true;
