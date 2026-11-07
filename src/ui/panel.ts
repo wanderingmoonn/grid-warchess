@@ -9,6 +9,7 @@
 import {
   CATEGORY_NAME,
   CONFIG,
+  UNIT_TYPES,
   ORDER_UPGRADE,
   buildCostOf,
   buildPowerOf,
@@ -17,6 +18,7 @@ import {
   passable,
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
+import { buildListOf, type BuildList } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
 import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
@@ -621,8 +623,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       );
     }
 
-    // 建造单位：列出它能盖的东西，点了就进选址模式
-    const buildables = (def.builds ?? [])
+    // 建造单位：列出它能盖的东西，点了就进选址模式。
+    // 名单走 buildListFor 过滤，所以"可建 N 种"和底下 N 个按钮永远是同一个数。
+    const buildables = buildListFor(s, def).ids
       .map((id) => s.unitTypes[id])
       .filter((x): x is UnitTypeDef => !!x);
     const notes = describeUnit(s, def, undefined, selectedUnit);
@@ -1242,6 +1245,20 @@ function yieldShort(def: UnitTypeDef): string {
   return Array.from(ids).map((id) => resourceShort(id)).join('·') || '资源';
 }
 
+/**
+ * 本局这个单位能盖什么。
+ *
+ * `exists` 把本局没启用的建筑过滤掉：以前面板是"查不到就静默丢掉"，
+ * 于是属性卡写着可建 10 种、底下只摆得出 8 个按钮。现在数字和名单来自同一次
+ * 过滤。规则书没有一局游戏，走的是同一个 buildListOf、只是不传 exists。
+ */
+function buildListFor(s: GameState, def: UnitTypeDef): BuildList {
+  return buildListOf(def, {
+    nameOf: (id) => s.unitTypes[id]?.name ?? UNIT_TYPES[id]?.name ?? id,
+    exists: (id) => !!s.unitTypes[id],
+  });
+}
+
 /** 产兵按钮：城市和军营共用一套写法，省得两处的样式慢慢跑偏 */
 /**
  * 产兵按钮。
@@ -1278,14 +1295,26 @@ function recruitButton(
   const siteAttr = mode === 'order' && site ? ` data-site="${site}"` : '';
   const tail =
     mode === 'order' ? `<span class="order-tag">＋队列</span>` : '';
-  return `<button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
+  /*
+   * 悬停详情卡：造出这个工兵**之前**就能看到它能盖什么，不必先花钱造出来、
+   * 再点开属性卡，或者去翻规则书。数据写在隐藏节点里，由 main.ts 那套通用
+   * 浮层搬去 body 显示——和选卡卡片的详情是同一份样式、同一段定位逻辑。
+   */
+  const builds = buildListFor(s, def);
+  const tip = `<span class="hover-tip" hidden>
+      <span class="tip-title"><b>${escapeHtml(def.name)}</b><i>${escapeHtml(CATEGORY_NAME[def.category] ?? '')}</i></span>
+      <span class="tip-row">${escapeHtml(detail)}</span>
+      ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${escapeHtml(builds.names.join('、'))}（共 ${builds.names.length} 种）</span>` : ''}
+    </span>`;
+  return `<span class="recruit-wrap" data-hover-tip>${tip}
+    <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
     </span>
     <span class="price">${costLabel(payCost)}</span>${tail}
-  </button>`;
+  </button></span>`;
 }
 
 const DIRS_4: ReadonlyArray<readonly [number, number]> = [

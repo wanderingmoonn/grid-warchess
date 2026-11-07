@@ -17,6 +17,7 @@
 
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
+import { buildListOf } from '../core/build-list.ts';
 
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
@@ -382,7 +383,15 @@ export function godShelfHtml(ui: GodUi): string {
     const chips = units
       .map((u) => {
         const on = ui.brush.kind === 'unit' && ui.brush.type === u.id;
-        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${u.maxHp} 血 · 攻 ${u.atk}${u.armor ? ` · 甲 ${u.armor}` : ''}">
+        // 货架上也要能看出这个工兵能盖什么，别等摆到棋盘上再点开属性卡
+        const builds = buildListOf(u, {
+          nameOf: (id) => s.unitTypes[id]?.name ?? id,
+          exists: (id) => !!s.unitTypes[id],
+        });
+        const buildTip = builds.names.length > 0
+          ? ` · 可建 ${escapeHtml(builds.names.join('、'))}`
+          : '';
+        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${u.maxHp} 血 · 攻 ${u.atk}${u.armor ? ` · 甲 ${u.armor}` : ''}${buildTip}">
           ${u.short} ${u.name}
         </button>`;
       })

@@ -1147,6 +1147,26 @@ check('产兵按钮上写着血量', () => {
   assert.equal(withHp.length, btns.length, '每个产兵按钮都该带血量');
 });
 
+check('造兵之前悬停就能看到这个工兵能盖什么', () => {
+  const wraps = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-wrap[data-hover-tip]'));
+  assert.ok(wraps.length > 0, '产兵按钮要挂上浮层宿主（宿主不能是 disabled 按钮）');
+  const withBuilds = wraps.filter((w) =>
+    (w.querySelector('.hover-tip')?.textContent ?? '').includes('可建造：'),
+  );
+  assert.ok(withBuilds.length > 0, '建造单位的隐藏详情里要写全可建造名单');
+
+  // 真悬停一次：浮层节点要出现在 body 上，而且要列具体建筑名而不是"共 N 种"
+  const target = withBuilds[0]!;
+  target.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+  const tip = doc.querySelector<HTMLElement>('#hover-tip');
+  assert.ok(tip && !tip.hidden, '悬停要浮出详情');
+  const text = tip!.textContent ?? '';
+  assert.ok(text.includes('可建造：'), '浮层里要有名单');
+  assert.ok(text.includes('箭塔') || text.includes('磨坊'), '名单要是具体建筑名');
+  target.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true }));
+  assert.equal(tip!.hidden, true, '移开就收起');
+});
+
 check('城市里不再直接产建筑', () => {
   const html = doc.querySelector('.side')?.innerHTML ?? '';
   assert.ok(!html.includes('自动开火'), '建筑不该出现在城市生产列表里');
@@ -5327,7 +5347,7 @@ await checkAsync('开启选卡后开局：遮罩盖住战场，双方各禁一�
   // 悬停看详情：被挡住的卡也要能看（这时候正是最想研究池子的时候）
   const probe = cards()[0]!;
   probe.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
-  const tip = doc.querySelector<HTMLElement>('#draft-tip');
+  const tip = doc.querySelector<HTMLElement>('#hover-tip');
   assert.ok(tip, '悬停应该浮出一块详情');
   assert.equal(tip!.hidden, false, '详情要显示出来');
   const tipText = tip!.textContent ?? '';

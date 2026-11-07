@@ -1963,7 +1963,7 @@ function renderDraft(): void {
   if (sig !== draftSig) {
     draftSig = sig;
     // 重画之后旧卡片已经不在文档里，浮层再留着就是一片错位的信息
-    hideDraftTip();
+    hideHoverTip();
     draftEl.innerHTML = draftScreenHtml(state, {
       seat: draftSeat,
       now: Date.now(),
@@ -2185,38 +2185,44 @@ async function refreshDraftRoom(): Promise<void> {
 /**
  * 卡片详情浮层（悬停显示完整数据）。
  *
+ * 最早只给选卡池用，现在产兵按钮也挂同一套：任何带 `data-hover-tip` 的宿主里
+ * 放一份 `.hover-tip[hidden]` 数据，这里只负责"搬上来 + 定位"——一份数据、
+ * 一处渲染逻辑，不用在两边各维护一份文案。
+ *
  * 为什么不写在卡片里做 CSS 浮层：池子是 `overflow:auto` 的滚动容器，
  * 卡片内部的绝对定位浮层会被裁掉——最上面一排的详情直接看不见。所以这个节点
- * 挂在 body 上，位置按卡片的视口矩形算，指针事件全部穿透（`pointer-events:none`），
+ * 挂在 body 上，位置按宿主的视口矩形算，指针事件全部穿透（`pointer-events:none`），
  * 免得它自己把 hover 打断。
  *
- * 数据仍然写在卡片里（`.draft-tip[hidden]`），这里只负责"搬上来 + 定位"：
- * 一份数据、一处渲染逻辑，不用在两边各维护一份文案。
+ * 宿主**不能是 disabled 按钮**：部分浏览器连鼠标事件都不派发，钱不够时反而
+ * 看不到详情。选卡一直用 `.draft-card-wrap` 当宿主，产兵按钮也照此套一层 span。
  */
-let draftTipEl: HTMLElement | null = null;
+let hoverTipEl: HTMLElement | null = null;
+let hoverTipHost: HTMLElement | null = null;
 
-function draftTipPanel(): HTMLElement {
-  if (draftTipEl) return draftTipEl;
+function hoverTipPanel(): HTMLElement {
+  if (hoverTipEl) return hoverTipEl;
   const el = document.createElement('div');
-  el.id = 'draft-tip';
+  el.id = 'hover-tip';
   el.hidden = true;
   document.body.appendChild(el);
-  draftTipEl = el;
+  hoverTipEl = el;
   return el;
 }
 
-function hideDraftTip(): void {
-  if (draftTipEl) draftTipEl.hidden = true;
+function hideHoverTip(): void {
+  if (hoverTipEl) hoverTipEl.hidden = true;
+  hoverTipHost = null;
 }
 
-function showDraftTip(card: HTMLElement): void {
-  const src = card.parentElement?.querySelector<HTMLElement>('.draft-tip');
+function showHoverTip(host: HTMLElement): void {
+  const src = host.querySelector<HTMLElement>('.hover-tip');
   if (!src) return;
-  const panel = draftTipPanel();
+  const panel = hoverTipPanel();
   panel.innerHTML = src.innerHTML;
   panel.hidden = false;
 
-  const r = card.getBoundingClientRect();
+  const r = host.getBoundingClientRect();
   const pw = panel.offsetWidth;
   const ph = panel.offsetHeight;
   const vw = window.innerWidth || 1024;
@@ -2227,27 +2233,33 @@ function showDraftTip(card: HTMLElement): void {
   const left = Math.min(Math.max(8, r.left), Math.max(8, vw - pw - 8));
   panel.style.left = `${left}px`;
   panel.style.top = `${Math.min(top, vh - ph - 8)}px`;
+  hoverTipHost = host;
 }
 
-/** 选卡遮罩上的悬停：进出卡片时搬运详情 */
-function bindDraftTips(): void {
+/** 所有 `data-hover-tip` 宿主共用的悬停：进出时搬运详情 */
+function bindHoverTips(): void {
+  const hostOf = (t: EventTarget | null): HTMLElement | null =>
+    (t as HTMLElement | null)?.closest<HTMLElement>('[data-hover-tip]') ?? null;
   appEl.addEventListener('mouseover', (e) => {
-    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
-    if (!card) return;
-    showDraftTip(card);
+    const host = hostOf(e.target);
+    if (!host) {
+      hideHoverTip();
+      return;
+    }
+    if (host !== hoverTipHost) showHoverTip(host);
   });
   appEl.addEventListener('mouseout', (e) => {
-    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>('.draft-card');
-    if (!card) return;
+    const host = hostOf(e.target);
+    if (!host || host !== hoverTipHost) return;
     const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
     // 在同一张卡内部移动（图标→文字）不算离开
-    if (to && card.contains(to)) return;
-    hideDraftTip();
+    if (to && host.contains(to)) return;
+    hideHoverTip();
   });
   // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
-  appEl.addEventListener('scroll', hideDraftTip, true);
-  document.addEventListener('visibilitychange', hideDraftTip);
-  appEl.addEventListener('click', hideDraftTip, true);
+  appEl.addEventListener('scroll', hideHoverTip, true);
+  document.addEventListener('visibilitychange', hideHoverTip);
+  appEl.addEventListener('click', hideHoverTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -5981,8 +5993,8 @@ boardScrollEl.addEventListener('pointerleave', (e) => {
   endPan(e);
 });
 
-// 选卡遮罩上的"悬停看详情"：卡片一多，光看名字和攻血根本判断不了禁它值不值
-bindDraftTips();
+// 悬停看详情：选卡时判断禁不禁、造兵之前判断这个工兵能盖什么，都靠这一套
+bindHoverTips();
 
 appEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;
