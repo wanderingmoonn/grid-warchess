@@ -2178,6 +2178,38 @@ a.btn {
   color: var(--text-3);
 }
 
+/*
+ * 上传地图那一屏的结果条。
+ *
+ * 两种状态用同一个盒子，只换色：作者要的是"成了没有"，
+ * 而不是两条位置不同的提示里去找哪一条是这次的。
+ */
+.map-err,
+.map-ok {
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.map-err {
+  background: rgba(178, 62, 48, 0.08);
+  border: 1px solid rgba(178, 62, 48, 0.28);
+  color: #8d2f24;
+}
+.map-ok {
+  background: rgba(47, 110, 168, 0.08);
+  border: 1px solid rgba(47, 110, 168, 0.24);
+  color: #23527c;
+}
+.map-err ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.map-err li + li {
+  margin-top: 3px;
+}
+
 
 /* ---------- 开局设置：固定地图画廊 ----------
 

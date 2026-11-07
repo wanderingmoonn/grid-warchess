@@ -228,6 +228,7 @@ export function godBarHtml(ui: GodUi): string {
         <button class="btn btn-primary" data-act="god-run-round" title="AI 替当前这一方走完这一回合（顶栏那个「第 N 回合」只加 1），然后交还给你">交给 AI · 一回合</button>
         <button class="btn" data-act="god-run-dead" title="AI 一直打到一方没兵为止，随时可以按停止">接管 · 打到全灭</button>
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
+        <button class="btn btn-sm" data-act="god-map-upload" title="把这一局的地形和城位存成一张地图，交到云端地图库（要审核）">上传这张图</button>
       </div>
     </div>
     ${(() => {

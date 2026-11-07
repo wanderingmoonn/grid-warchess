@@ -1,4 +1,4 @@
--- 玩家上传的地图库（上帝模式 → 地图工坊）
+-- 玩家上传的地图库（上帝模式 →「上传这张图」/ 开局面板 →「上传地图」）
 --
 -- 什么时候要执行这个文件：想让大家能互相玩到对方画的地图时，一次性执行。
 -- 不执行也不影响玩：内置地图照常可选，上传按钮会明说"地图库还没开通"。
@@ -10,6 +10,13 @@
 -- `validateFixedMap` 放行的数据，一份坏图最多是"列表里点不动"，不会被执行。
 --
 -- 只存地形与城位。没有任何脚本、URL 或可执行内容。
+--
+-- ⚠️ 2026-11-07 起这张表**要审核**，靠的是两句话的配合（改权限时别拆开）：
+--   · 读策略 `using (listed)` —— 未放行的行对所有人不可见（包括作者）；
+--   · 插入策略要求 `listed = false` —— 客户端**没法**自己把图设成公开。
+-- 放行只能在控制台/管理员身份下做，见 `warchess_maps_review.sql`。
+-- 如果哪天有人把插入策略改回"只看尺寸"，审核就形同虚设：任何人 open 一段
+-- 脚本插一行 listed=true 就绕过了整个流程。
 
 create table if not exists public.warchess_maps (
   id          bigserial   primary key,
@@ -23,12 +30,17 @@ create table if not exists public.warchess_maps (
   -- 城位：只存左上角，边长由局内设置决定
   cities_a    jsonb       not null,
   cities_b    jsonb       not null,
-  -- 留着以后做"隐藏某张图"的余地；列表只查 true
-  listed      boolean     not null default true
+  -- 审核闸门：false = 还在队列里，只有 true 才出现在「玩家上传地图」中
+  listed      boolean     not null default false
 );
 
 create index if not exists warchess_maps_created_idx
   on public.warchess_maps (created_at desc);
+
+-- 审核队列按"没放行的、最新的在前"扫，单独一条索引省一次全表排序
+create index if not exists warchess_maps_pending_idx
+  on public.warchess_maps (created_at desc)
+  where not listed;
 
 alter table public.warchess_maps enable row level security;
 
@@ -37,11 +49,16 @@ drop policy if exists warchess_maps_read on public.warchess_maps;
 create policy warchess_maps_read on public.warchess_maps
   for select using (listed);
 
--- 写：谁都能交一张。形状校验在客户端做（见 src/core/fixed-maps.ts），
--- 这里只挡明显不成立的尺寸，免得一条脏数据把列表撑爆。
+-- 写：谁都能**提交**一张，但只能是待审核的（listed = false）。
+-- 形状校验在客户端做（见 src/core/fixed-maps.ts），这里挡的是明显不成立的
+-- 尺寸，以及"自己给自己放行"这条路。
 drop policy if exists warchess_maps_insert on public.warchess_maps;
 create policy warchess_maps_insert on public.warchess_maps
-  for insert with check (w between 8 and 40 and h between 8 and 40 and length(name) between 1 and 24);
+  for insert with check (
+    listed = false
+    and w between 8 and 40 and h between 8 and 40 and length(name) between 1 and 24
+  );
 
 grant select, insert on public.warchess_maps to anon, authenticated;
 grant usage, select on sequence public.warchess_maps_id_seq to anon, authenticated;
+

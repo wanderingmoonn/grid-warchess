@@ -3893,6 +3893,35 @@ check('上帝模式：单格点击照旧，拖动尾巴不会把这一下吞掉�
   );
 });
 
+check('上帝模式：工具栏有「上传这张图」，弹窗先把尺寸、城数和审核流程说清楚', () => {
+  const btn = doc.querySelector<HTMLElement>('[data-act="god-map-upload"]');
+  assert.ok(btn, '上帝模式工具栏要能上传地图');
+
+  btn!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const mask = doc.querySelector<HTMLElement>('.modal-mask');
+  assert.ok(mask, '点了应该弹出上传面板');
+
+  const text = mask!.textContent ?? '';
+  assert.ok(text.includes('上传这张地图'), '弹窗要有标题');
+  assert.ok(text.includes('云端地图库'), '要说清传到哪儿去');
+  // 审核这句话必须在场：不写清楚，作者会以为传完别人立刻就能选
+  assert.ok(
+    text.includes('审核放行') || text.includes('等审核') || text.includes('先进审核队列'),
+    `要说明这是要走审核的：${text.slice(0, 120)}`,
+  );
+  assert.ok(mask!.querySelector('[data-field="name"]'), '要有地图名输入框');
+
+  // 能导出的图会显示尺寸统计；导不出（城贴边等）会显示原因——两种都得有内容
+  const hasStat = /\d+×\d+/.test(text);
+  const errBox = mask!.querySelector('.map-err');
+  assert.ok(hasStat || errBox, `弹窗该显示尺寸统计，或者说明为什么传不了：${text.slice(0, 160)}`);
+
+  const close = mask!.querySelector<HTMLElement>('[data-act="close"]');
+  assert.ok(close, '要能关掉');
+  close!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(doc.querySelector('.modal-mask'), null, '关掉之后遮罩要收起来');
+});
+
 check('己方战报只给自己的条目和战损，观战才看全部', () => {
   const st = createMatch(
     {

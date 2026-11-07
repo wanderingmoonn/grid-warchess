@@ -42,6 +42,7 @@ import {
 } from '../src/core/expansions.ts';
 import { CITY_MIN_GAP, MAP_STYLES, generateLayout, generateMultiLayout, mapStylesFor, terrainFromChar, twoCityMinSize } from '../src/core/mapgen.ts';
 import { BUILTIN_MAPS, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
+import { stateToFixedMap } from '../src/core/map-export.ts';
 import {
   clearUnits,
   paintTerrain,
@@ -16152,6 +16153,89 @@ test('补线：64×64 的对角线也不会漏（棋盘上限那档）', () => {
   assert.equal(long.length, 63, '63 步走完对角线');
   assert.equal(new Set(long.map((c) => `${c.x},${c.y}`)).size, 63, '不重复走同一格');
   assert.deepEqual(long[long.length - 1], { x: 63, y: 63 }, '终点必须落在目标格');
+});
+
+/*
+ * 上帝模式导出地图。
+ *
+ * 这一层要守的不是"能不能导"，而是**导出来的东西和别人看到的是同一张**：
+ * 扩展地形必须折成本体六种（否则没开扩展的局认不出来），折算过的格子数要
+ * 明说给作者，城位不达标要报错而不是替他挪。
+ */
+test('导出地图：沙盒 → 公开格式，扩展地形折成本体六种并说明折了几格', () => {
+  const s = fresh({ size: 16, startEra: 1 });
+  const set = (x: number, y: number, t: Terrain) => {
+    s.tiles[idx(s, x, y)]!.terrain = t;
+  };
+  // 一格一格地摆出每种扩展地形，再看导出成了什么
+  set(4, 4, 'marsh');
+  set(5, 4, 'shallow');
+  set(6, 4, 'plateau');
+  set(7, 4, 'dune');
+  set(8, 4, 'valley');
+  set(9, 4, 'water');
+
+  const r = stateToFixedMap(s, '导出测试');
+  assert.ok(r.ok, `应该能导出：${r.errors.join('；')}`);
+  const m = r.map!;
+
+  assert.equal(m.w, 16, '宽跟着局面');
+  assert.equal(m.h, 16, '高跟着局面');
+  assert.equal(m.name, '导出测试');
+  assert.ok(m.rows.every((row) => row.length === 16), '每行都该是 16 个字符');
+
+  // 折算规则：沼泽/谷地→平原，浅流→水域，台地/沙丘→丘陵，水本来就是水域
+  assert.equal(m.rows[4]![4], '.', '沼泽折成平原（它是能走的，折成水就成墙了）');
+  assert.equal(m.rows[4]![5], '~', '浅流折成水域');
+  assert.equal(m.rows[4]![6], 'h', '台地折成丘陵');
+  assert.equal(m.rows[4]![7], 'h', '沙丘折成丘陵');
+  assert.equal(m.rows[4]![8], '.', '谷地折成平原');
+  assert.equal(m.rows[4]![9], '~', '水域照旧');
+
+  // 折算说明必须点出名字和格数——作者得知道"我摆的图"和"传上去的图"哪里不一样
+  assert.ok(r.folded.includes('沼泽'), `折算说明该提到沼泽：${r.folded}`);
+  assert.ok(r.folded.includes('1 格'), `折算说明该给出格数：${r.folded}`);
+
+  // 城位：只认 A/B，按归属分两堆
+  assert.equal(m.citiesA.length, s.cities.filter((c) => c.owner === 'A').length, '红方城数对得上');
+  assert.equal(m.citiesB.length, s.cities.filter((c) => c.owner === 'B').length, '蓝方城数对得上');
+
+  // 导出的东西要能再被公开格式收下（不然上传那一步必失败）
+  const again = validateFixedMap({ ...m, id: 'user:x' });
+  assert.ok(again.ok, `导出的图应该能通过公开校验：${again.ok ? '' : again.errors.join('；')}`);
+});
+
+test('导出地图：城缺一边、尺寸越界、城贴边——三种都报错而不是替他改', () => {
+  // 缺蓝方的城
+  const s1 = fresh({ size: 16, startEra: 1 });
+  s1.cities = s1.cities.filter((c) => c.owner !== 'B');
+  const r1 = stateToFixedMap(s1, '缺城');
+  assert.equal(r1.ok, false, '只有一边有城不该通过');
+  assert.ok(
+    r1.errors.some((e) => e.includes('乙方')),
+    `要明确说是乙方缺城：${r1.errors.join('；')}`,
+  );
+
+  // 尺寸越界：4×4 的沙盒摆得下两座城，但公开地图最小 8
+  const s2 = fresh({ size: 4, startEra: 1 });
+  const r2 = stateToFixedMap(s2, '太小');
+  assert.equal(r2.ok, false, '4×4 不该能导出');
+  assert.ok(
+    r2.errors.some((e) => e.includes('8') && e.includes('40')),
+    `要把尺寸范围说出来：${r2.errors.join('；')}`,
+  );
+
+  // 城贴边：把 A 城挪到 (0,0)，公开格式要求离边界至少一格
+  const s3 = fresh({ size: 16, startEra: 1 });
+  const a = s3.cities.find((c) => c.owner === 'A')!;
+  a.x = 0;
+  a.y = 0;
+  const r3 = stateToFixedMap(s3, '贴边');
+  assert.equal(r3.ok, false, '贴边的城不该通过');
+  assert.ok(
+    r3.errors.some((e) => e.includes('贴边')),
+    `要说是城贴边了：${r3.errors.join('；')}`,
+  );
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);

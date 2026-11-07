@@ -102,6 +102,7 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
+import { openMapUpload } from './ui/map-upload.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
@@ -3834,6 +3835,21 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'god-clear': {
       godApply(clearUnits(state, el.dataset.side === 'B' ? 'B' : 'A'));
+      return;
+    }
+
+    /*
+     * 上传这张图：沙盒 → 云端地图库（待审核）。
+     *
+     * 不在这里直接传：地图名要人填，折算和校验的结果也要先说清楚。
+     * 弹窗负责那三句话，这里只负责把当前局面递过去。
+     */
+    case 'god-map-upload': {
+      if (godRunning || godPassing) {
+        toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
+        return;
+      }
+      openMapUpload({ state });
       return;
     }
 

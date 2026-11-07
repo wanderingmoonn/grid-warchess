@@ -816,18 +816,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                           `${m.w}×${m.h}`,
                           mapThumbSvg(m, thumbCity),
                           m.id === pickedMapId,
-                          m.author ? ` · ${esc(m.author)}` : '',
+                          `${m.author ? ` · ${esc(m.author)}` : ''}${m.pending ? ' · 待审核' : ''}`,
                         ),
                       )
                       .join('')}</div>`
-                  : `<div class="field-hint">还没有人传过。下面传一张上去，所有人都能在这里选到它。</div>`
+                  : `<div class="field-hint">库里还没有公开的图。下面传一张上去，审核通过后所有人都能在这里选到它。</div>`
               }
               ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
             </section>
 
             <section class="field">
               <div class="field-label">
-                上传地图 <span class="field-hint">传上去的图，所有玩家开局都能选到</span>
+                上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
               </div>
               ${
                 mapDraft
@@ -839,7 +839,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                          <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
                        </div>
                        <div class="map-draft-act">
-                         <button class="btn btn-sm btn-primary" data-act="map-upload">上传到地图库</button>
+                         <button class="btn btn-sm btn-primary" data-act="map-upload">提交审核</button>
                          <button class="btn btn-sm" data-act="map-cancel">取消</button>
                        </div>
                      </div>`
@@ -1239,7 +1239,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             config.fixedMap = got;
             config.size = got.w;
             mapDraft = null;
-            mapNote = `已上传「${got.name}」，现在所有玩家都能在地图库里选到它（本局已选中）`;
+            mapNote = `已提交「${got.name}」，等审核放行后别人就能选到它（本局已选中，你自己随时能用）`;
             mapBad = false;
           } else {
             mapNote = res.reason ?? '上传失败';

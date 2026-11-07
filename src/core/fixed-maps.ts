@@ -44,6 +44,14 @@ export interface FixedMap {
   createdAt?: string;
   /** 'builtin' / 'user'：界面据此决定要不要显示作者与删除入口 */
   source?: 'builtin' | 'user';
+  /**
+   * 还在等审核（**本机标记，不来自云端**）。
+   *
+   * 待审核的行 `listed=false`，按读策略谁也查不到——包括作者自己。所以这个
+   * 标记只能由上传方在本机缓存里带上，用来在画廊里说明"这张还没公开"。
+   * 拿它去判断权限就错了：它只是给人看的一行字。
+   */
+  pending?: boolean;
 }
 
 export interface MapPoint {
