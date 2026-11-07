@@ -21,6 +21,7 @@
  * 卡片挂在 body 上，不挂 #app：`render()` 每帧会整块重写 #app 里的东西，
  * 挂进去等于每帧重建一次卡片（动画会闪、按钮会丢焦点）。
  */
+import { reachableTiles } from '../core/rules.ts';
 import type { Action, GameState } from '../core/types.ts';
 
 export interface TutorialHooks {
@@ -55,6 +56,14 @@ interface Step {
   mark?: (c: Ctx) => Array<{ x: number; y: number }>;
   /** 要高亮的面板元素（CSS 选择器） */
   markSel?: string;
+  /**
+   * 把**整座敌城**框起来（画在城市自己那个 `.city-block` 上）。
+   *
+   * 不能用逐格 outline：四个格子各画一圈，边框会落在格子交界处、中央还会拉出
+   * 一个十字，看起来像把城切成了四块。城市本来就有一个整块的 `.city-block`，
+   * 直接给它换颜色就行。
+   */
+  markCity?: boolean;
 }
 
 const ME = 'A';
@@ -80,6 +89,35 @@ function cityRing(s: GameState): Array<{ x: number; y: number }> {
   return out;
 }
 
+/**
+ * 这一步允许走的落点：**走完之后能贴着那个农民**的格子。
+ *
+ * 为什么只放这些：教程的第三步是"走过去"，第四步是"打他"。如果允许朝任意方向走，
+ * 玩家很可能走反，然后第四步永远够不着——而教程又不会倒退，只能卡在那里。
+ * 与其在文案里写"请往右上走"，不如直接不给别的格子点。
+ */
+function allowedDestinations(s: GameState): Array<{ x: number; y: number }> {
+  const u = myUnit(s);
+  const b = bait(s);
+  if (!u || !b) return [];
+  const out: Array<{ x: number; y: number }> = [];
+  for (const i of reachableTiles(s, u).keys()) {
+    const x = i % s.w;
+    const y = Math.floor(i / s.w);
+    // 八向相邻（本游戏斜着也走一步，所以用切比雪夫距离）
+    if (Math.max(Math.abs(x - b.x), Math.abs(y - b.y)) === 1) out.push({ x, y });
+  }
+  return out;
+}
+
+/** 这一步允不允许落在这个格子上（只在「走过去」那一步设限） */
+export function tutorialAllowsMove(state: GameState, x: number, y: number): boolean {
+  if (!active) return true;
+  const step = STEPS[stepIndex];
+  if (!step || step.key !== 'move') return true;
+  return allowedDestinations(state).some((p) => p.x === x && p.y === y);
+}
+
 function snapOf(s: GameState): Snap {
   const c = foeCity(s);
   const u = myUnit(s);
@@ -97,16 +135,8 @@ const STEPS: Step[] = [
   {
     key: 'goal',
     title: '赢的条件只有一个',
-    body: () => '这盘棋的胜利条件不是"杀光对面"，是把对面的城打下来。\n红框圈住的那座城就是目标。',
-    mark: (c) => {
-      const f = foeCity(c.state);
-      if (!f) return [];
-      const out: Array<{ x: number; y: number }> = [];
-      for (let y = f.y; y < f.y + f.size; y++) {
-        for (let x = f.x; x < f.x + f.size; x++) out.push({ x, y });
-      }
-      return out;
-    },
+    body: () => '这盘棋的胜利条件是把对面的城打下来。\n红框圈住的那座城就是目标。',
+    markCity: true,
   },
   {
     key: 'select',
@@ -121,10 +151,13 @@ const STEPS: Step[] = [
   {
     key: 'move',
     title: '第二步：走过去',
-    body: () => '点一个亮起来的格子，兵就走过去了。\n每个兵每回合只能走一次、打一次；走完它会自动取消选中，想做下一件事要重新点它。',
-    done: (c, s) => {
+    body: () => '点亮起来的格子，兵就走过去了。（这一课只让它走到那个农民旁边，别的格子先不给点）\n每个兵每回合只能走一次、打一次；走完它会自动取消选中，想做下一件事要重新点它。',
+    mark: (c) => allowedDestinations(c.state),
+    done: (c) => {
       const u = myUnit(c.state);
-      return Boolean(u) && (u!.x !== s.myX || u!.y !== s.myY);
+      const b = bait(c.state);
+      if (!u || !b) return false;
+      return Math.max(Math.abs(u.x - b.x), Math.abs(u.y - b.y)) === 1;
     },
   },
   {
@@ -152,19 +185,14 @@ const STEPS: Step[] = [
       if (f?.ruined) return '城已经塌了，但它还不归你——把兵走进废墟，才算接管。\n（走之前先点一下你的兵）';
       return '走到城墙边上（亮起来的格子），再点一下你的兵，然后点那座城——这叫攻城。\n城血打完会变成废墟，再派兵走进去接管，这局就赢了。';
     },
+    markCity: true,
     mark: (c) => {
       const f = foeCity(c.state);
-      if (!f) return [];
       const u = myUnit(c.state);
-      // 已经贴着城了：圈城本身，提示"点它"
-      if (u && Math.abs(u.x - f.x) <= f.size && Math.abs(u.y - f.y) <= f.size) {
-        const out: Array<{ x: number; y: number }> = [];
-        for (let y = f.y; y < f.y + f.size; y++) {
-          for (let x = f.x; x < f.x + f.size; x++) out.push({ x, y });
-        }
-        return out;
-      }
-      return cityRing(c.state);
+      if (!f || !u) return [];
+      // 已经贴着城了：只要那个红框（点城就是攻城）；没贴到才给"该往哪站"
+      const near = Math.abs(u.x - f.x) <= f.size && Math.abs(u.y - f.y) <= f.size;
+      return near ? [] : cityRing(c.state);
     },
     done: (c) => c.state.winner === ME,
   },
@@ -205,6 +233,15 @@ export function tutorialStart(h: TutorialHooks, host?: HTMLElement): void {
 
 export function tutorialSnapshot(state: GameState): void {
   snap = snapOf(state);
+}
+
+/** 这一步要圈的格子 / 要框的城，直接交给棋盘渲染（见 BoardUi.tutorialTiles） */
+export function tutorialMarks(state: GameState): { tiles: number[]; cityId: string | null } {
+  const step = STEPS[stepIndex];
+  if (!active || !step) return { tiles: [], cityId: null };
+  const tiles = (step.mark?.({ state, selectedId: null }) ?? []).map((p) => p.y * state.w + p.x);
+  const cityId = step.markCity ? (foeCity(state)?.id ?? null) : null;
+  return { tiles, cityId };
 }
 
 /** 当前步骤（给用例断言用） */
@@ -299,14 +336,16 @@ function paint(state: GameState, selectedId: string | null, override?: string): 
     doc.body.appendChild(card);
   }
 
-  // 圈：先撤旧的，再画新的（棋盘每帧重建，旧的引用已经不在文档里了）
+  /*
+   * 棋盘上的圈**不在这里画**。
+   *
+   * 棋盘是每帧重建的、首帧还在 rAF 里，往 DOM 上贴的 class 随时会被冲掉或贴到
+   * 还没建出来的节点上——第一版就是这样：城市红框一直不出现。现在圈和红框都走
+   * `renderBoard` 的渲染参数（`tutorialTiles` / `tutorialCityId`），见 main.ts。
+   * 这里只留"面板按钮"的高亮，它不在棋盘里，重建节奏不一样。
+   */
   for (const el of marked) el.classList.remove('tut-ring');
   marked = [];
-  const marks = step.mark?.({ state, selectedId }) ?? [];
-  for (const m of marks) {
-    const el = doc.querySelector<HTMLElement>(`#board .tile[data-x="${m.x}"][data-y="${m.y}"]`);
-    if (el) { el.classList.add('tut-ring'); marked.push(el); }
-  }
   const selEl = step.markSel ? doc.querySelector<HTMLElement>(step.markSel) : null;
   if (selEl) { selEl.classList.add('tut-ring'); marked.push(selEl); }
 

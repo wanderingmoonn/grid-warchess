@@ -40,6 +40,7 @@ import {
 import { renderPanel } from '../src/ui/panel.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
+  tutorialAllowsMove,
   tutorialExit,
   tutorialOn,
   tutorialSnapshot,
@@ -6333,6 +6334,36 @@ check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡�
   assert.ok((d.body.textContent ?? '').includes('赢的条件'), '第一句要讲清胜利条件是破城');
   assert.equal(d.querySelectorAll('#board .tile').length, 144, '教学局应该是 12×12（144 格）');
   assert.ok(!d.querySelector('.title-screen'), '进教程要撤掉首页');
+
+  // 敌城要"一个整块的红框"，不是四个格子各描一圈（那样交界处有线、中间有个十字）
+  const ringed = Array.from(d.querySelectorAll<HTMLElement>('#board .city-block.tut-city-ring'));
+  assert.equal(ringed.length, 1, '只有敌城挂红框');
+  assert.ok(ringed[0]!.className.includes('owner-B'), '挂红框的必须是对面那座城');
+  assert.equal(
+    d.querySelectorAll('#board .tile.tut-ring').length,
+    0,
+    '第一步不该给任何格子描边（城市靠整块红框指出来）',
+  );
+});
+
+check('新手教程：第三步只放行「走完能贴着对手」的格子', () => {
+  /*
+   * 教程第三步是"走过去"，第四步是"打他"。如果允许朝任意方向走，玩家走反了就
+   * 永远够不着——教程不倒退，只能卡在那一步。所以这一步只放行贴着农民的落点。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const state = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => tutorialExit() }, host);
+  tutorialSnapshot(state);
+  tutorialTick(state, null);
+  doc.querySelector<HTMLElement>('[data-tut="next"]')!.click(); // 讲解步 → 选中
+  tutorialTick(state, 'tut-mine');                              // 选中 → 走过去
+  assert.equal(tutorialStep(), 'move');
+
+  assert.equal(tutorialAllowsMove(state, 4, 6), true, '走到农民旁边要放行');
+  assert.equal(tutorialAllowsMove(state, 2, 8), false, '往回走要拦住（走完够不着农民）');
+  tutorialExit();
 });
 
 check('新手教程：卡片一步步推进，做到才换下一步，跳过就收起来', () => {

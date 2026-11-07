@@ -1153,6 +1153,12 @@ function pickReplayFile(): void {
   input.click();
 }
 
+/** 教程这一步要圈的格子 / 要框的城（转成棋盘渲染认识的两个字段） */
+function tutorialMarksOf(): { tutorialTiles: number[]; tutorialCityId: string | null } {
+  const m = tutorial.tutorialMarks(state);
+  return { tutorialTiles: m.tiles, tutorialCityId: m.cityId };
+}
+
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
@@ -1215,6 +1221,11 @@ function render(): void {
     hpDrops,
     // 地上的东西（水雷/地雷）要按"这是谁的视角"分实心/空心
     me: me(),
+    /*
+     * 新手教程的圈和城里红框。走渲染参数而不是渲染完再贴 class：
+     * 棋盘每帧重建、首帧还在 rAF 里，贴上去的那一下经常白贴（城市红框就是这么丢的）。
+     */
+    ...(tutorial.tutorialOn() ? tutorialMarksOf() : {}),
   });
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
@@ -1309,7 +1320,18 @@ function render(): void {
    * 圈出来的格子也得每帧重挂一次。tutorial 自己判断"还是不是同一张卡片"，
    * 不会每帧新建节点（否则按钮会丢焦点、动画会闪）。
    */
-  if (tutorial.tutorialOn()) tutorial.tutorialTick(state, selectedId);
+  if (tutorial.tutorialOn()) {
+    const before = tutorial.tutorialStep();
+    tutorial.tutorialTick(state, selectedId);
+    /*
+     * 教程刚翻页：这一帧的棋盘还是按**上一步**的标记画的（圈在哪、框哪座城）。
+     * 不补一帧的话，红框要等到玩家下一次点击才出现——"该打这座城了"却什么都没框。
+     * 用 setTimeout 而不是直接递归，是为了不把 render 套进 render 里。
+     */
+    if (tutorial.tutorialOn() && tutorial.tutorialStep() !== before) {
+      setTimeout(() => { if (tutorial.tutorialOn()) render(); }, 0);
+    }
+  }
 }
 
 /**
@@ -3066,6 +3088,16 @@ function onBoardClick(e: Event): void {
 
   // 4) 可达格 → 移动（自己的城市格也算普通可走格）
   if (selectedId && reach.includes(cell)) {
+    /*
+     * 教程的"走过去"那一步只放行**走完能贴着对手**的格子。
+     *
+     * 不放行的话，玩家走反了就会卡住：下一步是"打他"，而教程不倒退。
+     * 与其在文案里喊"请往右上走"，不如直接把别的格子拦在门外。
+     */
+    if (tutorial.tutorialOn() && !tutorial.tutorialAllowsMove(state, coords.x, coords.y)) {
+      toast('这一课只学一步：走到那个农民旁边（亮着的格子）');
+      return;
+    }
     dispatch({ type: 'MOVE', unitId: selectedId, x: coords.x, y: coords.y });
     return;
   }

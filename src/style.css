@@ -5817,3 +5817,25 @@ a.btn {
 @media (prefers-reduced-motion: reduce) {
   .tut-ring { animation: none; }
 }
+
+/* ── 新手教程：整座敌城的红框 ──
+ *
+ * 挂在城市自己的 `.city-block` 上（那块本来就是一座城的整框），而不是给四个格子
+ * 各描一圈——逐格描边的边框会落在格子交界处，中央还会拉出一个十字，看着像把城
+ * 切成了四块。这里只换颜色、加粗、加一点外发光。
+ */
+.city-block.tut-city-ring {
+  border-color: #d9483f;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16);
+  animation: tut-city-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tut-city-pulse {
+  0%, 100% { border-color: #d9483f; box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16); }
+  50% { border-color: rgba(217, 72, 63, 0.55); box-shadow: 0 0 0 6px rgba(217, 72, 63, 0.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .city-block.tut-city-ring { animation: none; }
+}
