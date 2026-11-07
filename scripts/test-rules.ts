@@ -204,6 +204,8 @@ import {
   disbandRefundOf,
   canStandAt,
   canStrike,
+  attackableTargets,
+  isArmed,
   computeDamage,
   coversTile,
   damageToCity,
@@ -5194,6 +5196,52 @@ test('桥会被打掉，打掉之后变回水面', () => {
     'water',
     '桥没了，地形应该退回水面',
   );
+});
+
+test('没武器的单位不能出手：桥不会"打人"', () => {
+  // 桥是 atk 0 / range 0 的 building。以前它能对邻格下 ATTACK：伤害算出来是 0，
+  // 所以界面上看着"什么也没发生"，但副作用全都在——吃掉这回合的 acted、
+  // 白挨对面一次反击、战报里多一条"木桥 攻击 民兵，穿不透护甲，没有造成伤害"。
+  // 判定必须落在"能不能出手"这一层（isArmed），不能指望伤害为 0 自己兜住。
+  const s = fresh();
+  clearArea(s, 6, 4, 10, 10);
+  digRiver(s, 8, 3, 12);
+  const cur = bridgeAt(s, 8, 7, 7);
+  const bridge = cur.units.find((u) => u.type === 'bridge');
+  assert.ok(bridge);
+  // 新盖完的东西当回合是 acted（刚动过土），这里模拟"下一回合轮到它"：
+  // 动作位是空的，才是真正考验"能不能出手"的那一刻
+  bridge.acted = false;
+  bridge.moved = false;
+  // 桥西岸站一个敌人：贴着脸，射程上完全"够得着"
+  const foe = place(cur, 'B', 'militia', 7, 7);
+  assert.ok(foe);
+
+  assert.equal(isArmed(cur, bridge), false, '桥没有武器');
+  assert.equal(isArmed(cur, foe), true, '民兵有武器');
+  assert.deepEqual(attackableTargets(cur, bridge), [], '桥不该有任何可攻击目标');
+  assert.equal(canStrike(cur, bridge, foe), false, '桥贴着敌人也不该能出手');
+
+  // 硬下指令：要被拒，而且理由得是"没武器"，不是"够不着"
+  cur.current = 'A';
+  const logBefore = cur.log.length;
+  const hpBefore = foe.hp;
+  const r = applyAction(cur, { type: 'ATTACK', unitId: bridge.id, targetId: foe.id });
+  assert.equal(r.ok, false, '桥出不了手');
+  assert.match(r.reason ?? '', /没有武器/, `拒绝理由该说明没武器，实际：${r.reason}`);
+  assert.equal(bridge.acted, false, '被拒的动作不该消耗桥的这回合');
+  assert.equal(bridge.attacksLeft, undefined, '被拒的动作不该扣攻击次数');
+  assert.equal(foe.hp, hpBefore, '没打出去，对面不该掉血');
+  assert.equal(cur.log.length, logBefore, '被拒的动作不该往战报里写字');
+
+  // 反过来必须照旧：没武器只约束**出手方**，桥作为目标仍然能拆
+  cur.current = 'B';
+  assert.ok(
+    attackableTargets(cur, foe).some((u) => u.id === bridge.id),
+    '民兵仍然该能拆桥',
+  );
+  const hit = applyAction(cur, { type: 'ATTACK', unitId: foe.id, targetId: bridge.id });
+  assert.ok(hit.ok, hit.ok ? '' : `拆桥被误伤了：${hit.reason}`);
 });
 
 console.log('\n军营');

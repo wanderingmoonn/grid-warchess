@@ -1474,6 +1474,25 @@ export function canAttack(u: Unit): boolean {
   return !u.acted && (u.attacksLeft ?? 1) > 0;
 }
 
+/**
+ * 这个单位有没有"武器"：物理攻和魔法攻至少有一项大于 0。
+ *
+ * 桥、渡船、土墙、魔龙卵都是 `atk: 0` 且没有 `magicAtk` 的东西，以前它们
+ * 照样能下 ATTACK 指令——打不出伤害（`computeDamage` 归零），**但动作本身
+ * 有副作用**：吃掉这回合的 `acted`、挨对面一次反击、朝战报里写一条
+ * "木桥 攻击 民兵，穿不透护甲，没有造成伤害"。伤害为 0 不等于这个动作是空的，
+ * 所以要在"能不能出手"这一层拦，而不是在伤害那一层拦。
+ *
+ * 判据看**面板**，不看 `attackPowerNow`：光环和状态能让一个本来没武器的单位
+ * 凑出 1 点攻击，那不该让它"临时长出武器"。
+ *
+ * 只约束**出手方**。桥作为**目标**仍然能打——拆桥是正经战术，见 canStrike 的注释。
+ */
+export function isArmed(s: GameState, u: Unit): boolean {
+  const def = utype(s, u.type);
+  return (def.atk ?? 0) > 0 || (def.magicAtk ?? 0) > 0;
+}
+
 //旧代码残留，现在已经移动到aura.ts，这里只保留薄包装
 export function auraBonus(s: GameState, unit: Unit): { atk: number; armor: number } {
   const b = auraBonusOf(s, unit);
@@ -2351,6 +2370,10 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
  * 消耗动作——想真的断掉这条路，还是得把部队压到桥边。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
+  // 没武器的单位不能出手（桥、渡船、土墙、魔龙卵）。必须放在最前面：
+  // 下面的 `range` 判定会把 `range: 0` 兜底成"打到隔壁"（effectiveRange 至少 1），
+  // 所以不在这里拦，"0 射程"也能对邻格开火——见 isArmed 的注释。
+  if (!isArmed(s, attacker)) return false;
   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
   // 站在林子里连平射都被树冠吃掉一格（见 rangeModAgainst）。
   const range = effectiveRangeAgainst(s, attacker, tileAt(s, target.x, target.y));
@@ -2371,7 +2394,8 @@ export function attackableTargets(s: GameState, unit: Unit): Unit[] {
 
 /** 射程内的敌方城市 */
 export function siegeTargets(s: GameState, unit: Unit): City[] {
-  if (!canAttack(unit)) return [];
+  // 没武器的单位连攻城列表都不该进（桥、渡船、土墙、魔龙卵），见 isArmed
+  if (!canAttack(unit) || !isArmed(s, unit)) return [];
   // 城按"城市"那一层算高度（2 层）：站在台地上砸城比从谷底仰着砸多一格，
   // 和野战用同一条规则，不另开一套。
   return s.cities.filter((c) => {
@@ -3579,6 +3603,11 @@ function doAttack(
     return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
   }
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
+  // 单独立一条，别让它落到下面的"目标超出射程"：桥对邻格本来就是"射程够"，
+  // 走射程分支会回一句误导的话（见 isArmed）。
+  if (!isArmed(s, attacker)) {
+    return { ok: false, reason: `${utype(s, attacker.type).name} 没有武器，不能攻击` };
+  }
 
   // 反击判定也要按"还手的那个人"来算距离：地面兵够不着头顶的飞行单位，
   // 就不能在被飞行单位贴脸打的时候原地还手。这里必须换成
@@ -3848,6 +3877,11 @@ function doSiege(
   if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
+  // 和野战同理：没武器的单位不能攻城。否则桥会对着邻格的城市"攻城"，
+  // 打 0 点、白吃一回合，还往战报里写"木桥 攻城，但打不动这座城的城墙"。
+  if (!isArmed(s, attacker)) {
+    return { ok: false, reason: `${utype(s, attacker.type).name} 没有武器，不能攻城` };
+  }
 
   if (attacker.attacksLeft === undefined) {
     attacker.attacksLeft = Math.max(1, attacksPerTurn(s, attacker));
