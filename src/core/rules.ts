@@ -4969,6 +4969,20 @@ export function heroSkillsOf(
 
     let notReadyReason = k.notReadyReason; // 默认用静态配置
 
+    /*
+     * 这一回合已经放过技能、而这个技能不能连发 —— 现在按下去只会被
+     * `doHeroSkill` 拒掉，按钮就不该还亮着。
+     *
+     * 判据必须和那边那句 `if (!skill.multiCast && u.skillTurn === s.turn)` 完全一致：
+     * `multiCast: false` 和"根本不写这个字段"是同一件事（都是 falsy）。
+     * 以前这里漏了这一段，于是不能连发的技能放过一次之后仍然显示"就绪"，
+     * 点下去却报"这一回合已经放过技能"——按钮和规则各说各话。
+     */
+    if (ready && !k.multiCast && u.skillTurn === s.turn) {
+      ready = false;
+      notReadyReason = '这一回合已经放过技能';
+    }
+
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
     if (ready && SKILL_READY_CHECKS[k.id]) {
       const checkResult = SKILL_READY_CHECKS[k.id]!(s, u, abilityApi);

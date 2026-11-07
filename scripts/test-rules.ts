@@ -12008,6 +12008,41 @@ test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
 });
 
+test('技能：不能连发的技能，本回合放过之后就不该显示"就绪"（multiCast 写 false 与不写等价）', () => {
+  const s = fresh({ godMode: true });
+  s.current = 'A';
+  const u = s.units.find((x) => x.owner === 'A')!;
+  const def = s.unitTypes[u.type]!;
+
+  // 现造一个技能挂上去：这条用例只关心"就绪不就绪"，不关心效果
+  const setSkill = (multiCast?: boolean) => {
+    const base = { id: 'test-once', name: '试一次', summary: '', effect: 'test-once', cooldown: 0 };
+    def.skills = [multiCast === undefined ? base : { ...base, multiCast }];
+    return () => heroSkillsOf(s, u).find((k) => k.def.id === 'test-once')!;
+  };
+
+  // 1) 显式写 multiCast: false
+  let view = setSkill(false);
+  assert.equal(view().ready, true, '还没放过，应该是就绪的');
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '放过了就该熄，不然点下去只会被拒绝');
+  assert.ok(
+    (view().notReadyReason ?? '').includes('已经放过'),
+    '要给一句能看懂的原因，而不是一个亮着的按钮',
+  );
+
+  // 2) 根本不写这个字段 —— 必须和 false 完全一致
+  u.skillTurn = undefined;
+  view = setSkill(undefined);
+  assert.equal(view().ready, true);
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '不写 multiCast 也要熄（两者是同一件事）');
+
+  // 3) 声明了 multiCast: true 的可以连发，放过一次仍然就绪
+  view = setSkill(true);
+  assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
+});
+
 test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {
   const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
   const killer = place2(s, 'A', 'assassin-master', 5, 5);
