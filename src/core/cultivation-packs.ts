@@ -15,6 +15,7 @@ import {
   SPIRIT_CULTIVATOR, 
   CULTIVATOR, 
   SWORD_CULTIVATOR,
+  BODY_CULTIVATOR,
   SERVANT,
   DEACON,
   SPIRIT_FIELD,
@@ -51,6 +52,8 @@ export const CULTIVATION_PACK: Expansion = {
   units: [
     CULTIVATOR, 
     SWORD_CULTIVATOR, 
+    // 体修：第二个"能修炼的战斗流派"，靠金刚不坏硬抗（见 abilities/body-ward.ts）
+    BODY_CULTIVATOR,
     SPIRIT_CULTIVATOR,
     SERVANT, 
     // 执事是灵矿唯一的建造者：漏登记它就等于灵矿永远造不出来。

@@ -33,6 +33,10 @@ import {
   totalHpBonusForRank,
 } from '../src/core/cultivation/progression.ts';
 import {
+  BODY_ATK_MUL,
+  BODY_MOVE_MUL,
+  BODY_RANGE_MUL,
+  BODY_TRUE_DAMAGE_MUL,
   KILL_EXP_BASE,
   KILL_EXP_CAP_BASE,
   KILL_EXP_CAP_PER_RANK,
@@ -57,6 +61,7 @@ import {
   trueDamageForRank,
 } from '../src/core/cultivation/stats.ts';
 import { SPIRIT_ASCENSION_RANK } from '../src/core/cultivation/identity.ts';
+import { BODY_WARD_BASE, BODY_WARD_TIERS } from '../src/core/cultivation/abilities/body-ward.ts';
 import {
   SKY_STEP_RANK,
   SWEEP_BASE_REACH,
@@ -2582,6 +2587,11 @@ function cultivationRules(): string {
       <ul>
         <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
         <li><b>剑修（时代 2）</b>：以杀证道的新流派。他们极度擅长战斗，普攻的境界加成只有 ${SWORD_BASE_MUL} 倍，但能通过施展剑技和击杀敌人快速成长。</li>
+        <li><b>体修（时代 2）</b>：用身体硬抗的一支。招牌是「金刚不坏」——受到的伤害按剩余血量减免
+          ${Math.round(BODY_WARD_BASE * 100)}%~${Math.round(BODY_WARD_TIERS[3] * 100)}%，血越少越硬；
+          但真元与中毒、灼烧这类持续伤害<b>不受影响</b>，所以炼气士和剑修天生克它。
+          境界加成也偏科：攻击 ×${BODY_ATK_MUL}，真元、移动、射程各 ×${BODY_TRUE_DAMAGE_MUL}，
+          于是它永远比同伴慢半步、近一格。</li>
       </ul>
 
       <h3>境界与修为</h3>
@@ -2591,7 +2601,7 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
@@ -2627,7 +2637,8 @@ function cultivationRules(): string {
       <h3>各境界一览表</h3>
       <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
         其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
-        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。</p>
+        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。
+        体修的增量按「攻击 ×${BODY_ATK_MUL}、真元 ×${BODY_TRUE_DAMAGE_MUL}、移动 ×${BODY_MOVE_MUL}、射程 ×${BODY_RANGE_MUL}」折算，其余照表。</p>
       <div class="scroll-x">
         <table class="rank-table">
           <colgroup>${rankCols}</colgroup>

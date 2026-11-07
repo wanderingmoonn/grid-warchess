@@ -25,7 +25,10 @@ import {
   SWORD_KILL_EXP_MUL,
   killExpCapOfRank,
   killExpForRank,
+  trueDamageForRank,
+  trueDamageOf,
 } from '../../../src/core/cultivation/stats.ts';
+import { bodyWardPct, BODY_WARD_TIERS } from '../../../src/core/cultivation/abilities/body-ward.ts';
 import { baseLifespanOf, getExpGrowth } from '../../../src/core/cultivation/progression.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
@@ -1250,6 +1253,100 @@ export function run() {
     const withExp = runSeq(true);
     const withoutExp = runSeq(false);
     assert.ok(withExp > withoutExp, `有灵田(${withExp})应多于无灵田(${withoutExp})`);
+  });
+
+  // ── 体修（2026-11-07）──────────────────────────────────
+  test('体修：时代 2、算修士、带金刚不坏', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    assert.equal(s.unitTypes['body-cultivator'].era, 2, '体修是时代 2 的兵');
+    assert.ok(
+      CULTIVATION_PACK.units.some((u) => u.id === UNIT_IDS.BODY_CULTIVATOR),
+      '包里要登记体修',
+    );
+    assert.ok(CULTIVATION_ABILITIES.some((a) => a.id === 'body-ward'), '能力表里要有金刚不坏');
+    // 能修炼才算修士：升到 3 级后属性必须跟着涨
+    setCultivationExp(body, expForRank(2));
+    assert.ok(
+      effectiveStats(s, body).atk > s.unitTypes['body-cultivator'].atk,
+      '境界要加攻击，否则它只是个普通兵',
+    );
+    const lines = getCultivationPanelLines(s, body).join('\n');
+    assert.ok(lines.includes('金刚不坏'), '面板要写金刚不坏');
+    assert.ok(lines.includes('体修'), '面板要写流派系数');
+  });
+
+  test('金刚不坏：30% 起步，最后一档 50%', () => {
+    assert.deepEqual([...BODY_WARD_TIERS], [0.3, 0.35, 0.4, 0.5]);
+    assert.equal(bodyWardPct(100, 100), 0.3, '满血 30%');
+    assert.equal(bodyWardPct(60, 100), 0.35, '掉到 60% 血是第二档');
+    assert.equal(bodyWardPct(40, 100), 0.4, '掉到 40% 血是第三档');
+    assert.equal(bodyWardPct(25, 100), 0.5, '最后四分之一血跳到 50%');
+    assert.equal(bodyWardPct(1, 100), 0.5);
+    assert.equal(bodyWardPct(1, 0), 0, '没有生命上限时不该返回减免');
+  });
+
+  test('金刚不坏：挨打真的变少，血越少越硬', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    const foe = place2(s, 'B', 'artillery', 8, 5);
+
+    const full = computeDamage(s, foe, body);
+    body.hp = Math.round(maxHpOf(s, body) * 0.2);
+    const low = computeDamage(s, foe, body);
+    assert.ok(low < full, `残血(${low})该比满血(${full})挨得少`);
+
+    const qiDmg = computeDamage(s, foe, qi);
+    assert.ok(full < qiDmg, `满血体修(${full})也该比炼气士(${qiDmg})抗打`);
+  });
+
+  test('金刚不坏：只减物理段，真元原样吃', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'B', 'qi-cultivator', 8, 5);
+    setCultivationExp(body, expForRank(2));
+    setCultivationExp(qi, expForRank(2));
+
+    // 拉到最后一档（50%）：物理段减半，真元一分不少
+    body.hp = Math.round(maxHpOf(s, body) * 0.2);
+    const trueDmg = trueDamageOf(qi);
+    assert.ok(trueDmg > 0, '这条用例要求对面有真元');
+    const physical = Math.max(0, effectiveStats(s, qi).atk - effectiveStats(s, body).armor);
+    assert.equal(
+      computeDamage(s, qi, body),
+      Math.round(physical * 0.5) + trueDmg,
+      '真元不吃减免——炼气士/剑修才是体修的克星',
+    );
+  });
+
+  test('体修：境界加成偏科（攻 ×1.1，真元/移动/射程 ×0.5）', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    const sword = place2(s, 'A', 'sword-cultivator', 5, 9);
+    for (const u of [body, qi, sword]) setCultivationExp(u, expForRank(2)); // 都是 3 级
+
+    // 射程与移动折半：3 级时炼气士各 +1，体修还是 0
+    assert.equal(effectiveStats(s, body).range, 1, '体修射程不涨');
+    assert.equal(effectiveStats(s, qi).range, 2, '炼气士照常 +1');
+    assert.equal(effectiveStats(s, body).move, 2, '体修移动不涨');
+    assert.equal(effectiveStats(s, qi).move, 3, '炼气士照常 +1');
+
+    // 真元折半；炼气士与剑修不变
+    assert.equal(trueDamageOf(body), Math.floor(trueDamageForRank(3) / 2));
+    assert.equal(trueDamageOf(qi), trueDamageForRank(3));
+    assert.equal(trueDamageOf(sword), trueDamageForRank(3));
+
+    // 攻击则更高一档：体修用拳头吃饭
+    const bodyAtk = effectiveStats(s, body).atk - s.unitTypes['body-cultivator'].atk;
+    const qiAtk = effectiveStats(s, qi).atk - s.unitTypes['qi-cultivator'].atk;
+    assert.ok(bodyAtk >= qiAtk, `体修境界攻击(${bodyAtk})不该低于炼气士(${qiAtk})`);
   });
 }
 

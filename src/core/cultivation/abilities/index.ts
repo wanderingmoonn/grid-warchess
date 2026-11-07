@@ -5,6 +5,7 @@
 import type { AbilityDef } from '../../abilities.ts';
 
 import { ANOMALY } from './anomaly.ts';
+import { BODY_WARD } from './body-ward.ts';
 import { FORMATION_GUARDIAN } from './formation-guardian.ts';
 import { FORMATION_KILL } from './formation-kill.ts';
 import { FORMATION_SEAL } from './formation-seal.ts';
@@ -13,6 +14,7 @@ import { SPIRIT_ASCENSION } from './spirit-ascension.ts';
 import { SPIRIT_AURA } from './spirit-aura.ts';
 
 export * from './anomaly.ts';
+export * from './body-ward.ts';
 export * from './formation-guardian.ts';
 export * from './formation-kill.ts';
 export * from './formation-seal.ts';
@@ -23,6 +25,7 @@ export * from './unlocks.ts';
 
 export const CULTIVATION_ABILITIES: AbilityDef[] = [
   ANOMALY,
+  BODY_WARD,
   FORMATION_KILL,
   FORMATION_SEAL,
   FORMATION_GUARDIAN,

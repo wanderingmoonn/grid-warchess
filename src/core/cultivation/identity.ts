@@ -11,6 +11,7 @@ import type { GameState, Unit, UnitTypeDef } from '../types.ts';
 export const UNIT_IDS = {
   QI_CULTIVATOR: 'qi-cultivator',
   SWORD_CULTIVATOR: 'sword-cultivator',
+  BODY_CULTIVATOR: 'body-cultivator',
   SPIRIT: 'cultivator-spirit',
   SERVANT: 'cultivation-servant',
   DEACON: 'cultivation-deacon',
@@ -39,6 +40,7 @@ export const UNIT_IDS = {
 const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
+  UNIT_IDS.BODY_CULTIVATOR,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
@@ -60,6 +62,16 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
  */
 export function isSwordCultivatorType(type: string): boolean {
   return type === UNIT_IDS.SWORD_CULTIVATOR;
+}
+
+/**
+ * 是不是体修。同上，只认 type 字符串。
+ *
+ * 体修的境界加成是"偏科"的（攻 ×1.1、真元/移动/射程 ×0.5），这些系数在
+ * `stats.ts` 里按流派分支；身份判定留在这里，避免 stats 反过来import 兵种表。
+ */
+export function isBodyCultivatorType(type: string): boolean {
+  return type === UNIT_IDS.BODY_CULTIVATOR;
 }
 
 export function isSpirit(u: Unit): boolean {
