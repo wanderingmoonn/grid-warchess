@@ -76,8 +76,11 @@ export function hasAbilityIn(def: UnitTypeDef | undefined, id: string, extra?: s
 export function abilityNames(def: UnitTypeDef): string[] {
   const ids = def.abilities ?? [];
   const names = ids.map((id) => abilityById(id)?.name ?? id);
-  if (def.layer === 'air' && !ids.includes('fly-over')) names.unshift('掠空');
-  else if (def.flight === true && !ids.includes('fly') && !ids.includes('fly-over')) names.unshift('飞行');
+  // 空中层统一印「飞行」。「掠空」已经整个删掉（2026-11-07）——它和飞行在规则上
+  // 是同一件事，只在名字上有区别，而那个区别只会让人误会。
+  if ((def.layer === 'air' || def.flight === true) && !ids.includes('fly')) {
+    names.unshift('飞行');
+  }
   return names;
 }
 

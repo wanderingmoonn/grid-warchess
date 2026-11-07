@@ -101,9 +101,7 @@ export const MODERN_ABILITIES: AbilityDef[] = [
             if (c.side !== 'attacker' || !c.foe) return;
             const def = c.api.utype(c.state, c.foe.type);
             const flying =
-              def.layer === 'air' ||
-              c.api.hasAbility(c.state, c.foe, 'fly-over') ||
-              c.api.hasAbility(c.state, c.foe, 'fly');
+              def.layer === 'air' || c.api.hasAbility(c.state, c.foe, 'fly');
             if (flying) c.damage = Math.round(c.damage * ANTI_AIR);
           },
         },

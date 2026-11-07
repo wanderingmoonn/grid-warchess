@@ -2128,7 +2128,7 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
       if (u.summonedOnly) continue;
       const mech =
         (u.abilities ?? []).length > 0 ||
-        // 飞行/掠空从能力升格成了类型字段，但它仍然是机制（而且是最贵的那条）
+        // 飞行从能力升格成了类型字段，但它仍然是机制（而且是最贵的那条）
         u.flight === true ||
         u.layer === 'air' ||
         (u.splash ?? 0) > 0 ||
@@ -2312,7 +2312,8 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
 
   // 2026-11-07 第二批：女巫继续降价削血、骑士长加血
   assert.equal(of('witch').cost, 115, '女巫 120 → 115');
-  assert.equal(of('witch').maxHp, 19, '女巫 24 → 19（两发齐射必死，靠射程不靠血）');
+  assert.equal(of('witch').maxHp, 25, '女巫血量回到 25（19 那一刀砍在了不需要砍的地方）');
+  assert.deepEqual(of('witch').abilities, ['hex-weak'], '「掠空」已经整个删掉，只剩虚咒');
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
@@ -2388,7 +2389,7 @@ test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', ()
   assert.ok(up.hp > 60, '同时回血');
 });
 
-test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且掠空、陨卵半径 9', () => {
+test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且飞行、陨卵半径 9', () => {
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
 
   const egg = s.unitTypes['dragon-egg']!;
@@ -2399,17 +2400,17 @@ test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且掠空、陨卵半�
   const dragon = s.unitTypes['evil-dragon-king']!;
   assert.equal(dragon.vision, 9, '邪龙王视野 9');
   assert.equal(dragon.layer, 'air', '邪龙王在空中层');
-  assert.equal(dragon.flight, true, '掠空同时要能掠水，所以 flight 一起写');
+  assert.equal(dragon.flight, true, '飞行要能掠水，flight 与 layer 一起写');
   const skill = (dragon.skills ?? []).find((k) => k.id === 'dragon-egg');
   assert.equal(skill?.radius, 9, '陨卵半径 9');
 
-  // 掠空的实际含义：能和地面单位叠在同一格（见 layer 的说明）
+  // 空中层的实际含义：能和地面单位叠在同一格（见 layer 的说明）
   s.units = [];
   putTerrain(s, 5, 5, 'plain');
   const mate = stackOn(s, 'A', 'militia', 5, 5);
   const air = stackOn(s, 'A', 'evil-dragon-king', 5, 5);
   assert.equal(isAirborne(s, air), true);
-  assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
+  assert.equal(unitsAt(s, 5, 5).length, 2, '空中单位和地面单位共占一格');
   assert.ok(unitsAt(s, 5, 5).some((u) => u.id === mate.id), '地面那一个还在');
 });
 
@@ -2755,7 +2756,7 @@ test('老存档的"我方/敌方"会被换成红蓝，自定义名不动', () =>
   assert.equal(s.players.A.name, '老王');
 });
 
-test('掠空：能和地面单位站在同一格，也能从同一格互相打', () => {
+test('飞行：能和地面单位站在同一格，也能从同一格互相打', () => {
   const s = fresh({ expansionIds: FANTASY });
   for (const [x, y] of [[4, 5], [5, 5], [5, 6], [4, 6], [6, 5]]) {
     s.tiles[idx(s, x, y)].terrain = 'plain';
@@ -2765,7 +2766,7 @@ test('掠空：能和地面单位站在同一格，也能从同一格互相打',
   assert.equal(unitsAt(s, 5, 5).length, 1);
 
   // 飞行单位可以把"站着敌人的格子"当成落点
-  assert.ok(reachableTiles(s, air).has(idx(s, 5, 5)), '掠空要能停在敌人头顶');
+  assert.ok(reachableTiles(s, air).has(idx(s, 5, 5)), '飞行单位要能停在敌人头顶');
   // 地面单位不行（对照组：同一张图、同样的起点）
   s.units = s.units.filter((u) => u.id !== air.id);
   const cav = place2(s, 'A', 'royal-cavalry', 4, 5);
@@ -9972,7 +9973,7 @@ test('新英雄数值微调：刺客视野 7、牢大 3/4/2、大史莱姆甲 2'
 
 test('地面打空中按距离 +1，空中打地面照常', () => {
   const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
-  const bird = place2(s, 'A', 'phoenix', 6, 6); // 掠空单位
+  const bird = place2(s, 'A', 'phoenix', 6, 6); // 飞行单位
   const foot = place2(s, 'B', 'militia', 6, 7); // 射程 1
 
   assert.equal(strikeDistance(s, foot, bird), 2, '地面打空中：1 → 2');
@@ -10010,7 +10011,7 @@ test('地面单位打不到空中，也就换不了手', () => {
 test('压着打仍然互相能还手：同格距离按 0+1=1 算', () => {
   const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
   const bird = place2(s, 'A', 'phoenix', 6, 6);
-  // 地面单位站在同一格（掠空层和地面层可以叠）
+  // 地面单位站在同一格（空中层和地面层可以叠）
   const foot = stackOn(s, 'B', 'swordsman', 6, 6);
   assert.equal(strikeDistance(s, foot, bird), 1, '同格是 0+1');
   assert.equal(canStrike(s, foot, bird), true, '射程 1 也能打头顶那个');
@@ -14535,7 +14536,7 @@ test('迷雾：对手架在视野外的桥，看不见就是看不见', () => {
   assert.equal(playerView(s2, 'A').state.tiles[j]!.terrain, 'bridge', '地形桥不该被藏起来');
 });
 
-test('飞行：掠空的单位可以飞到深水上', () => {
+test('飞行：飞行单位可以飞到深水上', () => {
   const s = createMatch(
     { ...DEFAULT_CONFIG, size: 14, startEra: 6, expansionIds: ['pack-contemporary', 'air-corps'] },
     5454,
@@ -15506,7 +15507,8 @@ test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血
   assert.equal(serpent.maxHp, 26, '蛇人生命 26（2026-11-04 下放到一代时压下来的）');
   assert.equal(serpent.era, 1, '蛇人已经下放到第 1 代');
   const witch = s.unitTypes['witch']!;
-  assert.deepEqual(witch.abilities, ['fly-over', 'hex-weak'], '女巫：掠空 + 虚咒');
+  // 2026-11-07：掠空删掉了（它在时代 1 让她"近战打不到"，胜率 87%），只剩虚咒
+  assert.deepEqual(witch.abilities, ['hex-weak'], '女巫：只剩虚咒');
   assert.ok(!(witch.abilities ?? []).includes('curse-hit'), '咒缚已经换掉');
 });
 
@@ -15596,15 +15598,24 @@ test('虚咒：3 格内敌军攻击力 −25%，4 格外不生效，两道不叠
   assert.equal(effectiveStats(s, near).atk, Math.round(base * 0.75), '两道虚咒不叠乘');
 });
 
-test('掠空：女巫在空中层，能和地面单位共占一格', () => {
+test('女巫：删掉掠空之后回到地面层，近战够得着了', () => {
+  /*
+   * 2026-11-07 的读数：她胜率 87%（n=86），根因是「掠空」把她放进空中层，
+   * 而时代 1 的地面近战射程全是 1，canStrike 对空中单位要求射程 ≥ 2——
+   * 根本打不到。删掉掠空之后这条必须反过来成立，否则那一刀等于没砍。
+   */
   const s = fresh({ startEra: 3, expansionIds: FANTASY });
   s.units = [];
   const witch = place2(s, 'B', 'witch', 5, 5);
-  assert.equal(airLayer(s.unitTypes['witch']!), true, '掠空 = 空中层');
-  assert.equal(isAirborne(s, witch), true);
-  const foot = stackOn(s, 'A', 'swordsman', 5, 5);
-  assert.equal(unitsAt(s, 5, 5).length, 2, '掠空单位和地面单位共占一格');
-  assert.ok(unitsAt(s, 5, 5).some((u) => u.id === foot.id), '地面那一个还在');
+  assert.equal(airLayer(s.unitTypes['witch']!), false, '她不再是空中单位');
+  assert.equal(isAirborne(s, witch), false);
+  const foot = place2(s, 'A', 'swordsman', 5, 6);
+  assert.ok(canStrike(s, foot, witch), '相邻的步兵现在打得到她');
+  assert.ok(canStrike(s, witch, foot), '她也照样打得到人');
+  // 空中层本身没被删：飞行单位（狮鹫骑士）照旧能和地面单位共占一格
+  const flyer = place2(s, 'A', 'griffin-rider', 6, 6);
+  assert.equal(airLayer(s.unitTypes['griffin-rider']!), true, '飞行 = 空中层，机制还在');
+  assert.equal(isAirborne(s, flyer), true);
 });
 
 test('指挥光环：2 格内友军攻击 +4，3 格外吃不到', () => {
