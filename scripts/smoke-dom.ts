@@ -42,6 +42,7 @@ import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
   tutorialBlocking,
+  tutorialGoto,
   tutorialExit,
   tutorialOn,
   tutorialSnapshot,
@@ -6364,6 +6365,55 @@ check('新手教程：第三步只放行「走完能贴着对手」的格子', (
 
   assert.equal(tutorialAllowsMove(state, 4, 6), true, '走到农民旁边要放行');
   assert.equal(tutorialAllowsMove(state, 2, 8), false, '往回走要拦住（走完够不着农民）');
+  tutorialExit();
+});
+
+check('新手教程：看地形 / 升级城市 / 造兵 都按「真的做到了」判定', () => {
+  /*
+   * 这三步的共同点是"动作发生在面板里"，教程看不见点击，只能看结果：
+   *   · 看地形 → selectedTile 变了；
+   *   · 升级   → 自家城的时代 +1；
+   *   · 造兵   → 我方单位数 +1。
+   * 用 tutorialGoto 直接落到那一步，免得布景代码盖住断言。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let s = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => tutorialExit() }, host);
+  tutorialSnapshot(s);
+  const tick = (sel: string | null = null, tile: { x: number; y: number } | null = null): string => {
+    tutorialTick(s, sel, tile);
+    return tutorialStep();
+  };
+
+  // 看地形：点一格空地才过
+  tutorialGoto('terrain');
+  tutorialSnapshot(s);
+  assert.equal(tick(null, null), 'terrain', '没点格子不该过');
+  assert.equal(tick(null, { x: 9, y: 9 }), 'attack', '点了一格就该过');
+
+  // 升级城市：时代真的变了才过
+  tutorialGoto('upgrade');
+  tutorialSnapshot(s);
+  const home = s.cities.find((c) => c.owner === 'A')!;
+  const era0 = home.era;
+  assert.equal(tick(), 'upgrade', '还没升级不该过');
+  const up = applyAction(s, { type: 'UPGRADE', cityId: home.id });
+  assert.ok(up.ok, '教程局的钱应该够升一次级');
+  s = up.state;
+  assert.equal(s.cities.find((c) => c.id === home.id)!.era, era0 + 1);
+  assert.equal(tick(), 'recruit', '升完级就进造兵');
+
+  // 造兵：我方单位数 +1 才过
+  tutorialSnapshot(s);
+  const n0 = unitsOf(s, 'A').length;
+  assert.equal(tick(), 'recruit', '还没造兵不该过');
+  const rec = applyAction(s, { type: 'RECRUIT', cityId: home.id, unitType: 'militia' });
+  assert.ok(rec.ok, '教程局应该造得出民兵');
+  s = rec.state;
+  assert.equal(unitsOf(s, 'A').length, n0 + 1);
+  assert.equal(tick(), 'siege', '造完兵就进攻城');
+
   tutorialExit();
 });
 

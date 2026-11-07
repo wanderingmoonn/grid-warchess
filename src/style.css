@@ -5839,3 +5839,20 @@ a.btn {
 @media (prefers-reduced-motion: reduce) {
   .city-block.tut-city-ring { animation: none; }
 }
+
+/* 自家城的教程框用琥珀色：和"敌城红框"分开，也和红方自身的红色边不撞色 */
+.city-block.tut-city-ring-own {
+  border-color: #d8892b;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18);
+  animation: tut-city-pulse-own 1.2s ease-in-out infinite;
+}
+
+@keyframes tut-city-pulse-own {
+  0%, 100% { border-color: #d8892b; box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18); }
+  50% { border-color: rgba(216, 137, 43, 0.55); box-shadow: 0 0 0 6px rgba(216, 137, 43, 0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .city-block.tut-city-ring-own { animation: none; }
+}

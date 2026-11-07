@@ -1154,9 +1154,13 @@ function pickReplayFile(): void {
 }
 
 /** 教程这一步要圈的格子 / 要框的城（转成棋盘渲染认识的两个字段） */
-function tutorialMarksOf(): { tutorialTiles: number[]; tutorialCityId: string | null } {
+function tutorialMarksOf(): {
+  tutorialTiles: number[];
+  tutorialCityId: string | null;
+  tutorialOwnCityId: string | null;
+} {
   const m = tutorial.tutorialMarks(state);
-  return { tutorialTiles: m.tiles, tutorialCityId: m.cityId };
+  return { tutorialTiles: m.tiles, tutorialCityId: m.cityId, tutorialOwnCityId: m.ownCityId };
 }
 
 function render(): void {
@@ -1322,7 +1326,7 @@ function render(): void {
    */
   if (tutorial.tutorialOn()) {
     const before = tutorial.tutorialStep();
-    tutorial.tutorialTick(state, selectedId);
+    tutorial.tutorialTick(state, selectedId, selectedTile);
     /*
      * 教程刚翻页：这一帧的棋盘还是按**上一步**的标记画的（圈在哪、框哪座城）。
      * 不补一帧的话，红框要等到玩家下一次点击才出现——"该打这座城了"却什么都没框。
@@ -4094,7 +4098,7 @@ function startTutorial(): void {
   clearSelection();
   aiPaused = true;
   tutorialStartHooks();
-  tutorial.tutorialSnapshot(state);
+  tutorial.tutorialSnapshot(state, selectedTile);
   render();
   toast('新手教程：跟着卡片走就行，随时可以跳过');
 }

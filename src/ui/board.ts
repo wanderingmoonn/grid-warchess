@@ -56,6 +56,8 @@ export interface BoardUi {
    */
   tutorialTiles?: number[];
   tutorialCityId?: string | null;
+  /** 教程要指出的自家城（琥珀色框）：升级/造兵那两步靠它告诉玩家点哪 */
+  tutorialOwnCityId?: string | null;
   /** 处于野外建造模式时，可以放置建筑的空格 */
   placeable: number[];
   /** 威胁范围：移动之后能打到哪些格 */
@@ -614,6 +616,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     if (memo) cls.push('stale');
     if (ui.siegeTargets.includes(city.id)) cls.push('siege-target');
     if (ui.tutorialCityId && city.id === ui.tutorialCityId) cls.push('tut-city-ring');
+    if (ui.tutorialOwnCityId && city.id === ui.tutorialOwnCityId) cls.push('tut-city-ring-own');
     if (ui.selectedCityId === city.id) cls.push('selected');
 
     const ratio = city.hp / city.maxHp;

@@ -105,7 +105,11 @@ export function createTutorialMatch(): GameState {
   s.current = 'A';
   s.turn = 1;
   s.winner = null;
-  s.players.A.gold = 0;
+  /*
+   * 给玩家一笔钱：这一课要教"升级城市（220）"和"造兵（25 起）"。
+   * 给 600 是留了余量——玩家完全可能挑个贵的兵，那之后还要升得起级。
+   */
+  s.players.A.gold = 600;
   s.players.B.gold = 0;
   s.log = [];
   return s;

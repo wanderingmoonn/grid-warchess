@@ -21,7 +21,7 @@
  * 卡片挂在 body 上，不挂 #app：`render()` 每帧会整块重写 #app 里的东西，
  * 挂进去等于每帧重建一次卡片（动画会闪、按钮会丢焦点）。
  */
-import { reachableTiles } from '../core/rules.ts';
+import { reachableTiles, unitsOf } from '../core/rules.ts';
 import type { Action, GameState } from '../core/types.ts';
 
 export interface TutorialHooks {
@@ -34,6 +34,8 @@ export interface TutorialHooks {
 interface Ctx {
   state: GameState;
   selectedId: string | null;
+  /** 玩家点过的空格（看地形用）。点兵/点城不会留这个。 */
+  tile: { x: number; y: number } | null;
 }
 
 /** 每一步开始时记下的局面读数，`done` 靠"和它比"判断有没有变化 */
@@ -44,6 +46,12 @@ interface Snap {
   myX: number;
   myY: number;
   turn: number;
+  /** 我方单位数与自家城的时代：造兵 / 升级两步靠它判断"做到了没有" */
+  myUnits: number;
+  cityEra: number;
+  /** 上一步结束时点过的那格（看地形那步要"点一格**新的**"） */
+  tileX: number;
+  tileY: number;
 }
 
 interface Step {
@@ -64,6 +72,8 @@ interface Step {
    * 直接给它换颜色就行。
    */
   markCity?: boolean;
+  /** 把自家城框成琥珀色（"点这里"），和敌城的红框分开 */
+  markOwnCity?: boolean;
 }
 
 const ME = 'A';
@@ -72,6 +82,7 @@ const MY_ID = 'tut-mine';
 const myUnit = (s: GameState) => s.units.find((u) => u.id === MY_ID) ?? null;
 const bait = (s: GameState) => s.units.find((u) => u.owner === 'B') ?? null;
 const foeCity = (s: GameState) => s.cities.find((c) => c.owner === 'B') ?? null;
+const ownCity = (s: GameState) => s.cities.find((c) => c.owner === ME) ?? null;
 
 /** 敌城四邻：走到这些格子上才能攻城 */
 function cityRing(s: GameState): Array<{ x: number; y: number }> {
@@ -118,9 +129,10 @@ export function tutorialAllowsMove(state: GameState, x: number, y: number): bool
   return allowedDestinations(state).some((p) => p.x === x && p.y === y);
 }
 
-function snapOf(s: GameState): Snap {
+function snapOf(s: GameState, tile: { x: number; y: number } | null = null): Snap {
   const c = foeCity(s);
   const u = myUnit(s);
+  const home = ownCity(s);
   return {
     baitHp: bait(s)?.hp ?? 0,
     cityHp: c?.hp ?? 0,
@@ -128,6 +140,10 @@ function snapOf(s: GameState): Snap {
     myX: u?.x ?? -1,
     myY: u?.y ?? -1,
     turn: s.turn,
+    myUnits: unitsOf(s, ME).length,
+    cityEra: home?.era ?? 0,
+    tileX: tile?.x ?? -1,
+    tileY: tile?.y ?? -1,
   };
 }
 
@@ -161,8 +177,14 @@ const STEPS: Step[] = [
     },
   },
   {
+    key: 'terrain',
+    title: '第三步：看一眼地形',
+    body: () => '点一下棋盘上的空地（不是兵、也不是城）——界面会告诉你这是什么地形、走一格要多少代价。\n开打之前先看地，比打完了找原因便宜。',
+    done: (c, s) => c.tile !== null && (c.tile.x !== s.tileX || c.tile.y !== s.tileY),
+  },
+  {
     key: 'attack',
-    title: '第三步：攻击',
+    title: '第四步：攻击',
     body: () => '旁边那个农民不会还手，拿它练手。\n选中兵之后点它，就是攻击——注意看它的血条掉了多少。',
     mark: (c) => {
       const b = bait(c.state);
@@ -172,10 +194,25 @@ const STEPS: Step[] = [
   },
   {
     key: 'endturn',
-    title: '第四步：结束回合',
+    title: '第五步：结束回合',
     body: () => '兵打完了，这一回合就没什么可做的了——按「结束回合」。\n对面也会走一回合，所以每做一个动作都要想想：他下一步会不会打过来。',
     markSel: '[data-act="end-turn"]',
     done: (c) => c.state.current !== ME || c.state.turn > 1,
+  },
+  {
+    key: 'upgrade',
+    title: '第六步：升级城市',
+    body: () => '点一下你自己那座城（琥珀色框住的那座），面板里会出现「升级城市」。\n升级之后城墙更厚、能造的兵也更新一代——钱主要就花在这种地方。',
+    markOwnCity: true,
+    markSel: '[data-act="upgrade"]',
+    done: (c, s) => (ownCity(c.state)?.era ?? 0) > s.cityEra,
+  },
+  {
+    key: 'recruit',
+    title: '第七步：造兵',
+    body: () => '再点一次你自己的城，面板里就是能造的兵种，挑一个便宜的（民兵就够）。\n兵会站在城边的空格上；每个兵每回合仍然只能走一次、打一次。',
+    markOwnCity: true,
+    done: (c, s) => unitsOf(c.state, ME).length > s.myUnits,
   },
   {
     key: 'siege',
@@ -199,13 +236,16 @@ const STEPS: Step[] = [
   {
     key: 'done',
     title: '赢了',
-    body: () => '这就是一局棋的骨架：选兵 → 移动 → 攻击 → 结束回合 → 攻城接管。\n\n这一局故意没教造兵、升级城、地形和扩展包——那些等你打赢一局标准的再来。\n下面点「回到首页」，去开一局真的。',
+    body: () => '这就是一局棋的骨架：选兵 → 移动 → 攻击 → 结束回合 → 升级城市 → 造兵 → 攻城接管。\n\n这一局没教扩展包、迷雾、多人模式和指挥官模式——那些等你打赢一局标准的再来。\n下面点「回到首页」，去开一局真的。',
   },
 ];
 
 let active = false;
 let stepIndex = 0;
-let snap: Snap = { baitHp: 0, cityHp: 0, cityRuined: false, myX: -1, myY: -1, turn: 1 };
+let snap: Snap = {
+  baitHp: 0, cityHp: 0, cityRuined: false, myX: -1, myY: -1, turn: 1,
+  myUnits: 0, cityEra: 0, tileX: -1, tileY: -1,
+};
 let hooks: TutorialHooks | null = null;
 let card: HTMLElement | null = null;
 /**
@@ -231,17 +271,22 @@ export function tutorialStart(h: TutorialHooks, host?: HTMLElement): void {
   endingTurn = false;
 }
 
-export function tutorialSnapshot(state: GameState): void {
-  snap = snapOf(state);
+export function tutorialSnapshot(state: GameState, tile: { x: number; y: number } | null = null): void {
+  snap = snapOf(state, tile);
 }
 
 /** 这一步要圈的格子 / 要框的城，直接交给棋盘渲染（见 BoardUi.tutorialTiles） */
-export function tutorialMarks(state: GameState): { tiles: number[]; cityId: string | null } {
+export function tutorialMarks(state: GameState): {
+  tiles: number[];
+  cityId: string | null;
+  ownCityId: string | null;
+} {
   const step = STEPS[stepIndex];
-  if (!active || !step) return { tiles: [], cityId: null };
-  const tiles = (step.mark?.({ state, selectedId: null }) ?? []).map((p) => p.y * state.w + p.x);
+  if (!active || !step) return { tiles: [], cityId: null, ownCityId: null };
+  const tiles = (step.mark?.({ state, selectedId: null, tile: null }) ?? []).map((p) => p.y * state.w + p.x);
   const cityId = step.markCity ? (foeCity(state)?.id ?? null) : null;
-  return { tiles, cityId };
+  const ownCityId = step.markOwnCity ? (ownCity(state)?.id ?? null) : null;
+  return { tiles, cityId, ownCityId };
 }
 
 /**
@@ -255,6 +300,16 @@ export function tutorialBlocking(): boolean {
   if (!active) return false;
   const step = STEPS[stepIndex];
   return Boolean(step) && !step.done;
+}
+
+/**
+ * 只给用例用：跳到某一步。正常游玩不会用到——真实流程只靠 `done` 谓词前进。
+ * 加它是因为"十步全流程"的用例如果每次都从第一步走真实动作，读起来就淹没在
+ * 布景代码里，反而看不出每一步在验什么。
+ */
+export function tutorialGoto(key: string): void {
+  const i = STEPS.findIndex((x) => x.key === key);
+  if (i >= 0) stepIndex = i;
 }
 
 /** 当前步骤（给用例断言用） */
@@ -275,7 +330,11 @@ export function tutorialExit(): void {
  * 每次渲染后调一次。返回 true 表示"教程替玩家做了一个动作"，
  * 调用方（main）据此决定要不要再排一次渲染。
  */
-export function tutorialTick(state: GameState, selectedId: string | null): boolean {
+export function tutorialTick(
+  state: GameState,
+  selectedId: string | null,
+  tile: { x: number; y: number } | null = null,
+): boolean {
   if (!active || !hooks || !hostDoc) return false;
 
   // B 席：教程代按结束回合。延迟一帧，避免在 render 里再触发一次 render 的递归。
@@ -287,28 +346,33 @@ export function tutorialTick(state: GameState, selectedId: string | null): boole
         if (active && hooks) hooks.apply({ type: 'END_TURN' } as Action);
       }, 300);
     }
-    paint(state, selectedId, '对面在走它的回合……（这一局它不会打你）');
+    paint(state, selectedId, tile, '对面在走它的回合……（这一局它不会打你）');
     return false;
   }
 
   const step = STEPS[stepIndex];
   if (!step) return false;
-  if (step.done && step.done({ state, selectedId }, snap)) {
+  if (step.done && step.done({ state, selectedId, tile }, snap)) {
     stepIndex += 1;
-    snap = snapOf(state);
+    snap = snapOf(state, tile);
     if (stepIndex >= STEPS.length) {
       tutorialExit();
       return false;
     }
-    paint(state, selectedId);
+    paint(state, selectedId, tile);
     return false;
   }
-  paint(state, selectedId);
+  paint(state, selectedId, tile);
   return false;
 }
 
 /** 把卡片和圈画出来（每帧重画；棋盘每帧重建，圈也得跟着重挂） */
-function paint(state: GameState, selectedId: string | null, override?: string): void {
+function paint(
+  state: GameState,
+  selectedId: string | null,
+  tile: { x: number; y: number } | null,
+  override?: string,
+): void {
   const doc = hostDoc;
   const step = STEPS[stepIndex];
   if (!doc || !step) return;
@@ -339,9 +403,9 @@ function paint(state: GameState, selectedId: string | null, override?: string): 
       if (act === 'next') {
         // 只有讲解步（没有 done）才允许手动继续；有 done 的步必须真做到
         stepIndex += 1;
-        snap = snapOf(state);
+        snap = snapOf(state, tile);
         if (stepIndex >= STEPS.length) hooks?.exit();
-        else paint(state, selectedId);
+        else paint(state, selectedId, tile);
         return;
       }
       if (act === 'done') hooks?.exit();
@@ -364,7 +428,7 @@ function paint(state: GameState, selectedId: string | null, override?: string): 
 
   card.querySelector('.tut-step')!.textContent = `第 ${stepIndex + 1} / ${STEPS.length} 步`;
   card.querySelector('.tut-title')!.textContent = step.title;
-  card.querySelector('.tut-body')!.textContent = override ?? step.body({ state, selectedId });
+  card.querySelector('.tut-body')!.textContent = override ?? step.body({ state, selectedId, tile });
   const next = card.querySelector<HTMLButtonElement>('[data-tut="next"]')!;
   const done = card.querySelector<HTMLButtonElement>('[data-tut="done"]')!;
   const isLast = step.key === 'done';
