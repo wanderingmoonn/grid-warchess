@@ -38,6 +38,9 @@ CATEGORY = {'combat': '战斗', 'economy': '经济', 'builder': '工程', 'build
 ERA_NAME = {}
 SPLASH = 0.5
 
+# 分表顺序：和兵种面板一致，召唤物（不进兵营）压最后
+GROUP_ORDER = ['骑士团', '荒兽', '秘法', '英雄', '召唤']
+
 
 def style_header(ws, row, ncols, fill=INK):
     for c in range(1, ncols + 1):
@@ -151,7 +154,7 @@ def ability_detail_of(u):
 
 
 COLUMNS = [
-    ('包', 16, lambda u, p: p['name']),
+    ('包', 16, lambda u, p: u.get('group') or p['name']),
     ('名称', 12, lambda u, p: u['name']),
     ('图标', 6, lambda u, p: u.get('short', '')),
     ('时代', 7, lambda u, p: ERA_NAME.get(u['era'], u['era'])),
@@ -188,7 +191,7 @@ def make_sheet(wb, title, units, elements, tab_color=ACCENT):
 
     for i, (u, p) in enumerate(units):
         row = [
-            p['name'], u['name'], u.get('short', ''), ERA_NAME.get(u['era'], u['era']),
+            u.get('group') or p['name'], u['name'], u.get('short', ''), ERA_NAME.get(u['era'], u['era']),
             CATEGORY.get(u['category'], u['category']), u['cost'], u['atk'],
             u.get('burst', 1) if u.get('burst', 1) > 1 else '—',
             u.get('magicAtk') or '—', u['armor'], u.get('magicRes', 0), u['maxHp'],
@@ -230,7 +233,7 @@ def overview(wb, data):
     ws['A2'].font = SUB_FONT
 
     row = 4
-    ws.cell(row=row, column=1, value='包结构（一个前置 + 四个兵种包）').font = Font(
+    ws.cell(row=row, column=1, value='包结构').font = Font(
         name='微软雅黑', size=11, bold=True, color=ACCENT)
     row += 1
     head = ['扩展包', '兵种数', '依赖', '内容']
@@ -246,6 +249,40 @@ def overview(wb, data):
         ws.cell(row=row, column=4, value=p['summary'])
         row += 1
     style_body(ws, head_row + 1, row - 1, len(head), center_from=4)
+
+    # 子包一览：面板里按这五组分，分表也按它分。合并成一个扩展之后，
+    # 光看"包结构"那一行（奇想 72）会以为只有一张表，找不到该翻哪一页。
+    row += 1
+    ws.cell(row=row, column=1, value='子包（后面几张分表就是按它分的）').font = Font(
+        name='微软雅黑', size=11, bold=True, color=ACCENT)
+    row += 1
+    sub_head = ['子包', '兵种数', '说明']
+    for i, h in enumerate(sub_head, start=1):
+        ws.cell(row=row, column=i, value=h)
+    style_header(ws, row, len(sub_head))
+    sub_head_row = row
+    row += 1
+    counts, descs = {}, {}
+    for p in data['packs']:
+        for u in p['units']:
+            g = u.get('group') or '—'
+            counts[g] = counts.get(g, 0) + 1
+    descs = {
+        '骑士团': '人类：剑士、精英/皇家骑兵、法师、牧师、刺客、圣骑士、国王……',
+        '荒兽': '野兽与怪物：狼骑士、蜘蛛骑士、树人、牛头人、鹰身女妖、狮鹫骑士……',
+        '秘法': '亡灵与元素：诅咒师、死灵法师、四元素、吸血鬼、恶魔、机关傀儡……',
+        '英雄': '全场唯一的 11 个英雄，外加魔龙、魔龙卵、大史莱姆',
+        '召唤': '只能被召唤，不进兵营：骷髅、幻象、小史莱姆、小恶魔、土墙',
+    }
+    for g in GROUP_ORDER + [k for k in counts if k not in GROUP_ORDER]:
+        if g not in counts:
+            continue
+        ws.cell(row=row, column=1, value=g)
+        ws.cell(row=row, column=2, value=counts[g])
+        ws.cell(row=row, column=3, value=descs.get(g, ''))
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
+        row += 1
+    style_body(ws, sub_head_row + 1, row - 1, len(sub_head), center_from=3)
 
     row += 1
     ws.cell(row=row, column=1, value='规则速查（表里那几列怎么读）').font = Font(
@@ -357,20 +394,35 @@ def main():
         for u in p['units']:
             all_units.append((u, p))
 
-    # 一包一张表（法则包没有兵，跳过）
-    for p in data['packs']:
-        if not p['units']:
+    # 一个子包一张表。
+    #
+    # 2026-11-04 五个奇想包并成一个扩展之后，这里原来按 `data['packs']` 分页，
+    # 于是 72 个兵全挤进一张「奇想」表——以前骑士团/荒兽/秘法/英雄四张分表
+    # 才是好用的地方（找"荒兽这一档有什么"不用在 72 行里翻）。
+    # 合并只是把"要不要勾"合成一个开关，子包在兵种面板里还分着，所以照样分页。
+    by_group = {}
+    for u, p in all_units:
+        by_group.setdefault(u.get('group') or p['name'], []).append((u, p))
+    for g in GROUP_ORDER + [k for k in by_group if k not in GROUP_ORDER]:
+        if g not in by_group:
             continue
         # 召唤物和土墙排到最后：它们不是"能招募的兵"，混在造价序列里会让人以为 20 金能买一只小史莱姆
-        pairs = [(u, p) for u in sorted(p['units'], key=lambda x: (bool(x.get('summonedOnly')), x['cost'], x['name']))]
-        make_sheet(wb, p['name'].replace('奇想·', ''), pairs, elements)
+        pairs = sorted(by_group[g], key=lambda x: (bool(x[0].get('summonedOnly')), x[0]['cost'], x[0]['name']))
+        make_sheet(wb, g, pairs, elements)
 
-    # 全表：按包 + 造价排
-    order = {p['id']: i for i, p in enumerate(data['packs'])}
+    # 全表：按子包顺序 + 造价排（和兵种面板的排列一致）
+    gorder = {g: i for i, g in enumerate(GROUP_ORDER)}
     make_sheet(
         wb,
         '全表',
-        sorted(all_units, key=lambda x: (order[x[1]['id']], bool(x[0].get('summonedOnly')), x[0]['cost'])),
+        sorted(
+            all_units,
+            key=lambda x: (
+                gorder.get(x[0].get('group') or '', 99),
+                bool(x[0].get('summonedOnly')),
+                x[0]['cost'],
+            ),
+        ),
         elements,
         tab_color=INK,
     )

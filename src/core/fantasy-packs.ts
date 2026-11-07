@@ -323,6 +323,30 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   // 这五条都刻意做成"有代价/有前提"的机制，而不是纯数值加成：
   // 飞行要算落点、冲锋要先动过、吸血要真打疼人、威吓要贴上去、再生换的是慢。
   {
+    /*
+     * 石化：血量过半之后的另一副身子。
+     *
+     * 这里**不写任何钩子**，因为它的三件事（护甲翻倍、魔抗 +4、移动减半）
+     * 不是"结算时改一个数"，而是要同时影响面板、伤害、走位和 AI 的估算。
+     * 做成钩子只能在伤害公式里生效一半，面板和移动力会各说各话。
+     *
+     * 实际实现放在 `rules.ts` 的 `isPetrified()`，由三个取值口统一读取
+     * （ownArmorOf / magicResOf / movePower）。好处是**没有状态**：
+     * 血量过线的那一刻它就成立，回到一半以上立刻消失，
+     * 不存在"叠了两层只撤一层"或者"血回来了甲还在"这种残留。
+     *
+     * 判据是严格低于一半（`hp × 2 < maxHp`）。正好半血不触发——
+     * 用户给的两条规矩（低于 50% 触发、回到 50% 及以上解除）在 50% 这一点上
+     * 是重叠的，取"低于"才不会自相矛盾。
+     */
+    id: 'stone-skin',
+    name: '石化',
+    summary:
+      '生命低于一半时护甲翻倍、魔法抗性 +4、移动力减半；回到一半以上立刻恢复。血越少越硬，也越走不动。',
+    group: 'defense',
+    hooks: {},
+  },
+  {
     id: 'vanish',
     name: '隐匿',
     summary:
@@ -832,7 +856,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'repair',
     name: '修缮',
-    summary: '回合开始时，修复相邻的己方城市 6 点耐久。城下挨打的时候它是第二根血条。',
+    summary: '回合开始时，修复相邻的己方城市 10 点耐久。城下挨打的时候它是第二根血条。',
     group: 'support',
     hooks: {
       onTurnStart: [
@@ -842,8 +866,11 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             const def = c.api.utype(c.state, c.self.type);
             for (const city of c.api.citiesOf(c.state, c.owner)) {
               if (c.api.distToCity(c.self, city) > 1 || city.ruined || city.hp >= city.maxHp) continue;
-              city.hp = Math.min(city.maxHp, city.hp + 6);
-              c.api.pushLog(c.state, c.owner, `${def.name} 修缮 ${c.api.cityName(city)}，+6 耐久`);
+              // 2026-11-07：6 → 10。符文守卫 165 金、只能修 6 点，在同样价钱上
+              // 不如多买一个兵——修城这条线本来就只有这一个兵在走，修得不够狠
+              // 就等于不存在（400 局里符文守卫 0 次建造）。
+              city.hp = Math.min(city.maxHp, city.hp + 10);
+              c.api.pushLog(c.state, c.owner, `${def.name} 修缮 ${c.api.cityName(city)}，+10 耐久`);
             }
           },
         },
@@ -1176,8 +1203,11 @@ const KNIGHTS: Expansion = {
       abilities: ['stealth', 'steal-gold'],
     },
     // ── 3 级 ──────────────────────────────────────────────────────────────
-    // 超级重骑：8 甲 62 血，还能冲锋。代价是森林/丘陵/城市的进入消耗翻倍——
+    // 超级重骑：9 甲 67 血，还能冲锋。代价是森林/丘陵/城市的进入消耗翻倍——
     // 平地上它是墙，进了林子它是靶子。这条地形代价比削数值更能定性。
+    // 2026-11-07：8 甲 62 血 → 9 甲 67 血。同代的皇家骑兵（235 金）把这一档吃干了，
+    // 它 205 金却只多 3 甲、少 34 血——加一档甲不是为了让它变强，是为了让"最硬的一块铁"
+    // 这个说法站得住（9 甲是全包最高，和神圣骑士长同档）。
     {
       id: 'cataphract',
       name: '超级重骑',
@@ -1187,8 +1217,8 @@ const KNIGHTS: Expansion = {
       cost: 205,
       move: 4,
       atk: 24,
-      armor: 8,
-      maxHp: 62,
+      armor: 9,
+      maxHp: 67,
       range: 1,
       vision: 3,
       abilities: ['charge', 'slow-offroad'],
@@ -1410,11 +1440,11 @@ const BEASTS: Expansion = {
   scale: 'large',
   name: '奇想·荒兽',
   summary:
-    '十六个野性单位：狼骑士、蜘蛛骑士、蛇人、毒蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。',
+    '十六个野性单位：狼骑士、蜘蛛骑士、蛇人、蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。',
   requires: ['fantasy-core'],
   hooks: {},
   units: [
-    // ── 1 级：整包唯一的一级兵，充当前排 ──────────────────────────────────
+    // ── 1 级：蛇人当前排、蝙蝠当骚扰（2026-11-07 蝙蝠从二代 90 金压到一代 35 金）
     {
       // 蛇人：2026-11-02 护甲 3→6。它只有一个中毒、没有任何减伤手段，
       // 95 金这个价位上原本被 65 金的长枪兵全面压住。
@@ -1479,24 +1509,32 @@ const BEASTS: Expansion = {
       vision: 6,
       abilities: ['leap'],
     },
-    // 毒蝙蝠：三段 + 中毒。打轻甲是 3×4，打重甲是 3×1，天生怕硬。
+    /*
+     * 蝙蝠：三段连击，飞着走，脆得像纸。
+     *
+     * 2026-11-07 整兵重做（原来叫"毒蝙蝠"，90 金 / 22 血 / 带淬毒 / 二代）：
+     * 它当时的位置很尴尬——同代有狼骑士（55 金、30 血）、蜘蛛骑士（78 金、4 移 6 视），
+     * 90 金买一个 22 血的脆皮，谁都不会买（400 局只出场 14 次）。
+     * 现在往下压到**青铜**，35 金 / 10 血，去掉淬毒：它变成"最便宜的三段连击"，
+     * 用来补刀和骚扰，而不是站场。id 保持不变（存档、战报、跑批脚本都认它）。
+     */
     {
       id: 'poison-bat',
-      name: '毒蝙蝠',
+      name: '蝙蝠',
       short: '蝠',
-      era: 2,
+      era: 1,
       category: 'combat',
-      cost: 90,
+      cost: 35,
       move: 5,
       atk: 7,
       armor: 1,
-      maxHp: 22,
+      maxHp: 10,
       range: 1,
       vision: 5,
       burst: 3,
       flight: true,
       layer: 'air',
-      abilities: ['poison-hit'],
+      abilities: [],
     },
     {
       id: 'centaur',
@@ -1592,7 +1630,9 @@ const BEASTS: Expansion = {
       short: '牛',
       era: 3,
       category: 'combat',
-      cost: 165,
+      // 2026-11-07：165 → 155。同代的巨魔 170、食人魔 190 都比它厚，
+      // 它唯一的卖点是冲锋 + 群势（身边友军越多越硬），而那要先买得起才行。
+      cost: 155,
       move: 3,
       atk: 21,
       armor: 4,
@@ -1602,6 +1642,9 @@ const BEASTS: Expansion = {
       abilities: ['charge', 'herd'],
     },
     {
+      // 巨魔：怕火（×2）换来的是一身再生 + 石化。
+      // 石化让它变成"打不死的两段式"：前半条血是 4 甲 2 移的普通怪，
+      // 后半条血变 8 甲 1 移——你越打它越难打，但同时也越追不上你。
       id: 'troll',
       name: '巨魔',
       short: '巨',
@@ -1614,7 +1657,7 @@ const BEASTS: Expansion = {
       maxHp: 68,
       range: 1,
       vision: 3,
-      abilities: ['regenerate'],
+      abilities: ['regenerate', 'stone-skin'],
       weak: { fire: 2 },
     },
     // 石像鬼：半血从"会飞的石头"变成"会飞的疯子"。
@@ -1821,19 +1864,29 @@ const ARCANE: Expansion = {
     {
       // 女巫：2026-11-02 护甲 1→2、生命 26→30（之前是所有法师里最脆的一个，
       // 而她的价值要靠"贴上去打三格"才能兑现，站不住就什么都做不了）。
+      //
+      // 2026-11-07 整兵下放到第 2 代，数值与造价一起降：
+      //   160 金 / 攻 7 魔 13 / 血 30  →  120 金 / 攻 5 魔 9 / 血 24
+      // 依据不是"看着贵"，是同一把尺子量出来的：改之前她新尺子 4.76、旧尺子 4.06，
+      // 是三代远程里最划算的一档；而三代真正的毛病是**九个远程挤在 120~175 金**
+      // （见 docs/FANTASY-OVERLAP.md 的 G10）。把她挪到二代，那个坑位少一个，
+      // 二代多一个"带溅射的法师"——二代原来只有游侠和半人马两个远程，
+      // 都是单体。
+      // 降完之后：新 3.87 / 旧 3.19，落在这代的 2.34~4.66 / 1.72~3.30 区间里偏上，
+      // 位置在游侠（4.10 / 3.30）之下——她多出溅射、掠空、虚咒三样，值这个差。
       id: 'witch',
       name: '女巫',
       short: '女',
-      era: 3,
+      era: 2,
       category: 'combat',
-      cost: 160,
+      cost: 120,
       move: 2,
-      atk: 7,
+      atk: 5,
       armor: 2,
-      maxHp: 30,
+      maxHp: 24,
       range: 3,
       vision: 5,
-      magicAtk: 13,
+      magicAtk: 9,
       element: 'dark',
       splash: 1,
       // 2026-11-03 平衡调整：新增「掠空」（悬停：掠水、林地丘陵按 1 步、

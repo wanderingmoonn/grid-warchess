@@ -24,6 +24,7 @@ import {
   PRICE_EXP,
 } from '../src/core/unit-value.ts';
 import type { UnitTypeDef } from '../src/core/types.ts';
+import { packMap } from './lib/fantasy-observed.ts';
 
 const PUSH = { tempo: 1, visionCoverage: 0.4, fog: true };
 const TURTLE = { tempo: -1, visionCoverage: 0.4, fog: true };
@@ -34,9 +35,14 @@ if (fantasy.length === 0) throw new Error('没找到奇想扩展');
 
 const s = createMatch({ ...DEFAULT_CONFIG, startEra: 6, expansionIds: expansions.map((e) => e.id) }, 1);
 
-/** id → 所属扩展：兵种表本身不带包名，只能从扩展的 units 反查 */
-const packOf = new Map<string, string>();
-for (const e of expansions) for (const u of e.units ?? []) packOf.set(u.id, e.id);
+/**
+ * id → 子包。
+ *
+ * 2026-11-04 五个奇想包并成了一个扩展，于是 `e.id.replace('fantasy-','')`
+ * 对每个兵都返回同一个 'fantasy'，这一列就成了废列。子包的分法（骑士团 /
+ * 荒兽 / 秘法 / 英雄）在面板和选卡池里还留着，所以从源文件分段里读回来。
+ */
+const packOf = packMap();
 
 interface Row {
   d: UnitTypeDef;
@@ -63,7 +69,7 @@ for (const e of fantasy) {
     if (d.category !== 'combat') notes.push(d.category === 'economy' ? '经济' : d.category === 'builder' ? '工程' : d.category);
     rows.push({
       d,
-      pack: e.id.replace('fantasy-', ''),
+      pack: packOf.get(d.id) ?? '召唤',
       power: unitPower(d, NEUTRAL_CONTEXT),
       push: unitPower(d, PUSH),
       turtle: unitPower(d, TURTLE),
@@ -79,7 +85,7 @@ for (const e of fantasy) {
 const seen = new Set<string>();
 const uniq = rows.filter((r) => (seen.has(r.d.id) ? false : (seen.add(r.d.id), true)));
 
-const PACK_ORDER = ['core', 'knights', 'beasts', 'arcane', 'heroes'];
+const PACK_ORDER = ['骑士团', '荒兽', '秘法', '英雄', '召唤'];
 uniq.sort((a, b) => {
   const pa = PACK_ORDER.indexOf(a.pack);
   const pb = PACK_ORDER.indexOf(b.pack);
@@ -125,7 +131,17 @@ lines.push('> · **名次**：只在本表这 64 个奇想战斗兵内部排序�
 lines.push('> · 只说"贵不贵"，不说"该不该买"：治疗光环、召唤、破城这些价值按权重近似计入 `能力` 一列，');
 lines.push('>   但它们的真正价值取决于阵容，表里看不出来。');
 lines.push('');
-lines.push(`共 **${uniq.length}** 个兵种（奇想五包：${fantasy.map((e) => e.name).join('、')}）。`);
+{
+  const cnt = new Map<string, number>();
+  for (const r of uniq) cnt.set(r.pack, (cnt.get(r.pack) ?? 0) + 1);
+  const order = ['骑士团', '荒兽', '秘法', '英雄', '召唤'];
+  lines.push(
+    `共 **${uniq.length}** 个兵种（${order
+      .filter((k) => cnt.has(k))
+      .map((k) => `${k} ${cnt.get(k)}`)
+      .join(' · ')}）。`,
+  );
+}
 lines.push('');
 
 const head =
@@ -177,8 +193,11 @@ lines.push('| 兵种 | 价 | 性价比 | 超出封顶 |');
 lines.push('|---|---|---|---|');
 for (const r of capped) lines.push(`| ${r.d.name} | ${r.d.cost} | ${f2(r.eff)} | ${((r.eff / (26 / 3) - 1) * 100).toFixed(0)}% |`);
 lines.push('');
-lines.push('> 这一档在 AI 眼里是**平的**：邪龙王（10.40）和恶魔（8.78）拿一样的分，');
+lines.push('> 这一档在 AI 眼里是**平的**：超出封顶之后再划算也拿一样的分，');
 lines.push('> 它们之间只靠"代差加分、角色模板、攒钱目标"来区分。');
+lines.push('>');
+lines.push('> 注意这一列是 `min(26, 性价比 × 3)`，用的是**新**尺子；AI 实际采购读的是');
+lines.push('> 旧尺子（`攻×√血×射程 / 价^0.8`），两把尺子下的排序见 `docs/FANTASY-OVERLAP.md`。');
 
 mkdirSync('docs', { recursive: true });
 mkdirSync('results', { recursive: true });

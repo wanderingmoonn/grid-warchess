@@ -2691,7 +2691,7 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   s.tiles[idx(s, 5, 4)].terrain = 'plain';
   const mage = place2(s, 'A', 'mage', 5, 5);
 
-  // 超级重骑 8 甲：法师物理段 7−8=0，魔法段 18−0=18
+  // 超级重骑 9 甲：法师物理段 7−9=0，魔法段 18−0=18
   const heavy = place2(s, 'B', 'cataphract', 5, 4);
   assert.equal(computeDamage(s, mage, heavy), 18);
 
@@ -2699,12 +2699,14 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   const paladin = place2(s, 'B', 'paladin', 5, 4);
   assert.equal(computeDamage(s, mage, paladin), 14);
 
-  // 对照：同样攻击力全走物理的弓手，被 8 甲吃掉一大半
+  // 对照：同样攻击力全走物理的弓手，被重甲吃掉一大半。
+  // 甲数**从兵种定义里读**，不写字面量——这条测试要证明的是"物理吃甲、
+  // 魔法不吃甲"，和重骑具体几甲无关，写死一个 8 就变成"改数值要改测试"。
   // 重骑要**重新摆回去**：上一步 place2 已经把它换成了圣骑士，而圣骑士带着
-  // 守护光环（半径 2）——留着它的话，这个"8 甲目标"会平白多 2 甲。
+  // 守护光环（半径 2）——留着它的话，这个重甲目标会平白多 2 甲。
   const heavyAgain = place2(s, 'B', 'cataphract', 5, 4);
   const elf = place2(s, 'A', 'elf-archer', 6, 5);
-  assert.equal(computeDamage(s, elf, heavyAgain), 22 - 8);
+  assert.equal(computeDamage(s, elf, heavyAgain), 22 - s.unitTypes['cataphract']!.armor);
 });
 
 test('属性弱点：巨魔怕火，同一个火属性攻击打它翻倍', () => {
@@ -3501,7 +3503,7 @@ test('分裂：史莱姆死了变成两只小史莱姆', () => {
   for (const k of kids) assert.equal(k.owner, 'A');
 });
 
-test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
+test('修缮：符文守卫每回合给相邻的城补 10 点耐久', () => {
   const s = fresh({ expansionIds: FANTASY });
   const city = citiesOf(s, 'A')[0]!;
   city.hp = 10;
@@ -3512,7 +3514,86 @@ test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
     assert.ok(r.ok);
     st = r.state;
   }
-  assert.equal(cityById(st, city.id)!.hp, 16);
+  assert.equal(cityById(st, city.id)!.hp, 20);
+});
+
+test('石化：半血之下护甲翻倍、魔抗 +4、移速减半，回到半血之上立刻恢复', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const troll = place2(s, 'A', 'troll', 5, 5);
+  const def = s.unitTypes['troll']!;
+
+  const armorFull = effectiveStats(s, troll).armor;
+  const resFull = magicResOf(s, troll);
+  const moveFull = movePower(s, troll);
+  const half = Math.ceil(def.maxHp / 2);
+
+  // 正好半血：不触发。判据是"严格低于一半"——两条规矩（低于 50% 触发、
+  // 回到 50% 及以上解除）在 50% 这一点上重叠，取"低于"才不自相矛盾。
+  troll.hp = half;
+  assert.equal(effectiveStats(s, troll).armor, armorFull, '正好半血不翻倍');
+  assert.equal(magicResOf(s, troll), resFull, '正好半血不加魔抗');
+  assert.equal(movePower(s, troll), moveFull, '正好半血不减半');
+
+  // 掉到半血之下：三件事一起成立
+  troll.hp = half - 1;
+  assert.equal(effectiveStats(s, troll).armor, armorFull * 2, '护甲翻倍');
+  assert.equal(magicResOf(s, troll), resFull + 4, '魔抗 +4');
+  assert.equal(movePower(s, troll), Math.max(1, Math.floor(moveFull / 2)), '移动减半');
+
+  // 回到半血之上：三项全部回到原值——不是"再减一次"，也不是残留
+  troll.hp = def.maxHp;
+  assert.equal(effectiveStats(s, troll).armor, armorFull, '回血后护甲复原');
+  assert.equal(magicResOf(s, troll), resFull, '回血后魔抗复原');
+  assert.equal(movePower(s, troll), moveFull, '回血后移动复原');
+
+  // 反复进出低血：不累积（石化是读属性时现算的，没有可叠的状态）
+  for (let i = 0; i < 5; i += 1) {
+    troll.hp = half - 1;
+    troll.hp = def.maxHp;
+  }
+  troll.hp = half - 1;
+  assert.equal(effectiveStats(s, troll).armor, armorFull * 2, '反复进出之后仍然只翻一倍');
+  assert.equal(magicResOf(s, troll), resFull + 4, '魔抗也仍然只 +4');
+});
+
+test('石化：和减速、诅咒、护甲加成同时存在时不叠乘、不残留', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const troll = place2(s, 'A', 'troll', 5, 5);
+  const def = s.unitTypes['troll']!;
+  const half = Math.ceil(def.maxHp / 2);
+
+  // 减速：先看它自己的效果，再叠石化。石化是最后一刀"减半"，
+  // 顺序错了会出现"减半之后又被减速压到 0"或者"减速被算了两遍"。
+  troll.status = { slow: 1 };
+  const moveSlow = movePower(s, troll);
+  const armorSlowFull = effectiveStats(s, troll).armor;
+  troll.hp = half - 1;
+  const armorSlowLow = effectiveStats(s, troll).armor;
+  assert.equal(movePower(s, troll) >= 1, true, '减速 + 石化之后仍然走得动一格');
+  assert.equal(
+    armorSlowLow,
+    armorSlowFull + def.armor,
+    '翻倍只加一份基础甲，不是把减速后的甲再翻一遍',
+  );
+
+  // 诅咒（护甲 −2/层）：石化先翻倍，诅咒再扣——扣的量不该被翻倍
+  troll.hp = def.maxHp;
+  troll.status = { curse: 1 };
+  const armorCurseFull = effectiveStats(s, troll).armor;
+  troll.hp = half - 1;
+  const armorCurseLow = effectiveStats(s, troll).armor;
+  assert.equal(armorCurseLow, armorCurseFull + def.armor, '诅咒扣的量不跟着翻倍');
+
+  // 伤害结算走的是同一条取值口：低血时同一发物理伤害必须更少
+  const foe = place2(s, 'B', 'swordsman', 6, 5);
+  troll.status = {};
+  troll.hp = def.maxHp;
+  const dmgFull = computeDamage(s, foe, troll);
+  troll.hp = half - 1;
+  const dmgLow = computeDamage(s, foe, troll);
+  assert.ok(dmgLow < dmgFull, `低血时该更硬：满血吃 ${dmgFull}，半血之下只吃 ${dmgLow}`);
 });
 
 test('筑墙：土元素会在自己旁边立一道墙', () => {

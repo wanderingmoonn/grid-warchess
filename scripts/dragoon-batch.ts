@@ -27,7 +27,7 @@ const BASE_SEED = Number(argOf('seed', '9500'));
 const CAP = Number(argOf('cap', '200'));
 const PARALLEL = Number(argOf('parallel', String(os.cpus().length)));
 const OUT = argOf('out', 'results/dragoon');
-/** 这一批"无脑堆"的是哪个兵（默认龙骑兵；毒蝙蝠用 poison-bat） */
+/** 这一批"无脑堆"的是哪个兵（默认龙骑兵；蝙蝠用 poison-bat） */
 const TYPE = argOf('type', 'dragoon-rider');
 const ERA = Number(argOf('era', '3'));
 const SIZE = Number(argOf('size', '20'));
@@ -35,7 +35,7 @@ const AI_PATH = argOf('ai', '');
 const LABEL = argOf(
   'label',
   ({
-    'poison-bat': '毒蝙蝠',
+    'poison-bat': '蝙蝠',
     'dragoon-rider': '龙骑兵',
     'griffin-rider': '狮鹫骑士',
     harpy: '鹰身女妖',

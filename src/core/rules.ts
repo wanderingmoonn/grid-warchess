@@ -958,8 +958,43 @@ export function strikeDistance(s: GameState, attacker: Unit, defender: Unit): nu
 export function magicAtkOf(s: GameState, u: Unit): number {
   return (utype(s, u.type).magicAtk ?? 0) + (u.magicAtkBonus ?? 0);
 }
+
+/**
+ * 石化（巨魔的被动）：生命**严格低于**一半时成立。
+ *
+ * 为什么不做成"加一个状态、到点了再删掉"：那样每一处掉血、回血、治疗、复活
+ * 之后都得检查一次，漏一处就是"血回来了护甲还翻倍"，或者叠了两层只撤一层。
+ * 这里改成**每次读属性时现算**——血量过线，下一次读就是新值，没有可残留的东西，
+ * 也就不可能重复叠加。和「狂暴」（低血加攻）走的是同一条路子。
+ *
+ * 判据是"严格低于"：正好半血不触发（设成 ≤ 半血的话，50% 那一刻会同时满足
+ * "恢复到 50% 及以上应当消失"，两条规则会打架）。
+ */
+export function isPetrified(s: GameState, u: Unit): boolean {
+  const def = utype(s, u.type);
+  if (!(def.abilities ?? []).includes('stone-skin')) return false;
+  return u.hp * 2 < def.maxHp;
+}
+
+/**
+ * 单位**自身**的护甲：兵种基础 + 圣剑觉醒这类长在身上的加成。
+ *
+ * 不含地形、光环、驻军、诅咒——石化翻倍翻的是"它自己的甲"，
+ * 不是"脚下这块地的甲"。所以翻倍放在这一个取值口上，
+ * 面板（effectiveStats）和伤害结算（computeDamage）都走它，
+ * 两边才不会出现"面板 ×2、打出来没翻"。
+ */
+function ownArmorOf(s: GameState, u: Unit): number {
+  const def = utype(s, u.type);
+  const base = def.armor + (u.armorBonus ?? 0);
+  return isPetrified(s, u) ? base * 2 : base;
+}
+
 export function magicResOf(s: GameState, u: Unit): number {
-  return (utype(s, u.type).magicRes ?? 0) + (u.magicResBonus ?? 0);
+  const base = (utype(s, u.type).magicRes ?? 0) + (u.magicResBonus ?? 0);
+  // 石化 +4。这里是魔抗**唯一**的取值口（面板、伤害、AI 估算都读它），
+  // 加在这一处就同时管住三边，不用各自再写一遍。
+  return isPetrified(s, u) ? base + 4 : base;
 }
 
 /**
@@ -1493,6 +1528,15 @@ export function movePower(s: GameState, unit: Unit): number {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
   }
+  /*
+   * 石化：移动力减半（向下取整，最低 1）。
+   *
+   * 放在所有加减法**之后**：玩家看到的是"它现在只能走一半的路"，
+   * 所以连血战那种全军 +1 也一起折半，而不是"先折半再 +1"。
+   * `move > 0` 那道守卫不能省：扩展钩子返回 0 是引擎写明的"这一回合动不了"
+   * （封冻、行动点耗尽），减半之后若再套"保底 1"，封冻就被悄悄解开了。
+   */
+  if (move > 0 && isPetrified(s, unit)) move = Math.max(1, Math.floor(move / 2));
   // 钩子返回 0 = 这一回合动不了（封冻的海军）。
   move -= unit.moveSpent ?? 0; 
   return Math.max(0, move);
@@ -1677,10 +1721,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   }
 
   // ── 护甲（按当前所在格算）──
-  const armorBase = def.armor + (u.armorBonus ?? 0);
+  const armorBase = ownArmorOf(s, u);
   const armorItems: StatItem[] = [];
   let armor = armorBase;
   if (u.armorBonus) armorItems.push({ label: '圣剑觉醒', delta: u.armorBonus });
+  // 石化翻倍的是"它自己的甲"，所以只在 armorBase 上生效，写一条明细给面板看
+  if (isPetrified(s, u)) {
+    armorItems.push({ label: '石化 ×2', delta: armorBase - (def.armor + (u.armorBonus ?? 0)) });
+  }
   const tile = tileAt(s, u.x, u.y);
   for (const src of auraSourcesOf(s, u, 'allyArmor')) {
     armor += src.value;
@@ -1794,6 +1842,13 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
         moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
+    }
+    // 石化减半：和 movePower 同一个位置（扩展钩子之后）、同一个算法，
+    // 面板和实际走位才对得上
+    if (moveNow > 0 && isPetrified(s, u)) {
+      const before = moveNow;
+      moveNow = Math.max(1, Math.floor(moveNow / 2));
+      if (moveNow !== before) moveItems.push({ label: '石化 ×0.5', delta: moveNow - before });
     }
     const spent = u.moveSpent ?? 0;
     if (spent > 0) {
@@ -2369,7 +2424,8 @@ export function computeDamage(
   const atkNow = attackPowerNow(s, attacker);
 
   // 3. 核心：真实护甲是动态读取城市的，而不是读全局表里的 0
-  const actualArmor = isCity ? city.armor : dt.armor + (defender.armorBonus ?? 0);
+  //    石化翻倍也在这里生效：ownArmorOf 是"自己的甲"的唯一取值口
+  const actualArmor = isCity ? city.armor : ownArmorOf(s, defender);
 
   const ctx: HookCtx = {
     state: s,
