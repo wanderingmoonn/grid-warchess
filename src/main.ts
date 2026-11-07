@@ -7,6 +7,8 @@
 
 import './style.css';
 import * as tutorial from './ui/tutorial.ts';
+import { openBattleCard } from './ui/battle-card.ts';
+import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
@@ -300,6 +302,14 @@ const UNDO_LIMIT = 30;
 let chimeVolume = loadChimeVolume();
 /** 上一次渲染时的行动方：用来判断"回合是不是换人了" */
 let lastTurnPlayer: PlayerId | null = null;
+/**
+ * 这一局的"打完了"提示放过没有。
+ *
+ * 放在 render 里做，是因为分出胜负有**八条路**（攻城、认输、城被打光、
+ * 联机对面提交、AI 走完、指挥官批次收尾……）。在这些地方各写一句 toast
+ * 一定会漏掉其中几条，而且漏掉的那条恰好最需要提示。render 是唯一都经过的地方。
+ */
+let settledNotified = false;
 let selectedCityId: string | null = null;
 /** 选中的己方军营（点开来当产兵面板用） */
 let selectedCampId: string | null = null;
@@ -844,6 +854,15 @@ function panelInput(known?: PlayerView): PanelInput {
     planReady: state.orderReady?.[me()] === true,
     forceMode,
     report: reportPanel(),
+    /*
+     * 战报卡只排一种情况：复盘。
+     *
+     * 复盘里 `me()` 是"看棋的人"的席位，拖进来的那局跟你没关系，
+     * 生成的卡会把别人那局标成"我赢了"——和结算卡替人签同意书是同一类错。
+     * 上帝模式、双 AI 观战**给**：前者是自家最常用的模式，
+     * 后者打完一局正好发群里。
+     */
+    battleCard: state.winner !== null && replay === null,
   };
 }
 
@@ -1315,6 +1334,24 @@ function render(): void {
     syncReplayBar(replayEl, replayUiOf(), replaySeeking);
   } else if (!replayEl.hidden) {
     replayEl.hidden = true;
+  }
+
+  /*
+   * 打完了：告诉玩家产出在哪。
+   *
+   * 光有一张卡没人知道要点——按钮在右侧面板里，而终局那一刻大家的视线在棋盘上。
+   * 只提示一次（`settledNotified`），不自动弹卡：自动弹会挡住最后一眼局面，
+   * 而"刚打完"正是最想看清残局的时候。
+   * 复盘和教程局不提示：前者不是你的对局，后者有自己的收尾。
+   */
+  if (state.winner && !settledNotified) {
+    settledNotified = true;
+    if (replay === null && !tutorial.tutorialOn()) {
+      toast('这局打完了——右侧「战报卡」能存成图片');
+    }
+  } else if (!state.winner) {
+    // 换局 / 读档 / 撤销回到中局：标志要跟着回去，否则下一局打完了不再提示
+    settledNotified = false;
   }
 
   /*
@@ -3171,6 +3208,22 @@ async function copyMatchReport(): Promise<void> {
   }
 }
 
+/**
+ * 战报卡：一局打完才给。
+ *
+ * 用的是**当前**的 state（不是给系统看的那份报告）：卡面写的是"你这一局发生了什么"，
+ * 两边字段故意不共用，免得为了报表好看去改玩家看到的话。
+ */
+function openBattleCardFlow(): void {
+  if (!state.winner) {
+    toast('这局还没分出胜负，打完再来看');
+    return;
+  }
+  openBattleCard(buildBattleCard(state, me(), BUILD_VERSION), document.body, {
+    onCopied: () => toast('战报文字已复制'),
+  });
+}
+
 function downloadMatchReport(): void {
   const rep = finishedReport();
   const blob = new Blob([reportJson(rep)], { type: 'application/json' });
@@ -3663,6 +3716,10 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'report-download':
       downloadMatchReport();
+      return;
+
+    case 'battle-card':
+      openBattleCardFlow();
       return;
 
     case 'recruit-pack': {

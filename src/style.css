@@ -5859,3 +5859,77 @@ a.btn {
 @media (prefers-reduced-motion: reduce) {
   .city-block.tut-city-ring-own { animation: none; }
 }
+
+/* ── 战报卡 ──
+ * 层级 96：盖住棋盘和教程卡片（75），低于通用模态框（100）——它是"看结果"，
+ * 任何时候都不该挡住真正需要交互的对话框。
+ */
+.bc-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 96;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(30, 28, 24, 0.45);
+}
+
+.bc-box {
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 14px 16px 12px;
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(30, 28, 24, 0.28);
+}
+
+.bc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.bc-close {
+  border: 0;
+  background: none;
+  padding: 2px 6px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.bc-close:hover { color: var(--text); }
+
+.bc-img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* 画不出图的环境（jsdom / 老浏览器）退回纯文字，也要能读 */
+.bc-fallback {
+  margin: 0;
+  padding: 12px;
+  background: var(--panel-2);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-line;
+}
+
+.bc-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* 提示放在按钮**上面**：按钮是这张卡的最后一件东西，贴着底边才像"操作区" */
+.bc-tip { margin: 10px 0 0; }
