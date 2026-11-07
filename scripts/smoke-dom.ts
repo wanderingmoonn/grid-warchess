@@ -3741,6 +3741,158 @@ check('上帝模式开局：工具栏、兵种货架、全图视角一次到位'
   assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
 });
 
+/*
+ * 拖动绘制。
+ *
+ * jsdom 没有 Pointer Events，所以这里手工派发 pointerdown/pointermove/pointerup，
+ * 坐标靠给 `.tiles` 钉一个 400×400 的矩形来换算（和上面"点地图"那条同一套办法）。
+ * 要守的三件事：
+ *   1. 快速拖动只发起点和终点，中间那几格也必须被补上；
+ *   2. 整根拖动在撤销栈里只占一步；
+ *   3. 单格点击的老行为不变。
+ */
+let lastDragCell: { x: number; y: number } | null = null;
+
+check('上帝模式：笔刷按住拖过去，沿途每一格都刷到，撤销只退一步', () => {
+  // 挑一个地形笔刷：不依赖货架里有没有某个兵，也不会被"这格站着东西"挡住
+  click('[data-act="god-terrain"][data-terrain="forest"]');
+
+  const board = doc.querySelector<HTMLElement>('#board')!;
+  const tiles = board.querySelector<HTMLElement>('.tiles')!;
+  const cols = Number(board.style.getPropertyValue('--cols'));
+  const rows = Number(board.style.getPropertyValue('--rows'));
+  assert.ok(cols > 0 && rows > 0, '棋盘应该已经写好了行列数');
+
+  const box = 400;
+  Object.defineProperty(tiles, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      left: 100, top: 50, width: box, height: box, right: 100 + box, bottom: 50 + box, x: 100, y: 50,
+    }),
+  });
+  const cw = box / cols;
+  const ch = box / rows;
+  const at = (x: number, y: number) => ({
+    clientX: 100 + (x + 0.5) * cw,
+    clientY: 50 + (y + 0.5) * ch,
+  });
+  const fire = (type: string, p: { clientX: number; clientY: number }) => {
+    board.dispatchEvent(new window.MouseEvent(type, { ...p, bubbles: true }));
+  };
+
+  const before = savedGame();
+  // 城格改不了地形、已经是森林的格看不出变化——所以自己找一段"干净"的横线
+  const clean = (x: number, y: number): boolean => {
+    const t = before.tiles[y * cols + x];
+    return !!t && !t.cityId && t.terrain !== 'forest';
+  };
+  let sx = -1;
+  let sy = -1;
+  for (let y = 0; y < rows && sx < 0; y += 1) {
+    for (let x = 0; x + 4 < cols; x += 1) {
+      if (clean(x, y) && clean(x + 1, y) && clean(x + 2, y) && clean(x + 3, y) && clean(x + 4, y)) {
+        sx = x;
+        sy = y;
+        break;
+      }
+    }
+  }
+  assert.ok(sx >= 0, '这张图上应该有一段能连着刷五格的干净横线');
+
+  // 只发起点和终点，中间一格都不发——这就是"很快地划过去"
+  fire('pointerdown', at(sx, sy));
+  fire('pointermove', at(sx + 4, sy));
+  fire('pointerup', at(sx + 4, sy));
+  lastDragCell = { x: sx + 4, y: sy };
+
+  const after = savedGame();
+  for (let k = 0; k <= 4; k += 1) {
+    assert.equal(
+      after.tiles[sy * cols + sx + k]!.terrain,
+      'forest',
+      `(${sx + k},${sy}) 漏了：快速拖动必须把中间格子补齐`,
+    );
+  }
+  // 线外面的格子一格都不许动
+  if (sy + 1 < rows && clean(sx, sy + 1)) {
+    assert.equal(
+      after.tiles[(sy + 1) * cols + sx]!.terrain,
+      before.tiles[(sy + 1) * cols + sx]!.terrain,
+      '拖出界了：下面那一行不该被刷到',
+    );
+  }
+
+  // 一次「撤回」把整根拖动全退掉 → 这根拖动在撤销栈里只占一步
+  click('[data-act="undo"]');
+  const undone = savedGame();
+  for (let k = 0; k <= 4; k += 1) {
+    assert.equal(
+      undone.tiles[sy * cols + sx + k]!.terrain,
+      before.tiles[sy * cols + sx + k]!.terrain,
+      `撤回一次就该把 (${sx + k},${sy}) 一起退回去，说明整根拖动只压了一步`,
+    );
+  }
+});
+
+check('上帝模式：单格点击照旧，拖动尾巴不会把这一下吞掉或画两遍', () => {
+  const board = doc.querySelector<HTMLElement>('#board')!;
+  const cols = Number(board.style.getPropertyValue('--cols'));
+  const rows = Number(board.style.getPropertyValue('--rows'));
+  const box = 400;
+  const cw = box / cols;
+  const ch = box / rows;
+  const at = (x: number, y: number) => ({
+    clientX: 100 + (x + 0.5) * cw,
+    clientY: 50 + (y + 0.5) * ch,
+  });
+
+  const before = savedGame();
+  // 找一个既不是城、还不是森林、也不在上一条用例那次拖动的落点上
+  let cell: { x: number; y: number } | null = null;
+  for (let y = 0; y < rows && !cell; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      const t = before.tiles[y * cols + x];
+      if (!t || t.cityId || t.terrain === 'forest') continue;
+      if (lastDragCell && lastDragCell.x === x && lastDragCell.y === y) continue;
+      cell = { x, y };
+      break;
+    }
+  }
+  assert.ok(cell, '图上应该有没被画过的空格');
+  const index = cell!.y * cols + cell!.x;
+
+  // 1) 纯点击（没有 pointerdown/up，只有 click）：老路径必须还在
+  board
+    .querySelector<HTMLElement>(`.tile[data-x="${cell!.x}"][data-y="${cell!.y}"]`)!
+    .dispatchEvent(new window.MouseEvent('click', { ...at(cell!.x, cell!.y), bubbles: true }));
+  assert.equal(savedGame().tiles[index]!.terrain, 'forest', '单格点击还应该照旧刷上');
+
+  // 2) 按下-松开但没动（手指点一下）：落笔走 click，不能被拖动吃掉，也不能刷两遍
+  const second = (() => {
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        const t = before.tiles[y * cols + x];
+        if (!t || t.cityId || t.terrain === 'forest') continue;
+        if (x === cell!.x && y === cell!.y) continue;
+        return { x, y };
+      }
+    }
+    return null;
+  })();
+  assert.ok(second, '还需要第二个空格');
+  board.dispatchEvent(new window.MouseEvent('pointerdown', { ...at(second!.x, second!.y), bubbles: true }));
+  board.dispatchEvent(new window.MouseEvent('pointerup', { ...at(second!.x, second!.y), bubbles: true }));
+  // 松手后浏览器会补一个 click
+  board
+    .querySelector<HTMLElement>(`.tile[data-x="${second!.x}"][data-y="${second!.y}"]`)!
+    .dispatchEvent(new window.MouseEvent('click', { ...at(second!.x, second!.y), bubbles: true }));
+  assert.equal(
+    savedGame().tiles[second!.y * cols + second!.x]!.terrain,
+    'forest',
+    '点一下也要刷上',
+  );
+});
+
 check('己方战报只给自己的条目和战损，观战才看全部', () => {
   const st = createMatch(
     {

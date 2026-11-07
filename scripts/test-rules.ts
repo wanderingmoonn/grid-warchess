@@ -286,6 +286,7 @@ import {
   snapshotSignature,
 } from '../src/core/snapshot.ts';
 import { GOLD } from '../src/core/resources.ts';
+import { lineBetween } from '../src/core/grid-line.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
@@ -16067,6 +16068,90 @@ test('光环：动态效果型光环的半径传参生效', () => {
   assert.equal(auraTargets(ctx, 1).length, 1, '默认半径 1 只能取到自己');
   // 传半径 2：能取到 2 格外的人
   assert.equal(auraTargets(ctx, 2).length, 2, '传半径 2 取到两个人');
+});
+
+/*
+ * 拖动绘制的补线。
+ *
+ * 这条线的唯一职责是"快拖不漏格"，所以测的不是"像不像直线"，
+ * 而是**每一行/每一列都恰好被走到一次**——漏一格就是地图上少一块涂色。
+ */
+test('补线：水平/垂直/斜线都不漏格，且不含起点含终点', () => {
+  assert.deepEqual(lineBetween({ x: 2, y: 3 }, { x: 2, y: 3 }), [], '原地不动不产生格子');
+
+  // 水平：中间每一格都要有
+  const h = lineBetween({ x: 2, y: 5 }, { x: 7, y: 5 });
+  assert.deepEqual(
+    h.map((c) => c.x),
+    [3, 4, 5, 6, 7],
+    '水平线从起点之后一格开始、到终点结束',
+  );
+  assert.ok(h.every((c) => c.y === 5), '水平线不该漂到别的行');
+
+  // 垂直
+  const v = lineBetween({ x: 4, y: 1 }, { x: 4, y: 6 });
+  assert.deepEqual(v.map((c) => c.y), [2, 3, 4, 5, 6], '垂直线每一行都走到');
+
+  // 45° 斜线：一格不多一格不少
+  const d = lineBetween({ x: 0, y: 0 }, { x: 4, y: 4 });
+  assert.deepEqual(
+    d.map((c) => `${c.x},${c.y}`),
+    ['1,1', '2,2', '3,3', '4,4'],
+    '对角线每步走一格',
+  );
+});
+
+test('补线：反向拖一样不漏，陡/缓斜线都不跳行', () => {
+  /*
+   * 判据是**连续**，不是"两向完全对称"。Bresenham 正着走和反着走在缓斜线上
+   * 会偏向不同的那一边（1,1→9,4 经过 5,3；反着走经过 5,2）——这是算法本身的性质，
+   * 画出来的都是同一条连通的线。要守的是"不漏格、不跳格"。
+   */
+  const contiguous = (cells: Array<{ x: number; y: number }>, from: { x: number; y: number }) => {
+    let prev = from;
+    for (const c of cells) {
+      const dx = Math.abs(c.x - prev.x);
+      const dy = Math.abs(c.y - prev.y);
+      assert.ok(dx <= 1 && dy <= 1, `从 ${prev.x},${prev.y} 到 ${c.x},${c.y} 跳格了`);
+      assert.ok(dx + dy > 0, `在 ${c.x},${c.y} 原地踩了一脚`);
+      prev = c;
+    }
+  };
+
+  const fwd = lineBetween({ x: 1, y: 1 }, { x: 9, y: 4 });
+  const back = lineBetween({ x: 9, y: 4 }, { x: 1, y: 1 });
+  // 切比雪夫距离：8 列 3 行，最快也要走 8 步，一步都不许少
+  assert.equal(fwd.length, 8, '缓斜线该走满 8 步');
+  assert.equal(back.length, 8, '反向也一样 8 步');
+  contiguous(fwd, { x: 1, y: 1 });
+  contiguous(back, { x: 9, y: 4 });
+  assert.deepEqual(back[back.length - 1], { x: 1, y: 1 }, '反向要真的走到终点');
+
+  // 陡斜线（dx=3, dy=10）：每一行都要有，不能跳行
+  const steep = lineBetween({ x: 2, y: 0 }, { x: 5, y: 10 });
+  assert.equal(steep.length, 10, '陡斜线的格子数按较长的那条边走');
+  assert.deepEqual(
+    steep.map((c) => c.y),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    '陡斜线每一行都走到，一格都不漏',
+  );
+  contiguous(steep, { x: 2, y: 0 });
+
+  // 缓斜线（dx=10, dy=3）：每一列都要有
+  const shallow = lineBetween({ x: 0, y: 2 }, { x: 10, y: 5 });
+  assert.deepEqual(
+    shallow.map((c) => c.x),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    '缓斜线每一列都走到',
+  );
+  contiguous(shallow, { x: 0, y: 2 });
+});
+
+test('补线：64×64 的对角线也不会漏（棋盘上限那档）', () => {
+  const long = lineBetween({ x: 0, y: 0 }, { x: 63, y: 63 });
+  assert.equal(long.length, 63, '63 步走完对角线');
+  assert.equal(new Set(long.map((c) => `${c.x},${c.y}`)).size, 63, '不重复走同一格');
+  assert.deepEqual(long[long.length - 1], { x: 63, y: 63 }, '终点必须落在目标格');
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);

@@ -269,14 +269,14 @@ function brushHint(ui: GodUi, s: GameState): string {
   switch (ui.brush.kind) {
     case 'unit': {
       const def = s.unitTypes[ui.brush.type];
-      return `笔刷：${def?.name ?? ui.brush.type} —— 点棋盘落子，可以连着摆`;
+      return `笔刷：${def?.name ?? ui.brush.type} —— 点一格落子；按住拖过去能连着铺一片`;
     }
     case 'city':
       return '笔刷：城市 —— 点 2×2 的左上角，橙格是能放的位置';
     case 'erase':
-      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城';
+      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城；按住拖过去能连着擦';
     case 'terrain':
-      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，可以连着刷（城格和站着东西的格改不了）`;
+      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，或按住拖过去整片刷（城格和站着东西的格改不了）`;
     default:
       return '笔刷：查看 —— 点一格看看那儿有什么';
   }

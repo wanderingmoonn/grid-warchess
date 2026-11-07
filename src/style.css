@@ -369,6 +369,21 @@ body {
   flex: none;
 }
 
+/*
+ * 笔刷在手：拖动 = 画画，不是滚地图。
+ *
+ * `touch-action: none` 必须在这一层写死。`.board-scroll` 在放大档是
+ * `pan-x pan-y`，手指往边上一划就会被浏览器判成滚动手势，pointermove 直接
+ * 停发——拖到一半断掉，画出来只有第一格。这一条压过祖先的声明。
+ *
+ * 光标**不在这里改**。格子的光标只由交互状态决定（见下面 `.tile` 那段说明），
+ * 笔刷层再给格子写一句 cursor: crosshair 就会和"能不能去"那一套打架——
+ * 而且那条不变量是有测试守着的（它会扫这份样式表里 `.tile` 的基线块）。
+ */
+.board.brush-paint {
+  touch-action: none;
+}
+
 .tiles {
   display: grid;
   grid-template-columns: repeat(var(--cols, 12), 1fr);
