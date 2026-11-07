@@ -23,7 +23,7 @@
  * 一期直接规定：占地 > 1 的单位不传送；它们挡在落点上就整体失败。
  */
 import type { SkillDef, Unit } from '../../types.ts';
-import { registerSkillEffect } from '../../skill-hooks.ts';
+import { registerSkillEffect, registerSkillPreview } from '../../skill-hooks.ts';
 import { resOf, addRes } from '../../resources.ts';
 import { SPIRIT_STONE } from '../resources.ts';
 import { distance, inBounds } from '../../query.ts';
@@ -117,4 +117,32 @@ registerSkillEffect('teleport-swap', (c) => {
     plan.length > 1
       ? `传送阵挪移了 ${plan.length} 个单位的位置`
       : `传送阵只挪走了自己`;
+});
+
+/**
+ * 瞄准预览：鼠标停在哪一格，就把"谁会挪到哪"标出来。
+ *
+ * 返回的是**单位的目的格**，不是"技能作用范围"——传送阵波及的是人不是地，
+ * 把两片 2 格圆盘整块染红，反而看不出谁会被挤掉、谁只是站着不动。
+ * 大单位不参与（和效果里的规则一致），界外的目的格直接跳过。
+ */
+registerSkillPreview('teleport-swap', (c) => {
+  const { state, self, target } = c;
+  const vx = target.x - self.x;
+  const vy = target.y - self.y;
+  if (vx === 0 && vy === 0) return [];
+
+  const cells = new Set<number>();
+  for (const u of state.units) {
+    if ((state.unitTypes[u.type]?.footprint ?? 1) > 1) continue;
+    const to =
+      distance(u, self) <= TELEPORT_RADIUS
+        ? { x: u.x + vx, y: u.y + vy }
+        : distance(u, target) <= TELEPORT_RADIUS
+          ? { x: u.x - vx, y: u.y - vy }
+          : null;
+    if (!to || !inBounds(state, to.x, to.y)) continue;
+    cells.add(to.y * state.w + to.x);
+  }
+  return Array.from(cells);
 });

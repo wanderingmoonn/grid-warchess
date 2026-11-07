@@ -33,7 +33,7 @@ import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
-import { SKILL_EFFECTS } from '../../../src/core/skill-hooks.ts';
+import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -1133,6 +1133,25 @@ export function run() {
       '能力要注册，否则 onDamaged 静默失效',
     );
     assert.ok(CULTIVATION_HOOKS.redirectDamage, '转移钩子要接进扩展');
+  });
+
+  test('传送阵：落点预览标出「谁会挪到哪」，落点是自己时为空', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+    place2(s, 'A', 'militia', 6, 5); // 源侧
+    place2(s, 'B', 'militia', 10, 5); // 落点侧（落点 9,5）
+
+    const previewer = SKILL_PREVIEWERS['teleport-swap'];
+    assert.ok(previewer, '传送阵要注册落点预览，否则瞄准时什么都看不到');
+    const set = new Set(previewer!({ state: s, self: arr, target: { x: 9, y: 5 } }));
+    // 矢量 (4,0)：阵和源侧单位 +4，落点侧单位 −4
+    assert.ok(set.has(idx(s, 9, 5)), '阵自己的新位置');
+    assert.ok(set.has(idx(s, 10, 5)), '源侧单位的新位置');
+    assert.ok(set.has(idx(s, 6, 5)), '落点侧单位的新位置');
+
+    const selfTarget = previewer!({ state: s, self: arr, target: { x: 5, y: 5 } });
+    assert.equal(selfTarget.length, 0, '落在自己身上等于没传，不给预览');
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

@@ -256,6 +256,7 @@ import {
   underConstruction,
   unitIncome,
   unitIncomeAt,
+  unitYieldAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
@@ -9527,6 +9528,30 @@ test('unitIncomeAt：农民站平原收 7、站森林收 3，算完不挪动真�
   assert.equal(unitIncomeAt(s, farmer, forest.x, forest.y), 3, '森林该收 3');
   assert.equal(farmer.x, plain.x, '预览不该把单位真的挪走');
   assert.equal(farmer.y, plain.y, '预览不该把单位真的挪走');
+});
+
+test('unitYieldAt：灵田站平原收 11 金 1 灵、站森林收 6 金 4 灵，算完不挪真身', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  clearDecor(s);
+  const spots = dryTiles(s, 'plain');
+  const plain = spots[0]!;
+  const forest = spots[1]!;
+  s.tiles[forest.y * s.w + forest.x]!.terrain = 'forest';
+  const field = place2(s, 'A', 'cultivation-spirit-field', plain.x, plain.y);
+
+  const onPlain = unitYieldAt(s, field, plain.x, plain.y);
+  assert.equal(onPlain.gold, 11, '平原 11 金');
+  assert.equal(onPlain['spirit-stone'], 1, '平原 1 灵石');
+
+  const onForest = unitYieldAt(s, field, forest.x, forest.y);
+  assert.equal(onForest.gold, 6, '森林 6 金');
+  assert.equal(
+    onForest['spirit-stone'],
+    4,
+    '森林 4 灵石——只算金币的旧接口看不到这个差别',
+  );
+  assert.equal(field.x, plain.x, '预览不该把单位真的挪走');
+  assert.equal(field.y, plain.y, '预览不该把单位真的挪走');
 });
 
 test('effectiveStats：老兵不死的击杀成长进了真实攻击力', () => {

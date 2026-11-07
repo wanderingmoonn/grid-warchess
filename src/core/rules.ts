@@ -2917,6 +2917,24 @@ export function unitIncomeAt(s: GameState, u: Unit, x: number, y: number): numbe
 }
 
 /**
+ * 经济单位**如果**站在 (x,y)，每回合能收**哪些资源**。
+ *
+ * `unitIncomeAt` 只取金币，多资源扩展的单位（灵田、灵矿、粮仓……）用它算，
+ * 每一个落点都会得出同一个数字，移动预览等于白画。和上面那个一样只临时借坐标，
+ * 算完立刻还回去，整个过程同步、无副作用。
+ */
+export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): ResourceCost {
+  const ox = u.x;
+  const oy = u.y;
+  u.x = x;
+  u.y = y;
+  const yields = unitYield(s, u);
+  u.x = ox;
+  u.y = oy;
+  return yields;
+}
+
+/**
  * 这一方现在每回合能收多少（**全部资源**）。纯函数，不写状态。
  *
  * 金币那一段仍然过一遍 modifyIncome 钩子（战争经济之类的老扩展读它），

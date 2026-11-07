@@ -312,13 +312,16 @@ export function describeUnit(
         })
         .filter(Boolean)
         .join(' · ');
-      if (parts) lines.push(`每回合产出（按所站地形）：${parts}`);
+      // 这里印的是兵种基础值，不含扩展的 modifyYield（灵矿邻山、城郭包折算……）。
+      // 当前实际产出由属性卡那行负责，两者并排出现时靠"基础"两个字区分开，
+      // 否则玩家会看到"说明写 +5 灵石、面板写 +7"然后认为哪边算错了。
+      if (parts) lines.push(`基础产出（按所站地形，未计扩展加成）：${parts}`);
     } else if (def.yield) {
       const items = Object.entries(def.yield)
         .filter(([, v]) => (v ?? 0) > 0)
         .map(([id, v]) => `+${v} ${resourceShort(id)}`)
         .join(' ');
-      if (items) lines.push(`每回合产出：${items}`);
+      if (items) lines.push(`基础产出（未计扩展加成）：${items}`);
     }
     if (def.incomeByTerrain) {
       const parts = (Object.keys(def.incomeByTerrain) as Terrain[])
@@ -327,10 +330,10 @@ export function describeUnit(
           return `${TERRAIN_INFO[t].name} +${v}`;
         })
         .join(' · ');
-      lines.push(`每回合产出：${parts}`);
+      lines.push(`基础产出（金币，按所站地形）：${parts}`);
       lines.push(`相邻水域额外 +${CONFIG.riverTradeBonus} 金`);
     } else if (def.income) {
-      lines.push(`每回合产出 ${def.income} 金`);
+      lines.push(`基础产出 ${def.income} 金（未计扩展加成）`);
     }
   }
 
