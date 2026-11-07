@@ -2376,6 +2376,17 @@ function dispatch(action: Action): boolean {
     toast('复盘里只能看，要接着下先点「退出复盘」');
     return false;
   }
+  /*
+   * 教程的"讲解页"：先读完这一页，点了「继续」再动手。
+   *
+   * 不拦的话，第一步还没开始玩家就能自由走棋（教程卡片只是浮在上面），
+   * 兵走偏了后面几步就全对不上。这里拦的是**所有**改局动作，包括面板上的按钮——
+   * 屏幕上一个"看起来能按"的东西，按下去什么都不发生，比直接不让按更让人困惑。
+   */
+  if (tutorial.tutorialOn() && tutorial.tutorialBlocking()) {
+    toast('先读完这一页，点「继续」再动手');
+    return false;
+  }
   // AI 正在走这一方：玩家的点击一律不生效，不然会出现两边同时改同一个状态
   if (aiBusy()) {
     toast('这一方正由 AI 行动');

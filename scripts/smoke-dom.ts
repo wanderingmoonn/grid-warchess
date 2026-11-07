@@ -41,6 +41,7 @@ import { renderPanel } from '../src/ui/panel.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
+  tutorialBlocking,
   tutorialExit,
   tutorialOn,
   tutorialSnapshot,
@@ -6385,10 +6386,13 @@ check('新手教程：卡片一步步推进，做到才换下一步，跳过就�
   assert.ok(card, '卡片要挂上');
   assert.ok((card.textContent ?? '').includes('赢的条件'), '第一步先讲胜利条件（破城，不是杀光）');
   assert.equal(tutorialStep(), 'goal');
+  // 讲解页棋盘不许动：没点「继续」就能走棋的话，兵先走偏，后面几步全对不上
+  assert.equal(tutorialBlocking(), true, '讲解页要拦住所有动作');
 
   // 讲解步：点「继续」进下一步
   card.querySelector<HTMLElement>('[data-tut="next"]')!.click();
   assert.equal(tutorialStep(), 'select', '点「继续」要进到「选中你的兵」');
+  assert.equal(tutorialBlocking(), false, '操作页要放行动作');
   assert.ok(!doc.querySelector<HTMLElement>('[data-tut="next"]')!.hidden === false, '操作步的「继续」要收起来');
 
   // 没选中之前不动

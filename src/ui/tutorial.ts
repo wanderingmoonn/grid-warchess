@@ -244,6 +244,19 @@ export function tutorialMarks(state: GameState): { tiles: number[]; cityId: stri
   return { tiles, cityId };
 }
 
+/**
+ * 现在这一页是"讲解页"吗（没有判定条件的那些）。
+ *
+ * 讲解页上棋盘是**不许动的**：第一步还没点「继续」，玩家就能自由移动的话，
+ * 他可能在读到"目标是打城"之前先把兵走偏了，后面的步骤就全乱。所以讲解页上
+ * main.ts 会把所有动作拦下来，只放行卡片上的按钮。
+ */
+export function tutorialBlocking(): boolean {
+  if (!active) return false;
+  const step = STEPS[stepIndex];
+  return Boolean(step) && !step.done;
+}
+
 /** 当前步骤（给用例断言用） */
 export function tutorialStep(): string {
   return STEPS[stepIndex]?.key ?? 'off';

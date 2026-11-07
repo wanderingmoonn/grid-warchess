@@ -72,7 +72,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
 
       <div class="title-actions">
         ${(() => {
-          const tut = '<button class="title-btn" data-title="tutorial">新手教程 · 约 3 分钟</button>';
+          const tut = '<button class="title-btn" data-title="tutorial">新手教程</button>';
           const neu = '<button class="title-btn" data-title="new">开始对局</button>';
           const cont = `<button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
           // 第一次来：教程当主按钮、排第一；老玩家：开始对局在主位，教程退第二
