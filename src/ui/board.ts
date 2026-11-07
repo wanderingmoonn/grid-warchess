@@ -72,6 +72,20 @@ export interface BoardUi {
    */
   heat?: Map<number, number>;
   /**
+   * 这一下**刚刚打出去**的格子（格索引 → 次数），闪一次就散。
+   *
+   * 和 `heat` 是两个方向：那个是"上回合我在这挨打"（历史、常驻、出手即收），
+   * 这个是"我这一手打到了哪"（当下、一次性）。用同一套 `.fx-heat` 色块与分档，
+   * 让玩家不必学第二套视觉语言。
+   *
+   * `flashSeq` 是重播用的序号：同一批格子连着挨两下时，DOM 字串不变，
+   * `paintLayer` 会认为"没变"而不重写，动画就不会重播。带上序号，
+   * 每次动作的字串都不同，节点重建、动画从头再来。
+   */
+  heatFlash?: Map<number, number>;
+  /** 闪烁批次号（每次动作 +1）；只用来强制重播动画 */
+  flashSeq?: number;
+  /**
    * 这一步实际走的路线（单位 id → 格子串），只用来画移动动画。
    *
    * 不给也能用：退化成"起点直线滑到终点"。给了就沿路线拐弯，
@@ -179,8 +193,11 @@ function ensureStructure(el: HTMLElement): void {
   // 烈度层放在最后：它要压在棋子**上面**。
   // 以前把红罩画在格子里，一个兵站在那格上就把红全挡住了——
   // 看起来像"没生效"。现在它是一整层，红罩盖过棋子，一眼就能看见"这人挨了打"。
+  // 最后两层都在棋子之上：烈度常驻层（上回合挨打）与它的一次性闪烁层（这一下打了哪）。
+  // 闪烁层单独一层，是为了不污染常驻层的"内容相同就不写"缓存——那层按格累积、
+  // 大多帧不变；这层每次动作都要重播动画，混在一起会互相把对方的 diff 打断。
   el.innerHTML =
-    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div>';
+    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div>';
 }
 
 /**
@@ -476,6 +493,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
   const heatSet = ui.heat ?? null;
+  // 这一下刚打出去的格子：过一会儿由调用方清掉，这里只负责画出来
+  const flashSet = ui.heatFlash ?? null;
   const targetPositions = new Set<number>();
   for (const id of ui.targets) {
     const u = s.units.find((x) => x.id === id);
@@ -614,6 +633,32 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       }
     }
     paintLayer(heatEl, cells.join(''));
+  }
+
+  // ---- 出手闪烁层 ----
+  //
+  // 和上面同构、同样只给有内容的格子建节点，区别只在于：这一层不常驻，
+  // 由 main 在约 0.7 秒后把数据清空、再重绘一次，节点随之消失。
+  // 动画写在 CSS（`.fx-heat.flash`），只播一次，不和常驻层的无限脉冲打架。
+  const flashEl = el.querySelector<HTMLElement>('.heat-flash');
+  if (flashEl) {
+    const cells: string[] = [];
+    if (flashSet) {
+      const seq = ui.flashSeq ?? 0;
+      for (const i of Array.from(flashSet.keys()).sort((a, b) => a - b)) {
+        if (!visibleSet.has(i)) continue;
+        const n = flashSet.get(i) ?? 0;
+        if (n <= 0) continue;
+        const x = i % s.w;
+        const y = (i - x) / s.w;
+        cells.push(
+          `<i class="fx-heat flash d${heatStep(n)}" data-x="${x}" data-y="${y}" ` +
+            `data-flash="${seq}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1}"></i>`,
+        );
+      }
+    }
+    paintLayer(flashEl, cells.join(''));
   }
 
   // ---- 城市 ----

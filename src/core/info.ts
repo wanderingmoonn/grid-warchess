@@ -174,7 +174,7 @@ export function describeUnit(
       ? '随机一种元素'
       : (def.summon.type ? '随从' : '随从');
     lines.push(
-      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。召唤物不占编制。`,
+      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。`,
     );
   }
   if (def.cycle && def.cycle.length > 0) {
@@ -220,7 +220,7 @@ export function describeUnit(
   }
   if (def.burst) {
     lines.push(
-      `多动：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
+      `攻击次数：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
         `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }

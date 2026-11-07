@@ -21,6 +21,7 @@ import type {
   ResourceCost,
   ResourceDef
 } from './resources.ts';
+import { registerResourceName } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
 import type { AbilityDef } from './abilities.ts';
@@ -1219,4 +1220,19 @@ export function unitSourceIdOf(id: string): string | null {
     if (e.units?.some((u) => u.id === id)) return e.id;
   }
   return null;
+}
+
+/* ---------------------------------------------------------------------------
+ * 扩展资源的名字，模块加载时就登记。
+ *
+ * 以前只在 `createMatch` 里按本局启用的扩展注册（`setup.ts` 那一段）。
+ * 可规则书生成、开局设置、兵种编辑器都没有一局游戏，联机加入和读档又只恢复
+ * state、根本不走 createMatch——这些路径查不到资源定义，界面上就会出现
+ * 「spirit-stone」这种原始 id 而不是「灵石」。
+ *
+ * 名字是**数据**，不是"这一局流通什么"，所以应当跟着扩展声明一起加载。
+ * 这里只填兜底表，不动 `RESOURCES` 的长度和顺序（RL 特征按它开槽）。
+ * --------------------------------------------------------------------------- */
+for (const e of EXPANSIONS) {
+  for (const r of e.resources ?? []) registerResourceName(r);
 }

@@ -33,6 +33,10 @@ import {
   totalHpBonusForRank,
 } from '../src/core/cultivation/progression.ts';
 import {
+  BODY_ATK_MUL,
+  BODY_MOVE_MUL,
+  BODY_RANGE_MUL,
+  BODY_TRUE_DAMAGE_MUL,
   KILL_EXP_BASE,
   KILL_EXP_CAP_BASE,
   KILL_EXP_CAP_PER_RANK,
@@ -57,6 +61,18 @@ import {
   trueDamageForRank,
 } from '../src/core/cultivation/stats.ts';
 import { SPIRIT_ASCENSION_RANK } from '../src/core/cultivation/identity.ts';
+import { BODY_WARD_BASE, BODY_WARD_TIERS } from '../src/core/cultivation/abilities/body-ward.ts';
+import {
+  BLOOD_RITE_RADIUS_BASE,
+  BLOOD_RITE_RADIUS_STEP,
+  BLOOD_RITE_EXP_PER_DAMAGE,
+  BLOOD_RITE_EXP_DECAY,
+  BLOOD_RITE_ALLY_EXP_MUL,
+  BLOOD_RITE_LIFESPAN_COST,
+  bloodRiteRadiusForRank,
+  bloodRiteExpMul,
+} from '../src/core/cultivation/skills/blood-rite.ts';
+import { EXP_GROWTH_BLOOD } from '../src/core/cultivation/progression.ts';
 import {
   SKY_STEP_RANK,
   SWEEP_BASE_REACH,
@@ -154,11 +170,11 @@ const GENERIC_TERMS: Term[] = [
     brief: '打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。',
     more: `默认比例 ${Math.round(
       CONFIG.splashRatio * 100,
-    )}%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。`,
+    )}%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。`,
   },
   {
     key: 'burst',
-    name: '多动',
+    name: '攻击次数',
     brief: '一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。',
     more: '次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。',
   },
@@ -246,7 +262,7 @@ const GENERIC_TERMS: Term[] = [
     key: 'summon',
     name: '召唤',
     brief: '每隔 N 回合在自己身边生成一个召唤物，同源同时最多若干个。',
-    more: '召唤物不占编制上限，所以不会把产线堵死；召唤师被杀，已经召出来的还留在场上。',
+    more: '召唤师被杀，已经召出来的还留在场上。',
   },
   {
     key: 'ammo',
@@ -433,6 +449,18 @@ function traitsOf(u: UnitTypeDef): string {
     const a = abilityById(id);
     parts.push(a ? ref(`ab-${id}`) : `<b>${esc(id)}</b>`);
   }
+  // 自带技能也要印：魔修、剑修、散灵台的本体价值全在这条上，
+  // 光看攻/血那一行会以为它们只是"弱一点的兵"。
+  for (const k of u.skills ?? []) {
+    // 技能没有全局表：现登记一条，键用"兵种 + 技能名"，稳定可复现
+    const key = dynamicTerm(
+      `sk-${slug(u.id)}-${slug(k.name)}`,
+      k.name,
+      k.summary,
+      `冷却 ${k.cooldown} 回合；不占移动与攻击。`,
+    );
+    parts.push(ref(key, `${k.name} CD${k.cooldown}`));
+  }
   if (u.incomeByTerrain) {
     const best = Object.entries(u.incomeByTerrain).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
     if (best) parts.push(ref('income', `产出 ${terrainName(best[0])} +${best[1]}`));
@@ -448,7 +476,7 @@ function traitsOf(u: UnitTypeDef): string {
     if (table.length > 0) parts.push(ref('income', `产出 ${table.join(' ')}`));
   }
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
-  if (u.burst) parts.push(ref('burst', `多动 ${u.burst} 次`));
+  // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
   if ((u.builds ?? []).length > 0) {
     const { names } = buildListOf(u, { nameOf: manualNameOf });
     // 规则书里不该印出英文 id。出现就说明全量表漏了登记，宁可让生成失败，
@@ -470,9 +498,7 @@ function traitsOf(u: UnitTypeDef): string {
       key,
       `可建造 · ${u.name}`,
       `可建造：${names.join('、')}（共 ${names.length} 种）。` +
-        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`,
-      '这里列的是兵种自带的可建项目；有些扩展会在开局额外教建造单位几样新建筑' +
-        '（例如粮仓、船坞），实际清单随本局启用的扩展变化，以游戏内的产兵提示为准。',
+        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`
     );
     parts.push(ref(key, `可建 ${names.length} 种建筑`));
   }
@@ -624,16 +650,6 @@ function fantasyTraits(u: UnitTypeDef): string {
   }
   if (u.ammo) parts.push(ref('ammo', `弹药 ${u.ammo}`));
   if (u.hero) parts.push(ref('hero', `英雄${u.unlockCost ? ` 解锁 ${u.unlockCost}` : ''}`));
-  for (const k of u.skills ?? []) {
-    // 技能是兵种自带的，没有全局表：现登记一条，键用"兵种 + 技能名"，稳定可复现
-    const key = dynamicTerm(
-      `sk-${slug(u.id)}-${slug(k.name)}`,
-      k.name,
-      k.summary,
-      `冷却 ${k.cooldown} 回合；不占移动与攻击。`,
-    );
-    parts.push(ref(key, `${k.name} CD${k.cooldown}`));
-  }
   if (u.summonedOnly) parts.push(ref('summoned-only'));
   if (u.decays) parts.push(ref('decay', `自损 ${u.decays}/回合`));
   if (u.splitInto) parts.push(ref('split', `死后分裂 ${FANTASY_NAMES.get(u.splitInto) ?? u.splitInto}`));
@@ -1390,7 +1406,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <span class="c">条件：目标存活 且 攻击者在其射程内 且 攻击方没有${ref('ab-first-strike', '先手')}能力</span>
       </div>
       <p>所以远程站在射程外输出可以完全不吃反击；近战互殴时双方都掉血。</p>
-      <h3>溅射与多动</h3>
+      <h3>溅射与攻击次数</h3>
       <p>两种"打得不只一下"的机制，一个是横着铺开，一个是竖着连打：</p>
       <ul>
         <li><b>溅射（splash）</b>：主目标周围 <b>N 格内</b>（曼哈顿距离，不含斜角）的敌人各吃 <b>默认 ${Math.round(CONFIG.splashRatio * 100)}%</b> 伤害。
@@ -1399,21 +1415,24 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li><b>半径和比例都不是写死的</b>：扩展可以改半径（修真按境界，境界不够就是 0 格，
           四舍五入到"每 4 级多一格"），单位自己带 <code>custom.splashRatio</code> 时按它自己的比例结算。
           所以选中单位时侧栏显示的那一行才是准的，别拿兵种表里的数字去推算。</li>
-        <li><b>多动（burst）</b>：一回合能发起 <b>N 次独立攻击</b>。次数不是固定的：
+        <li><b>${ref('burst', '攻击次数')}（burst）</b>：一回合能发起 <b>N 次独立攻击</b>。次数不是固定的：
           装甲车 2 次、机枪队 3 次、重机枪组 4 次。每次都是完整的一击（护甲各减一次），
           <b>可以打不同的人</b>，攻击之间也能看到新的局面再决定下一发打谁。
-          次数没用完之前，这个单位<b>不算行动结束</b>。</li>
-        <li><b>多动也影响反击</b>：反击次数等于攻方的攻击次数。三个单位围攻一个三动兵，
+          次数没用完之前，这个单位<b>不算行动结束</b>。选中单位时侧栏那行「攻击次数」写的就是
+          "还剩几次 / 共几次"，不用再记兵种表上的数字。</li>
+        <li><b>攻击次数也影响反击</b>：反击次数等于攻方的攻击次数。三个单位围攻一个能打三次的兵，
           它能还手三次；但同一个单位连打它三次，它也只还手三次——围攻比单挑更有效，
           这是这一版刻意的改动。</li>
-        <li>表格里攻击列写成 <code>18×3</code> 表示"一击 18 点，一回合能打 3 次"。特性列会另外标出「溅射 N 格」「多动 N 次」。</li>
+        <li>表格里攻击列写成 <code>18×3</code> 表示"一击 18 点，一回合能打 3 次"。特性列只标
+          「溅射 N 格」这类额外属性，次数看攻击列就够了。</li>
         <li>${ref('ab-siege-master', '破城')}（攻城伤害 ×1.5）现在给到了整条炮线：臼炮、火炮、坦克、战列舰。高时代的城又厚又能回血，
           没有破城的攻城单位在城墙下只是刮痧。海上的攻城活归「浅水重炮舰」（岸轰），铁甲舰只管正面。</li>
-        <li>反击永远是一次正常攻击：不打折、不溅射、也不因为对方多动而变弱。</li>
+        <li>反击永远是一次正常攻击：不打折、不溅射、也不因为对方攻击次数多而变弱。</li>
       </ul>
       <div class="callout">
-        多动和溅射的软肋正好相反：多动兵一次只打一个人，<b>堆护甲</b>能减掉每一发；溅射是一次打一片，<b>散开阵型</b>才划算。
-        多动兵还有个自己的麻烦——第一次攻击之后它就<b>走不动了</b>（攻击会把移动一并作废），
+        攻击次数和溅射的软肋正好相反：次数多的兵一次只打一个人，<b>堆护甲</b>能减掉每一发；
+        溅射是一次打一片，<b>散开阵型</b>才划算。
+        次数多的兵还有个自己的麻烦——第一次攻击之后它就<b>走不动了</b>（攻击会把移动一并作废），
         所以剩下的几次只能站在原地打完，位置没选好就等于站着挨围攻。
       </div>
 
@@ -1429,11 +1448,14 @@ const CORE_BODY_MAIN = `    <section id="goal">
         不是"对面能打到哪"。</p>
       <ul>
         <li><b>挨了几下就记几次</b>：溅射打到三个人算三次（三个格子各记一笔），
-          多动兵连打同一格三下，那一格就是三次。</li>
+          攻击次数多的兵连打同一格三下，那一格就是三次。</li>
         <li><b>闪得越快，那里打得越凶</b>：三下比一下急，五下以上按最快档走。
           扫一眼棋盘就知道该往哪儿补人。</li>
         <li><b>你一出走就收起来</b>：这是"上回合的答卷"，看一眼就该让位。
           这一回合你走第一步之后，红格全部消失——想看就趁现在。</li>
+        <li><b>开火那一瞬会闪一下</b>：不管是你打出去的还是对面打过来的，命中的那几格
+          （含溅射范围）都会以同样的红格闪一次。它只是"刚刚这一下落在哪"的即时反馈，
+          不到一秒就散，不计入上面那份复盘——所以不会和"上回合挨打"的红格混在一起。</li>
         <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
         <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
         <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
@@ -2603,6 +2625,15 @@ function cultivationRules(): string {
       <ul>
         <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
         <li><b>剑修（时代 2）</b>：以杀证道的新流派。他们极度擅长战斗，普攻的境界加成只有 ${SWORD_BASE_MUL} 倍，但能通过施展剑技和击杀敌人快速成长。</li>
+        <li><b>体修（时代 2）</b>：用身体硬抗的一支。招牌是「金刚不坏」——受到的伤害按剩余血量减免
+          ${Math.round(BODY_WARD_BASE * 100)}%~${Math.round(BODY_WARD_TIERS[3] * 100)}%，血越少越硬；
+          但真元与中毒、灼烧这类持续伤害<b>不受影响</b>，所以炼气士和剑修天生克它。
+          境界加成也偏科：攻击 ×${BODY_ATK_MUL}，真元、移动、射程各 ×${BODY_TRUE_DAMAGE_MUL}，
+          于是它永远比同伴慢半步、近一格。</li>
+        <li><b>魔修（时代 3）</b>：以生灵为薪柴的一支。它几乎不靠打坐（每回合只有
+          ${EXP_GROWTH_BLOOD} 点），也<b>不吃击杀历练</b>——全部修为来自主动技能「血祭」，
+          那条路的经验绕过了每回合击杀上限，代价是每次都要烧掉
+          ${BLOOD_RITE_LIFESPAN_COST} 年寿元，而且境界越高，同样的伤害折出的修为越少。</li>
       </ul>
 
       <h3>境界与修为</h3>
@@ -2612,7 +2643,7 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
@@ -2648,7 +2679,8 @@ function cultivationRules(): string {
       <h3>各境界一览表</h3>
       <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
         其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
-        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。</p>
+        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。
+        体修的增量按「攻击 ×${BODY_ATK_MUL}、真元 ×${BODY_TRUE_DAMAGE_MUL}、移动 ×${BODY_MOVE_MUL}、射程 ×${BODY_RANGE_MUL}」折算，其余照表。</p>
       <div class="scroll-x">
         <table class="rank-table">
           <colgroup>${rankCols}</colgroup>
@@ -2691,6 +2723,28 @@ function cultivationRules(): string {
         <li><b>攻击范围</b>：基础 ${SWEEP_BASE_REACH} 格，境界每满 ${SWEEP_REACH_STEP} 级再 +1 格——<b>向上取整</b>，所以 1 级就已经是 ${sweepReachForRank(1)} 格，${MAX_RANK} 级是 ${sweepReachForRank(MAX_RANK)} 格。</li>
         <li><b>伤害效果</b>：对路径上的所有敌人和城市造成一次完整伤害，境界加成按 ${SWORD_SWEEP_MUL} 倍结算。</li>
         <li><b>修为获取</b>：挥剑本身 +${SWEEP_EXP_CAST} 修为（落空也给），每命中一个目标（人或城）再 +${SWEEP_EXP_PER_HIT}。</li>
+      </ul>
+
+      <h3>血祭</h3>
+      <p>魔修的立身之本：以自己为圆心，抽取周围一圈所有活物的精血。</p>
+      <ul>
+        <li><b>释放方式</b>：按一下立刻结算，不需要选点——<b>站哪儿</b>才是要算的事。</li>
+        <li><b>释放条件</b>：消耗 <b>1 次攻击次数</b>；没有冷却，攻击次数够就能连放。</li>
+        <li><b>攻击范围</b>：半径 ${BLOOD_RITE_RADIUS_BASE} 格起（四邻一圈，含斜角），
+          境界每满 ${BLOOD_RITE_RADIUS_STEP} 级再 +1 格——${MAX_RANK} 级是
+          ${bloodRiteRadiusForRank(MAX_RANK)} 格。</li>
+        <li><b>不分敌我</b>：范围内的单位全部挨一下完整伤害（护甲、真元、守御阵转移照常生效）。
+          但<b>友军最低只被抽到 1 点血</b>，永远不会被自己人抽死——不然献祭自家杂兵就能刷
+          「战争经济」「老兵不死」那类击杀奖励。</li>
+        <li><b>修为</b>：按"实际打掉的伤害"折算。0 级每点伤害折
+          ${Math.round(bloodRiteExpMul(0) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%，境界每高 1 级按 1 ÷ (1 + ${BLOOD_RITE_EXP_DECAY} × 境界) 衰减——
+          ${MAX_RANK} 级只剩 ${Math.round(bloodRiteExpMul(MAX_RANK) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%。友军那部分伤害只按
+          ${Math.round(BLOOD_RITE_ALLY_EXP_MUL * 100)}% 折算。<b>这条修为绕过每回合击杀上限</b>，
+          但伤害溢出的部分不算（打残血小兵不会更划算）。</li>
+        <li><b>代价</b>：每次释放扣 ${BLOOD_RITE_LIFESPAN_COST} 年寿元。寿元就是这一支的油表：
+          烧完就坐化，而境界提升会把油表加长——所以它总是在"多烧一点"和"活久一点"之间选。</li>
+        <li><b>魔修不吃击杀历练</b>：血祭已经是绕过上限的那条路，再叠一份击杀经验，
+          升级节奏会直接翻倍。</li>
       </ul>
 
       <h3>阵法</h3>
@@ -3135,6 +3189,22 @@ for (const { b, html } of rendered) {
   );
   if (dead.length > 0) {
     throw new Error(`${b.file} 有 ${dead.length} 个指向不存在词条的链接：${dead.join('、')}`);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 资源名自检：正文里不该出现扩展资源的英文 id。
+ *
+ * 以前「产出 +1 spirit-stone」就这么印进了修真册——资源名字只在 createMatch
+ * 时注册，而生成手册时根本没有一局游戏。现在名字在模块加载时全量登记，
+ * 这里再兜一道：以后加了个没登记名字的资源，npm run manual 会直接报错，
+ * 而不是等玩家在规则书里看到一串英文。
+ * --------------------------------------------------------------------------- */
+const declaredResourceIds = EXPANSIONS.flatMap((e) => (e.resources ?? []).map((r) => r.id));
+for (const { b, html } of rendered) {
+  const leaked = declaredResourceIds.filter((id) => html.includes(id));
+  if (leaked.length > 0) {
+    throw new Error(`${b.file} 里出现未翻译的资源 id：${leaked.join('、')}`);
   }
 }
 

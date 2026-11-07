@@ -68,7 +68,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
-import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
+import { heatCells, heatStep, newHeatCells, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
 import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
 
@@ -283,7 +283,7 @@ import {
   snapshotJson,
   snapshotSignature,
 } from '../src/core/snapshot.ts';
-import { GOLD } from '../src/core/resources.ts';
+import { GOLD, RESOURCES, registerResourceName, resourceName, resourceShort } from '../src/core/resources.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
 import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
@@ -466,6 +466,25 @@ test('建造名单：查不到中文名时退回 id，不抛错也不静默丢�
   const list = buildListOf({ id: 'probe', builds: ['a', 'b'] });
   assert.deepEqual(list.ids, ['a', 'b']);
   assert.deepEqual(list.names, ['a', 'b']);
+});
+
+test('资源名兜底：没有开局也能查到扩展资源的中文名，且不污染本局流通表', () => {
+  // 规则书生成、开局设置、联机加入、读档都不走 createMatch，
+  // 这些路径以前会把 spirit-stone 原样印给玩家。
+  assert.equal(resourceShort(SPIRIT_STONE), '灵', '没有一局游戏也要认得灵石简称');
+  assert.equal(resourceName(SPIRIT_STONE), '灵石');
+
+  // 兜底表本身：登记后能查到名字，但不会撑大 RESOURCES（RL 特征按它开槽）
+  registerResourceName({
+    id: 'probe-resource',
+    name: '试炼石',
+    short: '试',
+    color: '#000',
+    summary: '',
+  });
+  assert.equal(resourceShort('probe-resource'), '试');
+  assert.equal(resourceName('probe-resource'), '试炼石');
+  assert.ok(!RESOURCES.some((r) => r.id === 'probe-resource'), '兜底名字不该进本局流通表');
 });
 
 console.log('\n开局与地图');
@@ -1347,6 +1366,117 @@ test('不能攻城自己的城市', () => {
   cav.x = own.x;
   cav.y = own.y + own.size;
   assert.equal(applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: own.id }).ok, false);
+});
+
+/**
+ * 攻城溅射的布景：一座 B 城 + 一圈平地。
+ *
+ * 地形清成平原是必须的：山丘给守方加甲，会把"该掉多少血"变成另一个变量，
+ * 而这条用例要证的只是"红格盖住谁、谁就掉血"。
+ */
+function siegeScene() {
+  const s = fresh();
+  s.current = 'A';
+  s.units = [];
+  const city = citiesOf(s, 'B')[0]!;
+  for (let y = city.y - 2; y <= city.y + 4; y++) {
+    for (let x = city.x - 4; x <= city.x + 4; x++) {
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      const inCity =
+        x >= city.x && x < city.x + city.size && y >= city.y && y < city.y + city.size;
+      if (inCity) continue;
+      s.tiles[idx(s, x, y)]!.terrain = 'plain';
+    }
+  }
+  return { s, city };
+}
+
+test('攻城溅射：红格盖住的敌人都掉血，盖不到的一个都不掉', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const near = place2(s, 'B', 'militia', city.x - 1, city.y);
+  const far = place2(s, 'B', 'militia', city.x - 1, city.y + 2);
+  // 城内守军：站在城市格里，离爆心 1 格
+  const garrison = place2(s, 'B', 'militia', city.x, city.y + 1);
+  const hp0 = new Map(s.units.map((u) => [u.id, u.hp]));
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: gun.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+  const splashOf = (id: string) =>
+    Math.floor(computeDamage(s, gun, s.units.find((u) => u.id === id)!) * CONFIG.splashRatio);
+
+  assert.equal(at(near.id).hp, hp0.get(near.id)! - splashOf(near.id), '挨着城的兵要吃半伤');
+  assert.equal(at(garrison.id).hp, hp0.get(garrison.id)! - splashOf(garrison.id), '城内守军一起挨炸');
+  assert.equal(at(far.id).hp, hp0.get(far.id), '半径外的兵一格都不该掉');
+
+  /*
+   * 这条才是用户报的那个"对不上"：把战况烈度摊出来，逐个对照。
+   * 红格盖到谁，谁就必须掉血；没盖到的一个都不许掉——两边只要有一格对不上，
+   * 玩家看到的就是"红了但没掉血"或者"掉了但没红"。
+   */
+  const heat = new Set(
+    Object.keys(r.state.heat?.B?.[String(r.state.turn)] ?? {}).map(Number),
+  );
+  assert.ok(heat.size > 0, '攻城要记烈度');
+  for (const u of r.state.units.filter((x) => x.owner === 'B')) {
+    const lit = tilesOfUnit(r.state, u).some((t) => heat.has(idx(r.state, t.x, t.y)));
+    const lost = (hp0.get(u.id) ?? 0) - u.hp;
+    assert.equal(lost > 0, lit, `${utype(r.state, u.type).name}(${u.x},${u.y})：红格=${lit}，掉血=${lost}`);
+  }
+});
+
+test('攻城溅射跟着点中的那一格走，不总是城的左上角', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const corner = place2(s, 'B', 'militia', city.x + 1, city.y + 2);
+  const left = place2(s, 'B', 'militia', city.x - 1, city.y);
+  const hp0 = new Map(s.units.map((u) => [u.id, u.hp]));
+
+  // 点城的右下角：爆心挪过去，右下角外侧的人该挨，左边的不该
+  const r = applyAction(s, {
+    type: 'SIEGE',
+    unitId: gun.id,
+    cityId: city.id,
+    x: city.x + 1,
+    y: city.y + 1,
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+  assert.ok(at(corner.id).hp < hp0.get(corner.id)!, '点右边，右边外侧的人要挨');
+  assert.equal(at(left.id).hp, hp0.get(left.id), '点右边，左边的人不该挨');
+});
+
+test('没有溅射的单位攻城，旁边的人不挨打', () => {
+  const { s, city } = siegeScene();
+  const cav = place2(s, 'A', 'scout', city.x - 1, city.y);
+  const bystander = place2(s, 'B', 'militia', city.x - 1, city.y + 1);
+  const hp0 = bystander.hp;
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.find((u) => u.id === bystander.id)!.hp, hp0, '没溅射就不该波及');
+});
+
+test('攻城溅射打死的人会被清出棋盘，并留一条战报', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const doomed = place2(s, 'B', 'militia', city.x - 1, city.y);
+  doomed.hp = 1;
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: gun.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(
+    r.state.units.some((u) => u.id === doomed.id),
+    false,
+    '血量归零的兵不能留在场上',
+  );
+  assert.ok(
+    r.state.log.some((l) => l.text.includes('被炮火波及消灭')),
+    '战报里要写明他是被炮火波及打死的',
+  );
 });
 
 test('城市位置是浮动的，不再是矩形四角', () => {
@@ -3174,7 +3304,7 @@ test('召唤：死灵法师每两回合一个骷髅，到上限就停', () => {
   }
   const skels = st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton');
   assert.equal(skels.length, 4, '上限就是 4 个');
-  // 召唤物不占编制：编制里一个都数不到
+  // 召唤物不占ai编制：编制里一个都数不到
   assert.equal(
     st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton').length,
     skels.length,
@@ -3704,7 +3834,7 @@ test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各
   assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
-test('召唤物不占编制，也不能从产线招募', () => {
+test('召唤物不占ai编制，也不能从产线招募', () => {
   const s = fresh({ expansionIds: FANTASY });
   const before = armySize(s, 'A');
   for (let i = 0; i < 4; i += 1) stackOn(s, 'A', 'skeleton', 8 + i, 8);
@@ -11048,6 +11178,15 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
   assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
 
+  // 出手闪烁：动作前后的记账差 = 这一下打到哪
+  // 炮兵溅射半径 1（曼哈顿），所以是主目标 + 上下左右四格；开火者自己那格不该亮。
+  const flash = newHeatCells(s, shot.state);
+  assert.equal(flash.get(idx(shot.state, 8, 8)), 1, '主目标要闪');
+  assert.equal(flash.get(idx(shot.state, 8, 9)), 1, '溅射格也要闪');
+  assert.equal(flash.size, 5, '整片溅射范围都要闪（主目标 + 四邻）');
+  assert.ok(!flash.has(idx(shot.state, 6, 8)), '开火的那一格不闪：那是"我打到哪"，不是"我在哪"');
+  assert.equal(newHeatCells(shot.state, next.state).size, 0, '结束回合不记账，什么都不闪');
+
   // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
   const s2 = fresh();
   s2.current = 'A';
@@ -11948,6 +12087,41 @@ test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   const after = r.state.units.filter((u) => u.owner === 'B');
   const total1 = after.reduce((a, u) => a + u.hp, 0);
   assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
+});
+
+test('技能：不能连发的技能，本回合放过之后就不该显示"就绪"（multiCast 写 false 与不写等价）', () => {
+  const s = fresh({ godMode: true });
+  s.current = 'A';
+  const u = s.units.find((x) => x.owner === 'A')!;
+  const def = s.unitTypes[u.type]!;
+
+  // 现造一个技能挂上去：这条用例只关心"就绪不就绪"，不关心效果
+  const setSkill = (multiCast?: boolean) => {
+    const base = { id: 'test-once', name: '试一次', summary: '', effect: 'test-once', cooldown: 0 };
+    def.skills = [multiCast === undefined ? base : { ...base, multiCast }];
+    return () => heroSkillsOf(s, u).find((k) => k.def.id === 'test-once')!;
+  };
+
+  // 1) 显式写 multiCast: false
+  let view = setSkill(false);
+  assert.equal(view().ready, true, '还没放过，应该是就绪的');
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '放过了就该熄，不然点下去只会被拒绝');
+  assert.ok(
+    (view().notReadyReason ?? '').includes('已经放过'),
+    '要给一句能看懂的原因，而不是一个亮着的按钮',
+  );
+
+  // 2) 根本不写这个字段 —— 必须和 false 完全一致
+  u.skillTurn = undefined;
+  view = setSkill(undefined);
+  assert.equal(view().ready, true);
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '不写 multiCast 也要熄（两者是同一件事）');
+
+  // 3) 声明了 multiCast: true 的可以连发，放过一次仍然就绪
+  view = setSkill(true);
+  assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
 });
 
 test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {
