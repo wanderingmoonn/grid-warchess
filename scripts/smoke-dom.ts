@@ -5896,6 +5896,49 @@ check('选卡：底部「我已选」区把每张卡的完整面板都摊开，�
   }
 });
 
+check('选卡：轮流禁用——不是自己回合时池子是灰的，提示写明轮到谁', () => {
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch({ ...DEFAULT_CONFIG, draftMode: true }, 4243, {});
+    const r = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(r.ok, r.ok ? '' : `进禁用失败：${r.reason}`);
+    st = r.state;
+
+    // 先禁的那一方 = 后拿第一签的那一方
+    const first = st.draft!.banTurn!;
+    const second = first === 'A' ? 'B' : 'A';
+
+    // 站在"没轮到"的那一方看：池子必须是灰的，并说清在等谁
+    host.innerHTML = draftScreenHtml(st, { seat: second, now: Date.now(), isAi: () => false });
+    const blocked = host.querySelectorAll('.draft-card.is-blocked');
+    assert.ok(blocked.length > 0, '没轮到的这一方，池子里的卡应该都是灰的');
+    const hint = host.querySelector('.draft-hint')?.textContent ?? '';
+    assert.ok(hint.includes('正在禁用'), `提示要写明对面在禁：${hint}`);
+
+    // 站在"轮到"的那一方看：卡是可点的，提示说的是"轮到你"
+    host.innerHTML = draftScreenHtml(st, { seat: first, now: Date.now(), isAi: () => false });
+    assert.equal(host.querySelectorAll('.draft-card.is-blocked').length, 0, '轮到的一方，卡不该是灰的');
+    const mineHint = host.querySelector('.draft-hint')?.textContent ?? '';
+    assert.ok(mineHint.includes('轮到你禁用'), `提示要写"轮到你禁用"：${mineHint}`);
+
+    // 禁完之后交棒：轮次真的换人了
+    const id = remainingUnits(st).find((x) => st.unitTypes[x]?.category === 'combat')!;
+    st.current = first;
+    const done = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, first);
+    assert.ok(done.ok, done.ok ? '' : `禁用失败：${done.reason}`);
+    st = done.state;
+    assert.equal(st.draft!.banTurn, second, '禁完一格就该交棒');
+    host.innerHTML = draftScreenHtml(st, { seat: first, now: Date.now(), isAi: () => false });
+    assert.ok(
+      (host.querySelector('.draft-hint')?.textContent ?? '').includes('正在禁用'),
+      '交棒之后，原来看得到池子的那一方也该变成"等对面"',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
 check('选卡：对面已经选中的兵，鼠标挪上去也要给完整面板', () => {
   /*
    * 选卡时最想研究的一件事就是"对面拿走了什么"——它是不是我打算禁的那张、

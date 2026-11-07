@@ -13785,11 +13785,25 @@ function startStep(state: GameState): GameState {
   return r.ok ? r.state : state;
 }
 
-/** 禁用一步 */
+/** 禁用一步。轮流制之后必须轮到这一方，否则规则层会拒——测试也别偷偷越位。 */
 function banStep(state: GameState, side: PlayerId, unitId: string): GameState {
+  assert.equal(state.draft!.banTurn, side, `禁用该轮到 ${state.draft!.banTurn}，用例写的是 ${side}`);
   const r = applyAction(state, { type: 'DRAFT_BAN', unitId, at: state.draft!.deadline }, side);
   assert.ok(r.ok, r.ok ? '' : `禁用失败：${r.reason}`);
   return r.ok ? r.state : state;
+}
+
+/**
+ * 双方各禁一个（轮流：先手是**后拿第一签**的那一方）。
+ *
+ * 参数按"谁禁哪个"写，不按先后写——用例关心的是"两边各禁掉了什么"，
+ * 先后顺序是规则的事，不该让每条用例自己再算一遍。
+ */
+function banBoth(state: GameState, banA: string, banB: string): GameState {
+  const first = state.draft!.banTurn ?? 'A';
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
+  const unitFor = (side: PlayerId): string => (side === 'A' ? banA : banB);
+  return banStep(banStep(state, first, unitFor(first)), second, unitFor(second));
 }
 
 /** 选人一步（自动取当前轮次的那一方） */
@@ -13804,8 +13818,7 @@ function pickStep(state: GameState, unitId: string): GameState {
 function finishDraft(state: GameState): GameState {
   let st = state.draft!.phase === 'lobby' ? startStep(state) : state;
   const pool = st.draft!.pool;
-  st = banStep(st, 'A', pool[0]!);
-  st = banStep(st, 'B', pool[1]!);
+  st = banBoth(st, pool[0]!, pool[1]!);
   while (st.draft!.phase === 'pick') {
     const left = remainingUnits(st);
     if (left.length === 0) break;
@@ -13886,17 +13899,22 @@ test('选卡：禁用与选人两档时限分开设，规则写 deadline 时用�
   assert.equal(draftBanMsOf(banPhase), 10_000);
   assert.equal(draftMsOf(banPhase), 10_000, '当前阶段的时长要和 deadline 对得上');
 
-  // 双方各禁一个 → 进选人，改成 45 秒。
-  // 禁用动作带的 at 是"禁用期的截止时刻"，所以选人的 deadline 是从那一刻起算的。
-  // 池子本身已经剔掉了伪单位（见 draftCandidates），直接按顺序取两个
-  const pool = banPhase.draft!.pool;  const banned = banStep(banStep(banPhase, 'A', pool[0]!), 'B', pool[1]!);
+  /*
+   * 双方各禁一个 → 进选人，改成 45 秒。
+   *
+   * 轮流禁之后禁用期是**两段**，每段各 10 秒：交棒时会把倒计时给满，
+   * 对面不该继承剩下那几秒（他上一段根本没在操作）。所以选人的截止 =
+   * 起始 + 2×10 秒 + 45 秒。禁用动作带的 at 是"这一段的截止时刻"。
+   */
+  const pool = banPhase.draft!.pool;
+  const banned = banBoth(banPhase, pool[0]!, pool[1]!);
   assert.equal(banned.draft!.phase, 'pick');
   assert.equal(draftPickMsOf(banned), 45_000);
   assert.equal(draftMsOf(banned), 45_000);
   assert.equal(
     banned.draft!.deadline,
-    t0 + 10_000 + 45_000,
-    '选人期的 deadline 应该 = 禁用截止 + 45 秒',
+    t0 + 10_000 + 10_000 + 45_000,
+    '选人期的 deadline = 两段禁用 + 45 秒',
   );
 
   // 不填就是默认值：旧存档读出来也是它
@@ -13996,9 +14014,9 @@ test('选卡：进度号每走一步 +1（联机靠它做乐观锁）', () => {
 
   s = startStep(s);
   assert.equal(s.draft!.seq, start + 1, '"开始选卡"也算一步：联机时它也要能被对面看见');
-  s = banStep(s, 'A', s.draft!.pool[0]!);
+  s = banStep(s, s.draft!.banTurn!, s.draft!.pool[0]!);
   assert.equal(s.draft!.seq, start + 2, '一次禁用一个号');
-  s = banStep(s, 'B', s.draft!.pool[1]!);
+  s = banStep(s, s.draft!.banTurn!, s.draft!.pool[1]!);
   assert.equal(s.draft!.seq, start + 3, '两边都禁完只加两个号（进入选人不额外加）');
   s = pickStep(s, s.draft!.pool[2]!);
   assert.equal(s.draft!.seq, start + 4, '一次选人一个号');
@@ -14041,24 +14059,37 @@ test('选卡：可以整轮跳过——这一局按原版用全部兵种', () =>
 
   // 选到一半也能跳（对面掉线时用得上）
   let t = startStep(fresh({ draftMode: true }, 7303));
-  t = banStep(t, 'A', t.draft!.pool[0]!);
+  t = banStep(t, t.draft!.banTurn!, t.draft!.pool[0]!);
   const mid = applyAction(t, { type: 'DRAFT_SKIP', at: Date.now() }, 'B');
   assert.ok(mid.ok, mid.ok ? '' : mid.reason);
   assert.equal(mid.state.draft!.phase, 'done');
   assert.equal(mid.state.draft!.skipped, true);
 });
 
-test('选卡：盲禁——两边都交完才揭晓，禁掉的兵谁都拿不到', () => {
+test('选卡：轮流禁用——一方禁完才换另一方，禁掉的兵谁都拿不到', () => {
   let s = startStep(fresh({ draftMode: true }, 7105));
   const pool = s.draft!.pool;
+  const first = s.draft!.banTurn!;
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
   const banned = pool[0]!;
 
-  s = banStep(s, 'A', banned);
-  assert.equal(s.draft!.phase, 'ban', '只有一方交了禁用，还不该进入选人');
-  assert.deepEqual(s.draft!.bans.A, [banned]);
+  // 还没轮到的那一方，一步都不许下
+  const early = applyAction(s, { type: 'DRAFT_BAN', unitId: pool[1]!, at: s.draft!.deadline }, second);
+  assert.ok(!early.ok, '没轮到的一方不该能禁用');
+  assert.match(early.reason, /轮到/, '要说清是轮到谁了');
 
-  s = banStep(s, 'B', pool[1]!);
-  assert.equal(s.draft!.phase, 'pick', '两边都交完才进入选人');
+  s = banStep(s, first, banned);
+  assert.equal(s.draft!.phase, 'ban', '只有一方禁完，还不该进入选人');
+  assert.deepEqual(s.draft!.bans[first], [banned]);
+  assert.equal(s.draft!.banTurn, second, '禁完就交棒');
+
+  // 对面禁过的不能再禁一次（盲禁时代不可能出现，轮流制下会）
+  const dup = applyAction(s, { type: 'DRAFT_BAN', unitId: banned, at: s.draft!.deadline }, second);
+  assert.ok(!dup.ok, '对面已经禁掉的兵不该能再禁一次');
+  assert.match(dup.reason, /对面已经禁过/);
+
+  s = banStep(s, second, pool[1]!);
+  assert.equal(s.draft!.phase, 'pick', '两边都禁完才进入选人');
   assert.ok(!remainingUnits(s).includes(banned), '被禁的兵必须从池子里消失');
 
   // 拿被禁的那个去选：得被拒
@@ -14155,17 +14186,32 @@ test('选卡：建筑也要在名单里，工兵不能盖没选到的塔', () =>
   assert.ok(ok.ok, ok.ok ? '' : `选到的塔应该能盖：${ok.reason}`);
 });
 
-test('选卡：超时——禁用视为放弃，选人由系统补一个', () => {
+test('选卡：超时——当前这一方放弃，回合交给对面，选人由系统补一个', () => {
   let s = startStep(fresh({ draftMode: true }, 7112));
-  // 只让 A 交禁用，B 超时
-  s = banStep(s, 'A', s.draft!.pool[0]!);
-  const late = s.draft!.deadline + 1;
-  const r = applyAction(s, { type: 'DRAFT_TIMEOUT', at: late }, 'B');
+  const first = s.draft!.banTurn!;
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
+
+  /*
+   * 轮流制下"超时"只能算**当前这一方**放弃：先禁那方超时的时候，
+   * 后禁那方的倒计时根本没开始，替他一起判放弃等于白送一个禁位。
+   */
+  let r = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline + 1 }, first);
   assert.ok(r.ok, r.ok ? '' : r.reason);
   s = r.state;
-  assert.equal(s.draft!.phase, 'pick', '超时之后照样进入选人');
-  assert.deepEqual(s.draft!.bans.B.filter(Boolean), [], 'B 放弃了禁用，不该替它随机禁一个');
-  assert.ok(s.draft!.history.some((h) => h.side === 'B' && h.auto && h.unitId === null), '要留下"放弃"的记录');
+  assert.equal(s.draft!.phase, 'ban', '先禁的那方超时之后，对面还没轮到，不该直接进选人');
+  assert.equal(s.draft!.banTurn, second, '回合要交给对面');
+  assert.deepEqual(s.draft!.bans[first].filter(Boolean), [], '放弃了禁用，不该替它随机禁一个');
+  assert.ok(
+    s.draft!.history.some((h) => h.side === first && h.auto && h.unitId === null),
+    '要留下"放弃"的记录',
+  );
+  assert.ok(s.draft!.deadline > 0, '交棒之后要重新给对面计时');
+
+  // 对面也超时：两边都放弃了，才进选人
+  r = applyAction(s, { type: 'DRAFT_TIMEOUT', at: s.draft!.deadline + 1 }, second);
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  s = r.state;
+  assert.equal(s.draft!.phase, 'pick', '两边都放弃之后进入选人');
 
   // 选人超时：必须补一个，否则这一方凑不满名单
   const before = s.draft!.picks[s.draft!.order[s.draft!.step]!].length;
@@ -14227,53 +14273,99 @@ function clientSubmit(
   return { state: room.state, ok: false };
 }
 
-test('联机选卡：两边同时禁用，后交的一方合并重交，两份名单都留在房间里', () => {
+test('联机选卡：轮流禁用——没轮到的交不上去，交棒之后两份名单都在房间里', () => {
   const room = fakeRoom(7201);
+  const first = room.state.draft!.banTurn!;
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
+
+  // 还没轮到的那一方提交：本地就该被拒，更不能拿去推进房间
+  const stale = structuredClone(room.state);
+  const early = clientSubmit(
+    room,
+    stale,
+    { type: 'DRAFT_BAN', unitId: remainingUnits(stale)[0]!, at: Date.now() } as Parameters<typeof applyAction>[1],
+    second,
+  );
+  assert.equal(early.ok, false, '没轮到的那一方本地就该被拒');
+  assert.equal(room.lock, room.state.draft!.seq, '房间不该被这一步推进');
+
+  // 轮到的那一方：交得上去
   const a = structuredClone(room.state);
+  const banFirst = remainingUnits(a)[0]!;
+  const ra = clientSubmit(
+    room,
+    a,
+    { type: 'DRAFT_BAN', unitId: banFirst, at: Date.now() } as Parameters<typeof applyAction>[1],
+    first,
+  );
+  assert.ok(ra.ok, `${first} 应该交得上去`);
+  assert.equal(room.state.draft!.banTurn, second, '交完就交棒');
+
+  // 交棒之后，另一方基于房间最新那份提交
   const b = structuredClone(room.state);
-  const banA = remainingUnits(a)[0]!;
-  const banB = remainingUnits(b).find((id) => id !== banA)!;
+  const banSecond = remainingUnits(b).find((id) => id !== banFirst)!;
+  const rb = clientSubmit(
+    room,
+    b,
+    { type: 'DRAFT_BAN', unitId: banSecond, at: Date.now() } as Parameters<typeof applyAction>[1],
+    second,
+  );
+  assert.ok(rb.ok, `${second} 在交棒之后应该交得上去`);
 
-  const ra = clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A');
-  assert.ok(ra.ok, 'A 应该交得上去（房间还停在开局那一步）');
-  const rb = clientSubmit(room, b, { type: 'DRAFT_BAN', unitId: banB, at: Date.now() }, 'B');
-  assert.ok(rb.ok, 'B 被挡回来之后要能合并重交，而不是失败');
-
-  assert.deepEqual(room.state.draft!.bans.A, [banA], '房间里必须留着 A 的禁用');
-  assert.deepEqual(room.state.draft!.bans.B, [banB], '房间里必须留着 B 的禁用');
+  assert.deepEqual(room.state.draft!.bans[first], [banFirst], '房间里必须留着先禁那一方的禁用');
+  assert.deepEqual(room.state.draft!.bans[second], [banSecond], '也必须留着后禁那一方的禁用');
   assert.equal(room.state.draft!.phase, 'pick', '两边都禁完才进入选人');
   // 两边都能靠"进度号变大"拉到这一份：谁也不会停在只有自己那一手的名单上
-  assert.ok(room.state.draft!.seq > a.draft!.seq, '房间的进度号要比 A 本地大，A 才拉得到');
-  assert.ok(room.state.draft!.seq > b.draft!.seq, '也要比 B 本地大');
+  assert.ok(room.state.draft!.seq > a.draft!.seq, '房间的进度号要比先禁那一方本地大');
+  assert.ok(room.state.draft!.seq > b.draft!.seq, '也要比后禁那一方本地大');
 });
 
 test('联机选卡：超时是一步动作，提交进房间之后两边一起往前，不用再选一次', () => {
   const room = fakeRoom(7202);
+  const first = room.state.draft!.banTurn!;
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
   const a = structuredClone(room.state);
   const r = clientSubmit(
     room,
     a,
     { type: 'DRAFT_TIMEOUT', at: a.draft!.deadline } as Parameters<typeof applyAction>[1],
-    'A',
+    first,
   );
   assert.ok(r.ok, '超时这一步也要提交进房间（以前只改本地）');
-  assert.equal(room.state.draft!.phase, 'pick', '房间跟着进入选人，不是只有本地前进');
-  assert.ok(room.state.draft!.seq > a.draft!.seq, 'B 靠进度号就能拉到这一步');
+  assert.equal(room.state.draft!.phase, 'ban', '超时只放掉当前这一方，对面还没轮到');
+  assert.equal(room.state.draft!.banTurn, second, '房间跟着交棒，不是只有本地前进');
+  assert.ok(room.state.draft!.seq > a.draft!.seq, `${second} 靠进度号就能拉到这一步`);
+
+  // 对面也超时，两边都放弃之后才进选人
+  const b = structuredClone(room.state);
+  const r2 = clientSubmit(
+    room,
+    b,
+    { type: 'DRAFT_TIMEOUT', at: b.draft!.deadline } as Parameters<typeof applyAction>[1],
+    second,
+  );
+  assert.ok(r2.ok);
+  assert.equal(room.state.draft!.phase, 'pick', '两边都放弃之后进入选人');
 });
 
-test('联机选卡：同一手补不进新局面上，就判失败让调用方退回房间那份', () => {
+test('联机选卡：补一步也受轮次约束，"对面禁过的"和"已交棒的"都补不进去', () => {
   const room = fakeRoom(7203);
+  const first = room.state.draft!.banTurn!;
+  const second: PlayerId = first === 'A' ? 'B' : 'A';
   const a = structuredClone(room.state);
-  const banA = remainingUnits(a)[0]!;
-  assert.ok(clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'A').ok);
+  const banFirst = remainingUnits(a)[0]!;
+  assert.ok(
+    clientSubmit(room, a, { type: 'DRAFT_BAN', unitId: banFirst, at: Date.now() } as Parameters<typeof applyAction>[1], first).ok,
+  );
+  assert.equal(room.state.draft!.banTurn, second, '交完就交棒');
 
-  // 对面那一手仍然补得进去（盲禁是双方各一次，池子里的东西谁都还没被禁掉）
-  const other = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: banA, at: Date.now() }, 'B');
-  assert.equal(other.ok, true, 'B 在合并后的局面上还能禁同一个兵（两个人可以禁同一个）');
+  // 对面已经禁过的兵：补进来必须失败（盲禁时代这是允许的，轮流制下是白费一个禁位）
+  const dup = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: banFirst, at: Date.now() }, second);
+  assert.equal(dup.ok, false, '对面禁过的不能再禁一次');
 
-  // 但"同一个席位禁第二次"必须失败：否则重放会把一步变成两步
-  const again = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: 'archer', at: Date.now() }, 'A');
-  assert.equal(again.ok, false, 'A 已经禁过，再补一次必须被挡住');
+  // 已经交棒的那一方再补一手：也失败，否则重放会把一步变成两步
+  const again = mergeDraftStep(room.state, { type: 'DRAFT_BAN', unitId: 'archer', at: Date.now() }, first);
+  assert.equal(again.ok, false, '不是他的回合了，补不进');
 });
 
 test('选卡：AI 会禁用与选人，且只在池子里挑', () => {
@@ -14384,19 +14476,23 @@ test('选卡：旱地图上禁用不禁船（船在旱地本来就不值钱）',
  * 对面十有八九也在禁榜首，两下一撞，我这局的前两手一起没了。
  * 所以这里守两条：先手禁的不是榜首（那是后手的活），也不是自己最后真正拿到的第一张。
  */
-test('选卡：先手不 ban 榜首，也不 ban 自己第一手', () => {
+test('选卡：AI 的 auto 禁用就是"禁当前榜首"（轮流制不再预判对面）', () => {
+  /*
+   * 盲禁时代 A 走的是 targeted（预演对面禁榜首，再掐对面阵容里最值钱的），
+   * 因为"禁榜首＝自残"。轮流禁之后这个推理不成立了：
+   * 先禁的一方没有可预判的对象，后禁的一方直接看得见成果。
+   * 所以 auto 统一成 generic，两边禁的都是"当前榜首"。
+   */
   for (const startEra of [1, 3, 5]) {
     const s = createMatch(
       { ...DEFAULT_CONFIG, size: 14, startEra, draftMode: true, expansionIds: ['fantasy'] },
       7301,
     );
-    const banB = aiDraftBan(s, 'B')!; // 后手 = 禁榜首
-    const banA = aiDraftBan(s, 'A')!;
-    assert.ok(s.draft!.pool.includes(banA), '先手的禁用必须在池子里');
-    assert.notEqual(banA, banB, `起始第 ${startEra} 代：先手不该去禁榜首（那是后手的禁位）`);
-    // 先手自己第一手会拿的那张，不能是被自己禁掉的那张
-    const firstPick = aiDraftPick(s, 'A')!;
-    assert.notEqual(banA, firstPick, `起始第 ${startEra} 代：先手把自己的第一手禁掉了`);
+    for (const side of ['A', 'B'] as const) {
+      const auto = aiDraftBan(s, side)!;
+      assert.ok(s.draft!.pool.includes(auto), '禁用必须在池子里');
+      assert.equal(auto, aiDraftBan(s, side, 'generic'), `起始第 ${startEra} 代：${side} 的 auto 应该就是 generic`);
+    }
   }
 });
 

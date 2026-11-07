@@ -139,9 +139,8 @@ function playOne(seed: number): GameRow {
     const view = draftView(s);
     if (!view) break;
     if (view.phase === 'ban') {
-      const side: PlayerId | undefined = (['A', 'B'] as PlayerId[]).find(
-        (sd) => !(sd === 'A' ? view.a : view.b).banDone,
-      );
+      // 轮流禁用（2026-11-07）：只让当前这一方下注，不能按"谁还没禁完"挑人
+      const side: PlayerId | undefined = view.banTurn ?? undefined;
       if (!side) break;
       const id = aiDraftBan(s, side, BAN_MODE);
       if (!id) break;

@@ -456,6 +456,7 @@ export function draftPickOrder(picks: number): PlayerId[] {
 export function createDraft(state: GameState): DraftState {
   const budget = draftBudget(state);
   const sampled = sampleDraftPool(state, budget.pool, state.seed ^ 0x5eed1);
+  const order = draftPickOrderFor(seatsOf(state), budget.picks);
   return {
     // 先进"等待开局"：建房、贴邀请链接都发生在这一步（见 DraftPhase 的说明）
     phase: 'lobby',
@@ -465,7 +466,16 @@ export function createDraft(state: GameState): DraftState {
     // 四个席位都开出来：三人四人局的 BP 也走同一套蛇形
     bans: { A: [], B: [], C: [], D: [] },
     picks: { A: [], B: [], C: [], D: [] },
-    order: draftPickOrderFor(seatsOf(state), budget.picks),
+    order,
+    /*
+     * 轮流禁用**从后拿第一签的那一方开始**。
+     *
+     * 顺序制里第二个禁的人看得见第一个禁了什么，等于多一层信息；这份优势
+     * 给后选卡的那一方，正好抵掉第一签的一部分（实测第一签约值 ±10pp，
+     * 见 docs/DRAFT-STATS-2026-11-07.md）。先禁的人反过来什么都没有，
+     * 所以别把这句当"随机挑了一边"——要改就两边一起改。
+     */
+    banTurn: order[0] === 'A' ? 'B' : 'A',
     step: 0,
     // 联机锁从 1 起：房间那一行建出来时 turn 也是 1，第一笔 BP 提交正好对得上
     seq: 1,
@@ -579,7 +589,7 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     draft.seq += 1;
     s.log = [
       ...s.log,
-      { turn: s.turn, player: 'A', open: true, text: '选卡开始：双方同时禁用' },
+      { turn: s.turn, player: 'A', open: true, text: `选卡开始：轮流禁用（每方 ${draft.banSlots} 个）` },
     ];
     return { ok: true, state: s };
   }
@@ -606,21 +616,47 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
 
   if (action.type === 'DRAFT_BAN') {
     if (draft.phase !== 'ban') return { ok: false, reason: '禁用阶段已经结束了' };
+    /*
+     * 轮流禁用：不是你的回合就一步都不许下。
+     *
+     * 兜底 `?? 'A'` 是给老存档用的（那时还没有 banTurn 这个字段，双方同时禁，
+     * 谁先提交谁先来）。新局一定带这个字段。
+     */
+    const turn = draft.banTurn ?? 'A';
+    if (actor !== turn) {
+      return { ok: false, reason: `轮到${s.players[turn]?.name ?? turn}禁用了` };
+    }
     if (draft.bans[actor].length >= draft.banSlots) {
       return { ok: false, reason: `你这一轮已经禁用过 ${draft.banSlots} 个了` };
     }
     const id = action.unitId;
     if (!draft.pool.includes(id)) return { ok: false, reason: '这个兵种不在本局池子里' };
     if (draft.bans[actor].includes(id)) return { ok: false, reason: '你已经禁过它了' };
+    /*
+     * 对面已经禁掉的不能再禁一次。
+     *
+     * 盲禁时代这条不可能发生（互相看不见），轮流禁之后它变成真会发生的输入错误：
+     * 该禁的那张已经被对面按掉了，再举一次手是白费一个禁位。直接说明白，
+     * 好过让玩家以为自己禁成了。
+     */
+    const foe: PlayerId = actor === 'A' ? 'B' : 'A';
+    if (draft.bans[foe].includes(id)) return { ok: false, reason: '对面已经禁过它了' };
 
     draft.bans[actor] = [...draft.bans[actor], id];
     draft.seq += 1;
     draft.history = [...draft.history, { side: actor, kind: 'ban', unitId: id, auto: false }];
-    // 双方都交完才揭晓，同时进入选人阶段
-    if (draft.bans.A.length >= draft.banSlots && draft.bans.B.length >= draft.banSlots) {
-      draft.phase = 'pick';
-      draft.step = 0;
-      draft.deadline = (action.at ?? draft.deadline) + draftPickMsOf(s);
+    if (draft.bans[actor].length >= draft.banSlots) {
+      if (draft.bans.A.length >= draft.banSlots && draft.bans.B.length >= draft.banSlots) {
+        // 两边都禁满了 → 进选人
+        draft.phase = 'pick';
+        draft.step = 0;
+        draft.banTurn = undefined;
+        draft.deadline = (action.at ?? draft.deadline) + draftPickMsOf(s);
+      } else {
+        // 这一方禁满了 → 交棒，并把倒计时重新给满（对面不该继承剩下的秒数）
+        draft.banTurn = foe;
+        draft.deadline = (action.at ?? draft.deadline) + draftBanMsOf(s);
+      }
     }
     s.log = [
       ...s.log,
@@ -673,21 +709,41 @@ export function applyDraftAction(s: GameState, action: Action, actor: PlayerId):
     if (action.at < draft.deadline) return { ok: false, reason: '还没到时限' };
 
     if (draft.phase === 'ban') {
-      // 没交禁用的那一方＝放弃这次禁用。放弃是允许的，而且不该替它随机禁一个：
-      // 随机禁用有可能禁掉自己最想要的兵，那是惩罚而不是兜底。
-      for (const side of pendingBans(s)) {
-        draft.history = [
-          ...draft.history,
-          { side, kind: 'ban', unitId: null, auto: true },
-        ];
+      /*
+       * 超时＝**当前这一方**放弃剩下的禁用，然后把回合交给对面。
+       *
+       * 轮流制下不能像以前那样"两边一起判放弃"：先禁那一方超时的时候，
+       * 后禁那一方根本还没轮到、时间也还没开始算，替他放弃等于白送。
+       * 放弃也不替他随机禁——随机禁用可能禁掉自己最想要的兵，那是惩罚不是兜底。
+       */
+      const side = draft.banTurn ?? pendingBans(s)[0];
+      if (side) {
+        draft.history = [...draft.history, { side, kind: 'ban', unitId: null, auto: true }];
         // 用空数组占位不行（那等于没交），所以补一个"放弃"标记：长度对齐 banSlots
         while (draft.bans[side].length < draft.banSlots) {
           draft.bans[side] = [...draft.bans[side], ''];
         }
       }
+      const foe: PlayerId = side === 'A' ? 'B' : 'A';
+      const nameOf = (p: PlayerId): string => s.players[p]?.name ?? p;
+      draft.seq += 1;
+      if (side && draft.bans[foe].length < draft.banSlots) {
+        draft.banTurn = foe;
+        draft.deadline = action.at + draftBanMsOf(s);
+        s.log = [
+          ...s.log,
+          {
+            turn: s.turn,
+            player: side,
+            open: true,
+            text: `禁用超时：${nameOf(side)}放弃，轮到${nameOf(foe)}禁用`,
+          },
+        ];
+        return { ok: true, state: s };
+      }
       draft.phase = 'pick';
       draft.step = 0;
-      draft.seq += 1;
+      draft.banTurn = undefined;
       draft.deadline = action.at + draftPickMsOf(s);
       s.log = [...s.log, { turn: s.turn, player: 'A', open: true, text: '禁用超时：未禁用的一方视为放弃' }];
       return { ok: true, state: s };
@@ -761,6 +817,8 @@ export function draftView(state: GameState): {
   step: number;
   totalSteps: number;
   toAct: PlayerId | null;
+  /** 现在轮到谁禁用（只有 phase='ban' 时有意义；其它时候是 null） */
+  banTurn: PlayerId | null;
 } | null {
   const draft = state.draft;
   if (!draft) return null;
@@ -782,6 +840,7 @@ export function draftView(state: GameState): {
     step: draft.step,
     totalSteps: draft.order.length,
     toAct: draftSideToAct(state),
+    banTurn: draft.phase === 'ban' ? (draft.banTurn ?? null) : null,
   };
 }
 
@@ -879,21 +938,20 @@ function simulatePicks(
  * 禁用组合一次没变过。那不是在打 BP，是在走流程：民兵本来就不是任何人会先拿的卡。
  *
  * ---------------------------------------------------------------
- * 现在
+ * 现在（2026-11-07，禁用改成轮流之后）
  * ---------------------------------------------------------------
- * 先用**选人的那套判据**（空手跑一遍）排出"对手会按什么顺序拿"，然后按顺位下手：
+ * 先用**选人的那套判据**（空手跑一遍）排出"对面会按什么顺序拿"，
+ * 然后禁掉榜首——对面第一选就会拿走的那张。
  *
- *   · 后手（B）：对面第一选就要拿走最好的那张，禁榜首正好掐掉这一手；
- *   · 先手（A）：禁榜首等于自残——那张本来是我的。可"禁第二好的"也不对：
- *     对面十有八九也在禁榜首，两下一撞，我这两张一起没了，只能拿第三。
- *     所以先手改成**预演**：假设对面禁掉榜首，把整轮 BP 按选人判据走完，
- *     看看对面最后**真正落到手的是哪几张**，然后禁掉其中分值最高的那张。
+ * 盲禁时代那套"先手必须预演对面禁什么"的推理，在轮流制下**不成立了**：
  *
- *     这条比"禁第二好的"稳：对面那张是推演出来的既成事实，不是我猜的；
- *     而且它一定不在我这一手能拿到的范围里（否则对面拿不到），所以不会白禁。
+ *   · 后禁的一方**直接看得见**先禁方禁了什么（看不见就没法下嘴，
+ *     而且会去禁一个已经被禁掉的兵）；
+ *   · 先禁的一方根本没有可预判的对象——对面的禁用还没发生。
  *
- * 这条不对称来自规则本身（选人顺序 A,B,B,A…），不是偏心：盲禁 + 已知顺位时，
- * "掐掉对面那一手"和"别把自己的那一手一起掐掉"本来就是两件事。
+ * 所以两种策略合成一种：禁"当前最值钱的那张"。`targeted` 那个"预演对面禁榜首
+ * 再掐他阵容"的玩法保留成显式参数（探针脚本还在用它跑对照），但 auto 不再预判
+ * ——在轮流制里预判等于把已经发生的事再猜一遍。
  */
 export type BanMode = 'auto' | 'targeted' | 'generic';
 
@@ -912,17 +970,16 @@ export function aiDraftBan(state: GameState, side: PlayerId, mode: BanMode = 'au
   const sway = swayOffset(state, side);
 
   /*
-   * 两种禁用策略，默认按席位分：
-   *   · generic  —— 禁"全局第一名"（不分对面想不想要）；
+   * 两种禁用策略：
+   *   · generic  —— 禁"当前第一名"（对面第一选会拿走的那张）；
    *   · targeted —— 预演对面禁榜首，再禁掉**对面阵容里**最值钱的那张。
    *
-   * 现在默认是 A 用 targeted、B 用 generic。这个不对称是历史遗留（先写的是
-   * 先手那套"预判对面"，后手那句是后来补的简化版），**没有经过任何平衡论证**。
-   * 2026-11-07 量出 20×20 选卡局先手 67% 而关掉选卡只有 47%，这块是主要嫌疑，
-   * 所以把它做成显式参数，方便跑"两边同一策略"的对照。
+   * auto 现在一律 generic：轮流禁之后，后禁方直接看得见先禁方的成果，
+   * 先禁方也没有可预判的对象（见上面那段）。此前那套"A 用 targeted、
+   * B 用 generic"的不对称是盲禁时代的遗留，从没经过平衡论证——
+   * 它顺带还是 20×20 先手 67% 的嫌疑人之一，这次一并去掉。
    */
-  const strategy: 'targeted' | 'generic' =
-    mode === 'auto' ? (side === 'A' ? 'targeted' : 'generic') : mode;
+  const strategy: 'targeted' | 'generic' = mode === 'auto' ? 'generic' : mode;
   if (strategy === 'generic') return ranked[Math.min(sway, ranked.length - 1)]!.id;
 
   // targeted：预演"对面禁榜首"，再禁掉对面阵容里最值钱的那张

@@ -1913,8 +1913,9 @@ function draftIsAi(side: PlayerId): boolean {
 /**
  * 座位交接。
  *
- * 禁用是盲禁：我交完就该把设备交出去，不能顺手替对面也点了。
- * 选人期则完全由 order 决定——轮到谁，设备就跟着谁。
+ * 禁用改成轮流之后（2026-11-07），两段的判据其实是同一个了：
+ * **轮到谁，设备就跟着谁**。禁用期不再有"我交完就把设备交出去"这一步模糊操作
+ * ——只要 `banTurn` 不是我，设备就该在对面的手上。
  */
 function syncDraftSeat(): void {
   const view = draftView(state);
@@ -1928,12 +1929,8 @@ function syncDraftSeat(): void {
     draftSeat = view.toAct;
     return;
   }
-  if (view.phase === 'ban') {
-    const mine = draftSeat === 'A' ? view.a : view.b;
-    if (!mine.banDone) return;
-    const other: PlayerId = draftSeat === 'A' ? 'B' : 'A';
-    const otherView = other === 'A' ? view.a : view.b;
-    if (!otherView.banDone && !draftIsAi(other)) draftSeat = other;
+  if (view.phase === 'ban' && view.banTurn && !draftIsAi(view.banTurn)) {
+    draftSeat = view.banTurn;
   }
 }
 
@@ -2235,11 +2232,11 @@ function scheduleDraftAi(): void {
   if (draftAiPending) return;
   const view = draftView(state);
   if (!view) return;
+  // 轮流禁用之后，"轮到谁"才是判据：不能再用"还有谁没禁完"——
+  // 对面那一轮里没禁完的那个席位是玩家自己，AI 不该替他下手
   const aiPending =
     view.phase === 'ban'
-      ? (['A', 'B'] as PlayerId[]).some(
-          (side) => draftIsAi(side) && !(side === 'A' ? view.a : view.b).banDone,
-        )
+      ? !!view.banTurn && draftIsAi(view.banTurn)
       : view.phase === 'pick' && !!view.toAct && draftIsAi(view.toAct);
   if (!aiPending) return;
 
@@ -2250,10 +2247,8 @@ function scheduleDraftAi(): void {
     const now = draftView(state);
     if (!now) return;
     if (now.phase === 'ban') {
-      const side = (['A', 'B'] as PlayerId[]).find(
-        (sd) => draftIsAi(sd) && !(sd === 'A' ? now.a : now.b).banDone,
-      );
-      if (!side) return;
+      const side = now.banTurn;
+      if (!side || !draftIsAi(side)) return;
       const id = aiDraftBan(state, side);
       if (id) dispatchDraft({ type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
       return;
@@ -2418,9 +2413,14 @@ function onDraftClick(typeId: string): void {
   // 席位一律问 draftActor()：联机以房间为准，热座看交接
   const seat = draftActor();
   if (view.phase === 'ban') {
+    // 轮流禁用：先看轮到谁，再看禁没禁满——顺序反过来会给出误导的提示
+    if (view.banTurn && view.banTurn !== seat) {
+      toast(`现在轮到${state.players[view.banTurn].name}禁用`);
+      return;
+    }
     const mine = seat === 'A' ? view.a : view.b;
     if (mine.banDone) {
-      toast('你已经禁用过了，等对面');
+      toast('你已经禁完了，等对面');
       return;
     }
     dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, seat);

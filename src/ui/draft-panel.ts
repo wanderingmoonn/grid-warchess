@@ -173,7 +173,13 @@ function sideBlock(
   // 状态行：这一方现在在干什么。禁用期是"盲禁"，所以只报"交没交"，不报禁了什么。
   let status = '';
   if (view.phase === 'ban') {
-    status = mine.banDone ? '已提交禁用' : '正在挑禁用';
+    // 轮流制：三种状态要分开——轮到我了 / 我在禁但没禁完 / 我禁完了
+    const myTurn = view.banTurn === side;
+    status = mine.banDone
+      ? `已禁 ${mine.bans.length} 个`
+      : myTurn
+        ? `轮到禁用（还剩 ${Math.max(0, (s.draft?.banSlots ?? 0) - mine.bans.length)} 个）`
+        : '等对面禁用';
   } else if (view.phase === 'pick') {
     status = opts.toAct === side ? '轮到你选' : `已选 ${picked.length} / ${s.draft?.pickSlots}`;
   } else {
@@ -539,16 +545,28 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const seat = ctx.seat;
   const aiTurn = view.toAct ? ctx.isAi(view.toAct) : false;
 
-  // 谁能点：禁用期＝本地这一方还没交；选人期＝当前这一方就是本地席位
-  const canBan = view.phase === 'ban' && !view[seat === 'A' ? 'a' : 'b'].banDone;
+  /*
+   * 谁能点：禁用期＝**轮到本地这一方**且还没禁满；选人期＝当前这一方就是本地席位。
+   *
+   * 轮流禁之后"没禁满"不再等于"能点"：对面那一轮里你也还没禁满，
+   * 但一步都不该让你下（规则层也会拒，界面必须先在前面拦住，否则点一下弹一句
+   * "轮到红方禁用"——那是在用提示音代替禁用）。
+   */
+  const banTurn = view.phase === 'ban' ? view.banTurn : null;
+  const myBanLeft = Math.max(0, draft.banSlots - draft.bans[seat].length);
+  const canBan = view.phase === 'ban' && banTurn === seat && myBanLeft > 0;
   const canPick = view.phase === 'pick' && view.toAct === seat;
   const clickable = canBan || canPick;
 
   const hint =
     view.phase === 'ban'
       ? canBan
-        ? `挑一个你最不想看到的兵种禁掉（${draft.banSlots} 个），对方同时在进行，互相看不到`
-        : `你已提交，等${sideName(s, seat === 'A' ? 'B' : 'A')}禁用`
+        ? myBanLeft === draft.banSlots
+          ? `轮到你禁用：挑 ${draft.banSlots} 个最不想看到的兵种，禁完就换对面`
+          : `还能禁 ${myBanLeft} 个，禁完就换对面`
+        : banTurn && banTurn !== seat
+          ? `${sideName(s, banTurn)}正在禁用，禁完轮到你`
+          : `你已禁完，等${sideName(s, seat === 'A' ? 'B' : 'A')}禁用`
       : view.phase === 'pick'
         ? view.toAct === seat
           ? '轮到你选：点一个兵加入本局名单'
@@ -602,22 +620,33 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
       : canBan
         ? ''
         : view.phase === 'ban'
-          ? '你已经提交过禁用了，等对面'
+          ? banTurn && banTurn !== seat
+            ? `现在轮到${sideName(s, banTurn)}禁用`
+            : '你已经禁完了，等对面'
           : '现在不是你的操作';
   const cards = remain.map((id) => unitCard(s.unitTypes[id]!, !clickable, blockReason)).join('');
 
-  // 禁用期不揭晓对面禁了什么；选人期两边都公开
+  /*
+   * 禁用条：**已经禁完的那一方要露出来**。
+   *
+   * 盲禁时代这里是空的（"禁用期不揭晓对面禁了什么"），因为两边同时交、
+   * 交完一起开。轮流禁之后这条反过来了：后禁的一方**必须**看得见先禁方禁了
+   * 什么，否则他会去禁一个已经被禁掉的兵（规则层会拒，但那已经浪费了他的时间）。
+   * 只看"禁完的"——还在禁的那一方没禁完，露一半出来只会误导。
+   */
   const banLine = (side: PlayerId) => {
     const list = draft.bans[side].filter(Boolean);
     return list.map((id) => s.unitTypes[id]?.name ?? id).join('、');
   };
+  const banDoneOf = (side: PlayerId) => draft.bans[side].length >= draft.banSlots;
+  const showBans = (side: PlayerId) => view.phase === 'pick' || banDoneOf(side);
   const bansHtml =
-    view.phase === 'ban'
+    !showBans('A') && !showBans('B')
       ? ''
       : `<div class="draft-bans">
           <span class="draft-bans-title">禁用</span>
-          <span class="draft-ban-chip is-a">${sideName(s, 'A')}：${banLine('A') || '无'}</span>
-          <span class="draft-ban-chip is-b">${sideName(s, 'B')}：${banLine('B') || '无'}</span>
+          ${showBans('A') ? `<span class="draft-ban-chip is-a">${sideName(s, 'A')}：${banLine('A') || '无'}</span>` : ''}
+          ${showBans('B') ? `<span class="draft-ban-chip is-b">${sideName(s, 'B')}：${banLine('B') || '无'}</span>` : ''}
         </div>`;
 
   const log = draft.history
