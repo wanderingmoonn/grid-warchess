@@ -1614,6 +1614,20 @@ body {
   gap: 7px;
 }
 
+/*
+ * 产兵按钮的浮层宿主。多包一层 span 不是为了排版，是因为 disabled 的按钮
+ * 在部分浏览器里连 mouseover 都不派发——钱不够、不是自己回合时，玩家恰恰
+ * 最需要看"这工兵能盖什么"。宿主不禁用，浮层就还在。
+ */
+.recruit-wrap {
+  display: flex;
+}
+
+.recruit-wrap > .recruit-btn {
+  flex: 1;
+  min-width: 0;
+}
+
 .recruit-btn {
   display: flex;
   align-items: center;
@@ -4511,13 +4525,13 @@ a.btn {
 }
 
 /*
- * 卡片详情（悬停浮层）。
+ * 卡片详情（悬停浮层，选卡 / 产兵 / 兵种 chip 共用）。
  *
- * 卡片里那份 `.draft-tip` 只是"数据"，靠 hidden 藏着；真正显示的是界面层
- * 那个 `#draft-tip` 浮动节点——它挂在 body 上，因为池子本身是 overflow:auto
+ * 宿主里那份 `.hover-tip` 只是"数据"，靠 hidden 藏着；真正显示的是界面层
+ * 那个 `#hover-tip` 浮动节点——它挂在 body 上，因为池子本身是 overflow:auto
  * 的滚动容器，卡片内部的绝对定位浮层会被裁掉（最上面一排的详情直接看不到）。
  */
-#draft-tip {
+#hover-tip {
   position: fixed;
   z-index: 90;
   pointer-events: none;
@@ -4532,38 +4546,38 @@ a.btn {
   color: var(--text);
 }
 
-#draft-tip[hidden] {
+#hover-tip[hidden] {
   display: none;
 }
 
-#draft-tip .tip-title {
+#hover-tip .tip-title {
   display: flex;
   align-items: baseline;
   gap: 8px;
   margin-bottom: 4px;
 }
 
-#draft-tip .tip-title b {
+#hover-tip .tip-title b {
   font-size: 13px;
 }
 
-#draft-tip .tip-title i {
+#hover-tip .tip-title i {
   font-style: normal;
   font-size: 11px;
   color: var(--text-3);
 }
 
-#draft-tip .tip-row {
+#hover-tip .tip-row {
   display: block;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
 
-#draft-tip .tip-abil {
+#hover-tip .tip-abil {
   color: var(--a);
 }
 
-#draft-tip .tip-blocked {
+#hover-tip .tip-blocked {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px dashed var(--line);

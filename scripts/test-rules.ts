@@ -13,6 +13,7 @@
 // @ts-nocheck
 
 import assert from 'node:assert/strict';
+import { buildListOf } from '../src/core/build-list.ts';
 
 import {
   BASE_MAX_ERA,
@@ -439,6 +440,32 @@ function duel(s: GameState): { a: Unit; b: Unit } {
   b.y = 4;
   return { a, b };
 }
+
+console.log('\n建造名单（规则书 / 属性卡 / 产兵面板共用）');
+
+test('建造名单：奴隶能盖的 4 样都翻成中文名，顺序与数据一致', () => {
+  const def = UNIT_TYPES.laborer;
+  const list = buildListOf(def, { nameOf: (id) => UNIT_TYPES[id]?.name ?? id });
+  assert.deepEqual(list.ids, def.builds);
+  assert.deepEqual(list.names, ['箭塔', '磨坊', '木桥', '军营']);
+});
+
+test('建造名单：本局没启用的建筑被过滤，ids 与 names 一一对应', () => {
+  const def = UNIT_TYPES.laborer;
+  const list = buildListOf(def, {
+    nameOf: (id) => UNIT_TYPES[id]?.name ?? id,
+    exists: (id) => id !== 'mill',
+  });
+  assert.equal(list.ids.length, 3);
+  assert.equal(list.names.length, 3);
+  assert.ok(!list.names.includes('磨坊'), '面板上的"N 种"和按钮数必须来自同一次过滤');
+});
+
+test('建造名单：查不到中文名时退回 id，不抛错也不静默丢项', () => {
+  const list = buildListOf({ id: 'probe', builds: ['a', 'b'] });
+  assert.deepEqual(list.ids, ['a', 'b']);
+  assert.deepEqual(list.names, ['a', 'b']);
+});
 
 console.log('\n开局与地图');
 

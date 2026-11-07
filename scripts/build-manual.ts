@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
+import { buildListOf } from '../src/core/build-list.ts';
 import { deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
@@ -403,6 +404,20 @@ function termTable(keys: readonly string[], opts: { abilities?: boolean } = {}):
 }
 
 /**
+ * 规则书查建筑中文名用的全量表。
+ *
+ * `config.UNIT_TYPES` 里只有本体那 53 个兵，扩展兵种挂在 `EXPANSIONS[].units` 上。
+ * 只查前者的话，阵师那几行会印出 `cultivation-guard-formation` 这种英文 id。
+ * 游戏内查的是 `s.unitTypes`（本局启用的那批），两边各查各的表、但共用同一份
+ * 名单生成逻辑，所以数字和名字的口径不会分家。
+ */
+const ALL_UNIT_DEFS: Record<string, UnitTypeDef> = { ...UNIT_TYPES };
+for (const e of EXPANSIONS) {
+  for (const u of e.units ?? []) ALL_UNIT_DEFS[u.id] = u;
+}
+const manualNameOf = (id: string): string => ALL_UNIT_DEFS[id]?.name ?? id;
+
+/**
  * 一个兵种的"特性"列。
  *
  * 这一列过去是整份规则书最密的地方：能力名后面跟一句解释、溅射后面跟一句
@@ -434,7 +449,33 @@ function traitsOf(u: UnitTypeDef): string {
   }
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
   if (u.burst) parts.push(ref('burst', `多动 ${u.burst} 次`));
-  if (u.builds) parts.push(ref('builds', `可建 ${u.builds.length} 种建筑`));
+  if ((u.builds ?? []).length > 0) {
+    const { names } = buildListOf(u, { nameOf: manualNameOf });
+    // 规则书里不该印出英文 id。出现就说明全量表漏了登记，宁可让生成失败，
+    // 也不要给玩家一行"可建造：cultivation-guard-formation"。
+    const raw = names.find((n) => /^[a-z0-9_-]+$/i.test(n));
+    if (raw) throw new Error(`兵种「${u.name}」的可建造项「${raw}」没查到中文名`);
+    /*
+     * 每个工兵登记一条**专属**词条，而不是 18 个工兵共用「建造」那一条。
+     *
+     * 浮层本身不用改：它按链接的 href 去词条表取对应那行文字。以前所有工兵
+     * 都指向 #t-builds，取回来的是同一句"能盖哪几类建筑"；现在各自指向自己的
+     * 词条，悬停取回来的就是它自己的名单。奇想包的兵种技能词条用的也是这个
+     * dynamicTerm 办法。
+     *
+     * 点击链接跳到词条表、禁用脚本、打印时名单依然在，不需要另建一张对照表。
+     */
+    const key = `builds-${slug(u.id)}`;
+    dynamicTerm(
+      key,
+      `可建造 · ${u.name}`,
+      `可建造：${names.join('、')}（共 ${names.length} 种）。` +
+        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`,
+      '这里列的是兵种自带的可建项目；有些扩展会在开局额外教建造单位几样新建筑' +
+        '（例如粮仓、船坞），实际清单随本局启用的扩展变化，以游戏内的产兵提示为准。',
+    );
+    parts.push(ref(key, `可建 ${names.length} 种建筑`));
+  }
   // 载具：舱位与机位都是兵种数据上的数字，表里就该看得见——
   // 以前这两样只写在属性卡的正文里，横向比船的时候要一艘艘点开。
   const hold = holdOf(u);
@@ -1500,7 +1541,8 @@ const CORE_BODY_MAIN = `    <section id="goal">
       <h2><span class="sec-num">10</span>建造</h2>
       <p>建筑不是凭空出现的：得有一个<b>建造单位</b>走过去，花钱，把这一回合搭进去。</p>
       <ol>
-        <li>选中建造单位，面板底部会出现「可建造」列表。</li>
+        <li>选中 ${ref('builds', '建造单位')}，面板底部会出现「可建造」列表；
+          鼠标停在兵种上就能先看它具体能盖哪几样，不必等造出来再点属性卡。</li>
         <li>点其中一项，棋盘上高亮出它周围 <b>${CONFIG.buildRange} 格</b>内的空地。</li>
         <li>点一块地，开工。</li>
       </ol>
