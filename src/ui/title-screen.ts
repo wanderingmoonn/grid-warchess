@@ -23,6 +23,8 @@ export interface TitleOptions {
   /** 最近一版的一句话（可省） */
   latest?: string;
   onNew: () => void;
+  /** 新手教程：一条三分钟的固定局面，教选兵/移动/攻击/结束回合/攻城 */
+  onTutorial: () => void;
   onContinue: () => void;
   onOnline: () => void;
   onManual: () => void;
@@ -62,6 +64,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
 
       <div class="title-actions">
         <button class="title-btn primary" data-title="new">开始对局</button>
+        <button class="title-btn" data-title="tutorial">新手教程 · 约 3 分钟</button>
         <button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>
       </div>
 
@@ -107,6 +110,10 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       case 'new':
         close();
         opts.onNew();
+        break;
+      case 'tutorial':
+        close();
+        opts.onTutorial();
         break;
       case 'continue':
         close();

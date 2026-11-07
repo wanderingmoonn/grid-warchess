@@ -6,6 +6,8 @@
  */
 
 import './style.css';
+import * as tutorial from './ui/tutorial.ts';
+import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
 import { isProducer } from './core/produce.ts';
@@ -1299,6 +1301,15 @@ function render(): void {
   } else if (!replayEl.hidden) {
     replayEl.hidden = true;
   }
+
+  /*
+   * 新手教程的教练层。
+   *
+   * 放在 render 的最后：卡片要盖在已经画好的棋盘和面板上面，而且棋盘每帧重建，
+   * 圈出来的格子也得每帧重挂一次。tutorial 自己判断"还是不是同一张卡片"，
+   * 不会每帧新建节点（否则按钮会丢焦点、动画会闪）。
+   */
+  if (tutorial.tutorialOn()) tutorial.tutorialTick(state, selectedId);
 }
 
 /**
@@ -2397,8 +2408,10 @@ function dispatch(action: Action): boolean {
       // 轮到 AI 就让它接着走（双 AI 时会一直走回人类或分出胜负）
       if (isAiSide(state, state.current)) {
         void runAiLoop();
-      } else if (!anyAiSide(state)) {
-        // 只有两边都是人，才需要"把设备交给对方"
+      } else if (!anyAiSide(state) && !tutorial.tutorialOn()) {
+        // 只有两边都是人，才需要"把设备交给对方"。
+        // 教程局也不弹：那一局的对面板由教程自己代按结束回合（见 ui/tutorial.ts），
+        // 弹出「请把设备交给蓝方」会让新手以为要换人打。
         openHandoff();
       }
     }
@@ -3735,7 +3748,7 @@ async function runAiLoop(): Promise<void> {
   if (state.winner) return;
 
   if (!isAiSide(state, state.current) && !aiPaused) {
-    if (!anyAiSide(state)) {
+    if (!anyAiSide(state) && !tutorial.tutorialOn()) {
       openHandoff();
     } else {
       toast(`轮到${state.players[state.current].name}`);
@@ -3949,8 +3962,9 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
     hasSave: hasRealSave,
     version: BUILD_VERSION,
-    latest: '新：开始页面 + 对局可重放',
+    latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
+    onTutorial: startTutorial,
     onContinue: () => {
       render();
       kickAiIfNeeded();
@@ -3993,6 +4007,54 @@ function newGameFlow(): void {
     toast('新对局开始');
     kickAiIfNeeded();
   });
+}
+
+/**
+ * 新手教程：开一局钉死的局面，把教练层挂上。
+ *
+ * 存档在教程期间**挂起**（`suspendSaves`）。这不是防作弊，是防覆盖：教程每走一步
+ * 都会调 saveMatch，不挂起的话玩家正在打的那局会被一张教学棋盘顶掉，
+ * 而且没有任何提示——退出教程时再把存档读回来，他原来那局还在原地。
+ */
+function startTutorial(): void {
+  suspendSaves(true);
+  state = createTutorialMatch();
+  detachRoom();
+  resetZoom();
+  clearSelection();
+  aiPaused = true;
+  tutorialStartHooks();
+  tutorial.tutorialSnapshot(state);
+  render();
+  toast('新手教程：跟着卡片走就行，随时可以跳过');
+}
+
+function tutorialStartHooks(): void {
+  tutorial.tutorialStart({
+    apply: (a) => {
+      const r = applyAction(state, a);
+      if (!r.ok) return;
+      state = r.state;
+      render();
+    },
+    exit: exitTutorial,
+  }, document.body);
+}
+
+/**
+ * 退出教程：把玩家原来那局还回去。
+ *
+ * 从**存档**读，不从内存读——内存里现在是那张教学棋盘。读不到（第一次玩就点教程）
+ * 就现造一局默认的，和打开页面时的行为一致。
+ */
+function exitTutorial(): void {
+  tutorial.tutorialExit();
+  suspendSaves(false);
+  state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+  clearSelection();
+  render();
+  showTitle();
+  kickAiIfNeeded();
 }
 
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */

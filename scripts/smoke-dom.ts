@@ -34,10 +34,20 @@ import {
   effectiveStats,
   reachableTiles,
   refreshMemory,
+  unitsOf,
   unitIncomeAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
+import {
+  tutorialExit,
+  tutorialOn,
+  tutorialSnapshot,
+  tutorialStart,
+  tutorialStep,
+  tutorialTick,
+} from '../src/ui/tutorial.ts';
+import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -1656,6 +1666,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: false,
     version: '0.0.0-test',
     onNew: () => { started = true; },
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -1688,6 +1699,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: true,
     version: '0.0.0-test',
     onNew: () => {},
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -1704,6 +1716,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: true,
     version: '0.0.0-test',
     onNew: () => {},
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -6249,6 +6262,108 @@ await checkAsync('复盘：拖进来的不是对局数据时，要说清是什�
     (d.body.textContent ?? '').includes('动作序列'),
     '缺动作序列时要说清缺的是这个，而不是笼统说"文件不对"',
   );
+});
+
+check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡片跟着出现', () => {
+  /*
+   * 这条测的是**接线**：入口在首屏、点了会换局、换出来的确实是教学局。
+   * 上面那条只测卡片自己，测不到"main.ts 有没有把教程接上"——
+   * 而接线断了正是这种功能最容易出的问题（卡片能写，入口没人点得到）。
+   */
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.eval(code);
+  const d = w.document;
+
+  const entry = d.querySelector<HTMLElement>('[data-title="tutorial"]');
+  assert.ok(entry, '首页要有「新手教程」入口');
+  entry!.click();
+
+  assert.ok(d.querySelector('.tut-card'), '点了教程之后教练卡片要出现');
+  assert.ok((d.body.textContent ?? '').includes('赢的条件'), '第一句要讲清胜利条件是破城');
+  assert.equal(d.querySelectorAll('#board .tile').length, 144, '教学局应该是 12×12（144 格）');
+  assert.ok(!d.querySelector('.title-screen'), '进教程要撤掉首页');
+});
+
+check('新手教程：卡片一步步推进，做到才换下一步，跳过就收起来', () => {
+  /*
+   * 教程的全部价值在"它知道你做到了没有"。这条守三件事：
+   *   1. 讲解步（没有判定条件）可以手动「继续」；
+   *   2. 操作步必须**真的做到**才前进——这里用 selectedId 模拟"选中了兵"；
+   *   3. 「跳过教程」能把卡片收干净，并把控制权交回 main。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let exited = 0;
+  const state = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => { exited += 1; tutorialExit(); } }, host);
+  tutorialSnapshot(state);
+  tutorialTick(state, null);
+
+  const card = doc.querySelector<HTMLElement>('.tut-card');
+  assert.ok(card, '卡片要挂上');
+  assert.ok((card.textContent ?? '').includes('赢的条件'), '第一步先讲胜利条件（破城，不是杀光）');
+  assert.equal(tutorialStep(), 'goal');
+
+  // 讲解步：点「继续」进下一步
+  card.querySelector<HTMLElement>('[data-tut="next"]')!.click();
+  assert.equal(tutorialStep(), 'select', '点「继续」要进到「选中你的兵」');
+  assert.ok(!doc.querySelector<HTMLElement>('[data-tut="next"]')!.hidden === false, '操作步的「继续」要收起来');
+
+  // 没选中之前不动
+  tutorialTick(state, null);
+  assert.equal(tutorialStep(), 'select', '没选中兵不该前进');
+
+  // 选中之后自动进到「走过去」
+  tutorialTick(state, 'tut-mine');
+  assert.equal(tutorialStep(), 'move', '选中之后应该自动进到「走过去」');
+
+  // 跳过：卡片撤掉、控制权交回
+  doc.querySelector<HTMLElement>('[data-tut="skip"]')!.click();
+  assert.equal(exited, 1, '跳过要交回控制权');
+  assert.equal(tutorialOn(), false);
+  assert.ok(!doc.querySelector('.tut-card'), '卡片要撤干净');
+});
+
+check('新手教程：照卡片走能赢——移动/攻击/结束回合/攻城/入驻接管', () => {
+  /*
+   * 教程局必须**真的能打通**，而且只用教程里教过的动作。
+   * 这条同时是场景的回归测试：城市耐久、坐标、废墟接管这几样任何一项改坏，
+   * 新手就会卡在最后一步——那是比红用例更糟的事故（红了没人看得见）。
+   */
+  let s = createTutorialMatch();
+  const act = (a: Parameters<typeof applyAction>[1], tag: string): void => {
+    const r = applyAction(s, a);
+    assert.ok(r.ok, `${tag} 应该合法：${r.ok ? '' : (r as { reason: string }).reason}`);
+    s = r.state;
+  };
+  const mine = (): { id: string; x: number; y: number } => unitsOf(s, 'A')[0] as never;
+  const foeCity = (): { id: string; hp: number; ruined?: boolean; x: number; y: number } =>
+    s.cities.find((c) => c.owner === 'B') as never;
+
+  act({ type: 'MOVE', unitId: mine().id, x: 4, y: 6 }, '走到诱饵旁边');
+  act({ type: 'ATTACK', unitId: mine().id, targetId: unitsOf(s, 'B')[0]!.id }, '攻击诱饵');
+  act({ type: 'END_TURN' }, '结束回合');
+  act({ type: 'END_TURN' }, '对面结束回合（教程代按）');
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 5 }, '走到城下');
+
+  for (let i = 0; i < 4 && !s.winner; i++) {
+    if (!foeCity().ruined) act({ type: 'SIEGE', unitId: mine().id, cityId: foeCity().id }, `第 ${i + 1} 次攻城`);
+    if (s.winner) break;
+    act({ type: 'END_TURN' }, '结束回合');
+    act({ type: 'END_TURN' }, '对面结束回合');
+  }
+  assert.equal(foeCity().ruined, true, '两次攻城之后城应该塌成废墟');
+
+  // 废墟要派兵入驻才算接管
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 4 }, '走进废墟接管');
+  assert.equal(s.winner, 'A', '入驻之后这局就该结束了');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
