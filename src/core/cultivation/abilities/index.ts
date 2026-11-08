@@ -4,6 +4,9 @@
 // 不 import 就静默失效（和 skills/index.ts 同一个道理）。
 import type { AbilityDef } from '../../abilities.ts';
 
+import { ARTIFACT_SPIRIT, WARM_NOURISH } from '../artifacts.ts';
+import { SWORD_QI } from './artifact-auras.ts';
+
 import { ANOMALY } from './anomaly.ts';
 import { BODY_WARD } from './body-ward.ts';
 import { FORMATION_GUARDIAN } from './formation-guardian.ts';
@@ -14,6 +17,7 @@ import { SPIRIT_ASCENSION } from './spirit-ascension.ts';
 import { SPIRIT_AURA } from './spirit-aura.ts';
 
 export * from './anomaly.ts';
+export * from './artifact-auras.ts';
 export * from './body-ward.ts';
 export * from './formation-guardian.ts';
 export * from './formation-kill.ts';
@@ -22,9 +26,13 @@ export * from './qi-true-damage.ts';
 export * from './spirit-ascension.ts';
 export * from './spirit-aura.ts';
 export * from './unlocks.ts';
+// 法器的两条公共能力：定义在 cultivation/artifacts.ts（那里还有身份判定与查询），
+// 这里只把它们汇进能力表，好让面板/词条/悬停都能看到。
+export { ARTIFACT_SPIRIT, WARM_NOURISH } from '../artifacts.ts';
 
 export const CULTIVATION_ABILITIES: AbilityDef[] = [
   ANOMALY,
+  ARTIFACT_SPIRIT,
   BODY_WARD,
   FORMATION_KILL,
   FORMATION_SEAL,
@@ -32,4 +40,6 @@ export const CULTIVATION_ABILITIES: AbilityDef[] = [
   QI_TRUE_DAMAGE,
   SPIRIT_ASCENSION,
   SPIRIT_AURA,
+  SWORD_QI,
+  WARM_NOURISH,
 ];

@@ -347,6 +347,28 @@ export interface ProduceSpec {
   pop?: number;
 }
 
+/**
+ * 一条「邻里要求」：附近要有某个地形或某个单位。
+ *
+ * 选址（`adjacent`）和产地条件（`produceNear`）共用它，判据只有一处
+ * （rules 里的 adjacentHit / nearSpecsSatisfied），所以"炉子一半压在山脊上"
+ * 不会在建造和产兵两边算出两个答案。
+ */
+export interface NearSpec {
+  /** 邻里要有其中之一地形 */
+  terrain?: Terrain[];
+  /** 邻里要有其中之一兵种/建筑（写 id） */
+  unit?: string[];
+  /**
+   * 至少命中几个才算满足，默认 1。
+   *
+   * 数的是**不同的目标**不是格数：2×2 的炉子四邻会重复看到同一块灵田，
+   * 按格数会数成两块，玩家就会遇到"我明明只有一块灵田，怎么就能造了"。
+   * 青木剑的"相邻森林 **或** 2 块灵田"就是靠它在两条 spec 上分别写 1 和 2。
+   */
+  count?: number;
+}
+
 export interface UnitTypeDef {
   id: string;
   name: string;
@@ -609,12 +631,7 @@ export interface UnitTypeDef {
    *
    * 判据只在 rules.buildSiteError 一处，界面高亮和 AI 选址都读它，不要各写一份。
    */
-  adjacent?: {
-    /** 邻里要有其中之一地形 */
-    terrain?: Terrain[];
-    /** 邻里要有其中之一兵种/建筑（写 id） */
-    unit?: string[];
-  };
+  adjacent?: NearSpec;
 
   /**
    * 必须紧邻水域才能建（军营靠水补给）。
@@ -693,6 +710,19 @@ export interface UnitTypeDef {
    */
   campOnly?: boolean;
   /**
+   * 法器：修士炼出来的器物，不是活人。
+   *
+   * 它身上有两条**所有法器共有**的规则（见 cultivation/artifacts.ts），
+   * 靠这个标记统一开，而不是让每个法器各写一遍能力：
+   *   · 神识外移动力减半、神识内按修士护甲加甲（「器灵」）；
+   *   · 贴着己方修士就缓慢回血（「温养」）。
+   *
+   * 用标记而不是"带某条能力"来判：这两条是**身份**，不是可选机制。
+   * 漏写能力就是"这件法器坏了"，而漏写标记只会让它当场被测试逮住
+   * （cultivation.test 里有一条"每件法器都带这两条能力"）。
+   */
+  artifact?: boolean;
+  /**
    * 产地要求：造这个单位时，**产兵点**附近必须有其中之一。
    *
    * 写法与建筑选址的 `adjacent` 同构（占地的每一格连同它的四邻一起看），
@@ -700,13 +730,21 @@ export interface UnitTypeDef {
    * 于是炼器炉挨着森林就能出木器、挨着山就能出石印，同一座炉子因为站位不同
    * 有不同的产品线——这是设计上的重点，不是副作用。
    *
+   * 两种形态：
+   *   · 单个 spec：满足它就行（`{ terrain: ['forest'] }`）；
+   *   · **数组**：任意一条满足即可，用来表达"或"。青木剑要的
+   *     "相邻森林 **或** 2 块灵田"就是两条并列的 spec。
+   *
+   * `count` 是"至少几个"（默认 1）：数的是**命中的不同目标**，
+   * 不是格数——2×2 的炉子四邻会重复看到同一块灵田，按格数会数成两个。
+   *
    * 只对产兵建筑生效。城市不判这条（城市没有"附近有森林"这种说法，
    * 需要限定的单位请同时写 campOnly）。
    *
    * 更复杂的条件（境界、资源、周围要站某个人……）走扩展钩子
    * `ExpansionHooks.produceBlocked`，不要往这里塞规则。
    */
-  produceNear?: { terrain?: Terrain[]; unit?: string[] };
+  produceNear?: NearSpec | NearSpec[];
   /**
    * 召唤：每 `every` 个自己的回合，在相邻空格召唤一个单位，最多 `max` 个。
    *

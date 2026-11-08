@@ -34,7 +34,6 @@ import {
   buildSiteError,
   canStrike,
   cityById,
-  citiesOf,
   coversTile,
   distance,
   distToCity,
@@ -45,6 +44,7 @@ import {
   heroSkillsOf,
   reachableTiles,
   rebuildCost,
+  produceAt,
   recruitPriceOf,
   recruitResCost,
   recruitSpawnCells,
@@ -57,10 +57,9 @@ import {
 } from '../../src/core/rules.ts';
 import { CONFIG } from '../../src/core/config.ts';
 import { canHold, holdOf, holdRoom } from '../../src/core/carry.ts';
-import { canUseType, eraWindowOk } from '../../src/core/draft.ts';
+import { canUseType } from '../../src/core/draft.ts';
 import { canPay } from '../../src/core/resources.ts';
 import {
-  canProduce,
   isProducer,
   produceCooldownLeft,
   produceCostScale,
@@ -195,7 +194,10 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
     if (city.ruined) continue;
     if (city.capturedTurn === s.turn) continue;
     for (const def of typesUpTo(city.era)) {
-      if (!eraWindowOk(s, def, city.era)) continue;
+      // 和规则层同一条判据（produceAt）：时代 + 选卡 + campOnly。
+      // 只判 eraWindowOk 会把法器也枚举出来，而城市产线根本造不了它——
+      // 策略于是不停提出"点下去必被拒"的动作。
+      if (!produceAt(s, { kind: 'city', city }, def).ok) continue;
       if (heroBlocked(s, seat, def)) continue;
       if (!canPay(s.players[seat], costOf(def, 1))) continue;
       const slots = slotsFor(city.id, undefined, def);
@@ -205,22 +207,23 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
   }
 
   // ── 产兵（军营这类野外产兵点）───────────────────────────────────────
-  const ownCities = citiesOf(s, seat);
-  if (ownCities.length > 0) {
-    for (const u of mine) {
-      const campDef = utype(s, u.type);
-      if (!isProducer(campDef)) continue;
-      if (underConstruction(u)) continue;
-      if (produceCooldownLeft(s, u, campDef) > 0) continue;
-      const costScale = produceCostScale(campDef);
-      for (const def of typesUpTo(u.era ?? 9)) {
-        if (!canProduce(campDef, def).ok) continue;
-        if (!eraWindowOk(s, def, u.era ?? 0)) continue;
-        if (heroBlocked(s, seat, def)) continue;
-        if (!canPay(s.players[seat], costOf(def, costScale))) continue;
-        if (slotsFor(undefined, u.id, def).length === 0) continue;
-        out.push({ type: 'RECRUIT', unitId: u.id, unitType: def.id });
-      }
+  //
+  // 2026-11-08 删掉「军工供货」之后，产兵建筑按**自己的档位**出兵，
+  // 也不再要求"有城市"：城全丢了，前线的营照样能补兵。
+  for (const u of mine) {
+    const campDef = utype(s, u.type);
+    if (!isProducer(campDef)) continue;
+    if (underConstruction(u)) continue;
+    if (produceCooldownLeft(s, u, campDef) > 0) continue;
+    const costScale = produceCostScale(campDef);
+    for (const def of typesUpTo(campDef.era)) {
+      // 白名单 + 产地条件都在 produceAt 里。只问 canProduce 会漏掉
+      // "炼器炉挨着森林才出木器"，策略就会学到一个永远被拒的动作。
+      if (!produceAt(s, { kind: 'camp', camp: u }, def).ok) continue;
+      if (heroBlocked(s, seat, def)) continue;
+      if (!canPay(s.players[seat], costOf(def, costScale))) continue;
+      if (slotsFor(undefined, u.id, def).length === 0) continue;
+      out.push({ type: 'RECRUIT', unitId: u.id, unitType: def.id });
     }
   }
 

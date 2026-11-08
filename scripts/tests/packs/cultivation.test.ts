@@ -30,6 +30,8 @@ import {
 } from '../../../src/core/cultivation/stats.ts';
 import { bodyWardPct, BODY_WARD_TIERS } from '../../../src/core/cultivation/abilities/body-ward.ts';
 import { baseLifespanOf, getExpGrowth, getLifespan } from '../../../src/core/cultivation/progression.ts';
+import { warmNourishHeal, WARM_NOURISH_RADIUS } from '../../../src/core/cultivation/artifacts.ts';
+import { SWORD_QI_ATK_PCT, SWORD_QI_RADIUS } from '../../../src/core/cultivation/abilities/artifact-auras.ts';
 import { EXP_GROWTH_BLOOD } from '../../../src/core/cultivation/progression.ts';
 import {
   bloodRiteRadiusForRank,
@@ -1234,6 +1236,208 @@ export function run() {
     assert.ok(fromCity.ok ? '' : /产兵建筑/.test(fromCity.reason), '理由要说明只能由产兵建筑造');
     // 白名单按档位递增：一代炉子没有寒水镜
     assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
+  });
+
+  // ── 法器：器灵 / 温养 / 剑气环 / 产地（2026-11-08）──────
+
+  test('法器：每件都带 artifact 标记与两条公共能力', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const arts = Object.values(s.unitTypes).filter((d) => d.artifact);
+    assert.equal(arts.length, 4, '应该正好四件法器');
+    for (const d of arts) {
+      assert.equal(d.campOnly, true, `${d.name} 只能由产兵建筑造`);
+      assert.ok(d.abilities?.includes('artifact-spirit'), `${d.name} 缺「器灵」`);
+      assert.ok(d.abilities?.includes('warm-nourish'), `${d.name} 缺「温养」`);
+    }
+  });
+
+  test('器灵：出了修士神识移动力减半，修士死了也不算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    // 青木剑 4 移；场上没有修士 → 减半
+    assert.equal(movePower(s, sword), 2, '没有修士看着，飞剑只能拖着走');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    assert.equal(movePower(s, sword), 4, '修士在神识内 → 全额');
+
+    // 走远到神识之外
+    qi.x = s.w - 1;
+    qi.y = s.h - 1;
+    assert.equal(movePower(s, sword), 2, '出了神识又掉回减半');
+
+    // 死在旁边：死人不看路
+    qi.x = 6;
+    qi.y = 5;
+    qi.hp = 0;
+    assert.equal(movePower(s, sword), 2, '死掉的修士不再护持');
+  });
+
+  test('器灵：神识内加甲，取范围内护甲最高的修士的一半', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const base = s.unitTypes['cultivation-artifact-wood'].armor;
+    assert.equal(effectiveStats(s, sword).armor, base, '没修士就只有本体的甲');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    const qiArmor = effectiveStats(s, qi).armor;
+    assert.equal(
+      effectiveStats(s, sword).armor,
+      base + Math.floor(qiArmor / 2),
+      '神识内加半个修士甲',
+    );
+
+    // 再来一个甲更高的体修：**取最高**，不是相加
+    const body = place2(s, 'A', 'body-cultivator', 5, 6);
+    addExp(body, s, expForRank(4)); // rank 5
+    const bodyArmor = effectiveStats(s, body).armor;
+    assert.ok(bodyArmor > qiArmor, `体修的甲(${bodyArmor})该高于炼气士(${qiArmor})`);
+    assert.equal(
+      effectiveStats(s, sword).armor,
+      base + Math.floor(bodyArmor / 2),
+      '两个修士只按最高的那位算，不叠乘',
+    );
+
+    // 敌方修士不管用
+    const foe = place2(s, 'B', 'qi-cultivator', 4, 5);
+    assert.ok(foe);
+  });
+
+  test('器灵：敌方修士不给加持', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    place2(s, 'B', 'qi-cultivator', 6, 5);
+    const base = s.unitTypes['cultivation-artifact-wood'].armor;
+    assert.equal(effectiveStats(s, sword).armor, base, '敌人的神识不会替你御剑');
+    assert.equal(movePower(s, sword), 2, '也不会让你的飞剑走得快');
+  });
+
+  test('温养：半径内己方修士才回血，按最高境界算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    assert.equal(warmNourishHeal(s, sword), 0, '没修士就没得养');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    assert.equal(warmNourishHeal(s, sword), 1, '0 级修士回 1 点');
+
+    addExp(qi, s, expForRank(4)); // rank 5
+    assert.equal(warmNourishHeal(s, sword), 3, '5 级修士回 1 + ⌊5/2⌋ = 3 点');
+
+    // 出了温养半径（2 格）就断粮——注意它和"神识"是两个半径
+    qi.x = 5 + (WARM_NOURISH_RADIUS + 1);
+    assert.equal(warmNourishHeal(s, sword), 0, '离远了就不养了');
+  });
+
+  test('温养：回合开始真的回血，敌方修士不算', () => {
+    let s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    addExp(qi, s, expForRank(4)); // rank 5 → 每回合 3 点
+    place2(s, 'B', 'militia', 1, 1); // 留个对手，免得结束回合直接判胜
+    sword.hp = 10;
+
+    let r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    r = applyAction(r.state, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const back = r.state.units.find((u) => u.id === sword.id);
+    assert.ok(back, '青木剑还该在场上');
+    assert.equal(back!.hp, 13, '一个完整回合后该被养回 3 点');
+
+    // 敌方修士不该养
+    const s2 = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s2.units = [];
+    s2.current = 'A';
+    const mine = place2(s2, 'A', 'cultivation-artifact-wood', 5, 5);
+    place2(s2, 'B', 'qi-cultivator', 6, 5);
+    assert.equal(warmNourishHeal(s2, mine), 0, '别人的修士不会替你养剑');
+  });
+
+  test('剑气环：半径 2 内友军攻击 +15%', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const mate = place2(s, 'A', 'spearman', 6, 5);
+
+    // 先量基准：把剑挪到半径**之外**（距离按"剑到兵的格数"算，不是从原位置算）
+    sword.x = mate.x + SWORD_QI_RADIUS + 1;
+    const plain = effectiveStats(s, mate).atk;
+    assert.equal(plain, s.unitTypes['spearman'].atk, '出了半径就只剩本体攻击');
+
+    // 挪回半径内
+    sword.x = mate.x - 1;
+    const buffed = effectiveStats(s, mate).atk;
+    assert.equal(
+      buffed,
+      Math.round(plain * (1 + SWORD_QI_ATK_PCT)),
+      `半径内该 +${Math.round(SWORD_QI_ATK_PCT * 100)}%`,
+    );
+    assert.ok(buffed > plain, '加成果然生效了');
+  });
+
+  test('青木剑产地：相邻森林 或 2 块己方灵田', () => {
+    const mk = () => {
+      const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+      s.units = [];
+      s.current = 'A';
+      s.players.A.res = { [SPIRIT_STONE]: 300 };
+      // 把炉子附近摊平，免得默认地形里正好有林子
+      for (let y = 3; y <= 7; y++) {
+        for (let x = 3; x <= 7; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+      }
+      return s;
+    };
+    const v = (s: GameState, forge: { id: string }) =>
+      produceAt(s, { kind: 'camp', camp: s.units.find((u) => u.id === forge.id)! }, s.unitTypes['cultivation-artifact-wood']);
+
+    // 1) 空地：两个条件都不满足
+    {
+      const s = mk();
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      const r = v(s, forge);
+      assert.equal(r.ok, false, '什么都没有就不该造得出来');
+      assert.ok(r.ok ? '' : /森林/.test(r.reason), '理由里要提森林');
+    }
+    // 2) 挨着森林：满足
+    {
+      const s = mk();
+      s.tiles[4 * s.w + 5] = { terrain: 'forest', cityId: null };
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, true, '挨着森林就该能造');
+    }
+    // 3) 只有一块灵田：不够
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, false, '一块灵田不够');
+    }
+    // 4) 两块灵田：够
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      place2(s, 'A', 'cultivation-spirit-field', 6, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, true, '两块灵田也够');
+    }
+    // 5) 一块是自己的、一块是敌人的：敌田不算
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      place2(s, 'B', 'cultivation-spirit-field', 6, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, false, '敌方灵田不该给你的炉子供灵');
+    }
   });
 
   test('法器只认点名要造它的产兵建筑：军营连灰都不该列', () => {

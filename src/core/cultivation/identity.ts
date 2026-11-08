@@ -49,6 +49,10 @@ export const UNIT_IDS = {
 const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
+  // 灵体也算修士：它是修士死后所化，神识还在（vision 3）。
+  // 法器靠"修士的神识"吃饭，若不认它，就出现"师傅变成灵体飘在旁边，
+  // 弟子的飞剑当场掉地上"这种谁都没想到的场面。
+  UNIT_IDS.SPIRIT,
   UNIT_IDS.BODY_CULTIVATOR,
   UNIT_IDS.BLOOD_CULTIVATOR,
 ]);

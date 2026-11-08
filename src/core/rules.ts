@@ -106,6 +106,7 @@ import type {
   Element,
   FallenRecord,
   GameState,
+  NearSpec,
   OrderDirective,
   SkillDef,
   PlayerId,
@@ -192,12 +193,12 @@ export function adjacentToWater(s: GameState, x: number, y: number): boolean {
  */
 export function adjacentRequirementOf(
   def: UnitTypeDef,
-): { terrain: Terrain[]; unit: string[] } | null {
+): NearSpec | null {
   if (def.adjacent) {
     const terrain = def.adjacent.terrain ?? [];
     const unit = def.adjacent.unit ?? [];
     if (terrain.length === 0 && unit.length === 0) return null;
-    return { terrain, unit };
+    return { terrain, unit, count: def.adjacent.count };
   }
   if (def.requiresWater) return { terrain: WATER_TERRAINS, unit: [] };
   return null;
@@ -215,7 +216,10 @@ export function adjacentRequirementText(
 ): string | null {
   const adj = adjacentRequirementOf(def);
   if (!adj) return null;
-  const names = [...adj.terrain.map((t) => CONFIG.terrainName[t]), ...adj.unit.map(nameOf)];
+  const names = [
+    ...(adj.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(adj.unit ?? []).map(nameOf),
+  ];
   return `必须紧邻${names.join('或')}`;
 }
 
@@ -825,38 +829,72 @@ export function distToCity(unit: { x: number; y: number }, city: City): number {
  * 两处如果各写一遍，"2×2 的建筑一半压在山脊上"这种边界迟早会算出两个答案
  * ——玩家看到的是"炉子明明靠着山，怎么说没有森林"。
  */
-function adjacentHit(
+/**
+ * 一块占地 n×n 的地，命中了多少**不同**的邻里目标。
+ *
+ * 数"目标"而不是"格数"：2×2 的炉子四邻会重复看到同一块灵田，
+ * 按格数会数成两块，于是玩家遇到"我明明只有一块灵田，怎么就能造了"。
+ * 地形按坐标去重、单位按 id 去重，两种命中合在一个计数里
+ * （spec 只写一种时，就是那种东西的个数）。
+ *
+ * 单位按**阵营**过滤：敌方灵田不该给你的炉子供灵。以前这里不判阵营，
+ * "挨着敌方军营"这类要求会稀里糊涂地被敌人满足。
+ */
+function nearSpecCount(
   s: GameState,
-  tx: number,
-  ty: number,
-  spec: { terrain: Terrain[]; unit: string[] },
-): boolean {
-  const tile = tileAt(s, tx, ty);
-  if (tile && spec.terrain.includes(tile.terrain)) return true;
-  const here = unitAt(s, tx, ty);
-  if (here && spec.unit.includes(here.type)) return true;
-  return DIRS.some(([dx, dy]) => {
-    const nb = tileAt(s, tx + dx, ty + dy);
-    if (nb && spec.terrain.includes(nb.terrain)) return true;
-    const nu = unitAt(s, tx + dx, ty + dy);
-    return !!nu && spec.unit.includes(nu.type);
-  });
+  x: number,
+  y: number,
+  n: number,
+  spec: NearSpec,
+  owner: PlayerId,
+): number {
+  const terrain = spec.terrain ?? [];
+  const units = spec.unit ?? [];
+  if (terrain.length === 0 && units.length === 0) return 0;
+  const hits = new Set<string>();
+  const look = (tx: number, ty: number): void => {
+    if (!inBounds(s, tx, ty)) return;
+    const tile = tileAt(s, tx, ty);
+    if (tile && terrain.includes(tile.terrain)) hits.add(`t:${tx},${ty}`);
+    const u = unitAt(s, tx, ty);
+    if (u && u.owner === owner && units.includes(u.type)) hits.add(`u:${u.id}`);
+  };
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      look(tx, ty);
+      for (const [ox, oy] of DIRS) look(tx + ox, ty + oy);
+    }
+  }
+  return hits.size;
 }
 
-/**
- * 一个占地 n×n 的大家伙贴不贴着这些地形/单位。
- *
- * 和 `adjacentHit` 的分工：那个回答"这一格满不满足"，这个回答"整块地满不满足"
- * ——2×2 的炉子只要有一格挨着森林就算挨着。
- */
+/** 一组邻里要求满不满足（`count` 默认 1 = 有其中之一就够了） */
 function adjacentSatisfied(
   s: GameState,
   x: number,
   y: number,
   n: number,
-  spec: { terrain: Terrain[]; unit: string[] },
+  spec: NearSpec,
+  owner: PlayerId,
 ): boolean {
-  return tilesOfFootprint(x, y, n, (tx, ty) => adjacentHit(s, tx, ty, spec));
+  return nearSpecCount(s, x, y, n, spec, owner) >= (spec.count ?? 1);
+}
+
+/**
+ * 一条邻里要求怎么说给玩家听：`森林`、`2 个灵田`。
+ *
+ * 产地条件（produceAt 的拒绝理由）和兵种说明（info.ts）共用一份：
+ * 两处各写一遍就会出现"面板说缺 2 块灵田、点下去只说缺灵田"这种对不上的提示。
+ */
+export function nearSpecText(spec: NearSpec, nameOf: (id: string) => string): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(spec.unit ?? []).map(nameOf),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
 }
 
 
@@ -1537,7 +1575,9 @@ export function movePower(s: GameState, unit: Unit): number {
   if (sealFlat.value > 0) move = Math.max(0, move - sealFlat.value);
 
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
+    if (e.hooks.modifyMove) {
+      move = e.hooks.modifyMove({ state: s, unit, move, visionOf: (x) => visionOf(s, x) });
+    }
   }
   // 钩子返回 0 = 这一回合动不了（封冻的海军）。
   move -= unit.moveSpent ?? 0; 
@@ -1788,7 +1828,16 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
       const before = armor;
-      armor = e.hooks.modifyArmor({ state: s, attacker: u, defender: u, armor, isCounter: false });
+      armor = e.hooks.modifyArmor({
+        state: s,
+        attacker: u,
+        defender: u,
+        armor,
+        isCounter: false,
+        // 查自己直接给当前值：否则「按友军护甲加甲」那条钩子会转回来再算一次自己
+        armorOf: (x) => (x.id === u.id ? armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
       if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
     }
   }
@@ -1837,7 +1886,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyMove) {
         const before = moveNow;
-        moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
+        moveNow = e.hooks.modifyMove({
+        state: s,
+        unit: u,
+        move: moveNow,
+        visionOf: (x) => visionOf(s, x),
+      });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
     }
@@ -2466,7 +2520,15 @@ export function computeDamage(
   // 小型扩展
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
-      ctx.armor = e.hooks.modifyArmor({ state: s, attacker, defender, armor: ctx.armor, isCounter });
+      ctx.armor = e.hooks.modifyArmor({
+        state: s,
+        attacker,
+        defender,
+        armor: ctx.armor,
+        isCounter,
+        armorOf: (x) => (x.id === defender.id ? ctx.armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
     }
   }
 
@@ -4218,7 +4280,7 @@ export function buildSiteError(
   // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
   // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
   const adjacent = adjacentRequirementOf(def);
-  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent)) {
+  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent, builder.owner)) {
     return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
   }
 
@@ -4263,20 +4325,6 @@ export function buildSiteError(
  *
  * 选址里"临水""是不是全是陆地"这类条件说的都是整块地，不是锚点那一格。
  */
-function tilesOfFootprint(
-  x: number,
-  y: number,
-  n: number,
-  test: (tx: number, ty: number) => boolean,
-): boolean {
-  for (let dy = 0; dy < n; dy++) {
-    for (let dx = 0; dx < n; dx++) {
-      if (test(x + dx, y + dy)) return true;
-    }
-  }
-  return false;
-}
-
 /** 这一格的坐标写法，日志里到处用 */
 function cellName(x: number, y: number): string {
   return `${String.fromCharCode(65 + x)}${y + 1}`;
@@ -4574,19 +4622,22 @@ export function produceAt(
     const allowed = canProduce(campDef, target);
     if (!allowed.ok) return allowed;
 
-    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）
+    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）。
+    //
+    // 支持**数组**（任一满足）：青木剑要的"相邻森林 或 2 块灵田"就是两条并列。
+    // 单条 spec 里的 `count` 是"至少几个"，所以第二块灵田那条写 count: 2。
     const near = target.produceNear;
     if (near) {
-      const spec = { terrain: near.terrain ?? [], unit: near.unit ?? [] };
-      if (spec.terrain.length + spec.unit.length > 0) {
-        const n = footprintOf(s, source.camp);
-        if (!adjacentSatisfied(s, source.camp.x, source.camp.y, n, spec)) {
-          const names = [
-            ...spec.terrain.map((t) => CONFIG.terrainName[t]),
-            ...spec.unit.map((id) => s.unitTypes[id]?.name ?? id),
-          ];
-          return { ok: false, reason: `${target.name}要在${names.join('或')}旁边才造得出来` };
-        }
+      const specs = Array.isArray(near) ? near : [near];
+      const n = footprintOf(s, source.camp);
+      const ok = specs.some((sp) =>
+        adjacentSatisfied(s, source.camp.x, source.camp.y, n, sp, owner),
+      );
+      if (!ok) {
+        const need = specs
+          .map((sp) => nearSpecText(sp, (id) => s.unitTypes[id]?.name ?? id))
+          .join('，或 ');
+        return { ok: false, reason: `${target.name}要在${need}旁边才造得出来` };
       }
     }
   }

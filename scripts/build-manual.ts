@@ -65,7 +65,6 @@ import { BODY_WARD_BASE, BODY_WARD_TIERS } from '../src/core/cultivation/abiliti
 import {
   BLOOD_RITE_RADIUS_BASE,
   BLOOD_RITE_RADIUS_STEP,
-  BLOOD_RITE_EXP_PER_DAMAGE,
   BLOOD_RITE_EXP_DECAY,
   BLOOD_RITE_ALLY_EXP_MUL,
   BLOOD_RITE_LIFESPAN_COST,
@@ -109,6 +108,15 @@ import {
   ARTIFACT_WATER,
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
+import {
+  ARTIFACT_SPIRIT_ID,
+  ARTIFACT_SPIRIT_LABEL,
+  WARM_NOURISH_BASE,
+  WARM_NOURISH_ID,
+  WARM_NOURISH_LABEL,
+  WARM_NOURISH_RADIUS,
+} from '../src/core/cultivation/artifacts.ts';
+import { SWORD_QI_ATK_PCT, SWORD_QI_RADIUS } from '../src/core/cultivation/abilities/artifact-auras.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -488,18 +496,17 @@ function traitsOf(u: UnitTypeDef): string {
   // 产地要求：法器那类"挨着什么才造得出来"的兵，表格里必须写清楚，
   // 否则玩家看到一件四代法器只会以为它能从城市造出来。
   if (u.produceNear) {
-    const near = [
-      ...(u.produceNear.terrain ?? []).map((t) => terrainName(t)),
-      ...(u.produceNear.unit ?? []).map((id) => manualNameOf(id)),
-    ];
+    const specs = Array.isArray(u.produceNear) ? u.produceNear : [u.produceNear];
+    const near = specs.map(nearText).filter(Boolean);
     if (near.length > 0) {
+      const label = near.join(' 或 ');
       const key = dynamicTerm(
         `near-${slug(u.id)}`,
-        `产地 ${near.join('或')}`,
-        `造它的时候，产兵点的占地和四邻里必须有${near.join('或')}。`,
+        `产地 ${label}`,
+        `造它的时候，产兵点的占地和四邻里必须有${label}。`,
         '它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。',
       );
-      parts.push(ref(key, `产地 ${near.join('或')}`));
+      parts.push(ref(key, `产地 ${label}`));
     }
   }
   // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
@@ -558,6 +565,21 @@ function traitsOf(u: UnitTypeDef): string {
 
 function terrainName(id: string): string {
   return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? id;
+}
+
+/**
+ * 一条产地要求怎么印：`森林`、`2 个灵田`。
+ *
+ * 和规则层的 nearSpecText 同一个口径（连拒绝理由的措辞都对得上），
+ * 只是名字表用手册自己那份——手册要覆盖不在本局兵种表里的扩展兵种。
+ */
+function nearText(spec: { terrain?: string[]; unit?: string[]; count?: number }): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => terrainName(t)),
+    ...(spec.unit ?? []).map((id) => manualNameOf(id)),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
 }
 
 const COLUMNS = ['名称', '图标', '造价', '攻', '甲', '血', '移', '射', '视', '特性'];
@@ -2582,6 +2604,14 @@ function pct(x: number): number {
 function cultivationRules(): string {
   const unlocks = cultivationUnlocksByRank();
 
+  // 青木剑的产地是"或"两条（森林 / 2 块灵田），拼文案和面板同一口径
+  const woodNear = (
+    Array.isArray(ARTIFACT_WOOD.produceNear) ? ARTIFACT_WOOD.produceNear : [ARTIFACT_WOOD.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
   // 「战斗历练」表里的参照目标：三代戟兵。
   // 代价是规则书会跟着本体数值走——戟兵改攻击力，"单次"那两列自动变。
   const refKillUnit = UNIT_TYPES['halberdier'];
@@ -2805,12 +2835,39 @@ function cultivationRules(): string {
           ${ARTIFACT_FIRE.name}。高代炉子的价值是<b>多一种材料</b>，不是把旧法器做得更强。</li>
         <li><b>法器只能由炉子造</b>：城市产线里没有它们。想造就得先盖炉子。</li>
         <li><b>挨着什么就出什么</b>：每件法器都有产地要求，看的是炉子的占地和它自己的四邻——
-          ${ARTIFACT_WOOD.name}要森林，${ARTIFACT_STONE.name}要高山或丘陵，
+          ${ARTIFACT_WOOD.name}要<b>${woodNear}</b>，${ARTIFACT_STONE.name}要高山或丘陵，
           ${ARTIFACT_WATER.name}要水面，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
-          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。</li>
+          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。
+          数"几块灵田"时只认<b>自己的</b>田，敌人的不算。</li>
         <li><b>条件不满足时会灰着列出来</b>，并写清缺什么（"附近没有森林"），
           所以"该把炉子挪到哪儿"是能学会的，不是靠猜。</li>
         <li><b>一回合一件</b>：没有生产间隔，但一座炉子同时只出一件；想量产就多盖几座。</li>
+      </ul>
+
+      <h3>法器的两条公共规则</h3>
+      <p>法器不是活人：它不修炼、不吃灵气滋养、也不会自己找路。所以每一件都带着这两条：</p>
+      <ul>
+        <li>${ref('ab-' + ARTIFACT_SPIRIT_ID, ARTIFACT_SPIRIT_LABEL)}——<b>得有人在看着</b>。
+          出了己方修士的<b>神识范围</b>（就是那位修士的视野圈），移动力<b>减半</b>（至少留 1 格，
+          不会彻底动不了）；站在神识里，护甲额外加上<b>范围内护甲最高的那位修士的一半</b>。
+          多个修士只按最强的算，不叠乘；死掉的修士不算，敌人的神识也不算。</li>
+        <li>${ref('ab-' + WARM_NOURISH_ID, WARM_NOURISH_LABEL)}——<b>贴着修士就能自己复原</b>。
+          回合开始时，半径 ${WARM_NOURISH_RADIUS} 格内只要有己方修士，就回
+          <b>${WARM_NOURISH_BASE} + ⌊最高境界 ÷ 2⌋</b> 点生命（0 级养 1 点、9 级养 5 点）。
+          没有这一条，法器就是一次性消耗品，掉的血永远回不来。</li>
+      </ul>
+
+      <h3>青木剑</h3>
+      <p>一件飞剑。射程 <b>${ARTIFACT_WOOD.range}</b> 格，比同代的任何近战都远——
+        所以它能站在对方的攻击范围之外开火，<b>对方够不着，就还不了手</b>。
+        代价是血薄甲薄（${ARTIFACT_WOOD.maxHp} 血 / ${ARTIFACT_WOOD.armor} 甲），
+        离开修士的护持就废掉一半：这就是「器灵」要表达的东西。</p>
+      <ul>
+        <li><b>剑气环</b>：半径 ${SWORD_QI_RADIUS} 格内友军攻击 <b>+${Math.round(SWORD_QI_ATK_PCT * 100)}%</b>。
+          按比例而不是点数，所以对杂兵和重甲兵都一样是 15%。同类光环重叠时<b>取最强的一条</b>，
+          两把剑不会变成 +30%。</li>
+        <li><b>造价</b>：${ARTIFACT_WOOD.cost} 金 + ${ARTIFACT_WOOD.costRes?.['spirit-stone'] ?? 0} 灵石。
+          比同代骑兵贵一半左右——贵的是射程和光环，不是面板上的攻甲血。</li>
       </ul>
       <p class="era-meta">注：炉子和军营一样按<b>自己的档位</b>出兵，不随后方城市换代。
         盖房子也要看工匠的档位：二代的仆役只能起${FORGE_1.name}，想立${FORGE_3.name}，

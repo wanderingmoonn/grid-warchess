@@ -6,6 +6,8 @@ import type { UnitTypeDef } from '../types.ts';
 import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
+import { ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID } from './artifacts.ts';
+import { SWORD_QI_ID } from './abilities/artifact-auras.ts';
 import { GOLD } from '../resources.ts';
 
 //灵体
@@ -351,16 +353,32 @@ export const ARTIFACT_WOOD: UnitTypeDef = {
   era: 2,
   category: 'combat',
   campOnly: true,
-  cost: 90,
-  costRes: { 'spirit-stone': 4 },
-  move: 3,
-  atk: 11,
-  armor: 1,
-  maxHp: 18,
-  range: 1,
-  vision: 2,
-  // 林中取材：贴着森林才炼得出来
-  produceNear: { terrain: ['forest'] },
+  artifact: true,
+  cost: 150,
+  costRes: { 'spirit-stone': 10 },
+  /*
+   * 一件"飞剑"：跑得快、打得远，但血薄甲薄。
+   *
+   * 数值比同代兵略高一档（骑士 17/4/40 攻甲血、移 3 射 1），贵出来的部分是
+   * 射程 3 和「剑气环」——前者让它能站在近战射程外开火（对方够不着就不能反击），
+   * 后者让它成为一小团兵的火力核心。真正限制它的是造价和产地，不是数值。
+   */
+  move: 4,
+  atk: 18,
+  armor: 3,
+  maxHp: 36,
+  range: 3,
+  vision: 3,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID],
+  /*
+   * 两种产地，满足其一就行：
+   *   · 挨着森林——"林中取材"，最直白的一条；
+   *   · 或者挨着两块灵田——灵木得靠灵气养，宗门有田也能凑出来。
+   *
+   * 第二条是"数量条件"（count: 2），不是"挨着两块田其中一块"。
+   * 它让"没森林但田多"的开局也造得出青木剑，不至于整条木系被地形锁死。
+   */
+  produceNear: [{ terrain: ['forest'] }, { unit: [UNIT_IDS.SPIRIT_FIELD], count: 2 }],
 };
 
 export const ARTIFACT_STONE: UnitTypeDef = {
@@ -370,6 +388,7 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   era: 2,
   category: 'combat',
   campOnly: true,
+  artifact: true,
   cost: 110,
   costRes: { 'spirit-stone': 6 },
   move: 1,
@@ -378,6 +397,7 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   maxHp: 36,
   range: 1,
   vision: 2,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
   produceNear: { terrain: ['mountain', 'hill'] },
 };
 
@@ -388,6 +408,7 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   era: 3,
   category: 'combat',
   campOnly: true,
+  artifact: true,
   cost: 150,
   costRes: { 'spirit-stone': 8 },
   move: 2,
@@ -396,6 +417,7 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   maxHp: 22,
   range: 3,
   vision: 4,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
   produceNear: { terrain: ['water', 'shallow'] },
 };
 
@@ -406,6 +428,7 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   era: 4,
   category: 'combat',
   campOnly: true,
+  artifact: true,
   cost: 200,
   costRes: { 'spirit-stone': 12 },
   move: 2,
@@ -416,6 +439,7 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   vision: 3,
   // 炸开一小片：珠子碎了就是一团火
   splash: 1,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
   // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
   produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };

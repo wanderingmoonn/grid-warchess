@@ -1,6 +1,12 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import type { GameState, Unit } from '../types.ts';
 import { isCultivatorUnit, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
+import {
+  ARTIFACT_MOVE_MUL,
+  artifactArmorBonus,
+  cultivatorsCovering,
+  isArtifact,
+} from './artifacts.ts';
 import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
 import { 
   atkModifier, 
@@ -88,7 +94,18 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
     return atk + Math.floor(atkModifier(unit) * mul);
   },
 	// 护甲修正
-	modifyArmor: ({ state, defender, armor }) => {
+	modifyArmor: ({ state, defender, armor, armorOf, visionOf }) => {
+		// 法器：神识范围内按修士护甲加甲（「器灵」）。
+		// 取范围内**护甲最高**的那位的一半，不叠加——堆修士不该变成乘法收益。
+		if (isArtifact(state, defender)) {
+			const bonus = artifactArmorBonus(
+				state,
+				defender,
+				visionOf ?? (() => 0),
+				armorOf ?? (() => 0),
+			);
+			return armor + bonus;
+		}
 		if (!isCultivatorUnit(state, defender)) return armor;
 		return Math.max(0, armor + armorModifier(defender));
 	},
@@ -128,7 +145,16 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		return splash+SplashModifier(attacker);
 	},
 	// 移动修正
-	modifyMove: ({ state, unit, move }) => {
+	modifyMove: ({ state, unit, move, visionOf }) => {
+		// 法器：出了己方修士的神识就减半（「器灵」）。
+		// 留 1 格保底——移动力被减速压到 1 时再减半会变成 0，
+		// 那不是"飞剑掉地上"，那是"这件东西被永久钉死了"。
+		if (isArtifact(state, unit)) {
+			if (move <= 0) return move;
+			const watched = visionOf ? cultivatorsCovering(state, unit, visionOf).length > 0 : false;
+			if (watched) return move;
+			return Math.max(1, Math.floor(move * ARTIFACT_MOVE_MUL));
+		}
 		if (!isCultivatorUnit(state, unit)) return move;
 		return move + moveModifier(unit);
 	},
