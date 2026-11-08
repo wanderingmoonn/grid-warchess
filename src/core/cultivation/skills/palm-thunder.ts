@@ -46,7 +46,7 @@ export const PALM_THUNDER_SKILL: SkillDef = {
   name: '掌心雷',
   summary:
     `射程 ${PALM_THUNDER_RANGE} 格，对一名敌人造成 ${PALM_THUNDER_BASE} + 境界×${PALM_THUNDER_PER_RANK} 点伤害（无视护甲）；` +
-    `耗 ${PALM_THUNDER_COST} 灵力，灵力够就能连着放。`,
+    `耗 ${PALM_THUNDER_COST} 灵力。`,
   effect: 'palm-thunder',
   cooldown: 0,
   /*
