@@ -2570,9 +2570,9 @@ check('军营面板列出兵种，并写清自己是哪一档', () => {
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
   // 2026-11-08：营按自己的档位出兵，不再"补给来自某座城"。
   // 这里是城升到了二级、营还是一级，所以面板必须写一级，而不是跟着城写铁器。
-  assert.ok(html.includes('档位'), '应该写清这座营自己的档位');
-  assert.ok(html.includes('青铜'), '一级营就是青铜档位——不随后方城市变化');
-  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的档位');
+  assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
+  assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
+  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
@@ -2620,7 +2620,7 @@ check('敌军军营不给你产兵，并提示打掉它', () => {
   });
 
   assert.equal(host.querySelectorAll('.recruit-btn').length, 0, '敌方军营不该给产兵按钮');
-  assert.ok(host.innerHTML.includes('打掉'), '应该提示这是敌方补给点');
+  assert.ok(host.innerHTML.includes('产兵建筑'), '应该提示这是敌方的产兵点');
 });
 
 console.log('\n渡船面板');

@@ -34,7 +34,6 @@ import {
   buildSiteError,
   canStrike,
   cityById,
-  citiesOf,
   coversTile,
   distance,
   distToCity,
@@ -45,10 +44,10 @@ import {
   heroSkillsOf,
   reachableTiles,
   rebuildCost,
+  produceAt,
   recruitPriceOf,
   recruitResCost,
   recruitSpawnCells,
-  supplyEraAt,
   tileAt,
   underConstruction,
   unitAt,
@@ -58,10 +57,9 @@ import {
 } from '../../src/core/rules.ts';
 import { CONFIG } from '../../src/core/config.ts';
 import { canHold, holdOf, holdRoom } from '../../src/core/carry.ts';
-import { canUseType, eraWindowOk } from '../../src/core/draft.ts';
+import { canUseType } from '../../src/core/draft.ts';
 import { canPay } from '../../src/core/resources.ts';
 import {
-  canProduce,
   isProducer,
   produceCooldownLeft,
   produceCostScale,
@@ -196,7 +194,9 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
     if (city.ruined) continue;
     if (city.capturedTurn === s.turn) continue;
     for (const def of typesUpTo(city.era)) {
-      if (!eraWindowOk(s, def, city.era)) continue;
+      // 和规则层同一条判据：campOnly 的（法器）城市产线不供，光看时代会枚举出
+      // 一堆"点下去被拒"的动作。produceAt 里已经含了时代与选卡名单。
+      if (!produceAt(s, { kind: 'city', city }, def).ok) continue;
       if (heroBlocked(s, seat, def)) continue;
       if (!canPay(s.players[seat], costOf(def, 1))) continue;
       const slots = slotsFor(city.id, undefined, def);
@@ -206,22 +206,24 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
   }
 
   // ── 产兵（军营这类野外产兵点）───────────────────────────────────────
-  const ownCities = citiesOf(s, seat);
-  if (ownCities.length > 0) {
-    for (const u of mine) {
-      const campDef = utype(s, u.type);
-      if (!isProducer(campDef)) continue;
-      if (underConstruction(u)) continue;
-      if (produceCooldownLeft(s, u, campDef) > 0) continue;
-      const costScale = produceCostScale(campDef);
-      for (const def of typesUpTo(u.era ?? 9)) {
-        if (!canProduce(campDef, def).ok) continue;
-        if (!eraWindowOk(s, def, u.era ?? 0)) continue;
-        if (heroBlocked(s, seat, def)) continue;
-        if (!canPay(s.players[seat], costOf(def, costScale))) continue;
-        if (slotsFor(undefined, u.id, def).length === 0) continue;
-        out.push({ type: 'RECRUIT', unitId: u.id, unitType: def.id });
-      }
+  // 产兵建筑按**自己的档位**出兵，有没有城市都不影响（2026-11-08 删掉"军工供货"）。
+  // 以前这里用 `ownCities.length > 0` 包着，等于把"孤军营补兵"判成非法动作——
+  // 合法动作表比规则窄，自博弈会学出"没城就别补兵"这种假规律。
+  for (const u of mine) {
+    const campDef = utype(s, u.type);
+    if (!isProducer(campDef)) continue;
+    if (underConstruction(u)) continue;
+    if (produceCooldownLeft(s, u, campDef) > 0) continue;
+    const costScale = produceCostScale(campDef);
+    const campEra = campDef.era;
+    for (const def of typesUpTo(campEra)) {
+      // 白名单之外还有产地条件（炼器炉挨着森林才出木器），所以问 produceAt，
+      // 不能只问 canProduce——后者回答不了"这座炉子现在能造什么"。
+      if (!produceAt(s, { kind: 'camp', camp: u }, def).ok) continue;
+      if (heroBlocked(s, seat, def)) continue;
+      if (!canPay(s.players[seat], costOf(def, costScale))) continue;
+      if (slotsFor(undefined, u.id, def).length === 0) continue;
+      out.push({ type: 'RECRUIT', unitId: u.id, unitType: def.id });
     }
   }
 
@@ -260,12 +262,11 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
        * 实测剩下的 0.27% 跳过**全是桥**，769 步里没有例外。
        */
       const reach = bdef.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
-      // doBuild 会先问一句"这个产兵点在当前时代建起来有没有用"，
-      // 没用直接拒（提前修七代船坞 = 花 460 金买块石头）。
-      // 注意问的是**落点**的时代供货，不是工兵脚下那格——doBuild 用的是
-      // `supplyEraAt(s, s.current, { x, y })`，所以这一句必须放进格子循环里。
-      const eraOk = (x: number, y: number): boolean =>
-        produceUsableCount(bdef, s.unitTypes, supplyEraAt(s, seat, { x, y })) !== 0;
+      // doBuild 会先问一句"这个产兵点建起来有没有用"，没用直接拒
+      // （提前修七代船坞 = 花 460 金买块石头）。
+      // 2026-11-08 起产兵建筑按**自己的档位**出兵，不再看落点附近城市的时代，
+      // 所以这个判据与坐标无关，提到循环外面算一次就够。
+      const eraOk = produceUsableCount(bdef, s.unitTypes, bdef.era) !== 0;
       for (let dy = -reach; dy <= reach; dy++) {
         for (let dx = -reach; dx <= reach; dx++) {
           if (dx === 0 && dy === 0) continue;
@@ -278,7 +279,7 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
           const site = s.units.find(
             (o) => o.type === buildId && o.owner === seat && underConstruction(o) && coversTile(s, o, x, y),
           );
-          if (!eraOk(x, y)) continue;
+          if (!eraOk) continue;
           if (!site && !canPay(s.players[seat], recruitResCost(s, seat, bdef))) continue;
           out.push({ type: 'BUILD', unitId: u.id, unitType: buildId, x, y });
         }
