@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -44,6 +44,7 @@ import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/i
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
 import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
+import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -889,6 +890,12 @@ export function run() {
     assert.deepEqual([at(mate.id).x, at(mate.id).y], [10, 5], '源侧 +矢量');
     assert.deepEqual([at(foe.id).x, at(foe.id).y], [6, 5], '落点侧 −矢量');
     assert.equal(r.state.players.A.res![SPIRIT_STONE], 90, '扣 10 灵石');
+    // 传送一旦放出去就收不回来了：界面靠这个字段清空撤回栈
+    assert.equal(r.irreversible, true, '成功的传送也要封死撤回');
+    assert.ok(
+      r.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '成败都该在战报里留一句「撼动了时空结构」',
+    );
   });
 
   test('传送阵：失败也照扣灵石，而且这一回合不能再传', () => {
@@ -907,6 +914,11 @@ export function run() {
     });
     assert.ok(bad.ok, '失败仍然算作一次施放（否则灵石白扣还不用付代价）');
     assert.equal(bad.state.players.A.res![SPIRIT_STONE], 90, '失败照扣灵石');
+    assert.equal(bad.irreversible, true, '失败的传送同样撤不回来，否则惩罚等于不存在');
+    assert.ok(
+      bad.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '失败时战报也要留一句「撼动了时空结构」',
+    );
 
     const again = applyAction(bad.state, {
       type: 'HERO_SKILL',
@@ -919,6 +931,29 @@ export function run() {
     assert.ok(
       again.ok ? '' : /已经放过技能/.test(again.reason),
       `拒绝理由要说清是本回合用过了：${again.ok ? '' : again.reason}`,
+    );
+  });
+
+  test('传送阵：灵石不足根本没放成，不扣钱也不封撤回', () => {
+    // "撤不回来"只对**真的放出去**的那一次成立。钱不够时技能被拒在门口，
+    // 什么都没发生——这时候还把撤回栈清掉就是白白惩罚手滑。
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: TELEPORT_COST - 1 };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.equal(r.ok, false, '灵石不够就该拒绝');
+    assert.equal(s.players.A.res![SPIRIT_STONE], TELEPORT_COST - 1, '没放成就不该扣钱');
+    assert.ok(
+      !s.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '没放成不该留「撼动了时空结构」的痕',
     );
   });
 
@@ -1162,6 +1197,76 @@ export function run() {
 
     const selfTarget = previewer!({ state: s, self: arr, target: { x: 5, y: 5 } });
     assert.equal(selfTarget.length, 0, '落在自己身上等于没传，不给预览');
+  });
+
+  // ── 炼器（2026-11-08）──────────────────────────────
+
+  test('炼器：白名单 + campOnly + 产地条件，一条链判完', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+
+    // 铺一块平地，只在 (5,5) 留一格森林
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.tiles[5 * s.w + 5] = { terrain: 'forest', cityId: null };
+
+    const forge = place2(s, 'A', 'cultivation-forge-1', 5, 4); // 挨着森林
+    const bare = place2(s, 'A', 'cultivation-forge-1', 8, 8); // 什么都不挨着
+    const city = citiesOf(s, 'A')[0]!;
+    city.era = 4;
+
+    const v = (src: any, id: string) => produceAt(s, src, s.unitTypes[id]);
+
+    // 白名单：炉子不造普通兵
+    assert.equal(v({ kind: 'camp', camp: bare }, 'militia').ok, false, '炼器炉不该造民兵');
+    // 产地：同一座炉子，有森林能出、没有就出不了
+    assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-wood').ok, true, '挨着森林该能出青木剑');
+    const noForest = v({ kind: 'camp', camp: bare }, 'cultivation-artifact-wood');
+    assert.equal(noForest.ok, false, '没有森林出不了青木剑');
+    assert.ok(noForest.ok ? '' : /森林/.test(noForest.reason), '理由要写清缺森林');
+    // 城市不产法器（campOnly）
+    const fromCity = v({ kind: 'city', city }, 'cultivation-artifact-wood');
+    assert.equal(fromCity.ok, false, '城市产线不供法器');
+    assert.ok(fromCity.ok ? '' : /产兵建筑/.test(fromCity.reason), '理由要说明只能由产兵建筑造');
+    // 白名单按档位递增：一代炉子没有寒水镜
+    assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
+  });
+
+  test('炼器：真能从林中炉造出青木剑，空地炉被规则层拒', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.tiles[5 * s.w + 5] = { terrain: 'forest', cityId: null };
+    const forge = place2(s, 'A', 'cultivation-forge-1', 5, 4);
+    const bare = place2(s, 'A', 'cultivation-forge-1', 8, 8);
+
+    const ok = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: forge.id,
+      unitType: 'cultivation-artifact-wood',
+    });
+    assert.ok(ok.ok, ok.ok ? '' : `林中炉该能造青木剑：${ok.reason}`);
+    assert.ok(
+      ok.state.units.some((u) => u.type === 'cultivation-artifact-wood'),
+      '棋盘上应该多一柄青木剑',
+    );
+
+    const denied = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: bare.id,
+      unitType: 'cultivation-artifact-wood',
+    });
+    assert.equal(denied.ok, false, '空地炉造不出青木剑');
+    assert.ok(denied.ok ? '' : /森林/.test(denied.reason), `理由要写清缺森林：${denied.ok ? '' : denied.reason}`);
   });
 
   // ── 灵气滋养 ──────────────────────────────────────────

@@ -51,7 +51,6 @@ import {
   recruitSpawnCells,
   refreshMemory,
   siegeTargets,
-  supplyEraAt,
   terrainWalkable,
   threatTiles,
   unitYieldAt,
@@ -2556,8 +2555,21 @@ function dispatch(action: Action): boolean {
     toast(result.reason);
     return false;
   }
-  undoStack.push(state);
-  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  if (result.irreversible) {
+    // 这一步撤不回来（传送阵）：清空撤回栈。
+    //
+    // 为什么是"清空整个栈"而不是"只封这一步"：撤回是一摞快照，每一步存的都是
+    // 它**之前**的整份状态。要"跳过这一步、保留更早的几步"根本做不到——更早的
+    // 快照里灵石还在，装回去照样退款。所以只有两种可能：要么整摞作废，
+    // 要么这一次施放白扣。战报里那句「传送阵撼动了时空结构」就是在说这件事。
+    //
+    // 清空之后本回合继续走子照旧可撤，只是撤不回传送之前——够用，也不会让
+    // 手滑一次就锁死整回合。
+    undoStack = [];
+  } else {
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }
   state = result.state;
   // 这一下打到了哪：记账前后差出来的格子，闪一次就散（移动/招募差值为空，自然不闪）
   noteStrikeFlash(before, state);
@@ -3497,7 +3509,9 @@ function handleAction(act: string, el: HTMLElement): void {
         refreshSelection(); // 刷新高亮
         toast(
           targeting === 'point'
-            ? '点击地图上任意位置作为落点（点自己脚下取消）'
+            ? skillDef.irreversible
+              ? '点击地图上任意位置作为落点（点自己脚下取消）；这一次施放撤不回来'
+              : '点击地图上任意位置作为落点（点自己脚下取消）'
             : '请在地图上点击要施放的方向',
         );
         render();
@@ -4421,7 +4435,7 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
     out.push({
       id: u.id,
       label: `${d.name}（${x}${u.y + 1}）· 营`,
-      era: u.era ?? supplyEraAt(state, me(), u),
+      era: d.era,
       city: false,
     });
   }

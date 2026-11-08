@@ -99,7 +99,16 @@ import {
   GUARDIAN_DRAIN_CAP_PER_RANK,
 } from '../src/core/cultivation/abilities/formation-guardian.ts';
 import { GUARD_FORMATION } from '../src/core/cultivation/units.ts';
-import { TELEPORT_COST, TELEPORT_RADIUS } from '../src/core/cultivation/skills/teleport-swap.ts';
+import { TELEPORT_COST, TELEPORT_RADIUS, TELEPORT_RIFT_LOG } from '../src/core/cultivation/skills/teleport-swap.ts';
+import {
+  FORGE_1,
+  FORGE_2,
+  FORGE_3,
+  ARTIFACT_WOOD,
+  ARTIFACT_STONE,
+  ARTIFACT_WATER,
+  ARTIFACT_FIRE,
+} from '../src/core/cultivation/units.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -210,8 +219,8 @@ const GENERIC_TERMS: Term[] = [
   {
     key: 'produce',
     name: '产兵',
-    brief: '这是一座产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。',
-    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。城市丢了，营就断了补给，产不出兵。',
+    brief: '这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。',
+    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。',
   },
   {
     key: 'air',
@@ -476,6 +485,23 @@ function traitsOf(u: UnitTypeDef): string {
     if (table.length > 0) parts.push(ref('income', `产出 ${table.join(' ')}`));
   }
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
+  // 产地要求：法器那类"挨着什么才造得出来"的兵，表格里必须写清楚，
+  // 否则玩家看到一件四代法器只会以为它能从城市造出来。
+  if (u.produceNear) {
+    const near = [
+      ...(u.produceNear.terrain ?? []).map((t) => terrainName(t)),
+      ...(u.produceNear.unit ?? []).map((id) => manualNameOf(id)),
+    ];
+    if (near.length > 0) {
+      const key = dynamicTerm(
+        `near-${slug(u.id)}`,
+        `产地 ${near.join('或')}`,
+        `造它的时候，产兵点的占地和四邻里必须有${near.join('或')}。`,
+        '它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。',
+      );
+      parts.push(ref(key, `产地 ${near.join('或')}`));
+    }
+  }
   // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
   if ((u.builds ?? []).length > 0) {
     const { names } = buildListOf(u, { nameOf: manualNameOf });
@@ -1544,13 +1570,13 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li>只能在<b>自己的城市格</b>里产兵，而且那一格必须是空的。</li>
         <li>城市能造<b>当前时代及更早的全部兵种</b>，只有上界：<b>还没解锁的时代造不了</b>（<code>def.era &gt; 城市时代</code> 直接拒绝，面板里也不会列出来）。</li>
         <li><b>旧兵不会因为升城而消失</b>：第五代的城市照样能造民兵、长枪兵。城市升级只是"多出选项"，不该让已经会造的东西反而造不出来——这条对所有模式（单机 / 联机 / 指挥官 / 选卡）一个口径。</li>
-        <li>旧兵怎么找：生产列表顶上有<b>扩展包</b>与<b>时代</b>两排筛选，加上搜索框。它们只决定"看得到什么"，不改变"能买什么"。军营按"最近一座己方城市"的时代算，规则完全一样。</li>
+        <li>旧兵怎么找：生产列表顶上有<b>扩展包</b>与<b>时代</b>两排筛选，加上搜索框。它们只决定"看得到什么"，不改变"能买什么"。产兵建筑按自己的档位算，规则见下面那几条。</li>
         <li>建筑不在城市生产列表里，得由建造单位去盖（见第 10 节）。</li>
         <li>新兵<b>当回合不能行动</b>，否则等于凭空多一次攻击。</li>
         <li><b>水军要临水</b>：城市旁边必须有一格空水面，船就下在那儿。内陆城市造不了船。</li>
-        <li><b>军营</b>是第二个产兵点：兵从营门四邻的空地出来，规则和城市完全一样，唯一的区别是<b>它自己没有时代</b>——时代取离它最近的己方城市。军营不用升级，所以前线的兵种水平跟着后方那座城走。</li>
+        <li><b>军营</b>是第二个产兵点：兵从营门四邻的空地出来，但它<b>按自己的档位出兵</b>——一档营只出一代兵，想要新兵就再扎一座新营。它不升级、也不看后方城市，城全丢了照样能补兵。</li>
         <li><b>军营必须扎在水边</b>：脚下要是平地或丘陵，四邻还要有一格水面（桥面也算，桥下就是河）。粮秣、饮水、船运都得靠水，这条同时给了水军存在的理由——补给点必然在水上，也就必然会被船盯上。</li>
-        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（青铜）→ 寨垒（铁器）→ 堡寨（火器）→ 兵站（蒸汽）→ 前进基地（机械化）</b>。越高档耐久越高、哨兵火力越强，产兵规则完全一样（时代取最近的城市）。所以"把补给点往前推"这件事，是可以跟着时代一起升级的。第六档<b>联合作战中心</b>在扩展「信息化」里，和这一代的其他建筑一样是那个包带进来的。</li>
+        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（青铜）→ 寨垒（铁器）→ 堡寨（火器）→ 兵站（蒸汽）→ 前进基地（机械化）</b>。越高档耐久越高、哨兵火力越强，能出的兵也越新——档位就是它的时代。第六档<b>联合作战中心</b>在扩展「信息化」里，和这一代的其他建筑一样是那个包带进来的。</li>
         <li><b>兵种多了有搜索框</b>：一屏超过 6 种兵时，生产列表顶上会出现一个输入框，敲名字、代号、职能（战斗 / 经济 / 建造）、
           时代或<b>扩展包名</b>都能过滤，多个词按"且"算（"奇想 弓"）。它只过滤列表，不改变能买什么。</li>
         <li><b>带徽标的就是扩展兵</b>：名字旁边那个小圆标写着它来自哪个包。原版兵不挂——
@@ -2762,7 +2788,11 @@ function cultivationRules(): string {
         <li><b>传送阵</b>：主动技能「挪移」，全图选点，把阵周围 ${TELEPORT_RADIUS} 格内的单位
           与落点周围 ${TELEPORT_RADIUS} 格内的单位<b>整体对调</b>，耗 ${TELEPORT_COST} 灵石，每回合一次。
           占地超过一格的大单位不参与；地形站不住、落点被占满时整次作废——
-          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。</li>
+          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。
+          <b>而且这一步撤不回来</b>：只要落点按下去了，灵石和这一次施放就成了定局，
+          「撤回一步」也回不到传送之前——本回合之前走过的棋会一起定死
+          （之后继续走子仍然可撤）。不管成没成，战报都会留一句「${TELEPORT_RIFT_LOG}」，
+          看见它就知道这一步已经收不回去了。</li>
         <li><b>守御阵</b>（${GUARD_FORMATION.maxHp} 血 / ${GUARD_FORMATION.armor} 护甲）：
           半径 <b>${GUARDIAN_RADIUS}</b> 内的友军——<b>包括友军建筑</b>——受到伤害时，
           这一下改由守御阵承受。<b>只转伤害，不转移「被命中」这件事</b>：原目标一滴血不掉，
@@ -2782,6 +2812,27 @@ function cultivationRules(): string {
         敌方修士路过也不算替你守阵。
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
+
+      <h3>炼器</h3>
+      <p>炼器炉不是新机制：它就是一座<b>产兵建筑</b>，和军营共用同一套白名单，
+        只是名单里全是法器。所以"炉子能造什么"完全写在兵种数据里。</p>
+      <ul>
+        <li><b>三档炉子，名单递增</b>：${FORGE_1.name}（${ERAS[FORGE_1.era - 1]?.name ?? ''}）只出
+          ${ARTIFACT_WOOD.name}、${ARTIFACT_STONE.name}；${FORGE_2.name}（${ERAS[FORGE_2.era - 1]?.name ?? ''}）
+          多认 ${ARTIFACT_WATER.name}；${FORGE_3.name}（${ERAS[FORGE_3.era - 1]?.name ?? ''}）再添
+          ${ARTIFACT_FIRE.name}。高代炉子的价值是<b>多一种材料</b>，不是把旧法器做得更强。</li>
+        <li><b>法器只能由炉子造</b>：城市产线里没有它们。想造就得先盖炉子。</li>
+        <li><b>挨着什么就出什么</b>：每件法器都有产地要求，看的是炉子的占地和它自己的四邻——
+          ${ARTIFACT_WOOD.name}要森林，${ARTIFACT_STONE.name}要高山或丘陵，
+          ${ARTIFACT_WATER.name}要水面，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
+          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。</li>
+        <li><b>条件不满足时会灰着列出来</b>，并写清缺什么（"附近没有森林"），
+          所以"该把炉子挪到哪儿"是能学会的，不是靠猜。</li>
+        <li><b>一回合一件</b>：没有生产间隔，但一座炉子同时只出一件；想量产就多盖几座。</li>
+      </ul>
+      <p class="era-meta">注：炉子和军营一样按<b>自己的档位</b>出兵，不随后方城市换代。
+        盖房子也要看工匠的档位：二代的仆役只能起${FORGE_1.name}，想立${FORGE_3.name}，
+        得先把时代推到四代、造出管事。</p>
 
       <h3>突破与生命值</h3>
       <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——

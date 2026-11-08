@@ -62,7 +62,7 @@ import {
   recruitResCost,
   siegeTargets,
   stepCostBetween,
-  supplyEraAt,
+  produceAt,
   tileAt,
   underConstruction,
   unitAt,
@@ -4341,6 +4341,12 @@ function recruitCandidate(
     // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
     if (!eraWindowOk(s, d, src.era)) return reject('时代未解锁');
     if (!canUseType(s, me, d.id)) return reject('选卡未收录');
+    // 产兵建筑的白名单与产地条件：以前这里一条都不查，AI 会在船坞里点民兵，
+    // 规则层拒掉之后整回合就白扔了。和面板、规则层共用 produceAt。
+    if (src.kind === 'camp') {
+      const camp = s.units.find((u) => u.id === src.id);
+      if (!camp || !produceAt(s, { kind: 'camp', camp }, d).ok) return reject('这座营造不了');
+    }
     return slotsFor(d).length > 0;
   });
 
@@ -5593,14 +5599,13 @@ function aiNextActionCore(
       );
       if (c) candidates.push(c);
     }
-    // 军营：跟城市一样能出兵，但时代是它自己落成时钉死的那个
-    // （后方升了时代，老营不会隔空换代；要新兵就地再扎一座）。
-    const own = citiesOf(view, me);
-    if (own.length > 0) {
+    // 产兵建筑：按自己的档位出兵（2026-11-08 删掉"军工供货"）。
+    // 城市没了也照样能补兵——它不再靠后方供货，这条曾经是绕后骚扰的命门。
+    {
       for (const u of unitsOf(view, me)) {
         if (!isProducer(utype(view, u.type))) continue;
         if (orderSite && u.id !== orderSite) continue;
-        const era = u.era ?? supplyEraAt(view, me, u);
+        const era = utype(view, u.type).era;
         const c = recruitCandidate(
           view,
           { kind: 'camp', id: u.id, x: u.x, y: u.y, era },
