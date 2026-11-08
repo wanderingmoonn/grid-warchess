@@ -39,6 +39,15 @@ export interface AiBudget {
    * 队首是「升级时代」时，它指的是"升这一座城"。
    */
   orderSite?: string | null;
+  /** Optional mixed-army purchase objective; preserves the ordinary per-turn limits. */
+  recruitFocus?: {
+    unitType: 'mage' | 'holy-knight-lord';
+    purchased: number;
+    quota: number;
+    purchasedThisTurn: number;
+    supportPurchased: number;
+    rangedSupportPurchased: number;
+  };
 }
 
 export const DEFAULT_BUDGET: AiBudget = {

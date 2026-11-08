@@ -1,0 +1,73 @@
+{
+  "newMatches": 12,
+  "referenceMatches": 12,
+  "baselineFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "candidateFingerprint": "1ac5f004e77a1fab585f1fc2cc8fcd0d7d7e0c39a48ca6ea4daf6b1c1ed890b9",
+  "files": [
+    {
+      "path": "unit-strategy-20261108/candidate.patch",
+      "bytes": 19098,
+      "sha256": "e1e565a998852e500cfe2f3f09bfd78396ea187fc8c85b0e10547edaa4540c83"
+    },
+    {
+      "path": "unit-strategy-20261108/checks.json",
+      "bytes": 1897,
+      "sha256": "0bbcea1bca2f512bc568cebb233430e43185998ce4c47f2fbd06aee5a62d19b6"
+    },
+    {
+      "path": "unit-strategy-20261108/comparison-validation.json",
+      "bytes": 628,
+      "sha256": "ded4f49cf9fd87ec8cc19936e26c74fc02da6cef1561f59a0742579de7d897e5"
+    },
+    {
+      "path": "unit-strategy-20261108/comparison.json",
+      "bytes": 38441,
+      "sha256": "58c73ee5603d242c078986c7c3ebc6b2ea7112f593e4e1301e704184c41926e4"
+    },
+    {
+      "path": "unit-strategy-20261108/holy-banner.png",
+      "bytes": 104214,
+      "sha256": "a4ae6d97804227c1adf042eabe5d1fa3b3d0d6c14e0a49e377ef579247628696"
+    },
+    {
+      "path": "unit-strategy-20261108/holy-banner.svg",
+      "bytes": 104035,
+      "sha256": "ce63df40cf92860e523aaf8860fef2a3c2e704186113dd5004e8897778ff9ba6"
+    },
+    {
+      "path": "unit-strategy-20261108/outcomes.png",
+      "bytes": 71249,
+      "sha256": "8ddaac66b5d1129b2a862e6afbac5378db15a95390bb960b717df4fd4d108715"
+    },
+    {
+      "path": "unit-strategy-20261108/outcomes.svg",
+      "bytes": 69098,
+      "sha256": "f36b84b0d74f70d765f38b6a08dcacefa11dc6e2059758d4e804c9f8f37f1fb1"
+    },
+    {
+      "path": "unit-strategy-20261108/protocol.json",
+      "bytes": 19665,
+      "sha256": "9f8a56757154ae9cd3493976e97ccf1c63b4fe315bc93b7e1af779068c036f21"
+    },
+    {
+      "path": "unit-strategy-20261108/REPRODUCE.md",
+      "bytes": 3922,
+      "sha256": "1177d763dcfce68b9461d2b0dc9657f1f48e8cba206c646b15ce8777869df369"
+    },
+    {
+      "path": "unit-strategy-20261108/reproduction.zip",
+      "bytes": 5020618,
+      "sha256": "bf2f2d04aa701b4aca4a3f346a0528ab371c916fb2004e577c7e43da8af11593"
+    },
+    {
+      "path": "unit-strategy-20261108/seal.json",
+      "bytes": 695,
+      "sha256": "4f99bce42a0175a425977726a45cefea61a978754d173b1c41dcaa6e4727b6e0"
+    },
+    {
+      "path": "UNIT-STRATEGY-RETEST-2026-11-08.md",
+      "bytes": 12051,
+      "sha256": "5928ac0d65ebee26d21d8926750e42b0d9b901147d118484066cfd0a325cfca6"
+    }
+  ]
+}

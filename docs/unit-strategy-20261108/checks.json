@@ -1,0 +1,74 @@
+{
+  "complete": true,
+  "scope": "Clean a7978c1 checkout plus frozen baseline core and four candidate/test files; no unrelated dirty worktree changes.",
+  "checks": [
+    {
+      "name": "types",
+      "exitCode": 0,
+      "passLines": 0,
+      "tail": [
+        ""
+      ]
+    },
+    {
+      "name": "strategy",
+      "exitCode": 0,
+      "passLines": 12,
+      "tail": [
+        "PASS Rejected support moves are not repeated",
+        "PASS Unseen enemies cannot alter focused procurement through the public AI entry",
+        "{\"passed\":12}"
+      ]
+    },
+    {
+      "name": "ai",
+      "exitCode": 0,
+      "passLines": 51,
+      "tail": [
+        "✓ 掠空：速攻比均势值钱，均势又比龟缩值钱",
+        "✓ 掠空必须比飞行贵：它是飞行的超集",
+        "51 AI optimization tests passed"
+      ]
+    },
+    {
+      "name": "evaluation",
+      "exitCode": 0,
+      "passLines": 7,
+      "tail": [
+        "✓ Frozen 004d48a is byte-identical after reversing import rebasing",
+        "✓ Frozen 5fb8e5b is byte-identical after reversing import rebasing",
+        "7 evaluation tests passed"
+      ]
+    },
+    {
+      "name": "rules",
+      "exitCode": 0,
+      "passLines": 0,
+      "tail": [
+        "  ok   光环：动态效果型光环的半径传参生效",
+        "",
+        "通过 580 项，失败 0 项"
+      ]
+    },
+    {
+      "name": "replay",
+      "exitCode": 0,
+      "passLines": 9,
+      "tail": [
+        "✓ 报告体积：一局三十步的配置+动作还在可接受的量级",
+        "",
+        "9 项复盘用例通过"
+      ]
+    },
+    {
+      "name": "build",
+      "exitCode": 0,
+      "passLines": 2,
+      "tail": [
+        "dist/assets/index-BWnBGllE.js        74.48 kB │ gzip:  21.80 kB",
+        "dist/assets/index-Dk1_uB3u.js       469.19 kB │ gzip: 186.59 kB",
+        "✓ built in 5.36s"
+      ]
+    }
+  ]
+}

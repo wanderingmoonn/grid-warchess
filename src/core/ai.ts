@@ -78,6 +78,7 @@ import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';
+import { focusedPurchasePlan, holyBannerCandidate, specialistMoveBias, specialistRecruitAllowed } from './ai-unit-strategy.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
@@ -2884,7 +2885,8 @@ function unitCandidates(
       // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
       const destCity = cityAt(s, x, y);
       if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
-      const score = scoreMove(s, unit, x, y, all, traits);
+      const score = scoreMove(s, unit, x, y, all, traits)
+        + (aiLevelOf(s)==='advanced'?specialistMoveBias(s,unit,x,y,all.tactical):0);
       if (!best || score > best.score) {
         best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
       }
@@ -2899,7 +2901,8 @@ function unitCandidates(
      * 守点分够高的时候，这里什么都不推，这一回合它就站着。开火是另一组候选，
      * 所以"站着"不等于"不还手"。
      */
-    const stay = holdScore(s, unit, all, traits);
+    const stay = holdScore(s, unit, all, traits)
+      + (aiLevelOf(s)==='advanced'?specialistMoveBias(s,unit,unit.x,unit.y,all.tactical):0);
     if (best && best.score >= stay) out.push(best);
   }
 
@@ -4273,6 +4276,7 @@ function recruitCandidate(
     // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
     if (!eraWindowOk(s, d, src.era)) return reject('时代未解锁');
     if (!canUseType(s, me, d.id)) return reject('选卡未收录');
+    if (!order&&aiLevelOf(s)==='advanced'&&!specialistRecruitAllowed(s,d,plan.urgent)) return reject('专职单位缺少混编支援');
     return slotsFor(d).length > 0;
   });
 
@@ -5373,6 +5377,10 @@ function aiNextActionCore(
     if (spot) return { type: 'PLACE_EGG', x: spot.x, y: spot.y };
   }
 
+  const focusPurchase = depth===0&&!commander&&!order&&aiLevelOf(view)==='advanced'
+    ? focusedPurchasePlan(view,budget) : null;
+  if(focusPurchase?.action&&!rejected.has(aiActionKey(focusPurchase.action)))return focusPurchase.action;
+
   const candidates: Candidate[] = [];
   // 三套地形图（旱路 / 涉水 / 水路）算一次，本回合所有单位共用
   const wade = distanceFields(view, me, 'advance');
@@ -5480,7 +5488,8 @@ function aiNextActionCore(
 
   for (const u of unitsOf(view, me)) {
     candidates.push(...unitCandidates(view, u, fields, traits, rejected));
-    const skill = heroSkillCandidate(view, u);
+    const skill = aiLevelOf(view)==='advanced'&&u.type==='holy-knight-lord'
+      ? holyBannerCandidate(view,u,fields.tactical,rejected) : heroSkillCandidate(view, u);
     if (skill) candidates.push({ ...skill, score:skill.score+300 });
   }
 
@@ -5566,6 +5575,15 @@ function aiNextActionCore(
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
+    if(focusPurchase&&budget.recruitFocus?.unitType==='mage'&&budget.recruitFocus.purchasedThisTurn>=1&&action.type==='RECRUIT'&&action.unitType==='mage'){
+      candidates.splice(i,1);continue;
+    }
+    if(focusPurchase&&focusPurchase.reserveGold>0){
+      const cost=action.type==='RECRUIT'||action.type==='BUILD'
+        ? recruitPriceOf(view,me,utype(view,action.unitType)).gold
+        : action.type==='UPGRADE' ? (upgradeCostOf(view,cityById(view,action.cityId)!)??Infinity) : 0;
+      if(cost>0&&view.players[me].gold-cost<focusPurchase.reserveGold){candidates.splice(i,1);continue;}
+    }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
       if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);

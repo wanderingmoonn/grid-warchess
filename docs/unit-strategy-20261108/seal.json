@@ -1,0 +1,13 @@
+{
+  "sealedAt": "2026-11-08T15:24:54.832Z",
+  "baseline": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "candidate": "1ac5f004e77a1fab585f1fc2cc8fcd0d7d7e0c39a48ca6ea4daf6b1c1ed890b9",
+  "harness": {
+    "game.mjs": "2addc016afe6af19e4c16f5898b4491f660c347a7fcfa88d7280e94c3707fbd6",
+    "run.mjs": "f11c0122e48fb9f043cf69ae98b06e361c95bad0e7a7e5f5b9fd01625e0233e6",
+    "prepare.mjs": "e493945797f5cc830637582f98d994cfd1d9cbe809ac6d624233ec2336e9613b",
+    "protocol.json": "9f8a56757154ae9cd3493976e97ccf1c63b4fe315bc93b7e1af779068c036f21"
+  },
+  "changedRuleOrUnitFiles": [],
+  "policy": "Do not change code, recipes, seeds or budgets after seeing rematch outcomes."
+}
