@@ -63,14 +63,14 @@ export const CORE_ABILITIES: AbilityDef[] = [
   {
     id: 'first-strike',
     name: '先手',
-    summary: '攻击后不会被反击。远程狙击手的核心。',
+    summary: '攻击后不会被反击。',
     group: 'attack',
     hooks: { noCounter: true },
   },
   {
     id: 'armor-pierce',
     name: '破甲',
-    summary: '无视目标一半护甲。对付重甲和城池的解法。',
+    summary: '无视目标一半护甲。',
     group: 'attack',
     // 破甲排在护甲阶段的最后：先让穿隙、林地之主、扩展改甲把护甲累出来，
     // 再一刀砍半——反过来的话，"多 3 点甲"和"少一半甲"会互相吃掉。
@@ -159,7 +159,7 @@ export const CORE_ABILITIES: AbilityDef[] = [
   {
     id: 'stealth',
     name: '潜行',
-    summary: '站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。',
+    summary: '站在森林或丘陵上时，敌人要贴到相邻格才发现它。',
     group: 'move',
     hooks: {
       hidden: (c) => {
