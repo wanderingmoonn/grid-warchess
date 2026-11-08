@@ -157,6 +157,9 @@ export const DEACON: UnitTypeDef = {
     UNIT_IDS.SPIRIT_MINE,
     UNIT_IDS.FORGE_1,
     UNIT_IDS.FORGE_2,
+    UNIT_IDS.SECT,
+    UNIT_IDS.SCRIPTURE_PAVILION,
+    UNIT_IDS.SILENT_PAVILION,
   ],
   buildPower: 18,
 };
@@ -164,9 +167,9 @@ export const DEACON: UnitTypeDef = {
 /**
  * 管事（时代 4）：仆役 → 执事 → 管事，这一列是修真包里的"建造工人"线。
  *
- * 它比执事多会两样东西：三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
+ * 它比执事多会两样东西：二、三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
  * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊；
- * 灵泉也一样：开泉取水是宗门的家务事，归管事。
+ * 灵泉也一样：开泉取水是宗门的家务事，归管事。宗门大殿执事就会盖，它只是继承。
  */
 export const STEWARD: UnitTypeDef = {
   id: UNIT_IDS.STEWARD,
@@ -190,6 +193,9 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.FORGE_2,
     UNIT_IDS.FORGE_3,
     UNIT_IDS.SPIRIT_SPRING,
+    UNIT_IDS.SECT,
+    UNIT_IDS.SCRIPTURE_PAVILION,
+    UNIT_IDS.SILENT_PAVILION,
   ],
   buildPower: 24,
 };
@@ -256,6 +262,108 @@ export const SPIRIT_MINE: UnitTypeDef = {
   yield: { [GOLD]: 5, [SPIRIT_STONE]: 1 },
   yieldByTerrain: {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
+  },
+};
+
+// ── 静心阁（2026-11-08）────────────────────────────
+//
+// 藏经阁的对称件：一个往里装，一个往外倒。
+//   · 藏经阁：站在旁边可以**学**一门法术，还给阵营 +2 研发额度；
+//   · 静心阁：站在旁边可以**忘**掉一门法术，腾出自己的法术位。
+//
+// 造型、造价、耐久、选址条件都和藏经阁一样（1×1、贴着自家宗门），
+// 差别只在按钮上——玩家不用再学一套新的建筑语言。
+//
+// 它不给任何额度、不产资源：法术位由境界决定，忘掉一门只是把那个位置空出来。
+// 想多背，只能修炼；想换一门，来这里。
+
+export const SILENT_PAVILION: UnitTypeDef = {
+  id: UNIT_IDS.SILENT_PAVILION,
+  name: '静心阁',
+  short: '静',
+  era: 3,
+  category: 'building',
+  cost: 120,
+  costRes: { 'spirit-stone': 10 },
+  buildCost: 20,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 60,
+  range: 1,
+  vision: 3,
+  adjacent: { unit: [UNIT_IDS.SECT] },
+};
+
+// ── 藏经阁（2026-11-08）────────────────────────────
+//
+// 学法术的地方。必须**贴着自家宗门**：`adjacent` 是既有的选址条件（脚下 + 四邻），
+// 宗门的四格都算，所以贴着它任意一面墙都能起一座。
+//
+// 两件事都跟"贴着宗门"有关：
+//   · 建的时候：旁边必须已经有一座宗门（否则点不下去）；
+//   · 建成之后：宗门一旦被拆，这座楼**自动失效**——它给的 +2 法术位立刻消失，
+//     站在旁边也读不了书（见 spells.ts 的 libraryIsActive）。
+//
+// 没有数量上限：宗门周围的空位本身就是上限。堆十座藏经阁的代价是十格地和
+// 十次施工，而它们全都贴着同一座宗门——那是玩家的选择，不是需要额外拦的事。
+
+export const SCRIPTURE_PAVILION: UnitTypeDef = {
+  id: UNIT_IDS.SCRIPTURE_PAVILION,
+  name: '藏经阁',
+  short: '经',
+  era: 3,
+  category: 'building',
+  cost: 120,
+  costRes: { 'spirit-stone': 10 },
+  // 执事每回合 18 点 → 两回合立起来。藏书楼不该比宗门还难盖
+  buildCost: 20,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 60,
+  range: 1,
+  vision: 3,
+  adjacent: { unit: [UNIT_IDS.SECT] },
+};
+
+// ── 宗门大殿（2026-11-08）──────────────────────────
+//
+// 一座 2×2 的大建筑，自己不打人、不产资源，两个功能全挂在**贴着它站的修士**上：
+//   · 招募弟子：相邻有哪位 ≥2 期的修士，就能用灵石招哪位（规则在 hooks.ts 的
+//     produceBlocked + 定价钩子，纯查询在 sect.ts）；
+//   · 传承：贴着宗门打坐的低阶修士效率按"师徒境界差"放大（见 sect.ts 的 sectLegacyMul）。
+//
+// 所以它该修在修士堆里——师父走了就停产，弟子走了就吃不到传承。
+// 这是它唯一的"操作"，也是它为什么值 2×2 四格。
+
+export const SECT: UnitTypeDef = {
+  id: UNIT_IDS.SECT,
+  name: '宗门大殿',
+  short: '宗',
+  era: 3,
+  category: 'building',
+  // 四格：占满一圈徒弟的位置，也挡得住路——大建筑该有的代价
+  footprint: 2,
+  cost: 200,
+  costRes: { 'spirit-stone': 20 },
+  // 执事每回合 18 点 → 三回合；管事 24 点 → 两回合。宗门是"立起来要时间"的东西
+  buildCost: 48,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 120,
+  range: 1,
+  vision: 4,
+  /*
+   * 名单写死四条流派，能不能招由 `produceBlocked` 按"相邻师父"判。
+   *
+   * 为什么不把名单做成动态的：产兵面板的候选列表读的就是这份白名单，
+   * 名单里有的会**灰着列出来并写明缺什么**（"附近没有 2 期以上的剑修师傅"）。
+   * 动态名单会让玩家永远不知道自己错过了什么，也没有"把师父搬过来"的目标。
+   */
+  produce: {
+    units: [UNIT_IDS.QI_CULTIVATOR, UNIT_IDS.SWORD_CULTIVATOR, UNIT_IDS.BODY_CULTIVATOR, UNIT_IDS.BLOOD_CULTIVATOR],
   },
 };
 
@@ -378,6 +486,24 @@ export const FORGE_3: UnitTypeDef = {
  * 数值按"同代兵略强、但有地形门槛"来定：门槛本身就是成本，所以每一件都比
  * 同代的普通兵高一档；真正的限制是"你得先有炉子，还得把炉子摆在材料边上"。
  */
+
+/**
+ * 法器用哪条"会飞"的能力：`fly-over`（**名字叫「飞行」**，2026-11-08 改名后）。
+ *
+ * 注意 id 和名字对不上：`fly` 现在叫「掠空」（只掠水、仍在地面层），
+ * `fly-over` 才叫「飞行」（真正在空中层）。这条只在 abilities.ts 里解释一次，
+ * 这里写死 id 是为了让"法器悬浮在头顶"这件事有据可查。
+ *
+ * 选了空中层，连带三件事（都是规则自然推出来的，不是额外加的）：
+ *   · 图标缩小、画在上层；
+ *   · 地形一概不挡——水面、深水、高山都能停；
+ *   · 地面单位打它时距离 +1，所以射程 1 的近战够不着，除非敌人站到同一格压着打。
+ *
+ * 之前用的是「掠空」（只掠水、不下水层不悬空），代价是"飞剑贴地爬"这件事
+ * 和「御剑」的画面差得太远；换成真飞行之后，它才真的像一件被人遥控的器物。
+ */
+const FLY_ABILITY = 'fly-over';
+
 export const ARTIFACT_WOOD: UnitTypeDef = {
   id: UNIT_IDS.ARTIFACT_WOOD,
   name: '青木剑',
@@ -401,7 +527,7 @@ export const ARTIFACT_WOOD: UnitTypeDef = {
   maxHp: 36,
   range: 3,
   vision: 3,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, FLY_ABILITY],
   /*
    * 两种产地，满足其一就行：
    *   · 挨着森林——"林中取材"，最直白的一条；
@@ -437,7 +563,7 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   range: 1,
   vision: 2,
   splash: 1,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, FLY_ABILITY],
   /*
    * 丘陵，或者两块灵矿。
    *
@@ -469,7 +595,7 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   range: 4,
   vision: 5,
   splash: 2,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, FLY_ABILITY],
   /*
    * 两种产地，满足其一就行：
    *   · 水面或浅滩——"寒水"，最直白的一条；
@@ -505,7 +631,7 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   range: 3,
   vision: 4,
   splash: 2,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, FLY_ABILITY],
   // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
   produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };

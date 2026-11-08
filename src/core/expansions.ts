@@ -122,6 +122,14 @@ export interface MoveCtx {
   player: PlayerId;
   unitType: UnitTypeDef;
   cost: number;
+  /**
+   * 这次是从哪儿造的（城 / 产兵建筑），以及那座建筑本身。
+   *
+   * 只有 `doRecruit` / 面板知道它，AI 的历史采购判断和一批冻结快照都只传三个参数，
+   * 所以它是**可选**的：拿不到就按"不分产兵点"的老口径算钱。
+   * 修真包的宗门靠它把金币换成灵石——同一件修士，城里买是金价，宗门里招是灵石价。
+   */
+  source?: ProduceSource;
 }
 
 /**
@@ -144,6 +152,8 @@ export interface ResourceCostCtx {
   goldCost: number;
   /** 当前已经确定的非金币价格（来自 costRes 字段） */
   cost: ResourceCost;
+  /** 这次从哪儿造。语义见 `CostCtx.source`：拿不到就等于"不分产兵点"。 */
+  source?: ProduceSource;
 }
 
 /**
@@ -446,6 +456,64 @@ export interface ExpansionHooks {
    * 核心引擎不会读取这里的逻辑，只负责把它们画出来。
    */
   getUnitPanelLines?: (c: { state: GameState; unit: Unit }) => string[];
+
+  /**
+   * 单位面板上的**扩展按钮**。
+   *
+   * 只解决一件核心不知道怎么办的事："修士站在藏经阁旁边，想学一门法术"——
+   * 学什么、能不能学、花多少，全是扩展的知识，但它需要一个按钮。
+   *
+   * 核心负责：把它画在选中单位的卡片上、只在"自己的单位 + 自己的回合"时下发、
+   * 点击后发一个 `UNIT_ACTION { unitId, actionId }` 回来。`actionId` 的格式
+   * 完全由扩展决定（修真包用 `learn:<法术 id>`）。
+   *
+   * 只传 `viewer` 不传"是不是观战"：观战时核心自己就不列按钮，
+   * 扩展不用为这件事再分一次叉。
+   */
+  unitActions?: (c: {
+    state: GameState;
+    unit: Unit;
+    viewer: PlayerId;
+  }) => UnitActionOption[];
+
+  /**
+   * 处理 `UNIT_ACTION`。**谁声明了 `unitActions` 就由谁处理**（按扩展顺序取第一个），
+   * 返回字符串 = 拒绝，字符串本身是给玩家看的理由；返回 null = 成功。
+   *
+   * 副作用（扣资源、改单位、写战报）都在这里做，规则层只负责把动作变成
+   * 一份可回放的记录——和 `on*` 系列钩子同一个口径。
+   */
+  onUnitAction?: (c: {
+    state: GameState;
+    unit: Unit;
+    actionId: string;
+  }) => string | null;
+}
+
+/** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
+export interface UnitActionOption {
+  /** 点击后原样带回来的标识，格式由扩展决定 */
+  id: string;
+  label: string;
+  /**
+   * 分组标题。同一组的按钮排在同一个标题下面（缺省 = 「研修」）。
+   *
+   * 有它是因为同一个单位上可能同时挂两类操作：宗门大殿要给"研发"和"遗弃"，
+   * 修士只有"研修"。混在一行里，玩家分不清"花灵石"和"免费"这两件事。
+   */
+  group?: string;
+  /** 小字：这一下会发生什么 */
+  detail?: string;
+  disabled?: boolean;
+  /** 右侧的短提示：价格、或者为什么不能点 */
+  note?: string;
+  /**
+   * 需要二次确认的文案（不写 = 点了就执行）。
+   *
+   * 破坏性操作（遗弃法术、遗忘技能）必须由**扩展**声明这句话：界面不知道
+   * 哪个按钮是"能撤回"的。核心只负责把它弹出来，玩家点「取消」就什么都不发。
+   */
+  confirm?: string;
 }
 
 export interface Expansion {

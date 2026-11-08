@@ -2,8 +2,11 @@
 
 import type { GameState, Unit } from '../types.ts';
 import { skillsOf } from '../query.ts';
-import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
+import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
+import { sectLegacyMul } from './sect.ts';
+import { MANA_REGEN, manaOf, maxManaOf } from './mana.ts';
+import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, researchCapOf, researchedOf, spellSlotsOf } from './spells.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -51,6 +54,32 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 			: `修为经验：${exp}（已臻化境）`,
 	`寿元：${age} / ${Number.isFinite(lifespan) ? lifespan : '∞'}`,
 	];
+
+	/*
+	 * 灵力 + 法术位。
+	 *
+	 * 这两条必须常驻：法术的按钮会因为"灵力不够"变灰，而灰按钮不会告诉你
+	 * "还差多少"——面板上得有一个数，玩家才知道"再等一回合"还是"这辈子放不起"。
+	 * 法术位同理：`0 / 0` 是最容易被当成 bug 的状态，所以连"境界给几个、
+	 * 藏经阁给几个"一起拆开写。
+	 */
+	lines.push(`灵力：${manaOf(unit)} / ${maxManaOf(unit)}（每回合 +${MANA_REGEN}）`);
+	{
+		const slots = spellSlotsOf(unit);
+		const known = knownSpells(unit).length;
+		if (slots > 0 || known > 0) {
+			lines.push(`法术位：${known} / ${slots}（境界 ${Math.floor(rank / 2)}）`);
+		}
+		// 阵营的研发额度：只有开了藏经阁（或已研发过）才印，否则每张修士卡都多一行 0/0
+		const researchCap = researchCapOf(state, unit.owner);
+		const researched = researchedOf(state, unit.owner).length;
+		if (researchCap > 0 || researched > 0) {
+			const libs = activeLibrariesOf(state, unit.owner).length;
+			lines.push(
+				`本方研发：${researched} / ${researchCap}（藏经阁 ${libs} × ${LIBRARY_SPELL_SLOTS}）`,
+			);
+		}
+	}
 
 	if (isSwordCultivatorType(unit.type)) {
     lines.push(`剑修：境界加成在普攻时 ×${SWORD_BASE_MUL}，剑气纵横时 ×${SWORD_SWEEP_MUL}`);
@@ -114,6 +143,20 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
   const auraBonus = spiritAuraBonusOf(state, unit);	if (auraBonus > 0) {
 		lines.push(`${SPIRIT_AURA_LABEL}：每轮 +${auraBonus} 修为经验`);
 	}
+
+  /*
+   * 宗门传承：只在**吃得到**的时候单独写一行。
+   *
+   * 这条加成是乘在打坐量上的，而打坐量（境界 + 2，剑修减半、魔修固定 1）
+   * 本来就不在面板上印——两个都没写，玩家就完全看不见"师父站在旁边有没有用"。
+   * 所以这里要把乘完之后的实际数字一起写出来，而不是只说"受传承影响"。
+   */
+  const legacy = sectLegacyMul(state, unit);
+  if (legacy > 1) {
+    lines.push(
+      `宗门传承：打坐 ×${legacy}（师父比自己高 ${legacy + 1} 层以上）→ 每轮 +${getExpGrowth(unit) * legacy} 修为`,
+    );
+  }
 
 	if (aging > 0) {
 	lines.push(

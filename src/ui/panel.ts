@@ -67,7 +67,7 @@ import {
 } from '../core/rules.ts';
 import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
-import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
 
@@ -581,6 +581,45 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
 }
 
 /**
+ * 扩展声明的"单位操作"按钮（学法术、遗忘法术……）。
+ *
+ * 核心不知道这些按钮是干什么的：文案、能不能点、右边的短提示全由扩展的
+ * `unitActions` 给出，点击只会发一个 `UNIT_ACTION { unitId, actionId }` 回去。
+ *
+ * 为什么不在核心这里写死"学法术"：那等于让界面认识修真包，而这套代码的
+ * 分层是"界面不认识任何扩展"。一个通用的按钮位比一条特例便宜得多，
+ * 藏经阁之后的静心阁、宗门研发都能直接复用。
+ */
+function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
+  /** 按扩展给的 `group` 分组：同一组一个标题 */
+  const groups = new Map<string, string[]>();
+  for (const e of activeExpansions(s)) {
+    const opts = e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? [];
+    for (const o of opts) {
+      const title = o.group ?? '研修';
+      const rows = groups.get(title) ?? [];
+      const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
+      rows.push(
+        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
+           <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
+           <span class="price">${escapeHtml(o.note ?? '')}</span>
+         </button>`,
+      );
+      groups.set(title, rows);
+    }
+  }
+  if (groups.size === 0) return '';
+  return [...groups.entries()]
+    .map(
+      ([title, rows]) =>
+        `<div class="card-title" style="margin-top:14px">${escapeHtml(title)}</div>
+    <div class="recruit-list">${rows.join('')}</div>`,
+    )
+    .join('');
+}
+
+/**
  * 给上帝模式：把"这一格/这支兵"的**完整**属性卡原样吐出来。
  *
  * 沙盒原来点一下只弹一句"名字 血量"，光环、规则加成、真实数值、技能按钮
@@ -911,6 +950,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
+      ${mine && myTurn ? unitActionBlock(s, selectedUnit, me) : ''}
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
@@ -1101,7 +1141,10 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       }
     }
 
-    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id);
+    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id, {
+      kind: 'city',
+      city,
+    });
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -1361,8 +1404,10 @@ function recruitButton(
   extra: string,
   mode: 'recruit' | 'order' = 'recruit',
   site = '',
+  /** 从哪儿造：定价要和 doRecruit 同源（宗门里招修士收灵石，城里收金币） */
+  source?: ProduceSource,
 ): string {
-  const price = recruitResCost(s, me, def);
+  const price = recruitResCost(s, me, def, source);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
   // 看到 300 金的按钮却扣了 450，玩家只会觉得算错了。
   const unlockFee =
@@ -1508,6 +1553,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
               extra,
               ordering ? 'order' : 'recruit',
               camp.id,
+              { kind: 'camp', camp },
             );
           })
           .join('')}</div>
@@ -1548,7 +1594,12 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
-    <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
+    ${
+      // 不还手的产兵建筑（宗门大殿：枪口 0）就别写"1 格内每回合 0 点"了
+      def.atk > 0
+        ? `<div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>`
+        : ''
+    }
     <div class="info-row"><span>时代</span><b>${supplyLine}</b></div>
     ${
       mine
@@ -1560,6 +1611,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
+           ${
+             /*
+              * 扩展给这座"营"挂的操作（宗门大殿的研发 / 遗弃）。
+              *
+              * 必须画在**军营面板**里，不是单位详情卡：产兵建筑点开走的是
+              * `renderCamp` 这条支路，压根不会走到 `renderDetail` 的那一份。
+              * 以前只画在详情卡上，于是宗门大殿永远只剩"招募弟子"——
+              * 研发和遗弃两个按钮根本不存在。
+              */
+             mine && myTurn ? unitActionBlock(s, camp, me) : ''
+           }
            ${
              input.spawnPick
                ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${

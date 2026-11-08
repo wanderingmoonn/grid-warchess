@@ -12,6 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
+import { skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
@@ -1644,7 +1645,20 @@ function refreshSelection(): void {
        * 一千个格子全点亮会变成一片红海，什么也看不清。所以这里只清空高亮，
        * 落点范围改由鼠标悬停时现算（见 boardEl 上的 skillAimPreview）。
        */
-      if (pendingSkill.targeting === 'point') return;
+      if (pendingSkill.targeting === 'point') {
+        /*
+         * 选点型也要先把**基础范围**点亮。
+         *
+         * 以前这里直接 return，于是"射程圈"只有鼠标扫过去才出现——第一次玩的
+         * 人会以为这个技能没有范围，或者以为它坏了。现在先用"落点 = 自己脚下"
+         * 问一次预览器：掌心雷那种"以自己为圆心的射程圈"立刻就有了；
+         * 传送阵的预览器在落点=自己时返回空（原地传送没有意义），保持不亮。
+         */
+        if (previewer && caster) {
+          skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
+        }
+        return;
+      }
 
       // 方向型：四周四个方向作为点击热区（这符合战棋习惯）
       const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
@@ -3491,8 +3505,13 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 去兵种表里查出这个技能的原始数据
       const unit = state.units.find(u => u.id === unitId);
-      const def = unit ? state.unitTypes[unit.type] : null;
-      const skillDef = def?.skills?.find(s => s.id === skillId);
+      /*
+       * 必须查 `skillsOf`（兵种表 + 学来的），不能只查 `def.skills`：
+       * "学来的法术"只存在单位的 `extraSkills` 里，兵种表上根本没有。
+       * 只查兵种表的话，一个 `targeting: 'point'` 的法术会被当成"不需要选点"
+       * 直接派发出去——点一下按钮就白放，而且永远点不到目标。
+       */
+      const skillDef = unit ? skillsOf(state, unit).find(s => s.id === skillId) : null;
 
       // 如果数据里声明了需要选点/选方向，就进入等待状态
       if (skillDef && (skillDef.targeting === 'point' || skillDef.targeting === 'direction')) {
@@ -3520,6 +3539,21 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 没声明需要选点，或者找不到数据，维持原来的直接释放
       dispatch({ type: 'HERO_SKILL', unitId, skillId });
+      render();
+      return;
+    }
+
+    case 'unit-action': {
+      // 扩展声明的单位操作（学法术、遗忘法术……）。核心不解释 actionId，
+      // 只把它和单位 id 一起派发给规则层，由扩展的 onUnitAction 处理。
+      const id = el.dataset.id;
+      const actionId = el.dataset.action;
+      if (!id || !actionId) return;
+      // 破坏性操作（遗弃法术……）由扩展在按钮上声明确认文案，核心只负责弹
+      const confirmText = el.dataset.confirm;
+      if (confirmText && !window.confirm(confirmText)) return;
+      // dispatch 自己会 toast 失败原因，这里只管发
+      dispatch({ type: 'UNIT_ACTION', unitId: id, actionId });
       render();
       return;
     }
@@ -6761,9 +6795,13 @@ boardEl.addEventListener('mouseout', (e) => {
   // 在格子之间移动不算离开棋盘：relatedTarget 还在棋盘里，预览就该留着
   const to = (e as MouseEvent).relatedTarget as Node | null;
   if (to && boardEl.contains(to)) return;
-  if (skillThreatTiles.length === 0) return;
+  // 离开棋盘不清空，而是退回"基础范围"（落点=自己）。技能还端着，
+  // 射程就该一直看得见——清空会让人误以为技能已经取消了。
+  const caster = state.units.find((u) => u.id === pendingSkill!.unitId);
+  const previewer = SKILL_PREVIEWERS[pendingSkill.skillId];
   skillAimKey = '';
-  skillThreatTiles = [];
+  skillThreatTiles =
+    caster && previewer ? previewer({ state, self: caster, target: { x: caster.x, y: caster.y } }) : [];
   render();
 });
 

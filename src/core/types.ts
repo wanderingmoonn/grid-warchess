@@ -141,7 +141,7 @@ export type UnitDomain = 'land' | 'water';
  *
  * 所以层是类型上的第一等概念，不是某个兵种包的私货：
  *   · ground（缺省）—— 站地上，一格一个人
- *   · air           —— 掠空，和地面**互不占格**，可以和地面单位叠在同一格
+ *   · air           —— 飞行（2026-11-08 之前叫「掠空」），和地面**互不占格**，可以和地面单位叠在同一格
  *
  * 有了它，之后任何扩展想让"投石机抛射"“热气球侦察”进原版，都不用再改规则。
  */
@@ -1592,6 +1592,18 @@ export interface GameState {
    */
   unlocked?: Partial<Record<PlayerId, string[]>>;
   /**
+   * 每一方**已研发**的"法术/秘术" id。
+   *
+   * 和 `unlocked`（英雄兵种）分开：那是"某个兵种可以买了"，这是"某条法术进入了
+   * 本方藏书目录"。两者都是玩家级、只增不减的清单，但消费方完全不同——
+   * 混在一张表里，一个 id 到底是兵种还是法术就只能靠猜。
+   *
+   * 为什么必须进状态而不是放在建筑上：研发是**阵营**的能力（本方所有藏经阁通用），
+   * 挂在某座宗门大殿上会导致"换一座宗门就从零开始"。旧存档没有这个字段，
+   * 按"什么都没研发"处理。
+   */
+  researched?: Partial<Record<PlayerId, string[]>>;
+  /**
    * 选卡模式的开局 BP 状态（普通对局是 undefined）。
    *
    * 为什么放进 GameState 而不是界面里：它决定"这一局能造什么"，是规则的一部分；
@@ -1746,6 +1758,14 @@ export type Action =
   | { type: 'DISBAND'; unitId: string }
   /** 英雄技能：谁放、放哪个 */
   | { type: 'HERO_SKILL'; unitId: string; skillId: string; targetX?: number; targetY?: number }
+  /**
+   * 扩展自定义的"单位操作"（学法术、遗忘法术、传功……）。
+   *
+   * 核心不解释 `actionId`，只把它转交给扩展的 `onUnitAction`——这样加一类新操作
+   * 不用往 `Action` 里长一个新分支，也就不会让 AI / 回放 / 联机各自漏一处。
+   * 按钮由扩展的 `unitActions` 钩子自己列（见 expansions.ts），面板只管画。
+   */
+  | { type: 'UNIT_ACTION'; unitId: string; actionId: string }
   /** 把待落位的蛋放到这一格（不死鸟） */
   | { type: 'PLACE_EGG'; x: number; y: number }
   /** 认输：直接把胜利判给对方，不用把棋盘走完 */

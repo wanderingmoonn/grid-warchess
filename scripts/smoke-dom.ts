@@ -813,6 +813,56 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
 });
 
+/**
+ * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
+ *
+ * 扩展给单位挂的操作（宗门大殿的「研发 / 遗弃」）以前只画在详情卡上，
+ * 于是实战里点开宗门大殿只剩"招募弟子"，研发按钮根本不存在。
+ * 这条用例按"点开一座产兵建筑"的方式渲染，把那条支路钉住。
+ */
+check('产兵建筑上的扩展按钮：宗门大殿点开也要有「研发」', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['cultivation'] }, 515);
+  st.current = 'A';
+  st.units = [];
+  st.players.A.res = { 'spirit-stone': 200 };
+  for (let y = 2; y <= 8; y++) {
+    for (let x = 2; x <= 8; x++) st.tiles[y * st.w + x] = { terrain: 'plain', cityId: null };
+  }
+  const def = st.unitTypes['cultivation-sect'];
+  assert.ok(def, '修真包要带进宗门大殿');
+  const sect = {
+    id: 'sec1',
+    type: 'cultivation-sect',
+    owner: 'A' as const,
+    x: 4,
+    y: 4,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(sect);
+
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: sect,
+    selectedCityId: null,
+    // 关键：产兵建筑被点开时就是这个字段被设上
+    selectedCampId: sect.id,
+    selectedTile: null,
+  });
+
+  const html = host.innerHTML;
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('招募') || text.includes('生产'), '产兵那一块还应该在');
+  assert.ok(html.includes('data-action="research:palm-thunder"'), '宗门大殿的产兵面板里要能点「研发」');
+  assert.ok(text.includes('研发'), '面板上要有「研发」这一组');
+  // 不还手的产兵建筑不该印"1 格内每回合 0 点"
+  assert.ok(!text.includes('自动开火'), 'atk 0 的建筑不该有自动开火那一行');
+});
+
 check('多次攻击兵的面板写"还剩几次"，不是"几段"', () => {
   // 攻击次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
   // 顺带钉住旧说法：面板上不能再出现"每段独立减甲"——那是被否掉的模型。

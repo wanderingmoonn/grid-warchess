@@ -501,7 +501,9 @@
         <li><b>两层：地面与空中。</b>规则从原版起就承认"天上还有一层"，只是原版兵种全在地面。
           空中单位（兵种表里写 <code>layer: air</code>）和地面<b>互不占格</b>——它能停在敌人头顶，
           敌人也能从它脚下走过；<b>地面打空中时距离 +1</b>（得先够得着头顶），
-          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。</li>
+          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。
+          另有一种<b>「掠空」</b>：它并不离开地面层，只是能掠过水面（同样能停在水上）、
+          森林丘陵按 1 步算——别把它和飞行搞混，两者的差别是"离不离开地面这一层"。</li>
         <li><b>对方城市格不可通行</b>，必须先把耐久打空。</li>
         <li>己方城市格可以进驻，驻军享受城市的 +3 护甲。</li>
       </ul>
@@ -815,7 +817,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">飞行</td><td>可以飞越水面（但不能停在水上），森林和丘陵按 1 步算。河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">掠空</td><td>飞行，而且<b>可以和地面单位站在同一格</b>：它在你头顶，不在你身边。可以掠水、森林丘陵按 1 步算。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。开阔地上无效。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">掠空</td><td>掠过水面：可以飞越水面并停在水上，森林和丘陵按 1 步算，河防对它不成立；但爬不了高山。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">飞行</td><td>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>支援</h4>

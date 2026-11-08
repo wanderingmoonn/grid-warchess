@@ -104,12 +104,29 @@ import {
   FORGE_1,
   FORGE_2,
   FORGE_3,
+  SECT,
+  SCRIPTURE_PAVILION,
+  SILENT_PAVILION,
   SPIRIT_SPRING,
+  CULTIVATOR,
+  SWORD_CULTIVATOR,
+  BODY_CULTIVATOR,
+  BLOOD_CULTIVATOR,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
+import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
+import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
+import { MANA_REGEN, manaLimitForRank } from '../src/core/cultivation/mana.ts';
+import {
+  PALM_THUNDER_BASE,
+  PALM_THUNDER_COST,
+  PALM_THUNDER_PER_RANK,
+  PALM_THUNDER_RANGE,
+  PALM_THUNDER_SKILL,
+} from '../src/core/cultivation/skills/palm-thunder.ts';
 import {
   SPRING_FLOOR_HEAL,
   SPRING_HEAL_RATIO,
@@ -251,8 +268,8 @@ const GENERIC_TERMS: Term[] = [
   {
     key: 'air',
     name: '空中层',
-    brief: '与地面互不占格；地面单位打它时距离 +1，它能掠水、走森林丘陵只花 1 步。',
-    more: '掠水三兄弟（飞行 / 掠空 / 跳跃）机制同一套，差别只在名字对不对得上画面。掠空还能和地面单位同格：地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。两层叠在同一格时，点这一格会先问"有没有我能打的目标"——有就直接开火，不再只弹上面那个的属性卡。',
+    brief: '与地面互不占格；地面单位打它时距离 +1，地形一概不挡——水面、深水、高山都能停。',
+    more: '三种"会飞"（掠空 / 飞行 / 跳跃）机制同一套，差别只在名字对不对得上画面：掠空只掠过水面、还在地面层；飞行才真的悬在头顶，能和地面单位同格——地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。两层叠在同一格时，点这一格会先问"有没有我能打的目标"——有就直接开火，不再只弹上面那个的属性卡。',
   },
   {
     key: 'overhead',
@@ -1430,7 +1447,9 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li><b>两层：地面与空中。</b>规则从原版起就承认"天上还有一层"，只是原版兵种全在地面。
           空中单位（兵种表里写 <code>layer: air</code>）和地面<b>互不占格</b>——它能停在敌人头顶，
           敌人也能从它脚下走过；<b>地面打空中时距离 +1</b>（得先够得着头顶），
-          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。</li>
+          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。
+          另有一种<b>「掠空」</b>：它并不离开地面层，只是能掠过水面（同样能停在水上）、
+          森林丘陵按 1 步算——别把它和飞行搞混，两者的差别是"离不离开地面这一层"。</li>
         <li><b>对方城市格不可通行</b>，必须先把耐久打空。</li>
         <li>己方城市格可以进驻，驻军享受城市的 +3 护甲。</li>
       </ul>
@@ -2355,8 +2374,8 @@ function fantasyRules(): string {
           数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
         <li>${ref('elem')}决定这一下带什么，${ref('weak')}与${ref('resist')}决定目标怎么接。
           注意「怕」作用在<b>整段</b>伤害上：怕火的被火把砸一下也疼，不只是怕魔法火。</li>
-        <li>${ref('air')}：飞行、掠空、跳跃是同一套机制，区别只在名字对不对得上画面——
-          鹰和石像鬼飞行，蜘蛛骑士是跳跃，谁都不该"扑棱翅膀"。${ref('overhead')}</li>
+        <li>${ref('air')}：掠空、飞行、跳跃是同一套机制的三个档，区别只在名字对不对得上画面——
+          掠空是贴着水面掠过，飞行才真悬在头顶，蜘蛛骑士是跳跃。谁都不该"扑棱翅膀"。${ref('overhead')}</li>
         <li>${ref('status')}——中毒、点燃、减速、诅咒。都按血量百分比算，
           这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
         <li>${ref('mastery')}：属性不只是"这一下带什么状态"，而是四种形态。所以「转属性」
@@ -2875,6 +2894,73 @@ function cultivationRules(): string {
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 
+      <h3>宗门大殿</h3>
+      <p>${SECT.name}是<b>时代 ${SECT.era}</b> 的 <b>2×2</b> 大建筑（${SECT.maxHp} 血 / ${SECT.armor} 甲），由执事修建。
+        它自己不打架、不产资源，两个功能全挂在<b>贴着它站的修士</b>身上——所以它该修在修士堆里。</p>
+      <ul>
+        <li><b>招募弟子</b>：相邻站着一位 <b>${SECT_MASTER_MIN_RANK} 期（筑基）以上</b>的己方修士，
+          就能用<b>灵石</b>招出<b>同一种</b>修士（新弟子从 0 期入门）。
+          四个流派都可以，但敌方修士不算师父；名单是灰着列出来的，缺什么直接写在按钮上
+          （"附近没有 ${SECT_MASTER_MIN_RANK} 期以上的剑修师傅"）。</li>
+        <li><b>招募价</b>：按该兵种金币价的 <b>1/10</b> 折成灵石——
+          ${CULTIVATOR.name} ${sectRecruitStone(CULTIVATOR.cost)}、${BODY_CULTIVATOR.name} ${sectRecruitStone(BODY_CULTIVATOR.cost)}、
+          ${SWORD_CULTIVATOR.name} ${sectRecruitStone(SWORD_CULTIVATOR.cost)}、${BLOOD_CULTIVATOR.name} ${sectRecruitStone(BLOOD_CULTIVATOR.cost)}。
+          兵种调价时招募价自动跟着走，不会出现"剑修涨了、宗门还按原价卖"。
+          <b>城市产线照旧收金币</b>：灵石这条只属于宗门。</li>
+        <li><b>传承</b>：贴着宗门打坐的修士，修炼效率
+          <b>× (相邻最高境界 − 自己 − 1)</b>，最低 ×1。
+          所以<b>差 3 层才开始有加成</b>：${SECT_MASTER_MIN_RANK} 期师父带 0 期徒弟算下来还是 ×1（白搭），
+          3 期才 ×2。有加成的修士面板上会写「宗门传承 ×N」和"每轮 +多少修为"——
+          不写的话玩家永远看不见师父站旁边有没有用。</li>
+        <li><b>互相绑死</b>：师父走开 = 宗门停产；弟子走开 = 吃不到传承。
+          多个宗门<b>不叠乘</b>，取最强的一条（和所有光环同口径）。</li>
+        <li><b>2×2 的代价</b>：四格一起挡路、一起挨打；选址要求四格全空且地形可建，
+          所以<b>城里基本放不下</b>（城里只要有一个驻军就占掉一格）。
+          建造距离按"整块地到工匠最近的一格"算，不必拿左上角去凑。</li>
+      </ul>
+
+      <h3>藏经阁与法术</h3>
+      <p>法器和灵泉是"外物"，法术则是修士<b>自己身上</b>的东西。它和流派技能、境界技能长得一样
+        （都在技能栏里），但有三条不同：<b>只能学、要花灵力、占法术位</b>。</p>
+      <ul>
+        <li><b>灵力</b>：每个修士自己一池子，不是国库的灵石。上限
+          <b>${manaLimitForRank(0)} / ${manaLimitForRank(9)}</b> 点（0 期 / 9 期），
+          每回合开始回 <b>${MANA_REGEN}</b> 点。数值全是整十，方便以后细调。</li>
+        <li><b>法术位</b>：<b>⌊境界 ÷ 2⌋</b>——这是<b>一个修士</b>能记住几门法术。
+          所以 <b>0～1 期一个法术位都没有</b>，新招的弟子要先修炼才谈得上"学法术"。
+          流派技能（剑气纵横、血祭）和境界技能（御空）<b>不占</b>法术位。</li>
+        <li><b>研发额度</b>：<b>${RESEARCH_BASE_SLOTS > 0 ? `${RESEARCH_BASE_SLOTS} + ` : ''}${LIBRARY_SPELL_SLOTS} × 生效中的藏经阁</b>——
+          这是<b>整个阵营</b>能掌握几门法术。它和法术位是两件事：
+          额度决定"本方知道几门"，法术位决定"某个修士记得住几门"。
+          所以一座藏经阁能让全宗门多认两门法术，但不会让某个筑基修士多背一门。</li>
+        <li><b>${SCRIPTURE_PAVILION.name}</b>（${SCRIPTURE_PAVILION.era} 代，${SCRIPTURE_PAVILION.cost} 金 +
+          ${SCRIPTURE_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SCRIPTURE_PAVILION.maxHp} 血 /
+          ${SCRIPTURE_PAVILION.armor} 甲）：<b>只能建在自家宗门旁边</b>，每一座给本阵营
+          <b>+${LIBRARY_SPELL_SLOTS} 点研发额度</b>——所以<b>没有藏经阁就一门法术都研发不了</b>。
+          没有数量上限，宗门周围的空地就是上限。
+          <b>宗门一被拆，这座楼立刻失效</b>：额度没了，也读不了书。</li>
+        <li><b>研发</b>：选中自家的<b>宗门大殿</b>，在「研发」里花灵石把一门法术写进本方藏书目录
+          （每门 <b>${RESEARCH_STONE_COST}</b> 灵石，只收灵石）。额度满了、灵石不够都会灰着写原因。</li>
+        <li><b>遗弃</b>：研发过的法术在同一个面板的「遗弃」里可以划掉，<b>腾出研发额度</b>。
+          这一步<b>会弹确认框</b>（误点一次就少一门法术，代价太大）。
+          <b>已经学会的修士不受影响</b>——那属于遗忘，是静心阁的事。</li>
+        <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在「研修」里点
+          <b>研读「某某」</b>。本方没研发过、法术位满了、流派不符、没站在藏书楼旁边，
+          按钮会灰着并写清原因。</li>
+        <li><b>${SILENT_PAVILION.name}</b>（${SILENT_PAVILION.cost} 金 +
+          ${SILENT_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SILENT_PAVILION.maxHp} 血 /
+          ${SILENT_PAVILION.armor} 甲）：藏经阁的<b>对称件</b>——同样 1×1、同样只能贴着自家宗门。
+          站在旁边的修士可以<b>忘掉</b>一门已学的法术，<b>腾出法术位</b>。
+          这一步会弹确认框；忘掉之后回藏经阁还能<b>重新学</b>（研发没丢），
+          所以"换一门法术"的代价是走两趟路，不是重练。</li>
+        <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
+          对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
+          <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力。
+          <b>不限每回合一次</b>：灵力够就能连着放（9 期一回合能放两发），
+          所以"什么时候把这池子烧掉"是玩家自己的决定；它不占攻击次数，也不占移动。
+          它打不了城池，也打不了自己人。</li>
+      </ul>
+
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
         ${SPIRIT_SPRING.armor} 甲），由<b>管事</b>修建。它不产资源、不能攻击，
@@ -2928,8 +3014,10 @@ function cultivationRules(): string {
           没有这一条，法器就是一次性消耗品，掉的血永远回不来。</li>
       </ul>
 
-      <p>四件法器都会<b>飞</b>：能掠过水面、森林丘陵按 1 步算，河防拦不住它们。
-        但飞行只解决"怎么到"，不解决"到了能干什么"——每一件的性格完全不同。</p>
+      <p>四件法器都是<b>真的飞在天上</b>（${ref('ab-fly-over', '飞行')}）：它们悬在头顶那一层，
+        水面、深水、高山都能停，地面单位打它们时距离 +1——所以射程 1 的兵够不着，
+        除非挤到同一格压着打。飞行只解决"怎么到"，不解决"到了能干什么"——
+        每一件的性格完全不同。</p>
 
       <h3>青木剑</h3>
       <p>一件飞剑。射程 <b>${ARTIFACT_WOOD.range}</b> 格，比同代的任何近战都远——

@@ -941,7 +941,7 @@ export function cloneState(s: GameState): GameState {
  * （它决定"占不占格"，这件事渗进寻路、产兵位、攻击距离判断），
  * 不该由某个兵种包是否勾选来决定规则代码长什么样。
  *
- * 「掠空」这类能力可以再把它标成空中层（hooks.airLayer），
+ * 「飞行」这类能力可以再把它标成空中层（hooks.airLayer；id 叫 fly-over），
  * 那是给自定义兵种和旧数据留的路：老存档、老角色卡照常工作，
  * 新数据则应该直接写 `layer: 'air'`。
  */
@@ -950,7 +950,7 @@ export function airLayer(def: UnitTypeDef): boolean {
    * 三条判据，其实是同一件事的三种写法：
    *   · `layer: 'air'` —— 现在所有飞行单位都写这个；
    *   · `flight: true` —— 早先只有"能过水"这一个字段，没有层这个概念；
-   *   · 能力钩子 `airLayer` —— 「掠空」和兵种编辑器捏出来的旧数据。
+   *   · 能力钩子 `airLayer` —— 「飞行」（id `fly-over`）和兵种编辑器捏出来的旧数据。
    *
    * `flight` 这一条是后补的，补它是因为**两个字段各说各话**会长出真 bug：
    * 只写 `flight: true`、忘写 `layer: 'air'` 的单位会变成"能飞过河、
@@ -1018,7 +1018,7 @@ export function effectiveRange(s: GameState, u: Unit): number {
  *   · 射程 1 的步兵打不到**隔壁那格**的飞行单位；
  *   · 射程 2 的弓手只在"零到一格"内打得中，两格开外就够不着了；
  *   · 但飞行单位"压着打"（同一格）时距离算 0+1=1，脚下的兵还是能还手——
- *     这是「掠空」本来就有的交易：贴脸打会被反击，隔着一格才是安全的。
+ *     这是「飞行」本来就有的交易：贴脸打会被反击，隔着一格才是安全的。
  * 空中打地面、空中打空中、地面打地面都按正常距离算。
  *
  * 攻击判定、反击判定、以及所有"隔几格才打折/才加成"的能力都读它，
@@ -1421,7 +1421,7 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * 这个兵种能不能掠水。
  *
  * 读 `flight` 字段（原版预留的机制字段），同时认三条旧能力 id：
- * 飞行、掠空、跳跃。后两者是「奇想」包早期的写法，也是兵种编辑器里
+ * 掠空、飞行、跳跃。后两者是「奇想」包早期的写法，也是兵种编辑器里
  * 那三个勾选框——不认识它们，玩家自己捏的飞行兵会当场失灵。
  *
  * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
@@ -2067,10 +2067,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
 }
 
 /** 算上扩展规则后的兵种造价 */
-export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): number {
+export function recruitCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): number {
   let cost = def.cost;
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost });
+    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost, source });
   }
   return Math.max(0, cost);
 }
@@ -2081,9 +2086,18 @@ export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): n
  * 金币那一段走老的 modifyCost（所有既有扩展都在改它），其它资源走
  * modifyResourceCost。两个钩子分开而不是合成一个"价格对象"：
  * 合并等于把所有既有扩展的签名改一遍，而它们关心的事情本来就只有金币。
+ *
+ * `source` 是"从哪儿造"（城 / 哪座产兵建筑）。不传 = 不分产兵点，
+ * 这正是老调用方的行为；传了之后扩展才能做"同一件兵，城里卖金币、
+ * 宗门里卖灵石"这种按产地的定价（修真包就是这么用的）。
  */
-export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef): ResourceCost {
-  const gold = recruitCost(s, player, def);
+export function recruitResCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): ResourceCost {
+  const gold = recruitCost(s, player, def, source);
   let extra: ResourceCost = { ...(def.costRes ?? {}) };
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyResourceCost) {
@@ -2094,6 +2108,7 @@ export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef)
         baseCost: def.cost,
         goldCost: gold,
         cost: extra,
+        source,
       });
     }
   }
@@ -2123,8 +2138,9 @@ export function recruitPriceOf(
   s: GameState,
   player: PlayerId,
   def: UnitTypeDef,
+  source?: ProduceSource,
 ): { price: ResourceCost; unlockFee: number; total: ResourceCost; gold: number } {
-  const price = recruitResCost(s, player, def);
+  const price = recruitResCost(s, player, def, source);
   const needUnlock = def.hero === true && !(s.unlocked?.[player] ?? []).includes(def.id);
   const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
   const total: ResourceCost = { ...price };
@@ -2249,9 +2265,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const hooks = hooksOfUnit(s, unit);
-  // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
-  // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
-  // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
+  // 掠空：可以掠过水面，森林和丘陵也按 1 步算。
+  // 这条不是"更强的穿林"——穿林的收益是省一步，掠空的收益是**河防对它不成立**。
+  // 「飞行」（fly-over）是掠空的加强版：同样掠水，另外还能和地面单位同格。
+  // 注意 id 和名字是反的（2026-11-08 对调过名字）：fly = 掠空，fly-over = 飞行。
   const flyer = crossesWater(def);
   const air = isAirborne(s, unit);
   // 穿行：可以穿过敌军，只是不能停在上面
@@ -2344,7 +2361,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 敌军挡路：既不能进，也不能穿（除非你会穿行）。
       // **只有同一层会挡**：地面的兵挡地面，天上的挡天上。
       // 不同层可以共格，所以它们彼此既不挡路、也不占位——
-      // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
+      // 这正是「飞行」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
       if (enemyBlocks(nx, ny)) continue;
 
@@ -3568,6 +3585,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
         return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
+      case 'UNIT_ACTION':
+        return doUnitAction(next, action.unitId, action.actionId);
       case 'PLACE_EGG':
         return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
@@ -4439,8 +4458,15 @@ export function buildSiteError(
   // 距离：绝大多数建筑按 CONFIG.buildRange 算；少数"本来就要盖在远处"的
   // （海上钻井平台）在兵种数据里自己写一个更大的数——放宽的只是距离，
   // 选址条件照旧一条不少。
+  //
+  // 2×2 的建筑按**整块地到建造者的最近一格**算，不是按左上角锚点：
+  // 锚点算法下，贴着它右下角站也会被拒（"离得太远"），玩家没法从画面推出规则。
+  // n = 1 时这个式子和 `distance(builder, {x,y})` 完全一样。
   const reach = def.buildRange ?? CONFIG.buildRange;
-  if (distance(builder, { x, y }) > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
+  const cx = Math.min(Math.max(builder.x, x), x + n - 1);
+  const cy = Math.min(Math.max(builder.y, y), y + n - 1);
+  const gap = Math.abs(builder.x - cx) + Math.abs(builder.y - cy);
+  if (gap > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
     return overWater
       ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
       : `建造者离得太远（最多 ${reach} 格）`;
@@ -4809,6 +4835,11 @@ function doRecruit(
   /** 产兵点的造价倍率（produce.costScale）。城市永远是 1 */
   let costScale = 1;
   let slots: Array<{ x: number; y: number }> = [];
+  /**
+   * 这次"从哪儿造"。往下传给 recruitPriceOf，扩展才能按产地定不同的价
+   * （修真包的宗门：同一件修士，城里卖金币，宗门里卖灵石）。
+   */
+  let priceSource: ProduceSource | undefined;
 
   if (campId) {
     const camp = unitById(s, campId);
@@ -4832,6 +4863,7 @@ function doRecruit(
     // "军工供货"设计，2026-11-08 删掉了——同一座营的产出能力不该被十几格外
     // 某座城是否升级决定，玩家看不见这条因果）。
     label = campDef.name;
+    priceSource = { kind: 'camp', camp };
 
     slots = recruitSpawnCells(s, undefined, campId, unitTypeId);
   } else {
@@ -4850,6 +4882,7 @@ function doRecruit(
     if (!allowed.ok) return allowed;
 
     slots = recruitSpawnCells(s, cityId, undefined, unitTypeId);
+    priceSource = { kind: 'city', city };
     // 水军没有下水的位置时要说清原因：城不临水，还是水面已经站满了船
     if (def.domain === 'water' && slots.length === 0) {
       return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
@@ -4864,7 +4897,7 @@ function doRecruit(
   //
   // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
   // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
-  const quote = recruitPriceOf(s, s.current, def);
+  const quote = recruitPriceOf(s, s.current, def, priceSource);
   // 造价倍率只作用在兵价上，不解锁费（英雄解锁是全局一次的事，不该被营打折）
   const payCost = scaleCost(quote.total, costScale);
   const unlockFee = quote.unlockFee;
@@ -5601,6 +5634,27 @@ SKILL_EFFECTS['fuse'] = (c) => {
   c.state.units.push(boss);
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
+
+/**
+ * 扩展自定义的单位操作（`UNIT_ACTION`）。
+ *
+ * 核心只做三件事：认人、确认是谁的回合、把 `actionId` 原样交给扩展。
+ * "能不能学、学了扣什么、写不写战报"全在扩展的 `onUnitAction` 里——
+ * 规则层对它一无所知，所以加一类新操作（遗忘法术、宗门传功）不用回来改这里。
+ *
+ * 没有扩展声明 `unitActions` 时直接拒绝：否则一个手搓的回放文件能往状态里
+ * 塞任意 actionId，虽然什么都不会发生，但也会让"这一步为什么无效"无从查起。
+ */
+function doUnitAction(s: GameState, unitId: string, actionId: string): ActionResult {
+  const u = s.units.find((x) => x.id === unitId);
+  if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
+  if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+  const impl = activeExpansions(s).find((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+  if (!impl) return { ok: false, reason: '当前规则里没有这种操作' };
+  const reason = impl.hooks.onUnitAction!({ state: s, unit: u, actionId });
+  if (reason) return { ok: false, reason };
+  return { ok: true, state: s };
+}
 
 function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
   const u = s.units.find((x) => x.id === unitId);

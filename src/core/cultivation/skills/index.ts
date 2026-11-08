@@ -60,3 +60,11 @@ export {
   TELEPORT_OVERLOAD_LOG,
 } from './teleport-swap.ts';
 export { learnSkill, CULTIVATOR_SKILL_UNLOCKS } from './unlocks.ts';
+export {
+  PALM_THUNDER_SKILL,
+  PALM_THUNDER_COST,
+  PALM_THUNDER_RANGE,
+  PALM_THUNDER_BASE,
+  PALM_THUNDER_PER_RANK,
+  palmThunderDamage,
+} from './palm-thunder.ts';
