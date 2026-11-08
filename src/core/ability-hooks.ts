@@ -663,7 +663,7 @@ export interface AbilityHooks {
   passThrough?: boolean;
   /** 能不能掠水（飞行、掠空、跳跃） */
   crossesWater?: boolean;
-  /** 在不在空中层（能和地面单位同格）。目前只有「掠空」 */
+  /** 在不在空中层（能和地面单位同格）。目前只有「飞行」 */
   airLayer?: boolean;
   /** 藏不藏得住（潜行、隐匿） */
   hidden?: (c: HiddenCtx) => boolean;

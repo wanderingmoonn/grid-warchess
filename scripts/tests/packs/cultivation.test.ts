@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
+import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -1571,12 +1572,16 @@ export function run() {
 
   // ── 后三件法器：护甲光环 / 迟缓 / 熔甲 / 真元光环（2026-11-08）──
 
-  test('法器：四件都会飞', () => {
+  test('法器：四件都真的飞在空中层（id 是 fly-over，名字叫「飞行」）', () => {
     const s = fresh({ expansionIds: ['cultivation'] });
     const arts = Object.values(s.unitTypes).filter((d) => d.artifact);
     assert.equal(arts.length, 4, '应该正好四件法器');
     for (const d of arts) {
-      assert.ok(d.abilities?.includes('fly'), `${d.name} 少了飞行`);
+      // 2026-11-08：法器的"飞"从「掠空」（只掠水）换成「飞行」（空中层）。
+      // 名字和 id 是反的：fly-over 叫飞行，fly 叫掠空——见 abilities.ts 顶部注释。
+      assert.ok(d.abilities?.includes('fly-over'), `${d.name} 应该是真飞行（fly-over）`);
+      assert.ok(!d.abilities?.includes('fly'), `${d.name} 不该再挂掠空`);
+      assert.equal(airLayer(d), true, `${d.name} 要在空中层`);
     }
   });
 
@@ -1672,7 +1677,7 @@ export function run() {
     assert.ok(withAura > base);
   });
 
-  test('飞行：法器能跨水（沿用既有 fly 的语义，水面可停）', () => {
+  test('飞行：法器悬在空中层——能跨水、能停在水上、地面近战够不着', () => {
     const s = fresh({ expansionIds: ['cultivation'], godMode: true });
     s.units = [];
     s.current = 'A';
@@ -1689,7 +1694,16 @@ export function run() {
     assert.equal(movePower(s, sword), 2, '器灵减半后是 2 格');
     assert.ok(reach.has(idx(s, 7, 5)), '飞剑应该能飞到水对岸');
     // `fly` 是"掠水"，水上**可以停**（见 rules.tileStandsOk 的注释）。
-    assert.ok(reach.has(idx(s, 6, 5)), '掠过水面时也能停在上面');
+    assert.ok(reach.has(idx(s, 6, 5)), '悬在空中层，水面照样能停');
+
+    // 空中层的两个连带效果：地形一概不挡、地面射程 1 够不着
+    const mountain = s.tiles[idx(s, 8, 5)];
+    (mountain as { terrain: string }).terrain = 'mountain';
+    assert.equal(canStandAt(s, 8, 5, 'cultivation-artifact-wood'), true, '高山也能停');
+    const grunt = place2(s, 'B', 'militia', 4, 5); // 和飞剑相邻（真实距离 1）
+    assert.equal(distBetweenUnits(s, grunt, sword), 1, '前提：真的是隔壁那格');
+    assert.equal(strikeDistance(s, grunt, sword), 2, '打空中的目标要按 +1 距离算');
+    assert.equal(canStrike(s, grunt, sword), false, '射程 1 的地面兵够不着头顶那一层');
   });
 
   test('青木剑产地：相邻森林 或 2 块己方灵田', () => {

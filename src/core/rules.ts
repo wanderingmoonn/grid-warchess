@@ -941,7 +941,7 @@ export function cloneState(s: GameState): GameState {
  * （它决定"占不占格"，这件事渗进寻路、产兵位、攻击距离判断），
  * 不该由某个兵种包是否勾选来决定规则代码长什么样。
  *
- * 「掠空」这类能力可以再把它标成空中层（hooks.airLayer），
+ * 「飞行」这类能力可以再把它标成空中层（hooks.airLayer；id 叫 fly-over），
  * 那是给自定义兵种和旧数据留的路：老存档、老角色卡照常工作，
  * 新数据则应该直接写 `layer: 'air'`。
  */
@@ -950,7 +950,7 @@ export function airLayer(def: UnitTypeDef): boolean {
    * 三条判据，其实是同一件事的三种写法：
    *   · `layer: 'air'` —— 现在所有飞行单位都写这个；
    *   · `flight: true` —— 早先只有"能过水"这一个字段，没有层这个概念；
-   *   · 能力钩子 `airLayer` —— 「掠空」和兵种编辑器捏出来的旧数据。
+   *   · 能力钩子 `airLayer` —— 「飞行」（id `fly-over`）和兵种编辑器捏出来的旧数据。
    *
    * `flight` 这一条是后补的，补它是因为**两个字段各说各话**会长出真 bug：
    * 只写 `flight: true`、忘写 `layer: 'air'` 的单位会变成"能飞过河、
@@ -1018,7 +1018,7 @@ export function effectiveRange(s: GameState, u: Unit): number {
  *   · 射程 1 的步兵打不到**隔壁那格**的飞行单位；
  *   · 射程 2 的弓手只在"零到一格"内打得中，两格开外就够不着了；
  *   · 但飞行单位"压着打"（同一格）时距离算 0+1=1，脚下的兵还是能还手——
- *     这是「掠空」本来就有的交易：贴脸打会被反击，隔着一格才是安全的。
+ *     这是「飞行」本来就有的交易：贴脸打会被反击，隔着一格才是安全的。
  * 空中打地面、空中打空中、地面打地面都按正常距离算。
  *
  * 攻击判定、反击判定、以及所有"隔几格才打折/才加成"的能力都读它，
@@ -1421,7 +1421,7 @@ export function maxHpOf(s: GameState, u: Unit): number {
  * 这个兵种能不能掠水。
  *
  * 读 `flight` 字段（原版预留的机制字段），同时认三条旧能力 id：
- * 飞行、掠空、跳跃。后两者是「奇想」包早期的写法，也是兵种编辑器里
+ * 掠空、飞行、跳跃。后两者是「奇想」包早期的写法，也是兵种编辑器里
  * 那三个勾选框——不认识它们，玩家自己捏的飞行兵会当场失灵。
  *
  * 收在一个函数里，是因为漏掉任何一处都会长出那种只在特定局面才炸的 bug
@@ -2265,9 +2265,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const hooks = hooksOfUnit(s, unit);
-  // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
-  // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
-  // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
+  // 掠空：可以掠过水面，森林和丘陵也按 1 步算。
+  // 这条不是"更强的穿林"——穿林的收益是省一步，掠空的收益是**河防对它不成立**。
+  // 「飞行」（fly-over）是掠空的加强版：同样掠水，另外还能和地面单位同格。
+  // 注意 id 和名字是反的（2026-11-08 对调过名字）：fly = 掠空，fly-over = 飞行。
   const flyer = crossesWater(def);
   const air = isAirborne(s, unit);
   // 穿行：可以穿过敌军，只是不能停在上面
@@ -2360,7 +2361,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 敌军挡路：既不能进，也不能穿（除非你会穿行）。
       // **只有同一层会挡**：地面的兵挡地面，天上的挡天上。
       // 不同层可以共格，所以它们彼此既不挡路、也不占位——
-      // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
+      // 这正是「飞行」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
       if (enemyBlocks(nx, ny)) continue;
 

@@ -486,6 +486,24 @@ export const FORGE_3: UnitTypeDef = {
  * 数值按"同代兵略强、但有地形门槛"来定：门槛本身就是成本，所以每一件都比
  * 同代的普通兵高一档；真正的限制是"你得先有炉子，还得把炉子摆在材料边上"。
  */
+
+/**
+ * 法器用哪条"会飞"的能力：`fly-over`（**名字叫「飞行」**，2026-11-08 改名后）。
+ *
+ * 注意 id 和名字对不上：`fly` 现在叫「掠空」（只掠水、仍在地面层），
+ * `fly-over` 才叫「飞行」（真正在空中层）。这条只在 abilities.ts 里解释一次，
+ * 这里写死 id 是为了让"法器悬浮在头顶"这件事有据可查。
+ *
+ * 选了空中层，连带三件事（都是规则自然推出来的，不是额外加的）：
+ *   · 图标缩小、画在上层；
+ *   · 地形一概不挡——水面、深水、高山都能停；
+ *   · 地面单位打它时距离 +1，所以射程 1 的近战够不着，除非敌人站到同一格压着打。
+ *
+ * 之前用的是「掠空」（只掠水、不下水层不悬空），代价是"飞剑贴地爬"这件事
+ * 和「御剑」的画面差得太远；换成真飞行之后，它才真的像一件被人遥控的器物。
+ */
+const FLY_ABILITY = 'fly-over';
+
 export const ARTIFACT_WOOD: UnitTypeDef = {
   id: UNIT_IDS.ARTIFACT_WOOD,
   name: '青木剑',
@@ -509,7 +527,7 @@ export const ARTIFACT_WOOD: UnitTypeDef = {
   maxHp: 36,
   range: 3,
   vision: 3,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, FLY_ABILITY],
   /*
    * 两种产地，满足其一就行：
    *   · 挨着森林——"林中取材"，最直白的一条；
@@ -545,7 +563,7 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   range: 1,
   vision: 2,
   splash: 1,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, FLY_ABILITY],
   /*
    * 丘陵，或者两块灵矿。
    *
@@ -577,7 +595,7 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   range: 4,
   vision: 5,
   splash: 2,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, FLY_ABILITY],
   /*
    * 两种产地，满足其一就行：
    *   · 水面或浅滩——"寒水"，最直白的一条；
@@ -613,7 +631,7 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   range: 3,
   vision: 4,
   splash: 2,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, 'fly'],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, FLY_ABILITY],
   // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
   produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };
