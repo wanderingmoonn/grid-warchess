@@ -13,7 +13,7 @@
 
 import { CONFIG } from './config.ts';
 import { visibleMarks } from './marks.ts';
-import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
+import { cityTiles, cloneState, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
 import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
 
 export interface PlayerView {
@@ -57,7 +57,7 @@ function allTiles(s: GameState): Set<number> {
 export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerView {
   const visibleSet = reveal ? allTiles(s) : visibleTilesOf(s, p);
   const visible = Array.from(visibleSet);
-  const cloned = structuredClone(s);
+  const cloned = cloneState(s);
 
   if (!s.fog || reveal) {
     return {

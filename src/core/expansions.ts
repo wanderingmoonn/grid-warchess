@@ -1065,16 +1065,17 @@ export function availableExpansions(): Expansion[] {
  * 所以按内容记住上一次就够了——对局中途不会换扩展，命中率接近 100%。
  * 返回值是共享的只读数组：调用方只许遍历，不许改。
  */
-let lastIdsKey: string | null = null;
+let lastIds: string[] = [];
 let lastActive: Expansion[] = [];
 
 /** 按配置里勾选的顺序取出启用的扩展（顺序固定，保证确定性） */
 export function activeExpansions(state: GameState): Expansion[] {
   // 先过别名表：老存档里写的是合并前的 id，不迁移的话这里会一个包都取不到，
   // 表现就是"读档之后所有扩展规则突然都不生效了"
-  const ids = normalizeExpansionIds(state.config.expansionIds);
-  const key = ids.join('|');
-  if (key === lastIdsKey) return lastActive;
+  const raw = state.config.expansionIds;
+  // 局面在试算中反复被深拷贝；按内容比较，也能检测同一数组的原位修改。
+  if (raw.length === lastIds.length && raw.every((id, i) => id === lastIds[i])) return lastActive;
+  const ids = normalizeExpansionIds(raw);
   const out: Expansion[] = [];
   const on = enabledExpansionIds(ids);
   for (const id of ids) {
@@ -1082,7 +1083,7 @@ export function activeExpansions(state: GameState): Expansion[] {
     const e = expansionById(id);
     if (e) out.push(e);
   }
-  lastIdsKey = key;
+  lastIds = raw.slice();
   lastActive = out;
   return out;
 }

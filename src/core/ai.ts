@@ -77,6 +77,7 @@ import { orderDirectiveOf } from './rules.ts';
 import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
+import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
@@ -1002,6 +1003,9 @@ function scoreAttack(s: GameState, attacker: Unit, target: Unit, all: Fields): n
 
   const kill = preview.toDefender >= target.hp;
   let score = kill ? 120 + targetDef.cost * 0.12 : (preview.toDefender / targetDef.maxHp) * 60;
+  if (all.airDefense && preview.toDefender > 0) {
+    score += all.airDefense.priority(target) * Math.min(65, 15 + 55 * preview.toDefender / Math.max(1, target.hp));
+  }
   score -= (preview.toAttacker / selfDef.maxHp) * 45;
 
   // 溅射：一发打到一片，就按"额外伤害"折算成分数，否则 AI 只会盯着血最少的那一个，
@@ -1375,6 +1379,7 @@ function pickFocusTarget(s: GameState, me: PlayerId): string | null {
 
 interface Fields {
   tactical: TacticalMap;
+  airDefense: AirDefense | null;
   land: Map<string, number[]>;
   wade: Map<string, number[]>;
   water: Map<string, number[]>;
@@ -2023,7 +2028,7 @@ function scoreMove(
   const tile = s.tiles[y * s.w + x];
   if (!tile) return -999;
   if (aiLevelOf(s) !== 'basic' && def.category !== 'builder' && !s.config.godMode) {
-    return tacticalMoveScore(s, unit, x, y, all, traits);
+    return tacticalMoveScore(s, unit, x, y, all, traits) + (all.airDefense?.move(unit, {x,y}) ?? 0);
   }
 
   // 水军要按"水路的距离"算，否则它的起点在图上是无穷远，永远算不出方向
@@ -4174,6 +4179,7 @@ function recruitCandidate(
    * 与其在换血那段再抄一遍采购评分，不如把上限这一条做成开关。
    */
   ignoreCap = false,
+  airDefense: AirDefense | null = null,
 ): Candidate | null {
   // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
   // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
@@ -4385,7 +4391,8 @@ function recruitCandidate(
     // 计划要的份额，就该买。第一版写的是硬停采购（差额没凑齐就一个兵不造），
     // 实测胜率掉到 38.8%——钱是攒下来了，可对面在这几个回合里多出四五个兵，
     // 城下再也没站起来过。攒钱的意义是"为了一件大事忍一手"，不是"把自己饿死"。
-    if (plan.savingFor && !plan.urgent && !order) {
+    const intercept = airDefense?.recruit(d, src, price + unlockFee) ?? 0;
+    if (plan.savingFor && !plan.urgent && !order && (intercept < 35 || plan.savingFor === 'rebuild')) {
       // 目标本身就是它（攒英雄）：到店就买，别被自己的冻结额度挡住
       const isTarget =
         (plan.savingFor === 'hero' && d.hero) ||
@@ -4416,7 +4423,7 @@ function recruitCandidate(
       }
     }
 
-    let score = 50;
+    let score = 50 + intercept;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
       if (aiLevelOf(s)!=='basic') {
@@ -4748,6 +4755,7 @@ function swapOutCandidate(
   plan: AiPlan,
   mood: AiMood,
   seaDemandNow: number,
+  airDefense: AirDefense | null,
 ): Candidate | null {
   const bail = (why: string): null => {
     if (aiTrace.on) aiTrace.swapWhy.set(why, (aiTrace.swapWhy.get(why) ?? 0) + 1);
@@ -4779,6 +4787,7 @@ function swapOutCandidate(
       mood,
       seaDemandNow,
       true,
+      airDefense,
     );
     if (c && (!want || c.score > want.score)) want = c;
   }
@@ -4973,6 +4982,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
     if (i > 0) proj.players[player].gold += perTurn;
 
     let bestRecruit: Candidate | null = null;
+    const airDefense = airDefenseFor(proj, player);
     for (const city of citiesOf(proj, player)) {
       if (city.capturedTurn === proj.turn) continue;
       const c = recruitCandidate(
@@ -4984,6 +4994,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
         null,
         mood,
+        0, false, airDefense,
       );
       if (c && (!bestRecruit || c.score > bestRecruit.score)) bestRecruit = c;
     }
@@ -5381,8 +5392,14 @@ function aiNextActionCore(
   /** 两翼分工：主攻方向定了才能分第二路 */
   const flank = flankSplit(view, me, land, mood.focusCityId);
 
+  const airDefense = airDefenseFor(view, me);
+  // 预测敌方下一回合的火力，双方真实的移动点都保留在原局面中。
+  const forecast = airDefense ? {
+    ...view, units: view.units.map(u => u.owner !== me && u.moveSpent ? {...u, moveSpent: 0} : u),
+  } : view;
   const fields: Fields = {
-    tactical: tacticalMap(view, me),
+    tactical: tacticalMap(forecast, me),
+    airDefense,
     land,
     wade,
     water: distanceFields(view, me, 'water'),
@@ -5481,7 +5498,7 @@ function aiNextActionCore(
    * "一回合最多换一次"是**自限的**：解散之后 armySize 掉到 23，
    * 下一次进来第一条就不成立了。
    */
-  const swapOut = swapOutCandidate(view, me, traits, plan, mood, seaDemandNow);
+  const swapOut = swapOutCandidate(view, me, traits, plan, mood, seaDemandNow, fields.airDefense);
   if (swapOut) {
     if (aiTrace.on) aiTrace.swap += 1;
     return swapOut.action;
@@ -5508,6 +5525,7 @@ function aiNextActionCore(
         order,
         mood,
         seaDemandNow,
+        false, fields.airDefense,
       );
       if (c) candidates.push(c);
     }
@@ -5527,6 +5545,7 @@ function aiNextActionCore(
           order,
           mood,
           seaDemandNow,
+          false, fields.airDefense,
         );
         if (c) candidates.push(c);
       }

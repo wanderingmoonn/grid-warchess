@@ -687,8 +687,26 @@ export function supplyEraAt(
 
 
 
+const simulationCatalogs = new WeakSet<GameState['unitTypes']>();
+
+/** 离线跑批开始时复制并冻结本局兵种表，后续试算可以共享它。 */
+export function prepareSimulation(s: GameState): GameState {
+  const catalog = structuredClone(s.unitTypes);
+  // 兵种定义是存档里的纯数据。先复制，避免冻结自定义兵种或扩展注册表的嵌套数组。
+  function freezeTree(value: unknown): void {
+    if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return;
+    Object.freeze(value);
+    for (const child of Object.values(value)) freezeTree(child);
+  }
+  freezeTree(catalog);
+  simulationCatalogs.add(catalog);
+  return { ...s, unitTypes: catalog };
+}
+
 export function cloneState(s: GameState): GameState {
-  return structuredClone(s);
+  if (!simulationCatalogs.has(s.unitTypes)) return structuredClone(s);
+  // 城市、地形、单位、记忆和其余局面数据仍逐次深拷贝。
+  return { ...structuredClone({ ...s, unitTypes: undefined }), unitTypes: s.unitTypes };
 }
 
 // ── 奇想兵种包：魔法、属性、状态 ─────────────────────────────────────────
