@@ -1594,7 +1594,12 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
-    <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
+    ${
+      // 不还手的产兵建筑（宗门大殿：枪口 0）就别写"1 格内每回合 0 点"了
+      def.atk > 0
+        ? `<div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>`
+        : ''
+    }
     <div class="info-row"><span>时代</span><b>${supplyLine}</b></div>
     ${
       mine
@@ -1606,6 +1611,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
+           ${
+             /*
+              * 扩展给这座"营"挂的操作（宗门大殿的研发 / 遗弃）。
+              *
+              * 必须画在**军营面板**里，不是单位详情卡：产兵建筑点开走的是
+              * `renderCamp` 这条支路，压根不会走到 `renderDetail` 的那一份。
+              * 以前只画在详情卡上，于是宗门大殿永远只剩"招募弟子"——
+              * 研发和遗弃两个按钮根本不存在。
+              */
+             mine && myTurn ? unitActionBlock(s, camp, me) : ''
+           }
            ${
              input.spawnPick
                ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
