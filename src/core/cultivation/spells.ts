@@ -25,9 +25,11 @@
  * ⚠️ 红线：本文件不许 import `../units.ts`（见 skills/sky-step.ts 顶部）。
  * 需要宗门/藏经阁的 id 时从 `identity.ts` 取。
  */
-import type { GameState, Unit } from '../types.ts';
+import type { GameState, PlayerId, Unit } from '../types.ts';
 import type { SkillDef } from '../types.ts';
 import { distBetweenUnits } from '../query.ts';
+import { resOf } from '../resources.ts';
+import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { getRank } from './progression.ts';
 import { PALM_THUNDER_COST, PALM_THUNDER_SKILL } from './skills/palm-thunder.ts';
@@ -37,6 +39,14 @@ export interface SpellDef {
   skill: SkillDef;
   /** 施放一次要多少灵力 */
   cost: number;
+  /**
+   * 研发这条法术要多少灵石。不写就用 `RESEARCH_STONE_COST`。
+   *
+   * 研发**只收灵石**：这个包已经证明"灵石去处太少"，而法术是最适合拿灵石换的
+   * 东西——它不进军队编制、不能囤、也不能折回金币。想让某个法术更贵，
+   * 就在这里单独写一个数（越强的法术越该贵）。
+   */
+  researchCost?: number;
   /**
    * 限定流派（兵种 id 列表）。不写 = 所有修士都能学。
    *
@@ -56,8 +66,19 @@ export const SPELLS: readonly SpellDef[] = [
   { skill: PALM_THUNDER_SKILL, cost: PALM_THUNDER_COST },
 ];
 
-/** 每座生效中的藏经阁给本阵营加几个法术位 */
+/** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */
 export const LIBRARY_SPELL_SLOTS = 2;
+
+/**
+ * 阵营的研发基数。
+ *
+ * 0 意味着"没有藏经阁就一条法术都研发不了"——这是有意的：宗门大殿会摆坛作法，
+ * 但**书**在藏经阁里。想开一门新法术，先把藏书楼盖起来。
+ */
+export const RESEARCH_BASE_SLOTS = 0;
+
+/** 研发一条法术默认要多少灵石（`SpellDef.researchCost` 缺省时用它） */
+export const RESEARCH_STONE_COST = 60;
 
 /** 按 id 查法术。找不到 = 这不是法术（流派技能、境界技能都走这里返回 undefined） */
 export function spellOf(skillId: string): SpellDef | undefined {
@@ -87,7 +108,7 @@ export function libraryIsActive(s: GameState, lib: Unit): boolean {
 }
 
 /** 某一方生效中的藏经阁 */
-export function activeLibrariesOf(s: GameState, owner: string): Unit[] {
+export function activeLibrariesOf(s: GameState, owner: PlayerId): Unit[] {
   return s.units.filter(
     (u) => u.type === UNIT_IDS.SCRIPTURE_PAVILION && u.owner === owner && libraryIsActive(s, u),
   );
@@ -101,20 +122,95 @@ export function libraryNextTo(s: GameState, u: Unit): Unit | null {
   return null;
 }
 
-/** 这个修士能带几个法术：境界给一半，藏经阁每座 +2 */
-export function spellCapOf(s: GameState, u: Unit): number {
-  return Math.floor(getRank(u) / 2) + LIBRARY_SPELL_SLOTS * activeLibrariesOf(s, u.owner).length;
+/**
+ * 这个修士自己身上能带几个法术：`⌊境界 ÷ 2⌋`。
+ *
+ * 注意这里**不**含藏经阁：藏经阁加的是"这个阵营能研发多少门法术"
+ * （见 `researchCapOf`），不是"某个修士能背几门"。
+ *
+ * 这两件事以前被我混成一条，两个上限变成一个，于是"多盖几座藏书楼"
+ * 能直接让一个筑基修士背下全部法术。它们的语义完全不同：
+ *   · 研发上限 = 这一方**知道**多少门法术（藏书目录有多长）；
+ *   · 法术位   = 一个修士**记得住**多少门（境界越高，能背的越多）。
+ */
+export function spellSlotsOf(u: Unit): number {
+  return Math.floor(getRank(u) / 2);
+}
+
+/**
+ * 这一方**已研发**的法术（阵营级）。
+ *
+ * 存在 `state.researched[玩家]` 里：研发是阵营能力，本方所有藏经阁通用，
+ * 换一座宗门不该从零开始。
+ */
+export function researchedOf(s: GameState, owner: PlayerId): string[] {
+  return (s.researched ?? {})[owner] ?? [];
+}
+
+export function isResearched(s: GameState, owner: PlayerId, spellId: string): boolean {
+  return researchedOf(s, owner).includes(spellId);
+}
+
+/**
+ * 这一方能研发几门法术：`0 + 2 × 生效中的藏经阁`。
+ *
+ * 藏经阁必须贴着自家宗门才算生效（见 `libraryIsActive`），
+ * 所以"宗门被拆 → 藏书楼失效 → 研发额度下降"是一条链，不是三条规则。
+ */
+export function researchCapOf(s: GameState, owner: PlayerId): number {
+  return RESEARCH_BASE_SLOTS + LIBRARY_SPELL_SLOTS * activeLibrariesOf(s, owner).length;
+}
+
+/** 研发这一门要多少灵石 */
+export function researchCostOf(spell: SpellDef): number {
+  return spell.researchCost ?? RESEARCH_STONE_COST;
+}
+
+/**
+ * 能不能研发这一门。返回字符串 = 不能，字符串是给玩家看的理由。
+ *
+ * 面板（按钮灰不灰）和规则层（放不放行）共用这一份，理由和 `spellLearnProblem`
+ * 是同一个道理：两处各写一遍必然出现"能点、点下去被拒"。
+ */
+export function researchProblem(s: GameState, owner: PlayerId, spell: SpellDef): string | null {
+  if (isResearched(s, owner, spell.skill.id)) return `已经研发过「${spell.skill.name}」`;
+  const cap = researchCapOf(s, owner);
+  const used = researchedOf(s, owner).length;
+  if (used >= cap) {
+    return cap <= 0
+      ? '没有藏经阁：一门法术都研发不了（先盖一座贴着宗门的藏经阁）'
+      : `研发额度满了（${used} / ${cap}）：多盖一座藏经阁，或者遗弃一门旧法术`;
+  }
+  const cost = researchCostOf(spell);
+  const stones = resOf(s.players[owner], SPIRIT_STONE);
+  if (stones < cost) {
+    return `灵石不足（要 ${cost}，现在 ${stones}）`;
+  }
+  return null;
+}
+
+/** 这一门能不能遗弃：只有研发过的才谈得上遗弃 */
+export function abandonProblem(s: GameState, owner: PlayerId, spell: SpellDef): string | null {
+  if (!isResearched(s, owner, spell.skill.id)) return `还没研发过「${spell.skill.name}」`;
+  return null;
 }
 
 /**
  * 能不能学这一条法术。返回字符串 = 不能，字符串是给玩家看的理由。
  *
- * 规则层（`onUnitAction`）和面板（`unitActions` 把按钮灰掉）共用这一份，
- * 所以"能点"和"点得动"永远不会打架。
+ * 三道闸，顺序也是玩家理解的顺序：
+ *   1. 本方**研发过**它（没研发的东西藏经阁里没有）；
+ *   2. 流派限制（有些法术只有某一支学得会）；
+ *   3. 自己的法术位（`⌊境界 ÷ 2⌋`）还空着。
+ *
+ * 另外还有一条前置：得站在**生效中**的藏经阁旁边，否则连书都摸不到。
  */
 export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): string | null {
   if (knownSpells(u).some((sk) => sk.id === spell.skill.id)) {
     return `已经会「${spell.skill.name}」了`;
+  }
+  if (!isResearched(s, u.owner, spell.skill.id)) {
+    return `本方还没研发「${spell.skill.name}」——先在宗门大殿里研发它`;
   }
   if (spell.schools && !spell.schools.includes(u.type)) {
     return `这一门只有${spell.schools.map((id) => s.unitTypes[id]?.name ?? id).join('、')}学得会`;
@@ -122,12 +218,12 @@ export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): strin
   if (!libraryNextTo(s, u)) {
     return `要站在藏经阁旁边才能读（宗门没了，藏书楼也废了）`;
   }
-  const cap = spellCapOf(s, u);
+  const cap = spellSlotsOf(u);
   const known = knownSpells(u).length;
   if (known >= cap) {
     return cap <= 0
-      ? `境界不够：${Math.floor(getRank(u) / 2) || 0} 期没有法术位（至少 2 期）`
-      : `法术位满了（${known} / ${cap}）：再找一座藏经阁，或者去静心阁忘掉一门`;
+      ? `境界不够：0～1 期没有法术位（至少 2 期）`
+      : `法术位满了（${known} / ${cap}）：境界再高一点，或者去静心阁忘掉一门`;
   }
   return null;
 }

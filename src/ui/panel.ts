@@ -591,22 +591,32 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
  * 藏经阁之后的静心阁、宗门研发都能直接复用。
  */
 function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
-  const rows: string[] = [];
+  /** 按扩展给的 `group` 分组：同一组一个标题 */
+  const groups = new Map<string, string[]>();
   for (const e of activeExpansions(s)) {
     const opts = e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? [];
     for (const o of opts) {
+      const title = o.group ?? '研修';
+      const rows = groups.get(title) ?? [];
+      const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
       rows.push(
-        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}" ${o.disabled ? 'disabled' : ''}>
+        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
            <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
            <span class="price">${escapeHtml(o.note ?? '')}</span>
          </button>`,
       );
+      groups.set(title, rows);
     }
   }
-  if (rows.length === 0) return '';
-  return `<div class="card-title" style="margin-top:14px">研修</div>
-    <div class="recruit-list">${rows.join('')}</div>`;
+  if (groups.size === 0) return '';
+  return [...groups.entries()]
+    .map(
+      ([title, rows]) =>
+        `<div class="card-title" style="margin-top:14px">${escapeHtml(title)}</div>
+    <div class="recruit-list">${rows.join('')}</div>`,
+    )
+    .join('');
 }
 
 /**

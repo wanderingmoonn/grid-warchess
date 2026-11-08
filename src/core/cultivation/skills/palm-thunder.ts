@@ -46,10 +46,15 @@ export const PALM_THUNDER_SKILL: SkillDef = {
   name: '掌心雷',
   summary:
     `射程 ${PALM_THUNDER_RANGE} 格，对一名敌人造成 ${PALM_THUNDER_BASE} + 境界×${PALM_THUNDER_PER_RANK} 点伤害（无视护甲）；` +
-    `耗 ${PALM_THUNDER_COST} 灵力，每回合一次。`,
+    `耗 ${PALM_THUNDER_COST} 灵力，灵力够就能连着放。`,
   effect: 'palm-thunder',
   cooldown: 0,
-  multiCast: false,
+  /*
+   * **不限每回合一次**：节拍交给灵力池来管。
+   * 一个 9 期修士一回合能连放两发（130 点上限、每发 50），0 期连一发都攒不齐——
+   * "什么时候烧掉这池子"本身就是一个决定，比"一回合只能放一次"有意思得多。
+   */
+  multiCast: true,
   targeting: 'point',
   radius: PALM_THUNDER_RANGE,
 };

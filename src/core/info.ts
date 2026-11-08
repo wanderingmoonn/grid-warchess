@@ -245,7 +245,7 @@ export function describeUnit(
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
-    lines.push('前线产兵点：兵从营门四邻的空地出来。它按**自己的时代**出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
+    lines.push('前线产兵点：兵从营门四邻的空地出来。它按自己的时代出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
     if (spec.units?.length) {
       lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
     }

@@ -6,7 +6,7 @@ import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingY
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
 import { sectLegacyMul } from './sect.ts';
 import { MANA_REGEN, manaOf, maxManaOf } from './mana.ts';
-import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, spellCapOf } from './spells.ts';
+import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, researchCapOf, researchedOf, spellSlotsOf } from './spells.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -65,12 +65,18 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 	 */
 	lines.push(`灵力：${manaOf(unit)} / ${maxManaOf(unit)}（每回合 +${MANA_REGEN}）`);
 	{
-		const cap = spellCapOf(state, unit);
+		const slots = spellSlotsOf(unit);
 		const known = knownSpells(unit).length;
-		if (cap > 0 || known > 0) {
+		if (slots > 0 || known > 0) {
+			lines.push(`法术位：${known} / ${slots}（境界 ${Math.floor(rank / 2)}）`);
+		}
+		// 阵营的研发额度：只有开了藏经阁（或已研发过）才印，否则每张修士卡都多一行 0/0
+		const researchCap = researchCapOf(state, unit.owner);
+		const researched = researchedOf(state, unit.owner).length;
+		if (researchCap > 0 || researched > 0) {
 			const libs = activeLibrariesOf(state, unit.owner).length;
 			lines.push(
-				`法术位：${known} / ${cap}（境界 ${Math.floor(rank / 2)} + 藏经阁 ${libs} × ${LIBRARY_SPELL_SLOTS}）`,
+				`本方研发：${researched} / ${researchCap}（藏经阁 ${libs} × ${LIBRARY_SPELL_SLOTS}）`,
 			);
 		}
 	}

@@ -117,7 +117,7 @@ import {
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
 import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
-import { LIBRARY_SPELL_SLOTS } from '../src/core/cultivation/spells.ts';
+import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
 import { MANA_REGEN, manaLimitForRank } from '../src/core/cultivation/mana.ts';
 import {
   PALM_THUNDER_BASE,
@@ -2923,20 +2923,32 @@ function cultivationRules(): string {
         <li><b>灵力</b>：每个修士自己一池子，不是国库的灵石。上限
           <b>${manaLimitForRank(0)} / ${manaLimitForRank(9)}</b> 点（0 期 / 9 期），
           每回合开始回 <b>${MANA_REGEN}</b> 点。数值全是整十，方便以后细调。</li>
-        <li><b>法术位</b>：<b>⌊境界 ÷ 2⌋ + ${LIBRARY_SPELL_SLOTS} × 生效中的藏经阁</b>。
-          所以 <b>0～1 期一个法术位都没有</b>——新招的弟子要先修炼，才谈得上"学法术"。
+        <li><b>法术位</b>：<b>⌊境界 ÷ 2⌋</b>——这是<b>一个修士</b>能记住几门法术。
+          所以 <b>0～1 期一个法术位都没有</b>，新招的弟子要先修炼才谈得上"学法术"。
           流派技能（剑气纵横、血祭）和境界技能（御空）<b>不占</b>法术位。</li>
+        <li><b>研发额度</b>：<b>${RESEARCH_BASE_SLOTS > 0 ? `${RESEARCH_BASE_SLOTS} + ` : ''}${LIBRARY_SPELL_SLOTS} × 生效中的藏经阁</b>——
+          这是<b>整个阵营</b>能掌握几门法术。它和法术位是两件事：
+          额度决定"本方知道几门"，法术位决定"某个修士记得住几门"。
+          所以一座藏经阁能让全宗门多认两门法术，但不会让某个筑基修士多背一门。</li>
         <li><b>${SCRIPTURE_PAVILION.name}</b>（${SCRIPTURE_PAVILION.era} 代，${SCRIPTURE_PAVILION.cost} 金 +
           ${SCRIPTURE_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SCRIPTURE_PAVILION.maxHp} 血 /
           ${SCRIPTURE_PAVILION.armor} 甲）：<b>只能建在自家宗门旁边</b>，每一座给本阵营
-          <b>+${LIBRARY_SPELL_SLOTS} 个法术位</b>。没有数量上限——宗门周围的空地就是上限。
-          <b>宗门一被拆，这座楼立刻失效</b>：加成没了，也读不了书。</li>
-        <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在面板的「研修」里点
-          <b>研读「某某」</b>。学位满了、流派不符、没站在藏书楼旁边，按钮会灰着并写清原因。
-          研读本身暂时不消耗资源（研发与经书的经济还没做）。</li>
+          <b>+${LIBRARY_SPELL_SLOTS} 点研发额度</b>——所以<b>没有藏经阁就一门法术都研发不了</b>。
+          没有数量上限，宗门周围的空地就是上限。
+          <b>宗门一被拆，这座楼立刻失效</b>：额度没了，也读不了书。</li>
+        <li><b>研发</b>：选中自家的<b>宗门大殿</b>，在「研发」里花灵石把一门法术写进本方藏书目录
+          （每门 <b>${RESEARCH_STONE_COST}</b> 灵石，只收灵石）。额度满了、灵石不够都会灰着写原因。</li>
+        <li><b>遗弃</b>：研发过的法术在同一个面板的「遗弃」里可以划掉，<b>腾出研发额度</b>。
+          这一步<b>会弹确认框</b>（误点一次就少一门法术，代价太大）。
+          <b>已经学会的修士不受影响</b>——那属于遗忘，是静心阁的事。</li>
+        <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在「研修」里点
+          <b>研读「某某」</b>。本方没研发过、法术位满了、流派不符、没站在藏书楼旁边，
+          按钮会灰着并写清原因。</li>
         <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
           对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
-          <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力，每回合一次，不占攻击次数也不占移动。
+          <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力。
+          <b>不限每回合一次</b>：灵力够就能连着放（9 期一回合能放两发），
+          所以"什么时候把这池子烧掉"是玩家自己的决定；它不占攻击次数，也不占移动。
           它打不了城池，也打不了自己人。</li>
       </ul>
 

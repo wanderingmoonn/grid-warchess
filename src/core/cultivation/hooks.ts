@@ -1,5 +1,5 @@
 import type { ExpansionHooks, UnitActionOption } from '../expansions.ts';
-import type { GameState, Unit } from '../types.ts';
+import type { GameState, PlayerId, Unit } from '../types.ts';
 import { isCultivatorUnit, isCultivatorDef, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
 import {
   SECT_ID,
@@ -9,13 +9,19 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
+import { addRes } from '../resources.ts';
 import {
   SPELLS,
+  abandonProblem,
+  isResearched,
   knownSpells,
   libraryNextTo,
-  spellCapOf,
+  researchCostOf,
+  researchProblem,
+  researchedOf,
   spellLearnProblem,
   spellOf,
+  spellSlotsOf,
   teachSpell,
 } from './spells.ts';
 import {
@@ -45,7 +51,17 @@ import { bestAdjacentCultivatorRank } from './abilities/formation-guard.ts';
 import { guardianFor } from './abilities/formation-guardian.ts';
 import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from './abilities/formation-seal.ts';
 // query.ts 只 import type，不会和 rules.ts 形成环。
-import { distBetweenUnits, idx, inBounds } from '../query.ts';
+import { distBetweenUnits, idx, inBounds, underConstruction } from '../query.ts';
+
+/**
+ * 写一条**公开**战报。
+ *
+ * 研发、遗弃、学会法术这三件事对面迟早会通过"对面多了一门法术"察觉，
+ * 藏着反而像是 bug（"他什么时候会这个的"）。所以统一走 open: true。
+ */
+function push(s: GameState, player: PlayerId, text: string): void {
+  s.log.push({ turn: s.turn, player, text, open: true });
+}
 
 /**
  * 这个单位是不是被封印阵压住了。
@@ -229,48 +245,100 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		// 而不是按折后价——以后要是再来一条"宗门打折"的规则，两次折算不会打架。
 		return { ...cost, [SPIRIT_STONE]: (cost[SPIRIT_STONE] ?? 0) + sectRecruitStone(baseCost) };
 	},
-	// ── 藏经阁：学法术（2026-11-08）──────────────────
+	// ── 藏经阁：学法术 / 宗门大殿：研发与遗弃（2026-11-08）──
 	//
-	// 按钮和判定是同一份（`spellLearnProblem`）：面板拿它决定灰不灰，
-	// 这里拿它决定放不放行。两处各写一遍就会变成"按钮能点、点下去被拒"。
+	// 按钮和判定是同一份（`spellLearnProblem` / `researchProblem` / `abandonProblem`）：
+	// 面板拿它决定灰不灰，这里拿它决定放不放行。两处各写一遍就会变成
+	// "按钮能点、点下去被拒"。
 	//
-	// 只在"站在生效中的藏经阁旁边"时才列按钮：没书可读的时候在面板上挂一排
-	// 灰按钮，等于每次选中修士都多一堆噪音。
+	// 两组按钮从不打架：修士站在藏经阁旁边才有「研修」，宗门大殿自己才有
+	// 「研发 / 遗弃」，所以按 `group` 分组渲染就够了。
 	unitActions: ({ state, unit, viewer }) => {
 		if (unit.owner !== viewer) return [];
+		const out: UnitActionOption[] = [];
+
+		// 宗门大殿：研发（花灵石）+ 遗弃（腾出研发额度）
+		if (unit.type === SECT_ID) {
+			if (underConstruction(unit)) return [];
+			for (const sp of SPELLS) {
+				const done = isResearched(state, unit.owner, sp.skill.id);
+				if (!done) {
+					const problem = researchProblem(state, unit.owner, sp);
+					out.push({
+						id: `research:${sp.skill.id}`,
+						group: '研发',
+						label: `研发「${sp.skill.name}」`,
+						detail: sp.skill.summary,
+						disabled: !!problem,
+						note: problem ?? `${researchCostOf(sp)} 灵石`,
+					});
+					continue;
+				}
+				out.push({
+					id: `abandon:${sp.skill.id}`,
+					group: '遗弃',
+					label: `遗弃「${sp.skill.name}」`,
+					detail: '从本方藏书目录里划掉这一门，腾出研发额度；已经学会的修士不受影响',
+					confirm: `遗弃「${sp.skill.name}」？这会从本方的藏书目录里划掉它，` +
+						`腾出的研发额度可以用来研发别的法术。已经学会的修士保留它，但本方再也教不了新的弟子。`,
+					note: '不可撤回',
+				});
+			}
+			return out;
+		}
+
+		// 修士：站在生效中的藏经阁旁边才能读
 		if (!isCultivatorUnit(state, unit)) return [];
 		if (!libraryNextTo(state, unit)) return [];
-		const out: UnitActionOption[] = [];
 		for (const sp of SPELLS) {
 			if (knownSpells(unit).some((sk) => sk.id === sp.skill.id)) continue;
 			const problem = spellLearnProblem(state, unit, sp);
 			out.push({
 				id: `learn:${sp.skill.id}`,
+				group: '研修',
 				label: `研读「${sp.skill.name}」`,
 				detail: sp.skill.summary,
 				disabled: !!problem,
-				note: problem ?? `法术位 ${knownSpells(unit).length} / ${spellCapOf(state, unit)}`,
+				note: problem ?? `法术位 ${knownSpells(unit).length} / ${spellSlotsOf(unit)}`,
 			});
 		}
 		return out;
 	},
 	onUnitAction: ({ state, unit, actionId }) => {
-		const m = /^learn:(.+)$/.exec(actionId);
+		const m = /^(learn|research|abandon):(.+)$/.exec(actionId);
 		if (!m) return `认不出这个操作：${actionId}`;
-		const spell = spellOf(m[1]!);
+		const kind = m[1]!;
+		const spell = spellOf(m[2]!);
 		if (!spell) return '没有这门法术';
 
-		const problem = spellLearnProblem(state, unit, spell);
-		if (problem) return problem;
-		if (!teachSpell(unit, spell)) return `已经会「${spell.skill.name}」了`;
+		if (kind === 'learn') {
+			const problem = spellLearnProblem(state, unit, spell);
+			if (problem) return problem;
+			if (!teachSpell(unit, spell)) return `已经会「${spell.skill.name}」了`;
+			push(state, unit.owner, `${state.unitTypes[unit.type]?.name ?? unit.type}在藏经阁研读，学会了法术「${spell.skill.name}」`);
+			return null;
+		}
 
-		const who = state.unitTypes[unit.type]?.name ?? unit.type;
-		state.log.push({
-			turn: state.turn,
-			player: unit.owner,
-			text: `${who}在藏经阁研读，学会了法术「${spell.skill.name}」`,
-			open: true,
-		});
+		// 研发 / 遗弃都发生在宗门大殿上：不是大殿就拒绝（否则一个手搓动作能随处改写阵营状态）
+		if (state.unitTypes[unit.type]?.id !== SECT_ID) return '只有宗门大殿能做这件事';
+		if (underConstruction(unit)) return '宗门大殿还在施工';
+
+		if (kind === 'research') {
+			const problem = researchProblem(state, unit.owner, spell);
+			if (problem) return problem;
+			const cost = researchCostOf(spell);
+			addRes(state.players[unit.owner], SPIRIT_STONE, -cost);
+			const list = ((state.researched ??= {})[unit.owner] ??= []);
+			list.push(spell.skill.id);
+			push(state, unit.owner, `宗门大殿研发出法术「${spell.skill.name}」（耗 ${cost} 灵石）`);
+			return null;
+		}
+
+		const problem = abandonProblem(state, unit.owner, spell);
+		if (problem) return problem;
+		const list = researchedOf(state, unit.owner).filter((id) => id !== spell.skill.id);
+		(state.researched ??= {})[unit.owner] = list;
+		push(state, unit.owner, `宗门大殿遗弃了法术「${spell.skill.name}」，研发额度已腾出`);
 		return null;
 	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
