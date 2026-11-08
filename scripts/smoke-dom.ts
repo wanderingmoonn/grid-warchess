@@ -1219,6 +1219,187 @@ check('修真灵田的面板写全多资源收入，不只金币', () => {
   assert.ok(/\d+ 灵/.test(text), `也要写灵石，不能只剩金币：${text}`);
 });
 
+check('炼器炉面板：条件不满足的法器灰着列出来，并写清缺什么', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [
+        ...Object.keys(UNIT_TYPES),
+        'cultivation-forge-1',
+        'cultivation-artifact-wood',
+        'cultivation-artifact-stone',
+      ],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 法器要灵石：不补这一笔，按钮会因"资源不足"变灰，测不出产地条件
+  st.players.A.res = { 'spirit-stone': 100 };
+
+  // 把一片地摊平，保证炉子四周既没有森林也没有山
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  const forge: Unit = {
+    id: 'forge1',
+    type: 'cultivation-forge-1',
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes['cultivation-forge-1']?.maxHp ?? 90,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(forge);
+
+  const host = doc.createElement('div');
+  const paint = () => {
+    host.innerHTML = '';
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: forge,
+      selectedCityId: null,
+      selectedCampId: forge.id,
+      selectedTile: null,
+    });
+  };
+
+  paint();
+  let html = host.innerHTML;
+  assert.ok(html.includes('还造不出来'), '白名单里有、条件不满足的法器要单独列一组');
+  const wood = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood, '青木剑应该列出来（不能因为缺森林就消失）');
+  assert.equal(wood!.disabled, true, '缺材料时该是灰的');
+  assert.ok(html.includes('森林'), '按钮上要写清缺森林');
+
+  // 把炉子北边那格改成森林：同一座炉子应该立刻能造青木剑
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  paint();
+  html = host.innerHTML;
+  const wood2 = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood2, '青木剑还在列表里');
+  assert.equal(wood2!.disabled, false, '挨着森林之后就点得动了');
+  // 玄石印仍然缺山：它继续灰着，所以"还造不出来"这一组还在
+  const stone = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-stone"]');
+  assert.ok(stone, '玄石印也该列出来');
+  assert.equal(stone!.disabled, true, '没有山就还是灰的');
+  assert.ok(html.includes('山'), '玄石印的原因要写清缺山');
+  void html;
+});
+
+check('军营面板不列法器：campOnly 的东西不该出现在普通产兵点', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [...Object.keys(UNIT_TYPES), 'cultivation-artifact-wood'],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  st.players.A.res = { 'spirit-stone': 100 };
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  // 故意让军营挨着森林：条件满足也不该冒出法器——它根本不在军营的产品线上
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  const camp = {
+    id: 'camp1',
+    type: 'camp',
+    owner: 'A' as const,
+    x: 5,
+    y: 5,
+    hp: st.unitTypes.camp?.maxHp ?? 34,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(camp);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: camp,
+    selectedCityId: null,
+    selectedCampId: camp.id,
+    selectedTile: null,
+  });
+  assert.equal(
+    host.querySelector('[data-type="cultivation-artifact-wood"]'),
+    null,
+    '军营里连灰色的法器都不该出现',
+  );
+  assert.ok(!host.innerHTML.includes('还造不出来'), '军营不该有"还造不出来"这一组');
+});
+
+check('建造列表按档位过滤：高过工兵时代的建筑不列出来', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 造一个"二代的工匠，白名单里混进一座三代的堡寨"——
+  // 扩展就是这么往白名单里追加条目的（能架桥的人就能修船坞），
+  // 所以高代建筑完全可能出现二代的名单里。
+  st.unitTypes['test-builder-x'] = {
+    ...st.unitTypes.laborer,
+    id: 'test-builder-x',
+    name: '测试工匠',
+    era: 2,
+    builds: ['camp', 'camp3'],
+  };
+  const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  const builder: Unit = {
+    id: 'b1',
+    type: 'test-builder-x',
+    owner: 'A',
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(builder);
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: builder,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok(host.querySelector('[data-act="build"][data-type="camp"]'), '一代军营该列出来');
+  assert.equal(
+    host.querySelector('[data-act="build"][data-type="camp3"]'),
+    null,
+    '三代的堡寨不该挂在二代工匠的建造列表里',
+  );
+});
+
 check('详情面板显示的是算上修正的真实数值', () => {
   const st = createMatch(
     {
@@ -2329,7 +2510,7 @@ check('AI 连续行动时顶栏按钮不会被重建', () => {
 
 console.log('\n军营面板');
 
-check('军营面板列出兵种，并写清补给来自哪座城', () => {
+check('军营面板列出兵种，并写清自己是哪一档', () => {
   const st = createMatch(
     {
       size: 12,
@@ -2387,12 +2568,15 @@ check('军营面板列出兵种，并写清补给来自哪座城', () => {
 
   const html = host.innerHTML;
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
-  assert.ok(html.includes('补给来自'), '应该写清补给来自哪座城市');
-  assert.ok(html.includes('铁器'), '补给时代应该跟着最近的城走（这里升到了铁器）');
+  // 2026-11-08：营按自己的档位出兵，不再"补给来自某座城"。
+  // 这里是城升到了二级、营还是一级，所以面板必须写一级，而不是跟着城写铁器。
+  assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
+  assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
+  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
-  // 二级兵种也能造：军营的时代取最近那座二级城
-  assert.ok(host.querySelector('[data-type="spearman"]'), '二级城供养的军营应该能出二级兵');
+  // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
+  assert.equal(host.querySelector('[data-type="spearman"]'), null, '一级营根本不该列二级兵');
 });
 
 check('敌军军营不给你产兵，并提示打掉它', () => {
@@ -2436,7 +2620,7 @@ check('敌军军营不给你产兵，并提示打掉它', () => {
   });
 
   assert.equal(host.querySelectorAll('.recruit-btn').length, 0, '敌方军营不该给产兵按钮');
-  assert.ok(host.innerHTML.includes('打掉'), '应该提示这是敌方补给点');
+  assert.ok(host.innerHTML.includes('产兵建筑'), '应该提示这是敌方的产兵点');
 });
 
 console.log('\n渡船面板');

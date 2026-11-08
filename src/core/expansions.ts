@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
@@ -316,6 +316,25 @@ export interface ExpansionHooks {
    * 注意别在里面写 O(n²)：每次下命令都会问一遍。
    */
   canCommand?: (c: { state: GameState; unit: Unit }) => string | null;
+
+  /**
+   * 这个产兵点现在能不能造这个兵。返回字符串 = 不能，字符串是给玩家的理由。
+   *
+   * 和 `canProduce`（白名单）分工：白名单是数据里写死的"这营出什么"，
+   * 这个钩子是"此刻还有什么额外条件"——境界不够、灵石不够、
+   * 炉边要站个炼器师、本局开启了某个限制……
+   *
+   * 常见的地形条件不用走这里：兵种数据上的 `produceNear` 已经能表达
+   * "贴着森林/山/灵田才造得出来"，那条有现成的几何和默认文案（规则书要印）。
+   *
+   * 必须在**规则、面板、AI**三处都生效，所以由 rules.produceAt 统一调用，
+   * 扩展只要实现这一个函数，不用去改三个地方。
+   */
+  produceBlocked?: (c: {
+    state: GameState;
+    source: ProduceSource;
+    target: UnitTypeDef;
+  }) => string | null;
 
   /**
    * 这一次伤害由谁来接。返回 `null` = 不转移（默认）。

@@ -245,7 +245,7 @@ export function describeUnit(
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
-    lines.push('前线产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。城市丢了就产不出兵。');
+    lines.push('前线产兵点：兵从营门四邻的空地出来。它按**自己的时代**出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
     if (spec.units?.length) {
       lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
     }
@@ -259,6 +259,19 @@ export function describeUnit(
     if ((spec.pop ?? 0) > 0) lines.push(`占编制：这座营本身占 ${spec.pop} 格编制。`);
     const on = (def.buildOn ?? []).map((t) => TERRAIN_INFO[t].name).join('或');
     if (on) lines.push(`只能扎在${on}上`);
+  }
+  if (def.campOnly) {
+    lines.push('只能由产兵建筑制造：城市产线里没有它。');
+  }
+  if (def.produceNear) {
+    // 和选址要求同构：产兵点的每一格连同四邻都算
+    const names = [
+      ...(def.produceNear.terrain ?? []).map((t) => TERRAIN_INFO[t].name),
+      ...(def.produceNear.unit ?? []).map(nameOf),
+    ];
+    if (names.length > 0) {
+      lines.push(`产地要求：造它的产兵点必须挨着${names.join('或')}（占地每格和四邻都算）。`);
+    }
   }
   if (def.category === 'building') {
     // 选址要求只有一处来源（rules.adjacentRequirementOf），文案也由它生成。
@@ -351,6 +364,7 @@ export function describeUnit(
     const { names } = buildListOf(def, {
       nameOf,
       exists: (id) => !!s.unitTypes[id],
+      eraOf: (id) => s.unitTypes[id]?.era,
     });
     lines.push(`可建造：${names.join('、')}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);
     lines.push('本身不产金，靠盖出来的东西挣钱或防守');
