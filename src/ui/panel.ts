@@ -1534,9 +1534,8 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
       : grouped) + gatedGroup;
 
-  // 档位是这座营自己的，不看后方城市。写清楚是因为玩家会本能地以为
-  // "我的城已经五代了，这座营怎么还只出二代兵"。
-  const supplyLine = `${eraDef(era).name}时代档位（自己的档位，不随后方城市变化）`;
+  // 档位是这座营自己的，不看后方城市。写清楚是因为玩家会本能地以为"我的城已经五代了，这座营怎么还只出二代兵"。
+  const supplyLine = `${eraDef(era).name}`;
 
   return `
     <div class="unit-head">
@@ -1550,7 +1549,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
     <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
-    <div class="info-row"><span>档位</span><b>${supplyLine}</b></div>
+    <div class="info-row"><span>时代</span><b>${supplyLine}</b></div>
     ${
       mine
         ? `<div class="card-title" style="margin-top:14px">${
@@ -1572,11 +1571,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
              兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
-             <br />这座营按自己的档位出兵，不随后方城市换代——想要新兵，就在新地方再扎一座营。
+             <br />这座营按自己的时代出兵。
              ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
-             这是${s.players[camp.owner].name}的产兵建筑。把它打掉，对方就少一个前线补员点。
+             这是${s.players[camp.owner].name}的产兵建筑。
            </div>`
     }
   `;
