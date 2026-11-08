@@ -1746,6 +1746,14 @@ export type Action =
   | { type: 'DISBAND'; unitId: string }
   /** 英雄技能：谁放、放哪个 */
   | { type: 'HERO_SKILL'; unitId: string; skillId: string; targetX?: number; targetY?: number }
+  /**
+   * 扩展自定义的"单位操作"（学法术、遗忘法术、传功……）。
+   *
+   * 核心不解释 `actionId`，只把它转交给扩展的 `onUnitAction`——这样加一类新操作
+   * 不用往 `Action` 里长一个新分支，也就不会让 AI / 回放 / 联机各自漏一处。
+   * 按钮由扩展的 `unitActions` 钩子自己列（见 expansions.ts），面板只管画。
+   */
+  | { type: 'UNIT_ACTION'; unitId: string; actionId: string }
   /** 把待落位的蛋放到这一格（不死鸟） */
   | { type: 'PLACE_EGG'; x: number; y: number }
   /** 认输：直接把胜利判给对方，不用把棋盘走完 */

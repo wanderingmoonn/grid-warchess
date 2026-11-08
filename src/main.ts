@@ -12,6 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
+import { skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
@@ -3491,8 +3492,13 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 去兵种表里查出这个技能的原始数据
       const unit = state.units.find(u => u.id === unitId);
-      const def = unit ? state.unitTypes[unit.type] : null;
-      const skillDef = def?.skills?.find(s => s.id === skillId);
+      /*
+       * 必须查 `skillsOf`（兵种表 + 学来的），不能只查 `def.skills`：
+       * "学来的法术"只存在单位的 `extraSkills` 里，兵种表上根本没有。
+       * 只查兵种表的话，一个 `targeting: 'point'` 的法术会被当成"不需要选点"
+       * 直接派发出去——点一下按钮就白放，而且永远点不到目标。
+       */
+      const skillDef = unit ? skillsOf(state, unit).find(s => s.id === skillId) : null;
 
       // 如果数据里声明了需要选点/选方向，就进入等待状态
       if (skillDef && (skillDef.targeting === 'point' || skillDef.targeting === 'direction')) {
@@ -3520,6 +3526,18 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 没声明需要选点，或者找不到数据，维持原来的直接释放
       dispatch({ type: 'HERO_SKILL', unitId, skillId });
+      render();
+      return;
+    }
+
+    case 'unit-action': {
+      // 扩展声明的单位操作（学法术、遗忘法术……）。核心不解释 actionId，
+      // 只把它和单位 id 一起派发给规则层，由扩展的 onUnitAction 处理。
+      const id = el.dataset.id;
+      const actionId = el.dataset.action;
+      if (!id || !actionId) return;
+      // dispatch 自己会 toast 失败原因，这里只管发
+      dispatch({ type: 'UNIT_ACTION', unitId: id, actionId });
       render();
       return;
     }

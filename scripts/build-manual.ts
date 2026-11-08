@@ -105,6 +105,7 @@ import {
   FORGE_2,
   FORGE_3,
   SECT,
+  SCRIPTURE_PAVILION,
   SPIRIT_SPRING,
   CULTIVATOR,
   SWORD_CULTIVATOR,
@@ -116,6 +117,15 @@ import {
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
 import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
+import { LIBRARY_SPELL_SLOTS } from '../src/core/cultivation/spells.ts';
+import { MANA_REGEN, manaLimitForRank } from '../src/core/cultivation/mana.ts';
+import {
+  PALM_THUNDER_BASE,
+  PALM_THUNDER_COST,
+  PALM_THUNDER_PER_RANK,
+  PALM_THUNDER_RANGE,
+  PALM_THUNDER_SKILL,
+} from '../src/core/cultivation/skills/palm-thunder.ts';
 import {
   SPRING_FLOOR_HEAL,
   SPRING_HEAL_RATIO,
@@ -2904,6 +2914,30 @@ function cultivationRules(): string {
         <li><b>2×2 的代价</b>：四格一起挡路、一起挨打；选址要求四格全空且地形可建，
           所以<b>城里基本放不下</b>（城里只要有一个驻军就占掉一格）。
           建造距离按"整块地到工匠最近的一格"算，不必拿左上角去凑。</li>
+      </ul>
+
+      <h3>藏经阁与法术</h3>
+      <p>法器和灵泉是"外物"，法术则是修士<b>自己身上</b>的东西。它和流派技能、境界技能长得一样
+        （都在技能栏里），但有三条不同：<b>只能学、要花灵力、占法术位</b>。</p>
+      <ul>
+        <li><b>灵力</b>：每个修士自己一池子，不是国库的灵石。上限
+          <b>${manaLimitForRank(0)} / ${manaLimitForRank(9)}</b> 点（0 期 / 9 期），
+          每回合开始回 <b>${MANA_REGEN}</b> 点。数值全是整十，方便以后细调。</li>
+        <li><b>法术位</b>：<b>⌊境界 ÷ 2⌋ + ${LIBRARY_SPELL_SLOTS} × 生效中的藏经阁</b>。
+          所以 <b>0～1 期一个法术位都没有</b>——新招的弟子要先修炼，才谈得上"学法术"。
+          流派技能（剑气纵横、血祭）和境界技能（御空）<b>不占</b>法术位。</li>
+        <li><b>${SCRIPTURE_PAVILION.name}</b>（${SCRIPTURE_PAVILION.era} 代，${SCRIPTURE_PAVILION.cost} 金 +
+          ${SCRIPTURE_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SCRIPTURE_PAVILION.maxHp} 血 /
+          ${SCRIPTURE_PAVILION.armor} 甲）：<b>只能建在自家宗门旁边</b>，每一座给本阵营
+          <b>+${LIBRARY_SPELL_SLOTS} 个法术位</b>。没有数量上限——宗门周围的空地就是上限。
+          <b>宗门一被拆，这座楼立刻失效</b>：加成没了，也读不了书。</li>
+        <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在面板的「研修」里点
+          <b>研读「某某」</b>。学位满了、流派不符、没站在藏书楼旁边，按钮会灰着并写清原因。
+          研读本身暂时不消耗资源（研发与经书的经济还没做）。</li>
+        <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
+          对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
+          <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力，每回合一次，不占攻击次数也不占移动。
+          它打不了城池，也打不了自己人。</li>
       </ul>
 
       <h3>灵泉</h3>

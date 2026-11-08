@@ -456,6 +456,50 @@ export interface ExpansionHooks {
    * 核心引擎不会读取这里的逻辑，只负责把它们画出来。
    */
   getUnitPanelLines?: (c: { state: GameState; unit: Unit }) => string[];
+
+  /**
+   * 单位面板上的**扩展按钮**。
+   *
+   * 只解决一件核心不知道怎么办的事："修士站在藏经阁旁边，想学一门法术"——
+   * 学什么、能不能学、花多少，全是扩展的知识，但它需要一个按钮。
+   *
+   * 核心负责：把它画在选中单位的卡片上、只在"自己的单位 + 自己的回合"时下发、
+   * 点击后发一个 `UNIT_ACTION { unitId, actionId }` 回来。`actionId` 的格式
+   * 完全由扩展决定（修真包用 `learn:<法术 id>`）。
+   *
+   * 只传 `viewer` 不传"是不是观战"：观战时核心自己就不列按钮，
+   * 扩展不用为这件事再分一次叉。
+   */
+  unitActions?: (c: {
+    state: GameState;
+    unit: Unit;
+    viewer: PlayerId;
+  }) => UnitActionOption[];
+
+  /**
+   * 处理 `UNIT_ACTION`。**谁声明了 `unitActions` 就由谁处理**（按扩展顺序取第一个），
+   * 返回字符串 = 拒绝，字符串本身是给玩家看的理由；返回 null = 成功。
+   *
+   * 副作用（扣资源、改单位、写战报）都在这里做，规则层只负责把动作变成
+   * 一份可回放的记录——和 `on*` 系列钩子同一个口径。
+   */
+  onUnitAction?: (c: {
+    state: GameState;
+    unit: Unit;
+    actionId: string;
+  }) => string | null;
+}
+
+/** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
+export interface UnitActionOption {
+  /** 点击后原样带回来的标识，格式由扩展决定 */
+  id: string;
+  label: string;
+  /** 小字：这一下会发生什么 */
+  detail?: string;
+  disabled?: boolean;
+  /** 右侧的短提示：价格、或者为什么不能点 */
+  note?: string;
 }
 
 export interface Expansion {

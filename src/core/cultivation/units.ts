@@ -158,6 +158,7 @@ export const DEACON: UnitTypeDef = {
     UNIT_IDS.FORGE_1,
     UNIT_IDS.FORGE_2,
     UNIT_IDS.SECT,
+    UNIT_IDS.SCRIPTURE_PAVILION,
   ],
   buildPower: 18,
 };
@@ -192,6 +193,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.FORGE_3,
     UNIT_IDS.SPIRIT_SPRING,
     UNIT_IDS.SECT,
+    UNIT_IDS.SCRIPTURE_PAVILION,
   ],
   buildPower: 24,
 };
@@ -259,6 +261,38 @@ export const SPIRIT_MINE: UnitTypeDef = {
   yieldByTerrain: {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
   },
+};
+
+// ── 藏经阁（2026-11-08）────────────────────────────
+//
+// 学法术的地方。必须**贴着自家宗门**：`adjacent` 是既有的选址条件（脚下 + 四邻），
+// 宗门的四格都算，所以贴着它任意一面墙都能起一座。
+//
+// 两件事都跟"贴着宗门"有关：
+//   · 建的时候：旁边必须已经有一座宗门（否则点不下去）；
+//   · 建成之后：宗门一旦被拆，这座楼**自动失效**——它给的 +2 法术位立刻消失，
+//     站在旁边也读不了书（见 spells.ts 的 libraryIsActive）。
+//
+// 没有数量上限：宗门周围的空位本身就是上限。堆十座藏经阁的代价是十格地和
+// 十次施工，而它们全都贴着同一座宗门——那是玩家的选择，不是需要额外拦的事。
+
+export const SCRIPTURE_PAVILION: UnitTypeDef = {
+  id: UNIT_IDS.SCRIPTURE_PAVILION,
+  name: '藏经阁',
+  short: '经',
+  era: 3,
+  category: 'building',
+  cost: 120,
+  costRes: { 'spirit-stone': 10 },
+  // 执事每回合 18 点 → 两回合立起来。藏书楼不该比宗门还难盖
+  buildCost: 20,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 60,
+  range: 1,
+  vision: 3,
+  adjacent: { unit: [UNIT_IDS.SECT] },
 };
 
 // ── 宗门大殿（2026-11-08）──────────────────────────

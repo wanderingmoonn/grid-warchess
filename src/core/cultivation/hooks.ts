@@ -1,4 +1,4 @@
-import type { ExpansionHooks } from '../expansions.ts';
+import type { ExpansionHooks, UnitActionOption } from '../expansions.ts';
 import type { GameState, Unit } from '../types.ts';
 import { isCultivatorUnit, isCultivatorDef, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
 import {
@@ -8,6 +8,16 @@ import {
   sectRecruitableTypes,
   sectRecruitStone,
 } from './sect.ts';
+import { regenMana } from './mana.ts';
+import {
+  SPELLS,
+  knownSpells,
+  libraryNextTo,
+  spellCapOf,
+  spellLearnProblem,
+  spellOf,
+  teachSpell,
+} from './spells.ts';
 import {
   ARTIFACT_MOVE_MUL,
   artifactArmorBonus,
@@ -219,6 +229,50 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		// 而不是按折后价——以后要是再来一条"宗门打折"的规则，两次折算不会打架。
 		return { ...cost, [SPIRIT_STONE]: (cost[SPIRIT_STONE] ?? 0) + sectRecruitStone(baseCost) };
 	},
+	// ── 藏经阁：学法术（2026-11-08）──────────────────
+	//
+	// 按钮和判定是同一份（`spellLearnProblem`）：面板拿它决定灰不灰，
+	// 这里拿它决定放不放行。两处各写一遍就会变成"按钮能点、点下去被拒"。
+	//
+	// 只在"站在生效中的藏经阁旁边"时才列按钮：没书可读的时候在面板上挂一排
+	// 灰按钮，等于每次选中修士都多一堆噪音。
+	unitActions: ({ state, unit, viewer }) => {
+		if (unit.owner !== viewer) return [];
+		if (!isCultivatorUnit(state, unit)) return [];
+		if (!libraryNextTo(state, unit)) return [];
+		const out: UnitActionOption[] = [];
+		for (const sp of SPELLS) {
+			if (knownSpells(unit).some((sk) => sk.id === sp.skill.id)) continue;
+			const problem = spellLearnProblem(state, unit, sp);
+			out.push({
+				id: `learn:${sp.skill.id}`,
+				label: `研读「${sp.skill.name}」`,
+				detail: sp.skill.summary,
+				disabled: !!problem,
+				note: problem ?? `法术位 ${knownSpells(unit).length} / ${spellCapOf(state, unit)}`,
+			});
+		}
+		return out;
+	},
+	onUnitAction: ({ state, unit, actionId }) => {
+		const m = /^learn:(.+)$/.exec(actionId);
+		if (!m) return `认不出这个操作：${actionId}`;
+		const spell = spellOf(m[1]!);
+		if (!spell) return '没有这门法术';
+
+		const problem = spellLearnProblem(state, unit, spell);
+		if (problem) return problem;
+		if (!teachSpell(unit, spell)) return `已经会「${spell.skill.name}」了`;
+
+		const who = state.unitTypes[unit.type]?.name ?? unit.type;
+		state.log.push({
+			turn: state.turn,
+			player: unit.owner,
+			text: `${who}在藏经阁研读，学会了法术「${spell.skill.name}」`,
+			open: true,
+		});
+		return null;
+	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
 		for (const u of state.units) {
@@ -227,6 +281,9 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
         delete u.custom.burstCharges;
       }
       if (!isCultivatorUnit(state, u)) continue;
+      // 灵力：刷新上限并回一点。放在最前面——它和寿元无关，
+      // 一个这回合就要坐化的修士，灵力也该按当前境界结算。
+      regenMana(u);
       const age = u.age ?? 0;
       // 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
       const lifespan = ensureLifespan(u);

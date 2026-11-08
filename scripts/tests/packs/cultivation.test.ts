@@ -52,6 +52,18 @@ import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.t
 import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
 import { SPRING_HP_PER_STONE } from '../../../src/core/cultivation/skills/spirit-spring.ts';
 import { sectLegacyMul, sectRecruitStone } from '../../../src/core/cultivation/sect.ts';
+import {
+  LIBRARY_SPELL_SLOTS,
+  activeLibrariesOf,
+  knownSpells,
+  libraryIsActive,
+  spellCapOf,
+  spellLearnProblem,
+  spellOf,
+  teachSpell,
+} from '../../../src/core/cultivation/spells.ts';
+import { MANA_REGEN, manaLimitForRank, manaOf, maxManaOf, setMana } from '../../../src/core/cultivation/mana.ts';
+import { PALM_THUNDER_COST, palmThunderDamage } from '../../../src/core/cultivation/skills/palm-thunder.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -2246,6 +2258,239 @@ export function run() {
     const line = getCultivationPanelLines(s, disciple).find((l) => l.includes('宗门传承'));
     assert.ok(line, '有师父时要有「宗门传承」这一行');
     assert.ok(line!.includes('×2'), `要把倍率写出来：${line}`);
+  });
+
+  // ── 法术 / 灵力 / 藏经阁（2026-11-08）────────────────────
+  //
+  // 一串新东西：灵力池、法术位、藏经阁、可学的法术、施放。这里测的是它们之间
+  // **对得上**，不是数值强弱——数值还会调，接口不该跟着变。
+
+  /** 宗门 + 旁边一座藏经阁，再留一块空地给人站 */
+  const spellScene = () => {
+    const { s, sect } = sectScene();
+    // 宗门在 (4,4)-(5,5)；藏经阁贴着它右边
+    const lib = place2(s, 'A', 'cultivation-scripture-pavilion', 6, 4);
+    return { s, sect, lib };
+  };
+
+  test('灵力：上限按境界算，全部是整十，老存档读出来是满的', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    assert.equal(manaLimitForRank(0), 40, '0 期 40');
+    assert.equal(manaLimitForRank(9), 130, '9 期 130');
+    for (let r = 0; r <= 9; r++) {
+      assert.equal(manaLimitForRank(r) % 10, 0, `${r} 期的上限也必须是整十`);
+    }
+
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    assert.equal(maxManaOf(qi), 40, '没有落库字段时按当前境界现算');
+    assert.equal(manaOf(qi), 40, '老存档没有 mana 字段 → 按满灵力处理');
+    setMana(qi, 999);
+    assert.equal(manaOf(qi), 40, '写入要被上限夹住');
+  });
+
+  test('灵力：回合开始回 30，上限随境界刷新', () => {
+    let s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    setMana(qi, 0);
+    // 两次结束回合才轮到 A 的下一个回合开始（中间夹着 B 的回合）
+    s = nextTurn(nextTurn(s));
+    const after = unitOf(s, 'qi-cultivator', 'A');
+    assert.equal(manaOf(after), MANA_REGEN, `一回合回 ${MANA_REGEN} 点`);
+    assert.equal(maxManaOf(after), manaLimitForRank(getRank(after)), '上限跟着境界走');
+  });
+
+  test('藏经阁：只能贴着自家宗门建，宗门没了就失效', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const deacon = place2(s, 'A', 'cultivation-deacon', 6, 6);
+
+    // 旁边没有宗门：建不了
+    const alone = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-scripture-pavilion',
+      x: 7,
+      y: 6,
+    });
+    assert.equal(alone.ok, false, '没有宗门就不该能盖藏经阁');
+
+    // 立起宗门之后就能盖（宗门占 (4,4)-(5,5)，藏经阁贴它右边）
+    const sect = place2(s, 'A', 'cultivation-sect', 4, 4);
+    const r = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-scripture-pavilion',
+      x: 6,
+      y: 4,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const lib = r.state.units.find((u) => u.type === 'cultivation-scripture-pavilion')!;
+    assert.ok(libraryIsActive(r.state, lib), '贴着宗门就是生效的');
+    assert.equal(activeLibrariesOf(r.state, 'A').length, 1);
+
+    // 宗门被拆：这座楼立刻失效
+    const gone = { ...r.state, units: r.state.units.filter((u) => u.id !== sect.id) };
+    assert.equal(libraryIsActive(gone, lib), false, '宗门没了，藏书楼就废了');
+    assert.equal(activeLibrariesOf(gone, 'A').length, 0);
+  });
+
+  test('法术位：境界每 2 级 1 个，藏经阁每座 +2；0～1 期一个都没有', () => {
+    const { s, lib } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5); // 贴着藏经阁
+    assert.equal(spellCapOf(s, qi), 0 + LIBRARY_SPELL_SLOTS, '0 期：境界 0 + 藏经阁 2');
+
+    setCultivationExp(qi, expForRank(1)); // 2 期
+    assert.equal(getRank(qi), 2);
+    assert.equal(spellCapOf(s, qi), 1 + LIBRARY_SPELL_SLOTS, '2 期：境界给 1');
+
+    // 藏经阁不挨着宗门了 → 不再加成
+    const lib2 = { ...lib, x: 9, y: 9 };
+    const moved = { ...s, units: s.units.map((u) => (u.id === lib.id ? lib2 : u)) };
+    assert.equal(spellCapOf(moved, qi), 1, '离了宗门的藏经阁不算法术位');
+  });
+
+  test('藏经阁：站在旁边才学得会，会重复 / 满位 / 流派不符都会被拒', () => {
+    const { s } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    const spell = spellOf('palm-thunder')!;
+    assert.ok(spell, '掌心雷要在法术池里');
+
+    // 0 期：法术位 0 + 2 = 2，但……先看"不在藏经阁旁边"的情况
+    const far = place2(s, 'A', 'qi-cultivator', 9, 9);
+    assert.ok((spellLearnProblem(s, far, spell) ?? '').includes('藏经阁'), '不挨着藏经阁不能学');
+
+    assert.equal(spellLearnProblem(s, qi, spell), null, '站在旁边、有位就能学');
+    assert.ok(teachSpell(qi, spell), '学成功');
+    assert.ok(knownSpells(qi).some((sk) => sk.id === 'palm-thunder'));
+    assert.ok((spellLearnProblem(s, qi, spell) ?? '').includes('已经会'), '不能学第二遍');
+
+    // 境界太低且没有藏经阁：一个法术位都没有
+    const bare = fresh({ expansionIds: ['cultivation'], godMode: true });
+    bare.units = [];
+    const novice = place2(bare, 'A', 'qi-cultivator', 5, 5);
+    assert.equal(spellCapOf(bare, novice), 0, '0 期 + 没藏经阁 = 0');
+    assert.ok((spellLearnProblem(bare, novice, spell) ?? '').includes('藏经阁'), '理由要指向藏经阁');
+  });
+
+  test('掌心雷：无视护甲、扣灵力、每回合一次、超射程不生效', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(1)); // 2 期
+    teachSpell(mage, spellOf('palm-thunder')!);
+
+    const heavy = place2(s, 'B', 'body-cultivator', 5, 7); // 护甲 2、血 30；距离 3 格
+    heavy.hp = 500;
+    const before = manaOf(mage);
+    const dmg = palmThunderDamage(getRank(mage));
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'palm-thunder',
+      targetX: heavy.x,
+      targetY: heavy.y,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const victim = r.state.units.find((u) => u.id === heavy.id)!;
+    assert.equal(victim.hp, 500 - dmg, `伤害要正好 ${dmg} 点（护甲不参与）`);
+    assert.equal(manaOf(r.state.units.find((u) => u.id === mage.id)!), before - PALM_THUNDER_COST, '扣灵力');
+
+    // 同一回合第二次：技能栏那一条不允许多发
+    const again = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'palm-thunder',
+      targetX: heavy.x,
+      targetY: heavy.y,
+    });
+    assert.equal(again.ok, false, '每回合只能放一次');
+
+    // 射程外
+    const s2 = spellScene().s;
+    const m2 = place2(s2, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(m2, expForRank(1));
+    teachSpell(m2, spellOf('palm-thunder')!);
+    const far = place2(s2, 'B', 'body-cultivator', 9, 9);
+    const tooFar = applyAction(s2, {
+      type: 'HERO_SKILL',
+      unitId: m2.id,
+      skillId: 'palm-thunder',
+      targetX: far.x,
+      targetY: far.y,
+    });
+    assert.equal(tooFar.ok, false, '超出射程应该被拒');
+    assert.ok(tooFar.ok ? '' : /射程|太远/.test(tooFar.reason), `理由要说射程：${tooFar.ok ? '' : tooFar.reason}`);
+  });
+
+  test('掌心雷：灵力不够时按钮是灰的，硬放也不扣灵力', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(1));
+    teachSpell(mage, spellOf('palm-thunder')!);
+    const foe = place2(s, 'B', 'militia', 5, 7);
+    foe.hp = 100;
+
+    setMana(mage, PALM_THUNDER_COST - 1);
+    const skill = heroSkillsOf(s, mage).find((k) => k.def.id === 'palm-thunder')!;
+    assert.equal(skill.ready, false, '灵力不足时不该显示就绪');
+    assert.ok(skill.notReadyReason?.includes('灵力'), `理由要说灵力：${skill.notReadyReason}`);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'palm-thunder',
+      targetX: foe.x,
+      targetY: foe.y,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(manaOf(s.units.find((u) => u.id === mage.id)!), PALM_THUNDER_COST - 1, '失败不扣灵力');
+  });
+
+  test('UNIT_ACTION：从「研修」按钮到学成一门法术，走完整一条链', () => {
+    const { s } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(qi, expForRank(1)); // 2 期
+
+    const buttons = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    const learn = buttons.find((b) => b.id === 'learn:palm-thunder');
+    assert.ok(learn, '站在生效中的藏经阁旁边，要列出「研读掌心雷」');
+    assert.equal(learn!.disabled, false, '有位可学就不该是灰的');
+
+    const r = applyAction(s, { type: 'UNIT_ACTION', unitId: qi.id, actionId: 'learn:palm-thunder' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(knownSpells(r.state.units.find((u) => u.id === qi.id)!).length, 1, '学会了一门');
+    assert.ok(r.state.log.some((l) => l.text.includes('掌心雷')), '战报要写明学了什么');
+
+    // 再学一次：拒绝
+    const again = applyAction(r.state, { type: 'UNIT_ACTION', unitId: qi.id, actionId: 'learn:palm-thunder' });
+    assert.equal(again.ok, false, '不能学第二遍');
+
+    // 不在藏经阁旁边：一个按钮都不列（不制造噪音）
+    const far = place2(s, 'A', 'qi-cultivator', 9, 9);
+    assert.equal(
+      CULTIVATION_HOOKS.unitActions!({ state: s, unit: far, viewer: 'A' }).length,
+      0,
+      '没书可读就别列按钮',
+    );
+    // 别人的单位：也给不出按钮（面板只在自家单位上调用，这里兜一道）
+    assert.equal(CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'B' }).length, 0);
+  });
+
+  test('法术：面板写出灵力与法术位', () => {
+    const { s } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(qi, expForRank(1));
+    const lines = getCultivationPanelLines(s, qi);
+    assert.ok(lines.some((l) => l.includes('灵力') && l.includes('每回合')), '要有灵力行');
+    assert.ok(lines.some((l) => l.includes('法术位') && l.includes('藏经阁')), '要有法术位行');
   });
 }
 

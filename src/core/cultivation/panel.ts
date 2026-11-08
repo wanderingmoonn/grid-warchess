@@ -5,6 +5,8 @@ import { skillsOf } from '../query.ts';
 import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
 import { sectLegacyMul } from './sect.ts';
+import { MANA_REGEN, manaOf, maxManaOf } from './mana.ts';
+import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, spellCapOf } from './spells.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -52,6 +54,26 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 			: `修为经验：${exp}（已臻化境）`,
 	`寿元：${age} / ${Number.isFinite(lifespan) ? lifespan : '∞'}`,
 	];
+
+	/*
+	 * 灵力 + 法术位。
+	 *
+	 * 这两条必须常驻：法术的按钮会因为"灵力不够"变灰，而灰按钮不会告诉你
+	 * "还差多少"——面板上得有一个数，玩家才知道"再等一回合"还是"这辈子放不起"。
+	 * 法术位同理：`0 / 0` 是最容易被当成 bug 的状态，所以连"境界给几个、
+	 * 藏经阁给几个"一起拆开写。
+	 */
+	lines.push(`灵力：${manaOf(unit)} / ${maxManaOf(unit)}（每回合 +${MANA_REGEN}）`);
+	{
+		const cap = spellCapOf(state, unit);
+		const known = knownSpells(unit).length;
+		if (cap > 0 || known > 0) {
+			const libs = activeLibrariesOf(state, unit.owner).length;
+			lines.push(
+				`法术位：${known} / ${cap}（境界 ${Math.floor(rank / 2)} + 藏经阁 ${libs} × ${LIBRARY_SPELL_SLOTS}）`,
+			);
+		}
+	}
 
 	if (isSwordCultivatorType(unit.type)) {
     lines.push(`剑修：境界加成在普攻时 ×${SWORD_BASE_MUL}，剑气纵横时 ×${SWORD_SWEEP_MUL}`);

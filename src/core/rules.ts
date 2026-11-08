@@ -3584,6 +3584,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
         return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
+      case 'UNIT_ACTION':
+        return doUnitAction(next, action.unitId, action.actionId);
       case 'PLACE_EGG':
         return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
@@ -5631,6 +5633,27 @@ SKILL_EFFECTS['fuse'] = (c) => {
   c.state.units.push(boss);
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
+
+/**
+ * 扩展自定义的单位操作（`UNIT_ACTION`）。
+ *
+ * 核心只做三件事：认人、确认是谁的回合、把 `actionId` 原样交给扩展。
+ * "能不能学、学了扣什么、写不写战报"全在扩展的 `onUnitAction` 里——
+ * 规则层对它一无所知，所以加一类新操作（遗忘法术、宗门传功）不用回来改这里。
+ *
+ * 没有扩展声明 `unitActions` 时直接拒绝：否则一个手搓的回放文件能往状态里
+ * 塞任意 actionId，虽然什么都不会发生，但也会让"这一步为什么无效"无从查起。
+ */
+function doUnitAction(s: GameState, unitId: string, actionId: string): ActionResult {
+  const u = s.units.find((x) => x.id === unitId);
+  if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
+  if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+  const impl = activeExpansions(s).find((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+  if (!impl) return { ok: false, reason: '当前规则里没有这种操作' };
+  const reason = impl.hooks.onUnitAction!({ state: s, unit: u, actionId });
+  if (reason) return { ok: false, reason };
+  return { ok: true, state: s };
+}
 
 function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
   const u = s.units.find((x) => x.id === unitId);

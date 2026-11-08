@@ -581,6 +581,35 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
 }
 
 /**
+ * 扩展声明的"单位操作"按钮（学法术、遗忘法术……）。
+ *
+ * 核心不知道这些按钮是干什么的：文案、能不能点、右边的短提示全由扩展的
+ * `unitActions` 给出，点击只会发一个 `UNIT_ACTION { unitId, actionId }` 回去。
+ *
+ * 为什么不在核心这里写死"学法术"：那等于让界面认识修真包，而这套代码的
+ * 分层是"界面不认识任何扩展"。一个通用的按钮位比一条特例便宜得多，
+ * 藏经阁之后的静心阁、宗门研发都能直接复用。
+ */
+function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
+  const rows: string[] = [];
+  for (const e of activeExpansions(s)) {
+    const opts = e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? [];
+    for (const o of opts) {
+      rows.push(
+        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}" ${o.disabled ? 'disabled' : ''}>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
+           <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
+           <span class="price">${escapeHtml(o.note ?? '')}</span>
+         </button>`,
+      );
+    }
+  }
+  if (rows.length === 0) return '';
+  return `<div class="card-title" style="margin-top:14px">研修</div>
+    <div class="recruit-list">${rows.join('')}</div>`;
+}
+
+/**
  * 给上帝模式：把"这一格/这支兵"的**完整**属性卡原样吐出来。
  *
  * 沙盒原来点一下只弹一句"名字 血量"，光环、规则加成、真实数值、技能按钮
@@ -911,6 +940,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
+      ${mine && myTurn ? unitActionBlock(s, selectedUnit, me) : ''}
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
