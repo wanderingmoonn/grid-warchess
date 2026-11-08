@@ -5,7 +5,8 @@
 import type { AbilityDef } from '../../abilities.ts';
 
 import { ARTIFACT_SPIRIT, WARM_NOURISH } from '../artifacts.ts';
-import { SWORD_QI } from './artifact-auras.ts';
+import { FIRE_QI, STONE_WARD, SWORD_QI } from './artifact-auras.ts';
+import { CHILL_HIT, SUNDER_HIT } from './artifact-effects.ts';
 
 import { ANOMALY } from './anomaly.ts';
 import { BODY_WARD } from './body-ward.ts';
@@ -18,6 +19,7 @@ import { SPIRIT_AURA } from './spirit-aura.ts';
 
 export * from './anomaly.ts';
 export * from './artifact-auras.ts';
+export * from './artifact-effects.ts';
 export * from './body-ward.ts';
 export * from './formation-guardian.ts';
 export * from './formation-kill.ts';
@@ -34,12 +36,16 @@ export const CULTIVATION_ABILITIES: AbilityDef[] = [
   ANOMALY,
   ARTIFACT_SPIRIT,
   BODY_WARD,
+  CHILL_HIT,
   FORMATION_KILL,
   FORMATION_SEAL,
   FORMATION_GUARDIAN,
   QI_TRUE_DAMAGE,
   SPIRIT_ASCENSION,
   SPIRIT_AURA,
+  STONE_WARD,
+  SUNDER_HIT,
   SWORD_QI,
   WARM_NOURISH,
+  FIRE_QI,
 ];

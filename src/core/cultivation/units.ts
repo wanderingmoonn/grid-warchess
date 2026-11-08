@@ -7,7 +7,8 @@ import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID } from './artifacts.ts';
-import { SWORD_QI_ID } from './abilities/artifact-auras.ts';
+import { FIRE_QI_ID, STONE_WARD_ID, SWORD_QI_ID } from './abilities/artifact-auras.ts';
+import { CHILL_HIT_ID, SUNDER_HIT_ID } from './abilities/artifact-effects.ts';
 import { GOLD } from '../resources.ts';
 
 //灵体
@@ -369,7 +370,7 @@ export const ARTIFACT_WOOD: UnitTypeDef = {
   maxHp: 36,
   range: 3,
   vision: 3,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID],
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, 'fly'],
   /*
    * 两种产地，满足其一就行：
    *   · 挨着森林——"林中取材"，最直白的一条；
@@ -389,16 +390,31 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   category: 'combat',
   campOnly: true,
   artifact: true,
-  cost: 110,
-  costRes: { 'spirit-stone': 6 },
-  move: 1,
-  atk: 7,
-  armor: 6,
-  maxHp: 36,
+  cost: 180,
+  costRes: { 'spirit-stone': 10 },
+  /*
+   * 一块"砸下去的印"：攻低、甲厚、血多、慢、射程短，但**能溅**。
+   *
+   * 和青木剑正好相反——那一件是"跑得快、打得远、皮薄"，
+   * 这一件是"站得住、打得近、一下能扫到旁边的人"。
+   * 它是四件法器里唯一不靠机动吃饭的，所以飞行只是"能过河"，不改它的定位。
+   */
+  move: 2,
+  atk: 12,
+  armor: 9,
+  maxHp: 52,
   range: 1,
   vision: 2,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
-  produceNear: { terrain: ['mountain', 'hill'] },
+  splash: 1,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, 'fly'],
+  /*
+   * 丘陵，或者两块灵矿。
+   *
+   * 2 代还造不出灵矿（它是 3 代建筑），所以"或"这半边在前期永远不成立——
+   * 这是有意的兜底：**地图没生成丘陵时**，玩家升到 3 代、开一座灵矿
+   * 仍然能把这个产品线救回来，不至于整件法器作废。
+   */
+  produceNear: [{ terrain: ['mountain', 'hill'] }, { unit: [UNIT_IDS.SPIRIT_MINE], count: 2 }],
 };
 
 export const ARTIFACT_WATER: UnitTypeDef = {
@@ -409,15 +425,20 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   category: 'combat',
   campOnly: true,
   artifact: true,
-  cost: 150,
-  costRes: { 'spirit-stone': 8 },
+  cost: 190,
+  costRes: { 'spirit-stone': 12 },
+  /*
+   * 远程控制。攻击力刻意不如同代火枪兵（23），换来的是射程、视野和**面**：
+   * 溅射 2 格，而且被打到的都会被冻慢。它不是杀伤单位，是"让你的阵型走不动"。
+   */
   move: 2,
-  atk: 9,
-  armor: 2,
-  maxHp: 22,
-  range: 3,
-  vision: 4,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
+  atk: 16,
+  armor: 3,
+  maxHp: 30,
+  range: 4,
+  vision: 5,
+  splash: 2,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, 'fly'],
   produceNear: { terrain: ['water', 'shallow'] },
 };
 
@@ -429,17 +450,21 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   category: 'combat',
   campOnly: true,
   artifact: true,
-  cost: 200,
-  costRes: { 'spirit-stone': 12 },
+  cost: 260,
+  costRes: { 'spirit-stone': 16 },
+  /*
+   * 远程 AOE：四件里伤害最高的一件，代价是射程比寒水镜短一格。
+   * 溅射 2 格 + 「熔甲」＝ 一炮把一片阵型的护甲打对折，
+   * 后面跟上来的近战就有了破口。它是"开团的那一下"，不是持续输出。
+   */
   move: 2,
-  atk: 13,
-  armor: 2,
-  maxHp: 26,
-  range: 2,
-  vision: 3,
-  // 炸开一小片：珠子碎了就是一团火
-  splash: 1,
-  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID],
+  atk: 30,
+  armor: 3,
+  maxHp: 34,
+  range: 3,
+  vision: 4,
+  splash: 2,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, 'fly'],
   // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
   produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };

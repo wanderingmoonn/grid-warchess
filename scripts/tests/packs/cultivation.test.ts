@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -30,6 +30,7 @@ import {
 } from '../../../src/core/cultivation/stats.ts';
 import { bodyWardPct, BODY_WARD_TIERS } from '../../../src/core/cultivation/abilities/body-ward.ts';
 import { baseLifespanOf, getExpGrowth, getLifespan } from '../../../src/core/cultivation/progression.ts';
+import { trueDamageWithMods } from '../../../src/core/cultivation/stats.ts';
 import { warmNourishHeal, WARM_NOURISH_RADIUS } from '../../../src/core/cultivation/artifacts.ts';
 import { SWORD_QI_ATK_PCT, SWORD_QI_RADIUS } from '../../../src/core/cultivation/abilities/artifact-auras.ts';
 import { EXP_GROWTH_BLOOD } from '../../../src/core/cultivation/progression.ts';
@@ -43,6 +44,7 @@ import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
+import { CORE_ABILITIES } from '../../../src/core/abilities.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
 import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
@@ -535,7 +537,12 @@ export function run() {
     const pack = CULTIVATION_PACK;
     const ids = new Set(Object.values(UNIT_IDS));
     const inPack = new Set((pack.units ?? []).map((u) => u.id));
-    const abilityIds = new Set((pack.abilities ?? []).map((a) => a.id));
+    const abilityIds = new Set([
+      ...(pack.abilities ?? []).map((a) => a.id),
+      // 本体那批公共词汇（fly / heal / first-strike…）扩展当然可以用：
+      // 守卫要拦的是"谁都没定义过的 id"，不是"不是我家定义的 id"。
+      ...CORE_ABILITIES.map((a) => a.id),
+    ]);
 
     for (const u of pack.units ?? []) {
       assert.ok(ids.has(u.id), `${u.name} 的 id「${u.id}」没登记进 UNIT_IDS`);
@@ -1383,6 +1390,129 @@ export function run() {
       `半径内该 +${Math.round(SWORD_QI_ATK_PCT * 100)}%`,
     );
     assert.ok(buffed > plain, '加成果然生效了');
+  });
+
+  // ── 后三件法器：护甲光环 / 迟缓 / 熔甲 / 真元光环（2026-11-08）──
+
+  test('法器：四件都会飞', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const arts = Object.values(s.unitTypes).filter((d) => d.artifact);
+    assert.equal(arts.length, 4, '应该正好四件法器');
+    for (const d of arts) {
+      assert.ok(d.abilities?.includes('fly'), `${d.name} 少了飞行`);
+    }
+  });
+
+  test('磐石：半径 2 内友军护甲按比例加成，不足 1 点按 1 点', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 5, 5);
+    const mate = place2(s, 'A', 'spearman', 6, 5);
+
+    // 先把印挪到半径外量基准
+    seal.x = mate.x + 3;
+    const plain = effectiveStats(s, mate).armor;
+    assert.ok(plain > 0);
+
+    seal.x = mate.x - 1;
+    const buffed = effectiveStats(s, mate).armor;
+    // 长枪兵 3 甲，10% 取整是 0，但规则层有 +1 保底
+    assert.equal(buffed, plain + Math.max(1, Math.round(plain * 0.1)), '护甲光环要带 +1 保底');
+    assert.ok(buffed > plain, '加成果然生效');
+  });
+
+  test('迟缓：移动力减半，至少留 1 格', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const u = place2(s, 'A', 'spearman', 5, 5);
+    assert.equal(movePower(s, u), 2, '长枪兵 2 移');
+    u.status = { chill: 2 };
+    assert.equal(movePower(s, u), 1, '2 移减半 = 1');
+    // 剩 1 移的单位再减半仍然是 1：这是"追不上"，不是定身
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 8, 8);
+    seal.status = { chill: 2 };
+    assert.equal(movePower(s, seal), 1, '2 移的玄石印被冻慢后仍是 1，不会归零');
+  });
+
+  test('熔甲：护甲减半，按当前护甲算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 5, 5);
+    const before = effectiveStats(s, seal).armor;
+    seal.status = { sunder: 2 };
+    assert.equal(effectiveStats(s, seal).armor, Math.floor(before / 2), '熔甲把护甲打成一半');
+  });
+
+  test('寒水镜：主目标和被波及的都吃迟缓，射程外的没事', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const mirror = place2(s, 'A', 'cultivation-artifact-water', 4, 5);
+    const main = place2(s, 'B', 'militia', 8, 5);
+    const near = place2(s, 'B', 'militia', 8, 6);
+    const far = place2(s, 'B', 'militia', 8, 9);
+    main.hp = near.hp = far.hp = 500;
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: mirror.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id);
+    assert.equal(at(main.id)?.status?.chill, 2, '主目标要迟缓');
+    assert.equal(at(near.id)?.status?.chill, 2, '溅射波及的也要迟缓');
+    assert.equal(at(far.id)?.status?.chill, undefined, '射程外不该被冻');
+    assert.ok((at(near.id)?.hp ?? 0) < 500, '波及的要掉血');
+  });
+
+  test('赤炎珠：溅射挂熔甲；真元光环让修士真元 +10%（保底 +1）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const bead = place2(s, 'A', 'cultivation-artifact-fire', 4, 5);
+    const main = place2(s, 'B', 'militia', 7, 5);
+    const near = place2(s, 'B', 'militia', 7, 6);
+    main.hp = near.hp = 500;
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: bead.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id);
+    assert.equal(at(main.id)?.status?.sunder, 2, '主目标要熔甲');
+    assert.equal(at(near.id)?.status?.sunder, 2, '波及的也要熔甲');
+
+    // 真元光环：裸值 → 含光环
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    addExp(qi, s, expForRank(2)); // rank 3
+    const base = trueDamageOf(qi);
+    const withAura = trueDamageWithMods(base, 0.1);
+    assert.equal(withAura, base + Math.max(1, Math.round(base * 0.1)), '真元光环带 +1 保底');
+    assert.ok(withAura > base);
+  });
+
+  test('飞行：法器能跨水（沿用既有 fly 的语义，水面可停）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    // 铺一条竖着的水带在 x=6，其余平地
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) {
+        s.tiles[y * s.w + x] = { terrain: x === 6 ? 'water' : 'plain', cityId: null };
+      }
+    }
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const reach = reachableTiles(s, sword);
+    // 没有修士在旁边 → 器灵减半，移 4 只剩 2 格。
+    // 直线跨水到 (7,5) 正好 2 步；绕陆地走要 4 步，所以这一条就能证明它会飞。
+    assert.equal(movePower(s, sword), 2, '器灵减半后是 2 格');
+    assert.ok(reach.has(idx(s, 7, 5)), '飞剑应该能飞到水对岸');
+    // `fly` 是"掠水"，水上**可以停**（见 rules.tileStandsOk 的注释）。
+    assert.ok(reach.has(idx(s, 6, 5)), '掠过水面时也能停在上面');
   });
 
   test('青木剑产地：相邻森林 或 2 块己方灵田', () => {

@@ -92,6 +92,13 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 
 	if (rank > 0) {
 	const trueDmg = trueDamageOf(unit);
+	/*
+	 * 有光环加成时单独写一行「当前真元」。
+	 *
+	 * 下面那行「境界加成」印的是**境界给了多少**，不能混进光环；
+	 * 但玩家算伤害时看的是"这一下真元打多少"，所以有差额就得说清楚，
+	 * 否则"面板写 6、打出来 7"又要被当成 bug 排查一遍。
+	 */
 	// 这一行印的是"修到这一层本身给了多少"：**不乘流派系数、不扣衰老**。
 	// 超龄的惩罚在下面的「油尽灯枯」单独一行，灵体/剑修的系数由各自的说明行交代。
 	lines.push(

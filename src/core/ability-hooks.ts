@@ -171,6 +171,18 @@ export interface HookCtx {
   /** 面板要显示的算式 */
   items: StatItem[];
   isCounter: boolean;
+  /**
+   * 攻方的**友军真元百分比**加成（0.1 = +10%），由规则层注入。
+   *
+   * 为什么不在这层查：`HookCtx` 的消费者里有 `qi-true-damage`，它属于
+   * cultivation 的初始化链上游（packs → hooks → abilities），往上 import
+   * `auras.ts` 会把 ability-registry 一并拉起，而它顶层要遍历 EXPANSIONS——
+   * 结果是启动即炸 "Cannot access 'EXPENSIONS' before initialization"。
+   * 所以规则层算好、注入进来，和 `terrainBonus` 同一个待遇。
+   *
+   * 以后再有"丹药临时涨真元"之类，也加在这里，别让能力自己去查。
+   */
+  trueDamagePct?: number;
   /** 对手脚下地形带来的护甲加成，供「穿隙」扣掉 */
   terrainBonus: number;
   /** 已被标记"无视地形掩护"（穿隙），林地之主据此不强加护甲 */
@@ -344,6 +356,23 @@ export interface HitCtx {
   touched: string[];
 }
 
+/**
+ * 溅射**波及**到某个敌人时的上下文。
+ *
+ * `victim` 不含主目标：主目标吃的是全额伤害，走 `onHit`；这里只处理
+ * "被波及的其他人"。所以"命中就有"的效果要两条钩子都写，别指望一条通吃。
+ */
+export interface SplashHitCtx {
+  state: GameState;
+  /** 开火的那个 */
+  attacker: Unit;
+  /** 被波及的那个 */
+  victim: Unit;
+  /** 这一下实际打的伤害（已经乘过溅射比例） */
+  damage: number;
+  api: AbilityApi;
+}
+
 export interface DeathCtx {
   state: GameState;
   /** 倒下的那个 */
@@ -511,6 +540,33 @@ export interface AuraSpec {
   allyAtkPct?: number;
 
   /**
+   * 友军**护甲百分比**加成（0.1 = +10%）。
+   *
+   * 为什么需要它、不直接用 allyArmor：那个是加法，对 3 甲的单位是 +4（翻倍），
+   * 对 20 甲的单位是零头——同一个数字在前后期意义完全不同。百分比解决的是
+   * "同一条光环在整局里权重稳定"，而加法解决的是"对杂兵立刻有感"。
+   * 两种都留着，谁合适用谁。
+   *
+   * **保底 +1**：`round(3 × 0.1) = 0`，不给保底的话这条光环在前期等于不存在，
+   * 而玄石印（2 代）主要就是给前期修士保命用的。保底由 rules 那侧加，
+   * 这里只写比例。
+   *
+   * 多条取最强，不叠乘——和 allyAtkPct 同一条规矩。
+   */
+  allyArmorPct?: number;
+
+  /**
+   * 友军**真元百分比**加成（0.1 = +10%）。
+   *
+   * 真元（真实伤害）只有修士有，所以这条实际上只对修士生效。
+   * 走 `cultivation/stats.effectiveTrueDamage` 结算，和"吃丹药临时涨真元"共用同一个出口——
+   * 以后再加别的真元修正，只改那一个函数。
+   *
+   * 多条取最强，不叠乘。
+   */
+  allyTrueDamagePct?: number;
+
+  /**
    * 敌军**移动力留存比例**（0.5 = 只剩一半，向下取整）。
    *
    * 减到 0 就真的走不动了：movePower 里"保底 1"在光环之前，
@@ -567,6 +623,17 @@ export interface AbilityHooks {
   damage?: Staged<HookCtx>[];
   /** 命中之后贴状态（见 HIT_STAGE） */
   onHit?: Staged<HitCtx>[];
+  /**
+   * 溅射**波及**到某个敌人之后。
+   *
+   * 和 onHit 的分工：那个只对主目标触发，这里只对"被波及的"触发。
+   * 在此之前，溅射受害者只掉血、拿不到任何效果，于是"冻住一片""炸开一地"
+   * 这类设计根本写不出来——只能把范围扩到 onHit，而那会顺手改掉
+   * 现有三十多个溅射兵种的平衡（它们的毒/火一直只对主目标生效）。
+   *
+   * 所以这条**不会自动生效**：谁想要溅射也挂效果，就在自己的能力里写。
+   */
+  onSplash?: (c: SplashHitCtx) => void;
   /** 阵亡时（自爆、重生、分裂） */
   onDeath?: (c: DeathCtx) => void;
   /**

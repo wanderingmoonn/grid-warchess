@@ -136,7 +136,9 @@ import {
 import { 
   auraSourcesOf, 
   auraBonusOf, 
+  allyArmorPctOf,
   allyAtkPctOf,
+  allyTrueDamagePctOf,
   foeMovePctOf,
   foeMoveFlatOf,
   fearPenaltyOf, 
@@ -1200,6 +1202,34 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     // 原逻辑：只要 slow > 0，就扣 1 点移动
     modifyMove: (_s, _u, val, move) => (val > 0 ? move - 1 : move),
   },
+  /*
+   * 迟缓：移动力**减半**，不是定身。
+   *
+   * 和 slow 并存：一个是"按比例砍"，一个是"减一格"。两个都挂上时先减 1
+   * 再减半还是反过来，结果会差 1 点，所以顺序由 STATUS_ORDER 钉死。
+   *
+   * 保底 1 是设计意图：1 移的单位被减速后仍能走一格，不然它就变成
+   * "站着不能动"，那和定身没区别，而这条 debuff 想表达的是"追不上"。
+   */
+  chill: {
+    id: 'chill',
+    name: '迟缓',
+    summary: '移动力减半（至少留 1 格）',
+    modifyMove: (_s, _u, val, move) => (val > 0 ? Math.max(1, Math.floor(move * 0.5)) : move),
+  },
+  /*
+   * 熔甲：护甲**减半**。
+   *
+   * 取的是"当前护甲"（含光环、地形、已有加成），不是兵种白值——
+   * 玩家的直觉是"打上去甲少了一半"，而不是"基础甲少了一半"。
+   * 和「诅咒」（−2）不同，那个是固定值，对高甲单位几乎无效。
+   */
+  sunder: {
+    id: 'sunder',
+    name: '熔甲',
+    summary: '护甲减半',
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? Math.floor(armor / 2) : armor),
+  },
   curse: {
     id: 'curse',
     name: '诅咒',
@@ -1235,7 +1265,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
  * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
  * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
  */
-const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse', 'curse-deep'];
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'chill', 'curse', 'sunder', 'curse-deep'];
 
 /** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
 export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
@@ -1817,6 +1847,22 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const src of auraSourcesOf(s, u, 'allyArmor')) {
     armor += src.value;
     armorItems.push({ label: src.label, delta: src.value });
+  }
+  /*
+   * 护甲百分比光环（玄石印）。
+   *
+   * 位置和攻击那侧的 `allyAtkPct` 对齐：**加法光环之后、地形之前**。
+   * 放在地形之前是有意的——地形是"掩体 +2"，它不该被百分比放大，
+   * 否则同一条光环在山地上比在平原上值钱，玩家没法估算。
+   *
+   * 保底 +1：`round(3 × 0.1) = 0`，不给保底的话这条光环在前期等于不存在，
+   * 而 2 代的玄石印主要就是给低境界修士保命用的。
+   */
+  const armorPctSrc = allyArmorPctOf(s, u);
+  if (armorPctSrc) {
+    const before = armor;
+    armor += Math.max(1, Math.round(before * armorPctSrc.value));
+    armorItems.push({ label: armorPctSrc.label, delta: armor - before });
   }
   // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
   // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
@@ -2525,16 +2571,26 @@ export function computeDamage(
   //    石化翻倍也在这里生效：ownArmorOf 是"自己的甲"的唯一取值口
   const actualArmor = isCity ? city.armor : ownArmorOf(s, defender);
 
+  // 护甲百分比光环：面板（effectiveStats）里有这一段，这里也必须有——
+  // 少一处就是"面板写着 12 甲、实际按 9 甲挨打"。
+  const armorPctSrc = isCity ? null : allyArmorPctOf(s, defender);
+  const armorBaseNow =
+    actualArmor + defenderAura.armor + (armorPctSrc
+      ? Math.max(1, Math.round((actualArmor + defenderAura.armor) * armorPctSrc.value))
+      : 0);
+
   const ctx: HookCtx = {
     state: s,
     self: defender,
     foe: attacker,
     side: 'defender',
     atk: atkNow,
-    armor: actualArmor + defenderAura.armor + terrainBonus,
+    armor: armorBaseNow + terrainBonus,
     damage: atkNow,
     items: [],
     isCounter,
+    // 真元光环（赤炎珠）由这里注入：能力那一层不能自己查，见 HookCtx 的注释
+    trueDamagePct: allyTrueDamagePctOf(s, attacker)?.value ?? 0,
     terrainBonus,
     ignoreCover: false,
     distance: isCity ? 1 : strikeDistance(s, attacker, defender),
@@ -2804,6 +2860,19 @@ function strikeCellsOf(
  * `excludeIds` 是已经被结算过的人（普攻的主目标已经吃过全额，不能再吃一份）。
  * 城市也能当爆心：传城市的矩形即可，城里站着的守军距离 0，会一起挨炸。
  */
+/**
+ * 溅射**波及**之后的钩子：只问开火那一方的 `onSplash`，只传被波及的人。
+ *
+ * 主目标不经过这里——它吃全额伤害、走 `onHit`。两条钩子分开是有意的：
+ * 现有三十多个溅射兵种的毒/火都只对主目标生效，把范围并到 onHit 会一次
+ * 改掉它们的平衡；而"冻住一片"这种设计又确实需要"溅射也算命中"。
+ */
+function runSplashHooks(s: GameState, attacker: Unit, victim: Unit, damage: number): void {
+  for (const h of hooksOfUnit(s, attacker)) {
+    h.onSplash?.({ state: s, attacker, victim, damage, api: abilityApi });
+  }
+}
+
 function splashVictims(
   s: GameState,
   attacker: Unit,
@@ -3253,6 +3322,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
         hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
         noteVictim(v.unit, v.dmg);
+        if (v.unit.hp > 0) runSplashHooks(s, b, v.unit, v.dmg);
       }
 
       if (target.hp <= 0) {
@@ -3753,6 +3823,8 @@ function doAttack(
   for (const v of splashed) {
     // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
     hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    // 波及也算"命中"：寒水镜冻一片、赤炎珠熔一片都靠这里
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
   }
 
   const noCounter = hasFlagOn(s, attacker, 'noCounter');
@@ -4008,7 +4080,10 @@ function doSiege(
     { x: city.x, y: city.y, n: city.size },
     { hit: { x: hitX, y: hitY } },
   );
-  for (const v of splashed) hurtUnit(s, v.unit, v.dmg, { source: attacker });
+  for (const v of splashed) {
+    hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
+  }
 
   // 战况烈度：攻城按几何覆盖记，和攻击单位走同一套
   noteStrikeHeat(s, attacker, { x: city.x, y: city.y, n: city.size }, { x: hitX, y: hitY });

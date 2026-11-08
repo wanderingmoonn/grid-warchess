@@ -117,7 +117,15 @@ import {
   WARM_NOURISH_LABEL,
   WARM_NOURISH_RADIUS,
 } from '../src/core/cultivation/artifacts.ts';
-import { SWORD_QI_ATK_PCT, SWORD_QI_RADIUS } from '../src/core/cultivation/abilities/artifact-auras.ts';
+import {
+  FIRE_QI_RADIUS,
+  FIRE_QI_TRUE_PCT,
+  STONE_WARD_ARMOR_PCT,
+  STONE_WARD_RADIUS,
+  SWORD_QI_ATK_PCT,
+  SWORD_QI_RADIUS,
+} from '../src/core/cultivation/abilities/artifact-auras.ts';
+import { ARTIFACT_DEBUFF_TURNS } from '../src/core/cultivation/abilities/artifact-effects.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -125,7 +133,7 @@ import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
 import { resourceShort } from '../src/core/resources.ts';
-import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
+import type { Element, Terrain, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 
@@ -500,7 +508,7 @@ function traitsOf(u: UnitTypeDef): string {
     const specs = Array.isArray(u.produceNear) ? u.produceNear : [u.produceNear];
     const near = specs.map(nearText).filter(Boolean);
     if (near.length > 0) {
-      const label = near.join(' 或 ');
+      const label = near.join('，或 ');
       const key = dynamicTerm(
         `near-${slug(u.id)}`,
         `产地 ${label}`,
@@ -563,7 +571,9 @@ function traitsOf(u: UnitTypeDef): string {
 }
 
 function terrainName(id: string): string {
-  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? id;
+  // 手册自己那张表只有"能建在上面"的地形，`shallow`（浅滩）这类不在里面——
+  // 于是寒水镜的产地会印出英文 id。兜底问一次核心的地形名表。
+  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? CONFIG.terrainName[id as Terrain] ?? id;
 }
 
 /**
@@ -2880,6 +2890,9 @@ function cultivationRules(): string {
           没有这一条，法器就是一次性消耗品，掉的血永远回不来。</li>
       </ul>
 
+      <p>四件法器都会<b>飞</b>：能掠过水面、森林丘陵按 1 步算，河防拦不住它们。
+        但飞行只解决"怎么到"，不解决"到了能干什么"——每一件的性格完全不同。</p>
+
       <h3>青木剑</h3>
       <p>一件飞剑。射程 <b>${ARTIFACT_WOOD.range}</b> 格，比同代的任何近战都远——
         所以它能站在对方的攻击范围之外开火，<b>对方够不着，就还不了手</b>。
@@ -2891,6 +2904,41 @@ function cultivationRules(): string {
           两把剑不会变成 +30%。</li>
         <li><b>造价</b>：${ARTIFACT_WOOD.cost} 金 + ${ARTIFACT_WOOD.costRes?.['spirit-stone'] ?? 0} 灵石。
           比同代骑兵贵一半左右——贵的是射程和光环，不是面板上的攻甲血。</li>
+      </ul>
+
+      <h3>玄石印</h3>
+      <p>一块砸下去的印：攻低、甲厚、血多、慢、射程只有 ${ARTIFACT_STONE.range} 格，
+        但<b>能溅</b>。它是四件里唯一不靠机动吃饭的一件，所以飞行对它只是"能过河"。</p>
+      <ul>
+        <li><b>磐石</b>：半径 ${STONE_WARD_RADIUS} 格内友军护甲 <b>+${Math.round(STONE_WARD_ARMOR_PCT * 100)}%</b>，
+          <b>不足 1 点按 1 点</b>算。这条保底是必要的——3 甲的单位按 10% 取整是 0，
+          不给保底这条光环在前期等于不存在，而它本来就是给低境界修士保命用的。</li>
+        <li><b>产地</b>：丘陵，<b>或者</b>两块灵矿。后一条在二代不成立（灵矿是三代建筑），
+          它是给"地图没生成丘陵"留的后路：升到三代开一座矿，这条产品线还能救回来。</li>
+        <li><b>面板</b>：${ARTIFACT_STONE.atk} 攻 / ${ARTIFACT_STONE.armor} 甲 / ${ARTIFACT_STONE.maxHp} 血，
+          造价 ${ARTIFACT_STONE.cost} 金 + ${ARTIFACT_STONE.costRes?.['spirit-stone'] ?? 0} 灵石。</li>
+      </ul>
+
+      <h3>寒水镜</h3>
+      <p>远程控制。攻击力刻意不如同代火枪兵，换来的是<b>射程 ${ARTIFACT_WATER.range}、视野 ${ARTIFACT_WATER.vision}</b>
+        和 <b>${ARTIFACT_WATER.splash} 格溅射</b>——它不负责杀伤，负责让你的阵型走不动。</p>
+      <ul>
+        <li><b>寒霜</b>：被打到的目标「迟缓」${ARTIFACT_DEBUFF_TURNS} 回合，<b>移动力减半，至少留 1 格</b>。
+          注意是"追不上"不是"定身"：1 移的单位被冻慢后仍然能走一格。
+          <b>被溅射波及的敌人一样吃</b>——这是它和普通远程最大的区别。</li>
+        <li>重复命中不叠加回合数，只把回合数刷新回 ${ARTIFACT_DEBUFF_TURNS}。</li>
+      </ul>
+
+      <h3>赤炎珠</h3>
+      <p>远程 AOE，四件里伤害最高：${ARTIFACT_FIRE.atk} 攻、${ARTIFACT_FIRE.splash} 格溅射，
+        射程比寒水镜短一格。它是"开团的那一下"，不是持续输出。</p>
+      <ul>
+        <li><b>熔甲</b>：被打到的目标「护甲减半」${ARTIFACT_DEBUFF_TURNS} 回合，
+          按<b>当前护甲</b>算（含光环、地形、已有加成），不是兵种白值。
+          溅射波及的敌人一样生效——一炮把一片阵型的护甲打对折，后面跟上来的近战就有了破口。</li>
+        <li><b>真火</b>：半径 ${FIRE_QI_RADIUS} 格内友军<b>真元 +${Math.round(FIRE_QI_TRUE_PCT * 100)}%</b>
+          （同样有 +1 保底）。真元只有修士有，所以受益的也是修士——
+          这是四件法器里唯一直接加强修士输出的光环。</li>
       </ul>
       <p class="era-meta">注：炉子和军营一样按<b>自己的档位</b>出兵，不随后方城市换代。
         盖房子也要看工匠的档位：二代的仆役只能起${FORGE_1.name}，想立${FORGE_3.name}，
