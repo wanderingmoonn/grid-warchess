@@ -159,6 +159,7 @@ export const DEACON: UnitTypeDef = {
     UNIT_IDS.FORGE_2,
     UNIT_IDS.SECT,
     UNIT_IDS.SCRIPTURE_PAVILION,
+    UNIT_IDS.SILENT_PAVILION,
   ],
   buildPower: 18,
 };
@@ -194,6 +195,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.SPIRIT_SPRING,
     UNIT_IDS.SECT,
     UNIT_IDS.SCRIPTURE_PAVILION,
+    UNIT_IDS.SILENT_PAVILION,
   ],
   buildPower: 24,
 };
@@ -261,6 +263,36 @@ export const SPIRIT_MINE: UnitTypeDef = {
   yieldByTerrain: {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
   },
+};
+
+// ── 静心阁（2026-11-08）────────────────────────────
+//
+// 藏经阁的对称件：一个往里装，一个往外倒。
+//   · 藏经阁：站在旁边可以**学**一门法术，还给阵营 +2 研发额度；
+//   · 静心阁：站在旁边可以**忘**掉一门法术，腾出自己的法术位。
+//
+// 造型、造价、耐久、选址条件都和藏经阁一样（1×1、贴着自家宗门），
+// 差别只在按钮上——玩家不用再学一套新的建筑语言。
+//
+// 它不给任何额度、不产资源：法术位由境界决定，忘掉一门只是把那个位置空出来。
+// 想多背，只能修炼；想换一门，来这里。
+
+export const SILENT_PAVILION: UnitTypeDef = {
+  id: UNIT_IDS.SILENT_PAVILION,
+  name: '静心阁',
+  short: '静',
+  era: 3,
+  category: 'building',
+  cost: 120,
+  costRes: { 'spirit-stone': 10 },
+  buildCost: 20,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 60,
+  range: 1,
+  vision: 3,
+  adjacent: { unit: [UNIT_IDS.SECT] },
 };
 
 // ── 藏经阁（2026-11-08）────────────────────────────

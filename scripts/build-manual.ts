@@ -106,6 +106,7 @@ import {
   FORGE_3,
   SECT,
   SCRIPTURE_PAVILION,
+  SILENT_PAVILION,
   SPIRIT_SPRING,
   CULTIVATOR,
   SWORD_CULTIVATOR,
@@ -2944,6 +2945,12 @@ function cultivationRules(): string {
         <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在「研修」里点
           <b>研读「某某」</b>。本方没研发过、法术位满了、流派不符、没站在藏书楼旁边，
           按钮会灰着并写清原因。</li>
+        <li><b>${SILENT_PAVILION.name}</b>（${SILENT_PAVILION.cost} 金 +
+          ${SILENT_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SILENT_PAVILION.maxHp} 血 /
+          ${SILENT_PAVILION.armor} 甲）：藏经阁的<b>对称件</b>——同样 1×1、同样只能贴着自家宗门。
+          站在旁边的修士可以<b>忘掉</b>一门已学的法术，<b>腾出法术位</b>。
+          这一步会弹确认框；忘掉之后回藏经阁还能<b>重新学</b>（研发没丢），
+          所以"换一门法术"的代价是走两趟路，不是重练。</li>
         <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
           对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
           <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力。

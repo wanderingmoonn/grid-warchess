@@ -13,12 +13,15 @@ import { addRes } from '../resources.ts';
 import {
   SPELLS,
   abandonProblem,
+  forgetProblem,
+  forgetSpell,
   isResearched,
   knownSpells,
   libraryNextTo,
   researchCostOf,
   researchProblem,
   researchedOf,
+  silentPavilionNextTo,
   spellLearnProblem,
   spellOf,
   spellSlotsOf,
@@ -287,35 +290,66 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			return out;
 		}
 
-		// 修士：站在生效中的藏经阁旁边才能读
+		// 修士：站在生效中的藏经阁旁边才能读；站在静心阁旁边才能忘
 		if (!isCultivatorUnit(state, unit)) return [];
-		if (!libraryNextTo(state, unit)) return [];
-		for (const sp of SPELLS) {
-			if (knownSpells(unit).some((sk) => sk.id === sp.skill.id)) continue;
-			const problem = spellLearnProblem(state, unit, sp);
-			out.push({
-				id: `learn:${sp.skill.id}`,
-				group: '研修',
-				label: `研读「${sp.skill.name}」`,
-				detail: sp.skill.summary,
-				disabled: !!problem,
-				note: problem ?? `法术位 ${knownSpells(unit).length} / ${spellSlotsOf(unit)}`,
-			});
+
+		const slots = spellSlotsOf(unit);
+		const known = knownSpells(unit);
+
+		if (libraryNextTo(state, unit)) {
+			for (const sp of SPELLS) {
+				if (known.some((sk) => sk.id === sp.skill.id)) continue;
+				const problem = spellLearnProblem(state, unit, sp);
+				out.push({
+					id: `learn:${sp.skill.id}`,
+					group: '研修',
+					label: `研读「${sp.skill.name}」`,
+					detail: sp.skill.summary,
+					disabled: !!problem,
+					note: problem ?? `法术位 ${known.length} / ${slots}`,
+				});
+			}
+		}
+
+		if (silentPavilionNextTo(state, unit)) {
+			for (const sk of known) {
+				const sp = spellOf(sk.id);
+				if (!sp) continue;
+				const problem = forgetProblem(state, unit, sp);
+				out.push({
+					id: `forget:${sp.skill.id}`,
+					group: '遗忘',
+					label: `忘掉「${sp.skill.name}」`,
+					detail: '腾出一个法术位；想再学要回藏经阁重新研读',
+					confirm: `忘掉「${sp.skill.name}」？这个修士会立刻失去它，` +
+						`腾出的法术位可以学别的。要重新学回来，得回藏经阁再读一遍。`,
+					disabled: !!problem,
+					note: problem ?? `法术位 ${known.length} / ${slots}`,
+				});
+			}
 		}
 		return out;
 	},
 	onUnitAction: ({ state, unit, actionId }) => {
-		const m = /^(learn|research|abandon):(.+)$/.exec(actionId);
+		const m = /^(learn|research|abandon|forget):(.+)$/.exec(actionId);
 		if (!m) return `认不出这个操作：${actionId}`;
 		const kind = m[1]!;
 		const spell = spellOf(m[2]!);
 		if (!spell) return '没有这门法术';
 
-		if (kind === 'learn') {
-			const problem = spellLearnProblem(state, unit, spell);
+		if (kind === 'learn' || kind === 'forget') {
+			if (!isCultivatorUnit(state, unit)) return '只有修士能做这件事';
+			if (kind === 'learn') {
+				const problem = spellLearnProblem(state, unit, spell);
+				if (problem) return problem;
+				if (!teachSpell(unit, spell)) return `已经会「${spell.skill.name}」了`;
+				push(state, unit.owner, `${state.unitTypes[unit.type]?.name ?? unit.type}在藏经阁研读，学会了法术「${spell.skill.name}」`);
+				return null;
+			}
+			const problem = forgetProblem(state, unit, spell);
 			if (problem) return problem;
-			if (!teachSpell(unit, spell)) return `已经会「${spell.skill.name}」了`;
-			push(state, unit.owner, `${state.unitTypes[unit.type]?.name ?? unit.type}在藏经阁研读，学会了法术「${spell.skill.name}」`);
+			if (!forgetSpell(unit, spell)) return `本来就不会「${spell.skill.name}」`;
+			push(state, unit.owner, `${state.unitTypes[unit.type]?.name ?? unit.type}在静心阁静坐，忘掉了法术「${spell.skill.name}」`);
 			return null;
 		}
 

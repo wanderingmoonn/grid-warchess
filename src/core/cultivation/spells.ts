@@ -91,33 +91,52 @@ export function knownSpells(u: Unit): SkillDef[] {
 }
 
 /**
- * 这座藏经阁现在算不算生效：必须贴着**自家**宗门。
+ * 这座"配楼"（藏经阁 / 静心阁）现在算不算生效：必须贴着**自家**宗门。
  *
- * 为什么不是"建的时候有就行"：宗门被推掉之后那座楼就该废掉，
- * 否则玩家会看到"我宗门没了，法术位还在"，然后怀疑是不是显示错了。
+ * 为什么不是"建的时候有就行"：宗门被推掉之后那两座楼就该一起废掉，
+ * 否则玩家会看到"我宗门没了，法术额度还在"，然后怀疑是不是显示错了。
+ *
+ * 藏经阁和静心阁共用这一条：它们都是"宗门的下属机构"，
+ * 判定如果各写一遍，迟早出现"藏书楼算、静心阁不算"这种对不上的事。
  */
-export function libraryIsActive(s: GameState, lib: Unit): boolean {
-  if (lib.hp <= 0) return false;
+export function pavilionIsActive(s: GameState, b: Unit): boolean {
+  if (b.hp <= 0) return false;
   return s.units.some(
     (u) =>
       u.type === UNIT_IDS.SECT &&
-      u.owner === lib.owner &&
+      u.owner === b.owner &&
       u.hp > 0 &&
-      distBetweenUnits(s, u, lib) <= 1,
+      distBetweenUnits(s, u, b) <= 1,
   );
 }
 
-/** 某一方生效中的藏经阁 */
+/** 旧名：藏经阁版本的判据（规则书和测试都还这么叫）。等价于 `pavilionIsActive`。 */
+export function libraryIsActive(s: GameState, lib: Unit): boolean {
+  return pavilionIsActive(s, lib);
+}
+
+/** 某一方生效中的某类配楼 */
+export function activePavilionsOf(s: GameState, owner: PlayerId, type: string): Unit[] {
+  return s.units.filter((u) => u.type === type && u.owner === owner && pavilionIsActive(s, u));
+}
+
+/** 这一方还有几座生效中的藏经阁（= 研发额度的来源） */
 export function activeLibrariesOf(s: GameState, owner: PlayerId): Unit[] {
-  return s.units.filter(
-    (u) => u.type === UNIT_IDS.SCRIPTURE_PAVILION && u.owner === owner && libraryIsActive(s, u),
-  );
+  return activePavilionsOf(s, owner, UNIT_IDS.SCRIPTURE_PAVILION);
 }
 
 /** 这个修士脚下挨着的、生效中的藏经阁（学法术就在它旁边） */
 export function libraryNextTo(s: GameState, u: Unit): Unit | null {
   for (const lib of activeLibrariesOf(s, u.owner)) {
     if (distBetweenUnits(s, lib, u) <= 1) return lib;
+  }
+  return null;
+}
+
+/** 这个修士脚下挨着的、生效中的静心阁（忘法术就在它旁边） */
+export function silentPavilionNextTo(s: GameState, u: Unit): Unit | null {
+  for (const pav of activePavilionsOf(s, u.owner, UNIT_IDS.SILENT_PAVILION)) {
+    if (distBetweenUnits(s, pav, u) <= 1) return pav;
   }
   return null;
 }
@@ -233,5 +252,31 @@ export function teachSpell(u: Unit, spell: SpellDef): boolean {
   u.extraSkills ??= [];
   if (u.extraSkills.some((sk) => sk.id === spell.skill.id)) return false;
   u.extraSkills.push(spell.skill);
+  return true;
+}
+
+/**
+ * 能不能忘掉这一门。返回字符串 = 不能，字符串是给玩家看的理由。
+ *
+ * 只能忘**法术**（在 `SPELLS` 里的那些）：
+ *   · 流派技能（剑气纵横、血祭）写在兵种表上，根本不在 `extraSkills` 里；
+ *   · 境界技能（御空）是升级自动领悟的，忘了下次升级又会"重新领悟"——
+ *     与其做一条"忘了就再也不给"的特例，不如不许忘。
+ */
+export function forgetProblem(s: GameState, u: Unit, spell: SpellDef): string | null {
+  if (!knownSpells(u).some((sk) => sk.id === spell.skill.id)) {
+    return `本来就不会「${spell.skill.name}」`;
+  }
+  if (!silentPavilionNextTo(s, u)) {
+    return '要站在静心阁旁边才能忘（宗门没了，静心阁也废了）';
+  }
+  return null;
+}
+
+/** 真的忘掉。返回 true 表示这一次确实删掉了东西 */
+export function forgetSpell(u: Unit, spell: SpellDef): boolean {
+  const before = u.extraSkills ?? [];
+  if (!before.some((sk) => sk.id === spell.skill.id)) return false;
+  u.extraSkills = before.filter((sk) => sk.id !== spell.skill.id);
   return true;
 }

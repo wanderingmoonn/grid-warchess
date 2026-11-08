@@ -56,13 +56,16 @@ import {
   LIBRARY_SPELL_SLOTS,
   RESEARCH_BASE_SLOTS,
   activeLibrariesOf,
+  forgetProblem,
   isResearched,
   knownSpells,
   libraryIsActive,
+  pavilionIsActive,
   researchCapOf,
   researchCostOf,
   researchProblem,
   researchedOf,
+  silentPavilionNextTo,
   spellLearnProblem,
   spellOf,
   spellSlotsOf,
@@ -2554,6 +2557,119 @@ export function run() {
 
     // 别人的宗门：一个按钮都不给
     assert.equal(CULTIVATION_HOOKS.unitActions!({ state: s, unit: sect, viewer: 'B' }).length, 0);
+  });
+
+  // ── 静心阁（2026-11-08）────────────────────────
+  //
+  // 藏经阁的对称件：一个往里装、一个往外倒。造型/造价/选址完全一样，
+  // 差别只有"站在旁边能做什么"。
+
+  /** 宗门（4,4 起 2×2）+ 藏经阁（6,4）+ 静心阁（3,4） */
+  const forgetScene = () => {
+    const { s, sect } = sectScene();
+    const lib = place2(s, 'A', 'cultivation-scripture-pavilion', 6, 4);
+    const silent = place2(s, 'A', 'cultivation-silent-pavilion', 3, 4);
+    return { s, sect, lib, silent };
+  };
+
+  test('静心阁：和藏经阁对称（1×1、时代 3、只能贴宗门、执事会盖）', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-silent-pavilion'];
+    const lib = s.unitTypes['cultivation-scripture-pavilion'];
+    assert.ok(def, '静心阁要在本局兵种表里');
+    assert.equal(def.footprint ?? 1, 1, '1×1');
+    assert.equal(def.era, lib.era, '和藏经阁同一个时代');
+    assert.equal(def.cost, lib.cost, '造价对齐');
+    assert.deepEqual(def.adjacent, lib.adjacent, '选址条件对齐：贴着宗门');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-silent-pavilion'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-silent-pavilion'), '管事继承');
+  });
+
+  test('静心阁：宗门没了就失效，站远了也忘不了', () => {
+    const { s, silent } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 3, 5); // 贴着静心阁
+    setCultivationExp(qi, expForRank(1));
+    teachSpell(qi, spellOf('palm-thunder')!);
+
+    assert.ok(pavilionIsActive(s, silent), '贴着宗门就是生效的');
+    assert.ok(silentPavilionNextTo(s, qi), '站在旁边就找得到');
+    assert.equal(forgetProblem(s, qi, spellOf('palm-thunder')!), null, '有位可忘');
+
+    // 站远：忘不了
+    qi.x = 9;
+    qi.y = 9;
+    assert.equal(silentPavilionNextTo(s, qi), null);
+    assert.ok((forgetProblem(s, qi, spellOf('palm-thunder')!) ?? '').includes('静心阁'), '理由要指向静心阁');
+    qi.x = 3;
+    qi.y = 5;
+
+    // 宗门被拆：静心阁一起废掉
+    const gone = {
+      ...s,
+      units: s.units.filter((u) => u.type !== 'cultivation-sect'),
+    };
+    assert.equal(pavilionIsActive(gone, silent), false, '宗门没了，静心阁也废了');
+    assert.equal(silentPavilionNextTo(gone, qi), null);
+  });
+
+  test('静心阁：忘掉法术腾出法术位，回藏经阁还能再学', () => {
+    const { s, sect } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5); // 先站在藏经阁旁边
+    setCultivationExp(qi, expForRank(1)); // 2 期：1 个法术位
+
+    let cur = s;
+    const r1 = doAction(cur, sect.id, 'research:palm-thunder');
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    cur = r1.state;
+    const r2 = doAction(cur, qi.id, 'learn:palm-thunder');
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    cur = r2.state;
+
+    const learned = cur.units.find((u) => u.id === qi.id)!;
+    assert.equal(knownSpells(learned).length, 1);
+    assert.ok(heroSkillsOf(cur, learned).some((k) => k.def.id === 'palm-thunder'), '技能栏里能看到');
+
+    // 挪到静心阁旁边才能忘（走动是玩家自己的时间成本）
+    learned.x = 3;
+    learned.y = 5;
+    const r3 = doAction(cur, qi.id, 'forget:palm-thunder');
+    assert.ok(r3.ok, r3.ok ? '' : r3.reason);
+    const after = r3.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(knownSpells(after).length, 0, '忘掉了');
+    assert.ok(!heroSkillsOf(r3.state, after).some((k) => k.def.id === 'palm-thunder'), '技能栏里也没了');
+    assert.ok(r3.state.log.some((l) => l.text.includes('忘掉')), '战报要写');
+
+    // 再忘一次：本来就不会了
+    const r4 = doAction(r3.state, after.id, 'forget:palm-thunder');
+    assert.equal(r4.ok, false);
+
+    // 回藏经阁能重新学（研发还在）
+    const back = r3.state.units.find((u) => u.id === qi.id)!;
+    back.x = 6;
+    back.y = 5;
+    const r5 = doAction(r3.state, back.id, 'learn:palm-thunder');
+    assert.ok(r5.ok, r5.ok ? '' : r5.reason);
+  });
+
+  test('静心阁：只列"会"的法术，按钮带确认文案；不会的技能不出现', () => {
+    const { s } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 3, 5); // 贴着静心阁
+    setCultivationExp(qi, expForRank(3)); // 4 期
+
+    // 什么都不会：一个遗忘按钮都没有
+    const none = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    assert.equal(none.filter((b) => b.group === '遗忘').length, 0, '不会就别列');
+
+    teachSpell(qi, spellOf('palm-thunder')!);
+    const after = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    const forget = after.find((b) => b.id === 'forget:palm-thunder');
+    assert.ok(forget, '会了才列');
+    assert.equal(forget!.group, '遗忘');
+    assert.ok(forget!.confirm && forget!.confirm.includes('忘掉'), '遗忘必须带确认文案');
+    assert.equal(forget!.disabled, false);
+
+    // 流派技能（剑气纵横）不在额外技能里，天然不会出现在列表
+    assert.ok(!after.some((b) => b.id.includes('sword-sweep')), '流派技能不该出现在遗忘列表');
   });
 
   test('法术：面板写出灵力、法术位与本方研发', () => {
