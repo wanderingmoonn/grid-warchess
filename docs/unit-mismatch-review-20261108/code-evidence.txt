@@ -1,0 +1,298 @@
+冻结测试引擎的只读摘录。完整源文件与哈希在复现包内。
+
+snapshot/core/ai.ts  L3198-L3214
+3198:       case 'holy-banner': {
+3199:         /*
+3200:          * 圣旗：身边有三个人（含自己）就值。
+3201:          *
+3202:          * 和「降临」不同，它不看血线——护甲和魔抗是**预支**的减伤，
+3203:          * 等队友都残了再开，等于已经挨完了才加装甲。
+3204:          */
+3205:         const radius = k.radius ?? 2;
+3206:         const near = unitsOf(view, u.owner).filter((a) => distance(a, u) <= radius);
+3207:         if (near.length < 3) break;
+3208:         if (!foes.some((f) => distance(f, u) <= 6)) break;
+3209:         score = 26 + Math.min(12, near.length * 2);
+3210:         break;
+3211:       }
+3212:       case 'ascend': {
+3213:         /*
+3214:          * 圣剑觉醒是**越早开越值**：它加的是永久面板，开得早等于多吃了几个回合的加成。
+
+snapshot/core/ai.ts  L5481-L5488
+5481:   for (const u of unitsOf(view, me)) {
+5482:     candidates.push(...unitCandidates(view, u, fields, traits, rejected));
+5483:     const skill = heroSkillCandidate(view, u);
+5484:     if (skill) candidates.push({ ...skill, score:skill.score+300 });
+5485:   }
+5486: 
+5487:   // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
+5488:   // 别让它跟着每个产兵点、每个候选兵种重算。
+
+snapshot/core/fantasy-packs.ts  L1194-L1222
+1194:       abilities: ['charge', 'slow-offroad'],
+1195:     },
+1196:     // 法师：魔攻 18 不吃护甲。打重甲是主力，被骑兵贴上是提款机。
+1197:     {
+1198:       id: 'mage',
+1199:       name: '法师',
+1200:       short: '法',
+1201:       era: 3,
+1202:       category: 'combat',
+1203:       cost: 150,
+1204:       move: 2,
+1205:       atk: 7,
+1206:       armor: 1,
+1207:       maxHp: 24,
+1208:       range: 3,
+1209:       vision: 4,
+1210:       magicAtk: 18,
+1211:       element: 'arcane',
+1212:       splash: 1,
+1213:     },
+1214:     // 刺客：隐匿 + 26 攻。它的强不在换血，在"先手选一个软的打掉"。
+1215:     {
+1216:       id: 'assassin',
+1217:       name: '刺客',
+1218:       short: '刺',
+1219:       era: 3,
+1220:       category: 'combat',
+1221:       cost: 135,
+1222:       move: 4,
+
+snapshot/core/fantasy-packs.ts  L2486-L2524
+2486:   // 2 速让它天然落在阵线中间，而圣旗要的就是"身边有人"——这不是巧合，
+2487:   // 是它和刺客大师（3 速、要绕后）的对照：一个往前挤，一个往外绕。
+2488:   // 护甲 12 配盾墙，让对面必须用破甲或魔法来解它，而它恰好把魔抗发给全队。
+2489:   {
+2490:     id: 'holy-knight-lord',
+2491:     name: '神圣骑士长',
+2492:     short: '骑',
+2493:     era: 4,
+2494:     category: 'combat',
+2495:     cost: 470,
+2496:     move: 2,
+2497:     atk: 36,
+2498:     // 12 → 14（2026-10-31）：它是"站在最前面替全队吃伤害"的定位，
+2499:     // 而 12 甲在蒸汽时代挡不住主流破甲；多这两点，才配得上它 2 速的代价。
+2500:     armor: 14,
+2501:     maxHp: 150,
+2502:     range: 1,
+2503:     vision: 4,
+2504:     magicRes: 5,
+2505:     element: 'light',
+2506:     hero: true,
+2507:     unlockCost: 220,
+2508:     abilities: ['shield-wall'],
+2509:     skills: [
+2510:       {
+2511:         id: 'holy-banner',
+2512:         name: '圣旗',
+2513:         summary:
+2514:           '半径 2 内所有友军（含自己）护甲 +3、魔抗 +4，并获得**阵列**（免疫溅射）；持续到自己的下个回合开始。',
+2515:         effect: 'holy-banner',
+2516:         cooldown: 2,
+2517:         radius: 2,
+2518:         armorUp: 3,
+2519:         magicResUp: 4,
+2520:       },
+2521:     ],
+2522:   },
+2523:   // 圣剑勇者：信息化时代的光属性大剑。直线溅射 + 越打越强。
+2524:   //
+
+snapshot/core/config.ts  L519-L540
+519:    * 中国青铜时代的主战兵器，钩、啄、拉，专治甲片之间的缝——所以给的是破甲，
+520:    * 而不是再加一个"攻更高的民兵"。民兵 25 金 13 攻，它 30 金 12 攻、多一格甲
+521:    * 和破甲：同一档里买它不是为了打得狠，是为了打得穿。
+522:    */
+523:   ge: {
+524:     id: 'ge',
+525:     name: '戈兵',
+526:     short: '戈',
+527:     era: 1,
+528:     category: 'combat',
+529:     cost: 30,
+530:     move: 2,
+531:     atk: 12,
+532:     armor: 1,
+533:     maxHp: 30,
+534:     range: 1,
+535:     vision: 2,
+536:     abilities: ['armor-pierce'],
+537:   },
+538:   // ================= 时代 2 · 铁器 =================
+539:   spearman: {
+540:     id: 'spearman',
+
+snapshot/core/rules.ts  L2077-L2110
+2077: export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
+2078:   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
+2079:   // 站在林子里连平射都被树冠吃掉一格（见 rangeModAgainst）。
+2080:   const range = effectiveRangeAgainst(s, attacker, tileAt(s, target.x, target.y));
+2081:   // 地面打空中要多算一格（见 strikeDistance）；同格判定仍然看"真实相对位置"，
+2082:   // 否则"空中压着地面"这个免费的第一刀会被 +1 顺手吃掉
+2083:   const real = distBetweenUnits(s, attacker, target);
+2084:   const d = strikeDistance(s, attacker, target);
+2085:   if (d > range) return false;
+2086:   // 距离 0 只会在"空中压着地面"时出现——那是贴着打，不是"打不到自己"
+2087:   if (real === 0) return isAirborne(s, attacker) !== isAirborne(s, target);
+2088:   return true;
+2089: }
+2090: 
+2091: export function attackableTargets(s: GameState, unit: Unit): Unit[] {
+2092:   if (!canAttack(unit)) return [];
+2093:   return s.units.filter((u) => u.owner !== unit.owner && canStrike(s, unit, u));
+2094: }
+2095: 
+2096: /** 射程内的敌方城市 */
+2097: export function siegeTargets(s: GameState, unit: Unit): City[] {
+2098:   if (!canAttack(unit)) return [];
+2099:   // 城按"城市"那一层算高度（2 层）：站在台地上砸城比从谷底仰着砸多一格，
+2100:   // 和野战用同一条规则，不另开一套。
+2101:   return s.cities.filter((c) => {
+2102:     if (c.owner === unit.owner) return false;
+2103:     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
+2104:     if (c.ruined) return false;
+2105:     const d = distToCity(unit, c);
+2106:     if (d <= 0) return false;
+2107:     return d <= effectiveRangeAgainst(s, unit, tileAt(s, c.x, c.y));
+2108:   });
+2109: }
+2110: 
+
+snapshot/core/rules.ts  L4782-L4812
+4782:  * 圣旗（神圣骑士长）：半径内的友军（含自己）获得护甲、魔抗与阵列。
+4783:  *
+4784:  * 三样东西一起给，是因为它们各自单拎出来都不够看：+3 甲挡不住一轮集火、
+4785:  * +4 魔抗只对法师有用、阵列只免疫溅射。合起来才是"这一片阵线顶住了这一轮"，
+4786:  * 也才对得起一个英雄的一次出手。
+4787:  */
+4788: SKILL_EFFECTS['holy-banner'] = (c) => {
+4789:   const radius = c.skill.radius ?? 2;
+4790:   const armorUp = c.skill.armorUp ?? 3;
+4791:   const magicUp = c.skill.magicResUp ?? 4;
+4792:   let n = 0;
+4793:   for (const t of c.state.units) {
+4794:     if (t.owner !== c.self.owner || t.hp <= 0) continue;
+4795:     if (c.api.distance(t, c.self) > radius) continue;
+4796:     t.buff = {
+4797:       armor: armorUp,
+4798:       magicRes: magicUp,
+4799:       splashImmune: true,
+4800:       // 撑到自己的下个回合开始：要保护的是**对面**那一个回合
+4801:       turns: 1,
+4802:       label: '圣旗',
+4803:     };
+4804:     n += 1;
+4805:   }
+4806:   if (n === 0) {
+4807:     c.result.ok = false;
+4808:     c.result.reason = '半径内没有友军';
+4809:     return;
+4810:   }
+4811:   c.api.pushLog(c.state, c.self.owner, `圣旗：${n} 个友军获得护甲 +${armorUp}、魔抗 +${magicUp}、阵列`);
+4812: };
+
+snapshot/core/rules.ts  L4975-L5036
+4975: function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
+4976:   const u = s.units.find((x) => x.id === unitId);
+4977:   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
+4978:   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+4979: 
+4980:   const def = utype(s, u.type);
+4981:   const skill = skillsOf(s, u).find((k) => k.id === skillId);
+4982:   if (!skill) return { ok: false, reason: '这个单位没有这个技能' };
+4983: 
+4984:   // 如果技能不允许连发，且这回合已经放过，就拦住
+4985:   if (!skill.multiCast && u.skillTurn === s.turn) {
+4986:     return { ok: false, reason: '这个单位这一回合已经放过技能了' };
+4987:   }
+4988: 
+4989:   const cd = u.skillCd?.[skill.id] ?? 0;
+4990:   const chargeMax = skill.charges ?? 0;
+4991:   const regen = Math.max(1, skill.regen ?? 2);
+4992:   const box = u.skillCharge?.[skill.id];
+4993:   const charge = chargeMax > 0 ? Math.max(0, Math.min(chargeMax, box?.n ?? chargeMax)) : 0;
+4994:   if (chargeMax > 0) {
+4995:     if (charge <= 0) {
+4996:       const wait = Math.max(1, regen - Math.max(0, box?.t ?? 0));
+4997:       return { ok: false, reason: `${skill.name} 已经用光了，${wait} 个回合后回一发` };
+4998:     }
+4999:   } else if (cd > 0) {
+5000:     return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
+5001:   }
+5002: 
+5003:   const handler = SKILL_EFFECTS[skill.effect];
+5004:   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
+5005: 
+5006:   const c: SkillCtx = {
+5007:     state: s, 
+5008:     self: u, 
+5009:     skill, 
+5010:     api: abilityApi,
+5011:     target: (typeof targetX === 'number' && typeof targetY === 'number') ? { x: targetX, y: targetY } : undefined,
+5012:     result: { ok: true, log: `${def.name} 使用「${skill.name}」` }
+5013:   };
+5014: 
+5015:   handler(c);
+5016: 
+5017:   if (!c.result.ok) {
+5018:     return { ok: false, reason: c.result.reason ?? '技能无法使用' };
+5019:   }
+5020: 
+5021:   // 写出战报（如果 c.result.log 被修改或覆盖，则用新的）
+5022:   if (c.result.log) pushLog(s, u.owner, c.result.log);
+5023: 
+5024:   if (chargeMax > 0) {
+5025:     // 充能型：扣一发，不动冷却。t 保留——"用完最后一发之后还要攒两回合"
+5026:     // 这件事必须从放的那一回合就开始算，否则连开两发能白赚两回合。
+5027:     u.skillCharge = { ...(u.skillCharge ?? {}), [skill.id]: { n: charge - 1, t: Math.max(0, box?.t ?? 0) } };
+5028:     pushLog(s, u.owner, `${skill.name} 还剩 ${charge - 1}/${chargeMax} 发`);
+5029:   } else {
+5030:     // 进冷却
+5031:     u.skillCd = { ...(u.skillCd ?? {}), [skill.id]: skill.cooldown ?? 0 };
+5032:   }
+5033: 
+5034:   u.skillTurn = s.turn;
+5035: 
+5036:   sweepDead(s);
+
+game-policy-original.mjs  L126-L162
+126: const startStateHash=crypto.createHash('sha256').update(JSON.stringify(s)).digest('hex');
+127: function exposureAction(budget){
+128:  if(!focus||s.current!==side||focusStats.recruited>=focus.quota||budget.recruited>=budget.maxRecruit)return {action:null,hold:false};
+129:  if(armySize(s,side)>=protocol.aiArmyCap||heroBlocked(s,side,s.unitTypes[focus.id]))return {action:null,hold:false};
+130:  const sites=s.cities.filter(c=>c.owner===side&&!c.ruined&&c.era>=focus.era).sort((a,b)=>a.id.localeCompare(b.id));
+131:  const allowed=sites.filter(c=>recruitSpawnCells(s,c.id,undefined,focus.id).length>0);
+132:  if(!allowed.length)return {action:null,hold:false,noSite:true};
+133:  if(recruitPriceOf(s,side,s.unitTypes[focus.id]).gold>s.players[side].gold)return {action:null,hold:true,waitingGold:true};
+134:  return {action:{type:'RECRUIT',cityId:allowed[0].id,unitType:focus.id},hold:true};
+135: }
+136: while(!s.winner&&s.turn<=protocol.cap){
+137:  if(s.turn%10===1)fs.writeFileSync(path.join(liveFolder,job.id+'.json'),JSON.stringify({id:job.id,turn:s.turn,seconds:(performance.now()-started)/1000,fielded:focusStats.recruited,actions:actions.length}));
+138:  const actor=s.current,budget={...DEFAULT_BUDGET},denied=new Set();
+139:  income[actor]+=s.units.filter(u=>u.owner===actor).reduce((n,u)=>n+(unitYield(s,u).gold??0),0);
+140:  if(focus&&actor===side){
+141:   const live=s.units.filter(u=>paid.has(u.id));if(live.length)focusStats.fieldedTurns++;
+142:   focusStats.unitTurns+=live.length;focusStats.peakAlive=Math.max(focusStats.peakAlive,live.length);
+143:   for(const u of live){
+144:    focusStats.income+=unitYield(s,u).gold??0;
+145:    const abilities=s.unitTypes[u.type].abilities??[];
+146:    const radii=aurasOfUnit(s,u).map(a=>a.radius??1);if(abilities.some(a=>['heal-aura','purge','aura-speed'].includes(a)))radii.push(1);
+147:    const radius=radii.length?Math.max(...radii):0;
+148:    if(radius){const allies=s.units.filter(v=>v.owner===side&&v.id!==u.id&&Math.abs(u.x-v.x)+Math.abs(u.y-v.y)<=radius);focusStats.auraAllyTurns+=allies.length;focusStats.nearbyWoundedAllyTurns+=allies.filter(v=>v.hp<s.unitTypes[v.type].maxHp+(v.maxHpBonus??0)).length;}
+149:    if(abilities.includes('repair'))focusStats.nearbyCityTurns+=s.cities.filter(c=>c.owner===side&&cityTiles(c).some(p=>Math.abs(p.x-u.x)+Math.abs(p.y-u.y)<=1)).length;
+150:   }
+151:   for(const u of s.units.filter(u=>built.has(u.id))){focusStats.buildingIncome+=unitYield(s,u).gold??0;if(!(u.buildNeed>0&&(u.buildDone??0)<u.buildNeed))completed.add(u.id);}
+152:   const ex=exposureAction(budget);if(ex.noSite)focusStats.noSiteTurns++;if(ex.waitingGold)focusStats.waitingGoldTurns++;
+153:  }
+154:  for(let k=0;k<protocol.maxActions&&!s.winner;k++){
+155:   const ex=exposureAction(budget);
+156:   const adjusted=ex.hold?{...budget,maxRecruit:0,maxUpgrade:0}:budget;
+157:   const action=ex.action??aiNextAction(s,adjusted,denied);
+158:   if(!action||action.type==='END_TURN')break;
+159:   const res=step(action,{forced:!!ex.action});
+160:   if(!res.ok){
+161:    rejected[actor]++;if(badActions.length<12)badActions.push({turn:s.turn,actor,action,reason:res.reason});
+162:    if(ex.action)throw Error('Exposure action rejected: '+res.reason);

@@ -1,0 +1,616 @@
+{
+  "reviewDate": "2026-11-08",
+  "timezone": "Asia/Shanghai",
+  "sourceFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "scope": {
+    "treatmentGames": 12,
+    "controlGames": 4,
+    "totalGames": 16,
+    "units": 3,
+    "newFullMatches": 0,
+    "allFinalStatesVerified": true
+  },
+  "note": "SHA-256 of every archive member except manifest.json itself. No plotting dependencies, caches, credentials, workspace state or unrelated files are included.",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 2729,
+      "sha256": "667312680e8c305fe9ef9dbb2f3139ea0cba071015ee57646b95cdea33488fd9"
+    },
+    {
+      "path": "UNIT-MISMATCH-REVIEW-2026-11-08.md",
+      "bytes": 13665,
+      "sha256": "0ddbbe9f8347f9edfc1f769c139961d9bd53dac5a19538e95c4af21aebad1959"
+    },
+    {
+      "path": "assets/banner-protection.png",
+      "bytes": 44552,
+      "sha256": "af0dc45abe53f798416588390841de9c750ded952bc3592f45a18eff3d938761"
+    },
+    {
+      "path": "assets/opening-budget.png",
+      "bytes": 57152,
+      "sha256": "0f78ea86630589966286dc69d90ed473799c4b37bb87582f812e3999911f536b"
+    },
+    {
+      "path": "benchmark/game-policy-original.mjs",
+      "bytes": 14159,
+      "sha256": "aa9d1eaaec19e90fcc3731119c5b713e71f2957468cd3062ebcb0a51f6e11949"
+    },
+    {
+      "path": "benchmark/games/control-e3-218600.json",
+      "bytes": 1974,
+      "sha256": "dd27246b12612cce5ae0af8b5be7c8d7030186da7abb6e20d0a7fe8ae5740e27"
+    },
+    {
+      "path": "benchmark/games/control-e3-218600.replay.json.gz",
+      "bytes": 5405,
+      "sha256": "1a889de42c811b6a9f241ae6a6532aeea1629df59d9bd412a6da3dd95bddb10d"
+    },
+    {
+      "path": "benchmark/games/control-e3-218601.json",
+      "bytes": 2147,
+      "sha256": "9b5b9c381b085abb2ffa4ecb379b9032eab606fc4f72aacbce295abb68e2e454"
+    },
+    {
+      "path": "benchmark/games/control-e3-218601.replay.json.gz",
+      "bytes": 9370,
+      "sha256": "39f413e2bc4d65aeb1897435850ee79055adc8a9bae561b79973006d87fcfe45"
+    },
+    {
+      "path": "benchmark/games/control-e4-218600.json",
+      "bytes": 2111,
+      "sha256": "46db8440c7bb6ff23882e96acdf9fe6d681d91bba5453ecd04c2b0c2a9060915"
+    },
+    {
+      "path": "benchmark/games/control-e4-218600.replay.json.gz",
+      "bytes": 8269,
+      "sha256": "53c17f04644296ecc75ef4aa30ace6d0cade902a7adb0a9245d194a80c003ca7"
+    },
+    {
+      "path": "benchmark/games/control-e4-218601.json",
+      "bytes": 1910,
+      "sha256": "51b71e41a8b137c56562ca668d0599b932fc9ab8196a631670060a698fafa39b"
+    },
+    {
+      "path": "benchmark/games/control-e4-218601.replay.json.gz",
+      "bytes": 5132,
+      "sha256": "97bf235da7c473cfd6f9ae073eb294932a7ac33fcf830f134550194d7c88a856"
+    },
+    {
+      "path": "benchmark/games/ge-218600-A.json",
+      "bytes": 2031,
+      "sha256": "21ac1da523ad40c130d951c883b74ba647b73294d90870d359101ada88b54898"
+    },
+    {
+      "path": "benchmark/games/ge-218600-A.replay.json.gz",
+      "bytes": 7775,
+      "sha256": "43142156a529afd7cb20476cc88c9eae04984107bcb0474440ae73cb9defb357"
+    },
+    {
+      "path": "benchmark/games/ge-218600-B.json",
+      "bytes": 2027,
+      "sha256": "4b6fbbabf636fb11bd4a048433600066f4477d46f6fcb1ccea3c2d9bc2663ece"
+    },
+    {
+      "path": "benchmark/games/ge-218600-B.replay.json.gz",
+      "bytes": 6915,
+      "sha256": "05198829f286d28431198c35f96105adeb801a03966fd33402c4bc290db0336b"
+    },
+    {
+      "path": "benchmark/games/ge-218601-A.json",
+      "bytes": 2137,
+      "sha256": "8f9d8c40917c0ef454242eb6699969147eb4be093731055ca8b66bbfdbb016ee"
+    },
+    {
+      "path": "benchmark/games/ge-218601-A.replay.json.gz",
+      "bytes": 6713,
+      "sha256": "b86fd9f123e223095944c9b0441fa1316ac8a84b067de55de264f8950cfcbed2"
+    },
+    {
+      "path": "benchmark/games/ge-218601-B.json",
+      "bytes": 2100,
+      "sha256": "0ce429509477a93bcdd1ed2ccd0e74b07a065208b35b94af5967f02f1017b827"
+    },
+    {
+      "path": "benchmark/games/ge-218601-B.replay.json.gz",
+      "bytes": 6883,
+      "sha256": "497b650bc8f55283803fc50aa4b7bea922c34edd64c22223609deeda5052b781"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218600-A.json",
+      "bytes": 2232,
+      "sha256": "295c5dd979774c7c1758a336cc32042d0e7d2974bbd195851eb177e04c34828d"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218600-A.replay.json.gz",
+      "bytes": 6414,
+      "sha256": "5e9f0edf590cf7451c182f1eb2096e7b62040107dc5d7665eec995b6f31b97de"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218600-B.json",
+      "bytes": 2063,
+      "sha256": "0e2486f43dd0104d4eeb2047f69c250551ec63d59166fb0979f483d599a7d72b"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218600-B.replay.json.gz",
+      "bytes": 4479,
+      "sha256": "03f95b8bfc481821e66529cbcd4ed5041de8a01e4e9e572ab0312cb91b517ea1"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218601-A.json",
+      "bytes": 2035,
+      "sha256": "9e2292d3e1820178a1916692453e774564ed32f524cfe2ca3d03a20a3d63cc73"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218601-A.replay.json.gz",
+      "bytes": 4268,
+      "sha256": "f76fcc9919772a12a5f02083ca0cace1caa69c1859475d6b4897e4ad487840db"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218601-B.json",
+      "bytes": 2017,
+      "sha256": "ae10e8229a93e20abc45f89b726f237be33e1eb69efd1002418982107e979001"
+    },
+    {
+      "path": "benchmark/games/holy-knight-lord-218601-B.replay.json.gz",
+      "bytes": 4209,
+      "sha256": "737de49fee3759257951316fc9f7aa19328ae2f639ffd40de2b11c220c614bb8"
+    },
+    {
+      "path": "benchmark/games/mage-218600-A.json",
+      "bytes": 2082,
+      "sha256": "1070261ab7f4784c37e3394e789b48fcfb23c19c09dff1955b261af32887ed15"
+    },
+    {
+      "path": "benchmark/games/mage-218600-A.replay.json.gz",
+      "bytes": 6103,
+      "sha256": "35c6a917da12634beebbbc9649b75a24c2d8add33384aab72e50e9ed2aa3e123"
+    },
+    {
+      "path": "benchmark/games/mage-218600-B.json",
+      "bytes": 2013,
+      "sha256": "36e57cd0a643ce18b605807e33184695cc39b5c134e51b580e7438555427e63c"
+    },
+    {
+      "path": "benchmark/games/mage-218600-B.replay.json.gz",
+      "bytes": 6706,
+      "sha256": "84e7b568145413b2a364382d58a1354135da7d66ab794bbe690cfc138ff74f75"
+    },
+    {
+      "path": "benchmark/games/mage-218601-A.json",
+      "bytes": 1999,
+      "sha256": "6bf5766449ea81d2128b247fca0d585e672a1e03315476236c1e78747110f471"
+    },
+    {
+      "path": "benchmark/games/mage-218601-A.replay.json.gz",
+      "bytes": 5063,
+      "sha256": "031a235272e46d3542a305b2aafc57f41c1a051806b67e21ff3f5c44c064983f"
+    },
+    {
+      "path": "benchmark/games/mage-218601-B.json",
+      "bytes": 2084,
+      "sha256": "7175e51ab66d2207615e12bfdb3376c7471d6c38ca768f06c7c0a23aab7c76bc"
+    },
+    {
+      "path": "benchmark/games/mage-218601-B.replay.json.gz",
+      "bytes": 5877,
+      "sha256": "5ad017822db4f1fdc4d6e93ab0910dd1d59d8f4558f46944bcf2fb63eeee46d7"
+    },
+    {
+      "path": "benchmark/protocol.json",
+      "bytes": 90888,
+      "sha256": "8e99282b505513ebd4bb39e9c59b89ec29523e2723c87b0721f2c5faf8b57a15"
+    },
+    {
+      "path": "benchmark/snapshot/core/abilities.ts",
+      "bytes": 8541,
+      "sha256": "2e1f02378a4c0b51d30f4c0153e2b82cae9759cbab4932544eb8e8f52b53d638"
+    },
+    {
+      "path": "benchmark/snapshot/core/ability-hooks.ts",
+      "bytes": 20430,
+      "sha256": "e83238da28ece0757033533095efe5cb596390b2550c37f6bc1edb9bf06ff6b5"
+    },
+    {
+      "path": "benchmark/snapshot/core/ability-registry.ts",
+      "bytes": 8111,
+      "sha256": "869290f457b32f544b52cc4ae09b5e8e8f2dced7ab6f3a0deffce1368369aa2e"
+    },
+    {
+      "path": "benchmark/snapshot/core/action-points.ts",
+      "bytes": 22734,
+      "sha256": "83939f5135465105c7a437195597ca80efad7d2a222c1843cd91581a251ef11f"
+    },
+    {
+      "path": "benchmark/snapshot/core/ai-air-defense.ts",
+      "bytes": 5772,
+      "sha256": "705b23474452a2ef55bc76cfc2ee8ba75dc320479e8737b6c3275ddd8ed51c33"
+    },
+    {
+      "path": "benchmark/snapshot/core/ai-meta.ts",
+      "bytes": 4123,
+      "sha256": "134e618746aad749e263bdf25384c26f39ed24dc342fb0a42a4b0bad07f21cfb"
+    },
+    {
+      "path": "benchmark/snapshot/core/ai-tactics.ts",
+      "bytes": 6740,
+      "sha256": "08a13b02bd30310feff75c8110dbefc17ab4e73d877d719c65ad10ed7bac7ff7"
+    },
+    {
+      "path": "benchmark/snapshot/core/ai.ts",
+      "bytes": 273232,
+      "sha256": "d9446e5ab7a791cbdfef3aa677de5c3d77d430ab3e15261562f3792cb092df19"
+    },
+    {
+      "path": "benchmark/snapshot/core/air-packs.ts",
+      "bytes": 25104,
+      "sha256": "332855232e4bee903fbd310818ea2ebeb2fff8132a07ef9a2b8c416bbd465fdb"
+    },
+    {
+      "path": "benchmark/snapshot/core/auras.ts",
+      "bytes": 6497,
+      "sha256": "16fbd47e05f08eeb431570495706f88ef4203fbb6182e29a7f86f94e148e2b85"
+    },
+    {
+      "path": "benchmark/snapshot/core/build-info.ts",
+      "bytes": 1057,
+      "sha256": "b301318478a27a0b4c2f8761051312bebe7c03cbe68d1fffd57396bdbe428f5c"
+    },
+    {
+      "path": "benchmark/snapshot/core/carry.ts",
+      "bytes": 8252,
+      "sha256": "c464a9ea2341d876aba36adfbea589055212cf3eacc94485000ba724f3285ec8"
+    },
+    {
+      "path": "benchmark/snapshot/core/city-works.ts",
+      "bytes": 21434,
+      "sha256": "921e836e6f8f21fc7779beeeab3334211d20338f55bad6fa50b6d06df8eeae6e"
+    },
+    {
+      "path": "benchmark/snapshot/core/climate.ts",
+      "bytes": 12401,
+      "sha256": "5f2d0a94b02fe3c07c313bcfd42675e4664506ace61c907db8c5e96bc2acdff7"
+    },
+    {
+      "path": "benchmark/snapshot/core/config.ts",
+      "bytes": 38380,
+      "sha256": "27e83616341d7faa77518ca0d09536c601f91a1780aa25b365a0d63fa4b8ce81"
+    },
+    {
+      "path": "benchmark/snapshot/core/contemporary-packs.ts",
+      "bytes": 22967,
+      "sha256": "947d6cf97af406799b10e4c4897355b7bb7f50c1417198e843eb6f96e39ff79a"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation-packs.ts",
+      "bytes": 2624,
+      "sha256": "a49cd03548bc55c6a8c7441ccb1953ce87d58a03b60536cd9a212c5765a959b8"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/README.md",
+      "bytes": 10712,
+      "sha256": "d8bb77633ba323650090670ae32212734a798b093a0c67129b87a70d7c2b1096"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/anomaly.ts",
+      "bytes": 5583,
+      "sha256": "056eb51021db38128bc5269a4d2dd25d1b62648c014fb1b7f11f6c44e49ebe4d"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/index.ts",
+      "bytes": 857,
+      "sha256": "389b3ccd5798c4b449ec923276bd5a3f6a5e784521e4c349aac480746b4468f9"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/qi-true-damage.ts",
+      "bytes": 746,
+      "sha256": "ff7260d1be47b5a463ffe848b9f62b97d5b8aadcb6eea59f8b0f021bee9deb2a"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/spirit-ascension.ts",
+      "bytes": 2680,
+      "sha256": "0ccdfb4cda09181cd242cf3ba33cdaf52a88bd33a186844885cb33cdc455afbd"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/spirit-aura.ts",
+      "bytes": 3054,
+      "sha256": "96cc40ba99431e4dd0a55cd616015c76520711c35c6bb0a47ca12b2da5fda30b"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/abilities/unlocks.ts",
+      "bytes": 2126,
+      "sha256": "92d0a1a67c9880a54e0b864a0b35172c294b58cbc4c9e6e34ae086ce119142ff"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/hooks.ts",
+      "bytes": 6298,
+      "sha256": "496715fdce7e0e016d4314132c88d3562198e26966e32d72ce3c150fe123f5e9"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/identity.ts",
+      "bytes": 3708,
+      "sha256": "e332cf786c77ba1f09d4143c9c68c6cf3bbee4b3fe2bcc6d29b5fdb8338753f2"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/panel.ts",
+      "bytes": 2865,
+      "sha256": "3b49cf4826a0dfc3d7a8a55eeb1ea51c30bb4b4465b9a5e62b1496b765121add"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/progression.ts",
+      "bytes": 13135,
+      "sha256": "c0445a46241aa7bc73360494dcc5fb2dcd1268823a5b56e55350bd304b1759c2"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/resources.ts",
+      "bytes": 305,
+      "sha256": "63ea0823d9e388b8cece0a1f35cf1c066d67a7e88eae2482171a637cfa85d36a"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/index.ts",
+      "bytes": 1288,
+      "sha256": "8437ee0a92116dbbae46e979ce0fc5834a460a6a6fde6a7ce09ab67d0c39e714"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/sky-step.ts",
+      "bytes": 2962,
+      "sha256": "d3ead06e94bd400f814a4238b86e0d5f42acfc235a135a4617abdad7ce98107b"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/spirit-rebirth.ts",
+      "bytes": 4316,
+      "sha256": "64d7201102f332d1b2952b7617f8f9d2b1ff99d8b17742d1b2abd470ed759093"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/spirit-tower-shot.ts",
+      "bytes": 2990,
+      "sha256": "6ed5e8f45208b937ae398cc087a0183f80f433fb6be38fd375f28fbc2f9522a0"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/sword-sweep.ts",
+      "bytes": 7163,
+      "sha256": "effa7539d0d263911a9bf441d3582bff339e045cc0923c17323328a8fe9a708f"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/skills/unlocks.ts",
+      "bytes": 1850,
+      "sha256": "9d0aee42a2ede6f01efb43b0212229171624b6544f8c788e0fe279061692aaa0"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/stats.ts",
+      "bytes": 9179,
+      "sha256": "ad2a900ef30c18828a9189b9229cfacc95c4fa897513a62c03a4c861cef5a47b"
+    },
+    {
+      "path": "benchmark/snapshot/core/cultivation/units.ts",
+      "bytes": 3316,
+      "sha256": "f3d9b9dccf9c7b0b0a1e4003bc9975efcdb90c56acd23cd528372efb49b3d9d4"
+    },
+    {
+      "path": "benchmark/snapshot/core/customUnits.ts",
+      "bytes": 5407,
+      "sha256": "459b09f155168c3c4ebe19a588565dfa383b491862ee0a99fe7b92c60e9e1d12"
+    },
+    {
+      "path": "benchmark/snapshot/core/draft.ts",
+      "bytes": 46125,
+      "sha256": "404646d7e1cb3900f76e7840c481ecc3a66bbab6ccff9649cc5a96cbe756baa2"
+    },
+    {
+      "path": "benchmark/snapshot/core/era-packs.ts",
+      "bytes": 43802,
+      "sha256": "4037f248da850c6a73f5c412984b91fd4714e03844ad174fba861f98e82e30f7"
+    },
+    {
+      "path": "benchmark/snapshot/core/expansions.ts",
+      "bytes": 52490,
+      "sha256": "035d28da22ac21b4e7f8901a7eb92bf13ea88e3a27e36bff716aa61dd2055b71"
+    },
+    {
+      "path": "benchmark/snapshot/core/fantasy-packs.ts",
+      "bytes": 92432,
+      "sha256": "99a2f90a25b9bae598f82ff6305d6ab25f599e2d491bacf88cdd323a74d307fd"
+    },
+    {
+      "path": "benchmark/snapshot/core/fixed-maps.ts",
+      "bytes": 14772,
+      "sha256": "d37b201c78c07dd31dfdbb83286a19fbccbca43a1b070a0f6119e3843f3a47d0"
+    },
+    {
+      "path": "benchmark/snapshot/core/fog.ts",
+      "bytes": 6155,
+      "sha256": "f6238e4cf0ec83119e9debc464608107fe1ca9ee4c88bec34115103de71c81c2"
+    },
+    {
+      "path": "benchmark/snapshot/core/geo.ts",
+      "bytes": 813,
+      "sha256": "0a8b7f2347bdd064d37873c1fb170c113f851574f99e8eba7e92d67d08420c2b"
+    },
+    {
+      "path": "benchmark/snapshot/core/heat.ts",
+      "bytes": 7669,
+      "sha256": "28895bc9f6b47414baa3f30b4afb5c0814fb7e048889f3c3ebbc4a721579742f"
+    },
+    {
+      "path": "benchmark/snapshot/core/height-mapgen.ts",
+      "bytes": 22834,
+      "sha256": "10cc59dac813c10d942b9618fd4feb40f1b6978f2845e68add8d68ba7b89623a"
+    },
+    {
+      "path": "benchmark/snapshot/core/height-terrain.ts",
+      "bytes": 14745,
+      "sha256": "712322c0a5d5cb1b7d800dac1e4891529cfda92db9dd68c7c6a47a4ee59ddf48"
+    },
+    {
+      "path": "benchmark/snapshot/core/info.ts",
+      "bytes": 21805,
+      "sha256": "388d598528fb8ca7afc304d45efc0158a584f13dea3f0affa59b0b80996b6fe4"
+    },
+    {
+      "path": "benchmark/snapshot/core/mapgen.ts",
+      "bytes": 108151,
+      "sha256": "df87c2fc9c61d8482c0b9cd4e962bba284ff7299293f3f8b0743ce56e1fff698"
+    },
+    {
+      "path": "benchmark/snapshot/core/mark-registry.ts",
+      "bytes": 1034,
+      "sha256": "8446cba71d129b67ddda4fad04e3508c616960e1b2261f56585c9395f8fdc4ea"
+    },
+    {
+      "path": "benchmark/snapshot/core/marks.ts",
+      "bytes": 10159,
+      "sha256": "f6ce2997197366127710f296fea9c834df268eb815f0380b45093e8aa724138b"
+    },
+    {
+      "path": "benchmark/snapshot/core/mobility.ts",
+      "bytes": 3477,
+      "sha256": "2b0b83f2e59c24367b472f89adb7eb5beca98b7fb89ffb9422b2ecbf70b84906"
+    },
+    {
+      "path": "benchmark/snapshot/core/naval-carrier.ts",
+      "bytes": 9538,
+      "sha256": "819e7457dc46179e3b96b011801496e7bb513a8dcddd8388c6526e6bfe36d07d"
+    },
+    {
+      "path": "benchmark/snapshot/core/naval-packs.ts",
+      "bytes": 67902,
+      "sha256": "ea44f45ed3ae50ff3b5f96a247f1c52076d906fac41edf08fc038e05171eb3bf"
+    },
+    {
+      "path": "benchmark/snapshot/core/produce.ts",
+      "bytes": 6586,
+      "sha256": "1fb78d6f027fea6f8277725940da5ccc68ff18bc86ad26bbcd2abd90c7118547"
+    },
+    {
+      "path": "benchmark/snapshot/core/query.ts",
+      "bytes": 4890,
+      "sha256": "7ee7aa0b04130c4b8cb62a0a1b3625abbf4eec33658f4e72cdb218fc4e50ccfb"
+    },
+    {
+      "path": "benchmark/snapshot/core/replay-file.ts",
+      "bytes": 11768,
+      "sha256": "f933f19defb2548d56ea94485a4e2a275fa7cb4343fe5e30093b53f3f1e15b20"
+    },
+    {
+      "path": "benchmark/snapshot/core/report.ts",
+      "bytes": 13044,
+      "sha256": "63e93212320edbef8d95fd27b31fbe9892ee03bbab801a5aff80fb120d7429f3"
+    },
+    {
+      "path": "benchmark/snapshot/core/resources.ts",
+      "bytes": 7305,
+      "sha256": "36870dc2884c77a398581dceb399db0c5e31e25939430b315b1c127440cddcc5"
+    },
+    {
+      "path": "benchmark/snapshot/core/rng.ts",
+      "bytes": 911,
+      "sha256": "f966b3600a320e3b810333db929629f4ccb84acba14161a2cfa7779b935a8f0f"
+    },
+    {
+      "path": "benchmark/snapshot/core/rules.ts",
+      "bytes": 229340,
+      "sha256": "679429d06e6a8a0d8cc1eb53a9efdc043591ebfbdc0938dcef1839eac4dff762"
+    },
+    {
+      "path": "benchmark/snapshot/core/sandbox.ts",
+      "bytes": 11342,
+      "sha256": "99148202d1827de2e934c857a3d488be387f6293baf70ebcf273211b1f254492"
+    },
+    {
+      "path": "benchmark/snapshot/core/seasons.ts",
+      "bytes": 7297,
+      "sha256": "1054406ebd494a91eaa58b53cd78a67d78e80ccbe3009b27e3fd43eb23b006ad"
+    },
+    {
+      "path": "benchmark/snapshot/core/setup.ts",
+      "bytes": 27229,
+      "sha256": "c25dfe5f4d66536ad9af05a353b12605b13098334adcea0effe9f86f85a2bf32"
+    },
+    {
+      "path": "benchmark/snapshot/core/skill-hooks.ts",
+      "bytes": 1725,
+      "sha256": "92955441bdaa480cbf48ce8be6de496063ee51a012776c9d7e6e0bf79cadbec8"
+    },
+    {
+      "path": "benchmark/snapshot/core/snapshot.ts",
+      "bytes": 6309,
+      "sha256": "248390679e5d07f3c68d55f695a15fae852c3790d9fd0d70e8738b803a299983"
+    },
+    {
+      "path": "benchmark/snapshot/core/timeline.ts",
+      "bytes": 17056,
+      "sha256": "cb886294bb1c258f540c1fdca2fe8280afbcb68108e5b288dee473e1b87adca9"
+    },
+    {
+      "path": "benchmark/snapshot/core/types.ts",
+      "bytes": 75448,
+      "sha256": "ebf0d36603912b904a9b44e0481fc2aaaaab22bba3c6c777350e43cc163bc2a0"
+    },
+    {
+      "path": "benchmark/snapshot/core/unit-value.ts",
+      "bytes": 31317,
+      "sha256": "2f853cf1576d159f63fa6bb317a115addc70268590ca1ce36151e87525b7172e"
+    },
+    {
+      "path": "code-evidence.txt",
+      "bytes": 14511,
+      "sha256": "588c360e5d3aa569f064ad9941fa161adbbd69a3f77ad3577495ad0f8a8a3fa1"
+    },
+    {
+      "path": "extract-replays.mjs",
+      "bytes": 12534,
+      "sha256": "fc4e2383b81faba46c2f1d14b9c26f2376a0995869f719b707ecf6fc9128b6a2"
+    },
+    {
+      "path": "mechanic-and-position-probes.json",
+      "bytes": 79035,
+      "sha256": "847255220474267aa400cd80fab9e1bd53e79e21cc4f56cf624ae6d2497698a1"
+    },
+    {
+      "path": "plot_review.py",
+      "bytes": 3019,
+      "sha256": "a11b362ef54f2d1d6094908bf36d4e1a225515acb8a102ee76a814f7c9659274"
+    },
+    {
+      "path": "prior-ratings.json",
+      "bytes": 2583,
+      "sha256": "e935fad02e54f7a4e1946f694b6cf34be7f15db76574f7d7177c76d5a8368648"
+    },
+    {
+      "path": "probe-mechanics-and-positioning.mjs",
+      "bytes": 9549,
+      "sha256": "efe4ef0af6276a369422a6e8e3156dd0cf4358b4a2d0fc71d6697329926f3b00"
+    },
+    {
+      "path": "replay-review.json",
+      "bytes": 4158018,
+      "sha256": "141f7525c4f227dc5a4267658d5825e2154fe76357f70d41d984e0b0deac75c5"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 19,
+      "sha256": "de950d3b75e4ad1a760c121533e06390c84574f7dd0b53c0eaa742ab6d5c2f38"
+    },
+    {
+      "path": "review-summary.json",
+      "bytes": 61196,
+      "sha256": "a2d62a857879a9da77eaa9be590d117afba64d71a3b19df8b28b47525065fb77"
+    },
+    {
+      "path": "review-validation.json",
+      "bytes": 322,
+      "sha256": "0361e138fb0f7a0c225c7377d2f86b6bc8396f3239afe88f31d0ffb3099fa3f6"
+    },
+    {
+      "path": "summarize-review.mjs",
+      "bytes": 7537,
+      "sha256": "4e75c5e700f66e58a8f8eb946ee952a260041353c8e18cfeca952bc4f6f4520b"
+    },
+    {
+      "path": "verify-review.mjs",
+      "bytes": 3715,
+      "sha256": "67c42244292d435b85c0d31c65e91d927a554e28561d3fa372195dd85aee1c05"
+    }
+  ]
+}

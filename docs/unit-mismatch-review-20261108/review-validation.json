@@ -1,0 +1,14 @@
+{
+  "complete": true,
+  "replays": 16,
+  "unitCases": 12,
+  "sourceFiles": 69,
+  "sourceFilesMatch": true,
+  "rawOutcomesAndDamageMatch": true,
+  "ruleRejections": 0,
+  "openingBudgetPairs": 4,
+  "bannerLocalHpDifference": 102,
+  "legalCoverageAlternatives": 18,
+  "unitDefinitionsUnchanged": true,
+  "newFullMatches": 0
+}
