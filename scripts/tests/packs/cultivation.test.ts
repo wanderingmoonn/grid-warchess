@@ -1236,6 +1236,27 @@ export function run() {
     assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
   });
 
+  test('法器只认点名要造它的产兵建筑：军营连灰都不该列', () => {
+    // 军营的白名单是空的（= 不设限），所以它能认一整张兵种表。
+    // 但"不设限"不该盖过 campOnly：法器只能出自炼器炉，
+    // 否则军营里会平白多出一排灰色的"还造不出来"。
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const camp = place2(s, 'A', 'camp', 5, 5);
+    const r = produceAt(s, { kind: 'camp', camp }, s.unitTypes['cultivation-artifact-wood']);
+    assert.equal(r.ok, false, '军营不该认法器');
+    assert.ok(r.ok ? '' : /产不了/.test(r.reason), `理由要说清是产不了：${r.ok ? '' : r.reason}`);
+
+    // 反过来：炉子的白名单点了名，它就认
+    const forge = place2(s, 'A', 'cultivation-forge-1', 8, 8);
+    assert.equal(
+      produceAt(s, { kind: 'camp', camp: forge }, s.unitTypes['cultivation-artifact-wood']).ok,
+      false,
+      '炉子挨不到森林时仍然造不出（条件不满足）',
+    );
+  });
+
   test('炼器：真能从林中炉造出青木剑，空地炉被规则层拒', () => {
     const s = fresh({ expansionIds: ['cultivation'], godMode: true });
     s.units = [];

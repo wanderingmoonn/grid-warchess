@@ -533,6 +533,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               const builds = buildListOf(u, {
                 nameOf: (id) => catalog[id]?.name ?? id,
                 exists: (id) => !!catalog[id],
+                eraOf: (id) => catalog[id]?.era,
               });
               const buildTip = builds.names.length > 0 ? ` · 可建 ${builds.names.join('、')}` : '';
               const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}${buildTip}`;
