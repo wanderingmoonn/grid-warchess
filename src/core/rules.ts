@@ -106,6 +106,7 @@ import type {
   Element,
   FallenRecord,
   GameState,
+  NearSpec,
   OrderDirective,
   SkillDef,
   PlayerId,
@@ -135,7 +136,9 @@ import {
 import { 
   auraSourcesOf, 
   auraBonusOf, 
+  allyArmorPctOf,
   allyAtkPctOf,
+  allyTrueDamagePctOf,
   foeMovePctOf,
   foeMoveFlatOf,
   fearPenaltyOf, 
@@ -192,12 +195,12 @@ export function adjacentToWater(s: GameState, x: number, y: number): boolean {
  */
 export function adjacentRequirementOf(
   def: UnitTypeDef,
-): { terrain: Terrain[]; unit: string[] } | null {
+): NearSpec | null {
   if (def.adjacent) {
     const terrain = def.adjacent.terrain ?? [];
     const unit = def.adjacent.unit ?? [];
     if (terrain.length === 0 && unit.length === 0) return null;
-    return { terrain, unit };
+    return { terrain, unit, count: def.adjacent.count };
   }
   if (def.requiresWater) return { terrain: WATER_TERRAINS, unit: [] };
   return null;
@@ -215,7 +218,10 @@ export function adjacentRequirementText(
 ): string | null {
   const adj = adjacentRequirementOf(def);
   if (!adj) return null;
-  const names = [...adj.terrain.map((t) => CONFIG.terrainName[t]), ...adj.unit.map(nameOf)];
+  const names = [
+    ...(adj.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(adj.unit ?? []).map(nameOf),
+  ];
   return `必须紧邻${names.join('或')}`;
 }
 
@@ -823,38 +829,72 @@ export function distToCity(unit: { x: number; y: number }, city: City): number {
  * 两处如果各写一遍，"2×2 的建筑一半压在山脊上"这种边界迟早会算出两个答案
  * ——玩家看到的是"炉子明明靠着山，怎么说没有森林"。
  */
-function adjacentHit(
+/**
+ * 一块占地 n×n 的地，命中了多少**不同**的邻里目标。
+ *
+ * 数"目标"而不是"格数"：2×2 的炉子四邻会重复看到同一块灵田，
+ * 按格数会数成两块，于是玩家遇到"我明明只有一块灵田，怎么就能造了"。
+ * 地形按坐标去重、单位按 id 去重，两种命中合在一个计数里
+ * （spec 只写一种时，就是那种东西的个数）。
+ *
+ * 单位按**阵营**过滤：敌方灵田不该给你的炉子供灵。以前这里不判阵营，
+ * "挨着敌方军营"这类要求会稀里糊涂地被敌人满足。
+ */
+function nearSpecCount(
   s: GameState,
-  tx: number,
-  ty: number,
-  spec: { terrain: Terrain[]; unit: string[] },
-): boolean {
-  const tile = tileAt(s, tx, ty);
-  if (tile && spec.terrain.includes(tile.terrain)) return true;
-  const here = unitAt(s, tx, ty);
-  if (here && spec.unit.includes(here.type)) return true;
-  return DIRS.some(([dx, dy]) => {
-    const nb = tileAt(s, tx + dx, ty + dy);
-    if (nb && spec.terrain.includes(nb.terrain)) return true;
-    const nu = unitAt(s, tx + dx, ty + dy);
-    return !!nu && spec.unit.includes(nu.type);
-  });
+  x: number,
+  y: number,
+  n: number,
+  spec: NearSpec,
+  owner: PlayerId,
+): number {
+  const terrain = spec.terrain ?? [];
+  const units = spec.unit ?? [];
+  if (terrain.length === 0 && units.length === 0) return 0;
+  const hits = new Set<string>();
+  const look = (tx: number, ty: number): void => {
+    if (!inBounds(s, tx, ty)) return;
+    const tile = tileAt(s, tx, ty);
+    if (tile && terrain.includes(tile.terrain)) hits.add(`t:${tx},${ty}`);
+    const u = unitAt(s, tx, ty);
+    if (u && u.owner === owner && units.includes(u.type)) hits.add(`u:${u.id}`);
+  };
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      look(tx, ty);
+      for (const [ox, oy] of DIRS) look(tx + ox, ty + oy);
+    }
+  }
+  return hits.size;
 }
 
-/**
- * 一个占地 n×n 的大家伙贴不贴着这些地形/单位。
- *
- * 和 `adjacentHit` 的分工：那个回答"这一格满不满足"，这个回答"整块地满不满足"
- * ——2×2 的炉子只要有一格挨着森林就算挨着。
- */
+/** 一组邻里要求满不满足（`count` 默认 1 = 有其中之一就够了） */
 function adjacentSatisfied(
   s: GameState,
   x: number,
   y: number,
   n: number,
-  spec: { terrain: Terrain[]; unit: string[] },
+  spec: NearSpec,
+  owner: PlayerId,
 ): boolean {
-  return tilesOfFootprint(x, y, n, (tx, ty) => adjacentHit(s, tx, ty, spec));
+  return nearSpecCount(s, x, y, n, spec, owner) >= (spec.count ?? 1);
+}
+
+/**
+ * 一条邻里要求怎么说给玩家听：`森林`、`2 个灵田`。
+ *
+ * 产地条件（produceAt 的拒绝理由）和兵种说明（info.ts）共用一份：
+ * 两处各写一遍就会出现"面板说缺 2 块灵田、点下去只说缺灵田"这种对不上的提示。
+ */
+export function nearSpecText(spec: NearSpec, nameOf: (id: string) => string): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(spec.unit ?? []).map(nameOf),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
 }
 
 
@@ -1162,6 +1202,34 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     // 原逻辑：只要 slow > 0，就扣 1 点移动
     modifyMove: (_s, _u, val, move) => (val > 0 ? move - 1 : move),
   },
+  /*
+   * 迟缓：移动力**减半**，不是定身。
+   *
+   * 和 slow 并存：一个是"按比例砍"，一个是"减一格"。两个都挂上时先减 1
+   * 再减半还是反过来，结果会差 1 点，所以顺序由 STATUS_ORDER 钉死。
+   *
+   * 保底 1 是设计意图：1 移的单位被减速后仍能走一格，不然它就变成
+   * "站着不能动"，那和定身没区别，而这条 debuff 想表达的是"追不上"。
+   */
+  chill: {
+    id: 'chill',
+    name: '迟缓',
+    summary: '移动力减半（至少留 1 格）',
+    modifyMove: (_s, _u, val, move) => (val > 0 ? Math.max(1, Math.floor(move * 0.5)) : move),
+  },
+  /*
+   * 熔甲：护甲**减半**。
+   *
+   * 取的是"当前护甲"（含光环、地形、已有加成），不是兵种白值——
+   * 玩家的直觉是"打上去甲少了一半"，而不是"基础甲少了一半"。
+   * 和「诅咒」（−2）不同，那个是固定值，对高甲单位几乎无效。
+   */
+  sunder: {
+    id: 'sunder',
+    name: '熔甲',
+    summary: '护甲减半',
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? Math.floor(armor / 2) : armor),
+  },
   curse: {
     id: 'curse',
     name: '诅咒',
@@ -1197,7 +1265,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
  * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
  * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
  */
-const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse', 'curse-deep'];
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'chill', 'curse', 'sunder', 'curse-deep'];
 
 /** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
 export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
@@ -1570,7 +1638,9 @@ export function movePower(s: GameState, unit: Unit): number {
   if (sealFlat.value > 0) move = Math.max(0, move - sealFlat.value);
 
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
+    if (e.hooks.modifyMove) {
+      move = e.hooks.modifyMove({ state: s, unit, move, visionOf: (x) => visionOf(s, x) });
+    }
   }
   /*
    * 石化：移动力减半（向下取整，最低 1）。
@@ -1778,6 +1848,22 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += src.value;
     armorItems.push({ label: src.label, delta: src.value });
   }
+  /*
+   * 护甲百分比光环（玄石印）。
+   *
+   * 位置和攻击那侧的 `allyAtkPct` 对齐：**加法光环之后、地形之前**。
+   * 放在地形之前是有意的——地形是"掩体 +2"，它不该被百分比放大，
+   * 否则同一条光环在山地上比在平原上值钱，玩家没法估算。
+   *
+   * 保底 +1：`round(3 × 0.1) = 0`，不给保底的话这条光环在前期等于不存在，
+   * 而 2 代的玄石印主要就是给低境界修士保命用的。
+   */
+  const armorPctSrc = allyArmorPctOf(s, u);
+  if (armorPctSrc) {
+    const before = armor;
+    armor += Math.max(1, Math.round(before * armorPctSrc.value));
+    armorItems.push({ label: armorPctSrc.label, delta: armor - before });
+  }
   // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
   // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
   // 而空中层存在的理由恰恰是"从上面过去，地面的事与它无关"。
@@ -1834,7 +1920,16 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
       const before = armor;
-      armor = e.hooks.modifyArmor({ state: s, attacker: u, defender: u, armor, isCounter: false });
+      armor = e.hooks.modifyArmor({
+        state: s,
+        attacker: u,
+        defender: u,
+        armor,
+        isCounter: false,
+        // 查自己直接给当前值：否则「按友军护甲加甲」那条钩子会转回来再算一次自己
+        armorOf: (x) => (x.id === u.id ? armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
       if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
     }
   }
@@ -1883,7 +1978,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyMove) {
         const before = moveNow;
-        moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
+        moveNow = e.hooks.modifyMove({
+        state: s,
+        unit: u,
+        move: moveNow,
+        visionOf: (x) => visionOf(s, x),
+      });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
     }
@@ -2471,16 +2571,26 @@ export function computeDamage(
   //    石化翻倍也在这里生效：ownArmorOf 是"自己的甲"的唯一取值口
   const actualArmor = isCity ? city.armor : ownArmorOf(s, defender);
 
+  // 护甲百分比光环：面板（effectiveStats）里有这一段，这里也必须有——
+  // 少一处就是"面板写着 12 甲、实际按 9 甲挨打"。
+  const armorPctSrc = isCity ? null : allyArmorPctOf(s, defender);
+  const armorBaseNow =
+    actualArmor + defenderAura.armor + (armorPctSrc
+      ? Math.max(1, Math.round((actualArmor + defenderAura.armor) * armorPctSrc.value))
+      : 0);
+
   const ctx: HookCtx = {
     state: s,
     self: defender,
     foe: attacker,
     side: 'defender',
     atk: atkNow,
-    armor: actualArmor + defenderAura.armor + terrainBonus,
+    armor: armorBaseNow + terrainBonus,
     damage: atkNow,
     items: [],
     isCounter,
+    // 真元光环（赤炎珠）由这里注入：能力那一层不能自己查，见 HookCtx 的注释
+    trueDamagePct: allyTrueDamagePctOf(s, attacker)?.value ?? 0,
     terrainBonus,
     ignoreCover: false,
     distance: isCity ? 1 : strikeDistance(s, attacker, defender),
@@ -2520,7 +2630,15 @@ export function computeDamage(
   // 小型扩展
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
-      ctx.armor = e.hooks.modifyArmor({ state: s, attacker, defender, armor: ctx.armor, isCounter });
+      ctx.armor = e.hooks.modifyArmor({
+        state: s,
+        attacker,
+        defender,
+        armor: ctx.armor,
+        isCounter,
+        armorOf: (x) => (x.id === defender.id ? ctx.armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
     }
   }
 
@@ -2742,6 +2860,19 @@ function strikeCellsOf(
  * `excludeIds` 是已经被结算过的人（普攻的主目标已经吃过全额，不能再吃一份）。
  * 城市也能当爆心：传城市的矩形即可，城里站着的守军距离 0，会一起挨炸。
  */
+/**
+ * 溅射**波及**之后的钩子：只问开火那一方的 `onSplash`，只传被波及的人。
+ *
+ * 主目标不经过这里——它吃全额伤害、走 `onHit`。两条钩子分开是有意的：
+ * 现有三十多个溅射兵种的毒/火都只对主目标生效，把范围并到 onHit 会一次
+ * 改掉它们的平衡；而"冻住一片"这种设计又确实需要"溅射也算命中"。
+ */
+function runSplashHooks(s: GameState, attacker: Unit, victim: Unit, damage: number): void {
+  for (const h of hooksOfUnit(s, attacker)) {
+    h.onSplash?.({ state: s, attacker, victim, damage, api: abilityApi });
+  }
+}
+
 function splashVictims(
   s: GameState,
   attacker: Unit,
@@ -3191,6 +3322,7 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
         hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
         noteVictim(v.unit, v.dmg);
+        if (v.unit.hp > 0) runSplashHooks(s, b, v.unit, v.dmg);
       }
 
       if (target.hp <= 0) {
@@ -3691,6 +3823,8 @@ function doAttack(
   for (const v of splashed) {
     // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
     hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    // 波及也算"命中"：寒水镜冻一片、赤炎珠熔一片都靠这里
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
   }
 
   const noCounter = hasFlagOn(s, attacker, 'noCounter');
@@ -3946,7 +4080,10 @@ function doSiege(
     { x: city.x, y: city.y, n: city.size },
     { hit: { x: hitX, y: hitY } },
   );
-  for (const v of splashed) hurtUnit(s, v.unit, v.dmg, { source: attacker });
+  for (const v of splashed) {
+    hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
+  }
 
   // 战况烈度：攻城按几何覆盖记，和攻击单位走同一套
   noteStrikeHeat(s, attacker, { x: city.x, y: city.y, n: city.size }, { x: hitX, y: hitY });
@@ -4272,7 +4409,7 @@ export function buildSiteError(
   // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
   // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
   const adjacent = adjacentRequirementOf(def);
-  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent)) {
+  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent, builder.owner)) {
     return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
   }
 
@@ -4317,20 +4454,6 @@ export function buildSiteError(
  *
  * 选址里"临水""是不是全是陆地"这类条件说的都是整块地，不是锚点那一格。
  */
-function tilesOfFootprint(
-  x: number,
-  y: number,
-  n: number,
-  test: (tx: number, ty: number) => boolean,
-): boolean {
-  for (let dy = 0; dy < n; dy++) {
-    for (let dx = 0; dx < n; dx++) {
-      if (test(x + dx, y + dy)) return true;
-    }
-  }
-  return false;
-}
-
 /** 这一格的坐标写法，日志里到处用 */
 function cellName(x: number, y: number): string {
   return `${String.fromCharCode(65 + x)}${y + 1}`;
@@ -4628,19 +4751,22 @@ export function produceAt(
     const allowed = canProduce(campDef, target);
     if (!allowed.ok) return allowed;
 
-    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）
+    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）。
+    //
+    // 支持**数组**（任一满足）：青木剑要的"相邻森林 或 2 块灵田"就是两条并列。
+    // 单条 spec 里的 `count` 是"至少几个"，所以第二块灵田那条写 count: 2。
     const near = target.produceNear;
     if (near) {
-      const spec = { terrain: near.terrain ?? [], unit: near.unit ?? [] };
-      if (spec.terrain.length + spec.unit.length > 0) {
-        const n = footprintOf(s, source.camp);
-        if (!adjacentSatisfied(s, source.camp.x, source.camp.y, n, spec)) {
-          const names = [
-            ...spec.terrain.map((t) => CONFIG.terrainName[t]),
-            ...spec.unit.map((id) => s.unitTypes[id]?.name ?? id),
-          ];
-          return { ok: false, reason: `${target.name}要在${names.join('或')}旁边才造得出来` };
-        }
+      const specs = Array.isArray(near) ? near : [near];
+      const n = footprintOf(s, source.camp);
+      const ok = specs.some((sp) =>
+        adjacentSatisfied(s, source.camp.x, source.camp.y, n, sp, owner),
+      );
+      if (!ok) {
+        const need = specs
+          .map((sp) => nearSpecText(sp, (id) => s.unitTypes[id]?.name ?? id))
+          .join('，或 ');
+        return { ok: false, reason: `${target.name}要在${need}旁边才造得出来` };
       }
     }
   }

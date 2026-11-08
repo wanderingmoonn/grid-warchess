@@ -74,6 +74,20 @@ export interface ArmorCtx {
   /** 已经算好的护甲（兵种护甲 + 光环 + 地形），还没走破甲 */
   armor: number;
   isCounter: boolean;
+  /**
+   * 查**另一个**单位此刻的有效护甲。
+   *
+   * 给"按友军护甲加甲"这类规则用（法器的「器灵」：神识范围内 +修士护甲/2）。
+   * 为什么必须由规则层注入、而不让扩展自己算：护甲 = 兵种 + 光环 + 地形 +
+   * 状态 + 诅咒 + 驻军，扩展要是重算一遍，迟早和面板对不上——而玩家会拿
+   * 面板上那个数字来核对"我明明说 +7 怎么只加了 +5"。
+   *
+   * 查自己会拿到**当前这次的值**（`armor`），不会递归；查别人会完整算一遍
+   * 那个人的护甲（其中又会走一次本钩子）。所以别让两个单位互相查对方护甲。
+   */
+  armorOf?: (u: Unit) => number;
+  /** 查某个单位此刻的有效视野。同上，法器的「器灵」需要它。 */
+  visionOf?: (u: Unit) => number;
 }
 
 /**
@@ -95,6 +109,14 @@ export interface MoveCtx {
   state: GameState;
   unit: Unit;
   move: number;
+  /**
+   * 查某个单位此刻的有效视野（神识）。
+   *
+   * 同 `ArmorCtx.armorOf`：视野 = 兵种 + 境界 + 驻军 + 状态 + 扩展修正，
+   * 扩展自己算必然少算一半，而"少算"的表现是玩家的法器莫名其妙掉地上。
+   * 法器的「器灵」就是靠它判"在不在修士神识里"。
+   */
+  visionOf?: (u: Unit) => number;
 }export interface CostCtx {
   state: GameState;
   player: PlayerId;

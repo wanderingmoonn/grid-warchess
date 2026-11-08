@@ -43,6 +43,17 @@ export {
 } from './spirit-rebirth.ts';
 export { TOWER_CHARGE_SKILL, TOWER_CHARGE_COST, TOWER_BURST_CHARGES } from './spirit-tower-shot.ts';
 export {
+  SPRING_SURGE_SKILL,
+  SPRING_HEAL_RATIO,
+  SPRING_HP_PER_STONE,
+  SPRING_MIN_COST,
+  SPRING_FLOOR_HEAL,
+  SPRING_RADIUS,
+  springHealAmount,
+  springStoneCost,
+  springTargets,
+} from './spirit-spring.ts';
+export {
   TELEPORT_SKILL,
   TELEPORT_COST,
   TELEPORT_RADIUS,

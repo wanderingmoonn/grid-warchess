@@ -3,9 +3,12 @@
 import type { UnitTypeDef } from '../types.ts';
 // 技能的 SkillDef 和数值常量都在 skills/ 下：一个技能一个文件。
 // 这里只负责把它们挂到兵种身上，不重复定义。
-import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
+import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SPRING_SURGE_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
+import { ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID } from './artifacts.ts';
+import { FIRE_QI_ID, STONE_WARD_ID, SWORD_QI_ID } from './abilities/artifact-auras.ts';
+import { CHILL_HIT_ID, SUNDER_HIT_ID } from './abilities/artifact-effects.ts';
 import { GOLD } from '../resources.ts';
 
 //灵体
@@ -161,8 +164,9 @@ export const DEACON: UnitTypeDef = {
 /**
  * 管事（时代 4）：仆役 → 执事 → 管事，这一列是修真包里的"建造工人"线。
  *
- * 它只比执事多会一样东西：三档炼器炉。不新开「炼器师」是因为这条线的语义
- * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊。
+ * 它比执事多会两样东西：三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
+ * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊；
+ * 灵泉也一样：开泉取水是宗门的家务事，归管事。
  */
 export const STEWARD: UnitTypeDef = {
   id: UNIT_IDS.STEWARD,
@@ -185,6 +189,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.FORGE_1,
     UNIT_IDS.FORGE_2,
     UNIT_IDS.FORGE_3,
+    UNIT_IDS.SPIRIT_SPRING,
   ],
   buildPower: 24,
 };
@@ -254,6 +259,35 @@ export const SPIRIT_MINE: UnitTypeDef = {
   },
 };
 
+// ── 灵泉（2026-11-08）──────────────────────────────
+//
+// 加它的直接原因是寒水镜：那件法器的产地写的是"水面或浅滩"，而**地图不一定生成水**。
+// 没有水、又没有备用产地，整条水系法器就是一张废纸。灵泉既是那张备用产地，
+// 也是一座自己的支援建筑——一举两得。
+//
+// 它不产资源、不能攻击（atk 0，和阵法同一个口径：写个 5 反而让玩家以为它能打），
+// 全部价值在「泉涌」上。技能数值与计费在 skills/spirit-spring.ts，
+// 这里只负责"它长什么样、多少钱、谁能盖"。
+
+export const SPIRIT_SPRING: UnitTypeDef = {
+  id: UNIT_IDS.SPIRIT_SPRING,
+  name: '灵泉',
+  short: '泉',
+  era: 4,
+  category: 'building',
+  cost: 150,
+  costRes: { 'spirit-stone': 18 },
+  // 管事每回合 24 点，要两回合才立起来——它是"后方设施"，不该一夜之间冒出来
+  buildCost: 30,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 70,
+  range: 1,
+  vision: 3,
+  skills: [SPRING_SURGE_SKILL],
+};
+
 // ── 炼器（2026-11-08）──────────────────────────────
 //
 // 炼器炉用的是"军营那套产兵逻辑"，一行新规则都没有：
@@ -305,7 +339,7 @@ export const FORGE_2: UnitTypeDef = {
   range: 0,
   vision: 3,
   buildOn: ['plain', 'hill', 'forest'],
-  // 多认一样：水边的寒水镜
+  // 多认一样：水边（或灵泉旁）的寒水镜
   produce: {
     units: [UNIT_IDS.ARTIFACT_WOOD, UNIT_IDS.ARTIFACT_STONE, UNIT_IDS.ARTIFACT_WATER],
   },
@@ -351,16 +385,32 @@ export const ARTIFACT_WOOD: UnitTypeDef = {
   era: 2,
   category: 'combat',
   campOnly: true,
-  cost: 90,
-  costRes: { 'spirit-stone': 4 },
-  move: 3,
-  atk: 11,
-  armor: 1,
-  maxHp: 18,
-  range: 1,
-  vision: 2,
-  // 林中取材：贴着森林才炼得出来
-  produceNear: { terrain: ['forest'] },
+  artifact: true,
+  cost: 150,
+  costRes: { 'spirit-stone': 10 },
+  /*
+   * 一件"飞剑"：跑得快、打得远，但血薄甲薄。
+   *
+   * 数值比同代兵略高一档（骑士 17/4/40 攻甲血、移 3 射 1），贵出来的部分是
+   * 射程 3 和「剑气环」——前者让它能站在近战射程外开火（对方够不着就不能反击），
+   * 后者让它成为一小团兵的火力核心。真正限制它的是造价和产地，不是数值。
+   */
+  move: 4,
+  atk: 18,
+  armor: 3,
+  maxHp: 36,
+  range: 3,
+  vision: 3,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SWORD_QI_ID, 'fly'],
+  /*
+   * 两种产地，满足其一就行：
+   *   · 挨着森林——"林中取材"，最直白的一条；
+   *   · 或者挨着两块灵田——灵木得靠灵气养，宗门有田也能凑出来。
+   *
+   * 第二条是"数量条件"（count: 2），不是"挨着两块田其中一块"。
+   * 它让"没森林但田多"的开局也造得出青木剑，不至于整条木系被地形锁死。
+   */
+  produceNear: [{ terrain: ['forest'] }, { unit: [UNIT_IDS.SPIRIT_FIELD], count: 2 }],
 };
 
 export const ARTIFACT_STONE: UnitTypeDef = {
@@ -370,15 +420,32 @@ export const ARTIFACT_STONE: UnitTypeDef = {
   era: 2,
   category: 'combat',
   campOnly: true,
-  cost: 110,
-  costRes: { 'spirit-stone': 6 },
-  move: 1,
-  atk: 7,
-  armor: 6,
-  maxHp: 36,
+  artifact: true,
+  cost: 180,
+  costRes: { 'spirit-stone': 10 },
+  /*
+   * 一块"砸下去的印"：攻低、甲厚、血多、慢、射程短，但**能溅**。
+   *
+   * 和青木剑正好相反——那一件是"跑得快、打得远、皮薄"，
+   * 这一件是"站得住、打得近、一下能扫到旁边的人"。
+   * 它是四件法器里唯一不靠机动吃饭的，所以飞行只是"能过河"，不改它的定位。
+   */
+  move: 2,
+  atk: 12,
+  armor: 9,
+  maxHp: 52,
   range: 1,
   vision: 2,
-  produceNear: { terrain: ['mountain', 'hill'] },
+  splash: 1,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, STONE_WARD_ID, 'fly'],
+  /*
+   * 丘陵，或者两块灵矿。
+   *
+   * 2 代还造不出灵矿（它是 3 代建筑），所以"或"这半边在前期永远不成立——
+   * 这是有意的兜底：**地图没生成丘陵时**，玩家升到 3 代、开一座灵矿
+   * 仍然能把这个产品线救回来，不至于整件法器作废。
+   */
+  produceNear: [{ terrain: ['mountain', 'hill'] }, { unit: [UNIT_IDS.SPIRIT_MINE], count: 2 }],
 };
 
 export const ARTIFACT_WATER: UnitTypeDef = {
@@ -388,15 +455,32 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   era: 3,
   category: 'combat',
   campOnly: true,
-  cost: 150,
-  costRes: { 'spirit-stone': 8 },
+  artifact: true,
+  cost: 190,
+  costRes: { 'spirit-stone': 12 },
+  /*
+   * 远程控制。攻击力刻意不如同代火枪兵（23），换来的是射程、视野和**面**：
+   * 溅射 2 格，而且被打到的都会被冻慢。它不是杀伤单位，是"让你的阵型走不动"。
+   */
   move: 2,
-  atk: 9,
-  armor: 2,
-  maxHp: 22,
-  range: 3,
-  vision: 4,
-  produceNear: { terrain: ['water', 'shallow'] },
+  atk: 16,
+  armor: 3,
+  maxHp: 30,
+  range: 4,
+  vision: 5,
+  splash: 2,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, 'fly'],
+  /*
+   * 两种产地，满足其一就行：
+   *   · 水面或浅滩——"寒水"，最直白的一条；
+   *   · 或者挨着一座灵泉。
+   *
+   * 第二条是**为了没有水的地图**：地图生成不保证有河湖，而这一件是整条
+   * 水系唯一的产物，没有备用产地就等于"这张图这条线不存在"。
+   * 灵泉本身是四代建筑（见 SPIRIT_SPRING），所以这条后路要等管事出来才通——
+   * 三代之前仍然得找水。这是有意的时代门槛，不是遗漏。
+   */
+  produceNear: [{ terrain: ['water', 'shallow'] }, { unit: [UNIT_IDS.SPIRIT_SPRING] }],
 };
 
 export const ARTIFACT_FIRE: UnitTypeDef = {
@@ -406,16 +490,22 @@ export const ARTIFACT_FIRE: UnitTypeDef = {
   era: 4,
   category: 'combat',
   campOnly: true,
-  cost: 200,
-  costRes: { 'spirit-stone': 12 },
+  artifact: true,
+  cost: 260,
+  costRes: { 'spirit-stone': 16 },
+  /*
+   * 远程 AOE：四件里伤害最高的一件，代价是射程比寒水镜短一格。
+   * 溅射 2 格 + 「熔甲」＝ 一炮把一片阵型的护甲打对折，
+   * 后面跟上来的近战就有了破口。它是"开团的那一下"，不是持续输出。
+   */
   move: 2,
-  atk: 13,
-  armor: 2,
-  maxHp: 26,
-  range: 2,
-  vision: 3,
-  // 炸开一小片：珠子碎了就是一团火
-  splash: 1,
+  atk: 30,
+  armor: 3,
+  maxHp: 34,
+  range: 3,
+  vision: 4,
+  splash: 2,
+  abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, SUNDER_HIT_ID, FIRE_QI_ID, 'fly'],
   // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
   produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };

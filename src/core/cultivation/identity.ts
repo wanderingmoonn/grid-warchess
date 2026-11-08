@@ -20,6 +20,7 @@ export const UNIT_IDS = {
   SPIRIT_FIELD: 'cultivation-spirit-field',
   SPIRIT_MINE: 'cultivation-spirit-mine',
   SPIRIT_TOWER: 'cultivation-spirit-tower',
+  SPIRIT_SPRING: 'cultivation-spirit-spring',
   FORGE_1: 'cultivation-forge-1',
   FORGE_2: 'cultivation-forge-2',
   FORGE_3: 'cultivation-forge-3',

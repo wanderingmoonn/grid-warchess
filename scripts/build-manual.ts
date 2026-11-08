@@ -104,11 +104,37 @@ import {
   FORGE_1,
   FORGE_2,
   FORGE_3,
+  SPIRIT_SPRING,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
+import {
+  SPRING_FLOOR_HEAL,
+  SPRING_HEAL_RATIO,
+  SPRING_HP_PER_STONE,
+  SPRING_MIN_COST,
+  SPRING_RADIUS,
+  springHealAmount,
+} from '../src/core/cultivation/skills/spirit-spring.ts';
+import {
+  ARTIFACT_SPIRIT_ID,
+  ARTIFACT_SPIRIT_LABEL,
+  WARM_NOURISH_BASE,
+  WARM_NOURISH_ID,
+  WARM_NOURISH_LABEL,
+  WARM_NOURISH_RADIUS,
+} from '../src/core/cultivation/artifacts.ts';
+import {
+  FIRE_QI_RADIUS,
+  FIRE_QI_TRUE_PCT,
+  STONE_WARD_ARMOR_PCT,
+  STONE_WARD_RADIUS,
+  SWORD_QI_ATK_PCT,
+  SWORD_QI_RADIUS,
+} from '../src/core/cultivation/abilities/artifact-auras.ts';
+import { ARTIFACT_DEBUFF_TURNS } from '../src/core/cultivation/abilities/artifact-effects.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -116,7 +142,7 @@ import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
 import { resourceShort } from '../src/core/resources.ts';
-import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
+import type { Element, Terrain, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 
@@ -488,18 +514,17 @@ function traitsOf(u: UnitTypeDef): string {
   // 产地要求：法器那类"挨着什么才造得出来"的兵，表格里必须写清楚，
   // 否则玩家看到一件四代法器只会以为它能从城市造出来。
   if (u.produceNear) {
-    const near = [
-      ...(u.produceNear.terrain ?? []).map((t) => terrainName(t)),
-      ...(u.produceNear.unit ?? []).map((id) => manualNameOf(id)),
-    ];
+    const specs = Array.isArray(u.produceNear) ? u.produceNear : [u.produceNear];
+    const near = specs.map(nearText).filter(Boolean);
     if (near.length > 0) {
+      const label = near.join('，或 ');
       const key = dynamicTerm(
         `near-${slug(u.id)}`,
-        `产地 ${near.join('或')}`,
-        `造它的时候，产兵点的占地和四邻里必须有${near.join('或')}。`,
+        `产地 ${label}`,
+        `造它的时候，产兵点的占地和四邻里必须有${label}。`,
         '它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。',
       );
-      parts.push(ref(key, `产地 ${near.join('或')}`));
+      parts.push(ref(key, `产地 ${label}`));
     }
   }
   // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
@@ -555,7 +580,24 @@ function traitsOf(u: UnitTypeDef): string {
 }
 
 function terrainName(id: string): string {
-  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? id;
+  // 手册自己那张表只有"能建在上面"的地形，`shallow`（浅滩）这类不在里面——
+  // 于是寒水镜的产地会印出英文 id。兜底问一次核心的地形名表。
+  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? CONFIG.terrainName[id as Terrain] ?? id;
+}
+
+/**
+ * 一条产地要求怎么印：`森林`、`2 个灵田`。
+ *
+ * 和规则层的 nearSpecText 同一个口径（连拒绝理由的措辞都对得上），
+ * 只是名字表用手册自己那份——手册要覆盖不在本局兵种表里的扩展兵种。
+ */
+function nearText(spec: { terrain?: string[]; unit?: string[]; count?: number }): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => terrainName(t)),
+    ...(spec.unit ?? []).map((id) => manualNameOf(id)),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
 }
 
 const COLUMNS = ['名称', '图标', '造价', '攻', '甲', '血', '移', '射', '视', '特性'];
@@ -2604,6 +2646,22 @@ function pct(x: number): number {
 function cultivationRules(): string {
   const unlocks = cultivationUnlocksByRank();
 
+  // 青木剑的产地是"或"两条（森林 / 2 块灵田），拼文案和面板同一口径
+  const woodNear = (
+    Array.isArray(ARTIFACT_WOOD.produceNear) ? ARTIFACT_WOOD.produceNear : [ARTIFACT_WOOD.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
+  // 寒水镜同理：水面/浅滩，或者灵泉（地图没水时的后路，2026-11-08 加到数据里）
+  const waterNear = (
+    Array.isArray(ARTIFACT_WATER.produceNear) ? ARTIFACT_WATER.produceNear : [ARTIFACT_WATER.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
   // 「战斗历练」表里的参照目标：三代戟兵。
   // 代价是规则书会跟着本体数值走——戟兵改攻击力，"单次"那两列自动变。
   const refKillUnit = UNIT_TYPES['halberdier'];
@@ -2817,6 +2875,27 @@ function cultivationRules(): string {
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 
+      <h3>灵泉</h3>
+      <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
+        ${SPIRIT_SPRING.armor} 甲），由<b>管事</b>修建。它不产资源、不能攻击，
+        唯一的作用是主动技能「泉涌」——回血在这套规则里是<b>要付钱的选择</b>，不是"站在旁边就有"的白给。</p>
+      <ul>
+        <li><b>泉涌</b>：恢复<b>四邻</b>（曼哈顿 ${SPRING_RADIUS} 格，不含斜角）内每个己方单位
+          <b>${Math.round(SPRING_HEAL_RATIO * 100)}% 生命上限</b>，至少 1 点；每回合一次，不占用攻击次数。</li>
+        <li><b>按实际回血量收费</b>：每 <b>${SPRING_HP_PER_STONE} 点</b>血收 <b>1 块</b>灵石，
+          最低 ${SPRING_MIN_COST} 块。举例：一个 20 点血的单位每次回 ${springHealAmount(20)} 点、只收 1 块；
+          元婴修士那种几十点血的单位回一次要好几块。
+          <b>这条计费就是"高境界修士不能靠一口泉回成无敌"的那道闸</b>——血越厚，回一次越贵。</li>
+        <li><b>灵石不足时整条技能降级</b>：每个单位只回 <b>${SPRING_FLOOR_HEAL} 点</b>，仍然收 ${SPRING_MIN_COST} 块；
+          一块灵石都没有时按钮是灰的。不做"能回多少回多少"的比例折算——
+          "满额"和"聊胜于无"必须是两个一眼能分清的状态。</li>
+        <li><b>只治己方、只治伤员</b>：满血的、机械单位、正在施工的工地都不算；
+          四邻一个伤员都没有时，按钮同样是灰的。</li>
+        <li><b>它还是寒水镜的备用产地</b>：${ARTIFACT_WATER.name}原本只认水面/浅滩，而地图不保证有水。
+          在炉子旁边立一座灵泉，同样炼得出寒水镜。灵泉是四代建筑，所以三代之前仍然得找水——
+          这是有意的时代门槛。</li>
+      </ul>
+
       <h3>炼器</h3>
       <p>炼器炉不是新机制：它就是一座<b>产兵建筑</b>，和军营共用同一套白名单，
         只是名单里全是法器。所以"炉子能造什么"完全写在兵种数据里。</p>
@@ -2827,12 +2906,77 @@ function cultivationRules(): string {
           ${ARTIFACT_FIRE.name}。高代炉子的价值是<b>多一种材料</b>，不是把旧法器做得更强。</li>
         <li><b>法器只能由炉子造</b>：城市产线里没有它们。想造就得先盖炉子。</li>
         <li><b>挨着什么就出什么</b>：每件法器都有产地要求，看的是炉子的占地和它自己的四邻——
-          ${ARTIFACT_WOOD.name}要森林，${ARTIFACT_STONE.name}要高山或丘陵，
-          ${ARTIFACT_WATER.name}要水面，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
-          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。</li>
+          ${ARTIFACT_WOOD.name}要<b>${woodNear}</b>，${ARTIFACT_STONE.name}要高山或丘陵，
+          ${ARTIFACT_WATER.name}要<b>${waterNear}</b>，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
+          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。
+          数"几块灵田"时只认<b>自己的</b>田，敌人的不算。</li>
         <li><b>条件不满足时会灰着列出来</b>，并写清缺什么（"附近没有森林"），
           所以"该把炉子挪到哪儿"是能学会的，不是靠猜。</li>
         <li><b>一回合一件</b>：没有生产间隔，但一座炉子同时只出一件；想量产就多盖几座。</li>
+      </ul>
+
+      <h3>法器的两条公共规则</h3>
+      <p>法器不是活人：它不修炼、不吃灵气滋养、也不会自己找路。所以每一件都带着这两条：</p>
+      <ul>
+        <li>${ref('ab-' + ARTIFACT_SPIRIT_ID, ARTIFACT_SPIRIT_LABEL)}——<b>得有人在看着</b>。
+          出了己方修士的<b>神识范围</b>（就是那位修士的视野圈），移动力<b>减半</b>（至少留 1 格，
+          不会彻底动不了）；站在神识里，护甲额外加上<b>范围内护甲最高的那位修士的一半</b>。
+          多个修士只按最强的算，不叠乘；死掉的修士不算，敌人的神识也不算。</li>
+        <li>${ref('ab-' + WARM_NOURISH_ID, WARM_NOURISH_LABEL)}——<b>贴着修士就能自己复原</b>。
+          回合开始时，半径 ${WARM_NOURISH_RADIUS} 格内只要有己方修士，就回
+          <b>${WARM_NOURISH_BASE} + ⌊最高境界 ÷ 2⌋</b> 点生命（0 级养 1 点、9 级养 5 点）。
+          没有这一条，法器就是一次性消耗品，掉的血永远回不来。</li>
+      </ul>
+
+      <p>四件法器都会<b>飞</b>：能掠过水面、森林丘陵按 1 步算，河防拦不住它们。
+        但飞行只解决"怎么到"，不解决"到了能干什么"——每一件的性格完全不同。</p>
+
+      <h3>青木剑</h3>
+      <p>一件飞剑。射程 <b>${ARTIFACT_WOOD.range}</b> 格，比同代的任何近战都远——
+        所以它能站在对方的攻击范围之外开火，<b>对方够不着，就还不了手</b>。
+        代价是血薄甲薄（${ARTIFACT_WOOD.maxHp} 血 / ${ARTIFACT_WOOD.armor} 甲），
+        离开修士的护持就废掉一半：这就是「器灵」要表达的东西。</p>
+      <ul>
+        <li><b>剑气环</b>：半径 ${SWORD_QI_RADIUS} 格内友军攻击 <b>+${Math.round(SWORD_QI_ATK_PCT * 100)}%</b>。
+          按比例而不是点数，所以对杂兵和重甲兵都一样是 15%。同类光环重叠时<b>取最强的一条</b>，
+          两把剑不会变成 +30%。</li>
+        <li><b>造价</b>：${ARTIFACT_WOOD.cost} 金 + ${ARTIFACT_WOOD.costRes?.['spirit-stone'] ?? 0} 灵石。
+          比同代骑兵贵一半左右——贵的是射程和光环，不是面板上的攻甲血。</li>
+      </ul>
+
+      <h3>玄石印</h3>
+      <p>一块砸下去的印：攻低、甲厚、血多、慢、射程只有 ${ARTIFACT_STONE.range} 格，
+        但<b>能溅</b>。它是四件里唯一不靠机动吃饭的一件，所以飞行对它只是"能过河"。</p>
+      <ul>
+        <li><b>磐石</b>：半径 ${STONE_WARD_RADIUS} 格内友军护甲 <b>+${Math.round(STONE_WARD_ARMOR_PCT * 100)}%</b>，
+          <b>不足 1 点按 1 点</b>算。这条保底是必要的——3 甲的单位按 10% 取整是 0，
+          不给保底这条光环在前期等于不存在，而它本来就是给低境界修士保命用的。</li>
+        <li><b>产地</b>：丘陵，<b>或者</b>两块灵矿。后一条在二代不成立（灵矿是三代建筑），
+          它是给"地图没生成丘陵"留的后路：升到三代开一座矿，这条产品线还能救回来。</li>
+        <li><b>面板</b>：${ARTIFACT_STONE.atk} 攻 / ${ARTIFACT_STONE.armor} 甲 / ${ARTIFACT_STONE.maxHp} 血，
+          造价 ${ARTIFACT_STONE.cost} 金 + ${ARTIFACT_STONE.costRes?.['spirit-stone'] ?? 0} 灵石。</li>
+      </ul>
+
+      <h3>寒水镜</h3>
+      <p>远程控制。攻击力刻意不如同代火枪兵，换来的是<b>射程 ${ARTIFACT_WATER.range}、视野 ${ARTIFACT_WATER.vision}</b>
+        和 <b>${ARTIFACT_WATER.splash} 格溅射</b>——它不负责杀伤，负责让你的阵型走不动。</p>
+      <ul>
+        <li><b>寒霜</b>：被打到的目标「迟缓」${ARTIFACT_DEBUFF_TURNS} 回合，<b>移动力减半，至少留 1 格</b>。
+          注意是"追不上"不是"定身"：1 移的单位被冻慢后仍然能走一格。
+          <b>被溅射波及的敌人一样吃</b>——这是它和普通远程最大的区别。</li>
+        <li>重复命中不叠加回合数，只把回合数刷新回 ${ARTIFACT_DEBUFF_TURNS}。</li>
+      </ul>
+
+      <h3>赤炎珠</h3>
+      <p>远程 AOE，四件里伤害最高：${ARTIFACT_FIRE.atk} 攻、${ARTIFACT_FIRE.splash} 格溅射，
+        射程比寒水镜短一格。它是"开团的那一下"，不是持续输出。</p>
+      <ul>
+        <li><b>熔甲</b>：被打到的目标「护甲减半」${ARTIFACT_DEBUFF_TURNS} 回合，
+          按<b>当前护甲</b>算（含光环、地形、已有加成），不是兵种白值。
+          溅射波及的敌人一样生效——一炮把一片阵型的护甲打对折，后面跟上来的近战就有了破口。</li>
+        <li><b>真火</b>：半径 ${FIRE_QI_RADIUS} 格内友军<b>真元 +${Math.round(FIRE_QI_TRUE_PCT * 100)}%</b>
+          （同样有 +1 保底）。真元只有修士有，所以受益的也是修士——
+          这是四件法器里唯一直接加强修士输出的光环。</li>
       </ul>
       <p class="era-meta">注：炉子和军营一样按<b>自己的档位</b>出兵，不随后方城市换代。
         盖房子也要看工匠的档位：二代的仆役只能起${FORGE_1.name}，想立${FORGE_3.name}，

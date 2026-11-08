@@ -121,12 +121,38 @@ export function realmAtkFor(u: Unit): number {
   return Math.ceil(atkRaw(getRank(u)) * mul);
 }
 
-/** 真伤修正 */
+/**
+ * 真元：**只看境界与流派**的裸值。
+ *
+ * 这是"这个修士修炼到什么程度"，不含任何外面给的加成。
+ * 要算"这一下实际打多少真元"，用 `effectiveTrueDamage(s, u)`。
+ */
 export function trueDamageOf(u: Unit): number {
   const base = trueDamageForRank(getRank(u));
   return isBodyCultivatorType(u.type)
     ? Math.floor(base * BODY_TRUE_DAMAGE_MUL)
     : base;
+}
+
+/**
+ * 真元：把**裸值**和**外部加成**合成"这一下实际打多少"。
+ *
+ * 单独抽出来而不是改 `trueDamageOf` 的签名：后者是几十条测试和面板在用的
+ * "境界给了我多少"，把它和"今天实际有多少"混成一件事之后，面板就没法
+ * 分开说了。两件事，两个函数。
+ *
+ * `pct` 是"加成多少比例"（0.1 = +10%），由调用方去查——**这一层不能自己查**：
+ * `stats.ts` 在初始化链的最上游（packs → units → stats），往这里 import
+ * `auras.ts` 会把 ability-registry 提前拉起来，而它顶层要遍历 EXPANSIONS，
+ * 当场炸 "Cannot access 'EXPANSIONS' before initialization"。
+ *
+ * 给 **+1 保底**：低境界修士真元只有 1~2 点，10% 取整是 0，
+ * 不给保底这条光环在前期等于不存在。
+ */
+export function trueDamageWithMods(base: number, pct: number | null | undefined): number {
+  if (base <= 0) return 0;
+  if (!pct || pct <= 0) return base;
+  return base + Math.max(1, Math.round(base * pct));
 }
 
 /** 攻击次数修正 */

@@ -9,7 +9,7 @@
 import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
-import { adjacentRequirementText, heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
+import { adjacentRequirementText, heightOfTerrain, nearSpecText, splashRadiusOf, splashRatioOf } from './rules.ts';
 import { buildListOf } from './build-list.ts';
 import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
 import { isProducer, produceEveryTurns, produceOf } from './produce.ts';
@@ -264,13 +264,13 @@ export function describeUnit(
     lines.push('只能由产兵建筑制造：城市产线里没有它。');
   }
   if (def.produceNear) {
-    // 和选址要求同构：产兵点的每一格连同四邻都算
-    const names = [
-      ...(def.produceNear.terrain ?? []).map((t) => TERRAIN_INFO[t].name),
-      ...(def.produceNear.unit ?? []).map(nameOf),
-    ];
-    if (names.length > 0) {
-      lines.push(`产地要求：造它的产兵点必须挨着${names.join('或')}（占地每格和四邻都算）。`);
+    // 和选址要求同构：产兵点的每一格连同四邻都算。
+    // 多条 spec 之间是**或**（青木剑：相邻森林 或 2 块灵田），
+    // 文案由 rules.nearSpecText 出，和规则层的拒绝理由一字不差。
+    const specs = Array.isArray(def.produceNear) ? def.produceNear : [def.produceNear];
+    const parts = specs.map((sp) => nearSpecText(sp, nameOf)).filter(Boolean);
+    if (parts.length > 0) {
+      lines.push(`产地要求：造它的产兵点必须挨着${parts.join('，或 ')}（占地每格和四邻都算）。`);
     }
   }
   if (def.category === 'building') {
