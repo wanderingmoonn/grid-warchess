@@ -104,11 +104,20 @@ import {
   FORGE_1,
   FORGE_2,
   FORGE_3,
+  SPIRIT_SPRING,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
+import {
+  SPRING_FLOOR_HEAL,
+  SPRING_HEAL_RATIO,
+  SPRING_HP_PER_STONE,
+  SPRING_MIN_COST,
+  SPRING_RADIUS,
+  springHealAmount,
+} from '../src/core/cultivation/skills/spirit-spring.ts';
 import {
   ARTIFACT_SPIRIT_ID,
   ARTIFACT_SPIRIT_LABEL,
@@ -2645,6 +2654,14 @@ function cultivationRules(): string {
     .map(nearText)
     .join('，或 ');
 
+  // 寒水镜同理：水面/浅滩，或者灵泉（地图没水时的后路，2026-11-08 加到数据里）
+  const waterNear = (
+    Array.isArray(ARTIFACT_WATER.produceNear) ? ARTIFACT_WATER.produceNear : [ARTIFACT_WATER.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
   // 「战斗历练」表里的参照目标：三代戟兵。
   // 代价是规则书会跟着本体数值走——戟兵改攻击力，"单次"那两列自动变。
   const refKillUnit = UNIT_TYPES['halberdier'];
@@ -2858,6 +2875,27 @@ function cultivationRules(): string {
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 
+      <h3>灵泉</h3>
+      <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
+        ${SPIRIT_SPRING.armor} 甲），由<b>管事</b>修建。它不产资源、不能攻击，
+        唯一的作用是主动技能「泉涌」——回血在这套规则里是<b>要付钱的选择</b>，不是"站在旁边就有"的白给。</p>
+      <ul>
+        <li><b>泉涌</b>：恢复<b>四邻</b>（曼哈顿 ${SPRING_RADIUS} 格，不含斜角）内每个己方单位
+          <b>${Math.round(SPRING_HEAL_RATIO * 100)}% 生命上限</b>，至少 1 点；每回合一次，不占用攻击次数。</li>
+        <li><b>按实际回血量收费</b>：每 <b>${SPRING_HP_PER_STONE} 点</b>血收 <b>1 块</b>灵石，
+          最低 ${SPRING_MIN_COST} 块。举例：一个 20 点血的单位每次回 ${springHealAmount(20)} 点、只收 1 块；
+          元婴修士那种几十点血的单位回一次要好几块。
+          <b>这条计费就是"高境界修士不能靠一口泉回成无敌"的那道闸</b>——血越厚，回一次越贵。</li>
+        <li><b>灵石不足时整条技能降级</b>：每个单位只回 <b>${SPRING_FLOOR_HEAL} 点</b>，仍然收 ${SPRING_MIN_COST} 块；
+          一块灵石都没有时按钮是灰的。不做"能回多少回多少"的比例折算——
+          "满额"和"聊胜于无"必须是两个一眼能分清的状态。</li>
+        <li><b>只治己方、只治伤员</b>：满血的、机械单位、正在施工的工地都不算；
+          四邻一个伤员都没有时，按钮同样是灰的。</li>
+        <li><b>它还是寒水镜的备用产地</b>：${ARTIFACT_WATER.name}原本只认水面/浅滩，而地图不保证有水。
+          在炉子旁边立一座灵泉，同样炼得出寒水镜。灵泉是四代建筑，所以三代之前仍然得找水——
+          这是有意的时代门槛。</li>
+      </ul>
+
       <h3>炼器</h3>
       <p>炼器炉不是新机制：它就是一座<b>产兵建筑</b>，和军营共用同一套白名单，
         只是名单里全是法器。所以"炉子能造什么"完全写在兵种数据里。</p>
@@ -2869,7 +2907,7 @@ function cultivationRules(): string {
         <li><b>法器只能由炉子造</b>：城市产线里没有它们。想造就得先盖炉子。</li>
         <li><b>挨着什么就出什么</b>：每件法器都有产地要求，看的是炉子的占地和它自己的四邻——
           ${ARTIFACT_WOOD.name}要<b>${woodNear}</b>，${ARTIFACT_STONE.name}要高山或丘陵，
-          ${ARTIFACT_WATER.name}要水面，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
+          ${ARTIFACT_WATER.name}要<b>${waterNear}</b>，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
           同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。
           数"几块灵田"时只认<b>自己的</b>田，敌人的不算。</li>
         <li><b>条件不满足时会灰着列出来</b>，并写清缺什么（"附近没有森林"），

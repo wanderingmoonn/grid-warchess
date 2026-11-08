@@ -3,7 +3,7 @@
 import type { UnitTypeDef } from '../types.ts';
 // 技能的 SkillDef 和数值常量都在 skills/ 下：一个技能一个文件。
 // 这里只负责把它们挂到兵种身上，不重复定义。
-import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
+import { BLOOD_RITE_SKILL, SPIRIT_REBIRTH_SKILL, SPRING_SURGE_SKILL, SWORD_SWEEP_SKILL, TOWER_CHARGE_SKILL, TELEPORT_SKILL } from './skills/index.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID } from './artifacts.ts';
@@ -164,8 +164,9 @@ export const DEACON: UnitTypeDef = {
 /**
  * 管事（时代 4）：仆役 → 执事 → 管事，这一列是修真包里的"建造工人"线。
  *
- * 它只比执事多会一样东西：三档炼器炉。不新开「炼器师」是因为这条线的语义
- * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊。
+ * 它比执事多会两样东西：三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
+ * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊；
+ * 灵泉也一样：开泉取水是宗门的家务事，归管事。
  */
 export const STEWARD: UnitTypeDef = {
   id: UNIT_IDS.STEWARD,
@@ -188,6 +189,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.FORGE_1,
     UNIT_IDS.FORGE_2,
     UNIT_IDS.FORGE_3,
+    UNIT_IDS.SPIRIT_SPRING,
   ],
   buildPower: 24,
 };
@@ -257,6 +259,35 @@ export const SPIRIT_MINE: UnitTypeDef = {
   },
 };
 
+// ── 灵泉（2026-11-08）──────────────────────────────
+//
+// 加它的直接原因是寒水镜：那件法器的产地写的是"水面或浅滩"，而**地图不一定生成水**。
+// 没有水、又没有备用产地，整条水系法器就是一张废纸。灵泉既是那张备用产地，
+// 也是一座自己的支援建筑——一举两得。
+//
+// 它不产资源、不能攻击（atk 0，和阵法同一个口径：写个 5 反而让玩家以为它能打），
+// 全部价值在「泉涌」上。技能数值与计费在 skills/spirit-spring.ts，
+// 这里只负责"它长什么样、多少钱、谁能盖"。
+
+export const SPIRIT_SPRING: UnitTypeDef = {
+  id: UNIT_IDS.SPIRIT_SPRING,
+  name: '灵泉',
+  short: '泉',
+  era: 4,
+  category: 'building',
+  cost: 150,
+  costRes: { 'spirit-stone': 18 },
+  // 管事每回合 24 点，要两回合才立起来——它是"后方设施"，不该一夜之间冒出来
+  buildCost: 30,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 70,
+  range: 1,
+  vision: 3,
+  skills: [SPRING_SURGE_SKILL],
+};
+
 // ── 炼器（2026-11-08）──────────────────────────────
 //
 // 炼器炉用的是"军营那套产兵逻辑"，一行新规则都没有：
@@ -308,7 +339,7 @@ export const FORGE_2: UnitTypeDef = {
   range: 0,
   vision: 3,
   buildOn: ['plain', 'hill', 'forest'],
-  // 多认一样：水边的寒水镜
+  // 多认一样：水边（或灵泉旁）的寒水镜
   produce: {
     units: [UNIT_IDS.ARTIFACT_WOOD, UNIT_IDS.ARTIFACT_STONE, UNIT_IDS.ARTIFACT_WATER],
   },
@@ -439,7 +470,17 @@ export const ARTIFACT_WATER: UnitTypeDef = {
   vision: 5,
   splash: 2,
   abilities: [ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID, CHILL_HIT_ID, 'fly'],
-  produceNear: { terrain: ['water', 'shallow'] },
+  /*
+   * 两种产地，满足其一就行：
+   *   · 水面或浅滩——"寒水"，最直白的一条；
+   *   · 或者挨着一座灵泉。
+   *
+   * 第二条是**为了没有水的地图**：地图生成不保证有河湖，而这一件是整条
+   * 水系唯一的产物，没有备用产地就等于"这张图这条线不存在"。
+   * 灵泉本身是四代建筑（见 SPIRIT_SPRING），所以这条后路要等管事出来才通——
+   * 三代之前仍然得找水。这是有意的时代门槛，不是遗漏。
+   */
+  produceNear: [{ terrain: ['water', 'shallow'] }, { unit: [UNIT_IDS.SPIRIT_SPRING] }],
 };
 
 export const ARTIFACT_FIRE: UnitTypeDef = {

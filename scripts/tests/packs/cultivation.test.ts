@@ -49,6 +49,7 @@ import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/u
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
 import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
 import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
+import { SPRING_HP_PER_STONE } from '../../../src/core/cultivation/skills/spirit-spring.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -1243,6 +1244,159 @@ export function run() {
     assert.ok(fromCity.ok ? '' : /产兵建筑/.test(fromCity.reason), '理由要说明只能由产兵建筑造');
     // 白名单按时代递增：一代炉子没有寒水镜
     assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
+  });
+
+  // ── 灵泉（2026-11-08）──────────────────────────────
+  //
+  // 加它的直接原因是"地图不一定生成水"：寒水镜原本只认水面/浅滩，
+  // 一张没有河湖的图上这条产品线整条作废。灵泉既是备用产地，也是一座支援建筑。
+
+  test('灵泉：四代建筑，只有管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const spring = s.unitTypes['cultivation-spirit-spring'];
+    assert.ok(spring, '灵泉应该在对局兵种表里');
+    assert.equal(spring.era, 4, '灵泉是四代建筑');
+    assert.equal(spring.category, 'building', '它是建筑，不是兵');
+
+    const builds = (id: string) => s.unitTypes[id].builds ?? [];
+    assert.ok(!builds('cultivation-servant').includes('cultivation-spirit-spring'), '仆役不会开泉');
+    assert.ok(!builds('cultivation-deacon').includes('cultivation-spirit-spring'), '执事也不会');
+    assert.ok(builds('cultivation-steward').includes('cultivation-spirit-spring'), '管事会开泉');
+
+    // 真盖一次：管事投 24 点、灵泉要 30 点 → 当回合只是工地
+    const t = fresh({ expansionIds: ['cultivation'], godMode: true });
+    t.units = [];
+    t.current = 'A';
+    t.players.A.gold = 900;
+    t.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) t.tiles[y * t.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const steward = place2(t, 'A', 'cultivation-steward', 5, 5);
+    const built = applyAction(t, {
+      type: 'BUILD',
+      unitId: steward.id,
+      unitType: 'cultivation-spirit-spring',
+      x: 6,
+      y: 5,
+    });
+    assert.ok(built.ok, built.ok ? '' : built.reason);
+    const site = built.state.units.find((u) => u.type === 'cultivation-spirit-spring');
+    assert.ok(site, '应该落下一个工地');
+    assert.ok(
+      (site!.buildDone ?? 0) < (site!.buildNeed ?? 0),
+      '管事一次投 24 点、灵泉要 30 点，当回合立不起来',
+    );
+  });
+
+  test('寒水镜：没有水的地图上，灵泉旁边一样炼得出来', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+    // 铺一块干地：整片平原，没有水
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const forge = place2(s, 'A', 'cultivation-forge-2', 5, 5);
+    const v = (camp: any) => produceAt(s, { kind: 'camp', camp }, s.unitTypes['cultivation-artifact-water']);
+
+    const dry = v(forge);
+    assert.equal(dry.ok, false, '四邻没水也没灵泉时炼不出寒水镜');
+    assert.ok(
+      dry.ok ? '' : dry.reason.includes('灵泉'),
+      `拒绝理由要写明有另一条路：${dry.ok ? '' : dry.reason}`,
+    );
+
+    place2(s, 'A', 'cultivation-spirit-spring', 6, 5);
+    assert.equal(v(forge).ok, true, '灵泉就挨着炉子，应该能炼');
+  });
+
+  test('泉涌：四邻友军各回 10%，按实际回血量收灵石，每回合一次', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const left = place2(s, 'A', 'qi-cultivator', 4, 5);
+    const down = place2(s, 'A', 'qi-cultivator', 5, 6);
+    const foe = place2(s, 'B', 'qi-cultivator', 6, 5); // 敌人的伤员：不该被治
+    const far = place2(s, 'A', 'qi-cultivator', 7, 5); // 四邻之外
+    for (const u of [left, down, foe, far]) u.hp = 5;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+
+    const maxHp = maxHpOf(s, left);
+    const heal = Math.max(1, Math.round(maxHp * 0.1));
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.equal(at(left.id).hp, 5 + heal, `回 ${heal} 点（${maxHp} 上限的 10%）`);
+    assert.equal(at(down.id).hp, 5 + heal, '第二个相邻友军同样回');
+    assert.equal(at(foe.id).hp, 5, '泉水不替敌人疗伤');
+    assert.equal(at(far.id).hp, 5, '四邻之外不治（不含两格外）');
+
+    // 总回血量 = 2 × heal；每 5 点 1 块，至少 1 块
+    const cost = Math.max(1, Math.ceil((heal * 2) / SPRING_HP_PER_STONE));
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 100 - cost, `应该扣 ${cost} 块灵石`);
+
+    // 没有冷却，但 multiCast: false → 同一回合一放完就灰
+    const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.equal(again.ok, false, '一回合只能泉涌一次');
+  });
+
+  test('泉涌：灵石不够时每个单位只回 1 点，最低价照扣', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const mud = [
+      place2(s, 'A', 'body-cultivator', 4, 5),
+      place2(s, 'A', 'body-cultivator', 5, 6),
+      place2(s, 'A', 'body-cultivator', 6, 5),
+    ];
+    for (const u of mud) u.hp = 5;
+    // 三个体修（30 血）各回 3 点 = 9 点 → 满额要 2 块；只给 1 块
+    s.players.A.res = { [SPIRIT_STONE]: 1 };
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    for (const u of mud) assert.equal(at(u.id).hp, 6, '降级后每人只回 1 点');
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 0, '最低价 1 块照扣，不能白刷');
+    assert.ok(
+      r.state.log.some((l) => l.text.includes('灵石不足')),
+      '战报要说清这次是降级',
+    );
+  });
+
+  test('泉涌：没灵石 / 旁边没伤员时都放不出来', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const whole = place2(s, 'A', 'qi-cultivator', 4, 5); // 满血
+    const skillOf = () => heroSkillsOf(s, spring).find((k) => k.def.id === 'spring-surge')!;
+
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.equal(skillOf().ready, false, '一块灵石都没有时按钮该是灰的');
+    assert.ok(skillOf().notReadyReason?.includes('灵石'), '理由要说"灵石不足"');
+
+    s.players.A.res = { [SPIRIT_STONE]: 10 };
+    assert.equal(skillOf().ready, false, '四邻只有满血友军时也不该亮');
+    assert.ok(
+      /救治|伤员/.test(skillOf().notReadyReason ?? ''),
+      `理由要说清没人可治：${skillOf().notReadyReason}`,
+    );
+
+    whole.hp = 1;
+    assert.equal(skillOf().ready, true, '有人受伤就该亮');
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(
+      (r.state.units.find((u) => u.id === whole.id)!.hp) <= maxHpOf(s, whole),
+      '回血不会超过上限',
+    );
   });
 
   // ── 法器：器灵 / 温养 / 剑气环 / 产地（2026-11-08）──────
