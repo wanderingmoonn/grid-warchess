@@ -48,7 +48,6 @@ import {
   recruitPriceOf,
   recruitResCost,
   recruitSpawnCells,
-  supplyEraAt,
   tileAt,
   underConstruction,
   unitAt,
@@ -260,12 +259,11 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
        * 实测剩下的 0.27% 跳过**全是桥**，769 步里没有例外。
        */
       const reach = bdef.bridges ? CONFIG.buildRange + 2 : CONFIG.buildRange;
-      // doBuild 会先问一句"这个产兵点在当前时代建起来有没有用"，
-      // 没用直接拒（提前修七代船坞 = 花 460 金买块石头）。
-      // 注意问的是**落点**的时代供货，不是工兵脚下那格——doBuild 用的是
-      // `supplyEraAt(s, s.current, { x, y })`，所以这一句必须放进格子循环里。
-      const eraOk = (x: number, y: number): boolean =>
-        produceUsableCount(bdef, s.unitTypes, supplyEraAt(s, seat, { x, y })) !== 0;
+      // doBuild 会先问一句"这个产兵点建起来有没有用"，没用直接拒
+      // （提前修七代船坞 = 花 460 金买块石头）。
+      // 2026-11-08 起产兵建筑按**自己的档位**出兵，不再看落点附近城市的时代，
+      // 所以这个判据与坐标无关，提到循环外面算一次就够。
+      const eraOk = produceUsableCount(bdef, s.unitTypes, bdef.era) !== 0;
       for (let dy = -reach; dy <= reach; dy++) {
         for (let dx = -reach; dx <= reach; dx++) {
           if (dx === 0 && dy === 0) continue;
@@ -278,7 +276,7 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
           const site = s.units.find(
             (o) => o.type === buildId && o.owner === seat && underConstruction(o) && coversTile(s, o, x, y),
           );
-          if (!eraOk(x, y)) continue;
+          if (!eraOk) continue;
           if (!site && !canPay(s.players[seat], recruitResCost(s, seat, bdef))) continue;
           out.push({ type: 'BUILD', unitId: u.id, unitType: buildId, x, y });
         }

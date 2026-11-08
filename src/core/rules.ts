@@ -114,6 +114,7 @@ import type {
   Tile,
   Unit,
   UnitTypeDef,
+  ProduceSource,
 } from './types.ts';
 import { seatsOf } from './types.ts';
 import { skillsOf } from './query.ts';
@@ -818,10 +819,57 @@ export function distToCity(unit: { x: number; y: number }, city: City): number {
 }
 
 /**
- * 某方在某个位置「能拿到的最新军工」：离它最近的己方城市的时代。
+ * 某一格（**含它自己的四邻**）是否满足一组邻里要求。
  *
- * 军营落成时用它钉死自己的时代（见 doRecruit 的注释），界面和 AI 在
- * 旧存档（军营还没写 era）上也用它兜底。三处必须同一口径，所以只有这一份。
+ * 选址（`adjacent`）和产地条件（`produceNear`）共用这一份几何：
+ * 两处如果各写一遍，"2×2 的建筑一半压在山脊上"这种边界迟早会算出两个答案
+ * ——玩家看到的是"炉子明明靠着山，怎么说没有森林"。
+ */
+function adjacentHit(
+  s: GameState,
+  tx: number,
+  ty: number,
+  spec: { terrain: Terrain[]; unit: string[] },
+): boolean {
+  const tile = tileAt(s, tx, ty);
+  if (tile && spec.terrain.includes(tile.terrain)) return true;
+  const here = unitAt(s, tx, ty);
+  if (here && spec.unit.includes(here.type)) return true;
+  return DIRS.some(([dx, dy]) => {
+    const nb = tileAt(s, tx + dx, ty + dy);
+    if (nb && spec.terrain.includes(nb.terrain)) return true;
+    const nu = unitAt(s, tx + dx, ty + dy);
+    return !!nu && spec.unit.includes(nu.type);
+  });
+}
+
+/**
+ * 一个占地 n×n 的大家伙贴不贴着这些地形/单位。
+ *
+ * 和 `adjacentHit` 的分工：那个回答"这一格满不满足"，这个回答"整块地满不满足"
+ * ——2×2 的炉子只要有一格挨着森林就算挨着。
+ */
+function adjacentSatisfied(
+  s: GameState,
+  x: number,
+  y: number,
+  n: number,
+  spec: { terrain: Terrain[]; unit: string[] },
+): boolean {
+  return tilesOfFootprint(x, y, n, (tx, ty) => adjacentHit(s, tx, ty, spec));
+}
+
+
+
+/**
+ * @deprecated 2026-11-08 起「军工供货」已删除，**生产代码不要再调用**。
+ *
+ * 产兵建筑现在按自己的档位出兵（见 doRecruit 的 camp 分支），这条"离它最近的
+ * 己方城市的时代"不再是任何规则的一部分。
+ *
+ * 留着它只有一个原因：`scripts/baselines/ai-*.ts` 是冻结的 AI 快照，带 sha256
+ * 校验、一个字都不能改，而那几份快照仍然 import 这个名字来做 A/B 对照。
+ * 新写的任何东西都不要用它——那等于把删掉的供货逻辑又请回来。
  */
 export function supplyEraAt(
   s: GameState,
@@ -832,8 +880,6 @@ export function supplyEraAt(
   if (own.length === 0) return 1;
   return own.reduce((a, b) => (distToCity(at, a) <= distToCity(at, b) ? a : b)).era;
 }
-
-
 
 export function cloneState(s: GameState): GameState {
   return structuredClone(s);
@@ -4100,6 +4146,21 @@ export function buildSiteError(
   const n = footprintOf(s, def.id);
   const overWater = !!def.bridges;
 
+  /*
+   * 盖房子也要看档位：二代的工匠修不了四代的造船厂。
+   *
+   * 2026-11-08 删掉"军工供货"之前，这条是被顺手挡住的——早修起来也造不出东西，
+   * 于是"落成即废"那一关把它拒了。现在产兵建筑按**自己的档位**产出，
+   * 二代修出来的造船厂直接能下四代的船，一步跨两个时代。所以必须显式拦。
+   *
+   * 判据用**建造者自己的时代**而不是城市的时代：这样整条链只有"档位"一个概念
+   * （营按自己的档位出兵，工兵按自己的档位盖房），不重新引入对后方城市的依赖。
+   */
+  const builderDef = utype(s, builder.type);
+  if (def.era > builderDef.era) {
+    return `${def.name}要「${eraDef(def.era).name}」的工匠才修得起来`;
+  }
+
   // 占地逐格过一遍：界内、空着、地形合规。
   // 2×2 的建筑只要有一格落空，整块就不算数——部分落在水里再补半间房，
   // 是没法解释给玩家听的。
@@ -4157,22 +4218,8 @@ export function buildSiteError(
   // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
   // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
   const adjacent = adjacentRequirementOf(def);
-  if (adjacent) {
-    const hit = (tx: number, ty: number): boolean => {
-      const tile = tileAt(s, tx, ty);
-      if (tile && adjacent.terrain.includes(tile.terrain)) return true;
-      const here = unitAt(s, tx, ty);
-      if (here && adjacent.unit.includes(here.type)) return true;
-      return DIRS.some(([dx, dy]) => {
-        const nb = tileAt(s, tx + dx, ty + dy);
-        if (nb && adjacent.terrain.includes(nb.terrain)) return true;
-        const nu = unitAt(s, tx + dx, ty + dy);
-        return !!nu && adjacent.unit.includes(nu.type);
-      });
-    };
-    if (!tilesOfFootprint(x, y, n, hit)) {
-      return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
-    }
+  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent)) {
+    return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
   }
 
   // 别把自己堵死：城市格的出兵位是产线的命门。
@@ -4266,16 +4313,15 @@ function doBuild(
   /*
    * 落成即废的产兵点不许修。
    *
-   * 产兵点的时代**落成那一刻就钉死**了（见 doRecruit 的 camp 分支、下面建造结算里
-   * 那句 `era: supplyEraAt(...)`），之后不会跟着城市换代。带白名单的产兵点
-   * （船坞三代 / 造船厂五代 / 海军船台七代）如果提前修，白名单里的船一条都出不来——
+   * 产兵建筑按**自己的档位**出兵（见 doRecruit 的 camp 分支），所以"建起来之后
+   * 有没有东西可造"完全由它的白名单和自己的时代决定，与后方城市无关。
+   * 带白名单的产兵点如果白名单里全是更高代的东西，修好也是一块石头——
    * 玩家花了 460 金买到一块石头，而界面上不会告诉他这一点。
    *
    * 判据放在这里而不是各个包里：包只管数据，规则管"这笔钱花得对不对"。
    * 军营不受影响——它的白名单是空的，什么时代落成都能出那一代的兵。
    */
-  const supplyEra = supplyEraAt(s, s.current, { x, y });
-  const usable = produceUsableCount(def, s.unitTypes, supplyEra);
+  const usable = produceUsableCount(def, s.unitTypes, def.era);
   if (usable === 0) {
     const need = (produceOf(def)?.units ?? [])
       .map((id) => s.unitTypes[id])
@@ -4353,10 +4399,6 @@ function doBuild(
     kills: 0,
     moved: true,
     acted: true,
-    // 军营动工那一刻就把时代钉下来：它靠后方军工供货，供货方是谁当场就定了。
-    // 等它盖完之后再取一次，会让"同一座营，施工期间后方刚好升了时代"
-    // 这种巧合决定它的档次——玩家看不见这种因果。
-    ...(isProducer(def) ? { era: supplyEraAt(s, s.current, { x, y }) } : {}),
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
   });
 
@@ -4431,17 +4473,6 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
 }
 
 /**
- * 产兵。
- *
- * 产兵点有两种：城市，或者军营（`barracks`）。
- * 军营自己没有科技线：它落成的时候取**当时离得最近的己方城市的时代**，
- * 把这一个数字钉在自己身上（`Unit.era`），之后一直按它结算。
- *
- * 以前是每次产兵都现算"最近的己方城市"，于是后方升了一个时代，前线那座
- * 早就扎好的旧营隔空跟着换代——一座石板搭的营寨当场能出火枪手。现在
- * 营的时代是个实体属性：想要新时代的兵，就在新地方再扎一座营。
- */
-/**
  * 产兵点能往哪些格子出兵。
  *
  * 城市和军营各有一套扫描（城要看四周的水面，营要沿自家所有格子往外一圈），
@@ -4500,6 +4531,83 @@ export function recruitSpawnCells(
   return cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));
 }
 
+/**
+ * 这个产兵点能不能造这个兵——**唯一**的判据。
+ *
+ * 以前它散在三处：`doRecruit` 问白名单、面板问白名单、AI 一次都不问。
+ * 于是"AI 在船坞里点了一条民兵"这种动作能被提出来，执行时被规则层拒掉，
+ * 一整回合就白扔了。加到第三条判据（产地条件）之后，三处各写一遍必然跑偏，
+ * 所以收成一条链，谁都只问它：
+ *
+ *   1. 建筑要用建造单位去盖，召唤物只认召唤者；
+ *   2. `campOnly` —— 城市造不了，只能出自产兵建筑；
+ *   3. 产兵建筑的白名单（`produce.units`）；
+ *   4. 时代：产兵建筑按**自己**的档位，城市按自己的时代；
+ *   5. 选卡名单（`canUseType`）；
+ *   6. 产地条件：`produceNear`（贴着指定地形/单位）与扩展钩子 `produceBlocked`。
+ *
+ * 出兵格不在这里判：那是"站在哪儿"的问题（见 recruitSpawnCells），
+ * 和"能不能造"分开，否则一座四邻全堵的营会让整条产线显示成"不能造"。
+ */
+export function produceAt(
+  s: GameState,
+  source: ProduceSource,
+  target: UnitTypeDef,
+): { ok: true } | { ok: false; reason: string } {
+  if (target.category === 'building') {
+    return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
+  }
+  if (target.summonedOnly) {
+    return { ok: false, reason: `${target.name} 只能被召唤出来` };
+  }
+
+  const owner = source.kind === 'city' ? source.city.owner : source.camp.owner;
+  const era = source.kind === 'city' ? source.city.era : utype(s, source.camp.type).era;
+
+  if (source.kind === 'city') {
+    // 城市是不设限的产兵点，所以"只能由产兵建筑造"的东西要在这里显式挡掉
+    if (target.campOnly) {
+      return { ok: false, reason: `${target.name} 只能由产兵建筑造，城市产线不供` };
+    }
+  } else {
+    const campDef = utype(s, source.camp.type);
+    const allowed = canProduce(campDef, target);
+    if (!allowed.ok) return allowed;
+
+    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）
+    const near = target.produceNear;
+    if (near) {
+      const spec = { terrain: near.terrain ?? [], unit: near.unit ?? [] };
+      if (spec.terrain.length + spec.unit.length > 0) {
+        const n = footprintOf(s, source.camp);
+        if (!adjacentSatisfied(s, source.camp.x, source.camp.y, n, spec)) {
+          const names = [
+            ...spec.terrain.map((t) => CONFIG.terrainName[t]),
+            ...spec.unit.map((id) => s.unitTypes[id]?.name ?? id),
+          ];
+          return { ok: false, reason: `${target.name}要在${names.join('或')}旁边才造得出来` };
+        }
+      }
+    }
+  }
+
+  if (!eraWindowOk(s, target, era)) {
+    return { ok: false, reason: `${target.name} 需要「${eraDef(target.era).name}」时代` };
+  }
+  if (!canUseType(s, owner, target.id)) {
+    return { ok: false, reason: `${target.name} 不在本局选用的名单里` };
+  }
+
+  // 扩展的逃生口：境界、资源、周围要站某个人……数据说不清的都走这里。
+  // 返回字符串 = 不能造，字符串本身是给玩家看的理由。
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.produceBlocked?.({ state: s, source, target });
+    if (reason) return { ok: false, reason };
+  }
+
+  return { ok: true };
+}
+
 function doRecruit(
   s: GameState,
   cityId: string | undefined,
@@ -4509,49 +4617,40 @@ function doRecruit(
 ): ActionResult {
   const def = s.unitTypes[unitTypeId];
   if (!def) return { ok: false, reason: '本局没有这个兵种' };
-  if (def.category === 'building') {
-    return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
-  }
-  // 召唤物只认召唤者：让它们进产线会变成"花 45 金买一个死灵法师的免费赠品"
-  if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
-  // 选卡模式：不在本局名单里的东西造不出来。判据只有 core/draft.canUseType 一处，
-  // 界面上的产兵表和 AI 的候选列表都问同一句，不会出现"面板能点、点了被拒"。
-  if (!canUseType(s, s.current, unitTypeId)) {
-    return { ok: false, reason: `${def.name} 不在你本局的选用名单里` };
-  }
   // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
   // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
   // 「一个」也包括还没孵出来的那只（不死鸟的蛋），见 heroBlocked。
+  // 其余"能不能造"（建筑/召唤物/campOnly/白名单/时代/选卡/产地）统一走 produceAt。
   const blocked = heroBlocked(s, s.current, def);
   if (blocked) return { ok: false, reason: blocked };
 
-  /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
-  let era = 0;
+  /** 这个产兵点叫什么、能往哪些格子出兵 */
+  let label = '';
   /** 产兵点的造价倍率（produce.costScale）。城市永远是 1 */
   let costScale = 1;
-  let label = '';
   let slots: Array<{ x: number; y: number }> = [];
 
   if (campId) {
     const camp = unitById(s, campId);
     if (!camp) return { ok: false, reason: '产兵点不存在' };
     const campDef = utype(s, camp.type);
-    if (!isProducer(campDef)) return { ok: false, reason: '这不是军营' };
+    if (!isProducer(campDef)) return { ok: false, reason: '这不是产兵建筑' };
     if (underConstruction(camp)) return { ok: false, reason: `${campDef.name} 还在施工，营门都没立起来` };
-    if (camp.owner !== s.current) return { ok: false, reason: '这不是你的军营' };
+    if (camp.owner !== s.current) return { ok: false, reason: '这不是你的产兵建筑' };
 
-    // 三件事全读产兵的兵种数据：这个营认不认这个兵、多久能出一个、造价打几折
-    const allowed = canProduce(campDef, def);
-    if (!allowed.ok) return { ok: false, reason: allowed.reason };
+    // 白名单 + 产地条件 + 时代，一处判完（和面板、AI 是同一个函数）
+    const allowed = produceAt(s, { kind: 'camp', camp }, def);
+    if (!allowed.ok) return allowed;
     const wait = produceCooldownLeft(s, camp, campDef);
     if (wait > 0) {
       return { ok: false, reason: `${campDef.name}刚产出一批，还要 ${wait} 回合才能再产` };
     }
     costScale = produceCostScale(campDef);
 
-    const own = citiesOf(s, s.current);
-    if (own.length === 0) return { ok: false, reason: '没有城市，军营补给就断了' };
-    era = camp.era ?? supplyEraAt(s, camp.owner, camp);
+    // 产兵建筑按**自己的档位**出兵：想要新时代的兵，就在新地方再扎一座营，
+    // 或者直接把旧营拆了重盖。它不再跟随后方城市的时代（那是 2026-10-27 的
+    // "军工供货"设计，2026-11-08 删掉了——同一座营的产出能力不该被十几格外
+    // 某座城是否升级决定，玩家看不见这条因果）。
     label = campDef.name;
 
     slots = recruitSpawnCells(s, undefined, campId, unitTypeId);
@@ -4559,7 +4658,6 @@ function doRecruit(
     const city = cityId ? cityById(s, cityId) : undefined;
     if (!city) return { ok: false, reason: '城市不存在' };
     if (city.owner !== s.current) return { ok: false, reason: '只能在自己的城市产兵' };
-    era = city.era;
     label = cityName(city);
     if (city.ruined) {
       return { ok: false, reason: '这座城市已成废墟，先派兵入驻接管' };
@@ -4568,21 +4666,14 @@ function doRecruit(
       return { ok: false, reason: `${label}刚被打下来，本回合还没恢复生产` };
     }
 
+    const allowed = produceAt(s, { kind: 'city', city }, def);
+    if (!allowed.ok) return allowed;
+
     slots = recruitSpawnCells(s, cityId, undefined, unitTypeId);
     // 水军没有下水的位置时要说清原因：城不临水，还是水面已经站满了船
     if (def.domain === 'water' && slots.length === 0) {
       return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
     }
-  }
-
-  // 时代只剩一条：**不能造还没解锁的兵**。
-  //
-  // 以前这里是三段——"没到那个时代"、"城市不够新（重复写了一遍）"、
-  // "过时了，产线不带它"。第三段随着下限的取消一起没了：城市升到第五代
-  // 仍然能造民兵，因为"面板里堆满老古董"是界面问题，已经由筛选解决
-  // （扩展包 / 时代 / 搜索），不该由规则层拿"升级＝选项变少"来买单。
-  if (!eraWindowOk(s, def, era)) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
   }
 
   const player = s.players[s.current];

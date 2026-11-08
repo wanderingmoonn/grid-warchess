@@ -5399,28 +5399,37 @@ test('军营能像城市一样产兵', () => {
   assert.equal(born.length, 1, '兵应该从军营四邻出来');
 });
 
-test('军营产兵的时代取最近的己方城市', () => {
+test('军营按自己的档位出兵：一级营出不了二级兵，后方三级城也没用', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
   s.current = 'A';
   s.players.A.gold = 900;
 
-  // 一座二级城：能造一级和二级兵
-  city.era = 2;
+  // 后方已经三级了，但这一座是一级营（camp，era 1）。
+  // 2026-11-08 删掉"军工供货"之后，产兵建筑不再看后方城市的时代。
+  city.era = 3;
   const camp = place(s, 'A', 'camp', city.x + 2, city.y);
+  const denied = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'spearman' });
+  assert.equal(denied.ok, false, '一级营不该出二级兵——它不跟后方换代');
+  assert.ok(
+    denied.ok ? '' : /时代/.test(denied.reason),
+    `拒绝理由要说清是档位不够：${denied.ok ? '' : denied.reason}`,
+  );
 
-  const r = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'spearman' });
-  assert.ok(r.ok, r.ok ? '' : `二级兵应该能从军营出：${r.reason}`);
+  // 二级营（寨垒）才行，而且只靠自己，不靠旁边那座三级城
+  const camp2 = place(s, 'A', 'camp2', city.x + 4, city.y);
+  const r = applyAction(s, { type: 'RECRUIT', unitId: camp2.id, unitType: 'spearman' });
+  assert.ok(r.ok, r.ok ? '' : `二级营应该能出二级兵：${r.reason}`);
 });
 
-test('军营的时代落成即钉死：后方升级不会让老营跟着换代', () => {
+test('营的档位不再写进单位：三级城旁边扎的一级营仍只出一级兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
   s.current = 'A';
   s.players.A.gold = 900;
-  city.era = 1;
+  city.era = 3;
 
   // 清出一块空地，旁边留一格水，让军营"临水"这一条过得去
   const set = (x: number, y: number, terrain: 'plain' | 'water') => {
@@ -5436,18 +5445,14 @@ test('军营的时代落成即钉死：后方升级不会让老营跟着换代',
   const cur = r.state;
   const camp = unitsOf(cur, 'A').find((u) => u.type === 'camp');
   assert.ok(camp, '营应该扎起来了');
-  assert.equal(camp.era, 1, '动工那一刻的时代要钉在营上');
+  // 2026-11-08 删掉"军工供货"：时代不再钉在单位上，档位就是兵种表里的 era
+  assert.equal((camp as { era?: number }).era, undefined, '营身上不该再记时代');
 
-  // 后方升到火器时代：这座一级营不该隔空跟着换代
-  const mine = cur.cities.find((c) => c.id === city.id);
-  assert.ok(mine);
-  mine.era = 3;
   cur.players.A.gold = 900;
-
   const stale = applyAction(cur, { type: 'RECRUIT', unitId: camp.id, unitType: 'musketeer' });
-  assert.equal(stale.ok, false, '老营不该跟着后方换代');
+  assert.equal(stale.ok, false, '一级营出不了火枪兵——它只按自己的档位');
 
-  // 同一座三级城造同样的兵就没问题——差别只在"这座营是哪年扎的"
+  // 同一座三级城造同样的兵就没问题——差别只在"这座营是哪一档"
   const fromCity = applyAction(cur, { type: 'RECRUIT', cityId: city.id, unitType: 'musketeer' });
   assert.ok(fromCity.ok, fromCity.ok ? '' : `三级城应该能出火枪兵：${fromCity.reason}`);
 });
@@ -5473,15 +5478,17 @@ test('敌方城市里不许建造', () => {
   assert.match(r.ok ? '' : r.reason, /敌方城市/, '理由要说清是"敌城"，不是"格子上有东西"');
 });
 
-test('没有城市，军营就补不上兵', () => {
+test('没有城市也能补兵：产兵建筑不再靠后方供货', () => {
   const s = fresh();
   s.current = 'A';
   s.players.A.gold = 900;
 
+  // 2026-11-08 删掉"军工供货"：城全丢了，营照样按自己的档位出兵。
+  // 这条同时放开了绕后骚扰——前线的营不再是一打就哑的摆设。
   s.cities = s.cities.filter((c) => c.owner !== 'A');
   const camp = place(s, 'A', 'camp', 5, 5);
   const r = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'militia' });
-  assert.equal(r.ok, false, '断了补给的军营不该还能出兵');
+  assert.ok(r.ok, r.ok ? '' : `没有城市也该能出兵：${r.reason}`);
 });
 
 test('军营不能给敌军产兵，也不是城市', () => {
@@ -15755,9 +15762,10 @@ test('产兵点不许落成即废：二代的工程兵修不了四代的造船�
   assert.ok(yard, '海军包里应该有造船厂');
   const r = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'nv-shipyard', x: 4, y: 2 });
   assert.equal(r.ok, false, '二代的工程兵不该能在二代修四代的造船厂');
+  // 拒绝的理由现在是"档位不够"（以前是"落成即废"，那条要靠供货逻辑才算得出来）
   assert.ok(
-    (r as { reason?: string }).reason?.includes('造不出来'),
-    `拒绝理由要说清是"造不出来"，实际：${(r as { reason?: string }).reason}`,
+    (r as { reason?: string }).reason?.includes('工匠'),
+    `拒绝理由要说清是档位不够，实际：${(r as { reason?: string }).reason}`,
   );
 
   // 同一条规则不该误伤军营：它的白名单是空的，什么时代落成都能出那一代的兵

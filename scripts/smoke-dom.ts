@@ -1204,6 +1204,82 @@ check('修真灵田的面板写全多资源收入，不只金币', () => {
   assert.ok(/\d+ 灵/.test(text), `也要写灵石，不能只剩金币：${text}`);
 });
 
+check('炼器炉面板：条件不满足的法器灰着列出来，并写清缺什么', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [
+        ...Object.keys(UNIT_TYPES),
+        'cultivation-forge-1',
+        'cultivation-artifact-wood',
+        'cultivation-artifact-stone',
+      ],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 法器要灵石：不补这一笔，按钮会因"资源不足"变灰，测不出产地条件
+  st.players.A.res = { 'spirit-stone': 100 };
+
+  // 把一片地摊平，保证炉子四周既没有森林也没有山
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  const forge: Unit = {
+    id: 'forge1',
+    type: 'cultivation-forge-1',
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes['cultivation-forge-1']?.maxHp ?? 90,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(forge);
+
+  const host = doc.createElement('div');
+  const paint = () => {
+    host.innerHTML = '';
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: forge,
+      selectedCityId: null,
+      selectedCampId: forge.id,
+      selectedTile: null,
+    });
+  };
+
+  paint();
+  let html = host.innerHTML;
+  assert.ok(html.includes('还造不出来'), '白名单里有、条件不满足的法器要单独列一组');
+  const wood = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood, '青木剑应该列出来（不能因为缺森林就消失）');
+  assert.equal(wood!.disabled, true, '缺材料时该是灰的');
+  assert.ok(html.includes('森林'), '按钮上要写清缺森林');
+
+  // 把炉子北边那格改成森林：同一座炉子应该立刻能造青木剑
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  paint();
+  html = host.innerHTML;
+  const wood2 = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood2, '青木剑还在列表里');
+  assert.equal(wood2!.disabled, false, '挨着森林之后就点得动了');
+  // 玄石印仍然缺山：它继续灰着，所以"还造不出来"这一组还在
+  const stone = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-stone"]');
+  assert.ok(stone, '玄石印也该列出来');
+  assert.equal(stone!.disabled, true, '没有山就还是灰的');
+  assert.ok(html.includes('山'), '玄石印的原因要写清缺山');
+  void html;
+});
+
 check('详情面板显示的是算上修正的真实数值', () => {
   const st = createMatch(
     {
@@ -2270,7 +2346,7 @@ check('AI 连续行动时顶栏按钮不会被重建', () => {
 
 console.log('\n军营面板');
 
-check('军营面板列出兵种，并写清补给来自哪座城', () => {
+check('军营面板列出兵种，并写清自己是哪一档', () => {
   const st = createMatch(
     {
       size: 12,
@@ -2328,12 +2404,15 @@ check('军营面板列出兵种，并写清补给来自哪座城', () => {
 
   const html = host.innerHTML;
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
-  assert.ok(html.includes('补给来自'), '应该写清补给来自哪座城市');
-  assert.ok(html.includes('铁器'), '补给时代应该跟着最近的城走（这里升到了铁器）');
+  // 2026-11-08：营按自己的档位出兵，不再"补给来自某座城"。
+  // 这里是城升到了二级、营还是一级，所以面板必须写一级，而不是跟着城写铁器。
+  assert.ok(html.includes('档位'), '应该写清这座营自己的档位');
+  assert.ok(html.includes('青铜'), '一级营就是青铜档位——不随后方城市变化');
+  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的档位');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
-  // 二级兵种也能造：军营的时代取最近那座二级城
-  assert.ok(host.querySelector('[data-type="spearman"]'), '二级城供养的军营应该能出二级兵');
+  // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
+  assert.equal(host.querySelector('[data-type="spearman"]'), null, '一级营根本不该列二级兵');
 });
 
 check('敌军军营不给你产兵，并提示打掉它', () => {

@@ -132,7 +132,7 @@ export const SERVANT: UnitTypeDef = {
   maxHp: 20,
   range: 1,
   vision: 2,
-  builds: [UNIT_IDS.SPIRIT_FIELD, UNIT_IDS.SPIRIT_TOWER],
+  builds: [UNIT_IDS.SPIRIT_FIELD, UNIT_IDS.SPIRIT_TOWER, UNIT_IDS.FORGE_1],
   buildPower: 10,
 };
 export const DEACON: UnitTypeDef = {
@@ -148,8 +148,45 @@ export const DEACON: UnitTypeDef = {
   maxHp: 25,
   range: 1,
   vision: 2,
-  builds: [UNIT_IDS.SPIRIT_FIELD, UNIT_IDS.SPIRIT_TOWER, UNIT_IDS.SPIRIT_MINE],
+  builds: [
+    UNIT_IDS.SPIRIT_FIELD,
+    UNIT_IDS.SPIRIT_TOWER,
+    UNIT_IDS.SPIRIT_MINE,
+    UNIT_IDS.FORGE_1,
+    UNIT_IDS.FORGE_2,
+  ],
   buildPower: 18,
+};
+
+/**
+ * 管事（时代 4）：仆役 → 执事 → 管事，这一列是修真包里的"建造工人"线。
+ *
+ * 它只比执事多会一样东西：三档炼器炉。不新开「炼器师」是因为这条线的语义
+ * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊。
+ */
+export const STEWARD: UnitTypeDef = {
+  id: UNIT_IDS.STEWARD,
+  name: '管事',
+  short: '管',
+  era: 4,
+  category: 'builder',
+  cost: 150,
+  costRes: { 'spirit-stone': 8 },
+  move: 2,
+  atk: 8,
+  armor: 3,
+  maxHp: 28,
+  range: 1,
+  vision: 2,
+  builds: [
+    UNIT_IDS.SPIRIT_FIELD,
+    UNIT_IDS.SPIRIT_TOWER,
+    UNIT_IDS.SPIRIT_MINE,
+    UNIT_IDS.FORGE_1,
+    UNIT_IDS.FORGE_2,
+    UNIT_IDS.FORGE_3,
+  ],
+  buildPower: 24,
 };
 
 /** 灵矿每相邻一座高山，额外产出多少灵石（钩子在 hooks.ts，规则书要引用） */
@@ -215,6 +252,172 @@ export const SPIRIT_MINE: UnitTypeDef = {
   yieldByTerrain: {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
   },
+};
+
+// ── 炼器（2026-11-08）──────────────────────────────
+//
+// 炼器炉用的是"军营那套产兵逻辑"，一行新规则都没有：
+//   · 能造什么 = `produce.units` 白名单；
+//   · 能不能造 = 炉子**自己的**档位（era）≥ 法器的 era；
+//   · 在哪能造 = 法器身上的 `produceNear`——同一座炉子换块地就换一条产品线。
+//
+// 法器全部 `campOnly`：城市产线不供。想造就得把炉子挪到对的地形边上，
+// 这是这个系统唯一的"操作"。
+//
+// 三档炉子走的是和阵师、军营一样的白名单递增：高代炉子不是数值更高，
+// 而是**名单更长**——它不改变旧法器的强度，只是多认一种材料。
+
+export const FORGE_1: UnitTypeDef = {
+  id: UNIT_IDS.FORGE_1,
+  name: '炼器炉',
+  short: '炉',
+  era: 2,
+  category: 'building',
+  cost: 140,
+  costRes: { 'spirit-stone': 8 },
+  buildCost: 18,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 90,
+  range: 0,
+  vision: 3,
+  // 炉子自己可以建在林子里：站在森林格上，脚下那格就算"挨着森林"
+  buildOn: ['plain', 'hill', 'forest'],
+  produce: {
+    units: [UNIT_IDS.ARTIFACT_WOOD, UNIT_IDS.ARTIFACT_STONE],
+  },
+};
+
+export const FORGE_2: UnitTypeDef = {
+  id: UNIT_IDS.FORGE_2,
+  name: '地火炉',
+  short: '炉',
+  era: 3,
+  category: 'building',
+  cost: 200,
+  costRes: { 'spirit-stone': 12 },
+  buildCost: 26,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 120,
+  range: 0,
+  vision: 3,
+  buildOn: ['plain', 'hill', 'forest'],
+  // 多认一样：水边的寒水镜
+  produce: {
+    units: [UNIT_IDS.ARTIFACT_WOOD, UNIT_IDS.ARTIFACT_STONE, UNIT_IDS.ARTIFACT_WATER],
+  },
+};
+
+export const FORGE_3: UnitTypeDef = {
+  id: UNIT_IDS.FORGE_3,
+  name: '天工炉',
+  short: '炉',
+  era: 4,
+  category: 'building',
+  cost: 280,
+  costRes: { 'spirit-stone': 16 },
+  buildCost: 34,
+  move: 0,
+  atk: 0,
+  armor: 6,
+  maxHp: 150,
+  range: 0,
+  vision: 4,
+  buildOn: ['plain', 'hill', 'forest'],
+  produce: {
+    units: [
+      UNIT_IDS.ARTIFACT_WOOD,
+      UNIT_IDS.ARTIFACT_STONE,
+      UNIT_IDS.ARTIFACT_WATER,
+      UNIT_IDS.ARTIFACT_FIRE,
+    ],
+  },
+};
+
+/*
+ * 四件法器。它们都是普通战斗单位（category: 'combat'），只是不能从城市产线出来：
+ * 没有境界、不吃修炼经验，就是一件"会动的东西"。
+ *
+ * 数值按"同代兵略强、但有地形门槛"来定：门槛本身就是成本，所以每一件都比
+ * 同代的普通兵高一档；真正的限制是"你得先有炉子，还得把炉子摆在材料边上"。
+ */
+export const ARTIFACT_WOOD: UnitTypeDef = {
+  id: UNIT_IDS.ARTIFACT_WOOD,
+  name: '青木剑',
+  short: '木',
+  era: 2,
+  category: 'combat',
+  campOnly: true,
+  cost: 90,
+  costRes: { 'spirit-stone': 4 },
+  move: 3,
+  atk: 11,
+  armor: 1,
+  maxHp: 18,
+  range: 1,
+  vision: 2,
+  // 林中取材：贴着森林才炼得出来
+  produceNear: { terrain: ['forest'] },
+};
+
+export const ARTIFACT_STONE: UnitTypeDef = {
+  id: UNIT_IDS.ARTIFACT_STONE,
+  name: '玄石印',
+  short: '石',
+  era: 2,
+  category: 'combat',
+  campOnly: true,
+  cost: 110,
+  costRes: { 'spirit-stone': 6 },
+  move: 1,
+  atk: 7,
+  armor: 6,
+  maxHp: 36,
+  range: 1,
+  vision: 2,
+  produceNear: { terrain: ['mountain', 'hill'] },
+};
+
+export const ARTIFACT_WATER: UnitTypeDef = {
+  id: UNIT_IDS.ARTIFACT_WATER,
+  name: '寒水镜',
+  short: '水',
+  era: 3,
+  category: 'combat',
+  campOnly: true,
+  cost: 150,
+  costRes: { 'spirit-stone': 8 },
+  move: 2,
+  atk: 9,
+  armor: 2,
+  maxHp: 22,
+  range: 3,
+  vision: 4,
+  produceNear: { terrain: ['water', 'shallow'] },
+};
+
+export const ARTIFACT_FIRE: UnitTypeDef = {
+  id: UNIT_IDS.ARTIFACT_FIRE,
+  name: '赤炎珠',
+  short: '炎',
+  era: 4,
+  category: 'combat',
+  campOnly: true,
+  cost: 200,
+  costRes: { 'spirit-stone': 12 },
+  move: 2,
+  atk: 13,
+  armor: 2,
+  maxHp: 26,
+  range: 2,
+  vision: 3,
+  // 炸开一小片：珠子碎了就是一团火
+  splash: 1,
+  // 条件不只看地形，也可以看"旁边有没有某样东西"——地火要从灵矿里引
+  produceNear: { unit: [UNIT_IDS.SPIRIT_MINE] },
 };
 
 // ── 阵法（2026-11-06）──────────────────────────────

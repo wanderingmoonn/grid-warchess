@@ -55,6 +55,7 @@ import {
   heroSkillsOf,
   isAirborne,
   ordersOf,
+  produceAt,
   recruitResCost,
   recruitSpawnCells,
   incomeResOf,
@@ -997,6 +998,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      // 只能由产兵建筑造的（法器、船坞的船）城市产线不列——规则层也这么挡
+      !d.campOnly &&
       eraWindowOk(s, d, city.era) &&
       canUseType(s, city.owner, d.id),
   );
@@ -1370,14 +1373,9 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = camp.hp / def.maxHp;
 
-  // 补给：军营的时代在落成那一刻就钉死了（Unit.era），后方城市升级不会
-  // 隔空把它带着换代。旧存档没有这个字段，按最近己方城市的时代兜底。
-  const own = citiesOf(s, camp.owner);
-  const supply = own.reduce<typeof own[number] | null>(
-    (a, b) => (!a || distToCity(camp, b) < distToCity(camp, a) ? b : a),
-    null,
-  );
-  const era = camp.era ?? (supply ? supply.era : 0);
+  // 产兵建筑按**自己的档位**出兵（2026-11-08 删掉"军工供货"之后）：
+  // 想要新时代的兵，就盖新时代的营，或者把旧营拆了重盖。它不再看后方城市。
+  const era = def.era;
 
   // 兵从四邻出来。这两个数字只给下面的提示文案用，**能不能造**一律问规则层：
   // 判据按兵种分（飞行兵能停在水面上），自己数一遍 landSlots 必然和
@@ -1396,15 +1394,33 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   /** 这个兵种能不能从这座营出来（和 doRecruit 同一条判据） */
   const slotsOf = (d: { id: string }): number => recruitSpawnCells(s, undefined, camp.id, d.id).length;
 
-  const buildable = Object.values(s.unitTypes).filter(
+  /*
+   * 面板的两级过滤，和规则层同一套口径（produceAt）：
+   *
+   *   · 白名单决定**列不列**——不在 produce.units 里的根本不出现，
+   *     否则军营会变成"整张兵种表 + 90% 灰掉"；
+   *   · 产地条件决定**灰不灰**——白名单里有、但附近没森林/时代不够的，
+   *     照样列出来并写明原因，否则玩家永远不知道自己错过了什么，
+   *     也不知道该把炉子挪到哪儿。
+   *
+   * 以前条件不满足是直接从列表里消失的。炼器炉那种"挨着什么就出什么"的
+   * 建筑一旦这么写，玩家连"原来还有一件木器"都看不见。
+   */
+  const candidates = Object.values(s.unitTypes).filter(
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      // 白名单：不在 produce.units 里的根本不出现
+      canProduce(def, d).ok &&
+      // 档位与选卡：这一档本来就造不到的，不进"还造不出来"那一堆
+      // （否则一座空白名单的军营会把整张兵种表都灰着列出来）
       eraWindowOk(s, d, era) &&
-      canUseType(s, camp.owner, d.id) &&
-      // 白名单读的是这座营的 produce.units：列在这里的，点下去一定造得出来
-      canProduce(def, d).ok,
+      canUseType(s, camp.owner, d.id),
   );
+  const verdictOf = (d: UnitTypeDef) => produceAt(s, { kind: 'camp', camp }, d);
+  const buildable = candidates.filter((d) => verdictOf(d).ok);
+  /** 白名单里有、但现在造不出来的：灰着列出来，附上原因 */
+  const gated = candidates.filter((d) => !verdictOf(d).ok);
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
@@ -1441,19 +1457,28 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     })
     .join('');
 
-  const groups =
-    shown.length === 0
-      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
-      : grouped;
+  /** 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上 */
+  const gatedGroup =
+    gated.length === 0
+      ? ''
+      : `<div class="recruit-group">
+        <div class="recruit-group-title">还造不出来</div>
+        <div class="recruit-list">${gated
+          .map((d) => {
+            const v = verdictOf(d);
+            return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
+          })
+          .join('')}</div>
+      </div>`;
 
-  // 军营的时代是写死的。后方城市一旦追上来，玩家会看到"我有三级城，
-  // 这座营怎么还只出二级兵"——必须明说这是落成时的时代，不是 bug。
-  const staleEra = !!supply && supply.era > era;
-  const supplyLine = supply
-    ? `补给来自「${cityName(supply)}」· 落成于 ${eraDef(era).name}时代${
-        staleEra ? `（后方已到 ${eraDef(supply.era).name}，这座营不跟着换代）` : ''
-      }`
-    : '没有己方城市，补给断了';
+  const groups =
+    (buildable.length === 0
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
+      : grouped) + gatedGroup;
+
+  // 档位是这座营自己的，不看后方城市。写清楚是因为玩家会本能地以为
+  // "我的城已经五代了，这座营怎么还只出二代兵"。
+  const supplyLine = `${eraDef(era).name}时代档位（自己的档位，不随后方城市变化）`;
 
   return `
     <div class="unit-head">
@@ -1467,9 +1492,9 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
     <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
-    <div class="info-row"><span>补给</span><b>${supplyLine}</b></div>
+    <div class="info-row"><span>档位</span><b>${supplyLine}</b></div>
     ${
-      mine && supply
+      mine
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
@@ -1489,15 +1514,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
              兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
-             <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。
+             <br />这座营按自己的档位出兵，不随后方城市换代——想要新兵，就在新地方再扎一座营。
              ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
-             ${
-               supply
-                 ? `这是${s.players[camp.owner].name}的军营。把它打掉，对方就少一个前线补给点。`
-                 : '没有城市供养，这座军营已经产不出兵了。'
-             }
+             这是${s.players[camp.owner].name}的产兵建筑。把它打掉，对方就少一个前线补员点。
            </div>`
     }
   `;

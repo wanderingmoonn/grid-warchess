@@ -47,7 +47,6 @@ import {
   recruitSpawnCells,
   refreshMemory,
   siegeTargets,
-  supplyEraAt,
   terrainWalkable,
   threatTiles,
   unitYieldAt,
@@ -4099,7 +4098,7 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
     out.push({
       id: u.id,
       label: `${d.name}（${x}${u.y + 1}）· 营`,
-      era: u.era ?? supplyEraAt(state, me(), u),
+      era: d.era,
       city: false,
     });
   }
