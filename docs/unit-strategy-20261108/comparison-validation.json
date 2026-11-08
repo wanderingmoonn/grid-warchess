@@ -1,0 +1,22 @@
+{
+  "complete": true,
+  "newGames": 12,
+  "reusedBeforeGames": 12,
+  "nativeReplayAudited": 12,
+  "nativeStateVersion": 4,
+  "replaySchemaVersion": 3,
+  "fog": true,
+  "pairedStartHashesMatch": true,
+  "ruleRejections": 0,
+  "budgetViolations": 0,
+  "sealedFilesMatch": true,
+  "changedCoreFiles": [
+    "ai-meta.ts",
+    "ai-unit-strategy.ts",
+    "ai.ts"
+  ],
+  "unitAndRuleFilesUnchanged": true,
+  "geAllFourActionHashesIdentical": true,
+  "candidateFingerprint": "1ac5f004e77a1fab585f1fc2cc8fcd0d7d7e0c39a48ca6ea4daf6b1c1ed890b9",
+  "baselineFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414"
+}

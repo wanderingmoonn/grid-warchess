@@ -1,0 +1,1668 @@
+{
+  "scope": {
+    "newGames": 12,
+    "reusedBeforeGames": 12,
+    "maps": 2,
+    "seeds": [
+      218600,
+      218601
+    ],
+    "gamesPerType": 4,
+    "halfTurnCap": 200,
+    "nativeStateVersion": 4,
+    "replaySchemaVersion": 3,
+    "fog": true,
+    "types": [
+      "ge",
+      "mage",
+      "holy-knight-lord"
+    ],
+    "pairedBy": "same seed, target, seat, config and native preparation hash"
+  },
+  "baselineFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "candidateFingerprint": "1ac5f004e77a1fab585f1fc2cc8fcd0d7d7e0c39a48ca6ea4daf6b1c1ed890b9",
+  "changedCoreFiles": [
+    "ai-meta.ts",
+    "ai-unit-strategy.ts",
+    "ai.ts"
+  ],
+  "unitAndRuleFilesUnchanged": true,
+  "totals": [
+    {
+      "id": "ge",
+      "before": {
+        "id": "ge",
+        "name": "戈兵",
+        "games": 4,
+        "outcomes": {
+          "win": 3,
+          "loss": 1,
+          "capped": 0
+        },
+        "paid": 17,
+        "recruitSpend": 510,
+        "initialSpend": 480,
+        "attacks": 13,
+        "damage": 160,
+        "activeDamage": 126,
+        "counterDamage": 34,
+        "cityDamage": 0,
+        "damagePer100Gold": 31.372549019607842,
+        "moves": 201,
+        "deaths": 13,
+        "zeroAttackDeaths": 5,
+        "fullHpAttackDeaths": 4,
+        "killers": {
+          "demon": 2,
+          "night-necromancer": 5,
+          "phantom": 3,
+          "illusionist": 1,
+          "archer": 2
+        },
+        "medianOwnTurnsToFirstAttack": 7,
+        "firstEra4Turns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "firstRecruitTurns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "quotaCompleteTurns": [
+          3,
+          4,
+          3,
+          4
+        ],
+        "unusedPositiveShots": 11,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 0,
+          "afterMove": 0,
+          "beforeMove": 0,
+          "totalOtherCombatRecipients": 0,
+          "meanOtherCombatRecipients": 0,
+          "zeroOtherCombatRecipients": 0,
+          "legalImprovedCoverage": 0,
+          "localHpDifference": 0,
+          "localSavings": {
+            "self": 0,
+            "otherCombat": 0,
+            "nonCombat": 0,
+            "byType": {}
+          }
+        }
+      },
+      "after": {
+        "id": "ge",
+        "name": "戈兵",
+        "games": 4,
+        "outcomes": {
+          "win": 3,
+          "loss": 1,
+          "capped": 0
+        },
+        "paid": 17,
+        "recruitSpend": 510,
+        "initialSpend": 480,
+        "attacks": 13,
+        "damage": 160,
+        "activeDamage": 126,
+        "counterDamage": 34,
+        "cityDamage": 0,
+        "damagePer100Gold": 31.372549019607842,
+        "moves": 201,
+        "deaths": 13,
+        "zeroAttackDeaths": 5,
+        "fullHpAttackDeaths": 4,
+        "killers": {
+          "demon": 2,
+          "night-necromancer": 5,
+          "phantom": 3,
+          "illusionist": 1,
+          "archer": 2
+        },
+        "medianOwnTurnsToFirstAttack": 7,
+        "firstEra4Turns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "firstRecruitTurns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "quotaCompleteTurns": [
+          3,
+          4,
+          3,
+          4
+        ],
+        "unusedPositiveShots": 11,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 0,
+          "afterMove": 0,
+          "beforeMove": 0,
+          "totalOtherCombatRecipients": 0,
+          "meanOtherCombatRecipients": 0,
+          "zeroOtherCombatRecipients": 0,
+          "legalImprovedCoverage": 0,
+          "localHpDifference": 0,
+          "localSavings": {
+            "self": 0,
+            "otherCombat": 0,
+            "nonCombat": 0,
+            "byType": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "mage",
+      "before": {
+        "id": "mage",
+        "name": "法师",
+        "games": 4,
+        "outcomes": {
+          "win": 1,
+          "loss": 3,
+          "capped": 0
+        },
+        "paid": 19,
+        "recruitSpend": 2850,
+        "initialSpend": 2400,
+        "attacks": 70,
+        "damage": 1260,
+        "activeDamage": 1260,
+        "counterDamage": 0,
+        "cityDamage": 0,
+        "damagePer100Gold": 44.21052631578947,
+        "moves": 87,
+        "deaths": 19,
+        "zeroAttackDeaths": 3,
+        "fullHpAttackDeaths": 15,
+        "killers": {
+          "night-necromancer": 14,
+          "phoenix": 5
+        },
+        "medianOwnTurnsToFirstAttack": 6.5,
+        "firstEra4Turns": [
+          25,
+          24,
+          null,
+          null
+        ],
+        "firstRecruitTurns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "quotaCompleteTurns": [
+          3,
+          4,
+          3,
+          4
+        ],
+        "unusedPositiveShots": 2,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 0,
+          "afterMove": 0,
+          "beforeMove": 0,
+          "totalOtherCombatRecipients": 0,
+          "meanOtherCombatRecipients": 0,
+          "zeroOtherCombatRecipients": 0,
+          "legalImprovedCoverage": 0,
+          "localHpDifference": 0,
+          "localSavings": {
+            "self": 0,
+            "otherCombat": 0,
+            "nonCombat": 0,
+            "byType": {}
+          }
+        }
+      },
+      "after": {
+        "id": "mage",
+        "name": "法师",
+        "games": 4,
+        "outcomes": {
+          "win": 0,
+          "loss": 3,
+          "capped": 1
+        },
+        "paid": 16,
+        "recruitSpend": 2400,
+        "initialSpend": 2400,
+        "attacks": 50,
+        "damage": 1143,
+        "activeDamage": 1098,
+        "counterDamage": 45,
+        "cityDamage": 0,
+        "damagePer100Gold": 47.625,
+        "moves": 86,
+        "deaths": 16,
+        "zeroAttackDeaths": 2,
+        "fullHpAttackDeaths": 11,
+        "killers": {
+          "vampire": 1,
+          "night-necromancer": 13,
+          "druid": 1,
+          "phoenix": 1
+        },
+        "medianOwnTurnsToFirstAttack": 5,
+        "firstEra4Turns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "firstRecruitTurns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "quotaCompleteTurns": [
+          9,
+          10,
+          9,
+          10
+        ],
+        "unusedPositiveShots": 14,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 0,
+          "afterMove": 0,
+          "beforeMove": 0,
+          "totalOtherCombatRecipients": 0,
+          "meanOtherCombatRecipients": 0,
+          "zeroOtherCombatRecipients": 0,
+          "legalImprovedCoverage": 0,
+          "localHpDifference": 0,
+          "localSavings": {
+            "self": 0,
+            "otherCombat": 0,
+            "nonCombat": 0,
+            "byType": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "holy-knight-lord",
+      "before": {
+        "id": "holy-knight-lord",
+        "name": "神圣骑士长",
+        "games": 4,
+        "outcomes": {
+          "win": 0,
+          "loss": 3,
+          "capped": 1
+        },
+        "paid": 6,
+        "recruitSpend": 3700,
+        "initialSpend": 2760,
+        "attacks": 8,
+        "damage": 161,
+        "activeDamage": 161,
+        "counterDamage": 0,
+        "cityDamage": 120,
+        "damagePer100Gold": 4.351351351351351,
+        "moves": 40,
+        "deaths": 4,
+        "zeroAttackDeaths": 2,
+        "fullHpAttackDeaths": 0,
+        "killers": {
+          "elementalist": 1,
+          "sword-saint": 1,
+          "demon": 1,
+          "royal-king": 1
+        },
+        "medianOwnTurnsToFirstAttack": 5,
+        "firstEra4Turns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "firstRecruitTurns": [
+          11,
+          12,
+          11,
+          12
+        ],
+        "quotaCompleteTurns": [
+          11,
+          12,
+          11,
+          12
+        ],
+        "unusedPositiveShots": 0,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 45,
+          "afterMove": 8,
+          "beforeMove": 37,
+          "totalOtherCombatRecipients": 91,
+          "meanOtherCombatRecipients": 2.022222222222222,
+          "zeroOtherCombatRecipients": 5,
+          "legalImprovedCoverage": 18,
+          "localHpDifference": 102,
+          "localSavings": {
+            "self": 72,
+            "otherCombat": 11,
+            "nonCombat": 19,
+            "byType": {
+              "holy-knight-lord": 72,
+              "demon": 11,
+              "bridge": 19,
+              "farmer": 0,
+              "mg": 0,
+              "earth-wall": 0,
+              "musketeer": 0
+            }
+          }
+        }
+      },
+      "after": {
+        "id": "holy-knight-lord",
+        "name": "神圣骑士长",
+        "games": 4,
+        "outcomes": {
+          "win": 2,
+          "loss": 1,
+          "capped": 1
+        },
+        "paid": 6,
+        "recruitSpend": 3700,
+        "initialSpend": 2760,
+        "attacks": 11,
+        "damage": 292,
+        "activeDamage": 234,
+        "counterDamage": 58,
+        "cityDamage": 209,
+        "damagePer100Gold": 7.891891891891892,
+        "moves": 181,
+        "deaths": 4,
+        "zeroAttackDeaths": 0,
+        "fullHpAttackDeaths": 0,
+        "killers": {
+          "artillery": 1,
+          "ct_infantry": 1,
+          "phoenix": 1,
+          "rifleman": 1
+        },
+        "medianOwnTurnsToFirstAttack": 16,
+        "firstEra4Turns": [
+          1,
+          2,
+          1,
+          2
+        ],
+        "firstRecruitTurns": [
+          11,
+          12,
+          11,
+          12
+        ],
+        "quotaCompleteTurns": [
+          11,
+          12,
+          11,
+          12
+        ],
+        "unusedPositiveShots": 0,
+        "unusedCombatOrCity": 0,
+        "banner": {
+          "casts": 67,
+          "afterMove": 31,
+          "beforeMove": 36,
+          "totalOtherCombatRecipients": 169,
+          "meanOtherCombatRecipients": 2.5223880597014925,
+          "zeroOtherCombatRecipients": 12,
+          "legalImprovedCoverage": 5,
+          "localHpDifference": 216,
+          "localSavings": {
+            "self": 148,
+            "otherCombat": 38,
+            "nonCombat": 30,
+            "byType": {
+              "air-elemental": 7,
+              "water-elemental": 5,
+              "holy-knight-lord": 148,
+              "ge": 0,
+              "militia": 0,
+              "bridge2": 30,
+              "elementalist": 0,
+              "ct_tank": 4,
+              "skeleton": 14,
+              "demon": 0,
+              "imp": 0,
+              "engineer": 0,
+              "rifleman": 7,
+              "longbow": 0,
+              "harpy": 1
+            }
+          }
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "ge-218600-A",
+      "target": "ge",
+      "stage": 3,
+      "seed": 218600,
+      "seat": "A",
+      "before": {
+        "outcome": "win",
+        "turnsConsumed": 145,
+        "actionCount": 1384,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": 1,
+        "attacks": 0,
+        "unitDamage": 18,
+        "cityDamage": 0,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 5105,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "win",
+        "turnsConsumed": 145,
+        "actionCount": 1384,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": 1,
+        "attacks": 0,
+        "unitDamage": 18,
+        "cityDamage": 0,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 5105,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": true,
+      "firstDivergence": null,
+      "purchaseDecisionReasons": {}
+    },
+    {
+      "id": "ge-218600-B",
+      "target": "ge",
+      "stage": 3,
+      "seed": 218600,
+      "seat": "B",
+      "before": {
+        "outcome": "win",
+        "turnsConsumed": 140,
+        "actionCount": 1136,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": 2,
+        "attacks": 1,
+        "unitDamage": 12,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 11805,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "win",
+        "turnsConsumed": 140,
+        "actionCount": 1136,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": 2,
+        "attacks": 1,
+        "unitDamage": 12,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 11805,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": true,
+      "firstDivergence": null,
+      "purchaseDecisionReasons": {}
+    },
+    {
+      "id": "mage-218600-A",
+      "target": "mage",
+      "stage": 3,
+      "seed": 218600,
+      "seat": "A",
+      "before": {
+        "outcome": "win",
+        "turnsConsumed": 127,
+        "actionCount": 982,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": 25,
+        "attacks": 4,
+        "unitDamage": 131,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 8490,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "capped",
+        "turnsConsumed": 200,
+        "actionCount": 1234,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 9,
+        "firstEra4Turn": 1,
+        "attacks": 15,
+        "unitDamage": 457,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          1,
+          5,
+          7,
+          9
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 10455,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 0,
+        "turn": 1,
+        "current": "A",
+        "before": {
+          "type": "RECRUIT",
+          "cityId": "c1",
+          "unitType": "mage"
+        },
+        "after": {
+          "type": "UPGRADE",
+          "cityId": "c1"
+        },
+        "gold": 709,
+        "visibleOwnCombat": [
+          {
+            "id": "u1",
+            "type": "militia",
+            "x": 2,
+            "y": 13,
+            "hp": 28
+          },
+          {
+            "id": "u2",
+            "type": "archer",
+            "x": 4,
+            "y": 13,
+            "hp": 22
+          },
+          {
+            "id": "u3",
+            "type": "scout",
+            "x": 6,
+            "y": 13,
+            "hp": 26
+          },
+          {
+            "id": "u4",
+            "type": "ge",
+            "x": 3,
+            "y": 6,
+            "hp": 30
+          },
+          {
+            "id": "u5",
+            "type": "serpent-man",
+            "x": 2,
+            "y": 7,
+            "hp": 26
+          }
+        ],
+        "visibleEnemyCombat": []
+      },
+      "purchaseDecisionReasons": {
+        "preserve-one-mage-and-era": 1,
+        "staged-focus-recruit": 4
+      }
+    },
+    {
+      "id": "mage-218600-B",
+      "target": "mage",
+      "stage": 3,
+      "seed": 218600,
+      "seat": "B",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 131,
+        "actionCount": 1109,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": 24,
+        "attacks": 43,
+        "unitDamage": 757,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 6987,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "loss",
+        "turnsConsumed": 117,
+        "actionCount": 846,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 10,
+        "firstEra4Turn": 2,
+        "attacks": 20,
+        "unitDamage": 402,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          6,
+          8,
+          10
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 7225,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 8,
+        "turn": 2,
+        "current": "B",
+        "before": {
+          "type": "RECRUIT",
+          "cityId": "c3",
+          "unitType": "mage"
+        },
+        "after": {
+          "type": "UPGRADE",
+          "cityId": "c3"
+        },
+        "gold": 713,
+        "visibleOwnCombat": [
+          {
+            "id": "u6",
+            "type": "militia",
+            "x": 14,
+            "y": 6,
+            "hp": 28
+          },
+          {
+            "id": "u7",
+            "type": "archer",
+            "x": 15,
+            "y": 6,
+            "hp": 22
+          },
+          {
+            "id": "u8",
+            "type": "scout",
+            "x": 16,
+            "y": 6,
+            "hp": 26
+          },
+          {
+            "id": "u9",
+            "type": "ge",
+            "x": 16,
+            "y": 12,
+            "hp": 30
+          },
+          {
+            "id": "u10",
+            "type": "serpent-man",
+            "x": 14,
+            "y": 13,
+            "hp": 26
+          }
+        ],
+        "visibleEnemyCombat": []
+      },
+      "purchaseDecisionReasons": {
+        "preserve-one-mage-and-era": 1,
+        "staged-focus-recruit": 4
+      }
+    },
+    {
+      "id": "holy-knight-lord-218600-A",
+      "target": "holy-knight-lord",
+      "stage": 4,
+      "seed": 218600,
+      "seat": "A",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 198,
+        "actionCount": 1131,
+        "paid": 2,
+        "spend": 1160,
+        "firstRecruitTurn": 11,
+        "quotaCompleteTurn": 11,
+        "firstEra4Turn": 1,
+        "attacks": 2,
+        "unitDamage": 48,
+        "cityDamage": 0,
+        "deaths": 2,
+        "quotaPurchaseTurns": [
+          11
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 9455,
+        "bannerCasts": 19,
+        "bannerLocalHpDifference": 84
+      },
+      "after": {
+        "outcome": "win",
+        "turnsConsumed": 177,
+        "actionCount": 1200,
+        "paid": 1,
+        "spend": 690,
+        "firstRecruitTurn": 11,
+        "quotaCompleteTurn": 11,
+        "firstEra4Turn": 1,
+        "attacks": 1,
+        "unitDamage": 43,
+        "cityDamage": 0,
+        "deaths": 0,
+        "quotaPurchaseTurns": [
+          11
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 13955,
+        "bannerCasts": 23,
+        "bannerLocalHpDifference": 48
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 76,
+        "turn": 15,
+        "current": "A",
+        "before": {
+          "type": "END_TURN"
+        },
+        "after": {
+          "type": "MOVE",
+          "unitId": "u21",
+          "x": 4,
+          "y": 12
+        },
+        "gold": 9,
+        "visibleOwnCombat": [
+          {
+            "id": "u1",
+            "type": "militia",
+            "x": 5,
+            "y": 14,
+            "hp": 28
+          },
+          {
+            "id": "u2",
+            "type": "archer",
+            "x": 5,
+            "y": 13,
+            "hp": 22
+          },
+          {
+            "id": "u3",
+            "type": "scout",
+            "x": 6,
+            "y": 13,
+            "hp": 26
+          },
+          {
+            "id": "u4",
+            "type": "ge",
+            "x": 6,
+            "y": 11,
+            "hp": 30
+          },
+          {
+            "id": "u5",
+            "type": "serpent-man",
+            "x": 6,
+            "y": 12,
+            "hp": 26
+          },
+          {
+            "id": "u21",
+            "type": "holy-knight-lord",
+            "x": 4,
+            "y": 13,
+            "hp": 150
+          }
+        ],
+        "visibleEnemyCombat": []
+      },
+      "purchaseDecisionReasons": {
+        "staged-focus-recruit": 1
+      }
+    },
+    {
+      "id": "holy-knight-lord-218600-B",
+      "target": "holy-knight-lord",
+      "stage": 4,
+      "seed": 218600,
+      "seat": "B",
+      "before": {
+        "outcome": "capped",
+        "turnsConsumed": 200,
+        "actionCount": 755,
+        "paid": 2,
+        "spend": 1160,
+        "firstRecruitTurn": 12,
+        "quotaCompleteTurn": 12,
+        "firstEra4Turn": 2,
+        "attacks": 0,
+        "unitDamage": 0,
+        "cityDamage": 0,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          12
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 8245,
+        "bannerCasts": 19,
+        "bannerLocalHpDifference": 18
+      },
+      "after": {
+        "outcome": "capped",
+        "turnsConsumed": 200,
+        "actionCount": 1406,
+        "paid": 2,
+        "spend": 1160,
+        "firstRecruitTurn": 12,
+        "quotaCompleteTurn": 12,
+        "firstEra4Turn": 2,
+        "attacks": 3,
+        "unitDamage": 96,
+        "cityDamage": 0,
+        "deaths": 2,
+        "quotaPurchaseTurns": [
+          12
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 11950,
+        "bannerCasts": 23,
+        "bannerLocalHpDifference": 110
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 92,
+        "turn": 16,
+        "current": "B",
+        "before": {
+          "type": "MOVE",
+          "unitId": "u22",
+          "x": 17,
+          "y": 6
+        },
+        "after": {
+          "type": "MOVE",
+          "unitId": "u21",
+          "x": 12,
+          "y": 7
+        },
+        "gold": 38,
+        "visibleOwnCombat": [
+          {
+            "id": "u6",
+            "type": "militia",
+            "x": 11,
+            "y": 7,
+            "hp": 28
+          },
+          {
+            "id": "u7",
+            "type": "archer",
+            "x": 10,
+            "y": 6,
+            "hp": 22
+          },
+          {
+            "id": "u8",
+            "type": "scout",
+            "x": 9,
+            "y": 8,
+            "hp": 26
+          },
+          {
+            "id": "u10",
+            "type": "serpent-man",
+            "x": 9,
+            "y": 10,
+            "hp": 22
+          },
+          {
+            "id": "u21",
+            "type": "holy-knight-lord",
+            "x": 13,
+            "y": 7,
+            "hp": 150
+          },
+          {
+            "id": "u24",
+            "type": "musketeer",
+            "x": 15,
+            "y": 13,
+            "hp": 36
+          },
+          {
+            "id": "u27",
+            "type": "musketeer",
+            "x": 15,
+            "y": 7,
+            "hp": 36
+          }
+        ],
+        "visibleEnemyCombat": [
+          {
+            "id": "u3",
+            "type": "scout",
+            "x": 6,
+            "y": 8,
+            "hp": 26
+          },
+          {
+            "id": "u4",
+            "type": "ge",
+            "x": 6,
+            "y": 9,
+            "hp": 30
+          },
+          {
+            "id": "u18",
+            "type": "air-elemental",
+            "x": 9,
+            "y": 10,
+            "hp": 33
+          }
+        ]
+      },
+      "purchaseDecisionReasons": {
+        "staged-focus-recruit": 1
+      }
+    },
+    {
+      "id": "ge-218601-A",
+      "target": "ge",
+      "stage": 3,
+      "seed": 218601,
+      "seat": "A",
+      "before": {
+        "outcome": "win",
+        "turnsConsumed": 105,
+        "actionCount": 1032,
+        "paid": 5,
+        "spend": 150,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": 1,
+        "attacks": 9,
+        "unitDamage": 90,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 5963,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "win",
+        "turnsConsumed": 105,
+        "actionCount": 1032,
+        "paid": 5,
+        "spend": 150,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": 1,
+        "attacks": 9,
+        "unitDamage": 90,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 5963,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": true,
+      "firstDivergence": null,
+      "purchaseDecisionReasons": {}
+    },
+    {
+      "id": "ge-218601-B",
+      "target": "ge",
+      "stage": 3,
+      "seed": 218601,
+      "seat": "B",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 111,
+        "actionCount": 1079,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": 2,
+        "attacks": 3,
+        "unitDamage": 40,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 4775,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "loss",
+        "turnsConsumed": 111,
+        "actionCount": 1079,
+        "paid": 4,
+        "spend": 120,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": 2,
+        "attacks": 3,
+        "unitDamage": 40,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 4775,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": true,
+      "firstDivergence": null,
+      "purchaseDecisionReasons": {}
+    },
+    {
+      "id": "mage-218601-A",
+      "target": "mage",
+      "stage": 3,
+      "seed": 218601,
+      "seat": "A",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 86,
+        "actionCount": 709,
+        "paid": 6,
+        "spend": 900,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 3,
+        "firstEra4Turn": null,
+        "attacks": 5,
+        "unitDamage": 95,
+        "cityDamage": 0,
+        "deaths": 6,
+        "quotaPurchaseTurns": [
+          1,
+          1,
+          3,
+          3
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 5491,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "loss",
+        "turnsConsumed": 128,
+        "actionCount": 808,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 1,
+        "quotaCompleteTurn": 9,
+        "firstEra4Turn": 1,
+        "attacks": 4,
+        "unitDamage": 80,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          1,
+          5,
+          7,
+          9
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 4825,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 0,
+        "turn": 1,
+        "current": "A",
+        "before": {
+          "type": "RECRUIT",
+          "cityId": "c1",
+          "unitType": "mage"
+        },
+        "after": {
+          "type": "UPGRADE",
+          "cityId": "c1"
+        },
+        "gold": 713,
+        "visibleOwnCombat": [
+          {
+            "id": "u1",
+            "type": "militia",
+            "x": 1,
+            "y": 1,
+            "hp": 28
+          },
+          {
+            "id": "u2",
+            "type": "archer",
+            "x": 2,
+            "y": 1,
+            "hp": 22
+          },
+          {
+            "id": "u3",
+            "type": "scout",
+            "x": 3,
+            "y": 1,
+            "hp": 26
+          },
+          {
+            "id": "u4",
+            "type": "ge",
+            "x": 1,
+            "y": 16,
+            "hp": 30
+          },
+          {
+            "id": "u5",
+            "type": "serpent-man",
+            "x": 2,
+            "y": 16,
+            "hp": 26
+          }
+        ],
+        "visibleEnemyCombat": []
+      },
+      "purchaseDecisionReasons": {
+        "preserve-one-mage-and-era": 1,
+        "staged-focus-recruit": 4
+      }
+    },
+    {
+      "id": "mage-218601-B",
+      "target": "mage",
+      "stage": 3,
+      "seed": 218601,
+      "seat": "B",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 77,
+        "actionCount": 828,
+        "paid": 5,
+        "spend": 750,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 4,
+        "firstEra4Turn": null,
+        "attacks": 18,
+        "unitDamage": 277,
+        "cityDamage": 0,
+        "deaths": 5,
+        "quotaPurchaseTurns": [
+          2,
+          2,
+          4,
+          4
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 4897,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "loss",
+        "turnsConsumed": 77,
+        "actionCount": 589,
+        "paid": 4,
+        "spend": 600,
+        "firstRecruitTurn": 2,
+        "quotaCompleteTurn": 10,
+        "firstEra4Turn": 2,
+        "attacks": 11,
+        "unitDamage": 204,
+        "cityDamage": 0,
+        "deaths": 4,
+        "quotaPurchaseTurns": [
+          2,
+          6,
+          8,
+          10
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 3432,
+        "bannerCasts": 0,
+        "bannerLocalHpDifference": 0
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 9,
+        "turn": 2,
+        "current": "B",
+        "before": {
+          "type": "RECRUIT",
+          "cityId": "c3",
+          "unitType": "mage"
+        },
+        "after": {
+          "type": "UPGRADE",
+          "cityId": "c3"
+        },
+        "gold": 707,
+        "visibleOwnCombat": [
+          {
+            "id": "u6",
+            "type": "militia",
+            "x": 13,
+            "y": 0,
+            "hp": 28
+          },
+          {
+            "id": "u7",
+            "type": "archer",
+            "x": 14,
+            "y": 0,
+            "hp": 22
+          },
+          {
+            "id": "u8",
+            "type": "scout",
+            "x": 15,
+            "y": 0,
+            "hp": 26
+          },
+          {
+            "id": "u9",
+            "type": "ge",
+            "x": 16,
+            "y": 15,
+            "hp": 30
+          },
+          {
+            "id": "u10",
+            "type": "serpent-man",
+            "x": 17,
+            "y": 15,
+            "hp": 26
+          }
+        ],
+        "visibleEnemyCombat": []
+      },
+      "purchaseDecisionReasons": {
+        "preserve-one-mage-and-era": 1,
+        "staged-focus-recruit": 4
+      }
+    },
+    {
+      "id": "holy-knight-lord-218601-A",
+      "target": "holy-knight-lord",
+      "stage": 4,
+      "seed": 218601,
+      "seat": "A",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 56,
+        "actionCount": 522,
+        "paid": 1,
+        "spend": 690,
+        "firstRecruitTurn": 11,
+        "quotaCompleteTurn": 11,
+        "firstEra4Turn": 1,
+        "attacks": 5,
+        "unitDamage": 87,
+        "cityDamage": 0,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          11
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 3190,
+        "bannerCasts": 2,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "win",
+        "turnsConsumed": 107,
+        "actionCount": 1080,
+        "paid": 2,
+        "spend": 1160,
+        "firstRecruitTurn": 11,
+        "quotaCompleteTurn": 11,
+        "firstEra4Turn": 1,
+        "attacks": 5,
+        "unitDamage": 102,
+        "cityDamage": 66,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          11
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 7220,
+        "bannerCasts": 10,
+        "bannerLocalHpDifference": 33
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 83,
+        "turn": 13,
+        "current": "A",
+        "before": {
+          "type": "MOVE",
+          "unitId": "u3",
+          "x": 11,
+          "y": 9
+        },
+        "after": {
+          "type": "MOVE",
+          "unitId": "u20",
+          "x": 3,
+          "y": 2
+        },
+        "gold": 22,
+        "visibleOwnCombat": [
+          {
+            "id": "u1",
+            "type": "militia",
+            "x": 3,
+            "y": 3,
+            "hp": 28
+          },
+          {
+            "id": "u3",
+            "type": "scout",
+            "x": 10,
+            "y": 8,
+            "hp": 26
+          },
+          {
+            "id": "u4",
+            "type": "ge",
+            "x": 6,
+            "y": 19,
+            "hp": 30
+          },
+          {
+            "id": "u5",
+            "type": "serpent-man",
+            "x": 9,
+            "y": 15,
+            "hp": 26
+          },
+          {
+            "id": "u20",
+            "type": "holy-knight-lord",
+            "x": 2,
+            "y": 2,
+            "hp": 150
+          },
+          {
+            "id": "u21",
+            "type": "halberdier",
+            "x": 1,
+            "y": 17,
+            "hp": 46
+          },
+          {
+            "id": "u23",
+            "type": "priest",
+            "x": 2,
+            "y": 17,
+            "hp": 30
+          }
+        ],
+        "visibleEnemyCombat": [
+          {
+            "id": "u6",
+            "type": "militia",
+            "x": 8,
+            "y": 0,
+            "hp": 28
+          },
+          {
+            "id": "u8",
+            "type": "scout",
+            "x": 5,
+            "y": 1,
+            "hp": 1
+          }
+        ]
+      },
+      "purchaseDecisionReasons": {
+        "staged-focus-recruit": 1
+      }
+    },
+    {
+      "id": "holy-knight-lord-218601-B",
+      "target": "holy-knight-lord",
+      "stage": 4,
+      "seed": 218601,
+      "seat": "B",
+      "before": {
+        "outcome": "loss",
+        "turnsConsumed": 59,
+        "actionCount": 535,
+        "paid": 1,
+        "spend": 690,
+        "firstRecruitTurn": 12,
+        "quotaCompleteTurn": 12,
+        "firstEra4Turn": 2,
+        "attacks": 1,
+        "unitDamage": 26,
+        "cityDamage": 120,
+        "deaths": 0,
+        "quotaPurchaseTurns": [
+          12
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 2432,
+        "bannerCasts": 5,
+        "bannerLocalHpDifference": 0
+      },
+      "after": {
+        "outcome": "loss",
+        "turnsConsumed": 97,
+        "actionCount": 1072,
+        "paid": 1,
+        "spend": 690,
+        "firstRecruitTurn": 12,
+        "quotaCompleteTurn": 12,
+        "firstEra4Turn": 2,
+        "attacks": 2,
+        "unitDamage": 51,
+        "cityDamage": 143,
+        "deaths": 1,
+        "quotaPurchaseTurns": [
+          12
+        ],
+        "recruitsBeforeFocal": [],
+        "totalOwnRecruitSpend": 3720,
+        "bannerCasts": 11,
+        "bannerLocalHpDifference": 25
+      },
+      "sameActionHash": false,
+      "firstDivergence": {
+        "step": 81,
+        "turn": 12,
+        "current": "B",
+        "before": {
+          "type": "HERO_SKILL",
+          "unitId": "u22",
+          "skillId": "holy-banner"
+        },
+        "after": {
+          "type": "ATTACK",
+          "unitId": "u7",
+          "targetId": "u1"
+        },
+        "gold": 32,
+        "visibleOwnCombat": [
+          {
+            "id": "u7",
+            "type": "archer",
+            "x": 12,
+            "y": 0,
+            "hp": 22
+          },
+          {
+            "id": "u9",
+            "type": "ge",
+            "x": 17,
+            "y": 19,
+            "hp": 30
+          },
+          {
+            "id": "u10",
+            "type": "serpent-man",
+            "x": 11,
+            "y": 18,
+            "hp": 26
+          },
+          {
+            "id": "u22",
+            "type": "holy-knight-lord",
+            "x": 14,
+            "y": 1,
+            "hp": 150
+          }
+        ],
+        "visibleEnemyCombat": [
+          {
+            "id": "u1",
+            "type": "militia",
+            "x": 9,
+            "y": 0,
+            "hp": 7
+          }
+        ]
+      },
+      "purchaseDecisionReasons": {
+        "staged-focus-recruit": 1
+      }
+    }
+  ],
+  "probeComparison": {
+    "mageKnownStationaryLethalMoves": {
+      "before": 2,
+      "after": 0
+    },
+    "mageKilledByKnownNextTurn": {
+      "before": 0,
+      "after": 0
+    }
+  },
+  "limitations": [
+    "Four games per type share two maps; seat exchange is paired, not four independent map samples. No population win-rate claim or rating adjustment.",
+    "Capped means no native winner by200 single-side turns. It is not a formal draw, half-win or loss.",
+    "Procurement and tactics change together; this estimates the whole package against the frozen original opponent, not each component separately.",
+    "Holy knight starts from the same legally paid era4 development prefix, which remains part of the200-turn cap.",
+    "Instant HP output, cost efficiency and single-action banner ablations are descriptive/local quantities, not causal whole-game win estimates."
+  ]
+}

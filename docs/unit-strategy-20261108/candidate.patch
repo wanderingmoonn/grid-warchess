@@ -1,0 +1,308 @@
+diff --git a/scripts/test-ai-unit-strategy.ts b/scripts/test-ai-unit-strategy.ts
+new file mode 100644
+index 0000000..bd40cc7
+--- /dev/null
++++ b/scripts/test-ai-unit-strategy.ts
+@@ -0,0 +1,91 @@
++import assert from 'node:assert/strict';
++import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
++import { applyAction, prepareSimulation } from '../src/core/rules.ts';
++import { playerView } from '../src/core/fog.ts';
++import { tacticalMap } from '../src/core/ai-tactics.ts';
++import { aiNextAction, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
++import { focusedPurchasePlan, holyBannerCandidate, specialistRecruitAllowed } from '../src/core/ai-unit-strategy.ts';
++import type { AiBudget } from '../src/core/ai-meta.ts';
++import type { GameState, Unit } from '../src/core/types.ts';
++
++let passed=0;
++const test=(name:string,run:()=>void):void=>{run();passed++;console.log('PASS '+name);};
++function arena(era=3): GameState {
++ const s=prepareSimulation(createMatch({...DEFAULT_CONFIG,size:20,startEra:3,aiLevel:'advanced',expansionIds:['fantasy','pack-contemporary']},835700));
++ s.units=[];s.fog=false;s.current='A';s.players.A.gold=709;s.players.B.gold=0;
++ for(const c of s.cities)if(c.owner==='A')c.era=era;
++ for(let y=5;y<=15;y++)for(let x=5;x<=15;x++)s.tiles[y*s.w+x]={terrain:'plain',cityId:null};
++ return s;
++}
++function put(s:GameState,type:string,owner:'A'|'B',x:number,y:number):Unit {
++ const u:Unit={id:'strategy-'+s.nextUnitSeq++,type,owner,x,y,hp:s.unitTypes[type]!.maxHp,kills:0,moved:false,acted:false};s.units.push(u);return u;
++}
++function focus(type:'mage'|'holy-knight-lord',extra:Partial<NonNullable<AiBudget['recruitFocus']>>={}): AiBudget {
++ return {...DEFAULT_BUDGET,recruitFocus:{unitType:type,purchased:0,quota:type==='mage'?4:1,purchasedThisTurn:0,supportPurchased:0,rangedSupportPurchased:0,...extra}};
++}
++test('Mage focus preserves the first era upgrade and pays its native cost',()=>{
++ const s=arena(),b=focus('mage'),before=JSON.stringify(s.unitTypes),p=focusedPurchasePlan(s,b)!;
++ assert.equal(p.action?.type,'UPGRADE');if(p.action?.type!=='UPGRADE')throw Error('upgrade');
++ const r=applyAction(s,p.action);assert.ok(r.ok);assert.equal(r.state.players.A.gold,169);assert.equal(JSON.stringify(s.unitTypes),before);
++});
++test('Mage group recruits its frontline before the first fragile caster',()=>{
++ const s=arena(4);s.players.A.gold=169;const p=focusedPurchasePlan(s,focus('mage'))!;
++ assert.equal(p.action?.type,'RECRUIT');if(p.action?.type!=='RECRUIT')throw Error('recruit');assert.equal(p.action.unitType,'ge');assert.ok(applyAction(s,p.action).ok);
++});
++test('Mage focus limits direct purchases to one caster per own turn',()=>{
++ const s=arena(4);s.players.A.gold=1000;put(s,'ge','A',7,7);put(s,'mage','A',7,8);
++ const p=focusedPurchasePlan(s,focus('mage',{purchased:1,purchasedThisTurn:1,supportPurchased:1}))!;
++ assert.equal(p.action,null);assert.equal(p.reserveGold,150);
++});
++test('Finished focus releases its reserve to ordinary mixed procurement',()=>{
++ assert.equal(focusedPurchasePlan(arena(4),focus('mage',{purchased:4})),null);
++});
++test('Holy knight group first buys ranged support instead of holding every recruitment slot',()=>{
++ const s=arena(4);s.players.A.gold=273;
++ const p=focusedPurchasePlan(s,focus('holy-knight-lord'))!;
++ assert.equal(p.action?.type,'RECRUIT');if(p.action?.type!=='RECRUIT')throw Error('recruit');assert.equal(p.action.unitType,'musketeer');assert.ok(applyAction(s,p.action).ok);
++});
++test('Holy knight focus buys the hero once the mixed escort is funded',()=>{
++ const s=arena(4);s.players.A.gold=700;put(s,'ge','A',7,7);put(s,'musketeer','A',7,8);
++ const p=focusedPurchasePlan(s,focus('holy-knight-lord',{supportPurchased:2,rangedSupportPurchased:1}))!;
++ assert.equal(p.action?.type,'RECRUIT');if(p.action?.type!=='RECRUIT')throw Error('recruit');assert.equal(p.action.unitType,'holy-knight-lord');assert.ok(applyAction(s,p.action).ok);
++});
++test('Ordinary hero recruitment requires actual combat company',()=>{
++ const s=arena(4);put(s,'farmer','A',7,7);put(s,'farmer','A',7,8);
++ assert.equal(specialistRecruitAllowed(s,s.unitTypes['holy-knight-lord']!,false),false);
++ put(s,'ge','A',8,8);put(s,'musketeer','A',8,9);
++ assert.equal(specialistRecruitAllowed(s,s.unitTypes['holy-knight-lord']!,false),true);
++});
++test('Ordinary mage procurement avoids stacking specialists without an escort',()=>{
++ const s=arena();put(s,'ge','A',7,7);put(s,'mage','A',7,8);
++ assert.equal(specialistRecruitAllowed(s,s.unitTypes.mage!,false),false);
++ put(s,'ge','A',8,8);put(s,'musketeer','A',8,9);
++ assert.equal(specialistRecruitAllowed(s,s.unitTypes.mage!,false),true);
++});
++test('Holy banner moves toward the combat group before spending the cooldown',()=>{
++ const s=arena(4),u=put(s,'holy-knight-lord','A',7,7);
++ put(s,'musketeer','A',7,8);put(s,'musketeer','A',10,7);put(s,'musketeer','A',10,8);put(s,'musketeer','A',11,7);put(s,'ge','B',13,7);
++ const c=holyBannerCandidate(s,u,tacticalMap(s,'A'),new Set());assert.equal(c?.action.type,'MOVE');
++ const moved=applyAction(s,c!.action);assert.ok(moved.ok);
++ const next=moved.state.units.find(v=>v.id===u.id)!;
++ const cast=holyBannerCandidate(moved.state,next,tacticalMap(moved.state,'A'),new Set());assert.equal(cast?.action.type,'HERO_SKILL');assert.ok(applyAction(moved.state,cast!.action).ok);
++});
++test('Economy-only company does not trigger a cold holy banner',()=>{
++ const s=arena(4),u=put(s,'holy-knight-lord','A',7,7);put(s,'farmer','A',7,8);put(s,'farmer','A',8,7);put(s,'ge','B',13,7);
++ assert.equal(holyBannerCandidate(s,u,tacticalMap(s,'A'),new Set()),null);
++});
++test('Rejected support moves are not repeated',()=>{
++ const s=arena(4),u=put(s,'holy-knight-lord','A',7,7);put(s,'musketeer','A',10,7);put(s,'musketeer','A',10,8);put(s,'musketeer','A',11,7);put(s,'ge','B',13,7);
++ const first=holyBannerCandidate(s,u,tacticalMap(s,'A'),new Set());assert.ok(first);
++ const next=holyBannerCandidate(s,u,tacticalMap(s,'A'),new Set([aiActionKey(first.action)]));assert.ok(!next||aiActionKey(next.action)!==aiActionKey(first.action));
++});
++test('Unseen enemies cannot alter focused procurement through the public AI entry',()=>{
++ const s=arena();s.fog=true;
++ const ownCity=s.cities.find(c=>c.owner==='A')!;put(s,'farmer','A',ownCity.x,ownCity.y);
++ const visible=playerView(s,'A').state;
++ const unseen=s.tiles.map((_,i)=>({x:i%s.w,y:Math.floor(i/s.w)})).filter(p=>!visible.units.some(u=>u.owner==='A'&&Math.abs(u.x-p.x)+Math.abs(u.y-p.y)<=6)&&p.x>12);
++ const foe=put(s,'phoenix','B',unseen[0]!.x,unseen[0]!.y);assert.ok(!playerView(s,'A').state.units.some(u=>u.id===foe.id));
++ const other=structuredClone(s);Object.assign(other.units.find(u=>u.id===foe.id)!,unseen.at(-1)!);
++ assert.deepEqual(aiNextAction(s,focus('mage')),aiNextAction(other,focus('mage')));
++});
++console.log(JSON.stringify({passed}));
+diff --git a/src/core/ai-meta.ts b/src/core/ai-meta.ts
+index a4c634b..da09ebf 100644
+--- a/src/core/ai-meta.ts
++++ b/src/core/ai-meta.ts
+@@ -39,6 +39,15 @@ export interface AiBudget {
+    * 队首是「升级时代」时，它指的是"升这一座城"。
+    */
+   orderSite?: string | null;
++  /** Optional mixed-army purchase objective; preserves the ordinary per-turn limits. */
++  recruitFocus?: {
++    unitType: 'mage' | 'holy-knight-lord';
++    purchased: number;
++    quota: number;
++    purchasedThisTurn: number;
++    supportPurchased: number;
++    rangedSupportPurchased: number;
++  };
+ }
+ 
+ export const DEFAULT_BUDGET: AiBudget = {
+diff --git a/src/core/ai-unit-strategy.ts b/src/core/ai-unit-strategy.ts
+new file mode 100644
+index 0000000..04dd058
+--- /dev/null
++++ b/src/core/ai-unit-strategy.ts
+@@ -0,0 +1,108 @@
++import type { Action, GameState, Unit, UnitTypeDef } from './types.ts';
++import type { AiBudget } from './ai-meta.ts';
++import type { TacticalMap } from './ai-tactics.ts';
++import { CONFIG } from './config.ts';
++import { canUseType, eraWindowOk } from './draft.ts';
++import {
++  armySize, attackableTargets, distance, heroBlocked,
++  heroSkillsOf, previewAttack, reachableTiles, recruitPriceOf, recruitSpawnCells,
++  underConstruction, upgradeCostOf,
++} from './rules.ts';
++
++type Candidate = { action: Action; score: number };
++export interface FocusPurchasePlan { action: Action | null; reserveGold: number; reason: string }
++const key = (a: Action): string => JSON.stringify(a);
++const friends = (s: GameState): Unit[] => s.units.filter(u => u.owner === s.current && s.unitTypes[u.type]?.category === 'combat' && !underConstruction(u));
++const escort = (s: GameState,u: Unit): boolean => {
++  const d=s.unitTypes[u.type]!;
++  return d.domain!=='water'&&!d.flight&&d.layer!=='air'&&(d.range??1)<=2&&u.type!=='mage'&&u.type!=='holy-knight-lord';
++};
++
++/** Only feed the player's fog view to these helpers. Explicit commander orders bypass this filter. */
++export function specialistRecruitAllowed(s: GameState,d: UnitTypeDef,urgent: boolean): boolean {
++  const own=friends(s);
++  if(d.id==='mage'){
++    const guards=own.filter(u=>escort(s,u)).length;
++    const mages=own.filter(u=>u.type==='mage').length;
++    if(!guards&&!urgent)return false;
++    if(mages>=Math.max(1,Math.ceil(own.filter(u=>u.type!=='mage').length/2)))return false;
++  }
++  if(d.id==='holy-knight-lord'&&own.filter(u=>u.type!==d.id).length<2)return false;
++  return true;
++}
++
++/** A legal, reusable focus order: buy a mixed group without freezing its initial defense. */
++export function focusedPurchasePlan(s: GameState,budget: AiBudget): FocusPurchasePlan | null {
++  const focus=budget.recruitFocus;
++  if(!focus||focus.purchased>=focus.quota)return null;
++  const def=s.unitTypes[focus.unitType];
++  if(!def)return null;
++  const gold=s.players[s.current].gold,price=recruitPriceOf(s,s.current,def).gold;
++  const cities=s.cities.filter(c=>c.owner===s.current&&!c.ruined&&c.capturedTurn!==s.turn).sort((a,b)=>a.id.localeCompare(b.id));
++  const available=(d: UnitTypeDef)=>cities.find(c=>eraWindowOk(s,d,c.era)&&canUseType(s,s.current,d.id)&&recruitSpawnCells(s,c.id,undefined,d.id).length>0);
++  const targetCity=available(def);
++  if(!targetCity||heroBlocked(s,s.current,def)||armySize(s,s.current)>=CONFIG.maxUnits)return null;
++  const own=friends(s),foes=s.units.filter(u=>u.owner!==s.current&&s.unitTypes[u.type]?.category==='combat');
++  const mayRecruit=budget.recruited<budget.maxRecruit;
++  if(focus.unitType==='mage'&&focus.purchased===0&&cities.every(c=>c.era<4)&&budget.upgraded<budget.maxUpgrade){
++    const city=cities.find(c=>c.era===3&&gold>=(upgradeCostOf(s,c)??Infinity)+price);
++    if(city&&!foes.some(u=>distance(u,city)<=5))return {action:{type:'UPGRADE',cityId:city.id},reserveGold:price,reason:'preserve-one-mage-and-era'};
++  }
++  const liveGuards=own.filter(u=>escort(s,u)).length;
++  const liveRanged=own.filter(u=>u.type!==focus.unitType&&(s.unitTypes[u.type]?.range??1)>=3).length;
++  const supports=Math.max(focus.supportPurchased,own.filter(u=>u.type!==focus.unitType).length);
++  const needRanged=focus.unitType==='holy-knight-lord'&&Math.max(focus.rangedSupportPurchased,liveRanged)<1;
++  const needGuard=focus.unitType==='mage'&&Math.max(liveGuards,focus.supportPurchased)<Math.min(2,1+Math.floor(focus.purchased/2));
++  const needSupport=focus.unitType==='holy-knight-lord'&&supports<2;
++  if(mayRecruit&&(needRanged||needGuard||needSupport)){
++    const choices=needRanged?['musketeer','archer','crossbow']:['ge','militia','spearman'];
++    for(const type of choices){
++      const d=s.unitTypes[type];if(!d||d.summonedOnly)continue;
++      const city=available(d),cost=recruitPriceOf(s,s.current,d).gold;
++      if(city&&gold>=cost)return {action:{type:'RECRUIT',cityId:city.id,unitType:type},reserveGold:0,reason:needRanged?'ranged-escort':'frontline-escort'};
++    }
++  }
++  if(mayRecruit&&gold>=price&&(focus.unitType!=='mage'||focus.purchasedThisTurn<1))return {action:{type:'RECRUIT',cityId:targetCity.id,unitType:def.id},reserveGold:0,reason:'staged-focus-recruit'};
++  return {action:null,reserveGold:price,reason:focus.unitType==='mage'&&focus.purchasedThisTurn>=1?'one-mage-per-turn':'save-with-escorts'};
++}
++
++export function specialistMoveBias(s: GameState,u: Unit,x: number,y: number,tactical: TacticalMap): number {
++  if(u.type!=='mage'&&u.type!=='holy-knight-lord')return 0;
++  const moved={...u,x,y},risk=tactical.exposure(moved),own=friends(s);
++  if(u.type==='mage'){
++    const hp=Math.max(1,u.hp),guards=own.filter(v=>v.id!==u.id&&escort(s,v)&&distance(v,moved)<=2).length;
++    const firing=attackableTargets(s,moved).map(t=>previewAttack(s,moved,t)).reduce((best,p)=>Math.max(best,p.toDefender+p.toSplash-p.toAttacker),0);
++    return Math.min(12,guards*5)+Math.min(12,Math.max(0,firing)*0.35)-Math.min(70,risk.damage/hp*24)-(risk.lethal?65:0);
++  }
++  const company=own.filter(v=>v.id!==u.id&&distance(v,moved)<=2);
++  return Math.min(30,company.reduce((n,v)=>n+2+Math.min(5,(s.unitTypes[v.type]?.cost??0)/60),0))-(risk.lethal?60:0);
++}
++
++/** Select where to apply the buff before using its cooldown; the skill itself stays free. */
++export function holyBannerCandidate(s: GameState,u: Unit,tactical: TacticalMap,rejected: ReadonlySet<string>): Candidate | null {
++  if(u.type!=='holy-knight-lord'||u.skillTurn===s.turn)return null;
++  const skill=heroSkillsOf(s,u).find(k=>k.def.id==='holy-banner');
++  if(!skill?.ready)return null;
++  const foes=s.units.filter(v=>v.owner!==u.owner&&s.unitTypes[v.type]?.category==='combat');
++  if(!foes.some(v=>distance(v,u)<=6))return null;
++  const radius=skill.def.radius??2,own=friends(s);
++  const value=(at: Unit): number=>own.filter(v=>v.id!==u.id&&distance(v,at)<=radius&&!v.buff).reduce((n,v)=>{
++    const risk=tactical.exposure(v).damage;
++    return n+(1+Math.min(2,(s.unitTypes[v.type]?.cost??0)/150))*(0.5+Math.min(1.5,risk/Math.max(1,v.hp)));
++  },0);
++  const currentRisk=tactical.exposure(u),here=value(u)-currentRisk.damage*0.035;
++  let best: {x:number;y:number;score:number}|null=null;
++  if(!u.moved)for(const i of reachableTiles(s,u).keys()){
++    const x=i%s.w,y=Math.floor(i/s.w);if(x===u.x&&y===u.y)continue;
++    const action: Action={type:'MOVE',unitId:u.id,x,y};if(rejected.has(key(action)))continue;
++    const moved={...u,x,y},risk=tactical.exposure(moved);
++    if(risk.lethal||risk.damage>u.hp*0.65)continue;
++    const score=value(moved)-risk.damage*0.035;
++    if(score>here+1.0&&(!best||score>best.score))best={x,y,score};
++  }
++  if(best)return {action:{type:'MOVE',unitId:u.id,x:best.x,y:best.y},score:36+Math.min(12,best.score)};
++  const cast: Action={type:'HERO_SKILL',unitId:u.id,skillId:'holy-banner'};
++  if(rejected.has(key(cast)))return null;
++  if(value(u)<1&&currentRisk.damage===0)return null;
++  return {action:cast,score:28+Math.min(12,value(u))};
++}
+diff --git a/src/core/ai.ts b/src/core/ai.ts
+index 45daf25..274f9b8 100644
+--- a/src/core/ai.ts
++++ b/src/core/ai.ts
+@@ -78,6 +78,7 @@ import { GOLD, canPay, payRes, resOf } from './resources.ts';
+ import type { ResourceCost } from './resources.ts';
+ import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
+ import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';
++import { focusedPurchasePlan, holyBannerCandidate, specialistMoveBias, specialistRecruitAllowed } from './ai-unit-strategy.ts';
+ import { terrainArmorOf } from './ability-registry.ts';
+ import type { TacticalMap } from './ai-tactics.ts';
+ import { seatsOf } from './types.ts';
+@@ -2884,7 +2885,8 @@ function unitCandidates(
+       // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
+       const destCity = cityAt(s, x, y);
+       if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
+-      const score = scoreMove(s, unit, x, y, all, traits);
++      const score = scoreMove(s, unit, x, y, all, traits)
++        + (aiLevelOf(s)==='advanced'?specialistMoveBias(s,unit,x,y,all.tactical):0);
+       if (!best || score > best.score) {
+         best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
+       }
+@@ -2899,7 +2901,8 @@ function unitCandidates(
+      * 守点分够高的时候，这里什么都不推，这一回合它就站着。开火是另一组候选，
+      * 所以"站着"不等于"不还手"。
+      */
+-    const stay = holdScore(s, unit, all, traits);
++    const stay = holdScore(s, unit, all, traits)
++      + (aiLevelOf(s)==='advanced'?specialistMoveBias(s,unit,unit.x,unit.y,all.tactical):0);
+     if (best && best.score >= stay) out.push(best);
+   }
+ 
+@@ -4273,6 +4276,7 @@ function recruitCandidate(
+     // 选卡模式下 AI 也只能造自己选到的兵；时代只剩上界，旧兵对人对 AI 都造得出来
+     if (!eraWindowOk(s, d, src.era)) return reject('时代未解锁');
+     if (!canUseType(s, me, d.id)) return reject('选卡未收录');
++    if (!order&&aiLevelOf(s)==='advanced'&&!specialistRecruitAllowed(s,d,plan.urgent)) return reject('专职单位缺少混编支援');
+     return slotsFor(d).length > 0;
+   });
+ 
+@@ -5373,6 +5377,10 @@ function aiNextActionCore(
+     if (spot) return { type: 'PLACE_EGG', x: spot.x, y: spot.y };
+   }
+ 
++  const focusPurchase = depth===0&&!commander&&!order&&aiLevelOf(view)==='advanced'
++    ? focusedPurchasePlan(view,budget) : null;
++  if(focusPurchase?.action&&!rejected.has(aiActionKey(focusPurchase.action)))return focusPurchase.action;
++
+   const candidates: Candidate[] = [];
+   // 三套地形图（旱路 / 涉水 / 水路）算一次，本回合所有单位共用
+   const wade = distanceFields(view, me, 'advance');
+@@ -5480,7 +5488,8 @@ function aiNextActionCore(
+ 
+   for (const u of unitsOf(view, me)) {
+     candidates.push(...unitCandidates(view, u, fields, traits, rejected));
+-    const skill = heroSkillCandidate(view, u);
++    const skill = aiLevelOf(view)==='advanced'&&u.type==='holy-knight-lord'
++      ? holyBannerCandidate(view,u,fields.tactical,rejected) : heroSkillCandidate(view, u);
+     if (skill) candidates.push({ ...skill, score:skill.score+300 });
+   }
+ 
+@@ -5566,6 +5575,15 @@ function aiNextActionCore(
+   for (let i=candidates.length-1;i>=0;i--) {
+     const action=candidates[i]!.action;
+     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
++    if(focusPurchase&&budget.recruitFocus?.unitType==='mage'&&budget.recruitFocus.purchasedThisTurn>=1&&action.type==='RECRUIT'&&action.unitType==='mage'){
++      candidates.splice(i,1);continue;
++    }
++    if(focusPurchase&&focusPurchase.reserveGold>0){
++      const cost=action.type==='RECRUIT'||action.type==='BUILD'
++        ? recruitPriceOf(view,me,utype(view,action.unitType)).gold
++        : action.type==='UPGRADE' ? (upgradeCostOf(view,cityById(view,action.cityId)!)??Infinity) : 0;
++      if(cost>0&&view.players[me].gold-cost<focusPurchase.reserveGold){candidates.splice(i,1);continue;}
++    }
+     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
+       const cost=recruitCost(view,me,utype(view,action.unitType));
+       if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
