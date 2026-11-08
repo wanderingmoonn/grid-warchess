@@ -12,6 +12,7 @@
  */
 
 import { CONFIG } from './config.ts';
+import { activeExpansions } from './expansions.ts';
 import { visibleMarks } from './marks.ts';
 import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
 import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
@@ -58,6 +59,23 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   const visibleSet = reveal ? allTiles(s) : visibleTilesOf(s, p);
   const visible = Array.from(visibleSet);
   const cloned = structuredClone(s);
+
+  /*
+   * 隐藏信息：有些"底牌"和视野无关，是设计上就不给对面看的。
+   *
+   * 修真包的丹药是第一个用户——对手能看见你身上的 buff（药力藏不住），
+   * 但数不出你兜里还有几颗（那是底牌）。这一步必须放在"按雾筛单位"之前：
+   * 无雾模式下也照裁，因为这不是"看不见"，是"本来就不该给"。
+   *
+   * 观战（reveal）不裁：复盘和双 AI 观战要看全。
+   */
+  if (!reveal) {
+    const exps = activeExpansions(s);
+    for (const u of cloned.units) {
+      if (u.owner === p) continue;
+      for (const e of exps) e.hooks.redactUnit?.({ state: s, unit: u, viewer: p });
+    }
+  }
 
   if (!s.fog || reveal) {
     return {

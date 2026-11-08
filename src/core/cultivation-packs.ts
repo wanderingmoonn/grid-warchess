@@ -27,6 +27,7 @@ import {
   SECT,
   SCRIPTURE_PAVILION,
   SILENT_PAVILION,
+  ALCHEMY_FURNACE,
   FORGE_1,
   FORGE_2,
   FORGE_3,
@@ -85,6 +86,8 @@ export const CULTIVATION_PACK: Expansion = {
     SCRIPTURE_PAVILION,
     // 静心阁：和藏经阁对称，贴着宗门建；修士在这忘掉法术、腾出法术位
     SILENT_PAVILION,
+    // 炼丹炉：修士站在旁边才能炼丹药（丹药随身带，见 pills.ts）
+    ALCHEMY_FURNACE,
     // 炼器：三档炉子 + 四件法器。法器是 campOnly，城市产线不供（见 units.ts）
     FORGE_1,
     FORGE_2,

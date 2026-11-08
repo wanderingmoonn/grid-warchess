@@ -712,7 +712,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const customLines: string[] = [];
     for (const e of activeExpansions(s)) {
       if (e.hooks.getUnitPanelLines) {
-        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit }));
+        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit, viewer: me }));
       }
     }
     const customBlock = customLines.length > 0 
