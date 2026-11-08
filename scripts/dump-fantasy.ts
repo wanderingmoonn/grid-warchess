@@ -9,6 +9,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { CONFIG, ERAS } from '../src/core/config.ts';
+import { packMap } from './lib/fantasy-observed.ts';
 import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { BURN_MAX_LAYERS, BURN_PER_LAYER } from '../src/core/rules.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
@@ -18,6 +19,16 @@ const OUT = new URL('../_build/fantasy-units.json', import.meta.url);
 const names = new Map<string, string>();
 for (const u of FANTASY.units ?? []) names.set(u.id, u.name);
 
+/**
+ * 子包归属（骑士团 / 荒兽 / 秘法 / 英雄 / 召唤）。
+ *
+ * 2026-11-04 五个奇想包并成一个扩展，于是 Table 里只剩一张「奇想」分表——
+ * 以前那四张分表（骑士团 / 荒兽 / 秘法 / 英雄）才是好用的地方：
+ * 想找"荒兽这一档有什么"时，不用在 72 行里翻。
+ * 合并只是把"要不要勾"合成一个开关，子包本身在面板里还分着，所以照样分页。
+ */
+const GROUP = packMap();
+
 // 合并成一个包之后，导出表里只有一节；id/name 仍写出来，表格按它分页
 const packs = [FANTASY].map((p) => ({
   id: p.id,
@@ -26,6 +37,7 @@ const packs = [FANTASY].map((p) => ({
   summary: p.summary,
   units: (p.units ?? []).map((u) => ({
     ...u,
+    group: GROUP.get(u.id) ?? '召唤',
     // 召唤表里存的是 id，表格里要的是名字
     summonText: u.summon
       ? u.summon.type

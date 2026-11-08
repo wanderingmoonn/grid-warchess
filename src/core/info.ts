@@ -174,7 +174,7 @@ export function describeUnit(
       ? '随机一种元素'
       : (def.summon.type ? '随从' : '随从');
     lines.push(
-      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。召唤物不占编制。`,
+      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。`,
     );
   }
   if (def.cycle && def.cycle.length > 0) {
@@ -245,7 +245,7 @@ export function describeUnit(
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
-    lines.push('前线产兵点：兵从营门四邻的空地出来。它按**自己的档位**出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
+    lines.push('前线产兵点：兵从营门四邻的空地出来。它按**自己的时代**出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
     if (spec.units?.length) {
       lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
     }

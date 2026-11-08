@@ -1234,7 +1234,7 @@ export function run() {
     const fromCity = v({ kind: 'city', city }, 'cultivation-artifact-wood');
     assert.equal(fromCity.ok, false, '城市产线不供法器');
     assert.ok(fromCity.ok ? '' : /产兵建筑/.test(fromCity.reason), '理由要说明只能由产兵建筑造');
-    // 白名单按档位递增：一代炉子没有寒水镜
+    // 白名单按时代递增：一代炉子没有寒水镜
     assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
   });
 

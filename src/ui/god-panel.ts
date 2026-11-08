@@ -74,12 +74,6 @@ export interface GodUi {
   /** AI 正在替对面走**这一个回合**（不是两边都托管，那个走的是 running） */
   passing: boolean;
   /**
-   * 手上那支兵的一句话（血量、攻击、还剩不剩行动力）。空串＝没选中。
-   *
-   * 沙盒里没有属性卡，而自己下场走子时这几项每一下都要看。
-   */
-  selected: string;
-  /**
    * 侧栏顶上那块「选中了什么」的完整属性卡（已经渲染好的 HTML，空串＝没选中）。
    *
    * 为什么是"渲染好的字符串"而不是让这里自己画：属性卡里那套东西
@@ -174,11 +168,12 @@ export function godBarHtml(ui: GodUi): string {
            <span class="god-label">轮次</span>
            <div class="chip-row">${turnLabel(ui, s)}<button class="btn btn-sm${ui.myTurn ? ' btn-primary' : ''}" data-act="god-end-turn"${
              ui.myTurn ? '' : ' disabled'
-           } title="这一回合走完了，交给对面">结束回合</button></div>
-           <div class="chip-row" style="margin-top:6px">
-             ${chip(ui.quick, 'god-quick', '快捷模式', 'data-quick="1" title="开着的时候按空格直接结束回合，不用去点上面那颗按钮"')}
-             <span class="hint">${ui.quick ? '空格 = 结束回合' : '打开后可用空格结束回合'}</span>
-           </div>
+           } title="这一回合走完了，交给对面">结束回合</button>${chip(
+             ui.quick,
+             'god-quick',
+             '快捷模式',
+             'data-quick="1" title="开着的时候按空格直接结束回合，不用去点那颗按钮"',
+           )}<span class="hint">${ui.quick ? '空格 = 结束回合' : '打开后可用空格结束回合'}</span></div>
          </div>`;
 
   // 地形笔刷常驻显示，不折进"笔刷"那一组里。
@@ -205,10 +200,6 @@ export function godBarHtml(ui: GodUi): string {
     <div class="god-group">
       <span class="god-label">摆给</span>
       <div class="chip-row">${sideChips}</div>
-    </div>
-    <div class="god-group">
-      <span class="god-label">操控</span>
-      <div class="chip-row"><span class="hint">两边都由你走 · 想歇手用下面的「交给 AI」</span></div>
     </div>
     ${turnRow}
     <div class="god-group">
@@ -239,7 +230,10 @@ export function godBarHtml(ui: GodUi): string {
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
       </div>
     </div>
-    <span class="god-status">${ui.result || ui.selected || brushHint(ui, s)}</span>
+    ${(() => {
+      const note = ui.result || brushHint(ui, s);
+      return note ? `<span class="god-status">${note}</span>` : '';
+    })()}
   `;
 }
 
@@ -268,7 +262,9 @@ function brushHint(ui: GodUi, s: GameState): string {
   if (ui.brush.kind === 'none' && ui.play !== null) {
     if (ui.passing) return '对面正在走这一步，走完就轮到你';
     if (!ui.myTurn) return `${s.players[s.current].name}（AI）的回合，它走完就轮到你`;
-    return `点${s.players[s.current].name}的兵选中：蓝格走过去、红格开火。走完按「结束回合」`;
+    // 轮到你了：这里不再写"点兵选中、蓝格红格、走完按结束回合"那一长串。
+    // 棋盘和右侧面板已经把这三件事显示得很清楚，工具栏再念一遍只是噪音。
+    return '';
   }
   switch (ui.brush.kind) {
     case 'unit': {

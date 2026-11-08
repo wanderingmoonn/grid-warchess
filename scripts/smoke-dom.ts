@@ -24,7 +24,7 @@ import { playerView } from '../src/core/fog.ts';
 import { addMark } from '../src/core/marks.ts';
 import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
-import { remainingUnits } from '../src/core/draft.ts';
+import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { buildMatchReport } from '../src/core/report.ts';
@@ -34,11 +34,26 @@ import {
   effectiveStats,
   reachableTiles,
   refreshMemory,
+  unitsOf,
   unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
+import {
+  tutorialAllowsMove,
+  tutorialBlocking,
+  tutorialGoto,
+  tutorialExit,
+  tutorialOn,
+  tutorialSnapshot,
+  tutorialStart,
+  tutorialStep,
+  tutorialTick,
+} from '../src/ui/tutorial.ts';
+import { createTutorialMatch } from '../src/core/tutorial.ts';
+import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
+import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -1788,6 +1803,48 @@ check('选了人机对战才出现三档 AI：初级 / 中级 / 高级，默认�
   assert.equal(doc.querySelector('[data-ailevel]'), null, '切回热座应该收起来');
 });
 
+check('测试 AI 和三个档位排在同一行，并且写明自带全视野', () => {
+  /*
+   * 2026-11-06 上线：自博弈练出来的策略网络进了「AI」这一栏。
+   *
+   * 三条要在界面上钉住：
+   *   1. 它在同一行（玩家是在"给对面挑个对手"的时候看见它的）；
+   *   2. 它和三个档位互斥——选了它就等于换内核，不该同时亮着「高级 AI」；
+   *   3. 它的说明必须写清"自带全视野"。这不是文案洁癖：手写 AI 只吃
+   *      迷雾过滤后的视图，而它直接读盘面，开雾也看得见你——不写出来
+   *      就是拿一个不公平的对手当公平的用。
+   */
+  click('[data-ai="1"]');
+  const net = () => doc.querySelector<HTMLElement>('[data-aibrain="net"]');
+  assert.ok(net(), '人机对战时应该能选到测试 AI');
+  assert.ok((net()!.textContent ?? '').includes('全视野'), '按钮上要直接写着全视野');
+  assert.equal(net()!.closest('.ai-level-row'), doc.querySelector('.ai-level-row'), '它和三个档位是同一行');
+
+  click('[data-aibrain="net"]');
+  assert.ok(net()!.classList.contains('active'), '点它应该亮起来');
+  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了测试 AI 就不该同时亮着档位');
+
+  // 说明文案要写明全视野，否则玩家只会以为它是"第四档"
+  const section = net()!.closest('section')!;
+  assert.ok((section.textContent ?? '').includes('自带全视野'), '这一栏要有一句"自带全视野"的说明');
+
+  click('[data-ailevel="advanced"]');
+  assert.equal(net()!.classList.contains('active'), false, '点档位应该切回手写引擎');
+  assert.equal(
+    doc.querySelector<HTMLElement>('[data-ailevel].active')?.dataset.ailevel,
+    'advanced',
+    '切回来应该落在高级 AI',
+  );
+
+  // 指挥官模式的 AI 只执行玩家排的队列，网络内核不认队列——这一档不提供
+  click('[data-role="commander"]');
+  assert.equal(net(), null, '指挥官模式下不该出现测试 AI');
+  click('[data-role="full"]');
+
+  click('[data-ai="0"]');
+  assert.equal(net(), null, '切回热座应该收起来');
+});
+
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
   // 开局面板这时候已经开着（首屏在没有存档时会自动弹出），不再重复打开
   const activeSize = () =>
@@ -1954,6 +2011,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: false,
     version: '0.0.0-test',
     onNew: () => { started = true; },
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -1986,6 +2044,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: true,
     version: '0.0.0-test',
     onNew: () => {},
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -2002,6 +2061,7 @@ check('开始页面：没有存档时「继续」是灰的，点「开始对局�
     hasSave: true,
     version: '0.0.0-test',
     onNew: () => {},
+    onTutorial: () => {},
     onContinue: () => {},
     onOnline: () => {},
     onManual: () => {},
@@ -2209,7 +2269,6 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
     play: null,
     myTurn: true,
     passing: false,
-    selected: '',
     detail: '',
     query: '',
     quick: false,
@@ -2511,9 +2570,9 @@ check('军营面板列出兵种，并写清自己是哪一档', () => {
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
   // 2026-11-08：营按自己的档位出兵，不再"补给来自某座城"。
   // 这里是城升到了二级、营还是一级，所以面板必须写一级，而不是跟着城写铁器。
-  assert.ok(html.includes('档位'), '应该写清这座营自己的档位');
-  assert.ok(html.includes('青铜'), '一级营就是青铜档位——不随后方城市变化');
-  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的档位');
+  assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
+  assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
+  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
@@ -2561,7 +2620,7 @@ check('敌军军营不给你产兵，并提示打掉它', () => {
   });
 
   assert.equal(host.querySelectorAll('.recruit-btn').length, 0, '敌方军营不该给产兵按钮');
-  assert.ok(host.innerHTML.includes('打掉'), '应该提示这是敌方补给点');
+  assert.ok(host.innerHTML.includes('产兵建筑'), '应该提示这是敌方的产兵点');
 });
 
 console.log('\n渡船面板');
@@ -4078,7 +4137,6 @@ check('沙盒货架也能按扩展包切一刀', () => {
       play: null,
       myTurn: false,
       passing: false,
-      selected: '',
       detail: '',
       query: '',
       quick: false,
@@ -5716,6 +5774,118 @@ await checkAsync('选人：按蛇形顺序点满，遮罩收起、棋盘可用',
 });
 
 
+check('选卡模式下，城市的「升级后可解锁」只列这一局真能造的兵', () => {
+  /*
+   * 2026-11-06：这句提示原来只判 `def.era > city.era`（`ui/panel.ts` 的 `locked`），
+   * 于是在选卡模式下把**池子里没选到的卡**整批列了出来——玩家看到
+   * "升级后可解锁：圣剑勇者、九头蛇……"，真升完级一个也造不了。
+   * 那句话比不写更糟：它把"没选到"说成了"再等等就有"。
+   *
+   * 现在判据在 `core/draft.ts` 的 `upgradeUnlocks`，和产兵表共用 `canUseType`。
+   * 两边都要钉住：
+   *   ① 没选到的高时代卡**不出现**；
+   *   ② 经济 / 建造单位、生产性建筑、桥**照旧出现**——它们本来就不用选，
+   *      而"升级解锁伐木工 / 民夫 / 石桥"是真事（用户特别点了这一条）。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch(
+      { ...DEFAULT_CONFIG, size: 12, startEra: 1, draftMode: true, expansionIds: [] },
+      777,
+      {},
+    );
+    const started = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(started.ok, started.ok ? '' : `进禁用失败：${started.reason}`);
+    st = started.state;
+
+    // 交完禁用
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        const id = remainingUnits(st)[0]!;
+        st.current = side;
+        const r = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (r.ok) st = r.state;
+      }
+    }
+    assert.equal(st.draft!.phase, 'pick', '交完禁用应该进入选人');
+
+    // 一路选满（AI 那边不需要好用，这里只要走到"选卡结束"）
+    for (let guard = 0; guard < 40; guard += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const id = remainingUnits(st)[0];
+      if (!id) break;
+      st.current = side;
+      const r = applyAction(st, { type: 'DRAFT_PICK', unitId: id, at: Date.now() }, side);
+      if (!r.ok) break;
+      st = r.state;
+    }
+    assert.equal(st.draft!.phase, 'done', '选满之后这一局应该已经开始');
+
+    const city = st.cities.find((c) => c.owner === 'A')!;
+    assert.ok(city, 'A 方应该有一座城');
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: city.id,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+    const html = host.innerHTML;
+    const m = /升级后可解锁：([^<]*)</.exec(html);
+    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = m![1]!
+      .split('、')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    assert.ok(names.length > 0, '青铜开局升到二级肯定有东西解锁，不该是空的');
+
+    // ① 名单里的每一个，都必须是"这一局真能用"的
+    for (const name of names) {
+      const def = Object.values(st.unitTypes).find((d) => d.name === name);
+      assert.ok(def, `提示里出现了不认识的兵种名：${name}`);
+      assert.ok(
+        draftAlwaysAllowed(def!) || st.draft!.picks.A.includes(def!.id),
+        `「${name}」既没选到、也不是本来就能用的，不该出现在升级预览里`,
+      );
+    }
+
+    // ② 池子里确实存在"没选到的高时代卡"——不然这条用例测不出东西
+    const leakedPool = Object.values(st.unitTypes).filter(
+      (d) =>
+        d.era > city.era &&
+        !d.summonedOnly &&
+        !draftAlwaysAllowed(d) &&
+        !st.draft!.picks.A.includes(d.id),
+    );
+    assert.ok(leakedPool.length > 0, '这局该存在"没选到的高时代兵"，否则测不出漏卡');
+    const leaked = leakedPool.filter((d) => names.includes(d.name));
+    assert.equal(
+      leaked.length,
+      0,
+      `没选到的卡混进了升级预览：${leaked.map((d) => d.name).join('、')}`,
+    );
+
+    // ③ 反面：本来就不用选的那几类必须还在（用户点名的经济 / 建造单位）
+    assert.ok(names.includes('伐木工'), `二级的经济单位「伐木工」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('民夫'), `二级的建造单位「民夫」要还在，实际：${names.join('、')}`);
+    assert.ok(names.includes('石桥'), `三级的桥「石桥」要还在（桥也不进池子），实际：${names.join('、')}`);
+
+    // ④ 函数本身和面板同源：面板里列的就是 upgradeUnlocks 的结果
+    assert.deepEqual(
+      names,
+      upgradeUnlocks(st, 'A', city.era).map((d) => d.name),
+      '面板该直接用 upgradeUnlocks 的结果，别再自己写一份判据',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
 check('选卡池排序：同一代里，原版在扩展前面，扩展之间按声明顺序', () => {
   // 这条补的是"次要排序依据"：只按时代排的话，同一代里原版兵和扩展兵会混着排，
   // 扫池子时看不出"这批是哪个包带来的"。
@@ -6273,6 +6443,144 @@ await checkAsync('复盘：把一份对局数据拖进页面就能逐帧回看�
   assert.equal(saved.seed, seed, '本机存档的种子不该被换掉');
 });
 
+await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西全部收起来', async () => {
+  /*
+   * 复盘把 `state` 换成了别人的那一帧，但界面原来还以为这是"我的局"：
+   * 侧栏顶着「轮到你行动」、城里有「生产」按钮、选中单位有强制移动/拆除/结束回合，
+   * 顶栏还摆着「暂停 AI」「交给 AI」「导出对局」。点下去都被 dispatch 的闸门挡住，
+   * 于是玩家看到的是一屏"能点但没反应"的按钮——这就是"棋局和 UI 打架"。
+   *
+   * 这一条从**界面成品**倒着验：复盘里不该有任何一颗可用的改局按钮。
+   */
+  const seed = 707070;
+  const base = createMatch({ ...DEFAULT_CONFIG, size: 8 }, seed);
+  base.fog = false;
+  const w = bootWith(base);
+  const d = w.document;
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    assert.ok(r.ok, '造数据时这一步就没走通');
+    s2 = r.state;
+  }
+  // 终局帧：报告里有 winner，最容易把"结算卡"带出来
+  const report = buildMatchReport({ ...s2, winner: 'A' }, new Date('2026-11-06T00:00:00Z'), null, acts);
+
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  const side = (): HTMLElement => d.querySelector<HTMLElement>('#side')!;
+  /*
+   * 打开一座城。
+   *
+   * 挑"城里没站兵"的那一格：兵压在城上时点下去选中的是兵（连点轮换那套只在
+   * 正常对局里跑），而复盘里最想看的恰恰是城——耐久多少、还剩几回合能被拆。
+   */
+  const cityTile = [...d.querySelectorAll<HTMLElement>('.tile.t-city.own-A')].find(
+    (t) => !t.querySelector('.unit'),
+  );
+  assert.ok(cityTile, 'A 方城里应该有一格是空的');
+  cityTile!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(80);
+  assert.ok(
+    (side().textContent ?? '').includes('城市'),
+    `复盘里点城要看得到城市卡（城不是单位，得单独认一下）：${(side().textContent ?? '').slice(0, 60)}`,
+  );
+  const afterCity = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(!afterCity.includes('生产'), '复盘里不该出现生产区——那是别人那局的城');
+
+  /** 侧栏里"能改局"的按钮：一个都不许是可用状态 */
+  const liveActs = ['end-turn', 'undo', 'surrender', 'force-move', 'force-attack', 'disband', 'upgrade', 'commander-run', 'plan-commit'];
+  const enabled = [...side().querySelectorAll<HTMLButtonElement>('button')].filter(
+    (b) => !b.hidden && !b.disabled && (liveActs.includes(b.dataset.act ?? '') || b.classList.contains('recruit-btn')),
+  );
+  assert.deepEqual(
+    enabled.map((b) => `${b.dataset.act ?? 'recruit'}:${(b.textContent ?? '').trim().slice(0, 8)}`),
+    [],
+    '复盘里不该有一颗可用的改局按钮',
+  );
+
+  // 抬头必须说"这是复盘"，不能假装轮到你
+  const sideText = (side().textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(sideText.includes('复盘'), `侧栏要说清这是复盘：${sideText.slice(0, 60)}`);
+  assert.ok(!sideText.includes('轮到你行动'), '复盘里没有"你"的回合');
+  assert.ok(!sideText.includes('（你）'), '席位栏不该把某一方标成"你"——复盘里两边都是别人');
+
+  // 顶栏：会改局的那五个必须收起来，纯看的留下
+  const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
+  for (const act of ['toggle-ai', 'export', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+    assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
+  }
+  for (const act of ['manual', 'feedback']) {
+    assert.ok(topBtn(act), `顶栏该留着 ${act}`);
+    assert.notEqual(topBtn(act)!.hidden, true, `${act} 不该被藏起来`);
+  }
+
+  // 结算卡：别人那局打完了，不该问"要不要捐出这局的数据"
+  assert.equal(d.querySelector('.report-card'), null, '复盘里不该冒出结算卡——上传的是别人那局');
+
+  // 退出之后一切复原
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(100);
+  assert.equal(topBtn('toggle-ai')?.hidden, false, '退出后顶栏要复原');
+  assert.equal(topBtn('export')?.hidden, false, '退出后导出对局要回来');
+  assert.equal(d.querySelector('.tile.t-city.own-A') !== null, true, '退出后还是本机那局');
+});
+
+await checkAsync('复盘：AI 正在走的时候把文件拖进来，回放不会自己往前跑', async () => {
+  /*
+   * `enterReplay` 换的是全局 `state`，而 AI 走子那两条循环（runAiTurn / runCommanderBatch）
+   * 只认自己的 `token`。不按停的话，它们会接着在**回放**上下子：
+   * 拖到自己想看的那一帧，过一会儿棋又变了，回合数还和进度条对不上。
+   */
+  const seed = 606060;
+  const base = createMatch(
+    { ...DEFAULT_CONFIG, size: 8, aiOpponent: true, aiAlly: true },
+    seed,
+  );
+  base.fog = false;
+  const w = bootWith(base); // 开机就会自己开打（kickAiIfNeeded）
+  const d = w.document;
+  await wait(400); // 让它走到一半
+
+  let s2 = createMatch(base.config, seed);
+  s2.fog = false;
+  const acts = [{ type: 'END_TURN' as const }, { type: 'END_TURN' as const }];
+  for (const a of acts) {
+    const r = applyAction(s2, a);
+    if (r.ok) s2 = r.state;
+  }
+  const report = buildMatchReport(s2, new Date('2026-11-06T00:00:00Z'), null, acts);
+  const file = new w.File([JSON.stringify(report)], 'w.json', { type: 'application/json' });
+  const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+  w.dispatchEvent(ev);
+  const until = Date.now() + 4000;
+  while (Date.now() < until && d.querySelector<HTMLElement>('#replay')?.hidden !== false) await wait(20);
+  assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
+
+  // 跳到最后一步，然后盯一会儿：回放是死的，画面不该变
+  d.querySelector<HTMLElement>('[data-act="rp-last"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const turnBefore = d.querySelector('[data-ref="turn"]')?.textContent ?? '';
+  const slider = d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!;
+  const posBefore = slider.value;
+  await wait(500);
+  assert.equal(d.querySelector('[data-ref="turn"]')?.textContent ?? '', turnBefore, '回放里的回合数不该自己往前走');
+  assert.equal(d.querySelector<HTMLInputElement>('[data-act="rp-seek"]')!.value, posBefore, '进度条位置不该自己动');
+
+  d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  assert.ok(d.querySelector<HTMLElement>('#replay')!.hidden, '退出复盘');
+});
+
 await checkAsync('复盘：拖进来的不是对局数据时，要说清是什么问题', async () => {
   const st = createMatch({ ...DEFAULT_CONFIG, size: 8 }, 919191);
   const w = bootWith(st);
@@ -6300,6 +6608,420 @@ await checkAsync('复盘：拖进来的不是对局数据时，要说清是什�
     (d.body.textContent ?? '').includes('动作序列'),
     '缺动作序列时要说清缺的是这个，而不是笼统说"文件不对"',
   );
+});
+
+check('首页：第一次来把教程摆主位，老玩家仍是开始对局，教程入口一直在', () => {
+  /*
+   * 新手第一眼该看见「先学三分钟」，而不是「开始对局」——后者会把他直接扔进
+   * 两页开局面板。但教程入口不能对老玩家消失：那是"想进去复习"的唯一入口，
+   * 也是作者自己进去看的入口。
+   */
+  const base = {
+    hasSave: false,
+    version: '0.0.0-test',
+    onNew: () => {},
+    onTutorial: () => {},
+    onContinue: () => {},
+    onOnline: () => {},
+    onManual: () => {},
+    onEditor: () => {},
+    onImport: () => {},
+    onReplay: () => {},
+  };
+
+  // 第一次来
+  const h1 = doc.createElement('div');
+  doc.body.appendChild(h1);
+  const c1 = openTitle(h1, { ...base, firstVisit: true });
+  const acts1 = Array.from(h1.querySelectorAll<HTMLElement>('.title-actions .title-btn'));
+  assert.equal(acts1[0]?.dataset.title, 'tutorial', '第一次来：教程排第一');
+  assert.ok(acts1[0]?.classList.contains('primary'), '第一次来：教程是主按钮');
+  assert.equal(doc.activeElement, acts1[0], '焦点要落在主按钮上');
+  assert.equal(acts1[1]?.dataset.title, 'new', '「开始对局」退第二');
+  c1();
+
+  // 老玩家
+  const h2 = doc.createElement('div');
+  doc.body.appendChild(h2);
+  const c2 = openTitle(h2, { ...base, hasSave: true });
+  const acts2 = Array.from(h2.querySelectorAll<HTMLElement>('.title-actions .title-btn'));
+  assert.equal(acts2[0]?.dataset.title, 'new', '老玩家：开始对局在主位');
+  assert.ok(acts2[0]?.classList.contains('primary'));
+  assert.ok(
+    acts2.some((b) => b.dataset.title === 'tutorial'),
+    '老玩家也要留教程入口（复习、作者自己进去看都靠它）',
+  );
+  c2();
+});
+
+check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡片跟着出现', () => {
+  /*
+   * 这条测的是**接线**：入口在首屏、点了会换局、换出来的确实是教学局。
+   * 上面那条只测卡片自己，测不到"main.ts 有没有把教程接上"——
+   * 而接线断了正是这种功能最容易出的问题（卡片能写，入口没人点得到）。
+   */
+  const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+    url: 'http://localhost/',
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+  }).window;
+  if (!w.structuredClone) {
+    (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
+  }
+  w.eval(code);
+  const d = w.document;
+
+  const entry = d.querySelector<HTMLElement>('[data-title="tutorial"]');
+  assert.ok(entry, '首页要有「新手教程」入口');
+  entry!.click();
+
+  assert.ok(d.querySelector('.tut-card'), '点了教程之后教练卡片要出现');
+  assert.ok((d.body.textContent ?? '').includes('赢的条件'), '第一句要讲清胜利条件是破城');
+  assert.equal(d.querySelectorAll('#board .tile').length, 144, '教学局应该是 12×12（144 格）');
+  assert.ok(!d.querySelector('.title-screen'), '进教程要撤掉首页');
+
+  // 敌城要"一个整块的红框"，不是四个格子各描一圈（那样交界处有线、中间有个十字）
+  const ringed = Array.from(d.querySelectorAll<HTMLElement>('#board .city-block.tut-city-ring'));
+  assert.equal(ringed.length, 1, '只有敌城挂红框');
+  assert.ok(ringed[0]!.className.includes('owner-B'), '挂红框的必须是对面那座城');
+  assert.equal(
+    d.querySelectorAll('#board .tile.tut-ring').length,
+    0,
+    '第一步不该给任何格子描边（城市靠整块红框指出来）',
+  );
+});
+
+check('新手教程：第三步只放行「走完能贴着对手」的格子', () => {
+  /*
+   * 教程第三步是"走过去"，第四步是"打他"。如果允许朝任意方向走，玩家走反了就
+   * 永远够不着——教程不倒退，只能卡在那一步。所以这一步只放行贴着农民的落点。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const state = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => tutorialExit() }, host);
+  tutorialSnapshot(state);
+  tutorialTick(state, null);
+  doc.querySelector<HTMLElement>('[data-tut="next"]')!.click(); // 讲解步 → 选中
+  tutorialTick(state, 'tut-mine');                              // 选中 → 走过去
+  assert.equal(tutorialStep(), 'move');
+
+  assert.equal(tutorialAllowsMove(state, 4, 6), true, '走到农民旁边要放行');
+  assert.equal(tutorialAllowsMove(state, 2, 8), false, '往回走要拦住（走完够不着农民）');
+  tutorialExit();
+});
+
+check('新手教程：看地形 / 升级城市 / 造兵 都按「真的做到了」判定', () => {
+  /*
+   * 这三步的共同点是"动作发生在面板里"，教程看不见点击，只能看结果：
+   *   · 看地形 → selectedTile 变了；
+   *   · 升级   → 自家城的时代 +1；
+   *   · 造兵   → 我方单位数 +1。
+   * 用 tutorialGoto 直接落到那一步，免得布景代码盖住断言。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let s = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => tutorialExit() }, host);
+  tutorialSnapshot(s);
+  const tick = (sel: string | null = null, tile: { x: number; y: number } | null = null): string => {
+    tutorialTick(s, sel, tile);
+    return tutorialStep();
+  };
+
+  // 看地形：点一格空地才过
+  tutorialGoto('terrain');
+  tutorialSnapshot(s);
+  assert.equal(tick(null, null), 'terrain', '没点格子不该过');
+  assert.equal(tick(null, { x: 9, y: 9 }), 'attack', '点了一格就该过');
+
+  // 升级城市：时代真的变了才过
+  tutorialGoto('upgrade');
+  tutorialSnapshot(s);
+  const home = s.cities.find((c) => c.owner === 'A')!;
+  const era0 = home.era;
+  assert.equal(tick(), 'upgrade', '还没升级不该过');
+  const up = applyAction(s, { type: 'UPGRADE', cityId: home.id });
+  assert.ok(up.ok, '教程局的钱应该够升一次级');
+  s = up.state;
+  assert.equal(s.cities.find((c) => c.id === home.id)!.era, era0 + 1);
+  assert.equal(tick(), 'recruit', '升完级就进造兵');
+
+  // 造兵：我方单位数 +1 才过
+  tutorialSnapshot(s);
+  const n0 = unitsOf(s, 'A').length;
+  assert.equal(tick(), 'recruit', '还没造兵不该过');
+  const rec = applyAction(s, { type: 'RECRUIT', cityId: home.id, unitType: 'militia' });
+  assert.ok(rec.ok, '教程局应该造得出民兵');
+  s = rec.state;
+  assert.equal(unitsOf(s, 'A').length, n0 + 1);
+  assert.equal(tick(), 'siege', '造完兵就进攻城');
+
+  tutorialExit();
+});
+
+check('新手教程：卡片一步步推进，做到才换下一步，跳过就收起来', () => {
+  /*
+   * 教程的全部价值在"它知道你做到了没有"。这条守三件事：
+   *   1. 讲解步（没有判定条件）可以手动「继续」；
+   *   2. 操作步必须**真的做到**才前进——这里用 selectedId 模拟"选中了兵"；
+   *   3. 「跳过教程」能把卡片收干净，并把控制权交回 main。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let exited = 0;
+  const state = createTutorialMatch();
+  tutorialStart({ apply: () => {}, exit: () => { exited += 1; tutorialExit(); } }, host);
+  tutorialSnapshot(state);
+  tutorialTick(state, null);
+
+  const card = doc.querySelector<HTMLElement>('.tut-card');
+  assert.ok(card, '卡片要挂上');
+  assert.ok((card.textContent ?? '').includes('赢的条件'), '第一步先讲胜利条件（破城，不是杀光）');
+  assert.equal(tutorialStep(), 'goal');
+  // 讲解页棋盘不许动：没点「继续」就能走棋的话，兵先走偏，后面几步全对不上
+  assert.equal(tutorialBlocking(), true, '讲解页要拦住所有动作');
+
+  // 讲解步：点「继续」进下一步
+  card.querySelector<HTMLElement>('[data-tut="next"]')!.click();
+  assert.equal(tutorialStep(), 'select', '点「继续」要进到「选中你的兵」');
+  assert.equal(tutorialBlocking(), false, '操作页要放行动作');
+  assert.ok(!doc.querySelector<HTMLElement>('[data-tut="next"]')!.hidden === false, '操作步的「继续」要收起来');
+
+  // 没选中之前不动
+  tutorialTick(state, null);
+  assert.equal(tutorialStep(), 'select', '没选中兵不该前进');
+
+  // 选中之后自动进到「走过去」
+  tutorialTick(state, 'tut-mine');
+  assert.equal(tutorialStep(), 'move', '选中之后应该自动进到「走过去」');
+
+  // 跳过：卡片撤掉、控制权交回
+  doc.querySelector<HTMLElement>('[data-tut="skip"]')!.click();
+  assert.equal(exited, 1, '跳过要交回控制权');
+  assert.equal(tutorialOn(), false);
+  assert.ok(!doc.querySelector('.tut-card'), '卡片要撤干净');
+});
+
+check('新手教程：照卡片走能赢——移动/攻击/结束回合/攻城/入驻接管', () => {
+  /*
+   * 教程局必须**真的能打通**，而且只用教程里教过的动作。
+   * 这条同时是场景的回归测试：城市耐久、坐标、废墟接管这几样任何一项改坏，
+   * 新手就会卡在最后一步——那是比红用例更糟的事故（红了没人看得见）。
+   */
+  let s = createTutorialMatch();
+  const act = (a: Parameters<typeof applyAction>[1], tag: string): void => {
+    const r = applyAction(s, a);
+    assert.ok(r.ok, `${tag} 应该合法：${r.ok ? '' : (r as { reason: string }).reason}`);
+    s = r.state;
+  };
+  const mine = (): { id: string; x: number; y: number } => unitsOf(s, 'A')[0] as never;
+  const foeCity = (): { id: string; hp: number; ruined?: boolean; x: number; y: number } =>
+    s.cities.find((c) => c.owner === 'B') as never;
+
+  act({ type: 'MOVE', unitId: mine().id, x: 4, y: 6 }, '走到诱饵旁边');
+  act({ type: 'ATTACK', unitId: mine().id, targetId: unitsOf(s, 'B')[0]!.id }, '攻击诱饵');
+  act({ type: 'END_TURN' }, '结束回合');
+  act({ type: 'END_TURN' }, '对面结束回合（教程代按）');
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 5 }, '走到城下');
+
+  for (let i = 0; i < 4 && !s.winner; i++) {
+    if (!foeCity().ruined) act({ type: 'SIEGE', unitId: mine().id, cityId: foeCity().id }, `第 ${i + 1} 次攻城`);
+    if (s.winner) break;
+    act({ type: 'END_TURN' }, '结束回合');
+    act({ type: 'END_TURN' }, '对面结束回合');
+  }
+  assert.equal(foeCity().ruined, true, '两次攻城之后城应该塌成废墟');
+
+  // 废墟要派兵入驻才算接管
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 4 }, '走进废墟接管');
+  assert.equal(s.winner, 'A', '入驻之后这局就该结束了');
+});
+
+check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来', () => {
+  /*
+   * 用教程局走到底（它本身就是一局"破城获胜"的完整局），然后出卡。
+   * 三个数各自有明确的来源，不能靠文案：
+   *   破城回合 → city.capturedTurn；MVP → 单位击杀累加；关键三步 → 局面事实。
+   */
+  let s = createTutorialMatch();
+  const act = (a: Parameters<typeof applyAction>[1]): void => {
+    const r = applyAction(s, a);
+    assert.ok(r.ok, `动作应该合法：${(r as { reason?: string }).reason ?? ''}`);
+    s = r.state;
+  };
+  const mine = (): { id: string } => unitsOf(s, 'A')[0] as never;
+  const foeCity = (): { id: string; ruined?: boolean } => s.cities.find((c) => c.owner === 'B') as never;
+
+  act({ type: 'MOVE', unitId: mine().id, x: 4, y: 6 });
+  act({ type: 'ATTACK', unitId: mine().id, targetId: unitsOf(s, 'B')[0]!.id });
+  act({ type: 'END_TURN' });
+  act({ type: 'END_TURN' });
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 5 });
+  for (let i = 0; i < 4 && !s.winner; i++) {
+    if (!foeCity().ruined) act({ type: 'SIEGE', unitId: mine().id, cityId: foeCity().id });
+    if (s.winner) break;
+    act({ type: 'END_TURN' });
+    act({ type: 'END_TURN' });
+  }
+  act({ type: 'MOVE', unitId: mine().id, x: 5, y: 4 });
+  assert.equal(s.winner, 'A');
+
+  const card = buildBattleCard(s, 'A', 'test');
+  assert.equal(card.iWon, true);
+  assert.equal(card.winner, 'A');
+  assert.ok(card.winTurn !== null && card.winTurn! > 0, `破城回合应该是个正数，实际 ${card.winTurn}`);
+  assert.equal(card.steps.length, 3, '关键三步就是三条');
+  assert.ok(card.steps[1]!.includes('拿下第一座城'), '第二条讲破城');
+  assert.equal(card.sides.length, 2, '两人局两张席位');
+  assert.ok(battleCardText(card).includes('战报'), '复制出去的文案要有抬头');
+});
+
+check('战报卡：卡片能打开、能关掉，画不出图时退回纯文字', () => {
+  /*
+   * jsdom 没有 2D 画布，所以这条同时验"降级路径"：没有图也要有文字，
+   * 不能给玩家一个空壳弹窗。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const s = createTutorialMatch();
+  const card = buildBattleCard(s, 'A', 'test');
+  const close = openBattleCard(card, host);
+  const mask = host.querySelector('.bc-mask');
+  assert.ok(mask, '卡片要盖上来');
+  assert.ok((mask!.textContent ?? '').includes('战报卡'), '要有抬头');
+  assert.ok(host.querySelector('.bc-fallback'), '画不出图时要退回纯文字');
+  assert.ok((host.querySelector('.bc-fallback')!.textContent ?? '').includes('战报'), '降级文本要真有内容');
+  host.querySelector<HTMLElement>('[data-bc="close"]')!.click();
+  assert.ok(!host.querySelector('.bc-mask'), '点关闭要撤掉');
+  close();
+});
+
+check('战报卡：入口只看「打没打完」，不看结算卡那套条件', () => {
+  /*
+   * 这条挡的是一个很贵的错：战报卡原来挂在结算卡（`report`）上，而结算卡
+   * 在上帝模式里是**不给**的——上帝模式又恰好是自家玩得最多的地方。
+   * 于是"越常用的模式越看不到产出"。两个区块的可见条件本来就不该是同一个。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 4321);
+  const paint = (extra: Record<string, unknown> = {}) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      ...extra,
+    });
+
+  try {
+    // 还在打：没有入口
+    paint();
+    assert.equal(host.querySelector('[data-act="battle-card"]'), null, '没打完就不该有入口');
+    // 打完了，但结算卡因为"沙盒"被挡掉（report 不传）——入口仍然要在
+    paint({ battleCard: true });
+    assert.ok(host.querySelector('[data-act="battle-card"]'), '打完了就要有入口，哪怕结算卡不给');
+    assert.equal(host.querySelector('.report-card'), null, '这一条同时确认结算卡确实没渲染');
+  } finally {
+    host.remove();
+  }
+});
+
+check('战报卡：卡面每一笔都画在卡片里，没顶出边', () => {
+  /*
+   * 为什么不用截图比：jsdom 没有 2D 画布，而卡面排版的错（右边那串数字叠在
+   * 兵种名尾巴上、玩家名太长把页脚顶出卡片）恰恰只在**真的有字宽**时才出现。
+   *
+   * 办法是给一个有量宽能力的假 ctx：CJK 按 1em 算、半角按 0.55em 算。
+   * 不追求像素级正确（那要真字体），只求"每一笔的右边界有没有越线"能判出来。
+   * 这比人工肉眼看一遍更稳——将来改字号、加字段，这条会自动报警。
+   */
+  const draws: { text: string; x: number; y: number; w: number; size: number }[] = [];
+  let fontPx = 16;
+  const ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 1, font: '16px sans-serif', textBaseline: 'top',
+    beginPath() {}, moveTo() {}, arcTo() {}, closePath() {}, fill() {}, stroke() {},
+    fillRect() {},
+    fillText(text: string, x: number, y: number) {
+      draws.push({ text, x, y, w: measure(text, fontPx), size: fontPx });
+    },
+    measureText(text: string) { return { width: measure(text, fontPx) }; },
+  };
+  const measure = (text: string, px: number): number => {
+    let n = 0;
+    for (const ch of text) {
+      const c = ch.codePointAt(0) ?? 0;
+      n += c >= 0x2e80 ? px : px * 0.55;
+    }
+    return n;
+  };
+  // font 字符串里的 px 要跟着每次赋值走：画卡的人写的是 '800 64px ...'
+  const fakeCtx = new Proxy(ctx, {
+    set(t, k, v) {
+      if (k === 'font' && typeof v === 'string') {
+        const m = /(\d+(?:\.\d+)?)px/.exec(v);
+        if (m) fontPx = Number(m[1]);
+      }
+      return Reflect.set(t, k, v);
+    },
+  });
+  const canvas = { width: 0, height: 0, getContext: () => fakeCtx };
+  const fakeDoc = { createElement: () => canvas } as unknown as Document;
+
+  const st = createTutorialMatch();
+  const W0 = drawBattleCard(buildBattleCard(st, 'A', '9.9.9'), fakeDoc);
+  assert.ok(W0, '有 2D 上下文就要能画出画布');
+  assert.ok(draws.length >= 8, `卡面该有十来个字块，实际画了 ${draws.length}`);
+
+  const canvasW = canvas.width;
+  const canvasH = canvas.height;
+  const scan = (label: string): void => {
+    const over = draws.filter(
+      (x) => x.x < 20 || x.x + x.w > canvasW - 20 || x.y < 20 || x.y + x.size > canvasH - 16,
+    );
+    assert.equal(
+      over.length,
+      0,
+      `${label}：这些字块越界了：${over
+        .map((x) => `"${x.text}"@${Math.round(x.x)},${Math.round(x.y)}`)
+        .join(' / ')}`,
+    );
+    assert.ok(draws.some((x) => x.text.includes('战报')), `${label}：抬头要有「战报」两个字`);
+  };
+  scan('平局那张');
+
+  /*
+   * 再画一张赢局：这一档才是最常见的样子（大号破城回合 + 右侧击杀数）。
+   * 回合数故意给三位数，破城数字是卡面上最宽的一笔，位数一变最容易顶出去。
+   */
+  draws.length = 0;
+  drawBattleCard(
+    {
+      winner: 'A',
+      me: 'A',
+      iWon: true,
+      board: '32×32',
+      turns: 140,
+      winTurn: 137,
+      mvp: { type: 'knight', name: '星界龙骑士', kills: 12, alive: 3 },
+      steps: [
+        '开局：32×32，第 1 代起手，7 个扩展',
+        '第 137 回合你拿下第一座城：北境的铁堡（旧名：灰石哨站）',
+        '第 140 回合定局：9 兵对 3 兵，血量 214 对 66',
+      ],
+      sides: [
+        { side: 'A', name: '我', units: 9, cities: 4, hp: 214, era: 5 },
+        { side: 'B', name: '电脑·高级', units: 3, cities: 1, hp: 66, era: 4 },
+      ],
+      seed: 2091374821,
+      build: '0.3.47',
+    } as Parameters<typeof drawBattleCard>[0],
+    fakeDoc,
+  );
+  scan('赢局那张');
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

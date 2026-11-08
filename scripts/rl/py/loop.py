@@ -123,6 +123,11 @@ def main() -> int:
              "想把自博弈提到 0.5 以上又保留 20%% 打 AI 的锚，就得单独钉它。",
     )
     ap.add_argument(
+        "--eval-sizes", default="",
+        help="温度计在哪些尺寸上各测一遍，逗号分隔（默认空＝就用 eval 的默认尺寸）。"
+             "混尺寸训练时必须给全，否则温度计只看得见容易的那一半。",
+    )
+    ap.add_argument(
         "--intent", default="auto",
         help="给策略的意图：auto / random / rush / harass / boom。"
              "random 是训练'指令跟随'的口径（每一方按种子抽一个），auto 是 v1 的对照口径",
@@ -203,29 +208,48 @@ def main() -> int:
         played = roll.get("perGame", [])
         ai_games = [g for g in played if g.get("mode") != "self"]
         self_games = [g for g in played if g.get("mode") == "self"]
-        sample_win = 100.0 * sum(1 for g in ai_games if g.get("winner") == "A") / max(1, len(ai_games))
+        # 按**策略坐的那一边**算，不能写死 A：2026-11-06 起座位按种子交替（rollout 的
+        # policySeatOf），写死 A 的话这个数会退化成"先手胜率"，跟棋力脱钩。
+        # 老数据没有 policy_seat 字段，退回 A（那时候确实只有 A 座是策略）。
+        sample_win = 100.0 * sum(
+            1
+            for g in ai_games
+            if g.get("winner") and g.get("winner") == g.get("policySeat", "A")
+        ) / max(1, len(ai_games))
         # 自博弈那一半报"分不分得出胜负"——分不出就是没信号，和胜率无关
         self_dec = 100.0 * sum(1 for g in self_games if g.get("winner")) / max(1, len(self_games))
+
+        # 评估要**分尺寸各测一遍**：混尺寸训练里 10×10 好、12×12 烂是常态，
+        # 只测一个尺寸等于自欺，测完取平均等于用容易的那半掩盖难的那半。
+        sizes = [int(x) for x in args.eval_sizes.split(",") if x.strip()]
+        win_cur_by: dict[str, float] = {}
+        win_tgt_by: dict[str, float] = {}
+
+        def eval_one(weight_file: str, hcap: float, sz: int | None) -> float:
+            cmd = [
+                "node", "--experimental-strip-types", "scripts/rl/eval.ts",
+                "--mode", "policy", "--weights", weight_file, "--games", str(args.eval_games),
+                "--seed0", str(args.eval_seed0), "--ai-level", args.ai_level,
+                "--ai-handicap", str(hcap),
+            ]
+            if sz is not None:
+                cmd += ["--size", str(sz)]
+            return score_of(run(cmd))
 
         win_cur = float("nan")
         win_tgt = float("nan")
         if args.eval_games > 0:
-            ev = run([
-                "node", "--experimental-strip-types", "scripts/rl/eval.ts",
-                "--mode", "policy", "--weights", nxt, "--games", str(args.eval_games),
-                "--seed0", str(args.eval_seed0), "--ai-level", args.ai_level,
-                "--ai-handicap", level,
-            ])
-            win_cur = score_of(ev)
+            for sz in sizes or [None]:
+                sc = eval_one(nxt, handicap, sz)
+                win_cur_by[str(sz or "默认")] = sc
+            # 温度计读**最差的那个尺寸**：课程是为了让策略在每个尺寸上都站得住，
+            # 拿平均分收紧会让 12×12 的窟窿被 10×10 的好成绩补掉。
+            win_cur = min(win_cur_by.values())
             if handicap <= 0 or it % max(1, args.target_every) == 0:
                 # 目标档永远是"不削弱"：课程只是通往它的路，不能拿削弱档的成绩当进步
-                ev2 = run([
-                    "node", "--experimental-strip-types", "scripts/rl/eval.ts",
-                    "--mode", "policy", "--weights", nxt, "--games", str(args.eval_games),
-                    "--seed0", str(args.eval_seed0), "--ai-level", args.ai_level,
-                    "--ai-handicap", str(target),
-                ])
-                win_tgt = score_of(ev2)
+                for sz in sizes or [None]:
+                    win_tgt_by[str(sz or "默认")] = eval_one(nxt, float(target), sz)
+                win_tgt = min(win_tgt_by.values())
                 last_target = win_tgt
             else:
                 win_tgt = float("nan")
@@ -238,10 +262,15 @@ def main() -> int:
             # 这一轮实际抽到了哪几种对手：配比是概率，实际局数才是事实
             "modes": roll.get("modeCounts", {}),
             "steps": roll["steps"],
+            # 撞上限被整局丢掉的比例：12×12 上这是两成上下，不能让它悄悄吃掉样本
+            "timedOut": sum(1 for g in played if g.get("timedOut")),
+            "playCount": len(played),
             "sample_win": sample_win,
             "self_decisive": self_dec if self_games else float("nan"),
             "win_cur": win_cur,
+            "win_cur_by_size": win_cur_by,
             "win_target": win_tgt,
+            "win_target_by_size": win_tgt_by,
             "mean_logp": mean_logp,
             "kl": stats.get("approx_kl", float("nan")),
             "clip_frac": stats.get("clip_frac", float("nan")),
@@ -261,6 +290,14 @@ def main() -> int:
             f"{win_cur:>6.1f}% {tgt_txt} {mean_logp:>8.3f} {row['kl']:>9.2e} {row['entropy']:>7.3f} "
             f"{row['secs']:>5.0f}s"
         )
+        # 分尺寸的那一行：结论一律分尺寸报，绝不用平均糊过去
+        if len(win_cur_by) > 1:
+            parts = [f"{k}×{k} {v:.1f}%" for k, v in win_cur_by.items()]
+            tparts = [f"{k}×{k} {v:.1f}%" for k, v in win_tgt_by.items()]
+            print(f"    ↳ 当前档分尺寸：{' · '.join(parts)}" + (f" ｜ 不削弱：{' · '.join(tparts)}" if tparts else ""))
+        if row["playCount"]:
+            print(f"    ↳ 撞回合上限整局丢掉 {row['timedOut']}/{row['playCount']}"
+                  f"（{100.0 * row['timedOut'] / row['playCount']:.0f}%）")
 
         # 温度计：赢了收紧、输了放松。中间 40~60 是死区，不动——
         # 那个区间里"这一轮赢没赢"基本是噪声，动它等于跟着噪声走。

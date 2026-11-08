@@ -182,6 +182,20 @@ export function buildReplay(report: ReplayReport): ReplayBuild {
   if (config.draftMode) {
     warns.push('这是一局选卡对局：当时的禁用/选用名单没存在报告里，兵种池可能对不上。');
   }
+  /*
+   * 迷雾要照报告还原，不能只靠 `createMatch` 的默认值。
+   *
+   * 报告 v3 起记了 `fog`，而 `createMatch` 的默认是**开**（`fogDefault: true`）。
+   * 于是"关雾打的那一局"被复盘成"开雾"：隐身 / 潜行那几条判定只认 `s.fog`，
+   * 一旦这局里有这类单位，同一串动作会在复盘里走出不一样的结果——
+   * 表现是莫名其妙地"第 N 步走不下去"，而真正的原因是开局参数被换掉了。
+   * 训练口径的对局全是 `fog = false`（见 scripts/rl/play.ts），正好踩在这上面。
+   *
+   * 老报告没有这个字段：保持 `createMatch` 的默认（＝开），和当年一致。
+   */
+  if (typeof report.fog === 'boolean' && initial.fog !== report.fog) {
+    initial = { ...initial, fog: report.fog };
+  }
   if ((report.actionsDropped ?? 0) > 0) {
     warns.push(`原始日志超过上限，丢了 ${report.actionsDropped} 步——复盘会停在能走到的地方。`);
   }

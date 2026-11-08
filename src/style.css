@@ -2331,12 +2331,23 @@ a.btn {
 .chip-row {
   display: flex;
   flex-wrap: wrap;
+  /* 竖着对齐：这一行里既有 12px 的说明文字，也有 22~30px 高的按钮，
+     不居中的话文字会贴着顶部，看起来像"按钮掉下来了"或"字浮上去了" */
+  align-items: center;
   gap: 7px;
 }
 
 /* AI 难度那一行：跟上面的对手模式分个层，别让人以为它是第四种模式 */
 .ai-level-row {
   margin-top: 8px;
+}
+
+/*
+ * 「测试 AI · 全视野」：它和三个档位排在同一行，但不是第四档——是换了一个内核
+ * （策略网络）。虚线边就是为这个：档位是"同一个脑子算多细"，它换的是脑子。
+ */
+.chip.is-brain {
+  border-style: dashed;
 }
 
 .era-group {
@@ -5818,3 +5829,200 @@ a.btn {
     max-width: 14ch;
   }
 }
+
+/* ── 新手教程：教练层 ──
+ *
+ * 卡片挂在 body 上、固定在底部居中：它的位置唯一要满足的条件是"不挡棋盘中间"，
+ * 因为所有要点的东西都在棋盘和右侧面板上。层级取 75——高于棋盘上的小浮件和
+ * toast（60），低于模态框（100），和首页那套层级约定一致。
+ */
+.tut-card {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 75;
+  width: min(560px, calc(100vw - 20px));
+  box-sizing: border-box;
+  padding: 14px 16px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(43, 40, 35, 0.18);
+  color: var(--text);
+}
+
+.tut-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.tut-step {
+  font-size: 12px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.tut-skip {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.tut-skip:hover { color: var(--text); }
+
+.tut-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.tut-body {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+  /* 正文里用 \n 分段：新手读两行就够，写成一坨没人看 */
+  white-space: pre-line;
+}
+
+.tut-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* 高亮圈：画在格子内侧，不动布局；闪烁是为了"这一格可以被点"这件事能被余光看见 */
+.tut-ring {
+  outline: 3px solid #d8892b;
+  outline-offset: -3px;
+  animation: tut-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes tut-pulse {
+  0%, 100% { outline-color: rgba(216, 137, 43, 0.95); }
+  50% { outline-color: rgba(216, 137, 43, 0.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tut-ring { animation: none; }
+}
+
+/* ── 新手教程：整座敌城的红框 ──
+ *
+ * 挂在城市自己的 `.city-block` 上（那块本来就是一座城的整框），而不是给四个格子
+ * 各描一圈——逐格描边的边框会落在格子交界处，中央还会拉出一个十字，看着像把城
+ * 切成了四块。这里只换颜色、加粗、加一点外发光。
+ */
+.city-block.tut-city-ring {
+  border-color: #d9483f;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16);
+  animation: tut-city-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tut-city-pulse {
+  0%, 100% { border-color: #d9483f; box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16); }
+  50% { border-color: rgba(217, 72, 63, 0.55); box-shadow: 0 0 0 6px rgba(217, 72, 63, 0.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .city-block.tut-city-ring { animation: none; }
+}
+
+/* 自家城的教程框用琥珀色：和"敌城红框"分开，也和红方自身的红色边不撞色 */
+.city-block.tut-city-ring-own {
+  border-color: #d8892b;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18);
+  animation: tut-city-pulse-own 1.2s ease-in-out infinite;
+}
+
+@keyframes tut-city-pulse-own {
+  0%, 100% { border-color: #d8892b; box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18); }
+  50% { border-color: rgba(216, 137, 43, 0.55); box-shadow: 0 0 0 6px rgba(216, 137, 43, 0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .city-block.tut-city-ring-own { animation: none; }
+}
+
+/* ── 战报卡 ──
+ * 层级 96：盖住棋盘和教程卡片（75），低于通用模态框（100）——它是"看结果"，
+ * 任何时候都不该挡住真正需要交互的对话框。
+ */
+.bc-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 96;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(30, 28, 24, 0.45);
+}
+
+.bc-box {
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 14px 16px 12px;
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(30, 28, 24, 0.28);
+}
+
+.bc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.bc-close {
+  border: 0;
+  background: none;
+  padding: 2px 6px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.bc-close:hover { color: var(--text); }
+
+.bc-img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* 画不出图的环境（jsdom / 老浏览器）退回纯文字，也要能读 */
+.bc-fallback {
+  margin: 0;
+  padding: 12px;
+  background: var(--panel-2);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-line;
+}
+
+.bc-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* 提示放在按钮**上面**：按钮是这张卡的最后一件东西，贴着底边才像"操作区" */
+.bc-tip { margin: 10px 0 0; }

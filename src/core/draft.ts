@@ -205,6 +205,29 @@ export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
 }
 
 /**
+ * 城市升到 `era` 这一级之后**新解锁**的东西（面板那句「升级后可解锁」用它）。
+ *
+ * 和产兵表不是同一个集合，别再合并：
+ *   · 产兵表只列"城市产得出来的兵"，建筑不在里面（建筑要建造单位去盖）；
+ *   · 这里连建筑一起列——"升到火器时代能造石桥"对玩家是有用的一句话。
+ *
+ * 但"这一局能不能用"必须和产兵表同一个口径，所以都走 `canUseType`。
+ * 原来这里只判 `def.era > city.era`，于是在选卡模式下把**池子里没选到的卡**
+ * 全列了出来：玩家看到"升级后可解锁：圣剑勇者、九头蛇……"，升完级发现一个都造不了。
+ * 那几句话比不写更糟——它把"没选到"说成了"再等等就有"。
+ *
+ * 两条例外照旧：
+ *   · 经济单位 / 建造单位 / 生产性建筑 / 桥**本来就不用选**（`draftAlwaysAllowed`），
+ *     升级解锁它们是真事，必须留着（伐木工、民夫、石桥都在这一档）；
+ *   · 召唤物不算解锁——它们只能被召唤者带出来，谁也"解锁"不了。
+ */
+export function upgradeUnlocks(state: GameState, side: PlayerId, era: number): UnitTypeDef[] {
+  return Object.values(state.unitTypes).filter(
+    (def) => !def.summonedOnly && def.era > era && canUseType(state, side, def.id),
+  );
+}
+
+/**
  * 能进池子的兵种：战斗单位 + 非生产性建筑。
  *
  * 召唤物（只认召唤者）排除：它没有独立造价，选了也没法造。

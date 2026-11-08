@@ -232,6 +232,8 @@ test('Invisible enemy locations cannot change the first decision',()=>{
 });
 
 test('Difficulty survives setup and advanced remains separate from doctrines',()=>{
+  // 高级档保持"稳的那一版"：2026-11-06 试过放开，800 局 43.3%（z=-3.82）显著更差，
+  // 已回滚。见 docs/AI-2026-11-04-plan.md 第十四节。
   for (const level of ['basic','advanced','tactic'] as const) {
     const s=createMatch({...DEFAULT_CONFIG,aiLevel:level},92);
     assert.equal(aiLevelOf(s),level);

@@ -1,19 +1,20 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.37",
+  "version": "0.3.48",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:static": "vite build --outDir _publish --emptyOutDir",
     "preview": "vite preview",
-    "test": "npm run test:rules && npm run test:replay && npm run test:ai-optimization && npm run test:ui && npm run test:serve",
+    "test": "npm run test:rules && npm run test:replay && npm run test:net && npm run test:ai-optimization && npm run test:ui && npm run test:serve",
     "test:ai-optimization": "node --experimental-strip-types scripts/test-ai-optimization.ts && node --experimental-strip-types scripts/test-ai-evaluation.ts",
     "evaluate:ai": "node --experimental-strip-types scripts/evaluate-ai.ts",
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",
     "test:cultivation": "node --experimental-strip-types scripts/tests/packs/cultivation.test.ts",
     "test:replay": "node --experimental-strip-types scripts/test-replay-file.ts",
+    "test:net": "node --experimental-strip-types scripts/test-net-weights.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
     "test:serve": "node --experimental-strip-types scripts/smoke-serve.ts",
     "rl:test": "node --experimental-strip-types scripts/rl/test-m1.ts",
@@ -71,7 +72,11 @@
     "calibrate:k": "node --experimental-strip-types scripts/calibrate-k.ts",
     "fantasy:table": "node --experimental-strip-types scripts/fantasy-table.ts",
     "duel:batch": "node --experimental-strip-types scripts/ai-duel-batch.ts",
-    "era:table": "node --experimental-strip-types scripts/era-table.ts"
+    "duel:changed": "node --experimental-strip-types scripts/ai-duel-changed.ts",
+    "probe:doctrine": "node --experimental-strip-types scripts/probe-doctrine.ts",
+    "era:table": "node --experimental-strip-types scripts/era-table.ts",
+    "fantasy:overlap": "node --experimental-strip-types scripts/fantasy-overlap.ts",
+    "duel:smoke": "node --experimental-strip-types scripts/ai-duel-batch.ts --games 20 --parallel 20"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

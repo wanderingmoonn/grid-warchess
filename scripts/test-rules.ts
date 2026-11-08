@@ -2822,7 +2822,7 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   s.tiles[idx(s, 5, 4)].terrain = 'plain';
   const mage = place2(s, 'A', 'mage', 5, 5);
 
-  // 超级重骑 8 甲：法师物理段 7−8=0，魔法段 18−0=18
+  // 超级重骑 9 甲：法师物理段 7−9=0，魔法段 18−0=18
   const heavy = place2(s, 'B', 'cataphract', 5, 4);
   assert.equal(computeDamage(s, mage, heavy), 18);
 
@@ -2830,12 +2830,14 @@ test('魔法攻击不吃护甲，只被魔法抗性挡', () => {
   const paladin = place2(s, 'B', 'paladin', 5, 4);
   assert.equal(computeDamage(s, mage, paladin), 14);
 
-  // 对照：同样攻击力全走物理的弓手，被 8 甲吃掉一大半
+  // 对照：同样攻击力全走物理的弓手，被重甲吃掉一大半。
+  // 甲数**从兵种定义里读**，不写字面量——这条测试要证明的是"物理吃甲、
+  // 魔法不吃甲"，和重骑具体几甲无关，写死一个 8 就变成"改数值要改测试"。
   // 重骑要**重新摆回去**：上一步 place2 已经把它换成了圣骑士，而圣骑士带着
-  // 守护光环（半径 2）——留着它的话，这个"8 甲目标"会平白多 2 甲。
+  // 守护光环（半径 2）——留着它的话，这个重甲目标会平白多 2 甲。
   const heavyAgain = place2(s, 'B', 'cataphract', 5, 4);
   const elf = place2(s, 'A', 'elf-archer', 6, 5);
-  assert.equal(computeDamage(s, elf, heavyAgain), 22 - 8);
+  assert.equal(computeDamage(s, elf, heavyAgain), 22 - s.unitTypes['cataphract']!.armor);
 });
 
 test('属性弱点：巨魔怕火，同一个火属性攻击打它翻倍', () => {
@@ -3302,7 +3304,7 @@ test('召唤：死灵法师每两回合一个骷髅，到上限就停', () => {
   }
   const skels = st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton');
   assert.equal(skels.length, 4, '上限就是 4 个');
-  // 召唤物不占编制：编制里一个都数不到
+  // 召唤物不占ai编制：编制里一个都数不到
   assert.equal(
     st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton').length,
     skels.length,
@@ -3632,7 +3634,7 @@ test('分裂：史莱姆死了变成两只小史莱姆', () => {
   for (const k of kids) assert.equal(k.owner, 'A');
 });
 
-test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
+test('修缮：符文守卫每回合给相邻的城补 10 点耐久', () => {
   const s = fresh({ expansionIds: FANTASY });
   const city = citiesOf(s, 'A')[0]!;
   city.hp = 10;
@@ -3643,7 +3645,86 @@ test('修缮：符文守卫每回合给相邻的城补 6 点耐久', () => {
     assert.ok(r.ok);
     st = r.state;
   }
-  assert.equal(cityById(st, city.id)!.hp, 16);
+  assert.equal(cityById(st, city.id)!.hp, 20);
+});
+
+test('石化：半血之下护甲翻倍、魔抗 +4、移速减半，回到半血之上立刻恢复', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const troll = place2(s, 'A', 'troll', 5, 5);
+  const def = s.unitTypes['troll']!;
+
+  const armorFull = effectiveStats(s, troll).armor;
+  const resFull = magicResOf(s, troll);
+  const moveFull = movePower(s, troll);
+  const half = Math.ceil(def.maxHp / 2);
+
+  // 正好半血：不触发。判据是"严格低于一半"——两条规矩（低于 50% 触发、
+  // 回到 50% 及以上解除）在 50% 这一点上重叠，取"低于"才不自相矛盾。
+  troll.hp = half;
+  assert.equal(effectiveStats(s, troll).armor, armorFull, '正好半血不翻倍');
+  assert.equal(magicResOf(s, troll), resFull, '正好半血不加魔抗');
+  assert.equal(movePower(s, troll), moveFull, '正好半血不减半');
+
+  // 掉到半血之下：三件事一起成立
+  troll.hp = half - 1;
+  assert.equal(effectiveStats(s, troll).armor, armorFull * 2, '护甲翻倍');
+  assert.equal(magicResOf(s, troll), resFull + 4, '魔抗 +4');
+  assert.equal(movePower(s, troll), Math.max(1, Math.floor(moveFull / 2)), '移动减半');
+
+  // 回到半血之上：三项全部回到原值——不是"再减一次"，也不是残留
+  troll.hp = def.maxHp;
+  assert.equal(effectiveStats(s, troll).armor, armorFull, '回血后护甲复原');
+  assert.equal(magicResOf(s, troll), resFull, '回血后魔抗复原');
+  assert.equal(movePower(s, troll), moveFull, '回血后移动复原');
+
+  // 反复进出低血：不累积（石化是读属性时现算的，没有可叠的状态）
+  for (let i = 0; i < 5; i += 1) {
+    troll.hp = half - 1;
+    troll.hp = def.maxHp;
+  }
+  troll.hp = half - 1;
+  assert.equal(effectiveStats(s, troll).armor, armorFull * 2, '反复进出之后仍然只翻一倍');
+  assert.equal(magicResOf(s, troll), resFull + 4, '魔抗也仍然只 +4');
+});
+
+test('石化：和减速、诅咒、护甲加成同时存在时不叠乘、不残留', () => {
+  const s = fresh({ expansionIds: FANTASY });
+  s.tiles[idx(s, 5, 5)].terrain = 'plain';
+  const troll = place2(s, 'A', 'troll', 5, 5);
+  const def = s.unitTypes['troll']!;
+  const half = Math.ceil(def.maxHp / 2);
+
+  // 减速：先看它自己的效果，再叠石化。石化是最后一刀"减半"，
+  // 顺序错了会出现"减半之后又被减速压到 0"或者"减速被算了两遍"。
+  troll.status = { slow: 1 };
+  const moveSlow = movePower(s, troll);
+  const armorSlowFull = effectiveStats(s, troll).armor;
+  troll.hp = half - 1;
+  const armorSlowLow = effectiveStats(s, troll).armor;
+  assert.equal(movePower(s, troll) >= 1, true, '减速 + 石化之后仍然走得动一格');
+  assert.equal(
+    armorSlowLow,
+    armorSlowFull + def.armor,
+    '翻倍只加一份基础甲，不是把减速后的甲再翻一遍',
+  );
+
+  // 诅咒（护甲 −2/层）：石化先翻倍，诅咒再扣——扣的量不该被翻倍
+  troll.hp = def.maxHp;
+  troll.status = { curse: 1 };
+  const armorCurseFull = effectiveStats(s, troll).armor;
+  troll.hp = half - 1;
+  const armorCurseLow = effectiveStats(s, troll).armor;
+  assert.equal(armorCurseLow, armorCurseFull + def.armor, '诅咒扣的量不跟着翻倍');
+
+  // 伤害结算走的是同一条取值口：低血时同一发物理伤害必须更少
+  const foe = place2(s, 'B', 'swordsman', 6, 5);
+  troll.status = {};
+  troll.hp = def.maxHp;
+  const dmgFull = computeDamage(s, foe, troll);
+  troll.hp = half - 1;
+  const dmgLow = computeDamage(s, foe, troll);
+  assert.ok(dmgLow < dmgFull, `低血时该更硬：满血吃 ${dmgFull}，半血之下只吃 ${dmgLow}`);
 });
 
 test('筑墙：土元素会在自己旁边立一道墙', () => {
@@ -3753,7 +3834,7 @@ test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各
   assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
-test('召唤物不占编制，也不能从产线招募', () => {
+test('召唤物不占ai编制，也不能从产线招募', () => {
   const s = fresh({ expansionIds: FANTASY });
   const before = armySize(s, 'A');
   for (let i = 0; i < 4; i += 1) stackOn(s, 'A', 'skeleton', 8 + i, 8);
@@ -7241,6 +7322,9 @@ test('战术：切换是渐变的，不会一回合翻脸', () => {
 test('档位：只有中级档才打三套战术，高级档保持稳的那一版', () => {
   // 同一局面下比两档的"生效倾向"：中级档原样输出 aiMood，
   // 高级档权重均分、drive 清零、不弃城——但主攻方向要留着（那是走位，不是战术）。
+  //
+  // 2026-11-06 试过让高级档也吃战术层，800 局 A/B 是 43.3%（z=-3.82），显著更差，
+  // 已回滚（见 docs/AI-2026-11-04-plan.md 第十四节）。这条用例就是那个决定的上锁。
   const s = fresh({ startEra: 2, aiOpponent: true });
   const mine = citiesOf(s, 'A');
   assert.ok(mine.length >= 2, '这条用例需要两座城：一座可弃、一座留着');
@@ -10170,23 +10254,20 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
     assert.ok(material > prev, `${id} 的建材产出 ${material} 应该高于上一代 ${prev}`);
     prev = material;
   }
-  // 时代 5 单支建材兵得顶得上小半座建材基地，否则"换人"这件事没有意义。
-  // 门槛 2026-11-04 从 24 降到 19：那天把平原/丘陵/森林上的"粮材 vs 金币"
-  // 比例对调了（六成折成粮材 → 四成），所以最高一代的建材产出跟着掉三分之一，
-  // 换来的是同一个人现在能留下六成金币（升级城市只吃金币）。
-  assert.ok(prev >= 19, `时代 5 的建材兵该有 19 材以上，实际 ${prev}`);
+  // 时代 5 单支建材兵得顶得上半座建材基地，否则"换人"这件事没有意义。
+  // 门槛 2026-11-04 曾降到 19（那天把平原/丘陵/森林上的比例对调成"六成留金"，
+  // 建材产出掉三分之一）；**2026-11-06 回撤那次对调，门槛跟着回到 24**。
+  assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
 });
 
-test('城郭：平原/丘陵/森林上的经济单位，粮材与金币的分配是对调过的', () => {
+test('城郭：经济单位的粮材与金币分配不分地形，全按 6:4', () => {
   /*
-   * 2026-11-04 的调整：这三种地形上，经济单位的产出从"六成折成粮/材、四成留金"
-   * 对调成"六成留金、四成折成粮/材"。
+   * 2026-11-04 有一版是"按地形对调"：平原/丘陵/森林上六成留金、四成折粮材。
+   * **2026-11-06 回撤**——那三种地形是建材主产地，对调让建材掉三分之一，
+   * 金币却没变宽（短缺从金币挪到了建材）。
    *
-   * 为什么要钉死：这一条**看不出来**——玩家只看到"这块地给我 16 金 10 材"，
-   * 不会去反推背后的比例；而一旦谁把它改回去，唯一的症状是"升级总是差一口气"，
-   * 那种 bug 没人能复现。所以直接把三种地形的数写进用例。
-   *
-   * 城郊（city）故意不在这条里：那次只动了三种"种地地形"。
+   * 这条用例留着，是为了钉住"不再分地形"这件事：玩家看不出比例，只会觉得
+   * "这块地怎么突然少产建材了"。想再试对调，请连这条用例一起改，别偷偷改常数。
    */
   const s = fresh({ expansionIds: ['city-works'] });
   const at = (id: string, terrain: string): Record<string, number> => {
@@ -10195,25 +10276,25 @@ test('城郭：平原/丘陵/森林上的经济单位，粮材与金币的分配
     return unitYield(s, u) as Record<string, number>;
   };
 
-  // 采石工：丘陵 26 金 → 16 金 + 10 材（对调前是 10 金 + 16 材）
+  // 采石工：丘陵 26 金 → 10 金 + 16 材（六成折成建材）
   const hill = at('quarrier', 'hill');
-  assert.equal(hill.gold, 16, '丘陵上该留下六成金币');
-  assert.equal(hill.material, 10, '丘陵上该只剩四成建材');
+  assert.equal(hill.gold, 10, '丘陵上该只留四成金币');
+  assert.equal(hill.material, 16, '丘陵上该折六成建材');
 
-  // 平原：6 金 → 4 金 + 2 粮
+  // 平原：6 金 → 2 金 + 4 粮
   const plain = at('quarrier', 'plain');
-  assert.equal(plain.gold, 4, '平原上该留下六成金币');
-  assert.equal(plain.food, 2, '平原上该只剩四成粮');
+  assert.equal(plain.gold, 2, '平原上该只留四成金币');
+  assert.equal(plain.food, 4, '平原上该折六成粮');
 
-  // 森林：14 金 → 8 金 + 6 材
+  // 森林：14 金 → 6 金 + 8 材
   const forest = at('quarrier', 'forest');
-  assert.equal(forest.gold, 8, '森林上该留下六成金币');
-  assert.equal(forest.material, 6, '森林上该只剩四成建材');
+  assert.equal(forest.gold, 6, '森林上该只留四成金币');
+  assert.equal(forest.material, 8, '森林上该折六成建材');
 
-  // 城郊不参与这次对调：还是四成留金、六成折粮
+  // 城郊本来就是同一个口径：四成留金、六成折粮
   const city = at('quarrier', 'city');
-  assert.equal(city.gold, 2, '城郊不该被这次对调波及');
-  assert.equal(city.food, 4, '城郊还是六成折成粮');
+  assert.equal(city.gold, 2, '城郊四成留金');
+  assert.equal(city.food, 4, '城郊六成折成粮');
 });
 
 test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {

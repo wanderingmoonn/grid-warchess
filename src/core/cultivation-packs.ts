@@ -67,7 +67,6 @@ export const CULTIVATION_PACK: Expansion = {
     BLOOD_CULTIVATOR,
     SPIRIT_CULTIVATOR,
     SERVANT, 
-    // 执事是灵矿唯一的建造者：漏登记它就等于灵矿永远造不出来。
     DEACON,
     // 管事是三代炼器炉的建造者（仆役 → 执事 → 管事）
     STEWARD,

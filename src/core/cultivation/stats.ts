@@ -136,6 +136,11 @@ export function attTimesModifier(u: Unit): number {
 }
 
 /** 生命修正 */
+export function HpModifier(u: Unit): number {
+  const rank = getRank(u);
+  const realmsModifier = (rank - 1) / 2;
+  return Math.max(0, Math.floor(realmsModifier));
+}
 
 /** 护甲修正：境界，衰老 −1/岁 */
 export function armorModifier(u: Unit): number {

@@ -452,6 +452,16 @@ export function createMatch(
           : config.aiLevel === 'tactic'
             ? 'tactic'
             : 'advanced',
+      /*
+       * 内核：`net` = 自博弈练出来的策略网络（见 rl/brain.ts）。
+       *
+       * 和上面那些开关一样必须逐个抄进 state.config：读档、复盘、上报、
+       * 以及 AI 走子那一刻选哪个内核，读的都是这里。
+       *
+       * 只在**两席局**里认：那个网络是在 2 人、10×10/12×12 上练的，
+       * 三家四家的目标选择与席位顺序它一次都没见过——真让它上不叫测试。
+       */
+      aiBrain: twoSeats && config.aiBrain === 'net' ? 'net' : 'script',
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。
@@ -476,6 +486,16 @@ export function createMatch(
       // 2026-10-28 就漏了这一个：玩家明明勾了"数据收集"，上传上来却没有摘要，
       // 因为 resetRecorder() 读到的是 undefined。
       recordDetail: config.recordDetail === true,
+      /*
+       * 脚本强制的战术（窄决策采集用）。产品界面不出这两个字段。
+       *
+       * 写在这里是因为这个对象是**逐个白名单抄的**——2026-11-06 漏过一次：
+       * 加完字段没抄进来，`createMatch` 之后 `state.config.aiDoctrine` 是 undefined，
+       * 三组"不同战术"跑出了完全相同的对局，白跑一批。
+       * 没值时不写字段，读档老存档不会多出两个空键。
+       */
+      ...(config.aiDoctrine ? { aiDoctrine: config.aiDoctrine } : {}),
+      ...(config.aiDoctrineSeat ? { aiDoctrineSeat: config.aiDoctrineSeat } : {}),
     },
     unitTypes,
     turn: 1,

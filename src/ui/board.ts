@@ -50,6 +50,16 @@ export interface BoardUi {
   skillThreatTiles?: number[];
   /** 当前选中的城市 id */
   selectedCityId: string | null;
+  /**
+   * 新手教程要圈的格子（格索引）与要框的城市 id。
+   *
+   * 走渲染参数而不是"渲染完再往 DOM 上贴 class"：棋盘是每帧重建的，贴上去的 class
+   * 下一帧就没了；而且第一次渲染在 rAF 里，贴的那一下可能贴在还没建出来的节点上。
+   */
+  tutorialTiles?: number[];
+  tutorialCityId?: string | null;
+  /** 教程要指出的自家城（琥珀色框）：升级/造兵那两步靠它告诉玩家点哪 */
+  tutorialOwnCityId?: string | null;
   /** 处于野外建造模式时，可以放置建筑的空格 */
   placeable: number[];
   /** 威胁范围：移动之后能打到哪些格 */
@@ -479,6 +489,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const aimSet = new Set(ui.aimTiles);
   const skillThreatSet = new Set(ui.skillThreatTiles);
   const placeSet = new Set(ui.placeable);
+  const tutSet = new Set(ui.tutorialTiles ?? []);
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
   const heatSet = ui.heat ?? null;
@@ -543,6 +554,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
+      if (tutSet.has(i)) cls += ' tut-ring';
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
       if (layer.cls[i] !== cls) {
@@ -676,6 +688,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     if (ruined) cls.push('ruined');
     if (memo) cls.push('stale');
     if (ui.siegeTargets.includes(city.id)) cls.push('siege-target');
+    if (ui.tutorialCityId && city.id === ui.tutorialCityId) cls.push('tut-city-ring');
+    if (ui.tutorialOwnCityId && city.id === ui.tutorialOwnCityId) cls.push('tut-city-ring-own');
     if (ui.selectedCityId === city.id) cls.push('selected');
 
     const ratio = city.hp / city.maxHp;

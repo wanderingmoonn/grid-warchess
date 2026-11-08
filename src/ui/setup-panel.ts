@@ -104,6 +104,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiOpponent: initial.aiOpponent,
       aiAlly: initial.aiAlly,
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
+      // 内核跟着上一局走：连着跟测试 AI 打几局是常态（换阵营再来一把）。
+      // 缺省是手写引擎——老存档里没有这个字段，读出来就该是它。
+      aiBrain: initial.aiBrain === 'net' ? 'net' : 'script',
       // 人数跟着上一局走：连着开三人局是常态
       playerCount: initial.playerCount ?? 2,
       // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）
@@ -459,13 +462,42 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       // 只在对局里有 AI 的时候才给难度选项：双人热座选它没有意义
       const aiOn = config.aiOpponent || config.aiAlly;
+      /*
+       * 第四个按钮：测试 AI（策略网络）。
+       *
+       * 它在这一行里，但**不是第四档难度**——难度是手写引擎的算法档位，
+       * 而它是换了一个内核（见 rl/brain.ts），没有档位可言。所以用
+       * `data-aibrain` 单独标一个属性，而不是 `data-ailevel="net"`：
+       * 后者会让 `aiLevel` 这个字段凭空多出一个不存在的值，存档、上报、
+       * 复盘全都要跟着改，而它本来是个三选一。
+       *
+       * 点它的时候 `aiLevel` 仍留在原处——权重加载失败要退回手写 AI 时，
+       * "退回到哪一档"得有个说法，`advanced` 是默认值也是最稳的一档。
+       *
+       * **指挥官模式不出现这个按钮**：那个模式的 AI 只执行玩家排的生产队列
+       * （`budget.order`），而网络内核不认队列（见 main.ts 的 runAiTurn）。
+       * 摆一个点了不生效的按钮，比不摆更糟。
+       */
+      const netAllowed = !config.commanderMode;
+      const netOn = netAllowed && config.aiBrain === 'net';
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
-            <button class="chip ${config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
-            <button class="chip ${config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
-            <button class="chip ${config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
+            <button class="chip ${!netOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
+            <button class="chip ${!netOn && config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
+            <button class="chip ${!netOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
+            ${
+              netAllowed
+                ? `<button class="chip is-brain ${netOn ? 'active' : ''}" data-aibrain="net" title="自博弈训练出来的策略网络。自带全视野：开雾也看得见你的全部部队；只会一种打法节奏，没有档位">测试 AI · 全视野</button>`
+                : ''
+            }
           </div>
-          <div class="field-hint">初级适合熟悉规则；中级会随局面换打法（速攻 / 骚扰 / 弃城）；高级算得最细，走位与采购都稳</div>`
+          <div class="field-hint">${
+            netOn
+              ? '测试 AI 自带全视野——开雾对它没有作用，它能看见你的全部部队。它是在 10×10 / 12×12 的青铜开局上练出来的，<b>别的尺寸与时代会很弱</b>，也没有初级/中级/高级之分'
+              : netAllowed
+                ? '初级适合熟悉规则；中级会随局面换打法（速攻 / 骚扰 / 弃城）；高级算得最细，走位与采购都稳'
+                : '指挥官模式下的 AI 只执行你排好的生产序列，用的是手写引擎；测试 AI 不认队列，所以这一档不提供'
+          }</div>`
         : '';
 
       const sizeChips = BOARD_SIZES.map(
@@ -581,7 +613,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
-              <div class="field-label">对手 <span class="field-hint">AI 会跟你一样受迷雾限制</span></div>
+              <div class="field-label">对手 <span class="field-hint">${
+                netOn ? '测试 AI 自带全视野：开雾也看得见你' : 'AI 会跟你一样受迷雾限制'
+              }</span></div>
               ${
                 playerCount > 2
                   ? `<div class="field-hint">${playerCount} 人局固定为「全真人」：可以本地热座轮流操作，也可以建房联机。AI 不进多方局。</div>`
@@ -1040,6 +1074,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           config.aiOpponent = false;
           config.aiAlly = false;
           config.commanderMode = false;
+          // 测试 AI 的选择也一并放下：上帝模式那一栏根本不显示 AI 选项，
+          // 留着它就成了"看不见却生效"的设定——沙盒里点「交给 AI」时会突然
+          // 换成网络内核，而面板上没有任何地方写着这件事。
+          config.aiBrain = 'script';
           // 沙盒不产兵，选卡在这一局没有任何作用，别留个"开了却不生效"的开关
           config.draftMode = false;
         }
@@ -1051,6 +1089,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (lvBtn?.dataset.ailevel) {
         const lv = lvBtn.dataset.ailevel;
         config.aiLevel = lv === 'basic' ? 'basic' : lv === 'tactic' ? 'tactic' : 'advanced';
+        // 点档位＝"用手写引擎的那一档"，从测试 AI 切回来就靠这一下
+        config.aiBrain = 'script';
+        paint();
+        return;
+      }
+
+      const brainBtn = target.closest<HTMLElement>('[data-aibrain]');
+      if (brainBtn?.dataset.aibrain) {
+        config.aiBrain = brainBtn.dataset.aibrain === 'net' ? 'net' : 'script';
         paint();
         return;
       }
