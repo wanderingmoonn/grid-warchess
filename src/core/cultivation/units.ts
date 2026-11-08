@@ -157,6 +157,7 @@ export const DEACON: UnitTypeDef = {
     UNIT_IDS.SPIRIT_MINE,
     UNIT_IDS.FORGE_1,
     UNIT_IDS.FORGE_2,
+    UNIT_IDS.SECT,
   ],
   buildPower: 18,
 };
@@ -164,9 +165,9 @@ export const DEACON: UnitTypeDef = {
 /**
  * 管事（时代 4）：仆役 → 执事 → 管事，这一列是修真包里的"建造工人"线。
  *
- * 它比执事多会两样东西：三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
+ * 它比执事多会两样东西：二、三档炼器炉，以及灵泉。不新开「炼器师」是因为这条线的语义
  * 本来就是"谁在替宗门干活"——摆阵有阵师，炼器归管事，各管一摊；
- * 灵泉也一样：开泉取水是宗门的家务事，归管事。
+ * 灵泉也一样：开泉取水是宗门的家务事，归管事。宗门大殿执事就会盖，它只是继承。
  */
 export const STEWARD: UnitTypeDef = {
   id: UNIT_IDS.STEWARD,
@@ -190,6 +191,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.FORGE_2,
     UNIT_IDS.FORGE_3,
     UNIT_IDS.SPIRIT_SPRING,
+    UNIT_IDS.SECT,
   ],
   buildPower: 24,
 };
@@ -256,6 +258,46 @@ export const SPIRIT_MINE: UnitTypeDef = {
   yield: { [GOLD]: 5, [SPIRIT_STONE]: 1 },
   yieldByTerrain: {
     hill: { [GOLD]: 5, [SPIRIT_STONE]: 5 },
+  },
+};
+
+// ── 宗门大殿（2026-11-08）──────────────────────────
+//
+// 一座 2×2 的大建筑，自己不打人、不产资源，两个功能全挂在**贴着它站的修士**上：
+//   · 招募弟子：相邻有哪位 ≥2 期的修士，就能用灵石招哪位（规则在 hooks.ts 的
+//     produceBlocked + 定价钩子，纯查询在 sect.ts）；
+//   · 传承：贴着宗门打坐的低阶修士效率按"师徒境界差"放大（见 sect.ts 的 sectLegacyMul）。
+//
+// 所以它该修在修士堆里——师父走了就停产，弟子走了就吃不到传承。
+// 这是它唯一的"操作"，也是它为什么值 2×2 四格。
+
+export const SECT: UnitTypeDef = {
+  id: UNIT_IDS.SECT,
+  name: '宗门大殿',
+  short: '宗',
+  era: 3,
+  category: 'building',
+  // 四格：占满一圈徒弟的位置，也挡得住路——大建筑该有的代价
+  footprint: 2,
+  cost: 200,
+  costRes: { 'spirit-stone': 20 },
+  // 执事每回合 18 点 → 三回合；管事 24 点 → 两回合。宗门是"立起来要时间"的东西
+  buildCost: 48,
+  move: 0,
+  atk: 0,
+  armor: 5,
+  maxHp: 120,
+  range: 1,
+  vision: 4,
+  /*
+   * 名单写死四条流派，能不能招由 `produceBlocked` 按"相邻师父"判。
+   *
+   * 为什么不把名单做成动态的：产兵面板的候选列表读的就是这份白名单，
+   * 名单里有的会**灰着列出来并写明缺什么**（"附近没有 2 期以上的剑修师傅"）。
+   * 动态名单会让玩家永远不知道自己错过了什么，也没有"把师父搬过来"的目标。
+   */
+  produce: {
+    units: [UNIT_IDS.QI_CULTIVATOR, UNIT_IDS.SWORD_CULTIVATOR, UNIT_IDS.BODY_CULTIVATOR, UNIT_IDS.BLOOD_CULTIVATOR],
   },
 };
 

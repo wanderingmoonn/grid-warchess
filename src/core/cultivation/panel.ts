@@ -2,8 +2,9 @@
 
 import type { GameState, Unit } from '../types.ts';
 import { skillsOf } from '../query.ts';
-import { REALMS, MAX_RANK, getRank, getExp, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
+import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
+import { sectLegacyMul } from './sect.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -114,6 +115,20 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
   const auraBonus = spiritAuraBonusOf(state, unit);	if (auraBonus > 0) {
 		lines.push(`${SPIRIT_AURA_LABEL}：每轮 +${auraBonus} 修为经验`);
 	}
+
+  /*
+   * 宗门传承：只在**吃得到**的时候单独写一行。
+   *
+   * 这条加成是乘在打坐量上的，而打坐量（境界 + 2，剑修减半、魔修固定 1）
+   * 本来就不在面板上印——两个都没写，玩家就完全看不见"师父站在旁边有没有用"。
+   * 所以这里要把乘完之后的实际数字一起写出来，而不是只说"受传承影响"。
+   */
+  const legacy = sectLegacyMul(state, unit);
+  if (legacy > 1) {
+    lines.push(
+      `宗门传承：打坐 ×${legacy}（师父比自己高 ${legacy + 1} 层以上）→ 每轮 +${getExpGrowth(unit) * legacy} 修为`,
+    );
+  }
 
 	if (aging > 0) {
 	lines.push(

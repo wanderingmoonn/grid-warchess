@@ -67,7 +67,7 @@ import {
 } from '../core/rules.ts';
 import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
-import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
 
@@ -1101,7 +1101,10 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       }
     }
 
-    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id);
+    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id, {
+      kind: 'city',
+      city,
+    });
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -1361,8 +1364,10 @@ function recruitButton(
   extra: string,
   mode: 'recruit' | 'order' = 'recruit',
   site = '',
+  /** 从哪儿造：定价要和 doRecruit 同源（宗门里招修士收灵石，城里收金币） */
+  source?: ProduceSource,
 ): string {
-  const price = recruitResCost(s, me, def);
+  const price = recruitResCost(s, me, def, source);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
   // 看到 300 金的按钮却扣了 450，玩家只会觉得算错了。
   const unlockFee =
@@ -1508,6 +1513,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
               extra,
               ordering ? 'order' : 'recruit',
               camp.id,
+              { kind: 'camp', camp },
             );
           })
           .join('')}</div>

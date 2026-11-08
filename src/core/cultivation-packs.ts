@@ -24,6 +24,7 @@ import {
   SPIRIT_MINE,
   SPIRIT_TOWER,
   SPIRIT_SPRING,
+  SECT,
   FORGE_1,
   FORGE_2,
   FORGE_3,
@@ -76,6 +77,8 @@ export const CULTIVATION_PACK: Expansion = {
     SPIRIT_TOWER,
     // 灵泉：四代支援建筑，主动技能「泉涌」；同时是寒水镜在没有水的地图上的备用产地
     SPIRIT_SPRING,
+    // 宗门大殿：2×2，靠相邻的修士招募弟子（灵石）并传承（打坐加成）
+    SECT,
     // 炼器：三档炉子 + 四件法器。法器是 campOnly，城市产线不供（见 units.ts）
     FORGE_1,
     FORGE_2,

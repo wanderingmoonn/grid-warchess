@@ -122,6 +122,14 @@ export interface MoveCtx {
   player: PlayerId;
   unitType: UnitTypeDef;
   cost: number;
+  /**
+   * 这次是从哪儿造的（城 / 产兵建筑），以及那座建筑本身。
+   *
+   * 只有 `doRecruit` / 面板知道它，AI 的历史采购判断和一批冻结快照都只传三个参数，
+   * 所以它是**可选**的：拿不到就按"不分产兵点"的老口径算钱。
+   * 修真包的宗门靠它把金币换成灵石——同一件修士，城里买是金价，宗门里招是灵石价。
+   */
+  source?: ProduceSource;
 }
 
 /**
@@ -144,6 +152,8 @@ export interface ResourceCostCtx {
   goldCost: number;
   /** 当前已经确定的非金币价格（来自 costRes 字段） */
   cost: ResourceCost;
+  /** 这次从哪儿造。语义见 `CostCtx.source`：拿不到就等于"不分产兵点"。 */
+  source?: ProduceSource;
 }
 
 /**

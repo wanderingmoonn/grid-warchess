@@ -104,12 +104,18 @@ import {
   FORGE_1,
   FORGE_2,
   FORGE_3,
+  SECT,
   SPIRIT_SPRING,
+  CULTIVATOR,
+  SWORD_CULTIVATOR,
+  BODY_CULTIVATOR,
+  BLOOD_CULTIVATOR,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
   ARTIFACT_FIRE,
 } from '../src/core/cultivation/units.ts';
+import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
 import {
   SPRING_FLOOR_HEAL,
   SPRING_HEAL_RATIO,
@@ -2874,6 +2880,31 @@ function cultivationRules(): string {
         敌方修士路过也不算替你守阵。
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
+
+      <h3>宗门大殿</h3>
+      <p>${SECT.name}是<b>时代 ${SECT.era}</b> 的 <b>2×2</b> 大建筑（${SECT.maxHp} 血 / ${SECT.armor} 甲），由执事修建。
+        它自己不打架、不产资源，两个功能全挂在<b>贴着它站的修士</b>身上——所以它该修在修士堆里。</p>
+      <ul>
+        <li><b>招募弟子</b>：相邻站着一位 <b>${SECT_MASTER_MIN_RANK} 期（筑基）以上</b>的己方修士，
+          就能用<b>灵石</b>招出<b>同一种</b>修士（新弟子从 0 期入门）。
+          四个流派都可以，但敌方修士不算师父；名单是灰着列出来的，缺什么直接写在按钮上
+          （"附近没有 ${SECT_MASTER_MIN_RANK} 期以上的剑修师傅"）。</li>
+        <li><b>招募价</b>：按该兵种金币价的 <b>1/10</b> 折成灵石——
+          ${CULTIVATOR.name} ${sectRecruitStone(CULTIVATOR.cost)}、${BODY_CULTIVATOR.name} ${sectRecruitStone(BODY_CULTIVATOR.cost)}、
+          ${SWORD_CULTIVATOR.name} ${sectRecruitStone(SWORD_CULTIVATOR.cost)}、${BLOOD_CULTIVATOR.name} ${sectRecruitStone(BLOOD_CULTIVATOR.cost)}。
+          兵种调价时招募价自动跟着走，不会出现"剑修涨了、宗门还按原价卖"。
+          <b>城市产线照旧收金币</b>：灵石这条只属于宗门。</li>
+        <li><b>传承</b>：贴着宗门打坐的修士，修炼效率
+          <b>× (相邻最高境界 − 自己 − 1)</b>，最低 ×1。
+          所以<b>差 3 层才开始有加成</b>：${SECT_MASTER_MIN_RANK} 期师父带 0 期徒弟算下来还是 ×1（白搭），
+          3 期才 ×2。有加成的修士面板上会写「宗门传承 ×N」和"每轮 +多少修为"——
+          不写的话玩家永远看不见师父站旁边有没有用。</li>
+        <li><b>互相绑死</b>：师父走开 = 宗门停产；弟子走开 = 吃不到传承。
+          多个宗门<b>不叠乘</b>，取最强的一条（和所有光环同口径）。</li>
+        <li><b>2×2 的代价</b>：四格一起挡路、一起挨打；选址要求四格全空且地形可建，
+          所以<b>城里基本放不下</b>（城里只要有一个驻军就占掉一格）。
+          建造距离按"整块地到工匠最近的一格"算，不必拿左上角去凑。</li>
+      </ul>
 
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /

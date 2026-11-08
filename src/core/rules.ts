@@ -2067,10 +2067,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
 }
 
 /** 算上扩展规则后的兵种造价 */
-export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): number {
+export function recruitCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): number {
   let cost = def.cost;
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost });
+    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost, source });
   }
   return Math.max(0, cost);
 }
@@ -2081,9 +2086,18 @@ export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): n
  * 金币那一段走老的 modifyCost（所有既有扩展都在改它），其它资源走
  * modifyResourceCost。两个钩子分开而不是合成一个"价格对象"：
  * 合并等于把所有既有扩展的签名改一遍，而它们关心的事情本来就只有金币。
+ *
+ * `source` 是"从哪儿造"（城 / 哪座产兵建筑）。不传 = 不分产兵点，
+ * 这正是老调用方的行为；传了之后扩展才能做"同一件兵，城里卖金币、
+ * 宗门里卖灵石"这种按产地的定价（修真包就是这么用的）。
  */
-export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef): ResourceCost {
-  const gold = recruitCost(s, player, def);
+export function recruitResCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): ResourceCost {
+  const gold = recruitCost(s, player, def, source);
   let extra: ResourceCost = { ...(def.costRes ?? {}) };
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyResourceCost) {
@@ -2094,6 +2108,7 @@ export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef)
         baseCost: def.cost,
         goldCost: gold,
         cost: extra,
+        source,
       });
     }
   }
@@ -2123,8 +2138,9 @@ export function recruitPriceOf(
   s: GameState,
   player: PlayerId,
   def: UnitTypeDef,
+  source?: ProduceSource,
 ): { price: ResourceCost; unlockFee: number; total: ResourceCost; gold: number } {
-  const price = recruitResCost(s, player, def);
+  const price = recruitResCost(s, player, def, source);
   const needUnlock = def.hero === true && !(s.unlocked?.[player] ?? []).includes(def.id);
   const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
   const total: ResourceCost = { ...price };
@@ -4439,8 +4455,15 @@ export function buildSiteError(
   // 距离：绝大多数建筑按 CONFIG.buildRange 算；少数"本来就要盖在远处"的
   // （海上钻井平台）在兵种数据里自己写一个更大的数——放宽的只是距离，
   // 选址条件照旧一条不少。
+  //
+  // 2×2 的建筑按**整块地到建造者的最近一格**算，不是按左上角锚点：
+  // 锚点算法下，贴着它右下角站也会被拒（"离得太远"），玩家没法从画面推出规则。
+  // n = 1 时这个式子和 `distance(builder, {x,y})` 完全一样。
   const reach = def.buildRange ?? CONFIG.buildRange;
-  if (distance(builder, { x, y }) > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
+  const cx = Math.min(Math.max(builder.x, x), x + n - 1);
+  const cy = Math.min(Math.max(builder.y, y), y + n - 1);
+  const gap = Math.abs(builder.x - cx) + Math.abs(builder.y - cy);
+  if (gap > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
     return overWater
       ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
       : `建造者离得太远（最多 ${reach} 格）`;
@@ -4809,6 +4832,11 @@ function doRecruit(
   /** 产兵点的造价倍率（produce.costScale）。城市永远是 1 */
   let costScale = 1;
   let slots: Array<{ x: number; y: number }> = [];
+  /**
+   * 这次"从哪儿造"。往下传给 recruitPriceOf，扩展才能按产地定不同的价
+   * （修真包的宗门：同一件修士，城里卖金币，宗门里卖灵石）。
+   */
+  let priceSource: ProduceSource | undefined;
 
   if (campId) {
     const camp = unitById(s, campId);
@@ -4832,6 +4860,7 @@ function doRecruit(
     // "军工供货"设计，2026-11-08 删掉了——同一座营的产出能力不该被十几格外
     // 某座城是否升级决定，玩家看不见这条因果）。
     label = campDef.name;
+    priceSource = { kind: 'camp', camp };
 
     slots = recruitSpawnCells(s, undefined, campId, unitTypeId);
   } else {
@@ -4850,6 +4879,7 @@ function doRecruit(
     if (!allowed.ok) return allowed;
 
     slots = recruitSpawnCells(s, cityId, undefined, unitTypeId);
+    priceSource = { kind: 'city', city };
     // 水军没有下水的位置时要说清原因：城不临水，还是水面已经站满了船
     if (def.domain === 'water' && slots.length === 0) {
       return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
@@ -4864,7 +4894,7 @@ function doRecruit(
   //
   // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
   // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
-  const quote = recruitPriceOf(s, s.current, def);
+  const quote = recruitPriceOf(s, s.current, def, priceSource);
   // 造价倍率只作用在兵价上，不解锁费（英雄解锁是全局一次的事，不该被营打折）
   const payCost = scaleCost(quote.total, costScale);
   const unlockFee = quote.unlockFee;

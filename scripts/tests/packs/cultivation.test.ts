@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost } from '../../../src/core/rules.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -14,6 +14,7 @@ import {
   hpGainForRank,
   totalHpBonusForRank,
   maxHpDeltaBetween,
+  getRank,
 } from '../../../src/core/cultivation/progression.ts';
 import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
@@ -50,6 +51,7 @@ import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilit
 import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
 import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
 import { SPRING_HP_PER_STONE } from '../../../src/core/cultivation/skills/spirit-spring.ts';
+import { sectLegacyMul, sectRecruitStone } from '../../../src/core/cultivation/sect.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -2080,6 +2082,170 @@ export function run() {
     const beforeQi = getExp(qi);
     CULTIVATION_HOOKS.onUnitKilled({ state: s, victim: foe, killer: qi, killerOwner: 'A' });
     assert.ok(getExp(qi) > beforeQi, '其他修士仍然吃击杀历练');
+  });
+
+  // ── 宗门大殿（2026-11-08）──────────────────────────────
+  //
+  // 两个功能都挂在"贴着宗门站的修士"上：招募（灵石、认师父）与传承（打坐倍率）。
+  // 放在文件末尾是因为要用上面那几个 nextTurn / unitOf 辅助函数——
+  // 它们是在 `run()` 中途才声明的，写在前面会踩 TDZ。
+
+  /** 一块干净的空地，宗门摆 (4,4)-(5,5)，周围的格子留给师徒 */
+  const sectScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    s.players.A.gold = 900;
+    const sect = place2(s, 'A', 'cultivation-sect', 4, 4);
+    return { s, sect };
+  };
+
+  test('宗门：2×2、时代 3、执事与管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-sect'];
+    assert.ok(def, '宗门要在本局兵种表里');
+    assert.equal(def.footprint, 2, '宗门占 2×2');
+    assert.equal(def.era, 3, '宗门是三代建筑');
+
+    assert.ok(!(s.unitTypes['cultivation-servant'].builds ?? []).includes('cultivation-sect'), '仆役不会盖');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-sect'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-sect'), '管事继承');
+  });
+
+  test('宗门：2×2 的选址按整块地算距离，贴现着的那面墙不报"太远"', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    // 建造者站在 (7,5)：到锚点 (4,4) 是 4 格（> buildRange 2），
+    // 但到 2×2 的最近一格 (5,5) 只有 2 格——按锚点算的话这里会被拒。
+    const deacon = place2(s, 'A', 'cultivation-deacon', 7, 5);
+    const r = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-sect',
+      x: 4,
+      y: 4,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+  });
+
+  test('宗门：招弟子要相邻有 ≥2 期师傅，且只认己方', () => {
+    const { s, sect } = sectScene();
+    const qi = s.unitTypes['qi-cultivator'];
+    const v = () => produceAt(s, { kind: 'camp', camp: sect }, qi);
+
+    // 没人：拒绝，并写清缺什么
+    const none = v();
+    assert.equal(none.ok, false, '没有师傅就不该招得出来');
+    assert.ok(none.ok ? '' : /师傅/.test(none.reason), `理由要写清缺师傅：${none.ok ? '' : none.reason}`);
+
+    // 0 期的徒弟站在旁边：还是不行
+    const novice = place2(s, 'A', 'qi-cultivator', 6, 4);
+    assert.equal(v().ok, false, '0 期修士当不了师傅');
+
+    // 敌方 3 期修士贴着站：也不算
+    const foe = place2(s, 'B', 'qi-cultivator', 4, 6);
+    setCultivationExp(foe, expForRank(2));
+    assert.equal(v().ok, false, '敌方修士不给你当师傅');
+
+    // 己方 2 期：够了
+    setCultivationExp(novice, expForRank(1));
+    assert.equal(getRank(novice), 2, '前提：这位到了第 2 层');
+    assert.equal(v().ok, true, '2 期师傅就能开坛收徒');
+  });
+
+  test('宗门：招弟子收灵石、不收金币（城市产线照旧收金币）', () => {
+    const { s, sect } = sectScene();
+    const qi = s.unitTypes['qi-cultivator'];
+    const master = place2(s, 'A', 'qi-cultivator', 6, 4);
+    setCultivationExp(master, expForRank(1)); // 2 期
+
+    const stone = sectRecruitStone(qi.cost);
+    const inSect = recruitResCost(s, 'A', qi, { kind: 'camp', camp: sect });
+    assert.equal(inSect[SPIRIT_STONE], stone, `宗门里招炼气士要 ${stone} 灵石`);
+    assert.equal(inSect.gold, undefined, '宗门里不收金币');
+    // 同城里的价：还是金币
+    assert.equal(recruitResCost(s, 'A', qi).gold, qi.cost, '城市产线照旧是金币价');
+
+    const beforeGold = s.players.A.gold;
+    const r = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: sect.id,
+      unitType: 'qi-cultivator',
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(r.state.players.A.gold, beforeGold, '不该扣金币');
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 100 - stone, '扣灵石');
+    assert.equal(
+      r.state.units.filter((u) => u.type === 'qi-cultivator' && u.owner === 'A').length,
+      2,
+      '新弟子应该站出来了',
+    );
+  });
+
+  test('传承：摸不到宗门 / 师父不够高都是 ×1；差 3 层才 ×2', () => {
+    const { s, sect } = sectScene();
+    const disciple = place2(s, 'A', 'qi-cultivator', 6, 4); // 贴着宗门的右边
+    assert.equal(sectLegacyMul(s, disciple), 1, '旁边没别人，没有传承');
+
+    const master = place2(s, 'A', 'qi-cultivator', 4, 6); // 贴着宗门的下面
+    setCultivationExp(master, expForRank(1)); // 2 期
+    assert.equal(sectLegacyMul(s, disciple), 1, '2 期师父带 0 期弟子：2−0−1=1，白搭');
+
+    setCultivationExp(master, expForRank(2)); // 3 期
+    assert.equal(sectLegacyMul(s, disciple), 2, '3 期师父带 0 期弟子：×2');
+
+    // 敌人不算师父：把师父换成 B 方
+    master.owner = 'B';
+    assert.equal(sectLegacyMul(s, disciple), 1, '敌方修士不给你传承');
+
+    // 离开宗门就吃不到
+    master.owner = 'A';
+    disciple.x = 9;
+    disciple.y = 9;
+    assert.equal(sectLegacyMul(s, disciple), 1, '离宗门远了就没有传承');
+    void sect;
+  });
+
+  test('传承：真的让打坐变快（对比法），面板也写出来', () => {
+    const runSeq = (withMaster: boolean) => {
+      const { s, sect } = sectScene();
+      place2(s, 'A', 'qi-cultivator', 6, 4); // 弟子：0 期，贴着宗门
+      if (withMaster) {
+        const master = place2(s, 'A', 'qi-cultivator', 4, 6);
+        setCultivationExp(master, expForRank(2)); // 3 期
+        void sect;
+      }
+      const start = getExp(unitOf(s, 'qi-cultivator', 'A'));
+      let cur = s;
+      for (let i = 0; i < 4; i++) cur = nextTurn(cur);
+      return getExp(unitOf(cur, 'qi-cultivator', 'A')) - start;
+    };
+    const withMaster = runSeq(true);
+    const without = runSeq(false);
+    assert.ok(withMaster > without, `有师父(${withMaster})该比没师父(${without})涨得快`);
+
+    // 面板：只在吃得到的时候写这一行
+    const { s } = sectScene();
+    const disciple = place2(s, 'A', 'qi-cultivator', 6, 4);
+    assert.ok(
+      !getCultivationPanelLines(s, disciple).some((l) => l.includes('宗门传承')),
+      '没师父时面板不该冒出传承行',
+    );
+    const master = place2(s, 'A', 'qi-cultivator', 4, 6);
+    setCultivationExp(master, expForRank(2));
+    const line = getCultivationPanelLines(s, disciple).find((l) => l.includes('宗门传承'));
+    assert.ok(line, '有师父时要有「宗门传承」这一行');
+    assert.ok(line!.includes('×2'), `要把倍率写出来：${line}`);
   });
 }
 

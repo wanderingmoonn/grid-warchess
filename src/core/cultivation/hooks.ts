@@ -1,6 +1,13 @@
 import type { ExpansionHooks } from '../expansions.ts';
 import type { GameState, Unit } from '../types.ts';
-import { isCultivatorUnit, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
+import { isCultivatorUnit, isCultivatorDef, isSwordCultivatorType, isBloodCultivatorType, UNIT_IDS } from './identity.ts';
+import {
+  SECT_ID,
+  SECT_MASTER_MIN_RANK,
+  sectLegacyMul,
+  sectRecruitableTypes,
+  sectRecruitStone,
+} from './sect.ts';
 import {
   ARTIFACT_MOVE_MUL,
   artifactArmorBonus,
@@ -181,6 +188,37 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
     }
     return yields;
   },
+	// ── 宗门大殿（2026-11-08）──────────────────────
+	//
+	// 三条钩子干的是同一件事的两个面：**宗门只认"贴着它站的修士"**。
+	//   · produceBlocked：有 ≥2 期的师父站着，才招得出这个流派；
+	//   · modifyCost / modifyResourceCost：宗门里招弟子不收金币，改收灵石；
+	//   · onTurnStart（下面）：贴着宗门打坐的弟子吃「传承」加成。
+	//
+	// 定价必须走钩子而不是写死在兵种表上：同一件修士，城市产线仍然卖金币，
+	// 只有宗门这一条线收灵石。这就是 `source` 那个参数存在的全部理由。
+	produceBlocked: ({ state, source, target }) => {
+		if (source.kind !== 'camp') return null;
+		if (state.unitTypes[source.camp.type]?.id !== SECT_ID) return null;
+		if (!isCultivatorDef(target)) return `${state.unitTypes[source.camp.type].name}只收修士弟子`;
+		// 灵体这类召唤物到不了这里（produceAt 在更前面就挡了），不重复判
+		const allowed = sectRecruitableTypes(state, source.camp);
+		if (!allowed.has(target.id)) {
+			return `附近没有 ${SECT_MASTER_MIN_RANK} 期以上的${target.name}师傅`;
+		}
+		return null;
+	},
+	modifyCost: ({ state, source, cost }) => {
+		if (source?.kind !== 'camp') return cost;
+		return state.unitTypes[source.camp.type]?.id === SECT_ID ? 0 : cost;
+	},
+	modifyResourceCost: ({ state, source, baseCost, cost }) => {
+		if (source?.kind !== 'camp') return cost;
+		if (state.unitTypes[source.camp.type]?.id !== SECT_ID) return cost;
+		// 金币那一段已经被 modifyCost 归零；这里按**原始金币价**折成灵石，
+		// 而不是按折后价——以后要是再来一条"宗门打折"的规则，两次折算不会打架。
+		return { ...cost, [SPIRIT_STONE]: (cost[SPIRIT_STONE] ?? 0) + sectRecruitStone(baseCost) };
+	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
 		for (const u of state.units) {
@@ -217,7 +255,12 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
       }
 
       // 打坐：老死前照常修炼
-      addExp(u, state, getExpGrowth(u));
+      //
+      // 宗门传承按"贴着宗门站的最高境界 − 自己 − 1"放大这一次打坐。
+      // 乘在这里而不是改进 getExpGrowth：那个函数只拿得到 Unit，
+      // 看不见棋盘上有没有宗门，改进它就得把 GameState 塞进去（或做缓存），
+      // 而缓存会过期——师父一走加成还挂着，玩家根本没法验证规则。
+      addExp(u, state, getExpGrowth(u) * sectLegacyMul(state, u));
 		}
 	},
 
