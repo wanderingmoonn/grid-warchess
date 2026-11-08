@@ -364,6 +364,7 @@ export function describeUnit(
     const { names } = buildListOf(def, {
       nameOf,
       exists: (id) => !!s.unitTypes[id],
+      eraOf: (id) => s.unitTypes[id]?.era,
     });
     lines.push(`可建造：${names.join('、')}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);
     lines.push('本身不产金，靠盖出来的东西挣钱或防守');

@@ -504,7 +504,11 @@ function traitsOf(u: UnitTypeDef): string {
   }
   // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
   if ((u.builds ?? []).length > 0) {
-    const { names } = buildListOf(u, { nameOf: manualNameOf });
+    const { names } = buildListOf(u, {
+      nameOf: manualNameOf,
+      // 和面板同一条：高过这个工兵档位的建筑不进他的名单
+      eraOf: (id) => ALL_UNIT_DEFS[id]?.era,
+    });
     // 规则书里不该印出英文 id。出现就说明全量表漏了登记，宁可让生成失败，
     // 也不要给玩家一行"可建造：cultivation-guard-formation"。
     const raw = names.find((n) => /^[a-z0-9_-]+$/i.test(n));

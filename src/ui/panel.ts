@@ -1284,6 +1284,8 @@ function buildListFor(s: GameState, def: UnitTypeDef): BuildList {
   return buildListOf(def, {
     nameOf: (id) => s.unitTypes[id]?.name ?? UNIT_TYPES[id]?.name ?? id,
     exists: (id) => !!s.unitTypes[id],
+    // 高过这个工兵档位的建筑不列（判据在 buildListOf 里，和规则层同一条）
+    eraOf: (id) => s.unitTypes[id]?.era,
   });
 }
 

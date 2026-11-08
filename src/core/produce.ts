@@ -58,6 +58,14 @@ export function canProduce(
 ): ProduceVerdict {
   const spec = produceOf(producer);
   if (!spec) return { ok: false, reason: '这不是产兵点' };
+  // campOnly：只有**点名要造它**的产兵建筑才造得了。
+  //
+  // "不写白名单 = 不设限"那条便利不能盖过它：军营的白名单是空的，于是一整张
+  // 兵种表它都认，连炼器炉的法器也伸手。法器在军营里只会显示成灰色的
+  // "还造不出来"，但设计上它压根不该出现在军营的产品线上。
+  if (target.campOnly && !(spec.units ?? []).includes(target.id)) {
+    return { ok: false, reason: `${producer!.name}产不了${target.name}` };
+  }
   if (spec.units && !spec.units.includes(target.id)) {
     return { ok: false, reason: `${producer!.name}产不了${target.name}` };
   }

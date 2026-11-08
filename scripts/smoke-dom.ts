@@ -1280,6 +1280,111 @@ check('炼器炉面板：条件不满足的法器灰着列出来，并写清缺�
   void html;
 });
 
+check('军营面板不列法器：campOnly 的东西不该出现在普通产兵点', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [...Object.keys(UNIT_TYPES), 'cultivation-artifact-wood'],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  st.players.A.res = { 'spirit-stone': 100 };
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  // 故意让军营挨着森林：条件满足也不该冒出法器——它根本不在军营的产品线上
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  const camp = {
+    id: 'camp1',
+    type: 'camp',
+    owner: 'A' as const,
+    x: 5,
+    y: 5,
+    hp: st.unitTypes.camp?.maxHp ?? 34,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(camp);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: camp,
+    selectedCityId: null,
+    selectedCampId: camp.id,
+    selectedTile: null,
+  });
+  assert.equal(
+    host.querySelector('[data-type="cultivation-artifact-wood"]'),
+    null,
+    '军营里连灰色的法器都不该出现',
+  );
+  assert.ok(!host.innerHTML.includes('还造不出来'), '军营不该有"还造不出来"这一组');
+});
+
+check('建造列表按档位过滤：高过工兵时代的建筑不列出来', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 造一个"二代的工匠，白名单里混进一座三代的堡寨"——
+  // 扩展就是这么往白名单里追加条目的（能架桥的人就能修船坞），
+  // 所以高代建筑完全可能出现二代的名单里。
+  st.unitTypes['test-builder-x'] = {
+    ...st.unitTypes.laborer,
+    id: 'test-builder-x',
+    name: '测试工匠',
+    era: 2,
+    builds: ['camp', 'camp3'],
+  };
+  const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  const builder: Unit = {
+    id: 'b1',
+    type: 'test-builder-x',
+    owner: 'A',
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(builder);
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: builder,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok(host.querySelector('[data-act="build"][data-type="camp"]'), '一代军营该列出来');
+  assert.equal(
+    host.querySelector('[data-act="build"][data-type="camp3"]'),
+    null,
+    '三代的堡寨不该挂在二代工匠的建造列表里',
+  );
+});
+
 check('详情面板显示的是算上修正的真实数值', () => {
   const st = createMatch(
     {
