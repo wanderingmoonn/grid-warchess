@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
 import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
 import { distBetweenUnits } from '../../../src/core/query.ts';
@@ -3278,7 +3279,12 @@ export function run() {
 }
 
 // 这段魔法代码可以让这个文件被单独运行
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// 判据必须走 `pathToFileURL`。Windows 上 `process.argv[1]` 是 `G:\a\b.ts`，
+// 拼成 `` `file://${argv[1]}` `` 得到 `file://G:\a\b.ts`，永远不等于真实的
+// `file:///G:/a/b.ts`——于是整套用例静默跑 0 项、退出码 0，`npm run test:cultivation`
+// 看起来一直是绿的。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run();
   console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
   if (stats.failed > 0) process.exit(1);

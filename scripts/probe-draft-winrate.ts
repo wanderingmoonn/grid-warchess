@@ -48,6 +48,52 @@ const SHARD = Number(argOf('shard', '0'));
 const SHARDS = Number(argOf('shards', '1'));
 const OUT = argOf('out', '');
 const MERGE = argOf('merge', '');
+/**
+ * 关掉选卡（默认开）。
+ *
+ * 为什么需要它：选卡模式下先手会先挑走最好的卡，"先手胜率高"到底是
+ * 先手本身的优势、还是"先手拿走了那张超模卡"，这两件事只有把选卡关掉
+ * 才分得开。同配置跑一遍 --no-draft，两边兵种表完全一样，剩下的差值
+ * 才是席位/地图本身带来的。
+ */
+const DRAFT = !args.includes('--no-draft');
+/**
+ * 禁用策略：auto（A targeted / B generic，线上默认）· targeted · generic。
+ * 两边用同一策略跑一遍，才能判断"先手优势"是不是禁用规则的不对称带来的。
+ */
+const BAN_MODE = argOf('ban-mode', 'auto') as 'auto' | 'targeted' | 'generic';
+/**
+ * 谁先选。`other` = 把蛇形顺序整体对调（B 先选、A 后选），但**开局仍然是 A 走**。
+ *
+ * 这一个开关能分开两件一直被混为一谈的事：
+ *   · "先手"是席位（谁先动棋子）；
+ *   · "先手"是选卡的第一签位。
+ * 只换签位、不换走棋顺序，就能看出优势到底跟着哪一个走。
+ */
+const FIRST_DRAFT = argOf('first-draft', 'default');
+/**
+ * 选人顺序的排法（实验用，不改产品默认）：
+ *   · snake      —— 现状：偶数轮正走、奇数轮倒走（A,B,B,A,A,B,B,A,A,B,B,A）
+ *   · mirror     —— 两两对称：后一半是前一半的镜像且**换边**，
+ *                   于是"第 i 签"和"倒数第 i 签"永远一人一个（A,B,B,A,A,B,A,B,B,A,A,B）。
+ *                   现状那版是回文，镜像对全是同一人——A 同时拿了第一签和最后一签。
+ *   · alternate  —— 纯交替（A,B,A,B,…），谁都不连拿两签。
+ */
+const PICK_ORDER = argOf('pick-order', 'snake') as 'snake' | 'mirror' | 'alternate';
+
+function rewriteOrder(order: PlayerId[], mode: string): PlayerId[] {
+  const n = order.length;
+  const other = (p: PlayerId): PlayerId => (p === 'A' ? 'B' : 'A');
+  if (mode === 'alternate') {
+    return Array.from({ length: n }, (_, i) => (i % 2 === 0 ? order[0]! : other(order[0]!)));
+  }
+  if (mode === 'mirror') {
+    const out = order.slice(0, Math.ceil(n / 2));
+    while (out.length < n) out.push(other(order[n - 1 - out.length]!));
+    return out;
+  }
+  return order;
+}
 
 export interface GameRow {
   seed: number;
@@ -70,7 +116,7 @@ function playOne(seed: number): GameRow {
       aiLevel: LEVEL,
       aiOpponent: true,
       aiAlly: true,
-      draftMode: true,
+      draftMode: DRAFT,
       expansionIds: EXPANSIONS,
     },
     seed,
@@ -78,19 +124,25 @@ function playOne(seed: number): GameRow {
 
   // ── BP ──────────────────────────────────────────────────────────────
   // 从 lobby 开始：DRAFT_START 带一个计时起点（缺了会被判 NaN 超时，见 draft.ts）
-  const started = applyAction(s, { type: 'DRAFT_START', at: 0 });
+  const started = DRAFT ? applyAction(s, { type: 'DRAFT_START', at: 0 }) : { ok: false, state: s };
   if (started.ok) s = started.state;
+  if (DRAFT && FIRST_DRAFT === 'other' && s.draft) {
+    // 只对调签位，不碰开局谁先走
+    s.draft.order = s.draft.order.map((p) => (p === 'A' ? 'B' : 'A'));
+  }
+  if (DRAFT && PICK_ORDER !== 'snake' && s.draft) {
+    s.draft.order = rewriteOrder(s.draft.order, PICK_ORDER);
+  }
 
-  for (let guard = 0; guard < 200; guard++) {
+  for (let guard = 0; DRAFT && guard < 200; guard++) {
     if (!s.draft || s.draft.phase === 'done') break;
     const view = draftView(s);
     if (!view) break;
     if (view.phase === 'ban') {
-      const side: PlayerId | undefined = (['A', 'B'] as PlayerId[]).find(
-        (sd) => !(sd === 'A' ? view.a : view.b).banDone,
-      );
+      // 轮流禁用（2026-11-07）：只让当前这一方下注，不能按"谁还没禁完"挑人
+      const side: PlayerId | undefined = view.banTurn ?? undefined;
       if (!side) break;
-      const id = aiDraftBan(s, side);
+      const id = aiDraftBan(s, side, BAN_MODE);
       if (!id) break;
       const r = applyAction(s, { type: 'DRAFT_BAN', unitId: id, at: 1 }, side);
       // 失败要**当场炸**，不能 break：break 会让这一局带着空 list 进统计，
@@ -223,7 +275,9 @@ function report(rows: GameRow[]): void {
   };
   const list = [...ledger.values()].sort((x, y) => y.solo - x.solo || y.picked - x.picked);
 
-  console.log(`\n选卡体检 · ${games} 局 · 双 AI（${LEVEL}）· 起始第 ${ERA} 代 · ${SIZE}×${SIZE}`);
+  console.log(
+    `\n${DRAFT ? '选卡体检' : '无选卡对照'} · ${games} 局 · 双 AI（${LEVEL}）· 起始第 ${ERA} 代 · ${SIZE}×${SIZE}`,
+  );
   console.log(`扩展：${EXPANSIONS.join('+') || '（无）'}`);
   console.log(
     `结果：A 胜 ${aWins} / B 胜 ${bWins} / 未决 ${draws} · 平均 ${avgTurns.toFixed(1)} 回合`,
@@ -233,6 +287,9 @@ function report(rows: GameRow[]): void {
       `选位 ${[...new Set(rows.map((r) => r.picksA.length + r.picksB.length))].join('/')} 张`,
   );
 
+  if (!DRAFT) {
+    console.log('\n（关闭选卡：没有池子/禁用/抓取，下面的表是空的，只看上面的胜负与回合数）');
+  }
   const inPool = new Set(list.filter((L) => L.pool > 0).map((L) => L.id));
   const everPicked = list.filter((L) => L.picked > 0).length;
   console.log(

@@ -121,8 +121,18 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
       const i = idx(s, u.x, u.y);
       if (visibleSet.has(i)) continue;
       const tile = cloned.tiles[i];
-      // 桥只能架在水面上（见 buildSiteError 的 buildOn），看不见就退回水面
-      if (tile && tile.terrain === 'bridge') tile.terrain = 'water';
+      /*
+       * 看不见的桥要还原成**原来的地形**，不是一律还原成水。
+       *
+       * 桥现在也能架在沼泽上（`buildOn: ['water', 'marsh']`），
+       * 一律还原成水的话，沼泽上那座桥在迷雾里会凭空变成一条河——
+       * 河过不去、沼泽能过（移动力 2），玩家按错的地形做判断。
+       * 原地形建桥那一刻记在 `custom.deckFrom` 里；老存档没有这个字段，退回水面。
+       */
+      if (tile && tile.terrain === 'bridge') {
+        const from = u.custom?.deckFrom;
+        tile.terrain = from === 'marsh' ? 'marsh' : 'water';
+      }
     }
   }
 

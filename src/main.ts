@@ -75,7 +75,8 @@ import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames
 import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
-import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import { lineBetween } from './core/grid-line.ts';
+import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -103,6 +104,7 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
+import { openMapUpload } from './ui/map-upload.ts';
 import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
@@ -157,6 +159,7 @@ import {
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
+import { MODULES, deviceTargetOf } from './core/armor.ts';
 
 /**
  * 非空时表示某个英雄正在等玩家选技能目标。
@@ -174,6 +177,14 @@ let pendingSkill:
  * 不必重算一遍预览，棋盘也不用跟着重绘。
  */
 let skillAimKey = '';
+
+/**
+ * 非空时表示某台装甲正在等玩家给设备选落点（弹射钩索）。
+ *
+ * 和 `pendingSkill` 是同一个套路，但不合并：技能有冷却/连发这一整套要处理，
+ * 设备只有"选一格"。合成一个字段之后，"取消"该退回哪一层就说不清了。
+ */
+let pendingDevice: { unitId: string; deviceId: string } | null = null;
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -970,7 +981,7 @@ function panelInput(known?: PlayerView): PanelInput {
      * 战报卡只排一种情况：复盘。
      *
      * 复盘里 `me()` 是"看棋的人"的席位，拖进来的那局跟你没关系，
-     * 生成的卡会把别人那局标成"我赢了"——和结算卡替人签同意书是同一类错。
+     * 生成的卡会把别人那局标成"胜利"——和结算卡替人签同意书是同一类错。
      * 上帝模式、双 AI 观战**给**：前者是自家最常用的模式，
      * 后者打完一局正好发群里。
      */
@@ -1382,6 +1393,19 @@ function render(): void {
      */
     ...(tutorial.tutorialOn() ? tutorialMarksOf() : {}),
   });
+
+  /*
+   * 笔刷在手时，棋盘自己吃掉触摸手势。
+   *
+   * `.board-scroll` 在放大档是 `touch-action: pan-x pan-y`，手指一划就变成滚地图，
+   * pointermove 直接被浏览器掐掉——拖动绘制在触摸设备上会"划一下就断"。
+   * 这个 class 必须在**手势开始之前**就在，所以放在每帧渲染里维护，
+   * 而不是等 pointerdown 再贴。
+   */
+  boardEl.classList.toggle(
+    'brush-paint',
+    state.config.godMode === true && !replay && godBrush.kind !== 'none' && !godInControl(),
+  );
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
 
@@ -2040,8 +2064,9 @@ function draftIsAi(side: PlayerId): boolean {
 /**
  * 座位交接。
  *
- * 禁用是盲禁：我交完就该把设备交出去，不能顺手替对面也点了。
- * 选人期则完全由 order 决定——轮到谁，设备就跟着谁。
+ * 禁用改成轮流之后（2026-11-07），两段的判据其实是同一个了：
+ * **轮到谁，设备就跟着谁**。禁用期不再有"我交完就把设备交出去"这一步模糊操作
+ * ——只要 `banTurn` 不是我，设备就该在对面的手上。
  */
 function syncDraftSeat(): void {
   const view = draftView(state);
@@ -2055,12 +2080,8 @@ function syncDraftSeat(): void {
     draftSeat = view.toAct;
     return;
   }
-  if (view.phase === 'ban') {
-    const mine = draftSeat === 'A' ? view.a : view.b;
-    if (!mine.banDone) return;
-    const other: PlayerId = draftSeat === 'A' ? 'B' : 'A';
-    const otherView = other === 'A' ? view.a : view.b;
-    if (!otherView.banDone && !draftIsAi(other)) draftSeat = other;
+  if (view.phase === 'ban' && view.banTurn && !draftIsAi(view.banTurn)) {
+    draftSeat = view.banTurn;
   }
 }
 
@@ -2363,11 +2384,11 @@ function scheduleDraftAi(): void {
   if (draftAiPending) return;
   const view = draftView(state);
   if (!view) return;
+  // 轮流禁用之后，"轮到谁"才是判据：不能再用"还有谁没禁完"——
+  // 对面那一轮里没禁完的那个席位是玩家自己，AI 不该替他下手
   const aiPending =
     view.phase === 'ban'
-      ? (['A', 'B'] as PlayerId[]).some(
-          (side) => draftIsAi(side) && !(side === 'A' ? view.a : view.b).banDone,
-        )
+      ? !!view.banTurn && draftIsAi(view.banTurn)
       : view.phase === 'pick' && !!view.toAct && draftIsAi(view.toAct);
   if (!aiPending) return;
 
@@ -2378,10 +2399,8 @@ function scheduleDraftAi(): void {
     const now = draftView(state);
     if (!now) return;
     if (now.phase === 'ban') {
-      const side = (['A', 'B'] as PlayerId[]).find(
-        (sd) => draftIsAi(sd) && !(sd === 'A' ? now.a : now.b).banDone,
-      );
-      if (!side) return;
+      const side = now.banTurn;
+      if (!side || !draftIsAi(side)) return;
       const id = aiDraftBan(state, side);
       if (id) dispatchDraft({ type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
       return;
@@ -2546,9 +2565,14 @@ function onDraftClick(typeId: string): void {
   // 席位一律问 draftActor()：联机以房间为准，热座看交接
   const seat = draftActor();
   if (view.phase === 'ban') {
+    // 轮流禁用：先看轮到谁，再看禁没禁满——顺序反过来会给出误导的提示
+    if (view.banTurn && view.banTurn !== seat) {
+      toast(`现在轮到${state.players[view.banTurn].name}禁用`);
+      return;
+    }
     const mine = seat === 'A' ? view.a : view.b;
     if (mine.banDone) {
-      toast('你已经禁用过了，等对面');
+      toast('你已经禁完了，等对面');
       return;
     }
     dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, seat);
@@ -3050,6 +3074,23 @@ function onBoardClick(e: Event): void {
     refreshSelection(); // 恢复常规的移动/攻击高亮
     render();
     return; // 阻断后续的逻辑
+  }
+
+  // 0.15) 正在等待设备选点（弹射钩索）
+  if (pendingDevice && coords) {
+    const { unitId, deviceId } = pendingDevice;
+    pendingDevice = null;
+    const self = state.units.find((x) => x.id === unitId);
+    // 点回自己脚下 = 放弃：钩索"落点等于原地"本来就是非法目标，
+    // 与其让规则层回一句"已经在那一格了"，不如当取消。
+    if (self && coords.x === self.x && coords.y === self.y) {
+      toast('已取消');
+    } else {
+      dispatch({ type: 'USE_DEVICE', unitId, deviceId, x: coords.x, y: coords.y });
+    }
+    refreshSelection();
+    render();
+    return;
   }
 
   // AI 正在行动：不许下子，但"看"必须留着。
@@ -3580,6 +3621,70 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'launch': {
+      if (!selectedId) return;
+      dispatch({ type: 'LAUNCH', unitId: selectedId });
+      refreshSelection();
+      return;
+    }
+
+    case 'recover': {
+      const planeId = el.dataset.plane;
+      if (!selectedId || !planeId) return;
+      dispatch({ type: 'RECOVER', unitId: selectedId, planeId });
+      refreshSelection();
+      return;
+    }
+
+    case 'mount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'MOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'unmount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'UNMOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    // 用设备。要选落点的那一种（弹射钩索）先进入"等玩家点地图"的状态，
+    // 其余的直接结算：整备臂的目标是"相邻友军"，按钮本身就是按友军各出一个，
+    // 所以 `data-target` 已经带上了目标 id。
+    case 'use-device': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      const target = el.dataset.target;
+      if (target) {
+        dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod, targetId: target });
+        refreshSelection();
+        return;
+      }
+      const u = state.units.find((x) => x.id === selectedId);
+      const kind = u ? MODULES[mod]?.device : undefined;
+      if (kind && deviceTargetOf(kind) === 'tile') {
+        pendingDevice = { unitId: selectedId, deviceId: mod };
+        toast('在地图上点一个 3 格内的空地作为落点');
+        refreshSelection();
+        render();
+        return;
+      }
+      dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'recharge': {
+      if (!selectedId) return;
+      dispatch({ type: 'RECHARGE', unitId: selectedId });
+      refreshSelection();
+      return;
+    }
+
     case 'disband': {
       if (!selectedId) return;
       const u = state.units.find((x) => x.id === selectedId);
@@ -4074,6 +4179,21 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'god-clear': {
       godApply(clearUnits(state, el.dataset.side === 'B' ? 'B' : 'A'));
+      return;
+    }
+
+    /*
+     * 上传这张图：沙盒 → 云端地图库（待审核）。
+     *
+     * 不在这里直接传：地图名要人填，折算和校验的结果也要先说清楚。
+     * 弹窗负责那三句话，这里只负责把当前局面递过去。
+     */
+    case 'god-map-upload': {
+      if (godRunning || godPassing) {
+        toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
+        return;
+      }
+      openMapUpload({ state });
       return;
     }
 
@@ -5526,6 +5646,25 @@ function godApply(result: SandboxResult): void {
   render();
 }
 
+/**
+ * 把笔刷作用到**一格**：只算，不落撤销栈、不存档、不重绘。
+ *
+ * 拖动绘制要在一根手指划过的十几格上连着改局面。如果每格都走 `godApply`，
+ * 一次拖动会在撤销栈里压十几步——按一下 Ctrl+Z 只退一格，用起来就是"撤销坏了"。
+ * 所以把"改局面"和"记一步"拆开：这里只改，提交由 `godStrokeEnd` 统一做一次。
+ */
+function godPaintAt(base: GameState, x: number, y: number): SandboxResult {
+  // 空手不落笔（"空手点一下 = 看看这格是什么"，那是 `onGodClick` 的事）
+  if (godBrush.kind === 'none') return { ok: false, reason: '先挑一个笔刷' };
+  if (godBrush.kind === 'erase') return removeAt(base, x, y);
+  if (godBrush.kind === 'city') {
+    return placeCity(base, godSide, x, y, godCityEra || base.config.startEra);
+  }
+  // 改地形不看"摆给谁"：地形不属于任何一方
+  if (godBrush.kind === 'terrain') return paintTerrain(base, x, y, godBrush.terrain);
+  return placeUnit(base, godSide, godBrush.type, x, y);
+}
+
 function onGodClick(e: Event): void {
   if (godRunning || godPassing) {
     toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
@@ -5534,6 +5673,13 @@ function onGodClick(e: Event): void {
   const coords = coordsFromEvent(e);
   if (!coords) return;
   const { x, y } = coords;
+
+  // 这一次 click 是刚结束那根拖动的尾巴：那一格拖动时已经画过了，
+  // 再走一遍就是重复落子（摆兵/橡皮会直接报"这格已经有东西"）。
+  if (godDragTail && performance.now() - godDragTail.at < 600 && godDragTail.x === x && godDragTail.y === y) {
+    godDragTail = null;
+    return;
+  }
 
   // 空手：这一格上是什么。沙盒里没有属性卡这回事，
   // 想知道血量就点一下，一句话说清就够了。
@@ -5556,14 +5702,148 @@ function onGodClick(e: Event): void {
     return;
   }
 
-  if (godBrush.kind === 'erase') godApply(removeAt(state, x, y));
-  else if (godBrush.kind === 'city') {
-    godApply(placeCity(state, godSide, x, y, godCityEra || state.config.startEra));
-  } else if (godBrush.kind === 'terrain') {
-    // 改地形不看"摆给谁"：地形不属于任何一方
-    godApply(paintTerrain(state, x, y, godBrush.terrain));
-  } else godApply(placeUnit(state, godSide, godBrush.type, x, y));
+  godApply(godPaintAt(state, x, y));
 }
+
+/* ── 笔刷拖动绘制 ─────────────────────────────────────────────────────────
+ *
+ * 按下记一笔底账 → 移动时把**上一格到这一格之间的每一格**都补上 → 松开提交。
+ *
+ * 三件事是刻意这么定的：
+ *   · **按下不落笔**。落笔放在第一次 pointermove。这样"点一下"这个手势
+ *     根本不会进入拖动路径，松手后照旧由 click 走 `onGodClick`——
+ *     单格点击的行为一个字节都没变，也不会和它抢。
+ *   · **补线用 Bresenham，不用"逐格点"**。快速拖动时 pointermove 本身会跳格
+ *     （60Hz 手指一划就是三四格），只画事件点会画出一条虚线。
+ *     有 `getCoalescedEvents` 就把浏览器压掉的中间采样也取出来一起算。
+ *   · **撤销只压一次**。整根拖动 = 一步。鼠标划过去的不是十几次操作。
+ */
+let godStroke: {
+  /** 按下之前的局面：撤销栈要压的就是它 */
+  base: GameState;
+  /** 上一次落笔的格（补线的起点） */
+  last: { x: number; y: number };
+  /** 这一笔已经画过的格，避免同一个格子反复改（来回划不该刷十遍） */
+  cells: Set<number>;
+  /** 画成功几格。为 0 就不是拖动，交给 click 走原路 */
+  painted: number;
+  /** 第一句失败原因：整笔一格都没画上时说出来，画上了就当噪声吞掉 */
+  error: string;
+  pid: number;
+} | null = null;
+
+/** 拖动刚结束的那一格。用来吞掉松手后派生出来的那一下 click */
+let godDragTail: { x: number; y: number; at: number } | null = null;
+
+/** 画一格（同一笔里画过的跳过） */
+function godStrokePaint(x: number, y: number): void {
+  const stroke = godStroke;
+  if (!stroke) return;
+  const key = y * state.w + x;
+  if (stroke.cells.has(key)) return;
+  stroke.cells.add(key);
+  const r = godPaintAt(state, x, y);
+  if (!r.ok) {
+    if (!stroke.error) stroke.error = r.reason;
+    return;
+  }
+  state = r.state;
+  stroke.painted += 1;
+}
+
+/** 能不能起笔：和 `onGodClick` 的门槛保持一致（那边拦什么，这边也拦什么） */
+function godStrokeBegin(e: PointerEvent): boolean {
+  if (state.config.godMode !== true || replay) return false;
+  // 操控档/对面在走：那是"走棋"的地方，不该被笔刷抢走
+  if (godInControl() || godRunning || godPassing) return false;
+  if (godBrush.kind === 'none') return false;
+  if (e.pointerType === 'mouse' && e.button !== 0) return false;
+  const at = cellAtPoint(boardEl, e.clientX, e.clientY);
+  if (!at) return false;
+
+  godStroke = { base: state, last: at, cells: new Set(), painted: 0, error: '', pid: e.pointerId };
+  /*
+   * 抓指针：手指/鼠标划出棋盘边界也还算数，不会拖到一半断掉。
+   *
+   * 包 try：指针已经失效（比如这一下是合成事件、或者系统刚把手势抢走）时，
+   * 规范允许 `setPointerCapture` 抛 NotFoundError。抓不住只影响"划出边界还能继续"，
+   * 不该把整根拖动连第一格都赔进去。
+   */
+  try {
+    boardEl.setPointerCapture?.(e.pointerId);
+  } catch {
+    /* 抓不住就算了，拖动本身照旧 */
+  }
+  // 别让 .board-scroll 顺手把这一下当成"拖地图"（放大档里它也在听 pointerdown）
+  e.stopPropagation();
+  return true;
+}
+
+function godStrokeMove(e: PointerEvent): void {
+  const stroke = godStroke;
+  if (!stroke || e.pointerId !== stroke.pid) return;
+
+  /*
+   * 合并采样：高刷新率鼠标/极快的手指一帧里会攒好几个点，浏览器只派发最后一个。
+   * 不取出来，补线的起点就会从"上一个派发点"算起，那几格照样漏。
+   */
+  const coalesced =
+    typeof e.getCoalescedEvents === 'function' ? (e.getCoalescedEvents() as PointerEvent[]) : [];
+  const points = coalesced.length > 0 ? coalesced : [e];
+
+  let dirty = false;
+  for (const ev of points) {
+    const at = cellAtPoint(boardEl, ev.clientX, ev.clientY);
+    if (!at) continue;
+    /*
+     * 第一笔要把**按下那一格**补上。
+     *
+     * 落笔是"不含起点、含终点"的（起点算上一笔画过），可按下的时候我们故意
+     * 什么都没画——留给"点一下"走 click 那条老路。于是第一格必须在这里补：
+     * 不补的话，从 (2,3) 划到 (6,3) 画出来是 (3..6)，起点那个洞永远在。
+     */
+    if (stroke.cells.size === 0) {
+      const beforeFirst = stroke.painted;
+      godStrokePaint(stroke.last.x, stroke.last.y);
+      if (stroke.painted !== beforeFirst) dirty = true;
+    }
+    if (at.x === stroke.last.x && at.y === stroke.last.y) continue;
+    const before = stroke.painted;
+    for (const c of lineBetween(stroke.last, at)) godStrokePaint(c.x, c.y);
+    stroke.last = at;
+    if (stroke.painted !== before) dirty = true;
+  }
+  // 一帧最多重绘一次：每个格子都 render 会让 20×20 的拖动掉到个位数帧
+  if (dirty) render();
+}
+
+function godStrokeEnd(e: PointerEvent): void {
+  const stroke = godStroke;
+  if (!stroke || e.pointerId !== stroke.pid) return;
+  godStroke = null;
+  try {
+    if (boardEl.hasPointerCapture?.(stroke.pid)) boardEl.releasePointerCapture(stroke.pid);
+  } catch {
+    /* 同上：抓没抓到都不影响已经画上的格子 */
+  }
+
+  // 一格都没画上：要么是"点一下"（该由 click 走原路），要么每格都失败了
+  if (stroke.painted === 0) {
+    state = stroke.base;
+    if (stroke.error) toast(stroke.error);
+    return;
+  }
+
+  // 整根拖动压一步撤销
+  undoStack.push(stroke.base);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  godResult = '';
+  saveMatch(state);
+  render();
+  // 松手这一格拖动时已经画过了，记下来吞掉随之而来的 click
+  godDragTail = { x: stroke.last.x, y: stroke.last.y, at: performance.now() };
+}
+
 
 /**
  * 玩家结束回合之后：把对面那一步补上，然后交还。
@@ -6572,8 +6852,7 @@ const endPan = (e?: Event): void => {
   }
 };
 boardScrollEl.addEventListener('pointerup', endPan);
-boardScrollEl.addEventListener('pointercancel', endPan);
-boardScrollEl.addEventListener('pointerleave', (e) => {
+boardScrollEl.addEventListener('pointercancel', endPan);boardScrollEl.addEventListener('pointerleave', (e) => {
   /*
    * 已经抓住指针了就别再因为"离开元素边界"收工。
    *
@@ -6583,6 +6862,31 @@ boardScrollEl.addEventListener('pointerleave', (e) => {
    */
   if (boardScrollEl.hasPointerCapture?.(e.pointerId)) return;
   endPan(e);
+});
+
+/*
+ * 笔刷拖动：按下起笔、移动补格、松开提交。
+ *
+ * 挂在 `boardEl`（`#board`，一个长期存在的节点）而不是格子上：棋盘每帧都在重建
+ * 子节点，监听器挂在格子上，第一次重绘之后就没了。指针捕获也抓在这个节点上，
+ * 所以整根拖动的 pointermove 都会回到这里，哪怕手已经划到棋盘外面。
+ */
+boardEl.addEventListener('pointerdown', (e) => {
+  godStrokeBegin(e as PointerEvent);
+});
+boardEl.addEventListener('pointermove', (e) => {
+  if (!godStroke) return;
+  godStrokeMove(e as PointerEvent);
+});
+boardEl.addEventListener('pointerup', (e) => {
+  if (!godStroke) return;
+  godStrokeEnd(e as PointerEvent);
+});
+boardEl.addEventListener('pointercancel', (e) => {
+  // 系统把手势抢走了（来电、切后台）。已经画上去的东西**留着**：
+  // 玩家看得见它，回滚等于把他刚画的抹掉，比"提前提交"更没道理。
+  if (!godStroke) return;
+  godStrokeEnd(e as PointerEvent);
 });
 
 // 悬停看详情：选卡时判断禁不禁、造兵之前判断这个工兵能盖什么，都靠这一套

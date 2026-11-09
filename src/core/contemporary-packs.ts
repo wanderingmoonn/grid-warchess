@@ -101,9 +101,7 @@ export const MODERN_ABILITIES: AbilityDef[] = [
             if (c.side !== 'attacker' || !c.foe) return;
             const def = c.api.utype(c.state, c.foe.type);
             const flying =
-              def.layer === 'air' ||
-              c.api.hasAbility(c.state, c.foe, 'fly-over') ||
-              c.api.hasAbility(c.state, c.foe, 'fly');
+              def.layer === 'air' || c.api.hasAbility(c.state, c.foe, 'fly');
             if (flying) c.damage = Math.round(c.damage * ANTI_AIR);
           },
         },
@@ -270,7 +268,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     armor: 13,
     maxHp: 88,
     range: 5,
-    vision: 4,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 5,
     autoAttack: true,
   },
   {
@@ -546,7 +545,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     armor: 16,
     maxHp: 100,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 4,
     autoAttack: true,
   },

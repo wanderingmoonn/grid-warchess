@@ -22,6 +22,7 @@
 
 import { applyAction, citiesOf } from '../src/core/rules.ts';
 import { eraCeilingOf } from '../src/core/expansions.ts';
+import { upgradeEdgeOf } from '../src/core/era-routes.ts';
 import { eraDef } from '../src/core/config.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction } from '../src/core/ai.ts';
@@ -59,9 +60,12 @@ function giveEra(s: GameState, p: PlayerId, n: number): number {
   for (const c of citiesOf(s, p)) {
     for (let k = 0; k < n; k++) {
       if (c.era >= cap) break;
+      // 走路线，不写 era+1：换线之后这里也要跟着换，否则探针量的是"另一条科技线"
+      const edge = upgradeEdgeOf(s, c);
+      if (!edge) break;
       const from = eraDef(c.era);
-      const to = eraDef(c.era + 1);
-      c.era += 1;
+      const to = eraDef(edge.to);
+      c.era = edge.to;
       const hpGain = to.cityMaxHp - from.cityMaxHp;
       c.maxHp += hpGain;
       c.armor += to.cityArmor - from.cityArmor;

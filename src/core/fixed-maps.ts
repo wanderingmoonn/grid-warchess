@@ -26,6 +26,8 @@
  * 这样同一份地图在开了「城郭」扩展的局里会变成 3×3 的城，而不用改地图数据。
  */
 
+import { MAP_TERRAIN_CHARS } from './mapgen.ts';
+
 /** 一份固定地图 */
 export interface FixedMap {
   /** 唯一键：内置是 `builtin:xxx`，玩家上传的是 `user:<云端行 id>` */
@@ -44,6 +46,14 @@ export interface FixedMap {
   createdAt?: string;
   /** 'builtin' / 'user'：界面据此决定要不要显示作者与删除入口 */
   source?: 'builtin' | 'user';
+  /**
+   * 还在等审核（**本机标记，不来自云端**）。
+   *
+   * 待审核的行 `listed=false`，按读策略谁也查不到——包括作者自己。所以这个
+   * 标记只能由上传方在本机缓存里带上，用来在画廊里说明"这张还没公开"。
+   * 拿它去判断权限就错了：它只是给人看的一行字。
+   */
+  pending?: boolean;
 }
 
 export interface MapPoint {
@@ -60,13 +70,22 @@ export const MAP_MAX_BYTES = 256 * 1024;
 /**
  * 允许出现在地图里的地形字符。
  *
- * **只有本体这五种 + 桥**：`P`（台地）`v`（河谷）`w`（沼泽）`d`（沙丘）
- * `s`（浅滩）`D`（深水）都是扩展带来的地形，一份"给所有人玩"的地图用了它们，
- * 在没开对应扩展的局里就会还原成平原甚至未知格子。固定地图要能跨房间分享，
- * 所以这里直接不收——想用扩展地形，那种图只该留在自己的存档里。
+ * **这一份从 mapgen 的 `CHAR` 派生**，不再手写白名单。
+ *
+ * 2026-11-07 改的口径：以前这里只收 `.fh~^=` 六种本体地形，理由是"用扩展地形的图
+ * 在没开对应扩展的局里会认不出来"。这个理由不成立——地形是规则层的正式成员，
+ * 渲染（style.css 的 `.tile.t-*`）、移动（`blockedFor`）、视野全都无条件支持，
+ * 扩展只决定**地图生成器画不画**，不决定**这张图能不能有**。
+ * 代价是那六种之外的格子会被静默抹平：作者画了半天沼泽，传上去变平原，
+ * 而且只在别人那边变——这才是真正会吵起来的那种 bug。
+ *
+ * 所以现在收全部地形字符：`.` 平原 / `f` 森林 / `h` 丘陵 / `~` 水 / `^` 山 /
+ * `=` 桥 / `P` 台地 / `v` 谷地 / `w` 沼泽 / `d` 沙丘 / `s` 浅流 / `D` 深水。
  */
-export const TERRAIN_CHARS = '.fh~^=';
-export const TERRAIN_LEGEND = '（. 平原 / f 森林 / h 丘陵 / ~ 水 / ^ 山 / = 桥）';
+export const TERRAIN_CHARS: string = MAP_TERRAIN_CHARS;
+
+/** 给界面用的一句话图例（跟着上面那份自动对齐，别再手写一遍） */
+export const TERRAIN_LEGEND = `（可用字符：${TERRAIN_CHARS.split('').join(' ')}）`;
 
 /**
  * 校验一份"来路不明"的地图数据。
@@ -122,9 +141,23 @@ export function validateFixedMap(raw: unknown): { ok: true; map: FixedMap } | { 
   if (citiesB.length === 0) errors.push('乙方一座城都没有（citiesB）');
   if (citiesA.length > 8 || citiesB.length > 8) errors.push('每方最多 8 座城');
 
+  /*
+   * 城位只需要**放得下**，不要求离边界留空。
+   *
+   * 以前这里写的是 x ≥ 1 且 x ≤ w-3（"离边界至少一格"），理由是"城贴边了
+   * 开局部队没地方站"。但这条理由站不住：贴边的城周围照样有格子能站人，
+   * 而"把城摆在角上"本来就是一类正经的地图设计（要塞图、背水一战）。
+   * 玩家在沙盒里把城摆到角上，导出时却被自己的校验拦下——这不是保护，是刁难。
+   *
+   * 现在只拦真正不成立的那种：2×2 的城**框不进棋盘**（左上角取到最后两格之外）。
+   * 开「城郭」变 3×3 时可能溢出，那一步在 setup 里按棋盘边长夹一次（物理约束，
+   * 不是政策），见 `clampCityInto`。
+   */
   for (const c of [...citiesA, ...citiesB]) {
-    if (c.x < 1 || c.y < 1 || c.x > w - 3 || c.y > h - 3) {
-      errors.push(`城位 (${c.x}, ${c.y}) 贴边了：城要离边界至少 1 格（2×2 的城左上角最大是 ${w - 3}, ${h - 3}）`);
+    if (c.x < 0 || c.y < 0 || c.x + 2 > w || c.y + 2 > h) {
+      errors.push(
+        `城位 (${c.x}, ${c.y}) 超出棋盘了：2×2 的城左上角最多到 ${w - 2}, ${h - 2}`,
+      );
       break;
     }
   }
@@ -193,12 +226,32 @@ export function parseMapFile(text: string): { ok: true; map: FixedMap } | { ok: 
   const rowsWithCity: string[] = [];
   const cityA: MapPoint[] = [];
   const cityB: MapPoint[] = [];
+
+  /**
+   * 这一行像不像地形行。
+   *
+   * 判据必须用 `TERRAIN_CHARS`（从 mapgen 派生），不能手写一份字符类：
+   * 以前这里写的是 `/[^\sfh~^=ABab.]/`——只认本体六种。于是含 `w`（沼泽）
+   * 的行被判成"不像地形"，又在 `grid.length === 0` 的窗口里被当成**地图名**
+   * 吞掉，一串沼泽行整片消失，最后报"没有读到任何地形行"或者只剩前几行。
+   */
+  const isTerrainLine = (line: string): boolean => {
+    const cells = line.replace(/\s+/g, '');
+    if (!cells) return false;
+    for (const ch of cells) {
+      if (!TERRAIN_CHARS.includes(ch) && !'ABab'.includes(ch)) return false;
+    }
+    return true;
+  };
+
+  /** 只有**第一行**能当名字：后面的行就算有怪字符，也该交给校验去报"第几行第几列不认识" */
+  let nameTaken = false;
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
-    // 名字行：出现非地形字符（字母、汉字、冒号）就当作名字
-    if (grid.length === 0 && /[^\sfh~^=ABab.]/.test(line.replace(/^name[:：]\s*/i, ''))) {
+    if (!nameTaken && grid.length === 0 && !isTerrainLine(line)) {
       name = line.replace(/^name[:：]\s*/i, '').slice(0, 24);
+      nameTaken = true;
       continue;
     }
     // 行内空格是排版用的，去掉；大小写统一

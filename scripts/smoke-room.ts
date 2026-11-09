@@ -59,8 +59,9 @@ if (await submitTurn(seat.code, ended.state, prevTurn)) throw new Error('撞车�
  * 这一段是真刀真枪的协议验证，不是"函数能不能跑"：
  *   1. 建房时 turn 列存的是**进度号**（不是回合数 1）；
  *   2. 每一步都用"我看到的进度号"做乐观锁，过期的号必须被挡；
- *   3. 被挡之后重新拉、把这一步补到最新状态上，还能交上去（禁用期双方同时提交）；
- *   4. 选完之后 turn 交还给 1，正常对局的那把锁完好无损。
+ *   3. 禁用是轮流的：没轮到的那一方提交要被挡，交棒之后 banTurn 必须换人；
+ *   4. 被挡之后重新拉、把这一步补到最新状态上，还能交上去；
+ *   5. 选完之后 turn 交还给 1，正常对局的那把锁完好无损。
  * ------------------------------------------------------------------------- */
 
 const bpBase = createMatch(
@@ -83,22 +84,51 @@ if (!(await submitDraft(bpRoom.code, bp, seqLobby))) throw new Error('"开始选
 console.log('开始选卡', { 阶段: bp.draft!.phase, 进度号: bp.draft!.seq });
 
 const seq0 = bp.draft!.seq;
-const aBan = applyAction(bp, { type: 'DRAFT_BAN', unitId: bp.draft!.pool[0]!, at: bp.draft!.deadline }, 'A');
+/*
+ * 禁用是**轮流**的（`draft.banTurn`），不是双方同时禁。
+ *
+ * 谁先禁由选卡顺序决定：后拿第一签的那一方先禁（见 draft.ts 里 banTurn 的注释），
+ * 所以这里绝不能写死 'A'——12×12 这一局先禁的是 B。旧版就是这么写死的，
+ * 改轮流之后这条冒烟测试一直红着（它不在 `npm test` 里，谁也没发现）。
+ */
+const firstBanner = bp.draft!.banTurn!;
+if (!firstBanner) throw new Error('禁用阶段应该写明轮到谁');
+const secondBanner = firstBanner === 'A' ? 'B' : 'A';
+
+// 没轮到的那一方提交禁用，必须被挡——这是"轮流"的全部意义
+const offTurn = applyAction(
+  bp,
+  { type: 'DRAFT_BAN', unitId: bp.draft!.pool[0]!, at: bp.draft!.deadline },
+  secondBanner,
+);
+if (offTurn.ok) throw new Error(`还没轮到 ${secondBanner}，它居然也能禁`);
+
+const aBan = applyAction(
+  bp,
+  { type: 'DRAFT_BAN', unitId: bp.draft!.pool[0]!, at: bp.draft!.deadline },
+  firstBanner,
+);
 if (!aBan.ok) throw new Error(aBan.reason);
 bp = aBan.state;
-if (!(await submitDraft(bpRoom.code, bp, seq0))) throw new Error('A 的禁用没交上去');
+if (!(await submitDraft(bpRoom.code, bp, seq0))) throw new Error(`${firstBanner} 的禁用没交上去`);
 
-// B 在自己那台机器上：先拉最新，再禁
+// 另一方在自己那台机器上：先拉最新，再禁
 let remote = (await fetchRoom(bpRoom.code))!;
 const seq1 = remote.state.draft!.seq;
-if (seq1 !== seq0 + 1) throw new Error('A 提交后进度号应该 +1');
+if (seq1 !== seq0 + 1) throw new Error('提交后进度号应该 +1');
+if (remote.state.draft!.banTurn !== secondBanner) {
+  throw new Error(`交棒之后应该轮到 ${secondBanner}，实际是 ${remote.state.draft!.banTurn}`);
+}
 const bBan = applyAction(
   remote.state,
   { type: 'DRAFT_BAN', unitId: remote.state.draft!.pool[1]!, at: remote.state.draft!.deadline },
-  'B',
+  secondBanner,
 );
 if (!bBan.ok) throw new Error(bBan.reason);
-if (!(await submitDraft(bpRoom.code, bBan.state, seq1))) throw new Error('B 的禁用没交上去');
+if (!(await submitDraft(bpRoom.code, bBan.state, seq1))) throw new Error(`${secondBanner} 的禁用没交上去`);
+if (bBan.state.draft!.phase !== 'pick') {
+  throw new Error(`双方各禁 ${bBan.state.draft!.banSlots} 个之后应该进选人，现在是 ${bBan.state.draft!.phase}`);
+}
 
 // 拿已经过期的进度号再交一次：必须被挡（这就是"不会互相覆盖"的保证）
 if (await submitDraft(bpRoom.code, bBan.state, seq0)) throw new Error('过期进度号居然也能交');

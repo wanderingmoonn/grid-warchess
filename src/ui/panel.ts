@@ -20,13 +20,42 @@ import {
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
 import { buildListOf, type BuildList } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
+import { carrierBlock } from './carrier-block.ts';
+import { draftedCardsHtml } from './draft-panel.ts';
+import {
+  MODULES,
+  canMount,
+  canRecharge,
+  canUseDevice,
+  chargesLeft,
+  deviceTargetOf,
+  devicesOf,
+  energyReport,
+  fitsFrame,
+  modulesOf,
+  offlineModules,
+  rechargeQuote,
+  unitDraw,
+} from '../core/armor.ts';
 import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
 import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
 import { canUseType, eraWindowOk, upgradeUnlocks } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
-import { describeTerrain, describeUnit, ELEMENT_EFFECT, TERRAIN_INFO } from '../core/info.ts';
+import { 
+  describeTerrain,
+  describeUnit,
+  ELEMENT_EFFECT,
+  TERRAIN_INFO,
+    CLIMATE_ICON,
+  climateEffectLines,
+  describeTerrain,
+  describeUnit,
+  ELEMENT_EFFECT,
+  TERRAIN_INFO,
+  unitStatLine,
+} from '../core/info.ts';
 import {
   airLayer,
   attacksLeftOf,
@@ -60,10 +89,12 @@ import {
   incomeResOf,
   unitYield,
   unitsOf,
-  upgradeCostOf,
   utype,
   adjacentRequirementText,
+  hidesInFog,
+  hiddenFromAllFoes,
 } from '../core/rules.ts';
+import { upgradeTargetOf } from '../core/era-routes.ts';
 import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
@@ -359,6 +390,24 @@ function panelHtml(input: PanelInput): string {
         ${turnBadge}
         <span class="hint">第 ${s.turn} 次行动</span>
       </div>
+      ${
+        /*
+         * 撤回放在这里，不放在「结束回合」下面。
+         *
+         * 两颗按钮原来上下紧挨着（结束回合是整行长按钮，撤回就在它正下方），
+         * 而它们一个是"这一回合我走完了"、一个是"把最后一步退回来"——
+         * 手一抖点错，代价是一次回合交接。挪到顶部信息卡，"结束回合"下面
+         * 只剩「认输」和「音效」，中间还隔着一行提示。
+         */
+        input.replay
+          ? ''
+          : `<div class="undo-row">
+               <button class="btn btn-sm" data-act="undo" ${
+                 input.canUndo === true && myTurn ? '' : 'disabled'
+               } title="退回上一步（只在同一回合内可用）">撤回一步</button>
+               <span class="hint">同一回合内可退，结束回合后就不能了</span>
+             </div>`
+      }
       <div style="margin-top:12px">
         ${seatRows}
       </div>
@@ -427,7 +476,6 @@ function panelHtml(input: PanelInput): string {
              </button>`
       }
       <div class="side-actions"${input.replay ? ' hidden' : ''}>
-        <button class="btn btn-sm" data-act="undo" ${input.canUndo === true && myTurn ? '' : 'disabled'}>撤回一步</button>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}
         </button>
@@ -738,7 +786,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
     // 建造单位：列出它能盖的东西，点了就进选址模式。
     // 名单走 buildListFor 过滤，所以"可建 N 种"和底下 N 个按钮永远是同一个数。
-    const buildables = buildListFor(s, def).ids
+    const buildables = buildListFor(s, def, selectedUnit.owner).ids
       .map((id) => s.unitTypes[id])
       .filter((x): x is UnitTypeDef => !!x);
     const notes = describeUnit(s, def, undefined, selectedUnit);
@@ -782,7 +830,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                );
                const tag =
                  (b.bridges
-                   ? '架在水上 · 双向通行'
+                   // 桥的落点从数据里读（水域 / 沼泽），别在界面上另写一句"水上"
+                   ? `架在${(b.buildOn ?? ['water']).map((t) => CONFIG.terrainName[t]).join('/')}上 · 双向通行`
                    : isProducer(b)
                      ? `能产兵${produceEveryTurns(b) > 1 ? `（${produceEveryTurns(b)} 回合一批）` : ''} · ${(
                          b.buildOn ?? []
@@ -811,7 +860,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                const tagLine = mods.length > 0 ? `${tag} · ${mods.join(' · ')}` : tag;
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
                  <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
-                 <span class="meta"><b>${b.name}</b><span>攻 ${b.atk} · 甲 ${b.armor} · 血 ${b.maxHp} · ${tagLine}</span></span>
+                 <span class="meta"><b>${b.name}</b><span>${unitStatLine(b)} · ${tagLine}</span></span>
                  <span class="price">${costLabel(price)}</span>
                </button>`;
              })
@@ -916,6 +965,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
       <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(s, selectedUnit)}</b></div>
       ${statusRow(selectedUnit)}
+      ${stealthRow(s, selectedUnit, me)}
       <div class="info-row">
         <span>攻击 / 护甲</span>
         <b>${eff.atk} / ${eff.armor}${baseNote}</b>
@@ -981,6 +1031,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
+      ${armorBlock(s, selectedUnit, mine && myTurn)}
+      ${carrierBlock(s, selectedUnit, mine && myTurn)}
       ${mine && myTurn ? unitActionBlock(s, selectedUnit, me) : ''}
       ${cargoBlock}
       ${buildBlock}
@@ -1107,8 +1159,14 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const regenText =
     regen > 0 ? `每回合 +${regen}` : besieged ? '被围城，无法休整' : '城内没有驻军，不回血';
 
-  const upgradeCost = upgradeCostOf(s, city);
-  const nextEra = upgradeCost === null ? null : eraDef(city.era + 1);
+  /*
+   * 升级信息一次问清：升到哪一代、多少钱、还差什么条件，都来自 `upgradeTargetOf`。
+   * 写 `eraDef(city.era + 1)` 的话，路线一旦跳级或改道，面板会显示一个
+   * 和规则层不同的目标——"写着升到 X，点下去变成 Y"就是这么来的。
+   */
+  const upgradeTarget = upgradeTargetOf(s, city);
+  const upgradeCost = upgradeTarget ? upgradeTarget.cost : null;
+  const nextEra = upgradeTarget ? upgradeTarget.era : null;
 
   // 城里只产"能被派出去的单位"，建筑要用建造单位去盖。
   // 两个判据都问 core/draft：选卡模式下"名单外的造不了"和"旧兵照样能造"
@@ -1285,6 +1343,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
              <br />攻陷后会连同它的时代一起接收。
            </div>`
     }
+    ${draftedCardsHtml(s, city.owner)}
   `;
 }
 
@@ -1410,10 +1469,20 @@ function yieldShort(def: UnitTypeDef): string {
  * 于是属性卡写着可建 10 种、底下只摆得出 8 个按钮。现在数字和名单来自同一次
  * 过滤。规则书没有一局游戏，走的是同一个 buildListOf、只是不传 exists。
  */
-function buildListFor(s: GameState, def: UnitTypeDef): BuildList {
+function buildListFor(s: GameState, def: UnitTypeDef, seat: PlayerId): BuildList {
   return buildListOf(def, {
     nameOf: (id) => s.unitTypes[id]?.name ?? UNIT_TYPES[id]?.name ?? id,
-    exists: (id) => !!s.unitTypes[id],
+    /*
+     * 两层过滤，缺一个就会"看得到、点不动"：
+     *   · `unitTypes` —— 本局没启用这个扩展包，这个建筑根本不存在；
+     *   · `canUseType` —— 选卡模式下它没被选进名单（或者被对面禁了）。
+     *
+     * 第二条以前漏了：按钮和悬停提示都写着"能造"，点下去才弹
+     * "名单外的建筑造不出来"。玩家花一个回合把工兵走到位置，
+     * 最后一步才被拒——这不是提示不够，是面板在撒谎。
+     * 判据必须和 `doBuild` 用的是同一个函数，不是抄一遍。
+     */
+    exists: (id) => !!s.unitTypes[id] && canUseType(s, seat, id),
     // 高过这个工兵档位的建筑不列（判据在 buildListOf 里，和规则层同一条）
     eraOf: (id) => s.unitTypes[id]?.era,
   });
@@ -1452,7 +1521,9 @@ function recruitButton(
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
   // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
   // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
-  const detail = `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 移 ${def.move} · 射 ${def.range}${tag}`;
+  // 数值行只有一处来源（core/info 的 unitStatLine）：里面含「视野」，
+  // 以前这里手写的版本漏了它，同一个兵在产兵面板和选卡面板看到的数字不一样。
+  const detail = `${unitStatLine(def)}${tag}`;
   const act = mode === 'order' ? 'order-add' : 'recruit';
   const siteAttr = mode === 'order' && site ? ` data-site="${site}"` : '';
   const tail =
@@ -1462,7 +1533,7 @@ function recruitButton(
    * 再点开属性卡，或者去翻规则书。数据写在隐藏节点里，由 main.ts 那套通用
    * 浮层搬去 body 显示——和选卡卡片的详情是同一份样式、同一段定位逻辑。
    */
-  const builds = buildListFor(s, def);
+  const builds = buildListFor(s, def, me);
   const tip = `<span class="hover-tip" hidden>
       <span class="tip-title"><b>${escapeHtml(def.name)}</b><i>${escapeHtml(CATEGORY_NAME[def.category] ?? '')}</i></span>
       <span class="tip-row">${escapeHtml(detail)}</span>
@@ -1757,6 +1828,30 @@ function statusRow(u: Unit): string {
   return `<div class="status-row">${chips.join('')}</div>`;
 }
 
+/**
+ * 隐匿角标：这条兵此刻藏住了没。
+ *
+ * 为什么必须有：潜行 / 潜航 / 隐身 2026-11-09 起都是「出手即现形」，
+ * 而这条约束在界面上原本一个字都没有。玩家开完一枪只看到战报变了，
+ * 不知道自己自此整个敌方回合都露在外面——规则改了却不告诉人，等于没改。
+ *
+ * 判据不另立一套：能不能藏问 `hidesInFog`，藏住没有问 `hiddenFromAllFoes`，
+ * 都是规则层那两个函数。多人局里只要还有一家看得见，就说"已现形"。
+ */
+function stealthRow(s: GameState, u: Unit, viewer: PlayerId): string {
+  if (u.owner !== viewer || !hidesInFog(s, u)) return '';
+  const hidden = hiddenFromAllFoes(s, u);
+  const title = hidden
+    ? '对面看不见它：只有贴到相邻格才会被发现'
+    : s.fog === false
+      ? '这一局没开迷雾，隐匿不生效'
+      : '位置已经暴露：出过手，或者不在森林/丘陵上，或者对面已经贴到身边';
+  const chip = hidden
+    ? `<span class="status-chip st-stealth" title="${escapeHtml(title)}"><b>隐蔽中</b><i>对面看不见</i></span>`
+    : `<span class="status-chip st-exposed" title="${escapeHtml(title)}"><b>已现形</b><i>对面看得见</i></span>`;
+  return `<div class="status-row">${chip}</div>`;
+}
+
 function escapeHtml(t: string): string {
   return t.replace(/[&<>"']/g, (c) => {
     switch (c) {
@@ -1991,3 +2086,107 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
 }
 
 export const TERRAIN_NAMES = CONFIG.terrainName;
+
+
+/**
+ * 装甲面板：已装模块 + 可装模块 + 供电读数。
+ *
+ * 不是装甲素体就返回空串——普通兵的面板一个字都不变。
+ * 所有按钮都带着"为什么不能装"的 title：玩家不该为了问一句"为什么点不动"
+ * 去翻规则书，这也是这个面板存在的理由。
+ */
+function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
+  const def = s.unitTypes[u.type];
+  if (!def?.armorFrame) return '';
+  const rep = energyReport(s, u.owner);
+  const off = offlineModules(s, u);
+  const mine = modulesOf(u);
+
+  const installed = mine.map((id) => {
+    const m = MODULES[id];
+    if (!m) return '';
+    const dead = off.has(id);
+    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}>
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">拆</span>
+      <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗能 ${m.draw} · 拆除不退全额</span></span>
+      <span class="price">+${Math.floor(m.cost / 2)}</span>
+    </button>`;
+  });
+
+  const candidates = Object.values(MODULES)
+    .filter((m) => !mine.includes(m.id))
+    .filter((m) => fitsFrame(u, def, m))
+    .map((m) => {
+      const chk = canMount(s, u, m.id);
+      const why = chk.ok ? '' : (chk.reason ?? '');
+      return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(why)}">
+        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
+        <span class="meta"><b>${m.name}</b><span>${why || `耗能 ${m.draw}${m.weapon ? ` · 伤害 ${m.weapon.damage} · 射程 ${m.weapon.range}` : ''}`}</span></span>
+        <span class="price">${m.cost}</span>
+      </button>`;
+    });
+
+  // ── 设备（P5）：每件一行「用」，整备臂那种要选人的再按友军各出一行 ──
+  const chip = u.owner === 'A' ? 'a' : 'b';
+  const devRow = (id: string, label: string, sub: string, price: string, act: string, target?: string): string => {
+    const chk = canUseDevice(s, u, id);
+    const why = chk.ok ? '' : (chk.reason ?? '');
+    return `<button class="recruit-btn" data-act="${act}" data-mod="${id}"${target ? ` data-target="${target}"` : ''} ${
+      chk.ok && canAct ? '' : 'disabled'
+    } title="${escapeHtml(why)}">
+      <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">用</span>
+      <span class="meta"><b>${label}</b><span>${escapeHtml(why || sub)}</span></span>
+      <span class="price">${price}</span>
+    </button>`;
+  };
+
+  const deviceRows: string[] = [];
+  for (const { id, m } of devicesOf(u)) {
+    const left = chargesLeft(u, id);
+    const cap = m.charges ?? 0;
+    const head = `<div class="hint">${m.name} · 剩 ${left} / ${cap} 次</div>`;
+    if (deviceTargetOf(m.device) === 'unit') {
+      const allies = s.units.filter(
+        (t) =>
+          t.owner === u.owner &&
+          t.id !== u.id &&
+          t.hp > 0 &&
+          Math.max(Math.abs(t.x - u.x), Math.abs(t.y - u.y)) <= 1,
+      );
+      const rows = allies.map((t) =>
+        devRow(id, `${m.name} → ${s.unitTypes[t.type]?.name ?? t.type}`, m.note ?? '', '使用', 'use-device', t.id),
+      );
+      deviceRows.push(head + (rows.length ? rows.join('') : `<div class="hint">身边没有可以整备的友军。</div>`));
+      continue;
+    }
+    const hint =
+      deviceTargetOf(m.device) === 'tile' ? '点了之后在地图上选落点（3 格内）' : (m.note ?? '');
+    deviceRows.push(head + devRow(id, m.name, hint, '使用', 'use-device'));
+  }
+
+  // 整备：按缺口付费，占掉这座坞本回合的名额
+  const rc = rechargeQuote(s, u);
+  const rcChk = canRecharge(s, u);
+  const rechargeRow = `<button class="recruit-btn" data-act="recharge" ${rcChk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(
+    rcChk.ok ? '' : (rcChk.reason ?? ''),
+  )}">
+    <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">补</span>
+    <span class="meta"><b>整备</b><span>${escapeHtml(
+      rcChk.ok ? `补满充能与额外生命（${rc.devices} 件设备 · 额外生命 +${rc.hpGap}）` : (rcChk.reason ?? ''),
+    )}</span></span>
+    <span class="price">${rcChk.ok ? rc.total : '—'}</span>
+  </button>`;
+
+  return `<div class="card-title" style="margin-top:14px">装配 · 供电 ${rep.supply} / 需求 ${rep.demand}${
+    rep.headroom < 0 ? ` · <b style="color:#c0392b">过载 ${-rep.headroom}</b>` : ` · 余量 ${rep.headroom}`
+  }</div>
+  <div class="hint">这台耗能 ${unitDraw(s, u)}。装配要贴着装配坞、花掉它整回合；拆卸不花回合、退一半金币。</div>
+  ${installed.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${installed.join('')}</div>` : `<div class="hint">还没装任何模块——素体只有撞击。</div>`}
+  ${candidates.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${candidates.join('')}</div>` : ''}
+  ${
+    deviceRows.length > 0
+      ? `<div class="card-title" style="margin-top:14px">设备</div>${deviceRows.join('')}`
+      : ''
+  }
+  <div class="recruit-list" style="margin-top:8px">${rechargeRow}</div>`;
+}

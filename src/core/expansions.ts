@@ -28,6 +28,9 @@ import type { AbilityDef } from './abilities.ts';
 // 留痕种类（水雷/地雷……）的接口。同样只 import type：实现在 core/marks.ts，
 // 那边只依赖 types.ts，不会绕回来。
 import type { MarkKindDef } from './marks.ts';
+// 光环的声明式数据。同样只 import type：auras.ts 才是合并实现，
+// 而且它反过来要用 activeExpansions，写反了就是一个环。
+import type { AbilityApi, AuraSpec } from './ability-hooks.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_ARMS } from './era-packs.ts';
@@ -38,6 +41,7 @@ import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
 import { CONTEMPORARY_BASE_PACK } from './contemporary-packs.ts';
+import { ARMOR_ERA7, ARMOR_ERA8 } from './armor-expansion.ts';
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
 // 航母甲板那道"留给空军扩展"的接口在 naval-carrier.ts。这里只负责注册。
 import { NAVAL } from './naval-packs.ts';
@@ -57,6 +61,16 @@ export interface DamageCtx {
   defender: Unit;
   /** 已经算好的基础伤害（攻击 − 护甲 − 地形） */
   damage: number;
+  /**
+   * 这一步**之后**才会从伤害里扣掉的护甲（已经过破甲、地形、光环）。
+   *
+   * 为什么要把护甲也递进来：`modifyDamage` 拿到的是"扣甲之前"的伤害，想表达
+   * "目标实际掉血 ×0.7"就必须知道甲有多厚。烟幕就是这种——不知道甲，
+   * 只能把攻击力打七折，结果对厚甲目标变成近乎免疫。
+   */
+  armor: number;
+  /** 这一下是"溅射余波"还是主命中（反应堆护罩只吃前者的折扣） */
+  splash: boolean;
   isCounter: boolean;
 }
 
@@ -258,6 +272,14 @@ export interface KillCtx {
   /** 击杀者；同归于尽时为 undefined */
   killer?: Unit;
   killerOwner: PlayerId;
+  /**
+   * 直接扣血用的接口。
+   *
+   * 为什么死亡钩子也要它：亡语里的"自爆"要在这一刻就伤到旁人，
+   * 而扩展没法 import 规则层（会绕成环）。`onDeath` 那条能力钩子早就带着它，
+   * 扩展到的那条却没有——同样的活儿在两条路上门槛不一样，最后一定是"某个包里能写、别的包写不了"。
+   */
+  api: AbilityApi;
 }
 
 export interface TurnStartCtx {
@@ -319,6 +341,14 @@ export interface ExpansionHooks {
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
   modifyVision?: (c: VisionCtx) => number;
+  /**
+   * 纯函数：这个单位身上**除了兵种能力和 extraAbilities 之外**的光环来源。
+   *
+   * 给"模块类"光环用（装甲的集群协议、指挥车坞）。走这里而不是塞进 abilities：
+   * 模块是数据表里的条目，挂函数字段会让 `MODULES` 从纯数据变成不能序列化的东西。
+   * 返回单个或多个都行；断电的模块自己过滤掉（钩子拿得到 state，能查断电）。
+   */
+  extraAura?: (c: { state: GameState; unit: Unit }) => AuraSpec | AuraSpec[] | null;
   /**
    * 纯函数：这个玩家此刻被**强行点亮**的格子（格索引数组）。
    *
@@ -945,10 +975,13 @@ export const EXPANSIONS: Expansion[] = [
     summary:
       '单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。',
     hooks: {
+      // 只**读** `unit.kills`，不自己累加。
+      //
+      // 累加已经上移到规则层（rules 的 creditKill，在 fireKilled 里调）：
+      // 击杀数是这局发生过的事实，不是这个扩展的属性。留在这里的话，
+      // 没开这个包的对局里所有击杀数都是 0，战报卡的 MVP 就永远是空的；
+      // 而两边都写一遍会变成一杀 +2 攻，等于偷偷把这包加强了一倍。
       modifyDamage: ({ attacker, damage }) => damage + attacker.kills,
-      onUnitKilled: ({ killer }) => {
-        if (killer) killer.kills += 1;
-      },
       // 新增：让老兵不死自己负责在面板上显示加成
       modifyStatAtk: ({ unit, atk }) => {
         // 如果这个兵有击杀数，面板上就加成
@@ -1221,6 +1254,11 @@ export const EXPANSIONS: Expansion[] = [
   // 「信息化」：第六时代的底座——解锁这一级科技 + 9 个最基本的兵。
   // 它是「时代军备」「海军」「空军」里那批第六代兵种的兵种级前置（requiresPack）。
   CONTEMPORARY_BASE_PACK,
+  // 「装甲时代」：第 7 时代的底座 + 装甲素体/模块/供电。排在信息化之后——
+  // 它解的是第 7 级科技，读起来才和时代阶梯同序。
+  ARMOR_ERA7,
+  // 「聚变时代」：第 8 级的底座，前置就是上面这个包（`requires: ['armor-era7']`）。
+  ARMOR_ERA8,
   // 「海军」：第二到第六代的船 + 两条海权规则 + 深水地形 + 水雷（一个包）。
   // 钩子只读地形与城，不参与伤害公式，所以排哪儿都不影响平衡。
   NAVAL,

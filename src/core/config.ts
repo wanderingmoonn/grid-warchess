@@ -317,6 +317,26 @@ export const ERAS: EraDef[] = [
     cityArmor: 14,
     cityIncome: 62,
   },
+  {
+    level: 7,
+    name: '装甲时代',
+    short: '装甲',
+    hint: '平台、模块与供电',
+    upgradeCost: 1440,
+    cityMaxHp: 112,
+    cityArmor: 16,
+    cityIncome: 68,
+  },
+  {
+    level: 8,
+    name: '聚变时代',
+    short: '聚变',
+    hint: '超载、光环与重型平台',
+    upgradeCost: 1980,
+    cityMaxHp: 132,
+    cityArmor: 19,
+    cityIncome: 78,
+  },
 ];
 
 /**
@@ -665,6 +685,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
    * 和长弓的分工：长弓（90 金 / 射 4）靠射程压制，弩（82 金 / 射 3）靠**破甲**。
    * 弩的拉力大、装填慢，所以移动和血量都比长弓差一点——它不是"更好的弓"，
    * 是"拉得开重甲的那把"。铁器时代的主力远程从这一格开始分成两条路。
+   *
+   * 2026-11-07 攻击 16 → 19：射 3 + 破甲的组合在二代打重甲时，16 攻减完甲
+   * 只剩个位数，落在"要两轮才能换掉一个二级步兵"的尴尬区间。+3 之后
+   * 战力 45.0 → 49.8（×1.11），82 金没动，性价比从 3.98 抬到 4.42，
+   * 才真正配得上"二代唯一的破甲远程"这个定位。
    */
   crossbow: {
     id: 'crossbow',
@@ -674,7 +699,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     category: 'combat',
     cost: 82,
     move: 2,
-    atk: 16,
+    atk: 19,
     armor: 1,
     maxHp: 24,
     range: 3,
@@ -1063,7 +1088,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 13,
     maxHp: 86,
     range: 4,
-    vision: 3,
+    // 视野必须 ≥ 射程：2026-11-09 起"看不见就不能开火"，自动开火也吃这条。
+    // 留着原来的 3 等于把这座塔的射程悄悄砍成 3，而造价和攻击都是按 4 定的。
+    vision: 4,
     autoAttack: true,
   },
   industrialpark: {
@@ -1134,7 +1161,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge2: {
     id: 'bridge2',
@@ -1151,7 +1178,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge3: {
     id: 'bridge3',
@@ -1168,7 +1195,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   camp: {
     id: 'camp',

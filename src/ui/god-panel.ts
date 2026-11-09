@@ -18,6 +18,7 @@
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
 import { buildListOf } from '../core/build-list.ts';
+import { unitStatLine } from '../core/info.ts';
 
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
@@ -228,6 +229,7 @@ export function godBarHtml(ui: GodUi): string {
         <button class="btn btn-primary" data-act="god-run-round" title="AI 替当前这一方走完这一回合（顶栏那个「第 N 回合」只加 1），然后交还给你">交给 AI · 一回合</button>
         <button class="btn" data-act="god-run-dead" title="AI 一直打到一方没兵为止，随时可以按停止">接管 · 打到全灭</button>
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
+        <button class="btn btn-sm" data-act="god-map-upload" title="把这一局的地形和城位存成一张地图，交到云端地图库（要审核）">上传这张图</button>
       </div>
     </div>
     ${(() => {
@@ -269,14 +271,14 @@ function brushHint(ui: GodUi, s: GameState): string {
   switch (ui.brush.kind) {
     case 'unit': {
       const def = s.unitTypes[ui.brush.type];
-      return `笔刷：${def?.name ?? ui.brush.type} —— 点棋盘落子，可以连着摆`;
+      return `笔刷：${def?.name ?? ui.brush.type} —— 点一格落子；按住拖过去能连着铺一片`;
     }
     case 'city':
       return '笔刷：城市 —— 点 2×2 的左上角，橙格是能放的位置';
     case 'erase':
-      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城';
+      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城；按住拖过去能连着擦';
     case 'terrain':
-      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，可以连着刷（城格和站着东西的格改不了）`;
+      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，或按住拖过去整片刷（城格和站着东西的格改不了）`;
     default:
       return '笔刷：查看 —— 点一格看看那儿有什么';
   }
@@ -388,7 +390,7 @@ export function godShelfHtml(ui: GodUi): string {
         const buildTip = builds.names.length > 0
           ? ` · 可建 ${escapeHtml(builds.names.join('、'))}`
           : '';
-        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${u.maxHp} 血 · 攻 ${u.atk}${u.armor ? ` · 甲 ${u.armor}` : ''}${buildTip}">
+        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${unitStatLine(u)}${buildTip}">
           ${u.short} ${u.name}
         </button>`;
       })

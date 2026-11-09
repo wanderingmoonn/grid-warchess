@@ -369,6 +369,21 @@ body {
   flex: none;
 }
 
+/*
+ * 笔刷在手：拖动 = 画画，不是滚地图。
+ *
+ * `touch-action: none` 必须在这一层写死。`.board-scroll` 在放大档是
+ * `pan-x pan-y`，手指往边上一划就会被浏览器判成滚动手势，pointermove 直接
+ * 停发——拖到一半断掉，画出来只有第一格。这一条压过祖先的声明。
+ *
+ * 光标**不在这里改**。格子的光标只由交互状态决定（见下面 `.tile` 那段说明），
+ * 笔刷层再给格子写一句 cursor: crosshair 就会和"能不能去"那一套打架——
+ * 而且那条不变量是有测试守着的（它会扫这份样式表里 `.tile` 的基线块）。
+ */
+.board.brush-paint {
+  touch-action: none;
+}
+
 .tiles {
   display: grid;
   grid-template-columns: repeat(var(--cols, 12), 1fr);
@@ -1632,6 +1647,14 @@ body {
   border-width: 2px;
 }
 
+/* 隐匿：藏住了是冷灰蓝（"不显眼"），露出来是暖红（"你快挨打了"） */
+.status-chip.st-stealth {
+  color: #4a6b8a;
+  border-style: dashed;
+}
+
+.status-chip.st-exposed {
+  color: #b4463c;
 /* 增益（药力、圣旗……）：青绿，和四种减益的色系分开。
    它和减益排在同一行、用同一个形状，因为它们要回答的是同一个问题：
    "这东西还剩几回合"——而不是"我的属性为什么是这个数"。 */
@@ -2271,6 +2294,38 @@ a.btn {
   color: var(--text-3);
 }
 
+/*
+ * 上传地图那一屏的结果条。
+ *
+ * 两种状态用同一个盒子，只换色：作者要的是"成了没有"，
+ * 而不是两条位置不同的提示里去找哪一条是这次的。
+ */
+.map-err,
+.map-ok {
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.map-err {
+  background: rgba(178, 62, 48, 0.08);
+  border: 1px solid rgba(178, 62, 48, 0.28);
+  color: #8d2f24;
+}
+.map-ok {
+  background: rgba(47, 110, 168, 0.08);
+  border: 1px solid rgba(47, 110, 168, 0.24);
+  color: #23527c;
+}
+.map-err ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.map-err li + li {
+  margin-top: 3px;
+}
+
 
 /* ---------- 开局设置：固定地图画廊 ----------
 
@@ -2434,6 +2489,20 @@ a.btn {
   margin-left: 4px;
   font-size: 9.5px;
   opacity: 0.6;
+}
+
+/*
+ * 选卡模式下「开局自带、不进卡池」的兵种。
+ *
+ * 兵种池这张表列的是"这一局能造什么"，所以经济建筑、军营、桥、经济/建造单位
+ * 都会出现——但它们不参与 BP，不该让人以为能在池子里选到。
+ * 2026-11-08 有人问"磨坊怎么还在选卡池里"，就是因为这个差别没画在脸上。
+ */
+.chip-auto {
+  margin-left: 5px;
+  font-size: 9.5px;
+  opacity: 0.55;
+  letter-spacing: 0.02em;
 }
 
 .expansion-list {
@@ -4936,6 +5005,21 @@ a.btn {
   font-weight: 600;
 }
 
+/*
+ * 已经落到槽位上的那一格可以悬停看完整面板（对面拿了什么，是最想研究的）。
+ * 光靠"名字是个小圆角标签"看不出来它还能悬停，所以给个 help 光标 +
+ * 一条虚线底：一眼知道"这里能问"。
+ */
+.draft-slot.is-tippy {
+  cursor: help;
+  text-underline-offset: 3px;
+  text-decoration: underline dotted color-mix(in srgb, currentColor 35%, transparent);
+}
+.draft-slot.is-ban.is-tippy {
+  /* 禁用位本来就有删除线，再叠一条虚线下划线会糊成一团，只留光标 */
+  text-decoration: line-through;
+}
+
 .draft-log {
   list-style: none;
   margin: 0;
@@ -6103,3 +6187,22 @@ a.btn {
 
 /* 提示放在按钮**上面**：按钮是这张卡的最后一件东西，贴着底边才像"操作区" */
 .bc-tip { margin: 10px 0 0; }
+
+/* 顶部信息卡里的「撤回一步」。
+   它原来紧贴在「结束回合」下面：两颗按钮一个整行、一个半行，上下相邻，
+   而"走完了"和"退回上一步"点错的代价完全不对等。挪到顶栏之后靠这条留白
+   和下面那排玩家信息分开，别让人再把它当成回合按钮的一部分。 */
+.undo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.undo-row .hint {
+  flex: 1 1 auto;
+  font-size: 12px;
+  line-height: 1.35;
+}

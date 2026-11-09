@@ -661,7 +661,7 @@ export interface AbilityHooks {
   moveCostMul?: (c: MoveCostCtx) => number;
   /** 能不能穿过敌军 */
   passThrough?: boolean;
-  /** 能不能掠水（飞行、掠空、跳跃） */
+  /** 能不能掠水（飞行、跳跃） */
   crossesWater?: boolean;
   /** 在不在空中层（能和地面单位同格）。目前只有「飞行」 */
   airLayer?: boolean;

@@ -40,7 +40,7 @@ function airborne(state: GameState, unit: Unit | undefined): boolean {
   if (!unit) return false;
   const def = state.unitTypes[unit.type];
   if (!def) return false;
-  return def.layer === 'air' || (def.abilities ?? []).includes('fly-over');
+  return def.layer === 'air' || def.flight === true;
 }
 
 /**

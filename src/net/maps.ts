@@ -18,6 +18,15 @@ import { cloudDatabase } from './room.ts';
 const TABLE = 'warchess_maps';
 const LIST_LIMIT = 60;
 const CACHE_KEY = 'warchess.maps.cache.v1';
+/**
+ * 本机传过的图（含还在排队等审核的）。
+ *
+ * 为什么单独存一份：待审核的行 `listed=false`，按读策略**作者自己也查不到**
+ * （见 sql/warchess_maps.sql 的 `warchess_maps_read … using (listed)`）。
+ * 不存这一份的话，作者传完刷新一次，自己画了一小时的图就没了——
+ * 而他明明只是想等审核结果。存的是完整地图数据，不依赖云端回读。
+ */
+const MINE_KEY = 'warchess.maps.mine.v1';
 
 interface DbFailure {
   code?: string;
@@ -100,7 +109,69 @@ function writeCache(maps: FixedMap[]): void {
 
 /** 缓存里最后一批可用地图（同步，界面首帧就能用） */
 export function cachedMaps(): FixedMap[] {
-  return readCache();
+  // 本机传过的排在前面：那是作者刚做的图，找它的频率比找别人的高得多
+  return [...readMine(), ...readCache()];
+}
+
+interface MyUpload {
+  map: FixedMap;
+  /** true = 还在等审核（服务端看不见），false = 已通过 */
+  pending: boolean;
+  at: string;
+}
+
+function readMine(): FixedMap[] {
+  try {
+    const raw = localStorage.getItem(MINE_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as unknown;
+    if (!Array.isArray(list)) return [];
+    const out: FixedMap[] = [];
+    for (const it of list as MyUpload[]) {
+      const checked = validateFixedMap(it?.map);
+      // pending 不在云端数据里（校验会把它丢掉），所以过完校验再补回去：
+      // 画廊要靠它在名字后面写"待审核"
+      if (checked.ok) out.push({ ...checked.map, pending: it.pending === true });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** 把一张自己传的图记在本机（最多 20 张，最新的在前） */
+function rememberMine(map: FixedMap, pending: boolean): void {
+  try {
+    const raw = localStorage.getItem(MINE_KEY);
+    const list = Array.isArray(JSON.parse(raw ?? '[]')) ? (JSON.parse(raw ?? '[]') as MyUpload[]) : [];
+    const next: MyUpload[] = [{ map, pending, at: new Date().toISOString() }, ...list.filter((it) => it?.map?.name !== map.name)];
+    localStorage.setItem(MINE_KEY, JSON.stringify(next.slice(0, 20)));
+  } catch {
+    // 存不下（隐私模式 / 配额满）：这一次能玩就行
+  }
+}
+
+/**
+ * 把"已经放行了"的本机记录摘掉。
+ *
+ * 不摘会**同一张图出现两次**：待审核时本机那份的 id 是 `user:<时间戳>`
+ * （插入那次服务端回不了行，读策略看不见未放行的行），放行之后从云端拉回来的
+ * id 是 `user:<行号>`——两个不同的 id、同一个名字，画廊里就是两张。
+ *
+ * 认的是"名字 + 尺寸"：本机缓存里只有自己传的图（最多 20 张），
+ * 撞名又撞尺寸的概率可以忽略；真撞了也只是少一张本地重复项，不丢数据。
+ */
+function syncMineWithServer(server: FixedMap[]): void {
+  try {
+    const raw = localStorage.getItem(MINE_KEY);
+    const list = Array.isArray(JSON.parse(raw ?? '[]')) ? (JSON.parse(raw ?? '[]') as MyUpload[]) : [];
+    const key = (m: { name?: string; w?: number; h?: number }) => `${m?.name}|${m?.w}|${m?.h}`;
+    const live = new Set(server.map(key));
+    const kept = list.filter((it) => !(it?.pending && live.has(key(it.map ?? {}))));
+    if (kept.length !== list.length) localStorage.setItem(MINE_KEY, JSON.stringify(kept));
+  } catch {
+    // 存不下 / 读不出：多一张重复项而已，不该让整个列表跟着失败
+  }
 }
 
 /**
@@ -127,6 +198,8 @@ export async function listSharedMaps(): Promise<MapListResult> {
       .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
       .slice(0, LIST_LIMIT);
     writeCache(maps);
+    // 自己传的那几张如果已经出现在公开列表里，说明审核过了：把本机那份待审核记录摘掉
+    syncMineWithServer(maps);
     return { ok: true, maps };
   } catch (err) {
     const cached = readCache();
@@ -144,6 +217,21 @@ export interface MapUploadResult {
   howTo?: string;
   /** 成功时回填云端 id，界面用它去重 */
   map?: FixedMap;
+  /** 写进去了但**还没公开**：等人工审核放行（见表单里的 `listed`） */
+  pending?: boolean;
+}
+
+export interface UploadOptions {
+  /**
+   * 进待审核队列。默认 **true**，因为这张表是公开可写的：
+   * 不设闸门的话，任何一段脚本都能往"玩家上传地图"里塞任意内容。
+   *
+   * 闸门靠的是**权限**而不是界面：写入行带 `listed=false`，而读策略是
+   * `using (listed)`，所以未放行的图对所有人（含作者）都不可见；
+   * 客户端也**没有** update 权限，翻不了这个开关。放行只能在云端控制台做，
+   * 见 `sql/warchess_maps_review.sql`。
+   */
+  pending?: boolean;
 }
 
 /**
@@ -154,7 +242,12 @@ export interface MapUploadResult {
  *   2. **体积**——超了就别传，服务端也会拒；
  *   3. **写库**——成功之后把返回的行 id 拼成 `user:<id>`，和列表里的同一张图对上。
  */
-export async function uploadSharedMap(map: FixedMap, author?: string): Promise<MapUploadResult> {
+export async function uploadSharedMap(
+  map: FixedMap,
+  author?: string,
+  opts: UploadOptions = {},
+): Promise<MapUploadResult> {
+  const pending = opts.pending !== false;
   const parsed = validateFixedMap(map);
   if (!parsed.ok) return { ok: false, reason: parsed.errors[0], howTo: '改完再传一次' };
   const size = JSON.stringify(parsed.map).length;
@@ -183,10 +276,13 @@ export async function uploadSharedMap(map: FixedMap, author?: string): Promise<M
         rows: parsed.map.rows,
         cities_a: parsed.map.citiesA,
         cities_b: parsed.map.citiesB,
-        listed: true,
+        // 关键一行：没审核之前不给别人看
+        listed: !pending,
         created_at: new Date().toISOString(),
       })
-      // 让服务端回报实际写入的行：没有 select 就分不清"写成功"和"被策略挡了"
+      // 让服务端回报实际写入的行：没有 select 就分不清"写成功"和"被策略挡了"。
+      // 待审核的那次这里会**回空**（读策略看不见未列出的行），这是预期的，
+      // 所以下面 id 有兜底，不能因为回空就判失败。
       .select();
     if (res?.error) {
       const f = failure(res.error, '上传');
@@ -194,7 +290,10 @@ export async function uploadSharedMap(map: FixedMap, author?: string): Promise<M
     }
     const row = Array.isArray(res?.data) ? (res.data[0] as Row | undefined) : undefined;
     const id = row?.id !== undefined ? `user:${row.id}` : `user:${Date.now()}`;
-    return { ok: true, map: { ...parsed.map, id, source: 'user', author: author ?? undefined } };
+    const got: FixedMap = { ...parsed.map, id, source: 'user', author: author ?? undefined };
+    // 待审核的图服务端读不回来，只能靠本机这份保住"我刚画的那张"
+    rememberMine(got, pending);
+    return { ok: true, map: got, pending };
   } catch (err) {
     const f = failure(err as DbFailure, '上传');
     return { ok: false, reason: f.reason, howTo: f.retryable ? '稍后再试一次' : '需要先开通地图库' };

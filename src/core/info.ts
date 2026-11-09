@@ -11,6 +11,7 @@ import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
 import { adjacentRequirementText, heightOfTerrain, nearSpecText, splashRadiusOf, splashRatioOf } from './rules.ts';
 import { buildListOf } from './build-list.ts';
+import { canUseType } from './draft.ts';
 import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
 import { isProducer, produceEveryTurns, produceOf } from './produce.ts';
 import { resourceShort } from './resources.ts';
@@ -112,6 +113,37 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
  * 一个单位的特殊之处，翻成人话。
  * 返回空数组表示它就是个普通单位。
  */
+/**
+ * 一行数值：**界面所有地方共用这一份**（2026-11-09）。
+ *
+ * 以前这条是各写各的：产兵按钮写「攻·甲·血·移·射」，选卡卡片写「攻·甲·血·移·射·视」，
+ * 建造清单写「攻·甲·血」，上帝模式的悬停又只有「攻·甲」——同一个兵，四处看到四种
+ * 数字，而且**只有选卡那里有视野**。玩家问"这兵能看多远"时，答案取决于是从哪个
+ * 面板点进去的，这不叫信息量，叫不一致。
+ *
+ * 现在统一走这里：攻 / 甲 / 血（人人都有）→ 移（能动才写）→ 射 / 视野 →
+ * 溅射 / 连击 / 魔攻（有才写）。
+ *
+ * 用 `unitStatBits` 而不是直接拼字符串的场合：调用方已经有血条或耐久数字，
+ * 不想重复写「血 24」时，按前缀筛掉那一段即可。
+ */
+export function unitStatBits(def: UnitTypeDef): string[] {
+  const bits = [`攻 ${def.atk}`, `甲 ${def.armor}`, `血 ${def.maxHp}`];
+  // 移 0 的东西（建筑、城墙、桥）写「移 0」只会占地方
+  if (def.move > 0) bits.push(`移 ${def.move}`);
+  // `?? 0` 是兜底：扩展包里手写的兵种定义偶尔漏字段，界面上不该出现「视野 undefined」
+  bits.push(`射 ${def.range}`, `视野 ${def.vision ?? 0}`);
+  if (def.splash) bits.push(`溅射 ${def.splash}`);
+  if (def.burst && def.burst > 1) bits.push(`连击 ${def.burst}`);
+  if (def.magicAtk) bits.push(`魔攻 ${def.magicAtk}`);
+  return bits;
+}
+
+/** 上面那串的成品行：`攻 10 · 甲 4 · 血 32 · 射 4 · 视野 6` */
+export function unitStatLine(def: UnitTypeDef): string {
+  return unitStatBits(def).join(' · ');
+}
+
 export function describeUnit(
   s: GameState,
   def: UnitTypeDef,
@@ -136,12 +168,9 @@ export function describeUnit(
     lines.push('只在水上行动：上不了岸，只能在临水的城市下水。能打岸上的目标，也会被岸上打。');
   }
   // ── 移动层与飞行（原版机制，不是某个兵种包的特权） ────────────────────
-  if (def.layer === 'air') {
+  if (def.layer === 'air' || def.flight === true) {
     lines.push(
-      '飞行：它在空中，和地面单位互不占格。地上打天上距离 +1 。');
-  }
-  if (def.flight === true) {
-    lines.push('飞行：能掠过水面（也能停在水上），森林和丘陵按 1 步算。河防对它不成立。');
+      '飞行：能掠过水面（也能停在水上），森林和丘陵按 1 步算，和地面单位互不占格；地上打天上距离 +1。河防对它不成立。');
   }
   // ── 奇想兵种包的机制 ──────────────────────────────────────────────────
   if (def.magicAtk) {
@@ -240,7 +269,17 @@ export function describeUnit(
     );
   }
   if (def.bridges) {
-    lines.push('架在水面上：双向通行，谁都能从桥上走过（不能停留），船还能从桥下过。耐久归零就塌回水面。');
+    /*
+     * 文案从 `buildOn` 生成，不写死"水面"：桥现在也能架在沼泽上。
+     * 顺带改掉一句**错话**——这里以前写着"不能停留"，可桥面明明能站人
+     * （`rules.ts` 的 `if (d.bridges) return false` 就是给"谁都能站"放的行，
+     * 用例「架桥：水面变桥面，友军能过，也能停在桥上」也一直守着这条）。
+     * 属性卡上写反了，玩家会以为守桥、堵桥都做不到。
+     */
+    const on = (def.buildOn ?? ['water']).map((t) => TERRAIN_INFO[t].name).join('或');
+    lines.push(
+      `架在${on}上：双向通行，谁都能从上面走过，也能停在桥上；船还能从桥下过。耐久归零就塌回${on}。`,
+    );
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
@@ -358,11 +397,16 @@ export function describeUnit(
   }
 
   if ((def.builds ?? []).length > 0) {
-    // 走共用口径：和产兵按钮同一次过滤（本局没有的建筑不列），
+    // 走共用口径：和产兵按钮同一次过滤（本局没有的建筑不列、选卡没选到的不列），
     // 名字用上面那个带双表兜底的 nameOf，不再冒出英文 id。
+    //
+    // 第二层 `canUseType` 是 2026-11-08 补的：选卡模式下这张卡写着"可建造：箭塔、
+    // 城墙……"，其中一半根本没被选进名单，点下去才被拒。判据和 `doBuild` 同一个函数。
+    // 不知道是谁的兵（规则书 / 图鉴，没有 unit）时不按名单过滤——那种场合没有"这一局"。
+    const seat = unit?.owner ?? owner;
     const { names } = buildListOf(def, {
       nameOf,
-      exists: (id) => !!s.unitTypes[id],
+      exists: (id) => !!s.unitTypes[id] && (!seat || canUseType(s, seat, id)),
       eraOf: (id) => s.unitTypes[id]?.era,
     });
     lines.push(`可建造：${names.join('、')}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);

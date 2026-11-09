@@ -367,11 +367,11 @@
       <p>水和桥不是装饰，它们决定"能不能过去"：</p>
       <ul>
         <li><b>水域</b>陆军进不去，但<b>能养活一支舰队</b>。水军在水上一格一步，机动性其实比陆军好；它的短板是上不了岸、也进不了城。</li>
-        <li><b>桥</b>是修在水面上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
+        <li><b>桥</b>是修在水面（或沼泽）上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
         <li>桥上<b>能穿过，也能停</b>：桥在那一格上，人站在桥面。守桥、堵口、走到一半换气都靠这条——一格宽的桥不是"只能穿过去的门"，而是"只站得下一个人"的窄路。</li>
         <li>桥<b>不挡水路</b>：船从桥底下过，和走在河上一样。想把一条河彻底封死，得靠岸上的兵，不能靠桥。</li>
-        <li>桥有耐久（40），被打掉之后地形立刻退回水面。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
-        <li>桥只能架在<b>至少一侧是陆地</b>的水面上——一片汪洋上架不了桥。</li>
+        <li>桥有耐久（40），被打掉之后地形立刻退回原样（水域还是水域，沼泽还是沼泽）。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
+        <li>桥只能架在<b>至少一侧是陆地</b>的水面或沼泽上——一片汪洋上架不了桥。沼泽本来就能踩着走（移动力 2），架桥是为了让全军的补给线快一步。</li>
       </ul>
       <h3>渡船：让人过水</h3>
       <ul>
@@ -788,6 +788,15 @@
         <li>地形始终可见，<b>只有对方单位受迷雾影响</b>。</li>
         <li>视野来源：己方单位的视野半径、己方城市周围 1 格。</li>
         <li>离开视野的敌人会留下<b>半透明幽灵</b>，标在最后已知位置。移动过或已阵亡你都无从确认——这正是它的乐趣。</li>
+        <li><b>看得见才打得到</b>：攻击、攻城、<b>挨打后的反击</b>、<b>塔的自动开火</b>
+          都要求目标在本方视野里。城虽然一直画在地图上（地形是公开的），
+          但视野外的城墙砸不动；幽灵位置也不能当靶子。视野按"本方"算——旁边的友军或自己的城看见了，
+          就有人替你报点，可以打。</li>
+        <li><b>看得见那一格 ≠ 看得见那个兵</b>：带潜行、潜航、隐身的单位藏在林子、水下或云里时，
+          格子亮着、人却不显形——所以既打不着它，挨了它打也反击不了。破法是贴到相邻格。
+          反过来，它自己一出手就现形，那个敌方回合里它躲不了还手。</li>
+        <li>地形会改视野：<b>森林、河谷、沼泽 −1，丘陵 +1</b>（见「地形高差」）。站进林子的弓手看得近一格，
+          射程却没变——那多出来的一格就是打不着的，往下看"射程 / 视野"那一行。</li>
         <li>玩家视角恒等于当前行动方。人机对战时 AI 也只吃同一份过滤后的视图，不作弊。</li>
       </ul>
       <div class="callout">
@@ -817,7 +826,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">掠空</td><td>掠过水面：可以飞越水面并停在水上，森林和丘陵按 1 步算，河防对它不成立；但爬不了高山。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">飞行</td><td>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上、且这回合还没出过手时，敌人要贴到相邻格才发现它。一出手就现形，开阔地上无效。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">掠空</td><td>掠过水面：可以飞越水面并停在水上，森林和丘陵按 1 步算，河防对它不成立；但爬不了高山。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">飞行</td><td>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新潜下去。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新隐身。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>支援</h4>
@@ -1077,7 +1086,7 @@
         <td class="name">弩兵</td>
         <td class="glyph">弩</td>
         <td class="num">82</td>
-        <td class="num">16</td>
+        <td class="num">19</td>
         <td class="num">1</td>
         <td class="num">24</td>
         <td class="num">2</td>
@@ -1563,7 +1572,7 @@
         <td class="num">86</td>
         <td class="num">—</td>
         <td class="num">4</td>
-        <td class="num">3</td>
+        <td class="num">4</td>
         <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="industrialpark">

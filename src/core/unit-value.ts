@@ -108,8 +108,8 @@ export const ABILITY_VALUE: Record<string, number> = {
  *
  * 漏掉这两个是审计里最明显的一处系统性低估：
  *   · `flight`（20 个兵）——飞越水/林/山，等于"没有地形能拦住它"，
- *     而且能直接贴后排。可只有少数兵把它写进了 `abilities: ['fly-over']`，
- *     于是其余飞兵在这把尺子上被当成"移速快一点的陆军"。
+ *     而且能直接贴后排。它写在**类型字段**上（`flight` / `layer: 'air'`），
+ *     不在 `abilities` 数组里，于是飞兵在这把尺子上曾被当成"移速快一点的陆军"。
  *   · `splash`（34 个兵）——每次开火额外打一圈，按 50% 伤害算。
  *     半径 1 约等于输出 +5%，半径 3 约 +15%；再往上封顶（地图没那么挤）。
  * 效力对照：加上这两条之后，"模型说它便宜"的榜单里飞兵集体回落，
@@ -123,7 +123,7 @@ const SPLASH_CAP = 0.15;
  * 能力与"局面"的相性：**同一个能力，速攻和龟缩不一定同价**。
  *
  * 移速已经按 `tempo` 在 0.65~1.35 之间摆了，但能力还是常数——于是
- * "飞行"（穿人堆贴后排）和"守护"（站桩减伤）在速攻时一个价、龟缩时也一个价。
+ * "冲锋"（穿人堆贴后排）和"守护"（站桩减伤）在速攻时一个价、龟缩时也一个价。
  * 这张表只做一件事：给每条能力一个**随 tempo 倾斜的系数**，
  * `1 + tilt × tempo`（tempo ∈ [−1, 1]，于是在防守/均势/速攻下是 1−tilt、1、1+tilt）。
  *
@@ -134,12 +134,11 @@ const SPLASH_CAP = 0.15;
  *   · 数值类（破甲、真伤）与局面无关，不进表。
  *
  * 幅度参考移速：移速 ±35%，能力这里给到 ±20%~±60%，因为能力的"兑现条件"
- * 比移速更极端——飞行在龟缩时不是"弱一点"，是**根本用不上**（你自己就在防线上，
+ * 比移速更极端——冲锋在龟缩时不是"弱一点"，是**根本用不上**（你自己就在防线上，
  * 没有人堆要穿）。
  */
 export const ABILITY_TEMPO: Record<string, number> = {
   // 位置类：速攻更值钱
-  'fly-over': 0.6,
   charge: 0.5,
   leap: 0.4,
   kite: 0.4,
@@ -624,7 +623,7 @@ export function raidPremium(d: UnitTypeDef, ctx: ValueContext = NEUTRAL_CONTEXT)
   const bypass =
     d.flight || d.layer === 'air'
       ? 2
-      : (d.abilities ?? []).some((a) => a === 'leap' || a === 'fly-over' || a === 'phase')
+      : (d.abilities ?? []).some((a) => a === 'leap' || a === 'phase')
         ? 1.2
         : 0;
   const reach = Math.max(0, Math.min(1, (d.move + bypass - 4) / 3));

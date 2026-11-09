@@ -14,6 +14,7 @@
 新建测试文件时，请复制以下模版：
 ```ts
 // @ts-nocheck
+import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
 import { applyAction } from '../../../src/core/rules.ts';
 
@@ -26,7 +27,11 @@ export function run() {
 }
 
 // 魔法代码：允许单独运行此文件
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// 一定要用 `pathToFileURL`。Windows 下 argv[1] 是 `G:\a\b.ts`，拼出来的
+// `file://G:\a\b.ts` 永远不等于 `file:///G:/a/b.ts`——用例会静默跑 0 项并返回 0，
+// 看起来通过、其实什么都没测。（`cultivation.test.ts` 就这样空转过一整轮。）
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run();
   console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
   if (stats.failed > 0) process.exit(1);

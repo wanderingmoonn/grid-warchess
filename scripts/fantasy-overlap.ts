@@ -155,8 +155,8 @@ const GROUPS: Group[] = [
   },
   {
     title: 'G9 · 三代重骑',
-    ids: ['griffin-rider', 'cursed-knight', 'cataphract', 'royal-cavalry', 'dragoon-rider'],
-    note: '190~265 金、全部带冲锋或飞行。皇家骑兵（235）把这一档吃干了，龙骑兵（265）一次都没出场——这一对是被讨论过最多次的。',
+    ids: ['griffin-rider', 'cursed-knight', 'cataphract', 'royal-cavalry'],
+    note: '190~265 金、全部带冲锋或飞行。皇家骑兵（235）把这一档吃干了。龙骑兵（265）原本也在这组，2026-11-07 升到四代，见 G13。',
   },
   {
     title: 'G10 · 三代远程',
@@ -166,11 +166,10 @@ const GROUPS: Group[] = [
       'mage',
       'druid',
       'illusionist',
-      'alchemist',
       'necromancer',
       'elf-archer',
     ],
-    note: '九个射 2~5 的远程挤在 120~175 金。这是全表最大的一堆，也是"买个远程"这一个决定里最没有区分度的一段。鹰身女妖是唯一的物理远程（靠飞），其余八个都是法术/状态。',
+    note: '八个射 2~5 的远程挤在 120~175 金。这是全表最大的一堆，也是"买个远程"这一个决定里最没有区分度的一段。鹰身女妖是唯一的物理远程（靠飞），其余七个都是法术/状态。炼金术士 2026-11-07 升到四代（240 金），见 G14。',
   },
   {
     title: 'G11 · 三代支援',
@@ -184,13 +183,13 @@ const GROUPS: Group[] = [
   },
   {
     title: 'G13 · 四代顶线',
-    ids: ['clockwork-golem', 'royal-guard', 'two-head-giant'],
-    note: '245~300 金的厚甲。皇家守卫 10 甲 + 阵列，机关傀儡 9 甲 + 盾墙，双头巨人靠两段远程。',
+    ids: ['clockwork-golem', 'royal-guard', 'two-head-giant', 'dragoon-rider'],
+    note: '245~300 金的厚甲 + 一只飞的。皇家守卫 10 甲 + 阵列，机关傀儡 9 甲 + 盾墙，双头巨人靠两段远程；龙骑兵 265 金是三机制叠在一只兵上（飞 + 冲锋 + 溅射），2026-11-07 从三代升上来。',
   },
   {
-    title: 'G14 · 四代 235 金同价',
-    ids: ['werewolf', 'vampire'],
-    note: '同一代、同一个价（235），一个移 3 一个移 5，一个回血一个吸血。这是最干净的一组对照：除了定位，什么都一样。',
+    title: 'G14 · 四代 235/240 金同价',
+    ids: ['werewolf', 'vampire', 'alchemist'],
+    note: '同一代、几乎同一个价（235/235/240），一个移 3 一个移 5，一个回血一个吸血，一个是六发法术远程（2026-11-07 从三代升上来）。',
   },
   {
     title: 'G15 · 四代终局大件',

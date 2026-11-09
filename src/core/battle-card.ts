@@ -89,24 +89,52 @@ function firstCaptureTurn(
   return best;
 }
 
-/** 我方击杀最多的兵种。并列时取存活多的（"还站着"的更值得吹） */
+/**
+ * 我方击杀最多的兵种。
+ *
+ * 数据源分两层，顺序不能反：
+ *   1. `state.killTally` —— 规则层在 `fireKilled` 里按"击杀方 × 击杀者兵种"累计的，
+ *      单位死了也不丢。这是主路径。
+ *   2. 活着的单位身上攒的 `unit.kills` —— 只有旧存档/旧复盘才缺 killTally。
+ *      兜底而已：这个数以前只有「老兵不死」在维护，拿它当主数据源的话，
+ *      没开那个包的对局里 MVP 永远是空的（这就是这个字段最初坏掉的原因）。
+ *
+ * 并列时取终局存活多的（"还站着"的更值得吹）。
+ *
+ * 不按 category 过滤掉建筑：军营、箭塔真的会杀人。把建筑排除掉会出现
+ * "营地砍了 6 个，卡面却写没有击杀"——那比让建筑上榜更难看。
+ */
 function bestUnit(s: GameState, me: PlayerId): BattleCardData['mvp'] {
-  const byType = new Map<string, { kills: number; alive: number }>();
-  for (const u of unitsOf(s, me)) {
-    if (utype(s, u.type).category !== 'combat') continue;
-    const cur = byType.get(u.type) ?? { kills: 0, alive: 0 };
-    cur.kills += u.kills ?? 0;
-    cur.alive += 1;
-    byType.set(u.type, cur);
+  const kills = new Map<string, number>();
+  const tally = s.killTally?.[me];
+  const hasTally = !!tally && Object.keys(tally).length > 0;
+
+  if (hasTally) {
+    for (const [type, n] of Object.entries(tally!)) {
+      if (!n || n <= 0 || !s.unitTypes[type]) continue;
+      kills.set(type, n);
+    }
+  } else {
+    for (const u of unitsOf(s, me)) {
+      if (!u.kills) continue;
+      kills.set(u.type, (kills.get(u.type) ?? 0) + u.kills);
+    }
   }
+
+  const aliveByType = new Map<string, number>();
+  for (const u of unitsOf(s, me)) {
+    aliveByType.set(u.type, (aliveByType.get(u.type) ?? 0) + 1);
+  }
+
   let best: { type: string; kills: number; alive: number } | null = null;
-  for (const [type, v] of byType) {
-    if (!best || v.kills > best.kills || (v.kills === best.kills && v.alive > best.alive)) {
-      best = { type, kills: v.kills, alive: v.alive };
+  for (const [type, n] of kills) {
+    const alive = aliveByType.get(type) ?? 0;
+    if (!best || n > best.kills || (n === best.kills && alive > best.alive)) {
+      best = { type, kills: n, alive };
     }
   }
   if (!best || best.kills <= 0) return null;
-  return { ...best, name: utype(s, best.type).name };
+  return { ...best, name: s.unitTypes[best.type]?.name ?? best.type };
 }
 
 export function buildBattleCard(s: GameState, me: PlayerId, build: string): BattleCardData {
@@ -149,10 +177,12 @@ export function buildBattleCard(s: GameState, me: PlayerId, build: string): Batt
 
 /** 卡面文案（复制到聊天框的那一份，和图上写的一致） */
 export function battleCardText(d: BattleCardData): string {
+  // 「胜利/失败」而不是「我赢了/我输了」：这段文字是拿去转发的，
+  // 第一人称在别人手里会被读成他自己赢了/输了。
   const head = d.winner
     ? d.iWon
-      ? `我赢了 · 第 ${d.winTurn ?? d.turns} 回合破城`
-      : `我输了 · 撑到第 ${d.turns} 回合`
+      ? `胜利 · 第 ${d.winTurn ?? d.turns} 回合破城`
+      : `失败 · 撑到第 ${d.turns} 回合`
     : `平局 · 打了 ${d.turns} 回合`;
   const lines = [
     `【战报】${head}`,

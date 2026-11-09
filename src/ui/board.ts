@@ -22,6 +22,7 @@
 
 import type { PlayerView } from '../core/fog.ts';
 import { markKindOf } from '../core/mark-registry.ts';
+import { unitStatBits } from '../core/info.ts';
 import { 
   buildProgress, 
   cityName, 
@@ -889,7 +890,13 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const playerName = s.players[u.owner].name;
   const kindText =
     def.category === 'building' ? '建筑' : def.category === 'economy' ? '经济单位' : '部队';
-  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · 甲 ${def.armor}`;
+  /*
+   * 悬停提示里的数值行走共用口径（含「视野」）。
+   *
+   * 血已经用"当前/上限"写在前面了，这里把「血」那一段筛掉，别写两遍。
+   */
+  const statBits = unitStatBits(def).filter((b) => !b.startsWith('血 '));
+  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · ${statBits.join(' · ')}`;
 
   const cargo = u.cargo?.length ?? 0;
   const cargoBadge =
@@ -984,22 +991,42 @@ export function coordsFromEvent(e: Event): { x: number; y: number } | null {
    * 玩家能看出"点歪了"，看不出"这里没实现"。
    */
   const board = target.closest<HTMLElement>('.board');
-  const tiles = board?.querySelector<HTMLElement>('.tiles');
-  if (!board || !tiles) return null;
-
-  const cols = Number(board.style.getPropertyValue('--cols')) || 0;
-  const rows = Number(board.style.getPropertyValue('--rows')) || 0;
-  const box = tiles.getBoundingClientRect();
-  if (cols <= 0 || rows <= 0 || box.width <= 0 || box.height <= 0) return null;
+  if (!board) return null;
 
   // 只认鼠标/触摸那类带坐标的事件：键盘触发的 click 坐标是 0,0，换算出来是假命中
   const ev = e as MouseEvent;
   if (typeof ev.clientX !== 'number' || typeof ev.clientY !== 'number') return null;
   if (ev.clientX === 0 && ev.clientY === 0) return null;
 
+  return cellAtPoint(board, ev.clientX, ev.clientY);
+}
+
+/**
+ * 按屏幕坐标算落在哪一格（纯几何，**不看事件目标**）。
+ *
+ * 拖动绘制只能用这一条。指针被 `setPointerCapture` 抓到棋盘上之后，
+ * `pointermove` 的 target 就是 `.board` 本身了，`closest('[data-x]')` 永远查不到
+ * 格子——按老路径算，整根拖动画出来会是空的。合并采样（getCoalescedEvents）
+ * 拿到的那些中间点也一样没有格子节点可查。
+ *
+ * 顺带把上面那段兜底的几何换算收成一份：两处各写一遍，迟早会改歪一处。
+ */
+export function cellAtPoint(
+  board: HTMLElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  const tiles = board.querySelector<HTMLElement>('.tiles');
+  if (!tiles) return null;
+
+  const cols = Number(board.style.getPropertyValue('--cols')) || 0;
+  const rows = Number(board.style.getPropertyValue('--rows')) || 0;
+  const box = tiles.getBoundingClientRect();
+  if (cols <= 0 || rows <= 0 || box.width <= 0 || box.height <= 0) return null;
+
   const clamp = (v: number, hi: number): number => Math.min(hi, Math.max(0, v));
-  const x = clamp(Math.floor(((ev.clientX - box.left) / box.width) * cols), cols - 1);
-  const y = clamp(Math.floor(((ev.clientY - box.top) / box.height) * rows), rows - 1);
+  const x = clamp(Math.floor(((clientX - box.left) / box.width) * cols), cols - 1);
+  const y = clamp(Math.floor(((clientY - box.top) / box.height) * rows), rows - 1);
   return { x, y };
 }
 

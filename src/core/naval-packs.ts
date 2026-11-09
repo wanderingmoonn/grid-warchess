@@ -272,13 +272,19 @@ const LAY_MINES: AbilityDef = {
  *
  * 注意它**不是无敌**：贴脸就现形，一旦被发现，护甲 9、血量 100 的船
  * 挨两轮齐射就没了。所以潜艇的正确用法是"打完就换位置"，不是站桩。
+ *
+ * 2026-11-09：`hidden` 从"永久"改成"出手即现形"（和潜行同一把尺子）。
+ * 原先是 `() => true`，于是射程 3~4 的潜艇可以一直躲在水下白打，
+ * 连"打完换位置"这个唯一代价都省了。现在开火那一发仍然匿名、仍然不挨反击，
+ * 但开完就露出来，对面整个回合都能还手——潜航这才是一条**偷袭**能力。
  */
 const SUBMERGE: AbilityDef = {
   id: 'nv-submerge',
   name: '潜航',
-  summary: '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。',
+  summary:
+    '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新潜下去。',
   group: 'move',
-  hooks: { hidden: () => true, noCounter: true },
+  hooks: { hidden: (c) => !c.self.acted, noCounter: true },
 };
 
 /**
@@ -912,7 +918,9 @@ const FLEET_UNITS: UnitTypeDef[] = [
     move: 4,
     atk: 22,
     armor: 12,
-    maxHp: 190,
+    // 2026-11-08：三艘航母统一 ×1.15（190 → 219）。改的时候三艘要一起动，
+    // 单改一艘等于把「轻母是数量、舰母是质量」这条分工掰弯。
+    maxHp: 219,
     range: 3,
     vision: 9,
     domain: 'water',
@@ -986,7 +994,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     move: 5,
     atk: 20,
     armor: 10,
-    maxHp: 130,
+    maxHp: 150,
     range: 3,
     vision: 8,
     domain: 'water',
@@ -1073,7 +1081,7 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     move: 3,
     atk: 26,
     armor: 15,
-    maxHp: 260,
+    maxHp: 299,
     range: 3,
     vision: 9,
     domain: 'water',
@@ -1396,9 +1404,9 @@ function portRepair(state: GameState, player: PlayerId): void {
  * 甲板整备：把"轮到你"这个时机转告空军扩展（没接入就什么都不做）。
  *
  * 两个海军包都挂了这个钩子，所以同一次回合开始会被叫两遍。空军那边的
- * `onDeckTurnStart` 是"先收、再修、后放"的完整一套——跑两遍的后果不是
- * 放两架，而是**刚放出去的那架立刻被收回来再修一次**，玩家看到的是
- * "飞机原地没动、血却多回了 8 点"。所以这里用和 `portRepair` 同一个办法：
+ * `onDeckTurnStart` 现在只剩整备（收和放都已改成玩家动作），所以跑两遍
+ * 不再会"刚放出去又被收回来"，但**甲板上的飞机会一回合回 16 点血**——
+ * 照样是错的。所以这里用和 `portRepair` 同一个办法：
  * 在船身上记一个本回合的哨兵，第二遍直接跳过。
  */
 function deckUpkeep(state: GameState, player: PlayerId): void {
