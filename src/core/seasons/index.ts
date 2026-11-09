@@ -10,10 +10,12 @@
  * 所以每条钩子都先问"这个单位站在哪儿"，再查那张表。
  */
 
-import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from './expansions.ts';
-import { climateEffect, climateOfUnit, isNaval } from './climate.ts';
-import { seatsOf } from './types.ts';
-import type { GameState, Unit } from './types.ts';
+import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
+import { climateEffect, isNaval, SEASON_TURNS } from './climate.ts';
+import { climateAt, climateOfUnit, stepClimateField } from './field.ts';
+import { climateOverlayCells, seasonLabel, weatherBlock } from './view.ts';
+import { seatsOf } from '../types.ts';
+import type { GameState, Unit } from '../types.ts';
 
 /** 这个扩展在这个局面里生效吗（被前置/开关过滤掉时不算） */
 export function hasSeasons(s: GameState): boolean {
@@ -28,11 +30,27 @@ function defOf(s: GameState, u: Unit) {
 export const SEASONS: Expansion = {
   id: 'seasons',
   name: '季节与气候',
-  blurb: '四季轮换，气候改这一格的数值。',
+  blurb: '四季轮换。天气由气温与湿度两个场自己算出来，不再查表。',
   summary:
-    '春夏秋冬每 10 回合轮换。每格的气候由地形与海陆距离决定，再改这一格上的移动、护甲、视野、射程与产出。气候不影响城市。',
+    '春夏秋冬每 10 回合轮换，季节基准一到，各地的气温就开始向它趋近——水比热大，所以夏天海水还是凉的。'
+    + '每格有气温与湿度：气温由季节基准、海陆年温差与地形海拔决定；湿度靠蒸发注入、向四邻扩散、'
+    + '过饱和就下雨。两者一起判出这一格的天气，再改移动、护甲、视野、射程与产出。气候不影响城市。',
   scale: 'large',
   hooks: {
+    /**
+     * 回合开始：温湿度场走一步。
+     *
+     * 和灵气同一个节奏（每方回合一步，物理上"时间在流动"）。
+     * 一年 40 回合 = 80 步：陆地热容 260‰ 走完 99%，水面 40‰ 只走 56%——
+     * **夏天到了海水还是凉的**，这就是相位延迟。
+     *
+     * 它不产出任何规则效果，只更新状态。所以放在钩子的最前面，
+     * 让后面那些 modifyMove / modifyArmor 读到的都是这一回合的天气。
+     */
+    onTurnStart: ({ state }) => {
+      stepClimateField(state);
+    },
+
     /**
      * 移动力。
      *
@@ -175,5 +193,33 @@ export const SEASONS: Expansion = {
         if (fee > 0) log(p, `部队维护费支出 ${fee} 金`);
       }
     },
+
+    // ── 展示：侧栏天气块 / 顶栏季节 / 天气视图 ──────────
+    //
+    // 这三条以前是核心里的具名口子：`TopbarState.season` 一个字段、
+    // `ui/panel.ts` 直接 import 气候表拼天气块。现在核心只认
+    // 「一段 HTML」「一枚徽章」「一层染色」，不认识"季节""天气"。
+    getTilePanelHtml: ({ state, x, y, unit }) => {
+      const c = climateAt(state, x, y);
+      // 标题分两种：点空格子看到的是"这里的天气"，点单位看到的是"脚下的天气"。
+      // 文案差别很小，但玩家会因此知道"这是按格算的，不是我身上的状态"。
+      const title = unit ? '脚下的天气' : '这里的天气';
+      return `<div class="card-title" style="margin-top:12px">${title}</div>${weatherBlock(state, x, y, c)}`;
+    },
+    topbarBadges: ({ state }) => [
+      {
+        id: 'seasons-season',
+        text: seasonLabel(state.turn),
+        hint: `季节：每 ${SEASON_TURNS} 回合换一季`,
+      },
+    ],
+    boardViews: () => [
+      {
+        id: 'seasons-weather',
+        label: '天气',
+        hint: '看全图天气分布；点一下钉住，再点取消',
+        cells: ({ state }) => climateOverlayCells(state),
+      },
+    ],
   },
 };

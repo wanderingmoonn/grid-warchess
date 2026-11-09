@@ -44,15 +44,12 @@ import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, er
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
 import {
-  CLIMATE_ICON,
-  climateEffectLines,
   describeTerrain,
   describeUnit,
   ELEMENT_EFFECT,
   TERRAIN_INFO,
   unitStatLine,
 } from '../core/info.ts';
-import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, climateAt, seasonOf, type Climate } from '../core/climate.ts';
 import {
   airLayer,
   attacksLeftOf,
@@ -675,11 +672,34 @@ export function detailCardHtml(input: PanelInput, myTurn: boolean): string {
   return `<div class="card">${renderDetail(input, myTurn)}</div>`;
 }
 
+/**
+ * 扩展往侧栏里插的**成品 HTML**（天气块这类带颜色徽标的）。
+ *
+ * 和 `getUnitPanelLines` 的分工：那个是纯文本行、核心会转义；这个原样插入，
+ * 所以只能由扩展拼——扩展是代码，不是用户输入。
+ *
+ * `unit` 有值表示"看的是这个单位"，`x/y` 是它脚下那一格：
+ * 天气这类按格算的东西，两种卡走同一个入口。
+ */
+function extPanelHtml(
+  s: GameState,
+  x: number,
+  y: number,
+  unit: Unit | undefined,
+  me: PlayerId,
+): string {
+  const parts: string[] = [];
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.getTilePanelHtml) continue;
+    const html = e.hooks.getTilePanelHtml({ state: s, x, y, unit, viewer: me });
+    if (html) parts.push(html);
+  }
+  return parts.join('');
+}
+
 function renderDetail(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedUnit, selectedCityId, selectedCampId, selectedTile } = input;
   const s = view.state;
-  /** 没开「季节与气候」的局里，天气相关的块一律不出现——不留一排"温和" */
-  const weatherOn = s.config.expansionIds.includes('seasons');
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -727,12 +747,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                 .join('')}</div>`
             : ''
         }
-        ${
-          weatherOn
-            ? `<div class="card-title" style="margin-top:12px">这里的天气</div>
-               ${weatherBlock(climateAt(s, selectedTile.x, selectedTile.y))}`
-            : ''
-        }
+        ${extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me)}
         <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
       `;
     }
@@ -981,14 +996,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
       <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${stats.vision}</b></div>
-      ${
-        // 天气紧跟在"移动力 / 射程 / 视野"后面：这几项正是它改的东西，
-        // 放在别处玩家就得自己把两处信息对起来
-        weatherOn
-          ? `<div class="card-title" style="margin-top:12px">脚下的天气</div>
-             ${weatherBlock(climateAt(s, selectedUnit.x, selectedUnit.y))}`
-          : ''
-      }
+      ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
       ${
         // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
         // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
@@ -1870,8 +1878,6 @@ export interface TopbarState {
   /** 勾了「浓雾蔽野」：迷雾锁定开启，顶栏那个开关要禁用 */
   blackout: boolean;
   turn: number;
-  /** 季节条文案；null 表示这一局没开「季节与气候」 */
-  season: string | null;
   current: PlayerId;
   currentName: string;
   /** 当前行动方是不是 AI 在走 */
@@ -1907,38 +1913,6 @@ export interface TopbarState {
 }
 
 /**
- * 天气徽标：图标 + 中文名。
- *
- * `w-<id>` 这个 class 让每种气候有自己的底色，一眼能分冷暖和干湿；
- * 颜色只是辅助，名字和数值才是准的（色弱玩家也得读得懂）。
- */
-export function weatherBadge(c: Climate): string {
-  return `<span class="weather-badge w-${c}">${CLIMATE_ICON[c]} ${CLIMATE_NAME[c]}</span>`;
-}
-
-/**
- * 天气说明块：徽标 + 逐条效果。
- *
- * 效果文字从效果表派生（见 info.ts 的 climateEffectLines），
- * 所以这里不用维护第二份文案。
- */
-export function weatherBlock(c: Climate): string {
-  const lines = climateEffectLines(c);
-  const body =
-    lines.length === 0
-      ? `<div class="weather-none">这一格没有额外影响。</div>`
-      : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
-  return `<div class="weather-box">${weatherBadge(c)}${body}</div>`;
-}
-
-/** 季节条：顶栏常驻，显示"现在是哪一季、还有几回合换季" */
-export function seasonLabel(turn: number): string {
-  const season = seasonOf(turn);
-  const left = SEASON_TURNS - ((Math.max(1, turn) - 1) % SEASON_TURNS);
-  return `${SEASON_NAME[season]} · 剩 ${left} 回合`;
-}
-
-/**
  * 顶栏上那个"观战 N 人"。
  *
  * 为什么是由外面塞进来、而不是从 `PlayerView` 里读：观战人数不是对局状态，
@@ -1961,7 +1935,8 @@ export function topbarShell(): string {
       <span class="side-dot a" data-ref="dot"></span>
       <span data-ref="who"></span>
     </div>
-    <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
+    <!-- 扩展的常驻徽章（季节、以后的潮汐/瘟疫……）：只读文字，由 main 填 -->
+    <div class="topbar-badges" data-ref="topbar-badges"></div>
     <!--
       扩展的棋盘视图（灵气、以后的污染/视野……）：chip 由 main 按扩展给的
       定义创建，这里只留容器。没有扩展提供视图时整块不占位。
@@ -2003,7 +1978,6 @@ const topbarSigs = new WeakMap<HTMLElement, string>();
 export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   const sig = [
     s.turn,
-    s.season ?? '',
     s.current,
     s.currentName,
     s.aiCurrent ? 1 : 0,
@@ -2026,14 +2000,6 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
 
   const turn = ref('turn');
   if (turn) turn.textContent = `第 ${s.turn} 回合`;
-
-  // 季节：天气是逐格的，顶栏只放"现在换算哪一季"这个全局事实；
-  // 具体这一格是什么天气，留给侧栏（选中单位 / 格子时显示）。
-  const season = ref('season');
-  if (season) {
-    season.hidden = !s.season;
-    if (s.season) season.textContent = s.season;
-  }
 
   const dot = ref('dot');
   if (dot) dot.className = `side-dot ${s.current === 'A' ? 'a' : 'b'}`;

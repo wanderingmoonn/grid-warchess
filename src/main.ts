@@ -88,7 +88,7 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { MatchReport } from './core/report.ts';
@@ -339,6 +339,31 @@ function syncBoardViewChips(views: BoardView[]): void {
     el.classList.toggle('on', id === active);
     el.classList.toggle('pinned', id === boardViewPinned);
   }
+}
+
+/**
+ * 顶栏的常驻徽章（季节这类"整局的一个状态"）。
+ *
+ * 和 `syncBoardViewChips` 同一套做法：只在内容签名变了时才写 DOM。
+ * 以前季节是 `TopbarState.season` 一个具名字段 + 一个 `data-ref="season"`，
+ * 那是核心为「季节与气候」这个词专门开的口子——现在它只是"某个扩展的一枚徽章"。
+ */
+function syncTopbarBadges(): void {
+  const box = topbarEl.querySelector<HTMLElement>('[data-ref="topbar-badges"]');
+  if (!box) return;
+  const badges: Array<{ id: string; text: string; hint: string }> = [];
+  for (const e of activeExpansions(state)) {
+    if (!e.hooks.topbarBadges) continue;
+    badges.push(...e.hooks.topbarBadges({ state }));
+  }
+  const sig = badges.map((b) => `${b.id}:${b.text}:${b.hint}`).join('|');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const esc = (t: string) =>
+    t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  box.innerHTML = badges
+    .map((b) => `<span class="topbar-badge" title="${esc(b.hint)}">${esc(b.text)}</span>`)
+    .join('');
 }
 
 /** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
@@ -1289,7 +1314,8 @@ function render(): void {
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
-  // 顶栏的棋盘视图 chip（扩展给的；没有就整块不占位）
+  // 顶栏的扩展槽位：常驻徽章（季节）+ 棋盘视图 chip。都没有就整块不占位。
+  syncTopbarBadges();
   syncBoardViewChips(boardViewsOf());
   /*
    * 复盘时换一副眼镜：**旁观 + 全信息**。
@@ -1430,7 +1456,6 @@ function render(): void {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
-    season: state.config.expansionIds.includes('seasons') ? seasonLabel(state.turn) : null,
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),

@@ -4058,15 +4058,18 @@ a.btn {
  * 图标 + 名字 + 逐条效果。颜色只是"一眼分冷暖干湿"的辅助，
  * 名字和数值才是准的——色弱玩家也得读得懂，所以不靠颜色单独表意。
  */
-/* 扩展的棋盘视图 chip：和「季节」同尺寸，但可点、有开关态 */
-.topbar-ext {
+/* 顶栏的两个扩展槽位：只读徽章（季节）与可点击的视图 chip。
+   它们并排、同尺寸——玩家不用分辨"哪个是官方的、哪个是扩展的"。 */
+.topbar-ext,
+.topbar-badges {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
 }
 
-/* 没有扩展提供视图时整块不占位，顶栏不会多出一段空白 */
-.topbar-ext:empty {
+/* 没有扩展提供内容时整块不占位，顶栏不会多出一段空白 */
+.topbar-ext:empty,
+.topbar-badges:empty {
   display: none;
 }
 
@@ -4093,7 +4096,8 @@ a.btn {
   color: #2f6f5a;
 }
 
-.weather-chip {
+.weather-chip,
+.topbar-badge {
   flex: 0 0 auto;
   font-size: 12px;
   padding: 3px 9px;
@@ -4110,6 +4114,15 @@ a.btn {
   border-radius: 10px;
   background: var(--panel-2);
   border: 1px solid var(--line);
+}
+
+/* 气象读数：温度 · 湿度/饱和。放在徽标下面一行小字——
+   它是"为什么是这个天气"的解释，不该抢徽标的注意力 */
+.weather-readout {
+  font-size: 11px;
+  color: var(--text-3, var(--text-2));
+  margin: 4px 0 6px;
+  font-variant-numeric: tabular-nums;
 }
 
 .weather-badge {

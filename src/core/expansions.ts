@@ -36,7 +36,7 @@ import type { AbilityApi, AuraSpec } from './ability-hooks.ts';
 import { ERA_ARMS } from './era-packs.ts';
 import { FANTASY } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
-import { SEASONS } from './seasons.ts';
+import { SEASONS } from './seasons/index.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
@@ -506,6 +506,27 @@ export interface ExpansionHooks {
   getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
 
   /**
+   * 格子 / 单位卡上的**扩展 HTML 块**。
+   *
+   * 和 `getTilePanelLines` 分工：那个是纯文本行（核心会转义），
+   * 这个是成品 HTML——天气块要带 `.weather-badge.w-cold` 这种按气候分色的
+   * 徽标，纯文本表达不了。
+   *
+   * ⚠️ 核心**原样插入**，不转义。所以只准扩展拼，别把玩家可改的名字
+   * （自定义兵种名、玩家昵称）塞进模板——那是 XSS 的入口。
+   *
+   * `unit` 有值表示"看的是这个单位"（标题可能不同），`x/y` 永远是它脚下那一格：
+   * 天气这类东西是按格算的，两种卡走同一个入口。
+   */
+  getTilePanelHtml?: (c: {
+    state: GameState;
+    x: number;
+    y: number;
+    unit?: Unit;
+    viewer?: PlayerId;
+  }) => string | null;
+
+  /**
    * 棋盘视图：让扩展在棋盘上**染一层色**（灵气浓度、污染、视野……）。
    *
    * 核心只负责画。它拿到的是"哪几格 + CSS 颜色"，**不知道绿色代表什么**——
@@ -515,6 +536,25 @@ export interface ExpansionHooks {
    * 那些状态只活在界面层，不进存档、不进回放）。
    */
   boardViews?: (c: { state: GameState }) => BoardView[];
+
+  /**
+   * 顶栏的**常驻徽章**（四季、潮汐、瘟疫这类"整局的一个状态"）。
+   *
+   * 和 `boardViews` 分工：那个是可点击、会往棋盘上染色的视图；
+   * 这个只是几行只读文字。以前「季节」是核心写死的 `TopbarState.season`
+   * 加一个 `data-ref="season"` 的 span——那就是核心为一个扩展开的具名口子，
+   * 现在换成这个。
+   *
+   * 返回空数组 = 这局没有常驻徽章，顶栏那块整块不占位。
+   */
+  topbarBadges?: (c: { state: GameState }) => Array<{
+    /** 稳定 id：换局重建、diff 都用它 */
+    id: string;
+    /** 徽章上的字，短 */
+    text: string;
+    /** 悬停提示 */
+    hint: string;
+  }>;
 
 
   /**
