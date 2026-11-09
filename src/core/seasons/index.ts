@@ -159,10 +159,9 @@ export const SEASONS: Expansion = {
           for (let i = 0; i < ed.hits; i++) {
             // 雷暴（50 点）是真伤，不看护甲；风暴（5 点）吃护甲。
             //
-            // **每次至少 1 点**：风暴改成 10×5 之后，护甲 5 以上就一次都挡光，
-            // 重甲单位站在风暴里毫发无伤——"风刮不动铁罐头"不是设计意图，
-            // 是单次伤害太小带来的副作用。保底 1 点让它至少是个持续的消耗。
-            dmg += ed.amount >= 50 ? ed.amount : Math.max(1, ed.amount - (def.armor ?? 0));
+            // **不设保底**：10×5 的意图就是"5 甲以下重伤、5 甲以上免伤"——
+            // 护甲在风暴里是一条硬门槛，不是可以慢慢磨穿的减伤。
+            dmg += ed.amount >= 50 ? ed.amount : Math.max(0, ed.amount - (def.armor ?? 0));
           }
           if (dmg > 0) {
             hurt(u, dmg);
