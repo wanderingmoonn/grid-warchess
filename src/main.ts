@@ -157,7 +157,7 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
-import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
@@ -1808,14 +1808,26 @@ function refreshSelection(): void {
        */
       if (pendingSkill.targeting === 'point') {
         /*
-         * 选点型也要先把**基础范围**点亮。
+         * 先点亮**可落点的范围圈**。
          *
-         * 以前这里直接 return，于是"射程圈"只有鼠标扫过去才出现——第一次玩的
-         * 人会以为这个技能没有范围，或者以为它坏了。现在先用"落点 = 自己脚下"
-         * 问一次预览器：掌心雷那种"以自己为圆心的射程圈"立刻就有了；
-         * 传送阵的预览器在落点=自己时返回空（原地传送没有意义），保持不亮。
+         * 两条来源，谁有就用谁：
+         *   1. 技能登记过"合法落点"（`SKILL_TARGET_CELLS`，陨卵就是这种）——
+         *      直接把它给的那一片点亮。这是玩家判断"9 格边界在哪"的唯一线索。
+         *      2026-11-09 我合 main.ts 时以为这张表没人读，整段删了，
+         *      结果陨卵在界面上没有射程圈；这次连"点空地也能放"一起补回来。
+         *   2. 没登记的（掌心雷、传送阵这类）——拿"落点 = 自己脚下"问一次预览器：
+         *      以自己为圆心的射程圈立刻就有；传送阵在落点=自己时返回空，保持不亮。
+         *
+         * 点亮只影响观感：选点型的点击判定不查 `aimTiles`（见 skill-aim.ts），
+         * 所以"圈外的格子点了会失败"这件事仍然由规则层给说法。
          */
-        if (previewer && caster) {
+        const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
+        const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
+        if (cellsOf && skillDef) {
+          for (const p of cellsOf({ state, self: caster, skill: skillDef })) {
+            aimTiles.push(idx(state, p.x, p.y));
+          }
+        } else if (previewer && caster) {
           skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
         }
         return;

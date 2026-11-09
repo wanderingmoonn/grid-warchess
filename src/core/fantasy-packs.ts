@@ -2689,7 +2689,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     flight: true,
     layer: 'air',
     hero: true,
-    unlockCost: 300,
+    // 300 → 350（2026-11-10）：上一轮刚给它加过射程和陨卵的选点自由，
+    // 解锁门槛跟着挪一档，免得它成为"最便宜的大杀器"。
+    unlockCost: 350,
     requiresPack: 'pack-contemporary',
     weak: { light: 2 },
     resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
@@ -2700,8 +2702,9 @@ const HERO_UNITS: UnitTypeDef[] = [
         summary:
           '在 9 格内**自己挑一格**落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
         effect: 'dragon-egg',
-        // 落点由玩家点，不再由引擎替他想。地图上高亮的格子＝"能落蛋、且砸得到人"，
-        // 点空地会被拒绝（这条技能的身份是"陨石砸人"，不是"随地放蛋"）。
+        // 落点由玩家点，不再由引擎替他想。高亮的格子＝射程内放得下蛋的格子；
+        // 2026-11-10 起**点空地也算合法**——卵本身是两回合后的一条龙，
+        // 不只是"砸人那一下"，所以不再要求落点周围有敌人。
         targeting: 'point',
         cooldown: 3,
         radius: 9,

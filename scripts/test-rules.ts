@@ -2995,13 +2995,16 @@ test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', ()
   assert.equal(hatched!.type, 'magic-dragon', '两回合后孵成魔龙');
 });
 
-test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () => {
+test('陨卵：落点由玩家点，空地也能放（2026-11-10 放宽）', () => {
   /*
    * 原来是引擎替玩家挑"伤害最高的一格"。现在声明成选点技能（targeting: 'point'），
    * 界面把合法格子高亮、点哪落哪。
    *
-   * 两个口径必须同源：高亮的格子就是"点下去不会失败"的格子，
-   * 否则玩家会遇到这个包里最烦人的那种挫败——格子亮着，点下去回一句"不行"。
+   * 2026-11-10 改动：**落点周围不要求有敌人**。理由在规则层写着——卵本身是
+   * 两回合后的一条龙，不只是"砸人那一下"，把它锁死在"必须砸到人"上，
+   * 等于砍掉了"提前铺垫一条龙"这个玩法。
+   *
+   * 两个口径必须同源：高亮的格子就是"点下去不会失败"的格子。
    */
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
   s.units = [];
@@ -3013,11 +3016,14 @@ test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () 
   assert.equal(skill.targeting, 'point', '要声明成选点技能，界面才会进瞄准模式');
 
   const cells = SKILL_TARGET_CELLS['dragon-egg']!({ state: s, self: dragon, skill });
-  assert.ok(cells.length > 0, '有敌人就该有落点');
+  assert.ok(cells.length > 0, '射程内放得下蛋的格子都该高亮');
   assert.ok(cells.some((p) => p.x === 10 && p.y === 5), '(10,5) 贴着敌人，是合法落点');
-  assert.equal(cells.some((p) => p.x === 4 && p.y === 9), false, '砸不到人的空地不该高亮');
+  assert.ok(
+    cells.some((p) => p.x === 4 && p.y === 9),
+    '空地也该高亮——2026-11-10 起点空地也算合法（高亮和判定必须同源）',
+  );
 
-  // 点哪落哪
+  // 1) 砸得到人：点哪落哪，伤害照旧
   const r = applyAction(s, {
     type: 'HERO_SKILL',
     unitId: dragon.id,
@@ -3030,10 +3036,27 @@ test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () 
   assert.equal(egg?.x, 10, '蛋要落在玩家点的那一格');
   assert.equal(egg?.y, 5);
 
-  // 被拒绝的三种情况：各有各的说法，不能笼统回一句"不行"
+  // 2) 空地也能放：这次换邪龙王本体还站在 (5,5)，蛋落 (4,9)，附近没有敌人
+  const empty = applyAction(s, {
+    type: 'HERO_SKILL',
+    unitId: dragon.id,
+    skillId: 'dragon-egg',
+    targetX: 4,
+    targetY: 9,
+  });
+  assert.ok(empty.ok, `点空地该放得出来：${empty.ok ? '' : empty.reason}`);
+  const egg2 = empty.state.units.filter((u) => u.type === 'dragon-egg' && u.x === 4 && u.y === 9);
+  assert.equal(egg2.length, 1, '空地上也该长出一枚蛋');
+  assert.match(
+    empty.state.log.map((l) => l.text).join('\n'),
+    /没砸到人/,
+    '没伤到人要照实写进战报，而不是悄悄成功',
+  );
+
+  // 3) 仍然拒绝的两种情况：射程外 / 那一格放不下（有兵站着）
   const cases: Array<[{ x: number; y: number }, RegExp]> = [
     [{ x: 18, y: 5 }, /格内/],
-    [{ x: 3, y: 9 }, /砸不到人/],
+    [{ x: 11, y: 5 }, /放不下/],
   ];
   for (const [t, re] of cases) {
     const bad = applyAction(s, {

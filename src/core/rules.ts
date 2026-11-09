@@ -5974,9 +5974,11 @@ export function eggDropCells(
   return out;
 }
 
-// 界面：把"能落蛋、且砸得到人"的格子高亮出来（选点类技能的统一入口）
+// 界面：把"能落蛋"的格子高亮出来（选点类技能的统一入口）。
+// 2026-11-10 起不再筛"砸得到人"——点空地也能放蛋，高亮就得跟着放宽，
+// 否则玩家会遇到"这一格能用却没亮"的反向挫败。
 registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
-  eggDropCells(state, self, skill.radius ?? 9, skill.power ?? 1),
+  eggDropCells(state, self, skill.radius ?? 9, undefined, 'dragon-egg'),
 );
 
 /**
@@ -6004,38 +6006,43 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     return;
   }
   const foes = c.state.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
-  if (foes.length === 0) {
-    c.result.ok = false;
-    c.result.reason = '范围内没有敌人';
-    return;
-  }
 
-  // 能落蛋、且砸得到人的格子。玩家只能从这里面挑。
-  const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
-  if (legal.length === 0) {
+  /*
+   * 玩家能点的格子 = 射程内放得下蛋的格子，**不要求周围有敌人**（2026-11-10）。
+   *
+   * 以前这里把"砸得到人"当合法性的一部分，于是想往空地上放蛋（等两回合后
+   * 孵出一条龙、当筹码用）会被回一句"那一格周围没有敌人"。卵本身是战力，
+   * 不是只能当陨石——所以合法性只看"落得下"，伤害交给下面那一段自己算：
+   * 一个都没砸到就写"这一下没砸到人"。
+   */
+  const spots = eggDropCells(c.state, c.self, reach, undefined, eggType);
+  if (spots.length === 0) {
     c.result.ok = false;
-    c.result.reason = '没有能砸到敌人的落点';
+    c.result.reason = `陨卵只能落在 ${reach} 格内的空地上`;
     return;
   }
 
   let best: { x: number; y: number } | null = null;
   if (c.target) {
-    const hit = legal.find((p) => p.x === c.target!.x && p.y === c.target!.y);
+    const hit = spots.find((p) => p.x === c.target!.x && p.y === c.target!.y);
     if (!hit) {
       c.result.ok = false;
-      // 两种失败要分开说：射程外 / 那一格站不下 / 砸不到人
+      // 两种失败要分开说：射程外 / 那一格放不下
       const inReach =
         Math.max(Math.abs(c.target.x - c.self.x), Math.abs(c.target.y - c.self.y)) <= reach;
       c.result.reason = !inReach
         ? `陨卵只能落在 ${reach} 格内`
-        : !canStandAt(c.state, c.target.x, c.target.y, eggType)
-          ? '那一格放不下魔龙卵'
-          : '那一格周围没有敌人，砸不到人';
+        : '那一格放不下魔龙卵';
       return;
     }
     best = hit;
   } else {
-    // 自动挑（AI / 旧复盘）：从同一份 legal 里挑伤害最高的
+    /*
+     * 自动挑（AI / 旧复盘）：口径**故意不跟着放宽**——AI 只有当这一发能伤到人
+     * 才算"值得放"，而且老录像要能逐字重放（当年就是在"砸得到人"的格子里挑的）。
+     * 玩家手动点空地的自由不影响这条。
+     */
+    const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
     let bestScore = -1;
     for (const p of legal) {
       let score = 0;
