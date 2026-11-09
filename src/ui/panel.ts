@@ -933,10 +933,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
         // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
         splashRadiusOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>溅射</span><b>主目标 ${splashRadiusOf(
+          ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
               s,
               selectedUnit,
-            )} 格内（不含斜角）· ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
+            )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
           : ''
       }
       ${

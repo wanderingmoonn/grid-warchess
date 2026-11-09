@@ -76,7 +76,7 @@ export const HEAL_PILL: PillDef = {
   name: '回春丹',
   summary: `回复 ${Math.round(HEAL_PILL_RATIO * 100)}% 生命上限（至少 ${HEAL_PILL_FLOOR} 点）`,
   cost: { gold: 15, stone: 3 },
-  unusable: (s, u) => (u.hp >= getMaxHp(s, u) ? '血是满的，别浪费' : null),
+  unusable: (s, u) => (u.hp >= getMaxHp(s, u) ? '生命值已满' : null),
   apply: (s, u) => {
     const max = getMaxHp(s, u);
     const want = Math.max(HEAL_PILL_FLOOR, Math.round(max * HEAL_PILL_RATIO));
@@ -92,7 +92,7 @@ export const SPIRIT_PILL: PillDef = {
   name: '聚灵丹',
   summary: `立刻回复 ${SPIRIT_PILL_MANA} 点灵力`,
   cost: { gold: 20, stone: 6 },
-  unusable: (_s, u) => (manaOf(u) >= maxManaOf(u) ? '灵力是满的，别浪费' : null),
+  unusable: (_s, u) => (manaOf(u) >= maxManaOf(u) ? '灵力已满' : null),
   apply: (_s, u) => {
     const before = manaOf(u);
     const after = Math.min(maxManaOf(u), before + SPIRIT_PILL_MANA);
@@ -212,12 +212,12 @@ export function pillBrewProblem(s: GameState, owner: PlayerId, u: Unit, pill: Pi
   if (!isCultivatorUnit(s, u)) return '只有修士才炼丹';
   if (!furnaceNextTo(s, u)) return '要站在炼丹炉旁边才能炼';
   if (pillCountOf(u) >= pillCarryCap(u)) {
-    return `身上装不下了（${pillCountOf(u)} / ${pillCarryCap(u)}）：先吃几颗，或者换个弟子来背`;
+    return `装不下了（${pillCountOf(u)} / ${pillCarryCap(u)}）`;
   }
   const gold = resOf(s.players[owner], GOLD);
-  if (gold < pill.cost.gold) return `金币不足（要 ${pill.cost.gold}，现在 ${gold}）`;
+  if (gold < pill.cost.gold) return `金币不足（${gold} / ${pill.cost.gold}）`;
   const stones = resOf(s.players[owner], SPIRIT_STONE);
-  if (stones < pill.cost.stone) return `灵石不足（要 ${pill.cost.stone}，现在 ${stones}）`;
+  if (stones < pill.cost.stone) return `灵石不足（${stones} / ${pill.cost.stone}）`;
   return null;
 }
 
