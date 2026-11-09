@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const dir=path.dirname(fileURLToPath(import.meta.url)),read=n=>JSON.parse(fs.readFileSync(path.join(dir,n),'utf8'));
+const p=read('protocol.json'),hash=b=>crypto.createHash('sha256').update(b).digest('hex');
+assert.equal(read('preflight.json').complete,true);assert.equal(read('isolation-validation.json').complete,true);
+for(const [f,h]of Object.entries(p.fingerprints))assert.equal(hash(fs.readFileSync(path.join(dir,'snapshot/core',f))),h);
+for(const g of p.groups)for(const [f,h]of Object.entries(p.variantFingerprints[g.id].files))assert.equal(hash(fs.readFileSync(path.join(dir,'variants',g.id,'core',f))),h);
+const files=['prepare.mjs','run.mjs','game.mjs','protocol.json','source-deltas.json','adapter-changes.json'];
+const harness=Object.fromEntries(files.map(f=>[f,hash(fs.readFileSync(path.join(dir,f)))]));
+if(fs.existsSync(path.join(dir,'seal.json')))assert.deepEqual(read('seal.json').harness,harness);
+else fs.writeFileSync(path.join(dir,'seal.json'),JSON.stringify({sealedAt:new Date().toISOString(),harness,baseline:p.sourceFingerprint,variants:Object.fromEntries(p.groups.map(g=>[g.id,p.variantFingerprints[g.id].fingerprint])),policy:'No changes to strategy, source, seeds, caps or comparison after outcomes. Retain errors and capped results.'},null,2));
+for(const d of ['games','live','logs'])fs.mkdirSync(path.join(dir,d),{recursive:true});
+const complete=j=>{try{return read('live/'+j.id+'.json').complete&&fs.existsSync(path.join(dir,'games',j.id+'.json'))&&fs.existsSync(path.join(dir,'games',j.id+'.replay.json.gz'));}catch{return false;}};
+const jobs=p.jobs.filter(j=>!complete(j)),active=new Map(),failed=[];let done=p.jobs.length-jobs.length,next=0;const start=Date.now();
+const progress=()=>{const result={total:p.jobs.length,completed:done,active:[...active.values()],failed,elapsedSeconds:(Date.now()-start)/1000};fs.writeFileSync(path.join(dir,'progress.json'),JSON.stringify(result,null,2));return result;};
+await new Promise(resolve=>{
+ const launch=()=>{while(active.size<12&&next<jobs.length){const job=jobs[next++],log=fs.createWriteStream(path.join(dir,'logs',job.id+'.log'));
+  const child=spawn(process.execPath,['--max-old-space-size=1536','--experimental-strip-types',path.join(dir,'game.mjs'),'--job',job.id],{cwd:dir,stdio:['ignore','pipe','pipe'],windowsHide:true});
+  active.set(child.pid,{id:job.id,pid:child.pid});child.stdout.pipe(log);child.stderr.pipe(log);
+  child.on('exit',code=>{active.delete(child.pid);log.end();if(code===0&&complete(job))done++;else failed.push({id:job.id,code});progress();if(next>=jobs.length&&!active.size)resolve();else launch();});
+ }progress();if(next>=jobs.length&&!active.size)resolve();};launch();
+ const timer=setInterval(()=>{progress();if(next>=jobs.length&&!active.size)clearInterval(timer);},5000);
+});
+console.log(JSON.stringify({...progress(),complete:done===p.jobs.length}));if(failed.length)process.exitCode=1;

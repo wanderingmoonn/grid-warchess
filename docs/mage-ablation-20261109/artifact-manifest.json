@@ -1,0 +1,117 @@
+{
+  "newGames": 12,
+  "historicalReferenceGames": 8,
+  "baselineFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "variantFingerprints": {
+    "upgrade": "07d5ff12d8336ed25b04d0500b4b9e48fa75e8971a0406364ddb7d5a531bbae5",
+    "batch": "9fe3bd6b795b2618e587050bec13813f4708ef897147674df2ec4437caa7469d",
+    "position": "4e1aac7e86abbbcd53fa96795a7c74db75b659994cde51bc95a3e55e56532e8b"
+  },
+  "files": [
+    {
+      "path": "MAGE-ABLATION-2026-11-09.md",
+      "bytes": 11387,
+      "sha256": "c398d2cf486128a694f56cb331c0696601817eea935a78355e9e45f2a7bce257"
+    },
+    {
+      "path": "mage-ablation-20261109/checks.json",
+      "bytes": 2014,
+      "sha256": "ac55a894fee52cee8d4f176bf3bfc10d0e6006482ac48dc6c433528d6a96fc3e"
+    },
+    {
+      "path": "mage-ablation-20261109/compare.mjs",
+      "bytes": 12154,
+      "sha256": "4f85d34b62cb4fe433ffa93c44c794bd6c3a058ad59ca2320c49b1ae579fb098"
+    },
+    {
+      "path": "mage-ablation-20261109/comparison-validation.json",
+      "bytes": 681,
+      "sha256": "2616b54a5b3618b15238425cc2e9c5feb0e2368f040108881fe2222b0a76d743"
+    },
+    {
+      "path": "mage-ablation-20261109/comparison.json",
+      "bytes": 60536,
+      "sha256": "11088fe5692b7d7a7ea393a7642a58964cc463be78a3c8256fc0a007f3067ee2"
+    },
+    {
+      "path": "mage-ablation-20261109/experiment.patch",
+      "bytes": 10172,
+      "sha256": "709a0a7ada6e0aef16db7ffc32e56741b6136aafa8a70c4d9aa07536d9f21188"
+    },
+    {
+      "path": "mage-ablation-20261109/first-four-output.png",
+      "bytes": 104189,
+      "sha256": "37a363f413b2fcca9a395a0e920dd6535c9c21d3dc6b573003d46d01687ba18e"
+    },
+    {
+      "path": "mage-ablation-20261109/first-four-output.svg",
+      "bytes": 100757,
+      "sha256": "cd054c3fa8b0b434e647e064575ddb7894363324a7a4725bfd654d197b38420d"
+    },
+    {
+      "path": "mage-ablation-20261109/game.mjs",
+      "bytes": 15709,
+      "sha256": "e00ec9045401d8e269fbc1052ce2b8c97cb72631f31f56674605a01e8ab59438"
+    },
+    {
+      "path": "mage-ablation-20261109/isolation-validation.json",
+      "bytes": 298,
+      "sha256": "c72ff287dec2d3c72f9d3a673444cb39a73ba1d17f6f208e472c98c5528ad30a"
+    },
+    {
+      "path": "mage-ablation-20261109/outcomes.png",
+      "bytes": 58949,
+      "sha256": "f787db68c1199c23e15e89aa177033c186ebae6c2cad7940de78928743c12d87"
+    },
+    {
+      "path": "mage-ablation-20261109/outcomes.svg",
+      "bytes": 65787,
+      "sha256": "b59ef937e08f0b4808c2433aca125e0a178b4b7dbec76b4693277614788f9d94"
+    },
+    {
+      "path": "mage-ablation-20261109/plot_comparison.py",
+      "bytes": 3484,
+      "sha256": "2b17ac47634785729cc950f35450dacaed2b53a063ef4236133af5769d30ce1d"
+    },
+    {
+      "path": "mage-ablation-20261109/prepare.mjs",
+      "bytes": 9859,
+      "sha256": "07c4be1f69d0c287ff449b724a84b375405beeca84b6a410168483f920e16c21"
+    },
+    {
+      "path": "mage-ablation-20261109/protocol.json",
+      "bytes": 33641,
+      "sha256": "71052d7e6aa1839f6d53ed6fc789b154bd3941e8033ce9ad45ec0efbe45fbb6a"
+    },
+    {
+      "path": "mage-ablation-20261109/REPRODUCE.md",
+      "bytes": 4603,
+      "sha256": "4c861dfcfbb2535877935b1cf111567c2c48b0598502e9f0d09d506c876fc374"
+    },
+    {
+      "path": "mage-ablation-20261109/reproduction.zip",
+      "bytes": 7351614,
+      "sha256": "6a30ec1abbba3b6dd744f4b1c61e2966efdfb4db40e9c0820df5b7d0697a4437"
+    },
+    {
+      "path": "mage-ablation-20261109/run.mjs",
+      "bytes": 3117,
+      "sha256": "de870d091dbeecfaea5e0ba259791a5a37624ea6e86a1b89813eb05722b45f38"
+    },
+    {
+      "path": "mage-ablation-20261109/seal.json",
+      "bytes": 1069,
+      "sha256": "de38ce2f6aedbf85e16121de98522aef10762d204e7ade3106263d884f143aab"
+    },
+    {
+      "path": "mage-ablation-20261109/source-deltas.json",
+      "bytes": 1336,
+      "sha256": "44e1e628698a2eaeaf7107e02897819b7cba30fa335f913b3728868ef2afd540"
+    },
+    {
+      "path": "mage-ablation-20261109/verify-isolation.mjs",
+      "bytes": 2100,
+      "sha256": "e70f060fd66e1f74885fe3a98fcca912a5b93b676fc3168d89f4871840ce714d"
+    }
+  ]
+}

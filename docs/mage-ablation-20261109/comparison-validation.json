@@ -1,0 +1,22 @@
+{
+  "complete": true,
+  "newNativeReplays": 12,
+  "reusedOriginal": 4,
+  "reusedCombined": 4,
+  "totalCompared": 20,
+  "sealedFilesMatch": true,
+  "matchedInitialStates": true,
+  "matchedConfigs": true,
+  "ruleAndUnitFilesUnchanged": true,
+  "oneComponentPerGroup": true,
+  "rejections": 0,
+  "budgetViolations": 0,
+  "initialQuotaCompleted": 12,
+  "nativeStateVersion": 4,
+  "replaySchemaVersion": 3,
+  "variantFingerprints": {
+    "upgrade": "07d5ff12d8336ed25b04d0500b4b9e48fa75e8971a0406364ddb7d5a531bbae5",
+    "batch": "9fe3bd6b795b2618e587050bec13813f4708ef897147674df2ec4437caa7469d",
+    "position": "4e1aac7e86abbbcd53fa96795a7c74db75b659994cde51bc95a3e55e56532e8b"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "groups": 3,
+  "jobs": 12,
+  "onlyOneComponentPerGroup": true,
+  "allAiEditsReverseToOriginal": true,
+  "harnessEditsReverseToOriginal": true,
+  "changedRuleOrUnitFiles": [],
+  "originalSourceFingerprint": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414"
+}

@@ -1,0 +1,27 @@
+{
+  "upgrade": [],
+  "batch": [
+    {
+      "from": "import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';",
+      "to": "import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';\nimport { mageBatchActionAllowed } from './ai-mage-experiment.ts';"
+    },
+    {
+      "from": "    if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }",
+      "to": "    if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }\n    if(depth===0&&!mageBatchActionAllowed(view,budget,action)){candidates.splice(i,1);continue;}"
+    }
+  ],
+  "position": [
+    {
+      "from": "import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';",
+      "to": "import { airDefenseFor, type AirDefense } from './ai-air-defense.ts';\nimport { magePositionBias } from './ai-mage-experiment.ts';"
+    },
+    {
+      "from": "      const score = scoreMove(s, unit, x, y, all, traits);",
+      "to": "      const score = scoreMove(s, unit, x, y, all, traits)\n        + (aiLevelOf(s)==='advanced'?magePositionBias(s,unit,x,y,all.tactical):0);"
+    },
+    {
+      "from": "    const stay = holdScore(s, unit, all, traits);",
+      "to": "    const stay = holdScore(s, unit, all, traits)\n      + (aiLevelOf(s)==='advanced'?magePositionBias(s,unit,unit.x,unit.y,all.tactical):0);"
+    }
+  ]
+}
