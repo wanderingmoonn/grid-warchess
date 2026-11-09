@@ -2808,7 +2808,7 @@ test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', ()
   assert.ok(up.hp > 60, '同时回血');
 });
 
-test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且飞行、陨卵半径 9', () => {
+test('奇想平衡：魔龙卵变硬、邪龙王视野 11 且飞行、陨卵半径 11', () => {
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
 
   const egg = s.unitTypes['dragon-egg']!;
@@ -2817,11 +2817,11 @@ test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且飞行、陨卵半�
   assert.equal(egg.maxHp, 140, '魔龙卵生命 140');
 
   const dragon = s.unitTypes['evil-dragon-king']!;
-  assert.equal(dragon.vision, 9, '邪龙王视野 9');
+  assert.equal(dragon.vision, 11, '邪龙王视野 11（和陨卵半径对齐）');
   assert.equal(dragon.layer, 'air', '邪龙王在空中层');
   assert.equal(dragon.flight, true, '飞行要能掠水，flight 与 layer 一起写');
   const skill = (dragon.skills ?? []).find((k) => k.id === 'dragon-egg');
-  assert.equal(skill?.radius, 9, '陨卵半径 9');
+  assert.equal(skill?.radius, 11, '陨卵半径 11（和视野对齐）');
 
   // 空中层的实际含义：能和地面单位叠在同一格（见 layer 的说明）
   s.units = [];

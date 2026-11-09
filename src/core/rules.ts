@@ -5978,7 +5978,7 @@ export function eggDropCells(
 // 2026-11-10 起不再筛"砸得到人"——点空地也能放蛋，高亮就得跟着放宽，
 // 否则玩家会遇到"这一格能用却没亮"的反向挫败。
 registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
-  eggDropCells(state, self, skill.radius ?? 9, undefined, 'dragon-egg'),
+  eggDropCells(state, self, skill.radius ?? 11, undefined, 'dragon-egg'),
 );
 
 /**
