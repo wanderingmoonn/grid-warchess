@@ -1,0 +1,18 @@
+{
+  "sealedAt": "2026-11-09T10:45:14.253Z",
+  "harness": {
+    "prepare.mjs": "07c4be1f69d0c287ff449b724a84b375405beeca84b6a410168483f920e16c21",
+    "run.mjs": "de870d091dbeecfaea5e0ba259791a5a37624ea6e86a1b89813eb05722b45f38",
+    "game.mjs": "e00ec9045401d8e269fbc1052ce2b8c97cb72631f31f56674605a01e8ab59438",
+    "protocol.json": "71052d7e6aa1839f6d53ed6fc789b154bd3941e8033ce9ad45ec0efbe45fbb6a",
+    "source-deltas.json": "44e1e628698a2eaeaf7107e02897819b7cba30fa335f913b3728868ef2afd540",
+    "adapter-changes.json": "0c099001f2d86bcda12d73c973b3d6d889dec95e2facf4b80ad80cc2f2b6019f"
+  },
+  "baseline": "221136b94476994ea3deb49b9c888c35c8d3ddf252e923f31711db49e58b3414",
+  "variants": {
+    "upgrade": "07d5ff12d8336ed25b04d0500b4b9e48fa75e8971a0406364ddb7d5a531bbae5",
+    "batch": "9fe3bd6b795b2618e587050bec13813f4708ef897147674df2ec4437caa7469d",
+    "position": "4e1aac7e86abbbcd53fa96795a7c74db75b659994cde51bc95a3e55e56532e8b"
+  },
+  "policy": "No changes to strategy, source, seeds, caps or comparison after outcomes. Retain errors and capped results."
+}

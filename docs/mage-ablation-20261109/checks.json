@@ -1,0 +1,76 @@
+{
+  "complete": true,
+  "scope": "Clean ddd177d checkout plus two experiment helper/test files; no other working-tree changes.",
+  "checks": [
+    {
+      "name": "types",
+      "exitCode": 0,
+      "tail": [
+        ""
+      ]
+    },
+    {
+      "name": "mage-experiment",
+      "exitCode": 0,
+      "tail": [
+        "PASS Position-only gives no bias to holy knights, guards or other unit types",
+        "PASS Opening upgrade consumes only the fog view supplied by the controller",
+        "{\"passed\":15}"
+      ]
+    },
+    {
+      "name": "prior-strategy",
+      "exitCode": 0,
+      "tail": [
+        "PASS Rejected support moves are not repeated",
+        "PASS Unseen enemies cannot alter focused procurement through the public AI entry",
+        "{\"passed\":12}"
+      ]
+    },
+    {
+      "name": "ai",
+      "exitCode": 0,
+      "tail": [
+        "✓ 掠空：速攻比均势值钱，均势又比龟缩值钱",
+        "✓ 掠空必须比飞行贵：它是飞行的超集",
+        "51 AI optimization tests passed"
+      ]
+    },
+    {
+      "name": "evaluation",
+      "exitCode": 0,
+      "tail": [
+        "✓ Frozen 004d48a is byte-identical after reversing import rebasing",
+        "✓ Frozen 5fb8e5b is byte-identical after reversing import rebasing",
+        "7 evaluation tests passed"
+      ]
+    },
+    {
+      "name": "rules",
+      "exitCode": 0,
+      "tail": [
+        "  ok   光环：动态效果型光环的半径传参生效",
+        "",
+        "通过 580 项，失败 0 项"
+      ]
+    },
+    {
+      "name": "replay",
+      "exitCode": 0,
+      "tail": [
+        "✓ 报告体积：一局三十步的配置+动作还在可接受的量级",
+        "",
+        "9 项复盘用例通过"
+      ]
+    },
+    {
+      "name": "build",
+      "exitCode": 0,
+      "tail": [
+        "dist/assets/index-BWnBGllE.js        74.48 kB │ gzip:  21.80 kB",
+        "dist/assets/index-Dk1_uB3u.js       469.19 kB │ gzip: 186.59 kB",
+        "✓ built in 4.91s"
+      ]
+    }
+  ]
+}
