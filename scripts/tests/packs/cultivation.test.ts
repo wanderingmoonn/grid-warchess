@@ -43,6 +43,7 @@ import {
   BLOOD_RITE_LIFESPAN_COST,
 } from '../../../src/core/cultivation/skills/blood-rite.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
+import { detailCardHtml } from '../../../src/ui/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
@@ -59,6 +60,7 @@ import {
   PILLS,
   SPIRIT_PILL,
   WARD_PILL,
+  WARD_PILL_TURNS,
   addPill,
   furnaceNextTo,
   pillBrewProblem,
@@ -2925,6 +2927,46 @@ export function run() {
     const deacon = place2(s, 'A', 'cultivation-deacon', 6, 6);
     assert.ok(furnaceNextTo(s, deacon), '贴着炉子');
     assert.ok((pillBrewProblem(s, 'A', deacon, HEAL_PILL) ?? '').includes('修士'), '只有修士炼丹');
+  });
+
+  test('药力显示：和「中毒 n 回合」同一排，带剩余回合；属性明细里不重复', () => {
+    const { s, qi } = alchemyScene();
+    setCultivationExp(qi, expForRank(5));
+    addPill(qi, WARD_PILL.id);
+    const armorBefore = effectiveStats(s, qi).armor;
+    const r = doAct(s, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const st = r.state;
+    const unit = st.units.find((u) => u.id === qi.id)!;
+
+    // 1）属性明细里不再出现药力（那串读起来像地形/永久加成，而且没有回合数）
+    const eff = effectiveStats(st, unit);
+    assert.ok(
+      !eff.armorItems.some((it: { label: string }) => it.label === WARD_PILL.name),
+      `armorItems 不该列药力：${JSON.stringify(eff.armorItems)}`,
+    );
+    // 但护甲该加的还是加了（只是不写进明细）
+    assert.ok(eff.armor > armorBefore, `药力仍然算进护甲：${armorBefore} → ${eff.armor}`);
+
+    // 2）状态栏里有一条「护体丹 · 2 回合」
+    const html = detailCardHtml(
+      {
+        view: playerView(st, 'A'),
+        me: 'A',
+        selectedUnit: unit,
+        selectedCityId: null,
+        selectedCampId: null,
+        selectedTile: null,
+      },
+      true,
+    );
+    const chip = /<span class="status-chip st-buff"[^>]*>\s*<b>([^<]+)<\/b><i>([^<]+)<\/i>/.exec(html);
+    assert.ok(chip, '药力要画成状态徽章（和中点/减速同一排）');
+    assert.equal(chip![1], WARD_PILL.name, '徽章写丹药名');
+    assert.ok(
+      chip![2]!.includes(String(WARD_PILL_TURNS)) && chip![2]!.includes('回合'),
+      `徽章要写剩余回合：${chip![2]}`,
+    );
   });
 }
 
