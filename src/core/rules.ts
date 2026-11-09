@@ -1439,6 +1439,9 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
     // 就凭空多出一次攻击，等于它自己偷偷多打了一刀。
     moved: true,
     acted: true,
+    // 出生回合：技能那条路（heroSkillsOf / doHeroSkill）拿它挡"刚上场就放大招"。
+    // 走位和攻击靠上面两个 true 就够了，技能不查它们，所以得单独记。
+    bornTurn: s.turn,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
     // 卵一落地就开始倒计时：写在这里而不是"第一次回合开始"，
     // 否则每颗卵都会比自己写的 `turns` 多待一个回合。
@@ -5367,6 +5370,9 @@ function doRecruit(
     // 新兵当回合不能行动，否则等于凭空多一次攻击
     moved: true,
     acted: true,
+    // 出生回合：技能那条路靠它挡"刚造出来就放大招"
+    // （走位和攻击看上面两个 true，技能不查它们，所以得单独记）
+    bornTurn: s.turn,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
 
@@ -5702,6 +5708,21 @@ export function heroSkillsOf(
     if (ready && !k.multiCast && u.skillTurn === s.turn) {
       ready = false;
       notReadyReason = '这一回合已经放过技能';
+    }
+
+    /*
+     * 刚上场的单位这一回合不能放技能。
+     *
+     * 新单位由 `makeUnit` 写成 `moved: true, acted: true`，所以"不能走、不能打"
+     * 本来就是成立的；但技能这条路不查那两个字段，于是刚招出来的英雄
+     * 当回合就能放大招——等于一次招募买到"上场 + 一记技能"。
+     *
+     * 判据用自带的 `bornTurn`（详见 types.ts 那段），文案要和 `doHeroSkill`
+     * 里那句一字不差，否则又会出现"按钮亮着、点下去被拒"。
+     */
+    if (ready && u.bornTurn === s.turn) {
+      ready = false;
+      notReadyReason = '刚上场的单位这一回合还不能用技能';
     }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
@@ -6152,6 +6173,13 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 如果技能不允许连发，且这回合已经放过，就拦住
   if (!skill.multiCast && u.skillTurn === s.turn) {
     return { ok: false, reason: '这个单位这一回合已经放过技能了' };
+  }
+
+  // 刚上场的单位这一回合不能放技能（和 `heroSkillsOf` 里那条逐字对应）。
+  // 招募出来的英雄以前当回合就能放大招：一次花钱买到"上场 + 技能"，
+  // 而且对手算不出这笔账。
+  if (u.bornTurn === s.turn) {
+    return { ok: false, reason: '刚上场的单位这一回合还不能用技能' };
   }
 
   const cd = u.skillCd?.[skill.id] ?? 0;

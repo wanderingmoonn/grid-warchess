@@ -13538,6 +13538,59 @@ test('技能：不能连发的技能，本回合放过之后就不该显示"就�
   assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
 });
 
+test('刚造出来的英雄当回合不能放技能', () => {
+  /*
+   * 用户报的 bug："英雄单位被建造出来立刻就能释放技能"。
+   *
+   * 根因：新单位由 `makeUnit` 写成 `moved: true, acted: true`，走位和攻击因此
+   * 天然被挡住；可是**技能那条路不查这两个字段**（技能本来就不吃 acted，
+   * 否则"打完再放技能"会被一起禁掉）。于是刚招募的英雄当回合就能放大招——
+   * 一次花钱买到"上场 + 一记技能"，对手也推不出这笔账。
+   *
+   * 修法是给单位记一个出生回合 `bornTurn`，技能侧用它挡一回合；
+   * UI 侧（`heroSkillsOf`）用同一条判据 + 同一句文案，
+   * 不然又会变成"按钮亮着、点下去被拒"。
+   */
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  s.players.A.gold = 5000;
+  const city = citiesOf(s, 'A')[0]!;
+
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const st = r.state;
+  const hero = st.units.find((u) => u.owner === 'A' && u.type === 'dwarf-king');
+  assert.ok(hero, '矮人王应该已经出场');
+  assert.equal(hero!.bornTurn, st.turn, '出生回合要记下来');
+  assert.equal(hero!.moved, true, '新单位当回合不能走');
+  assert.equal(hero!.acted, true, '新单位当回合不能打');
+
+  // UI：技能不该显示"就绪"
+  const view = heroSkillsOf(st, hero!).find((k) => k.def.id === 'throw-axe')!;
+  assert.equal(view.ready, false, '刚上场的英雄，技能不该是亮的');
+  assert.equal(view.notReadyReason, '刚上场的单位这一回合还不能用技能');
+
+  // 规则：硬闯也要被拒
+  const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });
+  assert.equal(denied.ok, false, '刚上场就放技能应该被拒');
+  assert.match((denied as { reason: string }).reason, /刚上场/);
+
+  // 过一整个回合（A 结束 → B 结束 → 又轮到 A）：可以放了
+  const t1 = applyAction(st, { type: 'END_TURN' });
+  assert.ok(t1.ok);
+  const t2 = applyAction(t1.state, { type: 'END_TURN' });
+  assert.ok(t2.ok);
+  const later = t2.state;
+  const again = later.units.find((u) => u.id === hero!.id)!;
+  assert.ok(later.turn > again.bornTurn!, '回合已经推进过了');
+  assert.equal(
+    heroSkillsOf(later, again).find((k) => k.def.id === 'throw-axe')!.ready,
+    true,
+    '下一回合该恢复就绪',
+  );
+  const cast = applyAction(later, { type: 'HERO_SKILL', unitId: again.id, skillId: 'throw-axe' });
+  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
+});
+
 test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {
   const s = arena(fresh({ expansionIds: FANTASY, godMode: true }));
   const killer = place2(s, 'A', 'assassin-master', 5, 5);
