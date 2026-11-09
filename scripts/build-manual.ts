@@ -25,6 +25,7 @@ import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansi
 import {
   AGING_DEATH_AGE,
   EXP_GROWTH_FLAT,
+  LOW_RANK_GROWTH,
   LIFESPAN_BASE,
   LIFESPAN_PER_RANK,
   MAX_RANK,
@@ -2783,7 +2784,14 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点，<b>0~2 期另有起步加成
+          +${LOW_RANK_GROWTH[0]} / +${LOW_RANK_GROWTH[1]} / +${LOW_RANK_GROWTH[2]} 点</b>。
+          剑修：上面那个数 ÷ 2（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <div style="margin-top:6px;color:#6b6459;font-size:13px">
+            起步加成只给 0~2 期：修士的成长是"前期慢、后期陡"，不加成的话
+            从 0 期练到 3 期要三十多个回合，而那时候本体的科技早换两代了。
+            但它<b>不动天花板</b>——纯打坐仍然到 5 期封顶，再往上必须靠打仗续命。
+          </div>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>

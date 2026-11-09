@@ -45,6 +45,26 @@ export const LIFESPAN_PER_RANK = 9;
 export const EXP_GROWTH_FLAT = 2;
 
 /**
+ * 低境界的额外打坐加成，下标 = 当前境界，越界取 0。
+ *
+ * ── 为什么需要它（2026-11-09）──────────────────────────────
+ *
+ * 修士的成长是"前期慢、后期陡"，而本体的科技是线性的。0→3 期要 **34 回合**
+ * （接近一整年），那时候本体早换了两代兵——"发展修真路线"于是成了
+ * "这局别打了"，实机反馈就是"修士赶不上同时代的科技"。
+ *
+ * ── 为什么不直接调大 EXP_GROWTH_FLAT ───────────────────────
+ *
+ * 那条线是全境界共享的。调大之后**纯挂机能冲到 6 级**，而
+ * "挂机到 5 级封顶、再往上必须靠打仗续命"是这个包的地基
+ * （见 `scripts/tests/packs/cultivation.test.ts` 的「纯挂机曲线」）。
+ *
+ * 所以加成只给 0~2 期：**起步快一倍，天花板一格不动**。
+ * 3 期之后回到 `境界 + EXP_GROWTH_FLAT`，高境界的节奏和以前完全一样。
+ */
+export const LOW_RANK_GROWTH: readonly number[] = [5, 4, 2];
+
+/**
  * 魔修每回合打坐只有这么多——固定 1 点，不随境界长。
  *
  * 它不是"练"出来的：全部修为靠「血祭」炼化（见 skills/blood-rite.ts）。
@@ -192,7 +212,9 @@ export function getExpGrowth(u: Unit): number {
   }
   // 魔修不靠打坐：固定 1 点，涨修为得去血祭（那条路绕过了击杀上限）
   if (isBloodCultivatorType(u.type)) return EXP_GROWTH_BLOOD;
-  return getRank(u) + EXP_GROWTH_FLAT;
+  const rank = getRank(u);
+  // 低境界加成只给 0~2 期，见 LOW_RANK_GROWTH 的说明
+  return rank + EXP_GROWTH_FLAT + (LOW_RANK_GROWTH[rank] ?? 0);
 }
 
 /**
