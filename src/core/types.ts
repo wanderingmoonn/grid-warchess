@@ -251,6 +251,18 @@ export interface Tile {
   terrain: Terrain;
   /** 属于哪座城市；非城市格为 null */
   cityId: string | null;
+  /**
+   * 扩展专用的格子沙盒。核心**不读、不写、不解释**，只负责让它跟着存档走。
+   *
+   * 和 `Unit.custom` 一个道理：格子上的"环境"是扩展的事（灵气浓度、污染、
+   * 视野残留……），核心要是为每一种都开一个具名字段，就等于替所有扩展
+   * 各破一次口子。约定是**键带自己的命名空间**（修真包写 `custom.qi`），
+   * 免两个扩展撞同一个 key。
+   *
+   * 缺省 `undefined` 不等于 0——扩展可以自己定义"没有记录时按地形取默认值"，
+   * 这也是老存档不需要迁移的原因。
+   */
+  custom?: Record<string, unknown>;
 }
 
 export type UnitCategory = 'combat' | 'economy' | 'builder' | 'building';

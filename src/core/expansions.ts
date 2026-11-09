@@ -465,6 +465,17 @@ export interface ExpansionHooks {
   getUnitPanelLines?: (c: { state: GameState; unit: Unit; viewer?: PlayerId }) => string[];
 
   /**
+   * 选中一个**空格子**时，扩展想在侧栏补的几行。
+   *
+   * 和 `getUnitPanelLines` 是对称的：核心只知道"这是一块平原/森林"，
+   * 不知道格子上还有什么（灵气浓度、污染、残留视野……）。那些东西存在
+   * `Tile.custom` 里，只有扩展自己读得懂，所以也由扩展自己写文案。
+   *
+   * 只在"点的是格子"这条支路调用；点单位、点城市时不走这里。
+   */
+  getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
+
+  /**
    * 单位面板上的**扩展按钮**。
    *
    * 只解决一件核心不知道怎么办的事："修士站在藏经阁旁边，想学一门法术"——

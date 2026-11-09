@@ -109,6 +109,8 @@ import {
   SILENT_PAVILION,
   ALCHEMY_FURNACE,
   SPIRIT_SPRING,
+  SPIRIT_FIELD,
+  SPIRIT_MINE,
   CULTIVATOR,
   SWORD_CULTIVATOR,
   BODY_CULTIVATOR,
@@ -120,6 +122,15 @@ import {
 } from '../src/core/cultivation/units.ts';
 import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
 import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
+import {
+  QI_ABSORB,
+  QI_BUILDING_SOURCE,
+  QI_DECAY,
+  QI_LEAK_MAX,
+  QI_LEAK_THRESHOLD,
+  QI_MAX,
+  QI_TERRAIN_SOURCE,
+} from '../src/core/cultivation/qi-field.ts';
 import {
   HEAL_PILL,
   HEAL_PILL_FLOOR,
@@ -2972,6 +2983,36 @@ function cultivationRules(): string {
           所以"什么时候把这池子烧掉"是玩家自己的决定；它不占攻击次数，也不占移动。
           它打不了城池，也打不了自己人。</li>
       </ul>
+
+      <h3>灵气浓度</h3>
+      <p>每个格子有一个 <b>0～${QI_MAX}</b> 的灵气浓度。它不是贴在地形上的固定标签，
+        而是<b>每回合都在流动</b>的场：源头持续注入，浓处往稀处渗，越远越淡。
+        修士就站在这个场里吸灵力。</p>
+      <ul>
+        <li><b>每回合四步</b>：源汇注入 → 向四邻扩散（按梯度）→ 损耗
+          <b>${Math.round(QI_DECAY * 100)}%</b> → 截断在 0～${QI_MAX}。
+          扩散看的就是"邻居减自己"——浓的地方往外流，稀的地方被灌满，不用额外算梯度场。</li>
+        <li><b>源与汇</b>：高山 <b>+${QI_TERRAIN_SOURCE.mountain}</b>、
+          森林 / 水域 <b>+${QI_TERRAIN_SOURCE.forest}</b>（自然，量很少）；
+          ${SPIRIT_FIELD.name} <b>+${QI_BUILDING_SOURCE['cultivation-spirit-field']}</b>、
+          ${SPIRIT_SPRING.name} <b>+${QI_BUILDING_SOURCE['cultivation-spirit-spring']}</b>（人工，像样）；
+          <b>${SPIRIT_MINE.name}是汇 ${String(QI_BUILDING_SOURCE['cultivation-spirit-mine']).replace('-', '−')}</b>
+          ——"吸天地灵气凝结出灵石"，所以它周围会越来越荒。</li>
+        <li><b>源不是"自己满、旁边零"</b>：扩散会把浓度摊成一个从中心往外递减的<b>丘</b>。
+          实测一张 16×16 的常规地图上，水域边上的林子常年三四十，
+          再往外两格就只剩个位数——<b>灵气是局部的，不是全图平铺的</b>。</li>
+        <li><b>修士吸取</b>：每回合开始，灵力没满就从脚下抽。
+          抽多少 = <b>缺口 × ${Math.round(QI_ABSORB * 100)}%</b>，
+          但一次最多抽走格子的一半——防止一个修士路过把泉眼抽干。
+          所以"灵力越少吸得越快"是自动成立的，不用另写一条规则。</li>
+        <li><b>反向外漏</b>：脚下浓度低于 <b>${QI_LEAK_THRESHOLD}</b> 时，灵力会往环境里漏，
+          最多 ${QI_LEAK_MAX} 点；<b>境界每高一层，漏得少一成</b>——9 期基本不漏。
+          也就是说，把低阶弟子扔在荒地里，他的灵力是<b>存不住</b>的。</li>
+        <li><b>拆掉源不会瞬间清零</b>：浓度只是不再补充，按扩散和损耗慢慢退回去。
+          灵矿被拆了，它抽干的那片地也要过一阵才缓过来。</li>
+      </ul>
+      <p>在哪看：点一个空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
+        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。</p>
 
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /

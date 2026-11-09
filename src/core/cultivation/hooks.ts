@@ -9,6 +9,7 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
+import { exchangeMana, qiAt, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
 import {
   PILLS,
   addPill,
@@ -477,6 +478,10 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
+		// 灵气场：每方回合走一步。必须在遍历单位之前——它和"谁在场上"无关，
+		// 是环境自己的演化；后面的交换读的正是这一步之后的结果。
+		stepQiField(state);
+
 		for (const u of state.units) {
       if (u.owner !== player) continue;
       if (u.owner === player && u.type === UNIT_IDS.SPIRIT_TOWER && u.custom?.burstCharges) {
@@ -486,6 +491,9 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
       // 灵力：刷新上限并回一点。放在最前面——它和寿元无关，
       // 一个这回合就要坐化的修士，灵力也该按当前境界结算。
       regenMana(u);
+      // 灵气交换：必须等在 regenMana 之后。它补的是"基础恢复完"剩下的缺口——
+      // 放在前面，玩家看到的就是"我缺 30、环境补了 8、然后又 +30"这种算不清的账。
+      exchangeMana(state, u);
       const age = u.age ?? 0;
       // 首次访问（老存档）时把寿元落库，之后降级不会让寿命跟着回退
       const lifespan = ensureLifespan(u);
@@ -540,5 +548,12 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		const sealed = sealedReasonOf(state, unit);
 		if (sealed) lines.push(`封印：${sealed}`);
 		return lines;
+	},
+	// 空地上有什么，核心不知道——它只认识"平原/森林"，灵气浓度是扩展写在
+	// `Tile.custom.qi` 里的。所以文案也由扩展出。
+	getTilePanelLines: ({ state, x, y }) => {
+		const q = qiAt(state, x, y);
+		const src = qiSourceLabel(state, x, y);
+		return [`灵气浓度：${Math.round(q)} / ${QI_MAX}${src ? `（${src}）` : ''}`];
 	},
 };
