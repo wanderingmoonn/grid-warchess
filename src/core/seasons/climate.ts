@@ -139,6 +139,10 @@ export function coastClassOf(s: GameState, x: number, y: number): Coast {
 
 export type Climate =
   | 'mild'
+  /** 温和偏冷：行军舒服（移动 +1） */
+  | 'cool'
+  /** 温和偏热：作物长得好（产出 +25%） */
+  | 'warm'
   | 'cold'
   | 'hardWinter'
   | 'hot'
@@ -155,6 +159,8 @@ export type Climate =
 
 export const CLIMATE_NAME: Record<Climate, string> = {
   mild: '温和',
+  cool: '凉爽',
+  warm: '温暖',
   cold: '寒冷',
   hardWinter: '严冬',
   hot: '炎热',
@@ -178,7 +184,16 @@ export const CLIMATE_NAME: Record<Climate, string> = {
 /* ------------------------------------------------------------------ */
 
 export interface ClimateEffect {
-  /** 移动力倍率（0.75 / 0.5） */
+  /**
+   * 移动力**加法**修正（凉爽 +1）。
+   *
+   * 为什么不复用 `moveMul`：移动力是整数，`move × 0.85` 对 move 2 的兵
+   * 会 `floor` 成 1——**"只减 15%"实际减了 50%**。所以低移动单位的任何
+   * 乘法减速都是一刀砍半，对增益同理（×1.25 对 move 2 完全不生效）。
+   * 加减法才是玩家能预期的那种修正。
+   */
+  moveAdd?: number;
+  /** 移动力倍率（只留给严冬 / 酷暑这种"真的走不动"的极端天气） */
   moveMul?: number;
   /** 每走一格额外消耗的点数（暴雨 +2） */
   moveCostAdd?: number;
@@ -208,16 +223,38 @@ export interface ClimateEffect {
   landOnIce?: boolean;
 }
 
+/**
+ * 每个天气改什么。
+ *
+ * ── 一条原则：**降温降的是经济，不是腿** ──────────────────
+ *
+ * 早先"冷 / 热 / 阴雨"三档各带 `moveMul: 0.75`，玩家反馈说"到处都在减移动力，
+ * 战斗节奏太折磨"。数学上这比看上去更狠：移动力是整数，`2 × 0.75 = 1.5`
+ * 向下取整是 1——**标着 −25%，实际是 −50%**，而且越慢的兵越吃亏
+ * （骑兵 5 → 3 只掉 40%，步兵 2 → 1 掉了 50%）。
+ *
+ * 所以现在：**只有真正的极端天气减速**（严冬、酷暑、暴雨），
+ * 日常的冷暖只动产出与护甲。爽快的行军节奏比"精确模拟寒冷"重要得多。
+ *
+ * 反过来的增益也一样：`× 1.25` 对 move 2 的单位毫无效果（2.5 取整还是 2），
+ * 所以「凉爽」给的是 `moveAdd: +1` 这种**看得见**的加法。
+ */
 const EFFECTS: Record<Climate, ClimateEffect> = {
   mild: {},
-  cold: { moveMul: 0.75, incomeMul: 0.5 },
+  // 凉爽：天不热不冷，行军最舒服。这是本扩展唯一一个**加速**的天气
+  cool: { moveAdd: 1 },
+  // 温暖：作物长得好，部队不额外受累
+  warm: { incomeMul: 1.25 },
+  // 寒冷：只让经济难受，不拖慢部队
+  cold: { incomeMul: 0.7 },
+  hot: { incomeMul: 1.25, armorPenalty: 1 },
   hardWinter: { moveMul: 0.5, armorPenalty: 3, armorPenaltyOnlyField: true },
-  hot: { moveMul: 0.75, incomeMul: 1.25 },
   blazing: { moveMul: 0.5, armorPenalty: 2 },
   dampCold: { incomeMul: 2, upkeepRate: 0.05, upkeepHpRatio: 0.1 },
   dampHeat: { incomeMul: 2.5, upkeepRate: 0.1, upkeepHpRatio: 0.05 },
-  overcast: { moveMul: 0.75, incomeMul: 1.25, rangeAdd: -1 },
-  downpour: { moveCostAdd: 2, rangeAdd: -2 },
+  overcast: { incomeMul: 1.25, rangeAdd: -1 },
+  // 暴雨是"路烂了"而不是"人累了"：多花一点移动点，但不砍总移动力
+  downpour: { moveCostAdd: 1, rangeAdd: -2 },
   fog: { visionMax: 2, rangeMax: 4 },
   thunder: { endDamage: { hits: 1, amount: 50, splash: 0.5, radius: 1 }, incomeMul: 3 },
   frozen: { navyMoveZero: true, landOnIce: true },

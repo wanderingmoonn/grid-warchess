@@ -4145,6 +4145,14 @@ a.btn {
   background: #eef2ea;
   color: #4a5a44;
 }
+.weather-badge.w-cool {
+  background: #e2f1f1;
+  color: #2c6b6e;
+}
+.weather-badge.w-warm {
+  background: #fdf2da;
+  color: #96681a;
+}
 .weather-badge.w-cold {
   background: #e3edf6;
   color: #2f5c86;

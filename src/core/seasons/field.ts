@@ -109,9 +109,19 @@ export interface ClimateTuning {
   rainDrain: number;
   /** 每步至少凝掉这么多，否则会卡在饱和线上永远不落下来 */
   rainMinDrain: number;
-  /** 判类阈值（0.1°C） */
+  /**
+   * 判类阈值（0.1°C）。**七个档按温度排开**：
+   *
+   *   严冬 < −10°C < 寒冷 < 5°C < 凉爽 < 13°C < 温和 < 20°C < 温暖 < 27°C < 炎热 < 32°C < 酷暑
+   *
+   * 这组数是照"体感"定的，不是照物理定的：20°C 上下才是"温和"，
+   * 24°C 该觉得暖和，6°C 该觉得凉——早先 24°C 报"炎热"、6°C 报"温和"，
+   * 玩家一眼就看出不对。
+   */
   hardWinterAt: number;
   coldAt: number;
+  coolAt: number;
+  warmAt: number;
   hotAt: number;
   blazingAt: number;
   /** 相对湿度超过它、又没下雨 → 起雾 */
@@ -154,10 +164,12 @@ export const TUNING: ClimateTuning = {
   heavyMargin: 5,
   rainDrain: 0.4,
   rainMinDrain: 2,
-  hardWinterAt: -130,
-  coldAt: 40,
-  hotAt: 240,
-  blazingAt: 305,
+  hardWinterAt: -100,
+  coldAt: 50,
+  coolAt: 130,
+  warmAt: 200,
+  hotAt: 270,
+  blazingAt: 320,
   fogLine: 0.76,
   dampWet: 0.86,
 };
@@ -330,16 +342,23 @@ export function classifyClimate(
 
   // ── 不下雨 ──
   //
-  // 分三段走：**冷、热、温和**。雾只在温和段出现——它是春秋的东西
-  // （夜里地面辐射冷却），不是"冬天很冷"或"夏天很闷"的另一种说法。
-  // 冷段的"湿"就是湿冷，热段的"湿"就是湿热，各自有各自的标签。
+  // 按温度从冷到热一路排下去：严冬 → 寒冷 → 凉爽 → 温和 → 温暖 → 炎热 → 酷暑。
+  // 每一档的"湿"各有归宿：冷 / 凉爽段落到湿冷，温暖 / 炎热段落到湿热，
+  // 温和与凉爽段落到浓雾（雾是春秋的东西——夜里地面辐射冷却，
+  // 不是"冬天很冷"或"夏天很闷"的另一种说法）。
   if (temp < TUNING.hardWinterAt) return 'hardWinter';
   if (temp < TUNING.coldAt) return r > TUNING.dampWet ? 'dampCold' : 'cold';
-  if (temp >= TUNING.blazingAt) return 'blazing';
-  if (temp >= TUNING.hotAt) return r > TUNING.dampWet ? 'dampHeat' : 'hot';
-  if (r > fogLine) return 'fog';
-  if (r > TUNING.dampWet) return 'dampCold';
-  return 'mild';
+  if (temp < TUNING.coolAt) {
+    if (r > fogLine) return 'fog';
+    return r > TUNING.dampWet ? 'dampCold' : 'cool';
+  }
+  if (temp < TUNING.warmAt) {
+    if (r > fogLine) return 'fog';
+    return 'mild';
+  }
+  if (temp < TUNING.hotAt) return r > TUNING.dampWet ? 'dampHeat' : 'warm';
+  if (temp < TUNING.blazingAt) return r > TUNING.dampWet ? 'dampHeat' : 'hot';
+  return 'blazing';
 }
 
 /**

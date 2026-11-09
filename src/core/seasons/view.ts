@@ -32,6 +32,8 @@ import { climateAt, formatTemp, precipAt, precipLabel, satAt, tempAt, wetAt } fr
 /** 每个气候的图标。颜色只是辅助，名字和数值才是准的（色弱也得读得懂） */
 export const CLIMATE_ICON: Record<Climate, string> = {
   mild: '☀',
+  cool: '🍃',
+  warm: '🌞',
   cold: '❄',
   hardWinter: '☃',
   hot: '☀',
@@ -63,6 +65,7 @@ export function climateEffectLines(c: Climate): string[] {
   const out: string[] = [];
 
   if (e.moveMul !== undefined && e.moveMul !== 1) out.push(`移动力 ${signedPct(e.moveMul - 1)}`);
+  if (e.moveAdd) out.push(`移动力 ${e.moveAdd > 0 ? '+' : '−'}${Math.abs(e.moveAdd)}`);
   if (e.moveCostAdd) out.push(`每格移动消耗 +${e.moveCostAdd}`);
   if (e.armorPenalty) {
     out.push(
@@ -154,6 +157,8 @@ export function seasonLabel(turn: number): string {
  */
 const CLIMATE_TINT: Record<Climate, string> = {
   mild: 'rgba(0, 0, 0, 0)',
+  cool: 'rgba(110, 190, 190, 0.24)',
+  warm: 'rgba(245, 200, 110, 0.26)',
   cold: 'rgba(120, 170, 220, 0.30)',
   hardWinter: 'rgba(90, 130, 200, 0.46)',
   hot: 'rgba(240, 160, 80, 0.28)',
