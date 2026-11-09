@@ -11598,6 +11598,42 @@ test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
   );
 });
 
+test('严冬比寒冷更冷，减益也该更重（产出不例外）', () => {
+  const cold = climateEffect('cold');
+  const hard = climateEffect('hardWinter');
+  assert.ok(cold.incomeMul !== undefined, '寒冷要减产出');
+  assert.ok(hard.incomeMul !== undefined, '严冬也要减产出');
+  assert.ok(
+    hard.incomeMul! < cold.incomeMul!,
+    `严冬的产出该比寒冷更差：寒冷 ${cold.incomeMul}，严冬 ${hard.incomeMul}`,
+  );
+  // 而且严冬的其它减益至少不比寒冷轻
+  assert.ok((hard.moveMul ?? 1) <= (cold.moveMul ?? 1), '严冬不该比寒冷走得快');
+  assert.ok((hard.armorPenalty ?? 0) >= (cold.armorPenalty ?? 0), '严冬不该比寒冷护甲高');
+});
+
+test('风暴：10 次 × 5 点，不再一次 10 点', () => {
+  const ed = climateEffect('storm').endDamage;
+  assert.ok(ed, '风暴要有回合末伤害');
+  assert.equal(ed!.hits, 10, '10 次');
+  assert.equal(ed!.amount, 5, '每次 5 点');
+});
+
+test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
+  // 同温同湿，只有离岸距离不同。24°C 的海水
+  const at = (distToLand: number, temp = 240) =>
+    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand);
+  assert.equal(at(1), 'overcast', '贴岸 24°C 不该刮风暴——那是玩家发育的地方');
+  assert.equal(at(2), 'storm', '离岸 2 格就该刮');
+  assert.equal(at(4), 'storm', '外海更不用说');
+  // 异常暖的贴岸水还是会刮：不是"永远不刮"，只是要更热
+  // （26.8°C 正好卡在"够刮风暴、还没热到打雷"那一条窄缝里）
+  assert.equal(at(1, 268), 'storm', '26.8°C 的贴岸水可以刮');
+  assert.equal(at(1, 290), 'thunder', '再热就是雷暴，不是风暴');
+  // 冷海无论多外都不刮：6°C 的外海下大雨只是阴天（4°C 以下会先判成浮冰）
+  assert.equal(at(4, 60), 'overcast');
+});
+
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
   // 温湿度手工摆好，不去"等模型自己下雨"：
   // 这条测的是**效果链**（天气 → 移动/视野/射程），不是模型能不能下雨。
