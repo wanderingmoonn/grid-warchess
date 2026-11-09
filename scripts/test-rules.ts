@@ -2652,6 +2652,84 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
+test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
+  /*
+   * 用户点单（2026-11-09）："高时代经济单位生产效率大幅上升……不要再搞这种
+   * 莫名其妙的设计了"。
+   *
+   * 原来的问题不是"高时代产出没涨"，而是**倒退**：
+   *   时代 5 建材公司 290 金产 48（回本 6.0）
+   *   时代 6 物流集团 330 金产 40（回本 8.3）  ← 更贵、更慢
+   * 玩家在信息化时代花钱买了个比上一代还差的生产单位，且没有任何提示。
+   *
+   * 现在按"回本回合数"定价：时代 4/5 ≤ 5.5，时代 6~8 ≤ 5。
+   * 这条守的是**单调性**——以后新加经济单位，只要比同代或上一代更差就会在这里红。
+   */
+  const all = fullUnitCatalog();
+  const rows: Array<{ name: string; era: number; cost: number; best: number }> = [];
+  for (const [, d] of Object.entries(all) as Array<[string, any]>) {
+    if (d.category !== 'economy') continue;
+    if ((d.era ?? 0) < 4) continue;
+    const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
+    assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
+    rows.push({ name: d.name, era: d.era, cost: d.cost, best });
+  }
+  assert.ok(rows.length >= 8, `经济单位样本太少：${rows.length}`);
+
+  for (const r of rows) {
+    const payback = r.cost / r.best;
+    const cap = r.era >= 6 ? 5.0 : 5.5;
+    assert.ok(
+      payback <= cap + 1e-9,
+      `${r.name}（时代${r.era}）造价 ${r.cost}、最高产出 ${r.best}，回本 ${payback.toFixed(2)} 回合，超过 ${cap}`,
+    );
+  }
+
+  // 时代 6 不许比时代 5 更差（就是原来那个"莫名其妙"的坑）
+  const era5 = Math.min(...rows.filter((r) => r.era === 5).map((r) => r.cost / r.best));
+  const era6 = Math.max(...rows.filter((r) => r.era === 6).map((r) => r.cost / r.best));
+  assert.ok(era6 <= era5, `时代 6 最差的回本（${era6.toFixed(2)}）不该比时代 5 最好的（${era5.toFixed(2)}）还慢`);
+});
+
+test('信息化时代：战斗单位的射程整体 +1', () => {
+  /*
+   * 用户点单（2026-11-09）："信息化时代的单位集体射程上升 1"。
+   *
+   * 这条钉的是**结果**，不是"某段代码有没有跑"：时代 6 的战斗单位逐个对一遍。
+   * 只算战斗单位——建筑（碉堡、指挥所）的射程是另一条设计轴（自动开火 + 视野），
+   * 仓库/钻井这种没有武器的也不动。
+   *
+   * 没有武器的（魔龙卵、补给舰、预警机）射程是 0，本来就不该有射程。
+   */
+  const want: Record<string, number> = {
+    // 现代（pack-contemporary）
+    cnt_mechinf: 4, cnt_mbt: 4, cnt_atgm: 5, cnt_specops: 4,
+    cnt_sph: 6, cnt_mlrs: 6, cnt_sam: 6, cnt_heli: 5, cnt_uav: 6, cnt_destroyer: 6,
+    // 时代军备（第六代）
+    ct_infantry: 5, ct_tank: 5, ct_howitzer: 6, ct_recon: 4,
+    // 海军第六代
+    nv_carrier: 4, nv_large_cruiser: 7, nv_aegis: 7, nv_attack_sub: 5,
+    nv_ssk: 5, nv_amphib: 3, nv_missile_boat: 5, nv_lcs: 6, nv_usv: 5,
+    // 空军第六代
+    af_jet: 5, af_stealth: 5, af_attack_jet: 3, af_heli: 3, af_drone: 4,
+    af_strategic: 4, af_ew: 4, af_heavy_transport: 2,
+    // 奇想（开信息化才收录）
+    'sword-saint': 3, 'evil-dragon-king': 4, 'magic-dragon': 3,
+  };
+  const all = fullUnitCatalog();
+  for (const [id, range] of Object.entries(want)) {
+    const d: any = all[id];
+    assert.ok(d, `找不到 ${id}`);
+    assert.equal(d.era, 6, `${d.name} 应该是信息化时代（6）`);
+    assert.equal(d.range, range, `${d.name} 的射程应该是 ${range}（+1 之后）`);
+  }
+
+  // 没有武器的不许被顺手加上射程
+  for (const id of ['dragon-egg', 'nv_oiler', 'af_awacs']) {
+    assert.equal((all[id] as any)?.range, 0, `${id} 没有武器，射程该是 0`);
+  }
+});
+
 test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', () => {
   const without = fresh({ startEra: 6, expansionIds: ['fantasy-core', 'fantasy-heroes'] });
   assert.equal(without.unitTypes['sword-saint'], undefined, '没开现代时不该有圣剑勇者');
@@ -2667,7 +2745,8 @@ test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', ()
   assert.equal(saint!.era, 6, '圣剑勇者是信息化时代');
   assert.equal(saint!.element, 'light', '光属性');
   assert.equal(saint!.move, 4, '移速 4');
-  assert.equal(saint!.range, 2, '射程 2');
+  // 2026-11-09：信息化时代（6）的战斗单位射程集体 +1，他也在其中（2 → 3）
+  assert.equal(saint!.range, 3, '射程 3');
   assert.equal(saint!.splashLine, true, '攻击是直线形溅射');
   assert.ok(saint!.maxHp >= 120 && saint!.atk >= 40 && saint!.armor >= 10, '高血高攻高甲');
 

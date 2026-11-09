@@ -1455,7 +1455,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 34,
     range: 1,
     vision: 3,
-    incomeByTerrain: { city: 30, plain: 18, hill: 10, forest: 9 },
+    incomeByTerrain: { city: 56, plain: 34, hill: 19, forest: 17 },
   },
   {
     // 工兵：拒马、机枪地堡、钢桥、前进基地

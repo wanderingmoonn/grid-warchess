@@ -1057,7 +1057,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 36, city: 24, forest: 14, hill: 12 },
+    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16 },
   },
   crew: {
     id: 'crew',

@@ -2631,7 +2631,7 @@ const HERO_UNITS: UnitTypeDef[] = [
     atk: 46,
     armor: 11,
     maxHp: 140,
-    range: 2,
+    range: 3,
     vision: 6,
     magicAtk: 12,
     magicRes: 6,
@@ -2675,7 +2675,7 @@ const HERO_UNITS: UnitTypeDef[] = [
     atk: 40,
     armor: 8,
     maxHp: 190,
-    range: 3,
+    range: 4,
     // 视野 9：它落在哪儿，方圆九格就该是它的疆域——陨卵的射程也是 9，
     // 两者对齐，玩家看到"能砸到的地方"和"能看见的地方"是同一片。
     vision: 9,
@@ -2745,7 +2745,7 @@ const HERO_UNITS: UnitTypeDef[] = [
     atk: 44,
     armor: 10,
     maxHp: 150,
-    range: 2,
+    range: 3,
     vision: 6,
     magicAtk: 22,
     magicRes: 8,
