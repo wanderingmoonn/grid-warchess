@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { playerView } from './core/fog.ts';
+import { cellsInSight, playerView } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -366,15 +366,22 @@ function syncTopbarBadges(): void {
     .join('');
 }
 
-/** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
-function computeBoardView(): Map<number, string> | undefined {
+/**
+ * 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined。
+ *
+ * `visible` 是这一帧的视野：视图染色必须过一遍 `cellsInSight`。
+ * 天气、灵气这些场都是**按全图算的**（存在各自的 `Tile.custom` 里），
+ * 不裁的话，看视图就等于开了一张全图透视——对面城市在哪、附近是山是林，
+ * 一眼就能读出来。遮蔽放在核心而不是各个扩展里，是为了只有一个地方能漏。
+ */
+function computeBoardView(visible: readonly number[]): Map<number, string> | undefined {
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
   const cells = def?.cells?.({ state, viewer: me() });
   if (!cells || cells.length === 0) return undefined;
   const out = new Map<number, string>();
-  for (const c of cells) out.set(c.y * state.w + c.x, c.color);
+  for (const c of cellsInSight(state, visible, cells)) out.set(c.y * state.w + c.x, c.color);
   return out;
 }
 let selectedId: string | null = null;
@@ -1377,8 +1384,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
-    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值。
-    boardView: computeBoardView(),
+    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
+    boardView: computeBoardView(view.visible),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,

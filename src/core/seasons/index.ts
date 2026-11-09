@@ -228,7 +228,7 @@ export const SEASONS: Expansion = {
       {
         id: 'seasons-weather',
         label: '天气',
-        hint: '看全图天气分布；点一下钉住，再点取消',
+        hint: '看视野内的天气分布；点一下钉住，再点取消',
         cells: ({ state }) => climateOverlayCells(state),
       },
     ],

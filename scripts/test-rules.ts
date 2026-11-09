@@ -315,7 +315,7 @@ import {
   isEliminated,
   hasQuit,
 } from '../src/core/rules.ts';
-import { playerView } from '../src/core/fog.ts';
+import { cellsInSight, playerView } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -4830,6 +4830,33 @@ test('playerView 裁掉视野外的敌方单位', () => {
 test('城市对双方都是公开信息', () => {
   const s = fresh();
   assert.equal(playerView(s, 'A').state.cities.length, 4);
+});
+
+test('棋盘视图的染色按视野裁，不开全图透视', () => {
+  const s = fresh();
+  // 模拟天气/灵气这种"整张图都算得出来"的场：先铺满，再看裁完剩什么。
+  const all: Array<{ x: number; y: number; color: string }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) all.push({ x, y, color: '#000' });
+  }
+
+  // 无雾：一格都不许动（视野只遮"看不见的"，不遮"看得见的"）
+  s.fog = false;
+  assert.equal(cellsInSight(s, [], all).length, all.length, '无雾时视图不该被裁');
+
+  // 有雾：只剩此刻看得见的格
+  s.fog = true;
+  const view = playerView(s, 'A');
+  const kept = cellsInSight(s, view.visible, all);
+  const vis = new Set(view.visible);
+  assert.equal(kept.length, vis.size, '裁完的格数应等于视野格数');
+  assert.ok(kept.every((c) => vis.has(c.y * s.w + c.x)), '裁完不许留下视野外的格');
+  // 反着验一条：地图上一定有看不见的格，那些必须真的掉了
+  assert.ok(kept.length < all.length, '有雾时不该还剩一整张图');
+
+  // 观战 / 复盘：visible 本来就是全图，不该被裁掉
+  const wide = playerView(s, 'A', true);
+  assert.equal(cellsInSight(s, wide.visible, all).length, all.length, '全图视角不该被裁');
 });
 
 test('见过的敌人离开视野后留下幽灵', () => {

@@ -172,6 +172,32 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities };
 }
 
+/**
+ * 棋盘视图（天气、灵气浓度……）的染色格，按视野裁一遍。
+ *
+ * 为什么必须由核心裁、不能让扩展自己记得裁：扩展算的是**全图**的场——
+ * 温度、湿度、灵气浓度都是存在格子上的一整张图，它天然知道每一格的值。
+ * 但"这一格该不该给这个玩家看"是视野的知识，属于核心。漏掉一次，
+ * 玩家只要切一下视图就能读出对面城市在哪（一座灵田就是一团深绿）、
+ * 他家门口是山还是林子——这些正是迷雾该挡住的东西。
+ *
+ * 三条边界：
+ *   · 没有雾 → 一格不动（视野只遮"看不见的"，不遮"看得见的"）；
+ *   · 有雾 → 只留此刻在 `visible` 里的格；
+ *   · 观战 / 复盘传进来的 `visible` 本来就是全图，所以这里不用再分一次叉。
+ *
+ * 被裁掉的格**不画成灰色**：灰度本身也在说"这里有东西"，留白才是真的一无所知。
+ */
+export function cellsInSight<T extends { x: number; y: number }>(
+  s: GameState,
+  visible: readonly number[],
+  cells: readonly T[],
+): readonly T[] {
+  if (!s.fog) return cells;
+  const vis = new Set(visible);
+  return cells.filter((c) => vis.has(idx(s, c.x, c.y)));
+}
+
 /** 视野外的格子亮度，用于渲染时压暗。返回 0-1 */
 export function tileDim(visibleSet: ReadonlySet<number>, s: GameState, x: number, y: number): number {
   if (!s.fog) return 0;
