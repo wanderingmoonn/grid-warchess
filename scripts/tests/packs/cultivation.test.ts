@@ -48,10 +48,13 @@ import {
   QI_BUILDING_SOURCE,
   QI_MAX,
   QI_TERRAIN_SOURCE,
+  QI_VIEW_TIERS,
   exchangeMana,
   previewExchange,
   qiAt,
+  qiOverlayCells,
   qiSourceLabel,
+  qiTierOf,
   stepQiField,
 } from '../../../src/core/cultivation/qi-field.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
@@ -3134,6 +3137,38 @@ export function run() {
     const preview = previewExchange(s, qi);
     const real = exchangeMana(s, qi);
     assert.equal(preview.delta, real.delta, '预览与实际一致');
+  });
+
+  test('灵气视图：分 5 档，每格都有颜色（空白也是信息）', () => {
+    assert.equal(QI_VIEW_TIERS, 5);
+    assert.equal(qiTierOf(0), 0);
+    assert.equal(qiTierOf(19.9), 0);
+    assert.equal(qiTierOf(20), 1);
+    assert.equal(qiTierOf(60), 3);
+    assert.equal(qiTierOf(100), QI_VIEW_TIERS - 1, '满值落在最后一档');
+
+    const s = qiScene();
+    s.tiles[idx(s, 2, 2)] = { terrain: 'mountain', cityId: null };
+    const cells = qiOverlayCells(s);
+    assert.equal(cells.length, s.w * s.h, '每一格都要返回——空白格本身也是信息');
+    assert.ok(cells.every((c) => c.color.startsWith('rgba')), '颜色是带 alpha 的 CSS 串');
+    const hot = cells.find((c) => c.x === 2 && c.y === 2)!;
+    const cold = cells.find((c) => c.x === 0 && c.y === 0)!;
+    assert.notEqual(hot.color, cold.color, '浓淡要看得出来');
+  });
+
+  test('灵气视图：通过 boardViews 暴露，核心只拿到"格子和颜色"', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const views = CULTIVATION_HOOKS.boardViews!({ state: s });
+    const qi = views.find((v) => v.id === 'cultivation-qi');
+    assert.ok(qi, '要有灵气视图');
+    assert.equal(qi!.label, '灵气', '顶栏 chip 上就两个字');
+    assert.ok(qi!.hint.length > 0, '要有悬停提示');
+    const cells = qi!.cells!({ state: s, viewer: 'A' });
+    assert.equal(cells.length, s.w * s.h);
+    assert.ok(cells[0]!.color.includes('rgba'));
+    // 视图定义里**不带颜色**：颜色在 cells 的返回值里，核心拿到的是"这一格染什么"
+    assert.equal('color' in (qi as unknown as Record<string, unknown>), false);
   });
 
   test('灵气：面板写出脚下浓度与格子的源汇', () => {

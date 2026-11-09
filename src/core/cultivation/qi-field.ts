@@ -317,3 +317,50 @@ export function previewExchange(s: GameState, u: Unit): ManaExchange {
   }
   return { delta: 0, tile: q };
 }
+
+// ── 棋盘视图 ──────────────────────────────────────
+
+/** 浓度分几档。离散分档比连续渐变好读——玩家要答的是"这格浓不浓" */
+export const QI_VIEW_TIERS = 5;
+
+/**
+ * 五档的颜色：**同一支绿、逐级加浓**。
+ *
+ * 第 0 档也给一层极淡的底色、不跳过：跳过的话"稀"和"没有数据"看起来
+ * 一模一样，玩家会以为那片格子没算进视图。
+ */
+const QI_VIEW_COLORS: readonly string[] = [
+  'rgba(64, 160, 120, 0.07)',
+  'rgba(64, 160, 120, 0.16)',
+  'rgba(64, 160, 120, 0.28)',
+  'rgba(52, 150, 110, 0.42)',
+  'rgba(40, 140, 100, 0.58)',
+];
+
+/** 这一格属于第几档（0 ~ 4） */
+export function qiTierOf(q: number): number {
+  const t = Math.floor((clampQi(q) / QI_MAX) * QI_VIEW_TIERS);
+  return Math.max(0, Math.min(QI_VIEW_TIERS - 1, t));
+}
+
+/**
+ * 灵气视图：整张图的染色。
+ *
+ * **全图，不按视野裁**。灵气是"天地之气"，不是谁藏起来的底牌——
+ * 和丹药刚好相反（那个要 `redactUnit` 抹掉）。这两件事别混：
+ * 环境是公开的，底牌才是秘密。
+ *
+ * 每格都返回，包括浓度接近 0 的：视图要回答"整张图的分布"，
+ * 空白格本身也是信息（"这一带是死地"）。
+ */
+export function qiOverlayCells(
+  s: GameState,
+): Array<{ x: number; y: number; color: string }> {
+  const out: Array<{ x: number; y: number; color: string }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      out.push({ x, y, color: QI_VIEW_COLORS[qiTierOf(qiAt(s, x, y))]! });
+    }
+  }
+  return out;
+}
