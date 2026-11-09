@@ -385,6 +385,7 @@ export function godShelfHtml(ui: GodUi): string {
         const builds = buildListOf(u, {
           nameOf: (id) => s.unitTypes[id]?.name ?? id,
           exists: (id) => !!s.unitTypes[id],
+          eraOf: (id) => s.unitTypes[id]?.era,
         });
         const buildTip = builds.names.length > 0
           ? ` · 可建 ${escapeHtml(builds.names.join('、'))}`

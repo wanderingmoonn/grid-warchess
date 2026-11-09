@@ -33,6 +33,8 @@ import {
   maxHpOf
 } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit } from '../core/types.ts';
+import { costLabel, resourceShort } from '../core/resources.ts';
+import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 
 export interface BoardUi {
@@ -71,6 +73,20 @@ export interface BoardUi {
    */
   heat?: Map<number, number>;
   /**
+   * 这一下**刚刚打出去**的格子（格索引 → 次数），闪一次就散。
+   *
+   * 和 `heat` 是两个方向：那个是"上回合我在这挨打"（历史、常驻、出手即收），
+   * 这个是"我这一手打到了哪"（当下、一次性）。用同一套 `.fx-heat` 色块与分档，
+   * 让玩家不必学第二套视觉语言。
+   *
+   * `flashSeq` 是重播用的序号：同一批格子连着挨两下时，DOM 字串不变，
+   * `paintLayer` 会认为"没变"而不重写，动画就不会重播。带上序号，
+   * 每次动作的字串都不同，节点重建、动画从头再来。
+   */
+  heatFlash?: Map<number, number>;
+  /** 闪烁批次号（每次动作 +1）；只用来强制重播动画 */
+  flashSeq?: number;
+  /**
    * 这一步实际走的路线（单位 id → 格子串），只用来画移动动画。
    *
    * 不给也能用：退化成"起点直线滑到终点"。给了就沿路线拐弯，
@@ -79,13 +95,17 @@ export interface BoardUi {
    */
   movePath?: Map<string, Array<{ x: number; y: number }>>;
   /**
-   * 经济单位的移动产出预览：格索引 → 站上那格后的每回合收入。
+   * 经济单位的移动产出预览：格索引 → 站上那格后的**完整产出表**。
    *
-   * 只在"选中带收入的经济单位、且它还能动"时有值。数字印在可达格的
-   * 角上，玩家挪农民之前就能看到"去平原收 7、蹲河边多 3"——
-   * 收入本来就是按格子算的，不把数字放回格子上，这个机制就只活在说明书里。
+   * 只在"选中经济单位、且它还能动"时有值。数字印在可达格的角上，
+   * 玩家挪农民之前就能看到"去平原收 7、蹲河边多 3"——收入本来就是按格子
+   * 算的，不把数字放回格子上，这个机制就只活在说明书里。
+   *
+   * 存的是整张资源表而不是一个金币数：多资源扩展的单位（灵田、灵矿、粮仓）
+   * 金币可能没变、灵石变了很多，只传数字的话这一格和前几格看着一模一样。
+   * 徽标上仍只印金币（格子太小），其余资源挂在格子的原生悬停里。
    */
-  incomeHints?: Map<number, number>;
+  incomeHints?: Map<number, ResourceCost>;
   /**
    * 这一帧要"抖一下"的单位：id → 强度。
    *
@@ -174,8 +194,11 @@ function ensureStructure(el: HTMLElement): void {
   // 烈度层放在最后：它要压在棋子**上面**。
   // 以前把红罩画在格子里，一个兵站在那格上就把红全挡住了——
   // 看起来像"没生效"。现在它是一整层，红罩盖过棋子，一眼就能看见"这人挨了打"。
+  // 最后两层都在棋子之上：烈度常驻层（上回合挨打）与它的一次性闪烁层（这一下打了哪）。
+  // 闪烁层单独一层，是为了不污染常驻层的"内容相同就不写"缓存——那层按格累积、
+  // 大多帧不变；这层每次动作都要重播动画，混在一起会互相把对方的 diff 打断。
   el.innerHTML =
-    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div>';
+    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div>';
 }
 
 /**
@@ -404,6 +427,20 @@ function romanEra(era: number): string {
   return ['I', 'II', 'III', 'IV', 'V'][era - 1] ?? String(era);
 }
 
+/**
+ * 格子角上那枚产出徽标的文字。
+ *
+ * 只印金币：格子太小，三四样资源挤进去会盖住半个棋盘。金币为 0 的纯多资源
+ * 单位（粮仓这类）改成印第一项非金币资源，免得出现一个毫无意义的 `+0`。
+ * 完整清单在格子的原生悬停里（见 renderBoard 里的 title），那份不占地方。
+ */
+function incomeBadgeOf(cost: ResourceCost): string {
+  const gold = cost.gold ?? 0;
+  if (gold > 0) return `+${gold}`;
+  const first = Object.entries(cost).find(([, n]) => (n ?? 0) > 0);
+  return first ? `+${first[1]}${resourceShort(first[0])}` : '';
+}
+
 export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): void {
   ensureStructure(el);
   const s = view.state;
@@ -457,6 +494,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
   const heatSet = ui.heat ?? null;
+  // 这一下刚打出去的格子：过一会儿由调用方清掉，这里只负责画出来
+  const flashSet = ui.heatFlash ?? null;
   const targetPositions = new Set<number>();
   for (const id of ui.targets) {
     const u = s.units.find((x) => x.id === id);
@@ -528,11 +567,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       // 产出徽标只跟着可达格走：站不上去的地形（水、山）没有讨论价值
       const hint = ui.incomeHints?.get(i);
-      const badge = hint !== undefined ? `<span class="tile-income">+${hint}</span>` : '';
+      const badgeText = hint ? incomeBadgeOf(hint) : '';
+      const badge = badgeText ? `<span class="tile-income">${badgeText}</span>` : '';
       if (layer.badge[i] !== badge) {
         node.innerHTML = badge;
         layer.badge[i] = badge;
       }
+      /*
+       * 其余资源挂格子的原生悬停（方案乙）：徽标只留金币。
+       * 悬停必须挂在格子节点上，不能挂 `.tile-income`——那枚徽标是
+       * `pointer-events: none`，鼠标从它上面穿过去，浏览器根本不会弹 title。
+       */
+      const tip = hint ? `站在这里的每回合产出：${costLabel(hint)}` : '';
+      if (node.title !== tip) node.title = tip;
     }
   }
 
@@ -587,6 +634,32 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       }
     }
     paintLayer(heatEl, cells.join(''));
+  }
+
+  // ---- 出手闪烁层 ----
+  //
+  // 和上面同构、同样只给有内容的格子建节点，区别只在于：这一层不常驻，
+  // 由 main 在约 0.7 秒后把数据清空、再重绘一次，节点随之消失。
+  // 动画写在 CSS（`.fx-heat.flash`），只播一次，不和常驻层的无限脉冲打架。
+  const flashEl = el.querySelector<HTMLElement>('.heat-flash');
+  if (flashEl) {
+    const cells: string[] = [];
+    if (flashSet) {
+      const seq = ui.flashSeq ?? 0;
+      for (const i of Array.from(flashSet.keys()).sort((a, b) => a - b)) {
+        if (!visibleSet.has(i)) continue;
+        const n = flashSet.get(i) ?? 0;
+        if (n <= 0) continue;
+        const x = i % s.w;
+        const y = (i - x) / s.w;
+        cells.push(
+          `<i class="fx-heat flash d${heatStep(n)}" data-x="${x}" data-y="${y}" ` +
+            `data-flash="${seq}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1}"></i>`,
+        );
+      }
+    }
+    paintLayer(flashEl, cells.join(''));
   }
 
   // ---- 城市 ----

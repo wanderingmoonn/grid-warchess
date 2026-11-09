@@ -9,7 +9,7 @@
 import { abilityById, abilityNames } from './ability-registry.ts';
 import { CONFIG, UNIT_TYPES, buildCostOf, buildPowerOf, eraDef } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, unitSourceOf } from './expansions.ts';
-import { adjacentRequirementText, heightOfTerrain, splashRadiusOf, splashRatioOf } from './rules.ts';
+import { adjacentRequirementText, heightOfTerrain, nearSpecText, splashRadiusOf, splashRatioOf } from './rules.ts';
 import { buildListOf } from './build-list.ts';
 import { canUseType } from './draft.ts';
 import { deckCarryOf, describeAllow, holdOf } from './carry.ts';
@@ -203,7 +203,7 @@ export function describeUnit(
       ? '随机一种元素'
       : (def.summon.type ? '随从' : '随从');
     lines.push(
-      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。召唤物不占编制。`,
+      `召唤：每 ${def.summon.every} 个自己的回合，在相邻空格召来一个${what}，场上最多 ${def.summon.max} 个。`,
     );
   }
   if (def.cycle && def.cycle.length > 0) {
@@ -249,7 +249,7 @@ export function describeUnit(
   }
   if (def.burst) {
     lines.push(
-      `多动：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
+      `攻击次数：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
         `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }
@@ -284,7 +284,7 @@ export function describeUnit(
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
-    lines.push('前线产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。城市丢了就产不出兵。');
+    lines.push('前线产兵点：兵从营门四邻的空地出来。它按自己的时代出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
     if (spec.units?.length) {
       lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
     }
@@ -298,6 +298,19 @@ export function describeUnit(
     if ((spec.pop ?? 0) > 0) lines.push(`占编制：这座营本身占 ${spec.pop} 格编制。`);
     const on = (def.buildOn ?? []).map((t) => TERRAIN_INFO[t].name).join('或');
     if (on) lines.push(`只能扎在${on}上`);
+  }
+  if (def.campOnly) {
+    lines.push('只能由产兵建筑制造：城市产线里没有它。');
+  }
+  if (def.produceNear) {
+    // 和选址要求同构：产兵点的每一格连同四邻都算。
+    // 多条 spec 之间是**或**（青木剑：相邻森林 或 2 块灵田），
+    // 文案由 rules.nearSpecText 出，和规则层的拒绝理由一字不差。
+    const specs = Array.isArray(def.produceNear) ? def.produceNear : [def.produceNear];
+    const parts = specs.map((sp) => nearSpecText(sp, nameOf)).filter(Boolean);
+    if (parts.length > 0) {
+      lines.push(`产地要求：造它的产兵点必须挨着${parts.join('，或 ')}（占地每格和四邻都算）。`);
+    }
   }
   if (def.category === 'building') {
     // 选址要求只有一处来源（rules.adjacentRequirementOf），文案也由它生成。
@@ -351,13 +364,16 @@ export function describeUnit(
         })
         .filter(Boolean)
         .join(' · ');
-      if (parts) lines.push(`每回合产出（按所站地形）：${parts}`);
+      // 这里印的是兵种基础值，不含扩展的 modifyYield（灵矿邻山、城郭包折算……）。
+      // 当前实际产出由属性卡那行负责，两者并排出现时靠"基础"两个字区分开，
+      // 否则玩家会看到"说明写 +5 灵石、面板写 +7"然后认为哪边算错了。
+      if (parts) lines.push(`基础产出（按所站地形，未计扩展加成）：${parts}`);
     } else if (def.yield) {
       const items = Object.entries(def.yield)
         .filter(([, v]) => (v ?? 0) > 0)
         .map(([id, v]) => `+${v} ${resourceShort(id)}`)
         .join(' ');
-      if (items) lines.push(`每回合产出：${items}`);
+      if (items) lines.push(`基础产出（未计扩展加成）：${items}`);
     }
     if (def.incomeByTerrain) {
       const parts = (Object.keys(def.incomeByTerrain) as Terrain[])
@@ -366,10 +382,10 @@ export function describeUnit(
           return `${TERRAIN_INFO[t].name} +${v}`;
         })
         .join(' · ');
-      lines.push(`每回合产出：${parts}`);
+      lines.push(`基础产出（金币，按所站地形）：${parts}`);
       lines.push(`相邻水域额外 +${CONFIG.riverTradeBonus} 金`);
     } else if (def.income) {
-      lines.push(`每回合产出 ${def.income} 金`);
+      lines.push(`基础产出 ${def.income} 金（未计扩展加成）`);
     }
   }
 
@@ -392,6 +408,7 @@ export function describeUnit(
     const { names } = buildListOf(def, {
       nameOf,
       exists: (id) => !!s.unitTypes[id] && (!seat || canUseType(s, seat, id)),
+      eraOf: (id) => s.unitTypes[id]?.era,
     });
     lines.push(`可建造：${names.join('、')}（建造占掉整个回合，范围 ${CONFIG.buildRange} 格）`);
     lines.push('本身不产金，靠盖出来的东西挣钱或防守');
@@ -406,19 +423,19 @@ export function describeUnit(
   }
 
   if (def.range > 1) {
-    lines.push(`远程攻击，射程 ${def.range} 格：站在对方射程外输出可以不吃反击`);
+    lines.push(`远程攻击，射程 ${def.range} 格`);
   }
 
   if (def.range === 1) {
     lines.push('近战：攻击后会遭到对方反击（除非一击必杀）');
   }
 
-  lines.push(`来自「${eraDef(def.era).name}」时代，造价 ${def.cost}`);
+  lines.push(`来自「${eraDef(def.era).name}」，造价 ${def.cost}`);
 
   // 扩展包兵种要说清出处：不然玩家在列表里看见"九头蛇"，
   // 既不知道它属于哪个包，也不知道为什么下把没了。
   const src = unitSourceOf(def.id);
-  if (src) lines.push(`来源：${src}（开局勾上这个扩展才会出现）`);
+  if (src) lines.push(`来源：${src}`);
 
   return lines;
 }

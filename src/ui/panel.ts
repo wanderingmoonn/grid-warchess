@@ -80,9 +80,11 @@ import {
   heroSkillsOf,
   isAirborne,
   ordersOf,
+  produceAt,
   recruitResCost,
   recruitSpawnCells,
-  unitIncome,
+  incomeResOf,
+  unitYield,
   unitsOf,
   utype,
   adjacentRequirementText,
@@ -92,7 +94,7 @@ import {
 import { upgradeTargetOf } from '../core/era-routes.ts';
 import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
-import type { GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
+import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import { chimeLabel } from './sound.ts';
 
@@ -623,6 +625,45 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
 }
 
 /**
+ * 扩展声明的"单位操作"按钮（学法术、遗忘法术……）。
+ *
+ * 核心不知道这些按钮是干什么的：文案、能不能点、右边的短提示全由扩展的
+ * `unitActions` 给出，点击只会发一个 `UNIT_ACTION { unitId, actionId }` 回去。
+ *
+ * 为什么不在核心这里写死"学法术"：那等于让界面认识修真包，而这套代码的
+ * 分层是"界面不认识任何扩展"。一个通用的按钮位比一条特例便宜得多，
+ * 藏经阁之后的静心阁、宗门研发都能直接复用。
+ */
+function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
+  /** 按扩展给的 `group` 分组：同一组一个标题 */
+  const groups = new Map<string, string[]>();
+  for (const e of activeExpansions(s)) {
+    const opts = e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? [];
+    for (const o of opts) {
+      const title = o.group ?? '研修';
+      const rows = groups.get(title) ?? [];
+      const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
+      rows.push(
+        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
+           <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
+           <span class="price">${escapeHtml(o.note ?? '')}</span>
+         </button>`,
+      );
+      groups.set(title, rows);
+    }
+  }
+  if (groups.size === 0) return '';
+  return [...groups.entries()]
+    .map(
+      ([title, rows]) =>
+        `<div class="card-title" style="margin-top:14px">${escapeHtml(title)}</div>
+    <div class="recruit-list">${rows.join('')}</div>`,
+    )
+    .join('');
+}
+
+/**
  * 给上帝模式：把"这一格/这支兵"的**完整**属性卡原样吐出来。
  *
  * 沙盒原来点一下只弹一句"名字 血量"，光环、规则加成、真实数值、技能按钮
@@ -715,7 +756,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const customLines: string[] = [];
     for (const e of activeExpansions(s)) {
       if (e.hooks.getUnitPanelLines) {
-        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit }));
+        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit, viewer: me }));
       }
     }
     const customBlock = customLines.length > 0 
@@ -827,7 +868,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     // movePower/visionOf 则是移动力和视野的同一个真相源。
     // 面板再也不显示"裸装"数值——玩家对不上账，比没有数字更糟。
     const eff = effectiveStats(s, selectedUnit);
-    const income = unitIncome(s, selectedUnit);
+    /*
+     * 产出走 unitYield，不是 unitIncome：后者只取金币。
+     * unitYield 就是回合结算（settleIncome → incomeResOf）用的那个函数，
+     * 地形、临水、扩展的 modifyYield（灵矿邻山 +2 灵石、城郭包折算、海军平台被贴停产）
+     * 全都已经算在里面——面板和战报因此永远是同一笔账。
+     */
+    const yields = unitYield(s, selectedUnit);
     const signed = (n: number): string => (n > 0 ? `+${n}` : String(n));
     const modRow = (scope: string, it: { label: string; delta: number }): string =>
       `<div class="info-row stat-mod"><span>${scope} · ${it.label}</span><b class="${
@@ -921,15 +968,21 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
              ${weatherBlock(climateAt(s, selectedUnit.x, selectedUnit.y))}`
           : ''
       }
-      ${income > 0 ? `<div class="info-row"><span>每回合收入</span><b>${income} 金</b></div>` : ''}
+      ${
+        // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
+        // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
+        Object.keys(yields).length > 0
+          ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
+          : ''
+      }
       ${
         // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
         // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
         splashRadiusOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>溅射</span><b>主目标 ${splashRadiusOf(
+          ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
               s,
               selectedUnit,
-            )} 格内（不含斜角）· ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
+            )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
           : ''
       }
       ${
@@ -945,6 +998,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}
+      ${mine && myTurn ? unitActionBlock(s, selectedUnit, me) : ''}
       ${cargoBlock}
       ${buildBlock}
       ${noteBlock}
@@ -1086,6 +1140,8 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      // 只能由产兵建筑造的（法器、船坞的船）城市产线不列——规则层也这么挡
+      !d.campOnly &&
       eraWindowOk(s, d, city.era) &&
       canUseType(s, city.owner, d.id),
   );
@@ -1139,7 +1195,10 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       }
     }
 
-    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id);
+    return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id, {
+      kind: 'city',
+      city,
+    });
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -1190,7 +1249,19 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
     <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-    <div class="info-row"><span>每回合收入</span><b>${era.cityIncome} 金</b></div>
+    <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+    ${
+      /*
+       * 本方总收入单独一行，且只在**自己的城**上显示。
+       *
+       * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
+       * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
+       * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
+       */
+      mine
+        ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(incomeResOf(s, city.owner))}</b></div>`
+        : ''
+    }
     <div class="info-row"><span>驻军休整</span><b>${regenText}</b></div>
     ${upgradeBlock}
     ${
@@ -1377,6 +1448,8 @@ function buildListFor(s: GameState, def: UnitTypeDef, seat: PlayerId): BuildList
      * 判据必须和 `doBuild` 用的是同一个函数，不是抄一遍。
      */
     exists: (id) => !!s.unitTypes[id] && canUseType(s, seat, id),
+    // 高过这个工兵档位的建筑不列（判据在 buildListOf 里，和规则层同一条）
+    eraOf: (id) => s.unitTypes[id]?.era,
   });
 }
 
@@ -1396,8 +1469,10 @@ function recruitButton(
   extra: string,
   mode: 'recruit' | 'order' = 'recruit',
   site = '',
+  /** 从哪儿造：定价要和 doRecruit 同源（宗门里招修士收灵石，城里收金币） */
+  source?: ProduceSource,
 ): string {
-  const price = recruitResCost(s, me, def);
+  const price = recruitResCost(s, me, def, source);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
   // 看到 300 金的按钮却扣了 450，玩家只会觉得算错了。
   const unlockFee =
@@ -1468,14 +1543,9 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const queueFull = ordering && ordersOf(s, me).length >= CONFIG.commanderSlots;
   const ratio = camp.hp / def.maxHp;
 
-  // 补给：军营的时代在落成那一刻就钉死了（Unit.era），后方城市升级不会
-  // 隔空把它带着换代。旧存档没有这个字段，按最近己方城市的时代兜底。
-  const own = citiesOf(s, camp.owner);
-  const supply = own.reduce<typeof own[number] | null>(
-    (a, b) => (!a || distToCity(camp, b) < distToCity(camp, a) ? b : a),
-    null,
-  );
-  const era = camp.era ?? (supply ? supply.era : 0);
+  // 产兵建筑按**自己的档位**出兵（2026-11-08 删掉"军工供货"之后）：
+  // 想要新时代的兵，就盖新时代的营，或者把旧营拆了重盖。它不再看后方城市。
+  const era = def.era;
 
   // 兵从四邻出来。这两个数字只给下面的提示文案用，**能不能造**一律问规则层：
   // 判据按兵种分（飞行兵能停在水面上），自己数一遍 landSlots 必然和
@@ -1494,15 +1564,33 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   /** 这个兵种能不能从这座营出来（和 doRecruit 同一条判据） */
   const slotsOf = (d: { id: string }): number => recruitSpawnCells(s, undefined, camp.id, d.id).length;
 
-  const buildable = Object.values(s.unitTypes).filter(
+  /*
+   * 面板的两级过滤，和规则层同一套口径（produceAt）：
+   *
+   *   · 白名单决定**列不列**——不在 produce.units 里的根本不出现，
+   *     否则军营会变成"整张兵种表 + 90% 灰掉"；
+   *   · 产地条件决定**灰不灰**——白名单里有、但附近没森林/时代不够的，
+   *     照样列出来并写明原因，否则玩家永远不知道自己错过了什么，
+   *     也不知道该把炉子挪到哪儿。
+   *
+   * 以前条件不满足是直接从列表里消失的。炼器炉那种"挨着什么就出什么"的
+   * 建筑一旦这么写，玩家连"原来还有一件木器"都看不见。
+   */
+  const candidates = Object.values(s.unitTypes).filter(
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      // 白名单：不在 produce.units 里的根本不出现
+      canProduce(def, d).ok &&
+      // 档位与选卡：这一档本来就造不到的，不进"还造不出来"那一堆
+      // （否则一座空白名单的军营会把整张兵种表都灰着列出来）
       eraWindowOk(s, d, era) &&
-      canUseType(s, camp.owner, d.id) &&
-      // 白名单读的是这座营的 produce.units：列在这里的，点下去一定造得出来
-      canProduce(def, d).ok,
+      canUseType(s, camp.owner, d.id),
   );
+  const verdictOf = (d: UnitTypeDef) => produceAt(s, { kind: 'camp', camp }, d);
+  const buildable = candidates.filter((d) => verdictOf(d).ok);
+  /** 白名单里有、但现在造不出来的：灰着列出来，附上原因 */
+  const gated = candidates.filter((d) => !verdictOf(d).ok);
 
   const q = (input.recruitQuery ?? '').trim();
   const pack = input.recruitPack ?? PACK_ALL;
@@ -1532,6 +1620,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
               extra,
               ordering ? 'order' : 'recruit',
               camp.id,
+              { kind: 'camp', camp },
             );
           })
           .join('')}</div>
@@ -1539,19 +1628,27 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     })
     .join('');
 
-  const groups =
-    shown.length === 0
-      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
-      : grouped;
+  /** 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上 */
+  const gatedGroup =
+    gated.length === 0
+      ? ''
+      : `<div class="recruit-group">
+        <div class="recruit-group-title">还造不出来</div>
+        <div class="recruit-list">${gated
+          .map((d) => {
+            const v = verdictOf(d);
+            return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
+          })
+          .join('')}</div>
+      </div>`;
 
-  // 军营的时代是写死的。后方城市一旦追上来，玩家会看到"我有三级城，
-  // 这座营怎么还只出二级兵"——必须明说这是落成时的时代，不是 bug。
-  const staleEra = !!supply && supply.era > era;
-  const supplyLine = supply
-    ? `补给来自「${cityName(supply)}」· 落成于 ${eraDef(era).name}时代${
-        staleEra ? `（后方已到 ${eraDef(supply.era).name}，这座营不跟着换代）` : ''
-      }`
-    : '没有己方城市，补给断了';
+  const groups =
+    (buildable.length === 0
+      ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座营')
+      : grouped) + gatedGroup;
+
+  // 档位是这座营自己的，不看后方城市。写清楚是因为玩家会本能地以为"我的城已经五代了，这座营怎么还只出二代兵"。
+  const supplyLine = `${eraDef(era).name}`;
 
   return `
     <div class="unit-head">
@@ -1564,10 +1661,15 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
-    <div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>
-    <div class="info-row"><span>补给</span><b>${supplyLine}</b></div>
     ${
-      mine && supply
+      // 不还手的产兵建筑（宗门大殿：枪口 0）就别写"1 格内每回合 0 点"了
+      def.atk > 0
+        ? `<div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>`
+        : ''
+    }
+    <div class="info-row"><span>时代</span><b>${supplyLine}</b></div>
+    ${
+      mine
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
@@ -1576,6 +1678,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${groups}
+           ${
+             /*
+              * 扩展给这座"营"挂的操作（宗门大殿的研发 / 遗弃）。
+              *
+              * 必须画在**军营面板**里，不是单位详情卡：产兵建筑点开走的是
+              * `renderCamp` 这条支路，压根不会走到 `renderDetail` 的那一份。
+              * 以前只画在详情卡上，于是宗门大殿永远只剩"招募弟子"——
+              * 研发和遗弃两个按钮根本不存在。
+              */
+             mine && myTurn ? unitActionBlock(s, camp, me) : ''
+           }
            ${
              input.spawnPick
                ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
@@ -1587,15 +1700,11 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
              兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
              }）。
-             <br />军营自己不会升级，时代在落成那一刻就定了——想要新兵，就在新地方再扎一座营。
+             <br />这座营按自己的时代出兵。
              ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
-             ${
-               supply
-                 ? `这是${s.players[camp.owner].name}的军营。把它打掉，对方就少一个前线补给点。`
-                 : '没有城市供养，这座军营已经产不出兵了。'
-             }
+             这是${s.players[camp.owner].name}的产兵建筑。
            </div>`
     }
   `;
@@ -1643,20 +1752,45 @@ function renderLog(input: PanelInput): string {
  * 一个整数，只能按 key 区分。写错单位比不写更糟：一个"中毒 3 层"会让人
  * 以为伤害要乘三。
  */
+/** 一条增益徽章的说明：它到底加了什么（悬停时看） */
+function buffSummary(buff: NonNullable<Unit['buff']>): string {
+  const parts: string[] = [];
+  if (buff.armor) parts.push(`护甲 +${buff.armor}`);
+  if (buff.armorPct) parts.push(`护甲 +${Math.round(buff.armorPct * 100)}%`);
+  if (buff.magicRes) parts.push(`魔抗 +${buff.magicRes}`);
+  if (buff.splashImmune) parts.push('免疫溅射');
+  return parts.length > 0 ? parts.join('，') : '临时增益';
+}
+
 function statusRow(u: Unit): string {
-  const list = orderedStatuses(u.status);
-  if (list.length === 0) return '';
-  const chips = list
-    .map(([key, val]) => {
-      const def = STATUS_REGISTRY[key];
-      const name = def?.name ?? key;
-      const unit = key === 'burn' ? '层' : '回合';
-      return `<span class="status-chip st-${key}" title="${escapeHtml(def?.summary ?? name)}">
+  const chips: string[] = [];
+  for (const [key, val] of orderedStatuses(u.status)) {
+    const def = STATUS_REGISTRY[key];
+    const name = def?.name ?? key;
+    const unit = key === 'burn' ? '层' : '回合';
+    chips.push(`<span class="status-chip st-${key}" title="${escapeHtml(def?.summary ?? name)}">
         <b>${escapeHtml(name)}</b><i>${val} ${unit}</i>
-      </span>`;
-    })
-    .join('');
-  return `<div class="status-row">${chips}</div>`;
+      </span>`);
+  }
+
+  /*
+   * 药力 / 技能增益（`u.buff`）也挂在这一排。
+   *
+   * 它和中毒、减速是同一类东西：**有明确的剩余回合数**，到点自己消失。
+   * 以前它只出现在属性下面的修正项里（"甲 +12 护体丹"），那地方读起来
+   * 像地形或永久加成——玩家既不知道它会到期，也看不到还剩几回合。
+   *
+   * 排在减益后面：减益先看（决定这回合该怎么打），增益是"我还剩什么本钱"。
+   */
+  if (u.buff) {
+    const turns = Math.max(1, u.buff.turns ?? 1);
+    chips.push(`<span class="status-chip st-buff" title="${escapeHtml(buffSummary(u.buff))}">
+        <b>${escapeHtml(u.buff.label ?? '增益')}</b><i>${turns} 回合</i>
+      </span>`);
+  }
+
+  if (chips.length === 0) return '';
+  return `<div class="status-row">${chips.join('')}</div>`;
 }
 
 /**

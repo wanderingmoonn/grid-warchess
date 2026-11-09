@@ -99,6 +99,8 @@ const ATTR_LABELS = {
   foeAtkPct: '虚咒',
   foeArmor: '咒域',
   allyAtkPct: '攻击加成',
+  allyArmorPct: '护甲加成',
+  allyTrueDamagePct: '真元加成',
   foeMovePct: '迟缓',
   foeMoveFlat: '镇压',
 } as const;
@@ -222,21 +224,47 @@ export function curseSourcesOf(s: GameState, unit: Unit): AuraSource[] {
  * 返回来源是为了面板能写清"这 +10% 是谁给的"。两个杀伐阵重叠时
  * 仍然只有一个来源生效——和虚咒（foeAtkPct）同一条规矩。
  */
-export function allyAtkPctOf(s: GameState, unit: Unit): AuraSource | null {
+/**
+ * 一条"按百分比给友军"的光环里，罩在 unit 身上最强的那个。
+ *
+ * 三个百分比光环（攻击 / 护甲 / 真元）的遍历逻辑一模一样，只有取哪个字段不同。
+ * 抽出来是因为**取最强的比较方向必须是同一个**：分别写三份，迟早有一份写成
+ * "取最后一个"或者"叠乘"，而那种错误在面板上看不出来。
+ */
+function bestAllyPctOf(
+  s: GameState,
+  unit: Unit,
+  pick: (a: AuraSpec) => number | undefined,
+  fallbackLabel: string,
+): AuraSource | null {
   let best: AuraSource | null = null;
   for (const ally of s.units) {
     if (ally.id === unit.id || ally.owner !== unit.owner) continue;
     const gap = distBetweenUnits(s, ally, unit);
     for (const a of aurasOfUnit(s, ally)) {
-      const pct = a.allyAtkPct;
+      const pct = pick(a);
       if (!pct || pct <= 0) continue;
       if (gap > (a.radius ?? 1)) continue;
       if (!best || pct > best.value) {
-        best = { label: a.label ?? ATTR_LABELS.allyAtkPct, value: pct, sourceId: ally.id };
+        best = { label: a.label ?? fallbackLabel, value: pct, sourceId: ally.id };
       }
     }
   }
   return best;
+}
+
+export function allyAtkPctOf(s: GameState, unit: Unit): AuraSource | null {
+  return bestAllyPctOf(s, unit, (a) => a.allyAtkPct, ATTR_LABELS.allyAtkPct);
+}
+
+/** 罩在 unit 身上的**友军护甲百分比**加成：取最强的一条，不叠乘。 */
+export function allyArmorPctOf(s: GameState, unit: Unit): AuraSource | null {
+  return bestAllyPctOf(s, unit, (a) => a.allyArmorPct, ATTR_LABELS.allyArmorPct);
+}
+
+/** 罩在 unit 身上的**友军真元百分比**加成：取最强的一条，不叠乘。 */
+export function allyTrueDamagePctOf(s: GameState, unit: Unit): AuraSource | null {
+  return bestAllyPctOf(s, unit, (a) => a.allyTrueDamagePct, ATTR_LABELS.allyTrueDamagePct);
 }
 
 /**

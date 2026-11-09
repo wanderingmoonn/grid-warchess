@@ -35,9 +35,10 @@ import {
   reachableTiles,
   refreshMemory,
   unitsOf,
-  unitIncomeAt,
+  unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel } from '../src/ui/panel.ts';
+import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
@@ -698,9 +699,9 @@ check('高亮变了要真的变，节点还是同一个', () => {
     assert.equal(tile?.classList.contains('reach'), false, '取消选中后高亮要摘掉');
 
     // 产出角标：出现、换数字、消失，都以格子上的 span 为准
-    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 7]]) });
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, { gold: 7 }]]) });
     assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+7', '角标要写对数字');
-    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, 9]]) });
+    renderBoard(host, view, { ...emptyUi, incomeHints: new Map([[i, { gold: 9 }]]) });
     assert.ok(host.querySelector(`.tile${sel} .tile-income`)?.textContent === '+9', '角标数字变了要跟着变');
     renderBoard(host, view, emptyUi);
     assert.equal(host.querySelector(`.tile${sel} .tile-income`), null, '角标该消失');
@@ -812,9 +813,60 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   assert.ok((host.textContent ?? '').includes('金币 456'), '观战位两边都该看得见');
 });
 
-check('多动兵的面板写"还剩几次"，不是"几段"', () => {
-  // 多动的次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
+/**
+ * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
+ *
+ * 扩展给单位挂的操作（宗门大殿的「研发 / 遗弃」）以前只画在详情卡上，
+ * 于是实战里点开宗门大殿只剩"招募弟子"，研发按钮根本不存在。
+ * 这条用例按"点开一座产兵建筑"的方式渲染，把那条支路钉住。
+ */
+check('产兵建筑上的扩展按钮：宗门大殿点开也要有「研发」', () => {
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['cultivation'] }, 515);
+  st.current = 'A';
+  st.units = [];
+  st.players.A.res = { 'spirit-stone': 200 };
+  for (let y = 2; y <= 8; y++) {
+    for (let x = 2; x <= 8; x++) st.tiles[y * st.w + x] = { terrain: 'plain', cityId: null };
+  }
+  const def = st.unitTypes['cultivation-sect'];
+  assert.ok(def, '修真包要带进宗门大殿');
+  const sect = {
+    id: 'sec1',
+    type: 'cultivation-sect',
+    owner: 'A' as const,
+    x: 4,
+    y: 4,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(sect);
+
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: sect,
+    selectedCityId: null,
+    // 关键：产兵建筑被点开时就是这个字段被设上
+    selectedCampId: sect.id,
+    selectedTile: null,
+  });
+
+  const html = host.innerHTML;
+  const text = host.textContent ?? '';
+  assert.ok(text.includes('招募') || text.includes('生产'), '产兵那一块还应该在');
+  assert.ok(html.includes('data-action="research:palm-thunder"'), '宗门大殿的产兵面板里要能点「研发」');
+  assert.ok(text.includes('研发'), '面板上要有「研发」这一组');
+  // 不还手的产兵建筑不该印"1 格内每回合 0 点"
+  assert.ok(!text.includes('自动开火'), 'atk 0 的建筑不该有自动开火那一行');
+});
+
+check('多次攻击兵的面板写"还剩几次"，不是"几段"', () => {
+  // 攻击次数是这回合的剩余资源，玩家得看得见才能决定"这一发打谁"。
   // 顺带钉住旧说法：面板上不能再出现"每段独立减甲"——那是被否掉的模型。
+  // 口径统一成「攻击次数」："多动"这个词已经不印在界面上了。
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 4, expansionIds: [] }, 917);
   st.current = 'A';
@@ -836,7 +888,8 @@ check('多动兵的面板写"还剩几次"，不是"几段"', () => {
 
   paint();
   let text = host.textContent ?? '';
-  assert.ok(text.includes('多动'), '多动兵的侧栏要写出这件事');
+  assert.ok(text.includes('攻击次数'), '多次攻击的兵，侧栏要写出这件事');
+  assert.ok(!text.includes('多动'), '"多动"这个旧词不该再出现在界面上');
   assert.ok(text.includes(`还剩 ${burst} / ${burst} 次`), '还没出手时应该显示满次数');
   assert.ok(!text.includes('每段'), '不能再出现"每段"这种旧口径');
 
@@ -1001,6 +1054,61 @@ check('挨过打的格子挂烈度层：档位、数量、收起都对', () => {
   assert.equal(host.querySelectorAll('.heat .fx-heat').length, 0, '不给 heat 就该清干净');
 });
 
+check('出手闪烁层：打到哪就闪哪，用完即散', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4243);
+  const view = playerView(st, 'A');
+  const vis = new Set(view.visible);
+  const shown = view.visible.slice(0, 2);
+  let hidden = -1;
+  for (let i = 0; i < st.w * st.h; i += 1) if (!vis.has(i)) { hidden = i; break; }
+  assert.ok(shown.length === 2 && hidden >= 0, '这条用例要有两格可见、一格不可见');
+
+  const host = doc.createElement('div');
+  const empty = {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+  };
+  const cell = (i: number) => ({ x: i % st.w, y: Math.floor(i / st.w) });
+  const [a, b] = shown as [number, number];
+  const at = (i: number) =>
+    host.querySelector<HTMLElement>(
+      `.heat-flash .fx-heat[data-x="${cell(i).x}"][data-y="${cell(i).y}"]`,
+    );
+
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[a, 2], [b, 1]]), flashSeq: 1 });
+  assert.ok(host.querySelector('.heat-flash'), '棋盘里应该有一条独立的闪烁层');
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 2, '打到两格就闪两格');
+  assert.ok(at(a)!.classList.contains('flash'), '闪烁格要挂一次性动画的类');
+  assert.ok(at(a)!.classList.contains('d2'), '沿用烈度的分档：挨两下是 d2');
+  assert.equal(at(a)!.getAttribute('data-flash'), '1', '批次号要写到节点上');
+
+  // 闪烁层压在常驻烈度层之上：同一块地方同时出现时，是"刚刚这一下"更该被看见
+  const order = Array.from(host.children).map((n) => n.className);
+  assert.ok(
+    order.indexOf('heat-flash') > order.indexOf('heat'),
+    `闪烁层要排在烈度层之后（实际顺序 ${order.join(' → ')}）`,
+  );
+
+  // 同一批格子再挨一下：批次号变了就必须重写节点，否则动画不会重播
+  const before = at(a);
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[a, 2], [b, 1]]), flashSeq: 2 });
+  assert.equal(at(a)!.getAttribute('data-flash'), '2', '批次号要跟着更新');
+  assert.ok(before !== at(a), '同内容不同批次也要重建节点，动画才会从头播');
+
+  // 雾外不画：调用方漏过滤，这一层也要兜住
+  renderBoard(host, view, { ...empty, heatFlash: new Map([[hidden, 1]]), flashSeq: 3 });
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 0, '雾外的格子不该闪');
+
+  // 时间到了调用方清空数据：这一层跟着空掉，不留一块红在地上
+  renderBoard(host, view, empty);
+  assert.equal(host.querySelectorAll('.heat-flash .fx-heat').length, 0, '不给数据就该清干净');
+});
+
 check('点自己的单位会高亮可移动范围', () => {
   const unit = doc.querySelector<HTMLElement>('.unit.owner-A');
   assert.ok(unit, '找不到 A 方棋子');
@@ -1040,7 +1148,8 @@ check('选中农民会显示产出与临水加成', () => {
   assert.ok(farmer, '开局应该有农民');
   farmer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   const html = doc.querySelector('.side')?.innerHTML ?? '';
-  assert.ok(html.includes('每回合产出'), '应该显示产出说明');
+  assert.ok(html.includes('基础产出'), '应该显示产出说明（基础值）');
+  assert.ok(html.includes('每回合收入'), '当前实测产出要走属性卡那行');
   assert.ok(html.includes('相邻水域'), '应该显示临水加成');
 });
 
@@ -1084,9 +1193,10 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
 
   const reach = Array.from(reachableTiles(st, farmer).keys());
   assert.ok(reach.length > 0, '农民应该有可达格');
-  const hints = new Map<number, number>();
+  const hints = new Map<number, Record<string, number>>();
   for (const i of reach) {
-    hints.set(i, unitIncomeAt(st, farmer, i % st.w, Math.floor(i / st.w)));
+    const y = unitYieldAt(st, farmer, i % st.w, Math.floor(i / st.w));
+    if (Object.keys(y).length > 0) hints.set(i, y as Record<string, number>);
   }
 
   const host = doc.createElement('div');
@@ -1103,7 +1213,10 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
   });
   try {
     const badges = host.querySelectorAll('.tile-income');
-    assert.equal(badges.length, reach.length, '每个可达格都该有一个产出数字');
+    // 不再要求"每个可达格都有"：算出来是空表的格子（站上去什么都不产）
+    // 以前会印一个 +0，现在直接不印。有产出的格子一个都不能少。
+    assert.ok(hints.size > 0, '这个场景应该至少有一格有产出');
+    assert.equal(badges.length, hints.size, '有产出的可达格都该有一个产出数字');
     const text = badges[0]?.textContent ?? '';
     assert.ok(/^\+\d+$/, `${text} 应该是 +N`);
 
@@ -1116,14 +1229,271 @@ check('经济单位选中后，可达格上印出每格产出数字', () => {
       const tile = badge.parentElement;
       const idx = tile ? tiles.indexOf(tile) : -1;
       assert.ok(idx >= 0, '产出数字应该挂在格子里');
-      const shown = Number((badge.textContent ?? '+0').slice(1));
-      assert.equal(shown, hints.get(idx), `第 ${idx} 格印的是 ${shown}，真相源是 ${hints.get(idx)}`);
+      const truth = hints.get(idx);
+      assert.ok(truth, `第 ${idx} 格没有真相源`);
+      const gold = truth!.gold ?? 0;
+      // 徽标只印金币；纯非金币的单位印的是第一项资源，这里不按金币对账
+      if (gold <= 0) continue;
+      const shown = Number(/^\+(\d+)/.exec(badge.textContent ?? '')?.[1] ?? -1);
+      assert.equal(shown, gold, `第 ${idx} 格印的是 ${shown}，真相源是 ${gold}`);
       matched += 1;
     }
     assert.ok(matched > 0, '总得对上一格');
   } finally {
     host.remove();
   }
+});
+
+check('技能选点：方向型只认四邻，选点型全图都算（自己脚下除外）', () => {
+  // 方向型：四邻热区之外一律不算，点了就是"取消施法"
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 11 }),
+    true,
+    '方向型点四邻之一 = 选定',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'direction', onSelf: false, aimTiles: [11, 12], cell: 47 }),
+    false,
+    '方向型点远处 = 不算（以前传送阵就是被这一条卡住了）',
+  );
+  // 选点型：任何格都算落点，唯独自己脚下当作取消（技能会判过载并照扣灵石）
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 899 }),
+    true,
+    '选点型要能点全图，不能被 aimTiles 拦住',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 0 }),
+    false,
+    '点自己脚下 = 取消，不能白扣灵石',
+  );
+});
+
+check('修真灵田的面板写全多资源收入，不只金币', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [...Object.keys(UNIT_TYPES), 'cultivation-spirit-field'],
+    },
+    4242,
+  );
+  st.current = 'A';
+  const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  assert.ok(i >= 0, '应该有能站灵田的平原');
+  const field: Unit = {
+    id: 'field1',
+    type: 'cultivation-spirit-field',
+    owner: 'A',
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+    hp: st.unitTypes['cultivation-spirit-field']?.maxHp ?? 30,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(field);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: field,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const row = [...host.querySelectorAll<HTMLElement>('.info-row')].find((el) =>
+    (el.textContent ?? '').includes('每回合收入'),
+  );
+  assert.ok(row, '经济单位要有"每回合收入"这一行');
+  const text = row!.textContent ?? '';
+  assert.ok(/\d+ 金/.test(text), `要写金币：${text}`);
+  assert.ok(/\d+ 灵/.test(text), `也要写灵石，不能只剩金币：${text}`);
+});
+
+check('炼器炉面板：条件不满足的法器灰着列出来，并写清缺什么', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [
+        ...Object.keys(UNIT_TYPES),
+        'cultivation-forge-1',
+        'cultivation-artifact-wood',
+        'cultivation-artifact-stone',
+      ],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 法器要灵石：不补这一笔，按钮会因"资源不足"变灰，测不出产地条件
+  st.players.A.res = { 'spirit-stone': 100 };
+
+  // 把一片地摊平，保证炉子四周既没有森林也没有山
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  const forge: Unit = {
+    id: 'forge1',
+    type: 'cultivation-forge-1',
+    owner: 'A',
+    x: 5,
+    y: 5,
+    hp: st.unitTypes['cultivation-forge-1']?.maxHp ?? 90,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(forge);
+
+  const host = doc.createElement('div');
+  const paint = () => {
+    host.innerHTML = '';
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: forge,
+      selectedCityId: null,
+      selectedCampId: forge.id,
+      selectedTile: null,
+    });
+  };
+
+  paint();
+  let html = host.innerHTML;
+  assert.ok(html.includes('还造不出来'), '白名单里有、条件不满足的法器要单独列一组');
+  const wood = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood, '青木剑应该列出来（不能因为缺森林就消失）');
+  assert.equal(wood!.disabled, true, '缺材料时该是灰的');
+  assert.ok(html.includes('森林'), '按钮上要写清缺森林');
+
+  // 把炉子北边那格改成森林：同一座炉子应该立刻能造青木剑
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  paint();
+  html = host.innerHTML;
+  const wood2 = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-wood"]');
+  assert.ok(wood2, '青木剑还在列表里');
+  assert.equal(wood2!.disabled, false, '挨着森林之后就点得动了');
+  // 玄石印仍然缺山：它继续灰着，所以"还造不出来"这一组还在
+  const stone = host.querySelector<HTMLButtonElement>('[data-type="cultivation-artifact-stone"]');
+  assert.ok(stone, '玄石印也该列出来');
+  assert.equal(stone!.disabled, true, '没有山就还是灰的');
+  assert.ok(html.includes('山'), '玄石印的原因要写清缺山');
+  void html;
+});
+
+check('军营面板不列法器：campOnly 的东西不该出现在普通产兵点', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: [...Object.keys(UNIT_TYPES), 'cultivation-artifact-wood'],
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  st.players.A.res = { 'spirit-stone': 100 };
+  const at = (x: number, y: number) => y * st.w + x;
+  for (let y = 2; y <= 9; y++) {
+    for (let x = 2; x <= 9; x++) st.tiles[at(x, y)] = { terrain: 'plain', cityId: null };
+  }
+  // 故意让军营挨着森林：条件满足也不该冒出法器——它根本不在军营的产品线上
+  st.tiles[at(5, 4)] = { terrain: 'forest', cityId: null };
+  const camp = {
+    id: 'camp1',
+    type: 'camp',
+    owner: 'A' as const,
+    x: 5,
+    y: 5,
+    hp: st.unitTypes.camp?.maxHp ?? 34,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(camp);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: camp,
+    selectedCityId: null,
+    selectedCampId: camp.id,
+    selectedTile: null,
+  });
+  assert.equal(
+    host.querySelector('[data-type="cultivation-artifact-wood"]'),
+    null,
+    '军营里连灰色的法器都不该出现',
+  );
+  assert.ok(!host.innerHTML.includes('还造不出来'), '军营不该有"还造不出来"这一组');
+});
+
+check('建造列表按档位过滤：高过工兵时代的建筑不列出来', () => {
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 2,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    4242,
+  );
+  st.current = 'A';
+  st.players.A.gold = 900;
+  // 造一个"二代的工匠，白名单里混进一座三代的堡寨"——
+  // 扩展就是这么往白名单里追加条目的（能架桥的人就能修船坞），
+  // 所以高代建筑完全可能出现二代的名单里。
+  st.unitTypes['test-builder-x'] = {
+    ...st.unitTypes.laborer,
+    id: 'test-builder-x',
+    name: '测试工匠',
+    era: 2,
+    builds: ['camp', 'camp3'],
+  };
+  const i = st.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  const builder: Unit = {
+    id: 'b1',
+    type: 'test-builder-x',
+    owner: 'A',
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(builder);
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: builder,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.ok(host.querySelector('[data-act="build"][data-type="camp"]'), '一代军营该列出来');
+  assert.equal(
+    host.querySelector('[data-act="build"][data-type="camp3"]'),
+    null,
+    '三代的堡寨不该挂在二代工匠的建造列表里',
+  );
 });
 
 check('详情面板显示的是算上修正的真实数值', () => {
@@ -2367,7 +2737,7 @@ check('AI 连续行动时顶栏按钮不会被重建', () => {
 
 console.log('\n军营面板');
 
-check('军营面板列出兵种，并写清补给来自哪座城', () => {
+check('军营面板列出兵种，并写清自己是哪一档', () => {
   const st = createMatch(
     {
       size: 12,
@@ -2425,12 +2795,15 @@ check('军营面板列出兵种，并写清补给来自哪座城', () => {
 
   const html = host.innerHTML;
   assert.ok(html.includes('前线产兵点'), '面板应该标明这是产兵点');
-  assert.ok(html.includes('补给来自'), '应该写清补给来自哪座城市');
-  assert.ok(html.includes('铁器'), '补给时代应该跟着最近的城走（这里升到了铁器）');
+  // 2026-11-08：营按自己的档位出兵，不再"补给来自某座城"。
+  // 这里是城升到了二级、营还是一级，所以面板必须写一级，而不是跟着城写铁器。
+  assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
+  assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
+  assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
   assert.ok(html.includes('自动开火'), '军营会替自己开火');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
-  // 二级兵种也能造：军营的时代取最近那座二级城
-  assert.ok(host.querySelector('[data-type="spearman"]'), '二级城供养的军营应该能出二级兵');
+  // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
+  assert.equal(host.querySelector('[data-type="spearman"]'), null, '一级营根本不该列二级兵');
 });
 
 check('敌军军营不给你产兵，并提示打掉它', () => {
@@ -2474,7 +2847,7 @@ check('敌军军营不给你产兵，并提示打掉它', () => {
   });
 
   assert.equal(host.querySelectorAll('.recruit-btn').length, 0, '敌方军营不该给产兵按钮');
-  assert.ok(host.innerHTML.includes('打掉'), '应该提示这是敌方补给点');
+  assert.ok(host.innerHTML.includes('产兵建筑'), '应该提示这是敌方的产兵点');
 });
 
 console.log('\n渡船面板');

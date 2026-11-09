@@ -85,7 +85,7 @@ import {
 } from '../src/core/naval-carrier.ts';
 import { canHold, carryOf, deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { canProduce, isProducer, produceCooldownLeft, produceCostScale, produceEveryTurns, produceOf, producePop, produceUsableCount } from '../src/core/produce.ts';
-import { heatCells, heatStep, noteHeat, visibleHeat } from '../src/core/heat.ts';
+import { heatCells, heatStep, newHeatCells, noteHeat, visibleHeat } from '../src/core/heat.ts';
 import { NAVAL } from '../src/core/naval-packs.ts';
 import { SPIRIT_STONE } from '../src/core/cultivation/resources.ts';
 
@@ -298,6 +298,7 @@ import {
   underConstruction,
   unitIncome,
   unitIncomeAt,
+  unitYieldAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
@@ -325,7 +326,7 @@ import {
   snapshotJson,
   snapshotSignature,
 } from '../src/core/snapshot.ts';
-import { GOLD } from '../src/core/resources.ts';
+import { GOLD, RESOURCES, registerResourceName, resourceName, resourceShort } from '../src/core/resources.ts';
 import { isEcoBuilding } from '../src/core/city-works.ts';
 import { lineBetween } from '../src/core/grid-line.ts';
 import { REPORT_VERSION, buildMatchReport, reportSignature, reportFileName, reportJson } from '../src/core/report.ts';
@@ -524,6 +525,25 @@ test('建造名单：查不到中文名时退回 id，不抛错也不静默丢�
   const list = buildListOf({ id: 'probe', builds: ['a', 'b'] });
   assert.deepEqual(list.ids, ['a', 'b']);
   assert.deepEqual(list.names, ['a', 'b']);
+});
+
+test('资源名兜底：没有开局也能查到扩展资源的中文名，且不污染本局流通表', () => {
+  // 规则书生成、开局设置、联机加入、读档都不走 createMatch，
+  // 这些路径以前会把 spirit-stone 原样印给玩家。
+  assert.equal(resourceShort(SPIRIT_STONE), '灵', '没有一局游戏也要认得灵石简称');
+  assert.equal(resourceName(SPIRIT_STONE), '灵石');
+
+  // 兜底表本身：登记后能查到名字，但不会撑大 RESOURCES（RL 特征按它开槽）
+  registerResourceName({
+    id: 'probe-resource',
+    name: '试炼石',
+    short: '试',
+    color: '#000',
+    summary: '',
+  });
+  assert.equal(resourceShort('probe-resource'), '试');
+  assert.equal(resourceName('probe-resource'), '试炼石');
+  assert.ok(!RESOURCES.some((r) => r.id === 'probe-resource'), '兜底名字不该进本局流通表');
 });
 
 console.log('\n开局与地图');
@@ -1450,6 +1470,117 @@ test('不能攻城自己的城市', () => {
   cav.x = own.x;
   cav.y = own.y + own.size;
   assert.equal(applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: own.id }).ok, false);
+});
+
+/**
+ * 攻城溅射的布景：一座 B 城 + 一圈平地。
+ *
+ * 地形清成平原是必须的：山丘给守方加甲，会把"该掉多少血"变成另一个变量，
+ * 而这条用例要证的只是"红格盖住谁、谁就掉血"。
+ */
+function siegeScene() {
+  const s = fresh();
+  s.current = 'A';
+  s.units = [];
+  const city = citiesOf(s, 'B')[0]!;
+  for (let y = city.y - 2; y <= city.y + 4; y++) {
+    for (let x = city.x - 4; x <= city.x + 4; x++) {
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      const inCity =
+        x >= city.x && x < city.x + city.size && y >= city.y && y < city.y + city.size;
+      if (inCity) continue;
+      s.tiles[idx(s, x, y)]!.terrain = 'plain';
+    }
+  }
+  return { s, city };
+}
+
+test('攻城溅射：红格盖住的敌人都掉血，盖不到的一个都不掉', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const near = place2(s, 'B', 'militia', city.x - 1, city.y);
+  const far = place2(s, 'B', 'militia', city.x - 1, city.y + 2);
+  // 城内守军：站在城市格里，离爆心 1 格
+  const garrison = place2(s, 'B', 'militia', city.x, city.y + 1);
+  const hp0 = new Map(s.units.map((u) => [u.id, u.hp]));
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: gun.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+  const splashOf = (id: string) =>
+    Math.floor(computeDamage(s, gun, s.units.find((u) => u.id === id)!) * CONFIG.splashRatio);
+
+  assert.equal(at(near.id).hp, hp0.get(near.id)! - splashOf(near.id), '挨着城的兵要吃半伤');
+  assert.equal(at(garrison.id).hp, hp0.get(garrison.id)! - splashOf(garrison.id), '城内守军一起挨炸');
+  assert.equal(at(far.id).hp, hp0.get(far.id), '半径外的兵一格都不该掉');
+
+  /*
+   * 这条才是用户报的那个"对不上"：把战况烈度摊出来，逐个对照。
+   * 红格盖到谁，谁就必须掉血；没盖到的一个都不许掉——两边只要有一格对不上，
+   * 玩家看到的就是"红了但没掉血"或者"掉了但没红"。
+   */
+  const heat = new Set(
+    Object.keys(r.state.heat?.B?.[String(r.state.turn)] ?? {}).map(Number),
+  );
+  assert.ok(heat.size > 0, '攻城要记烈度');
+  for (const u of r.state.units.filter((x) => x.owner === 'B')) {
+    const lit = tilesOfUnit(r.state, u).some((t) => heat.has(idx(r.state, t.x, t.y)));
+    const lost = (hp0.get(u.id) ?? 0) - u.hp;
+    assert.equal(lost > 0, lit, `${utype(r.state, u.type).name}(${u.x},${u.y})：红格=${lit}，掉血=${lost}`);
+  }
+});
+
+test('攻城溅射跟着点中的那一格走，不总是城的左上角', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const corner = place2(s, 'B', 'militia', city.x + 1, city.y + 2);
+  const left = place2(s, 'B', 'militia', city.x - 1, city.y);
+  const hp0 = new Map(s.units.map((u) => [u.id, u.hp]));
+
+  // 点城的右下角：爆心挪过去，右下角外侧的人该挨，左边的不该
+  const r = applyAction(s, {
+    type: 'SIEGE',
+    unitId: gun.id,
+    cityId: city.id,
+    x: city.x + 1,
+    y: city.y + 1,
+  });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+  assert.ok(at(corner.id).hp < hp0.get(corner.id)!, '点右边，右边外侧的人要挨');
+  assert.equal(at(left.id).hp, hp0.get(left.id), '点右边，左边的人不该挨');
+});
+
+test('没有溅射的单位攻城，旁边的人不挨打', () => {
+  const { s, city } = siegeScene();
+  const cav = place2(s, 'A', 'scout', city.x - 1, city.y);
+  const bystander = place2(s, 'B', 'militia', city.x - 1, city.y + 1);
+  const hp0 = bystander.hp;
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: cav.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.find((u) => u.id === bystander.id)!.hp, hp0, '没溅射就不该波及');
+});
+
+test('攻城溅射打死的人会被清出棋盘，并留一条战报', () => {
+  const { s, city } = siegeScene();
+  const gun = place2(s, 'A', 'battery', city.x - 3, city.y);
+  const doomed = place2(s, 'B', 'militia', city.x - 1, city.y);
+  doomed.hp = 1;
+
+  const r = applyAction(s, { type: 'SIEGE', unitId: gun.id, cityId: city.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(
+    r.state.units.some((u) => u.id === doomed.id),
+    false,
+    '血量归零的兵不能留在场上',
+  );
+  assert.ok(
+    r.state.log.some((l) => l.text.includes('被炮火波及消灭')),
+    '战报里要写明他是被炮火波及打死的',
+  );
 });
 
 test('城市位置是浮动的，不再是矩形四角', () => {
@@ -3484,7 +3615,7 @@ test('召唤：死灵法师每两回合一个骷髅，到上限就停', () => {
   }
   const skels = st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton');
   assert.equal(skels.length, 4, '上限就是 4 个');
-  // 召唤物不占编制：编制里一个都数不到
+  // 召唤物不占ai编制：编制里一个都数不到
   assert.equal(
     st.units.filter((u) => u.owner === 'A' && u.type === 'skeleton').length,
     skels.length,
@@ -4014,7 +4145,7 @@ test('元素召唤师的上限是"所有元素加起来 2 只"，不是每种各
   assert.equal(after.length, 2, `四元素合计应当停在 2 只，实际 ${after.length}`);
 });
 
-test('召唤物不占编制，也不能从产线招募', () => {
+test('召唤物不占ai编制，也不能从产线招募', () => {
   const s = fresh({ expansionIds: FANTASY });
   const before = armySize(s, 'A');
   for (let i = 0; i < 4; i += 1) stackOn(s, 'A', 'skeleton', 8 + i, 8);
@@ -6098,28 +6229,37 @@ test('军营能像城市一样产兵', () => {
   assert.equal(born.length, 1, '兵应该从军营四邻出来');
 });
 
-test('军营产兵的时代取最近的己方城市', () => {
+test('军营按自己的档位出兵：一级营出不了二级兵，后方三级城也没用', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
   s.current = 'A';
   s.players.A.gold = 900;
 
-  // 一座二级城：能造一级和二级兵
-  city.era = 2;
+  // 后方已经三级了，但这一座是一级营（camp，era 1）。
+  // 2026-11-08 删掉"军工供货"之后，产兵建筑不再看后方城市的时代。
+  city.era = 3;
   const camp = place(s, 'A', 'camp', city.x + 2, city.y);
+  const denied = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'spearman' });
+  assert.equal(denied.ok, false, '一级营不该出二级兵——它不跟后方换代');
+  assert.ok(
+    denied.ok ? '' : /时代/.test(denied.reason),
+    `拒绝理由要说清是档位不够：${denied.ok ? '' : denied.reason}`,
+  );
 
-  const r = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'spearman' });
-  assert.ok(r.ok, r.ok ? '' : `二级兵应该能从军营出：${r.reason}`);
+  // 二级营（寨垒）才行，而且只靠自己，不靠旁边那座三级城
+  const camp2 = place(s, 'A', 'camp2', city.x + 4, city.y);
+  const r = applyAction(s, { type: 'RECRUIT', unitId: camp2.id, unitType: 'spearman' });
+  assert.ok(r.ok, r.ok ? '' : `二级营应该能出二级兵：${r.reason}`);
 });
 
-test('军营的时代落成即钉死：后方升级不会让老营跟着换代', () => {
+test('营的档位不再写进单位：三级城旁边扎的一级营仍只出一级兵', () => {
   const s = fresh();
   const city = citiesOf(s, 'A')[0];
   assert.ok(city);
   s.current = 'A';
   s.players.A.gold = 900;
-  city.era = 1;
+  city.era = 3;
 
   // 清出一块空地，旁边留一格水，让军营"临水"这一条过得去
   const set = (x: number, y: number, terrain: 'plain' | 'water') => {
@@ -6135,18 +6275,14 @@ test('军营的时代落成即钉死：后方升级不会让老营跟着换代',
   const cur = r.state;
   const camp = unitsOf(cur, 'A').find((u) => u.type === 'camp');
   assert.ok(camp, '营应该扎起来了');
-  assert.equal(camp.era, 1, '动工那一刻的时代要钉在营上');
+  // 2026-11-08 删掉"军工供货"：时代不再钉在单位上，档位就是兵种表里的 era
+  assert.equal((camp as { era?: number }).era, undefined, '营身上不该再记时代');
 
-  // 后方升到火器时代：这座一级营不该隔空跟着换代
-  const mine = cur.cities.find((c) => c.id === city.id);
-  assert.ok(mine);
-  mine.era = 3;
   cur.players.A.gold = 900;
-
   const stale = applyAction(cur, { type: 'RECRUIT', unitId: camp.id, unitType: 'musketeer' });
-  assert.equal(stale.ok, false, '老营不该跟着后方换代');
+  assert.equal(stale.ok, false, '一级营出不了火枪兵——它只按自己的档位');
 
-  // 同一座三级城造同样的兵就没问题——差别只在"这座营是哪年扎的"
+  // 同一座三级城造同样的兵就没问题——差别只在"这座营是哪一档"
   const fromCity = applyAction(cur, { type: 'RECRUIT', cityId: city.id, unitType: 'musketeer' });
   assert.ok(fromCity.ok, fromCity.ok ? '' : `三级城应该能出火枪兵：${fromCity.reason}`);
 });
@@ -6172,15 +6308,17 @@ test('敌方城市里不许建造', () => {
   assert.match(r.ok ? '' : r.reason, /敌方城市/, '理由要说清是"敌城"，不是"格子上有东西"');
 });
 
-test('没有城市，军营就补不上兵', () => {
+test('没有城市也能补兵：产兵建筑不再靠后方供货', () => {
   const s = fresh();
   s.current = 'A';
   s.players.A.gold = 900;
 
+  // 2026-11-08 删掉"军工供货"：城全丢了，营照样按自己的档位出兵。
+  // 这条同时放开了绕后骚扰——前线的营不再是一打就哑的摆设。
   s.cities = s.cities.filter((c) => c.owner !== 'A');
   const camp = place(s, 'A', 'camp', 5, 5);
   const r = applyAction(s, { type: 'RECRUIT', unitId: camp.id, unitType: 'militia' });
-  assert.equal(r.ok, false, '断了补给的军营不该还能出兵');
+  assert.ok(r.ok, r.ok ? '' : `没有城市也该能出兵：${r.reason}`);
 });
 
 test('军营不能给敌军产兵，也不是城市', () => {
@@ -10368,6 +10506,30 @@ test('unitIncomeAt：农民站平原收 7、站森林收 3，算完不挪动真�
   assert.equal(farmer.y, plain.y, '预览不该把单位真的挪走');
 });
 
+test('unitYieldAt：灵田站平原收 11 金 1 灵、站森林收 6 金 4 灵，算完不挪真身', () => {
+  const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+  clearDecor(s);
+  const spots = dryTiles(s, 'plain');
+  const plain = spots[0]!;
+  const forest = spots[1]!;
+  s.tiles[forest.y * s.w + forest.x]!.terrain = 'forest';
+  const field = place2(s, 'A', 'cultivation-spirit-field', plain.x, plain.y);
+
+  const onPlain = unitYieldAt(s, field, plain.x, plain.y);
+  assert.equal(onPlain.gold, 11, '平原 11 金');
+  assert.equal(onPlain['spirit-stone'], 1, '平原 1 灵石');
+
+  const onForest = unitYieldAt(s, field, forest.x, forest.y);
+  assert.equal(onForest.gold, 6, '森林 6 金');
+  assert.equal(
+    onForest['spirit-stone'],
+    4,
+    '森林 4 灵石——只算金币的旧接口看不到这个差别',
+  );
+  assert.equal(field.x, plain.x, '预览不该把单位真的挪走');
+  assert.equal(field.y, plain.y, '预览不该把单位真的挪走');
+});
+
 test('effectiveStats：老兵不死的击杀成长进了真实攻击力', () => {
   const s = arena(fresh({ expansionIds: ['veterans'] }));
   const u = place2(s, 'A', 'militia', 6, 6);
@@ -11914,6 +12076,15 @@ test('战况烈度：溅射按人头各记一格，反击记在出手方那一�
   assert.equal(bHeat.get(idx(next.state, 8, 8)), 1, '主目标挨了一下');
   assert.equal(bHeat.get(idx(next.state, 8, 9)), 1, '溅射到的那格也算挨了一下');
 
+  // 出手闪烁：动作前后的记账差 = 这一下打到哪
+  // 炮兵溅射半径 1（曼哈顿），所以是主目标 + 上下左右四格；开火者自己那格不该亮。
+  const flash = newHeatCells(s, shot.state);
+  assert.equal(flash.get(idx(shot.state, 8, 8)), 1, '主目标要闪');
+  assert.equal(flash.get(idx(shot.state, 8, 9)), 1, '溅射格也要闪');
+  assert.equal(flash.size, 5, '整片溅射范围都要闪（主目标 + 四邻）');
+  assert.ok(!flash.has(idx(shot.state, 6, 8)), '开火的那一格不闪：那是"我打到哪"，不是"我在哪"');
+  assert.equal(newHeatCells(shot.state, next.state).size, 0, '结束回合不记账，什么都不闪');
+
   // 反击不算"这一方打出去的"，所以不记：账面只收主动攻击与溅射
   const s2 = fresh();
   s2.current = 'A';
@@ -13112,6 +13283,41 @@ test('多动：自动开火的建筑也把这一回合的次数打满', () => {
   const after = r.state.units.filter((u) => u.owner === 'B');
   const total1 = after.reduce((a, u) => a + u.hp, 0);
   assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
+});
+
+test('技能：不能连发的技能，本回合放过之后就不该显示"就绪"（multiCast 写 false 与不写等价）', () => {
+  const s = fresh({ godMode: true });
+  s.current = 'A';
+  const u = s.units.find((x) => x.owner === 'A')!;
+  const def = s.unitTypes[u.type]!;
+
+  // 现造一个技能挂上去：这条用例只关心"就绪不就绪"，不关心效果
+  const setSkill = (multiCast?: boolean) => {
+    const base = { id: 'test-once', name: '试一次', summary: '', effect: 'test-once', cooldown: 0 };
+    def.skills = [multiCast === undefined ? base : { ...base, multiCast }];
+    return () => heroSkillsOf(s, u).find((k) => k.def.id === 'test-once')!;
+  };
+
+  // 1) 显式写 multiCast: false
+  let view = setSkill(false);
+  assert.equal(view().ready, true, '还没放过，应该是就绪的');
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '放过了就该熄，不然点下去只会被拒绝');
+  assert.ok(
+    (view().notReadyReason ?? '').includes('已经放过'),
+    '要给一句能看懂的原因，而不是一个亮着的按钮',
+  );
+
+  // 2) 根本不写这个字段 —— 必须和 false 完全一致
+  u.skillTurn = undefined;
+  view = setSkill(undefined);
+  assert.equal(view().ready, true);
+  u.skillTurn = s.turn;
+  assert.equal(view().ready, false, '不写 multiCast 也要熄（两者是同一件事）');
+
+  // 3) 声明了 multiCast: true 的可以连发，放过一次仍然就绪
+  view = setSkill(true);
+  assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
 });
 
 test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {
@@ -17131,9 +17337,10 @@ test('产兵点不许落成即废：二代的工程兵修不了四代的造船�
   assert.ok(yard, '海军包里应该有造船厂');
   const r = applyAction(s, { type: 'BUILD', unitId: builder.id, unitType: 'nv-shipyard', x: 4, y: 2 });
   assert.equal(r.ok, false, '二代的工程兵不该能在二代修四代的造船厂');
+  // 拒绝的理由现在是"档位不够"（以前是"落成即废"，那条要靠供货逻辑才算得出来）
   assert.ok(
-    (r as { reason?: string }).reason?.includes('造不出来'),
-    `拒绝理由要说清是"造不出来"，实际：${(r as { reason?: string }).reason}`,
+    (r as { reason?: string }).reason?.includes('工匠'),
+    `拒绝理由要说清是档位不够，实际：${(r as { reason?: string }).reason}`,
   );
 
   // 同一条规则不该误伤军营：它的白名单是空的，什么时代落成都能出那一代的兵

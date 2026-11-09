@@ -12,6 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
+import { skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { expansionById } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
@@ -20,7 +21,7 @@ import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { playerView } from './core/fog.ts';
-import { visibleHeat } from './core/heat.ts';
+import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
   applyAction,
@@ -51,10 +52,9 @@ import {
   recruitSpawnCells,
   refreshMemory,
   siegeTargets,
-  supplyEraAt,
   terrainWalkable,
   threatTiles,
-  unitIncomeAt,
+  unitYieldAt,
   unitsAt,
   unitsOf,
   upgradeCostOf,
@@ -71,6 +71,7 @@ import {
 import type { SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
+import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
@@ -155,11 +156,26 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
-import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
+import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { skillTargetPicked } from './ui/skill-aim.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
-/** 非空时表示某个英雄正在等玩家选技能方向 */
-let pendingSkill: { unitId: string; skillId: string } | null = null;
+/**
+ * 非空时表示某个英雄正在等玩家选技能目标。
+ *
+ * `targeting` 必须一起记下来：方向型技能只有四邻可以点，选点型（传送阵）
+ * 则是全图任意格。以前这里只存 unitId/skillId，所有技能都按"四邻热区"处理，
+ * 于是「挪移」只能往身边一格挪——技能数据里的 `targeting: 'point'` 白写了。
+ */
+let pendingSkill:
+  | { unitId: string; skillId: string; targeting: 'point' | 'direction' }
+  | null = null;
+
+/**
+ * 上一次悬停预览过的落点（"x,y"）。只在全图选点时用：同一格里反复 mousemove
+ * 不必重算一遍预览，棋盘也不用跟着重绘。
+ */
+let skillAimKey = '';
 
 /**
  * 非空时表示某台装甲正在等玩家给设备选落点（弹射钩索）。
@@ -1196,6 +1212,9 @@ function tutorialMarksOf(): {
 function render(): void {
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
+  // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
+  // 不逐格染红——`.tile.aim` 是红斜纹，铺满全图就没法看了。
+  boardEl.classList.toggle('aim-point', pendingSkill?.targeting === 'point');
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
@@ -1227,6 +1246,16 @@ function render(): void {
         active: state.current === me() && !spectating(),
       });
 
+  // 出手闪烁：和上面那层用同一套色块，区别是它只活在动作后的 0.7 秒里。
+  // 复盘不闪——那是别人的历史回放，没有"刚刚"可言；雾外不画，和红层同一口径。
+  let heatFlashView: Map<number, number> | undefined;
+  if (!replay && heatFlash && Date.now() < heatFlash.until) {
+    const seenNow = new Set(view.visible);
+    const out = new Map<number, number>();
+    for (const [i, n] of heatFlash.cells) if (seenNow.has(i)) out.set(i, n);
+    if (out.size > 0) heatFlashView = out;
+  }
+
   // 这一帧要抖谁、谁的血条要演残留：**只认上一个动作里真掉血的单位**
   const hpDrops = new Map(pendingDrops);
   pendingDrops.clear();
@@ -1249,6 +1278,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
+    heatFlash: heatFlashView,
+    flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,
     incomeHints: computeIncomeHints(selected),
     impacts,
@@ -1624,26 +1655,36 @@ function refreshSelection(): void {
     siege = [];
     aimTiles = []; 
     skillThreatTiles = [];
+    skillAimKey = '';
 
     const caster = state.units.find(u => u.id === pendingSkill?.unitId);
     const skillId = pendingSkill.skillId;
     const previewer = SKILL_PREVIEWERS[skillId];
 
     if (caster) {
-      const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
-      // 选点类（陨卵这种"在半径内挑一格落下"）：可点的格子由规则层给，
-      // 和"点下去会不会判失败"是同一套判断。四向热区是给"选方向"的技能留的，
-      // 两者不能叠加——把方向格混进选点里，玩家会点到一格"方向对、落点不合法"的地方。
-      const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
-      if (skillDef?.targeting === 'point' && cellsOf) {
-        for (const p of cellsOf({ state, self: caster, skill: skillDef })) {
-          aimTiles.push(idx(state, p.x, p.y));
+      /*
+       * 全图选点（传送阵「挪移」）：**不**逐格高亮。
+       *
+       * `.tile.aim` 是把整格铺成红色斜纹的样式，给"四选一方向"用的；
+       * 一千个格子全点亮会变成一片红海，什么也看不清。所以这里只清空高亮，
+       * 落点范围改由鼠标悬停时现算（见 boardEl 上的 skillAimPreview）。
+       */
+      if (pendingSkill.targeting === 'point') {
+        /*
+         * 选点型也要先把**基础范围**点亮。
+         *
+         * 以前这里直接 return，于是"射程圈"只有鼠标扫过去才出现——第一次玩的
+         * 人会以为这个技能没有范围，或者以为它坏了。现在先用"落点 = 自己脚下"
+         * 问一次预览器：掌心雷那种"以自己为圆心的射程圈"立刻就有了；
+         * 传送阵的预览器在落点=自己时返回空（原地传送没有意义），保持不亮。
+         */
+        if (previewer && caster) {
+          skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
         }
-        skillThreatTiles = [];
         return;
       }
 
-      // 1. 其余情况：四周四个方向作为点击热区（这符合战棋习惯）
+      // 方向型：四周四个方向作为点击热区（这符合战棋习惯）
       const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
       const threatSet = new Set<number>();
 
@@ -1739,21 +1780,22 @@ function clearSelection(): void {
 /**
  * 经济单位的移动产出预览。
  *
- * 选中带收入的经济单位、且它还有可达格时，把每一格站上去之后的收入
- * 都算出来（农民按地形、牧民按地形、临水一律 +河运）。
- * 固定收入的单位也参与：河边那格会多 3 金，这正是要给人看的差别。
- * reach 本身已经带上了"是谁的回合、动没动过"的口径，这里只补一条
- * 收入判空——没收入的东西没必要在几十个格子上各印一个 +0。
+ * 选中经济单位、且它还有可达格时，把每一格站上去之后的**全部产出**都算出来
+ * （农民按地形、牧民按地形、临水 +河运、扩展的 modifyYield 折算也一并算上）。
+ *
+ * 以前这里先看 `def.income` / `def.incomeByTerrain` 有没有写，没写就直接返回——
+ * 只产粮、材、灵石的单位（灵田、粮仓）因此永远没有预览，玩家挪它们时
+ * "去哪儿都一样"是错的。现在逐格算 unitYield，算出来是空表才跳过；
+ * reach 本身已经带上了"是谁的回合、动没动过"的口径。
  */
-function computeIncomeHints(unit: Unit | undefined): Map<number, number> {
-  const hints = new Map<number, number>();
+function computeIncomeHints(unit: Unit | undefined): Map<number, ResourceCost> {
+  const hints = new Map<number, ResourceCost>();
   if (!unit || reach.length === 0) return hints;
-  const def = utype(state, unit.type);
-  if (!def.incomeByTerrain && !def.income) return hints;
   for (const i of reach) {
     const x = i % state.w;
     const y = Math.floor(i / state.w);
-    hints.set(i, unitIncomeAt(state, unit, x, y));
+    const yields = unitYieldAt(state, unit, x, y);
+    if (Object.keys(yields).length > 0) hints.set(i, yields);
   }
   return hints;
 }
@@ -2057,6 +2099,7 @@ async function pushDraft(
 /** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
 function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
+  dropHeatFlash();
   state = snapshot.state;
   state.aiControl = { A: false, B: false };
   state.fog = fog;
@@ -2460,6 +2503,57 @@ function toast(msg: string): void {
  */
 let heatDismissTurn: number | null = null;
 
+/**
+ * 刚刚这一手打出去的格子。
+ *
+ * 不另建账本：每次伤害本来就会被 `noteHeatCell` 记在**挨打方、当前回合**下
+ * （溅射逐格各记一次，多段各记一次）。所以动作前后各拍一张记账快照、取差值，
+ * 差出来的就是"这一下覆盖了哪"——普攻、溅射、攻城、剑气这类技能全自动覆盖，
+ * 不必按动作类型逐个特判。
+ *
+ * 只要"这一下"，不留"这一回合"：留着就会和常驻的复盘红格抢同一个视觉位置，
+ * 而那种"刚才打了哪"的复盘需求，回合结束后也一样没人看。
+ */
+let heatFlash: { cells: Map<number, number>; seq: number; until: number } | null = null;
+let heatFlashTimer = 0;
+let heatFlashSeq = 0;
+/** 闪烁时长，与 CSS 里 `.fx-heat.flash` 的动画时长保持一致 */
+const HEAT_FLASH_MS = 700;
+
+/**
+ * 对账：这一步比上一步多记了哪些格子。
+ *
+ * 差值本身由 `core/heat.ts` 的 `newHeatCells` 算（那边能直接测），
+ * 这里只负责把它变成一个 0.7 秒的视觉事件。
+ */
+function noteStrikeFlash(before: GameState, after: GameState): void {
+  const cells = newHeatCells(before, after);
+  if (cells.size === 0) return;
+
+  heatFlashSeq += 1;
+  heatFlash = { cells, seq: heatFlashSeq, until: Date.now() + HEAT_FLASH_MS };
+  if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
+  heatFlashTimer = window.setTimeout(() => {
+    heatFlashTimer = 0;
+    // 这期间又打了一下：那一手自己排了新的定时器，这里不要抢先收掉
+    if (!heatFlash || Date.now() < heatFlash.until) return;
+    heatFlash = null;
+    render();
+  }, HEAT_FLASH_MS + 16);
+}
+
+/**
+ * 直接抹掉闪烁状态（连同定时器）。
+ *
+ * 换局、进房、退房时要调用：那批格子属于**上一张棋盘**，留到新局上会凭空
+ * 亮一块红，看起来像是刚有人在那边挨了打。
+ */
+function dropHeatFlash(): void {
+  heatFlash = null;
+  if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
+  heatFlashTimer = 0;
+}
+
 function dispatch(action: Action): boolean {
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
@@ -2499,9 +2593,24 @@ function dispatch(action: Action): boolean {
     toast(result.reason);
     return false;
   }
-  undoStack.push(state);
-  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  if (result.irreversible) {
+    // 这一步撤不回来（传送阵）：清空撤回栈。
+    //
+    // 为什么是"清空整个栈"而不是"只封这一步"：撤回是一摞快照，每一步存的都是
+    // 它**之前**的整份状态。要"跳过这一步、保留更早的几步"根本做不到——更早的
+    // 快照里灵石还在，装回去照样退款。所以只有两种可能：要么整摞作废，
+    // 要么这一次施放白扣。战报里那句「传送阵撼动了时空结构」就是在说这件事。
+    //
+    // 清空之后本回合继续走子照旧可撤，只是撤不回传送之前——够用，也不会让
+    // 手滑一次就锁死整回合。
+    undoStack = [];
+  } else {
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }
   state = result.state;
+  // 这一下打到了哪：记账前后差出来的格子，闪一次就散（移动/招募差值为空，自然不闪）
+  noteStrikeFlash(before, state);
   // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
   if (action.type !== 'END_TURN') heatDismissTurn = state.turn;
   noteHpDrops(before, state);
@@ -2595,6 +2704,8 @@ function undoLast(): void {
     return;
   }
   state = prev;
+  // 撤回来的这一步没有"刚刚打过"这回事：闪着的格子跟着一起撤掉
+  dropHeatFlash();
   saveMatch(state);
   clearSelection();
   render();
@@ -2829,10 +2940,17 @@ function onBoardClick(e: Event): void {
   // 0.1) 正在等待技能选点
   if (pendingSkill && coords) {
     const cell = idx(state, coords.x, coords.y);
+    const { unitId, skillId, targeting } = pendingSkill;
+    const caster = state.units.find((u) => u.id === unitId);
+    // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
+    // **照扣灵石**，玩家手一抖点到自家阵上就白亏 10 灵石，没必要。
+    const onSelf = !!caster && caster.x === coords.x && caster.y === coords.y;
 
-    // 如果点的是这4个高亮格之一，说明选定了方向
-    if (aimTiles.includes(cell)) {
-      const { unitId, skillId } = pendingSkill;
+    // 选点型技能（传送阵）：地图上任意一格都是合法落点；方向型只认四邻热区。
+    // 判定放在 skill-aim.ts 里，测试能直接把两种技能的规则钉住。
+    const picked = skillTargetPicked({ targeting, onSelf, aimTiles, cell });
+
+    if (picked) {
       const ok = dispatch({
         type: 'HERO_SKILL',
         unitId,
@@ -2849,7 +2967,7 @@ function onBoardClick(e: Event): void {
         pendingSkill = null;
       }
     } else {
-      // 点到 4 格之外：取消施法
+      // 方向型点到 4 格之外、或全图选点点到自己脚下：取消施法
       pendingSkill = null;
       toast('已取消施法');
     }
@@ -3492,8 +3610,13 @@ function handleAction(act: string, el: HTMLElement): void {
 
       // 去兵种表里查出这个技能的原始数据
       const unit = state.units.find(u => u.id === unitId);
-      const def = unit ? state.unitTypes[unit.type] : null;
-      const skillDef = def?.skills?.find(s => s.id === skillId);
+      /*
+       * 必须查 `skillsOf`（兵种表 + 学来的），不能只查 `def.skills`：
+       * "学来的法术"只存在单位的 `extraSkills` 里，兵种表上根本没有。
+       * 只查兵种表的话，一个 `targeting: 'point'` 的法术会被当成"不需要选点"
+       * 直接派发出去——点一下按钮就白放，而且永远点不到目标。
+       */
+      const skillDef = unit ? skillsOf(state, unit).find(s => s.id === skillId) : null;
 
       // 如果数据里声明了需要选点/选方向，就进入等待状态
       if (skillDef && (skillDef.targeting === 'point' || skillDef.targeting === 'direction')) {
@@ -3505,15 +3628,37 @@ function handleAction(act: string, el: HTMLElement): void {
           toast(skillDef.notReadyReason ?? `${skillDef.name} 现在还不能放`);
           return;
         }
-        pendingSkill = { unitId, skillId };
+        const targeting = skillDef.targeting === 'point' ? 'point' : 'direction';
+        pendingSkill = { unitId, skillId, targeting };
         refreshSelection(); // 刷新高亮
-        toast('请在地图上点击要施放的方向或位置');
+        toast(
+          targeting === 'point'
+            ? skillDef.irreversible
+              ? '点击地图上任意位置作为落点（点自己脚下取消）；这一次施放撤不回来'
+              : '点击地图上任意位置作为落点（点自己脚下取消）'
+            : '请在地图上点击要施放的方向',
+        );
         render();
         return;
       }
 
       // 没声明需要选点，或者找不到数据，维持原来的直接释放
       dispatch({ type: 'HERO_SKILL', unitId, skillId });
+      render();
+      return;
+    }
+
+    case 'unit-action': {
+      // 扩展声明的单位操作（学法术、遗忘法术……）。核心不解释 actionId，
+      // 只把它和单位 id 一起派发给规则层，由扩展的 onUnitAction 处理。
+      const id = el.dataset.id;
+      const actionId = el.dataset.action;
+      if (!id || !actionId) return;
+      // 破坏性操作（遗弃法术……）由扩展在按钮上声明确认文案，核心只负责弹
+      const confirmText = el.dataset.confirm;
+      if (confirmText && !window.confirm(confirmText)) return;
+      // dispatch 自己会 toast 失败原因，这里只管发
+      dispatch({ type: 'UNIT_ACTION', unitId: id, actionId });
       render();
       return;
     }
@@ -4133,6 +4278,7 @@ async function runAiTurn(
 
     state = result.state;
     noteHpDrops(before, state);
+    noteStrikeFlash(before, state);
     noteStep(actor, action);
     noteFinalFrame();
     if (action.type === 'RECRUIT') budget.recruited += 1;
@@ -4245,6 +4391,7 @@ function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
     state = createMatch(result.config, result.seed, loadCustomUnits());
+    dropHeatFlash();
     detachRoom();
     resetZoom();
     clearSelection();
@@ -4442,7 +4589,7 @@ function ownSites(): Array<{ id: string; label: string; era: number; city: boole
     out.push({
       id: u.id,
       label: `${d.name}（${x}${u.y + 1}）· 营`,
-      era: u.era ?? supplyEraAt(state, me(), u),
+      era: d.era,
       city: false,
     });
   }
@@ -5750,6 +5897,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   setSaveScope(seat.code);
   // 迷雾是"我这边想不想看"的偏好，不该被对方的存档覆盖
   const fog = state.fog;
+  dropHeatFlash();
   state = snapshot.state;
   state.fog = fog;
   // 云端房间可能是老版本建的，"我方/敌方"这种旧默认名顺手换掉
@@ -5777,6 +5925,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
 function leaveRoom(): void {
   const wasWatching = watching();
   detachRoom();
+  dropHeatFlash();
   // 回到本机那局：进房间时没动过它，原样还在
   state = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   resetRecorder();
@@ -5971,9 +6120,12 @@ async function pollRoom(): Promise<void> {
     const fog = state.fog;
     // 认输不推进回合、只换行动方，所以"谁退出了"要拿退出名单的条数来判
     const wasOut = (state.out ?? []).length;
+    // 联机没有"本地动作"可挂钩：对面这一回合打到哪，只能靠新旧两份状态的记账差
+    const beforeSync = state;
     state = snapshot.state;
     state.aiControl = { A: false, B: false };
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    if (decision.why !== 'finished') noteStrikeFlash(beforeSync, state);
     if (decision.why === 'finished') {
       dirty = false;
       clearSelection();
@@ -6913,6 +7065,48 @@ boardEl.addEventListener('mouseover', (e) => {
 boardEl.addEventListener('mouseout', (e) => {
   const target = e.target as HTMLElement | null;
   target?.closest<HTMLElement>('.tile.reach')?.classList.remove('reach-hover');
+});
+
+/**
+ * 全图选点技能的落点预览（传送阵「挪移」）。
+ *
+ * 这类技能没有逐格高亮（见 render 里的 `aim-point`），所以改成"鼠标停在哪，
+ * 就预览那一格作为落点会把谁挪到哪"。只在 `pendingSkill` 且
+ * `targeting === 'point'` 时工作，其它时候这两个监听什么都不做。
+ *
+ * 换格才重算：同一格里 mousemove 会连发几十次，没必要每次都跑一遍预览再重绘。
+ */
+boardEl.addEventListener('mouseover', (e) => {
+  const pending = pendingSkill;
+  if (!pending || pending.targeting !== 'point') return;
+  const tile = (e.target as HTMLElement | null)?.closest<HTMLElement>('.tile');
+  if (!tile) return;
+  const x = Number(tile.dataset.x);
+  const y = Number(tile.dataset.y);
+  const key = `${x},${y}`;
+  if (key === skillAimKey) return;
+
+  const caster = state.units.find((u) => u.id === pending.unitId);
+  const previewer = SKILL_PREVIEWERS[pending.skillId];
+  if (!caster || !previewer) return;
+  skillAimKey = key;
+  skillThreatTiles = previewer({ state, self: caster, target: { x, y } });
+  render();
+});
+
+boardEl.addEventListener('mouseout', (e) => {
+  if (!pendingSkill || pendingSkill.targeting !== 'point') return;
+  // 在格子之间移动不算离开棋盘：relatedTarget 还在棋盘里，预览就该留着
+  const to = (e as MouseEvent).relatedTarget as Node | null;
+  if (to && boardEl.contains(to)) return;
+  // 离开棋盘不清空，而是退回"基础范围"（落点=自己）。技能还端着，
+  // 射程就该一直看得见——清空会让人误以为技能已经取消了。
+  const caster = state.units.find((u) => u.id === pendingSkill!.unitId);
+  const previewer = SKILL_PREVIEWERS[pendingSkill.skillId];
+  skillAimKey = '';
+  skillThreatTiles =
+    caster && previewer ? previewer({ state, self: caster, target: { x: caster.x, y: caster.y } }) : [];
+  render();
 });
 
 let resizeTimer = 0;

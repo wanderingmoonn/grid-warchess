@@ -17,13 +17,18 @@
  * 只报"传送失败，传送阵过载"。而且失败的这一次仍然算作本回合已经放过技能
  * （doHeroSkill 成功分支才写 skillTurn，所以这里失败也返回 ok，只是不挪人）。
  *
+ * 代价必须**撤不回来**，所以这条技能声明了 `irreversible`：界面用完就把撤回栈
+ * 清空。否则撤一下就能把灵石和这一次施放机会全拿回来，"失败也照扣"等于没说。
+ * 战报里那句「传送阵撼动了时空结构」就是给这件事留的痕——不管成没成，
+ * 时空都被搅过一次。
+ *
  * ── 大单位不参与 ────────────────────────────────────────
  *
  * 占地 2×2 的单位坐标是"锚点"，平移之后锚点落在别人的格子里，判定非常绕。
  * 一期直接规定：占地 > 1 的单位不传送；它们挡在落点上就整体失败。
  */
 import type { SkillDef, Unit } from '../../types.ts';
-import { registerSkillEffect } from '../../skill-hooks.ts';
+import { registerSkillEffect, registerSkillPreview } from '../../skill-hooks.ts';
 import { resOf, addRes } from '../../resources.ts';
 import { SPIRIT_STONE } from '../resources.ts';
 import { distance, inBounds } from '../../query.ts';
@@ -34,18 +39,27 @@ export const TELEPORT_RADIUS = 2;
 export const TELEPORT_COST = 10;
 /** 失败时的战报。故意不写细节：玩家该学的是"别往水里传"，不是背规则。 */
 export const TELEPORT_OVERLOAD_LOG = '传送失败，传送阵过载';
+/**
+ * 每次施放（成或不成）都留的一句。
+ *
+ * 它同时是三件事的说明：灵石为什么扣了、这一回合为什么不能再传、
+ * 以及为什么这一步撤不回来。
+ */
+export const TELEPORT_RIFT_LOG = '传送阵撼动了时空结构';
 
 export const TELEPORT_SKILL: SkillDef = {
   id: 'teleport-swap',
   name: '挪移',
   summary:
     `把阵周围 ${TELEPORT_RADIUS} 格内的单位，与落点周围 ${TELEPORT_RADIUS} 格内的单位整体对调。` +
-    `全图选点，耗 ${TELEPORT_COST} 灵石，每回合一次；失败也照扣。`,
+    `全图选点，耗 ${TELEPORT_COST} 灵石，每回合一次；失败也照扣，而且撤不回来。`,
   effect: 'teleport-swap',
   cooldown: 0,
   multiCast: false, // 一回合只能开一次
   targeting: 'point',
   radius: TELEPORT_RADIUS,
+  // 灵石已经扣了、这一次施放也已经用掉：撤回去就等于把惩罚退掉
+  irreversible: true,
 };
 
 registerSkillEffect('teleport-swap', (c) => {
@@ -61,6 +75,9 @@ registerSkillEffect('teleport-swap', (c) => {
   }
   // 先扣。后面任何一步失败都不退——这是设计好的惩罚。
   addRes(p, SPIRIT_STONE, -TELEPORT_COST);
+  // 钱一扣，时空就算被搅过一次：成败都留痕（战报按时间倒序显示，
+  // 这句会落在"过载/挪移"那行下面）
+  c.api.pushLog(s, self.owner, TELEPORT_RIFT_LOG);
 
   const overload = () => {
     c.result.log = TELEPORT_OVERLOAD_LOG;
@@ -117,4 +134,32 @@ registerSkillEffect('teleport-swap', (c) => {
     plan.length > 1
       ? `传送阵挪移了 ${plan.length} 个单位的位置`
       : `传送阵只挪走了自己`;
+});
+
+/**
+ * 瞄准预览：鼠标停在哪一格，就把"谁会挪到哪"标出来。
+ *
+ * 返回的是**单位的目的格**，不是"技能作用范围"——传送阵波及的是人不是地，
+ * 把两片 2 格圆盘整块染红，反而看不出谁会被挤掉、谁只是站着不动。
+ * 大单位不参与（和效果里的规则一致），界外的目的格直接跳过。
+ */
+registerSkillPreview('teleport-swap', (c) => {
+  const { state, self, target } = c;
+  const vx = target.x - self.x;
+  const vy = target.y - self.y;
+  if (vx === 0 && vy === 0) return [];
+
+  const cells = new Set<number>();
+  for (const u of state.units) {
+    if ((state.unitTypes[u.type]?.footprint ?? 1) > 1) continue;
+    const to =
+      distance(u, self) <= TELEPORT_RADIUS
+        ? { x: u.x + vx, y: u.y + vy }
+        : distance(u, target) <= TELEPORT_RADIUS
+          ? { x: u.x - vx, y: u.y - vy }
+          : null;
+    if (!to || !inBounds(state, to.x, to.y)) continue;
+    cells.add(to.y * state.w + to.x);
+  }
+  return Array.from(cells);
 });

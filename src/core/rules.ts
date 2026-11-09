@@ -123,6 +123,7 @@ import type {
   Element,
   FallenRecord,
   GameState,
+  NearSpec,
   OrderDirective,
   SkillDef,
   PlayerId,
@@ -132,6 +133,7 @@ import type {
   Unit,
   UnitLayer,
   UnitTypeDef,
+  ProduceSource,
 } from './types.ts';
 import { seatsOf } from './types.ts';
 import { skillsOf } from './query.ts';
@@ -152,7 +154,9 @@ import {
 import { 
   auraSourcesOf, 
   auraBonusOf, 
+  allyArmorPctOf,
   allyAtkPctOf,
+  allyTrueDamagePctOf,
   foeMovePctOf,
   foeMoveFlatOf,
   fearPenaltyOf, 
@@ -209,12 +213,12 @@ export function adjacentToWater(s: GameState, x: number, y: number): boolean {
  */
 export function adjacentRequirementOf(
   def: UnitTypeDef,
-): { terrain: Terrain[]; unit: string[] } | null {
+): NearSpec | null {
   if (def.adjacent) {
     const terrain = def.adjacent.terrain ?? [];
     const unit = def.adjacent.unit ?? [];
     if (terrain.length === 0 && unit.length === 0) return null;
-    return { terrain, unit };
+    return { terrain, unit, count: def.adjacent.count };
   }
   if (def.requiresWater) return { terrain: WATER_TERRAINS, unit: [] };
   return null;
@@ -232,7 +236,10 @@ export function adjacentRequirementText(
 ): string | null {
   const adj = adjacentRequirementOf(def);
   if (!adj) return null;
-  const names = [...adj.terrain.map((t) => CONFIG.terrainName[t]), ...adj.unit.map(nameOf)];
+  const names = [
+    ...(adj.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(adj.unit ?? []).map(nameOf),
+  ];
   return `必须紧邻${names.join('或')}`;
 }
 
@@ -780,9 +787,7 @@ export function unitsOf(s: GameState, p: PlayerId): Unit[] {
  * 建筑本来就不该住人：它是工地，不是部队。
  */
 export function armySize(s: GameState, p: PlayerId): number {
-  // 召唤物不占编制：它们不是招募来的，用编制去卡它们只会让死灵法师
-  // 反过来把自己的产线堵死（招满四个骷髅，城市就再也造不出兵）。
-  // 它们的上限由召唤者自己的 summon.max 管。
+  // 召唤物的上限由召唤者自己的 summon.max 管。
   let n = 0;
   for (const u of s.units) {
     if (u.owner !== p) continue;
@@ -849,10 +854,91 @@ export function distToCity(unit: { x: number; y: number }, city: City): number {
 }
 
 /**
- * 某方在某个位置「能拿到的最新军工」：离它最近的己方城市的时代。
+ * 某一格（**含它自己的四邻**）是否满足一组邻里要求。
  *
- * 军营落成时用它钉死自己的时代（见 doRecruit 的注释），界面和 AI 在
- * 旧存档（军营还没写 era）上也用它兜底。三处必须同一口径，所以只有这一份。
+ * 选址（`adjacent`）和产地条件（`produceNear`）共用这一份几何：
+ * 两处如果各写一遍，"2×2 的建筑一半压在山脊上"这种边界迟早会算出两个答案
+ * ——玩家看到的是"炉子明明靠着山，怎么说没有森林"。
+ */
+/**
+ * 一块占地 n×n 的地，命中了多少**不同**的邻里目标。
+ *
+ * 数"目标"而不是"格数"：2×2 的炉子四邻会重复看到同一块灵田，
+ * 按格数会数成两块，于是玩家遇到"我明明只有一块灵田，怎么就能造了"。
+ * 地形按坐标去重、单位按 id 去重，两种命中合在一个计数里
+ * （spec 只写一种时，就是那种东西的个数）。
+ *
+ * 单位按**阵营**过滤：敌方灵田不该给你的炉子供灵。以前这里不判阵营，
+ * "挨着敌方军营"这类要求会稀里糊涂地被敌人满足。
+ */
+function nearSpecCount(
+  s: GameState,
+  x: number,
+  y: number,
+  n: number,
+  spec: NearSpec,
+  owner: PlayerId,
+): number {
+  const terrain = spec.terrain ?? [];
+  const units = spec.unit ?? [];
+  if (terrain.length === 0 && units.length === 0) return 0;
+  const hits = new Set<string>();
+  const look = (tx: number, ty: number): void => {
+    if (!inBounds(s, tx, ty)) return;
+    const tile = tileAt(s, tx, ty);
+    if (tile && terrain.includes(tile.terrain)) hits.add(`t:${tx},${ty}`);
+    const u = unitAt(s, tx, ty);
+    if (u && u.owner === owner && units.includes(u.type)) hits.add(`u:${u.id}`);
+  };
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      look(tx, ty);
+      for (const [ox, oy] of DIRS) look(tx + ox, ty + oy);
+    }
+  }
+  return hits.size;
+}
+
+/** 一组邻里要求满不满足（`count` 默认 1 = 有其中之一就够了） */
+function adjacentSatisfied(
+  s: GameState,
+  x: number,
+  y: number,
+  n: number,
+  spec: NearSpec,
+  owner: PlayerId,
+): boolean {
+  return nearSpecCount(s, x, y, n, spec, owner) >= (spec.count ?? 1);
+}
+
+/**
+ * 一条邻里要求怎么说给玩家听：`森林`、`2 个灵田`。
+ *
+ * 产地条件（produceAt 的拒绝理由）和兵种说明（info.ts）共用一份：
+ * 两处各写一遍就会出现"面板说缺 2 块灵田、点下去只说缺灵田"这种对不上的提示。
+ */
+export function nearSpecText(spec: NearSpec, nameOf: (id: string) => string): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => CONFIG.terrainName[t]),
+    ...(spec.unit ?? []).map(nameOf),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
+}
+
+
+
+/**
+ * @deprecated 2026-11-08 起「军工供货」已删除，**生产代码不要再调用**。
+ *
+ * 产兵建筑现在按自己的档位出兵（见 doRecruit 的 camp 分支），这条"离它最近的
+ * 己方城市的时代"不再是任何规则的一部分。
+ *
+ * 留着它只有一个原因：`scripts/baselines/ai-*.ts` 是冻结的 AI 快照，带 sha256
+ * 校验、一个字都不能改，而那几份快照仍然 import 这个名字来做 A/B 对照。
+ * 新写的任何东西都不要用它——那等于把删掉的供货逻辑又请回来。
  */
 export function supplyEraAt(
   s: GameState,
@@ -863,8 +949,6 @@ export function supplyEraAt(
   if (own.length === 0) return 1;
   return own.reduce((a, b) => (distToCity(at, a) <= distToCity(at, b) ? a : b)).era;
 }
-
-
 
 export function cloneState(s: GameState): GameState {
   return structuredClone(s);
@@ -888,7 +972,7 @@ export function cloneState(s: GameState): GameState {
  * （它决定"占不占格"，这件事渗进寻路、产兵位、攻击距离判断），
  * 不该由某个兵种包是否勾选来决定规则代码长什么样。
  *
- * 能力钩子 `airLayer` 也可以把它标成空中层，
+ * 「飞行」这类能力可以再把它标成空中层（hooks.airLayer；id 叫 fly-over），
  * 那是给自定义兵种和旧数据留的路：老存档、老角色卡照常工作，
  * 新数据则应该直接写 `layer: 'air'`。
  */
@@ -897,7 +981,7 @@ export function airLayer(def: UnitTypeDef): boolean {
    * 三条判据，其实是同一件事的三种写法：
    *   · `layer: 'air'` —— 现在所有飞行单位都写这个；
    *   · `flight: true` —— 早先只有"能过水"这一个字段，没有层这个概念；
-   *   · 能力钩子 `airLayer` —— 兵种编辑器捏出来的旧数据。
+   *   · 能力钩子 `airLayer` —— 「飞行」（id `fly-over`）和兵种编辑器捏出来的旧数据。
    *
    * `flight` 这一条是后补的，补它是因为**两个字段各说各话**会长出真 bug：
    * 只写 `flight: true`、忘写 `layer: 'air'` 的单位会变成"能飞过河、
@@ -1152,6 +1236,34 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
     // 原逻辑：只要 slow > 0，就扣 1 点移动
     modifyMove: (_s, _u, val, move) => (val > 0 ? move - 1 : move),
   },
+  /*
+   * 迟缓：移动力**减半**，不是定身。
+   *
+   * 和 slow 并存：一个是"按比例砍"，一个是"减一格"。两个都挂上时先减 1
+   * 再减半还是反过来，结果会差 1 点，所以顺序由 STATUS_ORDER 钉死。
+   *
+   * 保底 1 是设计意图：1 移的单位被减速后仍能走一格，不然它就变成
+   * "站着不能动"，那和定身没区别，而这条 debuff 想表达的是"追不上"。
+   */
+  chill: {
+    id: 'chill',
+    name: '迟缓',
+    summary: '移动力减半（至少留 1 格）',
+    modifyMove: (_s, _u, val, move) => (val > 0 ? Math.max(1, Math.floor(move * 0.5)) : move),
+  },
+  /*
+   * 熔甲：护甲**减半**。
+   *
+   * 取的是"当前护甲"（含光环、地形、已有加成），不是兵种白值——
+   * 玩家的直觉是"打上去甲少了一半"，而不是"基础甲少了一半"。
+   * 和「诅咒」（−2）不同，那个是固定值，对高甲单位几乎无效。
+   */
+  sunder: {
+    id: 'sunder',
+    name: '熔甲',
+    summary: '护甲减半',
+    modifyArmor: (_s, _u, val, armor) => (val > 0 ? Math.floor(armor / 2) : armor),
+  },
   curse: {
     id: 'curse',
     name: '诅咒',
@@ -1187,7 +1299,7 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
  * 而战报是玩家复盘时唯一的证据链，"这次到底先掉血还是先被烧"不该由
  * 对象里字段的写入顺序决定。扩展注册的状态排在后面，按注册先后。
  */
-const STATUS_ORDER = ['poison', 'burn', 'slow', 'curse', 'curse-deep'];
+const STATUS_ORDER = ['poison', 'burn', 'slow', 'chill', 'curse', 'sunder', 'curse-deep'];
 
 /** 把身上的状态按固定顺序摊成 [id, 值]，只留 > 0 的 */
 export function orderedStatuses(status: Unit['status']): Array<[string, number]> {
@@ -1337,6 +1449,23 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
 export function maxHpOf(s: GameState, u: Unit): number {
   const base = utype(s, u.type).maxHp;
   return base + (u.maxHpBonus ?? 0);
+}
+
+/**
+ * 百分比护甲（护体丹）实际加多少。
+ *
+ * 面板（effectiveStats）和伤害结算（computeDamage）**必须都调用这一个函数**：
+ * 两边各写一遍就会漂移，而漂移的表现是"面板说 10 点、打出来按 7 点算"——
+ * 圣旗那次已经踩过，这里收成一处。
+ *
+ * **+1 保底**：修士 0 期护甲就是 0，纯按比例算等于吃了没效果。
+ * 固定值那一路（圣旗 `buff.armor`）不加保底：它本来就是写死的一个数。
+ *
+ * ⚠️ 调用位置很关键：必须在**扩展钩子之后**（修真包的境界护甲在那里加上去），
+ * 在那之前护甲还是基础值，百分比等于白乘。
+ */
+function buffArmorPctGain(armor: number, pct: number): number {
+  return Math.max(1, Math.round(Math.max(0, armor) * pct));
 }
 
 /**
@@ -1587,7 +1716,9 @@ export function movePower(s: GameState, unit: Unit): number {
   if (sealFlat.value > 0) move = Math.max(0, move - sealFlat.value);
 
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyMove) move = e.hooks.modifyMove({ state: s, unit, move });
+    if (e.hooks.modifyMove) {
+      move = e.hooks.modifyMove({ state: s, unit, move, visionOf: (x) => visionOf(s, x) });
+    }
   }
   /*
    * 石化：移动力减半（向下取整，最低 1）。
@@ -1795,6 +1926,22 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     armor += src.value;
     armorItems.push({ label: src.label, delta: src.value });
   }
+  /*
+   * 护甲百分比光环（玄石印）。
+   *
+   * 位置和攻击那侧的 `allyAtkPct` 对齐：**加法光环之后、地形之前**。
+   * 放在地形之前是有意的——地形是"掩体 +2"，它不该被百分比放大，
+   * 否则同一条光环在山地上比在平原上值钱，玩家没法估算。
+   *
+   * 保底 +1：`round(3 × 0.1) = 0`，不给保底的话这条光环在前期等于不存在，
+   * 而 2 代的玄石印主要就是给低境界修士保命用的。
+   */
+  const armorPctSrc = allyArmorPctOf(s, u);
+  if (armorPctSrc) {
+    const before = armor;
+    armor += Math.max(1, Math.round(before * armorPctSrc.value));
+    armorItems.push({ label: armorPctSrc.label, delta: armor - before });
+  }
   // 地形护甲：**空中层不吃这一条**。飞机不在林子里、不在山脊上，
   // 脚下是什么对它没有任何意义——给它 +2 掩体等于让"贴着树林飞"变成一种战术，
   // 而空中层存在的理由恰恰是"从上面过去，地面的事与它无关"。
@@ -1836,12 +1983,18 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (armor !== before) armorItems.push({ label: def.name, delta: armor - before });
     }
   }
-  // 圣旗（神圣骑士长）：临时护甲。面板和结算必须读同一个字段，
+  // 圣旗（神圣骑士长）：**固定值**临时护甲。面板和结算必须读同一个字段，
   // 否则会出现"面板写着 10 点、实际按 7 点算"这种只能靠猜的偏差。
-  if (u.buff?.armor) {
-    armor += u.buff.armor;
-    armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
-  }
+  //
+  // 注意它和 `armorPct` 是**两个位置**：固定值加在这里（基础护甲那一层），
+  // 百分比要等扩展钩子（境界护甲）跑完再加——否则修士 0 期护甲是 0，
+  // "+25%" 会变成 "+0"。这条是实测踩出来的，别合并回去。
+  //
+  // ⚠️ 它**不进 `armorItems`**（药力/技能增益都不进）：属性下面那串修正项是
+  // "这个数字为什么是这样"，读起来像地形或永久加成；而 buff 是会到期的，
+  // 它真正的家在面板的状态栏里（`statusRow` 会画成「护体丹 2 回合」）。
+  // 两处都写一遍，玩家反而会以为有两个不同的东西。
+  if (u.buff?.armor) armor += u.buff.armor;
   for (const src of curseSourcesOf(s, u)) {
     armor -= src.value;
     armorItems.push({ label: src.label, delta: -src.value });
@@ -1851,9 +2004,26 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
       const before = armor;
-      armor = e.hooks.modifyArmor({ state: s, attacker: u, defender: u, armor, isCounter: false });
+      armor = e.hooks.modifyArmor({
+        state: s,
+        attacker: u,
+        defender: u,
+        armor,
+        isCounter: false,
+        // 查自己直接给当前值：否则「按友军护甲加甲」那条钩子会转回来再算一次自己
+        armorOf: (x) => (x.id === u.id ? armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
       if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
     }
+  }
+
+  // 百分比护甲（护体丹）：必须等扩展钩子（修真包的境界护甲）跑完再乘。
+  // 放在那之前，修士的护甲还是 0，+25% 会算成 0——实测踩过一次。
+  //
+  // 同样不进 `armorItems`，理由见上面那条：buff 由状态栏负责表达。
+  if (u.buff?.armorPct) {
+    armor += buffArmorPctGain(armor, u.buff.armorPct);
   }
   
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
@@ -1900,7 +2070,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyMove) {
         const before = moveNow;
-        moveNow = e.hooks.modifyMove({ state: s, unit: u, move: moveNow });
+        moveNow = e.hooks.modifyMove({
+        state: s,
+        unit: u,
+        move: moveNow,
+        visionOf: (x) => visionOf(s, x),
+      });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
     }
@@ -1984,10 +2159,15 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
 }
 
 /** 算上扩展规则后的兵种造价 */
-export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): number {
+export function recruitCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): number {
   let cost = def.cost;
   for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost });
+    if (e.hooks.modifyCost) cost = e.hooks.modifyCost({ state: s, player, unitType: def, cost, source });
   }
   return Math.max(0, cost);
 }
@@ -1998,9 +2178,18 @@ export function recruitCost(s: GameState, player: PlayerId, def: UnitTypeDef): n
  * 金币那一段走老的 modifyCost（所有既有扩展都在改它），其它资源走
  * modifyResourceCost。两个钩子分开而不是合成一个"价格对象"：
  * 合并等于把所有既有扩展的签名改一遍，而它们关心的事情本来就只有金币。
+ *
+ * `source` 是"从哪儿造"（城 / 哪座产兵建筑）。不传 = 不分产兵点，
+ * 这正是老调用方的行为；传了之后扩展才能做"同一件兵，城里卖金币、
+ * 宗门里卖灵石"这种按产地的定价（修真包就是这么用的）。
  */
-export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef): ResourceCost {
-  const gold = recruitCost(s, player, def);
+export function recruitResCost(
+  s: GameState,
+  player: PlayerId,
+  def: UnitTypeDef,
+  source?: ProduceSource,
+): ResourceCost {
+  const gold = recruitCost(s, player, def, source);
   let extra: ResourceCost = { ...(def.costRes ?? {}) };
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyResourceCost) {
@@ -2011,6 +2200,7 @@ export function recruitResCost(s: GameState, player: PlayerId, def: UnitTypeDef)
         baseCost: def.cost,
         goldCost: gold,
         cost: extra,
+        source,
       });
     }
   }
@@ -2040,8 +2230,9 @@ export function recruitPriceOf(
   s: GameState,
   player: PlayerId,
   def: UnitTypeDef,
+  source?: ProduceSource,
 ): { price: ResourceCost; unlockFee: number; total: ResourceCost; gold: number } {
-  const price = recruitResCost(s, player, def);
+  const price = recruitResCost(s, player, def, source);
   const needUnlock = def.hero === true && !(s.unlocked?.[player] ?? []).includes(def.id);
   const unlockFee = needUnlock ? Math.max(0, def.unlockCost ?? 0) : 0;
   const total: ResourceCost = { ...price };
@@ -2205,9 +2396,10 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
   const budget = movePower(s, unit);
   const def = utype(s, unit.type);
   const hooks = hooksOfUnit(s, unit);
-  // 飞行：可以掠过水面（但停不下来），森林和丘陵也按 1 步算。
-  // 这条不是"更强的穿林"——穿林的收益是省一步，飞行的收益是**河防对它不成立**。
-  // 「掠空」（fly-over）是飞行的加强版：同样掠水，另外还能和地面单位同格。
+  // 掠空：可以掠过水面，森林和丘陵也按 1 步算。
+  // 这条不是"更强的穿林"——穿林的收益是省一步，掠空的收益是**河防对它不成立**。
+  // 「飞行」（fly-over）是掠空的加强版：同样掠水，另外还能和地面单位同格。
+  // 注意 id 和名字是反的（2026-11-08 对调过名字）：fly = 掠空，fly-over = 飞行。
   const flyer = crossesWater(def);
   const air = isAirborne(s, unit);
   // 穿行：可以穿过敌军，只是不能停在上面
@@ -2300,7 +2492,7 @@ export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
       // 敌军挡路：既不能进，也不能穿（除非你会穿行）。
       // **只有同一层会挡**：地面的兵挡地面，天上的挡天上。
       // 不同层可以共格，所以它们彼此既不挡路、也不占位——
-      // 这正是「掠空」那半句"可以和地面单位重叠"的全部实现。
+      // 这正是「飞行」那半句"可以和地面单位重叠"的全部实现。
       // 桥仍然是双向的：谁都能从桥上过。
       if (enemyBlocks(nx, ny)) continue;
 
@@ -2581,16 +2773,26 @@ export function computeDamage(
   //    石化翻倍也在这里生效：ownArmorOf 是"自己的甲"的唯一取值口
   const actualArmor = isCity ? city.armor : ownArmorOf(s, defender);
 
+  // 护甲百分比光环：面板（effectiveStats）里有这一段，这里也必须有——
+  // 少一处就是"面板写着 12 甲、实际按 9 甲挨打"。
+  const armorPctSrc = isCity ? null : allyArmorPctOf(s, defender);
+  const armorBaseNow =
+    actualArmor + defenderAura.armor + (armorPctSrc
+      ? Math.max(1, Math.round((actualArmor + defenderAura.armor) * armorPctSrc.value))
+      : 0);
+
   const ctx: HookCtx = {
     state: s,
     self: defender,
     foe: attacker,
     side: 'defender',
     atk: atkNow,
-    armor: actualArmor + defenderAura.armor + terrainBonus,
+    armor: armorBaseNow + terrainBonus,
     damage: atkNow,
     items: [],
     isCounter,
+    // 真元光环（赤炎珠）由这里注入：能力那一层不能自己查，见 HookCtx 的注释
+    trueDamagePct: allyTrueDamagePctOf(s, attacker)?.value ?? 0,
     terrainBonus,
     ignoreCover: false,
     distance: isCity ? 1 : strikeDistance(s, attacker, defender),
@@ -2622,7 +2824,7 @@ export function computeDamage(
       const def = STATUS_REGISTRY[key];
       if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
     }
-  // 圣旗（神圣骑士长的技能）：临时护甲，和面板走同一个字段
+  // 圣旗 / 护体丹：临时护甲，和面板走同一个字段
   if (!isCity && defender.buff?.armor) ctx.armor += defender.buff.armor;
   // 咒域光环
   ctx.armor -= curseAuraPenalty(s, defender);
@@ -2630,8 +2832,23 @@ export function computeDamage(
   // 小型扩展
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifyArmor) {
-      ctx.armor = e.hooks.modifyArmor({ state: s, attacker, defender, armor: ctx.armor, isCounter });
+      ctx.armor = e.hooks.modifyArmor({
+        state: s,
+        attacker,
+        defender,
+        armor: ctx.armor,
+        isCounter,
+        armorOf: (x) => (x.id === defender.id ? ctx.armor : effectiveStats(s, x).armor),
+        visionOf: (x) => visionOf(s, x),
+      });
     }
+  }
+
+  // 百分比护甲（护体丹）：和 effectiveStats 一样，必须等扩展钩子跑完再乘。
+  // 结算这条还得赶在**破甲之前**——破甲削的是"这个人本来有多少甲"，
+  // 药力加成也是那部分甲的一部分。
+  if (!isCity && defender.buff?.armorPct) {
+    ctx.armor += buffArmorPctGain(ctx.armor, defender.buff.armorPct);
   }
 
   // 小型扩展到破甲之前
@@ -2790,7 +3007,11 @@ export function previewAttack(
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
-  for (const v of splashVictims(s, attacker, defender)) toSplash += v.dmg;
+  for (const v of splashVictims(
+    s, attacker,
+    { x: defender.x, y: defender.y, n: footprintOf(s, defender) },
+    { excludeIds: [defender.id] },
+  )) toSplash += v.dmg;
 
   return { toDefender, toAttacker, counter, hits: 1, toSplash };
 }
@@ -2824,90 +3045,97 @@ export function splashRatioOf(u: Unit): number {
 }
 
 /**
+ * 这一下**实际覆盖到**的格索引：爆心 = 点中的那一格，按溅射半径铺开。
+ *
+ * 战况烈度的红格、出手闪烁、以及"谁挨溅射"必须用同一份格子表。
+ * 以前伤害用的是"目标矩形到受害者矩形"的距离、烈度用的是"爆心到格"，
+ * 2×2 的单位上两者会差一格——于是出现"红格明明盖住了他，血却一点没掉"。
+ * 现在只有一个几何来源：红格盖到哪几格，就按这几格找人。
+ *
+ * 半径 0（没有溅射）时返回的就是爆心那一格：烈度要记"挨了一下"，
+ * 但调用方得自己判"有没有溅射"，别把贴身砍的那一格当成溅射。
+ */
+function strikeCellsOf(
+  s: GameState,
+  attacker: Unit,
+  rect: { x: number; y: number; n: number },
+  hit?: { x?: number; y?: number },
+): number[] {
+  const center = pickHitCell(attacker, rect, hit);
+  const radius = splashRadiusOf(s, attacker);
+  const line = utype(s, attacker.type).splashLine === true;
+  return strikeCoverCells(s, attacker, center, radius, line);
+}
+
+/**
  * 溅射范围内的敌人：主目标周围的敌人各吃一份打折的伤害。
  *
  * 只打敌人，不打自己人——"炮火误伤"听起来很真实，但在回合制里
  * 它只会变成"我不敢开炮"，而不是"我要算清楚再开炮"。
  *
- * 两条关于**大型目标**的约定（2026-10-29）：
- *   1. 距离按"身体最近的边"算（`distBetweenUnits`）。2×2 的大单位紧贴爆心时，
- *      它的四格都在范围内，用锚点算会把它误判成"离得远"。
- *   2. 它只挨**一份**。四格是同一个目标，不是四个目标——名单里用 id 去重，
- *      所以"直接伤害 + 溅射"加起来也只结算一次。
- */
-/**
- * 这一格是否落在"从攻击者指向主目标"的那条直线上（含对角线）。
+ * 判据只有一条：**身体占到被覆盖的任意一格**就算中弹。和棋盘上那片红是
+ * 同一份格子表（`strikeCellsOf`），所以玩家看见红格盖住了谁，谁就掉血；
+ * 2×2 的单位只要有任意一角在范围内就吃一份，不会因为锚点在圈外被漏掉。
  *
- * 只用来判直线溅射：方向由 `a → d` 决定，`v` 必须同方向、共线。
- * 用锚点算而不是身体最近边——直线是瞄准线，不是覆盖面积，
- * 2×2 单位挡在线上时按它自己那一格算反而更符合直觉。
+ * `excludeIds` 是已经被结算过的人（普攻的主目标已经吃过全额，不能再吃一份）。
+ * 城市也能当爆心：传城市的矩形即可，城里站着的守军距离 0，会一起挨炸。
  */
-function onStrikeLine(a: Unit, d: Unit, vx: number, vy: number): boolean {
-  const dx = Math.sign(d.x - a.x);
-  const dy = Math.sign(d.y - a.y);
-  if (dx === 0 && dy === 0) return true;
-  const x = vx - a.x;
-  const y = vy - a.y;
-  if (dx === 0) return x === 0 && Math.sign(y) === dy;
-  if (dy === 0) return y === 0 && Math.sign(x) === dx;
-  return x * dy === y * dx && Math.sign(x) === dx && Math.sign(y) === dy;
-}
-
 /**
- * 这一下溅射**波及**的所有格索引（含空格、含免疫格、含多格目标全部格子）。
- * 和 splashVictims 的分工：那个回答"谁挨打"，这个回答"地上哪几片红了"。
- * 两者判据一致（多格单位按到矩形最近距离算），否则视觉和数值会各说各话。
+ * 溅射**波及**之后的钩子：只问开火那一方的 `onSplash`，只传被波及的人。
+ *
+ * 主目标不经过这里——它吃全额伤害、走 `onHit`。两条钩子分开是有意的：
+ * 现有三十多个溅射兵种的毒/火都只对主目标生效，把范围并到 onHit 会一次
+ * 改掉它们的平衡；而"冻住一片"这种设计又确实需要"溅射也算命中"。
  */
-export function splashTilesOf(s: GameState, attacker: Unit, defender: Unit): number[] {
-  const radius = splashRadiusOf(s, attacker);
-  if (radius <= 0) return [];
-  const line = utype(s, attacker.type).splashLine === true;
-  const n = footprintOf(s, defender);
-  const out: number[] = [];
-  for (let ty = defender.y - radius; ty <= defender.y + n - 1 + radius; ty++) {
-    for (let tx = defender.x - radius; tx <= defender.x + n - 1 + radius; tx++) {
-      if (!inBounds(s, tx, ty)) continue;
-      const cx = Math.min(Math.max(tx, defender.x), defender.x + n - 1);
-      const cy = Math.min(Math.max(ty, defender.y), defender.y + n - 1);
-      const d = Math.abs(tx - cx) + Math.abs(ty - cy);
-      if (d > radius) continue;
-      if (line && !onStrikeLine(attacker, defender, tx, ty)) continue;
-      out.push(idx(s, tx, ty));
-    }
+function runSplashHooks(s: GameState, attacker: Unit, victim: Unit, damage: number): void {
+  for (const h of hooksOfUnit(s, attacker)) {
+    h.onSplash?.({ state: s, attacker, victim, damage, api: abilityApi });
   }
-  return out;
 }
 
 function splashVictims(
   s: GameState,
   attacker: Unit,
-  defender: Unit,
-  radiusOverride?: number,
+  rect: { x: number; y: number; n: number },
+  opts: { hit?: { x?: number; y?: number }; excludeIds?: readonly string[] } = {},
 ): Array<{ unit: Unit; dmg: number }> {
-  const radius = splashRadiusOf(s, attacker, radiusOverride);
-  if (radius <= 0) return [];
-  // 直线溅射（剑气、光束）：只扫那条线上的，不扫"周围一圈"
-  const line = utype(s, attacker.type).splashLine === true;
+  if (splashRadiusOf(s, attacker) <= 0) return [];
 
+  const covered = new Set(strikeCellsOf(s, attacker, rect, opts.hit));
+  if (covered.size === 0) return [];
+
+  const skip = new Set(opts.excludeIds ?? []);
   const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
-  const seen = new Set<string>([defender.id]);
   for (const v of s.units) {
     if (v.owner === attacker.owner) continue;
-    // 已经结算过的（主目标，或者同一格被扫到两次）不再收
-    if (seen.has(v.id)) continue;
-    if (distBetweenUnits(s, defender, v) > radius) continue;
-    if (line && !onStrikeLine(attacker, defender, v.x, v.y)) continue;
+    if (skip.has(v.id)) continue;
+    // 占到任意一格就算被覆盖：多格单位只挨一份（名单按单位去重）
+    if (!tilesOfUnit(s, v).some((t) => covered.has(idx(s, t.x, t.y)))) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlagOn(s, v, 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
     if (v.buff?.splashImmune) continue;
     const dmg = Math.floor(computeDamage(s, attacker, v, false, undefined, true) * ratio);
     if (dmg <= 0) continue;
-    seen.add(v.id);
     out.push({ unit: v, dmg });
   }
   return out;
+}
+
+/**
+ * 这一下溅射**波及**的所有格索引（含空格、含免疫格）。
+ *
+ * 和 splashVictims 的分工：那个回答"谁挨打"，这个回答"地上哪几片红了"。
+ * 但两边的格子表必须是同一份（都走 `strikeCellsOf`）——否则就会出现
+ * "红格盖住了他、血没掉"这种各说各话。这里也就是棋盘上那片红的来源。
+ */
+export function splashTilesOf(s: GameState, attacker: Unit, defender: Unit): number[] {
+  return strikeCellsOf(s, attacker, {
+    x: defender.x,
+    y: defender.y,
+    n: footprintOf(s, defender),
+  });
 }
 
 /**
@@ -3107,6 +3335,24 @@ export function unitIncomeAt(s: GameState, u: Unit, x: number, y: number): numbe
   u.x = ox;
   u.y = oy;
   return income;
+}
+
+/**
+ * 经济单位**如果**站在 (x,y)，每回合能收**哪些资源**。
+ *
+ * `unitIncomeAt` 只取金币，多资源扩展的单位（灵田、灵矿、粮仓……）用它算，
+ * 每一个落点都会得出同一个数字，移动预览等于白画。和上面那个一样只临时借坐标，
+ * 算完立刻还回去，整个过程同步、无副作用。
+ */
+export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): ResourceCost {
+  const ox = u.x;
+  const oy = u.y;
+  u.x = x;
+  u.y = y;
+  const yields = unitYield(s, u);
+  u.x = ox;
+  u.y = oy;
+  return yields;
 }
 
 /**
@@ -3318,26 +3564,24 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
 
       // 塔/炮台的自动开火也算一次攻势——但它在"接手方回合开始"那一刻结算，
       // 所以要显式落到"上一个回合"的账上（s.turn - 1），否则接手方看不到。
-      const prevTurn = s.turn - 1;
-      const victimSide = other(owner);
-      const tn = footprintOf(s, target);
-      const center = {
-        x: Math.min(Math.max(b.x, target.x), target.x + tn - 1),
-        y: Math.min(Math.max(b.y, target.y), target.y + tn - 1),
-      };
-      for (const i of strikeCoverCells(
-        s, b, center, splashRadiusOf(s, b), utype(s, b.type).splashLine === true,
-      )) {
-        const { x, y } = xyOf(s, i);
-        noteHeatAt(s, victimSide, prevTurn, x, y);
-      }
+      noteStrikeHeat(
+        s, b,
+        { x: target.x, y: target.y, n: footprintOf(s, target) },
+        undefined,
+        { owner: other(owner), turn: s.turn - 1 },
+      );
 
       // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
-      const splashed = splashVictims(s, b, target);
+      const splashed = splashVictims(
+        s, b,
+        { x: target.x, y: target.y, n: footprintOf(s, target) },
+        { excludeIds: [target.id] },
+      );
       for (const v of splashed) {
         hurtUnit(s, v.unit, v.dmg, { source: b });
         splashNames.add(utype(s, v.unit.type).name);
         noteVictim(v.unit, v.dmg);
+        if (v.unit.hp > 0) runSplashHooks(s, b, v.unit, v.dmg);
       }
 
       if (target.hp <= 0) {
@@ -3647,6 +3891,8 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
         return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
+      case 'UNIT_ACTION':
+        return doUnitAction(next, action.unitId, action.actionId);
       case 'PLACE_EGG':
         return doPlaceEgg(next, action.x, action.y);
       case 'SURRENDER':
@@ -3812,7 +4058,8 @@ function pickHitCell(
 /**
  * 一次攻击的战况烈度记录：几何覆盖的所有格子各记一次。
  *
- * 攻击单位 / 攻城 / 塔自动开火共用——"打了哪儿"必须同一套几何。
+ * 攻击单位 / 攻城 / 塔自动开火共用——"打了哪儿"必须同一套几何，而且要和
+ * `splashVictims` 用**同一份格表**：玩家看见红格盖住了谁，谁就该掉血。
  * 以前三处各写各的（doAttack 用了旧签名的 noteHeat、doSiege 压根没写），
  * 症状就是"打到城的这一面，整个城都红"和"溅射覆盖到的城外空地不红"。
  */
@@ -3821,13 +4068,16 @@ function noteStrikeHeat(
   attacker: Unit,
   rect: { x: number; y: number; n: number },
   hit?: { x?: number; y?: number },
+  /**
+   * 记到谁的账上、哪一回合。塔/炮台的自动开火是在**接手方回合开始**时结算的，
+   * 要落到 `s.turn - 1` 才看得见，所以这里留个口子；不传就是"当前行动方打到对手"。
+   */
+  book?: { owner: PlayerId; turn: number },
 ): void {
-  const center = pickHitCell(attacker, rect, hit);
-  const radius = splashRadiusOf(s, attacker);
-  const line = utype(s, attacker.type).splashLine === true;
-  for (const i of strikeCoverCells(s, attacker, center, radius, line)) {
+  for (const i of strikeCellsOf(s, attacker, rect, hit)) {
     const { x, y } = xyOf(s, i);
-    noteHeatCell(s, x, y);
+    if (book) noteHeatAt(s, book.owner, book.turn, x, y);
+    else noteHeatCell(s, x, y);
   }
 }
 
@@ -3940,15 +4190,18 @@ function doAttack(
     { x: hitX, y: hitY },
   );
 
+  // 溅射和上面那片红用同一份格表：红格盖住了谁，谁就掉一份。
+  // 主目标已经吃过全额，按 id 排掉——他脚下那几格当然也在覆盖范围里。
   const splashed = splashVictims(
-    s,
-    attacker,
-    defender,
-    wpn?.splash,
+    s, attacker,
+    { x: defender.x, y: defender.y, n: footprintOf(s, defender) },
+    { hit: { x: hitX, y: hitY }, excludeIds: [defender.id] },
   );
   for (const v of splashed) {
     // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
     hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    // 波及也算"命中"：寒水镜冻一片、赤炎珠熔一片都靠这里
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
   }
 
   const noCounter = hasFlagOn(s, attacker, 'noCounter');
@@ -4228,6 +4481,26 @@ function doSiege(
   const dmg = damageToCity(attacker, city, s);
   city.hp -= dmg;
 
+  /*
+   * 溅射：炮火砸在城墙上，附近挨得近的敌兵一样吃一份。
+   *
+   * 以前这里只扣城的耐久，于是玩家看到的是"红格把城外那圈盖住了，
+   * 旁边的人一点血没掉"——红格和伤害各算各的。现在两边共用
+   * `strikeCellsOf`：爆心就是点中的那一格，红格盖到哪几格就按哪几格找人。
+   *
+   * 城里站着的守军距离是 0，一起挨；打谁不打谁全交给 `splashVictims`，
+   * 攻城这条路不再自己判一遍。
+   */
+  const splashed = splashVictims(
+    s, attacker,
+    { x: city.x, y: city.y, n: city.size },
+    { hit: { x: hitX, y: hitY } },
+  );
+  for (const v of splashed) {
+    hurtUnit(s, v.unit, v.dmg, { source: attacker });
+    if (v.unit.hp > 0) runSplashHooks(s, attacker, v.unit, v.dmg);
+  }
+
   // 战况烈度：攻城按几何覆盖记，和攻击单位走同一套
   noteStrikeHeat(s, attacker, { x: city.x, y: city.y, n: city.size }, { x: hitX, y: hitY });
 
@@ -4246,13 +4519,46 @@ function doSiege(
     }
   }
 
+  const splashText =
+    splashed.length > 0
+      ? `，溅射 ${splashed.map((v) => utype(s, v.unit.type).name).join('、')}`
+      : '';
   pushLog(
     s,
     attacker.owner,
     dmg > 0
-      ? `${atName} 攻城，城市损失 ${dmg} 点耐久${loot > 0 ? `，顺手偷走 ${loot} 金` : ''}`
-      : `${atName} 攻城，但打不动这座城的城墙`,
+      ? `${atName} 攻城，城市损失 ${dmg} 点耐久${loot > 0 ? `，顺手偷走 ${loot} 金` : ''}${splashText}`
+      : `${atName} 攻城，但打不动这座城的城墙${splashText}`,
   );
+
+  /*
+   * 被波及的一方也要有一条：不然他那边看到的是"城里挨了一下，我营长凭空少了 30 血"。
+   * 和 doAttack 同一个口径——只写"被谁打的、掉了多少"，不写袭击者站哪；
+   * 隐匿中的袭击者连名字都不给。
+   */
+  if (splashed.length > 0) {
+    const byOwner = new Map<PlayerId, string[]>();
+    for (const v of splashed) {
+      const list = byOwner.get(v.unit.owner) ?? [];
+      list.push(utype(s, v.unit.type).name);
+      byOwner.set(v.unit.owner, list);
+    }
+    for (const [owner, names] of byOwner) {
+      const unseen = isHiddenFrom(s, attacker, owner);
+      pushLog(s, owner, `${unseen ? '视野外的一击' : atName} 攻城，炮火波及 ${names.join('、')}`);
+    }
+  }
+
+  // 溅射打死的要走完整善后：删人、战报、沉船、击杀钩子。
+  // 少这一段就会留下"血量 0 还站在场上"的兵——收口到 hurtUnit 时踩过这个坑。
+  for (const v of splashed) {
+    if (v.unit.hp > 0) continue;
+    if (!s.units.some((u) => u.id === v.unit.id)) continue;
+    s.units = s.units.filter((u) => u.id !== v.unit.id);
+    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
+    drownCargo(s, v.unit);
+    fireKilled(s, v.unit, attacker);
+  }
 
   attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
   attacker.moved = true;
@@ -4447,6 +4753,21 @@ export function buildSiteError(
   const n = footprintOf(s, def.id);
   const overWater = !!def.bridges;
 
+  /*
+   * 盖房子也要看时代：二代的工匠修不了四代的造船厂。
+   *
+   * 2026-11-08 删掉"军工供货"之前，这条是被顺手挡住的——早修起来也造不出东西，
+   * 于是"落成即废"那一关把它拒了。现在产兵建筑按**自己的时代**产出，
+   * 二代修出来的造船厂直接能下四代的船，一步跨两个时代。所以必须显式拦。
+   *
+   * 判据用**建造者自己的时代**而不是城市的时代：这样整条链只有"时代"一个概念
+   * （营按自己的时代出兵，工兵按自己的时代盖房），不重新引入对后方城市的依赖。
+   */
+  const builderDef = utype(s, builder.type);
+  if (def.era > builderDef.era) {
+    return `${def.name}要「${eraDef(def.era).name}」的工匠才修得起来`;
+  }
+
   // 占地逐格过一遍：界内、空着、地形合规。
   // 2×2 的建筑只要有一格落空，整块就不算数——部分落在水里再补半间房，
   // 是没法解释给玩家听的。
@@ -4504,22 +4825,8 @@ export function buildSiteError(
   // 以前就是各写一份：界面上的建造高亮用 `adjacentToWater`（它把桥面也算水面），
   // 这里只认 `water`，于是"在桥头扎营"会被高亮成可建、点下去才回一句"必须扎在水边"。
   const adjacent = adjacentRequirementOf(def);
-  if (adjacent) {
-    const hit = (tx: number, ty: number): boolean => {
-      const tile = tileAt(s, tx, ty);
-      if (tile && adjacent.terrain.includes(tile.terrain)) return true;
-      const here = unitAt(s, tx, ty);
-      if (here && adjacent.unit.includes(here.type)) return true;
-      return DIRS.some(([dx, dy]) => {
-        const nb = tileAt(s, tx + dx, ty + dy);
-        if (nb && adjacent.terrain.includes(nb.terrain)) return true;
-        const nu = unitAt(s, tx + dx, ty + dy);
-        return !!nu && adjacent.unit.includes(nu.type);
-      });
-    };
-    if (!tilesOfFootprint(x, y, n, hit)) {
-      return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
-    }
+  if (adjacent && !adjacentSatisfied(s, x, y, n, adjacent, builder.owner)) {
+    return `${def.name}${adjacentRequirementText(def, (id) => s.unitTypes[id]?.name ?? id)}`;
   }
 
   // 别把自己堵死：城市格的出兵位是产线的命门。
@@ -4548,8 +4855,15 @@ export function buildSiteError(
   // 距离：绝大多数建筑按 CONFIG.buildRange 算；少数"本来就要盖在远处"的
   // （海上钻井平台）在兵种数据里自己写一个更大的数——放宽的只是距离，
   // 选址条件照旧一条不少。
+  //
+  // 2×2 的建筑按**整块地到建造者的最近一格**算，不是按左上角锚点：
+  // 锚点算法下，贴着它右下角站也会被拒（"离得太远"），玩家没法从画面推出规则。
+  // n = 1 时这个式子和 `distance(builder, {x,y})` 完全一样。
   const reach = def.buildRange ?? CONFIG.buildRange;
-  if (distance(builder, { x, y }) > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
+  const cx = Math.min(Math.max(builder.x, x), x + n - 1);
+  const cy = Math.min(Math.max(builder.y, y), y + n - 1);
+  const gap = Math.abs(builder.x - cx) + Math.abs(builder.y - cy);
+  if (gap > reach && !(overWater && bridgeChainOk(builder, x, y, s))) {
     return overWater
       ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
       : `建造者离得太远（最多 ${reach} 格）`;
@@ -4563,20 +4877,6 @@ export function buildSiteError(
  *
  * 选址里"临水""是不是全是陆地"这类条件说的都是整块地，不是锚点那一格。
  */
-function tilesOfFootprint(
-  x: number,
-  y: number,
-  n: number,
-  test: (tx: number, ty: number) => boolean,
-): boolean {
-  for (let dy = 0; dy < n; dy++) {
-    for (let dx = 0; dx < n; dx++) {
-      if (test(x + dx, y + dy)) return true;
-    }
-  }
-  return false;
-}
-
 /** 这一格的坐标写法，日志里到处用 */
 function cellName(x: number, y: number): string {
   return `${String.fromCharCode(65 + x)}${y + 1}`;
@@ -4613,16 +4913,15 @@ function doBuild(
   /*
    * 落成即废的产兵点不许修。
    *
-   * 产兵点的时代**落成那一刻就钉死**了（见 doRecruit 的 camp 分支、下面建造结算里
-   * 那句 `era: supplyEraAt(...)`），之后不会跟着城市换代。带白名单的产兵点
-   * （船坞三代 / 造船厂五代 / 海军船台七代）如果提前修，白名单里的船一条都出不来——
+   * 产兵建筑按**自己的档位**出兵（见 doRecruit 的 camp 分支），所以"建起来之后
+   * 有没有东西可造"完全由它的白名单和自己的时代决定，与后方城市无关。
+   * 带白名单的产兵点如果白名单里全是更高代的东西，修好也是一块石头——
    * 玩家花了 460 金买到一块石头，而界面上不会告诉他这一点。
    *
    * 判据放在这里而不是各个包里：包只管数据，规则管"这笔钱花得对不对"。
    * 军营不受影响——它的白名单是空的，什么时代落成都能出那一代的兵。
    */
-  const supplyEra = supplyEraAt(s, s.current, { x, y });
-  const usable = produceUsableCount(def, s.unitTypes, supplyEra);
+  const usable = produceUsableCount(def, s.unitTypes, def.era);
   if (usable === 0) {
     const need = (produceOf(def)?.units ?? [])
       .map((id) => s.unitTypes[id])
@@ -4699,10 +4998,6 @@ function doBuild(
     kills: 0,
     moved: true,
     acted: true,
-    // 军营动工那一刻就把时代钉下来：它靠后方军工供货，供货方是谁当场就定了。
-    // 等它盖完之后再取一次，会让"同一座营，施工期间后方刚好升了时代"
-    // 这种巧合决定它的档次——玩家看不见这种因果。
-    ...(isProducer(def) ? { era: supplyEraAt(s, s.current, { x, y }) } : {}),
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
   });
 
@@ -4783,17 +5078,6 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
 }
 
 /**
- * 产兵。
- *
- * 产兵点有两种：城市，或者军营（`barracks`）。
- * 军营自己没有科技线：它落成的时候取**当时离得最近的己方城市的时代**，
- * 把这一个数字钉在自己身上（`Unit.era`），之后一直按它结算。
- *
- * 以前是每次产兵都现算"最近的己方城市"，于是后方升了一个时代，前线那座
- * 早就扎好的旧营隔空跟着换代——一座石板搭的营寨当场能出火枪手。现在
- * 营的时代是个实体属性：想要新时代的兵，就在新地方再扎一座营。
- */
-/**
  * 产兵点能往哪些格子出兵。
  *
  * 城市和军营各有一套扫描（城要看四周的水面，营要沿自家所有格子往外一圈），
@@ -4852,6 +5136,86 @@ export function recruitSpawnCells(
   return cityTiles(city).filter((t) => canStandAt(s, t.x, t.y, unitTypeId));
 }
 
+/**
+ * 这个产兵点能不能造这个兵——**唯一**的判据。
+ *
+ * 以前它散在三处：`doRecruit` 问白名单、面板问白名单、AI 一次都不问。
+ * 于是"AI 在船坞里点了一条民兵"这种动作能被提出来，执行时被规则层拒掉，
+ * 一整回合就白扔了。加到第三条判据（产地条件）之后，三处各写一遍必然跑偏，
+ * 所以收成一条链，谁都只问它：
+ *
+ *   1. 建筑要用建造单位去盖，召唤物只认召唤者；
+ *   2. `campOnly` —— 城市造不了，只能出自产兵建筑；
+ *   3. 产兵建筑的白名单（`produce.units`）；
+ *   4. 时代：产兵建筑按**自己**的时代，城市按自己的时代；
+ *   5. 选卡名单（`canUseType`）；
+ *   6. 产地条件：`produceNear`（贴着指定地形/单位）与扩展钩子 `produceBlocked`。
+ *
+ * 出兵格不在这里判：那是"站在哪儿"的问题（见 recruitSpawnCells），
+ * 和"能不能造"分开，否则一座四邻全堵的营会让整条产线显示成"不能造"。
+ */
+export function produceAt(
+  s: GameState,
+  source: ProduceSource,
+  target: UnitTypeDef,
+): { ok: true } | { ok: false; reason: string } {
+  if (target.category === 'building') {
+    return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
+  }
+  if (target.summonedOnly) {
+    return { ok: false, reason: `${target.name} 只能被召唤出来` };
+  }
+
+  const owner = source.kind === 'city' ? source.city.owner : source.camp.owner;
+  const era = source.kind === 'city' ? source.city.era : utype(s, source.camp.type).era;
+
+  if (source.kind === 'city') {
+    // 城市是不设限的产兵点，所以"只能由产兵建筑造"的东西要在这里显式挡掉
+    if (target.campOnly) {
+      return { ok: false, reason: `${target.name} 只能由产兵建筑造，城市产线不供` };
+    }
+  } else {
+    const campDef = utype(s, source.camp.type);
+    const allowed = canProduce(campDef, target);
+    if (!allowed.ok) return allowed;
+
+    // 产地条件：贴着某些地形/单位才造得出来（炼器炉挨森林出木器那一类）。
+    //
+    // 支持**数组**（任一满足）：青木剑要的"相邻森林 或 2 块灵田"就是两条并列。
+    // 单条 spec 里的 `count` 是"至少几个"，所以第二块灵田那条写 count: 2。
+    const near = target.produceNear;
+    if (near) {
+      const specs = Array.isArray(near) ? near : [near];
+      const n = footprintOf(s, source.camp);
+      const ok = specs.some((sp) =>
+        adjacentSatisfied(s, source.camp.x, source.camp.y, n, sp, owner),
+      );
+      if (!ok) {
+        const need = specs
+          .map((sp) => nearSpecText(sp, (id) => s.unitTypes[id]?.name ?? id))
+          .join('，或 ');
+        return { ok: false, reason: `${target.name}要在${need}旁边才造得出来` };
+      }
+    }
+  }
+
+  if (!eraWindowOk(s, target, era)) {
+    return { ok: false, reason: `${target.name} 需要「${eraDef(target.era).name}」时代` };
+  }
+  if (!canUseType(s, owner, target.id)) {
+    return { ok: false, reason: `${target.name} 不在本局选用的名单里` };
+  }
+
+  // 扩展的逃生口：境界、资源、周围要站某个人……数据说不清的都走这里。
+  // 返回字符串 = 不能造，字符串本身是给玩家看的理由。
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.produceBlocked?.({ state: s, source, target });
+    if (reason) return { ok: false, reason };
+  }
+
+  return { ok: true };
+}
+
 function doRecruit(
   s: GameState,
   cityId: string | undefined,
@@ -4861,11 +5225,7 @@ function doRecruit(
 ): ActionResult {
   const def = s.unitTypes[unitTypeId];
   if (!def) return { ok: false, reason: '本局没有这个兵种' };
-  if (def.category === 'building') {
-    return { ok: false, reason: '建筑要在野外选址修建，不能从产兵点生产' };
-  }
-  // 召唤物只认召唤者：让它们进产线会变成"花 45 金买一个死灵法师的免费赠品"
-  if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
+  // 建筑 / 召唤物 / 名单 / 时代 / 产地这些统一走下面的 produceAt，这里只补它管不到的。
   // 装甲素体：造它之前先看供电余量。
   //
   // 为什么卡在"造"而不是"装"：只在装配时校验的话，"先囤十台光素体、等电站盖好
@@ -4880,52 +5240,53 @@ function doRecruit(
       };
     }
   }
-  // 选卡模式：不在本局名单里的东西造不出来。判据只有 core/draft.canUseType 一处，
-  // 界面上的产兵表和 AI 的候选列表都问同一句，不会出现"面板能点、点了被拒"。
-  if (!canUseType(s, s.current, unitTypeId)) {
-    return { ok: false, reason: `${def.name} 不在你本局的选用名单里` };
-  }
   // 英雄：同一方场上只能有一个。这条在这里拦，是因为界面和 AI 两边的
   // 候选人列表都只是"能造什么"，管不了"已经有一个了"。
   // 「一个」也包括还没孵出来的那只（不死鸟的蛋），见 heroBlocked。
+  // 其余"能不能造"（建筑/召唤物/campOnly/白名单/时代/选卡/产地）统一走 produceAt。
   const blocked = heroBlocked(s, s.current, def);
   if (blocked) return { ok: false, reason: blocked };
 
-  /** 这个产兵点用哪个时代、叫什么、能往哪些格子出兵 */
-  let era = 0;
+  /** 这个产兵点叫什么、能往哪些格子出兵 */
+  let label = '';
   /** 产兵点的造价倍率（produce.costScale）。城市永远是 1 */
   let costScale = 1;
-  let label = '';
   let slots: Array<{ x: number; y: number }> = [];
+  /**
+   * 这次"从哪儿造"。往下传给 recruitPriceOf，扩展才能按产地定不同的价
+   * （修真包的宗门：同一件修士，城里卖金币，宗门里卖灵石）。
+   */
+  let priceSource: ProduceSource | undefined;
 
   if (campId) {
     const camp = unitById(s, campId);
     if (!camp) return { ok: false, reason: '产兵点不存在' };
     const campDef = utype(s, camp.type);
-    if (!isProducer(campDef)) return { ok: false, reason: '这不是军营' };
+    if (!isProducer(campDef)) return { ok: false, reason: '这不是产兵建筑' };
     if (underConstruction(camp)) return { ok: false, reason: `${campDef.name} 还在施工，营门都没立起来` };
-    if (camp.owner !== s.current) return { ok: false, reason: '这不是你的军营' };
+    if (camp.owner !== s.current) return { ok: false, reason: '这不是你的产兵建筑' };
 
-    // 三件事全读产兵的兵种数据：这个营认不认这个兵、多久能出一个、造价打几折
-    const allowed = canProduce(campDef, def);
-    if (!allowed.ok) return { ok: false, reason: allowed.reason };
+    // 白名单 + 产地条件 + 时代，一处判完（和面板、AI 是同一个函数）
+    const allowed = produceAt(s, { kind: 'camp', camp }, def);
+    if (!allowed.ok) return allowed;
     const wait = produceCooldownLeft(s, camp, campDef);
     if (wait > 0) {
       return { ok: false, reason: `${campDef.name}刚产出一批，还要 ${wait} 回合才能再产` };
     }
     costScale = produceCostScale(campDef);
 
-    const own = citiesOf(s, s.current);
-    if (own.length === 0) return { ok: false, reason: '没有城市，军营补给就断了' };
-    era = camp.era ?? supplyEraAt(s, camp.owner, camp);
+    // 产兵建筑按**自己的时代**出兵：想要新时代的兵，就在新地方再扎一座营，
+    // 或者直接把旧营拆了重盖。它不再跟随后方城市的时代（那是 2026-10-27 的
+    // "军工供货"设计，2026-11-08 删掉了——同一座营的产出能力不该被十几格外
+    // 某座城是否升级决定，玩家看不见这条因果）。
     label = campDef.name;
+    priceSource = { kind: 'camp', camp };
 
     slots = recruitSpawnCells(s, undefined, campId, unitTypeId);
   } else {
     const city = cityId ? cityById(s, cityId) : undefined;
     if (!city) return { ok: false, reason: '城市不存在' };
     if (city.owner !== s.current) return { ok: false, reason: '只能在自己的城市产兵' };
-    era = city.era;
     label = cityName(city);
     if (city.ruined) {
       return { ok: false, reason: '这座城市已成废墟，先派兵入驻接管' };
@@ -4934,21 +5295,15 @@ function doRecruit(
       return { ok: false, reason: `${label}刚被打下来，本回合还没恢复生产` };
     }
 
+    const allowed = produceAt(s, { kind: 'city', city }, def);
+    if (!allowed.ok) return allowed;
+
     slots = recruitSpawnCells(s, cityId, undefined, unitTypeId);
+    priceSource = { kind: 'city', city };
     // 水军没有下水的位置时要说清原因：城不临水，还是水面已经站满了船
     if (def.domain === 'water' && slots.length === 0) {
       return { ok: false, reason: '这座城市不临水（或水面已被占），造不了船' };
     }
-  }
-
-  // 时代只剩一条：**不能造还没解锁的兵**。
-  //
-  // 以前这里是三段——"没到那个时代"、"城市不够新（重复写了一遍）"、
-  // "过时了，产线不带它"。第三段随着下限的取消一起没了：城市升到第五代
-  // 仍然能造民兵，因为"面板里堆满老古董"是界面问题，已经由筛选解决
-  // （扩展包 / 时代 / 搜索），不该由规则层拿"升级＝选项变少"来买单。
-  if (!eraWindowOk(s, def, era)) {
-    return { ok: false, reason: `${def.name} 需要「${eraDef(def.era).name}」时代` };
   }
 
   const player = s.players[s.current];
@@ -4959,7 +5314,7 @@ function doRecruit(
   //
   // 这笔钱和兵价一起从 recruitPriceOf 出来：界面上的估价、AI 的采购判断
   // 用的都是同一份口径，否则会出现"面板说够、执行时不够"的空转。
-  const quote = recruitPriceOf(s, s.current, def);
+  const quote = recruitPriceOf(s, s.current, def, priceSource);
   // 造价倍率只作用在兵价上，不解锁费（英雄解锁是全局一次的事，不该被营打折）
   const payCost = scaleCost(quote.total, costScale);
   const unlockFee = quote.unlockFee;
@@ -5334,6 +5689,20 @@ export function heroSkillsOf(
     }
 
     let notReadyReason = k.notReadyReason; // 默认用静态配置
+
+    /*
+     * 这一回合已经放过技能、而这个技能不能连发 —— 现在按下去只会被
+     * `doHeroSkill` 拒掉，按钮就不该还亮着。
+     *
+     * 判据必须和那边那句 `if (!skill.multiCast && u.skillTurn === s.turn)` 完全一致：
+     * `multiCast: false` 和"根本不写这个字段"是同一件事（都是 falsy）。
+     * 以前这里漏了这一段，于是不能连发的技能放过一次之后仍然显示"就绪"，
+     * 点下去却报"这一回合已经放过技能"——按钮和规则各说各话。
+     */
+    if (ready && !k.multiCast && u.skillTurn === s.turn) {
+      ready = false;
+      notReadyReason = '这一回合已经放过技能';
+    }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
     if (ready && SKILL_READY_CHECKS[k.id]) {
@@ -5750,6 +6119,27 @@ SKILL_EFFECTS['fuse'] = (c) => {
   pushLog(c.state, c.self.owner, `${kin.length} 只大史莱姆聚合，${bossDef.name}带着 ${boss.hp} 点生命归位`);
 };
 
+/**
+ * 扩展自定义的单位操作（`UNIT_ACTION`）。
+ *
+ * 核心只做三件事：认人、确认是谁的回合、把 `actionId` 原样交给扩展。
+ * "能不能学、学了扣什么、写不写战报"全在扩展的 `onUnitAction` 里——
+ * 规则层对它一无所知，所以加一类新操作（遗忘法术、宗门传功）不用回来改这里。
+ *
+ * 没有扩展声明 `unitActions` 时直接拒绝：否则一个手搓的回放文件能往状态里
+ * 塞任意 actionId，虽然什么都不会发生，但也会让"这一步为什么无效"无从查起。
+ */
+function doUnitAction(s: GameState, unitId: string, actionId: string): ActionResult {
+  const u = s.units.find((x) => x.id === unitId);
+  if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
+  if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
+  const impl = activeExpansions(s).find((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+  if (!impl) return { ok: false, reason: '当前规则里没有这种操作' };
+  const reason = impl.hooks.onUnitAction!({ state: s, unit: u, actionId });
+  if (reason) return { ok: false, reason };
+  return { ok: true, state: s };
+}
+
 function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
@@ -5813,7 +6203,9 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
 
   sweepDead(s);
 
-  return { ok: true, state: s };
+  // 走到这里才算"真的放出去了"：灵石不足之类的拒绝在上面就返回了，
+  // 不会把撤回封死。界面拿这个字段清空撤回栈。
+  return { ok: true, state: s, irreversible: skill.irreversible === true };
 }
 
 /**

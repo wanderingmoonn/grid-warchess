@@ -1,7 +1,7 @@
 // 境界、经验、寿元、生命
 
 import type { GameState, Unit } from '../types.ts';
-import { ANOMALY_ABILITY_ID, SPIRIT_ASCENSION_RANK, isSwordCultivatorType } from './identity.ts';
+import { ANOMALY_ABILITY_ID, SPIRIT_ASCENSION_RANK, isSwordCultivatorType, isBloodCultivatorType } from './identity.ts';
 
 // --- 升级事件监听机制 ---
 type RankUpListener = (u: Unit, s: GameState) => void;
@@ -43,6 +43,14 @@ export const LIFESPAN_PER_RANK = 9;
 
 /** 打坐：每回合的保底经验（实际是 境界 + 这个数，剑修再打对折） */
 export const EXP_GROWTH_FLAT = 2;
+
+/**
+ * 魔修每回合打坐只有这么多——固定 1 点，不随境界长。
+ *
+ * 它不是"练"出来的：全部修为靠「血祭」炼化（见 skills/blood-rite.ts）。
+ * 这条是那个设计的地基：不给打坐，血祭才有存在的理由。
+ */
+export const EXP_GROWTH_BLOOD = 1;
 
 /**
  * 高境界的经验墙：从这一级起，突破门槛额外乘 HIGH_RANK_EXP_MUL。
@@ -182,6 +190,8 @@ export function getExpGrowth(u: Unit): number {
   if (isSwordCultivatorType(u.type)) {
     return Math.max(1, Math.floor((getRank(u) + EXP_GROWTH_FLAT) / 2));
   }
+  // 魔修不靠打坐：固定 1 点，涨修为得去血祭（那条路绕过了击杀上限）
+  if (isBloodCultivatorType(u.type)) return EXP_GROWTH_BLOOD;
   return getRank(u) + EXP_GROWTH_FLAT;
 }
 

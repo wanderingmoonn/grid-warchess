@@ -68,19 +68,19 @@ export function hasAbilityIn(def: UnitTypeDef | undefined, id: string, extra?: s
 /**
  * 把能力 id 列表翻成人话，给面板用。
  *
- * 飞行和掠空已经从"能力"升格成类型字段（`flight` / `layer`），
+ * 「飞行 / 掠空」已经从"能力"升格成类型字段（`flight` / `layer`），
  * 但它们仍然是玩家看得见的标签——所以字段为真时在这里补回来。
+ *
+ * 2026-11-08 两个名字对调过（见 abilities.ts 顶部）：**空中层 = 飞行**，
+ * **只掠水 = 掠空**。所以下面补的标签是"飞行"，不是"掠空"。
  * 判断里那两个 id 是**旧数据的兼容写法**，不是实现分支：
  * 老存档、老角色卡、编辑器里的老勾选框都还认它们。
  */
 export function abilityNames(def: UnitTypeDef): string[] {
   const ids = def.abilities ?? [];
   const names = ids.map((id) => abilityById(id)?.name ?? id);
-  // 空中层统一印「飞行」。「掠空」已经整个删掉（2026-11-07）——它和飞行在规则上
-  // 是同一件事，只在名字上有区别，而那个区别只会让人误会。
-  if ((def.layer === 'air' || def.flight === true) && !ids.includes('fly')) {
-    names.unshift('飞行');
-  }
+  if (def.layer === 'air' && !ids.includes('fly-over')) names.unshift('飞行');
+  else if (def.flight === true && !ids.includes('fly') && !ids.includes('fly-over')) names.unshift('飞行');
   return names;
 }
 

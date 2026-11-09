@@ -343,6 +343,9 @@ function draftNeed(state: GameState, shape: DraftBudget): number {
  * 把它们放进池子，等于允许一方把对手的产线整个 ban 掉——那不是 BP，是处刑。
  */
 export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
+  // 只能由产兵建筑造的东西（炼器炉的法器）跟着那座建筑走，不是"这一局选什么打法"：
+  // 把它放进池子，等于允许对手一 ban 就让你的炉子变成空壳。
+  if (def.campOnly) return true;
   if (def.category === 'economy' || def.category === 'builder') return true;
   /*
    * 经济建筑（磨坊/水车/工厂/粮仓/采石场/砖窑/工业园…）不进卡池。
@@ -397,6 +400,8 @@ export function draftCandidates(state: GameState): string[] {
       if (isPseudoUnit(def.id)) return false;
       if (draftAlwaysAllowed(def)) return false;
       if (def.summonedOnly) return false;
+      // campOnly 不进池子这件事由上面的 draftAlwaysAllowed 覆盖：
+      // 它跟着产兵建筑走，不算"选什么打法"。
       // 强行拦截残缺数据 / 测试残留 / 玩家乱改的本地自定义兵种
       // 如果没有写时代，或者时代小于 1，直接踢出池子，免得把排序搞炸
       if (typeof def.era !== 'number' || def.era < 1) return false;

@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
+import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
@@ -15,6 +16,7 @@ import {
   hpGainForRank,
   totalHpBonusForRank,
   maxHpDeltaBetween,
+  getRank,
 } from '../../../src/core/cultivation/progression.ts';
 import { playerView } from '../../../src/core/fog.ts';
 import { spiritAuraBonusOf, SPIRIT_AURA_LABEL } from '../../../src/core/cultivation/abilities/spirit-aura.ts';
@@ -26,15 +28,70 @@ import {
   SWORD_KILL_EXP_MUL,
   killExpCapOfRank,
   killExpForRank,
+  trueDamageForRank,
+  trueDamageOf,
 } from '../../../src/core/cultivation/stats.ts';
-import { baseLifespanOf, getExpGrowth } from '../../../src/core/cultivation/progression.ts';
+import { bodyWardPct, BODY_WARD_TIERS } from '../../../src/core/cultivation/abilities/body-ward.ts';
+import { baseLifespanOf, getExpGrowth, getLifespan } from '../../../src/core/cultivation/progression.ts';
+import { trueDamageWithMods } from '../../../src/core/cultivation/stats.ts';
+import { warmNourishHeal, WARM_NOURISH_RADIUS } from '../../../src/core/cultivation/artifacts.ts';
+import { SWORD_QI_ATK_PCT, SWORD_QI_RADIUS } from '../../../src/core/cultivation/abilities/artifact-auras.ts';
+import { EXP_GROWTH_BLOOD } from '../../../src/core/cultivation/progression.ts';
+import {
+  bloodRiteRadiusForRank,
+  bloodRiteExpMul,
+  BLOOD_RITE_ALLY_EXP_MUL,
+  BLOOD_RITE_LIFESPAN_COST,
+} from '../../../src/core/cultivation/skills/blood-rite.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
+import { detailCardHtml } from '../../../src/ui/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
+import { CORE_ABILITIES } from '../../../src/core/abilities.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../../../src/core/cultivation/abilities/unlocks.ts';
-import { SKILL_EFFECTS } from '../../../src/core/skill-hooks.ts';
+import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.ts';
+import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
+import { SPRING_HP_PER_STONE } from '../../../src/core/cultivation/skills/spirit-spring.ts';
+import { sectLegacyMul, sectRecruitStone } from '../../../src/core/cultivation/sect.ts';
+import {
+  HEAL_PILL,
+  PILL_CARRY_BASE,
+  PILLS,
+  SPIRIT_PILL,
+  WARD_PILL,
+  WARD_PILL_TURNS,
+  addPill,
+  furnaceNextTo,
+  pillBrewProblem,
+  pillCarryCap,
+  pillCountOf,
+  pillOf,
+  pillsOf,
+  pillUseProblem,
+} from '../../../src/core/cultivation/pills.ts';
+import {
+  LIBRARY_SPELL_SLOTS,
+  RESEARCH_BASE_SLOTS,
+  activeLibrariesOf,
+  forgetProblem,
+  isResearched,
+  knownSpells,
+  libraryIsActive,
+  pavilionIsActive,
+  researchCapOf,
+  researchCostOf,
+  researchProblem,
+  researchedOf,
+  silentPavilionNextTo,
+  spellLearnProblem,
+  spellOf,
+  spellSlotsOf,
+  teachSpell,
+} from '../../../src/core/cultivation/spells.ts';
+import { MANA_REGEN, manaLimitForRank, manaOf, maxManaOf, setMana } from '../../../src/core/cultivation/mana.ts';
+import { PALM_THUNDER_COST, palmThunderDamage } from '../../../src/core/cultivation/skills/palm-thunder.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -523,7 +580,12 @@ export function run() {
     const pack = CULTIVATION_PACK;
     const ids = new Set(Object.values(UNIT_IDS));
     const inPack = new Set((pack.units ?? []).map((u) => u.id));
-    const abilityIds = new Set((pack.abilities ?? []).map((a) => a.id));
+    const abilityIds = new Set([
+      ...(pack.abilities ?? []).map((a) => a.id),
+      // 本体那批公共词汇（fly / heal / first-strike…）扩展当然可以用：
+      // 守卫要拦的是"谁都没定义过的 id"，不是"不是我家定义的 id"。
+      ...CORE_ABILITIES.map((a) => a.id),
+    ]);
 
     for (const u of pack.units ?? []) {
       assert.ok(ids.has(u.id), `${u.name} 的 id「${u.id}」没登记进 UNIT_IDS`);
@@ -880,6 +942,12 @@ export function run() {
     assert.deepEqual([at(mate.id).x, at(mate.id).y], [10, 5], '源侧 +矢量');
     assert.deepEqual([at(foe.id).x, at(foe.id).y], [6, 5], '落点侧 −矢量');
     assert.equal(r.state.players.A.res![SPIRIT_STONE], 90, '扣 10 灵石');
+    // 传送一旦放出去就收不回来了：界面靠这个字段清空撤回栈
+    assert.equal(r.irreversible, true, '成功的传送也要封死撤回');
+    assert.ok(
+      r.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '成败都该在战报里留一句「撼动了时空结构」',
+    );
   });
 
   test('传送阵：失败也照扣灵石，而且这一回合不能再传', () => {
@@ -898,6 +966,11 @@ export function run() {
     });
     assert.ok(bad.ok, '失败仍然算作一次施放（否则灵石白扣还不用付代价）');
     assert.equal(bad.state.players.A.res![SPIRIT_STONE], 90, '失败照扣灵石');
+    assert.equal(bad.irreversible, true, '失败的传送同样撤不回来，否则惩罚等于不存在');
+    assert.ok(
+      bad.state.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '失败时战报也要留一句「撼动了时空结构」',
+    );
 
     const again = applyAction(bad.state, {
       type: 'HERO_SKILL',
@@ -910,6 +983,29 @@ export function run() {
     assert.ok(
       again.ok ? '' : /已经放过技能/.test(again.reason),
       `拒绝理由要说清是本回合用过了：${again.ok ? '' : again.reason}`,
+    );
+  });
+
+  test('传送阵：灵石不足根本没放成，不扣钱也不封撤回', () => {
+    // "撤不回来"只对**真的放出去**的那一次成立。钱不够时技能被拒在门口，
+    // 什么都没发生——这时候还把撤回栈清掉就是白白惩罚手滑。
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.players.A.res = { [SPIRIT_STONE]: TELEPORT_COST - 1 };
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: arr.id,
+      skillId: 'teleport-swap',
+      targetX: 9,
+      targetY: 5,
+    });
+    assert.equal(r.ok, false, '灵石不够就该拒绝');
+    assert.equal(s.players.A.res![SPIRIT_STONE], TELEPORT_COST - 1, '没放成就不该扣钱');
+    assert.ok(
+      !s.log.some((e) => e.text.includes(TELEPORT_RIFT_LOG)),
+      '没放成不该留「撼动了时空结构」的痕',
     );
   });
 
@@ -1136,6 +1232,607 @@ export function run() {
     assert.ok(CULTIVATION_HOOKS.redirectDamage, '转移钩子要接进扩展');
   });
 
+  test('传送阵：落点预览标出「谁会挪到哪」，落点是自己时为空', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', 'cultivation-teleport-formation', 5, 5);
+    place2(s, 'A', 'militia', 6, 5); // 源侧
+    place2(s, 'B', 'militia', 10, 5); // 落点侧（落点 9,5）
+
+    const previewer = SKILL_PREVIEWERS['teleport-swap'];
+    assert.ok(previewer, '传送阵要注册落点预览，否则瞄准时什么都看不到');
+    const set = new Set(previewer!({ state: s, self: arr, target: { x: 9, y: 5 } }));
+    // 矢量 (4,0)：阵和源侧单位 +4，落点侧单位 −4
+    assert.ok(set.has(idx(s, 9, 5)), '阵自己的新位置');
+    assert.ok(set.has(idx(s, 10, 5)), '源侧单位的新位置');
+    assert.ok(set.has(idx(s, 6, 5)), '落点侧单位的新位置');
+
+    const selfTarget = previewer!({ state: s, self: arr, target: { x: 5, y: 5 } });
+    assert.equal(selfTarget.length, 0, '落在自己身上等于没传，不给预览');
+  });
+
+  // ── 炼器（2026-11-08）──────────────────────────────
+
+  test('炼器：白名单 + campOnly + 产地条件，一条链判完', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+
+    // 铺一块平地，只在 (5,5) 留一格森林
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.tiles[5 * s.w + 5] = { terrain: 'forest', cityId: null };
+
+    const forge = place2(s, 'A', 'cultivation-forge-1', 5, 4); // 挨着森林
+    const bare = place2(s, 'A', 'cultivation-forge-1', 8, 8); // 什么都不挨着
+    const city = citiesOf(s, 'A')[0]!;
+    city.era = 4;
+
+    const v = (src: any, id: string) => produceAt(s, src, s.unitTypes[id]);
+
+    // 白名单：炉子不造普通兵
+    assert.equal(v({ kind: 'camp', camp: bare }, 'militia').ok, false, '炼器炉不该造民兵');
+    // 产地：同一座炉子，有森林能出、没有就出不了
+    assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-wood').ok, true, '挨着森林该能出青木剑');
+    const noForest = v({ kind: 'camp', camp: bare }, 'cultivation-artifact-wood');
+    assert.equal(noForest.ok, false, '没有森林出不了青木剑');
+    assert.ok(noForest.ok ? '' : /森林/.test(noForest.reason), '理由要写清缺森林');
+    // 城市不产法器（campOnly）
+    const fromCity = v({ kind: 'city', city }, 'cultivation-artifact-wood');
+    assert.equal(fromCity.ok, false, '城市产线不供法器');
+    assert.ok(fromCity.ok ? '' : /产兵建筑/.test(fromCity.reason), '理由要说明只能由产兵建筑造');
+    // 白名单按时代递增：一代炉子没有寒水镜
+    assert.equal(v({ kind: 'camp', camp: forge }, 'cultivation-artifact-water').ok, false, '一代炉不认三代法器');
+  });
+
+  // ── 灵泉（2026-11-08）──────────────────────────────
+  //
+  // 加它的直接原因是"地图不一定生成水"：寒水镜原本只认水面/浅滩，
+  // 一张没有河湖的图上这条产品线整条作废。灵泉既是备用产地，也是一座支援建筑。
+
+  test('灵泉：四代建筑，只有管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const spring = s.unitTypes['cultivation-spirit-spring'];
+    assert.ok(spring, '灵泉应该在对局兵种表里');
+    assert.equal(spring.era, 4, '灵泉是四代建筑');
+    assert.equal(spring.category, 'building', '它是建筑，不是兵');
+
+    const builds = (id: string) => s.unitTypes[id].builds ?? [];
+    assert.ok(!builds('cultivation-servant').includes('cultivation-spirit-spring'), '仆役不会开泉');
+    assert.ok(!builds('cultivation-deacon').includes('cultivation-spirit-spring'), '执事也不会');
+    assert.ok(builds('cultivation-steward').includes('cultivation-spirit-spring'), '管事会开泉');
+
+    // 真盖一次：管事投 24 点、灵泉要 30 点 → 当回合只是工地
+    const t = fresh({ expansionIds: ['cultivation'], godMode: true });
+    t.units = [];
+    t.current = 'A';
+    t.players.A.gold = 900;
+    t.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) t.tiles[y * t.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const steward = place2(t, 'A', 'cultivation-steward', 5, 5);
+    const built = applyAction(t, {
+      type: 'BUILD',
+      unitId: steward.id,
+      unitType: 'cultivation-spirit-spring',
+      x: 6,
+      y: 5,
+    });
+    assert.ok(built.ok, built.ok ? '' : built.reason);
+    const site = built.state.units.find((u) => u.type === 'cultivation-spirit-spring');
+    assert.ok(site, '应该落下一个工地');
+    assert.ok(
+      (site!.buildDone ?? 0) < (site!.buildNeed ?? 0),
+      '管事一次投 24 点、灵泉要 30 点，当回合立不起来',
+    );
+  });
+
+  test('寒水镜：没有水的地图上，灵泉旁边一样炼得出来', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+    // 铺一块干地：整片平原，没有水
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const forge = place2(s, 'A', 'cultivation-forge-2', 5, 5);
+    const v = (camp: any) => produceAt(s, { kind: 'camp', camp }, s.unitTypes['cultivation-artifact-water']);
+
+    const dry = v(forge);
+    assert.equal(dry.ok, false, '四邻没水也没灵泉时炼不出寒水镜');
+    assert.ok(
+      dry.ok ? '' : dry.reason.includes('灵泉'),
+      `拒绝理由要写明有另一条路：${dry.ok ? '' : dry.reason}`,
+    );
+
+    place2(s, 'A', 'cultivation-spirit-spring', 6, 5);
+    assert.equal(v(forge).ok, true, '灵泉就挨着炉子，应该能炼');
+  });
+
+  test('泉涌：四邻友军各回 10%，按实际回血量收灵石，每回合一次', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const left = place2(s, 'A', 'qi-cultivator', 4, 5);
+    const down = place2(s, 'A', 'qi-cultivator', 5, 6);
+    const foe = place2(s, 'B', 'qi-cultivator', 6, 5); // 敌人的伤员：不该被治
+    const far = place2(s, 'A', 'qi-cultivator', 7, 5); // 四邻之外
+    for (const u of [left, down, foe, far]) u.hp = 5;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+
+    const maxHp = maxHpOf(s, left);
+    const heal = Math.max(1, Math.round(maxHp * 0.1));
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.equal(at(left.id).hp, 5 + heal, `回 ${heal} 点（${maxHp} 上限的 10%）`);
+    assert.equal(at(down.id).hp, 5 + heal, '第二个相邻友军同样回');
+    assert.equal(at(foe.id).hp, 5, '泉水不替敌人疗伤');
+    assert.equal(at(far.id).hp, 5, '四邻之外不治（不含两格外）');
+
+    // 总回血量 = 2 × heal；每 5 点 1 块，至少 1 块
+    const cost = Math.max(1, Math.ceil((heal * 2) / SPRING_HP_PER_STONE));
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 100 - cost, `应该扣 ${cost} 块灵石`);
+
+    // 没有冷却，但 multiCast: false → 同一回合一放完就灰
+    const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.equal(again.ok, false, '一回合只能泉涌一次');
+  });
+
+  test('泉涌：灵石不够时每个单位只回 1 点，最低价照扣', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const mud = [
+      place2(s, 'A', 'body-cultivator', 4, 5),
+      place2(s, 'A', 'body-cultivator', 5, 6),
+      place2(s, 'A', 'body-cultivator', 6, 5),
+    ];
+    for (const u of mud) u.hp = 5;
+    // 三个体修（30 血）各回 3 点 = 9 点 → 满额要 2 块；只给 1 块
+    s.players.A.res = { [SPIRIT_STONE]: 1 };
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    for (const u of mud) assert.equal(at(u.id).hp, 6, '降级后每人只回 1 点');
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 0, '最低价 1 块照扣，不能白刷');
+    assert.ok(
+      r.state.log.some((l) => l.text.includes('灵石不足')),
+      '战报要说清这次是降级',
+    );
+  });
+
+  test('泉涌：没灵石 / 旁边没伤员时都放不出来', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const spring = place2(s, 'A', 'cultivation-spirit-spring', 5, 5);
+    const whole = place2(s, 'A', 'qi-cultivator', 4, 5); // 满血
+    const skillOf = () => heroSkillsOf(s, spring).find((k) => k.def.id === 'spring-surge')!;
+
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.equal(skillOf().ready, false, '一块灵石都没有时按钮该是灰的');
+    assert.ok(skillOf().notReadyReason?.includes('灵石'), '理由要说"灵石不足"');
+
+    s.players.A.res = { [SPIRIT_STONE]: 10 };
+    assert.equal(skillOf().ready, false, '四邻只有满血友军时也不该亮');
+    assert.ok(
+      /救治|伤员/.test(skillOf().notReadyReason ?? ''),
+      `理由要说清没人可治：${skillOf().notReadyReason}`,
+    );
+
+    whole.hp = 1;
+    assert.equal(skillOf().ready, true, '有人受伤就该亮');
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: spring.id, skillId: 'spring-surge' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(
+      (r.state.units.find((u) => u.id === whole.id)!.hp) <= maxHpOf(s, whole),
+      '回血不会超过上限',
+    );
+  });
+
+  // ── 法器：器灵 / 温养 / 剑气环 / 产地（2026-11-08）──────
+
+  test('法器：每件都带 artifact 标记与两条公共能力', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const arts = Object.values(s.unitTypes).filter((d) => d.artifact);
+    assert.equal(arts.length, 4, '应该正好四件法器');
+    for (const d of arts) {
+      assert.equal(d.campOnly, true, `${d.name} 只能由产兵建筑造`);
+      assert.ok(d.abilities?.includes('artifact-spirit'), `${d.name} 缺「器灵」`);
+      assert.ok(d.abilities?.includes('warm-nourish'), `${d.name} 缺「温养」`);
+    }
+  });
+
+  test('器灵：出了修士神识移动力减半，修士死了也不算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    // 青木剑 4 移；场上没有修士 → 减半
+    assert.equal(movePower(s, sword), 2, '没有修士看着，飞剑只能拖着走');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    assert.equal(movePower(s, sword), 4, '修士在神识内 → 全额');
+
+    // 走远到神识之外
+    qi.x = s.w - 1;
+    qi.y = s.h - 1;
+    assert.equal(movePower(s, sword), 2, '出了神识又掉回减半');
+
+    // 死在旁边：死人不看路
+    qi.x = 6;
+    qi.y = 5;
+    qi.hp = 0;
+    assert.equal(movePower(s, sword), 2, '死掉的修士不再护持');
+  });
+
+  test('器灵：神识内加甲，取范围内护甲最高的修士的一半', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const base = s.unitTypes['cultivation-artifact-wood'].armor;
+    assert.equal(effectiveStats(s, sword).armor, base, '没修士就只有本体的甲');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    const qiArmor = effectiveStats(s, qi).armor;
+    assert.equal(
+      effectiveStats(s, sword).armor,
+      base + Math.floor(qiArmor / 2),
+      '神识内加半个修士甲',
+    );
+
+    // 再来一个甲更高的体修：**取最高**，不是相加
+    const body = place2(s, 'A', 'body-cultivator', 5, 6);
+    addExp(body, s, expForRank(4)); // rank 5
+    const bodyArmor = effectiveStats(s, body).armor;
+    assert.ok(bodyArmor > qiArmor, `体修的甲(${bodyArmor})该高于炼气士(${qiArmor})`);
+    assert.equal(
+      effectiveStats(s, sword).armor,
+      base + Math.floor(bodyArmor / 2),
+      '两个修士只按最高的那位算，不叠乘',
+    );
+
+    // 敌方修士不管用
+    const foe = place2(s, 'B', 'qi-cultivator', 4, 5);
+    assert.ok(foe);
+  });
+
+  test('器灵：敌方修士不给加持', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    place2(s, 'B', 'qi-cultivator', 6, 5);
+    const base = s.unitTypes['cultivation-artifact-wood'].armor;
+    assert.equal(effectiveStats(s, sword).armor, base, '敌人的神识不会替你御剑');
+    assert.equal(movePower(s, sword), 2, '也不会让你的飞剑走得快');
+  });
+
+  test('温养：半径内己方修士才回血，按最高境界算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    assert.equal(warmNourishHeal(s, sword), 0, '没修士就没得养');
+
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    assert.equal(warmNourishHeal(s, sword), 1, '0 级修士回 1 点');
+
+    addExp(qi, s, expForRank(4)); // rank 5
+    assert.equal(warmNourishHeal(s, sword), 3, '5 级修士回 1 + ⌊5/2⌋ = 3 点');
+
+    // 出了温养半径（2 格）就断粮——注意它和"神识"是两个半径
+    qi.x = 5 + (WARM_NOURISH_RADIUS + 1);
+    assert.equal(warmNourishHeal(s, sword), 0, '离远了就不养了');
+  });
+
+  test('温养：回合开始真的回血，敌方修士不算', () => {
+    let s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    addExp(qi, s, expForRank(4)); // rank 5 → 每回合 3 点
+    place2(s, 'B', 'militia', 1, 1); // 留个对手，免得结束回合直接判胜
+    sword.hp = 10;
+
+    let r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    r = applyAction(r.state, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const back = r.state.units.find((u) => u.id === sword.id);
+    assert.ok(back, '青木剑还该在场上');
+    assert.equal(back!.hp, 13, '一个完整回合后该被养回 3 点');
+
+    // 敌方修士不该养
+    const s2 = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s2.units = [];
+    s2.current = 'A';
+    const mine = place2(s2, 'A', 'cultivation-artifact-wood', 5, 5);
+    place2(s2, 'B', 'qi-cultivator', 6, 5);
+    assert.equal(warmNourishHeal(s2, mine), 0, '别人的修士不会替你养剑');
+  });
+
+  test('剑气环：半径 2 内友军攻击 +15%', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const mate = place2(s, 'A', 'spearman', 6, 5);
+
+    // 先量基准：把剑挪到半径**之外**（距离按"剑到兵的格数"算，不是从原位置算）
+    sword.x = mate.x + SWORD_QI_RADIUS + 1;
+    const plain = effectiveStats(s, mate).atk;
+    assert.equal(plain, s.unitTypes['spearman'].atk, '出了半径就只剩本体攻击');
+
+    // 挪回半径内
+    sword.x = mate.x - 1;
+    const buffed = effectiveStats(s, mate).atk;
+    assert.equal(
+      buffed,
+      Math.round(plain * (1 + SWORD_QI_ATK_PCT)),
+      `半径内该 +${Math.round(SWORD_QI_ATK_PCT * 100)}%`,
+    );
+    assert.ok(buffed > plain, '加成果然生效了');
+  });
+
+  // ── 后三件法器：护甲光环 / 迟缓 / 熔甲 / 真元光环（2026-11-08）──
+
+  test('法器：四件都真的飞在空中层（id 是 fly-over，名字叫「飞行」）', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const arts = Object.values(s.unitTypes).filter((d) => d.artifact);
+    assert.equal(arts.length, 4, '应该正好四件法器');
+    for (const d of arts) {
+      // 2026-11-08：法器的"飞"从「掠空」（只掠水）换成「飞行」（空中层）。
+      // 名字和 id 是反的：fly-over 叫飞行，fly 叫掠空——见 abilities.ts 顶部注释。
+      assert.ok(d.abilities?.includes('fly-over'), `${d.name} 应该是真飞行（fly-over）`);
+      assert.ok(!d.abilities?.includes('fly'), `${d.name} 不该再挂掠空`);
+      assert.equal(airLayer(d), true, `${d.name} 要在空中层`);
+    }
+  });
+
+  test('磐石：半径 2 内友军护甲按比例加成，不足 1 点按 1 点', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 5, 5);
+    const mate = place2(s, 'A', 'spearman', 6, 5);
+
+    // 先把印挪到半径外量基准
+    seal.x = mate.x + 3;
+    const plain = effectiveStats(s, mate).armor;
+    assert.ok(plain > 0);
+
+    seal.x = mate.x - 1;
+    const buffed = effectiveStats(s, mate).armor;
+    // 长枪兵 3 甲，10% 取整是 0，但规则层有 +1 保底
+    assert.equal(buffed, plain + Math.max(1, Math.round(plain * 0.1)), '护甲光环要带 +1 保底');
+    assert.ok(buffed > plain, '加成果然生效');
+  });
+
+  test('迟缓：移动力减半，至少留 1 格', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const u = place2(s, 'A', 'spearman', 5, 5);
+    assert.equal(movePower(s, u), 2, '长枪兵 2 移');
+    u.status = { chill: 2 };
+    assert.equal(movePower(s, u), 1, '2 移减半 = 1');
+    // 剩 1 移的单位再减半仍然是 1：这是"追不上"，不是定身
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 8, 8);
+    seal.status = { chill: 2 };
+    assert.equal(movePower(s, seal), 1, '2 移的玄石印被冻慢后仍是 1，不会归零');
+  });
+
+  test('熔甲：护甲减半，按当前护甲算', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const seal = place2(s, 'A', 'cultivation-artifact-stone', 5, 5);
+    const before = effectiveStats(s, seal).armor;
+    seal.status = { sunder: 2 };
+    assert.equal(effectiveStats(s, seal).armor, Math.floor(before / 2), '熔甲把护甲打成一半');
+  });
+
+  test('寒水镜：主目标和被波及的都吃迟缓，射程外的没事', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const mirror = place2(s, 'A', 'cultivation-artifact-water', 4, 5);
+    const main = place2(s, 'B', 'militia', 8, 5);
+    const near = place2(s, 'B', 'militia', 8, 6);
+    const far = place2(s, 'B', 'militia', 8, 9);
+    main.hp = near.hp = far.hp = 500;
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: mirror.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id);
+    assert.equal(at(main.id)?.status?.chill, 2, '主目标要迟缓');
+    assert.equal(at(near.id)?.status?.chill, 2, '溅射波及的也要迟缓');
+    assert.equal(at(far.id)?.status?.chill, undefined, '射程外不该被冻');
+    assert.ok((at(near.id)?.hp ?? 0) < 500, '波及的要掉血');
+  });
+
+  test('赤炎珠：溅射挂熔甲；真元光环让修士真元 +10%（保底 +1）', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const bead = place2(s, 'A', 'cultivation-artifact-fire', 4, 5);
+    const main = place2(s, 'B', 'militia', 7, 5);
+    const near = place2(s, 'B', 'militia', 7, 6);
+    main.hp = near.hp = 500;
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: bead.id, targetId: main.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id);
+    assert.equal(at(main.id)?.status?.sunder, 2, '主目标要熔甲');
+    assert.equal(at(near.id)?.status?.sunder, 2, '波及的也要熔甲');
+
+    // 真元光环：裸值 → 含光环
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    addExp(qi, s, expForRank(2)); // rank 3
+    const base = trueDamageOf(qi);
+    const withAura = trueDamageWithMods(base, 0.1);
+    assert.equal(withAura, base + Math.max(1, Math.round(base * 0.1)), '真元光环带 +1 保底');
+    assert.ok(withAura > base);
+  });
+
+  test('飞行：法器悬在空中层——能跨水、能停在水上、地面近战够不着', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    // 铺一条竖着的水带在 x=6，其余平地
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) {
+        s.tiles[y * s.w + x] = { terrain: x === 6 ? 'water' : 'plain', cityId: null };
+      }
+    }
+    const sword = place2(s, 'A', 'cultivation-artifact-wood', 5, 5);
+    const reach = reachableTiles(s, sword);
+    // 没有修士在旁边 → 器灵减半，移 4 只剩 2 格。
+    // 直线跨水到 (7,5) 正好 2 步；绕陆地走要 4 步，所以这一条就能证明它会飞。
+    assert.equal(movePower(s, sword), 2, '器灵减半后是 2 格');
+    assert.ok(reach.has(idx(s, 7, 5)), '飞剑应该能飞到水对岸');
+    // `fly` 是"掠水"，水上**可以停**（见 rules.tileStandsOk 的注释）。
+    assert.ok(reach.has(idx(s, 6, 5)), '悬在空中层，水面照样能停');
+
+    // 空中层的两个连带效果：地形一概不挡、地面射程 1 够不着
+    const mountain = s.tiles[idx(s, 8, 5)];
+    (mountain as { terrain: string }).terrain = 'mountain';
+    assert.equal(canStandAt(s, 8, 5, 'cultivation-artifact-wood'), true, '高山也能停');
+    const grunt = place2(s, 'B', 'militia', 4, 5); // 和飞剑相邻（真实距离 1）
+    assert.equal(distBetweenUnits(s, grunt, sword), 1, '前提：真的是隔壁那格');
+    assert.equal(strikeDistance(s, grunt, sword), 2, '打空中的目标要按 +1 距离算');
+    assert.equal(canStrike(s, grunt, sword), false, '射程 1 的地面兵够不着头顶那一层');
+  });
+
+  test('青木剑产地：相邻森林 或 2 块己方灵田', () => {
+    const mk = () => {
+      const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+      s.units = [];
+      s.current = 'A';
+      s.players.A.res = { [SPIRIT_STONE]: 300 };
+      // 把炉子附近摊平，免得默认地形里正好有林子
+      for (let y = 3; y <= 7; y++) {
+        for (let x = 3; x <= 7; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+      }
+      return s;
+    };
+    const v = (s: GameState, forge: { id: string }) =>
+      produceAt(s, { kind: 'camp', camp: s.units.find((u) => u.id === forge.id)! }, s.unitTypes['cultivation-artifact-wood']);
+
+    // 1) 空地：两个条件都不满足
+    {
+      const s = mk();
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      const r = v(s, forge);
+      assert.equal(r.ok, false, '什么都没有就不该造得出来');
+      assert.ok(r.ok ? '' : /森林/.test(r.reason), '理由里要提森林');
+    }
+    // 2) 挨着森林：满足
+    {
+      const s = mk();
+      s.tiles[4 * s.w + 5] = { terrain: 'forest', cityId: null };
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, true, '挨着森林就该能造');
+    }
+    // 3) 只有一块灵田：不够
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, false, '一块灵田不够');
+    }
+    // 4) 两块灵田：够
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      place2(s, 'A', 'cultivation-spirit-field', 6, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, true, '两块灵田也够');
+    }
+    // 5) 一块是自己的、一块是敌人的：敌田不算
+    {
+      const s = mk();
+      place2(s, 'A', 'cultivation-spirit-field', 4, 5);
+      place2(s, 'B', 'cultivation-spirit-field', 6, 5);
+      const forge = place2(s, 'A', 'cultivation-forge-1', 5, 5);
+      assert.equal(v(s, forge).ok, false, '敌方灵田不该给你的炉子供灵');
+    }
+  });
+
+  test('法器只认点名要造它的产兵建筑：军营连灰都不该列', () => {
+    // 军营的白名单是空的（= 不设限），所以它能认一整张兵种表。
+    // 但"不设限"不该盖过 campOnly：法器只能出自炼器炉，
+    // 否则军营里会平白多出一排灰色的"还造不出来"。
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const camp = place2(s, 'A', 'camp', 5, 5);
+    const r = produceAt(s, { kind: 'camp', camp }, s.unitTypes['cultivation-artifact-wood']);
+    assert.equal(r.ok, false, '军营不该认法器');
+    assert.ok(r.ok ? '' : /产不了/.test(r.reason), `理由要说清是产不了：${r.ok ? '' : r.reason}`);
+
+    // 反过来：炉子的白名单点了名，它就认
+    const forge = place2(s, 'A', 'cultivation-forge-1', 8, 8);
+    assert.equal(
+      produceAt(s, { kind: 'camp', camp: forge }, s.unitTypes['cultivation-artifact-wood']).ok,
+      false,
+      '炉子挨不到森林时仍然造不出（条件不满足）',
+    );
+  });
+
+  test('炼器：真能从林中炉造出青木剑，空地炉被规则层拒', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.res = { [SPIRIT_STONE]: 200 };
+    s.players.A.gold = 900;
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.tiles[5 * s.w + 5] = { terrain: 'forest', cityId: null };
+    const forge = place2(s, 'A', 'cultivation-forge-1', 5, 4);
+    const bare = place2(s, 'A', 'cultivation-forge-1', 8, 8);
+
+    const ok = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: forge.id,
+      unitType: 'cultivation-artifact-wood',
+    });
+    assert.ok(ok.ok, ok.ok ? '' : `林中炉该能造青木剑：${ok.reason}`);
+    assert.ok(
+      ok.state.units.some((u) => u.type === 'cultivation-artifact-wood'),
+      '棋盘上应该多一柄青木剑',
+    );
+
+    const denied = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: bare.id,
+      unitType: 'cultivation-artifact-wood',
+    });
+    assert.equal(denied.ok, false, '空地炉造不出青木剑');
+    assert.ok(denied.ok ? '' : /森林/.test(denied.reason), `理由要写清缺森林：${denied.ok ? '' : denied.reason}`);
+  });
+
   // ── 灵气滋养 ──────────────────────────────────────────
 
   const nextTurn = (s: GameState) => {
@@ -1232,6 +1929,1045 @@ export function run() {
     const withExp = runSeq(true);
     const withoutExp = runSeq(false);
     assert.ok(withExp > withoutExp, `有灵田(${withExp})应多于无灵田(${withoutExp})`);
+  });
+
+  // ── 体修（2026-11-07）──────────────────────────────────
+  test('体修：时代 2、算修士、带金刚不坏', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    assert.equal(s.unitTypes['body-cultivator'].era, 2, '体修是时代 2 的兵');
+    assert.ok(
+      CULTIVATION_PACK.units.some((u) => u.id === UNIT_IDS.BODY_CULTIVATOR),
+      '包里要登记体修',
+    );
+    assert.ok(CULTIVATION_ABILITIES.some((a) => a.id === 'body-ward'), '能力表里要有金刚不坏');
+    // 能修炼才算修士：升到 3 级后属性必须跟着涨
+    setCultivationExp(body, expForRank(2));
+    assert.ok(
+      effectiveStats(s, body).atk > s.unitTypes['body-cultivator'].atk,
+      '境界要加攻击，否则它只是个普通兵',
+    );
+    const lines = getCultivationPanelLines(s, body).join('\n');
+    assert.ok(lines.includes('金刚不坏'), '面板要写金刚不坏');
+    assert.ok(lines.includes('体修'), '面板要写流派系数');
+  });
+
+  test('金刚不坏：30% 起步，最后一档 50%', () => {
+    assert.deepEqual([...BODY_WARD_TIERS], [0.3, 0.35, 0.4, 0.5]);
+    assert.equal(bodyWardPct(100, 100), 0.3, '满血 30%');
+    assert.equal(bodyWardPct(60, 100), 0.35, '掉到 60% 血是第二档');
+    assert.equal(bodyWardPct(40, 100), 0.4, '掉到 40% 血是第三档');
+    assert.equal(bodyWardPct(25, 100), 0.5, '最后四分之一血跳到 50%');
+    assert.equal(bodyWardPct(1, 100), 0.5);
+    assert.equal(bodyWardPct(1, 0), 0, '没有生命上限时不该返回减免');
+  });
+
+  test('金刚不坏：挨打真的变少，血越少越硬', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    const foe = place2(s, 'B', 'artillery', 8, 5);
+
+    const full = computeDamage(s, foe, body);
+    body.hp = Math.round(maxHpOf(s, body) * 0.2);
+    const low = computeDamage(s, foe, body);
+    assert.ok(low < full, `残血(${low})该比满血(${full})挨得少`);
+
+    const qiDmg = computeDamage(s, foe, qi);
+    assert.ok(full < qiDmg, `满血体修(${full})也该比炼气士(${qiDmg})抗打`);
+  });
+
+  test('金刚不坏：只减物理段，真元原样吃', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'B', 'qi-cultivator', 8, 5);
+    setCultivationExp(body, expForRank(2));
+    setCultivationExp(qi, expForRank(2));
+
+    // 拉到最后一档（50%）：物理段减半，真元一分不少
+    body.hp = Math.round(maxHpOf(s, body) * 0.2);
+    const trueDmg = trueDamageOf(qi);
+    assert.ok(trueDmg > 0, '这条用例要求对面有真元');
+    const physical = Math.max(0, effectiveStats(s, qi).atk - effectiveStats(s, body).armor);
+    assert.equal(
+      computeDamage(s, qi, body),
+      Math.round(physical * 0.5) + trueDmg,
+      '真元不吃减免——炼气士/剑修才是体修的克星',
+    );
+  });
+
+  test('体修：境界加成偏科（攻 ×1.1，真元/移动/射程 ×0.5）', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    const body = place2(s, 'A', 'body-cultivator', 5, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    const sword = place2(s, 'A', 'sword-cultivator', 5, 9);
+    for (const u of [body, qi, sword]) setCultivationExp(u, expForRank(2)); // 都是 3 级
+
+    // 射程与移动折半：3 级时炼气士各 +1，体修还是 0
+    assert.equal(effectiveStats(s, body).range, 1, '体修射程不涨');
+    assert.equal(effectiveStats(s, qi).range, 2, '炼气士照常 +1');
+    assert.equal(effectiveStats(s, body).move, 2, '体修移动不涨');
+    assert.equal(effectiveStats(s, qi).move, 3, '炼气士照常 +1');
+
+    // 真元折半；炼气士与剑修不变
+    assert.equal(trueDamageOf(body), Math.floor(trueDamageForRank(3) / 2));
+    assert.equal(trueDamageOf(qi), trueDamageForRank(3));
+    assert.equal(trueDamageOf(sword), trueDamageForRank(3));
+
+    // 攻击则更高一档：体修用拳头吃饭
+    const bodyAtk = effectiveStats(s, body).atk - s.unitTypes['body-cultivator'].atk;
+    const qiAtk = effectiveStats(s, qi).atk - s.unitTypes['qi-cultivator'].atk;
+    assert.ok(bodyAtk >= qiAtk, `体修境界攻击(${bodyAtk})不该低于炼气士(${qiAtk})`);
+  });
+
+  // ── 魔修（2026-11-07）──────────────────────────────────
+  /** 摆一个只有魔修的小场景：清空编制，方便数伤害 */
+  const mageScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    s.units = [];
+    s.current = 'A';
+    const mage = place2(s, 'A', 'blood-cultivator', 5, 5);
+    return { s, mage };
+  };
+  const castRite = (s: GameState, mage: any) =>
+    applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'blood-rite' });
+
+  test('魔修：时代 3、带血祭、打坐只有 1 点', () => {
+    const { s, mage } = mageScene();
+    assert.equal(s.unitTypes['blood-cultivator'].era, 3, '魔修是时代 3');
+    assert.ok(
+      CULTIVATION_PACK.units.some((u) => u.id === UNIT_IDS.BLOOD_CULTIVATOR),
+      '包里要登记魔修',
+    );
+    assert.ok(
+      (s.unitTypes['blood-cultivator'].skills ?? []).some((k) => k.id === 'blood-rite'),
+      '魔修要自带血祭',
+    );
+    assert.equal(EXP_GROWTH_BLOOD, 1);
+    assert.equal(getExpGrowth(mage), EXP_GROWTH_BLOOD, '魔修打坐固定 1 点');
+  });
+
+  test('血祭：一圈之内不分敌我，友军被抽到 1 血为止', () => {
+    const { s, mage } = mageScene();
+    const foe = place2(s, 'B', 'militia', 6, 5);
+    const ally = place2(s, 'A', 'militia', 4, 5);
+    ally.hp = 3;
+    const outside = place2(s, 'B', 'militia', 8, 5);
+
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.ok(at(foe.id).hp < foe.hp, '敌人要掉血');
+    assert.equal(at(ally.id).hp, 1, '友军最低留 1 血——否则自残就能刷击杀奖励');
+    assert.equal(at(outside.id).hp, outside.hp, '半径外不动');
+  });
+
+  test('血祭：修为按伤害折算，而且绕过每回合击杀上限', () => {
+    const { s, mage } = mageScene();
+    const foes = [
+      place2(s, 'B', 'militia', 6, 5),
+      place2(s, 'B', 'militia', 4, 5),
+      place2(s, 'B', 'militia', 5, 4),
+    ];
+    const per = computeDamage(s, mage, foes[0]);
+
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const exp = getExp(r.state.units.find((u) => u.id === mage.id)!);
+
+    assert.equal(exp, Math.floor(per * 3 * bloodRiteExpMul(0)), '伤害 × 折算率');
+    assert.ok(exp > killExpCapOfRank(0), `血祭(${exp}) 要能超过击杀上限(${killExpCapOfRank(0)})`);
+  });
+
+  test('血祭：友军那部分只折四分之一修为', () => {
+    const runWith = (owner: 'A' | 'B') => {
+      const { s, mage } = mageScene();
+      place2(s, owner, 'militia', 6, 5);
+      const r = castRite(s, mage);
+      assert.ok(r.ok, r.ok ? '' : r.reason);
+      return getExp(r.state.units.find((u) => u.id === mage.id)!);
+    };
+    const foeExp = runWith('B');
+    const allyExp = runWith('A');
+    assert.ok(foeExp > 0);
+    assert.equal(allyExp, Math.floor(foeExp * BLOOD_RITE_ALLY_EXP_MUL), '友军伤害只算 25%');
+  });
+
+  test('血祭：每次扣 1 年寿元', () => {
+    const { s, mage } = mageScene();
+    place2(s, 'A', 'militia', 6, 5); // 只打友军，经验不足以升级
+    const before = getLifespan(mage);
+    const r = castRite(s, mage);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === mage.id)!;
+    assert.equal(getLifespan(after), before - BLOOD_RITE_LIFESPAN_COST, '寿元 −1');
+  });
+
+  test('血祭：半径随境界成长，折算率随境界下降', () => {
+    assert.equal(bloodRiteRadiusForRank(0), 1);
+    assert.equal(bloodRiteRadiusForRank(3), 2);
+    assert.equal(bloodRiteRadiusForRank(6), 3);
+    assert.equal(bloodRiteRadiusForRank(9), 4);
+
+    assert.equal(bloodRiteExpMul(0), 1);
+    assert.ok(bloodRiteExpMul(3) < bloodRiteExpMul(0), '境界越高越不值钱');
+    assert.ok(bloodRiteExpMul(9) < bloodRiteExpMul(3));
+  });
+
+  test('魔修：不吃击杀历练（血祭已经是绕过上限的那条路）', () => {
+    const { s, mage } = mageScene();
+    setCultivationExp(mage, expForRank(2)); // 3 级
+    const foe = place2(s, 'B', 'halberdier', 6, 5);
+
+    const before = getExp(mage);
+    CULTIVATION_HOOKS.onUnitKilled({ state: s, victim: foe, killer: mage, killerOwner: 'A' });
+    assert.equal(getExp(mage), before, '魔修不该从击杀里拿修为');
+
+    // 对照：炼气士照常吃
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 7);
+    setCultivationExp(qi, expForRank(2));
+    const beforeQi = getExp(qi);
+    CULTIVATION_HOOKS.onUnitKilled({ state: s, victim: foe, killer: qi, killerOwner: 'A' });
+    assert.ok(getExp(qi) > beforeQi, '其他修士仍然吃击杀历练');
+  });
+
+  // ── 宗门大殿（2026-11-08）──────────────────────────────
+  //
+  // 两个功能都挂在"贴着宗门站的修士"上：招募（灵石、认师父）与传承（打坐倍率）。
+  // 放在文件末尾是因为要用上面那几个 nextTurn / unitOf 辅助函数——
+  // 它们是在 `run()` 中途才声明的，写在前面会踩 TDZ。
+
+  /** 一块干净的空地，宗门摆 (4,4)-(5,5)，周围的格子留给师徒 */
+  const sectScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    s.players.A.gold = 900;
+    const sect = place2(s, 'A', 'cultivation-sect', 4, 4);
+    return { s, sect };
+  };
+
+  test('宗门：2×2、时代 3、执事与管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-sect'];
+    assert.ok(def, '宗门要在本局兵种表里');
+    assert.equal(def.footprint, 2, '宗门占 2×2');
+    assert.equal(def.era, 3, '宗门是三代建筑');
+
+    assert.ok(!(s.unitTypes['cultivation-servant'].builds ?? []).includes('cultivation-sect'), '仆役不会盖');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-sect'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-sect'), '管事继承');
+  });
+
+  test('宗门：2×2 的选址按整块地算距离，贴现着的那面墙不报"太远"', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    // 建造者站在 (7,5)：到锚点 (4,4) 是 4 格（> buildRange 2），
+    // 但到 2×2 的最近一格 (5,5) 只有 2 格——按锚点算的话这里会被拒。
+    const deacon = place2(s, 'A', 'cultivation-deacon', 7, 5);
+    const r = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-sect',
+      x: 4,
+      y: 4,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+  });
+
+  test('宗门：招弟子要相邻有 ≥2 期师傅，且只认己方', () => {
+    const { s, sect } = sectScene();
+    const qi = s.unitTypes['qi-cultivator'];
+    const v = () => produceAt(s, { kind: 'camp', camp: sect }, qi);
+
+    // 没人：拒绝，并写清缺什么
+    const none = v();
+    assert.equal(none.ok, false, '没有师傅就不该招得出来');
+    assert.ok(none.ok ? '' : /师傅/.test(none.reason), `理由要写清缺师傅：${none.ok ? '' : none.reason}`);
+
+    // 0 期的徒弟站在旁边：还是不行
+    const novice = place2(s, 'A', 'qi-cultivator', 6, 4);
+    assert.equal(v().ok, false, '0 期修士当不了师傅');
+
+    // 敌方 3 期修士贴着站：也不算
+    const foe = place2(s, 'B', 'qi-cultivator', 4, 6);
+    setCultivationExp(foe, expForRank(2));
+    assert.equal(v().ok, false, '敌方修士不给你当师傅');
+
+    // 己方 2 期：够了
+    setCultivationExp(novice, expForRank(1));
+    assert.equal(getRank(novice), 2, '前提：这位到了第 2 层');
+    assert.equal(v().ok, true, '2 期师傅就能开坛收徒');
+  });
+
+  test('宗门：招弟子收灵石、不收金币（城市产线照旧收金币）', () => {
+    const { s, sect } = sectScene();
+    const qi = s.unitTypes['qi-cultivator'];
+    const master = place2(s, 'A', 'qi-cultivator', 6, 4);
+    setCultivationExp(master, expForRank(1)); // 2 期
+
+    const stone = sectRecruitStone(qi.cost);
+    const inSect = recruitResCost(s, 'A', qi, { kind: 'camp', camp: sect });
+    assert.equal(inSect[SPIRIT_STONE], stone, `宗门里招炼气士要 ${stone} 灵石`);
+    assert.equal(inSect.gold, undefined, '宗门里不收金币');
+    // 同城里的价：还是金币
+    assert.equal(recruitResCost(s, 'A', qi).gold, qi.cost, '城市产线照旧是金币价');
+
+    const beforeGold = s.players.A.gold;
+    const r = applyAction(s, {
+      type: 'RECRUIT',
+      unitId: sect.id,
+      unitType: 'qi-cultivator',
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(r.state.players.A.gold, beforeGold, '不该扣金币');
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 100 - stone, '扣灵石');
+    assert.equal(
+      r.state.units.filter((u) => u.type === 'qi-cultivator' && u.owner === 'A').length,
+      2,
+      '新弟子应该站出来了',
+    );
+  });
+
+  test('传承：摸不到宗门 / 师父不够高都是 ×1；差 3 层才 ×2', () => {
+    const { s, sect } = sectScene();
+    const disciple = place2(s, 'A', 'qi-cultivator', 6, 4); // 贴着宗门的右边
+    assert.equal(sectLegacyMul(s, disciple), 1, '旁边没别人，没有传承');
+
+    const master = place2(s, 'A', 'qi-cultivator', 4, 6); // 贴着宗门的下面
+    setCultivationExp(master, expForRank(1)); // 2 期
+    assert.equal(sectLegacyMul(s, disciple), 1, '2 期师父带 0 期弟子：2−0−1=1，白搭');
+
+    setCultivationExp(master, expForRank(2)); // 3 期
+    assert.equal(sectLegacyMul(s, disciple), 2, '3 期师父带 0 期弟子：×2');
+
+    // 敌人不算师父：把师父换成 B 方
+    master.owner = 'B';
+    assert.equal(sectLegacyMul(s, disciple), 1, '敌方修士不给你传承');
+
+    // 离开宗门就吃不到
+    master.owner = 'A';
+    disciple.x = 9;
+    disciple.y = 9;
+    assert.equal(sectLegacyMul(s, disciple), 1, '离宗门远了就没有传承');
+    void sect;
+  });
+
+  test('传承：真的让打坐变快（对比法），面板也写出来', () => {
+    const runSeq = (withMaster: boolean) => {
+      const { s, sect } = sectScene();
+      place2(s, 'A', 'qi-cultivator', 6, 4); // 弟子：0 期，贴着宗门
+      if (withMaster) {
+        const master = place2(s, 'A', 'qi-cultivator', 4, 6);
+        setCultivationExp(master, expForRank(2)); // 3 期
+        void sect;
+      }
+      const start = getExp(unitOf(s, 'qi-cultivator', 'A'));
+      let cur = s;
+      for (let i = 0; i < 4; i++) cur = nextTurn(cur);
+      return getExp(unitOf(cur, 'qi-cultivator', 'A')) - start;
+    };
+    const withMaster = runSeq(true);
+    const without = runSeq(false);
+    assert.ok(withMaster > without, `有师父(${withMaster})该比没师父(${without})涨得快`);
+
+    // 面板：只在吃得到的时候写这一行
+    const { s } = sectScene();
+    const disciple = place2(s, 'A', 'qi-cultivator', 6, 4);
+    assert.ok(
+      !getCultivationPanelLines(s, disciple).some((l) => l.includes('宗门传承')),
+      '没师父时面板不该冒出传承行',
+    );
+    const master = place2(s, 'A', 'qi-cultivator', 4, 6);
+    setCultivationExp(master, expForRank(2));
+    const line = getCultivationPanelLines(s, disciple).find((l) => l.includes('宗门传承'));
+    assert.ok(line, '有师父时要有「宗门传承」这一行');
+    assert.ok(line!.includes('×2'), `要把倍率写出来：${line}`);
+  });
+
+  // ── 法术 / 灵力 / 藏经阁 / 研发（2026-11-08）──────────────
+  //
+  // 两条**互不相干**的上限，别再混起来：
+  //   · 研发额度（阵营级）= 2 × 生效中的藏经阁 —— 这一方"知道"多少门法术；
+  //   · 法术位（修士级）= ⌊境界 ÷ 2⌋ —— 一个修士"记得住"多少门。
+
+  /** 宗门（4,4 起 2×2）+ 贴着它的藏经阁（6,4） */
+  const spellScene = () => {
+    const { s, sect } = sectScene();
+    const lib = place2(s, 'A', 'cultivation-scripture-pavilion', 6, 4);
+    return { s, sect, lib };
+  };
+
+  const doAction = (s: GameState, unitId: string, actionId: string) =>
+    applyAction(s, { type: 'UNIT_ACTION', unitId, actionId });
+
+  test('灵力：上限按境界算，全部是整十，老存档读出来是满的', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    assert.equal(manaLimitForRank(0), 40, '0 期 40');
+    assert.equal(manaLimitForRank(9), 130, '9 期 130');
+    for (let r = 0; r <= 9; r++) {
+      assert.equal(manaLimitForRank(r) % 10, 0, `${r} 期的上限也必须是整十`);
+    }
+
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    assert.equal(maxManaOf(qi), 40, '没有落库字段时按当前境界现算');
+    assert.equal(manaOf(qi), 40, '老存档没有 mana 字段 → 按满灵力处理');
+    setMana(qi, 999);
+    assert.equal(manaOf(qi), 40, '写入要被上限夹住');
+  });
+
+  test('灵力：回合开始回 30，上限随境界刷新', () => {
+    let s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    setMana(qi, 0);
+    // 两次结束回合才轮到 A 的下一个回合开始（中间夹着 B 的回合）
+    s = nextTurn(nextTurn(s));
+    const after = unitOf(s, 'qi-cultivator', 'A');
+    assert.equal(manaOf(after), MANA_REGEN, `一回合回 ${MANA_REGEN} 点`);
+    assert.equal(maxManaOf(after), manaLimitForRank(getRank(after)), '上限跟着境界走');
+  });
+
+  test('藏经阁：只能贴着自家宗门建，宗门没了就失效', () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    const deacon = place2(s, 'A', 'cultivation-deacon', 6, 6);
+
+    const alone = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-scripture-pavilion',
+      x: 7,
+      y: 6,
+    });
+    assert.equal(alone.ok, false, '没有宗门就不该能盖藏经阁');
+
+    const sect = place2(s, 'A', 'cultivation-sect', 4, 4);
+    const r = applyAction(s, {
+      type: 'BUILD',
+      unitId: deacon.id,
+      unitType: 'cultivation-scripture-pavilion',
+      x: 6,
+      y: 4,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const lib = r.state.units.find((u) => u.type === 'cultivation-scripture-pavilion')!;
+    assert.ok(libraryIsActive(r.state, lib), '贴着宗门就是生效的');
+    assert.equal(activeLibrariesOf(r.state, 'A').length, 1);
+
+    const gone = { ...r.state, units: r.state.units.filter((u) => u.id !== sect.id) };
+    assert.equal(libraryIsActive(gone, lib), false, '宗门没了，藏书楼就废了');
+    assert.equal(activeLibrariesOf(gone, 'A').length, 0);
+  });
+
+  test('研发：额度来自藏经阁，花灵石，重复与额度满都会被拒', () => {
+    const { s, sect } = spellScene();
+    const spell = spellOf('palm-thunder')!;
+
+    // 一座藏经阁 = 2 个研发额度
+    assert.equal(researchCapOf(s, 'A'), LIBRARY_SPELL_SLOTS, '一座藏经阁给 2 个额度');
+    assert.equal(researchedOf(s, 'A').length, 0);
+
+    // 灵石不够：拒
+    s.players.A.res = { [SPIRIT_STONE]: 10 };
+    assert.ok((researchProblem(s, 'A', spell) ?? '').includes('灵石'), '要说清灵石不足');
+    const poor = doAction(s, sect.id, 'research:palm-thunder');
+    assert.equal(poor.ok, false, '灵石不够研发不了');
+
+    // 够了：研发成功、扣灵石、进目录
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    const r = doAction(s, sect.id, 'research:palm-thunder');
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(researchedOf(r.state, 'A').length, 1);
+    assert.ok(isResearched(r.state, 'A', 'palm-thunder'));
+    assert.equal(r.state.players.A.res![SPIRIT_STONE], 100 - researchCostOf(spell), '扣灵石');
+    assert.ok(r.state.log.some((l) => l.text.includes('研发')), '战报要写明研发了什么');
+
+    // 重复研发：拒（而且面板上不会再出现"研发"那条按钮）
+    const again = doAction(r.state, sect.id, 'research:palm-thunder');
+    assert.equal(again.ok, false, '不能研发第二遍');
+
+    // 额度满：塞两条假 id 把 2 个额度占满
+    const full = { ...r.state, researched: { A: ['fake-a', 'fake-b'] } };
+    assert.ok((researchProblem(full, 'A', spell) ?? '').includes('额度'), '额度满了要说额度');
+
+    // 没有藏经阁（= 没有额度）：理由指向藏经阁
+    // 注意要用"还没研发过"的那份状态，否则会先被"已经研发过"拦下来
+    const noLib = { ...s, units: s.units.filter((u) => u.type !== 'cultivation-scripture-pavilion') };
+    assert.equal(researchCapOf(noLib, 'A'), RESEARCH_BASE_SLOTS);
+    assert.ok((researchProblem(noLib, 'A', spell) ?? '').includes('藏经阁'), '要说清是缺藏经阁');
+  });
+
+  test('遗弃：腾出研发额度，已经学会的修士保留', () => {
+    const { s, sect } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(qi, expForRank(1)); // 2 期，1 个法术位
+
+    let cur = s;
+    const r1 = doAction(cur, sect.id, 'research:palm-thunder');
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    cur = r1.state;
+
+    const learn = doAction(cur, qi.id, 'learn:palm-thunder');
+    assert.ok(learn.ok, learn.ok ? '' : learn.reason);
+    cur = learn.state;
+
+    // 遗弃：目录清空，但那个修士还留着它
+    const r2 = doAction(cur, sect.id, 'abandon:palm-thunder');
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    assert.equal(researchedOf(r2.state, 'A').length, 0, '研发额度腾出来了');
+    assert.equal(
+      knownSpells(r2.state.units.find((u) => u.id === qi.id)!).length,
+      1,
+      '已经学会的人不受影响（遗忘是静心阁的事）',
+    );
+
+    // 再遗弃一次：没有可遗弃的
+    const r3 = doAction(r2.state, sect.id, 'abandon:palm-thunder');
+    assert.equal(r3.ok, false);
+  });
+
+  test('学法术：必须先研发；法术位只看境界，与藏经阁无关', () => {
+    const { s, sect } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    const spell = spellOf('palm-thunder')!;
+
+    setCultivationExp(qi, expForRank(1)); // 2 期
+    // 没研发：拒绝，理由指向宗门大殿
+    assert.ok((spellLearnProblem(s, qi, spell) ?? '').includes('研发'), '没研发的学不了');
+    const early = doAction(s, qi.id, 'learn:palm-thunder');
+    assert.equal(early.ok, false);
+
+    const r = doAction(s, sect.id, 'research:palm-thunder');
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const learned = doAction(r.state, qi.id, 'learn:palm-thunder');
+    assert.ok(learned.ok, learned.ok ? '' : learned.reason);
+
+    // 法术位只按境界：2 期 1 个，3 期还是 1 个，6 期 3 个
+    assert.equal(spellSlotsOf(qi), 1);
+    const qi3 = place2(s, 'A', 'qi-cultivator', 6, 6);
+    setCultivationExp(qi3, expForRank(2));
+    assert.equal(spellSlotsOf(qi3), 1, '3 期仍然是 1 个');
+    const qi6 = place2(s, 'A', 'qi-cultivator', 4, 7);
+    setCultivationExp(qi6, expForRank(5));
+    assert.equal(spellSlotsOf(qi6), 3, '6 期 3 个');
+  });
+
+  test('掌心雷：无视护甲、扣灵力、灵力够就能连放、超射程不生效', () => {
+    const { s, sect } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8)); // 9 期：灵力上限 130，够连放两发
+
+    const r0 = doAction(s, sect.id, 'research:palm-thunder');
+    assert.ok(r0.ok, r0.ok ? '' : r0.reason);
+    const r1 = doAction(r0.state, mage.id, 'learn:palm-thunder');
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    let cur = r1.state;
+    const caster = cur.units.find((u) => u.id === mage.id)!;
+
+    const heavy = place2(cur, 'B', 'body-cultivator', 5, 7); // 护甲 2、血 30；距离 3 格
+    heavy.hp = 500;
+    const dmg = palmThunderDamage(getRank(caster));
+    const before = manaOf(caster);
+
+    const hit = (target: Unit) =>
+      applyAction(cur, {
+        type: 'HERO_SKILL',
+        unitId: caster.id,
+        skillId: 'palm-thunder',
+        targetX: target.x,
+        targetY: target.y,
+      });
+
+    const a = hit(heavy);
+    assert.ok(a.ok, a.ok ? '' : a.reason);
+    assert.equal(a.state.units.find((u) => u.id === heavy.id)!.hp, 500 - dmg, `伤害要正好 ${dmg} 点（护甲不参与）`);
+    assert.equal(manaOf(a.state.units.find((u) => u.id === caster.id)!), before - PALM_THUNDER_COST, '扣灵力');
+
+    // 第二发：**不限每回合一次**，只要灵力够
+    cur = a.state;
+    const b = applyAction(cur, {
+      type: 'HERO_SKILL',
+      unitId: caster.id,
+      skillId: 'palm-thunder',
+      targetX: heavy.x,
+      targetY: heavy.y,
+    });
+    assert.ok(b.ok, `灵力够就该能连放：${b.ok ? '' : b.reason}`);
+
+    // 第三发：灵力只剩 30，不够 50
+    const c3 = applyAction(b.state, {
+      type: 'HERO_SKILL',
+      unitId: caster.id,
+      skillId: 'palm-thunder',
+      targetX: heavy.x,
+      targetY: heavy.y,
+    });
+    assert.equal(c3.ok, false, '灵力见底就放不出来');
+    assert.ok(c3.ok ? '' : /灵力/.test(c3.reason), `理由要说灵力：${c3.ok ? '' : c3.reason}`);
+
+    // 射程外
+    const s2 = spellScene().s;
+    const m2 = place2(s2, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(m2, expForRank(1));
+    teachSpell(m2, spellOf('palm-thunder')!);
+    const far = place2(s2, 'B', 'body-cultivator', 9, 9);
+    const tooFar = applyAction(s2, {
+      type: 'HERO_SKILL',
+      unitId: m2.id,
+      skillId: 'palm-thunder',
+      targetX: far.x,
+      targetY: far.y,
+    });
+    assert.equal(tooFar.ok, false, '超出射程应该被拒');
+    assert.ok(tooFar.ok ? '' : /射程|太远/.test(tooFar.reason), `理由要说射程：${tooFar.ok ? '' : tooFar.reason}`);
+  });
+
+  test('掌心雷：灵力不够时按钮是灰的，硬放也不扣灵力', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(1));
+    teachSpell(mage, spellOf('palm-thunder')!);
+    const foe = place2(s, 'B', 'militia', 5, 7);
+    foe.hp = 100;
+
+    setMana(mage, PALM_THUNDER_COST - 1);
+    const skill = heroSkillsOf(s, mage).find((k) => k.def.id === 'palm-thunder')!;
+    assert.equal(skill.ready, false, '灵力不足时不该显示就绪');
+    assert.ok(skill.notReadyReason?.includes('灵力'), `理由要说灵力：${skill.notReadyReason}`);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'palm-thunder',
+      targetX: foe.x,
+      targetY: foe.y,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(manaOf(s.units.find((u) => u.id === mage.id)!), PALM_THUNDER_COST - 1, '失败不扣灵力');
+  });
+
+  test('宗门大殿的按钮：研发一组、遗弃一组，遗弃带确认文案', () => {
+    const { s, sect } = spellScene();
+    const before = CULTIVATION_HOOKS.unitActions!({ state: s, unit: sect, viewer: 'A' });
+    const research = before.find((b) => b.id === 'research:palm-thunder');
+    assert.ok(research, '没研发过时要列「研发」');
+    assert.equal(research!.group, '研发');
+    assert.ok(!research!.confirm, '研发是花钱做好事，不该弹确认');
+
+    // 研发之后变成「遗弃」，而且是破坏性操作
+    const r = doAction(s, sect.id, 'research:palm-thunder');
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = CULTIVATION_HOOKS.unitActions!({ state: r.state, unit: sect, viewer: 'A' });
+    const abandon = after.find((b) => b.id.startsWith('abandon:'));
+    assert.ok(abandon, '研发过之后要给「遗弃」按钮');
+    assert.equal(abandon!.group, '遗弃');
+    assert.ok(abandon!.confirm && abandon!.confirm.includes('遗弃'), '遗弃必须带确认文案');
+
+    // 别人的宗门：一个按钮都不给
+    assert.equal(CULTIVATION_HOOKS.unitActions!({ state: s, unit: sect, viewer: 'B' }).length, 0);
+  });
+
+  // ── 静心阁（2026-11-08）────────────────────────
+  //
+  // 藏经阁的对称件：一个往里装、一个往外倒。造型/造价/选址完全一样，
+  // 差别只有"站在旁边能做什么"。
+
+  /** 宗门（4,4 起 2×2）+ 藏经阁（6,4）+ 静心阁（3,4） */
+  const forgetScene = () => {
+    const { s, sect } = sectScene();
+    const lib = place2(s, 'A', 'cultivation-scripture-pavilion', 6, 4);
+    const silent = place2(s, 'A', 'cultivation-silent-pavilion', 3, 4);
+    return { s, sect, lib, silent };
+  };
+
+  test('静心阁：和藏经阁对称（1×1、时代 3、只能贴宗门、执事会盖）', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-silent-pavilion'];
+    const lib = s.unitTypes['cultivation-scripture-pavilion'];
+    assert.ok(def, '静心阁要在本局兵种表里');
+    assert.equal(def.footprint ?? 1, 1, '1×1');
+    assert.equal(def.era, lib.era, '和藏经阁同一个时代');
+    assert.equal(def.cost, lib.cost, '造价对齐');
+    assert.deepEqual(def.adjacent, lib.adjacent, '选址条件对齐：贴着宗门');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-silent-pavilion'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-silent-pavilion'), '管事继承');
+  });
+
+  test('静心阁：宗门没了就失效，站远了也忘不了', () => {
+    const { s, silent } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 3, 5); // 贴着静心阁
+    setCultivationExp(qi, expForRank(1));
+    teachSpell(qi, spellOf('palm-thunder')!);
+
+    assert.ok(pavilionIsActive(s, silent), '贴着宗门就是生效的');
+    assert.ok(silentPavilionNextTo(s, qi), '站在旁边就找得到');
+    assert.equal(forgetProblem(s, qi, spellOf('palm-thunder')!), null, '有位可忘');
+
+    // 站远：忘不了
+    qi.x = 9;
+    qi.y = 9;
+    assert.equal(silentPavilionNextTo(s, qi), null);
+    assert.ok((forgetProblem(s, qi, spellOf('palm-thunder')!) ?? '').includes('静心阁'), '理由要指向静心阁');
+    qi.x = 3;
+    qi.y = 5;
+
+    // 宗门被拆：静心阁一起废掉
+    const gone = {
+      ...s,
+      units: s.units.filter((u) => u.type !== 'cultivation-sect'),
+    };
+    assert.equal(pavilionIsActive(gone, silent), false, '宗门没了，静心阁也废了');
+    assert.equal(silentPavilionNextTo(gone, qi), null);
+  });
+
+  test('静心阁：忘掉法术腾出法术位，回藏经阁还能再学', () => {
+    const { s, sect } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5); // 先站在藏经阁旁边
+    setCultivationExp(qi, expForRank(1)); // 2 期：1 个法术位
+
+    let cur = s;
+    const r1 = doAction(cur, sect.id, 'research:palm-thunder');
+    assert.ok(r1.ok, r1.ok ? '' : r1.reason);
+    cur = r1.state;
+    const r2 = doAction(cur, qi.id, 'learn:palm-thunder');
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    cur = r2.state;
+
+    const learned = cur.units.find((u) => u.id === qi.id)!;
+    assert.equal(knownSpells(learned).length, 1);
+    assert.ok(heroSkillsOf(cur, learned).some((k) => k.def.id === 'palm-thunder'), '技能栏里能看到');
+
+    // 挪到静心阁旁边才能忘（走动是玩家自己的时间成本）
+    learned.x = 3;
+    learned.y = 5;
+    const r3 = doAction(cur, qi.id, 'forget:palm-thunder');
+    assert.ok(r3.ok, r3.ok ? '' : r3.reason);
+    const after = r3.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(knownSpells(after).length, 0, '忘掉了');
+    assert.ok(!heroSkillsOf(r3.state, after).some((k) => k.def.id === 'palm-thunder'), '技能栏里也没了');
+    assert.ok(r3.state.log.some((l) => l.text.includes('忘掉')), '战报要写');
+
+    // 再忘一次：本来就不会了
+    const r4 = doAction(r3.state, after.id, 'forget:palm-thunder');
+    assert.equal(r4.ok, false);
+
+    // 回藏经阁能重新学（研发还在）
+    const back = r3.state.units.find((u) => u.id === qi.id)!;
+    back.x = 6;
+    back.y = 5;
+    const r5 = doAction(r3.state, back.id, 'learn:palm-thunder');
+    assert.ok(r5.ok, r5.ok ? '' : r5.reason);
+  });
+
+  test('静心阁：只列"会"的法术，按钮带确认文案；不会的技能不出现', () => {
+    const { s } = forgetScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 3, 5); // 贴着静心阁
+    setCultivationExp(qi, expForRank(3)); // 4 期
+
+    // 什么都不会：一个遗忘按钮都没有
+    const none = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    assert.equal(none.filter((b) => b.group === '遗忘').length, 0, '不会就别列');
+
+    teachSpell(qi, spellOf('palm-thunder')!);
+    const after = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    const forget = after.find((b) => b.id === 'forget:palm-thunder');
+    assert.ok(forget, '会了才列');
+    assert.equal(forget!.group, '遗忘');
+    assert.ok(forget!.confirm && forget!.confirm.includes('忘掉'), '遗忘必须带确认文案');
+    assert.equal(forget!.disabled, false);
+
+    // 流派技能（剑气纵横）不在额外技能里，天然不会出现在列表
+    assert.ok(!after.some((b) => b.id.includes('sword-sweep')), '流派技能不该出现在遗忘列表');
+  });
+
+  test('法术：面板写出灵力、法术位与本方研发', () => {
+    const { s, sect } = spellScene();
+    const qi = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(qi, expForRank(5)); // 6 期 → 3 个法术位
+    const r = doAction(s, sect.id, 'research:palm-thunder');
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const lines = getCultivationPanelLines(r.state, r.state.units.find((u) => u.id === qi.id)!);
+    assert.ok(lines.some((l) => l.includes('灵力') && l.includes('每回合')), '要有灵力行');
+    assert.ok(lines.some((l) => l.includes('法术位') && l.includes('3')), '法术位要按境界写');
+    assert.ok(lines.some((l) => l.includes('本方研发') && l.includes('藏经阁')), '要有本方研发额度行');
+  });
+
+  // ── 丹药 / 炼丹炉（2026-11-08）────────────────────────
+  //
+  // 三条边界，每条都要钉住：
+  //   · 动作发起者是**修士**不是炉子（炉子只是个站位条件）；
+  //   · 数量是**隐藏信息**（对手看得见 buff，数不出兜里几颗）；
+  //   · 服用不需要站在任何地方（药是随身带的）。
+
+  /** 修士（5,5）+ 炼丹炉（6,5）：贴着站 */
+  const alchemyScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    s.players.A.gold = 900;
+    const furnace = place2(s, 'A', 'cultivation-alchemy-furnace', 6, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    return { s, furnace, qi };
+  };
+
+  const doAct = (s: GameState, unitId: string, actionId: string) =>
+    applyAction(s, { type: 'UNIT_ACTION', unitId, actionId });
+
+  test('炼丹炉：1×1、时代 3、执事与管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-alchemy-furnace'];
+    assert.ok(def, '炼丹炉要在本局兵种表里');
+    assert.equal(def.footprint ?? 1, 1, '1×1');
+    assert.equal(def.era, 3, '三代');
+    assert.equal(def.atk, 0, '不打人');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-alchemy-furnace'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-alchemy-furnace'), '管事继承');
+  });
+
+  test('携带上限：3 + ⌊境界/2⌋，装满了就炼不了', () => {
+    const { s, qi } = alchemyScene();
+    assert.equal(pillCarryCap(qi), PILL_CARRY_BASE, '0 期 3 颗');
+    setCultivationExp(qi, expForRank(5)); // 6 期
+    assert.equal(pillCarryCap(qi), PILL_CARRY_BASE + 3, '6 期 6 颗');
+
+    while (addPill(qi, HEAL_PILL.id)) {
+      /* 一直装到满 */
+    }
+    assert.equal(pillCountOf(qi), pillCarryCap(qi));
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('装不下'), '满了要说装不下');
+  });
+
+  test('炼丹：站炉子旁才炼得动，扣金币与灵石，丹进自己袋子', () => {
+    const { s, qi } = alchemyScene();
+    assert.ok(furnaceNextTo(s, qi), '贴着炉子');
+
+    // 站远：炼不了，理由指向炉子
+    qi.x = 9;
+    qi.y = 9;
+    assert.equal(furnaceNextTo(s, qi), null);
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('炼丹炉'), '理由要说炉子');
+    const far = doAct(s, qi.id, `brew:${HEAL_PILL.id}`);
+    assert.equal(far.ok, false, '离得远炼不了');
+    qi.x = 5;
+    qi.y = 5;
+
+    // 资源不足
+    s.players.A.gold = 1;
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('金币'), '金币不足要说清');
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('灵石'), '灵石不足要说清');
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+
+    // 真炼一颗
+    const beforeGold = s.players.A.gold;
+    const beforeStone = s.players.A.res![SPIRIT_STONE];
+    const r = doAct(s, qi.id, `brew:${HEAL_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(after)[HEAL_PILL.id], 1, '身上多了一颗');
+    assert.equal(r.state.players.A.gold, beforeGold - HEAL_PILL.cost.gold, '扣金币');
+    assert.equal(
+      r.state.players.A.res![SPIRIT_STONE],
+      beforeStone - HEAL_PILL.cost.stone,
+      '扣灵石',
+    );
+    assert.ok(r.state.log.some((l) => l.text.includes('炼成')), '战报要写炼成了什么');
+  });
+
+  test('回春丹：按生命上限回 12%，满血时吃不了', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    const max = maxHpOf(s, qi);
+
+    assert.ok((pillUseProblem(s, qi, HEAL_PILL) ?? '').includes('满'), '满血时按钮该灰');
+    const full = doAct(s, qi.id, `use:${HEAL_PILL.id}`);
+    assert.equal(full.ok, false);
+    assert.equal(pillCountOf(s.units.find((u) => u.id === qi.id)!), 1, '被拒时不该扣药');
+
+    qi.hp = Math.floor(max / 2);
+    const before = qi.hp;
+    const r = doAct(s, qi.id, `use:${HEAL_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    // 名义回 12%，但不能超过上限：修士 0 期只有一条薄血，按一半血起跳会顶到天花板
+    const want = Math.min(Math.max(15, Math.round(max * 0.12)), max - before);
+    assert.equal(after.hp, before + want, `该回 ${want} 点`);
+    assert.equal(pillCountOf(after), 0, '吃完就没了');
+    assert.equal(pillsOf(after)[HEAL_PILL.id], undefined, '归零的键要删掉，别留着 0');
+  });
+
+  test('聚灵丹：回 40 灵力，满灵力时吃不了', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, SPIRIT_PILL.id);
+    setMana(qi, 0);
+    const r = doAct(s, qi.id, `use:${SPIRIT_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(manaOf(r.state.units.find((u) => u.id === qi.id)!), 40, '回 40 点');
+
+    const { s: s2, qi: qi2 } = alchemyScene();
+    addPill(qi2, SPIRIT_PILL.id);
+    assert.ok((pillUseProblem(s2, qi2, SPIRIT_PILL) ?? '').includes('满'), '满灵力该灰');
+  });
+
+  test('护体丹：+25% 护甲，2 个自己的回合后掉掉；面板与结算读同一个字段', () => {
+    const { s, qi } = alchemyScene();
+    setCultivationExp(qi, expForRank(5)); // 6 期，护甲够高才看得出百分比
+    addPill(qi, WARD_PILL.id);
+    const armorBefore = effectiveStats(s, qi).armor;
+
+    const r = doAct(s, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(after.buff?.armorPct, 0.25, '要给 buff.armorPct');
+    assert.equal(after.buff?.turns, 2);
+    const armorAfter = effectiveStats(r.state, after).armor;
+    assert.ok(armorAfter > armorBefore, `护甲该变高：${armorBefore} → ${armorAfter}`);
+    assert.equal(
+      armorAfter,
+      armorBefore + Math.max(1, Math.round(armorBefore * 0.25)),
+      '加值要按面板那条式子算',
+    );
+
+    // 覆盖而不是叠加：再吃一颗，还是 25%
+    addPill(after, WARD_PILL.id);
+    const r2 = doAct(r.state, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    assert.equal(
+      r2.state.units.find((u) => u.id === qi.id)!.buff?.armorPct,
+      0.25,
+      '药力只有一份，新药压旧药',
+    );
+  });
+
+  test('丹药是隐藏信息：敌方拿到的视图里没有 pills，buff 照旧可见', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, WARD_PILL.id);
+    qi.buff = { armorPct: 0.25, turns: 2, label: '护体丹' };
+
+    // 自己：看得见
+    const mine = playerView(s, 'A').state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(mine)[HEAL_PILL.id], 1, '自己看得见自己的袋子');
+
+    // 对手：抹掉 pills，但 buff 留着（"看得见吃了药，看不见还有几颗"）
+    const foe = playerView(s, 'B').state.units.find((u) => u.id === qi.id);
+    assert.ok(foe, '无雾模式下对手看得见这个单位');
+    assert.deepEqual(foe!.custom?.pills, undefined, '对手数不出几颗');
+    assert.equal(foe!.buff?.armorPct, 0.25, '吃药的痕迹藏不住');
+
+    // 观战：不裁（复盘要看全）
+    const replay = playerView(s, 'B', true).state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(replay)[HEAL_PILL.id], 1, '观战不裁');
+  });
+
+  test('面板：只有本人看得到「携带丹药」，敌方那张卡整行不出现', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, HEAL_PILL.id);
+    const mine = getCultivationPanelLines(s, qi, 'A');
+    const line = mine.find((l) => l.includes('携带丹药'));
+    assert.ok(line, '自己要有这一行');
+    assert.ok(line!.includes(HEAL_PILL.name) && line!.includes('×2'), `要写清种类与数量：${line}`);
+
+    const foe = getCultivationPanelLines(s, qi, 'B');
+    assert.ok(!foe.some((l) => l.includes('携带丹药')), '敌方不该看到这一行（连 0 都不该印）');
+  });
+
+  test('按钮：站炉子旁列「炼丹」，身上有丹列「服用」，敌方一个都没有', () => {
+    const { s, qi } = alchemyScene();
+    const brew = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    assert.equal(brew.filter((b) => b.group === '炼丹').length, PILLS.length, '三颗都列出来');
+    assert.equal(brew.filter((b) => b.group === '服用').length, 0, '没药就别列服用');
+
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, WARD_PILL.id);
+    const withPills = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    const use = withPills.filter((b) => b.group === '服用');
+    assert.equal(use.length, 2, '有什么列什么');
+    // 能点的那些右侧写"还剩几颗"；还不能点的（比如满血时的回春丹）写的是原因
+    assert.ok(
+      use.filter((b) => !b.disabled).every((b) => b.note?.includes('颗')),
+      `能吃的要写清还剩几颗：${JSON.stringify(use.map((b) => b.note))}`,
+    );
+
+    // 敌方：连"炼丹"都不该看到（炉子是自己的，更别说袋子）
+    assert.equal(CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'B' }).length, 0);
+  });
+
+  test('丹药只在修士身上：工匠站炉子旁也炼不了', () => {
+    const { s } = alchemyScene();
+    const deacon = place2(s, 'A', 'cultivation-deacon', 6, 6);
+    assert.ok(furnaceNextTo(s, deacon), '贴着炉子');
+    assert.ok((pillBrewProblem(s, 'A', deacon, HEAL_PILL) ?? '').includes('修士'), '只有修士炼丹');
+  });
+
+  test('药力显示：和「中毒 n 回合」同一排，带剩余回合；属性明细里不重复', () => {
+    const { s, qi } = alchemyScene();
+    setCultivationExp(qi, expForRank(5));
+    addPill(qi, WARD_PILL.id);
+    const armorBefore = effectiveStats(s, qi).armor;
+    const r = doAct(s, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const st = r.state;
+    const unit = st.units.find((u) => u.id === qi.id)!;
+
+    // 1）属性明细里不再出现药力（那串读起来像地形/永久加成，而且没有回合数）
+    const eff = effectiveStats(st, unit);
+    assert.ok(
+      !eff.armorItems.some((it: { label: string }) => it.label === WARD_PILL.name),
+      `armorItems 不该列药力：${JSON.stringify(eff.armorItems)}`,
+    );
+    // 但护甲该加的还是加了（只是不写进明细）
+    assert.ok(eff.armor > armorBefore, `药力仍然算进护甲：${armorBefore} → ${eff.armor}`);
+
+    // 2）状态栏里有一条「护体丹 · 2 回合」
+    const html = detailCardHtml(
+      {
+        view: playerView(st, 'A'),
+        me: 'A',
+        selectedUnit: unit,
+        selectedCityId: null,
+        selectedCampId: null,
+        selectedTile: null,
+      },
+      true,
+    );
+    const chip = /<span class="status-chip st-buff"[^>]*>\s*<b>([^<]+)<\/b><i>([^<]+)<\/i>/.exec(html);
+    assert.ok(chip, '药力要画成状态徽章（和中点/减速同一排）');
+    assert.equal(chip![1], WARD_PILL.name, '徽章写丹药名');
+    assert.ok(
+      chip![2]!.includes(String(WARD_PILL_TURNS)) && chip![2]!.includes('回合'),
+      `徽章要写剩余回合：${chip![2]}`,
+    );
   });
 }
 

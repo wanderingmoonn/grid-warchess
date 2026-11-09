@@ -150,6 +150,48 @@ export function heatStep(count: number): number {
   return Math.min(5, Math.max(1, Math.trunc(count)));
 }
 
+/**
+ * 把"所有玩家、所有回合"的记账摊平成「格索引 → 次数」。
+ *
+ * 记账是按 (玩家, 回合) 分层的，而这个函数只关心"整盘棋一共记了多少"，
+ * 用来给两个状态做差。分层信息在差里没有意义——一层一层比会漏掉
+ * "回合推进导致记账从上一层挪到下一层"的情况。
+ */
+function heatTally(s: GameState): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const perPlayer of Object.values(s.heat ?? {})) {
+    for (const perTurn of Object.values(perPlayer ?? {})) {
+      for (const [k, v] of Object.entries(perTurn ?? {})) {
+        const i = Number(k);
+        if (!(v > 0)) continue;
+        out.set(i, (out.get(i) ?? 0) + v);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 这一步比上一步**多记了**哪些格子（格索引 → 新增次数）。
+ *
+ * 出手闪烁就靠它：动作前后各拍一张记账快照，差出来的就是"这一下覆盖到哪"。
+ * 好处是不必按动作类型逐个特判——普攻、溅射、反击、攻城、技能直伤走的都是
+ * `noteHeatCell`，谁记了账谁就浮出来。
+ *
+ * 只看"增加"：`noteHeatAt` 会顺手删掉过期回合的记账，那种减少和开火无关。
+ * 移动、建造、招募都不会记账，所以返回空表，界面自然不闪。
+ */
+export function newHeatCells(before: GameState, after: GameState): Map<number, number> {
+  const was = heatTally(before);
+  const now = heatTally(after);
+  const out = new Map<number, number>();
+  for (const [i, n] of now) {
+    const delta = n - (was.get(i) ?? 0);
+    if (delta > 0) out.set(i, delta);
+  }
+  return out;
+}
+
 /** 什么时候该把红格画出来 */
 export interface HeatViewOpts {
   /** 此刻看得见的格子（雾）。不传 = 全图可见 */

@@ -73,6 +73,14 @@ export const ABILITY_VALUE: Record<string, number> = {
   'af-stealth': 0.08,
   phase: 0.06,
   // 机动
+  /*
+   * 飞行 0.18：**必须比 `fly`（0.15，掠空）贵**，因为它严格包含掠空——
+   * 飞行 = 掠水 + 林丘各 1 步（= 掠空）+ 空中层（能和地面单位共格、地面近战够不着）。
+   * 注意 id 和名字是反的（2026-11-08 改过名）：`fly`=掠空，`fly-over`=飞行。
+   * 同一个东西，加强版反而更便宜，是上一轮定价里最直白的一处自相矛盾。
+   * 速攻时还要再高一截，见下面的 `ABILITY_TEMPO`。
+   */
+  'fly-over': 0.18,
   leap: 0.1,
   'forest-walk': 0.05,
   woodland: 0.05,

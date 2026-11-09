@@ -15,11 +15,26 @@ import {
   SPIRIT_CULTIVATOR, 
   CULTIVATOR, 
   SWORD_CULTIVATOR,
+  BODY_CULTIVATOR,
+  BLOOD_CULTIVATOR,
   SERVANT,
   DEACON,
+  STEWARD,
   SPIRIT_FIELD,
   SPIRIT_MINE,
   SPIRIT_TOWER,
+  SPIRIT_SPRING,
+  SECT,
+  SCRIPTURE_PAVILION,
+  SILENT_PAVILION,
+  ALCHEMY_FURNACE,
+  FORGE_1,
+  FORGE_2,
+  FORGE_3,
+  ARTIFACT_WOOD,
+  ARTIFACT_STONE,
+  ARTIFACT_WATER,
+  ARTIFACT_FIRE,
   FORMATION_MASTER,
   FORMATION_MASTER_2,
   FORMATION_MASTER_3,
@@ -51,12 +66,36 @@ export const CULTIVATION_PACK: Expansion = {
   units: [
     CULTIVATOR, 
     SWORD_CULTIVATOR, 
+    // 体修：第二个"能修炼的战斗流派"，靠金刚不坏硬抗（见 abilities/body-ward.ts）
+    BODY_CULTIVATOR,
+    // 魔修：靠「血祭」炼化生灵升级，打坐与击杀历练都不给它（见 skills/blood-rite.ts）
+    BLOOD_CULTIVATOR,
     SPIRIT_CULTIVATOR,
     SERVANT, 
     DEACON,
+    // 管事是三代炼器炉的建造者（仆役 → 执事 → 管事）
+    STEWARD,
     SPIRIT_FIELD, 
     SPIRIT_MINE,
     SPIRIT_TOWER,
+    // 灵泉：四代支援建筑，主动技能「泉涌」；同时是寒水镜在没有水的地图上的备用产地
+    SPIRIT_SPRING,
+    // 宗门大殿：2×2，靠相邻的修士招募弟子（灵石）并传承（打坐加成）
+    SECT,
+    // 藏经阁：只能贴着自家宗门，给本阵营 +2 研发额度，修士在这学法术
+    SCRIPTURE_PAVILION,
+    // 静心阁：和藏经阁对称，贴着宗门建；修士在这忘掉法术、腾出法术位
+    SILENT_PAVILION,
+    // 炼丹炉：修士站在旁边才能炼丹药（丹药随身带，见 pills.ts）
+    ALCHEMY_FURNACE,
+    // 炼器：三档炉子 + 四件法器。法器是 campOnly，城市产线不供（见 units.ts）
+    FORGE_1,
+    FORGE_2,
+    FORGE_3,
+    ARTIFACT_WOOD,
+    ARTIFACT_STONE,
+    ARTIFACT_WATER,
+    ARTIFACT_FIRE,
     // 阵法：阵师是唯一建造者，三个时代的白名单递增（见 units.ts）
     FORMATION_MASTER,
     FORMATION_MASTER_2,

@@ -33,6 +33,10 @@ import {
   totalHpBonusForRank,
 } from '../src/core/cultivation/progression.ts';
 import {
+  BODY_ATK_MUL,
+  BODY_MOVE_MUL,
+  BODY_RANGE_MUL,
+  BODY_TRUE_DAMAGE_MUL,
   KILL_EXP_BASE,
   KILL_EXP_CAP_BASE,
   KILL_EXP_CAP_PER_RANK,
@@ -57,6 +61,18 @@ import {
   trueDamageForRank,
 } from '../src/core/cultivation/stats.ts';
 import { SPIRIT_ASCENSION_RANK } from '../src/core/cultivation/identity.ts';
+import { BODY_WARD_BASE, BODY_WARD_TIERS } from '../src/core/cultivation/abilities/body-ward.ts';
+import {
+  BLOOD_RITE_RADIUS_BASE,
+  BLOOD_RITE_RADIUS_STEP,
+  BLOOD_RITE_EXP_PER_DAMAGE,
+  BLOOD_RITE_EXP_DECAY,
+  BLOOD_RITE_ALLY_EXP_MUL,
+  BLOOD_RITE_LIFESPAN_COST,
+  bloodRiteRadiusForRank,
+  bloodRiteExpMul,
+} from '../src/core/cultivation/skills/blood-rite.ts';
+import { EXP_GROWTH_BLOOD } from '../src/core/cultivation/progression.ts';
 import {
   SKY_STEP_RANK,
   SWEEP_BASE_REACH,
@@ -83,7 +99,71 @@ import {
   GUARDIAN_DRAIN_CAP_PER_RANK,
 } from '../src/core/cultivation/abilities/formation-guardian.ts';
 import { GUARD_FORMATION } from '../src/core/cultivation/units.ts';
-import { TELEPORT_COST, TELEPORT_RADIUS } from '../src/core/cultivation/skills/teleport-swap.ts';
+import { TELEPORT_COST, TELEPORT_RADIUS, TELEPORT_RIFT_LOG } from '../src/core/cultivation/skills/teleport-swap.ts';
+import {
+  FORGE_1,
+  FORGE_2,
+  FORGE_3,
+  SECT,
+  SCRIPTURE_PAVILION,
+  SILENT_PAVILION,
+  ALCHEMY_FURNACE,
+  SPIRIT_SPRING,
+  CULTIVATOR,
+  SWORD_CULTIVATOR,
+  BODY_CULTIVATOR,
+  BLOOD_CULTIVATOR,
+  ARTIFACT_WOOD,
+  ARTIFACT_STONE,
+  ARTIFACT_WATER,
+  ARTIFACT_FIRE,
+} from '../src/core/cultivation/units.ts';
+import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
+import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
+import {
+  HEAL_PILL,
+  HEAL_PILL_FLOOR,
+  HEAL_PILL_RATIO,
+  PILL_CARRY_BASE,
+  SPIRIT_PILL,
+  SPIRIT_PILL_MANA,
+  WARD_PILL,
+  WARD_PILL_ARMOR_PCT,
+  WARD_PILL_TURNS,
+} from '../src/core/cultivation/pills.ts';
+import { MANA_REGEN, manaLimitForRank } from '../src/core/cultivation/mana.ts';
+import {
+  PALM_THUNDER_BASE,
+  PALM_THUNDER_COST,
+  PALM_THUNDER_PER_RANK,
+  PALM_THUNDER_RANGE,
+  PALM_THUNDER_SKILL,
+} from '../src/core/cultivation/skills/palm-thunder.ts';
+import {
+  SPRING_FLOOR_HEAL,
+  SPRING_HEAL_RATIO,
+  SPRING_HP_PER_STONE,
+  SPRING_MIN_COST,
+  SPRING_RADIUS,
+  springHealAmount,
+} from '../src/core/cultivation/skills/spirit-spring.ts';
+import {
+  ARTIFACT_SPIRIT_ID,
+  ARTIFACT_SPIRIT_LABEL,
+  WARM_NOURISH_BASE,
+  WARM_NOURISH_ID,
+  WARM_NOURISH_LABEL,
+  WARM_NOURISH_RADIUS,
+} from '../src/core/cultivation/artifacts.ts';
+import {
+  FIRE_QI_RADIUS,
+  FIRE_QI_TRUE_PCT,
+  STONE_WARD_ARMOR_PCT,
+  STONE_WARD_RADIUS,
+  SWORD_QI_ATK_PCT,
+  SWORD_QI_RADIUS,
+} from '../src/core/cultivation/abilities/artifact-auras.ts';
+import { ARTIFACT_DEBUFF_TURNS } from '../src/core/cultivation/abilities/artifact-effects.ts';
 import { CULTIVATOR_ABILITY_UNLOCKS } from '../src/core/cultivation/abilities/unlocks.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../src/core/cultivation/skills/unlocks.ts';
 import { AP_BY_TIER, AP_COST } from '../src/core/action-points.ts';
@@ -91,7 +171,7 @@ import { FANTASY } from '../src/core/fantasy-packs.ts';
 import { DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { ELEMENT_NAME } from '../src/core/types.ts';
 import { resourceShort } from '../src/core/resources.ts';
-import type { Element, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
+import type { Element, Terrain, UnitCategory, UnitTypeDef } from '../src/core/types.ts';
 
 const ERA1_HP = ERAS[0]?.cityMaxHp ?? 30;
 
@@ -154,11 +234,11 @@ const GENERIC_TERMS: Term[] = [
     brief: '打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。',
     more: `默认比例 ${Math.round(
       CONFIG.splashRatio * 100,
-    )}%，不分敌我——友军站在炸点上一样掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。`,
+    )}%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。`,
   },
   {
     key: 'burst',
-    name: '多动',
+    name: '攻击次数',
     brief: '一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。',
     more: '次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。',
   },
@@ -194,14 +274,14 @@ const GENERIC_TERMS: Term[] = [
   {
     key: 'produce',
     name: '产兵',
-    brief: '这是一座产兵点：兵从营门四邻的空地出来，时代取离它最近的己方城市。',
-    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。城市丢了，营就断了补给，产不出兵。',
+    brief: '这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。',
+    more: '括号里是这座营和"默认产能"不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。',
   },
   {
     key: 'air',
     name: '空中层',
-    brief: '与地面互不占格；地面单位打它时距离 +1，它能掠水、走森林丘陵只花 1 步。',
-    more: '掠水三兄弟（飞行 / 跳跃 / 相位）机制同一套，差别只在名字对不对得上画面。空中单位和地面单位互不占格：地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。两层叠在同一格时，点这一格会先问"有没有我能打的目标"——有就直接开火，不再只弹上面那个的属性卡。',
+    brief: '与地面互不占格；地面单位打它时距离 +1，地形一概不挡——水面、深水、高山都能停。',
+    more: '三种"会飞"（掠空 / 飞行 / 跳跃）机制同一套，差别只在名字对不对得上画面：掠空只掠过水面、还在地面层；飞行才真的悬在头顶，能和地面单位同格——地面那格站着人，天上那格照样能停，天上那格的人也只能打天上的。两层叠在同一格时，点这一格会先问"有没有我能打的目标"——有就直接开火，不再只弹上面那个的属性卡。',
   },
   {
     key: 'overhead',
@@ -246,7 +326,7 @@ const GENERIC_TERMS: Term[] = [
     key: 'summon',
     name: '召唤',
     brief: '每隔 N 回合在自己身边生成一个召唤物，同源同时最多若干个。',
-    more: '召唤物不占编制上限，所以不会把产线堵死；召唤师被杀，已经召出来的还留在场上。',
+    more: '召唤师被杀，已经召出来的还留在场上。',
   },
   {
     key: 'ammo',
@@ -433,6 +513,18 @@ function traitsOf(u: UnitTypeDef): string {
     const a = abilityById(id);
     parts.push(a ? ref(`ab-${id}`) : `<b>${esc(id)}</b>`);
   }
+  // 自带技能也要印：魔修、剑修、散灵台的本体价值全在这条上，
+  // 光看攻/血那一行会以为它们只是"弱一点的兵"。
+  for (const k of u.skills ?? []) {
+    // 技能没有全局表：现登记一条，键用"兵种 + 技能名"，稳定可复现
+    const key = dynamicTerm(
+      `sk-${slug(u.id)}-${slug(k.name)}`,
+      k.name,
+      k.summary,
+      `冷却 ${k.cooldown} 回合；不占移动与攻击。`,
+    );
+    parts.push(ref(key, `${k.name} CD${k.cooldown}`));
+  }
   if (u.incomeByTerrain) {
     const best = Object.entries(u.incomeByTerrain).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
     if (best) parts.push(ref('income', `产出 ${terrainName(best[0])} +${best[1]}`));
@@ -448,9 +540,29 @@ function traitsOf(u: UnitTypeDef): string {
     if (table.length > 0) parts.push(ref('income', `产出 ${table.join(' ')}`));
   }
   if (u.splash) parts.push(ref('splash', `溅射 ${u.splash}`));
-  if (u.burst) parts.push(ref('burst', `多动 ${u.burst} 次`));
+  // 产地要求：法器那类"挨着什么才造得出来"的兵，表格里必须写清楚，
+  // 否则玩家看到一件四代法器只会以为它能从城市造出来。
+  if (u.produceNear) {
+    const specs = Array.isArray(u.produceNear) ? u.produceNear : [u.produceNear];
+    const near = specs.map(nearText).filter(Boolean);
+    if (near.length > 0) {
+      const label = near.join('，或 ');
+      const key = dynamicTerm(
+        `near-${slug(u.id)}`,
+        `产地 ${label}`,
+        `造它的时候，产兵点的占地和四邻里必须有${label}。`,
+        '它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。',
+      );
+      parts.push(ref(key, `产地 ${label}`));
+    }
+  }
+  // 「攻击次数」不再单独标：攻击列已经写成 `18×3`，特性列再挂一条是重复。
   if ((u.builds ?? []).length > 0) {
-    const { names } = buildListOf(u, { nameOf: manualNameOf });
+    const { names } = buildListOf(u, {
+      nameOf: manualNameOf,
+      // 和面板同一条：高过这个工兵档位的建筑不进他的名单
+      eraOf: (id) => ALL_UNIT_DEFS[id]?.era,
+    });
     // 规则书里不该印出英文 id。出现就说明全量表漏了登记，宁可让生成失败，
     // 也不要给玩家一行"可建造：cultivation-guard-formation"。
     const raw = names.find((n) => /^[a-z0-9_-]+$/i.test(n));
@@ -470,9 +582,7 @@ function traitsOf(u: UnitTypeDef): string {
       key,
       `可建造 · ${u.name}`,
       `可建造：${names.join('、')}（共 ${names.length} 种）。` +
-        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`,
-      '这里列的是兵种自带的可建项目；有些扩展会在开局额外教建造单位几样新建筑' +
-        '（例如粮仓、船坞），实际清单随本局启用的扩展变化，以游戏内的产兵提示为准。',
+        `建造占掉整个回合，范围 ${CONFIG.buildRange} 格。`
     );
     parts.push(ref(key, `可建 ${names.length} 种建筑`));
   }
@@ -499,7 +609,24 @@ function traitsOf(u: UnitTypeDef): string {
 }
 
 function terrainName(id: string): string {
-  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? id;
+  // 手册自己那张表只有"能建在上面"的地形，`shallow`（浅滩）这类不在里面——
+  // 于是寒水镜的产地会印出英文 id。兜底问一次核心的地形名表。
+  return TERRAIN_TABLE.find((t) => t.id === id)?.name ?? CONFIG.terrainName[id as Terrain] ?? id;
+}
+
+/**
+ * 一条产地要求怎么印：`森林`、`2 个灵田`。
+ *
+ * 和规则层的 nearSpecText 同一个口径（连拒绝理由的措辞都对得上），
+ * 只是名字表用手册自己那份——手册要覆盖不在本局兵种表里的扩展兵种。
+ */
+function nearText(spec: { terrain?: string[]; unit?: string[]; count?: number }): string {
+  const parts = [
+    ...(spec.terrain ?? []).map((t) => terrainName(t)),
+    ...(spec.unit ?? []).map((id) => manualNameOf(id)),
+  ];
+  const need = spec.count ?? 1;
+  return need > 1 ? `${need} 个${parts.join('或')}` : parts.join('或');
 }
 
 const COLUMNS = ['名称', '图标', '造价', '攻', '甲', '血', '移', '射', '视', '特性'];
@@ -624,16 +751,6 @@ function fantasyTraits(u: UnitTypeDef): string {
   }
   if (u.ammo) parts.push(ref('ammo', `弹药 ${u.ammo}`));
   if (u.hero) parts.push(ref('hero', `英雄${u.unlockCost ? ` 解锁 ${u.unlockCost}` : ''}`));
-  for (const k of u.skills ?? []) {
-    // 技能是兵种自带的，没有全局表：现登记一条，键用"兵种 + 技能名"，稳定可复现
-    const key = dynamicTerm(
-      `sk-${slug(u.id)}-${slug(k.name)}`,
-      k.name,
-      k.summary,
-      `冷却 ${k.cooldown} 回合；不占移动与攻击。`,
-    );
-    parts.push(ref(key, `${k.name} CD${k.cooldown}`));
-  }
   if (u.summonedOnly) parts.push(ref('summoned-only'));
   if (u.decays) parts.push(ref('decay', `自损 ${u.decays}/回合`));
   if (u.splitInto) parts.push(ref('split', `死后分裂 ${FANTASY_NAMES.get(u.splitInto) ?? u.splitInto}`));
@@ -1342,7 +1459,9 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li><b>两层：地面与空中。</b>规则从原版起就承认"天上还有一层"，只是原版兵种全在地面。
           空中单位（兵种表里写 <code>layer: air</code>）和地面<b>互不占格</b>——它能停在敌人头顶，
           敌人也能从它脚下走过；<b>地面打空中时距离 +1</b>（得先够得着头顶），
-          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。</li>
+          所以射程 1 的步兵打不到隔壁那格飞着的单位。飞行单位还能掠水、在森林丘陵只花 1 步。
+          另有一种<b>「掠空」</b>：它并不离开地面层，只是能掠过水面（同样能停在水上）、
+          森林丘陵按 1 步算——别把它和飞行搞混，两者的差别是"离不离开地面这一层"。</li>
         <li><b>对方城市格不可通行</b>，必须先把耐久打空。</li>
         <li>己方城市格可以进驻，驻军享受城市的 +3 护甲。</li>
       </ul>
@@ -1390,7 +1509,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <span class="c">条件：目标存活 且 攻击者在其射程内 且 攻击方没有${ref('ab-first-strike', '先手')}能力</span>
       </div>
       <p>所以远程站在射程外输出可以完全不吃反击；近战互殴时双方都掉血。</p>
-      <h3>溅射与多动</h3>
+      <h3>溅射与攻击次数</h3>
       <p>两种"打得不只一下"的机制，一个是横着铺开，一个是竖着连打：</p>
       <ul>
         <li><b>溅射（splash）</b>：主目标周围 <b>N 格内</b>（曼哈顿距离，不含斜角）的敌人各吃 <b>默认 ${Math.round(CONFIG.splashRatio * 100)}%</b> 伤害。
@@ -1399,21 +1518,24 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li><b>半径和比例都不是写死的</b>：扩展可以改半径（修真按境界，境界不够就是 0 格，
           四舍五入到"每 4 级多一格"），单位自己带 <code>custom.splashRatio</code> 时按它自己的比例结算。
           所以选中单位时侧栏显示的那一行才是准的，别拿兵种表里的数字去推算。</li>
-        <li><b>多动（burst）</b>：一回合能发起 <b>N 次独立攻击</b>。次数不是固定的：
+        <li><b>${ref('burst', '攻击次数')}（burst）</b>：一回合能发起 <b>N 次独立攻击</b>。次数不是固定的：
           装甲车 2 次、机枪队 3 次、重机枪组 4 次。每次都是完整的一击（护甲各减一次），
           <b>可以打不同的人</b>，攻击之间也能看到新的局面再决定下一发打谁。
-          次数没用完之前，这个单位<b>不算行动结束</b>。</li>
-        <li><b>多动也影响反击</b>：反击次数等于攻方的攻击次数。三个单位围攻一个三动兵，
+          次数没用完之前，这个单位<b>不算行动结束</b>。选中单位时侧栏那行「攻击次数」写的就是
+          "还剩几次 / 共几次"，不用再记兵种表上的数字。</li>
+        <li><b>攻击次数也影响反击</b>：反击次数等于攻方的攻击次数。三个单位围攻一个能打三次的兵，
           它能还手三次；但同一个单位连打它三次，它也只还手三次——围攻比单挑更有效，
           这是这一版刻意的改动。</li>
-        <li>表格里攻击列写成 <code>18×3</code> 表示"一击 18 点，一回合能打 3 次"。特性列会另外标出「溅射 N 格」「多动 N 次」。</li>
+        <li>表格里攻击列写成 <code>18×3</code> 表示"一击 18 点，一回合能打 3 次"。特性列只标
+          「溅射 N 格」这类额外属性，次数看攻击列就够了。</li>
         <li>${ref('ab-siege-master', '破城')}（攻城伤害 ×1.5）现在给到了整条炮线：臼炮、火炮、坦克、战列舰。高时代的城又厚又能回血，
           没有破城的攻城单位在城墙下只是刮痧。海上的攻城活归「浅水重炮舰」（岸轰），铁甲舰只管正面。</li>
-        <li>反击永远是一次正常攻击：不打折、不溅射、也不因为对方多动而变弱。</li>
+        <li>反击永远是一次正常攻击：不打折、不溅射、也不因为对方攻击次数多而变弱。</li>
       </ul>
       <div class="callout">
-        多动和溅射的软肋正好相反：多动兵一次只打一个人，<b>堆护甲</b>能减掉每一发；溅射是一次打一片，<b>散开阵型</b>才划算。
-        多动兵还有个自己的麻烦——第一次攻击之后它就<b>走不动了</b>（攻击会把移动一并作废），
+        攻击次数和溅射的软肋正好相反：次数多的兵一次只打一个人，<b>堆护甲</b>能减掉每一发；
+        溅射是一次打一片，<b>散开阵型</b>才划算。
+        次数多的兵还有个自己的麻烦——第一次攻击之后它就<b>走不动了</b>（攻击会把移动一并作废），
         所以剩下的几次只能站在原地打完，位置没选好就等于站着挨围攻。
       </div>
 
@@ -1429,11 +1551,14 @@ const CORE_BODY_MAIN = `    <section id="goal">
         不是"对面能打到哪"。</p>
       <ul>
         <li><b>挨了几下就记几次</b>：溅射打到三个人算三次（三个格子各记一笔），
-          多动兵连打同一格三下，那一格就是三次。</li>
+          攻击次数多的兵连打同一格三下，那一格就是三次。</li>
         <li><b>闪得越快，那里打得越凶</b>：三下比一下急，五下以上按最快档走。
           扫一眼棋盘就知道该往哪儿补人。</li>
         <li><b>你一出走就收起来</b>：这是"上回合的答卷"，看一眼就该让位。
           这一回合你走第一步之后，红格全部消失——想看就趁现在。</li>
+        <li><b>开火那一瞬会闪一下</b>：不管是你打出去的还是对面打过来的，命中的那几格
+          （含溅射范围）都会以同样的红格闪一次。它只是"刚刚这一下落在哪"的即时反馈，
+          不到一秒就散，不计入上面那份复盘——所以不会和"上回合挨打"的红格混在一起。</li>
         <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
         <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
         <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
@@ -1522,13 +1647,13 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li>只能在<b>自己的城市格</b>里产兵，而且那一格必须是空的。</li>
         <li>城市能造<b>当前时代及更早的全部兵种</b>，只有上界：<b>还没解锁的时代造不了</b>（<code>def.era &gt; 城市时代</code> 直接拒绝，面板里也不会列出来）。</li>
         <li><b>旧兵不会因为升城而消失</b>：第五代的城市照样能造民兵、长枪兵。城市升级只是"多出选项"，不该让已经会造的东西反而造不出来——这条对所有模式（单机 / 联机 / 指挥官 / 选卡）一个口径。</li>
-        <li>旧兵怎么找：生产列表顶上有<b>扩展包</b>与<b>时代</b>两排筛选，加上搜索框。它们只决定"看得到什么"，不改变"能买什么"。军营按"最近一座己方城市"的时代算，规则完全一样。</li>
+        <li>旧兵怎么找：生产列表顶上有<b>扩展包</b>与<b>时代</b>两排筛选，加上搜索框。它们只决定"看得到什么"，不改变"能买什么"。产兵建筑按自己的档位算，规则见下面那几条。</li>
         <li>建筑不在城市生产列表里，得由建造单位去盖（见第 10 节）。</li>
         <li>新兵<b>当回合不能行动</b>，否则等于凭空多一次攻击。</li>
         <li><b>水军要临水</b>：城市旁边必须有一格空水面，船就下在那儿。内陆城市造不了船。</li>
-        <li><b>军营</b>是第二个产兵点：兵从营门四邻的空地出来，规则和城市完全一样，唯一的区别是<b>它自己没有时代</b>——时代取离它最近的己方城市。军营不用升级，所以前线的兵种水平跟着后方那座城走。</li>
+        <li><b>军营</b>是第二个产兵点：兵从营门四邻的空地出来，但它<b>按自己的档位出兵</b>——一档营只出一代兵，想要新兵就再扎一座新营。它不升级、也不看后方城市，城全丢了照样能补兵。</li>
         <li><b>军营必须扎在水边</b>：脚下要是平地或丘陵，四邻还要有一格水面（桥面也算，桥下就是河）。粮秣、饮水、船运都得靠水，这条同时给了水军存在的理由——补给点必然在水上，也就必然会被船盯上。</li>
-        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（青铜）→ 寨垒（铁器）→ 堡寨（火器）→ 兵站（蒸汽）→ 前进基地（机械化）</b>。越高档耐久越高、哨兵火力越强，产兵规则完全一样（时代取最近的城市）。所以"把补给点往前推"这件事，是可以跟着时代一起升级的。第六档<b>联合作战中心</b>在扩展「信息化」里，和这一代的其他建筑一样是那个包带进来的。</li>
+        <li>军营分五档，跟着建造单位的时代解锁：<b>军营（青铜）→ 寨垒（铁器）→ 堡寨（火器）→ 兵站（蒸汽）→ 前进基地（机械化）</b>。越高档耐久越高、哨兵火力越强，能出的兵也越新——档位就是它的时代。第六档<b>联合作战中心</b>在扩展「信息化」里，和这一代的其他建筑一样是那个包带进来的。</li>
         <li><b>兵种多了有搜索框</b>：一屏超过 6 种兵时，生产列表顶上会出现一个输入框，敲名字、代号、职能（战斗 / 经济 / 建造）、
           时代或<b>扩展包名</b>都能过滤，多个词按"且"算（"奇想 弓"）。它只过滤列表，不改变能买什么。</li>
         <li><b>带徽标的就是扩展兵</b>：名字旁边那个小圆标写着它来自哪个包。原版兵不挂——
@@ -2270,8 +2395,8 @@ function fantasyRules(): string {
           数值都压在 20 以内——它是"另一条路"，不是"更大的数字"。</li>
         <li>${ref('elem')}决定这一下带什么，${ref('weak')}与${ref('resist')}决定目标怎么接。
           注意「怕」作用在<b>整段</b>伤害上：怕火的被火把砸一下也疼，不只是怕魔法火。</li>
-        <li>${ref('air')}：飞行和跳跃是同一套机制的两个名字，区别只在名字对不对得上画面——
-          鹰和石像鬼飞行，蜘蛛骑士是跳跃，谁都不该"扑棱翅膀"。${ref('overhead')}</li>
+        <li>${ref('air')}：掠空、飞行、跳跃是同一套机制的三个档，区别只在名字对不对得上画面——
+          掠空是贴着水面掠过，飞行才真悬在头顶，蜘蛛骑士是跳跃。谁都不该"扑棱翅膀"。${ref('overhead')}</li>
         <li>${ref('status')}——中毒、点燃、减速、诅咒。都按血量百分比算，
           这样一支巨魔中同样的毒，掉的血和它的体型相称。</li>
         <li>${ref('mastery')}：属性不只是"这一下带什么状态"，而是四种形态。所以「转属性」
@@ -2561,6 +2686,22 @@ function pct(x: number): number {
 function cultivationRules(): string {
   const unlocks = cultivationUnlocksByRank();
 
+  // 青木剑的产地是"或"两条（森林 / 2 块灵田），拼文案和面板同一口径
+  const woodNear = (
+    Array.isArray(ARTIFACT_WOOD.produceNear) ? ARTIFACT_WOOD.produceNear : [ARTIFACT_WOOD.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
+  // 寒水镜同理：水面/浅滩，或者灵泉（地图没水时的后路，2026-11-08 加到数据里）
+  const waterNear = (
+    Array.isArray(ARTIFACT_WATER.produceNear) ? ARTIFACT_WATER.produceNear : [ARTIFACT_WATER.produceNear]
+  )
+    .filter((x): x is NonNullable<typeof x> => !!x)
+    .map(nearText)
+    .join('，或 ');
+
   // 「战斗历练」表里的参照目标：三代戟兵。
   // 代价是规则书会跟着本体数值走——戟兵改攻击力，"单次"那两列自动变。
   const refKillUnit = UNIT_TYPES['halberdier'];
@@ -2612,6 +2753,15 @@ function cultivationRules(): string {
       <ul>
         <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
         <li><b>剑修（时代 2）</b>：以杀证道的新流派。他们极度擅长战斗，普攻的境界加成只有 ${SWORD_BASE_MUL} 倍，但能通过施展剑技和击杀敌人快速成长。</li>
+        <li><b>体修（时代 2）</b>：用身体硬抗的一支。招牌是「金刚不坏」——受到的伤害按剩余血量减免
+          ${Math.round(BODY_WARD_BASE * 100)}%~${Math.round(BODY_WARD_TIERS[3] * 100)}%，血越少越硬；
+          但真元与中毒、灼烧这类持续伤害<b>不受影响</b>，所以炼气士和剑修天生克它。
+          境界加成也偏科：攻击 ×${BODY_ATK_MUL}，真元、移动、射程各 ×${BODY_TRUE_DAMAGE_MUL}，
+          于是它永远比同伴慢半步、近一格。</li>
+        <li><b>魔修（时代 3）</b>：以生灵为薪柴的一支。它几乎不靠打坐（每回合只有
+          ${EXP_GROWTH_BLOOD} 点），也<b>不吃击杀历练</b>——全部修为来自主动技能「血祭」，
+          那条路的经验绕过了每回合击杀上限，代价是每次都要烧掉
+          ${BLOOD_RITE_LIFESPAN_COST} 年寿元，而且境界越高，同样的伤害折出的修为越少。</li>
       </ul>
 
       <h3>境界与修为</h3>
@@ -2621,7 +2771,7 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。剑修更注重实战。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
@@ -2657,7 +2807,8 @@ function cultivationRules(): string {
       <h3>各境界一览表</h3>
       <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
         其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
-        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。</p>
+        剑修的增量还要再乘 ${SWORD_BASE_MUL}（施展剑气纵横时 ${SWORD_SWEEP_MUL}）；灵体另有折算，见后面「灵体形态」。
+        体修的增量按「攻击 ×${BODY_ATK_MUL}、真元 ×${BODY_TRUE_DAMAGE_MUL}、移动 ×${BODY_MOVE_MUL}、射程 ×${BODY_RANGE_MUL}」折算，其余照表。</p>
       <div class="scroll-x">
         <table class="rank-table">
           <colgroup>${rankCols}</colgroup>
@@ -2702,6 +2853,28 @@ function cultivationRules(): string {
         <li><b>修为获取</b>：挥剑本身 +${SWEEP_EXP_CAST} 修为（落空也给），每命中一个目标（人或城）再 +${SWEEP_EXP_PER_HIT}。</li>
       </ul>
 
+      <h3>血祭</h3>
+      <p>魔修的立身之本：以自己为圆心，抽取周围一圈所有活物的精血。</p>
+      <ul>
+        <li><b>释放方式</b>：按一下立刻结算，不需要选点——<b>站哪儿</b>才是要算的事。</li>
+        <li><b>释放条件</b>：消耗 <b>1 次攻击次数</b>；没有冷却，攻击次数够就能连放。</li>
+        <li><b>攻击范围</b>：半径 ${BLOOD_RITE_RADIUS_BASE} 格起（四邻一圈，含斜角），
+          境界每满 ${BLOOD_RITE_RADIUS_STEP} 级再 +1 格——${MAX_RANK} 级是
+          ${bloodRiteRadiusForRank(MAX_RANK)} 格。</li>
+        <li><b>不分敌我</b>：范围内的单位全部挨一下完整伤害（护甲、真元、守御阵转移照常生效）。
+          但<b>友军最低只被抽到 1 点血</b>，永远不会被自己人抽死——不然献祭自家杂兵就能刷
+          「战争经济」「老兵不死」那类击杀奖励。</li>
+        <li><b>修为</b>：按"实际打掉的伤害"折算。0 级每点伤害折
+          ${Math.round(bloodRiteExpMul(0) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%，境界每高 1 级按 1 ÷ (1 + ${BLOOD_RITE_EXP_DECAY} × 境界) 衰减——
+          ${MAX_RANK} 级只剩 ${Math.round(bloodRiteExpMul(MAX_RANK) * BLOOD_RITE_EXP_PER_DAMAGE * 100)}%。友军那部分伤害只按
+          ${Math.round(BLOOD_RITE_ALLY_EXP_MUL * 100)}% 折算。<b>这条修为绕过每回合击杀上限</b>，
+          但伤害溢出的部分不算（打残血小兵不会更划算）。</li>
+        <li><b>代价</b>：每次释放扣 ${BLOOD_RITE_LIFESPAN_COST} 年寿元。寿元就是这一支的油表：
+          烧完就坐化，而境界提升会把油表加长——所以它总是在"多烧一点"和"活久一点"之间选。</li>
+        <li><b>魔修不吃击杀历练</b>：血祭已经是绕过上限的那条路，再叠一份击杀经验，
+          升级节奏会直接翻倍。</li>
+      </ul>
+
       <h3>阵法</h3>
       <p>阵法是<b>建筑</b>：不能移动、会被摧毁、会挡路。攻击力一律为 0，靠光环改数值、
         或者干脆替友军挨打来发挥作用。建造阵法要专门的阵师，阵师自己也要耗灵石。</p>
@@ -2717,7 +2890,11 @@ function cultivationRules(): string {
         <li><b>传送阵</b>：主动技能「挪移」，全图选点，把阵周围 ${TELEPORT_RADIUS} 格内的单位
           与落点周围 ${TELEPORT_RADIUS} 格内的单位<b>整体对调</b>，耗 ${TELEPORT_COST} 灵石，每回合一次。
           占地超过一格的大单位不参与；地形站不住、落点被占满时整次作废——
-          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。</li>
+          <b>灵石照扣，这一回合也不能再传</b>（战报只说「传送阵过载」）。
+          <b>而且这一步撤不回来</b>：只要落点按下去了，灵石和这一次施放就成了定局，
+          「撤回一步」也回不到传送之前——本回合之前走过的棋会一起定死
+          （之后继续走子仍然可撤）。不管成没成，战报都会留一句「${TELEPORT_RIFT_LOG}」，
+          看见它就知道这一步已经收不回去了。</li>
         <li><b>守御阵</b>（${GUARD_FORMATION.maxHp} 血 / ${GUARD_FORMATION.armor} 护甲）：
           半径 <b>${GUARDIAN_RADIUS}</b> 内的友军——<b>包括友军建筑</b>——受到伤害时，
           这一下改由守御阵承受。<b>只转伤害，不转移「被命中」这件事</b>：原目标一滴血不掉，
@@ -2737,6 +2914,225 @@ function cultivationRules(): string {
         敌方修士路过也不算替你守阵。
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
+
+      <h3>宗门大殿</h3>
+      <p>${SECT.name}是<b>时代 ${SECT.era}</b> 的 <b>2×2</b> 大建筑（${SECT.maxHp} 血 / ${SECT.armor} 甲），由执事修建。
+        它自己不打架、不产资源，两个功能全挂在<b>贴着它站的修士</b>身上——所以它该修在修士堆里。</p>
+      <ul>
+        <li><b>招募弟子</b>：相邻站着一位 <b>${SECT_MASTER_MIN_RANK} 期（筑基）以上</b>的己方修士，
+          就能用<b>灵石</b>招出<b>同一种</b>修士（新弟子从 0 期入门）。
+          四个流派都可以，但敌方修士不算师父；名单是灰着列出来的，缺什么直接写在按钮上
+          （"附近没有 ${SECT_MASTER_MIN_RANK} 期以上的剑修师傅"）。</li>
+        <li><b>招募价</b>：按该兵种金币价的 <b>1/10</b> 折成灵石——
+          ${CULTIVATOR.name} ${sectRecruitStone(CULTIVATOR.cost)}、${BODY_CULTIVATOR.name} ${sectRecruitStone(BODY_CULTIVATOR.cost)}、
+          ${SWORD_CULTIVATOR.name} ${sectRecruitStone(SWORD_CULTIVATOR.cost)}、${BLOOD_CULTIVATOR.name} ${sectRecruitStone(BLOOD_CULTIVATOR.cost)}。
+          兵种调价时招募价自动跟着走，不会出现"剑修涨了、宗门还按原价卖"。
+          <b>城市产线照旧收金币</b>：灵石这条只属于宗门。</li>
+        <li><b>传承</b>：贴着宗门打坐的修士，修炼效率
+          <b>× (相邻最高境界 − 自己 − 1)</b>，最低 ×1。
+          所以<b>差 3 层才开始有加成</b>：${SECT_MASTER_MIN_RANK} 期师父带 0 期徒弟算下来还是 ×1（白搭），
+          3 期才 ×2。有加成的修士面板上会写「宗门传承 ×N」和"每轮 +多少修为"——
+          不写的话玩家永远看不见师父站旁边有没有用。</li>
+        <li><b>互相绑死</b>：师父走开 = 宗门停产；弟子走开 = 吃不到传承。
+          多个宗门<b>不叠乘</b>，取最强的一条（和所有光环同口径）。</li>
+        <li><b>2×2 的代价</b>：四格一起挡路、一起挨打；选址要求四格全空且地形可建，
+          所以<b>城里基本放不下</b>（城里只要有一个驻军就占掉一格）。
+          建造距离按"整块地到工匠最近的一格"算，不必拿左上角去凑。</li>
+      </ul>
+
+      <h3>藏经阁与法术</h3>
+      <p>法器和灵泉是"外物"，法术则是修士<b>自己身上</b>的东西。它和流派技能、境界技能长得一样
+        （都在技能栏里），但有三条不同：<b>只能学、要花灵力、占法术位</b>。</p>
+      <ul>
+        <li><b>灵力</b>：每个修士自己一池子，不是国库的灵石。上限
+          <b>${manaLimitForRank(0)} / ${manaLimitForRank(9)}</b> 点（0 期 / 9 期），
+          每回合开始回 <b>${MANA_REGEN}</b> 点。数值全是整十，方便以后细调。</li>
+        <li><b>法术位</b>：<b>⌊境界 ÷ 2⌋</b>——这是<b>一个修士</b>能记住几门法术。
+          所以 <b>0～1 期一个法术位都没有</b>，新招的弟子要先修炼才谈得上"学法术"。
+          流派技能（剑气纵横、血祭）和境界技能（御空）<b>不占</b>法术位。</li>
+        <li><b>研发额度</b>：<b>${RESEARCH_BASE_SLOTS > 0 ? `${RESEARCH_BASE_SLOTS} + ` : ''}${LIBRARY_SPELL_SLOTS} × 生效中的藏经阁</b>——
+          这是<b>整个阵营</b>能掌握几门法术。它和法术位是两件事：
+          额度决定"本方知道几门"，法术位决定"某个修士记得住几门"。
+          所以一座藏经阁能让全宗门多认两门法术，但不会让某个筑基修士多背一门。</li>
+        <li><b>${SCRIPTURE_PAVILION.name}</b>（${SCRIPTURE_PAVILION.era} 代，${SCRIPTURE_PAVILION.cost} 金 +
+          ${SCRIPTURE_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SCRIPTURE_PAVILION.maxHp} 血 /
+          ${SCRIPTURE_PAVILION.armor} 甲）：<b>只能建在自家宗门旁边</b>，每一座给本阵营
+          <b>+${LIBRARY_SPELL_SLOTS} 点研发额度</b>——所以<b>没有藏经阁就一门法术都研发不了</b>。
+          没有数量上限，宗门周围的空地就是上限。
+          <b>宗门一被拆，这座楼立刻失效</b>：额度没了，也读不了书。</li>
+        <li><b>研发</b>：选中自家的<b>宗门大殿</b>，在「研发」里花灵石把一门法术写进本方藏书目录
+          （每门 <b>${RESEARCH_STONE_COST}</b> 灵石，只收灵石）。额度满了、灵石不够都会灰着写原因。</li>
+        <li><b>遗弃</b>：研发过的法术在同一个面板的「遗弃」里可以划掉，<b>腾出研发额度</b>。
+          这一步<b>会弹确认框</b>（误点一次就少一门法术，代价太大）。
+          <b>已经学会的修士不受影响</b>——那属于遗忘，是静心阁的事。</li>
+        <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在「研修」里点
+          <b>研读「某某」</b>。本方没研发过、法术位满了、流派不符、没站在藏书楼旁边，
+          按钮会灰着并写清原因。</li>
+        <li><b>${SILENT_PAVILION.name}</b>（${SILENT_PAVILION.cost} 金 +
+          ${SILENT_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SILENT_PAVILION.maxHp} 血 /
+          ${SILENT_PAVILION.armor} 甲）：藏经阁的<b>对称件</b>——同样 1×1、同样只能贴着自家宗门。
+          站在旁边的修士可以<b>忘掉</b>一门已学的法术，<b>腾出法术位</b>。
+          这一步会弹确认框；忘掉之后回藏经阁还能<b>重新学</b>（研发没丢），
+          所以"换一门法术"的代价是走两趟路，不是重练。</li>
+        <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
+          对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
+          <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力。
+          <b>不限每回合一次</b>：灵力够就能连着放（9 期一回合能放两发），
+          所以"什么时候把这池子烧掉"是玩家自己的决定；它不占攻击次数，也不占移动。
+          它打不了城池，也打不了自己人。</li>
+      </ul>
+
+      <h3>灵泉</h3>
+      <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
+        ${SPIRIT_SPRING.armor} 甲），由<b>管事</b>修建。它不产资源、不能攻击，
+        唯一的作用是主动技能「泉涌」——回血在这套规则里是<b>要付钱的选择</b>，不是"站在旁边就有"的白给。</p>
+      <ul>
+        <li><b>泉涌</b>：恢复<b>四邻</b>（曼哈顿 ${SPRING_RADIUS} 格，不含斜角）内每个己方单位
+          <b>${Math.round(SPRING_HEAL_RATIO * 100)}% 生命上限</b>，至少 1 点；每回合一次，不占用攻击次数。</li>
+        <li><b>按实际回血量收费</b>：每 <b>${SPRING_HP_PER_STONE} 点</b>血收 <b>1 块</b>灵石，
+          最低 ${SPRING_MIN_COST} 块。举例：一个 20 点血的单位每次回 ${springHealAmount(20)} 点、只收 1 块；
+          元婴修士那种几十点血的单位回一次要好几块。
+          <b>这条计费就是"高境界修士不能靠一口泉回成无敌"的那道闸</b>——血越厚，回一次越贵。</li>
+        <li><b>灵石不足时整条技能降级</b>：每个单位只回 <b>${SPRING_FLOOR_HEAL} 点</b>，仍然收 ${SPRING_MIN_COST} 块；
+          一块灵石都没有时按钮是灰的。不做"能回多少回多少"的比例折算——
+          "满额"和"聊胜于无"必须是两个一眼能分清的状态。</li>
+        <li><b>只治己方、只治伤员</b>：满血的、机械单位、正在施工的工地都不算；
+          四邻一个伤员都没有时，按钮同样是灰的。</li>
+        <li><b>它还是寒水镜的备用产地</b>：${ARTIFACT_WATER.name}原本只认水面/浅滩，而地图不保证有水。
+          在炉子旁边立一座灵泉，同样炼得出寒水镜。灵泉是四代建筑，所以三代之前仍然得找水——
+          这是有意的时代门槛。</li>
+      </ul>
+
+      <h3>炼丹与丹药</h3>
+      <p>炼器和丹药是一对：<b>法器是摆在外面的实力</b>，<b>丹药是藏在兜里的底牌</b>。
+        两者都不是兵，但走的路完全不同——法器是单位（会动、会挨打、对面看得见），
+        丹药是消耗品（跟着人走、人死药灭、对面只能猜）。</p>
+      <ul>
+        <li><b>${ALCHEMY_FURNACE.name}</b>（${ALCHEMY_FURNACE.era} 代，1×1，
+          ${ALCHEMY_FURNACE.cost} 金 + ${ALCHEMY_FURNACE.costRes?.['spirit-stone'] ?? 0} 灵石，
+          ${ALCHEMY_FURNACE.maxHp} 血 / ${ALCHEMY_FURNACE.armor} 甲，执事修）：
+          修士<b>站在它旁边</b>才炼得动。它不限选址（不像藏经阁要贴着宗门）——
+          丹药是补给，前线后方都该能起炉子。</li>
+        <li><b>发起动作的是修士，不是炉子</b>：选中修士，在面板的「炼丹」里点
+          <b>炼制「某某」</b>，花金币和灵石，丹<b>直接进这个修士自己的袋子</b>。
+          所以没有国库库存这一层：想让别人也吃药，就带个弟子来背——
+          <b>药童</b>是这套系统自己长出来的玩法，不是额外设计的。</li>
+        <li><b>携带上限</b>：<b>${PILL_CARRY_BASE} + ⌊境界 ÷ 2⌋</b> 颗
+          （2 期 4 颗、9 期 7 颗）。装满了炼不进去，先吃几颗再来。</li>
+        <li><b>丹药是隐藏信息</b>：对手<b>看不见你带了几颗</b>，只看得见你
+          <b>吃下去之后的 buff</b>。所以"他还有没有药"永远是个猜——
+          这也是这套系统最有意思的地方。视野层会把敌方的丹药数量直接抹掉，
+          无雾模式也一样：这不是"看不清"，是"本来就不给你看"。</li>
+        <li><b>服用不挑地方</b>：药是随身带的。法术要藏书楼、炼丹要炉子，
+          吃药只取决于你兜里有没有。也不占攻击次数、不占移动。</li>
+        <li><b>人死药灭</b>：丹药记在单位自己身上，它死了，兜里的药一起没。</li>
+      </ul>
+      <p>样板丹药三颗（加一颗 = 写一个数据项 + 在 <code>PILLS</code> 里登记一行）：</p>
+      <ul>
+        <li><b>${HEAL_PILL.name}</b>（${HEAL_PILL.cost.gold} 金 +
+          ${HEAL_PILL.cost.stone} 灵石）：回复 <b>${Math.round(HEAL_PILL_RATIO * 100)}% 生命上限</b>
+          （至少 ${HEAL_PILL_FLOOR} 点）。按比例而不是固定点数——修士的血量是爆炸式长的，
+          固定值只会在某一段境界好用。满血时按钮是灰的，别浪费。</li>
+        <li><b>${SPIRIT_PILL.name}</b>（${SPIRIT_PILL.cost.gold} 金 +
+          ${SPIRIT_PILL.cost.stone} 灵石）：立刻回复 <b>${SPIRIT_PILL_MANA} 点灵力</b>，
+          差不多就是多半发法术。灵力满时按钮是灰的。</li>
+        <li><b>${WARD_PILL.name}</b>（${WARD_PILL.cost.gold} 金 +
+          ${WARD_PILL.cost.stone} 灵石）：护甲 <b>+${Math.round(WARD_PILL_ARMOR_PCT * 100)}%</b>，
+          撑 <b>${WARD_PILL_TURNS} 个自己的回合</b>。按比例加甲是因为修士的护甲本身
+          随境界暴涨（9 期上百点），固定加值在低境界是神装、在高境界是个零头。
+          <b>药力只有一份，新药压旧药</b>，不会叠。
+          吃下去之后，面板的<b>状态栏</b>会挂一枚「${WARD_PILL.name} · ${WARD_PILL_TURNS} 回合」的徽章，
+          和中毒、减速排在同一排——它和它们一样，是<b>到点就消失</b>的东西，
+          所以不该混在属性明细里。</li>
+      </ul>
+
+      <h3>炼器</h3>
+      <p>炼器炉不是新机制：它就是一座<b>产兵建筑</b>，和军营共用同一套白名单，
+        只是名单里全是法器。所以"炉子能造什么"完全写在兵种数据里。</p>
+      <ul>
+        <li><b>三档炉子，名单递增</b>：${FORGE_1.name}（${ERAS[FORGE_1.era - 1]?.name ?? ''}）只出
+          ${ARTIFACT_WOOD.name}、${ARTIFACT_STONE.name}；${FORGE_2.name}（${ERAS[FORGE_2.era - 1]?.name ?? ''}）
+          多认 ${ARTIFACT_WATER.name}；${FORGE_3.name}（${ERAS[FORGE_3.era - 1]?.name ?? ''}）再添
+          ${ARTIFACT_FIRE.name}。高代炉子的价值是<b>多一种材料</b>，不是把旧法器做得更强。</li>
+        <li><b>法器只能由炉子造</b>：城市产线里没有它们。想造就得先盖炉子。</li>
+        <li><b>挨着什么就出什么</b>：每件法器都有产地要求，看的是炉子的占地和它自己的四邻——
+          ${ARTIFACT_WOOD.name}要<b>${woodNear}</b>，${ARTIFACT_STONE.name}要高山或丘陵，
+          ${ARTIFACT_WATER.name}要<b>${waterNear}</b>，${ARTIFACT_FIRE.name}要挨着灵矿（地火从矿里引）。
+          同一座炉子换块地，产品线就变了；一条满足不了全部，想凑齐就得盖第二座。
+          数"几块灵田"时只认<b>自己的</b>田，敌人的不算。</li>
+        <li><b>条件不满足时会灰着列出来</b>，并写清缺什么（"附近没有森林"），
+          所以"该把炉子挪到哪儿"是能学会的，不是靠猜。</li>
+        <li><b>一回合一件</b>：没有生产间隔，但一座炉子同时只出一件；想量产就多盖几座。</li>
+      </ul>
+
+      <h3>法器的两条公共规则</h3>
+      <p>法器不是活人：它不修炼、不吃灵气滋养、也不会自己找路。所以每一件都带着这两条：</p>
+      <ul>
+        <li>${ref('ab-' + ARTIFACT_SPIRIT_ID, ARTIFACT_SPIRIT_LABEL)}——<b>得有人在看着</b>。
+          出了己方修士的<b>神识范围</b>（就是那位修士的视野圈），移动力<b>减半</b>（至少留 1 格，
+          不会彻底动不了）；站在神识里，护甲额外加上<b>范围内护甲最高的那位修士的一半</b>。
+          多个修士只按最强的算，不叠乘；死掉的修士不算，敌人的神识也不算。</li>
+        <li>${ref('ab-' + WARM_NOURISH_ID, WARM_NOURISH_LABEL)}——<b>贴着修士就能自己复原</b>。
+          回合开始时，半径 ${WARM_NOURISH_RADIUS} 格内只要有己方修士，就回
+          <b>${WARM_NOURISH_BASE} + ⌊最高境界 ÷ 2⌋</b> 点生命（0 级养 1 点、9 级养 5 点）。
+          没有这一条，法器就是一次性消耗品，掉的血永远回不来。</li>
+      </ul>
+
+      <p>四件法器都是<b>真的飞在天上</b>（${ref('ab-fly-over', '飞行')}）：它们悬在头顶那一层，
+        水面、深水、高山都能停，地面单位打它们时距离 +1——所以射程 1 的兵够不着，
+        除非挤到同一格压着打。飞行只解决"怎么到"，不解决"到了能干什么"——
+        每一件的性格完全不同。</p>
+
+      <h3>青木剑</h3>
+      <p>一件飞剑。射程 <b>${ARTIFACT_WOOD.range}</b> 格，比同代的任何近战都远——
+        所以它能站在对方的攻击范围之外开火，<b>对方够不着，就还不了手</b>。
+        代价是血薄甲薄（${ARTIFACT_WOOD.maxHp} 血 / ${ARTIFACT_WOOD.armor} 甲），
+        离开修士的护持就废掉一半：这就是「器灵」要表达的东西。</p>
+      <ul>
+        <li><b>剑气环</b>：半径 ${SWORD_QI_RADIUS} 格内友军攻击 <b>+${Math.round(SWORD_QI_ATK_PCT * 100)}%</b>。
+          按比例而不是点数，所以对杂兵和重甲兵都一样是 15%。同类光环重叠时<b>取最强的一条</b>，
+          两把剑不会变成 +30%。</li>
+        <li><b>造价</b>：${ARTIFACT_WOOD.cost} 金 + ${ARTIFACT_WOOD.costRes?.['spirit-stone'] ?? 0} 灵石。
+          比同代骑兵贵一半左右——贵的是射程和光环，不是面板上的攻甲血。</li>
+      </ul>
+
+      <h3>玄石印</h3>
+      <p>一块砸下去的印：攻低、甲厚、血多、慢、射程只有 ${ARTIFACT_STONE.range} 格，
+        但<b>能溅</b>。它是四件里唯一不靠机动吃饭的一件，所以飞行对它只是"能过河"。</p>
+      <ul>
+        <li><b>磐石</b>：半径 ${STONE_WARD_RADIUS} 格内友军护甲 <b>+${Math.round(STONE_WARD_ARMOR_PCT * 100)}%</b>，
+          <b>不足 1 点按 1 点</b>算。这条保底是必要的——3 甲的单位按 10% 取整是 0，
+          不给保底这条光环在前期等于不存在，而它本来就是给低境界修士保命用的。</li>
+        <li><b>产地</b>：丘陵，<b>或者</b>两块灵矿。后一条在二代不成立（灵矿是三代建筑），
+          它是给"地图没生成丘陵"留的后路：升到三代开一座矿，这条产品线还能救回来。</li>
+        <li><b>面板</b>：${ARTIFACT_STONE.atk} 攻 / ${ARTIFACT_STONE.armor} 甲 / ${ARTIFACT_STONE.maxHp} 血，
+          造价 ${ARTIFACT_STONE.cost} 金 + ${ARTIFACT_STONE.costRes?.['spirit-stone'] ?? 0} 灵石。</li>
+      </ul>
+
+      <h3>寒水镜</h3>
+      <p>远程控制。攻击力刻意不如同代火枪兵，换来的是<b>射程 ${ARTIFACT_WATER.range}、视野 ${ARTIFACT_WATER.vision}</b>
+        和 <b>${ARTIFACT_WATER.splash} 格溅射</b>——它不负责杀伤，负责让你的阵型走不动。</p>
+      <ul>
+        <li><b>寒霜</b>：被打到的目标「迟缓」${ARTIFACT_DEBUFF_TURNS} 回合，<b>移动力减半，至少留 1 格</b>。
+          注意是"追不上"不是"定身"：1 移的单位被冻慢后仍然能走一格。
+          <b>被溅射波及的敌人一样吃</b>——这是它和普通远程最大的区别。</li>
+        <li>重复命中不叠加回合数，只把回合数刷新回 ${ARTIFACT_DEBUFF_TURNS}。</li>
+      </ul>
+
+      <h3>赤炎珠</h3>
+      <p>远程 AOE，四件里伤害最高：${ARTIFACT_FIRE.atk} 攻、${ARTIFACT_FIRE.splash} 格溅射，
+        射程比寒水镜短一格。它是"开团的那一下"，不是持续输出。</p>
+      <ul>
+        <li><b>熔甲</b>：被打到的目标「护甲减半」${ARTIFACT_DEBUFF_TURNS} 回合，
+          按<b>当前护甲</b>算（含光环、地形、已有加成），不是兵种白值。
+          溅射波及的敌人一样生效——一炮把一片阵型的护甲打对折，后面跟上来的近战就有了破口。</li>
+        <li><b>真火</b>：半径 ${FIRE_QI_RADIUS} 格内友军<b>真元 +${Math.round(FIRE_QI_TRUE_PCT * 100)}%</b>
+          （同样有 +1 保底）。真元只有修士有，所以受益的也是修士——
+          这是四件法器里唯一直接加强修士输出的光环。</li>
+      </ul>
+      <p class="era-meta">注：炉子和军营一样按<b>自己的档位</b>出兵，不随后方城市换代。
+        盖房子也要看工匠的档位：二代的仆役只能起${FORGE_1.name}，想立${FORGE_3.name}，
+        得先把时代推到四代、造出管事。</p>
 
       <h3>突破与生命值</h3>
       <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——
@@ -3144,6 +3540,22 @@ for (const { b, html } of rendered) {
   );
   if (dead.length > 0) {
     throw new Error(`${b.file} 有 ${dead.length} 个指向不存在词条的链接：${dead.join('、')}`);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 资源名自检：正文里不该出现扩展资源的英文 id。
+ *
+ * 以前「产出 +1 spirit-stone」就这么印进了修真册——资源名字只在 createMatch
+ * 时注册，而生成手册时根本没有一局游戏。现在名字在模块加载时全量登记，
+ * 这里再兜一道：以后加了个没登记名字的资源，npm run manual 会直接报错，
+ * 而不是等玩家在规则书里看到一串英文。
+ * --------------------------------------------------------------------------- */
+const declaredResourceIds = EXPANSIONS.flatMap((e) => (e.resources ?? []).map((r) => r.id));
+for (const { b, html } of rendered) {
+  const leaked = declaredResourceIds.filter((id) => html.includes(id));
+  if (leaked.length > 0) {
+    throw new Error(`${b.file} 里出现未翻译的资源 id：${leaked.join('、')}`);
   }
 }
 

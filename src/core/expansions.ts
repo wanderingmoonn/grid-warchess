@@ -14,13 +14,14 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
   ResourceCost,
   ResourceDef
 } from './resources.ts';
+import { registerResourceName } from './resources.ts';
 // 能力的元数据类型。只 `import type`，运行时不会把 abilities.ts 拉进来，
 // 也就不会形成 abilities → expansions → abilities 的环。
 import type { AbilityDef } from './abilities.ts';
@@ -87,6 +88,20 @@ export interface ArmorCtx {
   /** 已经算好的护甲（兵种护甲 + 光环 + 地形），还没走破甲 */
   armor: number;
   isCounter: boolean;
+  /**
+   * 查**另一个**单位此刻的有效护甲。
+   *
+   * 给"按友军护甲加甲"这类规则用（法器的「器灵」：神识范围内 +修士护甲/2）。
+   * 为什么必须由规则层注入、而不让扩展自己算：护甲 = 兵种 + 光环 + 地形 +
+   * 状态 + 诅咒 + 驻军，扩展要是重算一遍，迟早和面板对不上——而玩家会拿
+   * 面板上那个数字来核对"我明明说 +7 怎么只加了 +5"。
+   *
+   * 查自己会拿到**当前这次的值**（`armor`），不会递归；查别人会完整算一遍
+   * 那个人的护甲（其中又会走一次本钩子）。所以别让两个单位互相查对方护甲。
+   */
+  armorOf?: (u: Unit) => number;
+  /** 查某个单位此刻的有效视野。同上，法器的「器灵」需要它。 */
+  visionOf?: (u: Unit) => number;
 }
 
 /**
@@ -108,11 +123,27 @@ export interface MoveCtx {
   state: GameState;
   unit: Unit;
   move: number;
+  /**
+   * 查某个单位此刻的有效视野（神识）。
+   *
+   * 同 `ArmorCtx.armorOf`：视野 = 兵种 + 境界 + 驻军 + 状态 + 扩展修正，
+   * 扩展自己算必然少算一半，而"少算"的表现是玩家的法器莫名其妙掉地上。
+   * 法器的「器灵」就是靠它判"在不在修士神识里"。
+   */
+  visionOf?: (u: Unit) => number;
 }export interface CostCtx {
   state: GameState;
   player: PlayerId;
   unitType: UnitTypeDef;
   cost: number;
+  /**
+   * 这次是从哪儿造的（城 / 产兵建筑），以及那座建筑本身。
+   *
+   * 只有 `doRecruit` / 面板知道它，AI 的历史采购判断和一批冻结快照都只传三个参数，
+   * 所以它是**可选**的：拿不到就按"不分产兵点"的老口径算钱。
+   * 修真包的宗门靠它把金币换成灵石——同一件修士，城里买是金价，宗门里招是灵石价。
+   */
+  source?: ProduceSource;
 }
 
 /**
@@ -135,6 +166,8 @@ export interface ResourceCostCtx {
   goldCost: number;
   /** 当前已经确定的非金币价格（来自 costRes 字段） */
   cost: ResourceCost;
+  /** 这次从哪儿造。语义见 `CostCtx.source`：拿不到就等于"不分产兵点"。 */
+  source?: ProduceSource;
 }
 
 /**
@@ -347,6 +380,25 @@ export interface ExpansionHooks {
   canCommand?: (c: { state: GameState; unit: Unit }) => string | null;
 
   /**
+   * 这个产兵点现在能不能造这个兵。返回字符串 = 不能，字符串是给玩家的理由。
+   *
+   * 和 `canProduce`（白名单）分工：白名单是数据里写死的"这营出什么"，
+   * 这个钩子是"此刻还有什么额外条件"——境界不够、灵石不够、
+   * 炉边要站个炼器师、本局开启了某个限制……
+   *
+   * 常见的地形条件不用走这里：兵种数据上的 `produceNear` 已经能表达
+   * "贴着森林/山/灵田才造得出来"，那条有现成的几何和默认文案（规则书要印）。
+   *
+   * 必须在**规则、面板、AI**三处都生效，所以由 rules.produceAt 统一调用，
+   * 扩展只要实现这一个函数，不用去改三个地方。
+   */
+  produceBlocked?: (c: {
+    state: GameState;
+    source: ProduceSource;
+    target: UnitTypeDef;
+  }) => string | null;
+
+  /**
    * 这一次伤害由谁来接。返回 `null` = 不转移（默认）。
    *
    * 守御阵用它：半径内的友军挨打时，把伤害接到阵自己身上。
@@ -433,7 +485,88 @@ export interface ExpansionHooks {
    * 返回一个字符串数组，UI 会原样渲染在面板上。
    * 核心引擎不会读取这里的逻辑，只负责把它们画出来。
    */
-  getUnitPanelLines?: (c: { state: GameState; unit: Unit }) => string[];
+  /**
+   * 单位详情卡上的额外几行。
+   *
+   * `viewer` 是可选的：绝大多数扩展只需要"这单位是什么"，但有些行**只该给自己看**
+   * （修真包的丹药数量就是——敌方卡片上印一行"携带 0 颗"比不印更误导）。
+   * 老调用方不传也不会坏。
+   */
+  getUnitPanelLines?: (c: { state: GameState; unit: Unit; viewer?: PlayerId }) => string[];
+
+  /**
+   * 单位面板上的**扩展按钮**。
+   *
+   * 只解决一件核心不知道怎么办的事："修士站在藏经阁旁边，想学一门法术"——
+   * 学什么、能不能学、花多少，全是扩展的知识，但它需要一个按钮。
+   *
+   * 核心负责：把它画在选中单位的卡片上、只在"自己的单位 + 自己的回合"时下发、
+   * 点击后发一个 `UNIT_ACTION { unitId, actionId }` 回来。`actionId` 的格式
+   * 完全由扩展决定（修真包用 `learn:<法术 id>`）。
+   *
+   * 只传 `viewer` 不传"是不是观战"：观战时核心自己就不列按钮，
+   * 扩展不用为这件事再分一次叉。
+   */
+  unitActions?: (c: {
+    state: GameState;
+    unit: Unit;
+    viewer: PlayerId;
+  }) => UnitActionOption[];
+
+  /**
+   * 处理 `UNIT_ACTION`。**谁声明了 `unitActions` 就由谁处理**（按扩展顺序取第一个），
+   * 返回字符串 = 拒绝，字符串本身是给玩家看的理由；返回 null = 成功。
+   *
+   * 副作用（扣资源、改单位、写战报）都在这里做，规则层只负责把动作变成
+   * 一份可回放的记录——和 `on*` 系列钩子同一个口径。
+   */
+  onUnitAction?: (c: {
+    state: GameState;
+    unit: Unit;
+    actionId: string;
+  }) => string | null;
+
+  /**
+   * 视图裁剪：**别人**的单位下发之前，扩展可以抹掉自己那些"不该让对面知道的字段"。
+   *
+   * 为什么需要它：`playerView` 是 `structuredClone` 全量克隆之后只按视野筛单位，
+   * `Unit.custom` 里的东西会原样送到客户端。修真包的丹药就存在那里——
+   * 那正是设计要的"看不见的底牌"：对手看得见你身上的 buff，但数不出你兜里还有几颗。
+   *
+   * 三条约定：
+   *   · 只会对**非自己**的单位调用（自己的东西不下发是另一条规矩，不在这里管）；
+   *   · 拿到的 `unit` 已经是克隆体，改它不会影响真实状态；
+   *   · 只准改 `unit`，别去读 `state.units` 推别人的底细——那样就绕回来了。
+   *
+   * 观战（`reveal`）不裁：复盘和双 AI 观战要看全。
+   */
+  redactUnit?: (c: { state: GameState; unit: Unit; viewer: PlayerId }) => void;
+}
+
+/** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
+export interface UnitActionOption {
+  /** 点击后原样带回来的标识，格式由扩展决定 */
+  id: string;
+  label: string;
+  /**
+   * 分组标题。同一组的按钮排在同一个标题下面（缺省 = 「研修」）。
+   *
+   * 有它是因为同一个单位上可能同时挂两类操作：宗门大殿要给"研发"和"遗弃"，
+   * 修士只有"研修"。混在一行里，玩家分不清"花灵石"和"免费"这两件事。
+   */
+  group?: string;
+  /** 小字：这一下会发生什么 */
+  detail?: string;
+  disabled?: boolean;
+  /** 右侧的短提示：价格、或者为什么不能点 */
+  note?: string;
+  /**
+   * 需要二次确认的文案（不写 = 点了就执行）。
+   *
+   * 破坏性操作（遗弃法术、遗忘技能）必须由**扩展**声明这句话：界面不知道
+   * 哪个按钮是"能撤回"的。核心只负责把它弹出来，玩家点「取消」就什么都不发。
+   */
+  confirm?: string;
 }
 
 export interface Expansion {
@@ -1257,4 +1390,19 @@ export function unitSourceIdOf(id: string): string | null {
     if (e.units?.some((u) => u.id === id)) return e.id;
   }
   return null;
+}
+
+/* ---------------------------------------------------------------------------
+ * 扩展资源的名字，模块加载时就登记。
+ *
+ * 以前只在 `createMatch` 里按本局启用的扩展注册（`setup.ts` 那一段）。
+ * 可规则书生成、开局设置、兵种编辑器都没有一局游戏，联机加入和读档又只恢复
+ * state、根本不走 createMatch——这些路径查不到资源定义，界面上就会出现
+ * 「spirit-stone」这种原始 id 而不是「灵石」。
+ *
+ * 名字是**数据**，不是"这一局流通什么"，所以应当跟着扩展声明一起加载。
+ * 这里只填兜底表，不动 `RESOURCES` 的长度和顺序（RL 特征按它开槽）。
+ * --------------------------------------------------------------------------- */
+for (const e of EXPANSIONS) {
+  for (const r of e.resources ?? []) registerResourceName(r);
 }

@@ -34,9 +34,17 @@ function sideName(s: GameState, side: PlayerId): string {
  * 名单本身仍由 buildListOf 生成，规则书和产兵按钮用的是同一份逻辑。
  */
 const TIP_UNIT_NAMES = new Map<string, string>();
-for (const [id, u] of Object.entries(UNIT_TYPES)) TIP_UNIT_NAMES.set(id, u.name);
+/** 档位表：白名单里可能混着高代建筑（扩展在开局补条目），名单要按档位滤 */
+const TIP_UNIT_ERAS = new Map<string, number>();
+for (const [id, u] of Object.entries(UNIT_TYPES)) {
+  TIP_UNIT_NAMES.set(id, u.name);
+  TIP_UNIT_ERAS.set(id, u.era);
+}
 for (const e of EXPANSIONS) {
-  for (const u of e.units ?? []) TIP_UNIT_NAMES.set(u.id, u.name);
+  for (const u of e.units ?? []) {
+    TIP_UNIT_NAMES.set(u.id, u.name);
+    TIP_UNIT_ERAS.set(u.id, u.era);
+  }
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -83,7 +91,10 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
     .map((id) => abilityById(id)?.name ?? id)
     .filter(Boolean);
   // 建造单位：把"能盖哪几样"也放进悬停卡，玩家在禁用/选用之前就能判断值不值
-  const builds = buildListOf(def, { nameOf: (id) => TIP_UNIT_NAMES.get(id) });
+  const builds = buildListOf(def, {
+    nameOf: (id) => TIP_UNIT_NAMES.get(id),
+    eraOf: (id) => TIP_UNIT_ERAS.get(id),
+  });
   return `<span class="hover-tip" hidden>
       <span class="tip-title"><b>${def.name}</b><i>${meta.join(' · ')}</i></span>
       <span class="tip-row">${unitStatLine(def)}</span>

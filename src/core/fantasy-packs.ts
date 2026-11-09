@@ -23,7 +23,7 @@
  *   因为机制的价值不进这个模型。
  *
  * 换来的机制必须是"有代价的"：
- *   飞行要算落点、掠空会和地面叠在一格（被打时也一样）、
+ *   掠空要算落点、飞行会和地面叠在一格（被打时也一样）、
  *   冲锋要先动过、狂暴要掉到半血、撕咬要目标残血、重甲难行怕林子、
  *   召唤物占不了编制却也不能当主力、英雄贵在解锁而不是贵在面板。
  */
@@ -218,7 +218,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'charge',
     name: '冲锋',
-    summary: '本回合移动过时，攻击 +5（反击不算）。站着不动就没有这份加成。',
+    summary: '本回合移动过时，攻击 +5。',
     group: 'attack',
     hooks: {
       damage: [
@@ -966,7 +966,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'summoner',
     name: '召唤',
-    summary: '每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。召唤物不占编制。',
+    summary: '每隔几个自己的回合，在相邻空格召唤一个随从（有数量上限）。',
     group: 'support',
     hooks: {
       onTurnStart: [

@@ -2,7 +2,7 @@
 
 import type { Unit } from '../types.ts';
 import { getRank, getAgingYears } from './progression.ts';
-import { isSpirit, isSoulMasterSpirit, isSwordCultivatorType } from './identity.ts';
+import { isSpirit, isSoulMasterSpirit, isSwordCultivatorType, isBodyCultivatorType } from './identity.ts';
 
 // ── 境界基础加成：公式的单一真相 ──────────────────────────
 //
@@ -78,6 +78,23 @@ export function spiritRangeForRank(rank: number): number {
   return Math.ceil((rank / 2) * SPIRIT_RANGE_MUL);
 }
 
+// ── 体体系数 ──────────────────────────────────────────
+// 体修是"用拳头吃饭"的一支：境界加成偏攻击，其余几项折半。
+// 抽成常量而不是散在 if 里，是因为面板（panel.ts）要按同一份数字写说明，
+// 改倍率时不能只改一处。
+//
+// 为什么不动护甲和攻击次数：那两项是"能扛多久/能打几下"，体修的定位是
+// 站得住的近战，砍了这两项就真成沙包了。
+export const BODY_ATK_MUL = 1.1;
+export const BODY_TRUE_DAMAGE_MUL = 0.5;
+export const BODY_MOVE_MUL = 0.5;
+export const BODY_RANGE_MUL = 0.5;
+
+/** 体修的境界射程加成（境界射程折半，向下取整） */
+export function bodyRangeForRank(rank: number): number {
+  return Math.floor((rank / 2) * BODY_RANGE_MUL);
+}
+
 /** 要不要按"被削弱过的灵体"折算（未来的魂修不吃这一套） */
 function isWeakenedSpirit(u: Unit): boolean {
   return isSpirit(u) && !isSoulMasterSpirit(u);
@@ -85,14 +102,57 @@ function isWeakenedSpirit(u: Unit): boolean {
 
 /** 攻击力修正：境界，衰老 −2/岁 */
 export function atkModifier(u: Unit): number {
-  const rank = getRank(u);
-  const scaled = atkRaw(rank) * (isWeakenedSpirit(u) ? SPIRIT_ATK_MUL : 1);
-  return Math.ceil(scaled) - getAgingYears(u) * 2;
+  return realmAtkFor(u) - getAgingYears(u) * 2;
 }
 
-/** 真伤修正 */
+/**
+ * 面板用：这一境界按流派折算后，实际加多少攻击（**不扣衰老**）。
+ *
+ * 和 `realmAtkBase` 的区别是它认流派系数：剑修 ×0.8、体修 ×1.1。
+ * 界面上那行「境界加成」印的是纯境界值（那是有意为之，见 panel.ts），
+ * 所以体修要额外说明"折算后实际是多少"时用这个，别自己再乘一遍。
+ */
+export function realmAtkFor(u: Unit): number {
+  const mul = isWeakenedSpirit(u)
+    ? SPIRIT_ATK_MUL
+    : isBodyCultivatorType(u.type)
+      ? BODY_ATK_MUL
+      : 1;
+  return Math.ceil(atkRaw(getRank(u)) * mul);
+}
+
+/**
+ * 真元：**只看境界与流派**的裸值。
+ *
+ * 这是"这个修士修炼到什么程度"，不含任何外面给的加成。
+ * 要算"这一下实际打多少真元"，用 `effectiveTrueDamage(s, u)`。
+ */
 export function trueDamageOf(u: Unit): number {
-  return trueDamageForRank(getRank(u));
+  const base = trueDamageForRank(getRank(u));
+  return isBodyCultivatorType(u.type)
+    ? Math.floor(base * BODY_TRUE_DAMAGE_MUL)
+    : base;
+}
+
+/**
+ * 真元：把**裸值**和**外部加成**合成"这一下实际打多少"。
+ *
+ * 单独抽出来而不是改 `trueDamageOf` 的签名：后者是几十条测试和面板在用的
+ * "境界给了我多少"，把它和"今天实际有多少"混成一件事之后，面板就没法
+ * 分开说了。两件事，两个函数。
+ *
+ * `pct` 是"加成多少比例"（0.1 = +10%），由调用方去查——**这一层不能自己查**：
+ * `stats.ts` 在初始化链的最上游（packs → units → stats），往这里 import
+ * `auras.ts` 会把 ability-registry 提前拉起来，而它顶层要遍历 EXPANSIONS，
+ * 当场炸 "Cannot access 'EXPANSIONS' before initialization"。
+ *
+ * 给 **+1 保底**：低境界修士真元只有 1~2 点，10% 取整是 0，
+ * 不给保底这条光环在前期等于不存在。
+ */
+export function trueDamageWithMods(base: number, pct: number | null | undefined): number {
+  if (base <= 0) return 0;
+  if (!pct || pct <= 0) return base;
+  return base + Math.max(1, Math.round(base * pct));
 }
 
 /** 攻击次数修正 */
@@ -118,7 +178,9 @@ export function armorModifier(u: Unit): number {
 /** 移动修正 */
 export function moveModifier(u: Unit): number {
   if (isWeakenedSpirit(u)) return Math.ceil((getRank(u) / 3) * SPIRIT_MOVE_MUL);
-  return moveForRank(getRank(u));
+  const base = moveForRank(getRank(u));
+  // 体修身法笨重：境界带来的移动也折半（基础移动力不折，那是兵种的事）
+  return isBodyCultivatorType(u.type) ? Math.floor(base * BODY_MOVE_MUL) : base;
 }
 
 /** 溅射范围修正 */
@@ -129,7 +191,9 @@ export function SplashModifier(u: Unit): number {
 /** 射程修正 */
 export function RangeModifier(u: Unit): number {
   const rank = getRank(u);
-  return isWeakenedSpirit(u) ? spiritRangeForRank(rank) : realmRangeBase(rank);
+  if (isWeakenedSpirit(u)) return spiritRangeForRank(rank);
+  if (isBodyCultivatorType(u.type)) return bodyRangeForRank(rank);
+  return realmRangeBase(rank);
 }
 
 /** 视野修正 */

@@ -11,12 +11,27 @@ import type { GameState, Unit, UnitTypeDef } from '../types.ts';
 export const UNIT_IDS = {
   QI_CULTIVATOR: 'qi-cultivator',
   SWORD_CULTIVATOR: 'sword-cultivator',
+  BODY_CULTIVATOR: 'body-cultivator',
+  BLOOD_CULTIVATOR: 'blood-cultivator',
   SPIRIT: 'cultivator-spirit',
   SERVANT: 'cultivation-servant',
   DEACON: 'cultivation-deacon',
+  STEWARD: 'cultivation-steward',
   SPIRIT_FIELD: 'cultivation-spirit-field',
   SPIRIT_MINE: 'cultivation-spirit-mine',
   SPIRIT_TOWER: 'cultivation-spirit-tower',
+  SPIRIT_SPRING: 'cultivation-spirit-spring',
+  SECT: 'cultivation-sect',
+  SCRIPTURE_PAVILION: 'cultivation-scripture-pavilion',
+  SILENT_PAVILION: 'cultivation-silent-pavilion',
+  ALCHEMY_FURNACE: 'cultivation-alchemy-furnace',
+  FORGE_1: 'cultivation-forge-1',
+  FORGE_2: 'cultivation-forge-2',
+  FORGE_3: 'cultivation-forge-3',
+  ARTIFACT_WOOD: 'cultivation-artifact-wood',
+  ARTIFACT_STONE: 'cultivation-artifact-stone',
+  ARTIFACT_WATER: 'cultivation-artifact-water',
+  ARTIFACT_FIRE: 'cultivation-artifact-fire',
   FORMATION_MASTER: 'cultivation-formation-master',
   FORMATION_MASTER_2: 'cultivation-formation-master-2',
   FORMATION_MASTER_3: 'cultivation-formation-master-3',
@@ -39,6 +54,9 @@ export const UNIT_IDS = {
 const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
+  UNIT_IDS.SPIRIT,
+  UNIT_IDS.BODY_CULTIVATOR,
+  UNIT_IDS.BLOOD_CULTIVATOR,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
@@ -60,6 +78,27 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
  */
 export function isSwordCultivatorType(type: string): boolean {
   return type === UNIT_IDS.SWORD_CULTIVATOR;
+}
+
+/**
+ * 是不是体修。同上，只认 type 字符串。
+ *
+ * 体修的境界加成是"偏科"的（攻 ×1.1、真元/移动/射程 ×0.5），这些系数在
+ * `stats.ts` 里按流派分支；身份判定留在这里，避免 stats 反过来import 兵种表。
+ */
+export function isBodyCultivatorType(type: string): boolean {
+  return type === UNIT_IDS.BODY_CULTIVATOR;
+}
+
+/**
+ * 是不是魔修。
+ *
+ * 魔修不吃"打坐"和"击杀历练"两条常规路（见 progression.ts 的 getExpGrowth
+ * 与 hooks.ts 的 onUnitKilled），全部修为来自「血祭」——那条路的经验绕过了
+ * 每回合击杀上限，所以它不能同时再吃一份击杀经验，否则节奏直接翻倍。
+ */
+export function isBloodCultivatorType(type: string): boolean {
+  return type === UNIT_IDS.BLOOD_CULTIVATOR;
 }
 
 export function isSpirit(u: Unit): boolean {

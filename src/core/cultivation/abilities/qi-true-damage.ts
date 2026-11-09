@@ -1,7 +1,7 @@
 import type { AbilityDef } from '../../abilities';
 import { isCultivatorUnit } from '../identity.ts';
 import { DAMAGE_STAGE } from '../../ability-hooks.ts';
-import { trueDamageOf } from '../stats.ts';
+import { trueDamageOf, trueDamageWithMods } from '../stats.ts';
 
 // 真元：真实伤害
 export const QI_TRUE_DAMAGE: AbilityDef = {
@@ -16,7 +16,9 @@ export const QI_TRUE_DAMAGE: AbilityDef = {
         apply: (c) => {
           if (c.side !== 'attacker') return;
           if (!isCultivatorUnit(c.state, c.self)) return;
-          const trueDmg = trueDamageOf(c.self);
+          // 光环比例由规则层注入（`c.trueDamagePct`）：这个文件在初始化链上游，
+          // 自己 import auras 会把 ability-registry 提前拉起来、遍历未初始化的 EXPANSIONS。
+          const trueDmg = trueDamageWithMods(trueDamageOf(c.self), (c.trueDamagePct ?? 0));
           if (trueDmg > 0) c.damage += trueDmg;
         },
       },
