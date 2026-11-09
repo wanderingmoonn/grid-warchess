@@ -43,13 +43,7 @@ import { canUseType, eraWindowOk, upgradeUnlocks } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
 import type { PlayerView } from '../core/fog.ts';
-import { 
-  describeTerrain,
-  describeUnit,
-  ELEMENT_EFFECT,
-  TERRAIN_INFO,
-    CLIMATE_ICON,
-  climateEffectLines,
+import {
   describeTerrain,
   describeUnit,
   ELEMENT_EFFECT,
