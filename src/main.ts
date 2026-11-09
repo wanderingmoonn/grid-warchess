@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { playerView } from './core/fog.ts';
+import { playerView, isBlackedOut, onlyVisibleCells } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -366,6 +366,32 @@ function syncTopbarBadges(): void {
     .join('');
 }
 
+/**
+ * 浓雾：这一格此刻看不见（棋盘上画成 `.tile.unknown` 的那种黑格）。
+ *
+ * 只在"开了雾 + 勾了「浓雾蔽野」"这一局里成立。观战位与上帝模式的
+ * `viewNow()` 本来就是全图（`playerView` 的第三个参数），所以那几个模式
+ * 自动不会命中——不需要在这里多写分支。
+ */
+function blackedOutAt(coords: { x: number; y: number } | null | undefined): boolean {
+  if (!coords) return false;
+  // 判据收在 core/fog：棋盘怎么画、这里怎么判，用的是同一个 visibleTilesOf
+  return isBlackedOut(state, me(), coords.x, coords.y);
+}
+
+/**
+ * 黑格上"看一眼"的统一回应：说一句话就返回，绝不落到任何属性卡。
+ *
+ * 为什么值得单独一个函数：点击流程里"只看不操作"的入口有五处
+ * （复盘、点敌方单位、观战位、轮不到我/指挥官、点空地），
+ * 一处漏掉就等于那一片黑雾白送侦察。收成一个判断，漏了容易发现。
+ */
+function refuseLook(coords: { x: number; y: number } | null | undefined): boolean {
+  if (!blackedOutAt(coords)) return false;
+  toast('浓雾里看不清那儿');
+  return true;
+}
+
 /** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
 function computeBoardView(): Map<number, string> | undefined {
   const id = activeBoardViewId();
@@ -373,8 +399,19 @@ function computeBoardView(): Map<number, string> | undefined {
   const def = boardViewsOf().find((v) => v.id === id);
   const cells = def?.cells?.({ state, viewer: me() });
   if (!cells || cells.length === 0) return undefined;
+
   const out = new Map<number, string>();
-  for (const c of cells) out.set(c.y * state.w + c.x, c.color);
+  /*
+   * 「浓雾蔽野」下，视野外一格都不许染。
+   *
+   * 闸门放在这里而不是各个扩展的 `cells` 里，是因为**所有**棋盘视图都走这一条路
+   * （天气、灵气、热度……），逐个扩展去记得"我该不该过滤"迟早漏一个。
+   * 而漏掉的代价不小：天气是由地形算出来的，"这一片在下雨"就等于告诉玩家
+   * 那边不是沙漠；再配合"温和不画"，黑区的边界甚至能反推出地形轮廓。
+   *
+   * 未开浓雾时整段跳过，这批视图一格都不会少。
+   */
+  for (const c of onlyVisibleCells(state, me(), cells)) out.set(c.y * state.w + c.x, c.color);
   return out;
 }
 let selectedId: string | null = null;
@@ -2942,6 +2979,8 @@ function canRepeatSkill(unitId: string, skillId: string): boolean {
  */
 function inspectAt(coords: { x: number; y: number } | null): void {
   if (!coords) return;
+  // 浓雾里的黑格：连"看一眼"都不给（这条覆盖 AI 行动中、轮不到我、指挥官模式三条路）
+  if (refuseLook(coords)) return;
 
   const id = pickUnitId(coords, false);
   const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
@@ -2975,6 +3014,7 @@ function onBoardClick(e: Event): void {
   if (replay) {
     const at = coordsFromEvent(e);
     if (!at) return;
+    if (refuseLook(at)) return;
     const here = stackAt(at.x, at.y);
     if (here.length > 0) {
       selectedId = here[here.length - 1]!.id;
@@ -3189,6 +3229,16 @@ function onBoardClick(e: Event): void {
     toast(moveRefusal(coords));
     return;
   }
+
+  /*
+   * 浓雾：黑格上不做任何"查看"。
+   *
+   * 位置很讲究——放在函数最上面会连**动作**一起拦掉（下水点、施法落点、
+   * 强制移动、过桥都有各自的分支）；放在这里，上面那些动作分支已经走完，
+   * 往下全是"看一眼"：点敌方单位、点城、点空地。
+   * 黑格本来就不可能出现在 `reach` / `targets` 里，所以拦在这里不会误伤走子。
+   */
+  if (refuseLook(coords)) return;
 
   const clickedUnitId = pickUnitId(coords, wantAttack);
 

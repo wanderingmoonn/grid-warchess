@@ -315,7 +315,7 @@ import {
   isEliminated,
   hasQuit,
 } from '../src/core/rules.ts';
-import { playerView } from '../src/core/fog.ts';
+import { playerView, isBlackedOut, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -4916,6 +4916,63 @@ test('基础规则的雾不攒地形记忆', () => {
   assert.equal(s.memory.A.tiles, undefined, '不开浓雾就不该有地形记忆');
   assert.equal(s.memory.A.cities, undefined, '不开浓雾也不该有城市记忆');
   assert.equal(playerView(s, 'A').rememberedTiles.size, 0, '基础规则下没有"记忆里的地图"');
+});
+
+test('浓雾：看不见的格子点不开，也不给染色', () => {
+  /*
+   * 浓雾把**地形和城**一起遮掉（棋盘上画成 `.tile.unknown`），但"看一眼"
+   * 和"给视图染色"这两条路上原来是敞着的：
+   *   · 点一座看不见的城，城卡照样给出护甲和耐久；
+   *   · 开「天气」视图，黑区里在下雨也一并染出来——而天气由地形算出，
+   *     配合"温和不画"，连地形轮廓都能反推。
+   *
+   * 判据统一收在 `fog.isBlackedOut` / `fog.onlyVisibleCells`，这条守它们，
+   * 同时也守"没开浓雾时一格都不许拦"。
+   */
+  const mk = (ids: string[]) => {
+    const s = fresh({ expansionIds: ids });
+    s.fog = true;
+    return s;
+  };
+  const on = mk(['blackout']);
+  const off = mk([]);
+
+  const visA = visibleTilesOf(on, 'A');
+  let hidden = -1;
+  for (let i = 0; i < on.w * on.h; i++) {
+    if (!visA.has(i)) {
+      hidden = i;
+      break;
+    }
+  }
+  assert.ok(hidden >= 0, '总得有一格是看不见的');
+  const hx = hidden % on.w;
+  const hy = Math.floor(hidden / on.w);
+  const seen = [...visA][0]!;
+  const sx = seen % on.w;
+  const sy = Math.floor(seen / on.w);
+
+  assert.equal(isBlackedOut(on, 'A', hx, hy), true, '浓雾下视野外的格子是黑的，点开读不到东西');
+  assert.equal(isBlackedOut(on, 'A', sx, sy), false, '自己看得见的格子照常能看');
+
+  // 没开浓雾：普通雾只遮单位，地形一直画在屏幕上 —— 一格都不许拦
+  assert.equal(isBlackedOut(off, 'A', hx, hy), false, '没开浓雾，黑格这个概念不存在');
+  // 开了浓雾但没开雾：浓雾依附于雾，不成立
+  on.fog = false;
+  assert.equal(isBlackedOut(on, 'A', hx, hy), false, '没开雾就没有浓雾');
+  on.fog = true;
+
+  // 染色过滤：黑格不出色，看得见的照旧（这条同时管天气/灵气/热度所有视图）
+  const cells = [
+    { x: hx, y: hy, color: 'hidden' },
+    { x: sx, y: sy, color: 'seen' },
+  ];
+  assert.deepEqual(
+    onlyVisibleCells(on, 'A', cells).map((c) => c.color),
+    ['seen'],
+    '浓雾下黑格不该被染色——否则天气会把地形漏出来',
+  );
+  assert.equal(onlyVisibleCells(off, 'A', cells).length, 2, '没开浓雾时一格都不许少');
 });
 
 test('浓雾整局跑得下去：AI 照旧行动，记忆也不会越攒越大', () => {
