@@ -72,6 +72,15 @@ export interface BoardUi {
    */
   heat?: Map<number, number>;
   /**
+   * 扩展的棋盘视图：格索引 → CSS 颜色。
+   *
+   * 只有"视图打开"时才有值（悬停或钉住，状态在 main.ts）。这一层铺在
+   * **地面之上、棋子之下**——它染的是地，不该盖住人和标记。
+   *
+   * 核心不知道颜色代表什么：灵气、污染、视野都走同一个口子。
+   */
+  boardView?: Map<number, string>;
+  /**
    * 这一下**刚刚打出去**的格子（格索引 → 次数），闪一次就散。
    *
    * 和 `heat` 是两个方向：那个是"上回合我在这挨打"（历史、常驻、出手即收），
@@ -197,7 +206,7 @@ function ensureStructure(el: HTMLElement): void {
   // 闪烁层单独一层，是为了不污染常驻层的"内容相同就不写"缓存——那层按格累积、
   // 大多帧不变；这层每次动作都要重播动画，混在一起会互相把对方的 diff 打断。
   el.innerHTML =
-    '<div class="tiles"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div>';
+    '<div class="tiles"></div><div class="board-view"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div>';
 }
 
 /**
@@ -614,6 +623,29 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   //
   // 这一层在棋子之上：红罩盖住棋子，才看得出"站在这里的这个人挨过打"。
   // 雾里不画——main 已经按可见格过滤过，这里再兜一层，防调用方忘了传。
+  // ---- 扩展的棋盘视图（灵气浓度等）----
+  //
+  // 铺在地面之上、标记与棋子之下：它染的是"地"，不该盖住人和图标。
+  // 每一格都建节点（不像 heat 只画"有数的那几格"），因为"这里很稀"本身
+  // 也是信息；`paintLayer` 逐字比对，没变化就不写 DOM，所以并不贵。
+  const viewEl = el.querySelector<HTMLElement>('.board-view');
+  if (viewEl) {
+    const cells: string[] = [];
+    if (ui.boardView) {
+      for (const i of Array.from(ui.boardView.keys()).sort((a, b) => a - b)) {
+        const color = ui.boardView.get(i);
+        if (!color) continue;
+        const x = i % s.w;
+        const y = (i - x) / s.w;
+        cells.push(
+          `<i class="fx-qi" data-x="${x}" data-y="${y}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1};background:${color}"></i>`,
+        );
+      }
+    }
+    paintLayer(viewEl, cells.join(''));
+  }
+
   const heatEl = el.querySelector<HTMLElement>('.heat');
   if (heatEl) {
     const cells: string[] = [];

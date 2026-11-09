@@ -476,6 +476,18 @@ export interface ExpansionHooks {
   getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
 
   /**
+   * 棋盘视图：让扩展在棋盘上**染一层色**（灵气浓度、污染、视野……）。
+   *
+   * 核心只负责画。它拿到的是"哪几格 + CSS 颜色"，**不知道绿色代表什么**——
+   * 和 `getTilePanelLines` 一个道理：颜色是扩展的词汇，核心只认 DOM。
+   *
+   * 顶栏会为每个视图给一个 chip：悬停即看、点击钉住（交互在 main.ts 里，
+   * 那些状态只活在界面层，不进存档、不进回放）。
+   */
+  boardViews?: (c: { state: GameState }) => BoardView[];
+
+
+  /**
    * 单位面板上的**扩展按钮**。
    *
    * 只解决一件核心不知道怎么办的事："修士站在藏经阁旁边，想学一门法术"——
@@ -525,6 +537,26 @@ export interface ExpansionHooks {
 }
 
 /** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
+/**
+ * 一个棋盘视图。`cells` 只在视图激活时被调用，所以遍历全图的代价
+ * 不会平摊到每一帧。
+ */
+export interface BoardView {
+  /** 稳定 id：顶栏 chip 用它当状态键，改了等于换一个视图 */
+  id: string;
+  /** 顶栏上的字，两个字最好（和「季节」那个 chip 并排） */
+  label: string;
+  /** 悬停提示：这个视图在说什么 */
+  hint: string;
+  /** 每一格画什么色。返回空数组 = 这一帧不画 */
+  cells?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+    x: number;
+    y: number;
+    /** CSS 颜色，通常带 alpha */
+    color: string;
+  }>;
+}
+
 export interface UnitActionOption {
   /** 点击后原样带回来的标识，格式由扩展决定 */
   id: string;

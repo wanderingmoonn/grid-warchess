@@ -9,7 +9,7 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
-import { exchangeMana, qiAt, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
+import { exchangeMana, qiAt, qiOverlayCells, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
 import {
   PILLS,
   addPill,
@@ -556,4 +556,18 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		const src = qiSourceLabel(state, x, y);
 		return [`灵气浓度：${Math.round(q)} / ${QI_MAX}${src ? `（${src}）` : ''}`];
 	},
+	/*
+	 * 顶栏那个「灵气」chip：悬停看全图、点一下钉住（交互在 main.ts）。
+	 *
+	 * 核心拿到的是"哪几格染什么色"，不知道绿色代表浓度——所以这个视图
+	 * 换个语境能变成"污染视图""视野视图"，核心一行不用改。
+	 */
+	boardViews: () => [
+		{
+			id: 'cultivation-qi',
+			label: '灵气',
+			hint: '悬停查看全图灵气浓度；点一下钉住，再点取消',
+			cells: ({ state }) => qiOverlayCells(state),
+		},
+	],
 };

@@ -1871,6 +1871,11 @@ export function topbarShell(): string {
       <span data-ref="who"></span>
     </div>
     <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
+    <!--
+      扩展的棋盘视图（灵气、以后的污染/视野……）：chip 由 main 按扩展给的
+      定义创建，这里只留容器。没有扩展提供视图时整块不占位。
+    -->
+    <div class="topbar-ext" data-ref="board-views"></div>
     <button class="room-pill" data-act="online" data-ref="room" title="当前房间" hidden></button>
     <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>
