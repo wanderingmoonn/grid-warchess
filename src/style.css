@@ -763,6 +763,27 @@ body {
  * 这一层本身就是"刚刚被打"的信号，关掉动画等于把这个信息关掉一半。
  * 它是玩家主动看到的一瞬间提示（出手一次就收），不是常驻背景动画。
  */
+/* ---------------- 扩展的棋盘视图（灵气浓度等） ---------------- */
+/*
+ * 染色层铺在**地面之上、棋子之下**：它染的是"地"，不该盖住人和图标。
+ * 所以它排在 .tiles 之后、.marks 之前（见 board.ts 的层骨架）。
+ *
+ * `pointer-events: none` 是硬要求：开了视图之后点格子、点棋子必须照常生效。
+ * 颜色本身由扩展给（核心不知道绿色代表什么），这里只管网格与圆角。
+ */
+.board-view {
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 12), 1fr);
+  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  pointer-events: none;
+}
+
+.fx-qi {
+  border-radius: 4px;
+}
+
 .heat {
   position: absolute;
   inset: 6px;
@@ -4037,6 +4058,41 @@ a.btn {
  * 图标 + 名字 + 逐条效果。颜色只是"一眼分冷暖干湿"的辅助，
  * 名字和数值才是准的——色弱玩家也得读得懂，所以不靠颜色单独表意。
  */
+/* 扩展的棋盘视图 chip：和「季节」同尺寸，但可点、有开关态 */
+.topbar-ext {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* 没有扩展提供视图时整块不占位，顶栏不会多出一段空白 */
+.topbar-ext:empty {
+  display: none;
+}
+
+.view-chip {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.view-chip:hover,
+.view-chip.on {
+  color: #3f8a72;
+  border-color: #3f8a72;
+}
+
+/* 钉住时背景也亮一档：光靠颜色分不出"悬停"和"钉住" */
+.view-chip.pinned {
+  background: color-mix(in srgb, #3f8a72 18%, var(--panel-2));
+  color: #2f6f5a;
+}
+
 .weather-chip {
   flex: 0 0 auto;
   font-size: 12px;

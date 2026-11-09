@@ -696,6 +696,20 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       const info = TERRAIN_INFO[tile.terrain];
       const lines = describeTerrain(tile.terrain, s);
       const coord = `${String.fromCharCode(65 + selectedTile.x)}${selectedTile.y + 1}`;
+      // 扩展写在格子上的东西（灵气浓度之类）：核心不认识，只把盒子递过去——
+      // 和单位卡上的 getUnitPanelLines 一个口径。
+      const extLines: string[] = [];
+      for (const e of activeExpansions(s)) {
+        if (!e.hooks.getTilePanelLines) continue;
+        extLines.push(
+          ...e.hooks.getTilePanelLines({
+            state: s,
+            x: selectedTile.x,
+            y: selectedTile.y,
+            viewer: me,
+          }),
+        );
+      }
       return `
         <div class="unit-head">
           <div class="unit-chip" style="border-radius:8px;background:#8b8477">地</div>
@@ -706,6 +720,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         </div>
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
         <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
+        ${
+          extLines.length > 0
+            ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${extLines
+                .map((l) => `<div>· ${escapeHtml(l)}</div>`)
+                .join('')}</div>`
+            : ''
+        }
         ${
           weatherOn
             ? `<div class="card-title" style="margin-top:12px">这里的天气</div>
@@ -1941,6 +1962,11 @@ export function topbarShell(): string {
       <span data-ref="who"></span>
     </div>
     <span class="weather-chip" data-ref="season" title="季节：每 10 回合换一季" hidden></span>
+    <!--
+      扩展的棋盘视图（灵气、以后的污染/视野……）：chip 由 main 按扩展给的
+      定义创建，这里只留容器。没有扩展提供视图时整块不占位。
+    -->
+    <div class="topbar-ext" data-ref="board-views"></div>
     <button class="room-pill" data-act="online" data-ref="room" title="当前房间" hidden></button>
     <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>

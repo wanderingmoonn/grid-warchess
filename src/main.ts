@@ -14,7 +14,8 @@ import { createTutorialMatch } from './core/tutorial.ts';
 import { holdOf } from './core/carry.ts';
 import { skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
-import { expansionById } from './core/expansions.ts';
+import { activeExpansions, expansionById } from './core/expansions.ts';
+import type { BoardView } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
@@ -281,6 +282,76 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
  */
 let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+
+/*
+ * 棋盘视图的开关：悬停看一眼，点一下钉住。
+ *
+ * **只活在这一层**，绝不进 `GameState`——进去了就会跟着存档、回放、联机快照
+ * 一起走，然后出现"读档之后灵气视图还开着"这种既不必要也解释不清的状态。
+ *
+ * `hover` 优先于 `pinned`：鼠标停在别的 chip 上时先看那个，移开再回到钉住的。
+ */
+let boardViewHover: string | null = null;
+let boardViewPinned: string | null = null;
+
+/** 现在该画哪个视图（都没有就是 null） */
+function activeBoardViewId(): string | null {
+  return boardViewHover ?? boardViewPinned;
+}
+
+/** 这一局所有扩展声明的棋盘视图。每帧都会调，别在里面做重活 */
+function boardViewsOf(): BoardView[] {
+  const out: BoardView[] = [];
+  for (const e of activeExpansions(state)) {
+    if (!e.hooks.boardViews) continue;
+    out.push(...e.hooks.boardViews({ state }));
+  }
+  return out;
+}
+
+/**
+ * 顶栏上的视图 chip。
+ *
+ * 和顶栏骨架那条注释同一个理由：**绝不在每帧重建按钮节点**——
+ * mousedown 和 mouseup 落在不同节点上，click 就直接丢了（AI 托管时最明显）。
+ * 所以只在"数量变了"的时候重建一次，之后只改 class。
+ */
+function syncBoardViewChips(views: BoardView[]): void {
+  const box = topbarEl.querySelector<HTMLElement>('[data-ref="board-views"]');
+  if (!box) return;
+
+  if (box.dataset.count !== String(views.length)) {
+    box.dataset.count = String(views.length);
+    const esc = (t: string) =>
+      t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+    box.innerHTML = views
+      .map(
+        (v) =>
+          `<button class="view-chip" data-act="board-view" data-id="${esc(v.id)}" ` +
+          `title="${esc(v.hint)}">${esc(v.label)}</button>`,
+      )
+      .join('');
+  }
+
+  const active = activeBoardViewId();
+  for (const el of box.querySelectorAll<HTMLElement>('.view-chip')) {
+    const id = el.dataset.id ?? '';
+    el.classList.toggle('on', id === active);
+    el.classList.toggle('pinned', id === boardViewPinned);
+  }
+}
+
+/** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
+function computeBoardView(): Map<number, string> | undefined {
+  const id = activeBoardViewId();
+  if (!id) return undefined;
+  const def = boardViewsOf().find((v) => v.id === id);
+  const cells = def?.cells?.({ state, viewer: me() });
+  if (!cells || cells.length === 0) return undefined;
+  const out = new Map<number, string>();
+  for (const c of cells) out.set(c.y * state.w + c.x, c.color);
+  return out;
+}
 let selectedId: string | null = null;
 
 // ---------- 复盘 ----------
@@ -1218,6 +1289,8 @@ function render(): void {
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
+  // 顶栏的棋盘视图 chip（扩展给的；没有就整块不占位）
+  syncBoardViewChips(boardViewsOf());
   /*
    * 复盘时换一副眼镜：**旁观 + 全信息**。
    *
@@ -1278,6 +1351,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
+    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值。
+    boardView: computeBoardView(),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,
@@ -3748,6 +3823,15 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'board-view': {
+      const id = el.dataset.id ?? '';
+      // 点一下钉住、再点取消。钉住那一刻顺手清掉 hover：鼠标还停在 chip 上，
+      // 不清的话"取消"会立刻被 hover 重新点亮，看起来像点不动。
+      boardViewPinned = boardViewPinned === id ? null : id;
+      boardViewHover = null;
+      render();
+      return;
+    }
     case 'toggle-fog': {
       // 上帝模式固定全图：
       //   1. 沙盒里藏信息没有意义，盘上的兵都是自己摆的；
@@ -6835,6 +6919,32 @@ topbarEl.addEventListener(
 );
 
 topbarEl.addEventListener('scroll', () => syncTopbarScroll(), { passive: true });
+
+/*
+ * 棋盘视图 chip 的悬停：进来看一眼、移开就收。
+ *
+ * 用**委托**而不是逐个绑：chip 是每局重建一次的（扩展列表变了才重建），
+ * 绑在节点上的监听会跟着旧节点一起丢。挂在顶栏上，重建多少次都还在。
+ */
+topbarEl.addEventListener('mouseover', (e) => {
+  const chip = (e.target as Element | null)?.closest?.('.view-chip') as HTMLElement | null;
+  if (!chip) return;
+  const id = chip.dataset.id ?? null;
+  if (!id || boardViewHover === id) return;
+  boardViewHover = id;
+  render();
+});
+
+topbarEl.addEventListener('mouseout', (e) => {
+  const chip = (e.target as Element | null)?.closest?.('.view-chip') as HTMLElement | null;
+  if (!chip) return;
+  // 在 chip 内部移动（换到子节点）不算离开
+  const to = (e as MouseEvent).relatedTarget as Node | null;
+  if (to && chip.contains(to)) return;
+  if (boardViewHover === null) return;
+  boardViewHover = null;
+  render();
+});
 
 /**
  * 产兵搜索框。

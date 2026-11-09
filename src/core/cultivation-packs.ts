@@ -17,6 +17,7 @@ import {
   SWORD_CULTIVATOR,
   BODY_CULTIVATOR,
   BLOOD_CULTIVATOR,
+  SOUL_CULTIVATOR,
   SERVANT,
   DEACON,
   STEWARD,
@@ -70,6 +71,8 @@ export const CULTIVATION_PACK: Expansion = {
     BODY_CULTIVATOR,
     // 魔修：靠「血祭」炼化生灵升级，打坐与击杀历练都不给它（见 skills/blood-rite.ts）
     BLOOD_CULTIVATOR,
+    // 魂修：化灵之后不吃灵体削弱（判据在 identity.ts 的 SOUL_MASTER_IDS）
+    SOUL_CULTIVATOR,
     SPIRIT_CULTIVATOR,
     SERVANT, 
     DEACON,

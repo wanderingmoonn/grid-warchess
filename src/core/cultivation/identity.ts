@@ -13,6 +13,7 @@ export const UNIT_IDS = {
   SWORD_CULTIVATOR: 'sword-cultivator',
   BODY_CULTIVATOR: 'body-cultivator',
   BLOOD_CULTIVATOR: 'blood-cultivator',
+  SOUL_CULTIVATOR: 'soul-cultivator',
   SPIRIT: 'cultivator-spirit',
   SERVANT: 'cultivation-servant',
   DEACON: 'cultivation-deacon',
@@ -57,6 +58,7 @@ const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.SPIRIT,
   UNIT_IDS.BODY_CULTIVATOR,
   UNIT_IDS.BLOOD_CULTIVATOR,
+  UNIT_IDS.SOUL_CULTIVATOR,
 ]);
 
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
@@ -125,8 +127,25 @@ export const SPIRIT_ASCENSION_RANK = 4;
  */
 export const ANOMALY_ABILITY_ID = 'anomaly';
 
-/** 未来魂修集合：化灵后不吃削弱 */
-const SOUL_MASTER_IDS = new Set<string>();
+/**
+ * 魂修：化灵之后**不吃灵体削弱**的那一支。
+ *
+ * 这个集合原本是空的，只有一条注释占着位置（"未来魂修集合：化灵后不吃削弱"）。
+ * 现在它是整条魂修设计的**唯一开关**——`stats.ts` 的 `isWeakenedSpirit`
+ * 查的就是这里：
+ *
+ *   · 普通灵体：攻击 ×0.1、护甲 ×10、移动 ×1.2（`SPIRIT_*_MUL`）
+ *   · 魂修灵体：攻击/护甲/移动全按**活着时**的境界值算
+ *
+ * 所以"魂修死了战斗力掉得不多"不是另写一套加成，而是**不走进那条削弱分支**。
+ * 想让某个流派也免疫灵体削弱，把 id 加进来就行，别处一个字不用改。
+ */
+const SOUL_MASTER_IDS = new Set<string>([UNIT_IDS.SOUL_CULTIVATOR]);
+
+/** 只看 type 字符串：化灵那一刻 `u.type` 还没换成灵体，拿不到 `isSpirit` */
+export function isSoulMasterType(type: string): boolean {
+  return SOUL_MASTER_IDS.has(type);
+}
 
 export function isSoulMasterSpirit(u: Unit): boolean {
   if (!isSpirit(u)) return false;

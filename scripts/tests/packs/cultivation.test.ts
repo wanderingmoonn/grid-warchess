@@ -45,8 +45,24 @@ import {
 } from '../../../src/core/cultivation/skills/blood-rite.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
 import { detailCardHtml } from '../../../src/ui/panel.ts';
+import {
+  QI_BUILDING_SOURCE,
+  QI_MAX,
+  QI_TERRAIN_SOURCE,
+  QI_VIEW_TIERS,
+  exchangeMana,
+  previewExchange,
+  qiAt,
+  qiOverlayCells,
+  qiSourceLabel,
+  qiTierOf,
+  stepQiField,
+} from '../../../src/core/cultivation/qi-field.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
+import { isCultivatorUnit } from '../../../src/core/cultivation/identity.ts';
+import { SKY_STEP_SKILL } from '../../../src/core/cultivation/skills/sky-step.ts';
+import { PALM_THUNDER_SKILL } from '../../../src/core/cultivation/skills/palm-thunder.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
 import { CORE_ABILITIES } from '../../../src/core/abilities.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
@@ -2967,6 +2983,297 @@ export function run() {
     assert.ok(
       chip![2]!.includes(String(WARD_PILL_TURNS)) && chip![2]!.includes('回合'),
       `徽章要写剩余回合：${chip![2]}`,
+    );
+  });
+
+  // ── 灵气浓度（2026-11-09）────────────────────────────
+  //
+  // 一条扩散方程，四个坑：稳定性、边界零通量、双重缓冲、源汇符号。
+  // 这里钉住后三个（稳定性靠常量 D ≤ 0.25 保证，写死在实现里）。
+
+  /** 一张全平原的图（灵气缺省 0），方便逐格铺地形 */
+  const qiScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    return s;
+  };
+
+  const fillQi = (s: GameState, v: number) => {
+    for (let i = 0; i < s.tiles.length; i++) {
+      s.tiles[i] = { ...s.tiles[i], custom: { qi: v } };
+    }
+  };
+
+  test('灵气：没有落库字段时按地形取缺省（老存档不用迁移）', () => {
+    const s = qiScene();
+    s.tiles[idx(s, 2, 2)] = { terrain: 'forest', cityId: null };
+    s.tiles[idx(s, 3, 2)] = { terrain: 'mountain', cityId: null };
+    s.tiles[idx(s, 4, 2)] = { terrain: 'water', cityId: null };
+    assert.equal(qiAt(s, 2, 2), 50, '森林 50 = 5 / 0.1');
+    assert.equal(qiAt(s, 3, 2), 100, '高山 100 = 10 / 0.1');
+    assert.equal(qiAt(s, 4, 2), 50, '水域也算');
+    assert.equal(qiAt(s, 1, 1), 0, '平原 0');
+
+    // 显式写 0 就是"空的"，不该再退回地形缺省
+    s.tiles[idx(s, 2, 2)] = { ...s.tiles[idx(s, 2, 2)], custom: { qi: 0 } };
+    assert.equal(qiAt(s, 2, 2), 0, '落库的 0 要压过缺省');
+  });
+
+  test('灵气：从浓往稀流，边缘不掉得比中间多（零通量边界）', () => {
+    const s = qiScene();
+    s.tiles[idx(s, 4, 4)] = { terrain: 'mountain', cityId: null }; // 100
+    stepQiField(s);
+    assert.ok(qiAt(s, 4, 4) < 100, '浓的那格往外流了');
+    assert.ok(qiAt(s, 4, 3) > 0, '邻居涨了');
+    assert.ok(
+      qiAt(s, 4, 3) > qiAt(s, 4, 1),
+      '近的比远的浓——这就是梯度，不用单独算',
+    );
+
+    // 全图同浓度：一步之后中心和边缘掉得一样多（边缘没有额外失血）
+    const t = qiScene();
+    fillQi(t, 50);
+    stepQiField(t);
+    const corner = qiAt(t, 0, 0);
+    const middle = qiAt(t, Math.floor(t.w / 2), Math.floor(t.h / 2));
+    assert.ok(
+      Math.abs(corner - middle) < 0.01,
+      `边缘不该比中间掉得多：角${corner} vs 中${middle}`,
+    );
+  });
+
+  test('灵气：灵田/灵泉是源，灵矿是汇（不是源）', () => {
+    assert.equal(QI_BUILDING_SOURCE['cultivation-spirit-field'], 15);
+    assert.equal(QI_BUILDING_SOURCE['cultivation-spirit-spring'], 20);
+    assert.equal(QI_BUILDING_SOURCE['cultivation-spirit-mine'], -5, '灵矿是汇');
+
+    const s = qiScene();
+    // 两块同样的空地，一块摆灵矿，一块不摆
+    place2(s, 'A', 'cultivation-spirit-mine', 6, 6);
+    s.tiles[idx(s, 6, 6)] = { ...s.tiles[idx(s, 6, 6)], custom: { qi: 80 } };
+    s.tiles[idx(s, 2, 2)] = { ...s.tiles[idx(s, 2, 2)], custom: { qi: 80 } };
+    stepQiField(s);
+    assert.ok(
+      qiAt(s, 6, 6) < qiAt(s, 2, 2),
+      `灵矿那格该掉得更狠：${qiAt(s, 6, 6)} vs ${qiAt(s, 2, 2)}`,
+    );
+
+    // 灵泉把周围养起来
+    const t = qiScene();
+    const spring = place2(t, 'A', 'cultivation-spirit-spring', 8, 8);
+    const before = qiAt(t, 8, 8);
+    for (let i = 0; i < 8; i++) stepQiField(t);
+    assert.ok(qiAt(t, 8, 8) > before, '灵泉那格涨了');
+    assert.ok(qiAt(t, 7, 8) > 0, '旁边也被带起来了');
+    assert.equal(spring.hp > 0, true);
+  });
+
+  test('灵气：工地还不吐纳，建好才算源', () => {
+    const s = qiScene();
+    const field = place2(s, 'A', 'cultivation-spirit-field', 5, 5);
+    field.buildNeed = 30;
+    field.buildDone = 0;
+    assert.equal(qiSourceLabel(s, 5, 5), '', '工地不该出现在源汇说明里');
+
+    field.buildDone = 30;
+    assert.ok(qiSourceLabel(s, 5, 5).includes('灵田'), '建好了才算');
+    assert.equal(qiSourceLabel(s, 5, 5).includes('+15'), true);
+  });
+
+  test('灵气：修士吸灵力——缺口越大吸越多，且不会抽干格子', () => {
+    const s = qiScene();
+    s.tiles[idx(s, 4, 4)] = { ...s.tiles[idx(s, 4, 4)], custom: { qi: 100 } };
+    const qi = place2(s, 'A', 'qi-cultivator', 4, 4);
+
+    // 缺口大：全空
+    setMana(qi, 0);
+    const max = maxManaOf(qi);
+    const r = exchangeMana(s, qi);
+    assert.equal(r.delta, Math.ceil(max * 0.25), '吸 = 缺口 × 25%');
+    assert.equal(manaOf(qi), r.delta, '灵力涨了这么多');
+    assert.equal(qiAt(s, 4, 4), 100 - r.delta, '格子少了同样的量');
+
+    // 缺口小：只差 1 点就只吸 1
+    setMana(qi, max - 1);
+    assert.equal(exchangeMana(s, qi).delta, 1, '缺口 1 就吸 1');
+
+    // 一次最多抽走一半：格子只剩 2 点时吸不到 12
+    const s2 = qiScene();
+    s2.tiles[idx(s2, 4, 4)] = { ...s2.tiles[idx(s2, 4, 4)], custom: { qi: 2 } };
+    const q2 = place2(s2, 'A', 'qi-cultivator', 4, 4);
+    setMana(q2, 0);
+    const r2 = exchangeMana(s2, q2);
+    assert.equal(r2.delta, 1, 'floor(2 × 0.5) = 1');
+    assert.equal(qiAt(s2, 4, 4), 1, '还剩一半');
+  });
+
+  test('灵气：贫瘠时灵力反向外漏，境界越高漏得越少', () => {
+    const s = qiScene(); // 全 0
+    const low = place2(s, 'A', 'qi-cultivator', 3, 3);
+    setCultivationExp(low, expForRank(0));
+    setMana(low, maxManaOf(low));
+    const before = manaOf(low);
+    const r = exchangeMana(s, low);
+    assert.ok(r.delta < 0, '0 期站在荒地里会漏灵力');
+    assert.ok(manaOf(low) < before, '灵力真的少了');
+    assert.ok(qiAt(s, 3, 3) > 0, '漏出去的有一半回到格子里');
+
+    const high = place2(s, 'A', 'qi-cultivator', 6, 6);
+    setCultivationExp(high, expForRank(8)); // 9 期
+    setMana(high, maxManaOf(high));
+    const r2 = exchangeMana(s, high);
+    assert.ok(r2.delta >= -1, `9 期基本不漏：${r2.delta}`);
+  });
+
+  test('灵气：预览和实扣是同一套式子（面板说 +8 就得真涨 8）', () => {
+    const s = qiScene();
+    s.tiles[idx(s, 4, 4)] = { ...s.tiles[idx(s, 4, 4)], custom: { qi: 100 } };
+    const qi = place2(s, 'A', 'qi-cultivator', 4, 4);
+    setMana(qi, 10);
+
+    const preview = previewExchange(s, qi);
+    const real = exchangeMana(s, qi);
+    assert.equal(preview.delta, real.delta, '预览与实际一致');
+  });
+
+  test('灵气视图：分 5 档，每格都有颜色（空白也是信息）', () => {
+    assert.equal(QI_VIEW_TIERS, 5);
+    assert.equal(qiTierOf(0), 0);
+    assert.equal(qiTierOf(19.9), 0);
+    assert.equal(qiTierOf(20), 1);
+    assert.equal(qiTierOf(60), 3);
+    assert.equal(qiTierOf(100), QI_VIEW_TIERS - 1, '满值落在最后一档');
+
+    const s = qiScene();
+    s.tiles[idx(s, 2, 2)] = { terrain: 'mountain', cityId: null };
+    const cells = qiOverlayCells(s);
+    assert.equal(cells.length, s.w * s.h, '每一格都要返回——空白格本身也是信息');
+    assert.ok(cells.every((c) => c.color.startsWith('rgba')), '颜色是带 alpha 的 CSS 串');
+    const hot = cells.find((c) => c.x === 2 && c.y === 2)!;
+    const cold = cells.find((c) => c.x === 0 && c.y === 0)!;
+    assert.notEqual(hot.color, cold.color, '浓淡要看得出来');
+  });
+
+  test('灵气视图：通过 boardViews 暴露，核心只拿到"格子和颜色"', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const views = CULTIVATION_HOOKS.boardViews!({ state: s });
+    const qi = views.find((v) => v.id === 'cultivation-qi');
+    assert.ok(qi, '要有灵气视图');
+    assert.equal(qi!.label, '灵气', '顶栏 chip 上就两个字');
+    assert.ok(qi!.hint.length > 0, '要有悬停提示');
+    const cells = qi!.cells!({ state: s, viewer: 'A' });
+    assert.equal(cells.length, s.w * s.h);
+    assert.ok(cells[0]!.color.includes('rgba'));
+    // 视图定义里**不带颜色**：颜色在 cells 的返回值里，核心拿到的是"这一格染什么"
+    assert.equal('color' in (qi as unknown as Record<string, unknown>), false);
+  });
+
+  test('灵气：面板写出脚下浓度与格子的源汇', () => {
+    const s = qiScene();
+    s.tiles[idx(s, 4, 4)] = { terrain: 'forest', cityId: null };
+    const qi = place2(s, 'A', 'qi-cultivator', 4, 4);
+    setMana(qi, 0);
+
+    const lines = getCultivationPanelLines(s, qi, 'A');
+    assert.ok(lines.some((l) => l.includes('脚下灵气')), '修士面板要有这一行');
+    const tileLines = CULTIVATION_HOOKS.getTilePanelLines!({ state: s, x: 4, y: 4, viewer: 'A' });
+    assert.ok(tileLines.some((l) => l.includes('灵气浓度')), '格子面板要有这一行');
+    assert.ok(tileLines[0]!.includes('50'), `森林该写 50：${tileLines[0]}`);
+    assert.ok(qiAt(s, 4, 4) <= QI_MAX);
+    assert.ok((QI_TERRAIN_SOURCE.forest ?? 0) > 0);
+  });
+
+  // ── 魂修（2026-11-09）────────────────────────────────
+  //
+  // 它的全部特殊性都在"化灵"那一刻。判据是 identity.ts 的 SOUL_MASTER_IDS，
+  // 三个消费者分别是 stats.ts（攻击/护甲/移动）和 spirit-ascension.ts 的两处
+  // （生命加成、技能）。下面几条把它们逐一钉住，并且留一组普通修士做对照——
+  // 少了对照，"魂修没折"和"两边都折了只是数值不同"是分不出来的。
+
+  /** 造一个 9 期修士 → 挂灵体道果 → 被一刀打死，返回化灵后的灵体 */
+  const ascend = (type: string) => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    const u = place2(s, 'A', type, 5, 5);
+    setCultivationExp(u, expForRank(8)); // 9 期：境界加成够大，折减看得出来
+    u.maxHpBonus = 100;
+    u.hp = 101;
+    u.custom = { ...u.custom, lifespan: 100 };
+    u.extraAbilities = ['spirit-ascension'];
+    // 两条**普通**技能（都没有 soulBound 标记）：普通修士死了要丢掉它们
+    u.extraSkills = [SKY_STEP_SKILL, PALM_THUNDER_SKILL];
+    const killer = place2(s, 'B', 'militia', 6, 5);
+    killer.atkBonus = 1000;
+    s.current = 'B';
+    const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: u.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    if (!r.ok) return null;
+    const spirit = r.state.units.find((x) => x.custom?.spiritForm === true);
+    assert.ok(spirit, '应该化灵了');
+    return { s: r.state, spirit: spirit! };
+  };
+
+  test('魂修：3 代修士，吃修炼也吃灵力', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['soul-cultivator'];
+    assert.ok(def, '魂修要在本局兵种表里');
+    assert.equal(def.era, 3, '三代');
+    assert.equal(def.category, 'combat');
+    const u = place2(s, 'A', 'soul-cultivator', 5, 5);
+    assert.ok(isCultivatorUnit(s, u), '要算修士，否则不修炼、不吸灵气');
+  });
+
+  test('魂修化灵：境界血一点不折，学过的技能全留着', () => {
+    const r = ascend('soul-cultivator');
+    assert.ok(r);
+    assert.equal(r!.spirit.type, 'cultivator-spirit', '变成灵体');
+    assert.equal(r!.spirit.custom?.originType, 'soul-cultivator');
+    assert.equal(r!.spirit.maxHpBonus, 100, '魂修不折减：100 还是 100');
+    assert.equal(r!.spirit.hp, 101, '基础 1 + 100');
+    const ids = skillsOf(r!.s, r!.spirit).map((k) => k.id);
+    assert.ok(ids.includes(SKY_STEP_SKILL.id), '领悟的技能要带进魂里');
+    assert.ok(ids.includes(PALM_THUNDER_SKILL.id), '学来的法术也在');
+  });
+
+  test('对照：普通修士化灵后血掉七成、非魂法技能散掉', () => {
+    const r = ascend('qi-cultivator');
+    assert.ok(r);
+    assert.equal(r!.spirit.maxHpBonus, 30, '100 × 0.3');
+    assert.equal(r!.spirit.hp, 31);
+    const ids = skillsOf(r!.s, r!.spirit).map((k) => k.id);
+    assert.ok(!ids.includes(SKY_STEP_SKILL.id), '没标魂法的技能要散掉');
+    assert.ok(!ids.includes(PALM_THUNDER_SKILL.id), '学来的法术也散');
+  });
+
+  test('魂修灵体不吃削弱：攻击按境界算，比普通灵体高一截', () => {
+    const soul = ascend('soul-cultivator')!;
+    const plain = ascend('qi-cultivator')!;
+    const a = effectiveStats(soul.s, soul.spirit);
+    const b = effectiveStats(plain.s, plain.spirit);
+
+    // 普通灵体攻击 ×0.1；魂修按正常境界值 → 差一个数量级
+    assert.ok(a.atk > b.atk * 3, `魂修灵体攻击该高得多：${a.atk} vs ${b.atk}`);
+    // 护甲反过来：普通灵体 ×10 是补偿，魂修按正常算
+    assert.ok(a.armor < b.armor, `魂修护甲按正常算：${a.armor} vs ${b.armor}`);
+    // 但要和"活着的魂修"一个量级 —— 这才是"战斗力没掉"的意思。
+    // 差的那一点是**兵种基础值**：灵体 atk/armor 都是 0，魂修活着时是 8/1。
+    const soulDef = soul.s.unitTypes['soul-cultivator'];
+    const spiritDef = soul.s.unitTypes['cultivator-spirit'];
+    const alive = place2(soul.s, 'A', 'soul-cultivator', 3, 3);
+    setCultivationExp(alive, expForRank(8));
+    const live = effectiveStats(soul.s, alive);
+    assert.equal(
+      a.atk - (spiritDef.atk ?? 0),
+      live.atk - soulDef.atk,
+      `境界给的攻击加成和活着时一样：灵体 ${a.atk} / 活人 ${live.atk}`,
+    );
+    assert.equal(
+      a.armor - (spiritDef.armor ?? 0),
+      live.armor - soulDef.armor,
+      `境界给的护甲加成也一样：灵体 ${a.armor} / 活人 ${live.armor}`,
     );
   });
 }

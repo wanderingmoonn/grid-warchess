@@ -109,10 +109,13 @@ import {
   SILENT_PAVILION,
   ALCHEMY_FURNACE,
   SPIRIT_SPRING,
+  SPIRIT_FIELD,
+  SPIRIT_MINE,
   CULTIVATOR,
   SWORD_CULTIVATOR,
   BODY_CULTIVATOR,
   BLOOD_CULTIVATOR,
+  SOUL_CULTIVATOR,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
@@ -120,6 +123,15 @@ import {
 } from '../src/core/cultivation/units.ts';
 import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
 import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
+import {
+  QI_ABSORB,
+  QI_BUILDING_SOURCE,
+  QI_DECAY,
+  QI_LEAK_MAX,
+  QI_LEAK_THRESHOLD,
+  QI_MAX,
+  QI_TERRAIN_SOURCE,
+} from '../src/core/cultivation/qi-field.ts';
 import {
   HEAL_PILL,
   HEAL_PILL_FLOOR,
@@ -2982,6 +2994,40 @@ function cultivationRules(): string {
           它打不了城池，也打不了自己人。</li>
       </ul>
 
+      <h3>灵气浓度</h3>
+      <p>每个格子有一个 <b>0～${QI_MAX}</b> 的灵气浓度。它不是贴在地形上的固定标签，
+        而是<b>每回合都在流动</b>的场：源头持续注入，浓处往稀处渗，越远越淡。
+        修士就站在这个场里吸灵力。</p>
+      <ul>
+        <li><b>每回合四步</b>：源汇注入 → 向四邻扩散（按梯度）→ 损耗
+          <b>${Math.round(QI_DECAY * 100)}%</b> → 截断在 0～${QI_MAX}。
+          扩散看的就是"邻居减自己"——浓的地方往外流，稀的地方被灌满，不用额外算梯度场。</li>
+        <li><b>源与汇</b>：高山 <b>+${QI_TERRAIN_SOURCE.mountain}</b>、
+          森林 / 水域 <b>+${QI_TERRAIN_SOURCE.forest}</b>（自然，量很少）；
+          ${SPIRIT_FIELD.name} <b>+${QI_BUILDING_SOURCE['cultivation-spirit-field']}</b>、
+          ${SPIRIT_SPRING.name} <b>+${QI_BUILDING_SOURCE['cultivation-spirit-spring']}</b>（人工，像样）；
+          <b>${SPIRIT_MINE.name}是汇 ${String(QI_BUILDING_SOURCE['cultivation-spirit-mine']).replace('-', '−')}</b>
+          ——"吸天地灵气凝结出灵石"，所以它周围会越来越荒。</li>
+        <li><b>源不是"自己满、旁边零"</b>：扩散会把浓度摊成一个从中心往外递减的<b>丘</b>。
+          实测一张 16×16 的常规地图上，水域边上的林子常年三四十，
+          再往外两格就只剩个位数——<b>灵气是局部的，不是全图平铺的</b>。</li>
+        <li><b>修士吸取</b>：每回合开始，灵力没满就从脚下抽。
+          抽多少 = <b>缺口 × ${Math.round(QI_ABSORB * 100)}%</b>，
+          但一次最多抽走格子的一半——防止一个修士路过把泉眼抽干。
+          所以"灵力越少吸得越快"是自动成立的，不用另写一条规则。</li>
+        <li><b>反向外漏</b>：脚下浓度低于 <b>${QI_LEAK_THRESHOLD}</b> 时，灵力会往环境里漏，
+          最多 ${QI_LEAK_MAX} 点；<b>境界每高一层，漏得少一成</b>——9 期基本不漏。
+          也就是说，把低阶弟子扔在荒地里，他的灵力是<b>存不住</b>的。</li>
+        <li><b>拆掉源不会瞬间清零</b>：浓度只是不再补充，按扩散和损耗慢慢退回去。
+          灵矿被拆了，它抽干的那片地也要过一阵才缓过来。</li>
+        <li><b>看全图</b>：顶栏那个「灵气」按钮——<b>悬停</b>就在棋盘上铺一层
+          五档绿（越深越浓），<b>移开自动消失</b>；<b>点一下钉住</b>，这时移开也留着，
+          再点一下取消。染色是<b>全图</b>的——灵气是天地之气，不是谁藏起来的底牌
+          （丹药那种才需要藏）。</li>
+      </ul>
+      <p>在哪看：点一个空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
+        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。</p>
+
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
         ${SPIRIT_SPRING.armor} 甲），由<b>管事</b>修建。它不产资源、不能攻击，
@@ -3163,6 +3209,22 @@ function cultivationRules(): string {
         <li><b>灵魂飞行</b>：灵体视作飞行单位，可越过水面与地形。</li>
         <li><b>记忆封存</b>：化作灵体时，后天习得的普通技能会被暂时封存，只有特殊的<b>“魂法”</b>能保留。同时会暂时失去「灵体道果」特性——若灵体再次阵亡，将彻底消散。</li>
       </ul>
+
+      <h4>例外：${SOUL_CULTIVATOR.name}</h4>
+      <p>${SOUL_CULTIVATOR.name}（${ERAS[SOUL_CULTIVATOR.era - 1]?.name ?? ''}）是唯一一支
+        <b>化灵之后不掉战斗力</b>的修士。上面那一整串削弱，它<b>一条都不吃</b>：</p>
+      <ul>
+        <li><b>生命</b>：境界带来的生命加成<b>一点不折</b>（别人只剩 ${pct(SPIRIT_HP_BONUS_KEEP)}%）。</li>
+        <li><b>攻击 / 护甲 / 移动</b>：全按<b>活着时</b>的境界值算——不乘 ${pct(SPIRIT_ATK_MUL)}%，
+          也不吃那 ${SPIRIT_ARMOR_MUL} 倍护甲补偿（它走的是正常修士那条线）。</li>
+        <li><b>技能</b>：学过的技能和法术<b>全带进魂里</b>，不只是「魂法」。</li>
+      </ul>
+      <p>实测 9 期化灵：攻击还剩 <b>97%</b>、护甲 <b>99%</b>、生命 <b>100%</b>；
+        同期普通修士是攻击 <b>10%</b>、生命 <b>30%</b>。4 期时差距更大（魂修血量 77%，
+        普通 24%）——因为那时境界血量本来就薄，少一个兵种基础值就看得出来。</p>
+      <p>代价是它的<b>兵种基础值是同代里最平的</b>：活着的时候没有任何主动技能，
+        数值也就和别的修士打平。所以正确的用法是"<b>把它当耗材使</b>"——
+        它死得起，别的修士死不起。</p>
 
       <h4>主动重生</h4>
       <p>灵体形态下，单位将获得主动技能<b>「重生」</b>，消耗行动机会重塑肉身：</p>
