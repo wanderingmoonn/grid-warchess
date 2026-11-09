@@ -56,6 +56,9 @@ import {
 } from '../../../src/core/cultivation/qi-field.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
+import { isCultivatorUnit } from '../../../src/core/cultivation/identity.ts';
+import { SKY_STEP_SKILL } from '../../../src/core/cultivation/skills/sky-step.ts';
+import { PALM_THUNDER_SKILL } from '../../../src/core/cultivation/skills/palm-thunder.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
 import { CORE_ABILITIES } from '../../../src/core/abilities.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
@@ -3146,6 +3149,96 @@ export function run() {
     assert.ok(tileLines[0]!.includes('50'), `森林该写 50：${tileLines[0]}`);
     assert.ok(qiAt(s, 4, 4) <= QI_MAX);
     assert.ok((QI_TERRAIN_SOURCE.forest ?? 0) > 0);
+  });
+
+  // ── 魂修（2026-11-09）────────────────────────────────
+  //
+  // 它的全部特殊性都在"化灵"那一刻。判据是 identity.ts 的 SOUL_MASTER_IDS，
+  // 三个消费者分别是 stats.ts（攻击/护甲/移动）和 spirit-ascension.ts 的两处
+  // （生命加成、技能）。下面几条把它们逐一钉住，并且留一组普通修士做对照——
+  // 少了对照，"魂修没折"和"两边都折了只是数值不同"是分不出来的。
+
+  /** 造一个 9 期修士 → 挂灵体道果 → 被一刀打死，返回化灵后的灵体 */
+  const ascend = (type: string) => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    const u = place2(s, 'A', type, 5, 5);
+    setCultivationExp(u, expForRank(8)); // 9 期：境界加成够大，折减看得出来
+    u.maxHpBonus = 100;
+    u.hp = 101;
+    u.custom = { ...u.custom, lifespan: 100 };
+    u.extraAbilities = ['spirit-ascension'];
+    // 两条**普通**技能（都没有 soulBound 标记）：普通修士死了要丢掉它们
+    u.extraSkills = [SKY_STEP_SKILL, PALM_THUNDER_SKILL];
+    const killer = place2(s, 'B', 'militia', 6, 5);
+    killer.atkBonus = 1000;
+    s.current = 'B';
+    const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: u.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    if (!r.ok) return null;
+    const spirit = r.state.units.find((x) => x.custom?.spiritForm === true);
+    assert.ok(spirit, '应该化灵了');
+    return { s: r.state, spirit: spirit! };
+  };
+
+  test('魂修：4 代修士，吃修炼也吃灵力', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['soul-cultivator'];
+    assert.ok(def, '魂修要在本局兵种表里');
+    assert.equal(def.era, 4, '四代');
+    assert.equal(def.category, 'combat');
+    const u = place2(s, 'A', 'soul-cultivator', 5, 5);
+    assert.ok(isCultivatorUnit(s, u), '要算修士，否则不修炼、不吸灵气');
+  });
+
+  test('魂修化灵：境界血一点不折，学过的技能全留着', () => {
+    const r = ascend('soul-cultivator');
+    assert.ok(r);
+    assert.equal(r!.spirit.type, 'cultivator-spirit', '变成灵体');
+    assert.equal(r!.spirit.custom?.originType, 'soul-cultivator');
+    assert.equal(r!.spirit.maxHpBonus, 100, '魂修不折减：100 还是 100');
+    assert.equal(r!.spirit.hp, 101, '基础 1 + 100');
+    const ids = skillsOf(r!.s, r!.spirit).map((k) => k.id);
+    assert.ok(ids.includes(SKY_STEP_SKILL.id), '领悟的技能要带进魂里');
+    assert.ok(ids.includes(PALM_THUNDER_SKILL.id), '学来的法术也在');
+  });
+
+  test('对照：普通修士化灵后血掉七成、非魂法技能散掉', () => {
+    const r = ascend('qi-cultivator');
+    assert.ok(r);
+    assert.equal(r!.spirit.maxHpBonus, 30, '100 × 0.3');
+    assert.equal(r!.spirit.hp, 31);
+    const ids = skillsOf(r!.s, r!.spirit).map((k) => k.id);
+    assert.ok(!ids.includes(SKY_STEP_SKILL.id), '没标魂法的技能要散掉');
+    assert.ok(!ids.includes(PALM_THUNDER_SKILL.id), '学来的法术也散');
+  });
+
+  test('魂修灵体不吃削弱：攻击按境界算，比普通灵体高一截', () => {
+    const soul = ascend('soul-cultivator')!;
+    const plain = ascend('qi-cultivator')!;
+    const a = effectiveStats(soul.s, soul.spirit);
+    const b = effectiveStats(plain.s, plain.spirit);
+
+    // 普通灵体攻击 ×0.1；魂修按正常境界值 → 差一个数量级
+    assert.ok(a.atk > b.atk * 3, `魂修灵体攻击该高得多：${a.atk} vs ${b.atk}`);
+    // 护甲反过来：普通灵体 ×10 是补偿，魂修按正常算
+    assert.ok(a.armor < b.armor, `魂修护甲按正常算：${a.armor} vs ${b.armor}`);
+    // 但要和"活着的魂修"一个量级 —— 这才是"战斗力没掉"的意思。
+    // 差的那一点是**兵种基础值**：灵体 atk/armor 都是 0，魂修活着时是 8/1。
+    const soulDef = soul.s.unitTypes['soul-cultivator'];
+    const spiritDef = soul.s.unitTypes['cultivator-spirit'];
+    const alive = place2(soul.s, 'A', 'soul-cultivator', 3, 3);
+    setCultivationExp(alive, expForRank(8));
+    const live = effectiveStats(soul.s, alive);
+    assert.equal(
+      a.atk - (spiritDef.atk ?? 0),
+      live.atk - soulDef.atk,
+      `境界给的攻击加成和活着时一样：灵体 ${a.atk} / 活人 ${live.atk}`,
+    );
+    assert.equal(
+      a.armor - (spiritDef.armor ?? 0),
+      live.armor - soulDef.armor,
+      `境界给的护甲加成也一样：灵体 ${a.armor} / 活人 ${live.armor}`,
+    );
   });
 }
 

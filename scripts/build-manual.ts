@@ -115,6 +115,7 @@ import {
   SWORD_CULTIVATOR,
   BODY_CULTIVATOR,
   BLOOD_CULTIVATOR,
+  SOUL_CULTIVATOR,
   ARTIFACT_WOOD,
   ARTIFACT_STONE,
   ARTIFACT_WATER,
@@ -3195,6 +3196,22 @@ function cultivationRules(): string {
         <li><b>灵魂飞行</b>：灵体视作飞行单位，可越过水面与地形。</li>
         <li><b>记忆封存</b>：化作灵体时，后天习得的普通技能会被暂时封存，只有特殊的<b>“魂法”</b>能保留。同时会暂时失去「灵体道果」特性——若灵体再次阵亡，将彻底消散。</li>
       </ul>
+
+      <h4>例外：${SOUL_CULTIVATOR.name}</h4>
+      <p>${SOUL_CULTIVATOR.name}（${ERAS[SOUL_CULTIVATOR.era - 1]?.name ?? ''}）是唯一一支
+        <b>化灵之后不掉战斗力</b>的修士。上面那一整串削弱，它<b>一条都不吃</b>：</p>
+      <ul>
+        <li><b>生命</b>：境界带来的生命加成<b>一点不折</b>（别人只剩 ${pct(SPIRIT_HP_BONUS_KEEP)}%）。</li>
+        <li><b>攻击 / 护甲 / 移动</b>：全按<b>活着时</b>的境界值算——不乘 ${pct(SPIRIT_ATK_MUL)}%，
+          也不吃那 ${SPIRIT_ARMOR_MUL} 倍护甲补偿（它走的是正常修士那条线）。</li>
+        <li><b>技能</b>：学过的技能和法术<b>全带进魂里</b>，不只是「魂法」。</li>
+      </ul>
+      <p>实测 9 期化灵：攻击还剩 <b>97%</b>、护甲 <b>99%</b>、生命 <b>100%</b>；
+        同期普通修士是攻击 <b>10%</b>、生命 <b>30%</b>。4 期时差距更大（魂修血量 77%，
+        普通 24%）——因为那时境界血量本来就薄，少一个兵种基础值就看得出来。</p>
+      <p>代价是它的<b>兵种基础值是同代里最平的</b>：活着的时候没有任何主动技能，
+        数值也就和别的修士打平。所以正确的用法是"<b>把它当耗材使</b>"——
+        它死得起，别的修士死不起。</p>
 
       <h4>主动重生</h4>
       <p>灵体形态下，单位将获得主动技能<b>「重生」</b>，消耗行动机会重塑肉身：</p>
