@@ -1611,6 +1611,14 @@ body {
   border-width: 2px;
 }
 
+/* 增益（药力、圣旗……）：青绿，和四种减益的色系分开。
+   它和减益排在同一行、用同一个形状，因为它们要回答的是同一个问题：
+   "这东西还剩几回合"——而不是"我的属性为什么是这个数"。 */
+.status-chip.st-buff {
+  color: #3f8a72;
+  background: color-mix(in srgb, #3f8a72 10%, var(--panel-2));
+}
+
 /* 单位与地形的"说明书" */
 .unit-notes {
   margin-top: 10px;

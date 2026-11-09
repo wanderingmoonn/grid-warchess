@@ -3031,7 +3031,10 @@ function cultivationRules(): string {
           ${WARD_PILL.cost.stone} 灵石）：护甲 <b>+${Math.round(WARD_PILL_ARMOR_PCT * 100)}%</b>，
           撑 <b>${WARD_PILL_TURNS} 个自己的回合</b>。按比例加甲是因为修士的护甲本身
           随境界暴涨（9 期上百点），固定加值在低境界是神装、在高境界是个零头。
-          <b>药力只有一份，新药压旧药</b>，不会叠。</li>
+          <b>药力只有一份，新药压旧药</b>，不会叠。
+          吃下去之后，面板的<b>状态栏</b>会挂一枚「${WARD_PILL.name} · ${WARD_PILL_TURNS} 回合」的徽章，
+          和中毒、减速排在同一排——它和它们一样，是<b>到点就消失</b>的东西，
+          所以不该混在属性明细里。</li>
       </ul>
 
       <h3>炼器</h3>

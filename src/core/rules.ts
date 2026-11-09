@@ -1928,10 +1928,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   // 注意它和 `armorPct` 是**两个位置**：固定值加在这里（基础护甲那一层），
   // 百分比要等扩展钩子（境界护甲）跑完再加——否则修士 0 期护甲是 0，
   // "+25%" 会变成 "+0"。这条是实测踩出来的，别合并回去。
-  if (u.buff?.armor) {
-    armor += u.buff.armor;
-    armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
-  }
+  //
+  // ⚠️ 它**不进 `armorItems`**（药力/技能增益都不进）：属性下面那串修正项是
+  // "这个数字为什么是这样"，读起来像地形或永久加成；而 buff 是会到期的，
+  // 它真正的家在面板的状态栏里（`statusRow` 会画成「护体丹 2 回合」）。
+  // 两处都写一遍，玩家反而会以为有两个不同的东西。
+  if (u.buff?.armor) armor += u.buff.armor;
   for (const src of curseSourcesOf(s, u)) {
     armor -= src.value;
     armorItems.push({ label: src.label, delta: -src.value });
@@ -1957,10 +1959,10 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
 
   // 百分比护甲（护体丹）：必须等扩展钩子（修真包的境界护甲）跑完再乘。
   // 放在那之前，修士的护甲还是 0，+25% 会算成 0——实测踩过一次。
+  //
+  // 同样不进 `armorItems`，理由见上面那条：buff 由状态栏负责表达。
   if (u.buff?.armorPct) {
-    const gain = buffArmorPctGain(armor, u.buff.armorPct);
-    armor += gain;
-    armorItems.push({ label: u.buff.label ?? '技能增益', delta: gain });
+    armor += buffArmorPctGain(armor, u.buff.armorPct);
   }
   
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
