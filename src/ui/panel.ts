@@ -1272,7 +1272,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
         <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name}时代 · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
