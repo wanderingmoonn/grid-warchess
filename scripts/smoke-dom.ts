@@ -37,7 +37,7 @@ import {
   unitsOf,
   unitYieldAt,
 } from '../src/core/rules.ts';
-import { renderPanel } from '../src/ui/panel.ts';
+import { renderPanel, topbarShell } from '../src/ui/panel.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
@@ -487,6 +487,55 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
     // 它不该混进棋子层：雷不是单位
     assert.equal(host.querySelectorAll('.unit').length, st.units.length);
     assert.ok(mine.id !== foe.id, '两枚雷的 id 不能撞');
+  } finally {
+    host.remove();
+  }
+});
+
+check('顶栏：给扩展的棋盘视图留了容器', () => {
+  // 容器是空的，没有扩展提供视图时靠 CSS 的 :empty 收起来（style.css 的 .topbar-ext）。
+  // 钉这一条是因为"顶栏骨架只插一次"，删了容器就得改 main 的挂载方式。
+  const shell = topbarShell();
+  assert.ok(shell.includes('data-ref="board-views"'), '顶栏要有视图容器');
+  assert.ok(shell.includes('class="topbar-ext"'), '容器要带自己的 class');
+});
+
+check('棋盘视图：扩展给颜色，核心只负责画，而且不挡棋子', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 1 }, 77);
+  const base = {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+    me: 'A' as const,
+  };
+  try {
+    // 视图没打开：这一层一个节点都不该有
+    renderBoard(host, playerView(st, 'A'), { ...base });
+    assert.equal(host.querySelectorAll('.fx-qi').length, 0, '没打开就不该染色');
+
+    // 打开：只画"给了颜色"的格子
+    const cells = new Map<number, string>([
+      [0, 'rgba(64, 160, 120, 0.28)'],
+      [5, 'rgba(40, 140, 100, 0.58)'],
+    ]);
+    renderBoard(host, playerView(st, 'A'), { ...base, boardView: cells });
+    const nodes = host.querySelectorAll<HTMLElement>('.fx-qi');
+    assert.equal(nodes.length, 2, `只画给了颜色的格，实际 ${nodes.length}`);
+    const style = nodes[0]!.getAttribute('style') ?? '';
+    assert.ok(style.includes('rgba'), '颜色必须来自参数，不能写死');
+    assert.ok(style.includes('grid-column:1'), '按格定位');
+
+    // 层序：盖住地面、但不盖住棋子
+    const layers = Array.from(host.children).map((e) => e.className);
+    assert.ok(layers.indexOf('board-view') > layers.indexOf('tiles'), '要在格子之上');
+    assert.ok(layers.indexOf('board-view') < layers.indexOf('units'), '不该盖住棋子');
   } finally {
     host.remove();
   }

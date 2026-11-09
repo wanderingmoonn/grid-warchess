@@ -6,6 +6,7 @@ import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingY
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
 import { sectLegacyMul } from './sect.ts';
 import { MANA_REGEN, manaOf, maxManaOf } from './mana.ts';
+import { QI_MAX, previewExchange, qiAt } from './qi-field.ts';
 import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, researchCapOf, researchedOf, spellSlotsOf } from './spells.ts';
 import { PILLS, pillCarryCap, pillCountOf, pillsOf } from './pills.ts';
 import { 
@@ -68,6 +69,25 @@ export function getCultivationPanelLines(state: GameState, unit: Unit, viewer?: 
 	 * 藏经阁给几个"一起拆开写。
 	 */
 	lines.push(`灵力：${manaOf(unit)} / ${maxManaOf(unit)}（每回合 +${MANA_REGEN}）`);
+
+	/*
+	 * 脚下灵气，紧挨着灵力写。
+	 *
+	 * 一个是"池子里还有多少"，一个是"周围还能吸到多少"——玩家看这两行
+	 * 就能判断"再等一回合"还是"得挪个地方站"。少了后面这行，
+	 * 环境吸取就是一笔看不见的账（和"中毒/减速看不见"是同一类问题）。
+	 */
+	{
+		const q = qiAt(state, unit.x, unit.y);
+		const ex = previewExchange(state, unit);
+		const tail =
+			ex.delta > 0
+				? `每回合吸 ${ex.delta}`
+				: ex.delta < 0
+					? `灵气贫瘠，每回合漏 ${-ex.delta}`
+					: '不吸也不漏';
+		lines.push(`脚下灵气：${Math.round(q)} / ${QI_MAX}（${tail}）`);
+	}
 	{
 		const slots = spellSlotsOf(unit);
 		const known = knownSpells(unit).length;
