@@ -712,7 +712,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const customLines: string[] = [];
     for (const e of activeExpansions(s)) {
       if (e.hooks.getUnitPanelLines) {
-        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit }));
+        customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit, viewer: me }));
       }
     }
     const customBlock = customLines.length > 0 
@@ -933,10 +933,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
         // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
         splashRadiusOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>溅射</span><b>主目标 ${splashRadiusOf(
+          ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
               s,
               selectedUnit,
-            )} 格内（不含斜角）· ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
+            )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
           : ''
       }
       ${
@@ -1685,20 +1685,45 @@ function renderLog(input: PanelInput): string {
  * 一个整数，只能按 key 区分。写错单位比不写更糟：一个"中毒 3 层"会让人
  * 以为伤害要乘三。
  */
+/** 一条增益徽章的说明：它到底加了什么（悬停时看） */
+function buffSummary(buff: NonNullable<Unit['buff']>): string {
+  const parts: string[] = [];
+  if (buff.armor) parts.push(`护甲 +${buff.armor}`);
+  if (buff.armorPct) parts.push(`护甲 +${Math.round(buff.armorPct * 100)}%`);
+  if (buff.magicRes) parts.push(`魔抗 +${buff.magicRes}`);
+  if (buff.splashImmune) parts.push('免疫溅射');
+  return parts.length > 0 ? parts.join('，') : '临时增益';
+}
+
 function statusRow(u: Unit): string {
-  const list = orderedStatuses(u.status);
-  if (list.length === 0) return '';
-  const chips = list
-    .map(([key, val]) => {
-      const def = STATUS_REGISTRY[key];
-      const name = def?.name ?? key;
-      const unit = key === 'burn' ? '层' : '回合';
-      return `<span class="status-chip st-${key}" title="${escapeHtml(def?.summary ?? name)}">
+  const chips: string[] = [];
+  for (const [key, val] of orderedStatuses(u.status)) {
+    const def = STATUS_REGISTRY[key];
+    const name = def?.name ?? key;
+    const unit = key === 'burn' ? '层' : '回合';
+    chips.push(`<span class="status-chip st-${key}" title="${escapeHtml(def?.summary ?? name)}">
         <b>${escapeHtml(name)}</b><i>${val} ${unit}</i>
-      </span>`;
-    })
-    .join('');
-  return `<div class="status-row">${chips}</div>`;
+      </span>`);
+  }
+
+  /*
+   * 药力 / 技能增益（`u.buff`）也挂在这一排。
+   *
+   * 它和中毒、减速是同一类东西：**有明确的剩余回合数**，到点自己消失。
+   * 以前它只出现在属性下面的修正项里（"甲 +12 护体丹"），那地方读起来
+   * 像地形或永久加成——玩家既不知道它会到期，也看不到还剩几回合。
+   *
+   * 排在减益后面：减益先看（决定这回合该怎么打），增益是"我还剩什么本钱"。
+   */
+  if (u.buff) {
+    const turns = Math.max(1, u.buff.turns ?? 1);
+    chips.push(`<span class="status-chip st-buff" title="${escapeHtml(buffSummary(u.buff))}">
+        <b>${escapeHtml(u.buff.label ?? '增益')}</b><i>${turns} 回合</i>
+      </span>`);
+  }
+
+  if (chips.length === 0) return '';
+  return `<div class="status-row">${chips.join('')}</div>`;
 }
 
 function escapeHtml(t: string): string {

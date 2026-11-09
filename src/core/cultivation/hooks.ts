@@ -9,6 +9,17 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
+import {
+  PILLS,
+  addPill,
+  furnaceNextTo,
+  payForPill,
+  pillBrewProblem,
+  pillOf,
+  pillsOf,
+  pillUseProblem,
+  takePill,
+} from './pills.ts';
 import { addRes } from '../resources.ts';
 import {
   SPELLS,
@@ -328,12 +339,86 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 				});
 			}
 		}
+
+		/*
+		 * 服用：身上有什么就列什么，**不需要站在任何地方**。
+		 *
+		 * 这是丹药和「法术」「炼丹」最本质的区别：药是随身带的，
+		 * 法术要藏书楼、炼丹要炉子，而吃药只取决于"你兜里有没有"。
+		 * 也正因为这样，敌方看不到这一组按钮——`unitActions` 只对本人调用，
+		 * 而数量在视图层已经被 `redactUnit` 抹掉了。
+		 */
+		const bag = pillsOf(unit);
+		for (const pill of PILLS) {
+			const n = bag[pill.id] ?? 0;
+			if (n <= 0) continue;
+			const problem = pillUseProblem(state, unit, pill);
+			out.push({
+				id: `use:${pill.id}`,
+				group: '服用',
+				label: `服下「${pill.name}」`,
+				detail: pill.summary,
+				disabled: !!problem,
+				note: problem ?? `还有 ${n} 颗`,
+			});
+		}
+
+		// 炼丹：站在炉子旁边才列。三颗都列出来（钱不够就灰着写原因），
+		// 和炼器炉"看得见目标"同一口径。
+		if (furnaceNextTo(state, unit)) {
+			for (const pill of PILLS) {
+				const problem = pillBrewProblem(state, unit.owner, unit, pill);
+				out.push({
+					id: `brew:${pill.id}`,
+					group: '炼丹',
+					label: `炼制「${pill.name}」`,
+					detail: pill.summary,
+					disabled: !!problem,
+					note: problem ?? `${pill.cost.gold} 金 + ${pill.cost.stone} 灵石`,
+				});
+			}
+		}
 		return out;
 	},
 	onUnitAction: ({ state, unit, actionId }) => {
-		const m = /^(learn|research|abandon|forget):(.+)$/.exec(actionId);
+		const m = /^(learn|research|abandon|forget|use|brew):(.+)$/.exec(actionId);
 		if (!m) return `认不出这个操作：${actionId}`;
 		const kind = m[1]!;
+
+		/*
+		 * 丹药先分流：`use:` / `brew:` 后面是 **PillDef 的 id**，不是法术 id。
+		 * 混在下面那句 `spellOf` 里会被当成"没有这门法术"全拦掉。
+		 */
+		if (kind === 'use' || kind === 'brew') {
+			const pill = pillOf(m[2]!);
+			if (!pill) return '没有这种丹药';
+			if (!isCultivatorUnit(state, unit)) return '只有修士才用丹药';
+			const who = state.unitTypes[unit.type]?.name ?? unit.type;
+
+			if (kind === 'use') {
+				const problem = pillUseProblem(state, unit, pill);
+				if (problem) return problem;
+				// 先算效果再扣药：`apply` 返回 null 说明"这一颗现在用不上"，
+				// 那时候不能把药扣掉（否则满血点一下就是白扔一颗）
+				const log = pill.apply(state, unit);
+				if (!log) return `这一颗「${pill.name}」现在用不上`;
+				takePill(unit, pill.id);
+				push(state, unit.owner, `${who}服下「${pill.name}」，${log}（还剩 ${pillsOf(unit)[pill.id] ?? 0} 颗）`);
+				return null;
+			}
+
+			const problem = pillBrewProblem(state, unit.owner, unit, pill);
+			if (problem) return problem;
+			payForPill(state, unit.owner, pill);
+			addPill(unit, pill.id);
+			push(
+				state,
+				unit.owner,
+				`${who}在炼丹炉旁炼成一颗「${pill.name}」（耗 ${pill.cost.gold} 金 + ${pill.cost.stone} 灵石）`,
+			);
+			return null;
+		}
+
 		const spell = spellOf(m[2]!);
 		if (!spell) return '没有这门法术';
 
@@ -374,6 +459,21 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		(state.researched ??= {})[unit.owner] = list;
 		push(state, unit.owner, `宗门大殿遗弃了法术「${spell.skill.name}」，研发额度已腾出`);
 		return null;
+	},
+	/*
+	 * 隐藏信息：丹药是"藏起来的实力"，敌方数不出你兜里还有几颗。
+	 *
+	 * **只抹 `custom.pills`**，别的一概不动：境界、灵力这些本来就该看得见
+	 * （面板要显示"3 期剑修"，不然连该怕谁都不知道）。buff 也不抹——
+	 * 药力是**结果**，藏不住，这正是"看得见吃了药、看不见还有几颗"的分界。
+	 *
+	 * 只对非本人调用（fog.ts 保证），所以这里不用再判 viewer。
+	 */
+	redactUnit: ({ unit }) => {
+		if (!unit.custom || !('pills' in unit.custom)) return;
+		const next = { ...unit.custom };
+		delete next.pills;
+		unit.custom = next;
 	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
 	onTurnStart: ({ state, player }) => {
@@ -435,8 +535,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 规则层会在移动/攻击/攻城/放技能/建造五个入口统一问它。
 	// 面板上也要写一行，否则玩家只看到"点了没反应"。
 	canCommand: ({ state, unit }) => sealedReasonOf(state, unit),
-	getUnitPanelLines: ({ state, unit }) => {
-		const lines = getCultivationPanelLines(state, unit);
+	getUnitPanelLines: ({ state, unit, viewer }) => {
+		const lines = getCultivationPanelLines(state, unit, viewer);
 		const sealed = sealedReasonOf(state, unit);
 		if (sealed) lines.push(`封印：${sealed}`);
 		return lines;

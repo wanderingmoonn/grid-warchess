@@ -107,6 +107,7 @@ import {
   SECT,
   SCRIPTURE_PAVILION,
   SILENT_PAVILION,
+  ALCHEMY_FURNACE,
   SPIRIT_SPRING,
   CULTIVATOR,
   SWORD_CULTIVATOR,
@@ -119,6 +120,17 @@ import {
 } from '../src/core/cultivation/units.ts';
 import { SECT_MASTER_MIN_RANK, sectRecruitStone } from '../src/core/cultivation/sect.ts';
 import { LIBRARY_SPELL_SLOTS, RESEARCH_BASE_SLOTS, RESEARCH_STONE_COST } from '../src/core/cultivation/spells.ts';
+import {
+  HEAL_PILL,
+  HEAL_PILL_FLOOR,
+  HEAL_PILL_RATIO,
+  PILL_CARRY_BASE,
+  SPIRIT_PILL,
+  SPIRIT_PILL_MANA,
+  WARD_PILL,
+  WARD_PILL_ARMOR_PCT,
+  WARD_PILL_TURNS,
+} from '../src/core/cultivation/pills.ts';
 import { MANA_REGEN, manaLimitForRank } from '../src/core/cultivation/mana.ts';
 import {
   PALM_THUNDER_BASE,
@@ -2980,6 +2992,49 @@ function cultivationRules(): string {
         <li><b>它还是寒水镜的备用产地</b>：${ARTIFACT_WATER.name}原本只认水面/浅滩，而地图不保证有水。
           在炉子旁边立一座灵泉，同样炼得出寒水镜。灵泉是四代建筑，所以三代之前仍然得找水——
           这是有意的时代门槛。</li>
+      </ul>
+
+      <h3>炼丹与丹药</h3>
+      <p>炼器和丹药是一对：<b>法器是摆在外面的实力</b>，<b>丹药是藏在兜里的底牌</b>。
+        两者都不是兵，但走的路完全不同——法器是单位（会动、会挨打、对面看得见），
+        丹药是消耗品（跟着人走、人死药灭、对面只能猜）。</p>
+      <ul>
+        <li><b>${ALCHEMY_FURNACE.name}</b>（${ALCHEMY_FURNACE.era} 代，1×1，
+          ${ALCHEMY_FURNACE.cost} 金 + ${ALCHEMY_FURNACE.costRes?.['spirit-stone'] ?? 0} 灵石，
+          ${ALCHEMY_FURNACE.maxHp} 血 / ${ALCHEMY_FURNACE.armor} 甲，执事修）：
+          修士<b>站在它旁边</b>才炼得动。它不限选址（不像藏经阁要贴着宗门）——
+          丹药是补给，前线后方都该能起炉子。</li>
+        <li><b>发起动作的是修士，不是炉子</b>：选中修士，在面板的「炼丹」里点
+          <b>炼制「某某」</b>，花金币和灵石，丹<b>直接进这个修士自己的袋子</b>。
+          所以没有国库库存这一层：想让别人也吃药，就带个弟子来背——
+          <b>药童</b>是这套系统自己长出来的玩法，不是额外设计的。</li>
+        <li><b>携带上限</b>：<b>${PILL_CARRY_BASE} + ⌊境界 ÷ 2⌋</b> 颗
+          （2 期 4 颗、9 期 7 颗）。装满了炼不进去，先吃几颗再来。</li>
+        <li><b>丹药是隐藏信息</b>：对手<b>看不见你带了几颗</b>，只看得见你
+          <b>吃下去之后的 buff</b>。所以"他还有没有药"永远是个猜——
+          这也是这套系统最有意思的地方。视野层会把敌方的丹药数量直接抹掉，
+          无雾模式也一样：这不是"看不清"，是"本来就不给你看"。</li>
+        <li><b>服用不挑地方</b>：药是随身带的。法术要藏书楼、炼丹要炉子，
+          吃药只取决于你兜里有没有。也不占攻击次数、不占移动。</li>
+        <li><b>人死药灭</b>：丹药记在单位自己身上，它死了，兜里的药一起没。</li>
+      </ul>
+      <p>样板丹药三颗（加一颗 = 写一个数据项 + 在 <code>PILLS</code> 里登记一行）：</p>
+      <ul>
+        <li><b>${HEAL_PILL.name}</b>（${HEAL_PILL.cost.gold} 金 +
+          ${HEAL_PILL.cost.stone} 灵石）：回复 <b>${Math.round(HEAL_PILL_RATIO * 100)}% 生命上限</b>
+          （至少 ${HEAL_PILL_FLOOR} 点）。按比例而不是固定点数——修士的血量是爆炸式长的，
+          固定值只会在某一段境界好用。满血时按钮是灰的，别浪费。</li>
+        <li><b>${SPIRIT_PILL.name}</b>（${SPIRIT_PILL.cost.gold} 金 +
+          ${SPIRIT_PILL.cost.stone} 灵石）：立刻回复 <b>${SPIRIT_PILL_MANA} 点灵力</b>，
+          差不多就是多半发法术。灵力满时按钮是灰的。</li>
+        <li><b>${WARD_PILL.name}</b>（${WARD_PILL.cost.gold} 金 +
+          ${WARD_PILL.cost.stone} 灵石）：护甲 <b>+${Math.round(WARD_PILL_ARMOR_PCT * 100)}%</b>，
+          撑 <b>${WARD_PILL_TURNS} 个自己的回合</b>。按比例加甲是因为修士的护甲本身
+          随境界暴涨（9 期上百点），固定加值在低境界是神装、在高境界是个零头。
+          <b>药力只有一份，新药压旧药</b>，不会叠。
+          吃下去之后，面板的<b>状态栏</b>会挂一枚「${WARD_PILL.name} · ${WARD_PILL_TURNS} 回合」的徽章，
+          和中毒、减速排在同一排——它和它们一样，是<b>到点就消失</b>的东西，
+          所以不该混在属性明细里。</li>
       </ul>
 
       <h3>炼器</h3>

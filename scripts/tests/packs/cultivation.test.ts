@@ -43,6 +43,7 @@ import {
   BLOOD_RITE_LIFESPAN_COST,
 } from '../../../src/core/cultivation/skills/blood-rite.ts';
 import { getCultivationPanelLines } from '../../../src/core/cultivation/panel.ts';
+import { detailCardHtml } from '../../../src/ui/panel.ts';
 import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
@@ -53,6 +54,22 @@ import { SKILL_EFFECTS, SKILL_PREVIEWERS } from '../../../src/core/skill-hooks.t
 import { TELEPORT_COST, TELEPORT_RIFT_LOG } from '../../../src/core/cultivation/skills/teleport-swap.ts';
 import { SPRING_HP_PER_STONE } from '../../../src/core/cultivation/skills/spirit-spring.ts';
 import { sectLegacyMul, sectRecruitStone } from '../../../src/core/cultivation/sect.ts';
+import {
+  HEAL_PILL,
+  PILL_CARRY_BASE,
+  PILLS,
+  SPIRIT_PILL,
+  WARD_PILL,
+  WARD_PILL_TURNS,
+  addPill,
+  furnaceNextTo,
+  pillBrewProblem,
+  pillCarryCap,
+  pillCountOf,
+  pillOf,
+  pillsOf,
+  pillUseProblem,
+} from '../../../src/core/cultivation/pills.ts';
 import {
   LIBRARY_SPELL_SLOTS,
   RESEARCH_BASE_SLOTS,
@@ -2696,6 +2713,260 @@ export function run() {
     assert.ok(lines.some((l) => l.includes('灵力') && l.includes('每回合')), '要有灵力行');
     assert.ok(lines.some((l) => l.includes('法术位') && l.includes('3')), '法术位要按境界写');
     assert.ok(lines.some((l) => l.includes('本方研发') && l.includes('藏经阁')), '要有本方研发额度行');
+  });
+
+  // ── 丹药 / 炼丹炉（2026-11-08）────────────────────────
+  //
+  // 三条边界，每条都要钉住：
+  //   · 动作发起者是**修士**不是炉子（炉子只是个站位条件）；
+  //   · 数量是**隐藏信息**（对手看得见 buff，数不出兜里几颗）；
+  //   · 服用不需要站在任何地方（药是随身带的）。
+
+  /** 修士（5,5）+ 炼丹炉（6,5）：贴着站 */
+  const alchemyScene = () => {
+    const s = fresh({ expansionIds: ['cultivation'], godMode: true });
+    s.units = [];
+    s.current = 'A';
+    for (let y = 3; y <= 9; y++) {
+      for (let x = 3; x <= 9; x++) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+    }
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+    s.players.A.gold = 900;
+    const furnace = place2(s, 'A', 'cultivation-alchemy-furnace', 6, 5);
+    const qi = place2(s, 'A', 'qi-cultivator', 5, 5);
+    return { s, furnace, qi };
+  };
+
+  const doAct = (s: GameState, unitId: string, actionId: string) =>
+    applyAction(s, { type: 'UNIT_ACTION', unitId, actionId });
+
+  test('炼丹炉：1×1、时代 3、执事与管事会盖', () => {
+    const s = fresh({ expansionIds: ['cultivation'] });
+    const def = s.unitTypes['cultivation-alchemy-furnace'];
+    assert.ok(def, '炼丹炉要在本局兵种表里');
+    assert.equal(def.footprint ?? 1, 1, '1×1');
+    assert.equal(def.era, 3, '三代');
+    assert.equal(def.atk, 0, '不打人');
+    assert.ok(s.unitTypes['cultivation-deacon'].builds?.includes('cultivation-alchemy-furnace'), '执事会盖');
+    assert.ok(s.unitTypes['cultivation-steward'].builds?.includes('cultivation-alchemy-furnace'), '管事继承');
+  });
+
+  test('携带上限：3 + ⌊境界/2⌋，装满了就炼不了', () => {
+    const { s, qi } = alchemyScene();
+    assert.equal(pillCarryCap(qi), PILL_CARRY_BASE, '0 期 3 颗');
+    setCultivationExp(qi, expForRank(5)); // 6 期
+    assert.equal(pillCarryCap(qi), PILL_CARRY_BASE + 3, '6 期 6 颗');
+
+    while (addPill(qi, HEAL_PILL.id)) {
+      /* 一直装到满 */
+    }
+    assert.equal(pillCountOf(qi), pillCarryCap(qi));
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('装不下'), '满了要说装不下');
+  });
+
+  test('炼丹：站炉子旁才炼得动，扣金币与灵石，丹进自己袋子', () => {
+    const { s, qi } = alchemyScene();
+    assert.ok(furnaceNextTo(s, qi), '贴着炉子');
+
+    // 站远：炼不了，理由指向炉子
+    qi.x = 9;
+    qi.y = 9;
+    assert.equal(furnaceNextTo(s, qi), null);
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('炼丹炉'), '理由要说炉子');
+    const far = doAct(s, qi.id, `brew:${HEAL_PILL.id}`);
+    assert.equal(far.ok, false, '离得远炼不了');
+    qi.x = 5;
+    qi.y = 5;
+
+    // 资源不足
+    s.players.A.gold = 1;
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('金币'), '金币不足要说清');
+    s.players.A.gold = 900;
+    s.players.A.res = { [SPIRIT_STONE]: 0 };
+    assert.ok((pillBrewProblem(s, 'A', qi, HEAL_PILL) ?? '').includes('灵石'), '灵石不足要说清');
+    s.players.A.res = { [SPIRIT_STONE]: 100 };
+
+    // 真炼一颗
+    const beforeGold = s.players.A.gold;
+    const beforeStone = s.players.A.res![SPIRIT_STONE];
+    const r = doAct(s, qi.id, `brew:${HEAL_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(after)[HEAL_PILL.id], 1, '身上多了一颗');
+    assert.equal(r.state.players.A.gold, beforeGold - HEAL_PILL.cost.gold, '扣金币');
+    assert.equal(
+      r.state.players.A.res![SPIRIT_STONE],
+      beforeStone - HEAL_PILL.cost.stone,
+      '扣灵石',
+    );
+    assert.ok(r.state.log.some((l) => l.text.includes('炼成')), '战报要写炼成了什么');
+  });
+
+  test('回春丹：按生命上限回 12%，满血时吃不了', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    const max = maxHpOf(s, qi);
+
+    assert.ok((pillUseProblem(s, qi, HEAL_PILL) ?? '').includes('满'), '满血时按钮该灰');
+    const full = doAct(s, qi.id, `use:${HEAL_PILL.id}`);
+    assert.equal(full.ok, false);
+    assert.equal(pillCountOf(s.units.find((u) => u.id === qi.id)!), 1, '被拒时不该扣药');
+
+    qi.hp = Math.floor(max / 2);
+    const before = qi.hp;
+    const r = doAct(s, qi.id, `use:${HEAL_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    // 名义回 12%，但不能超过上限：修士 0 期只有一条薄血，按一半血起跳会顶到天花板
+    const want = Math.min(Math.max(15, Math.round(max * 0.12)), max - before);
+    assert.equal(after.hp, before + want, `该回 ${want} 点`);
+    assert.equal(pillCountOf(after), 0, '吃完就没了');
+    assert.equal(pillsOf(after)[HEAL_PILL.id], undefined, '归零的键要删掉，别留着 0');
+  });
+
+  test('聚灵丹：回 40 灵力，满灵力时吃不了', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, SPIRIT_PILL.id);
+    setMana(qi, 0);
+    const r = doAct(s, qi.id, `use:${SPIRIT_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(manaOf(r.state.units.find((u) => u.id === qi.id)!), 40, '回 40 点');
+
+    const { s: s2, qi: qi2 } = alchemyScene();
+    addPill(qi2, SPIRIT_PILL.id);
+    assert.ok((pillUseProblem(s2, qi2, SPIRIT_PILL) ?? '').includes('满'), '满灵力该灰');
+  });
+
+  test('护体丹：+25% 护甲，2 个自己的回合后掉掉；面板与结算读同一个字段', () => {
+    const { s, qi } = alchemyScene();
+    setCultivationExp(qi, expForRank(5)); // 6 期，护甲够高才看得出百分比
+    addPill(qi, WARD_PILL.id);
+    const armorBefore = effectiveStats(s, qi).armor;
+
+    const r = doAct(s, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.find((u) => u.id === qi.id)!;
+    assert.equal(after.buff?.armorPct, 0.25, '要给 buff.armorPct');
+    assert.equal(after.buff?.turns, 2);
+    const armorAfter = effectiveStats(r.state, after).armor;
+    assert.ok(armorAfter > armorBefore, `护甲该变高：${armorBefore} → ${armorAfter}`);
+    assert.equal(
+      armorAfter,
+      armorBefore + Math.max(1, Math.round(armorBefore * 0.25)),
+      '加值要按面板那条式子算',
+    );
+
+    // 覆盖而不是叠加：再吃一颗，还是 25%
+    addPill(after, WARD_PILL.id);
+    const r2 = doAct(r.state, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r2.ok, r2.ok ? '' : r2.reason);
+    assert.equal(
+      r2.state.units.find((u) => u.id === qi.id)!.buff?.armorPct,
+      0.25,
+      '药力只有一份，新药压旧药',
+    );
+  });
+
+  test('丹药是隐藏信息：敌方拿到的视图里没有 pills，buff 照旧可见', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, WARD_PILL.id);
+    qi.buff = { armorPct: 0.25, turns: 2, label: '护体丹' };
+
+    // 自己：看得见
+    const mine = playerView(s, 'A').state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(mine)[HEAL_PILL.id], 1, '自己看得见自己的袋子');
+
+    // 对手：抹掉 pills，但 buff 留着（"看得见吃了药，看不见还有几颗"）
+    const foe = playerView(s, 'B').state.units.find((u) => u.id === qi.id);
+    assert.ok(foe, '无雾模式下对手看得见这个单位');
+    assert.deepEqual(foe!.custom?.pills, undefined, '对手数不出几颗');
+    assert.equal(foe!.buff?.armorPct, 0.25, '吃药的痕迹藏不住');
+
+    // 观战：不裁（复盘要看全）
+    const replay = playerView(s, 'B', true).state.units.find((u) => u.id === qi.id)!;
+    assert.equal(pillsOf(replay)[HEAL_PILL.id], 1, '观战不裁');
+  });
+
+  test('面板：只有本人看得到「携带丹药」，敌方那张卡整行不出现', () => {
+    const { s, qi } = alchemyScene();
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, HEAL_PILL.id);
+    const mine = getCultivationPanelLines(s, qi, 'A');
+    const line = mine.find((l) => l.includes('携带丹药'));
+    assert.ok(line, '自己要有这一行');
+    assert.ok(line!.includes(HEAL_PILL.name) && line!.includes('×2'), `要写清种类与数量：${line}`);
+
+    const foe = getCultivationPanelLines(s, qi, 'B');
+    assert.ok(!foe.some((l) => l.includes('携带丹药')), '敌方不该看到这一行（连 0 都不该印）');
+  });
+
+  test('按钮：站炉子旁列「炼丹」，身上有丹列「服用」，敌方一个都没有', () => {
+    const { s, qi } = alchemyScene();
+    const brew = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    assert.equal(brew.filter((b) => b.group === '炼丹').length, PILLS.length, '三颗都列出来');
+    assert.equal(brew.filter((b) => b.group === '服用').length, 0, '没药就别列服用');
+
+    addPill(qi, HEAL_PILL.id);
+    addPill(qi, WARD_PILL.id);
+    const withPills = CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'A' });
+    const use = withPills.filter((b) => b.group === '服用');
+    assert.equal(use.length, 2, '有什么列什么');
+    // 能点的那些右侧写"还剩几颗"；还不能点的（比如满血时的回春丹）写的是原因
+    assert.ok(
+      use.filter((b) => !b.disabled).every((b) => b.note?.includes('颗')),
+      `能吃的要写清还剩几颗：${JSON.stringify(use.map((b) => b.note))}`,
+    );
+
+    // 敌方：连"炼丹"都不该看到（炉子是自己的，更别说袋子）
+    assert.equal(CULTIVATION_HOOKS.unitActions!({ state: s, unit: qi, viewer: 'B' }).length, 0);
+  });
+
+  test('丹药只在修士身上：工匠站炉子旁也炼不了', () => {
+    const { s } = alchemyScene();
+    const deacon = place2(s, 'A', 'cultivation-deacon', 6, 6);
+    assert.ok(furnaceNextTo(s, deacon), '贴着炉子');
+    assert.ok((pillBrewProblem(s, 'A', deacon, HEAL_PILL) ?? '').includes('修士'), '只有修士炼丹');
+  });
+
+  test('药力显示：和「中毒 n 回合」同一排，带剩余回合；属性明细里不重复', () => {
+    const { s, qi } = alchemyScene();
+    setCultivationExp(qi, expForRank(5));
+    addPill(qi, WARD_PILL.id);
+    const armorBefore = effectiveStats(s, qi).armor;
+    const r = doAct(s, qi.id, `use:${WARD_PILL.id}`);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const st = r.state;
+    const unit = st.units.find((u) => u.id === qi.id)!;
+
+    // 1）属性明细里不再出现药力（那串读起来像地形/永久加成，而且没有回合数）
+    const eff = effectiveStats(st, unit);
+    assert.ok(
+      !eff.armorItems.some((it: { label: string }) => it.label === WARD_PILL.name),
+      `armorItems 不该列药力：${JSON.stringify(eff.armorItems)}`,
+    );
+    // 但护甲该加的还是加了（只是不写进明细）
+    assert.ok(eff.armor > armorBefore, `药力仍然算进护甲：${armorBefore} → ${eff.armor}`);
+
+    // 2）状态栏里有一条「护体丹 · 2 回合」
+    const html = detailCardHtml(
+      {
+        view: playerView(st, 'A'),
+        me: 'A',
+        selectedUnit: unit,
+        selectedCityId: null,
+        selectedCampId: null,
+        selectedTile: null,
+      },
+      true,
+    );
+    const chip = /<span class="status-chip st-buff"[^>]*>\s*<b>([^<]+)<\/b><i>([^<]+)<\/i>/.exec(html);
+    assert.ok(chip, '药力要画成状态徽章（和中点/减速同一排）');
+    assert.equal(chip![1], WARD_PILL.name, '徽章写丹药名');
+    assert.ok(
+      chip![2]!.includes(String(WARD_PILL_TURNS)) && chip![2]!.includes('回合'),
+      `徽章要写剩余回合：${chip![2]}`,
+    );
   });
 }
 

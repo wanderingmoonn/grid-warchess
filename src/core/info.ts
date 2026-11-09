@@ -379,19 +379,19 @@ export function describeUnit(
   }
 
   if (def.range > 1) {
-    lines.push(`远程攻击，射程 ${def.range} 格：站在对方射程外输出可以不吃反击`);
+    lines.push(`远程攻击，射程 ${def.range} 格`);
   }
 
   if (def.range === 1) {
     lines.push('近战：攻击后会遭到对方反击（除非一击必杀）');
   }
 
-  lines.push(`来自「${eraDef(def.era).name}」时代，造价 ${def.cost}`);
+  lines.push(`来自「${eraDef(def.era).name}」，造价 ${def.cost}`);
 
   // 扩展包兵种要说清出处：不然玩家在列表里看见"九头蛇"，
   // 既不知道它属于哪个包，也不知道为什么下把没了。
   const src = unitSourceOf(def.id);
-  if (src) lines.push(`来源：${src}（开局勾上这个扩展才会出现）`);
+  if (src) lines.push(`来源：${src}`);
 
   return lines;
 }
