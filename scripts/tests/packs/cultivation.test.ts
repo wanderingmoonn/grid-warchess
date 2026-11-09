@@ -3215,11 +3215,11 @@ export function run() {
     return { s: r.state, spirit: spirit! };
   };
 
-  test('魂修：4 代修士，吃修炼也吃灵力', () => {
+  test('魂修：3 代修士，吃修炼也吃灵力', () => {
     const s = fresh({ expansionIds: ['cultivation'] });
     const def = s.unitTypes['soul-cultivator'];
     assert.ok(def, '魂修要在本局兵种表里');
-    assert.equal(def.era, 4, '四代');
+    assert.equal(def.era, 3, '三代');
     assert.equal(def.category, 'combat');
     const u = place2(s, 'A', 'soul-cultivator', 5, 5);
     assert.ok(isCultivatorUnit(s, u), '要算修士，否则不修炼、不吸灵气');
