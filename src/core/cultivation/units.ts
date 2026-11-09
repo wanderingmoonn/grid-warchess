@@ -123,7 +123,7 @@ export const BLOOD_CULTIVATOR: UnitTypeDef = {
 };
 
 /**
- * 魂修（时代 4）：唯一一支"死了不掉战斗力"的修士。
+ * 魂修（时代 3）：唯一一支"死了不掉战斗力"的修士。
  *
  * 它的强度**不在活着的时候**——数值只和同代持平，也没有主动技能。
  * 真正的价值在化灵：普通修士肉身一碎，技能散掉、境界血掉七成、攻击只剩一成；
@@ -134,16 +134,16 @@ export const BLOOD_CULTIVATOR: UnitTypeDef = {
  * 加一个 id 就够。
  *
  * 因此正确的用法是"把它当耗材使"：它死得起，别的修士死不起。
- * 时代 4 才给，是因为"死得起"在低境界没意义：那时血量本来就薄，
- * 而化灵本身要 4 期。
+ * 时代 3 才给，是因为"死得起"在低境界没意义：那时血量本来就薄，
+ * 而化灵本身要 4 期。太晚出场会来不及升级。
  */
 export const SOUL_CULTIVATOR: UnitTypeDef = {
   id: UNIT_IDS.SOUL_CULTIVATOR,
   name: '魂修',
   short: '魄',
-  era: 4,
+  era: 3,
   category: 'combat',
-  cost: 320,
+  cost: 300,
   move: 2,
   atk: 8,
   armor: 1,
