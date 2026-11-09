@@ -1,25 +1,30 @@
 /**
- * 「季节与气候」：一张地形 × 海陆距离 × 季节的天气表。
+ * 「季节与气候」的**骨架**：季节、海陆距离、14 个标签、以及每个标签改什么。
  *
- * 这个扩展改的是**战场条件**而不是数值：同一块地，春天是湿冷的、
- * 夏天是酷暑的、冬天可能是严冬——单位还是那些单位，但"这片地怎么打"变了。
+ * ── 这个文件里没有"天气表"了 ──────────────────────────────
  *
- * 三条设计上的取舍，写在这儿免得以后自己被自己坑：
+ * 原来这里有一张 地形 × 海陆 × 季节 的 120 格表，每格填一个天气。
+ * 它被删掉了，换成 `field.ts` 里的温湿度场——那张表当初是为了让人**口算**
+ * 才设计成离散的，而条目的编辑决定（"山地沿海的春天是浓雾"）现在变成了
+ * 温度、湿度、降水的**后果**。
+ *
+ * 表本身没浪费：它搬到了 `scripts/tune-climate.ts`，成了回归比对的期望值。
+ *
+ * ── 三条设计上的取舍（从原表时代保留下来）──────────────────
  *
  *   1. **气候不碰城市**。城市是"人住的地方"，自带供暖排水；让它也吃气候，
  *      就等于把一个全局乘数压到产能上，玩家除了骂人没事可做。
- *   2. **季节从回合数派生，不存进存档**。`floor((回合-1)/10) % 4` 一算就有，
- *      存档不用多一个字段，读旧档也不会因为缺字段而算错季节。
- *   3. **气候按格算，不按全局算**。所以它必须挂在"这一格"上：
- *      移动力看出发格、护甲看挨打的那个兵站哪儿、产出看经济单位脚下。
- *      做成全局修正会简单得多，但那样"沿海的平原"和"内陆的平原"就没区别了，
- *      整张海陆距离表也就白算。
+ *   2. **季节从回合数派生，不存进存档**。`floor((回合-1)/10) % 4` 一算就有。
+ *   3. **气候按格算，不按全局算**。移动力看出发格、护甲看挨打的那个兵站哪儿、
+ *      产出看经济单位脚下。做成全局修正会简单得多，但那样"沿海的平原"和
+ *      "内陆的平原"就没区别了。
  *
- * 这个文件只依赖 types.ts：规则层要用它，它不能反过来依赖规则层，
- * 否则 rules → expansions → climate → rules 绕成一圈。
+ * 依赖方向是**单向**的：本文件只依赖 types.ts；`field.ts` 依赖本文件。
+ * 气温场要读季节和海陆距离，反过来不行——否则
+ * rules → expansions → field → climate → field 会绕成一圈。
  */
 
-import type { GameState, Terrain, Unit } from '../types.ts';
+import type { GameState, Terrain } from '../types.ts';
 
 /* ------------------------------------------------------------------ */
 /* 1. 季节                                                             */
@@ -165,93 +170,8 @@ export const CLIMATE_NAME: Record<Climate, string> = {
   storm: '风暴',
 };
 
-/** 地形归到哪一类（城市、桥这类"其他"一律温和，不参与冲突判定） */
-function terrainClass(t: Terrain | null): 'plain' | 'hill' | 'mountain' | 'forest' | 'water' | 'other' {
-  switch (t) {
-    case 'plain':
-      return 'plain';
-    case 'hill':
-      return 'hill';
-    case 'mountain':
-      return 'mountain';
-    case 'forest':
-      return 'forest';
-    case 'water':
-    // 深水和浅流都算水面：风暴该在海上更凶，不是更温和。
-    // 漏掉这两档的话，开了「季节与气候」的对局里外海反而是最安全的地方。
-    case 'deep':
-    case 'shallow':
-      return 'water';
-    default:
-      return 'other';
-  }
-}
-
-/**
- * 气候矩阵：地形 × 海陆距离 × 季节。
- *
- * 直接照着设计表抄下来，没有再"抽象"一层——这张表的每一个格子都是
- * 一次编辑决定（比如"山地沿海的春天是浓雾"），抽象成公式只会把它藏起来。
- */
-const TABLE: Record<'plain' | 'hill' | 'mountain' | 'forest' | 'water', Record<Coast, Record<Season, Climate>>> = {
-  plain: {
-    coastal: { spring: 'dampCold', summer: 'mild', autumn: 'overcast', winter: 'mild' },
-    nearshore: { spring: 'mild', summer: 'hot', autumn: 'mild', winter: 'cold' },
-    inland: { spring: 'mild', summer: 'blazing', autumn: 'mild', winter: 'cold' },
-    shore: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    shallow: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    deep: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-  },
-  hill: {
-    coastal: { spring: 'overcast', summer: 'downpour', autumn: 'mild', winter: 'dampCold' },
-    nearshore: { spring: 'mild', summer: 'overcast', autumn: 'overcast', winter: 'cold' },
-    inland: { spring: 'mild', summer: 'hot', autumn: 'fog', winter: 'cold' },
-    shore: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    shallow: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    deep: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-  },
-  mountain: {
-    coastal: { spring: 'fog', summer: 'downpour', autumn: 'dampCold', winter: 'cold' },
-    nearshore: { spring: 'overcast', summer: 'thunder', autumn: 'cold', winter: 'hardWinter' },
-    inland: { spring: 'cold', summer: 'mild', autumn: 'cold', winter: 'hardWinter' },
-    shore: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    shallow: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    deep: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-  },
-  forest: {
-    coastal: { spring: 'fog', summer: 'dampHeat', autumn: 'overcast', winter: 'dampCold' },
-    nearshore: { spring: 'overcast', summer: 'dampHeat', autumn: 'fog', winter: 'cold' },
-    inland: { spring: 'mild', summer: 'hot', autumn: 'fog', winter: 'cold' },
-    shore: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    shallow: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    deep: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-  },
-  water: {
-    coastal: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    nearshore: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    inland: { spring: 'mild', summer: 'mild', autumn: 'mild', winter: 'mild' },
-    shore: { spring: 'fog', summer: 'mild', autumn: 'overcast', winter: 'frozen' },
-    shallow: { spring: 'driftIce', summer: 'storm', autumn: 'storm', winter: 'driftIce' },
-    deep: { spring: 'storm', summer: 'thunder', autumn: 'storm', winter: 'mild' },
-  },
-};
-
-/**
- * 这一格现在是什么气候。
- *
- * 不算扩展有没有开——开不开由调用方决定（扩展没开时这些钩子根本不会被调用）。
- */
-export function climateAt(s: GameState, x: number, y: number): Climate {
-  const cls = terrainClass(terrainAt(s, x, y));
-  if (cls === 'other') return 'mild';
-  const coast = coastClassOf(s, x, y);
-  return TABLE[cls][coast][seasonOf(s.turn)] ?? 'mild';
-}
-
-/** 某个单位脚下是什么气候 */
-export function climateOfUnit(s: GameState, u: Unit): Climate {
-  return climateAt(s, u.x, u.y);
-}
+/** `climateAt` 在 field.ts（它要读温湿度场）。这里只留"表"本身：
+ *  类型、季节、海陆距离、效果表——它们不依赖场，所以不会和 field 成环。 */
 
 /* ------------------------------------------------------------------ */
 /* 4. 气候效果表                                                       */

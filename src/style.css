@@ -4047,6 +4047,15 @@ a.btn {
   border: 1px solid var(--line);
 }
 
+/* 气象读数：温度 · 湿度/饱和。放在徽标下面一行小字——
+   它是"为什么是这个天气"的解释，不该抢徽标的注意力 */
+.weather-readout {
+  font-size: 11px;
+  color: var(--text-3, var(--text-2));
+  margin: 4px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 .weather-badge {
   display: inline-block;
   font-size: 12px;

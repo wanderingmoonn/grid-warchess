@@ -23,11 +23,11 @@ import {
   CLIMATE_NAME,
   SEASON_NAME,
   SEASON_TURNS,
-  climateAt,
   climateEffect,
   seasonOf,
   type Climate,
 } from './climate.ts';
+import { climateAt, formatTemp, precipAt, precipLabel, satAt, tempAt, wetAt } from './field.ts';
 
 /** 每个气候的图标。颜色只是辅助，名字和数值才是准的（色弱也得读得懂） */
 export const CLIMATE_ICON: Record<Climate, string> = {
@@ -102,14 +102,34 @@ export function weatherBadge(c: Climate): string {
   return `<span class="weather-badge w-${c}">${CLIMATE_ICON[c]} ${CLIMATE_NAME[c]}</span>`;
 }
 
-/** 天气说明块：徽标 + 逐条效果。效果文字从效果表派生，不维护第二份 */
-export function weatherBlock(c: Climate): string {
+/**
+ * 天气说明块：徽标 + **气象读数** + 逐条效果。
+ *
+ * 效果文字从效果表派生，不维护第二份；读数从场上现取。
+ * 单列一行温度/湿度是有用的：没有它，玩家只能看到"浓雾"这个结论，
+ * 看不到"14°C、湿度快满了"这个原因，也就没法理解为什么沿海先起雾。
+ */
+export function weatherBlock(
+  s: GameState,
+  x: number,
+  y: number,
+  c: Climate,
+): string {
+  const temp = tempAt(s, x, y);
+  const wet = wetAt(s, x, y);
+  const sat = satAt(s, x, y);
+  const precip = precipAt(s, x, y);
   const lines = climateEffectLines(c);
   const body =
     lines.length === 0
       ? `<div class="weather-none">这一格没有额外影响。</div>`
       : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
-  return `<div class="weather-box">${weatherBadge(c)}${body}</div>`;
+  return (
+    `<div class="weather-box">${weatherBadge(c)}` +
+    `<div class="weather-readout">${formatTemp(temp)} · 湿度 ${wet}/${sat}` +
+    `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}</div>` +
+    `${body}</div>`
+  );
 }
 
 /**

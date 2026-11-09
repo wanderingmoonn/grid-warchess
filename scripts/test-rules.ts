@@ -55,7 +55,8 @@ import {
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
-import { climateAt, coastClassOf, seasonOf } from '../src/core/seasons/climate.ts';
+import { coastClassOf, seasonOf } from '../src/core/seasons/climate.ts';
+import { climateAt, tempAt, wetAt, precipAt } from '../src/core/seasons/field.ts';
 import {
   airwingOps,
   deckLine,
@@ -10632,7 +10633,7 @@ test('海陆距离：方圆 2 格有水算沿海，方圆 7 格没水算内陆',
   assert.equal(coastClassOf(s, 10, 10), 'shore', '水格贴着陆地是沿岸');
 });
 
-test('气候矩阵：地形 × 海陆 × 季节照表走', () => {
+test('气候：温度场随季节与海陆走（原表已变成参考值，见 tune-climate）', () => {
   const mk = (turn: number) => {
     const s = fresh({ expansionIds: ['seasons'], godMode: true });
     flatten(s, 'plain');
@@ -10663,35 +10664,38 @@ test('气候矩阵：地形 × 海陆 × 季节照表走', () => {
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
-  const s = fresh({ expansionIds: ['seasons'], godMode: true });
-  flatten(s, 'plain');
-  s.turn = 15; // 夏
-  // 整张图抹成平原、没有水 → 每一格都是内陆
+  // 温湿度手工摆好，不去"等模型自己下雨"：
+  // 这条测的是**效果链**（天气 → 移动/视野/射程），不是模型能不能下雨。
+  // 模型跑出来的是一串天气的概率分布，拿它当断言会让测试随参数抖动。
+  const put = (turn: number, temp: number, wet: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    s.turn = turn;
+    s.tiles[5 * s.w + 5]!.custom = { temp, wet };
+    return s;
+  };
+
+  // 酷暑：32°C、干
+  const s = put(15, 320, 40);
   const u = place2(s, 'A', 'archer', 5, 5);
   const base = s.unitTypes.archer!.move;
-  assert.equal(climateAt(s, 5, 5), 'blazing', '平原·内陆·夏 = 酷暑');
+  assert.equal(climateAt(s, 5, 5), 'blazing', '32°C 又干 = 酷暑');
   assert.equal(movePower(s, u), Math.floor(base * 0.5), '酷暑是 -50%');
 
-  // 浓雾（丘陵·内陆·秋）：视野压到 2
-  const f = fresh({ expansionIds: ['seasons'], godMode: true });
-  flatten(f, 'plain');
-  f.turn = 25; // 秋
-  setTile(f, 7, 7, 'hill');
-  const archer = place2(f, 'A', 'archer', 7, 7);
-  assert.equal(climateAt(f, 7, 7), 'fog', '丘陵·内陆·秋 = 浓雾');
+  // 浓雾：14°C、接近饱和
+  const f = put(25, 140, 58);
+  const archer = place2(f, 'A', 'archer', 5, 5);
+  assert.equal(climateAt(f, 5, 5), 'fog', '14°C 且快饱和 = 浓雾');
   assert.ok(visionOf(f, archer) <= 2, `浓雾视野应该 ≤2，实际 ${visionOf(f, archer)}`);
   assert.ok(
     visionOf(f, archer) < s.unitTypes.archer!.vision,
     '浓雾必须真的压低了视野，不能本来就这么点',
   );
 
-  // 阴雨（平原·沿海·秋）：射程 -1
-  const o = fresh({ expansionIds: ['seasons'], godMode: true });
-  flatten(o, 'plain');
-  o.turn = 25;
-  setTile(o, 9, 8, 'water'); // 贴着 (8,8)，让它成为沿海
-  const bow = place2(o, 'A', 'archer', 8, 8);
-  assert.equal(climateAt(o, 8, 8), 'overcast', '平原·沿海·秋 = 阴雨');
+  // 阴雨：15°C、刚过饱和
+  const o = put(25, 150, 66);
+  const bow = place2(o, 'A', 'archer', 5, 5);
+  assert.equal(climateAt(o, 5, 5), 'overcast', '刚好过饱和 = 阴雨');
   assert.equal(
     effectiveRange(o, bow),
     Math.max(1, s.unitTypes.archer!.range - 1),
@@ -10700,15 +10704,15 @@ test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
 });
 
 test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
+  // 手工把这一格摆成"26°C + 严重过饱和"：雷暴需要又热又下大雨，
+  // 而模型自己跑出来的分布里它只有几个回合，不适合当固定断言。
   const s = fresh({ expansionIds: ['seasons'], godMode: true });
   flatten(s, 'plain');
-  // 山地·近岸·夏 = 雷暴：水放在切比雪夫距离 3 的位置（2 格内会变成沿海）
   s.turn = 15; // 夏
-  setTile(s, 3, 3, 'mountain');
-  setTile(s, 6, 3, 'water');
+  s.tiles[3 * s.w + 3]!.custom = { temp: 260, wet: 100 };
   const unit = place2(s, 'A', 'militia', 3, 3);
   const hpBefore = unit.hp;
-  assert.equal(climateAt(s, 3, 3), 'thunder', '山地·近岸·夏 应该是雷暴');
+  assert.equal(climateAt(s, 3, 3), 'thunder', '26°C 又是大雨 = 雷暴');
 
   const r = applyAction(s, { type: 'END_TURN' });
   assert.ok(r.ok, r.ok ? '' : r.reason);

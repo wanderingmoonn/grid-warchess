@@ -35,6 +35,7 @@
     "rl:train": "node scripts/rl/py/bridge.mjs train",
     "rl:loop": "node scripts/rl/py/bridge.mjs loop",
     "manual": "node --experimental-strip-types scripts/build-manual.ts",
+    "tune:climate": "node --experimental-strip-types scripts/tune-climate.ts",
     "snapshot": "node --experimental-strip-types scripts/snapshot-behavior.ts",
     "test:room": "node --experimental-strip-types scripts/smoke-room.ts",
     "sim": "node --experimental-strip-types scripts/sim-ai.ts",
