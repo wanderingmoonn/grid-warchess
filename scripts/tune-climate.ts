@@ -94,6 +94,18 @@ const EXPECT: Record<LandClass, Record<string, Record<Season, Climate>>> = {
 /** 只比这些格：表里的"其他"三档（沿海/近岸/内陆）对水域全是温和，没有信息量 */
 const LAND_COASTS: Coast[] = ['coastal', 'nearshore', 'inland'];
 const WATER_COASTS: Coast[] = ['shore', 'shallow', 'deep'];
+/** 原表里只有「温和」，没有凉爽 / 温暖——这两档是后来加的，算作温和的邻近档 */
+const NEAR: Partial<Record<Climate, Climate[]>> = {
+  mild: ['cool', 'warm'],
+};
+
+function verdictOf(actual: Climate, expect: Climate): 'ok' | 'near' | 'miss' {
+  if (actual === expect) return 'ok';
+  if (NEAR[expect]?.includes(actual)) return 'near';
+  if (NEAR[actual]?.includes(expect)) return 'near';
+  return 'miss';
+}
+
 const SEASONS: Season[] = ['spring', 'summer', 'autumn', 'winter'];
 
 /* ------------------------------------------------------------------ */
@@ -233,6 +245,7 @@ interface Sample {
   season: Season;
   actual: Climate;
   expect: Climate;
+  verdict: 'ok' | 'near' | 'miss';
   temp: number;
   wet: number;
   sat: number;
@@ -252,6 +265,7 @@ function collect(): Sample[] {
           season,
           actual: r.climate,
           expect: EXPECT[terrain]![coast]![season]!,
+          verdict: verdictOf(r.climate, EXPECT[terrain]![coast]![season]!),
           temp: r.temp,
           wet: r.wet,
           sat: r.sat,
@@ -264,7 +278,7 @@ function collect(): Sample[] {
 
 function score(): number {
   const rows = collect();
-  return rows.filter((r) => r.actual === r.expect).length / rows.length;
+  return rows.filter((r) => r.verdict !== 'miss').length / rows.length;
 }
 
 /* ------------------------------------------------------------------ */
@@ -281,23 +295,27 @@ const W = (t: string, n: number) => {
 function report(): void {
   const rows = collect();
   let hit = 0;
+  let near = 0;
   console.log('\n  地形      海陆       季节    期望        实际        温度      湿度/饱和');
   console.log('  ' + '─'.repeat(78));
   for (const r of rows) {
-    const ok = r.actual === r.expect;
-    if (ok) hit++;
+    if (r.verdict === 'ok') hit++;
+    if (r.verdict === 'near') near++;
+    const mark = r.verdict === 'ok' ? '✓' : r.verdict === 'near' ? '≈' : '✗';
     console.log(
       `  ${W(r.terrain, 10)}${W(r.coast, 11)}${W(r.season, 8)}` +
         `${W(r.expect, 12)}${W(r.actual, 12)}` +
         `${formatTemp(r.temp).padStart(8)}   ${String(r.wet).padStart(3)}/${String(r.sat).padStart(3)}` +
-        `  ${ok ? '✓' : '✗'}`,
+        `  ${mark}`,
     );
   }
 
   const pct = ((hit / rows.length) * 100).toFixed(1);
-  console.log(`\n  匹配 ${hit} / ${rows.length}  =  ${pct}%\n`);
+  const nearPct = (((hit + near) / rows.length) * 100).toFixed(1);
+  console.log(`\n  精确 ${hit} / ${rows.length} = ${pct}%` +
+    `　邻近 ${near} 格（凉爽 / 温暖算温和的邻居）　合计 ${nearPct}%\n`);
 
-  const miss = rows.filter((r) => r.actual !== r.expect);
+  const miss = rows.filter((r) => r.verdict === 'miss');
   if (miss.length > 0) {
     console.log('  不一致的格子：');
     for (const r of miss) {

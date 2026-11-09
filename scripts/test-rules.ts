@@ -71,8 +71,8 @@ import {
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
-import { coastClassOf, seasonOf } from '../src/core/seasons/climate.ts';
-import { climateAt, tempAt, wetAt, precipAt } from '../src/core/seasons/field.ts';
+import { CLIMATE_NAME, climateEffect, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
+import { classifyClimate, climateAt, precipAt, satOf, tempAt, wetAt } from '../src/core/seasons/field.ts';
 import {
   airwingOps,
   deckLine,
@@ -11541,17 +11541,61 @@ test('气候：温度场随季节与海陆走（原表已变成参考值，见 t
   const winter = mk(35);
   assert.equal(climateAt(winter, 5, 5), 'cold', '平原·内陆·冬 = 寒冷');
 
-  // 山地近岸的冬天是严冬
+  // 山地的冬天是严冬：海拔 −13°C，加上冬天的季节基准，落到 −11°C 左右。
+  // （原表这里写的是「寒冷」，但 −11°C 显然不是"寒冷"能概括的，
+  // 新模型给严冬更贴体感——这一格是有意偏离原表的。）
   const mtn = mk(35);
   setTile(mtn, 10, 10, 'water');
   setTile(mtn, 12, 10, 'mountain');
   assert.equal(coastClassOf(mtn, 12, 10), 'coastal');
-  assert.equal(climateAt(mtn, 12, 10), 'cold', '山地·沿海·冬 = 寒冷');
+  assert.equal(climateAt(mtn, 12, 10), 'hardWinter', '山地·沿海·冬 = 严冬');
 
   // 城市/桥这类"其他"一律温和，不参与冲突判定
   const city = mk(35);
   setTile(city, 5, 5, 'city');
   assert.equal(climateAt(city, 5, 5), 'mild', '城市不吃气候');
+});
+
+test('气候分档：按体感排，24°C 是温暖、6°C 是凉爽', () => {
+  // 温湿度直接给定（偏干），只测温度那一维
+  const at = (t: number) => classifyClimate(t, Math.round(satOf(t) * 0.5), 'none', false);
+  assert.equal(at(-150), 'hardWinter', '−15°C 严冬');
+  assert.equal(at(-20), 'cold', '−2°C 寒冷');
+  assert.equal(at(60), 'cool', '6°C 该是凉爽，不是温和');
+  assert.equal(at(150), 'mild', '15°C 温和');
+  assert.equal(at(240), 'warm', '24°C 该是温暖，不是炎热');
+  assert.equal(at(300), 'hot', '30°C 炎热');
+  assert.equal(at(340), 'blazing', '34°C 酷暑');
+});
+
+test('气候不再到处减移动力：日常的冷热阴雨一概不动速度', () => {
+  const slowed = (Object.keys(CLIMATE_NAME) as Climate[]).filter((k) => {
+    const e = climateEffect(k);
+    return !!e.moveMul && e.moveMul < 1;
+  });
+  // 只有"真的走不动"的极端天气才配减速。移动力是整数，乘 0.85 对 move 2 的兵
+  // 会被 floor 成 1——**标着 −15%，实际是 −50%**，这才是"节奏折磨"的来源。
+  assert.ok(slowed.length <= 3, `只有极端天气该减速，实际 ${slowed.length} 种：${slowed}`);
+  for (const k of ['mild', 'cool', 'warm', 'cold', 'hot', 'overcast'] as Climate[]) {
+    const e = climateEffect(k);
+    assert.ok(!e.moveMul || e.moveMul >= 1, `${CLIMATE_NAME[k]} 不该乘性减速`);
+  }
+  assert.equal(climateEffect('cool').moveAdd, 1, '凉爽给 +1 移动');
+});
+
+test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 5;
+  s.tiles[5 * s.w + 5]!.custom = { temp: 80, wet: 30 }; // 8°C 且干 → 凉爽
+  const u = place2(s, 'A', 'militia', 5, 5);
+  const base = s.unitTypes.militia!.move;
+  assert.equal(climateAt(s, 5, 5), 'cool');
+  assert.equal(
+    movePower(s, u),
+    base + 1,
+    `凉爽该给 +1：${base} 应该变 ${base + 1}，实际 ${movePower(s, u)}`,
+  );
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
@@ -11600,10 +11644,10 @@ test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
   const s = fresh({ expansionIds: ['seasons'], godMode: true });
   flatten(s, 'plain');
   s.turn = 15; // 夏
-  s.tiles[3 * s.w + 3]!.custom = { temp: 260, wet: 100 };
+  s.tiles[3 * s.w + 3]!.custom = { temp: 280, wet: 100 };
   const unit = place2(s, 'A', 'militia', 3, 3);
   const hpBefore = unit.hp;
-  assert.equal(climateAt(s, 3, 3), 'thunder', '26°C 又是大雨 = 雷暴');
+  assert.equal(climateAt(s, 3, 3), 'thunder', '28°C 又是大雨 = 雷暴');
 
   const r = applyAction(s, { type: 'END_TURN' });
   assert.ok(r.ok, r.ok ? '' : r.reason);
