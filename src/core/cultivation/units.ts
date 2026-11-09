@@ -10,6 +10,26 @@ import { ARTIFACT_SPIRIT_ID, WARM_NOURISH_ID } from './artifacts.ts';
 import { FIRE_QI_ID, STONE_WARD_ID, SWORD_QI_ID } from './abilities/artifact-auras.ts';
 import { CHILL_HIT_ID, SUNDER_HIT_ID } from './abilities/artifact-effects.ts';
 import { GOLD } from '../resources.ts';
+import { nextUpgradeCost } from '../config.ts';
+
+/**
+ * 修士的金币造价：**升到下一时代花费的一半**。
+ *
+ * 用现成的经济刻度定价，而不是每支修士各拍一个数：升铁器 220、升火器 360、
+ * 升蒸汽 540，于是 1/2/3 代修士落在 110/180/270——玩家自己就能算出
+ * "两个修士 ≈ 一次升代的预算"。以前那套 150/270/240/300 是逐个拍的，
+ * 结果是修士全线贵过本体同代兵种（2 代剑修 270 vs 骑士 95），
+ * 打起来就是"等你养出一个像样的修士，对面的长枪已经推到家门口了"。
+ *
+ * 1 代借的是"升到 2 代"那一笔（220），不是 `ERAS[0].upgradeCost`（0）——
+ * 否则炼气士会变成白送。
+ *
+ * 这条只覆盖**有境界成长的五支修士**：法器、阵法、建筑各有各的定位，
+ * 不跟时代升级挂钩（法器是"给修士配的装备"，贵在功能不在人头）。
+ */
+function cultivatorCost(era: number): number {
+  return (nextUpgradeCost(era) ?? 0) / 2;
+}
 
 //灵体
 export const SPIRIT_CULTIVATOR: UnitTypeDef = {
@@ -37,7 +57,7 @@ export const CULTIVATOR: UnitTypeDef = {
   short: '炼',
   era: 1,
   category: 'combat',
-  cost: 150,
+  cost: cultivatorCost(1),
   move: 2,
   atk: 10,
   armor: 0,
@@ -52,7 +72,7 @@ export const SWORD_CULTIVATOR: UnitTypeDef = {
   short: '剑',
   era: 2,
   category: 'combat',
-  cost: 270, 
+  cost: cultivatorCost(2),
   move: 3,
   atk: 8,
   armor: 1,
@@ -82,7 +102,7 @@ export const BODY_CULTIVATOR: UnitTypeDef = {
   short: '体',
   era: 2,
   category: 'combat',
-  cost: 240,
+  cost: cultivatorCost(2),
   move: 2,
   atk: 8,
   armor: 2,
@@ -111,7 +131,7 @@ export const BLOOD_CULTIVATOR: UnitTypeDef = {
   short: '魔',
   era: 3,
   category: 'combat',
-  cost: 300,
+  cost: cultivatorCost(3),
   move: 2,
   atk: 6,
   armor: 1,
@@ -143,7 +163,7 @@ export const SOUL_CULTIVATOR: UnitTypeDef = {
   short: '魄',
   era: 3,
   category: 'combat',
-  cost: 300,
+  cost: cultivatorCost(3),
   move: 2,
   atk: 8,
   armor: 1,
