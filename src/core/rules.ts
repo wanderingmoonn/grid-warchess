@@ -1418,6 +1418,23 @@ export function maxHpOf(s: GameState, u: Unit): number {
 }
 
 /**
+ * 百分比护甲（护体丹）实际加多少。
+ *
+ * 面板（effectiveStats）和伤害结算（computeDamage）**必须都调用这一个函数**：
+ * 两边各写一遍就会漂移，而漂移的表现是"面板说 10 点、打出来按 7 点算"——
+ * 圣旗那次已经踩过，这里收成一处。
+ *
+ * **+1 保底**：修士 0 期护甲就是 0，纯按比例算等于吃了没效果。
+ * 固定值那一路（圣旗 `buff.armor`）不加保底：它本来就是写死的一个数。
+ *
+ * ⚠️ 调用位置很关键：必须在**扩展钩子之后**（修真包的境界护甲在那里加上去），
+ * 在那之前护甲还是基础值，百分比等于白乘。
+ */
+function buffArmorPctGain(armor: number, pct: number): number {
+  return Math.max(1, Math.round(Math.max(0, armor) * pct));
+}
+
+/**
  * 这个兵种能不能掠水。
  *
  * 读 `flight` 字段（原版预留的机制字段），同时认三条旧能力 id：
@@ -1905,8 +1922,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       if (armor !== before) armorItems.push({ label: def.name, delta: armor - before });
     }
   }
-  // 圣旗（神圣骑士长）：临时护甲。面板和结算必须读同一个字段，
+  // 圣旗（神圣骑士长）：**固定值**临时护甲。面板和结算必须读同一个字段，
   // 否则会出现"面板写着 10 点、实际按 7 点算"这种只能靠猜的偏差。
+  //
+  // 注意它和 `armorPct` 是**两个位置**：固定值加在这里（基础护甲那一层），
+  // 百分比要等扩展钩子（境界护甲）跑完再加——否则修士 0 期护甲是 0，
+  // "+25%" 会变成 "+0"。这条是实测踩出来的，别合并回去。
   if (u.buff?.armor) {
     armor += u.buff.armor;
     armorItems.push({ label: u.buff.label ?? '技能增益', delta: u.buff.armor });
@@ -1932,6 +1953,14 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       });
       if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
     }
+  }
+
+  // 百分比护甲（护体丹）：必须等扩展钩子（修真包的境界护甲）跑完再乘。
+  // 放在那之前，修士的护甲还是 0，+25% 会算成 0——实测踩过一次。
+  if (u.buff?.armorPct) {
+    const gain = buffArmorPctGain(armor, u.buff.armorPct);
+    armor += gain;
+    armorItems.push({ label: u.buff.label ?? '技能增益', delta: gain });
   }
   
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
@@ -2639,7 +2668,7 @@ export function computeDamage(
       const def = STATUS_REGISTRY[key];
       if (def?.modifyArmor) ctx.armor = def.modifyArmor(s, defender, val, ctx.armor);
     }
-  // 圣旗（神圣骑士长的技能）：临时护甲，和面板走同一个字段
+  // 圣旗 / 护体丹：临时护甲，和面板走同一个字段
   if (!isCity && defender.buff?.armor) ctx.armor += defender.buff.armor;
   // 咒域光环
   ctx.armor -= curseAuraPenalty(s, defender);
@@ -2657,6 +2686,13 @@ export function computeDamage(
         visionOf: (x) => visionOf(s, x),
       });
     }
+  }
+
+  // 百分比护甲（护体丹）：和 effectiveStats 一样，必须等扩展钩子跑完再乘。
+  // 结算这条还得赶在**破甲之前**——破甲削的是"这个人本来有多少甲"，
+  // 药力加成也是那部分甲的一部分。
+  if (!isCity && defender.buff?.armorPct) {
+    ctx.armor += buffArmorPctGain(ctx.armor, defender.buff.armorPct);
   }
 
   // 小型扩展到破甲之前

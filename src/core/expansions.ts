@@ -455,7 +455,14 @@ export interface ExpansionHooks {
    * 返回一个字符串数组，UI 会原样渲染在面板上。
    * 核心引擎不会读取这里的逻辑，只负责把它们画出来。
    */
-  getUnitPanelLines?: (c: { state: GameState; unit: Unit }) => string[];
+  /**
+   * 单位详情卡上的额外几行。
+   *
+   * `viewer` 是可选的：绝大多数扩展只需要"这单位是什么"，但有些行**只该给自己看**
+   * （修真包的丹药数量就是——敌方卡片上印一行"携带 0 颗"比不印更误导）。
+   * 老调用方不传也不会坏。
+   */
+  getUnitPanelLines?: (c: { state: GameState; unit: Unit; viewer?: PlayerId }) => string[];
 
   /**
    * 单位面板上的**扩展按钮**。
@@ -488,6 +495,22 @@ export interface ExpansionHooks {
     unit: Unit;
     actionId: string;
   }) => string | null;
+
+  /**
+   * 视图裁剪：**别人**的单位下发之前，扩展可以抹掉自己那些"不该让对面知道的字段"。
+   *
+   * 为什么需要它：`playerView` 是 `structuredClone` 全量克隆之后只按视野筛单位，
+   * `Unit.custom` 里的东西会原样送到客户端。修真包的丹药就存在那里——
+   * 那正是设计要的"看不见的底牌"：对手看得见你身上的 buff，但数不出你兜里还有几颗。
+   *
+   * 三条约定：
+   *   · 只会对**非自己**的单位调用（自己的东西不下发是另一条规矩，不在这里管）；
+   *   · 拿到的 `unit` 已经是克隆体，改它不会影响真实状态；
+   *   · 只准改 `unit`，别去读 `state.units` 推别人的底细——那样就绕回来了。
+   *
+   * 观战（`reveal`）不裁：复盘和双 AI 观战要看全。
+   */
+  redactUnit?: (c: { state: GameState; unit: Unit; viewer: PlayerId }) => void;
 }
 
 /** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */

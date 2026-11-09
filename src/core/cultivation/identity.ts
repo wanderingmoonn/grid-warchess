@@ -24,6 +24,7 @@ export const UNIT_IDS = {
   SECT: 'cultivation-sect',
   SCRIPTURE_PAVILION: 'cultivation-scripture-pavilion',
   SILENT_PAVILION: 'cultivation-silent-pavilion',
+  ALCHEMY_FURNACE: 'cultivation-alchemy-furnace',
   FORGE_1: 'cultivation-forge-1',
   FORGE_2: 'cultivation-forge-2',
   FORGE_3: 'cultivation-forge-3',

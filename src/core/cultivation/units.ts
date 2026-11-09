@@ -160,6 +160,7 @@ export const DEACON: UnitTypeDef = {
     UNIT_IDS.SECT,
     UNIT_IDS.SCRIPTURE_PAVILION,
     UNIT_IDS.SILENT_PAVILION,
+    UNIT_IDS.ALCHEMY_FURNACE,
   ],
   buildPower: 18,
 };
@@ -196,6 +197,7 @@ export const STEWARD: UnitTypeDef = {
     UNIT_IDS.SECT,
     UNIT_IDS.SCRIPTURE_PAVILION,
     UNIT_IDS.SILENT_PAVILION,
+    UNIT_IDS.ALCHEMY_FURNACE,
   ],
   buildPower: 24,
 };
@@ -293,6 +295,37 @@ export const SILENT_PAVILION: UnitTypeDef = {
   range: 1,
   vision: 3,
   adjacent: { unit: [UNIT_IDS.SECT] },
+};
+
+// ── 炼丹炉（2026-11-08）────────────────────────────
+//
+// 丹药只能在炉子旁边炼，但**动作的发起者是修士，不是炉子**：
+// 选中修士 → 面板「炼丹」组 → 花金币和灵石，丹直接进他自己的袋子。
+//
+// 这是和炼器系统"错开"的地方：炼器炉是产兵建筑（产物是单位，走 produceAt），
+// 炼丹炉不产单位，所以它退化成一个**站位条件**——和藏经阁之于法术完全同构。
+// 好处是核心一个字不用改：不用新动作、不用库存、不用生产队列。
+//
+// 选址不限（不像藏经阁要贴宗门）：丹药是补给，前线后方都该能起炉子。
+// "打完仗要回炉子旁边补药"这件事本身就是它的物流成本。
+
+export const ALCHEMY_FURNACE: UnitTypeDef = {
+  id: UNIT_IDS.ALCHEMY_FURNACE,
+  name: '炼丹炉',
+  short: '丹',
+  era: 3,
+  category: 'building',
+  // 比藏经阁便宜一点：它不给任何被动加成，价值全在"能炼什么"上
+  cost: 110,
+  costRes: { 'spirit-stone': 8 },
+  // 执事 18 点 → 一回合立起来。小设施不该占两回合
+  buildCost: 18,
+  move: 0,
+  atk: 0,
+  armor: 2,
+  maxHp: 50,
+  range: 1,
+  vision: 2,
 };
 
 // ── 藏经阁（2026-11-08）────────────────────────────

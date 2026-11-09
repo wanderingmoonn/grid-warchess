@@ -1,12 +1,13 @@
 // 面板
 
-import type { GameState, Unit } from '../types.ts';
+import type { GameState, PlayerId, Unit } from '../types.ts';
 import { skillsOf } from '../query.ts';
 import { REALMS, MAX_RANK, getRank, getExp, getExpGrowth, getLifespan, getAgingYears, AGING_DEATH_AGE, expForRank, getMaxHp, EXP_GROWTH_BLOOD } from './progression.ts';
 import { isCultivatorUnit, isSwordCultivatorType, isBodyCultivatorType, isBloodCultivatorType } from './identity.ts';
 import { sectLegacyMul } from './sect.ts';
 import { MANA_REGEN, manaOf, maxManaOf } from './mana.ts';
 import { LIBRARY_SPELL_SLOTS, activeLibrariesOf, knownSpells, researchCapOf, researchedOf, spellSlotsOf } from './spells.ts';
+import { PILLS, pillCarryCap, pillCountOf, pillsOf } from './pills.ts';
 import { 
   trueDamageOf,
   SWORD_BASE_MUL,
@@ -36,7 +37,10 @@ import {
 } from './skills/index.ts';
 
 // 原来在扩展里它是匿名的箭头函数，现在给它起个正式名字
-export function getCultivationPanelLines(state: GameState, unit: Unit): string[] {
+//
+// `viewer` 是可选的：丹药那一行只该给本人看（敌方卡片上印"携带 0 颗"比不印
+// 更误导），但老调用方（测试、别的扩展）不传也不该坏，所以缺省就按"看不到"处理。
+export function getCultivationPanelLines(state: GameState, unit: Unit, viewer?: PlayerId): string[] {
   if (!isCultivatorUnit(state, unit)) return [];
 	const rank = getRank(unit);
 	const exp = getExp(unit);
@@ -78,6 +82,30 @@ export function getCultivationPanelLines(state: GameState, unit: Unit): string[]
 			lines.push(
 				`本方研发：${researched} / ${researchCap}（藏经阁 ${libs} × ${LIBRARY_SPELL_SLOTS}）`,
 			);
+		}
+	}
+
+	/*
+	 * 携带丹药：**只给本人看**。
+	 *
+	 * 这是设计的一部分，不是漏了：对手能看见 buff（药力藏不住），
+	 * 但数不出你兜里还有几颗。视图层（fog.ts 的 redactUnit）已经把敌方的
+	 * `custom.pills` 抹掉了，这里再判一次 viewer，是为了不让"敌方卡片上
+	 * 印一行 0 / 4"这种更糟的误导出现——看不到就该整行不出现。
+	 *
+	 * 0 颗时也印：新系统得先让人知道"这里能装东西"，才会去炉子旁边试。
+	 */
+	if (viewer === unit.owner) {
+		const bag = pillsOf(unit);
+		const total = pillCountOf(unit);
+		const cap = pillCarryCap(unit);
+		if (total === 0) {
+			lines.push(`携带丹药：空（0 / ${cap}）`);
+		} else {
+			const names = PILLS.filter((p) => (bag[p.id] ?? 0) > 0)
+				.map((p) => `${p.name}×${bag[p.id]}`)
+				.join('、');
+			lines.push(`携带丹药：${names}（${total} / ${cap}）`);
 		}
 	}
 
