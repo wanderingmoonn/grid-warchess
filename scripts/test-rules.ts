@@ -11843,6 +11843,35 @@ test('爬坡：往高处走每层 +1、封顶 2 层，下坡不加价，且一�
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
 });
 
+test('丘陵在地形高差下不再另收地形费：只按爬坡算', () => {
+  /*
+   * 本体地形表里丘陵是 2（平原 1 + 地形本身"陡" 1）。「地形高差」又把
+   * "上去吃力"表达成爬坡，两条叠在一起就是重复收费：平原→丘陵 3 点，
+   * 移动力 2 的步兵爬上去连一格都剩不下——丘陵变成"到此为止"。
+   *
+   * 2026-11-09 把那 1 点退回去（`HILL_TERRAIN_CREDIT`），丘陵只按高度差收钱。
+   * **森林不动**：它贵在"难走"，不高。
+   */
+  const on = fresh({ expansionIds: ['height-terrain'] });
+  assert.equal(stepCostBetween(on, 'plain', 'hill'), 2, '平原→丘陵：地形 1 + 爬坡 1');
+  assert.equal(stepCostBetween(on, 'hill', 'hill'), 1, '丘陵→丘陵：同层，只算地形 1');
+  assert.equal(stepCostBetween(on, 'hill', 'plain'), 1, '下坡不收费');
+  assert.equal(stepCostBetween(on, 'plain', 'forest'), 2, '森林照旧（难走，不是难爬）');
+  assert.equal(stepCostBetween(on, 'hill', 'plateau'), 3, '台地照旧：地形 2 + 爬坡 1');
+
+  // 不开扩展：本体口径一格不改
+  const off = fresh({ expansionIds: [] });
+  assert.equal(stepCostBetween(off, 'plain', 'hill'), CONFIG.terrainCost.hill);
+  assert.equal(stepCostBetween(off, 'hill', 'hill'), CONFIG.terrainCost.hill);
+
+  // 带单位时仍然"一格最多吃掉全部移动力"：民兵 2 点刚好上得去，但这一回合就到头
+  putTerrain(on, 4, 4, 'plain');
+  const s = unitOn(on, 'A', 'militia', 4, 4);
+  const u = s.units.find((x) => x.type === 'militia')!;
+  putTerrain(s, 5, 4, 'hill');
+  assert.equal(stepCostInto(s, u, idx(s, 4, 4), idx(s, 5, 4)), 2);
+});
+
 test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
   // 三种水面各归各：
   //   water   —— 深水，只有船能走
