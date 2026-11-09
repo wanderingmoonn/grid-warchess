@@ -268,7 +268,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     armor: 13,
     maxHp: 88,
     range: 5,
-    vision: 4,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 5,
     autoAttack: true,
   },
   {
@@ -544,7 +545,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     armor: 16,
     maxHp: 100,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 4,
     autoAttack: true,
   },

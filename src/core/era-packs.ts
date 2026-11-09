@@ -1174,7 +1174,8 @@ const INDUSTRY: UnitTypeDef[] = [
     armor: 10,
     maxHp: 60,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 3,
     autoAttack: true,
   },
@@ -1435,7 +1436,8 @@ const MODERN: UnitTypeDef[] = [
     armor: 15,
     maxHp: 90,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 4,
     autoAttack: true,
   },

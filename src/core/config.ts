@@ -1088,7 +1088,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 13,
     maxHp: 86,
     range: 4,
-    vision: 3,
+    // 视野必须 ≥ 射程：2026-11-09 起"看不见就不能开火"，自动开火也吃这条。
+    // 留着原来的 3 等于把这座塔的射程悄悄砍成 3，而造价和攻击都是按 4 定的。
+    vision: 4,
     autoAttack: true,
   },
   industrialpark: {

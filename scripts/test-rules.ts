@@ -257,6 +257,9 @@ import {
   heightOfTerrain,
   isAirborne,
   isHiddenFrom,
+  hidesInFog,
+  hiddenFromAllFoes,
+  unitInSightOf,
   magicDamageOf,
   magicAtkOf,
   magicResOf,
@@ -5052,19 +5055,36 @@ test('反击：看不见的攻击者不能还手', () => {
   assert.equal(afterSniper.hp, sniperMax, '看不见的攻击者不该被反击');
 });
 
-test('塔：看不见的敌人不开火（碉堡视野 3、射程 4）', () => {
+test('塔：看不见的敌人不开火', () => {
   /*
    * 自动开火一直在扫 `s.units`，不经过候选表，所以"看得见才打得到"从来没管到它：
-   * 碉堡能照着 4 格外（视野只有 3）的人开火，反过来林子里的斥候在塔面前等于没藏。
+   * 塔能照着射程内、视野外的人开火，反过来林子里的斥候在塔面前等于没藏。
    *
-   * 距离用横平竖直的那 4 格：`distance()` 是曼哈顿距离，斜着摆 2+2 也算 4 格，
-   * 但欧氏只有 2.83，落在视野 3 之内——那测的就不是"看不见"了。
+   * 用一座**临时兵种**（射 4 / 视 2）而不是碉堡：真实建筑 11-09 起已经
+   * "视野 = 射程"了（见上一条不变量用例），拿它来测就测不出东西；
+   * 而且要保证这条用例不会因为以后调数值再红一次。
+   *
+   * 距离用横平竖直的那几格：`distance()` 是曼哈顿距离，斜着摆 2+2 也算 4 格，
+   * 但欧氏只有 2.83，落在视野之外——那测的就不是"看不见"了。
    */
   const shoot = (gap: number) => {
     const s = fresh();
     s.fog = true;
+    s.unitTypes['test-short-sight-tower'] = {
+      ...s.unitTypes.militia!,
+      id: 'test-short-sight-tower',
+      name: '试短视塔',
+      short: '塔',
+      category: 'building',
+      move: 0,
+      atk: 30,
+      range: 4,
+      vision: 2,
+      maxHp: 200,
+      autoAttack: true,
+    };
     const spot = emptyPlain(s);
-    const tower = place2(s, 'A', 'bunker', spot.x, spot.y);
+    const tower = place2(s, 'A', 'test-short-sight-tower', spot.x, spot.y);
     // 只留这一座塔当视野来源，否则旁边随便哪个兵都能把目标照亮
     s.units = s.units.filter((u) => u.owner !== 'A' || u.id === tower.id);
 
@@ -5091,10 +5111,10 @@ test('塔：看不见的敌人不开火（碉堡视野 3、射程 4）', () => {
 
   const far = shoot(4);
   assert.equal(far.gone, false, '4 格外的人不该被击毁');
-  assert.equal(far.after, far.before, '4 格外（视野 3）看不见，不该挨这一炮');
+  assert.equal(far.after, far.before, '4 格外（视野 2）看不见，不该挨这一炮');
 
-  const near = shoot(3);
-  assert.ok(near.gone || near.after < near.before, '3 格内在视野里，塔要开火');
+  const near = shoot(2);
+  assert.ok(near.gone || near.after < near.before, '2 格内在视野里，塔要开火');
 });
 
 test('潜航 / 隐身：和潜行同一把尺子，出手即现形', () => {
@@ -12231,8 +12251,9 @@ test('瞭望塔：视野 6（+2），看得比打得远，且不影响自动开�
    * 2026-11-09：视野 4 → 6。
    *
    * "这个数值合理吗"值得较真一次：`fireBuildings` 选靶用的是 `def.range`，
-   * **根本不看视野**——所以视野只决定迷雾里能看多远（以及 AI 的信息）。
-   * 旧注释里"视野 5 就永远先手开火"那句是站不住的，真正涨杀伤的是当年的 atk 12。
+   * 视野只决定迷雾里能看多远（以及 AI 的信息）——**这条在 11-09 之后不成立了**，
+   * 自动开火现在也要过 `unitInSightOf`，所以视野成了开火的硬上限。
+   * 正因如此，这一轮把 5 座"视野 < 射程"的碉堡全部拉平（见下一条用例）。
    *
    * 放到全表里看：276 个兵种里视野 6 排不进前 10（侦察机 10、法师/航母 9、
    * 精灵弓手与几个顶级兵 7~8）；只看 54 座建筑，它排第二，仅次于六代的
@@ -12250,6 +12271,74 @@ test('瞭望塔：视野 6（+2），看得比打得远，且不影响自动开�
     if (u.category !== 'building' || u.era !== 1 || u.id === t.id) continue;
     assert.ok(t.vision >= u.vision, `${u.name} 的视野 ${u.vision} 反超了瞭望塔`);
   }
+});
+
+test('自动开火的建筑：视野必须 ≥ 射程', () => {
+  /*
+   * 2026-11-09 起塔要"看得见才开火"，于是 `vision < range` 不再是"塔看得近一点"，
+   * 而是**射程被悄悄砍掉**：造价、攻击都是按 range 定的，实际却打不了那么远。
+   *
+   * 全量目录上钉这条不变量，比逐个写死 5 个 id 有用——以后新加一座塔，
+   * 只要忘了写视野就会在这里露馅。
+   *
+   * `__city__` 是伪单位（射程 0、视野 0），0 ≥ 0 照样成立。
+   */
+  const all = fullUnitCatalog();
+  const bad: string[] = [];
+  for (const [id, d] of Object.entries(all) as Array<[string, any]>) {
+    if (!d.autoAttack) continue;
+    if ((d.vision ?? 0) < (d.range ?? 0)) bad.push(`${id} ${d.name} 视${d.vision} 射${d.range}`);
+  }
+  assert.deepEqual(bad, [], `这些自动开火建筑的视野小于射程，实际打不到最远处：${bad.join('、')}`);
+});
+
+test('三人局：只要还有一家看得见，就不算藏住', () => {
+  /*
+   * 八条潜行相关的用例全是两人局的。多人局里"藏住了没"没有唯一答案——
+   * 隐匿是**逐观察者**判定的，所以界面角标和攻击判定都得问"是不是**每一家**都看不见"。
+   * `hiddenFromAllFoes` 就是那个收口函数，这条守它。
+   */
+  const s = freshMulti(3);
+  s.fog = true;
+
+  const scout = s.units.find((u) => u.owner === 'A' && u.type === 'scout');
+  assert.ok(scout, '三人局的 A 方该有斥候');
+
+  // `freshMulti` 会把装饰地形抹平，所以自己种一棵树。
+  // 再把 B/C 的兵全赶到离它最远的那个角上——不靠地图恰好留一片空地，
+  // 地图怎么生成这条用例都成立
+  const spot = s.tiles.findIndex((t) => t.terrain === 'plain' && !t.cityId);
+  assert.ok(spot >= 0, '三人局这张图上该有平地');
+  s.tiles[spot] = { terrain: 'forest', cityId: null };
+  scout!.x = spot % s.w;
+  scout!.y = Math.floor(spot / s.w);
+
+  const corner = {
+    x: scout!.x < s.w / 2 ? s.w - 2 : 1,
+    y: scout!.y < s.h / 2 ? s.h - 2 : 1,
+  };
+  let spread = 0;
+  for (const u of s.units) {
+    if (u.owner === 'A') continue;
+    u.x = Math.min(s.w - 1, corner.x + (spread % 3));
+    u.y = corner.y;
+    spread += 1;
+  }
+
+  assert.equal(hiddenFromAllFoes(s, scout!), true, 'B、C 都够不着，应该算藏住');
+  for (const p of ['B', 'C'] as const) {
+    assert.equal(unitInSightOf(s, p, scout!), false, `${p} 不该指得到它`);
+  }
+
+  // 把 C 的一个兵贴到相邻格：对 C 现形，于是整体就不算藏住了
+  const cUnit = s.units.find((u) => u.owner === 'C');
+  assert.ok(cUnit, '三人局该有 C 的兵');
+  cUnit!.x = scout!.x + 1;
+  cUnit!.y = scout!.y;
+
+  assert.equal(unitInSightOf(s, 'C', scout!), true, '贴到相邻格就看得见');
+  assert.equal(unitInSightOf(s, 'B', scout!), false, 'B 仍然看不见');
+  assert.equal(hiddenFromAllFoes(s, scout!), false, '有一家看得见，就不能再说"藏住了"');
 });
 
 test('数值展示：每个兵种的数值行都带「视野」', () => {
@@ -15505,12 +15594,23 @@ test('卡牌先验：已从选卡估值里摘掉，开关不影响任何一签',
 });
 
 test('卡牌先验：乘数本身仍然算得对（离线看数据时用得到）', () => {
-  // 模块默认是关的（停用态），离线看数时手动打开
-  cardPrior.on = true;
-  assert.ok(cardPriorFactor('witch') > 1, '女巫实测 +31.5pp，乘数该 > 1');
-  assert.ok(cardPriorFactor('crossbow') < 1, '弩兵实测 −37.9pp，乘数该 < 1');
-  assert.equal(cardPriorFactor('no-such-unit-xyz'), 1, '表里没有的卡必须原样放行');
-  cardPrior.on = false;
+  /*
+   * 这条查的是**表里的数自洽**，不是门槛——所以直接对每一行核公式，
+   * 不经过 `cardPriorFactor`（那个会先看指纹新鲜度，表一过期就全返回 1，
+   * 于是"公式算得对不对"根本测不到）。
+   *
+   * factor = 1 + clamp(shrunk, ±span) / span × cap
+   */
+  for (const [id, row] of Object.entries(CARD_PRIOR)) {
+    const clamped = Math.max(-CARD_PRIOR_META.span, Math.min(CARD_PRIOR_META.span, row.shrunk));
+    const expected = 1 + (clamped / CARD_PRIOR_META.span) * CARD_PRIOR_META.cap;
+    assert.ok(
+      Math.abs(row.factor - expected) < 5e-4,
+      `${id} 的 factor=${row.factor} 和公式算出来的 ${expected.toFixed(4)} 对不上`,
+    );
+  }
+  assert.ok(CARD_PRIOR['witch']!.factor > 1, '女巫实测 +31.5pp，乘数该 > 1');
+  assert.ok(CARD_PRIOR['crossbow']!.factor < 1, '弩兵实测 −37.9pp，乘数该 < 1');
 });
 
 /* ===========================================================================
@@ -17568,13 +17668,33 @@ test('地图来源：空文件 / 不是地图的 JSON 都要给出可读的错�
  * （`WB_RULER` 的 50%→35% 就写在注释里，还是又跑了 400 局才翻出来）。
  * 红了就跑 `npm run draft:prior` 重生成。
  */
-test('卡牌先验：表里的数值指纹必须和当前数值一致（改了数字就要重生成）', () => {
-  assert.equal(
-    unitDigest(Object.keys(CARD_PRIOR)),
-    CARD_PRIOR_META.unitsDigest,
-    '先验表已过期：数值改过但没重跑 `npm run draft:prior`。'
-    + '（运行端此时会自动关掉先验，不会用错的分，但表也该刷新）',
-  );
+test('卡牌先验：指纹对不上时，整张表一律不生效', () => {
+  /*
+   * 指纹的作用是"数值改过就别用旧结论"，所以这条查两件事：
+   *   · 指纹对得上 → 打开开关后乘数按表走（离线分析能用）；
+   *   · 对不上     → **每一行都必须回落到 1**，一格都不许用。
+   *
+   * 2026-11-09 起这张表是**过期**状态：碉堡视野 3→4 改了参与指纹的字段。
+   * 重生成要 `.tmp/draft` 那 400 局数据（已被清掉）+ `npm run draft:prior`，
+   * 属于一次完整实验；在重跑之前，先验就该是关着的——这正是它该有的样子。
+   */
+  const fresh = unitDigest(Object.keys(CARD_PRIOR)) === CARD_PRIOR_META.unitsDigest;
+  cardPrior.on = true;
+  try {
+    if (fresh) {
+      assert.ok(cardPriorFactor('witch') > 1, '表新鲜：女巫应该被推高');
+      assert.equal(cardPriorFactor('no-such-unit-xyz'), 1, '表里没有的卡必须原样放行');
+    } else {
+      for (const id of Object.keys(CARD_PRIOR)) {
+        assert.equal(cardPriorFactor(id), 1, `${id} 的乘数必须回到 1（过期表不许用错的分）`);
+      }
+      console.warn(
+        '  ·  先验表已过期（数值改过），运行端已自动关掉。恢复：重跑 `npm run draft:prior`（需 .tmp/draft 的 400 局）',
+      );
+    }
+  } finally {
+    cardPrior.on = false;
+  }
 });
 
 test('卡牌先验：指纹对数值改动敏感，且与卡的顺序无关', () => {

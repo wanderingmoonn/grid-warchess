@@ -3861,7 +3861,7 @@ function doAttack(
    * 但规则层以前只看射程，于是可以对着自己视野外的东西开火。
    * 这条放在 `isArmed` 之后：先告诉玩家"这兵没武器"，再谈看不看得见。
    */
-  if (!tileVisibleTo(s, attacker.owner, defender.x, defender.y)) {
+  if (!unitInSightOf(s, attacker.owner, defender)) {
     return { ok: false, reason: `看不见 ${utype(s, defender.type).name}（在视野外）` };
   }
 
