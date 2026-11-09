@@ -405,8 +405,9 @@ function search(rounds: number): void {
 /**
  * 把 `TUNING` 的当前值写回 field.ts。
  *
- * 只替换 `export const TUNING: ClimateTuning = { ... };` 这一段，
- * 其它一个字都不动——注释、类型、函数全保留。
+ * ⚠️ 它只保留**数值**：`TUNING` 里那些逐条解释"这个数为什么是这个数"的注释
+ * 会被重新生成的代码冲掉。所以正常流程是**看日志、手工抄值**，
+ * `--apply` 只在"大改一轮、反正要重写注释"的时候用。
  */
 function apply(): void {
   const src = readFileSync(FIELD_PATH, 'utf8');

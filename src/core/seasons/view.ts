@@ -126,7 +126,7 @@ export function weatherBlock(
       : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
   return (
     `<div class="weather-box">${weatherBadge(c)}` +
-    `<div class="weather-readout">${formatTemp(temp)} · 湿度 ${wet}/${sat}` +
+    `<div class="weather-readout">${formatTemp(temp)} · 相对湿度 ${Math.round((wet / sat) * 100)}%` +
     `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}</div>` +
     `${body}</div>`
   );
