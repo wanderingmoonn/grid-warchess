@@ -5562,18 +5562,35 @@ check('天气标识：换季之后徽标和效果一起更新', () => {
   assert.ok(!winterHtml.includes('酷暑'), '换季之后不该还留着上一个季节的天气');
 });
 
-check('天气标识：顶栏的季节条跟着回合走', () => {
+check('天气标识：顶栏的季节徽章跟着回合走', () => {
+  // 季节以前是核心写死的 `TopbarState.season` + `data-ref="season"`；
+  // 现在它是扩展的一枚常驻徽章（`topbarBadges` 钩子），核心只认"一段文字"。
   const spring = weatherScene(5);
   const w = bootWith(spring.st);
-  const chip = w.document.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.ok(chip, '顶栏要有季节块');
-  assert.equal(chip.hidden, false, '开了天气就该显示');
-  assert.ok(chip.textContent?.includes('春'), `第 5 回合是春：${chip.textContent}`);
+  const badge = w.document.querySelector('.topbar-badge') as HTMLElement | null;
+  assert.ok(badge, '顶栏要有季节徽章（由扩展提供）');
+  assert.ok(badge.textContent?.includes('春'), `第 5 回合是春：${badge.textContent}`);
 
   const winter = weatherScene(35);
   const w2 = bootWith(winter.st);
-  const chip2 = w2.document.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.ok(chip2?.textContent?.includes('冬'), `第 35 回合是冬：${chip2?.textContent}`);
+  const badge2 = w2.document.querySelector('.topbar-badge');
+  assert.ok(badge2?.textContent?.includes('冬'), `第 35 回合是冬：${badge2?.textContent}`);
+});
+
+check('天气块：点单位时由扩展注入（核心不认识天气）', () => {
+  // 天气块是 HTML（带按气候分色的徽标），走 `getTilePanelHtml` 钩子原样插入。
+  // 这条钉住"钩子真的接上了"——以前它是 panel.ts 里直接 import 气候表拼出来的。
+  const { st, me } = weatherScene(15);
+  const w = bootWith(st);
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  const side = d.querySelector('.side')!.innerHTML;
+  assert.ok(side.includes('weather-badge'), '要有天气徽标');
+  assert.ok(side.includes('脚下的天气'), '单位卡上的标题：按格算，不是我身上的状态');
+  // class 选择器只能精确匹配，所以这里用正则找 `weather-badge w-xxx`
+  assert.ok(/weather-badge w-[a-zA-Z]+/.test(side), '徽标要带气候 class，才能按天气上色');
 });
 
 check('没开「季节与气候」时，界面一点天气都不出现', () => {
@@ -5585,9 +5602,11 @@ check('没开「季节与气候」时，界面一点天气都不出现', () => {
   );
   const side = d.querySelector('.side')!.innerHTML;
   assert.ok(!side.includes('weather-badge'), '没开扩展就不该有天气徽标');
+  assert.ok(!side.includes('这里的天气') && !side.includes('脚下的天气'), '连标题也不该留');
 
-  const chip = d.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.equal(chip?.hidden, true, '季节块也该藏起来');
+  // 常驻徽章那块整个是空的（CSS 的 :empty 会把它收起来）
+  const box = d.querySelector('[data-ref="topbar-badges"]') as HTMLElement | null;
+  assert.ok(!box || box.childElementCount === 0, '没开扩展就不该有常驻徽章');
 });
 
 console.log('\n对局数据上传');

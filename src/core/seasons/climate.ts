@@ -19,7 +19,7 @@
  * 否则 rules → expansions → climate → rules 绕成一圈。
  */
 
-import type { GameState, Terrain, Unit } from './types.ts';
+import type { GameState, Terrain, Unit } from '../types.ts';
 
 /* ------------------------------------------------------------------ */
 /* 1. 季节                                                             */

@@ -55,7 +55,7 @@ import {
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
-import { climateAt, coastClassOf, seasonOf } from '../src/core/climate.ts';
+import { climateAt, coastClassOf, seasonOf } from '../src/core/seasons/climate.ts';
 import {
   airwingOps,
   deckLine,
