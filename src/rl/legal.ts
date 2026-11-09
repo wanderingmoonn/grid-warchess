@@ -30,16 +30,14 @@
  */
 import {
   SKILL_EFFECTS,
+  attackableTargets,
   blockedFor,
   buildSiteError,
-  canStrike,
   cityById,
   citiesOf,
   coversTile,
   distance,
-  distToCity,
   disbandRefundOf,
-  effectiveRangeAgainst,
   eggSpots,
   heroBlocked,
   heroSkillsOf,
@@ -48,6 +46,7 @@ import {
   recruitPriceOf,
   recruitResCost,
   recruitSpawnCells,
+  siegeTargets,
   supplyEraAt,
   tileAt,
   underConstruction,
@@ -117,23 +116,21 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
       }
     }
 
-    // ── 攻击 ──────────────────────────────────────────────────────────
+    /*
+     * ── 攻击 / 攻城 ────────────────────────────────────────────────────
+     *
+     * 不再自己写一遍"射程够不够"，直接问规则层要候选表。
+     *
+     * 以前这里是手抄的：`canStrike` + 射程。2026-11-09 规则层加了
+     * "看得见才打得到"（目标格必须在本方视野里），这里没跟上，于是网络策略
+     * 枚举出一堆必然被拒的动作——`test-net-weights` 当场逮住（21 个被拒）。
+     * 候选表只有一处实现，枚举器当消费者，两边就再也不会漂。
+     */
     if (canStillAttack(u) && !underConstruction(u)) {
-      for (const foe of s.units) {
-        if (foe.owner === u.owner) continue;
-        if (foe.hp <= 0) continue;
-        if (!canStrike(s, u, foe)) continue;
+      for (const foe of attackableTargets(s, u)) {
         out.push({ type: 'ATTACK', unitId: u.id, targetId: foe.id });
       }
-    }
-
-    // ── 攻城 ──────────────────────────────────────────────────────────
-    if (canStillAttack(u) && !underConstruction(u)) {
-      for (const city of s.cities) {
-        if (city.owner === u.owner) continue;
-        if (city.ruined) continue;
-        const tile = tileAt(s, city.x, city.y);
-        if (distToCity(u, city) > effectiveRangeAgainst(s, u, tile)) continue;
+      for (const city of siegeTargets(s, u)) {
         out.push({ type: 'SIEGE', unitId: u.id, cityId: city.id });
       }
     }

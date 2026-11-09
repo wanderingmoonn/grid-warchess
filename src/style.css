@@ -1547,6 +1547,16 @@ body {
   border-width: 2px;
 }
 
+/* 隐匿：藏住了是冷灰蓝（"不显眼"），露出来是暖红（"你快挨打了"） */
+.status-chip.st-stealth {
+  color: #4a6b8a;
+  border-style: dashed;
+}
+
+.status-chip.st-exposed {
+  color: #b4463c;
+}
+
 /* 单位与地形的"说明书" */
 .unit-notes {
   margin-top: 10px;
@@ -2373,6 +2383,20 @@ a.btn {
   margin-left: 4px;
   font-size: 9.5px;
   opacity: 0.6;
+}
+
+/*
+ * 选卡模式下「开局自带、不进卡池」的兵种。
+ *
+ * 兵种池这张表列的是"这一局能造什么"，所以经济建筑、军营、桥、经济/建造单位
+ * 都会出现——但它们不参与 BP，不该让人以为能在池子里选到。
+ * 2026-11-08 有人问"磨坊怎么还在选卡池里"，就是因为这个差别没画在脸上。
+ */
+.chip-auto {
+  margin-left: 5px;
+  font-size: 9.5px;
+  opacity: 0.55;
+  letter-spacing: 0.02em;
 }
 
 .expansion-list {
@@ -6009,3 +6033,22 @@ a.btn {
 
 /* 提示放在按钮**上面**：按钮是这张卡的最后一件东西，贴着底边才像"操作区" */
 .bc-tip { margin: 10px 0 0; }
+
+/* 顶部信息卡里的「撤回一步」。
+   它原来紧贴在「结束回合」下面：两颗按钮一个整行、一个半行，上下相邻，
+   而"走完了"和"退回上一步"点错的代价完全不对等。挪到顶栏之后靠这条留白
+   和下面那排玩家信息分开，别让人再把它当成回合按钮的一部分。 */
+.undo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.undo-row .hint {
+  flex: 1 1 auto;
+  font-size: 12px;
+  line-height: 1.35;
+}

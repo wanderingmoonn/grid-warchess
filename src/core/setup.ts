@@ -23,6 +23,7 @@ import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
 import { registerResource } from './resources.ts';
+import { nextRandom } from './rng.ts';
 
 /**
  * 开局界面里的预设棋盘尺寸
@@ -358,7 +359,19 @@ export function createMatch(
   const unitTypes: Record<string, UnitTypeDef> = {};
   for (const id of pool) {
     const def = catalog[id];
-    if (def) unitTypes[id] = { ...def };
+    if (!def) continue;
+    /*
+     * 浅拷贝**不够**：`builds` 这类数组还是和目录里的同一份。
+     *
+     * 扩展包会就地改它（`attachShipyards` 往工程兵的 builds 里 push 船坞），
+     * 于是"开了一局带海军的"会把船坞永久钉进模块级的 `UNIT_TYPES`——
+     * 同一个进程里之后所有局的奴隶都变成"会造船坞但造不出来"，
+     * `test-rules` 里那条选卡用例就是这么炸的（`s.unitTypes[nv-dock]` 是 undefined）。
+     *
+     * 修在这里而不是各扩展里：这一层的契约本来就是"每个 state 一份私有的兵种表"，
+     * 让它真的私有，比让十几个扩展各自记得"别 push"可靠。
+     */
+    unitTypes[id] = { ...def, builds: def.builds ? [...def.builds] : undefined };
   }
 
   // ---- 城市 ----
@@ -394,6 +407,36 @@ export function createMatch(
 
   /** 这一局实际坐人的席位，按行动顺序 */
   const seats = PLAYER_ORDER.slice(0, playerCount);
+
+  /*
+   * 谁先动。
+   *
+   * 两人局才认（见 MatchConfig.firstSide）：三四人局的席位顺序还牵着出生点和城位，
+   * 让玩家任选先手等于让一张图的公平性取决于一个下拉框。
+   *
+   * `random` 用种子抽、**抽完就落成 'A'/'B' 存进 config**：复盘要逐帧还原，
+   * 存档里留一个"随机"字样，就等于每次打开都可能换一个先手。
+   */
+  const firstSeat: PlayerId = (() => {
+    const want = config.firstSide;
+    /*
+     * 随机：两人局抽 A/B，三四人局**在所有席位上抽**（等于随机轮转起点）。
+     *
+     * 多人局的回合本来就是环形的（`nextSeat` 按席位列环转），所以"从谁开始"
+     * 只影响起点、不影响循环——C 先手就是 C→D→A→B，和 A 先手是同一个环。
+     * 城位与出生点按席位固定分配，不跟着这个走（席位=地图位置，先手=谁先动）。
+     */
+    if (want === 'random') {
+      const n = seats.length;
+      if (n <= 1) return 'A';
+      // 用 0~1 的随机数乘以席位数取整：n=2 时退化成 A/B 各一半
+      const idx = Math.min(n - 1, Math.floor(nextRandom((seed ^ 0x1f2e3d4c) >>> 0).value * n));
+      return seats[idx]!;
+    }
+    // 指定先手只在两人局认：多人局让玩家任选先手，等于让一张图的公平性取决于下拉框
+    if (twoSeats && (want === 'A' || want === 'B')) return want;
+    return 'A';
+  })();
   /** 布局里某一家分到的城位（两家局只有 A/B，三家四家才多出来） */
   const layoutCities: Record<PlayerId, Array<{ x: number; y: number }>> = {
     A: layout.citiesA,
@@ -490,6 +533,21 @@ export function createMatch(
       // 人数必须活进 state.config：席位（谁上场、轮到谁、谁还活着）全靠它，
       // 和上面那些开关一样，这个是逐个白名单抄的，漏一个就等于被吃掉。
       playerCount,
+      // 时代路线：不填就是 linear（每级 +1 的老科技线）。
+      // 必须逐个白名单抄进 config——这里漏一个，存档读回来就退回线性表，
+      // 而"这局用的是哪条线"恰恰是最不该悄悄变的东西。
+      ...(config.eraRoute ? { eraRoute: config.eraRoute } : {}),
+      // 两个字段分工见 MatchConfig：
+      //   firstSide = 玩家选的档位（面板记忆）；firstSeat = 实际先手（规则读它）。
+      firstSide: config.firstSide === 'B' || config.firstSide === 'random' ? config.firstSide : 'A',
+      /*
+       * 永远写，哪怕先手就是 A。
+       *
+       * 一开始只在"不是 A"时才写（想少给老存档加键），结果读的一方分不清
+       * "没写"和"写了 A"——自己的测试就先绊了一跤。代价只是一个字段，
+       * 换来"读 config 就知道到底谁先动"，值。
+       */
+      firstSeat,
       commanderMode,
       godMode: config.godMode === true,
       // 选卡模式要活进 config：读档/联机之后界面才知道"这一局有 BP"
@@ -516,7 +574,7 @@ export function createMatch(
     },
     unitTypes,
     turn: 1,
-    current: 'A',
+    current: firstSeat,
     w,
     h,
     tiles,
@@ -596,7 +654,9 @@ export function createMatch(
      * 两人局里就是 B——和以前一模一样。三人四人局里，第二个之后的每个人都有
      * "先手已经动过一轮"的劣势，所以都给同样的比例；先手那位一分不补。
      */
-    for (const p of seats.slice(1)) {
+    for (const p of seats) {
+      // 先手那位不补；其余每人补（两人局就是另一位）
+      if (p === firstSeat) continue;
       const extra = Math.round(state.players[p].gold * bonusRatio);
       if (extra <= 0) continue;
       state.players[p].gold += extra;
@@ -614,7 +674,7 @@ export function createMatch(
   //
   // 想试"先手不领这第一笔"的配平方案时把这个开关打开：
   // 先手就只剩"先动一步"，钱要等自己第一个回合开始才到账。
-  if (!config.noFirstIncome) grantOpeningIncome(state);
+  if (!config.noFirstIncome) grantOpeningIncome(state, firstSeat);
 
   refreshMemory(state);
   return state;

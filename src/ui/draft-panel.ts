@@ -17,6 +17,7 @@ import { abilityById } from '../core/ability-registry.ts';
 import { airLayer } from '../core/rules.ts';
 import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
 import { resourceName } from '../core/resources.ts';
+import { unitStatLine } from '../core/info.ts';
 import type { ResourceId } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
@@ -47,16 +48,12 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 const DOMAIN_LABEL: Record<string, string> = { water: '水军', air: '空军' };
 
-/** 一行数值：攻/甲/血是每个兵种都有的，其余有才写 */
-function statLine(def: UnitTypeDef): string {
-  const bits = [`攻 ${def.atk}`, `甲 ${def.armor}`, `血 ${def.maxHp}`];
-  if (def.move > 0) bits.push(`移 ${def.move}`);
-  bits.push(`射 ${def.range}`, `视 ${def.vision}`);
-  if (def.splash) bits.push(`溅射 ${def.splash}`);
-  if (def.burst && def.burst > 1) bits.push(`连击 ${def.burst}`);
-  if (def.magicAtk) bits.push(`魔攻 ${def.magicAtk}`);
-  return bits.join(' · ');
-}
+/*
+ * 一行数值直接复用 `core/info` 的 `unitStatLine`。
+ *
+ * 这里原本是本地写的一份，措辞还和别处不同（它写「视」，产兵面板干脆没有这一项）。
+ * 同一张兵种卡，从选卡面板看和从兵营面板看差一个数字，是最没道理的不一致。
+ */
 
 /** 造价：金币 + 扩展带来的其它资源（有才写） */
 function costLine(def: UnitTypeDef): string {
@@ -89,7 +86,7 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
   const builds = buildListOf(def, { nameOf: (id) => TIP_UNIT_NAMES.get(id) });
   return `<span class="hover-tip" hidden>
       <span class="tip-title"><b>${def.name}</b><i>${meta.join(' · ')}</i></span>
-      <span class="tip-row">${statLine(def)}</span>
+      <span class="tip-row">${unitStatLine(def)}</span>
       <span class="tip-row">${costLine(def)}</span>
       ${abil.length > 0 ? `<span class="tip-row tip-abil">能力：${abil.join(' · ')}</span>` : ''}
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${builds.names.join('、')}（共 ${builds.names.length} 种）</span>` : ''}
@@ -108,10 +105,13 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
 function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   const bits = [`${eraDef(def.era).name}`];
   if (def.cost > 0) bits.push(`${def.cost} 金`);
+  // 紧凑卡是"一眼挑兵"用的，只写最能区分人的几项；视野跟着射程一起出，
+  // 因为"打得到多远"和"看得到多远"是同一个问题的两面。
   if (def.category === 'combat') bits.push(`攻 ${def.atk} · 血 ${def.maxHp}`);
   else bits.push('建筑');
   if (def.splash) bits.push(`溅射 ${def.splash}`);
   if (def.range >= 2) bits.push(`射程 ${def.range}`);
+  bits.push(`视野 ${def.vision}`);
   return `<span class="draft-card-wrap" data-hover-tip>
     <button type="button" class="draft-card ${def.category === 'building' ? 'is-building' : ''}${blocked ? ' is-blocked' : ''}"
       data-draft="${def.id}" ${blocked ? 'aria-disabled="true"' : ''}>
@@ -410,6 +410,31 @@ function pickedPanel(s: GameState, seat: PlayerId): string {
         ? ''
         : `<div class="draft-picked-grid">${cards}</div>`
     }
+  </section>`;
+}
+
+/**
+ * 只读的"这一方选到了什么"——给**对局中**点城市时用。
+ *
+ * 为什么复用 `pickedCard` 而不是另写一套小卡片：
+ * 这段内容的意义就是"和选卡界面右侧那个预览一模一样"。两份实现一定会漂移
+ * （一边加了字段、另一边忘了），而玩家会立刻发现"BP 时看到的面板和打起来看到的不一样"。
+ *
+ * `skipped`（跳过选卡）时返回空串：那种局面没有名单，显示一个空框只会让人以为坏了。
+ */
+export function draftedCardsHtml(s: GameState, seat: PlayerId): string {
+  const draft = s.draft;
+  if (!draft || draft.skipped) return '';
+  const picks = (draft.picks[seat] ?? []).filter((id) => !!s.unitTypes[id]);
+  if (picks.length === 0) return '';
+  const cards = picks.map((id, i) => pickedCard(s.unitTypes[id]!, i + 1)).join('');
+  return `<section class="draft-picked is-${seat === 'A' ? 'a' : 'b'}" style="margin-top:12px">
+    <div class="draft-picked-head">
+      <b>${sideName(s, seat)} · 选到的卡</b>
+      <span class="draft-picked-count">${picks.length} / ${draft.pickSlots}</span>
+      <span class="draft-picked-hint">这一局的名单，BP 时定下的</span>
+    </div>
+    <div class="draft-picked-grid">${cards}</div>
   </section>`;
 }
 

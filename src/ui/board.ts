@@ -22,6 +22,7 @@
 
 import type { PlayerView } from '../core/fog.ts';
 import { markKindOf } from '../core/mark-registry.ts';
+import { unitStatBits } from '../core/info.ts';
 import { 
   buildProgress, 
   cityName, 
@@ -784,7 +785,13 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const playerName = s.players[u.owner].name;
   const kindText =
     def.category === 'building' ? '建筑' : def.category === 'economy' ? '经济单位' : '部队';
-  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · 甲 ${def.armor}`;
+  /*
+   * 悬停提示里的数值行走共用口径（含「视野」）。
+   *
+   * 血已经用"当前/上限"写在前面了，这里把「血」那一段筛掉，别写两遍。
+   */
+  const statBits = unitStatBits(def).filter((b) => !b.startsWith('血 '));
+  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · ${statBits.join(' · ')}`;
 
   const cargo = u.cargo?.length ?? 0;
   const cargoBadge =

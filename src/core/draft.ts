@@ -173,16 +173,162 @@ export function draftBonus(expansionIds: readonly string[]): DraftBonus {
  * 所以它会同时点亮海军的 +1 与时代军备的 +2（池 27 / 禁 2 / 选 9）。
  * 规则按**实际生效的体系**算，不按"玩家本来想开哪一类"算。
  */
+/**
+ * 每代在池子里的硬上限。
+ *
+ * ---------------------------------------------------------------
+ * 为什么"权重"一个人不够
+ * ---------------------------------------------------------------
+ * 权重只在**池子有富余**时发得出去。而一局的池子有固定额度，起始代±1 的库存
+ * 一旦见底，水填法就必须把剩下的格子摊给更远的代——这不是权重算错了，是没地方放。
+ *
+ * 实测（2026-11-08，默认扩展、起始第 3 代）：池子 20 格里第 2 代占 6 格（30%），
+ * 第 5 代只剩 3 格。玩家开第 3 代是想打青铜到铁器，结果签里三成是上一代的兵；
+ * 而"升两级就到"的第 5 代反而被挤掉了。病因是"±2 代给 3 张"这顶帽子**不分方向**：
+ * 它同时压住了向上的第 5 代和向下的第 1 代，多出来的格子就只能堆在 -1 代身上。
+ *
+ * ---------------------------------------------------------------
+ * 所以帽子要分方向：往上是投资，往下是淘汰
+ * ---------------------------------------------------------------
+ *   · **向上（+2）尽量给足**：升两级就到手，是这一局的"目标单位"，
+ *     让它替 -1 代吃下多余的格子，池子才会越看越像"这一代 + 下一代"。
+ *   · **向下（-1）只留一小撮**：最多占池子的 15%（至少 2 张）。
+ *     这一代的作用是"便宜的补位"（多一个便宜近战/远程可挑），不是主菜。
+ *   · **再往下（≤ -2 代）不进池子**：起始第 3 代还给你发第 1 代民兵，
+ *     除了占版面没有别的用。库存撑不起一轮 BP 时才会被 `eraCaps` 放开（见那边）。
+ *
+ * 这几条都是**相对**的（按池子比例 / 按库存），换扩展、换池子大小都不用重调。
+ */
+const UP2_CAP = 8;
+const UP3_CAP = 3;
+const FAR_CAP = 1;
+/** -1 代最多占池子的这个比例（至少 2 张，不管池子多小） */
+const DOWN1_SHARE = 0.15;
+
+/** 各代有多少"可进池"的候选（库存） */
+function stockByEra(state: GameState): Map<number, number> {
+  const stock = new Map<number, number>();
+  for (const id of draftCandidates(state)) {
+    const def = state.unitTypes[id];
+    if (!def) continue;
+    const era = Math.max(1, Math.round(def.era || 1));
+    stock.set(era, (stock.get(era) ?? 0) + 1);
+  }
+  return stock;
+}
+
+/**
+ * 这一代在池子里最多占几格。
+ *
+ * `size` 是池子的目标额度，只用来算 -1 代那顶"按比例"的帽子。
+ */
+function eraCap(era: number, startEra: number, stock: number, size: number): number {
+  const gap = era - startEra;
+  if (gap === 0 || gap === 1) return stock;
+  if (gap === 2) return Math.min(stock, UP2_CAP);
+  if (gap === 3) return Math.min(stock, UP3_CAP);
+  if (gap >= 4) return Math.min(stock, FAR_CAP);
+  if (gap === -1) {
+    const share = Math.max(2, Math.ceil(size * DOWN1_SHARE));
+    return Math.min(stock, share);
+  }
+  return 0;
+}
+
+/**
+ * 每一代各自的上限（规则层与抽样共用这一份，别在两处各算一遍）。
+ *
+ * `minTotal` 是"这一轮 BP 至少要几张卡"（双方禁完再选完）。库存撑得住时它不起作用；
+ * 撑不住时按**离起始代由近到远**把帽子一层层松开——先放最近的代，因为那是
+ * 玩家真正会用的兵；一直放到够用或放到库存见底。
+ *
+ * 这一条是必须的：起始第 5 代的原版局，第 5 代只有 5 个兵、上面一代都没有，
+ * 光靠 ±1 代凑不满"各禁 1 + 各选 6"的 16 张；而起始第 8 代全开也只有 19 张候选，
+ * 对 26 张的需求同样不够。宁可让低代占几格，也不能让选卡走到一半没卡可选。
+ */
+function eraCaps(state: GameState, minTotal: number, size: number): Map<number, number> {
+  const startEra = Math.max(1, state.config.startEra ?? 1);
+  const stock = stockByEra(state);
+  const caps = new Map<number, number>();
+  let total = 0;
+  for (const [era, n] of stock) {
+    const c = eraCap(era, startEra, n, size);
+    caps.set(era, c);
+    total += c;
+  }
+  if (total >= minTotal) return caps;
+  const order = [...stock.keys()].sort((a, b) => {
+    const d = Math.abs(a - startEra) - Math.abs(b - startEra);
+    return d !== 0 ? d : a - b;
+  });
+  for (const era of order) {
+    if (total >= minTotal) break;
+    const n = stock.get(era) ?? 0;
+    const cur = caps.get(era) ?? 0;
+    const add = Math.min(n - cur, minTotal - total);
+    if (add <= 0) continue;
+    caps.set(era, cur + add);
+    total += add;
+  }
+  return caps;
+}
+
+/**
+ * 一局选卡的规模与每代上限——**唯一的一份推导**。
+ *
+ * `draftBudget`（界面显示"池子 N 张"、AI 估算）和 `sampleDraftPool`（真去抽卡）
+ * 都从这里取。以前两边各算一次，池子一被库存夹小，"预算说 20 张、实际抽了 18 张"
+ * 这种不一致就会冒出来。
+ */
+function poolLimits(state: GameState): {
+  base: number;
+  need: number;
+  size: number;
+  caps: Map<number, number>;
+  budget: DraftBudget;
+} {
+  const shape = poolShape(state);
+  const need = draftNeed(state, shape);
+  const caps = eraCaps(state, need, shape.base);
+  let total = 0;
+  for (const n of caps.values()) total += n;
+  const size = Math.min(shape.base, total);
+  return {
+    base: shape.base,
+    need,
+    size,
+    caps,
+    budget: { extra: shape.extra, pool: size, bans: shape.bans, picks: shape.picks },
+  };
+}
+
 export function draftBudget(state: GameState): DraftBudget {
+  return poolLimits(state).budget;
+}
+
+/** 池子的"目标额度"：只看扩展给了多少兵，跟起始时代无关 */
+function poolShape(state: GameState): DraftBudget & { base: number } {
   const extra = draftCandidates(state).filter((id) => unitSourceIdOf(id) !== null).length;
-  const pool = Math.min(DRAFT_POOL_CAP, DRAFT_POOL_BASE + Math.ceil(extra / 2));
   const bonus = draftBonus(state.config.expansionIds ?? []);
   return {
     extra,
-    pool,
+    base: Math.min(DRAFT_POOL_CAP, DRAFT_POOL_BASE + Math.ceil(extra / 2)),
+    pool: 0,
     bans: Math.min(DRAFT_BAN_CAP, DRAFT_BAN_BASE + bonus.bans),
     picks: Math.min(DRAFT_PICK_CAP, DRAFT_PICK_BASE + bonus.picks),
   };
+}
+
+/**
+ * 这一轮 BP 至少要几张卡：双方禁完再选完，多留 2 张做余量。
+ *
+ * 少了这道底线，按库存压小池子会在"兵本来就少"的开局上直接压断：
+ * 起始第 5 代的原版局只有 15 个候选、起始第 8 代全开只有 19 个，
+ * 而"各禁 3 + 各选 10"要 26 张——走到第 20 手就没卡可选了。
+ * `eraCaps` 会在库存不够时把帽子松开（见那边的说明），这里只负责把数算出来。
+ */
+function draftNeed(state: GameState, shape: DraftBudget): number {
+  return (shape.bans + shape.picks) * seatsOf(state).length + 2;
 }
 
 /* ===========================================================================
@@ -296,24 +442,39 @@ function shuffle<T>(list: T[], seed: number): { list: T[]; seed: number } {
  * 所以池子按"离起始时代多远"分配名额：
  *   · 起始那一代最多（一开局就能造，是真正的第一梯队）；
  *   · +1 代紧随其后（升一级就到，几乎每局都会升）；
- *   · 再往后递减，五代只剩个零头（够你留一手"决战用的东西"，但不占版面）；
- *   · 低于起始时代也递减，但比高于它的衰减慢——便宜的身体永远有用
- *     （占点、看家、挡路），而"造不出来"的高代兵是纯占位。
+ *   · 再往后递减，但仍有"抽得到一张"的额度（够你留一手"决战用的东西"）；
+ *   · 低于起始时代衰减得**陡得多**（见下面 2026-11-08 那段）。
  *
- * 每代仍然保底 2 格（库存不够就少给），所以"每个有货的时代都抽得到"这条不变。
+ * 保底只剩"起始代 ±1 各 1 格"（见 `allocatePoolSlots`），不是每代都有——
+ * 每代都保底的话，八个时代的池子先被保底吃掉十几格，权重就翻不过来了。
  */
 function eraWeight(era: number, startEra: number): number {
   const gap = era - startEra;
+  // 高于起始代：还是那条慢衰减——"造不出来"但值钱，留个零头有意义
   if (gap >= 0) return Math.max(0.2, 1.15 - 0.28 * gap);
-  return Math.max(0.35, 1 - 0.18 * -gap);
+  /*
+   * 低于起始代：**陡得多**（2026-11-08 调）。
+   *
+   * 原来是 1 - 0.18·d（-1 0.82 / -2 0.64 / -3 0.46 / -4 0.35，最低 0.35），
+   * 配上"每代保底 2 格"，起始第 3 代时池子里三成是上一代的兵——
+   * 玩家开第 3 代是想打青铜到铁器，结果签里堆着民兵长枪。
+   * 现在 -1 0.5 / -2 0.18 / -3 0.065 / -4 0.023，最低 0.02。
+   *
+   * 权重还要配帽子才管用（见 `eraCap`）：-1 代压到池子的 15%、再往下直接 0。
+   * 只调权重是不够的——水填法没处可放时，多出来的格子还是会压到最近的下游那一代。
+   */
+  return Math.max(0.02, 0.5 * 0.36 ** (-gap - 1));
 }
 
 /**
- * 把 `size` 个格子按权重分给各代，并夹在"每代库存"之内。
+ * 把 `size` 个格子按权重分给各代，并夹在"每代上限"之内。
  *
- * 分配用最大余数法（先取整、剩下的按小数部分从大到小补），溢出（某代库存不够）
- * 则把多出来的格子按权重让给还有货的邻代，反复到分完或没货可分。
+ * 分配用最大余数法（先取整、剩下的按小数部分从大到小补），溢出（某代顶到上限）
+ * 则把多出来的格子按权重让给还有余量的代，反复到分完或没处可放。
  * 这些都必须确定性：同一个 seed 必须得到同一个池子。
+ *
+ * `capOf` 传的是**已经算好的上限**（见 `eraCaps`），这里不再自己推导——
+ * "这一代最多几格"只有一处实现，否则预算和抽样会各夹一次、夹出两个数。
  */
 function allocatePoolSlots(
   eras: readonly number[],
@@ -324,23 +485,35 @@ function allocatePoolSlots(
   const quota = new Map<number, number>(eras.map((e) => [e, 0]));
   const weights = new Map(eras.map((e) => [e, eraWeight(e, startEra)]));
   let left = size;
-  // ① 保底：每代先给 2 格（小池子按人头摊薄）
-  const floor = Math.min(2, Math.floor(size / Math.max(1, eras.length)));
+  /*
+   * ① 保底只给"起始代 ±1"这一带，每代 1 格。
+   *
+   * 旧版是**每代 2 格**，于是 8 个时代的池子里先被保底吃掉 16 格——
+   * 起始第 7 代时，1~6 代凭保底就占了一半以上，权重再怎么调都翻不过来。
+   * 现在保底只保证"你这一代和上下各一代不至于一张都没有"，
+   * 再远的代全靠权重决定；低两代以上很可能一格都抽不到，这是有意的。
+   */
+  const floor = Math.min(1, Math.floor(size / Math.max(1, eras.length)));
   for (const era of eras) {
+    if (Math.abs(era - startEra) > 1) continue;
     const give = Math.min(floor, capOf(era), left);
     quota.set(era, give);
     left -= give;
   }
   // ② 余量按权重反复分（水填法）。
   //    一轮分完再看还剩多少：起始那一代的库存常常不够吃下自己那份权重
-  //    （本体第 1 代只有 6 个兵），多出来的格子要按比例摊给其它代，
-  //    而不是一股脑塞给权重第二名——那会让二代一口吃掉四成池子。
+  //    （本体第 1 代只有 6 个兵），多出来的格子要按比例摊给其它代。
+  //
+  //    这里曾经是"按圈补位"（0 圈吃饱才轮到 1 圈），为的是防止水填法
+  //    把多余的格子摊到低代去。现在低代有硬的帽子（-1 代 ≤15%、更远一律 0），
+  //    圈序已经没必要，反而会捣乱：起始第 3 代全扩展开局时，第 4 代库存一多，
+  //    1 圈就把 60 格吃干，第 5 代（升两级就到、本该有一份的"目标单位"）整代挂零。
   let guard = 0;
   while (left > 0 && guard++ < 64) {
-    const open = eras.filter((e) => capOf(e) > (quota.get(e) ?? 0));
-    if (open.length === 0) break;
-    const sumW = open.reduce((n, e) => n + (weights.get(e) ?? 0), 0) || 1;
-    const share = open.map((e) => {
+    const roomy = eras.filter((e) => capOf(e) > (quota.get(e) ?? 0));
+    if (roomy.length === 0) break;
+    const sumW = roomy.reduce((n, e) => n + (weights.get(e) ?? 0), 0) || 1;
+    const share = roomy.map((e) => {
       const room = capOf(e) - (quota.get(e) ?? 0);
       const want = Math.min((left * (weights.get(e) ?? 0)) / sumW, room);
       return { e, n: Math.floor(want), frac: want - Math.floor(want) };
@@ -376,7 +549,6 @@ function allocatePoolSlots(
  */
 export function sampleDraftPool(
   state: GameState,
-  size: number,
   seed: number,
 ): { pool: string[]; seed: number } {
   const buckets = new Map<number, string[]>();
@@ -399,7 +571,9 @@ export function sampleDraftPool(
   }
 
   const startEra = Math.max(1, state.config.startEra ?? 1);
-  const quota = allocatePoolSlots(eras, size, startEra, (e) => washed.get(e)!.length);
+  const lim = poolLimits(state);
+  const size = lim.size;
+  const quota = allocatePoolSlots(eras, size, startEra, (e) => lim.caps.get(e) ?? 0);
 
   const pool: string[] = [];
   const cursors = new Map<number, number>(eras.map((e) => [e, 0]));
@@ -455,8 +629,18 @@ export function draftPickOrder(picks: number): PlayerId[] {
  */
 export function createDraft(state: GameState): DraftState {
   const budget = draftBudget(state);
-  const sampled = sampleDraftPool(state, budget.pool, state.seed ^ 0x5eed1);
-  const order = draftPickOrderFor(seatsOf(state), budget.picks);
+  const sampled = sampleDraftPool(state, state.seed ^ 0x5eed1);
+  /*
+   * 选卡顺序从**先手方**开始轮转。
+   *
+   * 原来直接 `seatsOf(state)`（=['A','B']）。两人局可以选谁先动之后，如果先手是 B
+   * 而 BP 仍从 A 起，就会出现"后动的人先选卡"——那等于把先后手的定义拆成两套。
+   * 先手 = 先动 + 先禁/先选，补偿发给后手，三件事同一个人。
+   */
+  const seats = seatsOf(state);
+  const lead = seats.indexOf(state.current);
+  const rotated = lead > 0 ? [...seats.slice(lead), ...seats.slice(0, lead)] : seats;
+  const order = draftPickOrderFor(rotated, budget.picks);
   return {
     // 先进"等待开局"：建房、贴邀请链接都发生在这一步（见 DraftPhase 的说明）
     phase: 'lobby',
@@ -536,6 +720,51 @@ export function remainingUnits(state: GameState): string[] {
   if (!draft) return [];
   const taken = new Set<string>([...draft.bans.A, ...draft.bans.B, ...draft.picks.A, ...draft.picks.B]);
   return draft.pool.filter((id) => !isPseudoUnit(id) && !taken.has(id));
+}
+
+/**
+ * 把老存档池子里**本就不该进池**的卡摘掉（读档时调，见 storage/save.ts）。
+ *
+ * 为什么需要：池子是**存进存档**的，不是每局重抽。所以 11-07 把经济建筑移出
+ * 卡池之后，在那之前存的、正打到一半的对局仍然顶着一个含磨坊/粮仓的旧池子——
+ * 玩家看到的是一张"代码里已经不允许存在的卡"，而所有新开局的池子都是干净的。
+ * 症状就是这么来的：不是过滤没生效，是那份池子早就落盘了。
+ *
+ * 两条底线：
+ *   1. **只摘没被禁/选的**。已经进了某方手里的卡不能凭空消失，那会让阵容对不上。
+ *   2. **摘完还得凑得够签位**。剩的卡少于剩余签数就整个不动——宁可让这张卡
+ *      多待一会儿，也不能让对局卡在"没卡可选"上。
+ *
+ * 返回摘掉了几张（0 = 不用动）。
+ */
+export function pruneLegacyDraftPool(state: GameState): number {
+  const draft = state.draft;
+  // lobby 也处理：池子在 DRAFT_START 那一刻就定了，这时候摘是安全的，
+  // 而且读档进 lobby 正是"还没开始选"的常见状态
+  if (!draft || draft.phase === 'done') return 0;
+
+  const taken = new Set<string>([
+    ...draft.bans.A,
+    ...draft.bans.B,
+    ...draft.picks.A,
+    ...draft.picks.B,
+  ]);
+  const stale = draft.pool.filter((id) => {
+    if (taken.has(id)) return false;
+    const def = state.unitTypes[id];
+    return !!def && draftAlwaysAllowed(def);
+  });
+  if (stale.length === 0) return 0;
+
+  const picked = draft.picks.A.length + draft.picks.B.length;
+  const stepsLeft = Math.max(0, draft.order.length - picked);
+  const availableAfter = draft.pool.length - stale.length - taken.size;
+  // 摘了会凑不够签位：这次不动，让对局先能打完
+  if (availableAfter < stepsLeft) return 0;
+
+  const drop = new Set(stale);
+  draft.pool = draft.pool.filter((id) => !drop.has(id));
+  return stale.length;
 }
 
 /** 当前该谁选（禁用期返回 null：两边同时进行） */
@@ -1180,6 +1409,8 @@ export function draftPhaseLabel(state: GameState): string {
 export function draftSecondsLeft(state: GameState, now: number): number {
   const draft = state.draft;
   // lobby 不计时（要等人），结束/跳过也不计
-  if (!draft || draft.phase === 'done' || draft.phase === 'lobby') return 0;
+  // lobby 也处理：池子在 DRAFT_START 那一刻就定了，这时候摘是安全的，
+  // 而且读档进 lobby 正是"还没开始选"的常见状态
+  if (!draft || draft.phase === 'done') return 0;
   return Math.max(0, Math.ceil((draft.deadline - now) / 1000));
 }

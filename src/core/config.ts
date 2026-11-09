@@ -317,6 +317,26 @@ export const ERAS: EraDef[] = [
     cityArmor: 14,
     cityIncome: 62,
   },
+  {
+    level: 7,
+    name: '装甲时代',
+    short: '装甲',
+    hint: '平台、模块与供电',
+    upgradeCost: 1440,
+    cityMaxHp: 112,
+    cityArmor: 16,
+    cityIncome: 68,
+  },
+  {
+    level: 8,
+    name: '聚变时代',
+    short: '聚变',
+    hint: '超载、光环与重型平台',
+    upgradeCost: 1980,
+    cityMaxHp: 132,
+    cityArmor: 19,
+    cityIncome: 78,
+  },
 ];
 
 /**
@@ -1139,7 +1159,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge2: {
     id: 'bridge2',
@@ -1156,7 +1176,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge3: {
     id: 'bridge3',
@@ -1173,7 +1193,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   camp: {
     id: 'camp',

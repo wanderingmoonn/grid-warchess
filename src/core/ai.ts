@@ -23,6 +23,7 @@ import { isProducer, produceUsableCount } from './produce.ts';
 import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
 import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
+import { nextEraLevelOf } from './era-routes.ts';
 import type { ValueContext } from './unit-value.ts';
 import {
   armySize,
@@ -71,7 +72,10 @@ import {
   upgradeCostOf,
   utype,
   xyOf,
+  isAirborne,
+  strikeDistance,
 } from './rules.ts';
+import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
 import { orderDirectiveOf } from './rules.ts';
 import { GOLD, canPay, payRes, resOf } from './resources.ts';
@@ -2694,6 +2698,20 @@ function rawBuildScore(
   // 他站在空地上、没护甲加成、还刚把整回合花掉。
   const risky = inDanger(s, unit.owner, spot.x, spot.y);
 
+  /*
+   * 装甲基建（电站 / 装配坞）**必须在这里就分出去**。
+   *
+   * 它们不 autoAttack、不产兵、不产钱、不是桥，于是会掉进下面"工事/塔"那条线，
+   * 而那条线要求"离敌人 7 格内"——老家后院的电站永远拿不到分，直接 -999。
+   * 结果是：AI 一台素体都造不出来的死结（没电 → 素体全断电 → 采购被挡 →
+   * 更不会盖电站）。这一条是打这个死结的唯一位置：早于所有 -999。
+   */
+  if (ARMOR_SUPPORT_BUILDINGS.has(buildId)) {
+    const need = armorSupportNudge(s, unit.owner, buildId);
+    if (need <= 0) return need;
+    return 40 + need - (risky ? 30 : 0) - def.cost * 0.01;
+  }
+
   // 桥：跨得过去、对岸通向敌方城市才值得架
   if (def.bridges) {
     const gap = bridgeGap(s, spot.x, spot.y, land);
@@ -2928,6 +2946,139 @@ function rawBuildScore(
  * 过河阶段（河把两家隔开、桥还没铺通）时，能架桥的工程队要先去架桥——
  * 否则它会在家门口盖磨坊盖到天荒地老，而对岸一兵一卒都过不去。
  */
+/* ---------------------------------------------------------------------------
+ * 装甲（时代 7 / 8）：AI 至少要会三件事——盖电站、买素体、给素体装炮
+ *
+ * 在这之前 AI 对这套东西一无所知，后果是"装甲时代"的包里它一台素体都不造：
+ * 素体面板 atk 只有 12~34（那只是撞击），在采购评分里永远排在火枪兵后面。
+ * 而且"造了也没用"：没电站 → 模块全断电；没坞 → 一件都装不上。
+ * 三段一起补，缺一段这套内容在 AI 手里就是空的。
+ * ------------------------------------------------------------------------ */
+
+/** 装甲基建。它们既不产兵也不产钱，普通建造评分永远排不上 */
+const ARMOR_SUPPORT_BUILDINGS = new Set(['armor_coal', 'armor_fusion', 'armor_dock', 'armor_yard']);
+
+function armorSupportNudge(s: GameState, me: PlayerId, buildId: string): number {
+  if (!ARMOR_SUPPORT_BUILDINGS.has(buildId)) return 0;
+  const mine = unitsOf(s, me);
+  const frames = mine.filter((u) => utype(s, u.type).armorFrame);
+  // 一台素体都没有、也还没到第 7 代：别把钱砸在基建上
+  if (frames.length === 0 && eraNowOf(s) < 7) return 0;
+  const plants = mine.filter((u) => (utype(s, u.type).armorPower ?? 0) > 0).length;
+  const docks = mine.filter((u) => u.type === 'armor_dock' || u.type === 'armor_yard').length;
+  if (buildId === 'armor_coal' || buildId === 'armor_fusion') {
+    if (plants === 0) return 70;
+    return energyReport(s, me).headroom < 40 ? 40 : -25;
+  }
+  // 坞：先有一座；素体多起来再考虑第二座
+  if (docks === 0) return frames.length > 0 ? 65 : 35;
+  return docks < Math.max(1, Math.floor(frames.length / 3)) ? 10 : -25;
+}
+
+/**
+ * 一台素体"装完之后"值多少分。
+ *
+ * 用老尺子的形状（每回合伤害 × √耐久）去和坦克比：坦克是 `78 × √260`。
+ * 直接拿素体的 atk 去比是没意义的——那只是撞击，真正打的在武器里。
+ */
+function armorFrameScore(s: GameState, me: PlayerId, d: UnitTypeDef): number {
+  const gold = s.players[me].gold;
+  let best = 0;
+  for (const m of Object.values(MODULES)) {
+    if (!m.weapon) continue;
+    if (m.frames && !m.frames.includes(d.id)) continue;
+    if (m.excludeFrames?.includes(d.id)) continue;
+    // 买不起的武器不算：否则 AI 会按"装着轨道炮的塔"去估值，然后买回来一台空壳
+    if (m.cost > gold) continue;
+    const perTurn = (m.weapon.damage * (m.weapon.shots ?? 1)) / (1 + (m.weapon.reload ?? 0));
+    const power = perTurn * Math.sqrt(d.maxHp + (d.armor ?? 0) * 4);
+    if (power > best) best = power;
+  }
+  const tank = 78 * Math.sqrt(260);
+  return Math.min(34, (best / tank) * 46);
+}
+
+/** 最近的己方装配坞（含总厂） */
+function nearestOwnDock(s: GameState, me: PlayerId, from: { x: number; y: number }): Unit | null {
+  let best: Unit | null = null;
+  let bestD = Infinity;
+  for (const u of s.units) {
+    if (u.owner !== me || u.hp <= 0) continue;
+    if (u.type !== 'armor_dock' && u.type !== 'armor_yard') continue;
+    const d = Math.max(Math.abs(u.x - from.x), Math.abs(u.y - from.y));
+    if (d < bestD) {
+      bestD = d;
+      best = u;
+    }
+  }
+  return best;
+}
+
+/** 这台素体现在最该装哪一件（null = 先不装） */
+function bestModuleToMount(s: GameState, u: Unit): string | null {
+  const def = utype(s, u.type);
+  if (!def.armorFrame) return null;
+  const armed = weaponsOf(u).length > 0;
+  // 已经能打了：只有手头很宽裕才继续往上堆，别把回合都花在装配上
+  if (armed && s.players[u.owner].gold < 700) return null;
+  let best: { id: string; v: number } | null = null;
+  for (const m of Object.values(MODULES)) {
+    if (!canMount(s, u, m.id).ok) continue;
+    const v = moduleValueForArmor(m);
+    if (v <= 0) continue;
+    if (!best || v > best.v) best = { id: m.id, v };
+  }
+  return best ? best.id : null;
+}
+
+/** 一件模块大致值多少：只用来排序，不进任何公式 */
+function moduleValueForArmor(m: (typeof MODULES)[string]): number {
+  if (m.weapon) {
+    const perTurn = (m.weapon.damage * (m.weapon.shots ?? 1)) / (1 + (m.weapon.reload ?? 0));
+    return (
+      perTurn +
+      (m.weapon.pierce ? 12 : 0) +
+      (m.weapon.range >= 6 ? 8 : 0) +
+      (m.weapon.splash ? 6 : 0)
+    );
+  }
+  if (m.extraHp) return m.extraHp * 0.35 + (m.armor ?? 0) * 2;
+  if (m.armor) return m.armor * 3;
+  if (m.summon) return 16;
+  if (m.aura) return 14;
+  if (m.rangeBonus) return 12;
+  if (m.power) return 10;
+  if (m.charges) return 6 + m.charges * 2;
+  if (m.move || m.moveIdle) return 7;
+  if (m.steady) return 6;
+  return 0;
+}
+
+/**
+ * 这一发该用哪件武器：按"扣完甲之后每回合能打多少"挑。
+ *
+ * 不挑的话 `resolveArmorWeapon` 会退到"第一件能开火的"，于是装了防空炮
+ * 又装加农的装甲会拿防空炮去打地面目标——动作被规则层拒掉，
+ * 而 AI 的调度器遇到非法动作会中断整回合。
+ */
+function bestWeaponFor(s: GameState, u: Unit, target: Unit): string | null {
+  const off = offlineModules(s, u);
+  const air = isAirborne(s, target);
+  const armor = utype(s, target.type).armor;
+  const dist = strikeDistance(s, u, target);
+  let best: { id: string; v: number } | null = null;
+  for (const x of weaponsOf(u)) {
+    if (off.has(x.id)) continue;
+    const t = x.w.targets ?? 'both';
+    if (t !== 'both' && (t === 'air') !== air) continue;
+    if (dist > x.w.range) continue;
+    const eff = x.w.pierce ? Math.floor(armor / 2) : armor;
+    const per = Math.max(0, x.w.damage - eff) * (x.w.shots ?? 1);
+    if (!best || per > best.v) best = { id: x.id, v: per };
+  }
+  return best ? best.id : null;
+}
+
 function scoreBuild(
   s: GameState,
   unit: Unit,
@@ -2937,6 +3088,7 @@ function scoreBuild(
 ): number {
   const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood, all.sea, all.era);
   if (raw <= -900) return raw;
+
 
   const canBridge = (utype(s, unit.type).builds ?? []).includes('bridge');
 
@@ -2970,8 +3122,12 @@ function unitCandidates(
   // 而执行方遇到非法动作就中断整回合，整局直接卡死。
   if (!unit.acted && !underConstruction(unit)) {
     for (const t of attackableTargets(s, unit)) {
+      // 装甲要指定武器：不指定就退到"第一件能开火的"，装了防空炮又装加农的
+      // 装甲会拿防空炮去打地面目标 → 被规则层拒 → 调度器中断整回合。
+      const wpn = def.armorFrame ? bestWeaponFor(s, unit, t) : null;
+      if (def.armorFrame && !wpn) continue; // 没有一件打得动这个目标
       out.push({
-        action: { type: 'ATTACK', unitId: unit.id, targetId: t.id },
+        action: { type: 'ATTACK', unitId: unit.id, targetId: t.id, ...(wpn ? { weapon: wpn } : {}) },
         score: scoreAttack(s, unit, t, all),
       });
     }
@@ -2980,6 +3136,21 @@ function unitCandidates(
         action: { type: 'SIEGE', unitId: unit.id, cityId: c.id },
         score: scoreSiege(s, unit, c, all.focusCityId, all.mood),
       });
+    }
+    /*
+     * 装甲装配：贴着坞、有空槽、有钱有电，就装最值的那一件。
+     *
+     * 评分故意压得比"开火"低一点，但**空壳素体**（一件武器都没有）例外：
+     * 它现在只会撞击，装炮就是它这一回合唯一有意义的动作。
+     */
+    if (def.armorFrame) {
+      const mod = bestModuleToMount(s, unit);
+      if (mod) {
+        out.push({
+          action: { type: 'MOUNT', unitId: unit.id, moduleId: mod },
+          score: weaponsOf(unit).length === 0 ? 150 : 62,
+        });
+      }
     }
     if (def.builds && def.builds.length > 0) {
       for (const buildId of def.builds) {
@@ -3009,7 +3180,25 @@ function unitCandidates(
       // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
       const destCity = cityAt(s, x, y);
       if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
-      const score = scoreMove(s, unit, x, y, all, traits);
+      let score = scoreMove(s, unit, x, y, all, traits);
+      /*
+       * 空壳素体走向装配坞。
+       *
+       * 装配要求"贴着坞"，而 AI 的走位评分只知道"往前线压、别贴着敌人"，
+       * 没有任何一条会把它往自家坞带。结果是：素体造出来了、模块买得起、
+       * 坞就在后方——三件事齐了，就是永远装不上，一台平台到死只会撞击。
+       */
+      if (def.armorFrame && weaponsOf(unit).length === 0) {
+        const dock = nearestOwnDock(s, me, unit);
+        if (dock) {
+          const before = Math.max(Math.abs(unit.x - dock.x), Math.abs(unit.y - dock.y));
+          const after = Math.max(Math.abs(x - dock.x), Math.abs(y - dock.y));
+          // 每靠近一格给 120：退回去通常要吃走位评分的大额扣分（-200 上下），
+          // 定额加成压不住，按步数给才追得平。
+          if (after < before) score += (before - after) * 120;
+          if (after <= 1) score += 80;
+        }
+      }
       if (!best || score > best.score) {
         best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
       }
@@ -3685,7 +3874,12 @@ function reviveIntent(
     if (!city || city.owner !== me || city.ruined) return null;
     const cost = upgradeCostOf(s, city);
     if (cost === null || ctx.gold >= cost) return null;
-    return { cost, cityId: city.id, note: `升到第 ${city.era + 1} 代（接着攒）` };
+    const nextLevel = nextEraLevelOf(s, city);
+    return {
+      cost,
+      cityId: city.id,
+      note: nextLevel === null ? '继续攒钱' : `升到第 ${nextLevel} 代（接着攒）`,
+    };
   }
   if (it.goal === 'rebuild') {
     const ruin = it.cityId ? cityById(s, it.cityId) : null;
@@ -3923,13 +4117,19 @@ function buildPlan(
      *   · 视野内造不了几个兵（名额 + 钱谁先卡住算谁），最多按 5 个算。
      * 不打这两个折扣，升时代会永远碾压一切，AI 就又回到"整局只顾升城"。
      */
-    if (eraCity && eraTarget !== null && reach(eraTarget, SAVE_HORIZON)) {
+    /*
+     * 下一级是哪一代，问路线，不写 `era + 1`：路线可以跳级，也可以指向别的分支。
+     * 拿不到下一级（科技线到头/这一局封顶）时，这段评估整段跳过——
+     * 原来用 `era + 1` 会去数一张永远造不出来的兵表，凭空给出一个"换代很值"的结论。
+     */
+    const nextLevel = eraCity ? nextEraLevelOf(s, eraCity) : null;
+    if (eraCity && eraTarget !== null && nextLevel !== null && reach(eraTarget, SAVE_HORIZON)) {
       const nextPool = Object.values(s.unitTypes).filter(
         (d) =>
           d.category === 'combat' &&
           !d.summonedOnly &&
           canUseType(s, me, d.id) &&
-          d.era === eraCity.era + 1,
+          d.era === nextLevel,
       );
       const curPower = makeablePool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
       const nextPower = nextPool.reduce((m, d) => Math.max(m, combatPower(d)), 0);
@@ -3948,7 +4148,7 @@ function buildPlan(
           cost: eraTarget,
           score: gain / Math.max(20, eraTarget) ** 0.8,
           note:
-            `升到第 ${eraCity.era + 1} 代：每个名额 +${Math.round(delta)} 战力` +
+            `升到第 ${nextLevel} 代：每个名额 +${Math.round(delta)} 战力` +
             ` ×${futureUnits} 个名额${foeEra > maxEra ? '（对面已领先）' : ''}`,
         });
       }
@@ -4546,9 +4746,35 @@ function recruitCandidate(
       }
     }
 
+    /*
+     * 装甲素体：没电就是一堆废铁。
+     *
+     * 素体本身永不停机，但**模块全断电**——一台装不了任何东西的素体
+     * 只剩撞击，花 420~820 金买回来是纯亏。所以采购这一关先查余量：
+     * 连它自己的基础耗能都供不上，就别买了。
+     */
+    if (d.armorFrame) {
+      if (energyReport(s, me).headroom < (d.draw ?? 0)) {
+        deny('没电', d.id);
+        continue;
+      }
+      // 没有坞 = 没有任何办法把它装上炮：一台 420~820 金的平台只剩撞击，
+      // 比同等造价的步兵差一档。所以坞先到、素体后买。
+      const docked = s.units.some(
+        (u) =>
+          u.owner === me && u.hp > 0 && (u.type === 'armor_dock' || u.type === 'armor_yard'),
+      );
+      if (!docked) {
+        deny('没坞可装', d.id);
+        continue;
+      }
+    }
+
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
+      // 素体的 atk 只是撞击：真正的输出在要装上去的武器里，按"装完之后"估值
+      if (d.armorFrame) score += armorFrameScore(s, me, d);
       if (aiLevelOf(s)!=='basic') {
         score += Math.min(
           26,
@@ -4730,6 +4956,16 @@ function recruitCandidate(
     }
     if (d.category === 'builder') {
       score += builders < 1 ? 24 : builders < 2 ? 4 : -12;
+      /*
+       * 装甲基建只有「工程机组」盖得了（它的 `builds` 里才有电站/坞）。
+       * 不单独给这一条，AI 会一直用前六代那个工兵：它的 builds 里没有这些东西，
+       * 于是"想盖电站"这件事**连候选都不会出现**——采购、建造两边都看着正常，
+       * 就是电站永远不出现。
+       */
+      if ((d.builds ?? []).some((b) => ARMOR_SUPPORT_BUILDINGS.has(b))) {
+        const hasArmorBuilder = myUnits.some((u) => u.type === d.id);
+        if (eraNowOf(s) >= 7 && !hasArmorBuilder) score += 45;
+      }
       // 弃城期要靠工事把留守的那座城撑住，工程队值钱
       score += 8 * w.boom;
       if (plan.urgent) score -= 22;

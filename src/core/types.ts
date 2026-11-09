@@ -514,6 +514,19 @@ export interface UnitTypeDef {
    * 所以"换个更强的工兵"在棋盘上是有回报的，而不是只换个图标。
    */
   buildPower?: number;
+  /* ── 「装甲时代」的素体字段（全可选，见 core/armor.ts） ─────────────── */
+  /** 这是一台装甲素体（模块只能装在它身上） */
+  armorFrame?: boolean;
+  /** 插槽容量，按类型计数；没写的类型 = 0 个 */
+  slots?: { main?: number; sub?: number; plate?: number; system?: number; device?: number };
+  /** 素体自身的基础耗能（不含模块） */
+  draw?: number;
+  /** 底盘：只影响装配白名单与显示；`hover` 的素体另外带 layer:'air' */
+  chassis?: 'tracked' | 'walker' | 'hover' | 'quad';
+  /** 素体的「撞击」：一件武器都没装时的唯一攻击手段 */
+  ramAtk?: number;
+  /** 供电：这座建筑给己方装甲提供多少点额度（派生指标，不存库存） */
+  armorPower?: number;
   /**
    * 占地边长（格）。缺省 1 = 一格。
    *
@@ -762,6 +775,42 @@ export interface Unit {
    * 所以标记必须落在实例上。
    */
   summoned?: boolean;
+  /* ── 「装甲时代」的单位字段（全可选，见 core/armor.ts） ───────────────── */
+  /** 已装模块 id，**按装配顺序**（断电时后装的先停，武器也按这个顺序显示） */
+  modules?: string[];
+  /** 设备剩余充能：key = 模块 id */
+  charges?: Record<string, number>;
+  /**
+   * 每件武器各自的账：key = 模块 id。
+   *
+   * 为什么不是"一个每回合清空的数组"：`shots` 一回合能打几次、`reload` 要冷却
+   * 几回合，两件事必须分开记，否则"两回合 1 发"的重炮会在换回合时被当成满了。
+   */
+  weaponUse?: Record<string, { turn: number; shots: number; readyTurn?: number }>;
+  /**
+   * 额外生命：模块给的一层"先掉的血"。
+   *
+   * 它**不是血量上限**：上限永远是模块的额度（`extraHpCap`），这个字段是当前值，
+   * 卸下模块要跟着截断。设计上不做任何回血，只有「整备」能补。
+   */
+  extraHp?: number;
+  /**
+   * 别人给的、不属于任何模块的额外生命额度（整备臂「+40」这类）。
+   *
+   * 为什么单开一个数，而不是往 `modules` 里塞一个假模块：
+   * `extraHpCap` 是按**自己装的模块**算上限的，别人的模块不该记在我头上
+   * （否则我卸不掉它、面板还会显示一件我没装的装备）。
+   *
+   * 它是**一次性授予**：给了就涨上限、涨当前值，打光不会自己回来。
+   */
+  extraHpBonus?: number;
+  /**
+   * 「超载协议」的停机回合：等于当前回合号时，这台装甲**整台停机**（所有模块离线）。
+   *
+   * 存在实例上而不是按"装了超载就一定停"现算：停机是**周期性**的，
+   * 要记走到第几个自己的回合了；纯函数算不出来（没有起点）。
+   */
+  overheatTurn?: number;
   /** 本回合移动力已耗尽 */
   moved: boolean;
   /** 本回合已攻击 */
@@ -1189,7 +1238,35 @@ export interface MatchConfig {
    */
   secondGoldBonus?: number;
   /**
-   * 先手（A）第一回合不结算收入，默认 false。
+   * 这一局用哪条时代演进路线（见 `core/era-routes.ts`）。
+   *
+   * 缺省 `'linear'`：就是"每级 +1"的老科技线，所有老存档读回来都是它。
+   * 换线只改"从现在起往哪升"，不会改写已经升过的城——城市的 `era` 是既成事实。
+   */
+  eraRoute?: string;
+  /**
+   * 玩家**选的**先手档位：'A'（按席位）/ 'B'（两人局才有）/ 'random'。
+   *
+   * 这只是面板的记忆，规则不读它——真正生效的是 `firstSeat`。
+   * 分两个字段是因为"随机"抽完之后必须落成具体席位（复盘要能逐帧还原），
+   * 而落定的席位又反过来会被面板误当成"上次手动选的那一方"：
+   * 四家局抽到 B 和两人局手选 B 是两件事，只用一个字段就分不开。
+   */
+  firstSide?: 'A' | 'B' | 'random';
+  /**
+   * 这一局**实际**谁先动（抽完之后的结果）。缺省 'A'。
+   *
+   * 它同时决定三件事，别只改其中一件：
+   *   · 谁先行动（`state.current`）；
+   *   · 选卡 BP 谁先禁/先选（`createDraft` 按先手方轮转席位）；
+   *   · 先后手补偿发给**除先手之外**的人（原来写死"发给 B"）。
+   *
+   * 两人局可以手动选 A/B；三四人局只能选"随机"——多人局的席位顺序还牵着
+   * 出生点和城的排布，让玩家任选先手等于让一张图的公平性取决于一个下拉框。
+   */
+  firstSeat?: PlayerId;
+  /**
+   * 先手第一回合不结算收入，默认 false。
    *
    * 现在的规则是"开局先手先领一次收入再行动"，等于先手白拿一回合的钱
    * （青铜约 91 金，够买三个民兵）。把它关掉是一种结构性的先后手配平：
@@ -1653,7 +1730,15 @@ export interface FallenRecord {
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */
 export type Action =
   | { type: 'MOVE'; unitId: string; x: number; y: number }
-  | { type: 'ATTACK'; unitId: string; targetId: string; x?: number; y?: number }
+  | {
+      type: 'ATTACK';
+      unitId: string;
+      targetId: string;
+      x?: number;
+      y?: number;
+      /** 装甲：用哪件武器开火（不填就自动挑第一件能打的，再退到撞击） */
+      weapon?: string;
+    }
   | { type: 'SIEGE'; unitId: string; cityId: string; x?: number; y?: number }
   /**
    * 产兵。source 是城市（cityId）或军营（unitId），两者选其一。
@@ -1676,6 +1761,24 @@ export type Action =
     }
   /** 由建造单位在野外盖建筑：谁盖、盖什么、盖在哪 */
   | { type: 'BUILD'; unitId: string; unitType: string; x: number; y: number }
+  /** 装甲装配：走到装配坞旁边，花一回合把模块装上（见 core/armor.ts） */
+  | { type: 'MOUNT'; unitId: string; moduleId: string }
+  /** 装甲拆卸：不花回合，退一半金币 */
+  | { type: 'UNMOUNT'; unitId: string; moduleId: string }
+  /**
+   * 用一件设备（装备在 `device` 槽里的主动道具）。
+   *
+   * 目标语义按模块自己声明：要选点的传 `x`/`y`（弹射钩索的落点）或
+   * `targetId`（整备臂的友军），自动型的两个都不传。
+   * 用设备会吃掉本回合的"非移动动作"（`acted`），所以和开火互斥。
+   */
+  | { type: 'USE_DEVICE'; unitId: string; deviceId: string; x?: number; y?: number; targetId?: string }
+  /** 装甲整备：贴着装配坞补充能与额外生命，按缺口付金，占掉这座坞本回合的名额 */
+  | { type: 'RECHARGE'; unitId: string }
+  /** 航母：把甲板上第一架飞机放飞出去 */
+  | { type: 'LAUNCH'; unitId: string }
+  /** 航母：把贴身的这架飞机收进甲板（玩家手动，不再自动回收） */
+  | { type: 'RECOVER'; unitId: string; planeId: string }
   /** 上船：相邻的陆军走进渡船的货舱 */
   | { type: 'LOAD'; unitId: string; cargoId: string }
   /** 下船：把货舱里的单位放到相邻的空地上 */

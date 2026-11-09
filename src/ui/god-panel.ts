@@ -18,6 +18,7 @@
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
 import { buildListOf } from '../core/build-list.ts';
+import { unitStatLine } from '../core/info.ts';
 
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
@@ -388,7 +389,7 @@ export function godShelfHtml(ui: GodUi): string {
         const buildTip = builds.names.length > 0
           ? ` · 可建 ${escapeHtml(builds.names.join('、'))}`
           : '';
-        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${u.maxHp} 血 · 攻 ${u.atk}${u.armor ? ` · 甲 ${u.armor}` : ''}${buildTip}">
+        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${unitStatLine(u)}${buildTip}">
           ${u.short} ${u.name}
         </button>`;
       })

@@ -18,6 +18,7 @@ import { ERAS, UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
 import { buildListOf } from '../core/build-list.ts';
+import { unitStatLine } from '../core/info.ts';
 import {
   EXPANSIONS,
   availableExpansions,
@@ -26,6 +27,7 @@ import {
   lockedEraPacks,
 } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor, twoCityMinSize } from '../core/mapgen.ts';
+import { draftAlwaysAllowed } from '../core/draft.ts';
 import {
   MAP_MAX_BYTES,
   MAP_MAX_SIZE,
@@ -111,6 +113,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       playerCount: initial.playerCount ?? 2,
       // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）
       twoCities: initial.twoCities === true,
+      // 时代路线跟着上一局走（面板暂时不提供选择器，留给扩展/调试指定）
+      ...(initial.eraRoute ? { eraRoute: initial.eraRoute } : {}),
+      // 先手方跟着上一局走：想连打几局都是自己后手，只选一次就够
+      firstSide: initial.firstSide === 'B' || initial.firstSide === 'random' ? initial.firstSide : 'A',
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
@@ -535,11 +541,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 exists: (id) => !!catalog[id],
               });
               const buildTip = builds.names.length > 0 ? ` · 可建 ${builds.names.join('、')}` : '';
-              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}${buildTip}`;
+              /*
+               * 选卡模式下，经济/建造单位、生产性建筑、桥、经济建筑**不进卡池**：
+               * 它们开局自带（`draftAlwaysAllowed`）。这张表是"这一局能造什么"，
+               * 所以它们照样列——但不标出来的话，玩家会以为"磨坊怎么还在卡池里"。
+               * 2026-11-08 就是因为这个来问的（那份其实是老存档里落过盘的旧池子）。
+               */
+              const auto = config.draftMode && draftAlwaysAllowed(u);
+              const autoTip = auto ? ' · 选卡模式下开局自带，不进卡池' : '';
+              // 悬停里也给完整数值行（含视野）：这里是玩家决定"带不带它"的地方，
+              // 只有一个造价和名字的话，几个同类兵之间根本没法比
+              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost} · ${unitStatLine(u)}${buildTip}${autoTip}`;
               return `<button class="chip ${isUnitOn(u.id) ? 'active' : ''} ${
                 from ? 'is-extra' : ''
               }" data-unit="${u.id}" title="${esc(title)}">
-                 ${u.short} ${u.name}
+                 ${u.short} ${u.name}${auto ? '<span class="chip-auto">自带</span>' : ''}
                </button>`;
             })
             .join('');
@@ -628,6 +644,38 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${aiLevelChips}`
               }
             </section>
+
+            ${
+              config.godMode
+                ? ''
+                : playerCount === 2
+                  ? `<section class="field">
+              <div class="field-label">先手 <span class="field-hint">${
+                config.aiOpponent || config.aiAlly
+                  ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
+                  : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
+              }</span></div>
+              <div class="chip-row">
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">红方先手</button>
+                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}" data-first="B">蓝方先手</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+              </div>
+              ${config.firstSide === 'random' ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>' : ''}
+            </section>`
+                  : `<section class="field">
+              <div class="field-label">先手 <span class="field-hint">谁先行动、谁先禁/先选卡</span></div>
+              <div class="chip-row">
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">按席位顺序</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+              </div>
+              ${
+                config.firstSide === 'random'
+                  ? '<div class="field-hint">在参赛的席位上抽（三家就在 A/B/C 里抽），抽到谁谁先动；抽完存成具体席位，复盘不会变。</div>'
+                  : ''
+              }
+              <div class="field-hint">多人局的城位与出生点按席位固定，不跟着这个走——这里只决定谁先动。</div>
+            </section>`
+            }
 
             <section class="field">
               <div class="field-label">
@@ -1012,6 +1060,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           const need = twoCityMinSize(2, config.playerCount === 4 ? 4 : 3);
           if (config.size < need) config.size = need;
         }
+        paint();
+        return;
+      }
+
+      const firstBtn = target.closest<HTMLElement>('[data-first]');
+      if (firstBtn?.dataset.first) {
+        const v = firstBtn.dataset.first;
+        config.firstSide = v === 'B' ? 'B' : v === 'random' ? 'random' : 'A';
         paint();
         return;
       }

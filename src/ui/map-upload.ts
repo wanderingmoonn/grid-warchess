@@ -18,6 +18,7 @@
 
 import { mapToText, registerUserMaps, type FixedMap } from '../core/fixed-maps.ts';
 import { stateToFixedMap } from '../core/map-export.ts';
+import { mapFromFileText, sourceLabel } from '../core/map-source.ts';
 import type { GameState } from '../core/types.ts';
 import { uploadSharedMap } from '../net/maps.ts';
 
@@ -37,6 +38,8 @@ export function openMapUpload(opts: MapUploadOptions): void {
   mask.className = 'modal-mask';
 
   let name = `我的战场 ${new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`;
+  /** 用户动过名字输入框之后，就不再让文件名覆盖它 */
+  let nameTouched = false;
   let author = '';
   try {
     author = localStorage.getItem(AUTHOR_KEY) ?? '';
@@ -47,6 +50,11 @@ export function openMapUpload(opts: MapUploadOptions): void {
   let phase: '' | 'busy' | 'done' = '';
   let note = '';
   let bad = false;
+  /**
+   * 从文件读进来的地图。非空时**不看沙盒**——作者选了文件就是"传这份"，
+   * 再拿沙盒覆盖回去会让人以为文件白读了。
+   */
+  let imported: { map: FixedMap; source: 'save' | 'map'; note: string } | null = null;
 
   const close = (): void => {
     mask.remove();
@@ -59,7 +67,62 @@ export function openMapUpload(opts: MapUploadOptions): void {
    * 看着像浪费，其实是故意的：名字、地形、城位三者里任何一个变了，结果就会变，
    * 而这条链路是纯函数、几十微秒的事。缓存反而要处理"什么时候失效"。
    */
-  const build = () => stateToFixedMap(state, name.trim() || '未命名');
+  const build = () => {
+    if (!imported) return stateToFixedMap(state, name.trim() || '未命名');
+    // 文件已经过校验，这里只跟随输入框改名
+    return {
+      ok: true as const,
+      map: { ...imported.map, name: name.trim() || imported.map.name || '未命名' },
+      errors: [] as string[],
+      note: imported.note,
+    };
+  };
+
+  /** 读文件：存档 / 地图 JSON / 地图文本，判据全在 core/map-source.ts */
+  const loadFile = async (file: File): Promise<void> => {
+    let text = '';
+    try {
+      text = await file.text();
+    } catch {
+      note = '这个文件读不出来（不是文本，或者被占用）';
+      bad = true;
+      paint();
+      return;
+    }
+    const res = mapFromFileText(text, name.trim());
+    if (!res.ok || !res.map) {
+      imported = null;
+      note = `没读成${sourceLabel(res.source)}：${res.errors.slice(0, 2).join('；')}`;
+      bad = true;
+      paint();
+      return;
+    }
+    imported = {
+      map: res.map,
+      source: res.source === 'save' ? 'save' : 'map',
+      note: res.note,
+    };
+    // 名字没被手动改过就用文件名（比"我的战场 11/8"有意义得多）
+    if (!nameTouched) name = res.map.name;
+    note = `已读入${sourceLabel(res.source)}「${file.name}」：${res.map.w}×${res.map.h}，`
+      + `红方 ${res.map.citiesA.length} 城 / 蓝方 ${res.map.citiesB.length} 城`
+      + (res.note ? `。${res.note}` : '');
+    bad = false;
+    phase = '';
+    paint();
+  };
+
+  /** 选文件的入口（一个隐藏 input，点按钮触发） */
+  const pickFile = (): void => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,.txt,application/json,text/plain';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) void loadFile(file);
+    });
+    input.click();
+  };
 
   const statLine = (map: FixedMap): string => {
     const count: Record<string, number> = {};
@@ -95,6 +158,7 @@ export function openMapUpload(opts: MapUploadOptions): void {
           </label>
         </div>
         <div class="modal-foot">
+          <button class="btn btn-sm" data-act="file" title="手上的地图是存档/导出的文本？直接选文件">从文件读…</button>
           <button class="btn" data-act="close">关闭</button>
         </div>`;
     }
@@ -119,6 +183,7 @@ export function openMapUpload(opts: MapUploadOptions): void {
         ${note ? `<div class="${bad ? 'map-err' : 'map-ok'}">${esc(note)}</div>` : ''}
       </div>
       <div class="modal-foot">
+        <button class="btn btn-sm" data-act="file" title="换成另一份存档/地图文件">从文件读…</button>
         <button class="btn btn-sm" data-act="copy" title="复制成纯文本，粘到记事本里就能存下来">复制文本</button>
         <button class="btn btn-primary" data-act="upload" ${phase === 'busy' ? 'disabled' : ''}>
           ${phase === 'busy' ? '正在上传…' : phase === 'done' ? '再传一次' : '上传（待审核）'}
@@ -134,6 +199,8 @@ export function openMapUpload(opts: MapUploadOptions): void {
           <h2>上传这张地图</h2>
           <p>把现在沙盒里的地形和城位交到云端地图库。地形原样带上去，一格都不改。</p>
           <p>地图里<b>没有兵</b>：兵种是开局后自己造的，能不能造某个兵只取决于那一局开了哪些扩展，和这张图无关。</p>
+          <p>现在默认传<b>沙盒里的这一张</b>；如果图存在文件里（对局存档 <code>.txt/.json</code>、
+          或者之前「复制文本」存下来的地图），按下面的<b>「从文件读…」</b>，地形和城位会原样读进来。</p>
         </div>
         ${body()}
       </div>`;
@@ -145,7 +212,7 @@ export function openMapUpload(opts: MapUploadOptions): void {
 
   mask.addEventListener('input', (e) => {
     const el = e.target as HTMLInputElement;
-    if (el.dataset.field === 'name') name = el.value;
+    if (el.dataset.field === 'name') { name = el.value; nameTouched = true; }
     if (el.dataset.field === 'author') author = el.value;
   });
 
@@ -160,6 +227,11 @@ export function openMapUpload(opts: MapUploadOptions): void {
 
     if (act === 'close') {
       close();
+      return;
+    }
+
+    if (act === 'file') {
+      pickFile();
       return;
     }
 

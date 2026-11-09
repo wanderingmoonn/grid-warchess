@@ -8,6 +8,7 @@ import type {
 } from './ability-hooks.ts';
 import { distBetweenUnits } from './query.ts';
 import { aurasOf, hooksFor } from './ability-registry.ts';
+import { activeExpansions } from './expansions.ts';
 
 /** 本局兵种表。和 rules.ts 的 utype 同一口径，这里不抛新错。 */
 function defOf(s: GameState, u: Unit): UnitTypeDef {
@@ -29,6 +30,18 @@ export function aurasOfUnit(s: GameState, u: Unit): AuraSpec[] {
   for (const h of hooksFor(def, u.extraAbilities)) {
     if (!h.auraDynamic) continue;
     const extra = h.auraDynamic({ state: s, self: u });
+    if (!extra) continue;
+    if (Array.isArray(extra)) out.push(...extra);
+    else out.push(extra);
+  }
+  /*
+   * 扩展带来的光环（模块、车坞这类"不是兵种能力"的来源）。
+   *
+   * 合并进同一处，是为了让面板、AI 威胁圈、实际伤害拿到的永远是同一份——
+   * 分开算就会出现"面板写着 +6 攻、打出来是 +0"。
+   */
+  for (const e of activeExpansions(s)) {
+    const extra = e.hooks.extraAura?.({ state: s, unit: u });
     if (!extra) continue;
     if (Array.isArray(extra)) out.push(...extra);
     else out.push(extra);

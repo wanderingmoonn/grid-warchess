@@ -156,9 +156,18 @@ import {
   heartbeat,
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
+import { MODULES, deviceTargetOf } from './core/armor.ts';
 
 /** 非空时表示某个英雄正在等玩家选技能方向 */
 let pendingSkill: { unitId: string; skillId: string } | null = null;
+
+/**
+ * 非空时表示某台装甲正在等玩家给设备选落点（弹射钩索）。
+ *
+ * 和 `pendingSkill` 是同一个套路，但不合并：技能有冷却/连发这一整套要处理，
+ * 设备只有"选一格"。合成一个字段之后，"取消"该退回哪一层就说不清了。
+ */
+let pendingDevice: { unitId: string; deviceId: string } | null = null;
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -2849,6 +2858,23 @@ function onBoardClick(e: Event): void {
     return; // 阻断后续的逻辑
   }
 
+  // 0.15) 正在等待设备选点（弹射钩索）
+  if (pendingDevice && coords) {
+    const { unitId, deviceId } = pendingDevice;
+    pendingDevice = null;
+    const self = state.units.find((x) => x.id === unitId);
+    // 点回自己脚下 = 放弃：钩索"落点等于原地"本来就是非法目标，
+    // 与其让规则层回一句"已经在那一格了"，不如当取消。
+    if (self && coords.x === self.x && coords.y === self.y) {
+      toast('已取消');
+    } else {
+      dispatch({ type: 'USE_DEVICE', unitId, deviceId, x: coords.x, y: coords.y });
+    }
+    refreshSelection();
+    render();
+    return;
+  }
+
   // AI 正在行动：不许下子，但"看"必须留着。
   //
   // 对手思考、走子、开火，这一段能持续十几秒；以前整块 return，
@@ -3374,6 +3400,70 @@ function handleAction(act: string, el: HTMLElement): void {
       // 认输是不可逆的，必须问一句
       if (!window.confirm('确认认输？这一局会直接判负，且不能撤回。')) return;
       dispatch({ type: 'SURRENDER' });
+      return;
+    }
+
+    case 'launch': {
+      if (!selectedId) return;
+      dispatch({ type: 'LAUNCH', unitId: selectedId });
+      refreshSelection();
+      return;
+    }
+
+    case 'recover': {
+      const planeId = el.dataset.plane;
+      if (!selectedId || !planeId) return;
+      dispatch({ type: 'RECOVER', unitId: selectedId, planeId });
+      refreshSelection();
+      return;
+    }
+
+    case 'mount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'MOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'unmount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'UNMOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    // 用设备。要选落点的那一种（弹射钩索）先进入"等玩家点地图"的状态，
+    // 其余的直接结算：整备臂的目标是"相邻友军"，按钮本身就是按友军各出一个，
+    // 所以 `data-target` 已经带上了目标 id。
+    case 'use-device': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      const target = el.dataset.target;
+      if (target) {
+        dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod, targetId: target });
+        refreshSelection();
+        return;
+      }
+      const u = state.units.find((x) => x.id === selectedId);
+      const kind = u ? MODULES[mod]?.device : undefined;
+      if (kind && deviceTargetOf(kind) === 'tile') {
+        pendingDevice = { unitId: selectedId, deviceId: mod };
+        toast('在地图上点一个 3 格内的空地作为落点');
+        refreshSelection();
+        render();
+        return;
+      }
+      dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'recharge': {
+      if (!selectedId) return;
+      dispatch({ type: 'RECHARGE', unitId: selectedId });
+      refreshSelection();
       return;
     }
 

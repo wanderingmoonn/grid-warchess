@@ -57,11 +57,28 @@ import {
   eraDef,
   isPseudoUnit,
   navigable,
-  nextUpgradeCost,
   passable,
 } from './config.ts';
 import { LAST_STAND_BONUS, activeExpansions, eraCeilingOf, lockedEraPacks } from './expansions.ts';
+import { upgradeTargetOf } from './era-routes.ts';
+import {
+  doMount,
+  doUnmount,
+  doRecharge,
+  doUseDevice,
+  armorRangeBonus,
+  energyReport,
+  hasGyro,
+  hasHoverModule,
+  offlineModules,
+  weaponsOf,
+  noteWeaponFired,
+  resolveArmorWeapon,
+  shotsLeftThisTurn,
+  type WeaponProfile,
+} from './armor.ts';
 import { canHold, holdOf, holdRoom } from './carry.ts';
+import { airwingOps, deckOf } from './naval-carrier.ts';
 import {
   noteHeatAt, 
   noteHeatCell, 
@@ -113,6 +130,7 @@ import type {
   Terrain,
   Tile,
   Unit,
+  UnitLayer,
   UnitTypeDef,
 } from './types.ts';
 import { seatsOf } from './types.ts';
@@ -375,7 +393,20 @@ function hurtUnit(
   const victim = taker ?? target;
   const redirected = victim.id !== target.id;
 
-  victim.hp -= dmg;
+  /*
+   * 「装甲时代」的额外生命：先掉这一层，再掉血。
+   *
+   * 只在挨打的是装甲素体（有 `extraHp`）时生效——普通兵没有这个字段，
+   * 这一整段对它们是零成本的。额度由模块给（`extraHpCap`），卸下模块会截断，
+   * 所以这里不需要再判上限：`extraHp` 本身就不该超过额度。
+   */
+  let toHp = dmg;
+  if (victim.extraHp && victim.extraHp > 0) {
+    const absorb = Math.min(victim.extraHp, toHp);
+    victim.extraHp -= absorb;
+    toHp -= absorb;
+  }
+  victim.hp -= toHp;
 
   /*
    * 转移的战报必须写，而且默认公开。
@@ -883,6 +914,9 @@ export function airLayer(def: UnitTypeDef): boolean {
 /** 空中层：能飞，并且可以和地面单位同格 */
 export function isAirborne(s: GameState, u: Unit): boolean {
   if (u.layer) return u.layer === 'air';
+  // 「反重力悬浮」把地面素体改成空中：模块在就现算，断电/拆下自动落地。
+  // 这条必须在 `airLayer(utype)` 之前——否则地面素体永远进不了空中层。
+  if (u.modules && u.modules.length > 0 && hasHoverModule(s, u)) return true;
   return airLayer(utype(s, u.type));
 }
 
@@ -2041,15 +2075,27 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
  * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
  * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
-export function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId }): boolean {
+export function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId; modules?: string[]; layer?: UnitLayer }): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return true;
 
   const def = utype(s, unit.type);
-  // 地形这一关只有一处判据：`terrainWalkable`。以前这里分了两支——水军看
-  // navigable()、其余一律 `passable()`——于是飞行兵在"下船落点"这类地方
-  // 会被当成陆军，明明站得住的水面反而进不去。现在两支合并成一句按兵种问。
-  if (!terrainWalkable(def, tile.terrain)) return true;
+  /*
+   * 「反重力悬浮」：地面素体装上之后走的是空中那一套。
+   *
+   * 为什么要在这一层单独判：`terrainWalkable` 只看**兵种**，而悬浮是**模块**，
+   * 不在这里补一刀，装了悬浮的砧照样过不了河——面板写着"空中单位"，
+   * 实际一步都走不动。
+   * 高山仍然进不去：连飞行兵都进不去（`terrainWalkable` 的既有口径），
+   * 悬浮没有理由比飞行更自由。
+   */
+  const hover =
+    !unit.layer && !!unit.modules?.length && hasHoverModule(s, unit as Unit);
+  if (hover) {
+    if (tile.terrain === 'mountain') return true;
+  } else if (!terrainWalkable(def, tile.terrain)) {
+    return true;
+  }
   if (def.domain === 'water') {
     // 吃水：占地 2×2 的大舰进不了浅流，会搁浅。
     // 这是「浅水 vs 深水」这一对地形真正的分工——否则浅流对舰队只是"另一片水"。
@@ -2095,6 +2141,33 @@ export function isHiddenFrom(s: GameState, unit: Unit, viewer: PlayerId): boolea
   // 目标类型决定：声纳探的是潜艇，不该顺手把树林里的刺客一起照出来。
   for (const v of unitsOf(s, viewer)) {
     if (distance(v, unit) <= 1 + detectBonus(s, v, unit)) return false;
+  }
+  return true;
+}
+
+/**
+ * 这个兵种有没有"会藏起来"的本事（潜行 / 隐匿 / 潜航 / 隐身 / 刺客大师）。
+ *
+ * 只回答"它有没有这类能力"，不回答"此刻藏住了没"——后者要按观察者逐个算，
+ * 见 `isHiddenFrom`。界面要显示角标，两件事都得问，所以分开两个函数。
+ */
+export function hidesInFog(s: GameState, unit: Unit): boolean {
+  if (unit.heroBuff?.hidden === true) return true;
+  return hooksOfUnit(s, unit).some((h) => !!h.hidden);
+}
+
+/**
+ * 对**每一个**敌人是不是都藏住了。
+ *
+ * 隐匿是逐观察者判定的（潜行看地形、刺客看这回合动没动、贴脸会破），
+ * 所以"我藏住了没"在多人局里没有唯一答案。界面给自家单位挂角标时，
+ * 只要还有一家看得见它，就得说"已现形"——那才是它真正面临的风险。
+ */
+export function hiddenFromAllFoes(s: GameState, unit: Unit): boolean {
+  if (!s.fog) return false;
+  for (const p of Object.keys(s.players) as PlayerId[]) {
+    if (p === unit.owner) continue;
+    if (!isHiddenFrom(s, unit, p)) return false;
   }
   return true;
 }
@@ -2382,6 +2455,27 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   // 下面的 `range` 判定会把 `range: 0` 兜底成"打到隔壁"（effectiveRange 至少 1），
   // 所以不在这里拦，"0 射程"也能对邻格开火——见 isArmed 的注释。
   if (!isArmed(s, attacker)) return false;
+  /*
+   * 装甲素体：射程写在**武器**上，素体本身只有撞击（1 格）。
+   *
+   * 不在这一层按武器判的话，受影响的不是"能不能打"——doAttack 里另有一段
+   * 按武器判的闸门，玩家手点没问题——而是**所有"谁够得着我"的推断**：
+   * AI 的 `attackableTargets`、界面的可攻击高亮、威胁圈，全都只认 1 格，
+   * 装了 7 格炮的砧在它们眼里还是一台贴脸单位。
+   */
+  if (utype(s, attacker.type).armorFrame) {
+    const off = offlineModules(s, attacker);
+    const air = isAirborne(s, target);
+    let reach = 0;
+    for (const x of weaponsOf(attacker)) {
+      if (off.has(x.id)) continue;
+      const t = x.w.targets ?? 'both';
+      if (t !== 'both' && (t === 'air') !== air) continue;
+      reach = Math.max(reach, x.w.range + armorRangeBonus(attacker));
+    }
+    // 一件能用的武器都没有 → 只剩撞击
+    return strikeDistance(s, attacker, target) <= (reach > 0 ? reach : 1);
+  }
   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
   // 站在林子里连平射都被树冠吃掉一格（见 rangeModAgainst）。
   const range = effectiveRangeAgainst(s, attacker, tileAt(s, target.x, target.y));
@@ -2397,7 +2491,18 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
 
 export function attackableTargets(s: GameState, unit: Unit): Unit[] {
   if (!canAttack(unit)) return [];
-  return s.units.filter((u) => u.owner !== unit.owner && canStrike(s, unit, u));
+  return s.units.filter(
+    (u) =>
+      u.owner !== unit.owner &&
+      canStrike(s, unit, u) &&
+      // 看得见才打得到（开雾时才管）。派生的候选列表和真正的校验共用这一条，
+      // 否则 AI 会提一个必被拒的动作，界面也会画一个点不动的红框。
+      //
+      // 这里也要过隐匿判定：藏在林子里的兵，格子看得见不等于**它**看得见。
+      // 以前只查地形，能打到是因为界面压根不画它、AI 又只吃 playerView，
+      // 属于"碰巧打不到"；把条件写进候选表，才是真的打不到。
+      unitInSightOf(s, unit.owner, u),
+  );
 }
 
 /** 射程内的敌方城市 */
@@ -2410,6 +2515,8 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
     if (c.owner === unit.owner) return false;
     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
     if (c.ruined) return false;
+    // 城是被"画在"地图上的（地形公开），但看不见就不能砸——见 tileVisibleTo 的说明
+    if (!cityInSightOf(s, unit.owner, c)) return false;
     const d = distToCity(unit, c);
     if (d <= 0) return false;
     return d <= effectiveRangeAgainst(s, unit, tileAt(s, c.x, c.y));
@@ -2425,6 +2532,20 @@ export function computeDamage(
   attacker: Unit,
   defender: any, // 放宽类型，兼容裸 City 和伪 Unit
   isCounter = false,
+  /**
+   * 装甲武器：这一发用的那件武器。
+   *
+   * 只在"装甲素体 + 指定了武器"时传进来；不传就是老路径，
+   * `attackPowerNow` 照旧读兵种 atk —— 普通兵一行都不用改。
+   */
+  weapon?: WeaponProfile,
+  /**
+   * 这一下是溅射余波。默认 false，只有 `splashVictims` 会传 true。
+   *
+   * 为什么放在签名最后而不是塞进 weapon：判定它的是"怎么打出去的"，
+   * 不是"用什么打的"——同一个武器当主目标打和当余波打，规则不一样。
+   */
+  splash = false,
 ): number {
   // 1. 识别是否为城市
   const isCity = defender?.__isCity === true || defender?.type === '__city__';
@@ -2453,7 +2574,8 @@ export function computeDamage(
   const defenderAura = isCity ? { atk: 0, armor: 0, move: 0 } : auraBonusOf(s, defender);
 
   // 状态修正攻击力：放在最前面，后面那些乘算（射程折扣、属性倍率）才吃得到。
-  const atkNow = attackPowerNow(s, attacker);
+  // 装甲武器直接用它自己的伤害：素体 atk 只是撞击，不进这条线。
+  const atkNow = weapon ? weapon.damage : attackPowerNow(s, attacker);
 
   // 3. 核心：真实护甲是动态读取城市的，而不是读全局表里的 0
   //    石化翻倍也在这里生效：ownArmorOf 是"自己的甲"的唯一取值口
@@ -2515,6 +2637,10 @@ export function computeDamage(
   // 小型扩展到破甲之前
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.expanded, to: ARMOR_STAGE.pierce });
 
+  // 武器自带的破甲：和「破甲」能力同一个阶段、同一个算法（向下取整减半）。
+  // 写成扩展钩子不行——钩子不知道自己这一发用的是哪件武器。
+  if (weapon?.pierce) ctx.armor = Math.floor(ctx.armor / 2);
+
   // 破甲
   runBound(armorHooks, ctx, { from: ARMOR_STAGE.pierce, to: ARMOR_STAGE.postPierce });
   
@@ -2556,7 +2682,7 @@ export function computeDamage(
     let dmg = ctx.damage;
     for (const e of activeExpansions(s)) {
       if (e.hooks.modifyDamage) {
-        dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, isCounter });
+        dmg = e.hooks.modifyDamage({ state: s, attacker, defender, damage: dmg, armor: ctx.armor, splash, isCounter });
       }
     }
     ctx.damage = dmg;
@@ -2653,8 +2779,14 @@ export function previewAttack(
   const survives = defender.hp - toDefender > 0;
   // 这次打完还吃不吃得到反击：看防守方剩余的反击次数
   const countersLeft = defender.countersLeft ?? Math.max(0, attacksPerTurn(s, defender));
-  // 修改反击判定条件
-  const counter = survives && !hasFlagOn(s, attacker, 'noCounter') && countersLeft > 0 && canStrike(s, defender, attacker);
+  // 修改反击判定条件（要和真正结算那处逐条对齐，否则预览会画出一次不存在的反击）
+  const counter =
+    survives &&
+    !hasFlagOn(s, attacker, 'noCounter') &&
+    countersLeft > 0 &&
+    unitInSightOf(s, defender.owner, attacker) &&
+    canStrike(s, defender, attacker);
+
   const toAttacker = counter ? computeDamage(s, defender, attacker, true) : 0;
 
   let toSplash = 0;
@@ -2670,8 +2802,9 @@ export function previewAttack(
  * 结算、预览、侧栏、兵种卡都走这一个函数——四处各算一遍的话，
  * 界面上写着"1 格"而实际波及 2 格，玩家只会觉得规则在骗人。
  */
-export function splashRadiusOf(s: GameState, u: Unit): number {
-  let radius = utype(s, u.type).splash ?? 0;
+export function splashRadiusOf(s: GameState, u: Unit, override?: number): number {
+  // 装甲武器：溅射写在武器上，由调用方把半径传进来（素体的 splash 是 0）
+  let radius = override ?? utype(s, u.type).splash ?? 0;
   for (const e of activeExpansions(s)) {
     if (e.hooks.modifySplash) radius = e.hooks.modifySplash({ state: s, attacker: u, splash: radius });
   }
@@ -2749,8 +2882,9 @@ function splashVictims(
   s: GameState,
   attacker: Unit,
   defender: Unit,
+  radiusOverride?: number,
 ): Array<{ unit: Unit; dmg: number }> {
-  const radius = splashRadiusOf(s, attacker);
+  const radius = splashRadiusOf(s, attacker, radiusOverride);
   if (radius <= 0) return [];
   // 直线溅射（剑气、光束）：只扫那条线上的，不扫"周围一圈"
   const line = utype(s, attacker.type).splashLine === true;
@@ -2768,7 +2902,7 @@ function splashVictims(
     if (hasFlagOn(s, v, 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
     if (v.buff?.splashImmune) continue;
-    const dmg = Math.floor(computeDamage(s, attacker, v) * ratio);
+    const dmg = Math.floor(computeDamage(s, attacker, v, false, undefined, true) * ratio);
     if (dmg <= 0) continue;
     seen.add(v.id);
     out.push({ unit: v, dmg });
@@ -2844,7 +2978,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 先告诉世界"谁死了、死时是什么"，再处理"死后变成了什么"。
   // 亡语属于后者——它是死亡之后发生的事，不该污染死亡这件事本身。
   for (const e of activeExpansions(s)) {
-    e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner });
+    e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner, api: abilityApi });
   }
 
   // 3) 再执行亡语/转化（自爆、重生、分裂、灵体化）。
@@ -3033,10 +3167,11 @@ function settleIncome(s: GameState, p: PlayerId): ResourceCost {
  * 两边都拿，等于谁都没占便宜；这比"让 B 也别拿"更好，因为开局就有钱
  * 才能在第一回合做出有意义的选择（造第二个兵、升级、架桥）。
  */
-export function grantOpeningIncome(s: GameState): ResourceCost {
-  const income = settleIncome(s, 'A');
+export function grantOpeningIncome(s: GameState, first: PlayerId = 'A'): ResourceCost {
+  // 发给**先手方**，不是写死的 A：两人局现在可以选谁先动（见 MatchConfig.firstSide）
+  const income = settleIncome(s, first);
   const label = Object.keys(income).length > 0 ? incomeLabel(income) : '没有收入';
-  pushLog(s, 'A', `开局结算：第一回合收入 ${label}`);
+  pushLog(s, first, `开局结算：第一回合收入 ${label}`);
   return income;
 }
 
@@ -3099,20 +3234,17 @@ export function cityRegenOf(s: GameState, city: City): number {
  * 玩家就会看见一个点得动、点了却没反应的按钮。
  */
 export function upgradeCostOf(s: GameState, city: City): number | null {
-  if (city.era >= eraCeilingOf(s)) return null;
-  let cost = nextUpgradeCost(city.era);
-  for (const e of activeExpansions(s)) {
-    if (e.hooks.modifyUpgradeCost) {
-      cost = e.hooks.modifyUpgradeCost({
-        state: s,
-        player: city.owner,
-        city,
-        nextEra: city.era + 1,
-        cost,
-      });
-    }
-  }
-  return cost === null ? null : Math.max(0, cost);
+  /*
+   * 判据全搬到 `core/era-routes.ts` 了：路线（升到哪一级）、封顶、费用钩子、
+   * 额外条件，一处解析、三处（规则/界面/AI）共用。这里只保留老签名，
+   * 免得十几个调用点跟着改。
+   *
+   * **条件不满足时仍然返回价钱**：界面上那颗按钮要能显示"要 200 金"，
+   * 点下去再由 `doUpgrade` 报出 `requires` 给的原因——先报价再解释，
+   * 比把按钮变灰、什么都不说清楚要好。
+   */
+  const target = upgradeTargetOf(s, city);
+  return target ? target.cost : null;
 }
 
 /**
@@ -3157,8 +3289,22 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
     };
 
     while (shots > 0) {
+      /*
+       * 自动开火也要先"看得见"。
+       *
+       * 塔以前是直接扫 `s.units` 的——它不像普通单位那样走候选表，所以
+       * "看得见才打得到"那条约束从来没管到它：一座视野 3、射程 4 的碉堡
+       * 会照着 4 格外看不见的人开火，反过来，藏在林子里的斥候在塔面前
+       * 等于没藏。判据和手动攻击共用 `unitInSightOf`。
+       */
       const inRange = s.units
-        .filter((u) => u.owner !== owner && distance(b, u) > 0 && distance(b, u) <= def.range)
+        .filter(
+          (u) =>
+            u.owner !== owner &&
+            distance(b, u) > 0 &&
+            distance(b, u) <= def.range &&
+            unitInSightOf(s, owner, u),
+        )
         .sort((x, y) => distance(b, x) - distance(b, y) || x.hp - y.hp);
       const target = inRange[0];
       if (!target) break;
@@ -3232,9 +3378,27 @@ function fireBuildings(s: GameState, owner: PlayerId): void {
  * 而画面上的工地看起来随时会塌——先绕路，建完再通，才说得通。
  */
 function finishBuild(s: GameState, u: Unit): void {
-  if (!utype(s, u.type).bridges) return;
-  const tile = tileAt(s, u.x, u.y);
-  if (tile && tile.terrain === 'water') tile.terrain = 'bridge';
+  deckBridge(s, u);
+}
+
+/**
+ * 桥建成：把脚下的地形换成桥面。
+ *
+ * 判据来自数据里的 `buildOn`，**不写死 `water`**。以前写死 water，
+ * 往沼泽上架桥会"桥立起来了、路面没变"——陆军照样按沼泽的移动力 2 走，
+ * 玩家只会觉得"这桥白造了"。
+ *
+ * 顺手记下原地形（`custom.deckFrom`）：迷雾里要按原样还回去。
+ * 全都还原成水域的话，沼泽上那座桥在看不见的时候会凭空多出一条河。
+ */
+function deckBridge(s: GameState, bridge: Unit): void {
+  const def = utype(s, bridge.type);
+  if (!def.bridges) return;
+  const tile = tileAt(s, bridge.x, bridge.y);
+  if (!tile || tile.terrain === 'bridge') return;
+  if (!(def.buildOn ?? []).includes(tile.terrain)) return;
+  bridge.custom = { ...(bridge.custom ?? {}), deckFrom: tile.terrain };
+  tile.terrain = 'bridge';
 }
 
 /**
@@ -3337,8 +3501,8 @@ export function mergeDraftStep(
 /**
  * 这条指令是不是被"外力"挡住了（封印、眩晕、冰冻……）。
  *
- * 只问五类**主动命令**：移动、攻击、攻城、放技能、建造。像"结束回合""上船"
- * 这种不该被一并封掉——被封印的单位总得还能放弃行动。
+ * 只问这几类**主动命令**：移动、攻击、攻城、放技能、建造、用设备。像"结束回合"
+ * "上船"这种不该被一并封掉——被封印的单位总得还能放弃行动。
  *
  * 统一在动作分发之前挡一次，而不是在 doMove / doAttack 里各写一遍：
  * 漏掉一个入口就是"能走不能打"这种半封印的 bug，而且很难发现。
@@ -3349,7 +3513,8 @@ function commandBlockedBy(s: GameState, action: Action): string | null {
     action.type !== 'ATTACK' &&
     action.type !== 'SIEGE' &&
     action.type !== 'HERO_SKILL' &&
-    action.type !== 'BUILD'
+    action.type !== 'BUILD' &&
+    action.type !== 'USE_DEVICE'
   ) {
     return null;
   }
@@ -3404,7 +3569,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId, action.x, action.y);
+        return doAttack(next, action.unitId, action.targetId, action.x, action.y, action.weapon);
       case 'SIEGE':
         return doSiege(next, action.unitId, action.cityId, action.x, action.y);
       case 'RECRUIT':
@@ -3419,6 +3584,51 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
         );
       case 'BUILD':
         return doBuild(next, action.unitId, action.unitType, action.x, action.y);
+      // 装甲装配 / 拆卸：判定与结算都在 core/armor.ts，这里只做转发。
+      // 它们直接改 next，所以成功时要自己把 state 包回来。
+      case 'MOUNT': {
+        const r = doMount(next, action.unitId, action.moduleId);
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
+      case 'UNMOUNT': {
+        const r = doUnmount(next, action.unitId, action.moduleId);
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
+      // 设备与整备（P5）。判定与效果都在 core/armor.ts，这里只转发。
+      case 'USE_DEVICE': {
+        const r = doUseDevice(next, action.unitId, action.deviceId, {
+          x: action.x,
+          y: action.y,
+          targetId: action.targetId,
+        });
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
+      case 'RECHARGE': {
+        const r = doRecharge(next, action.unitId);
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
+      // 航母甲板：起飞与回收。
+      // 回收以前是回合开始自动做的，和「自动放飞」撞成死循环（飞机永远出不了
+      // 母舰旁边那一格），现在改成玩家动作；判定仍归空军扩展那份实现。
+      case 'LAUNCH': {
+        const carrier = unitById(next, action.unitId);
+        const ops = airwingOps();
+        if (!carrier) return { ok: false, reason: '没有这艘船' };
+        if (!ops?.launch) return { ok: false, reason: '这一局没有接入舰载航空兵' };
+        const plane = deckOf(carrier)[0];
+        if (!plane) return { ok: false, reason: '甲板是空的' };
+        const r = ops.launch({ state: next, carrier, plane });
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
+      case 'RECOVER': {
+        const carrier = unitById(next, action.unitId);
+        const plane = unitById(next, action.planeId);
+        const ops = airwingOps();
+        if (!carrier || !plane) return { ok: false, reason: '找不到船或飞机' };
+        if (!ops?.recover) return { ok: false, reason: '这一局没有接入舰载航空兵' };
+        const r = ops.recover({ state: next, carrier, plane });
+        return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
+      }
       case 'LOAD':
         return doLoad(next, action.unitId, action.cargoId);
       case 'UNLOAD':
@@ -3627,6 +3837,7 @@ function doAttack(
   targetId: string,
   hitX?: number,
   hitY?: number,
+  weaponId?: string,
 ): ActionResult {
   const attacker = unitById(s, unitId);
   const defender = unitById(s, targetId);
@@ -3643,12 +3854,32 @@ function doAttack(
   if (!isArmed(s, attacker)) {
     return { ok: false, reason: `${utype(s, attacker.type).name} 没有武器，不能攻击` };
   }
+  /*
+   * 看得见才打得到。
+   *
+   * 迷雾只遮单位、不遮地形，所以"那一格是不是亮的"在界面上看得一清二楚；
+   * 但规则层以前只看射程，于是可以对着自己视野外的东西开火。
+   * 这条放在 `isArmed` 之后：先告诉玩家"这兵没武器"，再谈看不看得见。
+   */
+  if (!tileVisibleTo(s, attacker.owner, defender.x, defender.y)) {
+    return { ok: false, reason: `看不见 ${utype(s, defender.type).name}（在视野外）` };
+  }
 
   // 反击判定也要按"还手的那个人"来算距离：地面兵够不着头顶的飞行单位，
   // 就不能在被飞行单位贴脸打的时候原地还手。这里必须换成
   // strikeDistance(defender, attacker)——写成攻击方的距离，等于只限制了
   // 进攻、放过了防守，这条规则就形同虚设。
-  if (!canStrike(s, attacker, defender)) {
+  // 装甲素体走"武器分支"：射程、伤害、溅射全看选中的那一件。
+  // 普通兵 `armorFrame` 是 undefined，`wpn` 恒为 null，下面每一处都退回老路径。
+  const frameDef = utype(s, attacker.type);
+  const picked = frameDef.armorFrame ? resolveArmorWeapon(s, attacker, weaponId, s.turn) : null;
+  if (picked && picked.kind === 'reject') return { ok: false, reason: picked.reason };
+  // 拆成两个普通变量（profile / 模块 id），后面就不用跟联合类型角力
+  const wpn: WeaponProfile | null = picked ? picked.w : null;
+  const wpnId: string | null = picked && picked.kind === 'weapon' ? picked.moduleId : null;
+  const isRam = picked?.kind === 'ram';
+
+  if (!frameDef.armorFrame && !canStrike(s, attacker, defender)) {
     return {
       ok: false,
       // 桥现在不再是"必须贴到桥头"：这一条只在射程真的不够时才会走到。
@@ -3657,6 +3888,21 @@ function doAttack(
         ? '射程不够，还够不着这座桥'
         : '目标超出射程',
     };
+  }
+
+  // 装甲的射程与"能不能打空中"都写在武器上，所以绕开 canStrike 自己判一遍。
+  // （canStrike 读的是兵种射程——素体只有撞击，永远 1 格。）
+  if (frameDef.armorFrame && wpn) {
+    const dist = strikeDistance(s, attacker, defender);
+    // 「瞄准阵列」：射程 +1，只对武器生效（撞击本来就是贴脸）
+    const effRange = wpn.range + (isRam ? 0 : armorRangeBonus(attacker));
+    if (dist > effRange) {
+      return { ok: false, reason: `目标超出射程（这${isRam ? '只能撞击' : '件武器'} ${effRange} 格）` };
+    }
+    const t = wpn.targets ?? 'both';
+    const air = isAirborne(s, defender);
+    if (t === 'air' && !air) return { ok: false, reason: '这件武器只能打空中目标' };
+    if (t === 'ground' && air) return { ok: false, reason: '这件武器只能打地面目标' };
   }
 
   const atkDef = utype(s, attacker.type);
@@ -3670,10 +3916,21 @@ function doAttack(
   if (attacker.attacksLeft <= 0) {
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
   }
-  const dmg = computeDamage(s, attacker, defender);
+  let dmg = computeDamage(s, attacker, defender, false, wpn ?? undefined);
+  // 移动后开火：伤害 ×0.7，装了「陀螺稳定器」就免这一条（设计 4.1 / 6.1.2）
+  if (frameDef.armorFrame && wpn && attacker.moved && !hasGyro(attacker)) {
+    dmg = Math.round(dmg * 0.7);
+  }
   // 走唯一出口：守御阵可能把这一下接走。注意 `defender` 仍然是他，
   // 所以反击判定、命中状态、击退都还作用在他身上（只有伤害被转走）。
   hurtUnit(s, defender, dmg, { source: attacker });
+
+  // 武器自带的状态（8 代的电磁脉冲炮 / 缓速弹）：打中了活人才能贴上。
+  // 这里把"层数"当"回合数"用——状态表本来就是按剩余回合记的，
+  // 多一层和久一回合在这套引擎里是同一件事（见 STATUS_REGISTRY 的 slow）。
+  if (wpn?.status && defender.hp > 0) {
+    abilityApi.putStatus(defender, wpn.status.id, wpn.status.stacks);
+  }
 
     // 战况烈度：一次攻击覆盖到的所有格，纯几何
   // （主命中格 = 鼠标点的格；溅射 = 以它为圆心扩 radius 格）
@@ -3683,7 +3940,12 @@ function doAttack(
     { x: hitX, y: hitY },
   );
 
-  const splashed = splashVictims(s, attacker, defender);
+  const splashed = splashVictims(
+    s,
+    attacker,
+    defender,
+    wpn?.splash,
+  );
   for (const v of splashed) {
     // 每个受害者单独判一次：一座守御阵可能同时替好几个人挨溅射
     hurtUnit(s, v.unit, v.dmg, { source: attacker });
@@ -3697,7 +3959,24 @@ function doAttack(
   }
 
   // 判断是否反击：不仅要活下来、不能先手，还要反击次数 > 0
-  if (!noCounter && defender.hp > 0 && defender.countersLeft > 0 && canStrike(s, defender, attacker)) {
+  /*
+   * 工地不还手。
+   *
+   * `doAttack` 早就拦住了"工地主动开火"，但**挨打时的反击**走的是另一条路
+   * （这里），于是半截塔楼照样能把人打一顿——建到一半的墙，凭什么有攻击力。
+   * 判据和主动开火共用 `underConstruction`，不另写一套。
+   */
+  const canCounter =
+    !noCounter &&
+    defender.hp > 0 &&
+    defender.countersLeft > 0 &&
+    !underConstruction(defender) &&
+    // 看不见的东西没法还手。挨了远程冷枪、连人影都没看见，不该凭空反击；
+    // 潜行/潜航/隐身那一发之所以能白打，靠的正是这条。
+    unitInSightOf(s, defender.owner, attacker) &&
+    canStrike(s, defender, attacker);
+
+  if (canCounter) {
     counterDmg = computeDamage(s, defender, attacker, true);
     // 反击也会被守御阵接走——"替友军挨打"不该挑来源
     hurtUnit(s, attacker, counterDmg, { source: defender });
@@ -3783,6 +4062,18 @@ function doAttack(
     pushLog(s, attacker.owner, `${atName} 的这一下不占本回合的攻击`);
   } else {
     attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
+    // 装甲：把这件武器的账记上（每回合次数、要不要冷却）
+    if (frameDef.armorFrame && wpnId && wpn) {
+      noteWeaponFired(attacker, wpnId, wpn, s.turn);
+      // 还有别的武器能打，就把闸门重新打开。
+      //
+      // 不走 `modifyAttacks` 钩子，是因为那个数同时被拿去当**反击次数**
+      // （`countersLeft`）——装甲一装上两门炮，挨打时就能反击两次，
+      // 那是白送的战力。这里只在"自己的回合开火收尾"处重开，影响面最小。
+      if (shotsLeftThisTurn(s, attacker, s.turn) > 0) {
+        attacker.attacksLeft = 1;
+      }
+    }
     attacker.moved = true;
     
     // 次数扣完了，才算彻底行动结束
@@ -3925,6 +4216,11 @@ function doSiege(
     return { ok: false, reason: '该单位本回合没有剩余攻击次数' };
   }
   
+  // 城市永远画在地图上（地形是公开的），但那不等于"你看得见它"。
+  // 不判这一条，就会出现"整片雾里凭空砸城墙"。
+  if (!cityInSightOf(s, attacker.owner, city)) {
+    return { ok: false, reason: '看不见那座城（在视野外）' };
+  }
   const dist = distToCity(attacker, city);
   if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
 
@@ -4359,11 +4655,10 @@ function doBuild(
     const need = site.buildNeed ?? 0;
     if ((site.buildDone ?? 0) >= need) {
       // 最后一把力：当场成型（桥这时候才真正通车）
-      const here = tileAt(s, site.x, site.y);
       delete site.buildDone;
       delete site.buildNeed;
       delete site.buildRate;
-      if (utype(s, site.type).bridges && here && here.terrain === 'water') here.terrain = 'bridge';
+      deckBridge(s, site);
       pushLog(s, s.current, `${builderDef.name} 接手 ${def.name} 的工地，当场完工`);
     } else {
       pushLog(
@@ -4413,8 +4708,8 @@ function doBuild(
 
   // 桥建成才把那一格换成桥面：工地桥不许提前通车（船也要先绕）
   if (def.bridges && !unfinished) {
-    const here = tileAt(s, x, y);
-    if (here) here.terrain = 'bridge';
+    const built = s.units[s.units.length - 1];
+    if (built) deckBridge(s, built);
   }
 
   // 建造要占掉这个单位的整回合
@@ -4443,7 +4738,8 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
   if (!city) return { ok: false, reason: '城市不存在' };
   if (city.owner !== s.current) return { ok: false, reason: '只能升级自己的城市' };
 
-  const cost = upgradeCostOf(s, city);
+  const target = upgradeTargetOf(s, city);
+  const cost = target ? target.cost : null;
   if (cost === null) {
     // 封顶有两种，说法不能一样：真到表底、和"这一局没开那一层"。
     // 后者要指出路（哪个包能打开），不然玩家会以为科技线到此为止。
@@ -4458,14 +4754,19 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
     return { ok: false, reason: '已经是最高时代' };
   }
 
+  // 路线上的额外条件（`requires`）。放在钱之前：钱不够是"再攒攒"，
+  // 条件不满足是"这条路现在走不了"，两者的下一步动作不一样。
+  if (target!.blocked) return { ok: false, reason: target!.blocked };
+
   const player = s.players[s.current];
   if (player.gold < cost) return { ok: false, reason: `金币不足（需要 ${cost}）` };
 
   const from = eraDef(city.era);
-  const to = eraDef(city.era + 1);
+  // 目标时代来自路线，不是 `era + 1`：路线允许跳级或指向别的分支
+  const to = target!.era;
 
   player.gold -= cost;
-  city.era += 1;
+  city.era = target!.edge.to;
 
   const hpGain = to.cityMaxHp - from.cityMaxHp;
   city.maxHp += hpGain;
@@ -4565,6 +4866,20 @@ function doRecruit(
   }
   // 召唤物只认召唤者：让它们进产线会变成"花 45 金买一个死灵法师的免费赠品"
   if (def.summonedOnly) return { ok: false, reason: `${def.name} 只能被召唤出来` };
+  // 装甲素体：造它之前先看供电余量。
+  //
+  // 为什么卡在"造"而不是"装"：只在装配时校验的话，"先囤十台光素体、等电站盖好
+  // 再一次性装满"就绕开了上限——那正是这个机制唯一想防的事。素体本身也有 draw，
+  // 所以"造出来"就该占额度。
+  if (def.armorFrame) {
+    const rep = energyReport(s, s.current);
+    if (rep.headroom < (def.draw ?? 0)) {
+      return {
+        ok: false,
+        reason: `供电不足：${def.name} 要 ${def.draw ?? 0} 点，余量只有 ${Math.max(0, rep.headroom)}`,
+      };
+    }
+  }
   // 选卡模式：不在本局名单里的东西造不出来。判据只有 core/draft.canUseType 一处，
   // 界面上的产兵表和 AI 的候选列表都问同一句，不会出现"面板能点、点了被拒"。
   if (!canUseType(s, s.current, unitTypeId)) {
@@ -5993,10 +6308,32 @@ export function cityName(city: City): string {
  * 这是"星际式"迷雾而不是"文明式"地形探索，对回合制战棋更合适：
  * 你不需要为"这片地是什么"消耗决策，只需要为"敌人在哪"消耗决策。
  */
+/**
+ * 本方所有的"眼睛"：每个自己单位的视野半径，加每座自己城市的城郊视野。
+ *
+ * 抽出来是因为**可见性有两个消费者**：整张可见格表（`visibleTilesOf`，渲染和记忆用）
+ * 和单格判定（`tileVisibleTo`，攻击合法性用）。两边各写一遍来源，
+ * 迟早出现"画出来是亮的、却打不着"或者反过来。来源只此一份。
+ */
+function forEachVisionSource(
+  s: GameState,
+  p: PlayerId,
+  fn: (x: number, y: number, r: number) => void,
+): void {
+  for (const u of s.units) {
+    if (u.owner !== p) continue;
+    fn(u.x, u.y, visionOf(s, u));
+  }
+  for (const city of s.cities) {
+    if (city.owner !== p) continue;
+    for (const t of cityTiles(city)) fn(t.x, t.y, CONFIG.cityVision);
+  }
+}
+
 export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
   const out = new Set<number>();
 
-  const addRadius = (cx: number, cy: number, r: number) => {
+  forEachVisionSource(s, p, (cx, cy, r) => {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (dx * dx + dy * dy > r * r) continue;
@@ -6005,17 +6342,7 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
         if (inBounds(s, x, y)) out.add(idx(s, x, y));
       }
     }
-  };
-
-  for (const u of s.units) {
-    if (u.owner !== p) continue;
-    addRadius(u.x, u.y, visionOf(s, u));
-  }
-
-  for (const city of s.cities) {
-    if (city.owner !== p) continue;
-    for (const t of cityTiles(city)) addRadius(t.x, t.y, CONFIG.cityVision);
-  }
+  });
 
   /*
    * 扩展的"额外视野"。
@@ -6035,6 +6362,67 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
   }
 
   return out;
+}
+
+/**
+ * 这一格此刻在不在 `p` 的视野里。
+ *
+ * 存在的理由：**看得见才打得到**。以前规则层完全不看视野——地图是公开的
+ * （基础迷雾只遮单位、不遮地形），于是"城里明明是一片雾，弓手照样能把城墙砸了"。
+ * 视图层用 `visibleTilesOf` 画明暗，规则层却用射程判合法，两套口径必然对不上。
+ *
+ * 用单格判定而不是整张可见格表：这条进了攻击合法性，是热路径
+ * （AI 每回合要把每个兵 × 每个目标都问一遍），而建一张全图集合太贵。
+ */
+export function tileVisibleTo(s: GameState, p: PlayerId, x: number, y: number): boolean {
+  if (!s.fog) return true;
+  let lit = false;
+  forEachVisionSource(s, p, (cx, cy, r) => {
+    if (lit) return;
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy <= r * r) lit = true;
+  });
+  if (lit) return true;
+  const i = idx(s, x, y);
+  for (const e of activeExpansions(s)) {
+    const extra = e.hooks.extraVision?.({ state: s, player: p });
+    if (extra && extra.includes(i)) return true;
+  }
+  return false;
+}
+
+/**
+ * 这座城此刻在不在 `p` 的视野里：**任意一格**被看见就算。
+ *
+ * 和 `fog.ts` 的 `cityInSight` 是同一条判据（那边手里已经有整张可见格表，
+ * 就地查更省）。一座城的城墙露出一角，就知道那儿有座城——但攻城打的是整座城，
+ * 所以只要有一面墙在视野里，它就打得。
+ */
+export function cityInSightOf(s: GameState, viewer: PlayerId, city: City): boolean {
+  if (!s.fog) return true;
+  for (const t of cityTiles(city)) {
+    if (tileVisibleTo(s, viewer, t.x, t.y)) return true;
+  }
+  return false;
+}
+
+/**
+ * `p` 能不能**指到**这个单位：它站的格子看得见，而且它没有藏起来。
+ *
+ * 这是"看得见才打得到"的统一判据，攻击候选、塔的自动开火、挨打后的反击
+ * 三处共用。分成两个条件是因为它们回答的是不同的问题：
+ *
+ *   · `tileVisibleTo` —— 那片地你熟不熟（地形是公开的，只要视野够）；
+ *   · `isHiddenFrom`  —— 那个**兵**露不露头（潜行/潜航/隐身另算）。
+ *
+ * 只查地形会漏掉后者：一个蹲在林子里、刚结束回合的斥候，格子看得见，
+ * 但它在迷雾里就是不显形。以前靠"界面不画、AI 只吃 playerView"侥幸成立，
+ * 换成塔的自动开火（它直接读 `s.units`）就立刻能打到看不见的人了。
+ */
+export function unitInSightOf(s: GameState, p: PlayerId, u: Unit): boolean {
+  if (!s.fog) return true;
+  return tileVisibleTo(s, p, u.x, u.y) && !isHiddenFrom(s, u, p);
 }
 
 /**
