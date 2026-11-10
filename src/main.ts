@@ -12,7 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
-import { skillsOf } from './core/query.ts';
+import { coversTile, skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
@@ -1384,7 +1384,12 @@ function render(): void {
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
   const threat =
-    !replay && selected && selected.owner === state.current && !selected.acted && !pendingSkill
+    !replay &&
+    selected &&
+    boardIdOf(selected) === EARTH &&
+    selected.owner === state.current &&
+    !selected.acted &&
+    !pendingSkill
       ? Array.from(threatTiles(state, selected))
       : [];
 
@@ -2009,9 +2014,11 @@ function viewForBoard(view: PlayerView, id: BoardId): PlayerView {
 /** 非地球的图没有选中/可达/染色这些地球坐标的东西，一律清空 */
 function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
   if (id === EARTH) return ui;
+  // 选中的单位如果就在这张图上，高亮要留着；切图时它属于别处才清掉
+  const sel = ui.selectedId ? state.units.find((u) => u.id === ui.selectedId) : undefined;
   return {
     ...ui,
-    selectedId: null,
+    selectedId: sel && boardIdOf(sel) === id ? sel.id : null,
     selectedCityId: null,
     reach: [],
     targets: [],
@@ -2062,6 +2069,20 @@ function syncTopbarScroll(): void {
 }
 /** 根据当前选中单位重算可达、可攻击、可攻城集合 */
 function refreshSelection(): void {
+  /*
+   * 别的图还没有动作系统：可达格、攻击目标、技能落点全是**地球**坐标算出来的，
+   * 在月球上算一遍只会把地球那套高亮带过去（它们最终也会被 boardUiFor 清掉）。
+   * 直接清空，省一次错误的寻路。
+   */
+  if (activeBoardId !== EARTH) {
+    reach = [];
+    targets = [];
+    siege = [];
+    aimTiles = [];
+    skillThreatTiles = [];
+    return;
+  }
+
   if (pendingSkill) {
     reach = [];
     targets = [];
@@ -3291,14 +3312,38 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 
 function onBoardClick(e: Event): void {
   /*
-   * 第三步只做了"看得见、切得动"，还没做"点得动"。
+   * 别的图（月球、以后的空间站）现在只做到"点得中、看得见"。
    *
-   * 点击链路（可达格、技能落点、建造位置）算的全是**地球**坐标；
-   * 在 9×9 的调试图上点 (3,4)，会被当成地球的 (3,4) 去执行。
-   * 所以先把非地球的点击挡住，第 4 步按图实现时再拆掉这道闸。
+   * 走子 / 开火 / 建造整条链路都按**地球**的坐标与宽度算（`idx()` 认的是
+   * `state.w`），在 12×12 的月球上点 (3,4) 会被当成地球的 (3,4) 去执行。
+   * 所以这里只做选中：选中之后侧栏那张属性卡是真的（它读的是单位自己），
+   * 面板里的按钮也照常能用——发射井的加注/发射就是在这条路上跑的。
    */
   if (activeBoardId !== EARTH) {
-    toast('这张图还不能操作');
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const id = activeBoardId;
+    const board = boardOf(state, id);
+    if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
+
+    const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
+    // 和地球那条一致：兵压在建筑上面，先选兵
+    const pick =
+      here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
+
+    selectedId = pick?.id ?? null;
+    selectedCityId = null;
+    selectedTile = null;
+    reach = [];
+    targets = [];
+    siege = [];
+    aimTiles = [];
+    skillThreatTiles = [];
+    if (!pick) {
+      const tile = board.tiles[at.y * board.w + at.x];
+      toast(tile ? `${TERRAIN_NAMES[tile.terrain] ?? tile.terrain} · 这张图还不能下达移动命令` : '这一格在图外');
+    }
+    render();
     return;
   }
 

@@ -45,6 +45,7 @@ import {
   BLOOD_TURN,
   bloodTurnOf,
   EXPANSIONS,
+  activeExpansions,
   LEGACY_UPGRADE_COST,
   availableExpansions,
   eraCeilingFor,
@@ -276,6 +277,7 @@ import {
   damageToCity,
   distance,
   distToCity,
+  distBetweenUnits,
   airLayer,
   effectiveRange,
   effectiveRangeAgainst,
@@ -376,6 +378,7 @@ import type {
 import { skillsOf } from '../src/core/query.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../src/core/space/moon.ts';
+import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../src/core/space/silo.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -19837,6 +19840,136 @@ test('太空时代：开局就有一张月球图，尺寸跟着地球', () => {
   // 大图上的比例也要对
   const big = fresh({ expansionIds: ['space-age'], size: 32 });
   assert.equal(big.boards?.moon?.w, 24);
+});
+
+console.log('\n太空时代：火箭发射井');
+
+test('发射井：装一个单位、加注 3 回合、送上月球', () => {
+  /*
+   * 这是第 6 步的全部：一个 2×2 的建筑、一个货舱、一个 3 回合的计时器，
+   * 以及"换一张图"的那一下。规则层不需要认识"火箭"——装载走的是
+   * 现成的 hold，发射走的是 UNIT_ACTION。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 5000;
+  s.players.A.res = { food: 9999, material: 9999 };
+
+  // 时代 5 的工程队该在开局就学会盖井（扩展的 onMatchStart 教的）
+  assert.ok((s.unitTypes.crew?.builds ?? []).includes(SILO_ID), '工程队该会盖发射井');
+
+  let cur = s;
+  const run = (a: Parameters<typeof applyAction>[1]) => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+  const siloOf = (st: GameState) => st.units.find((u) => u.type === SILO_ID);
+
+  const crew = place2(s, 'A', 'crew', 4, 4);
+  /*
+   * 站在 2×2 的**右下角旁边**：锚点距离是 2，占地距离才是 1。
+   * 装载判定必须按占地算，否则"看着挨着、规则说太远"。
+   */
+  const pax = place2(s, 'A', 'militia', 7, 6);
+
+  const built = run({ type: 'BUILD', unitId: crew.id, unitType: SILO_ID, x: 5, y: 5 });
+  assert.ok(built.ok, `建井失败：${built.reason}`);
+  let silo = siloOf(cur);
+  assert.ok(silo, '井要出现在场上');
+  assert.equal(footprintOf(cur, silo!), 2, '2×2');
+  // 工地进度不是这条用例要验的（那是建造系统的账），直接当它盖完了
+  delete silo!.buildNeed;
+  delete silo!.buildDone;
+
+  // 刚落成的建筑这一回合不能装卸（和"新招的兵当回合不能动"同一条），先过一轮
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  silo = siloOf(cur);
+
+  assert.equal(distBetweenUnits(cur, silo!, pax), 1, '右下角旁边就是贴身');
+  const load = run({ type: 'LOAD', unitId: silo!.id, cargoId: pax.id });
+  assert.ok(load.ok, `装载失败：${load.reason}`);
+  silo = siloOf(cur);
+  assert.equal(cur.units.some((u) => u.id === pax.id), false, '登舱之后棋盘上就没有它了');
+  assert.equal((silo!.cargo ?? []).length, 1, '货舱里有一个人');
+
+  /*
+   * 装了谁是**底牌**：燃料进度对面看得见（3 回合窗口就是靠它成立的），
+   * 但"里面坐着一个剑修"只有自己知道——和丹药同一个口径。
+   */
+  assert.ok(
+    siloLines(cur, silo!, 'A').some((l) => l.includes('民兵')),
+    '自己要看得见装的是谁',
+  );
+  const foeLines = siloLines(cur, silo!, 'B');
+  assert.ok(foeLines.some((l) => l.includes('燃料')), '燃料进度对手也该看得见');
+  assert.equal(
+    foeLines.some((l) => l.includes('民兵')),
+    false,
+    '对手不该从面板上读出装的是谁',
+  );
+
+  // 没加注就点火：拦住
+  const early = run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:launch' });
+  assert.equal(early.ok, false, '没燃料不该能飞');
+
+  assert.ok(run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:fuel' }).ok, '该能开始加注');
+  // 一来一回算一回合：A 的回合开始才 +1
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal(siloOf(cur)!.custom?.fuel, 1, '一回合加一格');
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  silo = siloOf(cur);
+  assert.equal(silo!.custom?.fuel, SILO_FUEL_TURNS, '三回合加满');
+
+  const go = run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:launch' });
+  assert.ok(go.ok, `发射失败：${go.reason}`);
+
+  const landed = cur.units.find((u) => u.id === pax.id);
+  assert.ok(landed, '人该在场上（同一支兵，不是新造的）');
+  assert.equal(boardIdOf(landed), 'moon', '它现在在月球图上');
+  const moon = cur.boards!.moon!;
+  assert.ok(
+    landed!.x >= 0 && landed!.x < moon.w && landed!.y >= 0 && landed!.y < moon.h,
+    '落点要在月图范围内',
+  );
+  assert.equal(landed!.acted, true, '落地当回合不能再动');
+  assert.equal(siloOf(cur)!.custom?.fuel, 0, '燃料清零');
+  assert.equal((siloOf(cur)!.cargo ?? []).length, 0, '货舱空了');
+  // 发射井自己还在，想再飞一趟就重新加注
+  assert.ok(siloOf(cur), '发射井不会被消耗');
+});
+
+test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {
+  /*
+   * 以前 `doUnitAction` 取"第一个声明了 unitActions 的扩展"。太空包在扩展表里
+   * 排在修真之前，所以它一挂上单位动作，修真的学法术/炼丹药就会被它一口回绝，
+   * 而且报的是"认不出这个操作"——跟玩家的操作毫无关系。
+   *
+   * 现在的判据是"谁在 unitActions 里列出了这个 id 就由谁执行"，这条守它。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'cultivation'], startEra: 5 });
+  flatten(s, 'plain');
+  place2(s, 'A', 'cultivation-sect', 6, 6);
+  place2(s, 'A', 'cultivation-scripture-pavilion', 8, 6);
+  const cult = place2(s, 'A', 'qi-cultivator', 9, 6);
+
+  const offered = activeExpansions(s).flatMap(
+    (e) => e.hooks.unitActions?.({ state: s, unit: cult, viewer: 'A' }) ?? [],
+  );
+  const learn = offered.find((o) => o.id.startsWith('learn:'));
+  assert.ok(learn, '修士站在藏经阁旁该有「学法术」按钮');
+
+  const r = applyAction(s, { type: 'UNIT_ACTION', unitId: cult.id, actionId: learn!.id });
+  assert.notEqual(
+    r.reason,
+    '当前规则里没有这种操作',
+    '这个动作该被修真包接手，而不是被太空包挡掉',
+  );
 });
 
 test('月球图：尺寸跟着地球缩，下限 4×4', () => {

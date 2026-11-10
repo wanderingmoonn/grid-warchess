@@ -303,16 +303,16 @@
   <main>
     <header class="page-head">
       <h1>时代与回旋镖 · 太空时代</h1>
-      <p>扩展分册 · 只改规则 · 本文件由 npm run manual 从配置自动生成</p>
+      <p>扩展分册 · 1 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
     </header>
 
 
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>开局在地球之外生成一张<b>月球图</b>：尺寸约为地球的 75%，最小 4×4；地形只有月壤与环形山，没有城市。左下角的地图列表可以在两张图之间切换，每张图各记各的相机。<b>目前只有&quot;能看&quot;</b>：火箭井、发射、着陆与登月胜利在后续版本接入。</p><ul class="pack-notes"><li>月球尺寸 = max(4, round(地球边长 × 0.75))，例如 12×12 的地球对应 9×9 的月球、16×16 对应 12×12。</li><li>月壤：1 点移动力、无掩护；环形山：2 点移动力、护甲 +2。</li><li>月球上不放城市——城市的产兵、升级与&quot;城打光就输&quot;的判定只作用于地球。</li></ul>
+      <p>开局在地球之外生成一张<b>月球图</b>：尺寸约为地球的 75%，最小 4×4；地形只有月壤与环形山，没有城市。左下角的地图列表可以在两张图之间切换，每张图各记各的相机。<b>时代 5 可以修「火箭发射井」</b>（2×2、建在平原）：装一个地面单位，加注 3 回合后点火，把它送到月面着陆点。</p><ul class="pack-notes"><li>月球尺寸 = max(4, round(地球边长 × 0.75))，例如 12×12 的地球对应 9×9 的月球、16×16 对应 12×12。</li><li>月壤：1 点移动力、无掩护；环形山：2 点移动力、护甲 +2。</li><li>月球上不放城市——城市的产兵、升级与&quot;城打光就输&quot;的判定只作用于地球。</li><li><b>火箭发射井</b>：时代 5、2×2、只能建在平原，420 金。它有一个货舱，贴着它点「装载」把一个地面单位接进来（船、飞机、建筑上不去）。</li><li>加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满 3 回合才能点火。发射后燃料清零，要再飞一趟就重新加注。</li><li>落地在<b>离月球中心最近的一块空地</b>，当回合不能再动。发射井与月球都不会被消耗。</li></ul>
       <dl class="kv">
-        <dt>兵种数量</dt><dd>0 个</dd>
-        <dt>覆盖时代</dt><dd>—（不带兵种）</dd>
+        <dt>兵种数量</dt><dd>1 个</dd>
+        <dt>覆盖时代</dt><dd>5（机械化时代）</dd>
         
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
       </dl>
@@ -324,7 +324,13 @@
 
     <section id="pack-units">
       <h2><span class="sec-num">02</span>兵种表</h2>
-      <p class="era-meta">这个包不带兵种，只改规则——表就不用列了。</p>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-space-age"><td colspan="11">太空时代 · 1 个</td></tr><tr data-unit="rocket_silo"><td class="name">火箭发射井</td><td class="glyph">井</td><td class="num">5</td><td class="num">420</td><td class="num">0</td><td class="num">10</td><td class="num">120</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-carry">装载 1</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
+      </table>
+    </div>
     </section>
 
     
@@ -332,7 +338,7 @@
     <section id="pack-terms">
       <h2><span class="sec-num">03</span>机制词条</h2>
       <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
-      <p class="era-meta">这一册没有需要单独解释的机制。</p>
+      <dl class="terms"><dt id="t-carry">装载</dt><dd>能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。 <span class="more">装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd></dl>
     </section>
   
     <footer>
@@ -340,5 +346,72 @@
     </footer>
   </main>
 </div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
 </body>
 </html>
