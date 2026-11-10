@@ -37,6 +37,7 @@ import { ERA_ARMS } from './era-packs.ts';
 import { FANTASY } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons/index.ts';
+import { SPACE_AGE } from './space/space-age.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
@@ -1317,6 +1318,9 @@ export const EXPANSIONS: Expansion[] = [
   ERA_ARMS,
   CITY_WORKS,
   SEASONS,
+  // 太空时代：目前只做"开局生成月球图"，为后面的火箭/登月打底。
+  // 排在季节之后、修真之前，只是读起来顺——它只挂 onMatchStart，没有判定顺序问题。
+  SPACE_AGE,
   CULTIVATION_PACK,
   // 「信息化」：第六时代的底座——解锁这一级科技 + 9 个最基本的兵。
   // 它是「时代军备」「海军」「空军」里那批第六代兵种的兵种级前置（requiresPack）。

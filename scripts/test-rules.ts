@@ -19665,6 +19665,27 @@ test('棋盘是一等公民：默认地球，取图不走别名', () => {
   assert.ok(boardOf(s, 'nowhere').tiles === s.tiles, '找不到的图退回地球');
 });
 
+test('太空时代：开局就有一张月球图，尺寸跟着地球', () => {
+  /*
+   * 第 5 步要跑通的就是这条路：勾了扩展 → 普通对局开局 → 地图列表里有月球。
+   * 它走的是 `onMatchStart`，时机在 `refreshMemory` 之前，所以迷雾记忆也会带上。
+   */
+  const s = fresh({ expansionIds: ['space-age'] });
+  const moon = s.boards?.moon;
+  assert.ok(moon, '勾了「太空时代」就该有月球');
+  assert.equal(moon!.w, moonSizeFor(s.w), '月球尺寸跟着地球走');
+  assert.equal(moon!.h, moonSizeFor(s.w));
+  assert.equal(moon!.tiles.length, moonSizeFor(s.w) ** 2);
+
+  // 没勾的局一格都不该多出来
+  const plain = fresh();
+  assert.equal(plain.boards?.moon, undefined, '没开扩展就不该有月球');
+
+  // 大图上的比例也要对
+  const big = fresh({ expansionIds: ['space-age'], size: 32 });
+  assert.equal(big.boards?.moon?.w, 24);
+});
+
 test('月球图：尺寸跟着地球缩，下限 4×4', () => {
   assert.equal(MOON_MIN_SIZE, 4);
   assert.equal(moonSizeFor(4), 4, '已经是下限，不能再小');
