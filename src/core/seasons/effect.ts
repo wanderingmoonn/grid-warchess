@@ -256,7 +256,7 @@ export function effectLines(e: ClimateEffect): string[] {
     const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
     out.push(
       d.hits > 1
-        ? `回合末受 ${d.hits} 次 ${d.amount} 点伤害（吃护甲）`
+        ? `回合末受 ${d.hits} 次 ${d.amount} 点物理伤害`
         : `回合末受 ${d.amount} 点伤害${splash}`,
     );
   }
