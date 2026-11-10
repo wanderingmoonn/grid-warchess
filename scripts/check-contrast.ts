@@ -160,6 +160,68 @@ if (WARN_ON_TOKEN_BG.some((x) => x.startsWith('legacy'))) {
   for (const w of WARN_ON_TOKEN_BG.filter((x) => x.startsWith('legacy'))) console.log('  · ' + w);
 }
 
+/*
+ * 第三道：**亮底规则**（底色写死成浅色、文字继承 --text）。
+ *
+ * 这道是被第二次事故逼出来的：`.expansion-item.on` 写死 `#f3f8fb`，
+ * 文字继承 `--text`——浅色主题下深字浅底没问题；深色主题下 `--text` 变白，
+ * 于是"各个扩展标题"和"结束后上传这局详细数据"整块消失。
+ *
+ * 判据：底色是字面浅色（亮度 > 0.7）时，把这一条规则实际会用到的文字色
+ * 算出来（显式 color → 解析 token；没写 → 继承 --text），modern 下必须 ≥ 4.5。
+ *
+ * 例外只有一处：棋盘（`.tile*`）是唯一不跟主题变的面，`style.css` 里给
+ * `.tile` 钉了 `color: var(--on-light)`，所以这一族按 --on-light 算。
+ */
+const LIGHT_MIN_LUM = 0.7;
+const lightFails: string[] = [];
+let lightChecked = 0;
+
+function lumOf(hex: string): number {
+  const [r, g, b] = rgb(hex);
+  const f = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+for (const { name, table } of allVars) {
+  for (const m of rules) {
+    const sel = m[1]!.trim().split('\n').pop()!.trim();
+    const body = m[2]!;
+    const bgLit = /background(?:-color)?:\s*(#[0-9a-fA-F]{6})\s*;/.exec(body)?.[1];
+    if (!bgLit) continue;
+    const bg = bgLit.toLowerCase();
+    if (lumOf(bg) < LIGHT_MIN_LUM) continue;
+    lightChecked += 1;
+
+    const colorDecl = /(?:^|[;\s])color:\s*([^;]+);/.exec(body)?.[1];
+    const tok = colorDecl ? /^var\(--([a-z0-9-]+)\)$/.exec(colorDecl.trim()) : null;
+    const fg = colorDecl
+      ? (tok ? hexOf(table[tok[1]!] ?? '') : hexOf(colorDecl.trim()))
+      : sel.startsWith('.tile')
+        ? hexOf(table['on-light'] ?? '')
+        : hexOf(table['text'] ?? '');
+    if (!fg) continue;
+    const r = ratio(fg, bg);
+    if (r < TEXT_MIN) {
+      lightFails.push(`${name}: ${sel} 亮底 ${bg} 上的字只有 ${r.toFixed(2)}:1`);
+    }
+  }
+}
+
+console.log(`  · 亮底规则检查了 ${lightChecked} 条`);
+assert.deepEqual(
+  lightFails.filter((x) => x.startsWith('modern')),
+  [],
+  `modern 主题有"浅底浅字"：\n${lightFails.filter((x) => x.startsWith('modern')).join('\n')}`,
+);
+if (lightFails.some((x) => x.startsWith('legacy'))) {
+  console.log('⚠ legacy 也有浅底浅字：');
+  for (const w of lightFails.filter((x) => x.startsWith('legacy'))) console.log('  · ' + w);
+}
+
 /* 只报"现代主题"的硬失败：legacy 是既有观感，改了就是改版，不在这一步动，
    但要把它列出来让人看见（下面单独打印）。 */
 const modernFailures = failures.filter((f) => f.startsWith('modern'));

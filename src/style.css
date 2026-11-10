@@ -67,6 +67,19 @@
   --price: #a8761a;
   --ink-warm: #4a463d;
 
+  /* ── 面（2026-11-11）────────────────────────────────────────────────
+   * 一批"写死的浅色底"收成 token：它们原来各自硬编码（#f3f8fb / #fffdf6 /
+   * #fbf7ea / #eae6dd），文字则继承 --text。换深色主题时底色不动、文字变白，
+   * 于是白底白字——扩展标题和"结束后上传详细数据"就是这么消失的。
+   * 收成 token 之后，底色跟着主题走，这类问题从根上断掉。 */
+  --surface-hl: #f3f8fb;      /* 选中面（勾上的扩展项） */
+  --surface-hover: #fffdf6;   /* 悬停面（按钮、书页行、搜索框聚焦） */
+  --surface-warm: #fbf7ea;    /* 升级按钮 */
+  --surface-warm-2: #f6efd8;  /* 升级按钮悬停 */
+  --track: #eae6dd;           /* 进度条底槽（血条/电力条） */
+  /* 永远浅色的面（棋盘、天气徽标）上该用什么字色：两套主题都一样 */
+  --on-light: #2b2823;
+
   /* ── 字阶（2026-11-10 第一批）────────────────────────────────────────
    * 现状是 19 种字号、222 次声明，其中 11.5px / 12.5px 这种半像素在 1x 屏上
    * 本来就是模糊的（浏览器要么取整要么用亚像素渲染），并没有"更精确"的好处。
@@ -150,18 +163,17 @@
   --hp-low: #e88478;
   --price: #d8a53f;
   --ink-warm: #cfc9bd;
+
+  --surface-hl: #22303d;
+  --surface-hover: #2a303a;
+  --surface-warm: #2b2519;
+  --surface-warm-2: #332d1e;
+  --track: #2b3038;
 }
 
-/* 白底悬停态：深底上直接用 #fff 会闪一块白，换成抬升面 */
-[data-ui='modern'] .zoom-btn:hover,
-[data-ui='modern'] .recruit-btn:hover:not(:disabled),
-[data-ui='modern'] .book-row:hover {
-  background: #2a303a;
-}
-
-[data-ui='modern'] .recruit-search-input:focus {
-  background: #1b1f26;
-}
+/* （原来这里有三条"深色主题下手写覆盖白底悬停"的补丁。
+   现在那些白底已经换成 --surface-hover / --surface-hl / --track，
+   底色跟着主题走，补丁就该删——留着会变成两套并行的真相。） */
 
 /* 提示条：原来固定深底白字，在深色主题里和背景糊成一片，加描边分开 */
 [data-ui='modern'] .toast {
@@ -467,7 +479,7 @@ body {
 }
 
 .zoom-btn:hover {
-  background: #fffdf6;
+  background: var(--surface-hover);
   border-color: rgba(120, 110, 92, 0.6);
 }
 
@@ -541,6 +553,9 @@ body {
  * 加新地形时别在 `.tile.t-*` 里写 cursor——那一定会和可达性打架。
  */
 .tile {
+  /* 棋盘是**唯一**不跟主题变的面（地形色按浅底调的）。
+     所以格子里的字色必须钉死成深色——继承 --text 的话，主题一变就白底白字。 */
+  color: var(--on-light);
   position: relative;
   border-right: 1px solid rgba(0, 0, 0, 0.045);
   border-bottom: 1px solid rgba(0, 0, 0, 0.045);
@@ -1840,7 +1855,7 @@ body {
 .hpbar {
   height: 6px;
   border-radius: 3px;
-  background: #eae6dd;
+  background: var(--track);
   overflow: hidden;
   margin: 8px 0 10px;
 }
@@ -1862,7 +1877,7 @@ body {
 .power-bar {
   height: 8px;
   border-radius: 4px;
-  background: #eae6dd;
+  background: var(--track);
   overflow: hidden;
 }
 
@@ -1999,7 +2014,7 @@ body {
 
 .recruit-btn:hover:not(:disabled) {
   border-color: var(--line-strong);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .recruit-btn:disabled {
@@ -2087,7 +2102,7 @@ body {
 .recruit-search-input:focus {
   outline: 2px solid var(--a-soft);
   border-color: var(--a);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .recruit-search-count {
@@ -2128,7 +2143,7 @@ body {
   padding: 10px 12px;
   border: 1px solid #cdb684;
   border-radius: 10px;
-  background: #fbf7ea;
+  background: var(--surface-warm);
   color: var(--text);
   font: inherit;
   text-align: left;
@@ -2139,7 +2154,7 @@ body {
 }
 
 .upgrade-btn:hover:not(:disabled) {
-  background: #f6efd8;
+  background: var(--surface-warm-2);
   border-color: #b19a5c;
 }
 
@@ -2755,7 +2770,7 @@ a.btn {
 
 .expansion-item.on {
   border-color: #8fb0cc;
-  background: #f3f8fb;
+  background: var(--surface-hl);
 }
 
 .expansion-item input {
@@ -3843,7 +3858,7 @@ a.btn {
 
 .fb-result.is-ok {
   border: 1px solid #cfe3d4;
-  background: #f1f7f2;
+  background: var(--ok-bg);
   color: var(--ok-deep);
 }
 
@@ -4192,7 +4207,7 @@ a.btn {
 
 .book-row:hover {
   border-color: var(--a);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .book-row b {
@@ -4375,7 +4390,7 @@ a.btn {
 }
 .weather-badge.w-warm {
   background: #fdf2da;
-  color: #96681a;
+  color: #8a5c12;
 }
 .weather-badge.w-cold {
   background: #e3edf6;
