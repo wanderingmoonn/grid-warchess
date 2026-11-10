@@ -341,6 +341,7 @@ import {
   aliveSeats,
   isEliminated,
   hasQuit,
+  produceAt,
 } from '../src/core/rules.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
@@ -11507,22 +11508,18 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
   assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
 });
 
-test('城郭：经济单位的粮材与金币分配不分地形，全按 8:2', () => {
+test('城郭：经济单位全折，按地形定产什么（粮 / 材 / 金）', () => {
   /*
-   * 2026-11-04 有一版是"按地形对调"：平原/丘陵/森林上六成留金、四成折粮材。
-   * **2026-11-06 回撤**——那三种地形是建材主产地，对调让建材掉三分之一，
-   * 金币却没变宽（短缺从金币挪到了建材）。
+   * 2026-11-10 用户定的新口径，取代"一律 8:2 折成粮材"：
+   *   · 平原、水域 → 全粮；
+   *   · 城市 → 全金（城里做买卖，不种地）；
+   *   · 其它地形（森林、丘陵……）→ 全材；
+   *   · 牧民是特例：粮食与材料各一半。
    *
-   * **2026-11-08 提到 8:2**（原来 6:4），和经济建筑拉平成同一个口径：
-   * 折成粮/材八成、留金两成。方向与 11-04 那次相反（那次是少折多留金）。
-   *
-   * 这条用例留着，是为了钉住两件事：
-   *   ① 不再分地形——玩家看不出比例，只会觉得"这块地怎么突然少产建材了"；
-   *   ② 比例是 8:2 而不是 6:4——想再调，请连这条用例一起改，别偷偷改常数。
+   * 这条用例同时钉住"全折"这件事：以前留着两成金币，现在经济单位在野外
+   * 一分金币都不产——金币要靠城市里的经济单位、经济建筑和税官。
    */
   const s = fresh({ expansionIds: ['city-works'] });
-  // 站到一格"不是城、也不是水"的空地上：固定 (5,5) 会随地图随机踩到城格，
-  // 城格有额外产出，量出来就不是 8:2 了（水多了之后这个坑开始经常踩中）。
   const spot = s.tiles.findIndex((t) => !t.cityId && t.terrain === 'plain');
   assert.ok(spot >= 0, '总得有一格空地');
   const sx = spot % s.w;
@@ -11533,25 +11530,91 @@ test('城郭：经济单位的粮材与金币分配不分地形，全按 8:2', (
     return unitYield(s, u) as Record<string, number>;
   };
 
-  // 采石工：丘陵 26 金 → 5 金 + 21 材（八成折成建材）
+  // 采石工：丘陵 26 / 森林 14 / 平原 6 / 城 6
   const hill = at('quarrier', 'hill');
-  assert.equal(hill.gold, 5, '丘陵上该只留两成金币');
-  assert.equal(hill.material, 21, '丘陵上该折八成建材');
+  assert.equal(hill.gold ?? 0, 0, '丘陵上不留金币');
+  assert.equal(hill.material, 26, '丘陵上的经济单位全出材料');
 
-  // 平原：6 金 → 1 金 + 5 粮
-  const plain = at('quarrier', 'plain');
-  assert.equal(plain.gold, 1, '平原上该只留两成金币');
-  assert.equal(plain.food, 5, '平原上该折八成粮');
-
-  // 森林：14 金 → 3 金 + 11 材
   const forest = at('quarrier', 'forest');
-  assert.equal(forest.gold, 3, '森林上该只留两成金币');
-  assert.equal(forest.material, 11, '森林上该折八成建材');
+  assert.equal(forest.gold ?? 0, 0, '森林上也不留金币');
+  assert.equal(forest.material, 14, '森林同样出材料');
 
-  // 城郊本来就是同一个口径：两成留金、八成折粮
+  const plain = at('quarrier', 'plain');
+  assert.equal(plain.gold ?? 0, 0, '平原上不留金币');
+  assert.equal(plain.food, 6, '平原上的经济单位全出粮食');
+
+  // 城郊：原来是八成折粮，现在原样收金
   const city = at('quarrier', 'city');
-  assert.equal(city.gold, 1, '城郊两成留金');
-  assert.equal(city.food, 5, '城郊八成折成粮');
+  assert.equal(city.gold, 6, '城里的经济单位产出全为金钱');
+  assert.equal(city.food ?? 0, 0, '城里不产粮');
+
+  // 农民：平原 7 → 全粮；丘陵 4 → 全材（本体兵种，被扩展改写）
+  assert.equal(at('farmer', 'plain').food, 7, '农民在平原全出粮');
+  assert.equal(at('farmer', 'hill').material, 4, '农民在丘陵全出材');
+
+  // 牧民是特例：丘陵 8 → 4 粮 + 4 材
+  const herderHill = at('herder', 'hill');
+  assert.equal(herderHill.gold ?? 0, 0, '牧民不产金');
+  assert.equal(herderHill.food, 4, '牧民一半产粮');
+  assert.equal(herderHill.material, 4, '牧民一半产材');
+  const herderPlain = at('herder', 'plain');
+  assert.equal(herderPlain.food, 2);
+  assert.equal(herderPlain.material, 2);
+});
+
+test('城郭：税官按全场粮材抽成，数量上限等于时代', () => {
+  /*
+   * 税官的产出不写在兵种表里（那张表全是 0），全靠 `modifyYield` 现算：
+   *   税 = round((全场粮 + 全场材) × TAX_RATE)
+   *
+   * 守三件事：
+   *   ① 产出跟着别的产业走（多摆产业，税就变多）；
+   *   ② 税官自己不进税基（否则互抽越叠越高）；
+   *   ③ 数量上限 = 当前时代（1 代只能有 1 个）。
+   */
+  // 先清掉开局自带的兵：老农民站在平原上会给税基贡献 7 粮，
+  // 税就从 5 变 6——那不是税算错了，是场地没扫干净。
+  // （只清兵、留城：下面要拿城问产兵上限）
+  const s = fresh({ expansionIds: ['city-works'], startEra: 1 });
+  s.units = [];
+  const spot = s.tiles.findIndex((t) => !t.cityId && t.terrain === 'plain');
+  const sx = spot % s.w;
+  const sy = Math.floor(spot / s.w);
+  const put = (id: string, terrain: string, dx = 0) => {
+    const u = place2(s, 'A', id, sx + dx, sy);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain as never;
+    return u;
+  };
+
+  // 两个采石工在丘陵：26 + 26 = 52 材料
+  put('quarrier', 'hill', 0);
+  put('quarrier', 'hill', 1);
+  const tax = put('tax_collector', 'plain', 2);
+  const first = unitYield(s, tax).gold ?? 0;
+  assert.ok(first > 0, `税官该有产出，实际 ${first}`);
+  assert.equal(first, Math.round(52 * 0.1), '税 = 全场粮材 × 一成');
+
+  // 再加一座产业：税基变大，税更多
+  put('quarrier', 'hill', 3);
+  const grown = unitYield(s, tax).gold ?? 0;
+  assert.ok(grown > first, `多一座产业，税该更多：${first} → ${grown}`);
+  assert.equal(grown, Math.round(78 * 0.1));
+
+  // 税官自己不进税基
+  const tax2 = put('tax_collector', 'plain', 4);
+  assert.equal(unitYield(s, tax).gold, grown, '另一个税官不该让这个税官多收');
+  assert.ok((unitYield(s, tax2).gold ?? 0) > 0, '第二个税官自己也要收得到');
+
+  // 上限：1 代只能有 1 个
+  const city = citiesOf(s, 'A')[0]!;
+  assert.equal(
+    s.units.filter((u) => u.owner === 'A' && u.type === 'tax_collector').length,
+    2,
+    '此时盘上已经摆了两个（place2 绕过规则）',
+  );
+  const check = produceAt(s, { kind: 'city', city }, s.unitTypes['tax_collector']!);
+  assert.equal(check.ok, false, '超过时代上限就该拦住');
+  assert.match(check.ok ? '' : check.reason, /税官最多 1 个/, '理由要说清上限');
 });
 
 test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {
