@@ -185,31 +185,6 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
 }
 
 /**
- * 「浓雾蔽野」下这一格是不是黑的（看不见）。
- *
- * 只在这个扩展**且**开着雾的局里成立；未开浓雾恒为 false——调用方直接问，
- * 不必到处写 `expansionIds.includes('blackout')`。
- *
- * 为什么需要它：棋盘把黑格画成 `.tile.unknown`，可是"点开看看"和"给视图染色"
- * 这两条路上原来是敞着的——
- *   · 点一座看不见的城，城卡照样给出护甲和耐久；
- *   · 开「天气」视图，黑区里在下雨也一并染出来（天气由地形算出来，
- *     配合"温和不画"，连地形轮廓都能反推）。
- * 那等于让浓雾免费提供侦察。判据和棋盘本身同一条：`visibleTilesOf`。
- */
-export function isBlackedOut(
-  s: GameState,
-  p: PlayerId,
-  x: number,
-  y: number,
-): boolean {
-  if (!s.fog) return false;
-  if (!s.config.expansionIds.includes('blackout')) return false;
-  const i = idx(s, x, y);
-  return i >= 0 && !visibleTilesOf(s, p).has(i);
-}
-
-/**
  * 棋盘视图染色的可见性过滤：有雾就只留看得见的格子。
  *
  * 闸门收在这里而不是各个扩展的 `cells` 里，因为**所有**棋盘视图都走同一条路
