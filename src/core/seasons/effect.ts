@@ -305,22 +305,19 @@ export function effectLines(e: ClimateEffect): string[] {
   }
   if (e.endDamage && e.combo !== 'thunder' && e.combo !== 'storm') {
     const d = e.endDamage;
-    const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
+    const splash = d.splash ? `，溅射 ${d.radius ?? 1} 格 · 50%` : '';
     out.push(
       d.hits > 1
-        ? `回合末受 ${d.hits} 次 ${d.amount} 点伤害（吃护甲）`
+        ? `回合末受 ${d.hits} 次 ${d.amount} 点物理伤害`
         : `回合末受 ${d.amount} 点伤害${splash}`,
     );
   }
   if (e.upkeepGold) out.push(`每回合交 ${e.upkeepGold} 金维护费`);
-  if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
-  // 冰面那两条同样已经写在组合行里了
-  if (e.combo !== 'freeze' && e.combo !== 'ice') {
-    if (e.navyMoveZero) out.push('海军移动力归零');
-    if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
-      out.push(`海军移动力 ${pct(e.navyMoveMul - 1)}`);
-    }
-    if (e.landOnIce) out.push('陆军可以在冰面上行走');
+  if (e.upkeepHpRatio) out.push(`维护费不足则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
+  if (e.navyMoveZero) out.push('海军移动力归零');
+  if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
+    out.push(`海军移动力 ${pct(e.navyMoveMul - 1)}`);
   }
+  if (e.landOnIce) out.push('陆军可以在冰面上行走');
   return out;
 }

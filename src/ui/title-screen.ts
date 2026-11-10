@@ -66,7 +66,6 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       return `<i style="--d:${(t / 12).toFixed(2)};--r:${(i * 37) % 100}"></i>`;
     }).join('')}</div>
     <div class="title-inner">
-      <p class="title-kicker">回合制 · 方格战棋</p>
       <h1 class="title-name">时代与回旋镖</h1>
       <p class="title-sub">从青铜到信息化：六个时代的产兵、经济与攻城</p>
 

@@ -1155,6 +1155,41 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   if (!city) return '';
 
   /*
+   * 浓雾蔽野：看不见的城，不许把耐久 / 护甲 / 收入念出来。
+   *
+   * 2026-11-10 补的洞。同一天把「未探明」做到了地形上（`selectedTile` 那条路），
+   * 可是城市卡走的是**另一个入口**（`selectedCityId`），它从来没查过视野——
+   * 黑掉的城市点开照样写着"耐久 30/30 · 护甲 4 · 本城收入 30 金"，
+   * 比地形泄漏值钱得多：攻不攻得下、值不值得围，全靠这几个数。
+   *
+   * 记忆里只存 owner / era / 最后看到的行动序号（`KnownCity` 没有耐久字段），
+   * 所以旧情报只给"谁在占、什么时代、多久以前看的"，血量那类数字一律不给。
+   */
+  if (view.terrainHidden) {
+    const vis = new Set(view.visible);
+    const inSight = cityTiles(city).some((t) => vis.has(t.y * s.w + t.x));
+    if (!inSight) {
+      const memo = view.rememberedCities.get(city.id);
+      const coord = `${String.fromCharCode(65 + city.x)}${city.y + 1}`;
+      const sub = memo
+        ? `坐标 ${coord} · 上次看到：${s.players[memo.owner]?.name ?? memo.owner} · ${
+            eraDef(memo.era).name
+          }（第 ${memo.seenAt} 行动）`
+        : `坐标 ${coord}`;
+      return `
+      <div class="unit-head">
+        <div class="unit-chip" style="border-radius:8px;background:#5f5a52">?</div>
+        <div>
+          <div class="unit-title">未探明</div>
+          <div class="unit-sub">${sub}</div>
+        </div>
+      </div>
+      <div class="unit-notes"><div>· 城市在雾里：耐久、护甲、收入都看不到。派个单位走近，或者等它重新进入视野。</div></div>
+    `;
+    }
+  }
+
+  /*
    * 指挥官模式下，自己的城仍然算"我的"。
    *
    * 原来这里把 readOnly 一刀切成 spectator || commander，于是指挥官模式的产兵面板
@@ -1324,7 +1359,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
         <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name}时代 · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
