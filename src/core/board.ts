@@ -95,3 +95,36 @@ export function xyOn(s: GameState, id: BoardId, i: number): { x: number; y: numb
   const w = boardOf(s, id).w;
   return { x: i % w, y: Math.floor(i / w) };
 }
+
+/**
+ * 把一份 state 投影成"只在某一张图上"的视角，给**只读**的几何/规则计算用。
+ *
+ * 为什么要有它：走子、选址、寻路这些函数是按"一个 state 一张图"写的，
+ * 里面到处是 `s.w / s.tiles / idx()`。与其把它们逐个改成"按图取格子"
+ * （369 处引用，改完没法验证），不如在**入口**换一副眼镜：
+ * 宽高和格子换成目标图的，单位和城市只留那张图的，其余字段原样沿用。
+ *
+ * 关键约束（写下来免得以后被误用）：
+ *   · 只读。**不要**拿它 `push` 单位或改 `players`——改动会落在临时对象上，
+ *     真状态看不见。要改状态就用真的 `state`。
+ *   · 地球直接返回 `state` 自己，零开销；所以地球那条路上的代码行为不变。
+ *   · `marks` 清空：水雷、火场目前只在地球，别的图上不该凭空出现。
+ */
+export function boardState(s: GameState, id: BoardId = EARTH): GameState {
+  if (id === EARTH || !s.boards?.[id]) return s;
+  const b = s.boards[id]!;
+  return {
+    ...s,
+    w: b.w,
+    h: b.h,
+    tiles: b.tiles,
+    units: s.units.filter((u) => boardIdOf(u) === id),
+    cities: s.cities.filter((c) => boardIdOf(c) === id),
+    marks: [],
+  };
+}
+
+/** 单位所在那张图的视角（地球单位就是原 state，零拷贝） */
+export function boardStateOf(s: GameState, u: { board?: BoardId }): GameState {
+  return boardState(s, boardIdOf(u));
+}

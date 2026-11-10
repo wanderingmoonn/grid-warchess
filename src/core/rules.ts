@@ -137,7 +137,7 @@ import type {
   ProduceSource,
 } from './types.ts';
 import { seatsOf } from './types.ts';
-import { boardIdOf, boardIds, boardOf, EARTH, idxOn } from './board.ts';
+import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -692,14 +692,16 @@ export function effectiveRangeAgainst(
 /**
  * 这个单位在不在**地球**上。
  *
- * 多图之后，一批位置类判定（走子、开火、建造、装卸）仍然是"拿 (x,y) 去
- * `state.tiles` 里查"——它们只认识地球。月球上的单位如果被这些动作带上，
- * 就会按地球的地形和宽度结算：玩家看到自己的兵在月面上走，对面却看不见它
- * （2026-11-10 的实机 bug）。
+ * 多图之后，"拿 (x,y) 去 `state.tiles` 里查"的那批位置判定，要么改成按图
+ * 投影（走子、建造已经这么做了，见 `boardStateOf`），要么先挡在门外。
  *
- * 所以位置类动作统一先问这一句。月球目前只能用**单位动作 / 技能**
- * （发射井的加注、月球基地的采样），那些不动坐标，不受影响。
- * 等月面真的能走能打了（第 8 步），把这些动作改成按 `boardIdOf` 取图再放开。
+ * 还挡着的三个：**开火、攻城、装卸**。原因都是同一个——它们顺着 `s` 还会
+ * 摸到伤害结算、溅射、反击、地形掩护、货舱那一串（`computeDamage` /
+ * `splashVictims` / `hurtUnit`），那些现在仍然按"一个 state 一张图"写。
+ * 半接过来只会得到"月面上开火、地球上有人掉血"这种更难查的 bug。
+ *
+ * 月面战斗是「太空战争」那一包的事；到那时把这几条也换成
+ * `boardStateOf` + 回写（投影只读、变更写在真 state 上）即可。
  */
 export function offWorld(u: Unit): boolean {
   return boardIdOf(u) !== EARTH;
@@ -2417,7 +2419,13 @@ function detectBonus(s: GameState, viewerUnit: Unit, target: Unit): number {
  * 返回 格索引 -> 累计消耗。被友军占据的格子会从结果里去掉：
  * 己方单位可以穿过友军，但不能停在友军身上。
  */
-export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
+export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
+  /*
+   * 按**单位所在的那张图**算：月球上的兵不能用地球的地形和宽度寻路。
+   * 换成的是一份只读投影（`boardStateOf`），地球单位拿到的就是原 state。
+   */
+  const s = boardStateOf(s0, unit);
+
   // 占地 2 的单位也能移动（2026-10-30）。
   //
   // 以前这里是一句"占地 2 一律返回空集"——那时 2×2 只有炮台、兵营这类
@@ -4016,20 +4024,24 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
   if (unit.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
-  if (offWorld(unit)) return { ok: false, reason: '这张图还不能下移动命令' };
+  /*
+   * 走子按**单位所在的那张图**结算：月球上的兵走月球的格子。
+   * `st` 是只读投影，变更仍然写在真的 `s` 上（单位对象本来就是同一个）。
+   */
+  const st = boardStateOf(s, unit);
   if (unit.moved) return { ok: false, reason: '该单位本回合已经移动过' };
-  if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
+  if (!inBounds(st, x, y)) return { ok: false, reason: '目标越界' };
 
   const reach = reachableTiles(s, unit);
-  if (!reach.has(idx(s, x, y))) return { ok: false, reason: '目标格不可达' };
+  if (!reach.has(idx(st, x, y))) return { ok: false, reason: '目标格不可达' };
 
   // 把到达目标格的真实消耗加进 moveSpent
-  const cost = reach.get(idx(s, x, y))!;
+  const cost = reach.get(idx(st, x, y))!;
   unit.moveSpent = (unit.moveSpent ?? 0) + cost;
 
   // 走进废墟 = 接管。钱要在动之前就查：走到一半发现掏不起重建费，
   // 会留下一个"已经站在城里但城市还是别人的"的中间态，很难收拾。
-  const destTile = tileAt(s, x, y);
+  const destTile = tileAt(st, x, y);
   const destCity = destTile?.cityId ? cityById(s, destTile.cityId) : null;
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
@@ -4045,7 +4057,8 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   // 落脚之后再算雷：**先站上去，再挨炸**。
   // 顺序不能反——反过来的话"能不能进这一格"要先去问一遍地上的东西，
   // 于是"踩雷"变成"这一步走不成"，雷就从陷阱变成了空气墙。
-  if (marksOf(s).length > 0) {
+  // 留痕（水雷、火场）只在地球有，别的图上不查
+  if (!offWorld(unit) && marksOf(s).length > 0) {
     enterTile(s, unit, markApi(s));
     // 炸死的就地清场：不清的话，下一步"入驻废墟"会由一个 0 血的单位执行
     if (unit.hp <= 0) {
@@ -4945,8 +4958,11 @@ function doBuild(
   if (!builder) return { ok: false, reason: '建造者不存在' };
   if (builder.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (builder.acted) return { ok: false, reason: '该单位本回合已经行动过' };
-  // 月面上还不能施工：选址、地形、距离全按地球算（见 offWorld）
-  if (offWorld(builder)) return { ok: false, reason: '这张图还不能建造' };
+  /*
+   * 施工按**建造者所在的那张图**结算：月面上的工程队盖的是月面的格子。
+   * `st` 是只读投影，真正的变更（扣钱、落单位）仍然写在 `s` 上。
+   */
+  const st = boardStateOf(s, builder);
 
   const builderDef = utype(s, builder.type);
   if (!builderDef.builds || builderDef.builds.length === 0) {
@@ -4992,12 +5008,12 @@ function doBuild(
   // 两个工兵一起修一座塔，就是把两次 BUILD 叠在同一个工地上：rate 相加、
   // 各自当场再投一次。这比"建造者必须一直站在旁边"好——工兵建完就走是常态，
   // 把进度绑在人的站位上，"走开"就成了一个玩家看不见的惩罚。
-  const site = s.units.find(
+  const site = st.units.find(
     (u) =>
       u.type === def.id &&
       u.owner === s.current &&
       underConstruction(u) &&
-      coversTile(s, u, x, y),
+      coversTile(st, u, x, y),
   );
   if (site) {
     const power = buildPowerOf(builderDef);
@@ -5023,7 +5039,7 @@ function doBuild(
     return { ok: true, state: s };
   }
 
-  const problem = buildSiteError(s, def, builder, x, y);
+  const problem = buildSiteError(st, def, builder, x, y);
   if (problem) return { ok: false, reason: problem };
 
   const price = recruitResCost(s, s.current, def);
@@ -5053,6 +5069,8 @@ function doBuild(
     moved: true,
     acted: true,
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
+    // 在月球上盖的就留在月球上（地球建筑没有这个字段 = 缺省地球）
+    ...(boardIdOf(builder) === EARTH ? {} : { board: boardIdOf(builder) }),
   });
 
   // 桥建成才把那一格换成桥面：工地桥不许提前通车（船也要先绕）

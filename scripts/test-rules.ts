@@ -339,7 +339,7 @@ import {
   isEliminated,
   hasQuit,
 } from '../src/core/rules.ts';
-import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
+import { playerView, onlyVisibleCells, viewOnBoard } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -19792,40 +19792,84 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
   assert.ok(siloOf(cur), '发射井不会被消耗');
 });
 
-test('月球上的兵不能在地球上被指挥（幽灵 bug）', () => {
+test('视图裁到某一张图：地球上不画月球上的东西', () => {
+  /*
+   * 幽灵的第二个来源是**渲染**：`renderBoard` 画的是 `view.state.units`，
+   * 而"地球那一份视图"以前是原样返回的——月球上的兵和月球基地就按同一个
+   * 坐标画到地球上了（2026-11-10 第二次反馈）。
+   *
+   * 现在不管是哪张图都走 `viewOnBoard`：单位、城市、幽灵都按图筛。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const u = place2(s, 'A', 'militia', 4, 4);
+  u.board = 'moon';
+
+  const view = playerView(s, 'A');
+  assert.ok(view.state.units.some((x) => x.id === u.id), '整份视图里当然有它（换图要用）');
+
+  const earth = viewOnBoard(view, 'earth');
+  assert.equal(earth.state.units.some((x) => x.id === u.id), false, '地球上不该画月球上的兵');
+  assert.equal(earth.state.w, s.w, '地球还是地球的宽度');
+
+  const moon = viewOnBoard(view, 'moon');
+  assert.ok(moon.state.units.some((x) => x.id === u.id), '月球那一份要有它');
+  assert.equal(moon.state.w, s.boards!.moon!.w, '宽度换成月球的');
+  assert.equal(moon.state.cities.length, 0, '月球上没有城可画');
+});
+
+test('月球上的兵按月球的格子走（幽灵 bug 的规则侧）', () => {
   /*
    * 实机反馈：把民兵发射到月球后，在地球的**同一坐标**上能选中并指挥他，
    * 指令按地球坐标结算——他在月面上走，对面还看不见他。
    *
-   * 根因是 `unitsAt` 只认坐标不认图。界面那一侧已经按当前图过滤（stackAt），
-   * 规则这一侧也得关死：位置类动作只在地球上成立（`offWorld`）。
+   * 两处都关了：界面按当前图筛单位（`stackAt`），渲染按图裁视图
+   * （`viewOnBoard`）。规则这一侧则是**按单位所在的图**结算：
+   * 越界判据、地形、寻路全用月球那一份，借地球坐标指挥不动他。
    */
   const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
-  const u = place2(s, 'A', 'militia', 5, 5);
+  for (const t of s.boards!.moon!.tiles) t.terrain = 'regolith';
+  const u = place2(s, 'A', 'militia', 2, 2);
   u.board = 'moon';
 
-  const move = applyAction(s, { type: 'MOVE', unitId: u.id, x: 6, y: 5 });
-  assert.equal(move.ok, false, '月面上的兵不该被 MOVE 指挥');
-  assert.ok(move.reason.includes('这张图'), `理由要说清是"图"的问题，实际：${move.reason}`);
+  const moonW = s.boards!.moon!.w;
+  const far = applyAction(s, { type: 'MOVE', unitId: u.id, x: moonW + 2, y: 2 });
+  assert.equal(far.ok, false, '超出月球宽度就是越界');
+  assert.ok(far.reason.includes('越界'), `理由该说越界，实际：${far.reason}`);
 
-  // 开火同样关掉：目标和攻击者不在同一张图上时，距离/地形都不可信
-  const foe = place2(s, 'B', 'militia', 6, 5);
-  const hit = applyAction(s, { type: 'ATTACK', unitId: u.id, targetId: foe.id });
-  assert.equal(hit.ok, false, '月面上的兵不该能开火');
+  const moved = applyAction(s, { type: 'MOVE', unitId: u.id, x: 3, y: 2 });
+  assert.ok(moved.ok, `月球上该能走：${moved.reason}`);
+  const after = moved.state.units.find((x) => x.id === u.id)!;
+  assert.equal(after.x, 3, '走的是月球那一格');
+  assert.equal(boardIdOf(after), 'moon', '还留在月球图上');
 
   /*
-   * 幽灵的来源：`unitsAt` 只认坐标。这条把前提钉住——
-   * 只要它还会在 (5,5) 找出月球上的兵，界面那一侧的按图过滤（stackAt）
-   * 就不能删；删了幽灵立刻回来。
+   * 占格也算得对：2×2 的基地在地球宽度的表里是四格，在月球这一份里也是四格。
+   * 走进去要被挡住——这条顺带守住"按图投影之后 footprint 仍然生效"。
    */
-  const view = playerView(s, 'A');
-  const atSameCell = unitsAt(view.state, 5, 5);
-  assert.ok(atSameCell.some((x) => x.id === u.id), '按坐标查确实会把它找出来');
-  assert.equal(
-    atSameCell.filter((x) => boardIdOf(x) === 'earth').length,
-    0,
-    '按图过滤之后，这一格在地球上是空的',
-  );
+  const blockState = moved.state;
+  blockState.units.push({
+    id: 'moon-base-test',
+    type: MOON_BASE_ID,
+    owner: 'A',
+    x: 6,
+    y: 2,
+    hp: 200,
+    kills: 0,
+    moved: true,
+    acted: true,
+    board: 'moon',
+  });
+  const into = applyAction(blockState, { type: 'MOVE', unitId: u.id, x: 6, y: 2 });
+  assert.equal(into.ok, false, '基地占着的那一格走不进去');
+
+  /*
+   * 开火仍然关着：月面战斗属于「太空战争」那一包，现在还没有瞄准与伤害的
+   * 按图结算（`computeDamage` 会读地形与掩护）。这条守着"暂时别开"。
+   */
+  const foe = place2(moved.state, 'B', 'militia', 4, 2);
+  foe.board = 'moon';
+  const hit = applyAction(moved.state, { type: 'ATTACK', unitId: u.id, targetId: foe.id });
+  assert.equal(hit.ok, false, '月面还不能开火');
 });
 
 test('登月胜利：展开基地、采样 3 回合、结果送回就赢', () => {
