@@ -269,6 +269,51 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
 }
 
 /**
+ * 把一份视图裁成"只看某一张图"。
+ *
+ * 渲染层（`ui/board.ts`）是按"一个 state 一张图"写的，一千多行，不值得为了
+ * 多图去改它。所以切图时给它一份**替身视图**：宽高、格子、单位、城市都换成
+ * 目标图的那一份，其余字段（config / unitTypes / players）原样保留。
+ *
+ * ⚠️ 地球也一样要裁。以前地球走的是"原样返回"的快路径，于是月球上的兵
+ * 跟着 `state.units` 一起被画到地球上（同一个坐标）——实机上看到的就是
+ * "月球的兵和月球基地出现在地球"（2026-11-10 第二次反馈）。
+ * 只有当所有单位、城市、幽灵本来就在地球上时，这份视图才真的只是地球那一份。
+ */
+export function viewOnBoard(view: PlayerView, id: BoardId): PlayerView {
+  const units = view.state.units.filter((u) => boardIdOf(u) === id);
+  const cities = view.state.cities.filter((c) => boardIdOf(c) === id);
+  const ghosts = view.ghosts.filter((g) => boardIdOf(g) === id);
+
+  if (
+    id === EARTH &&
+    units.length === view.state.units.length &&
+    cities.length === view.state.cities.length &&
+    ghosts.length === view.ghosts.length
+  ) {
+    return view;
+  }
+
+  const b = boardOf(view.state, id);
+  return {
+    ...view,
+    state: {
+      ...view.state,
+      w: b.w,
+      h: b.h,
+      tiles: b.tiles,
+      units,
+      cities,
+      // 留痕（水雷、火场）只在地球上，别的图先不给
+      marks: id === EARTH ? view.state.marks : [],
+    },
+    visible: view.visibleByBoard[id] ?? [],
+    rememberedTiles: view.rememberedByBoard[id] ?? new Map(),
+    ghosts,
+  };
+}
+
+/**
  * 棋盘视图染色的可见性过滤：有雾就只留看得见的格子。
  *
  * 闸门收在这里而不是各个扩展的 `cells` 里，因为**所有**棋盘视图都走同一条路

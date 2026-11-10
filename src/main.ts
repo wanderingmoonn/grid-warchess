@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { onlyVisibleCells, playerView } from './core/fog.ts';
+import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -36,7 +36,8 @@ import {
   cityAt,
   citiesOf,
   cityName,
-  distance,
+  distBetweenUnits,
+  distToUnit,
   disbandRefundOf,
   eggSpots,
   heroBlocked,
@@ -86,7 +87,7 @@ import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Uni
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
 import type { BoardUi } from './ui/board.ts';
-import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, hasBoard } from './core/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardState, EARTH, hasBoard } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
 import {
   aiDraftBan,
@@ -781,6 +782,12 @@ function planMovePath(before: GameState, action: Action): void {
   if (action.type !== 'MOVE') return;
   const u = before.units.find((x) => x.id === action.unitId);
   if (!u) return;
+  // 别的图不画拐弯路径：`pathCells` 是按地球宽度写死的。直线滑过去就够用了，
+  // 真要为月球画逐格路径，等它有了障碍和地形再说。
+  if (boardIdOf(u) !== EARTH) {
+    pendingMovePath = null;
+    return;
+  }
   pendingMovePath = new Map([
     [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y }, u.type)],
   ]);
@@ -1459,12 +1466,12 @@ function render(): void {
   /*
    * 画**当前这一张**图。
    *
-   * 地球走原路径（viewForBoard 直接返回 view，一个对象都不建）；
-   * 别的图给渲染层一个"替身 state"：宽高、格子、单位、城市都换成那张图的。
-   * 选中/可达/染色这些地球坐标的东西在 boardUiFor 里清空——第 4 步接
-   * 动作时再按图实现。
+   * `viewOnBoard` 给渲染层一份"替身视图"：宽高、格子、单位、城市都换成
+   * 那张图的那一份（地球也走这条路——不裁的话月球上的兵会画到地球上）。
+   * 没有别的图的东西时它原样返回，一个对象都不建。
+   * 选中/可达/染色这类"图内坐标"在 boardUiFor 里按图过滤。
    */
-  renderBoard(boardEl, viewForBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
+  renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
 
   /*
    * 笔刷在手时，棋盘自己吃掉触摸手势。
@@ -1982,35 +1989,6 @@ function addMoonBoard(): void {
   switchBoard('moon');
 }
 
-/**
- * 把主视图裁成"某一张图"。
- *
- * 渲染层（`ui/board.ts`）是按"一个 state 只有一张图"写的，一千多行，
- * 不值得为了切图去改它。这里给它一个**替身 state**：宽高、格子、单位、城市
- * 都换成目标图的，其余字段（config / unitTypes / players）原样保留。
- * 地球走快路径，一个对象都不新建。
- */
-function viewForBoard(view: PlayerView, id: BoardId): PlayerView {
-  if (id === EARTH) return view;
-  const b = boardOf(view.state, id);
-  return {
-    ...view,
-    state: {
-      ...view.state,
-      w: b.w,
-      h: b.h,
-      tiles: b.tiles,
-      units: view.state.units.filter((u) => boardIdOf(u) === id),
-      cities: view.state.cities.filter((c) => boardIdOf(c) === id),
-      // 留痕（雷、火）只在地球，别的图先不给
-      marks: [],
-    },
-    visible: view.visibleByBoard[id] ?? [],
-    rememberedTiles: view.rememberedByBoard[id] ?? new Map(),
-    ghosts: view.ghosts.filter((g) => boardIdOf(g) === id),
-  };
-}
-
 /** 非地球的图没有选中/可达/染色这些地球坐标的东西，一律清空 */
 function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
   if (id === EARTH) return ui;
@@ -2020,12 +1998,13 @@ function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
     ...ui,
     selectedId: sel && boardIdOf(sel) === id ? sel.id : null,
     selectedCityId: null,
-    reach: [],
+    // 可达格与建造高亮都是"图内索引"，渲染的正好是同一张图，照用
+    reach: ui.reach,
     targets: [],
     siegeTargets: [],
     aimTiles: [],
     skillThreatTiles: [],
-    placeable: [],
+    placeable: ui.placeable,
     threat: [],
     heat: undefined,
     heatFlash: undefined,
@@ -2075,11 +2054,22 @@ function refreshSelection(): void {
    * 直接清空，省一次错误的寻路。
    */
   if (activeBoardId !== EARTH) {
+    /*
+     * 别的图也能走（第 8 步起的月面行动）：可达格由 `reachableTiles` 按
+     * 单位所在的图算，索引也是那张图的索引，和渲染层对得上。
+     *
+     * 攻击、攻城、技能选点仍然只在地球：它们的射程、溅射、地形掩护全按
+     * `state` 结算，月面战斗是「太空战争」那一包的事。
+     */
     reach = [];
     targets = [];
     siege = [];
     aimTiles = [];
     skillThreatTiles = [];
+    const unit = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+    if (unit && unit.owner === me() && boardIdOf(unit) === activeBoardId && !unit.acted) {
+      reach = canMove(unit) ? Array.from(reachableTiles(state, unit).keys()) : [];
+    }
     return;
   }
 
@@ -2271,7 +2261,7 @@ function computePlaceable(): number[] {
     const out: number[] = [];
     for (let y = 0; y < state.h; y++) {
       for (let x = 0; x < state.w; x++) {
-        if (distance(ferry, { x, y }) !== 1) continue;
+        if (distToUnit(state, { x, y }, ferry) !== 1) continue;
         const tile = state.tiles[y * state.w + x];
         if (!tile) continue;
         // 落点问规则层（canStandAt 按**货舱里那个兵**判）：自己数一遍地形的话，
@@ -2299,11 +2289,16 @@ function computePlaceable(): number[] {
   // 军营那次就是这么坏的：规则里判临水只认 `water`，这里用的 `adjacentToWater`
   // 认桥面，于是桥头被高亮成可建，点下去才回一句"必须扎在水边"。
   // 判据只能有一处，界面这一层只负责问。
+  /*
+   * 按**建造者所在的那张图**算：月面上的工程队看的是月球的格子。
+   * `boardState` 对地球直接返回 state 本身，所以这条不影响原路径。
+   */
+  const grid = boardState(state, boardIdOf(builder));
   const out: number[] = [];
-  for (let y = 0; y < state.h; y++) {
-    for (let x = 0; x < state.w; x++) {
-      if (buildSiteError(state, def, builder, x, y) !== null) continue;
-      out.push(y * state.w + x);
+  for (let y = 0; y < grid.h; y++) {
+    for (let x = 0; x < grid.w; x++) {
+      if (buildSiteError(grid, def, builder, x, y) !== null) continue;
+      out.push(y * grid.w + x);
     }
   }
   return out;
@@ -3334,22 +3329,49 @@ function onBoardClick(e: Event): void {
     const board = boardOf(state, id);
     if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
 
+    /*
+     * 别的图（目前是月球）的点击：**建造选址 → 走子 → 选中**。
+     *
+     * 顺序和地球那条一致。这里没有攻击/攻城/技能选点——月面战斗还没做
+     * （见 refreshSelection 里的说明），所以那几种点击后面会落到"选中/取消"。
+     */
+    if (buildPlan) {
+      const plan = buildPlan;
+      const built = dispatch({
+        type: 'BUILD',
+        unitId: plan.unitId,
+        unitType: plan.type,
+        x: at.x,
+        y: at.y,
+      });
+      if (built) buildPlan = null;
+      refreshSelection();
+      render();
+      return;
+    }
+
     const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
     // 和地球那条一致：兵压在建筑上面，先选兵
     const pick =
       here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
 
+    // 点空地、手上又选着自己的人：下移动命令（走不走得通由规则层说）
+    if (!pick && selectedId) {
+      const sel = state.units.find((u) => u.id === selectedId);
+      if (sel && sel.owner === me() && boardIdOf(sel) === id && !sel.acted) {
+        if (dispatch({ type: 'MOVE', unitId: sel.id, x: at.x, y: at.y })) return;
+      }
+    }
+
     selectedId = pick?.id ?? null;
     selectedCityId = null;
     selectedTile = null;
-    reach = [];
-    targets = [];
-    siege = [];
     aimTiles = [];
     skillThreatTiles = [];
-    if (!pick) {
+    refreshSelection();
+    if (!pick && !selectedId) {
       const tile = board.tiles[at.y * board.w + at.x];
-      toast(tile ? `${TERRAIN_NAMES[tile.terrain] ?? tile.terrain} · 这张图还不能下达移动命令` : '这一格在图外');
+      if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
     }
     render();
     return;
@@ -3731,7 +3753,17 @@ function onBoardClick(e: Event): void {
   if (loadPlan) {
     const ferry = state.units.find((u) => u.id === loadPlan);
     const cargo = clickedUnitId ? state.units.find((u) => u.id === clickedUnitId) : null;
-    if (ferry && cargo && cargo.owner === ferry.owner && distance(ferry, cargo) === 1) {
+    /*
+     * 贴身按**占地**算，不是锚点：2×2 的发射井锚点在左上角，
+     * 站在它右下角旁边的兵，锚点距离是 3。规则层早就改过来了（doLoad 用的是
+     * distBetweenUnits），这里漏改，玩家按下去只会听到"点一个贴着船的己方陆军"。
+     */
+    if (
+      ferry &&
+      cargo &&
+      cargo.owner === ferry.owner &&
+      distBetweenUnits(state, ferry, cargo) === 1
+    ) {
       dispatch({ type: 'LOAD', unitId: ferry.id, cargoId: cargo.id });
       loadPlan = null;
       return;
@@ -3745,7 +3777,7 @@ function onBoardClick(e: Event): void {
 
   if (unloadPlan) {
     const ferry = state.units.find((u) => u.id === unloadPlan);
-    if (ferry?.cargo?.length && coords && distance(ferry, coords) === 1) {
+    if (ferry?.cargo?.length && coords && distToUnit(state, coords, ferry) === 1) {
       const cargoId = ferry.cargo[0]!.id;
       const ok = dispatch({
         type: 'UNLOAD',
