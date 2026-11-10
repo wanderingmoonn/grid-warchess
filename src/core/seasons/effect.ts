@@ -99,6 +99,11 @@ const INCOME_MAX = 0.9;
 /** 湿度到这条线就开始收维护费（固定金额见 TUNING.weatherUpkeep） */
 const HUMID_AT = 80;
 
+/** 浓雾把视野和射程压到多少（两者同一个数：看不清就打不准） */
+const FOG_CAP = 2;
+/** 浓雾只按得住视野不超过这个数的部队；更高的照常看 */
+const FOG_VISION_LINE = 5;
+
 function tierBonus(tiers: Array<{ below: number; bonus: number }>, v: number): number {
   for (const t of tiers) if (v < t.below) return t.bonus;
   return 0;
@@ -155,9 +160,15 @@ export function weatherEffect(d: WeatherDrivers): ClimateEffect {
   //
   // 只在**偏凉**的时候起雾、并且不能在下雨：雾是夜里地面辐射冷却的产物，
   // 28°C 加 85% 湿度是闷热，不是雾。少了这道温度闸，整个夏天都会是雾天。
+  //
+  // 只管"本来就看不太远"的部队（视野 ≤ `FOG_VISION_LINE`）：高时代那些
+  // 视野 6 以上的侦察/指挥单位在雾里仍然看得见，只是没了优势——
+  // 一律压到 2 等于把"看得远"这个卖点从它们身上没收掉。
   if (d.temp < TUNING.warmAt && d.precip === 'none' && d.rh >= TUNING.fogLine * 100) {
-    e.visionMax = 2;
-    e.rangeMax = 4;
+    e.visionMax = FOG_CAP;
+    e.rangeMax = FOG_CAP;
+    e.fogVisionLine = FOG_VISION_LINE;
+    e.combo = 'fog';
   }
 
   /* ── 灾害：冰面 / 雷暴 / 风暴 ───────────────────────── */
@@ -165,15 +176,19 @@ export function weatherEffect(d: WeatherDrivers): ClimateEffect {
     if (d.temp <= 0) {
       e.navyMoveZero = true;
       e.landOnIce = true;
+      e.combo = 'freeze';
     } else if (d.temp <= 45) {
       e.navyMoveMul = 0.75;
+      e.combo = 'ice';
     } else if (d.precip === 'heavy') {
       if (d.temp >= TUNING.hotAt) {
         // 暖水上的暴雨：雷暴
         e.endDamage = { hits: 1, amount: 50, splash: 0.5, radius: 1 };
+        e.combo = 'thunder';
       } else if (d.temp >= stormFloorOf(d.distToLand) && d.wind >= TUNING.stormWind) {
         // 风暴 = 雨大 + 风大 + 水暖 + 离岸够远，四个都满足才刮
         e.endDamage = { hits: 10, amount: 5 };
+        e.combo = 'storm';
       }
     }
   } else if (d.precip === 'heavy' && d.temp >= TUNING.hotAt) {
@@ -183,6 +198,7 @@ export function weatherEffect(d: WeatherDrivers): ClimateEffect {
     // 再加一道闸会让"徽标写着雷暴、却不掉血"（判类不看抬升，效果看），
     // 玩家只会觉得天气坏了。
     e.endDamage = { hits: 1, amount: 50, splash: 0.5, radius: 1 };
+    e.combo = 'thunder';
   }
 
   e.incomeBonus = Math.max(INCOME_MIN, Math.min(INCOME_MAX, income));
@@ -197,8 +213,10 @@ export function driversAt(s: GameState, x: number, y: number): WeatherDrivers {
   const wet = wetAt(s, x, y);
   return {
     temp: tempAt(s, x, y),
-    // 相对湿度按**有效**饱和线算（含辐合抬升）：和降水判据同一个口径
-    rh: sat > 0 ? Math.round((wet / sat) * 100) : 0,
+    // 相对湿度按**有效**饱和线算（含辐合抬升）：和降水判据同一个口径。
+    // 夹在 100 以内：暴雨时过饱和量能到 110%，但面板上印"相对湿度 111%"
+    // 只会让人怀疑是不是坏了——100% 就是"满"，多出来的部分已经变成雨。
+    rh: sat > 0 ? Math.min(100, Math.round((wet / sat) * 100)) : 0,
     precip: precipAt(s, x, y),
     wind: windSpeedAt(s, x, y),
     lift: upliftAt(s, x, y),
@@ -229,10 +247,41 @@ function stormFloorOf(distToLand: number): number {
  *
  * 表格改了、说明跟着改——不会出现"界面上写着 −25%、实际已经调成 −50%"。
  * `signedPct` 只处理百分比，别的单位各自写。
+ *
+ * 组合效果（浓雾 / 雷暴 / 风暴 / 封冻 / 浮冰）**单独一行、带名字**，
+ * 而且排在前面：这些不是"温度多少就减多少"能读出来的，是几个驱动凑到
+ * 一起才成立的。玩家看着 18°C、湿度 78% 是估不出会不会起雾的，
+ * 所以必须直接写"浓雾：……"，否则他只会看到"视野不超过 2"而不知道
+ * 为什么，也不知道自己能不能躲开。
  */
 export function effectLines(e: ClimateEffect): string[] {
   const out: string[] = [];
   const pct = (v: number) => `${v > 0 ? '+' : '−'}${Math.abs(Math.round(v * 100))}%`;
+
+  // ── 组合效果：先说"这是什么天气现象" ──
+  switch (e.combo) {
+    case 'fog':
+      out.push(
+        `浓雾：视野和射程都压到 ${e.visionMax ?? FOG_CAP}（只对视野 ≤${e.fogVisionLine ?? FOG_VISION_LINE} 的部队）`,
+      );
+      break;
+    case 'thunder':
+      out.push(`雷暴：回合末受 ${e.endDamage?.amount ?? 0} 点伤害，周围 1 格再吃一半`);
+      break;
+    case 'storm':
+      out.push(
+        `风暴：回合末受 ${e.endDamage?.hits ?? 0} 次 ${e.endDamage?.amount ?? 0} 点伤害（吃护甲）`,
+      );
+      break;
+    case 'freeze':
+      out.push('封冻：海军动不了，陆军可以踩着冰面走');
+      break;
+    case 'ice':
+      out.push('浮冰：海军移动力 −25%');
+      break;
+    default:
+      break;
+  }
 
   if (e.incomeBonus !== undefined && Math.round(e.incomeBonus * 100) !== 0) {
     out.push(`经济产出 ${pct(e.incomeBonus)}`);
@@ -249,9 +298,12 @@ export function effectLines(e: ClimateEffect): string[] {
     );
   }
   if (e.rangeAdd) out.push(`攻击范围 ${e.rangeAdd > 0 ? '+' : '−'}${Math.abs(e.rangeAdd)}`);
-  if (e.rangeMax) out.push(`攻击范围不超过 ${e.rangeMax}`);
-  if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
-  if (e.endDamage) {
+  // 浓雾那两条已经被组合行讲过了，不再重复一遍
+  if (e.combo !== 'fog') {
+    if (e.rangeMax) out.push(`攻击范围不超过 ${e.rangeMax}`);
+    if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
+  }
+  if (e.endDamage && e.combo !== 'thunder' && e.combo !== 'storm') {
     const d = e.endDamage;
     const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
     out.push(
@@ -262,10 +314,13 @@ export function effectLines(e: ClimateEffect): string[] {
   }
   if (e.upkeepGold) out.push(`每回合交 ${e.upkeepGold} 金维护费`);
   if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
-  if (e.navyMoveZero) out.push('海军移动力归零');
-  if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
-    out.push(`海军移动力 ${pct(e.navyMoveMul - 1)}`);
+  // 冰面那两条同样已经写在组合行里了
+  if (e.combo !== 'freeze' && e.combo !== 'ice') {
+    if (e.navyMoveZero) out.push('海军移动力归零');
+    if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
+      out.push(`海军移动力 ${pct(e.navyMoveMul - 1)}`);
+    }
+    if (e.landOnIce) out.push('陆军可以在冰面上行走');
   }
-  if (e.landOnIce) out.push('陆军可以在冰面上行走');
   return out;
 }

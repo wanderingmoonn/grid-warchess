@@ -11,6 +11,7 @@
  */
 
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
+import { activeExpansions } from '../expansions.ts';
 import { isNaval, SEASON_TURNS } from './climate.ts';
 import { climateAt, latitudeOf, stepClimateField, windAt } from './field.ts';
 import { effectAt, effectOfUnit } from './effect.ts';
@@ -26,6 +27,24 @@ export function hasSeasons(s: GameState): boolean {
 /** 单位类型（不走 rules.utype，避免规则层与扩展层互相引用） */
 function defOf(s: GameState, u: Unit) {
   return s.unitTypes[u.type];
+}
+
+/**
+ * 不受天气影响时，这支部队能看多远。
+ *
+ * 只用来判"浓雾按不按得住它"，所以只求量级对：从**兵种自身的视野**起算，
+ * 再把其它扩展给的视野加成叠上来（境界、丹药那一类），跳过天气自己。
+ * 不走 `rules.visionOf`——规则层反过来 import 这个文件，成环。
+ *
+ * 驻军抬视野这类核心细节这里没算：判的是 5 这条线，差一两格不影响结论。
+ */
+function visionBeforeFog(s: GameState, u: Unit): number {
+  let r = defOf(s, u)?.vision ?? 0;
+  for (const e of activeExpansions(s)) {
+    if (e.id === 'seasons' || !e.hooks.modifyVision) continue;
+    r = e.hooks.modifyVision({ state: s, player: u.owner, unit: u, base: r });
+  }
+  return r;
 }
 
 export const SEASONS: Expansion = {
@@ -57,6 +76,10 @@ export const SEASONS: Expansion = {
     + '便宜的单位心疼、高级经济单位几乎无感，高时代自然更扛天气。'
     + '<b>日常的冷暖只动经济与护甲，不拖慢部队</b>——只有严冬（−10°C 以下）与酷暑（32°C 以上）真的走不动；'
     + '而<b>大风只打空军</b>：风过线时逆风飞进那一格，每格多花 1 点移动力，地面部队一格都不受影响。'
+    + '<b>有些效果是几个驱动凑出来的</b>，面板会单独列一条带名字的，不用自己拿温度湿度去推：'
+    + '「浓雾：视野和射程都压到 2」——起雾要 20°C 以下、不下雨、相对湿度 ≥ 76%，'
+    + '而且<b>只按得住视野 ≤5 的部队</b>，看得更远的单位雾里照样看得远；'
+    + '「雷暴」「风暴」「封冻」「浮冰」同理，各占一行并写明伤害或限制。'
     + '气候不影响城市。',
   scale: 'large',
   hooks: {
@@ -105,9 +128,10 @@ export const SEASONS: Expansion = {
      * 问的是"飞进这一格"的价：拿目标格的风和这一步的方向比，
      * 逆风才收钱，顺风原价（也不打折——见 ClimateEffect.airUpwindCostAdd 的注释）。
      *
-     * 只在**这一格是大风**时收：不这样的话，全图常年有风，
+     * 只在**风够大**时收：不这样的话，全图常年有风，
      * 等于给所有空军加了一条永久减速，玩家还会觉得"凭什么"。
-     * 大风是看得见的标签——面板上写着，棋盘上染着，收钱才有理有据。
+     * 阈值和「大风」标签共用一条（TUNING.galeAt），所以"棋盘上说大风"
+     * 和"这里要多花钱"永远是同一批格子。
      */
     airStepCost: ({ state, fromIdx, toIdx, cost }) => {
       // 没有来处（部署、AI 只评估落点）：没有方向，也就谈不上逆风
@@ -125,23 +149,36 @@ export const SEASONS: Expansion = {
     },
 
     /**
-     * 视野。浓雾把视野压到 2。
+     * 视野。浓雾把**本来就看不太远**的部队压到 2。
      *
      * 只在有 unit 的调用里生效：那才是"这一格的雾有多大"；
      * 没有 unit 的是"这一方的整体视野"，雾属于格子不属于阵营。
+     *
+     * 高视野单位（6 以上，基本只有扩展里的高境界修士和侦察单位）不受影响：
+     * 一律压到 2 等于把"看得远"这个卖点从它们身上没收掉，玩家会觉得
+     * "我养到五境还是被雾糊住"。雾只收拾那些本来就靠得近才看得见的部队。
      */
     modifyVision: ({ state, unit, base }: VisionCtx) => {
       if (!unit) return base;
       const eff = effectOfUnit(state, unit);
-      return eff.visionMax ? Math.min(base, eff.visionMax) : base;
+      if (!eff.visionMax) return base;
+      if (eff.fogVisionLine !== undefined && visionBeforeFog(state, unit) > eff.fogVisionLine) {
+        return base;
+      }
+      return Math.min(base, eff.visionMax);
     },
 
-    /** 攻击范围：阴雨 -1、暴雨 -2；浓雾封顶 4。最少留 1 格。 */
+    /** 攻击范围：阴雨 -1、暴雨 -2；浓雾压到 2（和视野同一道闸）。最少留 1 格。 */
     modifyRange: ({ state, unit, range }: RangeCtx) => {
       const eff = effectOfUnit(state, unit);
       let out = range;
       if (eff.rangeAdd) out += eff.rangeAdd;
-      if (eff.rangeMax) out = Math.min(out, eff.rangeMax);
+      if (eff.rangeMax) {
+        // 和视野用同一把尺子：雾按不住的部队，射程也不该被按
+        const caught =
+          eff.fogVisionLine === undefined || visionBeforeFog(state, unit) <= eff.fogVisionLine;
+        if (caught) out = Math.min(out, eff.rangeMax);
+      }
       return Math.max(1, out);
     },
 

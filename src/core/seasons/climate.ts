@@ -222,10 +222,28 @@ export interface ClimateEffect {
   incomeBonus?: number;
   /** 攻击范围增减（阴雨 -1、暴雨 -2） */
   rangeAdd?: number;
-  /** 攻击范围上限（浓雾 4） */
+  /** 攻击范围上限（浓雾 2） */
   rangeMax?: number;
   /** 视野上限（浓雾 2） */
   visionMax?: number;
+  /**
+   * `visionMax` / `rangeMax` 只对**视野不超过这个数**的部队生效（浓雾 5）。
+   *
+   * 浓雾原来是"所有单位一律压到 2"，连视野 8 的侦察单位也一起按住——
+   * 高时代花大价钱买的"看得远"在雾天被一笔抹平，很别扭。
+   * 现在改成只收拾"本来就看不太远"的部队：雾对它们才是致命的，
+   * 而对高视野单位只是少看见一点（它们照样能看见，只是不再有优势）。
+   */
+  fogVisionLine?: number;
+  /**
+   * 这一格命中的**组合效果**。由多个驱动一起凑出来的那几种，
+   * 单独起个名字讲：温度湿度风都是玩家能读到的数，但"多少度加多少湿度
+   * 会起雾"没人算得出来，得直接告诉他"这是浓雾"。
+   *
+   * 一次只会有一个：起雾要求不下雨，雷暴/风暴要求下大雨，封冻要求结冰，
+   * 天然互斥。
+   */
+  combo?: 'fog' | 'thunder' | 'storm' | 'freeze' | 'ice';
   /** 回合结束的固定伤害 */
   endDamage?: { hits: number; amount: number; splash?: number; radius?: number };
   /**

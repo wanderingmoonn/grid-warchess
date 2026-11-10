@@ -72,7 +72,7 @@ import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
 import { CLIMATE_NAME, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
-import { weatherEffect } from '../src/core/seasons/effect.ts';
+import { effectLines, weatherEffect } from '../src/core/seasons/effect.ts';
 import type { WeatherDrivers } from '../src/core/seasons/effect.ts';
 import {
   classifyClimate,
@@ -12241,6 +12241,99 @@ test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
     Math.max(1, s.unitTypes.archer!.range - 1),
     '阴雨把射程砍一格',
   );
+});
+
+test('浓雾只按住视野 ≤5 的部队，看得远的照常看', () => {
+  /*
+   * 以前浓雾是"一律压到 2"：连视野 7 的侦察/高境界单位也一起被按住，
+   * 玩家花大价钱买的"看得远"在雾天被一笔抹平。
+   *
+   * 现在是**按单位自己的视野分档**：视野 ≤5 的压到 2（它们本来就靠得近），
+   * 视野 6 以上的不受影响——雾对它们只是"没了优势"，不是"瞎了"。
+   */
+  const fogMatch = (vision: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    s.turn = 25;
+    s.unitTypes.archer!.vision = vision;
+    s.tiles[5 * s.w + 5]!.custom = { temp: 140, wet: 58 };
+    assert.equal(climateAt(s, 5, 5), 'fog');
+    return s;
+  };
+
+  // 视野 3：雾按得住
+  const near = fogMatch(3);
+  const a = place2(near, 'A', 'archer', 5, 5);
+  assert.ok(visionOf(near, a) <= 2, `视野 3 的部队该被压到 2，实际 ${visionOf(near, a)}`);
+  assert.ok(effectiveRange(near, a) <= 2, '射程也一起压到 2');
+
+  // 视野 7：雾按不住
+  const far = fogMatch(7);
+  const b = place2(far, 'A', 'archer', 5, 5);
+  assert.equal(visionOf(far, b), 7, '视野 7 的部队在雾里还是 7');
+  assert.equal(effectiveRange(far, b), far.unitTypes.archer!.range, '射程也不压');
+
+  // 分界正好在 5：5 还是压，6 就不压
+  const edge = fogMatch(5);
+  const c = place2(edge, 'A', 'archer', 5, 5);
+  assert.ok(visionOf(edge, c) <= 2, '视野 5 仍在浓雾的辖区里');
+});
+
+test('组合效果单独列一条，带名字', () => {
+  /*
+   * 温度湿度风速是玩家能读到的数，但"多少度加多少湿度会起雾"没人算得出来。
+   * 所以浓雾/雷暴/风暴/封冻/浮冰这类**多驱动凑出来的**效果要在面板上
+   * 单独写一行名字，而不是只丢一句"视野不超过 2"让他自己猜发生了什么。
+   */
+  const fog = weatherEffect({
+    temp: 140,
+    rh: 90,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(fog.combo, 'fog');
+  const lines = effectLines(fog);
+  assert.ok(
+    lines[0]!.startsWith('浓雾：'),
+    `雾要排在第一条并带名字，实际第一条：${lines[0]}`,
+  );
+  assert.ok(lines[0]!.includes('2'), '名字后面要写清楚压到多少');
+  assert.ok(
+    !lines.some((l) => l === '视野不超过 2'),
+    '已经被组合行讲过的不要重复一遍',
+  );
+
+  // 雷暴：热 + 大雨
+  const thunder = weatherEffect({
+    temp: 280,
+    rh: 99,
+    precip: 'heavy',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(thunder.combo, 'thunder');
+  assert.ok(effectLines(thunder).some((l) => l.startsWith('雷暴：')));
+
+  // 封冻：冰面上那两条也不该再单独列一遍
+  const frozen = weatherEffect({
+    temp: -20,
+    rh: 70,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: true,
+    distToLand: 2,
+  });
+  assert.equal(frozen.combo, 'freeze');
+  const fl = effectLines(frozen);
+  assert.ok(fl.some((l) => l.startsWith('封冻：')));
+  assert.ok(!fl.includes('海军移动力归零'), '组合行讲过的不再重复');
+  assert.ok(!fl.includes('陆军可以在冰面上行走'), '同上');
 });
 
 test('天气伤害：雷暴的回合末伤害真的会掉血', () => {
