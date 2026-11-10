@@ -115,6 +115,8 @@ const TERRAIN_VALUE: Record<Terrain, number> = {
   valley: 0.9,
   marsh: 0.45,
   dune: 0.7,
+  regolith: 1,
+  crater: 0.75,
   water: 0.15,
   shallow: 0.5,
   deep: 0.05,

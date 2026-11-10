@@ -229,6 +229,9 @@ const CHAR: Record<Terrain, string> = {
   valley: 'v',
   marsh: 'w',
   dune: 'd',
+  // 月球地形：生成器不画，只有月球图用；留字符是为了调试转储
+  regolith: 'r',
+  crater: 'c',
   shallow: 's', // 浅滩：陆军能踩过去的"水"
   // 生成器自己**不画**深水：它是「海战」扩展在 afterTerrain 里把
   // 离岸 2 格以上的 water 改写的。这里留字符只是为了类型完整 + 调试转储够用。

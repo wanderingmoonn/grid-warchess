@@ -68,6 +68,9 @@ export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   bridge: 0,
   hill: 1,
   dune: 1,
+  // 月球：月壤就是基准面，环形山的坑缘比它高一档
+  regolith: 0,
+  crater: 1,
   plateau: 2,
   // 天险：任何单位都上不去，用无穷大表示"不参与算账"
   mountain: Number.POSITIVE_INFINITY,
@@ -96,6 +99,9 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   // 高处看得远
   hill: 1,
   dune: 1,
+  // 月壤平坦、环形山坑缘不算制高点（站在坑里和坑外差不多）
+  regolith: 0,
+  crater: 0,
   plateau: 2,
   // 站不上去，写 0 只是为了让表完整
   mountain: 0,

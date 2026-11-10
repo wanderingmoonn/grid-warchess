@@ -47,6 +47,18 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     defense: '护甲 +3',
     note: '崎岖不平，难以通行。',
   },
+  regolith: {
+    name: '月壤',
+    cost: '1 移动力',
+    defense: '无加成',
+    note: '月球表面最常见的地形，开阔、没有掩护。',
+  },
+  crater: {
+    name: '环形山',
+    cost: '2 移动力',
+    defense: '护甲 +2',
+    note: '坑缘的碎石坡，能挡一点，但要爬上去。',
+  },
   water: {
     name: '水域',
     cost: '不可通行',

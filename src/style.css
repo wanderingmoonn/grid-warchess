@@ -40,6 +40,9 @@
   --marsh: #a9b795;
   --dune: #e8d9a8;
   --shallow: #b7dcd6;
+  /* 月球：月壤比平原更灰更冷，环形山再暗一档——不看图例也能分出坑缘 */
+  --regolith: #d8d4ca;
+  --crater: #b6b1a7;
   --lava: #d99a72;
   --volcano: #8d8290;
 
@@ -650,6 +653,32 @@ body {
   border-radius: 50% 50% 40% 40%;
   border-top: 3px solid rgba(180, 150, 90, 0.55);
   background: rgba(200, 175, 115, 0.22);
+}
+
+.tile.t-regolith {
+  background: var(--regolith);
+}
+/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */
+.tile.t-regolith::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 32% 38%, rgba(110, 105, 96, 0.16) 0 6%, transparent 7%),
+    radial-gradient(circle at 70% 66%, rgba(110, 105, 96, 0.12) 0 5%, transparent 6%);
+}
+
+/* 环形山：坑缘一圈，中间比周围暗一点 */
+.tile.t-crater {
+  background: var(--crater);
+}
+.tile.t-crater::before {
+  content: '';
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: 2px solid rgba(92, 88, 80, 0.32);
+  background: rgba(120, 115, 106, 0.22);
 }
 
 /* 浅流：浅青底色 + 几道横向水纹，比深水（河）亮一档，

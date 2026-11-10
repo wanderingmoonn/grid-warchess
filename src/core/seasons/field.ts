@@ -235,6 +235,9 @@ export const TUNING: ClimateTuning = {
     valley: { temp: -10, wet: 70, evap: 2.8, heat: 470 },
     marsh: { temp: -20, wet: 96, evap: 4.6, heat: 430 },
     dune: { temp: 40, wet: 32, evap: 0.6, heat: 550 },
+    // 月球地形：气候场目前只跑地球，这里给个干燥值只为表完整
+    regolith: { temp: 0, wet: 10, evap: 0.1, heat: 520 },
+    crater: { temp: -10, wet: 8, evap: 0.1, heat: 520 },
     city: { temp: 0, wet: 55, evap: 2.0, heat: 480 },
     bridge: { temp: 0, wet: 105, evap: 8.5, heat: 200 },
     water: { temp: 0, wet: 105, evap: 8.5, heat: 100 },

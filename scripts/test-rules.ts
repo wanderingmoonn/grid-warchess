@@ -364,6 +364,7 @@ import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
 import type {
   Action,
+  Board,
   City,
   GameState,
   MatchConfig,
@@ -374,6 +375,7 @@ import type {
 } from '../src/core/types.ts';
 import { skillsOf } from '../src/core/query.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
+import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../src/core/space/moon.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -19814,6 +19816,49 @@ test('棋盘是一等公民：默认地球，取图不走别名', () => {
 
   // 没登记的图退回地球：旧存档/扩展写错 id 时不至于崩
   assert.ok(boardOf(s, 'nowhere').tiles === s.tiles, '找不到的图退回地球');
+});
+
+test('月球图：尺寸跟着地球缩，下限 4×4', () => {
+  assert.equal(MOON_MIN_SIZE, 4);
+  assert.equal(moonSizeFor(4), 4, '已经是下限，不能再小');
+  assert.equal(moonSizeFor(5), 4, '四舍五入到 4');
+  assert.equal(moonSizeFor(12), 9);
+  assert.equal(moonSizeFor(16), 12);
+  assert.equal(moonSizeFor(32), 24);
+  assert.equal(moonSizeFor(64), 48);
+  // 任何尺寸下都不该比地球还大
+  for (const n of [4, 5, 8, 12, 16, 24, 32, 48, 64]) {
+    assert.ok(moonSizeFor(n) <= n, `${n} 的月球不该比地球大`);
+  }
+});
+
+test('月球图：只有月壤与环形山，同种子同结果', () => {
+  const b = createMoonBoard(32, 4242);
+  assert.equal(b.w, 24);
+  assert.equal(b.h, 24);
+  assert.equal(b.tiles.length, 24 * 24);
+  assert.equal(b.kind, 'planet');
+
+  // 地形只有两种，而且月球上不放城
+  assert.ok(
+    b.tiles.every((t) => t.terrain === 'regolith' || t.terrain === 'crater'),
+    '月球只该有月壤和环形山',
+  );
+  assert.ok(b.tiles.every((t) => t.cityId === null), '月球上不放城');
+
+  const craters = b.tiles.filter((t) => t.terrain === 'crater').length;
+  assert.ok(craters > 0, '至少有一个环形山');
+  assert.ok(craters <= Math.floor(24 * 24 * 0.6), '环形山不该吃掉大半张图');
+
+  // 同一个种子必须生成一模一样的地貌（存档 / 回放 / 联机靠这条）
+  const sig = (x: Board): string => x.tiles.map((t) => t.terrain[0]).join('');
+  assert.equal(sig(createMoonBoard(32, 4242)), sig(b), '同种子同结果');
+  assert.notEqual(sig(createMoonBoard(32, 9999)), sig(b), '换种子该换地貌');
+
+  // 最小的月球也要留得下脚
+  const tiny = createMoonBoard(4, 7);
+  assert.equal(tiny.w, 4);
+  assert.ok(tiny.tiles.some((t) => t.terrain === 'regolith'), '4×4 上也要有落脚点');
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
