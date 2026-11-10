@@ -261,7 +261,7 @@ export function effectLines(e: ClimateEffect): string[] {
     );
   }
   if (e.upkeepGold) out.push(`每回合交 ${e.upkeepGold} 金维护费`);
-  if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
+  if (e.upkeepHpRatio) out.push(`维护费不足则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
   if (e.navyMoveZero) out.push('海军移动力归零');
   if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
     out.push(`海军移动力 ${pct(e.navyMoveMul - 1)}`);
