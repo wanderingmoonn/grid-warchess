@@ -47,6 +47,84 @@
   --cell: 44px;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * 现代主题（modern）——**只覆盖变量，不改任何选择器**
+ *
+ * 这就是"双轨并行"的第一层，也是最安全的一层：旧规则一条都不用动，
+ * 只要 `<html data-ui="modern">`，下面这批变量就把底色、文字、描边、
+ * 交互色整体换掉。回退 = 删掉这个属性（或删掉这个块）。
+ *
+ * 覆盖面（实测）：--panel 34 处 · --panel-2 48 处 · --text 44 处 ·
+ * --text-2 49 处 · --text-3 82 处 · --line 71 处 · --line-strong 33 处，
+ * 合计 370 余处引用，改一次全跟着走。
+ *
+ * **地形色（--plain/--forest/…）刻意不动。**
+ * 那 17 个色是按浅底调的，棋盘也一直是浅底；把棋盘一起变暗会让人认不出
+ * 森林和沼泽——"看得清地形"比"整体统一"重要。这条以后要不要动，另说。
+ *
+ * 硬编码色值（193 处）这一版也不动：它们多是按钮/徽标上的强调色，
+ * 换主题时仍然可读。逐个 token 化是下一阶段的事，别在这一步混进来。
+ * ══════════════════════════════════════════════════════════════════════ */
+[data-ui='modern'] {
+  --bg: #14171c;
+  --panel: #1b1f26;
+  --panel-2: #222731;
+  --line: #2e343f;
+  --line-strong: #454d5b;
+
+  --text: #e6e9ef;
+  --text-2: #a6adbb;
+  --text-3: #737b8a;
+
+  /* 交互主色：深底上要提亮，否则 --a 作为文字/描边时对比不够 */
+  --a: #5b9cf0;
+  --a-soft: #1d2a3d;
+  --b: #e06058;
+  --b-soft: #3a2321;
+
+  /* 席位色同样提亮，但**语义分工不变**：红方还是红、蓝方还是蓝 */
+  --team-a: #e06a61;
+  --team-a-soft: #3a2321;
+  --team-b: #6ba6f0;
+  --team-b-soft: #1d2a3d;
+  --team-c: #63c08a;
+  --team-c-soft: #1e3227;
+  --team-d: #d2a13c;
+  --team-d-soft: #33291a;
+
+  /* 圆角略收紧：现代面板偏"直角+小圆"，12px 在大卡片上显圆 */
+  --radius: 10px;
+}
+
+/* 白底悬停态：深底上直接用 #fff 会闪一块白，换成抬升面 */
+[data-ui='modern'] .zoom-btn:hover,
+[data-ui='modern'] .recruit-btn:hover:not(:disabled),
+[data-ui='modern'] .book-row:hover {
+  background: #2a303a;
+}
+
+[data-ui='modern'] .recruit-search-input:focus {
+  background: #1b1f26;
+}
+
+/* 提示条：原来固定深底白字，在深色主题里和背景糊成一片，加描边分开 */
+[data-ui='modern'] .toast {
+  background: #2a303a;
+  box-shadow: 0 0 0 1px #454d5b, 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* 「减少动态效果」：与主题正交的第二个开关。
+   不是把时长调小，而是**整段关掉**——动画前庭敏感的人要的是"不动"，
+   不是"动得快一点"。 */
+[data-motion='reduced'] *,
+[data-motion='reduced'] *::before,
+[data-motion='reduced'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
 * {
   box-sizing: border-box;
 }

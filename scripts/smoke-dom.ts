@@ -38,6 +38,7 @@ import {
   unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel, topbarShell } from '../src/ui/panel.ts';
+import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
@@ -4749,6 +4750,38 @@ check('己方战报只给自己的条目和战损，观战才看全部', () => {
   paint(null);
   const all = host.querySelector('.log')?.textContent ?? '';
   assert.ok(all.includes('他在攒钱'), '观战/热座要看全部');
+});
+
+check('主题开关：只改 html 上的两个属性，回退就是删掉它们', () => {
+  /*
+   * 2026-11-10 UI 重构的第一层。这条守的是**机制**而不是长相：
+   *   · legacy / modern 由 `<html data-ui>` 决定，CSS 里只有一个变量块；
+   *   · 回退 = 删属性（或 `__ui('legacy')`），不需要重新加载、不碰任何规则；
+   *   · 动效是第二根正交的轴（reduced 与主题可任意组合）。
+   *
+   * 长相在 jsdom 里验不了（没有布局、不算样式），所以这条只钉"属性写对了"。
+   */
+  const el = doc.createElement('html');
+
+  const modern = applyUiTheme({ root: el, mode: 'modern', motion: 'reduced' });
+  assert.deepEqual(modern, { mode: 'modern', motion: 'reduced' });
+  assert.equal(el.dataset.ui, 'modern', '要落到 data-ui 上');
+  assert.equal(el.dataset.motion, 'reduced', '动效是独立的一根轴');
+
+  const back = applyUiTheme({ root: el, mode: 'legacy', motion: 'full' });
+  assert.deepEqual(back, { mode: 'legacy', motion: 'full' });
+  assert.equal(el.dataset.ui, 'legacy', '切回去只改这一个属性');
+  assert.equal(el.dataset.motion, 'full');
+
+  // 没传 mode 时按"URL > localStorage > legacy"解析；jsdom 的地址里没有 ?ui
+  assert.equal(resolveUiMode(), 'legacy', '默认必须是旧版，不能把 modern 当默认');
+
+  // 切换要**立刻**生效（记住偏好那一步写 localStorage，jsdom 默认源没有存储权限，
+  // 所以这里只断言"当场生效"，持久化由 `applyUiTheme` 的 URL 分支兜着）
+  setUiMode('modern', el);
+  assert.equal(el.dataset.ui, 'modern', '切换后当场生效');
+  setUiMode('legacy', el);
+  assert.equal(el.dataset.ui, 'legacy', '切回来也当场生效');
 });
 
 check('上帝模式框选：矩形染色 + 工具栏报数 + 批量按钮都在', () => {

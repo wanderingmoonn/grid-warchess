@@ -167,7 +167,23 @@ import {
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
+import { applyUiTheme, installUiConsole } from './ui/theme.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
+
+/*
+ * 主题要在**任何渲染之前**落地。
+ *
+ * `applyUiTheme` 只改 `<html data-ui>` / `data-motion>` 两个属性，不碰任何规则；
+ * 但必须抢在第一帧之前——放在模块末尾（我第一版就放那儿了）会先按 legacy 画一帧
+ * 再跳成 modern，那一闪比不换主题还难受。所以放在 import 之后、所有初始化之前。
+ *
+ * 切换入口（暂不进设置页）：
+ *   · 地址栏 `?ui=modern`（对比用，优先级最高）；
+ *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
+ */
+applyUiTheme();
+installUiConsole();
+
 
 /**
  * 非空时表示某个英雄正在等玩家选技能目标。
