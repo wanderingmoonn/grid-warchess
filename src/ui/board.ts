@@ -82,6 +82,11 @@ export interface BoardUi {
    */
   boardView?: Map<number, string>;
   /**
+   * 染色层上再写一个字符（风向箭头）。和 `boardView` 同层同格，
+   * 只有扩展给了字才有节点——没字的时候这一层和从前一模一样。
+   */
+  boardGlyph?: Map<number, string>;
+  /**
    * 这一下**刚刚打出去**的格子（格索引 → 次数），闪一次就散。
    *
    * 和 `heat` 是两个方向：那个是"上回合我在这挨打"（历史、常驻、出手即收），
@@ -638,9 +643,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (!color) continue;
         const x = i % s.w;
         const y = (i - x) / s.w;
+        const glyph = ui.boardGlyph?.get(i) ?? '';
         cells.push(
-          `<i class="fx-qi" data-x="${x}" data-y="${y}" ` +
-            `style="grid-column:${x + 1};grid-row:${y + 1};background:${color}"></i>`,
+          `<i class="fx-qi${glyph ? ' wind' : ''}" data-x="${x}" data-y="${y}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1};background:${color}">${glyph}</i>`,
         );
       }
     }

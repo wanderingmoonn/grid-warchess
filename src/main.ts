@@ -401,6 +401,21 @@ function computeBoardView(visible: readonly number[]): Map<number, string> | und
   for (const c of onlyVisibleCells(state, visible, cells)) out.set(c.y * state.w + c.x, c.color);
   return out;
 }
+
+/**
+ * 视图层上的字符（风向箭头）。和染色同一条可见性闸门：
+ * 雾外的箭头同样不许出现——它泄露的信息（哪边风大）和颜色一样多。
+ */
+function computeBoardGlyph(visible: readonly number[]): Map<number, string> | undefined {
+  const id = activeBoardViewId();
+  if (!id) return undefined;
+  const def = boardViewsOf().find((v) => v.id === id);
+  const glyphs = def?.glyph?.({ state, viewer: me() });
+  if (!glyphs || glyphs.length === 0) return undefined;
+  const out = new Map<number, string>();
+  for (const g of onlyVisibleCells(state, visible, glyphs)) out.set(g.y * state.w + g.x, g.text);
+  return out;
+}
 let selectedId: string | null = null;
 
 // ---------- 复盘 ----------
@@ -1403,6 +1418,7 @@ function render(): void {
     heat,
     // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
     boardView: computeBoardView(view.visible),
+    boardGlyph: computeBoardGlyph(view.visible),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,

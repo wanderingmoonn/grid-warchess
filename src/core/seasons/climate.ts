@@ -35,7 +35,8 @@ export type Season = 'spring' | 'summer' | 'autumn' | 'winter';
 /** 每 10 回合换一个季节 */
 export const SEASON_TURNS = 10;
 
-const SEASON_ORDER: Season[] = ['spring', 'summer', 'autumn', 'winter'];
+/** 季节顺序（春→夏→秋→冬）。`field.ts` 按它算"这一季的中点"，所以导出。 */
+export const SEASON_ORDER: Season[] = ['spring', 'summer', 'autumn', 'winter'];
 
 export const SEASON_NAME: Record<Season, string> = {
   spring: '春',
@@ -152,6 +153,8 @@ export type Climate =
   | 'overcast'
   | 'downpour'
   | 'fog'
+  /** 大风：晴天但风大——空军逆风每格多花 1 点 */
+  | 'gale'
   | 'thunder'
   | 'frozen'
   | 'driftIce'
@@ -170,6 +173,7 @@ export const CLIMATE_NAME: Record<Climate, string> = {
   overcast: '阴雨',
   downpour: '暴雨',
   fog: '浓雾',
+  gale: '大风',
   thunder: '雷暴',
   frozen: '封冻',
   driftIce: '浮冰',
@@ -197,22 +201,59 @@ export interface ClimateEffect {
   moveMul?: number;
   /** 每走一格额外消耗的点数（暴雨 +2） */
   moveCostAdd?: number;
+  /**
+   * 空军**逆风**时每格多花的移动点。
+   *
+   * 只认逆风：顺风不加也不减。给 −1 会造出"每格 0 消耗"这种结算，
+   * 玩家算不清一格到底花多少，而且在整数移动力上会放大成"白嫖几格"。
+   */
+  airUpwindCostAdd?: number;
   /** 护甲惩罚（正数表示扣多少） */
   armorPenalty?: number;
   /** 护甲惩罚只对"不在城里驻扎的军队"生效（严冬） */
   armorPenaltyOnlyField?: boolean;
-  /** 经济产出倍率 */
-  incomeMul?: number;
+  /**
+   * 经济产出加成，**百分数、相加**（0.15 = +15%）。
+   *
+   * 为什么是加法不是乘法：天气是**多档同时生效**的（温度一档、湿度一档、
+   * 降水一档），乘法叠两次就失控——原来的「湿热」×2.5 再撞上「温暖」×1.25
+   * 就是 3.1 倍。加法封顶在 ±60%/90%，怎么叠都在玩家算得清的范围内。
+   */
+  incomeBonus?: number;
   /** 攻击范围增减（阴雨 -1、暴雨 -2） */
   rangeAdd?: number;
-  /** 攻击范围上限（浓雾 4） */
+  /** 攻击范围上限（浓雾 2） */
   rangeMax?: number;
   /** 视野上限（浓雾 2） */
   visionMax?: number;
+  /**
+   * `visionMax` / `rangeMax` 只对**视野不超过这个数**的部队生效（浓雾 5）。
+   *
+   * 浓雾原来是"所有单位一律压到 2"，连视野 8 的侦察单位也一起按住——
+   * 高时代花大价钱买的"看得远"在雾天被一笔抹平，很别扭。
+   * 现在改成只收拾"本来就看不太远"的部队：雾对它们才是致命的，
+   * 而对高视野单位只是少看见一点（它们照样能看见，只是不再有优势）。
+   */
+  fogVisionLine?: number;
+  /**
+   * 这一格命中的**组合效果**。由多个驱动一起凑出来的那几种，
+   * 单独起个名字讲：温度湿度风都是玩家能读到的数，但"多少度加多少湿度
+   * 会起雾"没人算得出来，得直接告诉他"这是浓雾"。
+   *
+   * 一次只会有一个：起雾要求不下雨，雷暴/风暴要求下大雨，封冻要求结冰，
+   * 天然互斥。
+   */
+  combo?: 'fog' | 'thunder' | 'storm' | 'freeze' | 'ice';
   /** 回合结束的固定伤害 */
   endDamage?: { hits: number; amount: number; splash?: number; radius?: number };
-  /** 维护费比例（按自身造价收金币） */
-  upkeepRate?: number;
+  /**
+   * 每回合的**固定**维护费（金）。
+   *
+   * 不按造价比例收：比例制下高级单位交得更多，而它的产出也更多——
+   * 结果"高时代更抗天气"这件事反而体现不出来。固定金额才是
+   * "廉价单位心疼、高级单位无感"。
+   */
+  upkeepGold?: number;
   /** 交不起维护费时的真实伤害（按血量上限比例） */
   upkeepHpRatio?: number;
   /** 海军移动力归零（封冻） */
@@ -223,53 +264,11 @@ export interface ClimateEffect {
   landOnIce?: boolean;
 }
 
-/**
- * 每个天气改什么。
- *
- * ── 一条原则：**降温降的是经济，不是腿** ──────────────────
- *
- * 早先"冷 / 热 / 阴雨"三档各带 `moveMul: 0.75`，玩家反馈说"到处都在减移动力，
- * 战斗节奏太折磨"。数学上这比看上去更狠：移动力是整数，`2 × 0.75 = 1.5`
- * 向下取整是 1——**标着 −25%，实际是 −50%**，而且越慢的兵越吃亏
- * （骑兵 5 → 3 只掉 40%，步兵 2 → 1 掉了 50%）。
- *
- * 所以现在：**只有真正的极端天气减速**（严冬、酷暑、暴雨），
- * 日常的冷暖只动产出与护甲。爽快的行军节奏比"精确模拟寒冷"重要得多。
- *
- * 反过来的增益也一样：`× 1.25` 对 move 2 的单位毫无效果（2.5 取整还是 2），
- * 所以「凉爽」给的是 `moveAdd: +1` 这种**看得见**的加法。
+/*
+ * 效果表已经搬走了：现在是 `effect.ts` 里的 `weatherEffect(drivers)`——
+ * 由温度、湿度、风、降水、抬升**各自算一档再叠加**，不再"一个标签一组加成"。
+ * 这个文件只留标签本身（类型、名字）和它们共同的效果结构。
  */
-const EFFECTS: Record<Climate, ClimateEffect> = {
-  mild: {},
-  // 凉爽：天不热不冷，行军最舒服。这是本扩展唯一一个**加速**的天气
-  cool: { moveAdd: 1 },
-  // 温暖：作物长得好，部队不额外受累
-  warm: { incomeMul: 1.25 },
-  // 寒冷：只让经济难受，不拖慢部队
-  cold: { incomeMul: 0.7 },
-  hot: { incomeMul: 1.25, armorPenalty: 1 },
-  // 严冬：比寒冷更冷，所以debuff也更重——地冻三尺，什么都长不出来。
-  // 早先这里只有移动与护甲、没有产出，于是"更冷的天气反而更养人"，
-  // 玩家一眼就看出来了（实机反馈）。
-  hardWinter: { moveMul: 0.5, armorPenalty: 3, armorPenaltyOnlyField: true, incomeMul: 0.5 },
-  blazing: { moveMul: 0.5, armorPenalty: 2 },
-  dampCold: { incomeMul: 2, upkeepRate: 0.05, upkeepHpRatio: 0.1 },
-  dampHeat: { incomeMul: 2.5, upkeepRate: 0.1, upkeepHpRatio: 0.05 },
-  overcast: { incomeMul: 1.25, rangeAdd: -1 },
-  // 暴雨是"路烂了"而不是"人累了"：多花一点移动点，但不砍总移动力
-  downpour: { moveCostAdd: 1, rangeAdd: -2 },
-  fog: { visionMax: 2, rangeMax: 4 },
-  thunder: { endDamage: { hits: 1, amount: 50, splash: 0.5, radius: 1 }, incomeMul: 3 },
-  frozen: { navyMoveZero: true, landOnIce: true },
-  driftIce: { navyMoveMul: 0.75 },
-  // 风暴：10 次 × 5 点。以前是 5 次 × 10 点，单次太疼——一次打死一个残血单位
-  // 会让"天气"变成比敌人更可怕的东西。拆成 10 下，总量一样但更像"被风刮"。
-  storm: { endDamage: { hits: 10, amount: 5 } },
-};
-
-export function climateEffect(c: Climate): ClimateEffect {
-  return EFFECTS[c] ?? {};
-}
 
 /** 这个单位是不是水军（水军吃"封冻 / 浮冰"，陆军吃"冰面"） */
 export function isNaval(def: { domain?: string }): boolean {

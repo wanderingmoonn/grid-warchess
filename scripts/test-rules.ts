@@ -71,8 +71,28 @@ import {
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
-import { CLIMATE_NAME, climateEffect, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
-import { classifyClimate, climateAt, precipAt, satOf, tempAt, wetAt } from '../src/core/seasons/field.ts';
+import { CLIMATE_NAME, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
+import { effectLines, weatherEffect } from '../src/core/seasons/effect.ts';
+import type { WeatherDrivers } from '../src/core/seasons/effect.ts';
+import {
+  classifyClimate,
+  climateAt,
+  precipAt,
+  satOf,
+  coriolisOf,
+  latitudeOf,
+  satAt,
+  satEffAt,
+  upliftAt,
+  stepClimateField,
+  tempAt,
+  tempTargetOf,
+  TUNING,
+  WET_MAX,
+  wetAt,
+  windAt,
+  windSpeedAt,
+} from '../src/core/seasons/field.ts';
 import {
   airwingOps,
   deckLine,
@@ -11823,19 +11843,26 @@ test('气候分档：按体感排，24°C 是温暖、6°C 是凉爽', () => {
   assert.equal(at(340), 'blazing', '34°C 酷暑');
 });
 
-test('气候不再到处减移动力：日常的冷热阴雨一概不动速度', () => {
-  const slowed = (Object.keys(CLIMATE_NAME) as Climate[]).filter((k) => {
-    const e = climateEffect(k);
-    return !!e.moveMul && e.moveMul < 1;
+test('只有极端温度才乘性减速：日常冷暖一概不动腿', () => {
+  // 效果现在由驱动算，所以直接扫温度轴：只有两头（严冬 / 酷暑）配减速。
+  // 移动力是整数，乘 0.85 对 move 2 的兵会被 floor 成 1——
+  // **标着 −15%，实际是 −50%**，这才是"节奏折磨"的来源。
+  const at = (temp: number): WeatherDrivers => ({
+    temp,
+    rh: 50,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
   });
-  // 只有"真的走不动"的极端天气才配减速。移动力是整数，乘 0.85 对 move 2 的兵
-  // 会被 floor 成 1——**标着 −15%，实际是 −50%**，这才是"节奏折磨"的来源。
-  assert.ok(slowed.length <= 3, `只有极端天气该减速，实际 ${slowed.length} 种：${slowed}`);
-  for (const k of ['mild', 'cool', 'warm', 'cold', 'hot', 'overcast'] as Climate[]) {
-    const e = climateEffect(k);
-    assert.ok(!e.moveMul || e.moveMul >= 1, `${CLIMATE_NAME[k]} 不该乘性减速`);
+  for (let t = -300; t <= 450; t += 10) {
+    const e = weatherEffect(at(t));
+    const extreme = t < -100 || t >= 320;
+    assert.equal(!!e.moveMul, extreme, `${(t / 10).toFixed(0)}°C 的减速状态不对`);
   }
-  assert.equal(climateEffect('cool').moveAdd, 1, '凉爽给 +1 移动');
+  // 5~10°C 是行军最舒服的一段，给的是看得见的加法
+  assert.equal(weatherEffect(at(80)).moveAdd, 1, '5~10°C 行军舒服：+1');
 });
 
 test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
@@ -11853,22 +11880,37 @@ test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
   );
 });
 
-test('严冬比寒冷更冷，减益也该更重（产出不例外）', () => {
-  const cold = climateEffect('cold');
-  const hard = climateEffect('hardWinter');
-  assert.ok(cold.incomeMul !== undefined, '寒冷要减产出');
-  assert.ok(hard.incomeMul !== undefined, '严冬也要减产出');
-  assert.ok(
-    hard.incomeMul! < cold.incomeMul!,
-    `严冬的产出该比寒冷更差：寒冷 ${cold.incomeMul}，严冬 ${hard.incomeMul}`,
-  );
-  // 而且严冬的其它减益至少不比寒冷轻
-  assert.ok((hard.moveMul ?? 1) <= (cold.moveMul ?? 1), '严冬不该比寒冷走得快');
-  assert.ok((hard.armorPenalty ?? 0) >= (cold.armorPenalty ?? 0), '严冬不该比寒冷护甲高');
+test('越冷产出越差：−2°C 比 −15°C 好，但都比舒适带差', () => {
+  const at = (temp: number): WeatherDrivers => ({
+    temp,
+    rh: 50,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  const cold = weatherEffect(at(-20)).incomeBonus!;
+  const hard = weatherEffect(at(-150)).incomeBonus!;
+  const comfy = weatherEffect(at(150)).incomeBonus!;
+  assert.equal(comfy, 0, '15°C 是舒适带，不增不减');
+  assert.ok(cold < comfy && hard < cold, `越冷越差：舒适 ${comfy} / −2°C ${cold} / −15°C ${hard}`);
+  // 严冬还要额外赔上移动与护甲
+  assert.ok((weatherEffect(at(-150)).moveMul ?? 1) < 1, '严冬走不动');
+  assert.ok((weatherEffect(at(-150)).armorPenalty ?? 0) >= 3, '严冬野外护甲掉三');
 });
 
 test('风暴：10 次 × 5 点，不再一次 10 点', () => {
-  const ed = climateEffect('storm').endDamage;
+  // 风暴由驱动直接判：暖水 + 大雨 + 风够大 + 离岸够远
+  const ed = weatherEffect({
+    temp: 240,
+    rh: 95,
+    precip: 'heavy',
+    wind: 40,
+    lift: 0,
+    water: true,
+    distToLand: 4,
+  }).endDamage;
   assert.ok(ed, '风暴要有回合末伤害');
   assert.equal(ed!.hits, 10, '10 次');
   assert.equal(ed!.amount, 5, '每次 5 点');
@@ -11876,8 +11918,9 @@ test('风暴：10 次 × 5 点，不再一次 10 点', () => {
 
 test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
   // 同温同湿，只有离岸距离不同。24°C 的海水
-  const at = (distToLand: number, temp = 240) =>
-    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand);
+  // 第三参之后补一个风速：风暴现在要求「雨大风也大」，默认给一条足够大的风
+  const at = (distToLand: number, temp = 240, wind = 40) =>
+    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand, wind);
   assert.equal(at(1), 'overcast', '贴岸 24°C 不该刮风暴——那是玩家发育的地方');
   assert.equal(at(2), 'storm', '离岸 2 格就该刮');
   assert.equal(at(4), 'storm', '外海更不用说');
@@ -11887,6 +11930,301 @@ test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
   assert.equal(at(1, 290), 'thunder', '再热就是雷暴，不是风暴');
   // 冷海无论多外都不刮：6°C 的外海下大雨只是阴天（4°C 以下会先判成浮冰）
   assert.equal(at(4, 60), 'overcast');
+});
+
+test('风场：从温度梯度推出来，同一局面算两遍一模一样', () => {
+  /*
+   * 风是**推出来的**，不是攒出来的：气压 ≈ −温度，风顺着温度梯度吹，
+   * 再叠一层季节主导风。这条守三件事：
+   *   · 可复现（回放两端算出来的风必须逐格相同）；
+   *   · 有上限（不能出现"一格 300 的风"把湿度一步吹穿整张图）；
+   *   · 山脚比平地风大（有梯度才有风，否则这个场就是常数）。
+   */
+  const mk = () => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true }, 777);
+    flatten(s, 'plain');
+    for (let y = 4; y < 9; y++) for (let x = 4; x < 9; x++) setTile(s, x, y, 'mountain');
+    s.turn = 12;
+    stepClimateField(s);
+    return s;
+  };
+  const a = mk();
+  const b = mk();
+  for (let i = 0; i < a.w * a.h; i++) {
+    const ax = a.tiles[i]!.custom?.windX as number;
+    const ay = a.tiles[i]!.custom?.windY as number;
+    assert.equal(ax, b.tiles[i]!.custom?.windX, `第 ${i} 格风向 x 不一致`);
+    assert.equal(ay, b.tiles[i]!.custom?.windY, `第 ${i} 格风向 y 不一致`);
+    assert.ok(Math.abs(ax) <= TUNING.windMax && Math.abs(ay) <= TUNING.windMax, '风不能超过上限');
+  }
+  // 山脚那一格的风该比远处平地大：有温度梯度才有风
+  const near = windSpeedAt(a, 3, 6);
+  const far = windSpeedAt(a, 1, 1);
+  assert.ok(near > far, `山脚 ${near} 该比平地 ${far} 风大`);
+});
+
+test('换季不跳变：一年是一条连续的曲线', () => {
+  /*
+   * 以前目标温度是**阶跃**的：换季那一回合从春直接跳到夏，陆地热容 48%
+   * 一步就吃掉二十多度差额的一半——玩家看到的是"上一回合 15°C，下一回合 23°C"。
+   * 现在按季节中点插值，换季那回合正好落在两季中间。
+   *
+   * 这条守两件事：单回合不许跳（峰值 < 3°C），而且一年真的走完一个来回
+   * （不是"为了平滑所以干脆不动"）。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  let prev: number | null = null;
+  let worst = 0;
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let turn = 1; turn <= 40; turn++) {
+    s.turn = turn;
+    stepClimateField(s);
+    stepClimateField(s);
+    const t = tempAt(s, 8, 8);
+    if (prev !== null) worst = Math.max(worst, Math.abs(t - prev));
+    prev = t;
+    lo = Math.min(lo, t);
+    hi = Math.max(hi, t);
+  }
+  assert.ok(worst <= 30, `单回合温差 ${(worst / 10).toFixed(1)}°C，还是太陡`);
+  assert.ok(hi - lo >= 150, `一年只走了 ${((hi - lo) / 10).toFixed(1)}°C，太平了`);
+});
+
+test('纬度：同一张图固定，不同种子冷热不同', () => {
+  // 没有种子的局面（调参工具的最小 state）不该被平移
+  assert.equal(latitudeOf(undefined), 0, '没有种子就没有纬度偏移');
+
+  const seen = new Set<number>();
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let seed = 1; seed <= 60; seed++) {
+    const v = latitudeOf(seed);
+    assert.ok(Math.abs(v) <= TUNING.latitudeSpread, '纬度偏移不能超过设定范围');
+    seen.add(v);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+  }
+  assert.ok(seen.size >= 15, `60 个种子只散出 ${seen.size} 种纬度，散列太差`);
+  assert.ok(hi - lo >= 40, '冷热两头拉不开，等于没有纬度');
+  assert.equal(latitudeOf(7), latitudeOf(7), '同一个种子永远同一条气候带');
+
+  // 整年一起平移：同一个局面只换种子，目标温度差正好是纬度差
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 5;
+  s.seed = 7;
+  const north = tempTargetOf(s, 5, 5);
+  s.seed = 1;
+  const south = tempTargetOf(s, 5, 5);
+  assert.equal(
+    north - south,
+    latitudeOf(7) - latitudeOf(1),
+    '纬度该整年平移，而不是只在某一季加减',
+  );
+});
+
+test('湿度平流：云跟着风走，方向对', () => {
+  /*
+   * 先把整张图跑到平衡（固定春天，让温度场收敛），再在中段放一团湿气。
+   * 八步之后这团湿气的重心必须往东挪——春天主导风朝东。
+   *
+   * 断言用**重心**而不是"某一格变湿了"：一团湿气会同时被扩散摊开，
+   * 单格的涨落说明不了方向。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true, size: 16 });
+  flatten(s, 'plain');
+  s.turn = 1;
+  for (let i = 0; i < 30; i++) stepClimateField(s);
+
+  const base = wetAt(s, 6, 8);
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const t = s.tiles[(8 + dy) * s.w + (6 + dx)]!;
+      t.custom = { ...t.custom, wet: WET_MAX };
+    }
+  }
+  const centroidX = () => {
+    let mx = 0;
+    let m = 0;
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const excess = Math.max(0, wetAt(s, x, y) - base);
+        mx += excess * x;
+        m += excess;
+      }
+    }
+    return m === 0 ? -1 : mx / m;
+  };
+  const before = centroidX();
+  assert.ok(before > 0, '前提：图里得真有那一团湿气');
+  for (let i = 0; i < 8; i++) stepClimateField(s);
+  const after = centroidX();
+  assert.ok(after > before + 0.3, `湿气该往东挪：${before.toFixed(2)} → ${after.toFixed(2)}`);
+});
+
+test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
+  const s = fresh({ expansionIds: ['seasons', 'air-corps'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 1;
+  const plane = place(s, 'A', 'af_scout', 5, 6);
+  const here = idx(s, 5, 5);
+
+  // 目标格：16°C、干、南风 40（往 +y 吹）→ 判成「大风」
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
+  assert.equal(climateAt(s, 5, 5), 'gale', '前提：这一格是大风');
+
+  // 从南往北飞：逆风 → 1 + 1
+  assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 2, '逆风每格 2 点');
+  // 从北往南飞：顺风 → 原价（不给折扣，见 ClimateEffect.airUpwindCostAdd）
+  assert.equal(stepCostInto(s, plane, idx(s, 5, 4), here, { flyer: true }), 1, '顺风不加价');
+  // 没有来处（部署 / 只评估落点）：没有方向，也就谈不上逆风
+  assert.equal(stepCostInto(s, plane, -1, here, { flyer: true }), 1, '没有来处不判逆风');
+
+  /*
+   * 关键变化：收费看的是**风**，不是标签。
+   *
+   * 以前"大风"是个标签，所以效果要等这一格被判成大风才生效；现在驱动直接
+   * 算效果，标签只是挑一个最显眼的讲——所以会出现"徽标写着酷暑、
+   * 但空军照样逆风加价"。
+   */
+  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 40 };
+  assert.equal(climateAt(s, 5, 5), 'blazing', '33°C 的标签是酷暑');
+  assert.equal(
+    stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }),
+    2,
+    '标签是酷暑，风够大照样逆风加价',
+  );
+
+  // 风不够大：一分不加，哪怕这一格温和得不能再温和
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 18 };
+  assert.equal(
+    stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }),
+    1,
+    '风不到线就不加价',
+  );
+
+  // 地面部队完全不受影响：大风只打空军
+  const foot = place(s, 'A', 'militia', 5, 6);
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
+  assert.equal(
+    stepCostInto(s, foot, idx(s, 5, 6), here),
+    CONFIG.terrainCost.plain,
+    '陆军的步耗一格都没变',
+  );
+});
+
+test('辐合：风往一处挤，饱和线被压下去', () => {
+  /*
+   * 辐合 = 空气抬升 = 绝热冷却 = 更容易饱和。所以它把**有效饱和线**往下压，
+   * 辐合区先起雨；辐散区反过来。这是"雨带沿风场排成条带"的来源。
+   *
+   * 手工摆一个风场：左边一律往右吹、右边一律往左吹，中间那条缝就是辐合线。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 1;
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      const wx = x < 8 ? 20 : x > 8 ? -20 : 0;
+      s.tiles[y * s.w + x]!.custom = { temp: 150, wet: 40, windX: wx, windY: 0 };
+    }
+  }
+  const seam = upliftAt(s, 8, 5);
+  assert.ok(seam > 0, `辐合线该抬升，实际 ${seam}`);
+  assert.ok(satEffAt(s, 8, 5) < satAt(s, 8, 5), '抬升该把饱和线压下去');
+  // 同向平流的地方既没有辐合也没有辐散
+  assert.equal(upliftAt(s, 3, 5), 0, '风一直往同一边吹的地方不抬升');
+  // 抬升有上限：再强的辐合也不能把饱和线压到 0
+  assert.ok(satEffAt(s, 8, 5) >= 10, '饱和线不许压穿地板');
+});
+
+test('地转偏向力：北半球把风往一边拧，南半球往另一边', () => {
+  /*
+   * 纬度不只是"这张图冷一点"——同一套数也当地转偏向力用：
+   * 偏北的图气旋逆时针、偏南的顺时针。做法是**把气压梯度先拧一个角度**
+   * 再当风用，所以不需要记住上一步的风，也不需要风暴中心在哪。
+   *
+   * 这条用一个纯东西向的温度梯度来验：春天主导风本来就是朝东（+x），
+   * 所以风里任何 y 分量都只能来自偏转。
+   */
+  assert.equal(coriolisOf(undefined), 0, '没有纬度的局面不偏转');
+  assert.ok(latitudeOf(1) < 0 && coriolisOf(1) > 0, '偏北的图：科氏为正');
+  assert.ok(latitudeOf(7) > 0 && coriolisOf(7) < 0, '偏南的图：科氏为负');
+
+  const windWithSeed = (seed: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        s.tiles[y * s.w + x]!.custom = { temp: x < 8 ? 0 : 200 };
+      }
+    }
+    s.turn = 6; // 春天：主导风 (22, 0)，y 分量只可能来自偏转
+    s.seed = seed;
+    stepClimateField(s);
+    return windAt(s, 8, 8);
+  };
+  const north = windWithSeed(1); // 偏北
+  const south = windWithSeed(7); // 偏南
+  assert.ok(north.y !== 0 && south.y !== 0, '有纬度就该有偏转');
+  assert.ok(north.y * south.y < 0, `两个半球该往相反方向拧：${north.y} / ${south.y}`);
+});
+
+test('产出加成是相加的，不是相乘的', () => {
+  /*
+   * 天气是**多档同时生效**的：温度一档、湿度一档、降水一档。
+   * 乘法叠两次就失控（旧的「湿热」×2.5 撞上「温暖」×1.25 就是 3.1 倍），
+   * 所以全部改成百分点相加，再夹在 −60%~+90% 里。
+   */
+  const e = weatherEffect({
+    temp: 280, // +10%
+    rh: 90, // +20%
+    precip: 'light', // +15%
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(Math.round(e.incomeBonus! * 100), 45, '10 + 20 + 15 = 45，不是 1.1×1.2×1.15');
+  // 再叠也不会飞出去
+  const worst = weatherEffect({
+    temp: 340,
+    rh: 99,
+    precip: 'light',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.ok(worst.incomeBonus! <= 0.9, '总加成有上限');
+});
+
+test('潮湿天收固定维护费，不看造价', () => {
+  const humid = (rh: number) =>
+    weatherEffect({ temp: 280, rh, precip: 'none', wind: 0, lift: 0, water: false, distToLand: 0 });
+  assert.equal(humid(90).upkeepGold, TUNING.weatherUpkeep, '潮湿天每个单位交固定几金');
+  assert.equal(humid(60).upkeepGold, undefined, '不潮就不收');
+  // 固定金额的意义：45 金的农夫和 260 金的农业公司交一样多，
+  // 相对产出一个心疼、一个无感——这才是"高时代更抗天气"。
+  assert.ok(!('upkeepRate' in humid(90)), '不许再按造价收百分比');
+});
+
+test('标签只挑最显眼的那一个讲：风大就说大风', () => {
+  // 效果早就不看标签了，这条只钉"徽标跟效果别打架"：
+  // 中段温度遇到大风，标签换成大风；两头（寒冷 / 炎热）不抢。
+  const dry = (t: number) => Math.round(satOf(t) * 0.5);
+  const at = (t: number, wind = 40) =>
+    classifyClimate(t, dry(t), 'none', false, 'plain', undefined, wind);
+  assert.equal(at(160, 0), 'mild', '没风就是温和');
+  assert.equal(at(160), 'gale');
+  assert.equal(at(80), 'gale', '凉爽的日子刮大风，标签也该说大风');
+  assert.equal(at(240), 'gale', '温暖也一样');
+  assert.equal(at(300), 'hot', '炎热比风更该被看见');
+  assert.equal(at(-20), 'cold', '零下先说寒冷');
+  // 下雨时不说大风：那是暴雨/雷暴的分工
+  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, 40), 'overcast');
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
@@ -11927,6 +12265,99 @@ test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {
     Math.max(1, s.unitTypes.archer!.range - 1),
     '阴雨把射程砍一格',
   );
+});
+
+test('浓雾只按住视野 ≤5 的部队，看得远的照常看', () => {
+  /*
+   * 以前浓雾是"一律压到 2"：连视野 7 的侦察/高境界单位也一起被按住，
+   * 玩家花大价钱买的"看得远"在雾天被一笔抹平。
+   *
+   * 现在是**按单位自己的视野分档**：视野 ≤5 的压到 2（它们本来就靠得近），
+   * 视野 6 以上的不受影响——雾对它们只是"没了优势"，不是"瞎了"。
+   */
+  const fogMatch = (vision: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    s.turn = 25;
+    s.unitTypes.archer!.vision = vision;
+    s.tiles[5 * s.w + 5]!.custom = { temp: 140, wet: 58 };
+    assert.equal(climateAt(s, 5, 5), 'fog');
+    return s;
+  };
+
+  // 视野 3：雾按得住
+  const near = fogMatch(3);
+  const a = place2(near, 'A', 'archer', 5, 5);
+  assert.ok(visionOf(near, a) <= 2, `视野 3 的部队该被压到 2，实际 ${visionOf(near, a)}`);
+  assert.ok(effectiveRange(near, a) <= 2, '射程也一起压到 2');
+
+  // 视野 7：雾按不住
+  const far = fogMatch(7);
+  const b = place2(far, 'A', 'archer', 5, 5);
+  assert.equal(visionOf(far, b), 7, '视野 7 的部队在雾里还是 7');
+  assert.equal(effectiveRange(far, b), far.unitTypes.archer!.range, '射程也不压');
+
+  // 分界正好在 5：5 还是压，6 就不压
+  const edge = fogMatch(5);
+  const c = place2(edge, 'A', 'archer', 5, 5);
+  assert.ok(visionOf(edge, c) <= 2, '视野 5 仍在浓雾的辖区里');
+});
+
+test('组合效果单独列一条，带名字', () => {
+  /*
+   * 温度湿度风速是玩家能读到的数，但"多少度加多少湿度会起雾"没人算得出来。
+   * 所以浓雾/雷暴/风暴/封冻/浮冰这类**多驱动凑出来的**效果要在面板上
+   * 单独写一行名字，而不是只丢一句"视野不超过 2"让他自己猜发生了什么。
+   */
+  const fog = weatherEffect({
+    temp: 140,
+    rh: 90,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(fog.combo, 'fog');
+  const lines = effectLines(fog);
+  assert.ok(
+    lines[0]!.startsWith('浓雾：'),
+    `雾要排在第一条并带名字，实际第一条：${lines[0]}`,
+  );
+  assert.ok(lines[0]!.includes('2'), '名字后面要写清楚压到多少');
+  assert.ok(
+    !lines.some((l) => l === '视野不超过 2'),
+    '已经被组合行讲过的不要重复一遍',
+  );
+
+  // 雷暴：热 + 大雨
+  const thunder = weatherEffect({
+    temp: 280,
+    rh: 99,
+    precip: 'heavy',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(thunder.combo, 'thunder');
+  assert.ok(effectLines(thunder).some((l) => l.startsWith('雷暴：')));
+
+  // 封冻：冰面上那两条也不该再单独列一遍
+  const frozen = weatherEffect({
+    temp: -20,
+    rh: 70,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: true,
+    distToLand: 2,
+  });
+  assert.equal(frozen.combo, 'freeze');
+  const fl = effectLines(frozen);
+  assert.ok(fl.some((l) => l.startsWith('封冻：')));
+  assert.ok(!fl.includes('海军移动力归零'), '组合行讲过的不再重复');
+  assert.ok(!fl.includes('陆军可以在冰面上行走'), '同上');
 });
 
 test('天气伤害：雷暴的回合末伤害真的会掉血', () => {

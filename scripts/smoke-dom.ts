@@ -614,6 +614,42 @@ const emptyUi = {
   threat: [] as number[],
 };
 
+check('棋盘视图的字符层：只画给了字的格，没字时一节点不多', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 9191);
+  const view = playerView(st, 'A');
+  const a = 3 * st.w + 2;
+  const b = 4 * st.w + 5;
+  try {
+    // 只有颜色：和从前一样，一个字都没有
+    renderBoard(host, view, {
+      ...emptyUi,
+      boardView: new Map([[a, 'rgba(0,0,0,0.2)']]),
+    });
+    assert.equal(host.querySelectorAll('.fx-qi').length, 1, '一格染色就是一个节点');
+    assert.equal(host.querySelector('.fx-qi.wind'), null, '没给字就不该有字符类');
+
+    // 给了字：同一个节点，字在格中央
+    renderBoard(host, view, {
+      ...emptyUi,
+      boardView: new Map([
+        [a, 'rgba(0,0,0,0.2)'],
+        [b, 'rgba(0,0,0,0.2)'],
+      ]),
+      boardGlyph: new Map([[a, '→']]),
+    });
+    const wind = host.querySelector('.fx-qi.wind');
+    assert.ok(wind, '有字的格要挂上 wind 类');
+    assert.equal(wind.textContent, '→', '字要落在染色层里');
+    assert.equal((wind as HTMLElement).style.gridColumn, '3', '位置还是那一格');
+    assert.equal(host.querySelectorAll('.fx-qi.wind').length, 1, '没给字的格不许跟着长字');
+  } finally {
+    host.remove();
+  }
+});
+
 check('同一局面重画：格子、棋子、城市的节点身份不变', () => {
   const host = doc.createElement('div');
   host.className = 'board';

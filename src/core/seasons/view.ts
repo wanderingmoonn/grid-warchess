@@ -19,15 +19,16 @@
  * 能进来，别把玩家可改的名字往模板里塞。
  */
 import type { GameState } from '../types.ts';
+import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, seasonOf, type Climate } from './climate.ts';
 import {
-  CLIMATE_NAME,
-  SEASON_NAME,
-  SEASON_TURNS,
-  climateEffect,
-  seasonOf,
-  type Climate,
-} from './climate.ts';
-import { climateAt, formatTemp, precipAt, precipLabel, satAt, tempAt, wetAt } from './field.ts';
+  climateAt,
+  formatTemp,
+  isGaleAt,
+  precipLabel,
+  windAt,
+  windLevelOf,
+} from './field.ts';
+import { driversAt, effectLines, weatherEffect } from './effect.ts';
 
 /** 每个气候的图标。颜色只是辅助，名字和数值才是准的（色弱也得读得懂） */
 export const CLIMATE_ICON: Record<Climate, string> = {
@@ -43,66 +44,32 @@ export const CLIMATE_ICON: Record<Climate, string> = {
   overcast: '☁',
   downpour: '⛈',
   fog: '🌫',
+  gale: '💨',
   thunder: '⚡',
   frozen: '🧊',
   driftIce: '❆',
   storm: '🌪',
 };
 
-function signedPct(rate: number): string {
-  const v = Math.round(rate * 100);
-  return `${v > 0 ? '+' : '−'}${Math.abs(v)}%`;
-}
-
-/**
- * 这个气候到底改了什么，翻成人话。
- *
- * **从效果表派生**，不另写一份文案：表格改了、说明跟着改，
- * 不会出现"界面上写着 −25%、实际已经调成 −50%"这种最难查的错。
- */
-export function climateEffectLines(c: Climate): string[] {
-  const e = climateEffect(c);
-  const out: string[] = [];
-
-  if (e.moveMul !== undefined && e.moveMul !== 1) out.push(`移动力 ${signedPct(e.moveMul - 1)}`);
-  if (e.moveAdd) out.push(`移动力 ${e.moveAdd > 0 ? '+' : '−'}${Math.abs(e.moveAdd)}`);
-  if (e.moveCostAdd) out.push(`每格移动消耗 +${e.moveCostAdd}`);
-  if (e.armorPenalty) {
-    out.push(
-      e.armorPenaltyOnlyField
-        ? `不在城里的军队护甲 −${e.armorPenalty}`
-        : `全军护甲 −${e.armorPenalty}`,
-    );
-  }
-  if (e.incomeMul !== undefined && e.incomeMul !== 1) {
-    out.push(`经济产出 ${signedPct(e.incomeMul - 1)}`);
-  }
-  if (e.rangeAdd) out.push(`攻击范围 ${e.rangeAdd > 0 ? '+' : '−'}${Math.abs(e.rangeAdd)}`);
-  if (e.rangeMax) out.push(`攻击范围不超过 ${e.rangeMax}`);
-  if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
-  if (e.endDamage) {
-    const d = e.endDamage;
-    const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
-    out.push(
-      d.hits > 1
-        ? `回合末受 ${d.hits} 次 ${d.amount} 点伤害（吃护甲）`
-        : `回合末受 ${d.amount} 点伤害${splash}`,
-    );
-  }
-  if (e.upkeepRate) out.push(`回合末交 ${Math.round(e.upkeepRate * 100)}% 维护费`);
-  if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
-  if (e.navyMoveZero) out.push('海军移动力归零');
-  if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
-    out.push(`海军移动力 ${signedPct(e.navyMoveMul - 1)}`);
-  }
-  if (e.landOnIce) out.push('陆军可以在冰面上行走');
-
-  return out;
-}
-
 /** 天气徽标：图标 + 中文名。`w-<id>` 让每种气候有自己的底色 */
 export function weatherBadge(c: Climate): string {
   return `<span class="weather-badge w-${c}">${CLIMATE_ICON[c]} ${CLIMATE_NAME[c]}</span>`;
+}
+
+/**
+ * 风向箭头：指向风**吹向**的方向（八方位）。
+ *
+ * 只用整数比大小，不碰三角函数——回放两端得画出同一支箭头。
+ * 横竖占优（1:3 以上）就画直箭头，否则画斜的。
+ */
+function windArrow(w: { x: number; y: number }): string {
+  if (w.x === 0 && w.y === 0) return '';
+  const ax = Math.abs(w.x);
+  const ay = Math.abs(w.y);
+  if (ax * 3 < ay) return w.y > 0 ? ' ↓' : ' ↑';
+  if (ay * 3 < ax) return w.x > 0 ? ' →' : ' ←';
+  if (w.y > 0) return w.x > 0 ? ' ↘' : ' ↙';
+  return w.x > 0 ? ' ↗' : ' ↖';
 }
 
 /**
@@ -118,19 +85,28 @@ export function weatherBlock(
   y: number,
   c: Climate,
 ): string {
-  const temp = tempAt(s, x, y);
-  const wet = wetAt(s, x, y);
-  const sat = satAt(s, x, y);
-  const precip = precipAt(s, x, y);
-  const lines = climateEffectLines(c);
+  /*
+   * 读数与效果都从**驱动**来，不是从标签来。
+   *
+   * 这是这次改造的关键：标签只决定徽标上的名字和颜色，真正的数字是
+   * "温度多少度、湿度多少、风几级"各自算出来的。所以会出现
+   * "徽标写着温和、但底下写着空军逆风 +1"——那不是 bug，是天气本来就有
+   * 多个维度，徽标只能挑一个说。
+   */
+  const d = driversAt(s, x, y);
+  const lines = effectLines(weatherEffect(d));
   const body =
     lines.length === 0
       ? `<div class="weather-none">这一格没有额外影响。</div>`
       : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
+  // 风力放在读数里：不然"大风"只是个名字，玩家不知道风有多大、
+  // 也不知道往哪边吹——而这两件事正是它唯一的规则含义。
+  const dir = windArrow(windAt(s, x, y));
   return (
     `<div class="weather-box">${weatherBadge(c)}` +
-    `<div class="weather-readout">${formatTemp(temp)} · 相对湿度 ${Math.round((wet / sat) * 100)}%` +
-    `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}</div>` +
+    `<div class="weather-readout">${formatTemp(d.temp)} · 相对湿度 ${d.rh}%` +
+    `${d.precip === 'none' ? '' : ` · ${precipLabel(d.precip)}`}` +
+    ` · 风力 ${windLevelOf(d.wind)} 级${dir}</div>` +
     `${body}</div>`
   );
 }
@@ -168,11 +144,34 @@ const CLIMATE_TINT: Record<Climate, string> = {
   overcast: 'rgba(140, 145, 155, 0.34)',
   downpour: 'rgba(80, 110, 160, 0.48)',
   fog: 'rgba(200, 205, 210, 0.46)',
+  gale: 'rgba(150, 175, 200, 0.30)',
   thunder: 'rgba(180, 150, 60, 0.44)',
   frozen: 'rgba(150, 215, 235, 0.50)',
   driftIce: 'rgba(175, 220, 240, 0.36)',
   storm: 'rgba(110, 90, 160, 0.48)',
 };
+
+/**
+ * 风向上的箭头：**只画在刮大风的格子上**。
+ *
+ * 全图铺箭头太吵——秋天大风能占四分之一的地，而且大多数格子的风根本
+ * 不影响规则，箭头只是底纹。只标"风真的会收钱的地方"，玩家一眼就知道
+ * 该绕哪边走。再隔一格画一个，免得大风季整片棋盘长毛。
+ */
+export function windGlyphCells(
+  s: GameState,
+): Array<{ x: number; y: number; text: string }> {
+  const out: Array<{ x: number; y: number; text: string }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if ((x + y) % 2 !== 0) continue; // 隔一格画一个
+      if (!isGaleAt(s, x, y)) continue;
+      const text = windArrow(windAt(s, x, y)).trim();
+      if (text) out.push({ x, y, text });
+    }
+  }
+  return out;
+}
 
 /**
  * 每格的天气染色。**"温和"不画**——它占了绝大多数格子，

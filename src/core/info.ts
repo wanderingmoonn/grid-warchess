@@ -57,13 +57,13 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     name: '深水',
     cost: '船 1 移动力 / 陆军不可通行',
     defense: '无加成',
-    note: '离岸两格以上的外海。',
+    note: '外海，难以架桥。',
   },
   bridge: {
     name: '桥',
     cost: '1 移动力',
     defense: '无加成',
-    note: '架在水面上的建筑，友军可以从上面走过，敌军过不来。有耐久，打掉即变回水面。',
+    note: '架在水面上的建筑，供友军通行。',
   },
   mountain: {
     name: '高山',
@@ -81,13 +81,13 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     name: '台地',
     cost: '2 移动力（爬坡另计）',
     defense: '护甲 +3',
-    note: '比平原高 2 层、比丘陵高 1 层。站在台地边缘射程 +1，往下打远处的敌人还能再 +1；从下面仰攻它，射程 -1。',
+    note: '高处的平原。',
   },
   valley: {
     name: '谷地',
     cost: '1 移动力',
     defense: '护甲 +2',
-    note: '比平原低 1 层。射程 -1（视线被两边的坡切掉），但往里走不吃爬坡费——从谷地冲上高地的那一步才贵。',
+    note: '更低的平原。',
   },
   marsh: {
     name: '沼泽',
@@ -105,7 +105,7 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     name: '浅流',
     cost: '2 移动力（陆军可涉水）',
     defense: '护甲 -1',
-    note: '水深刚过脚踝的漫水滩，也是全图唯一两边都能走的水：陆军涉水过去，水军也能贴着浅滩滑过去——绕海不如直接穿过一串浅滩。站在水里没处躲，挨打时比平地还吃亏；踩水走一格算两格。',
+    note: '水深刚过脚踝的漫水滩。',
   },
 };
 

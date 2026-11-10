@@ -249,6 +249,27 @@ export interface StepCostCtx {
   cost: number;
 }
 
+/**
+ * 空中一格的步耗（**只有飞行单位会问**）。
+ *
+ * 为什么不复用 `StepCostCtx`：那条对飞行是**整段跳过**的——飞行按一格 1 点算，
+ * 不该被爬坡收费，所以 `stepCostInto` 见到 flyer 直接返回 1、一个钩子都不调。
+ * 天气要改的是"风把飞机拖慢"，跟地形无关，而且逆风还是顺风要看**这一步的方向**，
+ * 所以单开一个口子，签名里带 fromIdx / toIdx。
+ *
+ * 返回 undefined 表示不改。
+ */
+export interface AirStepCostCtx {
+  state: GameState;
+  unit: Unit;
+  /** 出发格索引；从地图外/部署进来时为负数 */
+  fromIdx: number;
+  /** 目标格索引 */
+  toIdx: number;
+  /** 已经算好的基础价（飞行恒为 1） */
+  cost: number;
+}
+
 export interface CityRegenCtx {
   state: GameState;
   city: City;
@@ -428,6 +449,13 @@ export interface ExpansionHooks {
   modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
   /** 纯函数：修正进入某一格的真实步耗（爬坡） */
   modifyStepCost?: (c: StepCostCtx) => number | undefined;
+  /**
+   * 纯函数：修正**飞行**进入某一格的步耗（逆风）。
+   *
+   * 和 `modifyStepCost` 分开是因为那条对飞行不调用（飞行不看地形起伏）。
+   * 这里问的是"风"，参数里带方向——逆风加价、顺风原价，是这一步的事。
+   */
+  airStepCost?: (c: AirStepCostCtx) => number | undefined;
   /**
    * 纯函数：这一局某类地形有多高（层）。
    *
@@ -624,6 +652,21 @@ export interface BoardView {
     y: number;
     /** CSS 颜色，通常带 alpha */
     color: string;
+  }>;
+  /**
+   * 染色层之上再写一个字符（风向箭头这类）。
+   *
+   * 和 `cells` 同一层、同一格：核心只负责"把字画在格中央"，
+   * 画什么字、什么时候该有字，全由扩展决定。
+   *
+   * 为什么不做成"任意 HTML"：这层每帧都在重画，塞 HTML 进去就等于
+   * 让扩展在渲染热路径上跑，而且一个手滑就是注入。字符够用了。
+   */
+  glyph?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+    x: number;
+    y: number;
+    /** 一个字符（或很短的串），核心居中画出 */
+    text: string;
   }>;
 }
 

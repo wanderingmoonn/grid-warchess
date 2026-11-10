@@ -207,9 +207,18 @@ function esc(t: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** 能力说明里有 `**加粗**` 这种手写标记，转成标签；其余照常转义 */
+/**
+ * 富文本：先转义，再把**白名单里的标签**和 `**加粗**` 放回去。
+ *
+ * 扩展的 `summary` 是手写的，两种写法都出现过：`**加粗**` 和直接写 `<b>`。
+ * 早先这里只有 `esc()`，于是册子里原样印出 `&lt;b&gt;`——玩家看到的是
+ * 一堆 HTML 符号。现在统一走这个函数：标签先被转义，再按白名单还原，
+ * 所以 `<script>` 这类东西仍然只会显示成文本。
+ */
 function rich(t: string): string {
-  return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  return esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/&lt;(\/?)(b|strong|i|em|code|br)\s*\/?&gt;/g, '<$1$2>');
 }
 
 /* ---------------------------------------------------------------------------
@@ -828,7 +837,7 @@ function expansionTable(): string {
               : '';
             // 默认开着的那条要标出来：新对局不特别选就是它
             const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
-            return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${esc(e.summary)}</td><td class="traits">—</td></tr>`;
+            return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${rich(e.summary)}</td><td class="traits">—</td></tr>`;
           })
           .join('')}
       </tbody>
@@ -2368,7 +2377,7 @@ function smallSection(e: Exp, num: number): string {
   return `
     <section id="exp-${esc(e.id)}">
       <h2><span class="sec-num">${String(num).padStart(2, '0')}</span>${esc(e.name)}</h2>
-      <p>${esc(e.summary)}</p>
+      <p>${rich(e.summary)}</p>
 ${SMALL_NOTES[e.id] ? '      ' + SMALL_NOTES[e.id] : ''}
     </section>`;
 }
@@ -2584,7 +2593,7 @@ function packsOverview(packs: readonly Exp[]): string {
               us.length || '—'
             }</td><td class="num">${eras.length ? eraRange(eras) : '—'}</td><td class="nowrap">${
               req ? esc(req) : '—'
-            }</td><td>${esc(p.summary)}</td></tr>`;
+            }</td><td>${rich(p.summary)}</td></tr>`;
           })
           .join('')}
       </tbody>
@@ -2679,7 +2688,7 @@ function packBook(e: Exp): Book {
   const body = `
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>${esc(e.summary)}</p>
+      <p>${rich(e.summary)}</p>
       <dl class="kv">
         <dt>兵种数量</dt><dd>${units.length} 个</dd>
         <dt>覆盖时代</dt><dd>${eras.length ? eras.map((n) => `${n}（${esc(ERAS[n - 1]?.name ?? '')}）`).join('、') : '—（不带兵种）'}</dd>
@@ -3633,6 +3642,22 @@ mkdirSync('public', { recursive: true });
 
 // 先渲染再写：page() 只拼字符串，渲染一次就够，后面覆盖自检直接用这份结果
 const rendered = books.map((b) => ({ b, html: page(b) }));
+
+/*
+ * 自检：册子里不许出现被转义掉的标签。
+ *
+ * `summary` 这类手写文案以前走的是 `esc()`，于是 `<b>` 原样印成
+ * `&lt;b&gt;`——玩家看到一堆 HTML 符号，加粗也没了。现在文案统一走 `rich()`，
+ * 但以后新加一册、新加一段时很容易又漏。与其等玩家截图反馈，
+ * 不如让 `npm run manual` 直接失败：报错里带着漏出来的那个标签。
+ */
+for (const { b, html } of rendered) {
+  const leak = html.match(/&lt;\/?(?:b|strong|i|em|code|br)&gt;/);
+  if (leak) {
+    throw new Error(`${b.file} 里有没渲染的标签「${leak[0]}」——手写文案要走 rich()`);
+  }
+}
+
 for (const { b, html } of rendered) {
   writeFileSync(b.file, html, 'utf-8');
   const kb = Math.round(html.length / 1024);
