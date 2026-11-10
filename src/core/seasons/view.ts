@@ -178,7 +178,7 @@ const CLIMATE_TINT: Record<Climate, string> = {
  * 每格的天气染色。**"温和"不画**——它占了绝大多数格子，
  * 画一层透明色只会让整张图看起来什么都没发生；留白反而是"这里没事"。
  *
- * 返回全图，**不裁视野**：遮蔽统一由 `fog.ts` 的 `cellsInSight` 在渲染前做。
+ * 返回全图，**不裁视野**：遮蔽统一由 `fog.ts` 的 `onlyVisibleCells` 在渲染前做。
  * 天气场是按全图算的，不裁就等于把对面的地形和建筑分布摊开给你看。
  */
 export function climateOverlayCells(

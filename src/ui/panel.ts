@@ -30,8 +30,9 @@ import {
   chargesLeft,
   deviceTargetOf,
   devicesOf,
-  energyReport,
+  energyBreakdown,
   fitsFrame,
+  moduleSpecText,
   modulesOf,
   offlineModules,
   rechargeQuote,
@@ -1036,6 +1037,17 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
       }</b></div>
       <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${stats.vision}</b></div>
+      ${
+        // 装甲素体：插槽与耗电必须写在属性卡上。
+        // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
+        // 以前只能点进装配坞里数按钮。
+        def.armorFrame
+          ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
+             <div class="info-row"><span>耗电</span><b>${unitDraw(s, selectedUnit)} <small style="opacity:.65">（本方余量 ${
+               energyBreakdown(s, selectedUnit.owner).headroom
+             }）</small></b></div>`
+          : ''
+      }
       ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
       ${
         // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
@@ -2129,10 +2141,60 @@ export const TERRAIN_NAMES = CONFIG.terrainName;
  * 所有按钮都带着"为什么不能装"的 title：玩家不该为了问一句"为什么点不动"
  * 去翻规则书，这也是这个面板存在的理由。
  */
+/** 五个槽位的中文单字（和装配按钮上那枚角标同一套） */
+const SLOT_CHAR: Record<string, string> = { main: '主', sub: '副', plate: '甲', system: '统', device: '设' };
+
+/**
+ * 这台素体的插槽用了几个 / 一共几个。
+ *
+ * 以前面板上只有"能装什么"，从不写"还剩几个槽"——玩家装了三件之后
+ * 不知道还能不能再装，只能一件件点过去试，被拒了才知道满了。
+ */
+function slotLine(def: UnitTypeDef, u: Unit): string {
+  const caps: Record<string, number> = def.slots ?? {};
+  const used: Record<string, number> = {};
+  for (const id of modulesOf(u)) {
+    const slot = MODULES[id]?.slot;
+    if (slot) used[slot] = (used[slot] ?? 0) + 1;
+  }
+  const order = ['main', 'sub', 'plate', 'system', 'device'];
+  const totalCap = order.reduce((n, k) => n + (caps[k] ?? 0), 0);
+  const totalUsed = order.reduce((n, k) => n + (used[k] ?? 0), 0);
+  const detail = order
+    .filter((k) => (caps[k] ?? 0) > 0)
+    .map((k) => `${SLOT_CHAR[k]}${used[k] ?? 0}/${caps[k]}`)
+    .join(' · ');
+  return `${totalUsed}/${totalCap}${detail ? `（${detail}）` : ''}`;
+}
+
+/**
+ * 电力收支条：一条横条 + 三个数。
+ *
+ * 纯文字"供电 42 / 需求 26"玩家得自己减；这里直接把"用掉多少"画出来，
+ * 过载时整条变红——装配坞最常见的挫败就是"装上去才发现过载"。
+ */
+function powerBlock(s: GameState, owner: PlayerId): string {
+  const bk = energyBreakdown(s, owner);
+  const over = bk.headroom < 0;
+  const pct = bk.supply > 0 ? Math.min(100, Math.round((bk.demand / bk.supply) * 100)) : bk.demand > 0 ? 100 : 0;
+  const gen =
+    bk.modulePower > 0
+      ? `发电厂 ${bk.plantPower} + 装备 ${bk.modulePower}`
+      : `发电厂 ${bk.plantPower}`;
+  return `<div class="power-line">
+    <div class="power-bar"><i class="${over ? 'over' : ''}" style="width:${pct}%"></i></div>
+    <div class="power-nums">
+      <span>产能 <b>${bk.supply}</b> <em>${gen}</em></span>
+      <span>已用 <b>${bk.demand}</b></span>
+      <span class="${over ? 'over' : ''}">${over ? `过载 <b>${-bk.headroom}</b>` : `余量 <b>${bk.headroom}</b>`}</span>
+    </div>
+  </div>
+  <div class="hint">${bk.plants} 座电站 · ${bk.frames} 台装甲在吃电</div>`;
+}
+
 function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
   const def = s.unitTypes[u.type];
   if (!def?.armorFrame) return '';
-  const rep = energyReport(s, u.owner);
   const off = offlineModules(s, u);
   const mine = modulesOf(u);
 
@@ -2140,9 +2202,11 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     const m = MODULES[id];
     if (!m) return '';
     const dead = off.has(id);
-    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}>
+    // 数据特性写在第二行：以前只写"耗能 N"，装甲板/系统槽装了什么都看不见
+    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
+      title="${escapeHtml(moduleSpecText(m))}">
       <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">拆</span>
-      <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗能 ${m.draw} · 拆除不退全额</span></span>
+      <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}</span></span>
       <span class="price">+${Math.floor(m.cost / 2)}</span>
     </button>`;
   });
@@ -2155,7 +2219,9 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
       const why = chk.ok ? '' : (chk.reason ?? '');
       return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(why)}">
         <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
-        <span class="meta"><b>${m.name}</b><span>${why || `耗能 ${m.draw}${m.weapon ? ` · 伤害 ${m.weapon.damage} · 射程 ${m.weapon.range}` : ''}`}</span></span>
+        <span class="meta"><b>${m.name}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}${
+          why ? ` · <b style="color:#b4463c">${escapeHtml(why)}</b>` : ''
+        }</span></span>
         <span class="price">${m.cost}</span>
       </button>`;
     });
@@ -2211,10 +2277,10 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     <span class="price">${rcChk.ok ? rc.total : '—'}</span>
   </button>`;
 
-  return `<div class="card-title" style="margin-top:14px">装配 · 供电 ${rep.supply} / 需求 ${rep.demand}${
-    rep.headroom < 0 ? ` · <b style="color:#c0392b">过载 ${-rep.headroom}</b>` : ` · 余量 ${rep.headroom}`
-  }</div>
-  <div class="hint">这台耗能 ${unitDraw(s, u)}。装配要贴着装配坞、花掉它整回合；拆卸不花回合、退一半金币。</div>
+  return `<div class="card-title" style="margin-top:14px">装配 · 电力</div>
+  ${powerBlock(s, u.owner)}
+  <div class="info-row"><span>插槽</span><b>${slotLine(def, u)}</b></div>
+  <div class="hint">这台耗电 ${unitDraw(s, u)}（素体 ${def.draw ?? 0} + 模块 ${unitDraw(s, u) - (def.draw ?? 0)}）。装配要贴着装配坞、花掉它整回合；拆卸不花回合、退一半金币。</div>
   ${installed.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${installed.join('')}</div>` : `<div class="hint">还没装任何模块——素体只有撞击。</div>`}
   ${candidates.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${candidates.join('')}</div>` : ''}
   ${

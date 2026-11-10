@@ -119,6 +119,17 @@ export const CLIMB_COST = 1;
 export const CLIMB_CAP = 2;
 
 /**
+ * 丘陵在地形表里多收的那 1 点，在高差下退回去。
+ *
+ * `CONFIG.terrainCost.hill = 2` 是**本体**的口径（平原 1 + 地形本身难走 1）。
+ * 但「地形高差」已经把"上去吃力"表达成爬坡了，两条叠在一起就是重复收费：
+ * 平原→丘陵 会变成 3 点，移动力 2 的步兵爬上去一格都剩不下。
+ * 所以这里退回 1，丘陵只按"高度差"收钱，和森林（难走但不高）区分开。
+ */
+export const HILL_TERRAIN_CREDIT = 1;
+
+
+/**
  * 高度差影响射程的阈值。
  *
  * 定 2 而不是 1：平原↔丘陵只差一层，那是"略高一点"，弓箭手站上去就多一格射程的话，
@@ -279,15 +290,27 @@ export const HEIGHT_TERRAIN: Expansion = {
      * 各地形自带的额外步耗与沼泽陷足都已取消——它们和爬坡叠加之后，
      * 移动力 2 的兵连相邻的丘陵都迈不上去，那是规则把自己堵死。
      *
+     * 2026-11-09：**丘陵的地形费也退了**。本体地形表里丘陵是 2（平原 1 + "陡" 1），
+     * 可是高差已经用爬坡把"上去吃力"收过一次费——同一件事收两遍，
+     * 结果是平原→丘陵 3 点，移动力 2 的步兵爬上去正好一格不动。
+     * 现在 `hill` 的地形费按 1 算，上坡只收 `dh × CLIMB_COST`：
+     * 平原→丘陵 = 1 + 1 = 2（和森林同价），丘陵→丘陵 = 1，丘陵→平原（下坡）= 1。
+     * **森林不动**（它是高度 0 的"难走"，不是"难爬"）。
+     *
      * 最后再钳一下：**一格最多吃掉这个兵全部的移动力**。
      * 这样"爬得上去"永远成立（有移动力就上得去），只是这一回合就到头了；
      * 不会出现"看起来能走、点了没反应"的死角。
      */
     modifyStepCost: ({ state, unit, from, to, cost }) => {
-      if (!from) return undefined;
+      // 丘陵：把地形表里那 1 点"陡"退回去，陡不陡交给下面的爬坡算。
+      // 只在丘陵上退，台地（2）与森林（2）照旧——它们贵在别的理由上。
+      const base = to === 'hill' ? Math.max(1, cost - HILL_TERRAIN_CREDIT) : cost;
+      if (!from) return base === cost ? undefined : base;
+
       const dh = (TERRAIN_HEIGHT[to] ?? 0) - (TERRAIN_HEIGHT[from] ?? 0);
-      if (!(dh > 0)) return undefined;
-      const out = cost + Math.min(CLIMB_CAP, dh) * CLIMB_COST;
+      if (!(dh > 0)) return base === cost ? undefined : base;
+
+      const out = base + Math.min(CLIMB_CAP, dh) * CLIMB_COST;
       if (!unit) return out;
       // 兵种自己的移动力（天气/减益会再压它，这里取表里的基础值做上限）
       const move = state.unitTypes[unit.type]?.move ?? 0;

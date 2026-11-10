@@ -215,6 +215,7 @@ import {
   canUseDevice,
   chargesLeft,
   doMount,
+  moduleSpecText,
   doUnmount,
   energyReport,
   extraHpCap,
@@ -315,7 +316,7 @@ import {
   isEliminated,
   hasQuit,
 } from '../src/core/rules.ts';
-import { cellsInSight, playerView } from '../src/core/fog.ts';
+import { playerView, isBlackedOut, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -2515,7 +2516,12 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     // 视野 +1）的价格按 +50 走，640 仍在"英雄"这一档里；再往上就该另算。
     // 下限 300：暗夜死灵法师 2026-10-31 降到火器时代，价 320——它是"靠技能吃饭"
     // 的便宜英雄，不该被这条按蒸汽/现代英雄写的下限卡住。
-    assert.ok(u.cost >= 300 && u.cost <= 650, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    //
+    // 例外按 id 单开，**不抬高全局上限**：邪龙王 700（2026-11-09 用户点单——
+    // 它同时吃到"信息化射程 4→5"和"陨卵自己选落点"，640 已经压不住）。
+    // 把上限整体抬到 700 会让别的英雄跟着水涨船高，那是另一件事。
+    const cap = u.id === 'evil-dragon-king' ? 700 : 650;
+    assert.ok(u.cost >= 300 && u.cost <= cap, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
     // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火器时代（320 金），
     // 这一条"涨"的规则对它不成立。
@@ -2652,6 +2658,112 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
+test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）', () => {
+  /*
+   * 用户点单（2026-11-09）："高时代经济单位生产效率大幅上升……不要再搞这种
+   * 莫名其妙的设计了"。
+   *
+   * 原来的问题不是"高时代产出没涨"，而是**倒退**：
+   *   时代 5 建材公司 290 金产 48（回本 6.0）
+   *   时代 6 物流集团 330 金产 40（回本 8.3）  ← 更贵、更慢
+   * 玩家在信息化时代花钱买了个比上一代还差的生产单位，且没有任何提示。
+   *
+   * 现在按"回本回合数"定价：时代 4/5 ≤ 5.5，时代 6~8 ≤ 5。
+   * 这条守的是**单调性**——以后新加经济单位，只要比同代或上一代更差就会在这里红。
+   */
+  const all = fullUnitCatalog();
+  const rows: Array<{ name: string; era: number; cost: number; best: number }> = [];
+  for (const [, d] of Object.entries(all) as Array<[string, any]>) {
+    if (d.category !== 'economy') continue;
+    // 2026-11-10：从"时代 4 以上"放宽到"时代 3 以上"——军需官（时代 3）
+    // 原来的回本 9.4 是全表最差，比时代 1 的农民（6.4）还差。
+    if ((d.era ?? 0) < 3) continue;
+    const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
+    assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
+    rows.push({ name: d.name, era: d.era, cost: d.cost, best });
+  }
+  assert.ok(rows.length >= 8, `经济单位样本太少：${rows.length}`);
+
+  for (const r of rows) {
+    const payback = r.cost / r.best;
+    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5，3 代 ≤6
+    const cap = r.era >= 6 ? 5.0 : r.era >= 4 ? 5.5 : 6.0;
+    assert.ok(
+      payback <= cap + 1e-9,
+      `${r.name}（时代${r.era}）造价 ${r.cost}、最高产出 ${r.best}，回本 ${payback.toFixed(2)} 回合，超过 ${cap}`,
+    );
+  }
+
+  // 时代 6 不许比时代 5 更差（就是原来那个"莫名其妙"的坑）
+  const era5 = Math.min(...rows.filter((r) => r.era === 5).map((r) => r.cost / r.best));
+  const era6 = Math.max(...rows.filter((r) => r.era === 6).map((r) => r.cost / r.best));
+  assert.ok(era6 <= era5, `时代 6 最差的回本（${era6.toFixed(2)}）不该比时代 5 最好的（${era5.toFixed(2)}）还慢`);
+});
+
+test('信息化时代：战斗单位的射程整体 +1', () => {
+  /*
+   * 用户点单（2026-11-09）："信息化时代的单位集体射程上升 1"。
+   *
+   * 这条钉的是**结果**，不是"某段代码有没有跑"：时代 6 的战斗单位逐个对一遍。
+   * 只算战斗单位——建筑（碉堡、指挥所）的射程是另一条设计轴（自动开火 + 视野），
+   * 仓库/钻井这种没有武器的也不动。
+   *
+   * 没有武器的（魔龙卵、补给舰、预警机）射程是 0，本来就不该有射程。
+   */
+  const want: Record<string, number> = {
+    // 现代（pack-contemporary）
+    cnt_mechinf: 4, cnt_mbt: 4, cnt_atgm: 5, cnt_specops: 4,
+    cnt_sph: 6, cnt_mlrs: 6, cnt_sam: 6, cnt_heli: 5, cnt_uav: 6, cnt_destroyer: 6,
+    // 时代军备（第六代）
+    ct_infantry: 5, ct_tank: 5, ct_howitzer: 6, ct_recon: 4,
+    // 海军第六代
+    nv_carrier: 4, nv_large_cruiser: 7, nv_aegis: 7, nv_attack_sub: 5,
+    nv_ssk: 5, nv_amphib: 3, nv_missile_boat: 5, nv_lcs: 6, nv_usv: 5,
+    // 空军第六代
+    af_jet: 5, af_stealth: 5, af_attack_jet: 3, af_heli: 3, af_drone: 4,
+    af_strategic: 4, af_ew: 4, af_heavy_transport: 2,
+    // 奇想（开信息化才收录）
+    'sword-saint': 3, 'evil-dragon-king': 4, 'magic-dragon': 3,
+  };
+  const all = fullUnitCatalog();
+  for (const [id, range] of Object.entries(want)) {
+    const d: any = all[id];
+    assert.ok(d, `找不到 ${id}`);
+    assert.equal(d.era, 6, `${d.name} 应该是信息化时代（6）`);
+    assert.equal(d.range, range, `${d.name} 的射程应该是 ${range}（+1 之后）`);
+  }
+
+  // 没有武器的不许被顺手加上射程
+  for (const id of ['dragon-egg', 'nv_oiler', 'af_awacs']) {
+    assert.equal((all[id] as any)?.range, 0, `${id} 没有武器，射程该是 0`);
+  }
+
+  /*
+   * 2026-11-10：射程 +1 的这批**视野也同步 +1**（用户点单）。
+   * 理由和"看得见才打得到"同源：射程加了、视野没加，多出来那一格在雾战里
+   * 等于白送。注意这里只是各自 +1，不是"视野 = 射程"——自行榴弹炮那种
+   * 视 3 射 6 仍然要靠队友/城/塔报点，那是它的定位，不是漏改。
+   */
+  const vision: Record<string, number> = {
+    cnt_mechinf: 5, cnt_mbt: 4, cnt_atgm: 4, cnt_specops: 6,
+    cnt_sph: 3, cnt_mlrs: 3, cnt_sam: 6, cnt_heli: 6, cnt_uav: 7, cnt_destroyer: 7,
+    ct_infantry: 6, ct_tank: 5, ct_howitzer: 5, ct_recon: 7,
+    nv_carrier: 10, nv_large_cruiser: 7, nv_aegis: 8, nv_attack_sub: 6,
+    nv_ssk: 5, nv_amphib: 7, nv_missile_boat: 6, nv_lcs: 6, nv_usv: 4,
+    af_jet: 9, af_stealth: 9, af_attack_jet: 7, af_heli: 8, af_drone: 11,
+    af_strategic: 8, af_ew: 10, af_heavy_transport: 8,
+    'sword-saint': 7, 'magic-dragon': 7,
+  };
+  for (const [id, v] of Object.entries(vision)) {
+    assert.equal((all[id] as any).vision, v, `${(all[id] as any).name} 的视野应该是 ${v}（+1 之后）`);
+  }
+  // 兜底：这一代没有谁的眼睛被削到 3 以下（改了数值不至于把谁变成瞎子）
+  for (const [id, d] of Object.entries(all) as Array<[string, any]>) {
+    if (d.era !== 6 || d.category !== 'combat') continue;
+    if ((d.range ?? 0) >= 1) assert.ok(d.vision >= 3, `${d.name} 的视野只有 ${d.vision}`);
+  }
+});
+
 test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', () => {
   const without = fresh({ startEra: 6, expansionIds: ['fantasy-core', 'fantasy-heroes'] });
   assert.equal(without.unitTypes['sword-saint'], undefined, '没开现代时不该有圣剑勇者');
@@ -2667,7 +2779,8 @@ test('圣剑勇者与邪龙王：只在同时开了「信息化」时收录', ()
   assert.equal(saint!.era, 6, '圣剑勇者是信息化时代');
   assert.equal(saint!.element, 'light', '光属性');
   assert.equal(saint!.move, 4, '移速 4');
-  assert.equal(saint!.range, 2, '射程 2');
+  // 2026-11-09：信息化时代（6）的战斗单位射程集体 +1，他也在其中（2 → 3）
+  assert.equal(saint!.range, 3, '射程 3');
   assert.equal(saint!.splashLine, true, '攻击是直线形溅射');
   assert.ok(saint!.maxHp >= 120 && saint!.atk >= 40 && saint!.armor >= 10, '高血高攻高甲');
 
@@ -2724,7 +2837,7 @@ test('圣剑勇者：直线溅射只扫那条线，觉醒永久加攻甲血', ()
   assert.ok(up.hp > 60, '同时回血');
 });
 
-test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且飞行、陨卵半径 9', () => {
+test('奇想平衡：魔龙卵变硬、邪龙王视野 11 且飞行、陨卵半径 11', () => {
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
 
   const egg = s.unitTypes['dragon-egg']!;
@@ -2733,11 +2846,11 @@ test('奇想平衡：魔龙卵变硬、邪龙王视野 9 且飞行、陨卵半�
   assert.equal(egg.maxHp, 140, '魔龙卵生命 140');
 
   const dragon = s.unitTypes['evil-dragon-king']!;
-  assert.equal(dragon.vision, 9, '邪龙王视野 9');
+  assert.equal(dragon.vision, 11, '邪龙王视野 11（和陨卵半径对齐）');
   assert.equal(dragon.layer, 'air', '邪龙王在空中层');
   assert.equal(dragon.flight, true, '飞行要能掠水，flight 与 layer 一起写');
   const skill = (dragon.skills ?? []).find((k) => k.id === 'dragon-egg');
-  assert.equal(skill?.radius, 9, '陨卵半径 9');
+  assert.equal(skill?.radius, 11, '陨卵半径 11（和视野对齐）');
 
   // 空中层的实际含义：能和地面单位叠在同一格（见 layer 的说明）
   s.units = [];
@@ -2911,13 +3024,16 @@ test('邪龙王：陨卵砸出暗属性伤害，卵两回合后孵出魔龙', ()
   assert.equal(hatched!.type, 'magic-dragon', '两回合后孵成魔龙');
 });
 
-test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () => {
+test('陨卵：落点由玩家点，空地也能放（2026-11-10 放宽）', () => {
   /*
    * 原来是引擎替玩家挑"伤害最高的一格"。现在声明成选点技能（targeting: 'point'），
    * 界面把合法格子高亮、点哪落哪。
    *
-   * 两个口径必须同源：高亮的格子就是"点下去不会失败"的格子，
-   * 否则玩家会遇到这个包里最烦人的那种挫败——格子亮着，点下去回一句"不行"。
+   * 2026-11-10 改动：**落点周围不要求有敌人**。理由在规则层写着——卵本身是
+   * 两回合后的一条龙，不只是"砸人那一下"，把它锁死在"必须砸到人"上，
+   * 等于砍掉了"提前铺垫一条龙"这个玩法。
+   *
+   * 两个口径必须同源：高亮的格子就是"点下去不会失败"的格子。
    */
   const s = fresh({ startEra: 6, expansionIds: FANTASY_WITH_MODERN });
   s.units = [];
@@ -2929,11 +3045,14 @@ test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () 
   assert.equal(skill.targeting, 'point', '要声明成选点技能，界面才会进瞄准模式');
 
   const cells = SKILL_TARGET_CELLS['dragon-egg']!({ state: s, self: dragon, skill });
-  assert.ok(cells.length > 0, '有敌人就该有落点');
+  assert.ok(cells.length > 0, '射程内放得下蛋的格子都该高亮');
   assert.ok(cells.some((p) => p.x === 10 && p.y === 5), '(10,5) 贴着敌人，是合法落点');
-  assert.equal(cells.some((p) => p.x === 4 && p.y === 9), false, '砸不到人的空地不该高亮');
+  assert.ok(
+    cells.some((p) => p.x === 4 && p.y === 9),
+    '空地也该高亮——2026-11-10 起点空地也算合法（高亮和判定必须同源）',
+  );
 
-  // 点哪落哪
+  // 1) 砸得到人：点哪落哪，伤害照旧
   const r = applyAction(s, {
     type: 'HERO_SKILL',
     unitId: dragon.id,
@@ -2946,10 +3065,27 @@ test('陨卵：落点由玩家点，高亮的只是"砸得到人"的格子', () 
   assert.equal(egg?.x, 10, '蛋要落在玩家点的那一格');
   assert.equal(egg?.y, 5);
 
-  // 被拒绝的三种情况：各有各的说法，不能笼统回一句"不行"
+  // 2) 空地也能放：这次换邪龙王本体还站在 (5,5)，蛋落 (4,9)，附近没有敌人
+  const empty = applyAction(s, {
+    type: 'HERO_SKILL',
+    unitId: dragon.id,
+    skillId: 'dragon-egg',
+    targetX: 4,
+    targetY: 9,
+  });
+  assert.ok(empty.ok, `点空地该放得出来：${empty.ok ? '' : empty.reason}`);
+  const egg2 = empty.state.units.filter((u) => u.type === 'dragon-egg' && u.x === 4 && u.y === 9);
+  assert.equal(egg2.length, 1, '空地上也该长出一枚蛋');
+  assert.match(
+    empty.state.log.map((l) => l.text).join('\n'),
+    /没砸到人/,
+    '没伤到人要照实写进战报，而不是悄悄成功',
+  );
+
+  // 3) 仍然拒绝的两种情况：射程外 / 那一格放不下（有兵站着）
   const cases: Array<[{ x: number; y: number }, RegExp]> = [
     [{ x: 18, y: 5 }, /格内/],
-    [{ x: 3, y: 9 }, /砸不到人/],
+    [{ x: 11, y: 5 }, /放不下/],
   ];
   for (const [t, re] of cases) {
     const bad = applyAction(s, {
@@ -4842,12 +4978,12 @@ test('棋盘视图的染色按视野裁，不开全图透视', () => {
 
   // 无雾：一格都不许动（视野只遮"看不见的"，不遮"看得见的"）
   s.fog = false;
-  assert.equal(cellsInSight(s, [], all).length, all.length, '无雾时视图不该被裁');
+  assert.equal(onlyVisibleCells(s, [], all).length, all.length, '无雾时视图不该被裁');
 
   // 有雾：只剩此刻看得见的格
   s.fog = true;
   const view = playerView(s, 'A');
-  const kept = cellsInSight(s, view.visible, all);
+  const kept = onlyVisibleCells(s, view.visible, all);
   const vis = new Set(view.visible);
   assert.equal(kept.length, vis.size, '裁完的格数应等于视野格数');
   assert.ok(kept.every((c) => vis.has(c.y * s.w + c.x)), '裁完不许留下视野外的格');
@@ -4856,7 +4992,7 @@ test('棋盘视图的染色按视野裁，不开全图透视', () => {
 
   // 观战 / 复盘：visible 本来就是全图，不该被裁掉
   const wide = playerView(s, 'A', true);
-  assert.equal(cellsInSight(s, wide.visible, all).length, all.length, '全图视角不该被裁');
+  assert.equal(onlyVisibleCells(s, wide.visible, all).length, all.length, '全图视角不该被裁');
 });
 
 test('见过的敌人离开视野后留下幽灵', () => {
@@ -4943,6 +5079,74 @@ test('基础规则的雾不攒地形记忆', () => {
   assert.equal(s.memory.A.tiles, undefined, '不开浓雾就不该有地形记忆');
   assert.equal(s.memory.A.cities, undefined, '不开浓雾也不该有城市记忆');
   assert.equal(playerView(s, 'A').rememberedTiles.size, 0, '基础规则下没有"记忆里的地图"');
+});
+
+test('浓雾：看不见的格子点不开，也不给染色', () => {
+  /*
+   * 浓雾把**地形和城**一起遮掉（棋盘上画成 `.tile.unknown`），但"看一眼"
+   * 和"给视图染色"这两条路上原来是敞着的：
+   *   · 点一座看不见的城，城卡照样给出护甲和耐久；
+   *   · 开「天气」视图，黑区里在下雨也一并染出来——而天气由地形算出，
+   *     配合"温和不画"，连地形轮廓都能反推。
+   *
+   * 判据统一收在 `fog.isBlackedOut` / `fog.onlyVisibleCells`，这条守它们。
+   * 注意两条判据的松紧**不同**，别拿"浓雾"去想染色：
+   *   · `isBlackedOut` 只管浓雾（基础雾里地形是公开的，点开看是应该的）；
+   *   · 染色一律按视野裁——灵气浓度里掺着对面的灵田灵泉，
+   *     基础雾里把整张图铺开同样是白送侦察。
+   */
+  const mk = (ids: string[]) => {
+    const s = fresh({ expansionIds: ids });
+    s.fog = true;
+    return s;
+  };
+  const on = mk(['blackout']);
+  const off = mk([]);
+
+  const visA = visibleTilesOf(on, 'A');
+  let hidden = -1;
+  for (let i = 0; i < on.w * on.h; i++) {
+    if (!visA.has(i)) {
+      hidden = i;
+      break;
+    }
+  }
+  assert.ok(hidden >= 0, '总得有一格是看不见的');
+  const hx = hidden % on.w;
+  const hy = Math.floor(hidden / on.w);
+  const seen = [...visA][0]!;
+  const sx = seen % on.w;
+  const sy = Math.floor(seen / on.w);
+
+  assert.equal(isBlackedOut(on, 'A', hx, hy), true, '浓雾下视野外的格子是黑的，点开读不到东西');
+  assert.equal(isBlackedOut(on, 'A', sx, sy), false, '自己看得见的格子照常能看');
+
+  // 没开浓雾：普通雾只遮单位，地形一直画在屏幕上 —— 一格都不许拦
+  assert.equal(isBlackedOut(off, 'A', hx, hy), false, '没开浓雾，黑格这个概念不存在');
+  // 开了浓雾但没开雾：浓雾依附于雾，不成立
+  on.fog = false;
+  assert.equal(isBlackedOut(on, 'A', hx, hy), false, '没开雾就没有浓雾');
+  on.fog = true;
+
+  // 染色过滤：黑格不出色，看得见的照旧（这条同时管天气/灵气/热度所有视图）
+  const cells = [
+    { x: hx, y: hy, color: 'hidden' },
+    { x: sx, y: sy, color: 'seen' },
+  ];
+  assert.deepEqual(
+    onlyVisibleCells(on, [...visA], cells).map((c) => c.color),
+    ['seen'],
+    '浓雾下黑格不该被染色——否则天气会把地形漏出来',
+  );
+  // 基础雾一样裁：地形是公开的，但"由地形和建筑算出来的场"不是
+  assert.equal(
+    onlyVisibleCells(off, [...visibleTilesOf(off, 'A')], cells).length,
+    1,
+    '基础雾下也按视野裁——灵气浓度会漏出对面的灵田',
+  );
+  // 没开雾：一格都不许少
+  off.fog = false;
+  assert.equal(onlyVisibleCells(off, [], cells).length, 2, '没开雾时一格都不许少');
 });
 
 test('浓雾整局跑得下去：AI 照旧行动，记忆也不会越攒越大', () => {
@@ -11906,6 +12110,35 @@ test('爬坡：往高处走每层 +1、封顶 2 层，下坡不加价，且一�
   assert.equal(stepCostInto(s, u!, idx(s, 5, 5), idx(s, 5, 4), { waterUnit: true }), 1);
 });
 
+test('丘陵在地形高差下不再另收地形费：只按爬坡算', () => {
+  /*
+   * 本体地形表里丘陵是 2（平原 1 + 地形本身"陡" 1）。「地形高差」又把
+   * "上去吃力"表达成爬坡，两条叠在一起就是重复收费：平原→丘陵 3 点，
+   * 移动力 2 的步兵爬上去连一格都剩不下——丘陵变成"到此为止"。
+   *
+   * 2026-11-09 把那 1 点退回去（`HILL_TERRAIN_CREDIT`），丘陵只按高度差收钱。
+   * **森林不动**：它贵在"难走"，不高。
+   */
+  const on = fresh({ expansionIds: ['height-terrain'] });
+  assert.equal(stepCostBetween(on, 'plain', 'hill'), 2, '平原→丘陵：地形 1 + 爬坡 1');
+  assert.equal(stepCostBetween(on, 'hill', 'hill'), 1, '丘陵→丘陵：同层，只算地形 1');
+  assert.equal(stepCostBetween(on, 'hill', 'plain'), 1, '下坡不收费');
+  assert.equal(stepCostBetween(on, 'plain', 'forest'), 2, '森林照旧（难走，不是难爬）');
+  assert.equal(stepCostBetween(on, 'hill', 'plateau'), 3, '台地照旧：地形 2 + 爬坡 1');
+
+  // 不开扩展：本体口径一格不改
+  const off = fresh({ expansionIds: [] });
+  assert.equal(stepCostBetween(off, 'plain', 'hill'), CONFIG.terrainCost.hill);
+  assert.equal(stepCostBetween(off, 'hill', 'hill'), CONFIG.terrainCost.hill);
+
+  // 带单位时仍然"一格最多吃掉全部移动力"：民兵 2 点刚好上得去，但这一回合就到头
+  putTerrain(on, 4, 4, 'plain');
+  const s = unitOn(on, 'A', 'militia', 4, 4);
+  const u = s.units.find((x) => x.type === 'militia')!;
+  putTerrain(s, 5, 4, 'hill');
+  assert.equal(stepCostInto(s, u, idx(s, 4, 4), idx(s, 5, 4)), 2);
+});
+
 test('浅流：陆军涉得过去，水军也能贴着它滑', () => {
   // 三种水面各归各：
   //   water   —— 深水，只有船能走
@@ -13429,6 +13662,104 @@ test('技能：不能连发的技能，本回合放过之后就不该显示"就�
   // 3) 声明了 multiCast: true 的可以连发，放过一次仍然就绪
   view = setSkill(true);
   assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
+});
+
+test('装备说明书：没有一件模块是"只有耗能、看不出效果"的', () => {
+  /*
+   * 用户 2026-11-10 的原话是"避免当前只能看到模糊信息"。
+   *
+   * 以前装配坞每件只写「耗能 N」，武器再补一句伤害/射程；
+   * 装甲板、系统槽那些纯加法修正（护甲 +4、视野 +2、远程伤害 −3）全部隐身，
+   * 玩家只能去翻规则书。
+   *
+   * 这条守两件事：
+   *   1. `moduleSpecText` 把各类修正都翻译出来（武器 / 加法 / 防御 / 召唤 / 设备）；
+   *   2. **每一件**有实际效果的模块都不能回落成"无属性修正"——
+   *      以后新加一件模块忘了写，这里直接红。
+   */
+  const text = (id: string) => moduleSpecText(MODULES[id]!);
+
+  // 武器：伤害 / 射程 / 连发
+  assert.match(text('autocannon'), /伤害 38/);
+  assert.match(text('autocannon'), /射程 7/);
+  assert.match(text('autocannon'), /2 连发/);
+  // 破甲、溅射这些修饰也要在
+  assert.match(text('antitank'), /破甲/);
+  assert.match(text('flamer'), /溅射/);
+
+  // 纯加法修正：以前这一类是"看不见"的重灾区
+  const plate = Object.values(MODULES).find((m) => m.slot === 'plate' && (m.armor ?? 0) > 0);
+  assert.ok(plate, '得有一件加护甲的装甲板');
+  assert.match(moduleSpecText(plate!), /护甲 \+\d+/);
+
+  const sys = Object.values(MODULES).find((m) => m.slot === 'system' && (m.vision ?? 0) > 0);
+  if (sys) assert.match(moduleSpecText(sys), /视野 \+\d+/);
+
+  // 全表兜底：有名字有耗电，就必须有能读的效果说明
+  const silent: string[] = [];
+  for (const m of Object.values(MODULES)) {
+    const hasEffect = Boolean(
+      m.weapon || m.armor || m.move || m.moveIdle || m.vision || m.extraHp || m.power ||
+      m.ciws || m.splashCut || m.vector || m.rangeBonus || m.steady || m.stepAsOne ||
+      m.layerAir || m.summon || m.device || m.note || m.aura,
+    );
+    if (!hasEffect) continue;
+    if (moduleSpecText(m) === '无属性修正') silent.push(`${m.name}(${m.id})`);
+  }
+  assert.deepEqual(silent, [], `这些模块没写出效果：${silent.join('、')}`);
+});
+
+test('刚造出来的英雄当回合不能放技能', () => {
+  /*
+   * 用户报的 bug："英雄单位被建造出来立刻就能释放技能"。
+   *
+   * 根因：新单位由 `makeUnit` 写成 `moved: true, acted: true`，走位和攻击因此
+   * 天然被挡住；可是**技能那条路不查这两个字段**（技能本来就不吃 acted，
+   * 否则"打完再放技能"会被一起禁掉）。于是刚招募的英雄当回合就能放大招——
+   * 一次花钱买到"上场 + 一记技能"，对手也推不出这笔账。
+   *
+   * 修法是给单位记一个出生回合 `bornTurn`，技能侧用它挡一回合；
+   * UI 侧（`heroSkillsOf`）用同一条判据 + 同一句文案，
+   * 不然又会变成"按钮亮着、点下去被拒"。
+   */
+  const s = fresh({ startEra: 3, expansionIds: FANTASY });
+  s.players.A.gold = 5000;
+  const city = citiesOf(s, 'A')[0]!;
+
+  const r = applyAction(s, { type: 'RECRUIT', cityId: city.id, unitType: 'dwarf-king' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const st = r.state;
+  const hero = st.units.find((u) => u.owner === 'A' && u.type === 'dwarf-king');
+  assert.ok(hero, '矮人王应该已经出场');
+  assert.equal(hero!.bornTurn, st.turn, '出生回合要记下来');
+  assert.equal(hero!.moved, true, '新单位当回合不能走');
+  assert.equal(hero!.acted, true, '新单位当回合不能打');
+
+  // UI：技能不该显示"就绪"
+  const view = heroSkillsOf(st, hero!).find((k) => k.def.id === 'throw-axe')!;
+  assert.equal(view.ready, false, '刚上场的英雄，技能不该是亮的');
+  assert.equal(view.notReadyReason, '刚上场的单位这一回合还不能用技能');
+
+  // 规则：硬闯也要被拒
+  const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });
+  assert.equal(denied.ok, false, '刚上场就放技能应该被拒');
+  assert.match((denied as { reason: string }).reason, /刚上场/);
+
+  // 过一整个回合（A 结束 → B 结束 → 又轮到 A）：可以放了
+  const t1 = applyAction(st, { type: 'END_TURN' });
+  assert.ok(t1.ok);
+  const t2 = applyAction(t1.state, { type: 'END_TURN' });
+  assert.ok(t2.ok);
+  const later = t2.state;
+  const again = later.units.find((u) => u.id === hero!.id)!;
+  assert.ok(later.turn > again.bornTurn!, '回合已经推进过了');
+  assert.equal(
+    heroSkillsOf(later, again).find((k) => k.def.id === 'throw-axe')!.ready,
+    true,
+    '下一回合该恢复就绪',
+  );
+  const cast = applyAction(later, { type: 'HERO_SKILL', unitId: again.id, skillId: 'throw-axe' });
+  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
 });
 
 test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己的回合回一发', () => {

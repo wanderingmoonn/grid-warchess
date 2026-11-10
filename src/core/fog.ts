@@ -185,22 +185,47 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
 }
 
 /**
- * 棋盘视图（天气、灵气浓度……）的染色格，按视野裁一遍。
+ * 「浓雾蔽野」下这一格是不是黑的（看不见）。
  *
- * 为什么必须由核心裁、不能让扩展自己记得裁：扩展算的是**全图**的场——
- * 温度、湿度、灵气浓度都是存在格子上的一整张图，它天然知道每一格的值。
- * 但"这一格该不该给这个玩家看"是视野的知识，属于核心。漏掉一次，
- * 玩家只要切一下视图就能读出对面城市在哪（一座灵田就是一团深绿）、
- * 他家门口是山还是林子——这些正是迷雾该挡住的东西。
+ * 只在这个扩展**且**开着雾的局里成立；未开浓雾恒为 false——调用方直接问，
+ * 不必到处写 `expansionIds.includes('blackout')`。
  *
- * 三条边界：
- *   · 没有雾 → 一格不动（视野只遮"看不见的"，不遮"看得见的"）；
- *   · 有雾 → 只留此刻在 `visible` 里的格；
- *   · 观战 / 复盘传进来的 `visible` 本来就是全图，所以这里不用再分一次叉。
+ * 为什么需要它：棋盘把黑格画成 `.tile.unknown`，可是"点开看看"和"给视图染色"
+ * 这两条路上原来是敞着的——
+ *   · 点一座看不见的城，城卡照样给出护甲和耐久；
+ *   · 开「天气」视图，黑区里在下雨也一并染出来（天气由地形算出来，
+ *     配合"温和不画"，连地形轮廓都能反推）。
+ * 那等于让浓雾免费提供侦察。判据和棋盘本身同一条：`visibleTilesOf`。
+ */
+export function isBlackedOut(
+  s: GameState,
+  p: PlayerId,
+  x: number,
+  y: number,
+): boolean {
+  if (!s.fog) return false;
+  if (!s.config.expansionIds.includes('blackout')) return false;
+  const i = idx(s, x, y);
+  return i >= 0 && !visibleTilesOf(s, p).has(i);
+}
+
+/**
+ * 棋盘视图染色的可见性过滤：有雾就只留看得见的格子。
+ *
+ * 闸门收在这里而不是各个扩展的 `cells` 里，因为**所有**棋盘视图都走同一条路
+ * （天气、灵气、热度……），逐个扩展去记得"我该不该过滤"迟早漏一个。
+ *
+ * 为什么连"只遮单位"的基础雾也要裁：扩展算的是**全图**的场——温度湿度由地形
+ * 推出来，灵气浓度里还掺着对面灵田、灵泉的贡献。整张铺开就等于白送一张敌方
+ * 建筑与地形分布图：一座灵田就是一团深绿，"这一片在下雨"就等于说那边不是沙漠。
+ * 地形本身在基础雾里是公开的（棋盘上一直画着），但**由地形推出来的场**不是。
+ *
+ * `visible` 传这一帧 `playerView` 已经算好的那一份：观战 / 复盘拿到的是全图，
+ * 所以这里不必再判断"是不是在观战"。
  *
  * 被裁掉的格**不画成灰色**：灰度本身也在说"这里有东西"，留白才是真的一无所知。
  */
-export function cellsInSight<T extends { x: number; y: number }>(
+export function onlyVisibleCells<T extends { x: number; y: number }>(
   s: GameState,
   visible: readonly number[],
   cells: readonly T[],
