@@ -34,6 +34,14 @@ export interface PlayerView {
   rememberedTiles: Map<number, Terrain>;
   /** 已探索、此刻却看不见的城，值是记忆里的那一份样子（归属、时代、是否废墟） */
   rememberedCities: Map<string, KnownCity>;
+  /**
+   * 这一局连地形都藏吗？
+   *
+   * 只有「浓雾蔽野」是 true：基础规则的雾只遮单位，地形全图可见。
+   * 界面靠它决定"雾外那一格"该怎么写——是照记忆画地形，还是干脆什么都不说。
+   * 别在下游自己摸 `config.expansionIds`：那等于把某个扩展的 id 抄到第三处。
+   */
+  terrainHidden: boolean;
 }
 
 /** 这座城此刻有没有任何一格落在视野里 */
@@ -77,6 +85,9 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     }
   }
 
+  // 「浓雾蔽野」连地形一起遮。判断只做这一次，下游（面板、棋子）都读这个字段。
+  const terrainHidden = s.fog && !reveal && s.config.expansionIds.includes('blackout');
+
   if (!s.fog || reveal) {
     return {
       state: cloned,
@@ -84,6 +95,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
       ghosts: [],
       rememberedTiles: new Map(),
       rememberedCities: new Map(),
+      terrainHidden: false,
     };
   }
 
@@ -154,7 +166,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   // 走过路过的地方必须留个样子，否则第二次经过等于第一次来。
   const rememberedTiles = new Map<number, Terrain>();
   const rememberedCities = new Map<string, KnownCity>();
-  if (s.config.expansionIds.includes('blackout')) {
+  if (terrainHidden) {
     for (const [key, terrain] of Object.entries(mem.tiles ?? {})) {
       const i = Number(key);
       if (visibleSet.has(i)) continue; // 眼前看得见，按活的画
@@ -169,7 +181,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     }
   }
 
-  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities };
+  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities, terrainHidden };
 }
 
 /**
