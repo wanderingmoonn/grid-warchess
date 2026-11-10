@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { isBlackedOut, onlyVisibleCells, playerView } from './core/fog.ts';
+import { onlyVisibleCells, playerView } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -366,34 +366,21 @@ function syncTopbarBadges(): void {
     .join('');
 }
 
-/**
- * 浓雾：这一格此刻看不见（棋盘上画成 `.tile.unknown` 的那种黑格）。
+/*
+ * 浓雾下点黑格：**不拦，交给面板说"未探明"**。
  *
- * 只在"开了雾 + 勾了「浓雾蔽野」"这一局里成立。上帝模式的 `viewNow()` 本来就是
- * 全图（`playerView` 的第三个参数），所以自动不会命中。
+ * 2026-11-10 之前这里有一对 `blackedOutAt` / `refuseLook`：浓雾里点视野外的格子
+ * 直接 toast 一句「看不清」就吞掉这次点击。同日另一条线（Liuks）把遮蔽做到了
+ * 面板层——`PlayerView.terrainHidden` + 「未探明」/「记忆里的地形（可能有变）」，
+ * 活数据（灵气浓度、脚下天气）只在看得见时才算。
  *
- * 复盘与观战位单独放行：这两条路的棋盘就是 `playerView(..., true)` 画的，
- * 满屏没有一格是黑的——在这里拦，只会让"看完这局到底发生了什么"变成看一半。
+ * 两套叠在一起的结果是：面板那套在浓雾里永远走不到，玩家只能得到一句提示。
+ * 所以按"留面板、不留硬拦"收口：点得开，但念不出东西——这比"点不动"信息量更大，
+ * 也让普通雾与浓雾共用一条判断（`terrainHidden`）。
+ *
+ * 视图染色那条闸门（`onlyVisibleCells`）仍然在：它管的是"别把天气画到黑区"，
+ * 和点击是两回事。
  */
-function blackedOutAt(coords: { x: number; y: number } | null | undefined): boolean {
-  if (!coords) return false;
-  if (replay !== null || spectating()) return false;
-  // 判据收在 core/fog：棋盘怎么画、这里怎么判，用的是同一个 visibleTilesOf
-  return isBlackedOut(state, me(), coords.x, coords.y);
-}
-
-/**
- * 黑格上"看一眼"的统一回应：说一句话就返回，绝不落到任何属性卡。
- *
- * 为什么值得单独一个函数：点击流程里"只看不操作"的入口有五处
- * （点敌方单位、观战位、轮不到我/指挥官、点空地、复盘），
- * 一处漏掉就等于那一片黑雾白送侦察。收成一个判断，漏了容易发现。
- */
-function refuseLook(coords: { x: number; y: number } | null | undefined): boolean {
-  if (!blackedOutAt(coords)) return false;
-  toast('浓雾里看不清那儿');
-  return true;
-}
 
 /**
  * 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined。
@@ -2991,8 +2978,6 @@ function canRepeatSkill(unitId: string, skillId: string): boolean {
  */
 function inspectAt(coords: { x: number; y: number } | null): void {
   if (!coords) return;
-  // 浓雾里的黑格：连"看一眼"都不给（这条覆盖 AI 行动中、轮不到我、指挥官模式三条路）
-  if (refuseLook(coords)) return;
 
   const id = pickUnitId(coords, false);
   const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
@@ -3026,7 +3011,6 @@ function onBoardClick(e: Event): void {
   if (replay) {
     const at = coordsFromEvent(e);
     if (!at) return;
-    if (refuseLook(at)) return;
     const here = stackAt(at.x, at.y);
     if (here.length > 0) {
       selectedId = here[here.length - 1]!.id;
@@ -3241,16 +3225,6 @@ function onBoardClick(e: Event): void {
     toast(moveRefusal(coords));
     return;
   }
-
-  /*
-   * 浓雾：黑格上不做任何"查看"。
-   *
-   * 位置很讲究——放在函数最上面会连**动作**一起拦掉（下水点、施法落点、
-   * 强制移动、过桥都有各自的分支）；放在这里，上面那些动作分支已经走完，
-   * 往下全是"看一眼"：点敌方单位、点城、点空地。
-   * 黑格本来就不可能出现在 `reach` / `targets` 里，所以拦在这里不会误伤走子。
-   */
-  if (refuseLook(coords)) return;
 
   const clickedUnitId = pickUnitId(coords, wantAttack);
 
