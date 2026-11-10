@@ -205,6 +205,14 @@ export interface ClimateTuning {
   converge: number;
   /** 抬升最多把饱和线压低多少（点）。不封顶的话，强辐合会把饱和线压到 0 */
   convergeMax: number;
+  /**
+   * 潮湿天气的**固定**维护费（金/单位/回合）。
+   *
+   * 固定值而不是造价的百分比：45 金的经济单位和 260 金的按同一比例交，
+   * 高时代那笔钱相对产出微不足道，低时代却是实打实的负担——而比例制
+   * 恰恰让贵的交得更多，方向反了。
+   */
+  weatherUpkeep: number;
 }
 
 /**
@@ -270,6 +278,7 @@ export const TUNING: ClimateTuning = {
   wetDrift: 100,
   converge: 700,
   convergeMax: 12,
+  weatherUpkeep: 4,
 };
 
 /* -- 只读常量：不参与扫参 -------------------------------------------- */
@@ -286,7 +295,7 @@ export const WET_MAX = 100;
 /* 2. 两个场的读写                                                     */
 /* ------------------------------------------------------------------ */
 
-function isWaterTerrain(t: Terrain | undefined): boolean {
+export function isWaterTerrain(t: Terrain | undefined): boolean {
   return t === 'water' || t === 'deep' || t === 'shallow' || t === 'bridge';
 }
 
@@ -689,29 +698,25 @@ export function classifyClimate(
 
   // ── 不下雨 ──
   //
-  // 按温度从冷到热一路排下去：严冬 → 寒冷 → 凉爽 → 温和 → 温暖 → 炎热 → 酷暑。
-  // 每一档的"湿"各有归宿：冷 / 凉爽段落到湿冷，温暖 / 炎热段落到湿热，
-  // 温和与凉爽段落到浓雾（雾是春秋的东西——夜里地面辐射冷却，
-  // 不是"冬天很冷"或"夏天很闷"的另一种说法）。
+  // 顺序：最极端的两头 → 雾 → 风 → 温度档。
+  //
+  // 「大风」原来只肯在"温和"那一段出现，因为那时候**效果来自标签**，
+  // 抢了凉爽/温暖的档就等于没收掉它们的好处。现在效果由驱动直接算，
+  // 标签只剩"挑一个最显眼的来讲"，所以风够大就该说大风——
+  // 只是不抢零下的档（那时候"寒冷"更该被看见，而空军照样飞得慢）。
   if (temp < TUNING.hardWinterAt) return 'hardWinter';
+  if (temp >= TUNING.blazingAt) return 'blazing';
+  // 雾只肯在**偏凉**的时候起：雾是夜里地面辐射冷却的产物，
+  // 28°C 加 85% 湿度是闷热，不是雾。少了这道温度闸，整个夏天都是雾天。
+  if (temp < TUNING.warmAt && r > fogLine) return 'fog';
+  // 大风只在"不冷不热也不酷热"的中段抢标签：严冬/酷暑更该被看见，
+  // 而空军在那些地方照样飞得慢（效果不看标签）。
+  if (temp >= TUNING.coldAt && temp < TUNING.hotAt && windSpeed >= TUNING.galeAt) return 'gale';
   if (temp < TUNING.coldAt) return r > TUNING.dampWet ? 'dampCold' : 'cold';
-  if (temp < TUNING.coolAt) {
-    if (r > fogLine) return 'fog';
-    return r > TUNING.dampWet ? 'dampCold' : 'cool';
-  }
-  if (temp < TUNING.warmAt) {
-    if (r > fogLine) return 'fog';
-    // 大风只**替换「温和」**，不去抢凉爽和温暖。
-    //
-    // 那两档是玩家手里少有的增益（+1 移动 / +25% 产出），被一个纯空军减益顶掉
-    // 会很难受；而「温和」本来就是"这一格没额外影响"，换成大风不亏任何东西。
-    // 副作用是这个天气只在 13~20°C 的晴天出现——也就是春天和秋天，正好对。
-    if (windSpeed >= TUNING.galeAt) return 'gale';
-    return 'mild';
-  }
+  if (temp < TUNING.coolAt) return r > TUNING.dampWet ? 'dampCold' : 'cool';
+  if (temp < TUNING.warmAt) return 'mild';
   if (temp < TUNING.hotAt) return r > TUNING.dampWet ? 'dampHeat' : 'warm';
-  if (temp < TUNING.blazingAt) return r > TUNING.dampWet ? 'dampHeat' : 'hot';
-  return 'blazing';
+  return r > TUNING.dampWet ? 'dampHeat' : 'hot';
 }
 
 /**

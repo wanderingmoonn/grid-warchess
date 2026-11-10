@@ -11,8 +11,9 @@
  */
 
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
-import { climateEffect, isNaval, SEASON_TURNS } from './climate.ts';
-import { climateAt, climateOfUnit, latitudeOf, stepClimateField, windAt } from './field.ts';
+import { isNaval, SEASON_TURNS } from './climate.ts';
+import { climateAt, latitudeOf, stepClimateField, windAt } from './field.ts';
+import { effectAt, effectOfUnit } from './effect.ts';
 import { climateOverlayCells, seasonLabel, weatherBlock, windGlyphCells } from './view.ts';
 import { seatsOf } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -47,10 +48,15 @@ export const SEASONS: Expansion = {
     + '（同一个种子既决定这张图冷不冷，也决定它的气旋往哪边转）。'
     + '<b>风暴要雨大风也大</b>：外海的大雨配上够强的风才算风暴，所以它总在阵风那几天出现，'
     + '平时海面只是阴天。'
-    + '三者一起判出这一格的天气（严冬 / 寒冷 / 凉爽 / 温和 / 大风 / 温暖 / 炎热 / 酷暑八档，'
-    + '外加雨雾雷暴与冰面），再改移动、护甲、视野、射程与产出。'
-    + '<b>日常的冷暖阴雨只动经济与护甲，不拖慢部队</b>——只有严冬、酷暑与暴雨才真的走不动；'
-    + '而<b>大风只打空军</b>：逆风飞进那一格，每格多花 1 点移动力，地面部队一格都不受影响。'
+    + '这些驱动一起给出一个**徽标**（严冬 / 寒冷 / 温和 / 大风 / 湿热 …），但徽标只是挑一个最显眼的讲，'
+    + '<b>真正生效的效果是各驱动分别算一档再叠加的</b>：气温 5°C 一档（10~20°C 是舒适带）、'
+    + '湿度三段、风一条线、降水看大小。'
+    + '<b>产出加成一律相加不相乘</b>（温度 −50%~+20%、湿度 −10%~+25%、降水 +5%~+15%，'
+    + '合计夹在 −60%~+90%），怎么叠都在能心算的范围里。'
+    + '潮湿天（相对湿度 ≥ 80%）每个单位要交 <b>4 金</b>维护费——固定金额，'
+    + '便宜的单位心疼、高级经济单位几乎无感，高时代自然更扛天气。'
+    + '<b>日常的冷暖只动经济与护甲，不拖慢部队</b>——只有严冬（−10°C 以下）与酷暑（32°C 以上）真的走不动；'
+    + '而<b>大风只打空军</b>：风过线时逆风飞进那一格，每格多花 1 点移动力，地面部队一格都不受影响。'
     + '气候不影响城市。',
   scale: 'large',
   hooks: {
@@ -76,7 +82,7 @@ export const SEASONS: Expansion = {
      * `movePower` 会把这个 0 原样放出去（见那边的注释）。
      */
     modifyMove: ({ state, unit, move }) => {
-      const eff = climateEffect(climateOfUnit(state, unit));
+      const eff = effectOfUnit(state, unit);
       const def = defOf(state, unit);
       let out = move;
       if (def && isNaval(def)) {
@@ -108,7 +114,7 @@ export const SEASONS: Expansion = {
       if (fromIdx < 0 || toIdx < 0) return undefined;
       const tx = toIdx % state.w;
       const ty = Math.floor(toIdx / state.w);
-      const eff = climateEffect(climateAt(state, tx, ty));
+      const eff = effectAt(state, tx, ty);
       if (!eff.airUpwindCostAdd) return undefined;
       const w = windAt(state, tx, ty);
       const fx = fromIdx % state.w;
@@ -126,13 +132,13 @@ export const SEASONS: Expansion = {
      */
     modifyVision: ({ state, unit, base }: VisionCtx) => {
       if (!unit) return base;
-      const eff = climateEffect(climateOfUnit(state, unit));
+      const eff = effectOfUnit(state, unit);
       return eff.visionMax ? Math.min(base, eff.visionMax) : base;
     },
 
     /** 攻击范围：阴雨 -1、暴雨 -2；浓雾封顶 4。最少留 1 格。 */
     modifyRange: ({ state, unit, range }: RangeCtx) => {
-      const eff = climateEffect(climateOfUnit(state, unit));
+      const eff = effectOfUnit(state, unit);
       let out = range;
       if (eff.rangeAdd) out += eff.rangeAdd;
       if (eff.rangeMax) out = Math.min(out, eff.rangeMax);
@@ -146,7 +152,7 @@ export const SEASONS: Expansion = {
      * 否则冬天一到，守城反而成了劣势。
      */
     modifyArmor: ({ state, defender, armor }) => {
-      const eff = climateEffect(climateOfUnit(state, defender));
+      const eff = effectOfUnit(state, defender);
       if (!eff.armorPenalty) return armor;
       if (eff.armorPenaltyOnlyField) {
         const tile = state.tiles[defender.y * state.w + defender.x];
@@ -163,12 +169,14 @@ export const SEASONS: Expansion = {
      * 所以"沿海平原的春天"和"内陆平原的夏天"收入会真的不一样。
      */
     modifyYield: ({ state, unit, yields }) => {
-      const eff = climateEffect(climateOfUnit(state, unit));
-      if (!eff.incomeMul || eff.incomeMul === 1) return yields;
+      const eff = effectOfUnit(state, unit);
+      // 加成是**相加的百分点**（见 ClimateEffect.incomeBonus），这里只做一次 1+x
+      const mul = 1 + (eff.incomeBonus ?? 0);
+      if (mul === 1) return yields;
       const out: typeof yields = {};
       for (const [k, v] of Object.entries(yields)) {
         if (typeof v !== 'number') continue;
-        out[k as keyof typeof out] = Math.round(v * eff.incomeMul);
+        out[k as keyof typeof out] = Math.round(v * mul);
       }
       return out;
     },
@@ -187,7 +195,7 @@ export const SEASONS: Expansion = {
       for (const u of [...state.units]) {
         const def = state.unitTypes[u.type];
         if (!def) continue;
-        const eff = climateEffect(climateOfUnit(state, u));
+        const eff = effectOfUnit(state, u);
 
         // ── 固定伤害 ──
         // 雷暴是雷劈：50 点真伤、不看护甲，周围 1 格再吃一半。
@@ -220,8 +228,8 @@ export const SEASONS: Expansion = {
         }
 
         // ── 维护费 ──
-        if (eff.upkeepRate) {
-          const fee = Math.round((def.cost ?? 0) * eff.upkeepRate);
+        if (eff.upkeepGold) {
+          const fee = eff.upkeepGold;
           if (fee <= 0) continue;
           const p = state.players[u.owner];
           if (p.gold >= fee) {
