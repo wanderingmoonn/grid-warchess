@@ -458,13 +458,16 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
   // 一格自己的、一格敌人的（都摆在视野里，否则按迷雾规则根本不该画）
   const mine = addMark(st, { kind: 'nv-mine', owner: 'A', x: 2, y: 2, charges: 1, hidden: true });
   const foe = addMark(st, { kind: 'nv-mine', owner: 'B', x: 3, y: 2, charges: 1, hidden: false });
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
     host,
     {
       state: st,
-      visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
       ghosts: [],
       rememberedTiles: new Map(),
+      rememberedByBoard: {},
       rememberedCities: new Map(),
       terrainHidden: false,
     },
@@ -7017,11 +7020,14 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     threat: [] as number[],
     me: 'A' as const,
   };
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   const allVisible = {
     state: st,
-    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    visible: allSeen,
+    visibleByBoard: { earth: allSeen },
     ghosts: [] as never[],
     rememberedTiles: new Map(),
+    rememberedByBoard: {},
     rememberedCities: new Map(),
     terrainHidden: false,
   };

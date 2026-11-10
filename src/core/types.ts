@@ -1444,6 +1444,8 @@ export interface KnownUnit {
   type: string;
   x: number;
   y: number;
+  /** 在哪张图上看到的；缺省地球（旧存档没有这个字段） */
+  board?: BoardId;
   /** 在哪一行动序号被看到的 */
   seenAt: number;
 }
@@ -1475,6 +1477,14 @@ export interface PlayerMemory {
    * 用对象而不是数组：格索引是稀疏的，1024 格的图上打十回合可能只走过几十格。
    */
   tiles?: Record<number, Terrain>;
+  /**
+   * 每张图各自的"走过的地形"。`tiles` 是它在地球那一份的历史别名。
+   *
+   * 为什么不像 `visible` 那样直接替换：`tiles` 已经写进老存档，
+   * 而且浓雾扩展目前只作用于地球。新代码读 `tilesByBoard`，老存档读 `tiles`
+   * 再回填——两边都能活，等真有第二张图需要浓雾时再统一。
+   */
+  tilesByBoard?: Record<BoardId, Record<number, Terrain>>;
   /** 见过的城市（含敌城），浓雾下用来还原"记忆里的城" */
   cities?: KnownCity[];
 }
