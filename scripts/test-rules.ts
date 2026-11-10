@@ -79,6 +79,9 @@ import {
   satOf,
   coriolisOf,
   latitudeOf,
+  satAt,
+  satEffAt,
+  upliftAt,
   stepClimateField,
   tempAt,
   tempTargetOf,
@@ -12044,6 +12047,31 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
     CONFIG.terrainCost.plain,
     '陆军的步耗一格都没变',
   );
+});
+
+test('辐合：风往一处挤，饱和线被压下去', () => {
+  /*
+   * 辐合 = 空气抬升 = 绝热冷却 = 更容易饱和。所以它把**有效饱和线**往下压，
+   * 辐合区先起雨；辐散区反过来。这是"雨带沿风场排成条带"的来源。
+   *
+   * 手工摆一个风场：左边一律往右吹、右边一律往左吹，中间那条缝就是辐合线。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 1;
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      const wx = x < 8 ? 20 : x > 8 ? -20 : 0;
+      s.tiles[y * s.w + x]!.custom = { temp: 150, wet: 40, windX: wx, windY: 0 };
+    }
+  }
+  const seam = upliftAt(s, 8, 5);
+  assert.ok(seam > 0, `辐合线该抬升，实际 ${seam}`);
+  assert.ok(satEffAt(s, 8, 5) < satAt(s, 8, 5), '抬升该把饱和线压下去');
+  // 同向平流的地方既没有辐合也没有辐散
+  assert.equal(upliftAt(s, 3, 5), 0, '风一直往同一边吹的地方不抬升');
+  // 抬升有上限：再强的辐合也不能把饱和线压到 0
+  assert.ok(satEffAt(s, 8, 5) >= 10, '饱和线不许压穿地板');
 });
 
 test('地转偏向力：北半球把风往一边拧，南半球往另一边', () => {

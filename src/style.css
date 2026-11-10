@@ -775,19 +775,27 @@ body {
   position: absolute;
   inset: 6px;
   display: grid;
-  grid-template-columns: repeat(var(--cols, 12), 1fr);
-  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  /*
+   * `minmax(0, 1fr)` 而不是 `1fr`：这个层里有些格子要**写字**（风向箭头），
+   * 而 1fr 的列最小值取 min-content——64×64 时一格只有十几像素，箭头更宽，
+   * 于是整层被撑大、画到棋盘外面去。minmax(0, …) 允许列缩到 0，字由格子自己裁。
+   */
+  grid-template-columns: repeat(var(--cols, 12), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows, 12), minmax(0, 1fr));
+  overflow: hidden;
   pointer-events: none;
 }
 
 .fx-qi {
   border-radius: 4px;
+  overflow: hidden;
 }
 .fx-qi.wind {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  /* 字号跟着格子走：16×16 时是 15px，64×64 自动缩到 8px，不然一格塞不下 */
+  font-size: clamp(8px, calc(var(--cell, 32px) * 0.6), 15px);
   line-height: 1;
   color: rgba(255, 255, 255, 0.92);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
