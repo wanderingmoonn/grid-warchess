@@ -32,6 +32,14 @@ export type GodBrush =
   | { kind: 'terrain'; terrain: Terrain }
   | { kind: 'unit'; type: string };
 
+/** 框选之后给界面看的摘要（格数、单位数、尺寸） */
+export interface GodSelection {
+  w: number;
+  h: number;
+  cells: number;
+  units: number;
+}
+
 export interface GodUi {
   state: GameState;
   /** 这一下摆哪一方 */
@@ -54,6 +62,12 @@ export interface GodUi {
   era: number;
   /** 摆城时用哪个时代（1-5） */
   cityEra: number;
+  /**
+   * 当前框选（null = 没有选区）。
+   *
+   * 只在沙盒的"摆放档"里出现：操控档下拖动是走子/滚地图，不该弹这块。
+   */
+  selection: GodSelection | null;
   /** AI 正在打 */
   running: boolean;
   /** 打到第几回合（running 时有意义） */
@@ -191,13 +205,47 @@ export function godBarHtml(ui: GodUi): string {
     ),
   ).join('');
 
+  /*
+   * 选区那一条。
+   *
+   * 三个设计点：
+   *   · **数量写在按钮上**（删兵(7)），玩家点之前就知道会动到几个；
+   *   · 刷地形 / 放兵跟着**当前笔刷**走，没挑笔刷时说清楚"会刷成平原"，
+   *     免得点了之后发现地形不对还以为坏了；
+   *   · 平移做成四颗箭头而不是"拖过去"：拖动已经是框选和笔刷的，
+   *     再抢一手就没人分得清"我在拖什么"。
+   */
+  const sel = ui.selection;
+  const selRow = sel
+    ? `<div class="god-group god-select">
+         <span class="god-label">选区</span>
+         <span class="hint">${sel.w}×${sel.h} · ${sel.cells} 格 · ${sel.units} 个单位</span>
+         <div class="chip-row">
+           <button class="btn btn-sm" data-act="god-batch-del"${
+             sel.units > 0 ? '' : ' disabled'
+           } title="把选区里的单位全删掉（城留着）">删兵（${sel.units}）</button>
+           <button class="btn btn-sm" data-act="god-batch-terrain" title="按当前地形笔刷刷满选区；没挑笔刷就刷成平原">刷地形</button>
+           <button class="btn btn-sm" data-act="god-batch-fill" title="按当前兵种笔刷填满空格；没挑兵种就填民兵">放兵</button>
+           <span class="hint">整体平移</span>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="0" data-dy="-1">↑</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="-1" data-dy="0">←</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="1" data-dy="0">→</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="0" data-dy="1">↓</button>
+           <button class="btn btn-sm" data-act="god-sel-clear" title="收起选区（不影响图上的东西）">取消选区</button>
+         </div>
+       </div>`
+    : '';
+
   return `
     <div class="cmd-head">
       <b>上帝模式</b>
       <span class="cmd-hint">${
-        ui.play === null ? '全图无雾 · 摆兵摆城都不要钱' : '全图无雾 · 放下笔刷后点棋盘就是走子'
+        ui.play === null
+          ? '全图无雾 · 摆兵摆城都不要钱 · 空手斜拖可框选'
+          : '全图无雾 · 点棋盘就是走子 · 空手斜拖可框选'
       }</span>
     </div>
+    ${selRow}
     <div class="god-group">
       <span class="god-label">摆给</span>
       <div class="chip-row">${sideChips}</div>

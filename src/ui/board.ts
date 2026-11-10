@@ -63,6 +63,13 @@ export interface BoardUi {
   tutorialOwnCityId?: string | null;
   /** 处于野外建造模式时，可以放置建筑的空格 */
   placeable: number[];
+  /**
+   * 上帝模式的框选矩形（格索引）。只在沙盒里有值。
+   *
+   * 走渲染参数而不是"框完再贴 class"：棋盘每帧重建，贴上去的 class 下一帧
+   * 就没了；而且拖动过程中每帧都在重画，贴 class 会闪。
+   */
+  marqueeTiles?: number[];
   /** 威胁范围：移动之后能打到哪些格 */
   threat: number[];
   /**
@@ -504,6 +511,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const aimSet = new Set(ui.aimTiles);
   const skillThreatSet = new Set(ui.skillThreatTiles);
   const placeSet = new Set(ui.placeable);
+  const marqueeSet = new Set(ui.marqueeTiles ?? []);
   const tutSet = new Set(ui.tutorialTiles ?? []);
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
@@ -569,6 +577,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
+      if (marqueeSet.has(i)) cls += ' god-sel';
       if (tutSet.has(i)) cls += ' tut-ring';
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 

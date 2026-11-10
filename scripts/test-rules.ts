@@ -60,8 +60,14 @@ import { CARD_PRIOR, CARD_PRIOR_META } from './lib/card-prior.table.ts';
 import { stateToFixedMap } from '../src/core/map-export.ts';
 import {
   clearUnits,
+  deleteUnitsInRect,
+  fillUnitsInRect,
+  paintRect,
   paintTerrain,
   placeCity,
+  rectOf,
+  translateUnitsInRect,
+  unitsInRect,
   placeUnit,
   removeAt,
   sandboxCityProblem,
@@ -10225,6 +10231,90 @@ test('开了「信息化」和「现代战争」：能升到第六时代，并�
 
   const buy = applyAction(r.state, { type: 'RECRUIT', cityId: city.id, unitType: 'cnt_mbt' });
   assert.ok(buy.ok, `第六时代该造得出主战坦克：${!buy.ok ? buy.reason : ''}`);
+});
+
+test('框选批量：删兵 / 刷地形 / 放兵 / 整体平移', () => {
+  /*
+   * 上帝模式 2026-11-10 加的框选。这些是纯函数（`core/sandbox.ts`），
+   * 界面那边只管"矩形怎么拖出来、结果怎么说"，规则一律在这里。
+   *
+   * 四条共同的取舍在函数注释里写着，用例守的是**结果**：
+   *   1. 矩形两次点击顺序随便给（斜拖是常态）；
+   *   2. 批量操作能跳过的就跳过并报数，不因为一格不合格就整批失败；
+   *   3. 整体平移**要么全动、要么全不动**；
+   *   4. 放兵只填空格，有上限。
+   */
+  const s = arena(fresh({ godMode: true }, 4242));
+  for (let y = 0; y < s.h; y += 1) for (let x = 0; x < s.w; x += 1) putTerrain(s, x, y, 'plain');
+
+  // ── 矩形归一：从右下往左上拖也一样 ──
+  assert.deepEqual(rectOf({ x: 5, y: 5 }, { x: 3, y: 4 }, 12, 12), { x0: 3, y0: 4, x1: 5, y1: 5 });
+  // 出界的端点被夹回棋盘里，不会越界访问
+  assert.deepEqual(rectOf({ x: 11, y: 11 }, { x: -3, y: -2 }, 12, 12), { x0: 0, y0: 0, x1: 11, y1: 11 });
+
+  // ── 摆一小片：3 个兵 + 1 座城 ──
+  const a = place2(s, 'A', 'militia', 3, 3);
+  const b = place2(s, 'A', 'militia', 4, 3);
+  const c = place2(s, 'B', 'archer', 5, 3);
+  const rect = { x0: 3, y0: 3, x1: 5, y1: 4 };
+  assert.equal(unitsInRect(s, rect).length, 3, '选区内三个兵都该被认出来');
+
+  // ── 删兵：城不在选区里，兵全删 ──
+  const del = deleteUnitsInRect(s, rect);
+  assert.ok(del.ok);
+  assert.equal(del.removed, 3);
+  assert.equal(del.state.units.length, 0);
+
+  // 空选区删兵 → 明确拒绝，不是静默成功
+  const empty = deleteUnitsInRect(del.state, rect);
+  assert.equal(empty.ok, false);
+  assert.match(empty.ok ? '' : empty.reason, /没有单位/);
+
+  // ── 刷地形：有兵的格跳过，空地刷上 ──
+  const paint = paintRect(s, { x0: 2, y0: 2, x1: 4, y1: 4 }, 'forest');
+  assert.ok(paint.ok);
+  const tile = (x: number, y: number) => paint.state.tiles[y * paint.state.w + x]!;
+  assert.equal(tile(2, 2).terrain, 'forest', '空格要刷上');
+  assert.equal(tile(3, 3).terrain, 'plain', '有兵站着的那一格跳过');
+  // (2,2)-(4,4) 里站着 2 个兵（(3,3) 和 (4,3)），第三个在 (5,3) 选区外
+  assert.ok(paint.skipped >= 2, `有兵的那两格都该计入跳过，实际 ${paint.skipped}`);
+
+  // ── 放兵：只填空格，每格一个 ──
+  const fill = fillUnitsInRect(s, { x0: 7, y0: 7, x1: 9, y1: 8 }, 'A', 'militia');
+  assert.ok(fill.ok);
+  assert.equal(fill.placed, 6, '3×2 全空 → 六个');
+  assert.equal(fill.capped, false);
+  // 同一块再填一次：一格都站不下
+  const again = fillUnitsInRect(fill.state, { x0: 7, y0: 7, x1: 9, y1: 8 }, 'A', 'militia');
+  assert.equal(again.ok, false, '塞满了就不该假装放进去');
+
+  // ── 整体平移：成组前进 ──
+  const movers = {
+    x0: 7,
+    y0: 7,
+    x1: 9,
+    y1: 8,
+  };
+  const shift = translateUnitsInRect(fill.state, movers, 0, 2);
+  assert.ok(shift.ok);
+  assert.equal(shift.moved, 6);
+  const moved = shift.state.units.filter((u) => u.owner === 'A' && u.y >= 9 && u.y <= 10);
+  assert.equal(moved.length, 6, '六个兵一起下移两格');
+  assert.equal(shift.state.units.some((u) => u.y >= 7 && u.y <= 8 && u.x >= 7 && u.x <= 9), false, '原位置要空出来');
+
+  // ── 撞人就整笔拒绝：一个都不许动 ──
+  const blocked = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, -3);
+  // 往上 3 格会撞到……上一轮空出来的 (7..9,7..8) 其实是空的，所以这条应该是"能挪"；
+  // 换成撞边界：往下推到棋盘外
+  const out = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, 6);
+  assert.equal(out.ok, false, '推到棋盘外该整笔拒绝');
+  if (!out.ok) assert.match(out.reason, /棋盘外面/);
+  void blocked;
+
+  // 反证：正常情况确实能挪（不是永远返回失败）
+  const ok = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, -2);
+  assert.ok(ok.ok);
+  void a, b, c;
 });
 
 test('上帝模式也造不出这一局升不到的城', () => {

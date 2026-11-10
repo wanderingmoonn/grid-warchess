@@ -1755,6 +1755,15 @@ body {
   color: #c0392b;
 }
 
+/* 上帝模式的框选：半透明底 + 内描边。
+   只加底色会被地形色吃掉（沙漠、雪原都亮），所以描边是必须的那一半；
+   用内阴影而不是 outline，是因为格子是 grid 里的紧邻块，outline 会和外层
+   .board 的边框打架、在放大档还会被裁。 */
+.tile.god-sel {
+  background-color: rgba(74, 144, 226, 0.25);
+  box-shadow: inset 0 0 0 2px rgba(46, 112, 196, 0.85);
+}
+
 .unit-head {
   display: flex;
   align-items: center;

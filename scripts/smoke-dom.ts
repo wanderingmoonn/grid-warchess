@@ -54,7 +54,7 @@ import {
 import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
-import { godShelfHtml } from '../src/ui/god-panel.ts';
+import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
@@ -2701,6 +2701,7 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
     pack: '',
     era: 0,
     cityEra: 1,
+    selection: null,
     running: false,
     round: 1,
     result: '',
@@ -4750,6 +4751,96 @@ check('己方战报只给自己的条目和战损，观战才看全部', () => {
   assert.ok(all.includes('他在攒钱'), '观战/热座要看全部');
 });
 
+check('上帝模式框选：矩形染色 + 工具栏报数 + 批量按钮都在', () => {
+  /*
+   * 2026-11-10 加的框选。这条守两件事：
+   *   1. 棋盘认得选区（`.tile.god-sel`）——不然框完没有任何反馈；
+   *   2. 工具栏把"框了多大、里面有几个人"写出来，并把批量按钮摆出来。
+   *
+   * 拖动本身（pointerdown/move/up）走的是 main.ts 的事件，jsdom 里没有布局、
+   * `cellAtPoint` 算不出格子，所以那一段只能在真浏览器里验；
+   * 这里守的是"数据 → 界面"这一半，规则那一半在 test:rules「框选批量」。
+   */
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 606);
+  const marked = [0, 1, 12, 13];
+  renderBoard(host, playerView(st, 'A'), {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+    marqueeTiles: marked,
+  });
+  try {
+    assert.equal(
+      host.querySelectorAll('.tile.god-sel').length,
+      marked.length,
+      '选区里的四格要打上 god-sel（一行的两格 + 下一行的两格）',
+    );
+  } finally {
+    host.remove();
+  }
+
+  const bar = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: { w: 3, h: 2, cells: 6, units: 4 },
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  const text = bar.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(text.includes('3×2'), `要写选区尺寸：${text.slice(0, 120)}`);
+  assert.ok(text.includes('6 格'), '要写格数');
+  assert.ok(text.includes('4 个单位'), '要写单位数');
+  for (const act of ['god-batch-del', 'god-batch-terrain', 'god-batch-fill', 'god-shift', 'god-sel-clear']) {
+    assert.ok(bar.includes(`data-act="${act}"`), `批量按钮缺了 ${act}`);
+  }
+  assert.ok(text.includes('删兵（4）'), '删兵按钮上要带数量——点之前就知道会动到几个');
+
+  // 没有选区时这一块不该出现（工具栏保持原来的样子）
+  const bare = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: null,
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  assert.equal(bare.includes('god-batch-del'), false, '没选区就不该有批量按钮');
+});
+
 check('沙盒货架也能按扩展包切一刀', () => {
   // 直接渲染货架，不经过整局：验的是"分组口径"这一件事
   const st = createMatch(
@@ -4772,6 +4863,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
       pack,
       era,
       cityEra: 1,
+      selection: null,
       running: false,
       round: 1,
       result: '',
