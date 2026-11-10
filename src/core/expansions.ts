@@ -955,6 +955,25 @@ function lastStandDamage(state: GameState, owner: PlayerId, damage: number): num
   return state.firstCityLost === owner ? Math.round(damage * (1 + LAST_STAND_BONUS)) : damage;
 }
 
+/**
+ * 这一族兵算不算**陆地单位**。
+ *
+ * 「闪电战」（`blitz`）从 2026-11-10 起只对陆地生效：水军（`domain: 'water'`）
+ * 与空军（空中层）各自有"跑得快"的表达方式，再叠 +2 会让最快的船/飞机
+ * 直接甩开陆地——两条扩展各给一份速度，最后谁也不认账。
+ *
+ * 空中层的三条判据和 `rules.airLayer` 是同一条口径（layer / flight / 能力标志）。
+ * 这里没直接 import 它：`rules.ts` 反过来依赖本文件的 `activeExpansions`，
+ * 互相 import 会让模块初始化顺序变成隐式前提。判据只有三行，宁可抄一遍，
+ * 也不要一个只在某些加载顺序下成立的循环。
+ */
+export function isGroundUnitType(def: UnitTypeDef | undefined): boolean {
+  if (!def) return false;
+  if (def.layer === 'air' || def.flight === true) return false;
+  if ((def.abilities ?? []).includes('fly-over')) return false;
+  return def.domain !== 'water';
+}
+
 export const EXPANSIONS: Expansion[] = [
   {
     id: 'war-economy',
@@ -1043,13 +1062,18 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'blitz',
     name: '闪电战',
-    blurb: '快速单位跑得更快，但更贵。',
-    summary: '所有移动力 3 以上的快速单位移动 +2、造价 +10%。',
+    blurb: '陆地快速单位跑得更快，但更贵。',
+    summary:
+      '**陆地**上移动力 3 以上的单位移动 +2、造价 +10%。水军与空军不吃这一套——它们的速度归各自的扩展管，' +
+      '再加一档会让"最快的船/最快的飞机"直接甩开陆地。',
     hooks: {
-      modifyMove: ({ state, unit, move }) =>
-        (state.unitTypes[unit.type]?.move ?? 0) >= 3 ? move + 2 : move,
+      modifyMove: ({ state, unit, move }) => {
+        const def = state.unitTypes[unit.type];
+        if (!def || !isGroundUnitType(def)) return move;
+        return def.move >= 3 ? move + 2 : move;
+      },
       modifyCost: ({ unitType, cost }) =>
-        unitType.move >= 3 ? cost + Math.round(cost * 0.1) : cost,
+        isGroundUnitType(unitType) && unitType.move >= 3 ? cost + Math.round(cost * 0.1) : cost,
     },
   },
   {

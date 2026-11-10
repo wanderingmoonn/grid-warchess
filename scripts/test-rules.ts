@@ -4612,7 +4612,7 @@ test('堑壕战加的是护甲，不是"少挨 2 点"', () => {
   assert.ok(pierced < normal, `破甲应该把额外护甲削掉一半：普通 ${normal} vs 破甲 ${pierced}`);
 });
 
-test('闪击战：移速 3 以上的单位移动力 +2、造价 +10%', () => {
+test('闪击战：只有陆地单位吃移动 +2 / 造价 +10%（水军与空军不吃）', () => {
   const base = fresh();
   const buffed = fresh({ expansionIds: ['blitz'] });
   const cavA = findUnit(base, 'A', 'scout');
@@ -4627,6 +4627,35 @@ test('闪击战：移速 3 以上的单位移动力 +2、造价 +10%', () => {
   const slow = UNIT_TYPES.militia;
   assert.ok(slow.move < 3);
   assert.equal(recruitCost(buffed, 'A', slow), recruitCost(base, 'A', slow));
+
+  /*
+   * 2026-11-10：**只对陆地生效**。
+   *
+   * 以前不看兵种在哪一层：楼船（move 3、水军）和格里芬骑士（move 5、飞行）
+   * 都在吃 +2 与 +10% 涨价。水军/空军各自已经有速度表达（舢板靠河网、
+   * 飞行本来就快），再叠一档就是"最快的船直接甩开陆地"。
+   */
+  const boat = UNIT_TYPES.tower_ship!;
+  assert.equal(boat.domain, 'water', '楼船是水军');
+  assert.ok(boat.move >= 3, '它本来就 ≥3，正好能验证"以前会加、现在不会"');
+  assert.equal(recruitCost(buffed, 'A', boat), recruitCost(base, 'A', boat), '水军不涨价');
+
+  const withAir = fresh({ expansionIds: [...FANTASY, 'blitz'] });
+  const noAir = fresh({ expansionIds: [...FANTASY] });
+  const gryphon = withAir.unitTypes['griffin-rider']!;
+  assert.ok(gryphon, '格里芬骑士该在奇想包里');
+  assert.ok(gryphon.move >= 3, '它的移动力 ≥3，是会被旧规则命中的那种');
+  assert.equal(
+    recruitCost(withAir, 'A', gryphon),
+    recruitCost(noAir, 'A', gryphon),
+    '空军不涨价',
+  );
+  const flying = place2(withAir, 'A', 'griffin-rider', 5, 5);
+  assert.equal(movePower(withAir, flying), gryphon.move, '空军不吃闪电战的 +2');
+
+  // 反证：同样是 move ≥3 的**陆地**兵，仍然吃 +2（别把整个扩展一起关掉）
+  const horse = place2(buffed, 'A', 'scout', 6, 6);
+  assert.equal(movePower(buffed, horse), UNIT_TYPES.scout!.move + 2);
 });
 
 test('征兵制：战斗单位一律 −20%，起始金币减半', () => {
