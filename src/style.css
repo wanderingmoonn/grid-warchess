@@ -1690,6 +1690,54 @@ body {
   transition: width 0.2s ease;
 }
 
+/* 装配坞的电力收支条。
+   横向条 = 已用 / 产能，过载时整条变红并铺满——装配坞里最常见的挫败
+   就是"装上去才发现过载"，数字要先于按钮被看见。 */
+.power-line {
+  margin: 6px 0 4px;
+}
+
+.power-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #eae6dd;
+  overflow: hidden;
+}
+
+.power-bar > i {
+  display: block;
+  height: 100%;
+  background: #5b9bd5;
+  transition: width 0.2s ease;
+}
+
+.power-bar > i.over {
+  background: #c0392b;
+}
+
+.power-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #57534b;
+}
+
+.power-nums b {
+  color: #2f2a22;
+}
+
+.power-nums em {
+  font-style: normal;
+  opacity: 0.65;
+  margin-left: 4px;
+}
+
+.power-nums .over {
+  color: #c0392b;
+}
+
 .unit-head {
   display: flex;
   align-items: center;

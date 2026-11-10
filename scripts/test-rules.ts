@@ -215,6 +215,7 @@ import {
   canUseDevice,
   chargesLeft,
   doMount,
+  moduleSpecText,
   doUnmount,
   energyReport,
   extraHpCap,
@@ -13587,6 +13588,51 @@ test('技能：不能连发的技能，本回合放过之后就不该显示"就�
   // 3) 声明了 multiCast: true 的可以连发，放过一次仍然就绪
   view = setSkill(true);
   assert.equal(view().ready, true, '能连发的技能不该被这条规则挡住');
+});
+
+test('装备说明书：没有一件模块是"只有耗能、看不出效果"的', () => {
+  /*
+   * 用户 2026-11-10 的原话是"避免当前只能看到模糊信息"。
+   *
+   * 以前装配坞每件只写「耗能 N」，武器再补一句伤害/射程；
+   * 装甲板、系统槽那些纯加法修正（护甲 +4、视野 +2、远程伤害 −3）全部隐身，
+   * 玩家只能去翻规则书。
+   *
+   * 这条守两件事：
+   *   1. `moduleSpecText` 把各类修正都翻译出来（武器 / 加法 / 防御 / 召唤 / 设备）；
+   *   2. **每一件**有实际效果的模块都不能回落成"无属性修正"——
+   *      以后新加一件模块忘了写，这里直接红。
+   */
+  const text = (id: string) => moduleSpecText(MODULES[id]!);
+
+  // 武器：伤害 / 射程 / 连发
+  assert.match(text('autocannon'), /伤害 38/);
+  assert.match(text('autocannon'), /射程 7/);
+  assert.match(text('autocannon'), /2 连发/);
+  // 破甲、溅射这些修饰也要在
+  assert.match(text('antitank'), /破甲/);
+  assert.match(text('flamer'), /溅射/);
+
+  // 纯加法修正：以前这一类是"看不见"的重灾区
+  const plate = Object.values(MODULES).find((m) => m.slot === 'plate' && (m.armor ?? 0) > 0);
+  assert.ok(plate, '得有一件加护甲的装甲板');
+  assert.match(moduleSpecText(plate!), /护甲 \+\d+/);
+
+  const sys = Object.values(MODULES).find((m) => m.slot === 'system' && (m.vision ?? 0) > 0);
+  if (sys) assert.match(moduleSpecText(sys), /视野 \+\d+/);
+
+  // 全表兜底：有名字有耗电，就必须有能读的效果说明
+  const silent: string[] = [];
+  for (const m of Object.values(MODULES)) {
+    const hasEffect = Boolean(
+      m.weapon || m.armor || m.move || m.moveIdle || m.vision || m.extraHp || m.power ||
+      m.ciws || m.splashCut || m.vector || m.rangeBonus || m.steady || m.stepAsOne ||
+      m.layerAir || m.summon || m.device || m.note || m.aura,
+    );
+    if (!hasEffect) continue;
+    if (moduleSpecText(m) === '无属性修正') silent.push(`${m.name}(${m.id})`);
+  }
+  assert.deepEqual(silent, [], `这些模块没写出效果：${silent.join('、')}`);
 });
 
 test('刚造出来的英雄当回合不能放技能', () => {
