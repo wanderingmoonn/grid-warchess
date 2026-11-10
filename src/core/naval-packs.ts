@@ -1427,7 +1427,7 @@ function navalPanelLines(state: GameState, unit: Unit): string[] {
   // 大型单位的体量要写出来：玩家点了半天发现"怎么放不下"，
   // 得有一句话告诉他这不是 bug，是 2×2 的要求。
   if (state.unitTypes[unit.type]?.footprint === 2) {
-    lines.push('占地 2×2：四格一起挡路，起飞/停泊都要 2×2 的开阔水面');
+    lines.push('占地 2×2');
   }
   const deck = deckLine(state.unitTypes[unit.type], unit);
   if (deck) lines.push(deck);

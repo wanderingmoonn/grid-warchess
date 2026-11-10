@@ -344,7 +344,7 @@ export function describeUnit(
     );
   }
   if ((def.footprint ?? 1) > 1) {
-    lines.push('占地 2×2：四格一起挡路、一起挨打，拆掉才一起消失（锚点在左上角）。');
+    lines.push('占地 2×2 ，锚点在左上角。');
   }
   if (def.garrison) {
     lines.push(
