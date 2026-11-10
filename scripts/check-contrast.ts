@@ -105,6 +105,61 @@ for (const { name, p } of themes) {
   }
 }
 
+/*
+ * 第二道：**反色态**（白字压在 token 底色上）。
+ *
+ * 这条是被真事故逼出来的：`.chip.active` 原本写 `background: var(--text)` +
+ * `color: #fff`——浅色主题下 --text 是深褐，白字没问题；深色主题下 --text 变成
+ * 近白，于是白底白字，选中项直接消失。
+ *
+ * 判据同样按主题各算一次：写死 #fff 的规则，在**两套**主题里都必须过 4.5。
+ * 这类规则要么改成 `color: var(--panel)`（反色自洽），要么把底色换成
+ * `--a-fill` 那种"够深、白字能压"的填充色。
+ */
+const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+const WARN_ON_TOKEN_BG: string[] = [];
+let inverseChecked = 0;
+
+/*
+ * 注意：这里查的是**全量变量表**，不是上面那个 9 色的 palette。
+ * 第一版我图省事复用了 palette，结果 --a-fill 不在白名单里，一条都没查到，
+ * 计数器显示"检查了 0 条规则"还照样通过——空跑的检查比没有检查更危险。
+ */
+const allVars: Array<{ name: string; table: Record<string, string> }> = [
+  { name: 'legacy', table: root },
+  { name: 'modern', table: { ...root, ...modern } },
+];
+
+for (const { name, table } of allVars) {
+  for (const m of rules) {
+    const sel = m[1]!.trim().split('\n').pop()!.trim();
+    const body = m[2]!;
+    if (!body.includes('color: #fff')) continue;
+    const bg = /background(?:-color)?:\s*([^;]+);/.exec(body)?.[1]?.trim() ?? '';
+    const tok = /^var\(--([a-z0-9-]+)\)$/i.exec(bg);
+    if (!tok) continue; // 字面色 / color-mix / 渐变：算不准，跳过
+    const value = hexOf(table[tok[1]!] ?? '');
+    if (!value) continue;
+    inverseChecked += 1;
+    const r = ratio('#ffffff', value);
+    if (r < TEXT_MIN) {
+      WARN_ON_TOKEN_BG.push(`${name}: ${sel} 白字压在 --${tok[1]}(${value}) 上只有 ${r.toFixed(2)}:1`);
+    }
+  }
+}
+
+console.log(`  · 反色态（白字压 token 底色）检查了 ${inverseChecked} 条规则`);
+
+assert.deepEqual(
+  WARN_ON_TOKEN_BG.filter((x) => x.startsWith('modern')),
+  [],
+  `modern 主题有"白字压浅底"：\n${WARN_ON_TOKEN_BG.filter((x) => x.startsWith('modern')).join('\n')}`,
+);
+if (WARN_ON_TOKEN_BG.some((x) => x.startsWith('legacy'))) {
+  console.log('⚠ legacy 也有白字压浅底：');
+  for (const w of WARN_ON_TOKEN_BG.filter((x) => x.startsWith('legacy'))) console.log('  · ' + w);
+}
+
 /* 只报"现代主题"的硬失败：legacy 是既有观感，改了就是改版，不在这一步动，
    但要把它列出来让人看见（下面单独打印）。 */
 const modernFailures = failures.filter((f) => f.startsWith('modern'));

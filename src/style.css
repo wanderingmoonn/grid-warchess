@@ -12,6 +12,10 @@
      名字是历史遗留（原本就是 A/B 两方），含义早就泛化了，先不动它。 */
   --a: #2f6ea8;
   --a-soft: #dfeaf4;
+  /* 填充用的主色。和 --a（文字/描边用的强调色）**故意分开**：
+     深色主题里 --a 必须提亮才看得清，但提亮之后白字压上去就不够对比了。
+     一个变量扛两个角色，迟早出现"浅蓝底 + 白字"。 */
+  --a-fill: #2f6ea8;
   --b: #b8433a;
   --b-soft: #f6e2df;
 
@@ -110,8 +114,12 @@
   --text-3: #8b93a3;
 
   /* 交互主色：深底上要提亮，否则 --a 作为文字/描边时对比不够 */
+  /* 作为"文字/描边"的强调色：深底上要提亮 */
   --a: #5b9cf0;
   --a-soft: #1d2a3d;
+  /* 作为"填充"的强调色：白字要压在它上面，所以**不提亮**，
+     和旧版保持一致（白字对 #2f6ea8 是 4.8:1）。 */
+  --a-fill: #2f6ea8;
   --b: #e06058;
   --b-soft: #3a2321;
 
@@ -2265,7 +2273,7 @@ a.btn {
 
 .btn-primary {
   background: var(--text);
-  color: #fff;
+  color: var(--panel);
   border-color: var(--text);
   font-weight: 500;
 }
@@ -2685,9 +2693,12 @@ a.btn {
 }
 
 .chip.active {
+  /* 反色态：底色用文字色、文字用**面板色**。
+     原来这里写死 #fff —— 深色主题下 --text 变成近白，于是白底白字。
+     写成 var(--panel) 之后两套主题都自洽：浅底深字 / 深底浅字。 */
   background: var(--text);
   border-color: var(--text);
-  color: #fff;
+  color: var(--panel);
 }
 
 /*
@@ -2850,7 +2861,7 @@ a.btn {
   place-items: center;
   border-radius: 8px;
   background: var(--text);
-  color: #fff;
+  color: var(--panel);
   font-size: var(--fs-sm);
   font-weight: 500;
 }
@@ -3333,7 +3344,7 @@ a.btn {
 .cmd-progress i {
   display: block;
   height: 100%;
-  background: var(--a);
+  background: var(--a-fill);
   transition: width 120ms linear;
 }
 
@@ -3722,7 +3733,7 @@ a.btn {
 
 .pool-body .chip.active::before {
   border-color: var(--a);
-  background: var(--a);
+  background: var(--a-fill);
 }
 
 .pool-body .chip:not(.active) {
@@ -4224,7 +4235,7 @@ a.btn {
 }
 
 .force-btn.armed {
-  background: var(--a);
+  background: var(--a-fill);
   border-color: var(--a);
   color: #fff;
 }
@@ -4247,7 +4258,7 @@ a.btn {
   font-size: var(--fs-sm);
   font-weight: 600;
   color: #fff;
-  background: var(--a);
+  background: var(--a-fill);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   pointer-events: none;
 }
@@ -5539,7 +5550,7 @@ a.btn {
 }
 
 .draft-btn.is-primary {
-  background: var(--a);
+  background: var(--a-fill);
   border-color: var(--a);
   color: #fff;
   font-size: 13px;
@@ -5977,7 +5988,7 @@ a.btn {
 }
 .title-btn.primary {
   border-color: var(--a);
-  background: var(--a);
+  background: var(--a-fill);
   color: #fff;
 }
 .title-btn.primary:hover {
@@ -6095,7 +6106,7 @@ a.btn {
   flex: 0 0 auto;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--a);
+  background: var(--a-fill);
   color: #fff;
   font-size: var(--fs-sm);
   letter-spacing: 0.5px;
