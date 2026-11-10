@@ -82,9 +82,11 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
-import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
+import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
+import type { BoardUi } from './ui/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, hasBoard } from './core/board.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -231,6 +233,7 @@ appEl.innerHTML = `
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
         </div>
+        <div class="board-list" id="board-list"></div>
       </div>
       <aside class="side" id="side"></aside>
     </div>
@@ -250,6 +253,8 @@ const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
  * 它只认"可视区域"这一个坐标系，永远钉在右下角。
  */
 const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
+/** 左下角的地图列表：收起时只显示当前图，点开列出所有图 */
+const boardListEl = pick<HTMLElement>(appEl, '#board-list');
 /**
  * 强制模式的横幅。
  *
@@ -1372,6 +1377,8 @@ function render(): void {
    * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
    */
   const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
+  syncBoardList(view);
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
@@ -1413,7 +1420,7 @@ function render(): void {
     lastStrikerId = null;
   }
 
-  renderBoard(boardEl, view, {
+  const boardUi: BoardUi = {
     selectedId,
     reach,
     targets,
@@ -1442,7 +1449,16 @@ function render(): void {
      * 棋盘每帧重建、首帧还在 rAF 里，贴上去的那一下经常白贴（城市红框就是这么丢的）。
      */
     ...(tutorial.tutorialOn() ? tutorialMarksOf() : {}),
-  });
+  };
+  /*
+   * 画**当前这一张**图。
+   *
+   * 地球走原路径（viewForBoard 直接返回 view，一个对象都不建）；
+   * 别的图给渲染层一个"替身 state"：宽高、格子、单位、城市都换成那张图的。
+   * 选中/可达/染色这些地球坐标的东西在 boardUiFor 里清空——第 4 步接
+   * 动作时再按图实现。
+   */
+  renderBoard(boardEl, viewForBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
 
   /*
    * 笔刷在手时，棋盘自己吃掉触摸手势。
@@ -1590,6 +1606,24 @@ function render(): void {
  */
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
+/**
+ * 当前在看哪张图。
+ *
+ * 地球之外由图在运行时创建（月球、空间站）。这个变量只决定"画哪一张"，
+ * 不参与任何规则计算——规则层认的是单位/动作自带的 `board`。
+ */
+let activeBoardId: BoardId = EARTH;
+/** 左下角地图列表是否展开 */
+let boardListOpen = false;
+/** 地图列表已经画出来的签名，避免每帧重建 DOM */
+let boardListSig = '';
+/**
+ * 每张图各自的相机（缩放档 + 滚动位置）。
+ *
+ * 切图要还原相机：32×32 的地球放大到中间看战场，切到 7×7 的空间站再切回来，
+ * 如果回到左上角，玩家得重新拖一遍——多图玩法里这个动作一天要做几十次。
+ */
+const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number }>();
 /**
  * 上一次 `fitBoard()` 用的是哪一档。
  *
@@ -1776,6 +1810,10 @@ function zoomStep(dir: 1 | -1): void {
  * 而且再开一局还是这样（新局同样只改了数字）。
  */
 function resetZoom(): void {
+  activeBoardId = EARTH;
+  boardListOpen = false;
+  boardListSig = '';
+  boardCameras.clear();
   boardZoom = 1;
   // 尺寸缓存必须作废，否则下一帧不会重新量
   boardDirty = true;
@@ -1785,6 +1823,238 @@ function resetZoom(): void {
   boardScrollEl.classList.remove('dragging', 'zoomed');
   boardEl.classList.remove('zoomed');
 }
+
+/** 地图列表里的小标记：图的类型（地球单独给个"地"） */
+function boardGlyphOf(id: BoardId): string {
+  if (id === EARTH) return '地';
+  const kind = boardKindOf(state, id);
+  return kind === 'station' ? '站' : kind === 'orbit' ? '轨' : '星';
+}
+
+/** 这一张图上还有几个自家单位能动（建筑不算） */
+function boardReadyCount(view: PlayerView, id: BoardId): number {
+  if (replay || spectating()) return 0;
+  return view.state.units.filter((u) => {
+    if (u.owner !== me() || boardIdOf(u) !== id || u.acted) return false;
+    return view.state.unitTypes[u.type]?.category !== 'building';
+  }).length;
+}
+
+/** 这一张图上有没有看得见的敌人（地图列表上的红点） */
+function boardHasContact(view: PlayerView, id: BoardId): boolean {
+  if (replay || spectating()) return false;
+  return view.state.units.some((u) => u.owner !== me() && boardIdOf(u) === id);
+}
+
+/** 地图列表里的文字来自扩展，转义一遍再拼 HTML */
+function escapeBoardText(t: string): string {
+  return t
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 左下角的地图列表。
+ *
+ * 收起时只显示当前图（名字 + 待命数 + 敌人红点），点开列出所有图。
+ * 用签名挡住每帧重建：棋盘一帧要重画很多次，列表没必要跟着抖。
+ */
+function syncBoardList(view: PlayerView): void {
+  if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
+  const ids = boardIds(state);
+  const entries = ids.map((id) => ({
+    id,
+    name: boardName(state, id),
+    ready: boardReadyCount(view, id),
+    contact: boardHasContact(view, id),
+  }));
+  const sig = [
+    boardListOpen ? 'open' : 'shut',
+    activeBoardId,
+    replay ? 'replay' : '',
+    ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}`),
+  ].join('|');
+  if (sig === boardListSig) return;
+  boardListSig = sig;
+
+  boardListEl.classList.toggle('open', boardListOpen);
+  const cur = entries.find((e) => e.id === activeBoardId) ?? entries[0]!;
+  const current =
+    `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 张）">` +
+    `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +
+    `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
+    (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
+    (cur.contact ? '<i class="bl-contact" title="这张图上有敌人"></i>' : '') +
+    `<span class="bl-caret">▴</span>` +
+    `</button>`;
+
+  const rows = entries
+    .map(
+      (e) =>
+        `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
+        `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
+        `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
+        (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
+        (e.contact ? '<i class="bl-contact"></i>' : '') +
+        `</button>`,
+    )
+    .join('');
+
+  // 调试脚手架：第四步接入真正的月球后删掉
+  const debug =
+    godMode() && !replay
+      ? `<button class="bl-add" data-act="bl-add" title="开发用：造一张 9×9 的空图">＋ 调试图</button>`
+      : '';
+
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${debug}</div>`;
+}
+
+/**
+ * 切到另一张图。
+ *
+ * 只换"渲染的是哪张图"和相机，规则一行不动——单位、视野、动作各自带着
+ * 自己的 `board`，切图不影响它们。
+ */
+function switchBoard(id: BoardId): void {
+  if (id === activeBoardId || !hasBoard(state, id)) return;
+  // 走之前把相机存下来
+  boardCameras.set(activeBoardId, {
+    zoom: boardZoom,
+    left: boardScrollEl.scrollLeft,
+    top: boardScrollEl.scrollTop,
+  });
+
+  activeBoardId = id;
+  /*
+   * 选中、待放技能、待选落点全部清掉。
+   *
+   * 它们记的是**地球**的格坐标；原样带到 7×7 的空间站上，要么越界，
+   * 要么指向完全无关的格子。清掉是最不容易出错的做法——重新点一下就是了。
+   */
+  selectedId = null;
+  selectedTile = null;
+  selectedCityId = null;
+  selectedCampId = null;
+  pendingMovePath = null;
+  pendingSkill = null;
+  pendingDevice = null;
+  boardListOpen = false;
+
+  const cam = boardCameras.get(id) ?? { zoom: 1, left: 0, top: 0 };
+  boardZoom = cam.zoom;
+  boardDirty = true;
+  render();
+
+  const restore = (): void => {
+    boardScrollEl.scrollLeft = cam.left;
+    boardScrollEl.scrollTop = cam.top;
+  };
+  // 等这一帧的尺寸写完再还原滚动位置，否则会被 fitBoard 的布局覆盖
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+  else restore();
+}
+
+/**
+ * 开发用的第二张图：9×9 的空图，放几种地形看切图效果。
+ *
+ * **这是脚手架**，不是玩法：第四步会把真正的月球图接进来。
+ * 只在上帝国模式里出现，正式对局里一行都看不到。
+ */
+function addDebugBoard(): void {
+  if (!godMode() || replay) return;
+  const n = Object.keys(state.boards ?? {}).length + 1;
+  const id = `debug-${n}`;
+  const w = 9;
+  const h = 9;
+  const tiles = Array.from({ length: w * h }, (_, i) => {
+    const x = i % w;
+    const y = Math.floor(i / w);
+    let terrain: Terrain = 'plain';
+    if ((x === 2 || x === 6) && y >= 2 && y <= 6) terrain = 'forest';
+    if (y === 4 && x >= 3 && x <= 7) terrain = 'hill';
+    if (x === 4 && y === 2) terrain = 'water';
+    return { terrain, cityId: null };
+  });
+  state.boards ??= {};
+  state.boards[id] = { id, kind: 'planet', name: `调试图 ${n}`, w, h, tiles };
+  // 迷雾记忆按图刷新一次，切过去不会满屏"未探明"
+  refreshMemory(state);
+  switchBoard(id);
+}
+
+/**
+ * 把主视图裁成"某一张图"。
+ *
+ * 渲染层（`ui/board.ts`）是按"一个 state 只有一张图"写的，一千多行，
+ * 不值得为了切图去改它。这里给它一个**替身 state**：宽高、格子、单位、城市
+ * 都换成目标图的，其余字段（config / unitTypes / players）原样保留。
+ * 地球走快路径，一个对象都不新建。
+ */
+function viewForBoard(view: PlayerView, id: BoardId): PlayerView {
+  if (id === EARTH) return view;
+  const b = boardOf(view.state, id);
+  return {
+    ...view,
+    state: {
+      ...view.state,
+      w: b.w,
+      h: b.h,
+      tiles: b.tiles,
+      units: view.state.units.filter((u) => boardIdOf(u) === id),
+      cities: view.state.cities.filter((c) => boardIdOf(c) === id),
+      // 留痕（雷、火）只在地球，别的图先不给
+      marks: [],
+    },
+    visible: view.visibleByBoard[id] ?? [],
+    rememberedTiles: view.rememberedByBoard[id] ?? new Map(),
+    ghosts: view.ghosts.filter((g) => boardIdOf(g) === id),
+  };
+}
+
+/** 非地球的图没有选中/可达/染色这些地球坐标的东西，一律清空 */
+function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
+  if (id === EARTH) return ui;
+  return {
+    ...ui,
+    selectedId: null,
+    selectedCityId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    aimTiles: [],
+    skillThreatTiles: [],
+    placeable: [],
+    threat: [],
+    heat: undefined,
+    heatFlash: undefined,
+    movePath: undefined,
+    boardView: undefined,
+    boardGlyph: undefined,
+    incomeHints: undefined,
+    tutorialTiles: [],
+    tutorialCityId: null,
+    tutorialOwnCityId: null,
+  };
+}
+
+boardListEl.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act],[data-board]');
+  if (!el) return;
+  const act = el.dataset.act;
+  if (act === 'bl-toggle') {
+    boardListOpen = !boardListOpen;
+    syncBoardList(viewNow());
+    return;
+  }
+  if (act === 'bl-add') {
+    addDebugBoard();
+    return;
+  }
+  const id = el.dataset.board;
+  if (id) switchBoard(id);
+});
 
 /**
  * 顶栏还有没有"藏起来的部分"，用两侧的阴影提示。
@@ -3027,6 +3297,18 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 }
 
 function onBoardClick(e: Event): void {
+  /*
+   * 第三步只做了"看得见、切得动"，还没做"点得动"。
+   *
+   * 点击链路（可达格、技能落点、建造位置）算的全是**地球**坐标；
+   * 在 9×9 的调试图上点 (3,4)，会被当成地球的 (3,4) 去执行。
+   * 所以先把非地球的点击挡住，第 4 步按图实现时再拆掉这道闸。
+   */
+  if (activeBoardId !== EARTH) {
+    toast('这张图还不能操作');
+    return;
+  }
+
   /*
    * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
    *

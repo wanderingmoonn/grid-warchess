@@ -458,13 +458,16 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
   // 一格自己的、一格敌人的（都摆在视野里，否则按迷雾规则根本不该画）
   const mine = addMark(st, { kind: 'nv-mine', owner: 'A', x: 2, y: 2, charges: 1, hidden: true });
   const foe = addMark(st, { kind: 'nv-mine', owner: 'B', x: 3, y: 2, charges: 1, hidden: false });
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
     host,
     {
       state: st,
-      visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
       ghosts: [],
       rememberedTiles: new Map(),
+      rememberedByBoard: {},
       rememberedCities: new Map(),
       terrainHidden: false,
     },
@@ -7109,11 +7112,14 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     threat: [] as number[],
     me: 'A' as const,
   };
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   const allVisible = {
     state: st,
-    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    visible: allSeen,
+    visibleByBoard: { earth: allSeen },
     ghosts: [] as never[],
     rememberedTiles: new Map(),
+    rememberedByBoard: {},
     rememberedCities: new Map(),
     terrainHidden: false,
   };
@@ -8034,6 +8040,43 @@ check('「撤回一步」离开「结束回合」那一块，两处点击区域�
   assert.ok(!undo!.closest('.side-actions'), '撤回不许和认输挤同一排');
   // 两颗按钮不在同一个父节点下，就不可能叠在一起
   assert.notEqual(undo!.parentElement?.parentElement, endTurn!.parentElement, '两颗按钮不该共用一个容器');
+});
+
+check('切图：同一块画布换成另一张图的尺寸与格子', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 9192);
+  const earth = playerView(st, 'A');
+  try {
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '地球 12×12');
+    assert.equal(host.style.getPropertyValue('--cols'), '12');
+
+    // 一张 3×3 的小图：格子层必须按它自己的尺寸重建，不能残留地球的 144 格
+    const tiles = Array.from({ length: 9 }, (_, i) => ({
+      terrain: i === 4 ? 'forest' : 'plain',
+      cityId: null,
+    }));
+    const moon = {
+      ...earth,
+      state: { ...earth.state, w: 3, h: 3, tiles, units: [], cities: [], marks: [] },
+      visible: Array.from({ length: 9 }, (_, i) => i),
+      visibleByBoard: { earth: earth.visible, moon: Array.from({ length: 9 }, (_, i) => i) },
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      ghosts: [],
+    };
+    renderBoard(host, moon as never, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 9, '切到 3×3 要重建格子层');
+    assert.equal(host.style.getPropertyValue('--cols'), '3');
+
+    // 切回地球：还是 144，不是 9
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '切回来要回到 12×12');
+  } finally {
+    host.remove();
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

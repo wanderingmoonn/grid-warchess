@@ -820,6 +820,13 @@ export interface City {
   /** 左上角格坐标 */
   x: number;
   y: number;
+  /**
+   * 这座城在哪张图上；**缺省是地球**。
+   *
+   * 第一个版本里其它图（月球、空间站）不放城，所以它实际上总是 undefined；
+   * 留着是因为"占城"这个动作迟早会跨图，先让字段在，后面只改判定不改成结构。
+   */
+  board?: BoardId;
   /** 边长，目前固定 2 */
   size: number;
   owner: PlayerId;
@@ -852,6 +859,14 @@ export interface Unit {
   owner: PlayerId;
   x: number;
   y: number;
+  /**
+   * 这个单位站在哪张图上；**缺省是地球**。
+   *
+   * 为什么用可选字段而不是给每个单位都写上：旧存档、旧回放、以及绝大多数
+   * 只在地球上打的代码路径都不需要知道"图"这件事。默认值收在
+   * `core/board.ts` 的 `boardIdOf()` 里，判空只写一处。
+   */
+  board?: BoardId;
   hp: number;
   /** 累计击杀数，给"老兵"这类扩展规则用；不开扩展就是纯装饰 */
   kills: number;
@@ -1429,6 +1444,8 @@ export interface KnownUnit {
   type: string;
   x: number;
   y: number;
+  /** 在哪张图上看到的；缺省地球（旧存档没有这个字段） */
+  board?: BoardId;
   /** 在哪一行动序号被看到的 */
   seenAt: number;
 }
@@ -1460,6 +1477,14 @@ export interface PlayerMemory {
    * 用对象而不是数组：格索引是稀疏的，1024 格的图上打十回合可能只走过几十格。
    */
   tiles?: Record<number, Terrain>;
+  /**
+   * 每张图各自的"走过的地形"。`tiles` 是它在地球那一份的历史别名。
+   *
+   * 为什么不像 `visible` 那样直接替换：`tiles` 已经写进老存档，
+   * 而且浓雾扩展目前只作用于地球。新代码读 `tilesByBoard`，老存档读 `tiles`
+   * 再回填——两边都能活，等真有第二张图需要浓雾时再统一。
+   */
+  tilesByBoard?: Record<BoardId, Record<number, Terrain>>;
   /** 见过的城市（含敌城），浓雾下用来还原"记忆里的城" */
   cities?: KnownCity[];
 }
@@ -1592,6 +1617,41 @@ export interface OrderDirective {
   target?: { seat: PlayerId } | { dx: number; dy: number };
 }
 
+/**
+ * 一张图的身份。地球固定叫 `earth`，其余由扩展在运行时创建（月球、空间站……）。
+ *
+ * 用字符串而不是数字：存档、日志、联机包里都能直接读懂，加图不用维护序号表。
+ */
+export type BoardId = string;
+
+/** 这一张图是什么——地图列表的图标、以及"要不要跑气候/灵气"都看它 */
+export type BoardKind = 'planet' | 'station' | 'orbit';
+
+/**
+ * 一张棋盘。
+ *
+ * ── 存储上的一个约定 ─────────────────────────────────────
+ *
+ * **地球不进 `boards`**：它的格仍然在 `GameState.w / h / tiles` 里。
+ *
+ * 这不是偷懒，是为了躲开 `structuredClone`：如果 `boards.earth.tiles` 和
+ * `state.tiles` 指向同一个数组，克隆之后会变成两份独立的副本，
+ * 之后一边改了另一边不知道——`playerView` 每次渲染都要克隆，这个坑会立刻炸。
+ *
+ * 所以规则是：地球用 `w/h/tiles`，**别的图**用 `boards`。
+ * 要按图取格子，一律走 `core/board.ts` 的 `boardOf(s, id)`：
+ * 它认这个约定，调用方不需要知道地球是特例。
+ */
+export interface Board {
+  id: BoardId;
+  kind: BoardKind;
+  /** 地图列表上显示的名字（"月球"、"前哨站"）；缺省用 id */
+  name?: string;
+  w: number;
+  h: number;
+  tiles: Tile[];
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1610,6 +1670,14 @@ export interface GameState {
   w: number;
   h: number;
   tiles: Tile[];
+  /**
+   * 地球**以外**的棋盘（月球、空间站、小行星……），按 id 索引。
+   *
+   * 地球不放在这里——原因见 `Board` 的注释（克隆会让别名分叉）。
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"只有地球一张图"。
+   * 取图一律用 `core/board.ts` 的 `boardOf()`，不要自己判断。
+   */
+  boards?: Record<BoardId, Board>;
   cities: City[];
   units: Unit[];
   players: Record<PlayerId, PlayerState>;
@@ -1842,7 +1910,7 @@ export interface FallenRecord {
 }
 
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */
-export type Action =
+type ActionBase =
   | { type: 'MOVE'; unitId: string; x: number; y: number }
   | {
       type: 'ATTACK';
@@ -1980,6 +2048,18 @@ export type Action =
    */
   | { type: 'PLAN_END' }
   | { type: 'END_TURN' };
+
+/**
+ * 一个动作 + 它发生在哪张图上。
+ *
+ * `board` 缺省是地球：旧存档、旧回放、以及所有单图玩法都不写这个字段。
+ * 规则层在派发前必须校验"动作指向的单位/坐标真的在这张图上"——
+ * 否则一张 7×7 空间站的坐标会被当成地球的 (3,4)，静默执行到完全无关的格子上。
+ */
+export type Action = ActionBase & {
+  /** 这张图之外的图由扩展在运行时创建；缺省地球 */
+  board?: BoardId;
+};
 
 /** 产兵的源头：城市，或者产兵建筑（军营 / 船坞 / 炼器炉……） */
 export type ProduceSource =

@@ -119,6 +119,7 @@ import {
 import type {
   ActionResult,
   Action,
+  BoardId,
   City,
   Element,
   FallenRecord,
@@ -136,6 +137,7 @@ import type {
   ProduceSource,
 } from './types.ts';
 import { seatsOf } from './types.ts';
+import { boardIdOf, boardIds, boardOf, EARTH, idxOn } from './board.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -6760,28 +6762,40 @@ export function cityName(city: City): string {
 function forEachVisionSource(
   s: GameState,
   p: PlayerId,
-  fn: (x: number, y: number, r: number) => void,
+  fn: (board: BoardId, x: number, y: number, r: number) => void,
 ): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
-    fn(u.x, u.y, visionOf(s, u));
+    fn(boardIdOf(u), u.x, u.y, visionOf(s, u));
   }
   for (const city of s.cities) {
     if (city.owner !== p) continue;
-    for (const t of cityTiles(city)) fn(t.x, t.y, CONFIG.cityVision);
+    for (const t of cityTiles(city)) fn(boardIdOf(city), t.x, t.y, CONFIG.cityVision);
   }
 }
 
-export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
+/**
+ * **一张图**的可见格。
+ *
+ * 多图之后，"谁看得见哪"必须按图分开算：月球上的侦察兵不该点亮地球的格。
+ * 视野来源（单位、城市）带着自己的 `board`，这里只收同一张图的那些。
+ *
+ * `id` 缺省地球：绝大部分调用点（AI 威胁图、寻路、热度）只关心地球，
+ * 保持原来的签名，行为一格不变。
+ */
+export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): Set<number> {
   const out = new Set<number>();
+  const board = boardOf(s, id);
 
-  forEachVisionSource(s, p, (cx, cy, r) => {
+  forEachVisionSource(s, p, (b, cx, cy, r) => {
+    if (b !== id) return;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (dx * dx + dy * dy > r * r) continue;
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y)) out.add(idx(s, x, y));
+        if (x < 0 || y < 0 || x >= board.w || y >= board.h) continue;
+        out.add(y * board.w + x);
       }
     }
   });
@@ -6796,14 +6810,25 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
    * 代价是它进了热路径（寻路、威胁圈、记忆刷新都会调这个函数），
    * 所以钩子必须是纯函数且尽早返回；扩展那边先判 `s.current !== player`
    * 再遍历单位，空手而归的时候只花一次比较。
+   *
+   * **目前只在地球上生效**：钩子返回的是地球的格索引，把它当成别的图的索引
+   * 会点亮完全无关的格子。等有扩展真的要给月球加视野时，把钩子的返回值
+   * 改成"按图分组"再放开这条限制。
    */
-  for (const e of activeExpansions(s)) {
-    const extra = e.hooks.extraVision?.({ state: s, player: p });
-    if (!extra || extra.length === 0) continue;
-    for (const i of extra) out.add(i);
+  if (id === EARTH) {
+    for (const e of activeExpansions(s)) {
+      const extra = e.hooks.extraVision?.({ state: s, player: p });
+      if (!extra || extra.length === 0) continue;
+      for (const i of extra) out.add(i);
+    }
   }
 
   return out;
+}
+
+/** 地球的可见格。老名字保留：调用点太多，而且它们本来也只看地球。 */
+export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
+  return visibleTilesOn(s, p, EARTH);
 }
 
 /**
@@ -6816,16 +6841,25 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
  * 用单格判定而不是整张可见格表：这条进了攻击合法性，是热路径
  * （AI 每回合要把每个兵 × 每个目标都问一遍），而建一张全图集合太贵。
  */
-export function tileVisibleTo(s: GameState, p: PlayerId, x: number, y: number): boolean {
+export function tileVisibleTo(
+  s: GameState,
+  p: PlayerId,
+  x: number,
+  y: number,
+  id: BoardId = EARTH,
+): boolean {
   if (!s.fog) return true;
   let lit = false;
-  forEachVisionSource(s, p, (cx, cy, r) => {
+  forEachVisionSource(s, p, (b, cx, cy, r) => {
     if (lit) return;
+    if (b !== id) return;
     const dx = x - cx;
     const dy = y - cy;
     if (dx * dx + dy * dy <= r * r) lit = true;
   });
   if (lit) return true;
+  // 额外视野只有地球的索引，别的图直接跳过
+  if (id !== EARTH) return false;
   const i = idx(s, x, y);
   for (const e of activeExpansions(s)) {
     const extra = e.hooks.extraVision?.({ state: s, player: p });
@@ -6843,8 +6877,9 @@ export function tileVisibleTo(s: GameState, p: PlayerId, x: number, y: number): 
  */
 export function cityInSightOf(s: GameState, viewer: PlayerId, city: City): boolean {
   if (!s.fog) return true;
+  const id = boardIdOf(city);
   for (const t of cityTiles(city)) {
-    if (tileVisibleTo(s, viewer, t.x, t.y)) return true;
+    if (tileVisibleTo(s, viewer, t.x, t.y, id)) return true;
   }
   return false;
 }
@@ -6864,7 +6899,7 @@ export function cityInSightOf(s: GameState, viewer: PlayerId, city: City): boole
  */
 export function unitInSightOf(s: GameState, p: PlayerId, u: Unit): boolean {
   if (!s.fog) return true;
-  return tileVisibleTo(s, p, u.x, u.y) && !isHiddenFrom(s, u, p);
+  return tileVisibleTo(s, p, u.x, u.y, boardIdOf(u)) && !isHiddenFrom(s, u, p);
 }
 
 /**
@@ -6879,15 +6914,26 @@ export function refreshMemory(s: GameState): void {
   // 只有「浓雾蔽野」需要地形与城市的记忆：它把地图也遮了，
   // 走过的地方必须留下个样子，否则第二次经过等于第一次来。
   const keepMap = s.config.expansionIds.includes('blackout');
+  const ids = boardIds(s);
 
   for (const p of seatsOf(s)) {
-    const vis = visibleTilesOf(s, p);
+    /*
+     * 可见格按图各算一份。
+     *
+     * 这一步不能省成"只算地球"：月球上的侦察兵不该刷新地球的记忆，
+     * 反过来地球的视野也不该把月球上的敌人记进幽灵表。
+     */
+    const visByBoard: Record<BoardId, Set<number>> = {};
+    for (const id of ids) visByBoard[id] = visibleTilesOn(s, p, id);
+
     const mem = s.memory[p];
     const aliveIds = new Set(s.units.map((u) => u.id));
 
     for (const u of s.units) {
       if (u.owner === p) continue;
-      if (!vis.has(idx(s, u.x, u.y))) continue;
+      const id = boardIdOf(u);
+      const vis = visByBoard[id];
+      if (!vis || !vis.has(idxOn(s, id, u.x, u.y))) continue;
       // 潜行中的单位不该刷新坐标：它"还在原地"这件事本身也是情报
       if (isHiddenFrom(s, u, p)) continue;
 
@@ -6896,9 +6942,10 @@ export function refreshMemory(s: GameState): void {
         known.x = u.x;
         known.y = u.y;
         known.type = u.type;
+        known.board = id;
         known.seenAt = s.turn;
       } else {
-        mem.known.push({ id: u.id, type: u.type, x: u.x, y: u.y, seenAt: s.turn });
+        mem.known.push({ id: u.id, type: u.type, x: u.x, y: u.y, board: id, seenAt: s.turn });
       }
     }
 
@@ -6906,23 +6953,42 @@ export function refreshMemory(s: GameState): void {
     // 如果那格看不见，就继续保留——你不知道它死了还是走了。
     mem.known = mem.known.filter((k) => {
       if (aliveIds.has(k.id)) return true;
-      return !vis.has(idx(s, k.x, k.y));
+      const id = k.board ?? EARTH;
+      const vis = visByBoard[id];
+      return !vis || !vis.has(idxOn(s, id, k.x, k.y));
     });
 
     if (!keepMap) continue;
 
-    // 地形按"此刻亲眼看得到的"刷新。以前看过、现在看不见的格不会被抹掉——
-    // 那正是这份记忆存在的意义。
-    mem.tiles ??= {};
-    for (const i of vis) {
-      const tile = s.tiles[i];
-      if (tile) mem.tiles[i] = tile.terrain;
+    /*
+     * 地形按"此刻亲眼看得到的"刷新，**每张图一份**。
+     *
+     * 以前看过、现在看不见的格不会被抹掉——那正是这份记忆存在的意义。
+     * 地球同时往老的 `mem.tiles` 里写一份：那个字段已经进了老存档，
+     * 浓雾扩展也只作用于地球，两边都留着最省事。
+     */
+    mem.tilesByBoard ??= {};
+    for (const id of ids) {
+      const vis = visByBoard[id]!;
+      const board = boardOf(s, id);
+      const store = (mem.tilesByBoard[id] ??= {});
+      for (const i of vis) {
+        const tile = board.tiles[i];
+        if (tile) store[i] = tile.terrain;
+      }
+      if (id === EARTH) {
+        mem.tiles ??= {};
+        for (const [key, terrain] of Object.entries(store)) mem.tiles[Number(key)] = terrain;
+      }
     }
 
+    // 城目前只在地球：其它图不放城（见 board 的迁移约定）
     mem.cities ??= [];
+    const earthVis = visByBoard[EARTH]!;
     for (const city of s.cities) {
+      if (boardIdOf(city) !== EARTH) continue;
       // 沾到城的任意一格就算见过：城格是实心的，视野一定先落在它身上
-      if (!cityTiles(city).some((t) => vis.has(idx(s, t.x, t.y)))) continue;
+      if (!cityTiles(city).some((t) => earthVis.has(idx(s, t.x, t.y)))) continue;
       const snap = { owner: city.owner, era: city.era, ruined: city.ruined === true, seenAt: s.turn };
       const known = mem.cities.find((c) => c.id === city.id);
       if (known) Object.assign(known, snap);

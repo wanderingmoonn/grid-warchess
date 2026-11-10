@@ -335,6 +335,7 @@ import {
   utype,
   visionOf,
   visibleTilesOf,
+  visibleTilesOn,
   // 三/四人局：席位轮转与出局判定
   others,
   nextSeat,
@@ -372,6 +373,7 @@ import type {
   UnitTypeDef,
 } from '../src/core/types.ts';
 import { skillsOf } from '../src/core/query.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -19707,6 +19709,111 @@ test('聚变堆被拆时自爆：半径 1 各吃 60，不分敌我', () => {
   );
   assert.equal(r.state.units.find((u) => u.id === own.id)!.hp, ownHp - 60, '半径内的自家兵也吃 60');
   assert.equal(r.state.units.find((u) => u.id === far.id)!.hp, farHp, '半径外不挨');
+});
+
+test('视野按图分开：月球上的眼睛不点亮地球，也不丢敌人', () => {
+  /*
+   * 多图之后最容易犯的错是"拿一个全局可见集套所有图"：
+   * 地球的索引 5 和 3×3 月球图的索引 5 是两回事，混用会既点亮错误的格子、
+   * 又把另一张图上的敌人当"在地球视野里"下发。
+   */
+  const s = fresh({ fog: true });
+  s.boards = {
+    moon: {
+      id: 'moon',
+      kind: 'planet',
+      name: '月球',
+      w: 3,
+      h: 3,
+      tiles: Array.from({ length: 9 }, () => ({ terrain: 'plain' })),
+    },
+  };
+  const template = s.units.find((u) => u.owner === 'A')!;
+  s.unitTypes[template.type]!.vision = 3; // 3×3 小图上刚好覆盖全图
+
+  const foe: Unit = { ...template, id: 'moon-foe', owner: 'B', x: 2, y: 2, board: 'moon' };
+  s.units.push(foe);
+
+  // 没有月球上的眼睛：看不见它，视图里也不该有
+  assert.equal(unitInSightOf(s, 'A', foe), false, '地球的视野不该照到月球');
+  assert.equal(
+    playerView(s, 'A').state.units.some((u) => u.id === 'moon-foe'),
+    false,
+    '看不见的敌人不该下发',
+  );
+
+  const earthBefore = [...visibleTilesOn(s, 'A', EARTH)].sort((a, b) => a - b);
+
+  const scout: Unit = { ...template, id: 'moon-scout', x: 0, y: 0, board: 'moon' };
+  s.units.push(scout);
+
+  // 月球上的眼睛只点亮月球，地球的可见集一格都不多
+  assert.equal(unitInSightOf(s, 'A', foe), true, '同一张图上看得见');
+  assert.ok(visibleTilesOn(s, 'A', 'moon').has(2 * 3 + 2), '月球按自己的宽度算索引');
+  assert.deepEqual(
+    [...visibleTilesOn(s, 'A', EARTH)].sort((a, b) => a - b),
+    earthBefore,
+    '往月球加个兵，不该让地球多亮一格',
+  );
+
+  // 记忆也带图：幽灵知道自己在哪张图上
+  refreshMemory(s);
+  const known = s.memory.A.known.find((k) => k.id === 'moon-foe');
+  assert.ok(known, '看得见就该记进幽灵表');
+  assert.equal(known!.board, 'moon', '记忆里的单位要知道自己在哪张图');
+
+  // 眼睛走了：敌人从视图消失，但记忆留着（不知道它死没死）
+  s.units = s.units.filter((u) => u.id !== 'moon-scout');
+  assert.equal(
+    playerView(s, 'A').state.units.some((u) => u.id === 'moon-foe'),
+    false,
+    '没有眼睛了就该从视图里消失',
+  );
+  refreshMemory(s);
+  assert.ok(
+    s.memory.A.known.some((k) => k.id === 'moon-foe'),
+    '看不见了不等于死了，幽灵要留着',
+  );
+});
+
+test('棋盘是一等公民：默认地球，取图不走别名', () => {
+  /*
+   * 多图玩法的第一步只做"地基"：图有名字、坐标按图算、旧数据默认地球。
+   * 这条守三件事：
+   *   · 地球仍是 `state` 自己（不是被复制出来的一份）；
+   *   · 没写 board 的单位/城市/动作一律算地球；
+   *   · 其它图的索引按它自己的宽度算，不能借地球的 w。
+   */
+  const s = fresh();
+  assert.equal(boardIdOf(undefined), EARTH, '没有 board 就是地球');
+  assert.equal(boardIdOf(s.units[0]), EARTH, '旧存档里的单位算地球');
+
+  const earth = boardOf(s, EARTH);
+  assert.ok(earth.tiles === s.tiles, '地球不该被复制一份，否则克隆之后会分叉');
+  assert.equal(earth.w, s.w);
+
+  assert.equal(idxOn(s, EARTH, 3, 4), 4 * s.w + 3);
+  assert.deepEqual(xyOn(s, EARTH, 4 * s.w + 3), { x: 3, y: 4 });
+
+  // 一张 3×3 的小图：宽度只有 3，绝不能按地球的 w 算
+  s.boards = {
+    moon: {
+      id: 'moon',
+      kind: 'planet',
+      name: '月球',
+      w: 3,
+      h: 3,
+      tiles: Array.from({ length: 9 }, () => ({ terrain: 'plain' })),
+    },
+  };
+  assert.equal(idxOn(s, 'moon', 2, 2), 8, '小图按自己的宽度算索引');
+  assert.deepEqual(xyOn(s, 'moon', 8), { x: 2, y: 2 });
+  assert.deepEqual(boardIds(s), [EARTH, 'moon'], '地球永远排第一');
+  assert.equal(boardName(s, 'moon'), '月球');
+  assert.equal(boardKindOf(s, 'moon'), 'planet');
+
+  // 没登记的图退回地球：旧存档/扩展写错 id 时不至于崩
+  assert.ok(boardOf(s, 'nowhere').tiles === s.tiles, '找不到的图退回地球');
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
