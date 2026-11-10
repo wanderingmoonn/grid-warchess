@@ -566,7 +566,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		{
 			id: 'cultivation-qi',
 			label: '灵气',
-			hint: '悬停查看全图灵气浓度；点一下钉住，再点取消',
+			hint: '悬停查看视野内的灵气浓度；点一下钉住，再点取消',
 			cells: ({ state }) => qiOverlayCells(state),
 		},
 	],

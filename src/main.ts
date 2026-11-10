@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { playerView, isBlackedOut, onlyVisibleCells } from './core/fog.ts';
+import { isBlackedOut, onlyVisibleCells, playerView } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -369,12 +369,15 @@ function syncTopbarBadges(): void {
 /**
  * 浓雾：这一格此刻看不见（棋盘上画成 `.tile.unknown` 的那种黑格）。
  *
- * 只在"开了雾 + 勾了「浓雾蔽野」"这一局里成立。观战位与上帝模式的
- * `viewNow()` 本来就是全图（`playerView` 的第三个参数），所以那几个模式
- * 自动不会命中——不需要在这里多写分支。
+ * 只在"开了雾 + 勾了「浓雾蔽野」"这一局里成立。上帝模式的 `viewNow()` 本来就是
+ * 全图（`playerView` 的第三个参数），所以自动不会命中。
+ *
+ * 复盘与观战位单独放行：这两条路的棋盘就是 `playerView(..., true)` 画的，
+ * 满屏没有一格是黑的——在这里拦，只会让"看完这局到底发生了什么"变成看一半。
  */
 function blackedOutAt(coords: { x: number; y: number } | null | undefined): boolean {
   if (!coords) return false;
+  if (replay !== null || spectating()) return false;
   // 判据收在 core/fog：棋盘怎么画、这里怎么判，用的是同一个 visibleTilesOf
   return isBlackedOut(state, me(), coords.x, coords.y);
 }
@@ -383,7 +386,7 @@ function blackedOutAt(coords: { x: number; y: number } | null | undefined): bool
  * 黑格上"看一眼"的统一回应：说一句话就返回，绝不落到任何属性卡。
  *
  * 为什么值得单独一个函数：点击流程里"只看不操作"的入口有五处
- * （复盘、点敌方单位、观战位、轮不到我/指挥官、点空地），
+ * （点敌方单位、观战位、轮不到我/指挥官、点空地、复盘），
  * 一处漏掉就等于那一片黑雾白送侦察。收成一个判断，漏了容易发现。
  */
 function refuseLook(coords: { x: number; y: number } | null | undefined): boolean {
@@ -392,8 +395,15 @@ function refuseLook(coords: { x: number; y: number } | null | undefined): boolea
   return true;
 }
 
-/** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
-function computeBoardView(): Map<number, string> | undefined {
+/**
+ * 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined。
+ *
+ * `visible` 是这一帧的视野：视图染色必须过一遍 `onlyVisibleCells`。
+ * 天气、灵气这些场都是**按全图算的**（存在各自的 `Tile.custom` 里），
+ * 不裁的话，看视图就等于开了一张全图透视——对面城市在哪、附近是山是林，
+ * 一眼就能读出来。遮蔽放在核心而不是各个扩展里，是为了只有一个地方能漏。
+ */
+function computeBoardView(visible: readonly number[]): Map<number, string> | undefined {
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
@@ -401,17 +411,7 @@ function computeBoardView(): Map<number, string> | undefined {
   if (!cells || cells.length === 0) return undefined;
 
   const out = new Map<number, string>();
-  /*
-   * 「浓雾蔽野」下，视野外一格都不许染。
-   *
-   * 闸门放在这里而不是各个扩展的 `cells` 里，是因为**所有**棋盘视图都走这一条路
-   * （天气、灵气、热度……），逐个扩展去记得"我该不该过滤"迟早漏一个。
-   * 而漏掉的代价不小：天气是由地形算出来的，"这一片在下雨"就等于告诉玩家
-   * 那边不是沙漠；再配合"温和不画"，黑区的边界甚至能反推出地形轮廓。
-   *
-   * 未开浓雾时整段跳过，这批视图一格都不会少。
-   */
-  for (const c of onlyVisibleCells(state, me(), cells)) out.set(c.y * state.w + c.x, c.color);
+  for (const c of onlyVisibleCells(state, visible, cells)) out.set(c.y * state.w + c.x, c.color);
   return out;
 }
 let selectedId: string | null = null;
@@ -1414,8 +1414,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
-    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值。
-    boardView: computeBoardView(),
+    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
+    boardView: computeBoardView(view.visible),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,

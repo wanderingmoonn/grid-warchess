@@ -248,7 +248,10 @@ const EFFECTS: Record<Climate, ClimateEffect> = {
   // 寒冷：只让经济难受，不拖慢部队
   cold: { incomeMul: 0.7 },
   hot: { incomeMul: 1.25, armorPenalty: 1 },
-  hardWinter: { moveMul: 0.5, armorPenalty: 3, armorPenaltyOnlyField: true },
+  // 严冬：比寒冷更冷，所以debuff也更重——地冻三尺，什么都长不出来。
+  // 早先这里只有移动与护甲、没有产出，于是"更冷的天气反而更养人"，
+  // 玩家一眼就看出来了（实机反馈）。
+  hardWinter: { moveMul: 0.5, armorPenalty: 3, armorPenaltyOnlyField: true, incomeMul: 0.5 },
   blazing: { moveMul: 0.5, armorPenalty: 2 },
   dampCold: { incomeMul: 2, upkeepRate: 0.05, upkeepHpRatio: 0.1 },
   dampHeat: { incomeMul: 2.5, upkeepRate: 0.1, upkeepHpRatio: 0.05 },
@@ -259,7 +262,9 @@ const EFFECTS: Record<Climate, ClimateEffect> = {
   thunder: { endDamage: { hits: 1, amount: 50, splash: 0.5, radius: 1 }, incomeMul: 3 },
   frozen: { navyMoveZero: true, landOnIce: true },
   driftIce: { navyMoveMul: 0.75 },
-  storm: { endDamage: { hits: 5, amount: 10 } },
+  // 风暴：10 次 × 5 点。以前是 5 次 × 10 点，单次太疼——一次打死一个残血单位
+  // 会让"天气"变成比敌人更可怕的东西。拆成 10 下，总量一样但更像"被风刮"。
+  storm: { endDamage: { hits: 10, amount: 5 } },
 };
 
 export function climateEffect(c: Climate): ClimateEffect {

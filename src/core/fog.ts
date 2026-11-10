@@ -34,6 +34,14 @@ export interface PlayerView {
   rememberedTiles: Map<number, Terrain>;
   /** 已探索、此刻却看不见的城，值是记忆里的那一份样子（归属、时代、是否废墟） */
   rememberedCities: Map<string, KnownCity>;
+  /**
+   * 这一局连地形都藏吗？
+   *
+   * 只有「浓雾蔽野」是 true：基础规则的雾只遮单位，地形全图可见。
+   * 界面靠它决定"雾外那一格"该怎么写——是照记忆画地形，还是干脆什么都不说。
+   * 别在下游自己摸 `config.expansionIds`：那等于把某个扩展的 id 抄到第三处。
+   */
+  terrainHidden: boolean;
 }
 
 /** 这座城此刻有没有任何一格落在视野里 */
@@ -77,6 +85,9 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     }
   }
 
+  // 「浓雾蔽野」连地形一起遮。判断只做这一次，下游（面板、棋子）都读这个字段。
+  const terrainHidden = s.fog && !reveal && s.config.expansionIds.includes('blackout');
+
   if (!s.fog || reveal) {
     return {
       state: cloned,
@@ -84,6 +95,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
       ghosts: [],
       rememberedTiles: new Map(),
       rememberedCities: new Map(),
+      terrainHidden: false,
     };
   }
 
@@ -154,7 +166,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   // 走过路过的地方必须留个样子，否则第二次经过等于第一次来。
   const rememberedTiles = new Map<number, Terrain>();
   const rememberedCities = new Map<string, KnownCity>();
-  if (s.config.expansionIds.includes('blackout')) {
+  if (terrainHidden) {
     for (const [key, terrain] of Object.entries(mem.tiles ?? {})) {
       const i = Number(key);
       if (visibleSet.has(i)) continue; // 眼前看得见，按活的画
@@ -169,7 +181,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     }
   }
 
-  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities };
+  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities, terrainHidden };
 }
 
 /**
@@ -198,19 +210,28 @@ export function isBlackedOut(
 }
 
 /**
- * 棋盘视图染色的可见性过滤：「浓雾蔽野」下只留看得见的格子。
+ * 棋盘视图染色的可见性过滤：有雾就只留看得见的格子。
  *
  * 闸门收在这里而不是各个扩展的 `cells` 里，因为**所有**棋盘视图都走同一条路
  * （天气、灵气、热度……），逐个扩展去记得"我该不该过滤"迟早漏一个。
- * 未开浓雾时原样返回，一格都不会少。
+ *
+ * 为什么连"只遮单位"的基础雾也要裁：扩展算的是**全图**的场——温度湿度由地形
+ * 推出来，灵气浓度里还掺着对面灵田、灵泉的贡献。整张铺开就等于白送一张敌方
+ * 建筑与地形分布图：一座灵田就是一团深绿，"这一片在下雨"就等于说那边不是沙漠。
+ * 地形本身在基础雾里是公开的（棋盘上一直画着），但**由地形推出来的场**不是。
+ *
+ * `visible` 传这一帧 `playerView` 已经算好的那一份：观战 / 复盘拿到的是全图，
+ * 所以这里不必再判断"是不是在观战"。
+ *
+ * 被裁掉的格**不画成灰色**：灰度本身也在说"这里有东西"，留白才是真的一无所知。
  */
 export function onlyVisibleCells<T extends { x: number; y: number }>(
   s: GameState,
-  p: PlayerId,
+  visible: readonly number[],
   cells: readonly T[],
-): T[] {
-  if (!s.fog || !s.config.expansionIds.includes('blackout')) return [...cells];
-  const vis = visibleTilesOf(s, p);
+): readonly T[] {
+  if (!s.fog) return cells;
+  const vis = new Set(visible);
   return cells.filter((c) => vis.has(idx(s, c.x, c.y)));
 }
 

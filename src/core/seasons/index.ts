@@ -157,6 +157,10 @@ export const SEASONS: Expansion = {
         if (ed) {
           let dmg = 0;
           for (let i = 0; i < ed.hits; i++) {
+            // 雷暴（50 点）是真伤，不看护甲；风暴（5 点）吃护甲。
+            //
+            // **不设保底**：10×5 的意图就是"5 甲以下重伤、5 甲以上免伤"——
+            // 护甲在风暴里是一条硬门槛，不是可以慢慢磨穿的减伤。
             dmg += ed.amount >= 50 ? ed.amount : Math.max(0, ed.amount - (def.armor ?? 0));
           }
           if (dmg > 0) {
@@ -224,7 +228,7 @@ export const SEASONS: Expansion = {
       {
         id: 'seasons-weather',
         label: '天气',
-        hint: '看全图天气分布；点一下钉住，再点取消',
+        hint: '看视野内的天气分布；点一下钉住，再点取消',
         cells: ({ state }) => climateOverlayCells(state),
       },
     ],

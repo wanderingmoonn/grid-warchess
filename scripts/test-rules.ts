@@ -4968,6 +4968,33 @@ test('城市对双方都是公开信息', () => {
   assert.equal(playerView(s, 'A').state.cities.length, 4);
 });
 
+test('棋盘视图的染色按视野裁，不开全图透视', () => {
+  const s = fresh();
+  // 模拟天气/灵气这种"整张图都算得出来"的场：先铺满，再看裁完剩什么。
+  const all: Array<{ x: number; y: number; color: string }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) all.push({ x, y, color: '#000' });
+  }
+
+  // 无雾：一格都不许动（视野只遮"看不见的"，不遮"看得见的"）
+  s.fog = false;
+  assert.equal(onlyVisibleCells(s, [], all).length, all.length, '无雾时视图不该被裁');
+
+  // 有雾：只剩此刻看得见的格
+  s.fog = true;
+  const view = playerView(s, 'A');
+  const kept = onlyVisibleCells(s, view.visible, all);
+  const vis = new Set(view.visible);
+  assert.equal(kept.length, vis.size, '裁完的格数应等于视野格数');
+  assert.ok(kept.every((c) => vis.has(c.y * s.w + c.x)), '裁完不许留下视野外的格');
+  // 反着验一条：地图上一定有看不见的格，那些必须真的掉了
+  assert.ok(kept.length < all.length, '有雾时不该还剩一整张图');
+
+  // 观战 / 复盘：visible 本来就是全图，不该被裁掉
+  const wide = playerView(s, 'A', true);
+  assert.equal(onlyVisibleCells(s, wide.visible, all).length, all.length, '全图视角不该被裁');
+});
+
 test('见过的敌人离开视野后留下幽灵', () => {
   const s = fresh();
   const a = findUnit(s, 'A', 'scout');
@@ -5062,8 +5089,11 @@ test('浓雾：看不见的格子点不开，也不给染色', () => {
    *   · 开「天气」视图，黑区里在下雨也一并染出来——而天气由地形算出，
    *     配合"温和不画"，连地形轮廓都能反推。
    *
-   * 判据统一收在 `fog.isBlackedOut` / `fog.onlyVisibleCells`，这条守它们，
-   * 同时也守"没开浓雾时一格都不许拦"。
+   * 判据统一收在 `fog.isBlackedOut` / `fog.onlyVisibleCells`，这条守它们。
+   * 注意两条判据的松紧**不同**，别拿"浓雾"去想染色：
+   *   · `isBlackedOut` 只管浓雾（基础雾里地形是公开的，点开看是应该的）；
+   *   · 染色一律按视野裁——灵气浓度里掺着对面的灵田灵泉，
+   *     基础雾里把整张图铺开同样是白送侦察。
    */
   const mk = (ids: string[]) => {
     const s = fresh({ expansionIds: ids });
@@ -5104,11 +5134,19 @@ test('浓雾：看不见的格子点不开，也不给染色', () => {
     { x: sx, y: sy, color: 'seen' },
   ];
   assert.deepEqual(
-    onlyVisibleCells(on, 'A', cells).map((c) => c.color),
+    onlyVisibleCells(on, [...visA], cells).map((c) => c.color),
     ['seen'],
     '浓雾下黑格不该被染色——否则天气会把地形漏出来',
   );
-  assert.equal(onlyVisibleCells(off, 'A', cells).length, 2, '没开浓雾时一格都不许少');
+  // 基础雾一样裁：地形是公开的，但"由地形和建筑算出来的场"不是
+  assert.equal(
+    onlyVisibleCells(off, [...visibleTilesOf(off, 'A')], cells).length,
+    1,
+    '基础雾下也按视野裁——灵气浓度会漏出对面的灵田',
+  );
+  // 没开雾：一格都不许少
+  off.fog = false;
+  assert.equal(onlyVisibleCells(off, [], cells).length, 2, '没开雾时一格都不许少');
 });
 
 test('浓雾整局跑得下去：AI 照旧行动，记忆也不会越攒越大', () => {
@@ -11789,6 +11827,42 @@ test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
     base + 1,
     `凉爽该给 +1：${base} 应该变 ${base + 1}，实际 ${movePower(s, u)}`,
   );
+});
+
+test('严冬比寒冷更冷，减益也该更重（产出不例外）', () => {
+  const cold = climateEffect('cold');
+  const hard = climateEffect('hardWinter');
+  assert.ok(cold.incomeMul !== undefined, '寒冷要减产出');
+  assert.ok(hard.incomeMul !== undefined, '严冬也要减产出');
+  assert.ok(
+    hard.incomeMul! < cold.incomeMul!,
+    `严冬的产出该比寒冷更差：寒冷 ${cold.incomeMul}，严冬 ${hard.incomeMul}`,
+  );
+  // 而且严冬的其它减益至少不比寒冷轻
+  assert.ok((hard.moveMul ?? 1) <= (cold.moveMul ?? 1), '严冬不该比寒冷走得快');
+  assert.ok((hard.armorPenalty ?? 0) >= (cold.armorPenalty ?? 0), '严冬不该比寒冷护甲高');
+});
+
+test('风暴：10 次 × 5 点，不再一次 10 点', () => {
+  const ed = climateEffect('storm').endDamage;
+  assert.ok(ed, '风暴要有回合末伤害');
+  assert.equal(ed!.hits, 10, '10 次');
+  assert.equal(ed!.amount, 5, '每次 5 点');
+});
+
+test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
+  // 同温同湿，只有离岸距离不同。24°C 的海水
+  const at = (distToLand: number, temp = 240) =>
+    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand);
+  assert.equal(at(1), 'overcast', '贴岸 24°C 不该刮风暴——那是玩家发育的地方');
+  assert.equal(at(2), 'storm', '离岸 2 格就该刮');
+  assert.equal(at(4), 'storm', '外海更不用说');
+  // 异常暖的贴岸水还是会刮：不是"永远不刮"，只是要更热
+  // （26.8°C 正好卡在"够刮风暴、还没热到打雷"那一条窄缝里）
+  assert.equal(at(1, 268), 'storm', '26.8°C 的贴岸水可以刮');
+  assert.equal(at(1, 290), 'thunder', '再热就是雷暴，不是风暴');
+  // 冷海无论多外都不刮：6°C 的外海下大雨只是阴天（4°C 以下会先判成浮冰）
+  assert.equal(at(4, 60), 'overcast');
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {

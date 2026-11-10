@@ -466,6 +466,7 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
       ghosts: [],
       rememberedTiles: new Map(),
       rememberedCities: new Map(),
+      terrainHidden: false,
     },
     {
       selectedId: null,
@@ -933,8 +934,88 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
 });
 
 /**
- * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
+ * 雾里点一格：不能顺手把地形和敌情一起点出来。
  *
+ * 棋盘上画着雾、侧栏却把雾里的地形念出来（浓雾局里尤其荒谬），
+ * 或者把那一格的灵气来源写出来（"灵田 +15" 等于替你点出了对面建筑），
+ * 那这层雾就只是个视觉效果。两条边界：
+ *   · 连地形都遮的局（浓雾蔽野）→ 雾外只翻记忆，没记忆就写「未探明」；
+ *   · 地形公开的局 → 地形照写，但格子上的**活数据**（灵气、天气）只在视野内问。
+ */
+check('雾里点格子：地形和敌情都不该被点出来', () => {
+  const host = doc.createElement('div');
+  const paint = (st: ReturnType<typeof createMatch>, x: number, y: number) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: { x, y },
+    });
+  const xyOf = (st: ReturnType<typeof createMatch>, i: number) => ({
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+  });
+
+  // ── 连地形都遮的局 ──
+  const dark = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['blackout'] }, 4242);
+  const darkView = playerView(dark, 'A');
+  const seenDark = new Set(darkView.visible);
+  let cold = -1;
+  for (let i = 0; i < dark.w * dark.h; i++) {
+    if (!seenDark.has(i) && !darkView.rememberedTiles.has(i)) {
+      cold = i;
+      break;
+    }
+  }
+  assert.ok(cold >= 0, '总该有一格是没探索过的');
+  const coldPt = xyOf(dark, cold);
+  paint(dark, coldPt.x, coldPt.y);
+  const coldText = host.textContent ?? '';
+  assert.ok(coldText.includes('未探明'), `雾外没记忆的格该写「未探明」，实际：${coldText.slice(0, 80)}`);
+  assert.ok(!coldText.includes('进入消耗'), '「未探明」的格不许报进入消耗——那就等于报了地形');
+
+  // 记忆里的那一格：写记忆中的地形，并且明说是记的（可能已经变了）。
+  // 开局那一眼看到的格子此刻都还看得见，翻不到"记忆"，所以直接往账本上记一笔——
+  // 等价于"早先我从这一格走过"（浓雾局里这份账本就是 `refreshMemory` 写的）。
+  dark.memory.A.tiles = dark.memory.A.tiles ?? {};
+  dark.memory.A.tiles[cold] = 'forest';
+  assert.equal(
+    playerView(dark, 'A').rememberedTiles.get(cold),
+    'forest',
+    '前提：雾外那一格已经在记忆里',
+  );
+  paint(dark, coldPt.x, coldPt.y);
+  const memText = host.textContent ?? '';
+  assert.ok(memText.includes('森林'), `该按记忆报出地形，实际：${memText.slice(0, 80)}`);
+  assert.ok(memText.includes('记忆里的地形'), `翻记忆时要标出来，实际：${memText.slice(0, 80)}`);
+
+  // ── 地形公开的局：地形照写，但灵气这种活数据只在视野内 ──
+  const lit = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: ['cultivation'] }, 515);
+  const litView = playerView(lit, 'A');
+  const seenLit = new Set(litView.visible);
+  const far = [...Array(lit.w * lit.h).keys()].find((i) => !seenLit.has(i));
+  assert.ok(far !== undefined, '雾里总该有看不见的格');
+  const farPt = xyOf(lit, far!);
+  paint(lit, farPt.x, farPt.y);
+  assert.ok(
+    !(host.textContent ?? '').includes('灵气浓度'),
+    '雾外的格不该报灵气浓度——那行还带着"灵田 +15"的来源',
+  );
+
+  const near = litView.visible[0];
+  assert.ok(near !== undefined, '自己脚边总看得见');
+  const nearPt = xyOf(lit, near!);
+  paint(lit, nearPt.x, nearPt.y);
+  assert.ok(
+    (host.textContent ?? '').includes('灵气浓度'),
+    '看得见的格该照常写出灵气浓度',
+  );
+});
+
+/**
+ * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
  * 扩展给单位挂的操作（宗门大殿的「研发 / 遗弃」）以前只画在详情卡上，
  * 于是实战里点开宗门大殿只剩"招募弟子"，研发按钮根本不存在。
  * 这条用例按"点开一座产兵建筑"的方式渲染，把那条支路钉住。
@@ -6906,6 +6987,7 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     ghosts: [] as never[],
     rememberedTiles: new Map(),
     rememberedCities: new Map(),
+    terrainHidden: false,
   };
 
   const calls: string[] = [];

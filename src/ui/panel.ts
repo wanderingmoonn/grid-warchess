@@ -701,6 +701,11 @@ function extPanelHtml(
 function renderDetail(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedUnit, selectedCityId, selectedCampId, selectedTile } = input;
   const s = view.state;
+  /**
+   * 这一帧的视野。雾是"看不见就不说"的依据，面板也得守——
+   * 棋盘上画着迷雾、侧栏却能把雾里的地形和敌情念出来，那雾就白罩了。
+   */
+  const seenTiles = s.fog ? new Set(view.visible) : null;
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -712,31 +717,66 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   }
 
   if (selectedTile) {
-    const tile = s.tiles[selectedTile.y * s.w + selectedTile.x];
+    const ti = selectedTile.y * s.w + selectedTile.x;
+    const tile = s.tiles[ti];
     if (tile) {
-      const info = TERRAIN_INFO[tile.terrain];
-      const lines = describeTerrain(tile.terrain, s);
+      /*
+       * 雾里点一格，到底该知道什么？
+       *
+       * 三条线，别串：
+       *   · 没有雾 → 照旧，地形全图可见；
+       *   · 有雾但地形是公开的（基础规则）→ 地形照写，那是地图本来就有的信息；
+       *   · **浓雾蔽野**（`view.terrainHidden`）连地形都遮 → 雾外只翻记忆，
+       *     记忆里也没有就写「未探明」，别拿"平原"这种默认值骗人。
+       *
+       * 扩展写在格子上的东西（灵气浓度、脚下天气）是**活数据**，只在看得见时问。
+       * 雾外那一格报出的"62（灵田 +15）"，等于替玩家把对面的建筑点了一遍。
+       */
+      const seen = seenTiles ? seenTiles.has(ti) : true;
+      const memo = !seen && view.terrainHidden ? view.rememberedTiles.get(ti) : undefined;
+      const fromMemory = memo !== undefined;
+      const terrain = seen || !view.terrainHidden ? tile.terrain : memo;
       const coord = `${String.fromCharCode(65 + selectedTile.x)}${selectedTile.y + 1}`;
+
+      if (terrain === undefined) {
+        return `
+        <div class="unit-head">
+          <div class="unit-chip" style="border-radius:8px;background:#5f5a52">?</div>
+          <div>
+            <div class="unit-title">未探明</div>
+            <div class="unit-sub">坐标 ${coord}</div>
+          </div>
+        </div>
+        <div class="unit-notes"><div>· 雾里看不透这一格。派个单位走过去，或者等它进入视野。</div></div>
+      `;
+      }
+
+      const info = TERRAIN_INFO[terrain];
+      const lines = describeTerrain(terrain, s);
       // 扩展写在格子上的东西（灵气浓度之类）：核心不认识，只把盒子递过去——
-      // 和单位卡上的 getUnitPanelLines 一个口径。
+      // 和单位卡上的 getUnitPanelLines 一个口径。雾外不递（见上面的注释）。
       const extLines: string[] = [];
-      for (const e of activeExpansions(s)) {
-        if (!e.hooks.getTilePanelLines) continue;
-        extLines.push(
-          ...e.hooks.getTilePanelLines({
-            state: s,
-            x: selectedTile.x,
-            y: selectedTile.y,
-            viewer: me,
-          }),
-        );
+      if (seen) {
+        for (const e of activeExpansions(s)) {
+          if (!e.hooks.getTilePanelLines) continue;
+          extLines.push(
+            ...e.hooks.getTilePanelLines({
+              state: s,
+              x: selectedTile.x,
+              y: selectedTile.y,
+              viewer: me,
+            }),
+          );
+        }
       }
       return `
         <div class="unit-head">
           <div class="unit-chip" style="border-radius:8px;background:#8b8477">地</div>
           <div>
             <div class="unit-title">${info.name}</div>
-            <div class="unit-sub">坐标 ${coord}</div>
+            <div class="unit-sub">坐标 ${coord}${
+              fromMemory ? ' · 记忆里的地形（可能有变）' : ''
+            }</div>
           </div>
         </div>
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
@@ -748,7 +788,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                 .join('')}</div>`
             : ''
         }
-        ${extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me)}
+        ${seen ? extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me) : ''}
         <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
       `;
     }
@@ -1284,7 +1324,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
         <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name}时代 · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
