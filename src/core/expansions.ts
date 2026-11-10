@@ -606,7 +606,8 @@ export interface ExpansionHooks {
   }) => UnitActionOption[];
 
   /**
-   * 处理 `UNIT_ACTION`。**谁声明了 `unitActions` 就由谁处理**（按扩展顺序取第一个），
+   * 处理 `UNIT_ACTION`。**谁在 `unitActions` 里列出了这个 id，就由谁处理**
+   * （同一份 offer 与 handler 成对，见 rules.doUnitAction），
    * 返回字符串 = 拒绝，字符串本身是给玩家看的理由；返回 null = 成功。
    *
    * 副作用（扣资源、改单位、写战报）都在这里做，规则层只负责把动作变成

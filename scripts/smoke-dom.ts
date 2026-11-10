@@ -7987,5 +7987,54 @@ check('切图：同一块画布换成另一张图的尺寸与格子', () => {
   }
 });
 
+check('火箭发射井：属性卡写着燃料与货舱，加注/发射按钮都在', () => {
+  /*
+   * 发射井的全部交互都在侧栏：货舱是现成的那套（装载/卸载），
+   * 加注和发射是扩展给的两个按钮。这条钉"它们真的画出来了"——
+   * 规则层的用例只能验状态，验不了这对按钮有没有长在卡上。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7781);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  const silo = {
+    id: 'silo-test',
+    type: 'rocket_silo',
+    owner: 'A',
+    x: 6,
+    y: 6,
+    hp: 120,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units = st.units.filter((u) => !(u.x === 6 && u.y === 6));
+  st.units.push(silo as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: silo as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('燃料 0 / 3'), `燃料进度要写在卡上，实际：${text.slice(0, 120)}`);
+    assert.ok(text.includes('货舱：空'), '货舱状态要写在卡上');
+    assert.ok(host.querySelector('[data-action="silo:fuel"]'), '加注按钮不见了');
+    assert.ok(host.querySelector('[data-action="silo:launch"]'), '发射按钮不见了');
+    // 没燃料、没货：发射必须是禁用的，而不是点了才说不行
+    assert.equal(
+      host.querySelector('[data-action="silo:launch"]')!.hasAttribute('disabled'),
+      true,
+      '条件不齐时发射按钮该是灰的',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

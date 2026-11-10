@@ -912,8 +912,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       : `<div class="card-title" style="margin-top:14px">货舱 ${cargo.length} / ${cap}</div>
          <div class="hint">${
            cargo.length === 0
-             ? '空船。贴着岸边走，把陆军接上来。'
-             : cargo.map((u) => `${utype(s, u.type).name}（${u.hp}）`).join(' · ')
+             ? mine
+               ? // 只有水上的载具才是"贴着岸边接人"；发射井这类陆上载具换一句中性的
+                 utype(s, selectedUnit.type).domain === 'water'
+                 ? '空船。贴着岸边走，把陆军接上来。'
+                 : '空的。点「装载」，再点一个贴身的己方单位。'
+               : '空的。'
+             : mine
+               ? cargo.map((u) => `${utype(s, u.type).name}（${u.hp}）`).join(' · ')
+               : // 对手只数得出"装了几个"，看不出装的是谁——那是他的底牌
+                 `${cargo.length} 个单位（看不清是谁）`
          }</div>
          <div class="recruit-list" style="margin-top:8px">
            <button class="recruit-btn" data-act="load" ${!mine || selectedUnit.acted || cargo.length >= cap ? 'disabled' : ''}>

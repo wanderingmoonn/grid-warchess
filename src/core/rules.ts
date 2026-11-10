@@ -151,6 +151,7 @@ import {
   footprintOf, 
   coversTile, 
   tilesOfUnit,
+  distToUnit,
   distBetweenUnits,
 } from './query.ts';
 import { 
@@ -4656,7 +4657,14 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   const verdict = canHold(ferryDef, cargoDef);
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
   if (cargo.acted) return { ok: false, reason: '这个单位本回合已经行动过了' };
-  if (distance(ferry, cargo) !== 1) return { ok: false, reason: '要贴着船才能上船' };
+  /*
+   * 贴身判据按**占地**算，不是按锚点。
+   *
+   * 2×2 的载具（航母、发射井）锚点在左上角，站在它右下角旁边时锚点距离是 3：
+   * 画面上两个人明明挨着，规则却说"要贴着船"。这和建造距离那次是同一个坑
+   * （见 buildSiteError 里"整块地到工匠最近一格"）。
+   */
+  if (distBetweenUnits(s, ferry, cargo) !== 1) return { ok: false, reason: '要贴着船才能上船' };
 
   const load = ferry.cargo ?? [];
   if (holdRoom(ferryDef, ferry) <= 0) {
@@ -4718,7 +4726,7 @@ function doUnload(
   if (!cargo) return { ok: false, reason: '船上没有这个单位' };
 
   if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
-  if (distance(ferry, { x, y }) !== 1) return { ok: false, reason: '只能在船边一格下船' };
+  if (distToUnit(s, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
   if (unitAt(s, x, y)) return { ok: false, reason: '那一格已经有人了' };
   if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
@@ -6178,7 +6186,23 @@ function doUnitAction(s: GameState, unitId: string, actionId: string): ActionRes
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
-  const impl = activeExpansions(s).find((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+
+  /*
+   * **谁列出了这个按钮，就由谁执行**。
+   *
+   * 以前是"取第一个声明了 unitActions 的扩展"——那时候只有一个修真包，
+   * 写成 find 也能跑。现在太空包也挂上了单位动作，而它在扩展表里排在
+   * 修真之前：照旧写法，修真的学法术/炼丹药会被太空包一口回绝，
+   * 而报错会是"认不出这个操作"——一个跟玩家操作毫无关系的错。
+   *
+   * 所以判据从"谁先声明"改成"谁认领"：先问每个扩展的 `unitActions`
+   * 有没有这个 id，有才把动作交给它。按钮和处理器因此永远成对出现，
+   * 也不会因为扩展顺序不同而行为不同（联机时两端顺序必须一致）。
+   */
+  const impls = activeExpansions(s).filter((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+  const impl = impls.find((e) =>
+    (e.hooks.unitActions!({ state: s, unit: u, viewer: u.owner }) ?? []).some((o) => o.id === actionId),
+  );
   if (!impl) return { ok: false, reason: '当前规则里没有这种操作' };
   const reason = impl.hooks.onUnitAction!({ state: s, unit: u, actionId });
   if (reason) return { ok: false, reason };

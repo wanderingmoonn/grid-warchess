@@ -2892,6 +2892,15 @@ function rawBuildScore(
     return inc * 4 - resourceValue(s,unit.owner,recruitResCost(s,unit.owner,def)) * 0.03;
   }
 
+  /*
+   * 载具建筑（火箭发射井）：AI 不会装人、不会加注、也不会发射。
+   *
+   * 它没有 autoAttack、不产兵、不生钱，落到下面"纯防御工事"那条线会被当成
+   * 一堵墙——敌人压过来时花 420 金买一块永远飞不起来的场地。这是**护栏**，
+   * 不是 AI 玩法：等 AI 那条线（别人负责）真的会登月了再放开。
+   */
+  if (def.carry?.hold && !def.autoAttack && !isProducer(def)) return -999;
+
   if (def.autoAttack) {
     // 军事建筑：离敌人越近越有用，但不能贴在敌方主力脸上
     //
