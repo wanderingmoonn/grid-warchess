@@ -2657,7 +2657,7 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
-test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
+test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）', () => {
   /*
    * 用户点单（2026-11-09）："高时代经济单位生产效率大幅上升……不要再搞这种
    * 莫名其妙的设计了"。
@@ -2674,7 +2674,9 @@ test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
   const rows: Array<{ name: string; era: number; cost: number; best: number }> = [];
   for (const [, d] of Object.entries(all) as Array<[string, any]>) {
     if (d.category !== 'economy') continue;
-    if ((d.era ?? 0) < 4) continue;
+    // 2026-11-10：从"时代 4 以上"放宽到"时代 3 以上"——军需官（时代 3）
+    // 原来的回本 9.4 是全表最差，比时代 1 的农民（6.4）还差。
+    if ((d.era ?? 0) < 3) continue;
     const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
     assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
     rows.push({ name: d.name, era: d.era, cost: d.cost, best });
@@ -2683,7 +2685,8 @@ test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
 
   for (const r of rows) {
     const payback = r.cost / r.best;
-    const cap = r.era >= 6 ? 5.0 : 5.5;
+    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5，3 代 ≤6
+    const cap = r.era >= 6 ? 5.0 : r.era >= 4 ? 5.5 : 6.0;
     assert.ok(
       payback <= cap + 1e-9,
       `${r.name}（时代${r.era}）造价 ${r.cost}、最高产出 ${r.best}，回本 ${payback.toFixed(2)} 回合，超过 ${cap}`,
@@ -2732,6 +2735,31 @@ test('信息化时代：战斗单位的射程整体 +1', () => {
   // 没有武器的不许被顺手加上射程
   for (const id of ['dragon-egg', 'nv_oiler', 'af_awacs']) {
     assert.equal((all[id] as any)?.range, 0, `${id} 没有武器，射程该是 0`);
+  }
+
+  /*
+   * 2026-11-10：射程 +1 的这批**视野也同步 +1**（用户点单）。
+   * 理由和"看得见才打得到"同源：射程加了、视野没加，多出来那一格在雾战里
+   * 等于白送。注意这里只是各自 +1，不是"视野 = 射程"——自行榴弹炮那种
+   * 视 3 射 6 仍然要靠队友/城/塔报点，那是它的定位，不是漏改。
+   */
+  const vision: Record<string, number> = {
+    cnt_mechinf: 5, cnt_mbt: 4, cnt_atgm: 4, cnt_specops: 6,
+    cnt_sph: 3, cnt_mlrs: 3, cnt_sam: 6, cnt_heli: 6, cnt_uav: 7, cnt_destroyer: 7,
+    ct_infantry: 6, ct_tank: 5, ct_howitzer: 5, ct_recon: 7,
+    nv_carrier: 10, nv_large_cruiser: 7, nv_aegis: 8, nv_attack_sub: 6,
+    nv_ssk: 5, nv_amphib: 7, nv_missile_boat: 6, nv_lcs: 6, nv_usv: 4,
+    af_jet: 9, af_stealth: 9, af_attack_jet: 7, af_heli: 8, af_drone: 11,
+    af_strategic: 8, af_ew: 10, af_heavy_transport: 8,
+    'sword-saint': 7, 'magic-dragon': 7,
+  };
+  for (const [id, v] of Object.entries(vision)) {
+    assert.equal((all[id] as any).vision, v, `${(all[id] as any).name} 的视野应该是 ${v}（+1 之后）`);
+  }
+  // 兜底：这一代没有谁的眼睛被削到 3 以下（改了数值不至于把谁变成瞎子）
+  for (const [id, d] of Object.entries(all) as Array<[string, any]>) {
+    if (d.era !== 6 || d.category !== 'combat') continue;
+    if ((d.range ?? 0) >= 1) assert.ok(d.vision >= 3, `${d.name} 的视野只有 ${d.vision}`);
   }
 });
 

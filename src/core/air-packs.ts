@@ -362,7 +362,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 5,
     maxHp: 90,
     range: 5,
-    vision: 8,
+    vision: 9,
     ...AIRFRAME,
     abilities: ['af-superiority'],
     // 移动 12：全游戏最快的单位，一圈能横穿半张 20×20 的图。
@@ -381,7 +381,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 4,
     maxHp: 85,
     range: 5,
-    vision: 8,
+    vision: 9,
     ...AIRFRAME,
     abilities: ['af-superiority', 'af-stealth'],
     // 隐身 + 先手：迷雾局里摸到脸上才被发现，而且打你不挨反击。
@@ -400,7 +400,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 8,
     maxHp: 120,
     range: 3,
-    vision: 6,
+    vision: 7,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // A-10 那一挂：对地 +14、甲 8，专治坦克集群。射程只有 2，
@@ -419,7 +419,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 6,
     maxHp: 100,
     range: 3,
-    vision: 7,
+    vision: 8,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // 比攻击机便宜、比它慢、比它脆，但**便宜一半还多**。
@@ -438,7 +438,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 1,
     maxHp: 40,
     range: 4,
-    vision: 10,
+    vision: 11,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // 消耗品：280 金、视野 10、对地 +14，40 血。
@@ -457,7 +457,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 6,
     maxHp: 200,
     range: 4,
-    vision: 7,
+    vision: 8,
     ...AIRFRAME,
     splash: 2,
     abilities: ['siege-master'],
@@ -496,7 +496,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 4,
     maxHp: 110,
     range: 4,
-    vision: 9,
+    vision: 10,
     ...AIRFRAME,
     abilities: ['af-jam'],
     // 相邻敌军 −2 攻。它不杀伤，但能让对面整条战线少打一截——
@@ -515,7 +515,7 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     armor: 4,
     maxHp: 170,
     range: 2,
-    vision: 7,
+    vision: 8,
     ...AIRFRAME,
     carry: { hold: { max: 4 } },
     // 四个舱位、移动 10：一次能把半个小队丢到地图另一头。

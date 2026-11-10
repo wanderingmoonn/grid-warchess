@@ -976,7 +976,10 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 24,
     range: 1,
     vision: 3,
-    incomeByTerrain: { city: 16, plain: 9, hill: 5, forest: 4 },
+    // 2026-11-10：城市产出 16 → 27（回本 9.4 → 5.6）。它是全表最差的经济曲线——
+    // 时代 1 的农民回本 6.4、时代 3 的种植园主 6.0，一个"军需官"却要 9.4 回合，
+    // 贵在副地形上更划算（平地 15 / 丘陵 8 / 森林 7），但主轴必须先成立。
+    incomeByTerrain: { city: 27, plain: 15, hill: 8, forest: 7 },
   },
   {
     // 工兵：棱堡与防马桩的施工方

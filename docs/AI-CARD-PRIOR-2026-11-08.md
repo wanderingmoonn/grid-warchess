@@ -111,8 +111,10 @@ value = raw × 时代折价 × 每金战力^0.3
 - **没有跑胜率对照。** 现在能说的只有："选择更贴实测、且没压过 AI 的判断。"
   变强不变强，要 400 局 A/B 才知道（`probe-draft-winrate`，`WB_CARD_PRIOR=off/0.35` 两组）。
 - 没有上线。默认开着，但只有构建部署后才影响线上。
-- 命令已进 `package.json`：`npm run probe:card-prior`、`npm run draft:metrics`、
-  `npm run draft:prior`（重生成表）。
+- 命令已进 `package.json`：`npm run probe:draft-winrate`（胜率对照，工具脚本是
+  `scripts/probe-draft-winrate.ts`）、`npm run draft:metrics`、`npm run draft:prior`（重生成表）。
+  > 2026-11-10 更正：这里原来写的是一个并不存在的入口（也找不到同名脚本），
+  > 照着一敲就是 "Missing script"。现改为 `probe:draft-winrate`。
 
 ## 七、文件
 
