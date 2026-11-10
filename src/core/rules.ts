@@ -5791,7 +5791,7 @@ export function heroSkillsOf(
      */
     if (ready && u.bornTurn === s.turn) {
       ready = false;
-      notReadyReason = '刚上场的单位这一回合还不能用技能';
+      notReadyReason = '未就绪';
     }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
