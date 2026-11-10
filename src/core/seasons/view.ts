@@ -33,7 +33,7 @@ import {
   isGaleAt,
   precipAt,
   precipLabel,
-  satAt,
+  satEffAt,
   tempAt,
   wetAt,
   windAt,
@@ -150,7 +150,9 @@ export function weatherBlock(
 ): string {
   const temp = tempAt(s, x, y);
   const wet = wetAt(s, x, y);
-  const sat = satAt(s, x, y);
+  // 用**有效**饱和线（含辐合抬升）：辐合区常常一边下雨一边显示 100%，
+  // 拿真实饱和值去算会得到"60% 在下大雨"这种自相矛盾的读数。
+  const sat = satEffAt(s, x, y);
   const precip = precipAt(s, x, y);
   const lines = climateEffectLines(c);
   const body =

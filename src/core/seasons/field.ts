@@ -196,6 +196,15 @@ export interface ClimateTuning {
   stormWind: number;
   /** 湿度平流的折扣（百分数）：100 = 完全按风速漂 */
   wetDrift: number;
+  /**
+   * 辐合抬升的强度（千分数）：风往一处挤 → 空气抬升 → 绝热冷却 → 更容易饱和。
+   *
+   * 这是"雨带有了结构"的那一步：辐合区的饱和线被压下去，先起雨；
+   * 辐散区反过来，天更晴。所以雨天不再是随机斑点，而是沿风场的一条条带子。
+   */
+  converge: number;
+  /** 抬升最多把饱和线压低多少（点）。不封顶的话，强辐合会把饱和线压到 0 */
+  convergeMax: number;
 }
 
 /**
@@ -259,6 +268,8 @@ export const TUNING: ClimateTuning = {
   coriolis: 600,
   stormWind: 20,
   wetDrift: 100,
+  converge: 700,
+  convergeMax: 12,
 };
 
 /* -- 只读常量：不参与扫参 -------------------------------------------- */
@@ -444,11 +455,43 @@ export function satAt(s: GameState, x: number, y: number): number {
   return satOf(tempAt(s, x, y));
 }
 
+/**
+ * 这一格的风场抬升量（正 = 空气被挤上来，负 = 空气下沉）。
+ *
+ * 用中心差分算辐合：`div = (wx[x+1] − wx[x−1] + wy[y+1] − wy[y−1]) / 2`，
+ * 取负号 —— 风往一处挤（div<0）就是抬升。
+ *
+ * 边界用"贴边那一格的自己"补齐，不然图边上会凭空多出一条强辐散，
+ * 整圈海岸线都会变成晴天。
+ */
+export function upliftAt(s: GameState, x: number, y: number): number {
+  const wl = windAt(s, Math.max(0, x - 1), y);
+  const wr = windAt(s, Math.min(s.w - 1, x + 1), y);
+  const wu = windAt(s, x, Math.max(0, y - 1));
+  const wd = windAt(s, x, Math.min(s.h - 1, y + 1));
+  const div = (wr.x - wl.x + (wd.y - wu.y)) / 2;
+  const lift = Math.round((-div * TUNING.converge) / 1000);
+  // `+ 0` 把 -0 归一成 0：`Math.round(-0.2)` 是 -0，而 `Object.is(-0, 0)` 是假，
+  // 断言之类的地方会莫名其妙地不相等。
+  return Math.max(-TUNING.convergeMax, Math.min(TUNING.convergeMax, lift)) + 0;
+}
+
+/**
+ * 这一格**实际**的饱和线（把辐合抬升算进去）。
+ *
+ * 判降水、下雨、面板读数都用这一个：抬升中的空气更容易饱和，
+ * 所以它会比"温度对应的饱和值"更低。用真实饱和值判类的话，
+ * 会出现"刚刚在辐合区下完雨、面板却说天晴"的割裂。
+ */
+export function satEffAt(s: GameState, x: number, y: number): number {
+  return Math.max(10, satOf(tempAt(s, x, y)) - upliftAt(s, x, y));
+}
+
 export type Precip = 'none' | 'light' | 'heavy';
 
 /** 这一格现在下不下雨、下多大 */
 export function precipAt(s: GameState, x: number, y: number): Precip {
-  return precipOf(wetAt(s, x, y), satAt(s, x, y));
+  return precipOf(wetAt(s, x, y), satEffAt(s, x, y));
 }
 
 function precipOf(wet: number, sat: number): Precip {
@@ -688,7 +731,7 @@ export function climateAt(s: GameState, x: number, y: number): Climate {
   return classifyClimate(
     temp,
     wet,
-    precipOf(wet, satOf(temp)),
+    precipOf(wet, satEffAt(s, x, y)),
     water,
     tile.terrain,
     water ? distToLandOf(s, x, y) : undefined,
@@ -814,7 +857,7 @@ function stepHumidity(s: GameState): void {
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
-      const sat = satOf(tempAt(s, x, y));
+      const sat = satEffAt(s, x, y);
       let v = a[i]!;
       const over = v - sat;
       if (over > 0) {
