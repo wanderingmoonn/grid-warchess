@@ -71,7 +71,9 @@ import {
 import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
-import { CLIMATE_NAME, climateEffect, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
+import { CLIMATE_NAME, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
+import { weatherEffect } from '../src/core/seasons/effect.ts';
+import type { WeatherDrivers } from '../src/core/seasons/effect.ts';
 import {
   classifyClimate,
   climateAt,
@@ -11817,19 +11819,26 @@ test('气候分档：按体感排，24°C 是温暖、6°C 是凉爽', () => {
   assert.equal(at(340), 'blazing', '34°C 酷暑');
 });
 
-test('气候不再到处减移动力：日常的冷热阴雨一概不动速度', () => {
-  const slowed = (Object.keys(CLIMATE_NAME) as Climate[]).filter((k) => {
-    const e = climateEffect(k);
-    return !!e.moveMul && e.moveMul < 1;
+test('只有极端温度才乘性减速：日常冷暖一概不动腿', () => {
+  // 效果现在由驱动算，所以直接扫温度轴：只有两头（严冬 / 酷暑）配减速。
+  // 移动力是整数，乘 0.85 对 move 2 的兵会被 floor 成 1——
+  // **标着 −15%，实际是 −50%**，这才是"节奏折磨"的来源。
+  const at = (temp: number): WeatherDrivers => ({
+    temp,
+    rh: 50,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
   });
-  // 只有"真的走不动"的极端天气才配减速。移动力是整数，乘 0.85 对 move 2 的兵
-  // 会被 floor 成 1——**标着 −15%，实际是 −50%**，这才是"节奏折磨"的来源。
-  assert.ok(slowed.length <= 3, `只有极端天气该减速，实际 ${slowed.length} 种：${slowed}`);
-  for (const k of ['mild', 'cool', 'warm', 'cold', 'hot', 'overcast'] as Climate[]) {
-    const e = climateEffect(k);
-    assert.ok(!e.moveMul || e.moveMul >= 1, `${CLIMATE_NAME[k]} 不该乘性减速`);
+  for (let t = -300; t <= 450; t += 10) {
+    const e = weatherEffect(at(t));
+    const extreme = t < -100 || t >= 320;
+    assert.equal(!!e.moveMul, extreme, `${(t / 10).toFixed(0)}°C 的减速状态不对`);
   }
-  assert.equal(climateEffect('cool').moveAdd, 1, '凉爽给 +1 移动');
+  // 5~10°C 是行军最舒服的一段，给的是看得见的加法
+  assert.equal(weatherEffect(at(80)).moveAdd, 1, '5~10°C 行军舒服：+1');
 });
 
 test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
@@ -11847,22 +11856,37 @@ test('凉爽的 +1 真的落在移动力上（对慢兵也有效）', () => {
   );
 });
 
-test('严冬比寒冷更冷，减益也该更重（产出不例外）', () => {
-  const cold = climateEffect('cold');
-  const hard = climateEffect('hardWinter');
-  assert.ok(cold.incomeMul !== undefined, '寒冷要减产出');
-  assert.ok(hard.incomeMul !== undefined, '严冬也要减产出');
-  assert.ok(
-    hard.incomeMul! < cold.incomeMul!,
-    `严冬的产出该比寒冷更差：寒冷 ${cold.incomeMul}，严冬 ${hard.incomeMul}`,
-  );
-  // 而且严冬的其它减益至少不比寒冷轻
-  assert.ok((hard.moveMul ?? 1) <= (cold.moveMul ?? 1), '严冬不该比寒冷走得快');
-  assert.ok((hard.armorPenalty ?? 0) >= (cold.armorPenalty ?? 0), '严冬不该比寒冷护甲高');
+test('越冷产出越差：−2°C 比 −15°C 好，但都比舒适带差', () => {
+  const at = (temp: number): WeatherDrivers => ({
+    temp,
+    rh: 50,
+    precip: 'none',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  const cold = weatherEffect(at(-20)).incomeBonus!;
+  const hard = weatherEffect(at(-150)).incomeBonus!;
+  const comfy = weatherEffect(at(150)).incomeBonus!;
+  assert.equal(comfy, 0, '15°C 是舒适带，不增不减');
+  assert.ok(cold < comfy && hard < cold, `越冷越差：舒适 ${comfy} / −2°C ${cold} / −15°C ${hard}`);
+  // 严冬还要额外赔上移动与护甲
+  assert.ok((weatherEffect(at(-150)).moveMul ?? 1) < 1, '严冬走不动');
+  assert.ok((weatherEffect(at(-150)).armorPenalty ?? 0) >= 3, '严冬野外护甲掉三');
 });
 
 test('风暴：10 次 × 5 点，不再一次 10 点', () => {
-  const ed = climateEffect('storm').endDamage;
+  // 风暴由驱动直接判：暖水 + 大雨 + 风够大 + 离岸够远
+  const ed = weatherEffect({
+    temp: 240,
+    rh: 95,
+    precip: 'heavy',
+    wind: 40,
+    lift: 0,
+    water: true,
+    distToLand: 4,
+  }).endDamage;
   assert.ok(ed, '风暴要有回合末伤害');
   assert.equal(ed!.hits, 10, '10 次');
   assert.equal(ed!.amount, 5, '每次 5 点');
@@ -12034,10 +12058,28 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   // 没有来处（部署 / 只评估落点）：没有方向，也就谈不上逆风
   assert.equal(stepCostInto(s, plane, -1, here, { flyer: true }), 1, '没有来处不判逆风');
 
-  // 风还是那么大，但这一格不是大风（33°C 是酷暑）：不收钱
+  /*
+   * 关键变化：收费看的是**风**，不是标签。
+   *
+   * 以前"大风"是个标签，所以效果要等这一格被判成大风才生效；现在驱动直接
+   * 算效果，标签只是挑一个最显眼的讲——所以会出现"徽标写着酷暑、
+   * 但空军照样逆风加价"。
+   */
   s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 40 };
-  assert.equal(climateAt(s, 5, 5), 'blazing');
-  assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 1, '不是大风就不加价');
+  assert.equal(climateAt(s, 5, 5), 'blazing', '33°C 的标签是酷暑');
+  assert.equal(
+    stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }),
+    2,
+    '标签是酷暑，风够大照样逆风加价',
+  );
+
+  // 风不够大：一分不加，哪怕这一格温和得不能再温和
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 18 };
+  assert.equal(
+    stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }),
+    1,
+    '风不到线就不加价',
+  );
 
   // 地面部队完全不受影响：大风只打空军
   const foot = place(s, 'A', 'militia', 5, 6);
@@ -12106,15 +12148,58 @@ test('地转偏向力：北半球把风往一边拧，南半球往另一边', ()
   assert.ok(north.y * south.y < 0, `两个半球该往相反方向拧：${north.y} / ${south.y}`);
 });
 
-test('大风只替换「温和」，不抢凉爽和温暖', () => {
-  // 传 gale=true 时的分档：温和 → 大风；凉爽 / 温暖 / 酷暑 各自不变
+test('产出加成是相加的，不是相乘的', () => {
+  /*
+   * 天气是**多档同时生效**的：温度一档、湿度一档、降水一档。
+   * 乘法叠两次就失控（旧的「湿热」×2.5 撞上「温暖」×1.25 就是 3.1 倍），
+   * 所以全部改成百分点相加，再夹在 −60%~+90% 里。
+   */
+  const e = weatherEffect({
+    temp: 280, // +10%
+    rh: 90, // +20%
+    precip: 'light', // +15%
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.equal(Math.round(e.incomeBonus! * 100), 45, '10 + 20 + 15 = 45，不是 1.1×1.2×1.15');
+  // 再叠也不会飞出去
+  const worst = weatherEffect({
+    temp: 340,
+    rh: 99,
+    precip: 'light',
+    wind: 0,
+    lift: 0,
+    water: false,
+    distToLand: 0,
+  });
+  assert.ok(worst.incomeBonus! <= 0.9, '总加成有上限');
+});
+
+test('潮湿天收固定维护费，不看造价', () => {
+  const humid = (rh: number) =>
+    weatherEffect({ temp: 280, rh, precip: 'none', wind: 0, lift: 0, water: false, distToLand: 0 });
+  assert.equal(humid(90).upkeepGold, TUNING.weatherUpkeep, '潮湿天每个单位交固定几金');
+  assert.equal(humid(60).upkeepGold, undefined, '不潮就不收');
+  // 固定金额的意义：45 金的农夫和 260 金的农业公司交一样多，
+  // 相对产出一个心疼、一个无感——这才是"高时代更抗天气"。
+  assert.ok(!('upkeepRate' in humid(90)), '不许再按造价收百分比');
+});
+
+test('标签只挑最显眼的那一个讲：风大就说大风', () => {
+  // 效果早就不看标签了，这条只钉"徽标跟效果别打架"：
+  // 中段温度遇到大风，标签换成大风；两头（寒冷 / 炎热）不抢。
   const dry = (t: number) => Math.round(satOf(t) * 0.5);
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 0), 'mild');
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 40), 'gale');
-  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, 40), 'cool');
-  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, 40), 'warm');
-  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, 40), 'hot');
-  // 下雨时不该判成大风：那是暴雨/雷暴的分工
+  const at = (t: number, wind = 40) =>
+    classifyClimate(t, dry(t), 'none', false, 'plain', undefined, wind);
+  assert.equal(at(160, 0), 'mild', '没风就是温和');
+  assert.equal(at(160), 'gale');
+  assert.equal(at(80), 'gale', '凉爽的日子刮大风，标签也该说大风');
+  assert.equal(at(240), 'gale', '温暖也一样');
+  assert.equal(at(300), 'hot', '炎热比风更该被看见');
+  assert.equal(at(-20), 'cold', '零下先说寒冷');
+  // 下雨时不说大风：那是暴雨/雷暴的分工
   assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, 40), 'overcast');
 });
 

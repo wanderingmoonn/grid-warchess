@@ -19,27 +19,16 @@
  * 能进来，别把玩家可改的名字往模板里塞。
  */
 import type { GameState } from '../types.ts';
-import {
-  CLIMATE_NAME,
-  SEASON_NAME,
-  SEASON_TURNS,
-  climateEffect,
-  seasonOf,
-  type Climate,
-} from './climate.ts';
+import { CLIMATE_NAME, SEASON_NAME, SEASON_TURNS, seasonOf, type Climate } from './climate.ts';
 import {
   climateAt,
   formatTemp,
   isGaleAt,
-  precipAt,
   precipLabel,
-  satEffAt,
-  tempAt,
-  wetAt,
   windAt,
   windLevelOf,
-  windSpeedAt,
 } from './field.ts';
+import { driversAt, effectLines, weatherEffect } from './effect.ts';
 
 /** 每个气候的图标。颜色只是辅助，名字和数值才是准的（色弱也得读得懂） */
 export const CLIMATE_ICON: Record<Climate, string> = {
@@ -61,58 +50,6 @@ export const CLIMATE_ICON: Record<Climate, string> = {
   driftIce: '❆',
   storm: '🌪',
 };
-
-function signedPct(rate: number): string {
-  const v = Math.round(rate * 100);
-  return `${v > 0 ? '+' : '−'}${Math.abs(v)}%`;
-}
-
-/**
- * 这个气候到底改了什么，翻成人话。
- *
- * **从效果表派生**，不另写一份文案：表格改了、说明跟着改，
- * 不会出现"界面上写着 −25%、实际已经调成 −50%"这种最难查的错。
- */
-export function climateEffectLines(c: Climate): string[] {
-  const e = climateEffect(c);
-  const out: string[] = [];
-
-  if (e.moveMul !== undefined && e.moveMul !== 1) out.push(`移动力 ${signedPct(e.moveMul - 1)}`);
-  if (e.moveAdd) out.push(`移动力 ${e.moveAdd > 0 ? '+' : '−'}${Math.abs(e.moveAdd)}`);
-  if (e.moveCostAdd) out.push(`每格移动消耗 +${e.moveCostAdd}`);
-  if (e.armorPenalty) {
-    out.push(
-      e.armorPenaltyOnlyField
-        ? `不在城里的军队护甲 −${e.armorPenalty}`
-        : `全军护甲 −${e.armorPenalty}`,
-    );
-  }
-  if (e.incomeMul !== undefined && e.incomeMul !== 1) {
-    out.push(`经济产出 ${signedPct(e.incomeMul - 1)}`);
-  }
-  if (e.rangeAdd) out.push(`攻击范围 ${e.rangeAdd > 0 ? '+' : '−'}${Math.abs(e.rangeAdd)}`);
-  if (e.rangeMax) out.push(`攻击范围不超过 ${e.rangeMax}`);
-  if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
-  if (e.endDamage) {
-    const d = e.endDamage;
-    const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
-    out.push(
-      d.hits > 1
-        ? `回合末受 ${d.hits} 次 ${d.amount} 点伤害（吃护甲）`
-        : `回合末受 ${d.amount} 点伤害${splash}`,
-    );
-  }
-  if (e.upkeepRate) out.push(`回合末交 ${Math.round(e.upkeepRate * 100)}% 维护费`);
-  if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
-  if (e.airUpwindCostAdd) out.push(`空军逆风每格 +${e.airUpwindCostAdd}`);
-  if (e.navyMoveZero) out.push('海军移动力归零');
-  if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
-    out.push(`海军移动力 ${signedPct(e.navyMoveMul - 1)}`);
-  }
-  if (e.landOnIce) out.push('陆军可以在冰面上行走');
-
-  return out;
-}
 
 /** 天气徽标：图标 + 中文名。`w-<id>` 让每种气候有自己的底色 */
 export function weatherBadge(c: Climate): string {
@@ -148,26 +85,28 @@ export function weatherBlock(
   y: number,
   c: Climate,
 ): string {
-  const temp = tempAt(s, x, y);
-  const wet = wetAt(s, x, y);
-  // 用**有效**饱和线（含辐合抬升）：辐合区常常一边下雨一边显示 100%，
-  // 拿真实饱和值去算会得到"60% 在下大雨"这种自相矛盾的读数。
-  const sat = satEffAt(s, x, y);
-  const precip = precipAt(s, x, y);
-  const lines = climateEffectLines(c);
+  /*
+   * 读数与效果都从**驱动**来，不是从标签来。
+   *
+   * 这是这次改造的关键：标签只决定徽标上的名字和颜色，真正的数字是
+   * "温度多少度、湿度多少、风几级"各自算出来的。所以会出现
+   * "徽标写着温和、但底下写着空军逆风 +1"——那不是 bug，是天气本来就有
+   * 多个维度，徽标只能挑一个说。
+   */
+  const d = driversAt(s, x, y);
+  const lines = effectLines(weatherEffect(d));
   const body =
     lines.length === 0
       ? `<div class="weather-none">这一格没有额外影响。</div>`
       : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
   // 风力放在读数里：不然"大风"只是个名字，玩家不知道风有多大、
   // 也不知道往哪边吹——而这两件事正是它唯一的规则含义。
-  const w = windAt(s, x, y);
-  const dir = windArrow(w);
+  const dir = windArrow(windAt(s, x, y));
   return (
     `<div class="weather-box">${weatherBadge(c)}` +
-    `<div class="weather-readout">${formatTemp(temp)} · 相对湿度 ${Math.round((wet / sat) * 100)}%` +
-    `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}` +
-    ` · 风力 ${windLevelOf(windSpeedAt(s, x, y))} 级${dir}</div>` +
+    `<div class="weather-readout">${formatTemp(d.temp)} · 相对湿度 ${d.rh}%` +
+    `${d.precip === 'none' ? '' : ` · ${precipLabel(d.precip)}`}` +
+    ` · 风力 ${windLevelOf(d.wind)} 级${dir}</div>` +
     `${body}</div>`
   );
 }

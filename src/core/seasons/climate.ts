@@ -212,8 +212,14 @@ export interface ClimateEffect {
   armorPenalty?: number;
   /** 护甲惩罚只对"不在城里驻扎的军队"生效（严冬） */
   armorPenaltyOnlyField?: boolean;
-  /** 经济产出倍率 */
-  incomeMul?: number;
+  /**
+   * 经济产出加成，**百分数、相加**（0.15 = +15%）。
+   *
+   * 为什么是加法不是乘法：天气是**多档同时生效**的（温度一档、湿度一档、
+   * 降水一档），乘法叠两次就失控——原来的「湿热」×2.5 再撞上「温暖」×1.25
+   * 就是 3.1 倍。加法封顶在 ±60%/90%，怎么叠都在玩家算得清的范围内。
+   */
+  incomeBonus?: number;
   /** 攻击范围增减（阴雨 -1、暴雨 -2） */
   rangeAdd?: number;
   /** 攻击范围上限（浓雾 4） */
@@ -222,8 +228,14 @@ export interface ClimateEffect {
   visionMax?: number;
   /** 回合结束的固定伤害 */
   endDamage?: { hits: number; amount: number; splash?: number; radius?: number };
-  /** 维护费比例（按自身造价收金币） */
-  upkeepRate?: number;
+  /**
+   * 每回合的**固定**维护费（金）。
+   *
+   * 不按造价比例收：比例制下高级单位交得更多，而它的产出也更多——
+   * 结果"高时代更抗天气"这件事反而体现不出来。固定金额才是
+   * "廉价单位心疼、高级单位无感"。
+   */
+  upkeepGold?: number;
   /** 交不起维护费时的真实伤害（按血量上限比例） */
   upkeepHpRatio?: number;
   /** 海军移动力归零（封冻） */
@@ -234,56 +246,11 @@ export interface ClimateEffect {
   landOnIce?: boolean;
 }
 
-/**
- * 每个天气改什么。
- *
- * ── 一条原则：**降温降的是经济，不是腿** ──────────────────
- *
- * 早先"冷 / 热 / 阴雨"三档各带 `moveMul: 0.75`，玩家反馈说"到处都在减移动力，
- * 战斗节奏太折磨"。数学上这比看上去更狠：移动力是整数，`2 × 0.75 = 1.5`
- * 向下取整是 1——**标着 −25%，实际是 −50%**，而且越慢的兵越吃亏
- * （骑兵 5 → 3 只掉 40%，步兵 2 → 1 掉了 50%）。
- *
- * 所以现在：**只有真正的极端天气减速**（严冬、酷暑、暴雨），
- * 日常的冷暖只动产出与护甲。爽快的行军节奏比"精确模拟寒冷"重要得多。
- *
- * 反过来的增益也一样：`× 1.25` 对 move 2 的单位毫无效果（2.5 取整还是 2），
- * 所以「凉爽」给的是 `moveAdd: +1` 这种**看得见**的加法。
+/*
+ * 效果表已经搬走了：现在是 `effect.ts` 里的 `weatherEffect(drivers)`——
+ * 由温度、湿度、风、降水、抬升**各自算一档再叠加**，不再"一个标签一组加成"。
+ * 这个文件只留标签本身（类型、名字）和它们共同的效果结构。
  */
-const EFFECTS: Record<Climate, ClimateEffect> = {
-  mild: {},
-  // 凉爽：天不热不冷，行军最舒服。这是本扩展唯一一个**加速**的天气
-  cool: { moveAdd: 1 },
-  // 温暖：作物长得好，部队不额外受累
-  warm: { incomeMul: 1.25 },
-  // 寒冷：只让经济难受，不拖慢部队
-  cold: { incomeMul: 0.7 },
-  hot: { incomeMul: 1.25, armorPenalty: 1 },
-  // 严冬：比寒冷更冷，所以debuff也更重——地冻三尺，什么都长不出来。
-  // 早先这里只有移动与护甲、没有产出，于是"更冷的天气反而更养人"，
-  // 玩家一眼就看出来了（实机反馈）。
-  hardWinter: { moveMul: 0.5, armorPenalty: 3, armorPenaltyOnlyField: true, incomeMul: 0.5 },
-  blazing: { moveMul: 0.5, armorPenalty: 2 },
-  dampCold: { incomeMul: 2, upkeepRate: 0.05, upkeepHpRatio: 0.1 },
-  dampHeat: { incomeMul: 2.5, upkeepRate: 0.1, upkeepHpRatio: 0.05 },
-  overcast: { incomeMul: 1.25, rangeAdd: -1 },
-  // 暴雨是"路烂了"而不是"人累了"：多花一点移动点，但不砍总移动力
-  downpour: { moveCostAdd: 1, rangeAdd: -2 },
-  fog: { visionMax: 2, rangeMax: 4 },
-  // 大风：只打空军。地面部队一点不受影响——这条是故意的，
-  // 玩家已经抱怨过"到处都在减移动力"，所以这个天气专门不碰陆军。
-  gale: { airUpwindCostAdd: 1 },
-  thunder: { endDamage: { hits: 1, amount: 50, splash: 0.5, radius: 1 }, incomeMul: 3 },
-  frozen: { navyMoveZero: true, landOnIce: true },
-  driftIce: { navyMoveMul: 0.75 },
-  // 风暴：10 次 × 5 点。以前是 5 次 × 10 点，单次太疼——一次打死一个残血单位
-  // 会让"天气"变成比敌人更可怕的东西。拆成 10 下，总量一样但更像"被风刮"。
-  storm: { endDamage: { hits: 10, amount: 5 } },
-};
-
-export function climateEffect(c: Climate): ClimateEffect {
-  return EFFECTS[c] ?? {};
-}
 
 /** 这个单位是不是水军（水军吃"封冻 / 浮冰"，陆军吃"冰面"） */
 export function isNaval(def: { domain?: string }): boolean {
