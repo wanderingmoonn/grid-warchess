@@ -77,8 +77,10 @@ import {
   climateAt,
   precipAt,
   satOf,
+  latitudeOf,
   stepClimateField,
   tempAt,
+  tempTargetOf,
   TUNING,
   WET_MAX,
   wetAt,
@@ -11907,6 +11909,68 @@ test('风场：从温度梯度推出来，同一局面算两遍一模一样', ()
   assert.ok(near > far, `山脚 ${near} 该比平地 ${far} 风大`);
 });
 
+test('换季不跳变：一年是一条连续的曲线', () => {
+  /*
+   * 以前目标温度是**阶跃**的：换季那一回合从春直接跳到夏，陆地热容 48%
+   * 一步就吃掉二十多度差额的一半——玩家看到的是"上一回合 15°C，下一回合 23°C"。
+   * 现在按季节中点插值，换季那回合正好落在两季中间。
+   *
+   * 这条守两件事：单回合不许跳（峰值 < 3°C），而且一年真的走完一个来回
+   * （不是"为了平滑所以干脆不动"）。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  let prev: number | null = null;
+  let worst = 0;
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let turn = 1; turn <= 40; turn++) {
+    s.turn = turn;
+    stepClimateField(s);
+    stepClimateField(s);
+    const t = tempAt(s, 8, 8);
+    if (prev !== null) worst = Math.max(worst, Math.abs(t - prev));
+    prev = t;
+    lo = Math.min(lo, t);
+    hi = Math.max(hi, t);
+  }
+  assert.ok(worst <= 30, `单回合温差 ${(worst / 10).toFixed(1)}°C，还是太陡`);
+  assert.ok(hi - lo >= 150, `一年只走了 ${((hi - lo) / 10).toFixed(1)}°C，太平了`);
+});
+
+test('纬度：同一张图固定，不同种子冷热不同', () => {
+  // 没有种子的局面（调参工具的最小 state）不该被平移
+  assert.equal(latitudeOf(undefined), 0, '没有种子就没有纬度偏移');
+
+  const seen = new Set<number>();
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let seed = 1; seed <= 60; seed++) {
+    const v = latitudeOf(seed);
+    assert.ok(Math.abs(v) <= TUNING.latitudeSpread, '纬度偏移不能超过设定范围');
+    seen.add(v);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+  }
+  assert.ok(seen.size >= 15, `60 个种子只散出 ${seen.size} 种纬度，散列太差`);
+  assert.ok(hi - lo >= 40, '冷热两头拉不开，等于没有纬度');
+  assert.equal(latitudeOf(7), latitudeOf(7), '同一个种子永远同一条气候带');
+
+  // 整年一起平移：同一个局面只换种子，目标温度差正好是纬度差
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 5;
+  s.seed = 7;
+  const north = tempTargetOf(s, 5, 5);
+  s.seed = 1;
+  const south = tempTargetOf(s, 5, 5);
+  assert.equal(
+    north - south,
+    latitudeOf(7) - latitudeOf(1),
+    '纬度该整年平移，而不是只在某一季加减',
+  );
+});
+
 test('湿度平流：云跟着风走，方向对', () => {
   /*
    * 先把整张图跑到平衡（固定春天，让温度场收敛），再在中段放一团湿气。
@@ -11953,8 +12017,8 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   const plane = place(s, 'A', 'af_scout', 5, 6);
   const here = idx(s, 5, 5);
 
-  // 目标格：16°C、干、南风 30（往 +y 吹）→ 判成「大风」
-  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  // 目标格：16°C、干、南风 40（往 +y 吹）→ 判成「大风」
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
   assert.equal(climateAt(s, 5, 5), 'gale', '前提：这一格是大风');
 
   // 从南往北飞：逆风 → 1 + 1
@@ -11965,13 +12029,13 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   assert.equal(stepCostInto(s, plane, -1, here, { flyer: true }), 1, '没有来处不判逆风');
 
   // 风还是那么大，但这一格不是大风（33°C 是酷暑）：不收钱
-  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 30 };
+  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 40 };
   assert.equal(climateAt(s, 5, 5), 'blazing');
   assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 1, '不是大风就不加价');
 
   // 地面部队完全不受影响：大风只打空军
   const foot = place(s, 'A', 'militia', 5, 6);
-  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
   assert.equal(
     stepCostInto(s, foot, idx(s, 5, 6), here),
     CONFIG.terrainCost.plain,

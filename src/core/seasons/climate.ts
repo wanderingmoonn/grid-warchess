@@ -35,7 +35,8 @@ export type Season = 'spring' | 'summer' | 'autumn' | 'winter';
 /** 每 10 回合换一个季节 */
 export const SEASON_TURNS = 10;
 
-const SEASON_ORDER: Season[] = ['spring', 'summer', 'autumn', 'winter'];
+/** 季节顺序（春→夏→秋→冬）。`field.ts` 按它算"这一季的中点"，所以导出。 */
+export const SEASON_ORDER: Season[] = ['spring', 'summer', 'autumn', 'winter'];
 
 export const SEASON_NAME: Record<Season, string> = {
   spring: '春',

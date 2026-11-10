@@ -45,7 +45,15 @@
  * `climate.ts` 放类型、季节、海陆距离、效果表；`climateAt` 搬到了这里。
  */
 import type { GameState, Terrain } from '../types.ts';
-import { coastClassOf, seasonOf, type Climate, type Coast, type Season } from './climate.ts';
+import {
+  coastClassOf,
+  seasonOf,
+  SEASON_ORDER,
+  SEASON_TURNS,
+  type Climate,
+  type Coast,
+  type Season,
+} from './climate.ts';
 
 /* ------------------------------------------------------------------ */
 /* 1. 参数                                                             */
@@ -79,6 +87,13 @@ export interface ClimateTuning {
   seasonTemp: Record<Season, number>;
   /** 年温差围绕它展开 */
   tempMean: number;
+  /**
+   * 这张图的"纬度"：由地图种子派生的基准温度偏移（±多少个 0.1°C）。
+   *
+   * 同一张图永远在同一条气候带上（存档、回放都一致）；换张图可能冷一点、
+   * 也可能热一点——"这张图偏北"这件事从开局就成立，而不是靠天气随机。
+   */
+  latitudeSpread: number;
   /**
    * 海陆**年温差系数**（百分数）。这是"海陆距离"的物理真身：
    * 水比热大，沿海年温差小（冬暖夏凉）；内陆是大陆性气候。
@@ -176,8 +191,9 @@ export interface ClimateTuning {
  * （`scripts/tune-climate.ts`）会拿原来那张 120 格表当期望值扫参。
  */
 export const TUNING: ClimateTuning = {
-  seasonTemp: { spring: 150, summer: 300, autumn: 155, winter: -60 },
+  seasonTemp: { spring: 150, summer: 340, autumn: 155, winter: -65 },
   tempMean: 136,
+  latitudeSpread: 55,
   coastAmp: { coastal: 60, nearshore: 85, inland: 115, shore: 105, shallow: 95, deep: 85 },
   terrain: {
     plain: { temp: 0, wet: 62, evap: 2.6, heat: 480 },
@@ -212,17 +228,20 @@ export const TUNING: ClimateTuning = {
   blazingAt: 320,
   fogLine: 0.76,
   dampWet: 0.86,
-  // 风往哪儿吹（1/100 格每步）：春天西风、夏天南风、秋天西偏北、冬天北风
+  // 风往哪儿吹（1/100 格每步）：春西、夏南、秋东、冬北——四季两两相对
+  //
+  // 时间对称是刻意的：相邻两季风车转 90°，相对的两季正好反过来。
+  // 玩家记住"春秋对刮、冬夏对刮"就够了，不用背四个方向。
   prevailing: {
     spring: { x: 16, y: 0 },
-    summer: { x: 2, y: -12 },
-    autumn: { x: 12, y: 5 },
-    winter: { x: 5, y: 20 },
+    summer: { x: 0, y: -14 },
+    autumn: { x: -16, y: 0 },
+    winter: { x: 0, y: 18 },
   },
   gust: [90, 110, 140, 100, 80, 120, 160, 100],
   windGrad: 450,
   windMax: 55,
-  galeAt: 26,
+  galeAt: 31,
   wetDrift: 100,
 };
 
@@ -302,18 +321,58 @@ export function tempTargetOf(s: GameState, x: number, y: number): number {
   if (!tile) return TUNING.tempMean;
   const coast = coastClassOf(s, x, y);
   const amp = (TUNING.coastAmp[coast] ?? 100) / 100;
-  const base = TUNING.seasonTemp[seasonOf(s.turn)] ?? TUNING.tempMean;
-  return clampTemp(
-    TUNING.tempMean + (base - TUNING.tempMean) * amp + profileOf(tile.terrain).temp,
-  );
+  /*
+   * 三件事叠在一起：
+   *   · `tempMean` —— 全局基准（年温差围绕它展开）；
+   *   · `latitudeOf(seed)` —— 这张图偏北还是偏南，整年一起平移；
+   *   · 季节异常（相对全局基准算，所以纬度不会放大年温差）。
+   */
+  const mean = TUNING.tempMean + latitudeOf(s.seed);
+  const base = seasonBaseOf(s.turn);
+  return clampTemp(mean + (base - TUNING.tempMean) * amp + profileOf(tile.terrain).temp);
 }
 
 /**
- * 这一格现在的温度。
+ * 这张图的"纬度"：由地图种子派生的基准温度偏移（0.1°C）。
  *
- * 没有落库字段时返回**目标温度**——地图一生成就是稳定态，玩家不用等。
- * 和灵气的缺省值同一个思路。
+ * 同一张图永远在同一条气候带上——存档、回放、联机快照都靠种子重算，不用落库。
+ * 换张图可能冷 5 度，也可能热 5 度：**"这张图偏北"从开局起就成立**，
+ * 而不是每回合掷一次骰子。
+ *
+ * 没有种子的局面（调参脚本里那种只跑气候场的最小 state）返回 0：
+ * 那套工具比较的是"标准气候"，不该被某张图的纬度整体平移。
  */
+export function latitudeOf(seed: number | undefined): number {
+  const spread = TUNING.latitudeSpread;
+  if (!spread || typeof seed !== 'number' || !Number.isFinite(seed)) return 0;
+  // 乘法散列：低位也要参与。直接 `seed % n` 会让相邻种子得到相邻的纬度。
+  const h = Math.imul((seed ^ 0x9e3779b9) >>> 0, 2654435761) >>> 0;
+  return (h % (2 * spread + 1)) - spread;
+}
+
+/**
+ * 这一季的基准温度：**按季节中点插值**，所以换季不是跳变。
+ *
+ * 一年是一条三角波：仲春 15°C → 仲夏 31.5°C → 仲秋 15.5°C → 仲冬 −7.5°C
+ * → 回到仲春。换季那一回合正好落在两季的正中间（"入夏"那天 23°C），
+ * 之后匀速升到仲夏。
+ *
+ * 阶跃版本的问题：换季那一回合目标温度直接换成下一季的，陆地热容 48%
+ * 一步就吃掉二十多度差额的一半——玩家看到的是"上一回合 15°C，下一回合 23°C"。
+ * 现在同样的温差摊在十回合里，一回合两度多，走的是**过程**不是**瞬间**。
+ */
+function seasonBaseOf(turn: number): number {
+  const n = Math.max(1, Math.floor(turn));
+  // 相位：0 = 仲春，1 = 仲夏，2 = 仲秋，3 = 仲冬；换季落在 .5 上
+  const raw = (n - 1) / SEASON_TURNS - 0.5;
+  const phase = ((raw % 4) + 4) % 4;
+  const i = Math.floor(phase);
+  const frac = phase - i;
+  const a = TUNING.seasonTemp[SEASON_ORDER[i]!] ?? TUNING.tempMean;
+  const b = TUNING.seasonTemp[SEASON_ORDER[(i + 1) % 4]!] ?? TUNING.tempMean;
+  return a + (b - a) * frac;
+}
+
 export function tempAt(s: GameState, x: number, y: number): number {
   const tile = tileAt(s, x, y);
   if (!tile) return TUNING.tempMean;

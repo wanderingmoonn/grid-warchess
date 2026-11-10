@@ -12,7 +12,7 @@
 
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { climateEffect, isNaval, SEASON_TURNS } from './climate.ts';
-import { climateAt, climateOfUnit, stepClimateField, windAt } from './field.ts';
+import { climateAt, climateOfUnit, latitudeOf, stepClimateField, windAt } from './field.ts';
 import { climateOverlayCells, seasonLabel, weatherBlock } from './view.ts';
 import { seatsOf } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -30,13 +30,17 @@ function defOf(s: GameState, u: Unit) {
 export const SEASONS: Expansion = {
   id: 'seasons',
   name: '季节与气候',
-  blurb: '四季轮换。气温、湿度、风三个场都是自己算出来的，不再查表。',
+  blurb: '四季轮换。气温、湿度、风都是算出来的，每图另有气候带。',
   summary:
-    '春夏秋冬每 10 回合轮换，季节基准一到，各地的气温就开始向它趋近——水比热大，所以夏天海水还是凉的。'
+    '春夏秋冬每 10 回合轮换，但<b>换季不是跳变</b>：气温沿着一条连续的年曲线走，'
+    + '从仲春 15°C 匀速升到仲夏 34°C、再落到仲冬 −6.5°C，一回合只走两度多；'
+    + '水比热大，所以海水的升降永远比陆地慢半拍。'
+    + '<b>每张图有自己的气候带</b>：地图种子决定整年偏冷还是偏暖（±5.5°C），顶栏写着"偏北/偏南"，'
+    + '偏北的图冬天连平原都会进严冬。'
     + '每格有气温、湿度与风：气温由季节基准、海陆年温差与地形海拔决定；湿度靠蒸发注入、'
     + '随风吹、过饱和就下雨——<b>雨带会跟着风挪</b>，一场雨能从海上飘到内陆。'
     + '风是气压差吹出来的：冷处压高、暖处压低，所以山脚海边天生有风；再叠一层四季各不相同的'
-    + '<b>主导风</b>（冬北、夏南、春西），以及每两回合换一档的阵风。'
+    + '<b>主导风</b>（春西、夏南、秋东、冬北，四季两两相对），以及每两回合换一档的阵风。'
     + '三者一起判出这一格的天气（严冬 / 寒冷 / 凉爽 / 温和 / 大风 / 温暖 / 炎热 / 酷暑八档，'
     + '外加雨雾雷暴与冰面），再改移动、护甲、视野、射程与产出。'
     + '<b>日常的冷暖阴雨只动经济与护甲，不拖慢部队</b>——只有严冬、酷暑与暴雨才真的走不动；'
@@ -246,13 +250,31 @@ export const SEASONS: Expansion = {
       const title = unit ? '脚下的天气' : '这里的天气';
       return `<div class="card-title" style="margin-top:12px">${title}</div>${weatherBlock(state, x, y, c)}`;
     },
-    topbarBadges: ({ state }) => [
-      {
-        id: 'seasons-season',
-        text: seasonLabel(state.turn),
-        hint: `季节：每 ${SEASON_TURNS} 回合换一季`,
-      },
-    ],
+    topbarBadges: ({ state }) => {
+      const out = [
+        {
+          id: 'seasons-season',
+          text: seasonLabel(state.turn),
+          hint: `季节：每 ${SEASON_TURNS} 回合换一季`,
+        },
+      ];
+      /*
+       * 气候带：地图种子决定这张图整年偏冷还是偏暖（±5.5°C）。
+       *
+       * 不写出来的话，玩家只会觉得"这局怎么这么冷"，猜不到是地图本身如此。
+       * 只在不冷不热的中段图才不显示——那才是"标准气候"，没什么好说的。
+       */
+      const lat = latitudeOf(state.seed);
+      if (Math.abs(lat) >= 30) {
+        const c = (Math.abs(lat) / 10).toFixed(1);
+        out.push({
+          id: 'seasons-latitude',
+          text: lat > 0 ? '偏南' : '偏北',
+          hint: `这张图的基准温度 ${lat > 0 ? '+' : '−'}${c}°C：由地图种子决定，整年一起平移`,
+        });
+      }
+      return out;
+    },
     boardViews: () => [
       {
         id: 'seasons-weather',
