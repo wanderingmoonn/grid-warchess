@@ -653,6 +653,21 @@ export interface BoardView {
     /** CSS 颜色，通常带 alpha */
     color: string;
   }>;
+  /**
+   * 染色层之上再写一个字符（风向箭头这类）。
+   *
+   * 和 `cells` 同一层、同一格：核心只负责"把字画在格中央"，
+   * 画什么字、什么时候该有字，全由扩展决定。
+   *
+   * 为什么不做成"任意 HTML"：这层每帧都在重画，塞 HTML 进去就等于
+   * 让扩展在渲染热路径上跑，而且一个手滑就是注入。字符够用了。
+   */
+  glyph?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+    x: number;
+    y: number;
+    /** 一个字符（或很短的串），核心居中画出 */
+    text: string;
+  }>;
 }
 
 export interface UnitActionOption {

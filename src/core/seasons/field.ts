@@ -45,7 +45,15 @@
  * `climate.ts` 放类型、季节、海陆距离、效果表；`climateAt` 搬到了这里。
  */
 import type { GameState, Terrain } from '../types.ts';
-import { coastClassOf, seasonOf, type Climate, type Coast, type Season } from './climate.ts';
+import {
+  coastClassOf,
+  seasonOf,
+  SEASON_ORDER,
+  SEASON_TURNS,
+  type Climate,
+  type Coast,
+  type Season,
+} from './climate.ts';
 
 /* ------------------------------------------------------------------ */
 /* 1. 参数                                                             */
@@ -79,6 +87,13 @@ export interface ClimateTuning {
   seasonTemp: Record<Season, number>;
   /** 年温差围绕它展开 */
   tempMean: number;
+  /**
+   * 这张图的"纬度"：由地图种子派生的基准温度偏移（±多少个 0.1°C）。
+   *
+   * 同一张图永远在同一条气候带上（存档、回放都一致）；换张图可能冷一点、
+   * 也可能热一点——"这张图偏北"这件事从开局就成立，而不是靠天气随机。
+   */
+  latitudeSpread: number;
   /**
    * 海陆**年温差系数**（百分数）。这是"海陆距离"的物理真身：
    * 水比热大，沿海年温差小（冬暖夏凉）；内陆是大陆性气候。
@@ -165,6 +180,20 @@ export interface ClimateTuning {
   windMax: number;
   /** 判「大风」的风速线（百分之一格/步） */
   galeAt: number;
+  /**
+   * 地转偏向力的最大偏转（千分数）。600 ≈ 偏转 31°。
+   *
+   * 真值随纬度变化（赤道 0、两极最大），这里用"种子派生的纬度"当代理：
+   * 偏北的图逆时针、偏南的图顺时针，正中间的图不偏转。
+   */
+  coriolis: number;
+  /**
+   * 判「风暴」的风速线（百分之一格/步）。
+   *
+   * 风暴要**雨大风也大**：光有大雨是阴天，光有大风是「大风」。
+   * 这条把"外海起风暴"变成一件有时机的事——平时不刮，阵风那几天才刮。
+   */
+  stormWind: number;
   /** 湿度平流的折扣（百分数）：100 = 完全按风速漂 */
   wetDrift: number;
 }
@@ -176,8 +205,9 @@ export interface ClimateTuning {
  * （`scripts/tune-climate.ts`）会拿原来那张 120 格表当期望值扫参。
  */
 export const TUNING: ClimateTuning = {
-  seasonTemp: { spring: 150, summer: 300, autumn: 155, winter: -60 },
+  seasonTemp: { spring: 150, summer: 340, autumn: 155, winter: -65 },
   tempMean: 136,
+  latitudeSpread: 55,
   coastAmp: { coastal: 60, nearshore: 85, inland: 115, shore: 105, shallow: 95, deep: 85 },
   terrain: {
     plain: { temp: 0, wet: 62, evap: 2.6, heat: 480 },
@@ -212,17 +242,22 @@ export const TUNING: ClimateTuning = {
   blazingAt: 320,
   fogLine: 0.76,
   dampWet: 0.86,
-  // 风往哪儿吹（1/100 格每步）：春天西风、夏天南风、秋天西偏北、冬天北风
+  // 风往哪儿吹（1/100 格每步）：春西、夏南、秋东、冬北——四季两两相对
+  //
+  // 时间对称是刻意的：相邻两季风车转 90°，相对的两季正好反过来。
+  // 玩家记住"春秋对刮、冬夏对刮"就够了，不用背四个方向。
   prevailing: {
     spring: { x: 16, y: 0 },
-    summer: { x: 2, y: -12 },
-    autumn: { x: 12, y: 5 },
-    winter: { x: 5, y: 20 },
+    summer: { x: 0, y: -14 },
+    autumn: { x: -16, y: 0 },
+    winter: { x: 0, y: 18 },
   },
   gust: [90, 110, 140, 100, 80, 120, 160, 100],
   windGrad: 450,
   windMax: 55,
-  galeAt: 26,
+  galeAt: 31,
+  coriolis: 600,
+  stormWind: 20,
   wetDrift: 100,
 };
 
@@ -302,18 +337,73 @@ export function tempTargetOf(s: GameState, x: number, y: number): number {
   if (!tile) return TUNING.tempMean;
   const coast = coastClassOf(s, x, y);
   const amp = (TUNING.coastAmp[coast] ?? 100) / 100;
-  const base = TUNING.seasonTemp[seasonOf(s.turn)] ?? TUNING.tempMean;
-  return clampTemp(
-    TUNING.tempMean + (base - TUNING.tempMean) * amp + profileOf(tile.terrain).temp,
-  );
+  /*
+   * 三件事叠在一起：
+   *   · `tempMean` —— 全局基准（年温差围绕它展开）；
+   *   · `latitudeOf(seed)` —— 这张图偏北还是偏南，整年一起平移；
+   *   · 季节异常（相对全局基准算，所以纬度不会放大年温差）。
+   */
+  const mean = TUNING.tempMean + latitudeOf(s.seed);
+  const base = seasonBaseOf(s.turn);
+  return clampTemp(mean + (base - TUNING.tempMean) * amp + profileOf(tile.terrain).temp);
 }
 
 /**
- * 这一格现在的温度。
+ * 这张图的"纬度"：由地图种子派生的基准温度偏移（0.1°C）。
  *
- * 没有落库字段时返回**目标温度**——地图一生成就是稳定态，玩家不用等。
- * 和灵气的缺省值同一个思路。
+ * 同一张图永远在同一条气候带上——存档、回放、联机快照都靠种子重算，不用落库。
+ * 换张图可能冷 5 度，也可能热 5 度：**"这张图偏北"从开局起就成立**，
+ * 而不是每回合掷一次骰子。
+ *
+ * 没有种子的局面（调参脚本里那种只跑气候场的最小 state）返回 0：
+ * 那套工具比较的是"标准气候"，不该被某张图的纬度整体平移。
  */
+export function latitudeOf(seed: number | undefined): number {
+  const spread = TUNING.latitudeSpread;
+  if (!spread || typeof seed !== 'number' || !Number.isFinite(seed)) return 0;
+  // 乘法散列：低位也要参与。直接 `seed % n` 会让相邻种子得到相邻的纬度。
+  const h = Math.imul((seed ^ 0x9e3779b9) >>> 0, 2654435761) >>> 0;
+  return (h % (2 * spread + 1)) - spread;
+}
+
+/**
+ * 地转偏向力：北半球（偏北的图）为正、南半球为负，越靠"两极"越强。
+ *
+ * 用的是**同一套纬度**（种子派生的基准温度偏移），所以"这张图偏北"和
+ * "这张图的风往右拧"是同一件事，不用另开一个随机轴。
+ * 正中间的图不偏转——赤道上没有气旋，风直着吹。
+ */
+export function coriolisOf(seed: number | undefined): number {
+  const lat = latitudeOf(seed);
+  if (!lat) return 0;
+  // 偏北（lat<0）→ 正：北半球的气旋逆时针
+  const k = Math.round((lat / TUNING.latitudeSpread) * TUNING.coriolis);
+  return Math.max(-TUNING.coriolis, Math.min(TUNING.coriolis, -k));
+}
+
+/**
+ * 这一季的基准温度：**按季节中点插值**，所以换季不是跳变。
+ *
+ * 一年是一条三角波：仲春 15°C → 仲夏 31.5°C → 仲秋 15.5°C → 仲冬 −7.5°C
+ * → 回到仲春。换季那一回合正好落在两季的正中间（"入夏"那天 23°C），
+ * 之后匀速升到仲夏。
+ *
+ * 阶跃版本的问题：换季那一回合目标温度直接换成下一季的，陆地热容 48%
+ * 一步就吃掉二十多度差额的一半——玩家看到的是"上一回合 15°C，下一回合 23°C"。
+ * 现在同样的温差摊在十回合里，一回合两度多，走的是**过程**不是**瞬间**。
+ */
+function seasonBaseOf(turn: number): number {
+  const n = Math.max(1, Math.floor(turn));
+  // 相位：0 = 仲春，1 = 仲夏，2 = 仲秋，3 = 仲冬；换季落在 .5 上
+  const raw = (n - 1) / SEASON_TURNS - 0.5;
+  const phase = ((raw % 4) + 4) % 4;
+  const i = Math.floor(phase);
+  const frac = phase - i;
+  const a = TUNING.seasonTemp[SEASON_ORDER[i]!] ?? TUNING.tempMean;
+  const b = TUNING.seasonTemp[SEASON_ORDER[(i + 1) % 4]!] ?? TUNING.tempMean;
+  return a + (b - a) * frac;
+}
+
 export function tempAt(s: GameState, x: number, y: number): number {
   const tile = tileAt(s, x, y);
   if (!tile) return TUNING.tempMean;
@@ -457,6 +547,7 @@ export function stepWind(s: GameState): void {
   }
 
   const prev = prevailingOf(s);
+  const cross = coriolisOf(s.seed);
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
@@ -465,8 +556,18 @@ export function stepWind(s: GameState): void {
       // 边界没有"外面那格"，梯度按 0 算：风在图的边上不会凭空拐弯
       const gx = x > 0 && x < s.w - 1 ? p[i + 1]! - p[i - 1]! : 0;
       const gy = y > 0 && y < s.h - 1 ? p[i + s.w]! - p[i - s.w]! : 0;
-      const wx = prev.x + Math.round((gx * TUNING.windGrad) / 1000);
-      const wy = prev.y + Math.round((gy * TUNING.windGrad) / 1000);
+      /*
+       * 梯度 → 风之前先**按地转偏向力拧一个角度**：北半球逆时针、南半球顺时针，
+       * 偏转量随纬度增大（赤道 0、两极约 31°）。这就是"风不直着往低压走，
+       * 而是绕着它转"的来历——不需要记住上一步的风，也不需要风暴中心的位置。
+       *
+       * 写成一阶形式（cos≈1，sin=cross/1000）而不是真算三角函数：
+       * 角度本来就只有三十度上下，而且四则运算才保证回放逐格一致。
+       */
+      const rx = gx - (gy * cross) / 1000;
+      const ry = gy + (gx * cross) / 1000;
+      const wx = prev.x + Math.round((rx * TUNING.windGrad) / 1000);
+      const wy = prev.y + Math.round((ry * TUNING.windGrad) / 1000);
       tile.custom ??= {};
       tile.custom.windX = Math.max(-TUNING.windMax, Math.min(TUNING.windMax, wx));
       tile.custom.windY = Math.max(-TUNING.windMax, Math.min(TUNING.windMax, wy));
@@ -495,12 +596,12 @@ export function classifyClimate(
   /** 离岸格数：水面用它决定"刮不刮得起风暴"；陆地不传 */
   distToLand?: number,
   /**
-   * 这一格此刻在不在刮大风（由 `isGaleAt` 判）。
+   * 这一格的风速（百分之一格/步）。判「大风」和「风暴」都要它。
    *
-   * 传布尔而不是风速：阈值是**气象参数**、就住在本文件的 TUNING 里；
-   * `climate.ts` 只负责"大风这件事怎么落到某个天气标签上"。
+   * 传风速而不是布尔：阈值是**气象参数**、就住在本文件的 TUNING 里，
+   * 判类函数只管"这个速度该落成哪个标签"。
    */
-  gale = false,
+  windSpeed = 0,
 ): Climate {
   const sat = satOf(temp);
   const r = sat > 0 ? wet / sat : 0;
@@ -521,7 +622,14 @@ export function classifyClimate(
       const d = distToLand ?? 1;
       const floor =
         d <= 1 ? TUNING.stormTemp.coast : d <= 3 ? TUNING.stormTemp.near : TUNING.stormTemp.open;
-      return temp >= floor ? 'storm' : 'overcast';
+      /*
+       * 风暴 = 雨够大 + 风够大 + 水够暖，三个条件缺一不可。
+       *
+       * 只看雨的话，外海的大雨一口气就是"风暴"，常年刮个不停；加上风这一条，
+       * 风暴变成**有时机**的事：平时不刮，阵风那几天外海才起。这也顺带解释了
+       * 为什么风季（秋）的海上更凶——不是随机，是那几天的风真的够大。
+       */
+      return temp >= floor && windSpeed >= TUNING.stormWind ? 'storm' : 'overcast';
     }
     if (precip === 'light') return 'overcast';
     if (r > fogLine) return 'fog';
@@ -555,7 +663,7 @@ export function classifyClimate(
     // 那两档是玩家手里少有的增益（+1 移动 / +25% 产出），被一个纯空军减益顶掉
     // 会很难受；而「温和」本来就是"这一格没额外影响"，换成大风不亏任何东西。
     // 副作用是这个天气只在 13~20°C 的晴天出现——也就是春天和秋天，正好对。
-    if (gale) return 'gale';
+    if (windSpeed >= TUNING.galeAt) return 'gale';
     return 'mild';
   }
   if (temp < TUNING.hotAt) return r > TUNING.dampWet ? 'dampHeat' : 'warm';
@@ -584,9 +692,9 @@ export function climateAt(s: GameState, x: number, y: number): Climate {
     water,
     tile.terrain,
     water ? distToLandOf(s, x, y) : undefined,
-    // 「大风」只在没下雨的温和档里成立（见 classifyClimate）：刮风的日子
-    // 本来就不该同时在下雨——那是暴雨/雷暴的分工。
-    isGaleAt(s, x, y),
+    // 风速同时决定「大风」（陆地、没雨）和「风暴」（水面、大雨）：
+    // 前者是"风大得飞不动"，后者是"风大得船扛不住"。
+    windSpeedAt(s, x, y),
   );
 }
 

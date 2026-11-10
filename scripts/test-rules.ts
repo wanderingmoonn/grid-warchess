@@ -77,11 +77,15 @@ import {
   climateAt,
   precipAt,
   satOf,
+  coriolisOf,
+  latitudeOf,
   stepClimateField,
   tempAt,
+  tempTargetOf,
   TUNING,
   WET_MAX,
   wetAt,
+  windAt,
   windSpeedAt,
 } from '../src/core/seasons/field.ts';
 import {
@@ -11863,8 +11867,9 @@ test('风暴：10 次 × 5 点，不再一次 10 点', () => {
 
 test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
   // 同温同湿，只有离岸距离不同。24°C 的海水
-  const at = (distToLand: number, temp = 240) =>
-    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand);
+  // 第三参之后补一个风速：风暴现在要求「雨大风也大」，默认给一条足够大的风
+  const at = (distToLand: number, temp = 240, wind = 40) =>
+    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand, wind);
   assert.equal(at(1), 'overcast', '贴岸 24°C 不该刮风暴——那是玩家发育的地方');
   assert.equal(at(2), 'storm', '离岸 2 格就该刮');
   assert.equal(at(4), 'storm', '外海更不用说');
@@ -11905,6 +11910,68 @@ test('风场：从温度梯度推出来，同一局面算两遍一模一样', ()
   const near = windSpeedAt(a, 3, 6);
   const far = windSpeedAt(a, 1, 1);
   assert.ok(near > far, `山脚 ${near} 该比平地 ${far} 风大`);
+});
+
+test('换季不跳变：一年是一条连续的曲线', () => {
+  /*
+   * 以前目标温度是**阶跃**的：换季那一回合从春直接跳到夏，陆地热容 48%
+   * 一步就吃掉二十多度差额的一半——玩家看到的是"上一回合 15°C，下一回合 23°C"。
+   * 现在按季节中点插值，换季那回合正好落在两季中间。
+   *
+   * 这条守两件事：单回合不许跳（峰值 < 3°C），而且一年真的走完一个来回
+   * （不是"为了平滑所以干脆不动"）。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  let prev: number | null = null;
+  let worst = 0;
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let turn = 1; turn <= 40; turn++) {
+    s.turn = turn;
+    stepClimateField(s);
+    stepClimateField(s);
+    const t = tempAt(s, 8, 8);
+    if (prev !== null) worst = Math.max(worst, Math.abs(t - prev));
+    prev = t;
+    lo = Math.min(lo, t);
+    hi = Math.max(hi, t);
+  }
+  assert.ok(worst <= 30, `单回合温差 ${(worst / 10).toFixed(1)}°C，还是太陡`);
+  assert.ok(hi - lo >= 150, `一年只走了 ${((hi - lo) / 10).toFixed(1)}°C，太平了`);
+});
+
+test('纬度：同一张图固定，不同种子冷热不同', () => {
+  // 没有种子的局面（调参工具的最小 state）不该被平移
+  assert.equal(latitudeOf(undefined), 0, '没有种子就没有纬度偏移');
+
+  const seen = new Set<number>();
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let seed = 1; seed <= 60; seed++) {
+    const v = latitudeOf(seed);
+    assert.ok(Math.abs(v) <= TUNING.latitudeSpread, '纬度偏移不能超过设定范围');
+    seen.add(v);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+  }
+  assert.ok(seen.size >= 15, `60 个种子只散出 ${seen.size} 种纬度，散列太差`);
+  assert.ok(hi - lo >= 40, '冷热两头拉不开，等于没有纬度');
+  assert.equal(latitudeOf(7), latitudeOf(7), '同一个种子永远同一条气候带');
+
+  // 整年一起平移：同一个局面只换种子，目标温度差正好是纬度差
+  const s = fresh({ expansionIds: ['seasons'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 5;
+  s.seed = 7;
+  const north = tempTargetOf(s, 5, 5);
+  s.seed = 1;
+  const south = tempTargetOf(s, 5, 5);
+  assert.equal(
+    north - south,
+    latitudeOf(7) - latitudeOf(1),
+    '纬度该整年平移，而不是只在某一季加减',
+  );
 });
 
 test('湿度平流：云跟着风走，方向对', () => {
@@ -11953,8 +12020,8 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   const plane = place(s, 'A', 'af_scout', 5, 6);
   const here = idx(s, 5, 5);
 
-  // 目标格：16°C、干、南风 30（往 +y 吹）→ 判成「大风」
-  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  // 目标格：16°C、干、南风 40（往 +y 吹）→ 判成「大风」
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
   assert.equal(climateAt(s, 5, 5), 'gale', '前提：这一格是大风');
 
   // 从南往北飞：逆风 → 1 + 1
@@ -11965,13 +12032,13 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   assert.equal(stepCostInto(s, plane, -1, here, { flyer: true }), 1, '没有来处不判逆风');
 
   // 风还是那么大，但这一格不是大风（33°C 是酷暑）：不收钱
-  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 30 };
+  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 40 };
   assert.equal(climateAt(s, 5, 5), 'blazing');
   assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 1, '不是大风就不加价');
 
   // 地面部队完全不受影响：大风只打空军
   const foot = place(s, 'A', 'militia', 5, 6);
-  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 40 };
   assert.equal(
     stepCostInto(s, foot, idx(s, 5, 6), here),
     CONFIG.terrainCost.plain,
@@ -11979,16 +12046,48 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   );
 });
 
+test('地转偏向力：北半球把风往一边拧，南半球往另一边', () => {
+  /*
+   * 纬度不只是"这张图冷一点"——同一套数也当地转偏向力用：
+   * 偏北的图气旋逆时针、偏南的顺时针。做法是**把气压梯度先拧一个角度**
+   * 再当风用，所以不需要记住上一步的风，也不需要风暴中心在哪。
+   *
+   * 这条用一个纯东西向的温度梯度来验：春天主导风本来就是朝东（+x），
+   * 所以风里任何 y 分量都只能来自偏转。
+   */
+  assert.equal(coriolisOf(undefined), 0, '没有纬度的局面不偏转');
+  assert.ok(latitudeOf(1) < 0 && coriolisOf(1) > 0, '偏北的图：科氏为正');
+  assert.ok(latitudeOf(7) > 0 && coriolisOf(7) < 0, '偏南的图：科氏为负');
+
+  const windWithSeed = (seed: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        s.tiles[y * s.w + x]!.custom = { temp: x < 8 ? 0 : 200 };
+      }
+    }
+    s.turn = 6; // 春天：主导风 (22, 0)，y 分量只可能来自偏转
+    s.seed = seed;
+    stepClimateField(s);
+    return windAt(s, 8, 8);
+  };
+  const north = windWithSeed(1); // 偏北
+  const south = windWithSeed(7); // 偏南
+  assert.ok(north.y !== 0 && south.y !== 0, '有纬度就该有偏转');
+  assert.ok(north.y * south.y < 0, `两个半球该往相反方向拧：${north.y} / ${south.y}`);
+});
+
 test('大风只替换「温和」，不抢凉爽和温暖', () => {
   // 传 gale=true 时的分档：温和 → 大风；凉爽 / 温暖 / 酷暑 各自不变
   const dry = (t: number) => Math.round(satOf(t) * 0.5);
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, false), 'mild');
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, true), 'gale');
-  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, true), 'cool');
-  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, true), 'warm');
-  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, true), 'hot');
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 0), 'mild');
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 40), 'gale');
+  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, 40), 'cool');
+  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, 40), 'warm');
+  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, 40), 'hot');
   // 下雨时不该判成大风：那是暴雨/雷暴的分工
-  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, true), 'overcast');
+  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, 40), 'overcast');
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {

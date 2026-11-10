@@ -177,11 +177,16 @@ function makeScene(terrain: string, coast: Coast): MiniState {
 }
 
 /**
- * 跑两年，统计**每个季节里出现最多的那种天气**。
+ * 跑两年，统计**每个季节中段出现最多的那种天气**。
  *
- * 不取"季中某一回合"：天气是会变的（下过雨就转晴），固定采样点等于
- * 拿骰子的一次结果当期望值。众数才是"这个季节的典型天气"，
- * 也是玩家实际感受到的那个。
+ * 为什么只取中段（季内第 3~6 回合）：气温现在是一条连续的年曲线，
+ * 按"季节中点"插值（见 field.ts 的 `seasonBaseOf`）——换季不再是跳变，
+ * 而是从上一季中点匀速走到下一季中点。所以"这一季是多少度"这件事，
+ * 只有中点那一带能代表；把整季十回合混在一起取众数，等于把升温过程
+ * 和季节本身混为一谈。
+ *
+ * 仍然不取**单个**回合：天气是会变的（下过雨就转晴），一个采样点等于
+ * 拿骰子的一次结果当期望值。四个回合取众数就稳得多。
  *
  * 第一年只为让场从缺省态走到稳定，第二年才统计。
  */
@@ -202,8 +207,15 @@ function runYear(terrain: string, coast: Coast): Record<Season, SeasonRead> {
   }
   for (let turn = 1; turn <= 80; turn++) {
     s.turn = turn;
+    // 一回合走**两步**：真实对局里每个玩家回合开始都会走一步，
+    // 所以一轮下来是两步（见 field.ts：「一年 40 回合 = 80 步」）。
+    // 这里只走一步的话，温度会永远落后目标一大截，量出来的天气比实战更冷。
+    stepClimateField(s as never);
     stepClimateField(s as never);
     if (turn <= 40) continue;
+    // 只取季节中段：季内第 3~6 回合（0 基）。见上面那段注释。
+    const inSeason = (turn - 1) % 10;
+    if (inSeason < 3 || inSeason > 6) continue;
     const season = seasonOf(turn);
     const c = climateAt(s as never, CX, CY);
     tally[season].set(c, (tally[season].get(c) ?? 0) + 1);
