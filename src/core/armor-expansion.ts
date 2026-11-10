@@ -135,7 +135,7 @@ export const ARMOR_UNITS: UnitTypeDef[] = [
     maxHp: 34,
     range: 1,
     vision: 2,
-    incomeByTerrain: { hill: 66, forest: 36, city: 24, plain: 16 },
+    incomeByTerrain: { hill: 88, forest: 48, city: 32, plain: 21 },
   },
   {
     id: 'armor_agri',
@@ -150,7 +150,7 @@ export const ARMOR_UNITS: UnitTypeDef[] = [
     maxHp: 30,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 55, city: 36, forest: 20, hill: 16 },
+    incomeByTerrain: { plain: 84, city: 55, forest: 31, hill: 24 },
   },
 
   // ── 建造单位 ─────────────────────────────────────────────────────────
@@ -324,7 +324,7 @@ export const ARMOR8_UNITS: UnitTypeDef[] = [
     maxHp: 36,
     range: 1,
     vision: 2,
-    incomeByTerrain: { hill: 88, forest: 48, city: 32, plain: 22 },
+    incomeByTerrain: { hill: 120, forest: 65, city: 44, plain: 30 },
   },
   {
     id: 'armor_food8',
@@ -339,7 +339,7 @@ export const ARMOR8_UNITS: UnitTypeDef[] = [
     maxHp: 32,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 74, city: 48, forest: 27, hill: 22 },
+    incomeByTerrain: { plain: 116, city: 75, forest: 42, hill: 35 },
   },
 
   // ── 无人机（重装型，召唤专用） ────────────────────────────────────────

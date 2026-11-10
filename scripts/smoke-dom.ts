@@ -466,6 +466,7 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
       ghosts: [],
       rememberedTiles: new Map(),
       rememberedCities: new Map(),
+      terrainHidden: false,
     },
     {
       selectedId: null,
@@ -832,6 +833,76 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
+check('装配坞：每件装备写着数据与耗电，插槽与电力收支都看得见', () => {
+  /*
+   * 用户 2026-11-10 的诉求：装配坞以前每件只写"耗能 N"，装甲板/系统槽装了
+   * 什么效果全靠猜；插槽数量和电力收支也没有地方看。
+   *
+   * 这条钉的是"信息有没有出现在界面上"，不是"好不好看"：
+   *   · 每件候选装备的第二行 = 耗电 + 具体数据（护甲/移速/视野…）
+   *   · 属性卡与装配坞都写插槽用量（几/几）
+   *   · 电力块给出产能、已用、余量，以及"几座电站"
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 7, expansionIds: ['armor-era7'] }, 707);
+
+  // 找两块空地：一台素体 + 一座电站
+  const free = st.tiles
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.terrain === 'plain' && !t.cityId)
+    .map(({ i }) => ({ x: i % st.w, y: Math.floor(i / st.w) }))
+    .filter((p) => !st.units.some((u) => u.x === p.x && u.y === p.y));
+  assert.ok(free.length >= 2, '棋盘上得有两块空地');
+
+  st.units.push({
+    id: 'frame1', type: 'armor_anvil', owner: 'A',
+    x: free[0]!.x, y: free[0]!.y, hp: 175, kills: 0, moved: false, acted: false,
+  });
+  st.units.push({
+    id: 'plant1', type: 'armor_coal', owner: 'A',
+    x: free[1]!.x, y: free[1]!.y, hp: 70, kills: 0, moved: false, acted: false,
+  });
+  const frame = st.units.find((u) => u.id === 'frame1')!;
+
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: frame,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = (host.textContent ?? '').replace(/\s+/g, ' ');
+
+  // 1) 插槽：素体 5 格（主1 副1 甲2 统0 设1）
+  assert.ok(text.includes('插槽'), `属性卡/装配坞该有插槽一行：${text.slice(0, 200)}`);
+  assert.ok(text.includes('0/5'), '还没装东西时应该是 0/5');
+
+  // 2) 电力：产能 120（一座燃煤电站）、已用 20（素体自身耗电）、余量 100
+  assert.ok(text.includes('装配 · 电力'), '装配坞要有电力块');
+  assert.ok(text.includes('产能'), '要写产能');
+  assert.ok(/产能\s*120/.test(text), `产能该是 120：${text.match(/产能[^已]*/)?.[0] ?? ''}`);
+  assert.ok(/已用\s*20/.test(text), '已用该是 20（素体自身）');
+  assert.ok(/余量\s*100/.test(text), '余量该是 100');
+  assert.ok(text.includes('1 座电站'), '要写几座电站在发电');
+
+  // 3) 每件候选装备都要带"耗电 + 具体数据"
+  const rows = [...host.querySelectorAll('[data-act="mount"]')];
+  assert.ok(rows.length > 0, '该有可装的候选装备');
+  for (const row of rows) {
+    const t = (row.textContent ?? '').replace(/\s+/g, ' ');
+    assert.ok(t.includes('耗电'), `候选装备没写耗电：${t}`);
+    assert.ok(/耗电\s*\d+/.test(t), `耗电后面要跟数字：${t}`);
+  }
+  // 纯加法修正的模块（装甲板）必须把效果写出来，不能只有"耗能 6"
+  const plate = rows.find((r) => (r.textContent ?? '').includes('复合装甲'));
+  if (plate) {
+    const t = (plate.textContent ?? '').replace(/\s+/g, ' ');
+    assert.ok(/护甲\s*\+\d+|生命上限\s*\+\d+/.test(t), `装甲板要写出加多少：${t}`);
+  }
+  host.remove();
+});
+
 check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   // 雾里连地形都要走一遍才记得住，隔壁还剩多少钱更不该摆在 HUD 上——
   // 那等于免费告诉玩家"他还能不能再买一队兵"，照着想就是上帝视角。
@@ -863,8 +934,88 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
 });
 
 /**
- * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
+ * 雾里点一格：不能顺手把地形和敌情一起点出来。
  *
+ * 棋盘上画着雾、侧栏却把雾里的地形念出来（浓雾局里尤其荒谬），
+ * 或者把那一格的灵气来源写出来（"灵田 +15" 等于替你点出了对面建筑），
+ * 那这层雾就只是个视觉效果。两条边界：
+ *   · 连地形都遮的局（浓雾蔽野）→ 雾外只翻记忆，没记忆就写「未探明」；
+ *   · 地形公开的局 → 地形照写，但格子上的**活数据**（灵气、天气）只在视野内问。
+ */
+check('雾里点格子：地形和敌情都不该被点出来', () => {
+  const host = doc.createElement('div');
+  const paint = (st: ReturnType<typeof createMatch>, x: number, y: number) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: { x, y },
+    });
+  const xyOf = (st: ReturnType<typeof createMatch>, i: number) => ({
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+  });
+
+  // ── 连地形都遮的局 ──
+  const dark = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['blackout'] }, 4242);
+  const darkView = playerView(dark, 'A');
+  const seenDark = new Set(darkView.visible);
+  let cold = -1;
+  for (let i = 0; i < dark.w * dark.h; i++) {
+    if (!seenDark.has(i) && !darkView.rememberedTiles.has(i)) {
+      cold = i;
+      break;
+    }
+  }
+  assert.ok(cold >= 0, '总该有一格是没探索过的');
+  const coldPt = xyOf(dark, cold);
+  paint(dark, coldPt.x, coldPt.y);
+  const coldText = host.textContent ?? '';
+  assert.ok(coldText.includes('未探明'), `雾外没记忆的格该写「未探明」，实际：${coldText.slice(0, 80)}`);
+  assert.ok(!coldText.includes('进入消耗'), '「未探明」的格不许报进入消耗——那就等于报了地形');
+
+  // 记忆里的那一格：写记忆中的地形，并且明说是记的（可能已经变了）。
+  // 开局那一眼看到的格子此刻都还看得见，翻不到"记忆"，所以直接往账本上记一笔——
+  // 等价于"早先我从这一格走过"（浓雾局里这份账本就是 `refreshMemory` 写的）。
+  dark.memory.A.tiles = dark.memory.A.tiles ?? {};
+  dark.memory.A.tiles[cold] = 'forest';
+  assert.equal(
+    playerView(dark, 'A').rememberedTiles.get(cold),
+    'forest',
+    '前提：雾外那一格已经在记忆里',
+  );
+  paint(dark, coldPt.x, coldPt.y);
+  const memText = host.textContent ?? '';
+  assert.ok(memText.includes('森林'), `该按记忆报出地形，实际：${memText.slice(0, 80)}`);
+  assert.ok(memText.includes('记忆里的地形'), `翻记忆时要标出来，实际：${memText.slice(0, 80)}`);
+
+  // ── 地形公开的局：地形照写，但灵气这种活数据只在视野内 ──
+  const lit = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: ['cultivation'] }, 515);
+  const litView = playerView(lit, 'A');
+  const seenLit = new Set(litView.visible);
+  const far = [...Array(lit.w * lit.h).keys()].find((i) => !seenLit.has(i));
+  assert.ok(far !== undefined, '雾里总该有看不见的格');
+  const farPt = xyOf(lit, far!);
+  paint(lit, farPt.x, farPt.y);
+  assert.ok(
+    !(host.textContent ?? '').includes('灵气浓度'),
+    '雾外的格不该报灵气浓度——那行还带着"灵田 +15"的来源',
+  );
+
+  const near = litView.visible[0];
+  assert.ok(near !== undefined, '自己脚边总看得见');
+  const nearPt = xyOf(lit, near!);
+  paint(lit, nearPt.x, nearPt.y);
+  assert.ok(
+    (host.textContent ?? '').includes('灵气浓度'),
+    '看得见的格该照常写出灵气浓度',
+  );
+});
+
+/**
+ * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
  * 扩展给单位挂的操作（宗门大殿的「研发 / 遗弃」）以前只画在详情卡上，
  * 于是实战里点开宗门大殿只剩"招募弟子"，研发按钮根本不存在。
  * 这条用例按"点开一座产兵建筑"的方式渲染，把那条支路钉住。
@@ -6836,6 +6987,7 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     ghosts: [] as never[],
     rememberedTiles: new Map(),
     rememberedCities: new Map(),
+    terrainHidden: false,
   };
 
   const calls: string[] = [];

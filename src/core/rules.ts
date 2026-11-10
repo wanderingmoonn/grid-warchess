@@ -1439,6 +1439,9 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
     // 就凭空多出一次攻击，等于它自己偷偷多打了一刀。
     moved: true,
     acted: true,
+    // 出生回合：技能那条路（heroSkillsOf / doHeroSkill）拿它挡"刚上场就放大招"。
+    // 走位和攻击靠上面两个 true 就够了，技能不查它们，所以得单独记。
+    bornTurn: s.turn,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
     // 卵一落地就开始倒计时：写在这里而不是"第一次回合开始"，
     // 否则每颗卵都会比自己写的 `turns` 多待一个回合。
@@ -5367,6 +5370,9 @@ function doRecruit(
     // 新兵当回合不能行动，否则等于凭空多一次攻击
     moved: true,
     acted: true,
+    // 出生回合：技能那条路靠它挡"刚造出来就放大招"
+    // （走位和攻击看上面两个 true，技能不查它们，所以得单独记）
+    bornTurn: s.turn,
     ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
   });
 
@@ -5704,6 +5710,21 @@ export function heroSkillsOf(
       notReadyReason = '这一回合已经放过技能';
     }
 
+    /*
+     * 刚上场的单位这一回合不能放技能。
+     *
+     * 新单位由 `makeUnit` 写成 `moved: true, acted: true`，所以"不能走、不能打"
+     * 本来就是成立的；但技能这条路不查那两个字段，于是刚招出来的英雄
+     * 当回合就能放大招——等于一次招募买到"上场 + 一记技能"。
+     *
+     * 判据用自带的 `bornTurn`（详见 types.ts 那段），文案要和 `doHeroSkill`
+     * 里那句一字不差，否则又会出现"按钮亮着、点下去被拒"。
+     */
+    if (ready && u.bornTurn === s.turn) {
+      ready = false;
+      notReadyReason = '刚上场的单位这一回合还不能用技能';
+    }
+
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
     if (ready && SKILL_READY_CHECKS[k.id]) {
       const checkResult = SKILL_READY_CHECKS[k.id]!(s, u, abilityApi);
@@ -5953,9 +5974,11 @@ export function eggDropCells(
   return out;
 }
 
-// 界面：把"能落蛋、且砸得到人"的格子高亮出来（选点类技能的统一入口）
+// 界面：把"能落蛋"的格子高亮出来（选点类技能的统一入口）。
+// 2026-11-10 起不再筛"砸得到人"——点空地也能放蛋，高亮就得跟着放宽，
+// 否则玩家会遇到"这一格能用却没亮"的反向挫败。
 registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
-  eggDropCells(state, self, skill.radius ?? 9, skill.power ?? 1),
+  eggDropCells(state, self, skill.radius ?? 11, undefined, 'dragon-egg'),
 );
 
 /**
@@ -5983,38 +6006,43 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     return;
   }
   const foes = c.state.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
-  if (foes.length === 0) {
-    c.result.ok = false;
-    c.result.reason = '范围内没有敌人';
-    return;
-  }
 
-  // 能落蛋、且砸得到人的格子。玩家只能从这里面挑。
-  const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
-  if (legal.length === 0) {
+  /*
+   * 玩家能点的格子 = 射程内放得下蛋的格子，**不要求周围有敌人**（2026-11-10）。
+   *
+   * 以前这里把"砸得到人"当合法性的一部分，于是想往空地上放蛋（等两回合后
+   * 孵出一条龙、当筹码用）会被回一句"那一格周围没有敌人"。卵本身是战力，
+   * 不是只能当陨石——所以合法性只看"落得下"，伤害交给下面那一段自己算：
+   * 一个都没砸到就写"这一下没砸到人"。
+   */
+  const spots = eggDropCells(c.state, c.self, reach, undefined, eggType);
+  if (spots.length === 0) {
     c.result.ok = false;
-    c.result.reason = '没有能砸到敌人的落点';
+    c.result.reason = `陨卵只能落在 ${reach} 格内的空地上`;
     return;
   }
 
   let best: { x: number; y: number } | null = null;
   if (c.target) {
-    const hit = legal.find((p) => p.x === c.target!.x && p.y === c.target!.y);
+    const hit = spots.find((p) => p.x === c.target!.x && p.y === c.target!.y);
     if (!hit) {
       c.result.ok = false;
-      // 两种失败要分开说：射程外 / 那一格站不下 / 砸不到人
+      // 两种失败要分开说：射程外 / 那一格放不下
       const inReach =
         Math.max(Math.abs(c.target.x - c.self.x), Math.abs(c.target.y - c.self.y)) <= reach;
       c.result.reason = !inReach
         ? `陨卵只能落在 ${reach} 格内`
-        : !canStandAt(c.state, c.target.x, c.target.y, eggType)
-          ? '那一格放不下魔龙卵'
-          : '那一格周围没有敌人，砸不到人';
+        : '那一格放不下魔龙卵';
       return;
     }
     best = hit;
   } else {
-    // 自动挑（AI / 旧复盘）：从同一份 legal 里挑伤害最高的
+    /*
+     * 自动挑（AI / 旧复盘）：口径**故意不跟着放宽**——AI 只有当这一发能伤到人
+     * 才算"值得放"，而且老录像要能逐字重放（当年就是在"砸得到人"的格子里挑的）。
+     * 玩家手动点空地的自由不影响这条。
+     */
+    const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
     let bestScore = -1;
     for (const p of legal) {
       let score = 0;
@@ -6152,6 +6180,13 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 如果技能不允许连发，且这回合已经放过，就拦住
   if (!skill.multiCast && u.skillTurn === s.turn) {
     return { ok: false, reason: '这个单位这一回合已经放过技能了' };
+  }
+
+  // 刚上场的单位这一回合不能放技能（和 `heroSkillsOf` 里那条逐字对应）。
+  // 招募出来的英雄以前当回合就能放大招：一次花钱买到"上场 + 技能"，
+  // 而且对手算不出这笔账。
+  if (u.bornTurn === s.turn) {
+    return { ok: false, reason: '刚上场的单位这一回合还不能用技能' };
   }
 
   const cd = u.skillCd?.[skill.id] ?? 0;

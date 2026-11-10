@@ -1082,8 +1082,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 26,
     armor: 15,
     maxHp: 299,
-    range: 3,
-    vision: 9,
+    range: 4,
+    vision: 10,
     domain: 'water',
     // 2×2：占四格、四格都挡路、只在四格里挨一份伤害（见 rules 的 distBetweenUnits）。
     // 这是引擎里"大型单位"的唯一表达方式，也是城市与兵营在用的那套。
@@ -1119,8 +1119,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 85,
     armor: 17,
     maxHp: 175,
-    range: 6,
-    vision: 6,
+    range: 7,
+    vision: 7,
     domain: 'water',
     abilities: ['armor-pierce', 'nv-shore-bombard'],
     // 基洛夫级那种核动力大巡洋舰：**它接的是战列舰的位置，但不是战列舰**。
@@ -1139,8 +1139,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 72,
     armor: 15,
     maxHp: 150,
-    range: 6,
-    vision: 7,
+    range: 7,
+    vision: 8,
     domain: 'water',
     abilities: ['nv-aa-cover', 'armor-pierce'],
     // 舰队之伞：视野 7 比超巡好，区域防空对空中层多打 12 点。
@@ -1158,8 +1158,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 92,
     armor: 9,
     maxHp: 100,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
     domain: 'water',
     abilities: ['nv-submerge'],
     // 水下刺客：迷雾局里贴脸才现形，先手不被反击。
@@ -1178,8 +1178,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 74,
     armor: 7,
     maxHp: 72,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     domain: 'water',
     abilities: ['nv-submerge'],
     /*
@@ -1205,8 +1205,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 22,
     armor: 12,
     maxHp: 165,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     domain: 'water',
     // 两种装法并存：舱里的陆战队，甲板上的直升机。
     carry: { hold: { max: 4 }, deck: { max: 2, launchRange: 1 } },
@@ -1228,8 +1228,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 58,
     armor: 5,
     maxHp: 58,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
     domain: 'water',
     // 空潜快里的"快"：400 金买不到的东西它都有——射程 4、移 7、58 攻。
     // 代价是甲 5、血 58：挨一发战列舰的溅射就没了。
@@ -1246,8 +1246,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 56,
     armor: 10,
     maxHp: 100,
-    range: 5,
-    vision: 5,
+    range: 6,
+    vision: 6,
     domain: 'water',
     abilities: ['armor-pierce'],
     /*
@@ -1272,8 +1272,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 26,
     armor: 2,
     maxHp: 26,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     domain: 'water',
     /*
      * 无人水面艇（USV）：不载人，所以敢冲、敢死、敢贴近。

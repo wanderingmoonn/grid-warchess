@@ -104,6 +104,15 @@ export interface ClimateTuning {
    * 这个数和"蒸发"是一对：一块地的过饱和量会稳定在 `蒸发 / rainDrain`，
    * 所以水面（蒸发强）能冲到十几点、平地只有几点——**大雨是水边的特权**。
    */
+  /**
+   * 起风暴的最低水温（0.1°C），按**离岸格数**分三档。
+   *
+   * 风暴要开阔水面才刮得起来，但判定不能用 `coastClassOf` 的"深海"档——
+   * 它要求方圆 7 格没有陆地，而 16~32 格的小地图上**一格都满足不了**，
+   * 整片海都会被判成"沿岸"，于是"只在外海起风暴"就等于"永远不起风暴"。
+   * 离岸距离是连续的，大小图都能分出层次。
+   */
+  stormTemp: { coast: number; near: number; open: number };
   heavyMargin: number;
   /** 过饱和的水汽每步凝结掉多少比例（云、露、雨都算） */
   rainDrain: number;
@@ -161,6 +170,7 @@ export const TUNING: ClimateTuning = {
   wetDiffuse: 0.08,
   satBase: 48,
   satPerTemp: 90,
+  stormTemp: { coast: 265, near: 195, open: 120 },
   heavyMargin: 5,
   rainDrain: 0.4,
   rainMinDrain: 2,
@@ -190,6 +200,28 @@ export const WET_MAX = 100;
 
 function isWaterTerrain(t: Terrain | undefined): boolean {
   return t === 'water' || t === 'deep' || t === 'shallow' || t === 'bridge';
+}
+
+/**
+ * 这一格离最近的陆地有几格（切比雪夫距离，只看边圈）。水格用它判"够不够外海"。
+ *
+ * 为什么不用 `coastClassOf` 的 deep 档：那个要求方圆 7 格没有陆地，
+ * 而小地图上整片海都能在 7 格内摸到岸——于是每一格都是"沿岸"，
+ * 分级形同虚设。距离是连续的，16 格和 64 格的图上都能分出"贴岸 / 近海 / 外海"。
+ */
+export function distToLandOf(s: GameState, x: number, y: number): number {
+  for (let r = 1; r <= 7; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        // 只看这一圈的边：内圈上一轮已经查过了
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const t = tileAt(s, x + dx, y + dy);
+        if (!t) continue;
+        if (!isWaterTerrain(t.terrain)) return r;
+      }
+    }
+  }
+  return 8;
 }
 
 function clampTemp(v: number): number {
@@ -310,6 +342,8 @@ export function classifyClimate(
   precip: Precip,
   water: boolean,
   terrain?: Terrain,
+  /** 离岸格数：水面用它决定"刮不刮得起风暴"；陆地不传 */
+  distToLand?: number,
 ): Climate {
   const sat = satOf(temp);
   const r = sat > 0 ? wet / sat : 0;
@@ -325,7 +359,12 @@ export function classifyClimate(
     if (temp <= 45) return 'driftIce';
     if (precip === 'heavy') {
       if (temp >= TUNING.hotAt) return 'thunder';
-      return temp >= 120 ? 'storm' : 'overcast';
+      // 越往外海越容易起风暴：贴岸（1 格）要很暖才刮，外海（4 格以上）暖一点就刮。
+      // 沿岸是玩家发育的地方，不该常年被风暴堵着（实机反馈）。
+      const d = distToLand ?? 1;
+      const floor =
+        d <= 1 ? TUNING.stormTemp.coast : d <= 3 ? TUNING.stormTemp.near : TUNING.stormTemp.open;
+      return temp >= floor ? 'storm' : 'overcast';
     }
     if (precip === 'light') return 'overcast';
     if (r > fogLine) return 'fog';
@@ -374,7 +413,14 @@ export function climateAt(s: GameState, x: number, y: number): Climate {
   if (tile.terrain === 'city') return 'mild';
   const temp = tempAt(s, x, y);
   const wet = wetAt(s, x, y);
-  return classifyClimate(temp, wet, precipOf(wet, satOf(temp)), isWaterTerrain(tile.terrain), tile.terrain);
+  return classifyClimate(
+    temp,
+    wet,
+    precipOf(wet, satOf(temp)),
+    isWaterTerrain(tile.terrain),
+    tile.terrain,
+    isWaterTerrain(tile.terrain) ? distToLandOf(s, x, y) : undefined,
+  );
 }
 
 /** 某个单位脚下是什么气候 */

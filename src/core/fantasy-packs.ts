@@ -2631,8 +2631,8 @@ const HERO_UNITS: UnitTypeDef[] = [
     atk: 46,
     armor: 11,
     maxHp: 140,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     magicAtk: 12,
     magicRes: 6,
     element: 'light',
@@ -2669,16 +2669,19 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '邪',
     era: 6,
     category: 'combat',
-    cost: 640,
+    // 700：2026-11-09 由 640 上调。它是全场最贵的英雄，且刚吃到"信息化射程 +1"
+    // （4 → 5）与陨卵的选点自由——两条叠起来，640 那个价已经压不住它。
+    cost: 700,
     // 2 速：它是阵地单位，不是追人的龙。想让它上场，阵线得围着它摆。
     move: 2,
     atk: 40,
     armor: 8,
     maxHp: 190,
-    range: 3,
-    // 视野 9：它落在哪儿，方圆九格就该是它的疆域——陨卵的射程也是 9，
+    range: 4,
+    // 视野 11：它落在哪儿，方圆十一格就该是它的疆域——陨卵的射程也是 11，
     // 两者对齐，玩家看到"能砸到的地方"和"能看见的地方"是同一片。
-    vision: 9,
+    // 2026-11-10：两边一起从 9 提到 11（用户点单），对齐关系保持不变。
+    vision: 11,
     magicAtk: 30,
     magicRes: 12,
     element: 'dark',
@@ -2687,7 +2690,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     flight: true,
     layer: 'air',
     hero: true,
-    unlockCost: 300,
+    // 300 → 350（2026-11-10）：上一轮刚给它加过射程和陨卵的选点自由，
+    // 解锁门槛跟着挪一档，免得它成为"最便宜的大杀器"。
+    unlockCost: 350,
     requiresPack: 'pack-contemporary',
     weak: { light: 2 },
     resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
@@ -2696,13 +2701,15 @@ const HERO_UNITS: UnitTypeDef[] = [
         id: 'dragon-egg',
         name: '陨卵',
         summary:
-          '在 9 格内**自己挑一格**落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
+          '在 11 格内**自己挑一格**落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
         effect: 'dragon-egg',
-        // 落点由玩家点，不再由引擎替他想。地图上高亮的格子＝"能落蛋、且砸得到人"，
-        // 点空地会被拒绝（这条技能的身份是"陨石砸人"，不是"随地放蛋"）。
+        // 落点由玩家点，不再由引擎替他想。高亮的格子＝射程内放得下蛋的格子；
+        // 2026-11-10 起**点空地也算合法**——卵本身是两回合后的一条龙，
+        // 不只是"砸人那一下"，所以不再要求落点周围有敌人。
         targeting: 'point',
         cooldown: 3,
-        radius: 9,
+        // 9 → 11（2026-11-10）：和视野同步，砸得到的地方＝看得见的地方
+        radius: 11,
         power: 1,
       },
     ],
@@ -2742,11 +2749,13 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 300,
     move: 5,
-    atk: 44,
+    // 44 → 34（2026-11-10）：它 move 5 + 飞行 + 射程 3，物攻再压邪龙王一头
+    // 就变成"孵出来就是第二个英雄"。给它留魔法段（22）和机动，砍物理这 10 点。
+    atk: 34,
     armor: 10,
     maxHp: 150,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     magicAtk: 22,
     magicRes: 8,
     element: 'dark',

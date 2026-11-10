@@ -277,7 +277,7 @@ const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
     maxHp: 26,
     range: 1,
     vision: 2,
-    incomeByTerrain: { hill: 36, forest: 20, plain: 8, city: 10 },
+    incomeByTerrain: { hill: 40, forest: 22, plain: 9, city: 11 },
   },
   {
     id: 'materials',
@@ -293,7 +293,7 @@ const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     // 现代建材不只从山里来：城郊的拆迁料、预制件也算，所以 city 一档给得不低
-    incomeByTerrain: { hill: 48, forest: 26, city: 18, plain: 12 },
+    incomeByTerrain: { hill: 58, forest: 31, city: 22, plain: 14 },
   },
 ];
 

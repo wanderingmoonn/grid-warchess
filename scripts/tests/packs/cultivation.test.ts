@@ -5,6 +5,7 @@ import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSki
 import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
+import { nextUpgradeCost } from '../../../src/core/config.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
 // 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
 import type { GameState } from '../../../src/core/types.ts';
@@ -3215,6 +3216,18 @@ export function run() {
     assert.ok(spirit, '应该化灵了');
     return { s: r.state, spirit: spirit! };
   };
+
+  test('修士造价：升到下一时代花费的一半', () => {
+    // 一条经济刻度，五支修士共用：不跟着这条例走，就会出现"2 代剑修比
+    // 骑士贵三倍"这种没人算得清的价格。
+    const s = fresh({ expansionIds: ['cultivation'] });
+    for (const id of ['qi-cultivator', 'sword-cultivator', 'body-cultivator', 'blood-cultivator', 'soul-cultivator']) {
+      const def = s.unitTypes[id];
+      assert.ok(def, `${id} 要在本局兵种表里`);
+      const want = (nextUpgradeCost(def.era) ?? 0) / 2;
+      assert.equal(def.cost, want, `${id}（${def.era} 代）造价该是 ${want}`);
+    }
+  });
 
   test('魂修：3 代修士，吃修炼也吃灵力', () => {
     const s = fresh({ expansionIds: ['cultivation'] });

@@ -695,6 +695,125 @@ export function energyReport(s: GameState, player: PlayerId): EnergyReport {
   return { supply, demand, headroom: supply - demand };
 }
 
+/**
+ * 一件装备**具体在干什么**，压成一行字给面板用。
+ *
+ * 为什么需要它：装配坞以前每件只写「耗能 N」，武器再补一句伤害/射程，
+ * **装甲板、系统槽那些纯加法修正全部隐身**——玩家看到"复合装甲 · 耗能 6"，
+ * 不知道那是 +4 甲还是 +2 甲 +1 视野，只能去翻规则书。
+ *
+ * 这里是纯函数、只读 `ModuleDef`：面板、AI 复盘卡、规则书都能调，口径只有一处。
+ * 顺序按"玩家最关心"排：伤害 → 射程 → 命中相关 → 防御 → 机动 → 其他。
+ */
+/**
+ * 光环类的模块（集群协议、反导穹顶）以前在面板上**一个字都不写**——
+ * 它们没有 weapon/armor 这些字段，效果全在 `aura` 里，于是装配坞只显示
+ * "耗能 8"，玩家得去翻规则书才知道那是"半径 2 内友军攻击 +6"。
+ *
+ * 这里把 `AuraSpec` 翻成人话。只翻模块会用到的那些字段（见 MODULES），
+ * 兵种能力那条路仍走 auras.ts 自己的文案。
+ */
+function auraSpecText(a: AuraSpec): string {
+  const bits: string[] = [];
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  if (a.allyAtk) bits.push(`友军攻击 +${a.allyAtk}`);
+  if (a.allyAtkPct) bits.push(`友军攻击 +${pct(a.allyAtkPct)}`);
+  if (a.allyArmor) bits.push(`友军护甲 +${a.allyArmor}`);
+  if (a.allyArmorPct) bits.push(`友军护甲 +${pct(a.allyArmorPct)}`);
+  if (a.allyMove) bits.push(`友军移速 +${a.allyMove}`);
+  if (a.foeAtk) bits.push(`敌军攻击 −${a.foeAtk}`);
+  if (a.foeAtkPct) bits.push(`敌军攻击 −${pct(a.foeAtkPct)}`);
+  if (a.foeArmor) bits.push(`敌军护甲 −${a.foeArmor}`);
+  return bits.length > 0 ? `光环（半径 ${a.radius}）：${bits.join(' · ')}` : '';
+}
+
+export function moduleSpecText(m: ModuleDef): string {
+  const parts: string[] = [];
+  const sign = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+
+  const w = m.weapon;
+  if (w) {
+    parts.push(`伤害 ${w.damage}`);
+    parts.push(`射程 ${w.range}`);
+    if ((w.shots ?? 1) > 1) parts.push(`${w.shots} 连发`);
+    if ((w.burst ?? 1) > 1) parts.push(`每次 ${w.burst} 段`);
+    if (w.splash) parts.push(`溅射 ${w.splash}`);
+    if (w.pierce) parts.push('破甲');
+    if (w.targets === 'air') parts.push('只打空中');
+    else if (w.targets === 'ground') parts.push('只打地面');
+    if (w.vsBuilding && w.vsBuilding !== 1) parts.push(`对建筑 ×${w.vsBuilding}`);
+    if (w.status) parts.push(`命中叠 ${w.status.stacks} 层减速`);
+    if (w.reload) parts.push(`打完冷却 ${w.reload} 回合`);
+  }
+
+  // 纯加法修正（装甲板 / 系统槽的主力）
+  if (m.armor) parts.push(`护甲 ${sign(m.armor)}`);
+  if (m.extraHp) parts.push(`生命上限 ${sign(m.extraHp)}`);
+  if (m.move) parts.push(`移速 ${sign(m.move)}`);
+  if (m.moveIdle) parts.push(`未出手时移速 ${sign(m.moveIdle)}`);
+  if (m.vision) parts.push(`视野 ${sign(m.vision)}`);
+  if (m.rangeBonus) parts.push(`射程 ${sign(m.rangeBonus)}`);
+  if (m.power) parts.push(`供电 ${sign(m.power)}`);
+  if (m.steady) parts.push('移动后开火不吃减伤');
+  if (m.stepAsOne) parts.push('森林丘陵按 1 步');
+  if (m.layerAir) parts.push('装上后升空');
+  if (m.ciws) parts.push(`远程伤害 −${m.ciws}`);
+  if (m.splashCut) parts.push(`溅射伤害 −${Math.round(m.splashCut * 100)}%`);
+  if (m.vector) parts.push(`移动后远程伤害 −${m.vector}`);
+  if (m.summon) parts.push(`每 ${m.summon.every} 回合召唤，最多 ${m.summon.max} 个`);
+  if (m.aura) {
+    const aura = auraSpecText(m.aura);
+    if (aura) parts.push(aura);
+  }
+  if (m.charges) parts.push(`${m.charges} 次使用`);
+  if (m.note) parts.push(m.note);
+
+  return parts.length > 0 ? parts.join(' · ') : '无属性修正';
+}
+
+/**
+ * 电力的**分项**账：电站发多少、装备发多少、谁在吃。
+ *
+ * `energyReport` 只给三个总数（供给/需求/余量），够判"能不能装"，
+ * 但玩家问"我这个余量是哪来的"时它答不上来。这里把发电拆成
+ * 「发电厂」与「装备自带」两笔，面板据此画收支条。
+ */
+export function energyBreakdown(s: GameState, player: PlayerId): {
+  /** 发电厂（armorPower）发的电 */
+  plantPower: number;
+  /** 装备自带（超载协议那种 power 字段） */
+  modulePower: number;
+  supply: number;
+  demand: number;
+  headroom: number;
+  /** 几座发电厂 */
+  plants: number;
+  /** 几台装甲在吃电 */
+  frames: number;
+} {
+  let plantPower = 0;
+  let modulePower = 0;
+  let demand = 0;
+  let plants = 0;
+  let frames = 0;
+  for (const u of s.units) {
+    if (u.owner !== player || u.hp <= 0) continue;
+    const def = s.unitTypes[u.type];
+    if (!def) continue;
+    if (def.armorPower) {
+      plantPower += def.armorPower;
+      plants += 1;
+    }
+    if (def.armorFrame) {
+      demand += unitDraw(s, u);
+      frames += 1;
+      for (const id of modulesOf(u)) modulePower += MODULES[id]?.power ?? 0;
+    }
+  }
+  const supply = plantPower + modulePower;
+  return { plantPower, modulePower, supply, demand, headroom: supply - demand, plants, frames };
+}
+
 /** 这台装甲的总耗能（素体基础 + 已装模块） */
 export function unitDraw(s: GameState, u: Unit): number {
   const def = s.unitTypes[u.type];

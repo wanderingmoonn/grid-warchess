@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { playerView } from './core/fog.ts';
+import { isBlackedOut, onlyVisibleCells, playerView } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -157,7 +157,7 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
-import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
@@ -366,15 +366,52 @@ function syncTopbarBadges(): void {
     .join('');
 }
 
-/** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
-function computeBoardView(): Map<number, string> | undefined {
+/**
+ * 浓雾：这一格此刻看不见（棋盘上画成 `.tile.unknown` 的那种黑格）。
+ *
+ * 只在"开了雾 + 勾了「浓雾蔽野」"这一局里成立。上帝模式的 `viewNow()` 本来就是
+ * 全图（`playerView` 的第三个参数），所以自动不会命中。
+ *
+ * 复盘与观战位单独放行：这两条路的棋盘就是 `playerView(..., true)` 画的，
+ * 满屏没有一格是黑的——在这里拦，只会让"看完这局到底发生了什么"变成看一半。
+ */
+function blackedOutAt(coords: { x: number; y: number } | null | undefined): boolean {
+  if (!coords) return false;
+  if (replay !== null || spectating()) return false;
+  // 判据收在 core/fog：棋盘怎么画、这里怎么判，用的是同一个 visibleTilesOf
+  return isBlackedOut(state, me(), coords.x, coords.y);
+}
+
+/**
+ * 黑格上"看一眼"的统一回应：说一句话就返回，绝不落到任何属性卡。
+ *
+ * 为什么值得单独一个函数：点击流程里"只看不操作"的入口有五处
+ * （点敌方单位、观战位、轮不到我/指挥官、点空地、复盘），
+ * 一处漏掉就等于那一片黑雾白送侦察。收成一个判断，漏了容易发现。
+ */
+function refuseLook(coords: { x: number; y: number } | null | undefined): boolean {
+  if (!blackedOutAt(coords)) return false;
+  toast('浓雾里看不清那儿');
+  return true;
+}
+
+/**
+ * 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined。
+ *
+ * `visible` 是这一帧的视野：视图染色必须过一遍 `onlyVisibleCells`。
+ * 天气、灵气这些场都是**按全图算的**（存在各自的 `Tile.custom` 里），
+ * 不裁的话，看视图就等于开了一张全图透视——对面城市在哪、附近是山是林，
+ * 一眼就能读出来。遮蔽放在核心而不是各个扩展里，是为了只有一个地方能漏。
+ */
+function computeBoardView(visible: readonly number[]): Map<number, string> | undefined {
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
   const cells = def?.cells?.({ state, viewer: me() });
   if (!cells || cells.length === 0) return undefined;
+
   const out = new Map<number, string>();
-  for (const c of cells) out.set(c.y * state.w + c.x, c.color);
+  for (const c of onlyVisibleCells(state, visible, cells)) out.set(c.y * state.w + c.x, c.color);
   return out;
 }
 let selectedId: string | null = null;
@@ -1377,8 +1414,8 @@ function render(): void {
     placeable: computePlaceable(),
     threat,
     heat,
-    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值。
-    boardView: computeBoardView(),
+    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
+    boardView: computeBoardView(view.visible),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,
@@ -1771,14 +1808,26 @@ function refreshSelection(): void {
        */
       if (pendingSkill.targeting === 'point') {
         /*
-         * 选点型也要先把**基础范围**点亮。
+         * 先点亮**可落点的范围圈**。
          *
-         * 以前这里直接 return，于是"射程圈"只有鼠标扫过去才出现——第一次玩的
-         * 人会以为这个技能没有范围，或者以为它坏了。现在先用"落点 = 自己脚下"
-         * 问一次预览器：掌心雷那种"以自己为圆心的射程圈"立刻就有了；
-         * 传送阵的预览器在落点=自己时返回空（原地传送没有意义），保持不亮。
+         * 两条来源，谁有就用谁：
+         *   1. 技能登记过"合法落点"（`SKILL_TARGET_CELLS`，陨卵就是这种）——
+         *      直接把它给的那一片点亮。这是玩家判断"9 格边界在哪"的唯一线索。
+         *      2026-11-09 我合 main.ts 时以为这张表没人读，整段删了，
+         *      结果陨卵在界面上没有射程圈；这次连"点空地也能放"一起补回来。
+         *   2. 没登记的（掌心雷、传送阵这类）——拿"落点 = 自己脚下"问一次预览器：
+         *      以自己为圆心的射程圈立刻就有；传送阵在落点=自己时返回空，保持不亮。
+         *
+         * 点亮只影响观感：选点型的点击判定不查 `aimTiles`（见 skill-aim.ts），
+         * 所以"圈外的格子点了会失败"这件事仍然由规则层给说法。
          */
-        if (previewer && caster) {
+        const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
+        const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
+        if (cellsOf && skillDef) {
+          for (const p of cellsOf({ state, self: caster, skill: skillDef })) {
+            aimTiles.push(idx(state, p.x, p.y));
+          }
+        } else if (previewer && caster) {
           skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
         }
         return;
@@ -2942,6 +2991,8 @@ function canRepeatSkill(unitId: string, skillId: string): boolean {
  */
 function inspectAt(coords: { x: number; y: number } | null): void {
   if (!coords) return;
+  // 浓雾里的黑格：连"看一眼"都不给（这条覆盖 AI 行动中、轮不到我、指挥官模式三条路）
+  if (refuseLook(coords)) return;
 
   const id = pickUnitId(coords, false);
   const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
@@ -2975,6 +3026,7 @@ function onBoardClick(e: Event): void {
   if (replay) {
     const at = coordsFromEvent(e);
     if (!at) return;
+    if (refuseLook(at)) return;
     const here = stackAt(at.x, at.y);
     if (here.length > 0) {
       selectedId = here[here.length - 1]!.id;
@@ -3189,6 +3241,16 @@ function onBoardClick(e: Event): void {
     toast(moveRefusal(coords));
     return;
   }
+
+  /*
+   * 浓雾：黑格上不做任何"查看"。
+   *
+   * 位置很讲究——放在函数最上面会连**动作**一起拦掉（下水点、施法落点、
+   * 强制移动、过桥都有各自的分支）；放在这里，上面那些动作分支已经走完，
+   * 往下全是"看一眼"：点敌方单位、点城、点空地。
+   * 黑格本来就不可能出现在 `reach` / `targets` 里，所以拦在这里不会误伤走子。
+   */
+  if (refuseLook(coords)) return;
 
   const clickedUnitId = pickUnitId(coords, wantAttack);
 

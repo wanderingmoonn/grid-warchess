@@ -14,6 +14,7 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
+import { MODULES, moduleSpecText } from '../src/core/armor.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { buildListOf } from '../src/core/build-list.ts';
@@ -25,6 +26,7 @@ import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansi
 import {
   AGING_DEATH_AGE,
   EXP_GROWTH_FLAT,
+  LOW_RANK_GROWTH,
   LIFESPAN_BASE,
   LIFESPAN_PER_RANK,
   MAX_RANK,
@@ -2334,6 +2336,9 @@ const SMALL_NOTES: Record<string, string> = {
         <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
         <li><b>对面的钱袋也看不见了</b>：HUD 上对方金币只显示成一个「?」。这一条和"地形要侦察"是一回事——
           知道对面还剩多少钱，等于知道他还能不能再买一队兵，那是免费的战略情报。</li>
+        <li><b>点雾里的格子也问不出东西</b>：侧栏只写「未探明」；
+          走过的地方按<b>记忆里的地形</b>显示（会标出来，因为对面可能已经在那儿架了桥）。
+          天气、灵气浓度这类<b>活数据</b>一律不报——不然点一圈就等于把对面读了一遍。</li>
       </ul>`,
   'last-stand': `<p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
         会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>`,
@@ -2586,6 +2591,73 @@ function packsOverview(packs: readonly Exp[]): string {
     </table>`;
 }
 
+/**
+ * 装甲时代 / 聚变时代的**装备表**。
+ *
+ * 用户 2026-11-10 的反馈：装配坞里能看全了，但开局前想查"速射炮几伤害、
+ * 什么装甲板最划算"还得先开一局。规则书缺这张表。
+ *
+ * 数据全部来自 `MODULES` + `moduleSpecText`（和装配坞同一份文字），
+ * 所以改数值只改一处，书和界面一起跟着变。
+ *
+ * 槽位分组而不是按时代拆：模块本身**不按时代上锁**（`canMount` 只看槽位、
+ * 素体白黑名单、地面/空中），拿了 7 代素体就能装 8 代的模块。按时代拆表
+ * 反而会让人以为"这个模块要 8 代才能装"。
+ */
+function armorModuleSection(): string {
+  const SLOT_TITLE: Array<[string, string]> = [
+    ['main', '主武器'],
+    ['sub', '副武器'],
+    ['plate', '装甲板'],
+    ['system', '系统'],
+    ['device', '设备'],
+  ];
+  const tables = SLOT_TITLE.map(([slot, title]) => {
+    const rows = Object.values(MODULES)
+      .filter((m) => m.slot === slot)
+      .sort((a, b) => a.cost - b.cost);
+    if (rows.length === 0) return '';
+    const body = rows
+      .map(
+        (m) => `
+      <tr data-mod="${esc(m.id)}">
+        <td class="name">${esc(m.name)}</td>
+        <td class="num">${m.cost}</td>
+        <td class="num">${m.draw}</td>
+        <td class="traits">${esc(moduleSpecText(m))}</td>
+      </tr>`,
+      )
+      .join('');
+    return `
+    <h4>${title}（${rows.length} 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+  }).join('');
+  if (!tables) return '';
+
+  const deviceRows = Object.values(MODULES).filter((m) => m.slot === 'device');
+  const maxDraw = Math.max(0, ...Object.values(MODULES).map((m) => m.draw));
+
+  return `
+    <section id="pack-mods">
+      <h2><span class="sec-num">03</span>装备表</h2>
+      <p>素体本身不会打人（只有撞击），战力全在<b>装了什么</b>上。装配要贴着<b>装配坞</b>、
+        花掉它整个回合；拆卸不花回合、退一半金币。同一格槽位装满了就装不进去，
+        素体面板和装配坞里都写着"已用 / 总数"。</p>
+      <p><b>电是硬约束。</b>每台素体自己就有基础耗电，每件模块再叠一笔（下表"耗电"列，
+        最大 ${maxDraw} 点）。发电厂是唯一来源（另有「超载协议」自带额度，代价是定期停机）。
+        需求超过供给时，从最后装上去的那件开始断电——所以别在过载边缘追求"再多一件"，
+        装配坞的电力条会先变红。</p>
+      <p>模块<b>不按时代上锁</b>：拿着 7 代素体也能装 8 代的模块，
+        只要槽位、素体白名单、地面/空中对得上。下表按槽位分组，就是这个原因。</p>
+      ${tables}
+      ${deviceRows.length ? `<p class="era-meta">设备（${deviceRows.length} 件）要用掉装配坞当回合的
+        "整备"名额，效果走地图上的落点选择，不在装配的那一刻结算。</p>` : ''}
+    </section>`;
+}
+
 /** 单个大包一本（城市工坊、季节这类不归组的） */
 function packBook(e: Exp): Book {
   resetTerms();
@@ -2595,10 +2667,13 @@ function packBook(e: Exp): Book {
     .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
     .join('、');
 
+  // 装甲两包多一节装备表：装配坞里能看，但开局前查数值也得有地方
+  const armorMods = e.id.startsWith('armor-') ? armorModuleSection() : '';
   const nav = `
     <a href="#pack-intro">1. 这个包是什么</a>
     <a href="#pack-units">2. 兵种表</a>
-    <a href="#pack-terms">3. 机制词条</a>
+    ${armorMods ? '<a href="#pack-mods">3. 装备表</a>' : ''}
+    <a href="#pack-terms">${armorMods ? '4' : '3'}. 机制词条</a>
   `;
 
   const body = `
@@ -2622,8 +2697,10 @@ function packBook(e: Exp): Book {
       ${units.length ? mergedTable([e], 'era', false) : '<p class="era-meta">这个包不带兵种，只改规则——表就不用列了。</p>'}
     </section>
 
+    ${armorMods}
+
     <section id="pack-terms">
-      <h2><span class="sec-num">03</span>机制词条</h2>
+      <h2><span class="sec-num">${armorMods ? '04' : '03'}</span>机制词条</h2>
       <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
       ${termTable(takeTerms())}
     </section>
@@ -2783,7 +2860,14 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点，<b>0~2 期另有起步加成
+          +${LOW_RANK_GROWTH[0]} / +${LOW_RANK_GROWTH[1]} / +${LOW_RANK_GROWTH[2]} 点</b>。
+          剑修：上面那个数 ÷ 2（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <div style="margin-top:6px;color:#6b6459;font-size:13px">
+            起步加成只给 0~2 期：修士的成长是"前期慢、后期陡"，不加成的话
+            从 0 期练到 3 期要三十多个回合，而那时候本体的科技早换两代了。
+            但它<b>不动天花板</b>——纯打坐仍然到 5 期封顶，再往上必须靠打仗续命。
+          </div>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
@@ -3020,13 +3104,15 @@ function cultivationRules(): string {
           也就是说，把低阶弟子扔在荒地里，他的灵力是<b>存不住</b>的。</li>
         <li><b>拆掉源不会瞬间清零</b>：浓度只是不再补充，按扩散和损耗慢慢退回去。
           灵矿被拆了，它抽干的那片地也要过一阵才缓过来。</li>
-        <li><b>看全图</b>：顶栏那个「灵气」按钮——<b>悬停</b>就在棋盘上铺一层
+        <li><b>看视野内的浓度</b>：顶栏那个「灵气」按钮——<b>悬停</b>就在棋盘上铺一层
           五档绿（越深越浓），<b>移开自动消失</b>；<b>点一下钉住</b>，这时移开也留着，
-          再点一下取消。染色是<b>全图</b>的——灵气是天地之气，不是谁藏起来的底牌
-          （丹药那种才需要藏）。</li>
+          再点一下取消。染色<b>只铺在自己看得见的格子上</b>——
+          灵气场是按整张图算的（对面一座灵田，四邻都会变浓），
+          所以全图摊开就等于白送一张敌方建筑分布图。迷雾里留白，看不清才正常。</li>
       </ul>
-      <p>在哪看：点一个空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
-        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。</p>
+      <p>在哪看：点一个<b>看得见的</b>空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
+        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。
+        雾里的格子不报这行——浓度是活数据，报出来就等于替你点了对面的灵田。</p>
 
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
