@@ -132,6 +132,10 @@ export const CONFIG = {
     marsh: 0,
     // 沙丘：沙脊上目标明显
     dune: 1,
+    // 月壤：开阔、没有掩护
+    regolith: 0,
+    // 环形山：坑缘的碎石能挡一下
+    crater: 2,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -154,6 +158,10 @@ export const CONFIG = {
     deep: 99,
     marsh: 2,
     dune: 2,
+    // 月壤：松但平，正常走
+    regolith: 1,
+    // 环形山：爬坑缘费劲
+    crater: 2,
   } as Record<Terrain, number>,
 
   /**
@@ -177,6 +185,8 @@ export const CONFIG = {
     dune: '沙丘',
     shallow: '浅流',
     deep: '深水',
+    regolith: '月壤',
+    crater: '环形山',
   } as Record<Terrain, string>,
 };
 

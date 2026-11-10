@@ -79,6 +79,7 @@ import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, hasBoard } from './core/board.ts';
+import { createMoonBoard } from './core/space/moon.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -1895,7 +1896,7 @@ function syncBoardList(view: PlayerView): void {
   // 调试脚手架：第四步接入真正的月球后删掉
   const debug =
     godMode() && !replay
-      ? `<button class="bl-add" data-act="bl-add" title="开发用：造一张 9×9 的空图">＋ 调试图</button>`
+      ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
       : '';
 
   boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${debug}</div>`;
@@ -1947,31 +1948,23 @@ function switchBoard(id: BoardId): void {
 }
 
 /**
- * 开发用的第二张图：9×9 的空图，放几种地形看切图效果。
+ * 上帝模式里的「＋ 月球」：按当前的玩法生成真正的月球图。
  *
- * **这是脚手架**，不是玩法：第四步会把真正的月球图接进来。
- * 只在上帝国模式里出现，正式对局里一行都看不到。
+ * 正式入口在「太空时代」扩展里（第 5 步接），这里只是提前留一个能看效果的按钮：
+ * 尺寸按 `moonSizeFor(state.w)` 跟着地球缩，地形是月壤 + 环形山。
  */
-function addDebugBoard(): void {
+function addMoonBoard(): void {
   if (!godMode() || replay) return;
-  const n = Object.keys(state.boards ?? {}).length + 1;
-  const id = `debug-${n}`;
-  const w = 9;
-  const h = 9;
-  const tiles = Array.from({ length: w * h }, (_, i) => {
-    const x = i % w;
-    const y = Math.floor(i / w);
-    let terrain: Terrain = 'plain';
-    if ((x === 2 || x === 6) && y >= 2 && y <= 6) terrain = 'forest';
-    if (y === 4 && x >= 3 && x <= 7) terrain = 'hill';
-    if (x === 4 && y === 2) terrain = 'water';
-    return { terrain, cityId: null };
-  });
+  if (state.boards?.moon) {
+    switchBoard('moon');
+    return;
+  }
+  const board = createMoonBoard(state.w, state.seed);
   state.boards ??= {};
-  state.boards[id] = { id, kind: 'planet', name: `调试图 ${n}`, w, h, tiles };
+  state.boards.moon = board;
   // 迷雾记忆按图刷新一次，切过去不会满屏"未探明"
   refreshMemory(state);
-  switchBoard(id);
+  switchBoard('moon');
 }
 
 /**
@@ -2039,7 +2032,7 @@ boardListEl.addEventListener('click', (e) => {
     return;
   }
   if (act === 'bl-add') {
-    addDebugBoard();
+    addMoonBoard();
     return;
   }
   const id = el.dataset.board;
