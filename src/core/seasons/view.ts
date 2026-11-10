@@ -27,7 +27,18 @@ import {
   seasonOf,
   type Climate,
 } from './climate.ts';
-import { climateAt, formatTemp, precipAt, precipLabel, satAt, tempAt, wetAt } from './field.ts';
+import {
+  climateAt,
+  formatTemp,
+  precipAt,
+  precipLabel,
+  satAt,
+  tempAt,
+  wetAt,
+  windAt,
+  windLevelOf,
+  windSpeedAt,
+} from './field.ts';
 
 /** 每个气候的图标。颜色只是辅助，名字和数值才是准的（色弱也得读得懂） */
 export const CLIMATE_ICON: Record<Climate, string> = {
@@ -43,6 +54,7 @@ export const CLIMATE_ICON: Record<Climate, string> = {
   overcast: '☁',
   downpour: '⛈',
   fog: '🌫',
+  gale: '💨',
   thunder: '⚡',
   frozen: '🧊',
   driftIce: '❆',
@@ -91,6 +103,7 @@ export function climateEffectLines(c: Climate): string[] {
   }
   if (e.upkeepRate) out.push(`回合末交 ${Math.round(e.upkeepRate * 100)}% 维护费`);
   if (e.upkeepHpRatio) out.push(`交不起则掉 ${Math.round(e.upkeepHpRatio * 100)}% 生命上限`);
+  if (e.airUpwindCostAdd) out.push(`空军逆风每格 +${e.airUpwindCostAdd}`);
   if (e.navyMoveZero) out.push('海军移动力归零');
   if (e.navyMoveMul !== undefined && e.navyMoveMul !== 1) {
     out.push(`海军移动力 ${signedPct(e.navyMoveMul - 1)}`);
@@ -103,6 +116,22 @@ export function climateEffectLines(c: Climate): string[] {
 /** 天气徽标：图标 + 中文名。`w-<id>` 让每种气候有自己的底色 */
 export function weatherBadge(c: Climate): string {
   return `<span class="weather-badge w-${c}">${CLIMATE_ICON[c]} ${CLIMATE_NAME[c]}</span>`;
+}
+
+/**
+ * 风向箭头：指向风**吹向**的方向（八方位）。
+ *
+ * 只用整数比大小，不碰三角函数——回放两端得画出同一支箭头。
+ * 横竖占优（1:3 以上）就画直箭头，否则画斜的。
+ */
+function windArrow(w: { x: number; y: number }): string {
+  if (w.x === 0 && w.y === 0) return '';
+  const ax = Math.abs(w.x);
+  const ay = Math.abs(w.y);
+  if (ax * 3 < ay) return w.y > 0 ? ' ↓' : ' ↑';
+  if (ay * 3 < ax) return w.x > 0 ? ' →' : ' ←';
+  if (w.y > 0) return w.x > 0 ? ' ↘' : ' ↙';
+  return w.x > 0 ? ' ↗' : ' ↖';
 }
 
 /**
@@ -127,10 +156,15 @@ export function weatherBlock(
     lines.length === 0
       ? `<div class="weather-none">这一格没有额外影响。</div>`
       : `<div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>`;
+  // 风力放在读数里：不然"大风"只是个名字，玩家不知道风有多大、
+  // 也不知道往哪边吹——而这两件事正是它唯一的规则含义。
+  const w = windAt(s, x, y);
+  const dir = windArrow(w);
   return (
     `<div class="weather-box">${weatherBadge(c)}` +
     `<div class="weather-readout">${formatTemp(temp)} · 相对湿度 ${Math.round((wet / sat) * 100)}%` +
-    `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}</div>` +
+    `${precip === 'none' ? '' : ` · ${precipLabel(precip)}`}` +
+    ` · 风力 ${windLevelOf(windSpeedAt(s, x, y))} 级${dir}</div>` +
     `${body}</div>`
   );
 }
@@ -168,6 +202,7 @@ const CLIMATE_TINT: Record<Climate, string> = {
   overcast: 'rgba(140, 145, 155, 0.34)',
   downpour: 'rgba(80, 110, 160, 0.48)',
   fog: 'rgba(200, 205, 210, 0.46)',
+  gale: 'rgba(150, 175, 200, 0.30)',
   thunder: 'rgba(180, 150, 60, 0.44)',
   frozen: 'rgba(150, 215, 235, 0.50)',
   driftIce: 'rgba(175, 220, 240, 0.36)',

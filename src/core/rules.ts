@@ -635,7 +635,22 @@ export function stepCostInto(
 ): number {
   const to = s.tiles[toIdx];
   if (!to) return 99;
-  if (opts.waterUnit || opts.flyer) return 1;
+  if (opts.waterUnit) return 1;
+  /*
+   * 飞行：默认一格 1 点，**不看地形**（连高山都过得去，没理由按 99 点收费）。
+   *
+   * 但"天气"和"地形"是两回事：风把飞机拖慢，和地面起伏无关。所以这里不是
+   * 直接 return 1，而是给扩展留一个只问"空中这一步"的钩子（见 airStepCost）。
+   * 没开晴天以外的扩展时它恒为 undefined，代价和从前一模一样。
+   */
+  if (opts.flyer) {
+    let cost = 1;
+    for (const e of activeExpansions(s)) {
+      const over = e.hooks.airStepCost?.({ state: s, unit, fromIdx, toIdx, cost });
+      if (over !== undefined) cost = over;
+    }
+    return cost;
+  }
   const base = CONFIG.terrainCost[to.terrain] ?? 99;
   if (base >= 99) return 99;
   const from = fromIdx >= 0 ? (s.tiles[fromIdx] ?? null) : null;

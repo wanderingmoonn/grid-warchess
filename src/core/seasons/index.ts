@@ -12,7 +12,7 @@
 
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { climateEffect, isNaval, SEASON_TURNS } from './climate.ts';
-import { climateAt, climateOfUnit, stepClimateField } from './field.ts';
+import { climateAt, climateOfUnit, stepClimateField, windAt } from './field.ts';
 import { climateOverlayCells, seasonLabel, weatherBlock } from './view.ts';
 import { seatsOf } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -30,13 +30,17 @@ function defOf(s: GameState, u: Unit) {
 export const SEASONS: Expansion = {
   id: 'seasons',
   name: '季节与气候',
-  blurb: '四季轮换。天气由气温与湿度两个场自己算出来，不再查表。',
+  blurb: '四季轮换。气温、湿度、风三个场都是自己算出来的，不再查表。',
   summary:
     '春夏秋冬每 10 回合轮换，季节基准一到，各地的气温就开始向它趋近——水比热大，所以夏天海水还是凉的。'
-    + '每格有气温与湿度：气温由季节基准、海陆年温差与地形海拔决定；湿度靠蒸发注入、向四邻扩散、'
-    + '过饱和就下雨。两者一起判出这一格的天气（严冬 / 寒冷 / 凉爽 / 温和 / 温暖 / 炎热 / 酷暑七档，'
+    + '每格有气温、湿度与风：气温由季节基准、海陆年温差与地形海拔决定；湿度靠蒸发注入、'
+    + '随风吹、过饱和就下雨——<b>雨带会跟着风挪</b>，一场雨能从海上飘到内陆。'
+    + '风是气压差吹出来的：冷处压高、暖处压低，所以山脚海边天生有风；再叠一层四季各不相同的'
+    + '<b>主导风</b>（冬北、夏南、春西），以及每两回合换一档的阵风。'
+    + '三者一起判出这一格的天气（严冬 / 寒冷 / 凉爽 / 温和 / 大风 / 温暖 / 炎热 / 酷暑八档，'
     + '外加雨雾雷暴与冰面），再改移动、护甲、视野、射程与产出。'
-    + '<b>日常的冷暖阴雨只动经济与护甲，不拖慢部队</b>——只有严冬、酷暑与暴雨才真的走不动。'
+    + '<b>日常的冷暖阴雨只动经济与护甲，不拖慢部队</b>——只有严冬、酷暑与暴雨才真的走不动；'
+    + '而<b>大风只打空军</b>：逆风飞进那一格，每格多花 1 点移动力，地面部队一格都不受影响。'
     + '气候不影响城市。',
   scale: 'large',
   hooks: {
@@ -77,6 +81,31 @@ export const SEASONS: Expansion = {
       // 向下取整：2 点移动力在 -50% 之后是 1，不是 1.0 和 1.5 之间的某个数。
       // 少半格移动力没法表示，宁可让玩家吃亏一点也别给出错觉。
       return Math.max(0, Math.floor(out));
+    },
+
+    /**
+     * 空中的步耗：**逆风每格 +1**。
+     *
+     * 问的是"飞进这一格"的价：拿目标格的风和这一步的方向比，
+     * 逆风才收钱，顺风原价（也不打折——见 ClimateEffect.airUpwindCostAdd 的注释）。
+     *
+     * 只在**这一格是大风**时收：不这样的话，全图常年有风，
+     * 等于给所有空军加了一条永久减速，玩家还会觉得"凭什么"。
+     * 大风是看得见的标签——面板上写着，棋盘上染着，收钱才有理有据。
+     */
+    airStepCost: ({ state, fromIdx, toIdx, cost }) => {
+      // 没有来处（部署、AI 只评估落点）：没有方向，也就谈不上逆风
+      if (fromIdx < 0 || toIdx < 0) return undefined;
+      const tx = toIdx % state.w;
+      const ty = Math.floor(toIdx / state.w);
+      const eff = climateEffect(climateAt(state, tx, ty));
+      if (!eff.airUpwindCostAdd) return undefined;
+      const w = windAt(state, tx, ty);
+      const fx = fromIdx % state.w;
+      const fy = Math.floor(fromIdx / state.w);
+      const dot = (tx - fx) * w.x + (ty - fy) * w.y;
+      if (dot >= 0) return undefined; // 顺风或侧风：不加价
+      return cost + eff.airUpwindCostAdd;
     },
 
     /**

@@ -72,7 +72,18 @@ import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
 import { CLIMATE_NAME, climateEffect, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
-import { classifyClimate, climateAt, precipAt, satOf, tempAt, wetAt } from '../src/core/seasons/field.ts';
+import {
+  classifyClimate,
+  climateAt,
+  precipAt,
+  satOf,
+  stepClimateField,
+  tempAt,
+  TUNING,
+  WET_MAX,
+  wetAt,
+  windSpeedAt,
+} from '../src/core/seasons/field.ts';
 import {
   airwingOps,
   deckLine,
@@ -11863,6 +11874,121 @@ test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
   assert.equal(at(1, 290), 'thunder', '再热就是雷暴，不是风暴');
   // 冷海无论多外都不刮：6°C 的外海下大雨只是阴天（4°C 以下会先判成浮冰）
   assert.equal(at(4, 60), 'overcast');
+});
+
+test('风场：从温度梯度推出来，同一局面算两遍一模一样', () => {
+  /*
+   * 风是**推出来的**，不是攒出来的：气压 ≈ −温度，风顺着温度梯度吹，
+   * 再叠一层季节主导风。这条守三件事：
+   *   · 可复现（回放两端算出来的风必须逐格相同）；
+   *   · 有上限（不能出现"一格 300 的风"把湿度一步吹穿整张图）；
+   *   · 山脚比平地风大（有梯度才有风，否则这个场就是常数）。
+   */
+  const mk = () => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true }, 777);
+    flatten(s, 'plain');
+    for (let y = 4; y < 9; y++) for (let x = 4; x < 9; x++) setTile(s, x, y, 'mountain');
+    s.turn = 12;
+    stepClimateField(s);
+    return s;
+  };
+  const a = mk();
+  const b = mk();
+  for (let i = 0; i < a.w * a.h; i++) {
+    const ax = a.tiles[i]!.custom?.windX as number;
+    const ay = a.tiles[i]!.custom?.windY as number;
+    assert.equal(ax, b.tiles[i]!.custom?.windX, `第 ${i} 格风向 x 不一致`);
+    assert.equal(ay, b.tiles[i]!.custom?.windY, `第 ${i} 格风向 y 不一致`);
+    assert.ok(Math.abs(ax) <= TUNING.windMax && Math.abs(ay) <= TUNING.windMax, '风不能超过上限');
+  }
+  // 山脚那一格的风该比远处平地大：有温度梯度才有风
+  const near = windSpeedAt(a, 3, 6);
+  const far = windSpeedAt(a, 1, 1);
+  assert.ok(near > far, `山脚 ${near} 该比平地 ${far} 风大`);
+});
+
+test('湿度平流：云跟着风走，方向对', () => {
+  /*
+   * 先把整张图跑到平衡（固定春天，让温度场收敛），再在中段放一团湿气。
+   * 八步之后这团湿气的重心必须往东挪——春天主导风朝东。
+   *
+   * 断言用**重心**而不是"某一格变湿了"：一团湿气会同时被扩散摊开，
+   * 单格的涨落说明不了方向。
+   */
+  const s = fresh({ expansionIds: ['seasons'], godMode: true, size: 16 });
+  flatten(s, 'plain');
+  s.turn = 1;
+  for (let i = 0; i < 30; i++) stepClimateField(s);
+
+  const base = wetAt(s, 6, 8);
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const t = s.tiles[(8 + dy) * s.w + (6 + dx)]!;
+      t.custom = { ...t.custom, wet: WET_MAX };
+    }
+  }
+  const centroidX = () => {
+    let mx = 0;
+    let m = 0;
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const excess = Math.max(0, wetAt(s, x, y) - base);
+        mx += excess * x;
+        m += excess;
+      }
+    }
+    return m === 0 ? -1 : mx / m;
+  };
+  const before = centroidX();
+  assert.ok(before > 0, '前提：图里得真有那一团湿气');
+  for (let i = 0; i < 8; i++) stepClimateField(s);
+  const after = centroidX();
+  assert.ok(after > before + 0.3, `湿气该往东挪：${before.toFixed(2)} → ${after.toFixed(2)}`);
+});
+
+test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
+  const s = fresh({ expansionIds: ['seasons', 'air-corps'], godMode: true });
+  flatten(s, 'plain');
+  s.turn = 1;
+  const plane = place(s, 'A', 'af_scout', 5, 6);
+  const here = idx(s, 5, 5);
+
+  // 目标格：16°C、干、南风 30（往 +y 吹）→ 判成「大风」
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  assert.equal(climateAt(s, 5, 5), 'gale', '前提：这一格是大风');
+
+  // 从南往北飞：逆风 → 1 + 1
+  assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 2, '逆风每格 2 点');
+  // 从北往南飞：顺风 → 原价（不给折扣，见 ClimateEffect.airUpwindCostAdd）
+  assert.equal(stepCostInto(s, plane, idx(s, 5, 4), here, { flyer: true }), 1, '顺风不加价');
+  // 没有来处（部署 / 只评估落点）：没有方向，也就谈不上逆风
+  assert.equal(stepCostInto(s, plane, -1, here, { flyer: true }), 1, '没有来处不判逆风');
+
+  // 风还是那么大，但这一格不是大风（33°C 是酷暑）：不收钱
+  s.tiles[here]!.custom = { temp: 330, wet: 30, windX: 0, windY: 30 };
+  assert.equal(climateAt(s, 5, 5), 'blazing');
+  assert.equal(stepCostInto(s, plane, idx(s, 5, 6), here, { flyer: true }), 1, '不是大风就不加价');
+
+  // 地面部队完全不受影响：大风只打空军
+  const foot = place(s, 'A', 'militia', 5, 6);
+  s.tiles[here]!.custom = { temp: 160, wet: 30, windX: 0, windY: 30 };
+  assert.equal(
+    stepCostInto(s, foot, idx(s, 5, 6), here),
+    CONFIG.terrainCost.plain,
+    '陆军的步耗一格都没变',
+  );
+});
+
+test('大风只替换「温和」，不抢凉爽和温暖', () => {
+  // 传 gale=true 时的分档：温和 → 大风；凉爽 / 温暖 / 酷暑 各自不变
+  const dry = (t: number) => Math.round(satOf(t) * 0.5);
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, false), 'mild');
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, true), 'gale');
+  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, true), 'cool');
+  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, true), 'warm');
+  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, true), 'hot');
+  // 下雨时不该判成大风：那是暴雨/雷暴的分工
+  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, true), 'overcast');
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {

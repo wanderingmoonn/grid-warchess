@@ -4239,6 +4239,10 @@ a.btn {
   background: #e8e8e8;
   color: #55524c;
 }
+.weather-badge.w-gale {
+  background: #e3ecf4;
+  color: #35566f;
+}
 .weather-badge.w-thunder {
   background: #f0e6f7;
   color: #5b3a7a;
