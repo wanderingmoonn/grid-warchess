@@ -12,11 +12,14 @@
  *   · `temp`（0.1°C 的整数）——季节基准 + 海陆年温差 + 地形海拔，
  *     再按各自的热容**慢慢趋近**目标。相位延迟是这么来的：
  *     夏天到了，海水还是凉的。
- *   · `wet`（0~100 的绝对湿度）——蒸发注入、向四邻扩散、超过饱和线就下雨。
- *     "海陆距离"不再是查表的一个维度，而是**扩散的自然结果**：
+ *   · `wet`（0~100 的绝对湿度）——蒸发注入、**随风平流**、向四邻扩散、
+ *     超过饱和线就下雨。"海陆距离"不再是查表的一个维度，而是**输运的自然结果**：
  *     靠水的地方潮，往里走越来越干。
+ *   · `wind`（`windX` / `windY`，百分之一格每步）——由**温度梯度**推出来：
+ *     p ≈ −T，冷处压高、暖处压低，风顺着梯度吹；再叠一层季节主导风。
+ *     有了它，湿度才会"挪"而不是只"漫"——雨带跟着风走，云在动。
  *
- * 最后一步把 `(temp, wet, 降水强弱)` 判回原来那 14 个标签。
+ * 最后一步把 `(temp, wet, 降水强弱, 风)` 判回那 17 个标签。
  * **这一步是刻意的**：`ClimateEffect` 表、五条规则钩子、侧栏文案、
  * 天气视图全都不用动——换的是数据来源，不是天气系统。
  *
@@ -137,6 +140,33 @@ export interface ClimateTuning {
   fogLine: number;
   /** 相对湿度超过它 → 湿冷 / 湿热 */
   dampWet: number;
+  /**
+   * 主导风向（百分之一格/步）。四季各一个，风往哪儿吹。
+   *
+   * 这一项是"天气系统整体往哪边漂"的骨架：冬天北风往南吹，夏天南风往北吹，
+   * 春天西风往东吹。玩家记住的是"冬天的云往南跑"，不是某个浮点数。
+   */
+  prevailing: Record<Season, { x: number; y: number }>;
+  /**
+   * 阵风周期（百分数），每 2 回合换一档。
+   *
+   * 没有它，主导风是个常数——要么全年天天大风，要么一年到头都没有。
+   * 这张表让"这几天风大"成串出现（16 回合一个来回），不用引入压力场演化。
+   */
+  gust: number[];
+  /**
+   * 温度梯度换算成风速的系数（千分数）。
+   *
+   * 物理上气压 ≈ −温度（冷空气重、压得高），风从高压吹向低压，
+   * 也就是**顺着温度梯度吹**：海边/山脚这些温差大的地方自带一股风。
+   */
+  windGrad: number;
+  /** 风速上限（百分之一格/步）。同时也是"再大风也不会把云吹过半个地图"的闸 */
+  windMax: number;
+  /** 判「大风」的风速线（百分之一格/步） */
+  galeAt: number;
+  /** 湿度平流的折扣（百分数）：100 = 完全按风速漂 */
+  wetDrift: number;
 }
 
 /**
@@ -182,6 +212,18 @@ export const TUNING: ClimateTuning = {
   blazingAt: 320,
   fogLine: 0.76,
   dampWet: 0.86,
+  // 风往哪儿吹（1/100 格每步）：春天西风、夏天南风、秋天西偏北、冬天北风
+  prevailing: {
+    spring: { x: 16, y: 0 },
+    summer: { x: 2, y: -12 },
+    autumn: { x: 12, y: 5 },
+    winter: { x: 5, y: 20 },
+  },
+  gust: [90, 110, 140, 100, 80, 120, 160, 100],
+  windGrad: 450,
+  windMax: 55,
+  galeAt: 26,
+  wetDrift: 100,
 };
 
 /* -- 只读常量：不参与扫参 -------------------------------------------- */
@@ -325,6 +367,114 @@ function precipOf(wet: number, sat: number): Precip {
 }
 
 /* ------------------------------------------------------------------ */
+/* 2.5 风场                                                            */
+/* ------------------------------------------------------------------ */
+
+/** 风：单位和 `Tile.custom.windX/windY` 同一个刻度（百分之一格/步） */
+export interface Wind {
+  x: number;
+  y: number;
+}
+
+/**
+ * 这一刻的**主导风**：季节定方向，阵风表定强弱。
+ *
+ * 没有落库的风时也用它兜底（老存档、地图刚生成），所以"第一回合就有风"。
+ */
+export function prevailingOf(s: GameState): Wind {
+  const base = TUNING.prevailing[seasonOf(s.turn)] ?? { x: 0, y: 0 };
+  const turn = Math.max(1, Math.floor(s.turn));
+  const g = (TUNING.gust[Math.floor((turn - 1) / 2) % TUNING.gust.length] ?? 100) / 100;
+  return { x: Math.round(base.x * g), y: Math.round(base.y * g) };
+}
+
+/**
+ * 这一格的风。
+ *
+ * 没落库（老存档 / 刚生成的地图）时返回主导风：风场是"算出来的"，不是"攒出来的"，
+ * 缺省值给一个有方向的常规风，比给 0 更接近它该有的样子。
+ */
+export function windAt(s: GameState, x: number, y: number): Wind {
+  const tile = tileAt(s, x, y);
+  if (!tile) return { x: 0, y: 0 };
+  const wx = tile.custom?.windX;
+  const wy = tile.custom?.windY;
+  if (typeof wx === 'number' && typeof wy === 'number' && Number.isFinite(wx) && Number.isFinite(wy)) {
+    return { x: wx, y: wy };
+  }
+  return prevailingOf(s);
+}
+
+/** 风速（百分之一格/步）。判「大风」、面板读数都用它 */
+export function windSpeedAt(s: GameState, x: number, y: number): number {
+  const w = windAt(s, x, y);
+  return Math.round(Math.sqrt(w.x * w.x + w.y * w.y));
+}
+
+/**
+ * 风速 → 风力等级（0~12）。
+ *
+ * 用的是蒲福风的档数，不是我们的内部刻度：玩家看得懂"7 级风"，
+ * 看不懂"风速 36"。一档 = 5 个内部刻度，正好让「大风」落在 7 级上。
+ */
+export function windLevelOf(speed: number): number {
+  return Math.max(0, Math.min(12, Math.round(speed / 5)));
+}
+
+/** 这一格此刻刮不刮「大风」（判类用） */
+export function isGaleAt(s: GameState, x: number, y: number): boolean {
+  return windSpeedAt(s, x, y) >= TUNING.galeAt;
+}
+
+/**
+ * 风场走一步：**从温度场推出来**，不是自己演化。
+ *
+ * 三步：
+ *   1. 压力代理 `p ≈ −T`：冷空气重 → 高压，暖处低压。
+ *   2. 温度先做一次 3×3 盒平滑。不做的话，山地与平原交界那一格的温差
+ *      会变成一条一格宽的锯齿状"风口"，风场看着像噪点。
+ *   3. 风 = 主导风 + k × ∇T（从高压吹向低压，也就是顺着温度梯度）。
+ *
+ * 全部整数与四则运算：不用 sin/cos，回放两端算出来的风一模一样。
+ */
+export function stepWind(s: GameState): void {
+  const n = s.w * s.h;
+  const p = new Array<number>(n);
+
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      let sum = 0;
+      let cnt = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!tileAt(s, x + dx, y + dy)) continue;
+          sum += tempAt(s, x + dx, y + dy);
+          cnt++;
+        }
+      }
+      p[y * s.w + x] = cnt === 0 ? 0 : Math.round(sum / cnt);
+    }
+  }
+
+  const prev = prevailingOf(s);
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      const i = y * s.w + x;
+      const tile = s.tiles[i];
+      if (!tile) continue;
+      // 边界没有"外面那格"，梯度按 0 算：风在图的边上不会凭空拐弯
+      const gx = x > 0 && x < s.w - 1 ? p[i + 1]! - p[i - 1]! : 0;
+      const gy = y > 0 && y < s.h - 1 ? p[i + s.w]! - p[i - s.w]! : 0;
+      const wx = prev.x + Math.round((gx * TUNING.windGrad) / 1000);
+      const wy = prev.y + Math.round((gy * TUNING.windGrad) / 1000);
+      tile.custom ??= {};
+      tile.custom.windX = Math.max(-TUNING.windMax, Math.min(TUNING.windMax, wx));
+      tile.custom.windY = Math.max(-TUNING.windMax, Math.min(TUNING.windMax, wy));
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 3. 判类                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -344,6 +494,13 @@ export function classifyClimate(
   terrain?: Terrain,
   /** 离岸格数：水面用它决定"刮不刮得起风暴"；陆地不传 */
   distToLand?: number,
+  /**
+   * 这一格此刻在不在刮大风（由 `isGaleAt` 判）。
+   *
+   * 传布尔而不是风速：阈值是**气象参数**、就住在本文件的 TUNING 里；
+   * `climate.ts` 只负责"大风这件事怎么落到某个天气标签上"。
+   */
+  gale = false,
 ): Climate {
   const sat = satOf(temp);
   const r = sat > 0 ? wet / sat : 0;
@@ -393,6 +550,12 @@ export function classifyClimate(
   }
   if (temp < TUNING.warmAt) {
     if (r > fogLine) return 'fog';
+    // 大风只**替换「温和」**，不去抢凉爽和温暖。
+    //
+    // 那两档是玩家手里少有的增益（+1 移动 / +25% 产出），被一个纯空军减益顶掉
+    // 会很难受；而「温和」本来就是"这一格没额外影响"，换成大风不亏任何东西。
+    // 副作用是这个天气只在 13~20°C 的晴天出现——也就是春天和秋天，正好对。
+    if (gale) return 'gale';
     return 'mild';
   }
   if (temp < TUNING.hotAt) return r > TUNING.dampWet ? 'dampHeat' : 'warm';
@@ -413,13 +576,17 @@ export function climateAt(s: GameState, x: number, y: number): Climate {
   if (tile.terrain === 'city') return 'mild';
   const temp = tempAt(s, x, y);
   const wet = wetAt(s, x, y);
+  const water = isWaterTerrain(tile.terrain);
   return classifyClimate(
     temp,
     wet,
     precipOf(wet, satOf(temp)),
-    isWaterTerrain(tile.terrain),
+    water,
     tile.terrain,
-    isWaterTerrain(tile.terrain) ? distToLandOf(s, x, y) : undefined,
+    water ? distToLandOf(s, x, y) : undefined,
+    // 「大风」只在没下雨的温和档里成立（见 classifyClimate）：刮风的日子
+    // 本来就不该同时在下雨——那是暴雨/雷暴的分工。
+    isGaleAt(s, x, y),
   );
 }
 
@@ -460,10 +627,14 @@ function stepTemperature(s: GameState): void {
 }
 
 /**
- * 湿度走一步：蒸发 → 扩散 → 降水 → 截断。
+ * 湿度走一步：蒸发 → 平流 → 扩散 → 降水 → 截断。
  *
- * 两次缓冲：扩散必须用**上一步的整张表**算新值。原地更新会让扩散带方向偏置，
- * 图像上表现为"湿气往左上角漂"——灵气那边也是同一个坑。
+ * 平流是这一版新加的：**云会跟着风走**。用半拉格朗日写法——按风反推
+ * "这团水汽上一步在哪"，再在四个角上双线性插值。任意风速都稳定
+ * （显式对流要卡 CFL，风速一大就炸），代价是会有一点点数值抹平，
+ * 正好顶替了一部分原本靠扩散做的平滑。
+ *
+ * 剩下的扩散仍然保留一小份：纯平流会让湿度场沿风向拉成丝，看着脏。
  */
 function stepHumidity(s: GameState): void {
   const n = s.w * s.h;
@@ -487,22 +658,47 @@ function stepHumidity(s: GameState): void {
     }
   }
 
-  // 2) 扩散：向四邻的**均值**靠拢（凸组合，任意 D 都稳定）
+  // 2) 平流：半拉格朗日采样。
+  //
+  // 位移 = 风(百分之一格/步) × `wetDrift`。风 30 → 一步挪 0.3 格，
+  // 32 格的图上一场雨跨图要 100 多步——正好是"云在慢慢走"的节奏。
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      const i = y * s.w + x;
+      const w = windAt(s, x, y);
+      const fx = x - (w.x * TUNING.wetDrift) / 10000;
+      const fy = y - (w.y * TUNING.wetDrift) / 10000;
+      // 采样点钳在图内：边界按"贴边那格的湿度"算，不让水汽漏出地图
+      const cx = Math.max(0, Math.min(s.w - 1, fx));
+      const cy = Math.max(0, Math.min(s.h - 1, fy));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const x1 = Math.min(s.w - 1, x0 + 1);
+      const y1 = Math.min(s.h - 1, y0 + 1);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const top = a[y0 * s.w + x0]! * (1 - tx) + a[y0 * s.w + x1]! * tx;
+      const bot = a[y1 * s.w + x0]! * (1 - tx) + a[y1 * s.w + x1]! * tx;
+      b[i] = clampWet(top * (1 - ty) + bot * ty);
+    }
+  }
+
+  // 3) 扩散：向四邻的**均值**靠拢（凸组合，任意 D 都稳定）
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
       let sum = 0;
       let cnt = 0;
-      if (x > 0) { sum += a[i - 1]!; cnt++; }
-      if (x < s.w - 1) { sum += a[i + 1]!; cnt++; }
-      if (y > 0) { sum += a[i - s.w]!; cnt++; }
-      if (y < s.h - 1) { sum += a[i + s.w]!; cnt++; }
+      if (x > 0) { sum += b[i - 1]!; cnt++; }
+      if (x < s.w - 1) { sum += b[i + 1]!; cnt++; }
+      if (y > 0) { sum += b[i - s.w]!; cnt++; }
+      if (y < s.h - 1) { sum += b[i + s.w]!; cnt++; }
       // 没有邻居（1×1 的图）：原地不动，绝不除以 0
-      b[i] = cnt === 0 ? a[i]! : a[i]! + TUNING.wetDiffuse * (sum / cnt - a[i]!);
+      a[i] = cnt === 0 ? b[i]! : b[i]! + TUNING.wetDiffuse * (sum / cnt - b[i]!);
     }
   }
 
-  // 3) 降水：过饱和的部分凝结掉——按**比例**而不是固定值。
+  // 4) 降水：过饱和的部分凝结掉——按**比例**而不是固定值。
   //
   // 固定扣量做过一版，问题是要么"永远差一点点到不了大雨"、要么"一次倒空
   // 之后连旱十回合"。按比例凝结让过饱和量稳定在 `蒸发 / rainDrain`：
@@ -511,7 +707,7 @@ function stepHumidity(s: GameState): void {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
       const sat = satOf(tempAt(s, x, y));
-      let v = b[i]!;
+      let v = a[i]!;
       const over = v - sat;
       if (over > 0) {
         v -= Math.max(TUNING.rainMinDrain, Math.round(over * TUNING.rainDrain));
@@ -520,7 +716,7 @@ function stepHumidity(s: GameState): void {
     }
   }
 
-  // 4) 写回
+  // 5) 写回
   for (let i = 0; i < n; i++) {
     const tile = s.tiles[i];
     if (!tile) continue;
@@ -538,6 +734,9 @@ function stepHumidity(s: GameState): void {
  */
 export function stepClimateField(s: GameState): void {
   stepTemperature(s);
+  // 风是从温度场推出来的，所以必须排在温度之后、湿度之前：
+  // 先有这一季的温差，才有这一季的风；湿度再按这股风走。
+  stepWind(s);
   stepHumidity(s);
 }
 

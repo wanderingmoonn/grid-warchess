@@ -152,6 +152,8 @@ export type Climate =
   | 'overcast'
   | 'downpour'
   | 'fog'
+  /** 大风：晴天但风大——空军逆风每格多花 1 点 */
+  | 'gale'
   | 'thunder'
   | 'frozen'
   | 'driftIce'
@@ -170,6 +172,7 @@ export const CLIMATE_NAME: Record<Climate, string> = {
   overcast: '阴雨',
   downpour: '暴雨',
   fog: '浓雾',
+  gale: '大风',
   thunder: '雷暴',
   frozen: '封冻',
   driftIce: '浮冰',
@@ -197,6 +200,13 @@ export interface ClimateEffect {
   moveMul?: number;
   /** 每走一格额外消耗的点数（暴雨 +2） */
   moveCostAdd?: number;
+  /**
+   * 空军**逆风**时每格多花的移动点。
+   *
+   * 只认逆风：顺风不加也不减。给 −1 会造出"每格 0 消耗"这种结算，
+   * 玩家算不清一格到底花多少，而且在整数移动力上会放大成"白嫖几格"。
+   */
+  airUpwindCostAdd?: number;
   /** 护甲惩罚（正数表示扣多少） */
   armorPenalty?: number;
   /** 护甲惩罚只对"不在城里驻扎的军队"生效（严冬） */
@@ -259,6 +269,9 @@ const EFFECTS: Record<Climate, ClimateEffect> = {
   // 暴雨是"路烂了"而不是"人累了"：多花一点移动点，但不砍总移动力
   downpour: { moveCostAdd: 1, rangeAdd: -2 },
   fog: { visionMax: 2, rangeMax: 4 },
+  // 大风：只打空军。地面部队一点不受影响——这条是故意的，
+  // 玩家已经抱怨过"到处都在减移动力"，所以这个天气专门不碰陆军。
+  gale: { airUpwindCostAdd: 1 },
   thunder: { endDamage: { hits: 1, amount: 50, splash: 0.5, radius: 1 }, incomeMul: 3 },
   frozen: { navyMoveZero: true, landOnIce: true },
   driftIce: { navyMoveMul: 0.75 },
