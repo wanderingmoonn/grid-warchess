@@ -253,7 +253,7 @@ export function effectLines(e: ClimateEffect): string[] {
   if (e.visionMax) out.push(`视野不超过 ${e.visionMax}`);
   if (e.endDamage) {
     const d = e.endDamage;
-    const splash = d.splash ? `，周围 ${d.radius ?? 1} 格再吃一半` : '';
+    const splash = d.splash ? `，溅射 ${d.radius ?? 1} 格 · 50%` : '';
     out.push(
       d.hits > 1
         ? `回合末受 ${d.hits} 次 ${d.amount} 点物理伤害`
