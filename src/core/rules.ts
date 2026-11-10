@@ -690,6 +690,22 @@ export function effectiveRangeAgainst(
 }
 
 /**
+ * 这个单位在不在**地球**上。
+ *
+ * 多图之后，一批位置类判定（走子、开火、建造、装卸）仍然是"拿 (x,y) 去
+ * `state.tiles` 里查"——它们只认识地球。月球上的单位如果被这些动作带上，
+ * 就会按地球的地形和宽度结算：玩家看到自己的兵在月面上走，对面却看不见它
+ * （2026-11-10 的实机 bug）。
+ *
+ * 所以位置类动作统一先问这一句。月球目前只能用**单位动作 / 技能**
+ * （发射井的加注、月球基地的采样），那些不动坐标，不受影响。
+ * 等月面真的能走能打了（第 8 步），把这些动作改成按 `boardIdOf` 取图再放开。
+ */
+export function offWorld(u: Unit): boolean {
+  return boardIdOf(u) !== EARTH;
+}
+
+/**
  * 这一格上的单位。
  *
  * 同一格可能同时站着"建筑"和"站在建筑上的部队"（驻军、桥面）。
@@ -4000,6 +4016,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
   if (unit.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  if (offWorld(unit)) return { ok: false, reason: '这张图还不能下移动命令' };
   if (unit.moved) return { ok: false, reason: '该单位本回合已经移动过' };
   if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
 
@@ -4115,6 +4132,9 @@ function doAttack(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!defender) return { ok: false, reason: '目标不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  if (offWorld(attacker) || offWorld(defender)) {
+    return { ok: false, reason: '这张图还不能开火' };
+  }
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
   if (underConstruction(attacker)) {
     return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
@@ -4474,6 +4494,7 @@ function doSiege(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  if (offWorld(attacker)) return { ok: false, reason: '这张图还不能攻城' };
   if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
@@ -4641,6 +4662,7 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
+  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   // "能不能装、能装谁、装几个"全在兵种数据的 carry.hold 上，这里只读不猜。
   const hold = holdOf(ferryDef);
@@ -4657,6 +4679,7 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   const verdict = canHold(ferryDef, cargoDef);
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
   if (cargo.acted) return { ok: false, reason: '这个单位本回合已经行动过了' };
+  if (boardIdOf(cargo) !== boardIdOf(ferry)) return { ok: false, reason: '不在同一张图上，装不上' };
   /*
    * 贴身判据按**占地**算，不是按锚点。
    *
@@ -4717,6 +4740,7 @@ function doUnload(
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
+  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   if (!holdOf(ferryDef)) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
@@ -4921,6 +4945,8 @@ function doBuild(
   if (!builder) return { ok: false, reason: '建造者不存在' };
   if (builder.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (builder.acted) return { ok: false, reason: '该单位本回合已经行动过' };
+  // 月面上还不能施工：选址、地形、距离全按地球算（见 offWorld）
+  if (offWorld(builder)) return { ok: false, reason: '这张图还不能建造' };
 
   const builderDef = utype(s, builder.type);
   if (!builderDef.builds || builderDef.builds.length === 0) {

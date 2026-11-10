@@ -379,6 +379,7 @@ import { skillsOf } from '../src/core/query.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../src/core/space/silo.ts';
+import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf } from '../src/core/space/moon-base.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -19942,6 +19943,95 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
   assert.equal((siloOf(cur)!.cargo ?? []).length, 0, '货舱空了');
   // 发射井自己还在，想再飞一趟就重新加注
   assert.ok(siloOf(cur), '发射井不会被消耗');
+});
+
+test('月球上的兵不能在地球上被指挥（幽灵 bug）', () => {
+  /*
+   * 实机反馈：把民兵发射到月球后，在地球的**同一坐标**上能选中并指挥他，
+   * 指令按地球坐标结算——他在月面上走，对面还看不见他。
+   *
+   * 根因是 `unitsAt` 只认坐标不认图。界面那一侧已经按当前图过滤（stackAt），
+   * 规则这一侧也得关死：位置类动作只在地球上成立（`offWorld`）。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const u = place2(s, 'A', 'militia', 5, 5);
+  u.board = 'moon';
+
+  const move = applyAction(s, { type: 'MOVE', unitId: u.id, x: 6, y: 5 });
+  assert.equal(move.ok, false, '月面上的兵不该被 MOVE 指挥');
+  assert.ok(move.reason.includes('这张图'), `理由要说清是"图"的问题，实际：${move.reason}`);
+
+  // 开火同样关掉：目标和攻击者不在同一张图上时，距离/地形都不可信
+  const foe = place2(s, 'B', 'militia', 6, 5);
+  const hit = applyAction(s, { type: 'ATTACK', unitId: u.id, targetId: foe.id });
+  assert.equal(hit.ok, false, '月面上的兵不该能开火');
+
+  /*
+   * 幽灵的来源：`unitsAt` 只认坐标。这条把前提钉住——
+   * 只要它还会在 (5,5) 找出月球上的兵，界面那一侧的按图过滤（stackAt）
+   * 就不能删；删了幽灵立刻回来。
+   */
+  const view = playerView(s, 'A');
+  const atSameCell = unitsAt(view.state, 5, 5);
+  assert.ok(atSameCell.some((x) => x.id === u.id), '按坐标查确实会把它找出来');
+  assert.equal(
+    atSameCell.filter((x) => boardIdOf(x) === 'earth').length,
+    0,
+    '按图过滤之后，这一格在地球上是空的',
+  );
+});
+
+test('登月胜利：展开基地、采样 3 回合、结果送回就赢', () => {
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  // 月面铺平，保证 2×2 放得下
+  for (const t of s.boards!.moon!.tiles) t.terrain = 'regolith';
+  const crew = place2(s, 'A', 'crew', 2, 2);
+  crew.board = 'moon';
+
+  let cur = s;
+  const run = (a: Parameters<typeof applyAction>[1]) => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+  const baseOf = (st: GameState) => st.units.find((u) => u.type === MOON_BASE_ID);
+
+  const dep = run({ type: 'UNIT_ACTION', unitId: crew.id, actionId: 'base:deploy' });
+  assert.ok(dep.ok, `展开失败：${dep.reason}`);
+  const base = baseOf(cur);
+  assert.ok(base, '基地要出现在场上');
+  assert.equal(boardIdOf(base), 'moon', '基地在月球图上');
+  assert.equal(footprintOf(cur, base!), 2, '2×2');
+  // 沿用原 id：不是"工程队阵亡 + 新基地"，而是同一支兵换了兵种
+  const sameId = cur.units.find((u) => u.id === crew.id);
+  assert.ok(sameId, '工程单位并进了基地（id 不变）');
+  assert.equal(sameId!.type, MOON_BASE_ID);
+
+  // 落地当回合不能采样（和"刚上场的单位不能放技能"同一条）
+  const early = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.equal(early.ok, false, '落地当回合不该能采样');
+
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  const cast = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.ok(cast.ok, `采样失败：${cast.reason}`);
+  assert.equal(samplingOf(cur)?.left, SAMPLE_TURNS, '倒计时要能读出来（顶栏用它）');
+  // 开采样这条战报是**公开**的：对手必须看得见"他还有几回合就赢"
+  assert.ok(
+    cur.log.some((l) => l.open === true && l.text.includes('月壤采样')),
+    '开采样要有公开战报',
+  );
+
+  // 整局只能做一次
+  const again = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.equal(again.ok, false, '采样只能做一次');
+
+  // 三个自己的回合：前面两个回合结束时都还没赢
+  for (let i = 0; i < 4; i++) run({ type: 'END_TURN' });
+  assert.equal(cur.winner ?? null, null, '两个回合之后还不该赢');
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal(cur.winner, 'A', '采样结果送回，本方获胜');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

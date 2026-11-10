@@ -8042,6 +8042,77 @@ check('「撤回一步」离开「结束回合」那一块，两处点击区域�
   assert.notEqual(undo!.parentElement?.parentElement, endTurn!.parentElement, '两颗按钮不该共用一个容器');
 });
 
+check('月球基地：卡上有采样技能和倒计时，月面的工程队有「展开」按钮', () => {
+  /*
+   * 登月胜利只有两个交互：月面上「展开月球基地」、基地上「月壤采样」。
+   * 它们分别是单位动作和主动技能——两条不同的渲染路径，都在这条里钉住。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7793);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  st.units = st.units.filter((u) => u.x !== 4 || u.y !== 4);
+  const base = {
+    id: 'base-test',
+    type: 'moon-base',
+    owner: 'A',
+    x: 4,
+    y: 4,
+    hp: 200,
+    kills: 0,
+    moved: false,
+    acted: false,
+    board: 'moon',
+    custom: { sample: 2 },
+  };
+  st.units.push(base as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: base as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('还剩 2 个回合'), `倒计时要在卡上，实际：${text.slice(0, 120)}`);
+    const btn = host.querySelector('[data-act="hero-skill"][data-skill="lunar-sampling"]');
+    assert.ok(btn, '「月壤采样」按钮不见了');
+
+    // 换成月面上的工程队：该出现「展开月球基地」
+    st.units = st.units.filter((u) => u.id !== 'base-test');
+    const crew = {
+      id: 'crew-moon',
+      type: 'crew',
+      owner: 'A',
+      x: 6,
+      y: 6,
+      hp: 30,
+      kills: 0,
+      moved: false,
+      acted: false,
+      board: 'moon',
+    };
+    st.units.push(crew as never);
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: crew as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    assert.ok(
+      host.querySelector('[data-action="base:deploy"]'),
+      '月面工程队该有「展开月球基地」按钮',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
 check('切图：同一块画布换成另一张图的尺寸与格子', () => {
   const host = doc.createElement('div');
   host.className = 'board';
