@@ -3155,7 +3155,15 @@ function undoLast(): void {
  */
 function stackAt(x: number, y: number): Unit[] {
   const view = viewNow().state;
-  const list = unitsAt(view, x, y).slice();
+  /*
+   * **只收当前这张图上的单位**。
+   *
+   * `unitsAt` 是按坐标算的，不认识"图"：月球上的兵在 (5,5)，地球的 (5,5)
+   * 也会把它找出来。于是玩家在地球点一下那个空格，就选中了月球上的那支兵，
+   * 之后的走子指令全按地球坐标下——月球的兵在地球上走，对面还看不见它。
+   * 这个幽灵就是这么来的（2026-11-10 实机反馈）。
+   */
+  const list = unitsAt(view, x, y).filter((u) => boardIdOf(u) === activeBoardId).slice();
   const rank = (u: Unit) => {
     if (utype(view, u.type).category === 'building') return 2;
     return isAirborne(view, u) ? 0 : 1;
