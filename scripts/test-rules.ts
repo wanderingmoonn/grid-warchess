@@ -365,6 +365,7 @@ import type {
   UnitTypeDef,
 } from '../src/core/types.ts';
 import { skillsOf } from '../src/core/query.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -19554,6 +19555,46 @@ test('聚变堆被拆时自爆：半径 1 各吃 60，不分敌我', () => {
   );
   assert.equal(r.state.units.find((u) => u.id === own.id)!.hp, ownHp - 60, '半径内的自家兵也吃 60');
   assert.equal(r.state.units.find((u) => u.id === far.id)!.hp, farHp, '半径外不挨');
+});
+
+test('棋盘是一等公民：默认地球，取图不走别名', () => {
+  /*
+   * 多图玩法的第一步只做"地基"：图有名字、坐标按图算、旧数据默认地球。
+   * 这条守三件事：
+   *   · 地球仍是 `state` 自己（不是被复制出来的一份）；
+   *   · 没写 board 的单位/城市/动作一律算地球；
+   *   · 其它图的索引按它自己的宽度算，不能借地球的 w。
+   */
+  const s = fresh();
+  assert.equal(boardIdOf(undefined), EARTH, '没有 board 就是地球');
+  assert.equal(boardIdOf(s.units[0]), EARTH, '旧存档里的单位算地球');
+
+  const earth = boardOf(s, EARTH);
+  assert.ok(earth.tiles === s.tiles, '地球不该被复制一份，否则克隆之后会分叉');
+  assert.equal(earth.w, s.w);
+
+  assert.equal(idxOn(s, EARTH, 3, 4), 4 * s.w + 3);
+  assert.deepEqual(xyOn(s, EARTH, 4 * s.w + 3), { x: 3, y: 4 });
+
+  // 一张 3×3 的小图：宽度只有 3，绝不能按地球的 w 算
+  s.boards = {
+    moon: {
+      id: 'moon',
+      kind: 'planet',
+      name: '月球',
+      w: 3,
+      h: 3,
+      tiles: Array.from({ length: 9 }, () => ({ terrain: 'plain' })),
+    },
+  };
+  assert.equal(idxOn(s, 'moon', 2, 2), 8, '小图按自己的宽度算索引');
+  assert.deepEqual(xyOn(s, 'moon', 8), { x: 2, y: 2 });
+  assert.deepEqual(boardIds(s), [EARTH, 'moon'], '地球永远排第一');
+  assert.equal(boardName(s, 'moon'), '月球');
+  assert.equal(boardKindOf(s, 'moon'), 'planet');
+
+  // 没登记的图退回地球：旧存档/扩展写错 id 时不至于崩
+  assert.ok(boardOf(s, 'nowhere').tiles === s.tiles, '找不到的图退回地球');
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
