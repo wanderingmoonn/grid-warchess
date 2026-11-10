@@ -30,6 +30,7 @@ import {
 import {
   climateAt,
   formatTemp,
+  isGaleAt,
   precipAt,
   precipLabel,
   satAt,
@@ -208,6 +209,28 @@ const CLIMATE_TINT: Record<Climate, string> = {
   driftIce: 'rgba(175, 220, 240, 0.36)',
   storm: 'rgba(110, 90, 160, 0.48)',
 };
+
+/**
+ * 风向上的箭头：**只画在刮大风的格子上**。
+ *
+ * 全图铺箭头太吵——秋天大风能占四分之一的地，而且大多数格子的风根本
+ * 不影响规则，箭头只是底纹。只标"风真的会收钱的地方"，玩家一眼就知道
+ * 该绕哪边走。再隔一格画一个，免得大风季整片棋盘长毛。
+ */
+export function windGlyphCells(
+  s: GameState,
+): Array<{ x: number; y: number; text: string }> {
+  const out: Array<{ x: number; y: number; text: string }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if ((x + y) % 2 !== 0) continue; // 隔一格画一个
+      if (!isGaleAt(s, x, y)) continue;
+      const text = windArrow(windAt(s, x, y)).trim();
+      if (text) out.push({ x, y, text });
+    }
+  }
+  return out;
+}
 
 /**
  * 每格的天气染色。**"温和"不画**——它占了绝大多数格子，

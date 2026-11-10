@@ -77,6 +77,7 @@ import {
   climateAt,
   precipAt,
   satOf,
+  coriolisOf,
   latitudeOf,
   stepClimateField,
   tempAt,
@@ -84,6 +85,7 @@ import {
   TUNING,
   WET_MAX,
   wetAt,
+  windAt,
   windSpeedAt,
 } from '../src/core/seasons/field.ts';
 import {
@@ -11865,8 +11867,9 @@ test('风暴：10 次 × 5 点，不再一次 10 点', () => {
 
 test('风暴按离岸距离分级：贴岸不刮，外海刮', () => {
   // 同温同湿，只有离岸距离不同。24°C 的海水
-  const at = (distToLand: number, temp = 240) =>
-    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand);
+  // 第三参之后补一个风速：风暴现在要求「雨大风也大」，默认给一条足够大的风
+  const at = (distToLand: number, temp = 240, wind = 40) =>
+    classifyClimate(temp, 90, 'heavy', true, 'water', distToLand, wind);
   assert.equal(at(1), 'overcast', '贴岸 24°C 不该刮风暴——那是玩家发育的地方');
   assert.equal(at(2), 'storm', '离岸 2 格就该刮');
   assert.equal(at(4), 'storm', '外海更不用说');
@@ -12043,16 +12046,48 @@ test('大风：空军逆风每格 +1，顺风与非大风都不加价', () => {
   );
 });
 
+test('地转偏向力：北半球把风往一边拧，南半球往另一边', () => {
+  /*
+   * 纬度不只是"这张图冷一点"——同一套数也当地转偏向力用：
+   * 偏北的图气旋逆时针、偏南的顺时针。做法是**把气压梯度先拧一个角度**
+   * 再当风用，所以不需要记住上一步的风，也不需要风暴中心在哪。
+   *
+   * 这条用一个纯东西向的温度梯度来验：春天主导风本来就是朝东（+x），
+   * 所以风里任何 y 分量都只能来自偏转。
+   */
+  assert.equal(coriolisOf(undefined), 0, '没有纬度的局面不偏转');
+  assert.ok(latitudeOf(1) < 0 && coriolisOf(1) > 0, '偏北的图：科氏为正');
+  assert.ok(latitudeOf(7) > 0 && coriolisOf(7) < 0, '偏南的图：科氏为负');
+
+  const windWithSeed = (seed: number) => {
+    const s = fresh({ expansionIds: ['seasons'], godMode: true });
+    flatten(s, 'plain');
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        s.tiles[y * s.w + x]!.custom = { temp: x < 8 ? 0 : 200 };
+      }
+    }
+    s.turn = 6; // 春天：主导风 (22, 0)，y 分量只可能来自偏转
+    s.seed = seed;
+    stepClimateField(s);
+    return windAt(s, 8, 8);
+  };
+  const north = windWithSeed(1); // 偏北
+  const south = windWithSeed(7); // 偏南
+  assert.ok(north.y !== 0 && south.y !== 0, '有纬度就该有偏转');
+  assert.ok(north.y * south.y < 0, `两个半球该往相反方向拧：${north.y} / ${south.y}`);
+});
+
 test('大风只替换「温和」，不抢凉爽和温暖', () => {
   // 传 gale=true 时的分档：温和 → 大风；凉爽 / 温暖 / 酷暑 各自不变
   const dry = (t: number) => Math.round(satOf(t) * 0.5);
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, false), 'mild');
-  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, true), 'gale');
-  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, true), 'cool');
-  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, true), 'warm');
-  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, true), 'hot');
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 0), 'mild');
+  assert.equal(classifyClimate(160, dry(160), 'none', false, 'plain', undefined, 40), 'gale');
+  assert.equal(classifyClimate(80, dry(80), 'none', false, 'plain', undefined, 40), 'cool');
+  assert.equal(classifyClimate(240, dry(240), 'none', false, 'plain', undefined, 40), 'warm');
+  assert.equal(classifyClimate(300, dry(300), 'none', false, 'plain', undefined, 40), 'hot');
   // 下雨时不该判成大风：那是暴雨/雷暴的分工
-  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, true), 'overcast');
+  assert.equal(classifyClimate(160, 90, 'light', false, 'plain', undefined, 40), 'overcast');
 });
 
 test('气候效果：酷暑腰斩移动力，浓雾压视野和射程', () => {

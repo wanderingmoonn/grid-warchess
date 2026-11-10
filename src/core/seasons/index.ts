@@ -13,7 +13,7 @@
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { climateEffect, isNaval, SEASON_TURNS } from './climate.ts';
 import { climateAt, climateOfUnit, latitudeOf, stepClimateField, windAt } from './field.ts';
-import { climateOverlayCells, seasonLabel, weatherBlock } from './view.ts';
+import { climateOverlayCells, seasonLabel, weatherBlock, windGlyphCells } from './view.ts';
 import { seatsOf } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 
@@ -41,6 +41,10 @@ export const SEASONS: Expansion = {
     + '随风吹、过饱和就下雨——<b>雨带会跟着风挪</b>，一场雨能从海上飘到内陆。'
     + '风是气压差吹出来的：冷处压高、暖处压低，所以山脚海边天生有风；再叠一层四季各不相同的'
     + '<b>主导风</b>（春西、夏南、秋东、冬北，四季两两相对），以及每两回合换一档的阵风。'
+    + '风还会被<b>地转偏向力</b>拧一个角度：偏北的图逆时针、偏南的顺时针、正中间不偏'
+    + '（同一个种子既决定这张图冷不冷，也决定它的气旋往哪边转）。'
+    + '<b>风暴要雨大风也大</b>：外海的大雨配上够强的风才算风暴，所以它总在阵风那几天出现，'
+    + '平时海面只是阴天。'
     + '三者一起判出这一格的天气（严冬 / 寒冷 / 凉爽 / 温和 / 大风 / 温暖 / 炎热 / 酷暑八档，'
     + '外加雨雾雷暴与冰面），再改移动、护甲、视野、射程与产出。'
     + '<b>日常的冷暖阴雨只动经济与护甲，不拖慢部队</b>——只有严冬、酷暑与暴雨才真的走不动；'
@@ -281,6 +285,8 @@ export const SEASONS: Expansion = {
         label: '天气',
         hint: '看视野内的天气分布；点一下钉住，再点取消',
         cells: ({ state }) => climateOverlayCells(state),
+        // 箭头只画大风区（见 windGlyphCells）：平时一格都没有，刮风季也不会糊成一片
+        glyph: ({ state }) => windGlyphCells(state),
       },
     ],
   },
