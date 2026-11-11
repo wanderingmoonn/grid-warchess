@@ -30,6 +30,7 @@
     "draft:metrics": "python scripts/draft-metrics.py",
     "draft:prior": "python scripts/draft-metrics.py e1 e3 e3-turnban --emit-ts scripts/lib/card-prior.table.ts",
     "test:cultivation": "node --experimental-strip-types scripts/tests/packs/cultivation.test.ts",
+    "test:space": "node --experimental-strip-types scripts/tests/packs/space.test.ts",
     "test:replay": "node --experimental-strip-types scripts/test-replay-file.ts",
     "test:net": "node --experimental-strip-types scripts/test-net-weights.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
