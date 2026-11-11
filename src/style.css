@@ -748,78 +748,29 @@ body {
 }
 
 /*
- * ── 地形纹理（2026-11-11）──────────────────────────────────────────────
+ * 基础地形：纯色。
  *
- * 现状的问题不是"颜色不好看"，是**一片死色**：12×12 的盘上森林能连出十几格，
- * 每格一模一样的平涂，远看就是一块绿斑，读不出"这是一片林子"。
+ * 2026-11-11 这里一度塞了手画的 CSS 纹理（radial-gradient 点阵、假树冠、假坡），
+ * 想解决"一片死色"。**删掉了**，两个原因：
+ *   1. 小格子上它一眼假——44px 里那几个半圆看着像贴纸，不像地面；
+ *   2. 更要命的是它成了**默认外观**：开关默认关，玩家看到的就是这套手画的，
+ *      真正生成的材质反而要手动去开。回退方案不该冒充成品。
  *
- * 三条做法，都不引入图片：
- *   1. 每种地形给两层以上的 `background-image`（点阵 / 弧 / 圆），近看有材质；
- *   2. 尺寸用 `calc(var(--cell) * k)`——32×32 的盘子上格子只有 24px，
- *      固定的 px 尺寸在那里会糊成一片噪点；
- *   3. `background-position` 读 `--jx/--jy`（由 board.ts 按坐标算），
- *      同色连片时纹理错开，不然看着像墙纸。
- *
- * 颜色一个都没改：地形色是**玩法信息**（走位、视野、产出全指着它），
- * 这一轮只加质感不动色相，免得"好看了但认错了地形"。
+ * 现在：关 = 纯色（就是这张表），开 = 生成的材质图（见下面那一节）。
+ * 深水波纹、山、台地、沼泽、沙丘这些**保留**——它们是识别标志（"这是山，过不去"），
+ * 不是纹理，删了玩家会认错地形。
  */
 .tile.t-plain {
-  background-color: var(--plain);
-  background-image:
-    radial-gradient(circle at 30% 34%, rgba(106, 136, 86, 0.17) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 72% 66%, rgba(106, 136, 86, 0.13) 0 1px, transparent 1.7px);
-  background-size:
-    calc(var(--cell) * 0.34) calc(var(--cell) * 0.34),
-    calc(var(--cell) * 0.44) calc(var(--cell) * 0.44);
-  background-position:
-    var(--jx, 0) var(--jy, 0),
-    calc(var(--jx, 0px) + 5px) calc(var(--jy, 0px) + 7px);
+  background: var(--plain);
 }
-
-/*
- * 森林：**让树冠超出格子**。
- *
- * 第一版把三个圆缩在格子里（0.58~0.8 倍），结果是"每格三坨波点"——
- * 因为每格是独立元素，圆被格子边界整整齐齐地框住，连成片就成了波点布。
- * 现在把图案放大到 1.3~1.6 格，圆被边界裁掉一圈，相邻格拼起来才是连续的树冠。
- * 再叠 `--jx/--jy` 的错位，一片林地看上去就没有"重复单元"了。
- *
- * 对比也压下来了：第一版树冠比底色深三档，远看像绿布上撒了黑点。
- */
 .tile.t-forest {
-  background-color: var(--forest);
-  background-image:
-    radial-gradient(circle at 50% 50%, rgba(126, 168, 106, 0.8) 0 42%, transparent 43%),
-    radial-gradient(circle at 50% 50%, rgba(146, 186, 124, 0.72) 0 30%, transparent 31%),
-    radial-gradient(circle at 50% 50%, rgba(116, 158, 98, 0.62) 0 46%, transparent 47%);
-  background-size:
-    calc(var(--cell) * 1.5) calc(var(--cell) * 1.5),
-    calc(var(--cell) * 2.1) calc(var(--cell) * 2.1),
-    calc(var(--cell) * 1.8) calc(var(--cell) * 1.8);
-  background-position:
-    calc(var(--jx, 0px) * 1.6) calc(var(--jy, 0px) * 1.6),
-    calc(var(--jx, 0px) * 1.2 + 40px) calc(var(--jy, 0px) * 1.2 + 26px),
-    calc(var(--jx, 0px) * 0.8 + 16px) calc(var(--jy, 0px) * 0.8 + 44px);
+  background: var(--forest);
 }
-
-/*
- * 丘陵：一道压在地面上的缓坡。
- *
- * 第一版用两个同心椭圆，亮度只差 0.2——在 44px 的格子上等于没有。
- * 现在改成"暗底 + 亮弧"，弧顶压在 62% 处、下面留一道阴影，读起来是"坡"。
- * 同样允许超出格子，相邻丘陵会连成起伏的地面。
- */
 .tile.t-hill {
-  background-color: var(--hill);
-  background-image:
-    radial-gradient(circle at 50% 50%, rgba(255, 250, 236, 0.55) 0 46%, transparent 47%),
-    radial-gradient(circle at 50% 58%, rgba(150, 118, 66, 0.22) 0 52%, transparent 53%);
-  background-size:
-    calc(var(--cell) * 1.7) calc(var(--cell) * 1.7),
-    calc(var(--cell) * 2.1) calc(var(--cell) * 2.1);
-  background-position:
-    calc(var(--jx, 0px) + 30%) calc(var(--jy, 0px) + 10%),
-    calc(var(--jx, 0px) + 55%) calc(var(--jy, 0px) + 22%);
+  background: var(--hill);
+}
+.tile.t-water {
+  background: var(--water);
 }
 
 /*
@@ -837,11 +788,16 @@ body {
  */
 html[data-terrain='on'] .tile {
   /*
-   * 768 而不是图的原始 512：图是"世界"纹理，格子只是取景窗口。
-   * 按 512 铺，一个 44px 格子里会装下一大块图案（森林就是"两个圆点"）；
-   * 放大到 768 之后每格只切到 5.7% 的面积，读起来才是"林冠的质地"而不是"几棵树"。
+   * 图的原始尺寸（512）。这一档是唯一说得通的：以下三种实测都不行——
+   *   768 → 每格是"几个放大的圆"，糊；
+   *   320 → 圆变小，还是糊；
+   *   128 → 纹理被压没了，整片退回纯色，只剩零星圆点。
+   *
+   * 根本原因是**图本身是照片纹理**，缩到 44px 的窗口里没有可读的层次。
+   * 想要"看得见的材质"，得换成图案化的 tile（每格一棵树、一块石头那种
+   * 专门为小尺寸画的图形），不是把大图缩一缩。这条留在这里是给下次的提醒。
    */
-  background-size: 768px 768px;
+  background-size: 512px 512px;
   background-repeat: repeat;
   background-position:
     calc(var(--x, 0) * var(--cell) * -1)
@@ -869,6 +825,19 @@ html[data-terrain='on'] .tile.t-deep::before {
 }
 html[data-terrain='on'] .tile.t-mountain {
   background-image: url('art/terrain/mountain.webp');
+}
+/*
+ * 山在材质模式下**不叠那座白色假山**。
+ *
+ * 那个三角形是 `clip-path` 画的，白顶 + 灰身，压在一张岩石材质上像贴纸——
+ * 用户截图里最刺眼的就是这一排。但三角形本身不能删：它是"这是山、任何单位
+ * 都过不去"的唯一形状信号（光靠灰色和月壤、城市分不清）。
+ * 所以改成一条很淡的棱线：读得出"这里有山"，但不像贴上去的。
+ */
+html[data-terrain='on'] .tile.t-mountain::before {
+  inset: 38% 26% 26% 26%;
+  background: rgba(58, 64, 78, 0.22);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
 }
 
 /* 浅水：细波纹。和水面色只差一点，靠"有纹路"表达"这是水" */
