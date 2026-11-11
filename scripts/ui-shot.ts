@@ -219,6 +219,17 @@ const tag =
   (W_ARG ? `-${W}` : '') +
   (DRAFT ? '-draft' : '');
 
+/*
+ * 每次运行前清一次本机存储。
+ *
+ * 不清的话，上一次跑 `draft` 点过的「开启选卡模式」会留在同一个
+ * `.tmp/edge-profile` 里（那个开关是"勾一次就记住"），下一次拍普通对局
+ * 拍到的却是一屏 BP——图看着没报错，内容却是错的。
+ * 截图必须可重复，这是前提。
+ */
+await goto(BASE);
+await evaluate('localStorage.clear()');
+
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
 
