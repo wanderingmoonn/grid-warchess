@@ -12,13 +12,14 @@
  *   1. 该拒绝的请求要**拒绝**（400 / 404，而不是 200 假装成功）；
  *   2. 拒绝之后进程必须**还活着**。
  *
- * 运行：npm run test:serve
+ * 运行：npm run test:serve（会先跑 build:static 产出 `_publish/`，脚本自己也能判缺）
  */
 
 // @ts-nocheck
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import { connect } from 'node:net';
 import { request } from 'node:http';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
@@ -75,6 +76,19 @@ function get(path: string, method = 'GET'): Promise<{ status: number; body: stri
     req.on('error', reject);
     req.end();
   });
+}
+
+/*
+ * 先确认构建产物在。
+ *
+ * `_publish/` 由 `npm run build:static` 生成、不进版本库，所以干净克隆上它一定
+ * 不存在。以前这里不查，缺产物时会被二十条 "ENOENT ... _publish/index.html"
+ * 糊一脸——看着像服务器崩了，其实是没构建。现在一句话说清；`npm run test:serve`
+ * 也已经会自己先构建一次。
+ */
+if (!fs.existsSync(join(ROOT, '_publish', 'index.html'))) {
+  console.error('[serve] 缺少 _publish/index.html：先跑一次 `npm run build:static`');
+  process.exit(1);
 }
 
 const child = spawn(process.execPath, [join(ROOT, 'scripts', 'serve-static.mjs')], {

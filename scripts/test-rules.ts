@@ -14361,7 +14361,15 @@ test('刚造出来的英雄当回合不能放技能', () => {
   // 规则：硬闯也要被拒
   const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });
   assert.equal(denied.ok, false, '刚上场就放技能应该被拒');
-  assert.match((denied as { reason: string }).reason, /刚上场/);
+  /*
+   * 文案钉死成和 `heroSkillsOf` 里那句**逐字一样**的「未就绪」。
+   *
+   * 早先这里是长句「刚上场的单位这一回合还不能用技能」，但那一行要挤进
+   * 技能按钮右侧的 price 位（还是 11–12px），长句直接把按钮撑变形。
+   * 现在两处统一用「未就绪」——短是短，但**不能只改一边**，否则又会出现
+   * "按钮上写着 A、点下去弹 B"。
+   */
+  assert.equal((denied as { reason: string }).reason, '未就绪');
 
   // 过一整个回合（A 结束 → B 结束 → 又轮到 A）：可以放了
   const t1 = applyAction(st, { type: 'END_TURN' });
