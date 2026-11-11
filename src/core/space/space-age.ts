@@ -19,6 +19,7 @@ import {
   ROCKET_SILO,
   SILO_FUEL_TURNS,
   SILO_ID,
+  announceBuiltSilos,
   launchProblem,
   launchToMoon,
   siloLines,
@@ -31,6 +32,7 @@ import {
   SAMPLE_TURNS,
   deployBase,
   deployProblem,
+  interruptSampling,
   lunarWinner,
   moonBaseLines,
   samplingOf,
@@ -80,12 +82,17 @@ export const SPACE_AGE: Expansion = {
     '<b>火箭发射井</b>：时代 5、2×2、只能建在平原，420 金。它有一个货舱，'
       + '贴着它点「装载」把一个地面单位接进来（船、飞机、建筑上不去）。',
     `加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满 ${SILO_FUEL_TURNS} 回合才能点火。`
-      + '发射后燃料清零，要再飞一趟就重新加注。',
+      + '发射后燃料清零，要再飞一趟就重新加注。'
+      + '<b>进度是公开的</b>：每回合发一条战报（加注 1/3、2/3…），对手读得到你还有几回合就飞。',
+    '<b>井藏不住</b>：发射井一建成就会在敌方视野里点亮一整个敌方回合；'
+      + '加注期间每回合都会重新点亮（烟柱一直冒）。<b>不加注的旧井不亮</b>——'
+      + '所以"建好先放着"是一种真实的欺骗。',
     '落地在<b>离月球中心最近的一块空地</b>，当回合不能再动。发射井与月球都不会被消耗。',
     '<b>登月胜利</b>：工程单位在月面点「展开月球基地」（2×2、200 血、12 甲、视野 5，'
       + '落地那回合不能采样），然后点基地的「月壤采样」；'
       + `${SAMPLE_TURNS} 个<b>自己的</b>回合后结果送回，直接获胜。整局只能做一次。`
-      + '顶栏会出现「登月 n」，双方都看得见。',
+      + '顶栏会出现「登月 n」，双方都看得见。'
+      + '<b>基地挨打就作废</b>：采样进度清零、要重新点——所以登月之后必须留人守。',
     '月面上的部队可以正常走动、正常开火：寻路、地形消耗、占格、射程、地形掩护、溅射'
       + '全都按<b>月球那一份</b>算。**地球和月球之间打不到**——坐标再近，中间也隔着一个天空。'
       + '攻城与装卸仍然只在地球（月球上没有城，也没有能装东西的船）。',
@@ -104,10 +111,29 @@ export const SPACE_AGE: Expansion = {
       state.boards.moon = createMoonBoard(state.w, state.seed);
     },
 
+    /**
+     * 采样挨打就作废。
+     *
+     * 走 `onUnitDamaged`（伤害已经写进 hp、死亡还没判）而不是能力钩子：
+     * 基地是建筑，没有"能力"，这条是**这个扩张的规则**，不该长在兵种上。
+     */
+    onUnitDamaged: ({ state, unit, source }) => interruptSampling(state, unit, source),
+
     /** 加注是"我方后勤"：每回合推进自己那些正在加注的井 */
     onTurnStart: ({ state, player }) => {
       tickSilos(state, player);
       tickMoonBases(state, player);
+    },
+
+    /**
+     * 回合结束再喊一次"新井立起来了"。
+     *
+     * 施工可能就在这个回合里完成（对面回合里被补完，或者你刚盖好）。
+     * 只在回合开始喊会漏掉它，对手那一整回合都看不见——"井藏不住"就白写了。
+     * 这里喊完正好赶上交给下一位：`s.current` 已经换人，点亮立刻生效。
+     */
+    onTurnEnd: ({ state, player }) => {
+      announceBuiltSilos(state, player);
     },
 
     /**

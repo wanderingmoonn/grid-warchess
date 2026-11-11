@@ -49,7 +49,8 @@ export const LUNAR_SAMPLING: SkillDef = {
   name: '月壤采样',
   summary:
     `把月壤样本封进返回舱，${SAMPLE_TURNS} 个回合后结果送回地球；` +
-    '结果一到，本方直接获胜。整局只能做一次。',
+    '结果一到，本方直接获胜。整局只能做一次。' +
+    '<b>基地挨打就作废</b>：进度清零，要重新开始——所以登月之后还得守。',
   effect: 'lunar-sampling',
   // 一次性：真正的闸门在就绪检查里（做过就不能再做），冷却留着是为了按钮文案
   cooldown: 0,
@@ -253,6 +254,7 @@ export function moonBaseLines(_s: GameState, u: Unit, viewer?: PlayerId): string
   }
   if (st.left > 0) {
     out.push(`月壤采样进行中：还剩 ${st.left} 个回合送回结果`);
+    out.push('基地一挨打就作废（进度清零）——要么有人守，要么别急着点');
   } else if (mine) {
     out.push(`点「月壤采样」（主动技能）开始；结果 ${SAMPLE_TURNS} 个回合后送回，一到就赢`);
   } else {
@@ -260,6 +262,35 @@ export function moonBaseLines(_s: GameState, u: Unit, viewer?: PlayerId): string
   }
   if (mine) out.push(`基地 ${u.hp} / ${MOON_BASE.maxHp}：被打掉的话采样作废`);
   return out;
+}
+
+/**
+ * 采样被打断：基地**挨一下**就作废，进度清零。
+ *
+ * 为什么门槛这么低（哪怕只掉 1 点血）：这条胜利条件原本是"开始采样 = 赢"，
+ * 对手没有任何反制。清零之后，一个普通兵贴上基地就能把倒计时按死——
+ * 于是"登月"从"飞上去就赢"变成"飞上去还要守"，投送率（一次一个 / 3 回合加注）
+ * 才第一次成为真实的资源竞争。
+ *
+ * 不做"≥N 点伤害才算"的门槛：那是数值问题，真要调只改这一个数，
+ * 机制不必重写。也不加冷却：清零之后随时可以重新点，倒计时从头算——
+ * 玩家看到的永远是"还剩几个回合"，而不是一个隐藏的冷却条。
+ *
+ * 环境伤害（中毒/灼烧/天气）不算：它们走 `tickStatuses` 扣血，不经过
+ * `hurtUnit`，所以天然不触发这里——"被打断"必须真的是对面在打你。
+ */
+export function interruptSampling(s: GameState, base: Unit, source?: Unit): void {
+  if (base.type !== MOON_BASE_ID) return;
+  const st = baseStateOf(base);
+  if (st.left <= 0 || st.sampled) return;
+  base.custom = { ...(base.custom ?? {}), sample: 0 };
+  const who = source ? `「${s.unitTypes[source.type]?.name ?? source.type}」` : '';
+  log(
+    s,
+    base.owner,
+    `月球基地挨了${who}一下，月壤采样被打断（进度清零，要重新开始）`,
+    true,
+  );
 }
 
 // ── 技能注册 ─────────────────────────────────────────────────────────

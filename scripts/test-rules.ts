@@ -20494,6 +20494,118 @@ test('手搓一张第二张图（不挂任何扩展）：走子、开火、威�
   );
 });
 
+console.log('\n太空时代：点亮与打断');
+
+test('发射井：建成点亮一整个敌方回合，加注期间每回合重新点亮', () => {
+  /*
+   * 「点亮一回合」是核心机制（`spotlight.ts`），修真异象和这里共用一套：
+   * 你标记 → 敌方的那个回合看得见 → 那个回合结束时熄。
+   * 判定方式是"敌方可见格里有没有井那一格"，因为"被看见"在引擎里
+   * 就是"那一格进了敌方可见集"——只画特效是没用的。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 5000;
+  const crew = place2(s, 'A', 'crew', 4, 4);
+  const silo = place2(s, 'A', SILO_ID, 10, 10);
+  silo.buildNeed = 1;
+  silo.buildDone = 1; // 已经建好（施工完成时核心会删掉这两个字段）
+  s.current = 'A';
+
+  const cell = idx(s, 10, 10);
+  const seenByB = (st: GameState) => visibleTilesOn(st, 'B', EARTH).has(cell);
+
+  // A 回合刚开始：B 不该看见（还没标记；而且这条只在"看的人自己的回合"生效）
+  assert.equal(seenByB(s), false, '标记之前不该亮');
+
+  // A 结束回合 → 轮到 B：井点亮
+  const toB = applyAction(s, { type: 'END_TURN' });
+  assert.ok(toB.ok, toB.reason);
+  assert.equal(toB.state.current, 'B');
+  assert.ok(seenByB(toB.state), '建好的井要在敌方回合点亮');
+
+  /*
+   * 熄灯：B 结束回合之后，A 的井不该还亮着（否则等于永久暴露）。
+   * 注意这一回合 A 没有加注，所以不会被重新点亮。
+   */
+  const toA = applyAction(toB.state, { type: 'END_TURN' });
+  assert.ok(toA.ok, toA.reason);
+  assert.equal(toA.state.current, 'A');
+  assert.equal(seenByB(toA.state), false, '敌方回合结束后必须熄灯');
+
+  // 加注：开始加注之后，每回合重新点亮
+  const s2 = toA.state;
+  const silo2 = s2.units.find((u) => u.type === SILO_ID)!;
+  const fuelled = applyAction(s2, { type: 'UNIT_ACTION', unitId: silo2.id, actionId: 'silo:fuel' });
+  assert.ok(fuelled.ok, fuelled.reason);
+  const toB2 = applyAction(fuelled.state, { type: 'END_TURN' });
+  assert.ok(toB2.ok, toB2.reason);
+  assert.ok(
+    visibleTilesOn(toB2.state, 'B', EARTH).has(idx(toB2.state, silo2.x, silo2.y)),
+    '加注期间要每回合重新点亮（烟柱一直冒）',
+  );
+});
+
+test('加注进度是公开战报：对手读得到"还差几回合"', () => {
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  const silo = place2(s, 'A', SILO_ID, 6, 6);
+  s.current = 'A';
+  const started = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:fuel' });
+  assert.ok(started.ok, started.reason);
+
+  // 推进一回合：加注到 1/3，并且这条必须是公开的（open = true）
+  const toB = applyAction(started.state, { type: 'END_TURN' });
+  assert.ok(toB.ok, toB.reason);
+  const toA = applyAction(toB.state, { type: 'END_TURN' });
+  assert.ok(toA.ok, toA.reason);
+  const line = toA.state.log.find((l) => l.open === true && l.text.includes('加注燃料'));
+  assert.ok(line, `加注进度要写公开战报，实际日志：${toA.state.log.slice(-3).map((l) => l.text).join(' / ')}`);
+});
+
+test('月壤采样：基地挨一下就打回原点，顶栏提示消失、可以重新点', () => {
+  /*
+   * 这是"登月之后还要守"的那一条。门槛刻意做得很低（1 点也算），
+   * 因为反制原本在数学上不成立：民兵 13 攻 − 12 甲 = 每回合 1 点，
+   * 而基地 200 血——如果不按"挨打即清零"，一个兵贴上去毫无意义。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const base = onMoon(s, 'A', MOON_BASE_ID, 3, 3);
+  base.custom = { ...(base.custom ?? {}), sample: SAMPLE_TURNS };
+  // 一支够劲的兵：民兵打不穿 12 甲（那样测的就不是"打断"而是"打不动"）
+  s.unitTypes['test-knocker'] = {
+    ...s.unitTypes.militia,
+    id: 'test-knocker',
+    name: '拆台队',
+    atk: 40,
+    range: 1,
+  };
+  const raider = onMoon(s, 'B', 'test-knocker', 5, 3);
+  base.hp = 200;
+  s.current = 'B';
+  refreshMemory(s);
+
+  assert.ok(samplingOf(s), '前提：这时候确实在采样');
+  const r = applyAction(s, { type: 'ATTACK', unitId: raider.id, targetId: base.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === base.id);
+  assert.ok(after, '这一下不该把基地打死（测的是打断，不是拆毁）');
+  assert.equal(samplingOf(r.state) ?? null, null, '采样要被打回原点');
+  assert.equal(after!.custom?.sample ?? 0, 0, '进度清零');
+  assert.equal(after!.custom?.sampled, undefined, '不算完成');
+  assert.ok(
+    r.state.log.some((l) => l.open === true && l.text.includes('采样被打断')),
+    '打断要有公开战报（对手得知道"这一下有用"）',
+  );
+
+  // 可以重新点：回到自己的回合，立刻就能重新开始
+  const mine = { ...r.state, current: 'A' as const };
+  const again = applyAction(mine, { type: 'HERO_SKILL', unitId: base.id, skillId: 'lunar-sampling' });
+  assert.ok(again.ok, `清零之后该能重新采样：${again.reason}`);
+  assert.equal(samplingOf(again.state)?.left, SAMPLE_TURNS, '倒计时从头算');
+});
+
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {
   /*
    * 以前 `doUnitAction` 取"第一个声明了 unitActions 的扩展"。太空包在扩展表里

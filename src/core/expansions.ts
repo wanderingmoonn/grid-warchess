@@ -388,6 +388,18 @@ export interface ExpansionHooks {
   extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
 
   /**
+   * 有单位真的掉了血（伤害已经写进 hp，死亡流程还没开始）。
+   *
+   * 给"被打断/被打醒"这一类规则用：太空的月壤采样被打一下就作废，
+   * 走的就是这条。和 `modifyDamage` 分工不同——那个改的是数值，
+   * 这个只在"确实掉了血"之后通知一声（`amount > 0`）。
+   *
+   * 不要在这里再扣血或杀人：死亡判定在 hurtUnit 之后的主流程里，
+   * 这里动血会让"这一下到底打死了没有"变成两处口径。
+   */
+  onUnitDamaged?: (c: { state: GameState; unit: Unit; amount: number; source?: Unit }) => void;
+
+  /**
    * 这个单位现在**能不能下命令**。返回字符串 = 不能，字符串是给玩家的理由。
    *
    * 和技能的 readyCheck 不是一层：那个说的是技能自身的冷却/资源，

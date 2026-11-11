@@ -22,8 +22,9 @@
 
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../types.ts';
 import { boardIdOf, boardOf } from '../board.ts';
-import { tilesOfUnit } from '../query.ts';
+import { tilesOfUnit, underConstruction } from '../query.ts';
 import { passable } from '../config.ts';
+import { markSpotlight, clearSpotlight } from '../spotlight.ts';
 
 /** 建筑 id。写进存档，改它等于让老存档里的发射井变成一块石头 */
 export const SILO_ID = 'rocket_silo';
@@ -143,8 +144,15 @@ export function startFueling(s: GameState, silo: Unit): string | null {
   if (st.fuel >= SILO_FUEL_TURNS) return '燃料已经加满了，直接发射就行';
   if (st.fueling) return `已经在加注了（${st.fuel} / ${SILO_FUEL_TURNS}）`;
   writeSilo(silo, { fuel: st.fuel, fueling: true });
+  /*
+   * 一点火加注就点亮：烟柱从这一刻开始冒。
+   *
+   * 只在回合开始刷新是不够的——玩家可能在本回合中途才点「加注」，
+   * 那一次 `tickSilos` 已经过去了，对手这一回合就看不见它。
+   */
+  markSpotlight(silo);
   const left = SILO_FUEL_TURNS - st.fuel;
-  log(s, silo.owner, `${s.unitTypes[silo.type]?.name ?? '发射井'}开始加注燃料，还要 ${left} 回合`);
+  log(s, silo.owner, `${s.unitTypes[silo.type]?.name ?? '发射井'}开始加注燃料，还要 ${left} 回合`, true);
   return null;
 }
 
@@ -198,6 +206,8 @@ export function launchToMoon(s: GameState, silo: Unit): string | null {
     // 火箭升空是瞒不住的，而且对手看着它飞过去才知道该在哪儿堵
     true,
   );
+  // 燃料清了、火箭走了：井不再冒烟，这一盏点亮到此为止
+  clearSpotlight(silo);
   return null;
 }
 
@@ -206,15 +216,59 @@ export function launchToMoon(s: GameState, silo: Unit): string | null {
  *
  * 只推进**这一方自己的**井：加注是"我方后勤"，对手的回合不该替我加油。
  */
+/**
+ * 新盖好的井喊一嗓子：**只喊一次**，点亮一整个敌方回合。
+ *
+ * 两个时机都要调（回合开始 + 回合结束）：井可能在对方回合里被你自己的施工队
+ * 补完，也可能在本回合刚立起来；只在回合开始喊，会漏掉"本回合刚建好"的那一座，
+ * 于是对手整回合都看不见它。
+ *
+ * 判"建好"用 `buildNeed` 有没有被删掉（施工完成时核心会删），
+ * 再用 `announced` 保证不重复——读存档、重开都不会反复点亮。
+ */
+export function announceBuiltSilos(s: GameState, player: PlayerId): void {
+  for (const u of s.units) {
+    if (u.owner !== player || !isSilo(s, u)) continue;
+    if (underConstruction(u)) continue;
+    if (u.custom?.announced === true) continue;
+    u.custom = { ...(u.custom ?? {}), announced: true };
+    markSpotlight(u);
+    log(
+      s,
+      player,
+      `${s.unitTypes[u.type]?.name ?? '发射井'}立起来了——这么大的东西，隔着半个战场也看得见`,
+      true,
+    );
+  }
+}
+
 export function tickSilos(s: GameState, player: PlayerId): void {
+  announceBuiltSilos(s, player);
+
   for (const u of s.units) {
     if (u.owner !== player || !isSilo(s, u)) continue;
     const st = siloStateOf(u);
+
+    /*
+     * 「加注期间」每回合重新标记一次：清灯发生在对方回合结束时，
+     * 不 refresh 的话只有第一回合亮。烟柱一直冒，所以一直看得见。
+     * 不加注的旧井**不亮**——"建好先放着"因此是一种真实的欺骗。
+     */
+    if (!underConstruction(u) && st.fueling) markSpotlight(u);
+
     if (!st.fueling) continue;
     const fuel = Math.min(SILO_FUEL_TURNS, st.fuel + 1);
     writeSilo(u, { fuel, fueling: fuel < SILO_FUEL_TURNS });
+    const siloName = s.unitTypes[u.type]?.name ?? '发射井';
     if (fuel >= SILO_FUEL_TURNS) {
-      log(s, player, `${s.unitTypes[u.type]?.name ?? '发射井'}的燃料加满了（${SILO_FUEL_TURNS} / ${SILO_FUEL_TURNS}）`, true);
+      log(s, player, `${siloName}的燃料加满了（${SILO_FUEL_TURNS} / ${SILO_FUEL_TURNS}），随时可以点火`, true);
+    } else {
+      /*
+       * 加注进度**公开**：对手必须能读到"他还差几回合就飞"。
+       * 这是火箭奇袭唯一的预警，比在顶栏加一个倒计时更省事：
+       * 战报本来就两边都能翻，也不会多占一块界面。
+       */
+      log(s, player, `${siloName}正在加注燃料（${fuel} / ${SILO_FUEL_TURNS}）`, true);
     }
   }
 }

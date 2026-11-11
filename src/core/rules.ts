@@ -138,6 +138,7 @@ import type {
 } from './types.ts';
 import { seatsOf } from './types.ts';
 import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
+import { clearSpotlightsOfOthers, spotlightCellsOn } from './spotlight.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -505,6 +506,15 @@ function hurtUnit(
     state: s, self: victim, amount: dmg, source: opts.source, api: abilityApi,
   };
   for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
+
+  /*
+   * 扩展层的"真的掉血了"通知（数值已写进 hp）。
+   * 给"挨打就作废"这类规则用，见 ExpansionHooks.onUnitDamaged。
+   * 传的是 `victim`：伤害被守御阵接走时，掉血的是接替者，不是原目标。
+   */
+  for (const e of activeExpansions(s)) {
+    e.hooks.onUnitDamaged?.({ state: s, unit: victim, amount: toHp, source: opts.source });
+  }
 
   /*
    * 转移把接替者打死了，得由这里收场。
@@ -7069,6 +7079,15 @@ function doEndTurn(s: GameState): ActionResult {
   const prevSites = s.orderSites?.[prevPlayer];
   if (prevSites && prevSites.length > 0) prevSites.shift();
 
+  /*
+   * 「点亮一回合」到这里熄灯：`prevPlayer` 的回合刚结束，站在他对面的
+   * 那些单位已经亮了他一整回合（见 spotlight.ts）。
+   *
+   * 放在切人**之前**清，是因为 `spotlightCellsOn` 只看 `s.current`：
+   * 先把 current 换掉再清，中间那一瞬谁都不该看见。
+   */
+  clearSpotlightsOfOthers(s, prevPlayer);
+
   const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
   s.turn += 1;
@@ -7237,6 +7256,13 @@ export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): 
     }
   }
 
+  /*
+   * 「点亮一回合」：核心机制，**不经过扩展钩子**，所以任何图都能用
+   * （钩子那条还是地球专供，见上面的说明）。
+   * 修真的异象、太空的发射井都记在这里，规则层与 AI 一起认。
+   */
+  for (const i of spotlightCellsOn(s, p, id)) out.add(i);
+
   return out;
 }
 
@@ -7273,12 +7299,16 @@ export function tileVisibleTo(
   });
   if (lit) return true;
   // 额外视野只有地球的索引，别的图直接跳过
-  if (id !== EARTH) return false;
-  const i = idx(s, x, y);
-  for (const e of activeExpansions(s)) {
-    const extra = e.hooks.extraVision?.({ state: s, player: p });
-    if (extra && extra.includes(i)) return true;
+  if (id === EARTH) {
+    const i = idx(s, x, y);
+    for (const e of activeExpansions(s)) {
+      const extra = e.hooks.extraVision?.({ state: s, player: p });
+      if (extra && extra.includes(i)) return true;
+    }
   }
+  // 点亮：按这张图的格号比对（任何图都认）
+  const spotCell = y * boardOf(s, id).w + x;
+  if (spotlightCellsOn(s, p, id).includes(spotCell)) return true;
   return false;
 }
 
