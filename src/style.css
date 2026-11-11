@@ -7048,3 +7048,39 @@ a.btn {
     display: none;
   }
 }
+
+/*
+ * 手机：「设置」钉在顶栏右缘。
+ *
+ * 360px 上顶栏放不下整套按钮（回合胶囊 + 交给 AI + 联机 + 迷雾 + 设置），
+ * 靠横滚才够得着——而它是**唯一**必须永远够得着的那个：主题、铃声、导出、
+ * 规则书、反馈全在里面。实测 360px 下它被裁得只剩半个"设"字。
+ *
+ * sticky 而不是把它移出滚动容器：顶栏的骨架只插一次 DOM（AI 每走一步都在
+ * render，重建按钮会让 mousedown/mouseup 之间换掉节点、点击丢失），
+ * 所以不能为了这件事改结构。sticky 只改定位，不动节点。
+ */
+@media (max-width: 640px) {
+  .topbar [data-act='settings'] {
+    position: sticky;
+    right: 0;
+    /* 别的按钮滚到它下面时不许透出来 */
+    background: var(--panel);
+    /* 左侧一道渐隐：看得出"从这儿开始是固定的" */
+    box-shadow: -10px 0 10px -8px rgba(40, 35, 25, 0.35);
+  }
+}
+
+/*
+ * 手机：顶栏只留「回合胶囊 · 交给 AI · 设置」。
+ *
+ * 「联机」「迷雾」一局里点不到一次（联机是开局前的事，迷雾基本定死在开局面板），
+ * 却每回合都占着横向空间——360px 上正是它们把「设置」挤出了屏幕。
+ * 现在这两颗搬进设置弹窗（settingsHtml 的 compact 组），顶栏一条都不用滚。
+ */
+@media (max-width: 640px) {
+  .topbar-actions [data-act='online'],
+  .topbar-actions [data-act='toggle-fog'] {
+    display: none;
+  }
+}

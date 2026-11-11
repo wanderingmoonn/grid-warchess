@@ -31,6 +31,20 @@ export interface SettingsOptions {
    * 否则"藏了入口"变成"换了个地方露出来"。
    */
   replay?: boolean;
+  /**
+   * 窄屏专用：把顶栏那两颗「联机」「迷雾」也收进来。
+   *
+   * 360px 宽的顶栏放不下整套按钮（回合胶囊 + 交给 AI + 联机 + 迷雾 + 设置），
+   * 只能横向滚——而这两颗恰恰是"一局点不到一次"的。按频率分层之后，
+   * 手机顶栏只剩「回合胶囊 · 交给 AI · 设置」，一个滚动条都不用出现。
+   */
+  compact?: boolean;
+  /** 迷雾开着吗（compact 时设置里要显示状态） */
+  fog?: boolean;
+  /** 浓雾蔽野：迷雾锁定，开关只做说明 */
+  blackout?: boolean;
+  /** 联机房间码；null = 本机对局 */
+  roomCode?: string | null;
 }
 
 const chip = (on: boolean, act: string, label: string, extra = ''): string =>
@@ -93,6 +107,42 @@ export function settingsHtml(o: SettingsOptions): string {
           <button class="btn btn-sm" data-act="new-game">回首页</button>
         </div>
       </section>
+
+      ${
+        /*
+         * 「对局中」这一组只在窄屏出现。
+         *
+         * 桌面顶栏本来就有「联机」「迷雾」两颗按钮，这里再放一份就是两处状态、
+         * 两条路径；手机上顶栏放不下，它们才搬进来。
+         */
+        o.compact
+          ? `<section class="set-group">
+        <div class="set-title">对局中</div>
+        <div class="set-row">
+          <div class="set-label">迷雾
+            <span class="set-hint">${
+              o.blackout
+                ? '这局开了「浓雾蔽野」，迷雾锁定开启，关不掉。'
+                : '关掉等于全图可见。自定义局里想看清楚时用，正常对局别关。'
+            }</span>
+          </div>
+          <div class="chip-row">
+            <button class="chip${o.fog ? ' active' : ''}" data-act="toggle-fog" ${
+              o.blackout ? 'disabled' : ''
+            }>${o.fog ? '开' : '关'}</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">联机
+            <span class="set-hint">${
+              o.roomCode ? `当前房间 ${o.roomCode}` : '建房或加入别人的房间（不在房间里的对局是本机的）'
+            }</span>
+          </div>
+          <button class="btn btn-sm" data-act="online">${o.roomCode ? '房间' : '联机'}</button>
+        </div>
+      </section>`
+          : ''
+      }
 
       <section class="set-group">
         <div class="set-title">其它</div>
