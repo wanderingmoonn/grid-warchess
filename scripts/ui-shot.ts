@@ -230,6 +230,41 @@ const tag =
 await goto(BASE);
 await evaluate('localStorage.clear()');
 
+if (ARGS.includes('manual')) {
+  /*
+   * 规则书：只看长表（兵种一多那种）。
+   *
+   * 长表在 .scroll-x.tall 里**自己滚**（表头吸顶），所以验它要滚那个容器，
+   * 不是滚窗口——滚窗口的话表头当然一直不动，等于什么都没测。
+   */
+  await goto(BASE + 'manual-pack-eras.html');
+  // 手册页开了 `html { scroll-behavior: smooth }`：默认的 scrollIntoView 是动画，
+  // 截的时候可能还停在半路（第一次就是这么拍到页面顶部的）。一律用 instant。
+  await evaluate(`(() => {
+    const box = document.querySelector('.scroll-x.tall');
+    if (!box) return;
+    const top = box.getBoundingClientRect().top + window.scrollY - 6;
+    window.scrollTo({ top, behavior: 'instant' });
+  })()`);
+  await sleep(400);
+  await shot(`10-manual-top${MOBILE ? '-m' : ''}`);
+
+  // 纵向滚到表格中段 + 横向滚一点：表头该还在，兵种名该还贴左边
+  await evaluate(`(() => {
+    const box = document.querySelector('.scroll-x.tall');
+    if (!box) return;
+    box.scrollTop = 900;
+    box.scrollLeft = 220;
+  })()`);
+  await sleep(400);
+  await shot(`11-manual-scrolled${MOBILE ? '-m' : ''}`);
+
+  proc.kill();
+  staticServer.close();
+  console.log('\n完成：', OUT);
+  process.exit(0);
+}
+
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
 

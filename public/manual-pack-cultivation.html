@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 修真扩展</title>
 <style>
   :root {
@@ -184,6 +190,63 @@
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
   table.wide { font-size: 12.5px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
@@ -333,7 +396,7 @@
       <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
         跨段比较时请对照"来源"那一列。</p>
       
-    <div class="scroll-x">
+    <div class="scroll-x tall">
       <table class="wide">
         <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
         <tbody><tr class="grp" id="p-cultivation"><td colspan="12">修真 · 31 个</td></tr><tr data-unit="cultivator-spirit"><td class="name">灵体</td><td class="glyph">魂</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-cultivator-spirit-重生">重生 CD0</a></td></tr><tr data-unit="qi-cultivator"><td class="name">炼气士</td><td class="glyph">炼</td><td class="src">修真</td><td class="num">1</td><td class="num">110</td><td class="num">10</td><td class="num">0</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="cultivation-spirit-tower"><td class="name">散灵台</td><td class="glyph">灵</td><td class="src">修真</td><td class="num">2</td><td class="num">60</td><td class="num">12</td><td class="num">2</td><td class="num">28</td><td class="num">—</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-tower-释放灵气">释放灵气 CD0</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-servant"><td class="name">仆役</td><td class="glyph">仆</td><td class="src">修真</td><td class="num">2</td><td class="num">75</td><td class="num">4</td><td class="num">2</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-servant">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-spirit-field"><td class="name">灵田</td><td class="glyph">田</td><td class="src">修真</td><td class="num">2</td><td class="num">90</td><td class="num">2</td><td class="num">2</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-spirit-aura">灵气滋养</a> · <a class="ref" href="#t-income">产出 +6 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-forge-1"><td class="name">炼器炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">2</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">90</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-artifact-wood"><td class="name">青木剑</td><td class="glyph">木</td><td class="src">修真</td><td class="num">2</td><td class="num">150</td><td class="num">18</td><td class="num">3</td><td class="num">36</td><td class="num">4</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sword-qi">剑气环</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-near-cultivation-artifact-wood">产地 森林，或 2 个灵田</a></td></tr><tr data-unit="sword-cultivator"><td class="name">剑修</td><td class="glyph">剑</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">1</td><td class="num">20</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-sword-cultivator-剑气纵横">剑气纵横 CD0</a></td></tr><tr data-unit="body-cultivator"><td class="name">体修</td><td class="glyph">体</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">2</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-ab-body-ward">金刚不坏</a></td></tr><tr data-unit="cultivation-artifact-stone"><td class="name">玄石印</td><td class="glyph">石</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">12</td><td class="num">9</td><td class="num">52</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-stone-ward">磐石</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-near-cultivation-artifact-stone">产地 高山或丘陵，或 2 个灵矿</a></td></tr><tr data-unit="cultivation-kill-formation"><td class="name">杀伐阵</td><td class="glyph">杀</td><td class="src">修真</td><td class="num">3</td><td class="num">80</td><td class="num">0</td><td class="num">4</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-kill">杀伐</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-alchemy-furnace"><td class="name">炼丹炉</td><td class="glyph">丹</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">0</td><td class="num">2</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-deacon"><td class="name">执事</td><td class="glyph">执</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">6</td><td class="num">3</td><td class="num">25</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-deacon">可建 9 种建筑</a></td></tr><tr data-unit="cultivation-scripture-pavilion"><td class="name">藏经阁</td><td class="glyph">经</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-silent-pavilion"><td class="name">静心阁</td><td class="glyph">静</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-spirit-mine"><td class="name">灵矿</td><td class="glyph">矿</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">3</td><td class="num">4</td><td class="num">45</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +5 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master"><td class="name">阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">6</td><td class="num">2</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master">可建 1 种建筑</a></td></tr><tr data-unit="cultivation-artifact-water"><td class="name">寒水镜</td><td class="glyph">水</td><td class="src">修真</td><td class="num">3</td><td class="num">190</td><td class="num">16</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-chill">寒霜</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-water">产地 水域或浅流，或 灵泉</a></td></tr><tr data-unit="cultivation-forge-2"><td class="name">地火炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-sect"><td class="name">宗门大殿</td><td class="glyph">宗</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="soul-cultivator"><td class="name">魂修</td><td class="glyph">魄</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">8</td><td class="num">1</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="blood-cultivator"><td class="name">魔修</td><td class="glyph">魔</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">6</td><td class="num">1</td><td class="num">22</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-blood-cultivator-血祭">血祭 CD0</a></td></tr><tr data-unit="cultivation-seal-formation"><td class="name">封印阵</td><td class="glyph">封</td><td class="src">修真</td><td class="num">4</td><td class="num">100</td><td class="num">0</td><td class="num">5</td><td class="num">34</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-seal">封印</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-guard-formation"><td class="name">守御阵</td><td class="glyph">守</td><td class="src">修真</td><td class="num">4</td><td class="num">110</td><td class="num">0</td><td class="num">6</td><td class="num">80</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-guardian">守御</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-steward"><td class="name">管事</td><td class="glyph">管</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">8</td><td class="num">3</td><td class="num">28</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-steward">可建 11 种建筑</a></td></tr><tr data-unit="cultivation-spirit-spring"><td class="name">灵泉</td><td class="glyph">泉</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">0</td><td class="num">5</td><td class="num">70</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-spring-泉涌">泉涌 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-2"><td class="name">大阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">4</td><td class="num">170</td><td class="num">8</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-2">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-artifact-fire"><td class="name">赤炎珠</td><td class="glyph">炎</td><td class="src">修真</td><td class="num">4</td><td class="num">260</td><td class="num">30</td><td class="num">3</td><td class="num">34</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sunder">熔甲</a> · <a class="ref" href="#t-ab-artifact-fire-qi">真火</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-fire">产地 灵矿</a></td></tr><tr data-unit="cultivation-forge-3"><td class="name">天工炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">4</td><td class="num">280</td><td class="num">0</td><td class="num">6</td><td class="num">150</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-teleport-formation"><td class="name">传送阵</td><td class="glyph">传</td><td class="src">修真</td><td class="num">5</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">32</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-teleport-formation-挪移">挪移 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-3"><td class="name">天阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">5</td><td class="num">220</td><td class="num">10</td><td class="num">4</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-3">可建 4 种建筑</a></td></tr></tbody>
