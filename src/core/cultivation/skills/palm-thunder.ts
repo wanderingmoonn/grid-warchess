@@ -22,6 +22,7 @@
 import type { SkillDef } from '../../types.ts';
 import { registerSkillEffect, registerSkillPreview, registerSkillReadyCheck } from '../../skill-hooks.ts';
 import { coversTile, distBetweenUnits } from '../../query.ts';
+import { boardIdOf } from '../../board.ts';
 import { getRank } from '../progression.ts';
 import { canSpendMana, manaOf, spendMana } from '../mana.ts';
 
@@ -70,6 +71,8 @@ registerSkillReadyCheck('palm-thunder', (_s, u) => {
 
 registerSkillEffect('palm-thunder', (c) => {
   const s = c.state;
+  // 查格子/找目标一律按施法者那张图；`s` 只用来改状态（扣血、写战报）
+  const view = c.view;
   const self = c.self;
   const target = c.target;
 
@@ -80,7 +83,7 @@ registerSkillEffect('palm-thunder', (c) => {
   }
   // 用 coversTile 而不是"锚点坐标相等"：2×2 的单位占四格，
   // 点在它的右下角也该算命中（query.ts 里那是同一份几何）。
-  const victim = s.units.find((u) => u.hp > 0 && coversTile(s, u, target.x, target.y));
+  const victim = view.units.find((u) => u.hp > 0 && coversTile(view, u, target.x, target.y));
   if (!victim) {
     // 法术只打单位：城池、空地都要明说，否则玩家会以为"点了没反应"
     c.result.ok = false;
@@ -92,7 +95,7 @@ registerSkillEffect('palm-thunder', (c) => {
     c.result.reason = `不能对自己的${c.api.utype(s, victim.type).name}放雷`;
     return;
   }
-  if (distBetweenUnits(s, self, victim) > PALM_THUNDER_RANGE) {
+  if (distBetweenUnits(view, self, victim) > PALM_THUNDER_RANGE) {
     c.result.ok = false;
     c.result.reason = `太远了（掌心雷射程 ${PALM_THUNDER_RANGE} 格）`;
     return;
@@ -108,7 +111,7 @@ registerSkillEffect('palm-thunder', (c) => {
   // 走唯一扣血出口：守御阵会替它挡、受伤钩子照常触发
   c.api.hurt(s, victim, dmg, { source: self, logText: `${name}以掌心雷击中${c.api.utype(s, victim.type).name}，造成 ${dmg} 点伤害` });
   // 战况烈度：雷落到过哪儿，对面下一回合看得见
-  c.api.noteHeat(s, victim.x, victim.y);
+  c.api.noteHeat(s, victim.x, victim.y, boardIdOf(self));
 
   if (victim.hp <= 0) {
     c.api.killUnit(s, victim, self, `${c.api.utype(s, victim.type).name}被掌心雷击穿`);
@@ -125,7 +128,8 @@ registerSkillEffect('palm-thunder', (c) => {
  * 不按落点算（落点只是最终目标），否则鼠标一动高亮就跟着碎，反而看不清射程。
  */
 registerSkillPreview('palm-thunder', (c) => {
-  const { state, self } = c;
+  // 预览也按施法者那张图：界与格号都是"这张图"的，地球的 20 宽不能拿来算月球
+  const { view: state, self } = c;
   const cells: number[] = [];
   for (let dy = -PALM_THUNDER_RANGE; dy <= PALM_THUNDER_RANGE; dy++) {
     for (let dx = -PALM_THUNDER_RANGE; dx <= PALM_THUNDER_RANGE; dx++) {

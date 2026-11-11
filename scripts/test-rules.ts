@@ -3232,7 +3232,7 @@ test('陨卵：落点由玩家点，空地也能放（2026-11-10 放宽）', () 
   const skill = (s.unitTypes['evil-dragon-king']!.skills ?? []).find((k) => k.id === 'dragon-egg')!;
   assert.equal(skill.targeting, 'point', '要声明成选点技能，界面才会进瞄准模式');
 
-  const cells = SKILL_TARGET_CELLS['dragon-egg']!({ state: s, self: dragon, skill });
+  const cells = SKILL_TARGET_CELLS['dragon-egg']!({ state: s, view: s, self: dragon, skill });
   assert.ok(cells.length > 0, '射程内放得下蛋的格子都该高亮');
   assert.ok(cells.some((p) => p.x === 10 && p.y === 5), '(10,5) 贴着敌人，是合法落点');
   assert.ok(
@@ -20424,6 +20424,74 @@ test('月面战斗：凭空出现的单位留在月面（spawn 带图）', () =>
   abilityApi.spawn(s, 'B', 'militia', 2, 2);
   const earthling = s.units.filter((u) => boardIdOf(u) === EARTH).pop();
   assert.ok(earthling, '不传 board 就是地球');
+});
+
+console.log('\n多图：不是月球的特例');
+
+test('手搓一张第二张图（不挂任何扩展）：走子、开火、威胁圈都按它结算', () => {
+  /*
+   * 这条是为了证明"多图"不是太空包的特例：这里**不挂任何扩展**，
+   * 直接用 `s.boards` 塞一张 8×8 的图。引擎应该一视同仁——
+   * 地球与它之间只靠 `Unit.board` 区分，没有"月球专用分支"。
+   *
+   * 它同时是"以后再加空间站/其他星球"的最小回归：如果哪天有人在战斗链上
+   * 又写回了 `s.tiles`，这条会红。
+   */
+  const s = fresh();
+  const W = 8;
+  const tiles = Array.from({ length: W * W }, () => ({
+    terrain: 'plain' as Terrain,
+    cityId: null,
+  }));
+  s.boards = {
+    'test-b': { id: 'test-b', kind: 'planet', name: '试验图', w: W, h: W, tiles },
+  };
+
+  // 地球同坐标先摆一个人：后面的断言要看它有没有被"同一张纸上的坐标"误伤
+  const ghost = place2(s, 'B', 'militia', 3, 2);
+  const put = (owner: 'A' | 'B', type: string, x: number, y: number) => {
+    const def = s.unitTypes[type];
+    const u: Unit = {
+      id: `tb${s.nextUnitSeq++}`,
+      type,
+      owner,
+      x,
+      y,
+      hp: def.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+      board: 'test-b',
+    };
+    s.units.push(u);
+    return u;
+  };
+  const me = put('A', 'militia', 2, 2);
+  const foe = put('B', 'militia', 3, 2);
+  // 另一个没出过手的自己人：走子那条要它来测（打过之后 moved 就锁上了）
+  const mover = put('A', 'militia', 1, 1);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: me.id, targetId: foe.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.ok(hp(foe.id) < foe.hp, '第二张图上贴身的敌人打得到');
+  assert.equal(hp(ghost.id), ghost.hp, '地球上同坐标的人不该挨这一刀');
+
+  // 越界按这张图自己的宽高（8 宽：x=8 就已经出界）
+  const far = applyAction(r.state, { type: 'MOVE', unitId: mover.id, x: 8, y: 2 });
+  assert.equal(far.ok, false, 'x=8 在 8 宽图上就是越界');
+  assert.ok(far.reason.includes('越界'), `理由该说越界，实际：${far.reason}`);
+
+  // 威胁圈的格号必须落在这一张图里（0..63），不能按地球的宽度算
+  const self = r.state.units.find((u) => u.id === me.id)!;
+  const threat = threatTiles(r.state, self);
+  assert.ok(threat.size > 0, '近战贴身，威胁圈不该是空的');
+  assert.ok(
+    [...threat].every((i) => i >= 0 && i < W * W),
+    '威胁圈的格号必须属于第二张图（否则会画到地球的格子上）',
+  );
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

@@ -40,7 +40,6 @@ import {
 import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, marksAt } from './marks.ts';
-import { boardIdOf, boardStateOf } from './board.ts';
 import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
@@ -387,7 +386,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
         {
           stage: STAT_STAGE.base,
           apply: (c) => {
-            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            const tile = c.api.tileOf(c.state, c.self);
             if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
             c.armor += WOODLAND_ARMOR;
             c.items.push({ label: '林地之主', delta: WOODLAND_ARMOR });
@@ -400,7 +399,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
           apply: (c) => {
             // 只有"我挨打"才给自己加甲。出手时加的是对手的甲，那是反向的
             if (c.side !== 'defender') return;
-            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            const tile = c.api.tileOf(c.state, c.self);
             if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
             if (!c.ignoreCover) c.armor += 3;
           },
@@ -598,7 +597,8 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             if (dx === 0 && dy === 0) return;
             const nx = c.target.x + dx;
             const ny = c.target.y + dy;
-            if (!c.api.canStandAt(c.state, nx, ny, c.target.type)) return;
+            // 按目标所在那张图判：月球上被击退，不该去查地球那一格站不站得住
+            if (!c.api.canStandAt(c.view, nx, ny, c.target.type)) return;
             c.target.x = nx;
             c.target.y = ny;
             c.result.pushed = true;
@@ -758,9 +758,8 @@ const FANTASY_ABILITIES: AbilityDef[] = [
         for (let k = 0; k < 2; k += 1) {
           // 落点按死者那张图找：月球上死掉的史莱姆，小史莱姆也该在月球上，
           // 不能凭空出现在地球同一坐标（那正是"月面幽灵"）。
-          const spot = c.api.freeNeighbor(boardStateOf(c.state, c.victim), c.victim, kid);
-          if (!spot) break;
-          c.api.spawn(c.state, c.victim.owner, kid, spot.x, spot.y, boardIdOf(c.victim));
+          const born2 = c.api.spawnNear(c.state, c.victim.owner, kid, c.victim);
+          if (!born2) break;
           born += 1;
         }
         if (born > 0) c.api.pushLog(c.state, c.victim.owner, `${def.name} 分裂出 ${born} 只小史莱姆`, true);
@@ -893,9 +892,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             const def = c.api.utype(c.state, c.self.type);
             const wall = def.builds?.[0] ?? 'earth-wall';
             if (!c.state.unitTypes[wall]) return;
-            const spot = c.api.freeNeighbor(boardStateOf(c.state, c.self), c.self, wall);
-            if (!spot) return;
-            c.api.spawn(c.state, c.owner, wall, spot.x, spot.y, boardIdOf(c.self));
+            if (!c.api.spawnNear(c.state, c.owner, wall, c.self)) return;
             c.api.pushLog(c.state, c.owner, `${def.name} 立起一道土墙`);
           },
         },
@@ -997,9 +994,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
               (u) => u.owner === c.owner && outputs.includes(u.type),
             ).length;
             if (alive >= spec.max) return;
-            const spot = c.api.freeNeighbor(boardStateOf(c.state, c.self), c.self, type);
-            if (!spot) return;
-            c.api.spawn(c.state, c.owner, type, spot.x, spot.y, boardIdOf(c.self));
+            if (!c.api.spawnNear(c.state, c.owner, type, c.self)) return;
             c.api.pushLog(c.state, c.owner, `${def.name} 召唤出 ${c.api.utype(c.state, type).name}`);
           },
         },

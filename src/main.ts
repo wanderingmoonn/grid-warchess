@@ -87,7 +87,7 @@ import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Uni
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
 import type { BoardUi } from './ui/board.ts';
-import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardState, EARTH, hasBoard } from './core/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
 import {
   aiDraftBan,
@@ -2175,11 +2175,20 @@ function refreshSelection(): void {
         const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
         const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
         if (cellsOf && skillDef) {
-          for (const p of cellsOf({ state, self: caster, skill: skillDef })) {
-            aimTiles.push(idx(state, p.x, p.y));
+          // 选点格与预览一律按**施法者那张图**：月面上的技能不该在地球上高亮，
+          // 格号也不通用（地球 20 宽的 i=45 和月球 9 宽的 i=45 不是一个位置）
+          const view = boardStateOf(state, caster);
+          const board = boardIdOf(caster);
+          for (const p of cellsOf({ state, view, self: caster, skill: skillDef })) {
+            aimTiles.push(idxOn(state, board, p.x, p.y));
           }
         } else if (previewer && caster) {
-          skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
+          skillThreatTiles = previewer({
+            state,
+            view: boardStateOf(state, caster),
+            self: caster,
+            target: { x: caster.x, y: caster.y },
+          });
         }
         return;
       }
@@ -2197,7 +2206,12 @@ function refreshSelection(): void {
 
           // 2. 如果有预览器，就问一下这个方向会打到哪
           if (previewer) {
-            const cells = previewer({ state, self: caster, target: { x: aimX, y: aimY } });
+            const cells = previewer({
+              state,
+              view: boardStateOf(state, caster),
+              self: caster,
+              target: { x: aimX, y: aimY },
+            });
             for (const cell of cells) {
               // 把自己脚下和起点的 aim 格剔除
               if (cell !== caster.y * state.w + caster.x && !aimTiles.includes(cell)) {
@@ -7918,7 +7932,7 @@ boardEl.addEventListener('mouseover', (e) => {
   const previewer = SKILL_PREVIEWERS[pending.skillId];
   if (!caster || !previewer) return;
   skillAimKey = key;
-  skillThreatTiles = previewer({ state, self: caster, target: { x, y } });
+  skillThreatTiles = previewer({ state, view: boardStateOf(state, caster), self: caster, target: { x, y } });
   render();
 });
 
@@ -7933,7 +7947,14 @@ boardEl.addEventListener('mouseout', (e) => {
   const previewer = SKILL_PREVIEWERS[pendingSkill.skillId];
   skillAimKey = '';
   skillThreatTiles =
-    caster && previewer ? previewer({ state, self: caster, target: { x: caster.x, y: caster.y } }) : [];
+    caster && previewer
+      ? previewer({
+          state,
+          view: boardStateOf(state, caster),
+          self: caster,
+          target: { x: caster.x, y: caster.y },
+        })
+      : [];
   render();
 });
 

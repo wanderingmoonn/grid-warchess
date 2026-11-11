@@ -4,6 +4,12 @@ import type { AbilityApi } from './ability-hooks.ts';
 
 export interface SkillCtx {
   state: GameState;
+  /**
+   * **施法者所在那张图**的只读视角。查格子一律用它，别用 `state`：
+   * `state.tiles` 永远是地球的，在月面上选点会选到"地球上同一坐标"。
+   * 改状态（生成、扣血、写战报）仍然用 `state`。
+   */
+  view: GameState;
   self: Unit;
   skill: any; // 这里建议换成 import type { SkillDef } from './types.ts' 如果 types.ts 定义了的话
   /** 提供给技能引擎工具（比如算伤害、算溅射） */
@@ -37,6 +43,12 @@ export function registerSkillReadyCheck(id: string, check: (s: GameState, u: Uni
 
 export interface SkillPreviewCtx {
   state: GameState;
+  /**
+   * **施法者所在那张图**的只读视角。查格子一律用它，别用 `state`：
+   * `state.tiles` 永远是地球的，在月面上选点会选到"地球上同一坐标"。
+   * 改状态（生成、扣血、写战报）仍然用 `state`。
+   */
+  view: GameState;
   self: Unit;
   /** 玩家瞄准的落点或方向格 */
   target: { x: number; y: number };
@@ -66,6 +78,12 @@ export function registerSkillPreview(id: string, previewer: SkillPreviewer): voi
  */
 export type SkillTargetCells = (c: {
   state: GameState;
+  /**
+   * **施法者所在那张图**的只读视角。查格子一律用它，别用 `state`：
+   * `state.tiles` 永远是地球的，在月面上选点会选到"地球上同一坐标"。
+   * 改状态（生成、扣血、写战报）仍然用 `state`。
+   */
+  view: GameState;
   self: Unit;
   skill: any;
 }) => Array<{ x: number; y: number }>;

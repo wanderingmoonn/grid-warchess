@@ -305,6 +305,24 @@ export const abilityApi: AbilityApi = {
     u.summoned = true;
     s.units.push(u);
   },
+  viewOf: (s, u) => boardStateOf(s, u),
+  tileOf: (s, u) => tileUnder(s, u),
+  /**
+   * 找空地 + 生成，一步做完。
+   *
+   * 分成 `freeNeighbor` + `spawn` 两步写的时候，落点和出生点各算各的：
+   * 前者默认按地球找空地，后者默认生在地球——在月面上就会得到
+   * "月球找的空地、地球多的人"。合成一个函数之后，两个坐标由同一个单位决定。
+   */
+  spawnNear: (s, owner, type, near) => {
+    const view = boardStateOf(s, near);
+    const spot = freeNeighbor(view, near, type);
+    if (!spot) return null;
+    const u = makeUnit(s, owner, type, spot.x, spot.y, boardIdOf(near));
+    u.summoned = true;
+    s.units.push(u);
+    return u;
+  },
   pushLog,
   citiesOf,
   distToCity,
@@ -358,7 +376,11 @@ export const abilityApi: AbilityApi = {
     fireKilled(s, victim, killer);
   },
   destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
-  noteHeat: (s, x, y) => noteHeatCell(s, x, y),
+  noteHeat: (s, x, y, board) => {
+    // 只记地球：格号在两张图上会撞（见 ability-hooks 的说明）
+    if (board && board !== EARTH) return;
+    noteHeatCell(s, x, y);
+  },
   isAirborne: (s, u) => isAirborne(s, u),
   unitsAt: (s, x, y) => unitsAt(s, x, y),
   movePower: (s, u) => movePower(s, u),
@@ -2027,6 +2049,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
   const atkCtx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: u,
     // 面板没有对手：算攻击时它当自己是出手的一方，算护甲时当自己挨打。
     // 这样看 side 的能力在面板上也会按玩家预期生效。
@@ -2093,6 +2120,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   // 也在驻军、诅咒之前——那两项排在它之后，面板上的算式才和结算顺序一致。
   const armorCtx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: u,
     side: 'defender',
     atk: 0,
@@ -2948,6 +2980,11 @@ export function computeDamage(
 
   const ctx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: defender,
     foe: attacker,
     side: 'defender',
@@ -3390,7 +3427,15 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 主流程只做两件通用的事：把 result 里的"要不要清场"落实下去，
   // 以及通知扩展"亡语跑完了"。清场放在这里而不是各能力里自己删，
   // 是为了避免两段能力交叉删列表、把刚分裂出来的小史莱姆一起删掉。
-  const dctx: DeathCtx = { state: s, victim, killer, api: abilityApi, result: { blasts: 0 } };
+  const dctx: DeathCtx = {
+    state: s,
+    // 死在月面上的，亡语也该在月面上结算（见 ability-hooks 里 view 的契约）
+    view: boardStateOf(s, victim),
+    victim,
+    killer,
+    api: abilityApi,
+    result: { blasts: 0 },
+  };
   for (const h of hooksOfUnit(s, victim)) h.onDeath?.(dctx);
   // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
@@ -4573,6 +4618,8 @@ function doAttack(
   // 击退在后面（命中状态之后）。同一条兵种挂了两条时按 abilities 的顺序跑。
   const sctx: StrikeCtx = {
     state: s,
+    // 出手方与目标一定同图（doAttack 的门槛），取出手方那张
+    view: boardStateOf(s, attacker),
     self: attacker,
     target: defender,
     damage: dmg,
@@ -4691,7 +4738,14 @@ function doAttack(
     // "杀完再走一步"是脱战，而"杀完再砍一刀"是另一档强度，不在这个技能里。
     // 死在反击里的情况（attacker.hp <= 0）不给：人都倒了，走给谁看。
     if (attacker.hp > 0 && s.units.some((u) => u.id === attacker.id)) {
-      const kctx: KillCtx = { state: s, self: attacker, victim: defender, api: abilityApi, result: { moveBack: false } };
+      const kctx: KillCtx = {
+        state: s,
+        view: boardStateOf(s, attacker),
+        self: attacker,
+        victim: defender,
+        api: abilityApi,
+        result: { moveBack: false },
+      };
       for (const h of hooksOfUnit(s, attacker)) h.onKill?.(kctx);
       if (kctx.result.moveBack) {
         attacker.moved = false;
@@ -6325,8 +6379,9 @@ export function eggDropCells(
 // 界面：把"能落蛋"的格子高亮出来（选点类技能的统一入口）。
 // 2026-11-10 起不再筛"砸得到人"——点空地也能放蛋，高亮就得跟着放宽，
 // 否则玩家会遇到"这一格能用却没亮"的反向挫败。
-registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
-  eggDropCells(state, self, skill.radius ?? 11, undefined, 'dragon-egg'),
+registerSkillTargetCells('dragon-egg', ({ view, self, skill }) =>
+  // 落点按**施法者那张图**算：月面上放蛋，能点的格子是月球那一片
+  eggDropCells(view, self, skill.radius ?? 11, undefined, 'dragon-egg'),
 );
 
 /**
@@ -6574,6 +6629,8 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
 
   const c: SkillCtx = {
     state: s, 
+    // 技能里的选点、范围、地形一律按施法者那张图（见 skill-hooks 的 view 契约）
+    view: boardStateOf(s, u),
     self: u, 
     skill, 
     api: abilityApi,
@@ -6983,7 +7040,7 @@ function runTurnStart(s: GameState, u: Unit, p: PlayerId, from: number, to: numb
   if (hooks.length === 0) return;
   runStaged(
     hooks,
-    { state: s, self: u, owner: p, rested, healable: canBeHealedOn(s, u), api: abilityApi },
+    { state: s, view: boardStateOf(s, u), self: u, owner: p, rested, healable: canBeHealedOn(s, u), api: abilityApi },
     { from, to },
   );
 }

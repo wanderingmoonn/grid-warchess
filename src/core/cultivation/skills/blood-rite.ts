@@ -25,6 +25,7 @@
 import type { GameState, Unit, SkillDef } from '../../types.ts';
 import { registerSkillEffect, registerSkillReadyCheck } from '../../skill-hooks.ts';
 import { distToUnit, inBounds } from '../../query.ts';
+import { boardIdOf } from '../../board.ts';
 import { addExp, ensureLifespan, getRank } from '../progression.ts';
 
 // ── 数值 ──────────────────────────────────────────
@@ -111,12 +112,12 @@ registerSkillEffect('blood-rite', (c) => {
 
   // 2. 战况烈度：圆盘每一格都记，空地和友军那几格也算
   //    （"范围"是几何，不是"谁掉了血"）
-  for (const cell of bloodRiteCells(c.state, self, radius)) {
-    c.api.noteHeat(c.state, cell.x, cell.y);
+  for (const cell of bloodRiteCells(c.view, self, radius)) {
+    c.api.noteHeat(c.state, cell.x, cell.y, boardIdOf(self));
   }
 
   // 3. 受害者：半径内除自己以外的所有单位，不分敌我
-  const victims = c.state.units.filter(
+  const victims = c.view.units.filter(
     (u) =>
       u.id !== self.id &&
       u.hp > 0 &&
