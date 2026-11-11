@@ -1122,6 +1122,20 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             : ''
         }
         ${
+          /*
+           * 反应射击用掉的是同一份次数，所以"敌人还没来，但我这一轮已经打完了"
+           * 这件事必须能看见。否则玩家会以为塔坏了——它上一次开火是在**对面的
+           * 回合**里发生的，自己回合从头到尾没点过任何按钮。
+           */
+          utype(s, selectedUnit.type).autoAttack &&
+          attacksLeftOf(s, selectedUnit) < attacksPerTurn(s, selectedUnit)
+            ? `<div class="info-row"><span>反应射击</span><b>本回合还剩 ${attacksLeftOf(
+                s,
+                selectedUnit,
+              )} / ${attacksPerTurn(s, selectedUnit)} 发</b></div>`
+            : ''
+        }
+        ${
           // 装甲素体：插槽与耗电必须写在属性卡上。
           // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
           // 以前只能点进装配坞里数按钮。
@@ -1149,22 +1163,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
               )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
             : ''
         }
-        ${
-          /*
-           * 反应射击用掉的是同一份次数，所以"敌人还没来，但我这一轮已经打完了"
-           * 这件事必须能看见。否则玩家会以为塔坏了——它上一次开火是在**对面的
-           * 回合**里发生的，自己回合从头到尾没点过任何按钮。
-           */
-          utype(s, selectedUnit.type).autoAttack &&
-          attacksLeftOf(s, selectedUnit) < attacksPerTurn(s, selectedUnit)
-            ? `<div class="info-row"><span>反应射击</span><b>本回合还剩 ${attacksLeftOf(
-                s,
-                selectedUnit,
-              )} / ${attacksPerTurn(s, selectedUnit)} 发</b></div>`
-            : ''
-        }
       </div>
       ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
+
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}

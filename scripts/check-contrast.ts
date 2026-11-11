@@ -117,6 +117,53 @@ for (const { name, p } of themes) {
  * `--a-fill` 那种"够深、白字能压"的填充色。
  */
 const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+
+/*
+ * 状态规则（:hover / :active / :focus）自己通常**不写 color**，靠继承。
+ * 下面的检查都要知道"这条 hover 的字色从哪来"，所以先建一张表：
+ * 去掉状态伪类的基础选择器 → 它声明的 color。
+ *
+ * 不建这张表的话，「亮底检查」会把没写 color 的规则一律当成 `--text`——
+ * `.zoom-btn:hover` 就被误报成"浅底浅字"，而它实际继承的是 `--on-light`（深褐）。
+ */
+const STATE_RE = /:(hover|active|focus|focus-visible|checked)\b/;
+
+/**
+ * 把选择器里的状态伪类剥掉，用来找它的基础规则。
+ *
+ * 必须先整块去掉 `:not(...)`——`.btn:hover:not(:disabled)` 只删 `:hover`
+ * 会剩下 `.btn:not(:disabled)`，和基础规则 `.btn` 对不上，
+ * 于是这一类（本项目里最多的一类）全被跳过，检查覆盖率只有 10 条。
+ */
+function stripState(sel: string): string {
+  return sel
+    .replace(/:not\([^)]*\)/gi, '')
+    .replace(/:{1,2}[a-z-]+(\([^)]*\))?/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const baseFgBySel = new Map<string, string>();
+for (const m of rules) {
+  const sel = m[1]!.trim().split('\n').pop()!.trim();
+  if (STATE_RE.test(sel)) continue;
+  const c = /(?:^|[;\s])color:\s*([^;]+);/.exec(m[2]!)?.[1]?.trim();
+  if (!c) continue;
+  for (const one of sel.split(',')) baseFgBySel.set(one.trim(), c);
+}
+
+/** 这条规则的字色：自己写了就用，没写就顺着基础选择器继承 */
+function fgDeclOf(sel: string, body: string): string | undefined {
+  const own = /(?:^|[;\s])color:\s*([^;]+);/.exec(body)?.[1]?.trim();
+  if (own) return own;
+  for (const one of sel.split(',')) {
+    const base = stripState(one.trim());
+    // 精确匹配不到就退到第一个类名（`.btn.btn-sm` 这种复合类常挂在 `.btn` 上）
+    const hit = baseFgBySel.get(base) ?? baseFgBySel.get(base.split(/[\s>+~]/)[0]!.trim());
+    if (hit) return hit;
+  }
+  return undefined;
+}
 const WARN_ON_TOKEN_BG: string[] = [];
 let inverseChecked = 0;
 
@@ -201,7 +248,7 @@ for (const { name, table } of allVars) {
     if (lumOf(bg) < LIGHT_MIN_LUM) continue;
     lightChecked += 1;
 
-    const colorDecl = /(?:^|[;\s])color:\s*([^;]+);/.exec(body)?.[1];
+    const colorDecl = fgDeclOf(sel, body);
     const tok = colorDecl ? /^var\(--([a-z0-9-]+)\)$/.exec(colorDecl.trim()) : null;
     const fg = colorDecl
       ? (tok ? hexOf(table[tok[1]!] ?? '') : hexOf(colorDecl.trim()))
@@ -231,6 +278,94 @@ if (lightFails.some((x) => x.startsWith('legacy'))) {
    但要把它列出来让人看见（下面单独打印）。 */
 const modernFailures = failures.filter((f) => f.startsWith('modern'));
 const legacyFailures = failures.filter((f) => f.startsWith('legacy'));
+
+/*
+ * 第三道：**状态切换后的前景 × 背景**。
+ *
+ * 前两道只管"白字压 token 底"，反过来的那种没人管，于是 2026-11-11 出了一桩：
+ *   .btn-primary        { background: var(--text); color: var(--panel) }   ← 两主题反相
+ *   .btn-primary:hover  { background: #1f1d19 }                            ← 只改背景
+ * legacy 下是"黑底白字 → 更黑底白字"，没事；modern 下原本是"浅底深字"，
+ * 被这条硬编码压成近黑，字还是深色 —— 按钮一悬停就黑底黑字。
+ *
+ * 所以这一道专门查**带状态伪类的规则**：它自己没写 color 时，去基础选择器取。
+ * 颜色表达式支持 var(#hex) / #hex / rgba(不透明) / color-mix(in srgb, A p%, B)，
+ * 认不出来的一律跳过（并计数，空跑会在这里露出来）。
+ */
+function hex6(r: number, g: number, b: number): string {
+  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+function colorOf(expr: string, table: Record<string, string>, depth = 0): string | null {
+  if (depth > 3) return null;
+  const s = expr.trim().replace(/\s+/g, ' ');
+  const v = /^var\(--([a-z0-9-]+)\)$/i.exec(s);
+  if (v) {
+    const raw = table[v[1]!];
+    return raw ? colorOf(raw, table, depth + 1) : null;
+  }
+  const hex = hexOf(s);
+  if (hex) return hex;
+  const rgba = /^rgba?\(([^)]+)\)$/i.exec(s);
+  if (rgba) {
+    const parts = rgba[1]!.split(',').map((x) => Number(x.trim()));
+    const [r, g, b, a] = parts;
+    if (a !== undefined && a < 0.95) return null; // 半透明：算不准，跳过
+    if (r === undefined || g === undefined || b === undefined) return null;
+    return hex6(r, g, b);
+  }
+  const mix = /^color-mix\(in srgb, (.+?) (\d+)%, (.+)\)$/i.exec(s);
+  if (mix) {
+    const c1 = colorOf(mix[1]!, table, depth + 1);
+    const c2 = colorOf(mix[3]!, table, depth + 1);
+    if (!c1 || !c2) return null;
+    const p = Number(mix[2]) / 100;
+    const [r1, g1, b1] = rgb(c1);
+    const [r2, g2, b2] = rgb(c2);
+    return hex6(r1 * p + r2 * (1 - p), g1 * p + g2 * (1 - p), b1 * p + b2 * (1 - p));
+  }
+  return null;
+}
+
+let stateChecked = 0;
+const STATE_BAD: string[] = [];
+
+for (const { name, table } of allVars) {
+  for (const m of rules) {
+    const sel = m[1]!.trim().split('\n').pop()!.trim();
+    const body = m[2]!;
+    if (!STATE_RE.test(sel)) continue;
+    const bgRaw = /\bbackground(?:-color)?:\s*([^;]+);/.exec(body)?.[1]?.trim();
+    if (!bgRaw) continue;
+    const bg = colorOf(bgRaw, table);
+    if (!bg) continue;
+
+    // 前景：自己写了就用；没写就顺着基础选择器继承（上面那张表）
+    const fgRaw = fgDeclOf(sel, body);
+    if (!fgRaw) continue;
+    const fg = colorOf(fgRaw, table);
+    if (!fg) continue;
+
+    stateChecked += 1;
+    const r = ratio(fg, bg);
+    if (r < TEXT_MIN) {
+      STATE_BAD.push(`${name}: ${sel} —— 文字 ${fg} 压 ${bg}，只有 ${r.toFixed(2)}:1`);
+    }
+  }
+}
+
+console.log(`  · 状态切换（hover/active/focus）检查了 ${stateChecked} 条规则`);
+
+assert.deepEqual(
+  STATE_BAD.filter((x) => x.startsWith('modern')),
+  [],
+  `modern 主题的状态色有"字压着自己的底"：\n${STATE_BAD.filter((x) => x.startsWith('modern')).join('\n')}`,
+);
+if (STATE_BAD.some((x) => x.startsWith('legacy'))) {
+  console.log('⚠ legacy 状态色也不达标（既有观感，只记录）：');
+  for (const f of STATE_BAD.filter((x) => x.startsWith('legacy'))) console.log('  · ' + f);
+}
 
 console.log('── 对比度实测 ──');
 for (const r of rows) console.log('  ' + r);
