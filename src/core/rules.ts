@@ -119,6 +119,7 @@ import {
 import type {
   ActionResult,
   Action,
+  BoardId,
   City,
   Element,
   FallenRecord,
@@ -136,6 +137,7 @@ import type {
   ProduceSource,
 } from './types.ts';
 import { seatsOf } from './types.ts';
+import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -149,6 +151,7 @@ import {
   footprintOf, 
   coversTile, 
   tilesOfUnit,
+  distToUnit,
   distBetweenUnits,
 } from './query.ts';
 import { 
@@ -684,6 +687,24 @@ export function effectiveRangeAgainst(
     range = e.hooks.modifyRangeAgainst({ state: s, unit: attacker, targetTerrain, range });
   }
   return Math.max(1, range);
+}
+
+/**
+ * 这个单位在不在**地球**上。
+ *
+ * 多图之后，"拿 (x,y) 去 `state.tiles` 里查"的那批位置判定，要么改成按图
+ * 投影（走子、建造已经这么做了，见 `boardStateOf`），要么先挡在门外。
+ *
+ * 还挡着的三个：**开火、攻城、装卸**。原因都是同一个——它们顺着 `s` 还会
+ * 摸到伤害结算、溅射、反击、地形掩护、货舱那一串（`computeDamage` /
+ * `splashVictims` / `hurtUnit`），那些现在仍然按"一个 state 一张图"写。
+ * 半接过来只会得到"月面上开火、地球上有人掉血"这种更难查的 bug。
+ *
+ * 月面战斗是「太空战争」那一包的事；到那时把这几条也换成
+ * `boardStateOf` + 回写（投影只读、变更写在真 state 上）即可。
+ */
+export function offWorld(u: Unit): boolean {
+  return boardIdOf(u) !== EARTH;
 }
 
 /**
@@ -2398,7 +2419,13 @@ function detectBonus(s: GameState, viewerUnit: Unit, target: Unit): number {
  * 返回 格索引 -> 累计消耗。被友军占据的格子会从结果里去掉：
  * 己方单位可以穿过友军，但不能停在友军身上。
  */
-export function reachableTiles(s: GameState, unit: Unit): Map<number, number> {
+export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
+  /*
+   * 按**单位所在的那张图**算：月球上的兵不能用地球的地形和宽度寻路。
+   * 换成的是一份只读投影（`boardStateOf`），地球单位拿到的就是原 state。
+   */
+  const s = boardStateOf(s0, unit);
+
   // 占地 2 的单位也能移动（2026-10-30）。
   //
   // 以前这里是一句"占地 2 一律返回空集"——那时 2×2 只有炮台、兵营这类
@@ -3997,19 +4024,24 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
   if (unit.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  /*
+   * 走子按**单位所在的那张图**结算：月球上的兵走月球的格子。
+   * `st` 是只读投影，变更仍然写在真的 `s` 上（单位对象本来就是同一个）。
+   */
+  const st = boardStateOf(s, unit);
   if (unit.moved) return { ok: false, reason: '该单位本回合已经移动过' };
-  if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
+  if (!inBounds(st, x, y)) return { ok: false, reason: '目标越界' };
 
   const reach = reachableTiles(s, unit);
-  if (!reach.has(idx(s, x, y))) return { ok: false, reason: '目标格不可达' };
+  if (!reach.has(idx(st, x, y))) return { ok: false, reason: '目标格不可达' };
 
   // 把到达目标格的真实消耗加进 moveSpent
-  const cost = reach.get(idx(s, x, y))!;
+  const cost = reach.get(idx(st, x, y))!;
   unit.moveSpent = (unit.moveSpent ?? 0) + cost;
 
   // 走进废墟 = 接管。钱要在动之前就查：走到一半发现掏不起重建费，
   // 会留下一个"已经站在城里但城市还是别人的"的中间态，很难收拾。
-  const destTile = tileAt(s, x, y);
+  const destTile = tileAt(st, x, y);
   const destCity = destTile?.cityId ? cityById(s, destTile.cityId) : null;
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
@@ -4025,7 +4057,8 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   // 落脚之后再算雷：**先站上去，再挨炸**。
   // 顺序不能反——反过来的话"能不能进这一格"要先去问一遍地上的东西，
   // 于是"踩雷"变成"这一步走不成"，雷就从陷阱变成了空气墙。
-  if (marksOf(s).length > 0) {
+  // 留痕（水雷、火场）只在地球有，别的图上不查
+  if (!offWorld(unit) && marksOf(s).length > 0) {
     enterTile(s, unit, markApi(s));
     // 炸死的就地清场：不清的话，下一步"入驻废墟"会由一个 0 血的单位执行
     if (unit.hp <= 0) {
@@ -4112,6 +4145,9 @@ function doAttack(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!defender) return { ok: false, reason: '目标不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  if (offWorld(attacker) || offWorld(defender)) {
+    return { ok: false, reason: '这张图还不能开火' };
+  }
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
   if (underConstruction(attacker)) {
     return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
@@ -4471,6 +4507,7 @@ function doSiege(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  if (offWorld(attacker)) return { ok: false, reason: '这张图还不能攻城' };
   if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
@@ -4638,6 +4675,7 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
+  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   // "能不能装、能装谁、装几个"全在兵种数据的 carry.hold 上，这里只读不猜。
   const hold = holdOf(ferryDef);
@@ -4654,7 +4692,15 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   const verdict = canHold(ferryDef, cargoDef);
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
   if (cargo.acted) return { ok: false, reason: '这个单位本回合已经行动过了' };
-  if (distance(ferry, cargo) !== 1) return { ok: false, reason: '要贴着船才能上船' };
+  if (boardIdOf(cargo) !== boardIdOf(ferry)) return { ok: false, reason: '不在同一张图上，装不上' };
+  /*
+   * 贴身判据按**占地**算，不是按锚点。
+   *
+   * 2×2 的载具（航母、发射井）锚点在左上角，站在它右下角旁边时锚点距离是 3：
+   * 画面上两个人明明挨着，规则却说"要贴着船"。这和建造距离那次是同一个坑
+   * （见 buildSiteError 里"整块地到工匠最近一格"）。
+   */
+  if (distBetweenUnits(s, ferry, cargo) !== 1) return { ok: false, reason: '要贴着船才能上船' };
 
   const load = ferry.cargo ?? [];
   if (holdRoom(ferryDef, ferry) <= 0) {
@@ -4707,6 +4753,7 @@ function doUnload(
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
+  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   if (!holdOf(ferryDef)) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
@@ -4716,7 +4763,7 @@ function doUnload(
   if (!cargo) return { ok: false, reason: '船上没有这个单位' };
 
   if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
-  if (distance(ferry, { x, y }) !== 1) return { ok: false, reason: '只能在船边一格下船' };
+  if (distToUnit(s, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
   if (unitAt(s, x, y)) return { ok: false, reason: '那一格已经有人了' };
   if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
@@ -4911,6 +4958,11 @@ function doBuild(
   if (!builder) return { ok: false, reason: '建造者不存在' };
   if (builder.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (builder.acted) return { ok: false, reason: '该单位本回合已经行动过' };
+  /*
+   * 施工按**建造者所在的那张图**结算：月面上的工程队盖的是月面的格子。
+   * `st` 是只读投影，真正的变更（扣钱、落单位）仍然写在 `s` 上。
+   */
+  const st = boardStateOf(s, builder);
 
   const builderDef = utype(s, builder.type);
   if (!builderDef.builds || builderDef.builds.length === 0) {
@@ -4956,12 +5008,12 @@ function doBuild(
   // 两个工兵一起修一座塔，就是把两次 BUILD 叠在同一个工地上：rate 相加、
   // 各自当场再投一次。这比"建造者必须一直站在旁边"好——工兵建完就走是常态，
   // 把进度绑在人的站位上，"走开"就成了一个玩家看不见的惩罚。
-  const site = s.units.find(
+  const site = st.units.find(
     (u) =>
       u.type === def.id &&
       u.owner === s.current &&
       underConstruction(u) &&
-      coversTile(s, u, x, y),
+      coversTile(st, u, x, y),
   );
   if (site) {
     const power = buildPowerOf(builderDef);
@@ -4987,7 +5039,7 @@ function doBuild(
     return { ok: true, state: s };
   }
 
-  const problem = buildSiteError(s, def, builder, x, y);
+  const problem = buildSiteError(st, def, builder, x, y);
   if (problem) return { ok: false, reason: problem };
 
   const price = recruitResCost(s, s.current, def);
@@ -5017,6 +5069,8 @@ function doBuild(
     moved: true,
     acted: true,
     ...(unfinished ? { buildDone: done, buildNeed: need, buildRate: power } : {}),
+    // 在月球上盖的就留在月球上（地球建筑没有这个字段 = 缺省地球）
+    ...(boardIdOf(builder) === EARTH ? {} : { board: boardIdOf(builder) }),
   });
 
   // 桥建成才把那一格换成桥面：工地桥不许提前通车（船也要先绕）
@@ -5737,7 +5791,7 @@ export function heroSkillsOf(
      */
     if (ready && u.bornTurn === s.turn) {
       ready = false;
-      notReadyReason = '刚上场的单位这一回合还不能用技能';
+      notReadyReason = '未就绪';
     }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
@@ -6176,7 +6230,23 @@ function doUnitAction(s: GameState, unitId: string, actionId: string): ActionRes
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
-  const impl = activeExpansions(s).find((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+
+  /*
+   * **谁列出了这个按钮，就由谁执行**。
+   *
+   * 以前是"取第一个声明了 unitActions 的扩展"——那时候只有一个修真包，
+   * 写成 find 也能跑。现在太空包也挂上了单位动作，而它在扩展表里排在
+   * 修真之前：照旧写法，修真的学法术/炼丹药会被太空包一口回绝，
+   * 而报错会是"认不出这个操作"——一个跟玩家操作毫无关系的错。
+   *
+   * 所以判据从"谁先声明"改成"谁认领"：先问每个扩展的 `unitActions`
+   * 有没有这个 id，有才把动作交给它。按钮和处理器因此永远成对出现，
+   * 也不会因为扩展顺序不同而行为不同（联机时两端顺序必须一致）。
+   */
+  const impls = activeExpansions(s).filter((e) => e.hooks.onUnitAction && e.hooks.unitActions);
+  const impl = impls.find((e) =>
+    (e.hooks.unitActions!({ state: s, unit: u, viewer: u.owner }) ?? []).some((o) => o.id === actionId),
+  );
   if (!impl) return { ok: false, reason: '当前规则里没有这种操作' };
   const reason = impl.hooks.onUnitAction!({ state: s, unit: u, actionId });
   if (reason) return { ok: false, reason };
@@ -6201,7 +6271,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 招募出来的英雄以前当回合就能放大招：一次花钱买到"上场 + 技能"，
   // 而且对手算不出这笔账。
   if (u.bornTurn === s.turn) {
-    return { ok: false, reason: '刚上场的单位这一回合还不能用技能' };
+    return { ok: false, reason: '未就绪' };
   }
 
   const cd = u.skillCd?.[skill.id] ?? 0;
@@ -6760,28 +6830,40 @@ export function cityName(city: City): string {
 function forEachVisionSource(
   s: GameState,
   p: PlayerId,
-  fn: (x: number, y: number, r: number) => void,
+  fn: (board: BoardId, x: number, y: number, r: number) => void,
 ): void {
   for (const u of s.units) {
     if (u.owner !== p) continue;
-    fn(u.x, u.y, visionOf(s, u));
+    fn(boardIdOf(u), u.x, u.y, visionOf(s, u));
   }
   for (const city of s.cities) {
     if (city.owner !== p) continue;
-    for (const t of cityTiles(city)) fn(t.x, t.y, CONFIG.cityVision);
+    for (const t of cityTiles(city)) fn(boardIdOf(city), t.x, t.y, CONFIG.cityVision);
   }
 }
 
-export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
+/**
+ * **一张图**的可见格。
+ *
+ * 多图之后，"谁看得见哪"必须按图分开算：月球上的侦察兵不该点亮地球的格。
+ * 视野来源（单位、城市）带着自己的 `board`，这里只收同一张图的那些。
+ *
+ * `id` 缺省地球：绝大部分调用点（AI 威胁图、寻路、热度）只关心地球，
+ * 保持原来的签名，行为一格不变。
+ */
+export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): Set<number> {
   const out = new Set<number>();
+  const board = boardOf(s, id);
 
-  forEachVisionSource(s, p, (cx, cy, r) => {
+  forEachVisionSource(s, p, (b, cx, cy, r) => {
+    if (b !== id) return;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (dx * dx + dy * dy > r * r) continue;
         const x = cx + dx;
         const y = cy + dy;
-        if (inBounds(s, x, y)) out.add(idx(s, x, y));
+        if (x < 0 || y < 0 || x >= board.w || y >= board.h) continue;
+        out.add(y * board.w + x);
       }
     }
   });
@@ -6796,14 +6878,25 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
    * 代价是它进了热路径（寻路、威胁圈、记忆刷新都会调这个函数），
    * 所以钩子必须是纯函数且尽早返回；扩展那边先判 `s.current !== player`
    * 再遍历单位，空手而归的时候只花一次比较。
+   *
+   * **目前只在地球上生效**：钩子返回的是地球的格索引，把它当成别的图的索引
+   * 会点亮完全无关的格子。等有扩展真的要给月球加视野时，把钩子的返回值
+   * 改成"按图分组"再放开这条限制。
    */
-  for (const e of activeExpansions(s)) {
-    const extra = e.hooks.extraVision?.({ state: s, player: p });
-    if (!extra || extra.length === 0) continue;
-    for (const i of extra) out.add(i);
+  if (id === EARTH) {
+    for (const e of activeExpansions(s)) {
+      const extra = e.hooks.extraVision?.({ state: s, player: p });
+      if (!extra || extra.length === 0) continue;
+      for (const i of extra) out.add(i);
+    }
   }
 
   return out;
+}
+
+/** 地球的可见格。老名字保留：调用点太多，而且它们本来也只看地球。 */
+export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
+  return visibleTilesOn(s, p, EARTH);
 }
 
 /**
@@ -6816,16 +6909,25 @@ export function visibleTilesOf(s: GameState, p: PlayerId): Set<number> {
  * 用单格判定而不是整张可见格表：这条进了攻击合法性，是热路径
  * （AI 每回合要把每个兵 × 每个目标都问一遍），而建一张全图集合太贵。
  */
-export function tileVisibleTo(s: GameState, p: PlayerId, x: number, y: number): boolean {
+export function tileVisibleTo(
+  s: GameState,
+  p: PlayerId,
+  x: number,
+  y: number,
+  id: BoardId = EARTH,
+): boolean {
   if (!s.fog) return true;
   let lit = false;
-  forEachVisionSource(s, p, (cx, cy, r) => {
+  forEachVisionSource(s, p, (b, cx, cy, r) => {
     if (lit) return;
+    if (b !== id) return;
     const dx = x - cx;
     const dy = y - cy;
     if (dx * dx + dy * dy <= r * r) lit = true;
   });
   if (lit) return true;
+  // 额外视野只有地球的索引，别的图直接跳过
+  if (id !== EARTH) return false;
   const i = idx(s, x, y);
   for (const e of activeExpansions(s)) {
     const extra = e.hooks.extraVision?.({ state: s, player: p });
@@ -6843,8 +6945,9 @@ export function tileVisibleTo(s: GameState, p: PlayerId, x: number, y: number): 
  */
 export function cityInSightOf(s: GameState, viewer: PlayerId, city: City): boolean {
   if (!s.fog) return true;
+  const id = boardIdOf(city);
   for (const t of cityTiles(city)) {
-    if (tileVisibleTo(s, viewer, t.x, t.y)) return true;
+    if (tileVisibleTo(s, viewer, t.x, t.y, id)) return true;
   }
   return false;
 }
@@ -6864,7 +6967,7 @@ export function cityInSightOf(s: GameState, viewer: PlayerId, city: City): boole
  */
 export function unitInSightOf(s: GameState, p: PlayerId, u: Unit): boolean {
   if (!s.fog) return true;
-  return tileVisibleTo(s, p, u.x, u.y) && !isHiddenFrom(s, u, p);
+  return tileVisibleTo(s, p, u.x, u.y, boardIdOf(u)) && !isHiddenFrom(s, u, p);
 }
 
 /**
@@ -6879,15 +6982,26 @@ export function refreshMemory(s: GameState): void {
   // 只有「浓雾蔽野」需要地形与城市的记忆：它把地图也遮了，
   // 走过的地方必须留下个样子，否则第二次经过等于第一次来。
   const keepMap = s.config.expansionIds.includes('blackout');
+  const ids = boardIds(s);
 
   for (const p of seatsOf(s)) {
-    const vis = visibleTilesOf(s, p);
+    /*
+     * 可见格按图各算一份。
+     *
+     * 这一步不能省成"只算地球"：月球上的侦察兵不该刷新地球的记忆，
+     * 反过来地球的视野也不该把月球上的敌人记进幽灵表。
+     */
+    const visByBoard: Record<BoardId, Set<number>> = {};
+    for (const id of ids) visByBoard[id] = visibleTilesOn(s, p, id);
+
     const mem = s.memory[p];
     const aliveIds = new Set(s.units.map((u) => u.id));
 
     for (const u of s.units) {
       if (u.owner === p) continue;
-      if (!vis.has(idx(s, u.x, u.y))) continue;
+      const id = boardIdOf(u);
+      const vis = visByBoard[id];
+      if (!vis || !vis.has(idxOn(s, id, u.x, u.y))) continue;
       // 潜行中的单位不该刷新坐标：它"还在原地"这件事本身也是情报
       if (isHiddenFrom(s, u, p)) continue;
 
@@ -6896,9 +7010,10 @@ export function refreshMemory(s: GameState): void {
         known.x = u.x;
         known.y = u.y;
         known.type = u.type;
+        known.board = id;
         known.seenAt = s.turn;
       } else {
-        mem.known.push({ id: u.id, type: u.type, x: u.x, y: u.y, seenAt: s.turn });
+        mem.known.push({ id: u.id, type: u.type, x: u.x, y: u.y, board: id, seenAt: s.turn });
       }
     }
 
@@ -6906,23 +7021,42 @@ export function refreshMemory(s: GameState): void {
     // 如果那格看不见，就继续保留——你不知道它死了还是走了。
     mem.known = mem.known.filter((k) => {
       if (aliveIds.has(k.id)) return true;
-      return !vis.has(idx(s, k.x, k.y));
+      const id = k.board ?? EARTH;
+      const vis = visByBoard[id];
+      return !vis || !vis.has(idxOn(s, id, k.x, k.y));
     });
 
     if (!keepMap) continue;
 
-    // 地形按"此刻亲眼看得到的"刷新。以前看过、现在看不见的格不会被抹掉——
-    // 那正是这份记忆存在的意义。
-    mem.tiles ??= {};
-    for (const i of vis) {
-      const tile = s.tiles[i];
-      if (tile) mem.tiles[i] = tile.terrain;
+    /*
+     * 地形按"此刻亲眼看得到的"刷新，**每张图一份**。
+     *
+     * 以前看过、现在看不见的格不会被抹掉——那正是这份记忆存在的意义。
+     * 地球同时往老的 `mem.tiles` 里写一份：那个字段已经进了老存档，
+     * 浓雾扩展也只作用于地球，两边都留着最省事。
+     */
+    mem.tilesByBoard ??= {};
+    for (const id of ids) {
+      const vis = visByBoard[id]!;
+      const board = boardOf(s, id);
+      const store = (mem.tilesByBoard[id] ??= {});
+      for (const i of vis) {
+        const tile = board.tiles[i];
+        if (tile) store[i] = tile.terrain;
+      }
+      if (id === EARTH) {
+        mem.tiles ??= {};
+        for (const [key, terrain] of Object.entries(store)) mem.tiles[Number(key)] = terrain;
+      }
     }
 
+    // 城目前只在地球：其它图不放城（见 board 的迁移约定）
     mem.cities ??= [];
+    const earthVis = visByBoard[EARTH]!;
     for (const city of s.cities) {
+      if (boardIdOf(city) !== EARTH) continue;
       // 沾到城的任意一格就算见过：城格是实心的，视野一定先落在它身上
-      if (!cityTiles(city).some((t) => vis.has(idx(s, t.x, t.y)))) continue;
+      if (!cityTiles(city).some((t) => earthVis.has(idx(s, t.x, t.y)))) continue;
       const snap = { owner: city.owner, era: city.era, ruined: city.ruined === true, seenAt: s.turn };
       const known = mem.cities.find((c) => c.id === city.id);
       if (known) Object.assign(known, snap);

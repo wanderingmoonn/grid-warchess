@@ -45,6 +45,7 @@ import {
   BLOOD_TURN,
   bloodTurnOf,
   EXPANSIONS,
+  activeExpansions,
   LEGACY_UPGRADE_COST,
   availableExpansions,
   eraCeilingFor,
@@ -276,6 +277,7 @@ import {
   damageToCity,
   distance,
   distToCity,
+  distBetweenUnits,
   airLayer,
   effectiveRange,
   effectiveRangeAgainst,
@@ -335,6 +337,7 @@ import {
   utype,
   visionOf,
   visibleTilesOf,
+  visibleTilesOn,
   // 三/四人局：席位轮转与出局判定
   others,
   nextSeat,
@@ -343,7 +346,7 @@ import {
   hasQuit,
   produceAt,
 } from '../src/core/rules.ts';
-import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
+import { playerView, onlyVisibleCells, viewOnBoard } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -363,6 +366,7 @@ import { DEFAULT_SIZE_FOR_ERA as eraSize } from '../src/ui/setup-panel.ts';
 import { PLAYER_ORDER, seatsOf } from '../src/core/types.ts';
 import type {
   Action,
+  Board,
   City,
   GameState,
   MatchConfig,
@@ -372,6 +376,10 @@ import type {
   UnitTypeDef,
 } from '../src/core/types.ts';
 import { skillsOf } from '../src/core/query.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH, idxOn, xyOn } from '../src/core/board.ts';
+import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../src/core/space/moon.ts';
+import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../src/core/space/silo.ts';
+import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf } from '../src/core/space/moon-base.ts';
 import { 
   cultivationRank,
   getAgingYears,
@@ -14348,12 +14356,20 @@ test('刚造出来的英雄当回合不能放技能', () => {
   // UI：技能不该显示"就绪"
   const view = heroSkillsOf(st, hero!).find((k) => k.def.id === 'throw-axe')!;
   assert.equal(view.ready, false, '刚上场的英雄，技能不该是亮的');
-  assert.equal(view.notReadyReason, '刚上场的单位这一回合还不能用技能');
+  assert.equal(view.notReadyReason, '未就绪');
 
   // 规则：硬闯也要被拒
   const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });
   assert.equal(denied.ok, false, '刚上场就放技能应该被拒');
-  assert.match((denied as { reason: string }).reason, /刚上场/);
+  /*
+   * 文案钉死成和 `heroSkillsOf` 里那句**逐字一样**的「未就绪」。
+   *
+   * 早先这里是长句「刚上场的单位这一回合还不能用技能」，但那一行要挤进
+   * 技能按钮右侧的 price 位（还是 11–12px），长句直接把按钮撑变形。
+   * 现在两处统一用「未就绪」——短是短，但**不能只改一边**，否则又会出现
+   * "按钮上写着 A、点下去弹 B"。
+   */
+  assert.equal((denied as { reason: string }).reason, '未就绪');
 
   // 过一整个回合（A 结束 → B 结束 → 又轮到 A）：可以放了
   const t1 = applyAction(st, { type: 'END_TURN' });
@@ -19709,6 +19725,438 @@ test('聚变堆被拆时自爆：半径 1 各吃 60，不分敌我', () => {
   );
   assert.equal(r.state.units.find((u) => u.id === own.id)!.hp, ownHp - 60, '半径内的自家兵也吃 60');
   assert.equal(r.state.units.find((u) => u.id === far.id)!.hp, farHp, '半径外不挨');
+});
+
+test('视野按图分开：月球上的眼睛不点亮地球，也不丢敌人', () => {
+  /*
+   * 多图之后最容易犯的错是"拿一个全局可见集套所有图"：
+   * 地球的索引 5 和 3×3 月球图的索引 5 是两回事，混用会既点亮错误的格子、
+   * 又把另一张图上的敌人当"在地球视野里"下发。
+   */
+  const s = fresh({ fog: true });
+  s.boards = {
+    moon: {
+      id: 'moon',
+      kind: 'planet',
+      name: '月球',
+      w: 3,
+      h: 3,
+      tiles: Array.from({ length: 9 }, () => ({ terrain: 'plain' })),
+    },
+  };
+  const template = s.units.find((u) => u.owner === 'A')!;
+  s.unitTypes[template.type]!.vision = 3; // 3×3 小图上刚好覆盖全图
+
+  const foe: Unit = { ...template, id: 'moon-foe', owner: 'B', x: 2, y: 2, board: 'moon' };
+  s.units.push(foe);
+
+  // 没有月球上的眼睛：看不见它，视图里也不该有
+  assert.equal(unitInSightOf(s, 'A', foe), false, '地球的视野不该照到月球');
+  assert.equal(
+    playerView(s, 'A').state.units.some((u) => u.id === 'moon-foe'),
+    false,
+    '看不见的敌人不该下发',
+  );
+
+  const earthBefore = [...visibleTilesOn(s, 'A', EARTH)].sort((a, b) => a - b);
+
+  const scout: Unit = { ...template, id: 'moon-scout', x: 0, y: 0, board: 'moon' };
+  s.units.push(scout);
+
+  // 月球上的眼睛只点亮月球，地球的可见集一格都不多
+  assert.equal(unitInSightOf(s, 'A', foe), true, '同一张图上看得见');
+  assert.ok(visibleTilesOn(s, 'A', 'moon').has(2 * 3 + 2), '月球按自己的宽度算索引');
+  assert.deepEqual(
+    [...visibleTilesOn(s, 'A', EARTH)].sort((a, b) => a - b),
+    earthBefore,
+    '往月球加个兵，不该让地球多亮一格',
+  );
+
+  // 记忆也带图：幽灵知道自己在哪张图上
+  refreshMemory(s);
+  const known = s.memory.A.known.find((k) => k.id === 'moon-foe');
+  assert.ok(known, '看得见就该记进幽灵表');
+  assert.equal(known!.board, 'moon', '记忆里的单位要知道自己在哪张图');
+
+  // 眼睛走了：敌人从视图消失，但记忆留着（不知道它死没死）
+  s.units = s.units.filter((u) => u.id !== 'moon-scout');
+  assert.equal(
+    playerView(s, 'A').state.units.some((u) => u.id === 'moon-foe'),
+    false,
+    '没有眼睛了就该从视图里消失',
+  );
+  refreshMemory(s);
+  assert.ok(
+    s.memory.A.known.some((k) => k.id === 'moon-foe'),
+    '看不见了不等于死了，幽灵要留着',
+  );
+});
+
+test('棋盘是一等公民：默认地球，取图不走别名', () => {
+  /*
+   * 多图玩法的第一步只做"地基"：图有名字、坐标按图算、旧数据默认地球。
+   * 这条守三件事：
+   *   · 地球仍是 `state` 自己（不是被复制出来的一份）；
+   *   · 没写 board 的单位/城市/动作一律算地球；
+   *   · 其它图的索引按它自己的宽度算，不能借地球的 w。
+   */
+  const s = fresh();
+  assert.equal(boardIdOf(undefined), EARTH, '没有 board 就是地球');
+  assert.equal(boardIdOf(s.units[0]), EARTH, '旧存档里的单位算地球');
+
+  const earth = boardOf(s, EARTH);
+  assert.ok(earth.tiles === s.tiles, '地球不该被复制一份，否则克隆之后会分叉');
+  assert.equal(earth.w, s.w);
+
+  assert.equal(idxOn(s, EARTH, 3, 4), 4 * s.w + 3);
+  assert.deepEqual(xyOn(s, EARTH, 4 * s.w + 3), { x: 3, y: 4 });
+
+  // 一张 3×3 的小图：宽度只有 3，绝不能按地球的 w 算
+  s.boards = {
+    moon: {
+      id: 'moon',
+      kind: 'planet',
+      name: '月球',
+      w: 3,
+      h: 3,
+      tiles: Array.from({ length: 9 }, () => ({ terrain: 'plain' })),
+    },
+  };
+  assert.equal(idxOn(s, 'moon', 2, 2), 8, '小图按自己的宽度算索引');
+  assert.deepEqual(xyOn(s, 'moon', 8), { x: 2, y: 2 });
+  assert.deepEqual(boardIds(s), [EARTH, 'moon'], '地球永远排第一');
+  assert.equal(boardName(s, 'moon'), '月球');
+  assert.equal(boardKindOf(s, 'moon'), 'planet');
+
+  // 没登记的图退回地球：旧存档/扩展写错 id 时不至于崩
+  assert.ok(boardOf(s, 'nowhere').tiles === s.tiles, '找不到的图退回地球');
+});
+
+test('太空时代：开局就有一张月球图，尺寸跟着地球', () => {
+  /*
+   * 第 5 步要跑通的就是这条路：勾了扩展 → 普通对局开局 → 地图列表里有月球。
+   * 它走的是 `onMatchStart`，时机在 `refreshMemory` 之前，所以迷雾记忆也会带上。
+   */
+  const s = fresh({ expansionIds: ['space-age'] });
+  const moon = s.boards?.moon;
+  assert.ok(moon, '勾了「太空时代」就该有月球');
+  assert.equal(moon!.w, moonSizeFor(s.w), '月球尺寸跟着地球走');
+  assert.equal(moon!.h, moonSizeFor(s.w));
+  assert.equal(moon!.tiles.length, moonSizeFor(s.w) ** 2);
+
+  // 没勾的局一格都不该多出来
+  const plain = fresh();
+  assert.equal(plain.boards?.moon, undefined, '没开扩展就不该有月球');
+
+  // 大图上的比例也要对
+  const big = fresh({ expansionIds: ['space-age'], size: 32 });
+  assert.equal(big.boards?.moon?.w, 24);
+});
+
+console.log('\n太空时代：火箭发射井');
+
+test('发射井：装一个单位、加注 3 回合、送上月球', () => {
+  /*
+   * 这是第 6 步的全部：一个 2×2 的建筑、一个货舱、一个 3 回合的计时器，
+   * 以及"换一张图"的那一下。规则层不需要认识"火箭"——装载走的是
+   * 现成的 hold，发射走的是 UNIT_ACTION。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 5000;
+  s.players.A.res = { food: 9999, material: 9999 };
+
+  // 时代 5 的工程队该在开局就学会盖井（扩展的 onMatchStart 教的）
+  assert.ok((s.unitTypes.crew?.builds ?? []).includes(SILO_ID), '工程队该会盖发射井');
+
+  let cur = s;
+  const run = (a: Parameters<typeof applyAction>[1]) => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+  const siloOf = (st: GameState) => st.units.find((u) => u.type === SILO_ID);
+
+  const crew = place2(s, 'A', 'crew', 4, 4);
+  /*
+   * 站在 2×2 的**右下角旁边**：锚点距离是 2，占地距离才是 1。
+   * 装载判定必须按占地算，否则"看着挨着、规则说太远"。
+   */
+  const pax = place2(s, 'A', 'militia', 7, 6);
+
+  const built = run({ type: 'BUILD', unitId: crew.id, unitType: SILO_ID, x: 5, y: 5 });
+  assert.ok(built.ok, `建井失败：${built.reason}`);
+  let silo = siloOf(cur);
+  assert.ok(silo, '井要出现在场上');
+  assert.equal(footprintOf(cur, silo!), 2, '2×2');
+  // 工地进度不是这条用例要验的（那是建造系统的账），直接当它盖完了
+  delete silo!.buildNeed;
+  delete silo!.buildDone;
+
+  // 刚落成的建筑这一回合不能装卸（和"新招的兵当回合不能动"同一条），先过一轮
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  silo = siloOf(cur);
+
+  assert.equal(distBetweenUnits(cur, silo!, pax), 1, '右下角旁边就是贴身');
+  const load = run({ type: 'LOAD', unitId: silo!.id, cargoId: pax.id });
+  assert.ok(load.ok, `装载失败：${load.reason}`);
+  silo = siloOf(cur);
+  assert.equal(cur.units.some((u) => u.id === pax.id), false, '登舱之后棋盘上就没有它了');
+  assert.equal((silo!.cargo ?? []).length, 1, '货舱里有一个人');
+
+  /*
+   * 装了谁是**底牌**：燃料进度对面看得见（3 回合窗口就是靠它成立的），
+   * 但"里面坐着一个剑修"只有自己知道——和丹药同一个口径。
+   */
+  assert.ok(
+    siloLines(cur, silo!, 'A').some((l) => l.includes('民兵')),
+    '自己要看得见装的是谁',
+  );
+  const foeLines = siloLines(cur, silo!, 'B');
+  assert.ok(foeLines.some((l) => l.includes('燃料')), '燃料进度对手也该看得见');
+  assert.equal(
+    foeLines.some((l) => l.includes('民兵')),
+    false,
+    '对手不该从面板上读出装的是谁',
+  );
+
+  // 没加注就点火：拦住
+  const early = run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:launch' });
+  assert.equal(early.ok, false, '没燃料不该能飞');
+
+  assert.ok(run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:fuel' }).ok, '该能开始加注');
+  // 一来一回算一回合：A 的回合开始才 +1
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal(siloOf(cur)!.custom?.fuel, 1, '一回合加一格');
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  silo = siloOf(cur);
+  assert.equal(silo!.custom?.fuel, SILO_FUEL_TURNS, '三回合加满');
+
+  const go = run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:launch' });
+  assert.ok(go.ok, `发射失败：${go.reason}`);
+
+  const landed = cur.units.find((u) => u.id === pax.id);
+  assert.ok(landed, '人该在场上（同一支兵，不是新造的）');
+  assert.equal(boardIdOf(landed), 'moon', '它现在在月球图上');
+  const moon = cur.boards!.moon!;
+  assert.ok(
+    landed!.x >= 0 && landed!.x < moon.w && landed!.y >= 0 && landed!.y < moon.h,
+    '落点要在月图范围内',
+  );
+  assert.equal(landed!.acted, true, '落地当回合不能再动');
+  assert.equal(siloOf(cur)!.custom?.fuel, 0, '燃料清零');
+  assert.equal((siloOf(cur)!.cargo ?? []).length, 0, '货舱空了');
+  // 发射井自己还在，想再飞一趟就重新加注
+  assert.ok(siloOf(cur), '发射井不会被消耗');
+});
+
+test('视图裁到某一张图：地球上不画月球上的东西', () => {
+  /*
+   * 幽灵的第二个来源是**渲染**：`renderBoard` 画的是 `view.state.units`，
+   * 而"地球那一份视图"以前是原样返回的——月球上的兵和月球基地就按同一个
+   * 坐标画到地球上了（2026-11-10 第二次反馈）。
+   *
+   * 现在不管是哪张图都走 `viewOnBoard`：单位、城市、幽灵都按图筛。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const u = place2(s, 'A', 'militia', 4, 4);
+  u.board = 'moon';
+
+  const view = playerView(s, 'A');
+  assert.ok(view.state.units.some((x) => x.id === u.id), '整份视图里当然有它（换图要用）');
+
+  const earth = viewOnBoard(view, 'earth');
+  assert.equal(earth.state.units.some((x) => x.id === u.id), false, '地球上不该画月球上的兵');
+  assert.equal(earth.state.w, s.w, '地球还是地球的宽度');
+
+  const moon = viewOnBoard(view, 'moon');
+  assert.ok(moon.state.units.some((x) => x.id === u.id), '月球那一份要有它');
+  assert.equal(moon.state.w, s.boards!.moon!.w, '宽度换成月球的');
+  assert.equal(moon.state.cities.length, 0, '月球上没有城可画');
+});
+
+test('月球上的兵按月球的格子走（幽灵 bug 的规则侧）', () => {
+  /*
+   * 实机反馈：把民兵发射到月球后，在地球的**同一坐标**上能选中并指挥他，
+   * 指令按地球坐标结算——他在月面上走，对面还看不见他。
+   *
+   * 两处都关了：界面按当前图筛单位（`stackAt`），渲染按图裁视图
+   * （`viewOnBoard`）。规则这一侧则是**按单位所在的图**结算：
+   * 越界判据、地形、寻路全用月球那一份，借地球坐标指挥不动他。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  for (const t of s.boards!.moon!.tiles) t.terrain = 'regolith';
+  const u = place2(s, 'A', 'militia', 2, 2);
+  u.board = 'moon';
+
+  const moonW = s.boards!.moon!.w;
+  const far = applyAction(s, { type: 'MOVE', unitId: u.id, x: moonW + 2, y: 2 });
+  assert.equal(far.ok, false, '超出月球宽度就是越界');
+  assert.ok(far.reason.includes('越界'), `理由该说越界，实际：${far.reason}`);
+
+  const moved = applyAction(s, { type: 'MOVE', unitId: u.id, x: 3, y: 2 });
+  assert.ok(moved.ok, `月球上该能走：${moved.reason}`);
+  const after = moved.state.units.find((x) => x.id === u.id)!;
+  assert.equal(after.x, 3, '走的是月球那一格');
+  assert.equal(boardIdOf(after), 'moon', '还留在月球图上');
+
+  /*
+   * 占格也算得对：2×2 的基地在地球宽度的表里是四格，在月球这一份里也是四格。
+   * 走进去要被挡住——这条顺带守住"按图投影之后 footprint 仍然生效"。
+   */
+  const blockState = moved.state;
+  blockState.units.push({
+    id: 'moon-base-test',
+    type: MOON_BASE_ID,
+    owner: 'A',
+    x: 6,
+    y: 2,
+    hp: 200,
+    kills: 0,
+    moved: true,
+    acted: true,
+    board: 'moon',
+  });
+  const into = applyAction(blockState, { type: 'MOVE', unitId: u.id, x: 6, y: 2 });
+  assert.equal(into.ok, false, '基地占着的那一格走不进去');
+
+  /*
+   * 开火仍然关着：月面战斗属于「太空战争」那一包，现在还没有瞄准与伤害的
+   * 按图结算（`computeDamage` 会读地形与掩护）。这条守着"暂时别开"。
+   */
+  const foe = place2(moved.state, 'B', 'militia', 4, 2);
+  foe.board = 'moon';
+  const hit = applyAction(moved.state, { type: 'ATTACK', unitId: u.id, targetId: foe.id });
+  assert.equal(hit.ok, false, '月面还不能开火');
+});
+
+test('登月胜利：展开基地、采样 3 回合、结果送回就赢', () => {
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  // 月面铺平，保证 2×2 放得下
+  for (const t of s.boards!.moon!.tiles) t.terrain = 'regolith';
+  const crew = place2(s, 'A', 'crew', 2, 2);
+  crew.board = 'moon';
+
+  let cur = s;
+  const run = (a: Parameters<typeof applyAction>[1]) => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+  const baseOf = (st: GameState) => st.units.find((u) => u.type === MOON_BASE_ID);
+
+  const dep = run({ type: 'UNIT_ACTION', unitId: crew.id, actionId: 'base:deploy' });
+  assert.ok(dep.ok, `展开失败：${dep.reason}`);
+  const base = baseOf(cur);
+  assert.ok(base, '基地要出现在场上');
+  assert.equal(boardIdOf(base), 'moon', '基地在月球图上');
+  assert.equal(footprintOf(cur, base!), 2, '2×2');
+  // 沿用原 id：不是"工程队阵亡 + 新基地"，而是同一支兵换了兵种
+  const sameId = cur.units.find((u) => u.id === crew.id);
+  assert.ok(sameId, '工程单位并进了基地（id 不变）');
+  assert.equal(sameId!.type, MOON_BASE_ID);
+
+  // 落地当回合不能采样（和"刚上场的单位不能放技能"同一条）
+  const early = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.equal(early.ok, false, '落地当回合不该能采样');
+
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  const cast = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.ok(cast.ok, `采样失败：${cast.reason}`);
+  assert.equal(samplingOf(cur)?.left, SAMPLE_TURNS, '倒计时要能读出来（顶栏用它）');
+  // 开采样这条战报是**公开**的：对手必须看得见"他还有几回合就赢"
+  assert.ok(
+    cur.log.some((l) => l.open === true && l.text.includes('月壤采样')),
+    '开采样要有公开战报',
+  );
+
+  // 整局只能做一次
+  const again = run({ type: 'HERO_SKILL', unitId: base!.id, skillId: 'lunar-sampling' });
+  assert.equal(again.ok, false, '采样只能做一次');
+
+  // 三个自己的回合：前面两个回合结束时都还没赢
+  for (let i = 0; i < 4; i++) run({ type: 'END_TURN' });
+  assert.equal(cur.winner ?? null, null, '两个回合之后还不该赢');
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal(cur.winner, 'A', '采样结果送回，本方获胜');
+});
+
+test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {
+  /*
+   * 以前 `doUnitAction` 取"第一个声明了 unitActions 的扩展"。太空包在扩展表里
+   * 排在修真之前，所以它一挂上单位动作，修真的学法术/炼丹药就会被它一口回绝，
+   * 而且报的是"认不出这个操作"——跟玩家的操作毫无关系。
+   *
+   * 现在的判据是"谁在 unitActions 里列出了这个 id 就由谁执行"，这条守它。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'cultivation'], startEra: 5 });
+  flatten(s, 'plain');
+  place2(s, 'A', 'cultivation-sect', 6, 6);
+  place2(s, 'A', 'cultivation-scripture-pavilion', 8, 6);
+  const cult = place2(s, 'A', 'qi-cultivator', 9, 6);
+
+  const offered = activeExpansions(s).flatMap(
+    (e) => e.hooks.unitActions?.({ state: s, unit: cult, viewer: 'A' }) ?? [],
+  );
+  const learn = offered.find((o) => o.id.startsWith('learn:'));
+  assert.ok(learn, '修士站在藏经阁旁该有「学法术」按钮');
+
+  const r = applyAction(s, { type: 'UNIT_ACTION', unitId: cult.id, actionId: learn!.id });
+  assert.notEqual(
+    r.reason,
+    '当前规则里没有这种操作',
+    '这个动作该被修真包接手，而不是被太空包挡掉',
+  );
+});
+
+test('月球图：尺寸跟着地球缩，下限 4×4', () => {
+  assert.equal(MOON_MIN_SIZE, 4);
+  assert.equal(moonSizeFor(4), 4, '已经是下限，不能再小');
+  assert.equal(moonSizeFor(5), 4, '四舍五入到 4');
+  assert.equal(moonSizeFor(12), 9);
+  assert.equal(moonSizeFor(16), 12);
+  assert.equal(moonSizeFor(32), 24);
+  assert.equal(moonSizeFor(64), 48);
+  // 任何尺寸下都不该比地球还大
+  for (const n of [4, 5, 8, 12, 16, 24, 32, 48, 64]) {
+    assert.ok(moonSizeFor(n) <= n, `${n} 的月球不该比地球大`);
+  }
+});
+
+test('月球图：只有月壤与环形山，同种子同结果', () => {
+  const b = createMoonBoard(32, 4242);
+  assert.equal(b.w, 24);
+  assert.equal(b.h, 24);
+  assert.equal(b.tiles.length, 24 * 24);
+  assert.equal(b.kind, 'planet');
+
+  // 地形只有两种，而且月球上不放城
+  assert.ok(
+    b.tiles.every((t) => t.terrain === 'regolith' || t.terrain === 'crater'),
+    '月球只该有月壤和环形山',
+  );
+  assert.ok(b.tiles.every((t) => t.cityId === null), '月球上不放城');
+
+  const craters = b.tiles.filter((t) => t.terrain === 'crater').length;
+  assert.ok(craters > 0, '至少有一个环形山');
+  assert.ok(craters <= Math.floor(24 * 24 * 0.6), '环形山不该吃掉大半张图');
+
+  // 同一个种子必须生成一模一样的地貌（存档 / 回放 / 联机靠这条）
+  const sig = (x: Board): string => x.tiles.map((t) => t.terrain[0]).join('');
+  assert.equal(sig(createMoonBoard(32, 4242)), sig(b), '同种子同结果');
+  assert.notEqual(sig(createMoonBoard(32, 9999)), sig(b), '换种子该换地貌');
+
+  // 最小的月球也要留得下脚
+  const tiny = createMoonBoard(4, 7);
+  assert.equal(tiny.w, 4);
+  assert.ok(tiny.tiles.some((t) => t.terrain === 'regolith'), '4×4 上也要有落脚点');
 });
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);

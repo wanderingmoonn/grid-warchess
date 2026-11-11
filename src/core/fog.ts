@@ -13,15 +13,24 @@
 
 import { CONFIG } from './config.ts';
 import { activeExpansions } from './expansions.ts';
+import { boardIdOf, boardIds, boardOf, EARTH, idxOn } from './board.ts';
 import { visibleMarks } from './marks.ts';
-import { cityTiles, idx, isHiddenFrom, visibleTilesOf } from './rules.ts';
-import type { City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
+import { cityTiles, idx, isHiddenFrom, visibleTilesOn } from './rules.ts';
+import type { BoardId, City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
 
 export interface PlayerView {
   /** 可以直接喂给界面的状态：敌方单位已经被裁掉 */
   state: GameState;
-  /** 当前可见格索引，给渲染做明暗用 */
+  /**
+   * **地球**的可见格索引。
+   *
+   * 历史字段：界面现在只画地球，所以它等于 `visibleByBoard.earth`。
+   * 新代码（尤其是"当前显示哪张图"的渲染）应当读 `visibleByBoard`，
+   * 不要假设 `visible` 覆盖了所有图。
+   */
   visible: number[];
+  /** 每张图各自的可见格；地图列表、切图渲染都读它 */
+  visibleByBoard: Record<BoardId, number[]>;
   /** 记忆中但当前看不见的敌方单位，渲染成半透明幽灵 */
   ghosts: KnownUnit[];
   /**
@@ -32,6 +41,12 @@ export interface PlayerView {
    * 对面趁夜在河上架了座桥，我们不该立刻知道。
    */
   rememberedTiles: Map<number, Terrain>;
+  /**
+   * 每张图各自的"记忆里的地形"。
+   *
+   * `rememberedTiles` 是它在地球那一份的别名（浓雾扩展目前只作用于地球）。
+   */
+  rememberedByBoard: Record<BoardId, Map<number, Terrain>>;
   /** 已探索、此刻却看不见的城，值是记忆里的那一份样子（归属、时代、是否废墟） */
   rememberedCities: Map<string, KnownCity>;
   /**
@@ -44,18 +59,24 @@ export interface PlayerView {
   terrainHidden: boolean;
 }
 
-/** 这座城此刻有没有任何一格落在视野里 */
-function cityInSight(s: GameState, city: City, visibleSet: ReadonlySet<number>): boolean {
+/** 这座城此刻有没有任何一格落在**它自己那张图**的视野里 */
+function cityInSight(
+  s: GameState,
+  city: City,
+  visibleSet: ReadonlySet<number>,
+  id: BoardId,
+): boolean {
   for (const t of cityTiles(city)) {
-    if (visibleSet.has(idx(s, t.x, t.y))) return true;
+    if (visibleSet.has(idxOn(s, id, t.x, t.y))) return true;
   }
   return false;
 }
 
-/** 棋盘上所有格子的索引，观战视角用 */
-function allTiles(s: GameState): Set<number> {
+/** 一张图上所有格子的索引，观战视角用 */
+function allTilesOn(s: GameState, id: BoardId): Set<number> {
+  const { w, h } = boardOf(s, id);
   const out = new Set<number>();
-  for (let i = 0; i < s.w * s.h; i++) out.add(i);
+  for (let i = 0; i < w * h; i++) out.add(i);
   return out;
 }
 
@@ -64,8 +85,24 @@ function allTiles(s: GameState): Set<number> {
  *               它只影响"给谁看"，不影响任何规则计算。
  */
 export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerView {
-  const visibleSet = reveal ? allTiles(s) : visibleTilesOf(s, p);
-  const visible = Array.from(visibleSet);
+  /*
+   * 每张图各算一份可见格。
+   *
+   * 多图之后这一步不能再只算地球：月球上的侦察兵不该点亮地球，
+   * 地球的视野也不该把月球上的敌人漏下来。`visible` 是历史字段，
+   * 保留成地球那一份——界面现在只画地球。
+   */
+  const ids = boardIds(s);
+  const visibleByBoard: Record<BoardId, number[]> = {};
+  const visibleSets: Record<BoardId, Set<number>> = {};
+  for (const id of ids) {
+    const set = reveal ? allTilesOn(s, id) : visibleTilesOn(s, p, id);
+    visibleSets[id] = set;
+    visibleByBoard[id] = Array.from(set);
+  }
+  const visible = visibleByBoard[EARTH] ?? [];
+  const earthSet = visibleSets[EARTH] ?? new Set<number>();
+
   const cloned = structuredClone(s);
 
   /*
@@ -92,16 +129,27 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     return {
       state: cloned,
       visible,
+      visibleByBoard,
       ghosts: [],
       rememberedTiles: new Map(),
+      rememberedByBoard: {},
       rememberedCities: new Map(),
       terrainHidden: false,
     };
   }
 
-  cloned.units = cloned.units.filter(
-    (u) => u.owner === p || (visibleSet.has(idx(s, u.x, u.y)) && !isHiddenFrom(s, u, p)),
-  );
+  /*
+   * 按**单位所在的那张图**筛。
+   *
+   * 不能再用一个全局 `visibleSet`：地球的索引 5 和月球图的索引 5 是两回事，
+   * 拿错表会把月球上的敌人当成"在地球视野里"直接下发。
+   */
+  cloned.units = cloned.units.filter((u) => {
+    if (u.owner === p) return true;
+    const id = boardIdOf(u);
+    const set = visibleSets[id];
+    return !!set && set.has(idxOn(s, id, u.x, u.y)) && !isHiddenFrom(s, u, p);
+  });
 
   /*
    * 格子上留的东西（水雷、地雷……）同样要按"该不该让他知道"裁一遍。
@@ -110,9 +158,11 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
    *   · 自己布的永远看得见——不然埋完就忘了，等于给自己也埋了；
    *   · 别人布的默认看不见，只有"自己的单位贴到规定距离以内、且那一格在视野里"
    *     才算发现。视野外一律不给（否则按 F12 就是一整张雷区地图）。
+   *
+   * 目前留痕只在地球，所以这里用地球的可见集；等月球也能布雷再按图分组。
    */
   if (cloned.marks) {
-    cloned.marks = visibleMarks(s, p, (i) => visibleSet.has(i));
+    cloned.marks = visibleMarks(s, p, (i) => earthSet.has(i));
   }
 
   /*
@@ -130,9 +180,12 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     for (const u of s.units) {
       if (!s.unitTypes[u.type]?.bridges) continue;
       if (u.owner === p) continue;
-      const i = idx(s, u.x, u.y);
-      if (visibleSet.has(i)) continue;
-      const tile = cloned.tiles[i];
+      const id = boardIdOf(u);
+      const set = visibleSets[id];
+      if (!set) continue;
+      const i = idxOn(s, id, u.x, u.y);
+      if (set.has(i)) continue;
+      const tile = boardOf(cloned, id).tiles[i];
       /*
        * 看不见的桥要还原成**原来的地形**，不是一律还原成水。
        *
@@ -162,26 +215,102 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   const mem = cloned.memory[p];
   const ghosts = mem.known.filter((k) => !seenIds.has(k.id));
 
-  // 浓雾才需要"记忆里的地图"：它连地形和城市一起遮，
-  // 走过路过的地方必须留个样子，否则第二次经过等于第一次来。
+  /*
+   * 浓雾才需要"记忆里的地图"：它连地形和城市一起遮，
+   * 走过路过的地方必须留个样子，否则第二次经过等于第一次来。
+   *
+   * 每张图一份。地球同时回填老的 `rememberedTiles`：那个字段界面还在读，
+   * 而且浓雾目前只作用于地球。
+   */
+  const rememberedByBoard: Record<BoardId, Map<number, Terrain>> = {};
   const rememberedTiles = new Map<number, Terrain>();
   const rememberedCities = new Map<string, KnownCity>();
   if (terrainHidden) {
-    for (const [key, terrain] of Object.entries(mem.tiles ?? {})) {
-      const i = Number(key);
-      if (visibleSet.has(i)) continue; // 眼前看得见，按活的画
-      if (!cloned.tiles[i]) continue; // 地图缩小过，老记忆越界了
-      rememberedTiles.set(i, terrain);
+    for (const id of ids) {
+      const map = new Map<number, Terrain>();
+      /*
+       * 地球这一份要把老的 `mem.tiles` 合并进来：
+       * 它已经写进老存档，而且有些测试/工具只往那一份里记。
+       * 两份同源时值相同，合并只是让"只有其中一份"的数据都不丢。
+       */
+      const memTiles =
+        id === EARTH
+          ? { ...(mem.tilesByBoard?.[EARTH] ?? {}), ...(mem.tiles ?? {}) }
+          : (mem.tilesByBoard?.[id] ?? {});
+      const set = visibleSets[id] ?? new Set<number>();
+      const board = boardOf(cloned, id);
+      for (const [key, terrain] of Object.entries(memTiles)) {
+        const i = Number(key);
+        if (set.has(i)) continue; // 眼前看得见，按活的画
+        if (!board.tiles[i]) continue; // 地图缩小过，老记忆越界了
+        map.set(i, terrain);
+      }
+      rememberedByBoard[id] = map;
+      if (id === EARTH) for (const [i, terrain] of map) rememberedTiles.set(i, terrain);
     }
     for (const snap of mem.cities ?? []) {
       const city = cloned.cities.find((c) => c.id === snap.id);
       if (!city) continue; // 城已经没了，这份记忆作废
-      if (cityInSight(s, city, visibleSet)) continue; // 眼前看得见，用活的
+      if (cityInSight(s, city, earthSet, EARTH)) continue; // 眼前看得见，用活的
       rememberedCities.set(snap.id, snap);
     }
   }
 
-  return { state: cloned, visible, ghosts, rememberedTiles, rememberedCities, terrainHidden };
+  return {
+    state: cloned,
+    visible,
+    visibleByBoard,
+    ghosts,
+    rememberedTiles,
+    rememberedByBoard,
+    rememberedCities,
+    terrainHidden,
+  };
+}
+
+/**
+ * 把一份视图裁成"只看某一张图"。
+ *
+ * 渲染层（`ui/board.ts`）是按"一个 state 一张图"写的，一千多行，不值得为了
+ * 多图去改它。所以切图时给它一份**替身视图**：宽高、格子、单位、城市都换成
+ * 目标图的那一份，其余字段（config / unitTypes / players）原样保留。
+ *
+ * ⚠️ 地球也一样要裁。以前地球走的是"原样返回"的快路径，于是月球上的兵
+ * 跟着 `state.units` 一起被画到地球上（同一个坐标）——实机上看到的就是
+ * "月球的兵和月球基地出现在地球"（2026-11-10 第二次反馈）。
+ * 只有当所有单位、城市、幽灵本来就在地球上时，这份视图才真的只是地球那一份。
+ */
+export function viewOnBoard(view: PlayerView, id: BoardId): PlayerView {
+  const units = view.state.units.filter((u) => boardIdOf(u) === id);
+  const cities = view.state.cities.filter((c) => boardIdOf(c) === id);
+  const ghosts = view.ghosts.filter((g) => boardIdOf(g) === id);
+
+  if (
+    id === EARTH &&
+    units.length === view.state.units.length &&
+    cities.length === view.state.cities.length &&
+    ghosts.length === view.ghosts.length
+  ) {
+    return view;
+  }
+
+  const b = boardOf(view.state, id);
+  return {
+    ...view,
+    state: {
+      ...view.state,
+      w: b.w,
+      h: b.h,
+      tiles: b.tiles,
+      units,
+      cities,
+      // 留痕（水雷、火场）只在地球上，别的图先不给
+      marks: id === EARTH ? view.state.marks : [],
+    },
+    visible: view.visibleByBoard[id] ?? [],
+    rememberedTiles: view.rememberedByBoard[id] ?? new Map(),
+    ghosts,
+  };
 }
 
 /**

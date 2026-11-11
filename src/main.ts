@@ -12,7 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
-import { skillsOf } from './core/query.ts';
+import { coversTile, skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { onlyVisibleCells, playerView } from './core/fog.ts';
+import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -36,7 +36,8 @@ import {
   cityAt,
   citiesOf,
   cityName,
-  distance,
+  distBetweenUnits,
+  distToUnit,
   disbandRefundOf,
   eggSpots,
   heroBlocked,
@@ -82,9 +83,12 @@ import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
-import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
+import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
+import type { BoardUi } from './ui/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardState, EARTH, hasBoard } from './core/board.ts';
+import { createMoonBoard } from './core/space/moon.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -248,6 +252,7 @@ appEl.innerHTML = `
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
         </div>
+        <div class="board-list" id="board-list"></div>
       </div>
       <aside class="side" id="side"></aside>
     </div>
@@ -267,6 +272,8 @@ const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
  * 它只认"可视区域"这一个坐标系，永远钉在右下角。
  */
 const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
+/** 左下角的地图列表：收起时只显示当前图，点开列出所有图 */
+const boardListEl = pick<HTMLElement>(appEl, '#board-list');
 /**
  * 强制模式的横幅。
  *
@@ -811,6 +818,12 @@ function planMovePath(before: GameState, action: Action): void {
   if (action.type !== 'MOVE') return;
   const u = before.units.find((x) => x.id === action.unitId);
   if (!u) return;
+  // 别的图不画拐弯路径：`pathCells` 是按地球宽度写死的。直线滑过去就够用了，
+  // 真要为月球画逐格路径，等它有了障碍和地形再说。
+  if (boardIdOf(u) !== EARTH) {
+    pendingMovePath = null;
+    return;
+  }
   pendingMovePath = new Map([
     [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y }, u.type)],
   ]);
@@ -1420,11 +1433,18 @@ function render(): void {
    * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
    */
   const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
+  syncBoardList(view);
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
   const threat =
-    !replay && selected && selected.owner === state.current && !selected.acted && !pendingSkill
+    !replay &&
+    selected &&
+    boardIdOf(selected) === EARTH &&
+    selected.owner === state.current &&
+    !selected.acted &&
+    !pendingSkill
       ? Array.from(threatTiles(state, selected))
       : [];
 
@@ -1461,7 +1481,7 @@ function render(): void {
     lastStrikerId = null;
   }
 
-  renderBoard(boardEl, view, {
+  const boardUi: BoardUi = {
     selectedId,
     reach,
     targets,
@@ -1490,7 +1510,16 @@ function render(): void {
      * 棋盘每帧重建、首帧还在 rAF 里，贴上去的那一下经常白贴（城市红框就是这么丢的）。
      */
     ...(tutorial.tutorialOn() ? tutorialMarksOf() : {}),
-  });
+  };
+  /*
+   * 画**当前这一张**图。
+   *
+   * `viewOnBoard` 给渲染层一份"替身视图"：宽高、格子、单位、城市都换成
+   * 那张图的那一份（地球也走这条路——不裁的话月球上的兵会画到地球上）。
+   * 没有别的图的东西时它原样返回，一个对象都不建。
+   * 选中/可达/染色这类"图内坐标"在 boardUiFor 里按图过滤。
+   */
+  renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
 
   /*
    * 笔刷在手时，棋盘自己吃掉触摸手势。
@@ -1638,6 +1667,24 @@ function render(): void {
  */
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
+/**
+ * 当前在看哪张图。
+ *
+ * 地球之外由图在运行时创建（月球、空间站）。这个变量只决定"画哪一张"，
+ * 不参与任何规则计算——规则层认的是单位/动作自带的 `board`。
+ */
+let activeBoardId: BoardId = EARTH;
+/** 左下角地图列表是否展开 */
+let boardListOpen = false;
+/** 地图列表已经画出来的签名，避免每帧重建 DOM */
+let boardListSig = '';
+/**
+ * 每张图各自的相机（缩放档 + 滚动位置）。
+ *
+ * 切图要还原相机：32×32 的地球放大到中间看战场，切到 7×7 的空间站再切回来，
+ * 如果回到左上角，玩家得重新拖一遍——多图玩法里这个动作一天要做几十次。
+ */
+const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number }>();
 /**
  * 上一次 `fitBoard()` 用的是哪一档。
  *
@@ -1824,6 +1871,10 @@ function zoomStep(dir: 1 | -1): void {
  * 而且再开一局还是这样（新局同样只改了数字）。
  */
 function resetZoom(): void {
+  activeBoardId = EARTH;
+  boardListOpen = false;
+  boardListSig = '';
+  boardCameras.clear();
   boardZoom = 1;
   // 尺寸缓存必须作废，否则下一帧不会重新量
   boardDirty = true;
@@ -1833,6 +1884,204 @@ function resetZoom(): void {
   boardScrollEl.classList.remove('dragging', 'zoomed');
   boardEl.classList.remove('zoomed');
 }
+
+/** 地图列表里的小标记：图的类型（地球单独给个"地"） */
+function boardGlyphOf(id: BoardId): string {
+  if (id === EARTH) return '地';
+  const kind = boardKindOf(state, id);
+  return kind === 'station' ? '站' : kind === 'orbit' ? '轨' : '星';
+}
+
+/** 这一张图上还有几个自家单位能动（建筑不算） */
+function boardReadyCount(view: PlayerView, id: BoardId): number {
+  if (replay || spectating()) return 0;
+  return view.state.units.filter((u) => {
+    if (u.owner !== me() || boardIdOf(u) !== id || u.acted) return false;
+    return view.state.unitTypes[u.type]?.category !== 'building';
+  }).length;
+}
+
+/** 这一张图上有没有看得见的敌人（地图列表上的红点） */
+function boardHasContact(view: PlayerView, id: BoardId): boolean {
+  if (replay || spectating()) return false;
+  return view.state.units.some((u) => u.owner !== me() && boardIdOf(u) === id);
+}
+
+/** 地图列表里的文字来自扩展，转义一遍再拼 HTML */
+function escapeBoardText(t: string): string {
+  return t
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 左下角的地图列表。
+ *
+ * 收起时只显示当前图（名字 + 待命数 + 敌人红点），点开列出所有图。
+ * 用签名挡住每帧重建：棋盘一帧要重画很多次，列表没必要跟着抖。
+ */
+function syncBoardList(view: PlayerView): void {
+  if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
+  const ids = boardIds(state);
+  const entries = ids.map((id) => ({
+    id,
+    name: boardName(state, id),
+    ready: boardReadyCount(view, id),
+    contact: boardHasContact(view, id),
+  }));
+  const sig = [
+    boardListOpen ? 'open' : 'shut',
+    activeBoardId,
+    replay ? 'replay' : '',
+    ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}`),
+  ].join('|');
+  if (sig === boardListSig) return;
+  boardListSig = sig;
+
+  boardListEl.classList.toggle('open', boardListOpen);
+  const cur = entries.find((e) => e.id === activeBoardId) ?? entries[0]!;
+  const current =
+    `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 张）">` +
+    `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +
+    `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
+    (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
+    (cur.contact ? '<i class="bl-contact" title="这张图上有敌人"></i>' : '') +
+    `<span class="bl-caret">▴</span>` +
+    `</button>`;
+
+  const rows = entries
+    .map(
+      (e) =>
+        `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
+        `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
+        `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
+        (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
+        (e.contact ? '<i class="bl-contact"></i>' : '') +
+        `</button>`,
+    )
+    .join('');
+
+  // 调试脚手架：第四步接入真正的月球后删掉
+  const debug =
+    godMode() && !replay
+      ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
+      : '';
+
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${debug}</div>`;
+}
+
+/**
+ * 切到另一张图。
+ *
+ * 只换"渲染的是哪张图"和相机，规则一行不动——单位、视野、动作各自带着
+ * 自己的 `board`，切图不影响它们。
+ */
+function switchBoard(id: BoardId): void {
+  if (id === activeBoardId || !hasBoard(state, id)) return;
+  // 走之前把相机存下来
+  boardCameras.set(activeBoardId, {
+    zoom: boardZoom,
+    left: boardScrollEl.scrollLeft,
+    top: boardScrollEl.scrollTop,
+  });
+
+  activeBoardId = id;
+  /*
+   * 选中、待放技能、待选落点全部清掉。
+   *
+   * 它们记的是**地球**的格坐标；原样带到 7×7 的空间站上，要么越界，
+   * 要么指向完全无关的格子。清掉是最不容易出错的做法——重新点一下就是了。
+   */
+  selectedId = null;
+  selectedTile = null;
+  selectedCityId = null;
+  selectedCampId = null;
+  pendingMovePath = null;
+  pendingSkill = null;
+  pendingDevice = null;
+  boardListOpen = false;
+
+  const cam = boardCameras.get(id) ?? { zoom: 1, left: 0, top: 0 };
+  boardZoom = cam.zoom;
+  boardDirty = true;
+  render();
+
+  const restore = (): void => {
+    boardScrollEl.scrollLeft = cam.left;
+    boardScrollEl.scrollTop = cam.top;
+  };
+  // 等这一帧的尺寸写完再还原滚动位置，否则会被 fitBoard 的布局覆盖
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+  else restore();
+}
+
+/**
+ * 上帝模式里的「＋ 月球」：按当前的玩法生成真正的月球图。
+ *
+ * 正式入口在「太空时代」扩展里（第 5 步接），这里只是提前留一个能看效果的按钮：
+ * 尺寸按 `moonSizeFor(state.w)` 跟着地球缩，地形是月壤 + 环形山。
+ */
+function addMoonBoard(): void {
+  if (!godMode() || replay) return;
+  if (state.boards?.moon) {
+    switchBoard('moon');
+    return;
+  }
+  const board = createMoonBoard(state.w, state.seed);
+  state.boards ??= {};
+  state.boards.moon = board;
+  // 迷雾记忆按图刷新一次，切过去不会满屏"未探明"
+  refreshMemory(state);
+  switchBoard('moon');
+}
+
+/** 非地球的图没有选中/可达/染色这些地球坐标的东西，一律清空 */
+function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
+  if (id === EARTH) return ui;
+  // 选中的单位如果就在这张图上，高亮要留着；切图时它属于别处才清掉
+  const sel = ui.selectedId ? state.units.find((u) => u.id === ui.selectedId) : undefined;
+  return {
+    ...ui,
+    selectedId: sel && boardIdOf(sel) === id ? sel.id : null,
+    selectedCityId: null,
+    // 可达格与建造高亮都是"图内索引"，渲染的正好是同一张图，照用
+    reach: ui.reach,
+    targets: [],
+    siegeTargets: [],
+    aimTiles: [],
+    skillThreatTiles: [],
+    placeable: ui.placeable,
+    threat: [],
+    heat: undefined,
+    heatFlash: undefined,
+    movePath: undefined,
+    boardView: undefined,
+    boardGlyph: undefined,
+    incomeHints: undefined,
+    tutorialTiles: [],
+    tutorialCityId: null,
+    tutorialOwnCityId: null,
+  };
+}
+
+boardListEl.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act],[data-board]');
+  if (!el) return;
+  const act = el.dataset.act;
+  if (act === 'bl-toggle') {
+    boardListOpen = !boardListOpen;
+    syncBoardList(viewNow());
+    return;
+  }
+  if (act === 'bl-add') {
+    addMoonBoard();
+    return;
+  }
+  const id = el.dataset.board;
+  if (id) switchBoard(id);
+});
 
 /**
  * 顶栏还有没有"藏起来的部分"，用两侧的阴影提示。
@@ -1847,6 +2096,31 @@ function syncTopbarScroll(): void {
 }
 /** 根据当前选中单位重算可达、可攻击、可攻城集合 */
 function refreshSelection(): void {
+  /*
+   * 别的图还没有动作系统：可达格、攻击目标、技能落点全是**地球**坐标算出来的，
+   * 在月球上算一遍只会把地球那套高亮带过去（它们最终也会被 boardUiFor 清掉）。
+   * 直接清空，省一次错误的寻路。
+   */
+  if (activeBoardId !== EARTH) {
+    /*
+     * 别的图也能走（第 8 步起的月面行动）：可达格由 `reachableTiles` 按
+     * 单位所在的图算，索引也是那张图的索引，和渲染层对得上。
+     *
+     * 攻击、攻城、技能选点仍然只在地球：它们的射程、溅射、地形掩护全按
+     * `state` 结算，月面战斗是「太空战争」那一包的事。
+     */
+    reach = [];
+    targets = [];
+    siege = [];
+    aimTiles = [];
+    skillThreatTiles = [];
+    const unit = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+    if (unit && unit.owner === me() && boardIdOf(unit) === activeBoardId && !unit.acted) {
+      reach = canMove(unit) ? Array.from(reachableTiles(state, unit).keys()) : [];
+    }
+    return;
+  }
+
   if (pendingSkill) {
     reach = [];
     targets = [];
@@ -2035,7 +2309,7 @@ function computePlaceable(): number[] {
     const out: number[] = [];
     for (let y = 0; y < state.h; y++) {
       for (let x = 0; x < state.w; x++) {
-        if (distance(ferry, { x, y }) !== 1) continue;
+        if (distToUnit(state, { x, y }, ferry) !== 1) continue;
         const tile = state.tiles[y * state.w + x];
         if (!tile) continue;
         // 落点问规则层（canStandAt 按**货舱里那个兵**判）：自己数一遍地形的话，
@@ -2063,11 +2337,16 @@ function computePlaceable(): number[] {
   // 军营那次就是这么坏的：规则里判临水只认 `water`，这里用的 `adjacentToWater`
   // 认桥面，于是桥头被高亮成可建，点下去才回一句"必须扎在水边"。
   // 判据只能有一处，界面这一层只负责问。
+  /*
+   * 按**建造者所在的那张图**算：月面上的工程队看的是月球的格子。
+   * `boardState` 对地球直接返回 state 本身，所以这条不影响原路径。
+   */
+  const grid = boardState(state, boardIdOf(builder));
   const out: number[] = [];
-  for (let y = 0; y < state.h; y++) {
-    for (let x = 0; x < state.w; x++) {
-      if (buildSiteError(state, def, builder, x, y) !== null) continue;
-      out.push(y * state.w + x);
+  for (let y = 0; y < grid.h; y++) {
+    for (let x = 0; x < grid.w; x++) {
+      if (buildSiteError(grid, def, builder, x, y) !== null) continue;
+      out.push(y * grid.w + x);
     }
   }
   return out;
@@ -2931,7 +3210,15 @@ function undoLast(): void {
  */
 function stackAt(x: number, y: number): Unit[] {
   const view = viewNow().state;
-  const list = unitsAt(view, x, y).slice();
+  /*
+   * **只收当前这张图上的单位**。
+   *
+   * `unitsAt` 是按坐标算的，不认识"图"：月球上的兵在 (5,5)，地球的 (5,5)
+   * 也会把它找出来。于是玩家在地球点一下那个空格，就选中了月球上的那支兵，
+   * 之后的走子指令全按地球坐标下——月球的兵在地球上走，对面还看不见它。
+   * 这个幽灵就是这么来的（2026-11-10 实机反馈）。
+   */
+  const list = unitsAt(view, x, y).filter((u) => boardIdOf(u) === activeBoardId).slice();
   const rank = (u: Unit) => {
     if (utype(view, u.type).category === 'building') return 2;
     return isAirborne(view, u) ? 0 : 1;
@@ -3077,6 +3364,69 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 }
 
 function onBoardClick(e: Event): void {
+  /*
+   * 别的图（月球、以后的空间站）现在只做到"点得中、看得见"。
+   *
+   * 走子 / 开火 / 建造整条链路都按**地球**的坐标与宽度算（`idx()` 认的是
+   * `state.w`），在 12×12 的月球上点 (3,4) 会被当成地球的 (3,4) 去执行。
+   * 所以这里只做选中：选中之后侧栏那张属性卡是真的（它读的是单位自己），
+   * 面板里的按钮也照常能用——发射井的加注/发射就是在这条路上跑的。
+   */
+  if (activeBoardId !== EARTH) {
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const id = activeBoardId;
+    const board = boardOf(state, id);
+    if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
+
+    /*
+     * 别的图（目前是月球）的点击：**建造选址 → 走子 → 选中**。
+     *
+     * 顺序和地球那条一致。这里没有攻击/攻城/技能选点——月面战斗还没做
+     * （见 refreshSelection 里的说明），所以那几种点击后面会落到"选中/取消"。
+     */
+    if (buildPlan) {
+      const plan = buildPlan;
+      const built = dispatch({
+        type: 'BUILD',
+        unitId: plan.unitId,
+        unitType: plan.type,
+        x: at.x,
+        y: at.y,
+      });
+      if (built) buildPlan = null;
+      refreshSelection();
+      render();
+      return;
+    }
+
+    const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
+    // 和地球那条一致：兵压在建筑上面，先选兵
+    const pick =
+      here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
+
+    // 点空地、手上又选着自己的人：下移动命令（走不走得通由规则层说）
+    if (!pick && selectedId) {
+      const sel = state.units.find((u) => u.id === selectedId);
+      if (sel && sel.owner === me() && boardIdOf(sel) === id && !sel.acted) {
+        if (dispatch({ type: 'MOVE', unitId: sel.id, x: at.x, y: at.y })) return;
+      }
+    }
+
+    selectedId = pick?.id ?? null;
+    selectedCityId = null;
+    selectedTile = null;
+    aimTiles = [];
+    skillThreatTiles = [];
+    refreshSelection();
+    if (!pick && !selectedId) {
+      const tile = board.tiles[at.y * board.w + at.x];
+      if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+    }
+    render();
+    return;
+  }
+
   /*
    * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
    *
@@ -3453,7 +3803,17 @@ function onBoardClick(e: Event): void {
   if (loadPlan) {
     const ferry = state.units.find((u) => u.id === loadPlan);
     const cargo = clickedUnitId ? state.units.find((u) => u.id === clickedUnitId) : null;
-    if (ferry && cargo && cargo.owner === ferry.owner && distance(ferry, cargo) === 1) {
+    /*
+     * 贴身按**占地**算，不是锚点：2×2 的发射井锚点在左上角，
+     * 站在它右下角旁边的兵，锚点距离是 3。规则层早就改过来了（doLoad 用的是
+     * distBetweenUnits），这里漏改，玩家按下去只会听到"点一个贴着船的己方陆军"。
+     */
+    if (
+      ferry &&
+      cargo &&
+      cargo.owner === ferry.owner &&
+      distBetweenUnits(state, ferry, cargo) === 1
+    ) {
       dispatch({ type: 'LOAD', unitId: ferry.id, cargoId: cargo.id });
       loadPlan = null;
       return;
@@ -3467,7 +3827,7 @@ function onBoardClick(e: Event): void {
 
   if (unloadPlan) {
     const ferry = state.units.find((u) => u.id === unloadPlan);
-    if (ferry?.cargo?.length && coords && distance(ferry, coords) === 1) {
+    if (ferry?.cargo?.length && coords && distToUnit(state, coords, ferry) === 1) {
       const cargoId = ferry.cargo[0]!.id;
       const ok = dispatch({
         type: 'UNLOAD',

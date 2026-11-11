@@ -31,7 +31,7 @@
     "test:replay": "node --experimental-strip-types scripts/test-replay-file.ts",
     "test:net": "node --experimental-strip-types scripts/test-net-weights.ts",
     "test:ui": "node --experimental-strip-types scripts/smoke-dom.ts",
-    "test:serve": "node --experimental-strip-types scripts/smoke-serve.ts",
+    "test:serve": "npm run build:static && node --experimental-strip-types scripts/smoke-serve.ts",
     "rl:test": "node --experimental-strip-types scripts/rl/test-m1.ts",
     "rl:test-env": "node --experimental-strip-types scripts/rl/test-env-desc.ts",
     "rl:bench": "node --experimental-strip-types scripts/rl/bench-legal.ts",

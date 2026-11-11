@@ -475,13 +475,16 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
   // 一格自己的、一格敌人的（都摆在视野里，否则按迷雾规则根本不该画）
   const mine = addMark(st, { kind: 'nv-mine', owner: 'A', x: 2, y: 2, charges: 1, hidden: true });
   const foe = addMark(st, { kind: 'nv-mine', owner: 'B', x: 3, y: 2, charges: 1, hidden: false });
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
     host,
     {
       state: st,
-      visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
       ghosts: [],
       rememberedTiles: new Map(),
+      rememberedByBoard: {},
       rememberedCities: new Map(),
       terrainHidden: false,
     },
@@ -7315,11 +7318,14 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     threat: [] as number[],
     me: 'A' as const,
   };
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   const allVisible = {
     state: st,
-    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    visible: allSeen,
+    visibleByBoard: { earth: allSeen },
     ghosts: [] as never[],
     rememberedTiles: new Map(),
+    rememberedByBoard: {},
     rememberedCities: new Map(),
     terrainHidden: false,
   };
@@ -8262,6 +8268,163 @@ check('「撤回一步」离开「结束回合」那一块，两处点击区域�
   assert.ok(!undo!.closest('.side-actions'), '撤回不许和认输挤同一排');
   // 两颗按钮不在同一个父节点下，就不可能叠在一起
   assert.notEqual(undo!.parentElement?.parentElement, endTurn!.parentElement, '两颗按钮不该共用一个容器');
+});
+
+check('月球基地：卡上有采样技能和倒计时，月面的工程队有「展开」按钮', () => {
+  /*
+   * 登月胜利只有两个交互：月面上「展开月球基地」、基地上「月壤采样」。
+   * 它们分别是单位动作和主动技能——两条不同的渲染路径，都在这条里钉住。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7793);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  st.units = st.units.filter((u) => u.x !== 4 || u.y !== 4);
+  const base = {
+    id: 'base-test',
+    type: 'moon-base',
+    owner: 'A',
+    x: 4,
+    y: 4,
+    hp: 200,
+    kills: 0,
+    moved: false,
+    acted: false,
+    board: 'moon',
+    custom: { sample: 2 },
+  };
+  st.units.push(base as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: base as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('还剩 2 个回合'), `倒计时要在卡上，实际：${text.slice(0, 120)}`);
+    const btn = host.querySelector('[data-act="hero-skill"][data-skill="lunar-sampling"]');
+    assert.ok(btn, '「月壤采样」按钮不见了');
+
+    // 换成月面上的工程队：该出现「展开月球基地」
+    st.units = st.units.filter((u) => u.id !== 'base-test');
+    const crew = {
+      id: 'crew-moon',
+      type: 'crew',
+      owner: 'A',
+      x: 6,
+      y: 6,
+      hp: 30,
+      kills: 0,
+      moved: false,
+      acted: false,
+      board: 'moon',
+    };
+    st.units.push(crew as never);
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: crew as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    assert.ok(
+      host.querySelector('[data-action="base:deploy"]'),
+      '月面工程队该有「展开月球基地」按钮',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
+check('切图：同一块画布换成另一张图的尺寸与格子', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 9192);
+  const earth = playerView(st, 'A');
+  try {
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '地球 12×12');
+    assert.equal(host.style.getPropertyValue('--cols'), '12');
+
+    // 一张 3×3 的小图：格子层必须按它自己的尺寸重建，不能残留地球的 144 格
+    const tiles = Array.from({ length: 9 }, (_, i) => ({
+      terrain: i === 4 ? 'forest' : 'plain',
+      cityId: null,
+    }));
+    const moon = {
+      ...earth,
+      state: { ...earth.state, w: 3, h: 3, tiles, units: [], cities: [], marks: [] },
+      visible: Array.from({ length: 9 }, (_, i) => i),
+      visibleByBoard: { earth: earth.visible, moon: Array.from({ length: 9 }, (_, i) => i) },
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      ghosts: [],
+    };
+    renderBoard(host, moon as never, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 9, '切到 3×3 要重建格子层');
+    assert.equal(host.style.getPropertyValue('--cols'), '3');
+
+    // 切回地球：还是 144，不是 9
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '切回来要回到 12×12');
+  } finally {
+    host.remove();
+  }
+});
+
+check('火箭发射井：属性卡写着燃料与货舱，加注/发射按钮都在', () => {
+  /*
+   * 发射井的全部交互都在侧栏：货舱是现成的那套（装载/卸载），
+   * 加注和发射是扩展给的两个按钮。这条钉"它们真的画出来了"——
+   * 规则层的用例只能验状态，验不了这对按钮有没有长在卡上。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7781);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  const silo = {
+    id: 'silo-test',
+    type: 'rocket_silo',
+    owner: 'A',
+    x: 6,
+    y: 6,
+    hp: 120,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units = st.units.filter((u) => !(u.x === 6 && u.y === 6));
+  st.units.push(silo as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: silo as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('燃料 0 / 3'), `燃料进度要写在卡上，实际：${text.slice(0, 120)}`);
+    assert.ok(text.includes('货舱：空'), '货舱状态要写在卡上');
+    assert.ok(host.querySelector('[data-action="silo:fuel"]'), '加注按钮不见了');
+    assert.ok(host.querySelector('[data-action="silo:launch"]'), '发射按钮不见了');
+    // 没燃料、没货：发射必须是禁用的，而不是点了才说不行
+    assert.equal(
+      host.querySelector('[data-action="silo:launch"]')!.hasAttribute('disabled'),
+      true,
+      '条件不齐时发射按钮该是灰的',
+    );
+  } finally {
+    host.remove();
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

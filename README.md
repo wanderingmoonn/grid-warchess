@@ -221,11 +221,12 @@ npm run dev      # 本地开发，http://127.0.0.1:5178
 | 命令 | 做什么 |
 |---|---|
 | `npm run dev` | 本地开发服务器 |
-| `npm test` | 全量测试：规则 384 项 + AI 场景 26 项 + 评估方法 7 项 + DOM 冒烟 141 项 |
+| `npm test` | 全量测试：样式体检 → 对比度 → 规则 820 项 → 回放/联机/AI → DOM 冒烟 → 启动/浓雾/框选 → 静态服务器 |
 | `npm run test:rules` | 只跑规则内核（无浏览器、无 mock，直接 import） |
 | `npm run test:ai-optimization` | AI 战术、高差兼容、冻结基准与评估统计检查 |
 | `npm run evaluate:ai` | 新旧 AI 配对评估；默认 208 场，快速检查命令见创作者指南 |
 | `npm run build` | `tsc --noEmit` + `vite build`，产出 `dist/` |
+| `npm run build:static` | 产出线上发布用的 `_publish/`（不进版本库；`test:serve` 会自己先跑一次） |
 | `npm run manual` | 从代码里的兵种/能力/扩展数据重新生成规则书（6 册：核心册 + 小型扩展合订本 + 奇幻合册 + 时代兵备合册 + 两个单包册） |
 | `npm run bench` | 双 AI 对打基准：每个组合 N 个种子，统计回合数与最高时代 |
 | `npm run perf` | 性能体检：分规模测单帧耗时 / 掉帧率 / 每帧新建 DOM，定位渲染瓶颈（见 [docs/PERF.md](docs/PERF.md)） |

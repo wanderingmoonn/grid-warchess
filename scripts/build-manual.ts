@@ -2676,6 +2676,14 @@ function packBook(e: Exp): Book {
     .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
     .join('、');
 
+  // 大包自己的「补充规则」。以前只有合册会印，单独成册的包反而漏掉
+  const notesHtml =
+    (e.manualNotes ?? []).length > 0
+      ? `<ul class="pack-notes">${(e.manualNotes ?? [])
+          .map((n) => `<li>${rich(n)}</li>`)
+          .join('')}</ul>`
+      : '';
+
   // 装甲两包多一节装备表：装配坞里能看，但开局前查数值也得有地方
   const armorMods = e.id.startsWith('armor-') ? armorModuleSection() : '';
   const nav = `
@@ -2688,7 +2696,7 @@ function packBook(e: Exp): Book {
   const body = `
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>${rich(e.summary)}</p>
+      <p>${rich(e.summary)}</p>${notesHtml}
       <dl class="kv">
         <dt>兵种数量</dt><dd>${units.length} 个</dd>
         <dt>覆盖时代</dt><dd>${eras.length ? eras.map((n) => `${n}（${esc(ERAS[n - 1]?.name ?? '')}）`).join('、') : '—（不带兵种）'}</dd>

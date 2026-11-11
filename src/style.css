@@ -44,6 +44,9 @@
   --marsh: #a9b795;
   --dune: #e8d9a8;
   --shallow: #b7dcd6;
+  /* 月球：月壤比平原更灰更冷，环形山再暗一档——不看图例也能分出坑缘 */
+  --regolith: #d8d4ca;
+  --crater: #b6b1a7;
   --lava: #d99a72;
   --volcano: #8d8290;
 
@@ -497,6 +500,142 @@ body {
   transform: translateY(1px);
 }
 
+/* ---------- 左下角：地图列表 ---------- */
+/*
+ * 收起时只有一枚"当前图"的按钮，点开在它上面列出所有图。
+ * 位置和缩放条对称（它右下、这里左下），容器本身不接点击，只有按钮接。
+ */
+.board-list {
+  position: fixed;
+  left: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 6px;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.board-list:hover,
+.board-list:focus-within,
+.board-list.open {
+  opacity: 1;
+}
+
+.bl-current,
+.bl-row,
+.bl-add {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 110, 92, 0.35);
+  background: rgba(252, 250, 244, 0.92);
+  color: #4a463d;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * hover / 选中态把底色换成了更亮的浅色，这里必须**显式再写一遍字色**：
+ * 只有底色、没有 color 的规则，`npm run test:contrast` 会按"继承 --text"去算，
+ * 而现代主题下 --text 近白 —— 于是报"浅底浅字"。
+ * 实际渲染没问题（文字色由上面那条基础规则给死），但显式写出来既不靠推断，
+ * 也把"这族按钮永远浅底深字、不跟主题变深"这条意图写在原地。
+ */
+.bl-current:hover,
+.bl-row:hover {
+  background: #fffdf6;
+  border-color: rgba(120, 110, 92, 0.6);
+  color: #4a463d;
+}
+
+.bl-current {
+  font-weight: 500;
+}
+
+.bl-menu {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  /* 图多的时候别顶出屏幕；超过就自己滚 */
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.board-list.open .bl-menu {
+  display: flex;
+}
+
+.bl-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(120, 110, 92, 0.16);
+  font-size: 11px;
+  color: #6b6459;
+}
+
+.bl-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bl-ready {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f0c987;
+  color: #5a4212;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.bl-contact {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4553f;
+}
+
+.bl-row.on {
+  background: #fbf3e2;
+  border-color: rgba(120, 110, 92, 0.7);
+  /* 同理：浅底必须配显式深字，别让体检按 --text 推断（见上面那条注释） */
+  color: #4a463d;
+}
+
+.bl-caret {
+  color: #8b8477;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.board-list.open .bl-caret {
+  transform: rotate(180deg);
+}
+
+.bl-add {
+  border-style: dashed;
+  color: #8b8477;
+  font-size: 11px;
+}
+
 /* ---------- 棋盘 ---------- */
 .board {
   position: relative;
@@ -683,6 +822,32 @@ body {
   border-radius: 50% 50% 40% 40%;
   border-top: 3px solid rgba(180, 150, 90, 0.55);
   background: rgba(200, 175, 115, 0.22);
+}
+
+.tile.t-regolith {
+  background: var(--regolith);
+}
+/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */
+.tile.t-regolith::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 32% 38%, rgba(110, 105, 96, 0.16) 0 6%, transparent 7%),
+    radial-gradient(circle at 70% 66%, rgba(110, 105, 96, 0.12) 0 5%, transparent 6%);
+}
+
+/* 环形山：坑缘一圈，中间比周围暗一点 */
+.tile.t-crater {
+  background: var(--crater);
+}
+.tile.t-crater::before {
+  content: '';
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: 2px solid rgba(92, 88, 80, 0.32);
+  background: rgba(120, 115, 106, 0.22);
 }
 
 /* 浅流：浅青底色 + 几道横向水纹，比深水（河）亮一档，
