@@ -134,6 +134,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       draftPickMs: initial.draftPickMs,
       // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
+      /*
+       * 默认**关**（保留 2026-11-04 定下的立场）。
+       *
+       * 2026-11-11 我一度把它改成默认开，被 `smoke-dom` 那条用例拦下了：
+       * "默认必须是关的：不勾就不记，也不多交东西"。这条是对的——
+       * 它守的不是代码，是**采集范围**：记录过程等于把一整局的每一步都留在
+       * 报告里，这件事得玩家点头，不能替他决定。
+       *
+       * 数据那边确实有代价：库里 65 局只有 19 局带动作序列。但解法不该是
+       * 偷偷改默认值，而是让"勾一次就一直记住"（loadRecordPref 已经做到）。
+       */
       recordDetail: loadRecordPref() ?? initial.recordDetail === true,
     };
 

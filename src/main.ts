@@ -103,7 +103,7 @@ import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
-import type { MatchReport } from './core/report.ts';
+import type { LoggedAction, MatchReport } from './core/report.ts';
 import {
   newTimeline,
   noteAction,
@@ -666,7 +666,7 @@ let recorder: MatchTimeline | null = null;
  * 上限 1500 步：一局通常 400~1000 步；超了就从尾部截断并计数（`actionsDropped`），
  * 让"这份日志不全"这件事在报告里自己说出来，而不是重放时对不上再让人去猜。
  */
-let actionLog: Action[] | null = null;
+let actionLog: LoggedAction[] | null = null;
 let actionDropped = 0;
 let actionBytes = 0;
 /** 步数上限 */
@@ -703,9 +703,12 @@ function resetRecorder(): void {
 function noteStep(actor: PlayerId, action: Action): void {
   if (actionLog) {
     if (actionLog.length < ACTION_LOG_CAP && actionBytes < ACTION_LOG_BYTES) {
-      actionLog.push(action);
+      // 带上行动方（2026-11-11）：END_TURN 归谁光看动作推不准，
+      // 而"人这一步怎么想的"恰恰要靠它把人类的决策单独拎出来
+      const step = { ...action, by: actor } as LoggedAction;
+      actionLog.push(step);
       // 粗算就够：这里的用途只是"别撞上限"，不需要精确
-      actionBytes += JSON.stringify(action).length + 1;
+      actionBytes += JSON.stringify(step).length + 1;
     } else {
       actionDropped += 1;
     }
