@@ -22,7 +22,7 @@
  *   node --experimental-strip-types scripts/defense-duel.ts --unit sword --gap 9
  */
 
-import { applyAction, distance, reachableTiles } from '../src/core/rules.ts';
+import { applyAction, distance, reachableTiles, utype } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit } from '../src/core/types.ts';
 
@@ -35,6 +35,9 @@ const argOf = (name: string, dflt: string): string => {
 const UNIT = argOf('unit', 'militia');
 const GAP = Number(argOf('gap', '7'));
 const RUNS = Number(argOf('runs', '12'));
+/** 守方除了塔之外还摆几个兵（护卫）。0 = 只有塔，纯测建筑本身 */
+const GUARDS = Number(argOf('guards', '0'));
+const GUARD_UNIT = argOf('guard-unit', 'militia');
 const CAP = Number(argOf('cap', '24'));
 const SIZE = Number(argOf('size', '20'));
 /**
@@ -92,7 +95,13 @@ function priceOf(s: GameState, u: Unit): number {
   return s.unitTypes[u.type]?.cost ?? 0;
 }
 
-function runOne(towers: number, farmers: number, attackers: number, seed: number): Omit<Row, 'label' | 'runs'> {
+function runOne(
+  towers: number,
+  farmers: number,
+  attackers: number,
+  seed: number,
+  guards = GUARDS,
+): Omit<Row, 'label' | 'runs'> {
   seq = 0;
   const s0 = createMatch(
     {
@@ -149,6 +158,8 @@ function runOne(towers: number, farmers: number, attackers: number, seed: number
   const top = midY - Math.floor(towers / 2);
   for (let i = 0; i < towers; i++) put(s0, 'A', 'tower', tx, top + i);
   for (let i = 0; i < farmers; i++) put(s0, 'A', 'farmer', tx - 2, top + i);
+  // 护卫站在塔**前面**一格：他们的活是挡住冲进来的人，不是跟着农民躲
+  for (let i = 0; i < guards; i++) put(s0, 'A', GUARD_UNIT, tx + 1, top + i);
   const ax = Math.min(SIZE - 1, tx + GAP);
   const atop = midY - Math.floor(attackers / 2);
   for (let i = 0; i < attackers; i++) put(s0, 'B', UNIT, ax, atop + i);
@@ -212,6 +223,27 @@ function runOne(towers: number, farmers: number, attackers: number, seed: number
   const towerCount = () => s.units.filter((u) => u.owner === 'A' && u.type === 'tower' && u.hp > 0).length;
   const farmerCount = () => s.units.filter((u) => u.owner === 'A' && u.hp > 0 && s.unitTypes[u.type]?.category === 'economy').length;
 
+  /**
+   * 守方回合：护卫只做一件事——**够得着就打**。
+   *
+   * 不让他们追出去：这条场景测的是"守不守得住"，护卫离阵去追人，
+   * 阵型就散了，测出来的也不是建筑的价值。
+   */
+  const defenderAct = (): void => {
+    const ids = s.units
+      .filter((u) => u.owner === 'A' && u.hp > 0 && utype(s, u.type).category === 'combat')
+      .map((u) => u.id);
+    for (const id of ids) {
+      const me = s.units.find((k) => k.id === id);
+      if (!me || me.hp <= 0) continue;
+      const prey = s.units.find((k) => k.owner === 'B' && k.hp > 0 && distance(k, me) <= 1);
+      if (!prey) continue;
+      const r = applyAction(s, { type: 'ATTACK', unitId: id, targetId: prey.id });
+      if (r.ok) s = r.state;
+      s.winner = null;
+    }
+  };
+
   /** 交回合；任何一步把对局判死了就清掉，脚本自己决定什么时候停 */
   const pass = (): boolean => {
     const r = applyAction(s, { type: 'END_TURN' });
@@ -225,6 +257,8 @@ function runOne(towers: number, farmers: number, attackers: number, seed: number
     turn += 1;
     // 轮到攻方为止：守方回合什么都不做，但"进入守方回合"这件事本身会触发清场射击
     for (let guard = 0; s.current !== 'B' && guard < 6; guard += 1) {
+      // 轮到守方：护卫先打（建筑物的清场射击在进入这个回合时已经结算过了）
+      if (s.current === 'A') defenderAct();
       if (!pass()) break;
     }
     if (s.current !== 'B') break;
@@ -259,9 +293,15 @@ function runOne(towers: number, farmers: number, attackers: number, seed: number
 
 const rows: Row[] = [];
 for (const spec of MATRIX.split(',')) {
-  const m = /^(\d+)x(\d+)v(\d+)$/.exec(spec.trim());
+  // `2x0v4` = 2 塔 0 农 vs 4 兵；`2x1g2v4` = 再多 2 个护卫
+  const m = /^(\d+)x(\d+)(?:g(\d+))?v(\d+)$/.exec(spec.trim());
   if (!m) continue;
-  const [towers, farmers, attackers] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const [towers, farmers, guards, attackers] = [
+    Number(m[1]),
+    Number(m[2]),
+    Number(m[3] ?? 0),
+    Number(m[4]),
+  ];
   const acc: Row = {
     label: spec.trim(),
     runs: RUNS,
@@ -277,7 +317,7 @@ for (const spec of MATRIX.split(',')) {
   let ratioSum = 0;
   let ratioN = 0;
   for (let i = 0; i < RUNS; i++) {
-    const r = runOne(towers, farmers, attackers, 4300 + i);
+    const r = runOne(towers, farmers, attackers, 4300 + i, guards);
     acc.wipeAttacker += r.wipeAttacker;
     acc.wipeTower += r.wipeTower;
     acc.econSafe += r.econSafe;
