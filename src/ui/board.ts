@@ -551,11 +551,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const jx = ((x * 37 + y * 61) % 7) * 3;
       const jy = ((x * 53 + y * 17) % 7) * 3;
       /*
+       * 地形 tile 的变体号（0/1/2）。
+       *
+       * 一种地形只有一张图，铺满整片林子就是"同一个图标阵列"——所以每种地形
+       * 备三张变体，按坐标挑。乘两个不同的质数再取模，相邻格不会连续同款，
+       * 也不会出现明显的斜条纹（试过 (x+y)%3，斜着一排全一样）。
+       */
+      const variant = (x * 7 + y * 13) % 3;
+      /*
        * `--x/--y` 也一起给：开了地形材质之后，每格要按**格坐标**去大图上取景，
        * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——

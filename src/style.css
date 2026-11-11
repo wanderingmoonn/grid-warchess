@@ -807,8 +807,32 @@ html[data-terrain='on'] .tile {
 html[data-terrain='on'] .tile.t-plain {
   background-image: url('art/terrain/plain.webp');
 }
+/*
+ * ── 图案化 tile（B 方案，2026-11-12）──────────────────────────────────
+ *
+ * 和上面那张"一张大图取景"是两种完全不同的做法：
+ *   · 大图取景：把 512 的照片纹理缩小塞进 44px —— 没有可读层次（四档都试过）；
+ *   · 图案 tile：一个 tile 就是一个**为小尺寸画的图形**（一棵树、一块石头），
+ *     缩到 40px 仍然读得出"这是树"。这是 Advance Wars / Wargroove / 陷阵之志
+ *     那类地图的做法。
+ *
+ * 每种地形三张变体，按 `data-v`（由 board.ts 按坐标算）挑，避免同一片林子
+ * 全是同一个图标排成阵列。
+ *
+ * 图是**透明底**：地面色仍来自 `--forest` 那套变量，tile 只负责"长什么"。
+ * 所以换成 tile 之后，地形的色相不会跑——玩家靠颜色判断走位这件事没被破坏。
+ */
 html[data-terrain='on'] .tile.t-forest {
-  background-image: url('art/terrain/forest.webp');
+  background-image: url('art/terrain/forest-1.png');
+  background-size: 100% 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-terrain='on'] .tile.t-forest[data-v='1'] {
+  background-image: url('art/terrain/forest-2.png');
+}
+html[data-terrain='on'] .tile.t-forest[data-v='2'] {
+  background-image: url('art/terrain/forest-3.png');
 }
 html[data-terrain='on'] .tile.t-hill {
   background-image: url('art/terrain/hill.webp');
