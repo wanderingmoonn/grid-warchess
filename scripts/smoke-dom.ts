@@ -1857,6 +1857,67 @@ check('属性卡：数值排成两列，标签在上、数值在下', () => {
   assert.equal(host.querySelector('.stat-span'), null, '没有修正明细时不该有跨列块');
 });
 
+check('建造面板按用途分组：防御 / 营地 / 经济 / 桥', () => {
+  /*
+   * 2026-11-11 整合建造单位之后，奴隶能盖 7 样、建筑队能盖 33 样
+   * （高代继承低代，还把时代军备包的工事都收了进来）。平铺一列的话
+   * 玩家在一屏里找不到"我要的那座塔"，所以按用途分了四组。
+   *
+   * 这条守的是**分组真的出现了**，而不是只有数据改了：
+   * 默认局里奴隶的 4 样正好各归一组，四组标题都该在。
+   */
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5151,
+  );
+  st.current = 'A';
+  const laborer = {
+    id: 'builder-probe',
+    type: 'laborer',
+    owner: 'A' as const,
+    x: 6,
+    y: 6,
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(laborer);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: laborer,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const titles = [...host.querySelectorAll('.recruit-group-title')].map((el) => el.textContent ?? '');
+  for (const label of ['防御工事', '营地', '经济建筑', '桥']) {
+    assert.ok(
+      titles.some((t) => t.startsWith(label)),
+      `建造面板缺了「${label}」这一组，实际分组：${titles.join(' / ')}`,
+    );
+  }
+  // 每组标题带数量，且加起来等于按钮总数——不然"共 N 种"和实际摆出来的对不上
+  const countOf = (t: string) => Number(/·\s*(\d+)$/.exec(t)?.[1] ?? 0);
+  const sum = titles.reduce((n, t) => n + countOf(t), 0);
+  assert.equal(
+    sum,
+    host.querySelectorAll('[data-act="build"]').length,
+    '各组数量之和必须等于建造按钮总数',
+  );
+});
+
 console.log('\n城市与产兵');
 
 check('点自己空城会打开产兵面板', () => {

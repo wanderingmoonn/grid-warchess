@@ -248,7 +248,7 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     // 海上钻井平台也归它：那是第六时代唯一一座"盖在海面上"的经济建筑。
     // 挂在这一位（底座工程兵）而不是「工程兵团」，是因为「现代海军」只要求
     // 「信息化」——挂到需要「现代战争」的那一位身上，会有整整一档玩家修不了自己的平台。
-    builds: ['ct_pillbox', 'ct_industrial', 'bridge', 'bridge2', 'bridge3', 'camp6', 'nv_oil_platform'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bunker', 'industrialpark', 'bridge3', 'camp5', 'mod_concretewall', 'mod_dragonsteeth', 'mod_mgbunker', 'ct_pillbox', 'ct_industrial', 'camp6', 'cnt_armorwall', 'cnt_bunker', 'cnt_hq', 'nv_oil_platform'],
   },
 
   // ---- 建筑 ----
@@ -597,6 +597,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     short: '团',
     era: 6,
     category: 'builder',
+    legacy: true,
     cost: 320,
     move: 2,
     atk: 6,
@@ -605,7 +606,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     buildPower: 40,
-    builds: ['cnt_armorwall', 'cnt_bunker', 'cnt_hq', 'bridge3'],
+    builds: [],
   },
 ];
 
@@ -650,7 +651,7 @@ export const MODERN_WARFARE: Expansion = {
   summary:
     '第六代的专精兵：机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、远程火箭炮、' +
     '防空导弹营、武装直升机、察打无人机、导弹驱逐舰，外加复合装甲墙、加固地堡、前进指挥所、' +
-    '物流集团与工程兵团。需要先开「信息化」。',
+    '与物流集团。需要先开「信息化」。',
   requires: ['pack-contemporary'],
   hooks: {},
   abilities: MODERN_ABILITIES,

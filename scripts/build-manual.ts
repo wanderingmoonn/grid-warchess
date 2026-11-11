@@ -520,6 +520,19 @@ const ALL_UNIT_DEFS: Record<string, UnitTypeDef> = { ...UNIT_TYPES };
 for (const e of EXPANSIONS) {
   for (const u of e.units ?? []) ALL_UNIT_DEFS[u.id] = u;
 }
+
+/**
+ * 退役兵种（types.ts 的 `legacy`）不进规则书。
+ *
+ * 定义还留在兵种表里，是为了**老存档里的单位不至于变成"未知类型"**；
+ * 但手册里要是照样列着"工匠 / 掘城兵 / 工兵团"，读者会去找产线，
+ * 而产线在 2026-11-11 已经整合掉了——书里学不到、也造不出来。
+ *
+ * 注意 `ALL_UNIT_DEFS` 上面那一行**不过滤**：查名字时仍需要它们。
+ */
+const liveUnits = (p: { units?: UnitTypeDef[] }): UnitTypeDef[] =>
+  (p.units ?? []).filter((u) => !u.legacy);
+
 const manualNameOf = (id: string): string => ALL_UNIT_DEFS[id]?.name ?? id;
 
 /**
@@ -2579,7 +2592,7 @@ function mergedTable(
 
   const rows: string[] = [];
   for (const p of packs) {
-    const units = [...(p.units ?? [])].sort(
+    const units = [...liveUnits(p)].sort(
       (a, b) => a.era - b.era || a.cost - b.cost || a.name.localeCompare(b.name, 'zh-CN'),
     );
     if (units.length === 0) continue;
@@ -2658,7 +2671,7 @@ function packsOverview(packs: readonly Exp[]): string {
       <tbody>
         ${packs
           .map((p) => {
-            const us = p.units ?? [];
+            const us = liveUnits(p);
             const eras = [...new Set(us.map((u) => u.era))].sort((a, b) => a - b);
             // 前置只写简称（"法则"而不是"奇想·法则"）：这一列本来就只有一指宽
             const req = (p.requires ?? [])
@@ -2748,7 +2761,7 @@ function armorModuleSection(): string {
 /** 单个大包一本（城市工坊、季节这类不归组的） */
 function packBook(e: Exp): Book {
   resetTerms();
-  const units = e.units ?? [];
+  const units = liveUnits(e);
   const eras = [...new Set(units.map((u) => u.era))].sort((a, b) => a - b);
   const reqNames = (e.requires ?? [])
     .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
@@ -3467,7 +3480,7 @@ const BOOK_GROUPS: BookGroup[] = [
       <p><b>第六代的开关只有一处</b>：「信息化」的 <code>unlockEra: 6</code> 把科技线推到第六级。
         时代军备里那 15 个第六代兵（机械化步兵、主战坦克、反坦克导弹、自行榴弹炮、远程火箭炮、
         防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、前进指挥所、
-        物流集团、工程兵团、特种部队）靠兵种级 <code>requiresPack</code> 挂在那上面：
+        物流集团、特种部队）靠兵种级 <code>requiresPack</code> 挂在那上面：
         没勾「信息化」时它们不进本局兵种表——造不出来的兵，等于没有。</p>`,
   },
   {
@@ -3587,11 +3600,11 @@ function groupMembers(g: BookGroup): Exp[] {
 
 function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
   resetTerms();
-  const total = packs.reduce((n, p) => n + (p.units?.length ?? 0), 0);
-  const eras = [...new Set(packs.flatMap((p) => (p.units ?? []).map((u) => u.era)))].sort(
+  const total = packs.reduce((n, p) => n + (liveUnits(p).length), 0);
+  const eras = [...new Set(packs.flatMap((p) => liveUnits(p).map((u) => u.era)))].sort(
     (a, b) => a - b,
   );
-  const withUnits = packs.filter((p) => (p.units ?? []).length > 0);
+  const withUnits = packs.filter((p) => liveUnits(p).length > 0);
   /**
    * 各包要点。写成函数而不是先算好：这段里将来可能引用机制词条（现在还没有），
    * 一旦引用了，它必须在"表格已经渲染完"之后求值——模板里的插值顺序就是求值顺序，
@@ -3629,7 +3642,7 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
     <a href="#g-intro">1. 基础信息</a>
     <a href="#g-units">2. 兵种总表</a>
     ${packs
-      .filter((p) => (p.units ?? []).length > 0)
+      .filter((p) => liveUnits(p).length > 0)
       .map((p) => `<a class="sub" href="#p-${esc(p.id)}">${esc(shortPackName(p))}</a>`)
       .join('\n    ')}
     <a href="#g-notes">3. 各包要点</a>${hasRules ? '\n    <a href="#g-rules">4. 特殊规则</a>' : ''}
@@ -3778,7 +3791,7 @@ for (const { html } of rendered) {
   for (const m of html.matchAll(/data-unit="([^"]+)"/g)) seenUnits.add(m[1] ?? '');
 }
 const missing = largeExps.flatMap((e) =>
-  (e.units ?? []).filter((u) => !seenUnits.has(u.id)).map((u) => `${e.name} · ${u.name}（${u.id}）`),
+  liveUnits(e).filter((u) => !seenUnits.has(u.id)).map((u) => `${e.name} · ${u.name}（${u.id}）`),
 );
 if (missing.length > 0) {
   throw new Error(`有 ${missing.length} 个扩展兵种没有进任何一册：\n  ${missing.join('\n  ')}`);
@@ -3822,6 +3835,6 @@ for (const { b, html } of rendered) {
 writeFileSync('manual.html', rendered[0]!.html, 'utf-8');
 console.log(
   `共 ${books.length} 册（原 ${1 + 1 + largeExps.length} 册）· 兵种 ${Object.keys(UNIT_TYPES).length} 个 · ` +
-    `扩展兵种 ${largeExps.reduce((n, e) => n + (e.units?.length ?? 0), 0)} 个已全部入册 · ` +
+    `扩展兵种 ${largeExps.reduce((n, e) => n + liveUnits(e).length, 0)} 个已全部入册 · ` +
     `能力 ${allAbilities().length} 条 · 扩展 ${EXPANSIONS.length} 个`,
 );

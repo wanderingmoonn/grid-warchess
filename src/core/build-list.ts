@@ -20,6 +20,61 @@ export interface BuildList {
   names: string[];
 }
 
+/**
+ * 建造清单的分组。
+ *
+ * 2026-11-11 整合建造单位之后，一个建筑队的可建名单从 10 种涨到 33 种——
+ * 平铺一列按钮，玩家在一屏里找不到"我要的那座塔"。按用途分组之后
+ * 每组 3~15 个，还能顺带看出"这一代的防御工事有哪些"。
+ *
+ * 判据写在这里而不是让每座建筑自带一个字段：分组是**读法**（玩家想干什么），
+ * 不是建筑属性。同一座兵工厂既产金又能打，归到"经济"是因为它主要是拿来挣钱的。
+ */
+export type BuildGroup = 'defense' | 'camp' | 'economy' | 'bridge';
+
+export const BUILD_GROUP_LABEL: Record<BuildGroup, string> = {
+  defense: '防御工事',
+  camp: '营地（产兵点）',
+  economy: '经济建筑',
+  bridge: '桥',
+};
+
+/** 组与组的先后：先看能不能守住，再看能不能出兵、挣钱，最后才是过河 */
+export const BUILD_GROUP_ORDER: BuildGroup[] = ['defense', 'camp', 'economy', 'bridge'];
+
+/** 归到"经济"的那几座：产金为主，顺便有点防御力（兵工厂 atk5、工业园 atk5） */
+const ECONOMY_BUILDINGS = new Set([
+  'mill',
+  'watermill',
+  'factory',
+  'arsenal',
+  'ind_steelworks',
+  'industrialpark',
+  'ct_industrial',
+  'nv_oil_platform',
+]);
+
+export function buildGroupOf(id: string): BuildGroup {
+  if (id.startsWith('bridge')) return 'bridge';
+  if (id.startsWith('camp')) return 'camp';
+  if (ECONOMY_BUILDINGS.has(id)) return 'economy';
+  return 'defense';
+}
+
+/** 把一份 id 名单拆成"按组、组内保持原顺序"的结构；空组不返回 */
+export function groupBuilds(ids: readonly string[]): Array<{ group: BuildGroup; ids: string[] }> {
+  const buckets = new Map<BuildGroup, string[]>();
+  for (const id of ids) {
+    const g = buildGroupOf(id);
+    if (!buckets.has(g)) buckets.set(g, []);
+    buckets.get(g)!.push(id);
+  }
+  return BUILD_GROUP_ORDER.filter((g) => buckets.has(g)).map((g) => ({
+    group: g,
+    ids: buckets.get(g)!,
+  }));
+}
+
 export function buildListOf(
   def: UnitTypeDef,
   opts: {

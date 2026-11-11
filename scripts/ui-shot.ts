@@ -356,6 +356,23 @@ await evaluate(`(() => {
 await sleep(700);
 await shot(`04-unit-${tag}`);
 
+if (ARGS.includes('builder')) {
+  /*
+   * 建造面板：整合之后一个建筑队能盖 33 种，靠"分组"才找得到东西。
+   * 点棋盘上的单位直到侧栏出现「可建造」——建造单位是哪一个不固定。
+   */
+  await evaluate(`(() => {
+    const units = [...document.querySelectorAll('.unit')].slice(0, 16);
+    for (const u of units) {
+      u.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      if ((document.querySelector('#side')?.textContent ?? '').includes('可建造')) return true;
+    }
+    return false;
+  })()`);
+  await sleep(600);
+  await shot(`04b-builder-${tag}`);
+}
+
 // 城市卡：侧栏里最长的一张（属性 + 升级 + 整张产兵表），也是窄屏最容易顶出屏幕的。
 // 城是 2×2，有的格子上压着兵（点下去选中的是兵），所以逐格试到面板标题变成「城市」为止；
 // 同一格连点会轮换、反而更不稳，这里每格只点一次。

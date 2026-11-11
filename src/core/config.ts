@@ -515,7 +515,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 20,
     range: 1,
     vision: 2,
-    builds: ['tower', 'mill', 'bridge', 'camp'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower'],
     buildPower: 8,
   },
   tower: {
@@ -635,6 +635,14 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 20,
     range: 1,
     vision: 2,
+    /*
+     * 2026-11-11：给伐木工「穿林」。
+     *
+     * 它每天在林子里干活，却是全场走得最慢的单位之一（移动力 2），
+     * 进森林还要付整步——"在自家林地挪一格等于走两格"，这个手感是错的。
+     * 穿上林之后森林不再减速，它就真的成了"林子里的搬运工"。
+     */
+    abilities: ['forest-walk'],
     incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0 },
   },
   miller: {
@@ -650,7 +658,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 22,
     range: 1,
     vision: 2,
-    builds: ['keep', 'watermill', 'bridge', 'camp', 'camp2'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon'],
     buildPower: 12,
   },
   keep: {
@@ -838,7 +846,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    builds: ['battery', 'factory', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork'],
     buildPower: 18,
   },
   battery: {
@@ -960,7 +968,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 26,
     range: 1,
     vision: 2,
-    builds: ['fortress', 'arsenal', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3', 'camp4'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks'],
     buildPower: 24,
   },
   fortress: {
@@ -1082,7 +1090,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 2,
-    builds: ['bunker', 'industrialpark', 'bridge', 'bridge2', 'bridge3', 'camp', 'camp2', 'camp3', 'camp4', 'camp5'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bunker', 'industrialpark', 'bridge3', 'camp5', 'mod_concretewall', 'mod_dragonsteeth', 'mod_mgbunker'],
     buildPower: 32,
   },
   bunker: {

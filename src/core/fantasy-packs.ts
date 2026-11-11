@@ -1540,7 +1540,7 @@ const BEASTS: Expansion = {
      */
     {
       id: 'poison-bat',
-      name: '蝙蝠',
+      name: '毒蝙蝠',
       short: '蝠',
       era: 1,
       category: 'combat',
@@ -1554,7 +1554,9 @@ const BEASTS: Expansion = {
       burst: 3,
       flight: true,
       layer: 'air',
-      abilities: [],
+      // 2026-11-11：用户要求把名字和「淬毒」还回来（35 金 / 10 血的定位不动）。
+      // 三段连击每次都会贴毒，所以它的杀伤不再靠单发数值，而是"打完还得掉几轮"。
+      abilities: ['poison-hit'],
     },
     {
       id: 'centaur',

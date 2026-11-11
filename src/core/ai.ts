@@ -4072,6 +4072,7 @@ function buildPlan(
       (d) =>
         d.category === 'combat' &&
         !d.summonedOnly &&
+        !d.legacy &&
         canUseType(s, me, d.id) &&
         eraWindowOk(s, d, maxEra),
     );
@@ -4628,6 +4629,8 @@ function recruitCandidate(
     if (hasHold(d)) return reject('AI 不会用运输船');
     // 召唤物只认召唤者：AI 花 45 金买一个骷髅，等于给死灵法师的赠品单独付钱。
     if (d.summonedOnly) return reject('召唤物不采购');
+    // 退役兵种（types.ts 的 legacy）：定义留着只为老存档能显示，AI 别去买
+    if (d.legacy) return reject('退役兵种');
     // 英雄场上只能有一个（蛋还没孵也算"有一个"）。这条规则在 doRecruit 里也拦了，
     // 但在这里先拦掉，才能让 AI 把"再多买一个"的钱花到别处，而不是每回合撞一次墙。
     if (heroBlocked(s, me, d)) return reject('英雄已在场');

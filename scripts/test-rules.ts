@@ -541,11 +541,25 @@ function duel(s: GameState): { a: Unit; b: Unit } {
 
 console.log('\n建造名单（规则书 / 属性卡 / 产兵面板共用）');
 
-test('建造名单：奴隶能盖的 4 样都翻成中文名，顺序与数据一致', () => {
+test('建造名单：奴隶能盖的都翻成中文名，顺序与数据一致', () => {
+  /*
+   * 2026-11-11：建造单位整合之后，一代的奴隶从 4 样涨到 7 样（并进了时代军备包
+   * 的栅栏/夯土墙/瞭望塔）。所以这里**不再写死数量和完整名单**——那是我每加
+   * 一座建筑就要改一次的断言，改成守"顺序一致 + 每条都翻成了中文"。
+   */
   const def = UNIT_TYPES.laborer;
-  const list = buildListOf(def, { nameOf: (id) => UNIT_TYPES[id]?.name ?? id });
-  assert.deepEqual(list.ids, def.builds);
-  assert.deepEqual(list.names, ['箭塔', '磨坊', '木桥', '军营']);
+  // 名字要查全表：奴隶的名单里现在带时代军备包的建筑，只查本体表会退回 id
+  const all = fullUnitCatalog();
+  const list = buildListOf(def, { nameOf: (id) => all[id]?.name ?? id });
+  assert.deepEqual(list.ids, def.builds, 'ids 必须与数据同序，不许重排');
+  assert.equal(list.names.length, list.ids.length);
+  assert.ok(
+    list.names.every((n) => !/^[a-z][a-z0-9_-]*$/.test(n)),
+    `每一项都要翻成中文名，实际：${list.names.join('、')}`,
+  );
+  for (const id of ['tower', 'mill', 'bridge', 'camp']) {
+    assert.ok(list.ids.includes(id), `一代的基本工事 ${id} 不该丢`);
+  }
 });
 
 test('建造名单：本局没启用的建筑被过滤，ids 与 names 一一对应', () => {
@@ -554,8 +568,8 @@ test('建造名单：本局没启用的建筑被过滤，ids 与 names 一一对
     nameOf: (id) => UNIT_TYPES[id]?.name ?? id,
     exists: (id) => id !== 'mill',
   });
-  assert.equal(list.ids.length, 3);
-  assert.equal(list.names.length, 3);
+  assert.equal(list.ids.length, def.builds.length - 1, '滤掉一座，其余照旧');
+  assert.equal(list.names.length, list.ids.length);
   assert.ok(!list.names.includes('磨坊'), '面板上的"N 种"和按钮数必须来自同一次过滤');
 });
 
@@ -5725,9 +5739,17 @@ test('开局带海军不会污染后面的对局（兵种表是私有的）', ()
   fresh({ size: 20, expansionIds: ['naval'] });
   const plain = fresh();
   const laborer = plain.unitTypes['laborer']!;
-  for (const id of laborer.builds ?? []) {
-    assert.ok(plain.unitTypes[id], `builds 里的 ${id} 必须在本局兵种表里`);
-  }
+  /*
+   * 2026-11-11：不能再要求"builds 里每一项都在本局兵种表里"——整合之后
+   * 奴隶的名单确实包含时代军备包的栅栏/瞭望塔，没开那个包时它们当然不在表里
+   * （`buildListOf` 的 exists 会滤掉）。这条用例真正要守的是**数组有没有被
+   * 上一次开局的扩展改过**，所以改成和模块级数据逐项比对。
+   */
+  assert.deepEqual(
+    laborer.builds,
+    UNIT_TYPES.laborer!.builds,
+    'builds 是这一局自己的副本，不该被上一次开局的扩展改过',
+  );
   assert.ok(!(laborer.builds ?? []).includes('nv-dock'), '没开海军的局里不该会造船坞');
 });
 
@@ -6148,7 +6170,10 @@ test('选卡：建造单位不列"没选到"的建筑', () => {
    */
   const s = fresh({ draftMode: true }, 7102);
   const def = s.unitTypes['laborer']!;
-  const builds = (def.builds ?? []).filter((id) => !draftAlwaysAllowed(s.unitTypes[id]!));
+  // 先滤掉本局不存在的（整合之后名单里带着别的扩展包的建筑，见 build-list.ts）
+  const builds = (def.builds ?? [])
+    .filter((id) => !!s.unitTypes[id])
+    .filter((id) => !draftAlwaysAllowed(s.unitTypes[id]!));
   // 磨坊是经济建筑、桥和军营是骨架，都不进卡池——真正"要选才有"的只有箭塔
   assert.ok(builds.length >= 1, '奴隶至少要有一样"要选才有的"建筑（箭塔）');
 
