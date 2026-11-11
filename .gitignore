@@ -1,5 +1,8 @@
-# 依赖
-node_modules/
+# 依赖目录。末尾**不能**带斜杠：`node_modules/` 只匹配目录，
+# 而 git worktree 里的 node_modules 常常是个符号链接，带斜杠就漏过去了。
+# （2026-11-11 真漏过一次：一个自指的 node_modules 链接混进了合并提交，
+#   之后 checkout 出来的工作区一装依赖就成了死循环链接。）
+node_modules
 
 # 构建产物（由 npm run build 生成，不进版本库）
 dist/
