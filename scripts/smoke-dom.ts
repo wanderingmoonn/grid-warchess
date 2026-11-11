@@ -3511,16 +3511,29 @@ check('开局面板能选角色', () => {
   assert.ok(doc.querySelector('[data-role="full"]'), '应该有亲自指挥选项');
 });
 
-check('开局面板有"数据收集"开关，默认关', () => {
+check('开局面板有"数据收集"开关，默认开', () => {
+  /*
+   * 2026-11-11 用户拍板：默认从"关"改成"开"。
+   *
+   * 原来那条断言写的是「默认必须是关的：不勾就不记，也不多交东西」。
+   * 立场没错，代价是数据——65 局里只有 19 局带动作序列，剩下的事后想复盘
+   * 连素材都没有。改开之后的边界：**记录**默认开（只发生在本机），
+   * **发送**仍然要玩家在结算卡上点一下，取消勾选也会被记住。
+   */
   const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
-  assert.ok(box, '应该有"结束后上传详细数据"的勾选框');
-  assert.equal(box.checked, false, '默认必须是关的：不勾就不记，也不多交东西');
-  // 勾上之后只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  assert.ok(box, '应该有"记录详细数据"的勾选框');
+  assert.equal(box.checked, true, '默认勾上：否则半数对局事后想复盘都没有素材');
+
+  // 取消勾选只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  box.checked = false;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.ok(
+    !box.closest('.expansion-item')?.classList.contains('on'),
+    '取消之后卡片不该还亮着',
+  );
   box.checked = true;
   box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
-  box.checked = false;
-  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
 });
 
 await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {

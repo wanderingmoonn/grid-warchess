@@ -135,17 +135,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
       /*
-       * 默认**关**（保留 2026-11-04 定下的立场）。
+       * 默认**开**（2026-11-11 用户拍板改的）。
        *
-       * 2026-11-11 我一度把它改成默认开，被 `smoke-dom` 那条用例拦下了：
-       * "默认必须是关的：不勾就不记，也不多交东西"。这条是对的——
-       * 它守的不是代码，是**采集范围**：记录过程等于把一整局的每一步都留在
-       * 报告里，这件事得玩家点头，不能替他决定。
+       * 原来是默认关，理由是"不勾就不记，也不多交东西"。那条立场本身没错，
+       * 代价是数据：65 局里只有 19 局带动作序列，剩下 46 局事后想复盘都没有素材。
        *
-       * 数据那边确实有代价：库里 65 局只有 19 局带动作序列。但解法不该是
-       * 偷偷改默认值，而是让"勾一次就一直记住"（loadRecordPref 已经做到）。
+       * 改默认开之后，边界仍然清楚：
+       *   · **记录**默认开——它只发生在这台机器上，不替玩家做任何对外动作；
+       *   · **发送**仍然要玩家在结算卡上点一下，这一层没动；
+       *   · 取消勾选会记住（loadRecordPref），下次还是关的。
+       * 换句话说：默认帮你把素材留着，但决定权还在你手里。
        */
-      recordDetail: loadRecordPref() ?? initial.recordDetail === true,
+      recordDetail: loadRecordPref() ?? true,
     };
 
     // 上一次存下来的勾选里可能带着伪单位（攻城结算用的「城市」壳）或者本版
@@ -621,11 +622,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
                 <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
                 <span class="expansion-body">
-                  <b>结束后上传这局的详细数据</b>
+                  <b>记录这局的详细数据（默认开启）</b>
                   <span>
                     记每回合的兵力 / 城防 / 金币，以及双方的出兵与行动次数，
                     还有每一步的动作——这局能在本地逐帧重放。
-                    不记玩家名与房间码。勾一次就记住；结算卡会自动打勾，但发送仍要你点一下。
+                    不记玩家名与房间码。取消勾选就不再记录（会记住你的选择）；
+                    上传仍要你在结算卡上点一下，不点不会发出去。
                   </span>
                 </span>
               </label>
