@@ -75,6 +75,7 @@
     "upload:report": "node --experimental-strip-types scripts/upload-report.ts",
     "sample:reports": "node --experimental-strip-types scripts/make-sample-reports.ts",
     "arena": "node --experimental-strip-types scripts/arena-duel.ts",
+    "duel:defense": "node --experimental-strip-types scripts/defense-duel.ts",
     "dragoon": "node --experimental-strip-types scripts/dragoon-batch.ts",
     "adoption": "node --experimental-strip-types scripts/probe-adoption.ts",
     "duel": "node --experimental-strip-types scripts/ai-duel.ts",

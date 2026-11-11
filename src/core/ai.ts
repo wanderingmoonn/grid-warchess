@@ -2090,7 +2090,36 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   return score;
 }
 
+/**
+ * 走位总分 = 底层分 − "入界费"。
+ *
+ * 底层那套（`scoreMoveInner`）里，`exposure` 算的是"站在这儿每回合挨多少"；
+ * 2026-11-11 起建筑改成"敌人踏进射程就立刻开火"，于是"走进射程"多了一笔
+ * **当场结算**的支出。两个口径补上，AI 才会像人一样：能绕就绕一格，
+ * 绕不开（或者已经决定强攻）就硬吃。
+ *
+ * 收费只收一次（`entryToll` 只算新进入的射程），所以站在塔边上不会每格都扣，
+ * 也就不会把 AI 压成不敢挪窝的乌龟；`all.commit`（全军压城）时一律免单——
+ * 那时候队形比省一发子弹重要。
+ */
 function scoreMove(
+  s: GameState,
+  unit: Unit,
+  x: number,
+  y: number,
+  all: Fields,
+  traits: AiTraits,
+): number {
+  const base = scoreMoveInner(s, unit, x, y, all, traits);
+  if (base <= -900) return base; // 已经判死（进不去/必被拒绝），不用再算钱
+  const def = utype(s, unit.type);
+  if (def.category === 'building') return base; // 建筑不动，这条是给走子用的
+  if (all.commit) return base;
+  const toll = all.tactical.entryToll(unit, x, y);
+  return toll > 0 ? base - Math.min(8, toll * 0.6) : base;
+}
+
+function scoreMoveInner(
   s: GameState,
   unit: Unit,
   x: number,

@@ -390,11 +390,45 @@ function redirectOf(s: GameState, victim: Unit, amount: number, source: Unit | u
  *
  * 返回值是"实际承受者"，调用方要按它写战报（转移之后挨打的不是原来那个人）。
  */
+/**
+ * 一条伤害流水。只在跑批/体检时记，正常对局里一条都不会产生。
+ *
+ * 为什么要这个东西：`balance-report` 是按"动作前后血量差"归因的，只有 ATTACK
+ * 那一步才算账。反应射击发生在 MOVE / 下船 / 召唤这些动作里，血量差分根本
+ * 看不见它——一座塔打出成吨伤害，统计上照样是 0。与其到处改归因逻辑，
+ * 不如在**唯一的伤害出口**留一条流水，跑批时把它抽干。
+ */
+export interface DamageEvent {
+  srcId: string;
+  srcType: string;
+  dstId: string;
+  dstType: string;
+  /** 真正掉的血（额外生命吸收掉的那部分不算） */
+  amount: number;
+  /** 出手方式：`attack` / `react` / ……没标的一律算 `attack` */
+  kind: string;
+  lethal: boolean;
+}
+
+let damageLedger: DamageEvent[] | null = null;
+
+/** 开始记伤害流水（跑批脚本在开局前调一次） */
+export function startDamageLedger(): void {
+  damageLedger = [];
+}
+
+/** 取走并清空流水 */
+export function drainDamageLedger(): DamageEvent[] {
+  const out = damageLedger ?? [];
+  damageLedger = [];
+  return out;
+}
+
 function hurtUnit(
   s: GameState,
   target: Unit,
   amount: number,
-  opts: { source?: Unit; logText?: string } = {},
+  opts: { source?: Unit; logText?: string; kind?: string } = {},
 ): { victim: Unit; amount: number; redirected: boolean } {
   const dmg = Math.max(0, Math.round(amount));
   if (dmg <= 0) return { victim: target, amount: 0, redirected: false };
@@ -450,6 +484,19 @@ function hurtUnit(
    */
   if (redirected && victim.hp <= 0) {
     abilityApi.killUnit(s, victim, opts.source, `${utype(s, victim.type).name} 被击毁`);
+  }
+
+  // 流水放在最后：`victim.hp` 已经被钩子们处理过，`lethal` 才是真的结论
+  if (damageLedger && opts.source && toHp > 0) {
+    damageLedger.push({
+      srcId: opts.source.id,
+      srcType: opts.source.type,
+      dstId: victim.id,
+      dstType: victim.type,
+      amount: toHp,
+      kind: opts.kind ?? 'attack',
+      lethal: victim.hp <= 0,
+    });
   }
 
   return { victim, amount: dmg, redirected };
@@ -3539,124 +3586,236 @@ export function upgradeCostOf(s: GameState, city: City): number | null {
 }
 
 /**
- * 建筑在敌方回合开始时自动开火。
+ * 一座能自动开火的建筑，把**这一回合剩下的攻击次数**打光。
  *
- * 时机选在"对方刚接手回合"，而不是自己回合结束前，是因为这样守方才算真正
- * 享受到防御工事的好处：敌人一踏进射程就先挨一轮，然后才轮到它行动。
+ * 以前那套是"守方在敌人接手回合时白打一轮"，和手动开火各算各的：一座塔
+ * 在自己回合点一炮、敌人回合再自动一炮，一回合等于两次火力。现在改成
+ * **反应射击**——敌人踏进射程的那一刻就打，打出去的发数从 `attacksLeft`
+ * 里扣。于是"自己回合手动开过两发、敌人再进来"只剩其余几发：一回合总共
+ * 还是那么几次，变的只是时机，从"挨完打才还手"变成"进门就打"。
+ *
+ * `focus` 是刚踏进射程的那个单位：先打它，它倒了还有余弹就按老规矩
+ * （最近、血最少）转火。这条口径也说得通——塔的价值在"让冲得最快的那一个
+ * 先死"，而不是把伤害均匀摊给所有人。
+ *
+ * 返回打出的总伤害。
  */
-function fireBuildings(s: GameState, owner: PlayerId): void {
+function buildingVolley(s: GameState, b: Unit, focus?: Unit): number {
+  const def = utype(s, b.type);
+  let shots = attacksLeftOf(s, b);
+  if (shots <= 0) return 0;
+
+  let hits = 0;
+  let totalDmg = 0;
+  const hitNames = new Set<string>();
+  const splashNames = new Set<string>();
+  /**
+   * 按"挨打的是谁家"分账：三人四人局里一座塔的射程可能同时覆盖两家，
+   * 一条战报发给一边就成了漏报。
+   */
+  const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
+  const noteVictim = (u: Unit, dmg: number): void => {
+    if (u.owner === b.owner) return;
+    const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
+    box.names.add(utype(s, u.type).name);
+    box.dmg += dmg;
+    byVictim.set(u.owner, box);
+  };
+
+  /**
+   * 这个目标能不能打：活着、在对面的图上、在射程内，而且**看得见**。
+   * "看得见才打得到"那条约束手动攻击和这里共用 `unitInSightOf`——
+   * 塔要是能照着自己看不见的人开火，藏在林子里的斥候在塔面前就等于没藏。
+   */
+  const canHit = (u: Unit): boolean =>
+    u.hp > 0 &&
+    u.owner !== b.owner &&
+    s.units.includes(u) &&
+    boardIdOf(u) === boardIdOf(b) &&
+    distance(b, u) > 0 &&
+    distance(b, u) <= def.range &&
+    unitInSightOf(s, b.owner, u);
+
+  const targetOf = (): Unit | null => {
+    if (focus && canHit(focus)) return focus;
+    let best: Unit | null = null;
+    let bestD = 0;
+    for (const u of s.units) {
+      if (!canHit(u)) continue;
+      const d = distance(b, u);
+      if (!best || d < bestD || (d === bestD && u.hp < best.hp)) {
+        best = u;
+        bestD = d;
+      }
+    }
+    return best;
+  };
+
+  while (shots > 0) {
+    const target = targetOf();
+    if (!target) break;
+
+    const dmg = computeDamage(s, b, target);
+    // `kind: 'react'`：跑批按这个标签把反应射击的输出单独记一笔
+    hurtUnit(s, target, dmg, { source: b, kind: 'react' });
+    totalDmg += dmg;
+    hits += 1;
+    shots -= 1;
+    hitNames.add(utype(s, target.type).name);
+    noteVictim(target, dmg);
+
+    /*
+     * 战况烈度要落到**挨打那一方**的账上、记在当前回合。
+     *
+     * 反应射击发生在对方的回合里：记到自己名下（`noteHeatCell`）对方看不见
+     * 这片红，记到"上一回合"又会飘到一段没人看的时间轴上。
+     */
+    noteStrikeHeat(
+      s, b,
+      { x: target.x, y: target.y, n: footprintOf(s, target) },
+      undefined,
+      { owner: target.owner, turn: s.turn },
+    );
+
+    // 炮台/要塞也吃溅射：不然"炮"这种单位反应射击时反而比手动开炮弱
+    const splashed = splashVictims(
+      s, b,
+      { x: target.x, y: target.y, n: footprintOf(s, target) },
+      { excludeIds: [target.id] },
+    );
+    for (const v of splashed) {
+      hurtUnit(s, v.unit, v.dmg, { source: b, kind: 'react' });
+      splashNames.add(utype(s, v.unit.type).name);
+      noteVictim(v.unit, v.dmg);
+      if (v.unit.hp > 0) runSplashHooks(s, b, v.unit, v.dmg);
+    }
+
+    if (target.hp <= 0) {
+      // 走完整死亡流程：删除 + 战报 + 沉船 + onDeath / onUnitKilled
+      abilityApi.killUnit(s, target, b, `${utype(s, target.type).name} 被击毁`);
+    }
+    for (const v of splashed) {
+      if (v.unit.hp > 0) continue;
+      if (!s.units.some((u) => u.id === v.unit.id)) continue;
+      abilityApi.killUnit(s, v.unit, b, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
+    }
+  }
+
+  // 打出去的发数留在单位身上，下个自己回合开始时由 resetUnitsFor 清掉
+  b.attacksLeft = shots;
+  if (hits === 0) return 0;
+
+  const splashText = splashNames.size > 0 ? `，溅射 ${[...splashNames].join('、')}` : '';
+  pushLog(
+    s,
+    b.owner,
+    `${def.name} 反应射击${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
+  );
+  // 挨打的一方也要有一条：不然防守方看到的是"我的兵凭空掉血"
+  for (const [who, box] of byVictim) {
+    pushLog(s, who, `${def.name} 对 ${[...box.names].join('、')} 开火，共造成 ${box.dmg} 点伤害`);
+  }
+  return totalDmg;
+}
+
+/**
+ * 有单位**踏进射程**：射程内的敌方建筑立刻各打一轮。
+ *
+ * 触发点只有"落位"这一件事，所以走子、下船、空投、召唤、孵化、出生全都算——
+ * 谁能绕开落地直接站到塔跟前，谁就白嫖了这座塔。
+ *
+ * ── 为什么按回合去重 ──────────────────────────────────────────────
+ *
+ * `reactedTurn` 记"这一回合已经触发过"。一个单位一回合只走一次，去重是为了
+ * 让"走子时结算"和"动作后统一补扫"这两条路不会对同一个单位各开一轮火。
+ *
+ * ── 为什么要有深度上限 ────────────────────────────────────────────
+ *
+ * 反应射击会打死人，亡语可能又召唤一个，而召唤出来的新兵同样算"落位"。
+ * 没有上限的话，一条链能在一步动作里打到底，回放都不好复现。给 6：
+ * 正常局面根本到不了，真到了就说明有循环。
+ */
+let reactionDepth = 0;
+const REACTION_MAX_DEPTH = 6;
+
+export function reactionFireOn(s: GameState, unit: Unit): void {
+  if (unit.hp <= 0 || !s.units.includes(unit)) return;
+  if (unit.reactedTurn === s.turn) return;
+  if (reactionDepth >= REACTION_MAX_DEPTH) return;
+  unit.reactedTurn = s.turn;
+
+  const board = boardIdOf(unit);
+  const foes = s.units.filter(
+    (b) =>
+      b.owner !== unit.owner &&
+      b.hp > 0 &&
+      utype(s, b.type).autoAttack &&
+      !underConstruction(b) &&
+      boardIdOf(b) === board &&
+      distance(b, unit) > 0 &&
+      distance(b, unit) <= utype(s, b.type).range &&
+      unitInSightOf(s, b.owner, unit),
+  );
+  if (foes.length === 0) return;
+
+  reactionDepth += 1;
+  try {
+    for (const b of foes) {
+      if (!s.units.includes(b) || b.hp <= 0) continue;
+      if (attacksLeftOf(s, b) <= 0) continue;
+      /*
+       * 火力不因为"焦点死了"停下。
+       *
+       * 打头那一个被第一座塔解决掉之后，后面几座塔没有理由收枪——射程里
+       * 还站着别人，而且那才是"集群冲锋"真正吃亏的地方：三座塔全对着
+       * 同一个人开火，人一死剩下两座就白站一回合。现在每座塔各自挑
+       * 自己射程内"最近、血最少"的目标（`focus` 没了自然退化成那个）。
+       */
+      buildingVolley(s, b, unit.hp > 0 && s.units.includes(unit) ? unit : undefined);
+    }
+  } finally {
+    reactionDepth -= 1;
+  }
+  sweepDead(s);
+}
+
+/**
+ * 回合开始时的"清场射击"：射程里已经站着敌人的建筑，先打一轮。
+ *
+ * 反应射击只认"落位"，可是敌人走过来挨了一炮之后如果**原地砍塔**，
+ * 坐标不变，就再也不会触发——塔会被活活砍死而不还手。这一轮补的正是这个洞。
+ *
+ * 它不会让建筑多打：这一轮打掉的发数就是本回合的全部份额，剩下的要靠反应
+ * 射击，而反应射击扣的是同一份 `attacksLeft`。所以"一回合 N 发"的规矩没变，
+ * 变的只是"这 N 发一定会打出去，不会因为没人靠近就烂在手里"。
+ */
+function reactionVolleyAtTurnStart(s: GameState, owner: PlayerId): void {
   const buildings = s.units.filter(
-    (u) => u.owner === owner && utype(s, u.type).autoAttack && !underConstruction(u),
+    (u) => u.owner === owner && u.hp > 0 && utype(s, u.type).autoAttack && !underConstruction(u),
   );
   for (const b of buildings) {
-    if (!s.units.includes(b)) continue;
-    // 这一回合已经手动开过火的，不再自动开火。
-    //
-    // 判据用 manualFired 而不是 acted：刚建好的建筑也是 acted=true。
-    if (b.manualFired) continue;
-    const def = utype(s, b.type);
-    // 多动：自动开火也要把这一回合的攻击次数打满。
-    // 每一发都重新挑"最近的、血最少的"，所以打死一个会自动转火下一个。
-    let shots = attacksPerTurn(s, b);
-    if (shots <= 0) continue;
-    let hits = 0;
-    let totalDmg = 0;
-    const hitNames = new Set<string>();
-    const splashNames = new Set<string>();
-    /**
-     * 按"挨打的是谁家"分账。
-     *
-     * 两人局里挨打的必然只有一家，可以写死 `other(owner)`；三人四人局里
-     * 一座塔的射程可能同时覆盖两家的人，一条战报发给一边就成了漏报。
-     * 所以先按主人分组，打完之后各自收自己那一条。
-     */
-    const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
-    const noteVictim = (u: Unit, dmg: number) => {
-      if (u.owner === owner) return;
-      const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
-      box.names.add(utype(s, u.type).name);
-      box.dmg += dmg;
-      byVictim.set(u.owner, box);
-    };
+    // 这一轮可能已经把塔自己打没了（连环爆），每座都重新确认一次
+    if (!s.units.includes(b) || b.hp <= 0) continue;
+    if (attacksLeftOf(s, b) <= 0) continue;
+    buildingVolley(s, b);
+  }
+  sweepDead(s);
+}
 
-    while (shots > 0) {
-      /*
-       * 自动开火也要先"看得见"。
-       *
-       * 塔以前是直接扫 `s.units` 的——它不像普通单位那样走候选表，所以
-       * "看得见才打得到"那条约束从来没管到它：一座视野 3、射程 4 的碉堡
-       * 会照着 4 格外看不见的人开火，反过来，藏在林子里的斥候在塔面前
-       * 等于没藏。判据和手动攻击共用 `unitInSightOf`。
-       */
-      const inRange = s.units
-        .filter(
-          (u) =>
-            u.owner !== owner &&
-            distance(b, u) > 0 &&
-            distance(b, u) <= def.range &&
-            unitInSightOf(s, owner, u),
-        )
-        .sort((x, y) => distance(b, x) - distance(b, y) || x.hp - y.hp);
-      const target = inRange[0];
-      if (!target) break;
-
-      const dmg = computeDamage(s, b, target);
-      hurtUnit(s, target, dmg, { source: b });
-      totalDmg += dmg;
-      hits += 1;
-      shots -= 1;
-      hitNames.add(utype(s, target.type).name);
-
-      // 塔/炮台的自动开火也算一次攻势——但它在"接手方回合开始"那一刻结算，
-      // 所以要显式落到"上一个回合"的账上（s.turn - 1），否则接手方看不到。
-      noteStrikeHeat(
-        s, b,
-        { x: target.x, y: target.y, n: footprintOf(s, target) },
-        undefined,
-        { owner: other(owner), turn: s.turn - 1 },
-      );
-
-      // 炮台/要塞也吃溅射：不然"炮"这种单位自动开火时反而比手动开炮弱
-      const splashed = splashVictims(
-        s, b,
-        { x: target.x, y: target.y, n: footprintOf(s, target) },
-        { excludeIds: [target.id] },
-      );
-      for (const v of splashed) {
-        hurtUnit(s, v.unit, v.dmg, { source: b });
-        splashNames.add(utype(s, v.unit.type).name);
-        noteVictim(v.unit, v.dmg);
-        if (v.unit.hp > 0) runSplashHooks(s, b, v.unit, v.dmg);
-      }
-
-      if (target.hp <= 0) {
-        // 走完整死亡流程：删除 + 战报 + 沉船 + onDeath / onUnitKilled
-        abilityApi.killUnit(s, target, b, `${utype(s, target.type).name} 被击毁`);
-      }
-
-      for (const v of splashed) {
-        if (v.unit.hp > 0) continue;
-        if (!s.units.some((u) => u.id === v.unit.id)) continue;
-        abilityApi.killUnit(s, v.unit, b, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
-      }
-    }
-
-    if (hits === 0) continue;
-    const splashText = splashNames.size > 0 ? `，溅射 ${[...splashNames].join('、')}` : '';
-    pushLog(
-      s,
-      owner,
-      `${def.name} 自动开火${hits > 1 ? ` ${hits} 次` : ''}，对 ${[...hitNames].join('、')} 共造成 ${totalDmg} 点伤害${splashText}`,
-    );
-    // 挨打的一方也要有一条：塔和营是在**对面回合开始时**自己开火的，
-    // 不写这一条，防守方看到的就是"我的兵凭空掉血"（理由同 doAttack 里那段）。
-    for (const [who, box] of byVictim) {
-      pushLog(
-        s,
-        who,
-        `${def.name} 对 ${[...box.names].join('、')} 开火，共造成 ${box.dmg} 点伤害`,
-      );
-    }
+/**
+ * 动作结束后补扫一遍"落位"。
+ *
+ * 走子那条路在 `doMove` 里按"踩雷 → 反应射击 → 入驻废墟"的顺序单独结算了，
+ * 这里负责其余所有会把单位放到新位置的动作：下船、空投、召唤、孵化、击退、
+ * 以及各扩展自己搬人的技能。判据是"id 还在、坐标变了"，站着不动的不会误触。
+ */
+function reactionSweep(before: GameState, after: GameState): void {
+  const was = new Map<string, string>();
+  for (const u of before.units) was.set(u.id, `${boardIdOf(u)}:${u.x},${u.y}`);
+  for (const u of [...after.units]) {
+    const now = `${boardIdOf(u)}:${u.x},${u.y}`;
+    if (was.get(u.id) === now) continue;
+    reactionFireOn(after, u);
   }
 }
 
@@ -3728,7 +3887,6 @@ function resetUnitsFor(s: GameState, p: PlayerId): void {
     if (u.owner === p) {
       u.moved = false;
       u.acted = false;
-      u.manualFired = false;
       delete u.attacksLeft;
       delete u.moveSpent;
     }
@@ -3751,16 +3909,6 @@ function grantTurnTo(s: GameState, to: PlayerId): void {
   // 新回合开始，所有单位的反击次数重置（不分敌我：这是"每回合一次"的额度）
   for (const u of s.units) delete u.countersLeft;
   resetUnitsFor(s, to);
-}
-
-/**
- * 记一笔"这一炮是人点的"。
- *
- * 只对能自动开火的建筑有意义——它们一回合只该有一段火力：
- * 你点了就由你打，没点才轮到回合结束时的自动那一下（见 fireBuildings）。
- */
-function markManualFire(s: GameState, u: Unit): void {
-  if (utype(s, u.type).autoAttack) u.manualFired = true;
 }
 
 /**
@@ -3948,6 +4096,15 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
   })();
 
   if (result.ok) {
+    /*
+     * 反应射击补扫：走子那条路已经在 doMove 里按"踩雷 → 反应射击 → 入驻"
+     * 结算过了（`reactedTurn` 会把它挡在门外），这里管其余所有"把单位放到
+     * 新位置"的动作——下船、空投、召唤、孵化、击退、扩展技能搬人。
+     *
+     * 必须在 recordDeaths 之前：被打死的要算进这一手的战损，
+     * 否则招魂读不到"本回合谁没了"，战报上也会少一截。
+     */
+    reactionSweep(s, result.state);
     syncBridges(result.state);
     // 放在 syncBridges 之后：桥塌落水也算"这一下没的"，早写就漏掉那一批
     recordDeaths(result.state, rosterBefore, action);
@@ -4065,6 +4222,23 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
       sweepDead(s);
       return { ok: true, state: s };
     }
+  }
+
+  /*
+   * 站定之后才轮到炮口：先踩雷、再挨反应射击、最后才入驻废墟。
+   *
+   * 顺序是玩家定的，也说得出道理——
+   *   · 雷是地上的东西，脚一落地就炸，跑不掉；
+   *   · 塔打的是"到达"这一件事，人还没站稳就开火才是"阻击"，要是等抢完城
+   *     才打，塔就成了马后炮；
+   *   · 入驻是走子**成功之后**的结果，人被打死了就不该再抢下一座城。
+   *
+   * 没开太空包、也没造塔的局这里是一次空转（先筛建筑再判射程，都是一次遍历）。
+   */
+  reactionFireOn(s, unit);
+  if (unit.hp <= 0 || !s.units.includes(unit)) {
+    sweepDead(s);
+    return { ok: true, state: s };
   }
 
   if (destCity?.ruined) {
@@ -4387,7 +4561,6 @@ function doAttack(
     if (attacker.attacksLeft <= 0) {
       attacker.acted = true;
     }
-    markManualFire(s, attacker);
   }
 
   // 一出手就现形：技能隐匿只保到"你先动手为止"，不是永久隐身。
@@ -4620,7 +4793,6 @@ function doSiege(
   if (attacker.attacksLeft <= 0) {
     attacker.acted = true;
   }
-  markManualFire(s, attacker);
 
   if (city.hp <= 0) {
     destroyCity(s, city, attacker.owner);
@@ -6776,8 +6948,16 @@ function doEndTurn(s: GameState): ActionResult {
   // 光环、净化、修缮、筑墙、布雷、召唤、转属——全部自动触发
   turnStartSkills(s, nextPlayer);
 
-  // 守方的建筑在敌人接手回合的第一时间开火
-  fireBuildings(s, prevPlayer);
+  /*
+   * 接手方的建筑先清一次场：射程里已经站着人的，就在这一刻打。
+   *
+   * 位置和以前那句 `fireBuildings(s, prevPlayer)` 一样，主语换了：
+   * 以前是"守方在敌人接手时白打一轮"（和手动开火各算各的），
+   * 现在是"轮到自己时，把这一回合的火力花在射程里还在的人身上"——
+   * 同一份 `attacksLeft`，不会多打一发。
+   */
+  reactionVolleyAtTurnStart(s, nextPlayer);
+
   s.winner = s.winner ?? checkWinner(s);
   if (s.winner) {
     pushLog(s, s.winner, '对局结束');

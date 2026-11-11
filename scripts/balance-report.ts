@@ -24,6 +24,7 @@ import {
   armySize,
   citiesOf,
   distToCity,
+  distance,
   idx,
   inBounds,
   recruitCost,
@@ -31,6 +32,8 @@ import {
   unitAt,
   unitsOf,
   utype,
+  startDamageLedger,
+  drainDamageLedger,
 } from '../src/core/rules.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from '../src/core/config.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -114,6 +117,18 @@ interface Tally {
   initDealt: number;
   initTaken: number;
   initCount: number;
+  /** AI 提出来的 BUILD 次数（不管成没成）——"想建"比"建成"更能反映意图 */
+  intent: number;
+  /** 其中被规则拒掉的次数（没钱、地形不对、位置被占……） */
+  fail: number;
+  /** 第一次建成是在第几回合（没建过就是 undefined） */
+  firstTurn?: number;
+  /** 建造那一刻离最近敌人多远（只对 BUILD 有意义，用来分前线工事/后方刷建筑） */
+  foeDistSum: number;
+  foeDistN: number;
+  /** 阵亡个数 / 阵亡身价：回答"这条防线守没守住"，也用来量经济单位的损失 */
+  lost: number;
+  lostValue: number;
 }
 
 interface TypeStat {
@@ -136,6 +151,28 @@ interface TypeStat {
   kills: number;
   initCount: number;
   initRatio: number | null;
+  /** 建造意图（AI 提了几次 BUILD，含被拒的） */
+  intent: number;
+  intentPerGame: number;
+  /** 意图失败率：提出来的建造有多少次没落地 */
+  failRate: number;
+  /** 采用率：多少比例的对局里至少建了一座。比 share 更直观地回答"有人在用吗" */
+  adoptRate: number;
+  /** 平均建造回合（只有建过的局算） */
+  firstTurnAvg: number | null;
+  /** 建造时平均离最近敌人多远；99 表示场上一开始就没有敌人 */
+  foeDistAvg: number | null;
+  /** 阵亡个数与身价（按兵种） */
+  lost: number;
+  lostValue: number;
+  lostPerGame: number;
+  /** 有多少局里至少建过一次（adoptRate 的分子，合并多批结果时要靠它） */
+  adoptGames: number;
+  /** firstTurnAvg 的样本数（合并时加权用） */
+  firstTurnN: number;
+  /** foeDistAvg 的分子分母（合并时加权用） */
+  foeDistSum?: number;
+  foeDistN?: number;
 }
 
 interface GameResult {
@@ -708,12 +745,20 @@ function emptyTally(): Tally {
     initDealt: 0,
     initTaken: 0,
     initCount: 0,
+    intent: 0,
+    fail: 0,
+    foeDistSum: 0,
+    foeDistN: 0,
+    lost: 0,
+    lostValue: 0,
   };
 }
 
 function runGame(seed: number): {
   result: GameResult;
   tallies: Map<string, Tally>;
+  /** 这一局里建过/招过的兵种（算"采用率"用：有多少局里它至少出现过一次） */
+  usedTypes: string[];
   draw: DrawInfo | null;
 } {
   const size = SIZE > 0 ? SIZE : DEFAULT_SIZE_FOR_ERA(ERA);
@@ -735,6 +780,15 @@ function runGame(seed: number): {
   );
 
   const tallies = new Map<string, Tally>();
+  const builtThisGame = new Set<string>();
+  /*
+   * 伤害流水：反应射击打出多少，只有这里数得到。
+   *
+   * 下面那段"动作前后血量差"的归因只认 ATTACK——它看不见移动、下船、
+   * 召唤里发生的伤害。塔现在全部火力都在那条路上，不接这个口子，
+   * 统计出来的建筑输出是 0（不是"低"，是字面意义的 0）。
+   */
+  startDamageLedger();
   const tallyOf = (type: string): Tally => {
     let t = tallies.get(type);
     if (!t) {
@@ -772,7 +826,36 @@ function runGame(seed: number): {
 
   /** 记一笔账 + 结算这一次动作的交换，然后把动作真的打出去 */
   const act = (action: Action): boolean => {
-    // 招兵 / 建造先记账（用当下的价格，含扩展规则对造价的改动）
+    /*
+     * 建造**意图**：动作一发出就记，不管最后成没成。
+     *
+     * 这一步和"建成"分开，是因为两者回答的是不同的问题：
+     *   · `intent` = AI 有没有动这个念头（含被规则拒掉的）——"想建但建不起"
+     *     才是采用率低的真原因，只看建成数会把它和"完全不考虑"混在一起；
+     *   · `built` = 真落地了几座（花过钱的）。
+     * 顺便记下"建造那一刻最近的敌人有多远"，用来分前线工事和后方刷建筑。
+     */
+    const buildType = action.type === 'BUILD' ? action.unitType : null;
+    if (action.type === 'BUILD' && s.unitTypes[action.unitType]) {
+      const t = tallyOf(action.unitType);
+      t.intent += 1;
+      const foes = s.units.filter((u) => u.owner !== s.current);
+      const spot = { x: action.x, y: action.y };
+      t.foeDistSum += foes.length > 0 ? Math.min(...foes.map((u) => distance(u, spot))) : 99;
+      t.foeDistN += 1;
+    }
+
+    const before = s;
+    const r = applyAction(s, action);
+    if (!r.ok) {
+      // 失败的动作理论上不会留下伤害，但流水是模块级的：不清的话它会漏进下一步的账
+      drainDamageLedger();
+      if (buildType) tallyOf(buildType).fail += 1;
+      return false;
+    }
+    const after = r.state;
+
+    // 落地之后再记"建成"：被规则拒掉的建造没有花出去的钱，也不该算进采用率
     if (action.type === 'RECRUIT' || action.type === 'BUILD') {
       const def = s.unitTypes[action.unitType];
       if (def) {
@@ -781,6 +864,8 @@ function runGame(seed: number): {
         const t = tallyOf(action.unitType);
         t.built += 1;
         t.spend += cost;
+        if (t.firstTurn === undefined) t.firstTurn = s.turn;
+        builtThisGame.add(action.unitType);
         if (action.type === 'RECRUIT') {
           const bag = who === 'A' ? picksA : picksB;
           bag[action.unitType] = (bag[action.unitType] ?? 0) + 1;
@@ -789,11 +874,6 @@ function runGame(seed: number): {
         }
       }
     }
-
-    const before = s;
-    const r = applyAction(s, action);
-    if (!r.ok) return false;
-    const after = r.state;
 
     // 城市易主：一条一条记，别只记"有没有发生过"——是哪一座、第几回合、谁抢的，后面都要用
     for (const c0 of before.cities) {
@@ -880,6 +960,36 @@ function runGame(seed: number): {
       }
     }
 
+    /*
+     * 反应射击的账：从伤害流水里捡 `react` 那几条。
+     *
+     * 只捡 react，不碰别的——ATTACK 的伤害已经在上面按血量差算过一遍，
+     * 这里再把流水里的 attack 也算一次就是双倍。
+     * 口径跟上面完全对齐：开局白送的兵进 init*，招来的进 dealt/taken。
+     */
+    for (const e of drainDamageLedger()) {
+      if (e.kind !== 'react' || e.amount <= 0) continue;
+      const at = tallyOf(e.srcType);
+      const dt = tallyOf(e.dstType);
+      if (initialIds.has(e.srcId)) at.initDealt += e.amount;
+      else {
+        at.dealt += e.amount;
+        if (e.lethal) at.kills += 1;
+      }
+      if (initialIds.has(e.dstId)) dt.initTaken += e.amount;
+      else dt.taken += e.amount;
+    }
+
+    // 阵亡记账：上一步还在、这一步没了。和 timeline 的 lostByType 同一口径，
+    // 但这里按"整局累计"记，报表能直接回答"经济单位每局死几个"。
+    const afterIds = new Set(after.units.map((u) => u.id));
+    for (const u of before.units) {
+      if (afterIds.has(u.id)) continue;
+      const t = tallyOf(u.type);
+      t.lost += 1;
+      t.lostValue += s.unitTypes[u.type]?.cost ?? 0;
+    }
+
     // 出场记账：这一步之后场上多出来的兵，都算这个兵种的出场。
     // 招募、建造、召唤、分裂、蛋孵化全走这一条路——只有"新出现的 id"才算，
     // 所以走位、换目标不会把数字灌水。
@@ -945,7 +1055,7 @@ function runGame(seed: number): {
     };
   }
 
-  return { result, tallies, draw };
+  return { result, tallies, usedTypes: [...builtThisGame], draw };
 }
 
 
@@ -953,10 +1063,15 @@ async function main(): Promise<void> {
   const games: GameResult[] = [];
   const stuck: DrawInfo[] = [];
   const total = new Map<string, Tally>();
+  /** 兵种 → 第一次建成的回合之和的计数（求平均用） */
+  const firstTurnN = new Map<string, number>();
+  /** 兵种 → 有多少局里至少建过一个 */
+  const adoptGames = new Map<string, number>();
 
   for (let i = 0; i < GAMES; i++) {
     const seed = BASE_SEED + i;
-    const { result, tallies, draw } = runGame(seed);
+    const { result, tallies, usedTypes, draw } = runGame(seed);
+    for (const t of usedTypes) adoptGames.set(t, (adoptGames.get(t) ?? 0) + 1);
     games.push(result);
     if (draw) stuck.push(draw);
 
@@ -971,6 +1086,16 @@ async function main(): Promise<void> {
       acc.initDealt += t.initDealt;
       acc.initTaken += t.initTaken;
       acc.initCount += t.initCount;
+      acc.intent += t.intent;
+      acc.fail += t.fail;
+      acc.foeDistSum += t.foeDistSum;
+      acc.foeDistN += t.foeDistN;
+      acc.lost += t.lost;
+      acc.lostValue += t.lostValue;
+      if (t.firstTurn !== undefined) {
+        acc.firstTurn = (acc.firstTurn ?? 0) + t.firstTurn;
+        firstTurnN.set(type, (firstTurnN.get(type) ?? 0) + 1);
+      }
       total.set(type, acc);
     }
 
@@ -1021,6 +1146,19 @@ async function main(): Promise<void> {
       kills: t.kills,
       initCount: t.initCount,
       initRatio: t.initTaken > 0 ? t.initDealt / t.initTaken : t.initDealt > 0 ? null : 0,
+      intent: t.intent,
+      intentPerGame: GAMES > 0 ? t.intent / GAMES : 0,
+      failRate: t.intent > 0 ? t.fail / t.intent : 0,
+      adoptRate: GAMES > 0 ? (adoptGames.get(type) ?? 0) / GAMES : 0,
+      firstTurnAvg: t.firstTurn !== undefined ? t.firstTurn / Math.max(1, firstTurnN.get(type) ?? 1) : null,
+      foeDistAvg: t.foeDistN > 0 ? t.foeDistSum / t.foeDistN : null,
+      lost: t.lost,
+      lostValue: t.lostValue,
+      lostPerGame: GAMES > 0 ? t.lost / GAMES : 0,
+      adoptGames: adoptGames.get(type) ?? 0,
+      firstTurnN: firstTurnN.get(type) ?? 0,
+      foeDistSum: t.foeDistSum,
+      foeDistN: t.foeDistN,
     });
   }
   stats.sort((a, b) => b.dealt - a.dealt);

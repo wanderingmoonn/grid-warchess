@@ -903,7 +903,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                          .map((t) => CONFIG.terrainName[t])
                          .join('/')}`
                      : b.autoAttack
-                       ? `自动开火 ${b.range} 格`
+                       ? `反应射击 ${b.range} 格`
                        : b.incomeByTerrain || b.income || b.yield
                          ? `产出 ${yieldShort(b)}`
                          : '工事') + (siteNeed ? ` · ${siteNeed}` : '');
@@ -1122,6 +1122,20 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             : ''
         }
         ${
+          /*
+           * 反应射击用掉的是同一份次数，所以"敌人还没来，但我这一轮已经打完了"
+           * 这件事必须能看见。否则玩家会以为塔坏了——它上一次开火是在**对面的
+           * 回合**里发生的，自己回合从头到尾没点过任何按钮。
+           */
+          utype(s, selectedUnit.type).autoAttack &&
+          attacksLeftOf(s, selectedUnit) < attacksPerTurn(s, selectedUnit)
+            ? `<div class="info-row"><span>反应射击</span><b>本回合还剩 ${attacksLeftOf(
+                s,
+                selectedUnit,
+              )} / ${attacksPerTurn(s, selectedUnit)} 发</b></div>`
+            : ''
+        }
+        ${
           // 装甲素体：插槽与耗电必须写在属性卡上。
           // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
           // 以前只能点进装配坞里数按钮。
@@ -1151,6 +1165,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         }
       </div>
       ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
+
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}
@@ -1880,7 +1895,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     ${
       // 不还手的产兵建筑（宗门大殿：枪口 0）就别写"1 格内每回合 0 点"了
       def.atk > 0
-        ? `<div class="info-row"><span>自动开火</span><b>${def.range} 格内每回合 ${def.atk} 点</b></div>`
+        ? `<div class="info-row"><span>反应射击</span><b>${def.range} 格内进入即打，每发 ${def.atk} 点</b></div>`
         : ''
     }
     <div class="info-row"><span>时代</span><b>${supplyLine}</b></div>
