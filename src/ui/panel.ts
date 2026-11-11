@@ -989,6 +989,21 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const hasMastery = (def.abilities ?? []).includes('element-mastery');
     const canShift = (def.cycle ?? []).length > 1;
 
+    /*
+     * 攻击/护甲这一格。
+     *
+     * 带修正明细时整组跨两列（明细写在自己那格下面），没有明细时就占半格——
+     * 不加这个判断的话，一个没吃过任何加成的民兵也会空出右边一整格，
+     * 看起来像"这里本该有个数字，没加载出来"。
+     */
+    const atkRow = `<div class="info-row">
+            <span>攻击 / 护甲</span>
+            <b>${eff.atk} / ${eff.armor}${baseNote}</b>
+          </div>`;
+    const atkCell = statModBlock
+      ? `<div class="stat-span">${atkRow}${statModBlock}</div>`
+      : atkRow;
+
     return `
       <div class="unit-head">
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
@@ -1005,26 +1020,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
-      <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(s, selectedUnit)}</b></div>
       ${statusRow(selectedUnit)}
       ${stealthRow(s, selectedUnit, me)}
-      <div class="info-row">
-        <span>攻击 / 护甲</span>
-        <b>${eff.atk} / ${eff.armor}${baseNote}</b>
-      </div>
-      ${statModBlock}
-      ${
-        // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
-        // 只写"攻击 0"等于告诉玩家这个兵不会打人。
-        // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
-        // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
-        magicAtkOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
-              s,
-              selectedUnit,
-            )} / ${magicResOf(s, selectedUnit)}</b></div>`
-          : ''
-      }
       ${
         // 当前属性：至尊法师每回合自己切一次，而属性决定"打出去带什么状态、
         // 暗形态下魔法段还 ×1.5"。不显示就是在让人猜——那个词会变成一枚纯装饰的徽标。
@@ -1040,49 +1037,90 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             }`
           : ''
       }
-      <div class="info-row"><span>移动力</span><b>${
-        eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
-      }</b></div>
-      <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${stats.vision}</b></div>
       ${
-        // 装甲素体：插槽与耗电必须写在属性卡上。
-        // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
-        // 以前只能点进装配坞里数按钮。
-        def.armorFrame
-          ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
+        /*
+         * 属性表改成两列（2026-11-11 组件层）。
+         *
+         * 原来一行一条、一条 22px，一个普通兵光属性就要吃掉 140px 的竖向空间，
+         * 而每一行右边那半截全是空白——13px 的字，一行只用掉 12 个字符宽。
+         * 侧栏本来就窄，玩家每次看兵都得把面板滚一屏才能看见「拆除」。
+         *
+         * 两列之后：标签在上、数值在下（`.stat-grid .info-row` 改成竖排）。
+         * 选竖排而不是"两个标签-数值并排"，是因为并排时每格只剩 ~150px，
+         * 「攻击 / 护甲 13 / 2（基础 1）」这种一定会折行，而折行后
+         * 标签和数值的归属就靠猜了；竖排则让数值独占一整格宽度。
+         *
+         * 顺序按"先看什么"重排：活着没有 → 跑得动吗 → 打得多疼 → 打多远 →
+         * 其它（魔法 / 多动 / 插槽 / 收入 / 溅射）。
+         * 攻击那一组要带上修正明细，所以整组跨两列，明细永远紧贴它的数字。
+         */
+        ''
+      }
+      <div class="stat-grid">
+        <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(
+          s,
+          selectedUnit,
+        )}</b></div>
+        <div class="info-row"><span>移动力</span><b>${
+          eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
+        }</b></div>
+        ${atkCell}
+        <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(
+          s,
+          selectedUnit,
+        )} / ${stats.vision}</b></div>
+        ${
+          // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
+          // 只写"攻击 0"等于告诉玩家这个兵不会打人。
+          // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
+          // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
+          magicAtkOf(s, selectedUnit) > 0
+            ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
+                s,
+                selectedUnit,
+              )} / ${magicResOf(s, selectedUnit)}</b></div>`
+            : ''
+        }
+        ${
+          // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
+          // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
+          attacksPerTurn(s, selectedUnit) > 1
+            ? `<div class="info-row"><span>攻击次数</span><b>还剩 ${attacksLeftOf(
+                s,
+                selectedUnit,
+              )} / ${attacksPerTurn(s, selectedUnit)} 次</b></div>`
+            : ''
+        }
+        ${
+          // 装甲素体：插槽与耗电必须写在属性卡上。
+          // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
+          // 以前只能点进装配坞里数按钮。
+          def.armorFrame
+            ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
              <div class="info-row"><span>耗电</span><b>${unitDraw(s, selectedUnit)} <small style="opacity:.65">（本方余量 ${
                energyBreakdown(s, selectedUnit.owner).headroom
              }）</small></b></div>`
-          : ''
-      }
+            : ''
+        }
+        ${
+          // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
+          // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
+          Object.keys(yields).length > 0
+            ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
+            : ''
+        }
+        ${
+          // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
+          // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
+          splashRadiusOf(s, selectedUnit) > 0
+            ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
+                s,
+                selectedUnit,
+              )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
+            : ''
+        }
+      </div>
       ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
-      ${
-        // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
-        // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
-        Object.keys(yields).length > 0
-          ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
-          : ''
-      }
-      ${
-        // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
-        // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
-        splashRadiusOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
-              s,
-              selectedUnit,
-            )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
-          : ''
-      }
-      ${
-        // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
-        // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
-        attacksPerTurn(s, selectedUnit) > 1
-          ? `<div class="info-row"><span>攻击次数</span><b>还剩 ${attacksLeftOf(
-              s,
-              selectedUnit,
-            )} / ${attacksPerTurn(s, selectedUnit)} 次</b></div>`
-          : ''
-      }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}

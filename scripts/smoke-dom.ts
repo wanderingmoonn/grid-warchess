@@ -1795,6 +1795,63 @@ check('详情面板显示的是算上修正的真实数值', () => {
   );
   const eff = effectiveStats(st, vet);
   assert.ok(html.includes(`<b>${eff.atk}`) || html.includes(`${eff.atk}（基础`), '面板数字要等于 effectiveStats');
+  // 2026-11-11：攻击那一格在"有修正"时会跨两列，明细紧贴在自己那格下面。
+  // 不这么放的话，明细会被挤到半格宽里，一条"老兵不死 +2"折成三行。
+  assert.ok(
+    host.querySelector('.stat-span .stat-mods'),
+    '修正明细要在跨列的那一格里面（.stat-span .stat-mods）',
+  );
+});
+
+check('属性卡：数值排成两列，标签在上、数值在下', () => {
+  /*
+   * 一行一条的时候，每行右边半截全空着：13px 的字，一行只用掉十二三个字符宽，
+   * 一个普通兵光属性就要 140px 竖向空间。改成两列之后玩家不用先滚一屏才看得见
+   * 「拆除」。这条守的是"排法"本身——数字对不对由上面那条管。
+   */
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5150,
+  );
+  const unit = st.units.find((u) => u.owner === 'A')!;
+  assert.ok(unit, '开局 A 方应该有兵');
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: unit,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const grid = host.querySelector<HTMLElement>('.stat-grid');
+  assert.ok(grid, '属性要收进 .stat-grid（两列容器）');
+  const cells = [...grid!.children].filter((el) => el.classList.contains('info-row'));
+  assert.ok(cells.length >= 4, `普通兵至少四格：生命 / 移动力 / 攻击护甲 / 射程视野，实际 ${cells.length}`);
+  // 竖排靠的是 DOM 顺序（span 在前、b 在后）——顺序反了 CSS 也不会换回来
+  for (const cell of cells) {
+    assert.ok(cell.querySelector('span') && cell.querySelector('b'), '每格都要有标签和数值');
+    assert.equal(
+      cell.firstElementChild?.tagName,
+      'SPAN',
+      '标签必须排在数值前面：竖排时先读到的就是它',
+    );
+  }
+  assert.ok(
+    (grid!.textContent ?? '').includes('生命') && (grid!.textContent ?? '').includes('移动力'),
+    '生命和移动力都要在网格里',
+  );
+  // 没有修正时不许出现跨列块——那会空出右边一整格，看着像数字没加载出来
+  assert.equal(host.querySelector('.stat-span'), null, '没有修正明细时不该有跨列块');
 });
 
 console.log('\n城市与产兵');

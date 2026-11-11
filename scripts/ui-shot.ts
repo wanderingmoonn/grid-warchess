@@ -9,8 +9,10 @@
  * 无头实例，再用 Node 22 自带的全局 WebSocket 说 CDP。零依赖。
  *
  * 用法：
- *   node --experimental-strip-types scripts/ui-shot.ts            # 拍默认几张
- *   node --experimental-strip-types scripts/ui-shot.ts setup      # 只拍某一幕
+ *   node --experimental-strip-types scripts/ui-shot.ts              # 桌面（1440×900）
+ *   node --experimental-strip-types scripts/ui-shot.ts modern       # 桌面 + 新版主题
+ *   node --experimental-strip-types scripts/ui-shot.ts mobile       # 手机（390×844 @2x）
+ *   node --experimental-strip-types scripts/ui-shot.ts modern mobile
  *
  * 产物在 `.tmp/shots/`。不出现在 npm test 里：它依赖本机浏览器和端口，
  * 不适合当 CI 闸门。
@@ -25,8 +27,20 @@ import path from 'node:path';
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const PORT = 9333;
-const W = 1440;
-const H = 900;
+
+/*
+ * 尺寸：默认桌面 1440×900，加 `mobile` 参数换成 iPhone 14 的 390×844。
+ *
+ * 为什么要真的按手机尺寸拍：窄屏的问题（并排挤成一团、按钮被裁、面板顶出
+ * 屏幕）在 1440 的画布上**一次都复现不出来**——CSS 断点全是按视口走的。
+ * 不拍就只能在手机上被用户看见。
+ */
+const ARGS = process.argv.slice(2);
+const MOBILE = ARGS.includes('mobile');
+const W = MOBILE ? 390 : 1440;
+const H = MOBILE ? 844 : 900;
+/* 手机按 2 倍像素密度拍，否则 390 宽的字在图上糊成一团、看不清断行对不对 */
+const DPR = MOBILE ? 2 : 1;
 /* 自带静态服务：不依赖外部的 python http.server。
    靠 `&` 起的后台进程会跟着上一条命令一起被收走，第一次就栽在这上面
    ——截出来一张"无法访问此页面"。服务写在脚本里，跑一次就有一套完整的。 */
@@ -137,7 +151,7 @@ const page = (method: string, params: object = {}) => root.send(method, params, 
 await page('Page.enable');
 await page('Runtime.enable');
 await page('Emulation.setDeviceMetricsOverride', {
-  width: W, height: H, deviceScaleFactor: 1, mobile: false,
+  width: W, height: H, deviceScaleFactor: DPR, mobile: MOBILE,
 });
 
 async function goto(url: string) {
@@ -191,8 +205,8 @@ async function click(selector: string) {
 
 /* ── 场景 ─────────────────────────────────────────────────────────────── */
 
-const theme = process.argv[2] === 'modern' ? '&ui=modern' : '';
-const tag = theme ? 'modern' : 'legacy';
+const theme = ARGS.includes('modern') ? '&ui=modern' : '';
+const tag = (theme ? 'modern' : 'legacy') + (MOBILE ? '-m' : '');
 
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
@@ -201,6 +215,17 @@ await shot(`01-title-${tag}`);
 if (!(await clickText('开始对局'))) console.log('  （标题页没找到「开始对局」）');
 await sleep(900);
 await shot(`02-setup-${tag}`);
+
+// 自定义棋盘边长那一行（输入框 + 说明）。手机上面板几乎占满一屏，首屏拍不到它——
+// 而"输入框被旁边那段说明挤出去/压住"恰恰只在窄屏出现。
+await evaluate(`(() => {
+  const b = document.querySelector('.modal-body');
+  if (b) b.scrollTop = b.scrollHeight;
+  const r = document.querySelector('.size-row');
+  if (r) r.scrollIntoView({ block: 'center' });
+})()`);
+await sleep(350);
+await shot(`02b-setup-end-${tag}`);
 
 // 设置页 → 开打。按钮文案随状态变（"开始""进入战场"…），逐个别名试
 for (const label of ['开始对局', '开始', '进入战场', '开战', '确认']) {

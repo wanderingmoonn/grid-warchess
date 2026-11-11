@@ -1810,6 +1810,66 @@ body {
   font-weight: 500;
 }
 
+/*
+ * 单位属性表：两列。
+ *
+ * 来历：一行一条的排法，每行右边半截永远是空的（13px 字，一行只用掉
+ * 十二三个字符宽），一个普通兵光属性就吃掉 140px 竖向空间，玩家看兵得先
+ * 滚一屏才够得着「拆除」。
+ *
+ * 这里的排法是**竖排**（标签在上、数值在下），不是"两个 标签—数值 并排"：
+ * 并排时一格只剩 ~150px，「攻击 / 护甲 13 / 2（基础 1）」必然折行，折完
+ * 标签和数值对不上号；竖排让数值独占整格宽度，长也就自己换第二行。
+ *
+ * `minmax(0, 1fr)` 而不是 `1fr`：1fr 的下限是 min-content，
+ * 一条长数值会把整列撑宽顶出侧栏——和 `.main` 那次踩的是同一个坑。
+ */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 14px;
+  margin: 6px 0 2px;
+}
+
+/* 跨两列：带修正明细的攻击组、以及收入这种一行装不下的 */
+.stat-span {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-grid > .info-row,
+.stat-span > .info-row {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 1px;
+  padding: 0;
+}
+
+/* 标签降一档、降一级灰度；数值升一档字重——一眼先看数字，再看它是什么 */
+.stat-grid > .info-row > span,
+.stat-span > .info-row > span {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.3;
+}
+
+.stat-grid > .info-row > b,
+.stat-span > .info-row > b {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.35;
+  /* 数值再长也不许撑破格子：宁可折行，不许把第二列挤出去 */
+  overflow-wrap: anywhere;
+}
+
+/* 明细收紧一点：它现在是跨列块的一部分，左边距要留给那条竖线 */
+.stat-span .stat-mods {
+  margin: 0 0 0 2px;
+}
+
 /* 真实数值的修正明细：攻击/护甲下面逐条列出"哪里来的几点"。
    加成用绿、削弱用红——和血条的红绿语义一致（绿=好，红=糟）；
    字号比主行小一档、缩一点，视觉上是主行的附属说明。 */
@@ -6600,4 +6660,83 @@ a.btn {
   flex: 1 1 auto;
   font-size: var(--fs-sm);
   line-height: 1.35;
+}
+
+/* ---------- 手机适配 ---------- */
+/*
+ * 这一批只有一条判据：**窄屏下把"并排"改成"竖排"**。
+ *
+ * 桌面侧栏固定 340px，两列属性表按容器宽度算就行；手机上侧栏变成
+ * 棋盘下面的一条整宽面板，视口宽度直接就是它的宽度，所以断点用视口就够。
+ */
+
+/* 设置弹窗：一行一件事（左标签 + 右控件）在 340px 以下会互相挤。
+   「减少动态效果」那条解释会折成四行、chip 被压到贴边——改成上下两段。 */
+@media (max-width: 560px) {
+  .modal-mask {
+    /* 24px 的留白在手机上等于白扔 48px 宽度，面板会显得比屏幕还窄一截 */
+    padding: 10px;
+  }
+
+  .modal-head {
+    padding: 16px 16px 0;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+  }
+
+  .modal-foot {
+    padding: 12px 16px;
+  }
+
+  .set-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .set-control {
+    /* 滑块吃掉多余宽度，数值和「试听」贴右边，一行正好 */
+    justify-content: flex-start;
+  }
+
+  .set-range {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 88px;
+  }
+
+  .set-value {
+    min-width: 56px;
+  }
+}
+
+/* 极窄屏（iPhone SE 一代那种 320px）：两列属性会窄到"基础 1 / 1"自己折行，
+   折出来的第二行看着像另一条属性的值。退回一列。 */
+@media (max-width: 360px) {
+  .stat-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * 开局面板的字段标题：`起始时代` + 一句解释，桌面是同一行的两段。
+ *
+ * 窄屏上它会被挤成**一列一个字**（"起/始/时/代"竖着排）。原因在 flex 的
+ * 最小尺寸：两段都是中文，中文的 min-content 就是一个字，于是两边都能
+ * 合法地缩到 1 个字宽，浏览器就这么分了——不是"字号太大"，是"允许它缩"。
+ *
+ * 所以这里不调字号，改成上下两段：标题独占一行，解释另起一行。
+ * 这也顺带解决了"解释太长时标题被压到只剩半行"的老问题。
+ */
+@media (max-width: 560px) {
+  .field-label {
+    display: block;
+  }
+
+  .field-label > .field-hint {
+    display: block;
+    margin-top: 3px;
+  }
 }
