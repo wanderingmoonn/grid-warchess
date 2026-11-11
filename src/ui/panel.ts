@@ -122,6 +122,14 @@ export interface PanelInput {
    * 一刷新就弹回去）。
    */
   opsOpen?: boolean;
+  /**
+   * 「战报」卡是不是展开着。
+   *
+   * 和「操作」卡同一个理由，但更彻底：战报每回合都在长，而玩家真正在读它的时候
+   * 是"这一回合到底发生了什么"——不是每一步都要盯着。它排在侧栏最下面，
+   * 常驻展开等于把「结束回合」和「认输」一路顶出屏幕。
+   */
+  logOpen?: boolean;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -388,7 +396,7 @@ function panelHtml(input: PanelInput): string {
     .join('');
 
   return `
-    <div class="card">
+    <div class="card card-seats">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         ${turnBadge}
         <span class="hint">第 ${s.turn} 次行动</span>
@@ -430,11 +438,13 @@ function panelHtml(input: PanelInput): string {
 
     ${renderReport(s, input.report)}
 
-    <div class="card">${detail}</div>
+    <div class="card card-detail">${detail}</div>
 
     <div class="card">
-      <div class="card-title">战报</div>
-      ${logHtml}
+      <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
+        <summary class="card-title fold-head">战报</summary>
+        ${logHtml}
+      </details>
     </div>
 
     <div class="side-footer">
@@ -1280,8 +1290,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   // 回血：只有"有驻军 + 城外没有敌人"才成立，所以要把当前状态说清楚，
   // 否则玩家只会看到血条不动而不知道为什么
-  const regen = cityRegenOf(s, city);
-  const besieged = s.units.some(
+  const regen = cityRegenOf(s, city);  const besieged = s.units.some(
     (u) => u.owner !== city.owner && distToCity(u, city) <= 1,
   );
   const regenText =
@@ -1369,14 +1378,23 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const eraFilter = input.recruitEra ?? ERA_ALL;
   const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
-  const grouped = (['combat', 'economy', 'builder'] as const)
+  const cats = (['combat', 'economy', 'builder'] as const).filter((cat) =>
+    shown.some((d) => d.category === cat),
+  );
+  const grouped = cats
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
-      if (items.length === 0) return '';
-      return `<div class="recruit-group">
-        <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${items.map(unitButton).join('')}</div>
-      </div>`;
+      /*
+       * 只有一组时不写组标题。
+       *
+       * 低时代城里能造的往往全是战斗单位，这时候「战斗单位」这个标题
+       * 只是把第一排按钮往下推了 16px——它没有区分任何东西。
+       */
+      const title =
+        cats.length > 1 ? `<div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>` : '';
+      return `<div class="recruit-group">${title}<div class="recruit-list">${items
+        .map(unitButton)
+        .join('')}</div></div>`;
     })
     .join('');
 
@@ -1391,7 +1409,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
           ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
         } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
            <span class="upgrade-main">
-             <b>升级到「${nextEra.name}」时代</b>
+             <b>升级到「${nextEra.name}」</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
            </span>
            <span class="price">${upgradeCost}</span>
@@ -1410,22 +1428,26 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
-    <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
-    <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-    <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
-    ${
-      /*
-       * 本方总收入单独一行，且只在**自己的城**上显示。
-       *
-       * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
-       * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
-       * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
-       */
-      mine
-        ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(incomeResOf(s, city.owner))}</b></div>`
-        : ''
-    }
-    <div class="info-row"><span>驻军休整</span><b>${regenText}</b></div>
+    <div class="stat-grid">
+      <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
+      <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
+      <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+      ${
+        /*
+         * 本方总收入单独一行，且只在**自己的城**上显示。
+         *
+         * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
+         * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
+         * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
+         */
+        mine
+          ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(
+              incomeResOf(s, city.owner),
+            )}</b></div>`
+          : ''
+      }
+      <div class="info-row stat-wide"><span>驻军休整</span><b>${regenText}</b></div>
+    </div>
     ${upgradeBlock}
     ${
       mine
@@ -1455,8 +1477,19 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                      : '城内已站满，先让部队挪一挪。'
              }
              ${
+               /*
+                * 升级解锁预览改成折叠的（2026-11-11）。
+                *
+                * 这一段原来是把所有解锁兵种用"、"连成一句话。青铜开局升一级能解锁
+                * 三四十种，于是侧栏底部糊上一整段两百多字的名单——把「结束回合」
+                * 和「认输」一路顶出屏幕，而它恰恰是"以后才用得上"的信息。
+                * 现在只留一行"解锁 N 种"，想看名单点开。
+                */
                locked.length > 0
-                 ? `<br />升级后可解锁：${locked.map((d) => d.name).join('、')}`
+                 ? `<details class="unlock-fold">
+                      <summary>升级后可解锁：${locked.length} 种兵种</summary>
+                      <div class="unlock-list">${locked.map((d) => d.name).join('、')}</div>
+                    </details>`
                  : ''
              }
            </div>`

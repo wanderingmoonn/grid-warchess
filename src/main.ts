@@ -278,7 +278,7 @@ const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
 
 /*
- * 「操作」卡开合状态的记录点。
+ * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
  *
  * `<details>` 的 `toggle` 事件**不冒泡**，所以只能用捕获阶段挂在容器上。
  * 面板每次重建都会按这个标记重新加 `open`，收起/展开才不会一刷新就弹回去。
@@ -288,7 +288,10 @@ sideEl.addEventListener(
   (e) => {
     const el = e.target as HTMLElement | null;
     if (!el || !el.classList.contains('card-fold')) return;
-    opsOpen = (el as HTMLDetailsElement).open;
+    const open = (el as HTMLDetailsElement).open;
+    // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
+    if (el.dataset.fold === 'log') logOpen = open;
+    else opsOpen = open;
   },
   true,
 );
@@ -1018,13 +1021,14 @@ function myTurn(): boolean {
  * 单独重画面板的那条路没有，就现算。
  */
 /**
- * 「操作」说明卡是否展开。
+ * 侧栏折叠卡是否展开（「操作」「战报」各一个）。
  *
  * 面板是**整块重建**的（每回合、每次金币变动都会重写 innerHTML），`<details>`
  * 的 open 状态一重建就没了。所以状态存在这里，渲染时带上去；`<details>` 的
  * toggle 不冒泡，监听挂在 sideEl 上用捕获。
  */
 let opsOpen = false;
+let logOpen = false;
 
 function panelInput(known?: PlayerView): PanelInput {
   const view = known ?? playerView(state, me(), spectating());
@@ -1038,6 +1042,7 @@ function panelInput(known?: PlayerView): PanelInput {
     selectedCampId,
     selectedTile,
     opsOpen,
+    logOpen,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,

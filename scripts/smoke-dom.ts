@@ -2942,7 +2942,9 @@ check('升级后城市更硬，产兵列表也多出二级兵', () => {
   // 时代 2 城市护甲应该是 6
   assert.ok(html.includes('护甲</span><b>6</b>'), '护甲应该提升到 6');
   assert.ok(doc.querySelectorAll('.recruit-btn').length >= 8, '时代 II 应该能看到两个时代的兵种');
-  assert.ok(!html.includes('升级后可解锁：长枪兵'), '长枪兵应该已经从锁定变成可选');
+  // 2026-11-11：解锁名单收进折叠块，判据从"整段 HTML 里有没有某个词"改成"名单里有没有"
+  const unlockList = doc.querySelector('.unlock-list')?.textContent ?? '';
+  assert.ok(!unlockList.includes('长枪兵'), '长枪兵应该已经从锁定名单里消失');
 });
 
 check('打过一局之后回首页，「继续上一局」就亮了', () => {
@@ -6761,10 +6763,10 @@ check('选卡模式下，城市的「升级后可解锁」只列这一局真能�
       selectedTile: null,
     });
 
-    const html = host.innerHTML;
-    const m = /升级后可解锁：([^<]*)</.exec(html);
-    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
-    const names = m![1]!
+    // 2026-11-11：名单收进 <details> 里了，抓的话直接从名单节点取——
+    // 别再用正则去啃那句提示的文案（改个字就红，而且红得没意义）
+    assert.ok(host.querySelector('.unlock-fold'), '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = (host.querySelector('.unlock-list')?.textContent ?? '')
       .split('、')
       .map((t) => t.trim())
       .filter(Boolean);

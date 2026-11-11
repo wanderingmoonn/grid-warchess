@@ -252,6 +252,31 @@ await evaluate(`(() => {
 await sleep(700);
 await shot(`04-unit-${tag}`);
 
+// 城市卡：侧栏里最长的一张（属性 + 升级 + 整张产兵表），也是窄屏最容易顶出屏幕的。
+// 城是 2×2，有的格子上压着兵（点下去选中的是兵），所以逐格试到面板标题变成「城市」为止；
+// 同一格连点会轮换、反而更不稳，这里每格只点一次。
+await evaluate(`(() => {
+  const title = () => document.querySelector('#side .unit-title')?.textContent ?? '';
+  const n = document.querySelectorAll('.tile.t-city.own-A').length;
+  for (let i = 0; i < n; i += 1) {
+    const t = document.querySelectorAll('.tile.t-city.own-A')[i];
+    if (!t) continue;
+    t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    if (title().includes('城市')) break;
+  }
+})()`);
+await sleep(600);
+await shot(`07-city-${tag}`);
+
+// 侧栏底部：产兵表尾巴 + 战报卡 + 结束回合。桌面滚的是 #side，手机滚的是整页。
+await evaluate(`(() => {
+  const s = document.querySelector('#side');
+  if (s && s.scrollHeight > s.clientHeight) s.scrollTop = s.scrollHeight;
+  else window.scrollTo(0, document.documentElement.scrollHeight);
+})()`);
+await sleep(350);
+await shot(`07b-city-end-${tag}`);
+
 // 交接遮罩：每次换手都会出现，且刚改过（--mask 跟着主题走）
 await clickText('结束行动');
 await sleep(900);

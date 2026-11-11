@@ -1832,11 +1832,24 @@ body {
 }
 
 /* 跨两列：带修正明细的攻击组、以及收入这种一行装不下的 */
-.stat-span {
+/*
+ * 跨两列的格子（攻击组、城市卡的「驻军休整」）。
+ *
+ * 内部也是两列：左边是数值，右边是修正明细。
+ * 最初写成"数值一行、明细整行铺在下面"，结果攻击跨列之后，
+ * 紧跟其后的「射程 / 视野」只剩半格，右边空出整整一格——看着像有个数字没加载出来。
+ * 明细挪到右边之后，那块宽度被用掉了，而且"哪里来的 +3"就贴在自己那个 13 的旁边。
+ */
+.stat-span,
+.stat-grid > .stat-wide {
   grid-column: 1 / -1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+}
+
+.stat-span {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
+  align-items: start;
 }
 
 .stat-grid > .info-row,
@@ -6738,5 +6751,48 @@ a.btn {
   .field-label > .field-hint {
     display: block;
     margin-top: 3px;
+  }
+}
+
+/* 升级解锁预览（折叠）。
+   一条一句"解锁 N 种兵"，点开才是名单——它是"以后才用得上"的信息，
+   常驻展开会在侧栏底部糊两百多字，把结束回合顶出屏幕。 */
+.unlock-fold {
+  margin-top: 6px;
+}
+
+.unlock-fold > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  /* 虚下划线：看得出"这是能点的"，又不像链接那样抢眼 */
+  text-decoration: underline dotted currentColor;
+  text-underline-offset: 3px;
+}
+
+.unlock-fold > summary:hover {
+  color: var(--text);
+}
+
+.unlock-list {
+  margin-top: 5px;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/*
+ * 手机上把「详情卡」提到最前面。
+ *
+ * 桌面是"棋盘在左、侧栏在右"，席位栏在最上面是对的：它和棋盘一起看，
+ * 一眼知道现在轮到谁、双方还剩几座城。
+ *
+ * 手机是"棋盘在上、侧栏在下一整条"，顺序就变成了"棋盘 → 席位 → 你点的那个东西"。
+ * 点完一座城要先划过一张席位卡才看得见能造什么，而那张卡上的数字这一秒并不需要。
+ * 详情卡用 order 提上去，桌面的顺序一点不变（同一条规则只在窄屏生效）。
+ */
+@media (max-width: 920px) {
+  .card-detail {
+    order: -1;
   }
 }
