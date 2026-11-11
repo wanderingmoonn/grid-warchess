@@ -64,13 +64,21 @@ import {
 } from './core/rules.ts';
 import {
   clearUnits,
+  deleteUnitsInRect,
+  fillUnitsInRect,
+  paintRect,
   paintTerrain,
   placeCity,
   placeUnit,
+  rectH,
+  rectOf,
+  rectW,
   removeAt,
   sandboxCityProblem,
+  translateUnitsInRect,
+  unitsInRect,
 } from './core/sandbox.ts';
-import type { SandboxResult } from './core/sandbox.ts';
+import type { Rect, SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { ResourceCost } from './core/resources.ts';
@@ -109,7 +117,7 @@ import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
-import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
+import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
@@ -163,7 +171,24 @@ import {
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
+import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { settingsHtml } from './ui/settings.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
+
+/*
+ * 主题要在**任何渲染之前**落地。
+ *
+ * `applyUiTheme` 只改 `<html data-ui>` / `data-motion>` 两个属性，不碰任何规则；
+ * 但必须抢在第一帧之前——放在模块末尾（我第一版就放那儿了）会先按 legacy 画一帧
+ * 再跳成 modern，那一闪比不换主题还难受。所以放在 import 之后、所有初始化之前。
+ *
+ * 切换入口（暂不进设置页）：
+ *   · 地址栏 `?ui=modern`（对比用，优先级最高）；
+ *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
+ */
+applyUiTheme();
+installUiConsole();
+
 
 /**
  * 非空时表示某个英雄正在等玩家选技能目标。
@@ -258,6 +283,25 @@ const boardListEl = pick<HTMLElement>(appEl, '#board-list');
  */
 const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
+
+/*
+ * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
+ *
+ * `<details>` 的 `toggle` 事件**不冒泡**，所以只能用捕获阶段挂在容器上。
+ * 面板每次重建都会按这个标记重新加 `open`，收起/展开才不会一刷新就弹回去。
+ */
+sideEl.addEventListener(
+  'toggle',
+  (e) => {
+    const el = e.target as HTMLElement | null;
+    if (!el || !el.classList.contains('card-fold')) return;
+    const open = (el as HTMLDetailsElement).open;
+    // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
+    if (el.dataset.fold === 'log') logOpen = open;
+    else opsOpen = open;
+  },
+  true,
+);
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
 const replayEl = pick<HTMLElement>(appEl, '#replay');
@@ -989,6 +1033,16 @@ function myTurn(): boolean {
  * 这里再算一遍纯属白烧——`playerView` 每帧 1.4ms，32×32 上占单帧的 7%。
  * 单独重画面板的那条路没有，就现算。
  */
+/**
+ * 侧栏折叠卡是否展开（「操作」「战报」各一个）。
+ *
+ * 面板是**整块重建**的（每回合、每次金币变动都会重写 innerHTML），`<details>`
+ * 的 open 状态一重建就没了。所以状态存在这里，渲染时带上去；`<details>` 的
+ * toggle 不冒泡，监听挂在 sideEl 上用捕获。
+ */
+let opsOpen = false;
+let logOpen = false;
+
 function panelInput(known?: PlayerView): PanelInput {
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
@@ -1000,6 +1054,8 @@ function panelInput(known?: PlayerView): PanelInput {
     selectedCityId,
     selectedCampId,
     selectedTile,
+    opsOpen,
+    logOpen,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,
@@ -1434,6 +1490,8 @@ function render(): void {
     siegeTargets: siege,
     selectedCityId,
     placeable: computePlaceable(),
+    // 框选：拖动中显示临时矩形，松手后显示提交的那一块
+    marqueeTiles: godRectIndices(),
     threat,
     heat,
     // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
@@ -2886,7 +2944,9 @@ function bindHoverTips(): void {
   // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
   appEl.addEventListener('scroll', hideHoverTip, true);
   document.addEventListener('visibilitychange', hideHoverTip);
-  appEl.addEventListener('click', hideHoverTip, true);
+
+
+appEl.addEventListener('click', hideHoverTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -3944,11 +4004,12 @@ function handleAction(act: string, el: HTMLElement): void {
    *
    * 不能只靠 `dispatch` 那道闸：侧栏里有一半按钮根本不走 dispatch
    * （撤回直接弹 undoStack、联机直接换 state、参谋部直接排队列）。
-   * 逐个去堵必然漏，所以在这儿统一拦——只放行三件和"改这一局"无关的事：
-   * 规则书、反馈、回首页。
+   * 逐个去堵必然漏，所以在这儿统一拦——只放行和"改这一局"无关的事：
+   * 规则书、反馈、回首页，以及装这三件的「设置」弹窗本身
+   * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game';
+    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
@@ -4018,13 +4079,11 @@ function handleAction(act: string, el: HTMLElement): void {
       undoLast();
       return;
 
-    case 'chime':
-      chimeVolume = nextChimeVolume(chimeVolume);
-      saveChimeVolume(chimeVolume);
-      // 点一下顺手试听当前档位（音量 0 时 playChime 自己会跳过）
-      playChime(chimeVolume);
-      render();
-      return;
+    /*
+     * 顶栏那颗"铃声：60% → 80% → 0 → 60%"的循环按钮已经拆了（2026-11-11），
+     * 音量改在「设置」里用滑块调，那才是"调一个连续量"该有的样子。
+     * 原来那个 case 留在这儿只会变成第二条没人管的设置路径。
+     */
 
     case 'surrender': {
       // 认输是不可逆的，必须问一句
@@ -4360,6 +4419,11 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'settings': {
+      openSettings();
+      return;
+    }
+
     case 'manual': {
       openManualFlow();
       return;
@@ -4538,6 +4602,83 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'recruit-era': {
       const v = Number(el.dataset.era ?? 0);
       recruitEra = recruitEra === v ? 0 : v;
+      render();
+      return;
+    }
+
+    // ---------- 框选之后的批量操作（2026-11-10） ----------
+    //
+    // 每个 case 都是"纯函数算新状态 → godBatchApply 压一次撤销 → toast 报数"。
+    // 报数不是客套：刷一片地形里有城会被跳过，不说清楚玩家会以为漏刷了。
+    case 'god-batch-del': {
+      if (!godRect) return;
+      const r = deleteUnitsInRect(state, godRect);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      godBatchApply(r.state, `删除 ${r.removed} 个单位（城留着）`);
+      return;
+    }
+
+    case 'god-batch-terrain': {
+      if (!godRect) return;
+      // 手上没地形笔刷就刷成平原：沙盒里最常做的是"把这片推平"
+      const t: Terrain = godBrush.kind === 'terrain' ? godBrush.terrain : 'plain';
+      const r = paintRect(state, godRect, t);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      godBatchApply(
+        r.state,
+        `刷上${CONFIG.terrainName[t]} ${r.painted} 格${r.skipped > 0 ? `（跳过 ${r.skipped} 格：城 / 有兵 / 已经是这个地形）` : ''}`,
+      );
+      return;
+    }
+
+    case 'god-batch-fill': {
+      if (!godRect) return;
+      // 手上没兵种笔刷就填民兵：它是货架上的第一格，也是"凑一支队伍"的默认
+      const type = godBrush.kind === 'unit' ? godBrush.type : 'militia';
+      const r = fillUnitsInRect(state, godRect, godSide, type);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      const name = state.unitTypes[type]?.name ?? type;
+      const tail = r.capped
+        ? '（到上限，没放完）'
+        : r.skipped > 0
+          ? `（${r.skipped} 格站不下）`
+          : '';
+      godBatchApply(r.state, `放下 ${r.placed} 个${name}${tail}`);
+      return;
+    }
+
+    case 'god-shift': {
+      if (!godRect) return;
+      const dx = Number(el.dataset.dx ?? 0);
+      const dy = Number(el.dataset.dy ?? 0);
+      const r = translateUnitsInRect(state, godRect, dx, dy);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      // 选区跟着走一格，才能连着按：挪完还框着同一批人
+      godRect = {
+        x0: Math.max(0, Math.min(state.w - 1, godRect.x0 + dx)),
+        y0: Math.max(0, Math.min(state.h - 1, godRect.y0 + dy)),
+        x1: Math.max(0, Math.min(state.w - 1, godRect.x1 + dx)),
+        y1: Math.max(0, Math.min(state.h - 1, godRect.y1 + dy)),
+      };
+      godBatchApply(r.state, `整体平移 ${r.moved} 个单位`);
+      return;
+    }
+
+    case 'god-sel-clear': {
+      godRect = null;
+      godSig = '';
       render();
       return;
     }
@@ -5720,6 +5861,59 @@ async function runCommanderBatch(): Promise<void> {
 let godSide: PlayerId = 'A';
 /** 手上拿的是什么 */
 let godBrush: GodBrush = { kind: 'none' };
+
+/* ── 框选（2026-11-10） ────────────────────────────────────────────────
+ *
+ * 一次拖动有三种可能的含义，靠**手上有没有笔刷**分开，不靠修饰键：
+ *   · 空手（`brush.kind === 'none'`）→ 斜向拖出矩形选区；
+ *   · 拿着地形/兵种/橡皮 → 仍然是"拖动绘制"（老行为，一个字没改）。
+ *
+ * 为什么不加 Shift/Alt：沙盒里 Shift 已经在正常对局里是"强制攻击"，
+ * 而这里最常做的事就是"摆一片"。让"空手"承担框选，符合"手上没工具 =
+ * 在指东西"这个直觉，也不需要玩家记住第二个修饰键。
+ *
+ * 单击不受影响：框选要到**第一次 pointermove** 才算成立（和笔刷拖动同一个
+ * 门槛），所以"点一下看看这格是什么"照旧走 `onGodClick`。
+ */
+let godRect: Rect | null = null;
+/** 正在拖的那个（松手才提交给 godRect；没动过就当作单击，不产选区） */
+let godMarquee: { a: { x: number; y: number }; b: { x: number; y: number }; pid: number } | null = null;
+
+/** 选区里那几格的索引（给棋盘染色用）；没有选区就是空数组 */
+function godRectIndices(): number[] {
+  const r = godMarquee ? rectOf(godMarquee.a, godMarquee.b, state.w, state.h) : godRect;
+  if (!r) return [];
+  const out: number[] = [];
+  for (let y = r.y0; y <= r.y1; y += 1) {
+    for (let x = r.x0; x <= r.x1; x += 1) out.push(y * state.w + x);
+  }
+  return out;
+}
+
+/** 工具栏那块摘要要的三个数 */
+function godSelectionForUi(): { w: number; h: number; cells: number; units: number } | null {
+  const r = godRect;
+  if (!r) return null;
+  return { w: rectW(r), h: rectH(r), cells: rectW(r) * rectH(r), units: unitsInRect(state, r).length };
+}
+
+/**
+ * 批量操作的统一出口：**只压一次撤销**。
+ *
+ * 选二十个兵删掉，撤销一下就全回来——和"一笔拖动 = 一步"是同一条规矩。
+ * 复用 `godApply` 不行：那个每次调用压一次栈，二十次操作就是二十层撤销。
+ */
+function godBatchApply(next: GameState, msg: string): void {
+  undoStack.push(state);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  state = next;
+  godResult = '';
+  godSig = '';
+  godShelfSig = '';
+  saveMatch(state);
+  render();
+  toast(msg);
+}
 /** 摆城用哪个时代；0 表示"还没挑过"，按这一局的起始时代走 */
 let godCityEra = 0;
 /**
@@ -5887,6 +6081,7 @@ function godUi() {
     state,
     side: godSide,
     brush: godBrush,
+    selection: godSelectionForUi(),
     pack: godPack,
     era: godEra,
     // 没挑过时代就按这一局的起始时代：从青铜开局的人摆出来的城，
@@ -5970,6 +6165,11 @@ function renderGodBar(): void {
     // 有一枚蛋等着孵也要重绘：工具栏上那句结论会从"接着摆"变成
     // "还有一枚蛋"，而蛋出现时单位数正好减一，两边都得算进签名
     state.pendingEgg ? state.pendingEgg.owner : '-',
+    // 框选：选区的尺寸/格数/单位数会整条出现或整条消失，四样都要进签名。
+    // 漏了它，拖完一次框选工具栏不会变（第一次就踩到了）。
+    godRect ? `${godRect.x0},${godRect.y0},${godRect.x1},${godRect.y1}` : '-',
+    // 选区里的兵力会随批量操作变（删兵、放兵、平移），所以另算一个数
+    godRect ? unitsInRect(state, godRect).length : 0,
   ].join('|');
   if (sig === godSig) return;
   godSig = sig;
@@ -6093,6 +6293,18 @@ function onGodClick(e: Event): void {
     return;
   }
 
+  /*
+   * 有选区的时候，点棋盘 = 先收选区（并继续做这一下原本要做的事）。
+   *
+   * 不这么做的话，选区会一直亮着，玩家改完一批想去点别的地方，屏幕上
+   * 还挂着一块蓝框，分不清"现在框的是谁"。
+   */
+  if (godRect) {
+    godRect = null;
+    godSig = '';
+    render();
+  }
+
   // 空手：这一格上是什么。沙盒里没有属性卡这回事，
   // 想知道血量就点一下，一句话说清就够了。
   if (godBrush.kind === 'none') {
@@ -6166,12 +6378,35 @@ function godStrokePaint(x: number, y: number): void {
 /** 能不能起笔：和 `onGodClick` 的门槛保持一致（那边拦什么，这边也拦什么） */
 function godStrokeBegin(e: PointerEvent): boolean {
   if (state.config.godMode !== true || replay) return false;
-  // 操控档/对面在走：那是"走棋"的地方，不该被笔刷抢走
-  if (godInControl() || godRunning || godPassing) return false;
-  if (godBrush.kind === 'none') return false;
+  if (godRunning || godPassing) return false;
   if (e.pointerType === 'mouse' && e.button !== 0) return false;
   const at = cellAtPoint(boardEl, e.clientX, e.clientY);
   if (!at) return false;
+
+  /*
+   * 空手：起一个**框选**，不落笔。
+   *
+   * 松手之前都不算数（见 `godStrokeEnd`）：这样"点一下"根本不会产生选区，
+   * 也就不会和 `onGodClick` 抢——和笔刷拖动"按下不落笔"是同一个理由。
+   */
+  if (godBrush.kind === 'none') {
+    godMarquee = { a: at, b: at, pid: e.pointerId };
+    try {
+      boardEl.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* 抓不住只影响"划出边界还能继续"，不该让框选连起点都没有 */
+    }
+    e.stopPropagation();
+    return true;
+  }
+
+  /*
+   * 有笔刷时，操控档不给画：那里的一举一动都是"真的走一步"，
+   * 拖过一片就等于替对手改局面。摆放档（`play === null`）才允许笔刷拖动。
+   *
+   * 框选**两种档都允许**：它只选不改，选完要按哪颗批量按钮还是玩家自己决定。
+   */
+  if (godInControl()) return false;
 
   godStroke = { base: state, last: at, cells: new Set(), painted: 0, error: '', pid: e.pointerId };
   /*
@@ -6192,6 +6427,15 @@ function godStrokeBegin(e: PointerEvent): boolean {
 }
 
 function godStrokeMove(e: PointerEvent): void {
+  if (godMarquee) {
+    if (e.pointerId !== godMarquee.pid) return;
+    const at = cellAtPoint(boardEl, e.clientX, e.clientY);
+    if (!at) return; // 划出棋盘就停在最后一格，不把选区缩成 0
+    if (at.x === godMarquee.b.x && at.y === godMarquee.b.y) return;
+    godMarquee.b = at;
+    render();
+    return;
+  }
   const stroke = godStroke;
   if (!stroke || e.pointerId !== stroke.pid) return;
 
@@ -6230,6 +6474,26 @@ function godStrokeMove(e: PointerEvent): void {
 }
 
 function godStrokeEnd(e: PointerEvent): void {
+  if (godMarquee) {
+    if (e.pointerId !== godMarquee.pid) return;
+    const m = godMarquee;
+    godMarquee = null;
+    const r = rectOf(m.a, m.b, state.w, state.h);
+    const clicked = r.x0 === r.x1 && r.y0 === r.y1;
+    /*
+     * 没拖开就当作单击：不产选区、清掉旧选区，把这一下让给 `onGodClick`。
+     * （拖开的门槛是"矩形超过一格"，不是"指针动过"——手抖一像素不该变成 1×1 选区。）
+     */
+    godRect = clicked ? null : r;
+    if (!clicked) {
+      const n = unitsInRect(state, r).length;
+      toast(`已选 ${rectW(r)}×${rectH(r)} 区域 · ${n} 个单位`);
+    }
+    // 吞掉松手后浏览器补的那一下 click（它会落到 onGodClick 上）
+    godDragTail = { x: m.b.x, y: m.b.y, at: performance.now() };
+    render();
+    return;
+  }
   const stroke = godStroke;
   if (!stroke || e.pointerId !== stroke.pid) return;
   godStroke = null;
@@ -7287,17 +7551,18 @@ boardEl.addEventListener('pointerdown', (e) => {
   godStrokeBegin(e as PointerEvent);
 });
 boardEl.addEventListener('pointermove', (e) => {
-  if (!godStroke) return;
+  // 框选时 `godStroke` 是空的（那一笔没落），所以两个都要判
+  if (!godStroke && !godMarquee) return;
   godStrokeMove(e as PointerEvent);
 });
 boardEl.addEventListener('pointerup', (e) => {
-  if (!godStroke) return;
+  if (!godStroke && !godMarquee) return;
   godStrokeEnd(e as PointerEvent);
 });
 boardEl.addEventListener('pointercancel', (e) => {
   // 系统把手势抢走了（来电、切后台）。已经画上去的东西**留着**：
   // 玩家看得见它，回滚等于把他刚画的抹掉，比"提前提交"更没道理。
-  if (!godStroke) return;
+  if (!godStroke && !godMarquee) return;
   godStrokeEnd(e as PointerEvent);
 });
 
@@ -7871,3 +8136,117 @@ if (drift) {
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
 if (forceHome || invited.length < 4) showTitle();
+
+/* ── 设置弹窗 ────────────────────────────────────────────────────────────
+ *
+ * 顶栏只留每回合都要看的东西；"想起来才改"的都进这里：主题、动效、铃声、
+ * 导出、规则书、反馈、回首页。
+ *
+ * 为什么自己建节点而不进 render()：面板每帧重建，而弹窗是**短暂**的、带输入
+ * 焦点（滑块）——扔进渲染循环会被反复冲掉，拖动滑块的手感直接废掉。
+ */
+let settingsMask: HTMLElement | null = null;
+
+function closeSettings(): void {
+  settingsMask?.remove();
+  settingsMask = null;
+}
+
+function openSettings(): void {
+  closeSettings();
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  settingsMask = mask;
+
+  const paint = (): void => {
+    mask.innerHTML = settingsHtml({
+      theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
+      reducedMotion: document.documentElement.dataset.motion === 'reduced',
+      chime: chimeVolume,
+      chimeText: chimeLabel(chimeVolume),
+      replay: replay !== null,
+      // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
+      // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
+      compact:
+        typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 640px)').matches
+          : window.innerWidth <= 640,
+      fog: state.fog !== false,
+      blackout: state.config.expansionIds.includes('blackout'),
+      roomCode: room?.code ?? null,
+    });
+  };
+  paint();
+  document.body.append(mask);
+
+  mask.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    // 点遮罩空白处 = 关闭（和规则书那些弹窗一个手势）
+    if (t === mask) {
+      closeSettings();
+      return;
+    }
+    const el = t.closest<HTMLElement>('[data-act]');
+    const act = el?.dataset.act;
+    if (!act) return;
+
+    if (act === 'settings-close') {
+      closeSettings();
+      return;
+    }
+    if (act === 'set-theme') {
+      setUiMode(el!.dataset.theme === 'modern' ? 'modern' : 'legacy');
+      paint();
+      return;
+    }
+    if (act === 'set-motion') {
+      setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'chime-test') {
+      playChime(chimeVolume);
+      return;
+    }
+
+    /*
+     * 迷雾开关：**不关弹窗**，原地重画。
+     * 玩家刚点的就是这一屏上的开关，把他踢出去再开一次才能确认结果，
+     * 那是把"看一眼变成了三步"。其余动作仍然走下面那条统一出口。
+     */
+    if (act === 'toggle-fog') {
+      const proxy = document.createElement('button');
+      proxy.dataset.act = act;
+      appEl.append(proxy);
+      proxy.click();
+      proxy.remove();
+      paint();
+      return;
+    }
+
+    /*
+     * 其余动作（导出 / 回首页 / 规则书 / 反馈 / 联机）走**主分发**，不在这里重写一遍。
+     * 造一个带同样 data-act 的替身点一下：多一条实现就多一条会跑偏的地方。
+     */
+    closeSettings();
+    const proxy = document.createElement('button');
+    proxy.dataset.act = act;
+    appEl.append(proxy);
+    proxy.click();
+    proxy.remove();
+  });
+
+  // 滑块：拖动时只改音量与那一行文字，不整块重画（重画会丢焦点、断手感）
+  mask.addEventListener('input', (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.dataset.act !== 'chime-range') return;
+    chimeVolume = Math.min(1, Math.max(0, Number(t.value) / 100));
+    saveChimeVolume(chimeVolume);
+    const value = mask.querySelector('.set-value');
+    if (value) value.textContent = chimeLabel(chimeVolume);
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settingsMask) closeSettings();
+});

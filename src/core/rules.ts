@@ -5963,7 +5963,7 @@ export function heroSkillsOf(
      */
     if (ready && u.bornTurn === s.turn) {
       ready = false;
-      notReadyReason = '刚上场的单位这一回合还不能用技能';
+      notReadyReason = '未就绪';
     }
 
     // 核心扩展：如果基础条件是“就绪”，再问一句扩展有没有别的限制
@@ -6443,7 +6443,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 招募出来的英雄以前当回合就能放大招：一次花钱买到"上场 + 技能"，
   // 而且对手算不出这笔账。
   if (u.bornTurn === s.turn) {
-    return { ok: false, reason: '刚上场的单位这一回合还不能用技能' };
+    return { ok: false, reason: '未就绪' };
   }
 
   const cd = u.skillCd?.[skill.id] ?? 0;

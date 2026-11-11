@@ -61,8 +61,14 @@ import { CARD_PRIOR, CARD_PRIOR_META } from './lib/card-prior.table.ts';
 import { stateToFixedMap } from '../src/core/map-export.ts';
 import {
   clearUnits,
+  deleteUnitsInRect,
+  fillUnitsInRect,
+  paintRect,
   paintTerrain,
   placeCity,
+  rectOf,
+  translateUnitsInRect,
+  unitsInRect,
   placeUnit,
   removeAt,
   sandboxCityProblem,
@@ -339,6 +345,7 @@ import {
   aliveSeats,
   isEliminated,
   hasQuit,
+  produceAt,
 } from '../src/core/rules.ts';
 import { playerView, onlyVisibleCells, viewOnBoard } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
@@ -2823,7 +2830,7 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
-test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）', () => {
+test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
   /*
    * 用户点单（2026-11-09）："高时代经济单位生产效率大幅上升……不要再搞这种
    * 莫名其妙的设计了"。
@@ -2840,9 +2847,11 @@ test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）',
   const rows: Array<{ name: string; era: number; cost: number; best: number }> = [];
   for (const [, d] of Object.entries(all) as Array<[string, any]>) {
     if (d.category !== 'economy') continue;
-    // 2026-11-10：从"时代 4 以上"放宽到"时代 3 以上"——军需官（时代 3）
-    // 原来的回本 9.4 是全表最差，比时代 1 的农民（6.4）还差。
-    if ((d.era ?? 0) < 3) continue;
+    // 2026-11-11：这条线只管时代 4 以上。11-10 曾放宽到时代 3 来给军需官兜底，
+    // 但那等于用测试承诺"军需官的回本必须 ≤6"，结果只能靠把它加强到 27 来满足；
+    // 用户要求回调之后，口径跟着退回——**门槛不该替设计做决定**。
+    // 军需官（时代 3，回本 9.4）是已知例外，它值不值那个价是另一个问题。
+    if ((d.era ?? 0) < 4) continue;
     const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
     assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
     rows.push({ name: d.name, era: d.era, cost: d.cost, best });
@@ -2851,8 +2860,8 @@ test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）',
 
   for (const r of rows) {
     const payback = r.cost / r.best;
-    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5，3 代 ≤6
-    const cap = r.era >= 6 ? 5.0 : r.era >= 4 ? 5.5 : 6.0;
+    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5
+    const cap = r.era >= 6 ? 5.0 : 5.5;
     assert.ok(
       payback <= cap + 1e-9,
       `${r.name}（时代${r.era}）造价 ${r.cost}、最高产出 ${r.best}，回本 ${payback.toFixed(2)} 回合，超过 ${cap}`,
@@ -10375,6 +10384,90 @@ test('开了「信息化」和「现代战争」：能升到第六时代，并�
   assert.ok(buy.ok, `第六时代该造得出主战坦克：${!buy.ok ? buy.reason : ''}`);
 });
 
+test('框选批量：删兵 / 刷地形 / 放兵 / 整体平移', () => {
+  /*
+   * 上帝模式 2026-11-10 加的框选。这些是纯函数（`core/sandbox.ts`），
+   * 界面那边只管"矩形怎么拖出来、结果怎么说"，规则一律在这里。
+   *
+   * 四条共同的取舍在函数注释里写着，用例守的是**结果**：
+   *   1. 矩形两次点击顺序随便给（斜拖是常态）；
+   *   2. 批量操作能跳过的就跳过并报数，不因为一格不合格就整批失败；
+   *   3. 整体平移**要么全动、要么全不动**；
+   *   4. 放兵只填空格，有上限。
+   */
+  const s = arena(fresh({ godMode: true }, 4242));
+  for (let y = 0; y < s.h; y += 1) for (let x = 0; x < s.w; x += 1) putTerrain(s, x, y, 'plain');
+
+  // ── 矩形归一：从右下往左上拖也一样 ──
+  assert.deepEqual(rectOf({ x: 5, y: 5 }, { x: 3, y: 4 }, 12, 12), { x0: 3, y0: 4, x1: 5, y1: 5 });
+  // 出界的端点被夹回棋盘里，不会越界访问
+  assert.deepEqual(rectOf({ x: 11, y: 11 }, { x: -3, y: -2 }, 12, 12), { x0: 0, y0: 0, x1: 11, y1: 11 });
+
+  // ── 摆一小片：3 个兵 + 1 座城 ──
+  const a = place2(s, 'A', 'militia', 3, 3);
+  const b = place2(s, 'A', 'militia', 4, 3);
+  const c = place2(s, 'B', 'archer', 5, 3);
+  const rect = { x0: 3, y0: 3, x1: 5, y1: 4 };
+  assert.equal(unitsInRect(s, rect).length, 3, '选区内三个兵都该被认出来');
+
+  // ── 删兵：城不在选区里，兵全删 ──
+  const del = deleteUnitsInRect(s, rect);
+  assert.ok(del.ok);
+  assert.equal(del.removed, 3);
+  assert.equal(del.state.units.length, 0);
+
+  // 空选区删兵 → 明确拒绝，不是静默成功
+  const empty = deleteUnitsInRect(del.state, rect);
+  assert.equal(empty.ok, false);
+  assert.match(empty.ok ? '' : empty.reason, /没有单位/);
+
+  // ── 刷地形：有兵的格跳过，空地刷上 ──
+  const paint = paintRect(s, { x0: 2, y0: 2, x1: 4, y1: 4 }, 'forest');
+  assert.ok(paint.ok);
+  const tile = (x: number, y: number) => paint.state.tiles[y * paint.state.w + x]!;
+  assert.equal(tile(2, 2).terrain, 'forest', '空格要刷上');
+  assert.equal(tile(3, 3).terrain, 'plain', '有兵站着的那一格跳过');
+  // (2,2)-(4,4) 里站着 2 个兵（(3,3) 和 (4,3)），第三个在 (5,3) 选区外
+  assert.ok(paint.skipped >= 2, `有兵的那两格都该计入跳过，实际 ${paint.skipped}`);
+
+  // ── 放兵：只填空格，每格一个 ──
+  const fill = fillUnitsInRect(s, { x0: 7, y0: 7, x1: 9, y1: 8 }, 'A', 'militia');
+  assert.ok(fill.ok);
+  assert.equal(fill.placed, 6, '3×2 全空 → 六个');
+  assert.equal(fill.capped, false);
+  // 同一块再填一次：一格都站不下
+  const again = fillUnitsInRect(fill.state, { x0: 7, y0: 7, x1: 9, y1: 8 }, 'A', 'militia');
+  assert.equal(again.ok, false, '塞满了就不该假装放进去');
+
+  // ── 整体平移：成组前进 ──
+  const movers = {
+    x0: 7,
+    y0: 7,
+    x1: 9,
+    y1: 8,
+  };
+  const shift = translateUnitsInRect(fill.state, movers, 0, 2);
+  assert.ok(shift.ok);
+  assert.equal(shift.moved, 6);
+  const moved = shift.state.units.filter((u) => u.owner === 'A' && u.y >= 9 && u.y <= 10);
+  assert.equal(moved.length, 6, '六个兵一起下移两格');
+  assert.equal(shift.state.units.some((u) => u.y >= 7 && u.y <= 8 && u.x >= 7 && u.x <= 9), false, '原位置要空出来');
+
+  // ── 撞人就整笔拒绝：一个都不许动 ──
+  const blocked = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, -3);
+  // 往上 3 格会撞到……上一轮空出来的 (7..9,7..8) 其实是空的，所以这条应该是"能挪"；
+  // 换成撞边界：往下推到棋盘外
+  const out = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, 6);
+  assert.equal(out.ok, false, '推到棋盘外该整笔拒绝');
+  if (!out.ok) assert.match(out.reason, /棋盘外面/);
+  void blocked;
+
+  // 反证：正常情况确实能挪（不是永远返回失败）
+  const ok = translateUnitsInRect(shift.state, { x0: 7, y0: 9, x1: 9, y1: 10 }, 0, -2);
+  assert.ok(ok.ok);
+  void a, b, c;
+});
+
 test('上帝模式也造不出这一局升不到的城', () => {
   const s = fresh({ size: 12 }, 9903);
   // 找一块 2×2 的空平原（城要占满这四格的左上角）
@@ -11565,22 +11658,18 @@ test('建材产线：伐木工之后每一代都有人接，产出逐代往上�
   assert.ok(prev >= 24, `时代 5 的建材兵该有 24 材以上，实际 ${prev}`);
 });
 
-test('城郭：经济单位的粮材与金币分配不分地形，全按 8:2', () => {
+test('城郭：经济单位全折，按地形定产什么（粮 / 材 / 金）', () => {
   /*
-   * 2026-11-04 有一版是"按地形对调"：平原/丘陵/森林上六成留金、四成折粮材。
-   * **2026-11-06 回撤**——那三种地形是建材主产地，对调让建材掉三分之一，
-   * 金币却没变宽（短缺从金币挪到了建材）。
+   * 2026-11-10 用户定的新口径，取代"一律 8:2 折成粮材"：
+   *   · 平原、水域 → 全粮；
+   *   · 城市 → 全金（城里做买卖，不种地）；
+   *   · 其它地形（森林、丘陵……）→ 全材；
+   *   · 牧民是特例：粮食与材料各一半。
    *
-   * **2026-11-08 提到 8:2**（原来 6:4），和经济建筑拉平成同一个口径：
-   * 折成粮/材八成、留金两成。方向与 11-04 那次相反（那次是少折多留金）。
-   *
-   * 这条用例留着，是为了钉住两件事：
-   *   ① 不再分地形——玩家看不出比例，只会觉得"这块地怎么突然少产建材了"；
-   *   ② 比例是 8:2 而不是 6:4——想再调，请连这条用例一起改，别偷偷改常数。
+   * 这条用例同时钉住"全折"这件事：以前留着两成金币，现在经济单位在野外
+   * 一分金币都不产——金币要靠城市里的经济单位、经济建筑和税官。
    */
   const s = fresh({ expansionIds: ['city-works'] });
-  // 站到一格"不是城、也不是水"的空地上：固定 (5,5) 会随地图随机踩到城格，
-  // 城格有额外产出，量出来就不是 8:2 了（水多了之后这个坑开始经常踩中）。
   const spot = s.tiles.findIndex((t) => !t.cityId && t.terrain === 'plain');
   assert.ok(spot >= 0, '总得有一格空地');
   const sx = spot % s.w;
@@ -11591,25 +11680,91 @@ test('城郭：经济单位的粮材与金币分配不分地形，全按 8:2', (
     return unitYield(s, u) as Record<string, number>;
   };
 
-  // 采石工：丘陵 26 金 → 5 金 + 21 材（八成折成建材）
+  // 采石工：丘陵 26 / 森林 14 / 平原 6 / 城 6
   const hill = at('quarrier', 'hill');
-  assert.equal(hill.gold, 5, '丘陵上该只留两成金币');
-  assert.equal(hill.material, 21, '丘陵上该折八成建材');
+  assert.equal(hill.gold ?? 0, 0, '丘陵上不留金币');
+  assert.equal(hill.material, 26, '丘陵上的经济单位全出材料');
 
-  // 平原：6 金 → 1 金 + 5 粮
-  const plain = at('quarrier', 'plain');
-  assert.equal(plain.gold, 1, '平原上该只留两成金币');
-  assert.equal(plain.food, 5, '平原上该折八成粮');
-
-  // 森林：14 金 → 3 金 + 11 材
   const forest = at('quarrier', 'forest');
-  assert.equal(forest.gold, 3, '森林上该只留两成金币');
-  assert.equal(forest.material, 11, '森林上该折八成建材');
+  assert.equal(forest.gold ?? 0, 0, '森林上也不留金币');
+  assert.equal(forest.material, 14, '森林同样出材料');
 
-  // 城郊本来就是同一个口径：两成留金、八成折粮
+  const plain = at('quarrier', 'plain');
+  assert.equal(plain.gold ?? 0, 0, '平原上不留金币');
+  assert.equal(plain.food, 6, '平原上的经济单位全出粮食');
+
+  // 城郊：原来是八成折粮，现在原样收金
   const city = at('quarrier', 'city');
-  assert.equal(city.gold, 1, '城郊两成留金');
-  assert.equal(city.food, 5, '城郊八成折成粮');
+  assert.equal(city.gold, 6, '城里的经济单位产出全为金钱');
+  assert.equal(city.food ?? 0, 0, '城里不产粮');
+
+  // 农民：平原 7 → 全粮；丘陵 4 → 全材（本体兵种，被扩展改写）
+  assert.equal(at('farmer', 'plain').food, 7, '农民在平原全出粮');
+  assert.equal(at('farmer', 'hill').material, 4, '农民在丘陵全出材');
+
+  // 牧民是特例：丘陵 8 → 4 粮 + 4 材
+  const herderHill = at('herder', 'hill');
+  assert.equal(herderHill.gold ?? 0, 0, '牧民不产金');
+  assert.equal(herderHill.food, 4, '牧民一半产粮');
+  assert.equal(herderHill.material, 4, '牧民一半产材');
+  const herderPlain = at('herder', 'plain');
+  assert.equal(herderPlain.food, 2);
+  assert.equal(herderPlain.material, 2);
+});
+
+test('城郭：税官按全场粮材抽成，数量上限等于时代', () => {
+  /*
+   * 税官的产出不写在兵种表里（那张表全是 0），全靠 `modifyYield` 现算：
+   *   税 = round((全场粮 + 全场材) × TAX_RATE)
+   *
+   * 守三件事：
+   *   ① 产出跟着别的产业走（多摆产业，税就变多）；
+   *   ② 税官自己不进税基（否则互抽越叠越高）；
+   *   ③ 数量上限 = 当前时代（1 代只能有 1 个）。
+   */
+  // 先清掉开局自带的兵：老农民站在平原上会给税基贡献 7 粮，
+  // 税就从 5 变 6——那不是税算错了，是场地没扫干净。
+  // （只清兵、留城：下面要拿城问产兵上限）
+  const s = fresh({ expansionIds: ['city-works'], startEra: 1 });
+  s.units = [];
+  const spot = s.tiles.findIndex((t) => !t.cityId && t.terrain === 'plain');
+  const sx = spot % s.w;
+  const sy = Math.floor(spot / s.w);
+  const put = (id: string, terrain: string, dx = 0) => {
+    const u = place2(s, 'A', id, sx + dx, sy);
+    s.tiles[u.y * s.w + u.x]!.terrain = terrain as never;
+    return u;
+  };
+
+  // 两个采石工在丘陵：26 + 26 = 52 材料
+  put('quarrier', 'hill', 0);
+  put('quarrier', 'hill', 1);
+  const tax = put('tax_collector', 'plain', 2);
+  const first = unitYield(s, tax).gold ?? 0;
+  assert.ok(first > 0, `税官该有产出，实际 ${first}`);
+  assert.equal(first, Math.round(52 * 0.1), '税 = 全场粮材 × 一成');
+
+  // 再加一座产业：税基变大，税更多
+  put('quarrier', 'hill', 3);
+  const grown = unitYield(s, tax).gold ?? 0;
+  assert.ok(grown > first, `多一座产业，税该更多：${first} → ${grown}`);
+  assert.equal(grown, Math.round(78 * 0.1));
+
+  // 税官自己不进税基
+  const tax2 = put('tax_collector', 'plain', 4);
+  assert.equal(unitYield(s, tax).gold, grown, '另一个税官不该让这个税官多收');
+  assert.ok((unitYield(s, tax2).gold ?? 0) > 0, '第二个税官自己也要收得到');
+
+  // 上限：1 代只能有 1 个
+  const city = citiesOf(s, 'A')[0]!;
+  assert.equal(
+    s.units.filter((u) => u.owner === 'A' && u.type === 'tax_collector').length,
+    2,
+    '此时盘上已经摆了两个（place2 绕过规则）',
+  );
+  const check = produceAt(s, { kind: 'city', city }, s.unitTypes['tax_collector']!);
+  assert.equal(check.ok, false, '超过时代上限就该拦住');
+  assert.match(check.ok ? '' : check.reason, /税官最多 1 个/, '理由要说清上限');
 });
 
 test('建材建筑按代分工兵：劳工只有砖窑，建筑队三样全会', () => {
@@ -14349,12 +14504,20 @@ test('刚造出来的英雄当回合不能放技能', () => {
   // UI：技能不该显示"就绪"
   const view = heroSkillsOf(st, hero!).find((k) => k.def.id === 'throw-axe')!;
   assert.equal(view.ready, false, '刚上场的英雄，技能不该是亮的');
-  assert.equal(view.notReadyReason, '刚上场的单位这一回合还不能用技能');
+  assert.equal(view.notReadyReason, '未就绪');
 
   // 规则：硬闯也要被拒
   const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });
   assert.equal(denied.ok, false, '刚上场就放技能应该被拒');
-  assert.match((denied as { reason: string }).reason, /刚上场/);
+  /*
+   * 文案钉死成和 `heroSkillsOf` 里那句**逐字一样**的「未就绪」。
+   *
+   * 早先这里是长句「刚上场的单位这一回合还不能用技能」，但那一行要挤进
+   * 技能按钮右侧的 price 位（还是 11–12px），长句直接把按钮撑变形。
+   * 现在两处统一用「未就绪」——短是短，但**不能只改一边**，否则又会出现
+   * "按钮上写着 A、点下去弹 B"。
+   */
+  assert.equal((denied as { reason: string }).reason, '未就绪');
 
   // 过一整个回合（A 结束 → B 结束 → 又轮到 A）：可以放了
   const t1 = applyAction(st, { type: 'END_TURN' });

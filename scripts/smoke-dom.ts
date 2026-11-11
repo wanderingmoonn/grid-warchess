@@ -38,6 +38,8 @@ import {
   unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel, topbarShell } from '../src/ui/panel.ts';
+import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
+import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
@@ -54,7 +56,7 @@ import {
 import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
-import { godShelfHtml } from '../src/ui/god-panel.ts';
+import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
@@ -149,6 +151,21 @@ function click(sel: string): void {
   const el = doc.querySelector<HTMLElement>(sel);
   assert.ok(el, `找不到元素 ${sel}`);
   el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+}
+
+/**
+ * 回首页。
+ *
+ * 2026-11-11 起「回首页」不再单独挂在顶栏上，而是收进「设置」弹窗
+ * （规则书/反馈/导出/回首页 都是"想起来才点一次"的东西）。用例里要回门面，
+ * 统一走这一个 helper，别每处各写一遍开弹窗的三步。
+ */
+function goHome(): void {
+  click('[data-act="settings"]');
+  // 弹窗里的那一条（刚才全局替换把它也换成了 goHome，自己调自己——栈直接爆）
+  const btn = doc.querySelector<HTMLElement>('[data-act="new-game"]');
+  assert.ok(btn, '设置弹窗里应该有「回首页」');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 }
 
 function unitsCount(): number {
@@ -1781,6 +1798,63 @@ check('详情面板显示的是算上修正的真实数值', () => {
   );
   const eff = effectiveStats(st, vet);
   assert.ok(html.includes(`<b>${eff.atk}`) || html.includes(`${eff.atk}（基础`), '面板数字要等于 effectiveStats');
+  // 2026-11-11：攻击那一格在"有修正"时会跨两列，明细紧贴在自己那格下面。
+  // 不这么放的话，明细会被挤到半格宽里，一条"老兵不死 +2"折成三行。
+  assert.ok(
+    host.querySelector('.stat-span .stat-mods'),
+    '修正明细要在跨列的那一格里面（.stat-span .stat-mods）',
+  );
+});
+
+check('属性卡：数值排成两列，标签在上、数值在下', () => {
+  /*
+   * 一行一条的时候，每行右边半截全空着：13px 的字，一行只用掉十二三个字符宽，
+   * 一个普通兵光属性就要 140px 竖向空间。改成两列之后玩家不用先滚一屏才看得见
+   * 「拆除」。这条守的是"排法"本身——数字对不对由上面那条管。
+   */
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5150,
+  );
+  const unit = st.units.find((u) => u.owner === 'A')!;
+  assert.ok(unit, '开局 A 方应该有兵');
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: unit,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const grid = host.querySelector<HTMLElement>('.stat-grid');
+  assert.ok(grid, '属性要收进 .stat-grid（两列容器）');
+  const cells = [...grid!.children].filter((el) => el.classList.contains('info-row'));
+  assert.ok(cells.length >= 4, `普通兵至少四格：生命 / 移动力 / 攻击护甲 / 射程视野，实际 ${cells.length}`);
+  // 竖排靠的是 DOM 顺序（span 在前、b 在后）——顺序反了 CSS 也不会换回来
+  for (const cell of cells) {
+    assert.ok(cell.querySelector('span') && cell.querySelector('b'), '每格都要有标签和数值');
+    assert.equal(
+      cell.firstElementChild?.tagName,
+      'SPAN',
+      '标签必须排在数值前面：竖排时先读到的就是它',
+    );
+  }
+  assert.ok(
+    (grid!.textContent ?? '').includes('生命') && (grid!.textContent ?? '').includes('移动力'),
+    '生命和移动力都要在网格里',
+  );
+  // 没有修正时不许出现跨列块——那会空出右边一整格，看着像数字没加载出来
+  assert.equal(host.querySelector('.stat-span'), null, '没有修正明细时不该有跨列块');
 });
 
 console.log('\n城市与产兵');
@@ -2096,12 +2170,15 @@ console.log('\n开局设置');
  * 将来入口再挪一次，只需要改这一个函数。
  */
 function openSetup(): void {
-  click('[data-act="new-game"]');
+  goHome();
   assert.ok(doc.querySelector('.title-screen'), '顶栏那颗按钮应该先把人送回首页');
   click('[data-title="new"]');
 }
 
-check('顶栏「首页」回到门面，再点「开始对局」才打开设置面板', () => {
+check('顶栏「设置」→「回首页」回到门面，再点「开始对局」才打开设置面板', () => {
+  // 2026-11-11：顶栏不再直接放「首页」，它随规则书/反馈/导出一起进了设置弹窗
+  click('[data-act="settings"]');
+  assert.ok(doc.querySelector('.modal-mask'), '顶栏的「设置」要打开弹窗');
   click('[data-act="new-game"]');
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '顶栏那颗按钮应该打开首页');
@@ -2704,6 +2781,7 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
     pack: '',
     era: 0,
     cityEra: 1,
+    selection: null,
     running: false,
     round: 1,
     result: '',
@@ -2867,12 +2945,14 @@ check('升级后城市更硬，产兵列表也多出二级兵', () => {
   // 时代 2 城市护甲应该是 6
   assert.ok(html.includes('护甲</span><b>6</b>'), '护甲应该提升到 6');
   assert.ok(doc.querySelectorAll('.recruit-btn').length >= 8, '时代 II 应该能看到两个时代的兵种');
-  assert.ok(!html.includes('升级后可解锁：长枪兵'), '长枪兵应该已经从锁定变成可选');
+  // 2026-11-11：解锁名单收进折叠块，判据从"整段 HTML 里有没有某个词"改成"名单里有没有"
+  const unlockList = doc.querySelector('.unlock-list')?.textContent ?? '';
+  assert.ok(!unlockList.includes('长枪兵'), '长枪兵应该已经从锁定名单里消失');
 });
 
 check('打过一局之后回首页，「继续上一局」就亮了', () => {
   // 上面已经开过好几局，所以这里应该能接着打——与"第一次来"那条正好成对
-  click('[data-act="new-game"]');
+  goHome();
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '先回首页');
   const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
@@ -2892,7 +2972,7 @@ check('兵种编辑器在首页，顶栏不再有这颗按钮', () => {
   assert.equal(doc.querySelector('[data-act="unit-editor"]'), null, '顶栏不该还留着兵种编辑器');
   assert.equal(doc.querySelector('[data-act="import"]'), null, '顶栏也不该留着导入对局');
 
-  click('[data-act="new-game"]');
+  goHome();
   assert.ok(doc.querySelector('.title-screen'), '先回首页');
   assert.ok(doc.querySelector('[data-title="editor"]'), '首页应该有兵种编辑器入口');
   assert.ok(doc.querySelector('[data-title="import"]'), '首页应该有导入对局入口');
@@ -4753,6 +4833,216 @@ check('己方战报只给自己的条目和战损，观战才看全部', () => {
   assert.ok(all.includes('他在攒钱'), '观战/热座要看全部');
 });
 
+check('设置弹窗：主题、动效、铃声、低频入口都在里面', () => {
+  /*
+   * 2026-11-11：顶栏那排"想起来才改"的按钮改成一颗「设置」。
+   * 这条钉住"搬进去的东西一件都不少"——搬家最容易掉的正是最后那件。
+   *
+   * 顺带把主题开关也放进来：之前只能用 `?ui=modern` 或控制台，用户问过
+   * "modern 开关在哪"，答起来都不像正常产品。
+   */
+  const html = settingsHtml({
+    theme: 'modern',
+    reducedMotion: true,
+    chime: 0.35,
+    chimeText: '铃声 35%',
+  });
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  for (const act of [
+    'set-theme',
+    'set-motion',
+    'chime-range',
+    'chime-test',
+    'export',
+    'new-game',
+    'manual',
+    'feedback',
+    'settings-close',
+  ]) {
+    assert.ok(html.includes(`data-act="${act}"`), `设置里缺了 ${act}`);
+  }
+
+  // 当前值要如实反映：深色主题选中的是「新版」，动效选中的是「减少」
+  assert.ok(/data-theme="modern"[^>]*>新版/.test(html), '当前主题要标在「新版」上');
+  assert.ok(/data-motion="reduced"[^>]*>减少/.test(html), '减少动效要标在「减少」上');
+  assert.ok(text.includes('铃声 35%'), `音量文字要写出来：${text.slice(0, 80)}`);
+  // 滑块的值跟 chime 走，别写死 60
+  assert.ok(/value="35"/.test(html), '滑块初值要等于当前音量');
+
+  // 副标题要说清"这是本机设置"——不然玩家会以为它会跟着存档走
+  assert.ok(text.includes('只影响这台设备'), '要说清这些设置不进存档');
+});
+
+check('手机设置里多出「对局中」：迷雾开关和联机入口', () => {
+  /*
+   * 2026-11-11：360px 宽的顶栏放不下「联机」「迷雾」两颗按钮，
+   * 结果是「设置」被挤出屏幕。按频率分层后，这两颗只在手机上搬进设置——
+   * 桌面顶栏本来就有，所以 compact 不传时**不能**重复出现（两处状态两条路径）。
+   */
+  const phone = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: true,
+    roomCode: null,
+  });
+  assert.ok(phone.includes('data-act="toggle-fog"'), '手机设置里要有迷雾开关');
+  assert.ok(phone.includes('data-act="online"'), '手机设置里要有联机入口');
+  assert.ok(/class="chip active" data-act="toggle-fog"/.test(phone), '迷雾开着时开关要高亮');
+  assert.ok(phone.includes('联机'), '要有「联机」这两个字，不能只有一个图标');
+
+  // 桌面版：不传 compact 就不该出现这一组
+  const desktop = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+  });
+  assert.equal(
+    desktop.includes('data-act="toggle-fog"'),
+    false,
+    '桌面顶栏本来就有迷雾按钮，设置里不该再放一份',
+  );
+
+  // 房间码：在房间里要写出来，不然玩家不知道该点「房间」还是「联机」
+  const inRoom = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: false,
+    roomCode: 'AB12CD',
+  });
+  assert.ok(inRoom.includes('AB12CD'), '房间里要显示房间码');
+  assert.ok(inRoom.includes('当前房间'), '要说清这是当前房间');
+});
+
+check('主题开关：只改 html 上的两个属性，回退就是删掉它们', () => {
+  /*
+   * 2026-11-10 UI 重构的第一层。这条守的是**机制**而不是长相：
+   *   · legacy / modern 由 `<html data-ui>` 决定，CSS 里只有一个变量块；
+   *   · 回退 = 删属性（或 `__ui('legacy')`），不需要重新加载、不碰任何规则；
+   *   · 动效是第二根正交的轴（reduced 与主题可任意组合）。
+   *
+   * 长相在 jsdom 里验不了（没有布局、不算样式），所以这条只钉"属性写对了"。
+   */
+  const el = doc.createElement('html');
+
+  const modern = applyUiTheme({ root: el, mode: 'modern', motion: 'reduced' });
+  assert.deepEqual(modern, { mode: 'modern', motion: 'reduced' });
+  assert.equal(el.dataset.ui, 'modern', '要落到 data-ui 上');
+  assert.equal(el.dataset.motion, 'reduced', '动效是独立的一根轴');
+
+  const back = applyUiTheme({ root: el, mode: 'legacy', motion: 'full' });
+  assert.deepEqual(back, { mode: 'legacy', motion: 'full' });
+  assert.equal(el.dataset.ui, 'legacy', '切回去只改这一个属性');
+  assert.equal(el.dataset.motion, 'full');
+
+  // 没传 mode 时按"URL > localStorage > legacy"解析；jsdom 的地址里没有 ?ui
+  assert.equal(resolveUiMode(), 'legacy', '默认必须是旧版，不能把 modern 当默认');
+
+  // 切换要**立刻**生效（记住偏好那一步写 localStorage，jsdom 默认源没有存储权限，
+  // 所以这里只断言"当场生效"，持久化由 `applyUiTheme` 的 URL 分支兜着）
+  setUiMode('modern', el);
+  assert.equal(el.dataset.ui, 'modern', '切换后当场生效');
+  setUiMode('legacy', el);
+  assert.equal(el.dataset.ui, 'legacy', '切回来也当场生效');
+});
+
+check('上帝模式框选：矩形染色 + 工具栏报数 + 批量按钮都在', () => {
+  /*
+   * 2026-11-10 加的框选。这条守两件事：
+   *   1. 棋盘认得选区（`.tile.god-sel`）——不然框完没有任何反馈；
+   *   2. 工具栏把"框了多大、里面有几个人"写出来，并把批量按钮摆出来。
+   *
+   * 拖动本身（pointerdown/move/up）走的是 main.ts 的事件，jsdom 里没有布局、
+   * `cellAtPoint` 算不出格子，所以那一段只能在真浏览器里验；
+   * 这里守的是"数据 → 界面"这一半，规则那一半在 test:rules「框选批量」。
+   */
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 606);
+  const marked = [0, 1, 12, 13];
+  renderBoard(host, playerView(st, 'A'), {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+    marqueeTiles: marked,
+  });
+  try {
+    assert.equal(
+      host.querySelectorAll('.tile.god-sel').length,
+      marked.length,
+      '选区里的四格要打上 god-sel（一行的两格 + 下一行的两格）',
+    );
+  } finally {
+    host.remove();
+  }
+
+  const bar = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: { w: 3, h: 2, cells: 6, units: 4 },
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  const text = bar.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(text.includes('3×2'), `要写选区尺寸：${text.slice(0, 120)}`);
+  assert.ok(text.includes('6 格'), '要写格数');
+  assert.ok(text.includes('4 个单位'), '要写单位数');
+  for (const act of ['god-batch-del', 'god-batch-terrain', 'god-batch-fill', 'god-shift', 'god-sel-clear']) {
+    assert.ok(bar.includes(`data-act="${act}"`), `批量按钮缺了 ${act}`);
+  }
+  assert.ok(text.includes('删兵（4）'), '删兵按钮上要带数量——点之前就知道会动到几个');
+
+  // 没有选区时这一块不该出现（工具栏保持原来的样子）
+  const bare = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: null,
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  assert.equal(bare.includes('god-batch-del'), false, '没选区就不该有批量按钮');
+});
+
 check('沙盒货架也能按扩展包切一刀', () => {
   // 直接渲染货架，不经过整局：验的是"分组口径"这一件事
   const st = createMatch(
@@ -4775,6 +5065,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
       pack,
       era,
       cityEra: 1,
+      selection: null,
       running: false,
       round: 1,
       result: '',
@@ -5552,6 +5843,8 @@ check('点「规则书」：一本就直开，多本先问看哪本', () => {
   };
   try {
     // 当前对局是默认配置：核心册 + 小型合订本 = 两本，应该弹书单
+    // 2026-11-11 起这条入口收在「设置」里，先开门再点书
+    click('[data-act="settings"]');
     click('[data-act="manual"]');
     const rows = Array.from(doc.querySelectorAll<HTMLElement>('.book-row'));
     assert.equal(rows.length, 2, `默认配置应该有两本书可选，实际 ${rows.length}`);
@@ -6275,8 +6568,13 @@ check('反馈：对局打到一半也能拍下现场（不必等打完）', () =
   const w = bootWith(st);
   const d = w.document;
 
+  // 入口已经收进「设置」：打到一半也要两步点到（顶栏设置 → 反馈）
+  const gear = d.querySelector<HTMLElement>('[data-act="settings"]');
+  assert.ok(gear, '顶栏要一直有个「设置」入口');
+  gear!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
   const btn = d.querySelector<HTMLElement>('[data-act="feedback"]');
-  assert.ok(btn, '顶栏要一直有个「反馈」入口');
+  assert.ok(btn, '设置里要一直有个「反馈」入口');
   btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 
   const modal = d.querySelector<HTMLElement>('.feedback-modal');
@@ -6515,10 +6813,10 @@ check('选卡模式下，城市的「升级后可解锁」只列这一局真能�
       selectedTile: null,
     });
 
-    const html = host.innerHTML;
-    const m = /升级后可解锁：([^<]*)</.exec(html);
-    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
-    const names = m![1]!
+    // 2026-11-11：名单收进 <details> 里了，抓的话直接从名单节点取——
+    // 别再用正则去啃那句提示的文案（改个字就红，而且红得没意义）
+    assert.ok(host.querySelector('.unlock-fold'), '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = (host.querySelector('.unlock-list')?.textContent ?? '')
       .split('、')
       .map((t) => t.trim())
       .filter(Boolean);
@@ -7301,15 +7599,30 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   assert.ok(!sideText.includes('轮到你行动'), '复盘里没有"你"的回合');
   assert.ok(!sideText.includes('（你）'), '席位栏不该把某一方标成"你"——复盘里两边都是别人');
 
-  // 顶栏：会改局的那五个必须收起来，纯看的留下
+  /*
+   * 顶栏：会改局的那几个收起来，纯看的留下。
+   *
+   * 2026-11-11 起低频入口都进了「设置」，所以这里多一层：设置按钮本身要在，
+   * 打开之后「导出对局」得消失——复盘导的是别人那局，原来顶栏那颗就是藏起来的，
+   * 搬进弹窗不能把这条规矩丢了。
+   */
   const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
-  for (const act of ['toggle-ai', 'export', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+  for (const act of ['toggle-ai', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
     assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
   }
-  for (const act of ['manual', 'feedback']) {
-    assert.ok(topBtn(act), `顶栏该留着 ${act}`);
-    assert.notEqual(topBtn(act)!.hidden, true, `${act} 不该被藏起来`);
+  assert.ok(topBtn('settings'), '顶栏该留着「设置」');
+  assert.notEqual(topBtn('settings')!.hidden, true, '「设置」不该被藏起来');
+
+  topBtn('settings')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const gear = d.querySelector<HTMLElement>('.modal-mask')!;
+  assert.equal(gear.querySelector('[data-act="export"]'), null, '复盘里设置弹窗不给导出');
+  for (const act of ['manual', 'feedback', 'new-game']) {
+    assert.ok(gear.querySelector(`[data-act="${act}"]`), `设置里该留着 ${act}`);
   }
+  gear.querySelector<HTMLElement>('[data-act="settings-close"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  assert.equal(d.querySelector('.modal-mask'), null, '关掉设置别留一层遮罩');
 
   // 结算卡：别人那局打完了，不该问"要不要捐出这局的数据"
   assert.equal(d.querySelector('.report-card'), null, '复盘里不该冒出结算卡——上传的是别人那局');
@@ -7318,7 +7631,14 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   await wait(100);
   assert.equal(topBtn('toggle-ai')?.hidden, false, '退出后顶栏要复原');
-  assert.equal(topBtn('export')?.hidden, false, '退出后导出对局要回来');
+  topBtn('settings')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.ok(
+    d.querySelector('.modal-mask [data-act="export"]'),
+    '退出复盘后设置里的「导出对局」要回来',
+  );
+  d.querySelector<HTMLElement>('[data-act="settings-close"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
   assert.equal(d.querySelector('.tile.t-city.own-A') !== null, true, '退出后还是本机那局');
 });
 

@@ -94,7 +94,6 @@ import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
-import { chimeLabel } from './sound.ts';
 
 export interface PanelInput {
   view: PlayerView;
@@ -114,6 +113,23 @@ export interface PanelInput {
    * 触屏和鼠标党点这两个按钮。状态放在 main 里，面板只负责显示"现在是哪一档"。
    */
   forceMode?: 'move' | 'attack' | null;
+  /**
+   * 「操作」说明卡是不是展开着。
+   *
+   * 那张卡是给第一次玩的人看的：五段话，每段都在教一个基本操作。可它**每回合
+   * 都在**，对已经会玩的人就是一块占着侧栏的文字墙——真正要看的"战报"被挤到
+   * 下面去了。所以默认收起，展开状态由 main 记着（面板每帧重建，记在这里才不会
+   * 一刷新就弹回去）。
+   */
+  opsOpen?: boolean;
+  /**
+   * 「战报」卡是不是展开着。
+   *
+   * 和「操作」卡同一个理由，但更彻底：战报每回合都在长，而玩家真正在读它的时候
+   * 是"这一回合到底发生了什么"——不是每一步都要盯着。它排在侧栏最下面，
+   * 常驻展开等于把「结束回合」和「认输」一路顶出屏幕。
+   */
+  logOpen?: boolean;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -380,7 +396,7 @@ function panelHtml(input: PanelInput): string {
     .join('');
 
   return `
-    <div class="card">
+    <div class="card card-seats">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         ${turnBadge}
         <span class="hint">第 ${s.turn} 次行动</span>
@@ -422,14 +438,27 @@ function panelHtml(input: PanelInput): string {
 
     ${renderReport(s, input.report)}
 
-    <div class="card">${detail}</div>
+    <div class="card card-detail${
+      input.selectedUnit || input.selectedCityId || input.selectedCampId || input.selectedTile
+        ? ' card-detail-live'
+        : ''
+    }">${detail}</div>
 
     <div class="card">
-      <div class="card-title">战报</div>
-      ${logHtml}
+      <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
+        <summary class="card-title fold-head">战报</summary>
+        ${logHtml}
+      </details>
     </div>
 
     <div class="side-footer">
+      <!--
+        主按钮单独包一层（2026-11-11）。
+        手机上是"棋盘在上、侧栏在下一整条"，侧栏会长到两三屏（产兵表 + 战报），
+        「结束行动」每回合必点却排在最后——于是每回合都要往回滑两屏。
+        窄屏时这一层改成贴底固定，认输和提示仍然随内容走（它们不该常驻遮挡）。
+      -->
+      <div class="footer-main">
       ${
         /*
          * 指挥官模式：这里原来还是「结束行动，交给对方」。
@@ -470,12 +499,12 @@ function panelHtml(input: PanelInput): string {
                }
              </button>`
       }
+      </div>
       <div class="side-actions"${input.replay ? ' hidden' : ''}>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}
         </button>
       </div>
-      <button class="btn btn-sm btn-block" data-act="chime">${chimeLabel(input.chimeVolume ?? 0.6)}</button>
       <div class="hint" style="text-align:center">
         ${
           input.replay
@@ -607,7 +636,7 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
       }
       rows.push(
         `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
-           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
            <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
            <span class="price">${status}</span>
          </button>`,
@@ -643,7 +672,7 @@ function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
       const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
       rows.push(
         `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
-           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${escapeHtml(o.label.slice(0, 1))}</span>
            <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
            <span class="price">${escapeHtml(o.note ?? '')}</span>
          </button>`,
@@ -894,7 +923,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                if (b.garrison) mods.push('可驻军');
                const tagLine = mods.length > 0 ? `${tag} · ${mods.join(' · ')}` : tag;
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
-                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
+                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${b.short}</span>
                  <span class="meta"><b>${b.name}</b><span>${unitStatLine(b)} · ${tagLine}</span></span>
                  <span class="price">${costLabel(price)}</span>
                </button>`;
@@ -925,7 +954,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
          }</div>
          <div class="recruit-list" style="margin-top:8px">
            <button class="recruit-btn" data-act="load" ${!mine || selectedUnit.acted || cargo.length >= cap ? 'disabled' : ''}>
-             <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">装</span>
+             <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">装</span>
              <span class="meta"><b>装载</b><span>把贴身的陆军接上船（占掉它这一回合）</span></span>
              <span class="price">—</span>
            </button>
@@ -933,7 +962,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
              cargo.length === 0
                ? ''
                : `<button class="recruit-btn" data-act="unload" ${!mine || selectedUnit.acted ? 'disabled' : ''}>
-                    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">卸</span>
+                    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">卸</span>
                     <span class="meta"><b>卸载</b><span>放到船边一格空地，下船后本回合不能再动</span></span>
                     <span class="price">—</span>
                   </button>`
@@ -990,6 +1019,21 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const hasMastery = (def.abilities ?? []).includes('element-mastery');
     const canShift = (def.cycle ?? []).length > 1;
 
+    /*
+     * 攻击/护甲这一格。
+     *
+     * 带修正明细时整组跨两列（明细写在自己那格下面），没有明细时就占半格——
+     * 不加这个判断的话，一个没吃过任何加成的民兵也会空出右边一整格，
+     * 看起来像"这里本该有个数字，没加载出来"。
+     */
+    const atkRow = `<div class="info-row">
+            <span>攻击 / 护甲</span>
+            <b>${eff.atk} / ${eff.armor}${baseNote}</b>
+          </div>`;
+    const atkCell = statModBlock
+      ? `<div class="stat-span">${atkRow}${statModBlock}</div>`
+      : atkRow;
+
     return `
       <div class="unit-head">
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
@@ -1006,26 +1050,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           : ''
       }
       <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
-      <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(s, selectedUnit)}</b></div>
       ${statusRow(selectedUnit)}
       ${stealthRow(s, selectedUnit, me)}
-      <div class="info-row">
-        <span>攻击 / 护甲</span>
-        <b>${eff.atk} / ${eff.armor}${baseNote}</b>
-      </div>
-      ${statModBlock}
-      ${
-        // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
-        // 只写"攻击 0"等于告诉玩家这个兵不会打人。
-        // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
-        // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
-        magicAtkOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
-              s,
-              selectedUnit,
-            )} / ${magicResOf(s, selectedUnit)}</b></div>`
-          : ''
-      }
       ${
         // 当前属性：至尊法师每回合自己切一次，而属性决定"打出去带什么状态、
         // 暗形态下魔法段还 ×1.5"。不显示就是在让人猜——那个词会变成一枚纯装饰的徽标。
@@ -1041,62 +1067,104 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             }`
           : ''
       }
-      <div class="info-row"><span>移动力</span><b>${
-        eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
-      }</b></div>
-      <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(s, selectedUnit)} / ${stats.vision}</b></div>
       ${
-        // 装甲素体：插槽与耗电必须写在属性卡上。
-        // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
-        // 以前只能点进装配坞里数按钮。
-        def.armorFrame
-          ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
+        /*
+         * 属性表改成两列（2026-11-11 组件层）。
+         *
+         * 原来一行一条、一条 22px，一个普通兵光属性就要吃掉 140px 的竖向空间，
+         * 而每一行右边那半截全是空白——13px 的字，一行只用掉 12 个字符宽。
+         * 侧栏本来就窄，玩家每次看兵都得把面板滚一屏才能看见「拆除」。
+         *
+         * 两列之后：标签在上、数值在下（`.stat-grid .info-row` 改成竖排）。
+         * 选竖排而不是"两个标签-数值并排"，是因为并排时每格只剩 ~150px，
+         * 「攻击 / 护甲 13 / 2（基础 1）」这种一定会折行，而折行后
+         * 标签和数值的归属就靠猜了；竖排则让数值独占一整格宽度。
+         *
+         * 顺序按"先看什么"重排：活着没有 → 跑得动吗 → 打得多疼 → 打多远 →
+         * 其它（魔法 / 多动 / 插槽 / 收入 / 溅射）。
+         * 攻击那一组要带上修正明细，所以整组跨两列，明细永远紧贴它的数字。
+         */
+        ''
+      }
+      <div class="stat-grid">
+        <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(
+          s,
+          selectedUnit,
+        )}</b></div>
+        <div class="info-row"><span>移动力</span><b>${
+          eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
+        }</b></div>
+        ${atkCell}
+        <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(
+          s,
+          selectedUnit,
+        )} / ${stats.vision}</b></div>
+        ${
+          // 魔法段单独一行：至尊法师的攻击是 0、伤害全在魔法上，
+          // 只写"攻击 0"等于告诉玩家这个兵不会打人。
+          // 魔攻/魔抗也走"单位现值"而不是兵种表：圣剑觉醒会往上叠 +8 魔攻 / +2 魔抗，
+          // 面板若只读 def，玩家会看到"技能说加了，数字没动"。
+          magicAtkOf(s, selectedUnit) > 0
+            ? `<div class="info-row"><span>魔法攻击 / 魔抗</span><b>${magicAtkOf(
+                s,
+                selectedUnit,
+              )} / ${magicResOf(s, selectedUnit)}</b></div>`
+            : ''
+        }
+        ${
+          // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
+          // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
+          attacksPerTurn(s, selectedUnit) > 1
+            ? `<div class="info-row"><span>攻击次数</span><b>还剩 ${attacksLeftOf(
+                s,
+                selectedUnit,
+              )} / ${attacksPerTurn(s, selectedUnit)} 次</b></div>`
+            : ''
+        }
+        ${
+          // 装甲素体：插槽与耗电必须写在属性卡上。
+          // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
+          // 以前只能点进装配坞里数按钮。
+          def.armorFrame
+            ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
              <div class="info-row"><span>耗电</span><b>${unitDraw(s, selectedUnit)} <small style="opacity:.65">（本方余量 ${
                energyBreakdown(s, selectedUnit.owner).headroom
              }）</small></b></div>`
-          : ''
-      }
+            : ''
+        }
+        ${
+          // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
+          // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
+          Object.keys(yields).length > 0
+            ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
+            : ''
+        }
+        ${
+          // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
+          // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
+          splashRadiusOf(s, selectedUnit) > 0
+            ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
+                s,
+                selectedUnit,
+              )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
+            : ''
+        }
+        ${
+          /*
+           * 反应射击用掉的是同一份次数，所以"敌人还没来，但我这一轮已经打完了"
+           * 这件事必须能看见。否则玩家会以为塔坏了——它上一次开火是在**对面的
+           * 回合**里发生的，自己回合从头到尾没点过任何按钮。
+           */
+          utype(s, selectedUnit.type).autoAttack &&
+          attacksLeftOf(s, selectedUnit) < attacksPerTurn(s, selectedUnit)
+            ? `<div class="info-row"><span>反应射击</span><b>本回合还剩 ${attacksLeftOf(
+                s,
+                selectedUnit,
+              )} / ${attacksPerTurn(s, selectedUnit)} 发</b></div>`
+            : ''
+        }
+      </div>
       ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
-      ${
-        // 条件看"产出表非空"而不是"金币 > 0"：只产灵石/粮食的单位以前整行都不出现。
-        // 施工中的单位 unitYield 返回空表，这一行自然消失，和以前的观感一致。
-        Object.keys(yields).length > 0
-          ? `<div class="info-row"><span>每回合收入</span><b>${costLabel(yields)}</b></div>`
-          : ''
-      }
-      ${
-        // 半径和比例都按"现在这个单位"算，不读兵种表：修真的境界、单位自带的
-        // custom.splashRatio 都会改这两项，界面必须和结算走同一个函数
-        splashRadiusOf(s, selectedUnit) > 0
-          ? `<div class="info-row"><span>溅射</span><b> ${splashRadiusOf(
-              s,
-              selectedUnit,
-            )} 格 · ${Math.round(splashRatioOf(selectedUnit) * 100)}%</b></div>`
-          : ''
-      }
-      ${
-        // 多动：一回合能打几次、现在还剩几次。剩的次数少于总数时才看得出
-        // "这个单位这回合还没打完"——所以永远显示"剩 / 共"，别只显示总数。
-        attacksPerTurn(s, selectedUnit) > 1
-          ? `<div class="info-row"><span>攻击次数</span><b>还剩 ${attacksLeftOf(
-              s,
-              selectedUnit,
-            )} / ${attacksPerTurn(s, selectedUnit)} 次</b></div>`
-          : ''
-      }
-      ${
-        /*
-         * 反应射击用掉的是同一份次数，所以"敌人还没来，但我这一轮已经打完了"
-         * 这件事必须能看见。否则玩家会以为塔坏了——它上一次开火是在**对面的
-         * 回合**里发生的，自己回合从头到尾没点过任何按钮。
-         */
-        utype(s, selectedUnit.type).autoAttack && attacksLeftOf(s, selectedUnit) < attacksPerTurn(s, selectedUnit)
-          ? `<div class="info-row"><span>反应射击</span><b>本回合还剩 ${attacksLeftOf(
-              s,
-              selectedUnit,
-            )} / ${attacksPerTurn(s, selectedUnit)} 发</b></div>`
-          : ''
-      }
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}
@@ -1140,7 +1208,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
   return `
     ${heroBlock}
-    <div class="card-title"${heroBlock ? ' style="margin-top:14px"' : ''}>操作</div>
+    <details class="card-fold"${input.opsOpen ? ' open' : ''}${heroBlock ? ' style="margin-top:14px"' : ''}>
+    <summary class="card-title fold-head">操作</summary>
     ${
       /*
        * 复盘：这一段原来照抄对局里的操作说明——"点自己的单位 → 蓝色格子是可移动范围"。
@@ -1166,6 +1235,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       按住修饰键则只对下一次点击生效。
     </div>`
     }
+    </details>
   `;
 }
 
@@ -1254,8 +1324,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   // 回血：只有"有驻军 + 城外没有敌人"才成立，所以要把当前状态说清楚，
   // 否则玩家只会看到血条不动而不知道为什么
-  const regen = cityRegenOf(s, city);
-  const besieged = s.units.some(
+  const regen = cityRegenOf(s, city);  const besieged = s.units.some(
     (u) => u.owner !== city.owner && distToCity(u, city) <= 1,
   );
   const regenText =
@@ -1343,14 +1412,23 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const eraFilter = input.recruitEra ?? ERA_ALL;
   const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
-  const grouped = (['combat', 'economy', 'builder'] as const)
+  const cats = (['combat', 'economy', 'builder'] as const).filter((cat) =>
+    shown.some((d) => d.category === cat),
+  );
+  const grouped = cats
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
-      if (items.length === 0) return '';
-      return `<div class="recruit-group">
-        <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${items.map(unitButton).join('')}</div>
-      </div>`;
+      /*
+       * 只有一组时不写组标题。
+       *
+       * 低时代城里能造的往往全是战斗单位，这时候「战斗单位」这个标题
+       * 只是把第一排按钮往下推了 16px——它没有区分任何东西。
+       */
+      const title =
+        cats.length > 1 ? `<div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>` : '';
+      return `<div class="recruit-group">${title}<div class="recruit-list">${items
+        .map(unitButton)
+        .join('')}</div></div>`;
     })
     .join('');
 
@@ -1365,7 +1443,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
           ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
         } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
            <span class="upgrade-main">
-             <b>升级到「${nextEra.name}」时代</b>
+             <b>升级到「${nextEra.name}」</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
            </span>
            <span class="price">${upgradeCost}</span>
@@ -1384,22 +1462,26 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
-    <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
-    <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-    <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
-    ${
-      /*
-       * 本方总收入单独一行，且只在**自己的城**上显示。
-       *
-       * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
-       * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
-       * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
-       */
-      mine
-        ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(incomeResOf(s, city.owner))}</b></div>`
-        : ''
-    }
-    <div class="info-row"><span>驻军休整</span><b>${regenText}</b></div>
+    <div class="stat-grid">
+      <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
+      <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
+      <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+      ${
+        /*
+         * 本方总收入单独一行，且只在**自己的城**上显示。
+         *
+         * 一是因为原来的"每回合收入"只写城市基础值：战争经济这类 modifyIncome
+         * 会改实际到账，两处对不上，玩家按城卡算账会差一截。
+         * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
+         */
+        mine
+          ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(
+              incomeResOf(s, city.owner),
+            )}</b></div>`
+          : ''
+      }
+      <div class="info-row stat-wide"><span>驻军休整</span><b>${regenText}</b></div>
+    </div>
     ${upgradeBlock}
     ${
       mine
@@ -1429,8 +1511,19 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                      : '城内已站满，先让部队挪一挪。'
              }
              ${
+               /*
+                * 升级解锁预览改成折叠的（2026-11-11）。
+                *
+                * 这一段原来是把所有解锁兵种用"、"连成一句话。青铜开局升一级能解锁
+                * 三四十种，于是侧栏底部糊上一整段两百多字的名单——把「结束回合」
+                * 和「认输」一路顶出屏幕，而它恰恰是"以后才用得上"的信息。
+                * 现在只留一行"解锁 N 种"，想看名单点开。
+                */
                locked.length > 0
-                 ? `<br />升级后可解锁：${locked.map((d) => d.name).join('、')}`
+                 ? `<details class="unlock-fold">
+                      <summary>升级后可解锁：${locked.length} 种兵种</summary>
+                      <div class="unlock-list">${locked.map((d) => d.name).join('、')}</div>
+                    </details>`
                  : ''
              }
            </div>`
@@ -1643,7 +1736,7 @@ function recruitButton(
     </span>`;
   return `<span class="recruit-wrap" data-hover-tip>${tip}
     <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
-    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
@@ -2059,15 +2152,15 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
-      <button class="btn btn-sm" data-act="manual">规则书</button>
-      <button class="btn btn-sm" data-act="feedback" title="拍下当前局面，报个 bug">反馈</button>
-      <button class="btn btn-sm" data-act="export" data-ref="export">导出对局</button>
       <!--
-        「兵种编辑器」「导入对局」搬去了开始页面（2026-11-04）：
-        这两件事都不是"在对局里做的事"——编辑兵种是先改配置再开局，
-        导入是换一局，把它们留在顶栏只会让一排对局操作里混进两个配置入口。
+        低频入口不再是顶栏按钮（2026-11-11 第二版）。
+
+        上一版把它们收进「更多」下拉，用户看了一眼说：不如干脆叫「设置」。
+        他是对的——"更多"是在给一堆杂项找词，而它们的共同点恰恰是
+        "不常改、想起来才改"：那就是设置。现在全部进设置弹窗，
+        铃声这种同样"想起来才调"的也一起搬进去，顶栏只留每回合都要看的东西。
       -->
-      <button class="btn btn-sm" data-act="new-game">首页</button>
+      <button class="btn btn-sm" data-act="settings" title="主题、声音、导出、规则书">设置</button>
     </div>
   `;
 }
@@ -2261,7 +2354,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     // 数据特性写在第二行：以前只写"耗能 N"，装甲板/系统槽装了什么都看不见
     return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
       title="${escapeHtml(moduleSpecText(m))}">
-      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">拆</span>
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">拆</span>
       <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}</span></span>
       <span class="price">+${Math.floor(m.cost / 2)}</span>
     </button>`;
@@ -2274,7 +2367,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
       const chk = canMount(s, u, m.id);
       const why = chk.ok ? '' : (chk.reason ?? '');
       return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(why)}">
-        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
+        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
         <span class="meta"><b>${m.name}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}${
           why ? ` · <b style="color:#b4463c">${escapeHtml(why)}</b>` : ''
         }</span></span>
@@ -2290,7 +2383,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     return `<button class="recruit-btn" data-act="${act}" data-mod="${id}"${target ? ` data-target="${target}"` : ''} ${
       chk.ok && canAct ? '' : 'disabled'
     } title="${escapeHtml(why)}">
-      <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">用</span>
+      <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:var(--fs-sm)">用</span>
       <span class="meta"><b>${label}</b><span>${escapeHtml(why || sub)}</span></span>
       <span class="price">${price}</span>
     </button>`;
@@ -2326,7 +2419,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
   const rechargeRow = `<button class="recruit-btn" data-act="recharge" ${rcChk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(
     rcChk.ok ? '' : (rcChk.reason ?? ''),
   )}">
-    <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">补</span>
+    <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:var(--fs-sm)">补</span>
     <span class="meta"><b>整备</b><span>${escapeHtml(
       rcChk.ok ? `补满充能与额外生命（${rc.devices} 件设备 · 额外生命 +${rc.hpGap}）` : (rcChk.reason ?? ''),
     )}</span></span>

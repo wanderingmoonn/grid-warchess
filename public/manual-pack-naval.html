@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 海战扩展</title>
 <style>
   :root {
@@ -55,7 +61,7 @@
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -68,7 +74,7 @@
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -81,7 +87,7 @@
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -112,7 +118,7 @@
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -124,7 +130,7 @@
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -142,7 +148,7 @@
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -168,7 +174,7 @@
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -177,14 +183,71 @@
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -217,7 +280,7 @@
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -252,7 +315,7 @@
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -260,7 +323,7 @@
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
@@ -367,7 +430,7 @@
       <p>按包分段（灰色的那一行），段内按时代、造价排序。同段之内价钱越往下越贵；
         跨段比较时请对照"来源"那一列。</p>
       
-    <div class="scroll-x">
+    <div class="scroll-x tall">
       <table class="wide">
         <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
         <tbody><tr class="grp" id="p-naval"><td colspan="12">海军 · 41 个</td></tr><tr data-unit="nv_galley"><td class="name">桨帆船</td><td class="glyph">桨</td><td class="src">海军</td><td class="num">2</td><td class="num">110</td><td class="num">18</td><td class="num">4</td><td class="num">52</td><td class="num">5</td><td class="num">2</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="nv-dock"><td class="name">船坞</td><td class="glyph">坞</td><td class="src">海军</td><td class="num">2</td><td class="num">120</td><td class="num">0</td><td class="num">4</td><td class="num">80</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵（造价 95%）</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="nv_dromon"><td class="name">德罗蒙战舰</td><td class="glyph">德</td><td class="src">海军</td><td class="num">2</td><td class="num">132</td><td class="num">19</td><td class="num">5</td><td class="num">60</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="nv_fireship"><td class="name">火船</td><td class="glyph">火</td><td class="src">海军</td><td class="num">3</td><td class="num">105</td><td class="num">40</td><td class="num">2</td><td class="num">34</td><td class="num">6</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-kamikaze">自爆</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="nv_sailing_frigate"><td class="name">风帆巡航舰</td><td class="glyph">帆</td><td class="src">海军</td><td class="num">3</td><td class="num">175</td><td class="num">30</td><td class="num">5</td><td class="num">62</td><td class="num">6</td><td class="num">3</td><td class="num">5</td><td class="traits">—</td></tr><tr data-unit="nv_carrack"><td class="name">卡拉克帆船</td><td class="glyph">卡</td><td class="src">海军</td><td class="num">3</td><td class="num">210</td><td class="num">22</td><td class="num">6</td><td class="num">84</td><td class="num">4</td><td class="num">2</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-carry">装载 4</a></td></tr><tr data-unit="nv_treasure_ship"><td class="name">宝船</td><td class="glyph">宝</td><td class="src">海军</td><td class="num">3</td><td class="num">235</td><td class="num">18</td><td class="num">7</td><td class="num">135</td><td class="num">3</td><td class="num">2</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-carry">装载 4</a></td></tr><tr data-unit="nv_galleon"><td class="name">盖伦帆船</td><td class="glyph">盖</td><td class="src">海军</td><td class="num">3</td><td class="num">240</td><td class="num">33</td><td class="num">8</td><td class="num">82</td><td class="num">4</td><td class="num">3</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-carry">装载 3</a></td></tr><tr data-unit="nv_turtle_ship"><td class="name">龟船</td><td class="glyph">龟</td><td class="src">海军</td><td class="num">3</td><td class="num">245</td><td class="num">34</td><td class="num">10</td><td class="num">88</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="nv_torpedo_boat"><td class="name">鱼雷艇</td><td class="glyph">雷</td><td class="src">海军</td><td class="num">4</td><td class="num">150</td><td class="num">38</td><td class="num">3</td><td class="num">38</td><td class="num">6</td><td class="num">2</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="nv_minesweeper"><td class="name">扫雷舰</td><td class="glyph">扫</td><td class="src">海军</td><td class="num">4</td><td class="num">220</td><td class="num">22</td><td class="num">6</td><td class="num">76</td><td class="num">4</td><td class="num">3</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-nv-sweep">扫雷</a> · <a class="ref" href="#t-ab-nv-asw">反潜</a></td></tr><tr data-unit="nv_minelayer"><td class="name">布雷舰</td><td class="glyph">布</td><td class="src">海军</td><td class="num">4</td><td class="num">240</td><td class="num">8</td><td class="num">8</td><td class="num">110</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-nv-lay-mines">布雷</a></td></tr><tr data-unit="nv-shipyard"><td class="name">造船厂</td><td class="glyph">厂</td><td class="src">海军</td><td class="num">4</td><td class="num">260</td><td class="num">0</td><td class="num">6</td><td class="num">130</td><td class="num">—</td><td class="num">0</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-produce">产兵（造价 90%）</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="nv_submarine"><td class="name">潜艇</td><td class="glyph">艇</td><td class="src">海军</td><td class="num">4</td><td class="num">300</td><td class="num">62</td><td class="num">6</td><td class="num">70</td><td class="num">5</td><td class="num">3</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-nv-submerge">潜航</a></td></tr><tr data-unit="nv_transport"><td class="name">运输舰</td><td class="glyph">运</td><td class="src">海军</td><td class="num">4</td><td class="num">300</td><td class="num">6</td><td class="num">8</td><td class="num">110</td><td class="num">5</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-carry">装载 5</a></td></tr><tr data-unit="nv_frigate"><td class="name">护卫舰</td><td class="glyph">护</td><td class="src">海军</td><td class="num">4</td><td class="num">310</td><td class="num">30×2</td><td class="num">8</td><td class="num">78</td><td class="num">6</td><td class="num">4</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="nv_monitor"><td class="name">浅水重炮舰</td><td class="glyph">浅</td><td class="src">海军</td><td class="num">4</td><td class="num">330</td><td class="num">50</td><td class="num">10</td><td class="num">82</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="nv_landing_ship"><td class="name">登陆舰</td><td class="glyph">登</td><td class="src">海军</td><td class="num">5</td><td class="num">210</td><td class="num">5</td><td class="num">6</td><td class="num">100</td><td class="num">4</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-carry">装载 3</a></td></tr><tr data-unit="nv_cruiser"><td class="name">装甲巡洋舰</td><td class="glyph">巡</td><td class="src">海军</td><td class="num">5</td><td class="num">400</td><td class="num">56</td><td class="num">12</td><td class="num">100</td><td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a></td></tr><tr data-unit="nv_repair_ship"><td class="name">维修舰</td><td class="glyph">修</td><td class="src">海军</td><td class="num">5</td><td class="num">420</td><td class="num">0</td><td class="num">10</td><td class="num">130</td><td class="num">4</td><td class="num">0</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-nv-fleet-repair">海上补给</a></td></tr><tr data-unit="nv_fleet_sub"><td class="name">远洋潜艇</td><td class="glyph">潜</td><td class="src">海军</td><td class="num">5</td><td class="num">420</td><td class="num">78</td><td class="num">8</td><td class="num">78</td><td class="num">5</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-nv-submerge">潜航</a></td></tr><tr data-unit="nv_light_cruiser"><td class="name">轻巡洋舰</td><td class="glyph">巡</td><td class="src">海军</td><td class="num">5</td><td class="num">430</td><td class="num">58</td><td class="num">11</td><td class="num">100</td><td class="num">6</td><td class="num">5</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="nv_sub_tender"><td class="name">潜母</td><td class="glyph">母</td><td class="src">海军</td><td class="num">5</td><td class="num">460</td><td class="num">0</td><td class="num">10</td><td class="num">140</td><td class="num">4</td><td class="num">0</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-nv-sub-tender">潜母</a></td></tr><tr data-unit="nv_heavy_cruiser"><td class="name">重巡洋舰</td><td class="glyph">重</td><td class="src">海军</td><td class="num">5</td><td class="num">480</td><td class="num">70</td><td class="num">12</td><td class="num">110</td><td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="nv_light_carrier"><td class="name">轻型航空母舰</td><td class="glyph">轻</td><td class="src">海军</td><td class="num">5</td><td class="num">640</td><td class="num">20</td><td class="num">10</td><td class="num">150</td><td class="num">5</td><td class="num">3</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-nv-aa-cover">区域防空</a> · <a class="ref" href="#t-carry">甲板 2</a></td></tr><tr data-unit="nv_battlecruiser"><td class="name">战列巡洋舰</td><td class="glyph">巡</td><td class="src">海军</td><td class="num">5</td><td class="num">660</td><td class="num">92</td><td class="num">12</td><td class="num">140</td><td class="num">6</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a></td></tr><tr data-unit="nv_battleship"><td class="name">战列舰</td><td class="glyph">战</td><td class="src">海军</td><td class="num">5</td><td class="num">780</td><td class="num">95</td><td class="num">18</td><td class="num">180</td><td class="num">4</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-siege-master">破城</a> · <a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a> · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="nv_aviation_battleship"><td class="name">航空战列舰</td><td class="glyph">航</td><td class="src">海军</td><td class="num">5</td><td class="num">860</td><td class="num">70</td><td class="num">16</td><td class="num">165</td><td class="num">4</td><td class="num">5</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-carry">甲板 1</a></td></tr><tr data-unit="nv_fleet_carrier"><td class="name">舰队航母</td><td class="glyph">航</td><td class="src">海军</td><td class="num">5</td><td class="num">950</td><td class="num">22</td><td class="num">12</td><td class="num">219</td><td class="num">4</td><td class="num">3</td><td class="num">9</td><td class="traits"><a class="ref" href="#t-ab-nv-aa-cover">区域防空</a> · <a class="ref" href="#t-carry">甲板 3</a></td></tr><tr data-unit="nv_usv"><td class="name">无人艇</td><td class="glyph">无</td><td class="src">海军</td><td class="num">6</td><td class="num">240</td><td class="num">26</td><td class="num">2</td><td class="num">26</td><td class="num">8</td><td class="num">5</td><td class="num">4</td><td class="traits">—</td></tr><tr data-unit="nv_missile_boat"><td class="name">导弹快艇</td><td class="glyph">导</td><td class="src">海军</td><td class="num">6</td><td class="num">400</td><td class="num">58</td><td class="num">5</td><td class="num">58</td><td class="num">7</td><td class="num">5</td><td class="num">6</td><td class="traits">—</td></tr><tr data-unit="nv_oiler"><td class="name">舰队补给舰</td><td class="glyph">补</td><td class="src">海军</td><td class="num">6</td><td class="num">430</td><td class="num">0</td><td class="num">10</td><td class="num">130</td><td class="num">4</td><td class="num">0</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-nv-fleet-oiler">远洋补给</a></td></tr><tr data-unit="nv-naval-yard"><td class="name">海军船台</td><td class="glyph">台</td><td class="src">海军</td><td class="num">6</td><td class="num">460</td><td class="num">0</td><td class="num">8</td><td class="num">190</td><td class="num">—</td><td class="num">0</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-produce">产兵（2 回合一批 · 造价 85%）</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="nv_oil_platform"><td class="name">海上钻井平台</td><td class="glyph">井</td><td class="src">海军</td><td class="num">6</td><td class="num">480</td><td class="num">0</td><td class="num">6</td><td class="num">90</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 深水 +50</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="nv_lcs"><td class="name">濒海战斗舰</td><td class="glyph">濒</td><td class="src">海军</td><td class="num">6</td><td class="num">520</td><td class="num">56</td><td class="num">10</td><td class="num">100</td><td class="num">7</td><td class="num">6</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="nv_ssk"><td class="name">常规潜艇</td><td class="glyph">潜</td><td class="src">海军</td><td class="num">6</td><td class="num">520</td><td class="num">74</td><td class="num">7</td><td class="num">72</td><td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-nv-submerge">潜航</a></td></tr><tr data-unit="nv_amphib"><td class="name">两栖攻击舰</td><td class="glyph">两</td><td class="src">海军</td><td class="num">6</td><td class="num">760</td><td class="num">22</td><td class="num">12</td><td class="num">165</td><td class="num">5</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-nv-aa-cover">区域防空</a> · <a class="ref" href="#t-carry">装载 4</a> · <a class="ref" href="#t-carry">甲板 2</a></td></tr><tr data-unit="nv_aegis"><td class="name">防空巡洋舰</td><td class="glyph">防</td><td class="src">海军</td><td class="num">6</td><td class="num">880</td><td class="num">72</td><td class="num">15</td><td class="num">150</td><td class="num">5</td><td class="num">7</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-nv-aa-cover">区域防空</a> · <a class="ref" href="#t-ab-armor-pierce">破甲</a></td></tr><tr data-unit="nv_attack_sub"><td class="name">攻击核潜艇</td><td class="glyph">潜</td><td class="src">海军</td><td class="num">6</td><td class="num">900</td><td class="num">92</td><td class="num">9</td><td class="num">100</td><td class="num">5</td><td class="num">5</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-nv-submerge">潜航</a></td></tr><tr data-unit="nv_large_cruiser"><td class="name">超巡</td><td class="glyph">超</td><td class="src">海军</td><td class="num">6</td><td class="num">1050</td><td class="num">85</td><td class="num">17</td><td class="num">175</td><td class="num">5</td><td class="num">7</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-armor-pierce">破甲</a> · <a class="ref" href="#t-ab-nv-shore-bombard">岸轰</a></td></tr><tr data-unit="nv_carrier"><td class="name">航空母舰</td><td class="glyph">航</td><td class="src">海军</td><td class="num">6</td><td class="num">1350</td><td class="num">26</td><td class="num">15</td><td class="num">299</td><td class="num">3</td><td class="num">4</td><td class="num">10</td><td class="traits"><a class="ref" href="#t-ab-nv-fleet-command">旗舰</a> · <a class="ref" href="#t-ab-nv-aa-cover">区域防空</a> · <a class="ref" href="#t-carry">甲板 4</a></td></tr></tbody>

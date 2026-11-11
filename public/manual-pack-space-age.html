@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 太空时代</title>
 <style>
   :root {
@@ -55,7 +61,7 @@
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -68,7 +74,7 @@
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -81,7 +87,7 @@
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -112,7 +118,7 @@
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -124,7 +130,7 @@
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -142,7 +148,7 @@
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -168,7 +174,7 @@
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -177,14 +183,71 @@
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -217,7 +280,7 @@
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -252,7 +315,7 @@
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -260,7 +323,7 @@
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
