@@ -438,7 +438,11 @@ function panelHtml(input: PanelInput): string {
 
     ${renderReport(s, input.report)}
 
-    <div class="card card-detail">${detail}</div>
+    <div class="card card-detail${
+      input.selectedUnit || input.selectedCityId || input.selectedCampId || input.selectedTile
+        ? ' card-detail-live'
+        : ''
+    }">${detail}</div>
 
     <div class="card">
       <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
@@ -448,6 +452,13 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     <div class="side-footer">
+      <!--
+        主按钮单独包一层（2026-11-11）。
+        手机上是"棋盘在上、侧栏在下一整条"，侧栏会长到两三屏（产兵表 + 战报），
+        「结束行动」每回合必点却排在最后——于是每回合都要往回滑两屏。
+        窄屏时这一层改成贴底固定，认输和提示仍然随内容走（它们不该常驻遮挡）。
+      -->
+      <div class="footer-main">
       ${
         /*
          * 指挥官模式：这里原来还是「结束行动，交给对方」。
@@ -488,6 +499,7 @@ function panelHtml(input: PanelInput): string {
                }
              </button>`
       }
+      </div>
       <div class="side-actions"${input.replay ? ' hidden' : ''}>
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}

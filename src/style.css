@@ -2381,6 +2381,16 @@ body {
   padding-top: 4px;
 }
 
+/* 只装主按钮（结束行动 / 提交计划）的那一层。
+   桌面它只是个普通容器；手机上它会变成贴底固定的一条（见文件末尾的手机适配）。 */
+.footer-main {
+  display: flex;
+}
+
+.footer-main > .btn {
+  flex: 1;
+}
+
 /* 结束回合下面那排：撤回 / 认输 */
 .side-actions {
   display: flex;
@@ -6790,9 +6800,86 @@ a.btn {
  * 手机是"棋盘在上、侧栏在下一整条"，顺序就变成了"棋盘 → 席位 → 你点的那个东西"。
  * 点完一座城要先划过一张席位卡才看得见能造什么，而那张卡上的数字这一秒并不需要。
  * 详情卡用 order 提上去，桌面的顺序一点不变（同一条规则只在窄屏生效）。
+ *
+ * 只对**真的选中了东西**的那张生效（`card-detail-live`）。什么都不选时，
+ * 详情卡里只有「操作」折叠行和英雄技能，把它提到席位栏前面反而更怪：
+ * 一眼看到的是一行"操作"，而不是"轮到谁、双方还有多少钱"。
  */
 @media (max-width: 920px) {
-  .card-detail {
+  .card-detail-live {
     order: -1;
+  }
+}
+
+/*
+ * ── 手机：把「结束行动」钉在屏幕底部 ──────────────────────────────────────
+ *
+ * 手机上侧栏是棋盘下面的一整条，会长到两三屏（席位 + 详情 + 产兵表 + 战报）。
+ * 而「结束行动」是**每回合必点一次**的按钮，它排在最后——于是每回合都要
+ * 往回滑两屏。滑两次还能忍，一局几十回合就是几十次。
+ *
+ * 只固定主按钮那一层（.footer-main）：认输和底部那句提示仍随内容滚，
+ * 它们不该常驻遮挡棋盘。z-index 取 45——高于棋盘浮件（缩放条 60 反而在它上面，
+ * 靠位置错开），低于交接遮罩（50）和所有弹窗（70+），免得盖住必须读的东西。
+ */
+@media (max-width: 920px) {
+  .footer-main {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 18px rgba(40, 35, 25, 0.1);
+  }
+
+  /* 底栏把内容挡住的那一截：不给够，滚到底时最后一行永远差半行 */
+  .side {
+    padding-bottom: 84px;
+  }
+
+  /* 缩放条并进底栏的左侧。
+     原来它是相对**视口**钉在右下角的，不管怎么摆都会盖住棋盘最右下那几格
+     （那几格里常常正好站着兵）。底栏已经是常驻的了，把它并进去：
+     左边三颗缩放按钮、右边一颗结束行动，谁都不遮挡。 */
+  .zoom-bar {
+    position: fixed;
+    left: 10px;
+    right: auto;
+    bottom: calc(9px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .zoom-bar .zoom-btn {
+    height: 34px;
+    min-width: 32px;
+    font-size: var(--fs-body);
+  }
+
+  /* 给左边那组缩放按钮让位：底栏本身还是整条，只是主按钮不再从最左边开始 */
+  .footer-main {
+    padding-left: 132px;
+  }
+
+  .chat-dock {
+    bottom: calc(114px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .toast {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/*
+ * 手机：「撤回一步」后面那句解释让位。
+ *
+ * "同一回合内可退，结束回合后就不能了"是**看懂一次就够**的说明，
+ * 却常驻占掉撤回按钮右边一大半行宽。手机上这张卡（席位栏）每屏都在，
+ * 而那一秒玩家要看的是双方金币和城数。按钮本身有 title，长按能看。
+ */
+@media (max-width: 560px) {
+  .undo-row .hint {
+    display: none;
   }
 }

@@ -268,11 +268,17 @@ await evaluate(`(() => {
 await sleep(600);
 await shot(`07-city-${tag}`);
 
-// 侧栏底部：产兵表尾巴 + 战报卡 + 结束回合。桌面滚的是 #side，手机滚的是整页。
+// 侧栏底部：产兵表尾巴 + 战报卡 + 结束回合。
+// 滚的是谁取决于断点：桌面是 #side 自己滚，手机是 .main（整条竖着滚）。
 await evaluate(`(() => {
-  const s = document.querySelector('#side');
-  if (s && s.scrollHeight > s.clientHeight) s.scrollTop = s.scrollHeight;
-  else window.scrollTo(0, document.documentElement.scrollHeight);
+  const cands = [document.querySelector('#side'), document.querySelector('.main')];
+  for (const el of cands) {
+    if (el && el.scrollHeight > el.clientHeight + 4) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+  }
+  window.scrollTo(0, document.documentElement.scrollHeight);
 })()`);
 await sleep(350);
 await shot(`07b-city-end-${tag}`);
