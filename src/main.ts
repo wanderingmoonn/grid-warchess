@@ -117,7 +117,7 @@ import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
-import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
+import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
@@ -171,7 +171,24 @@ import {
 } from './net/presence.ts';
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
+import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { settingsHtml } from './ui/settings.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
+
+/*
+ * 主题要在**任何渲染之前**落地。
+ *
+ * `applyUiTheme` 只改 `<html data-ui>` / `data-motion>` 两个属性，不碰任何规则；
+ * 但必须抢在第一帧之前——放在模块末尾（我第一版就放那儿了）会先按 legacy 画一帧
+ * 再跳成 modern，那一闪比不换主题还难受。所以放在 import 之后、所有初始化之前。
+ *
+ * 切换入口（暂不进设置页）：
+ *   · 地址栏 `?ui=modern`（对比用，优先级最高）；
+ *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
+ */
+applyUiTheme();
+installUiConsole();
+
 
 /**
  * 非空时表示某个英雄正在等玩家选技能目标。
@@ -266,6 +283,25 @@ const boardListEl = pick<HTMLElement>(appEl, '#board-list');
  */
 const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
+
+/*
+ * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
+ *
+ * `<details>` 的 `toggle` 事件**不冒泡**，所以只能用捕获阶段挂在容器上。
+ * 面板每次重建都会按这个标记重新加 `open`，收起/展开才不会一刷新就弹回去。
+ */
+sideEl.addEventListener(
+  'toggle',
+  (e) => {
+    const el = e.target as HTMLElement | null;
+    if (!el || !el.classList.contains('card-fold')) return;
+    const open = (el as HTMLDetailsElement).open;
+    // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
+    if (el.dataset.fold === 'log') logOpen = open;
+    else opsOpen = open;
+  },
+  true,
+);
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
 const replayEl = pick<HTMLElement>(appEl, '#replay');
@@ -997,6 +1033,16 @@ function myTurn(): boolean {
  * 这里再算一遍纯属白烧——`playerView` 每帧 1.4ms，32×32 上占单帧的 7%。
  * 单独重画面板的那条路没有，就现算。
  */
+/**
+ * 侧栏折叠卡是否展开（「操作」「战报」各一个）。
+ *
+ * 面板是**整块重建**的（每回合、每次金币变动都会重写 innerHTML），`<details>`
+ * 的 open 状态一重建就没了。所以状态存在这里，渲染时带上去；`<details>` 的
+ * toggle 不冒泡，监听挂在 sideEl 上用捕获。
+ */
+let opsOpen = false;
+let logOpen = false;
+
 function panelInput(known?: PlayerView): PanelInput {
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
@@ -1008,6 +1054,8 @@ function panelInput(known?: PlayerView): PanelInput {
     selectedCityId,
     selectedCampId,
     selectedTile,
+    opsOpen,
+    logOpen,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,
@@ -2896,7 +2944,9 @@ function bindHoverTips(): void {
   // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
   appEl.addEventListener('scroll', hideHoverTip, true);
   document.addEventListener('visibilitychange', hideHoverTip);
-  appEl.addEventListener('click', hideHoverTip, true);
+
+
+appEl.addEventListener('click', hideHoverTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -3954,11 +4004,12 @@ function handleAction(act: string, el: HTMLElement): void {
    *
    * 不能只靠 `dispatch` 那道闸：侧栏里有一半按钮根本不走 dispatch
    * （撤回直接弹 undoStack、联机直接换 state、参谋部直接排队列）。
-   * 逐个去堵必然漏，所以在这儿统一拦——只放行三件和"改这一局"无关的事：
-   * 规则书、反馈、回首页。
+   * 逐个去堵必然漏，所以在这儿统一拦——只放行和"改这一局"无关的事：
+   * 规则书、反馈、回首页，以及装这三件的「设置」弹窗本身
+   * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game';
+    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
@@ -4028,13 +4079,11 @@ function handleAction(act: string, el: HTMLElement): void {
       undoLast();
       return;
 
-    case 'chime':
-      chimeVolume = nextChimeVolume(chimeVolume);
-      saveChimeVolume(chimeVolume);
-      // 点一下顺手试听当前档位（音量 0 时 playChime 自己会跳过）
-      playChime(chimeVolume);
-      render();
-      return;
+    /*
+     * 顶栏那颗"铃声：60% → 80% → 0 → 60%"的循环按钮已经拆了（2026-11-11），
+     * 音量改在「设置」里用滑块调，那才是"调一个连续量"该有的样子。
+     * 原来那个 case 留在这儿只会变成第二条没人管的设置路径。
+     */
 
     case 'surrender': {
       // 认输是不可逆的，必须问一句
@@ -4367,6 +4416,11 @@ function handleAction(act: string, el: HTMLElement): void {
       aiSpeed = (aiSpeed + 1) % AI_SPEED_MS.length;
       render();
       toast(`AI 速度：${AI_SPEED_NAME[aiSpeed]}`);
+      return;
+    }
+
+    case 'settings': {
+      openSettings();
       return;
     }
 
@@ -8082,3 +8136,93 @@ if (drift) {
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
 if (forceHome || invited.length < 4) showTitle();
+
+/* ── 设置弹窗 ────────────────────────────────────────────────────────────
+ *
+ * 顶栏只留每回合都要看的东西；"想起来才改"的都进这里：主题、动效、铃声、
+ * 导出、规则书、反馈、回首页。
+ *
+ * 为什么自己建节点而不进 render()：面板每帧重建，而弹窗是**短暂**的、带输入
+ * 焦点（滑块）——扔进渲染循环会被反复冲掉，拖动滑块的手感直接废掉。
+ */
+let settingsMask: HTMLElement | null = null;
+
+function closeSettings(): void {
+  settingsMask?.remove();
+  settingsMask = null;
+}
+
+function openSettings(): void {
+  closeSettings();
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  settingsMask = mask;
+
+  const paint = (): void => {
+    mask.innerHTML = settingsHtml({
+      theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
+      reducedMotion: document.documentElement.dataset.motion === 'reduced',
+      chime: chimeVolume,
+      chimeText: chimeLabel(chimeVolume),
+      replay: replay !== null,
+    });
+  };
+  paint();
+  document.body.append(mask);
+
+  mask.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    // 点遮罩空白处 = 关闭（和规则书那些弹窗一个手势）
+    if (t === mask) {
+      closeSettings();
+      return;
+    }
+    const el = t.closest<HTMLElement>('[data-act]');
+    const act = el?.dataset.act;
+    if (!act) return;
+
+    if (act === 'settings-close') {
+      closeSettings();
+      return;
+    }
+    if (act === 'set-theme') {
+      setUiMode(el!.dataset.theme === 'modern' ? 'modern' : 'legacy');
+      paint();
+      return;
+    }
+    if (act === 'set-motion') {
+      setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'chime-test') {
+      playChime(chimeVolume);
+      return;
+    }
+
+    /*
+     * 其余动作（导出 / 回首页 / 规则书 / 反馈）走**主分发**，不在这里重写一遍。
+     * 造一个带同样 data-act 的替身点一下：多一条实现就多一条会跑偏的地方。
+     */
+    closeSettings();
+    const proxy = document.createElement('button');
+    proxy.dataset.act = act;
+    appEl.append(proxy);
+    proxy.click();
+    proxy.remove();
+  });
+
+  // 滑块：拖动时只改音量与那一行文字，不整块重画（重画会丢焦点、断手感）
+  mask.addEventListener('input', (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.dataset.act !== 'chime-range') return;
+    chimeVolume = Math.min(1, Math.max(0, Number(t.value) / 100));
+    saveChimeVolume(chimeVolume);
+    const value = mask.querySelector('.set-value');
+    if (value) value.textContent = chimeLabel(chimeVolume);
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settingsMask) closeSettings();
+});
