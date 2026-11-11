@@ -540,7 +540,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     for (let i = 0; i < s.w * s.h; i++) {
       const x = i % s.w;
       const y = (i - x) / s.w;
-      shell.push(`<div class="tile" data-x="${x}" data-y="${y}"></div>`);
+      /*
+       * 纹理错位（--jx / --jy）。
+       *
+       * 森林、丘陵这些纹理是**按格平铺**的（每格一个元素，背景只能各自重复），
+       * 三棵固定位置的树冠会在每一格同一个角落出现，连成片就是一张壁纸。
+       * 按坐标给一点偏移，同色地形连起来才像"一片林子"而不是"一堆同样的砖"。
+       * 这两项整局不变，所以和 data-x/data-y 一起在重建时写死。
+       */
+      const jx = ((x * 37 + y * 61) % 7) * 3;
+      const jy = ((x * 53 + y * 17) % 7) * 3;
+      shell.push(
+        `<div class="tile" data-x="${x}" data-y="${y}" style="--jx:${jx}px;--jy:${jy}px"></div>`,
+      );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
     // 重建这条路上层里本来就没有节点，跳过判断没有意义
