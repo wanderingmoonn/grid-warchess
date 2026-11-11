@@ -3039,7 +3039,7 @@ check('军营面板列出兵种，并写清自己是哪一档', () => {
   assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
   assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
   assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
-  assert.ok(html.includes('自动开火'), '军营会替自己开火');
+  assert.ok(html.includes('反应射击'), '军营会替自己开火（敌人踏进射程就打）');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
   assert.equal(host.querySelector('[data-type="spearman"]'), null, '一级营根本不该列二级兵');

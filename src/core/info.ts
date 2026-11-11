@@ -426,7 +426,10 @@ export function describeUnit(
   }
 
   if (def.autoAttack) {
-    lines.push(`每回合自动开火，射程 ${def.range} 格，优先打最近且血最少的敌人`);
+    lines.push(
+      `敌人踏进 ${def.range} 格射程时立即开火（反应射击），先打刚进来的那一个，` +
+        '其次按"最近、血最少"选目标；打出去的发数和手动开火共用同一份次数',
+    );
   }
 
   if (def.move === 0) {

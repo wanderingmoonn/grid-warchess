@@ -308,6 +308,7 @@ import {
   orderedStatuses,
   abilityApi,
   refreshMemory,
+  reactionFireOn,
   registerSkillEffect,
   registerStatus,
   SKILL_EFFECTS,
@@ -2190,63 +2191,154 @@ test('敌方设施不能站，得先打掉', () => {
   assert.equal(reachableTiles(built.state, m).has(idx(built.state, 6, 5)), false, '敌方塔不该是落点');
 });
 
-test('建筑在敌方回合开始时自动开火', () => {
+test('反应射击：敌人踏进射程那一刻就开火', () => {
   const s = fresh();
-  // 直接摆一座塔：这条测开火节奏，施工进度由「箭塔」那条负责。
-  // 建造点数上线之后，塔不再是一个 BUILD 就立起来的。
+  // 直接摆一座塔：这条测开火时机，施工进度由「箭塔」那条负责。
   const tower = place2(s, 'A', 'tower', 6, 5);
-  const enemy = s.units.find((u) => u.owner === 'B');
-  assert.ok(tower && enemy);
+  // 站在 4 格外（塔的射程是 3），这一步走进去才算"进入射程"
+  const foe = place2(s, 'B', 'militia', 6, 9);
+  for (const y of [6, 7, 8, 9]) s.tiles[idx(s, 6, y)].terrain = 'plain';
+  const hpBefore = foe.hp;
 
-  enemy.x = tower.x + 1;
-  enemy.y = tower.y;
-  s.tiles[idx(s, enemy.x, enemy.y)].terrain = 'plain';
-  const hpBefore = enemy.hp;
-
-  const r = applyAction(s, { type: 'END_TURN' });
-  assert.ok(r.ok);
-  const after = r.state.units.find((u) => u.id === enemy.id);
-  assert.ok(after, '一炮打不死，应该还活着');
-  assert.ok((after?.hp ?? 0) < hpBefore, '应该被塔打掉血');
+  s.current = 'B';
+  const r = applyAction(s, { type: 'MOVE', unitId: foe.id, x: 6, y: 7 });
+  assert.ok(r.ok, r.reason);
+  const after = r.state.units.find((u) => u.id === foe.id);
+  assert.ok(after && after.hp < hpBefore, '走进塔的射程要当场挨一炮，而不是等到回合末');
 });
 
-test('建筑手动开过火，同一回合不再自动补一炮', () => {
+test('反应射击用掉的是同一份攻击次数：手动打光之后，本回合不能再补一炮', () => {
   const s = fresh();
   const tower = place2(s, 'A', 'tower', 6, 5);
-  const enemy = s.units.find((u) => u.owner === 'B');
-  assert.ok(tower && enemy);
+  const bait = place2(s, 'B', 'militia', 6, 6); // 挨手动那一炮的
+  const rusher = place2(s, 'B', 'militia', 6, 9); // 待会儿冲进来的
+  for (const y of [6, 7, 8, 9]) s.tiles[idx(s, 6, y)].terrain = 'plain';
+  // 血给厚一点：一炮打不死，才分得清"打了几段"
+  bait.hp = 999;
+  rusher.hp = 999;
 
-  enemy.x = tower.x + 1;
-  enemy.y = tower.y;
-  s.tiles[idx(s, enemy.x, enemy.y)].terrain = 'plain';
-  // 血给厚一点：一炮打不死，才数得清"一共打了几段"
-  enemy.hp = 500;
+  // A 回合：塔手动打一炮，这一回合的次数就用光了
+  const shot = applyAction(s, { type: 'ATTACK', unitId: tower.id, targetId: bait.id });
+  assert.ok(shot.ok, shot.reason);
 
-  // 第 1 段：塔刚立起来那回合不能手动（acted），由自动开火代劳
-  const endA = applyAction(s, { type: 'END_TURN' });
-  if (!endA.ok) assert.fail(endA.reason);
-  const afterAuto = endA.state.units.find((u) => u.id === enemy.id);
-  assert.ok(afterAuto && afterAuto.hp < 500, '自动开火这一段应该成立');
-
-  // 回到 A 的回合，塔重置完就能手动了
-  const endB = applyAction(endA.state, { type: 'END_TURN' });
-  if (!endB.ok) assert.fail(endB.reason);
-  const tw = endB.state.units.find((u) => u.id === tower.id);
-  const foe = endB.state.units.find((u) => u.id === enemy.id);
-  assert.ok(tw && foe);
-  const beforeShot = foe.hp;
-  const shot = applyAction(endB.state, { type: 'ATTACK', unitId: tw.id, targetId: foe.id });
-  if (!shot.ok) assert.fail(shot.reason);
-  const afterShot = shot.state.units.find((u) => u.id === foe.id);
-  assert.ok(afterShot && afterShot.hp < beforeShot, '手动开火这一段应该成立');
-
-  // 第 2 段不该再来：B 接手回合时，塔已经打过一炮了
-  const endC = applyAction(shot.state, { type: 'END_TURN' });
-  if (!endC.ok) assert.fail(endC.reason);
-  const final = endC.state.units.find((u) => u.id === foe.id);
-  assert.ok(final, '目标还活着');
-  assert.ok(final.hp >= afterShot.hp, `手动开火后又挨了一炮：${afterShot.hp} → ${final.hp}`);
+  // A 结束 → 轮到 B；B 把另一支兵走进去，塔已经没有次数可打
+  const endA = applyAction(shot.state, { type: 'END_TURN' });
+  assert.ok(endA.ok, endA.reason);
+  const beforeRush = endA.state.units.find((u) => u.id === rusher.id).hp;
+  const move = applyAction(endA.state, { type: 'MOVE', unitId: rusher.id, x: 6, y: 7 });
+  assert.ok(move.ok, move.reason);
+  const afterRush = move.state.units.find((u) => u.id === rusher.id);
+  assert.ok(
+    afterRush.hp >= beforeRush,
+    `塔这一回合已经开过火，不该再打一发：${beforeRush} → ${afterRush.hp}`,
+  );
 });
+
+test('反应射击：打死一个还有余弹就转火下一个', () => {
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (let x = 5; x <= 9; x++) s.tiles[idx(s, x, 5)].terrain = 'plain';
+  // 两连发、单发 30：第一发就能送走 1 血的靶子，第二发必须转给下一个人
+  s.unitTypes['test-twin-tower'] = {
+    ...s.unitTypes.militia,
+    id: 'test-twin-tower',
+    category: 'building',
+    autoAttack: true,
+    move: 0,
+    burst: 2,
+    atk: 30,
+    armor: 0,
+    maxHp: 200,
+    range: 3,
+    abilities: [],
+  };
+  place2(s, 'A', 'test-twin-tower', 5, 5);
+  const bait = place2(s, 'B', 'militia', 9, 5); // 走进来送死的那一个
+  bait.hp = 1;
+  const bystander = place2(s, 'B', 'militia', 6, 5); // 本来就在射程里
+  bystander.hp = 500;
+  s.current = 'B';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'MOVE', unitId: bait.id, x: 7, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === bait.id), false, '一发就该送走它');
+  const after = r.state.units.find((u) => u.id === bystander.id);
+  assert.ok(after, '旁边那个不该无端消失');
+  assert.ok(after.hp < 500, '余弹要转火到下一个人，而不是憋着');
+});
+
+test('反应射击：被打死在废墟上的兵抢不了城（先落位、后入驻）', () => {
+  /*
+   * 顺序是"踩雷 → 反应射击 → 入驻废墟"。这条盯的是最后一环：
+   * 塔在入驻**之前**开火，人被打死了就不该再执行抢城那一段。
+   * 反过来（先入驻后开火）会出现"城已经归我了，然后我才死"的鬼故事。
+   */
+  const s = fresh({ godMode: true });
+  s.units = [];
+  const city = s.cities.find((c) => c.owner === 'B')!;
+  city.ruined = true;
+  city.hp = 0;
+  s.players.B.gold = 9999;
+
+  // 从城的四格里挑一格当落点，再沿四个方向找"起点 + 塔位"都能站的两格
+  let plan: { dest: { x: number; y: number }; start: { x: number; y: number }; tower: { x: number; y: number } } | null = null;
+  const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+    const dest = { x: city.x + dx, y: city.y + dy };
+    for (const [sx, sy] of dirs) {
+      const start = { x: dest.x + sx, y: dest.y + sy };
+      const tower = { x: dest.x + sx * 2, y: dest.y + sy * 2 };
+      const ok = [start, tower].every(
+        (c) =>
+          c.x >= 0 && c.y >= 0 && c.x < s.w && c.y < s.h &&
+          !s.tiles[idx(s, c.x, c.y)].cityId,
+      );
+      if (!ok) continue;
+      plan = { dest, start, tower };
+      break;
+    }
+    if (plan) break;
+  }
+  assert.ok(plan, '这张图上应该找得到"城 + 一格 + 两格"的直线');
+
+  for (const c of [plan!.start, plan!.tower]) s.tiles[idx(s, c.x, c.y)].terrain = 'plain';
+  place2(s, 'A', 'tower', plan!.tower.x, plan!.tower.y);
+  const mover = place2(s, 'B', 'militia', plan!.start.x, plan!.start.y);
+  mover.hp = 1; // 一发就死，才轮得到"入驻"那一段去暴露问题
+  s.current = 'B';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'MOVE', unitId: mover.id, x: plan!.dest.x, y: plan!.dest.y });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === mover.id), false, '走进塔的射程就该被打死');
+  const after = r.state.cities.find((c) => c.id === city.id)!;
+  assert.equal(after.ruined, true, '人死了，废墟不该被接管');
+  assert.equal(after.owner, 'B', '城没易手');
+});
+
+test('反应射击：动作后补扫——动作里凭空出现的兵也挨打', () => {
+  /*
+   * 走子那条路在 doMove 里单独结算；下船、空投、召唤、孵化这些"把单位放到新位置"
+   * 的动作走的是 applyAction 末尾的统一补扫。这里用一条**孵蛋**动作制造
+   * "一步动作里凭空多出来的人"——蛋必须先挂着，落位发生在动作内部，
+   * 这样 before/after 的差分才看得见它。
+   */
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (let x = 5; x <= 9; x++) s.tiles[idx(s, x, 5)].terrain = 'plain';
+  place2(s, 'A', 'tower', 5, 5);
+  s.current = 'B';
+  s.pendingEgg = { owner: 'B', type: 'militia', x: 7, y: 5, radius: 0, hpRatio: 1 };
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'PLACE_EGG', x: 7, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const born = r.state.units.find((u) => u.owner === 'B' && u.type === 'militia');
+  assert.ok(born, '蛋应该孵出来了');
+  assert.ok(born.hp < s.unitTypes.militia.maxHp, '凭空落在射程里也要吃一发');
+});
+
 
 test('开局送两个经济单位', () => {
   const s = fresh();
@@ -5517,10 +5609,13 @@ test('塔：看不见的敌人不开火', () => {
     const victim = place2(s, 'B', 'militia', target!.x, target!.y);
     const before = victim.hp;
 
-    // 结束 A 的回合 → B 接手回合开头，守方建筑开火
-    const r = applyAction(s, { type: 'END_TURN' });
-    assert.ok(r.ok, '应该能结束回合');
-    const after = r.state.units.find((u) => u.id === victim.id);
+    /*
+     * 直接调规则层的落位入口，而不是让兵"走进来"：
+     * 这条用例单独钉"看不见就不打"，触发时机由「反应射击：敌人踏进射程」那条负责。
+     * 走一遍 END_TURN 已经证明不了任何事——回合末那一炮已经没有了。
+     */
+    reactionFireOn(s, victim);
+    const after = s.units.find((u) => u.id === victim.id);
     return { before, after: after?.hp ?? 0, gone: !after };
   };
 
@@ -14031,33 +14126,34 @@ test('石堡射程 2 → 3：三格外能还手，四格外打不到，其它防
   assert.equal(UNIT_TYPES.keep.atk, 13, '只加射程，攻击力不动');
   assert.equal(UNIT_TYPES.keep.cost, 100, '造价不动');
 
-  // ② 行为：自动开火真的按新射程算
-  const s = fresh({ godMode: true });
-  s.units = [];
-  for (const [x, y] of [[5, 5], [8, 5], [9, 5]]) {
-    s.tiles[idx(s, x, y)].terrain = 'plain';
-  }
-  place2(s, 'A', 'keep', 5, 5);
-  const near = place2(s, 'B', 'militia', 8, 5); // 距离 3：射程内
-  const far = place2(s, 'B', 'militia', 9, 5); // 距离 4：射程外
-  near.hp = 500;
-  far.hp = 500;
-  s.current = 'A';
-  refreshMemory(s);
+  // ② 行为：反应射击真的按新射程算
+  //
+  // 每条都用一局全新的棋盘：塔一回合只有一发，同一个局面里连测两次，
+  // 第二发永远打不出来，测出来的是"没次数"而不是"够不着"。
+  const probe = (fromX: number, toX: number): number => {
+    const s = fresh({ godMode: true });
+    s.units = [];
+    for (let x = 5; x <= 10; x++) s.tiles[idx(s, x, 5)].terrain = 'plain';
+    place2(s, 'A', 'keep', 5, 5);
+    const walker = place2(s, 'B', 'militia', fromX, 5);
+    walker.hp = 500;
+    s.current = 'B';
+    refreshMemory(s);
+    const r = applyAction(s, { type: 'MOVE', unitId: walker.id, x: toX, y: 5 });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    return r.state.units.find((u) => u.id === walker.id)?.hp ?? 0;
+  };
 
-  const r = applyAction(s, { type: 'END_TURN' });
-  assert.ok(r.ok, r.ok ? '' : r.reason);
-  const hpOf = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
-  assert.ok(hpOf(near.id) < 500, '三格外的敌人应该挨打');
-  assert.equal(hpOf(far.id), 500, '四格外的敌人打不到（否则就不是"加一格"而是无限射程）');
+  assert.ok(probe(9, 8) < 500, '走进三格内应该挨打');
+  assert.equal(probe(10, 9), 500, '四格外的敌人打不到（否则就不是"加一格"而是无限射程）');
 });
 
-test('多动：自动开火的建筑也把这一回合的次数打满', () => {
+test('多动：反应射击也把这一回合的次数打满', () => {
   // 手动点能点 N 下，交给它自己打只打一下——同一座塔两套火力，
   // 玩家就只能被迫每回合手点。这条用例盯的就是这个缝。
   const s = fresh({ godMode: true });
   s.units = [];
-  for (const [x, y] of [[5, 5], [6, 5], [6, 4], [4, 5]]) {
+  for (const [x, y] of [[5, 5], [6, 4], [7, 5], [8, 5], [9, 5]]) {
     s.tiles[idx(s, x, y)].terrain = 'plain';
   }
   // 一座三连发的哨塔（拿民兵当底子改，避免依赖某个扩展包的具体兵种）
@@ -14075,21 +14171,28 @@ test('多动：自动开火的建筑也把这一回合的次数打满', () => {
     abilities: [],
   };
   const tower = place2(s, 'A', 'test-tower', 5, 5);
-  const e1 = place2(s, 'B', 'militia', 6, 5);
-  const e2 = place2(s, 'B', 'militia', 6, 4);
+  // 从 4 格外走进 3 格内；血给厚一点，三发打不死才数得清发数
+  const e1 = place2(s, 'B', 'militia', 9, 5);
   e1.hp = 500;
-  e2.hp = 500;
-  s.current = 'A';
+  s.current = 'B';
   refreshMemory(s);
 
+  // 伤害按"走完之后那一格"的距离算，所以先把人挪过去量一发
+  const ox = e1.x;
+  const oy = e1.y;
+  e1.x = 7;
+  e1.y = 5;
   const single = computeDamage(s, tower, e1);
-  const total0 = e1.hp + e2.hp;
-  // A 结束回合 → B 的回合开始 → A 的塔自动开火
-  const r = applyAction(s, { type: 'END_TURN' });
+  e1.x = ox;
+  e1.y = oy;
+
+  const total0 = e1.hp;
+  const r = applyAction(s, { type: 'MOVE', unitId: e1.id, x: 7, y: 5 });
   assert.ok(r.ok, r.ok ? '' : r.reason);
-  const after = r.state.units.filter((u) => u.owner === 'B');
-  const total1 = after.reduce((a, u) => a + u.hp, 0);
-  assert.equal(total0 - total1, single * 3, '自动开火要打满 3 次，不是只打 1 次');
+  const after = r.state.units.find((u) => u.id === e1.id);
+  assert.ok(after, '三发打不死 500 血的靶子');
+  assert.equal(total0 - after.hp, single * 3, '反应射击要打满 3 次，不是只打 1 次');
+  assert.equal(after.hp > 0, true);
 });
 
 test('技能：不能连发的技能，本回合放过之后就不该显示"就绪"（multiCast 写 false 与不写等价）', () => {

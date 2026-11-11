@@ -31,6 +31,8 @@ import {
   unitAt,
   unitsOf,
   utype,
+  startDamageLedger,
+  drainDamageLedger,
 } from '../src/core/rules.ts';
 import { CONFIG, UNIT_TYPES, eraDef } from '../src/core/config.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
@@ -735,6 +737,14 @@ function runGame(seed: number): {
   );
 
   const tallies = new Map<string, Tally>();
+  /*
+   * 伤害流水：反应射击打出多少，只有这里数得到。
+   *
+   * 下面那段"动作前后血量差"的归因只认 ATTACK——它看不见移动、下船、
+   * 召唤里发生的伤害。塔现在全部火力都在那条路上，不接这个口子，
+   * 统计出来的建筑输出是 0（不是"低"，是字面意义的 0）。
+   */
+  startDamageLedger();
   const tallyOf = (type: string): Tally => {
     let t = tallies.get(type);
     if (!t) {
@@ -792,7 +802,11 @@ function runGame(seed: number): {
 
     const before = s;
     const r = applyAction(s, action);
-    if (!r.ok) return false;
+    if (!r.ok) {
+      // 失败的动作理论上不会留下伤害，但流水是模块级的：不清的话它会漏进下一步的账
+      drainDamageLedger();
+      return false;
+    }
     const after = r.state;
 
     // 城市易主：一条一条记，别只记"有没有发生过"——是哪一座、第几回合、谁抢的，后面都要用
@@ -878,6 +892,26 @@ function runGame(seed: number): {
           }
         }
       }
+    }
+
+    /*
+     * 反应射击的账：从伤害流水里捡 `react` 那几条。
+     *
+     * 只捡 react，不碰别的——ATTACK 的伤害已经在上面按血量差算过一遍，
+     * 这里再把流水里的 attack 也算一次就是双倍。
+     * 口径跟上面完全对齐：开局白送的兵进 init*，招来的进 dealt/taken。
+     */
+    for (const e of drainDamageLedger()) {
+      if (e.kind !== 'react' || e.amount <= 0) continue;
+      const at = tallyOf(e.srcType);
+      const dt = tallyOf(e.dstType);
+      if (initialIds.has(e.srcId)) at.initDealt += e.amount;
+      else {
+        at.dealt += e.amount;
+        if (e.lethal) at.kills += 1;
+      }
+      if (initialIds.has(e.dstId)) dt.initTaken += e.amount;
+      else dt.taken += e.amount;
     }
 
     // 出场记账：这一步之后场上多出来的兵，都算这个兵种的出场。

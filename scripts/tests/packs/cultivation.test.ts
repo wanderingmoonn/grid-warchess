@@ -487,9 +487,14 @@ export function run() {
       id: 't-tower', type: 'cultivation-spirit-tower', owner: 'A' as const,
       x: 5, y: 5, hp: 28, kills: 0, moved: true, acted: false,
     });
+    /*
+     * 靶子先站在散灵台的射程（4 格）外，等 B 的回合自己走进来：
+     * 2026-11-11 起防空建筑不再"回合末补一炮"，只有落位才触发反应射击。
+     */
+    for (let x = 6; x <= 10; x++) s.tiles[5 * s.w + x] = { terrain: 'plain', cityId: null };
     s.units.push({
       id: 't-target', type: 'militia', owner: 'B' as const,
-      x: 6, y: 5, hp: 100, kills: 0, moved: true, acted: true,
+      x: 10, y: 5, hp: 100, kills: 0, moved: true, acted: true,
     });
 
     s.players.A.res = { [SPIRIT_STONE]: TOWER_CHARGE_COST * 2 };
@@ -514,8 +519,12 @@ export function run() {
     );
     console.log('放完技能后的 custom：', towerAfterSkill.custom);
 
-    const r = applyAction(skillRes.state, { type: 'END_TURN' });
-    assert.ok(r.ok);
+    const endTurn = applyAction(skillRes.state, { type: 'END_TURN' });
+    assert.ok(endTurn.ok);
+
+    // B 的回合：把靶子挪进射程（10,5 → 9,5，距离 4）
+    const r = applyAction(endTurn.state, { type: 'MOVE', unitId: 't-target', x: 9, y: 5 });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
 
     console.log('战斗日志：', r.state.log.map(l => l.text));
 
