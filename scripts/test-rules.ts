@@ -2685,7 +2685,7 @@ test('奇想数值调整：死灵法师降到火器并降价、骑士长 +2 甲�
   assert.equal(of('holy-knight-lord').maxHp, 170, '神圣骑士长 150 → 170');
 });
 
-test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）', () => {
+test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
   /*
    * 用户点单（2026-11-09）："高时代经济单位生产效率大幅上升……不要再搞这种
    * 莫名其妙的设计了"。
@@ -2702,9 +2702,11 @@ test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）',
   const rows: Array<{ name: string; era: number; cost: number; best: number }> = [];
   for (const [, d] of Object.entries(all) as Array<[string, any]>) {
     if (d.category !== 'economy') continue;
-    // 2026-11-10：从"时代 4 以上"放宽到"时代 3 以上"——军需官（时代 3）
-    // 原来的回本 9.4 是全表最差，比时代 1 的农民（6.4）还差。
-    if ((d.era ?? 0) < 3) continue;
+    // 2026-11-11：这条线只管时代 4 以上。11-10 曾放宽到时代 3 来给军需官兜底，
+    // 但那等于用测试承诺"军需官的回本必须 ≤6"，结果只能靠把它加强到 27 来满足；
+    // 用户要求回调之后，口径跟着退回——**门槛不该替设计做决定**。
+    // 军需官（时代 3，回本 9.4）是已知例外，它值不值那个价是另一个问题。
+    if ((d.era ?? 0) < 4) continue;
     const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
     assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
     rows.push({ name: d.name, era: d.era, cost: d.cost, best });
@@ -2713,8 +2715,8 @@ test('经济单位：时代 3 以上回本不超过 6 回合（越高越快）',
 
   for (const r of rows) {
     const payback = r.cost / r.best;
-    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5，3 代 ≤6
-    const cap = r.era >= 6 ? 5.0 : r.era >= 4 ? 5.5 : 6.0;
+    // 时代越高回本越快：6~8 代 ≤5，4~5 代 ≤5.5
+    const cap = r.era >= 6 ? 5.0 : 5.5;
     assert.ok(
       payback <= cap + 1e-9,
       `${r.name}（时代${r.era}）造价 ${r.cost}、最高产出 ${r.best}，回本 ${payback.toFixed(2)} 回合，超过 ${cap}`,
