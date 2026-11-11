@@ -6271,7 +6271,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
   // 招募出来的英雄以前当回合就能放大招：一次花钱买到"上场 + 技能"，
   // 而且对手算不出这笔账。
   if (u.bornTurn === s.turn) {
-    return { ok: false, reason: '刚上场的单位这一回合还不能用技能' };
+    return { ok: false, reason: '未就绪' };
   }
 
   const cd = u.skillCd?.[skill.id] ?? 0;

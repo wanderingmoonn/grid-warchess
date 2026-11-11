@@ -14356,7 +14356,7 @@ test('刚造出来的英雄当回合不能放技能', () => {
   // UI：技能不该显示"就绪"
   const view = heroSkillsOf(st, hero!).find((k) => k.def.id === 'throw-axe')!;
   assert.equal(view.ready, false, '刚上场的英雄，技能不该是亮的');
-  assert.equal(view.notReadyReason, '刚上场的单位这一回合还不能用技能');
+  assert.equal(view.notReadyReason, '未就绪');
 
   // 规则：硬闯也要被拒
   const denied = applyAction(st, { type: 'HERO_SKILL', unitId: hero!.id, skillId: 'throw-axe' });

@@ -544,10 +544,18 @@ body {
   backdrop-filter: blur(2px);
 }
 
+/*
+ * hover / 选中态把底色换成了更亮的浅色，这里必须**显式再写一遍字色**：
+ * 只有底色、没有 color 的规则，`npm run test:contrast` 会按"继承 --text"去算，
+ * 而现代主题下 --text 近白 —— 于是报"浅底浅字"。
+ * 实际渲染没问题（文字色由上面那条基础规则给死），但显式写出来既不靠推断，
+ * 也把"这族按钮永远浅底深字、不跟主题变深"这条意图写在原地。
+ */
 .bl-current:hover,
 .bl-row:hover {
   background: #fffdf6;
   border-color: rgba(120, 110, 92, 0.6);
+  color: #4a463d;
 }
 
 .bl-current {
@@ -608,6 +616,8 @@ body {
 .bl-row.on {
   background: #fbf3e2;
   border-color: rgba(120, 110, 92, 0.7);
+  /* 同理：浅底必须配显式深字，别让体检按 --text 推断（见上面那条注释） */
+  color: #4a463d;
 }
 
 .bl-caret {
