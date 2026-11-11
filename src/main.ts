@@ -8232,6 +8232,24 @@ function openSettings(): void {
       paint();
       return;
     }
+    if (act === 'set-fx') {
+      /*
+       * 一个按钮管两件事：地面材质 + 棋子贴图。
+       *
+       * 拆成两个开关的那一版，用户点了「棋子贴图」发现地面没变——
+       * "切换贴图"在他脑子里是一个动作。合并之后仍然两个状态分开存，
+       * 只是入口只有一个。
+       */
+      const on = el!.dataset.fx === 'on';
+      setUiTerrain(on);
+      setUiArt(on);
+      if (on) {
+        // 棋子清单要等拉回来，先画一帧地形，到货后再补一帧
+        void loadUnitArtIndex().then(() => paint());
+      }
+      paint();
+      return;
+    }
     if (act === 'set-terrain') {
       setUiTerrain(el!.dataset.terrain === 'on');
       paint();

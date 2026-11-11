@@ -20,13 +20,14 @@ export interface SettingsOptions {
   /** 是否减少动效 */
   reducedMotion: boolean;
   /**
-   * 棋子用贴图还是汉字。
+   * 美术贴图（地形材质 + 棋子贴图）。
    *
-   * 这是 2026-11-11 那个"兵种美术"试验的开关：默认关，打开之后**有图的兵种**换成
-   * 像素图，其余照旧显示汉字。关掉就完全回到原样，不需要回滚版本。
+   * 2026-11-11 一度拆成两个开关，结果用户点了「棋子贴图」发现地面没变——
+   * "切换贴图"在心智上是一个动作，拆成两个就得先知道哪个管地面。
+   * 现在合并成一个按钮，两个状态仍然分开存（URL 上 `?terrain=on` / `?art=on`
+   * 还能各自压控制，做 A/B 时用得上）。
    */
   unitArt?: boolean;
-  /** 地形用生成的材质图还是 CSS 画的纹理。默认关，关着时不请求任何图片 */
   terrainArt?: boolean;
   /** 铃声音量 0~1 */
   chime: number;
@@ -89,21 +90,15 @@ export function settingsHtml(o: SettingsOptions): string {
           </div>
         </div>
         <div class="set-row">
-          <div class="set-label">地形材质
-            <span class="set-hint">把地面换成生成材质图：草原有草叶、森林连成一片林冠。关着只用 CSS 纹理，一个字节都不下载。</span>
+          <div class="set-label">美术贴图
+            <span class="set-hint">
+              把地面换成生成的材质图（草原有草叶、森林连成一片林冠），棋子有图的也换成贴图。
+              关着就是原来的纯色块 + 汉字，一个图片字节都不下载。没有图的地形与兵种自动保留原样。
+            </span>
           </div>
           <div class="chip-row">
-            ${chip(!o.terrainArt, 'set-terrain', '纹理', 'data-terrain="off"')}
-            ${chip(!!o.terrainArt, 'set-terrain', '材质', 'data-terrain="on"')}
-          </div>
-        </div>
-        <div class="set-row">
-          <div class="set-label">棋子贴图
-            <span class="set-hint">用美术图替换棋子上的汉字。目前只有少数兵种有图，其余仍然显示汉字——没有图的绝不会变空。关掉就完全回到原样。</span>
-          </div>
-          <div class="chip-row">
-            ${chip(!o.unitArt, 'set-art', '汉字', 'data-art="off"')}
-            ${chip(!!o.unitArt, 'set-art', '贴图', 'data-art="on"')}
+            ${chip(!(o.terrainArt || o.unitArt), 'set-fx', '原版', 'data-fx="off"')}
+            ${chip(!!(o.terrainArt || o.unitArt), 'set-fx', '材质', 'data-fx="on"')}
           </div>
         </div>
       </section>

@@ -359,6 +359,30 @@ await evaluate(`(() => {
 await sleep(700);
 await shot(`04-unit-${tag}`);
 
+if (ARGS.includes('clickswitch')) {
+  // 诊断：走真实点击路径（设置 → 地形材质 → 材质），看 html 上的属性有没有变
+  const before = await evaluate(
+    `(document.documentElement.dataset.terrain ?? '-') + '/' + (document.documentElement.dataset.art ?? '-')`,
+  );
+  await click('[data-act="settings"]');
+  await sleep(300);
+  const btns = await evaluate(`(() => {
+    const b = document.querySelector('[data-act="set-fx"][data-fx="on"]');
+    return b ? b.textContent.trim() : '(找不到按钮)';
+  })()`);
+  await evaluate(`(() => {
+    const b = document.querySelector('[data-act="set-fx"][data-fx="on"]');
+    if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await sleep(500);
+  const after = await evaluate(
+    `(document.documentElement.dataset.terrain ?? '-') + '/' + (document.documentElement.dataset.art ?? '-')`,
+  );
+  console.log('  [switch] 按钮:', btns, ' 点前:', before, ' 点后:', after);
+  await shot(`04c-switch-${tag}`);
+}
+
 if (ARGS.includes('art')) {
   // 诊断：开关到底有没有生效、清单有没有拉到、盘上有没有 img
   const info = await evaluate(`(() => ({
