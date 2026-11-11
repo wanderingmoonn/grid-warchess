@@ -822,6 +822,55 @@ body {
     calc(var(--jx, 0px) + 55%) calc(var(--jy, 0px) + 22%);
 }
 
+/*
+ * ── 地形材质（2026-11-11，图片层，默认关）─────────────────────────────
+ *
+ * 和上面那几条 CSS 纹理是**同一件事的两档**：关着用 CSS 画的（有纹理但一眼假），
+ * 开着换成混元生成的材质图（真材质，跨格连续）。
+ *
+ * 取景方式值得说明：每格用 `--x/--y` 去同一张 512×512 的大图上切一块，
+ * 因此**同一种地形连成片时纹理是连续的**——这正是 CSS 逐格平铺做不到的事
+ * （每格独立元素，图案只能各自重复，连起来就是墙纸）。
+ *
+ * 关着的时候这几个规则一条都不匹配，浏览器也不会去下载那几张 webp。
+ * 没有图的地形（台地/谷地/沼泽/沙丘/月壤/熔岩/城市/桥）继续用上面那套。
+ */
+html[data-terrain='on'] .tile {
+  /*
+   * 768 而不是图的原始 512：图是"世界"纹理，格子只是取景窗口。
+   * 按 512 铺，一个 44px 格子里会装下一大块图案（森林就是"两个圆点"）；
+   * 放大到 768 之后每格只切到 5.7% 的面积，读起来才是"林冠的质地"而不是"几棵树"。
+   */
+  background-size: 768px 768px;
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--cell) * -1)
+    calc(var(--y, 0) * var(--cell) * -1);
+}
+
+html[data-terrain='on'] .tile.t-plain {
+  background-image: url('art/terrain/plain.webp');
+}
+html[data-terrain='on'] .tile.t-forest {
+  background-image: url('art/terrain/forest.webp');
+}
+html[data-terrain='on'] .tile.t-hill {
+  background-image: url('art/terrain/hill.webp');
+}
+html[data-terrain='on'] .tile.t-water {
+  background-image: url('art/terrain/water.webp');
+}
+/* 深水原来靠 `::before` 画波纹；有了材质就不叠了，否则两层波纹打架 */
+html[data-terrain='on'] .tile.t-deep {
+  background-image: url('art/terrain/deep.webp');
+}
+html[data-terrain='on'] .tile.t-deep::before {
+  display: none;
+}
+html[data-terrain='on'] .tile.t-mountain {
+  background-image: url('art/terrain/mountain.webp');
+}
+
 /* 浅水：细波纹。和水面色只差一点，靠"有纹路"表达"这是水" */
 .tile.t-water {
   background-color: var(--water);

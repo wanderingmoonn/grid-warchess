@@ -213,7 +213,9 @@ async function click(selector: string) {
 /* ── 场景 ─────────────────────────────────────────────────────────────── */
 
 const theme =
-  (ARGS.includes('modern') ? '&ui=modern' : '') + (ARGS.includes('art') ? '&art=on' : '');
+  (ARGS.includes('modern') ? '&ui=modern' : '') +
+  (ARGS.includes('art') ? '&art=on' : '') +
+  (ARGS.includes('terrain') ? '&terrain=on' : '');
 const tag =
   (theme ? 'modern' : 'legacy') +
   (MOBILE ? '-m' : '') +

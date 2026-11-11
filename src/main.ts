@@ -173,6 +173,7 @@ import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
 import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
+import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
@@ -194,6 +195,7 @@ installUiConsole();
  * 真的打开时才去拉清单——关着的时候一个字节都不多请求。
  */
 initUnitArt();
+initTerrainArt();
 
 
 /**
@@ -8189,6 +8191,7 @@ function openSettings(): void {
       chime: chimeVolume,
       chimeText: chimeLabel(chimeVolume),
       unitArt: uiArtOn(),
+      terrainArt: uiTerrainOn(),
       replay: replay !== null,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
@@ -8226,6 +8229,11 @@ function openSettings(): void {
     }
     if (act === 'set-motion') {
       setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'set-terrain') {
+      setUiTerrain(el!.dataset.terrain === 'on');
       paint();
       return;
     }

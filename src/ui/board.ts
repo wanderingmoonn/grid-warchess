@@ -550,8 +550,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        */
       const jx = ((x * 37 + y * 61) % 7) * 3;
       const jy = ((x * 53 + y * 17) % 7) * 3;
+      /*
+       * `--x/--y` 也一起给：开了地形材质之后，每格要按**格坐标**去大图上取景，
+       * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
+       */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" style="--jx:${jx}px;--jy:${jy}px"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——

@@ -26,6 +26,8 @@ export interface SettingsOptions {
    * 像素图，其余照旧显示汉字。关掉就完全回到原样，不需要回滚版本。
    */
   unitArt?: boolean;
+  /** 地形用生成的材质图还是 CSS 画的纹理。默认关，关着时不请求任何图片 */
+  terrainArt?: boolean;
   /** 铃声音量 0~1 */
   chime: number;
   /** 铃声那一行右边显示的文字（"铃声 60%"，来自 sound.ts） */
@@ -84,6 +86,15 @@ export function settingsHtml(o: SettingsOptions): string {
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
             ${chip(o.reducedMotion, 'set-motion', '减少', 'data-motion="reduced"')}
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">地形材质
+            <span class="set-hint">把地面换成生成材质图：草原有草叶、森林连成一片林冠。关着只用 CSS 纹理，一个字节都不下载。</span>
+          </div>
+          <div class="chip-row">
+            ${chip(!o.terrainArt, 'set-terrain', '纹理', 'data-terrain="off"')}
+            ${chip(!!o.terrainArt, 'set-terrain', '材质', 'data-terrain="on"')}
           </div>
         </div>
         <div class="set-row">
