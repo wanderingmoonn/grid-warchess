@@ -1621,6 +1621,57 @@ body {
   flex: 0 0 auto;
 }
 
+/* 可折叠的信息卡：标题行就是开关，右侧一个箭头指示开合。
+   用原生 <details> 而不是自己写开合：键盘（Enter/空格）、读屏、默认焦点行为
+   全都白送，而这些自己实现起来最容易漏。 */
+.card-fold {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+/* 它要是卡片里的第一块，就不该再画一条分隔线——那是"和上面分开"的意思，
+   而上面什么都没有。 */
+.card-fold:first-child {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+.card-fold > .fold-head {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  margin: 0;
+}
+
+/* 展开时才需要它和正文拉开一点 */
+.card-fold[open] > .fold-head {
+  margin-bottom: 8px;
+}
+
+.card-fold > .fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.card-fold > .fold-head::after {
+  content: '⌄';
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  transition: transform 0.15s ease;
+}
+
+.card-fold[open] > .fold-head::after {
+  content: '⌃';
+}
+
+.card-fold > .fold-head:hover {
+  color: var(--text);
+}
+
 .card-title {
   font-size: var(--fs-sm);
   font-weight: 500;

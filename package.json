@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.3.84",
+  "version": "0.3.85",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -24,6 +24,7 @@
     "test:blackout": "node --experimental-strip-types scripts/smoke-blackout.ts",
     "test:marquee": "node --experimental-strip-types scripts/smoke-marquee.ts",
     "test:contrast": "node --experimental-strip-types scripts/check-contrast.ts",
+    "shot": "node --experimental-strip-types scripts/ui-shot.ts",
     "draft:metrics": "python scripts/draft-metrics.py",
     "draft:prior": "python scripts/draft-metrics.py e1 e3 e3-turnban --emit-ts scripts/lib/card-prior.table.ts",
     "test:cultivation": "node --experimental-strip-types scripts/tests/packs/cultivation.test.ts",

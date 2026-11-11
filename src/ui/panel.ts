@@ -114,6 +114,15 @@ export interface PanelInput {
    * 触屏和鼠标党点这两个按钮。状态放在 main 里，面板只负责显示"现在是哪一档"。
    */
   forceMode?: 'move' | 'attack' | null;
+  /**
+   * 「操作」说明卡是不是展开着。
+   *
+   * 那张卡是给第一次玩的人看的：五段话，每段都在教一个基本操作。可它**每回合
+   * 都在**，对已经会玩的人就是一块占着侧栏的文字墙——真正要看的"战报"被挤到
+   * 下面去了。所以默认收起，展开状态由 main 记着（面板每帧重建，记在这里才不会
+   * 一刷新就弹回去）。
+   */
+  opsOpen?: boolean;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -1119,7 +1128,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
   return `
     ${heroBlock}
-    <div class="card-title"${heroBlock ? ' style="margin-top:14px"' : ''}>操作</div>
+    <details class="card-fold"${input.opsOpen ? ' open' : ''}${heroBlock ? ' style="margin-top:14px"' : ''}>
+    <summary class="card-title fold-head">操作</summary>
     ${
       /*
        * 复盘：这一段原来照抄对局里的操作说明——"点自己的单位 → 蓝色格子是可移动范围"。
@@ -1145,6 +1155,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       按住修饰键则只对下一次点击生效。
     </div>`
     }
+    </details>
   `;
 }
 
