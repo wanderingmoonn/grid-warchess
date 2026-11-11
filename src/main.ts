@@ -8165,6 +8165,15 @@ function openSettings(): void {
       chime: chimeVolume,
       chimeText: chimeLabel(chimeVolume),
       replay: replay !== null,
+      // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
+      // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
+      compact:
+        typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 640px)').matches
+          : window.innerWidth <= 640,
+      fog: state.fog !== false,
+      blackout: state.config.expansionIds.includes('blackout'),
+      roomCode: room?.code ?? null,
     });
   };
   paint();
@@ -8201,7 +8210,22 @@ function openSettings(): void {
     }
 
     /*
-     * 其余动作（导出 / 回首页 / 规则书 / 反馈）走**主分发**，不在这里重写一遍。
+     * 迷雾开关：**不关弹窗**，原地重画。
+     * 玩家刚点的就是这一屏上的开关，把他踢出去再开一次才能确认结果，
+     * 那是把"看一眼变成了三步"。其余动作仍然走下面那条统一出口。
+     */
+    if (act === 'toggle-fog') {
+      const proxy = document.createElement('button');
+      proxy.dataset.act = act;
+      appEl.append(proxy);
+      proxy.click();
+      proxy.remove();
+      paint();
+      return;
+    }
+
+    /*
+     * 其余动作（导出 / 回首页 / 规则书 / 反馈 / 联机）走**主分发**，不在这里重写一遍。
      * 造一个带同样 data-act 的替身点一下：多一条实现就多一条会跑偏的地方。
      */
     closeSettings();
