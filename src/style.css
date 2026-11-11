@@ -3115,7 +3115,7 @@ a.btn {
 .chip.is-extra::after {
   content: '扩';
   margin-left: 4px;
-  font-size: 9.5px;
+  font-size: 10px;
   opacity: 0.6;
 }
 
@@ -3128,7 +3128,7 @@ a.btn {
  */
 .chip-auto {
   margin-left: 5px;
-  font-size: 9.5px;
+  font-size: 10px;
   opacity: 0.55;
   letter-spacing: 0.02em;
 }
@@ -3918,7 +3918,7 @@ a.btn {
 .start-rail-foot {
   margin-top: auto;
   padding: 8px;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-3);
 }
@@ -6689,7 +6689,7 @@ a.btn {
 
 .tut-body {
   margin: 0 0 12px;
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.7;
   color: var(--text-2);
   /* 正文里用 \n 分段：新手读两行就够，写成一坨没人看 */
