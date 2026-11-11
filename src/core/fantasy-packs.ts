@@ -40,6 +40,7 @@ import {
 import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, marksAt } from './marks.ts';
+import { boardIdOf, boardStateOf } from './board.ts';
 import type { MarkKindDef } from './marks.ts';
 import type { UnitTypeDef } from './types.ts';
 
@@ -755,9 +756,11 @@ const FANTASY_ABILITIES: AbilityDef[] = [
         const kid = def.splitInto ?? 'slimelet';
         let born = 0;
         for (let k = 0; k < 2; k += 1) {
-          const spot = c.api.freeNeighbor(c.state, c.victim, kid);
+          // 落点按死者那张图找：月球上死掉的史莱姆，小史莱姆也该在月球上，
+          // 不能凭空出现在地球同一坐标（那正是"月面幽灵"）。
+          const spot = c.api.freeNeighbor(boardStateOf(c.state, c.victim), c.victim, kid);
           if (!spot) break;
-          c.api.spawn(c.state, c.victim.owner, kid, spot.x, spot.y);
+          c.api.spawn(c.state, c.victim.owner, kid, spot.x, spot.y, boardIdOf(c.victim));
           born += 1;
         }
         if (born > 0) c.api.pushLog(c.state, c.victim.owner, `${def.name} 分裂出 ${born} 只小史莱姆`, true);
@@ -890,9 +893,9 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             const def = c.api.utype(c.state, c.self.type);
             const wall = def.builds?.[0] ?? 'earth-wall';
             if (!c.state.unitTypes[wall]) return;
-            const spot = c.api.freeNeighbor(c.state, c.self, wall);
+            const spot = c.api.freeNeighbor(boardStateOf(c.state, c.self), c.self, wall);
             if (!spot) return;
-            c.api.spawn(c.state, c.owner, wall, spot.x, spot.y);
+            c.api.spawn(c.state, c.owner, wall, spot.x, spot.y, boardIdOf(c.self));
             c.api.pushLog(c.state, c.owner, `${def.name} 立起一道土墙`);
           },
         },
@@ -994,9 +997,9 @@ const FANTASY_ABILITIES: AbilityDef[] = [
               (u) => u.owner === c.owner && outputs.includes(u.type),
             ).length;
             if (alive >= spec.max) return;
-            const spot = c.api.freeNeighbor(c.state, c.self, type);
+            const spot = c.api.freeNeighbor(boardStateOf(c.state, c.self), c.self, type);
             if (!spot) return;
-            c.api.spawn(c.state, c.owner, type, spot.x, spot.y);
+            c.api.spawn(c.state, c.owner, type, spot.x, spot.y, boardIdOf(c.self));
             c.api.pushLog(c.state, c.owner, `${def.name} 召唤出 ${c.api.utype(c.state, type).name}`);
           },
         },

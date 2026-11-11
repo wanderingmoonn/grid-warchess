@@ -20199,13 +20199,25 @@ test('月球上的兵按月球的格子走（幽灵 bug 的规则侧）', () => 
   assert.equal(into.ok, false, '基地占着的那一格走不进去');
 
   /*
-   * 开火仍然关着：月面战斗属于「太空战争」那一包，现在还没有瞄准与伤害的
-   * 按图结算（`computeDamage` 会读地形与掩护）。这条守着"暂时别开"。
+   * 开火那一侧（2026-11-11 起）：月面能打了，但**只能打同一张图上的**。
+   * 具体判定见下面「月面战斗」那组用例；这里只钉住"不串图"这一条，
+   * 因为它是"按图走子"最容易退化的地方。
    */
   const foe = place2(moved.state, 'B', 'militia', 4, 2);
   foe.board = 'moon';
   const hit = applyAction(moved.state, { type: 'ATTACK', unitId: u.id, targetId: foe.id });
-  assert.equal(hit.ok, false, '月面还不能开火');
+  assert.ok(hit.ok, `月面上贴身的敌人该打得到：${hit.reason}`);
+
+  // 反过来：站在地球同一坐标的人，不该被月球上的这一刀碰到
+  const ghost = place2(moved.state, 'B', 'militia', 5, 2);
+  const hpBefore = ghost.hp;
+  const cross = applyAction(moved.state, { type: 'ATTACK', unitId: u.id, targetId: ghost.id });
+  assert.equal(cross.ok, false, '跨图打不到：坐标再近也隔着一个天空');
+  assert.equal(
+    moved.state.units.find((x) => x.id === ghost.id)!.hp,
+    hpBefore,
+    '地球上的那个人一滴血都不该掉',
+  );
 });
 
 test('登月胜利：展开基地、采样 3 回合、结果送回就赢', () => {
@@ -20259,6 +20271,159 @@ test('登月胜利：展开基地、采样 3 回合、结果送回就赢', () =>
   run({ type: 'END_TURN' });
   run({ type: 'END_TURN' });
   assert.equal(cur.winner, 'A', '采样结果送回，本方获胜');
+});
+
+console.log('\n太空时代：月面战斗');
+
+/**
+ * 把一个单位摆到月球上。
+ *
+ * 不能借 `place2`：它按 (x,y) 去重，会顺手清掉"同一坐标"的其他单位——
+ * 而这几条用例要摆的正是"地球与月球同坐标各站一个人"，用它就把对手删了。
+ * 所以这里直接 push，图写到单位身上。
+ */
+function onMoon(st: GameState, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  const def = st.unitTypes[type];
+  assert.ok(def, `本局没有 ${type} 这个兵种`);
+  const u: Unit = {
+    id: `m${st.nextUnitSeq++}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+    board: 'moon',
+  };
+  st.units.push(u);
+  return u;
+}
+
+/** 月球铺平，免得随机环形山把落点占了 */
+function flattenMoon(st: GameState): void {
+  for (const t of st.boards!.moon!.tiles) t.terrain = 'regolith';
+}
+
+test('月面战斗：地形掩护按月球算，不是地球上同一坐标那块地', () => {
+  /*
+   * 这条守的是 `computeDamage` 里那次"查地形"。以前它写死 `tileAt(s, x, y)`，
+   * 读的是 `s.tiles`（地球）——月球上站在环形山里的人，护甲会按地球那块草地算。
+   * 月面开火一接上，这个错就会立刻变成"月面地形是装饰"。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const moon = s.boards!.moon!;
+  const atk = onMoon(s, 'A', 'militia', 2, 2);
+  const prey = onMoon(s, 'B', 'militia', 3, 2);
+
+  const plain = computeDamage(s, atk, prey);
+  // 把**月球**那一格改成环形山（护甲 +2），地球同一坐标保持原样
+  moon.tiles[2 * moon.w + 3]!.terrain = 'crater';
+  const onCrater = computeDamage(s, atk, prey);
+  assert.ok(
+    onCrater < plain,
+    `环形山该减伤：月壤 ${plain} → 环形山 ${onCrater}`,
+  );
+
+  // 反过来：地球那一格改成环形山，月球上的这个人不该受影响
+  const earthTile = s.tiles[idx(s, 3, 2)];
+  const keep = earthTile.terrain;
+  earthTile.terrain = 'crater';
+  const stillCrater = computeDamage(s, atk, prey);
+  assert.equal(stillCrater, onCrater, '地球的地形改动不该影响月球上的结算');
+  earthTile.terrain = keep;
+});
+
+test('月面战斗：溅射只波及同一张图上的人', () => {
+  /*
+   * 覆盖格是一串**格号**，地球 20 宽的 `i=45` 和月球 9 宽的 `i=45` 是两个位置。
+   * 不判图的话，月面上一炮"溅射"过去的会是地球上某个坐标恰好相同的人——
+   * 这是接月面战斗时最容易犯、也最难查的错。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  flatten(s, 'plain');
+  // 一门射程 3、溅射 2 的迫击炮（拿民兵改，别依赖某个扩展的具体兵种）
+  s.unitTypes['test-mortar'] = {
+    ...s.unitTypes.militia,
+    id: 'test-mortar',
+    name: '试验迫击炮',
+    atk: 20,
+    range: 3,
+    splash: 2,
+    maxHp: 200,
+  };
+  // 先摆地球那两个人：`place2` 按 (x,y) 去重，后摆会删掉同坐标的月球单位。
+  // （月球这边走 `onMoon`，它只 push 不清理，所以先后顺序必须是"地球先、月球后"。）
+  const ghostA = place2(s, 'B', 'militia', 4, 6);
+  const ghostB = place2(s, 'B', 'militia', 5, 6);
+  const gun = onMoon(s, 'A', 'test-mortar', 2, 6);
+  const direct = onMoon(s, 'B', 'militia', 4, 6);
+  const bystander = onMoon(s, 'B', 'militia', 5, 6);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: direct.id, x: 4, y: 6 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
+  assert.ok(hp(direct.id) < direct.hp, '主目标要掉血');
+  assert.ok(hp(bystander.id) < bystander.hp, '月球上被覆盖到的人要吃溅射');
+  assert.equal(hp(ghostA.id), ghostA.hp, '地球上同坐标的人不该被月面这一炮打到');
+  assert.equal(hp(ghostB.id), ghostB.hp, '同上（和站位无关，是图不对）');
+});
+
+test('月面战斗：基地能被拆——采样作废，登月胜利不再成立', () => {
+  /*
+   * 登月胜利原本是**不可逆**的：基地一立、采样一开始，对面只能干看着。
+   * 月面能打之后第一条要成立的就是"拆掉基地 = 拆掉胜利"，否则反制链是断的。
+   * （`lunarWinner` / `samplingOf` 只认活着的基地，代码早写好了，以前没机会验证。）
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const base = onMoon(s, 'A', MOON_BASE_ID, 3, 3);
+  base.custom = { ...(base.custom ?? {}), sample: SAMPLE_TURNS }; // 正在采样
+  // 基地是 12 甲，民兵那点攻击打上去是 0——用一支专门够劲的兵来拆，
+  // 这条测的是"拆掉之后胜利作废"，不是攻城数值本身。
+  s.unitTypes['test-cracker'] = {
+    ...s.unitTypes.militia,
+    id: 'test-cracker',
+    name: '拆台队',
+    atk: 60,
+    range: 1,
+  };
+  const raider = onMoon(s, 'B', 'test-cracker', 5, 3); // 贴着基地的右边缘
+  base.hp = 5; // 一炮就能拆，测的是"拆掉之后"，不是攻城数值
+  assert.ok(samplingOf(s), '前提：这时候确实在采样');
+
+  s.current = 'B';
+  refreshMemory(s);
+  const r = applyAction(s, { type: 'ATTACK', unitId: raider.id, targetId: base.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === base.id), false, '基地该被拆掉');
+  assert.equal(samplingOf(r.state) ?? null, null, '采样要作废（顶栏的「登月 n」跟着消失）');
+  assert.equal(r.state.winner ?? null, null, '拆掉基地就不该再判 A 赢');
+});
+
+test('月面战斗：凭空出现的单位留在月面（spawn 带图）', () => {
+  /*
+   * 召唤/分裂/孵化全都走 `abilityApi.spawn`。它在别的图上一律要带 `board`，
+   * 不带就会在**地球同一坐标**多出一个单位——6e3e86f 修过的"月面幽灵"，
+   * 只是这次是从"凭空出现"这条路进来的。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  s.current = 'B';
+  abilityApi.spawn(s, 'B', 'militia', 2, 2, 'moon');
+  const born = s.units.find((u) => u.board === 'moon');
+  assert.ok(born, '应该出现在月球上');
+  assert.equal(boardIdOf(born!), 'moon');
+
+  // 不传 board 的老行为不变：默认地球（老存档、老回放都走这条）
+  abilityApi.spawn(s, 'B', 'militia', 2, 2);
+  const earthling = s.units.filter((u) => boardIdOf(u) === EARTH).pop();
+  assert.ok(earthling, '不传 board 就是地球');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {
