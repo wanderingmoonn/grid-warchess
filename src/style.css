@@ -1665,6 +1665,51 @@ body {
   background: var(--team-b);
 }
 
+/*
+ * 兵种贴图（2026-11-11，试验层，默认关）。
+ *
+ * 只在设置里打开「棋子贴图」、且这个兵种真有图时才出现；其余仍然显示汉字，
+ * 所以这个类名出现与否本身就是"有没有用图"的唯一判据。
+ *
+ * `image-rendering: pixelated` 是必须的：这些是像素画，浏览器默认的双线性插值
+ * 会把边缘抹成糊块——同一张图在 34px 下，pixelated 认得出人形，默认插值认不出。
+ * 图片本身是透明底，阵营色由 `.unit-inner` 的背景提供，所以这里不用复制一份。
+ */
+.unit-inner.has-art {
+  /*
+   * 有图时把填充色让出来。
+   *
+   * 像素图本身是深色为主，压在饱和的队伍色（红/蓝）上会糊成一团——
+   * 实测第一版就是这样：小人几乎看不出轮廓。所以有图时改用中性浅底，
+   * 阵营改**描边**表达。阵营色回答"这是谁的兵"，它不该和"这是什么兵"抢同一块像素。
+   */
+  background: var(--panel);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 2px currentColor;
+}
+
+.unit.owner-A .unit-inner.has-art {
+  background: var(--panel);
+  color: var(--team-a);
+}
+
+.unit.owner-B .unit-inner.has-art {
+  background: var(--panel);
+  color: var(--team-b);
+}
+
+.unit-art {
+  display: block;
+  width: 86%;
+  height: 86%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .unit:hover .unit-inner {
   transform: translateY(-1px) scale(1.04);
 }

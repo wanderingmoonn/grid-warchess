@@ -212,7 +212,8 @@ async function click(selector: string) {
 
 /* ── 场景 ─────────────────────────────────────────────────────────────── */
 
-const theme = ARGS.includes('modern') ? '&ui=modern' : '';
+const theme =
+  (ARGS.includes('modern') ? '&ui=modern' : '') + (ARGS.includes('art') ? '&art=on' : '');
 const tag =
   (theme ? 'modern' : 'legacy') +
   (MOBILE ? '-m' : '') +
@@ -355,6 +356,19 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
+
+if (ARGS.includes('art')) {
+  // 诊断：开关到底有没有生效、清单有没有拉到、盘上有没有 img
+  const info = await evaluate(`(() => ({
+    flag: document.documentElement.dataset.art ?? '(无)',
+    imgs: document.querySelectorAll('img.unit-art').length,
+    inners: document.querySelectorAll('.unit-inner').length,
+    src: document.querySelector('img.unit-art')?.getAttribute('src') ?? null,
+    html: (document.querySelector('.unit-inner')?.outerHTML ?? '').slice(0, 220),
+    box: (() => { const i = document.querySelector('img.unit-art'); if (!i) return null; const r = i.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })(),
+  }))()`);
+  console.log('  [art]', JSON.stringify(info));
+}
 
 if (ARGS.includes('builder')) {
   /*

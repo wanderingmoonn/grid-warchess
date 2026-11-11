@@ -172,6 +172,7 @@ import {
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
 import { settingsHtml } from './ui/settings.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
@@ -188,6 +189,11 @@ import { MODULES, deviceTargetOf } from './core/armor.ts';
  */
 applyUiTheme();
 installUiConsole();
+/*
+ * 兵种贴图：默认关，只把 `<html data-art>` 定下来。
+ * 真的打开时才去拉清单——关着的时候一个字节都不多请求。
+ */
+initUnitArt();
 
 
 /**
@@ -1416,7 +1422,22 @@ function tutorialMarksOf(): {
   return { tutorialTiles: m.tiles, tutorialCityId: m.cityId, tutorialOwnCityId: m.ownCityId };
 }
 
+/**
+ * 贴图清单是异步的：**第一帧一定还没有它**。
+ *
+ * 所以不能在启动时拉一次就完事——那一刻还没有渲染入口，拉到了也没人重画，
+ * 结果就是"打开了开关、棋盘照旧全是汉字"，看着像开关失效。
+ * 放在 render 里惰性触发：清单到货后补画一帧，只补一次。
+ */
+let artIndexAsked = false;
+function ensureArtIndex(): void {
+  if (artIndexAsked || !uiArtOn()) return;
+  artIndexAsked = true;
+  void loadUnitArtIndex().then(() => render());
+}
+
 function render(): void {
+  ensureArtIndex();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -8167,6 +8188,7 @@ function openSettings(): void {
       reducedMotion: document.documentElement.dataset.motion === 'reduced',
       chime: chimeVolume,
       chimeText: chimeLabel(chimeVolume),
+      unitArt: uiArtOn(),
       replay: replay !== null,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
@@ -8204,6 +8226,16 @@ function openSettings(): void {
     }
     if (act === 'set-motion') {
       setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'set-art') {
+      const on = el!.dataset.art === 'on';
+      setUiArt(on);
+      if (on) {
+        // 清单要先到，否则这一帧仍然全是汉字，看起来像"点了没反应"
+        void loadUnitArtIndex().then(() => paint());
+      }
       paint();
       return;
     }

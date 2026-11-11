@@ -19,6 +19,13 @@ export interface SettingsOptions {
   theme: 'legacy' | 'modern';
   /** 是否减少动效 */
   reducedMotion: boolean;
+  /**
+   * 棋子用贴图还是汉字。
+   *
+   * 这是 2026-11-11 那个"兵种美术"试验的开关：默认关，打开之后**有图的兵种**换成
+   * 像素图，其余照旧显示汉字。关掉就完全回到原样，不需要回滚版本。
+   */
+  unitArt?: boolean;
   /** 铃声音量 0~1 */
   chime: number;
   /** 铃声那一行右边显示的文字（"铃声 60%"，来自 sound.ts） */
@@ -77,6 +84,15 @@ export function settingsHtml(o: SettingsOptions): string {
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
             ${chip(o.reducedMotion, 'set-motion', '减少', 'data-motion="reduced"')}
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">棋子贴图
+            <span class="set-hint">用美术图替换棋子上的汉字。目前只有少数兵种有图，其余仍然显示汉字——没有图的绝不会变空。关掉就完全回到原样。</span>
+          </div>
+          <div class="chip-row">
+            ${chip(!o.unitArt, 'set-art', '汉字', 'data-art="off"')}
+            ${chip(!!o.unitArt, 'set-art', '贴图', 'data-art="on"')}
           </div>
         </div>
       </section>

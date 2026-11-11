@@ -36,6 +36,7 @@ import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
+import { unitArtUrl } from './unit-art.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -935,14 +936,31 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const siteNote = prog ? ` · 工地 ${prog.done}/${prog.need}（+${prog.rate}/回合）` : '';
 
   const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
-  const inner = `<div class="unit-inner">${def.short}${cargoBadge}
+  /*
+   * 有贴图就用贴图，没有就还是那个汉字。
+   *
+   * 只在 `.unit-inner` 的**内容**上换，圆角方块和阵营底色都不动——
+   * 阵营色回答的是"这是谁的兵"，比"这是什么兵"更该优先读到，图替换掉的只是字。
+   */
+  const artUrl = unitArtUrl(u.type);
+  const glyph = artUrl
+    ? `<img class="unit-art" src="${artUrl}" alt="" draggable="false" />`
+    : def.short;
+  const inner = `<div class="unit-inner${artUrl ? ' has-art' : ''}">${glyph}${cargoBadge}
       ${buildBar}
       <div class="unit-hp"><i class="hp-lag"></i><i class="hp-now ${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>`;
   const clsText = `${cls.join(' ')}${siteCls}`;
   const style = tileRect(s, u.x, u.y, fp);
   return {
-    key: `u:${u.id}`,
+    /*
+     * key 里带上"有没有贴图"这一维。
+     *
+     * 棋子层按 key 做 diff（内容没变就不写 DOM），而贴图清单是**异步到货**的：
+     * 第一帧没有图、写进了缓存，清单到了之后 key 若还是同一个，diff 会认定
+     * "内容没变"直接跳过——开关打开了、棋盘照旧全是汉字。
+     */
+    key: `u:${u.id}${artUrl ? ':art' : ''}`,
     cls: clsText,
     style,
     title,

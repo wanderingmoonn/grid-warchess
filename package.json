@@ -1,12 +1,12 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.4.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:static": "vite build --outDir _publish --emptyOutDir",
+    "build:static": "npm run art:index && vite build --outDir _publish --emptyOutDir",
     "preview": "vite preview",
     "test": "npm run test:css && npm run test:contrast && npm run test:rules && npm run test:replay && npm run test:net && npm run test:ai-optimization && npm run test:ui && npm run test:cultivation && npm run test:room && npm run test:serve && npm run test:boot && npm run test:blackout && npm run test:marquee",
     "test:ai-optimization": "node --experimental-strip-types scripts/test-ai-optimization.ts && node --experimental-strip-types scripts/test-ai-evaluation.ts",
@@ -93,7 +93,8 @@
     "probe:doctrine": "node --experimental-strip-types scripts/probe-doctrine.ts",
     "era:table": "node --experimental-strip-types scripts/era-table.ts",
     "fantasy:overlap": "node --experimental-strip-types scripts/fantasy-overlap.ts",
-    "duel:smoke": "node --experimental-strip-types scripts/ai-duel-batch.ts --games 20 --parallel 20"
+    "duel:smoke": "node --experimental-strip-types scripts/ai-duel-batch.ts --games 20 --parallel 20",
+    "art:index": "node --experimental-strip-types scripts/art-index.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
