@@ -3761,18 +3761,43 @@ export function reactionFireOn(s: GameState, unit: Unit): void {
   reactionDepth += 1;
   try {
     for (const b of foes) {
-      /*
-       * 人已经被前面的塔打死了，这一"次进入"就到此为止：
-       * 剩下的塔没有新的触发理由，不该照着别处的兵继续喷。
-       * （同一座塔打死目标后还有余弹，会在 `buildingVolley` 里自己转火。）
-       */
-      if (unit.hp <= 0 || !s.units.includes(unit)) break;
       if (!s.units.includes(b) || b.hp <= 0) continue;
       if (attacksLeftOf(s, b) <= 0) continue;
-      buildingVolley(s, b, unit);
+      /*
+       * 火力不因为"焦点死了"停下。
+       *
+       * 打头那一个被第一座塔解决掉之后，后面几座塔没有理由收枪——射程里
+       * 还站着别人，而且那才是"集群冲锋"真正吃亏的地方：三座塔全对着
+       * 同一个人开火，人一死剩下两座就白站一回合。现在每座塔各自挑
+       * 自己射程内"最近、血最少"的目标（`focus` 没了自然退化成那个）。
+       */
+      buildingVolley(s, b, unit.hp > 0 && s.units.includes(unit) ? unit : undefined);
     }
   } finally {
     reactionDepth -= 1;
+  }
+  sweepDead(s);
+}
+
+/**
+ * 回合开始时的"清场射击"：射程里已经站着敌人的建筑，先打一轮。
+ *
+ * 反应射击只认"落位"，可是敌人走过来挨了一炮之后如果**原地砍塔**，
+ * 坐标不变，就再也不会触发——塔会被活活砍死而不还手。这一轮补的正是这个洞。
+ *
+ * 它不会让建筑多打：这一轮打掉的发数就是本回合的全部份额，剩下的要靠反应
+ * 射击，而反应射击扣的是同一份 `attacksLeft`。所以"一回合 N 发"的规矩没变，
+ * 变的只是"这 N 发一定会打出去，不会因为没人靠近就烂在手里"。
+ */
+function reactionVolleyAtTurnStart(s: GameState, owner: PlayerId): void {
+  const buildings = s.units.filter(
+    (u) => u.owner === owner && u.hp > 0 && utype(s, u.type).autoAttack && !underConstruction(u),
+  );
+  for (const b of buildings) {
+    // 这一轮可能已经把塔自己打没了（连环爆），每座都重新确认一次
+    if (!s.units.includes(b) || b.hp <= 0) continue;
+    if (attacksLeftOf(s, b) <= 0) continue;
+    buildingVolley(s, b);
   }
   sweepDead(s);
 }
@@ -6922,6 +6947,16 @@ function doEndTurn(s: GameState): ActionResult {
 
   // 光环、净化、修缮、筑墙、布雷、召唤、转属——全部自动触发
   turnStartSkills(s, nextPlayer);
+
+  /*
+   * 接手方的建筑先清一次场：射程里已经站着人的，就在这一刻打。
+   *
+   * 位置和以前那句 `fireBuildings(s, prevPlayer)` 一样，主语换了：
+   * 以前是"守方在敌人接手时白打一轮"（和手动开火各算各的），
+   * 现在是"轮到自己时，把这一回合的火力花在射程里还在的人身上"——
+   * 同一份 `attacksLeft`，不会多打一发。
+   */
+  reactionVolleyAtTurnStart(s, nextPlayer);
 
   s.winner = s.winner ?? checkWinner(s);
   if (s.winner) {

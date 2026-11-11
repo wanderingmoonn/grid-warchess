@@ -2268,6 +2268,51 @@ test('反应射击：打死一个还有余弹就转火下一个', () => {
   assert.ok(after.hp < 500, '余弹要转火到下一个人，而不是憋着');
 });
 
+test('反应射击：轮到自己时先清一次场——原地不动的敌人也照打', () => {
+  /*
+   * 之前只认"落位"：敌人走过来挨一炮，然后原地砍塔，坐标不变就再也不触发，
+   * 塔会被活活砍死。这一轮补的就是"射程里还站着人"。
+   */
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (let x = 5; x <= 7; x++) s.tiles[idx(s, x, 5)].terrain = 'plain';
+  place2(s, 'A', 'tower', 5, 5);
+  const parked = place2(s, 'B', 'militia', 6, 5); // 站进来就不动了
+  parked.hp = 500;
+  s.current = 'B';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'END_TURN' }); // B 结束 → 轮到 A，塔清场
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const after = r.state.units.find((u) => u.id === parked.id);
+  assert.ok(after && after.hp < 500, '轮到自己时，塔要先把射程里的人打一遍');
+});
+
+test('反应射击：前一座塔打死了人，后一座照打射程里的其他人', () => {
+  // 三座塔全对着同一个人开火、人一死剩下两座白站一回合——那才是集群吃亏的地方
+  const s = fresh({ godMode: true });
+  s.units = [];
+  for (let x = 5; x <= 9; x++) {
+    s.tiles[idx(s, x, 5)].terrain = 'plain';
+    s.tiles[idx(s, x, 6)].terrain = 'plain';
+    s.tiles[idx(s, x, 7)].terrain = 'plain';
+  }
+  place2(s, 'A', 'tower', 5, 5);
+  place2(s, 'A', 'tower', 9, 5);
+  const parked = place2(s, 'B', 'militia', 7, 6); // 本来就在两座塔的射程里
+  parked.hp = 500;
+  const bait = place2(s, 'B', 'militia', 7, 7); // 冲进来送死的那一个（走 2 格够得着）
+  bait.hp = 1;
+  s.current = 'B';
+  refreshMemory(s);
+
+  const r = applyAction(s, { type: 'MOVE', unitId: bait.id, x: 7, y: 5 });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === bait.id), false, '第一座塔就该送走它');
+  const after = r.state.units.find((u) => u.id === parked.id);
+  assert.ok(after && after.hp < 500, '第二座塔不该因为"目标死了"就收枪');
+});
+
 test('反应射击：被打死在废墟上的兵抢不了城（先落位、后入驻）', () => {
   /*
    * 顺序是"踩雷 → 反应射击 → 入驻废墟"。这条盯的是最后一环：
