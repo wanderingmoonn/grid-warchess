@@ -284,6 +284,27 @@ await evaluate(`(() => {
 await sleep(350);
 await shot(`02b-setup-end-${tag}`);
 
+// 悬停态：`:hover` 只改背景、文字色却假设"底色不会反转"的地方，只有把指针真的
+// 移上去才看得见。合成 MouseEvent 不触发 :hover，必须走 CDP 的真鼠标事件。
+if (ARGS.includes('hover')) {
+  const box = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim() === '开始对局');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (box) {
+    await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y, button: 'none' });
+    await sleep(350);
+    await shot(`02h-hover-${tag}`);
+    // 复位，别让悬停状态污染后面的截图
+    await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, button: 'none' });
+    await sleep(150);
+  } else {
+    console.log('  （没找到「开始对局」按钮）');
+  }
+}
+
 if (DRAFT) {
   // 勾上「选卡模式」再开打，才会进 BP 那一屏（默认配置里它是关的）
   const on = await evaluate(`(() => {
