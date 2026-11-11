@@ -113,7 +113,7 @@ import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
-import { chimeLabel, loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
+import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
@@ -3714,13 +3714,11 @@ function handleAction(act: string, el: HTMLElement): void {
       undoLast();
       return;
 
-    case 'chime':
-      chimeVolume = nextChimeVolume(chimeVolume);
-      saveChimeVolume(chimeVolume);
-      // 点一下顺手试听当前档位（音量 0 时 playChime 自己会跳过）
-      playChime(chimeVolume);
-      render();
-      return;
+    /*
+     * 顶栏那颗"铃声：60% → 80% → 0 → 60%"的循环按钮已经拆了（2026-11-11），
+     * 音量改在「设置」里用滑块调，那才是"调一个连续量"该有的样子。
+     * 原来那个 case 留在这儿只会变成第二条没人管的设置路径。
+     */
 
     case 'surrender': {
       // 认输是不可逆的，必须问一句
