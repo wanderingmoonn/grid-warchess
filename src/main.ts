@@ -1940,6 +1940,23 @@ function syncBoardList(view: PlayerView): void {
   if (sig === boardListSig) return;
   boardListSig = sig;
 
+  /*
+   * 只有一张图时**整个列表都不该出现**。
+   *
+   * 它存在的理由是"在地球和月球之间切换"；只有地球的时候，它是一块
+   * 永远只有一个选项的按钮，占着左下角、还挡着地图，玩家反馈说看着像多了个功能。
+   * 判据用"这一局有几张图"，不是"有没有开太空包"——以后再加别的图（空间站、
+   * 其他星球）不用回来改这里。
+   *
+   * 唯一的例外是上帝模式的开发按钮（生成月球图）：那东西本来就是为了"还没有图的时候
+   * 造一张图"而存在的，藏起来就点不到了。
+   */
+  const devAdd = godMode() && !replay;
+  const showList = entries.length > 1 || devAdd;
+  boardListEl.classList.toggle('single', !showList);
+  // 收起时把展开状态也归位：否则下一局多图时会一进场就是展开的
+  if (!showList) boardListOpen = false;
+
   boardListEl.classList.toggle('open', boardListOpen);
   const cur = entries.find((e) => e.id === activeBoardId) ?? entries[0]!;
   const current =
@@ -1964,12 +1981,11 @@ function syncBoardList(view: PlayerView): void {
     .join('');
 
   // 调试脚手架：第四步接入真正的月球后删掉
-  const debug =
-    godMode() && !replay
-      ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
-      : '';
+  const debug = devAdd
+    ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
+    : '';
 
-  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${debug}</div>`;
+  boardListEl.innerHTML = showList ? `${current}<div class="bl-menu">${rows}${debug}</div>` : '';
 }
 
 /**

@@ -187,6 +187,22 @@ check('首屏只渲染己方棋子，敌方在视野外被裁掉', () => {
   assert.ok(foe <= 2, `敌方不该整队出现，实际看见 ${foe} 个`);
 });
 
+check('只有一张地图时，左下角的地图列表整个收起来', () => {
+  /*
+   * 玩家反馈：没开「太空时代」也会看见左下角那个"选择星球"的按钮。
+   * 它本来是给"地球 / 月球切换"用的，只有地球时就是一个永远只有一个选项的
+   * 按钮，占着地图。判据是"这一局有几张图"（`boardIds().length`），
+   * 不是"有没有开某个扩展"——以后再加别的图不用回来改。
+   *
+   * jsdom 里没有布局，所以断言"类名 + 没建子节点"：CSS 那句
+   * `.board-list.single { display: none }` 负责真正藏起来。
+   */
+  const el = doc.querySelector<HTMLElement>('#board-list');
+  assert.ok(el, '容器本身还在（只是不显示）');
+  assert.ok(el!.classList.contains('single'), '单图时要带 single 类');
+  assert.equal(el!.children.length, 0, '单图时一个按钮都不该建出来');
+});
+
 check('地形类正确分布', () => {
   // 地图现在是随机的，具体几格水/几座山每局都不同，
   // 所以只验证"确实有地形变化"和"城市格数固定"。

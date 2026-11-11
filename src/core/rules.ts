@@ -197,9 +197,15 @@ export {
  * 做成对外导出的判断，是因为它不只是一条合法性检查——
  * 地图生成、AI 选址、界面高亮都要用同一套口径，各写一份必然走偏。
  */
-export function adjacentToWater(s: GameState, x: number, y: number): boolean {
+export function adjacentToWater(
+  s: GameState,
+  x: number,
+  y: number,
+  /** 哪张图；不传 = 地球（老调用点一个都不用改） */
+  board: BoardId = EARTH,
+): boolean {
   return DIRS.some(([dx, dy]) => {
-    const t = tileAt(s, x + dx, y + dy);
+    const t = tileAtOn(s, board, x + dx, y + dy);
     if (!t) return false;
     // 临水就是临水，不分深浅：浅流踩得过去、深水只有船能进，
     // 但"挨着水"这件事对贸易、港口、造船位是一回事。
@@ -2053,7 +2059,8 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (isPetrified(s, u)) {
     armorItems.push({ label: '石化 ×2', delta: armorBase - (def.armor + (u.armorBonus ?? 0)) });
   }
-  const tile = tileAt(s, u.x, u.y);
+  // 地形加成按**这个单位所在的图**取：月球上站在环形山里，面板该写环形山的 +2 甲
+  const tile = tileUnder(s, u);
   for (const src of auraSourcesOf(s, u, 'allyArmor')) {
     armor += src.value;
     armorItems.push({ label: src.label, delta: src.value });
@@ -2717,7 +2724,15 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
  *
  * 建筑（移动力 0）永远按第二种算。
  */
-export function threatTiles(s: GameState, unit: Unit): Set<number> {
+export function threatTiles(state: GameState, unit: Unit): Set<number> {
+  /*
+   * 纯几何，按**这个单位所在的那张图**算。
+   *
+   * 返回的是"这张图的格号"：地球的 45 和月球的 45 不是一个位置，
+   * 所以调用方画在哪张图上，就得拿哪张图的格号。以前它默认读 `s.tiles`，
+   * 月面上的单位会算出一圈"地球上能打到哪"——月面战斗接上之后这就是错的。
+   */
+  const s = boardStateOf(state, unit);
   const out = new Set<number>();
   const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
   // 多格单位：距离要量到**整个矩形**，不能量锚点。
@@ -3440,7 +3455,9 @@ function checkWinner(s: GameState): PlayerId | null {
 export function unitYield(s: GameState, u: Unit): ResourceCost {
   if (underConstruction(u)) return {};
   const def = utype(s, u.type);
-  const tile = tileAt(s, u.x, u.y);
+  // 产出看脚下那块地，而"脚下"是**它所在那张图**的那一格。
+  // 现在月球上没有经济单位，但少这一层的话，以后往月面放农场就会按地球的地形结算。
+  const tile = tileUnder(s, u);
   const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;
@@ -3461,7 +3478,7 @@ export function unitYield(s: GameState, u: Unit): ResourceCost {
     for (const [id, n] of Object.entries(def.yield)) add(id, n);
   }
 
-  if ((out[GOLD] ?? 0) > 0 && adjacentToWater(s, u.x, u.y)) {
+  if ((out[GOLD] ?? 0) > 0 && adjacentToWater(s, u.x, u.y, boardIdOf(u))) {
     // 桥面也要算"临水"：桥架在水上，桥下还是水。
     // 只判 water 的话，玩家在河边修一座桥，反而把这一带的贸易加成弄没了——
     // 这是实打实踩过的 bug（建桥之后沿岸农民全少 3 金收入）。
@@ -4789,7 +4806,9 @@ function doSiege(
     return { ok: false, reason: '看不见那座城（在视野外）' };
   }
   const dist = distToCity(attacker, city);
-  if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
+  if (dist > effectiveRangeAgainst(s, attacker, tileAtOn(s, boardIdOf(city), city.x, city.y))) {
+    return { ok: false, reason: '城市超出射程' };
+  }
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);

@@ -555,6 +555,18 @@ body {
   pointer-events: none;
 }
 
+/*
+ * 只有一张图时整个列表都不出现。
+ *
+ * 它存在的理由是"在地球和月球之间切换"；只有地球的时候，它是一块永远
+ * 只有一个选项的按钮，占着左下角还挡地图。`display:none` 必须写在
+ * `.board-list` 之后（同优先级靠源码顺序压过上面的 `display:flex`），
+ * 也别改成 `visibility`——那还占着点击区。
+ */
+.board-list.single {
+  display: none;
+}
+
 .board-list:hover,
 .board-list:focus-within,
 .board-list.open {
