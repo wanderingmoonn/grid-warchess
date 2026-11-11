@@ -373,7 +373,7 @@ export const abilityApi: AbilityApi = {
       logText ?? `${utype(s, victim.type).name} 被消灭`,
       true,
     );
-    drownCargo(s, victim);
+    loseCargo(s, victim);
     fireKilled(s, victim, killer);
   },
   destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
@@ -3376,16 +3376,20 @@ function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
 
 /** 通知所有扩展：有单位阵亡了 */
 /**
- * 船沉了，货舱里的人一起没。
+ * 载体被摧毁，货舱里的单位一起没。
  *
  * 不写这条会出现最糟的一种情形：船被打沉了，但船上那两个兵凭空回到了
  * 棋盘上（因为它们的对象还挂在货舱里），玩家只会觉得"这游戏算错了"。
- * 所以凡是从 s.units 里删单位的地方，船上的货一并清掉。
+ * 所以凡是从 s.units 里删单位的地方，载的货一并清掉。
+ *
+ * 载体不止船：货舱是通用机制（船、渡船、太空的发射井都带 hold）。
+ * 所以文案写"载体"而不写"船"，也不必为每种载体各写一句——
+ * 谁被摧毁对玩家是明摆着的，战报只需要说清**里面的人也没了**。
  */
-function drownCargo(s: GameState, dead: Unit): void {
+function loseCargo(s: GameState, dead: Unit): void {
   if (!dead.cargo || dead.cargo.length === 0) return;
   const names = dead.cargo.map((u) => utype(s, u.type).name).join('、');
-  pushLog(s, dead.owner, `随船沉没：${names}`, true);
+  pushLog(s, dead.owner, `所载单位一同损毁：${names}`, true);
 }
 
 /**
@@ -4740,7 +4744,7 @@ function doAttack(
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
     pushLog(s, attacker.owner, `${dfName} 被消灭`, true);
-    drownCargo(s, defender);
+    loseCargo(s, defender);
     fireKilled(s, defender, attacker);
     // 收割（刺客大师）：亲手斩掉一个，本回合的移动力就还回来。
     //
@@ -4770,13 +4774,13 @@ function doAttack(
     if (!s.units.some((u) => u.id === v.unit.id)) continue;
     s.units = s.units.filter((u) => u.id !== v.unit.id);
     pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    drownCargo(s, v.unit);
+    loseCargo(s, v.unit);
     fireKilled(s, v.unit, attacker);
   }
   if (attacker.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== attacker.id);
     pushLog(s, attacker.owner, `${atName} 在反击中阵亡`, true);
-    drownCargo(s, attacker);
+    loseCargo(s, attacker);
     fireKilled(s, attacker, undefined);
   }
 
@@ -4953,7 +4957,7 @@ function doSiege(
     if (!s.units.some((u) => u.id === v.unit.id)) continue;
     s.units = s.units.filter((u) => u.id !== v.unit.id);
     pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    drownCargo(s, v.unit);
+    loseCargo(s, v.unit);
     fireKilled(s, v.unit, attacker);
   }
 
@@ -6834,7 +6838,7 @@ function sweepDead(s: GameState): void {
     if (!s.units.some((x) => x.id === u.id)) continue;
     s.units = s.units.filter((x) => x.id !== u.id);
     pushLog(s, u.owner, `${utype(s, u.type).name} 倒下了`, true);
-    drownCargo(s, u);
+    loseCargo(s, u);
     fireKilled(s, u, undefined);
   }
 }

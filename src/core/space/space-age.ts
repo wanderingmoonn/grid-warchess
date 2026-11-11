@@ -35,7 +35,7 @@ import {
   interruptSampling,
   lunarWinner,
   moonBaseLines,
-  samplingOf,
+  samplingsOf,
   tickMoonBases,
 } from './moon-base.ts';
 import { boardIdOf } from '../board.ts';
@@ -89,9 +89,10 @@ export const SPACE_AGE: Expansion = {
       + '所以"建好先放着"是一种真实的欺骗。',
     '落地在<b>离月球中心最近的一块空地</b>，当回合不能再动。发射井与月球都不会被消耗。',
     '<b>登月胜利</b>：工程单位在月面点「展开月球基地」（2×2、200 血、12 甲、视野 5，'
+      + '并且<b>四格都得是月壤平地</b>——环形山不算，站错了先挪一格；'
       + '落地那回合不能采样），然后点基地的「月壤采样」；'
       + `${SAMPLE_TURNS} 个<b>自己的</b>回合后结果送回，直接获胜。整局只能做一次。`
-      + '顶栏会出现「登月 n」，双方都看得见。'
+      + '顶栏给<b>每一方各显示一条</b>「红方 登月 3」——你能随时读到对手还差几回合。'
       + '<b>基地挨打就作废</b>：采样进度清零、要重新点——所以登月之后必须留人守。',
     '月面上的部队可以正常走动、正常开火：寻路、地形消耗、占格、射程、地形掩护、溅射'
       + '全都按<b>月球那一份</b>算。**地球和月球之间打不到**——坐标再近，中间也隔着一个天空。'
@@ -226,16 +227,26 @@ export const SPACE_AGE: Expansion = {
      * 给**双方**看：进攻方要看到自己还剩几回合，防守方要看到一个"再不拦就输了"
      * 的红色提醒——这条压力正是 3 回合窗口存在的意义。
      */
-    topbarBadges: ({ state }) => {
-      const info = samplingOf(state);
-      if (!info || info.done) return [];
-      return [
-        {
-          id: 'space-lunar',
-          text: `登月 ${info.left}`,
-          hint: `${state.players[info.owner].name}的月壤采样还有 ${info.left} 个回合送回，一到就赢`,
-        },
-      ];
-    },
+    /**
+     * 顶栏倒计时：**每一方一条**。
+     *
+     * 以前只显示找到的第一座，于是两人同时登月时有一个人的进度是隐形的。
+     * 这条胜利条件是"谁先送回谁赢"，两边的倒计时得并排摆着才像一场竞赛。
+     * 文本带名字（默认就是"红方/蓝方"，不占几个字）：两个「登月 2」并排
+     * 谁也分不清是谁的。
+     */
+    topbarBadges: ({ state }) =>
+      samplingsOf(state)
+        .filter((info) => !info.done)
+        .map((info) => {
+          const who = state.players[info.owner].name;
+          return {
+            id: `space-lunar-${info.owner}`,
+            text: `${who} 登月 ${info.left}`,
+            hint:
+              `${who}的月壤采样还有 ${info.left} 个回合送回，一到就赢；` +
+              '基地一挨打就作废，所以贴上去打一下也是有效的反制',
+          };
+        }),
   },
 };

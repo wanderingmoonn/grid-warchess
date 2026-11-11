@@ -7611,8 +7611,9 @@ test('船被打沉，舱里的人一起没', () => {
 
   assert.ok(!cur.units.some((u) => u.id === ferry.id), '船应该被打沉了');
   assert.ok(!cur.units.some((u) => u.id === crew.id), '船上的人应该跟着没了');
+  // 文案是通用的（"所载单位一同损毁"）：载体不止船，别让战报替玩家假定是什么沉的
   assert.ok(
-    cur.log.some((e) => e.text.includes('随船沉没')),
+    cur.log.some((e) => e.text.includes('所载单位一同损毁')),
     `战报里应该写清楚：${cur.log.slice(-3).map((e) => e.text).join(' / ')}`,
   );
 });

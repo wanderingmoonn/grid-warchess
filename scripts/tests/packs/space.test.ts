@@ -27,7 +27,7 @@ import { footprintOf, distBetweenUnits } from '../../../src/core/query.ts';
 import { playerView, viewOnBoard } from '../../../src/core/fog.ts';
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../../../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../../../src/core/space/silo.ts';
-import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf } from '../../../src/core/space/moon-base.ts';
+import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf, samplingsOf } from '../../../src/core/space/moon-base.ts';
 import type { Board, GameState, Unit } from '../../../src/core/types.ts';
 
 /** 地球铺平（这些用例只关心规则，不关心地形） */
@@ -576,6 +576,70 @@ test('月壤采样：基地挨一下就打回原点，顶栏提示消失、可�
   const again = applyAction(mine, { type: 'HERO_SKILL', unitId: base.id, skillId: 'lunar-sampling' });
   assert.ok(again.ok, `清零之后该能重新采样：${again.reason}`);
   assert.equal(samplingOf(again.state)?.left, SAMPLE_TURNS, '倒计时从头算');
+});
+
+test('双方同时采样：顶栏给每一方各一条倒计时', () => {
+  /*
+   * 以前 `samplingOf` 只返回找到的**第一个**，顶栏就只有一个「登月 n」。
+   * 两人同时登月时，其中一个人的进度是隐形的——而这条胜利条件本质是
+   * "谁先送回谁赢"，看不见对手的进度等于看不见竞赛的另一半。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const mine = onMoon(s, 'A', MOON_BASE_ID, 2, 2);
+  const theirs = onMoon(s, 'B', MOON_BASE_ID, 8, 8);
+  mine.custom = { ...(mine.custom ?? {}), sample: 2 };
+  theirs.custom = { ...(theirs.custom ?? {}), sample: SAMPLE_TURNS };
+
+  const list = samplingsOf(s);
+  assert.equal(list.length, 2, '两座基地都在采样，都要报出来');
+  assert.deepEqual(
+    list.map((x) => [x.owner, x.left]),
+    [['A', 2], ['B', SAMPLE_TURNS]],
+    '各报各的剩余回合（顺序按 s.units，稳定）',
+  );
+  // 单数版仍在：只取第一个，给"只关心有没有人在采"的地方用
+  assert.equal(samplingOf(s)?.owner, 'A');
+
+  const badges = activeExpansions(s).flatMap((e) => e.hooks.topbarBadges?.({ state: s }) ?? []);
+  assert.equal(badges.length, 2, `顶栏要有两条，实际：${JSON.stringify(badges)}`);
+  assert.ok(badges.some((b) => b.id === 'space-lunar-A' && b.text.includes('2')), '我方那条带回合数');
+  assert.ok(badges.some((b) => b.id === 'space-lunar-B' && b.text.includes(String(SAMPLE_TURNS))), '对手那条也在');
+  // 名字要在：两个「登月 2」并排，谁也分不清是谁的
+  assert.ok(badges.every((b) => /红方|蓝方/.test(b.text)), `徽标要带玩家名：${badges.map((b) => b.text).join(' / ')}`);
+
+  // 采完之后不再占用顶栏（人家已经赢了，这条徽标没有意义）
+  theirs.custom = { ...(theirs.custom ?? {}), sampled: true };
+  const after = activeExpansions(s).flatMap((e) => e.hooks.topbarBadges?.({ state: s }) ?? []);
+  assert.equal(after.length, 1, 'done 的那条不再显示');
+});
+
+test('展开基地：四格都要是平地，站在环形山上展不开', () => {
+  /*
+   * 文案一直写着"要一块平地"，但代码只判了 `passable`——环形山（2 步、
+   * 护甲 +2）也能展开，等于文案在骗人。现在按文案来。
+   *
+   * 环形山放在工程单位脚下：`baseAnchorFor` 的四个候选锚点（自己、左、上、左上）
+   * 都包含脚下这一格，所以一处是坑，四种摆法全都放不下——正好把"整块平地"
+   * 这条钉死，而不是碰巧被某个角挡住。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const moon = s.boards!.moon!;
+  const pit = (3 * moon.w) + 3;
+  moon.tiles[pit]!.terrain = 'crater';
+  const crew = onMoon(s, 'A', 'crew', 3, 3);
+
+  const bad = applyAction(s, { type: 'UNIT_ACTION', unitId: crew.id, actionId: 'base:deploy' });
+  assert.equal(bad.ok, false, '脚下是环形山，不该能展开');
+  assert.ok(bad.reason.includes('平地'), `理由该说清是地形问题，实际：${bad.reason}`);
+  assert.equal(s.units.filter((u) => u.type === MOON_BASE_ID).length, 0, '失败时不该凭空多出一座基地');
+
+  // 填平就能展开（证明拦的确实只是地形，不是别的）
+  moon.tiles[pit]!.terrain = 'regolith';
+  const good = applyAction(s, { type: 'UNIT_ACTION', unitId: crew.id, actionId: 'base:deploy' });
+  assert.ok(good.ok, `填平之后该能展开：${good.ok ? '' : good.reason}`);
+  assert.ok(good.state.units.some((u) => u.type === MOON_BASE_ID), '基地起来了');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

@@ -32,7 +32,7 @@
 
 import type { GameState, PlayerId, SkillDef, Unit, UnitTypeDef } from '../types.ts';
 import { boardIdOf, boardOf } from '../board.ts';
-import { passable } from '../config.ts';
+import { CONFIG, passable } from '../config.ts';
 import { registerSkillEffect, registerSkillReadyCheck } from '../skill-hooks.ts';
 import { MOON_BOARD } from './silo.ts';
 
@@ -100,7 +100,22 @@ function log(s: GameState, p: PlayerId, text: string, open = false): void {
 // ── 展开 ─────────────────────────────────────────────────────────────
 
 /**
- * 2×2 能不能落在这里（在月图里、地形过得去、没被占）。
+ * 「平地」的定义：能走，而且不额外费脚力（`terrainCost` ≤ 1）。
+ *
+ * 为什么不硬编码 `regolith`：以后给月面加地形（沙脊、浅坑）时，
+ * 谁算平地该由地形表说话，而不是回来改这个函数。
+ * 环形山是 2——爬坑缘费劲，算不上平地。
+ */
+function isFlat(t: keyof typeof CONFIG.terrainCost): boolean {
+  return passable(t) && (CONFIG.terrainCost[t] ?? 99) <= 1;
+}
+
+/**
+ * 2×2 能不能落在这里（在月图里、**整块平地**、没被占）。
+ *
+ * 地形要求是"整块平地"而不只是"能走"：文案一直写着"要一块平地"，
+ * 以前实际只判了 `passable`，于是环形山（2 步、+2 甲）也能展开——
+ * 等于文案在骗人。现在按文案来：四格都得是平地，站在环形山边上就得先挪一格。
  *
  * `ignoreId` 是**要展开的那个人自己**：他就站在锚点上，不排掉的话
  * "脚下这一格被占着"，一块平地都放不下。
@@ -113,7 +128,7 @@ function canPlaceBaseAt(s: GameState, x: number, y: number, ignoreId?: string): 
       const ty = y + dy;
       if (tx < 0 || ty < 0 || tx >= moon.w || ty >= moon.h) return false;
       const tile = moon.tiles[ty * moon.w + tx];
-      if (!tile || !passable(tile.terrain)) return false;
+      if (!tile || !isFlat(tile.terrain)) return false;
       // 月面上没有城；占地的只可能是单位（含另一座基地）
       const busy = s.units.some(
         (u) =>
@@ -156,7 +171,7 @@ export function deployProblem(s: GameState, u: Unit): string | null {
     return '本方已经有一座月球基地了';
   }
   if (!s.boards?.[MOON_BOARD]) return '这一局没有月球图';
-  if (!baseAnchorFor(s, u)) return '这里放不下 2×2 的基地（要一块平地）';
+  if (!baseAnchorFor(s, u)) return '这里放不下 2×2 的基地（四格都得是月壤平地，环形山不行）';
   return null;
 }
 
@@ -202,15 +217,29 @@ export function deployBase(s: GameState, u: Unit): string | null {
 
 // ── 采样 ─────────────────────────────────────────────────────────────
 
-/** 正在采样/已完成的那个基地（给顶栏倒计时用） */
-export function samplingOf(s: GameState): { owner: PlayerId; left: number; done: boolean } | null {
+/**
+ * 所有在采样（或已采完）的基地，按 `s.units` 的顺序。
+ *
+ * 以前只返回**第一个**，于是顶栏只有一个「登月 n」：两个人同时登月时，
+ * 其中一个的倒计时是隐形的。而这条胜利条件本质是场竞赛——"谁先送回谁赢"，
+ * 看不见对手的进度就等于看不见这场竞赛的另一半。
+ *
+ * 同一方最多一座基地（`deployProblem` 挡着），所以不用去重。
+ */
+export function samplingsOf(s: GameState): Array<{ owner: PlayerId; left: number; done: boolean }> {
+  const out: Array<{ owner: PlayerId; left: number; done: boolean }> = [];
   for (const u of s.units) {
     if (u.type !== MOON_BASE_ID || u.hp <= 0) continue;
     const st = baseStateOf(u);
-    if (st.sampled) return { owner: u.owner, left: 0, done: true };
-    if (st.left > 0) return { owner: u.owner, left: st.left, done: false };
+    if (st.sampled) out.push({ owner: u.owner, left: 0, done: true });
+    else if (st.left > 0) out.push({ owner: u.owner, left: st.left, done: false });
   }
-  return null;
+  return out;
+}
+
+/** 正在采样/已完成的那个基地（单数版；多人同时采样时只看得到第一个，见上） */
+export function samplingOf(s: GameState): { owner: PlayerId; left: number; done: boolean } | null {
+  return samplingsOf(s)[0] ?? null;
 }
 
 /** 有人的采样结果送回了 → 他赢。没有就返回 undefined（**必须**是 undefined） */
