@@ -44,8 +44,14 @@ import type { GameState, PlayerId, Unit } from './types.ts';
  * 的格。方向由鼠标点的那一格决定，不由矩形锚点决定——点城的右侧，
  * 剑气就往右侧穿过去。
  */
+/**
+ * 只取"宽高"是有意的：覆盖格是一串**格号**，而格号只在某一张图里成立
+ * （地球 20 宽的 `i=45` 和月球 9 宽的 `i=45` 是两个位置）。
+ * 所以调用方传的是"这张图"的 `{ w, h }`，不是整个 state——
+ * 传 state 就会不自觉地按地球算，月面战斗第一次接上时这里正好是最容易漏的一处。
+ */
 export function strikeCoverCells(
-  s: GameState,
+  s: { w: number; h: number },
   attacker: { x: number; y: number },
   hit: { x: number; y: number },
   radius: number,

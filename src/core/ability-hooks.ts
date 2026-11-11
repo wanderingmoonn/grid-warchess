@@ -23,7 +23,7 @@
  * 因为那些先后有实际意义（狂暴要在加减之后乘、盾墙要在冲锋之后减）。
  */
 
-import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { BoardId, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { distBetweenUnits } from './query.ts';
 
 /** 四邻方向。规则层到处都要用，放这里省得扩展自己再抄一份 */
@@ -69,8 +69,15 @@ export interface AbilityApi {
     opts?: { ignoreUnits?: boolean },
   ): boolean;
   freeNeighbor(s: GameState, u: Unit, type: string): { x: number; y: number } | null;
-  /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它） */
-  spawn(s: GameState, owner: PlayerId, type: string, x: number, y: number): void;
+  /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它）；`board` 不传就是地球 */
+  spawn(
+    s: GameState,
+    owner: PlayerId,
+    type: string,
+    x: number,
+    y: number,
+    board?: BoardId,
+  ): void;
   pushLog(s: GameState, player: PlayerId, text: string, open?: boolean): void;
   citiesOf(s: GameState, p: PlayerId): City[];
   distToCity(u: { x: number; y: number }, city: City): number;
