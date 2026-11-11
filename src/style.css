@@ -7084,3 +7084,30 @@ a.btn {
     display: none;
   }
 }
+
+/*
+ * 手机上的选卡卡片：数值行允许折行。
+ *
+ * `.dc-meta` 是 nowrap + ellipsis——桌面上池子是多列窄卡，截断是对的
+ * （一屏 20 张，靠悬停看详情）。手机上单列，一张卡有 300px 宽，
+ * 截断反而切在最要命的地方："攻 15 · 血 85 · 射程 2 · 视…" 永远看不到视野。
+ *
+ * 折成两行只多 14px 高，但"能不能打到它"这件事不用再悬停问了。
+ */
+@media (max-width: 640px) {
+  .dc-meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35;
+  }
+
+  /* 折行之后卡片会变高，把内边距和图标收一点，一屏仍然能看到十来张 */
+  .draft-card {
+    padding: 7px 9px;
+  }
+
+  .dc-icon {
+    flex: 0 0 auto;
+  }
+}

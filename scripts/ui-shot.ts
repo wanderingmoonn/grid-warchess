@@ -37,6 +37,8 @@ const PORT = 9333;
  */
 const ARGS = process.argv.slice(2);
 const MOBILE = ARGS.includes('mobile');
+/* 只拍选卡（BP）一屏：它平时要先在开局面板里勾「选卡模式」才会出现 */
+const DRAFT = ARGS.includes('draft');
 /*
  * 还能临时指定宽度（`w=360`）：安卓常见窄屏就是 360，而"刚好放不下"这种情况
  * 只会在某个具体宽度上出现——390 能放下不代表 360 能，差 30px 就是横滚。
@@ -212,7 +214,10 @@ async function click(selector: string) {
 
 const theme = ARGS.includes('modern') ? '&ui=modern' : '';
 const tag =
-  (theme ? 'modern' : 'legacy') + (MOBILE ? '-m' : '') + (W_ARG ? `-${W}` : '');
+  (theme ? 'modern' : 'legacy') +
+  (MOBILE ? '-m' : '') +
+  (W_ARG ? `-${W}` : '') +
+  (DRAFT ? '-draft' : '');
 
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
@@ -232,6 +237,32 @@ await evaluate(`(() => {
 })()`);
 await sleep(350);
 await shot(`02b-setup-end-${tag}`);
+
+if (DRAFT) {
+  // 勾上「选卡模式」再开打，才会进 BP 那一屏（默认配置里它是关的）
+  const on = await evaluate(`(() => {
+    const b = document.querySelector('[data-draft-mode="on"]');
+    if (!b) return false;
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  if (!on) console.log('  （没找到「开启选卡模式」）');
+  await sleep(400);
+  for (const label of ['开始对局', '开始', '进入战场', '开战']) {
+    if (await clickText(label)) break;
+  }
+  await sleep(1800);
+  await shot(`08-draft-${tag}`);
+  // 还有一屏：点「开始选卡」之后才是真正的池子（左池右人）
+  if (await clickText('开始选卡')) {
+    await sleep(1500);
+    await shot(`09-draft-pool-${tag}`);
+  }
+  proc.kill();
+  staticServer.close();
+  console.log('\n完成：', OUT);
+  process.exit(0);
+}
 
 // 设置页 → 开打。按钮文案随状态变（"开始""进入战场"…），逐个别名试
 for (const label of ['开始对局', '开始', '进入战场', '开战', '确认']) {
