@@ -16,6 +16,7 @@
     "probe:adoption": "node --experimental-strip-types scripts/probe-adoption.ts",
     "probe:draft-winrate": "node --experimental-strip-types scripts/probe-draft-winrate.ts",
     "probe:econ": "node --experimental-strip-types scripts/probe-econ.ts",
+    "probe:econ-payback": "node --experimental-strip-types scripts/probe-econ-payback.ts",
     "probe:fog64": "node --experimental-strip-types scripts/probe-fog64.ts",
     "probe:save": "node --experimental-strip-types scripts/probe-save.ts",
     "test:rules": "node --experimental-strip-types scripts/test-rules.ts",

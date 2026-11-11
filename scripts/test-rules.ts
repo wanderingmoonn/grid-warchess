@@ -2864,7 +2864,8 @@ test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
     // 2026-11-11：这条线只管时代 4 以上。11-10 曾放宽到时代 3 来给军需官兜底，
     // 但那等于用测试承诺"军需官的回本必须 ≤6"，结果只能靠把它加强到 27 来满足；
     // 用户要求回调之后，口径跟着退回——**门槛不该替设计做决定**。
-    // 军需官（时代 3，回本 9.4）是已知例外，它值不值那个价是另一个问题。
+    // 军需官（时代 3）由下面那条用例单独钉：它靠"城市就是最佳地形、不用走路"
+    // 拿到一轮结构性优势，所以允许比同代慢一轮（实测 8 轮，同代 7 轮）。
     if ((d.era ?? 0) < 4) continue;
     const best = Math.max(0, ...Object.values(d.incomeByTerrain ?? { plain: 0 } as Record<string, number>));
     assert.ok(best > 0, `${d.name} 是经济单位，却没有产出`);
@@ -2886,6 +2887,31 @@ test('经济单位：时代 4 以上回本不超过 5.5 回合', () => {
   const era5 = Math.min(...rows.filter((r) => r.era === 5).map((r) => r.cost / r.best));
   const era6 = Math.max(...rows.filter((r) => r.era === 6).map((r) => r.cost / r.best));
   assert.ok(era6 <= era5, `时代 6 最差的回本（${era6.toFixed(2)}）不该比时代 5 最好的（${era5.toFixed(2)}）还慢`);
+});
+
+test('军需官：城市 20，实测回本 8 轮（同代 7 轮，慢的那一轮是它的"不用走路"红利）', () => {
+  /*
+   * 为什么这条不走"回本 ≤ 5.5"那条线：军需官是**唯一**一个
+   * "城市就是最佳地形"的经济单位，别的单位造出来要先花一轮走出去
+   * （新单位当回合动不了，站城里是 0 收入）。
+   *
+   * 实测见 `scripts/probe-econ-payback.ts`：真跑 applyAction，每轮读 unitYield。
+   *   农民 0,7,7… → 8 轮      牧民 0,8,8… → 7 轮
+   *   种植园主 9,20,20… → 7 轮  军需官 20,20,20… → 8 轮
+   * 结构优势正好一轮，所以它的"数值回本"（150/20 = 7.5）本来就该比同代慢。
+   *
+   * 16 的时候实测是 10 轮——比同代慢 3 轮、比时代 1 的农民还慢，
+   * 那不是"削弱"，是把它踢出了经济单位序列。20 是"慢一轮"的那一档；
+   * 22 起就是持平（7 轮），26 起会翻成 6 轮、比同代都快。
+   */
+  const d = (fullUnitCatalog() as Record<string, any>)['gp_quartermaster'];
+  assert.ok(d, '时代军备里应该有军需官');
+  assert.equal(d.incomeByTerrain.city, 20, '城市产出这一轮定在 20');
+  assert.equal(d.incomeByTerrain.plain, 11, '副地形按同比例：平地 11');
+  assert.equal(d.incomeByTerrain.hill, 6, '丘陵 6');
+  assert.equal(d.incomeByTerrain.forest, 5, '森林 5');
+  const paybackRounds = Math.ceil(d.cost / d.incomeByTerrain.city);
+  assert.equal(paybackRounds, 8, `150 / 20 应该落在第 8 轮，实际 ${paybackRounds}`);
 });
 
 test('信息化时代：战斗单位的射程整体 +1', () => {
