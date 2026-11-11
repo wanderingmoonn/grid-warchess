@@ -18,7 +18,12 @@ import {
   passable,
 } from '../core/config.ts';
 import { canPay, costLabel, resourceShort } from '../core/resources.ts';
-import { buildListOf, type BuildList } from '../core/build-list.ts';
+import {
+  buildListOf,
+  groupBuilds,
+  BUILD_GROUP_LABEL,
+  type BuildList,
+} from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
@@ -881,9 +886,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const buildBlock =
       buildables.length === 0 || !mine
         ? ''
-        : `<div class="card-title" style="margin-top:14px">可建造</div>
-           <div class="recruit-list">${buildables
-             .map((b) => {
+        : `<div class="card-title" style="margin-top:14px">可建造 <span class="hint">${buildables.length} 种</span></div>
+           ${groupBuilds(buildables.map((b) => b.id))
+             .map(
+               (g) => `<div class="recruit-group">
+                 <div class="recruit-group-title">${BUILD_GROUP_LABEL[g.group]} · ${g.ids.length}</div>
+                 <div class="recruit-list">${g.ids
+             .map((id) => {
+               const b = s.unitTypes[id]!;
                const price = recruitResCost(s, me, b);
                const dis = !canBuildNow || !canPay(s.players[me], price);
                // 选址要求（临水、山边、挨着灵田……）统一由数据生成，
@@ -929,6 +939,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                </button>`;
              })
              .join('')}</div>
+               </div>`,
+             )
+             .join('')}
            <div class="hint" style="margin-top:8px">建造要占掉这个单位的整回合，选址范围 ${CONFIG.buildRange} 格。</div>`;
 
     // 运输船：装卸是它唯一会做的事，所以单独开一块，写清载了谁、还能装几个
@@ -1347,6 +1360,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      // 退役兵种（2026-11-11 整合建造单位时留的兼容壳）：定义还在是为了
+      // 让老存档里的单位不至于变成"未知类型"，但任何产线都不该再列出它
+      !d.legacy &&
       // 只能由产兵建筑造的（法器、船坞的船）城市产线不列——规则层也这么挡
       !d.campOnly &&
       eraWindowOk(s, d, city.era) &&
@@ -1811,6 +1827,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     (d) =>
       d.category !== 'building' &&
       !d.summonedOnly &&
+      !d.legacy &&
       // 白名单：不在 produce.units 里的根本不出现
       canProduce(def, d).ok &&
       // 档位与选卡：这一档本来就造不到的，不进"还造不出来"那一堆

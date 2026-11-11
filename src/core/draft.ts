@@ -383,7 +383,12 @@ export function draftAlwaysAllowed(def: UnitTypeDef): boolean {
  */
 export function upgradeUnlocks(state: GameState, side: PlayerId, era: number): UnitTypeDef[] {
   return Object.values(state.unitTypes).filter(
-    (def) => !def.summonedOnly && def.era > era && canUseType(state, side, def.id),
+    (def) =>
+      !def.summonedOnly &&
+      // 退役兵种（见 types.ts 的 legacy）：升级预览里也不该出现
+      !def.legacy &&
+      def.era > era &&
+      canUseType(state, side, def.id),
   );
 }
 
@@ -400,6 +405,8 @@ export function draftCandidates(state: GameState): string[] {
       if (isPseudoUnit(def.id)) return false;
       if (draftAlwaysAllowed(def)) return false;
       if (def.summonedOnly) return false;
+      // 退役兵种不进池子：选了也造不出来，等于白占一格
+      if (def.legacy) return false;
       // campOnly 不进池子这件事由上面的 draftAlwaysAllowed 覆盖：
       // 它跟着产兵建筑走，不算"选什么打法"。
       // 强行拦截残缺数据 / 测试残留 / 玩家乱改的本地自定义兵种

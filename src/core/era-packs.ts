@@ -37,7 +37,7 @@
  */
 
 import type { AbilityDef } from './abilities.ts';
-// 第六时代的 15 个专精兵和他们那一套能力仍然定义在 contemporary-packs.ts 里
+// 第六时代的 14 个专精兵和他们那一套能力仍然定义在 contemporary-packs.ts 里
 // （那边有按 EHP 校准过的数值口径），这里只负责把它们并进同一个包。
 // 依赖方向是单向的：era-packs → contemporary-packs，反过来没有引用。
 import { CONTEMPORARY_WAR, MODERN_ABILITIES } from './contemporary-packs.ts';
@@ -219,6 +219,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     short: '匠',
     era: 1,
     category: 'builder',
+    legacy: true,
     cost: 55,
     move: 2,
     atk: 5,
@@ -226,7 +227,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     maxHp: 20,
     range: 1,
     vision: 2,
-    builds: ['anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'bridge', 'camp'],
+    builds: [],
   },
   {
     // 三层桨战船：青铜海权的象征，撞角为主。
@@ -463,6 +464,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '掘',
     era: 2,
     category: 'builder',
+    legacy: true,
     cost: 95,
     move: 2,
     atk: 4,
@@ -470,7 +472,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     maxHp: 22,
     range: 1,
     vision: 2,
-    builds: ['med_wall', 'med_donjon', 'bridge', 'camp2'],
+    builds: [],
   },
   {
     // 齿轮帆船：铁器唯一能运兵过河的船，运 3 个
@@ -998,6 +1000,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     short: '坑',
     era: 3,
     category: 'builder',
+    legacy: true,
     cost: 135,
     move: 2,
     atk: 5,
@@ -1005,7 +1008,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 24,
     range: 1,
     vision: 2,
-    builds: ['gp_chevaux', 'gp_earthwork', 'gp_bastion', 'bridge2', 'camp3'],
+    builds: [],
   },
   {
     // 风帆战列舰：三层甲板、一百门炮，火器时代的海上霸主
@@ -1248,6 +1251,7 @@ const INDUSTRY: UnitTypeDef[] = [
     short: '地',
     era: 4,
     category: 'builder',
+    legacy: true,
     cost: 210,
     move: 2,
     atk: 5,
@@ -1255,7 +1259,7 @@ const INDUSTRY: UnitTypeDef[] = [
     maxHp: 26,
     range: 1,
     vision: 2,
-    builds: ['ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bridge2', 'camp4'],
+    builds: [],
   },
   {
     // 驱逐舰：蒸汽时代的海上多面手，带一点溅射
@@ -1477,6 +1481,7 @@ const MODERN: UnitTypeDef[] = [
     short: '战',
     era: 5,
     category: 'builder',
+    legacy: true,
     cost: 265,
     move: 2,
     atk: 5,
@@ -1484,7 +1489,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 30,
     range: 1,
     vision: 2,
-    builds: ['mod_dragonsteeth', 'mod_concretewall', 'mod_mgbunker', 'bridge3', 'camp5'],
+    builds: [],
   },
   {
     // 驱逐舰：现代海军的通用平台
@@ -1539,7 +1544,7 @@ const MODERN: UnitTypeDef[] = [
  * 合并之后只剩一个勾：勾上就是"每一代都有额外的兵"。
  *
  * ---------------------------------------------------------------
- * 第六时代那 15 个专精兵为什么还留着条件
+ * 第六时代那 14 个专精兵为什么还留着条件
  * ---------------------------------------------------------------
  * 它们的 `requiresPack` 是「信息化」：那一代是「信息化」这个包开出来的
  * （`unlockEra: 6`），不勾它城市永远升不到 6 级，这批兵一个都造不出来。
@@ -1556,9 +1561,9 @@ export const ERA_ARMS: Expansion = {
     '每一代都多出一批可选兵种：青铜的投石兵/战车/攻城槌/旌旗车，铁器的瑞士长矛兵/重装军士/' +
     '战象/弩炮/攻城塔，火器的线列步兵/胸甲骑兵/猎兵/棱堡，蒸汽的堑壕突击队/火焰喷射器/' +
     '列车炮/马克 I 坦克，机械化的伞兵/突击队/喀秋莎/重型坦克；布雷与扫雷的能力也在这一包里。' +
-    '另含第六时代的 15 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
+    '另含第六时代的 14 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
     '远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、' +
-    '前进指挥所、物流集团、工程兵团）——**这批要同时开「信息化」才会出现**，' +
+    '前进指挥所、物流集团）——**这批要同时开「信息化」才会出现**，' +
     '因为第六时代是那个包开出来的。',
   hooks: {},
   abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ...MODERN_ABILITIES],
