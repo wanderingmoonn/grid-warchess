@@ -86,6 +86,7 @@ import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
+import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
@@ -1441,7 +1442,8 @@ function render(): void {
   const threat =
     !replay &&
     selected &&
-    boardIdOf(selected) === EARTH &&
+    // 不再限定地球：threatTiles 已经按单位所在的图算，返回的也是那张图的格号。
+    // 限定地球会让月面上的兵永远看不到"我这一步能威胁到哪"。
     selected.owner === state.current &&
     !selected.acted &&
     !pendingSkill
@@ -2053,33 +2055,14 @@ function addMoonBoard(): void {
   switchBoard('moon');
 }
 
-/** 非地球的图没有选中/可达/染色这些地球坐标的东西，一律清空 */
+/**
+ * 把"整局"的高亮缩到这张图（纯换算，实现在 ui/board-scope.ts，可被测试直接调）。
+ *
+ * 以前这段对非地球图**无条件清空** `targets` 等字段，于是月面上选中单位后
+ * 一个可攻击格都不亮、点也点不动——看着像"月面不能打"，其实是界面把数据扔了。
+ */
 function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
-  if (id === EARTH) return ui;
-  // 选中的单位如果就在这张图上，高亮要留着；切图时它属于别处才清掉
-  const sel = ui.selectedId ? state.units.find((u) => u.id === ui.selectedId) : undefined;
-  return {
-    ...ui,
-    selectedId: sel && boardIdOf(sel) === id ? sel.id : null,
-    selectedCityId: null,
-    // 可达格与建造高亮都是"图内索引"，渲染的正好是同一张图，照用
-    reach: ui.reach,
-    targets: [],
-    siegeTargets: [],
-    aimTiles: [],
-    skillThreatTiles: [],
-    placeable: ui.placeable,
-    threat: [],
-    heat: undefined,
-    heatFlash: undefined,
-    movePath: undefined,
-    boardView: undefined,
-    boardGlyph: undefined,
-    incomeHints: undefined,
-    tutorialTiles: [],
-    tutorialCityId: null,
-    tutorialOwnCityId: null,
-  };
+  return scopeBoardUi(ui, id, state.units);
 }
 
 boardListEl.addEventListener('click', (e) => {
@@ -2305,9 +2288,11 @@ function clearSelection(): void {
 function computeIncomeHints(unit: Unit | undefined): Map<number, ResourceCost> {
   const hints = new Map<number, ResourceCost>();
   if (!unit || reach.length === 0) return hints;
+  // `reach` 是**单位所在那张图**的格号，反算坐标必须用那张图的宽度
+  const w = boardOf(state, boardIdOf(unit)).w;
   for (const i of reach) {
-    const x = i % state.w;
-    const y = Math.floor(i / state.w);
+    const x = i % w;
+    const y = Math.floor(i / w);
     const yields = unitYieldAt(state, unit, x, y);
     if (Object.keys(yields).length > 0) hints.set(i, yields);
   }

@@ -28,12 +28,21 @@
  */
 
 import { boardIdOf, boardOf } from './board.ts';
+import { footprintOf } from './query.ts';
 import type { BoardId, GameState, PlayerId, Unit } from './types.ts';
 
-/** 点亮的是"标记时那一格" */
+/**
+ * 点亮的是"标记时那一块"。
+ *
+ * `n` 是当时的占地边长：2×2 的建筑（发射井、月球基地）要亮**四格**，
+ * 只亮锚点会得到一个"只有左上角发亮"的怪东西——玩家根本看不出那是同一座建筑。
+ * 记下 n 而不是每次现算，仍然保持"痕迹"语义：标记之后单位再挪，亮的是原来那块。
+ */
 export interface SpotlightSpot {
   x: number;
   y: number;
+  /** 占地边长；老存档没有这个字段，按 1 处理 */
+  n?: number;
 }
 
 /** 这个单位身上有待生效的点亮吗 */
@@ -44,9 +53,13 @@ export function spotlightOf(u: Unit): SpotlightSpot | undefined {
   return raw;
 }
 
-/** 记一次点亮（覆盖旧的：连续标记只亮最新那一格） */
-export function markSpotlight(u: Unit): void {
-  u.custom = { ...(u.custom ?? {}), spotlight: { x: u.x, y: u.y } satisfies SpotlightSpot };
+/** 记一次点亮（覆盖旧的：连续标记只亮最新那一块） */
+export function markSpotlight(s: GameState, u: Unit): void {
+  const n = footprintOf(s, u);
+  u.custom = {
+    ...(u.custom ?? {}),
+    spotlight: { x: u.x, y: u.y, ...(n > 1 ? { n } : {}) } satisfies SpotlightSpot,
+  };
 }
 
 /** 手动熄灯（拆掉/取消时用；正常流程靠回合结束清） */
@@ -73,7 +86,18 @@ export function spotlightCellsOn(s: GameState, p: PlayerId, board: BoardId): num
     if (boardIdOf(u) !== board) continue;
     const spot = spotlightOf(u);
     if (!spot) continue;
-    out.push(spot.y * boardOf(s, board).w + spot.x);
+    const w = boardOf(s, board).w;
+    const h = boardOf(s, board).h;
+    const n = spot.n && spot.n > 1 ? spot.n : 1;
+    // 占地整块都亮（2×2 的建筑亮四格），出界的那几格直接跳过
+    for (let dy = 0; dy < n; dy += 1) {
+      for (let dx = 0; dx < n; dx += 1) {
+        const x = spot.x + dx;
+        const y = spot.y + dy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        out.push(y * w + x);
+      }
+    }
   }
   return out;
 }

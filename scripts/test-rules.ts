@@ -20514,6 +20514,8 @@ test('发射井：建成点亮一整个敌方回合，加注期间每回合重�
 
   const cell = idx(s, 10, 10);
   const seenByB = (st: GameState) => visibleTilesOn(st, 'B', EARTH).has(cell);
+  // 2×2 的建筑要亮**四格**：只亮锚点的话，玩家看到的是一块孤零零的亮格
+  const siloCells = [idx(s, 10, 10), idx(s, 11, 10), idx(s, 10, 11), idx(s, 11, 11)];
 
   // A 回合刚开始：B 不该看见（还没标记；而且这条只在"看的人自己的回合"生效）
   assert.equal(seenByB(s), false, '标记之前不该亮');
@@ -20523,6 +20525,11 @@ test('发射井：建成点亮一整个敌方回合，加注期间每回合重�
   assert.ok(toB.ok, toB.reason);
   assert.equal(toB.state.current, 'B');
   assert.ok(seenByB(toB.state), '建好的井要在敌方回合点亮');
+  assert.deepEqual(
+    siloCells.filter((i) => visibleTilesOn(toB.state, 'B', EARTH).has(i)).length,
+    4,
+    '2×2 的井要整块亮（四格），不能只亮锚点',
+  );
 
   /*
    * 熄灯：B 结束回合之后，A 的井不该还亮着（否则等于永久暴露）。

@@ -150,7 +150,7 @@ export function startFueling(s: GameState, silo: Unit): string | null {
    * 只在回合开始刷新是不够的——玩家可能在本回合中途才点「加注」，
    * 那一次 `tickSilos` 已经过去了，对手这一回合就看不见它。
    */
-  markSpotlight(silo);
+  markSpotlight(s, silo);
   const left = SILO_FUEL_TURNS - st.fuel;
   log(s, silo.owner, `${s.unitTypes[silo.type]?.name ?? '发射井'}开始加注燃料，还要 ${left} 回合`, true);
   return null;
@@ -232,7 +232,7 @@ export function announceBuiltSilos(s: GameState, player: PlayerId): void {
     if (underConstruction(u)) continue;
     if (u.custom?.announced === true) continue;
     u.custom = { ...(u.custom ?? {}), announced: true };
-    markSpotlight(u);
+    markSpotlight(s, u);
     log(
       s,
       player,
@@ -254,7 +254,7 @@ export function tickSilos(s: GameState, player: PlayerId): void {
      * 不 refresh 的话只有第一回合亮。烟柱一直冒，所以一直看得见。
      * 不加注的旧井**不亮**——"建好先放着"因此是一种真实的欺骗。
      */
-    if (!underConstruction(u) && st.fueling) markSpotlight(u);
+    if (!underConstruction(u) && st.fueling) markSpotlight(s, u);
 
     if (!st.fueling) continue;
     const fuel = Math.min(SILO_FUEL_TURNS, st.fuel + 1);

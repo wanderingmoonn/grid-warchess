@@ -58,6 +58,9 @@ import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
+import { scopeBoardUi } from '../src/ui/board-scope.ts';
+import { EARTH } from '../src/core/board.ts';
+import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -185,6 +188,48 @@ check('首屏只渲染己方棋子，敌方在视野外被裁掉', () => {
   // 这条断言要守的是"看不全"，不是"一个都看不见"。
   const foe = doc.querySelectorAll('.unit.owner-B').length;
   assert.ok(foe <= 2, `敌方不该整队出现，实际看见 ${foe} 个`);
+});
+
+check('月面选中单位时，可攻击目标不能整组清空', () => {
+  /*
+   * 实机反馈：「拉到月球上之后点自己的兵，没有可攻击格，敌人也点不动」。
+   *
+   * 根因不在规则层（`attackableTargets` 早就按图算了），而是渲染前的那一步
+   * `scopeBoardUi` 对**非地球图**无条件把 `targets` 清空——数据被界面扔了。
+   * 这条守的就是"选中的单位在哪张图上，那张图的高亮就照用"。
+   */
+  const ui = {
+    selectedId: 'm1',
+    reach: [1, 2, 3],
+    targets: ['e1'],
+    siegeTargets: [],
+    aimTiles: [],
+    skillThreatTiles: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [5],
+    heat: new Map([[7, 2]]),
+    incomeHints: new Map(),
+  } as unknown as BoardUi;
+  const moonUnit = { id: 'm1', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false, board: 'moon' };
+  // 地球单位**没有** board 字段（缺省即地球），别从月球那个对象里 spread 出 board
+  const earthUnit = { id: 'm2', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false };
+
+  // 选中的兵在月球：高亮留着
+  const onMoon = scopeBoardUi(ui, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(onMoon.targets, ['e1'], '月面上的可攻击目标要留着，否则点不动');
+  assert.deepEqual(onMoon.reach, [1, 2, 3], '可达格同理');
+  assert.deepEqual(onMoon.threat, [5], '威胁圈同理');
+  assert.equal(onMoon.heat, undefined, '战况烈度只认地球格号，别画到月球上');
+
+  // 选中的兵在地球、正在看月球：一律清空（不能把地球的格号画过去）
+  const earthSel = scopeBoardUi({ ...ui, selectedId: 'm2' } as BoardUi, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(earthSel.targets, [], '不是这张图上的人，高亮必须清空');
+  assert.equal(earthSel.selectedId, null);
+
+  // 地球那张图不做任何换算（老路径原样返回）
+  const onEarth = scopeBoardUi(ui, EARTH, [earthUnit as never]);
+  assert.equal(onEarth, ui, '地球直接返回原对象，零开销');
 });
 
 check('只有一张地图时，左下角的地图列表整个收起来', () => {
