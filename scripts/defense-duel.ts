@@ -85,6 +85,9 @@ interface Row {
   attackerHurt: number;
   /** 守方总掉血 / 守方满血 */
   defenderHurt: number;
+  /** 收场时还剩几个农民 / 几座塔（"守住了没有"最直白的两个数） */
+  farmersAlive: number;
+  towersAlive: number;
   /** 撑到第几回合才结束 */
   turns: number;
   /** 攻方身价损失 ÷ 守方身价损失 */
@@ -283,6 +286,8 @@ function runOne(
     attackerAlive: attackerCount(),
     attackerHurt: hp0.att > 0 ? (hp0.att - hp1.att) / hp0.att : 0,
     defenderHurt: hp0.def > 0 ? (hp0.def - hp1.def) / hp0.def : 0,
+    farmersAlive: farmerCount(),
+    towersAlive: towerCount(),
     turns: turn,
     valueRatio:
       hp0.defValue - hp1.defValue > 0
@@ -311,6 +316,8 @@ for (const spec of MATRIX.split(',')) {
     attackerAlive: 0,
     attackerHurt: 0,
     defenderHurt: 0,
+    farmersAlive: 0,
+    towersAlive: 0,
     turns: 0,
     valueRatio: 0,
   };
@@ -324,6 +331,8 @@ for (const spec of MATRIX.split(',')) {
     acc.attackerAlive += r.attackerAlive;
     acc.attackerHurt += r.attackerHurt;
     acc.defenderHurt += r.defenderHurt;
+    acc.farmersAlive += r.farmersAlive;
+    acc.towersAlive += r.towersAlive;
     acc.turns += r.turns;
     if (Number.isFinite(r.valueRatio)) {
       ratioSum += r.valueRatio;
@@ -336,6 +345,8 @@ for (const spec of MATRIX.split(',')) {
   acc.attackerAlive /= RUNS;
   acc.attackerHurt /= RUNS;
   acc.defenderHurt /= RUNS;
+  acc.farmersAlive /= RUNS;
+  acc.towersAlive /= RUNS;
   acc.turns /= RUNS;
   acc.valueRatio = ratioN > 0 ? ratioSum / ratioN : 0;
   rows.push(acc);
@@ -343,12 +354,13 @@ for (const spec of MATRIX.split(',')) {
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`;
 console.log(`防御对决：攻方 ${UNIT} ×N，塔阵 + 农民；间距 ${GAP} 格，每组 ${RUNS} 局\n`);
-console.log('阵型      攻灭   塔灭   农民无损  攻方存活  攻方掉血  守方掉血  回合  交换比');
+console.log('阵型      攻灭   塔灭   农民无损  攻方存活  攻方掉血  守方掉血  塔存  农存  回合  交换比');
 for (const r of rows) {
   console.log(
     `${r.label.padEnd(9)} ${pct(r.wipeAttacker).padStart(4)}  ${pct(r.wipeTower).padStart(4)}  ` +
       `${pct(r.econSafe).padStart(7)}  ${r.attackerAlive.toFixed(2).padStart(8)}  ` +
       `${pct(r.attackerHurt).padStart(7)}  ${pct(r.defenderHurt).padStart(7)}  ` +
+      `${r.towersAlive.toFixed(1).padStart(3)}  ${r.farmersAlive.toFixed(1).padStart(3)}  ` +
       `${r.turns.toFixed(1).padStart(4)}  ${r.valueRatio.toFixed(2).padStart(5)}`,
   );
 }

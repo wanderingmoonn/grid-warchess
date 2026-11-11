@@ -126,6 +126,9 @@ interface Tally {
   /** 建造那一刻离最近敌人多远（只对 BUILD 有意义，用来分前线工事/后方刷建筑） */
   foeDistSum: number;
   foeDistN: number;
+  /** 阵亡个数 / 阵亡身价：回答"这条防线守没守住"，也用来量经济单位的损失 */
+  lost: number;
+  lostValue: number;
 }
 
 interface TypeStat {
@@ -159,6 +162,17 @@ interface TypeStat {
   firstTurnAvg: number | null;
   /** 建造时平均离最近敌人多远；99 表示场上一开始就没有敌人 */
   foeDistAvg: number | null;
+  /** 阵亡个数与身价（按兵种） */
+  lost: number;
+  lostValue: number;
+  lostPerGame: number;
+  /** 有多少局里至少建过一次（adoptRate 的分子，合并多批结果时要靠它） */
+  adoptGames: number;
+  /** firstTurnAvg 的样本数（合并时加权用） */
+  firstTurnN: number;
+  /** foeDistAvg 的分子分母（合并时加权用） */
+  foeDistSum?: number;
+  foeDistN?: number;
 }
 
 interface GameResult {
@@ -735,6 +749,8 @@ function emptyTally(): Tally {
     fail: 0,
     foeDistSum: 0,
     foeDistN: 0,
+    lost: 0,
+    lostValue: 0,
   };
 }
 
@@ -964,6 +980,16 @@ function runGame(seed: number): {
       else dt.taken += e.amount;
     }
 
+    // 阵亡记账：上一步还在、这一步没了。和 timeline 的 lostByType 同一口径，
+    // 但这里按"整局累计"记，报表能直接回答"经济单位每局死几个"。
+    const afterIds = new Set(after.units.map((u) => u.id));
+    for (const u of before.units) {
+      if (afterIds.has(u.id)) continue;
+      const t = tallyOf(u.type);
+      t.lost += 1;
+      t.lostValue += s.unitTypes[u.type]?.cost ?? 0;
+    }
+
     // 出场记账：这一步之后场上多出来的兵，都算这个兵种的出场。
     // 招募、建造、召唤、分裂、蛋孵化全走这一条路——只有"新出现的 id"才算，
     // 所以走位、换目标不会把数字灌水。
@@ -1064,6 +1090,8 @@ async function main(): Promise<void> {
       acc.fail += t.fail;
       acc.foeDistSum += t.foeDistSum;
       acc.foeDistN += t.foeDistN;
+      acc.lost += t.lost;
+      acc.lostValue += t.lostValue;
       if (t.firstTurn !== undefined) {
         acc.firstTurn = (acc.firstTurn ?? 0) + t.firstTurn;
         firstTurnN.set(type, (firstTurnN.get(type) ?? 0) + 1);
@@ -1124,6 +1152,13 @@ async function main(): Promise<void> {
       adoptRate: GAMES > 0 ? (adoptGames.get(type) ?? 0) / GAMES : 0,
       firstTurnAvg: t.firstTurn !== undefined ? t.firstTurn / Math.max(1, firstTurnN.get(type) ?? 1) : null,
       foeDistAvg: t.foeDistN > 0 ? t.foeDistSum / t.foeDistN : null,
+      lost: t.lost,
+      lostValue: t.lostValue,
+      lostPerGame: GAMES > 0 ? t.lost / GAMES : 0,
+      adoptGames: adoptGames.get(type) ?? 0,
+      firstTurnN: firstTurnN.get(type) ?? 0,
+      foeDistSum: t.foeDistSum,
+      foeDistN: t.foeDistN,
     });
   }
   stats.sort((a, b) => b.dealt - a.dealt);
