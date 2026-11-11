@@ -37,10 +37,15 @@ const PORT = 9333;
  */
 const ARGS = process.argv.slice(2);
 const MOBILE = ARGS.includes('mobile');
-const W = MOBILE ? 390 : 1440;
-const H = MOBILE ? 844 : 900;
+/*
+ * 还能临时指定宽度（`w=360`）：安卓常见窄屏就是 360，而"刚好放不下"这种情况
+ * 只会在某个具体宽度上出现——390 能放下不代表 360 能，差 30px 就是横滚。
+ */
+const W_ARG = ARGS.find((a) => /^w=\d+$/.test(a));
+const W = W_ARG ? Number(W_ARG.slice(2)) : MOBILE ? 390 : 1440;
+const H = MOBILE || W_ARG ? 844 : 900;
 /* 手机按 2 倍像素密度拍，否则 390 宽的字在图上糊成一团、看不清断行对不对 */
-const DPR = MOBILE ? 2 : 1;
+const DPR = MOBILE || W_ARG ? 2 : 1;
 /* 自带静态服务：不依赖外部的 python http.server。
    靠 `&` 起的后台进程会跟着上一条命令一起被收走，第一次就栽在这上面
    ——截出来一张"无法访问此页面"。服务写在脚本里，跑一次就有一套完整的。 */
@@ -206,7 +211,8 @@ async function click(selector: string) {
 /* ── 场景 ─────────────────────────────────────────────────────────────── */
 
 const theme = ARGS.includes('modern') ? '&ui=modern' : '';
-const tag = (theme ? 'modern' : 'legacy') + (MOBILE ? '-m' : '');
+const tag =
+  (theme ? 'modern' : 'legacy') + (MOBILE ? '-m' : '') + (W_ARG ? `-${W}` : '');
 
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);

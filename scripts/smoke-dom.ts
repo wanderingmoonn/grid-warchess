@@ -4871,6 +4871,53 @@ check('设置弹窗：主题、动效、铃声、低频入口都在里面', () =
   assert.ok(text.includes('只影响这台设备'), '要说清这些设置不进存档');
 });
 
+check('手机设置里多出「对局中」：迷雾开关和联机入口', () => {
+  /*
+   * 2026-11-11：360px 宽的顶栏放不下「联机」「迷雾」两颗按钮，
+   * 结果是「设置」被挤出屏幕。按频率分层后，这两颗只在手机上搬进设置——
+   * 桌面顶栏本来就有，所以 compact 不传时**不能**重复出现（两处状态两条路径）。
+   */
+  const phone = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: true,
+    roomCode: null,
+  });
+  assert.ok(phone.includes('data-act="toggle-fog"'), '手机设置里要有迷雾开关');
+  assert.ok(phone.includes('data-act="online"'), '手机设置里要有联机入口');
+  assert.ok(/class="chip active" data-act="toggle-fog"/.test(phone), '迷雾开着时开关要高亮');
+  assert.ok(phone.includes('联机'), '要有「联机」这两个字，不能只有一个图标');
+
+  // 桌面版：不传 compact 就不该出现这一组
+  const desktop = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+  });
+  assert.equal(
+    desktop.includes('data-act="toggle-fog"'),
+    false,
+    '桌面顶栏本来就有迷雾按钮，设置里不该再放一份',
+  );
+
+  // 房间码：在房间里要写出来，不然玩家不知道该点「房间」还是「联机」
+  const inRoom = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: false,
+    roomCode: 'AB12CD',
+  });
+  assert.ok(inRoom.includes('AB12CD'), '房间里要显示房间码');
+  assert.ok(inRoom.includes('当前房间'), '要说清这是当前房间');
+});
+
 check('主题开关：只改 html 上的两个属性，回退就是删掉它们', () => {
   /*
    * 2026-11-10 UI 重构的第一层。这条守的是**机制**而不是长相：
