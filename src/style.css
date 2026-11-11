@@ -355,73 +355,6 @@ body {
 /* 「更多」下拉：低频入口的容器。
    summary 借了 .btn 的外观（同高同圆角），但去掉 details 的三角标记；
    菜单浮在顶栏之上，右对齐——顶栏是最后一个元素，往左开才不会顶出屏幕。 */
-/* 顶栏本身是 `overflow-y: hidden`（它要在窄屏横向滚动），
-   绝对定位的下拉会被**裁掉**——第一版截出来的菜单就是这么"打开了但看不见"。
-   只在菜单展开时放开溢出：这时候横向滚动暂时不重要，菜单看得见更重要。 */
-.topbar:has(.topbar-more[open]) {
-  overflow: visible;
-}
-
-.topbar-more {
-  position: relative;
-}
-
-.topbar-more > summary {
-  list-style: none;
-  cursor: pointer;
-  user-select: none;
-}
-
-.topbar-more > summary::-webkit-details-marker {
-  display: none;
-}
-
-.topbar-more > summary::after {
-  content: '⌄';
-  margin-left: 6px;
-  opacity: 0.7;
-}
-
-.topbar-more[open] > summary::after {
-  content: '⌃';
-}
-
-.topbar-more > .menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 40;
-  min-width: 148px;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 12px 30px rgba(40, 35, 25, 0.18);
-}
-
-.menu-item {
-  text-align: left;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--fs-body);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.menu-item:hover:not(:disabled) {
-  background: var(--surface-hover);
-}
-
-.menu-item:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
 
 .topbar-actions {
   display: flex;
@@ -2639,6 +2572,78 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* ── 设置弹窗 ────────────────────────────────────────────────────────────
+ * 一行一件事：左边是名字 + 一句解释，右边是控件。
+ * 解释文字常驻而不是藏在 title 里——这些选项**一辈子只调一次**，
+ * 调的时候看不懂就再也不会回来看了。
+ */
+.set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.set-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.set-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.set-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+
+.set-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+  max-width: 34em;
+}
+
+.set-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.set-range {
+  width: 132px;
+  accent-color: var(--a);
+}
+
+.set-value {
+  min-width: 62px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 设置里的 chip 组不要折行：`space-between` 会把右侧挤到很窄，
+   「旧版 / 新版」被压成上下两行——看着像两个独立开关，其实是二选一。 */
+.set-row .chip-row {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .modal-foot {

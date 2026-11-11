@@ -94,7 +94,6 @@ import { seatsOf } from '../core/types.ts';
 import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
-import { chimeLabel } from './sound.ts';
 
 export interface PanelInput {
   view: PlayerView;
@@ -484,7 +483,6 @@ function panelHtml(input: PanelInput): string {
           ${quit ? '已认输' : '认输'}
         </button>
       </div>
-      <button class="btn btn-sm btn-block" data-act="chime">${chimeLabel(input.chimeVolume ?? 0.6)}</button>
       <div class="hint" style="text-align:center">
         ${
           input.replay
@@ -2050,24 +2048,14 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
       <!--
-        低频入口收进「更多」（2026-11-11）。
+        低频入口不再是顶栏按钮（2026-11-11 第二版）。
 
-        规则书 / 反馈 / 导出对局 / 首页 这四件事，一局里通常各点一次都不到，
-        却和「交给 AI」「迷雾」这些每回合都要看的按钮并排、同样大小、同样亮——
-        顶栏右侧因此变成一排"看起来都重要"的按钮，谁都不突出。
-
-        按频率分两层：每个回合都可能点的留在明面，其余收进菜单。
-        菜单用 <details>，不额外写开合逻辑（键盘、焦点、语义都白送）。
+        上一版把它们收进「更多」下拉，用户看了一眼说：不如干脆叫「设置」。
+        他是对的——"更多"是在给一堆杂项找词，而它们的共同点恰恰是
+        "不常改、想起来才改"：那就是设置。现在全部进设置弹窗，
+        铃声这种同样"想起来才调"的也一起搬进去，顶栏只留每回合都要看的东西。
       -->
-      <details class="topbar-more" data-ref="more">
-        <summary class="btn btn-sm">更多</summary>
-        <div class="menu">
-          <button class="menu-item" data-act="manual">规则书</button>
-          <button class="menu-item" data-act="feedback" title="拍下当前局面，报个 bug">反馈问题</button>
-          <button class="menu-item" data-act="export" data-ref="export">导出对局</button>
-          <button class="menu-item" data-act="new-game">回首页</button>
-        </div>
-      </details>
+      <button class="btn btn-sm" data-act="settings" title="主题、声音、导出、规则书">设置</button>
     </div>
   `;
 }
