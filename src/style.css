@@ -79,6 +79,9 @@
   --track: #eae6dd;           /* 进度条底槽（血条/电力条） */
   /* 永远浅色的面（棋盘、天气徽标）上该用什么字色：两套主题都一样 */
   --on-light: #2b2823;
+  /* 全屏遮罩（交接、暂停）：浅色主题是一层米白，深色主题必须换成一层暗。
+     复用 --bg 不行：那个是"页面底色"，遮罩要能盖住棋盘又不完全挡住。 */
+  --mask: rgba(242, 239, 232, 0.94);
 
   /* ── 字阶（2026-11-10 第一批）────────────────────────────────────────
    * 现状是 19 种字号、222 次声明，其中 11.5px / 12.5px 这种半像素在 1x 屏上
@@ -169,6 +172,7 @@
   --surface-warm: #2b2519;
   --surface-warm-2: #332d1e;
   --track: #2b3038;
+  --mask: rgba(12, 14, 18, 0.9);
 }
 
 /* （原来这里有三条"深色主题下手写覆盖白底悬停"的补丁。
@@ -348,6 +352,77 @@ body {
   background: var(--team-b);
 }
 
+/* 「更多」下拉：低频入口的容器。
+   summary 借了 .btn 的外观（同高同圆角），但去掉 details 的三角标记；
+   菜单浮在顶栏之上，右对齐——顶栏是最后一个元素，往左开才不会顶出屏幕。 */
+/* 顶栏本身是 `overflow-y: hidden`（它要在窄屏横向滚动），
+   绝对定位的下拉会被**裁掉**——第一版截出来的菜单就是这么"打开了但看不见"。
+   只在菜单展开时放开溢出：这时候横向滚动暂时不重要，菜单看得见更重要。 */
+.topbar:has(.topbar-more[open]) {
+  overflow: visible;
+}
+
+.topbar-more {
+  position: relative;
+}
+
+.topbar-more > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.topbar-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.topbar-more > summary::after {
+  content: '⌄';
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
+.topbar-more[open] > summary::after {
+  content: '⌃';
+}
+
+.topbar-more > .menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(40, 35, 25, 0.18);
+}
+
+.menu-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .topbar-actions {
   display: flex;
   gap: 8px;
@@ -470,8 +545,10 @@ body {
   line-height: 1;
   border-radius: 8px;
   border: 1px solid rgba(120, 110, 92, 0.35);
+  /* 这几个按钮是**浮在棋盘上**的，棋盘在深色主题里也是浅底，
+     所以它们跟棋盘一起保持浅底 + 深字（--on-light），不能跟着面板变深。 */
   background: rgba(252, 250, 244, 0.92);
-  color: var(--ink-warm);
+  color: var(--on-light);
   cursor: pointer;
   backdrop-filter: blur(2px);
   /* 容器已经是 none 了，按钮要把点击收回来 */
@@ -1630,6 +1707,14 @@ body {
   padding-top: 10px;
 }
 
+/* 卡片里只剩这一块（还没选任何东西时的默认页）：别再画卡片的框。
+   留着框会变成一条 34px 高的空盒子，看起来像个坏掉的输入框。 */
+.card:has(> .card-fold:only-child) {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
 /* 它要是卡片里的第一块，就不该再画一条分隔线——那是"和上面分开"的意思，
    而上面什么都没有。 */
 .card-fold:first-child {
@@ -2386,7 +2471,7 @@ a.btn {
   z-index: 50;
   display: grid;
   place-items: center;
-  background: rgba(242, 239, 232, 0.94);
+  background: var(--mask);
   backdrop-filter: blur(8px);
 }
 
@@ -4505,7 +4590,10 @@ a.btn {
    所以不上重色，勾选框和三个按钮排一行，失败时的说明才用红。 */
 .report-card {
   border-color: rgba(112, 148, 112, 0.45);
+  /* 这张卡是要**截图发出去**的：它必须永远是浅底，
+     所以字色也钉死成深色，不能跟着主题变白。 */
   background: rgba(247, 250, 245, 0.72);
+  color: var(--on-light);
 }
 
 .report-list {

@@ -2659,7 +2659,24 @@ function bindHoverTips(): void {
   // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
   appEl.addEventListener('scroll', hideHoverTip, true);
   document.addEventListener('visibilitychange', hideHoverTip);
-  appEl.addEventListener('click', hideHoverTip, true);
+  /*
+ * 「更多」菜单：点外面关掉，按 Esc 也关。
+ *
+ * `<details>` 自己只认"再点一次 summary"，而顶栏菜单最自然的动作是"点到别处"——
+ * 不关的话它会一直挂在棋盘上面，挡住左上角的城。
+ */
+document.addEventListener('pointerdown', (e) => {
+  const more = topbarEl.querySelector<HTMLDetailsElement>('.topbar-more');
+  if (!more || !more.open) return;
+  if (!more.contains(e.target as Node)) more.open = false;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const more = topbarEl.querySelector<HTMLDetailsElement>('.topbar-more');
+  if (more?.open) more.open = false;
+});
+
+appEl.addEventListener('click', hideHoverTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */

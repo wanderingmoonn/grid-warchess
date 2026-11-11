@@ -212,6 +212,24 @@ for (const label of ['开始对局', '开始', '进入战场', '开战', '确认
 await sleep(2000);
 await shot(`03-battle-${tag}`);
 
+// 顶栏「更多」菜单展开。
+// 必须用**真鼠标事件**（CDP Input）：<summary> 的展开走的是浏览器默认动作，
+// 合成的 MouseEvent 不会触发它——第一版就是这么截出一张"菜单没开"的图。
+const box = await evaluate(`(() => {
+  const s = document.querySelector('.topbar-more > summary');
+  if (!s) return null;
+  const r = s.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+})()`);
+if (box) {
+  await page('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1 });
+  await page('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 });
+}
+await sleep(400);
+await shot(`05-menu-${tag}`);
+await evaluate(`document.querySelector('.topbar-more')?.removeAttribute('open')`);
+await sleep(200);
+
 // 侧栏：点一个自己的单位，看属性卡（信息密度最高的地方）
 await evaluate(`(() => {
   const u = document.querySelector('.unit');
@@ -219,6 +237,11 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
+
+// 交接遮罩：每次换手都会出现，且刚改过（--mask 跟着主题走）
+await clickText('结束行动');
+await sleep(900);
+await shot(`06-handoff-${tag}`);
 
 proc.kill();
 staticServer.close();

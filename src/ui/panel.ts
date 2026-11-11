@@ -2049,15 +2049,25 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
-      <button class="btn btn-sm" data-act="manual">规则书</button>
-      <button class="btn btn-sm" data-act="feedback" title="拍下当前局面，报个 bug">反馈</button>
-      <button class="btn btn-sm" data-act="export" data-ref="export">导出对局</button>
       <!--
-        「兵种编辑器」「导入对局」搬去了开始页面（2026-11-04）：
-        这两件事都不是"在对局里做的事"——编辑兵种是先改配置再开局，
-        导入是换一局，把它们留在顶栏只会让一排对局操作里混进两个配置入口。
+        低频入口收进「更多」（2026-11-11）。
+
+        规则书 / 反馈 / 导出对局 / 首页 这四件事，一局里通常各点一次都不到，
+        却和「交给 AI」「迷雾」这些每回合都要看的按钮并排、同样大小、同样亮——
+        顶栏右侧因此变成一排"看起来都重要"的按钮，谁都不突出。
+
+        按频率分两层：每个回合都可能点的留在明面，其余收进菜单。
+        菜单用 <details>，不额外写开合逻辑（键盘、焦点、语义都白送）。
       -->
-      <button class="btn btn-sm" data-act="new-game">首页</button>
+      <details class="topbar-more" data-ref="more">
+        <summary class="btn btn-sm">更多</summary>
+        <div class="menu">
+          <button class="menu-item" data-act="manual">规则书</button>
+          <button class="menu-item" data-act="feedback" title="拍下当前局面，报个 bug">反馈问题</button>
+          <button class="menu-item" data-act="export" data-ref="export">导出对局</button>
+          <button class="menu-item" data-act="new-game">回首页</button>
+        </div>
+      </details>
     </div>
   `;
 }

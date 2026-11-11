@@ -190,9 +190,14 @@ for (const { name, table } of allVars) {
   for (const m of rules) {
     const sel = m[1]!.trim().split('\n').pop()!.trim();
     const body = m[2]!;
-    const bgLit = /background(?:-color)?:\s*(#[0-9a-fA-F]{6})\s*;/.exec(body)?.[1];
+    const bgLit = /background(?:-color)?:\s*(#[0-9a-fA-F]{6}|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+)/.exec(body)?.[1];
     if (!bgLit) continue;
-    const bg = bgLit.toLowerCase();
+    // rgba(252,250,244,.92) 这类"半透明白底"也要算：它同样是个亮底，
+    // 第一版只认六位 hex，于是缩放按钮那组浮在棋盘上的按钮混过去了。
+    const bgrgb = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(bgLit);
+    const bg = bgrgb
+      ? '#' + [bgrgb[1], bgrgb[2], bgrgb[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('')
+      : bgLit.toLowerCase();
     if (lumOf(bg) < LIGHT_MIN_LUM) continue;
     lightChecked += 1;
 
