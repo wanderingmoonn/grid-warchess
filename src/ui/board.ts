@@ -918,7 +918,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const cargo = u.cargo?.length ?? 0;
   const cargoBadge =
     cargo > 0
-      ? `<span style="font-size:9px;vertical-align:top;opacity:.85">${cargo}</span>`
+      ? `<span style="font-size:var(--fs-micro);vertical-align:top;opacity:.85">${cargo}</span>`
       : '';
 
   // 工地：进度条压在血条上面。没有它，玩家只看到一座"残血"的建筑，

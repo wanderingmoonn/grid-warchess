@@ -636,7 +636,7 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
       }
       rows.push(
         `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
-           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
            <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
            <span class="price">${status}</span>
          </button>`,
@@ -672,7 +672,7 @@ function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
       const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
       rows.push(
         `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
-           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${escapeHtml(o.label.slice(0, 1))}</span>
+           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${escapeHtml(o.label.slice(0, 1))}</span>
            <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
            <span class="price">${escapeHtml(o.note ?? '')}</span>
          </button>`,
@@ -923,7 +923,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                if (b.garrison) mods.push('可驻军');
                const tagLine = mods.length > 0 ? `${tag} · ${mods.join(' · ')}` : tag;
                return `<button class="recruit-btn" data-act="build" data-type="${b.id}" ${dis ? 'disabled' : ''}>
-                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${b.short}</span>
+                 <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${b.short}</span>
                  <span class="meta"><b>${b.name}</b><span>${unitStatLine(b)} · ${tagLine}</span></span>
                  <span class="price">${costLabel(price)}</span>
                </button>`;
@@ -954,7 +954,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
          }</div>
          <div class="recruit-list" style="margin-top:8px">
            <button class="recruit-btn" data-act="load" ${!mine || selectedUnit.acted || cargo.length >= cap ? 'disabled' : ''}>
-             <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">装</span>
+             <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">装</span>
              <span class="meta"><b>装载</b><span>把贴身的陆军接上船（占掉它这一回合）</span></span>
              <span class="price">—</span>
            </button>
@@ -962,7 +962,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
              cargo.length === 0
                ? ''
                : `<button class="recruit-btn" data-act="unload" ${!mine || selectedUnit.acted ? 'disabled' : ''}>
-                    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">卸</span>
+                    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">卸</span>
                     <span class="meta"><b>卸载</b><span>放到船边一格空地，下船后本回合不能再动</span></span>
                     <span class="price">—</span>
                   </button>`
@@ -1722,7 +1722,7 @@ function recruitButton(
     </span>`;
   return `<span class="recruit-wrap" data-hover-tip>${tip}
     <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
-    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${def.short}</span>
+    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
       <span>${detail}${extra}</span>
@@ -2340,7 +2340,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     // 数据特性写在第二行：以前只写"耗能 N"，装甲板/系统槽装了什么都看不见
     return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
       title="${escapeHtml(moduleSpecText(m))}">
-      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">拆</span>
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">拆</span>
       <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}</span></span>
       <span class="price">+${Math.floor(m.cost / 2)}</span>
     </button>`;
@@ -2353,7 +2353,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
       const chk = canMount(s, u, m.id);
       const why = chk.ok ? '' : (chk.reason ?? '');
       return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(why)}">
-        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
+        <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
         <span class="meta"><b>${m.name}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}${
           why ? ` · <b style="color:#b4463c">${escapeHtml(why)}</b>` : ''
         }</span></span>
@@ -2369,7 +2369,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     return `<button class="recruit-btn" data-act="${act}" data-mod="${id}"${target ? ` data-target="${target}"` : ''} ${
       chk.ok && canAct ? '' : 'disabled'
     } title="${escapeHtml(why)}">
-      <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">用</span>
+      <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:var(--fs-sm)">用</span>
       <span class="meta"><b>${label}</b><span>${escapeHtml(why || sub)}</span></span>
       <span class="price">${price}</span>
     </button>`;
@@ -2405,7 +2405,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
   const rechargeRow = `<button class="recruit-btn" data-act="recharge" ${rcChk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(
     rcChk.ok ? '' : (rcChk.reason ?? ''),
   )}">
-    <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:12px">补</span>
+    <span class="unit-chip ${chip}" style="width:26px;height:26px;font-size:var(--fs-sm)">补</span>
     <span class="meta"><b>整备</b><span>${escapeHtml(
       rcChk.ok ? `补满充能与额外生命（${rc.devices} 件设备 · 额外生命 +${rc.hpGap}）` : (rcChk.reason ?? ''),
     )}</span></span>

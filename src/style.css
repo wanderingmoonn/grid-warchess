@@ -86,16 +86,42 @@
      复用 --bg 不行：那个是"页面底色"，遮罩要能盖住棋盘又不完全挡住。 */
   --mask: rgba(242, 239, 232, 0.94);
 
-  /* ── 字阶（2026-11-10 第一批）────────────────────────────────────────
-   * 现状是 19 种字号、222 次声明，其中 11.5px / 12.5px 这种半像素在 1x 屏上
-   * 本来就是模糊的（浏览器要么取整要么用亚像素渲染），并没有"更精确"的好处。
-   * 这一批先立 6 档 + 把半像素并回去；剩下的 17/16/15 分档留着下一批动。 */
-  --fs-title: 17px;
-  --fs-h1: 16px;
-  --fs-h2: 15px;
-  --fs-body: 13px;
-  --fs-sm: 12px;
+  /* ── 字阶 ────────────────────────────────────────────────────────────
+   * 2026-11-10 第一批：立 6 档、把半像素并回去。
+   * 2026-11-11 第二批：**所有字号一律走变量**，并补上漏掉的四档。
+   *
+   * 动之前的样子：14 种字号散在 112 处声明里，其中 `--fs-title/h1/h2` 三档
+   * 定义了却**一次都没被引用**（用的人全在直接写 `font-size: 17px`）——
+   * 建了变量没人用，等于没有。
+   *
+   * 现在 11 档，每一档只有一种用途，且全库只剩 `var(--fs-*)`：
+   *
+   *   10 micro  角标、kbd、行内元信息（原 9px 那两处也并进来了）
+   *   11 xs     次级说明：分组标题、meta 行、面板里的注释
+   *   12 sm     小号正文：表格、浮层、列表副行
+   *   13 body   正文：按钮、输入、卡片内容（全库最多，37 处）
+   *   14 md     **基准字号**（body 默认），强调行
+   *   15 h2     小节标题
+   *   16 h1     标题；输入框也必须是它——iOS 上小于 16px 聚焦会放大整页
+   *   17 title  面板标题
+   *   18 xl     弹窗大标题（原来的 19 / 20 一并到这儿，差 1px 看不出来）
+   *   30 num    房间码这类要一眼看清的大数字
+   *   40 hero   首页主标题
+   *
+   * 数值只改过三处：9→10、19→18、20→18。
+   * 别再往这条链里加新值——要更大的字，先问清楚它比 17 大多少、为什么。
+   */
+  --fs-micro: 10px;
   --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-body: 13px;
+  --fs-md: 14px;
+  --fs-h2: 15px;
+  --fs-h1: 16px;
+  --fs-title: 17px;
+  --fs-xl: 18px;
+  --fs-num: 30px;
+  --fs-hero: 40px;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -214,7 +240,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-md);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -306,7 +332,7 @@ body {
 .brand {
   font-weight: 600;
   letter-spacing: 0.02em;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   white-space: nowrap;
 }
 
@@ -538,7 +564,7 @@ body {
   border: 1px solid rgba(120, 110, 92, 0.35);
   background: rgba(252, 250, 244, 0.92);
   color: #4a463d;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1;
   cursor: pointer;
   backdrop-filter: blur(2px);
@@ -583,7 +609,7 @@ body {
   height: 16px;
   border-radius: 4px;
   background: rgba(120, 110, 92, 0.16);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: #6b6459;
 }
 
@@ -601,7 +627,7 @@ body {
   border-radius: 8px;
   background: #f0c987;
   color: #5a4212;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 15px;
   text-align: center;
 }
@@ -622,7 +648,7 @@ body {
 
 .bl-caret {
   color: #8b8477;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   transition: transform 0.15s ease;
 }
 
@@ -633,7 +659,7 @@ body {
 .bl-add {
   border-style: dashed;
   color: #8b8477;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 /* ---------- 棋盘 ---------- */
@@ -1463,7 +1489,7 @@ body {
   border-style: dashed;
 }
 .city-ruin {
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.04em;
   color: #8a2b22;
   white-space: nowrap;
@@ -1476,7 +1502,7 @@ body {
   filter: brightness(0.72) saturate(0.5);
 }
 .city-stale {
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.04em;
   color: #6d6255;
   white-space: nowrap;
@@ -1883,7 +1909,7 @@ body {
 
 .vs-name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-body);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1914,7 +1940,7 @@ body {
 }
 
 .vs-mid {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: center;
   min-width: 52px;
@@ -1954,7 +1980,7 @@ body {
 .info-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 3px 0;
   color: var(--text-2);
 }
@@ -2090,7 +2116,7 @@ body {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid currentColor;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-2);
   background: var(--panel-2);
@@ -2102,7 +2128,7 @@ body {
 
 .status-chip i {
   font-style: normal;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   opacity: 0.75;
 }
 
@@ -2246,7 +2272,7 @@ body {
   place-items: center;
   color: #fff;
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .unit-chip.a {
@@ -2258,7 +2284,7 @@ body {
 
 .unit-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .unit-sub {
@@ -2276,7 +2302,7 @@ body {
 }
 
 .recruit-group-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   letter-spacing: 0.04em;
   margin-bottom: 5px;
@@ -2338,11 +2364,11 @@ body {
 
 .recruit-btn .meta b {
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .recruit-btn .meta span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -2360,7 +2386,7 @@ body {
   border-radius: 999px;
   background: var(--a-soft);
   color: var(--a);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   font-weight: 400;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -2414,7 +2440,7 @@ body {
 
 .recruit-search-count {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -2478,18 +2504,18 @@ body {
 }
 
 .upgrade-main b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
 }
 
 .upgrade-main span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   line-height: 1.45;
 }
 
 .upgrade-btn .price {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--price);
 }
@@ -2581,7 +2607,7 @@ body {
   padding: 9px 13px;
   border-radius: 9px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   cursor: pointer;
   transition:
     background 0.12s ease,
@@ -2668,14 +2694,14 @@ a.btn {
 
 .handoff-card h2 {
   margin: 0 0 8px;
-  font-size: 19px;
+  font-size: var(--fs-xl);
   font-weight: 600;
 }
 
 .handoff-card p {
   margin: 0 0 22px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
 }
 
@@ -2707,7 +2733,7 @@ a.btn {
   color: #fff;
   padding: 9px 16px;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   z-index: 60;
   animation: toast-in 0.18s ease;
   pointer-events: none;
@@ -2800,7 +2826,7 @@ a.btn {
 
 .modal-head h2 {
   margin: 0 0 6px;
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -3033,7 +3059,7 @@ a.btn {
 
 .map-card > i {
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3072,7 +3098,7 @@ a.btn {
 
 .era-tag {
   flex: 0 0 38px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: right;
 }
@@ -3115,7 +3141,7 @@ a.btn {
 .chip.is-extra::after {
   content: '扩';
   margin-left: 4px;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   opacity: 0.6;
 }
 
@@ -3128,7 +3154,7 @@ a.btn {
  */
 .chip-auto {
   margin-left: 5px;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   opacity: 0.55;
   letter-spacing: 0.02em;
 }
@@ -3174,7 +3200,7 @@ a.btn {
 }
 
 .expansion-body b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
 }
 
@@ -3192,7 +3218,7 @@ a.btn {
   border-radius: 4px;
   background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
   color: var(--accent, #3b82f6);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .seed-row {
@@ -3275,11 +3301,11 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .editor-name small {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3328,7 +3354,7 @@ a.btn {
 .editor-field input,
 .editor-field select {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 6px 8px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
@@ -3363,7 +3389,7 @@ a.btn {
 
 .editor-hint {
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   line-height: 1.6;
 }
@@ -3378,7 +3404,7 @@ a.btn {
 .editor-ability-tag {
   flex: 0 0 34px;
   padding-top: 2px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3425,7 +3451,7 @@ a.btn {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 9px 11px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
@@ -3455,7 +3481,7 @@ a.btn {
 
 .room-input {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -3518,7 +3544,7 @@ a.btn {
 
 .room-code {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 30px;
+  font-size: var(--fs-num);
   font-weight: 700;
   letter-spacing: 0.32em;
   text-align: center;
@@ -3538,7 +3564,7 @@ a.btn {
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--panel-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.6;
   margin-bottom: 16px;
 }
@@ -3697,7 +3723,7 @@ a.btn {
 }
 
 .cmd-head b {
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -3707,7 +3733,7 @@ a.btn {
 }
 
 .cmd-count {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   white-space: nowrap;
 }
@@ -3792,7 +3818,7 @@ a.btn {
   box-shadow: 0 10px 30px rgba(43, 40, 35, 0.18);
   padding: 14px 16px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.6;
 }
 
@@ -3864,12 +3890,12 @@ a.btn {
 }
 
 .start-brand b {
-  font-size: 14px;
+  font-size: var(--fs-md);
   letter-spacing: 0.02em;
 }
 
 .start-brand span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3895,13 +3921,13 @@ a.btn {
 }
 
 .start-nav-item b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
 }
 
 .start-nav-item span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3918,7 +3944,7 @@ a.btn {
 .start-rail-foot {
   margin-top: auto;
   padding: 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-3);
 }
@@ -3999,7 +4025,7 @@ a.btn {
 }
 
 .pool-open-text b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
@@ -4048,7 +4074,7 @@ a.btn {
 }
 
 .pool-head-text b {
-  font-size: 15px;
+  font-size: var(--fs-h2);
   font-weight: 600;
 }
 
@@ -4166,7 +4192,7 @@ a.btn {
 }
 
 .fb-summary b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
@@ -4196,7 +4222,7 @@ a.btn {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.55;
 }
 
@@ -4294,7 +4320,7 @@ a.btn {
 }
 
 .map-draft-meta > b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -4416,7 +4442,7 @@ a.btn {
    */
   .chip {
     padding: 9px 14px;
-    font-size: 13px;
+    font-size: var(--fs-body);
   }
 
   /* 兵种池：手机上留白收一档，把高度还给那两百多个 chip */
@@ -4493,7 +4519,7 @@ a.btn {
 .god-live {
   display: flex;
   gap: 16px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
 }
 
@@ -4600,7 +4626,7 @@ a.btn {
 }
 
 .book-row b {
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .book-row span {
@@ -4674,7 +4700,7 @@ a.btn {
 .force-btn kbd,
 .hint kbd {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 4px;
   border-radius: 4px;
   border: 1px solid currentColor;
@@ -4747,7 +4773,7 @@ a.btn {
 /* 气象读数：温度 · 湿度/饱和。放在徽标下面一行小字——
    它是"为什么是这个天气"的解释，不该抢徽标的注意力 */
 .weather-readout {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3, var(--text-2));
   margin: 4px 0 6px;
   font-variant-numeric: tabular-nums;
@@ -4941,7 +4967,7 @@ a.btn {
 
 .chat-fab {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -4985,7 +5011,7 @@ a.btn {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   /* 抓手：整块面板只有这一条可以拖 */
   cursor: grab;
   user-select: none;
@@ -4999,7 +5025,7 @@ a.btn {
 
 .chat-head .chat-who {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
@@ -5010,7 +5036,7 @@ a.btn {
 .chat-x {
   border: 0;
   background: transparent;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   line-height: 1;
   color: var(--text-3);
   cursor: pointer;
@@ -5019,7 +5045,7 @@ a.btn {
 
 /* 「屏蔽」是两个字，按 16px 排会把标题挤掉一半，单独压小一号 */
 .chat-head .chat-mute {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 4px;
   border-radius: 4px;
   border: 1px solid var(--line);
@@ -5046,7 +5072,7 @@ a.btn {
   gap: 4px;
   flex-wrap: wrap;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-3);
   background: var(--panel-2);
@@ -5077,12 +5103,12 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.4;
 }
 
 .chat-line .chat-meta {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-3);
 }
 
@@ -5136,7 +5162,7 @@ a.btn {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -5150,7 +5176,7 @@ a.btn {
 }
 
 .chat-note {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--b);
   padding: 0 10px 8px;
   line-height: 1.4;
@@ -5181,7 +5207,7 @@ a.btn {
   /* iOS 上输入框字号小于 16px，聚焦时整页会被放大一次，
      放大之后聊天框就跑出屏幕——这一条是防这个的，别当成随手写的 */
   .chat-input {
-    font-size: 16px;
+    font-size: var(--fs-h1);
   }
 }
 
@@ -5232,14 +5258,14 @@ a.btn {
 .draft-step {
   grid-area: step;
   font-weight: 700;
-  font-size: 17px;
+  font-size: var(--fs-title);
   letter-spacing: 0.02em;
 }
 
 .draft-seat {
   grid-area: seat;
   justify-self: end;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -5251,7 +5277,7 @@ a.btn {
   grid-area: timer;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   color: var(--a);
   min-width: 44px;
   text-align: center;
@@ -5270,7 +5296,7 @@ a.btn {
 
 .draft-hint {
   grid-area: hint;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
   line-height: 1.5;
 }
@@ -5295,7 +5321,7 @@ a.btn {
   justify-content: space-between;
   align-items: baseline;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--fs-md);
   margin-bottom: 8px;
 }
 
@@ -5426,12 +5452,12 @@ a.btn {
 }
 
 #hover-tip .tip-title b {
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 #hover-tip .tip-title i {
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -5476,14 +5502,14 @@ a.btn {
 
 .dc-name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dc-meta {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5527,7 +5553,7 @@ a.btn {
 .draft-map-facts {
   font-weight: 500;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .draft-map-grid {
@@ -5572,7 +5598,7 @@ a.btn {
 
 .draft-map-note {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: center;
 }
@@ -5602,11 +5628,11 @@ a.btn {
   justify-content: space-between;
   align-items: baseline;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .draft-side-status {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -5623,7 +5649,7 @@ a.btn {
 }
 
 .draft-slot {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   border-radius: 999px;
   border: 1px dashed var(--line-strong);
@@ -5689,7 +5715,7 @@ a.btn {
 
 .draft-empty {
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 20px;
   text-align: center;
 }
@@ -5751,7 +5777,7 @@ a.btn {
 }
 
 .draft-picked-head > b {
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .draft-picked-count {
@@ -5817,13 +5843,13 @@ a.btn {
 }
 
 .dp-index {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .dp-name {
-  font-size: 14px;
+  font-size: var(--fs-md);
   /* 名字长也不许截断，允许换行 */
   overflow-wrap: anywhere;
 }
@@ -5836,7 +5862,7 @@ a.btn {
 }
 
 .dp-tag {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   padding: 0 6px;
   border-radius: 999px;
@@ -5960,7 +5986,7 @@ a.btn {
   background: var(--a-fill);
   border-color: var(--a);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 8px 16px;
 }
 
@@ -5981,12 +6007,12 @@ a.btn {
 
 .draft-lobby h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--fs-xl);
 }
 
 .draft-lobby-lead {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-2);
   max-width: 62ch;
@@ -6022,7 +6048,7 @@ a.btn {
 }
 
 .lobby-code {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   letter-spacing: 0.18em;
   font-variant-numeric: tabular-nums;
 }
@@ -6112,7 +6138,7 @@ a.btn {
   border-radius: 50%;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-2);
 }
 
@@ -6126,7 +6152,7 @@ a.btn {
 }
 
 .cmd-chip-est {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -6142,7 +6168,7 @@ a.btn {
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1;
   padding: 0 1px;
 }
@@ -6155,7 +6181,7 @@ a.btn {
 .order-tag {
   margin-left: auto;
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--a);
   border: 1px solid color-mix(in srgb, var(--a) 35%, var(--line));
   border-radius: 999px;
@@ -6166,7 +6192,7 @@ a.btn {
 /* 面板标题旁那句"点兵种排进队列（2/5）" */
 .order-note {
   font-weight: 400;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -6362,14 +6388,14 @@ a.btn {
 }
 .title-name {
   margin: 0;
-  font-size: 40px;
+  font-size: var(--fs-hero);
   line-height: 1.15;
   letter-spacing: 0.04em;
   color: var(--text);
 }
 .title-sub {
   margin: 10px 0 26px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text-2);
 }
 
@@ -6386,7 +6412,7 @@ a.btn {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   cursor: pointer;
 }
 .title-btn:hover:not(:disabled) {
@@ -6415,7 +6441,7 @@ a.btn {
   gap: 4px 8px;
   justify-content: center;
   align-items: center;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-3);
 }
 .title-links button {
@@ -6474,7 +6500,7 @@ a.btn {
 
 @media (max-width: 520px) {
   .title-inner { padding: 30px 22px 22px; }
-  .title-name { font-size: 30px; }
+  .title-name { font-size: var(--fs-num); }
   .title-actions { flex-direction: column; }
   .title-btn { width: 100%; }
 }
@@ -6535,12 +6561,12 @@ a.btn {
 .rp-pos {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .rp-pos b {
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--fs-h2);
 }
 
 .rp-pos i {
@@ -6618,7 +6644,7 @@ a.btn {
   border-radius: 14px;
   background: rgba(47, 110, 168, 0.08);
   color: var(--a);
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 600;
   pointer-events: none;
 }
@@ -6683,13 +6709,13 @@ a.btn {
 
 .tut-title {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   line-height: 1.3;
 }
 
 .tut-body {
   margin: 0 0 12px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1.7;
   color: var(--text-2);
   /* 正文里用 \n 分段：新手读两行就够，写成一坨没人看 */
@@ -6794,7 +6820,7 @@ a.btn {
   border: 0;
   background: none;
   padding: 2px 6px;
-  font-size: 20px;
+  font-size: var(--fs-xl);
   line-height: 1;
   color: var(--text-3);
   cursor: pointer;
@@ -6815,7 +6841,7 @@ a.btn {
   padding: 12px;
   background: var(--panel-2);
   border-radius: 10px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-2);
   white-space: pre-line;
@@ -7000,9 +7026,13 @@ a.btn {
     box-shadow: 0 -6px 18px rgba(40, 35, 25, 0.1);
   }
 
-  /* 底栏把内容挡住的那一截：不给够，滚到底时最后一行永远差半行 */
+  /*
+   * 底栏把内容挡住的那一截：不给够，滚到底时最后一行永远差半行。
+   * 104 = 底栏（约 54）+ 浮在它上面的地图列表（28 + 间距 22）。
+   * 少给这 20px，滚到底时最后一行会被「地球」那颗按钮压住。
+   */
   .side {
-    padding-bottom: 84px;
+    padding-bottom: 104px;
   }
 
   /* 缩放条并进底栏的左侧。
@@ -7124,7 +7154,13 @@ a.btn {
  */
 @media (max-width: 920px) {
   .board-list {
-    left: 12px;
+    left: 10px;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    /*
+     * 触屏上没有 hover，那条 `opacity: .8` 会**一直**生效：
+     * 按钮本身 92% 白底，再乘 0.8 就只剩七成多，底下滚过去的文字直接透上来，
+     * 看着像两个图层叠在一起。桌面上能靠 hover 恢复，手机上恢复不了。
+     */
+    opacity: 1;
   }
 }

@@ -41,7 +41,7 @@ export function carrierBlock(s: GameState, u: Unit, canAct: boolean): string {
     const btn =
       i === 0
         ? `<button class="recruit-btn" data-act="launch" ${canAct ? '' : 'disabled'}>
-             <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">放</span>
+             <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">放</span>
              <span class="meta"><b>放飞 ${label}</b><span>放到母舰周围的空域，当回合不能再移动</span></span>
              <span class="price">起飞</span>
            </button>`
@@ -54,7 +54,7 @@ export function carrierBlock(s: GameState, u: Unit, canAct: boolean): string {
     const name = def?.name ?? p.type;
     const disabled = !canAct || free <= 0;
     return `<button class="recruit-btn" data-act="recover" data-plane="${p.id}" ${disabled ? 'disabled' : ''}>
-      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:12px">收</span>
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">收</span>
       <span class="meta"><b>回收 ${name}</b><span>${p.hp} 血 · 离母舰 ${Math.abs(p.x - u.x) + Math.abs(p.y - u.y)} 格</span></span>
       <span class="price">${free <= 0 ? '甲板满' : '进甲板'}</span>
     </button>`;
