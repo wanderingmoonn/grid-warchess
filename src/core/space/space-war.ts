@@ -27,6 +27,7 @@ import {
   CORE_DEFS,
   STATION_CORE,
   STATION_CORE_ID,
+  STATION_LIFE,
   STATION_PRODUCER,
   STATION_SOLAR,
   STATION_THRUSTER,
@@ -75,6 +76,11 @@ export const SPACE_WAR: Expansion = {
       + `每台「推进器舱」耗 ${THRUSTER_DRAW}，每座「生产舱」耗 ${PRODUCER_DRAW}。`
       + '电不够就造不出来（按钮会写明还差多少）；万一被打到过载，整站停摆——'
       + '推进器不提速、生产舱不产金。',
+    '<b>维生仓</b>：造好之后，<b>半径 3 格</b>内的单位不再吃「恶劣外空环境」'
+      + '（护甲不再 ÷5、移动不再减半）。航天员本来就免疫，不用罩。'
+      + '覆盖是<b>按格算</b>的：站要长大就得多造几座，围着它布置才划算。'
+      + '维生仓自己也是密封模块，所以它自己同样不受影响——攻打一座站时，'
+      + '它往往是最难拆的那一块。',
     '<b>推进器舱</b>：必须造在核心舱的<b>下半区</b>（不是正下方，整条下缘都行）。'
       + `每台让这座站的<b>航速</b> +${THRUSTER_SPEED}。`
       + '<b>装了推进器，空间站就是飞船</b>：点核心舱出现「启航 → 目的地」，'
@@ -87,7 +93,7 @@ export const SPACE_WAR: Expansion = {
       + '还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。'
       + '只有一张图的局面没有星图可看。',
   ],
-  units: [STATION_CORE, STATION_PRODUCER, STATION_SOLAR, STATION_THRUSTER],
+  units: [STATION_CORE, STATION_PRODUCER, STATION_SOLAR, STATION_LIFE, STATION_THRUSTER],
   hooks: {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
     onTurnStart: ({ state, player }) => {

@@ -139,6 +139,7 @@ import type {
 import { seatsOf } from './types.ts';
 import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
 import { clearSpotlightsOfOthers, spotlightCellsOn } from './spotlight.ts';
+import { hazardArmorOf, hazardFor, hazardMoveOf } from './hazard.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -1898,6 +1899,14 @@ export function movePower(s: GameState, unit: Unit): number {
    * `move > 0` 那道守卫不能省：扩展钩子返回 0 是引擎写明的"这一回合动不了"
    * （封冻、行动点耗尽），减半之后若再套"保底 1"，封冻就被悄悄解开了。
    */
+  /*
+   * 地图环境（外空、辐射、毒雾）：**先环境、后状态**。
+   *
+   * 顺序有讲究：环境是"这张图让所有人变慢"，石化是"这个单位自己变慢"。
+   * 反过来先折石化再折环境，同一支兵在两张图上会得到不一样的结果，
+   * 玩家没法用"我在月球上就是慢一半"来解释。
+   */
+  move = hazardMoveOf(move, hazardFor(s, unit));
   if (move > 0 && isPetrified(s, unit)) move = Math.max(1, Math.floor(move / 2));
   // 钩子返回 0 = 这一回合动不了（封冻的海军）。
   move -= unit.moveSpent ?? 0; 
@@ -2206,7 +2215,22 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (u.buff?.armorPct) {
     armor += buffArmorPctGain(armor, u.buff.armorPct);
   }
-  
+
+  /*
+   * 地图环境：护甲整除数、无保底。
+   *
+   * 放在**所有加成之后**：穿什么甲都挡不住没有空气这件事，
+   * "甲不值钱"是环境决定的，不是某一层加成能抵消的。
+   * 面板必须和 `computeDamage` 同一位置，否则会出现"面板 2 甲、实际按 2 甲算"
+   * 之外的第三种数——那种偏差最难查。
+   */
+  const hz = hazardFor(s, u);
+  if (hz) {
+    const before = armor;
+    armor = hazardArmorOf(armor, hz);
+    if (armor !== before) armorItems.push({ label: hz.name, delta: armor - before });
+  }
+
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
   const moveBase = def.move;
   const moveItems: StatItem[] = [];
@@ -2259,6 +2283,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
+    }
+    // 地图环境：和 movePower 同一个位置（扩展钩子之后、石化之前）
+    if (hz) {
+      const before = moveNow;
+      moveNow = hazardMoveOf(moveNow, hz);
+      if (moveNow !== before) moveItems.push({ label: hz.name, delta: moveNow - before });
     }
     // 石化减半：和 movePower 同一个位置（扩展钩子之后）、同一个算法，
     // 面板和实际走位才对得上
@@ -3061,6 +3091,12 @@ export function computeDamage(
   // 药力加成也是那部分甲的一部分。
   if (!isCity && defender.buff?.armorPct) {
     ctx.armor += buffArmorPctGain(ctx.armor, defender.buff.armorPct);
+  }
+
+  // 地图环境：护甲整除数（和 effectiveStats 同一个位置：所有加成之后、破甲之前）
+  if (!isCity) {
+    const hz = hazardFor(s, defender);
+    if (hz) ctx.armor = hazardArmorOf(ctx.armor, hz);
   }
 
   // 小型扩展到破甲之前

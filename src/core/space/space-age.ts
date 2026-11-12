@@ -17,7 +17,12 @@ import type { Expansion, UnitActionOption } from '../expansions.ts';
 import { createMoonBoard, MOON_MIN_SIZE, MOON_SIZE_RATIO } from './moon.ts';
 import {
   ROCKET_SILO,
+  SILO_FUEL_TO_STATION,
   SILO_FUEL_TURNS,
+  boardName,
+  chooseDest,
+  currentDest,
+  siloStateOf,
   SILO_ID,
   announceBuiltSilos,
   launchProblem,
@@ -40,7 +45,8 @@ import {
 } from './moon-base.ts';
 import { boardIdOf } from '../board.ts';
 import { MOON_BOARD } from './moon.ts';
-import { createStarmap, MOON_LANE_TURNS, starmapOf } from './starmap.ts';
+import { ASTRONAUT } from './astronaut.ts';
+import { createStarmap, lanesFrom, MOON_LANE_TURNS, nodeName, nodeOf, peekStarmap, starmapOf } from './starmap.ts';
 import { tickTransit, transitCountOf } from './transit.ts';
 
 /**
@@ -84,9 +90,19 @@ export const SPACE_AGE: Expansion = {
     '月球上不放城市——城市的产兵、升级与"城打光就输"的判定只作用于地球。',
     '<b>火箭发射井</b>：时代 5、2×2、只能建在平原，420 金。它有一个货舱，'
       + '贴着它点「装载」把一个地面单位接进来（船、飞机、建筑上不去）。',
-    `加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满 ${SILO_FUEL_TURNS} 回合才能点火。`
+    '<b>先选目的地，再加注</b>：井的面板里先点一个「目的地」——'
+      + `落到月球表面要加注 ${SILO_FUEL_TURNS} 回合，投送到自己的空间站只要 1 回合`
+      + '（火箭从地面直上头顶轨道，不用走航道）。<b>改目的地会清空燃料</b>，'
+      + '否则可以先按空间站加注、再改成月球白赚两回合。',
+    `加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满了才能点火。`
       + '发射后燃料清零，要再飞一趟就重新加注。'
       + '<b>进度是公开的</b>：每回合发一条战报（加注 1/3、2/3…），对手读得到你还有几回合就飞。',
+    '<b>恶劣外空环境</b>：月球上<b>所有单位</b>都背着这条——护甲 ÷5（无保底，0 就是 0）、'
+      + '移动力减半（保底 1）。它不是地形（和站在哪一格无关），是"进了这张图就生效"。'
+      + '结果是很脆：4 甲的小兵在月面上等于没有甲，12 甲的月球基地只剩 2 甲。',
+    '<b>航天员</b>：时代 5 的新兵种，<b>不受恶劣外空环境影响</b>（护甲和移动都按原值）。'
+      + '别的兵上去护甲归零、走得慢，他不用——所以"登月带谁"从此有了答案。'
+      + '航天员也照常受地形和其他规则影响，只是免疫外空环境。',
     '<b>航道</b>：地球和月球之间连着一条地月航道，点火之后单位进入航道飞 1 个回合'
       + '（火箭弹道固定，不受任何加成影响）——顶栏会出现「红方 火箭 1」，双方都看得见。'
       + '在途的单位不在任何棋盘上，<b>打不到</b>：航道只计时，不是战场。'
@@ -108,7 +124,7 @@ export const SPACE_AGE: Expansion = {
       + '（基地 200 血 12 甲，不是一炮能拆的，所以登月之后要守）。'
       + '反制不止一条路：也可以在<strong>发射之前</strong>拆掉发射井、或者杀掉等舱的那支工程单位。',
   ],
-  units: [ROCKET_SILO, MOON_BASE],
+  units: [ROCKET_SILO, MOON_BASE, ASTRONAUT],
   hooks: {
     onMatchStart: ({ state }) => {
       // 会盖房的人先学会盖井（没开太空包的局连这个类型都没有，见上面）
@@ -192,17 +208,66 @@ export const SPACE_AGE: Expansion = {
       if ((unit.buildNeed ?? 0) > (unit.buildDone ?? 0)) return [];
 
       const out: UnitActionOption[] = [];
-      const fuel = Number(unit.custom?.fuel ?? 0);
-      const fueling = unit.custom?.fueling === true;
+      const st = siloStateOf(unit);
+      const dest = currentDest(state, unit);
+      const cap = dest?.fuel ?? SILO_FUEL_TURNS;
       const cargo = unit.cargo ?? [];
+
+      /*
+       * 先选目的地，再谈燃料：加注几回合**跟目的地走**（月球 3、空间站 1）。
+       * 以前只有月球一条路，这一步可以省；现在多了一种目的地，就得先说清楚。
+       */
+      const here = nodeOf(state, unit);
+      if (here) {
+        // ① 落到节点表面（月球）：加注 3 回合
+        for (const { to } of lanesFrom(state, here.id)) {
+          const on = !dest?.board && dest?.node === to;
+          out.push({
+            id: `silo:dest:node:${to}`,
+            group: '目的地',
+            label: `→ ${nodeName(state, to)}表面`,
+            detail: `落到${nodeName(state, to)}的地面（加注 ${SILO_FUEL_TURNS} 回合）`,
+            note: on ? '已选中' : `${SILO_FUEL_TURNS} 回合`,
+            disabled: on,
+          });
+        }
+        /*
+         * ② 投送进自己的空间站：加注 1 回合。
+         *
+         * 两种都列：
+         *   · 站停在**本站点**（地球轨道）→ 火箭垂直上升，不用走航道；
+         *   · 站停在**航道另一头**（航行到月球轨道的站）→ 还得飞一段航道。
+         * 只列自己的站：别人的站不开门。
+         */
+        for (const rec of peekStarmap(state)?.stations ?? []) {
+          if (rec.owner !== unit.owner) continue;
+          const sameNode = rec.at === here.id;
+          const reachable = sameNode || lanesFrom(state, here.id).some((x) => x.to === rec.at);
+          if (!reachable) continue;
+          const on = dest?.board === rec.board;
+          const name = state.boards?.[rec.board]?.name ?? rec.board;
+          out.push({
+            id: `silo:dest:st:${rec.board}`,
+            group: '目的地',
+            label: `→ ${name}`,
+            detail: sameNode
+              ? '火箭垂直上升到自己的轨道站（加注 1 回合，点火即到）'
+              : `飞到${nodeName(state, rec.at)}轨道上的站（加注 1 回合 + 航道）`,
+            note: on ? '已选中' : `${SILO_FUEL_TO_STATION} 回合`,
+            disabled: on,
+          });
+        }
+      }
 
       out.push({
         id: 'silo:fuel',
         group: '发射井',
         label: '加注燃料',
-        detail: `点一下开始，之后每回合 +1，满 ${SILO_FUEL_TURNS} 回合才能点火`,
-        note: `${Math.min(SILO_FUEL_TURNS, fuel)} / ${SILO_FUEL_TURNS}`,
-        disabled: fuel >= SILO_FUEL_TURNS || fueling,
+        detail: dest
+          ? `去${boardName(state, dest)}：每回合 +1，满 ${cap} 回合才能点火`
+          : '先在上面选一个目的地',
+        note: `${Math.min(cap, st.fuel)} / ${cap}`,
+        disabled: !dest || st.fuel >= cap || st.fueling,
       });
 
       const problem = launchProblem(state, unit);
@@ -225,6 +290,18 @@ export const SPACE_AGE: Expansion = {
       if (unit.type !== SILO_ID) return '这里没有发射井';
       if (actionId === 'silo:fuel') return startFueling(state, unit);
       if (actionId === 'silo:launch') return launchIntoLane(state, unit);
+      if (actionId.startsWith('silo:dest:node:')) {
+        return chooseDest(state, unit, {
+          node: actionId.slice('silo:dest:node:'.length),
+          fuel: SILO_FUEL_TURNS,
+        });
+      }
+      if (actionId.startsWith('silo:dest:st:')) {
+        const board = actionId.slice('silo:dest:st:'.length);
+        const rec = (peekStarmap(state)?.stations ?? []).find((r) => r.board === board);
+        if (!rec) return '找不到这座空间站';
+        return chooseDest(state, unit, { node: rec.at, board, fuel: SILO_FUEL_TO_STATION });
+      }
       return `认不出这个操作：${actionId}`;
     },
 

@@ -26,6 +26,7 @@ import {
 } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
 import { boardIdOf, boardOf, EARTH } from '../core/board.ts';
+import { hazardLines, hazardOn } from '../core/hazard.ts';
 import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
@@ -838,6 +839,12 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
       const info = TERRAIN_INFO[terrain];
       const lines = describeTerrain(terrain, s);
+      /*
+       * 这张图的**环境**（外空之类）：和地形无关，整张图都这样。
+       * 放在地形卡最上面一条，是因为它比"这格是月壤"重要得多——
+       * 玩家点开一格，第一件该知道的事是"这里不能待"。
+       */
+      const hazards = hazardLines(hazardOn(s, board));
       // 扩展写在格子上的东西（灵气浓度之类）：核心不认识，只把盒子递过去——
       // 和单位卡上的 getUnitPanelLines 一个口径。雾外不递（见上面的注释）。
       const extLines: string[] = [];
@@ -867,6 +874,13 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         </div>
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
         <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
+        ${
+          hazards.length > 0
+            ? `<div class="info-row"><span>环境</span><b style="color:#b4553f">${escapeHtml(
+                hazards.join(' · '),
+              )}</b></div>`
+            : ''
+        }
         ${
           extLines.length > 0
             ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${extLines

@@ -123,6 +123,8 @@ export function enterLane(
     from?: StarNodeId;
     /** 缺省 surface：落到棋盘上。orbit = 到轨道，由扩展在到达时生成棋盘 */
     kind?: 'surface' | 'orbit';
+    /** 目的地棋盘（投送到某座空间站时用）；不传就落到节点的棋盘 */
+    board?: BoardId;
   },
 ): Transit | null {
   const map = starmapOf(s);
@@ -137,7 +139,8 @@ export function enterLane(
    * 只有"落到地面"才要求目的地有棋盘。
    * 轨道那条路恰恰是反的：棋盘要等核心舱到了才生成，所以这里不能拦。
    */
-  if (kind === 'surface' && !dest?.board) return null;
+  // 落到地面要求"那一头有落脚处"：节点自带棋盘，或者调用方点名了一张（站）
+  if (kind === 'surface' && !opts.board && !dest?.board) return null;
   if (opts.cargo.length === 0) return null;
 
   const mine = (s.transit ?? []).filter((t) => t.owner === opts.owner).length;
@@ -163,21 +166,25 @@ export function enterLane(
  * 返回 false = 落不下（目的地被堵满 / 目的节点还没有棋盘），
  * 这时**单位留在天上**、下一回合再试——不能丢，也不该凭空塞进别人身上。
  */
-export function arrive(s: GameState, t: Transit): boolean {
-  /*
-   * 轨道到达交给扩展：那里可能还没有棋盘，棋盘是**到了才生成**的。
-   * 用注册而不是直接 import，是为了让这个文件不认识"空间站"——
-   * 它只管"从 A 飞到 B"，至于 B 上建什么，是太空包的事。
-   */
-  if ((t.kind ?? 'surface') === 'orbit') {
-    return orbitArrival ? orbitArrival(s, t) : false;
-  }
-  const map = starmapOf(s);
-  const board = map?.nodes.find((n) => n.id === t.to)?.board;
-  if (!board) return false;
-
+/**
+ * 把货舱里的人放到某张图上（按"离中心最近空地"落）。
+ *
+ * 抽出来是因为现在有**两个入口**：航道到达，以及"同节点垂直上升"
+ * （火箭从地面直接上自己的轨道站，不用走航道）。两条路的落地规则
+ * 必须一模一样——否则同一个站，从航道来的人能动、从地面来的人不能，
+ * 或者反过来，玩家一眼就会发现。
+ *
+ * 返回真正落地的那几个（可能少于 cargo，说明地方不够）。
+ */
+export function landCargoOn(
+  s: GameState,
+  owner: PlayerId,
+  board: BoardId,
+  cargo: Unit[],
+  label: string,
+): Unit[] {
   const landed: Unit[] = [];
-  for (const pax of t.cargo) {
+  for (const pax of cargo) {
     const spot = landingSpotOn(s, board);
     if (!spot) break;
     const u: Unit = {
@@ -193,11 +200,29 @@ export function arrive(s: GameState, t: Transit): boolean {
     landed.push(u);
     log(
       s,
-      t.owner,
-      `${s.unitTypes[u.type]?.name ?? u.type} 抵达${nodeName(s, t.to)}（${cellName(spot.x, spot.y)}）`,
+      owner,
+      `${s.unitTypes[u.type]?.name ?? u.type} 抵达${label}（${cellName(spot.x, spot.y)}）`,
       true,
     );
   }
+  return landed;
+}
+
+export function arrive(s: GameState, t: Transit): boolean {
+  /*
+   * 轨道到达交给扩展：那里可能还没有棋盘，棋盘是**到了才生成**的。
+   * 用注册而不是直接 import，是为了让这个文件不认识"空间站"——
+   * 它只管"从 A 飞到 B"，至于 B 上建什么，是太空包的事。
+   */
+  if ((t.kind ?? 'surface') === 'orbit') {
+    return orbitArrival ? orbitArrival(s, t) : false;
+  }
+  const map = starmapOf(s);
+  // 投送到某座空间站时，目的地是那张站棋盘，不是节点的棋盘
+  const board = t.board ?? map?.nodes.find((n) => n.id === t.to)?.board;
+  if (!board) return false;
+
+  const landed = landCargoOn(s, t.owner, board, t.cargo, nodeName(s, t.to));
 
   if (landed.length === 0) return false;
   // 只送走了一部分：剩下的继续等（P0 货舱只有 1 格，这条只是不丢东西的保险）

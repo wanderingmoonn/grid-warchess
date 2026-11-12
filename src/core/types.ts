@@ -1676,9 +1676,30 @@ export type BoardKind = 'planet' | 'station' | 'orbit';
  * 要按图取格子，一律走 `core/board.ts` 的 `boardOf(s, id)`：
  * 它认这个约定，调用方不需要知道地球是特例。
  */
+/**
+ * 一张图的**环境**：进入这张图就生效，和站在哪一格无关。
+ *
+ * 和地形是两回事：地形按格（这格是森林、那格是环形山），
+ * 环境按图（整张月球都缺氧）。所以它挂在 `Board` 上，不进地形表。
+ *
+ * 以后的"辐射区""毒雾"也是同一个字段，不用再加一套。
+ */
+export interface HazardSpec {
+  id: string;
+  name: string;
+  /** 护甲除以几（向下取整）。**无保底**：0 就是 0 */
+  armorDiv?: number;
+  /** 移动力乘以几 */
+  moveMul?: number;
+  /** 乘完之后的保底（通常 1） */
+  moveMin?: number;
+}
+
 export interface Board {
   id: BoardId;
   kind: BoardKind;
+  /** 这张图的环境（缺省 = 没有） */
+  hazard?: HazardSpec;
   /** 地图列表上显示的名字（"月球"、"前哨站"）；缺省用 id */
   name?: string;
   w: number;
@@ -1791,6 +1812,12 @@ export interface Transit {
    * 老存档没有这个字段，读出来是 surface，行为不变。
    */
   kind?: 'surface' | 'orbit';
+  /**
+   * 目的地棋盘。有值 = 落到这张图（**自己的空间站**），没有 = 落到节点自己的棋盘。
+   *
+   * 站是已经存在的棋盘，所以它走的是 surface 那条路，只是"哪张图"换了人指定。
+   */
+  board?: BoardId;
   /** 还要几个回合到（0 = 这一回合开始时到达） */
   left: number;
   cargo: Unit[];

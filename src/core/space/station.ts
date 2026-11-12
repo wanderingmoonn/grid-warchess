@@ -35,10 +35,13 @@ import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells,
 import { lanesFrom, laneDistance, nodeName, nodeOf, starmapOf } from './starmap.ts';
 import { registerOrbitArrival } from './transit.ts';
 import { SILO_ID } from './silo.ts';
+import { SPACE_HAZARD } from './space-hazard.ts';
+import { registerHazardExempt } from '../hazard.ts';
 
 export const STATION_CORE_ID = 'station-core';
 export const STATION_PRODUCER_ID = 'station-producer';
 export const STATION_SOLAR_ID = 'station-solar';
+export const STATION_LIFE_ID = 'station-life-support';
 export const STATION_THRUSTER_ID = 'station-thruster';
 
 /** 铺一格甲板的额定价（会乘折扣） */
@@ -49,6 +52,8 @@ export const PRODUCER_BASE_COST = 320;
 export const SOLAR_BASE_COST = 240;
 /** 一台推进器舱的额定价（会乘折扣） */
 export const THRUSTER_BASE_COST = 420;
+/** 一座维生仓的额定价（会乘折扣） */
+export const LIFE_BASE_COST = 360;
 /** 生产舱每回合产多少金币 */
 export const PRODUCER_INCOME = 6;
 
@@ -71,6 +76,23 @@ export const SOLAR_POWER = 12;
 export const PRODUCER_DRAW = 4;
 /** 一台推进器吃多少电 */
 export const THRUSTER_DRAW = 15;
+/**
+ * 一座维生仓吃多少电。
+ *
+ * 定成 8 而不是 12：核心舱自带 10 电，玩家造下第一座维生仓时不该立刻过载——
+ * 那就变成"必须先造太阳能才能维持生命"，一步都走不动。
+ * 8 让第一座刚好够，第二座就得先扩电，这才是"能量约束搭配"该有的节奏。
+ */
+export const LIFE_DRAW = 8;
+
+/**
+ * 维生仓的覆盖半径（曼哈顿距离，含自己那一格）。
+ *
+ * 为什么是半径而不是"全站"：全站豁免让维生仓变成一次性开关——站再大、
+ * 人再多，一座就够，它就只是一笔必交的税。半径逼玩家把舱段围着它布置，
+ * 站要长大就得再添一座，于是"站越大越贵"这条曲线自然长出来。
+ */
+export const LIFE_RADIUS = 3;
 
 /** 每台推进器给航道加多少速度（速度 1 + n） */
 export const THRUSTER_SPEED = 1;
@@ -162,7 +184,7 @@ export function createStationBoard(id: string, size: number, name: string): Boar
       });
     }
   }
-  return { id, kind: 'station', name, w: n, h: n, tiles };
+  return { id, kind: 'station', name, w: n, h: n, tiles, hazard: SPACE_HAZARD };
 }
 
 /** 这座站是不是空间站（按图判断，别拿 id 前缀猜） */
@@ -182,6 +204,7 @@ export interface StationPower {
   solars: number;
   thrusters: number;
   producers: number;
+  lives: number;
   /**
    * 供电不足。所有耗能舱段一起停机：推进器不提速、生产舱不产金。
    *
@@ -205,6 +228,7 @@ export function stationPower(s: GameState, board: string): StationPower {
   let solars = 0;
   let thrusters = 0;
   let producers = 0;
+  let lives = 0;
   // `?? []`：界面测试会拿一个只带 starmap 的假 state 来算航程，
   // 这里不该因为"没有 units 字段"就炸
   for (const u of s.units ?? []) {
@@ -226,6 +250,10 @@ export function stationPower(s: GameState, board: string): StationPower {
         thrusters += 1;
         demand += THRUSTER_DRAW;
         break;
+      case STATION_LIFE_ID:
+        lives += 1;
+        demand += LIFE_DRAW;
+        break;
       default:
         break;
     }
@@ -238,6 +266,7 @@ export function stationPower(s: GameState, board: string): StationPower {
     solars,
     thrusters,
     producers,
+    lives,
     brownout: demand > supply,
   };
 }
@@ -248,6 +277,32 @@ export function stationPowerOf(s: GameState, u: Unit): StationPower | null {
   if (!isStationBoard(s, board)) return null;
   return stationPower(s, board);
 }
+
+/**
+ * 维生仓的豁免：站上有在役的维生仓、且这个单位在它的覆盖半径内，
+ * 就不吃「恶劣外空环境」。
+ *
+ * **读时算，不写回 `board.hazard`**：写回去的话，维生仓被打掉、站被拆、
+ * 存档读入这几条路径只要漏一条，那座站就会永久免疫——而这种"永久"没人查得出来。
+ *
+ * 维生仓**自己也豁免**（`some` 里不排除自己）：它是一个密封的生命维持模块，
+ * 本来就该比普通舱段结实一点，也顺带成为攻打一座站时"先拆哪个"的答案。
+ */
+registerHazardExempt((s, unit, h) => {
+  if (h.id !== SPACE_HAZARD.id) return false;
+  const board = boardIdOf(unit);
+  if (!isStationBoard(s, board)) return false;
+  // 断电 = 生命维持停摆。和"断电的生产舱不产金、推进器不提速"同一条口径
+  if (stationPower(s, board).brownout) return false;
+  return s.units.some(
+    (v) =>
+      v.type === STATION_LIFE_ID &&
+      v.hp > 0 &&
+      v.owner === unit.owner &&
+      boardIdOf(v) === board &&
+      Math.abs(v.x - unit.x) + Math.abs(v.y - unit.y) <= LIFE_RADIUS,
+  );
+});
 
 /* ===========================================================================
  * 航行：装了推进器，空间站就是飞船
@@ -365,6 +420,7 @@ export function stationPowerHtml(s: GameState, u: Unit): string | null {
       : `核心 ${p.cores * CORE_POWER}`;
   const parts = [
     p.solars > 0 ? `${p.solars} 块太阳能` : '',
+    p.lives > 0 ? `${p.lives} 座维生仓` : '',
     p.thrusters > 0 ? `${p.thrusters} 台推进器` : '',
     p.producers > 0 ? `${p.producers} 座生产舱` : '',
   ].filter(Boolean);
@@ -511,6 +567,18 @@ const STATION_BUILD_SOLAR: SkillDef = {
   targeting: 'point',
 };
 
+const STATION_BUILD_LIFE: SkillDef = {
+  id: 'station-build-life',
+  name: '建造维生仓',
+  summary:
+    `在空的甲板上造一座维生仓（耗电 ${LIFE_DRAW}），让周围 ${LIFE_RADIUS} 格内的单位` +
+    '不再吃「恶劣外空环境」：护甲不再 ÷5、移动不再减半。',
+  effect: 'station-build-life',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
 const STATION_BUILD_THRUSTER: SkillDef = {
   id: 'station-build-thruster',
   name: '建造推进器舱',
@@ -539,7 +607,13 @@ export const STATION_CORE: UnitTypeDef = {
   vision: 4,
   footprint: 1,
   summonedOnly: true,
-  skills: [STATION_EXPAND, STATION_BUILD, STATION_BUILD_SOLAR, STATION_BUILD_THRUSTER],
+  skills: [
+    STATION_EXPAND,
+    STATION_BUILD,
+    STATION_BUILD_SOLAR,
+    STATION_BUILD_LIFE,
+    STATION_BUILD_THRUSTER,
+  ],
 };
 
 export const STATION_PRODUCER: UnitTypeDef = {
@@ -583,6 +657,23 @@ export const STATION_SOLAR: UnitTypeDef = {
  * 这不是"正下方"——整条下缘都算，因为推进器是"朝后喷"的一组，
  * 只要求装在核心舱后方，不要求对准某一条轴线。
  */
+export const STATION_LIFE: UnitTypeDef = {
+  id: STATION_LIFE_ID,
+  name: '维生仓',
+  short: '生',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 60,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
 export const STATION_THRUSTER: UnitTypeDef = {
   id: STATION_THRUSTER_ID,
   name: '推进器舱',
@@ -767,6 +858,7 @@ function buildModule(
 
 registerSkillTargetCells('station-build', ({ state, self }) => emptyDeckCells(state, self));
 registerSkillTargetCells('station-build-solar', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-life', ({ state, self }) => emptyDeckCells(state, self));
 
 registerSkillTargetCells('station-build-thruster', ({ state, self }) => {
   // 只给下半区：点不亮的格子，玩家一眼就知道推进器该往哪装
@@ -792,6 +884,15 @@ registerSkillEffect('station-build-solar', (c) => {
     baseCost: SOLAR_BASE_COST,
     draw: 0,
     what: '太阳能舱',
+  });
+});
+
+registerSkillEffect('station-build-life', (c) => {
+  buildModule(c, {
+    typeId: STATION_LIFE_ID,
+    baseCost: LIFE_BASE_COST,
+    draw: LIFE_DRAW,
+    what: '维生仓',
   });
 });
 
@@ -825,6 +926,17 @@ registerSkillReadyCheck('station-build', (s, u) => {
 
 registerSkillReadyCheck('station-build-solar', (s, u) => {
   if (s.players[u.owner].gold < buildCost(s, u.owner, SOLAR_BASE_COST)) {
+    return '金币不够';
+  }
+  return true;
+});
+
+registerSkillReadyCheck('station-build-life', (s, u) => {
+  const p = stationPowerOf(s, u);
+  if (p && p.headroom < LIFE_DRAW) {
+    return `电力不够（要 ${LIFE_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+  }
+  if (s.players[u.owner].gold < buildCost(s, u.owner, LIFE_BASE_COST)) {
     return '金币不够';
   }
   return true;
@@ -874,6 +986,7 @@ export function stationLines(s: GameState, u: Unit): string[] {
   const maker = buildCost(s, u.owner, PRODUCER_BASE_COST);
   const solar = buildCost(s, u.owner, SOLAR_BASE_COST);
   const thruster = buildCost(s, u.owner, THRUSTER_BASE_COST);
+  const life = buildCost(s, u.owner, LIFE_BASE_COST);
   const p = stationPower(s, board);
   out.push(
     `能量：供电 ${p.supply} / 已用 ${p.demand} / ${p.brownout ? `过载 ${-p.headroom}（全站停摆）` : `余量 ${p.headroom}`}`,
@@ -881,9 +994,14 @@ export function stationLines(s: GameState, u: Unit): string[] {
   const rec = stationOf(s, u);
   const speed = rec ? stationSpeed(s, rec) : 1;
   out.push(
-    `舱段：${p.solars} 太阳能 · ${p.thrusters} 推进器 · ${p.producers} 生产舱` +
+    `舱段：${p.solars} 太阳能 · ${p.lives} 维生仓 · ${p.thrusters} 推进器 · ${p.producers} 生产舱` +
       `（航速 ${speed}）`,
   );
+  if (p.lives > 0) {
+    out.push(`维生仓覆盖半径 ${LIFE_RADIUS} 格：范围内不吃「恶劣外空环境」`);
+  } else {
+    out.push('没有维生仓：站内所有单位护甲 ÷5、移动减半（航天员除外）');
+  }
   if (rec?.travel) {
     out.push(`正在驶向${nodeName(s, rec.travel.to)}：还有 ${Math.max(0, rec.travel.left)} 回合`);
   } else if (rec) {
@@ -897,5 +1015,6 @@ export function stationLines(s: GameState, u: Unit): string[] {
   out.push(`一座生产舱：${maker} 金（每回合 +${PRODUCER_INCOME} 金，耗电 ${PRODUCER_DRAW}）`);
   out.push(`一块太阳能舱：${solar} 金（发电 ${SOLAR_POWER}）`);
   out.push(`一台推进器舱：${thruster} 金（耗电 ${THRUSTER_DRAW}，航速 +${THRUSTER_SPEED}）`);
+  out.push(`一座维生仓：${life} 金（耗电 ${LIFE_DRAW}，覆盖半径 ${LIFE_RADIUS}）`);
   return out;
 }

@@ -20,6 +20,7 @@
  */
 
 import type { Board, Terrain, Tile } from '../types.ts';
+import { SPACE_HAZARD } from './space-hazard.ts';
 
 /**
  * 月球图的 id。
@@ -150,5 +151,7 @@ export function createMoonBoard(earthSize: number, seed: number): Board {
     w: n,
     h: n,
     tiles,
+    // 没有大气、没有重力：进入这张图的单位统一背「恶劣外空环境」
+    hazard: SPACE_HAZARD,
   };
 }

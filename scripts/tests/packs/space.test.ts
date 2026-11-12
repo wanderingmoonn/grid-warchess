@@ -44,6 +44,7 @@ import {
   THRUSTER_BASE_COST,
   THRUSTER_DRAW,
   beginStationSail,
+  LIFE_RADIUS,
   buildCost,
   buildRate,
   siloWeight,
@@ -53,10 +54,17 @@ import {
   stationSailProblem,
   stationSailTurns,
   stationSpeed,
+  STATION_LIFE_ID,
+  createStationBoard,
   tickProducers,
   tickStationTravel,
 } from '../../../src/core/space/station.ts';
+import { ASTRONAUT_ID } from '../../../src/core/space/astronaut.ts';
+import { SILO_FUEL_TO_STATION, chooseDest, currentDest, siloStateOf } from '../../../src/core/space/silo.ts';
+import { effectiveStats, movePower } from '../../../src/core/rules.ts';
+import { canProduce } from '../../../src/core/produce.ts';
 import { laneTurnsFor } from '../../../src/core/space/transit.ts';
+import { hazardFor } from '../../../src/core/hazard.ts';
 import { SKILL_TARGET_CELLS } from '../../../src/core/skill-hooks.ts';
 import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
@@ -398,8 +406,23 @@ test('月面战斗：地形掩护按月球算，不是地球上同一坐标那�
   const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
   flattenMoon(s);
   const moon = s.boards!.moon!;
-  const atk = onMoon(s, 'A', 'militia', 2, 2);
-  const prey = onMoon(s, 'B', 'militia', 3, 2);
+  /*
+   * 用一支**厚甲**的试验兵，不是民兵。
+   *
+   * 因为「恶劣外空环境」把最终护甲 ÷5（无保底）：民兵 4 甲 → 0，
+   * 环形山的 +2 再除一次还是 0，看不出任何差别。这不是 bug，正是
+   * "轻甲在真空里没有意义"的表达；要验证地形还在按月球取，就得让
+   * 基础护甲足够大（23 → 4，25 → 5），除完仍能分出高下。
+   */
+  s.unitTypes['test-tank'] = {
+    ...s.unitTypes.militia,
+    id: 'test-tank',
+    name: '试验重甲',
+    armor: 23,
+    maxHp: 200,
+  };
+  const atk = onMoon(s, 'A', 'test-tank', 2, 2);
+  const prey = onMoon(s, 'B', 'test-tank', 3, 2);
 
   const plain = computeDamage(s, atk, prey);
   // 把**月球**那一格改成环形山（护甲 +2），地球同一坐标保持原样
@@ -1302,6 +1325,163 @@ test('能量条：在面板上能看到供电、已用、余量与航速', () =>
   assert.ok(html!.includes('余量'), '没有过载时显示余量');
   assert.ok(html!.includes('航速 1'), '标准航速要写出来');
   assert.equal(stationPowerHtml(cur, { ...core, board: 'earth' } as never), null, '地球上的单位没有站能量');
+});
+
+console.log('\n太空时代：恶劣外空环境与航天员');
+
+test('恶劣外空环境：月面上护甲 ÷5（无保底）、移动减半（保底 1）', () => {
+  /*
+   * 两条都要验，而且都要和"地球上同一支部队"对照——只验月球上的绝对值，
+   * 分不清是环境生效了还是这个兵本来就弱。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  // 地球也铺平：不然默认地形（森林之类）的掩护会让"按原值"这条对不上
+  flatten(s, 'plain');
+  {
+    s.unitTypes['test-weak'] = {
+      ...s.unitTypes.militia,
+      id: 'test-weak',
+      name: '轻甲兵',
+      armor: 4,
+      move: 2,
+    };
+    const onEarth = place2(s, 'A', 'test-weak', 2, 2);
+    const onMoonUnit = onMoon(s, 'A', 'test-weak', 3, 3);
+
+    assert.equal(effectiveStats(s, onEarth).armor, 4, '地球上按原值');
+    assert.equal(effectiveStats(s, onMoonUnit).armor, 0, '月面上 4 ÷ 5 = 0（无保底）');
+    assert.equal(movePower(s, onEarth), 2, '地球上移速 2');
+    assert.equal(movePower(s, onMoonUnit), 1, '月面上减半 → 1（保底 1）');
+
+    // 环境是"这张图"的，不是"这个兵"的
+    assert.ok(hazardFor(s, onMoonUnit), '月球单位受环境影响');
+    assert.equal(hazardFor(s, onEarth), null, '地球单位不受影响');
+  }
+});
+
+test('航天员：不吃恶劣外空环境', () => {
+  /*
+   * 这是航天员唯一的核心差异。别的兵在月面上护甲归零、移速减半，
+   * 他按原值算——所以"登月带谁"变成了一个有答案的问题。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  const astro = onMoon(s, 'A', ASTRONAUT_ID, 3, 3);
+  assert.ok(astro, '航天员兵种要存在（基础包就带）');
+
+  assert.equal(hazardFor(s, astro), null, '航天员免疫外空环境');
+  assert.equal(effectiveStats(s, astro).armor, s.unitTypes[ASTRONAUT_ID]!.armor, '护甲不折');
+  assert.equal(movePower(s, astro), s.unitTypes[ASTRONAUT_ID]!.move, '移动不折');
+
+  /*
+   * 能产出来才有意义：军营（`barracks`）的白名单是空的 = 不设限，
+   * 所以新兵种只要进了本局兵种表就自动出现在产品线上。
+   * 这条钉住"它不是一个只能靠代码塞进去的兵"。
+   */
+  const camp = Object.values(s.unitTypes).find((d) => d.produce && !d.produce.units);
+  assert.ok(camp, '本局应该有军营（白名单为空的产兵点）');
+  assert.equal(canProduce(camp!, s.unitTypes[ASTRONAUT_ID]!).ok, true, '军营能产航天员');
+});
+
+test('维生仓：覆盖半径内豁免，半径外照样吃环境', () => {
+  /*
+   * 半径而不是全站：站要长大就得多造维生仓，这是"站越大越贵"的曲线。
+   * 所以必须验"覆盖到"和"没覆盖到"两边，只验一边等于没验。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  flatten(s, 'plain');
+  s.unitTypes['test-sitter'] = { ...s.unitTypes.militia, id: 'test-sitter', name: '站内兵', armor: 5 };
+
+  // 手搓一座 7×7 的站：核心在 (3,3)
+  s.boards!['st-7'] = createStationBoard('st-7', 7, '测试站');
+  const b = s.boards!['st-7']!;
+  for (const t of b.tiles) t.terrain = 'deck';
+  const push = (type: string, x: number, y: number) => {
+    const u: Unit = {
+      id: `x${s.nextUnitSeq++}`,
+      type,
+      owner: 'A',
+      x,
+      y,
+      hp: s.unitTypes[type]!.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+      board: 'st-7',
+    };
+    s.units.push(u);
+    return u;
+  };
+  push(STATION_CORE_ID, 3, 3);
+
+  const near = push('test-sitter', 3, 6); // 离 (3,3) 正好 3 格：覆盖到
+  const far = push('test-sitter', 6, 6); // 曼哈顿 6 格：覆盖不到
+
+  assert.equal(effectiveStats(s, near).armor, 1, '没有维生仓时 5 ÷ 5 = 1');
+  assert.equal(effectiveStats(s, far).armor, 1);
+
+  // 维生仓放 (2,4)：到 near(3,6) 曼哈顿 3（覆盖到），到 far(6,6) 是 6（覆盖不到）
+  push(STATION_LIFE_ID, 2, 4);
+
+  assert.equal(effectiveStats(s, near).armor, 5, '维生仓覆盖内：护甲按原值');
+  assert.equal(effectiveStats(s, far).armor, 1, '覆盖外：照样 ÷5');
+  assert.ok(LIFE_RADIUS >= 3);
+});
+
+test('火箭投放：选空间站只需加注 1 回合，点火即到', () => {
+  /*
+   * 站在地球轨道，和发射井在同一个节点——所以是"垂直上升"，不走航道。
+   * 以前只能投月球，这一条是"火箭能上站"的验收。
+   */
+  const st = openStation();
+  let cur = st.state;
+  cur.players.A.gold = 99999;
+  flatten(cur, 'plain');
+
+  // 井在 (5,5)；站已经在地球轨道（openStation 建的）
+  const silo = cur.units.find((u) => u.type === SILO_ID)!;
+  const paxType = ASTRONAUT_ID;
+  const pax: Unit = {
+    id: 'pax1',
+    type: paxType,
+    owner: 'A',
+    x: silo.x + 1,
+    y: silo.y + 1,
+    hp: 24,
+    kills: 0,
+    moved: true,
+    acted: true,
+  };
+  // 直接塞进货舱（装载本身在别的用例里验过）
+  cur.units = cur.units.filter((u) => u.id !== pax.id);
+  silo.cargo = [pax];
+  cur.current = 'A';
+
+  const rec = cur.starmap!.stations[0]!;
+  const chose = chooseDest(cur, silo, { node: rec.at, board: rec.board, fuel: SILO_FUEL_TO_STATION });
+  assert.equal(chose, null, `选目的地失败：${chose}`);
+  assert.equal(currentDest(cur, silo)?.fuel, SILO_FUEL_TO_STATION, '去站只要 1 回合');
+  assert.equal(siloStateOf(silo).fuel, 0, '选目的地会清空燃料');
+
+  const fueled = applyAction(cur, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:fuel' });
+  assert.ok(fueled.ok, fueled.ok ? '' : fueled.reason);
+  cur = fueled.state;
+  // 过一次自己的回合：加注到 1/1
+  const b = applyAction(cur, { type: 'END_TURN' });
+  const back = applyAction(b.ok ? b.state : cur, { type: 'END_TURN' });
+  cur = back.ok ? back.state : cur;
+
+  const siloNow = cur.units.find((u) => u.id === silo.id)!;
+  assert.equal(siloStateOf(siloNow).fuel, SILO_FUEL_TO_STATION, '1 回合就加满了');
+
+  const go = applyAction(cur, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:launch' });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+  const landed = go.state.units.find((u) => u.id === 'pax1');
+  assert.ok(landed, '人应该在站里');
+  assert.equal(boardIdOf(landed!), rec.board, '落在站棋盘上');
+  assert.equal((go.state.transit ?? []).length, 0, '同节点不走航道，天上不该有火箭');
+  assert.equal(landed!.acted, true, '落地当回合不能动');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

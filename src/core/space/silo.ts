@@ -26,13 +26,36 @@ import type { GameState, PlayerId, StarNodeId, Unit, UnitTypeDef } from '../type
 import { underConstruction } from '../query.ts';
 import { markSpotlight, clearSpotlight } from '../spotlight.ts';
 import { lanesFrom, nodeById, nodeName, nodeOf } from './starmap.ts';
-import { cellName, enterLane, landingSpotOn, laneTurnsFor } from './transit.ts';
+import { cellName, enterLane, landCargoOn, landingSpotOn, laneTurnsFor } from './transit.ts';
 
 /** 建筑 id。写进存档，改它等于让老存档里的发射井变成一块石头 */
 export const SILO_ID = 'rocket_silo';
 
-/** 加注满要几回合（每回合 +1） */
+/** 去**月球表面**要加注几回合（每回合 +1）。去空间站只要 1 回合，见 `SiloDest.fuel` */
 export const SILO_FUEL_TURNS = 3;
+
+/** 去空间站要加注几回合：轨道就在头顶，不用攒那么多燃料 */
+export const SILO_FUEL_TO_STATION = 1;
+
+/**
+ * 这次要飞哪儿。
+ *
+ * 以前不用选——只有月球一条路，`lanesFrom(node)[0]` 拿到什么就飞什么。
+ * 现在多了"投送到自己的空间站"，而**加注回合数跟目的地走**（月球 3、站 1），
+ * 所以必须先说清楚去哪儿，再开始攒燃料。
+ */
+export interface SiloDest {
+  /** 星图上的节点（月球 / 地球……） */
+  node: StarNodeId;
+  /**
+   * 目的地的棋盘。
+   *   有值 = 进这张图（某座空间站）；
+   *   没有 = 落到节点自己的棋盘（月球表面）。
+   */
+  board?: string;
+  /** 加注几回合 */
+  fuel: number;
+}
 
 export const ROCKET_SILO: UnitTypeDef = {
   id: SILO_ID,
@@ -61,23 +84,80 @@ export const ROCKET_SILO: UnitTypeDef = {
   carry: { hold: { max: 1 } },
 };
 
-/** 井里存的东西。老存档没有 `custom`，一律当 0 / 没在加注 */
+/** 井里存的东西。老存档没有 `custom`，一律当 0 / 没在加注 / 没选目的地 */
 interface SiloState {
   fuel: number;
   fueling: boolean;
+  /** 这次要去哪儿；老存档没有，按"第一条航道 + 月球燃料"兜底 */
+  dest?: SiloDest;
 }
 
 /** 读一下发射井的状态（任何单位都能传，非发射井返回 0/停） */
 export function siloStateOf(u: Unit): SiloState {
   const raw = Number(u.custom?.fuel ?? 0);
-  const fuel = Number.isFinite(raw) ? Math.max(0, Math.min(SILO_FUEL_TURNS, Math.round(raw))) : 0;
-  return { fuel, fueling: u.custom?.fueling === true && fuel < SILO_FUEL_TURNS };
+  const dest = destOfCustom(u.custom?.dest);
+  const cap = dest?.fuel ?? SILO_FUEL_TURNS;
+  const fuel = Number.isFinite(raw) ? Math.max(0, Math.min(cap, Math.round(raw))) : 0;
+  return {
+    fuel,
+    fueling: u.custom?.fueling === true && fuel < cap,
+    ...(dest ? { dest } : {}),
+  };
+}
+
+/** 存档里的目的地：字段不全就当没选（宁可让玩家重选，也别按半截数据飞） */
+function destOfCustom(raw: unknown): SiloDest | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const d = raw as Partial<SiloDest>;
+  if (typeof d.node !== 'string' || typeof d.fuel !== 'number') return undefined;
+  return { node: d.node, ...(typeof d.board === 'string' ? { board: d.board } : {}), fuel: Math.max(1, Math.round(d.fuel)) };
 }
 
 function writeSilo(u: Unit, next: SiloState): void {
   u.custom ??= {};
   u.custom.fuel = next.fuel;
   u.custom.fueling = next.fueling;
+  if (next.dest) u.custom.dest = { ...next.dest };
+  else delete u.custom.dest;
+}
+
+/**
+ * 这次要去哪儿。
+ *
+ * 没有显式选过（老存档、刚建好的井）就按老规矩：第一条航道、月球燃料。
+ * 这样升级上来的存档不用重选也能发射，行为和以前一模一样。
+ */
+export function currentDest(s: GameState, silo: Unit): SiloDest | undefined {
+  const st = siloStateOf(silo);
+  if (st.dest) return st.dest;
+  const here = nodeOf(s, silo);
+  if (!here) return undefined;
+  const out = lanesFrom(s, here.id)[0];
+  if (!out) return undefined;
+  const board = nodeById(s, out.to)?.board;
+  if (!board) return undefined;
+  return { node: out.to, fuel: SILO_FUEL_TURNS };
+}
+
+/**
+ * 选目的地。**会清空燃料**：不然可以先按空间站加注 1 回合，
+ * 再改成月球——等于白占 2 回合的便宜。
+ */
+export function chooseDest(s: GameState, silo: Unit, dest: SiloDest): string | null {
+  if (siloStateOf(silo).fueling) return '正在加注，先等这一轮加完再改目的地';
+  writeSilo(silo, { fuel: 0, fueling: false, dest });
+  log(
+    s,
+    silo.owner,
+    `${s.unitTypes[silo.type]?.name ?? '发射井'}的目标改为${boardName(s, dest)}，燃料清零（要 ${dest.fuel} 回合加注）`,
+    true,
+  );
+  return null;
+}
+
+/** 目的地的显示名：站用站名，节点用节点名 */
+export function boardName(s: GameState, dest: SiloDest): string {
+  return s.boards?.[dest.board ?? '']?.name ?? nodeName(s, dest.node);
 }
 
 function isSilo(s: GameState, u: Unit): boolean {
@@ -96,9 +176,11 @@ function log(s: GameState, p: PlayerId, text: string, open = false): void {
  */
 export function startFueling(s: GameState, silo: Unit): string | null {
   const st = siloStateOf(silo);
-  if (st.fuel >= SILO_FUEL_TURNS) return '燃料已经加满了，直接发射就行';
-  if (st.fueling) return `已经在加注了（${st.fuel} / ${SILO_FUEL_TURNS}）`;
-  writeSilo(silo, { fuel: st.fuel, fueling: true });
+  const dest = currentDest(s, silo);
+  if (!dest) return '还没选目的地';
+  if (st.fuel >= dest.fuel) return '燃料已经加满了，直接发射就行';
+  if (st.fueling) return `已经在加注了（${st.fuel} / ${dest.fuel}）`;
+  writeSilo(silo, { fuel: st.fuel, fueling: true, dest });
   /*
    * 一点火加注就点亮：烟柱从这一刻开始冒。
    *
@@ -106,8 +188,13 @@ export function startFueling(s: GameState, silo: Unit): string | null {
    * 那一次 `tickSilos` 已经过去了，对手这一回合就看不见它。
    */
   markSpotlight(s, silo);
-  const left = SILO_FUEL_TURNS - st.fuel;
-  log(s, silo.owner, `${s.unitTypes[silo.type]?.name ?? '发射井'}开始加注燃料，还要 ${left} 回合`, true);
+  const left = dest.fuel - st.fuel;
+  log(
+    s,
+    silo.owner,
+    `${s.unitTypes[silo.type]?.name ?? '发射井'}开始加注燃料，去${boardName(s, dest)}，还要 ${left} 回合`,
+    true,
+  );
   return null;
 }
 
@@ -121,30 +208,50 @@ export function startFueling(s: GameState, silo: Unit): string | null {
 function outboundLane(
   s: GameState,
   silo: Unit,
-): { laneId: string; to: StarNodeId; turns: number } | null {
+): { laneId: string; to: StarNodeId; turns: number; board?: string } | null {
+  const dest = currentDest(s, silo);
   const here = nodeOf(s, silo);
-  if (!here) return null;
-  const out = lanesFrom(s, here.id)[0];
+  if (!dest || !here) return null;
+  const out = lanesFrom(s, here.id).find((x) => x.to === dest.node);
   if (!out) return null;
-  return { laneId: out.lane.id, to: out.to, turns: laneTurnsFor(out.lane) };
+  return {
+    laneId: out.lane.id,
+    to: dest.node,
+    turns: laneTurnsFor(out.lane),
+    ...(dest.board ? { board: dest.board } : {}),
+  };
 }
 
 /** 发射前的检查。和发射本身分开：面板要用同一句话告诉玩家"还差什么" */
 export function launchProblem(s: GameState, silo: Unit): string | null {
   const st = siloStateOf(silo);
-  if (st.fuel < SILO_FUEL_TURNS) {
+  const dest = currentDest(s, silo);
+  if (!dest) return '还没选目的地';
+  if (st.fuel < dest.fuel) {
     return st.fueling
-      ? `燃料还在加注（${st.fuel} / ${SILO_FUEL_TURNS}）`
-      : `燃料没加满（${st.fuel} / ${SILO_FUEL_TURNS}），先点「加注燃料」`;
+      ? `燃料还在加注（${st.fuel} / ${dest.fuel}）`
+      : `燃料没加满（${st.fuel} / ${dest.fuel}），先点「加注燃料」`;
   }
   const cargo = silo.cargo ?? [];
   if (cargo.length === 0) return '货舱是空的：先让一个单位登舱（面板上的「装载」）';
-  const out = outboundLane(s, silo);
-  if (!out) return '这里没有可用的航道';
-  // 注意这里是 nodeById（节点 id），不是 nodeOfBoard（棋盘 id）——两者差一层
-  const destBoard = nodeById(s, out.to)?.board;
+
+  /*
+   * 同节点投送（火箭垂直上升到自己头顶的轨道站）**不需要航道**。
+   * 地球和地球之间没有航道，硬按航道检查会把最常用的那条路判成走不了。
+   */
+  const here = nodeOf(s, silo);
+  const sameNode = !!dest.board && !!here && dest.node === here.id;
+  if (!sameNode && !outboundLane(s, silo)) return '这里没有通往目的地的航道';
+
+  /*
+   * 目的地棋盘：选的是站就用站那张，选的是节点就用节点自己的。
+   * 这里以前只认节点（`nodeById`），于是"投送到空间站"永远被判成
+   * "那一头还没有能落脚的地方"。
+   */
+  const destBoard = dest.board ?? nodeById(s, dest.node)?.board;
   if (!destBoard) return '航道那一头还没有能落脚的地方';
-  if (!landingSpotOn(s, destBoard)) return `${nodeName(s, out.to)}上已经没有落脚的地方了`;
+  if (!s.boards?.[destBoard] && destBoard !== 'earth') return '目的地已经不在了';
+  if (!landingSpotOn(s, destBoard)) return `${boardName(s, dest)}上已经没有落脚的地方了`;
   return null;
 }
 
@@ -162,18 +269,50 @@ export function launchIntoLane(s: GameState, silo: Unit): string | null {
   const problem = launchProblem(s, silo);
   if (problem) return problem;
 
-  const out = outboundLane(s, silo)!;
+  const dest = currentDest(s, silo)!;
+  const here = nodeOf(s, silo);
   const cargo = silo.cargo ?? [];
-  const t = enterLane(s, { owner: silo.owner, laneId: out.laneId, to: out.to, cargo });
+
+  /*
+   * 目的地就在**头顶这颗星球的轨道**：火箭垂直上升，不走航道。
+   *
+   * 这一条是"投送空间站"最常用的路径——核心舱只能从发射井就地入轨，
+   * 所以站一开始都挂在地球轨道，送人上去本来就该是"点火即到"。
+   * 走航道反而不对：地球和地球之间没有航道。
+   */
+  if (dest.board && here && dest.node === here.id) {
+    const landed = landCargoOn(s, silo.owner, dest.board, cargo, boardName(s, dest));
+    if (landed.length === 0) return '站里没有空位了';
+    silo.cargo = [];
+    writeSilo(silo, { fuel: 0, fueling: false, dest });
+    clearSpotlight(silo);
+    log(
+      s,
+      silo.owner,
+      `${landed.map((u) => s.unitTypes[u.type]?.name ?? u.type).join('、')} 乘火箭进入${boardName(s, dest)}`,
+      true,
+    );
+    return null;
+  }
+  // 目的地不在本站点：走航道（站航行到别的星球轨道之后，就得飞一段）
+  const out = outboundLane(s, silo);
+  if (!out) return '这里没有通往目的地的航道';
+  const t = enterLane(s, {
+    owner: silo.owner,
+    laneId: out.laneId,
+    to: out.to,
+    cargo,
+    ...(dest.board ? { board: dest.board } : {}),
+  });
   if (!t) return '这条航道走不了';
 
   silo.cargo = [];
-  writeSilo(silo, { fuel: 0, fueling: false });
+  writeSilo(silo, { fuel: 0, fueling: false, dest });
   const names = cargo.map((u) => s.unitTypes[u.type]?.name ?? u.type).join('、');
   log(
     s,
     silo.owner,
-    `${names} 乘火箭升空，飞向${nodeName(s, out.to)}（${t.left} 回合后到达）`,
+    `${names} 乘火箭升空，飞向${boardName(s, dest)}（${t.left} 回合后到达）`,
     // 火箭升空是瞒不住的，而且对手看着它飞过去才知道该在哪儿堵
     true,
   );
@@ -228,18 +367,20 @@ export function tickSilos(s: GameState, player: PlayerId): void {
     if (!underConstruction(u) && st.fueling) markSpotlight(s, u);
 
     if (!st.fueling) continue;
-    const fuel = Math.min(SILO_FUEL_TURNS, st.fuel + 1);
-    writeSilo(u, { fuel, fueling: fuel < SILO_FUEL_TURNS });
+    const dest = currentDest(s, u);
+    if (!dest) continue;
+    const fuel = Math.min(dest.fuel, st.fuel + 1);
+    writeSilo(u, { fuel, fueling: fuel < dest.fuel, dest });
     const siloName = s.unitTypes[u.type]?.name ?? '发射井';
-    if (fuel >= SILO_FUEL_TURNS) {
-      log(s, player, `${siloName}的燃料加满了（${SILO_FUEL_TURNS} / ${SILO_FUEL_TURNS}），随时可以点火`, true);
+    if (fuel >= dest.fuel) {
+      log(s, player, `${siloName}的燃料加满了（${dest.fuel} / ${dest.fuel}），随时可以点火`, true);
     } else {
       /*
        * 加注进度**公开**：对手必须能读到"他还差几回合就飞"。
        * 这是火箭奇袭唯一的预警，比在顶栏加一个倒计时更省事：
        * 战报本来就两边都能翻，也不会多占一块界面。
        */
-      log(s, player, `${siloName}正在加注燃料（${fuel} / ${SILO_FUEL_TURNS}）`, true);
+      log(s, player, `${siloName}正在加注燃料（${fuel} / ${dest.fuel}）`, true);
     }
   }
 }
