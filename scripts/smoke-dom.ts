@@ -61,6 +61,7 @@ import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
 import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
 import { starLayout } from '../src/ui/star-layout.ts';
+import { renderStarMap } from '../src/ui/star-map.ts';
 import { EARTH } from '../src/core/board.ts';
 import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -328,6 +329,43 @@ check('星图布局：地球居中、其余节点在外圈，坐标是算出来�
     null,
     '只有一张图时不画星图',
   );
+});
+
+check('星图渲染：每条航线都带一根可点的命中条', () => {
+  /*
+   * 上一版把点击挂在 SVG 的 `<line>` 上，实机点不到（父级 pointer-events:none
+   * 想让子元素覆盖，依赖太多细节）。现在改成普通 DOM 的透明长条——这条用例
+   * 钉住"渲染时确实生成了它"，不然又退回只能看、不能点。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: { moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+  } as never;
+  const view = { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, view, 'A', null);
+  const taps = host.querySelectorAll('[data-act="star-lane"]');
+  assert.equal(taps.length, 1, `每条航线都要有命中条，实际 ${taps.length}`);
+  assert.equal((taps[0] as HTMLElement).dataset.id, 'earth-moon');
+  assert.equal(host.querySelectorAll('.sm-lane-line').length, 1, '线本身还在（只负责好看）');
+  assert.equal(host.querySelectorAll('[data-act="star-node"]').length, 2, '两个节点都可点');
+
+  // 同一份数据重画一次：签名挡住，DOM 不重建（点击不会被打断）
+  const before = taps[0];
+  renderStarMap(host, view, 'A', null);
+  assert.equal(host.querySelectorAll('[data-act="star-lane"]')[0], before, '内容没变就不该重建');
 });
 
 check('地形类正确分布', () => {

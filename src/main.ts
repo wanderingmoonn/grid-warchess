@@ -1106,9 +1106,18 @@ function starPanelInfo(): StarPanelInfo | null {
   const lane = lay.lanes.find((l) => l.id === starSel!.id);
   if (!lane) return null;
   const onWay = trips.filter((t) => t.lane === lane.id);
+  /*
+   * 航程现在就是"几个回合"，因为还没什么东西能改变速度。
+   *
+   * 但**它不该一直是回合数**：等空间站能装推进器之后，同一条航线的
+   * 通过时间应该 = 距离 ÷ 速度。到那时给 `StarLane` 分开存 `distance`
+   * 与速度修正，这里改成"距离 N，当前速度下 M 回合"——
+   * 面板文案不用再动。现在先按"距离 = 1 回合"显示，不多造一个还没人用的字段。
+   */
   const lines = [
     `${lane.a.name} ⇄ ${lane.b.name}`,
     `航程 ${lane.turns} 回合（点火之后开始算）`,
+    '以后装了推进器，同一段路会更快走完',
   ];
   if (onWay.length === 0) {
     lines.push('路上没有东西');

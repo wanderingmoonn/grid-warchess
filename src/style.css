@@ -841,12 +841,40 @@ body {
   fill: none;
 }
 
-.sm-lane-hit {
-  stroke: transparent;
-  stroke-width: 0.34;
-  fill: none;
-  pointer-events: stroke;
+/*
+ * 航线的**命中条**：一根透明的长按钮，铺在两点之间。
+ *
+ * 不把点击挂在 SVG 的 `<line>` 上：那要依赖 SVG 根 `pointer-events:none`
+ * 被子元素覆盖，实机上点不到（上一版就是这么翻车的）。普通按钮的命中
+ * 是浏览器最基础的能力，还自带 hover 与键盘焦点。
+ *
+ * 定位靠百分比：left/top 是 a 格中心的百分比，宽度是两点距离占整块的比例，
+ * 再按角度旋转——正方形网格下这样算正好贴合。
+ */
+.sm-lane-tap {
+  position: absolute;
+  height: 18px;
+  margin-top: -9px;
+  transform-origin: 0 50%;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   cursor: pointer;
+  z-index: 2;
+}
+
+.sm-lane-tap:hover {
+  background: rgba(216, 162, 74, 0.14);
+}
+
+.sm-lane-tap.on {
+  background: rgba(216, 162, 74, 0.2);
+}
+
+.sm-lane-tap:focus-visible {
+  outline: 2px solid #d8a24a;
+  outline-offset: 1px;
 }
 
 .sm-lane.on .sm-lane-line {
@@ -856,7 +884,7 @@ body {
 
 .sm-node {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   display: flex;
   flex-direction: column;
   align-items: center;

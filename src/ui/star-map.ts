@@ -73,6 +73,18 @@ export function renderStarMap(
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
 
+  /*
+   * 航线分两层：
+   *   · SVG 那根线只负责**好看**（pointer-events: none）；
+   *   · 点击交给一根**普通 DOM 的透明长条**（`.sm-lane-tap`），
+   *     用百分比 + rotate 铺在两点之间。
+   *
+   * 为什么不给 `<line>` 挂 pointer-events：上一版就是这么写的，
+   * 实机上点不到——SVG 根上的 `pointer-events: none` 靠子元素覆盖这条路
+   * 依赖继承与命中的细节，改一次错一次。普通按钮的命中是浏览器最基础的能力，
+   * 没有这种不确定性；顺带还能有 hover 和键盘焦点。
+   */
+  const size = lay.size;
   const lines = lay.lanes
     .map((l) => {
       const on = sel?.kind === 'lane' && sel.id === l.id;
@@ -81,12 +93,25 @@ export function renderStarMap(
       const x2 = l.b.x + 0.5;
       const y2 = l.b.y + 0.5;
       const geom = `x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"`;
+      return `<g class="sm-lane${on ? ' on' : ''}"><line class="sm-lane-line" ${geom}></line></g>`;
+    })
+    .join('');
+
+  // 命中条：从 a 的中心拉到 b 的中心，宽度 = 两点距离（百分比），再旋转
+  const taps = lay.lanes
+    .map((l) => {
+      const on = sel?.kind === 'lane' && sel.id === l.id;
+      const x1 = ((l.a.x + 0.5) / size) * 100;
+      const y1 = ((l.a.y + 0.5) / size) * 100;
+      const dx = l.b.x - l.a.x;
+      const dy = l.b.y - l.a.y;
+      const len = (Math.hypot(dx, dy) / size) * 100;
+      const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
       return (
-        `<g class="sm-lane${on ? ' on' : ''}">` +
-        // 透明的一根粗线专门接点击：2px 的细线根本点不中
-        `<line class="sm-lane-hit" ${geom} data-act="star-lane" data-id="${esc(l.id)}"></line>` +
-        `<line class="sm-lane-line" ${geom}></line>` +
-        `</g>`
+        `<button class="sm-lane-tap${on ? ' on' : ''}"` +
+        ` data-act="star-lane" data-id="${esc(l.id)}"` +
+        ` aria-label="${esc(`${l.a.name} 到 ${l.b.name} 的航线`)}"` +
+        ` style="left:${x1}%;top:${y1}%;width:${len}%;transform:rotate(${deg}deg)"></button>`
       );
     })
     .join('');
@@ -135,6 +160,7 @@ export function renderStarMap(
     `<div class="sm-grid" style="--sm:${lay.size}">` +
     `<svg class="sm-lanes" viewBox="0 0 ${lay.size} ${lay.size}" preserveAspectRatio="none">${lines}</svg>` +
     backdrop +
+    taps +
     cells +
     `</div>` +
     `</div>`;
