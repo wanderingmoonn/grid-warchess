@@ -20,6 +20,16 @@
  */
 
 import type { Board, Terrain, Tile } from '../types.ts';
+import { SPACE_HAZARD } from './space-hazard.ts';
+
+/**
+ * 月球图的 id。
+ *
+ * 从 `silo.ts` 搬过来的：月球是**月球自己的事**，不该由发射井定义。
+ * 发射井改造之后连"月球"这个词都不该知道——它只负责把货送上某条航道。
+ * 写进存档，改它等于让老存档丢图。
+ */
+export const MOON_BOARD = 'moon';
 
 /** 月球最小边长。再小就放不下着陆区（第 5 步会用到中间那几格） */
 export const MOON_MIN_SIZE = 4;
@@ -141,5 +151,7 @@ export function createMoonBoard(earthSize: number, seed: number): Board {
     w: n,
     h: n,
     tiles,
+    // 没有大气、没有重力：进入这张图的单位统一背「恶劣外空环境」
+    hazard: SPACE_HAZARD,
   };
 }

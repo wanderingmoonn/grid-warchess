@@ -45,7 +45,8 @@ import {
   type Precip,
 } from './field.ts';
 import type { ClimateEffect } from './climate.ts';
-import type { GameState } from '../types.ts';
+import type { BoardId, GameState } from '../types.ts';
+import { boardIdOf, EARTH } from '../board.ts';
 
 /** 算效果要的五个驱动（都是每格现成的量） */
 export interface WeatherDrivers {
@@ -230,8 +231,21 @@ export function effectAt(s: GameState, x: number, y: number): ClimateEffect {
   return weatherEffect(driversAt(s, x, y));
 }
 
-/** 单位脚下这一格的效果 */
-export function effectOfUnit(s: GameState, u: { x: number; y: number }): ClimateEffect {
+/**
+ * 单位脚下这一格的效果。
+ *
+ * **只对地球上的单位成立**：气候是按"地形 + 海陆 + 纬度"推的，那套数据只对
+ * 地球那张图有意义。空间站的格子在站内是 (3,2)、在地球上也是 (3,2)，
+ * 不判图的话，站里的核心舱会按地球上 (3,2) 的天气吃雷劈——2026-11-12
+ * 实机上就是"开季节包之后核心舱自己掉血坠毁"。
+ *
+ * 判据放在这个**唯一取值口**：移动、护甲、视野、射程、产出、回合末伤害
+ * 全都读它，一处收口比在七八个钩子里各加一行靠谱。
+ * 月球同理（月壤、没有大气，`getTilePanelHtml` 与 `boardViews` 也早就不给
+ * 非地球的图算天气了，这里补上规则层那半）。
+ */
+export function effectOfUnit(s: GameState, u: { x: number; y: number; board?: BoardId }): ClimateEffect {
+  if (boardIdOf(u) !== EARTH) return {};
   return effectAt(s, u.x, u.y);
 }
 

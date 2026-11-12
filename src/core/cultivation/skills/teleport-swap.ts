@@ -105,8 +105,8 @@ registerSkillEffect('teleport-swap', (c) => {
 
   // 校验一：界内 + 地形站得住。此时谁都没挪，所以必须忽略"格子上有人"。
   for (const m of plan) {
-    if (!inBounds(s, m.x, m.y)) return overload();
-    if (!c.api.canStandAt(s, m.x, m.y, m.u.type, { ignoreUnits: true })) return overload();
+    if (!inBounds(c.view, m.x, m.y)) return overload();
+    if (!c.api.canStandAt(c.view, m.x, m.y, m.u.type, { ignoreUnits: true })) return overload();
   }
 
   // 校验二：全部挪完之后，同一格不能有两个单位。
@@ -115,7 +115,7 @@ registerSkillEffect('teleport-swap', (c) => {
   const dest = new Map<string, number>();
   const moved = new Map<string, { x: number; y: number }>();
   for (const m of plan) moved.set(m.u.id, m);
-  for (const u of s.units) {
+  for (const u of c.view.units) {
     const m = moved.get(u.id);
     const key = m ? `${m.x},${m.y}` : `${u.x},${u.y}`;
     dest.set(key, (dest.get(key) ?? 0) + 1);
@@ -144,7 +144,8 @@ registerSkillEffect('teleport-swap', (c) => {
  * 大单位不参与（和效果里的规则一致），界外的目的格直接跳过。
  */
 registerSkillPreview('teleport-swap', (c) => {
-  const { state, self, target } = c;
+  // 只列**同一张图**上的人：月球上没人会被地球那边的传送阵挪走
+  const { view: state, self, target } = c;
   const vx = target.x - self.x;
   const vy = target.y - self.y;
   if (vx === 0 && vy === 0) return [];

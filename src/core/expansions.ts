@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { BoardId, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
@@ -38,6 +38,7 @@ import { FANTASY } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
 import { SEASONS } from './seasons/index.ts';
 import { SPACE_AGE } from './space/space-age.ts';
+import { SPACE_WAR } from './space/space-war.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
@@ -351,6 +352,25 @@ export interface ExpansionHooks {
   modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
+
+  /**
+   * 选址否决：这条建筑**这一格**为什么不能盖（返回 null = 可以）。
+   *
+   * 和 `buildSiteError` 分工：核心只判通用的那几条（越界、占位、地形、距离、
+   * 会不会把城堵死），**扩展独有的上限**（"每颗星球每方只能有一座接驳站"）
+   * 走这里。不放进兵种数据，是因为它要读局面（你已经盖了几座），
+   * 而兵种表是纯数据。
+   *
+   * 拿到的是**建造者所在那张图**的投影（`boardStateOf`）：`state.units`
+   * 只有这张图上的兵，直接 filter 就是"这个星球上有几座"。
+   */
+  buildProblem?: (c: {
+    state: GameState;
+    player: PlayerId;
+    typeId: string;
+    x: number;
+    y: number;
+  }) => string | null;
   /** 纯函数：修正移动力 */
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */
@@ -386,6 +406,18 @@ export interface ExpansionHooks {
    * 返回的是格索引（`y * w + x`），不是坐标对——调用方直接往 Set 里塞。
    */
   extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
+
+  /**
+   * 有单位真的掉了血（伤害已经写进 hp，死亡流程还没开始）。
+   *
+   * 给"被打断/被打醒"这一类规则用：太空的月壤采样被打一下就作废，
+   * 走的就是这条。和 `modifyDamage` 分工不同——那个改的是数值，
+   * 这个只在"确实掉了血"之后通知一声（`amount > 0`）。
+   *
+   * 不要在这里再扣血或杀人：死亡判定在 hurtUnit 之后的主流程里，
+   * 这里动血会让"这一下到底打死了没有"变成两处口径。
+   */
+  onUnitDamaged?: (c: { state: GameState; unit: Unit; amount: number; source?: Unit }) => void;
 
   /**
    * 这个单位现在**能不能下命令**。返回字符串 = 不能，字符串是给玩家的理由。
@@ -532,7 +564,19 @@ export interface ExpansionHooks {
    *
    * 只在"点的是格子"这条支路调用；点单位、点城市时不走这里。
    */
-  getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
+  getTilePanelLines?: (c: {
+    state: GameState;
+    x: number;
+    y: number;
+    /**
+     * 这一格在**哪张图**上。缺省 = 地球（老扩展不用改）。
+     *
+     * 按格算的东西（灵气、天气、污染）都必须看它：空间站的 (3,2) 和地球的
+     * (3,2) 不是一个地方，"按坐标算一遍"会算出地球上的天气。
+     */
+    board?: BoardId;
+    viewer?: PlayerId;
+  }) => string[];
 
   /**
    * 格子 / 单位卡上的**扩展 HTML 块**。
@@ -552,6 +596,8 @@ export interface ExpansionHooks {
     x: number;
     y: number;
     unit?: Unit;
+    /** 同上：缺省 = 地球。不在那张图上算得出的东西，就返回空 */
+    board?: BoardId;
     viewer?: PlayerId;
   }) => string | null;
 
@@ -634,6 +680,29 @@ export interface ExpansionHooks {
    * 观战（`reveal`）不裁：复盘和双 AI 观战要看全。
    */
   redactUnit?: (c: { state: GameState; unit: Unit; viewer: PlayerId }) => void;
+
+  /**
+   * 视图裁剪：**整个单位都不下发**（返回 true = 这个视角看不见它）。
+   *
+   * 和 `redactUnit` 分工不同：那个是"看得见这个人，抹掉他兜里的东西"，
+   * 这个是"连人影都不给"。空间站的舱段是第一个用户——敌方空间站的**外形**
+   * 是公开的（甲板铺到哪了大家都看得见），但舱段装的是什么、装在哪，
+   * 只能靠轨道轰击一格一格试出来。
+   *
+   * 三条约定和 `redactUnit` 一样（只对非自己的单位调用、观战不裁）。
+   * 额外一条：**记忆也要过这道闸**。否则"曾经看过"会在 `memory.known` 里
+   * 留下一份完整布局，按 F12 就能读出对面站里哪一格有炮——那正是这条
+   * 规则要藏的东西。`playerView` 因此会把这个判据同时用在活单位和幽灵上。
+   */
+  hideUnit?: (c: {
+    state: GameState;
+    /**
+     * 活单位或**记忆里的幽灵**。只保证有 `type / x / y / board`，
+     * 想判归属就从棋盘查（星图上的站有 owner），别读 `unit.owner`。
+     */
+    unit: Pick<Unit, 'type' | 'x' | 'y'> & { board?: Unit['board'] };
+    viewer: PlayerId;
+  }) => boolean;
 }
 
 /** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
@@ -649,7 +718,16 @@ export interface BoardView {
   /** 悬停提示：这个视图在说什么 */
   hint: string;
   /** 每一格画什么色。返回空数组 = 这一帧不画 */
-  cells?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+  cells?: (c: {
+    state: GameState;
+    viewer: PlayerId;
+    /**
+     * 正在看哪张图。**按格算的视图必须看它**：天气、灵气、控制区都是
+     * "这张图的第 (x,y) 格"，拿地球的格子去算月球，颜色会整体错行。
+     * 缺省 = 地球（老扩展不用改）。
+     */
+    board?: BoardId;
+  }) => Array<{
     x: number;
     y: number;
     /** CSS 颜色，通常带 alpha */
@@ -664,7 +742,7 @@ export interface BoardView {
    * 为什么不做成"任意 HTML"：这层每帧都在重画，塞 HTML 进去就等于
    * 让扩展在渲染热路径上跑，而且一个手滑就是注入。字符够用了。
    */
-  glyph?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+  glyph?: (c: { state: GameState; viewer: PlayerId; board?: BoardId }) => Array<{
     x: number;
     y: number;
     /** 一个字符（或很短的串），核心居中画出 */
@@ -777,6 +855,31 @@ export interface Expansion {
    * 前置包把这件事变成显式的、可见的选择，而不是藏在代码里的隐式依赖。
    */
   requires?: string[];
+  /**
+   * **互斥**：这些包不能和本包同时开。
+   *
+   * 判据是**双向**的——`A.conflicts` 里有 `B`，等价于 `B.conflicts` 里有 `A`，
+   * 所以只在"更该负责的那一侧"写一次就够了（两边各写一遍，改 id 时必然漏一个）。
+   * 面板上两个包的卡片都会显示出这层关系（`conflictIdsOf` 负责对称化）。
+   *
+   * 冲突不是"数值上不划算"，而是**两套规则互相拆台**：现在唯一一条是
+   * 城郭与修真——城郭把造价改成粮/材（金币只占零头），修真整套经济长在金币
+   * 与灵石上，两个一起开，"钱"这件事就没有意义了。
+   *
+   * 处理方式：勾选时**直接拒绝**并说清是谁挡着（见开局面板）；配置里已经带着
+   * 一对冲突的（老存档、联机快照）由 `enabledExpansionIds` 按顺序保留先出现的
+   * 那个，保证同一个配置在任何机器上都算出同一套规则。
+   */
+  conflicts?: string[];
+  /**
+   * **联动**：和这些包一起开才完整，但**不是前置**——单开也能跑，只是少了那部分。
+   *
+   * 和 `requires` 的区别就一条：`requires` 没满足时整包不进场（连兵带钩子），
+   * 这个只是"少几格内容"。所以它只出现在面板上、不参与任何门控：
+   * 现在是「时代军备 / 海军 / 空军 / 奇想」各自有几个第六代兵种挂在
+   * 「信息化」上（兵种级 `requiresPack`），不开那个包，那几格永远不会出现。
+   */
+  recommends?: string[];
   /**
    * 规则书怎么归册：'small' 进小型扩展合订本，'large' 单独成册。
    *
@@ -1322,6 +1425,9 @@ export const EXPANSIONS: Expansion[] = [
   // 太空时代：目前只做"开局生成月球图"，为后面的火箭/登月打底。
   // 排在季节之后、修真之前，只是读起来顺——它只挂 onMatchStart，没有判定顺序问题。
   SPACE_AGE,
+  // 「太空战争」：星图 + 空间站，**依赖太空时代**（requires）。
+  // 紧跟在基础包后面：它挂的是空间站那摊事，和修真/军备没有顺序关系。
+  SPACE_WAR,
   CULTIVATION_PACK,
   // 「信息化」：第六时代的底座——解锁这一级科技 + 9 个最基本的兵。
   // 它是「时代军备」「海军」「空军」里那批第六代兵种的兵种级前置（requiresPack）。
@@ -1409,6 +1515,42 @@ export function expansionById(id: string): Expansion | undefined {
 }
 
 /**
+ * 这两个包互斥吗。
+ *
+ * **双向判**：`conflicts` 只在一边写，两边都要认。逐对查表比维护一份"冲突对"
+ * 表省事，也不会出现"同一对关系在一个方向生效、另一个方向不生效"。
+ */
+export function expansionsClash(a: string, b: string): boolean {
+  if (a === b) return false;
+  const ca = expansionById(a);
+  const cb = expansionById(b);
+  if (!ca || !cb) return false;
+  return (ca.conflicts ?? []).includes(cb.id) || (cb.conflicts ?? []).includes(ca.id);
+}
+
+/**
+ * 这个包**在面板上**要显示的冲突名单（对称化之后的结果）。
+ *
+ * 只写在一侧的关系，两个包的卡片都得看得见——不然玩家会在"被冲突"的那张卡上
+ * 什么都看不到，勾下去才被拒。
+ */
+export function conflictIdsOf(id: string): string[] {
+  const e = expansionById(id);
+  if (!e) return [];
+  const out = new Set((e.conflicts ?? []).map((x) => MERGED_INTO[x] ?? x));
+  for (const other of EXPANSIONS) {
+    if ((other.conflicts ?? []).some((x) => (MERGED_INTO[x] ?? x) === e.id)) out.add(other.id);
+  }
+  out.delete(e.id);
+  return [...out];
+}
+
+/** 已经选中的这些包里，有哪些和 `id` 冲突（面板拒绝勾选时要指名道姓） */
+export function conflictsWith(ids: readonly string[], id: string): string[] {
+  return normalizeExpansionIds(ids).filter((x) => expansionsClash(x, id));
+}
+
+/**
  * 开局面板与规则书里能出现的那部分扩展（`hidden` 的不在其中）。
  *
  * 只影响"玩家选不选得到"，不影响 `expansionById` / `activeExpansions`：
@@ -1455,14 +1597,23 @@ export function activeExpansions(state: GameState): Expansion[] {
 /**
  * 把"勾了什么"过滤成"真正生效了什么"。
  *
- * 前置关系可能成链（A 要 B、B 要 C），所以这里跑到不动点：
- * 每轮剔掉前置没满足的，直到没有可剔的。写成一次遍历会在
- * "C 被剔掉"和"B 要 C"之间随机出结果——取决于数组顺序，那是不可接受的。
+ * 两条关系在这里合流：
+ *   · `requires`：前置没满足 → 整包不进场；
+ *   · `conflicts`：两个互斥的包同时出现 → **留下先出现的那个**。
+ *
+ * 前置关系可能成链（A 要 B、B 要 C），所以跑到不动点：每轮剔掉前置没满足的，
+ * 直到没有可剔的。写成一次遍历会在 "C 被剔掉" 和 "B 要 C" 之间随机出结果——
+ * 取决于数组顺序，那是不可接受的。
+ *
+ * 冲突也放进同一个循环，因为两者会互相牵动：A 和 B 冲突、C 要 A，
+ * 剔掉 A 之后 C 也得跟着走。循环只会删不会加，所以一定收敛。
  */
 export function enabledExpansionIds(ids: readonly string[]): Set<string> {
   // 同样是先迁移再判前置：`requires` 里写的都是新 id，
   // 老配置带着旧 id 进来时若不迁移，"前置没满足"会把整个包剔掉
-  const on = new Set(normalizeExpansionIds(ids).filter((id) => !!expansionById(id)));
+  const order = normalizeExpansionIds(ids).filter((id) => !!expansionById(id));
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const on = new Set(order);
   for (;;) {
     let changed = false;
     for (const id of Array.from(on)) {
@@ -1470,6 +1621,25 @@ export function enabledExpansionIds(ids: readonly string[]): Set<string> {
       if (need.every((r) => on.has(r))) continue;
       on.delete(id);
       changed = true;
+    }
+    /*
+     * 冲突：按**配置里的先后**保留先出现的那个。
+     *
+     * 为什么是"先出现的赢"而不是"更重要的赢"：这里没有"更重要"这种信息，
+     * 而玩家的心理预期就是"我先勾的那个留下"。面板上想开另一个会先被拒绝，
+     * 所以这条只对老存档 / 联机快照这类"配置里本来就有一对"的情况生效。
+     */
+    for (const id of order) {
+      if (!on.has(id)) continue;
+      const mine = pos.get(id) ?? 0;
+      for (const other of order) {
+        if (other === id || !on.has(other)) continue;
+        if ((pos.get(other) ?? 0) > mine) continue; // 后面那个先让路，等它自己轮回来处理
+        if (!expansionsClash(id, other)) continue;
+        on.delete(id);
+        changed = true;
+        break;
+      }
     }
     if (!changed) return on;
   }

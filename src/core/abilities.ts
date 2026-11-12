@@ -181,7 +181,7 @@ export const CORE_ABILITIES: AbilityDef[] = [
     hooks: {
       hidden: (c) => {
         if (c.self.acted) return false;
-        const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+        const tile = c.api.tileOf(c.state, c.self);
         return !!tile && (tile.terrain === 'forest' || tile.terrain === 'hill');
       },
     },

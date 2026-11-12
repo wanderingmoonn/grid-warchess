@@ -136,6 +136,12 @@ export const CONFIG = {
     regolith: 0,
     // 环形山：坑缘的碎石能挡一下
     crater: 2,
+    // 虚空：站不上去，防御加成没有意义
+    void: 0,
+    // 甲板：平的，没遮挡
+    deck: 0,
+    // 破损舱段：破口两面透风，站在那里就是露着
+    wreck: 0,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -162,6 +168,12 @@ export const CONFIG = {
     regolith: 1,
     // 环形山：爬坑缘费劲
     crater: 2,
+    // 虚空：过不去（99 是"不可通行"的通用写法）
+    void: 99,
+    // 甲板：正常走
+    deck: 1,
+    // 破损舱段：能过，但碎钢架和裸露的管路绊脚，走一格顶两格
+    wreck: 2,
   } as Record<Terrain, number>,
 
   /**
@@ -187,6 +199,9 @@ export const CONFIG = {
     deep: '深水',
     regolith: '月壤',
     crater: '环形山',
+    void: '虚空',
+    deck: '甲板',
+    wreck: '破损舱段',
   } as Record<Terrain, string>,
 };
 

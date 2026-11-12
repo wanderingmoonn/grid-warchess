@@ -138,6 +138,9 @@ import type {
 } from './types.ts';
 import { seatsOf } from './types.ts';
 import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
+import { clearSpotlightsOfOthers, spotlightCellsOn } from './spotlight.ts';
+import { hazardArmorOf, hazardFor, hazardMoveOf } from './hazard.ts';
+import { reconCellsOn } from './recon.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -197,9 +200,15 @@ export {
  * 做成对外导出的判断，是因为它不只是一条合法性检查——
  * 地图生成、AI 选址、界面高亮都要用同一套口径，各写一份必然走偏。
  */
-export function adjacentToWater(s: GameState, x: number, y: number): boolean {
+export function adjacentToWater(
+  s: GameState,
+  x: number,
+  y: number,
+  /** 哪张图；不传 = 地球（老调用点一个都不用改） */
+  board: BoardId = EARTH,
+): boolean {
   return DIRS.some(([dx, dy]) => {
-    const t = tileAt(s, x + dx, y + dy);
+    const t = tileAtOn(s, board, x + dx, y + dy);
     if (!t) return false;
     // 临水就是临水，不分深浅：浅流踩得过去、深水只有船能进，
     // 但"挨着水"这件事对贸易、港口、造船位是一回事。
@@ -291,10 +300,31 @@ export const abilityApi: AbilityApi = {
   freeNeighbor,
   // 所有"凭空出现"的单位都从这条路走（召唤 / 分裂 / 孵化 / 裂殖 / 聚合）。
   // 在这里统一打标记，比让五个调用点各自记得打要可靠。
-  spawn: (s, owner, type, x, y) => {
-    const u = makeUnit(s, owner, type, x, y);
+  //
+  // `board`：出生在哪张图上，不传 = 地球。**在别的图上施法时必须传**，
+  // 否则会在同样的坐标上凭空多出一个地球单位（月面幽灵）。
+  spawn: (s, owner, type, x, y, board) => {
+    const u = makeUnit(s, owner, type, x, y, board);
     u.summoned = true;
     s.units.push(u);
+  },
+  viewOf: (s, u) => boardStateOf(s, u),
+  tileOf: (s, u) => tileUnder(s, u),
+  /**
+   * 找空地 + 生成，一步做完。
+   *
+   * 分成 `freeNeighbor` + `spawn` 两步写的时候，落点和出生点各算各的：
+   * 前者默认按地球找空地，后者默认生在地球——在月面上就会得到
+   * "月球找的空地、地球多的人"。合成一个函数之后，两个坐标由同一个单位决定。
+   */
+  spawnNear: (s, owner, type, near) => {
+    const view = boardStateOf(s, near);
+    const spot = freeNeighbor(view, near, type);
+    if (!spot) return null;
+    const u = makeUnit(s, owner, type, spot.x, spot.y, boardIdOf(near));
+    u.summoned = true;
+    s.units.push(u);
+    return u;
   },
   pushLog,
   citiesOf,
@@ -345,11 +375,15 @@ export const abilityApi: AbilityApi = {
       logText ?? `${utype(s, victim.type).name} 被消灭`,
       true,
     );
-    drownCargo(s, victim);
+    loseCargo(s, victim);
     fireKilled(s, victim, killer);
   },
   destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
-  noteHeat: (s, x, y) => noteHeatCell(s, x, y),
+  noteHeat: (s, x, y, board) => {
+    // 只记地球：格号在两张图上会撞（见 ability-hooks 的说明）
+    if (board && board !== EARTH) return;
+    noteHeatCell(s, x, y);
+  },
   isAirborne: (s, u) => isAirborne(s, u),
   unitsAt: (s, x, y) => unitsAt(s, x, y),
   movePower: (s, u) => movePower(s, u),
@@ -474,6 +508,15 @@ function hurtUnit(
     state: s, self: victim, amount: dmg, source: opts.source, api: abilityApi,
   };
   for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
+
+  /*
+   * 扩展层的"真的掉血了"通知（数值已写进 hp）。
+   * 给"挨打就作废"这类规则用，见 ExpansionHooks.onUnitDamaged。
+   * 传的是 `victim`：伤害被守御阵接走时，掉血的是接替者，不是原目标。
+   */
+  for (const e of activeExpansions(s)) {
+    e.hooks.onUnitDamaged?.({ state: s, unit: victim, amount: toHp, source: opts.source });
+  }
 
   /*
    * 转移把接替者打死了，得由这里收场。
@@ -630,6 +673,26 @@ export function tileAt(s: GameState, x: number, y: number): Tile | null {
   return s.tiles[idx(s, x, y)] ?? null;
 }
 
+/**
+ * 某一格的地形，**按图取**。
+ *
+ * `tileAt` 读的是 `s.tiles`（地球那张），月球单位拿它查会得到"地球上同一坐标"
+ * 的地形——月面上站在环形山里，护甲却按地球那块草地算。战斗链上凡是
+ * "拿目标坐标去查地形"的地方，一律走这个。
+ *
+ * 地球那条路不绕：`boardOf(s, EARTH)` 直接返回 `s` 自己。
+ */
+export function tileAtOn(s: GameState, board: BoardId, x: number, y: number): Tile | null {
+  const g = boardOf(s, board);
+  if (x < 0 || y < 0 || x >= g.w || y >= g.h) return null;
+  return g.tiles[y * g.w + x] ?? null;
+}
+
+/** 某个单位脚下（锚点）的地形，按它所在的那张图算 */
+function tileUnder(s: GameState, u: { board?: BoardId; x: number; y: number }): Tile | null {
+  return tileAtOn(s, boardIdOf(u), u.x, u.y);
+}
+
 // ── 地形高度：射程与机动的共同尺度 ────────────────────────────────────
 //
 // 高度**不是本体规则**，是「地形高差」扩展带来的。本体只提供两个钩子口：
@@ -742,13 +805,21 @@ export function effectiveRangeAgainst(
  * 多图之后，"拿 (x,y) 去 `state.tiles` 里查"的那批位置判定，要么改成按图
  * 投影（走子、建造已经这么做了，见 `boardStateOf`），要么先挡在门外。
  *
- * 还挡着的三个：**开火、攻城、装卸**。原因都是同一个——它们顺着 `s` 还会
- * 摸到伤害结算、溅射、反击、地形掩护、货舱那一串（`computeDamage` /
- * `splashVictims` / `hurtUnit`），那些现在仍然按"一个 state 一张图"写。
- * 半接过来只会得到"月面上开火、地球上有人掉血"这种更难查的 bug。
+ * ── 2026-11-11：开火与攻城**已经按图接上**，这条不再是战斗的闸门 ──────
  *
- * 月面战斗是「太空战争」那一包的事；到那时把这几条也换成
- * `boardStateOf` + 回写（投影只读、变更写在真 state 上）即可。
+ * 月面战斗接上时走过的路（留给下一个人照抄）：
+ *   · 几何按图取：`tileAtOn` / `tileUnder` 查地形掩护与射程，
+ *     `strikeCellsOf` 用**攻击者那张图**的宽高算覆盖格，`splashVictims` 只波及同图单位；
+ *   · 闸门换成"同图判定"（`doAttack` / `doSiege` / `canStrike`）——
+ *     跨图的两个单位哪怕坐标挨着，中间也隔着一个天空；
+ *   · 变更仍然写在真 `state` 上，只有**读**才按图；
+ *   · 战况烈度（heat）暂时只记地球：它存的是格号，没带"图"这一维。
+ *
+ * 还挡着的只剩两处，都是因为对象压根不在别的图上：
+ *   · **装卸**（`doLoad` / `doUnload`）：货舱单位（船、发射井）都只在地球，
+ *     月面没有任何带 hold 的东西；真要在月面装卸，把里面的 `inBounds` /
+ *     `unitAt` / `blockedFor` 换成 `boardStateOf` 的投影即可；
+ *   · **地雷/火场**（`marks`）：只在地球生成，`boardState` 投影时也是清空的。
  */
 export function offWorld(u: Unit): boolean {
   return boardIdOf(u) !== EARTH;
@@ -1508,7 +1579,21 @@ function hashPick(s: GameState, salt: number, n: number): number {
 }
 
 /** 造一个单位对象。招募、召唤、分裂三条路都走这里，字段不会走散。 */
-function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: number): Unit {
+function makeUnit(
+  s: GameState,
+  owner: PlayerId,
+  type: string,
+  x: number,
+  y: number,
+  /**
+   * 出生在哪张图上。不传 = 地球。
+   *
+   * 地球单位**不写这个字段**：老存档、老回放、联机快照里都没有它，
+   * `boardIdOf` 缺省就是地球，所以一个字节都不用多存。
+   * 别的图必须写——漏了就会被当成地球单位，正是 6e3e86f 修过的"月面幽灵"。
+   */
+  board?: BoardId,
+): Unit {
   const def = utype(s, type);
   return {
     id: `u${s.nextUnitSeq++}`,
@@ -1529,6 +1614,7 @@ function makeUnit(s: GameState, owner: PlayerId, type: string, x: number, y: num
     // 卵一落地就开始倒计时：写在这里而不是"第一次回合开始"，
     // 否则每颗卵都会比自己写的 `turns` 多待一个回合。
     ...(def.hatch ? { hatchLeft: def.hatch.turns } : {}),
+    ...(board && board !== EARTH ? { board } : {}),
   };
 }
 
@@ -1814,6 +1900,14 @@ export function movePower(s: GameState, unit: Unit): number {
    * `move > 0` 那道守卫不能省：扩展钩子返回 0 是引擎写明的"这一回合动不了"
    * （封冻、行动点耗尽），减半之后若再套"保底 1"，封冻就被悄悄解开了。
    */
+  /*
+   * 地图环境（外空、辐射、毒雾）：**先环境、后状态**。
+   *
+   * 顺序有讲究：环境是"这张图让所有人变慢"，石化是"这个单位自己变慢"。
+   * 反过来先折石化再折环境，同一支兵在两张图上会得到不一样的结果，
+   * 玩家没法用"我在月球上就是慢一半"来解释。
+   */
+  move = hazardMoveOf(move, hazardFor(s, unit));
   if (move > 0 && isPetrified(s, unit)) move = Math.max(1, Math.floor(move / 2));
   // 钩子返回 0 = 这一回合动不了（封冻的海军）。
   move -= unit.moveSpent ?? 0; 
@@ -1975,6 +2069,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   // 放在威吓之后、哀兵必胜之前：原来就在这个位置，而乘法必须吃满前面的加减。
   const atkCtx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: u,
     // 面板没有对手：算攻击时它当自己是出手的一方，算护甲时当自己挨打。
     // 这样看 side 的能力在面板上也会按玩家预期生效。
@@ -2007,7 +2106,8 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (isPetrified(s, u)) {
     armorItems.push({ label: '石化 ×2', delta: armorBase - (def.armor + (u.armorBonus ?? 0)) });
   }
-  const tile = tileAt(s, u.x, u.y);
+  // 地形加成按**这个单位所在的图**取：月球上站在环形山里，面板该写环形山的 +2 甲
+  const tile = tileUnder(s, u);
   for (const src of auraSourcesOf(s, u, 'allyArmor')) {
     armor += src.value;
     armorItems.push({ label: src.label, delta: src.value });
@@ -2040,6 +2140,11 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   // 也在驻军、诅咒之前——那两项排在它之后，面板上的算式才和结算顺序一致。
   const armorCtx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: u,
     side: 'defender',
     atk: 0,
@@ -2111,7 +2216,22 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
   if (u.buff?.armorPct) {
     armor += buffArmorPctGain(armor, u.buff.armorPct);
   }
-  
+
+  /*
+   * 地图环境：护甲整除数、无保底。
+   *
+   * 放在**所有加成之后**：穿什么甲都挡不住没有空气这件事，
+   * "甲不值钱"是环境决定的，不是某一层加成能抵消的。
+   * 面板必须和 `computeDamage` 同一位置，否则会出现"面板 2 甲、实际按 2 甲算"
+   * 之外的第三种数——那种偏差最难查。
+   */
+  const hz = hazardFor(s, u);
+  if (hz) {
+    const before = armor;
+    armor = hazardArmorOf(armor, hz);
+    if (armor !== before) armorItems.push({ label: hz.name, delta: armor - before });
+  }
+
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
   const moveBase = def.move;
   const moveItems: StatItem[] = [];
@@ -2164,6 +2284,12 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
       });
         if (moveNow !== before) moveItems.push({ label: e.name, delta: moveNow - before });
       }
+    }
+    // 地图环境：和 movePower 同一个位置（扩展钩子之后、石化之前）
+    if (hz) {
+      const before = moveNow;
+      moveNow = hazardMoveOf(moveNow, hz);
+      if (moveNow !== before) moveItems.push({ label: hz.name, delta: moveNow - before });
     }
     // 石化减半：和 movePower 同一个位置（扩展钩子之后）、同一个算法，
     // 面板和实际走位才对得上
@@ -2671,7 +2797,15 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
  *
  * 建筑（移动力 0）永远按第二种算。
  */
-export function threatTiles(s: GameState, unit: Unit): Set<number> {
+export function threatTiles(state: GameState, unit: Unit): Set<number> {
+  /*
+   * 纯几何，按**这个单位所在的那张图**算。
+   *
+   * 返回的是"这张图的格号"：地球的 45 和月球的 45 不是一个位置，
+   * 所以调用方画在哪张图上，就得拿哪张图的格号。以前它默认读 `s.tiles`，
+   * 月面上的单位会算出一圈"地球上能打到哪"——月面战斗接上之后这就是错的。
+   */
+  const s = boardStateOf(state, unit);
   const out = new Set<number>();
   const targets = [...new Map(s.tiles.map(t => [t.terrain,t])).values()];
   // 多格单位：距离要量到**整个矩形**，不能量锚点。
@@ -2735,6 +2869,14 @@ export function threatTiles(s: GameState, unit: Unit): Set<number> {
  * 消耗动作——想真的断掉这条路，还是得把部队压到桥边。
  */
 export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
+  /*
+   * 不同图上的两个单位，哪怕坐标在纸上"挨着"，也是隔着一个天空的。
+   *
+   * 以前靠 `offWorld` 在 `doAttack` 门口一刀切（月面一律不许开火），
+   * 现在月面能打了，这条判据就必须各自成立：**几何只看同一张图**。
+   * 放在最前面，后面那些射程/地形计算才不会拿两张图的坐标互相比。
+   */
+  if (boardIdOf(attacker) !== boardIdOf(target)) return false;
   // 没武器的单位不能出手（桥、渡船、土墙、魔龙卵）。必须放在最前面：
   // 下面的 `range` 判定会把 `range: 0` 兜底成"打到隔壁"（effectiveRange 至少 1），
   // 所以不在这里拦，"0 射程"也能对邻格开火——见 isArmed 的注释。
@@ -2762,7 +2904,7 @@ export function canStrike(s: GameState, attacker: Unit, target: Unit): boolean {
   }
   // 射程要按"这一发从哪打到哪"算：站丘陵上俯射多一格，往高处仰攻少一格，
   // 站在林子里连平射都被树冠吃掉一格（见 rangeModAgainst）。
-  const range = effectiveRangeAgainst(s, attacker, tileAt(s, target.x, target.y));
+  const range = effectiveRangeAgainst(s, attacker, tileUnder(s, target));
   // 地面打空中要多算一格（见 strikeDistance）；同格判定仍然看"真实相对位置"，
   // 否则"空中压着地面"这个免费的第一刀会被 +1 顺手吃掉
   const real = distBetweenUnits(s, attacker, target);
@@ -2797,13 +2939,15 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
   // 和野战用同一条规则，不另开一套。
   return s.cities.filter((c) => {
     if (c.owner === unit.owner) return false;
+    // 城只在地球上；月球上的部队没有城可砸。同一条"几何只看同一张图"。
+    if (boardIdOf(c) !== boardIdOf(unit)) return false;
     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去
     if (c.ruined) return false;
     // 城是被"画在"地图上的（地形公开），但看不见就不能砸——见 tileVisibleTo 的说明
     if (!cityInSightOf(s, unit.owner, c)) return false;
     const d = distToCity(unit, c);
     if (d <= 0) return false;
-    return d <= effectiveRangeAgainst(s, unit, tileAt(s, c.x, c.y));
+    return d <= effectiveRangeAgainst(s, unit, tileAtOn(s, boardIdOf(c), c.x, c.y));
   });
 }
 
@@ -2853,7 +2997,9 @@ export function computeDamage(
   }
 
   // 2. 城市不吃地形和光环；空中单位同样不吃地形（见 effectiveStats 同一处注释）
-  const tile = isCity ? null : tileAt(s, defender.x, defender.y);
+  // 地形掩护按**挨打的那个人所在的那张图**取：月球单位站在环形山里，
+  // 该拿环形山的 +2 甲，而不是地球上同一坐标那块地的掩护。
+  const tile = isCity ? null : tileUnder(s, defender);
   const terrainBonus = tile && !isAirborne(s, defender) ? CONFIG.terrainDef[tile.terrain] : 0;
   const defenderAura = isCity ? { atk: 0, armor: 0, move: 0 } : auraBonusOf(s, defender);
 
@@ -2875,6 +3021,11 @@ export function computeDamage(
 
   const ctx: HookCtx = {
     state: s,
+    // 只读视角：`self` 会被 runBound 逐个改绑，所以必须用 getter——
+    // 写成固定字段的话，第二条能力拿到的是第一个主人的那张图。
+    get view() {
+      return boardStateOf(this.state, this.self);
+    },
     self: defender,
     foe: attacker,
     side: 'defender',
@@ -2941,6 +3092,12 @@ export function computeDamage(
   // 药力加成也是那部分甲的一部分。
   if (!isCity && defender.buff?.armorPct) {
     ctx.armor += buffArmorPctGain(ctx.armor, defender.buff.armorPct);
+  }
+
+  // 地图环境：护甲整除数（和 effectiveStats 同一个位置：所有加成之后、破甲之前）
+  if (!isCity) {
+    const hz = hazardFor(s, defender);
+    if (hz) ctx.armor = hazardArmorOf(ctx.armor, hz);
   }
 
   // 小型扩展到破甲之前
@@ -3156,7 +3313,9 @@ function strikeCellsOf(
   const center = pickHitCell(attacker, rect, hit);
   const radius = splashRadiusOf(s, attacker);
   const line = utype(s, attacker.type).splashLine === true;
-  return strikeCoverCells(s, attacker, center, radius, line);
+  // 覆盖格是"格号"的集合，而格号只在某一张图里成立：地球 20 宽的一个格号，
+  // 在 9 宽的月球上指向完全不同的位置。所以按攻击者那张图的宽高算。
+  return strikeCoverCells(boardOf(s, boardIdOf(attacker)), attacker, center, radius, line);
 }
 
 /**
@@ -3199,11 +3358,20 @@ function splashVictims(
   const skip = new Set(opts.excludeIds ?? []);
   const ratio = splashRatioOf(attacker);
   const out: Array<{ unit: Unit; dmg: number }> = [];
+  /*
+   * 只有**同一张图**上的人会被波及。
+   *
+   * 覆盖格是攻击者那张图的格号；地球和月球的格号在数值上会撞（都是 0..w*h-1），
+   * 不判图的话，月面上一炮"溅射"过去的会是地球上某个坐标恰好相同的人——
+   * 这是接月面战斗时最容易犯、也最难查的错。
+   */
+  const board = boardIdOf(attacker);
   for (const v of s.units) {
     if (v.owner === attacker.owner) continue;
+    if (boardIdOf(v) !== board) continue;
     if (skip.has(v.id)) continue;
     // 占到任意一格就算被覆盖：多格单位只挨一份（名单按单位去重）
-    if (!tilesOfUnit(s, v).some((t) => covered.has(idx(s, t.x, t.y)))) continue;
+    if (!tilesOfUnit(s, v).some((t) => covered.has(idxOn(s, board, t.x, t.y)))) continue;
     // 阵列：只免疫"被波及"，当主目标时那一下照吃
     if (hasFlagOn(s, v, 'immuneSplash')) continue;
     // 圣旗给的阵列是临时的，所以不能只认兵种表上的那条能力
@@ -3245,16 +3413,20 @@ function pushLog(s: GameState, p: PlayerId, text: string, open = false): void {
 
 /** 通知所有扩展：有单位阵亡了 */
 /**
- * 船沉了，货舱里的人一起没。
+ * 载体被摧毁，货舱里的单位一起没。
  *
  * 不写这条会出现最糟的一种情形：船被打沉了，但船上那两个兵凭空回到了
  * 棋盘上（因为它们的对象还挂在货舱里），玩家只会觉得"这游戏算错了"。
- * 所以凡是从 s.units 里删单位的地方，船上的货一并清掉。
+ * 所以凡是从 s.units 里删单位的地方，载的货一并清掉。
+ *
+ * 载体不止船：货舱是通用机制（船、渡船、太空的发射井都带 hold）。
+ * 所以文案写"载体"而不写"船"，也不必为每种载体各写一句——
+ * 谁被摧毁对玩家是明摆着的，战报只需要说清**里面的人也没了**。
  */
-function drownCargo(s: GameState, dead: Unit): void {
+function loseCargo(s: GameState, dead: Unit): void {
   if (!dead.cargo || dead.cargo.length === 0) return;
   const names = dead.cargo.map((u) => utype(s, u.type).name).join('、');
-  pushLog(s, dead.owner, `随船沉没：${names}`, true);
+  pushLog(s, dead.owner, `所载单位一同损毁：${names}`, true);
 }
 
 /**
@@ -3306,7 +3478,15 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 主流程只做两件通用的事：把 result 里的"要不要清场"落实下去，
   // 以及通知扩展"亡语跑完了"。清场放在这里而不是各能力里自己删，
   // 是为了避免两段能力交叉删列表、把刚分裂出来的小史莱姆一起删掉。
-  const dctx: DeathCtx = { state: s, victim, killer, api: abilityApi, result: { blasts: 0 } };
+  const dctx: DeathCtx = {
+    state: s,
+    // 死在月面上的，亡语也该在月面上结算（见 ability-hooks 里 view 的契约）
+    view: boardStateOf(s, victim),
+    victim,
+    killer,
+    api: abilityApi,
+    result: { blasts: 0 },
+  };
   for (const h of hooksOfUnit(s, victim)) h.onDeath?.(dctx);
   // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
@@ -3371,7 +3551,9 @@ function checkWinner(s: GameState): PlayerId | null {
 export function unitYield(s: GameState, u: Unit): ResourceCost {
   if (underConstruction(u)) return {};
   const def = utype(s, u.type);
-  const tile = tileAt(s, u.x, u.y);
+  // 产出看脚下那块地，而"脚下"是**它所在那张图**的那一格。
+  // 现在月球上没有经济单位，但少这一层的话，以后往月面放农场就会按地球的地形结算。
+  const tile = tileUnder(s, u);
   const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;
@@ -3392,7 +3574,7 @@ export function unitYield(s: GameState, u: Unit): ResourceCost {
     for (const [id, n] of Object.entries(def.yield)) add(id, n);
   }
 
-  if ((out[GOLD] ?? 0) > 0 && adjacentToWater(s, u.x, u.y)) {
+  if ((out[GOLD] ?? 0) > 0 && adjacentToWater(s, u.x, u.y, boardIdOf(u))) {
     // 桥面也要算"临水"：桥架在水上，桥下还是水。
     // 只判 water 的话，玩家在河边修一座桥，反而把这一带的贸易加成弄没了——
     // 这是实打实踩过的 bug（建桥之后沿岸农民全少 3 金收入）。
@@ -4299,6 +4481,15 @@ function noteStrikeHeat(
    */
   book?: { owner: PlayerId; turn: number },
 ): void {
+  /*
+   * 战况烈度目前**只记地球**。
+   *
+   * 它存的是一串格号（`heat[玩家][回合][格号]`），而格号只在某一张图里成立；
+   * 界面的红格层读的也是地球那份可见格。月面往上写只会得到两类问题：
+   * 和地球同号的格子互相串味，或者画在没人的地方。
+   * 真要月面也显示，得先给 heat 加上"图"这一维——那是独立的一件事。
+   */
+  if (boardIdOf(attacker) !== EARTH) return;
   for (const i of strikeCellsOf(s, attacker, rect, hit)) {
     const { x, y } = xyOf(s, i);
     if (book) noteHeatAt(s, book.owner, book.turn, x, y);
@@ -4319,8 +4510,16 @@ function doAttack(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!defender) return { ok: false, reason: '目标不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
-  if (offWorld(attacker) || offWorld(defender)) {
-    return { ok: false, reason: '这张图还不能开火' };
+  /*
+   * 原来这里是 `if (offWorld(attacker) || offWorld(defender)) 这张图还不能开火`。
+   *
+   * 月面战斗接上之后，那条"一刀切"换成了**同图判定**：几何（射程、溅射、
+   * 地形掩护）本来就只在同一张图里有意义，跨图的两个单位哪怕坐标挨着，
+   * 中间也隔着一个天空。所有几何函数都改成了按图取（`tileUnder` /
+   * `strikeCellsOf` / `splashVictims` 各自认自己那张图），闸门只留这一条。
+   */
+  if (boardIdOf(attacker) !== boardIdOf(defender)) {
+    return { ok: false, reason: '不在同一张图上，打不到' };
   }
   if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
   if (underConstruction(attacker)) {
@@ -4470,6 +4669,8 @@ function doAttack(
   // 击退在后面（命中状态之后）。同一条兵种挂了两条时按 abilities 的顺序跑。
   const sctx: StrikeCtx = {
     state: s,
+    // 出手方与目标一定同图（doAttack 的门槛），取出手方那张
+    view: boardStateOf(s, attacker),
     self: attacker,
     target: defender,
     damage: dmg,
@@ -4580,7 +4781,7 @@ function doAttack(
   if (defender.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== defender.id);
     pushLog(s, attacker.owner, `${dfName} 被消灭`, true);
-    drownCargo(s, defender);
+    loseCargo(s, defender);
     fireKilled(s, defender, attacker);
     // 收割（刺客大师）：亲手斩掉一个，本回合的移动力就还回来。
     //
@@ -4588,7 +4789,14 @@ function doAttack(
     // "杀完再走一步"是脱战，而"杀完再砍一刀"是另一档强度，不在这个技能里。
     // 死在反击里的情况（attacker.hp <= 0）不给：人都倒了，走给谁看。
     if (attacker.hp > 0 && s.units.some((u) => u.id === attacker.id)) {
-      const kctx: KillCtx = { state: s, self: attacker, victim: defender, api: abilityApi, result: { moveBack: false } };
+      const kctx: KillCtx = {
+        state: s,
+        view: boardStateOf(s, attacker),
+        self: attacker,
+        victim: defender,
+        api: abilityApi,
+        result: { moveBack: false },
+      };
       for (const h of hooksOfUnit(s, attacker)) h.onKill?.(kctx);
       if (kctx.result.moveBack) {
         attacker.moved = false;
@@ -4603,13 +4811,13 @@ function doAttack(
     if (!s.units.some((u) => u.id === v.unit.id)) continue;
     s.units = s.units.filter((u) => u.id !== v.unit.id);
     pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    drownCargo(s, v.unit);
+    loseCargo(s, v.unit);
     fireKilled(s, v.unit, attacker);
   }
   if (attacker.hp <= 0) {
     s.units = s.units.filter((u) => u.id !== attacker.id);
     pushLog(s, attacker.owner, `${atName} 在反击中阵亡`, true);
-    drownCargo(s, attacker);
+    loseCargo(s, attacker);
     fireKilled(s, attacker, undefined);
   }
 
@@ -4680,7 +4888,7 @@ function doSiege(
   if (!attacker) return { ok: false, reason: '单位不存在' };
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
-  if (offWorld(attacker)) return { ok: false, reason: '这张图还不能攻城' };
+  if (boardIdOf(attacker) !== boardIdOf(city)) return { ok: false, reason: '不在同一张图上，够不着这座城' };
   if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
@@ -4703,7 +4911,9 @@ function doSiege(
     return { ok: false, reason: '看不见那座城（在视野外）' };
   }
   const dist = distToCity(attacker, city);
-  if (dist > effectiveRangeAgainst(s, attacker, tileAt(s, city.x, city.y))) return { ok: false, reason: '城市超出射程' };
+  if (dist > effectiveRangeAgainst(s, attacker, tileAtOn(s, boardIdOf(city), city.x, city.y))) {
+    return { ok: false, reason: '城市超出射程' };
+  }
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);
@@ -4784,7 +4994,7 @@ function doSiege(
     if (!s.units.some((u) => u.id === v.unit.id)) continue;
     s.units = s.units.filter((u) => u.id !== v.unit.id);
     pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    drownCargo(s, v.unit);
+    loseCargo(s, v.unit);
     fireKilled(s, v.unit, attacker);
   }
 
@@ -4847,7 +5057,11 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
-  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
+  /*
+   * 不再拦"非地球"。装卸本来就是"两个同图单位贴身"，那张图是什么无所谓：
+   * 月面基地补给、空间站对接都要走这条。跨图由下面那条同图判定挡住，
+   * 那才是真正要防的错（坐标再近也隔着一个天空）。
+   */
   const ferryDef = utype(s, ferry.type);
   // "能不能装、能装谁、装几个"全在兵种数据的 carry.hold 上，这里只读不猜。
   const hold = holdOf(ferryDef);
@@ -4925,7 +5139,6 @@ function doUnload(
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
-  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   if (!holdOf(ferryDef)) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
@@ -4934,10 +5147,16 @@ function doUnload(
   const cargo = load.find((u) => u.id === cargoId);
   if (!cargo) return { ok: false, reason: '船上没有这个单位' };
 
-  if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
-  if (distToUnit(s, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
-  if (unitAt(s, x, y)) return { ok: false, reason: '那一格已经有人了' };
-  if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
+  /*
+   * 落点判定全部按**船所在的那张图**：越界、占地、能不能站，都是那张图的格子。
+   * 以前这里读的是地球的格子表，在月球/空间站上下船会拿到"地球上同一坐标"
+   * 的地形——一个明明能站的地方被说成上不了岸，反过来也成立。
+   */
+  const view = boardStateOf(s, ferry);
+  if (!inBounds(view, x, y)) return { ok: false, reason: '目标越界' };
+  if (distToUnit(view, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
+  if (unitAt(view, x, y)) return { ok: false, reason: '那一格已经有人了' };
+  if (blockedFor(view, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
   ferry.cargo = load.filter((u) => u.id !== cargoId);
 
@@ -5104,6 +5323,24 @@ export function buildSiteError(
     return overWater
       ? `建造者离得太远（最多 ${reach} 格；桥可以沿已有的桥面再往外接两节）`
       : `建造者离得太远（最多 ${reach} 格）`;
+  }
+
+  /*
+   * 扩展自己的上限（每颗星球每方一座接驳站这类）。
+   *
+   * 放最后：通用条件先给出更基础的理由（"离得太远"比"已经有一座了"更该先说）。
+   * 传进来的 `s` 已经是**建造者那张图**的投影，所以扩展可以直接数
+   * `state.units`——那就是这颗星球上的全部东西。
+   */
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.buildProblem?.({
+      state: s,
+      player: builder.owner,
+      typeId: def.id,
+      x,
+      y,
+    });
+    if (reason) return reason;
   }
 
   return null;
@@ -6102,15 +6339,17 @@ SKILL_EFFECTS['raise-dead'] = (c) => {
     c.result.reason = `招魂「${def.name}」还差：${missingLabel(me, cost)}`;
     return;
   }
-  // 两格以内（2026-10-31 从"相邻一格"放宽）：混战里贴身的四格基本是满的
-  const spot = freeSpotWithin(c.state, c.self, pick.type, 2);
+  // 两格以内（2026-10-31 从"相邻一格"放宽）：混战里贴身的四格基本是满的。
+  // 落点按**施法者所在的那张图**找：月球上招魂，不该站起来一个地球单位。
+  const view = boardStateOf(c.state, c.self);
+  const spot = freeSpotWithin(view, c.self, pick.type, 2);
   if (!spot) {
     c.result.ok = false;
     c.result.reason = '两格内没有能站起来的空地';
     return;
   }
   payRes(me, cost);
-  c.api.spawn(c.state, owner, pick.type, spot.x, spot.y);
+  c.api.spawn(c.state, owner, pick.type, spot.x, spot.y, boardIdOf(c.self));
   pick.revived = true;
   c.api.pushLog(
     c.state,
@@ -6218,8 +6457,9 @@ export function eggDropCells(
 // 界面：把"能落蛋"的格子高亮出来（选点类技能的统一入口）。
 // 2026-11-10 起不再筛"砸得到人"——点空地也能放蛋，高亮就得跟着放宽，
 // 否则玩家会遇到"这一格能用却没亮"的反向挫败。
-registerSkillTargetCells('dragon-egg', ({ state, self, skill }) =>
-  eggDropCells(state, self, skill.radius ?? 11, undefined, 'dragon-egg'),
+registerSkillTargetCells('dragon-egg', ({ view, self, skill }) =>
+  // 落点按**施法者那张图**算：月面上放蛋，能点的格子是月球那一片
+  eggDropCells(view, self, skill.radius ?? 11, undefined, 'dragon-egg'),
 );
 
 /**
@@ -6246,7 +6486,9 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     c.result.reason = '这个版本里没有魔龙卵';
     return;
   }
-  const foes = c.state.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
+  // 落点、遮挡、能砸到谁，全都按**施法者那张图**看：月球上放的卵不该去砸地球的人
+  const view = boardStateOf(c.state, c.self);
+  const foes = view.units.filter((u) => u.owner !== c.self.owner && u.hp > 0);
 
   /*
    * 玩家能点的格子 = 射程内放得下蛋的格子，**不要求周围有敌人**（2026-11-10）。
@@ -6256,7 +6498,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
    * 不是只能当陨石——所以合法性只看"落得下"，伤害交给下面那一段自己算：
    * 一个都没砸到就写"这一下没砸到人"。
    */
-  const spots = eggDropCells(c.state, c.self, reach, undefined, eggType);
+  const spots = eggDropCells(view, c.self, reach, undefined, eggType);
   if (spots.length === 0) {
     c.result.ok = false;
     c.result.reason = `陨卵只能落在 ${reach} 格内的空地上`;
@@ -6283,7 +6525,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
      * 才算"值得放"，而且老录像要能逐字重放（当年就是在"砸得到人"的格子里挑的）。
      * 玩家手动点空地的自由不影响这条。
      */
-    const legal = eggDropCells(c.state, c.self, reach, blast, eggType);
+    const legal = eggDropCells(view, c.self, reach, blast, eggType);
     let bestScore = -1;
     for (const p of legal) {
       let score = 0;
@@ -6306,7 +6548,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     return;
   }
 
-  c.api.spawn(c.state, c.self.owner, eggType, best.x, best.y);
+  c.api.spawn(c.state, c.self.owner, eggType, best.x, best.y, boardIdOf(c.self));
   let hit = 0;
   let dealt = 0;
   for (const f of foes) {
@@ -6465,6 +6707,8 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
 
   const c: SkillCtx = {
     state: s, 
+    // 技能里的选点、范围、地形一律按施法者那张图（见 skill-hooks 的 view 契约）
+    view: boardStateOf(s, u),
     self: u, 
     skill, 
     api: abilityApi,
@@ -6658,7 +6902,7 @@ function sweepDead(s: GameState): void {
     if (!s.units.some((x) => x.id === u.id)) continue;
     s.units = s.units.filter((x) => x.id !== u.id);
     pushLog(s, u.owner, `${utype(s, u.type).name} 倒下了`, true);
-    drownCargo(s, u);
+    loseCargo(s, u);
     fireKilled(s, u, undefined);
   }
 }
@@ -6874,7 +7118,7 @@ function runTurnStart(s: GameState, u: Unit, p: PlayerId, from: number, to: numb
   if (hooks.length === 0) return;
   runStaged(
     hooks,
-    { state: s, self: u, owner: p, rested, healable: canBeHealedOn(s, u), api: abilityApi },
+    { state: s, view: boardStateOf(s, u), self: u, owner: p, rested, healable: canBeHealedOn(s, u), api: abilityApi },
     { from, to },
   );
 }
@@ -6902,6 +7146,15 @@ function doEndTurn(s: GameState): ActionResult {
   if (prevQueue && prevQueue.length > 0) prevQueue.shift();
   const prevSites = s.orderSites?.[prevPlayer];
   if (prevSites && prevSites.length > 0) prevSites.shift();
+
+  /*
+   * 「点亮一回合」到这里熄灯：`prevPlayer` 的回合刚结束，站在他对面的
+   * 那些单位已经亮了他一整回合（见 spotlight.ts）。
+   *
+   * 放在切人**之前**清，是因为 `spotlightCellsOn` 只看 `s.current`：
+   * 先把 current 换掉再清，中间那一瞬谁都不该看见。
+   */
+  clearSpotlightsOfOthers(s, prevPlayer);
 
   const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
@@ -7071,6 +7324,15 @@ export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): 
     }
   }
 
+  /*
+   * 「点亮一回合」：核心机制，**不经过扩展钩子**，所以任何图都能用
+   * （钩子那条还是地球专供，见上面的说明）。
+   * 修真的异象、太空的发射井都记在这里，规则层与 AI 一起认。
+   */
+  for (const i of spotlightCellsOn(s, p, id)) out.add(i);
+  // 侦察情报：遥感模块看到的那几格，和"自己视野"同一层
+  for (const i of reconCellsOn(s, p, id)) out.add(i);
+
   return out;
 }
 
@@ -7107,12 +7369,17 @@ export function tileVisibleTo(
   });
   if (lit) return true;
   // 额外视野只有地球的索引，别的图直接跳过
-  if (id !== EARTH) return false;
-  const i = idx(s, x, y);
-  for (const e of activeExpansions(s)) {
-    const extra = e.hooks.extraVision?.({ state: s, player: p });
-    if (extra && extra.includes(i)) return true;
+  if (id === EARTH) {
+    const i = idx(s, x, y);
+    for (const e of activeExpansions(s)) {
+      const extra = e.hooks.extraVision?.({ state: s, player: p });
+      if (extra && extra.includes(i)) return true;
+    }
   }
+  // 点亮 / 侦察：按这张图的格号比对（任何图都认）
+  const spotCell = y * boardOf(s, id).w + x;
+  if (spotlightCellsOn(s, p, id).includes(spotCell)) return true;
+  if (reconCellsOn(s, p, id).includes(spotCell)) return true;
   return false;
 }
 
