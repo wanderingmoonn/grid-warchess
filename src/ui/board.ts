@@ -28,6 +28,8 @@ import {
   cityName, 
   footprintOf, 
   isAirborne, 
+  orderedStatuses,
+  STATUS_REGISTRY,
   underConstruction, 
   utype,
   maxHpOf
@@ -1004,6 +1006,17 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
 
   const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
   /*
+   * 悬停里补上身上挂的状态。
+   *
+   * 侧栏的属性卡已经有一排徽章，但那要"先选中"才看得见；棋盘上这两方
+   * 谁中了毒、谁还在烧，过去只能在战报里翻。这里不新增视觉元素，只把
+   * 已经在 state 里的东西接到已有的悬停提示上——两边的兵一样能看。
+   */
+  const statusText = orderedStatuses(u.status)
+    .map(([key, val]) => `${STATUS_REGISTRY[key]?.name ?? key} ${val}`)
+    .join(' · ');
+  const fullTitle = statusText ? `${title} · ${statusText}` : title;
+  /*
    * 有贴图就用贴图，没有就还是那个汉字。
    *
    * 只在 `.unit-inner` 的**内容**上换，圆角方块和阵营底色都不动——
@@ -1030,7 +1043,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
     key: `u:${u.id}${artUrl ? ':art' : ''}`,
     cls: clsText,
     style,
-    title,
+    title: fullTitle,
     x: u.x,
     y: u.y,
     id: u.id,
@@ -1038,7 +1051,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
     inner,
     hpRatio: Math.max(0, Math.min(1, ratio)),
     chipFrom: ui.hpDrops?.get(u.id),
-    sig: `${clsText}|${style}|${title}|${inner}`,
+    sig: `${clsText}|${style}|${fullTitle}|${inner}`,
   };
 }
 

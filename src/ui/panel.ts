@@ -1967,6 +1967,16 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   // 档位是这座营自己的，不看后方城市。写清楚是因为玩家会本能地以为"我的城已经五代了，这座营怎么还只出二代兵"。
   const supplyLine = `${eraDef(era).name}`;
 
+  /*
+   * 状态行（中毒 / 灼烧 / 减速……）在**自己的**军营卡上也要画一遍。
+   *
+   * 自己的产兵建筑走的是 `renderCamp` 这条支路，不是通用单位卡——于是同一座
+   * 军营，**敌方**点开有状态徽章、自己点开什么都没有（2026-11-12 实机反馈：
+   * "看不到自己中了什么状态，只能看见敌方的"）。军营是要挨打的建筑，
+   * 中毒掉血却看不到来源，是最难查的一类"我的东西怎么自己少了血"。
+   */
+  const statusHtml = statusRow(camp);
+
   return `
     <div class="unit-head">
       <div class="unit-chip ${camp.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">${def.short}</div>
@@ -1976,6 +1986,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
+    ${statusHtml}
     <div class="info-row"><span>生命</span><b>${camp.hp} / ${def.maxHp}</b></div>
     <div class="info-row"><span>攻击 / 护甲</span><b>${def.atk} / ${def.armor}</b></div>
     ${
