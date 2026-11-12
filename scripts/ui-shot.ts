@@ -212,7 +212,10 @@ async function click(selector: string) {
 
 /* ── 场景 ─────────────────────────────────────────────────────────────── */
 
-const theme = ARGS.includes('modern') ? '&ui=modern' : '';
+const theme =
+  (ARGS.includes('modern') ? '&ui=modern' : '') +
+  (ARGS.includes('art') ? '&art=on' : '') +
+  (ARGS.includes('terrain') ? '&terrain=on' : '');
 const tag =
   (theme ? 'modern' : 'legacy') +
   (MOBILE ? '-m' : '') +
@@ -355,6 +358,63 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
+
+if (ARGS.includes('clickswitch') || ARGS.includes('terrain')) {
+  const probe = await evaluate(`(() => {
+    const el = document.querySelector('.tile.t-forest');
+    if (!el) return { err: '盘上没有森林格' };
+    const cs = getComputedStyle(el);
+    return {
+      flag: document.documentElement.dataset.terrain ?? '(无)',
+      v: el.dataset.v,
+      img: cs.backgroundImage.slice(0, 80),
+      withImg: [...document.querySelectorAll('.tile')]
+        .filter((t) => getComputedStyle(t).backgroundImage !== 'none')
+        .slice(0, 6)
+        .map((t) => t.className + ' @' + t.dataset.x + ',' + t.dataset.y),
+      size: cs.backgroundSize,
+      w: Math.round(el.getBoundingClientRect().width),
+    };
+  })()`);
+  console.log('  [terrain]', JSON.stringify(probe));
+}
+
+if (ARGS.includes('clickswitch')) {
+  // 诊断：走真实点击路径（设置 → 地形材质 → 材质），看 html 上的属性有没有变
+  const before = await evaluate(
+    `(document.documentElement.dataset.terrain ?? '-') + '/' + (document.documentElement.dataset.art ?? '-')`,
+  );
+  await click('[data-act="settings"]');
+  await sleep(300);
+  const btns = await evaluate(`(() => {
+    const b = document.querySelector('[data-act="set-fx"][data-fx="on"]');
+    return b ? b.textContent.trim() : '(找不到按钮)';
+  })()`);
+  await evaluate(`(() => {
+    const b = document.querySelector('[data-act="set-fx"][data-fx="on"]');
+    if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await sleep(500);
+  const after = await evaluate(
+    `(document.documentElement.dataset.terrain ?? '-') + '/' + (document.documentElement.dataset.art ?? '-')`,
+  );
+  console.log('  [switch] 按钮:', btns, ' 点前:', before, ' 点后:', after);
+  await shot(`04c-switch-${tag}`);
+}
+
+if (ARGS.includes('art')) {
+  // 诊断：开关到底有没有生效、清单有没有拉到、盘上有没有 img
+  const info = await evaluate(`(() => ({
+    flag: document.documentElement.dataset.art ?? '(无)',
+    imgs: document.querySelectorAll('img.unit-art').length,
+    inners: document.querySelectorAll('.unit-inner').length,
+    src: document.querySelector('img.unit-art')?.getAttribute('src') ?? null,
+    html: (document.querySelector('.unit-inner')?.outerHTML ?? '').slice(0, 220),
+    box: (() => { const i = document.querySelector('img.unit-art'); if (!i) return null; const r = i.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })(),
+  }))()`);
+  console.log('  [art]', JSON.stringify(info));
+}
 
 if (ARGS.includes('builder')) {
   /*

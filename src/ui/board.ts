@@ -36,6 +36,7 @@ import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
+import { unitArtUrl } from './unit-art.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -542,7 +543,71 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     for (let i = 0; i < s.w * s.h; i++) {
       const x = i % s.w;
       const y = (i - x) / s.w;
-      shell.push(`<div class="tile" data-x="${x}" data-y="${y}"></div>`);
+      /*
+       * 纹理错位（--jx / --jy）。
+       *
+       * 森林、丘陵这些纹理是**按格平铺**的（每格一个元素，背景只能各自重复），
+       * 三棵固定位置的树冠会在每一格同一个角落出现，连成片就是一张壁纸。
+       * 按坐标给一点偏移，同色地形连起来才像"一片林子"而不是"一堆同样的砖"。
+       * 这两项整局不变，所以和 data-x/data-y 一起在重建时写死。
+       */
+      const jx = ((x * 37 + y * 61) % 7) * 3;
+      const jy = ((x * 53 + y * 17) % 7) * 3;
+      /*
+       * 地形 tile 的变体号（0/1/2）——**按"林子深处/中间/边缘"分配**，不是随机。
+       *
+       * 第一版用 (x*7+y*13)%3 纯按坐标取模：技术上确实"不连续"，但观感上
+       * 三种树一格一换，像把三张贴纸随手撒在格子上，一片林子看不出结构。
+       *
+       * 现在按 8 邻居里有几格是同种地形来分层：
+       *   5~8 个 → 深处（0，大冠树）—— 林子的芯
+       *   2~4 个 → 中间（1，针叶）—— 过渡带
+       *   0~1 个 → 边缘（2，灌木）—— 贴着草地的边
+       * 单格孤立的树自然全是灌木，成片的林子外面一圈灌木、里面大树，
+       * 远看就有"林缘 → 林心"的层次。
+       *
+       * 再叠一点按坐标的微扰（约 1/9 的格子顺延一档），否则同一层会过于整齐。
+       */
+      const terrainAt = (tx: number, ty: number): string | null =>
+        tx < 0 || ty < 0 || tx >= s.w || ty >= s.h
+          ? null
+          : (s.tiles[ty * s.w + tx]?.terrain ?? null);
+      const here = s.tiles[i]?.terrain ?? null;
+      let same = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (terrainAt(x + dx, y + dy) === here) same += 1;
+        }
+      }
+      /*
+       * 同种地形之间不要画格子线。
+       *
+       * `.tile` 有 1px 的右边框和下边框——那是给"每格都是一个独立方块"用的，
+       * 但同种地形连成片时，那些线拼成一张桌子，整块草地看起来是"表格"而不是"地面"。
+       * 热门战棋（Advance Wars / Wargroove）的地面之所以连成一片，一半功劳在这里。
+       *
+       * 只看右和下：左上由邻居负责，不重复画。
+       */
+      const joinR = terrainAt(x + 1, y) === here ? '1' : '0';
+      const joinD = terrainAt(x, y + 1) === here ? '1' : '0';
+      const ring = same >= 5 ? 0 : same >= 2 ? 1 : 2;
+      const variant = (ring + ((x * 17 + y * 23) % 9 === 0 ? 1 : 0)) % 3;
+      /*
+       * 稀疏地形的装饰密度：约 1/5 的格子带一个小图案，其余留白。
+       *
+       * 第一版是"每格都放"，结果整片草地像菜园——战棋里平原的观感是
+       * **大片空 + 零星一点东西**，密了就变成图案阵列，反而比纯色更乱。
+       * 森林不参与这个开关：林子本来就该是密的。
+       */
+      const deco = (x * 31 + y * 17) % 5 === 0 ? '1' : '0';
+      /*
+       * `--x/--y` 也一起给：开了地形材质之后，每格要按**格坐标**去大图上取景，
+       * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
+       */
+      shell.push(
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" data-jr="${joinR}" data-jd="${joinD}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+      );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
     // 重建这条路上层里本来就没有节点，跳过判断没有意义
@@ -938,14 +1003,31 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const siteNote = prog ? ` · 工地 ${prog.done}/${prog.need}（+${prog.rate}/回合）` : '';
 
   const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
-  const inner = `<div class="unit-inner">${def.short}${cargoBadge}
+  /*
+   * 有贴图就用贴图，没有就还是那个汉字。
+   *
+   * 只在 `.unit-inner` 的**内容**上换，圆角方块和阵营底色都不动——
+   * 阵营色回答的是"这是谁的兵"，比"这是什么兵"更该优先读到，图替换掉的只是字。
+   */
+  const artUrl = unitArtUrl(u.type);
+  const glyph = artUrl
+    ? `<img class="unit-art" src="${artUrl}" alt="" draggable="false" />`
+    : def.short;
+  const inner = `<div class="unit-inner${artUrl ? ' has-art' : ''}">${glyph}${cargoBadge}
       ${buildBar}
       <div class="unit-hp"><i class="hp-lag"></i><i class="hp-now ${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>`;
   const clsText = `${cls.join(' ')}${siteCls}`;
   const style = tileRect(s, u.x, u.y, fp);
   return {
-    key: `u:${u.id}`,
+    /*
+     * key 里带上"有没有贴图"这一维。
+     *
+     * 棋子层按 key 做 diff（内容没变就不写 DOM），而贴图清单是**异步到货**的：
+     * 第一帧没有图、写进了缓存，清单到了之后 key 若还是同一个，diff 会认定
+     * "内容没变"直接跳过——开关打开了、棋盘照旧全是汉字。
+     */
+    key: `u:${u.id}${artUrl ? ':art' : ''}`,
     cls: clsText,
     style,
     title,

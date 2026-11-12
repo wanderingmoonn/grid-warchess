@@ -19,6 +19,16 @@ export interface SettingsOptions {
   theme: 'legacy' | 'modern';
   /** 是否减少动效 */
   reducedMotion: boolean;
+  /**
+   * 美术贴图（地形材质 + 棋子贴图）。
+   *
+   * 2026-11-11 一度拆成两个开关，结果用户点了「棋子贴图」发现地面没变——
+   * "切换贴图"在心智上是一个动作，拆成两个就得先知道哪个管地面。
+   * 现在合并成一个按钮，两个状态仍然分开存（URL 上 `?terrain=on` / `?art=on`
+   * 还能各自压控制，做 A/B 时用得上）。
+   */
+  unitArt?: boolean;
+  terrainArt?: boolean;
   /** 铃声音量 0~1 */
   chime: number;
   /** 铃声那一行右边显示的文字（"铃声 60%"，来自 sound.ts） */
@@ -77,6 +87,18 @@ export function settingsHtml(o: SettingsOptions): string {
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
             ${chip(o.reducedMotion, 'set-motion', '减少', 'data-motion="reduced"')}
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">美术贴图
+            <span class="set-hint">
+              把地面换成生成的材质图（草原有草叶、森林连成一片林冠），棋子有图的也换成贴图。
+              关着就是原来的纯色块 + 汉字，一个图片字节都不下载。没有图的地形与兵种自动保留原样。
+            </span>
+          </div>
+          <div class="chip-row">
+            ${chip(!(o.terrainArt || o.unitArt), 'set-fx', '原版', 'data-fx="off"')}
+            ${chip(!!(o.terrainArt || o.unitArt), 'set-fx', '材质', 'data-fx="on"')}
           </div>
         </div>
       </section>

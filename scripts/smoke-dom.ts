@@ -60,6 +60,7 @@ import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
+import { __setArtIndexForTest, setUiArt, uiArtOn } from '../src/ui/unit-art.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
 import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
 import { starLayout } from '../src/ui/star-layout.ts';
@@ -806,6 +807,117 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
   } finally {
     host.remove();
   }
+});
+
+check('棋子贴图：默认关，有图也仍然显示汉字', () => {
+  /*
+   * 这是 2026-11-11 那个兵种美术试验的开关。默认必须是关的：
+   * 现在只有 4 个兵种有图，默认打开会让棋盘变成"一半图一半字"，比全字更乱。
+   * 关着的时候**一个 img 都不该出现**，也不该去拉清单。
+   */
+  const was = uiArtOn();
+  setUiArt(false);
+  __setArtIndexForTest(['militia']);
+
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1 }, 4242);
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+  try {
+    assert.equal(host.querySelectorAll('.unit-art').length, 0, '关着就不该有贴图');
+    const inner = host.querySelector('.unit-inner');
+    assert.ok((inner?.textContent ?? '').trim().length > 0, '应该还是汉字');
+  } finally {
+    host.remove();
+  }
+
+  setUiArt(was);
+  __setArtIndexForTest(null);
+});
+
+check('棋子贴图：打开后只有清单里的兵种换成图，没图的回退汉字', () => {
+  /*
+   * 这条守的是"绝不出现空格子"：清单里没有的、或者图加载失败的，
+   * 都必须退回汉字。棋盘上出现一个没有任何标识的方块，玩家没法判断那是什么。
+   */
+  const was = uiArtOn();
+  setUiArt(true);
+  __setArtIndexForTest(['militia']);
+
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1 }, 4243);
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+  try {
+    const militiaCount = st.units.filter((u) => u.type === 'militia').length;
+    const imgs = [...host.querySelectorAll('img.unit-art')];
+    assert.equal(imgs.length, militiaCount, '只有清单里的民兵该换成图');
+    for (const img of imgs) {
+      assert.ok(
+        (img.getAttribute('src') ?? '').includes('art/units/militia.png'),
+        '路径要按兵种 id 约定，加新图不用改代码',
+      );
+    }
+    // 其余兵种仍然是字
+    const glyphs = [...host.querySelectorAll('.unit-inner')].filter((el) => !el.querySelector('img'));
+    assert.ok(glyphs.length > 0, '没图的兵种应该还有汉字');
+    for (const el of glyphs) {
+      assert.ok((el.textContent ?? '').trim().length > 0, '没图也不能变空');
+    }
+  } finally {
+    host.remove();
+  }
+
+  setUiArt(was);
+  __setArtIndexForTest(null);
 });
 
 check('顶栏：给扩展的棋盘视图留了容器', () => {
@@ -3806,16 +3918,29 @@ check('开局面板能选角色', () => {
   assert.ok(doc.querySelector('[data-role="full"]'), '应该有亲自指挥选项');
 });
 
-check('开局面板有"数据收集"开关，默认关', () => {
+check('开局面板有"数据收集"开关，默认开', () => {
+  /*
+   * 2026-11-11 用户拍板：默认从"关"改成"开"。
+   *
+   * 原来那条断言写的是「默认必须是关的：不勾就不记，也不多交东西」。
+   * 立场没错，代价是数据——65 局里只有 19 局带动作序列，剩下的事后想复盘
+   * 连素材都没有。改开之后的边界：**记录**默认开（只发生在本机），
+   * **发送**仍然要玩家在结算卡上点一下，取消勾选也会被记住。
+   */
   const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
-  assert.ok(box, '应该有"结束后上传详细数据"的勾选框');
-  assert.equal(box.checked, false, '默认必须是关的：不勾就不记，也不多交东西');
-  // 勾上之后只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  assert.ok(box, '应该有"记录详细数据"的勾选框');
+  assert.equal(box.checked, true, '默认勾上：否则半数对局事后想复盘都没有素材');
+
+  // 取消勾选只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  box.checked = false;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.ok(
+    !box.closest('.expansion-item')?.classList.contains('on'),
+    '取消之后卡片不该还亮着',
+  );
   box.checked = true;
   box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
-  box.checked = false;
-  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
 });
 
 await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {

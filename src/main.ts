@@ -111,7 +111,7 @@ import { bindChatComposer } from './ui/chat-input.ts';
 import { renderPanel, invalidatePanel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
-import type { MatchReport } from './core/report.ts';
+import type { LoggedAction, MatchReport } from './core/report.ts';
 import {
   newTimeline,
   noteAction,
@@ -180,6 +180,8 @@ import {
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
+import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
@@ -196,6 +198,12 @@ import { MODULES, deviceTargetOf } from './core/armor.ts';
  */
 applyUiTheme();
 installUiConsole();
+/*
+ * 兵种贴图：默认关，只把 `<html data-art>` 定下来。
+ * 真的打开时才去拉清单——关着的时候一个字节都不多请求。
+ */
+initUnitArt();
+initTerrainArt();
 
 
 /**
@@ -689,7 +697,7 @@ let recorder: MatchTimeline | null = null;
  * 上限 1500 步：一局通常 400~1000 步；超了就从尾部截断并计数（`actionsDropped`），
  * 让"这份日志不全"这件事在报告里自己说出来，而不是重放时对不上再让人去猜。
  */
-let actionLog: Action[] | null = null;
+let actionLog: LoggedAction[] | null = null;
 let actionDropped = 0;
 let actionBytes = 0;
 /** 步数上限 */
@@ -726,9 +734,12 @@ function resetRecorder(): void {
 function noteStep(actor: PlayerId, action: Action): void {
   if (actionLog) {
     if (actionLog.length < ACTION_LOG_CAP && actionBytes < ACTION_LOG_BYTES) {
-      actionLog.push(action);
+      // 带上行动方（2026-11-11）：END_TURN 归谁光看动作推不准，
+      // 而"人这一步怎么想的"恰恰要靠它把人类的决策单独拎出来
+      const step = { ...action, by: actor } as LoggedAction;
+      actionLog.push(step);
       // 粗算就够：这里的用途只是"别撞上限"，不需要精确
-      actionBytes += JSON.stringify(action).length + 1;
+      actionBytes += JSON.stringify(step).length + 1;
     } else {
       actionDropped += 1;
     }
@@ -1530,7 +1541,22 @@ function tutorialMarksOf(): {
   return { tutorialTiles: m.tiles, tutorialCityId: m.cityId, tutorialOwnCityId: m.ownCityId };
 }
 
+/**
+ * 贴图清单是异步的：**第一帧一定还没有它**。
+ *
+ * 所以不能在启动时拉一次就完事——那一刻还没有渲染入口，拉到了也没人重画，
+ * 结果就是"打开了开关、棋盘照旧全是汉字"，看着像开关失效。
+ * 放在 render 里惰性触发：清单到货后补画一帧，只补一次。
+ */
+let artIndexAsked = false;
+function ensureArtIndex(): void {
+  if (artIndexAsked || !uiArtOn()) return;
+  artIndexAsked = true;
+  void loadUnitArtIndex().then(() => render());
+}
+
 function render(): void {
+  ensureArtIndex();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -8591,6 +8617,8 @@ function openSettings(): void {
       reducedMotion: document.documentElement.dataset.motion === 'reduced',
       chime: chimeVolume,
       chimeText: chimeLabel(chimeVolume),
+      unitArt: uiArtOn(),
+      terrainArt: uiTerrainOn(),
       replay: replay !== null,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
@@ -8628,6 +8656,39 @@ function openSettings(): void {
     }
     if (act === 'set-motion') {
       setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'set-fx') {
+      /*
+       * 一个按钮管两件事：地面材质 + 棋子贴图。
+       *
+       * 拆成两个开关的那一版，用户点了「棋子贴图」发现地面没变——
+       * "切换贴图"在他脑子里是一个动作。合并之后仍然两个状态分开存，
+       * 只是入口只有一个。
+       */
+      const on = el!.dataset.fx === 'on';
+      setUiTerrain(on);
+      setUiArt(on);
+      if (on) {
+        // 棋子清单要等拉回来，先画一帧地形，到货后再补一帧
+        void loadUnitArtIndex().then(() => paint());
+      }
+      paint();
+      return;
+    }
+    if (act === 'set-terrain') {
+      setUiTerrain(el!.dataset.terrain === 'on');
+      paint();
+      return;
+    }
+    if (act === 'set-art') {
+      const on = el!.dataset.art === 'on';
+      setUiArt(on);
+      if (on) {
+        // 清单要先到，否则这一帧仍然全是汉字，看起来像"点了没反应"
+        void loadUnitArtIndex().then(() => paint());
+      }
       paint();
       return;
     }
