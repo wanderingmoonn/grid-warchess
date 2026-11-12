@@ -820,33 +820,6 @@ html[data-terrain='on'] .tile {
  */
 html[data-terrain='on'] .tiles {
   background-color: var(--plain);
-  position: relative;
-}
-/*
- * 地面明暗起伏（2026-11-12 用户点头加回的那一层）。
- *
- * 有意做成**独立的覆盖层**，而不是写进 `.tiles` 的 background：
- * 平原格是透明的，会露出下面那层；森林、水、丘陵的格子是"不透明的物件+底色"，
- * 写在背景里的话光照到它们边上就断掉，接缝处会突然亮一截。
- * 盖在最上面一层，整张图就共享同一束光——树、水面、石头也一起被照到。
- * 它排在 `.cities` / `.units` 之前，所以棋子不会被压暗。
- *
- * 周期 520px：一盘 12×12 在 600px 上下，等于每盘只有两三处起伏。
- * **必须是跨格的**——按格重复的明暗就变回"每格一块"，正是之前那个毛病。
- *
- * 强度刻意很低（白 0.22 / 暗 0.05，落在颜色上大约 ±7/255），
- * 只在扫视时给出"地面不是一块死板"的感觉，看不出图案。
- */
-html[data-terrain='on'] .tiles::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(120% 95% at 26% 14%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 62%),
-    radial-gradient(95% 85% at 78% 88%, rgba(78, 98, 54, 0.055), rgba(78, 98, 54, 0) 66%);
-  background-size: 520px 520px;
-  background-repeat: repeat;
 }
 /*
  * 只改 `border-color`、不改宽度：`border: 0` 会改变 box 尺寸（那 1px 本来算在
