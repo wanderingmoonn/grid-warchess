@@ -1360,42 +1360,6 @@ function replayGoto(index: number): void {
 function handleReplayAction(act: string, el: HTMLElement): void {
   if (!replay) return;
   switch (act) {
-    /*
-     * 星图：一层盖在棋盘上的视图，只读。
-     * 它不改这一局，所以在复盘里也放行（见上面的 harmless）。
-     */
-    case 'star-open':
-      if (!starLayout(state)) {
-        toast('这一局只有一张图，没有星图可看');
-        return;
-      }
-      starOpen = true;
-      starSel = null;
-      render();
-      return;
-    case 'star-close':
-      starOpen = false;
-      starSel = null;
-      render();
-      return;
-    case 'star-node':
-      starSel = { kind: 'node', id: el.dataset.id ?? '' };
-      render();
-      return;
-    case 'star-lane':
-      starSel = { kind: 'lane', id: el.dataset.id ?? '' };
-      render();
-      return;
-    case 'star-go': {
-      const id = el.dataset.id;
-      if (!id || !hasBoard(state, id)) return;
-      starOpen = false;
-      starSel = null;
-      // 已经在这张图上：switchBoard 会直接返回，那就自己重画一次把覆盖层收掉
-      if (id === activeBoardId) render();
-      else switchBoard(id);
-      return;
-    }
     case 'rp-first':
       replayStopTimer();
       replayPlaying = false;
@@ -2160,7 +2124,7 @@ function syncBoardList(view: PlayerView): void {
     ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
     : '';
 
-  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${starBtn}${starHtml}${debug}</div>`;
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${starBtn}${rows}${starHtml}${debug}</div>`;
 }
 
 /**
@@ -4183,11 +4147,61 @@ function downloadMatchReport(): void {
   toast(`已导出 ${a.download}`);
 }
 
+/**
+ * 星图相关的动作。
+ *
+ * 独立成一个函数、由 `handleAction` 的**开头**分发，而不是塞进那个大 switch：
+ * 星图是"叠在棋盘上的一层视图"，不是对局动作，混在一起既难找，也容易像
+ * 上一版那样被插到 `handleReplayAction` 的 switch 里——按钮点下去毫无反应，
+ * 因为那条路只在 `rp-` 前缀时才走。
+ */
+function handleStarAction(act: string, el: HTMLElement): void {
+  switch (act) {
+    case 'star-open':
+      if (!starLayout(state)) {
+        toast('这一局只有一张图，没有星图可看');
+        return;
+      }
+      starOpen = true;
+      starSel = null;
+      render();
+      return;
+    case 'star-close':
+      starOpen = false;
+      starSel = null;
+      render();
+      return;
+    case 'star-node':
+      starSel = { kind: 'node', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-lane':
+      starSel = { kind: 'lane', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-go': {
+      const id = el.dataset.id;
+      if (!id || !hasBoard(state, id)) return;
+      starOpen = false;
+      starSel = null;
+      // 已经在这张图上：switchBoard 会直接返回，那就自己重画一次把覆盖层收掉
+      if (id === activeBoardId) render();
+      else switchBoard(id);
+      return;
+    }
+  }
+}
+
 function handleAction(act: string, el: HTMLElement): void {
   // 复盘控件先处理：它在"对局已经结束/不该能操作"的时候仍然要能按，
   // 所以不能跟着下面那堆对局动作一起被挡掉
   if (act.startsWith('rp-')) {
     handleReplayAction(act, el);
+    return;
+  }
+  // 星图是只读视图，不走对局那道闸（复盘里也要能开）
+  if (act.startsWith('star-')) {
+    handleStarAction(act, el);
     return;
   }
   /*
@@ -4200,10 +4214,11 @@ function handleAction(act: string, el: HTMLElement): void {
    * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    // 星图只是"看"：复盘里也该能打开（`star-*` 不改这一局的任何东西）
-    const harmless =
-      act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings' ||
-      act.startsWith('star-');
+    /*
+     * 星图不在这张名单里：它在上面就前置分发掉并 return 了，
+     * 压根走不到这道闸（`star-*` 不改这一局的任何东西，复盘里也能开）。
+     */
+    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
