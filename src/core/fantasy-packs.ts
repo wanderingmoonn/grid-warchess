@@ -2798,6 +2798,8 @@ export const FANTASY: Expansion = {
   scale: 'large',
   name: '奇想',
   blurb: '魔法、荒兽与英雄，一整套奇幻军备。',
+  // 圣剑勇者与邪龙王是第六代英雄（兵种级 requiresPack），要「信息化」才招得到
+  recommends: ['pack-contemporary'],
   summary:
     '一整套奇想军备：法则（魔法攻击/魔抗、属性克制、负面状态、空中层）+ 人类的骑士团 + ' +
     '荒兽 + 秘法 + 十一个全场唯一的英雄。开这一个包就有全部 72 个兵种，不再分五个勾。' +

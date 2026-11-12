@@ -3948,6 +3948,35 @@ a.btn {
   font-size: var(--fs-xs);
 }
 
+/*
+ * 三种关系同一副标签、三种底色：
+ *   依赖（默认蓝）· 冲突（红）· 联动（绿）。
+ *
+ * 形状完全一样是有意的——它们回答的是同一个问题"这个包和别的包什么关系"，
+ * 玩家只需要学会"看颜色区分关系"，不用再认三种不同的控件。
+ * 颜色走语义 token（`--danger-strong` / `--ok-deep`），换主题时跟着变。
+ */
+.expansion-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.expansion-tags .expansion-req {
+  margin-top: 0;
+}
+
+.expansion-body .expansion-req.is-clash {
+  background: color-mix(in srgb, var(--danger-strong) 12%, transparent);
+  color: var(--danger-strong);
+}
+
+.expansion-body .expansion-req.is-link {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok-deep);
+}
+
 .seed-row {
   display: flex;
   align-items: center;
