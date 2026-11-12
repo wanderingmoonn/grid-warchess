@@ -804,9 +804,6 @@ html[data-terrain='on'] .tile {
     calc(var(--y, 0) * var(--cell) * -1);
 }
 
-html[data-terrain='on'] .tile.t-plain {
-  background-image: url('/art/terrain/plain.webp');
-}
 /*
  * ── 图案化 tile（B 方案，2026-11-12）──────────────────────────────────
  *
@@ -822,17 +819,40 @@ html[data-terrain='on'] .tile.t-plain {
  * 图是**透明底**：地面色仍来自 `--forest` 那套变量，tile 只负责"长什么"。
  * 所以换成 tile 之后，地形的色相不会跑——玩家靠颜色判断走位这件事没被破坏。
  */
+/* tile 的公共摆放方式：一格一张，铺满，不重复 */
 html[data-terrain='on'] .tile.t-forest {
-  background-image: url('/art/terrain/forest-1.png?v=2');
   background-size: 100% 100%;
   background-position: center;
   background-repeat: no-repeat;
 }
+html[data-terrain='on'] .tile.t-forest {
+  background-image: url('/art/terrain/forest-1.png?v=4');
+}
+/*
+ * 平原暂时保持纯色。
+ *
+ * 我自己生成过一版 48px 的 8-bit 草簇/石堆，和森林那套（柔和矢量、软描边）
+ * 摆在一起风格明显打架——硬像素 vs 柔边，一眼能看出不是一个人画的。
+ * 宁可先留白，也不要两套风格混着。
+ */
+
+/*
+ * 迷雾里没见过的格子不画地形细节。
+ *
+ * 看不清的地方本来就不该有"这里有石堆"的信息——那是给眼睛看的，
+ * 而这一类格子恰恰是"你看不清"的语义。何况一大片灰底上撒满彩色小图标，
+ * 观感上比纯色乱得多。
+ */
+html[data-terrain='on'] .tile.out {
+  /* !important 在这里是必要的：`.t-forest[data-v='1']` 那几条是 (0,4,1)，
+     光靠 `.tile.out` 的 (0,3,1) 压不住，而"看不见的格子不画细节"是硬规则 */
+  background-image: none !important;
+}
 html[data-terrain='on'] .tile.t-forest[data-v='1'] {
-  background-image: url('/art/terrain/forest-2.png?v=2');
+  background-image: url('/art/terrain/forest-2.png?v=4');
 }
 html[data-terrain='on'] .tile.t-forest[data-v='2'] {
-  background-image: url('/art/terrain/forest-3.png?v=2');
+  background-image: url('/art/terrain/forest-3.png?v=4');
 }
 
 /*

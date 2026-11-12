@@ -368,6 +368,10 @@ if (ARGS.includes('clickswitch') || ARGS.includes('terrain')) {
       flag: document.documentElement.dataset.terrain ?? '(无)',
       v: el.dataset.v,
       img: cs.backgroundImage.slice(0, 80),
+      withImg: [...document.querySelectorAll('.tile')]
+        .filter((t) => getComputedStyle(t).backgroundImage !== 'none')
+        .slice(0, 6)
+        .map((t) => t.className + ' @' + t.dataset.x + ',' + t.dataset.y),
       size: cs.backgroundSize,
       w: Math.round(el.getBoundingClientRect().width),
     };

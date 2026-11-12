@@ -559,11 +559,19 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        */
       const variant = (x * 7 + y * 13) % 3;
       /*
+       * 稀疏地形的装饰密度：约 1/5 的格子带一个小图案，其余留白。
+       *
+       * 第一版是"每格都放"，结果整片草地像菜园——战棋里平原的观感是
+       * **大片空 + 零星一点东西**，密了就变成图案阵列，反而比纯色更乱。
+       * 森林不参与这个开关：林子本来就该是密的。
+       */
+      const deco = (x * 31 + y * 17) % 5 === 0 ? '1' : '0';
+      /*
        * `--x/--y` 也一起给：开了地形材质之后，每格要按**格坐标**去大图上取景，
        * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
