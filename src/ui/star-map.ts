@@ -70,7 +70,10 @@ export function renderStarMap(
         `${n.id}/${n.x},${n.y}/${n.stations.length}/${n.stations.filter((x) => x.travelTo).length}/` +
         `${readyOn(n.board)}/${contactOn(n.board) ? 1 : 0}/${tripsOn(n.id)}`,
     ),
-    ...lay.lanes.map((l) => `${l.id}/${l.turns}`),
+    ...lay.lanes.map(
+      (l) =>
+        `${l.id}/${l.turns}/${l.sailors.map((sm) => `${sm.owner}:${sm.progress.toFixed(2)}`).join(',')}`,
+    ),
   ].join('|');
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
@@ -116,6 +119,34 @@ export function renderStarMap(
         ` style="left:${x1}%;top:${y1}%;width:${len}%;transform:rotate(${deg}deg)"></button>`
       );
     })
+    .join('');
+
+  /*
+   * 航行中的空间站：一枚小三角，画在两节点连线上，位置 = 航程进度。
+   *
+   * 不做成"节点上的角标"：那只能说"它正在走"，说不出"走到哪了"。
+   * 而这枚三角的位置本身就是答案——玩家看一眼就知道对手的站还有多远到。
+   * 老存档没有 `total`，进度按 0 算（贴在出发端），至少不会画到航线外面。
+   */
+  const sails = lay.lanes
+    .flatMap((l) =>
+      l.sailors.map((sm) => {
+        const x1 = l.a.x + 0.5;
+        const y1 = l.a.y + 0.5;
+        const x2 = l.b.x + 0.5;
+        const y2 = l.b.y + 0.5;
+        const cx = x1 + (x2 - x1) * sm.progress;
+        const cy = y1 + (y2 - y1) * sm.progress;
+        const deg = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+        return (
+          `<g class="sm-sail ${sm.owner === 'A' ? 'a' : 'b'}" transform="translate(${cx} ${cy}) rotate(${deg})">` +
+          // 尖头朝 +x（也就是朝目的地），旋转已经把它摆正
+          `<polygon points="0.24,0 -0.13,-0.16 -0.13,0.16"></polygon>` +
+          `<title>${esc(sm.ownerName)}的「${esc(sm.name)}」正在航行（${Math.round(sm.progress * 100)}%）</title>` +
+          `</g>`
+        );
+      }),
+    )
     .join('');
 
   const cells = lay.nodes
@@ -164,7 +195,7 @@ export function renderStarMap(
     `<button class="sm-close" data-act="star-close">关闭</button>` +
     `</div>` +
     `<div class="sm-grid" style="--sm:${lay.size}">` +
-    `<svg class="sm-lanes" viewBox="0 0 ${lay.size} ${lay.size}" preserveAspectRatio="none">${lines}</svg>` +
+    `<svg class="sm-lanes" viewBox="0 0 ${lay.size} ${lay.size}" preserveAspectRatio="none">${lines}${sails}</svg>` +
     backdrop +
     taps +
     cells +

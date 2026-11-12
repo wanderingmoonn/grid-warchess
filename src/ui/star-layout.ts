@@ -23,6 +23,8 @@ export interface StarStationCell {
   name: string;
   /** 正在驶向哪个节点（没在航行就没有这个字段） */
   travelTo?: string;
+  /** 航程进度 0~1（0 = 刚出发，1 = 到港）；没在航行就是 undefined */
+  progress?: number;
 }
 
 export interface StarNodeCell {
@@ -42,6 +44,8 @@ export interface StarLaneCell {
   a: StarNodeCell;
   b: StarNodeCell;
   turns: number;
+  /** 这条航道上正在飞的站（画成一枚小三角，位置 = 进度） */
+  sailors: Array<{ owner: PlayerId; ownerName: string; name: string; progress: number }>;
 }
 
 export interface StarLayout {
@@ -108,6 +112,15 @@ export function starLayout(s: GameState): StarLayout | null {
         ownerName: s.players[st.owner]?.name ?? st.owner,
         name: s.boards?.[st.board]?.name ?? st.board,
         ...(st.travel ? { travelTo: st.travel.to } : {}),
+        ...(st.travel
+          ? {
+              // 老存档没有 total：当作刚出发（贴在起点），总比算成负数好
+              progress: Math.max(
+                0,
+                Math.min(1, (st.travel.total ? 1 - st.travel.left / st.travel.total : 0)),
+              ),
+            }
+          : {}),
       }));
 
   if (earth) {
@@ -157,7 +170,24 @@ export function starLayout(s: GameState): StarLayout | null {
     const a = byId.get(l.a);
     const b = byId.get(l.b);
     if (!a || !b) continue;
-    lanes.push({ id: l.id, a, b, turns: laneTurnsFor(l) });
+    lanes.push({
+      id: l.id,
+      a,
+      b,
+      turns: laneTurnsFor(l),
+      // 站在哪条航道上走着：星图把它画在两节点之间，位置就是航程进度
+      sailors: map.stations
+        .filter((st) => st.travel?.lane === l.id)
+        .map((st) => ({
+          owner: st.owner,
+          ownerName: s.players[st.owner]?.name ?? st.owner,
+          name: s.boards?.[st.board]?.name ?? st.board,
+          progress: Math.max(
+            0,
+            Math.min(1, st.travel?.total ? 1 - (st.travel.left ?? 0) / st.travel.total : 0),
+          ),
+        })),
+    });
   }
 
   return { size, nodes: cells, lanes };

@@ -360,6 +360,7 @@ check('星图渲染：每条航线都带一根可点的命中条', () => {
   renderStarMap(host, view, 'A', null);
   const taps = host.querySelectorAll('[data-act="star-lane"]');
   assert.equal(taps.length, 1, `每条航线都要有命中条，实际 ${taps.length}`);
+  assert.equal(host.querySelectorAll('.sm-sail').length, 0, '没有船在走就不该有三角');
   assert.equal((taps[0] as HTMLElement).dataset.id, 'earth-moon');
   assert.equal(host.querySelectorAll('.sm-lane-line').length, 1, '线本身还在（只负责好看）');
   assert.equal(host.querySelectorAll('[data-act="star-node"]').length, 2, '两个节点都可点');
@@ -427,6 +428,48 @@ check('星图：航行中的站还挂在出发地，并带上目标节点', () =
   assert.equal(earth.stations[0]!.travelTo, 'moon', '要写明正驶向哪儿');
   assert.equal(moon.stations.length, 0, '还没到，不算停在月球');
   assert.equal(earth.stations[0]!.name, '前哨站');
+});
+
+check('星图：航道上真的画出航行中的站（小三角）', () => {
+  /*
+   * 用户反馈："空间站飞行过程中，星图的航线里找不到它，描述还是空置描述"。
+   * 所以这条钉两件事：航线上有那枚三角，且卡片文字不再说"路上没有东西"。
+   * （卡片那段是 `main.ts::starPanelInfo`，这里只验渲染产物。）
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        {
+          board: 's1',
+          at: 'earth',
+          owner: 'A',
+          core: 'core-outpost',
+          travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, total: 2 },
+        },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never, 'A', null);
+  const sails = host.querySelectorAll('.sm-sail');
+  assert.equal(sails.length, 1, `航道上要画一枚三角，实际 ${sails.length}`);
+  const tip = sails[0]!.querySelector('title')?.textContent ?? '';
+  assert.ok(tip.includes('前哨站'), `三角的提示要写清是哪座站：${tip}`);
+  assert.ok(tip.includes('50%'), `走了一半要写 50%：${tip}`);
 });
 
 check('地形类正确分布', () => {

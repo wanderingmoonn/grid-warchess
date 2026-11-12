@@ -56,6 +56,7 @@ import {
   stationSpeed,
   STATION_LIFE_ID,
   createStationBoard,
+  renameStation,
   tickProducers,
   tickStationTravel,
 } from '../../../src/core/space/station.ts';
@@ -63,6 +64,7 @@ import { ASTRONAUT_ID } from '../../../src/core/space/astronaut.ts';
 import { SILO_FUEL_TO_STATION, chooseDest, currentDest, siloStateOf } from '../../../src/core/space/silo.ts';
 import { effectiveStats, movePower } from '../../../src/core/rules.ts';
 import { canProduce } from '../../../src/core/produce.ts';
+import { starLayout } from '../../../src/ui/star-layout.ts';
 import { laneTurnsFor } from '../../../src/core/space/transit.ts';
 import { hazardFor } from '../../../src/core/hazard.ts';
 import { SKILL_TARGET_CELLS } from '../../../src/core/skill-hooks.ts';
@@ -1482,6 +1484,101 @@ test('火箭投放：选空间站只需加注 1 回合，点火即到', () => {
   assert.equal(boardIdOf(landed!), rec.board, '落在站棋盘上');
   assert.equal((go.state.transit ?? []).length, 0, '同节点不走航道，天上不该有火箭');
   assert.equal(landed!.acted, true, '落地当回合不能动');
+});
+
+test('站名：同轨道两座站编号不同，并且可以改名', () => {
+  /*
+   * 一个轨道停两座站时，两个「前往」按钮如果完全一样，玩家只能数着点。
+   * 编号是默认值，改名是逃生口——两条都要能用。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 99999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+
+  const first = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(first.ok, first.ok ? '' : first.reason);
+  const second = applyAction(first.state, {
+    type: 'UNIT_ACTION',
+    unitId: first.state.units.find((u) => u.type === SILO_ID)!.id,
+    actionId: 'silo:core:core-outpost',
+  });
+  assert.ok(second.ok, second.ok ? '' : second.reason);
+
+  const names = second.state.starmap!.stations.map((r) => second.state.boards![r.board]!.name);
+  assert.equal(names.length, 2);
+  assert.notEqual(names[0], names[1], `两座站不能同名：${names.join(' / ')}`);
+  assert.ok(names.every((n) => /\d/.test(n!)), `默认名要带编号：${names.join(' / ')}`);
+
+  // 改名：写进 boards[id].name（面板、星图、名单共用这一份）
+  const board = second.state.starmap!.stations[0]!.board;
+  assert.equal(renameStation(second.state, board, '  天枢  '), null);
+  assert.equal(second.state.boards![board]!.name, '天枢', '要去掉首尾空白');
+  assert.equal(renameStation(second.state, board, '   '), '名字不能是空的');
+  assert.equal(renameStation(second.state, board, '一二三四五六七八九十一二三四五'), '名字最多 14 个字');
+  assert.equal(renameStation(second.state, 'earth', '地球'), '这不是一座空间站');
+});
+
+test('星图：航行中的站出现在航线的 sailors 里，进度按总航程算', () => {
+  /*
+   * 用户反馈"站飞走了，星图航线上却写着路上没有东西"。
+   * 三角的位置就是"走到哪了"，所以进度必须对：1 - left/total。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+  pave(cur, board, [[1, 1], [3, 3]]);
+  const solar = build(cur, st.core.id, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+  const thr = build(cur, st.core.id, 'station-build-thruster', 3, 3);
+  assert.ok(thr.ok, thr.ok ? '' : thr.reason);
+  cur = thr.state;
+
+  const core = cur.units.find((u) => u.type === STATION_CORE_ID)!;
+  const rec = stationOf(cur, core)!;
+  assert.equal(beginStationSail(cur, rec, 'moon'), null);
+  assert.ok(rec.travel?.total, '要记下总航程，否则画不出进度');
+
+  const lay = starLayout(cur, 'A')!;
+  const lane = lay.lanes.find((l) => l.id === rec.travel!.lane)!;
+  assert.equal(lane.sailors.length, 1, '航线上要能看到这座站');
+  assert.equal(lane.sailors[0]!.progress, 0, '刚出发：进度 0');
+  assert.equal(lane.sailors[0]!.name, cur.boards![board]!.name);
+
+  // 走一回合：进度变成 1/3
+  tickStationTravel(cur, 'A');
+  const lay2 = starLayout(cur, 'A')!;
+  const lane2 = lay2.lanes.find((l) => l.id === rec.travel!.lane)!;
+  assert.ok(
+    Math.abs(lane2.sailors[0]!.progress - 1 / 3) < 1e-9,
+    `走一回合该是 1/3，实际 ${lane2.sailors[0]!.progress}`,
+  );
+});
+
+test('天气视图只在看地球时有内容（跨扩展兼容）', () => {
+  /*
+   * 用户反馈"空间站上依然有天气和天气效果"。
+   *
+   * 根因：`boardViews.cells` 以前不收 `board`，季节包按地球的宽高算出
+   * 一串地球格号，再被画到空间站那张图上——颜色整体错行，还理直气壮。
+   * 现在契约里带了 `board`，非地球一律返回空。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war', 'seasons'], startEra: 5 });
+  const views = activeExpansions(s).flatMap((e) => e.hooks.boardViews?.() ?? []);
+  const weather = views.find((v) => v.id === 'seasons-weather');
+  assert.ok(weather?.cells, '开了季节就该有天气视图');
+  assert.equal(
+    weather!.cells!({ state: s, viewer: 'A', board: 'moon' }).length,
+    0,
+    '月球上不能有天气',
+  );
+  assert.ok(
+    weather!.cells!({ state: s, viewer: 'A', board: 'earth' }).length > 0,
+    '地球上照常有天气',
+  );
+  assert.equal(weather!.glyph!({ state: s, viewer: 'A', board: 'moon' }).length, 0, '风箭头同理');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

@@ -121,6 +121,11 @@ export interface StarPanelInfo {
    * 玩家在星图上点它，本来想去的可能就是其中某一座。
    */
   goto?: Array<{ label: string; board: string }>;
+  /**
+   * 可以改名的空间站（只有自己的站才给这个入口）。
+   * 一个轨道上停两座站时，默认名只差编号，玩家要数着点——改名是最省事的解法。
+   */
+  rename?: Array<{ board: string; name: string }>;
 }
 
 export interface PanelInput {
@@ -491,6 +496,12 @@ function panelHtml(input: PanelInput): string {
                  `<button class="btn btn-sm btn-primary" data-act="star-go" data-id="${escapeHtml(g.board)}">前往 ${escapeHtml(g.label)}</button>`,
              )
              .join(' ')}
+           ${(input.star.rename ?? [])
+             .map(
+               (r) =>
+                 `<button class="btn btn-sm" data-act="star-rename" data-id="${escapeHtml(r.board)}" title="给这座空间站改个名字">改名</button>`,
+             )
+             .join(' ')}
          </div>`
       : ''}
 
@@ -685,7 +696,9 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
         }
       }
       rows.push(
-        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
+        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
+          k.ready ? '' : 'disabled'
+        } title="${escapeHtml(`${def.name} · ${k.def.name}｜${k.def.summary.replace(/<[^>]+>/g, '')}｜${status}`)}">
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
            <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
            <span class="price">${status}</span>

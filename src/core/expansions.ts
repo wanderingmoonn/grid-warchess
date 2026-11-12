@@ -676,7 +676,16 @@ export interface BoardView {
   /** 悬停提示：这个视图在说什么 */
   hint: string;
   /** 每一格画什么色。返回空数组 = 这一帧不画 */
-  cells?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+  cells?: (c: {
+    state: GameState;
+    viewer: PlayerId;
+    /**
+     * 正在看哪张图。**按格算的视图必须看它**：天气、灵气、控制区都是
+     * "这张图的第 (x,y) 格"，拿地球的格子去算月球，颜色会整体错行。
+     * 缺省 = 地球（老扩展不用改）。
+     */
+    board?: BoardId;
+  }) => Array<{
     x: number;
     y: number;
     /** CSS 颜色，通常带 alpha */
@@ -691,7 +700,7 @@ export interface BoardView {
    * 为什么不做成"任意 HTML"：这层每帧都在重画，塞 HTML 进去就等于
    * 让扩展在渲染热路径上跑，而且一个手滑就是注入。字符够用了。
    */
-  glyph?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+  glyph?: (c: { state: GameState; viewer: PlayerId; board?: BoardId }) => Array<{
     x: number;
     y: number;
     /** 一个字符（或很短的串），核心居中画出 */

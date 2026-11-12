@@ -364,6 +364,25 @@ export function stationDestinations(
 }
 
 /**
+ * 给空间站改名。
+ *
+ * 为什么要能改：一个轨道上停两座站时，默认名只差一个编号，
+ * 「前往 红方的空间站 1 / 2」这种按钮玩家要数着点。让自己起名是最省事的解法。
+ *
+ * 名字存在 `boards[id].name`——它就是面板、星图、名单共用那一份，
+ * 所以改完处处都变，不需要再同步别的地方。
+ */
+export function renameStation(s: GameState, board: string, name: string): string | null {
+  const b = s.boards?.[board];
+  if (!b || b.kind !== 'station') return '这不是一座空间站';
+  const next = name.trim().replace(/\s+/g, ' ');
+  if (!next) return '名字不能是空的';
+  if (next.length > 14) return '名字最多 14 个字';
+  b.name = next;
+  return null;
+}
+
+/**
  * 启航：**只改一个字段**。站内坐标、单位、甲板全都不动，
  * 到港时把 `at` 改成目的地。这就是"不用真挪坐标"的实现。
  */
@@ -373,7 +392,7 @@ export function beginStationSail(s: GameState, station: StarStation, to: StarNod
   const dest = stationDestinations(s, station).find((d) => d.to === to);
   if (!dest) return '这两个节点之间没有航道';
 
-  station.travel = { lane: dest.lane.id, from: station.at, to, left: dest.turns };
+  station.travel = { lane: dest.lane.id, from: station.at, to, left: dest.turns, total: dest.turns };
   const name = s.boards?.[station.board]?.name ?? '空间站';
   log(
     s,
@@ -462,7 +481,16 @@ export function deployStationAt(
   const seq = (map.seq ?? 0) + 1;
   map.seq = seq;
   const boardId = `station-${seq}`;
-  const name = `${s.players[owner]?.name ?? owner}的空间站`;
+  /*
+   * 默认名带编号：同一个轨道上停两座站时，「前往 红方的空间站」两个按钮
+   * 一模一样，玩家根本分不清该点哪个。编号至少让它有区别，
+   * 想更好认就自己改名（`renameStation`）。
+   */
+  const base = `${s.players[owner]?.name ?? owner}的空间站`;
+  const taken = new Set(map.stations.map((st) => s.boards?.[st.board]?.name));
+  let n = map.stations.filter((st) => st.owner === owner).length + 1;
+  while (taken.has(`${base} ${n}`)) n += 1;
+  const name = `${base} ${n}`;
 
   s.boards ??= {};
   s.boards[boardId] = createStationBoard(boardId, core.size, name);
@@ -836,7 +864,7 @@ function buildModule(
     const p = stationPower(state, board);
     if (p.headroom < opts.draw) {
       c.result.ok = false;
-      c.result.reason = `电力不够：要 ${opts.draw}，还余 ${p.headroom}`;
+      c.result.reason = `电力不足 ${p.headroom}/${opts.draw}`;
       return;
     }
   }
@@ -907,49 +935,44 @@ registerSkillEffect('station-build-thruster', (c) => {
 });
 
 registerSkillReadyCheck('station-expand', (s, u) => {
-  if (s.players[u.owner].gold < buildCost(s, u.owner, EXPAND_BASE_COST)) {
-    return '金币不够';
-  }
+  const cost = buildCost(s, u.owner, EXPAND_BASE_COST);
+  if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
 
 registerSkillReadyCheck('station-build', (s, u) => {
   const p = stationPowerOf(s, u);
   if (p && p.headroom < PRODUCER_DRAW) {
-    return `电力不够（要 ${PRODUCER_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+    return `电力不足 ${p.headroom}/${PRODUCER_DRAW}`;
   }
-  if (s.players[u.owner].gold < buildCost(s, u.owner, PRODUCER_BASE_COST)) {
-    return '金币不够';
-  }
+  const cost = buildCost(s, u.owner, PRODUCER_BASE_COST);
+  if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
 
 registerSkillReadyCheck('station-build-solar', (s, u) => {
-  if (s.players[u.owner].gold < buildCost(s, u.owner, SOLAR_BASE_COST)) {
-    return '金币不够';
-  }
+  const cost = buildCost(s, u.owner, SOLAR_BASE_COST);
+  if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
 
 registerSkillReadyCheck('station-build-life', (s, u) => {
   const p = stationPowerOf(s, u);
   if (p && p.headroom < LIFE_DRAW) {
-    return `电力不够（要 ${LIFE_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+    return `电力不足 ${p.headroom}/${LIFE_DRAW}`;
   }
-  if (s.players[u.owner].gold < buildCost(s, u.owner, LIFE_BASE_COST)) {
-    return '金币不够';
-  }
+  const cost = buildCost(s, u.owner, LIFE_BASE_COST);
+  if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
 
 registerSkillReadyCheck('station-build-thruster', (s, u) => {
   const p = stationPowerOf(s, u);
   if (p && p.headroom < THRUSTER_DRAW) {
-    return `电力不够（要 ${THRUSTER_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+    return `电力不足 ${p.headroom}/${THRUSTER_DRAW}`;
   }
-  if (s.players[u.owner].gold < buildCost(s, u.owner, THRUSTER_BASE_COST)) {
-    return '金币不够';
-  }
+  const cost = buildCost(s, u.owner, THRUSTER_BASE_COST);
+  if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
 

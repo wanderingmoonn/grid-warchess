@@ -341,9 +341,14 @@ export const SEASONS: Expansion = {
         id: 'seasons-weather',
         label: '天气',
         hint: '看视野内的天气分布；点一下钉住，再点取消',
-        cells: ({ state }) => climateOverlayCells(state),
+        /*
+         * 只在地球上画。天气是按"地形 + 海陆 + 纬度"推的，那套数据只对地球成立；
+         * 空间站和月球上打开「天气」应该是**一片空白**，而不是把地球那张图的
+         * 气候按同一组坐标糊上去（玩家一眼就知道串台了，还会以为站上在下雨）。
+         */
+        cells: ({ state, board }) => ((board ?? EARTH) === EARTH ? climateOverlayCells(state) : []),
         // 箭头只画大风区（见 windGlyphCells）：平时一格都没有，刮风季也不会糊成一片
-        glyph: ({ state }) => windGlyphCells(state),
+        glyph: ({ state, board }) => ((board ?? EARTH) === EARTH ? windGlyphCells(state) : []),
       },
     ],
   },

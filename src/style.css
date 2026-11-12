@@ -968,6 +968,20 @@ body {
   color: #16402a;
 }
 
+/* 航行中的站：航线上的小三角，位置就是航程进度 */
+.sm-sail polygon {
+  stroke: rgba(20, 18, 14, 0.55);
+  stroke-width: 0.02;
+}
+
+.sm-sail.a polygon {
+  fill: var(--team-a);
+}
+
+.sm-sail.b polygon {
+  fill: var(--team-b);
+}
+
 /* 有空间站正在驶离这个节点：一个轻巧的箭头，不抢站数角标 */
 .sm-sailing {
   position: absolute;
@@ -2739,6 +2753,27 @@ body {
   font-size: var(--fs-sm);
   color: var(--price);
   font-weight: 500;
+  /*
+   * 右边的短标记（"就绪" / "电力不足 3/15"）**不换行**。
+   *
+   * 换行本身没错，错的是它会把左边的标题挤到只剩一个字宽——技能名变成竖排，
+   * 玩家读不出这是哪个技能。文案已经改短，这里再兜一层：它永远是一行。
+   */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/*
+ * 标题（"空间站核心舱 · 建造推进器舱"）也守一行。
+ *
+ * 太长就省略，不要折成竖排——横排能扫读，竖排只能一个字一个字猜。
+ * 完整名字在 `title` 属性里（`heroSkillBlock` 已经写了）。
+ */
+.recruit-btn .meta b {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 来源徽标：兵种从 49 个涨到 118 个之后，"这兵是哪个包的"必须写在脸上——

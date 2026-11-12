@@ -92,6 +92,7 @@ import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boa
 import { createMoonBoard } from './core/space/moon.ts';
 import { hasStarRows, starRows } from './ui/star-panel.ts';
 import { peekStarmap } from './core/space/starmap.ts';
+import { renameStation } from './core/space/station.ts';
 import { starLayout } from './ui/star-layout.ts';
 import { renderStarMap, type StarSelection } from './ui/star-map.ts';
 import { nodeName } from './core/space/starmap.ts';
@@ -455,7 +456,7 @@ function computeBoardView(visible: readonly number[]): Map<number, string> | und
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
-  const cells = def?.cells?.({ state, viewer: me() });
+  const cells = def?.cells?.({ state, viewer: me(), board: activeBoardId });
   if (!cells || cells.length === 0) return undefined;
 
   /*
@@ -479,7 +480,7 @@ function computeBoardGlyph(visible: readonly number[]): Map<number, string> | un
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
-  const glyphs = def?.glyph?.({ state, viewer: me() });
+  const glyphs = def?.glyph?.({ state, viewer: me(), board: activeBoardId });
   if (!glyphs || glyphs.length === 0) return undefined;
   // 和染色同一个道理：格号属于这张图，列宽也得取这张图的
   const w = boardOf(state, activeBoardId).w;
@@ -1111,31 +1112,52 @@ function starPanelInfo(): StarPanelInfo | null {
     const goto: Array<{ label: string; board: string }> = [];
     if (n.board) goto.push({ label: n.name, board: n.board });
     for (const st of n.stations) goto.push({ label: st.name, board: st.board });
-    return { kind: 'node', title: n.name, lines, ...(goto.length > 0 ? { goto } : {}) };
+    // 只有自己的站才给「改名」：别人的站名你改不了
+    const mine = (peekStarmap(state)?.stations ?? []).filter(
+      (st) => st.at === n.id && st.owner === me(),
+    );
+    const rename = mine.map((st) => ({
+      board: st.board,
+      name: state.boards?.[st.board]?.name ?? st.board,
+    }));
+    return {
+      kind: 'node',
+      title: n.name,
+      lines,
+      ...(goto.length > 0 ? { goto } : {}),
+      ...(rename.length > 0 ? { rename } : {}),
+    };
   }
 
   const lane = lay.lanes.find((l) => l.id === starSel!.id);
   if (!lane) return null;
   const onWay = trips.filter((t) => t.lane === lane.id);
+  // 航行中的站也算"路上有东西"——以前这条只数火箭，于是站开着的时候航线卡写着"路上没有东西"
+  const sailing = (peekStarmap(state)?.stations ?? []).filter((st) => st.travel?.lane === lane.id);
   /*
-   * 航程现在就是"几个回合"，因为还没什么东西能改变速度。
-   *
-   * 但**它不该一直是回合数**：等空间站能装推进器之后，同一条航线的
-   * 通过时间应该 = 距离 ÷ 速度。到那时给 `StarLane` 分开存 `distance`
-   * 与速度修正，这里改成"距离 N，当前速度下 M 回合"——
-   * 面板文案不用再动。现在先按"距离 = 1 回合"显示，不多造一个还没人用的字段。
+   * 这里只写**火箭**的航程：弹道固定，和谁发、有没有推进器都无关。
+   * 空间站自己开过去是另一回事（距离 ÷ 航速），回合数在站的卡片和下面
+   * 那几行"正在驶向"里，不混在一起写。
    */
   const lines = [
     `${lane.a.name} ⇄ ${lane.b.name}`,
-    `航程 ${lane.turns} 回合（点火之后开始算）`,
-    '以后装了推进器，同一段路会更快走完',
+    `火箭航程 ${lane.turns} 回合（点火之后开始算）`,
   ];
-  if (onWay.length === 0) {
+  if (onWay.length === 0 && sailing.length === 0) {
     lines.push('路上没有东西');
-  } else {
-    for (const t of onWay) {
-      lines.push(`${who(t.owner)} → ${nodeName(state, t.to)}，还有 ${Math.max(0, t.left)} 回合`);
-    }
+  }
+  for (const t of onWay) {
+    lines.push(`${who(t.owner)}的火箭 → ${nodeName(state, t.to)}，还有 ${Math.max(0, t.left)} 回合`);
+  }
+  for (const st of sailing) {
+    const name = state.boards?.[st.board]?.name ?? st.board;
+    const pct = st.travel?.total
+      ? Math.round((1 - (st.travel.left ?? 0) / st.travel.total) * 100)
+      : 0;
+    lines.push(
+      `${who(st.owner)}的「${name}」正在驶向${nodeName(state, st.travel!.to)}：` +
+        `还有 ${Math.max(0, st.travel!.left)} 回合（已走 ${pct}%）`,
+    );
   }
   return { kind: 'lane', title: `航道 · ${lane.a.name} ⇄ ${lane.b.name}`, lines };
 }
@@ -4293,6 +4315,30 @@ function handleStarAction(act: string, el: HTMLElement): void {
       // 已经在这张图上：switchBoard 会直接返回，那就自己重画一次把覆盖层收掉
       if (id === activeBoardId) render();
       else switchBoard(id);
+      return;
+    }
+    case 'star-rename': {
+      /*
+       * 改名不在 action 流里（没有这种动作类型），所以**回放里禁止**：
+       * 回放是按动作重演的，名字却直接写在 state 上，重演会抹掉它，
+       * 表现是"我改的名字过一会儿自己变回去了"。
+       */
+      if (replay) {
+        toast('回放里不能改名字');
+        return;
+      }
+      const id = el.dataset.id;
+      if (!id) return;
+      const cur = state.boards?.[id]?.name ?? '';
+      const next = window.prompt('给这座空间站起个名字（最多 14 个字）', cur);
+      if (next === null) return;
+      const err = renameStation(state, id, next);
+      if (err) {
+        toast(err);
+        return;
+      }
+      // 面板标题也读这个名字，重画一次就全同步了
+      render();
       return;
     }
   }

@@ -1782,6 +1782,14 @@ export interface StarStation {
     to: StarNodeId;
     /** 还要几个自己的回合到 */
     left: number;
+    /**
+     * 出发时算出来的总航程。
+     *
+     * 星图上要按"走完全程的百分之几"画它，只有 `left` 是画不出来的：
+     * 不知道起点在哪，就不知道它走了多远。老存档没有这个字段，按 `left` 兜底
+     * （进度 0，贴在出发端）。
+     */
+    total?: number;
   };
 }
 
