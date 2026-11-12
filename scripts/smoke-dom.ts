@@ -2771,6 +2771,70 @@ check('勾选冲突的包会被拒绝，并说清是谁挡着', () => {
   assert.equal(box('city-works').checked, false, '取消之后能正常关掉');
 });
 
+check('状态徽章：自己人和敌人都看得见（含自己的产兵建筑）', () => {
+  /*
+   * 2026-11-12 实机反馈："看不到自己中了什么状态，只能看见敌方的"。
+   *
+   * 根因不是数据、也不是 CSS：**自己的产兵建筑走的是 `renderCamp` 这条支路**，
+   * 不是通用单位卡。同一座军营，敌方点开有「中毒 2 回合」，自己点开只有血条——
+   * 而军营正是最容易被毒/烧的建筑，掉血却看不到来源最难查。
+   *
+   * 这条用例把四条路都钉住：自己的兵、敌方的兵、自己的营、敌方的营。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: [] }, 4477);
+  st.current = 'A';
+  const paint = (input: Partial<Parameters<typeof renderPanel>[1]>) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      ...input,
+    });
+
+  const mine = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.category === 'combat')!;
+  const foe = st.units.find((u) => u.owner === 'B' && st.unitTypes[u.type]?.category === 'combat')!;
+  assert.ok(mine && foe, '开局该有两边的战斗单位');
+  mine.status = { poison: 2 };
+  foe.status = { burn: 2 };
+
+  paint({ selectedUnit: mine });
+  assert.ok(host.querySelector('.status-chip'), '自己的兵要显示状态徽章');
+  paint({ selectedUnit: foe });
+  assert.ok(host.querySelector('.status-chip'), '敌方的兵也要显示');
+
+  // 产兵建筑：自己走 renderCamp，敌方走通用卡——两条都要有
+  const campDef = UNIT_TYPES.camp ?? Object.values(st.unitTypes).find((d) => d.id.startsWith('camp'));
+  assert.ok(campDef, '应该能找到一个产兵建筑定义');
+  const put = (owner: 'A' | 'B', x: number, y: number) => {
+    const u: Unit = {
+      id: `camp-${owner}`,
+      type: campDef!.id,
+      owner,
+      x,
+      y,
+      hp: campDef!.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+      status: { poison: 2 },
+    };
+    st.units.push(u);
+    st.tiles[y * st.w + x] = { terrain: 'plain', cityId: null };
+    return u;
+  };
+  const mineCamp = put('A', 5, 5);
+  paint({ selectedUnit: mineCamp, selectedCampId: mineCamp.id });
+  assert.ok(host.textContent?.includes('中毒'), '自己的军营也要写中毒');
+  assert.equal(host.querySelectorAll('.status-chip').length >= 1, true, '自己的军营要有状态徽章');
+
+  const foeCamp = put('B', 7, 5);
+  paint({ selectedUnit: foeCamp });
+  assert.ok(host.textContent?.includes('中毒'), '敌方的军营照旧');
+});
 /** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */
 function openPool(): void {
   if (!doc.querySelector('.pool-layer')) click('[data-act="unit-pool"]');
