@@ -22,6 +22,7 @@
 
 import type { Expansion, UnitActionOption } from '../expansions.ts';
 import { SILO_ID } from './silo.ts';
+import { nodeName } from './starmap.ts';
 import {
   CORE_DEFS,
   STATION_CORE,
@@ -34,11 +35,17 @@ import {
   SOLAR_POWER,
   THRUSTER_DRAW,
   THRUSTER_SPEED,
+  beginStationSail,
   buildCost,
   launchCore,
+  stationDestinations,
   stationLines,
+  stationOf,
   stationPowerHtml,
+  stationSailProblem,
+  stationSpeed,
   tickProducers,
+  tickStationTravel,
 } from './station.ts';
 
 export const SPACE_WAR: Expansion = {
@@ -69,9 +76,12 @@ export const SPACE_WAR: Expansion = {
       + '电不够就造不出来（按钮会写明还差多少）；万一被打到过载，整站停摆——'
       + '推进器不提速、生产舱不产金。',
     '<b>推进器舱</b>：必须造在核心舱的<b>下半区</b>（不是正下方，整条下缘都行）。'
-      + `每台让本方航道速度 +${THRUSTER_SPEED}：航程 = 距离 ÷ 速度，向上取整、至少 1 回合。`
-      + '地月航道距离 3，所以标准速度 3 回合、1 台 2 回合、2 台 1 回合。'
-      + '推进器是给<b>全方</b>的火箭用的，装在哪座站上都算。',
+      + `每台让这座站的<b>航速</b> +${THRUSTER_SPEED}。`
+      + '<b>装了推进器，空间站就是飞船</b>：点核心舱出现「启航 → 目的地」，'
+      + '沿航道开到别的星球轨道，站内坐标一格不动，变的只是它挂在哪颗星球上。'
+      + '航程 = 航道距离 ÷ 航速（向上取整、至少 1 回合），地月距离 6，'
+      + '所以 1 台推进器 3 回合、2 台 2 回合、3 台 2 回合、5 台 1 回合。'
+      + '<b>推进器不影响火箭</b>：直飞月球的火箭弹道固定，1 回合到。',
     '<b>星图</b>：左上角面板里点「查看星图」。星图把每颗星球画成一格，'
       + '连线就是航道；点星球能看到轨道上停着哪些站、有没有东西正在飞来，'
       + '还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。'
@@ -82,6 +92,8 @@ export const SPACE_WAR: Expansion = {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
     onTurnStart: ({ state, player }) => {
       tickProducers(state, player);
+      // 在航的站：只推自己的（和火箭同一个规矩）
+      tickStationTravel(state, player);
     },
 
     /**
@@ -92,28 +104,64 @@ export const SPACE_WAR: Expansion = {
      * 这些按钮**不看燃料**——核心舱不需要加注。
      */
     unitActions: ({ state, unit, viewer }) => {
-      if (unit.owner !== viewer || unit.type !== SILO_ID) return [];
-      // 还没盖完的井不接活
-      if ((unit.buildNeed ?? 0) > (unit.buildDone ?? 0)) return [];
+      if (unit.owner !== viewer) return [];
       const out: UnitActionOption[] = [];
-      for (const core of CORE_DEFS) {
-        const cost = buildCost(state, unit.owner, core.cost);
-        const afford = state.players[unit.owner].gold >= cost;
-        out.push({
-          id: `silo:core:${core.id}`,
-          group: '空间站',
-          label: core.name,
-          detail: core.blurb,
-          note: `${cost} 金 · 免加注`,
-          disabled: !afford,
-        });
+
+      // 发射井：发射核心舱（还没盖完的井不接活）
+      if (unit.type === SILO_ID) {
+        if ((unit.buildNeed ?? 0) > (unit.buildDone ?? 0)) return [];
+        for (const core of CORE_DEFS) {
+          const cost = buildCost(state, unit.owner, core.cost);
+          const afford = state.players[unit.owner].gold >= cost;
+          out.push({
+            id: `silo:core:${core.id}`,
+            group: '空间站',
+            label: core.name,
+            detail: core.blurb,
+            note: `${cost} 金 · 免加注`,
+            disabled: !afford,
+          });
+        }
+        return out;
       }
-      return out;
+
+      /*
+       * 核心舱：启航。
+       *
+       * 装了推进器，这座站就是**飞船**——可以沿航道去别的星球轨道。
+       * 每个相邻节点一个按钮（不是技能）：技能是"选棋盘格"的，
+       * 而这里选的是星图节点，两者不是一套交互。
+       */
+      if (unit.type === STATION_CORE_ID) {
+        const rec = stationOf(state, unit);
+        if (!rec) return [];
+        const problem = stationSailProblem(state, rec);
+        for (const d of stationDestinations(state, rec)) {
+          out.push({
+            id: `station:sail:${d.to}`,
+            group: '启航',
+            label: `启航 → ${nodeName(state, d.to)}`,
+            detail: `航程 ${d.turns} 回合（航速 ${stationSpeed(state, rec)}）`,
+            note: problem ?? '条件齐了',
+            disabled: !!problem,
+          });
+        }
+        return out;
+      }
+
+      return [];
     },
 
     onUnitAction: ({ state, unit, actionId }) => {
-      if (!actionId.startsWith('silo:core:')) return `认不出这个操作：${actionId}`;
-      return launchCore(state, unit, actionId.slice('silo:core:'.length));
+      if (actionId.startsWith('silo:core:')) {
+        return launchCore(state, unit, actionId.slice('silo:core:'.length));
+      }
+      if (actionId.startsWith('station:sail:')) {
+        const rec = stationOf(state, unit);
+        if (!rec) return '这支部队不在任何空间站上';
+        return beginStationSail(state, rec, actionId.slice('station:sail:'.length));
+      }
+      return `认不出这个操作：${actionId}`;
     },
 
     getUnitPanelLines: ({ state, unit }) => {

@@ -28,17 +28,20 @@ export const EARTH_NODE: StarNodeId = EARTH;
 /** 月球的节点 id */
 export const MOON_NODE: StarNodeId = MOON_BOARD;
 
+/** 地月航道上**火箭**要飞几个回合。推进器不影响它——火箭弹道是固定的 */
+export const MOON_LANE_TURNS = 1;
+
 /**
- * 地月航道的**距离**（不是回合数）。
+ * 地月航道的**太空距离**：空间站自己开过去时按 `距离 ÷ 速度` 算。
  *
- * 为什么从 1 提到 3：`推进器` 那条规则是"航程 = 距离 ÷ 速度"。
- * 距离如果是 1，基础速度也是 1，那"提一档速度"算出来还是 `ceil(1/1.5)=1`——
- * 推进器在屏幕上永远看不出效果，等于没做。
+ * 为什么和上面的回合数分开：这两件事的速度来源不同。
+ *   · 火箭是一次性投送，弹道写死，谁发都是 1 回合；
+ *   · 空间站是**飞船**，推力越大开得越快，速度 = 1 + 在役推进器数。
  *
- * 3 让这条曲线有意义：没有推进器 3 回合，1 台 2 回合，2 台 1 回合（下限）。
- * 以后更远的航道（地球→别的星球）距离更大，推进器就一直有用。
+ * 如果共用一个字段，就只能二选一：要么火箭慢到能体现推进器（玩家嫌流程长），
+ * 要么推进器在火箭上永远看不出效果。
  */
-export const MOON_LANE_DISTANCE = 3;
+export const MOON_LANE_DISTANCE = 6;
 
 /** 地月航道的 id（存档里认这个字符串，别改） */
 export const MOON_LANE = 'earth-moon';
@@ -54,17 +57,30 @@ export function createStarmap(opts: { moon?: boolean } = {}): Starmap {
   const lanes: StarLane[] = [];
   if (opts.moon) {
     nodes.push({ id: MOON_NODE, kind: 'moon', board: MOON_BOARD, name: '月球' });
-    lanes.push({ id: MOON_LANE, a: EARTH_NODE, b: MOON_NODE, distance: MOON_LANE_DISTANCE });
+    lanes.push({
+      id: MOON_LANE,
+      a: EARTH_NODE,
+      b: MOON_NODE,
+      turns: MOON_LANE_TURNS,
+      distance: MOON_LANE_DISTANCE,
+    });
   }
   return { nodes, lanes, stations: [], seq: 0 };
 }
 
+/** 火箭的航程（回合）。老存档只有 `turns`，正好也是这个意思 */
+export function laneCruise(l: StarLane): number {
+  return Math.max(1, l.turns ?? 1);
+}
+
 /**
- * 一条航道的距离。老存档只有 `turns`，读作距离（那时速度恒为 1，两者同值）。
+ * 航道的太空距离（空间站航行用）。
+ *
+ * 老存档没有这个字段：按"火箭 1 回合 = 距离 6"的比例补一个，
+ * 让升级上来的存档也能航行，而不是算成 0 回合瞬移。
  */
 export function laneDistance(l: StarLane): number {
-  const d = l.distance ?? l.turns ?? 1;
-  return Math.max(1, d);
+  return Math.max(1, l.distance ?? laneCruise(l) * 6);
 }
 
 /**

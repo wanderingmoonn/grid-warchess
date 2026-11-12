@@ -21,6 +21,8 @@ export interface StarStationCell {
   owner: PlayerId;
   ownerName: string;
   name: string;
+  /** 正在驶向哪个节点（没在航行就没有这个字段） */
+  travelTo?: string;
 }
 
 export interface StarNodeCell {
@@ -68,10 +70,10 @@ function sizeFor(count: number): number {
  * 调用方据此不画星图、也不给入口。
  */
 /**
- * `viewer` 决定"航程"这一列显示几回合：距离是死的，速度是活的
- * （推进器越多飞越快，见 `laneTurnsFor`）。不传就看当前行动的玩家。
+ * 布局。航程那一列是**火箭的**（固定回合），和谁在看无关——
+ * 空间站自己航行的回合数是另一回事，显示在站的卡片上。
  */
-export function starLayout(s: GameState, viewer: PlayerId = s.current): StarLayout | null {
+export function starLayout(s: GameState): StarLayout | null {
   const map = peekStarmap(s);
   if (!map || map.nodes.length <= 1) return null;
 
@@ -105,6 +107,7 @@ export function starLayout(s: GameState, viewer: PlayerId = s.current): StarLayo
         owner: st.owner,
         ownerName: s.players[st.owner]?.name ?? st.owner,
         name: s.boards?.[st.board]?.name ?? st.board,
+        ...(st.travel ? { travelTo: st.travel.to } : {}),
       }));
 
   if (earth) {
@@ -154,7 +157,7 @@ export function starLayout(s: GameState, viewer: PlayerId = s.current): StarLayo
     const a = byId.get(l.a);
     const b = byId.get(l.b);
     if (!a || !b) continue;
-    lanes.push({ id: l.id, a, b, turns: laneTurnsFor(s, viewer, l) });
+    lanes.push({ id: l.id, a, b, turns: laneTurnsFor(l) });
   }
 
   return { size, nodes: cells, lanes };

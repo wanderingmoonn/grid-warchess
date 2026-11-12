@@ -17,12 +17,23 @@
  *    于是"多盖井"和"多建站"是同一条投资曲线上的两段，而不是两个独立系统。
  */
 
-import type { Board, GameState, PlayerId, SkillDef, Transit, Unit, UnitTypeDef } from '../types.ts';
+import type {
+  Board,
+  GameState,
+  PlayerId,
+  SkillDef,
+  StarLane,
+  StarNodeId,
+  StarStation,
+  Transit,
+  Unit,
+  UnitTypeDef,
+} from '../types.ts';
 import { boardIdOf, boardOf, boardStateOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells, type SkillCtx } from '../skill-hooks.ts';
-import { nodeName, nodeOf, starmapOf } from './starmap.ts';
-import { registerLaneSpeed, registerOrbitArrival } from './transit.ts';
+import { lanesFrom, laneDistance, nodeName, nodeOf, starmapOf } from './starmap.ts';
+import { registerOrbitArrival } from './transit.ts';
 import { SILO_ID } from './silo.ts';
 
 export const STATION_CORE_ID = 'station-core';
@@ -238,31 +249,103 @@ export function stationPowerOf(s: GameState, u: Unit): StationPower | null {
   return stationPower(s, board);
 }
 
-/**
- * 某一方的**航速**：标准速度 1，每台在役推进器 +1。
- *
- * 断电的站上的推进器不算——那是"装了但没通电"，玩家在面板上能看见过载，
- * 也该在航程上看见后果。同一方多座站的推进器**累加**：推进器是给火箭用的，
- * 火箭发射时不看它装在哪座站上。
- */
-export function thrusterSpeed(s: GameState, owner: PlayerId): number {
-  const byBoard = new Map<string, number>();
-  for (const u of s.units ?? []) {
-    if (u.owner !== owner || u.hp <= 0 || u.type !== STATION_THRUSTER_ID) continue;
-    const b = boardIdOf(u);
-    if (!isStationBoard(s, b)) continue;
-    byBoard.set(b, (byBoard.get(b) ?? 0) + 1);
-  }
-  let active = 0;
-  for (const [b, n] of byBoard) {
-    if (stationPower(s, b).brownout) continue;
-    active += n;
-  }
-  return 1 + active * THRUSTER_SPEED;
+/* ===========================================================================
+ * 航行：装了推进器，空间站就是飞船
+ * ======================================================================== */
+
+/** 这支兵所在的站记录（不在站上返回 undefined） */
+export function stationOf(s: GameState, u: Unit): StarStation | undefined {
+  const board = boardIdOf(u);
+  return starmapOf(s)?.stations.find((st) => st.board === board);
 }
 
-// 注册给航道：航程 = 距离 ÷ 速度（`transit.laneTurnsFor`）
-registerLaneSpeed((s, owner) => thrusterSpeed(s, owner));
+/**
+ * 这座站在役的推进器数。
+ *
+ * 断电的站算 0——"装了但没通电"不该推得动一座站。玩家在面板上能看见过载，
+ * 也该在航速上看见后果。
+ */
+export function stationThrusters(s: GameState, station: StarStation): number {
+  const p = stationPower(s, station.board);
+  return p.brownout ? 0 : p.thrusters;
+}
+
+/** 这座站的航速：标准 1 + 在役推进器数 */
+export function stationSpeed(s: GameState, station: StarStation): number {
+  return 1 + stationThrusters(s, station) * THRUSTER_SPEED;
+}
+
+/**
+ * 空间站开过一段航道要几回合：**距离 ÷ 速度**。
+ *
+ * 这才是"距离 ÷ 速度"该待的地方。火箭的航程是固定的（见 `transit.laneTurnsFor`）——
+ * 火箭是一次性投送，弹道写死；站是自己开过去的，推力越大越快。
+ */
+export function stationSailTurns(s: GameState, station: StarStation, lane: StarLane): number {
+  return Math.max(1, Math.ceil(laneDistance(lane) / stationSpeed(s, station)));
+}
+
+/** 启航前的检查。和面板共用一句话，免得"按钮写着能飞、点下去说不能" */
+export function stationSailProblem(s: GameState, station: StarStation): string | null {
+  if (station.travel) {
+    return `正在驶向${nodeName(s, station.travel.to)}（还有 ${Math.max(0, station.travel.left)} 回合）`;
+  }
+  if (!starmapOf(s)) return '这一局没有星图';
+  if (lanesFrom(s, station.at).length === 0) return '这里没有可去的航道';
+  if (stationThrusters(s, station) === 0) return '至少要一台推进器舱才能启航';
+  return null;
+}
+
+/** 从这座站出发能去哪些节点（含各自航程） */
+export function stationDestinations(
+  s: GameState,
+  station: StarStation,
+): Array<{ to: StarNodeId; lane: StarLane; turns: number }> {
+  return lanesFrom(s, station.at).map(({ lane, to }) => ({
+    to,
+    lane,
+    turns: stationSailTurns(s, station, lane),
+  }));
+}
+
+/**
+ * 启航：**只改一个字段**。站内坐标、单位、甲板全都不动，
+ * 到港时把 `at` 改成目的地。这就是"不用真挪坐标"的实现。
+ */
+export function beginStationSail(s: GameState, station: StarStation, to: StarNodeId): string | null {
+  const problem = stationSailProblem(s, station);
+  if (problem) return problem;
+  const dest = stationDestinations(s, station).find((d) => d.to === to);
+  if (!dest) return '这两个节点之间没有航道';
+
+  station.travel = { lane: dest.lane.id, from: station.at, to, left: dest.turns };
+  const name = s.boards?.[station.board]?.name ?? '空间站';
+  log(
+    s,
+    station.owner,
+    `${name}启航，驶向${nodeName(s, to)}（航程 ${dest.turns} 回合）`,
+    true,
+  );
+  return null;
+}
+
+/** 回合开始：推进自己那些在航行的站 */
+export function tickStationTravel(s: GameState, player: PlayerId): void {
+  const map = starmapOf(s);
+  if (!map) return;
+  for (const st of map.stations) {
+    if (st.owner !== player || !st.travel) continue;
+    st.travel.left -= 1;
+    if (st.travel.left > 0) continue;
+    const to = st.travel.to;
+    st.at = to;
+    st.travel = undefined;
+    const name = s.boards?.[st.board]?.name ?? '空间站';
+    log(s, player, `${name}抵达${nodeName(s, to)}轨道`, true);
+  }
+}
+
+
 
 /**
  * 站的能量条（HTML）。
@@ -285,7 +368,8 @@ export function stationPowerHtml(s: GameState, u: Unit): string | null {
     p.thrusters > 0 ? `${p.thrusters} 台推进器` : '',
     p.producers > 0 ? `${p.producers} 座生产舱` : '',
   ].filter(Boolean);
-  const speed = thrusterSpeed(s, u.owner);
+  const st = stationOf(s, u);
+  const speed = st ? stationSpeed(s, st) : 0;
   return `<div class="power-line">
     <div class="power-bar station"><i class="${over ? 'over' : ''}" style="width:${pct}%"></i></div>
     <div class="power-nums">
@@ -794,10 +878,21 @@ export function stationLines(s: GameState, u: Unit): string[] {
   out.push(
     `能量：供电 ${p.supply} / 已用 ${p.demand} / ${p.brownout ? `过载 ${-p.headroom}（全站停摆）` : `余量 ${p.headroom}`}`,
   );
+  const rec = stationOf(s, u);
+  const speed = rec ? stationSpeed(s, rec) : 1;
   out.push(
     `舱段：${p.solars} 太阳能 · ${p.thrusters} 推进器 · ${p.producers} 生产舱` +
-      `（航速 ${thrusterSpeed(s, u.owner)}）`,
+      `（航速 ${speed}）`,
   );
+  if (rec?.travel) {
+    out.push(`正在驶向${nodeName(s, rec.travel.to)}：还有 ${Math.max(0, rec.travel.left)} 回合`);
+  } else if (rec) {
+    const dests = stationDestinations(s, rec);
+    if (dests.length > 0) {
+      const list = dests.map((d) => `${nodeName(s, d.to)} ${d.turns} 回合`).join(' · ');
+      out.push(`可航行：${list}`);
+    }
+  }
   out.push(`扩建一格甲板：${expand} 金`);
   out.push(`一座生产舱：${maker} 金（每回合 +${PRODUCER_INCOME} 金，耗电 ${PRODUCER_DRAW}）`);
   out.push(`一块太阳能舱：${solar} 金（发电 ${SOLAR_POWER}）`);

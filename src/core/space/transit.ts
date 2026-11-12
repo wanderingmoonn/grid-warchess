@@ -29,36 +29,25 @@ import type { BoardId, GameState, PlayerId, StarLane, StarNodeId, Transit, Unit 
 import { boardIdOf, boardOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
 import { passable } from '../config.ts';
-import { laneDistance, starmapOf, nodeName } from './starmap.ts';
+import { laneCruise, starmapOf, nodeName } from './starmap.ts';
 
 /** 面板上的一格坐标写法（A1） */
 export function cellName(x: number, y: number): string {
   return `${String.fromCharCode(65 + x)}${y + 1}`;
 }
 
-/* ===========================================================================
- * 航速：航程 = 距离 ÷ 速度
- * ======================================================================== */
-
 /**
- * 某一方飞一段航道的**速度**。
+ * 火箭的航程（回合）。
  *
- * 现在唯一的速度来源是空间站上的推进器舱（`space-war` 包注册）。
- * 用注册而不是直接 import，是因为 transit 在**基础包**里，不能认识太空战争；
- * 而且反向 import 会成环（station → silo → transit → station）。
+ * **火箭的速度是固定的**——一次性投送，弹道写死，谁发、有没有推进器都是这么多回合。
+ * "距离 ÷ 速度"那条公式属于**空间站自己航行**（站是飞船，推力越大开得越快），
+ * 在 `space/station.ts` 的 `stationSailTurns` 里，不在这里。
+ *
+ * 这两个数曾经被混成一个：那时用推进器给火箭提速，代价是地月航程必须拉到 3 回合
+ * 才看得出效果，发射流程被拖长。分开之后各自归位。
  */
-export type LaneSpeed = (s: GameState, owner: PlayerId, lane: StarLane) => number;
-
-let laneSpeed: LaneSpeed | null = null;
-
-export function registerLaneSpeed(fn: LaneSpeed): void {
-  laneSpeed = fn;
-}
-
-/** 实际航程（回合）。速度至少 1，结果至少 1——再快也得飞一回合 */
-export function laneTurnsFor(s: GameState, owner: PlayerId, lane: StarLane): number {
-  const speed = Math.max(1, laneSpeed ? laneSpeed(s, owner, lane) : 1);
-  return Math.max(1, Math.ceil(laneDistance(lane) / speed));
+export function laneTurnsFor(lane: StarLane): number {
+  return laneCruise(lane);
 }
 
 function log(s: GameState, p: PlayerId, text: string, open = false): void {
@@ -160,8 +149,8 @@ export function enterLane(
     from: opts.from ?? from,
     to: opts.to,
     ...(kind === 'orbit' ? { kind } : {}),
-    // 实际回合数按"距离 ÷ 速度"算：同一段路，有推进器的一方先到
-    left: laneTurnsFor(s, opts.owner, lane),
+    // 火箭弹道固定：同一段路对谁都一样长（空间站航行是另一条路）
+    left: laneTurnsFor(lane),
     cargo: opts.cargo.map((u) => ({ ...u })),
   };
   s.transit = [...(s.transit ?? []), t];

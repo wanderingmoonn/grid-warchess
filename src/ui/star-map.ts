@@ -66,7 +66,9 @@ export function renderStarMap(
     lay.size,
     `${sel?.kind ?? ''}:${sel?.id ?? ''}`,
     ...lay.nodes.map(
-      (n) => `${n.id}/${n.x},${n.y}/${n.stations.length}/${readyOn(n.board)}/${contactOn(n.board) ? 1 : 0}/${tripsOn(n.id)}`,
+      (n) =>
+        `${n.id}/${n.x},${n.y}/${n.stations.length}/${n.stations.filter((x) => x.travelTo).length}/` +
+        `${readyOn(n.board)}/${contactOn(n.board) ? 1 : 0}/${tripsOn(n.id)}`,
     ),
     ...lay.lanes.map((l) => `${l.id}/${l.turns}`),
   ].join('|');
@@ -136,6 +138,10 @@ export function renderStarMap(
         (trips > 0 ? `<span class="sm-trip" title="有东西正在飞来">${trips}</span>` : '') +
         (n.stations.length > 0
           ? `<span class="sm-stations" title="轨道上停泊 ${n.stations.length} 座空间站">${n.stations.length}</span>`
+          : '') +
+        // 有船在走：给节点加一段虚线动感（S3 的在途动画之前，先让人看得见"站不在这儿了"）
+        (n.stations.some((x) => x.travelTo)
+          ? `<span class="sm-sailing" title="有空间站正在驶离">⇢</span>`
           : '') +
         `</button>`
       );

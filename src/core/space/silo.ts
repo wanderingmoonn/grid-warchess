@@ -126,8 +126,7 @@ function outboundLane(
   if (!here) return null;
   const out = lanesFrom(s, here.id)[0];
   if (!out) return null;
-  // 面板上要写"我这边的火箭要几回合"，所以按自己（发射方）的速度算
-  return { laneId: out.lane.id, to: out.to, turns: laneTurnsFor(s, silo.owner, out.lane) };
+  return { laneId: out.lane.id, to: out.to, turns: laneTurnsFor(out.lane) };
 }
 
 /** 发射前的检查。和发射本身分开：面板要用同一句话告诉玩家"还差什么" */

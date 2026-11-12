@@ -552,8 +552,14 @@ body {
 .board-list {
   position: fixed;
   left: 14px;
-  /* 顶栏 54px，再留 10px：别压在顶栏的按钮上 */
-  top: calc(54px + 10px);
+  /*
+   * 顶栏 +（可能存在的）指挥官条 + 10px。
+   *
+   * 以前写死 `54px + 10px`：上帝模式和 AI 观战会在顶栏下面多一条指挥官条，
+   * 列表就正好压在它上面，两边都点不顺手。`--chrome` 由 `fitBoard()` 写
+   * （它就是算棋盘可用高度时用的那个数），默认 54 是"只有顶栏"。
+   */
+  top: calc(var(--chrome, 54px) + 10px);
   z-index: 60;
   display: flex;
   /* 向下展开：按钮在上，菜单在它下面（以前在左下角是向上展开的） */
@@ -960,6 +966,16 @@ body {
   top: 3px;
   background: #9fd8b6;
   color: #16402a;
+}
+
+/* 有空间站正在驶离这个节点：一个轻巧的箭头，不抢站数角标 */
+.sm-sailing {
+  position: absolute;
+  left: 3px;
+  top: 22px;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: #4d8fbf;
 }
 
 .sm-contact {

@@ -29,7 +29,7 @@ import { onlyVisibleCells, playerView, viewOnBoard } from '../../../src/core/fog
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../../../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../../../src/core/space/silo.ts';
 import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf, samplingsOf } from '../../../src/core/space/moon-base.ts';
-import { MOON_LANE_DISTANCE } from '../../../src/core/space/starmap.ts';
+import { MOON_LANE, MOON_LANE_TURNS } from '../../../src/core/space/starmap.ts';
 import {
   CORE_POWER,
   EXPAND_BASE_COST,
@@ -43,17 +43,21 @@ import {
   STATION_THRUSTER_ID,
   THRUSTER_BASE_COST,
   THRUSTER_DRAW,
+  beginStationSail,
   buildCost,
   buildRate,
   siloWeight,
+  stationOf,
   stationPower,
   stationPowerHtml,
+  stationSailProblem,
+  stationSailTurns,
+  stationSpeed,
   tickProducers,
-  thrusterSpeed,
+  tickStationTravel,
 } from '../../../src/core/space/station.ts';
 import { laneTurnsFor } from '../../../src/core/space/transit.ts';
 import { SKILL_TARGET_CELLS } from '../../../src/core/skill-hooks.ts';
-import { MOON_LANE } from '../../../src/core/space/starmap.ts';
 import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
 /** 地球铺平（这些用例只关心规则，不关心地形） */
@@ -182,19 +186,16 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
   assert.equal(cur.units.some((u) => u.id === pax.id), false, '在途单位不在任何棋盘上');
   assert.equal((cur.transit ?? []).length, 1, '有一枚火箭在天上');
   assert.equal(cur.transit![0]!.to, 'moon', '飞向月球');
-  // 地月距离 3、标准速度 1 → 3 回合（推进器能把这个数压下去，见空间站那组用例）
+  // 火箭弹道**固定**：1 回合到，推进器不影响它（那是空间站航行的事）
   assert.equal(
     cur.transit![0]!.left,
-    MOON_LANE_DISTANCE,
-    `没有推进器时该飞 ${MOON_LANE_DISTANCE} 回合`,
+    MOON_LANE_TURNS,
+    `火箭该飞 ${MOON_LANE_TURNS} 回合`,
   );
 
   // 过完整的一轮回到 A：回合开始的 tickTransit 把它落地
-  for (let i = 0; i < MOON_LANE_DISTANCE; i += 1) {
-    assert.equal(cur.transit![0]?.left, MOON_LANE_DISTANCE - i, `第 ${i + 1} 轮开始前还剩 ${MOON_LANE_DISTANCE - i}`);
-    run({ type: 'END_TURN' });
-    run({ type: 'END_TURN' });
-  }
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
   assert.equal((cur.transit ?? []).length, 0, '落地之后天上就没有它了');
 
   const landed = cur.units.find((u) => u.id === pax.id);
@@ -1142,20 +1143,23 @@ test('推进器舱：必须装在核心舱的下半区，上半区连高亮都�
   assert.ok(up.reason?.includes('下半区'), `实际：${up.reason}`);
 });
 
-test('推进器提速：航程 = 距离 ÷ 速度，两台把地月压到 1 回合', () => {
+test('推进器 = 飞船：装了才能启航，航速决定航程', () => {
   /*
-   * 地月距离 3。标准速度 1 → 3 回合；每台推进器 +1 速度。
-   * 这是 P2b 的验收：推进器真的接上了 `laneTurnsFor`，不是只有个名字。
+   * 推进器**不加速火箭**（火箭弹道固定）。它让空间站变成飞船：
+   * 沿航道开到别的星球轨道，航程 = 距离 ÷ 航速。
+   *
+   * 这条同时钉住"没有推进器不能启航"——那是这套机制的入口。
    */
   const st = openStation();
   let cur = st.state;
   const board = st.board;
   const lane = cur.starmap!.lanes.find((l) => l.id === MOON_LANE)!;
 
-  assert.equal(thrusterSpeed(cur, 'A'), 1, '没有推进器时标准速度');
-  assert.equal(laneTurnsFor(cur, 'A', lane), MOON_LANE_DISTANCE, '距离 3、速度 1 → 3 回合');
-  // 对手没推进器，同一段路对他还是 3 回合
-  assert.equal(laneTurnsFor(cur, 'B', lane), MOON_LANE_DISTANCE);
+  // 还没推进器：火箭航程不受影响，站也不能启航
+  assert.equal(laneTurnsFor(lane), MOON_LANE_TURNS, '火箭永远是 1 回合');
+  const rec0 = stationOf(cur, cur.units.find((u) => u.type === STATION_CORE_ID)!)!;
+  assert.equal(stationSpeed(cur, rec0), 1, '没有推进器：航速 1');
+  assert.ok(stationSailProblem(cur, rec0)?.includes('推进器'), '没有推进器不能启航');
 
   // 三块太阳能（46 电）+ 两台推进器（30 电）
   pave(cur, board, [[0, 0], [1, 0], [0, 1], [3, 3], [3, 4]]);
@@ -1168,14 +1172,67 @@ test('推进器提速：航程 = 距离 ÷ 速度，两台把地月压到 1 回�
   const t1 = build(cur, st.core.id, 'station-build-thruster', 3, 3);
   assert.ok(t1.ok, t1.ok ? '' : t1.reason);
   cur = t1.state;
-  assert.equal(thrusterSpeed(cur, 'A'), 2, '一台 → 速度 2');
-  assert.equal(laneTurnsFor(cur, 'A', lane), 2, '距离 3 ÷ 速度 2 → 2 回合');
+  let rec = stationOf(cur, cur.units.find((u) => u.type === STATION_CORE_ID)!)!;
+  assert.equal(stationSpeed(cur, rec), 2, '一台推进器 → 航速 2');
+  // 地月距离 6：6 ÷ 2 = 3 回合
+  assert.equal(stationSailTurns(cur, rec, lane), 3, '距离 6 ÷ 航速 2 → 3 回合');
 
   const t2 = build(cur, st.core.id, 'station-build-thruster', 3, 4);
   assert.ok(t2.ok, t2.ok ? '' : t2.reason);
   cur = t2.state;
-  assert.equal(thrusterSpeed(cur, 'A'), 3, '两台 → 速度 3');
-  assert.equal(laneTurnsFor(cur, 'A', lane), 1, '距离 3 ÷ 速度 3 → 1 回合（下限 1）');
+  rec = stationOf(cur, cur.units.find((u) => u.type === STATION_CORE_ID)!)!;
+  assert.equal(stationSpeed(cur, rec), 3, '两台 → 航速 3');
+  assert.equal(stationSailTurns(cur, rec, lane), 2, '距离 6 ÷ 航速 3 → 2 回合');
+});
+
+test('启航：只改一个字段，站内坐标一格不动', () => {
+  /*
+   * "空间站位置转移"的全部实现就是 `station.at = 目的地`。
+   * 站内那张棋盘、甲板、舱段、单位坐标全都不动——这是用户明确要的形状
+   * （"直接改字段就行，不用真挪动坐标"）。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+  const rec0 = stationOf(cur, cur.units.find((u) => u.type === STATION_CORE_ID)!)!;
+  assert.equal(rec0.at, 'earth', '开局在地球轨道');
+
+  // 造一台推进器（够启航就行）
+  pave(cur, board, [[1, 1], [3, 3]]);
+  const solar = build(cur, st.core.id, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+  const thr = build(cur, st.core.id, 'station-build-thruster', 3, 3);
+  assert.ok(thr.ok, thr.ok ? '' : thr.reason);
+  cur = thr.state;
+
+  const core = cur.units.find((u) => u.type === STATION_CORE_ID)!;
+  const { x: coreX, y: coreY } = core;
+  const tilesBefore = cur.boards![board]!.tiles.map((t) => t.terrain).join('');
+  const rec = stationOf(cur, core)!;
+
+  // 启航前：站在地球上
+  const before = beginStationSail(cur, rec, 'moon');
+  assert.equal(before, null, `启航失败：${before}`);
+  assert.ok(rec.travel, '要在航道上');
+  assert.equal(rec.travel!.to, 'moon');
+  assert.equal(rec.travel!.left, 3, '距离 6 ÷ 航速 2 = 3 回合');
+  assert.equal(rec.at, 'earth', '飞行期间还挂在出发地');
+
+  // 站内坐标、地形一格没动
+  const still = cur.units.find((u) => u.type === STATION_CORE_ID)!;
+  assert.deepEqual([still.x, still.y], [coreX, coreY], '核心舱还在原格');
+  assert.equal(cur.boards![board]!.tiles.map((t) => t.terrain).join(''), tilesBefore, '甲板一块没变');
+
+  // 飞完：at 变成月球，travel 清掉
+  for (let i = 0; i < 3; i += 1) tickStationTravel(cur, 'A');
+  assert.equal(rec.at, 'moon', '到港之后挂在月球轨道');
+  assert.equal(rec.travel, undefined, '航行状态清掉');
+  assert.deepEqual(
+    [cur.units.find((u) => u.type === STATION_CORE_ID)!.x, cur.units.find((u) => u.type === STATION_CORE_ID)!.y],
+    [coreX, coreY],
+    '到港也不动站内坐标',
+  );
 });
 
 test('断电：太阳能被打掉，整站停摆——推进器不提速、生产舱不产金', () => {
@@ -1194,7 +1251,8 @@ test('断电：太阳能被打掉，整站停摆——推进器不提速、生�
   const thruster = build(cur, st.core.id, 'station-build-thruster', 3, 3);
   assert.ok(thruster.ok, thruster.ok ? '' : thruster.reason);
   cur = thruster.state;
-  assert.equal(thrusterSpeed(cur, 'A'), 2);
+  const recA = stationOf(cur, cur.units.find((u) => u.type === STATION_CORE_ID)!)!;
+  assert.equal(stationSpeed(cur, recA), 2);
 
   // 把太阳能打掉（P2c 之前没有攻站，这里直接改 hp 模拟"被摧毁"）
   cur.units.filter((u) => u.type === STATION_SOLAR_ID).forEach((u) => {
@@ -1202,7 +1260,7 @@ test('断电：太阳能被打掉，整站停摆——推进器不提速、生�
   });
   const p = stationPower(cur, board);
   assert.ok(p.brownout, '没有太阳能就该过载');
-  assert.equal(thrusterSpeed(cur, 'A'), 1, '断电的推进器不提供速度');
+  assert.equal(stationSpeed(cur, recA), 1, '断电的推进器不提供航速');
 
   /*
    * 生产舱同理。先修好太阳能把生产舱造出来，再把太阳能打掉——

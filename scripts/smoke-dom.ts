@@ -396,6 +396,39 @@ check('虚空与甲板：地形表齐了，选点型技能不依赖高亮', () =
   );
 });
 
+check('星图：航行中的站还挂在出发地，并带上目标节点', () => {
+  /*
+   * 站的"位置转移"只改 `at`，到港才改。所以飞行期间它在星图上**还在原地**，
+   * 但带一个"正在驶向"的标记——不标的话玩家会以为它凭空消失了。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        { board: 's1', at: 'earth', owner: 'A', core: 'core-outpost', travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 2 } },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(st)!;
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.equal(earth.stations.length, 1, '飞行期间还挂在出发地');
+  assert.equal(earth.stations[0]!.travelTo, 'moon', '要写明正驶向哪儿');
+  assert.equal(moon.stations.length, 0, '还没到，不算停在月球');
+  assert.equal(earth.stations[0]!.name, '前哨站');
+});
+
 check('地形类正确分布', () => {
   // 地图现在是随机的，具体几格水/几座山每局都不同，
   // 所以只验证"确实有地形变化"和"城市格数固定"。

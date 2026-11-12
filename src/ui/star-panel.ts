@@ -12,7 +12,7 @@
 
 import { nodeName, peekStarmap } from '../core/space/starmap.ts';
 import { laneTurnsFor } from '../core/space/transit.ts';
-import type { GameState, PlayerId } from '../core/types.ts';
+import type { GameState } from '../core/types.ts';
 
 export interface StarLaneRow {
   a: string;
@@ -28,15 +28,11 @@ export interface StarTripRow {
   left: number;
 }
 
-export function starRows(
-  state: GameState,
-  /** 谁在看：航程按他的速度算（推进器） */
-  viewer: PlayerId = state.current,
-): { lanes: StarLaneRow[]; trips: StarTripRow[] } {
+export function starRows(state: GameState): { lanes: StarLaneRow[]; trips: StarTripRow[] } {
   const lanes = (peekStarmap(state)?.lanes ?? []).map((l) => ({
     a: nodeName(state, l.a),
     b: nodeName(state, l.b),
-    turns: laneTurnsFor(state, viewer, l),
+    turns: laneTurnsFor(l),
   }));
   const trips = (state.transit ?? []).map((t) => ({
     owner: t.owner,

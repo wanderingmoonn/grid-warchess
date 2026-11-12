@@ -91,6 +91,7 @@ import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
 import { hasStarRows, starRows } from './ui/star-panel.ts';
+import { peekStarmap } from './core/space/starmap.ts';
 import { starLayout } from './ui/star-layout.ts';
 import { renderStarMap, type StarSelection } from './ui/star-map.ts';
 import { nodeName } from './core/space/starmap.ts';
@@ -1087,7 +1088,17 @@ function starPanelInfo(): StarPanelInfo | null {
       lines.push('轨道上没有空间站');
     } else {
       lines.push(`轨道上停泊 ${n.stations.length} 座空间站`);
-      for (const st of n.stations) lines.push(`· ${st.ownerName}的「${st.name}」`);
+      for (const st of n.stations) {
+        lines.push(
+          `· ${st.ownerName}的「${st.name}」${st.travelTo ? `（正在驶向${st.travelTo}）` : ''}`,
+        );
+      }
+    }
+    // 正往这儿飞的站：到了才会出现在 n.stations 里，所以单独说一句
+    const inbound = (peekStarmap(state)?.stations ?? []).filter((st) => st.travel?.to === n.id);
+    for (const st of inbound) {
+      const name = state.boards?.[st.board]?.name ?? st.board;
+      lines.push(`${who(st.owner)}的「${name}」正在驶来，还有 ${Math.max(0, st.travel!.left)} 回合`);
     }
     const incoming = trips.filter((t) => t.to === n.id);
     if (incoming.length === 0) {
@@ -1652,10 +1663,21 @@ function render(): void {
   }
 
   if (state.config.godMode === true && !replay) {
-    // 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
-    // 兵是自己一手摆上去的，摆的时候就知道它是谁。
-    renderGodShelf();
+    /*
+     * 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
+     * 兵是自己一手摆上去的，摆的时候就知道它是谁。
+     *
+     * **例外是星图**：星图卡也在侧栏里。货架要是永远压在上面，
+     * 沙盒里点星球就只能看到一堆兵种，永远找不到自己那座空间站。
+     */
     renderGodBar();
+    if (starOpen) {
+      // 清签名：关掉星图之后货架才会被重画回来（否则签名没变会早退）
+      godShelfSig = '';
+      keepSideScroll(() => renderPanel(sideEl, panelInput(view)));
+    } else {
+      renderGodShelf();
+    }
   } else {
     // 离开沙盒（新对局 / 导入 / 切回普通局）：两份签名作废，
     // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
@@ -1842,6 +1864,12 @@ function fitBoard(): void {
   if (width <= 0) return;
 
   const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
+  /*
+   * 把"顶部占了多少"写给 CSS：左上角的地图列表是 `position: fixed`，
+   * 它不知道指挥官条（上帝模式 / AI 观战时会多出一条）有多高，
+   * 写死 54px 就会压在条上。变量名一次说清，别的地方也能用。
+   */
+  document.documentElement.style.setProperty('--chrome', `${chrome}px`);
   const box = boardWrapEl.parentElement;
   const cs = box ? window.getComputedStyle(box) : null;
   const padY = cs

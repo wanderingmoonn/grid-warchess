@@ -1748,6 +1748,20 @@ export interface StarStation {
   owner: PlayerId;
   /** 展开它的核心舱型号（决定尺寸的那一个） */
   core: string;
+  /**
+   * 正在航向另一个节点。
+   *
+   * 站内的坐标一点不动（棋盘还是那张），变的只是它挂在星图的哪个节点——
+   * 这就是"改字段，不真挪坐标"。
+   * `left` 归零时把 `at` 改成 `to`，清掉这个字段。
+   */
+  travel?: {
+    lane: string;
+    from: StarNodeId;
+    to: StarNodeId;
+    /** 还要几个自己的回合到 */
+    left: number;
+  };
 }
 
 export interface Starmap {
