@@ -41,6 +41,8 @@ import { renderPanel, topbarShell } from '../src/ui/panel.ts';
 import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
 import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
+import { TERRAIN_INFO } from '../src/core/info.ts';
+import { CONFIG } from '../src/core/config.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
@@ -59,6 +61,12 @@ import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { __setArtIndexForTest, setUiArt, uiArtOn } from '../src/ui/unit-art.ts';
+import { scopeBoardUi } from '../src/ui/board-scope.ts';
+import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
+import { starLayout } from '../src/ui/star-layout.ts';
+import { renderStarMap } from '../src/ui/star-map.ts';
+import { EARTH } from '../src/core/board.ts';
+import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -186,6 +194,293 @@ check('首屏只渲染己方棋子，敌方在视野外被裁掉', () => {
   // 这条断言要守的是"看不全"，不是"一个都看不见"。
   const foe = doc.querySelectorAll('.unit.owner-B').length;
   assert.ok(foe <= 2, `敌方不该整队出现，实际看见 ${foe} 个`);
+});
+
+check('月面选中单位时，可攻击目标不能整组清空', () => {
+  /*
+   * 实机反馈：「拉到月球上之后点自己的兵，没有可攻击格，敌人也点不动」。
+   *
+   * 根因不在规则层（`attackableTargets` 早就按图算了），而是渲染前的那一步
+   * `scopeBoardUi` 对**非地球图**无条件把 `targets` 清空——数据被界面扔了。
+   * 这条守的就是"选中的单位在哪张图上，那张图的高亮就照用"。
+   */
+  const ui = {
+    selectedId: 'm1',
+    reach: [1, 2, 3],
+    targets: ['e1'],
+    siegeTargets: [],
+    aimTiles: [],
+    skillThreatTiles: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [5],
+    heat: new Map([[7, 2]]),
+    incomeHints: new Map(),
+  } as unknown as BoardUi;
+  const moonUnit = { id: 'm1', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false, board: 'moon' };
+  // 地球单位**没有** board 字段（缺省即地球），别从月球那个对象里 spread 出 board
+  const earthUnit = { id: 'm2', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false };
+
+  // 选中的兵在月球：高亮留着
+  const onMoon = scopeBoardUi(ui, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(onMoon.targets, ['e1'], '月面上的可攻击目标要留着，否则点不动');
+  assert.deepEqual(onMoon.reach, [1, 2, 3], '可达格同理');
+  assert.deepEqual(onMoon.threat, [5], '威胁圈同理');
+  assert.equal(onMoon.heat, undefined, '战况烈度只认地球格号，别画到月球上');
+
+  // 选中的兵在地球、正在看月球：一律清空（不能把地球的格号画过去）
+  const earthSel = scopeBoardUi({ ...ui, selectedId: 'm2' } as BoardUi, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(earthSel.targets, [], '不是这张图上的人，高亮必须清空');
+  assert.equal(earthSel.selectedId, null);
+
+  // 地球那张图不做任何换算（老路径原样返回）
+  const onEarth = scopeBoardUi(ui, EARTH, [earthUnit as never]);
+  assert.equal(onEarth, ui, '地球直接返回原对象，零开销');
+});
+
+check('只有一张地图时，左上角的星图面板整个收起来', () => {
+  /*
+   * 玩家反馈两次：没开太空扩展也能看见那个"选择星球"的按钮。
+   * 它本来是给"地球 / 月球切换 + 看在途"用的，只有地球时就是一个永远只有一个
+   * 选项的按钮，占着角落还挡地图。
+   *
+   * 判据是"这一局有几张图"（`boardIds().length`），不是"有没有开某个扩展"。
+   *
+   * 这次不再只靠 `.board-list.single` 那个类：类样式会被 `display:flex`
+   * 或别处覆盖层吃掉（上一版就是这么"看起来改了却没生效"的），
+   * 所以直接写内联 `display:none`，测试断言的就是这个。
+   */
+  const el = doc.querySelector<HTMLElement>('#board-list');
+  assert.ok(el, '容器本身还在（只是不显示）');
+  assert.equal(el!.style.display, 'none', '单图时要直接内联隐藏（不依赖 CSS 类）');
+  assert.ok(el!.classList.contains('single'), 'single 类留作 CSS 兜底');
+  assert.equal(el!.children.length, 0, '单图时一个按钮都不该建出来');
+});
+
+check('星图面板的取数：相连与在途（纯函数，不需要 DOM）', () => {
+  /*
+   * 面板本身在 jsdom 里不好复现（要开太空扩展、还要造一张月球），
+   * 所以把"该显示什么"抽成 `starRows`。它错了的表现是"节点名写成 id"、
+   * "在途显示 -1 回合"——都是只会在实机被玩家发现的那种。
+   */
+  const st = {
+    players: { A: { name: '红方' }, B: { name: '蓝方' } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+    transit: [{ id: 't1', owner: 'B', lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, cargo: [] }],
+  } as never;
+
+  const r = starRows(st);
+  assert.deepEqual(r.lanes, [{ a: '地球', b: '月球', turns: 1 }], '航道要写名字，不是 id');
+  assert.deepEqual(r.trips, [{ owner: 'B', who: '蓝方', to: '月球', left: 1 }], '在途要带玩家名');
+
+  // 没有星图也没有在途：整块不占位（单图局就是这个状态）
+  assert.equal(hasStarRows(starRows({ players: { A: { name: '红方' } } } as never)), false);
+});
+
+check('星图布局：地球居中、其余节点在外圈，坐标是算出来的', () => {
+  /*
+   * 布局不进存档（见 ui/star-layout.ts 开头）：同一组节点必须永远算出同一个位置，
+   * 否则加一张图就会让老局面错位。
+   */
+  const base = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+        { id: 'o1', kind: 'orbit', name: '轨道一' },
+      ],
+      lanes: [
+        { id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 },
+        { id: 'moon-o1', a: 'moon', b: 'o1', turns: 2 },
+      ],
+      stations: [{ board: 's1', at: 'moon', owner: 'A', core: 'core-1' }],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(base)!;
+  assert.equal(lay.size, 5, '三个节点用 5×5 就够');
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  assert.deepEqual([earth.x, earth.y], [2, 2], '地球在正中');
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.deepEqual([moon.x, moon.y], [4, 2], '第一个外圈节点在右侧');
+  assert.equal(moon.stations.length, 1, '停泊的站挂在节点上');
+  assert.equal(lay.lanes.length, 2, '两条航线都连上了');
+  // 再算一次：同一组节点必须得到同一个布局
+  assert.deepEqual(starLayout(base), lay, '布局必须是确定的');
+
+  // 只有地球：没有星图可言
+  assert.equal(
+    starLayout({
+      players: {},
+      boards: {},
+      starmap: { nodes: [{ id: 'earth', kind: 'planet', board: 'earth', name: '地球' }], lanes: [], stations: [], seq: 0 },
+    } as never),
+    null,
+    '只有一张图时不画星图',
+  );
+});
+
+check('星图渲染：每条航线都带一根可点的命中条', () => {
+  /*
+   * 上一版把点击挂在 SVG 的 `<line>` 上，实机点不到（父级 pointer-events:none
+   * 想让子元素覆盖，依赖太多细节）。现在改成普通 DOM 的透明长条——这条用例
+   * 钉住"渲染时确实生成了它"，不然又退回只能看、不能点。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: { moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+  } as never;
+  const view = { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, view, 'A', null);
+  const taps = host.querySelectorAll('[data-act="star-lane"]');
+  assert.equal(taps.length, 1, `每条航线都要有命中条，实际 ${taps.length}`);
+  assert.equal(host.querySelectorAll('.sm-sail').length, 0, '没有船在走就不该有三角');
+  assert.equal((taps[0] as HTMLElement).dataset.id, 'earth-moon');
+  assert.equal(host.querySelectorAll('.sm-lane-line').length, 1, '线本身还在（只负责好看）');
+  assert.equal(host.querySelectorAll('[data-act="star-node"]').length, 2, '两个节点都可点');
+
+  // 同一份数据重画一次：签名挡住，DOM 不重建（点击不会被打断）
+  const before = taps[0];
+  renderStarMap(host, view, 'A', null);
+  assert.equal(host.querySelectorAll('[data-act="star-lane"]')[0], before, '内容没变就不该重建');
+});
+
+check('虚空与甲板：地形表齐了，选点型技能不依赖高亮', () => {
+  /*
+   * 空间站的两格必须在地形表里有名字与说明——否则点开它们只会看到
+   * "undefined"，或者干脆什么都不显示。
+   *
+   * 后半段钉的是"选点型技能不看 aimTiles"：在非地球图上高亮列表以前是空的，
+   * 但点下去仍然应该算选定（真正的合法性由规则层判）。这个区分很重要——
+   * 上一轮把"点不中"归咎于格号算错，方向就偏了。
+   */
+  assert.equal(TERRAIN_INFO.void.name, '虚空');
+  assert.equal(TERRAIN_INFO.deck.name, '甲板');
+  assert.ok(CONFIG.terrainCost.void >= 99, '虚空不可通行');
+  assert.equal(CONFIG.terrainCost.deck, 1, '甲板正常走');
+
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 7 }),
+    true,
+    '选点型没有高亮也该算选中',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 7 }),
+    false,
+    '点自己脚下 = 取消',
+  );
+});
+
+check('星图：航行中的站还挂在出发地，并带上目标节点', () => {
+  /*
+   * 站的"位置转移"只改 `at`，到港才改。所以飞行期间它在星图上**还在原地**，
+   * 但带一个"正在驶向"的标记——不标的话玩家会以为它凭空消失了。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        { board: 's1', at: 'earth', owner: 'A', core: 'core-outpost', travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 2 } },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(st)!;
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.equal(earth.stations.length, 1, '飞行期间还挂在出发地');
+  assert.equal(earth.stations[0]!.travelTo, 'moon', '要写明正驶向哪儿');
+  assert.equal(moon.stations.length, 0, '还没到，不算停在月球');
+  assert.equal(earth.stations[0]!.name, '前哨站');
+});
+
+check('星图：航道上真的画出航行中的站（小三角）', () => {
+  /*
+   * 用户反馈："空间站飞行过程中，星图的航线里找不到它，描述还是空置描述"。
+   * 所以这条钉两件事：航线上有那枚三角，且卡片文字不再说"路上没有东西"。
+   * （卡片那段是 `main.ts::starPanelInfo`，这里只验渲染产物。）
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        {
+          board: 's1',
+          at: 'earth',
+          owner: 'A',
+          core: 'core-outpost',
+          travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, total: 2 },
+        },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never, 'A', null);
+  const sails = host.querySelectorAll('.sm-sail');
+  assert.equal(sails.length, 1, `航道上要画一枚三角，实际 ${sails.length}`);
+  const tip = sails[0]!.querySelector('title')?.textContent ?? '';
+  assert.ok(tip.includes('前哨站'), `三角的提示要写清是哪座站：${tip}`);
+  assert.ok(tip.includes('50%'), `走了一半要写 50%：${tip}`);
+  /*
+   * 尖头指向**目的地**：三角要跟着航线旋转。
+   * 这条航线是水平的（earth → moon 在右边），所以角度是 0，
+   * 只验"有 rotate"，方向由 `points` 的尖头在 +x 保证。
+   */
+  const tf = sails[0]!.getAttribute('transform') ?? '';
+  assert.ok(tf.includes('translate'), `位置要按进度插值：${tf}`);
+  assert.ok(tf.includes('rotate('), `三角要跟着航线指向终点：${tf}`);
+  const poly = sails[0]!.querySelector('polygon')!.getAttribute('points') ?? '';
+  assert.ok(poly.trim().startsWith('0.12,0'), `尖头要在 +x（朝终点）：${poly}`);
 });
 
 check('地形类正确分布', () => {
@@ -2397,13 +2692,83 @@ check('扩展条目只印一句话，规则细则留给规则书', () => {
    * 有的干脆把十几个兵种名一口气列完（"桨帆船、德罗蒙、卡拉克、盖伦……"），
    * 二十几条挤在一屏里，玩家读完才知道自己该不该勾。
    * 现在面板只印 `blurb`（一句话），summary 留在规则书的合册总表里。
+   *
+   * 2026-11-12：卡片里多了「关系」标签（前置/冲突/联动），所以字数只量
+   * **说明那一行**——把标签一起数进去，"海军"就会因为"联动：信息化"而超标。
    */
   const item = doc.querySelector<HTMLElement>('[data-exp="naval"]')?.closest('.expansion-item');
   assert.ok(item, '面板里应该有「海军」这一条');
-  const text = item!.textContent ?? '';
+  const desc = item!.querySelector<HTMLElement>('.expansion-body > span:not(.expansion-tags)');
+  assert.ok(desc, '卡片里该有说明那一行');
+  const text = desc!.textContent ?? '';
   assert.ok(text.includes('从桨帆船到航母'), `面板该印那句 blurb，实际是：${text.trim()}`);
   assert.ok(!text.includes('德罗蒙'), '整串船名不该搬进面板——那些在规则书里');
   assert.ok(text.trim().length <= 40, `一条扩展的说明在面板上不该超过一行，实际 ${text.trim().length} 字`);
+});
+
+check('扩展卡片标出三种关系：前置（蓝）· 冲突（红）· 联动（绿）', () => {
+  /*
+   * 玩家在这里要回答的是同一个问题——"这个包和别的包什么关系"。
+   * 三种关系的形状一样、只有底色不同，所以这里只查"哪一类标签出现在谁身上"。
+   *
+   * 冲突尤其要**两侧都标**：只写在被冲突的那一侧，另一张卡上什么都没写，
+   * 玩家勾下去才被拒，那种体验比没有提示更差。
+   */
+  const chipsOf = (id: string): HTMLElement[] => {
+    const card = doc.querySelector<HTMLElement>(`[data-exp="${id}"]`)?.closest('.expansion-item');
+    assert.ok(card, `面板里应该有「${id}」这一条`);
+    return [...card!.querySelectorAll<HTMLElement>('.expansion-req')];
+  };
+
+  const city = chipsOf('city-works');
+  const clash = city.find((c) => c.classList.contains('is-clash'));
+  assert.ok(clash, '城郭要标出冲突');
+  assert.ok(clash!.textContent?.includes('修真'), `冲突标签该指名道姓，实际：${clash!.textContent}`);
+
+  const cult = chipsOf('cultivation');
+  assert.ok(
+    cult.some((c) => c.classList.contains('is-clash') && c.textContent?.includes('城郭')),
+    '修真那一侧也要标出来（关系只写在城郭的数据里，显示要对称）',
+  );
+
+  const fan = chipsOf('fantasy');
+  const link = fan.find((c) => c.classList.contains('is-link'));
+  assert.ok(link, '奇想要标出联动');
+  assert.ok(link!.textContent?.includes('信息化'), `联动标签该写出目标，实际：${link!.textContent}`);
+
+  // 前置那一类还是原来的写法（太空战争依赖太空时代）
+  const sw = chipsOf('space-war');
+  assert.ok(
+    sw.some((c) => !c.classList.contains('is-clash') && !c.classList.contains('is-link') && c.textContent?.includes('太空时代')),
+    '前置还是蓝色的那一种',
+  );
+});
+
+check('勾选冲突的包会被拒绝，并说清是谁挡着', () => {
+  /*
+   * 规则层会把冲突的那一包剔掉（`enabledExpansionIds`），但那对玩家是**静默**的：
+   * 他勾了、开局了，才发现少了一整包。所以面板要在勾选这一刻就拒绝，
+   * 并写出挡路的那一个——玩家自己决定撤哪个。
+   */
+  const box = (id: string): HTMLInputElement => {
+    const el = doc.querySelector<HTMLInputElement>(`[data-exp="${id}"]`);
+    assert.ok(el, `找不到 ${id} 的勾选框`);
+    return el!;
+  };
+
+  if (!box('city-works').checked) box('city-works').click();
+  assert.equal(box('city-works').checked, true, '前提：城郭已经勾上');
+
+  // 勾修真：应当被拒（paint 之后要重新查节点）
+  box('cultivation').click();
+  assert.equal(box('cultivation').checked, false, '冲突的包不该被勾上');
+  const note = doc.querySelector<HTMLElement>('.map-note.is-bad');
+  assert.ok(note, '该给一行提示');
+  assert.ok(note!.textContent?.includes('修真'), `提示要指名道姓，实际：${note!.textContent}`);
+
+  // 收尾：把城郭取消，别把这一局的配置留给后面的用例
+  box('city-works').click();
+  assert.equal(box('city-works').checked, false, '取消之后能正常关掉');
 });
 
 /** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */

@@ -21,7 +21,7 @@ import { buildListOf } from '../src/core/build-list.ts';
 import { deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
-import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
+import { BLOOD_TURN, EXPANSIONS, availableExpansions, conflictIdsOf } from '../src/core/expansions.ts';
 // 修真那一册的正文要从这些地方取数字，一个都不许在文案里手打。
 import {
   AGING_DEATH_AGE,
@@ -844,15 +844,29 @@ function expansionTable(): string {
       <tbody>
         ${small
           .map((e) => {
-            // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场
-            const req = (e.requires ?? []).length
-              ? ` <span class="c">（需先开 ${(e.requires ?? [])
-                  .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
-                  .join('、')}）</span>`
-              : '';
+            // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场；
+            // 冲突同理——两包一起勾，后勾的那个直接被拒
+            const req = [
+              (e.requires ?? []).length
+                ? `需先开 ${(e.requires ?? [])
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')}`
+                : '',
+              conflictIdsOf(e.id).length
+                ? `不能同开 ${conflictIdsOf(e.id)
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')}`
+                : '',
+              (e.recommends ?? []).length
+                ? `与 ${(e.recommends ?? [])
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')} 联动`
+                : '',
+            ].filter(Boolean);
+            const reqNote = req.length ? ` <span class="c">（${req.join('；')}）</span>` : '';
             // 默认开着的那条要标出来：新对局不特别选就是它
             const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
-            return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${rich(e.summary)}</td><td class="traits">—</td></tr>`;
+            return `<tr><td class="name">${esc(e.name)}${tag}${reqNote}</td><td>${rich(e.summary)}</td><td class="traits">—</td></tr>`;
           })
           .join('')}
       </tbody>
@@ -2667,19 +2681,32 @@ function eraRange(eras: readonly number[]): string {
 function packsOverview(packs: readonly Exp[]): string {
   return `
     <table class="overview">
-      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>关系</th><th>它解决什么</th></tr></thead>
       <tbody>
         ${packs
           .map((p) => {
             const us = liveUnits(p);
             const eras = [...new Set(us.map((u) => u.era))].sort((a, b) => a - b);
-            // 前置只写简称（"法则"而不是"奇想·法则"）：这一列本来就只有一指宽
-            const req = (p.requires ?? [])
-              .map((id) => {
-                const r = EXPANSIONS.find((x) => x.id === id);
-                return r ? shortPackName(r) : id;
-              })
-              .join('、');
+            /*
+             * 关系一列写三件事：前置（不开就不进场）、冲突（不能同开）、
+             * 联动（一起开才完整）。只写简称（"法则"而不是"奇想·法则"）：
+             * 这一列本来就只有一指宽。
+             */
+            const shortOf = (id: string): string => {
+              const r = EXPANSIONS.find((x) => x.id === id);
+              return r ? shortPackName(r) : id;
+            };
+            const req = [
+              (p.requires ?? []).length ? `需先开 ${(p.requires ?? []).map(shortOf).join('、')}` : '',
+              conflictIdsOf(p.id).length
+                ? `不能同开 ${conflictIdsOf(p.id).map(shortOf).join('、')}`
+                : '',
+              (p.recommends ?? []).length
+                ? `联动 ${(p.recommends ?? []).map(shortOf).join('、')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('；');
             return `<tr><td class="name">${esc(p.name)}</td><td class="num">${
               us.length || '—'
             }</td><td class="num">${eras.length ? eraRange(eras) : '—'}</td><td class="nowrap">${
@@ -2766,6 +2793,13 @@ function packBook(e: Exp): Book {
   const reqNames = (e.requires ?? [])
     .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
     .join('、');
+  // 冲突与联动也印在书头：规则书是查关系的地方，不该只写"前置"这一种
+  const clashNames = conflictIdsOf(e.id)
+    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+    .join('、');
+  const linkNames = (e.recommends ?? [])
+    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+    .join('、');
 
   // 大包自己的「补充规则」。以前只有合册会印，单独成册的包反而漏掉
   const notesHtml =
@@ -2792,6 +2826,8 @@ function packBook(e: Exp): Book {
         <dt>兵种数量</dt><dd>${units.length} 个</dd>
         <dt>覆盖时代</dt><dd>${eras.length ? eras.map((n) => `${n}（${esc(ERAS[n - 1]?.name ?? '')}）`).join('、') : '—（不带兵种）'}</dd>
         ${reqNames ? `<dt>前置</dt><dd>需要先开「${esc(reqNames)}」</dd>` : ''}
+        ${clashNames ? `<dt>冲突</dt><dd>不能和「${esc(clashNames)}」同时开：两套规则会互相拆台</dd>` : ''}
+        ${linkNames ? `<dt>联动</dt><dd>和「${esc(linkNames)}」一起开才完整（不是前置，单开少一部分内容）</dd>` : ''}
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
       </dl>
       <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），

@@ -97,6 +97,20 @@ export function xyOn(s: GameState, id: BoardId, i: number): { x: number; y: numb
 }
 
 /**
+ * 按图取一格（越界返回 null）。
+ *
+ * 和 `rules.tileAtOn` 是同一件事，但放在这里是为了**避开循环依赖**：
+ * `space/transit.ts` 需要它，而 rules 那条链会绕回扩展（rules → mark-registry
+ * → expansions → space-age → silo → transit）。`board.ts` 只依赖 types，
+ * 谁都能安全地引它。
+ */
+export function tileOn(s: GameState, id: BoardId, x: number, y: number): Tile | null {
+  const b = boardOf(s, id);
+  if (x < 0 || y < 0 || x >= b.w || y >= b.h) return null;
+  return b.tiles[y * b.w + x] ?? null;
+}
+
+/**
  * 把一份 state 投影成"只在某一张图上"的视角，给**只读**的几何/规则计算用。
  *
  * 为什么要有它：走子、选址、寻路这些函数是按"一个 state 一张图"写的，

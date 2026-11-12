@@ -1267,7 +1267,7 @@ export function run() {
 
     const previewer = SKILL_PREVIEWERS['teleport-swap'];
     assert.ok(previewer, '传送阵要注册落点预览，否则瞄准时什么都看不到');
-    const set = new Set(previewer!({ state: s, self: arr, target: { x: 9, y: 5 } }));
+    const set = new Set(previewer!({ state: s, view: s, self: arr, target: { x: 9, y: 5 } }));
     // 矢量 (4,0)：阵和源侧单位 +4，落点侧单位 −4
     assert.ok(set.has(idx(s, 9, 5)), '阵自己的新位置');
     assert.ok(set.has(idx(s, 10, 5)), '源侧单位的新位置');

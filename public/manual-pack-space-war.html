@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>时代与回旋镖 · 太空战争</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 14px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
+     那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
+     数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
+  table.rank-table { table-layout: fixed; font-size: 12px; }
+  table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
+  table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
+  table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#pack-intro">1. 这个包是什么</a>
+    <a href="#pack-units">2. 兵种表</a>
+    
+    <a href="#pack-terms">3. 机制词条</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>时代与回旋镖 · 太空战争</h1>
+      <p>扩展分册 · 14 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+    </header>
+
+
+    <section id="pack-intro">
+      <h2><span class="sec-num">01</span>这个包是什么</h2>
+      <p>在基础包（<b>太空时代</b>）之上加一层「轨道」：地球和月球成为星图上的两个节点，中间连着航道；发射井除了送兵，还能把<b>核心舱</b>送上轨道，展开成一座可扩建的空间站。站上的建设不需要工程队、不需要运输——花资源就长。</p><ul class="pack-notes"><li><b>空间站</b>：发射井可以直接发射「核心舱」——<b>不用加注、不用装载</b>，只花资源，点火就入轨。核心舱决定站的规模（5×5 / 7×7 / 9×9），到轨道时只有正中间一格甲板，其余全是虚空。点核心舱的「扩建甲板」选一格挨着已有甲板的虚空，花资源铺出来；铺好之后可以在上面造「生产舱」（每回合产金币）。站上的建设<b>不需要工程队、不需要运输</b>，钱到位就长。</li><li><b>太空建设折扣</b>：地球上每多一座发射井，站上建设就更便宜一点——但<b>收益递减</b>：没有井时比额定贵 50%，一座井时贵 30%，两座贵 14%，三座基本平价，之后才开始便宜，永远到不了半价。所以&quot;多盖井&quot;和&quot;多建站&quot;是同一条投资曲线上的两段。</li><li><b>舱段与能量</b>：空间站有一条<b>自己的能量账</b>（不是地球上的电网）：核心舱自带 10 电，每块「太阳能舱」+12，每台「推进器舱」耗 15，每座「生产舱」耗 4。电不够就造不出来（按钮会写明还差多少）；万一被打到过载，整站停摆——推进器不提速、生产舱不产金。</li><li><b>功能舱段</b>：遥感模块、微重力研究室、材料研究室、通讯模块——它们<b>必须有一名航天员贴着（上下左右相邻）才会工作</b>，没人值守就是一个箱子：不加成、技能也放不出来。航天员自己免疫外空环境，所以&quot;派个人上去值班&quot;是这些舱段的前置条件。</li><li><b>遥感模块</b>：技能「星球表面观测」——从轨道上对<b>脚下这颗星球</b>做一次观测，选一格，点亮它和上下左右共 5 格，本方从此看得见那片地方（情报永久有效，同一座模块再观测会替换上一次）。<b>每回合 1 次</b>，用掉之后要点技能按钮会提示&quot;回一发&quot;。</li><li><b>微重力研究室</b>：每座让本方<b>总金币收入 +5%</b>，多座叠加，上限 +20%。</li><li><b>材料研究室</b>：每座让本方<b>所有单位护甲 +1</b>，上限 +5。这条加成是<b>给地球上的部队</b>准备的：站内单位仍在「恶劣外空环境」里，那 ÷5 会把它吃掉——空间站里的装甲挡不住没有空气，这不是算错。</li><li><b>通讯模块</b>：每座让本方<b>所有单位视野 +1</b>，上限 +3。</li><li><b>维生仓</b>：造好之后，<b>半径 3 格</b>内的单位不再吃「恶劣外空环境」（护甲不再 ÷5、移动不再减半）。航天员本来就免疫，不用罩。覆盖是<b>按格算</b>的：站要长大就得多造几座，围着它布置才划算。维生仓自己也是密封模块，所以它自己同样不受影响——攻打一座站时，它往往是最难拆的那一块。</li><li><b>推进器舱</b>：必须造在核心舱的<b>下半区</b>（不是正下方，整条下缘都行）。每台让这座站的<b>航速</b> +1。<b>装了推进器，空间站就是飞船</b>：点核心舱出现「启航 → 目的地」，沿航道开到别的星球轨道，站内坐标一格不动，变的只是它挂在哪颗星球上。航程 = 航道距离 ÷ 航速（向上取整、至少 1 回合），地月距离 6，所以 1 台推进器 3 回合、2 台 2 回合、3 台 2 回合、5 台 1 回合。<b>推进器不影响火箭</b>：直飞月球的火箭弹道固定，1 回合到。</li><li><b>星图</b>：左上角面板里点「查看星图」。星图把每颗星球画成一格，连线就是航道；点星球能看到轨道上停着哪些站、有没有东西正在飞来，还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。只有一张图的局面没有星图可看。</li><li><b>看得到的和看不到的</b>：敌方空间站的<b>外形</b>是公开的——甲板铺到了哪、哪里被打穿了破口，都画在地图上。但里面装了什么<b>只有核心舱看得见</b>：舱段位置、类型、还剩多少血，一律不显示。所以打别人的站，是<b>盲打</b>。</li><li><b>轨道炮舱</b>：功能舱段（要航天员相邻、要电）。技能「轨道轰击」——对<b>同一轨道</b>上的一座敌方空间站选一格打一发，每回合 1 次，伤害 30（照常扣护甲）。<b>打不到核心舱</b>（那一格连点都点不亮）。同一轨道上有两座以上敌方站时，先在面板上「瞄准」一座；只有一座时自动瞄上。打中舱段就结算伤害，<b>打空就把那一格的甲板打穿</b>。</li><li><b>破损舱段</b>：被打穿的甲板。它能走人（一格顶两格）、能人从它旁边继续铺甲板，但<b>站不住舱段</b>（地板都没了）。修复走核心舱的「扩建甲板」，价格和铺一格虚空一样。想拆一座站，就得先打出一串破口。</li><li><b>太空装甲</b>：不吃电，血厚甲硬（生命 180 / 护甲 14）。它的作用很朴素——<b>它站在那儿</b>：轨道轰击选中的格子上只要有东西，就打那个东西。所以把装甲铺在要保住的甲板上，炮就只能打在它身上。它自己那格甲板也不会被打穿。</li><li><b>出舱口</b>：把一个<b>相邻</b>的单位打出去，送到同一轨道上：<b>我方空间站的入舱口</b>（有空位时），或<b>敌方空间站的破损舱段</b>（就是登船）。每座出舱口每回合 1 次。送进破口的人当回合不能动；送进入舱口的人要等一回合才能卸下来。舱段（建筑）不能装进舱门——只有人过得去。</li><li><b>入舱口</b>：接收同轨道我方出舱口送来的人，最多<b>缓存 3 个</b>，满了就拒绝进入。缓存的人不在棋盘上——看不见、打不到、也不吃外空环境，要让他们干活，得点「卸下」放到隔壁的空甲板上（旁边没空位就下不来）。舱门被打掉时，里面的人也一起没了。</li><li><b>降落到星球</b>：出舱口的第三个目的地是<b>所在轨道对应的那颗星球</b>——地球轨道上就跳回地球，月球轨道上就跳上月球。默认落在<b>图的正中央</b>（城里、水里、被人占着的格子会把它挤到旁边的空地）。降落的人当回合不能动，和登船同一口径。</li><li><b>接驳站</b>（2×2，工程队修，每颗星球每方只能有一座）：不发电、不产金，唯一的作用是<b>改降落点</b>——你这边的部队降落到这颗星球时，不再落在图中央，而是落在接驳站旁边那一圈空地上。没有它就只能盲跳正中，有了它，空降才是一次能规划位置的机动。</li><li><b>废墟与接管</b>：核心舱被打掉（或者自己点「拆除」）之后，这座站<b>不会当场消失</b>，而是变成废墟：全站停摆、倒计时 3 个回合（按原主的回合算）。<b>站上任意一个单位</b>都能付维护费接管——核心舱在原位重生、所有舱段连同所有权一起归他（名字也换成新主）。到期还没人接管，整张棋盘连同上面的人和舱段一起被删掉。所以打掉一座站最好是<b>派人进去</b>，而不是隔空打完就走。</li></ul>
+      <dl class="kv">
+        <dt>兵种数量</dt><dd>14 个</dd>
+        <dt>覆盖时代</dt><dd>5（机械化时代）</dd>
+        <dt>前置</dt><dd>需要先开「太空时代」</dd>
+        
+        
+        <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
+      </dl>
+      <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
+        搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
+        和原版兵是同一把尺子。</p>
+      
+    </section>
+
+    <section id="pack-units">
+      <h2><span class="sec-num">02</span>兵种表</h2>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-space-war"><td colspan="11">太空战争 · 14 个</td></tr><tr data-unit="station-lab-material"><td class="name">材料研究室</td><td class="glyph">材</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-launch"><td class="name">出舱口</td><td class="glyph">出</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-cannon"><td class="name">轨道炮舱</td><td class="glyph">炮</td><td class="num">5</td><td class="num">0</td><td class="num">30</td><td class="num">6</td><td class="num">80</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-sk-station-cannon-轨道轰击">轨道轰击 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-core"><td class="name">空间站核心舱</td><td class="glyph">核</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">8</td><td class="num">120</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-sk-station-core-扩建甲板">扩建甲板 CD0</a> · <a class="ref" href="#t-sk-station-core-建造生产舱">建造生产舱 CD0</a> · <a class="ref" href="#t-sk-station-core-建造太阳能舱">建造太阳能舱 CD0</a> · <a class="ref" href="#t-sk-station-core-建造维生仓">建造维生仓 CD0</a> · <a class="ref" href="#t-sk-station-core-建造推进器舱">建造推进器舱 CD0</a> · <a class="ref" href="#t-sk-station-core-建造遥感模块">建造遥感模块 CD0</a> · <a class="ref" href="#t-sk-station-core-建造微重力研究室">建造微重力研究室 CD0</a> · <a class="ref" href="#t-sk-station-core-建造材料研究室">建造材料研究室 CD0</a> · <a class="ref" href="#t-sk-station-core-建造通讯模块">建造通讯模块 CD0</a> · <a class="ref" href="#t-sk-station-core-建造轨道炮舱">建造轨道炮舱 CD0</a> · <a class="ref" href="#t-sk-station-core-建造太空装甲">建造太空装甲 CD0</a> · <a class="ref" href="#t-sk-station-core-建造出舱口">建造出舱口 CD0</a> · <a class="ref" href="#t-sk-station-core-建造入舱口">建造入舱口 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-dock"><td class="name">入舱口</td><td class="glyph">入</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-producer"><td class="name">生产舱</td><td class="glyph">产</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-armor"><td class="name">太空装甲</td><td class="glyph">甲</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">14</td><td class="num">180</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-solar"><td class="name">太阳能舱</td><td class="glyph">阳</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">50</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-comm"><td class="name">通讯模块</td><td class="glyph">讯</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-thruster"><td class="name">推进器舱</td><td class="glyph">推</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-lab-gravity"><td class="name">微重力研究室</td><td class="glyph">微</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-life-support"><td class="name">维生仓</td><td class="glyph">生</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="station-remote"><td class="name">遥感模块</td><td class="glyph">遥</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">0</td><td class="num">1</td><td class="traits"><a class="ref" href="#t-sk-station-remote-星球表面观测">星球表面观测 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="landing-pad"><td class="name">接驳站</td><td class="glyph">驳</td><td class="num">5</td><td class="num">224</td><td class="num">0</td><td class="num">4</td><td class="num">100</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
+      </table>
+    </div>
+    </section>
+
+    
+
+    <section id="pack-terms">
+      <h2><span class="sec-num">03</span>机制词条</h2>
+      <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
+      <dl class="terms"><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-sk-station-cannon-轨道轰击">轨道轰击</dt><dd>对同一轨道上的一座敌方空间站打一发：选一格。<b>看不出那一格有没有舱段</b>——空的甲板会被打穿成破损舱段，打中舱段则照常结算伤害。核心舱打不穿。每回合 1 次。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-扩建甲板">扩建甲板</dt><dd>把一格虚空铺成甲板（也能把<b>破损舱段</b>修回甲板）。一次一格，可以连着铺；价格按太空建设折扣算。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造生产舱">建造生产舱</dt><dd>在空的甲板上造一座生产舱，每回合产 6 金（耗电 4）。价格按太空建设折扣算。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造太阳能舱">建造太阳能舱</dt><dd>在空的甲板上造一块太阳能舱，发电 12。它自己不用电，所以电力再紧也能造。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造维生仓">建造维生仓</dt><dd>在空的甲板上造一座维生仓（耗电 8），让周围 3 格内的单位不再吃「恶劣外空环境」：护甲不再 ÷5、移动不再减半。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造推进器舱">建造推进器舱</dt><dd>在核心舱<b>下半区</b>的空甲板上造一台推进器，耗电 15。每台让本方航道速度 +1（航程 = 距离 ÷ 速度）。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造遥感模块">建造遥感模块</dt><dd>在空的甲板上造一座遥感模块（耗电 10）。它有「星球表面观测」技能：从轨道上点亮地表一小片。需要航天员相邻才工作。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造微重力研究室">建造微重力研究室</dt><dd>在空的甲板上造一座微重力研究室（耗电 12）：每座让本方<b>总金币收入 +5%</b>，多座叠加、上限 +20%。需要航天员相邻才工作。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造材料研究室">建造材料研究室</dt><dd>在空的甲板上造一座材料研究室（耗电 12）：每座让本方<b>所有单位护甲 +1</b>，上限 +5。需要航天员相邻才工作。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造通讯模块">建造通讯模块</dt><dd>在空的甲板上造一座通讯模块（耗电 8）：每座让本方<b>所有单位视野 +1</b>，上限 +3。需要航天员相邻才工作。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造轨道炮舱">建造轨道炮舱</dt><dd>在空的甲板上造一座轨道炮舱（耗电 14）：技能「轨道轰击」，对同一轨道的敌方空间站点火。需要航天员相邻才工作。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造太空装甲">建造太空装甲</dt><dd>在空的甲板上焊一块太空装甲：不吃电，血厚甲硬。敌方轨道轰击会打在它身上，脚下的甲板就不会被打穿。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造出舱口">建造出舱口</dt><dd>在空的甲板上造一座出舱口（耗电 8）：把一个相邻单位发射到同一轨道上我方空间站的入舱口，或敌方空间站的破损舱段。每回合 1 次。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-core-建造入舱口">建造入舱口</dt><dd>在空的甲板上造一座入舱口（耗电 6）：接收同轨道我方出舱口送来的人，最多缓存 3 个，满了拒绝进入；要人下船得再点「卸下」。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-station-remote-星球表面观测">星球表面观测</dt><dd>对脚下这颗星球的表面做一次观测：选一格，点亮它和上下左右共 5 格。情报永久有效（同一座模块再观测会替换上一次）。每回合 1 次。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd></dl>
+    </section>
+  
+    <footer>
+      时代与回旋镖 · 太空战争 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>

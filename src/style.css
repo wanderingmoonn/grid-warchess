@@ -47,6 +47,11 @@
   /* 月球：月壤比平原更灰更冷，环形山再暗一档——不看图例也能分出坑缘 */
   --regolith: #d8d4ca;
   --crater: #b6b1a7;
+  /* 空间站：虚空是"这里还没有东西"，所以近乎全黑；甲板是铺好的冷灰金属 */
+  --void: #14161a;
+  --deck: #7c8592;
+  /* 破损舱段：被打穿的甲板露出舱体，比甲板暗、比虚空亮 */
+  --wreck: #4b413a;
   --lava: #d99a72;
   --volcano: #8d8290;
 
@@ -536,23 +541,48 @@ body {
   transform: translateY(1px);
 }
 
-/* ---------- 左下角：地图列表 ---------- */
+/* ---------- 左上角：星图（地图切换 + 在途） ---------- */
 /*
- * 收起时只有一枚"当前图"的按钮，点开在它上面列出所有图。
- * 位置和缩放条对称（它右下、这里左下），容器本身不接点击，只有按钮接。
+ * 收起时只有一枚"当前图"的按钮，点开在它**下面**列出所有节点、相连关系和在途。
+ *
+ * 为什么从右下角搬到左上：左下角挤着缩放条和底栏，玩家反馈"手感不好"——
+ * 一枚要经常点的按钮不该和缩放挤在同一个角上。左上角在顶栏下面，
+ * 平时是空的，点起来也不挡地图中央。
+ *
+ * 容器本身不接点击，只有按钮接。
  */
 .board-list {
   position: fixed;
   left: 14px;
-  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  /*
+   * 顶栏 +（可能存在的）指挥官条 + 10px。
+   *
+   * 以前写死 `54px + 10px`：上帝模式和 AI 观战会在顶栏下面多一条指挥官条，
+   * 列表就正好压在它上面，两边都点不顺手。`--chrome` 由 `fitBoard()` 写
+   * （它就是算棋盘可用高度时用的那个数），默认 54 是"只有顶栏"。
+   */
+  top: calc(var(--chrome, 54px) + 10px);
   z-index: 60;
   display: flex;
-  flex-direction: column-reverse;
+  /* 向下展开：按钮在上，菜单在它下面（以前在左下角是向上展开的） */
+  flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   opacity: 0.8;
   transition: opacity 0.15s ease;
   pointer-events: none;
+}
+
+/*
+ * 只有一张图时整个列表都不出现。
+ *
+ * 它存在的理由是"在地球和月球之间切换"；只有地球的时候，它是一块永远
+ * 只有一个选项的按钮，占着左下角还挡地图。`display:none` 必须写在
+ * `.board-list` 之后（同优先级靠源码顺序压过上面的 `display:flex`），
+ * 也别改成 `visibility`——那还占着点击区。
+ */
+.board-list.single {
+  display: none;
 }
 
 .board-list:hover,
@@ -649,6 +679,23 @@ body {
   background: #c4553f;
 }
 
+/*
+ * 废墟倒计时：「废 3」。
+ *
+ * 用灰褐色的方块而不是红点：红色在这个列表里已经是"这里有敌人"，
+ * 废墟是"这里快没了"——两件事都得一眼看见，但不能混。
+ * 显式写死深字浅底，别让对比度体检按主题推断。
+ */
+.bl-ruin {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #d9cfc0;
+  color: #4a3b2c;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  white-space: nowrap;
+}
+
 .bl-row.on {
   background: #fbf3e2;
   border-color: rgba(120, 110, 92, 0.7);
@@ -666,10 +713,326 @@ body {
   transform: rotate(180deg);
 }
 
+/*
+ * 星图：相连 + 在途。
+ *
+ * 只读文字，不接点击。航道那行是"谁和谁连着、几回合"，
+ * 在途那行是"谁的东西正在飞、还剩几回合"——同一块面板回答
+ * "我在哪、还能去哪、路上有什么"。
+ */
+.bl-star {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 132px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(120, 110, 92, 0.35);
+}
+
+.bl-lane,
+.bl-trip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: #8b8477;
+  white-space: nowrap;
+}
+
+/* 航程靠右：一行里左边是"谁连着谁"，右边是"几回合" */
+.bl-lane-t,
+.bl-trip-left {
+  margin-left: auto;
+  color: #6b6459;
+}
+
+.bl-trip {
+  color: #6b6459;
+}
+
+.bl-trip-who {
+  font-weight: 500;
+}
+
+/* 列表里的分组标签（"空间站"）：一行小字 + 上方一道细线，不占点击 */
+.bl-sep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 4px 2px 0;
+  border-top: 1px dashed rgba(120, 110, 92, 0.3);
+  font-size: var(--fs-micro);
+  color: #8b8477;
+  pointer-events: none;
+}
+
 .bl-add {
   border-style: dashed;
   color: #8b8477;
   font-size: var(--fs-xs);
+}
+
+/* ---------- 星图覆盖层 ---------- */
+/*
+ * 星图是"长得像棋盘的视图"，不是 boards 里的一张图（见 ui/star-map.ts 开头）。
+ * 盖在棋盘区上、压暗底下的棋盘，按「关闭」退出——这样切换图和看星图
+ * 是两件事，不会互相打断。
+ */
+.star-map {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  padding: 18px;
+  background: rgba(18, 17, 14, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * 不用 `.star-map { display:flex }`：那会被 `[hidden]` 的 UA 样式压住吗？
+ * 反了——是类选择器会压住 `[hidden]`。所以只在"没 hidden"时才给 flex。
+ */
+.star-map:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sm-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.sm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sm-title {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sm-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.sm-close {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.sm-close:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.sm-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--sm, 5), 1fr);
+  grid-template-rows: repeat(var(--sm, 5), 1fr);
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+/* 空格：只画一条极淡的线，让"棋盘"有骨架又不抢节点 */
+.sm-cell {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  opacity: 0.5;
+}
+
+.sm-lanes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 细线负责好看，粗的透明线负责接点击 */
+.sm-lane-line {
+  stroke: var(--line-strong);
+  stroke-width: 0.06;
+  fill: none;
+}
+
+/*
+ * 航线的**命中条**：一根透明的长按钮，铺在两点之间。
+ *
+ * 不把点击挂在 SVG 的 `<line>` 上：那要依赖 SVG 根 `pointer-events:none`
+ * 被子元素覆盖，实机上点不到（上一版就是这么翻车的）。普通按钮的命中
+ * 是浏览器最基础的能力，还自带 hover 与键盘焦点。
+ *
+ * 定位靠百分比：left/top 是 a 格中心的百分比，宽度是两点距离占整块的比例，
+ * 再按角度旋转——正方形网格下这样算正好贴合。
+ */
+.sm-lane-tap {
+  position: absolute;
+  height: 18px;
+  margin-top: -9px;
+  transform-origin: 0 50%;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.sm-lane-tap:hover {
+  background: rgba(216, 162, 74, 0.14);
+}
+
+.sm-lane-tap.on {
+  background: rgba(216, 162, 74, 0.2);
+}
+
+.sm-lane-tap:focus-visible {
+  outline: 2px solid #d8a24a;
+  outline-offset: 1px;
+}
+
+.sm-lane.on .sm-lane-line {
+  stroke: #d8a24a;
+  stroke-width: 0.1;
+}
+
+.sm-node {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: 7%;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sm-node:hover {
+  border-color: #d8a24a;
+}
+
+.sm-node.on {
+  border-color: #d8a24a;
+  box-shadow: inset 0 0 0 1px #d8a24a;
+}
+
+/* 还没有棋盘的节点（轨道槽位）：虚线，看得出来"现在去不了" */
+.sm-node.bare {
+  border-style: dashed;
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sm-node-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 角标挤在右上：待命数、在途、停泊的站数 */
+.sm-ready,
+.sm-trip,
+.sm-stations {
+  position: absolute;
+  top: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  text-align: center;
+}
+
+.sm-ready {
+  right: 3px;
+  background: #f0c987;
+  color: #5a4212;
+}
+
+.sm-trip {
+  right: 3px;
+  top: 20px;
+  background: #7fb0d8;
+  color: #14303f;
+}
+
+.sm-stations {
+  left: 3px;
+  top: 3px;
+  background: #9fd8b6;
+  color: #16402a;
+}
+
+/* 航行中的站：航线上的小三角，位置就是航程进度 */
+.sm-sail polygon {
+  stroke: rgba(20, 18, 14, 0.5);
+  /* 三角本身只有 0.19 个单位宽，描边再粗就把形状糊掉了 */
+  stroke-width: 0.012;
+}
+
+.sm-sail.a polygon {
+  fill: var(--team-a);
+}
+
+.sm-sail.b polygon {
+  fill: var(--team-b);
+}
+
+/* 有空间站正在驶离这个节点：一个轻巧的箭头，不抢站数角标 */
+.sm-sailing {
+  position: absolute;
+  left: 3px;
+  top: 22px;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: #4d8fbf;
+}
+
+.sm-contact {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4553f;
 }
 
 /* ---------- 棋盘 ---------- */
@@ -1078,8 +1441,62 @@ html[data-terrain='on'] .tile.t-mountain::before {
 .tile.t-regolith {
   background: var(--regolith);
 }
-/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */
-.tile.t-regolith::before {
+
+/*
+ * 空间站的两格。
+ *
+ * 虚空不是"一种地形"，是"这里还没有东西"——所以它不该有纹理、不该有细节，
+ * 只是一块凹下去的深色。甲板相反：要有存在感，玩家一眼能看出站长到哪了。
+ */
+.tile.t-void {
+  background: var(--void);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* 甲板：冷灰金属 + 极淡的横向拼缝，像一块块铺板 */
+.tile.t-deck {
+  background: var(--deck);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.tile.t-deck::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.12) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+/*
+ * 破损舱段：甲板被炸穿的破口。
+ *
+ * 要一眼和甲板、虚空都分开：底色比甲板深得多（露出来的舱体结构），
+ * 但没有虚空那么黑（那里连地板都没有）。纹理用**斜向断口**而不是横拼缝，
+ * 远看就能认出"这一格不是好地板"——玩家要能扫一眼数出哪里被打开了口子。
+ */
+.tile.t-wreck {
+  background: var(--wreck);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.tile.t-wreck::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.16) 0 1px,
+      transparent 1px 6px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.35) 0 2px,
+      transparent 2px 9px
+    );
+}
+/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */.tile.t-regolith::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -2495,6 +2912,16 @@ html[data-terrain='on'] .tile.t-mountain::before {
   background: var(--danger-strong);
 }
 
+/* 空间站的能量条：青绿，和地面电网的蓝区分开。
+   同一条横条、同一组数字，玩家不用再学一遍怎么读。 */
+.power-bar.station > i {
+  background: #3fae96;
+}
+
+.power-bar.station > i.over {
+  background: var(--danger-strong);
+}
+
 .power-nums {
   display: flex;
   flex-wrap: wrap;
@@ -2646,6 +3073,27 @@ html[data-terrain='on'] .tile.t-mountain::before {
   font-size: var(--fs-sm);
   color: var(--price);
   font-weight: 500;
+  /*
+   * 右边的短标记（"就绪" / "电力不足 3/15"）**不换行**。
+   *
+   * 换行本身没错，错的是它会把左边的标题挤到只剩一个字宽——技能名变成竖排，
+   * 玩家读不出这是哪个技能。文案已经改短，这里再兜一层：它永远是一行。
+   */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/*
+ * 标题（"空间站核心舱 · 建造推进器舱"）也守一行。
+ *
+ * 太长就省略，不要折成竖排——横排能扫读，竖排只能一个字一个字猜。
+ * 完整名字在 `title` 属性里（`heroSkillBlock` 已经写了）。
+ */
+.recruit-btn .meta b {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 来源徽标：兵种从 49 个涨到 118 个之后，"这兵是哪个包的"必须写在脸上——
@@ -3498,6 +3946,35 @@ a.btn {
   background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
   color: var(--accent, #3b82f6);
   font-size: var(--fs-xs);
+}
+
+/*
+ * 三种关系同一副标签、三种底色：
+ *   依赖（默认蓝）· 冲突（红）· 联动（绿）。
+ *
+ * 形状完全一样是有意的——它们回答的是同一个问题"这个包和别的包什么关系"，
+ * 玩家只需要学会"看颜色区分关系"，不用再认三种不同的控件。
+ * 颜色走语义 token（`--danger-strong` / `--ok-deep`），换主题时跟着变。
+ */
+.expansion-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.expansion-tags .expansion-req {
+  margin-top: 0;
+}
+
+.expansion-body .expansion-req.is-clash {
+  background: color-mix(in srgb, var(--danger-strong) 12%, transparent);
+  color: var(--danger-strong);
+}
+
+.expansion-body .expansion-req.is-link {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok-deep);
 }
 
 .seed-row {
@@ -7434,7 +7911,7 @@ a.btn {
 @media (max-width: 920px) {
   .board-list {
     left: 10px;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    top: calc(54px + 8px);
     /*
      * 触屏上没有 hover，那条 `opacity: .8` 会**一直**生效：
      * 按钮本身 92% 白底，再乘 0.8 就只剩七成多，底下滚过去的文字直接透上来，

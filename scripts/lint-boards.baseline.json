@@ -1,0 +1,146 @@
+{
+  "src/core/ability-hooks.ts": {
+    "state.tiles": 5,
+    "tileAt(": 13,
+    "unitsAt(": 1
+  },
+  "src/core/ai-tactics.ts": {
+    "state.tiles": 2,
+    "idx(": 7,
+    "inBounds(": 1,
+    "xyOf(": 1
+  },
+  "src/core/ai.ts": {
+    "state.tiles": 20,
+    "idx(": 1,
+    "tileAt(": 9,
+    "inBounds(": 9,
+    "xyOf(": 3,
+    "unitAt(": 6
+  },
+  "src/core/armor.ts": {
+    "state.tiles": 2,
+    "inBounds(": 4
+  },
+  "src/core/city-works.ts": {
+    "state.tiles": 2
+  },
+  "src/core/cultivation/hooks.ts": {
+    "state.tiles": 1,
+    "idx(": 1,
+    "inBounds(": 1
+  },
+  "src/core/cultivation/qi-field.ts": {
+    "state.tiles": 8,
+    "idx(": 5
+  },
+  "src/core/cultivation/skills/blood-rite.ts": {
+    "inBounds(": 1
+  },
+  "src/core/cultivation/skills/sky-step.ts": {
+    "unitsAt(": 1
+  },
+  "src/core/cultivation/skills/teleport-swap.ts": {
+    "inBounds(": 3
+  },
+  "src/core/draft.ts": {
+    "state.tiles": 1
+  },
+  "src/core/era-packs.ts": {
+    "state.tiles": 1
+  },
+  "src/core/expansions.ts": {
+    "state.tiles": 2
+  },
+  "src/core/fantasy-packs.ts": {
+    "state.tiles": 1
+  },
+  "src/core/fog.ts": {
+    "state.tiles": 6,
+    "idx(": 1
+  },
+  "src/core/height-terrain.ts": {
+    "state.tiles": 2
+  },
+  "src/core/map-export.ts": {
+    "state.tiles": 1
+  },
+  "src/core/map-source.ts": {
+    "state.tiles": 1
+  },
+  "src/core/marks.ts": {
+    "state.tiles": 1
+  },
+  "src/core/naval-packs.ts": {
+    "state.tiles": 1
+  },
+  "src/core/report.ts": {
+    "state.tiles": 1
+  },
+  "src/core/rules.ts": {
+    "state.tiles": 15,
+    "idx(": 11,
+    "tileAt(": 14,
+    "inBounds(": 8,
+    "xyOf(": 4,
+    "unitAt(": 6,
+    "unitsAt(": 2
+  },
+  "src/core/sandbox.ts": {
+    "state.tiles": 8
+  },
+  "src/core/seasons/climate.ts": {
+    "state.tiles": 1
+  },
+  "src/core/seasons/effect.ts": {
+    "state.tiles": 1
+  },
+  "src/core/seasons/field.ts": {
+    "state.tiles": 6,
+    "tileAt(": 9
+  },
+  "src/core/seasons/index.ts": {
+    "state.tiles": 1
+  },
+  "src/core/skill-hooks.ts": {
+    "state.tiles": 3
+  },
+  "src/core/space/moon-base.ts": {
+    "state.tiles": 1
+  },
+  "src/core/tutorial.ts": {
+    "state.tiles": 3,
+    "idx(": 2
+  },
+  "src/core/types.ts": {
+    "state.tiles": 2
+  },
+  "src/main.ts": {
+    "state.tiles": 7,
+    "idx(": 10,
+    "unitsAt(": 1
+  },
+  "src/rl/env-desc.ts": {
+    "state.tiles": 2
+  },
+  "src/rl/features.ts": {
+    "state.tiles": 4,
+    "tileAt(": 4
+  },
+  "src/rl/legal.ts": {
+    "tileAt(": 3,
+    "unitAt(": 1
+  },
+  "src/storage/save.ts": {
+    "state.tiles": 1
+  },
+  "src/ui/board.ts": {
+    "state.tiles": 8
+  },
+  "src/ui/draft-panel.ts": {
+    "state.tiles": 3
+  },
+  "src/ui/panel.ts": {
+    "state.tiles": 3
+  }
+}

@@ -10,6 +10,7 @@
  * 所以每条钩子都先问"这个单位站在哪儿"，再查那张表。
  */
 
+import { boardIdOf, EARTH } from '../board.ts';
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { activeExpansions } from '../expansions.ts';
 import { isNaval, SEASON_TURNS } from './climate.ts';
@@ -258,6 +259,10 @@ export const SEASONS: Expansion = {
             const extra = Math.max(1, Math.round(ed.amount * splash));
             for (const v of state.units) {
               if (v.id === u.id) continue;
+              // 溅射也只在**同一张图**上：雷暴打的是地球上的那一圈，
+              // 不该顺着格号劈到空间站/月球上坐标相同的人（跨图之后
+              // "隔壁"这件事本身就不成立）
+              if (boardIdOf(v) !== boardIdOf(u)) continue;
               if (Math.abs(v.x - u.x) + Math.abs(v.y - u.y) > r) continue;
               hurt(v, extra);
             }
@@ -294,7 +299,16 @@ export const SEASONS: Expansion = {
     // 这三条以前是核心里的具名口子：`TopbarState.season` 一个字段、
     // `ui/panel.ts` 直接 import 气候表拼天气块。现在核心只认
     // 「一段 HTML」「一枚徽章」「一层染色」，不认识"季节""天气"。
-    getTilePanelHtml: ({ state, x, y, unit }) => {
+    getTilePanelHtml: ({ state, x, y, unit, board }) => {
+      /*
+       * 只在地球上算天气。
+       *
+       * 气候是按"地形 + 海陆 + 纬度"推的，那套数据只对**地球那张图**成立。
+       * 空间站的格子在站内是 (3,2)、在地球上也是 (3,2)，不判图就会给一座
+       * 封闭的空间站报出"晴，23°C"——玩家一眼看出这是串台。
+       * 月球同理（那边是月壤，也没有大气）。
+       */
+      if ((board ?? EARTH) !== EARTH) return null;
       const c = climateAt(state, x, y);
       // 标题分两种：点空格子看到的是"这里的天气"，点单位看到的是"脚下的天气"。
       // 文案差别很小，但玩家会因此知道"这是按格算的，不是我身上的状态"。
@@ -331,9 +345,14 @@ export const SEASONS: Expansion = {
         id: 'seasons-weather',
         label: '天气',
         hint: '看视野内的天气分布；点一下钉住，再点取消',
-        cells: ({ state }) => climateOverlayCells(state),
+        /*
+         * 只在地球上画。天气是按"地形 + 海陆 + 纬度"推的，那套数据只对地球成立；
+         * 空间站和月球上打开「天气」应该是**一片空白**，而不是把地球那张图的
+         * 气候按同一组坐标糊上去（玩家一眼就知道串台了，还会以为站上在下雨）。
+         */
+        cells: ({ state, board }) => ((board ?? EARTH) === EARTH ? climateOverlayCells(state) : []),
         // 箭头只画大风区（见 windGlyphCells）：平时一格都没有，刮风季也不会糊成一片
-        glyph: ({ state }) => windGlyphCells(state),
+        glyph: ({ state, board }) => ((board ?? EARTH) === EARTH ? windGlyphCells(state) : []),
       },
     ],
   },

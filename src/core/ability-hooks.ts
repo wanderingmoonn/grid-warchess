@@ -23,7 +23,7 @@
  * 因为那些先后有实际意义（狂暴要在加减之后乘、盾墙要在冲锋之后减）。
  */
 
-import type { City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { BoardId, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { distBetweenUnits } from './query.ts';
 
 /** 四邻方向。规则层到处都要用，放这里省得扩展自己再抄一份 */
@@ -69,8 +69,36 @@ export interface AbilityApi {
     opts?: { ignoreUnits?: boolean },
   ): boolean;
   freeNeighbor(s: GameState, u: Unit, type: string): { x: number; y: number } | null;
-  /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它） */
-  spawn(s: GameState, owner: PlayerId, type: string, x: number, y: number): void;
+  /**
+   * `u` 所在那张图的只读视角。手边没有 ctx（比如就绪检查回调）时用它：
+   * `const view = api.viewOf(s, u)`，之后 `api.tileAt(view, x, y)` 就是对的。
+   */
+  viewOf(s: GameState, u: Unit): GameState;
+  /**
+   * `u` 脚下那一格的地形（**按它所在的那张图**取）。
+   *
+   * 比 `tileAt(s, u.x, u.y)` 多知道一件事：u 在哪张图。地球之外的图上，
+   * 后者拿到的是"地球上同一坐标"的地形，而且不会报错。
+   */
+  tileOf(s: GameState, u: Unit): { terrain: Terrain } | null;
+  /**
+   * 造一个单位，落在 `near` 旁边一格的空地上（同一张图）。
+   *
+   * 这是"召唤/分裂/筑墙"该用的那一个：落点和单位由同一张图决定，
+   * 不会出现"在月球上找的空地，却在地球上生出一个人"——
+   * 那正是 `freeNeighbor` + `spawn` 分开写时最容易出的错。
+   * 没有空地就返回 null（不生成）。
+   */
+  spawnNear(s: GameState, owner: PlayerId, type: string, near: Unit): Unit | null;
+  /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它）；`board` 不传就是地球 */
+  spawn(
+    s: GameState,
+    owner: PlayerId,
+    type: string,
+    x: number,
+    y: number,
+    board?: BoardId,
+  ): void;
   pushLog(s: GameState, player: PlayerId, text: string, open?: boolean): void;
   citiesOf(s: GameState, p: PlayerId): City[];
   distToCity(u: { x: number; y: number }, city: City): number;
@@ -129,7 +157,14 @@ export interface AbilityApi {
   /** 摧毁一座城市：变废墟、挤出守军、写战报。幂等（已废墟的再打不生效）。 */
   destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void;
   /** 把这一格记进战斗烈度（供被攻击方下回合闪红） */
-  noteHeat(s: GameState, x: number, y: number): void;
+  /**
+   * 给"战况烈度"记一格。
+   *
+   * `board` 不是地球时**直接跳过**：heat 存的是一串格号，没有"图"这一维，
+   * 记进去会和地球同号的格子串味（界面的红格层读的是地球那份可见格）。
+   * 传了 board 才能保证"在月面放技能不会在地球上画出炸点"。
+   */
+  noteHeat(s: GameState, x: number, y: number, board?: BoardId): void;
   isAirborne(s: GameState, u: Unit): boolean;
   unitsAt(s: GameState, x: number, y: number): Unit[];
   /** 算上扩展规则后的剩余移动力（已扣除 moveSpent） */
@@ -156,6 +191,19 @@ export type Side = 'attacker' | 'defender';
  */
 export interface HookCtx {
   state: GameState;
+  /**
+   * **这张图**的只读视角：宽高、格子、单位、城市都只剩 `self` 所在的那一张。
+   *
+   * 契约一句话：**改状态用 `state`，查格子用 `view`**。
+   *
+   * `state.tiles` 永远是地球的（多图之后地球没有并进 `s.boards`，见 board.ts），
+   * 所以 `api.tileAt(c.state, u.x, u.y)` 在地球上恰好对、在任何别的图上都是错的，
+   * 而且不报错。写成 `api.tileAt(c.view, ...)` 就一定对。
+   *
+   * 为什么是"视角"而不是"参数"：绝大多数调用手里都有单位，单位自己知道
+   * 自己在哪张图，调用方不该有机会传错。
+   */
+  view: GameState;
   /** 能力的主人 */
   self: Unit;
   /** 对面那个；没有对手的场合（面板数值）为 undefined */
@@ -375,6 +423,19 @@ export interface SplashHitCtx {
 
 export interface DeathCtx {
   state: GameState;
+  /**
+   * **这张图**的只读视角：宽高、格子、单位、城市都只剩 `self` 所在的那一张。
+   *
+   * 契约一句话：**改状态用 `state`，查格子用 `view`**。
+   *
+   * `state.tiles` 永远是地球的（多图之后地球没有并进 `s.boards`，见 board.ts），
+   * 所以 `api.tileAt(c.state, u.x, u.y)` 在地球上恰好对、在任何别的图上都是错的，
+   * 而且不报错。写成 `api.tileAt(c.view, ...)` 就一定对。
+   *
+   * 为什么是"视角"而不是"参数"：绝大多数调用手里都有单位，单位自己知道
+   * 自己在哪张图，调用方不该有机会传错。
+   */
+  view: GameState;
   /** 倒下的那个 */
   victim: Unit;
   killer: Unit | undefined;
@@ -404,6 +465,19 @@ export interface DamagedCtx {
 
 export interface KillCtx {
   state: GameState;
+  /**
+   * **这张图**的只读视角：宽高、格子、单位、城市都只剩 `self` 所在的那一张。
+   *
+   * 契约一句话：**改状态用 `state`，查格子用 `view`**。
+   *
+   * `state.tiles` 永远是地球的（多图之后地球没有并进 `s.boards`，见 board.ts），
+   * 所以 `api.tileAt(c.state, u.x, u.y)` 在地球上恰好对、在任何别的图上都是错的，
+   * 而且不报错。写成 `api.tileAt(c.view, ...)` 就一定对。
+   *
+   * 为什么是"视角"而不是"参数"：绝大多数调用手里都有单位，单位自己知道
+   * 自己在哪张图，调用方不该有机会传错。
+   */
+  view: GameState;
   /** 击杀者（攻方） */
   self: Unit;
   victim: Unit;
@@ -413,6 +487,19 @@ export interface KillCtx {
 
 export interface StrikeCtx {
   state: GameState;
+  /**
+   * **这张图**的只读视角：宽高、格子、单位、城市都只剩 `self` 所在的那一张。
+   *
+   * 契约一句话：**改状态用 `state`，查格子用 `view`**。
+   *
+   * `state.tiles` 永远是地球的（多图之后地球没有并进 `s.boards`，见 board.ts），
+   * 所以 `api.tileAt(c.state, u.x, u.y)` 在地球上恰好对、在任何别的图上都是错的，
+   * 而且不报错。写成 `api.tileAt(c.view, ...)` 就一定对。
+   *
+   * 为什么是"视角"而不是"参数"：绝大多数调用手里都有单位，单位自己知道
+   * 自己在哪张图，调用方不该有机会传错。
+   */
+  view: GameState;
   self: Unit;
   target: Unit;
   /** 这一下真打出来的伤害 */
@@ -457,6 +544,19 @@ export interface MagicCtx {
 
 export interface TurnStartCtx {
   state: GameState;
+  /**
+   * **这张图**的只读视角：宽高、格子、单位、城市都只剩 `self` 所在的那一张。
+   *
+   * 契约一句话：**改状态用 `state`，查格子用 `view`**。
+   *
+   * `state.tiles` 永远是地球的（多图之后地球没有并进 `s.boards`，见 board.ts），
+   * 所以 `api.tileAt(c.state, u.x, u.y)` 在地球上恰好对、在任何别的图上都是错的，
+   * 而且不报错。写成 `api.tileAt(c.view, ...)` 就一定对。
+   *
+   * 为什么是"视角"而不是"参数"：绝大多数调用手里都有单位，单位自己知道
+   * 自己在哪张图，调用方不该有机会传错。
+   */
+  view: GameState;
   self: Unit;
   /** 自己的那一方 */
   owner: PlayerId;

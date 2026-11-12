@@ -25,6 +25,9 @@ import {
   type BuildList,
 } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
+import { boardIdOf, boardOf, EARTH } from '../core/board.ts';
+import { hazardLines, hazardOn } from '../core/hazard.ts';
+import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
 import {
@@ -100,6 +103,26 @@ import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 
+/**
+ * 星图面板要显示的内容。
+ *
+ * 这里只放"已经算好的几行字"，不把星图数据整个丢进面板：
+ * 节点/航线的取数在 `main.ts` 里做（它才知道星图视图选中了谁），
+ * 面板只负责画。少一层猜，就少一处"面板读不到星图"的耦合。
+ */
+export interface StarPanelInfo {
+  kind: 'node' | 'lane';
+  title: string;
+  lines: string[];
+  /**
+   * 能去的地方：节点自己 + 它轨道上停泊的空间站。
+   *
+   * 用列表而不是单个 `goBoard`：一个星球可能停着好几座站，
+   * 玩家在星图上点它，本来想去的可能就是其中某一座。
+   */
+  goto?: Array<{ label: string; board: string }>;
+}
+
 export interface PanelInput {
   view: PlayerView;
   me: PlayerId;
@@ -109,6 +132,15 @@ export interface PanelInput {
   selectedCampId: string | null;
   /** 点空地时选中的地形，用来显示地形说明 */
   selectedTile: { x: number; y: number } | null;
+  /** 星图上选中的节点/航线（null = 没开星图，或者星图上什么都没选） */
+  star?: StarPanelInfo | null;
+  /**
+   * 当前正在看哪张图。
+   *
+   * 地形卡必须按它取格子：`selectedTile` 只是"这张图上的 (x,y)"，
+   * 拿地球的宽度去算格号，在月球/空间站上会取到**地球上同一坐标**的地形。
+   */
+  activeBoard?: BoardId;
   /**
    * 强制模式的当前档位（null = 没开）。
    *
@@ -449,6 +481,20 @@ function panelHtml(input: PanelInput): string {
         : ''
     }">${detail}</div>
 
+    ${input.star
+      ? `<div class="card">
+           <div class="card-title">${escapeHtml(input.star.title)}</div>
+           ${input.star.lines.map((l) => `<div class="hint">${escapeHtml(l)}</div>`).join('')}
+           ${(input.star.goto ?? [])
+             .map(
+               (g) =>
+                 `<button class="btn btn-sm btn-primary" data-act="star-go" data-id="${escapeHtml(g.board)}">前往 ${escapeHtml(g.label)}</button>`,
+             )
+             .join(' ')}
+
+         </div>`
+      : ''}
+
     <div class="card">
       <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
         <summary class="card-title fold-head">战报</summary>
@@ -640,7 +686,9 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
         }
       }
       rows.push(
-        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'}>
+        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
+          k.ready ? '' : 'disabled'
+        } title="${escapeHtml(`${def.name} · ${k.def.name}｜${k.def.summary.replace(/<[^>]+>/g, '')}｜${status}`)}">
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
            <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
            <span class="price">${status}</span>
@@ -722,11 +770,13 @@ function extPanelHtml(
   y: number,
   unit: Unit | undefined,
   me: PlayerId,
+  board: BoardId,
 ): string {
   const parts: string[] = [];
   for (const e of activeExpansions(s)) {
     if (!e.hooks.getTilePanelHtml) continue;
-    const html = e.hooks.getTilePanelHtml({ state: s, x, y, unit, viewer: me });
+    // `board` 必须传：按格算的扩展（天气/灵气）要凭它判断"这一格在哪"
+    const html = e.hooks.getTilePanelHtml({ state: s, x, y, unit, board, viewer: me });
     if (html) parts.push(html);
   }
   return parts.join('');
@@ -739,7 +789,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
    * 这一帧的视野。雾是"看不见就不说"的依据，面板也得守——
    * 棋盘上画着迷雾、侧栏却能把雾里的地形和敌情念出来，那雾就白罩了。
    */
-  const seenTiles = s.fog ? new Set(view.visible) : null;
+  const board = input.activeBoard ?? EARTH;
+  const seenTiles = s.fog ? new Set(view.visibleByBoard?.[board] ?? view.visible) : null;
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -751,8 +802,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   }
 
   if (selectedTile) {
-    const ti = selectedTile.y * s.w + selectedTile.x;
-    const tile = s.tiles[ti];
+    const grid = boardOf(s, board);
+    const ti = selectedTile.y * grid.w + selectedTile.x;
+    const tile = grid.tiles[ti];
     if (tile) {
       /*
        * 雾里点一格，到底该知道什么？
@@ -767,7 +819,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
        * 雾外那一格报出的"62（灵田 +15）"，等于替玩家把对面的建筑点了一遍。
        */
       const seen = seenTiles ? seenTiles.has(ti) : true;
-      const memo = !seen && view.terrainHidden ? view.rememberedTiles.get(ti) : undefined;
+      const memo =
+        !seen && view.terrainHidden
+          ? (view.rememberedByBoard?.[board] ?? view.rememberedTiles).get(ti)
+          : undefined;
       const fromMemory = memo !== undefined;
       const terrain = seen || !view.terrainHidden ? tile.terrain : memo;
       const coord = `${String.fromCharCode(65 + selectedTile.x)}${selectedTile.y + 1}`;
@@ -787,6 +842,12 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
       const info = TERRAIN_INFO[terrain];
       const lines = describeTerrain(terrain, s);
+      /*
+       * 这张图的**环境**（外空之类）：和地形无关，整张图都这样。
+       * 放在地形卡最上面一条，是因为它比"这格是月壤"重要得多——
+       * 玩家点开一格，第一件该知道的事是"这里不能待"。
+       */
+      const hazards = hazardLines(hazardOn(s, board));
       // 扩展写在格子上的东西（灵气浓度之类）：核心不认识，只把盒子递过去——
       // 和单位卡上的 getUnitPanelLines 一个口径。雾外不递（见上面的注释）。
       const extLines: string[] = [];
@@ -798,6 +859,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
               state: s,
               x: selectedTile.x,
               y: selectedTile.y,
+              board,
               viewer: me,
             }),
           );
@@ -816,13 +878,20 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
         <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
         ${
+          hazards.length > 0
+            ? `<div class="info-row"><span>环境</span><b style="color:#b4553f">${escapeHtml(
+                hazards.join(' · '),
+              )}</b></div>`
+            : ''
+        }
+        ${
           extLines.length > 0
             ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${extLines
                 .map((l) => `<div>· ${escapeHtml(l)}</div>`)
                 .join('')}</div>`
             : ''
         }
-        ${seen ? extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me) : ''}
+        ${seen ? extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me, board) : ''}
         <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
       `;
     }
@@ -1177,7 +1246,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             : ''
         }
       </div>
-      ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
+      ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me, boardIdOf(selectedUnit))}
 
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}

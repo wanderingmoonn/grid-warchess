@@ -100,7 +100,34 @@ export type Terrain =
    * 只有开了海军扩展的对局才会出现 deep 格（扩展的 afterTerrain 把
    * 离岸 2 格以上的 water 改写成 deep），老存档里一格都不会有。
    */
-  | 'deep';
+  | 'deep'
+  /**
+   * 虚空：空间站里**还没铺出来**的格子。
+   *
+   * 不可通行、不可建造、没有掩护——它不是"一种地形"，是"这里还没有东西"。
+   * 只有空间站棋盘会用；地表地图永远不会生成它。
+   */
+  | 'void'
+  /**
+   * 甲板：空间站里已经铺好的地板。
+   *
+   * 为什么不复用 `plain`：`buildOn: ['plain']` 的建筑（发射井）会在站内被
+   * 判成"可以盖"——一个建在空间站上的火箭发射井，听着就像 bug。
+   * 单独一种地形让这两件事在数据上就不可能混淆。
+   */
+  | 'deck'
+  /**
+   * 破损舱段：甲板被打穿之后的残骸。
+   *
+   * 和 `void` 的区别是它**曾经是甲板**——结构还在，所以：
+   *   · 人能站（登船部队就是从破口进来的），走一格顶两格（碎钢架硌脚）；
+   *   · 能从它旁边继续铺甲板（结构还连着），所以炸穿一格不会把站切成两半；
+   *   · 但**站不住建筑**——地板都没了，舱段往哪儿装。
+   *
+   * 修复走核心舱的「扩建甲板」：花一样的钱把它重新铺回甲板。
+   * 只有空间站棋盘会出现它。
+   */
+  | 'wreck';
 /*
  * 2026-10-30 删掉的两个地形：`lava`（熔岩）与 `volcano`（火山）。
  *
@@ -1661,14 +1688,189 @@ export type BoardKind = 'planet' | 'station' | 'orbit';
  * 要按图取格子，一律走 `core/board.ts` 的 `boardOf(s, id)`：
  * 它认这个约定，调用方不需要知道地球是特例。
  */
+/**
+ * 一张图的**环境**：进入这张图就生效，和站在哪一格无关。
+ *
+ * 和地形是两回事：地形按格（这格是森林、那格是环形山），
+ * 环境按图（整张月球都缺氧）。所以它挂在 `Board` 上，不进地形表。
+ *
+ * 以后的"辐射区""毒雾"也是同一个字段，不用再加一套。
+ */
+export interface HazardSpec {
+  id: string;
+  name: string;
+  /** 护甲除以几（向下取整）。**无保底**：0 就是 0 */
+  armorDiv?: number;
+  /** 移动力乘以几 */
+  moveMul?: number;
+  /** 乘完之后的保底（通常 1） */
+  moveMin?: number;
+}
+
 export interface Board {
   id: BoardId;
   kind: BoardKind;
+  /** 这张图的环境（缺省 = 没有） */
+  hazard?: HazardSpec;
   /** 地图列表上显示的名字（"月球"、"前哨站"）；缺省用 id */
   name?: string;
   w: number;
   h: number;
   tiles: Tile[];
+}
+
+/**
+ * 星图上的一个点。
+ *
+ * ── 为什么"节点"和"棋盘"不是一回事 ───────────────────────
+ *
+ * 地球和月球既是节点、又有棋盘；**轨道槽位只有位置、没有格子**（核心舱还没到，
+ * 那里什么都不是）；空间站有格子，但它"停"在某个槽位上——站内坐标和星图位置
+ * 是两套坐标，混成一张表就再也表达不了"站从 A 槽挪到 B 槽、站内的人没动"。
+ *
+ * 所以 `board` 是可选的：有棋盘的节点才填。
+ */
+export type StarNodeId = string;
+
+export interface StarNode {
+  id: StarNodeId;
+  kind: 'planet' | 'moon' | 'orbit';
+  /** 有棋盘的节点才有：地球 'earth'、月球 'moon'、空间站生成时给的 id */
+  board?: BoardId;
+  name: string;
+}
+
+/**
+ * 一条航道：两节点之间的**连接**。
+ *
+ * 它不是一个"可以被守住的路口"——太空里可以向任何方向飞，
+ * 所谓航道只是"这两个星球之间有路"的抽象。所以：
+ *   · **一条边 = 相连**，不存在平行航道，"走哪条"不是一个问题；
+ *   · **不能封锁**：没有关卡、没有巡逻，另一头也挡不住你来；
+ *   · 只有 `turns` 是可调的（航程），它是**看得见的窗口**：
+ *     对手读得到"火箭还有 N 回合到"，才谈得上在落点等它。
+ *
+ * 如果哪天要做"拦截"，那是"打在天上的单位"，不是"封一条路"——
+ * 那时加的是战斗规则，不是这条边上的一个开关。
+ */
+export interface ReconMark {
+  owner: PlayerId;
+  board: BoardId;
+  /** 谁观测的（同一座模块再观测会覆盖） */
+  by: string;
+  /** 这张图的格号 */
+  cells: number[];
+  turn: number;
+}
+
+export interface StarLane {
+  id: string;
+  a: StarNodeId;
+  b: StarNodeId;
+  /**
+   * 航道的**距离**（抽象单位，1 点 = 速度 1 时飞 1 回合）。
+   *
+   * 实际回合数是 `ceil(distance / 速度)`，速度由发射方的推进器决定
+   * （见 `space/station.ts` 的 `thrusterSpeed`）。
+   * 所以不要把 `distance` 当"要几回合"直接显示——那是 `laneTurnsFor` 的事。
+   */
+  distance?: number;
+  /**
+   * 老存档的"航程"字段（11-12 之前只有这个）。
+   *
+   * 新局不再写它，读的时候用 `laneDistance()` 兜底：`distance ?? turns`。
+   * 留着不改名，是为了让老存档读进来仍然能飞。
+   */
+  turns?: number;
+}
+
+/** 一座空间站：一张棋盘 + 它现在停在哪个节点上 + 是谁的 */
+export interface StarStation {
+  board: BoardId;
+  at: StarNodeId;
+  owner: PlayerId;
+  /** 展开它的核心舱型号（决定尺寸的那一个） */
+  core: string;
+  /**
+   * 正在航向另一个节点。
+   *
+   * 站内的坐标一点不动（棋盘还是那张），变的只是它挂在星图的哪个节点——
+   * 这就是"改字段，不真挪坐标"。
+   * `left` 归零时把 `at` 改成 `to`，清掉这个字段。
+   */
+  travel?: {
+    lane: string;
+    from: StarNodeId;
+    to: StarNodeId;
+    /** 还要几个自己的回合到 */
+    left: number;
+    /**
+     * 出发时算出来的总航程。
+     *
+     * 星图上要按"走完全程的百分之几"画它，只有 `left` 是画不出来的：
+     * 不知道起点在哪，就不知道它走了多远。老存档没有这个字段，按 `left` 兜底
+     * （进度 0，贴在出发端）。
+     */
+    total?: number;
+  };
+  /**
+   * 废墟：核心舱被打掉之后，这座站进入"还能抢修"的状态。
+   *
+   * 它**不是**立刻消失：3 个回合（按原主的回合算）之内，只要有人站在站里
+   * 付一笔维护费，就能把它连同所有舱段一起接管；到期还没人管，整张棋盘
+   * 连同上面的一切（舱段、人）一起删掉。
+   *
+   * 为什么留一段窗口而不是当场删：太空里"打掉核心"应该是**抢船**，不是
+   * 点一下就没——打的人想留着自己用，守的人想抢修回来，窗口就是这两拨人的
+   * 争夺时间。也正因为有窗口，"拆除自己的站"才不需要另写一套流程。
+   */
+  ruin?: {
+    /** 还剩几个"by 的回合" */
+    left: number;
+    /** 按谁的回合倒计时（原主；自己拆也是原主） */
+    by: PlayerId;
+    /** 核心舱原来的位置：接管时新核心就落在这里 */
+    x: number;
+    y: number;
+  };
+}
+
+export interface Starmap {
+  nodes: StarNode[];
+  lanes: StarLane[];
+  stations: StarStation[];
+  /** 生成空间站 board id 用的序号（`station-1`、`station-2`……） */
+  seq: number;
+}
+
+/**
+ * 一段正在飞的航程。
+ *
+ * `cargo` 里的单位**已经从 `units` 里摘掉了**：留在棋盘上会被回合重置、
+ * 被迷雾裁、被战斗误伤，还会在两张图上同时出现。货舱那套语义正好能复用。
+ */
+export interface Transit {
+  id: string;
+  owner: PlayerId;
+  lane: string;
+  from: StarNodeId;
+  to: StarNodeId;
+  /**
+   * 到哪儿去：
+   *   · `surface`（缺省）= 落到某张图上，按那张图的落点放人；
+   *   · `orbit` = 到星球**轨道**，那里可能还没有棋盘——核心舱到了才生成。
+   * 老存档没有这个字段，读出来是 surface，行为不变。
+   */
+  kind?: 'surface' | 'orbit';
+  /**
+   * 目的地棋盘。有值 = 落到这张图（**自己的空间站**），没有 = 落到节点自己的棋盘。
+   *
+   * 站是已经存在的棋盘，所以它走的是 surface 那条路，只是"哪张图"换了人指定。
+   */
+  board?: BoardId;
+  /** 还要几个回合到（0 = 这一回合开始时到达） */
+  left: number;
+  cargo: Unit[];
 }
 
 export interface GameState {
@@ -1697,6 +1899,28 @@ export interface GameState {
    * 取图一律用 `core/board.ts` 的 `boardOf()`，不要自己判断。
    */
   boards?: Record<BoardId, Board>;
+  /**
+   * 侦察情报（遥感观测这类）。可选：只有太空战争会写。
+   *
+   * 和 `spotlight`（让别人看见我）方向相反——这里是"我看见别人"。
+   */
+  recon?: ReconMark[];
+  /**
+   * 星图：图与图之间的关系（哪些节点、怎么连通、空间站停在哪）。
+   *
+   * 只有太空包会写它；没开那类扩展的对局是 `undefined`，语义正好等于
+   * "只有一张地球、没有航道"——所以旧存档、旧回放都不用兼容层。
+   * 取节点/航道一律走 `core/space/starmap.ts`，别自己遍历。
+   */
+  starmap?: Starmap;
+  /**
+   * 在途投送：点火之后、还没落地的单位。
+   *
+   * 这些单位**不在 `units` 里**（原因见 `Transit` 的注释），所以：
+   * 回合重置不会碰它们、迷雾不会裁它们、攻击也打不到它们。
+   * 旧存档是 `undefined`，等于"天上没人"。
+   */
+  transit?: Transit[];
   cities: City[];
   units: Unit[];
   players: Record<PlayerId, PlayerState>;
