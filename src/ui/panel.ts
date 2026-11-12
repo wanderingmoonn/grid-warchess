@@ -25,6 +25,8 @@ import {
   type BuildList,
 } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
+import { boardOf, EARTH } from '../core/board.ts';
+import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
 import {
@@ -131,6 +133,13 @@ export interface PanelInput {
   selectedTile: { x: number; y: number } | null;
   /** 星图上选中的节点/航线（null = 没开星图，或者星图上什么都没选） */
   star?: StarPanelInfo | null;
+  /**
+   * 当前正在看哪张图。
+   *
+   * 地形卡必须按它取格子：`selectedTile` 只是"这张图上的 (x,y)"，
+   * 拿地球的宽度去算格号，在月球/空间站上会取到**地球上同一坐标**的地形。
+   */
+  activeBoard?: BoardId;
   /**
    * 强制模式的当前档位（null = 没开）。
    *
@@ -774,7 +783,8 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
    * 这一帧的视野。雾是"看不见就不说"的依据，面板也得守——
    * 棋盘上画着迷雾、侧栏却能把雾里的地形和敌情念出来，那雾就白罩了。
    */
-  const seenTiles = s.fog ? new Set(view.visible) : null;
+  const board = input.activeBoard ?? EARTH;
+  const seenTiles = s.fog ? new Set(view.visibleByBoard?.[board] ?? view.visible) : null;
 
   // 军营：自己点开就是产兵面板，跟城市那套是一回事
   if (selectedCampId) {
@@ -786,8 +796,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
   }
 
   if (selectedTile) {
-    const ti = selectedTile.y * s.w + selectedTile.x;
-    const tile = s.tiles[ti];
+    const grid = boardOf(s, board);
+    const ti = selectedTile.y * grid.w + selectedTile.x;
+    const tile = grid.tiles[ti];
     if (tile) {
       /*
        * 雾里点一格，到底该知道什么？
@@ -802,7 +813,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
        * 雾外那一格报出的"62（灵田 +15）"，等于替玩家把对面的建筑点了一遍。
        */
       const seen = seenTiles ? seenTiles.has(ti) : true;
-      const memo = !seen && view.terrainHidden ? view.rememberedTiles.get(ti) : undefined;
+      const memo =
+        !seen && view.terrainHidden
+          ? (view.rememberedByBoard?.[board] ?? view.rememberedTiles).get(ti)
+          : undefined;
       const fromMemory = memo !== undefined;
       const terrain = seen || !view.terrainHidden ? tile.terrain : memo;
       const coord = `${String.fromCharCode(65 + selectedTile.x)}${selectedTile.y + 1}`;

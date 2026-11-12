@@ -41,16 +41,6 @@ import {
 import { boardIdOf } from '../board.ts';
 import { MOON_BOARD } from './moon.ts';
 import { createStarmap, MOON_LANE_TURNS, starmapOf } from './starmap.ts';
-import {
-  CORE_DEFS,
-  STATION_CORE,
-  STATION_CORE_ID,
-  STATION_PRODUCER,
-  buildCost,
-  launchCore,
-  stationLines,
-  tickProducers,
-} from './station.ts';
 import { tickTransit, transitCountOf } from './transit.ts';
 
 /**
@@ -113,29 +103,11 @@ export const SPACE_AGE: Expansion = {
     '月面上的部队可以正常走动、正常开火：寻路、地形消耗、占格、射程、地形掩护、溅射'
       + '全都按<b>月球那一份</b>算。**地球和月球之间打不到**——坐标再近，中间也隔着一个天空。'
       + '攻城与装卸仍然只在地球（月球上没有城，也没有能装东西的船）。',
-    '<b>空间站</b>：发射井可以直接发射「核心舱」——<b>不用加注、不用装载</b>，只花资源，'
-      + '点火就入轨。核心舱决定站的规模（5×5 / 7×7 / 9×9），到轨道时只有正中间一格甲板，'
-      + '其余全是虚空。点核心舱的「扩建甲板」选一格挨着已有甲板的虚空，花资源铺出来；'
-      + '铺好之后可以在上面造「生产舱」（每回合产金币）。'
-      + '站上的建设<b>不需要工程队、不需要运输</b>，钱到位就长。',
-    '<b>太空建设折扣</b>：地球上每多一座发射井，站上建设就更便宜一点——'
-      + '但<b>收益递减</b>：没有井时比额定贵 50%，一座井时贵 30%，两座贵 14%，'
-      + '三座基本平价，之后才开始便宜，永远到不了半价。'
-      + '所以"多盖井"和"多建站"是同一条投资曲线上的两段。',
-    '<b>空间站</b>：发射井可以直接发射「核心舱」——<b>不用加注、不用装载</b>，只花资源，'
-      + '点火就入轨。核心舱决定站的规模（5×5 / 7×7 / 9×9），到轨道时只有正中间一格甲板，'
-      + '其余全是虚空。点核心舱的「扩建甲板」选一格挨着已有甲板的虚空，花资源铺出来；'
-      + '铺好之后可以在上面造「生产舱」（每回合产金币）。'
-      + '站上的建设<b>不需要工程队、不需要运输</b>，钱到位就长。',
-    '<b>太空建设折扣</b>：地球上每多一座发射井，站上建设就更便宜一点——'
-      + '但<b>收益递减</b>：没有井时比额定贵 50%，一座井时贵 30%，两座贵 14%，'
-      + '三座基本平价，之后才开始便宜，永远到不了半价。'
-      + '所以"多盖井"和"多建站"是同一条投资曲线上的两段。',
     '<b>对手能打回去了</b>：再派一支兵登月、贴到基地边上把它拆掉，采样就作废'
       + '（基地 200 血 12 甲，不是一炮能拆的，所以登月之后要守）。'
       + '反制不止一条路：也可以在<strong>发射之前</strong>拆掉发射井、或者杀掉等舱的那支工程单位。',
   ],
-  units: [ROCKET_SILO, MOON_BASE, STATION_CORE, STATION_PRODUCER],
+  units: [ROCKET_SILO, MOON_BASE],
   hooks: {
     onMatchStart: ({ state }) => {
       // 会盖房的人先学会盖井（没开太空包的局连这个类型都没有，见上面）
@@ -169,8 +141,6 @@ export const SPACE_AGE: Expansion = {
       // 在途的火箭：只推自己的（路上的东西归主人管）
       tickTransit(state, player);
       tickMoonBases(state, player);
-      // 空间站上的生产舱
-      tickProducers(state, player);
     },
 
     /**
@@ -246,24 +216,6 @@ export const SPACE_AGE: Expansion = {
         disabled: !!problem,
       });
 
-      /*
-       * 发射核心舱：**不用加注、不用装载**，直接花钱入轨。
-       *
-       * 和上面那条"发射"并列，而不是做成第二座建筑——井本来就是发射台，
-       * 送人和送舱段是同一件设施的两项业务。
-       */
-      for (const core of CORE_DEFS) {
-        const cost = buildCost(state, unit.owner, core.cost);
-        const afford = state.players[unit.owner].gold >= cost;
-        out.push({
-          id: `silo:core:${core.id}`,
-          group: '空间站',
-          label: core.name,
-          detail: core.blurb,
-          note: `${cost} 金 · 免加注`,
-          disabled: !afford,
-        });
-      }
       return out;
     },
 
@@ -272,16 +224,12 @@ export const SPACE_AGE: Expansion = {
       if (unit.type !== SILO_ID) return '这里没有发射井';
       if (actionId === 'silo:fuel') return startFueling(state, unit);
       if (actionId === 'silo:launch') return launchIntoLane(state, unit);
-      if (actionId.startsWith('silo:core:')) {
-        return launchCore(state, unit, actionId.slice('silo:core:'.length));
-      }
       return `认不出这个操作：${actionId}`;
     },
 
     // viewer 要传：给对手看的那份要裁掉"装的是谁"（见 siloLines）
     getUnitPanelLines: ({ state, unit, viewer }) => {
       if (unit.type === MOON_BASE_ID) return moonBaseLines(state, unit, viewer);
-      if (unit.type === STATION_CORE_ID) return stationLines(state, unit);
       const lines = siloLines(state, unit, viewer);
       // 落在月面的工程单位：提示它能展开基地（否则玩家不知道下一步该干什么）
       if (viewer === unit.owner && boardIdOf(unit) === MOON_BOARD && state.unitTypes[unit.type]?.category === 'builder') {

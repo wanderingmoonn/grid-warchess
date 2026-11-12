@@ -1136,10 +1136,18 @@ function panelInput(known?: PlayerView): PanelInput {
     view,
     me: me(),
     // 注意用 view.state 而不是 state：面板同样不该看到视野外的东西
-    selectedUnit: picked,
-    selectedCityId,
-    selectedCampId,
-    selectedTile,
+    /*
+     * 星图打开时，棋盘的选中一律不显示。
+     *
+     * 两套东西没有关系：星图上点的是节点/航线，棋盘上点的是格/单位。
+     * 一起摆出来时，玩家会在"星球卡"上面看到刚才点的那块平原——像是没刷新。
+     * 选中本身不清（关掉星图还要用），只是这一帧不显示。
+     */
+    selectedUnit: starOpen ? null : picked,
+    selectedCityId: starOpen ? null : selectedCityId,
+    selectedCampId: starOpen ? null : selectedCampId,
+    selectedTile: starOpen ? null : selectedTile,
+    activeBoard: activeBoardId,
     star: starPanelInfo(),
     opsOpen,
     logOpen,
@@ -2113,6 +2121,8 @@ function syncBoardList(view: PlayerView): void {
    * 这回事（见 `StarLane` 的注释）。
    */
   const star = starRows(state);
+  // 航道属于星图（战争包）；"在途"是发射的一部分，基础包也该看得见
+  if (!hasSpaceWar()) star.lanes = [];
   const laneRows = star.lanes
     .map(
       (l) =>
@@ -2133,9 +2143,10 @@ function syncBoardList(view: PlayerView): void {
   const starHtml = hasStarRows(star) ? `<div class="bl-star">${laneRows}${tripRows}</div>` : '';
 
   // 星图入口：单图时整个面板是隐藏的，走不到这里
-  const starBtn =
-    `<button class="bl-row bl-star-open" data-act="star-open">` +
-    `<span class="bl-kind">图</span><span class="bl-name">查看星图</span></button>`;
+  const starBtn = hasSpaceWar()
+    ? `<button class="bl-row bl-star-open" data-act="star-open">` +
+      `<span class="bl-kind">图</span><span class="bl-name">查看星图</span></button>`
+    : '';
 
   // 调试脚手架：第四步接入真正的月球后删掉
   const debug = devAdd
@@ -3674,7 +3685,15 @@ function onBoardClick(e: Event): void {
 
   // 0.1) 正在等待技能选点
   if (pendingSkill && coords) {
-    const cell = idx(state, coords.x, coords.y);
+    /*
+     * 格号必须按**当前正在看的这张图**算。
+     *
+     * 这里原来写 `idx(state, ...)`（地球的列宽）。空间站只有 5×5，
+     * 按地球 20 宽算出来的格号跟 `aimTiles` 里那串（`idxOn` 算的）
+     * 永远对不上——于是 every 一次落点都被判成"不在合法格内"，
+     * 表现就是**技能点不中任何格子**，连提示都没有。
+     */
+    const cell = idxOn(state, activeBoardId, coords.x, coords.y);
     const { unitId, skillId, targeting } = pendingSkill;
     const caster = state.units.find((u) => u.id === unitId);
     // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
@@ -4176,6 +4195,10 @@ function downloadMatchReport(): void {
 function handleStarAction(act: string, el: HTMLElement): void {
   switch (act) {
     case 'star-open':
+      if (!hasSpaceWar()) {
+        toast('这一局没有开「太空战争」，没有星图');
+        return;
+      }
       if (!starLayout(state)) {
         toast('这一局只有一张图，没有星图可看');
         return;
@@ -6253,6 +6276,17 @@ const GOD_BUDGET: Partial<AiBudget> = { maxRecruit: 0, maxUpgrade: 0 };
 
 function godMode(): boolean {
   return state.config.godMode === true;
+}
+
+/**
+ * 这一局开没开「太空战争」。
+ *
+ * 星图与空间站属于那个包，基础包（太空时代）只有月球和发射井。
+ * 直接看 `config.expansionIds`：`requires` 在开局时已经把不满足的包滤掉了，
+ * 所以这里看到的就是"真的生效了"的列表。
+ */
+function hasSpaceWar(): boolean {
+  return state.config.expansionIds.includes('space-war');
 }
 
 /**

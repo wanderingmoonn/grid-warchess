@@ -820,6 +820,31 @@ test('视图染色：可见集与格号都按图取', () => {
   assert.ok(moon.w < s.w, `前提：月球比地球窄（${moon.w} < ${s.w}）`);
 });
 
+test('拆包：只开基础包时没有空间站，也没有「发射核心舱」', () => {
+  /*
+   * 两个包的分界线：基础包 = 月球 + 发射井 + 登月；太空战争 = 星图 + 空间站。
+   * 只勾基础包时，井上不该出现"发射核心舱"，兵种表里也不该有核心舱——
+   * 否则"简单登月"的玩家会平白多出一整套他看不懂的建筑。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 9999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+
+  assert.equal(s.unitTypes[STATION_CORE_ID], undefined, '基础包不带核心舱兵种');
+  const r = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.equal(r.ok, false, '基础包里没有这个动作');
+
+  // 反过来：勾上战争包就有了（requires 满足）
+  const war = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  assert.ok(war.unitTypes[STATION_CORE_ID], '战争包里核心舱要在');
+
+  // 只勾战争包、不勾基础包：`requires` 应该把它整包滤掉
+  const orphan = fresh({ expansionIds: ['space-war'], startEra: 5 });
+  assert.equal(orphan.unitTypes[STATION_CORE_ID], undefined, '缺前置时战争包不该进场');
+});
+
 console.log('\n太空战争：空间站');
 
 test('核心舱：发射后生成一张 5×5 的站，中心甲板、其余虚空', () => {
@@ -827,7 +852,7 @@ test('核心舱：发射后生成一张 5×5 的站，中心甲板、其余虚�
    * 核心舱发射**不加注、不装载**：地面上点火就入轨，只花资源。
    * 站棋盘是那一刻才生成的——所以这条也在验"投送可以没有棋盘"这个地基。
    */
-  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
   s.players.A.gold = 9999;
   const silo = place2(s, 'A', SILO_ID, 5, 5);
@@ -863,7 +888,7 @@ test('太空建设折扣：0 座井贵一半，井越多越便宜、但边际递
    * `rate(n) = 0.5 - 0.8^n`：0 井 −50%、1 井 −30%、2 井 −14%……
    * 关键不是这几个数，而是**每多一座井的收益在变小**，且永远不到 +50%。
    */
-  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
   s.current = 'A';
 
@@ -891,7 +916,7 @@ test('太空建设折扣：0 座井贵一半，井越多越便宜、但边际递
 });
 
 test('扩建：选一格相邻虚空铺成甲板，不相邻的铺不了', () => {
-  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
   s.players.A.gold = 9999;
   const silo = place2(s, 'A', SILO_ID, 5, 5);
@@ -928,7 +953,7 @@ test('扩建：选一格相邻虚空铺成甲板，不相邻的铺不了', () =>
 });
 
 test('生产舱：造在空甲板上，每回合产金', () => {
-  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
   s.players.A.gold = 9999;
   const silo = place2(s, 'A', SILO_ID, 5, 5);
@@ -962,7 +987,7 @@ test('空间站上的东西按站结算：虚空不可通行、甲板能站', ()
    * 虚空是"这里还没有东西"，不是一种地形——所以它必须挡人。
    * 如果它能走，整个"扩建"就没有意义了。
    */
-  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
   s.players.A.gold = 9999;
   const silo = place2(s, 'A', SILO_ID, 5, 5);
