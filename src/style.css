@@ -805,7 +805,7 @@ html[data-terrain='on'] .tile {
 }
 
 html[data-terrain='on'] .tile.t-plain {
-  background-image: url('art/terrain/plain.webp');
+  background-image: url('/art/terrain/plain.webp');
 }
 /*
  * ── 图案化 tile（B 方案，2026-11-12）──────────────────────────────────
@@ -823,32 +823,48 @@ html[data-terrain='on'] .tile.t-plain {
  * 所以换成 tile 之后，地形的色相不会跑——玩家靠颜色判断走位这件事没被破坏。
  */
 html[data-terrain='on'] .tile.t-forest {
-  background-image: url('art/terrain/forest-1.png');
+  background-image: url('/art/terrain/forest-1.png?v=2');
   background-size: 100% 100%;
   background-position: center;
   background-repeat: no-repeat;
 }
 html[data-terrain='on'] .tile.t-forest[data-v='1'] {
-  background-image: url('art/terrain/forest-2.png');
+  background-image: url('/art/terrain/forest-2.png?v=2');
 }
 html[data-terrain='on'] .tile.t-forest[data-v='2'] {
-  background-image: url('art/terrain/forest-3.png');
+  background-image: url('/art/terrain/forest-3.png?v=2');
+}
+
+/*
+ * 关掉为"纯色块"配的那几个几何装饰。
+ *
+ * `.t-forest::before` 是一个半透明圆、`.t-hill::before` 是一道拱形——
+ * 它们是给纯色地面加"这里有点东西"的暗示用的。但它们画在**背景图之上**，
+ * 所以接上 tile 之后，看到的永远是那个圆，图再换也没用。
+ * 排查了两轮才想到这一层：一直以为是图糊了。
+ *
+ * 山、火山、台地、沼泽、沙丘的 `::before` **不在此列**：那些是形状标志
+ * （"这是山、过不去"），删了玩家会认错地形。
+ */
+html[data-terrain='on'] .tile.t-forest::before,
+html[data-terrain='on'] .tile.t-hill::before {
+  display: none;
 }
 html[data-terrain='on'] .tile.t-hill {
-  background-image: url('art/terrain/hill.webp');
+  background-image: url('/art/terrain/hill.webp');
 }
 html[data-terrain='on'] .tile.t-water {
-  background-image: url('art/terrain/water.webp');
+  background-image: url('/art/terrain/water.webp');
 }
 /* 深水原来靠 `::before` 画波纹；有了材质就不叠了，否则两层波纹打架 */
 html[data-terrain='on'] .tile.t-deep {
-  background-image: url('art/terrain/deep.webp');
+  background-image: url('/art/terrain/deep.webp');
 }
 html[data-terrain='on'] .tile.t-deep::before {
   display: none;
 }
 html[data-terrain='on'] .tile.t-mountain {
-  background-image: url('art/terrain/mountain.webp');
+  background-image: url('/art/terrain/mountain.webp');
 }
 /*
  * 山在材质模式下**不叠那座白色假山**。

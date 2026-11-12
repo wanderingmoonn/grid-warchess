@@ -359,6 +359,22 @@ await evaluate(`(() => {
 await sleep(700);
 await shot(`04-unit-${tag}`);
 
+if (ARGS.includes('clickswitch') || ARGS.includes('terrain')) {
+  const probe = await evaluate(`(() => {
+    const el = document.querySelector('.tile.t-forest');
+    if (!el) return { err: '盘上没有森林格' };
+    const cs = getComputedStyle(el);
+    return {
+      flag: document.documentElement.dataset.terrain ?? '(无)',
+      v: el.dataset.v,
+      img: cs.backgroundImage.slice(0, 80),
+      size: cs.backgroundSize,
+      w: Math.round(el.getBoundingClientRect().width),
+    };
+  })()`);
+  console.log('  [terrain]', JSON.stringify(probe));
+}
+
 if (ARGS.includes('clickswitch')) {
   // 诊断：走真实点击路径（设置 → 地形材质 → 材质），看 html 上的属性有没有变
   const before = await evaluate(
