@@ -679,6 +679,23 @@ body {
   background: #c4553f;
 }
 
+/*
+ * 废墟倒计时：「废 3」。
+ *
+ * 用灰褐色的方块而不是红点：红色在这个列表里已经是"这里有敌人"，
+ * 废墟是"这里快没了"——两件事都得一眼看见，但不能混。
+ * 显式写死深字浅底，别让对比度体检按主题推断。
+ */
+.bl-ruin {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #d9cfc0;
+  color: #4a3b2c;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  white-space: nowrap;
+}
+
 .bl-row.on {
   background: #fbf3e2;
   border-color: rgba(120, 110, 92, 0.7);

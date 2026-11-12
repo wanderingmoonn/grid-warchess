@@ -31,6 +31,9 @@ import {
   GRAVITY_PER,
   MATERIAL_CAP,
   MATERIAL_PER,
+  LANDING_PAD,
+  LANDING_PAD_ID,
+  RUIN_TURNS,
   STATION_ARMOR,
   STATION_CANNON,
   STATION_CANNON_ID,
@@ -72,7 +75,10 @@ import {
   stationPowerHtml,
   stationSailProblem,
   stationSpeed,
+  ruinActions,
+  ruinStation,
   tickProducers,
+  tickStationRuins,
   tickStationTravel,
 } from './station.ts';
 
@@ -155,6 +161,20 @@ export const SPACE_WAR: Expansion = {
       + '满了就拒绝进入。缓存的人不在棋盘上——看不见、打不到、也不吃外空环境，'
       + '要让他们干活，得点「卸下」放到隔壁的空甲板上（旁边没空位就下不来）。'
       + '舱门被打掉时，里面的人也一起没了。',
+    '<b>降落到星球</b>：出舱口的第三个目的地是<b>所在轨道对应的那颗星球</b>——'
+      + '地球轨道上就跳回地球，月球轨道上就跳上月球。默认落在<b>图的正中央</b>'
+      + '（城里、水里、被人占着的格子会把它挤到旁边的空地）。降落的人当回合不能动，'
+      + '和登船同一口径。',
+    '<b>接驳站</b>（2×2，工程队修，每颗星球每方只能有一座）：不发电、不产金，'
+      + '唯一的作用是<b>改降落点</b>——你这边的部队降落到这颗星球时，'
+      + '不再落在图中央，而是落在接驳站旁边那一圈空地上。'
+      + '没有它就只能盲跳正中，有了它，空降才是一次能规划位置的机动。',
+    `<b>废墟与接管</b>：核心舱被打掉（或者自己点「拆除」）之后，这座站<b>不会当场消失</b>，`
+      + `而是变成废墟：全站停摆、倒计时 ${RUIN_TURNS} 个回合（按原主的回合算）。`
+      + '<b>站上任意一个单位</b>都能付维护费接管——核心舱在原位重生、'
+      + '所有舱段连同所有权一起归他（名字也换成新主）。'
+      + `到期还没人接管，整张棋盘连同上面的人和舱段一起被删掉。`
+      + '所以打掉一座站最好是<b>派人进去</b>，而不是隔空打完就走。',
   ],
   units: [
     STATION_CORE,
@@ -170,6 +190,7 @@ export const SPACE_WAR: Expansion = {
     STATION_ARMOR,
     STATION_LAUNCH,
     STATION_DOCK,
+    LANDING_PAD,
   ],
   hooks: {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
@@ -207,6 +228,48 @@ export const SPACE_WAR: Expansion = {
       tickProducers(state, player);
       // 在航的站：只推自己的（和火箭同一个规矩）
       tickStationTravel(state, player);
+      // 废墟倒计时：也按"谁的原主"走，和上面两个同一套口径
+      tickStationRuins(state, player);
+    },
+
+    /** 开局把「接驳站」加进工程队的手艺里（和基础包教发射井同一处口径） */
+    onMatchStart: ({ state }) => {
+      for (const def of Object.values(state.unitTypes)) {
+        if (def.category !== 'builder') continue;
+        if ((def.era ?? 0) < LANDING_PAD.era!) continue;
+        if (!def.builds) continue;
+        if (!def.builds.includes(LANDING_PAD_ID)) def.builds.push(LANDING_PAD_ID);
+      }
+    },
+
+    /**
+     * 核心舱没了 = 这座站变成废墟。
+     *
+     * 走 `onUnitKilled` 而不是各个伤害来源：核心舱能被打死、被亡语炸死、
+     * 被拆（自己点按钮走的是另一条），钩子是唯一一处"任何死法都会经过"的地方。
+     * 自拆时核心是我方主动删的，不经过这里——那边自己写 ruin。
+     */
+    onUnitKilled: ({ state, victim, killerOwner }) => {
+      if (victim.type !== STATION_CORE_ID) return;
+      const board = victim.board;
+      if (!board) return;
+      const rec = starmapOf(state)?.stations.find((st) => st.board === board);
+      if (!rec || rec.ruin) return;
+      ruinStation(state, board, victim.x, victim.y, killerOwner, '核心舱被摧毁');
+    },
+
+    /**
+     * 「每颗星球每方只许有一座接驳站」。
+     *
+     * 传进来的 `state` 是**建造者那张图**的投影，所以 `units` 就是这颗星球上
+     * 的全部单位——直接数就是"这个星球上有几座"。
+     */
+    buildProblem: ({ state, player, typeId }) => {
+      if (typeId !== LANDING_PAD_ID) return null;
+      const have = (state.units ?? []).filter(
+        (u) => u.type === LANDING_PAD_ID && u.owner === player,
+      ).length;
+      return have > 0 ? '这颗星球上你已经有一座接驳站了（每颗星球每方只能有一座）' : null;
     },
 
     /**
@@ -237,6 +300,16 @@ export const SPACE_WAR: Expansion = {
     unitActions: ({ state, unit, viewer }) => {
       if (unit.owner !== viewer) return [];
       const out: UnitActionOption[] = [];
+
+      /*
+       * 废墟：站上**任何**单位都能付维护费接管（不管是谁的兵）。
+       *
+       * 放在最前面：废墟里的舱段一个按钮都不该有，而站上的人现在最想做的事
+       * 就是"这船归谁"。原来的舱段分支会以为自己是活的，弹出一堆点了没反应的
+       * 按钮（断电、废墟两重前提下它们其实全都不工作）。
+       */
+      const salvage = ruinActions(state, unit);
+      if (salvage.length > 0) return salvage;
 
       // 发射井：发射核心舱（还没盖完的井不接活）
       if (unit.type === SILO_ID) {
@@ -277,6 +350,20 @@ export const SPACE_WAR: Expansion = {
             disabled: !!problem,
           });
         }
+        /*
+         * 拆除：走完整毁灭流程（先废墟、3 回合后消失），不是当场删。
+         * 二次确认是必须的——这一下把站里所有人也一起送上了倒计时。
+         */
+        if (!rec.ruin) {
+          out.push({
+            id: 'station:scuttle',
+            group: '拆除',
+            label: '拆除这座空间站',
+            detail: `当场进入废墟：${RUIN_TURNS} 个回合内谁都能花钱接管，到期连同舱段和人一起消失`,
+            note: '不可撤回',
+            confirm: '拆除之后这座站会立刻变成废墟，3 个回合后彻底消失（连同上面的人）。确定？',
+          });
+        }
         return out;
       }
 
@@ -300,6 +387,9 @@ export const SPACE_WAR: Expansion = {
       if (actionId.startsWith('station:aim:')) return combatUnitAction(state, unit, actionId);
       if (actionId.startsWith('station:launch:')) return combatUnitAction(state, unit, actionId);
       if (actionId.startsWith('station:unload:')) return combatUnitAction(state, unit, actionId);
+      if (actionId === 'station:salvage' || actionId === 'station:scuttle') {
+        return combatUnitAction(state, unit, actionId);
+      }
       return `认不出这个操作：${actionId}`;
     },
 

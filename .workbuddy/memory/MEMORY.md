@@ -21,6 +21,9 @@
   只有核心舱例外。`fog.playerView` 里活单位、ghosts、`memory.known` 三处都要过。
 - 轨道轰击是**跨图盲打**：选一格，空甲板 → `wreck`，有舱段 → `computeDamage`。
   核心舱那一格连可点格都不给。
+- **核心舱死 ≠ 站消失**：`StarStation.ruin`（3 个原主回合）→ 站上任意单位付
+  `200+60×规模` 接管；到期 `removeStationBoard` 连人带舱段一起删。自拆走同一条。
+- 废墟不逐处判：`stationPower` 对废墟直接 `brownout`，全站停摆一次到位。
 
 ## 架构与坑
 

@@ -47,10 +47,14 @@ import {
   STATION_LAUNCH_ID,
   CANNON_ATK,
   DOCK_CAPACITY,
+  LANDING_PAD_ID,
+  RUIN_TURNS,
   cannonAimBoard,
   dockActions,
   dockCargo,
+  isRuined,
   launchActions,
+  salvageCost,
   THRUSTER_BASE_COST,
   THRUSTER_DRAW,
   beginStationSail,
@@ -2121,6 +2125,197 @@ test('出舱口：送进敌方破口＝登船；入舱口满了拒收', () => {
   });
   assert.equal(refused.ok, false, '满了就该拒绝进入');
   assert.ok(refused.reason?.includes('满'), `理由要说清是满了：${refused.reason}`);
+});
+
+test('出舱口：第三个目的地——降落到所在轨道的星球', () => {
+  /*
+   * 站停在地球轨道，所以"脚下那颗星球"就是地球。
+   * 落点默认在图中央（城里、水里、占着人的格子会把它挤开）。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const a1 = st.board;
+  pave(cur, a1, [[1, 1], [3, 3], [3, 2]]);
+  putOnBoard(cur, a1, 'A', STATION_SOLAR_ID, 1, 1);
+  const port = putOnBoard(cur, a1, 'A', STATION_LAUNCH_ID, 3, 3);
+  const marine = putOnBoard(cur, a1, 'A', ASTRONAUT_ID, 3, 2);
+
+  const land = launchActions(cur, port).find((o) => o.id.endsWith(':land'));
+  assert.ok(land, '要有"降落到星球"的按钮');
+  const go = applyAction(cur, { type: 'UNIT_ACTION', unitId: port.id, actionId: land!.id });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+
+  const landed = go.state.units.find((u) => u.id === marine.id)!;
+  assert.equal(boardIdOf(landed), EARTH, '落在地球上');
+  const b = boardOf(go.state, EARTH);
+  const cx = Math.floor((b.w - 1) / 2);
+  const cy = Math.floor((b.h - 1) / 2);
+  assert.ok(
+    Math.abs(landed.x - cx) + Math.abs(landed.y - cy) <= 6,
+    `落点该挨着图中央，实际 ${landed.x},${landed.y}（中心 ${cx},${cy}）`,
+  );
+  // 降落的单位当回合不能动（和登船同一个口径）
+  assert.equal(landed.moved, true);
+  assert.equal(landed.acted, true);
+});
+
+test('接驳站：降落改在它旁边；每颗星球每方只能有一座', () => {
+  const st = openStation();
+  let cur = st.state;
+  const a1 = st.board;
+  pave(cur, a1, [[1, 1], [3, 3], [3, 2]]);
+  putOnBoard(cur, a1, 'A', STATION_SOLAR_ID, 1, 1);
+  const port = putOnBoard(cur, a1, 'A', STATION_LAUNCH_ID, 3, 3);
+  const marine = putOnBoard(cur, a1, 'A', ASTRONAUT_ID, 3, 2);
+
+  // 地球上的接驳站（2×2，摆在 (3,3)）
+  const pad = putOnBoard(cur, EARTH, 'A', LANDING_PAD_ID, 3, 3);
+  const fitted = putOnBoard(cur, EARTH, 'A', LANDING_PAD_ID, 12, 12);
+  cur.units = cur.units.filter((u) => u.id !== fitted.id); // 只留一座
+
+  const land = launchActions(cur, port).find((o) => o.id.endsWith(':land'));
+  const go = applyAction(cur, { type: 'UNIT_ACTION', unitId: port.id, actionId: land!.id });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+  const landed = go.state.units.find((u) => u.id === marine.id)!;
+  /*
+   * 落在接驳站**外沿那一圈**：2×2 的站占 (3,3)-(4,4)，所以落点到这块地的
+   * 曼哈顿距离是 1（贴边）。不要求具体是哪一格——空位是局面决定的。
+   */
+  const dx = Math.max(0, Math.max(3 - landed.x, landed.x - 4));
+  const dy = Math.max(0, Math.max(3 - landed.y, landed.y - 4));
+  assert.ok(dx + dy <= 1, `该贴着接驳站，实际落在 ${landed.x},${landed.y}（距离 ${dx + dy}）`);
+
+  /*
+   * 每颗星球每方一座：走真正的 BUILD，验的是规则层那道闸，不是钩子自己。
+   * 在地球上试会被城挤掉（城市格不让建、最后一个出兵位也不让建），
+   * 所以换到月球——那里没有城，地形就是月壤和环形山。
+   */
+  const crew = putOnBoard(cur, 'moon', 'A', 'crew', 2, 2);
+  crew.era = 5;
+  crew.acted = false; // putOnBoard 摆出来的都是"这回合已经动过"
+  cur.players.A.gold = 99999;
+  const first = applyAction(cur, {
+    type: 'BUILD',
+    unitId: crew.id,
+    unitType: LANDING_PAD_ID,
+    x: 3,
+    y: 3,
+  });
+  assert.ok(first.ok, first.ok ? '' : first.reason);
+  cur = first.state; // 第二下要打在"已经有了一座"的局面里
+  assert.equal(pad.hp > 0, true);
+
+  const crew2 = putOnBoard(cur, 'moon', 'A', 'crew', 6, 6);
+  crew2.acted = false;
+  const second = applyAction(cur, {
+    type: 'BUILD',
+    unitId: crew2.id,
+    unitType: LANDING_PAD_ID,
+    x: 7,
+    y: 6,
+  });
+  assert.equal(second.ok, false, '同一颗星球上第二座接驳站不该建得起来');
+  assert.ok(second.reason?.includes('接驳站'), `实际：${second.reason}`);
+});
+
+test('核心舱被打掉：全站停摆，3 个原主回合后整张图连人一起消失', () => {
+  /*
+   * 这是"抢船"的整条链：打死核心 → 废墟（还能抢修）→ 到期整张棋盘删除。
+   * 站上的舱段不会跟着消失，它们是接管时的战利品。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const node = cur.starmap!.stations[0]!.at;
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+  putOnBoard(cur, foe.board, 'B', STATION_PRODUCER_ID, 1, 1);
+  putOnBoard(cur, foe.board, 'B', STATION_SOLAR_ID, 1, 2);
+  foe.core.hp = 1;
+
+  // A 的登船队就站在核心舱隔壁
+  const raider = putOnBoard(cur, foe.board, 'A', 'militia', foe.core.x + 1, foe.core.y);
+  raider.acted = false;
+  cur.current = 'A';
+
+  const hit = applyAction(cur, { type: 'ATTACK', unitId: raider.id, targetId: foe.core.id });
+  assert.ok(hit.ok, hit.ok ? '' : hit.reason);
+  cur = hit.state;
+
+  assert.equal(cur.units.some((u) => u.id === foe.core.id), false, '核心舱没了');
+  assert.equal(isRuined(cur, foe.board), true, '站进入废墟');
+  assert.equal(stationPower(cur, foe.board).brownout, true, '废墟整站断电');
+  assert.equal(cur.boards![foe.board] !== undefined, true, '棋盘还在，还有抢修窗口');
+  // 舱段是战利品，不会随核心一起没
+  assert.ok(cur.units.some((u) => u.type === STATION_PRODUCER_ID && boardIdOf(u) === foe.board));
+
+  const rec = cur.starmap!.stations.find((x) => x.board === foe.board)!;
+  assert.equal(rec.ruin!.left, RUIN_TURNS);
+
+  // 倒计时按原主的回合走：打死它的是 A，所以数 A 的回合
+  cur = round(cur);
+  assert.equal(cur.starmap!.stations.find((x) => x.board === foe.board)!.ruin!.left, RUIN_TURNS - 1);
+  cur = round(cur);
+  cur = round(cur);
+  assert.equal(cur.boards![foe.board], undefined, '到期的棋盘要删掉');
+  assert.equal(cur.starmap!.stations.some((x) => x.board === foe.board), false, '星图上也没有了');
+  assert.equal(cur.units.some((u) => boardIdOf(u) === foe.board), false, '上面的人一起没');
+});
+
+test('接管废墟：付维护费修好，站与所有舱段归你', () => {
+  const st = openStation();
+  let cur = st.state;
+  const node = cur.starmap!.stations[0]!.at;
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+  const lab = putOnBoard(cur, foe.board, 'B', STATION_LAB_MATERIAL_ID, 1, 1);
+  foe.core.hp = 1;
+  const raider = putOnBoard(cur, foe.board, 'A', 'militia', foe.core.x + 1, foe.core.y);
+  raider.acted = false;
+  cur.current = 'A';
+  cur = applyAction(cur, { type: 'ATTACK', unitId: raider.id, targetId: foe.core.id }).state;
+
+  // 废墟上的任意单位都能接管（这里是 A 的登船队）
+  const u = cur.units.find((x) => x.id === raider.id)!;
+  const offers = activeExpansions(cur).flatMap(
+    (e) => e.hooks.unitActions?.({ state: cur, unit: u, viewer: 'A' }) ?? [],
+  );
+  const salvage = offers.find((o) => o.id === 'station:salvage');
+  assert.ok(salvage, '废墟上该有「接管」按钮');
+  assert.equal(salvage!.disabled, false);
+
+  const price = salvageCost(cur, cur.starmap!.stations.find((x) => x.board === foe.board)!);
+  const goldBefore = cur.players.A.gold;
+  const done = applyAction(cur, { type: 'UNIT_ACTION', unitId: raider.id, actionId: 'station:salvage' });
+  assert.ok(done.ok, done.ok ? '' : done.reason);
+  cur = done.state;
+
+  assert.equal(isRuined(cur, foe.board), false, '不再是废墟');
+  assert.equal(cur.starmap!.stations.find((x) => x.board === foe.board)!.owner, 'A', '站归 A');
+  assert.equal(cur.players.A.gold, goldBefore - price, `扣了维护费 ${price}`);
+  // 核心舱在原位重生，舱段跟着换主
+  const core = cur.units.find((x) => x.type === STATION_CORE_ID && boardIdOf(x) === foe.board)!;
+  assert.ok(core, '核心舱要回来');
+  assert.equal(core.x, foe.core.x);
+  assert.equal(core.y, foe.core.y);
+  const labNow = cur.units.find((x) => x.id === lab.id)!;
+  assert.equal(labNow.owner, 'A', '舱段一起归你');
+  // 换主之后名字跟着变（默认名才改，自己起过的不动）
+  assert.ok(cur.boards![foe.board]!.name!.includes('A') || !cur.boards![foe.board]!.name!.includes('B'));
+});
+
+test('拆除：核心舱当场消失，先进入废墟再走完毁灭流程', () => {
+  const st = openStation();
+  const cur = st.state;
+  const offers = activeExpansions(cur).flatMap(
+    (e) => e.hooks.unitActions?.({ state: cur, unit: st.core, viewer: 'A' }) ?? [],
+  );
+  const scuttle = offers.find((o) => o.id === 'station:scuttle');
+  assert.ok(scuttle, '核心舱该有「拆除」按钮');
+  assert.ok(scuttle!.confirm, '拆站要二次确认');
+
+  const r = applyAction(cur, { type: 'UNIT_ACTION', unitId: st.core.id, actionId: 'station:scuttle' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === st.core.id), false, '核心舱当场没了');
+  assert.equal(isRuined(r.state, st.board), true, '站进入废墟（不是当场删除）');
+  assert.equal(r.state.boards![st.board] !== undefined, true, '棋盘还在，对面还有机会抢修');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

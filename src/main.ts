@@ -1091,7 +1091,9 @@ function starPanelInfo(): StarPanelInfo | null {
       lines.push(`轨道上停泊 ${n.stations.length} 座空间站`);
       for (const st of n.stations) {
         lines.push(
-          `· ${st.ownerName}的「${st.name}」${st.travelTo ? `（正在驶向${st.travelTo}）` : ''}`,
+          `· ${st.ownerName}的「${st.name}」`
+          + `${st.travelTo ? `（正在驶向${st.travelTo}）` : ''}`
+          + `${st.ruinLeft ? `（废墟，${st.ruinLeft} 回合后消失）` : ''}`,
         );
       }
     }
@@ -2069,11 +2071,21 @@ function escapeBoardText(t: string): string {
  */
 function syncBoardList(view: PlayerView): void {
   if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
+  /*
+   * 废墟的倒计时也要进列表。
+   *
+   * 一座站变成废墟之后，它没有核心舱、所有舱段停摆——玩家最需要知道的
+   * 就是"还剩几个回合"，而这个数字只在站内面板上看得到。列表是全局面板里
+   * 唯一一栏一直亮着的东西，所以这里给一个「废 N」角标。
+   */
+  const ruinLeftOf = (id: BoardId): number =>
+    peekStarmap(state)?.stations.find((st) => st.board === id)?.ruin?.left ?? 0;
   const entryOf = (id: BoardId) => ({
     id,
     name: boardName(state, id),
     ready: boardReadyCount(view, id),
     contact: boardHasContact(view, id),
+    ruin: ruinLeftOf(id),
   });
   /*
    * 面板的顺序：**星图 → 星球 → 自己的空间站**。
@@ -2098,7 +2110,7 @@ function syncBoardList(view: PlayerView): void {
     boardListOpen ? 'open' : 'shut',
     activeBoardId,
     replay ? 'replay' : '',
-    ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}`),
+    ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}/${e.ruin}`),
     // 在途的倒计时：面板展开时它每回合都在变，不进签名就永远停在旧数字
     ...(state.transit ?? []).map((t) => `${t.owner}/${t.to}/${t.left}`),
   ].join('|');
@@ -2136,15 +2148,17 @@ function syncBoardList(view: PlayerView): void {
     `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +
     `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
     (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
+    (cur.ruin > 0 ? `<span class="bl-ruin" title="废墟：${cur.ruin} 个回合后消失">废 ${cur.ruin}</span>` : '') +
     (cur.contact ? '<i class="bl-contact" title="这张图上有敌人"></i>' : '') +
     `<span class="bl-caret">▾</span>` +
     `</button>`;
 
-  const rowOf = (e: { id: BoardId; name: string; ready: number; contact: boolean }): string =>
+  const rowOf = (e: { id: BoardId; name: string; ready: number; contact: boolean; ruin: number }): string =>
     `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
     `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
     `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
     (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
+    (e.ruin > 0 ? `<span class="bl-ruin" title="废墟：${e.ruin} 个回合后消失">废 ${e.ruin}</span>` : '') +
     (e.contact ? '<i class="bl-contact"></i>' : '') +
     `</button>`;
   const rows =

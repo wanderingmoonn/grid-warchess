@@ -29,10 +29,11 @@ import type {
   Unit,
   UnitTypeDef,
 } from '../types.ts';
-import { boardIdOf, boardOf, boardName, boardStateOf, tileOn } from '../board.ts';
-import { tilesOfUnit } from '../query.ts';
+import { boardIdOf, boardOf, boardName, boardStateOf, EARTH, tileOn } from '../board.ts';
+import { footprintOf, tilesOfUnit } from '../query.ts';
+import { passable } from '../config.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells, type SkillCtx } from '../skill-hooks.ts';
-import { lanesFrom, laneDistance, nodeById, nodeName, nodeOf, starmapOf } from './starmap.ts';
+import { lanesFrom, laneDistance, nodeById, nodeName, nodeOf, peekStarmap, starmapOf } from './starmap.ts';
 import { cellName, registerOrbitArrival } from './transit.ts';
 import { SILO_ID } from './silo.ts';
 import { SPACE_HAZARD } from './space-hazard.ts';
@@ -144,6 +145,27 @@ export const DOCK_DRAW = 6;
 export const CANNON_ATK = 30;
 /** 入舱口能缓存几个单位（满了拒绝进入） */
 export const DOCK_CAPACITY = 3;
+
+/**
+ * 废墟能撑几个"原主的回合"。
+ *
+ * 3 = 攻方至少要守住三个回合才能吃干抹净，守方也还有一次反打的机会。
+ * 再长就变成"打林战"，再短就没人来得及接管。
+ */
+export const RUIN_TURNS = 3;
+/**
+ * 接管一座废墟的维护费：底价 + 每格规模。
+ *
+ * 按**规模**而不是按"里面剩几座舱段"算，是因为舱段对敌人不可见
+ * （`hideUnit`）——按数量定价等于把情报标了价。5×5 的站 500 金、9×9 的 740。
+ */
+export const SALVAGE_BASE_COST = 200;
+export const SALVAGE_PER_SIZE = 60;
+
+/** 接驳站：太空部队降落的落点由它决定 */
+export const LANDING_PAD_ID = 'landing-pad';
+/** 每颗星球每方一座 */
+export const LANDING_PAD_COST = 320;
 
 /** 微重力研究室：每座 +5%，软上限 +20% */
 export const GRAVITY_PER = 0.05;
@@ -286,12 +308,54 @@ export interface StationPower {
 }
 
 /**
+ * 这张棋盘对应的站记录（不是站就 undefined）。
+ *
+ * 和 `stationOf(unit)` 分开：很多地方手上只有 board id（能量、废墟倒计时、
+ * 列表角标），没有单位可传。
+ */
+export function stationRecordOf(s: GameState, board: string): StarStation | undefined {
+  return peekStarmap(s)?.stations.find((st) => st.board === board);
+}
+
+/**
+ * 这座站是不是废墟（核心舱已经没了，只剩抢修窗口）。
+ *
+ * 判据只有 `StarStation.ruin` 一个：**别去数"核心舱还在不在"**——
+ * 核心舱被自拆、被打掉、被遣散是三条路径，漏一条就出现"没有核心舱却还
+ * 在产金"的站。ruin 是显式状态，写一次管到底。
+ */
+export function isRuined(s: GameState, board: string): boolean {
+  return !!stationRecordOf(s, board)?.ruin;
+}
+
+/**
  * 一座站的能量账。
  *
  * 收的是**哪张站棋盘**，不是"哪个玩家"——两座站隔着几万公里，
  * 不可能互相供电。这也是它和 `armor.energyReport`（一方共用一股电）的区别。
  */
 export function stationPower(s: GameState, board: string): StationPower {
+  /*
+   * 废墟：整站断电。
+   *
+   * 为什么不"照常算出来、再让各处自己判"：这座站已经没有核心舱了，
+   * 太阳能板没人接线、生产舱没人维护——**物理上就是没电**。
+   * 在这里返回 brownout 之后，所有"断电就停摆"的既有判据（产能、航速、
+   * 维生仓、功能舱加成）一次全部失效，不用再逐处补 `isRuined`。
+   */
+  if (isRuined(s, board)) {
+    return {
+      supply: 0,
+      demand: 0,
+      headroom: 0,
+      cores: 0,
+      solars: 0,
+      thrusters: 0,
+      producers: 0,
+      lives: 0,
+      brownout: true,
+    };
+  }
   let supply = 0;
   let demand = 0;
   let cores = 0;
@@ -434,6 +498,7 @@ export function stationSailTurns(s: GameState, station: StarStation, lane: StarL
 
 /** 启航前的检查。和面板共用一句话，免得"按钮写着能飞、点下去说不能" */
 export function stationSailProblem(s: GameState, station: StarStation): string | null {
+  if (station.ruin) return '这座站已经成了废墟，飞不了';
   if (station.travel) {
     return `正在驶向${nodeName(s, station.travel.to)}（还有 ${Math.max(0, station.travel.left)} 回合）`;
   }
@@ -521,6 +586,19 @@ export function tickStationTravel(s: GameState, player: PlayerId): void {
  * 只在颜色上区分（`.power-bar.station`），免得和地面电网混起来。
  */
 export function stationPowerHtml(s: GameState, u: Unit): string | null {
+  /*
+   * 废墟：不画能量条，画一行"这是什么、还剩几回合"。
+   *
+   * 一条 0/0 的红条只会让玩家以为"电力算错了"。废墟要表达的是
+   * "这站已经完了，还能抢"，所以直接把倒计时写在这儿——它也是这座站
+   * 现在唯一重要的数字。
+   */
+  const rec = stationOf(s, u);
+  if (rec?.ruin) {
+    const left = Math.max(0, rec.ruin.left);
+    return `<div class="hint"><b>废墟</b>：核心舱已被摧毁，所有舱段停摆。`
+      + `${left} 个回合后整座站会被彻底抹掉；站上任意单位可付维护费接管。</div>`;
+  }
   const p = stationPowerOf(s, u);
   if (!p) return null;
   const over = p.brownout;
@@ -1100,6 +1178,38 @@ export const STATION_DOCK: UnitTypeDef = {
   summonedOnly: true,
 };
 
+/**
+ * 接驳站：给"从轨道上跳下来"的部队一个落脚点。
+ *
+ * 它不发电、不产金、不加成——唯一的作用是把降落点从"全图正中"换成
+ * "它旁边那一圈"。这件事在战术上很实在：正中往往压着城或山，
+ * 而"跳在自家接驳站旁边"等于把空降变成一次可控的侧翼机动。
+ *
+ * 每颗星球每方一座（`buildProblem` 兜这道闸），2×2：它是场地，不是箱子。
+ */
+export const LANDING_PAD: UnitTypeDef = {
+  id: LANDING_PAD_ID,
+  name: '接驳站',
+  short: '驳',
+  era: 5,
+  category: 'building',
+  cost: LANDING_PAD_COST,
+  buildCost: 48,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 100,
+  range: 0,
+  vision: 3,
+  footprint: 2,
+  /*
+   * 白名单而不是"随便什么能站的地"：不给白名单时判据是 `passable`，
+   * 而 `passable` 放行 `void`/`deck`——工程队万一被送上站，就能在甲板上
+   * 修一座接驳站，这件事没有意义。
+   */
+  buildOn: ['plain', 'forest', 'hill', 'plateau', 'valley', 'marsh', 'dune', 'regolith', 'crater', 'city'],
+};
+
 // ── 技能：扩建 / 建造 ────────────────────────────────────────────────
 
 function log(s: GameState, p: PlayerId, text: string, open = false): void {
@@ -1221,6 +1331,8 @@ export function activeModuleCount(s: GameState, owner: PlayerId, typeId: string)
     if (u.owner !== owner || u.type !== typeId || u.hp <= 0) continue;
     const board = boardIdOf(u);
     if (!isStationBoard(s, board)) continue;
+    // 废墟里的舱段只是残骸：不产金、不加甲、不加视野（见 stationPower 的注释）
+    if (isRuined(s, board)) continue;
     if (!dark.has(board)) dark.set(board, stationPower(s, board).brownout);
     if (dark.get(board)) continue;
     if (!isStaffed(s, u)) continue;
@@ -1597,6 +1709,7 @@ export function cannonAimBoard(s: GameState, self: Unit): string | null {
 
 /** 炮口转向：面板上每个敌方站一个按钮（只有一个目标时不显示，自动瞄上） */
 export function cannonActions(s: GameState, cannon: Unit): UnitActionOption[] {
+  if (isRuined(s, boardIdOf(cannon))) return [];
   const rivals = rivalStationsOnOrbit(s, cannon);
   if (rivals.length <= 1) return [];
   const aim = cannonAimBoard(s, cannon);
@@ -1755,6 +1868,7 @@ export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
   const out: UnitActionOption[] = [];
   if (port.custom?.launchedTurn === s.turn) return out;
   if (!stationOf(s, port)) return out;
+  if (isRuined(s, boardIdOf(port))) return out;
   // 断电：舱门是电动的。与其列一串点不动的按钮，不如直接把理由写在面板行里
   if (stationPower(s, boardIdOf(port)).brownout) return out;
 
@@ -1784,6 +1898,8 @@ export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
   // 敌方站上的破口（能直接登船的地方）
   const wrecks: Array<{ board: string; x: number; y: number }> = [];
   for (const st of rivalStationsOnOrbit(s, port)) {
+    // 废墟没有"破口"可登——要上去只能等它变成废墟之后从轨道降落（见下）
+    if (st.ruin) continue;
     const b = boardOf(s, st.board);
     for (let y = 0; y < b.h; y++) {
       for (let x = 0; x < b.w; x++) {
@@ -1793,6 +1909,16 @@ export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
       }
     }
   }
+
+  /*
+   * 降落：这个轨道对应的那颗星球（第三类目的地）。
+   *
+   * 落点由 `landingCell` 决定（自家接驳站旁边，否则全图正中）——
+   * 界面上只给"降落到月球"这一句，玩家不需要知道坐标，也不想算。
+   */
+  const rec = stationOf(s, port);
+  const planet = rec ? nodeById(s, rec.at)?.board : undefined;
+  const landSpot = planet ? landingCell(s, planet, port.owner) : null;
 
   for (const cargo of cargos) {
     const name = s.unitTypes[cargo.type]?.name ?? '单位';
@@ -1815,6 +1941,20 @@ export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
         note: '登船',
       });
     }
+    if (planet && landSpot) {
+      const pad = (s.units ?? []).some(
+        (u) => u.type === LANDING_PAD_ID && u.owner === port.owner && u.hp > 0 && boardIdOf(u) === planet,
+      );
+      out.push({
+        id: `station:launch:${cargo.id}:land`,
+        group: `出舱口 · ${name}`,
+        label: `送 ${name} → 降落「${boardName(s, planet)}」`,
+        detail: pad
+          ? `落在接驳站旁边的空地上（${cellName(landSpot.x, landSpot.y)}）`
+          : `落在图中央（${cellName(landSpot.x, landSpot.y)}）；盖一座接驳站可以改落点`,
+        note: '降落',
+      });
+    }
   }
   return out;
 }
@@ -1822,6 +1962,7 @@ export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
 /** 入舱口的按钮：舱里有几个能卸的人就有几个按钮 */
 export function dockActions(s: GameState, port: Unit): UnitActionOption[] {
   const out: UnitActionOption[] = [];
+  if (isRuined(s, boardIdOf(port))) return out;
   const cargo = dockCargo(port);
   for (let i = 0; i < cargo.length; i += 1) {
     const item = cargo[i]!;
@@ -1847,6 +1988,9 @@ export function dockActions(s: GameState, port: Unit): UnitActionOption[] {
  * （是不是你的、断电没有、那个单位还在不在）。
  */
 export function combatUnitAction(s: GameState, unit: Unit, actionId: string): string | null {
+  if (actionId === 'station:salvage') return salvageStation(s, unit);
+  if (actionId === 'station:scuttle') return scuttleStation(s, unit);
+
   if (actionId.startsWith('station:aim:')) {
     const board = actionId.slice('station:aim:'.length);
     if (!rivalStationsOnOrbit(s, unit).some((st) => st.board === board)) {
@@ -1923,6 +2067,30 @@ export function combatUnitAction(s: GameState, unit: Unit, actionId: string): st
     return null;
   }
 
+  if (kind === 'land') {
+    const rec = stationOf(s, unit);
+    const planet = rec ? nodeById(s, rec.at)?.board : undefined;
+    if (!planet) return '这个轨道上没有可以降落的星球';
+    const cell = landingCell(s, planet, unit.owner);
+    if (!cell) return '那颗星球上没有能落脚的地方';
+
+    s.units = s.units.filter((u) => u.id !== body.id);
+    body.board = planet === EARTH ? undefined : planet;
+    body.x = cell.x;
+    body.y = cell.y;
+    body.moved = true;
+    body.acted = true;
+    s.units.push(body);
+    unit.custom = { ...(unit.custom ?? {}), launchedTurn: s.turn };
+    log(
+      s,
+      unit.owner,
+      `${s.unitTypes[body.type]?.name ?? '单位'} 从出舱口跳下，降落在「${boardName(s, planet)}」${cellName(cell.x, cell.y)}`,
+      true,
+    );
+    return null;
+  }
+
   if (kind === 'wreck') {
     const board = rest[2] ?? '';
     const x = Number(rest[3]);
@@ -1955,6 +2123,21 @@ export function combatUnitAction(s: GameState, unit: Unit, actionId: string): st
 
 /** 战斗舱段的面板说明（核心舱之外的那几个） */
 export function combatLines(s: GameState, u: Unit): string[] {
+  /*
+   * 废墟优先：这时候"这座舱段能干什么"已经不重要了，重要的是
+   * "这站还剩几个回合、谁能接手"。所有舱段共用同一段话。
+   */
+  const rec = stationOf(s, u);
+  if (rec?.ruin) {
+    const price = salvageCost(s, rec);
+    const mine = rec.owner === u.owner;
+    return [
+      `废墟：核心舱已被摧毁，全站停摆`,
+      `${Math.max(0, rec.ruin.left)} 个回合后整座站会被彻底抹掉（连同上的人和舱段）`,
+      mine ? '你是这座站的原主：站在这里付维护费可以把它修回来' : '站上任意单位可以付维护费接管这座站',
+      `维护费 ${price} 金，接管后所有舱段归你`,
+    ];
+  }
   switch (u.type) {
     case STATION_CANNON_ID: {
       const aim = cannonAimBoard(s, u);
@@ -2052,4 +2235,312 @@ export function stationLines(s: GameState, u: Unit): string[] {
   out.push(`一座出舱口：${launch} 金（耗电 ${LAUNCH_DRAW}，每回合 1 次）`);
   out.push(`一座入舱口：${dock} 金（耗电 ${DOCK_DRAW}，缓存 ${DOCK_CAPACITY} 人）`);
   return out;
+}
+
+/* ===========================================================================
+ * 废墟与接管
+ *
+ * ── 生命周期 ────────────────────────────────────────────
+ *
+ *   核心舱被打掉 / 被自拆
+ *        ↓   （`ruinStation`：写 StarStation.ruin，站立刻全停摆）
+ *   废墟：3 个原主回合内，站上任意单位可付维护费接管
+ *        ↓   （没人接 → `tickStationRuins` 倒计时归零）
+ *   整张棋盘连同上面的舱段和人一起删掉（`removeStationBoard`）
+ *
+ * 为什么是"先变废墟、过 3 回合再删"而不是当场删：打掉核心的战争目标
+ * 通常是**抢船**，不是清屏；给一个窗口，攻守双方才有得抢。自己点「拆除」
+ * 走的是同一条流程（`by` 写自己），所以不需要第二套实现。
+ * ======================================================================== */
+
+/** 拆掉一座站要付的维护费。按**规模**算，不按里面剩下多少舱段——
+ *  舱段对敌人是不可见的（`hideUnit`），按数量定价等于把情报标了价。 */
+export function salvageCost(s: GameState, station: StarStation): number {
+  const b = s.boards?.[station.board];
+  const size = b ? Math.max(b.w, b.h) : 5;
+  return SALVAGE_BASE_COST + SALVAGE_PER_SIZE * size;
+}
+
+/**
+ * 让一座站进入废墟。
+ *
+ * 三条路都走这里：核心舱被打掉（`onUnitKilled`）、玩家点「拆除」、
+ * 以及以后可能出现的"弃站"。**幂等**：已经是废墟就直接返回——
+ * 死亡钩子在某些路径上会跑两次（先 fireKilled 再 sweepDead），
+ * 不幂等的话倒计时会被重置成满格。
+ */
+export function ruinStation(
+  s: GameState,
+  board: string,
+  x: number,
+  y: number,
+  by: PlayerId,
+  reason: string,
+): void {
+  const rec = stationRecordOf(s, board);
+  if (!rec || rec.ruin) return;
+  rec.ruin = { left: RUIN_TURNS, by, x, y };
+  // 一座被打烂的站不会再自己飞：半路被毁的站也得当场停在原地
+  delete rec.travel;
+  // 站里的舱段不再是"这座站的"，但也不销毁：它们是接管时的战利品
+  const name = boardName(s, board);
+  log(s, by, `${name} 变成废墟（${reason}）：${RUIN_TURNS} 个回合内可以花钱接管`, true);
+}
+
+/**
+ * 回合开始：给**原主**的那些废墟倒计时。
+ *
+ * 按原主的回合数算，和火箭/站航行同一套口径（"3 回合"= 这个人自己的三次回合）。
+ * 用全局回合会让先手方平白少等一轮，玩家算不出来。
+ */
+export function tickStationRuins(s: GameState, player: PlayerId): void {
+  const map = starmapOf(s);
+  if (!map) return;
+  for (const st of [...map.stations]) {
+    if (!st.ruin || st.ruin.by !== player) continue;
+    st.ruin.left -= 1;
+    if (st.ruin.left > 0) continue;
+    removeStationBoard(s, st.board);
+  }
+}
+
+/**
+ * 把一张站棋盘整块删掉：棋盘、星图记录、上面的一切。
+ *
+ * 三件容易漏的事，都在这里收口：
+ *   · **上面的人**：销毁时他们跟着没（战报要点名，否则玩家只看到自己的兵
+ *     从名单里消失了）；
+ *   · **飞向它的火箭**：目的地没了再让它到港，会在 `s.boards[board]` 上读到
+ *     undefined；
+ *   · **记忆里的幽灵**：`memory.known` 里留着已删除棋盘的记录，
+ *     名单/星图偶尔还会算到它们。
+ */
+export function removeStationBoard(s: GameState, board: string): void {
+  const map = starmapOf(s);
+  if (!map) return;
+  const rec = map.stations.find((st) => st.board === board);
+  if (!rec) return;
+  const name = boardName(s, board);
+
+  const lost = (s.units ?? []).filter((u) => boardIdOf(u) === board);
+  if (lost.length > 0) {
+    // 站上的人按**各自的主人**分别写一条：一句话里混着两边的兵，谁也读不懂
+    const byOwner = new Map<PlayerId, string[]>();
+    for (const u of lost) {
+      const list = byOwner.get(u.owner) ?? [];
+      list.push(s.unitTypes[u.type]?.name ?? u.type);
+      byOwner.set(u.owner, list);
+    }
+    for (const [owner, names] of byOwner) {
+      log(s, owner, `${name} 彻底解体，${names.length} 个单位随之消失：${names.join('、')}`, true);
+    }
+  }
+  s.units = (s.units ?? []).filter((u) => boardIdOf(u) !== board);
+
+  // 在途的火箭：目的地没了。就地取消，并把货还到起点那颗星球的轨道上？——
+  // 不还：火箭已经飞出去一半，凭空变回一群人比"失联"更难解释。
+  const transit = s.transit ?? [];
+  const doomed = transit.filter((t) => t.board === board);
+  if (doomed.length > 0) {
+    for (const t of doomed) {
+      log(s, t.owner, `${name} 已经不存在，飞向它的火箭失联（${t.cargo.length} 个单位）`, true);
+    }
+    s.transit = transit.filter((t) => t.board !== board);
+  }
+
+  // 记忆：每方各删一份
+  for (const mem of Object.values(s.memory ?? {})) {
+    if (!mem?.known) continue;
+    mem.known = mem.known.filter((k) => k.board !== board);
+  }
+  // 侦察情报同样按图存
+  if (s.recon) s.recon = s.recon.filter((r) => r.board !== board);
+
+  map.stations = map.stations.filter((st) => st.board !== board);
+  delete s.boards?.[board];
+  // 一条公开战报就够：名字消失这件事两方都该看到（`open` 只写一次）
+  log(s, rec.owner, `${name} 已经从星图上消失`, true);
+}
+
+/**
+ * 站在废墟上的单位能看到「接管」按钮。
+ *
+ * 换成**动作**而不是"走过去自动接管"（城市废墟是后者）：站内的"走上去"
+ * 稀松平常，一次误点就掏掉几百金；而且废墟本身要连续几回合被人站着，
+ * 做成按钮才说得清"我打算接手这艘船"。
+ */
+export function ruinActions(s: GameState, unit: Unit): UnitActionOption[] {
+  const rec = stationOf(s, unit);
+  if (!rec?.ruin) return [];
+  const price = salvageCost(s, rec);
+  const afford = s.players[unit.owner].gold >= price;
+  return [
+    {
+      id: 'station:salvage',
+      group: '废墟',
+      label: rec.owner === unit.owner ? '抢修这座空间站' : '接管这座空间站',
+      detail: `付维护费把它连同所有舱段修好，归你所有（核心舱重新出现在原位）`,
+      note: afford ? `${price} 金` : `金币不足 ${s.players[unit.owner].gold}/${price}`,
+      disabled: !afford,
+    },
+  ];
+}
+
+/**
+ * 接管废墟：付钱 → 换主 → 核心舱在原位重生 → 舱段一起改姓。
+ *
+ * 站上的**其他人**（原主的守军）不会因此消失，也不会自动变节：他们还在
+ * 这座站里，于是立刻变成"在敌站里的一小队人"——这正是抢船该有的样子。
+ */
+export function salvageStation(s: GameState, unit: Unit): string | null {
+  const rec = stationOf(s, unit);
+  if (!rec?.ruin) return '这里没有可以接管的废墟';
+  const board = rec.board;
+  const price = salvageCost(s, rec);
+  if (s.players[unit.owner].gold < price) return `维护费不够（要 ${price} 金）`;
+
+  const { x, y } = rec.ruin;
+  const prevOwner = rec.owner;
+  s.players[unit.owner].gold -= price;
+
+  rec.owner = unit.owner;
+  delete rec.ruin;
+  // 名字跟着换主：只改"默认名"（原主的名字 + 编号），玩家自己起过的名字不动
+  const b = s.boards?.[board];
+  const prevName = s.players[prevOwner]?.name ?? prevOwner;
+  const myName = s.players[unit.owner]?.name ?? unit.owner;
+  const prefix = `${prevName}的空间站`;
+  if (b?.name?.startsWith(prefix)) b.name = `${myName}的空间站${b.name.slice(prefix.length)}`;
+  // 舱段跟着换主：只是"重新接上电"，不是重新造一遍。
+  // 原主自己抢修时这些舱段本来就是他的，只数不改。
+  let modules = 0;
+  for (const u of s.units ?? []) {
+    if (boardIdOf(u) !== board || u.type === STATION_CORE_ID) continue;
+    u.owner = unit.owner;
+    u.acted = true;
+    modules += 1;
+  }
+
+  // 核心舱在原位重生：满血、当回合不能动（它是"刚修好"，不是"一直在"）。
+  // 原位被站着（接管的人自己就可能站在那儿）就退到旁边最近的一格空甲板——
+  // 两个单位叠在一格上，后面每一条占位判定都会错。
+  let spot = { x, y };
+  if (coveredOn(s, board, x, y)) {
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (tileOn(s, board, nx, ny)?.terrain !== 'deck') continue;
+      if (coveredOn(s, board, nx, ny)) continue;
+      spot = { x: nx, y: ny };
+      break;
+    }
+  }
+  const coreDef = s.unitTypes[STATION_CORE_ID];
+  const core: Unit = {
+    id: `u${s.nextUnitSeq++}`,
+    type: STATION_CORE_ID,
+    owner: unit.owner,
+    x: spot.x,
+    y: spot.y,
+    hp: coreDef?.maxHp ?? 120,
+    kills: 0,
+    moved: true,
+    acted: true,
+    board,
+  };
+  s.units.push(core);
+
+  const name = boardName(s, board);
+  log(s, unit.owner, `支付 ${price} 金接管「${name}」，${modules} 座舱段归你`, true);
+  if (prevOwner !== unit.owner) log(s, prevOwner, `「${name}」被对手接管了`, true);
+  return null;
+}
+
+/**
+ * 拆除自己的站：**不是当场消失**，而是立刻进入废墟，走完 3 回合的毁灭流程。
+ *
+ * 为什么要留这段：拆站的目的通常是"不留给对面"。当场删掉等于替对手
+ * 省了判断；走废墟流程，对面还有 3 个回合可以抢修——拆的一方要么守住，
+ * 要么接受它可能被接手。这也是为什么这个按钮要二次确认。
+ */
+export function scuttleStation(s: GameState, unit: Unit): string | null {
+  const rec = stationOf(s, unit);
+  if (!rec) return '这支部队不在任何空间站上';
+  if (unit.type !== STATION_CORE_ID) return '只有核心舱能拆掉一座站';
+  if (rec.ruin) return '这座站已经是废墟了';
+
+  ruinStation(s, rec.board, unit.x, unit.y, unit.owner, '被自己人拆除');
+  // 核心舱当场没了：站立刻停摆，剩下的舱段留作接管时的战利品
+  s.units = (s.units ?? []).filter((u) => u.id !== unit.id);
+  return null;
+}
+
+/* ── 降落：出舱口的第三个目的地 ─────────────────────────────────── */
+
+/**
+ * 太空部队落到某颗星球时的落点。
+ *
+ * 两种规则，按"有没有接驳站"分：
+ *   · 有：落在接驳站**身边**（近处那一圈空地上），这就是接驳站的全部作用；
+ *   · 没有：落在全图正中央，再往外螺旋找第一块能站的地。
+ *
+ * 从中心往外找而不是"中心不行就失败"：正中央常常压着城或山，
+ * 那种情况下还回一句"落不下去"，等于让这个目的地随机不可用。
+ */
+export function landingCell(s: GameState, board: string, owner: PlayerId): { x: number; y: number } | null {
+  const b = boardOf(s, board);
+  const free = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= b.w || y >= b.h) return false;
+    const tile = tileOn(s, board, x, y);
+    if (!tile) return false;
+    const t = tile.terrain;
+    // 城格不算落点：空降进城等于绕过城墙，而"入城"在这套规则里是走进去的事
+    if (t === 'city' || tile.cityId) return false;
+    if (!passable(t) || t === 'void' || t === 'wreck') return false;
+    return !coveredOn(s, board, x, y);
+  };
+
+  const pad = (s.units ?? []).find(
+    (u) => u.type === LANDING_PAD_ID && u.owner === owner && u.hp > 0 && boardIdOf(u) === board,
+  );
+  if (pad) {
+    // 接驳站是 2×2：从它外沿那一圈开始，一圈一圈往外找
+    const n = footprintOf(s, pad);
+    const ringOf = (x: number, y: number, ring: number): boolean =>
+      x === pad.x - ring ||
+      x === pad.x + n - 1 + ring ||
+      y === pad.y - ring ||
+      y === pad.y + n - 1 + ring;
+    for (let ring = 1; ring <= Math.max(b.w, b.h); ring += 1) {
+      for (let y = pad.y - ring; y <= pad.y + n - 1 + ring; y += 1) {
+        for (let x = pad.x - ring; x <= pad.x + n - 1 + ring; x += 1) {
+          if (!ringOf(x, y, ring)) continue;
+          if (free(x, y)) return { x, y };
+        }
+      }
+    }
+    return null;
+  }
+
+  const cx = Math.floor((b.w - 1) / 2);
+  const cy = Math.floor((b.h - 1) / 2);
+  for (let ring = 0; ring < Math.max(b.w, b.h); ring += 1) {
+    for (let y = cy - ring; y <= cy + ring; y += 1) {
+      for (let x = cx - ring; x <= cx + ring; x += 1) {
+        // 只走"这一圈"的格，否则越近的格子会被反复检查
+        if (Math.abs(x - cx) + Math.abs(y - cy) !== ring) continue;
+        if (free(x, y)) return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+/** 这一格是不是被某个单位（按占地）压着 */
+function coveredOn(s: GameState, board: string, x: number, y: number): boolean {
+  return (s.units ?? []).some((u) => {
+    if (u.hp <= 0 || boardIdOf(u) !== board) return false;
+    const n = footprintOf(s, u);
+    return x >= u.x && x < u.x + n && y >= u.y && y < u.y + n;
+  });
 }

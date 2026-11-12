@@ -5325,6 +5325,24 @@ export function buildSiteError(
       : `建造者离得太远（最多 ${reach} 格）`;
   }
 
+  /*
+   * 扩展自己的上限（每颗星球每方一座接驳站这类）。
+   *
+   * 放最后：通用条件先给出更基础的理由（"离得太远"比"已经有一座了"更该先说）。
+   * 传进来的 `s` 已经是**建造者那张图**的投影，所以扩展可以直接数
+   * `state.units`——那就是这颗星球上的全部东西。
+   */
+  for (const e of activeExpansions(s)) {
+    const reason = e.hooks.buildProblem?.({
+      state: s,
+      player: builder.owner,
+      typeId: def.id,
+      x,
+      y,
+    });
+    if (reason) return reason;
+  }
+
   return null;
 }
 

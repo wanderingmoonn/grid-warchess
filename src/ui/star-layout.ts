@@ -25,6 +25,8 @@ export interface StarStationCell {
   travelTo?: string;
   /** 航程进度 0~1（0 = 刚出发，1 = 到港）；没在航行就是 undefined */
   progress?: number;
+  /** 废墟还剩几个回合（不是废墟就没有这个字段） */
+  ruinLeft?: number;
 }
 
 export interface StarNodeCell {
@@ -111,6 +113,7 @@ export function starLayout(s: GameState): StarLayout | null {
         owner: st.owner,
         ownerName: s.players[st.owner]?.name ?? st.owner,
         name: s.boards?.[st.board]?.name ?? st.board,
+        ...(st.ruin ? { ruinLeft: st.ruin.left } : {}),
         ...(st.travel ? { travelTo: st.travel.to } : {}),
         ...(st.travel
           ? {

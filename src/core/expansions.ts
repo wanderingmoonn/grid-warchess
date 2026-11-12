@@ -352,6 +352,25 @@ export interface ExpansionHooks {
   modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
+
+  /**
+   * 选址否决：这条建筑**这一格**为什么不能盖（返回 null = 可以）。
+   *
+   * 和 `buildSiteError` 分工：核心只判通用的那几条（越界、占位、地形、距离、
+   * 会不会把城堵死），**扩展独有的上限**（"每颗星球每方只能有一座接驳站"）
+   * 走这里。不放进兵种数据，是因为它要读局面（你已经盖了几座），
+   * 而兵种表是纯数据。
+   *
+   * 拿到的是**建造者所在那张图**的投影（`boardStateOf`）：`state.units`
+   * 只有这张图上的兵，直接 filter 就是"这个星球上有几座"。
+   */
+  buildProblem?: (c: {
+    state: GameState;
+    player: PlayerId;
+    typeId: string;
+    x: number;
+    y: number;
+  }) => string | null;
   /** 纯函数：修正移动力 */
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */
