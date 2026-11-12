@@ -50,6 +50,8 @@
   /* 空间站：虚空是"这里还没有东西"，所以近乎全黑；甲板是铺好的冷灰金属 */
   --void: #14161a;
   --deck: #7c8592;
+  /* 破损舱段：被打穿的甲板露出舱体，比甲板暗、比虚空亮 */
+  --wreck: #4b413a;
   --lava: #d99a72;
   --volcano: #8d8290;
 
@@ -1234,8 +1236,35 @@ body {
     transparent 1px 7px
   );
 }
-/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */
-.tile.t-regolith::before {
+
+/*
+ * 破损舱段：甲板被炸穿的破口。
+ *
+ * 要一眼和甲板、虚空都分开：底色比甲板深得多（露出来的舱体结构），
+ * 但没有虚空那么黑（那里连地板都没有）。纹理用**斜向断口**而不是横拼缝，
+ * 远看就能认出"这一格不是好地板"——玩家要能扫一眼数出哪里被打开了口子。
+ */
+.tile.t-wreck {
+  background: var(--wreck);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.tile.t-wreck::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.16) 0 1px,
+      transparent 1px 6px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.35) 0 2px,
+      transparent 2px 9px
+    );
+}
+/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */.tile.t-regolith::before {
   content: '';
   position: absolute;
   inset: 0;

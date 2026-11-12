@@ -77,6 +77,7 @@ export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   // 空间站：没有高度概念
   void: 0,
   deck: 0,
+  wreck: 0,
 };
 
 /**
@@ -111,6 +112,7 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   // 空间站：站内一马平川，视野不额外加减
   void: 0,
   deck: 0,
+  wreck: 0,
 };
 
 /**

@@ -2232,27 +2232,6 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     if (armor !== before) armorItems.push({ label: hz.name, delta: armor - before });
   }
 
-  /*
-   * 环境**之后**的加成（材料研究室这类站内设施）。
-   * 进 `armorItems` 是有意的：玩家要能看出"这 +1 是在除完 5 之后加的"。
-   */
-  const hctx = {
-    state: s,
-    attacker: u,
-    defender: u,
-    armor,
-    isCounter: false,
-    armorOf: (x: Unit) => (x.id === u.id ? armor : effectiveStats(s, x).armor),
-    visionOf: (x: Unit) => visionOf(s, x),
-  };
-  for (const e of activeExpansions(s)) {
-    if (!e.hooks.postHazardArmor) continue;
-    hctx.armor = armor;
-    const before = armor;
-    armor = e.hooks.postHazardArmor(hctx);
-    if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
-  }
-
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
   const moveBase = def.move;
   const moveItems: StatItem[] = [];
@@ -3119,19 +3098,6 @@ export function computeDamage(
   if (!isCity) {
     const hz = hazardFor(s, defender);
     if (hz) ctx.armor = hazardArmorOf(ctx.armor, hz);
-    // 环境之后的加成（材料研究室）：位置和 effectiveStats 一致，面板与结算同源
-    for (const e of activeExpansions(s)) {
-      if (!e.hooks.postHazardArmor) continue;
-      ctx.armor = e.hooks.postHazardArmor({
-        state: s,
-        attacker,
-        defender,
-        armor: ctx.armor,
-        isCounter,
-        armorOf: (x: Unit) => (x.id === defender.id ? ctx.armor : effectiveStats(s, x).armor),
-        visionOf: (x: Unit) => visionOf(s, x),
-      });
-    }
   }
 
   // 小型扩展到破甲之前

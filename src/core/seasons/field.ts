@@ -241,6 +241,8 @@ export const TUNING: ClimateTuning = {
     // 空间站：站内是封闭环境，气候场根本不跑；给值只为表完整
     void: { temp: 0, wet: 0, evap: 0, heat: 0 },
     deck: { temp: 0, wet: 0, evap: 0, heat: 0 },
+    // 破损舱段：漏气了，比甲板还干；气候场同样不跑
+    wreck: { temp: 0, wet: 0, evap: 0, heat: 0 },
     city: { temp: 0, wet: 55, evap: 2.0, heat: 480 },
     bridge: { temp: 0, wet: 105, evap: 8.5, heat: 200 },
     water: { temp: 0, wet: 105, evap: 8.5, heat: 100 },

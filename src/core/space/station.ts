@@ -29,7 +29,7 @@ import type {
   Unit,
   UnitTypeDef,
 } from '../types.ts';
-import { boardIdOf, boardOf, boardStateOf, tileOn } from '../board.ts';
+import { boardIdOf, boardOf, boardName, boardStateOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells, type SkillCtx } from '../skill-hooks.ts';
 import { lanesFrom, laneDistance, nodeById, nodeName, nodeOf, starmapOf } from './starmap.ts';
@@ -39,6 +39,7 @@ import { SPACE_HAZARD } from './space-hazard.ts';
 import { ASTRONAUT_ID } from './astronaut.ts';
 import { registerHazardExempt } from '../hazard.ts';
 import { setRecon } from '../recon.ts';
+import type { UnitActionOption } from '../expansions.ts';
 
 export const STATION_CORE_ID = 'station-core';
 export const STATION_PRODUCER_ID = 'station-producer';
@@ -49,6 +50,15 @@ export const STATION_LAB_GRAVITY_ID = 'station-lab-gravity';
 export const STATION_LAB_MATERIAL_ID = 'station-lab-material';
 export const STATION_COMM_ID = 'station-comm';
 export const STATION_THRUSTER_ID = 'station-thruster';
+/* ── 战斗舱段（2026-11-12）─────────────────────────────────────────
+ * 前四个是"让站能打仗"，后三个是"把人送进别人家"。
+ * 拆成四个 id 而不是一个"武器舱"，是因为它们的造价、耗电、位置约束
+ * 各不相同，玩家在面板上也要一眼分清。
+ */
+export const STATION_CANNON_ID = 'station-cannon';
+export const STATION_ARMOR_ID = 'station-armor';
+export const STATION_LAUNCH_ID = 'station-launch';
+export const STATION_DOCK_ID = 'station-dock';
 
 /** 铺一格甲板的额定价（会乘折扣） */
 export const EXPAND_BASE_COST = 80;
@@ -64,6 +74,10 @@ export const REMOTE_BASE_COST = 380;
 export const GRAVITY_BASE_COST = 450;
 export const MATERIAL_BASE_COST = 450;
 export const COMM_BASE_COST = 340;
+export const CANNON_BASE_COST = 620;
+export const ARMOR_BASE_COST = 300;
+export const LAUNCH_BASE_COST = 380;
+export const DOCK_BASE_COST = 320;
 
 /**
  * 功能舱段（遥感 / 两个研究室 / 通讯）**必须相邻一名航天员**才工作。
@@ -108,6 +122,28 @@ export const REMOTE_DRAW = 10;
 export const GRAVITY_DRAW = 12;
 export const MATERIAL_DRAW = 12;
 export const COMM_DRAW = 8;
+export const CANNON_DRAW = 14;
+/**
+ * 太空装甲**不耗电**。
+ *
+ * 它是一块焊在甲板上的板子，没有任何"要通电才工作"的东西。这不是随手给的
+ * 优惠：如果它也吃电，"保护地板"就变成"先为了防御再造一块太阳能"，
+ * 而防的那一格可能只要 80 金就能重铺——玩家不会去造第二块太阳能来救一格甲板。
+ */
+export const ARMOR_DRAW = 0;
+export const LAUNCH_DRAW = 8;
+export const DOCK_DRAW = 6;
+
+/**
+ * 轨道炮一发打多少（再照常扣护甲、扣地形掩护、过环境）。
+ *
+ * 30 这个数是"两发打不掉一块新装甲板"的量级：装甲舱 180 血、站内护甲被
+ * 环境折过之后基本是 2~3，一发约 27~28。于是"守着破口"至少要挨七八发——
+ * 防守方有整整两个回合去补人，而不是被一发穿透。
+ */
+export const CANNON_ATK = 30;
+/** 入舱口能缓存几个单位（满了拒绝进入） */
+export const DOCK_CAPACITY = 3;
 
 /** 微重力研究室：每座 +5%，软上限 +20% */
 export const GRAVITY_PER = 0.05;
@@ -300,6 +336,16 @@ export function stationPower(s: GameState, board: string): StationPower {
       case STATION_COMM_ID:
         demand += COMM_DRAW;
         break;
+      case STATION_CANNON_ID:
+        demand += CANNON_DRAW;
+        break;
+      case STATION_LAUNCH_ID:
+        demand += LAUNCH_DRAW;
+        break;
+      case STATION_DOCK_ID:
+        demand += DOCK_DRAW;
+        break;
+      /* 太空装甲 ARMOR_DRAW = 0：不挂 case 就是不吃电，见那个常量的注释 */
       default:
         break;
     }
@@ -625,7 +671,7 @@ const STATION_OBSERVE: SkillDef = {
 const STATION_EXPAND: SkillDef = {
   id: 'station-expand',
   name: '扩建甲板',
-  summary: '把一格虚空铺成甲板。一次一格，可以连着铺；价格按太空建设折扣算。',
+  summary: '把一格虚空铺成甲板（也能把<b>破损舱段</b>修回甲板）。一次一格，可以连着铺；价格按太空建设折扣算。',
   effect: 'station-expand',
   cooldown: 0,
   // 一回合可以铺好几格：空间站是"花钱长大"的，不该被回合数卡住
@@ -719,6 +765,72 @@ const STATION_BUILD_COMM: SkillDef = {
   targeting: 'point',
 };
 
+/* ── 战斗舱段的四个建造技能 ────────────────────────────────────── */
+
+const STATION_BUILD_CANNON: SkillDef = {
+  id: 'station-build-cannon',
+  name: '建造轨道炮舱',
+  summary: `在空的甲板上造一座轨道炮舱（耗电 ${CANNON_DRAW}）：技能「轨道轰击」，对同一轨道的敌方空间站点火。需要航天员相邻才工作。`,
+  effect: 'station-build-cannon',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_ARMOR: SkillDef = {
+  id: 'station-build-armor',
+  name: '建造太空装甲',
+  summary: `在空的甲板上焊一块太空装甲：不吃电，血厚甲硬。敌方轨道轰击会打在它身上，` +
+    '脚下的甲板就不会被打穿。',
+  effect: 'station-build-armor',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_LAUNCH: SkillDef = {
+  id: 'station-build-launch',
+  name: '建造出舱口',
+  summary: `在空的甲板上造一座出舱口（耗电 ${LAUNCH_DRAW}）：把一个相邻单位发射到` +
+    '同一轨道上我方空间站的入舱口，或敌方空间站的破损舱段。每回合 1 次。',
+  effect: 'station-build-launch',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_DOCK: SkillDef = {
+  id: 'station-build-dock',
+  name: '建造入舱口',
+  summary: `在空的甲板上造一座入舱口（耗电 ${DOCK_DRAW}）：接收同轨道我方出舱口送来的人，` +
+    `最多缓存 ${DOCK_CAPACITY} 个，满了拒绝进入；要人下船得再点「卸下」。`,
+  effect: 'station-build-dock',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+/**
+ * 轨道轰击：这一包唯一的**跨图攻击**。
+ *
+ * 为什么不做成"普通攻击"：站与站之间隔着同一轨道上的真空，坐标距离毫无意义，
+ * 而普通攻击的射程/视线全靠几何（同图判定见 `doAttack`）。做成技能之后，
+ * "打得到"由"同一轨道"决定，选哪一格由玩家点，两件事各自清楚。
+ */
+const STATION_BOMBARD: SkillDef = {
+  id: 'station-bombard',
+  name: '轨道轰击',
+  summary:
+    '对同一轨道上的一座敌方空间站打一发：选一格。<b>看不出那一格有没有舱段</b>——' +
+    '空的甲板会被打穿成破损舱段，打中舱段则照常结算伤害。核心舱打不穿。每回合 1 次。',
+  effect: 'station-bombard',
+  cooldown: 0,
+  // 和遥感一样：每回合 1 发，跨回合不攒
+  charges: 1,
+  regen: 1,
+  targeting: 'point',
+};
+
 export const STATION_CORE: UnitTypeDef = {
   id: STATION_CORE_ID,
   name: '空间站核心舱',
@@ -745,6 +857,10 @@ export const STATION_CORE: UnitTypeDef = {
     STATION_BUILD_GRAVITY,
     STATION_BUILD_MATERIAL,
     STATION_BUILD_COMM,
+    STATION_BUILD_CANNON,
+    STATION_BUILD_ARMOR,
+    STATION_BUILD_LAUNCH,
+    STATION_BUILD_DOCK,
   ],
 };
 
@@ -898,30 +1014,127 @@ export const STATION_THRUSTER: UnitTypeDef = {
   summonedOnly: true,
 };
 
+/**
+ * 轨道炮舱：这一包唯一的跨图武器。
+ *
+ * `atk` 就写炮击值（`CANNON_ATK`）——伤害结算走的是通用的
+ * `computeDamage`，它读的就是这个字段。炮本身不参加普通攻击（站与站之间
+ * 没有几何，`doAttack` 的同图闸门会先把它挡住），所以这个数值只在
+ * 「轨道轰击」里被用到。
+ */
+export const STATION_CANNON: UnitTypeDef = {
+  id: STATION_CANNON_ID,
+  name: '轨道炮舱',
+  short: '炮',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: CANNON_ATK,
+  armor: 6,
+  maxHp: 80,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+  skills: [STATION_BOMBARD],
+};
+
+/**
+ * 太空装甲：一块焊在甲板上的板子。
+ *
+ * 它的作用方式很朴素——**它站在那儿**。轨道轰击选中的格子上只要有东西，
+ * 就打那个东西；所以把装甲铺在要保住的甲板上，炮就只能打在它身上。
+ * 不给光环、不给减伤：一层"替甲板挨打的血条"就够了，规则越少越好解释。
+ */
+export const STATION_ARMOR: UnitTypeDef = {
+  id: STATION_ARMOR_ID,
+  name: '太空装甲',
+  short: '甲',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 14,
+  maxHp: 180,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+/** 出舱口：把相邻的人打出去（送到同轨道的我方入舱口，或敌方破口） */
+export const STATION_LAUNCH: UnitTypeDef = {
+  id: STATION_LAUNCH_ID,
+  name: '出舱口',
+  short: '出',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 60,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+/** 入舱口：接收送过来的人，缓存到有人来卸为止 */
+export const STATION_DOCK: UnitTypeDef = {
+  id: STATION_DOCK_ID,
+  name: '入舱口',
+  short: '入',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 60,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
 // ── 技能：扩建 / 建造 ────────────────────────────────────────────────
 
 function log(s: GameState, p: PlayerId, text: string, open = false): void {
   s.log.push({ turn: s.turn, player: p, text, open });
 }
 
-/** 4 邻域里有没有已经铺好的甲板（核心舱本身站在甲板上，所以它也覆盖到了） */
+/**
+ * 4 邻域里有没有"还连着结构"的格——甲板，或者被打穿的破损舱段。
+ *
+ * 破损舱段也算：它的地板没了，但舱体骨架还在，扩建就是顺着骨架往外铺。
+ * 不认它的话，"打穿一格"会把它外面那一整片甲板变成再也铺不到的孤岛，
+ * 而玩家看到的明明是"这块还连着"。
+ */
 function touchesDeck(s: GameState, board: string, x: number, y: number): boolean {
-  return (
-    tileOn(s, board, x - 1, y)?.terrain === 'deck' ||
-    tileOn(s, board, x + 1, y)?.terrain === 'deck' ||
-    tileOn(s, board, x, y - 1)?.terrain === 'deck' ||
-    tileOn(s, board, x, y + 1)?.terrain === 'deck'
-  );
+  const solid = (xx: number, yy: number): boolean => {
+    const t = tileOn(s, board, xx, yy)?.terrain;
+    return t === 'deck' || t === 'wreck';
+  };
+  return solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1);
 }
 
-/** 站内所有"挨着已有甲板"的虚空 */
+/**
+ * 站内可以动土的两类格：没铺过的虚空，和被打穿的破损舱段。
+ *
+ * 二者的处理完全一样（花钱铺成甲板），差别只在战报那句话——
+ * 玩家把一格破口重新铺好时，看到"铺下一格甲板"会以为点错了。
+ */
 registerSkillTargetCells('station-expand', ({ state, self }) => {
   const board = boardIdOf(self);
   const b = boardOf(state, board);
   const out: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < b.h; y++) {
     for (let x = 0; x < b.w; x++) {
-      if (tileOn(state, board, x, y)?.terrain !== 'void') continue;
+      const t = tileOn(state, board, x, y)?.terrain;
+      if (t !== 'void' && t !== 'wreck') continue;
       if (!touchesDeck(state, board, x, y)) continue;
       out.push({ x, y });
     }
@@ -939,9 +1152,9 @@ registerSkillEffect('station-expand', (c) => {
   }
   const board = boardIdOf(self);
   const tile = tileOn(c.state, board, t.x, t.y);
-  if (!tile || tile.terrain !== 'void') {
+  if (!tile || (tile.terrain !== 'void' && tile.terrain !== 'wreck')) {
     c.result.ok = false;
-    c.result.reason = '只能铺虚空';
+    c.result.reason = '只能铺虚空或破损舱段';
     return;
   }
   if (!touchesDeck(c.state, board, t.x, t.y)) {
@@ -949,15 +1162,17 @@ registerSkillEffect('station-expand', (c) => {
     c.result.reason = '要挨着已有的甲板铺';
     return;
   }
+  // 修复和铺新板同价：破损舱段不是"废墟"，它是一格还要再付一次钱的地板
   const cost = buildCost(c.state, self.owner, EXPAND_BASE_COST);
   if (c.state.players[self.owner].gold < cost) {
     c.result.ok = false;
     c.result.reason = `金币不够（要 ${cost}）`;
     return;
   }
+  const repair = tile.terrain === 'wreck';
   c.state.players[self.owner].gold -= cost;
   tile.terrain = 'deck';
-  c.result.log = `铺下一格甲板（${cost} 金）`;
+  c.result.log = repair ? `修复一格破损舱段（${cost} 金）` : `铺下一格甲板（${cost} 金）`;
 });
 
 /**
@@ -1155,6 +1370,26 @@ registerSkillEffect('station-build-comm', (c) => {
   buildModule(c, { typeId: STATION_COMM_ID, baseCost: COMM_BASE_COST, draw: COMM_DRAW, what: '通讯模块' });
 });
 
+/* ── 战斗舱段：四个建造技能 ─────────────────────────────────────── */
+
+registerSkillTargetCells('station-build-cannon', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-armor', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-launch', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-dock', ({ state, self }) => emptyDeckCells(state, self));
+
+registerSkillEffect('station-build-cannon', (c) => {
+  buildModule(c, { typeId: STATION_CANNON_ID, baseCost: CANNON_BASE_COST, draw: CANNON_DRAW, what: '轨道炮舱' });
+});
+registerSkillEffect('station-build-armor', (c) => {
+  buildModule(c, { typeId: STATION_ARMOR_ID, baseCost: ARMOR_BASE_COST, draw: ARMOR_DRAW, what: '太空装甲' });
+});
+registerSkillEffect('station-build-launch', (c) => {
+  buildModule(c, { typeId: STATION_LAUNCH_ID, baseCost: LAUNCH_BASE_COST, draw: LAUNCH_DRAW, what: '出舱口' });
+});
+registerSkillEffect('station-build-dock', (c) => {
+  buildModule(c, { typeId: STATION_DOCK_ID, baseCost: DOCK_BASE_COST, draw: DOCK_DRAW, what: '入舱口' });
+});
+
 registerSkillEffect('station-build-life', (c) => {
   buildModule(c, {
     typeId: STATION_LIFE_ID,
@@ -1201,6 +1436,11 @@ for (const [id, draw, cost] of [
   ['station-build-gravity', GRAVITY_DRAW, GRAVITY_BASE_COST],
   ['station-build-material', MATERIAL_DRAW, MATERIAL_BASE_COST],
   ['station-build-comm', COMM_DRAW, COMM_BASE_COST],
+  ['station-build-cannon', CANNON_DRAW, CANNON_BASE_COST],
+  // 装甲不耗电（draw 0），但金币门槛照走同一条
+  ['station-build-armor', ARMOR_DRAW, ARMOR_BASE_COST],
+  ['station-build-launch', LAUNCH_DRAW, LAUNCH_BASE_COST],
+  ['station-build-dock', DOCK_DRAW, DOCK_BASE_COST],
 ] as Array<[string, number, number]>) {
   registerSkillReadyCheck(id, (s, u) => {
     const p = stationPowerOf(s, u);
@@ -1305,6 +1545,458 @@ export function tickProducers(s: GameState, player: PlayerId): void {
   log(s, player, `${n} 座生产舱产出 ${gain} 金`, false);
 }
 
+/* ===========================================================================
+ * 战斗：轨道轰击与登船
+ *
+ * ── 这一段的两个前提 ─────────────────────────────────────────
+ *
+ * 1. **敌人站里的舱段看不见**。甲板铺到哪是公开的（`playerView` 里空间站
+ *    所有格都可见），但装了什么、装在哪，只能靠一格一格打出来
+ *    （`hideUnit` 钩子，见 space-war）。所以这里的选点**不做任何"那里有东西"
+ *    的判断**——有东西就打东西，没东西就打穿甲板。
+ *
+ * 2. **站与站之间没有几何**。同一轨道上的两座站隔着一段真空，坐标距离
+ *    毫无意义，所以轨道轰击不是普通攻击，是技能：能不能打由"同一轨道"决定。
+ * ======================================================================== */
+
+/** 这一格站着谁（站内全是 1×1，按格坐标查就够了；空格 = undefined） */
+function unitOnCell(s: GameState, board: string, x: number, y: number): Unit | undefined {
+  return (s.units ?? []).find((u) => u.hp > 0 && boardIdOf(u) === board && u.x === x && u.y === y);
+}
+
+/**
+ * 这个单位这件"跨站的活儿"能碰到哪些站：**同一轨道上的所有站**。
+ *
+ * "同一轨道"是这一包唯一的距离概念（见 `StarStation.at`）。站内坐标再近也
+ * 不算——两座站哪怕在星图上贴着，只要不共轨就隔着航道。
+ */
+function stationsOnOrbit(s: GameState, self: Unit): StarStation[] {
+  const rec = stationOf(s, self);
+  const map = starmapOf(s);
+  if (!rec || !map) return [];
+  return map.stations.filter((st) => st.at === rec.at && !!s.boards?.[st.board]);
+}
+
+/** 同一轨道上别人家的站（能打的） */
+export function rivalStationsOnOrbit(s: GameState, self: Unit): StarStation[] {
+  return stationsOnOrbit(s, self).filter((st) => st.owner !== self.owner);
+}
+
+/**
+ * 这一炮现在瞄着哪座站。
+ *
+ * 自动瞄的条件是"只有一个目标"：玩家没有必要为了唯一的选择多点一次按钮。
+ * 两个以上就必须自己选——不然"打错了站"没有任何提示，而一发一回合。
+ */
+export function cannonAimBoard(s: GameState, self: Unit): string | null {
+  const rivals = rivalStationsOnOrbit(s, self);
+  const aim = self.custom?.aim;
+  if (typeof aim === 'string' && rivals.some((st) => st.board === aim)) return aim;
+  return rivals.length === 1 ? rivals[0]!.board : null;
+}
+
+/** 炮口转向：面板上每个敌方站一个按钮（只有一个目标时不显示，自动瞄上） */
+export function cannonActions(s: GameState, cannon: Unit): UnitActionOption[] {
+  const rivals = rivalStationsOnOrbit(s, cannon);
+  if (rivals.length <= 1) return [];
+  const aim = cannonAimBoard(s, cannon);
+  return rivals.map((st) => ({
+    id: `station:aim:${st.board}`,
+    group: '目标',
+    label: `瞄准「${boardName(s, st.board)}」`,
+    detail: '把轨道炮对准这座站，再用技能「轨道轰击」选一格',
+    note: st.board === aim ? '已瞄准' : '未瞄准',
+  }));
+}
+
+/**
+ * 可轰击的格：目标站的所有甲板，**除了核心舱脚下那一格**。
+ *
+ * 核心舱不是"护甲高"，是根本打不进去（用户定的规矩）。所以它连可点格都不给——
+ * "点得亮、点下去说不行"是这套界面最忌讳的一种毛病。
+ */
+registerSkillTargetCells('station-bombard', ({ state, self }) => {
+  const board = cannonAimBoard(state, self);
+  if (!board) return { cells: [] };
+  const b = boardOf(state, board);
+  const core = (state.units ?? []).find(
+    (u) => u.type === STATION_CORE_ID && u.hp > 0 && boardIdOf(u) === board,
+  );
+  const cells: Array<{ x: number; y: number }> = [];
+  for (let y = 0; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      if (tileOn(state, board, x, y)?.terrain !== 'deck') continue;
+      if (core && core.x === x && core.y === y) continue;
+      cells.push({ x, y });
+    }
+  }
+  return { board, cells };
+});
+
+registerSkillEffect('station-bombard', (c) => {
+  const { state, self } = c;
+  const fail = (reason: string): void => {
+    c.result.ok = false;
+    c.result.reason = reason;
+  };
+  if (!isStaffed(state, self)) return fail('没有航天员在旁边，炮位没人操作');
+  if (stationPower(state, boardIdOf(self)).brownout) return fail('这座站断电了，炮打不出去');
+
+  const board = cannonAimBoard(state, self);
+  if (!board) return fail('先选一个目标空间站');
+  const t = c.target;
+  if (!t) return fail('要选一格');
+
+  const tile = tileOn(state, board, t.x, t.y);
+  if (!tile || tile.terrain !== 'deck') return fail('那一格不是甲板');
+  const victim = unitOnCell(state, board, t.x, t.y);
+  if (victim?.type === STATION_CORE_ID) return fail('核心舱有整座站的外壳护着，打不穿');
+
+  const name = boardName(state, board);
+  const where = cellName(t.x, t.y);
+
+  if (victim) {
+    /*
+     * 打中舱段：走 `api.computeDamage` + `api.hurt`，不自己造一套伤害公式。
+     * 护甲、地形掩护、恶劣外空 ÷5、材料研究室、守御阵这类"替人挨打"的规则
+     * 全都还认这一发，和其它所有伤害同一条出口。
+     *
+     * 唯一的将就差在**距离**：`computeDamage` 会算一次两格之间的坐标距离，
+     * 而两座站之间没有距离这回事。它只影响"隔格减伤"那几条（`rangeMul`），
+     * 炮本身没有那些加成，所以这里不会偏。
+     */
+    const dmg = c.api.computeDamage(state, self, victim, false);
+    c.api.hurt(state, victim, dmg, { source: self });
+    const what = state.unitTypes[victim.type]?.name ?? '舱段';
+    const down = victim.hp <= 0 ? '，舱段被摧毁' : '';
+    c.result.log = `轨道轰击命中「${name}」的${what}：${dmg} 伤害${down}`;
+    // 两边都要有一条：挨打的人不该只看到自己血少了
+    log(state, self.owner, `轨道轰击命中「${name}」的${what}，造成 ${dmg} 伤害${down}`, true);
+    log(state, victim.owner, `「${name}」的${what}被轨道轰击命中，承受 ${dmg} 伤害${down}`, true);
+    return;
+  }
+
+  /*
+   * 打空：把这一格甲板打穿。
+   *
+   * 没有伤害数字、没有豁免——一发一格，这是"盲打"的全部回报。
+   * 打穿之后它是 `wreck`：还能走人（登船就是从破口进来的）、还能从旁边铺，
+   * 但站不住舱段；修复要走核心舱的「扩建甲板」。
+   */
+  tile.terrain = 'wreck';
+  c.result.log = `轨道轰击打穿了「${name}」${where}的甲板`;
+  log(state, self.owner, `轨道轰击打穿了「${name}」${where}的甲板`, true);
+  log(state, victimOwnerOfBoard(state, board), `「${name}」${where}的甲板被轨道轰击打穿`, true);
+});
+
+registerSkillReadyCheck('station-bombard', (s, u) => {
+  if (!isStaffed(s, u)) return '无航天员';
+  if (stationPower(s, boardIdOf(u)).brownout) return '断电';
+  if (!cannonAimBoard(s, u)) return '先选目标';
+  return true;
+});
+
+/** 这座站是谁的（打空甲板时也要给对方写一条战报） */
+function victimOwnerOfBoard(s: GameState, board: string): PlayerId {
+  return starmapOf(s)?.stations.find((st) => st.board === board)?.owner ?? s.current;
+}
+
+/* ── 出舱口 / 入舱口：把人送过去 ─────────────────────────────────── */
+
+/**
+ * 入舱口里缓存的人。
+ *
+ * 他们**不在 `s.units` 里**，也不在任何格子上——舱里没有地板，他们挂在架子上。
+ * 所以：看不见、打不到、也不吃外空环境；想让他们干活必须先「卸下」。
+ *
+ * 存在 `custom.cargo` 里而不是新开一个全局表：缓存跟着那座舱门走，
+ * 舱门被打掉（单位消失）时里面的人也一起没了，不需要另一条清理路径。
+ */
+export interface DockCargo {
+  unit: Unit;
+  /** 进舱那一回合：**当回合不能卸**，得在里面待一轮 */
+  arrivedTurn: number;
+}
+
+export function dockCargo(port: Unit): DockCargo[] {
+  const raw = port.custom?.cargo;
+  return Array.isArray(raw) ? (raw as DockCargo[]) : [];
+}
+
+/** 这个单位能不能被装进出舱口：建筑不行（舱段没法自己走进舱门） */
+function launchable(s: GameState, u: Unit): boolean {
+  if (u.hp <= 0) return false;
+  return (s.unitTypes[u.type]?.category ?? '') !== 'building';
+}
+
+/** 入舱口旁边能放下一个人的空甲板（4 邻域，按"上右下左"找第一格） */
+function freeDeckBeside(s: GameState, port: Unit): { x: number; y: number } | null {
+  const board = boardIdOf(port);
+  for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+    const x = port.x + dx;
+    const y = port.y + dy;
+    if (tileOn(s, board, x, y)?.terrain !== 'deck') continue;
+    if (unitOnCell(s, board, x, y)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
+/**
+ * 出舱口这个可以点"发射"的人 × 目的地组合。
+ *
+ * 为什么是按钮而不是"先点这个再点那个"：目的地在**另一张图**上（另一座站），
+ * 而技能选点只认一张图（`SKILL_TARGET_CELLS` 只能返回一个 board）。
+ * 按钮列表是这套引擎里唯一能跨图选目标的现成交互（发射井选目的地就是它）。
+ *
+ * 每回合 1 次：一个舱门一口气把半支队伍甩过去，等于给了"传送"。
+ */
+export function launchActions(s: GameState, port: Unit): UnitActionOption[] {
+  const out: UnitActionOption[] = [];
+  if (port.custom?.launchedTurn === s.turn) return out;
+  if (!stationOf(s, port)) return out;
+  // 断电：舱门是电动的。与其列一串点不动的按钮，不如直接把理由写在面板行里
+  if (stationPower(s, boardIdOf(port)).brownout) return out;
+
+  const board = boardIdOf(port);
+  const cargos = (s.units ?? []).filter(
+    (u) =>
+      u.owner === port.owner &&
+      boardIdOf(u) === board &&
+      u.id !== port.id &&
+      launchable(s, u) &&
+      Math.abs(u.x - port.x) + Math.abs(u.y - port.y) === 1,
+  );
+  if (cargos.length === 0) return out;
+
+  // 我方入舱口：**满了也列出来**，只是点不动——"为什么我的入舱口不在列表里"
+  // 是比"它写着满了"更差的一种体验
+  const docks: Array<{ board: string; dock: Unit; space: number }> = [];
+  for (const st of stationsOnOrbit(s, port)) {
+    if (st.owner !== port.owner || st.board === board) continue;
+    const dock = (s.units ?? []).find(
+      (u) => u.type === STATION_DOCK_ID && u.hp > 0 && boardIdOf(u) === st.board,
+    );
+    if (!dock) continue;
+    docks.push({ board: st.board, dock, space: DOCK_CAPACITY - dockCargo(dock).length });
+  }
+
+  // 敌方站上的破口（能直接登船的地方）
+  const wrecks: Array<{ board: string; x: number; y: number }> = [];
+  for (const st of rivalStationsOnOrbit(s, port)) {
+    const b = boardOf(s, st.board);
+    for (let y = 0; y < b.h; y++) {
+      for (let x = 0; x < b.w; x++) {
+        if (tileOn(s, st.board, x, y)?.terrain !== 'wreck') continue;
+        if (unitOnCell(s, st.board, x, y)) continue;
+        wrecks.push({ board: st.board, x, y });
+      }
+    }
+  }
+
+  for (const cargo of cargos) {
+    const name = s.unitTypes[cargo.type]?.name ?? '单位';
+    for (const d of docks) {
+      out.push({
+        id: `station:launch:${cargo.id}:dock:${d.dock.id}`,
+        group: `出舱口 · ${name}`,
+        label: `送 ${name} →「${boardName(s, d.board)}」入舱口`,
+        detail: `进去之后要等一回合才能卸下（还能再进 ${Math.max(0, d.space)} 个）`,
+        note: d.space > 0 ? '同轨道' : `满了 ${DOCK_CAPACITY}/${DOCK_CAPACITY}`,
+        disabled: d.space <= 0,
+      });
+    }
+    for (const w of wrecks) {
+      out.push({
+        id: `station:launch:${cargo.id}:wreck:${w.board}:${w.x}:${w.y}`,
+        group: `出舱口 · ${name}`,
+        label: `送 ${name} →「${boardName(s, w.board)}」${cellName(w.x, w.y)}`,
+        detail: '从破口直接登船（落点有敌人就打不了）',
+        note: '登船',
+      });
+    }
+  }
+  return out;
+}
+
+/** 入舱口的按钮：舱里有几个能卸的人就有几个按钮 */
+export function dockActions(s: GameState, port: Unit): UnitActionOption[] {
+  const out: UnitActionOption[] = [];
+  const cargo = dockCargo(port);
+  for (let i = 0; i < cargo.length; i += 1) {
+    const item = cargo[i]!;
+    const name = s.unitTypes[item.unit.type]?.name ?? '单位';
+    const stuck = item.arrivedTurn >= s.turn;
+    const spot = freeDeckBeside(s, port);
+    out.push({
+      id: `station:unload:${i}`,
+      group: '入舱口',
+      label: `卸下 ${name}`,
+      detail: stuck ? '刚进舱，还在固定（下一回合才能出来）' : '放到隔壁的空甲板上，下来就能动',
+      note: stuck ? '等一回合' : spot ? cellName(spot.x, spot.y) : '旁边没空位',
+      disabled: stuck || !spot,
+    });
+  }
+  return out;
+}
+
+/**
+ * 处理出舱口/入舱口的动作。返回字符串 = 拒绝（给玩家看的理由），null = 成功。
+ *
+ * 三件事都集中在这一个函数里，是因为它们共用同一批前置检查
+ * （是不是你的、断电没有、那个单位还在不在）。
+ */
+export function combatUnitAction(s: GameState, unit: Unit, actionId: string): string | null {
+  if (actionId.startsWith('station:aim:')) {
+    const board = actionId.slice('station:aim:'.length);
+    if (!rivalStationsOnOrbit(s, unit).some((st) => st.board === board)) {
+      return '那不是一个能打的目标';
+    }
+    unit.custom = { ...(unit.custom ?? {}), aim: board };
+    log(s, unit.owner, `轨道炮转向「${boardName(s, board)}」`, false);
+    return null;
+  }
+
+  if (actionId.startsWith('station:unload:')) {
+    if (unit.type !== STATION_DOCK_ID) return '这支部队不是入舱口';
+    const idx = Number(actionId.slice('station:unload:'.length));
+    const cargo = dockCargo(unit);
+    const item = cargo[idx];
+    if (!item) return '舱里没有这个人';
+    if (item.arrivedTurn >= s.turn) return '刚进舱，这一回合还在固定';
+    const spot = freeDeckBeside(s, unit);
+    if (!spot) return '旁边没有空的甲板，卸不下来';
+
+    const board = boardIdOf(unit);
+    const body = item.unit;
+    body.board = board;
+    body.x = spot.x;
+    body.y = spot.y;
+    // 在舱里待了一轮，落地就是满状态（不然"下船即残废"）
+    body.moved = false;
+    body.acted = false;
+    s.units.push(body);
+    cargo.splice(idx, 1);
+    unit.custom = { ...(unit.custom ?? {}), cargo };
+    log(s, unit.owner, `${s.unitTypes[body.type]?.name ?? '单位'} 从入舱口卸下（${cellName(spot.x, spot.y)}）`, false);
+    return null;
+  }
+
+  if (!actionId.startsWith('station:launch:')) return null;
+
+  if (unit.type !== STATION_LAUNCH_ID) return '这支部队不是出舱口';
+  if (unit.custom?.launchedTurn === s.turn) return '这个出舱口本回合已经发射过了';
+  if (stationPower(s, boardIdOf(unit)).brownout) return '这座站断电了，舱门打不开';
+
+  const rest = actionId.slice('station:launch:'.length).split(':');
+  const cargoId = rest[0] ?? '';
+  const kind = rest[1] ?? '';
+  const body = (s.units ?? []).find((u) => u.id === cargoId);
+  if (!body) return '这个人已经不在了';
+  if (body.owner !== unit.owner) return '不能把别人的兵发射出去';
+  if (!launchable(s, body)) return '舱段没法自己走进舱门';
+  if (boardIdOf(body) !== boardIdOf(unit)) return '这个人不在这座站上';
+  if (Math.abs(body.x - unit.x) + Math.abs(body.y - unit.y) !== 1) return '要贴着一个单位才能装它';
+
+  if (kind === 'dock') {
+    const dock = (s.units ?? []).find((u) => u.id === rest[2]);
+    if (!dock || dock.type !== STATION_DOCK_ID) return '那个入舱口不见了';
+    if (dock.owner !== unit.owner) return '不能往别人的入舱口里送人';
+    const orbit = stationsOnOrbit(s, unit).find((st) => st.board === boardIdOf(dock));
+    if (!orbit) return '那个入舱口不在同一轨道上';
+    const cargo = dockCargo(dock);
+    if (cargo.length >= DOCK_CAPACITY) return `那个入舱口满了（${DOCK_CAPACITY}/${DOCK_CAPACITY}）`;
+
+    // 从棋盘上摘下来，装进舱里
+    s.units = s.units.filter((u) => u.id !== body.id);
+    body.moved = true;
+    body.acted = true;
+    cargo.push({ unit: body, arrivedTurn: s.turn });
+    dock.custom = { ...(dock.custom ?? {}), cargo };
+    unit.custom = { ...(unit.custom ?? {}), launchedTurn: s.turn };
+    log(
+      s,
+      unit.owner,
+      `${s.unitTypes[body.type]?.name ?? '单位'} 从出舱口发射，进入「${boardName(s, boardIdOf(dock))}」的入舱口`,
+      false,
+    );
+    return null;
+  }
+
+  if (kind === 'wreck') {
+    const board = rest[2] ?? '';
+    const x = Number(rest[3]);
+    const y = Number(rest[4]);
+    const orbit = rivalStationsOnOrbit(s, unit).find((st) => st.board === board);
+    if (!orbit) return '那个破口不在同一轨道上';
+    if (tileOn(s, board, x, y)?.terrain !== 'wreck') return '那已经不是一个破口了';
+    if (unitOnCell(s, board, x, y)) return '破口那儿已经有人了';
+
+    s.units = s.units.filter((u) => u.id !== body.id);
+    body.board = board;
+    body.x = x;
+    body.y = y;
+    body.moved = true;
+    body.acted = true;
+    s.units.push(body);
+    unit.custom = { ...(unit.custom ?? {}), launchedTurn: s.turn };
+    log(
+      s,
+      unit.owner,
+      `${s.unitTypes[body.type]?.name ?? '单位'} 从破口登上「${boardName(s, board)}」${cellName(x, y)}`,
+      true,
+    );
+    log(s, orbit.owner, `有敌人从 ${cellName(x, y)} 的破口登上了「${boardName(s, board)}」`, true);
+    return null;
+  }
+
+  return `认不出这个发射方式：${kind}`;
+}
+
+/** 战斗舱段的面板说明（核心舱之外的那几个） */
+export function combatLines(s: GameState, u: Unit): string[] {
+  switch (u.type) {
+    case STATION_CANNON_ID: {
+      const aim = cannonAimBoard(s, u);
+      const rivals = rivalStationsOnOrbit(s, u);
+      const out = [
+        `每回合 1 发，伤害 ${CANNON_ATK}（照常扣护甲），需要航天员相邻、站不能断电`,
+        '打不到核心舱；空的甲板会被打穿成破损舱段，站上去的舱段照常结算伤害',
+      ];
+      if (rivals.length === 0) out.unshift('同一轨道上没有敌方空间站，这门炮暂时没目标');
+      else if (!aim) out.unshift(`同一轨道上有 ${rivals.length} 座敌方空间站：先在下面选一个目标`);
+      else out.unshift(`当前瞄准「${boardName(s, aim)}」`);
+      return out;
+    }
+    case STATION_ARMOR_ID: {
+      const def = s.unitTypes[STATION_ARMOR_ID];
+      return [
+        `生命 ${u.hp}/${def?.maxHp ?? 0} · 不吃电`,
+        '它在的时候，轨道轰击只能打在它身上——脚下这格甲板不会被打穿',
+        '站被打成破口之后，往往就是靠它顶着，让对面没法接着往下打',
+      ];
+    }
+    case STATION_LAUNCH_ID: {
+      const used = u.custom?.launchedTurn === s.turn;
+      const dark = stationPower(s, boardIdOf(u)).brownout;
+      return [
+        dark ? '这座站断电了，舱门打不开' : used ? '这个出舱口本回合已经发射过了' : '本回合可以发射一次',
+        '把相邻的一个单位送到同一轨道上：我方入舱口的空位，或敌方站上的破口',
+        '送进破口的人当回合不能动；送进入舱口的人要等一回合才能卸下来',
+      ];
+    }
+    case STATION_DOCK_ID: {
+      const n = dockCargo(u).length;
+      const out = [`舱内缓存 ${n}/${DOCK_CAPACITY}${n >= DOCK_CAPACITY ? '（满了，拒绝进入）' : ''}`];
+      if (n > 0) out.push('点下面的「卸下」把里面的人放到隔壁空甲板');
+      else out.push('同轨道我方出舱口送来的人会先存在这里');
+      return out;
+    }
+    default:
+      return [];
+  }
+}
+
 /** 面板上的几行字 */
 export function stationLines(s: GameState, u: Unit): string[] {
   if (u.type !== STATION_CORE_ID) return [];
@@ -1350,5 +2042,14 @@ export function stationLines(s: GameState, u: Unit): string[] {
   out.push(`一块太阳能舱：${solar} 金（发电 ${SOLAR_POWER}）`);
   out.push(`一台推进器舱：${thruster} 金（耗电 ${THRUSTER_DRAW}，航速 +${THRUSTER_SPEED}）`);
   out.push(`一座维生仓：${life} 金（耗电 ${LIFE_DRAW}，覆盖半径 ${LIFE_RADIUS}）`);
+  // 战斗舱段：面板上给价，玩家不用先点一遍才知道造不起
+  const cannon = buildCost(s, u.owner, CANNON_BASE_COST);
+  const armor = buildCost(s, u.owner, ARMOR_BASE_COST);
+  const launch = buildCost(s, u.owner, LAUNCH_BASE_COST);
+  const dock = buildCost(s, u.owner, DOCK_BASE_COST);
+  out.push(`一座轨道炮舱：${cannon} 金（耗电 ${CANNON_DRAW}，每回合 1 发）`);
+  out.push(`一块太空装甲：${armor} 金（不吃电，血厚）`);
+  out.push(`一座出舱口：${launch} 金（耗电 ${LAUNCH_DRAW}，每回合 1 次）`);
+  out.push(`一座入舱口：${dock} 金（耗电 ${DOCK_DRAW}，缓存 ${DOCK_CAPACITY} 人）`);
   return out;
 }

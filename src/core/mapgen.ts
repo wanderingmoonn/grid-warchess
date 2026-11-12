@@ -239,6 +239,7 @@ const CHAR: Record<Terrain, string> = {
   // 空间站专用：生成器不画，留字符只为类型完整与调试转储
   void: '#',
   deck: '_',
+  wreck: '%',
 };
 
 /**

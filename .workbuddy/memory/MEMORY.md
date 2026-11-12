@@ -12,6 +12,16 @@
   `scripts/merge-balance.ts`（多批跑批按原始计数合并）、
   `scripts/reaction-analysis.py`（生成 Markdown 表）。
 
+## 太空战争：战斗口径（2026-11-12 P2f）
+
+- **材料研究室**改回普通 `modifyArmor`：它的加成本来是给**地球**部队的，
+  站内被「恶劣外空环境」÷5 吃掉是对的。`postHazardArmor` 钩子已删，
+  别再"为了不被除"把它挪到环境之后。
+- **敌方空间站只公开外形**（甲板/破口），舱段靠 `hideUnit` 钩子整块不下发，
+  只有核心舱例外。`fog.playerView` 里活单位、ghosts、`memory.known` 三处都要过。
+- 轨道轰击是**跨图盲打**：选一格，空甲板 → `wreck`，有舱段 → `computeDamage`。
+  核心舱那一格连可点格都不给。
+
 ## 架构与坑
 
 - **移动是瞬移结算**：`doMove` 直接改坐标，没有路径记录。要按"路过"判定必须

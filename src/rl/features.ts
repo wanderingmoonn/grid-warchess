@@ -126,6 +126,7 @@ const TERRAIN_VALUE: Record<Terrain, number> = {
   // 空间站：甲板当平地，虚空是墙——RL 只在跑地表，给值只为表完整
   deck: 1,
   void: 0,
+  wreck: 0.8,
 };
 
 /**

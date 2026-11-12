@@ -132,7 +132,30 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   // 「浓雾蔽野」连地形一起遮。判断只做这一次，下游（面板、棋子）都读这个字段。
   const terrainHidden = s.fog && !reveal && s.config.expansionIds.includes('blackout');
 
+  /*
+   * "设计上不给看"的单位（敌方空间站里的舱段）。
+   *
+   * 和视野是两回事：外形（甲板铺到哪）是公开的，装了什么只能靠打出来。
+   * 所以这条判据要在**两处**同时生效——
+   *   · 活单位：一下发就全露了；
+   *   · `memory.known` 里的幽灵：不筛的话"曾经看过"会留下一份完整布局，
+   *     按 F12 就能读出对面哪一格有炮。
+   * 无雾模式也照裁（同理 `redactUnit` 的注释）：这不是"看不见"，是"本来就不该给"。
+   */
+  const exps = activeExpansions(s);
+  const concealed = (u: { type: string; x: number; y: number; board?: BoardId }): boolean => {
+    for (const e of exps) {
+      if (e.hooks.hideUnit?.({ state: s, unit: u, viewer: p })) return true;
+    }
+    return false;
+  };
+
   if (!s.fog || reveal) {
+    cloned.units = cloned.units.filter((u) => u.owner === p || !concealed(u));
+    // 无雾时幽灵表用不上，但 `memory` 是随 state 一起下发的：
+    // 留着一份"对面哪一格有炮"的记忆，等于把这条规则废掉
+    const own = cloned.memory?.[p];
+    if (own) own.known = own.known.filter((k) => !concealed(k));
     return {
       state: cloned,
       visible,
@@ -153,6 +176,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
    */
   cloned.units = cloned.units.filter((u) => {
     if (u.owner === p) return true;
+    if (concealed(u)) return false;
     const id = boardIdOf(u);
     const set = visibleSets[id];
     return !!set && set.has(idxOn(s, id, u.x, u.y)) && !isHiddenFrom(s, u, p);
@@ -220,6 +244,14 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
 
   const seenIds = new Set(cloned.units.map((u) => u.id));
   const mem = cloned.memory[p];
+  /*
+   * 记忆里也要过一遍「整块不给看」。
+   *
+   * 不筛的话，敌方空间站的舱段会被记成幽灵：它们**永远**不在 `cloned.units`
+   * 里，于是每一次刷新都"失踪"，每一帧都画成半透明的影子——既泄露布局，
+   * 又让那座站永远在闪烁。直接把它从下发的记忆里删掉，等于"从没看见过"。
+   */
+  mem.known = mem.known.filter((k) => !concealed(k));
   const ghosts = mem.known.filter((k) => !seenIds.has(k.id));
 
   /*

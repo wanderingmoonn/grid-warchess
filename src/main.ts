@@ -3633,7 +3633,12 @@ function onBoardClick(e: Event): void {
     const caster = state.units.find((u) => u.id === unitId);
     // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
     // **照扣灵石**，玩家手一抖点到自家阵上就白亏 10 灵石，没必要。
-    const onSelf = !!caster && caster.x === coords.x && caster.y === coords.y;
+    //
+    // 坐标相同**且在同一张图**才算"自己脚下"：跨图技能（遥感看地表、轨道炮
+    // 打对面的站）里，"站上的 (3,3)" 和 "地球/对面站上的 (3,3)" 是两回事，
+    // 只比坐标的话，玩家一点就"已取消施法"。
+    const onSelf =
+      !!caster && boardIdOf(caster) === activeBoardId && caster.x === coords.x && caster.y === coords.y;
 
     // 选点型技能（传送阵）：地图上任意一格都是合法落点；方向型只认四邻热区。
     // 判定放在 skill-aim.ts 里，测试能直接把两种技能的规则钉住。

@@ -71,6 +71,12 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     defense: '无掩护',
     note: '空间站铺好的地板。舱段和人都站在这里。',
   },
+  wreck: {
+    name: '破损舱段',
+    cost: '2 移动力',
+    defense: '无掩护',
+    note: '被轨道轰击打穿的甲板。还能走人、还能从旁边接着铺，但站不住建筑；修复要走「扩建甲板」。',
+  },
   water: {
     name: '水域',
     cost: '不可通行',

@@ -22,7 +22,7 @@
 
 import type { Expansion, UnitActionOption } from '../expansions.ts';
 import { SILO_ID } from './silo.ts';
-import { nodeName } from './starmap.ts';
+import { nodeName, starmapOf } from './starmap.ts';
 import {
   COMM_CAP,
   COMM_PER,
@@ -31,7 +31,14 @@ import {
   GRAVITY_PER,
   MATERIAL_CAP,
   MATERIAL_PER,
+  STATION_ARMOR,
+  STATION_CANNON,
+  STATION_CANNON_ID,
   STATION_COMM,
+  STATION_DOCK,
+  STATION_DOCK_ID,
+  STATION_LAUNCH,
+  STATION_LAUNCH_ID,
   STATION_LAB_GRAVITY,
   STATION_LAB_MATERIAL,
   STATION_LIFE,
@@ -45,6 +52,7 @@ import {
   STATION_SOLAR,
   STATION_THRUSTER,
   activeModuleCount,
+  CANNON_ATK,
   CORE_POWER,
   PRODUCER_DRAW,
   SOLAR_POWER,
@@ -52,6 +60,11 @@ import {
   THRUSTER_SPEED,
   beginStationSail,
   buildCost,
+  cannonActions,
+  combatLines,
+  combatUnitAction,
+  dockActions,
+  launchActions,
   launchCore,
   stationDestinations,
   stationLines,
@@ -100,8 +113,8 @@ export const SPACE_WAR: Expansion = {
     `<b>微重力研究室</b>：每座让本方<b>总金币收入 +${Math.round(GRAVITY_PER * 100)}%</b>，`
       + `多座叠加，上限 +${Math.round(GRAVITY_CAP * 100)}%。`,
     `<b>材料研究室</b>：每座让本方<b>所有单位护甲 +${MATERIAL_PER}</b>，上限 +${MATERIAL_CAP}。`
-      + '这条加成落在"外空 ÷5"<b>之后</b>——站内单位本来都被环境折过一遍，'
-      + '如果先加再除，等于白造。',
+      + '这条加成是<b>给地球上的部队</b>准备的：站内单位仍在「恶劣外空环境」里，'
+      + '那 ÷5 会把它吃掉——空间站里的装甲挡不住没有空气，这不是算错。',
     `<b>通讯模块</b>：每座让本方<b>所有单位视野 +${COMM_PER}</b>，上限 +${COMM_CAP}。`,
     '<b>维生仓</b>：造好之后，<b>半径 3 格</b>内的单位不再吃「恶劣外空环境」'
       + '（护甲不再 ÷5、移动不再减半）。航天员本来就免疫，不用罩。'
@@ -119,6 +132,29 @@ export const SPACE_WAR: Expansion = {
       + '连线就是航道；点星球能看到轨道上停着哪些站、有没有东西正在飞来，'
       + '还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。'
       + '只有一张图的局面没有星图可看。',
+    /* ── 战斗：P2f ── */
+    '<b>看得到的和看不到的</b>：敌方空间站的<b>外形</b>是公开的——甲板铺到了哪、'
+      + '哪里被打穿了破口，都画在地图上。但里面装了什么<b>只有核心舱看得见</b>：'
+      + '舱段位置、类型、还剩多少血，一律不显示。所以打别人的站，是<b>盲打</b>。',
+    '<b>轨道炮舱</b>：功能舱段（要航天员相邻、要电）。技能「轨道轰击」——'
+      + '对<b>同一轨道</b>上的一座敌方空间站选一格打一发，每回合 1 次，'
+      + `伤害 ${CANNON_ATK}（照常扣护甲）。<b>打不到核心舱</b>（那一格连点都点不亮）。`
+      + '同一轨道上有两座以上敌方站时，先在面板上「瞄准」一座；只有一座时自动瞄上。'
+      + '打中舱段就结算伤害，<b>打空就把那一格的甲板打穿</b>。',
+    '<b>破损舱段</b>：被打穿的甲板。它能走人（一格顶两格）、能人从它旁边继续铺甲板，'
+      + '但<b>站不住舱段</b>（地板都没了）。修复走核心舱的「扩建甲板」，价格和铺一格虚空一样。'
+      + '想拆一座站，就得先打出一串破口。',
+    '<b>太空装甲</b>：不吃电，血厚甲硬（生命 180 / 护甲 14）。它的作用很朴素——'
+      + '<b>它站在那儿</b>：轨道轰击选中的格子上只要有东西，就打那个东西。'
+      + '所以把装甲铺在要保住的甲板上，炮就只能打在它身上。它自己那格甲板也不会被打穿。',
+    '<b>出舱口</b>：把一个<b>相邻</b>的单位打出去，送到同一轨道上：'
+      + '<b>我方空间站的入舱口</b>（有空位时），或<b>敌方空间站的破损舱段</b>（就是登船）。'
+      + '每座出舱口每回合 1 次。送进破口的人当回合不能动；送进入舱口的人要等一回合才能卸下来。'
+      + '舱段（建筑）不能装进舱门——只有人过得去。',
+    '<b>入舱口</b>：接收同轨道我方出舱口送来的人，最多<b>缓存 3 个</b>，'
+      + '满了就拒绝进入。缓存的人不在棋盘上——看不见、打不到、也不吃外空环境，'
+      + '要让他们干活，得点「卸下」放到隔壁的空甲板上（旁边没空位就下不来）。'
+      + '舱门被打掉时，里面的人也一起没了。',
   ],
   units: [
     STATION_CORE,
@@ -130,17 +166,21 @@ export const SPACE_WAR: Expansion = {
     STATION_LAB_GRAVITY,
     STATION_LAB_MATERIAL,
     STATION_COMM,
+    STATION_CANNON,
+    STATION_ARMOR,
+    STATION_LAUNCH,
+    STATION_DOCK,
   ],
   hooks: {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
     /**
      * 材料研究室：本方**所有单位**护甲 +1/座，上限 +5。
      *
-     * 走 `postHazardArmor`（环境之后）而不是 `modifyArmor`：站内所有单位都在
-     * "外空 ÷5"里，如果 +1 先加再除，等于永远是 0——研究会白造。
-     * 这条加成是"给舱段加装装甲板"，本来就该落在除完之后。
+     * 走普通的 `modifyArmor`（和环境除法之前那些加成同一条路）——这条加成
+     * **本来就是给地球上的部队用的**：站里那点空间，装甲板再好也挡不住没有空气，
+     * 所以它在站内会被「恶劣外空环境」÷5 吃掉，这是有意的，不是漏洞。
      */
-    postHazardArmor: ({ state, defender, armor }) => {
+    modifyArmor: ({ state, defender, armor }) => {
       const n = Math.min(MATERIAL_CAP, activeModuleCount(state, defender.owner, STATION_LAB_MATERIAL_ID));
       return n > 0 ? armor + n * MATERIAL_PER : armor;
     },
@@ -167,6 +207,24 @@ export const SPACE_WAR: Expansion = {
       tickProducers(state, player);
       // 在航的站：只推自己的（和火箭同一个规矩）
       tickStationTravel(state, player);
+    },
+
+    /**
+     * 敌方空间站：只看得到"壳"，看不到里面装了什么。
+     *
+     * 甲板铺到哪是公开的（`playerView` 里站内所有格本来就全可见），所以
+     * "这座站有多大、哪里有破口"玩家一直知道。但舱段装在哪、装的是什么，
+     * 只有核心舱例外——核心舱是整座站的中心，看不见它就没法判断该往哪儿打。
+     *
+     * 于是轨道轰击是**盲打**：选一格，打中舱段算你运气好，打空就是打穿甲板。
+     * 这条规矩把"太空装甲铺在哪"变成了一个真正的决定。
+     */
+    hideUnit: ({ state, unit, viewer }) => {
+      const board = unit.board;
+      const st = board ? starmapOf(state)?.stations.find((x) => x.board === board) : undefined;
+      if (!st) return false;
+      if (st.owner === viewer) return false;
+      return unit.type !== STATION_CORE_ID;
     },
 
     /**
@@ -222,6 +280,11 @@ export const SPACE_WAR: Expansion = {
         return out;
       }
 
+      // 战斗舱段：炮口转向 / 出舱口发射 / 入舱口卸人
+      if (unit.type === STATION_CANNON_ID) return cannonActions(state, unit);
+      if (unit.type === STATION_LAUNCH_ID) return launchActions(state, unit);
+      if (unit.type === STATION_DOCK_ID) return dockActions(state, unit);
+
       return [];
     },
 
@@ -234,12 +297,16 @@ export const SPACE_WAR: Expansion = {
         if (!rec) return '这支部队不在任何空间站上';
         return beginStationSail(state, rec, actionId.slice('station:sail:'.length));
       }
+      if (actionId.startsWith('station:aim:')) return combatUnitAction(state, unit, actionId);
+      if (actionId.startsWith('station:launch:')) return combatUnitAction(state, unit, actionId);
+      if (actionId.startsWith('station:unload:')) return combatUnitAction(state, unit, actionId);
       return `认不出这个操作：${actionId}`;
     },
 
     getUnitPanelLines: ({ state, unit }) => {
-      if (unit.type !== STATION_CORE_ID) return [];
-      return stationLines(state, unit);
+      if (unit.type === STATION_CORE_ID) return stationLines(state, unit);
+      // 战斗舱段各有各的账（瞄着谁、舱里几个人、本回合还能不能发射）
+      return combatLines(state, unit);
     },
 
     /**
@@ -252,6 +319,14 @@ export const SPACE_WAR: Expansion = {
      */
     getTilePanelHtml: ({ state, unit, viewer }) => {
       if (!unit) return null;
+      /*
+       * 只给自己的东西画能量条。
+       *
+       * 对面站里的舱段本来就不下发（`hideUnit`），于是"按视图状态现算"的能量账
+       * 会拿只剩一个核心舱的数据算出"供电 10 / 已用 0"——那不是情报，那是错数。
+       * 与其显示一个假的余量，不如不显示。
+       */
+      if (unit.owner !== viewer) return null;
       const power = stationPowerHtml(state, unit);
       if (!power) return null;
       /*

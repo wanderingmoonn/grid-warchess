@@ -140,6 +140,8 @@ export const CONFIG = {
     void: 0,
     // 甲板：平的，没遮挡
     deck: 0,
+    // 破损舱段：破口两面透风，站在那里就是露着
+    wreck: 0,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -170,6 +172,8 @@ export const CONFIG = {
     void: 99,
     // 甲板：正常走
     deck: 1,
+    // 破损舱段：能过，但碎钢架和裸露的管路绊脚，走一格顶两格
+    wreck: 2,
   } as Record<Terrain, number>,
 
   /**
@@ -197,6 +201,7 @@ export const CONFIG = {
     crater: '环形山',
     void: '虚空',
     deck: '甲板',
+    wreck: '破损舱段',
   } as Record<Terrain, string>,
 };
 

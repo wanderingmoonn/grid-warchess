@@ -21,7 +21,7 @@ import {
   threatTiles,
   visibleTilesOn,
 } from '../../../src/core/rules.ts';
-import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, idxOn, EARTH } from '../../../src/core/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, idxOn, tileOn, EARTH } from '../../../src/core/board.ts';
 import { CONFIG } from '../../../src/core/config.ts';
 import { activeExpansions } from '../../../src/core/expansions.ts';
 import { footprintOf, distBetweenUnits } from '../../../src/core/query.ts';
@@ -41,6 +41,16 @@ import {
   STATION_PRODUCER_ID,
   STATION_SOLAR_ID,
   STATION_THRUSTER_ID,
+  STATION_ARMOR_ID,
+  STATION_CANNON_ID,
+  STATION_DOCK_ID,
+  STATION_LAUNCH_ID,
+  CANNON_ATK,
+  DOCK_CAPACITY,
+  cannonAimBoard,
+  dockActions,
+  dockCargo,
+  launchActions,
   THRUSTER_BASE_COST,
   THRUSTER_DRAW,
   beginStationSail,
@@ -1614,10 +1624,17 @@ test('功能舱段：没有航天员相邻就不工作', () => {
   /*
    * "没人看的仪器就是一个箱子"。这条验的是**值守**这道闸：
    * 同一个舱段，没人和有人，加成必须不一样。
+   *
+   * 观测对象是**地球上的**一个兵，不是站里的核心舱：材料研究室的 +1 甲
+   * 走的是普通 `modifyArmor`（加在环境除法之前），在站内会被「恶劣外空环境」
+   * ÷5 吃掉——那是设计要的（它的加成本来就是给地球部队的）。
+   * 拿站里的单位当观测对象，测到的是"环境"而不是"值守"。
    */
   const st = openStation();
   let cur = st.state;
   const board = st.board;
+  place2(cur, 'A', 'militia', 6, 6);
+  const watcher = cur.units.filter((u) => u.type === 'militia').at(-1)!;
   pave(cur, board, [[1, 1], [3, 3], [3, 4]]);
 
   // 先补电：一块太阳能（+12）才带得动材料研究室（12）
@@ -1629,28 +1646,39 @@ test('功能舱段：没有航天员相邻就不工作', () => {
   cur = lab.state;
 
   const labUnit = cur.units.find((u) => u.type === STATION_LAB_MATERIAL_ID)!;
-  const before = effectiveStats(cur, st.core).armor;
+  const before = effectiveStats(cur, watcher).armor;
   assert.equal(isStaffed(cur, labUnit), false, '还没人值班');
   assert.equal(activeModuleCount(cur, 'A', STATION_LAB_MATERIAL_ID), 0, '无人值守不算在役');
+  assert.equal(effectiveStats(cur, watcher).armor, before, '没人的时候不加甲');
 
   // 隔壁放一名航天员
   putOnBoard(cur, board, 'A', ASTRONAUT_ID, 3, 4);
   assert.equal(isStaffed(cur, labUnit), true, '相邻就算值班');
   assert.equal(activeModuleCount(cur, 'A', STATION_LAB_MATERIAL_ID), 1);
-  assert.equal(effectiveStats(cur, st.core).armor, before + 1, '护甲 +1 生效');
+  assert.equal(effectiveStats(cur, watcher).armor, before + 1, '地球上的兵护甲 +1');
+
+  // 站内单位照样被环境 ÷5 吃掉：这条是"加成给地球"的直接证据，不是 bug
+  const coreInStation = effectiveStats(cur, st.core).armor;
+  assert.ok(
+    coreInStation <= Math.floor((8 + 1) / 5),
+    `站内核心舱的护甲该被外空折过（实际 ${coreInStation}）`,
+  );
 
   // 挪远一格（不相邻）：立刻停工
   const astro = cur.units.find((u) => u.type === ASTRONAUT_ID)!;
   astro.y = 1;
   astro.x = 1;
   assert.equal(isStaffed(cur, labUnit), false);
-  assert.equal(effectiveStats(cur, st.core).armor, before, '离开就恢复原值');
+  assert.equal(effectiveStats(cur, watcher).armor, before, '离开就恢复原值');
 });
 
 test('材料 / 通讯：每座 +1，软上限 5 与 3', () => {
   /*
    * 上限是硬的（`Math.min`），但"几座"要按**在役**数：无人值守的不算。
    * 这条只测上限本身，值守逻辑在上一条。
+   *
+   * 同样观测**地球上的**兵：站里单位的护甲会被外空 ÷5 折掉，
+   * 用它测上限测到的是环境，不是 `Math.min`。
    */
   const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
   flatten(s, 'plain');
@@ -1658,9 +1686,10 @@ test('材料 / 通讯：每座 +1，软上限 5 与 3', () => {
   const b = s.boards!['st-x']!;
   for (const t of b.tiles) t.terrain = 'deck';
   putOnBoard(s, 'st-x', 'A', STATION_CORE_ID, 4, 4);
+  place2(s, 'A', 'militia', 6, 6);
+  const watcher = s.units.filter((u) => u.type === 'militia').at(-1)!;
 
-  const core = s.units.find((u) => u.type === STATION_CORE_ID)!;
-  const baseArmor = effectiveStats(s, core).armor;
+  const baseArmor = effectiveStats(s, watcher).armor;
 
   /*
    * 六座材料研究室（上限 5）+ 六块太阳能。
@@ -1673,7 +1702,7 @@ test('材料 / 通讯：每座 +1，软上限 5 与 3', () => {
     putOnBoard(s, 'st-x', 'A', ASTRONAUT_ID, i, 3);
   }
   assert.equal(activeModuleCount(s, 'A', STATION_LAB_MATERIAL_ID), 6, '六座都在役');
-  assert.equal(effectiveStats(s, core).armor, baseArmor + 5, '护甲上限 +5（不是 +6）');
+  assert.equal(effectiveStats(s, watcher).armor, baseArmor + 5, '护甲上限 +5（不是 +6）');
 
   // 通讯：四座，上限 +3
   for (let i = 0; i < 4; i += 1) {
@@ -1681,6 +1710,7 @@ test('材料 / 通讯：每座 +1，软上限 5 与 3', () => {
     putOnBoard(s, 'st-x', 'A', STATION_COMM_ID, i, 6);
     putOnBoard(s, 'st-x', 'A', ASTRONAUT_ID, i, 7);
   }
+  const core = s.units.find((u) => u.type === STATION_CORE_ID)!;
   const baseVision = s.unitTypes[STATION_CORE_ID]!.vision;
   assert.equal(visionOf(s, core), baseVision + 3, '视野上限 +3（4 座只给 3）');
 });
@@ -1793,6 +1823,304 @@ test('遥感模块：从轨道观测地表，点亮目标格与四邻（每回�
     targetY: 11,
   });
   assert.equal(again.ok, false, '同一回合不能观测两次');
+});
+
+console.log('\n太空战争：战斗舱段');
+
+/**
+ * 手搓一座额外的空间站（不走发射井）。
+ *
+ * 这里要验的是"两座站怎么打"，不是"核心舱怎么上天"——后者在别的用例里。
+ * 直接建棋盘 + 往星图里挂一条记录，比让发射井飞两趟省事得多。
+ */
+function addStation(
+  s: GameState,
+  nodeId: string,
+  owner: 'A' | 'B',
+  name: string,
+  size = 5,
+): { board: string; core: Unit } {
+  const board = `foe-${s.nextUnitSeq++}`;
+  s.boards![board] = createStationBoard(board, size, name);
+  const b = s.boards![board]!;
+  for (const t of b.tiles) t.terrain = 'deck';
+  s.starmap!.stations.push({ board, at: nodeId, owner, core: 'core-outpost' });
+  const mid = (size - 1) / 2;
+  const core = putOnBoard(s, board, owner, STATION_CORE_ID, mid, mid);
+  return { board, core };
+}
+
+/** 过一次完整的回合（A → B → A），让"每回合一次"的限制复位 */
+function round(cur: GameState): GameState {
+  let s = cur;
+  for (let i = 0; i < 2; i += 1) {
+    const r = applyAction(s, { type: 'END_TURN' });
+    if (r.ok) s = r.state;
+  }
+  return s;
+}
+
+test('轨道炮舱：跨站盲打——空甲板被打穿，核心舱点不亮', () => {
+  /*
+   * 这是这一包唯一的跨图攻击，所以要点都在这条里：
+   *   · 目标自动瞄上（同轨道只有一座敌站时不多点一次）；
+   *   · 可点格里**没有核心舱那一格**（打不穿的东西不给你点）；
+   *   · 打空 = 甲板变 `wreck`；
+   *   · 每回合只有一发。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const mine = st.board;
+  const node = cur.starmap!.stations[0]!.at;
+
+  pave(cur, mine, [[1, 1], [3, 3], [3, 4]]);
+  putOnBoard(cur, mine, 'A', STATION_SOLAR_ID, 1, 1);
+  const cannon = putOnBoard(cur, mine, 'A', STATION_CANNON_ID, 3, 3);
+  putOnBoard(cur, mine, 'A', ASTRONAUT_ID, 3, 4);
+
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+
+  assert.equal(cannonAimBoard(cur, cannon), foe.board, '同轨道只有一座敌站：自动瞄上');
+
+  const decl = SKILL_TARGET_CELLS['station-bombard']!({
+    state: cur,
+    view: cur,
+    self: cannon,
+    skill: heroSkillsOf(cur, cannon).find((k) => k.def.id === 'station-bombard')!.def,
+  }) as { board?: string; cells: Array<{ x: number; y: number }> };
+  assert.equal(decl.board, foe.board, '选点要声明"打的是对面那张图"');
+  assert.equal(
+    decl.cells.some((c) => c.x === foe.core.x && c.y === foe.core.y),
+    false,
+    '核心舱那一格不该出现在可点格里',
+  );
+
+  const fire = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: cannon.id,
+    skillId: 'station-bombard',
+    targetX: 0,
+    targetY: 0,
+  });
+  assert.ok(fire.ok, fire.ok ? '' : fire.reason);
+  cur = fire.state;
+  assert.equal(tileOn(cur, foe.board, 0, 0)?.terrain, 'wreck', '空甲板被打穿成破损舱段');
+  assert.equal(tileOn(cur, foe.board, 0, 1)?.terrain, 'deck', '只打穿一格');
+
+  // 硬点核心舱：拦下来，理由要说清是核心舱
+  const atCore = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: cannon.id,
+    skillId: 'station-bombard',
+    targetX: foe.core.x,
+    targetY: foe.core.y,
+  });
+  assert.equal(atCore.ok, false, '核心舱打不穿');
+
+  // 每回合 1 发
+  const two = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: cannon.id,
+    skillId: 'station-bombard',
+    targetX: 0,
+    targetY: 1,
+  });
+  assert.equal(two.ok, false, '同一回合不能打两发');
+
+  // 破口能继续打：打穿第二格
+  cur = round(cur);
+  const third = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: cannon.id,
+    skillId: 'station-bombard',
+    targetX: 0,
+    targetY: 1,
+  });
+  assert.ok(third.ok, third.ok ? '' : third.reason);
+  assert.equal(tileOn(third.state, foe.board, 0, 1)?.terrain, 'wreck');
+});
+
+test('轨道炮舱：打中有东西的格子＝打那个舱段（装甲替甲板挨打）', () => {
+  /*
+   * "看不出那一格有没有东西"是这条规则的前提，所以打中之后的结算必须和
+   * 普通攻击同一套（`computeDamage` + `hurt`）：护甲、环境、守御阵全都照旧。
+   * 顺带钉住太空装甲的存在意义——它站在哪儿，哪儿的甲板就不会被打穿。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const mine = st.board;
+  const node = cur.starmap!.stations[0]!.at;
+
+  pave(cur, mine, [[1, 1], [3, 3], [3, 4]]);
+  putOnBoard(cur, mine, 'A', STATION_SOLAR_ID, 1, 1);
+  const cannon = putOnBoard(cur, mine, 'A', STATION_CANNON_ID, 3, 3);
+  putOnBoard(cur, mine, 'A', ASTRONAUT_ID, 3, 4);
+
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+  const armor = putOnBoard(cur, foe.board, 'B', STATION_ARMOR_ID, 0, 0);
+
+  const fire = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: cannon.id,
+    skillId: 'station-bombard',
+    targetX: 0,
+    targetY: 0,
+  });
+  assert.ok(fire.ok, fire.ok ? '' : fire.reason);
+
+  const after = fire.state.units.find((u) => u.id === armor.id)!;
+  assert.ok(after, '装甲不该被一发打没');
+  assert.ok(after.hp < armor.hp, `打中舱段要掉血（${armor.hp} → ${after.hp}）`);
+  // 站内护甲被环境 ÷5（14 → 2），所以这一发该打出接近满额的伤害
+  assert.equal(
+    armor.hp - after.hp,
+    Math.max(0, CANNON_ATK - 2),
+    '伤害 = 炮击值 − 站内实际护甲',
+  );
+  assert.equal(tileOn(fire.state, foe.board, 0, 0)?.terrain, 'deck', '有舱段的格子不会被一起打穿');
+});
+
+test('敌方空间站：只看得到外壳与核心舱，看不出里面装了什么', () => {
+  /*
+   * 甲板是公开的（不然"哪里有破口"都不知道），舱段不是。
+   * 这条同时守住"记忆里也不许留一份完整布局"——`memory.known` 会随视图下发。
+   */
+  const st = openStation();
+  const cur = st.state;
+  const node = cur.starmap!.stations[0]!.at;
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+  putOnBoard(cur, foe.board, 'B', STATION_PRODUCER_ID, 1, 1);
+  putOnBoard(cur, foe.board, 'B', STATION_ARMOR_ID, 1, 2);
+
+  const viewA = playerView(cur, 'A');
+  const seen = viewA.state.units.filter((u) => boardIdOf(u) === foe.board);
+  assert.deepEqual(
+    seen.map((u) => u.type),
+    [STATION_CORE_ID],
+    'A 只该看到对面的核心舱',
+  );
+  assert.equal(
+    viewA.visibleByBoard[foe.board]!.length,
+    cur.boards![foe.board]!.w * cur.boards![foe.board]!.h,
+    '外壳（甲板铺到哪）是公开的',
+  );
+  assert.equal(
+    (viewA.state.memory.A?.known ?? []).some((k) => k.board === foe.board),
+    false,
+    '记忆里也不该留下对面舱段的坐标',
+  );
+
+  const viewB = playerView(cur, 'B');
+  assert.equal(
+    viewB.state.units.filter((u) => boardIdOf(u) === foe.board).length,
+    3,
+    '自己的站当然全看得见',
+  );
+});
+
+test('出舱口 / 入舱口：送过去当回合不能卸，下一回合卸在隔壁', () => {
+  /*
+   * 一条完整的运输链：出舱口装人 → 我方同轨道入舱口缓存 → 下一回合卸到甲板。
+   * "当回合不能卸"就是这一程的那一回合——给防守方一个能反应的窗口。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const a1 = st.board;
+  const node = cur.starmap!.stations[0]!.at;
+
+  pave(cur, a1, [[1, 1], [3, 3], [3, 2]]);
+  putOnBoard(cur, a1, 'A', STATION_SOLAR_ID, 1, 1);
+  const port = putOnBoard(cur, a1, 'A', STATION_LAUNCH_ID, 3, 3);
+  const marine = putOnBoard(cur, a1, 'A', ASTRONAUT_ID, 3, 2);
+
+  const a2 = addStation(cur, node, 'A', '二号站');
+  const dock = putOnBoard(cur, a2.board, 'A', STATION_DOCK_ID, 2, 2);
+
+  const offers = launchActions(cur, port);
+  const toDock = offers.find((o) => o.id.includes(':dock:'));
+  assert.ok(toDock, '该有一个"送到我方入舱口"的按钮');
+
+  const go = applyAction(cur, { type: 'UNIT_ACTION', unitId: port.id, actionId: toDock!.id });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+  cur = go.state;
+
+  const portNow = cur.units.find((u) => u.id === port.id)!;
+  const dockNow = cur.units.find((u) => u.id === dock.id)!;
+  assert.equal(cur.units.some((u) => u.id === marine.id), false, '上船之后棋盘上就没有他了');
+  assert.equal(dockCargo(dockNow).length, 1, '入舱口里有一个人');
+  assert.equal(dockCargo(dockNow)[0]!.unit.id, marine.id);
+
+  // 本回合已经发射过一次
+  const twice = applyAction(cur, { type: 'UNIT_ACTION', unitId: portNow.id, actionId: toDock!.id });
+  assert.equal(twice.ok, false, '一座出舱口每回合只发一次');
+
+  // 当回合不能卸
+  const early = applyAction(cur, { type: 'UNIT_ACTION', unitId: dock.id, actionId: 'station:unload:0' });
+  assert.equal(early.ok, false, '刚进舱，还在固定');
+
+  // 下一回合：卸在隔壁
+  cur = round(cur);
+  const unload = applyAction(cur, { type: 'UNIT_ACTION', unitId: dock.id, actionId: 'station:unload:0' });
+  assert.ok(unload.ok, unload.ok ? '' : unload.reason);
+  const landed = unload.state.units.find((u) => u.id === marine.id)!;
+  assert.ok(landed, '卸下来就该回到棋盘上');
+  assert.equal(boardIdOf(landed), a2.board, '落在二号站上');
+  assert.equal(Math.abs(landed.x - 2) + Math.abs(landed.y - 2), 1, '落在入舱口隔壁');
+  assert.equal(landed.moved, false);
+  assert.equal(landed.acted, false, '落地就是满状态');
+
+  const dockAfter = unload.state.units.find((u) => u.id === dock.id)!;
+  assert.equal(dockCargo(dockAfter).length, 0, '舱里空了');
+});
+
+test('出舱口：送进敌方破口＝登船；入舱口满了拒收', () => {
+  const st = openStation();
+  let cur = st.state;
+  const a1 = st.board;
+  const node = cur.starmap!.stations[0]!.at;
+
+  pave(cur, a1, [[1, 1], [3, 3], [2, 3]]);
+  putOnBoard(cur, a1, 'A', STATION_SOLAR_ID, 1, 1);
+  const port = putOnBoard(cur, a1, 'A', STATION_LAUNCH_ID, 3, 3);
+  const marine = putOnBoard(cur, a1, 'A', ASTRONAUT_ID, 2, 3);
+
+  // 敌方站：一格破口
+  const foe = addStation(cur, node, 'B', '红方的空间站 1');
+  const b = cur.boards![foe.board]!;
+  b.tiles[0]!.terrain = 'wreck'; // (0,0)
+
+  const toWreck = launchActions(cur, port).find((o) => o.id.includes(':wreck:'));
+  assert.ok(toWreck, '该有一个"从破口登船"的按钮');
+  const go = applyAction(cur, { type: 'UNIT_ACTION', unitId: port.id, actionId: toWreck!.id });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+
+  const landed = go.state.units.find((u) => u.id === marine.id)!;
+  assert.ok(landed, '登船的人要在棋盘上');
+  assert.equal(boardIdOf(landed), foe.board, '落在敌方站上');
+  assert.equal(landed.x, 0);
+  assert.equal(landed.y, 0);
+  assert.ok(go.state.log.some((l) => l.player === 'B' && l.text.includes('登')), '被打的那方要有战报');
+
+  // 破口已经被占了：登船按钮不该再出现
+  assert.equal(
+    launchActions(go.state, go.state.units.find((u) => u.id === port.id)!).some((o) => o.id.includes(':wreck:')),
+    false,
+    '破口站了人就不能再往那儿登',
+  );
+
+  // 入舱口满了拒收
+  const s2 = addStation(cur, node, 'A', '二号站');
+  const dock = putOnBoard(cur, s2.board, 'A', STATION_DOCK_ID, 2, 2);
+  dock.custom = {
+    cargo: Array.from({ length: DOCK_CAPACITY }, (_, i) => ({ unit: { ...marine, id: `stuffed-${i}` }, arrivedTurn: 0 })),
+  };
+  const refused = applyAction(cur, {
+    type: 'UNIT_ACTION',
+    unitId: port.id,
+    actionId: `station:launch:${marine.id}:dock:${dock.id}`,
+  });
+  assert.equal(refused.ok, false, '满了就该拒绝进入');
+  assert.ok(refused.reason?.includes('满'), `理由要说清是满了：${refused.reason}`);
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

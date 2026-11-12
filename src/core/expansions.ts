@@ -352,13 +352,6 @@ export interface ExpansionHooks {
   modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
-  /**
-   * 和 `modifyArmor` 一样，但**跑在地图环境之后**（外空 ÷5 之后）。
-   *
-   * 给"站内设施"这类加成用：材料研究室给的 +1 甲，是给已经适应了外空的
-   * 舱段加装装甲板，不该被环境再除一次（+1 除 5 = 0，等于没做）。
-   */
-  postHazardArmor?: (c: ArmorCtx) => number;
   /** 纯函数：修正移动力 */
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */
@@ -668,6 +661,29 @@ export interface ExpansionHooks {
    * 观战（`reveal`）不裁：复盘和双 AI 观战要看全。
    */
   redactUnit?: (c: { state: GameState; unit: Unit; viewer: PlayerId }) => void;
+
+  /**
+   * 视图裁剪：**整个单位都不下发**（返回 true = 这个视角看不见它）。
+   *
+   * 和 `redactUnit` 分工不同：那个是"看得见这个人，抹掉他兜里的东西"，
+   * 这个是"连人影都不给"。空间站的舱段是第一个用户——敌方空间站的**外形**
+   * 是公开的（甲板铺到哪了大家都看得见），但舱段装的是什么、装在哪，
+   * 只能靠轨道轰击一格一格试出来。
+   *
+   * 三条约定和 `redactUnit` 一样（只对非自己的单位调用、观战不裁）。
+   * 额外一条：**记忆也要过这道闸**。否则"曾经看过"会在 `memory.known` 里
+   * 留下一份完整布局，按 F12 就能读出对面站里哪一格有炮——那正是这条
+   * 规则要藏的东西。`playerView` 因此会把这个判据同时用在活单位和幽灵上。
+   */
+  hideUnit?: (c: {
+    state: GameState;
+    /**
+     * 活单位或**记忆里的幽灵**。只保证有 `type / x / y / board`，
+     * 想判归属就从棋盘查（星图上的站有 owner），别读 `unit.owner`。
+     */
+    unit: Pick<Unit, 'type' | 'x' | 'y'> & { board?: Unit['board'] };
+    viewer: PlayerId;
+  }) => boolean;
 }
 
 /** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
