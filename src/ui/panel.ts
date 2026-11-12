@@ -100,6 +100,26 @@ import { skillsOf } from '../core/query.ts';
 import type { GameState, PlayerId, ProduceSource, Unit, UnitTypeDef } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 
+/**
+ * 星图面板要显示的内容。
+ *
+ * 这里只放"已经算好的几行字"，不把星图数据整个丢进面板：
+ * 节点/航线的取数在 `main.ts` 里做（它才知道星图视图选中了谁），
+ * 面板只负责画。少一层猜，就少一处"面板读不到星图"的耦合。
+ */
+export interface StarPanelInfo {
+  kind: 'node' | 'lane';
+  title: string;
+  lines: string[];
+  /**
+   * 能去的地方：节点自己 + 它轨道上停泊的空间站。
+   *
+   * 用列表而不是单个 `goBoard`：一个星球可能停着好几座站，
+   * 玩家在星图上点它，本来想去的可能就是其中某一座。
+   */
+  goto?: Array<{ label: string; board: string }>;
+}
+
 export interface PanelInput {
   view: PlayerView;
   me: PlayerId;
@@ -109,6 +129,8 @@ export interface PanelInput {
   selectedCampId: string | null;
   /** 点空地时选中的地形，用来显示地形说明 */
   selectedTile: { x: number; y: number } | null;
+  /** 星图上选中的节点/航线（null = 没开星图，或者星图上什么都没选） */
+  star?: StarPanelInfo | null;
   /**
    * 强制模式的当前档位（null = 没开）。
    *
@@ -448,6 +470,19 @@ function panelHtml(input: PanelInput): string {
         ? ' card-detail-live'
         : ''
     }">${detail}</div>
+
+    ${input.star
+      ? `<div class="card">
+           <div class="card-title">${escapeHtml(input.star.title)}</div>
+           ${input.star.lines.map((l) => `<div class="hint">${escapeHtml(l)}</div>`).join('')}
+           ${(input.star.goto ?? [])
+             .map(
+               (g) =>
+                 `<button class="btn btn-sm btn-primary" data-act="star-go" data-id="${escapeHtml(g.board)}">前往 ${escapeHtml(g.label)}</button>`,
+             )
+             .join(' ')}
+         </div>`
+      : ''}
 
     <div class="card">
       <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>

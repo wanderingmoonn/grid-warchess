@@ -91,6 +91,10 @@ import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
 import { hasStarRows, starRows } from './ui/star-panel.ts';
+import { starLayout } from './ui/star-layout.ts';
+import { renderStarMap, type StarSelection } from './ui/star-map.ts';
+import { nodeName } from './core/space/starmap.ts';
+import type { StarPanelInfo } from './ui/panel.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -254,6 +258,7 @@ appEl.innerHTML = `
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
         </div>
+        <div class="star-map" id="star-map" hidden></div>
         <div class="board-list" id="board-list"></div>
       </div>
       <aside class="side" id="side"></aside>
@@ -274,8 +279,10 @@ const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
  * 它只认"可视区域"这一个坐标系，永远钉在右下角。
  */
 const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
-/** 左下角的地图列表：收起时只显示当前图，点开列出所有图 */
+/** 左上角的地图列表：收起时只显示当前图，点开列出所有图 */
 const boardListEl = pick<HTMLElement>(appEl, '#board-list');
+/** 星图覆盖层：盖在棋盘上，按 Esc / 关闭退出 */
+const starMapEl = pick<HTMLElement>(appEl, '#star-map');
 /**
  * 强制模式的横幅。
  *
@@ -1057,6 +1064,62 @@ function myTurn(): boolean {
 let opsOpen = false;
 let logOpen = false;
 
+/**
+ * 星图上选中节点/航线时，侧栏那张卡的内容。
+ *
+ * 只产出"几行已经算好的字"，不把星图数据塞进面板：面板不需要知道
+ * 节点画在哪个格、航线连谁，它只负责画。以后星图加东西，改这里就够了。
+ */
+function starPanelInfo(): StarPanelInfo | null {
+  if (!starOpen || !starSel) return null;
+  const lay = starLayout(state);
+  if (!lay) return null;
+  const who = (p: PlayerId): string => state.players[p]?.name ?? p;
+  const trips = state.transit ?? [];
+
+  if (starSel.kind === 'node') {
+    const n = lay.nodes.find((x) => x.id === starSel!.id);
+    if (!n) return null;
+    const lines: string[] = [
+      n.kind === 'moon' ? '卫星' : n.kind === 'orbit' ? '轨道槽位' : '星球',
+    ];
+    if (n.stations.length === 0) {
+      lines.push('轨道上没有空间站');
+    } else {
+      lines.push(`轨道上停泊 ${n.stations.length} 座空间站`);
+      for (const st of n.stations) lines.push(`· ${st.ownerName}的「${st.name}」`);
+    }
+    const incoming = trips.filter((t) => t.to === n.id);
+    if (incoming.length === 0) {
+      lines.push('没有东西正在飞来');
+    } else {
+      for (const t of incoming) {
+        lines.push(`${who(t.owner)}的火箭正在飞来，还有 ${Math.max(0, t.left)} 回合`);
+      }
+    }
+    const goto: Array<{ label: string; board: string }> = [];
+    if (n.board) goto.push({ label: n.name, board: n.board });
+    for (const st of n.stations) goto.push({ label: st.name, board: st.board });
+    return { kind: 'node', title: n.name, lines, ...(goto.length > 0 ? { goto } : {}) };
+  }
+
+  const lane = lay.lanes.find((l) => l.id === starSel!.id);
+  if (!lane) return null;
+  const onWay = trips.filter((t) => t.lane === lane.id);
+  const lines = [
+    `${lane.a.name} ⇄ ${lane.b.name}`,
+    `航程 ${lane.turns} 回合（点火之后开始算）`,
+  ];
+  if (onWay.length === 0) {
+    lines.push('路上没有东西');
+  } else {
+    for (const t of onWay) {
+      lines.push(`${who(t.owner)} → ${nodeName(state, t.to)}，还有 ${Math.max(0, t.left)} 回合`);
+    }
+  }
+  return { kind: 'lane', title: `航道 · ${lane.a.name} ⇄ ${lane.b.name}`, lines };
+}
+
 function panelInput(known?: PlayerView): PanelInput {
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
@@ -1068,6 +1131,7 @@ function panelInput(known?: PlayerView): PanelInput {
     selectedCityId,
     selectedCampId,
     selectedTile,
+    star: starPanelInfo(),
     opsOpen,
     logOpen,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
@@ -1296,6 +1360,42 @@ function replayGoto(index: number): void {
 function handleReplayAction(act: string, el: HTMLElement): void {
   if (!replay) return;
   switch (act) {
+    /*
+     * 星图：一层盖在棋盘上的视图，只读。
+     * 它不改这一局，所以在复盘里也放行（见上面的 harmless）。
+     */
+    case 'star-open':
+      if (!starLayout(state)) {
+        toast('这一局只有一张图，没有星图可看');
+        return;
+      }
+      starOpen = true;
+      starSel = null;
+      render();
+      return;
+    case 'star-close':
+      starOpen = false;
+      starSel = null;
+      render();
+      return;
+    case 'star-node':
+      starSel = { kind: 'node', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-lane':
+      starSel = { kind: 'lane', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-go': {
+      const id = el.dataset.id;
+      if (!id || !hasBoard(state, id)) return;
+      starOpen = false;
+      starSel = null;
+      // 已经在这张图上：switchBoard 会直接返回，那就自己重画一次把覆盖层收掉
+      if (id === activeBoardId) render();
+      else switchBoard(id);
+      return;
+    }
     case 'rp-first':
       replayStopTimer();
       replayPlaying = false;
@@ -1449,6 +1549,9 @@ function render(): void {
   const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
   // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
   syncBoardList(view);
+  // 星图：盖在棋盘上的一层。没开就不画，开了才按当前视图算一遍
+  starMapEl.hidden = !starOpen;
+  if (starOpen) renderStarMap(starMapEl, view, me(), starSel);
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
@@ -1690,6 +1793,14 @@ let boardZoom = 1;
  * 不参与任何规则计算——规则层认的是单位/动作自带的 `board`。
  */
 let activeBoardId: BoardId = EARTH;
+
+/**
+ * 星图覆盖层开着吗。**纯界面状态**：不进存档、不进回放，
+ * 也不影响任何规则——关掉它跟重新打开页面看到的是同一局。
+ */
+let starOpen = false;
+/** 星图上选中了哪个节点/航线。切图或关星图时清掉 */
+let starSel: StarSelection | null = null;
 /** 左下角地图列表是否展开 */
 let boardListOpen = false;
 /** 地图列表已经画出来的签名，避免每帧重建 DOM */
@@ -2039,12 +2150,17 @@ function syncBoardList(view: PlayerView): void {
     .join('');
   const starHtml = hasStarRows(star) ? `<div class="bl-star">${laneRows}${tripRows}</div>` : '';
 
+  // 星图入口：单图时整个面板是隐藏的，走不到这里
+  const starBtn =
+    `<button class="bl-row bl-star-open" data-act="star-open">` +
+    `<span class="bl-kind">图</span><span class="bl-name">查看星图</span></button>`;
+
   // 调试脚手架：第四步接入真正的月球后删掉
   const debug = devAdd
     ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
     : '';
 
-  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${starHtml}${debug}</div>`;
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${starBtn}${starHtml}${debug}</div>`;
 }
 
 /**
@@ -2077,6 +2193,9 @@ function switchBoard(id: BoardId): void {
   pendingSkill = null;
   pendingDevice = null;
   boardListOpen = false;
+  // 星图盖着的时候切了图：把覆盖层收掉，否则新图上还压着一层旧星图
+  starOpen = false;
+  starSel = null;
 
   const cam = boardCameras.get(id) ?? { zoom: 1, left: 0, top: 0 };
   boardZoom = cam.zoom;
@@ -4081,7 +4200,10 @@ function handleAction(act: string, el: HTMLElement): void {
    * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings';
+    // 星图只是"看"：复盘里也该能打开（`star-*` 不改这一局的任何东西）
+    const harmless =
+      act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings' ||
+      act.startsWith('star-');
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
@@ -7815,6 +7937,23 @@ appEl.addEventListener('input', (e) => {
  *      "想按 A 结果结束了回合"；
  *   3. 按住不放（e.repeat）只认第一下，否则连发会把好几个回合一起交出去。
  */
+/*
+ * 星图开着时，Esc 先关它。
+ *
+ * 这条必须**排在复盘那条前面**：复盘里也能开星图，而 Esc 在那边是"退出复盘"。
+ * 玩家的心理顺序是"先退一层"——按一次 Esc 直接把这局复盘关掉会很突兀。
+ * 用 `stopImmediatePropagation` 而不是 `stopPropagation`：两个监听都挂在 window 上，
+ * 后者拦不住同级的其他监听器。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!starOpen || e.key !== 'Escape') return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  starOpen = false;
+  starSel = null;
+  render();
+});
+
 window.addEventListener('keydown', (e) => {
   if (!godQuick || state.config.godMode !== true) return;
   // 复盘里空格归复盘（播放/暂停）：这里再拦一道，否则放一段沙盒回放时空格会被

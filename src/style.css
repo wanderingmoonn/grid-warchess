@@ -735,6 +735,212 @@ body {
   font-size: var(--fs-xs);
 }
 
+/* ---------- 星图覆盖层 ---------- */
+/*
+ * 星图是"长得像棋盘的视图"，不是 boards 里的一张图（见 ui/star-map.ts 开头）。
+ * 盖在棋盘区上、压暗底下的棋盘，按「关闭」退出——这样切换图和看星图
+ * 是两件事，不会互相打断。
+ */
+.star-map {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  padding: 18px;
+  background: rgba(18, 17, 14, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * 不用 `.star-map { display:flex }`：那会被 `[hidden]` 的 UA 样式压住吗？
+ * 反了——是类选择器会压住 `[hidden]`。所以只在"没 hidden"时才给 flex。
+ */
+.star-map:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sm-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.sm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sm-title {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sm-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.sm-close {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.sm-close:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.sm-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--sm, 5), 1fr);
+  grid-template-rows: repeat(var(--sm, 5), 1fr);
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+/* 空格：只画一条极淡的线，让"棋盘"有骨架又不抢节点 */
+.sm-cell {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  opacity: 0.5;
+}
+
+.sm-lanes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 细线负责好看，粗的透明线负责接点击 */
+.sm-lane-line {
+  stroke: var(--line-strong);
+  stroke-width: 0.06;
+  fill: none;
+}
+
+.sm-lane-hit {
+  stroke: transparent;
+  stroke-width: 0.34;
+  fill: none;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.sm-lane.on .sm-lane-line {
+  stroke: #d8a24a;
+  stroke-width: 0.1;
+}
+
+.sm-node {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: 7%;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sm-node:hover {
+  border-color: #d8a24a;
+}
+
+.sm-node.on {
+  border-color: #d8a24a;
+  box-shadow: inset 0 0 0 1px #d8a24a;
+}
+
+/* 还没有棋盘的节点（轨道槽位）：虚线，看得出来"现在去不了" */
+.sm-node.bare {
+  border-style: dashed;
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sm-node-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 角标挤在右上：待命数、在途、停泊的站数 */
+.sm-ready,
+.sm-trip,
+.sm-stations {
+  position: absolute;
+  top: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  text-align: center;
+}
+
+.sm-ready {
+  right: 3px;
+  background: #f0c987;
+  color: #5a4212;
+}
+
+.sm-trip {
+  right: 3px;
+  top: 20px;
+  background: #7fb0d8;
+  color: #14303f;
+}
+
+.sm-stations {
+  left: 3px;
+  top: 3px;
+  background: #9fd8b6;
+  color: #16402a;
+}
+
+.sm-contact {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4553f;
+}
+
 /* ---------- 棋盘 ---------- */
 .board {
   position: relative;

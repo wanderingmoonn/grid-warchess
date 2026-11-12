@@ -60,6 +60,7 @@ import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
 import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
+import { starLayout } from '../src/ui/star-layout.ts';
 import { EARTH } from '../src/core/board.ts';
 import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -278,6 +279,55 @@ check('星图面板的取数：相连与在途（纯函数，不需要 DOM）', 
 
   // 没有星图也没有在途：整块不占位（单图局就是这个状态）
   assert.equal(hasStarRows(starRows({ players: { A: { name: '红方' } } } as never)), false);
+});
+
+check('星图布局：地球居中、其余节点在外圈，坐标是算出来的', () => {
+  /*
+   * 布局不进存档（见 ui/star-layout.ts 开头）：同一组节点必须永远算出同一个位置，
+   * 否则加一张图就会让老局面错位。
+   */
+  const base = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+        { id: 'o1', kind: 'orbit', name: '轨道一' },
+      ],
+      lanes: [
+        { id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 },
+        { id: 'moon-o1', a: 'moon', b: 'o1', turns: 2 },
+      ],
+      stations: [{ board: 's1', at: 'moon', owner: 'A', core: 'core-1' }],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(base)!;
+  assert.equal(lay.size, 5, '三个节点用 5×5 就够');
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  assert.deepEqual([earth.x, earth.y], [2, 2], '地球在正中');
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.deepEqual([moon.x, moon.y], [4, 2], '第一个外圈节点在右侧');
+  assert.equal(moon.stations.length, 1, '停泊的站挂在节点上');
+  assert.equal(lay.lanes.length, 2, '两条航线都连上了');
+  // 再算一次：同一组节点必须得到同一个布局
+  assert.deepEqual(starLayout(base), lay, '布局必须是确定的');
+
+  // 只有地球：没有星图可言
+  assert.equal(
+    starLayout({
+      players: {},
+      boards: {},
+      starmap: { nodes: [{ id: 'earth', kind: 'planet', board: 'earth', name: '地球' }], lanes: [], stations: [], seq: 0 },
+    } as never),
+    null,
+    '只有一张图时不画星图',
+  );
 });
 
 check('地形类正确分布', () => {
