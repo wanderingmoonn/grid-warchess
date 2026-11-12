@@ -577,6 +577,17 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
           if (terrainAt(x + dx, y + dy) === here) same += 1;
         }
       }
+      /*
+       * 同种地形之间不要画格子线。
+       *
+       * `.tile` 有 1px 的右边框和下边框——那是给"每格都是一个独立方块"用的，
+       * 但同种地形连成片时，那些线拼成一张桌子，整块草地看起来是"表格"而不是"地面"。
+       * 热门战棋（Advance Wars / Wargroove）的地面之所以连成一片，一半功劳在这里。
+       *
+       * 只看右和下：左上由邻居负责，不重复画。
+       */
+      const joinR = terrainAt(x + 1, y) === here ? '1' : '0';
+      const joinD = terrainAt(x, y + 1) === here ? '1' : '0';
       const ring = same >= 5 ? 0 : same >= 2 ? 1 : 2;
       const variant = (ring + ((x * 17 + y * 23) % 9 === 0 ? 1 : 0)) % 3;
       /*
@@ -592,7 +603,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" data-jr="${joinR}" data-jd="${joinD}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
