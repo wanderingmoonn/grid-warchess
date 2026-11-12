@@ -551,13 +551,34 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const jx = ((x * 37 + y * 61) % 7) * 3;
       const jy = ((x * 53 + y * 17) % 7) * 3;
       /*
-       * 地形 tile 的变体号（0/1/2）。
+       * 地形 tile 的变体号（0/1/2）——**按"林子深处/中间/边缘"分配**，不是随机。
        *
-       * 一种地形只有一张图，铺满整片林子就是"同一个图标阵列"——所以每种地形
-       * 备三张变体，按坐标挑。乘两个不同的质数再取模，相邻格不会连续同款，
-       * 也不会出现明显的斜条纹（试过 (x+y)%3，斜着一排全一样）。
+       * 第一版用 (x*7+y*13)%3 纯按坐标取模：技术上确实"不连续"，但观感上
+       * 三种树一格一换，像把三张贴纸随手撒在格子上，一片林子看不出结构。
+       *
+       * 现在按 8 邻居里有几格是同种地形来分层：
+       *   5~8 个 → 深处（0，大冠树）—— 林子的芯
+       *   2~4 个 → 中间（1，针叶）—— 过渡带
+       *   0~1 个 → 边缘（2，灌木）—— 贴着草地的边
+       * 单格孤立的树自然全是灌木，成片的林子外面一圈灌木、里面大树，
+       * 远看就有"林缘 → 林心"的层次。
+       *
+       * 再叠一点按坐标的微扰（约 1/9 的格子顺延一档），否则同一层会过于整齐。
        */
-      const variant = (x * 7 + y * 13) % 3;
+      const terrainAt = (tx: number, ty: number): string | null =>
+        tx < 0 || ty < 0 || tx >= s.w || ty >= s.h
+          ? null
+          : (s.tiles[ty * s.w + tx]?.terrain ?? null);
+      const here = s.tiles[i]?.terrain ?? null;
+      let same = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (terrainAt(x + dx, y + dy) === here) same += 1;
+        }
+      }
+      const ring = same >= 5 ? 0 : same >= 2 ? 1 : 2;
+      const variant = (ring + ((x * 17 + y * 23) % 9 === 0 ? 1 : 0)) % 3;
       /*
        * 稀疏地形的装饰密度：约 1/5 的格子带一个小图案，其余留白。
        *
