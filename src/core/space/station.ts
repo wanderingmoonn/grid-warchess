@@ -61,7 +61,20 @@ export const STATION_ARMOR_ID = 'station-armor';
 export const STATION_LAUNCH_ID = 'station-launch';
 export const STATION_DOCK_ID = 'station-dock';
 
-/** 铺一格甲板的额定价（会乘折扣） */
+/**
+ * 上线测试期的**采用率折扣**：太空建设的额定价整体打七折。
+ *
+ * 为什么现在要动价格：这一包的门槛是"先花一大笔钱建井、再花一大笔钱发核心舱"，
+ * 玩家在没体验过轨道玩法之前，看到的只有一串"很贵"，于是根本不会去用——
+ * **用不上的东西测不出问题**。先把基础费用压下来换采用率，等有人用了再按实测
+ * 调回去（数值平衡本来也留到内容冻结之后）。
+ *
+ * 只乘在**额定价**上，和"太空建设折扣"（发射井数量那条曲线）相乘，
+ * 所以 0 座井仍然是最贵的一档（×1.5）。想调回去只改这一个数。
+ */
+export const PRICE_CUT = 0.7;
+
+/** 额定价（会乘折扣，也会被 PRICE_CUT 打折） */
 export const EXPAND_BASE_COST = 80;
 /** 一座生产舱的额定价（会乘折扣） */
 export const PRODUCER_BASE_COST = 320;
@@ -164,8 +177,14 @@ export const SALVAGE_PER_SIZE = 60;
 
 /** 接驳站：太空部队降落的落点由它决定 */
 export const LANDING_PAD_ID = 'landing-pad';
-/** 每颗星球每方一座 */
-export const LANDING_PAD_COST = 320;
+/**
+ * 每颗星球每方一座。
+ *
+ * 它不走 `buildCost`（那是站内建设的账，乘的是太空建设折扣），而是一座
+ * **地表建筑**，价格走通用的 `recruitResCost`——所以 `PRICE_CUT` 在这里
+ * 手工乘一次，别让同一包里两套定价口径。
+ */
+export const LANDING_PAD_COST = Math.round(320 * PRICE_CUT);
 
 /** 微重力研究室：每座 +5%，软上限 +20% */
 export const GRAVITY_PER = 0.05;
@@ -253,7 +272,7 @@ export function buildRate(s: GameState, player: PlayerId): number {
 
 /** 按折扣算出来的实际价格（至少 1 金，免得算成免费） */
 export function buildCost(s: GameState, player: PlayerId, base: number): number {
-  return Math.max(1, Math.round(base * (1 - buildRate(s, player))));
+  return Math.max(1, Math.round(base * PRICE_CUT * (1 - buildRate(s, player))));
 }
 
 // ── 棋盘 ─────────────────────────────────────────────────────────────
@@ -2180,60 +2199,27 @@ export function combatLines(s: GameState, u: Unit): string[] {
   }
 }
 
-/** 面板上的几行字 */
+/**
+ * 面板上的几行字（核心舱）。
+ *
+ * **只留"现在是什么状态"，不留"每一座舱段多少钱、干什么"**。
+ * 后者每一句都已经写在对应技能的说明里了，在这里再列一遍只是把侧栏拉长：
+ * 规则书可以啰嗦，面板不行——玩家在面板上要看的是"这站现在怎么样"。
+ * 具体价格在建造按钮上：买不起时右边会写"金币不足 120/450"，那才是需要它的时刻。
+ */
 export function stationLines(s: GameState, u: Unit): string[] {
   if (u.type !== STATION_CORE_ID) return [];
   const board = boardIdOf(u);
   const b = boardOf(s, board);
-  const rate = buildRate(s, u.owner);
-  const pct = Math.round(rate * 100);
-  const out = [
-    `站的规模：${b.w}×${b.h}`,
-    `太空建设折扣：${pct >= 0 ? `便宜 ${pct}%` : `贵 ${-pct}%`}（${siloWeight(s, u.owner)} 座发射井）`,
-  ];
-  const expand = buildCost(s, u.owner, EXPAND_BASE_COST);
-  const maker = buildCost(s, u.owner, PRODUCER_BASE_COST);
-  const solar = buildCost(s, u.owner, SOLAR_BASE_COST);
-  const thruster = buildCost(s, u.owner, THRUSTER_BASE_COST);
-  const life = buildCost(s, u.owner, LIFE_BASE_COST);
+  const pct = Math.round(buildRate(s, u.owner) * 100);
   const p = stationPower(s, board);
-  out.push(
-    `能量：供电 ${p.supply} / 已用 ${p.demand} / ${p.brownout ? `过载 ${-p.headroom}（全站停摆）` : `余量 ${p.headroom}`}`,
-  );
   const rec = stationOf(s, u);
-  const speed = rec ? stationSpeed(s, rec) : 1;
-  out.push(
-    `舱段：${p.solars} 太阳能 · ${p.lives} 维生仓 · ${p.thrusters} 推进器 · ${p.producers} 生产舱` +
-      `（航速 ${speed}）`,
-  );
-  if (p.lives > 0) {
-    out.push(`维生仓覆盖半径 ${LIFE_RADIUS} 格：范围内不吃「恶劣外空环境」`);
-  } else {
-    out.push('没有维生仓：站内所有单位护甲 ÷5、移动减半（航天员除外）');
-  }
-  if (rec?.travel) {
-    out.push(`正在驶向${nodeName(s, rec.travel.to)}：还有 ${Math.max(0, rec.travel.left)} 回合`);
-  } else if (rec) {
-    const dests = stationDestinations(s, rec);
-    if (dests.length > 0) {
-      const list = dests.map((d) => `${nodeName(s, d.to)} ${d.turns} 回合`).join(' · ');
-      out.push(`可航行：${list}`);
-    }
-  }
-  out.push(`扩建一格甲板：${expand} 金`);
-  out.push(`一座生产舱：${maker} 金（每回合 +${PRODUCER_INCOME} 金，耗电 ${PRODUCER_DRAW}）`);
-  out.push(`一块太阳能舱：${solar} 金（发电 ${SOLAR_POWER}）`);
-  out.push(`一台推进器舱：${thruster} 金（耗电 ${THRUSTER_DRAW}，航速 +${THRUSTER_SPEED}）`);
-  out.push(`一座维生仓：${life} 金（耗电 ${LIFE_DRAW}，覆盖半径 ${LIFE_RADIUS}）`);
-  // 战斗舱段：面板上给价，玩家不用先点一遍才知道造不起
-  const cannon = buildCost(s, u.owner, CANNON_BASE_COST);
-  const armor = buildCost(s, u.owner, ARMOR_BASE_COST);
-  const launch = buildCost(s, u.owner, LAUNCH_BASE_COST);
-  const dock = buildCost(s, u.owner, DOCK_BASE_COST);
-  out.push(`一座轨道炮舱：${cannon} 金（耗电 ${CANNON_DRAW}，每回合 1 发）`);
-  out.push(`一块太空装甲：${armor} 金（不吃电，血厚）`);
-  out.push(`一座出舱口：${launch} 金（耗电 ${LAUNCH_DRAW}，每回合 1 次）`);
-  out.push(`一座入舱口：${dock} 金（耗电 ${DOCK_DRAW}，缓存 ${DOCK_CAPACITY} 人）`);
+  const out = [
+    `规模 ${b.w}×${b.h} · 建设${pct >= 0 ? `便宜 ${pct}%` : `贵 ${-pct}%`}（${siloWeight(s, u.owner)} 座发射井）`,
+    `舱段 ${p.solars} 太阳能 · ${p.lives} 维生仓 · ${p.thrusters} 推进器 · ${p.producers} 生产舱 · 航速 ${rec ? stationSpeed(s, rec) : 1}`,
+  ];
+  // 在航是一个**状态**，不是说明——它得在这儿，因为启航按钮只列目的地
+  if (rec?.travel) out.push(`正在驶向${nodeName(s, rec.travel.to)}：还有 ${Math.max(0, rec.travel.left)} 回合`);
   return out;
 }
 

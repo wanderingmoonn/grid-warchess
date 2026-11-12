@@ -10,7 +10,7 @@
  * 所以每条钩子都先问"这个单位站在哪儿"，再查那张表。
  */
 
-import { EARTH } from '../board.ts';
+import { boardIdOf, EARTH } from '../board.ts';
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { activeExpansions } from '../expansions.ts';
 import { isNaval, SEASON_TURNS } from './climate.ts';
@@ -259,6 +259,10 @@ export const SEASONS: Expansion = {
             const extra = Math.max(1, Math.round(ed.amount * splash));
             for (const v of state.units) {
               if (v.id === u.id) continue;
+              // 溅射也只在**同一张图**上：雷暴打的是地球上的那一圈，
+              // 不该顺着格号劈到空间站/月球上坐标相同的人（跨图之后
+              // "隔壁"这件事本身就不成立）
+              if (boardIdOf(v) !== boardIdOf(u)) continue;
               if (Math.abs(v.x - u.x) + Math.abs(v.y - u.y) > r) continue;
               hurt(v, extra);
             }

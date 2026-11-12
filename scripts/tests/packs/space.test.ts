@@ -88,6 +88,7 @@ import { canProduce } from '../../../src/core/produce.ts';
 import { starLayout } from '../../../src/ui/star-layout.ts';
 import { laneTurnsFor } from '../../../src/core/space/transit.ts';
 import { hazardFor } from '../../../src/core/hazard.ts';
+import { effectAt, effectOfUnit } from '../../../src/core/seasons/effect.ts';
 import { SKILL_TARGET_CELLS } from '../../../src/core/skill-hooks.ts';
 import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
@@ -964,7 +965,8 @@ test('太空建设折扣：0 座井贵一半，井越多越便宜、但边际递
 
   assert.equal(siloWeight(s, 'A'), 0);
   assert.ok(Math.abs(buildRate(s, 'A') - -0.5) < 1e-9, '0 座井：贵 50%');
-  assert.equal(buildCost(s, 'A', 100), 150, '100 金的额定 → 150 金');
+  // 价格 = 额定 × PRICE_CUT（上线测试期的采用率折扣）× (1 − 折扣率)
+  assert.equal(buildCost(s, 'A', 100), 105, '100 金额定 → 70 → 再贵 50% = 105');
 
   // 摆两座建好的井（工地不算，见 siloWeight 的注释）
   const a = place2(s, 'A', SILO_ID, 4, 4);
@@ -975,7 +977,7 @@ test('太空建设折扣：0 座井贵一半，井越多越便宜、但边际递
   }
   const r2 = buildRate(s, 'A');
   assert.ok(Math.abs(r2 - -0.14) < 1e-9, `2 座井该是 −14%，实际 ${(r2 * 100).toFixed(1)}%`);
-  assert.equal(buildCost(s, 'A', 100), 114);
+  assert.equal(buildCost(s, 'A', 100), 80, '70 再贵 14% ≈ 80');
 
   // 边际递减：第 1→2 座的收益 > 第 2→3 座
   const r1 = 0.5 - Math.pow(0.8, 1);
@@ -1600,6 +1602,47 @@ test('天气视图只在看地球时有内容（跨扩展兼容）', () => {
     '地球上照常有天气',
   );
   assert.equal(weather!.glyph!({ state: s, viewer: 'A', board: 'moon' }).length, 0, '风箭头同理');
+});
+
+test('天气不串到空间站：地球上在打雷，站里的核心舱不掉血', () => {
+  /*
+   * 实机反馈："同时开季节与气候包，核心舱会自己掉血消失坠毁"。
+   *
+   * 根因：`effectOfUnit` 只按坐标读**地球**的气候场。空间站的 (2,2) 和地球的
+   * (2,2) 撞号，于是站里的核心舱按地球那格的天吃了雷劈（50 点真伤）。
+   * 现在这个取值口先判图，非地球一律返回空效果；雷暴的溅射也补了同图判定。
+   *
+   * 这一条**必须带 seasons**：不带的话气候场根本没跑，"没掉血"是空转。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war', 'seasons'], startEra: 5 });
+  flatten(s, 'plain');
+  const foe = addStation(s, EARTH, 'A', '测试站'); // 5×5，核心在 (2,2)
+  const cur = s;
+  /*
+   * 强制一格雷暴：30°C + 满湿度 = 大雨，热 + 大雨 = 雷劈（见 weatherEffect）。
+   * 改的是**地球**上 (2,2)——正好是核心舱在站内的坐标。
+   */
+  const i = idxOn(cur, EARTH, 2, 2);
+  cur.tiles[i]!.terrain = 'plain';
+  cur.tiles[i]!.custom = { temp: 300, wet: 100 };
+  assert.ok(effectAt(cur, 2, 2).endDamage, '前提：这一格真的在打雷');
+
+  // 取值口本身就该是空的（移动、护甲、视野、产出全走这一个函数）
+  assert.deepEqual(effectOfUnit(cur, foe.core), {}, '站内单位读不到地球的天气');
+
+  // 对照：同一个坐标上的地球部队照常挨雷劈（证明不是"天气整个失效了"）。
+  // 用 putOnBoard 而不是 place2：后者按 (x,y) 去重、不分图，会把同坐标的
+  // 核心舱一起删掉（这个坑在记忆里记过一次）。
+  const pax = putOnBoard(cur, EARTH, 'A', 'militia', 2, 2);
+  const hp0 = foe.core.hp;
+
+  cur.current = 'A';
+  const r = applyAction(cur, { type: 'END_TURN' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const core = r.state.units.find((u) => u.id === foe.core.id)!;
+  assert.equal(core.hp, hp0, '回合末的天灾不该打到站里来');
+  const paxAfter = r.state.units.find((u) => u.id === pax.id);
+  assert.ok(!paxAfter || paxAfter.hp < pax.hp, '地球上的兵照样吃这一记');
 });
 
 console.log('\n太空战争：功能舱段');
