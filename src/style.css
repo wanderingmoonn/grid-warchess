@@ -822,20 +822,31 @@ html[data-terrain='on'] .tiles {
   background-color: var(--plain);
 }
 /*
- * 只改 `border-color`、不改宽度：`border: 0` 会改变 box 尺寸（那 1px 本来算在
- * 轨道里），相邻格重新分配宽度，反而把底下的缝推出来。
+ * 材质模式下把格线**彻底去掉**（宽度也归零，不只是改颜色）。
+ *
+ * 上一版只写了 `border-color: transparent`，以为"看不见就是没有"。实测有两处漏：
+ *
+ *   1. **格子底色从边框里透出来。** `background-origin` 初始值是 `padding-box`，
+ *      贴图从内边距框起画，那 1px 边框里露的是格子自己的 `background-color`。
+ *      整片丘陵上于是浮出一层浅色网格线——不是抗锯齿，也不是接缝。加
+ *      `border-box` 之后贴图铺过去了，但只修好了"图"，没修好别的两层：
+ *   2. **`inset` 阴影画不进边框那 1px。** 内阴影是从边框**内缘**往里画的，
+ *      所以高山的断崖阴影/邻格投影到了格边就停住，留一条没压暗的亮缝
+ *      （实测那一列比两侧亮 24~40 个亮度级）。相邻两格各让 1px，缝正好在中间。
+ *   3. 那一列**仍然**比两侧亮 7 级（丘陵）：即使贴图铺到了，元素边缘落在
+ *      44.9px 这种小数上，最后一列是半覆盖的抗锯齿像素，底下的 `.tiles`
+ *      底色（`--plain` 的浅绿）会掺进来一点，连成片就是一条淡线。
+ *
+ * 三者同一个根源：**多出来的那 1px 边框**。所以直接归零。
+ *
+ * 关于"归零会不会动布局"：不会。`* { box-sizing: border-box }`，格子宽度来自
+ * 网格轨道（`repeat(n, 1fr)`），边框在这条宽度**里面**，去掉它只是内容框宽 1px。
+ * 实测同一格在改前/改后都是 44.891×44.891，±0 变化。（早先那句"border: 0 会
+ * 改变 box 尺寸"是 content-box 时代的结论，在这里不成立，改前先量了一遍。）
  */
 html[data-terrain='on'] .tile {
-  /*
-   * 让材质铺到**边框**下面。
-   *
-   * `background-origin` 的初始值是 `padding-box`：贴图从内边距框开始画，
-   * 而那 1px 透明边框里露出来的是格子自己的 `background-color`。
-   * 于是在整片山/丘陵上会浮出一层浅色网格线——不是抗锯齿、不是接缝，
-   * 就是底色从边框里透出来。改成 border-box，边框那 1px 也归贴图管。
-   */
   background-origin: border-box;
-  border-color: transparent;
+  border-width: 0;
 }
 /*
  * 内描边（`inset 0 0 0 1px`）统一由下面那条合成规则盖掉：合成用的是透明的
@@ -946,18 +957,13 @@ html[data-terrain='on'] .tile.t-plain[data-d='1']::before {
  * 观感上比纯色乱得多。
  */
 /*
- * 同种地形相邻时把那条边线藏掉。
+ * 同种地形相邻时把那条边线藏掉——**这条已经不需要了**。
  *
- * `data-jr` / `data-jd` 由 board.ts 按地形算好（右、下各一条，左上交给邻居）。
- * 这是"地面连成一片"的关键——比任何纹理都管用：热门战棋的地面大多是纯色，
- * 看起来却是连续的地面，靠的就是不画线。
+ * 老方案是逐格算 `data-jr` / `data-jd`（右、下各一条），只把同地形那两侧的
+ * `border-color` 抹成透明。现在材质模式下所有格子的边框宽度都是 0，
+ * 没有线可藏；board.ts 里算这两个属性的代码也早就不在了（规则留着会误导下一个
+ * 改这里的人）。删掉。
  */
-html[data-terrain='on'] .tile[data-jr='1'] {
-  border-right-color: transparent;
-}
-html[data-terrain='on'] .tile[data-jd='1'] {
-  border-bottom-color: transparent;
-}
 
 html[data-terrain='on'] .tile.out {
   /* !important 在这里是必要的：`.t-forest[data-v='1']` 那几条是 (0,4,1)，
