@@ -24,13 +24,27 @@ import type { Expansion, UnitActionOption } from '../expansions.ts';
 import { SILO_ID } from './silo.ts';
 import { nodeName } from './starmap.ts';
 import {
+  COMM_CAP,
+  COMM_PER,
   CORE_DEFS,
+  GRAVITY_CAP,
+  GRAVITY_PER,
+  MATERIAL_CAP,
+  MATERIAL_PER,
+  STATION_COMM,
+  STATION_LAB_GRAVITY,
+  STATION_LAB_MATERIAL,
+  STATION_LIFE,
+  STATION_LAB_GRAVITY_ID,
+  STATION_LAB_MATERIAL_ID,
+  STATION_COMM_ID,
   STATION_CORE,
   STATION_CORE_ID,
-  STATION_LIFE,
   STATION_PRODUCER,
+  STATION_REMOTE,
   STATION_SOLAR,
   STATION_THRUSTER,
+  activeModuleCount,
   CORE_POWER,
   PRODUCER_DRAW,
   SOLAR_POWER,
@@ -76,6 +90,19 @@ export const SPACE_WAR: Expansion = {
       + `每台「推进器舱」耗 ${THRUSTER_DRAW}，每座「生产舱」耗 ${PRODUCER_DRAW}。`
       + '电不够就造不出来（按钮会写明还差多少）；万一被打到过载，整站停摆——'
       + '推进器不提速、生产舱不产金。',
+    '<b>功能舱段</b>：遥感模块、微重力研究室、材料研究室、通讯模块——'
+      + '它们<b>必须有一名航天员贴着（上下左右相邻）才会工作</b>，'
+      + '没人值守就是一个箱子：不加成、技能也放不出来。'
+      + '航天员自己免疫外空环境，所以"派个人上去值班"是这些舱段的前置条件。',
+    '<b>遥感模块</b>：技能「星球表面观测」——从轨道上对<b>脚下这颗星球</b>做一次观测，'
+      + '选一格，点亮它和上下左右共 5 格，本方从此看得见那片地方（情报永久有效，'
+      + '同一座模块再观测会替换上一次）。<b>每回合 1 次</b>，用掉之后要点技能按钮会提示"回一发"。',
+    `<b>微重力研究室</b>：每座让本方<b>总金币收入 +${Math.round(GRAVITY_PER * 100)}%</b>，`
+      + `多座叠加，上限 +${Math.round(GRAVITY_CAP * 100)}%。`,
+    `<b>材料研究室</b>：每座让本方<b>所有单位护甲 +${MATERIAL_PER}</b>，上限 +${MATERIAL_CAP}。`
+      + '这条加成落在"外空 ÷5"<b>之后</b>——站内单位本来都被环境折过一遍，'
+      + '如果先加再除，等于白造。',
+    `<b>通讯模块</b>：每座让本方<b>所有单位视野 +${COMM_PER}</b>，上限 +${COMM_CAP}。`,
     '<b>维生仓</b>：造好之后，<b>半径 3 格</b>内的单位不再吃「恶劣外空环境」'
       + '（护甲不再 ÷5、移动不再减半）。航天员本来就免疫，不用罩。'
       + '覆盖是<b>按格算</b>的：站要长大就得多造几座，围着它布置才划算。'
@@ -93,9 +120,49 @@ export const SPACE_WAR: Expansion = {
       + '还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。'
       + '只有一张图的局面没有星图可看。',
   ],
-  units: [STATION_CORE, STATION_PRODUCER, STATION_SOLAR, STATION_LIFE, STATION_THRUSTER],
+  units: [
+    STATION_CORE,
+    STATION_PRODUCER,
+    STATION_SOLAR,
+    STATION_LIFE,
+    STATION_THRUSTER,
+    STATION_REMOTE,
+    STATION_LAB_GRAVITY,
+    STATION_LAB_MATERIAL,
+    STATION_COMM,
+  ],
   hooks: {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
+    /**
+     * 材料研究室：本方**所有单位**护甲 +1/座，上限 +5。
+     *
+     * 走 `postHazardArmor`（环境之后）而不是 `modifyArmor`：站内所有单位都在
+     * "外空 ÷5"里，如果 +1 先加再除，等于永远是 0——研究会白造。
+     * 这条加成是"给舱段加装装甲板"，本来就该落在除完之后。
+     */
+    postHazardArmor: ({ state, defender, armor }) => {
+      const n = Math.min(MATERIAL_CAP, activeModuleCount(state, defender.owner, STATION_LAB_MATERIAL_ID));
+      return n > 0 ? armor + n * MATERIAL_PER : armor;
+    },
+
+    /** 通讯模块：本方所有单位视野 +1/座，上限 +3 */
+    modifyVision: ({ state, player, base }) => {
+      const n = Math.min(COMM_CAP, activeModuleCount(state, player, STATION_COMM_ID));
+      return n > 0 ? base + n * COMM_PER : base;
+    },
+
+    /**
+     * 微重力研究室：本方总金币收入 +5%/座，上限 +20%。
+     *
+     * 按**比例**而不是固定值：收入随城市和地形涨，固定值到后期就等于没有。
+     */
+    modifyIncome: ({ state, player, income }) => {
+      const n = activeModuleCount(state, player, STATION_LAB_GRAVITY_ID);
+      if (n <= 0) return income;
+      const rate = Math.min(GRAVITY_CAP, GRAVITY_PER * n);
+      return Math.round(income * (1 + rate));
+    },
+
     onTurnStart: ({ state, player }) => {
       tickProducers(state, player);
       // 在航的站：只推自己的（和火箭同一个规矩）

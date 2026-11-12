@@ -32,16 +32,22 @@ import type {
 import { boardIdOf, boardOf, boardStateOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells, type SkillCtx } from '../skill-hooks.ts';
-import { lanesFrom, laneDistance, nodeName, nodeOf, starmapOf } from './starmap.ts';
-import { registerOrbitArrival } from './transit.ts';
+import { lanesFrom, laneDistance, nodeById, nodeName, nodeOf, starmapOf } from './starmap.ts';
+import { cellName, registerOrbitArrival } from './transit.ts';
 import { SILO_ID } from './silo.ts';
 import { SPACE_HAZARD } from './space-hazard.ts';
+import { ASTRONAUT_ID } from './astronaut.ts';
 import { registerHazardExempt } from '../hazard.ts';
+import { setRecon } from '../recon.ts';
 
 export const STATION_CORE_ID = 'station-core';
 export const STATION_PRODUCER_ID = 'station-producer';
 export const STATION_SOLAR_ID = 'station-solar';
 export const STATION_LIFE_ID = 'station-life-support';
+export const STATION_REMOTE_ID = 'station-remote';
+export const STATION_LAB_GRAVITY_ID = 'station-lab-gravity';
+export const STATION_LAB_MATERIAL_ID = 'station-lab-material';
+export const STATION_COMM_ID = 'station-comm';
 export const STATION_THRUSTER_ID = 'station-thruster';
 
 /** 铺一格甲板的额定价（会乘折扣） */
@@ -54,6 +60,18 @@ export const SOLAR_BASE_COST = 240;
 export const THRUSTER_BASE_COST = 420;
 /** 一座维生仓的额定价（会乘折扣） */
 export const LIFE_BASE_COST = 360;
+export const REMOTE_BASE_COST = 380;
+export const GRAVITY_BASE_COST = 450;
+export const MATERIAL_BASE_COST = 450;
+export const COMM_BASE_COST = 340;
+
+/**
+ * 功能舱段（遥感 / 两个研究室 / 通讯）**必须相邻一名航天员**才工作。
+ *
+ * "相邻"按 4 邻域算，和移动、扩建、装卸同一套口径——玩家已经在用那套判断
+ * "贴不贴得上"。8 邻域会让人以为斜角也算，而移动不能斜走。
+ */
+export const CREW_REACH = 1;
 /** 生产舱每回合产多少金币 */
 export const PRODUCER_INCOME = 6;
 
@@ -84,6 +102,22 @@ export const THRUSTER_DRAW = 15;
  * 8 让第一座刚好够，第二座就得先扩电，这才是"能量约束搭配"该有的节奏。
  */
 export const LIFE_DRAW = 8;
+
+/** 功能舱段的耗电（都要相邻航天员才工作，见 `isStaffed`） */
+export const REMOTE_DRAW = 10;
+export const GRAVITY_DRAW = 12;
+export const MATERIAL_DRAW = 12;
+export const COMM_DRAW = 8;
+
+/** 微重力研究室：每座 +5%，软上限 +20% */
+export const GRAVITY_PER = 0.05;
+export const GRAVITY_CAP = 0.2;
+/** 材料研究室：每座全方护甲 +1，软上限 +5 */
+export const MATERIAL_PER = 1;
+export const MATERIAL_CAP = 5;
+/** 通讯模块：每座全方视野 +1，软上限 +3 */
+export const COMM_PER = 1;
+export const COMM_CAP = 3;
 
 /**
  * 维生仓的覆盖半径（曼哈顿距离，含自己那一格）。
@@ -253,6 +287,18 @@ export function stationPower(s: GameState, board: string): StationPower {
       case STATION_LIFE_ID:
         lives += 1;
         demand += LIFE_DRAW;
+        break;
+      case STATION_REMOTE_ID:
+        demand += REMOTE_DRAW;
+        break;
+      case STATION_LAB_GRAVITY_ID:
+        demand += GRAVITY_DRAW;
+        break;
+      case STATION_LAB_MATERIAL_ID:
+        demand += MATERIAL_DRAW;
+        break;
+      case STATION_COMM_ID:
+        demand += COMM_DRAW;
         break;
       default:
         break;
@@ -562,6 +608,20 @@ export function launchCore(s: GameState, silo: Unit, coreId: string): string | n
 
 // ── 单位 ─────────────────────────────────────────────────────────────
 
+const STATION_OBSERVE: SkillDef = {
+  id: 'station-observe',
+  name: '星球表面观测',
+  summary:
+    '对脚下这颗星球的表面做一次观测：选一格，点亮它和上下左右共 5 格。' +
+    '情报永久有效（同一座模块再观测会替换上一次）。每回合 1 次。',
+  effect: 'station-observe',
+  cooldown: 0,
+  // 1 发、每回合回 1：正好是"每回合最多一次"，而且跨回合不会攒
+  charges: 1,
+  regen: 1,
+  targeting: 'point',
+};
+
 const STATION_EXPAND: SkillDef = {
   id: 'station-expand',
   name: '扩建甲板',
@@ -619,6 +679,46 @@ const STATION_BUILD_THRUSTER: SkillDef = {
   targeting: 'point',
 };
 
+const STATION_BUILD_REMOTE: SkillDef = {
+  id: 'station-build-remote',
+  name: '建造遥感模块',
+  summary: `在空的甲板上造一座遥感模块（耗电 ${REMOTE_DRAW}）。它有「星球表面观测」技能：从轨道上点亮地表一小片。需要航天员相邻才工作。`,
+  effect: 'station-build-remote',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_GRAVITY: SkillDef = {
+  id: 'station-build-gravity',
+  name: '建造微重力研究室',
+  summary: `在空的甲板上造一座微重力研究室（耗电 ${GRAVITY_DRAW}）：每座让本方<b>总金币收入 +${Math.round(GRAVITY_PER * 100)}%</b>，多座叠加、上限 +${Math.round(GRAVITY_CAP * 100)}%。需要航天员相邻才工作。`,
+  effect: 'station-build-gravity',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_MATERIAL: SkillDef = {
+  id: 'station-build-material',
+  name: '建造材料研究室',
+  summary: `在空的甲板上造一座材料研究室（耗电 ${MATERIAL_DRAW}）：每座让本方<b>所有单位护甲 +${MATERIAL_PER}</b>，上限 +${MATERIAL_CAP}。需要航天员相邻才工作。`,
+  effect: 'station-build-material',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_COMM: SkillDef = {
+  id: 'station-build-comm',
+  name: '建造通讯模块',
+  summary: `在空的甲板上造一座通讯模块（耗电 ${COMM_DRAW}）：每座让本方<b>所有单位视野 +${COMM_PER}</b>，上限 +${COMM_CAP}。需要航天员相邻才工作。`,
+  effect: 'station-build-comm',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
 export const STATION_CORE: UnitTypeDef = {
   id: STATION_CORE_ID,
   name: '空间站核心舱',
@@ -641,6 +741,10 @@ export const STATION_CORE: UnitTypeDef = {
     STATION_BUILD_SOLAR,
     STATION_BUILD_LIFE,
     STATION_BUILD_THRUSTER,
+    STATION_BUILD_REMOTE,
+    STATION_BUILD_GRAVITY,
+    STATION_BUILD_MATERIAL,
+    STATION_BUILD_COMM,
   ],
 };
 
@@ -696,6 +800,81 @@ export const STATION_LIFE: UnitTypeDef = {
   atk: 0,
   armor: 3,
   maxHp: 60,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+/**
+ * 遥感模块：从轨道上拍一张地表照片。
+ *
+ * 它自己不能建在地表（站只在轨道上），技能选点会切到**脚下那颗星球**的棋盘。
+ * 这张情报是永久的：卫星拍下来的就是那几格。
+ */
+export const STATION_REMOTE: UnitTypeDef = {
+  id: STATION_REMOTE_ID,
+  name: '遥感模块',
+  short: '遥',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 50,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+  skills: [STATION_OBSERVE],
+};
+
+export const STATION_LAB_GRAVITY: UnitTypeDef = {
+  id: STATION_LAB_GRAVITY_ID,
+  name: '微重力研究室',
+  short: '微',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 50,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+export const STATION_LAB_MATERIAL: UnitTypeDef = {
+  id: STATION_LAB_MATERIAL_ID,
+  name: '材料研究室',
+  short: '材',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 50,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+export const STATION_COMM: UnitTypeDef = {
+  id: STATION_COMM_ID,
+  name: '通讯模块',
+  short: '讯',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 50,
   range: 0,
   vision: 1,
   footprint: 1,
@@ -790,6 +969,49 @@ registerSkillEffect('station-expand', (c) => {
 function occupiedAt(s: GameState, self: Unit, x: number, y: number): boolean {
   const view = boardStateOf(s, self);
   return view.units.some((u) => tilesOfUnit(view, u).some((t) => t.x === x && t.y === y));
+}
+
+/**
+ * 这座功能舱有没有**人在值班**：4 邻域里有本方的航天员。
+ *
+ * 为什么是 4 邻域：移动、扩建、装卸用的都是同一套，玩家已经会判断"贴不贴得上"。
+ * 8 邻域会让人以为斜角也算，但兵不能斜走，于是"看起来挨着却不工作"。
+ *
+ * 无人值守的舱段**完全不工作**：不产金币、不加甲、不加视野、技能也不能放。
+ * 这不是"效率降低"——一个没人看的仪器就是一个箱子。
+ */
+export function isStaffed(s: GameState, u: Unit): boolean {
+  const board = boardIdOf(u);
+  return (s.units ?? []).some(
+    (v) =>
+      v.owner === u.owner &&
+      v.type === ASTRONAUT_ID &&
+      v.hp > 0 &&
+      boardIdOf(v) === board &&
+      Math.abs(v.x - u.x) + Math.abs(v.y - u.y) <= CREW_REACH,
+  );
+}
+
+/**
+ * 这一方现在有**几座**某类功能舱在正常工作（有人值守 + 站没断电）。
+ *
+ * 材料研究室、通讯模块、微重力研究室都靠它算加成；数值给的是"每座多少"，
+ * 上限在各自调用点用 `Math.min` 夹住。
+ */
+export function activeModuleCount(s: GameState, owner: PlayerId, typeId: string): number {
+  // 每张站的断电状态只算一次：这个函数会被护甲/视野的钩子频繁调用
+  const dark = new Map<string, boolean>();
+  let n = 0;
+  for (const u of s.units ?? []) {
+    if (u.owner !== owner || u.type !== typeId || u.hp <= 0) continue;
+    const board = boardIdOf(u);
+    if (!isStationBoard(s, board)) continue;
+    if (!dark.has(board)) dark.set(board, stationPower(s, board).brownout);
+    if (dark.get(board)) continue;
+    if (!isStaffed(s, u)) continue;
+    n += 1;
+  }
+  return n;
 }
 
 /** 站内所有空的甲板（没有单位占着） */
@@ -915,6 +1137,24 @@ registerSkillEffect('station-build-solar', (c) => {
   });
 });
 
+registerSkillTargetCells('station-build-remote', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-gravity', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-material', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-comm', ({ state, self }) => emptyDeckCells(state, self));
+
+registerSkillEffect('station-build-remote', (c) => {
+  buildModule(c, { typeId: STATION_REMOTE_ID, baseCost: REMOTE_BASE_COST, draw: REMOTE_DRAW, what: '遥感模块' });
+});
+registerSkillEffect('station-build-gravity', (c) => {
+  buildModule(c, { typeId: STATION_LAB_GRAVITY_ID, baseCost: GRAVITY_BASE_COST, draw: GRAVITY_DRAW, what: '微重力研究室' });
+});
+registerSkillEffect('station-build-material', (c) => {
+  buildModule(c, { typeId: STATION_LAB_MATERIAL_ID, baseCost: MATERIAL_BASE_COST, draw: MATERIAL_DRAW, what: '材料研究室' });
+});
+registerSkillEffect('station-build-comm', (c) => {
+  buildModule(c, { typeId: STATION_COMM_ID, baseCost: COMM_BASE_COST, draw: COMM_DRAW, what: '通讯模块' });
+});
+
 registerSkillEffect('station-build-life', (c) => {
   buildModule(c, {
     typeId: STATION_LIFE_ID,
@@ -955,6 +1195,77 @@ registerSkillReadyCheck('station-build-solar', (s, u) => {
   if (s.players[u.owner].gold < cost) return `金币不足 ${s.players[u.owner].gold}/${cost}`;
   return true;
 });
+
+for (const [id, draw, cost] of [
+  ['station-build-remote', REMOTE_DRAW, REMOTE_BASE_COST],
+  ['station-build-gravity', GRAVITY_DRAW, GRAVITY_BASE_COST],
+  ['station-build-material', MATERIAL_DRAW, MATERIAL_BASE_COST],
+  ['station-build-comm', COMM_DRAW, COMM_BASE_COST],
+] as Array<[string, number, number]>) {
+  registerSkillReadyCheck(id, (s, u) => {
+    const p = stationPowerOf(s, u);
+    if (p && p.headroom < draw) return `电力不足 ${p.headroom}/${draw}`;
+    const price = buildCost(s, u.owner, cost);
+    if (s.players[u.owner].gold < price) return `金币不足 ${s.players[u.owner].gold}/${price}`;
+    return true;
+  });
+}
+
+/* ── 遥感模块的技能 ───────────────────────────────────────────── */
+
+/**
+ * 可点格：**脚下那颗星球的整张图**（格子列表留空）。
+ *
+ * 为什么不返回具体格子：返回整张图会让 `aimTiles` 把每一格都铺成红色斜纹，
+ * 一片红海什么都看不清（传送阵那条注释里踩过同一个坑）。
+ * 界面拿到 `board` 会先切图，玩家点哪就用哪——合法性由 effect 判。
+ */
+registerSkillTargetCells('station-observe', ({ state, self }) => {
+  const rec = stationOf(state, self);
+  const node = rec ? nodeById(state, rec.at) : undefined;
+  const board = node?.board;
+  if (!board) return { cells: [] };
+  return { board, cells: [] };
+});
+
+registerSkillEffect('station-observe', (c) => {
+  const self = c.self;
+  const t = c.target;
+  const fail = (reason: string): void => {
+    c.result.ok = false;
+    c.result.reason = reason;
+  };
+  if (!isStaffed(c.state, self)) return fail('没有航天员在旁边，仪器没人看');
+  const rec = stationOf(c.state, self);
+  const node = rec ? nodeById(c.state, rec.at) : undefined;
+  const board = node?.board;
+  if (!board) return fail('这座站不在任何星球的轨道上');
+  if (!t) return fail('要选一格');
+
+  const b = boardOf(c.state, board);
+  if (t.x < 0 || t.y < 0 || t.x >= b.w || t.y >= b.h) return fail('那一格在这张图外面');
+
+  /*
+   * 目标格 + 上下左右，共 5 格（出界的不算）。
+   * 用"四邻"而不是 3×3：和移动、扩建、值守同一套邻接口径，
+   * 玩家看到的就是"这一格和它四面"。
+   */
+  const cells: number[] = [];
+  const push = (x: number, y: number): void => {
+    if (x < 0 || y < 0 || x >= b.w || y >= b.h) return;
+    cells.push(y * b.w + x);
+  };
+  push(t.x, t.y);
+  push(t.x - 1, t.y);
+  push(t.x + 1, t.y);
+  push(t.x, t.y - 1);
+  push(t.x, t.y + 1);
+
+  setRecon(c.state, self.owner, board, self.id, cells);
+  c.result.log = `遥感观测：${nodeName(c.state, rec!.at)} ${cellName(t.x, t.y)} 及四邻已标亮`;
+});
+
+registerSkillReadyCheck('station-observe', (s, u) => (isStaffed(s, u) ? true : '无航天员'));
 
 registerSkillReadyCheck('station-build-life', (s, u) => {
   const p = stationPowerOf(s, u);

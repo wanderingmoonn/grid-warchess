@@ -1741,6 +1741,16 @@ export interface StarNode {
  * 如果哪天要做"拦截"，那是"打在天上的单位"，不是"封一条路"——
  * 那时加的是战斗规则，不是这条边上的一个开关。
  */
+export interface ReconMark {
+  owner: PlayerId;
+  board: BoardId;
+  /** 谁观测的（同一座模块再观测会覆盖） */
+  by: string;
+  /** 这张图的格号 */
+  cells: number[];
+  turn: number;
+}
+
 export interface StarLane {
   id: string;
   a: StarNodeId;
@@ -1857,6 +1867,12 @@ export interface GameState {
    * 取图一律用 `core/board.ts` 的 `boardOf()`，不要自己判断。
    */
   boards?: Record<BoardId, Board>;
+  /**
+   * 侦察情报（遥感观测这类）。可选：只有太空战争会写。
+   *
+   * 和 `spotlight`（让别人看见我）方向相反——这里是"我看见别人"。
+   */
+  recon?: ReconMark[];
   /**
    * 星图：图与图之间的关系（哪些节点、怎么连通、空间站停在哪）。
    *

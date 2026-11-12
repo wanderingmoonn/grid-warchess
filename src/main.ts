@@ -2374,13 +2374,15 @@ function refreshSelection(): void {
         const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
         const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
         if (cellsOf && skillDef) {
-          // 选点格与预览一律按**施法者那张图**：月面上的技能不该在地球上高亮，
-          // 格号也不通用（地球 20 宽的 i=45 和月球 9 宽的 i=45 不是一个位置）
-          const view = boardStateOf(state, caster);
-          const board = boardIdOf(caster);
-          for (const p of cellsOf({ state, view, self: caster, skill: skillDef })) {
-            aimTiles.push(idxOn(state, board, p.x, p.y));
-          }
+          /*
+           * 选点格按**技能自己声明的那张图**：缺省是施法者所在的图，
+           * 遥感模块这类跨图技能会明确指定"脚下那颗星球表面"。
+           * 格号不通用（地球 20 宽的 i=45 和月球 9 宽的 i=45 不是一个位置）。
+           */
+          const res = cellsOf({ state, view: boardStateOf(state, caster), self: caster, skill: skillDef });
+          const cells = Array.isArray(res) ? res : res.cells;
+          const board = Array.isArray(res) ? boardIdOf(caster) : (res.board ?? boardIdOf(caster));
+          for (const p of cells) aimTiles.push(idxOn(state, board, p.x, p.y));
         } else if (previewer && caster) {
           skillThreatTiles = previewer({
             state,
@@ -4558,6 +4560,19 @@ function handleAction(act: string, el: HTMLElement): void {
           return;
         }
         const targeting = skillDef.targeting === 'point' ? 'point' : 'direction';
+
+        /*
+         * 跨图选点：技能自己声明"要选哪张图的格子"（遥感模块观测的是脚下星球）。
+         * 必须在**进入瞄准模式之前**切过去，否则玩家点的是地球、算的是空间站。
+         * `switchBoard` 会清掉 `pendingSkill`，所以顺序不能反过来。
+         */
+        if (targeting === 'point' && unit) {
+          const fn = SKILL_TARGET_CELLS[skillDef.effect];
+          const res = fn?.({ state, view: boardStateOf(state, unit), self: unit, skill: skillDef });
+          const want = res && !Array.isArray(res) ? res.board : undefined;
+          if (want && want !== activeBoardId && hasBoard(state, want)) switchBoard(want);
+        }
+
         pendingSkill = { unitId, skillId, targeting };
         refreshSelection(); // 刷新高亮
         toast(

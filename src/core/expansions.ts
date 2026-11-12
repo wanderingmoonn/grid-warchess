@@ -352,6 +352,13 @@ export interface ExpansionHooks {
   modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
+  /**
+   * 和 `modifyArmor` 一样，但**跑在地图环境之后**（外空 ÷5 之后）。
+   *
+   * 给"站内设施"这类加成用：材料研究室给的 +1 甲，是给已经适应了外空的
+   * 舱段加装装甲板，不该被环境再除一次（+1 除 5 = 0，等于没做）。
+   */
+  postHazardArmor?: (c: ArmorCtx) => number;
   /** 纯函数：修正移动力 */
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */

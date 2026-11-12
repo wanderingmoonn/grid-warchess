@@ -471,12 +471,15 @@ check('星图：航道上真的画出航行中的站（小三角）', () => {
   assert.ok(tip.includes('前哨站'), `三角的提示要写清是哪座站：${tip}`);
   assert.ok(tip.includes('50%'), `走了一半要写 50%：${tip}`);
   /*
-   * 方向固定朝右：转过之后在斜线上的小三角像歪掉的箭头，
-   * 反而不好认。所以 `transform` 里只该有 translate，没有 rotate。
+   * 尖头指向**目的地**：三角要跟着航线旋转。
+   * 这条航线是水平的（earth → moon 在右边），所以角度是 0，
+   * 只验"有 rotate"，方向由 `points` 的尖头在 +x 保证。
    */
   const tf = sails[0]!.getAttribute('transform') ?? '';
   assert.ok(tf.includes('translate'), `位置要按进度插值：${tf}`);
-  assert.equal(tf.includes('rotate'), false, `三角不跟着航线转：${tf}`);
+  assert.ok(tf.includes('rotate('), `三角要跟着航线指向终点：${tf}`);
+  const poly = sails[0]!.querySelector('polygon')!.getAttribute('points') ?? '';
+  assert.ok(poly.trim().startsWith('0.12,0'), `尖头要在 +x（朝终点）：${poly}`);
 });
 
 check('地形类正确分布', () => {

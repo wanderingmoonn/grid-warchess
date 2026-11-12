@@ -137,13 +137,13 @@ export function renderStarMap(
         const y2 = l.b.y + 0.5;
         const cx = x1 + (x2 - x1) * sm.progress;
         const cy = y1 + (y2 - y1) * sm.progress;
+        const deg = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
         return (
-          `<g class="sm-sail ${sm.owner === 'A' ? 'a' : 'b'}" transform="translate(${cx} ${cy})">` +
+          `<g class="sm-sail ${sm.owner === 'A' ? 'a' : 'b'}" transform="translate(${cx} ${cy}) rotate(${deg})">` +
           /*
-           * **永远朝右**，不跟着航线方向转。
-           * 转过之后，斜线上的小三角看起来像歪掉的箭头；它要表达的是
-           * "这里有一个正在走的东西"，不是"它指着哪"。
-           * 尺寸也比第一版小了一半——它是个标记，不该压过节点。
+           * 尖头指向**目的地**（a → b 的方向）：它是"这艘船正往哪儿开"，
+           * 不是"这里有个东西"。所以跟着航线旋转，不固定方向。
+           * 尺寸保持小：它是标记，不该压过节点。
            */
           `<polygon points="0.12,0 -0.07,-0.085 -0.07,0.085"></polygon>` +
           `<title>${esc(sm.ownerName)}的「${esc(sm.name)}」正在航行（${Math.round(sm.progress * 100)}%）</title>` +

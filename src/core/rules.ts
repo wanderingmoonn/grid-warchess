@@ -140,6 +140,7 @@ import { seatsOf } from './types.ts';
 import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './board.ts';
 import { clearSpotlightsOfOthers, spotlightCellsOn } from './spotlight.ts';
 import { hazardArmorOf, hazardFor, hazardMoveOf } from './hazard.ts';
+import { reconCellsOn } from './recon.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -2231,6 +2232,27 @@ export function effectiveStats(s: GameState, u: Unit): EffectiveStats {
     if (armor !== before) armorItems.push({ label: hz.name, delta: armor - before });
   }
 
+  /*
+   * 环境**之后**的加成（材料研究室这类站内设施）。
+   * 进 `armorItems` 是有意的：玩家要能看出"这 +1 是在除完 5 之后加的"。
+   */
+  const hctx = {
+    state: s,
+    attacker: u,
+    defender: u,
+    armor,
+    isCounter: false,
+    armorOf: (x: Unit) => (x.id === u.id ? armor : effectiveStats(s, x).armor),
+    visionOf: (x: Unit) => visionOf(s, x),
+  };
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.postHazardArmor) continue;
+    hctx.armor = armor;
+    const before = armor;
+    armor = e.hooks.postHazardArmor(hctx);
+    if (armor !== before) armorItems.push({ label: e.name, delta: armor - before });
+  }
+
   // ── 移动力 (严格按照 movePower 的执行顺序) ──
   const moveBase = def.move;
   const moveItems: StatItem[] = [];
@@ -3097,6 +3119,19 @@ export function computeDamage(
   if (!isCity) {
     const hz = hazardFor(s, defender);
     if (hz) ctx.armor = hazardArmorOf(ctx.armor, hz);
+    // 环境之后的加成（材料研究室）：位置和 effectiveStats 一致，面板与结算同源
+    for (const e of activeExpansions(s)) {
+      if (!e.hooks.postHazardArmor) continue;
+      ctx.armor = e.hooks.postHazardArmor({
+        state: s,
+        attacker,
+        defender,
+        armor: ctx.armor,
+        isCounter,
+        armorOf: (x: Unit) => (x.id === defender.id ? ctx.armor : effectiveStats(s, x).armor),
+        visionOf: (x: Unit) => visionOf(s, x),
+      });
+    }
   }
 
   // 小型扩展到破甲之前
@@ -7311,6 +7346,8 @@ export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): 
    * 修真的异象、太空的发射井都记在这里，规则层与 AI 一起认。
    */
   for (const i of spotlightCellsOn(s, p, id)) out.add(i);
+  // 侦察情报：遥感模块看到的那几格，和"自己视野"同一层
+  for (const i of reconCellsOn(s, p, id)) out.add(i);
 
   return out;
 }
@@ -7355,9 +7392,10 @@ export function tileVisibleTo(
       if (extra && extra.includes(i)) return true;
     }
   }
-  // 点亮：按这张图的格号比对（任何图都认）
+  // 点亮 / 侦察：按这张图的格号比对（任何图都认）
   const spotCell = y * boardOf(s, id).w + x;
   if (spotlightCellsOn(s, p, id).includes(spotCell)) return true;
+  if (reconCellsOn(s, p, id).includes(spotCell)) return true;
   return false;
 }
 

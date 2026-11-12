@@ -1,5 +1,5 @@
 // src/core/skill-hooks.ts
-import type { GameState, Unit } from './types.ts';
+import type { BoardId, GameState, Unit } from './types.ts';
 import type { AbilityApi } from './ability-hooks.ts';
 
 export interface SkillCtx {
@@ -86,7 +86,19 @@ export type SkillTargetCells = (c: {
   view: GameState;
   self: Unit;
   skill: any;
-}) => Array<{ x: number; y: number }>;
+}) =>
+  | Array<{ x: number; y: number }>
+  | {
+      /**
+       * 选点在哪张图。缺省 = 施法者所在的那张。
+       *
+       * 遥感模块是第一个用它的：站在轨道上，要选的是**脚下那颗星球表面**的格子。
+       * 界面拿到这个字段会先把图切过去，再进瞄准模式——不这么做的话，
+       * 玩家点的是地球表面，而 `aimTiles` 算的是空间站，一个都对不上。
+       */
+      board?: BoardId;
+      cells: Array<{ x: number; y: number }>;
+    };
 
 export const SKILL_TARGET_CELLS: Record<string, SkillTargetCells> = {};
 

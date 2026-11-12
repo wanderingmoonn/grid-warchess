@@ -54,15 +54,22 @@ import {
   stationSailProblem,
   stationSailTurns,
   stationSpeed,
+  STATION_COMM_ID,
+  STATION_LAB_GRAVITY_ID,
+  STATION_LAB_MATERIAL_ID,
   STATION_LIFE_ID,
+  STATION_REMOTE_ID,
+  activeModuleCount,
   createStationBoard,
+  isStaffed,
   renameStation,
   tickProducers,
   tickStationTravel,
 } from '../../../src/core/space/station.ts';
 import { ASTRONAUT_ID } from '../../../src/core/space/astronaut.ts';
 import { SILO_FUEL_TO_STATION, chooseDest, currentDest, siloStateOf } from '../../../src/core/space/silo.ts';
-import { effectiveStats, movePower } from '../../../src/core/rules.ts';
+import { effectiveStats, heroSkillsOf, incomeOf, movePower, visionOf } from '../../../src/core/rules.ts';
+import { reconCellsOn } from '../../../src/core/recon.ts';
 import { canProduce } from '../../../src/core/produce.ts';
 import { starLayout } from '../../../src/ui/star-layout.ts';
 import { laneTurnsFor } from '../../../src/core/space/transit.ts';
@@ -1579,6 +1586,213 @@ test('天气视图只在看地球时有内容（跨扩展兼容）', () => {
     '地球上照常有天气',
   );
   assert.equal(weather!.glyph!({ state: s, viewer: 'A', board: 'moon' }).length, 0, '风箭头同理');
+});
+
+console.log('\n太空战争：功能舱段');
+
+/** 往某张站图上摆一个单位（站内坐标，不查地形） */
+function putOnBoard(st: GameState, board: string, owner: 'A' | 'B', type: string, x: number, y: number): Unit {
+  const def = st.unitTypes[type];
+  assert.ok(def, `本局没有 ${type}`);
+  const u: Unit = {
+    id: `m${st.nextUnitSeq++}`,
+    type,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: true,
+    acted: true,
+    board,
+  };
+  st.units.push(u);
+  return u;
+}
+
+test('功能舱段：没有航天员相邻就不工作', () => {
+  /*
+   * "没人看的仪器就是一个箱子"。这条验的是**值守**这道闸：
+   * 同一个舱段，没人和有人，加成必须不一样。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+  pave(cur, board, [[1, 1], [3, 3], [3, 4]]);
+
+  // 先补电：一块太阳能（+12）才带得动材料研究室（12）
+  const solar = build(cur, st.core.id, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+  const lab = build(cur, st.core.id, 'station-build-material', 3, 3);
+  assert.ok(lab.ok, lab.ok ? '' : lab.reason);
+  cur = lab.state;
+
+  const labUnit = cur.units.find((u) => u.type === STATION_LAB_MATERIAL_ID)!;
+  const before = effectiveStats(cur, st.core).armor;
+  assert.equal(isStaffed(cur, labUnit), false, '还没人值班');
+  assert.equal(activeModuleCount(cur, 'A', STATION_LAB_MATERIAL_ID), 0, '无人值守不算在役');
+
+  // 隔壁放一名航天员
+  putOnBoard(cur, board, 'A', ASTRONAUT_ID, 3, 4);
+  assert.equal(isStaffed(cur, labUnit), true, '相邻就算值班');
+  assert.equal(activeModuleCount(cur, 'A', STATION_LAB_MATERIAL_ID), 1);
+  assert.equal(effectiveStats(cur, st.core).armor, before + 1, '护甲 +1 生效');
+
+  // 挪远一格（不相邻）：立刻停工
+  const astro = cur.units.find((u) => u.type === ASTRONAUT_ID)!;
+  astro.y = 1;
+  astro.x = 1;
+  assert.equal(isStaffed(cur, labUnit), false);
+  assert.equal(effectiveStats(cur, st.core).armor, before, '离开就恢复原值');
+});
+
+test('材料 / 通讯：每座 +1，软上限 5 与 3', () => {
+  /*
+   * 上限是硬的（`Math.min`），但"几座"要按**在役**数：无人值守的不算。
+   * 这条只测上限本身，值守逻辑在上一条。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  flatten(s, 'plain');
+  s.boards!['st-x'] = createStationBoard('st-x', 9, '测试站');
+  const b = s.boards!['st-x']!;
+  for (const t of b.tiles) t.terrain = 'deck';
+  putOnBoard(s, 'st-x', 'A', STATION_CORE_ID, 4, 4);
+
+  const core = s.units.find((u) => u.type === STATION_CORE_ID)!;
+  const baseArmor = effectiveStats(s, core).armor;
+
+  /*
+   * 六座材料研究室（上限 5）+ 六块太阳能。
+   * 每座 12 电，六座 72；核心 10 + 六块太阳能 72 = 82，不能不给电——
+   * 断电的站整站停摆，那样测到的会是"0 座在役"，不是上限。
+   */
+  for (let i = 0; i < 6; i += 1) {
+    putOnBoard(s, 'st-x', 'A', 'station-solar', i, 0);
+    putOnBoard(s, 'st-x', 'A', STATION_LAB_MATERIAL_ID, i, 2);
+    putOnBoard(s, 'st-x', 'A', ASTRONAUT_ID, i, 3);
+  }
+  assert.equal(activeModuleCount(s, 'A', STATION_LAB_MATERIAL_ID), 6, '六座都在役');
+  assert.equal(effectiveStats(s, core).armor, baseArmor + 5, '护甲上限 +5（不是 +6）');
+
+  // 通讯：四座，上限 +3
+  for (let i = 0; i < 4; i += 1) {
+    putOnBoard(s, 'st-x', 'A', 'station-solar', i, 5);
+    putOnBoard(s, 'st-x', 'A', STATION_COMM_ID, i, 6);
+    putOnBoard(s, 'st-x', 'A', ASTRONAUT_ID, i, 7);
+  }
+  const baseVision = s.unitTypes[STATION_CORE_ID]!.vision;
+  assert.equal(visionOf(s, core), baseVision + 3, '视野上限 +3（4 座只给 3）');
+});
+
+test('微重力研究室：收入 +5%/座，软上限 +20%', () => {
+  /*
+   * 按比例而不是固定值：收入随城市和地形涨，固定值到后期等于没有。
+   */
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  flatten(s, 'plain');
+  s.boards!['st-y'] = createStationBoard('st-y', 9, '测试站');
+  const b = s.boards!['st-y']!;
+  for (const t of b.tiles) t.terrain = 'deck';
+
+  const base = incomeOf(s, 'A');
+  assert.ok(base > 0, `前提：有基础收入（${base}）`);
+
+  // 每座 12 电，配一块太阳能（+12）：不给电的话站会过载，加成全部失效
+  const addLab = (n: number): void => {
+    for (let i = 0; i < n; i += 1) {
+      putOnBoard(s, 'st-y', 'A', 'station-solar', i, 5);
+      putOnBoard(s, 'st-y', 'A', STATION_LAB_GRAVITY_ID, i, 6);
+      putOnBoard(s, 'st-y', 'A', ASTRONAUT_ID, i, 7);
+    }
+  };
+  addLab(1);
+  assert.equal(incomeOf(s, 'A'), Math.round(base * 1.05), '一座 +5%');
+  addLab(2); // 共 3 座 → +15%
+  assert.equal(incomeOf(s, 'A'), Math.round(base * 1.15), '三座 +15%');
+  addLab(5); // 共 8 座 → 夹在 +20%
+  assert.equal(incomeOf(s, 'A'), Math.round(base * 1.2), '八座也只给 +20%');
+});
+
+test('遥感模块：从轨道观测地表，点亮目标格与四邻（每回合 1 次）', () => {
+  /*
+   * 这是"跨图选点"的第一个用户：站停在地球轨道，技能要选的是**地球表面**。
+   * 规则层只负责把 5 格记进情报；界面负责先切图（见 main 的 hero-skill）。
+   */
+  const st = openStation();
+  let cur = st.state;
+  /*
+   * 清掉地球上的开局编制，只留发射井：否则城市和民兵的视野会把
+   * 目标格盖住，"观测前看不见"这个前提就不成立了。
+   */
+  cur.units = cur.units.filter((u) => boardIdOf(u) !== EARTH || u.type === SILO_ID);
+  const board = st.board;
+  pave(cur, board, [[3, 3], [3, 4]]);
+
+  /*
+   * 直接用 `putOnBoard` 摆，不走建造：建造出来的模块 `bornTurn === 当前回合`，
+   * 技能会被"刚上场不能放"挡住（那是通用规则，不是这条要测的东西）。
+   */
+  const mod = putOnBoard(cur, board, 'A', STATION_REMOTE_ID, 3, 3);
+
+  // 没人值班：技能不可用
+  assert.equal(
+    heroSkillsOf(cur, mod).find((k) => k.def.id === 'station-observe')?.ready,
+    false,
+    '没有航天员时技能不ready',
+  );
+
+  putOnBoard(cur, board, 'A', ASTRONAUT_ID, 3, 4);
+  assert.equal(
+    heroSkillsOf(cur, mod).find((k) => k.def.id === 'station-observe')?.ready,
+    true,
+    '有人值班就 ready',
+  );
+
+  /*
+   * 选点声明：技能的格子属于**地球**（脚下那颗星球），不是空间站。
+   * 界面靠这个字段先切图再进瞄准——返回错了，玩家会在站上对着 5×5 点，
+   * 而规则层判的是地球坐标。
+   */
+  const cellsDecl = SKILL_TARGET_CELLS['station-observe']!({
+    state: cur,
+    view: cur,
+    self: mod,
+    skill: heroSkillsOf(cur, mod).find((k) => k.def.id === 'station-observe')!.def,
+  });
+  assert.equal(Array.isArray(cellsDecl), false, '遥感要声明目标图，不能只给格子');
+  assert.equal((cellsDecl as { board?: string }).board, EARTH, '目标图是脚下的地球');
+
+  // 目标：地球中部一格（视野外，但四邻都在界内——贴边会少几格）
+  const tx = 10;
+  const ty = 10;
+  const cell = idx(cur, tx, ty);
+  assert.equal(visibleTilesOn(cur, 'A', EARTH).has(cell), false, '前提：这一格现在看不见');
+
+  const cast = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: mod.id,
+    skillId: 'station-observe',
+    targetX: tx,
+    targetY: ty,
+  });
+  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
+  cur = cast.state;
+
+  const recon = reconCellsOn(cur, 'A', EARTH);
+  assert.equal(recon.length, 5, '目标格 + 上下左右共 5 格');
+  assert.ok(recon.includes(cell), '目标格在内');
+  assert.ok(visibleTilesOn(cur, 'A', EARTH).has(cell), '观测之后这一格进了本方可见集');
+
+  // 每回合 1 次：再用一次应该被挡住
+  const again = applyAction(cur, {
+    type: 'HERO_SKILL',
+    unitId: mod.id,
+    skillId: 'station-observe',
+    targetX: 11,
+    targetY: 11,
+  });
+  assert.equal(again.ok, false, '同一回合不能观测两次');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {
