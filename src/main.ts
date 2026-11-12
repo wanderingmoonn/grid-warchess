@@ -2269,7 +2269,7 @@ function refreshSelection(): void {
    * 在月球上算一遍只会把地球那套高亮带过去（它们最终也会被 boardUiFor 清掉）。
    * 直接清空，省一次错误的寻路。
    */
-  if (activeBoardId !== EARTH) {
+  if (activeBoardId !== EARTH && !pendingSkill) {
     /*
      * 别的图也能走（第 8 步起的月面行动）：可达格由 `reachableTiles` 按
      * 单位所在的图算，索引也是那张图的索引，和渲染层对得上。
@@ -3549,102 +3549,15 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 
 function onBoardClick(e: Event): void {
   /*
-   * 别的图（月球、以后的空间站）现在只做到"点得中、看得见"。
+   * 选点 / 设备落点**优先于一切**：比"这是哪张图"还早。
    *
-   * 走子 / 开火 / 建造整条链路都按**地球**的坐标与宽度算（`idx()` 认的是
-   * `state.w`），在 12×12 的月球上点 (3,4) 会被当成地球的 (3,4) 去执行。
-   * 所以这里只做选中：选中之后侧栏那张属性卡是真的（它读的是单位自己），
-   * 面板里的按钮也照常能用——发射井的加注/发射就是在这条路上跑的。
-   */
-  if (activeBoardId !== EARTH) {
-    const at = coordsFromEvent(e);
-    if (!at) return;
-    const id = activeBoardId;
-    const board = boardOf(state, id);
-    if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
-
-    /*
-     * 别的图（目前是月球）的点击：**建造选址 → 走子 → 选中**。
-     *
-     * 顺序和地球那条一致。这里没有攻击/攻城/技能选点——月面战斗还没做
-     * （见 refreshSelection 里的说明），所以那几种点击后面会落到"选中/取消"。
-     */
-    if (buildPlan) {
-      const plan = buildPlan;
-      const built = dispatch({
-        type: 'BUILD',
-        unitId: plan.unitId,
-        unitType: plan.type,
-        x: at.x,
-        y: at.y,
-      });
-      if (built) buildPlan = null;
-      refreshSelection();
-      render();
-      return;
-    }
-
-    const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
-    // 和地球那条一致：兵压在建筑上面，先选兵
-    const pick =
-      here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
-
-    // 点空地、手上又选着自己的人：下移动命令（走不走得通由规则层说）
-    if (!pick && selectedId) {
-      const sel = state.units.find((u) => u.id === selectedId);
-      if (sel && sel.owner === me() && boardIdOf(sel) === id && !sel.acted) {
-        if (dispatch({ type: 'MOVE', unitId: sel.id, x: at.x, y: at.y })) return;
-      }
-    }
-
-    selectedId = pick?.id ?? null;
-    selectedCityId = null;
-    selectedTile = null;
-    aimTiles = [];
-    skillThreatTiles = [];
-    refreshSelection();
-    if (!pick && !selectedId) {
-      const tile = board.tiles[at.y * board.w + at.x];
-      if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
-    }
-    render();
-    return;
-  }
-
-  /*
-   * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
+   * 这个函数一进来就有一个 `if (activeBoardId !== EARTH)` 分支，非地球图的
+   * 点击全被它接走（建造选址 → 走子 → 选中）。技能选点如果排在它后面，
+   * 在空间站/月球上永远点不到落点——这正是"扩建甲板点不中格子"的真因。
    *
-   * 走子/开火那条路整段跳过——`state` 是历史帧，改它就等于篡改别人的对局。
-   * 只保留选中，因为"这一步它为什么这么走"十有八九要从属性卡上的
-   * 光环、加成、剩余行动次数里找答案。
+   * "正在等一个落点"是全局状态：此时点棋盘只有一个含义，跟在哪张图、
+   * 是不是上帝模式都无关。
    */
-  if (replay) {
-    const at = coordsFromEvent(e);
-    if (!at) return;
-    const here = stackAt(at.x, at.y);
-    if (here.length > 0) {
-      selectedId = here[here.length - 1]!.id;
-      selectedCityId = null;
-    } else {
-      /*
-       * 城里没站兵的那几格要能点开城。
-       *
-       * 复盘最常问的一句是"这一步它为什么不敢压上去"，答案往往在城的耐久和
-       * 时代上（攻城伤害 = 攻击 − 护甲）。而城不是单位，不在这条 `stackAt` 里，
-       * 不单独认一下的话，城市卡在复盘里永远打不开。
-       */
-      const city = cityAt(state, at.x, at.y);
-      selectedId = null;
-      selectedCityId = city?.id ?? null;
-      selectedTile = city ? null : at;
-    }
-    // 只换选中，不重算可达格/目标：那两样会让棋盘看起来像能操作
-    reach = [];
-    targets = [];
-    siege = [];
-    render();
-    return;
-  }
   /*
    * 选点 / 设备落点**优先于一切模式**。
    *
@@ -3720,6 +3633,110 @@ function onBoardClick(e: Event): void {
     return;
   }
 
+  /*
+   * 别的图（月球、以后的空间站）现在只做到"点得中、看得见"。
+   *
+   * 走子 / 开火 / 建造整条链路都按**地球**的坐标与宽度算（`idx()` 认的是
+   * `state.w`），在 12×12 的月球上点 (3,4) 会被当成地球的 (3,4) 去执行。
+   * 所以这里只做选中：选中之后侧栏那张属性卡是真的（它读的是单位自己），
+   * 面板里的按钮也照常能用——发射井的加注/发射就是在这条路上跑的。
+   */
+  if (activeBoardId !== EARTH) {
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const id = activeBoardId;
+    const board = boardOf(state, id);
+    if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
+
+    /*
+     * 别的图（目前是月球）的点击：**建造选址 → 走子 → 选中**。
+     *
+     * 顺序和地球那条一致。这里没有攻击/攻城/技能选点——月面战斗还没做
+     * （见 refreshSelection 里的说明），所以那几种点击后面会落到"选中/取消"。
+     */
+    if (buildPlan) {
+      const plan = buildPlan;
+      const built = dispatch({
+        type: 'BUILD',
+        unitId: plan.unitId,
+        unitType: plan.type,
+        x: at.x,
+        y: at.y,
+      });
+      if (built) buildPlan = null;
+      refreshSelection();
+      render();
+      return;
+    }
+
+    const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
+    // 和地球那条一致：兵压在建筑上面，先选兵
+    const pick =
+      here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
+
+    // 点空地、手上又选着自己的人：下移动命令（走不走得通由规则层说）
+    if (!pick && selectedId) {
+      const sel = state.units.find((u) => u.id === selectedId);
+      if (sel && sel.owner === me() && boardIdOf(sel) === id && !sel.acted) {
+        if (dispatch({ type: 'MOVE', unitId: sel.id, x: at.x, y: at.y })) return;
+      }
+    }
+
+    selectedId = pick?.id ?? null;
+    selectedCityId = null;
+    /*
+     * 点空地：**把这一格交给侧栏**。
+     *
+     * 以前这里写死 `selectedTile = null` 再弹一句 toast，于是侧栏永远
+     * 只显示上一次选中的东西——在空间站上点虚空看起来"什么都没发生"。
+     * 选中的是一个单位时才清格子。
+     */
+    selectedTile = pick || selectedId ? null : at;
+    aimTiles = [];
+    skillThreatTiles = [];
+    refreshSelection();
+    if (!pick && !selectedId) {
+      const tile = board.tiles[at.y * board.w + at.x];
+      if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+    }
+    render();
+    return;
+  }
+
+  /*
+   * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
+   *
+   * 走子/开火那条路整段跳过——`state` 是历史帧，改它就等于篡改别人的对局。
+   * 只保留选中，因为"这一步它为什么这么走"十有八九要从属性卡上的
+   * 光环、加成、剩余行动次数里找答案。
+   */
+  if (replay) {
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const here = stackAt(at.x, at.y);
+    if (here.length > 0) {
+      selectedId = here[here.length - 1]!.id;
+      selectedCityId = null;
+    } else {
+      /*
+       * 城里没站兵的那几格要能点开城。
+       *
+       * 复盘最常问的一句是"这一步它为什么不敢压上去"，答案往往在城的耐久和
+       * 时代上（攻城伤害 = 攻击 − 护甲）。而城不是单位，不在这条 `stackAt` 里，
+       * 不单独认一下的话，城市卡在复盘里永远打不开。
+       */
+      const city = cityAt(state, at.x, at.y);
+      selectedId = null;
+      selectedCityId = city?.id ?? null;
+      selectedTile = city ? null : at;
+    }
+    // 只换选中，不重算可达格/目标：那两样会让棋盘看起来像能操作
+    reach = [];
+    targets = [];
+    siege = [];
+    render();
+    return;
+  }
   if (state.config.godMode === true) {
     // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
     // 这格可达吗、能不能开火）在纯沙盒里一条都不成立，整块交出去。

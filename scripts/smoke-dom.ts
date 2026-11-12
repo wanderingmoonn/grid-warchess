@@ -41,6 +41,8 @@ import { renderPanel, topbarShell } from '../src/ui/panel.ts';
 import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
 import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
+import { TERRAIN_INFO } from '../src/core/info.ts';
+import { CONFIG } from '../src/core/config.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
@@ -366,6 +368,32 @@ check('星图渲染：每条航线都带一根可点的命中条', () => {
   const before = taps[0];
   renderStarMap(host, view, 'A', null);
   assert.equal(host.querySelectorAll('[data-act="star-lane"]')[0], before, '内容没变就不该重建');
+});
+
+check('虚空与甲板：地形表齐了，选点型技能不依赖高亮', () => {
+  /*
+   * 空间站的两格必须在地形表里有名字与说明——否则点开它们只会看到
+   * "undefined"，或者干脆什么都不显示。
+   *
+   * 后半段钉的是"选点型技能不看 aimTiles"：在非地球图上高亮列表以前是空的，
+   * 但点下去仍然应该算选定（真正的合法性由规则层判）。这个区分很重要——
+   * 上一轮把"点不中"归咎于格号算错，方向就偏了。
+   */
+  assert.equal(TERRAIN_INFO.void.name, '虚空');
+  assert.equal(TERRAIN_INFO.deck.name, '甲板');
+  assert.ok(CONFIG.terrainCost.void >= 99, '虚空不可通行');
+  assert.equal(CONFIG.terrainCost.deck, 1, '甲板正常走');
+
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 7 }),
+    true,
+    '选点型没有高亮也该算选中',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 7 }),
+    false,
+    '点自己脚下 = 取消',
+  );
 });
 
 check('地形类正确分布', () => {
