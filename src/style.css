@@ -2562,6 +2562,16 @@ body {
   background: var(--danger-strong);
 }
 
+/* 空间站的能量条：青绿，和地面电网的蓝区分开。
+   同一条横条、同一组数字，玩家不用再学一遍怎么读。 */
+.power-bar.station > i {
+  background: #3fae96;
+}
+
+.power-bar.station > i.over {
+  background: var(--danger-strong);
+}
+
 .power-nums {
   display: flex;
   flex-wrap: wrap;

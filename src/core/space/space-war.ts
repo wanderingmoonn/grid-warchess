@@ -27,9 +27,17 @@ import {
   STATION_CORE,
   STATION_CORE_ID,
   STATION_PRODUCER,
+  STATION_SOLAR,
+  STATION_THRUSTER,
+  CORE_POWER,
+  PRODUCER_DRAW,
+  SOLAR_POWER,
+  THRUSTER_DRAW,
+  THRUSTER_SPEED,
   buildCost,
   launchCore,
   stationLines,
+  stationPowerHtml,
   tickProducers,
 } from './station.ts';
 
@@ -55,12 +63,21 @@ export const SPACE_WAR: Expansion = {
       + '但<b>收益递减</b>：没有井时比额定贵 50%，一座井时贵 30%，两座贵 14%，'
       + '三座基本平价，之后才开始便宜，永远到不了半价。'
       + '所以"多盖井"和"多建站"是同一条投资曲线上的两段。',
+    '<b>舱段与能量</b>：空间站有一条<b>自己的能量账</b>（不是地球上的电网）：'
+      + `核心舱自带 ${CORE_POWER} 电，每块「太阳能舱」+${SOLAR_POWER}，`
+      + `每台「推进器舱」耗 ${THRUSTER_DRAW}，每座「生产舱」耗 ${PRODUCER_DRAW}。`
+      + '电不够就造不出来（按钮会写明还差多少）；万一被打到过载，整站停摆——'
+      + '推进器不提速、生产舱不产金。',
+    '<b>推进器舱</b>：必须造在核心舱的<b>下半区</b>（不是正下方，整条下缘都行）。'
+      + `每台让本方航道速度 +${THRUSTER_SPEED}：航程 = 距离 ÷ 速度，向上取整、至少 1 回合。`
+      + '地月航道距离 3，所以标准速度 3 回合、1 台 2 回合、2 台 1 回合。'
+      + '推进器是给<b>全方</b>的火箭用的，装在哪座站上都算。',
     '<b>星图</b>：左上角面板里点「查看星图」。星图把每颗星球画成一格，'
       + '连线就是航道；点星球能看到轨道上停着哪些站、有没有东西正在飞来，'
       + '还能直接「前往」那张图或那座站。点连线能看到航程与路上的东西。'
       + '只有一张图的局面没有星图可看。',
   ],
-  units: [STATION_CORE, STATION_PRODUCER],
+  units: [STATION_CORE, STATION_PRODUCER, STATION_SOLAR, STATION_THRUSTER],
   hooks: {
     /** 空间站上的生产舱：每回合给自己主人产金币 */
     onTurnStart: ({ state, player }) => {
@@ -102,6 +119,19 @@ export const SPACE_WAR: Expansion = {
     getUnitPanelLines: ({ state, unit }) => {
       if (unit.type !== STATION_CORE_ID) return [];
       return stationLines(state, unit);
+    },
+
+    /**
+     * 站的能量条。
+     *
+     * 挂在**格子卡**上而不是 `getUnitPanelLines`：那个只能吐纯文本，
+     * 而这里要的是一条能一眼看出"用掉多少"的横条（和装配坞的电力条同款）。
+     * 点站里的任何一座舱段都能看到——玩家想确认"再加一台推进器会不会过载"，
+     * 不该先回去点核心舱。
+     */
+    getTilePanelHtml: ({ state, unit }) => {
+      if (!unit) return null;
+      return stationPowerHtml(state, unit);
     },
   },
 };

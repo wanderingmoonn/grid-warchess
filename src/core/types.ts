@@ -1724,7 +1724,21 @@ export interface StarLane {
   id: string;
   a: StarNodeId;
   b: StarNodeId;
-  turns: number;
+  /**
+   * 航道的**距离**（抽象单位，1 点 = 速度 1 时飞 1 回合）。
+   *
+   * 实际回合数是 `ceil(distance / 速度)`，速度由发射方的推进器决定
+   * （见 `space/station.ts` 的 `thrusterSpeed`）。
+   * 所以不要把 `distance` 当"要几回合"直接显示——那是 `laneTurnsFor` 的事。
+   */
+  distance?: number;
+  /**
+   * 老存档的"航程"字段（11-12 之前只有这个）。
+   *
+   * 新局不再写它，读的时候用 `laneDistance()` 兜底：`distance ?? turns`。
+   * 留着不改名，是为了让老存档读进来仍然能飞。
+   */
+  turns?: number;
 }
 
 /** 一座空间站：一张棋盘 + 它现在停在哪个节点上 + 是谁的 */

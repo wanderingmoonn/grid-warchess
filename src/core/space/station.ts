@@ -20,20 +20,49 @@
 import type { Board, GameState, PlayerId, SkillDef, Transit, Unit, UnitTypeDef } from '../types.ts';
 import { boardIdOf, boardOf, boardStateOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
-import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells } from '../skill-hooks.ts';
+import { registerSkillEffect, registerSkillReadyCheck, registerSkillTargetCells, type SkillCtx } from '../skill-hooks.ts';
 import { nodeName, nodeOf, starmapOf } from './starmap.ts';
-import { registerOrbitArrival } from './transit.ts';
+import { registerLaneSpeed, registerOrbitArrival } from './transit.ts';
 import { SILO_ID } from './silo.ts';
 
 export const STATION_CORE_ID = 'station-core';
 export const STATION_PRODUCER_ID = 'station-producer';
+export const STATION_SOLAR_ID = 'station-solar';
+export const STATION_THRUSTER_ID = 'station-thruster';
 
 /** 铺一格甲板的额定价（会乘折扣） */
 export const EXPAND_BASE_COST = 80;
 /** 一座生产舱的额定价（会乘折扣） */
 export const PRODUCER_BASE_COST = 320;
+/** 一块太阳能舱的额定价（会乘折扣） */
+export const SOLAR_BASE_COST = 240;
+/** 一台推进器舱的额定价（会乘折扣） */
+export const THRUSTER_BASE_COST = 420;
 /** 生产舱每回合产多少金币 */
 export const PRODUCER_INCOME = 6;
+
+/* ── 能量：每座空间站自己的一条账 ──────────────────────────────
+ *
+ * 和「装甲与装配」里的电力同一条口径：**能量是派生指标，不是库存**。
+ * 每次现算 `供 - 耗`，不攒、不存。
+ *
+ * 但两者的**范围**不同：装甲那边是"一方所有单位共用一条电网"，
+ * 这里必须**每座站各算各的**——两座站隔着几万公里，不可能互相供电。
+ * 所以 `stationPower` 收的是"哪张站棋盘"，不是"哪个玩家"。
+ *
+ * 数值取整是有意的：玩家在面板上要能心算"再来一块太阳能够不够"。
+ */
+/** 核心舱自带的一点电：让新站至少能带一座生产舱，不至于开局就断电 */
+export const CORE_POWER = 10;
+/** 一块太阳能舱发多少电 */
+export const SOLAR_POWER = 12;
+/** 一座生产舱吃多少电 */
+export const PRODUCER_DRAW = 4;
+/** 一台推进器吃多少电 */
+export const THRUSTER_DRAW = 15;
+
+/** 每台推进器给航道加多少速度（速度 1 + n） */
+export const THRUSTER_SPEED = 1;
 
 /** 一种核心舱：定的是**站的棋盘边长**，核心舱本身是同一个兵种 */
 export interface CoreDef {
@@ -128,6 +157,146 @@ export function createStationBoard(id: string, size: number, name: string): Boar
 /** 这座站是不是空间站（按图判断，别拿 id 前缀猜） */
 export function isStationBoard(s: GameState, board: string): boolean {
   return s.boards?.[board]?.kind === 'station';
+}
+
+/* ===========================================================================
+ * 能量：每座站自己的一条账
+ * ======================================================================== */
+
+export interface StationPower {
+  supply: number;
+  demand: number;
+  headroom: number;
+  cores: number;
+  solars: number;
+  thrusters: number;
+  producers: number;
+  /**
+   * 供电不足。所有耗能舱段一起停机：推进器不提速、生产舱不产金。
+   *
+   * 为什么是"整站停"而不是"按顺序挑几个停"：玩家在面板上看到的是
+   * 一条红条 + 一个负数，最直觉的解释就是"这站电不够，停摆了"。
+   * 挑着停需要另一套优先级规则，而玩家没有理由猜到那个优先级。
+   */
+  brownout: boolean;
+}
+
+/**
+ * 一座站的能量账。
+ *
+ * 收的是**哪张站棋盘**，不是"哪个玩家"——两座站隔着几万公里，
+ * 不可能互相供电。这也是它和 `armor.energyReport`（一方共用一股电）的区别。
+ */
+export function stationPower(s: GameState, board: string): StationPower {
+  let supply = 0;
+  let demand = 0;
+  let cores = 0;
+  let solars = 0;
+  let thrusters = 0;
+  let producers = 0;
+  // `?? []`：界面测试会拿一个只带 starmap 的假 state 来算航程，
+  // 这里不该因为"没有 units 字段"就炸
+  for (const u of s.units ?? []) {
+    if (u.hp <= 0 || boardIdOf(u) !== board) continue;
+    switch (u.type) {
+      case STATION_CORE_ID:
+        cores += 1;
+        supply += CORE_POWER;
+        break;
+      case STATION_SOLAR_ID:
+        solars += 1;
+        supply += SOLAR_POWER;
+        break;
+      case STATION_PRODUCER_ID:
+        producers += 1;
+        demand += PRODUCER_DRAW;
+        break;
+      case STATION_THRUSTER_ID:
+        thrusters += 1;
+        demand += THRUSTER_DRAW;
+        break;
+      default:
+        break;
+    }
+  }
+  return {
+    supply,
+    demand,
+    headroom: supply - demand,
+    cores,
+    solars,
+    thrusters,
+    producers,
+    brownout: demand > supply,
+  };
+}
+
+/** 这支兵所在站的能量账（不在站上返回 null） */
+export function stationPowerOf(s: GameState, u: Unit): StationPower | null {
+  const board = boardIdOf(u);
+  if (!isStationBoard(s, board)) return null;
+  return stationPower(s, board);
+}
+
+/**
+ * 某一方的**航速**：标准速度 1，每台在役推进器 +1。
+ *
+ * 断电的站上的推进器不算——那是"装了但没通电"，玩家在面板上能看见过载，
+ * 也该在航程上看见后果。同一方多座站的推进器**累加**：推进器是给火箭用的，
+ * 火箭发射时不看它装在哪座站上。
+ */
+export function thrusterSpeed(s: GameState, owner: PlayerId): number {
+  const byBoard = new Map<string, number>();
+  for (const u of s.units ?? []) {
+    if (u.owner !== owner || u.hp <= 0 || u.type !== STATION_THRUSTER_ID) continue;
+    const b = boardIdOf(u);
+    if (!isStationBoard(s, b)) continue;
+    byBoard.set(b, (byBoard.get(b) ?? 0) + 1);
+  }
+  let active = 0;
+  for (const [b, n] of byBoard) {
+    if (stationPower(s, b).brownout) continue;
+    active += n;
+  }
+  return 1 + active * THRUSTER_SPEED;
+}
+
+// 注册给航道：航程 = 距离 ÷ 速度（`transit.laneTurnsFor`）
+registerLaneSpeed((s, owner) => thrusterSpeed(s, owner));
+
+/**
+ * 站的能量条（HTML）。
+ *
+ * 样式复用装甲时代那套 `.power-line` / `.power-bar` / `.power-nums`——
+ * 玩家在装配坞已经学过"一条横条 + 供/用/余量"，这边不需要再教一遍。
+ * 只在颜色上区分（`.power-bar.station`），免得和地面电网混起来。
+ */
+export function stationPowerHtml(s: GameState, u: Unit): string | null {
+  const p = stationPowerOf(s, u);
+  if (!p) return null;
+  const over = p.brownout;
+  const pct = p.supply > 0 ? Math.min(100, Math.round((p.demand / p.supply) * 100)) : p.demand > 0 ? 100 : 0;
+  const gen =
+    p.solars > 0
+      ? `核心 ${p.cores * CORE_POWER} + 太阳能 ${p.solars * SOLAR_POWER}`
+      : `核心 ${p.cores * CORE_POWER}`;
+  const parts = [
+    p.solars > 0 ? `${p.solars} 块太阳能` : '',
+    p.thrusters > 0 ? `${p.thrusters} 台推进器` : '',
+    p.producers > 0 ? `${p.producers} 座生产舱` : '',
+  ].filter(Boolean);
+  const speed = thrusterSpeed(s, u.owner);
+  return `<div class="power-line">
+    <div class="power-bar station"><i class="${over ? 'over' : ''}" style="width:${pct}%"></i></div>
+    <div class="power-nums">
+      <span>供电 <b>${p.supply}</b> <em>${gen}</em></span>
+      <span>已用 <b>${p.demand}</b></span>
+      <span class="${over ? 'over' : ''}">${over ? `过载 <b>${-p.headroom}</b>` : `余量 <b>${p.headroom}</b>`}</span>
+    </div>
+  </div>
+  <div class="hint">${parts.length > 0 ? parts.join(' · ') : '只有核心舱'} · 航速 ${speed}${
+    over ? '（<b>断电：推进器与生产舱停摆</b>）' : ''
+  }</div>`;
 }
 
 /**
@@ -239,8 +408,32 @@ const STATION_EXPAND: SkillDef = {
 const STATION_BUILD: SkillDef = {
   id: 'station-build',
   name: '建造生产舱',
-  summary: `在空的甲板上造一座生产舱，每回合产 ${PRODUCER_INCOME} 金。价格按太空建设折扣算。`,
+  summary:
+    `在空的甲板上造一座生产舱，每回合产 ${PRODUCER_INCOME} 金（耗电 ${PRODUCER_DRAW}）。` +
+    '价格按太空建设折扣算。',
   effect: 'station-build',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_SOLAR: SkillDef = {
+  id: 'station-build-solar',
+  name: '建造太阳能舱',
+  summary: `在空的甲板上造一块太阳能舱，发电 ${SOLAR_POWER}。它自己不用电，所以电力再紧也能造。`,
+  effect: 'station-build-solar',
+  cooldown: 0,
+  multiCast: true,
+  targeting: 'point',
+};
+
+const STATION_BUILD_THRUSTER: SkillDef = {
+  id: 'station-build-thruster',
+  name: '建造推进器舱',
+  summary:
+    `在核心舱<b>下半区</b>的空甲板上造一台推进器，耗电 ${THRUSTER_DRAW}。` +
+    `每台让本方航道速度 +${THRUSTER_SPEED}（航程 = 距离 ÷ 速度）。`,
+  effect: 'station-build-thruster',
   cooldown: 0,
   multiCast: true,
   targeting: 'point',
@@ -262,13 +455,54 @@ export const STATION_CORE: UnitTypeDef = {
   vision: 4,
   footprint: 1,
   summonedOnly: true,
-  skills: [STATION_EXPAND, STATION_BUILD],
+  skills: [STATION_EXPAND, STATION_BUILD, STATION_BUILD_SOLAR, STATION_BUILD_THRUSTER],
 };
 
 export const STATION_PRODUCER: UnitTypeDef = {
   id: STATION_PRODUCER_ID,
   name: '生产舱',
   short: '产',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 60,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+export const STATION_SOLAR: UnitTypeDef = {
+  id: STATION_SOLAR_ID,
+  name: '太阳能舱',
+  short: '阳',
+  era: 5,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 50,
+  range: 0,
+  vision: 1,
+  footprint: 1,
+  summonedOnly: true,
+};
+
+/**
+ * 推进器舱：给**全方**的航道提速。
+ *
+ * 位置有硬约束（见 `inThrusterZone`）：必须在核心舱的**下半区**。
+ * 这不是"正下方"——整条下缘都算，因为推进器是"朝后喷"的一组，
+ * 只要求装在核心舱后方，不要求对准某一条轴线。
+ */
+export const STATION_THRUSTER: UnitTypeDef = {
+  id: STATION_THRUSTER_ID,
+  name: '推进器舱',
+  short: '推',
   era: 5,
   category: 'building',
   cost: 0,
@@ -356,22 +590,51 @@ function occupiedAt(s: GameState, self: Unit, x: number, y: number): boolean {
 }
 
 /** 站内所有空的甲板（没有单位占着） */
-registerSkillTargetCells('station-build', ({ state, self }) => {
+function emptyDeckCells(s: GameState, self: Unit): Array<{ x: number; y: number }> {
   const board = boardIdOf(self);
-  const b = boardOf(state, board);
+  const b = boardOf(s, board);
   const out: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < b.h; y++) {
     for (let x = 0; x < b.w; x++) {
-      if (tileOn(state, board, x, y)?.terrain !== 'deck') continue;
-      if (occupiedAt(state, self, x, y)) continue;
+      if (tileOn(s, board, x, y)?.terrain !== 'deck') continue;
+      if (occupiedAt(s, self, x, y)) continue;
       out.push({ x, y });
     }
   }
   return out;
-});
+}
 
-registerSkillEffect('station-build', (c) => {
-  const self = c.self;
+/** 这座站的核心舱（推进器的"下半区"以它为基准） */
+function coreOf(s: GameState, board: string): Unit | undefined {
+  return s.units.find((u) => u.type === STATION_CORE_ID && u.hp > 0 && boardIdOf(u) === board);
+}
+
+/**
+ * 这一格算不算推进器舱的合法位置：核心舱的**下半区**。
+ *
+ * 为什么是"下半区"而不是"正下方"：推进器是一组朝后喷的引擎，
+ * 只要求装在核心舱后方，不要求对准某一条轴线。玩家想摆成一排、
+ * 想贴左缘、想贴右缘都行——这样"下半区"才是一个能规划的形状，
+ * 而不是一条必须精确命中的直线。
+ */
+export function inThrusterZone(s: GameState, self: Unit, x: number, y: number): boolean {
+  const core = coreOf(s, boardIdOf(self));
+  if (!core) return false;
+  return y > core.y && x >= 0 && y >= 0 && x < boardOf(s, boardIdOf(self)).w;
+}
+
+/**
+ * 造一座舱段的公共流程：验格 → 验位置 → 验电 → 验钱 → 落成。
+ *
+ * 三个建造技能只差参数，所以合成一条。最容易写漏的是**耗电检查**：
+ * 以前没有能量这回事，造完就生效；现在"电力不够"必须是建造前的一道闸，
+ * 而不是造出来之后发现它不转。
+ */
+function buildModule(
+  c: SkillCtx,
+  opts: { typeId: string; baseCost: number; draw: number; needThrusterZone?: boolean; what: string },
+): void {
+  const { state, self } = c;
   const t = c.target;
   if (!t) {
     c.result.ok = false;
@@ -379,30 +642,83 @@ registerSkillEffect('station-build', (c) => {
     return;
   }
   const board = boardIdOf(self);
-  if (tileOn(c.state, board, t.x, t.y)?.terrain !== 'deck') {
+  if (tileOn(state, board, t.x, t.y)?.terrain !== 'deck') {
     c.result.ok = false;
     c.result.reason = '只能建在甲板上';
     return;
   }
-  if (occupiedAt(c.state, self, t.x, t.y)) {
+  if (occupiedAt(state, self, t.x, t.y)) {
     c.result.ok = false;
     c.result.reason = '那一格已经有东西了';
     return;
   }
-  const cost = buildCost(c.state, self.owner, PRODUCER_BASE_COST);
-  if (c.state.players[self.owner].gold < cost) {
+  if (opts.needThrusterZone && !inThrusterZone(state, self, t.x, t.y)) {
+    c.result.ok = false;
+    c.result.reason = '推进器必须装在核心舱的下半区';
+    return;
+  }
+  if (opts.draw > 0) {
+    const p = stationPower(state, board);
+    if (p.headroom < opts.draw) {
+      c.result.ok = false;
+      c.result.reason = `电力不够：要 ${opts.draw}，还余 ${p.headroom}`;
+      return;
+    }
+  }
+  const cost = buildCost(state, self.owner, opts.baseCost);
+  if (state.players[self.owner].gold < cost) {
     c.result.ok = false;
     c.result.reason = `金币不够（要 ${cost}）`;
     return;
   }
 
-  c.state.players[self.owner].gold -= cost;
-  const def = c.state.unitTypes[STATION_PRODUCER_ID];
-  c.api.spawn(c.state, self.owner, STATION_PRODUCER_ID, t.x, t.y, board);
+  state.players[self.owner].gold -= cost;
+  c.api.spawn(state, self.owner, opts.typeId, t.x, t.y, board);
   // 刚造出来这一回合不干活：和"新招的兵当回合不能动"同一条
-  const born = c.state.units[c.state.units.length - 1];
+  const born = state.units[state.units.length - 1];
   if (born) born.acted = true;
-  c.result.log = `建成一座${def?.name ?? '生产舱'}（${cost} 金）`;
+  const name = state.unitTypes[opts.typeId]?.name ?? opts.what;
+  c.result.log = `建成一座${name}（${cost} 金）`;
+}
+
+registerSkillTargetCells('station-build', ({ state, self }) => emptyDeckCells(state, self));
+registerSkillTargetCells('station-build-solar', ({ state, self }) => emptyDeckCells(state, self));
+
+registerSkillTargetCells('station-build-thruster', ({ state, self }) => {
+  // 只给下半区：点不亮的格子，玩家一眼就知道推进器该往哪装
+  const board = boardIdOf(self);
+  const b = boardOf(state, board);
+  const core = coreOf(state, board);
+  if (!core) return [];
+  return emptyDeckCells(state, self).filter((p) => inThrusterZone(state, self, p.x, p.y) && p.y < b.h);
+});
+
+registerSkillEffect('station-build', (c) => {
+  buildModule(c, {
+    typeId: STATION_PRODUCER_ID,
+    baseCost: PRODUCER_BASE_COST,
+    draw: PRODUCER_DRAW,
+    what: '生产舱',
+  });
+});
+
+registerSkillEffect('station-build-solar', (c) => {
+  buildModule(c, {
+    typeId: STATION_SOLAR_ID,
+    baseCost: SOLAR_BASE_COST,
+    draw: 0,
+    what: '太阳能舱',
+  });
+});
+
+registerSkillEffect('station-build-thruster', (c) => {
+  buildModule(c, {
+    typeId: STATION_THRUSTER_ID,
+    baseCost: THRUSTER_BASE_COST,
+    draw: THRUSTER_DRAW,
+    needThrusterZone: true,
+    what: '推进器舱',
+  });
 });
 
 registerSkillReadyCheck('station-expand', (s, u) => {
@@ -413,19 +729,44 @@ registerSkillReadyCheck('station-expand', (s, u) => {
 });
 
 registerSkillReadyCheck('station-build', (s, u) => {
+  const p = stationPowerOf(s, u);
+  if (p && p.headroom < PRODUCER_DRAW) {
+    return `电力不够（要 ${PRODUCER_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+  }
   if (s.players[u.owner].gold < buildCost(s, u.owner, PRODUCER_BASE_COST)) {
     return '金币不够';
   }
   return true;
 });
 
-/** 回合开始：每座生产舱给自己主人产金币 */
+registerSkillReadyCheck('station-build-solar', (s, u) => {
+  if (s.players[u.owner].gold < buildCost(s, u.owner, SOLAR_BASE_COST)) {
+    return '金币不够';
+  }
+  return true;
+});
+
+registerSkillReadyCheck('station-build-thruster', (s, u) => {
+  const p = stationPowerOf(s, u);
+  if (p && p.headroom < THRUSTER_DRAW) {
+    return `电力不够（要 ${THRUSTER_DRAW}，还余 ${p.headroom}）：先造太阳能舱`;
+  }
+  if (s.players[u.owner].gold < buildCost(s, u.owner, THRUSTER_BASE_COST)) {
+    return '金币不够';
+  }
+  return true;
+});
+
+/** 回合开始：每座**通电的**生产舱给自己主人产金币 */
 export function tickProducers(s: GameState, player: PlayerId): void {
   if (!s.unitTypes[STATION_PRODUCER_ID]) return;
   let n = 0;
   for (const u of s.units) {
     if (u.owner !== player || u.type !== STATION_PRODUCER_ID) continue;
-    if (!isStationBoard(s, boardIdOf(u))) continue;
+    const board = boardIdOf(u);
+    if (!isStationBoard(s, board)) continue;
+    // 断电的站整站停摆：这条和推进器不提速是同一个判据（见 stationPower）
+    if (stationPower(s, board).brownout) continue;
     n += 1;
   }
   if (n === 0) return;
@@ -447,7 +788,19 @@ export function stationLines(s: GameState, u: Unit): string[] {
   ];
   const expand = buildCost(s, u.owner, EXPAND_BASE_COST);
   const maker = buildCost(s, u.owner, PRODUCER_BASE_COST);
+  const solar = buildCost(s, u.owner, SOLAR_BASE_COST);
+  const thruster = buildCost(s, u.owner, THRUSTER_BASE_COST);
+  const p = stationPower(s, board);
+  out.push(
+    `能量：供电 ${p.supply} / 已用 ${p.demand} / ${p.brownout ? `过载 ${-p.headroom}（全站停摆）` : `余量 ${p.headroom}`}`,
+  );
+  out.push(
+    `舱段：${p.solars} 太阳能 · ${p.thrusters} 推进器 · ${p.producers} 生产舱` +
+      `（航速 ${thrusterSpeed(s, u.owner)}）`,
+  );
   out.push(`扩建一格甲板：${expand} 金`);
-  out.push(`一座生产舱：${maker} 金（每回合 +${PRODUCER_INCOME} 金）`);
+  out.push(`一座生产舱：${maker} 金（每回合 +${PRODUCER_INCOME} 金，耗电 ${PRODUCER_DRAW}）`);
+  out.push(`一块太阳能舱：${solar} 金（发电 ${SOLAR_POWER}）`);
+  out.push(`一台推进器舱：${thruster} 金（耗电 ${THRUSTER_DRAW}，航速 +${THRUSTER_SPEED}）`);
   return out;
 }

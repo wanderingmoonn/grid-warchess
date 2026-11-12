@@ -29,16 +29,31 @@ import { onlyVisibleCells, playerView, viewOnBoard } from '../../../src/core/fog
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../../../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../../../src/core/space/silo.ts';
 import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf, samplingsOf } from '../../../src/core/space/moon-base.ts';
+import { MOON_LANE_DISTANCE } from '../../../src/core/space/starmap.ts';
 import {
+  CORE_POWER,
   EXPAND_BASE_COST,
+  PRODUCER_DRAW,
   PRODUCER_INCOME,
+  SOLAR_BASE_COST,
+  SOLAR_POWER,
   STATION_CORE_ID,
   STATION_PRODUCER_ID,
+  STATION_SOLAR_ID,
+  STATION_THRUSTER_ID,
+  THRUSTER_BASE_COST,
+  THRUSTER_DRAW,
   buildCost,
   buildRate,
   siloWeight,
+  stationPower,
+  stationPowerHtml,
   tickProducers,
+  thrusterSpeed,
 } from '../../../src/core/space/station.ts';
+import { laneTurnsFor } from '../../../src/core/space/transit.ts';
+import { SKILL_TARGET_CELLS } from '../../../src/core/skill-hooks.ts';
+import { MOON_LANE } from '../../../src/core/space/starmap.ts';
 import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
 /** 地球铺平（这些用例只关心规则，不关心地形） */
@@ -167,11 +182,19 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
   assert.equal(cur.units.some((u) => u.id === pax.id), false, '在途单位不在任何棋盘上');
   assert.equal((cur.transit ?? []).length, 1, '有一枚火箭在天上');
   assert.equal(cur.transit![0]!.to, 'moon', '飞向月球');
-  assert.equal(cur.transit![0]!.left, 1, '还有一个回合到');
+  // 地月距离 3、标准速度 1 → 3 回合（推进器能把这个数压下去，见空间站那组用例）
+  assert.equal(
+    cur.transit![0]!.left,
+    MOON_LANE_DISTANCE,
+    `没有推进器时该飞 ${MOON_LANE_DISTANCE} 回合`,
+  );
 
-  // 过一轮回到 A：回合开始的 tickTransit 把它落地
-  run({ type: 'END_TURN' });
-  run({ type: 'END_TURN' });
+  // 过完整的一轮回到 A：回合开始的 tickTransit 把它落地
+  for (let i = 0; i < MOON_LANE_DISTANCE; i += 1) {
+    assert.equal(cur.transit![0]?.left, MOON_LANE_DISTANCE - i, `第 ${i + 1} 轮开始前还剩 ${MOON_LANE_DISTANCE - i}`);
+    run({ type: 'END_TURN' });
+    run({ type: 'END_TURN' });
+  }
   assert.equal((cur.transit ?? []).length, 0, '落地之后天上就没有它了');
 
   const landed = cur.units.find((u) => u.id === pax.id);
@@ -1003,6 +1026,224 @@ test('空间站上的东西按站结算：虚空不可通行、甲板能站', ()
   // 虚空没有地形消耗（99 = 不可通行），甲板是 1
   assert.ok(CONFIG.terrainCost.void >= 99, '虚空不可通行');
   assert.equal(CONFIG.terrainCost.deck, 1, '甲板正常走');
+});
+
+console.log('\n太空战争：舱段与能量');
+
+/** 开一座 5×5 的站（核心舱在正中），返回核心舱与棋盘 id */
+function openStation(): { state: GameState; core: Unit; board: string } {
+  const s = fresh({ expansionIds: ['space-age', 'space-war'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 99999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  const rec = r.state.starmap!.stations[0]!;
+  const core = r.state.units.find((u) => u.type === STATION_CORE_ID)!;
+  return { state: r.state, core, board: rec.board };
+}
+
+/** 直接铺几格甲板（"已经铺好"是前置条件，不是这几条用例要验的东西） */
+function pave(st: GameState, board: string, cells: Array<[number, number]>): void {
+  const b = st.boards![board]!;
+  for (const [x, y] of cells) b.tiles[y * b.w + x]!.terrain = 'deck';
+}
+
+/** 在站上放一座舱段；失败时把原 state 还回来，方便继续断言 */
+function build(
+  st: GameState,
+  coreId: string,
+  skillId: string,
+  x: number,
+  y: number,
+): { ok: boolean; reason?: string; state: GameState } {
+  const r = applyAction(st, { type: 'HERO_SKILL', unitId: coreId, skillId, targetX: x, targetY: y });
+  return { ok: r.ok, ...(r.ok ? {} : { reason: r.reason }), state: r.ok ? r.state : st };
+}
+
+test('太阳能舱：发电抬高余量；电不够时推进器根本造不出来', () => {
+  /*
+   * 能量是**每座站自己**的账：核心舱自带 10 电，一台推进器要 15。
+   * 所以"先造太阳能再造推进器"不是建议，是硬门槛——这条钉住那道闸。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+  const coreId = st.core.id;
+
+  const start = stationPower(cur, board);
+  assert.equal(start.supply, CORE_POWER, '核心舱自带一点电');
+  assert.equal(start.demand, 0);
+  assert.equal(start.headroom, CORE_POWER);
+
+  pave(cur, board, [[3, 3], [1, 1]]);
+
+  // 只有核心舱：10 电带不动 15 电的推进器
+  const noPower = build(cur, coreId, 'station-build-thruster', 3, 3);
+  assert.equal(noPower.ok, false, '电力不够就不该造得出来');
+  assert.ok(noPower.reason?.includes('电力'), `理由要说清是电的问题：${noPower.reason}`);
+
+  // 一块太阳能 +12 → 22 电，够了
+  const solar = build(cur, coreId, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+  const withSolar = stationPower(cur, board);
+  assert.equal(withSolar.supply, CORE_POWER + SOLAR_POWER, '一块太阳能 +12');
+  assert.equal(withSolar.solars, 1);
+
+  const thruster = build(cur, coreId, 'station-build-thruster', 3, 3);
+  assert.ok(thruster.ok, thruster.ok ? '' : thruster.reason);
+  cur = thruster.state;
+  const p = stationPower(cur, board);
+  assert.equal(p.demand, THRUSTER_DRAW, '推进器吃 15 电');
+  assert.equal(p.headroom, CORE_POWER + SOLAR_POWER - THRUSTER_DRAW);
+  assert.ok(p.headroom >= 0 && !p.brownout, '这时候还没过载');
+
+  // 再铺一格、再造一台：余 7 带不动第二台
+  pave(cur, board, [[3, 4]]);
+  const second = build(cur, coreId, 'station-build-thruster', 3, 4);
+  assert.equal(second.ok, false, '第二台推进器要 15 电，余量只有 7');
+  assert.ok(second.reason?.includes('电力'), `实际：${second.reason}`);
+});
+
+test('推进器舱：必须装在核心舱的下半区，上半区连高亮都不给', () => {
+  /*
+   * "下半区"不是"正下方"：整条下缘都算（见 inThrusterZone）。
+   * 这条同时验两件事——可点格列表里没有上半区，硬点也造不出来。
+   */
+  const st = openStation();
+  const cur = st.state;
+  const board = st.board;
+
+  // 核心舱在 (2,2)：上半区是 y<2，下半区是 y>2
+  pave(cur, board, [[2, 1], [0, 3]]);
+
+  const cells = SKILL_TARGET_CELLS['station-build-thruster']!({
+    state: cur,
+    view: cur,
+    self: st.core,
+    skill: cur.unitTypes[STATION_CORE_ID]!.skills!.find((k) => k.id === 'station-build-thruster'),
+  });
+  assert.equal(
+    cells.some((c) => c.x === 2 && c.y === 1),
+    false,
+    '上半区不该出现在可点格里',
+  );
+  assert.equal(
+    cells.some((c) => c.x === 0 && c.y === 3),
+    true,
+    '下半区的左缘也算（不是只有正下方）',
+  );
+
+  // 绕过界面直接施放也不行
+  const up = build(cur, st.core.id, 'station-build-thruster', 2, 1);
+  assert.equal(up.ok, false);
+  assert.ok(up.reason?.includes('下半区'), `实际：${up.reason}`);
+});
+
+test('推进器提速：航程 = 距离 ÷ 速度，两台把地月压到 1 回合', () => {
+  /*
+   * 地月距离 3。标准速度 1 → 3 回合；每台推进器 +1 速度。
+   * 这是 P2b 的验收：推进器真的接上了 `laneTurnsFor`，不是只有个名字。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+  const lane = cur.starmap!.lanes.find((l) => l.id === MOON_LANE)!;
+
+  assert.equal(thrusterSpeed(cur, 'A'), 1, '没有推进器时标准速度');
+  assert.equal(laneTurnsFor(cur, 'A', lane), MOON_LANE_DISTANCE, '距离 3、速度 1 → 3 回合');
+  // 对手没推进器，同一段路对他还是 3 回合
+  assert.equal(laneTurnsFor(cur, 'B', lane), MOON_LANE_DISTANCE);
+
+  // 三块太阳能（46 电）+ 两台推进器（30 电）
+  pave(cur, board, [[0, 0], [1, 0], [0, 1], [3, 3], [3, 4]]);
+  for (const [x, y] of [[0, 0], [1, 0], [0, 1]] as Array<[number, number]>) {
+    const r = build(cur, st.core.id, 'station-build-solar', x, y);
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    cur = r.state;
+  }
+
+  const t1 = build(cur, st.core.id, 'station-build-thruster', 3, 3);
+  assert.ok(t1.ok, t1.ok ? '' : t1.reason);
+  cur = t1.state;
+  assert.equal(thrusterSpeed(cur, 'A'), 2, '一台 → 速度 2');
+  assert.equal(laneTurnsFor(cur, 'A', lane), 2, '距离 3 ÷ 速度 2 → 2 回合');
+
+  const t2 = build(cur, st.core.id, 'station-build-thruster', 3, 4);
+  assert.ok(t2.ok, t2.ok ? '' : t2.reason);
+  cur = t2.state;
+  assert.equal(thrusterSpeed(cur, 'A'), 3, '两台 → 速度 3');
+  assert.equal(laneTurnsFor(cur, 'A', lane), 1, '距离 3 ÷ 速度 3 → 1 回合（下限 1）');
+});
+
+test('断电：太阳能被打掉，整站停摆——推进器不提速、生产舱不产金', () => {
+  /*
+   * 过载不是只写在面板上的红字：断电的站上，推进器不再给速度，
+   * 生产舱也不再产金。这一条让"面板上的红条"真的对应后果。
+   */
+  const st = openStation();
+  let cur = st.state;
+  const board = st.board;
+
+  pave(cur, board, [[1, 1], [3, 3], [4, 4]]);
+  const solar = build(cur, st.core.id, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+  const thruster = build(cur, st.core.id, 'station-build-thruster', 3, 3);
+  assert.ok(thruster.ok, thruster.ok ? '' : thruster.reason);
+  cur = thruster.state;
+  assert.equal(thrusterSpeed(cur, 'A'), 2);
+
+  // 把太阳能打掉（P2c 之前没有攻站，这里直接改 hp 模拟"被摧毁"）
+  cur.units.filter((u) => u.type === STATION_SOLAR_ID).forEach((u) => {
+    u.hp = 0;
+  });
+  const p = stationPower(cur, board);
+  assert.ok(p.brownout, '没有太阳能就该过载');
+  assert.equal(thrusterSpeed(cur, 'A'), 1, '断电的推进器不提供速度');
+
+  /*
+   * 生产舱同理。先修好太阳能把生产舱造出来，再把太阳能打掉——
+   * 顺序反过来的话"造不出来"会掩盖"造出来也不产金"这条。
+   */
+  cur.units.filter((u) => u.type === STATION_SOLAR_ID).forEach((u) => {
+    u.hp = 1;
+  });
+  const maker = build(cur, st.core.id, 'station-build', 4, 4);
+  assert.ok(maker.ok, maker.ok ? '' : maker.reason);
+  cur = maker.state;
+  cur.units.filter((u) => u.type === STATION_SOLAR_ID).forEach((u) => {
+    u.hp = 0;
+  });
+  assert.ok(stationPower(cur, board).brownout, '前提：这时候确实断电');
+  const goldBefore = cur.players.A.gold;
+  tickProducers(cur, 'A');
+  assert.equal(cur.players.A.gold, goldBefore, '断电的生产舱不该产金');
+});
+
+test('能量条：在面板上能看到供电、已用、余量与航速', () => {
+  /*
+   * 站的能量条走 `getTilePanelHtml`（成品 HTML），因为它要一条横条；
+   * `getUnitPanelLines` 只能吐纯文本。这条钉住那几个数真的画出来了。
+   */
+  const st = openStation();
+  let cur = st.state;
+  cur.players.A.gold = 99999;
+  pave(cur, st.board, [[1, 1], [3, 3]]);
+  const solar = build(cur, st.core.id, 'station-build-solar', 1, 1);
+  assert.ok(solar.ok, solar.ok ? '' : solar.reason);
+  cur = solar.state;
+
+  const core = cur.units.find((u) => u.type === STATION_CORE_ID)!;
+  const html = stationPowerHtml(cur, core);
+  assert.ok(html, '核心舱上要能拿到能量条');
+  assert.ok(html!.includes('供电'), '要有供电');
+  assert.ok(html!.includes(String(CORE_POWER + SOLAR_POWER)), '供电数是 22');
+  assert.ok(html!.includes('余量'), '没有过载时显示余量');
+  assert.ok(html!.includes('航速 1'), '标准航速要写出来');
+  assert.equal(stationPowerHtml(cur, { ...core, board: 'earth' } as never), null, '地球上的单位没有站能量');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

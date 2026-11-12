@@ -40,7 +40,7 @@ import {
 } from './moon-base.ts';
 import { boardIdOf } from '../board.ts';
 import { MOON_BOARD } from './moon.ts';
-import { createStarmap, MOON_LANE_TURNS, starmapOf } from './starmap.ts';
+import { createStarmap, MOON_LANE_DISTANCE, starmapOf } from './starmap.ts';
 import { tickTransit, transitCountOf } from './transit.ts';
 
 /**
@@ -72,7 +72,8 @@ export const SPACE_AGE: Expansion = {
     + '地形只有月壤与环形山，没有城市。'
     + '左下角的地图列表可以在两张图之间切换，每张图各记各的相机。'
     + '<b>时代 5 可以修「火箭发射井」</b>（2×2、建在平原）：装一个地面单位，'
-    + `加注 ${SILO_FUEL_TURNS} 回合后点火，进入<b>地月航道</b>，${MOON_LANE_TURNS} 回合后落到月面。`
+    + `加注 ${SILO_FUEL_TURNS} 回合后点火，进入<b>地月航道</b>（距离 ${MOON_LANE_DISTANCE}），`
+    + '航程 = 距离 ÷ 速度：标准速度 1 时 3 回合落到月面，装了推进器的会更快。'
     + '把一支<b>工程单位</b>送上去，它能在月面展开成 2×2 的<b>月球基地</b>；'
     + `基地的主动技能「月壤采样」${SAMPLE_TURNS} 个回合后把结果送回地球——<b>结果一到就赢</b>。`,
   scale: 'large',
@@ -86,8 +87,10 @@ export const SPACE_AGE: Expansion = {
     `加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满 ${SILO_FUEL_TURNS} 回合才能点火。`
       + '发射后燃料清零，要再飞一趟就重新加注。'
       + '<b>进度是公开的</b>：每回合发一条战报（加注 1/3、2/3…），对手读得到你还有几回合就飞。',
-    '<b>航道</b>：地球和月球之间连着一条地月航道，点火之后单位进入航道飞 '
-      + `${MOON_LANE_TURNS} 个回合——顶栏会出现「红方 火箭 ${MOON_LANE_TURNS}」，双方都看得见。`
+    '<b>航道</b>：地球和月球之间连着一条地月航道（<b>距离 3</b>），点火之后单位进入航道飞 '
+      + '<b>距离 ÷ 速度</b> 个回合（向上取整，至少 1）：标准速度 1 是 3 回合，'
+      + '每多一台「推进器舱」速度 +1，两台就能压到 1 回合。'
+      + '顶栏会出现「红方 火箭 n」，双方都看得见。'
       + '在途的单位不在任何棋盘上，<b>打不到</b>：航道只计时，不是战场。'
       + '落地之后当回合不能动。',
     '<b>井藏不住</b>：发射井一建成就会在敌方视野里点亮一整个敌方回合；'

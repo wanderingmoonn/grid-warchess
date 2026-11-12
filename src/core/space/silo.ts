@@ -26,7 +26,7 @@ import type { GameState, PlayerId, StarNodeId, Unit, UnitTypeDef } from '../type
 import { underConstruction } from '../query.ts';
 import { markSpotlight, clearSpotlight } from '../spotlight.ts';
 import { lanesFrom, nodeById, nodeName, nodeOf } from './starmap.ts';
-import { cellName, enterLane, landingSpotOn } from './transit.ts';
+import { cellName, enterLane, landingSpotOn, laneTurnsFor } from './transit.ts';
 
 /** 建筑 id。写进存档，改它等于让老存档里的发射井变成一块石头 */
 export const SILO_ID = 'rocket_silo';
@@ -126,7 +126,8 @@ function outboundLane(
   if (!here) return null;
   const out = lanesFrom(s, here.id)[0];
   if (!out) return null;
-  return { laneId: out.lane.id, to: out.to, turns: out.lane.turns };
+  // 面板上要写"我这边的火箭要几回合"，所以按自己（发射方）的速度算
+  return { laneId: out.lane.id, to: out.to, turns: laneTurnsFor(s, silo.owner, out.lane) };
 }
 
 /** 发射前的检查。和发射本身分开：面板要用同一句话告诉玩家"还差什么" */

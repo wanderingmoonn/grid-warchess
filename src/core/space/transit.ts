@@ -25,15 +25,40 @@
  *      对手得看得见，才谈得上在落点等它。这是基础包里"加注进度公开"的延续。
  */
 
-import type { BoardId, GameState, PlayerId, StarNodeId, Transit, Unit } from '../types.ts';
+import type { BoardId, GameState, PlayerId, StarLane, StarNodeId, Transit, Unit } from '../types.ts';
 import { boardIdOf, boardOf, tileOn } from '../board.ts';
 import { tilesOfUnit } from '../query.ts';
 import { passable } from '../config.ts';
-import { starmapOf, nodeName } from './starmap.ts';
+import { laneDistance, starmapOf, nodeName } from './starmap.ts';
 
 /** 面板上的一格坐标写法（A1） */
 export function cellName(x: number, y: number): string {
   return `${String.fromCharCode(65 + x)}${y + 1}`;
+}
+
+/* ===========================================================================
+ * 航速：航程 = 距离 ÷ 速度
+ * ======================================================================== */
+
+/**
+ * 某一方飞一段航道的**速度**。
+ *
+ * 现在唯一的速度来源是空间站上的推进器舱（`space-war` 包注册）。
+ * 用注册而不是直接 import，是因为 transit 在**基础包**里，不能认识太空战争；
+ * 而且反向 import 会成环（station → silo → transit → station）。
+ */
+export type LaneSpeed = (s: GameState, owner: PlayerId, lane: StarLane) => number;
+
+let laneSpeed: LaneSpeed | null = null;
+
+export function registerLaneSpeed(fn: LaneSpeed): void {
+  laneSpeed = fn;
+}
+
+/** 实际航程（回合）。速度至少 1，结果至少 1——再快也得飞一回合 */
+export function laneTurnsFor(s: GameState, owner: PlayerId, lane: StarLane): number {
+  const speed = Math.max(1, laneSpeed ? laneSpeed(s, owner, lane) : 1);
+  return Math.max(1, Math.ceil(laneDistance(lane) / speed));
 }
 
 function log(s: GameState, p: PlayerId, text: string, open = false): void {
@@ -135,7 +160,8 @@ export function enterLane(
     from: opts.from ?? from,
     to: opts.to,
     ...(kind === 'orbit' ? { kind } : {}),
-    left: lane.turns,
+    // 实际回合数按"距离 ÷ 速度"算：同一段路，有推进器的一方先到
+    left: laneTurnsFor(s, opts.owner, lane),
     cargo: opts.cargo.map((u) => ({ ...u })),
   };
   s.transit = [...(s.transit ?? []), t];

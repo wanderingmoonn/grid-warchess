@@ -14,6 +14,7 @@
 
 import type { GameState, PlayerId, StarNodeId } from '../core/types.ts';
 import { peekStarmap, EARTH_NODE } from '../core/space/starmap.ts';
+import { laneTurnsFor } from '../core/space/transit.ts';
 
 export interface StarStationCell {
   board: string;
@@ -66,7 +67,11 @@ function sizeFor(count: number): number {
  * 没有星图（没开太空那类扩展、或这一局只有地球）时返回 null——
  * 调用方据此不画星图、也不给入口。
  */
-export function starLayout(s: GameState): StarLayout | null {
+/**
+ * `viewer` 决定"航程"这一列显示几回合：距离是死的，速度是活的
+ * （推进器越多飞越快，见 `laneTurnsFor`）。不传就看当前行动的玩家。
+ */
+export function starLayout(s: GameState, viewer: PlayerId = s.current): StarLayout | null {
   const map = peekStarmap(s);
   if (!map || map.nodes.length <= 1) return null;
 
@@ -149,7 +154,7 @@ export function starLayout(s: GameState): StarLayout | null {
     const a = byId.get(l.a);
     const b = byId.get(l.b);
     if (!a || !b) continue;
-    lanes.push({ id: l.id, a, b, turns: l.turns });
+    lanes.push({ id: l.id, a, b, turns: laneTurnsFor(s, viewer, l) });
   }
 
   return { size, nodes: cells, lanes };
