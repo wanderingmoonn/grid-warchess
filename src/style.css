@@ -826,15 +826,21 @@ html[data-terrain='on'] .tiles {
  * 轨道里），相邻格重新分配宽度，反而把底下的缝推出来。
  */
 html[data-terrain='on'] .tile {
+  /*
+   * 让材质铺到**边框**下面。
+   *
+   * `background-origin` 的初始值是 `padding-box`：贴图从内边距框开始画，
+   * 而那 1px 透明边框里露出来的是格子自己的 `background-color`。
+   * 于是在整片山/丘陵上会浮出一层浅色网格线——不是抗锯齿、不是接缝，
+   * 就是底色从边框里透出来。改成 border-box，边框那 1px 也归贴图管。
+   */
+  background-origin: border-box;
   border-color: transparent;
 }
-html[data-terrain='on'] .tile.t-deep,
-html[data-terrain='on'] .tile.t-mountain,
-html[data-terrain='on'] .tile.t-plateau,
-html[data-terrain='on'] .tile.t-shallow,
-html[data-terrain='on'] .tile.t-lava {
-  box-shadow: none;
-}
+/*
+ * 内描边（`inset 0 0 0 1px`）统一由下面那条合成规则盖掉：合成用的是透明的
+ * 占位阴影，等于把各 terrain 自带的"每格一圈"关掉，又不会和新的边缘阴影打架。
+ */
 /* 浅水的横条是逐格重复的：相位对不上，相邻格接起来就是"每格一条横线" */
 html[data-terrain='on'] .tile.t-shallow::before {
   display: none;
@@ -1032,28 +1038,130 @@ html[data-terrain='on'] .tile.t-hill {
  *
  * 上亮下暗是有意的：抬起来的东西，上沿吃光、下沿投影，光的方向和树、土堆一致。
  */
-html[data-terrain='on'] .tile.t-hill {
+/*
+ * 阴影合成：所有 terrain 共用一条 `box-shadow`，八条占位阴影分别由
+ * `--e-*`（自己这块地的四缘）和 `--m-*`（邻格高山投过来的影子）填。
+ *
+ * 为什么必须合成一条：`box-shadow` 是整条覆盖的，分开写四五个规则的话，
+ * 后写的会把前面的顶掉——之前丘陵"只有一边有坎"就是这个原因。
+ */
+html[data-terrain='on'] .tile {
+  /* 一格宽。下面所有阴影的尺寸都按它的比例算，缩放时自动跟着变 */
+  --u: var(--cell, 44px);
   --e-t: 0 0 0 transparent;
   --e-r: 0 0 0 transparent;
   --e-b: 0 0 0 transparent;
   --e-l: 0 0 0 transparent;
+  --m-t: 0 0 0 transparent;
+  --m-r: 0 0 0 transparent;
+  --m-b: 0 0 0 transparent;
+  --m-l: 0 0 0 transparent;
   box-shadow:
     var(--e-t),
     var(--e-r),
     var(--e-b),
-    var(--e-l);
+    var(--e-l),
+    var(--m-t),
+    var(--m-r),
+    var(--m-b),
+    var(--m-l);
 }
+/*
+ * 下面四条 `--e-*` 全部改用 `--u`（= 一格宽）的比例，不再写死 px。
+ *
+ * 以前的像素值是按格宽 25px 调的，放大到 66px 时那道坎只剩薄薄一层，
+ * 缩到 20px 又糊成一团——"放大和 32×32 时尤其明显"的缺陷报告里有一半是它。
+ * 坎的本质是"坡有多高"，坡当然该跟着格子一起长。
+ */
 html[data-terrain='on'] .tile.t-hill[data-et='1'] {
-  --e-t: inset 0 3px 3px -2px rgba(255, 252, 240, 0.55);
+  --e-t: inset 0 calc(var(--u) * 0.12) calc(var(--u) * 0.12) calc(var(--u) * -0.08) rgba(255, 252, 240, 0.55);
 }
 html[data-terrain='on'] .tile.t-hill[data-eb='1'] {
-  --e-b: inset 0 -6px 7px -4px rgba(96, 74, 42, 0.55);
+  --e-b: inset 0 calc(var(--u) * -0.24) calc(var(--u) * 0.28) calc(var(--u) * -0.16) rgba(96, 74, 42, 0.55);
 }
 html[data-terrain='on'] .tile.t-hill[data-el='1'] {
-  --e-l: inset 4px 0 5px -3px rgba(96, 74, 42, 0.30);
+  --e-l: inset calc(var(--u) * 0.16) 0 calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.30);
 }
 html[data-terrain='on'] .tile.t-hill[data-er='1'] {
-  --e-r: inset -4px 0 5px -3px rgba(96, 74, 42, 0.30);
+  --e-r: inset calc(var(--u) * -0.16) 0 calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.30);
+}
+
+/*
+ * 高山：同一套 `--e-*`，但**重一档**。
+ *
+ * 丘陵的坎是 0.12~0.28 格宽、alpha 0.3~0.55；山用 0.24~0.56、0.45~0.60，
+ * 底部那道压得最深最宽（山的侧面高，投在自己脚下的阴影也长）。
+ * 上沿的亮边反而收了一点（0.45）：峰体自己顶上就有高光，格边上再来一道
+ * 亮线会变成"每格一个框"。
+ */
+html[data-terrain='on'] .tile.t-mountain[data-et='1'] {
+  --e-t: inset 0 calc(var(--u) * 0.24) calc(var(--u) * 0.28) calc(var(--u) * -0.16) rgba(255, 252, 240, 0.45);
+}
+html[data-terrain='on'] .tile.t-mountain[data-eb='1'] {
+  /*
+   * 南缘是山的"立面"。两条阴影叠起来才有立面感：
+   *   宽而软的一条 = 坡；
+   *   贴边窄而硬的一条 = 坡脚那条折线（没有它，坡就是一团雾）。
+   */
+  --e-b:
+    inset 0 calc(var(--u) * -0.46) calc(var(--u) * 0.34) calc(var(--u) * -0.16) rgba(26, 32, 44, 0.52),
+    inset 0 calc(var(--u) * -0.07) calc(var(--u) * 0.05) 0 rgba(20, 26, 36, 0.42);
+}
+html[data-terrain='on'] .tile.t-mountain[data-el='1'] {
+  --e-l:
+    inset calc(var(--u) * 0.30) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(26, 32, 44, 0.38),
+    inset calc(var(--u) * 0.05) 0 calc(var(--u) * 0.04) 0 rgba(20, 26, 36, 0.34);
+}
+html[data-terrain='on'] .tile.t-mountain[data-er='1'] {
+  --e-r:
+    inset calc(var(--u) * -0.30) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(26, 32, 44, 0.38),
+    inset calc(var(--u) * -0.05) 0 calc(var(--u) * 0.04) 0 rgba(20, 26, 36, 0.34);
+}
+
+/*
+ * 邻格投过来的影子（`data-m*`）—— "谁比谁高"最管用的那条线索。
+ *
+ * 一块地高不高，眼睛主要看**旁边陷不陷下去**，而不是自己画得多亮。
+ * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
+ * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
+ *
+ * 值从 "1" 改成 `m` / `h`：m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
+ * 这样画出来是**两级台阶**——丘陵把地面压低一点，山再压低一截。
+ * 以前只有山有影子，于是"山"只是"一块更灰的地"，因为没有参照物说它更高。
+ *
+ * 冷暖也分开：山影偏冷（蓝灰），丘影偏暖（土黄）。冷暖差比明度差更容易
+ * 读出"远处的高地"，而且不会让整片地都变脏。
+ */
+html[data-terrain='on'] .tile[data-mt='m'] {
+  /*
+   * 山投在下一格上的影子，同样两层：一层铺开（影子的衰减）、一层贴边（接触影）。
+   * 只有软的一层时，远看像那块地"本来就暗"，不像"被挡住了光"。
+   */
+  --m-t:
+    inset 0 calc(var(--u) * 0.52) calc(var(--u) * 0.72) calc(var(--u) * -0.34) rgba(24, 30, 44, 0.46),
+    inset 0 calc(var(--u) * 0.10) calc(var(--u) * 0.12) 0 rgba(20, 26, 38, 0.34);
+}
+html[data-terrain='on'] .tile[data-ml='m'] {
+  --m-l: inset calc(var(--u) * 0.36) 0 calc(var(--u) * 0.44) calc(var(--u) * -0.24) rgba(26, 32, 46, 0.26);
+}
+html[data-terrain='on'] .tile[data-mr='m'] {
+  --m-r: inset calc(var(--u) * -0.44) 0 calc(var(--u) * 0.52) calc(var(--u) * -0.28) rgba(26, 32, 46, 0.34);
+}
+html[data-terrain='on'] .tile[data-mb='m'] {
+  --m-b: inset 0 calc(var(--u) * -0.24) calc(var(--u) * 0.36) calc(var(--u) * -0.24) rgba(26, 32, 46, 0.22);
+}
+
+html[data-terrain='on'] .tile[data-mt='h'] {
+  --m-t: inset 0 calc(var(--u) * 0.18) calc(var(--u) * 0.34) calc(var(--u) * -0.14) rgba(96, 74, 42, 0.22);
+}
+html[data-terrain='on'] .tile[data-ml='h'] {
+  --m-l: inset calc(var(--u) * 0.14) 0 calc(var(--u) * 0.24) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.14);
+}
+html[data-terrain='on'] .tile[data-mr='h'] {
+  --m-r: inset calc(var(--u) * -0.18) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(96, 74, 42, 0.18);
+}
+html[data-terrain='on'] .tile[data-mb='h'] {
+  --m-b: inset 0 calc(var(--u) * -0.12) calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.12);
 }
 
 /*
@@ -1127,21 +1235,37 @@ html[data-terrain='on'] .board.big .tile.t-deep {
 html[data-terrain='on'] .tile.t-deep::before {
   display: none;
 }
-html[data-terrain='on'] .tile.t-mountain {
-  background-image: url('/art/terrain/mountain.webp');
-}
 /*
- * 山在材质模式下**不叠那座白色假山**。
+ * 高山（2026-11-13 第二次重做）。
  *
- * 那个三角形是 `clip-path` 画的，白顶 + 灰身，压在一张岩石材质上像贴纸——
- * 用户截图里最刺眼的就是这一排。但三角形本身不能删：它是"这是山、任何单位
- * 都过不去"的唯一形状信号（光靠灰色和月壤、城市分不清）。
- * 所以改成一条很淡的棱线：读得出"这里有山"，但不像贴上去的。
+ * 走过两条死路，都记在这里，免得再走：
+ *
+ *   ① **一格一座峰**（程序画的三角锥 / 图像生成的写实峰体）。锥体的轮廓太强，
+ *      一格一个就成了盖章：九格九个尖，横竖都对齐；换成写实的又和淡彩平面打架。
+ *      用户的话："你怎么跑都是一个三角锥，稍微写实一点就又违和又不好看。"
+ *   ② **浅灰细麻点**（原始那版）。也没有形状，而且当年连 `background-size` 都
+ *      没写，每格都在采样同一小块，整片山是一模一样的浅灰方板。
+ *
+ * 现在这一版不放任何"单格物件"，只做**连续的石质地面**：
+ * 纹理横跨 5 格、按格坐标取景，相邻格接得上；高差完全交给阴影三条线——
+ * 区域的坎（`--e-*`）、邻格的投影（`data-m*`）、以及纹理自己的大尺度明暗。
+ */
+/*
+ * 只换成材质，**不再叠任何形状**：`.tile.t-mountain::before` 是给"关掉材质"
+ * 那套图标用的三角锥，材质模式下必须关掉——否则岩面底下会冒出一排蓝三角，
+ * 就是上一轮被否掉的"盖章"。
  */
 html[data-terrain='on'] .tile.t-mountain::before {
-  inset: 38% 26% 26% 26%;
-  background: rgba(58, 64, 78, 0.22);
-  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  display: none;
+}
+
+html[data-terrain='on'] .tile.t-mountain {
+  background-image: url('/art/terrain/mountain.webp');
+  background-size: calc(var(--u) * 5) calc(var(--u) * 5);
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--u) * -1)
+    calc(var(--y, 0) * var(--u) * -1);
 }
 
 /* 浅水：细波纹。和水面色只差一点，靠"有纹路"表达"这是水" */

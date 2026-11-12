@@ -37,6 +37,7 @@ import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 import { unitArtUrl } from './unit-art.ts';
+import { uiTerrainOn } from './terrain-art.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -673,8 +674,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         const v = dense ? '1' : '0';
         if (node.dataset.v !== v) node.dataset.v = v;
       }
-      if (cls.includes('t-hill')) {
-
+      /*
+       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵和高山都要。
+       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈——两者共用同一套数据，
+       * 只是 CSS 里的强度不同，这是"高山看起来比丘陵高"的一半来源。
+       */
+      if (cls.includes('t-hill') || cls.includes('t-mountain')) {
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
           return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
@@ -688,7 +693,51 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (node.dataset.eb !== eb) node.dataset.eb = eb;
         if (node.dataset.el !== el) node.dataset.el = el;
       }
-      if (layer.cls[i] !== cls) {
+
+      /*
+       * 邻格投过来的影子（`data-mt/mr/mb/ml`）——"谁比谁高"最管用的那条线索。
+       *
+       * 一块地高不高，眼睛主要看**旁边陷不陷下去**，而不是自己画得多亮。
+       * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
+       * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
+       *
+       * 值的含义从"1"改成 `m` / `h`：
+       *   m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
+       * 于是同一套数据画出一条**两级台阶**——丘陵把地面压低一点，山再压低一截，
+       * 而不是"山有影子、丘陵没有"，让人分不清是山高还是丘陵本来就平的。
+       *
+       * 山与山之间不投影（一条山脊，不该有缝），所以给山自己清空。
+       */
+      if (cls.includes('t-mountain')) {
+        if (node.dataset.mt) {
+          delete node.dataset.mt;
+          delete node.dataset.mr;
+          delete node.dataset.mb;
+          delete node.dataset.ml;
+        }
+      } else {
+        const kindAt = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
+          const t = dispTerrain[ty * s.w + tx];
+          return t === 'mountain' ? 'm' : t === 'hill' ? 'h' : '0';
+        };
+        const mt = kindAt(x, y - 1);
+        const mr = kindAt(x + 1, y);
+        const mb = kindAt(x, y + 1);
+        const ml = kindAt(x - 1, y);
+        if (mt !== '0' || mr !== '0' || mb !== '0' || ml !== '0') {
+          if (node.dataset.mt !== mt) node.dataset.mt = mt;
+          if (node.dataset.mr !== mr) node.dataset.mr = mr;
+          if (node.dataset.mb !== mb) node.dataset.mb = mb;
+          if (node.dataset.ml !== ml) node.dataset.ml = ml;
+        } else if (node.dataset.mt) {
+          delete node.dataset.mt;
+          delete node.dataset.mr;
+          delete node.dataset.mb;
+          delete node.dataset.ml;
+        }
+      }
+if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
         node.className = cls;
@@ -1045,8 +1094,13 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
    *
    * 只在 `.unit-inner` 的**内容**上换，圆角方块和阵营底色都不动——
    * 阵营色回答的是"这是谁的兵"，比"这是什么兵"更该优先读到，图替换掉的只是字。
+   *
+   * **地形材质开着时一律用汉字（2026-11-12）**：地上的树、石、水都是淡彩平面，
+   * 兵种那批像素小人压在上面又碎又花，整张图变成两种画风打架。
+   * 用户的判断是"目前兵种贴图太难看"，所以材质模式下退回汉字，
+   * 棋子贴图这个开关只在"原版"地面下才有意义。
    */
-  const artUrl = unitArtUrl(u.type);
+  const artUrl = uiTerrainOn() ? null : unitArtUrl(u.type);
   const glyph = artUrl
     ? `<img class="unit-art" src="${artUrl}" alt="" draggable="false" />`
     : def.short;
