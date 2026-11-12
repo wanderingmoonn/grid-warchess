@@ -567,42 +567,14 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       const jx = ((x * 37 + y * 61) % 7) * 3;
       const jy = ((x * 53 + y * 17) % 7) * 3;
       /*
-       * 地形 tile 的变体号（0/1/2）——**按"林子深处/中间/边缘"分配**，不是随机。
+       * 森林的疏密（`data-v`）**不在这里定**。
        *
-       * 第一版用 (x*7+y*13)%3 纯按坐标取模：技术上确实"不连续"，但观感上
-       * 三种树一格一换，像把三张贴纸随手撒在格子上，一片林子看不出结构。
+       * 它取决于"周围几格是林子"，而那要按**画出来的地形**算（雾里看到的是记忆里的
+       * 地形，见下面 dispTerrain）。这条信息在渲染循环里才有，所以放到那儿写。
        *
-       * 现在按 8 邻居里有几格是同种地形来分层：
-       *   5~8 个 → 深处（0，大冠树）—— 林子的芯
-       *   2~4 个 → 中间（1，针叶）—— 过渡带
-       *   0~1 个 → 边缘（2，灌木）—— 贴着草地的边
-       * 单格孤立的树自然全是灌木，成片的林子外面一圈灌木、里面大树，
-       * 远看就有"林缘 → 林心"的层次。
-       *
-       * 再叠一点按坐标的微扰（约 1/9 的格子顺延一档），否则同一层会过于整齐。
+       * 那段算 8 邻居数的代码（ring/variant）随之删掉——它服务的是旧的"深处/过渡/
+       * 林缘三档"，而灌木那一档已经去掉，改成"四邻全是林子就多长一棵针叶"。
        */
-      const terrainAt = (tx: number, ty: number): string | null =>
-        tx < 0 || ty < 0 || tx >= s.w || ty >= s.h
-          ? null
-          : (s.tiles[ty * s.w + tx]?.terrain ?? null);
-      const here = s.tiles[i]?.terrain ?? null;
-      let same = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          if (terrainAt(x + dx, y + dy) === here) same += 1;
-        }
-      }
-      /*
-       * 同地形之间那条线，**不在这一层解决**。
-       *
-       * 这里曾经算出 `data-jr / data-jd`，让 CSS 把相邻同地形的那条边设成
-       * transparent。抹不干净：真正的缝不是 border，是每格背景各自绘制、
-       * 各自由亚像素落点抗锯齿留下的 1px 差。现在地面整块挂在 `.tiles` 上、
-       * 格子一律 `border-color: transparent`（见 style.css 的地形材质段）。
-       */
-      const ring = same >= 5 ? 0 : same >= 2 ? 1 : 2;
-      const variant = (ring + ((x * 17 + y * 23) % 9 === 0 ? 1 : 0)) % 3;
       /*
        * 稀疏地形的装饰密度：约 1/5 的格子带一个小图案，其余留白。
        *
@@ -616,7 +588,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 相邻格取相邻区域，整片才是一块连续的地面。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
@@ -669,6 +641,23 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 邻接按 `dispTerrain`（画出来的地形）算，不是真地形：雾里看到的是记忆里的
        * 地形，拿真地形算会让阴影出现在"看着一样"的两格之间。
        */
+      /*
+       * 森林的疏密：**四邻全是林子 → 三棵针叶，否则两棵**。
+       *
+       * 用户的原话："针叶数量变化随周围森林数量增多，周围四格全是，两颗就变三棵"。
+       * 只看正交四邻（不看对角）——这样林子越靠里、树越密，边上自然稀，
+       * 远看就有了"林心 → 林缘"的层次，而且是**长出来的**，不是贴上去的分层。
+       *
+       * 同样按 `dispTerrain` 算：雾里看到的林子和算出来的林子必须是同一片，
+       * 否则又会出现"看着是树林却没长密"的错位（外缘阴影就栽过这个跟头）。
+       */
+      if (cls.includes('t-forest')) {
+        const isForest = (tx: number, ty: number): boolean =>
+          tx >= 0 && ty >= 0 && tx < s.w && ty < s.h && dispTerrain[ty * s.w + tx] === 'forest';
+        const dense = isForest(x, y - 1) && isForest(x, y + 1) && isForest(x - 1, y) && isForest(x + 1, y);
+        const v = dense ? '1' : '0';
+        if (node.dataset.v !== v) node.dataset.v = v;
+      }
       if (cls.includes('t-hill')) {
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
