@@ -152,7 +152,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 190,
     draw: 10,
-    weapon: { damage: 38, range: 7, shots: 2 },
+    weapon: { damage: 49, range: 7, shots: 2 },
   },
   antitank: {
     id: 'antitank',
@@ -160,7 +160,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 240,
     draw: 14,
-    weapon: { damage: 74, range: 7, pierce: true },
+    weapon: { damage: 96, range: 7, pierce: true },
     excludeFrames: ['armor_hawk'],
   },
   flamer: {
@@ -169,7 +169,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 170,
     draw: 12,
-    weapon: { damage: 48, range: 4, splash: 1 },
+    weapon: { damage: 62, range: 4, splash: 1 },
     frames: ['armor_anvil', 'armor_forge'],
   },
   twin: {
@@ -178,7 +178,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 280,
     draw: 14,
-    weapon: { damage: 55, range: 8, burst: 2 },
+    weapon: { damage: 72, range: 8, burst: 2 },
     frames: ['armor_anvil', 'armor_tower'],
   },
   chainsaw: {
@@ -187,7 +187,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 140,
     draw: 6,
-    weapon: { damage: 138, range: 1 },
+    weapon: { damage: 179, range: 1 },
   },
   coax: {
     id: 'coax',
@@ -195,7 +195,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 90,
     draw: 4,
-    weapon: { damage: 26, range: 6, shots: 2 },
+    weapon: { damage: 34, range: 6, shots: 2 },
   },
   grenade: {
     id: 'grenade',
@@ -203,7 +203,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 170,
     draw: 6,
-    weapon: { damage: 56, range: 7, splash: 1, vsBuilding: 1.5 },
+    weapon: { damage: 73, range: 7, splash: 1, vsBuilding: 1.5 },
     excludeFrames: ['armor_hawk'],
   },
   flak: {
@@ -212,7 +212,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 200,
     draw: 8,
-    weapon: { damage: 44, range: 8, shots: 2, targets: 'air' },
+    weapon: { damage: 57, range: 8, shots: 2, targets: 'air' },
   },
   dozer: {
     id: 'dozer',
@@ -220,7 +220,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 80,
     draw: 4,
-    weapon: { damage: 34, range: 1, vsBuilding: 2 },
+    weapon: { damage: 44, range: 1, vsBuilding: 2 },
     frames: ['armor_anvil'],
   },
   maghammer: {
@@ -229,7 +229,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 160,
     draw: 8,
-    weapon: { damage: 104, range: 1, pierce: true },
+    weapon: { damage: 135, range: 1, pierce: true },
     frames: ['armor_anvil'],
     unique: true,
   },
@@ -241,7 +241,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'plate',
     cost: 160,
     draw: 0,
-    armor: 3,
+    armor: 4,
     frames: ['armor_anvil'],
   },
   reactive: {
@@ -297,7 +297,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'system',
     cost: 280,
     draw: 8,
-    extraHp: 60,
+    extraHp: 78,
     unique: true,
   },
   jammer: {
@@ -401,7 +401,7 @@ export const MODULES: Record<string, ModuleDef> = {
     cost: 420,
     draw: 20,
     frames: ['armor_tower'],
-    weapon: { damage: 210, range: 11, reload: 1, pierce: true },
+    weapon: { damage: 273, range: 11, reload: 1, pierce: true },
   },
   plasmacannon: {
     id: 'plasmacannon',
@@ -410,7 +410,7 @@ export const MODULES: Record<string, ModuleDef> = {
     cost: 380,
     draw: 16,
     excludeFrames: ['armor_hawk', 'armor_hunter'],
-    weapon: { damage: 104, range: 8, splash: 1 },
+    weapon: { damage: 135, range: 8, splash: 1 },
   },
   laserarray: {
     id: 'laserarray',
@@ -418,7 +418,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 340,
     draw: 14,
-    weapon: { damage: 96, range: 9 },
+    weapon: { damage: 125, range: 9 },
   },
   empcannon: {
     id: 'empcannon',
@@ -426,7 +426,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 300,
     draw: 12,
-    weapon: { damage: 58, range: 8, status: { id: 'slow', stacks: 2 } },
+    weapon: { damage: 75, range: 8, status: { id: 'slow', stacks: 2 } },
   },
   plasmaedge: {
     id: 'plasmaedge',
@@ -434,7 +434,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'main',
     cost: 380,
     draw: 18,
-    weapon: { damage: 240, range: 1, pierce: true },
+    weapon: { damage: 312, range: 1, pierce: true },
   },
   micromissile: {
     id: 'micromissile',
@@ -442,7 +442,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 260,
     draw: 8,
-    weapon: { damage: 30, range: 9, shots: 3, targets: 'both' },
+    weapon: { damage: 39, range: 9, shots: 3, targets: 'both' },
   },
   ciws: {
     id: 'ciws',
@@ -450,8 +450,8 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 200,
     draw: 6,
-    ciws: 8,
-    weapon: { damage: 36, range: 5 },
+    ciws: 10,
+    weapon: { damage: 47, range: 5 },
   },
   slowmissile: {
     id: 'slowmissile',
@@ -459,7 +459,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'sub',
     cost: 220,
     draw: 6,
-    weapon: { damage: 46, range: 8, status: { id: 'slow', stacks: 1 } },
+    weapon: { damage: 60, range: 8, status: { id: 'slow', stacks: 1 } },
   },
   gravityhammer: {
     id: 'gravityhammer',
@@ -468,7 +468,7 @@ export const MODULES: Record<string, ModuleDef> = {
     cost: 280,
     draw: 12,
     excludeFrames: ['armor_tower'],
-    weapon: { damage: 140, range: 1, splash: 1 },
+    weapon: { damage: 182, range: 1, splash: 1 },
   },
 
   // ── 装甲（3 件） ─────────────────────────────────────────────────────
@@ -478,8 +478,8 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'plate',
     cost: 300,
     draw: 6,
-    armor: 3,
-    extraHp: 90,
+    armor: 4,
+    extraHp: 117,
   },
   phasearmor: {
     id: 'phasearmor',
@@ -487,7 +487,7 @@ export const MODULES: Record<string, ModuleDef> = {
     slot: 'plate',
     cost: 360,
     draw: 10,
-    armor: 6,
+    armor: 8,
     move: -1,
     frames: ['armor_tower'],
   },
@@ -555,7 +555,7 @@ export const MODULES: Record<string, ModuleDef> = {
     cost: 300,
     draw: 6,
     move: 1,
-    vector: 6,
+    vector: 8,
   },
   sprint: {
     id: 'sprint',
@@ -882,7 +882,12 @@ export function readyWeapons(s: GameState, u: Unit, turn: number): string[] {
 
 /** 装配坞的兵种 id */
 export const ARMOR_DOCK = 'armor_dock';
-/** 装配总厂的兵种 id：每回合能装 2 次、整备半价 */
+/**
+ * 装配总厂的兵种 id。
+ *
+ * 2026-11-12 起“每回合能装 2 次”不再是它的卖点（装配已经不限次数，见 `canMount`），
+ * 剩下的差别是**整备名额 2 次 + 整备半价**——补给节奏是它现在唯一的位置。
+ */
 export const ARMOR_YARD = 'armor_yard';
 
 /** 这台单位身边（相邻格，含自身格）有没有己方的装配坞 */
@@ -897,12 +902,14 @@ function dockNextTo(s: GameState, u: Unit): Unit | undefined {
 }
 
 /**
- * 这座坞本回合还能用几次。
+ * 这座坞本回合还能接几次**整备**。
  *
  * 名额记在 `custom` 上，不再借用 `Unit.era`。借用那个字段有两个毛病：
  *   1. 它和法律意义上的"落成时代"共用一个格子，一旦别处给坞写了 era，
  *      就会莫名变成"本回合已经用过"；
  *   2. 一个数字装不下"每回合 2 次"（装配总厂）。
+ *
+ * **只管整备**：装配（`doMount`）从 2026-11-12 起不限次数，不走这个名字额。
  */
 function dockCapacity(dock: Unit): number {
   return dock.type === ARMOR_YARD ? 2 : 1;
@@ -926,6 +933,12 @@ export interface MountCheck {
 
 /**
  * 能不能装。按"先说清为什么不行"的顺序排：位置 → 槽位 → 预算 → 钱。
+ *
+ * **2026-11-12 起不再限制"每座坞每回合只接一单"。** 原来的节流是"坞的名额"，
+ * 效果是"这台今天装了一件，就别想再装第二件"——玩家装满一台要来回四五回合，
+ * 而装甲的强度本来就建立在"装满"上。现在的节流换成**行动**：装上第一件，
+ * 这台本回合就不能动了（`doMount` 里置 acted / moved），之后想继续装只管装，
+ * 钱和电够就行。整备（`doRecharge`）仍然按坞的名额走，那是另一条补给节奏。
  */
 export function canMount(s: GameState, u: Unit, moduleId: string): MountCheck {
   const def = s.unitTypes[u.type];
@@ -935,9 +948,6 @@ export function canMount(s: GameState, u: Unit, moduleId: string): MountCheck {
   if (!fitsFrame(u, def, m)) return { ok: false, reason: `${def.name} 装不上「${m.name}」` };
   const dock = dockNextTo(s, u);
   if (!dock) return { ok: false, reason: '要走到装配坞旁边才能装配' };
-  if (dockUsedThisTurn(dock, s.turn) >= dockCapacity(dock)) {
-    return { ok: false, reason: '这座装配坞本回合已经用过了' };
-  }
   const rep = energyReport(s, u.owner);
   if (rep.headroom < m.draw) {
     return { ok: false, reason: `供电不足：还要 ${m.draw} 点，余量只有 ${Math.max(0, rep.headroom)}` };
@@ -948,11 +958,12 @@ export function canMount(s: GameState, u: Unit, moduleId: string): MountCheck {
 }
 
 /**
- * 装配：付钱、扣回合、占掉这座坞本回合的名额。
+ * 装配：付钱、装上去、这台本回合就不能再动了。
  *
- * 名额记在坞的 `custom` 上（见 `dockCapacity`）。以前借用 `Unit.era` 存回合号，
- * 理由是"那个字段在坞身上没有第二用途"——直到第 8 代的「装配总厂」要每回合
- * 2 次，一个数字装不下，才把这条债还掉。
+ * 2026-11-12 之前的版本还占掉"这座坞本回合的名额"（每座 1 次 / 装配总厂 2 次）。
+ * 那条限制的代价是"装满一台要跨好个回合"，而坞本身并不稀缺——真正该稀缺的是
+ * 这台单位这一回合的行动。所以名额那一步去掉了（`spendDock` 只剩整备在用），
+ * 改成：**装一件就置 acted**，之后还能接着装，只是这台这回合不动了。
  */
 export function doMount(s: GameState, unitId: string, moduleId: string): MountResult {
   const u = s.units.find((x) => x.id === unitId && x.hp > 0);
@@ -960,7 +971,6 @@ export function doMount(s: GameState, unitId: string, moduleId: string): MountRe
   const chk = canMount(s, u, moduleId);
   if (!chk.ok) return { ok: false, reason: chk.reason ?? "装不上" };
   const m = MODULES[moduleId]!;
-  const dock = dockNextTo(s, u)!;
 
   s.players[u.owner].gold -= m.cost;
   u.modules = [...modulesOf(u), moduleId];
@@ -968,8 +978,12 @@ export function doMount(s: GameState, unitId: string, moduleId: string): MountRe
     u.charges = { ...(u.charges ?? {}), [moduleId]: m.charges };
   }
   if (m.extraHp) u.extraHp = Math.min(extraHpCap(s, u), (u.extraHp ?? 0) + m.extraHp);
-  spendDock(dock, s.turn);
-  // 装配消耗这台单位一回合（每座坞每回合 1~2 次，所以这一条同时也是节流）
+  /*
+   * 装配消耗这台单位一回合。
+   *
+   * 这一条现在是**唯一的节流**（见 canMount 的说明），所以别顺手删：
+   * 删了就成了"走到坞边上零成本换装"，装甲会变成一台随时改配置的变形金刚。
+   */
   u.acted = true;
   u.moved = true;
   return { ok: true };
@@ -1154,15 +1168,15 @@ export const MINE_KIND = 'armor-mine';
 export const LANCE_KIND = 'armor-lance';
 /** 一团烟幕能撑几个"自己回合的开始" */
 export const SMOKE_TURNS = 2;
-/** 护盾投影器给每个友军多少额外生命 */
-export const SHIELD_PROJ_HP = 30;
+/** 护盾投影器给每个友军多少额外生命（2026-11-12 随整包 +30%：30 → 39） */
+export const SHIELD_PROJ_HP = 39;
 
 /** 充能补给：按模块造价的这个比例收费 */
 export const CHARGE_REFILL_RATE = 0.3;
 /** 额外生命补给：多少金买 1 点（见 4.6 的「1 金 / 2 点」） */
 export const EXTRA_HP_PER_GOLD = 2;
 /** 整备臂给出去的额外生命 */
-export const SERVICE_BONUS_HP = 40;
+export const SERVICE_BONUS_HP = 52;
 /** 无人机场上上限（设计稿 6.5） */
 export const DRONE_CAP = 2;
 /** 超载协议：每这么多个"自己的回合"停一次机（见 6.3） */

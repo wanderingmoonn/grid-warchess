@@ -1047,7 +1047,8 @@ check('装配坞：每件装备写着数据与耗电，插槽与电力收支都�
   assert.ok(text.includes('0/5'), '还没装东西时应该是 0/5');
 
   // 2) 电力：产能 120（一座燃煤电站）、已用 20（素体自身耗电）、余量 100
-  assert.ok(text.includes('装配 · 电力'), '装配坞要有电力块');
+  //    2026-11-12 起电力条挪到侧栏顶部：**不选装甲也要看得见**，
+  //    这里选中的是素体，属于"顺带也在"的那一档。
   assert.ok(text.includes('产能'), '要写产能');
   assert.ok(/产能\s*120/.test(text), `产能该是 120：${text.match(/产能[^已]*/)?.[0] ?? ''}`);
   assert.ok(/已用\s*20/.test(text), '已用该是 20（素体自身）');
@@ -1068,7 +1069,85 @@ check('装配坞：每件装备写着数据与耗电，插槽与电力收支都�
     const t = (plate.textContent ?? '').replace(/\s+/g, ' ');
     assert.ok(/护甲\s*\+\d+|生命上限\s*\+\d+/.test(t), `装甲板要写出加多少：${t}`);
   }
+  /*
+   * 4) 装上一件之后：**槽位角标保持"主/副/甲/统/设"，拆卸单独成组**。
+   *
+   * 旧版把已装模块整行做成了"拆"按钮，于是五件模块排下来全是"拆"，
+   * 主武器和装甲板分不出来。现在已装是只读行（角标是槽位），
+   * 拆卸是另一组按钮（角标才是"拆"，文字写"槽位 · 名称"）。
+   */
+  frame.modules = ['autocannon'];
+  const host4 = doc.createElement('div');
+  renderPanel(host4, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: frame,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const staticRow = host4.querySelector('.recruit-btn.is-static');
+  assert.ok(staticRow, '已装模块要有一条只读行');
+  const st1 = (staticRow!.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(st1.includes('主'), `只读行的角标要保留槽位：${st1}`);
+  assert.ok(st1.includes('速射炮'), '只读行要写明装的是什么');
+  assert.ok(!st1.includes('拆'), '只读行不该出现"拆"');
+  const un = host4.querySelector('[data-act="unmount"]');
+  assert.ok(un, '拆卸要单独一颗按钮');
+  const ut = (un!.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(ut.includes('拆'), `拆卸按钮写"拆"：${ut}`);
+  assert.ok(ut.includes('主 · 速射炮'), `拆卸按钮要写明"槽位 · 名称"：${ut}`);
+  const mountRow = host4.querySelector('[data-act="mount"]');
+  assert.ok(mountRow, '还要有可装模块');
+  assert.notStrictEqual(
+    un!.closest('.recruit-list'),
+    mountRow!.closest('.recruit-list'),
+    '拆卸与装配必须分成两组，不能混在一条列表里',
+  );
+  host4.remove();
+  frame.modules = [];
+
   host.remove();
+
+  /*
+   * 选中的不是装甲，电力条照样在（2026-11-12 用户的要求：
+   * "建出发电站后应默认显示电量，无需点击装甲"）。
+   */
+  const host2 = doc.createElement('div');
+  renderPanel(host2, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const t2 = (host2.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(/产能\s*120/.test(t2), `没选装甲时也该看到电力：${t2.slice(0, 120)}`);
+  host2.remove();
+
+  /*
+   * 一座电站都没有的时候，电量信息一个字都不该出现——
+   * "产能 0 / 过载 20"只会让人以为哪里坏了。
+   */
+  const bare = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 7, expansionIds: ['armor-era7'] }, 708);
+  bare.units.push({
+    id: 'frame2', type: 'armor_anvil', owner: 'A',
+    x: free[0]!.x, y: free[0]!.y, hp: 175, kills: 0, moved: false, acted: false,
+  });
+  const host3 = doc.createElement('div');
+  renderPanel(host3, {
+    view: playerView(bare, 'A'),
+    me: 'A',
+    selectedUnit: bare.units.find((u) => u.id === 'frame2') ?? null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const t3 = (host3.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(!t3.includes('产能'), '没电站时不该画电力块');
+  assert.ok(!t3.includes('余量'), '没电站时不该出现"余量"');
+  host3.remove();
 });
 
 check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {

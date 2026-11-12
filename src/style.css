@@ -2811,11 +2811,16 @@ html[data-terrain='on'] .tile.t-mountain {
   gap: 4px 14px;
   margin-top: 5px;
   font-size: var(--fs-sm);
-  color: #57534b;
+  /*
+   * 2026-11-12：这一块从装甲面板挪到了侧栏顶部（有电站就常驻），
+   * 所以配色不能再写死深灰——新版主题是深色面板，写死就成深底深字。
+   * 改用文字色变量，两套主题各自自洽。
+   */
+  color: var(--text-2);
 }
 
 .power-nums b {
-  color: #2f2a22;
+  color: var(--text);
 }
 
 .power-nums em {
@@ -2956,6 +2961,28 @@ html[data-terrain='on'] .tile.t-mountain {
   font-size: var(--fs-sm);
   color: var(--price);
   font-weight: 500;
+}
+
+/*
+ * 只读行：已装模块的展示行（2026-11-12）。
+ *
+ * 它和下面「可装模块」共用一套排版，但**不是按钮**——拆卸已经挪到单独一组。
+ * 所以要把"能点"的暗示全摘掉：手指不变成手型、悬停不亮、右侧那格写"已装"
+ * 而不是价格。留着 hover 效果的话，玩家会一直去点它。
+ */
+.recruit-btn.is-static {
+  background: var(--panel);
+  cursor: default;
+}
+
+.recruit-btn.is-static:hover {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.recruit-btn.is-static .price {
+  color: var(--text-3);
+  font-weight: 400;
 }
 
 /* 来源徽标：兵种从 49 个涨到 118 个之后，"这兵是哪个包的"必须写在脸上——

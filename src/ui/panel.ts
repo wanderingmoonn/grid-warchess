@@ -370,6 +370,18 @@ function panelHtml(input: PanelInput): string {
   const expansionText = activeNames.length > 0 ? activeNames.join(' · ') : '无';
 
   /*
+   * 电力条：**名下有电站在发电**就常驻在侧栏顶部（2026-11-12）。
+   *
+   * 以前它挂在装甲面板里，意味着"想看电，先得选一台装甲"——而玩家最需要
+   * 这个读数的时刻恰恰是"还没造装甲，正在犹豫要不要先盖电站"。
+   *
+   * 没电站时整块不出现：那时产能 0、需求 0，画出来只是一条红杠，
+   * 反而让人以为出了问题。观战/复盘也不画——那是别人名下的电。
+   */
+  const powerLine =
+    !spectator && energyBreakdown(s, me).plants > 0 ? powerBlock(s, me) : '';
+
+  /*
    * 席位条：两家时是两行，三家四家时就是三行四行。
    *
    * 以前这里是硬编码的"A vs B"——三人局里第三个人根本不会出现在这一栏里。
@@ -429,6 +441,7 @@ function panelHtml(input: PanelInput): string {
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
       <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
+      ${powerLine}
     </div>
 
     ${eggBanner}
@@ -1152,11 +1165,18 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           // 装甲素体：插槽与耗电必须写在属性卡上。
           // "这台还能装几件""它吃了多少电"是装配前最先要判断的两件事，
           // 以前只能点进装配坞里数按钮。
+          //
+          // "本方余量"只在**有电站**时才附上：一座电站都没有的时候那是个负数，
+          // 写了只会让人以为哪里坏了（真正的原因写在装配按钮的 title 里）。
           def.armorFrame
             ? `<div class="info-row"><span>插槽</span><b>${slotLine(def, selectedUnit)}</b></div>
-             <div class="info-row"><span>耗电</span><b>${unitDraw(s, selectedUnit)} <small style="opacity:.65">（本方余量 ${
-               energyBreakdown(s, selectedUnit.owner).headroom
-             }）</small></b></div>`
+             <div class="info-row"><span>耗电</span><b>${unitDraw(s, selectedUnit)}${
+               energyBreakdown(s, selectedUnit.owner).plants > 0
+                 ? ` <small style="opacity:.65">（本方余量 ${
+                     energyBreakdown(s, selectedUnit.owner).headroom
+                   }）</small>`
+                 : ''
+             }</b></div>`
             : ''
         }
         ${
@@ -2365,16 +2385,42 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
   const off = offlineModules(s, u);
   const mine = modulesOf(u);
 
+  /*
+   * 已装的模块：**只读展示，不当按钮用**。
+   *
+   * 以前每一行都是一颗「拆卸」按钮，角标也被换成"拆"——于是"这台装了哪些槽"
+   * 这件事在列表里消失了：五件模块排下来全是"拆"，主武器和装甲板长得一样。
+   * 现在角标还原成槽位单字，拆卸挪到下面单独一组（见 `unmountRows`）。
+   */
   const installed = mine.map((id) => {
     const m = MODULES[id];
     if (!m) return '';
     const dead = off.has(id);
-    // 数据特性写在第二行：以前只写"耗能 N"，装甲板/系统槽装了什么都看不见
-    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
-      title="${escapeHtml(moduleSpecText(m))}">
-      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">拆</span>
+    return `<div class="recruit-btn is-static" title="${escapeHtml(moduleSpecText(m))}">
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${
+        SLOT_CHAR[m.slot] ?? '?'
+      }</span>
       <span class="meta"><b>${m.name}${dead ? ' · 断电' : ''}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}</span></span>
-      <span class="price">+${Math.floor(m.cost / 2)}</span>
+      <span class="price">已装</span>
+    </div>`;
+  });
+
+  /*
+   * 拆卸：**单独一组**，和"可装模块"分开。
+   *
+   * 要求是"装备和拆卸别混在一条列表里"——玩家的手指落在同一排按钮上，
+   * 一个是花 240 金装反装甲炮、一个是退 120 金把它拆了，代价完全反向。
+   * 所以这里换一条标题、按钮文案也写明"拆 · 槽位 名称"，并标出退款额。
+   */
+  const unmountRows = mine.map((id) => {
+    const m = MODULES[id];
+    if (!m) return '';
+    const refund = Math.floor(m.cost / 2);
+    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
+      title="拆下来，退 ${refund} 金；不消耗本回合">
+      <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">拆</span>
+      <span class="meta"><b>${SLOT_CHAR[m.slot] ?? '?'} · ${m.name}</b><span>拆下退还 ${refund} 金 · 不花回合</span></span>
+      <span class="price">+${refund}</span>
     </button>`;
   });
 
@@ -2444,12 +2490,27 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     <span class="price">${rcChk.ok ? rc.total : '—'}</span>
   </button>`;
 
-  return `<div class="card-title" style="margin-top:14px">装配 · 电力</div>
-  ${powerBlock(s, u.owner)}
+  /*
+   * 这里**不再画电力条**（2026-11-12）：电是"这一方"的资源，不是这台车的属性。
+   * 以前只有点开一台装甲才看得见产能/已用/余量，而玩家最需要它的时刻恰恰是
+   * "还没造装甲、正在想要不要先盖电站"。现在它挪到侧栏顶部（`panelHtml`），
+   * 只要名下有电站在发电就一直在，没电站则整块不出现。
+   */
+  return `<div class="card-title" style="margin-top:14px">装配</div>
   <div class="info-row"><span>插槽</span><b>${slotLine(def, u)}</b></div>
-  <div class="hint">这台耗电 ${unitDraw(s, u)}（素体 ${def.draw ?? 0} + 模块 ${unitDraw(s, u) - (def.draw ?? 0)}）。装配要贴着装配坞、花掉它整回合；拆卸不花回合、退一半金币。</div>
-  ${installed.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${installed.join('')}</div>` : `<div class="hint">还没装任何模块——素体只有撞击。</div>`}
+  <div class="hint">这台耗电 ${unitDraw(s, u)}（素体 ${def.draw ?? 0} + 模块 ${unitDraw(s, u) - (def.draw ?? 0)}）。装配要贴着装配坞；<b>装一件这台本回合就不能再行动</b>，但同回合可以接着装（钱和电够就行）。拆卸不花回合、退一半金币。</div>
+  ${
+    installed.length > 0
+      ? `<div class="recruit-list" style="margin-top:8px">${installed.join('')}</div>`
+      : `<div class="hint">还没装任何模块——素体只有撞击。</div>`
+  }
   ${candidates.length > 0 ? `<div class="recruit-list" style="margin-top:8px">${candidates.join('')}</div>` : ''}
+  ${
+    unmountRows.length > 0
+      ? `<div class="card-title" style="margin-top:14px">拆卸（退还一半）</div>
+         <div class="recruit-list">${unmountRows.join('')}</div>`
+      : ''
+  }
   ${
     deviceRows.length > 0
       ? `<div class="card-title" style="margin-top:14px">设备</div>${deviceRows.join('')}`

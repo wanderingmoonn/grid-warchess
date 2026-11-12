@@ -402,6 +402,22 @@ const GENERIC_TERMS: Term[] = [
     brief: '至尊法师的四种形态：火再叠一层、水挂霜缚、自然攻击时回血、暗把魔法段 ×1.5。',
     more: '所以「转属性」是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。',
   },
+  {
+    key: 'slots',
+    name: '插槽',
+    brief: '装甲素体身上能装模块的位置，按类型分别计数：主 / 副 / 甲 / 统 / 设。',
+    more: `每一类各数各的：主槽只吃主武器，装甲板只能进甲槽，装满了这一类就再塞不进去。
+      素体的攻/血/甲是**空壳**的底子，真正打仗的数字全看装了什么——所以看一台装甲先看插槽，再看其它列。
+      想装满一台要先盖装配坞（贴身穿好才能装配），每装一件这台当回合就不能再动了。`,
+  },
+  {
+    key: 'power',
+    name: '供电',
+    brief: '电站给己方装甲提供的电能额度；每台素体和每件模块都在吃它。',
+    more: `电不存库存，"产能 − 需求"每回合现算；需求超过产能时，从**最后装上去的那件**开始断电，
+      被断的那件当场失效（面板上标"断电"）。所以别在过载边缘追求"再多装一件"——
+      侧栏顶部的电力条会先变红，它只在你有电站时才出现。`,
+  },
 ];
 
 const TERM_BY_KEY = new Map<string, Term>(GENERIC_TERMS.map((t) => [t.key, t]));
@@ -563,6 +579,31 @@ function traitsOf(u: UnitTypeDef): string {
     );
     parts.push(ref(key, `${k.name} CD${k.cooldown}`));
   }
+  /*
+   * 装甲素体：**插槽是它最重要的一列**（2026-11-12 补）。
+   *
+   * 这一列以前对装甲素体几乎是空的：攻/血在表头，而"能装几个主槽"这个决定
+   * 战力的数字整张表都查不到，只能开一局点开属性卡。现在按 `主2·副1·甲2…`
+   * 印出来；电站再把"供电 +N"印上——它是这套系统唯一的电源，不写进表等于没写。
+   *
+   * 顺序和面板里的 `SLOT_CHAR`（主/副/甲/统/设）一致，两边对着看不用换算。
+   */
+  if (u.armorFrame) {
+    const order: Array<[keyof NonNullable<UnitTypeDef['slots']>, string]> = [
+      ['main', '主'],
+      ['sub', '副'],
+      ['plate', '甲'],
+      ['system', '统'],
+      ['device', '设'],
+    ];
+    const slots = order
+      .filter(([k]) => (u.slots?.[k] ?? 0) > 0)
+      .map(([k, ch]) => `${ch}${u.slots?.[k] ?? 0}`)
+      .join(' ');
+    if (slots) parts.push(ref('slots', `插槽 ${slots}`));
+    if ((u.draw ?? 0) > 0) parts.push(ref('power', `耗电 ${u.draw}`));
+  }
+  if ((u.armorPower ?? 0) > 0) parts.push(ref('power', `供电 +${u.armorPower}`));
   if (u.incomeByTerrain) {
     const best = Object.entries(u.incomeByTerrain).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
     if (best) parts.push(ref('income', `产出 ${terrainName(best[0])} +${best[1]}`));
@@ -2743,8 +2784,10 @@ function armorModuleSection(): string {
   return `
     <section id="pack-mods">
       <h2><span class="sec-num">03</span>装备表</h2>
-      <p>素体本身不会打人（只有撞击），战力全在<b>装了什么</b>上。装配要贴着<b>装配坞</b>、
-        花掉它整个回合；拆卸不花回合、退一半金币。同一格槽位装满了就装不进去，
+      <p>素体本身不会打人（只有撞击），战力全在<b>装了什么</b>上。装配要贴着<b>装配坞</b>；
+        <b>装上一件，这台当回合就不能再行动</b>——但同回合可以接着装，钱和电够就行
+        （2026-11-12 起取消了"每座坞每回合只接一单"）。拆卸不花回合、退一半金币，
+        它和装配在面板里是分开的两组。同一类槽位装满了就装不进去，
         素体面板和装配坞里都写着"已用 / 总数"。</p>
       <p><b>电是硬约束。</b>每台素体自己就有基础耗电，每件模块再叠一笔（下表"耗电"列，
         最大 ${maxDraw} 点）。发电厂是唯一来源（另有「超载协议」自带额度，代价是定期停机）。

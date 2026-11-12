@@ -14471,7 +14471,8 @@ test('装备说明书：没有一件模块是"只有耗能、看不出效果"的
   const text = (id: string) => moduleSpecText(MODULES[id]!);
 
   // 武器：伤害 / 射程 / 连发
-  assert.match(text('autocannon'), /伤害 38/);
+  // 数字读表而不是写死：数值调一次（比如 2026-11-12 的整包 +30%）这条不该跟着红
+  assert.match(text('autocannon'), new RegExp(`伤害 ${MODULES.autocannon!.weapon!.damage}`));
   assert.match(text('autocannon'), /射程 7/);
   assert.match(text('autocannon'), /2 连发/);
   // 破甲、溅射这些修饰也要在
@@ -19261,7 +19262,7 @@ test('装甲：装配要坞、要槽位、要电、要钱，缺一样都给出�
   assert.equal(dock.custom?.dockUses ?? 0, 0, '只看不装不该占掉坞');
 });
 
-test('装甲：装载扣钱、占地坞一次、且这台本回合就算行动过', () => {
+test('装甲：装载扣钱、这台本回合就算行动过，同一回合可以接着装', () => {
   const s = fresh({ expansionIds: [...BASE.expansionIds, 'armor-era7'] });
   const anvil = spawn(s, 'armor_anvil', 'A', 5, 5);
   const dock = spawn(s, 'armor_dock', 'A', 6, 5);
@@ -19274,19 +19275,28 @@ test('装甲：装载扣钱、占地坞一次、且这台本回合就算行动�
   assert.equal(s.players.A.gold, before - MODULES.autocannon!.cost, '按模块造价扣钱');
   assert.deepEqual(anvil.modules, ['autocannon']);
   assert.equal(anvil.acted, true, '装配消耗这台一回合');
-  assert.equal(dock.custom?.dockUses, 1, '这座坞本回合的名额被用掉了');
+  assert.equal(anvil.moved, true, '移动也一起用掉');
+  assert.equal(dock.custom?.dockUses ?? 0, 0, '装配不再占用坞的名额（名额只剩整备）');
 
-  // 第二台想用同一座坞：被拦
+  /*
+   * 2026-11-12：取消"每轮只能装一个插槽"。
+   * 节流从"坞的名额"换成"这台这一回合的行动"——装第一件就不能动了，
+   * 但同回合想接着装多少件都行，只要槽位、电、钱够。
+   */
+  const r2 = doMount(s, anvil.id, 'coax');
+  assert.ok(r2.ok, `同回合第二件也该成功：${!r2.ok ? r2.reason : ''}`);
+  assert.deepEqual(anvil.modules, ['autocannon', 'coax'], '两件都装上了');
+
   const forge = spawn(s, 'armor_forge', 'A', 5, 6);
-  const r2 = doMount(s, forge.id, 'coax');
-  assert.ok(!r2.ok && /用过了/.test(r2.reason ?? ''), '每座坞每回合只接一单');
+  const r2b = doMount(s, forge.id, 'coax');
+  assert.ok(r2b.ok, `另一台共用同一座坞也该成功：${!r2b.ok ? r2b.reason : ''}`);
 
   // 卸装：退一半、不额外消耗回合（同回合就能拆）
   const gold = s.players.A.gold;
   const r3 = doUnmount(s, anvil.id, 'autocannon');
   assert.ok(r3.ok, '拆卸不该被拦');
   assert.equal(s.players.A.gold, gold + Math.floor(MODULES.autocannon!.cost / 2), '退 50% 金币');
-  assert.deepEqual(anvil.modules, [], '模块真的拿掉了');
+  assert.deepEqual(anvil.modules, ['coax'], '只拿掉那一件');
 });
 
 test('装甲：卸下护盾发生器时，当前额外生命要跟着截断', () => {
@@ -19297,8 +19307,8 @@ test('装甲：卸下护盾发生器时，当前额外生命要跟着截断', ()
   s.players.A.gold = 2000;
 
   assert.ok(doMount(s, forge.id, 'shieldgen').ok);
-  assert.equal(forge.extraHp, 60, '装上就该有 60 点额外生命');
-  assert.equal(extraHpCap(s, forge), 60);
+  assert.equal(forge.extraHp, MODULES.shieldgen!.extraHp, '装上就该拿到这件模块给的额外生命');
+  assert.equal(extraHpCap(s, forge), MODULES.shieldgen!.extraHp);
   assert.ok(doUnmount(s, forge.id, 'shieldgen').ok);
   assert.equal(extraHpCap(s, forge), 0, '额度归零');
   assert.equal(forge.extraHp, 0, '当前值必须跟着截断，否则"装上补满、卸下带走"就是无限血包');
@@ -19497,7 +19507,7 @@ test('弹射钩索：3 格内瞬移，越距拒绝，落地就当移动过', () 
   assert.equal(chargesLeft(moved, 'grapnel'), 1, '用一次扣一次');
 });
 
-test('布雷器：一次布两枚，敌人踩上去炸 40，自己人不炸', () => {
+test('布雷器：一次布两枚，敌人踩上去炸 52，自己人不炸', () => {
   const s = fresh({ expansionIds: [...BASE.expansionIds, 'armor-era7'] });
   s.current = 'A';
   spawn(s, 'armor_coal', 'A', 7, 7);
@@ -19526,7 +19536,7 @@ test('布雷器：一次布两枚，敌人踩上去炸 40，自己人不炸', ()
   const foeMax = st.unitTypes['armor_anvil']!.maxHp;
   rr = applyAction(st, { type: 'MOVE', unitId: foe.id, x: list[1]!.x, y: list[1]!.y });
   assert.ok(rr.ok, `敌人该走得进去：${!rr.ok ? rr.reason : ''}`);
-  assert.equal(rr.state.units.find((u) => u.id === foe.id)!.hp, foeMax - 40, '踩雷掉 40');
+  assert.equal(rr.state.units.find((u) => u.id === foe.id)!.hp, foeMax - 52, '踩雷掉 52');
 });
 
 test('烟幕：远程 −30%，贴脸不减，且只保护布设者那一方', () => {
@@ -19581,9 +19591,9 @@ test('整备：补满充能与额外生命，按缺口收费，占掉这座坞',
   const q = rechargeQuote(s, u);
   assert.equal(q.devices, 1, '只有烟幕缺次数');
   assert.equal(q.chargeCost, Math.ceil(110 * 0.3), '补次数按模块造价 30%');
-  assert.equal(q.hpGap, 40, '额外生命上限 60，现在 20');
-  assert.equal(q.hpCost, 20, '1 金 / 2 点');
-  assert.equal(q.total, 53);
+  assert.equal(q.hpGap, 78 - 20, '额外生命上限 78（整包 +30% 后的额度），现在 20');
+  assert.equal(q.hpCost, Math.ceil((78 - 20) / 2), '1 金 / 2 点');
+  assert.equal(q.total, q.chargeCost + q.hpCost);
 
   const gold0 = s.players.A.gold;
   let r = applyAction(s, { type: 'RECHARGE', unitId: u.id });
@@ -19663,7 +19673,7 @@ test('近防激光：挨远程打少掉 8 点，贴脸打不减', () => {
   const plain = computeDamage(s, shooter, target, false, MODULES.antitank!.weapon);
   target.modules = ['structlayer', 'phasearmor', 'ciws'];
   const withCiws = computeDamage(s, shooter, target, false, MODULES.antitank!.weapon);
-  assert.equal(plain - withCiws, 8, '远程这一下该少 8 点');
+  assert.equal(plain - withCiws, MODULES.ciws!.ciws!, '远程这一下该少掉近防的额度');
 
   shooter.y = 6; // 贴脸
   const close = computeDamage(s, shooter, target, false, MODULES.antitank!.weapon);
@@ -19672,23 +19682,21 @@ test('近防激光：挨远程打少掉 8 点，贴脸打不减', () => {
   assert.equal(close, closePlain, '贴脸打不吃近防激光');
 });
 
-test('装配总厂：一回合能装两次（普通坞只能一次）', () => {
+test('装配坞：一座坞一回合能接任意多单（名额只剩整备在用）', () => {
   const s = fresh({ expansionIds: [...BASE.expansionIds, 'armor-era7', 'armor-era8'] });
   const yard = spawn(s, 'armor_yard', 'A', 6, 5);
   spawn(s, 'armor_coal', 'A', 4, 5);
   s.players.A.gold = 5000;
 
+  // 一台砧（主1 副1 甲2 设1）连着装三件：主炮 / 副武器 / 装甲板
   const a = spawn(s, 'armor_anvil', 'A', 5, 5);
-  const b = spawn(s, 'armor_anvil', 'A', 6, 6);
-  let r = doMount(s, a.id, 'autocannon');
-  assert.ok(r.ok, `第一次该成功：${!r.ok ? r.reason : ''}`);
-  r = doMount(s, b.id, 'autocannon');
-  assert.ok(r.ok, `第二次也该成功（总厂有 2 个名额）：${!r.ok ? r.reason : ''}`);
+  assert.ok(doMount(s, a.id, 'autocannon').ok, '第一件');
+  assert.ok(doMount(s, a.id, 'coax').ok, '同回合第二件');
+  assert.ok(doMount(s, a.id, 'composite').ok, '同回合第三件（甲槽）');
+  assert.equal(yard.custom?.dockUses ?? 0, 0, '装配不写坞的名额');
 
-  const c = spawn(s, 'armor_anvil', 'A', 5, 6);
-  r = doMount(s, c.id, 'autocannon');
-  assert.ok(!r.ok, '第三台就该被拦了');
-  assert.equal(yard.custom?.dockUses, 2);
+  const b = spawn(s, 'armor_anvil', 'A', 6, 6);
+  assert.ok(doMount(s, b.id, 'autocannon').ok, '另一台照样能装');
 });
 
 test('重装母舱：每两回合放一架重装无人机，场上最多 2 架', () => {
@@ -19710,7 +19718,7 @@ test('重装母舱：每两回合放一架重装无人机，场上最多 2 架',
   assert.equal(count(), 2, '到 2 架就停');
 });
 
-test('轨道引导：标下去，下一回合开始时 3×3 里的一起挨 120', () => {
+test('轨道引导：标下去，下一回合开始时 3×3 里的一起挨 156', () => {
   const s = fresh({ expansionIds: [...BASE.expansionIds, 'armor-era7', 'armor-era8'] });
   s.current = 'A';
   const coal = spawn(s, 'armor_coal', 'A', 9, 9);
@@ -19727,10 +19735,13 @@ test('轨道引导：标下去，下一回合开始时 3×3 里的一起挨 120'
   r = applyAction(r.state, { type: 'END_TURN' });
   assert.ok(r.ok, '该能结束回合');
   const hpOf = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
-  assert.equal(hpOf(foe.id), 175 - 120, '3×3 里的目标吃 120');
-  assert.equal(hpOf(far.id), 175, '范围外不挨');
-  assert.equal(hpOf(coal.id), 42, '范围外的自家电站不挨');
-  assert.equal(hpOf(tower.id), 330 - 120, '不分敌我：自己站在里面也挨');
+  // 血量读兵种表：整包 +30% 之后写死的 175 / 330 会跟着红
+  const maxOf = (id: string) => s.unitTypes[id]!.maxHp;
+  const LANCE_HIT = 156;
+  assert.equal(hpOf(foe.id), maxOf('armor_anvil') - LANCE_HIT, '3×3 里的目标吃一发');
+  assert.equal(hpOf(far.id), maxOf('armor_anvil'), '范围外不挨');
+  assert.equal(hpOf(coal.id), maxOf('armor_coal'), '范围外的自家电站不挨');
+  assert.equal(hpOf(tower.id), maxOf('armor_tower') - LANCE_HIT, '不分敌我：自己站在里面也挨');
   assert.ok(!marksOf(r.state).some((m) => m.kind === 'armor-lance'), '标用一次就没了');
 });
 
