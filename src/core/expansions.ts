@@ -856,6 +856,31 @@ export interface Expansion {
    */
   requires?: string[];
   /**
+   * **互斥**：这些包不能和本包同时开。
+   *
+   * 判据是**双向**的——`A.conflicts` 里有 `B`，等价于 `B.conflicts` 里有 `A`，
+   * 所以只在"更该负责的那一侧"写一次就够了（两边各写一遍，改 id 时必然漏一个）。
+   * 面板上两个包的卡片都会显示出这层关系（`conflictIdsOf` 负责对称化）。
+   *
+   * 冲突不是"数值上不划算"，而是**两套规则互相拆台**：现在唯一一条是
+   * 城郭与修真——城郭把造价改成粮/材（金币只占零头），修真整套经济长在金币
+   * 与灵石上，两个一起开，"钱"这件事就没有意义了。
+   *
+   * 处理方式：勾选时**直接拒绝**并说清是谁挡着（见开局面板）；配置里已经带着
+   * 一对冲突的（老存档、联机快照）由 `enabledExpansionIds` 按顺序保留先出现的
+   * 那个，保证同一个配置在任何机器上都算出同一套规则。
+   */
+  conflicts?: string[];
+  /**
+   * **联动**：和这些包一起开才完整，但**不是前置**——单开也能跑，只是少了那部分。
+   *
+   * 和 `requires` 的区别就一条：`requires` 没满足时整包不进场（连兵带钩子），
+   * 这个只是"少几格内容"。所以它只出现在面板上、不参与任何门控：
+   * 现在是「时代军备 / 海军 / 空军 / 奇想」各自有几个第六代兵种挂在
+   * 「信息化」上（兵种级 `requiresPack`），不开那个包，那几格永远不会出现。
+   */
+  recommends?: string[];
+  /**
    * 规则书怎么归册：'small' 进小型扩展合订本，'large' 单独成册。
    *
    * 不让生成器去猜（比如"带兵种就算大型"）——「奇想·法则」一个兵都不带，
@@ -1490,6 +1515,42 @@ export function expansionById(id: string): Expansion | undefined {
 }
 
 /**
+ * 这两个包互斥吗。
+ *
+ * **双向判**：`conflicts` 只在一边写，两边都要认。逐对查表比维护一份"冲突对"
+ * 表省事，也不会出现"同一对关系在一个方向生效、另一个方向不生效"。
+ */
+export function expansionsClash(a: string, b: string): boolean {
+  if (a === b) return false;
+  const ca = expansionById(a);
+  const cb = expansionById(b);
+  if (!ca || !cb) return false;
+  return (ca.conflicts ?? []).includes(cb.id) || (cb.conflicts ?? []).includes(ca.id);
+}
+
+/**
+ * 这个包**在面板上**要显示的冲突名单（对称化之后的结果）。
+ *
+ * 只写在一侧的关系，两个包的卡片都得看得见——不然玩家会在"被冲突"的那张卡上
+ * 什么都看不到，勾下去才被拒。
+ */
+export function conflictIdsOf(id: string): string[] {
+  const e = expansionById(id);
+  if (!e) return [];
+  const out = new Set((e.conflicts ?? []).map((x) => MERGED_INTO[x] ?? x));
+  for (const other of EXPANSIONS) {
+    if ((other.conflicts ?? []).some((x) => (MERGED_INTO[x] ?? x) === e.id)) out.add(other.id);
+  }
+  out.delete(e.id);
+  return [...out];
+}
+
+/** 已经选中的这些包里，有哪些和 `id` 冲突（面板拒绝勾选时要指名道姓） */
+export function conflictsWith(ids: readonly string[], id: string): string[] {
+  return normalizeExpansionIds(ids).filter((x) => expansionsClash(x, id));
+}
+
+/**
  * 开局面板与规则书里能出现的那部分扩展（`hidden` 的不在其中）。
  *
  * 只影响"玩家选不选得到"，不影响 `expansionById` / `activeExpansions`：
@@ -1536,14 +1597,23 @@ export function activeExpansions(state: GameState): Expansion[] {
 /**
  * 把"勾了什么"过滤成"真正生效了什么"。
  *
- * 前置关系可能成链（A 要 B、B 要 C），所以这里跑到不动点：
- * 每轮剔掉前置没满足的，直到没有可剔的。写成一次遍历会在
- * "C 被剔掉"和"B 要 C"之间随机出结果——取决于数组顺序，那是不可接受的。
+ * 两条关系在这里合流：
+ *   · `requires`：前置没满足 → 整包不进场；
+ *   · `conflicts`：两个互斥的包同时出现 → **留下先出现的那个**。
+ *
+ * 前置关系可能成链（A 要 B、B 要 C），所以跑到不动点：每轮剔掉前置没满足的，
+ * 直到没有可剔的。写成一次遍历会在 "C 被剔掉" 和 "B 要 C" 之间随机出结果——
+ * 取决于数组顺序，那是不可接受的。
+ *
+ * 冲突也放进同一个循环，因为两者会互相牵动：A 和 B 冲突、C 要 A，
+ * 剔掉 A 之后 C 也得跟着走。循环只会删不会加，所以一定收敛。
  */
 export function enabledExpansionIds(ids: readonly string[]): Set<string> {
   // 同样是先迁移再判前置：`requires` 里写的都是新 id，
   // 老配置带着旧 id 进来时若不迁移，"前置没满足"会把整个包剔掉
-  const on = new Set(normalizeExpansionIds(ids).filter((id) => !!expansionById(id)));
+  const order = normalizeExpansionIds(ids).filter((id) => !!expansionById(id));
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const on = new Set(order);
   for (;;) {
     let changed = false;
     for (const id of Array.from(on)) {
@@ -1551,6 +1621,25 @@ export function enabledExpansionIds(ids: readonly string[]): Set<string> {
       if (need.every((r) => on.has(r))) continue;
       on.delete(id);
       changed = true;
+    }
+    /*
+     * 冲突：按**配置里的先后**保留先出现的那个。
+     *
+     * 为什么是"先出现的赢"而不是"更重要的赢"：这里没有"更重要"这种信息，
+     * 而玩家的心理预期就是"我先勾的那个留下"。面板上想开另一个会先被拒绝，
+     * 所以这条只对老存档 / 联机快照这类"配置里本来就有一对"的情况生效。
+     */
+    for (const id of order) {
+      if (!on.has(id)) continue;
+      const mine = pos.get(id) ?? 0;
+      for (const other of order) {
+        if (other === id || !on.has(other)) continue;
+        if ((pos.get(other) ?? 0) > mine) continue; // 后面那个先让路，等它自己轮回来处理
+        if (!expansionsClash(id, other)) continue;
+        on.delete(id);
+        changed = true;
+        break;
+      }
     }
     if (!changed) return on;
   }

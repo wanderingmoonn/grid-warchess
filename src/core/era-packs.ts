@@ -1567,6 +1567,8 @@ const MODERN: UnitTypeDef[] = [
 export const ERA_ARMS: Expansion = {
   id: 'era-arms',
   scale: 'large',
+  // 第六代那 15 个专精兵挂在「信息化」上（兵种级 requiresPack），不开它就不进场
+  recommends: ['pack-contemporary'],
   name: '时代军备',
   blurb: '每一代都多一批可选兵种。',
   summary:

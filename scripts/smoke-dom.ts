@@ -2692,13 +2692,83 @@ check('扩展条目只印一句话，规则细则留给规则书', () => {
    * 有的干脆把十几个兵种名一口气列完（"桨帆船、德罗蒙、卡拉克、盖伦……"），
    * 二十几条挤在一屏里，玩家读完才知道自己该不该勾。
    * 现在面板只印 `blurb`（一句话），summary 留在规则书的合册总表里。
+   *
+   * 2026-11-12：卡片里多了「关系」标签（前置/冲突/联动），所以字数只量
+   * **说明那一行**——把标签一起数进去，"海军"就会因为"联动：信息化"而超标。
    */
   const item = doc.querySelector<HTMLElement>('[data-exp="naval"]')?.closest('.expansion-item');
   assert.ok(item, '面板里应该有「海军」这一条');
-  const text = item!.textContent ?? '';
+  const desc = item!.querySelector<HTMLElement>('.expansion-body > span:not(.expansion-tags)');
+  assert.ok(desc, '卡片里该有说明那一行');
+  const text = desc!.textContent ?? '';
   assert.ok(text.includes('从桨帆船到航母'), `面板该印那句 blurb，实际是：${text.trim()}`);
   assert.ok(!text.includes('德罗蒙'), '整串船名不该搬进面板——那些在规则书里');
   assert.ok(text.trim().length <= 40, `一条扩展的说明在面板上不该超过一行，实际 ${text.trim().length} 字`);
+});
+
+check('扩展卡片标出三种关系：前置（蓝）· 冲突（红）· 联动（绿）', () => {
+  /*
+   * 玩家在这里要回答的是同一个问题——"这个包和别的包什么关系"。
+   * 三种关系的形状一样、只有底色不同，所以这里只查"哪一类标签出现在谁身上"。
+   *
+   * 冲突尤其要**两侧都标**：只写在被冲突的那一侧，另一张卡上什么都没写，
+   * 玩家勾下去才被拒，那种体验比没有提示更差。
+   */
+  const chipsOf = (id: string): HTMLElement[] => {
+    const card = doc.querySelector<HTMLElement>(`[data-exp="${id}"]`)?.closest('.expansion-item');
+    assert.ok(card, `面板里应该有「${id}」这一条`);
+    return [...card!.querySelectorAll<HTMLElement>('.expansion-req')];
+  };
+
+  const city = chipsOf('city-works');
+  const clash = city.find((c) => c.classList.contains('is-clash'));
+  assert.ok(clash, '城郭要标出冲突');
+  assert.ok(clash!.textContent?.includes('修真'), `冲突标签该指名道姓，实际：${clash!.textContent}`);
+
+  const cult = chipsOf('cultivation');
+  assert.ok(
+    cult.some((c) => c.classList.contains('is-clash') && c.textContent?.includes('城郭')),
+    '修真那一侧也要标出来（关系只写在城郭的数据里，显示要对称）',
+  );
+
+  const fan = chipsOf('fantasy');
+  const link = fan.find((c) => c.classList.contains('is-link'));
+  assert.ok(link, '奇想要标出联动');
+  assert.ok(link!.textContent?.includes('信息化'), `联动标签该写出目标，实际：${link!.textContent}`);
+
+  // 前置那一类还是原来的写法（太空战争依赖太空时代）
+  const sw = chipsOf('space-war');
+  assert.ok(
+    sw.some((c) => !c.classList.contains('is-clash') && !c.classList.contains('is-link') && c.textContent?.includes('太空时代')),
+    '前置还是蓝色的那一种',
+  );
+});
+
+check('勾选冲突的包会被拒绝，并说清是谁挡着', () => {
+  /*
+   * 规则层会把冲突的那一包剔掉（`enabledExpansionIds`），但那对玩家是**静默**的：
+   * 他勾了、开局了，才发现少了一整包。所以面板要在勾选这一刻就拒绝，
+   * 并写出挡路的那一个——玩家自己决定撤哪个。
+   */
+  const box = (id: string): HTMLInputElement => {
+    const el = doc.querySelector<HTMLInputElement>(`[data-exp="${id}"]`);
+    assert.ok(el, `找不到 ${id} 的勾选框`);
+    return el!;
+  };
+
+  if (!box('city-works').checked) box('city-works').click();
+  assert.equal(box('city-works').checked, true, '前提：城郭已经勾上');
+
+  // 勾修真：应当被拒（paint 之后要重新查节点）
+  box('cultivation').click();
+  assert.equal(box('cultivation').checked, false, '冲突的包不该被勾上');
+  const note = doc.querySelector<HTMLElement>('.map-note.is-bad');
+  assert.ok(note, '该给一行提示');
+  assert.ok(note!.textContent?.includes('修真'), `提示要指名道姓，实际：${note!.textContent}`);
+
+  // 收尾：把城郭取消，别把这一局的配置留给后面的用例
+  box('city-works').click();
+  assert.equal(box('city-works').checked, false, '取消之后能正常关掉');
 });
 
 /** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */

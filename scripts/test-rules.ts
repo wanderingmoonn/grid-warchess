@@ -46,6 +46,10 @@ import {
   bloodTurnOf,
   EXPANSIONS,
   activeExpansions,
+  conflictIdsOf,
+  conflictsWith,
+  enabledExpansionIds,
+  expansionsClash,
   LEGACY_UPGRADE_COST,
   availableExpansions,
   eraCeilingFor,
@@ -4899,6 +4903,62 @@ test('多个扩展可以同时生效', () => {
   assert.equal(s.cities[0].armor, eraDef(1).cityArmor + 1);
   const { b } = duel(s);
   assert.equal(computeDamage(s, cav, b), UNIT_TYPES.scout.atk - UNIT_TYPES.militia.armor);
+});
+
+test('扩展冲突：互斥的两包不能同时生效，先勾的赢', () => {
+  /*
+   * 城郭把造价换成粮/材、修真整套经济长在金币与灵石上——两套规则互相拆台，
+   * 一起开会在"造兵几乎不花钱"和"修士靠金币堆"之间得到一个解释不通的中间态。
+   *
+   * 冲突只在城郭那一侧写一次（`conflicts`），所以这条同时验"双向判"。
+   */
+  assert.equal(expansionsClash('city-works', 'cultivation'), true, '写在一侧也要认');
+  assert.equal(expansionsClash('cultivation', 'city-works'), true, '反方向同样成立');
+  assert.equal(expansionsClash('city-works', 'seasons'), false, '无关的包不算冲突');
+
+  const a = enabledExpansionIds(['city-works', 'cultivation']);
+  assert.equal(a.has('city-works'), true, '配置里排前面的留下');
+  assert.equal(a.has('cultivation'), false, '排后面的被剔掉');
+
+  const b = enabledExpansionIds(['cultivation', 'city-works']);
+  assert.equal(b.has('cultivation'), true, '换个顺序，赢的也换人');
+  assert.equal(b.has('city-works'), false);
+
+  // 面板要在**两个包**的卡片上都写出这层关系（只写一侧的话另一张卡是空的）
+  assert.deepEqual(conflictIdsOf('cultivation'), ['city-works']);
+  assert.deepEqual(conflictIdsOf('city-works'), ['cultivation']);
+  // 勾选时用来"指名道姓"的那个查询
+  assert.deepEqual(conflictsWith(['city-works', 'seasons'], 'cultivation'), ['city-works']);
+
+  // 真开一局：只有先勾的那包进场
+  const s = fresh({ expansionIds: ['city-works', 'cultivation'] });
+  const live = activeExpansions(s).map((e) => e.id);
+  assert.ok(live.includes('city-works'), '城郭生效');
+  assert.ok(!live.includes('cultivation'), '修真整包不进场');
+});
+
+test('扩展联动：只是提示，不参与门控', () => {
+  /*
+   * 「奇想」的两个六代英雄（圣剑勇者、邪龙王）挂兵种级 `requiresPack`，
+   * 要「信息化」才招得到。这是**联动**不是前置：单开奇想照样整包进场，
+   * 只是少了那两格。所以 `recommends` 不该影响 enabledExpansionIds。
+   */
+  assert.deepEqual(expansionById('fantasy')?.recommends, ['pack-contemporary']);
+  assert.equal(expansionById('fantasy')?.requires, undefined, '它不是前置');
+  const on = enabledExpansionIds(['fantasy']);
+  assert.equal(on.has('fantasy'), true, '单开照常生效');
+  assert.equal(on.has('pack-contemporary'), false, '不会把它自动补上');
+
+  // 每个联动目标都得是真包（防止改名之后留下一串死链）
+  for (const e of EXPANSIONS) {
+    for (const r of e.recommends ?? []) {
+      assert.ok(expansionById(r), `${e.id} 的联动目标 ${r} 不存在`);
+    }
+    for (const c of e.conflicts ?? []) {
+      assert.ok(expansionById(c), `${e.id} 的冲突目标 ${c} 不存在`);
+      assert.notEqual(c, e.id, `${e.id} 不该和自己冲突`);
+    }
+  }
 });
 
 console.log('\n哀兵必胜');
