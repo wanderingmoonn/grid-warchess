@@ -57,7 +57,7 @@
   },
   "src/core/fog.ts": {
     "state.tiles": 6,
-    "idx(": 2
+    "idx(": 1
   },
   "src/core/height-terrain.ts": {
     "state.tiles": 2
@@ -108,9 +108,6 @@
   "src/core/space/moon-base.ts": {
     "state.tiles": 1
   },
-  "src/core/space/silo.ts": {
-    "state.tiles": 1
-  },
   "src/core/tutorial.ts": {
     "state.tiles": 3,
     "idx(": 2
@@ -120,7 +117,7 @@
   },
   "src/main.ts": {
     "state.tiles": 7,
-    "idx(": 11,
+    "idx(": 10,
     "unitsAt(": 1
   },
   "src/rl/env-desc.ts": {
@@ -138,7 +135,7 @@
     "state.tiles": 1
   },
   "src/ui/board.ts": {
-    "state.tiles": 6
+    "state.tiles": 8
   },
   "src/ui/draft-panel.ts": {
     "state.tiles": 3
