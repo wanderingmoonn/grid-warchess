@@ -22,12 +22,23 @@ import {
   visibleTilesOn,
 } from '../../../src/core/rules.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, idxOn, EARTH } from '../../../src/core/board.ts';
+import { CONFIG } from '../../../src/core/config.ts';
 import { activeExpansions } from '../../../src/core/expansions.ts';
 import { footprintOf, distBetweenUnits } from '../../../src/core/query.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from '../../../src/core/fog.ts';
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../../../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../../../src/core/space/silo.ts';
 import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf, samplingsOf } from '../../../src/core/space/moon-base.ts';
+import {
+  EXPAND_BASE_COST,
+  PRODUCER_INCOME,
+  STATION_CORE_ID,
+  STATION_PRODUCER_ID,
+  buildCost,
+  buildRate,
+  siloWeight,
+  tickProducers,
+} from '../../../src/core/space/station.ts';
 import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
 /** 地球铺平（这些用例只关心规则，不关心地形） */
@@ -807,6 +818,166 @@ test('视图染色：可见集与格号都按图取', () => {
   // 不传 board 的老行为不变：按地球算
   assert.equal(onlyVisibleCells(s, [earthIdx], cells).length, 1, '缺省还是地球');
   assert.ok(moon.w < s.w, `前提：月球比地球窄（${moon.w} < ${s.w}）`);
+});
+
+console.log('\n太空战争：空间站');
+
+test('核心舱：发射后生成一张 5×5 的站，中心甲板、其余虚空', () => {
+  /*
+   * 核心舱发射**不加注、不装载**：地面上点火就入轨，只花资源。
+   * 站棋盘是那一刻才生成的——所以这条也在验"投送可以没有棋盘"这个地基。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 9999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+
+  const r = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+
+  const rec = r.state.starmap!.stations[0];
+  assert.ok(rec, '星图上要记下这座站');
+  const b = r.state.boards![rec!.board]!;
+  assert.equal(b.kind, 'station', 'kind 要是 station（面板据此不列它）');
+  assert.equal(b.w, 5, '哨站核心舱 = 5×5');
+  assert.equal(b.h, 5);
+
+  const mid = 2;
+  assert.equal(b.tiles[mid * 5 + mid]!.terrain, 'deck', '正中间是甲板');
+  assert.equal(
+    b.tiles.filter((t) => t.terrain === 'void').length,
+    24,
+    '其余全是虚空',
+  );
+
+  const core = r.state.units.find((u) => u.type === STATION_CORE_ID);
+  assert.ok(core, '核心舱要在场上');
+  assert.equal(boardIdOf(core!), rec!.board);
+  assert.deepEqual([core!.x, core!.y], [mid, mid], '站在正中间');
+  assert.equal(core!.acted, true, '刚入轨这一回合不能走动/攻击');
+});
+
+test('太空建设折扣：0 座井贵一半，井越多越便宜、但边际递减', () => {
+  /*
+   * `rate(n) = 0.5 - 0.8^n`：0 井 −50%、1 井 −30%、2 井 −14%……
+   * 关键不是这几个数，而是**每多一座井的收益在变小**，且永远不到 +50%。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.current = 'A';
+
+  assert.equal(siloWeight(s, 'A'), 0);
+  assert.ok(Math.abs(buildRate(s, 'A') - -0.5) < 1e-9, '0 座井：贵 50%');
+  assert.equal(buildCost(s, 'A', 100), 150, '100 金的额定 → 150 金');
+
+  // 摆两座建好的井（工地不算，见 siloWeight 的注释）
+  const a = place2(s, 'A', SILO_ID, 4, 4);
+  const b2 = place2(s, 'A', SILO_ID, 8, 8);
+  for (const x of [a, b2]) {
+    delete x.buildNeed;
+    delete x.buildDone;
+  }
+  const r2 = buildRate(s, 'A');
+  assert.ok(Math.abs(r2 - -0.14) < 1e-9, `2 座井该是 −14%，实际 ${(r2 * 100).toFixed(1)}%`);
+  assert.equal(buildCost(s, 'A', 100), 114);
+
+  // 边际递减：第 1→2 座的收益 > 第 2→3 座
+  const r1 = 0.5 - Math.pow(0.8, 1);
+  const r3 = 0.5 - Math.pow(0.8, 3);
+  assert.ok(r2 - r1 > r3 - r2, '每多一座井的收益必须递减');
+  assert.ok(r3 < 0.5, '3 座井还没到 +50%');
+  assert.ok(Math.pow(0.8, 1000) > 0, '0.8^n 永远大于 0，所以折扣永远到不了 +50%（软上限）');
+});
+
+test('扩建：选一格相邻虚空铺成甲板，不相邻的铺不了', () => {
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 9999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+  const made = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(made.ok, made.ok ? '' : made.reason);
+
+  const rec = made.state.starmap!.stations[0]!;
+  const core = made.state.units.find((u) => u.type === STATION_CORE_ID)!;
+  const goldBefore = made.state.players.A.gold;
+
+  // 挨着中心的那一格：可以铺
+  const ok = applyAction(made.state, {
+    type: 'HERO_SKILL',
+    unitId: core.id,
+    skillId: 'station-expand',
+    targetX: 3,
+    targetY: 2,
+  });
+  assert.ok(ok.ok, ok.ok ? '' : ok.reason);
+  const board = ok.state.boards![rec.board]!;
+  assert.equal(board.tiles[2 * board.w + 3]!.terrain, 'deck', '那一格变成甲板');
+  assert.ok(ok.state.players.A.gold < goldBefore, '要扣钱');
+
+  // 角落的虚空不挨着任何甲板：铺不了
+  const far = applyAction(ok.state, {
+    type: 'HERO_SKILL',
+    unitId: core.id,
+    skillId: 'station-expand',
+    targetX: 0,
+    targetY: 0,
+  });
+  assert.equal(far.ok, false, '不能凭空在角落铺');
+});
+
+test('生产舱：造在空甲板上，每回合产金', () => {
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 9999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+  const made = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(made.ok, made.ok ? '' : made.reason);
+  const core = made.state.units.find((u) => u.type === STATION_CORE_ID)!;
+
+  // 先铺一格空甲板，再造生产舱
+  const paved = applyAction(made.state, {
+    type: 'HERO_SKILL', unitId: core.id, skillId: 'station-expand', targetX: 3, targetY: 2,
+  });
+  assert.ok(paved.ok, paved.ok ? '' : paved.reason);
+  const built = applyAction(paved.state, {
+    type: 'HERO_SKILL', unitId: core.id, skillId: 'station-build', targetX: 3, targetY: 2,
+  });
+  assert.ok(built.ok, built.ok ? '' : built.reason);
+
+  const maker = built.state.units.find((u) => u.type === STATION_PRODUCER_ID);
+  assert.ok(maker, '生产舱要在场上');
+  assert.equal(boardIdOf(maker!), boardIdOf(core), '在自己的站上');
+
+  // 产出：直接调 tickProducers，免得被城市的收入混进来
+  const before = built.state.players.A.gold;
+  tickProducers(built.state, 'A');
+  assert.equal(built.state.players.A.gold, before + PRODUCER_INCOME, '每座生产舱 +6 金');
+});
+
+test('空间站上的东西按站结算：虚空不可通行、甲板能站', () => {
+  /*
+   * 虚空是"这里还没有东西"，不是一种地形——所以它必须挡人。
+   * 如果它能走，整个"扩建"就没有意义了。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  s.players.A.gold = 9999;
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  s.current = 'A';
+  const made = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:core:core-outpost' });
+  assert.ok(made.ok, made.ok ? '' : made.reason);
+
+  const rec = made.state.starmap!.stations[0]!;
+  const b = made.state.boards![rec.board]!;
+  const mid = (b.w - 1) / 2;
+  assert.equal(b.tiles[mid * b.w + mid]!.terrain, 'deck');
+  assert.equal(b.tiles[0]!.terrain, 'void');
+  // 虚空没有地形消耗（99 = 不可通行），甲板是 1
+  assert.ok(CONFIG.terrainCost.void >= 99, '虚空不可通行');
+  assert.equal(CONFIG.terrainCost.deck, 1, '甲板正常走');
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

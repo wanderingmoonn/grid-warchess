@@ -2024,13 +2024,21 @@ function escapeBoardText(t: string): string {
  */
 function syncBoardList(view: PlayerView): void {
   if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
-  const ids = boardIds(state);
-  const entries = ids.map((id) => ({
+  /*
+   * 面板只列**星球**，不列空间站。
+   *
+   * 站是"进得去的地方"，不是"要在这里切换的两块战场"：一局三座站会让列表
+   * 从 2 项涨到 5 项，而玩家真正想切的是地球和月球。站走星图或侧栏的「前往」。
+   */
+  const entryOf = (id: BoardId) => ({
     id,
     name: boardName(state, id),
     ready: boardReadyCount(view, id),
     contact: boardHasContact(view, id),
-  }));
+  });
+  const entries = boardIds(state)
+    .filter((id) => state.boards?.[id]?.kind !== 'station')
+    .map(entryOf);
   const devAdd = godMode() && !replay;
   const showList = entries.length > 1 || devAdd;
   const sig = [
@@ -2071,7 +2079,8 @@ function syncBoardList(view: PlayerView): void {
   }
 
   boardListEl.classList.toggle('open', boardListOpen);
-  const cur = entries.find((e) => e.id === activeBoardId) ?? entries[0]!;
+  // 当前可能正站在某座站上（从星图过来的）：标题要显示它，但菜单里不列
+  const cur = entries.find((e) => e.id === activeBoardId) ?? entryOf(activeBoardId);
   const current =
     `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 张）">` +
     `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +

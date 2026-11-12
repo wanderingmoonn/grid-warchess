@@ -74,6 +74,9 @@ export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   plateau: 2,
   // 天险：任何单位都上不去，用无穷大表示"不参与算账"
   mountain: Number.POSITIVE_INFINITY,
+  // 空间站：没有高度概念
+  void: 0,
+  deck: 0,
 };
 
 /**
@@ -105,6 +108,9 @@ export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   plateau: 2,
   // 站不上去，写 0 只是为了让表完整
   mountain: 0,
+  // 空间站：站内一马平川，视野不额外加减
+  void: 0,
+  deck: 0,
 };
 
 /**

@@ -13,7 +13,7 @@
 
 import { CONFIG } from './config.ts';
 import { activeExpansions } from './expansions.ts';
-import { boardIdOf, boardIds, boardOf, EARTH, idxOn } from './board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardOf, EARTH, idxOn } from './board.ts';
 import { visibleMarks } from './marks.ts';
 import { cityTiles, idx, isHiddenFrom, visibleTilesOn } from './rules.ts';
 import type { BoardId, City, GameState, KnownCity, KnownUnit, PlayerId, Terrain } from './types.ts';
@@ -96,7 +96,14 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
   const visibleByBoard: Record<BoardId, number[]> = {};
   const visibleSets: Record<BoardId, Set<number>> = {};
   for (const id of ids) {
-    const set = reveal ? allTilesOn(s, id) : visibleTilesOn(s, p, id);
+    /*
+     * 空间站全可见：站是自己的，虚空只是"还没铺"，不该像未探明地形那样黑着。
+     * 而且站就几格大，核心舱视野 4 基本也全罩住了——这条只是把"基本"变成"一定"。
+     */
+    const set =
+      reveal || boardKindOf(s, id) === 'station'
+        ? allTilesOn(s, id)
+        : visibleTilesOn(s, p, id);
     visibleSets[id] = set;
     visibleByBoard[id] = Array.from(set);
   }

@@ -40,6 +40,20 @@ function log(s: GameState, p: PlayerId, text: string, open = false): void {
   s.log.push({ turn: s.turn, player: p, text, open });
 }
 
+/**
+ * 到达"轨道"时干什么。
+ *
+ * 由太空包注册（生成空间站棋盘、把核心舱放上去）。返回 false = 这次落不了
+ * （比如点没选好），单位留在天上等下一回合——和"目的地被占满"同一条处理。
+ */
+export type OrbitArrival = (s: GameState, t: Transit) => boolean;
+
+let orbitArrival: OrbitArrival | null = null;
+
+export function registerOrbitArrival(fn: OrbitArrival): void {
+  orbitArrival = fn;
+}
+
 /** 这一格能不能落人：地形过得去、也没人占着 */
 function freeSpotOn(s: GameState, board: BoardId, x: number, y: number): boolean {
   // 按图取格：`tileOn` 认"地球的格在 s 上、别的图在 boards 里"这条约定
@@ -87,7 +101,15 @@ export function landingSpotOn(s: GameState, board: BoardId): { x: number; y: num
  */
 export function enterLane(
   s: GameState,
-  opts: { owner: PlayerId; laneId: string; to: StarNodeId; cargo: Unit[]; from?: StarNodeId },
+  opts: {
+    owner: PlayerId;
+    laneId: string;
+    to: StarNodeId;
+    cargo: Unit[];
+    from?: StarNodeId;
+    /** 缺省 surface：落到棋盘上。orbit = 到轨道，由扩展在到达时生成棋盘 */
+    kind?: 'surface' | 'orbit';
+  },
 ): Transit | null {
   const map = starmapOf(s);
   const lane = map?.lanes.find((l) => l.id === opts.laneId);
@@ -96,7 +118,12 @@ export function enterLane(
   const from = lane.a === opts.to ? lane.b : lane.a;
   if (lane.a !== opts.to && lane.b !== opts.to) return null;
   const dest = map.nodes.find((n) => n.id === opts.to);
-  if (!dest?.board) return null;
+  const kind = opts.kind ?? 'surface';
+  /*
+   * 只有"落到地面"才要求目的地有棋盘。
+   * 轨道那条路恰恰是反的：棋盘要等核心舱到了才生成，所以这里不能拦。
+   */
+  if (kind === 'surface' && !dest?.board) return null;
   if (opts.cargo.length === 0) return null;
 
   const mine = (s.transit ?? []).filter((t) => t.owner === opts.owner).length;
@@ -107,6 +134,7 @@ export function enterLane(
     lane: lane.id,
     from: opts.from ?? from,
     to: opts.to,
+    ...(kind === 'orbit' ? { kind } : {}),
     left: lane.turns,
     cargo: opts.cargo.map((u) => ({ ...u })),
   };
@@ -121,6 +149,14 @@ export function enterLane(
  * 这时**单位留在天上**、下一回合再试——不能丢，也不该凭空塞进别人身上。
  */
 export function arrive(s: GameState, t: Transit): boolean {
+  /*
+   * 轨道到达交给扩展：那里可能还没有棋盘，棋盘是**到了才生成**的。
+   * 用注册而不是直接 import，是为了让这个文件不认识"空间站"——
+   * 它只管"从 A 飞到 B"，至于 B 上建什么，是太空包的事。
+   */
+  if ((t.kind ?? 'surface') === 'orbit') {
+    return orbitArrival ? orbitArrival(s, t) : false;
+  }
   const map = starmapOf(s);
   const board = map?.nodes.find((n) => n.id === t.to)?.board;
   if (!board) return false;

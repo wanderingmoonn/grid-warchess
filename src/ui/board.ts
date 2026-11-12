@@ -205,6 +205,8 @@ const TERRAIN_CLASS: Record<string, string> = {
   dune: 't-dune',
   regolith: 't-regolith',
   crater: 't-crater',
+  void: 't-void',
+  deck: 't-deck',
   shallow: 't-shallow',
   lava: 't-lava',
   volcano: 't-volcano',

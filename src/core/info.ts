@@ -59,6 +59,18 @@ export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     defense: '护甲 +2',
     note: '坑缘的碎石坡，能挡一点，但要爬上去。',
   },
+  void: {
+    name: '虚空',
+    cost: '不可通行',
+    defense: '—',
+    note: '空间站里还没铺出来的地方。花资源把它铺成甲板，站才长得大。',
+  },
+  deck: {
+    name: '甲板',
+    cost: '1 移动力',
+    defense: '无掩护',
+    note: '空间站铺好的地板。舱段和人都站在这里。',
+  },
   water: {
     name: '水域',
     cost: '不可通行',
