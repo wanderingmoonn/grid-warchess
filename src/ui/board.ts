@@ -465,6 +465,21 @@ function incomeBadgeOf(cost: ResourceCost): string {
   return first ? `+${first[1]}${resourceShort(first[0])}` : '';
 }
 
+/*
+ * 只刷新格宽（`--cell`），不重画棋盘。
+ *
+ * `fitBoard()` 改的是棋盘外框尺寸，格子是按 `1fr` 排的，会自己跟着走；
+ * 但 `--cell` 是 `renderBoard()` 里写的，缩放/窗口变化之后它还是旧值。
+ * 于是"按格取景"的背景（丘陵纹理、水面波光）用旧格宽算偏移，图案在格边界上
+ * 对不齐——表现就是"断开"，点一下棋盘触发重画又好了。
+ * 这个函数让 fitBoard 在改完尺寸后把格宽补上。
+ */
+export function refreshCellVar(el: HTMLElement, cols: number): void {
+  if (!Number.isFinite(cols) || cols <= 0) return;
+  const cellSize = Math.max(18, (el.clientWidth - 12) / cols);
+  setVar(el, '--cell', `${cellSize}px`);
+}
+
 export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): void {
   ensureStructure(el);
   const s = view.state;
@@ -659,19 +674,6 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (node.dataset.v !== v) node.dataset.v = v;
       }
       if (cls.includes('t-hill')) {
-        /*
-         * 土堆是**稀疏物件**，不是纹理：约 2/7 的丘陵格长一丛，其余留白。
-         * 两种图交替（`a` / `b`），免得整片丘陵是同一个形状重复。
-         * 物件与格子一一对应，所以永远不会被格边切断——这是它相对"背景纹理"
-         * 的决定性优势（纹理按格取景，边界上必然差半像素）。
-         */
-        const hk = (x * 31 + y * 17) % 7;
-        const hm = hk === 0 ? 'a' : hk === 3 ? 'b' : '';
-        if (hm) {
-          if (node.dataset.hm !== hm) node.dataset.hm = hm;
-        } else if (node.dataset.hm) {
-          delete node.dataset.hm;
-        }
 
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';

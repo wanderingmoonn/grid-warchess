@@ -85,7 +85,7 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
+import { cellAtPoint, coordsFromEvent, refreshCellVar, renderBoard } from './ui/board.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardState, EARTH, hasBoard } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
@@ -1791,6 +1791,16 @@ function fitBoard(): void {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
   }
+
+  /*
+   * 尺寸变了，格宽也要跟着变。
+   *
+   * `--cell` 是 renderBoard 写的，而这里只改棋盘外框、不重画内容；
+   * 格子按 `1fr` 排会自己跟着走，但"按格取景"的背景（丘陵纹理、水面波光）
+   * 还在用旧格宽算偏移，图案在格边界上就对不齐——表现是缩放后丘陵/水面
+   * "断开"，点一下棋盘（触发重画）又好了。这一句把这个窗口关掉。
+   */
+  refreshCellVar(boardEl, state?.w ?? 0);
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
