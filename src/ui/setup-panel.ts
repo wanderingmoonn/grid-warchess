@@ -604,15 +604,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const out: string[] = [];
         const need = expansionById(id)?.requires ?? [];
         if (need.length > 0) {
-          out.push(`<span class="expansion-req">需先开：${need.map(nameOf).join('、')}</span>`);
+          out.push(`<span class="expansion-req">依赖：${need.map(nameOf).join('、')}</span>`);
         }
         const clash = conflictIdsOf(id);
         if (clash.length > 0) {
-          out.push(`<span class="expansion-req is-clash">不能同开：${clash.map(nameOf).join('、')}</span>`);
+          out.push(`<span class="expansion-req is-clash">冲突：${clash.map(nameOf).join('、')}</span>`);
         }
         const link = expansionById(id)?.recommends ?? [];
         if (link.length > 0) {
-          out.push(`<span class="expansion-req is-link">联动：${link.map(nameOf).join('、')}</span>`);
+          out.push(`<span class="expansion-req is-link">推荐：${link.map(nameOf).join('、')}</span>`);
         }
         return out.length > 0 ? `<span class="expansion-tags">${out.join('')}</span>` : '';
       };
