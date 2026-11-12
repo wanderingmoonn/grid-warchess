@@ -183,9 +183,23 @@ export const SPACE_WAR: Expansion = {
      * 点站里的任何一座舱段都能看到——玩家想确认"再加一台推进器会不会过载"，
      * 不该先回去点核心舱。
      */
-    getTilePanelHtml: ({ state, unit }) => {
+    getTilePanelHtml: ({ state, unit, viewer }) => {
       if (!unit) return null;
-      return stationPowerHtml(state, unit);
+      const power = stationPowerHtml(state, unit);
+      if (!power) return null;
+      /*
+       * 改名挂在**核心舱的单位卡**上，而不是星图里。
+       *
+       * 星图上要「点开星图 → 点星球 → 再点改名」，三步才到；而玩家改名的时机
+       * 基本是"我正在看这座站"。所以放在它自己的卡片上，和扩建、建舱段在一起。
+       * 只给核心舱：站在生产舱上点"改名"，会让人以为改的是那座舱段。
+       */
+      const rec = stationOf(state, unit);
+      const rename =
+        rec && unit.type === STATION_CORE_ID && unit.owner === viewer
+          ? `<button class="btn btn-sm" data-act="star-rename" data-id="${rec.board}" title="给这座空间站起个名字">给空间站改名</button>`
+          : '';
+      return power + rename;
     },
   },
 };

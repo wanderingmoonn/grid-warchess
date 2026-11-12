@@ -470,6 +470,13 @@ check('星图：航道上真的画出航行中的站（小三角）', () => {
   const tip = sails[0]!.querySelector('title')?.textContent ?? '';
   assert.ok(tip.includes('前哨站'), `三角的提示要写清是哪座站：${tip}`);
   assert.ok(tip.includes('50%'), `走了一半要写 50%：${tip}`);
+  /*
+   * 方向固定朝右：转过之后在斜线上的小三角像歪掉的箭头，
+   * 反而不好认。所以 `transform` 里只该有 translate，没有 rotate。
+   */
+  const tf = sails[0]!.getAttribute('transform') ?? '';
+  assert.ok(tf.includes('translate'), `位置要按进度插值：${tf}`);
+  assert.equal(tf.includes('rotate'), false, `三角不跟着航线转：${tf}`);
 });
 
 check('地形类正确分布', () => {

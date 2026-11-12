@@ -1112,21 +1112,8 @@ function starPanelInfo(): StarPanelInfo | null {
     const goto: Array<{ label: string; board: string }> = [];
     if (n.board) goto.push({ label: n.name, board: n.board });
     for (const st of n.stations) goto.push({ label: st.name, board: st.board });
-    // 只有自己的站才给「改名」：别人的站名你改不了
-    const mine = (peekStarmap(state)?.stations ?? []).filter(
-      (st) => st.at === n.id && st.owner === me(),
-    );
-    const rename = mine.map((st) => ({
-      board: st.board,
-      name: state.boards?.[st.board]?.name ?? st.board,
-    }));
-    return {
-      kind: 'node',
-      title: n.name,
-      lines,
-      ...(goto.length > 0 ? { goto } : {}),
-      ...(rename.length > 0 ? { rename } : {}),
-    };
+    // 改名不在这里：它挂在核心舱的单位卡上（玩家改名的时机是"我正在看这座站"）
+    return { kind: 'node', title: n.name, lines, ...(goto.length > 0 ? { goto } : {}) };
   }
 
   const lane = lay.lanes.find((l) => l.id === starSel!.id);
@@ -2082,21 +2069,27 @@ function escapeBoardText(t: string): string {
  */
 function syncBoardList(view: PlayerView): void {
   if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
-  /*
-   * 面板只列**星球**，不列空间站。
-   *
-   * 站是"进得去的地方"，不是"要在这里切换的两块战场"：一局三座站会让列表
-   * 从 2 项涨到 5 项，而玩家真正想切的是地球和月球。站走星图或侧栏的「前往」。
-   */
   const entryOf = (id: BoardId) => ({
     id,
     name: boardName(state, id),
     ready: boardReadyCount(view, id),
     contact: boardHasContact(view, id),
   });
-  const entries = boardIds(state)
-    .filter((id) => state.boards?.[id]?.kind !== 'station')
-    .map(entryOf);
+  /*
+   * 面板的顺序：**星图 → 星球 → 自己的空间站**。
+   *
+   * 以前站不进这个列表（"站是进得去的地方，不是要切的战场"），但实际用下来
+   * "回自己的站"是高频操作，而星图要三步（开星图 → 点星球 → 点前往）。
+   * 列表里直接放一个「站」，一步就到。
+   *
+   * 站排在最后：只有地球和月球的局，这个列表长得还和以前一样，
+   * 多出来的那一截在下面。
+   */
+  const ids = boardIds(state);
+  const isStation = (id: BoardId) => state.boards?.[id]?.kind === 'station';
+  const planetIds = ids.filter((id) => !isStation(id));
+  const stationIds = ids.filter(isStation);
+  const entries = [...planetIds, ...stationIds].map(entryOf);
   const devAdd = godMode() && !replay;
   const showList = entries.length > 1 || devAdd;
   const sig = [
@@ -2137,10 +2130,9 @@ function syncBoardList(view: PlayerView): void {
   }
 
   boardListEl.classList.toggle('open', boardListOpen);
-  // 当前可能正站在某座站上（从星图过来的）：标题要显示它，但菜单里不列
   const cur = entries.find((e) => e.id === activeBoardId) ?? entryOf(activeBoardId);
   const current =
-    `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 张）">` +
+    `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 个地方）">` +
     `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +
     `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
     (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
@@ -2148,17 +2140,18 @@ function syncBoardList(view: PlayerView): void {
     `<span class="bl-caret">▾</span>` +
     `</button>`;
 
-  const rows = entries
-    .map(
-      (e) =>
-        `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
-        `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
-        `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
-        (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
-        (e.contact ? '<i class="bl-contact"></i>' : '') +
-        `</button>`,
-    )
-    .join('');
+  const rowOf = (e: { id: BoardId; name: string; ready: number; contact: boolean }): string =>
+    `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
+    `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
+    `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
+    (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
+    (e.contact ? '<i class="bl-contact"></i>' : '') +
+    `</button>`;
+  const rows =
+    planetIds.map((id) => rowOf(entryOf(id))).join('') +
+    (stationIds.length > 0
+      ? `<div class="bl-sep">空间站</div>${stationIds.map((id) => rowOf(entryOf(id))).join('')}`
+      : '');
 
   /*
    * 星图：**相连**与**在途**。
@@ -2235,7 +2228,11 @@ function switchBoard(id: BoardId): void {
   pendingMovePath = null;
   pendingSkill = null;
   pendingDevice = null;
-  boardListOpen = false;
+  /*
+   * 切图**不动** `boardListOpen`：玩家要"保持展开/关闭状态"。
+   * 以前这里强制收起，于是"点完一座站想再点另一座"要重新展开一次——
+   * 而这个列表本来就是连着点的地方。
+   */
   // 星图盖着的时候切了图：把覆盖层收掉，否则新图上还压着一层旧星图
   starOpen = false;
   starSel = null;

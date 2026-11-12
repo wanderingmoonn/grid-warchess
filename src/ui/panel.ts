@@ -121,11 +121,6 @@ export interface StarPanelInfo {
    * 玩家在星图上点它，本来想去的可能就是其中某一座。
    */
   goto?: Array<{ label: string; board: string }>;
-  /**
-   * 可以改名的空间站（只有自己的站才给这个入口）。
-   * 一个轨道上停两座站时，默认名只差编号，玩家要数着点——改名是最省事的解法。
-   */
-  rename?: Array<{ board: string; name: string }>;
 }
 
 export interface PanelInput {
@@ -496,12 +491,7 @@ function panelHtml(input: PanelInput): string {
                  `<button class="btn btn-sm btn-primary" data-act="star-go" data-id="${escapeHtml(g.board)}">前往 ${escapeHtml(g.label)}</button>`,
              )
              .join(' ')}
-           ${(input.star.rename ?? [])
-             .map(
-               (r) =>
-                 `<button class="btn btn-sm" data-act="star-rename" data-id="${escapeHtml(r.board)}" title="给这座空间站改个名字">改名</button>`,
-             )
-             .join(' ')}
+
          </div>`
       : ''}
 
