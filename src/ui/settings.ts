@@ -126,7 +126,19 @@ export function settingsHtml(o: SettingsOptions): string {
               ? '<span class="set-hint">复盘里不给导出：先点复盘条上的「退出」，回到你那局再导。</span>'
               : '<button class="btn btn-sm" data-act="export">导出对局</button>'
           }
+          <button class="btn btn-sm" data-act="new-match">新对局</button>
           <button class="btn btn-sm" data-act="new-game">回首页</button>
+        </div>
+        <div class="set-row">
+          <div class="set-label">新对局快捷键
+            <span class="set-hint">
+              对局中按一下就能直接开新局的设置面板，不用先回首页再点「开始对局」。
+              只在棋盘上生效：正在输入文字时不抢键，复盘里先退出复盘。
+            </span>
+          </div>
+          <div class="set-control">
+            <kbd class="set-key">Alt</kbd><span class="set-key-plus">+</span><kbd class="set-key">N</kbd>
+          </div>
         </div>
       </section>
 

@@ -45,7 +45,17 @@ function apply(): void {
 export function initTerrainArt(): void {
   const url = fromUrl();
   const raw = stored();
-  on = url === 'on' ? true : url === 'off' ? false : (raw ?? false);
+  /*
+   * 没存过就**默认开**（2026-11-12 用户定）。
+   *
+   * 原来默认关，理由是"没验证过的东西不替玩家做主"。可材质现在是这个游戏
+   * 的脸面：新玩家第一眼看到的是纯色块，等于给他看了一张草稿；而设置藏得
+   * 很深（顶栏齿轮 → 外观），他根本不会想到去那儿找一张"本该长这样"的图。
+   *
+   * 只影响**第一眼**：存过 '0' 的人（明确关过的）仍然关着，
+   * `?terrain=off` 也照旧能压住——老玩家的选择不会被这一行改掉。
+   */
+  on = url === 'on' ? true : url === 'off' ? false : (raw ?? true);
   apply();
 }
 

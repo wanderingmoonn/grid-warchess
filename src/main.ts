@@ -4045,13 +4045,19 @@ function handleAction(act: string, el: HTMLElement): void {
    * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game' || act === 'settings';
+    const harmless =
+      act === 'manual' ||
+      act === 'feedback' ||
+      act === 'new-game' ||
+      act === 'new-match' ||
+      act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
     }
-    // 回首页之前先把那一局还回去：不还原的话，首页后面躲着的是一份别人棋的副本
-    if (act === 'new-game') exitReplay();
+    // 「回首页」「新对局」都是"离开这一局"：先把借来的 state 还回去再放行。
+    // 不还原的话，开局面板拿到的 `state.config` 是**别人那局**的配置。
+    if (act === 'new-game' || act === 'new-match') exitReplay();
   }
   switch (act) {
     case 'force-move':
@@ -4516,6 +4522,22 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'import': {
       // 顶栏这颗按钮也挪到首页了，分支留作同一条实现（见 importMatchFlow）
       importMatchFlow();
+      return;
+    }
+
+    /*
+     * 「新对局」：直接开开局面板，**不经过首页**。
+     *
+     * 首页那颗「开始对局」走的也是 `newGameFlow()`，所以两条入口是同一套实现：
+     * 面板里点「开始对局」才会真的换局，点取消等于什么都没发生。
+     *
+     * 复盘里先退出来：这时 `state` 是别人那局的某一帧，开局面板拿到的
+     * `state.config` 也是别人的；不退的话，确认之后新局起来了，
+     * 复盘条还挂在上面，`replayIndex` 和新 `state` 对不上。
+     */
+    case 'new-match': {
+      if (replay) exitReplay();
+      newGameFlow();
       return;
     }
 
@@ -7876,6 +7898,35 @@ window.addEventListener('keydown', (e) => {
       exitReplay();
       return;
   }
+});
+
+/*
+ * 新对局快捷键：Alt + N（设置里写着，见 `settingsHtml`）。
+ *
+ * 为什么不用单键 N：棋盘上没有任何地方提示"按 N"，误触的代价是丢掉当前这一局
+ * 的设置面板——虽然还要在面板里确认，但一个无提示的单键太容易在输入法、
+ * 快捷回复这些场景里被按下。Alt + N 不撞浏览器的新建窗口（那是 Ctrl + N，
+ * 拦不住也不该拦），也不撞已有的键位（空格 = 上帝模式结束回合，←→ = 复盘逐帧）。
+ *
+ * 守卫沿用空格那条：输入中不抢；按住不放只认第一下（否则按住 N 会连开面板）。
+ *
+ * 弹窗规则：**已经有一层弹窗时不开**——首页、规则书、联机面板都盖在棋盘上，
+ * 再叠一层开局面板，关的时候要关两次，而且下面那层的状态是旧的。
+ * 设置面板是唯一例外：那颗「新对局」按钮本来就在里面，按快捷键等于点它。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || e.metaKey) return;
+  if (e.code !== 'KeyN' && (e.key ?? '').toLowerCase() !== 'n') return;
+  if (e.repeat) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)) return;
+  const openMask = document.querySelector('.modal-mask');
+  if (openMask) {
+    if (openMask !== settingsMask) return;
+    closeSettings();
+  }
+  e.preventDefault();
+  handleAction('new-match', document.body);
 });
 
 /*

@@ -3496,6 +3496,35 @@ a.btn {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * 快捷键的键帽。
+ *
+ * `kbd` 的浏览器默认样式（等宽 + 内嵌边框）在深色面板上几乎看不见，
+ * 所以自己画：浅一档的底色 + 圆角 + 细描边，看起来才像"一个可以按的键"。
+ * 别做成彩色——它旁边是「新对局」按钮，两个都染色会分不清哪个能点。
+ */
+.set-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
+.set-key-plus {
+  margin: 0 2px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
 /* 设置里的 chip 组不要折行：`space-between` 会把右侧挤到很窄，
    「旧版 / 新版」被压成上下两行——看着像两个独立开关，其实是二选一。 */
 .set-row .chip-row {
