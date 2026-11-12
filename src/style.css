@@ -536,18 +536,25 @@ body {
   transform: translateY(1px);
 }
 
-/* ---------- 左下角：地图列表 ---------- */
+/* ---------- 左上角：星图（地图切换 + 在途） ---------- */
 /*
- * 收起时只有一枚"当前图"的按钮，点开在它上面列出所有图。
- * 位置和缩放条对称（它右下、这里左下），容器本身不接点击，只有按钮接。
+ * 收起时只有一枚"当前图"的按钮，点开在它**下面**列出所有节点、相连关系和在途。
+ *
+ * 为什么从右下角搬到左上：左下角挤着缩放条和底栏，玩家反馈"手感不好"——
+ * 一枚要经常点的按钮不该和缩放挤在同一个角上。左上角在顶栏下面，
+ * 平时是空的，点起来也不挡地图中央。
+ *
+ * 容器本身不接点击，只有按钮接。
  */
 .board-list {
   position: fixed;
   left: 14px;
-  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  /* 顶栏 54px，再留 10px：别压在顶栏的按钮上 */
+  top: calc(54px + 10px);
   z-index: 60;
   display: flex;
-  flex-direction: column-reverse;
+  /* 向下展开：按钮在上，菜单在它下面（以前在左下角是向上展开的） */
+  flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   opacity: 0.8;
@@ -676,6 +683,50 @@ body {
 
 .board-list.open .bl-caret {
   transform: rotate(180deg);
+}
+
+/*
+ * 星图：相连 + 在途。
+ *
+ * 只读文字，不接点击。航道那行是"谁和谁连着、几回合"，
+ * 在途那行是"谁的东西正在飞、还剩几回合"——同一块面板回答
+ * "我在哪、还能去哪、路上有什么"。
+ */
+.bl-star {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 132px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(120, 110, 92, 0.35);
+}
+
+.bl-lane,
+.bl-trip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: #8b8477;
+  white-space: nowrap;
+}
+
+/* 航程靠右：一行里左边是"谁连着谁"，右边是"几回合" */
+.bl-lane-t,
+.bl-trip-left {
+  margin-left: auto;
+  color: #6b6459;
+}
+
+.bl-trip {
+  color: #6b6459;
+}
+
+.bl-trip-who {
+  font-weight: 500;
 }
 
 .bl-add {
@@ -7186,7 +7237,7 @@ a.btn {
 @media (max-width: 920px) {
   .board-list {
     left: 10px;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    top: calc(54px + 8px);
     /*
      * 触屏上没有 hover，那条 `opacity: .8` 会**一直**生效：
      * 按钮本身 92% 白底，再乘 0.8 就只剩七成多，底下滚过去的文字直接透上来，

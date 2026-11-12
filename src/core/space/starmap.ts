@@ -96,14 +96,18 @@ export function laneBetween(s: GameState, a: StarNodeId, b: StarNodeId): StarLan
   );
 }
 
-/** 从某个节点出发能去哪儿：一条航道两个方向，都算出口 */
+/**
+ * 从某个节点出发能去哪儿：一条边两个方向都算出口。
+ *
+ * 没有"封锁"这一档（见 `StarLane` 的注释）：连着的就是连着的，
+ * 这里只回答"有哪些邻居、各要几回合"。
+ */
 export function lanesFrom(
   s: GameState,
   from: StarNodeId,
 ): Array<{ lane: StarLane; to: StarNodeId }> {
   const out: Array<{ lane: StarLane; to: StarNodeId }> = [];
   for (const l of peekStarmap(s)?.lanes ?? []) {
-    if (l.blocked) continue;
     if (l.a === from) out.push({ lane: l, to: l.b });
     else if (l.b === from) out.push({ lane: l, to: l.a });
   }

@@ -59,6 +59,7 @@ import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
+import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
 import { EARTH } from '../src/core/board.ts';
 import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
@@ -232,20 +233,51 @@ check('月面选中单位时，可攻击目标不能整组清空', () => {
   assert.equal(onEarth, ui, '地球直接返回原对象，零开销');
 });
 
-check('只有一张地图时，左下角的地图列表整个收起来', () => {
+check('只有一张地图时，左上角的星图面板整个收起来', () => {
   /*
-   * 玩家反馈：没开「太空时代」也会看见左下角那个"选择星球"的按钮。
-   * 它本来是给"地球 / 月球切换"用的，只有地球时就是一个永远只有一个选项的
-   * 按钮，占着地图。判据是"这一局有几张图"（`boardIds().length`），
-   * 不是"有没有开某个扩展"——以后再加别的图不用回来改。
+   * 玩家反馈两次：没开太空扩展也能看见那个"选择星球"的按钮。
+   * 它本来是给"地球 / 月球切换 + 看在途"用的，只有地球时就是一个永远只有一个
+   * 选项的按钮，占着角落还挡地图。
    *
-   * jsdom 里没有布局，所以断言"类名 + 没建子节点"：CSS 那句
-   * `.board-list.single { display: none }` 负责真正藏起来。
+   * 判据是"这一局有几张图"（`boardIds().length`），不是"有没有开某个扩展"。
+   *
+   * 这次不再只靠 `.board-list.single` 那个类：类样式会被 `display:flex`
+   * 或别处覆盖层吃掉（上一版就是这么"看起来改了却没生效"的），
+   * 所以直接写内联 `display:none`，测试断言的就是这个。
    */
   const el = doc.querySelector<HTMLElement>('#board-list');
   assert.ok(el, '容器本身还在（只是不显示）');
-  assert.ok(el!.classList.contains('single'), '单图时要带 single 类');
+  assert.equal(el!.style.display, 'none', '单图时要直接内联隐藏（不依赖 CSS 类）');
+  assert.ok(el!.classList.contains('single'), 'single 类留作 CSS 兜底');
   assert.equal(el!.children.length, 0, '单图时一个按钮都不该建出来');
+});
+
+check('星图面板的取数：相连与在途（纯函数，不需要 DOM）', () => {
+  /*
+   * 面板本身在 jsdom 里不好复现（要开太空扩展、还要造一张月球），
+   * 所以把"该显示什么"抽成 `starRows`。它错了的表现是"节点名写成 id"、
+   * "在途显示 -1 回合"——都是只会在实机被玩家发现的那种。
+   */
+  const st = {
+    players: { A: { name: '红方' }, B: { name: '蓝方' } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+    transit: [{ id: 't1', owner: 'B', lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, cargo: [] }],
+  } as never;
+
+  const r = starRows(st);
+  assert.deepEqual(r.lanes, [{ a: '地球', b: '月球', turns: 1 }], '航道要写名字，不是 id');
+  assert.deepEqual(r.trips, [{ owner: 'B', who: '蓝方', to: '月球', left: 1 }], '在途要带玩家名');
+
+  // 没有星图也没有在途：整块不占位（单图局就是这个状态）
+  assert.equal(hasStarRows(starRows({ players: { A: { name: '红方' } } } as never)), false);
 });
 
 check('地形类正确分布', () => {

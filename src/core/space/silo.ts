@@ -165,7 +165,7 @@ export function launchIntoLane(s: GameState, silo: Unit): string | null {
   const out = outboundLane(s, silo)!;
   const cargo = silo.cargo ?? [];
   const t = enterLane(s, { owner: silo.owner, laneId: out.laneId, to: out.to, cargo });
-  if (!t) return '航道用不了（可能被封锁了）';
+  if (!t) return '这条航道走不了';
 
   silo.cargo = [];
   writeSilo(silo, { fuel: 0, fueling: false });

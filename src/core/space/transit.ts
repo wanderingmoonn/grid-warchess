@@ -91,7 +91,7 @@ export function enterLane(
 ): Transit | null {
   const map = starmapOf(s);
   const lane = map?.lanes.find((l) => l.id === opts.laneId);
-  if (!map || !lane || lane.blocked) return null;
+  if (!map || !lane) return null;
   // 方向由"去哪"决定：一条航道两个方向都走
   const from = lane.a === opts.to ? lane.b : lane.a;
   if (lane.a !== opts.to && lane.b !== opts.to) return null;

@@ -90,6 +90,7 @@ import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
+import { hasStarRows, starRows } from './ui/star-panel.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -1946,31 +1947,44 @@ function syncBoardList(view: PlayerView): void {
     ready: boardReadyCount(view, id),
     contact: boardHasContact(view, id),
   }));
+  const devAdd = godMode() && !replay;
+  const showList = entries.length > 1 || devAdd;
   const sig = [
+    // show/hide 也算进签名：隐藏时 DOM 被清空了，切回来必须重建
+    showList ? 'show' : 'hide',
     boardListOpen ? 'open' : 'shut',
     activeBoardId,
     replay ? 'replay' : '',
     ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}`),
+    // 在途的倒计时：面板展开时它每回合都在变，不进签名就永远停在旧数字
+    ...(state.transit ?? []).map((t) => `${t.owner}/${t.to}/${t.left}`),
   ].join('|');
   if (sig === boardListSig) return;
   boardListSig = sig;
 
   /*
-   * 只有一张图时**整个列表都不该出现**。
+   * 只有一张图时**整个面板都不出现**。
    *
-   * 它存在的理由是"在地球和月球之间切换"；只有地球的时候，它是一块
-   * 永远只有一个选项的按钮，占着左下角、还挡着地图，玩家反馈说看着像多了个功能。
-   * 判据用"这一局有几张图"，不是"有没有开太空包"——以后再加别的图（空间站、
-   * 其他星球）不用回来改这里。
+   * 它存在的理由是"在图之间切换 + 看在途"；只有地球的时候，它是一块永远
+   * 只有一个选项的按钮，占着角落还挡地图。判据用"这一局有几张图"，
+   * 不是"有没有开某个扩展"——以后加空间站、别的星球不用回来改。
    *
-   * 唯一的例外是上帝模式的开发按钮（生成月球图）：那东西本来就是为了"还没有图的时候
-   * 造一张图"而存在的，藏起来就点不到了。
+   * 唯一的例外是上帝模式的开发按钮（生成月球图）：那东西本来就是为了
+   * "还没有图的时候造一张图"而存在的，藏起来就点不到了。
+   *
+   * 隐藏用**内联 `display:none`**，不再只靠 `.board-list.single` 那个类：
+   * 玩家反馈"还是看得见"，而类样式会被 `display:flex` 或别处的覆盖层吃掉，
+   * 内联样式没有这个问题（CSS 那条留作兜底）。
    */
-  const devAdd = godMode() && !replay;
-  const showList = entries.length > 1 || devAdd;
+  boardListEl.style.display = showList ? '' : 'none';
   boardListEl.classList.toggle('single', !showList);
-  // 收起时把展开状态也归位：否则下一局多图时会一进场就是展开的
-  if (!showList) boardListOpen = false;
+  if (!showList) {
+    // 收起时把展开状态归位、DOM 也清掉：否则下一局多图时会一进场就是展开的
+    boardListOpen = false;
+    boardListEl.classList.remove('open');
+    boardListEl.innerHTML = '';
+    return;
+  }
 
   boardListEl.classList.toggle('open', boardListOpen);
   const cur = entries.find((e) => e.id === activeBoardId) ?? entries[0]!;
@@ -1980,7 +1994,7 @@ function syncBoardList(view: PlayerView): void {
     `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
     (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
     (cur.contact ? '<i class="bl-contact" title="这张图上有敌人"></i>' : '') +
-    `<span class="bl-caret">▴</span>` +
+    `<span class="bl-caret">▾</span>` +
     `</button>`;
 
   const rows = entries
@@ -1995,12 +2009,42 @@ function syncBoardList(view: PlayerView): void {
     )
     .join('');
 
+  /*
+   * 星图：**相连**与**在途**。
+   *
+   * 星图放在这个面板里而不是单独开一块，是因为它们回答的是同一个问题
+   * "我在哪、还能去哪"。只有一张图时整个面板是隐藏的，玩家也就不会
+   * 被这一堆信息淹没——要看的时候它才在。
+   *
+   * 航道只写"谁连着谁、几回合"：太空里可以向任何方向飞，没有"封哪条路"
+   * 这回事（见 `StarLane` 的注释）。
+   */
+  const star = starRows(state);
+  const laneRows = star.lanes
+    .map(
+      (l) =>
+        `<div class="bl-lane">${escapeBoardText(l.a)} ⇄ ${escapeBoardText(l.b)}` +
+        `<span class="bl-lane-t">${l.turns} 回合</span></div>`,
+    )
+    .join('');
+  const tripRows = star.trips
+    .map(
+      (t) =>
+        `<div class="bl-trip" title="${escapeBoardText(t.who)}的火箭还有 ${t.left} 个回合到达">` +
+        `<span class="bl-trip-who">${escapeBoardText(t.who)}</span>` +
+        `<span class="bl-trip-to">→ ${escapeBoardText(t.to)}</span>` +
+        `<span class="bl-trip-left">${t.left}</span>` +
+        `</div>`,
+    )
+    .join('');
+  const starHtml = hasStarRows(star) ? `<div class="bl-star">${laneRows}${tripRows}</div>` : '';
+
   // 调试脚手架：第四步接入真正的月球后删掉
   const debug = devAdd
     ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
     : '';
 
-  boardListEl.innerHTML = showList ? `${current}<div class="bl-menu">${rows}${debug}</div>` : '';
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${rows}${starHtml}${debug}</div>`;
 }
 
 /**
