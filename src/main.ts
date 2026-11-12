@@ -449,8 +449,16 @@ function computeBoardView(visible: readonly number[]): Map<number, string> | und
   const cells = def?.cells?.({ state, viewer: me() });
   if (!cells || cells.length === 0) return undefined;
 
+  /*
+   * 格号是**这张图**的格号，宽也必须取这张图的：以前写死 `state.w`，
+   * 于是在月球/空间站上打开的视图会按地球的列宽换算，颜色整体错行。
+   * `visible` 由调用方给（那张图的可见集），不是地球那一份。
+   */
+  const w = boardOf(state, activeBoardId).w;
   const out = new Map<number, string>();
-  for (const c of onlyVisibleCells(state, visible, cells)) out.set(c.y * state.w + c.x, c.color);
+  for (const c of onlyVisibleCells(state, visible, cells, activeBoardId)) {
+    out.set(c.y * w + c.x, c.color);
+  }
   return out;
 }
 
@@ -464,8 +472,12 @@ function computeBoardGlyph(visible: readonly number[]): Map<number, string> | un
   const def = boardViewsOf().find((v) => v.id === id);
   const glyphs = def?.glyph?.({ state, viewer: me() });
   if (!glyphs || glyphs.length === 0) return undefined;
+  // 和染色同一个道理：格号属于这张图，列宽也得取这张图的
+  const w = boardOf(state, activeBoardId).w;
   const out = new Map<number, string>();
-  for (const g of onlyVisibleCells(state, visible, glyphs)) out.set(g.y * state.w + g.x, g.text);
+  for (const g of onlyVisibleCells(state, visible, glyphs, activeBoardId)) {
+    out.set(g.y * w + g.x, g.text);
+  }
   return out;
 }
 let selectedId: string | null = null;
@@ -1497,8 +1509,9 @@ function render(): void {
     threat,
     heat,
     // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
-    boardView: computeBoardView(view.visible),
-    boardGlyph: computeBoardGlyph(view.visible),
+    // 可见集按**正在看的那张图**给：地球的索引在月球上不是一个位置
+    boardView: computeBoardView(view.visibleByBoard[activeBoardId] ?? []),
+    boardGlyph: computeBoardGlyph(view.visibleByBoard[activeBoardId] ?? []),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,

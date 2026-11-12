@@ -21,7 +21,7 @@ import {
   SILO_ID,
   announceBuiltSilos,
   launchProblem,
-  launchToMoon,
+  launchIntoLane,
   siloLines,
   startFueling,
   tickSilos,
@@ -39,7 +39,9 @@ import {
   tickMoonBases,
 } from './moon-base.ts';
 import { boardIdOf } from '../board.ts';
-import { MOON_BOARD } from './silo.ts';
+import { MOON_BOARD } from './moon.ts';
+import { createStarmap, MOON_LANE_TURNS, starmapOf } from './starmap.ts';
+import { tickTransit, transitCountOf } from './transit.ts';
 
 /**
  * 把发射井加进"会盖房的人"的手艺里。
@@ -70,7 +72,7 @@ export const SPACE_AGE: Expansion = {
     + '地形只有月壤与环形山，没有城市。'
     + '左下角的地图列表可以在两张图之间切换，每张图各记各的相机。'
     + '<b>时代 5 可以修「火箭发射井」</b>（2×2、建在平原）：装一个地面单位，'
-    + `加注 ${SILO_FUEL_TURNS} 回合后点火，把它送到月面着陆点。`
+    + `加注 ${SILO_FUEL_TURNS} 回合后点火，进入<b>地月航道</b>，${MOON_LANE_TURNS} 回合后落到月面。`
     + '把一支<b>工程单位</b>送上去，它能在月面展开成 2×2 的<b>月球基地</b>；'
     + `基地的主动技能「月壤采样」${SAMPLE_TURNS} 个回合后把结果送回地球——<b>结果一到就赢</b>。`,
   scale: 'large',
@@ -84,6 +86,10 @@ export const SPACE_AGE: Expansion = {
     `加注是<b>计时器</b>：点一下「加注燃料」开始，之后每回合 +1，满 ${SILO_FUEL_TURNS} 回合才能点火。`
       + '发射后燃料清零，要再飞一趟就重新加注。'
       + '<b>进度是公开的</b>：每回合发一条战报（加注 1/3、2/3…），对手读得到你还有几回合就飞。',
+    '<b>航道</b>：地球和月球之间连着一条地月航道，点火之后单位进入航道飞 '
+      + `${MOON_LANE_TURNS} 个回合——顶栏会出现「红方 火箭 ${MOON_LANE_TURNS}」，双方都看得见。`
+      + '在途的单位不在任何棋盘上，<b>打不到</b>：航道只计时，不是战场。'
+      + '落地之后当回合不能动。',
     '<b>井藏不住</b>：发射井一建成就会在敌方视野里点亮一整个敌方回合；'
       + '加注期间每回合都会重新点亮（烟柱一直冒）。<b>不加注的旧井不亮</b>——'
       + '所以"建好先放着"是一种真实的欺骗。',
@@ -107,9 +113,18 @@ export const SPACE_AGE: Expansion = {
       // 会盖房的人先学会盖井（没开太空包的局连这个类型都没有，见上面）
       teachBuilders(state);
       // 已经有月球就别重复生成（导入存档、重开同一局）
-      if (state.boards?.moon) return;
-      state.boards ??= {};
-      state.boards.moon = createMoonBoard(state.w, state.seed);
+      if (!state.boards?.moon) {
+        state.boards ??= {};
+        state.boards.moon = createMoonBoard(state.w, state.seed);
+      }
+      /*
+       * 星图：月球有了就补一张"地球 ↔ 月球"的图。
+       *
+       * 老存档（11-12 之前）没有这个字段，`starmapOf` 会在第一次用到时
+       * 按现有棋盘补一张——这里先建好，读档之后面板、发射井立刻能用。
+       */
+      state.starmap ??= createStarmap({ moon: !!state.boards.moon });
+      starmapOf(state);
     },
 
     /**
@@ -123,6 +138,8 @@ export const SPACE_AGE: Expansion = {
     /** 加注是"我方后勤"：每回合推进自己那些正在加注的井 */
     onTurnStart: ({ state, player }) => {
       tickSilos(state, player);
+      // 在途的火箭：只推自己的（路上的东西归主人管）
+      tickTransit(state, player);
       tickMoonBases(state, player);
     },
 
@@ -193,7 +210,7 @@ export const SPACE_AGE: Expansion = {
         group: '发射井',
         label: '发射',
         detail: cargo.length > 0
-          ? `把货舱里的「${state.unitTypes[cargo[0]!.type]?.name ?? cargo[0]!.type}」送上月面`
+          ? `把货舱里的「${state.unitTypes[cargo[0]!.type]?.name ?? cargo[0]!.type}」送进航道`
           : '货舱是空的：先点「装载」接一个地面单位进来',
         note: problem ?? '条件齐了',
         disabled: !!problem,
@@ -205,7 +222,7 @@ export const SPACE_AGE: Expansion = {
       if (actionId === 'base:deploy') return deployBase(state, unit);
       if (unit.type !== SILO_ID) return '这里没有发射井';
       if (actionId === 'silo:fuel') return startFueling(state, unit);
-      if (actionId === 'silo:launch') return launchToMoon(state, unit);
+      if (actionId === 'silo:launch') return launchIntoLane(state, unit);
       return `认不出这个操作：${actionId}`;
     },
 
@@ -235,18 +252,38 @@ export const SPACE_AGE: Expansion = {
      * 文本带名字（默认就是"红方/蓝方"，不占几个字）：两个「登月 2」并排
      * 谁也分不清是谁的。
      */
-    topbarBadges: ({ state }) =>
-      samplingsOf(state)
-        .filter((info) => !info.done)
-        .map((info) => {
-          const who = state.players[info.owner].name;
-          return {
-            id: `space-lunar-${info.owner}`,
-            text: `${who} 登月 ${info.left}`,
-            hint:
-              `${who}的月壤采样还有 ${info.left} 个回合送回，一到就赢；` +
-              '基地一挨打就作废，所以贴上去打一下也是有效的反制',
-          };
-        }),
+    topbarBadges: ({ state }) => {
+      const out: Array<{ id: string; text: string; hint: string }> = [];
+      for (const info of samplingsOf(state)) {
+        if (info.done) continue;
+        const who = state.players[info.owner].name;
+        out.push({
+          id: `space-lunar-${info.owner}`,
+          text: `${who} 登月 ${info.left}`,
+          hint:
+            `${who}的月壤采样还有 ${info.left} 个回合送回，一到就赢；` +
+            '基地一挨打就作废，所以贴上去打一下也是有效的反制',
+        });
+      }
+      /*
+       * 在途的火箭也是**公开**的：天上飞着的东西藏不住，
+       * 而且对手得读得到"还有几回合到"，才谈得上在落点等它。
+       * 每方一条（取最近的那一枚），不按人头刷屏。
+       */
+      for (const owner of ['A', 'B', 'C', 'D'] as const) {
+        if (transitCountOf(state, owner) === 0) continue;
+        const trips = (state.transit ?? []).filter((t) => t.owner === owner);
+        const soonest = Math.min(...trips.map((t) => Math.max(0, t.left)));
+        const who = state.players[owner].name;
+        out.push({
+          id: `space-transit-${owner}`,
+          text: `${who} 火箭 ${soonest}`,
+          hint:
+            `${who}有 ${trips.length} 枚火箭在航道上，最快 ${soonest} 个回合后落地；` +
+            '落点固定写在发射井面板上，可以在那里等它',
+        });
+      }
+      return out;
+    },
   },
 };

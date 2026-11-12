@@ -333,10 +333,12 @@ export function onlyVisibleCells<T extends { x: number; y: number }>(
   s: GameState,
   visible: readonly number[],
   cells: readonly T[],
+  /** `visible` 是哪张图的格号。不传 = 地球（老调用点一个都不用改） */
+  board: BoardId = EARTH,
 ): readonly T[] {
   if (!s.fog) return cells;
   const vis = new Set(visible);
-  return cells.filter((c) => vis.has(idx(s, c.x, c.y)));
+  return cells.filter((c) => vis.has(idxOn(s, board, c.x, c.y)));
 }
 
 /** 视野外的格子亮度，用于渲染时压暗。返回 0-1 */

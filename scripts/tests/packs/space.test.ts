@@ -21,14 +21,14 @@ import {
   threatTiles,
   visibleTilesOn,
 } from '../../../src/core/rules.ts';
-import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, EARTH } from '../../../src/core/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, idxOn, EARTH } from '../../../src/core/board.ts';
 import { activeExpansions } from '../../../src/core/expansions.ts';
 import { footprintOf, distBetweenUnits } from '../../../src/core/query.ts';
-import { playerView, viewOnBoard } from '../../../src/core/fog.ts';
+import { onlyVisibleCells, playerView, viewOnBoard } from '../../../src/core/fog.ts';
 import { createMoonBoard, MOON_MIN_SIZE, moonSizeFor } from '../../../src/core/space/moon.ts';
 import { SILO_ID, SILO_FUEL_TURNS, siloLines } from '../../../src/core/space/silo.ts';
 import { MOON_BASE_ID, SAMPLE_TURNS, samplingOf, samplingsOf } from '../../../src/core/space/moon-base.ts';
-import type { Board, GameState, Unit } from '../../../src/core/types.ts';
+import type { Board, GameState, Terrain, Unit } from '../../../src/core/types.ts';
 
 /** 地球铺平（这些用例只关心规则，不关心地形） */
 function flatten(s: GameState, terrain: 'plain' | 'water' = 'plain'): void {
@@ -145,6 +145,23 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
 
   const go = run({ type: 'UNIT_ACTION', unitId: silo!.id, actionId: 'silo:launch' });
   assert.ok(go.ok, `发射失败：${go.reason}`);
+  assert.equal(siloOf(cur)!.custom?.fuel, 0, '燃料清零');
+  assert.equal((siloOf(cur)!.cargo ?? []).length, 0, '货舱空了');
+
+  /*
+   * 发射之后**人不在棋盘上**，在航道上飞——这是这一版最大的行为变化。
+   * 以前是"点火即到达"，现在是"点火 + 飞 1 回合"，中间那一段就是
+   * 对手唯一能看见、能等的一段路（顶栏会报"火箭 1"）。
+   */
+  assert.equal(cur.units.some((u) => u.id === pax.id), false, '在途单位不在任何棋盘上');
+  assert.equal((cur.transit ?? []).length, 1, '有一枚火箭在天上');
+  assert.equal(cur.transit![0]!.to, 'moon', '飞向月球');
+  assert.equal(cur.transit![0]!.left, 1, '还有一个回合到');
+
+  // 过一轮回到 A：回合开始的 tickTransit 把它落地
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal((cur.transit ?? []).length, 0, '落地之后天上就没有它了');
 
   const landed = cur.units.find((u) => u.id === pax.id);
   assert.ok(landed, '人该在场上（同一支兵，不是新造的）');
@@ -155,8 +172,6 @@ test('发射井：装一个单位、加注 3 回合、送上月球', () => {
     '落点要在月图范围内',
   );
   assert.equal(landed!.acted, true, '落地当回合不能再动');
-  assert.equal(siloOf(cur)!.custom?.fuel, 0, '燃料清零');
-  assert.equal((siloOf(cur)!.cargo ?? []).length, 0, '货舱空了');
   // 发射井自己还在，想再飞一趟就重新加注
   assert.ok(siloOf(cur), '发射井不会被消耗');
 });
@@ -640,6 +655,158 @@ test('展开基地：四格都要是平地，站在环形山上展不开', () =>
   const good = applyAction(s, { type: 'UNIT_ACTION', unitId: crew.id, actionId: 'base:deploy' });
   assert.ok(good.ok, `填平之后该能展开：${good.ok ? '' : good.reason}`);
   assert.ok(good.state.units.some((u) => u.type === MOON_BASE_ID), '基地起来了');
+});
+
+console.log('\n太空战争：航道投送');
+
+test('航道投送：目的地不是月球也能送到（手搓第二个节点）', () => {
+  /*
+   * 这条是 P0 的验收：**投送链不认识月球**。
+   *
+   * 以前 `launchToMoon` 里写死 `MOON_BOARD` 和 `moonLandingTile`，换一张图就废。
+   * 现在发射井只做两件事：问"我站在星图哪个节点"、问"这个节点有哪些可用航道"。
+   * 所以这里把航道改成"地球 → 一张手搓的 8×8 图"，照样能送过去。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  const W = 8;
+  s.boards!['test-b'] = {
+    id: 'test-b',
+    kind: 'planet',
+    name: '试验场',
+    w: W,
+    h: W,
+    tiles: Array.from({ length: W * W }, () => ({ terrain: 'plain' as Terrain, cityId: null })),
+  };
+  s.starmap!.nodes.push({ id: 'tb', kind: 'planet', board: 'test-b', name: '试验场' });
+  // 只留这一条：发射井没有"月球优先"这种说法，它拿到的第一条就是路
+  s.starmap!.lanes = [{ id: 'earth-tb', a: 'earth', b: 'tb', turns: 2 }];
+
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  const pax = place2(s, 'A', 'militia', 7, 6);
+  // 装好货、加满油（装载与加注本身在别的用例里验）
+  s.units = s.units.filter((u) => u.id !== pax.id);
+  silo.cargo = [{ ...pax }];
+  silo.custom = { fuel: SILO_FUEL_TURNS, fueling: false };
+  s.current = 'A';
+
+  let cur = s;
+  const run = (a: Parameters<typeof applyAction>[1]) => {
+    const r = applyAction(cur, a);
+    if (r.ok) cur = r.state;
+    return r;
+  };
+
+  const go = run({ type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:launch' });
+  assert.ok(go.ok, `发射失败：${go.reason}`);
+  assert.equal((cur.transit ?? []).length, 1, '上路了');
+  assert.equal(cur.transit![0]!.to, 'tb', '飞向手搓的那个节点，不是月球');
+  assert.equal(cur.transit![0]!.left, 2, '航程 2 回合');
+
+  // 一来一回算一轮：两轮之后到
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+  assert.equal((cur.transit ?? []).length, 1, '才过了一回合，还在天上');
+  assert.equal(cur.transit![0]!.left, 1);
+  run({ type: 'END_TURN' });
+  run({ type: 'END_TURN' });
+
+  assert.equal((cur.transit ?? []).length, 0, '到了');
+  const landed = cur.units.find((u) => u.id === pax.id);
+  assert.ok(landed, '人落地了');
+  assert.equal(boardIdOf(landed), 'test-b', '落在手搓那张图上');
+  assert.equal(landed!.acted, true, '落地当回合不能动');
+});
+
+test('在途单位：不在任何棋盘上，谁也打不到', () => {
+  /*
+   * 在途单位**不进 `s.units`**，这是这条链最重要的一条约定：
+   * 留着的话会被回合重置（moved/acted 被清）、被迷雾裁、被战斗误伤，
+   * 还会在两张图上"同时存在"。
+   *
+   * 顺带钉住"打不到"：所有攻击目标都从 `units` 里取，不在里面就等于
+   * 天上那一段路是安全的——这是已定的设计（航道只计时，不能打）。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flatten(s, 'plain');
+  const silo = place2(s, 'A', SILO_ID, 5, 5);
+  const pax = place2(s, 'A', 'militia', 7, 6);
+  s.units = s.units.filter((u) => u.id !== pax.id);
+  silo.cargo = [{ ...pax }];
+  silo.custom = { fuel: SILO_FUEL_TURNS, fueling: false };
+  s.current = 'A';
+
+  const go = applyAction(s, { type: 'UNIT_ACTION', unitId: silo.id, actionId: 'silo:launch' });
+  assert.ok(go.ok, go.ok ? '' : go.reason);
+  assert.equal(go.state.units.some((u) => u.id === pax.id), false, '在途单位不在棋盘上');
+  assert.equal((go.state.transit ?? []).length, 1, '但它在天上');
+  // 地球与月球上都找不到它——不存在"同时出现在两张图"这回事
+  for (const b of boardIds(go.state)) {
+    assert.equal(
+      go.state.units.some((u) => u.id === pax.id && boardIdOf(u) === b),
+      false,
+      `${b} 上不该有它`,
+    );
+  }
+});
+
+test('装卸按图：月球上装得上，跨图装不上', () => {
+  /*
+   * `LOAD` / `UNLOAD` 以前在门口一刀切 `offWorld`，月面和空间站都装卸不了。
+   * 现在只认"同图 + 贴身"：跨图那一条才是真正要防的错（坐标再近也隔着天空）。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  flattenMoon(s);
+  s.unitTypes['test-lander'] = {
+    ...s.unitTypes.militia,
+    id: 'test-lander',
+    name: '登陆艇',
+    move: 2,
+    carry: { hold: { max: 2 } },
+  };
+  // 地球同一坐标上先放一个自己人：`place2` 按 (x,y) 去重，后摆会把月球那个人删掉
+  const ghost = place2(s, 'A', 'militia', 4, 3);
+  const ferry = onMoon(s, 'A', 'test-lander', 3, 3);
+  const pax = onMoon(s, 'A', 'militia', 4, 3);
+  s.current = 'A';
+  refreshMemory(s);
+
+  const cross = applyAction(s, { type: 'LOAD', unitId: ferry.id, cargoId: ghost.id });
+  assert.equal(cross.ok, false, '跨图装不上');
+  assert.ok(cross.ok === false && cross.reason.includes('同一张图'), `理由要说清是同图问题：${cross.ok ? '' : cross.reason}`);
+
+  const same = applyAction(s, { type: 'LOAD', unitId: ferry.id, cargoId: pax.id });
+  assert.ok(same.ok, `月面上该能装载：${same.ok ? '' : same.reason}`);
+  assert.equal((same.state.units.find((u) => u.id === ferry.id)!.cargo ?? []).length, 1);
+});
+
+test('视图染色：可见集与格号都按图取', () => {
+  /*
+   * `onlyVisibleCells` 以前用 `idx(s, ...)`（地球的列宽）。地球 20 宽、月球 15 宽，
+   * 同一个 (4,3) 在两张图上是不同的格号——按错宽度筛，颜色会整体错行。
+   */
+  const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
+  s.fog = true;
+  const moon = s.boards!.moon!;
+  const x = 4;
+  const y = 3;
+  const earthIdx = idx(s, x, y);
+  const moonIdx = idxOn(s, 'moon', x, y);
+
+  const cells = [{ x, y }];
+  // 只把"月球那一格"放进可见集：按月球筛该命中
+  assert.equal(onlyVisibleCells(s, [moonIdx], cells, 'moon').length, 1, '月球上那一格可见');
+  if (earthIdx !== moonIdx) {
+    // 换成地球的宽去筛，同一个坐标算出来是另一个格号（不命中）
+    assert.equal(
+      onlyVisibleCells(s, [moonIdx], cells, EARTH).length,
+      0,
+      '拿地球的宽度去筛月球的格号，不该命中',
+    );
+  }
+  // 不传 board 的老行为不变：按地球算
+  assert.equal(onlyVisibleCells(s, [earthIdx], cells).length, 1, '缺省还是地球');
+  assert.ok(moon.w < s.w, `前提：月球比地球窄（${moon.w} < ${s.w}）`);
 });
 
 test('两个扩展都挂单位动作时：谁列的按钮谁执行', () => {

@@ -1671,6 +1671,76 @@ export interface Board {
   tiles: Tile[];
 }
 
+/**
+ * 星图上的一个点。
+ *
+ * ── 为什么"节点"和"棋盘"不是一回事 ───────────────────────
+ *
+ * 地球和月球既是节点、又有棋盘；**轨道槽位只有位置、没有格子**（核心舱还没到，
+ * 那里什么都不是）；空间站有格子，但它"停"在某个槽位上——站内坐标和星图位置
+ * 是两套坐标，混成一张表就再也表达不了"站从 A 槽挪到 B 槽、站内的人没动"。
+ *
+ * 所以 `board` 是可选的：有棋盘的节点才填。
+ */
+export type StarNodeId = string;
+
+export interface StarNode {
+  id: StarNodeId;
+  kind: 'planet' | 'moon' | 'orbit';
+  /** 有棋盘的节点才有：地球 'earth'、月球 'moon'、空间站生成时给的 id */
+  board?: BoardId;
+  name: string;
+}
+
+/**
+ * 一条航道：两节点之间的路。
+ *
+ * `turns` 是"点火之后还要飞几个回合"——它是**看得见的窗口**，不是装饰：
+ * 对手读得到"火箭还有 N 回合到"，才谈得上在落点等它。
+ * 长度不可变的"路"本身没有状态，`blocked` 留给 P1 的封锁。
+ */
+export interface StarLane {
+  id: string;
+  a: StarNodeId;
+  b: StarNodeId;
+  turns: number;
+  blocked?: boolean;
+}
+
+/** 一座空间站：一张棋盘 + 它现在停在哪个节点上 + 是谁的 */
+export interface StarStation {
+  board: BoardId;
+  at: StarNodeId;
+  owner: PlayerId;
+  /** 展开它的核心舱型号（决定尺寸的那一个） */
+  core: string;
+}
+
+export interface Starmap {
+  nodes: StarNode[];
+  lanes: StarLane[];
+  stations: StarStation[];
+  /** 生成空间站 board id 用的序号（`station-1`、`station-2`……） */
+  seq: number;
+}
+
+/**
+ * 一段正在飞的航程。
+ *
+ * `cargo` 里的单位**已经从 `units` 里摘掉了**：留在棋盘上会被回合重置、
+ * 被迷雾裁、被战斗误伤，还会在两张图上同时出现。货舱那套语义正好能复用。
+ */
+export interface Transit {
+  id: string;
+  owner: PlayerId;
+  lane: string;
+  from: StarNodeId;
+  to: StarNodeId;
+  /** 还要几个回合到（0 = 这一回合开始时到达） */
+  left: number;
+  cargo: Unit[];
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1697,6 +1767,22 @@ export interface GameState {
    * 取图一律用 `core/board.ts` 的 `boardOf()`，不要自己判断。
    */
   boards?: Record<BoardId, Board>;
+  /**
+   * 星图：图与图之间的关系（哪些节点、怎么连通、空间站停在哪）。
+   *
+   * 只有太空包会写它；没开那类扩展的对局是 `undefined`，语义正好等于
+   * "只有一张地球、没有航道"——所以旧存档、旧回放都不用兼容层。
+   * 取节点/航道一律走 `core/space/starmap.ts`，别自己遍历。
+   */
+  starmap?: Starmap;
+  /**
+   * 在途投送：点火之后、还没落地的单位。
+   *
+   * 这些单位**不在 `units` 里**（原因见 `Transit` 的注释），所以：
+   * 回合重置不会碰它们、迷雾不会裁它们、攻击也打不到它们。
+   * 旧存档是 `undefined`，等于"天上没人"。
+   */
+  transit?: Transit[];
   cities: City[];
   units: Unit[];
   players: Record<PlayerId, PlayerState>;

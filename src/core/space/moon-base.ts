@@ -34,7 +34,7 @@ import type { GameState, PlayerId, SkillDef, Unit, UnitTypeDef } from '../types.
 import { boardIdOf, boardOf } from '../board.ts';
 import { CONFIG, passable } from '../config.ts';
 import { registerSkillEffect, registerSkillReadyCheck } from '../skill-hooks.ts';
-import { MOON_BOARD } from './silo.ts';
+import { MOON_BOARD } from './moon.ts';
 
 export const MOON_BASE_ID = 'moon-base';
 

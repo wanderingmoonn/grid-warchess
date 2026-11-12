@@ -14,8 +14,10 @@
  *
  * 地球专供、任何图都不放行的几样：
  *   · `heat` / `heatFlash`：存的是地球格号，没带"图"这一维；
- *   · `boardView` / `boardGlyph`：按地球可见格算出来的染色；
  *   · `tutorialTiles`：教学关只在地球。
+ *
+ * 染色（`boardView` / `boardGlyph`）**不再清空**：`computeBoardView` 已经按
+ * "当前正在看的那张图"算格号与可见集，月球上的灵气、航道、控制区才画得对。
  */
 
 import { boardIdOf, EARTH } from '../core/board.ts';
@@ -40,8 +42,9 @@ export function scopeBoardUi(ui: BoardUi, id: BoardId, units: readonly Unit[]): 
     heat: undefined,
     heatFlash: undefined,
     movePath: mine ? ui.movePath : undefined,
-    boardView: undefined,
-    boardGlyph: undefined,
+    // 染色是按当前图算好的，照用（见文件头）
+    boardView: ui.boardView,
+    boardGlyph: ui.boardGlyph,
     incomeHints: mine ? ui.incomeHints : undefined,
     tutorialTiles: [],
     tutorialCityId: null,

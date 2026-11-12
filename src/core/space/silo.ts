@@ -9,7 +9,9 @@
  *
  * 于是发射井做的事情只剩下三件，全部在这个文件里：
  *   1. **加注燃料**：点一下开始，之后每回合 +1，满 3 回合才能点火；
- *   2. **发射**：把货舱里那一个单位放到月球图中心附近；
+ *   2. **发射**：把货舱里的单位送进**一条航道**（`transit.ts`）。
+ *      注意它**不知道目的地在哪**——从哪儿出发就去查星图上这个节点有哪些航道。
+ *      基础包只有"地球→月球"一条，以后会有更多条、也会被封锁；
  *   3. **写面板文案**：燃料几格、还差什么才能飞。
  *
  * ── 为什么不引入"燃料"资源 ────────────────────────────────────────────
@@ -20,20 +22,17 @@
  * 这是整条链上唯一"能被反制"的环节，比多一种货币重要。
  */
 
-import type { GameState, PlayerId, Unit, UnitTypeDef } from '../types.ts';
-import { boardIdOf, boardOf } from '../board.ts';
-import { tilesOfUnit, underConstruction } from '../query.ts';
-import { passable } from '../config.ts';
+import type { GameState, PlayerId, StarNodeId, Unit, UnitTypeDef } from '../types.ts';
+import { underConstruction } from '../query.ts';
 import { markSpotlight, clearSpotlight } from '../spotlight.ts';
+import { lanesFrom, nodeById, nodeName, nodeOf } from './starmap.ts';
+import { cellName, enterLane, landingSpotOn } from './transit.ts';
 
 /** 建筑 id。写进存档，改它等于让老存档里的发射井变成一块石头 */
 export const SILO_ID = 'rocket_silo';
 
 /** 加注满要几回合（每回合 +1） */
 export const SILO_FUEL_TURNS = 3;
-
-/** 月球图的 id（`space-age` 在开局建的那一张） */
-export const MOON_BOARD = 'moon';
 
 export const ROCKET_SILO: UnitTypeDef = {
   id: SILO_ID,
@@ -85,50 +84,6 @@ function isSilo(s: GameState, u: Unit): boolean {
   return u.type === SILO_ID && !!s.unitTypes[SILO_ID];
 }
 
-/** 这一格能不能落人：地形过得去、也没人占着（按 2×2 的占地算） */
-function freeLandingSpot(s: GameState, x: number, y: number): boolean {
-  const moon = boardOf(s, MOON_BOARD);
-  const tile = moon.tiles[y * moon.w + x];
-  if (!tile || !passable(tile.terrain)) return false;
-  for (const u of s.units) {
-    if (boardIdOf(u) !== MOON_BOARD) continue;
-    for (const t of tilesOfUnit(s, u)) {
-      if (t.x === x && t.y === y) return false;
-    }
-  }
-  return true;
-}
-
-/**
- * 月面着陆点：**离中心最近的空地**。
- *
- * 取中心而不是随机，是因为"落在哪"这件事玩家必须能预判——他要绕着它
- * 排兵、要堵对面的着陆点。随机落点会让每一次发射都变成开盲盒。
- *
- * 环形山也能落（它只是贵一步），只要地形过得去；被占的格让开，
- * 于是第二艘船会自己往外挪一圈。
- */
-export function moonLandingTile(s: GameState): { x: number; y: number } | null {
-  const moon = s.boards?.[MOON_BOARD];
-  if (!moon) return null;
-  const cx = (moon.w - 1) / 2;
-  const cy = (moon.h - 1) / 2;
-  let best: { x: number; y: number; d: number } | null = null;
-  for (let y = 0; y < moon.h; y++) {
-    for (let x = 0; x < moon.w; x++) {
-      if (!freeLandingSpot(s, x, y)) continue;
-      const d = Math.abs(x - cx) + Math.abs(y - cy);
-      if (!best || d < best.d) best = { x, y, d };
-    }
-  }
-  return best ? { x: best.x, y: best.y } : null;
-}
-
-/** 面板上的一格坐标写法（A1） */
-function cellName(x: number, y: number): string {
-  return `${String.fromCharCode(65 + x)}${y + 1}`;
-}
-
 function log(s: GameState, p: PlayerId, text: string, open = false): void {
   s.log.push({ turn: s.turn, player: p, text, open });
 }
@@ -156,6 +111,24 @@ export function startFueling(s: GameState, silo: Unit): string | null {
   return null;
 }
 
+/**
+ * 从这座井能飞出去哪条航道。
+ *
+ * 发射井**不知道目的地是月球**——它只知道自己站在星图的哪个节点上，
+ * 然后问这个节点有哪些可用航道。基础包只有"地球→月球"一条，取第一条；
+ * 等 P1 有多条航道，这里换成"玩家选的那一条"就行，发射井本身不用改。
+ */
+function outboundLane(
+  s: GameState,
+  silo: Unit,
+): { laneId: string; to: StarNodeId; turns: number } | null {
+  const here = nodeOf(s, silo);
+  if (!here) return null;
+  const out = lanesFrom(s, here.id)[0];
+  if (!out) return null;
+  return { laneId: out.lane.id, to: out.to, turns: out.lane.turns };
+}
+
 /** 发射前的检查。和发射本身分开：面板要用同一句话告诉玩家"还差什么" */
 export function launchProblem(s: GameState, silo: Unit): string | null {
   const st = siloStateOf(silo);
@@ -166,43 +139,41 @@ export function launchProblem(s: GameState, silo: Unit): string | null {
   }
   const cargo = silo.cargo ?? [];
   if (cargo.length === 0) return '货舱是空的：先让一个单位登舱（面板上的「装载」）';
-  if (!s.boards?.[MOON_BOARD]) return '这一局没有月球图';
-  if (!moonLandingTile(s)) return '月面上已经没有落脚的地方了';
+  const out = outboundLane(s, silo);
+  if (!out) return '这里没有可用的航道';
+  // 注意这里是 nodeById（节点 id），不是 nodeOfBoard（棋盘 id）——两者差一层
+  const destBoard = nodeById(s, out.to)?.board;
+  if (!destBoard) return '航道那一头还没有能落脚的地方';
+  if (!landingSpotOn(s, destBoard)) return `${nodeName(s, out.to)}上已经没有落脚的地方了`;
   return null;
 }
 
 /**
- * 点火：把货舱里那一个单位放到月面着陆点。
+ * 点火：把货舱里的单位送进航道。
  *
  * 三个细节：
- *   · 落地的单位**当回合不能再动**（`moved` / `acted` 都置真）——
- *     否则"发射 + 立刻行动"等于白送一个回合，而且它脚下的图才刚出现；
+ *   · **单位立刻移出 `s.units`**（进 `transit.cargo`）：留在棋盘上会被回合重置、
+ *     被迷雾裁、被战斗误伤，还会在两张图上同时出现；
  *   · 燃料清零：想再飞一趟就重新加注，3 回合的窗口再来一次；
  *   · 单位**保留原来的 id 和全部自定义字段**（境界、弹药、装备都在里头），
- *     换的只有 `board` 和坐标。
+ *     换的只有 `board` 和坐标——到达时才写。
  */
-export function launchToMoon(s: GameState, silo: Unit): string | null {
+export function launchIntoLane(s: GameState, silo: Unit): string | null {
   const problem = launchProblem(s, silo);
   if (problem) return problem;
 
-  const pax = (silo.cargo ?? [])[0]!;
-  const spot = moonLandingTile(s)!;
-  const name = s.unitTypes[pax.type]?.name ?? pax.type;
+  const out = outboundLane(s, silo)!;
+  const cargo = silo.cargo ?? [];
+  const t = enterLane(s, { owner: silo.owner, laneId: out.laneId, to: out.to, cargo });
+  if (!t) return '航道用不了（可能被封锁了）';
 
   silo.cargo = [];
   writeSilo(silo, { fuel: 0, fueling: false });
-  s.units.push({
-    ...pax,
-    board: MOON_BOARD,
-    x: spot.x,
-    y: spot.y,
-    moved: true,
-    acted: true,
-  });
+  const names = cargo.map((u) => s.unitTypes[u.type]?.name ?? u.type).join('、');
   log(
     s,
     silo.owner,
-    `${name} 乘火箭抵达月球（${cellName(spot.x, spot.y)}）`,
+    `${names} 乘火箭升空，飞向${nodeName(s, out.to)}（${t.left} 回合后到达）`,
     // 火箭升空是瞒不住的，而且对手看着它飞过去才知道该在哪儿堵
     true,
   );
@@ -284,7 +255,8 @@ export function tickSilos(s: GameState, player: PlayerId): void {
  *     才谈得上决定"现在来拆还是先攒兵"；
  *   · 装了谁**不公开**——那是你的底牌（和丹药一个口径：看得到 buff、数不出兜里几颗）。
  *     对面只知道"装了一个人"，不知道是剑修还是建筑队，也就没法提前安排克制。
- *   · 着陆点只给自己的玩家看：它一直是月球中心附近，是常识，不该占对手的面板。
+ *   · 落点只给自己的玩家看：它永远是"目的地中心附近"的规则，对手要堵可以自己算，
+ *     不该占它的面板。
  */
 export function siloLines(s: GameState, u: Unit, viewer?: PlayerId): string[] {
   if (!isSilo(s, u)) return [];
@@ -310,11 +282,18 @@ export function siloLines(s: GameState, u: Unit, viewer?: PlayerId): string[] {
       : `货舱：${cargo.map((c) => s.unitTypes[c.type]?.name ?? c.type).join('、')}`,
   );
 
-  const spot = moonLandingTile(s);
-  if (!spot) {
-    out.push('这一局没有月球图，发射井飞不了');
-  } else if (st.fuel >= SILO_FUEL_TURNS && cargo.length > 0) {
-    out.push(`月面着陆点：${cellName(spot.x, spot.y)}（离月球中心最近的一块空地）`);
+  const dest = outboundLane(s, u);
+  if (!dest) {
+    out.push('这里没有可用的航道，发射井飞不出去');
+  } else {
+    const board = nodeById(s, dest.to)?.board;
+    const spot = board ? landingSpotOn(s, board) : null;
+    if (st.fuel >= SILO_FUEL_TURNS && cargo.length > 0) {
+      out.push(`目的地：${nodeName(s, dest.to)}（航程 ${dest.turns} 回合）`);
+      if (spot) out.push(`落点：${cellName(spot.x, spot.y)}（离中心最近的一块空地）`);
+    } else {
+      out.push(`可飞的航道：→ ${nodeName(s, dest.to)}（${dest.turns} 回合）`);
+    }
   }
   return out;
 }

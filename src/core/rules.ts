@@ -5020,7 +5020,11 @@ function doLoad(s: GameState, ferryId: string, cargoId: string): ActionResult {
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
-  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
+  /*
+   * 不再拦"非地球"。装卸本来就是"两个同图单位贴身"，那张图是什么无所谓：
+   * 月面基地补给、空间站对接都要走这条。跨图由下面那条同图判定挡住，
+   * 那才是真正要防的错（坐标再近也隔着一个天空）。
+   */
   const ferryDef = utype(s, ferry.type);
   // "能不能装、能装谁、装几个"全在兵种数据的 carry.hold 上，这里只读不猜。
   const hold = holdOf(ferryDef);
@@ -5098,7 +5102,6 @@ function doUnload(
   if (!ferry) return { ok: false, reason: '船不存在' };
   if (ferry.owner !== s.current) return { ok: false, reason: '这不是你的船' };
 
-  if (offWorld(ferry)) return { ok: false, reason: '这张图还不能装卸' };
   const ferryDef = utype(s, ferry.type);
   if (!holdOf(ferryDef)) return { ok: false, reason: '这个单位没有货舱' };
   if (ferry.acted) return { ok: false, reason: '这条船本回合已经装卸过了' };
@@ -5107,10 +5110,16 @@ function doUnload(
   const cargo = load.find((u) => u.id === cargoId);
   if (!cargo) return { ok: false, reason: '船上没有这个单位' };
 
-  if (!inBounds(s, x, y)) return { ok: false, reason: '目标越界' };
-  if (distToUnit(s, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
-  if (unitAt(s, x, y)) return { ok: false, reason: '那一格已经有人了' };
-  if (blockedFor(s, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
+  /*
+   * 落点判定全部按**船所在的那张图**：越界、占地、能不能站，都是那张图的格子。
+   * 以前这里读的是地球的格子表，在月球/空间站上下船会拿到"地球上同一坐标"
+   * 的地形——一个明明能站的地方被说成上不了岸，反过来也成立。
+   */
+  const view = boardStateOf(s, ferry);
+  if (!inBounds(view, x, y)) return { ok: false, reason: '目标越界' };
+  if (distToUnit(view, { x, y }, ferry) !== 1) return { ok: false, reason: '只能在船边一格下船' };
+  if (unitAt(view, x, y)) return { ok: false, reason: '那一格已经有人了' };
+  if (blockedFor(view, x, y, cargo)) return { ok: false, reason: '那里上不了岸' };
 
   ferry.cargo = load.filter((u) => u.id !== cargoId);
 
