@@ -510,6 +510,22 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const visibleSet = new Set(view.visible);
   // 浓雾下"去过、此刻看不见"的格：按记忆里的样子画，压暗一档
   const rememberedTiles = view.rememberedTiles;
+  /*
+   * 每格**画出来的**是什么地形（外缘阴影要用它算邻接）。
+   *
+   * 不能直接用 `tile.terrain`：雾里看到的是**记忆**里的地形（`memo`），
+   * 浓雾没去过的更是 `unknown`。第一版拿真地形算邻接，于是阴影画在了
+   * "看着相同、实际不同"的地方——用户的原话是"丘陵之间莫名其妙多了阴影，
+   * 丘陵和别的地形之间几乎没有"。看着一样就该是一条平边，这是硬要求。
+   */
+  const dispTerrain: string[] = new Array(s.w * s.h).fill('');
+  for (let i = 0; i < s.w * s.h; i++) {
+    const t = s.tiles[i];
+    if (!t) continue;
+    const lit = !blackout || visibleSet.has(i);
+    const memo = lit ? undefined : rememberedTiles.get(i);
+    dispTerrain[i] = blackout && !lit && memo === undefined ? 'unknown' : (memo ?? t.terrain);
+  }
   const reachSet = new Set(ui.reach);
   const aimSet = new Set(ui.aimTiles);
   const skillThreatSet = new Set(ui.skillThreatTiles);
@@ -596,21 +612,11 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        */
       const deco = (x * 31 + y * 17) % 5 === 0 ? '1' : '0';
       /*
-       * 四条边各自"是不是区域的边缘"（`data-e*`）。
-       *
-       * 给"整块地形像被抬起来一块"用的：丘陵区内部什么都不画，只有**贴着别的地形
-       * 的那一面**加一道很淡的内阴影，于是整片丘陵四周有一圈"坎"、中间是干净的。
-       * 关键是它只发生在区域轮廓上——逐格都画就成了每格一圈，那是格子线。
-       *
-       * 只算上下左右四邻，不关心对角：阴影是画在内侧的，斜角本来就叠不上。
-       */
-      const edge = (tx: number, ty: number): string => (terrainAt(tx, ty) === here ? '0' : '1');
-      /*
        * `--x/--y` 也一起给：丘陵的纹理要按格坐标去大图上取景，
        * 相邻格取相邻区域，整片才是一块连续的地面。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" data-et="${edge(x, y - 1)}" data-er="${edge(x + 1, y)}" data-eb="${edge(x, y + 1)}" data-el="${edge(x - 1, y)}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
@@ -655,6 +661,28 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       if (tutSet.has(i)) cls += ' tut-ring';
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
+      /*
+       * 丘陵区的四条外缘（`data-et/er/eb/el`）：只有"这一面挨着另一种地形"才是 1，
+       * CSS 只在那几侧画内侧阴影，于是整片丘陵四周有一圈坎、中间是干净的。
+       *
+       * 逐格都画就变成每格一圈——那就是格子线，前面试过三次都栽在这上面。
+       * 邻接按 `dispTerrain`（画出来的地形）算，不是真地形：雾里看到的是记忆里的
+       * 地形，拿真地形算会让阴影出现在"看着一样"的两格之间。
+       */
+      if (cls.includes('t-hill')) {
+        const isEdge = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
+          return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
+        };
+        const et = isEdge(x, y - 1);
+        const er = isEdge(x + 1, y);
+        const eb = isEdge(x, y + 1);
+        const el = isEdge(x - 1, y);
+        if (node.dataset.et !== et) node.dataset.et = et;
+        if (node.dataset.er !== er) node.dataset.er = er;
+        if (node.dataset.eb !== eb) node.dataset.eb = eb;
+        if (node.dataset.el !== el) node.dataset.el = el;
+      }
       if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
