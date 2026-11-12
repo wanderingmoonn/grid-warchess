@@ -659,6 +659,20 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (node.dataset.v !== v) node.dataset.v = v;
       }
       if (cls.includes('t-hill')) {
+        /*
+         * 土堆是**稀疏物件**，不是纹理：约 2/7 的丘陵格长一丛，其余留白。
+         * 两种图交替（`a` / `b`），免得整片丘陵是同一个形状重复。
+         * 物件与格子一一对应，所以永远不会被格边切断——这是它相对"背景纹理"
+         * 的决定性优势（纹理按格取景，边界上必然差半像素）。
+         */
+        const hk = (x * 31 + y * 17) % 7;
+        const hm = hk === 0 ? 'a' : hk === 3 ? 'b' : '';
+        if (hm) {
+          if (node.dataset.hm !== hm) node.dataset.hm = hm;
+        } else if (node.dataset.hm) {
+          delete node.dataset.hm;
+        }
+
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
           return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
