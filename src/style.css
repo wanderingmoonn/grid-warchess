@@ -1040,12 +1040,58 @@ html[data-terrain='on'] .tile.t-hill[data-er='1'] {
   --e-r: inset -4px 0 5px -3px rgba(96, 74, 42, 0.30);
 }
 
+/*
+ * 水面流动（2026-11-12）。
+ *
+ * 做法：两层**软高光**在纯色水面上漂移，方向和速度都不同，产生微微的波光。
+ * 为什么不用贴图加 `animation`：贴图是 512px 的、按格取景，动起来每格的相位会
+ * 各走各的，接缝立刻显形。这里用一个**尺寸固定的周期图案**（104×56 / 152×72），
+ * 动画的位移正好等于它自己的周期，所以首尾严丝合缝、可以无限循环；
+ * 每格的图案又是同一相位，连成片就是整片水一起动。
+ *
+ * 两个关键约束写在下面：大地图（>1024 格）关掉——那是逐格的 repaint，
+ * 4096 格同时动会把帧率吃掉；系统开了"减少动态效果"的也关掉。
+ */
 html[data-terrain='on'] .tile.t-water {
-  background-image: url('/art/terrain/water.webp');
+  background-image:
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 72%);
+  background-size: 148px 86px, 214px 118px;
+  background-repeat: repeat;
+  /* 必须清掉基础规则里按格抖动的 `--jx/--jy`：那是为了打散"每格一张贴图"的阵列感，
+     但水面靠的是**相位对齐**——所有格同一个相位，连成片才是一整片水。 */
+  background-position: 0 0, 0 0;
+  animation: water-flow 9s linear infinite;
 }
-/* 深水原来靠 `::before` 画波纹；有了材质就不叠了，否则两层波纹打架 */
+/* 深水：同一个图案、压暗一档、慢一倍——"看不到底"的水流得慢 */
 html[data-terrain='on'] .tile.t-deep {
-  background-image: url('/art/terrain/deep.webp');
+  background-image:
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 72%);
+  background-size: 148px 86px, 214px 118px;
+  background-repeat: repeat;
+  background-position: 0 0, 0 0;
+  animation: water-flow 17s linear infinite;
+}
+/* 位移正好各走一个周期：第一层向右 120px、第二层向左 170px，首尾接得上 */
+@keyframes water-flow {
+  from {
+    background-position: 0 0, 0 0;
+  }
+  to {
+    background-position: 148px 0, -214px 0;
+  }
+}
+/* 大地图逐格 repaint 太贵；系统要求减少动效时也不该动 */
+html[data-terrain='on'] .board.big .tile.t-water,
+html[data-terrain='on'] .board.big .tile.t-deep {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-terrain='on'] .tile.t-water,
+  html[data-terrain='on'] .tile.t-deep {
+    animation: none;
+  }
 }
 html[data-terrain='on'] .tile.t-deep::before {
   display: none;
