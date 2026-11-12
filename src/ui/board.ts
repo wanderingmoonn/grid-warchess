@@ -596,11 +596,21 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        */
       const deco = (x * 31 + y * 17) % 5 === 0 ? '1' : '0';
       /*
-       * `--x/--y` 也一起给：开了地形材质之后，每格要按**格坐标**去大图上取景，
-       * 相邻格取相邻区域，整盘才是一张连续的地面（而不是每格一张小贴图）。
+       * 四条边各自"是不是区域的边缘"（`data-e*`）。
+       *
+       * 给"整块地形像被抬起来一块"用的：丘陵区内部什么都不画，只有**贴着别的地形
+       * 的那一面**加一道很淡的内阴影，于是整片丘陵四周有一圈"坎"、中间是干净的。
+       * 关键是它只发生在区域轮廓上——逐格都画就成了每格一圈，那是格子线。
+       *
+       * 只算上下左右四邻，不关心对角：阴影是画在内侧的，斜角本来就叠不上。
+       */
+      const edge = (tx: number, ty: number): string => (terrainAt(tx, ty) === here ? '0' : '1');
+      /*
+       * `--x/--y` 也一起给：丘陵的纹理要按格坐标去大图上取景，
+       * 相邻格取相邻区域，整片才是一块连续的地面。
        */
       shell.push(
-        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+        `<div class="tile" data-x="${x}" data-y="${y}" data-v="${variant}" data-d="${deco}" data-et="${edge(x, y - 1)}" data-er="${edge(x + 1, y)}" data-eb="${edge(x, y + 1)}" data-el="${edge(x - 1, y)}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
       );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
