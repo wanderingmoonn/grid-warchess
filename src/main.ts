@@ -88,7 +88,7 @@ import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, renderBoard } from './ui/board.ts';
 import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
-import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn } from './core/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
 import { createMoonBoard } from './core/space/moon.ts';
 import { hasStarRows, starRows } from './ui/star-panel.ts';
 import { starLayout } from './ui/star-layout.ts';
@@ -3645,40 +3645,13 @@ function onBoardClick(e: Event): void {
     render();
     return;
   }
-  if (state.config.godMode === true) {
-    // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
-    // 这格可达吗、能不能开火）在纯沙盒里一条都不成立，整块交出去。
-    if (!godInControl()) {
-      onGodClick(e);
-      return;
-    }
-    // 操控档：下面落到正常那一套（选中、走子、开火、强制移动全都照旧）。
-    // 借的只有一样——`me()`：上帝模式里它返回"当前行动方"，正好就是你要走的那一方。
-    if (godRunning || godPassing) {
-      toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
-      return;
-    }
-    if (!godMyTurn()) {
-      toast(`现在是${state.players[state.current].name}（AI）的回合，等它走完`);
-      return;
-    }
-    // 上一次"交给 AI"那句结论到这儿就过期了：局面马上就要被你自己改。
-    // 不清的话它会一直占着状态行，把刚加的"这支兵还剩什么"压住。
-    if (godResult) {
-      godResult = '';
-      godSig = '';
-    }
-    // 空手点空地＝"看看这儿是什么"：沙盒里这比"取消选中"常用得多。
-    // 只在**手上没选中任何东西**时提示——手上有一支兵的时候，点别处
-    // 几乎总是"想走到那儿"，这时候弹地形名就是噪声。
-    const probe = coordsFromEvent(e);
-    if (!selectedId && probe && !cityAt(state, probe.x, probe.y)) {
-      if (stackAt(probe.x, probe.y).length === 0) {
-        const tile = state.tiles[idx(state, probe.x, probe.y)];
-        if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
-      }
-    }
-  }
+  /*
+   * 选点 / 设备落点**优先于一切模式**。
+   *
+   * 这一段以前排在上帝模式分支之后：一开沙盒，点技能按钮虽然进了瞄准模式，
+   * 再点棋盘却被 `godMode` 那段接走（落子/选中），技能永远落不了点。
+   * "正在等一个落点"是全局状态，不该被任何模式抢走。
+   */
   if (handoffOpen || state.winner) return;
 
   const coords = coordsFromEvent(e);
@@ -3747,6 +3720,53 @@ function onBoardClick(e: Event): void {
     return;
   }
 
+  if (state.config.godMode === true) {
+    // 摆放档：这里点棋盘是"落子"，不是"走子"。走子那套判断（轮到我吗、
+    // 这格可达吗、能不能开火）在纯沙盒里一条都不成立，整块交出去。
+    if (!godInControl()) {
+      onGodClick(e);
+      return;
+    }
+    // 操控档：下面落到正常那一套（选中、走子、开火、强制移动全都照旧）。
+    // 借的只有一样——`me()`：上帝模式里它返回"当前行动方"，正好就是你要走的那一方。
+    if (godRunning || godPassing) {
+      toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
+      return;
+    }
+    if (!godMyTurn()) {
+      toast(`现在是${state.players[state.current].name}（AI）的回合，等它走完`);
+      return;
+    }
+    // 上一次"交给 AI"那句结论到这儿就过期了：局面马上就要被你自己改。
+    // 不清的话它会一直占着状态行，把刚加的"这支兵还剩什么"压住。
+    if (godResult) {
+      godResult = '';
+      godSig = '';
+    }
+    // 空手点空地＝"看看这儿是什么"：沙盒里这比"取消选中"常用得多。
+    // 只在**手上没选中任何东西**时提示——手上有一支兵的时候，点别处
+    // 几乎总是"想走到那儿"，这时候弹地形名就是噪声。
+    const probe = coordsFromEvent(e);
+    if (!selectedId && probe && !cityAt(state, probe.x, probe.y)) {
+      if (stackAt(probe.x, probe.y).length === 0) {
+        /*
+         * 按**当前这张图**取格。
+         *
+         * 这里原来读 `state.tiles`（地球）：在空间站点一格虚空，
+         * 弹出来的是"地球上同一坐标"的地形，而且只弹一句 toast——
+         * 侧栏什么都不变，玩家以为"点了没反应"。
+         */
+        const tile = tileOn(state, activeBoardId, probe.x, probe.y);
+        if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+        selectedId = null;
+        selectedCityId = null;
+        selectedCampId = null;
+        selectedTile = probe;
+        render();
+        return;
+      }
+    }
+  }
   // AI 正在行动：不许下子，但"看"必须留着。
   //
   // 对手思考、走子、开火，这一段能持续十几秒；以前整块 return，

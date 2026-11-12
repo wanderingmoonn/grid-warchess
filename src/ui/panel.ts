@@ -25,7 +25,7 @@ import {
   type BuildList,
 } from '../core/build-list.ts';
 import { holdOf } from '../core/carry.ts';
-import { boardOf, EARTH } from '../core/board.ts';
+import { boardIdOf, boardOf, EARTH } from '../core/board.ts';
 import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
@@ -766,11 +766,13 @@ function extPanelHtml(
   y: number,
   unit: Unit | undefined,
   me: PlayerId,
+  board: BoardId,
 ): string {
   const parts: string[] = [];
   for (const e of activeExpansions(s)) {
     if (!e.hooks.getTilePanelHtml) continue;
-    const html = e.hooks.getTilePanelHtml({ state: s, x, y, unit, viewer: me });
+    // `board` 必须传：按格算的扩展（天气/灵气）要凭它判断"这一格在哪"
+    const html = e.hooks.getTilePanelHtml({ state: s, x, y, unit, board, viewer: me });
     if (html) parts.push(html);
   }
   return parts.join('');
@@ -847,6 +849,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
               state: s,
               x: selectedTile.x,
               y: selectedTile.y,
+              board,
               viewer: me,
             }),
           );
@@ -871,7 +874,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                 .join('')}</div>`
             : ''
         }
-        ${seen ? extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me) : ''}
+        ${seen ? extPanelHtml(s, selectedTile.x, selectedTile.y, undefined, me, board) : ''}
         <div class="unit-notes">${lines.map((l) => `<div>· ${l}</div>`).join('')}</div>
       `;
     }
@@ -1226,7 +1229,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             : ''
         }
       </div>
-      ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me)}
+      ${extPanelHtml(s, selectedUnit.x, selectedUnit.y, selectedUnit, me, boardIdOf(selectedUnit))}
 
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}

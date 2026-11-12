@@ -10,6 +10,7 @@
  * 所以每条钩子都先问"这个单位站在哪儿"，再查那张表。
  */
 
+import { EARTH } from '../board.ts';
 import type { Expansion, RangeCtx, TurnEndCtx, VisionCtx } from '../expansions.ts';
 import { activeExpansions } from '../expansions.ts';
 import { isNaval, SEASON_TURNS } from './climate.ts';
@@ -294,7 +295,16 @@ export const SEASONS: Expansion = {
     // 这三条以前是核心里的具名口子：`TopbarState.season` 一个字段、
     // `ui/panel.ts` 直接 import 气候表拼天气块。现在核心只认
     // 「一段 HTML」「一枚徽章」「一层染色」，不认识"季节""天气"。
-    getTilePanelHtml: ({ state, x, y, unit }) => {
+    getTilePanelHtml: ({ state, x, y, unit, board }) => {
+      /*
+       * 只在地球上算天气。
+       *
+       * 气候是按"地形 + 海陆 + 纬度"推的，那套数据只对**地球那张图**成立。
+       * 空间站的格子在站内是 (3,2)、在地球上也是 (3,2)，不判图就会给一座
+       * 封闭的空间站报出"晴，23°C"——玩家一眼看出这是串台。
+       * 月球同理（那边是月壤，也没有大气）。
+       */
+      if ((board ?? EARTH) !== EARTH) return null;
       const c = climateAt(state, x, y);
       // 标题分两种：点空格子看到的是"这里的天气"，点单位看到的是"脚下的天气"。
       // 文案差别很小，但玩家会因此知道"这是按格算的，不是我身上的状态"。

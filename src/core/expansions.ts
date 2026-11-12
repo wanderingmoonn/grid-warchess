@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { BoardId, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
@@ -545,7 +545,19 @@ export interface ExpansionHooks {
    *
    * 只在"点的是格子"这条支路调用；点单位、点城市时不走这里。
    */
-  getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
+  getTilePanelLines?: (c: {
+    state: GameState;
+    x: number;
+    y: number;
+    /**
+     * 这一格在**哪张图**上。缺省 = 地球（老扩展不用改）。
+     *
+     * 按格算的东西（灵气、天气、污染）都必须看它：空间站的 (3,2) 和地球的
+     * (3,2) 不是一个地方，"按坐标算一遍"会算出地球上的天气。
+     */
+    board?: BoardId;
+    viewer?: PlayerId;
+  }) => string[];
 
   /**
    * 格子 / 单位卡上的**扩展 HTML 块**。
@@ -565,6 +577,8 @@ export interface ExpansionHooks {
     x: number;
     y: number;
     unit?: Unit;
+    /** 同上：缺省 = 地球。不在那张图上算得出的东西，就返回空 */
+    board?: BoardId;
     viewer?: PlayerId;
   }) => string | null;
 
