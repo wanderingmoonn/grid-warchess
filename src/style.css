@@ -1635,11 +1635,19 @@ html[data-terrain='on'] .tile.t-shallow::before {
   pointer-events: none;
   /* 覆盖掉非材质模式那层"每格一条横线" */
   background: none;
+  /*
+   * 过渡带只占 **15%** 格宽。
+   *
+   * 先写过 55%：45px 的格子上两边各糊 22px，深水整格都被抹开，一条 1 格宽的
+   * 水道直接糊成一团水彩——2026-11-13 用户截图说"好乱好难看"。
+   * 现在 15% ≈ 7px，两格合起来 14px：读起来是"边上收了个圆角"，不是"抹了一道"。
+   * 再窄就回到刀切边，再宽就又开始糊，这个值别再往上加。
+   */
   background-image:
-    linear-gradient(to left, var(--nb-r, transparent), transparent 55%),
-    linear-gradient(to right, var(--nb-l, transparent), transparent 55%),
-    linear-gradient(to bottom, var(--nb-t, transparent), transparent 55%),
-    linear-gradient(to top, var(--nb-b, transparent), transparent 55%);
+    linear-gradient(to left, var(--nb-r, transparent), transparent 15%),
+    linear-gradient(to right, var(--nb-l, transparent), transparent 15%),
+    linear-gradient(to bottom, var(--nb-t, transparent), transparent 15%),
+    linear-gradient(to top, var(--nb-b, transparent), transparent 15%);
 }
 
 /*
