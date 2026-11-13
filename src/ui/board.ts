@@ -729,6 +729,22 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
             ? 1
             : 0;
       if (myRank >= 3) {
+        /*
+         * 孤峰标记（`data-iso`）：四邻里山格少于 2 个。
+         *
+         * 四缘阴影是按"一整片山"调的，单格孤立时四面同时压暗，
+         * 落到平地上读成**一个洞**而不是一座峰。CSS 见到这个标记就把四缘收弱一档，
+         * 只留"这一块比周围高"的暗示。
+         */
+        let adjMountain = 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+          if (dispTerrain[ny * s.w + nx] === 'mountain') adjMountain += 1;
+        }
+        if (adjMountain < 2) node.dataset.iso = '1';
+        else if (node.dataset.iso) delete node.dataset.iso;
         // 最高的地形不再挨别人的投影（山脊内部不该出现缝）
         if (node.dataset.mt) {
           delete node.dataset.mt;

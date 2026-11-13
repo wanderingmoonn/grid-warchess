@@ -2035,10 +2035,118 @@ export function generateLayout(
     }
   }
 
+/**
+ * 把零散的山收拢成山岭（2026-11-13）。
+ *
+ * 两条路都会留下"一格独山"：高度场分层时孤立的高点、本体 3% 撒点时最小 3 格的团。
+ * 玩家看到的不是"这里有一道山"，而是"平地里冒出一块石头"——挡路也只有一格。
+ * 所以做两件事：
+ *
+ *   ① **抹碎片**：连通块小于 `minSize` 的一律降成丘陵。山不再是"点"；
+ *   ② **加厚山体**：被 ≥2 座山夹住的丘陵按 `absorb` 的概率并进来。
+ *      只在"夹缝里"长，不往外糊——否则山会像霉斑一样摊开。
+ *
+ * 上限 `maxGrow`：山是不可通行的，长太多会把图堵死（连通性开凿在后面，
+ * 但它只保证"有路"，不保证"路好走"）。
+ */
+function consolidateMountains(
+  c: Ctx,
+  rng: () => number,
+  opts: { minSize?: number; absorb?: number; maxGrow?: number; cleanOnly?: boolean } = {},
+): void {
+  const { minSize = 3, absorb = 0, maxGrow = 1, cleanOnly = false } = opts;
+  const { w, h, g } = c;
+  const n = w * h;
+  let total = 0;
+  for (let i = 0; i < n; i++) if (g[i] === 'mountain') total += 1;
+  if (total === 0) return;
+
+  const label = new Int32Array(n).fill(-1);
+  const sizes: number[] = [];
+  const stack: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (g[i] !== 'mountain' || label[i] >= 0) continue;
+    const id = sizes.length;
+    let size = 0;
+    label[i] = id;
+    stack.push(i);
+    while (stack.length > 0) {
+      const k = stack.pop()!;
+      size += 1;
+      const x = k % w;
+      const y = (k / w) | 0;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx;
+        if (g[j] !== 'mountain' || label[j] >= 0) continue;
+        label[j] = id;
+        stack.push(j);
+      }
+    }
+    sizes.push(size);
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (g[i] !== 'mountain') continue;
+    if ((sizes[label[i]!] ?? 0) < minSize) g[i] = 'hill';
+  }
+
+  if (cleanOnly) return; // 只抹碎片时到此为止（开凿之后那一遍）
+
+  const grow: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (g[i] !== 'hill') continue;
+    const x = i % w;
+    const y = (i / w) | 0;
+    let adj = 0;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      if (g[ny * w + nx] === 'mountain') adj += 1;
+    }
+    if (adj >= 2 && rng() < absorb) grow.push(i);
+  }
+  const cap = Math.round(total * maxGrow);
+  let added = 0;
+  for (const i of grow) {
+    if (total + added >= cap) break;
+    g[i] = 'mountain';
+    added += 1;
+  }
+}
+
   // ---- 完全镜像：把每一对镜像格统一成同一块地形 ----
   //
   // 做法是"取 A 区那一侧的版本，两边都写成它"。逐格复制 A 区到 B 区不行：
   // 分区按"离谁近"算，边界不是严格的反对角线，会漏掉一些格子。
+  // 山收拢：本体撒点与扩展高度场两条路都在这儿过一道
+  // 山岭地貌例外：它的山脊**本来就是一格宽的一条线**（paintRidge），
+  // 用 5 格的门槛去"抹碎片"会把被隘口切开的残段也一起删掉（实测有种子直接变成 0 座山）。
+  // 所以山岭只删真正的孤格，然后靠加厚把这条线撑成一片山。
+  const ridgeStyle = style === 'ridge';
+  /*
+   * **只在基础地貌上做**（本体配方那条路）。
+   *
+   * 高差扩展是"先按高度铺高原、再给山补山脚台地"，峰体小是它的正常形态；
+   * 我一刀切掉 1~2 格的峰，山脚那圈台地就没有依托，整张图会连一格台地都不剩
+   * （实测 open/31 从 11 格台地变成 0，等高线与"高地变多"两条用例直接红）。
+   * 扩展地貌本来就只有 1 个碎片/8 局，不需要这道清理。
+   */
+  // 有没有扩展要在地形生成之后接手（`afterTerrain`，高差扩展就走这条）——
+  // 那种地图的形状该由扩展自己负责，别在这儿削它的峰。
+  const ownedByExpansion = (opts.expansions ?? []).some(
+    (id) => !!expansionById(id)?.afterTerrain,
+  );
+  if (!build && !ownedByExpansion) consolidateMountains(c, rngTerrain, {
+    minSize: ridgeStyle ? 2 : 3,
+    // 只删碎片、不加厚：加厚会把"删掉的那些"又长回来，总数反而翻倍
+    absorb: 0,
+    maxGrow: 1,
+  });
+
   const symmetrize = () => {
     if (symmetry !== 'mirror') return;
     const snap = [...c.g];
@@ -2134,6 +2242,14 @@ export function generateLayout(
       standable += 1;
     }
   }
+  // 开凿（carve / openPasses）会在山体上切出新的 1~2 格残块——再抹一遍，这回不生长
+  if (!build && !ownedByExpansion) {
+    consolidateMountains(c, rngTerrain, {
+      minSize: 3,
+      cleanOnly: true,
+    });
+  }
+
   symmetrize(); // 城郊处理也要对称，否则镜像模式会和"严格对称"对不上
 
   // ---- 收尾校平：水不够就贴着已有水域再长，够了一格不加 ----
