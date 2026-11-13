@@ -39,7 +39,7 @@
   --city: #d3d7de;
   /* 高度阶梯的配色：越高的地形越"亮、偏冷"，越低越"暗、偏湿"，
      这样不看图例也能读出地势——台地最亮、谷地与沼泽最暗，水最蓝。 */
-  --plateau: #e7ecdf;
+  --plateau: #e6e0c8;
   --valley: #c3cfa6;
   --marsh: #a9b795;
   --dune: #e8d9a8;
@@ -1394,6 +1394,49 @@ html[data-terrain='on'] .tile.t-hill {
 }
 
 /*
+ * 台地：**一片平整的干土台面**（材质模式）。
+ *
+ * 和前两版的区别：第一版画成等高线地图，第二版把台阶明暗拉开成绗缝被面。
+ * 这一版把它当材质——细密的水平层理（11px 一道、对比只有 3~5 级）+ 极轻的
+ * 大尺度起伏，铺满整格、按格取景，只负责"这是一块晒干的台面"。
+ *
+ * **高差不指望贴图**：台地的高低由下面那套 `--e-*` 区域外缘阴影来说，
+ * 和丘陵/高山共用一条 `box-shadow`，只是强度卡在两者中间。
+ */
+html[data-terrain='on'] .tile.t-plateau {
+  background-image: url("data:image/webp;base64,UklGRtIRAABXRUJQVlA4IMYRAAAwpACdASoAAgACPjEWikQiISEmoNCo0NAGCWluTSlUbHdpzfU/Swz5W7Z9aBnPznq/8uBf+vp1f+G//z1K/FP/T0V+Qs/fRX+I+VqTjo/1fzH/AA1vqwa3q5hVaCvzVOezGhyJpTGdkrG4k7J4fq6UCe9dejpBwvnrXA0Jj5PLV/4sNLfJ8WwGNrhIxYbBLBK3pzRhvd6h27kYnMNFBwX/OZa7Tf3vgW3YNzfC6hgN6ns10JuEBpWLIqjJtIyAw4H/hSqb27XQWrx3nnQ9E2z6ZlyvIZ1h6XsYmGECzQe0HVJralW55qtYCJef9fmHKHmAP9MEDIEm8TfCjVFmMfb3oIF60uULghKYZF3xoIMFi7Bd9vVIp890bn7BZOPGZy3QOvPH4qCY5RTeJMDVUdp6HjmKxwGEVgLXpfLcp51LDRhj7MrbmRRH72C9KAG4bRsNF/pUExXzQqbHZym8ZMd0qNhOgPbLOgbSoZby6Fm/6LK0YmR0uHlsa30EbbM/jbmV7F3beXC7p43aahYVMD5cwKaPOARmMXf5Puj4aVmTSSivw+GK/oWH1yjuhR/fk7uOweVdsBJIwRoh3A5oAkk1zn3CpaFEv34oCC9i+/7TnXUohBWJrYmnabYYVk89cs9ss6gKx4q9f0rha7Nl0Ctz+beuKjRt8pRenV+h0TdmScg3UilS3wNW1xOZH27juUT0Ck/KPKnjO7cyAhPmrX2iU6uhIU6owG8Ub0PY7MX5ZnLR3w52N9C50JrkegLjK6kT88cHHympxMSpffC6m2GXs80w42/AX7o9al3dDSs+AgCtXMVpi3WZ1eDj4FwQk2+w5BV6ULj/59vmqapOApzRzoal2zQel8VBMYIv1Ic5wqah3hLXTDiu9lmP0pyKGP6mUEbDyMDhQEIRuTymKJ+8+zfom33jzuTvUoN0nmx3jo85CBUN5pXk6PGmKW6iL6dIIXHetqERr2maZnQVikGYJ8XNdFQi/JfK3i0apJVJsycLqxEUGR4yf474QuH6q9KK3nEJMwt9BJZFivE7uEBkzQioH7o4O81MbeldUQkfqtqx0xqtuAuxYkWjgqsizzxIS9EBko+D7GekKITx4EMxrqR6zLxC9A909LItvBxe69ilTRieeMiGk0KDYGG8XRoem0OFS6qrm5CrshsE10z5N5p7NdpYc9hME8SJ1BEYpu0ej9YaSK01VyrbFD3MN0c/kTZD3iN0wGsM9eIS7kV31fAQmXf4ETjSC80eoPs9zR5oga3OEs1FiwETLk6b8aTzNED52Cy7KNMR6s/t4MX5lLvNus08RSFF2aZZfLEZj8N5rdNGDa3VBbBPngM216luU303Z71B+TkoqepLR88pRjCv2jnEiD8K3axNcXkQkAK/FWzxTLFjaGGzSgl3J3qlwV+GSgJGCQO9FfM1Z4Iz1lblL0wFjtIGWvIyMvShtmY7iHV4U3m93X0cUik+BBwAKjf0oXBClUNq8l6bvgEaTdbCK5b739BdUp3pnzD+tNll5FQF+xMUkiAEHDbRLtdJGC+B9RUnBZDa1KG2T/djY5R/jGFW8IgH47hoxoIoQa0Rq0bKZcovyUQJMWu6WiolIjc290n6mshzT6iPzrI/ne2z/AzIHwKwg0WcgaGCqZ2itYr5EOzUDjXbvSEaqjCc2MVBrAX9gc4FXXmwirrYgF7BtOMsRFQMXbqW5HArKooNvO6kcdSoeA3i1sMhSe8hNirhLjXi2k7J2dScl6XMtHh0zQ1AtJTTQAD+/+CRo/26tD65Drs16v/dH/Jn+VXTb4N2ggjvRvCMLFluxHMupeQ4pdtaLgeluBkZCSh0HEQf6KAgPMcguw+SGiXWEaauOIdq9+yh64ibzWvyE8Bzwm3S7Zs2HlCtkznd20XxZ6Bxbpsk6EikUI64Zh9mgq16+T9JX5ir3hOJeNxiGaMi8LOrfTqvcSjwl6BvrJRo2SJCSNnuTubaWK43uOEV3pT4W1N8hQEqMav4DNWjCNr1sgLaljRBiqFkKatDnLvPIcxzi6ThO4+Ye+nhLztCXRl94HdX4EC5Glj3V2yML6ZigItkFTrjLboAHMU8Ov+5xbkp6Qc+e6pGva6FGSQ/Yr2jzIAjRM7Y9MKZ8fr6CIMGYbuzYGy4VqvdrppKtUbjsCLwVi+/6C2HJJhGpKXzib185gWu9k40uU3WZRiUYOpOiT4d/CTjlBrwOuqZqTT9oPA+RyoMZ2wPM+hcYxx1ScllI+aiIWRUltegBocfZykqDS05aalReIF+S5OVa2U/WBJphmQCQCEr6QCWkkKIy0LCpUO4tqACYRXUfHXOOcdGF9WmR2ekhgMjN8khlC9sD42rY1LkTOsrspV62fOmfCq2zTF0OHGgnq9VvYgcGDp27bBMwB6RvTT3RRpeGO6zeBDAeL/LM0WJm0vymBNu+j/f2Y2LsilYd+PPENHUwdTHoRjOcF2+xbbGj9JK7E/CArvNFNpSN3RyN1CK2qFvEsNWSO4xpdx83mOLkaXP3MysSrrZH32/g6UujL0glk4qE21eTNFqB1HsjlcCz4qaBOrjuJFAb2bgyOEtdUiyOl2d20SFI3oRn6G1SIPB5gG5cTZhSSqJ/LT99EaRpgwiSpRK7T2hfzpwe7cO3eNGZ93yVjuCiCg338cK+gwcMGPFWDbYl4rNBYLA6iBOUAgBqeTrBJkEmlEJ7UuLTsxc4rhzbIRPLwCR/DECzBThdpfux1by13B615F7glUACq2aEkPNwjUxeop6DeQbN20TZo3wlBOy61yyLsgbXcLN3i3wIk+xhD0uFQC/7pi8oqgvdby8BYBQEo4Neg5fAebfGpt/+C47EldK/PpAgYkWyaI0RmbY4Y2ZoAzyqc99Wy/JYvAW2szVio2WTl7HlQgoFhpLNl/kqSNpb7h/1UHWebskI7VQ/3KNydK9wDtQO0aCk41Wd9aNS5hMUsil+abmobPBVrYGVJCF7RNE5sYtibebk6YYvlfz2YV8xG6U4sMPAn0z3mluPkXz3k08/vVpJUU/O3FfcvMy8Y5LmzRxf0y9LefAolgUnKHJKFn84RChuVJqgHrr9zxnAvS8gbQXn/VDo1/70VpT4aiZSkTZZ/HC+qmruuQIr1VYQIcoMbWXDgOYiEi4hQJOW2lYWGQoDWZ7DlQ/37gss9rpzPFvKAHGaIxLszL+X/vbjdayJczqO6r/XrAy7BORy0AF1Zy1oAgJq/sExHIuBsVCKnwLHGnfXoP09x4DQKUgLScG3tnNAlN2tUdHBzqIgqeUnWOLDiWG5QRLkoLPdNxjSxgrEWXG0h+Y5nWpEZCYar86rJCbtIqqLyDcVI58V1tBu+vF8fRp8IVZ/n7G5tgzibF9ogOVJixU9ECppINkiLsgS26K9O5xSIi5sdhHFAjMZJs6XEg7FJLV31abiNBINnADFohdNUsg6xLGbNtSi6QrZ1Zjd0glJ3VvaY2LPRlID1tVoLr88FnrVswQgm5zhZPMSz4Z/CYvOALID//+kRuWJd3g8trrGKp4p1rcOZJ34/awEn+2oIzsSic2TmfzoACvy1poXQnaS3yelMxCWe9Xe0HbkKNBVbAT5o/YQNWY3eWzBsg/9TrL0xL3TUgnadIQHnXhWiEjusde4C18+Zpe9FbiFWkRABDzKGLntt/Juc9vT95FEYQ+k0lajUq2+jrlLZJvcJxdE78Zj5v8ovwf5jw+WRn4hgr1cbb2yZKXFahKx7O9WUKdV8BnqgEGYAA2gEacENRQfup6xvC2QV+ypO/jycl5/hApgLwhSX9xiru1AJITORZ9KNQhCCD7QcPiXbC3LyFmxr7q9dgxqbgWT2YjUp+COGE7rq+4EVsv9m83tkXuuXOy+hnEIcnlgMC6kfC+DW0auvGXEoRPUAGIZTNIluzJZyyfExXOLJw1vPDVLFiNEwkxioRfvhUUjUVxbV8m9V28AUmyelUJ72rzhl9Y/kFv4TAwiBc+G28havX4bvZgp+XN9A4WdSm4NmbAhJEwgDswszom+/aAryvRfnSENOc8o9OJRyRvptyu07Z336uU+iH00JnbvCQwC9nEsB1yAZZ1qmsv0w0nTJnT3/amVBVc0dG/EBSzArUjgq9FJd/3uqQzcUHDmuOlIihVaw0AmcUCqEBQCDizIi5BZUkreodcfuILB54aE+Qu09PiDZUwZlE0l9/kwmd+DiysvSqtuzkxxa24eLVXPttOT0PcOIfHFv+zSYIJwrOKRwHDZXYRY/cqTJbfJc4hROXazFThPg9bwpHXr0mE+1eCnlRoybKleFMjcOmsEFr/HXSE3snsLGjn1ab5wZnFeZqKQ3/j/s/A8rQi9luC/LCDAd/yv+7TR+dnqtkYC6F4ZMP9PuPIcMtnjw8aqF4CDvJ7G/Wf2XyqqwawWjefRFrdEdWfDOVeaIwvJCRkgS/7VA/42UzBy74BY1mjIjmXM0YgkiTu7DEUNt+JGpbcY+WJwWkIleDx8dC7hNdkrbUkjbJGVm1QF1KY+7aWBi2NI0pQsCSLGe42PSLNTvpwSY3Lqbx5Ja+k2Ika1nsetBisTyO/e/HB0UKUdc0qHJ3mQn2y1BX5kPfihetzIz9kIhCNfIwVlOX9yPQulngdZ8oey/eoDxC5hgGax1bEvpcXv+zCx02++hKfS5oQM4pejehNMax/3TvFDoNRTkmsuQi7Nn3xTtDhO7YuDiMSwSAblqquyxn76QYjromhH1CYeMM3xZTV0P+qgMX9McoJej6Qcbkwk88ogbpXvtSr12cS0ALLndN47arB65ZCR0u8u4hzj1nlFcfM2oxLYxxO+izVJYlv+HBR67Lkfu7Rp0yuwD0H5v4Z1vlcrNhj+vagOdQyzloLQWwLxLv3AD7CiZAMqaH9Bqszce513wu1yrtBSUbVwnfWq1+st4sUlgWP7dwhtM43RkPjffOOVIsR08e2gMwmO4Aw0aju4CyCU1yu4/JDGbsiwa4Wx8ArEJ3n/Uuxju2qZPXQITO+q03LQjplBEtpfP9l69t+ygm2tinpbT/UBa2IjOcvQm/gAFyAmvJUJVdic6pu1+8r9TBaBTFkyW6Mmbw+ShHjdeVhkH5ZLtnvXVfrWJ7M9TAt1cbofDy7r1kNLQ9dd6kEYGcDay1/XmM6Nx2xqiwFkq/wliCthFYfmDFx9THnhT2R2kgO8tGdm1OpXS1JeP+LzSsQeH8jUjNMW8DYcqZhR0ujFoAvUWnynzq6x0chshMerO6aetZpQrJDSx0Sb7Wm4+dghRd4gds+UpT5+zjZuwaWB7DEsv6VMcQ3yQhM2PE5uEbZyTdPEk3RaSIkttsS9Soebez1uw3C1APzgvncd5WnS4DNitIy3ELjVQ/9QTOo+lLZCj573FPbgH5ZzXYeppQk6SyRk1448aiSyZsEkkbpo+1Kd2nS80xJJ4xzFHQ1E2yCqB0uni9xC5JqueRhf0cJZAHosoDttduiKzNpC2g6HUkf6LjsQBsp1pQDKqfP2IVoljDW7ErJnlTaH1oJeumISeSyEaBkXuQ/FbuOSC5fXDufEvojrR2wCa6LBqJwWtyMBebmrnoZpUR7APcd5Qolw2kCj3gelp6BmMaEGiJ4PfSxe9AZQMmeoHxtJ8Eo4fWOlsA0+GgzahyCNJnf7KLJIgb/aHac1diLnzK041b2pdV1mvZ6PW1gBjfIZr4eT7vEpvRa0McP1Z24hNsOXx4ioUIdWlKtzVD4Uk/tozpZ+X1pHFZgiX77JVeGx0nepcFeMCRB8q6rnHypvfunmLboH1Uap10ckI2tZFdY46zvVX2kQEYAAQA6EmiWKAEVarteJL2YQP+MQrhvYG76nAUc2Ba/LeG8U+sqq2VJgYbVX9VwsJB9wH9Fya7XqUbB56PIA5qvy0l3wRyooVNYh4KaISt9g4Pl0yHriVkkklrsY4eUmCIuHpQj5gorJgG+XJBjUrecji3xIshT9xBuhwlEY9+lubmw/w4G08JCCBFp52BuC3gbUyZjwqk0zCppyIjzYjivPZOkEDmFvY6Ql9hJzGAuCotG+FEj2mKjBTBso+rs4saZvi9RegZETNQAAA==");
+  background-size: calc(var(--cell, 44px) * 5) calc(var(--cell, 44px) * 5);
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--cell) * -1)
+    calc(var(--y, 0) * var(--cell) * -1);
+}
+/* 材质模式下不再叠形状：贴图已经说明"这是台面"，再压一个梯形会重复 */
+html[data-terrain='on'] .tile.t-plateau::before {
+  display: none;
+}
+/*
+ * 台地的外缘：**卡在丘陵和高山之间**。
+ *
+ * 丘陵 0.12~0.28 格 / α0.30~0.55，高山 0.24~0.56 格 / α0.45~0.60。
+ * 台地取 0.18~0.36：比丘陵那道坎高，比山的断崖浅——三条地形并排时，
+ * 光看坎的深浅就能排出"低→中→高"。
+ * 上沿的亮边给到 0.58（三者里最亮）：平顶被太阳直射，是台地最认得出来的一笔。
+ */
+html[data-terrain='on'] .tile.t-plateau[data-et='1'] {
+  --e-t: inset 0 calc(var(--u) * 0.18) calc(var(--u) * 0.16) calc(var(--u) * -0.10) rgba(255, 253, 244, 0.62);
+}
+html[data-terrain='on'] .tile.t-plateau[data-eb='1'] {
+  --e-b: inset 0 calc(var(--u) * -0.36) calc(var(--u) * 0.32) calc(var(--u) * -0.18) rgba(96, 86, 56, 0.56);
+}
+html[data-terrain='on'] .tile.t-plateau[data-el='1'] {
+  --e-l: inset calc(var(--u) * 0.22) 0 calc(var(--u) * 0.22) calc(var(--u) * -0.14) rgba(104, 96, 66, 0.28);
+}
+html[data-terrain='on'] .tile.t-plateau[data-er='1'] {
+  --e-r: inset calc(var(--u) * -0.22) 0 calc(var(--u) * 0.22) calc(var(--u) * -0.14) rgba(104, 96, 66, 0.28);
+}
+
+/*
  * 丘陵区的外缘阴影（2026-11-12，第六次尝试）。
  *
  * 前面五种做法（居中物件、镜像平铺、满幅纹理、抠块重撒、每格明暗）全败在同一处：
@@ -1788,10 +1831,39 @@ html[data-terrain='on'] .tile.t-mountain {
 .tile.t-plateau::before {
   content: '';
   position: absolute;
-  inset: 18% 14% 18% 14%;
-  background: rgba(150, 160, 120, 0.28);
-  clip-path: polygon(12% 0%, 88% 0%, 100% 100%, 0% 100%);
+  /*
+   * 尺寸和另外两个地形共用一把尺子：
+   *   丘陵顶 42% / 台地顶 26% / 高山顶 12%——越高的地形，轮廓越往上长。
+   * 底边落在 82%，和**高山**同一条线（都是"整块地面"）；丘陵是土包、不落地
+   * （68%），那是它和高山/台地的形态差别，别去抹平。
+   */
+  inset: 26% 11% 18% 11%;
+  /*
+   * 台地 = **两级台面 + 崖体**，读法是"左边高一层、右边低一层"。
+   *
+   * 台阶交给**轮廓上的那个缺口**（左边台面到 16% 就断，右边接着往下 16% 才开始），
+   * 而不是画几条横条——第一版就是画横条，整张脸成了条纹蛋糕。
+   * 缺口下面再压一条**只铺在台阶下方**的阴影（第二个背景层限定宽度），
+   * 表示"高台把影子投在低台上"，这是台地最能说明自己"有高差"的一笔。
+   *
+   * 三段色带沿用高山那套（亮顶 / 中调崖体 / 暗底），硬边不渐变：
+   * 高山是三块，这里也是三块，放在一起才像同一个系列画的。
+   */
+  background-image:
+    /* 台阶下沿的投影：宽度只到台阶那一段（右侧 44%），高度 9% */
+    linear-gradient(#a89a72, #a89a72),
+    linear-gradient(to bottom, #f8f3e0 0 16%, #cbbf96 16% 86%, #93855c 86% 100%);
+  background-size:
+    44% 9%,
+    100% 100%;
+  background-position:
+    right 0 top 16%,
+    0 0;
+  background-repeat: no-repeat;
+  /* 左边高台、右边低一档：缺口就是"层叠台阶"，尖顶留给高山 */
+  clip-path: polygon(4% 0%, 56% 0%, 56% 16%, 92% 16%, 100% 100%, 0% 100%);
 }
+
 
 .tile.t-valley {
   background: var(--valley);

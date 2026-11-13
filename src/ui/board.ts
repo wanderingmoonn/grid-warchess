@@ -680,11 +680,15 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (node.dataset.v !== v) node.dataset.v = v;
       }
       /*
-       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵和高山都要。
-       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈——两者共用同一套数据，
-       * 只是 CSS 里的强度不同，这是"高山看起来比丘陵高"的一半来源。
+       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵、高山、台地都要。
+       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈，台地卡在中间——
+       * 三者共用同一套数据，只是 CSS 里的强度不同。这是"谁比谁高"的一半来源
+       * （另一半是贴图/纹理本身）。
+       *
+       * 台地是 2026-11-13 加进来的：在那之前它只是"一块更亮的绿色"，
+       * 四周没有坎、也没有投影，站在丘陵旁边完全读不出高差。
        */
-      if (cls.includes('t-hill') || cls.includes('t-mountain')) {
+      if (cls.includes('t-hill') || cls.includes('t-mountain') || cls.includes('t-plateau')) {
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
           return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
