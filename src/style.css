@@ -1428,7 +1428,9 @@ html[data-terrain='on'] .tile.t-plateau::before {
  * 上沿的亮边给到 0.58（三者里最亮）：平顶被太阳直射，是台地最认得出来的一笔。
  */
 html[data-terrain='on'] .tile.t-plateau[data-et='1'] {
-  --e-t: inset 0 calc(var(--u) * 0.18) calc(var(--u) * 0.16) calc(var(--u) * -0.10) rgba(255, 253, 244, 0.62);
+  --e-t:
+    /* 亮而窄：台地底子浅，暖白摊开成一片就看不见了——收窄之后峰值才够 */
+    inset 0 calc(var(--u) * 0.10) calc(var(--u) * 0.05) 0 rgba(255, 255, 250, 0.34);
 }
 html[data-terrain='on'] .tile.t-plateau[data-eb='1'] {
   --e-b:/n    inset 0 calc(var(--u) * -0.34) calc(var(--u) * 0.30) calc(var(--u) * -0.18) rgba(96, 86, 56, 0.42),
