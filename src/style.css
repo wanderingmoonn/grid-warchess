@@ -1215,10 +1215,12 @@ html[data-terrain='on'] .tile {
  * 内描边（`inset 0 0 0 1px`）统一由下面那条合成规则盖掉：合成用的是透明的
  * 占位阴影，等于把各 terrain 自带的"每格一圈"关掉，又不会和新的边缘阴影打架。
  */
-/* 浅水的横条是逐格重复的：相位对不上，相邻格接起来就是"每格一条横线" */
-html[data-terrain='on'] .tile.t-shallow::before {
-  display: none;
-}
+/*
+ * 浅水的横条是逐格重复的：相位对不上，相邻格接起来就是"每格一条横线"。
+ *
+ * 这一层在材质模式下**改作水陆过渡用**（见下面"深水 ↔ 浅水的过渡"那一节）：
+ * 关掉的是"每格一条横线"，不是这个伪元素本身。
+ */
 
 /*
  * ── 图案化 tile（B 方案，2026-11-12）──────────────────────────────────
@@ -1603,6 +1605,71 @@ html[data-terrain='on'] .board.big .tile.t-deep {
 }
 html[data-terrain='on'] .tile.t-deep::before {
   display: none;
+}
+/*
+ * ── 深水 ↔ 浅水的过渡（2026-11-13）────────────────────────────────────
+ *
+ * 深水 #4a7fa6、浅水 #a8cadf，两档差得够远，硬拼在一起就是一条刀切边。
+ * 而"脚底下还能踩，往外一步就没底"本来是连续的地形，边界该是一道坡。
+ *
+ * 做法（和邻格投影同一套思路）：**谁挨着另一档，就在自己这一侧朝那边铺
+ * 一道半透明的对方色**，两侧各铺一半。于是边界那条线上的颜色
+ * = 0.5×我的 + 0.5×他的，两边算出来是同一个值，接缝就消失了。
+ *
+ * 为什么不用 `background` 直接改 tile 本身：水面的动态波纹是
+ * `animation: water-flow` 在动 `background-position`，而 keyframes 只写了
+ * 两层——再往 `background-image` 里插一层渐变，渐变会被那条动画的位移
+ * 拖着走。所以过渡放在伪元素上，和动画互不干扰。
+ *
+ * `data-wt/wr/wb/wl` 由 board.ts 按四邻算好：`d` = 我这边浅、朝深水铺深色；
+ * `l` = 我这边深、朝浅水铺浅色。四个方向各一条渐变，没邻居的那几侧是
+ * `transparent`（渐变两端同色，等于没画），所以不用为每种组合单写规则。
+ */
+html[data-terrain='on'] .tile.t-water::before,
+html[data-terrain='on'] .tile.t-deep::before,
+html[data-terrain='on'] .tile.t-shallow::before {
+  display: block;
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* 覆盖掉非材质模式那层"每格一条横线" */
+  background: none;
+  background-image:
+    linear-gradient(to left, var(--nb-r, transparent), transparent 55%),
+    linear-gradient(to right, var(--nb-l, transparent), transparent 55%),
+    linear-gradient(to bottom, var(--nb-t, transparent), transparent 55%),
+    linear-gradient(to top, var(--nb-b, transparent), transparent 55%);
+}
+
+/*
+ * 叠什么色：只按"邻居是哪一档"决定，不看我自己的类型。
+ * 两侧都用 0.5 的 alpha，中点才会重合；只要有一侧偷懒用别的值，
+ * 边界上就会重新出现一条缝（这条是这套做法唯一必须守住的数）。
+ */
+html[data-terrain='on'] .tile[data-wt='d'] {
+  --nb-t: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wr='d'] {
+  --nb-r: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wb='d'] {
+  --nb-b: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wl='d'] {
+  --nb-l: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wt='l'] {
+  --nb-t: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wr='l'] {
+  --nb-r: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wb='l'] {
+  --nb-b: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wl='l'] {
+  --nb-l: rgba(168, 202, 223, 0.5);
 }
 /*
  * 高山（2026-11-13 第二次重做）。

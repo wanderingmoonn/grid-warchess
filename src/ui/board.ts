@@ -742,6 +742,43 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
           delete node.dataset.ml;
         }
       }
+      /*
+       * 深水 ↔ 浅水之间那道坡（`data-wt/wr/wb/wl`）。
+       *
+       * 深水 #4a7fa6、浅水 #a8cadf，硬拼是一条刀切边；而"这一脚还踩得住、
+       * 再走一步就没底"本来是连续的。做法：**挨着另一档的那一侧，在自己这一侧
+       * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
+       * 两色的中点，于是接上。
+       *
+       * 值 = "该往这边叠什么"：`d` 我在浅水这侧、叠深水色；`l` 我在深水这侧、
+       * 叠浅水色。浅水和"水域"算同一档（色差本来就不大），互相之间不铺。
+       *
+       * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
+       * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
+       */
+      const WATER_RANK: Record<string, number> = { shallow: 1, water: 1, deep: 2 };
+      const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
+      if (rankHere > 0) {
+        const wetSide = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
+          const r = WATER_RANK[dispTerrain[ty * s.w + tx] ?? ''] ?? 0;
+          if (r === 0 || r === rankHere) return '0';
+          return r > rankHere ? 'd' : 'l';
+        };
+        const wt = wetSide(x, y - 1);
+        const wr = wetSide(x + 1, y);
+        const wb = wetSide(x, y + 1);
+        const wl = wetSide(x - 1, y);
+        if (node.dataset.wt !== wt) node.dataset.wt = wt;
+        if (node.dataset.wr !== wr) node.dataset.wr = wr;
+        if (node.dataset.wb !== wb) node.dataset.wb = wb;
+        if (node.dataset.wl !== wl) node.dataset.wl = wl;
+      } else if (node.dataset.wt) {
+        delete node.dataset.wt;
+        delete node.dataset.wr;
+        delete node.dataset.wb;
+        delete node.dataset.wl;
+      }
 if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了

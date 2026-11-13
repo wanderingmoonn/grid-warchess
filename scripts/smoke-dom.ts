@@ -795,6 +795,73 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
       me: 'A',
     },
   );
+check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之间不标', () => {
+  /*
+   * 深水 #4a7fa6 / 浅水 #a8cadf 硬拼是一条刀切边，所以 board.ts 会给"挨着
+   * 另一档"的那几侧写 `data-wt/wr/wb/wl`，CSS 在那一侧铺一道半透明的对方色，
+   * 两侧各铺一半、边界线上的颜色正好是两档的中点。
+   *
+   * 这条钉两件事：
+   *   1. 方向要对（`d` = 我在浅水这侧、叠深色；`l` = 我在深水这侧、叠浅色）；
+   *   2. **同档之间不标**——标了就会在浅水和浅水之间平白多一道坡。
+   *      "水域"和"浅流"算同一档（色差本来就小）。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['naval-fleet'] }, 313);
+
+  const put = (x: number, y: number, t: string) => {
+    st.tiles[y * st.w + x]!.terrain = t as never;
+  };
+  // 第 0 行：深 深 水 水
+  put(0, 0, 'deep');
+  put(1, 0, 'deep');
+  put(2, 0, 'water');
+  put(3, 0, 'water');
+  // 第 1 行：深 浅（竖直方向）
+  put(1, 1, 'shallow');
+
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      me: 'A',
+    },
+  );
+
+  const tile = (x: number, y: number) => host.querySelector(`.tile[data-x="${x}"][data-y="${y}"]`)!;
+
+  // (1,0) 深水：右边是水域 → 该朝右铺浅色；左边是深水 → 不铺
+  assert.equal(tile(1, 0).getAttribute('data-wr'), 'l', '深水挨浅水，右边该叠浅色');
+  assert.equal(tile(1, 0).getAttribute('data-wl'), '0', '左边还是深水，不该铺');
+  // (2,0) 水域：左边是深水 → 朝左叠深色
+  assert.equal(tile(2, 0).getAttribute('data-wl'), 'd', '浅水挨深水，左边该叠深色');
+  // (0,0) 深水：右边也是深水 → 一个方向都不该标
+  assert.equal(tile(0, 0).getAttribute('data-wr'), '0', '同档之间不铺');
+  // (3,0) 水域：左边是水域（同档），下边也按同档算 → 不铺
+  assert.equal(tile(3, 0).getAttribute('data-wl'), '0', '水域之间不铺');
+  // (1,0) 下面是浅流：浅流和深水不同档，要铺（竖直方向也要连上）
+  assert.equal(tile(1, 0).getAttribute('data-wb'), 'l', '深水挨浅流，下边也该叠浅色');
+  // (3,0) 下面是水域：水域和浅流算同档，不铺
+  assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和浅流算同一档，不铺');
+  host.remove();
+});
+
   try {
     const marks = host.querySelectorAll('.fx-mark');
     assert.equal(marks.length, 2, `两条留痕都该画出来，实际 ${marks.length}`);
