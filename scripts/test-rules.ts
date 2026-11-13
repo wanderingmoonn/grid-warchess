@@ -13,6 +13,9 @@
 // @ts-nocheck
 
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildListOf } from '../src/core/build-list.ts';
 
 import {
@@ -4227,7 +4230,39 @@ test('焦土：阵亡时按最大生命 20% 波及四周', () => {
   const r = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: b.id });
   assert.ok(r.ok);
   const blast = Math.max(1, Math.round(UNIT_TYPES[b.type].maxHp * 0.2));
-  assert.equal(r.state.units.find((n) => n.id === neighbor.id)?.hp, beforeHp - blast);
+  // 2026-11-13：焦土改成物理直伤，先减目标护甲（以前是裸扣血）
+  const scoutArmor = UNIT_TYPES['scout']!.armor;
+  assert.equal(
+    r.state.units.find((n) => n.id === neighbor.id)?.hp,
+    beforeHp - Math.max(0, blast - scoutArmor),
+    `焦土 ${blast} 点减护甲 ${scoutArmor}`,
+  );
+});
+
+test('死亡合一：焦土砸死的兵也会跑自己的亡语（连锁不断）', () => {
+  // 2026-11-13 之前，焦土是 `state.units.filter(u => u.hp > 0)`：尸体被抹掉了，
+  // 但它自己的亡语一句都不跑。表现是"焦土砸死一个自爆兵，自爆兵不炸"，
+  // 连锁反应到第二代就断，而且没有任何报错。
+  const s = fresh({ expansionIds: ['scorched-earth'] });
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  grantAbility(s, 'militia', 'kamikaze'); // 只有民兵会自爆，被砸死的那个用别的兵种
+
+  const killer = place(s, 'A', 'archer', 7, 6);
+  const bomb = place(s, 'B', 'scout', 7, 5); // 要倒下的（1 血，没有亡语）
+  bomb.hp = 1;
+  const bomber = place(s, 'B', 'militia', 6, 5); // 贴着，会被焦土砸死 → 应该有自爆
+  bomber.hp = 1;
+  place(s, 'A', 'militia', 5, 5); // 自爆的四邻，用来接伤害
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === bomber.id), false, '自爆兵该被焦土砸死');
+  assert.ok(
+    r.state.log.some((l) => l.text.includes('自爆')),
+    '它死了就得炸——被焦土砸死不该静默消失',
+  );
 });
 
 test('多个扩展可以同时生效', () => {
@@ -14652,12 +14687,17 @@ test('死亡枕藉：砸不到空中，2×2 按身体算，够不着的不会挨
   assert.equal(after(victim.id), 0, '1 血的军营应该倒下');
 
   // 贴着 2×2 身体的四个方向都该吃到（老代码只认锚点右侧/下侧，那几个方向全漏）
-  assert.equal(after(left.id), 28 - blast, '左边贴着身体的要吃到');
-  assert.equal(after(right.id), 28 - blast, '右边贴着身体的要吃到');
-  assert.equal(after(down.id), 28 - blast, '下边贴着身体的要吃到');
-  assert.equal(after(up.id), 28 - blast, '上边贴着身体的要吃到');
+  // 2026-11-13 起焦土是物理直伤：先减各自护甲
+  const milArmor = s.unitTypes['militia']!.armor;
+  const bowArmor = s.unitTypes['archer']!.armor;
+  const onMil = Math.max(0, blast - milArmor);
+  const onBow = Math.max(0, blast - bowArmor);
+  assert.equal(after(left.id), 28 - onMil, '左边贴着身体的要吃到');
+  assert.equal(after(right.id), 28 - onMil, '右边贴着身体的要吃到');
+  assert.equal(after(down.id), 28 - onMil, '下边贴着身体的要吃到');
+  assert.equal(after(up.id), 28 - onMil, '上边贴着身体的要吃到');
   // 阵亡波及不分敌我：站得近的自己人也吃
-  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - blast, '凑太近的自己人也吃');
+  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - onBow, '凑太近的自己人也吃');
   // 够不着 / 打不到的
   assert.equal(after(far.id), s.unitTypes['militia']!.maxHp, '隔着两格的完全不该挨打');
   assert.equal(after(hover.id), s.unitTypes['af_balloon']!.maxHp, '空中单位砸不到');
@@ -14679,8 +14719,11 @@ test('死亡枕藉：1×1 的亡语仍然只是四邻', () => {
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   const blast = Math.max(1, Math.round(s.unitTypes['militia']!.maxHp * 0.2));
-  assert.equal(after(adj.id), 28 - blast, '正对着的一格要吃到');
-  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - blast, '另一边正对着的也要吃到');
+  // 焦土是物理直伤，先减各自护甲
+  const onMil = Math.max(0, blast - s.unitTypes['militia']!.armor);
+  const onBow = Math.max(0, blast - s.unitTypes['archer']!.armor);
+  assert.equal(after(adj.id), 28 - onMil, '正对着的一格要吃到');
+  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - onBow, '另一边正对着的也要吃到');
   assert.equal(after(diag.id), s.unitTypes['militia']!.maxHp, '斜角不算相邻');
 });
 
@@ -15874,6 +15917,60 @@ test('物理直伤：hurtPhysical 先减甲、hurt 不减——同一颗雷，�
   raw.hp = 200;
   abilityApi.hurt(s, raw, 20);
   assert.equal(raw.hp, 180, 'hurt 原样扣血，不再减甲');
+});
+
+/*
+ * 扣血的出口守卫（2026-11-13）。
+ *
+ * 这个 bug 反复出现：地雷、焦土、自爆之所以"无视护甲"，都是因为
+ * 它们绕开了 `hurtUnit`，直接 `u.hp -= n`。绕过之后，转移（守御阵）、
+ * 受伤钩子、致死战报、击杀归属全都一起失效——而且不报错、很难发现。
+ *
+ * 光靠注释里的"别这么做"挡不住（`AbilityApi.hurt` 的注释里早就写了，
+ * 焦土照样绕过）。所以把它变成一条会红的测试：
+ * 全仓库只有 `hurtUnit` 内部可以裸改 hp，其它地方必须显式打
+ * `hp-exempt: <理由>` 才放行。新增一条直伤时，正确的写法是
+ * `abilityApi.hurtPhysical(...)` 或 `hurtPhysical(...)`。
+ */
+test('代码纪律：扣血只有一个出口，绕过它要显式豁免', () => {
+  const CORE = fileURLToPath(new URL('../src/core', import.meta.url));
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.ts')) files.push(p);
+    }
+  };
+  walk(CORE);
+
+  const offenders: string[] = [];
+  let exempted = 0;
+  for (const f of files) {
+    const lines = readFileSync(f, 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      const t = line.trim();
+      // 注释里提到 `u.hp -= n` 是在讲规矩，不是在扣血
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return;
+      if (!/\.hp\s*-=/.test(line)) return;
+      if (line.includes('hp-exempt')) {
+        exempted += 1;
+        return;
+      }
+      offenders.push(`${f.replace(CORE, 'src/core')}:${i + 1}  ${t}`);
+    });
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    '发现未经豁免的 `hp -=`（绕过了转移/受伤钩子/致死结算）：\n' +
+      `${offenders.join('\n')}\n` +
+      '改用 hurtPhysical(...) / abilityApi.hurtPhysical(...)；' +
+      '确实不该走这条路的（内生损耗、城市），在那一行加 `hp-exempt: 理由`。',
+  );
+  // 豁免本身也要有数：0 说明扫描没生效（路径写错、正则失效都会这样）
+  assert.ok(exempted > 0, '一条豁免都没扫到，说明这个检查没真正跑起来');
 });
 
 test('造船厂：会架桥的工程兵能修，能在水面上产兵', () => {

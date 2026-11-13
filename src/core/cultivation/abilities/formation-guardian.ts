@@ -85,7 +85,7 @@ export const FORMATION_GUARDIAN: AbilityDef = {
       if (take <= 0) return;
 
       const healed = Math.min(gap, take * perHp);
-      guard.hp -= take;
+      guard.hp -= take; // hp-exempt: 阵吸修士的血，是内部转移，不是"修士受了伤"
       self.hp = Math.min(max, self.hp + healed);
       self.custom = {
         ...prev,

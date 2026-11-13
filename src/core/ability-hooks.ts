@@ -344,32 +344,16 @@ export const TURN_START = {
 } as const;
 
 /**
- * 持续状态的定义。
- * 扩展可以通过注册表注册自己的状态，从而影响单位。
+ * 持续状态的定义与结算上下文，**已经搬到 `statuses.ts`**（2026-11-13）。
+ *
+ * 搬家的原因很实在：注册表原先长在 `rules.ts` 里，而扩展包不能 import rules
+ * （运行时环），于是"扩展可以注册状态"这句话只能停在注释上——
+ * 中毒、灼烧这些奇想包的内容因此被迫写死在核心。
+ *
+ * 这里保留 re-export，只是为了不打断既有的 `import type { StatusDef }
+ * from './ability-hooks.ts'`；新代码请直接从 `./statuses.ts` 取。
  */
-export interface StatusDef {
-  id: string;
-  name: string;
-  summary: string;
-
-  /** 
-   * 回合开始时的结算（比如掉血、回血）。
-   * 返回字符串则写入战报，返回 null 表示不写。
-   */
-  onTurnStart?: (s: GameState, u: Unit, val: number) => string | null;
-
-  /** 修正移动力 */
-  modifyMove?: (s: GameState, u: Unit, val: number, move: number) => number;
-
-  /** 修正护甲 */
-  modifyArmor?: (s: GameState, u: Unit, val: number, armor: number) => number;
-
-  /** 修正攻击力（可以留给未来的面板和使用，目前先挂着） */
-  modifyAtk?: (s: GameState, u: Unit, val: number, atk: number) => number;
-  
-  /** 修正视野 */
-  modifyVision?: (s: GameState, u: Unit, val: number, vision: number) => number;
-}
+export type { StatusDef, StatusTickCtx } from './statuses.ts';
 
 export interface HitCtx {
   state: GameState;

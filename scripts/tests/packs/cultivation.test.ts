@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
 import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
@@ -1099,6 +1099,26 @@ export function run() {
     );
   });
 
+  test('守御阵：连「焦土」砸过来的也能接——它已经不再是绕过一切的裸扣血', () => {
+    // 2026-11-13 之前，焦土是 `near.hp -= blast`：守御阵接不住、也不算"挨打"。
+    // 现在它走 hurtPhysical，和地雷、自爆同一条路，所以这条该绿。
+    const s = fresh({ expansionIds: ['cultivation', 'scorched-earth'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const mate = place2(s, 'A', 'militia', 6, 5); // 紧挨着要倒下的那个，会被焦土波及
+    const bomb = place2(s, 'B', 'militia', 7, 5);
+    bomb.hp = 1; // 一碰就倒
+    const killer = place2(s, 'A', 'archer', 7, 6);
+    s.current = 'A';
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    assert.equal(at(mate.id).hp, mate.hp, '原目标一滴血没掉（这一下被阵接走了）');
+    assert.ok(at(arr.id).hp < arr.hp, '阵替友军吃了焦土');
+  });
+
   test('守御阵：友军建筑受击也转；半径外的友军不转', () => {
     const { s } = guardScene();
     s.units = [];
@@ -1127,12 +1147,20 @@ export function run() {
   });
 
   test('守御阵：中毒/灼烧这类状态伤害不转，血仍从原目标身上掉', () => {
-    const { s, arr, mate } = guardScene();
+    const { s, arr, mate } = guardScene(); // s.current === 'B'
     const before = { arr: arr.hp, mate: mate.hp };
     const dmg = Math.ceil(maxHpOf(s, mate) * 0.06);
-    STATUS_REGISTRY.poison.onTurnStart(s, mate, 1);
-    assert.equal(mate.hp, before.mate - dmg, '中毒扣的是中毒者自己的血');
-    assert.equal(arr.hp, before.arr, '阵不该替全军吃状态');
+
+    // 走真实路径：结束 B 的回合 → A 的回合开始结算中毒。
+    // 2026-11-13 起状态扣血也走 hurtUnit（internal），所以这条同时验两件事：
+    // 掉的血对得上，而且守御阵不会替全军吃状态。
+    mate.status = { poison: 1 };
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.equal(at(mate.id).hp, before.mate - dmg, '中毒扣的是中毒者自己的血');
+    assert.equal(at(arr.id).hp, before.arr, '阵不该替全军吃状态');
   });
 
   test('守御阵：自己挨打就吸守阵修士的血，每回合额度=境界', () => {
