@@ -710,14 +710,26 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
        * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
        *
-       * 值的含义从"1"改成 `m` / `h`：
-       *   m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
-       * 于是同一套数据画出一条**两级台阶**——丘陵把地面压低一点，山再压低一截，
-       * 而不是"山有影子、丘陵没有"，让人分不清是山高还是丘陵本来就平的。
+       * 值的含义：`m` = 山投的（长、冷、深）、`p` = 台地投的（居中）、
+       * `h` = 丘陵投的（短、暖、浅）。于是同一套数据排出**三级台阶**：
+       * 丘陵把地面压低一点，台地再压一截，山压得最狠。
        *
-       * 山与山之间不投影（一条山脊，不该有缝），所以给山自己清空。
+       * **2026-11-13：改成有方向的**——只有"比我高"的邻居才投影。
+       * 之前是无条件投：同高的丘陵之间也互相投，整片丘陵每一格的上沿都有一道影，
+       * 放大看就是一条条横向接缝；台地挨着丘陵时，丘陵还会把影子"往上"投到台地上，
+       * 于是台地看着比丘陵还低。现在按高度排序，谁高谁投。
        */
-      if (cls.includes('t-mountain')) {
+      const HEIGHT_RANK: Record<string, number> = { hill: 1, plateau: 2, mountain: 3 };
+      const rankOf = (t: string | undefined): number => HEIGHT_RANK[t ?? ''] ?? 0;
+      const myRank = cls.includes('t-mountain')
+        ? 3
+        : cls.includes('t-plateau')
+          ? 2
+          : cls.includes('t-hill')
+            ? 1
+            : 0;
+      if (myRank >= 3) {
+        // 最高的地形不再挨别人的投影（山脊内部不该出现缝）
         if (node.dataset.mt) {
           delete node.dataset.mt;
           delete node.dataset.mr;
@@ -727,8 +739,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       } else {
         const kindAt = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const t = dispTerrain[ty * s.w + tx];
-          return t === 'mountain' ? 'm' : t === 'hill' ? 'h' : '0';
+          const r = rankOf(dispTerrain[ty * s.w + tx]);
+          if (r <= myRank) return '0';
+          return r === 3 ? 'm' : r === 2 ? 'p' : 'h';
         };
         const mt = kindAt(x, y - 1);
         const mr = kindAt(x + 1, y);
