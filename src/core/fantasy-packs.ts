@@ -439,7 +439,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
         {
           stage: STAT_STAGE.base,
           apply: (c) => {
-            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            const tile = c.api.tileOf(c.state, c.self);
             if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
             c.armor += WOODLAND_ARMOR;
             c.items.push({ label: '林地之主', delta: WOODLAND_ARMOR });
@@ -452,7 +452,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
           apply: (c) => {
             // 只有"我挨打"才给自己加甲。出手时加的是对手的甲，那是反向的
             if (c.side !== 'defender') return;
-            const tile = c.api.tileAt(c.state, c.self.x, c.self.y);
+            const tile = c.api.tileOf(c.state, c.self);
             if (!tile || (tile.terrain !== 'forest' && tile.terrain !== 'hill')) return;
             if (!c.ignoreCover) c.armor += 3;
           },
@@ -650,7 +650,8 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             if (dx === 0 && dy === 0) return;
             const nx = c.target.x + dx;
             const ny = c.target.y + dy;
-            if (!c.api.canStandAt(c.state, nx, ny, c.target.type)) return;
+            // 按目标所在那张图判：月球上被击退，不该去查地球那一格站不站得住
+            if (!c.api.canStandAt(c.view, nx, ny, c.target.type)) return;
             c.target.x = nx;
             c.target.y = ny;
             c.result.pushed = true;
@@ -810,9 +811,10 @@ const FANTASY_ABILITIES: AbilityDef[] = [
         const kid = def.splitInto ?? 'slimelet';
         let born = 0;
         for (let k = 0; k < 2; k += 1) {
-          const spot = c.api.freeNeighbor(c.state, c.victim, kid);
-          if (!spot) break;
-          c.api.spawn(c.state, c.victim.owner, kid, spot.x, spot.y);
+          // 落点按死者那张图找：月球上死掉的史莱姆，小史莱姆也该在月球上，
+          // 不能凭空出现在地球同一坐标（那正是"月面幽灵"）。
+          const born2 = c.api.spawnNear(c.state, c.victim.owner, kid, c.victim);
+          if (!born2) break;
           born += 1;
         }
         if (born > 0) c.api.pushLog(c.state, c.victim.owner, `${def.name} 分裂出 ${born} 只小史莱姆`, true);
@@ -945,9 +947,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
             const def = c.api.utype(c.state, c.self.type);
             const wall = def.builds?.[0] ?? 'earth-wall';
             if (!c.state.unitTypes[wall]) return;
-            const spot = c.api.freeNeighbor(c.state, c.self, wall);
-            if (!spot) return;
-            c.api.spawn(c.state, c.owner, wall, spot.x, spot.y);
+            if (!c.api.spawnNear(c.state, c.owner, wall, c.self)) return;
             c.api.pushLog(c.state, c.owner, `${def.name} 立起一道土墙`);
           },
         },
@@ -1049,9 +1049,7 @@ const FANTASY_ABILITIES: AbilityDef[] = [
               (u) => u.owner === c.owner && outputs.includes(u.type),
             ).length;
             if (alive >= spec.max) return;
-            const spot = c.api.freeNeighbor(c.state, c.self, type);
-            if (!spot) return;
-            c.api.spawn(c.state, c.owner, type, spot.x, spot.y);
+            if (!c.api.spawnNear(c.state, c.owner, type, c.self)) return;
             c.api.pushLog(c.state, c.owner, `${def.name} 召唤出 ${c.api.utype(c.state, type).name}`);
           },
         },
@@ -1417,11 +1415,18 @@ const KNIGHTS: Expansion = {
       layer: 'air',
     },
     // 龙骑兵：飞行 + 冲锋 + 溅射。三条机制叠在一个兵上，所以面板压得低。
+    //
+    // 2026-11-07 升到 4 代。原因是它在 3 代的标准池里是首签最强的一张：
+    // 时代 3 / 20×20 的 200 局里，"首签摸到龙骑兵"的那一侧胜率 83%（18 局），
+    // 和火枪手（92%）、迫击炮（67%）一起构成了 3 代选卡的固定答案。
+    // 数值一个不动——升代之后时代谱更硬，等效血被压低，战力自己从 152.7
+    // 掉到 132.6，265 金的性价比 6.16 仍在 4 代中位（5.60）之上，
+    // 它本来就该是"贵而强"的那张，不需要再补一刀。
     {
       id: 'dragoon-rider',
       name: '龙骑兵',
       short: '龙',
-      era: 3,
+      era: 4,
       category: 'combat',
       cost: 265,
       move: 5,
@@ -1436,20 +1441,33 @@ const KNIGHTS: Expansion = {
       abilities: ['charge'],
     },
     // 炼金术士：六发。前三发改变战场，后三发是余量，打光就退回近战。
+    //
+    // 2026-11-07 整体上调一档：代 3 → 4，射程 +1、视野 +1、护甲 +1、血 +10、
+    // 魔法 +8（15 → 23），价格 165 → 240。
+    //
+    // 价格是照"代 4 中位性价比"定的，不是拍脑袋：这套面板把战力从 67.8
+    // 推到 114.1（×1.68）。留在 165 金，它的性价比会是 6.88——正好是 4 代
+    // 35 个战斗兵里最高的一档（中位 5.60），等于换了个更强的身体还降了价。
+    // 240 金把它压回 5.60，即"在 4 代当个标准远程"，这也和它 240 金
+    // 落在吸血鬼 / 狼人（235）同一档的事实对得上。
+    //
+    // 魔攻只给 +8 而不是按血/甲同比例加：它的伤害结构是"六发里前三发改变
+    // 战场"，弹药是硬上限，加魔攻的边际收益比加血更陡——+8 已经把一发
+    // 对轻甲的期望从 12 抬到 20，再往上就该改弹药数了。
     {
       id: 'alchemist',
       name: '炼金术士',
       short: '炼',
-      era: 3,
+      era: 4,
       category: 'combat',
-      cost: 165,
+      cost: 240,
       move: 2,
       atk: 9,
-      armor: 2,
-      maxHp: 30,
-      range: 3,
-      vision: 4,
-      magicAtk: 15,
+      armor: 3,
+      maxHp: 40,
+      range: 4,
+      vision: 5,
+      magicAtk: 23,
       element: 'fire',
       splash: 1,
       ammo: 6,
@@ -1575,7 +1593,7 @@ const BEASTS: Expansion = {
      */
     {
       id: 'poison-bat',
-      name: '蝙蝠',
+      name: '毒蝙蝠',
       short: '蝠',
       era: 1,
       category: 'combat',
@@ -1589,7 +1607,9 @@ const BEASTS: Expansion = {
       burst: 3,
       flight: true,
       layer: 'air',
-      abilities: [],
+      // 2026-11-11：用户要求把名字和「淬毒」还回来（35 金 / 10 血的定位不动）。
+      // 三段连击每次都会贴毒，所以它的杀伤不再靠单发数值，而是"打完还得掉几轮"。
+      abilities: ['poison-hit'],
     },
     {
       id: 'centaur',
@@ -1928,28 +1948,40 @@ const ARCANE: Expansion = {
       // 二代多一个"带溅射的法师"——二代原来只有游侠和半人马两个远程，
       // 都是单体。
       // 降完之后：新 3.87 / 旧 3.19，落在这代的 2.34~4.66 / 1.72~3.30 区间里偏上，
-      // 位置在游侠（4.10 / 3.30）之下——她多出溅射、飞行、虚咒三样，值这个差。
+      // 位置在游侠（4.10 / 3.30）之下——她多出溅射、掠空、虚咒三样，值这个差。
+      //
+      // 2026-11-07 三次调整（当天，推翻上面那次）：删掉「掠空」、血 19 → 25。
+      //
+      // 选卡体检 100 局（docs/DRAFT-STATS-2026-11-07.md）量出来的：她在时代 1
+      // 胜率 87.2%（n=86，z=+10.3），进池 87%、被选率 100%，抢不到就输。
+      // 查下来跟血量无关——「掠空」带 airLayer，她在**空中层**，而时代 1 的
+      // 地面近战射程全是 1，canStrike 对空中单位要求射程 ≥ 2，根本打不到她；
+      // 唯一能对空的弓手每局都被 AI 禁掉。于是 115 金的 3 射程法师在青铜局无解，
+      // 19 血一点不重要——上一刀砍在了不需要砍的地方。
+      //
+      // 现在：删掉掠空，她重新变成"能被近战围死的远程"，血回调到 25
+      // （比原来的 30 少一点、比 19 像个活人）；115 金的价位不动。
+      // 代价要认：她不能再掠水，森林丘陵也不再按 1 步算，移速仍是 2。
       id: 'witch',
       name: '女巫',
       short: '女',
       era: 2,
       category: 'combat',
-      cost: 120,
+      cost: 115,
       move: 2,
       atk: 5,
       armor: 2,
-      maxHp: 24,
+      maxHp: 25,
       range: 3,
       vision: 5,
       magicAtk: 9,
       element: 'dark',
       splash: 1,
-      // 2026-11-03 平衡调整：新增「飞行」（悬停：掠水、林地丘陵按 1 步、
-      // 能和地面单位共占一格，地面近战够不着她）；「咒缚」换成「虚咒」
-      // （3 格内敌军攻击力 −25%）。原来那套"打中才贴护甲 −4"要靠她站到
-      // 射程里才有用，而她是全场最脆的法师——换成常驻光环之后，
+      // 「咒缚」换成「虚咒」（3 格内敌军攻击力 −25%）：原来那套"打中才贴护甲 −4"
+      // 要靠她站到射程里才有用，而她是全场最脆的法师——换成常驻光环之后，
       // 她的价值从"敢不敢贴"变成"站在哪"，这才是这个兵种该有的问题。
-      abilities: ['fly-over', 'hex-weak'],
+      // 「掠空」见上面那段：它是"打不到"的根源，不是"站得住"的补丁。
+      abilities: ['hex-weak'],
     },
     {
       id: 'cursed-knight',
@@ -2606,7 +2638,11 @@ const HERO_UNITS: UnitTypeDef[] = [
     // 12 → 14（2026-10-31）：它是"站在最前面替全队吃伤害"的定位，
     // 而 12 甲在蒸汽时代挡不住主流破甲；多这两点，才配得上它 2 速的代价。
     armor: 14,
-    maxHp: 150,
+    // 150 → 170（2026-11-07）：它的血量是"替别人挨打"的额度，不是自己的生存力。
+    // 470 金 + 2 速 + 圣旗要贴到半径 2，实战里它几乎每回合都在吃两份伤害；
+    // 150 血撑不到第二次开旗，这条英雄就退化成"开一次旗然后死"。
+    // 拉高的是**耐久上限**，攻防一条没动——它更耐打，但仍然不靠输出说话。
+    maxHp: 170,
     range: 1,
     vision: 4,
     magicRes: 5,
@@ -2650,8 +2686,8 @@ const HERO_UNITS: UnitTypeDef[] = [
     atk: 46,
     armor: 11,
     maxHp: 140,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     magicAtk: 12,
     magicRes: 6,
     element: 'light',
@@ -2688,16 +2724,19 @@ const HERO_UNITS: UnitTypeDef[] = [
     short: '邪',
     era: 6,
     category: 'combat',
-    cost: 640,
+    // 700：2026-11-09 由 640 上调。它是全场最贵的英雄，且刚吃到"信息化射程 +1"
+    // （4 → 5）与陨卵的选点自由——两条叠起来，640 那个价已经压不住它。
+    cost: 700,
     // 2 速：它是阵地单位，不是追人的龙。想让它上场，阵线得围着它摆。
     move: 2,
     atk: 40,
     armor: 8,
     maxHp: 190,
-    range: 3,
-    // 视野 9：它落在哪儿，方圆九格就该是它的疆域——陨卵的射程也是 9，
+    range: 4,
+    // 视野 11：它落在哪儿，方圆十一格就该是它的疆域——陨卵的射程也是 11，
     // 两者对齐，玩家看到"能砸到的地方"和"能看见的地方"是同一片。
-    vision: 9,
+    // 2026-11-10：两边一起从 9 提到 11（用户点单），对齐关系保持不变。
+    vision: 11,
     magicAtk: 30,
     magicRes: 12,
     element: 'dark',
@@ -2706,7 +2745,9 @@ const HERO_UNITS: UnitTypeDef[] = [
     flight: true,
     layer: 'air',
     hero: true,
-    unlockCost: 300,
+    // 300 → 350（2026-11-10）：上一轮刚给它加过射程和陨卵的选点自由，
+    // 解锁门槛跟着挪一档，免得它成为"最便宜的大杀器"。
+    unlockCost: 350,
     requiresPack: 'pack-contemporary',
     weak: { light: 2 },
     resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
@@ -2715,10 +2756,15 @@ const HERO_UNITS: UnitTypeDef[] = [
         id: 'dragon-egg',
         name: '陨卵',
         summary:
-          '在 9 格内挑一个能砸到最多敌人的位置落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法。魔龙卵 2 回合后孵化为魔龙。',
+          '在 11 格内**自己挑一格**落下魔龙卵：落点周围 1 格内的敌人各吃一发暗属性魔法（不吃护甲、只被魔抗挡）。魔龙卵 2 回合后孵化为魔龙。',
         effect: 'dragon-egg',
+        // 落点由玩家点，不再由引擎替他想。高亮的格子＝射程内放得下蛋的格子；
+        // 2026-11-10 起**点空地也算合法**——卵本身是两回合后的一条龙，
+        // 不只是"砸人那一下"，所以不再要求落点周围有敌人。
+        targeting: 'point',
         cooldown: 3,
-        radius: 9,
+        // 9 → 11（2026-11-10）：和视野同步，砸得到的地方＝看得见的地方
+        radius: 11,
         power: 1,
       },
     ],
@@ -2758,11 +2804,13 @@ const HERO_UNITS: UnitTypeDef[] = [
     category: 'combat',
     cost: 300,
     move: 5,
-    atk: 44,
+    // 44 → 34（2026-11-10）：它 move 5 + 飞行 + 射程 3，物攻再压邪龙王一头
+    // 就变成"孵出来就是第二个英雄"。给它留魔法段（22）和机动，砍物理这 10 点。
+    atk: 34,
     armor: 10,
     maxHp: 150,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     magicAtk: 22,
     magicRes: 8,
     element: 'dark',
@@ -2805,6 +2853,8 @@ export const FANTASY: Expansion = {
   scale: 'large',
   name: '奇想',
   blurb: '魔法、荒兽与英雄，一整套奇幻军备。',
+  // 圣剑勇者与邪龙王是第六代英雄（兵种级 requiresPack），要「信息化」才招得到
+  recommends: ['pack-contemporary'],
   summary:
     '一整套奇想军备：法则（魔法攻击/魔抗、属性克制、负面状态、空中层）+ 人类的骑士团 + ' +
     '荒兽 + 秘法 + 十一个全场唯一的英雄。开这一个包就有全部 72 个兵种，不再分五个勾。' +

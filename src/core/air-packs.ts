@@ -116,13 +116,19 @@ const ANTI_SHIP: AbilityDef = {
  *
  * 复用既有两条机制（`hidden` 走潜行判定、`noCounter` 是先手那个旗标），
  * 所以"迷雾局里贴脸才发现"这条规则对隐身机和潜艇是同一条——一致性白拿。
+ *
+ * 2026-11-09：`hidden` 改成"出手即现形"。隐身机 86 攻、射程 4、900 金，
+ * 原先永久隐身 = 永久免费输出，比潜艇更过分。现在打法是"潜进纵深、
+ * 一口吃掉一个目标、然后立刻撤出视野"，而不是飘在对面头顶上刷伤害。
+ * `noCounter` 保留：那一发仍然是先手，对方只是**之后**能还手。
  */
 const STEALTH: AbilityDef = {
   id: 'af-stealth',
   name: '隐身',
-  summary: '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。',
+  summary:
+    '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新隐身。',
   group: 'move',
-  hooks: { hidden: () => true, noCounter: true },
+  hooks: { hidden: (c) => !c.self.acted, noCounter: true },
 };
 
 /**
@@ -355,8 +361,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 78,
     armor: 5,
     maxHp: 90,
-    range: 4,
-    vision: 8,
+    range: 5,
+    vision: 9,
     ...AIRFRAME,
     abilities: ['af-superiority'],
     // 移动 12：全游戏最快的单位，一圈能横穿半张 20×20 的图。
@@ -374,8 +380,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 86,
     armor: 4,
     maxHp: 85,
-    range: 4,
-    vision: 8,
+    range: 5,
+    vision: 9,
     ...AIRFRAME,
     abilities: ['af-superiority', 'af-stealth'],
     // 隐身 + 先手：迷雾局里摸到脸上才被发现，而且打你不挨反击。
@@ -393,8 +399,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 88,
     armor: 8,
     maxHp: 120,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // A-10 那一挂：对地 +14、甲 8，专治坦克集群。射程只有 2，
@@ -412,8 +418,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 60,
     armor: 6,
     maxHp: 100,
-    range: 2,
-    vision: 7,
+    range: 3,
+    vision: 8,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // 比攻击机便宜、比它慢、比它脆，但**便宜一半还多**。
@@ -431,8 +437,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 44,
     armor: 1,
     maxHp: 40,
-    range: 3,
-    vision: 10,
+    range: 4,
+    vision: 11,
     ...AIRFRAME,
     abilities: ['af-ground-strike'],
     // 消耗品：280 金、视野 10、对地 +14，40 血。
@@ -450,8 +456,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 74,
     armor: 6,
     maxHp: 200,
-    range: 3,
-    vision: 7,
+    range: 4,
+    vision: 8,
     ...AIRFRAME,
     splash: 2,
     abilities: ['siege-master'],
@@ -489,8 +495,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 20,
     armor: 4,
     maxHp: 110,
-    range: 3,
-    vision: 9,
+    range: 4,
+    vision: 10,
     ...AIRFRAME,
     abilities: ['af-jam'],
     // 相邻敌军 −2 攻。它不杀伤，但能让对面整条战线少打一截——
@@ -508,8 +514,8 @@ const MODERN_AIR_UNITS: UnitTypeDef[] = [
     atk: 6,
     armor: 4,
     maxHp: 170,
-    range: 1,
-    vision: 7,
+    range: 2,
+    vision: 8,
     ...AIRFRAME,
     carry: { hold: { max: 4 } },
     // 四个舱位、移动 10：一次能把半个小队丢到地图另一头。
@@ -625,37 +631,39 @@ const AIRWING_OPS: AirwingOps = {
   },
 
   /**
-   * 每回合轮到航母时：**先收、再修、后放**。
+   * 每回合轮到航母时：**只整备，收和放都是玩家动作**。
    *
-   * 这个顺序是有讲究的：
-   *   · 先收：贴着母舰的飞机算"返航"，进甲板；
-   *   · 再修：甲板上的飞机每回合回 8 点（整备）——不加这条，飞机就成了一次性的；
-   *   · 后放：每回合放**一架**。放太快会让"甲板容量"这个数字失去意义。
+   * 到这里为止踩过一个完整的坑，两边都得写下来，不然还会复现。
+   *
+   * 一开始是"先收、再修、后放"，收和放都是自动的，其中"收"还无条件：
+   * 任何曼哈顿距离 ≤1 的己方舰载机，回合一开始就被塞进甲板，玩家没得选。
+   * 三条撞在一起就成了死循环——
+   *   ① 收进甲板；
+   *   ② 同一回合"后放"又把它扔出去，落点 `findAirspace` 从 r=1 起找，
+   *      正好落在①要吞掉的那一圈；
+   *   ③ `launch` 把它设成 `moved: true`，当回合动不了。
+   * 于是飞机每回合被收一次、扔一次，永远出不了母舰旁边那一格（实测三轮，
+   * 飞机 id 每轮都换、`moved` 恒为 true、MOVE 一直被拒）。
+   *
+   * 删掉自动回收之后还剩半个问题：**自动放**还在，而它的触发条件只是
+   * "甲板不空"。于是玩家点完「回收」，下一回合开头飞机立刻又被扔出去，
+   * 回收实际等于"顺手修 8 点"，甲板永远存不下第二架，机库这个概念是空的。
+   *
+   * 所以两边都改成手动（`LAUNCH` / `RECOVER` 两个 Action，面板上有按钮）。
+   * 甲板现在的语义是**机库**：停多久修多久，什么时候放飞由玩家决定。
+   * 代价也是清楚的——停在甲板上的飞机完全不参战，放飞那回合还占掉移动。
    */
   onDeckTurnStart: ({ state, carrier }) => {
     if (!airEnabled(state)) return;
-    const spec = deckSpecOf(state.unitTypes[carrier.type]);
-    if (!spec) return;
+    // 没有甲板的船不用整备（顺便挡掉非航母单位）
+    if (!deckSpecOf(state.unitTypes[carrier.type])) return;
 
-    // 1) 返航：贴着母舰的舰载机自动收进甲板
-    for (const u of [...state.units]) {
-      if (u.owner !== carrier.owner) continue;
-      if (!CARRIER_CAPABLE.has(u.type)) continue;
-      if (Math.abs(u.x - carrier.x) + Math.abs(u.y - carrier.y) > 1) continue;
-      if (deckFree(state.unitTypes[carrier.type], carrier) <= 0) break;
-      AIRWING_OPS.recover({ state, carrier, plane: u });
-    }
-
-    // 2) 整备：甲板上的飞机每回合回 8 点（上限是兵种血量）
+    // 整备：甲板上的飞机每回合回**一半上限血量**（向上取整，不会超过满血）。
+    // 原来是固定 +8，对 70 血的舰载机要九回合才修满，等于没有整备——
+    // 现在残血机进甲板两回合就能再战，甲板才真的能当机库用。
     for (const p of deckOf(carrier)) {
       const max = state.unitTypes[p.type]?.maxHp ?? p.hp;
-      p.hp = Math.min(max, p.hp + 8);
-    }
-
-    // 3) 放飞：每回合最多一架，出不去就留着
-    if (deckFree(state.unitTypes[carrier.type], carrier) < spec.capacity) {
-      const first = deckOf(carrier)[0];
-      if (first) AIRWING_OPS.launch({ state, carrier, plane: first });
+      p.hp = Math.min(max, p.hp + Math.ceil(max / 2));
     }
   },
 };
@@ -707,6 +715,8 @@ export const AIR: Expansion = {
   name: '空军',
   blurb: '从侦察气球到喷气机，能上航母甲板。',
   scale: 'large',
+  // 喷气机那几架同样要「信息化」解锁第六代
+  recommends: ['pack-contemporary'],
   summary:
     '第四到第六时代的空中力量：侦察气球、侦察机、双翼战斗机、活塞战斗机、俯冲轰炸机、' +
     '强击机、重型轰炸机、运输机、舰载机；第六代再加喷气战斗机、隐身战斗机、攻击机、' +

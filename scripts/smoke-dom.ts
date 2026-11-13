@@ -38,7 +38,11 @@ import {
   unitYieldAt,
 } from '../src/core/rules.ts';
 import { renderPanel, topbarShell } from '../src/ui/panel.ts';
+import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
+import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
+import { TERRAIN_INFO } from '../src/core/info.ts';
+import { CONFIG } from '../src/core/config.ts';
 import { openTitle } from '../src/ui/title-screen.ts';
 import {
   tutorialAllowsMove,
@@ -54,8 +58,15 @@ import {
 import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
-import { godShelfHtml } from '../src/ui/god-panel.ts';
+import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
 import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
+import { __setArtIndexForTest, setUiArt, uiArtOn } from '../src/ui/unit-art.ts';
+import { scopeBoardUi } from '../src/ui/board-scope.ts';
+import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
+import { starLayout } from '../src/ui/star-layout.ts';
+import { renderStarMap } from '../src/ui/star-map.ts';
+import { EARTH } from '../src/core/board.ts';
+import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
 import type { Unit } from '../src/core/types.ts';
@@ -151,6 +162,21 @@ function click(sel: string): void {
   el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 }
 
+/**
+ * 回首页。
+ *
+ * 2026-11-11 起「回首页」不再单独挂在顶栏上，而是收进「设置」弹窗
+ * （规则书/反馈/导出/回首页 都是"想起来才点一次"的东西）。用例里要回门面，
+ * 统一走这一个 helper，别每处各写一遍开弹窗的三步。
+ */
+function goHome(): void {
+  click('[data-act="settings"]');
+  // 弹窗里的那一条（刚才全局替换把它也换成了 goHome，自己调自己——栈直接爆）
+  const btn = doc.querySelector<HTMLElement>('[data-act="new-game"]');
+  assert.ok(btn, '设置弹窗里应该有「回首页」');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+}
+
 function unitsCount(): number {
   return doc.querySelectorAll('.unit').length;
 }
@@ -168,6 +194,293 @@ check('首屏只渲染己方棋子，敌方在视野外被裁掉', () => {
   // 这条断言要守的是"看不全"，不是"一个都看不见"。
   const foe = doc.querySelectorAll('.unit.owner-B').length;
   assert.ok(foe <= 2, `敌方不该整队出现，实际看见 ${foe} 个`);
+});
+
+check('月面选中单位时，可攻击目标不能整组清空', () => {
+  /*
+   * 实机反馈：「拉到月球上之后点自己的兵，没有可攻击格，敌人也点不动」。
+   *
+   * 根因不在规则层（`attackableTargets` 早就按图算了），而是渲染前的那一步
+   * `scopeBoardUi` 对**非地球图**无条件把 `targets` 清空——数据被界面扔了。
+   * 这条守的就是"选中的单位在哪张图上，那张图的高亮就照用"。
+   */
+  const ui = {
+    selectedId: 'm1',
+    reach: [1, 2, 3],
+    targets: ['e1'],
+    siegeTargets: [],
+    aimTiles: [],
+    skillThreatTiles: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [5],
+    heat: new Map([[7, 2]]),
+    incomeHints: new Map(),
+  } as unknown as BoardUi;
+  const moonUnit = { id: 'm1', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false, board: 'moon' };
+  // 地球单位**没有** board 字段（缺省即地球），别从月球那个对象里 spread 出 board
+  const earthUnit = { id: 'm2', type: 'militia', owner: 'A' as const, x: 2, y: 2, hp: 10, kills: 0, moved: false, acted: false };
+
+  // 选中的兵在月球：高亮留着
+  const onMoon = scopeBoardUi(ui, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(onMoon.targets, ['e1'], '月面上的可攻击目标要留着，否则点不动');
+  assert.deepEqual(onMoon.reach, [1, 2, 3], '可达格同理');
+  assert.deepEqual(onMoon.threat, [5], '威胁圈同理');
+  assert.equal(onMoon.heat, undefined, '战况烈度只认地球格号，别画到月球上');
+
+  // 选中的兵在地球、正在看月球：一律清空（不能把地球的格号画过去）
+  const earthSel = scopeBoardUi({ ...ui, selectedId: 'm2' } as BoardUi, 'moon', [moonUnit as never, earthUnit as never]);
+  assert.deepEqual(earthSel.targets, [], '不是这张图上的人，高亮必须清空');
+  assert.equal(earthSel.selectedId, null);
+
+  // 地球那张图不做任何换算（老路径原样返回）
+  const onEarth = scopeBoardUi(ui, EARTH, [earthUnit as never]);
+  assert.equal(onEarth, ui, '地球直接返回原对象，零开销');
+});
+
+check('只有一张地图时，左上角的星图面板整个收起来', () => {
+  /*
+   * 玩家反馈两次：没开太空扩展也能看见那个"选择星球"的按钮。
+   * 它本来是给"地球 / 月球切换 + 看在途"用的，只有地球时就是一个永远只有一个
+   * 选项的按钮，占着角落还挡地图。
+   *
+   * 判据是"这一局有几张图"（`boardIds().length`），不是"有没有开某个扩展"。
+   *
+   * 这次不再只靠 `.board-list.single` 那个类：类样式会被 `display:flex`
+   * 或别处覆盖层吃掉（上一版就是这么"看起来改了却没生效"的），
+   * 所以直接写内联 `display:none`，测试断言的就是这个。
+   */
+  const el = doc.querySelector<HTMLElement>('#board-list');
+  assert.ok(el, '容器本身还在（只是不显示）');
+  assert.equal(el!.style.display, 'none', '单图时要直接内联隐藏（不依赖 CSS 类）');
+  assert.ok(el!.classList.contains('single'), 'single 类留作 CSS 兜底');
+  assert.equal(el!.children.length, 0, '单图时一个按钮都不该建出来');
+});
+
+check('星图面板的取数：相连与在途（纯函数，不需要 DOM）', () => {
+  /*
+   * 面板本身在 jsdom 里不好复现（要开太空扩展、还要造一张月球），
+   * 所以把"该显示什么"抽成 `starRows`。它错了的表现是"节点名写成 id"、
+   * "在途显示 -1 回合"——都是只会在实机被玩家发现的那种。
+   */
+  const st = {
+    players: { A: { name: '红方' }, B: { name: '蓝方' } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+    transit: [{ id: 't1', owner: 'B', lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, cargo: [] }],
+  } as never;
+
+  const r = starRows(st);
+  assert.deepEqual(r.lanes, [{ a: '地球', b: '月球', turns: 1 }], '航道要写名字，不是 id');
+  assert.deepEqual(r.trips, [{ owner: 'B', who: '蓝方', to: '月球', left: 1 }], '在途要带玩家名');
+
+  // 没有星图也没有在途：整块不占位（单图局就是这个状态）
+  assert.equal(hasStarRows(starRows({ players: { A: { name: '红方' } } } as never)), false);
+});
+
+check('星图布局：地球居中、其余节点在外圈，坐标是算出来的', () => {
+  /*
+   * 布局不进存档（见 ui/star-layout.ts 开头）：同一组节点必须永远算出同一个位置，
+   * 否则加一张图就会让老局面错位。
+   */
+  const base = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+        { id: 'o1', kind: 'orbit', name: '轨道一' },
+      ],
+      lanes: [
+        { id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 },
+        { id: 'moon-o1', a: 'moon', b: 'o1', turns: 2 },
+      ],
+      stations: [{ board: 's1', at: 'moon', owner: 'A', core: 'core-1' }],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(base)!;
+  assert.equal(lay.size, 5, '三个节点用 5×5 就够');
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  assert.deepEqual([earth.x, earth.y], [2, 2], '地球在正中');
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.deepEqual([moon.x, moon.y], [4, 2], '第一个外圈节点在右侧');
+  assert.equal(moon.stations.length, 1, '停泊的站挂在节点上');
+  assert.equal(lay.lanes.length, 2, '两条航线都连上了');
+  // 再算一次：同一组节点必须得到同一个布局
+  assert.deepEqual(starLayout(base), lay, '布局必须是确定的');
+
+  // 只有地球：没有星图可言
+  assert.equal(
+    starLayout({
+      players: {},
+      boards: {},
+      starmap: { nodes: [{ id: 'earth', kind: 'planet', board: 'earth', name: '地球' }], lanes: [], stations: [], seq: 0 },
+    } as never),
+    null,
+    '只有一张图时不画星图',
+  );
+});
+
+check('星图渲染：每条航线都带一根可点的命中条', () => {
+  /*
+   * 上一版把点击挂在 SVG 的 `<line>` 上，实机点不到（父级 pointer-events:none
+   * 想让子元素覆盖，依赖太多细节）。现在改成普通 DOM 的透明长条——这条用例
+   * 钉住"渲染时确实生成了它"，不然又退回只能看、不能点。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: { moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] } },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1 }],
+      stations: [],
+      seq: 0,
+    },
+  } as never;
+  const view = { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, view, 'A', null);
+  const taps = host.querySelectorAll('[data-act="star-lane"]');
+  assert.equal(taps.length, 1, `每条航线都要有命中条，实际 ${taps.length}`);
+  assert.equal(host.querySelectorAll('.sm-sail').length, 0, '没有船在走就不该有三角');
+  assert.equal((taps[0] as HTMLElement).dataset.id, 'earth-moon');
+  assert.equal(host.querySelectorAll('.sm-lane-line').length, 1, '线本身还在（只负责好看）');
+  assert.equal(host.querySelectorAll('[data-act="star-node"]').length, 2, '两个节点都可点');
+
+  // 同一份数据重画一次：签名挡住，DOM 不重建（点击不会被打断）
+  const before = taps[0];
+  renderStarMap(host, view, 'A', null);
+  assert.equal(host.querySelectorAll('[data-act="star-lane"]')[0], before, '内容没变就不该重建');
+});
+
+check('虚空与甲板：地形表齐了，选点型技能不依赖高亮', () => {
+  /*
+   * 空间站的两格必须在地形表里有名字与说明——否则点开它们只会看到
+   * "undefined"，或者干脆什么都不显示。
+   *
+   * 后半段钉的是"选点型技能不看 aimTiles"：在非地球图上高亮列表以前是空的，
+   * 但点下去仍然应该算选定（真正的合法性由规则层判）。这个区分很重要——
+   * 上一轮把"点不中"归咎于格号算错，方向就偏了。
+   */
+  assert.equal(TERRAIN_INFO.void.name, '虚空');
+  assert.equal(TERRAIN_INFO.deck.name, '甲板');
+  assert.ok(CONFIG.terrainCost.void >= 99, '虚空不可通行');
+  assert.equal(CONFIG.terrainCost.deck, 1, '甲板正常走');
+
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: false, aimTiles: [], cell: 7 }),
+    true,
+    '选点型没有高亮也该算选中',
+  );
+  assert.equal(
+    skillTargetPicked({ targeting: 'point', onSelf: true, aimTiles: [], cell: 7 }),
+    false,
+    '点自己脚下 = 取消',
+  );
+});
+
+check('星图：航行中的站还挂在出发地，并带上目标节点', () => {
+  /*
+   * 站的"位置转移"只改 `at`，到港才改。所以飞行期间它在星图上**还在原地**，
+   * 但带一个"正在驶向"的标记——不标的话玩家会以为它凭空消失了。
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        { board: 's1', at: 'earth', owner: 'A', core: 'core-outpost', travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 2 } },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const lay = starLayout(st)!;
+  const earth = lay.nodes.find((n) => n.id === 'earth')!;
+  const moon = lay.nodes.find((n) => n.id === 'moon')!;
+  assert.equal(earth.stations.length, 1, '飞行期间还挂在出发地');
+  assert.equal(earth.stations[0]!.travelTo, 'moon', '要写明正驶向哪儿');
+  assert.equal(moon.stations.length, 0, '还没到，不算停在月球');
+  assert.equal(earth.stations[0]!.name, '前哨站');
+});
+
+check('星图：航道上真的画出航行中的站（小三角）', () => {
+  /*
+   * 用户反馈："空间站飞行过程中，星图的航线里找不到它，描述还是空置描述"。
+   * 所以这条钉两件事：航线上有那枚三角，且卡片文字不再说"路上没有东西"。
+   * （卡片那段是 `main.ts::starPanelInfo`，这里只验渲染产物。）
+   */
+  const st = {
+    players: { A: { name: '红方' } },
+    units: [],
+    transit: [],
+    boards: {
+      moon: { id: 'moon', kind: 'moon', name: '月球', w: 5, h: 5, tiles: [] },
+      s1: { id: 's1', kind: 'station', name: '前哨站', w: 5, h: 5, tiles: [] },
+    },
+    starmap: {
+      nodes: [
+        { id: 'earth', kind: 'planet', board: 'earth', name: '地球' },
+        { id: 'moon', kind: 'moon', board: 'moon', name: '月球' },
+      ],
+      lanes: [{ id: 'earth-moon', a: 'earth', b: 'moon', turns: 1, distance: 6 }],
+      stations: [
+        {
+          board: 's1',
+          at: 'earth',
+          owner: 'A',
+          core: 'core-outpost',
+          travel: { lane: 'earth-moon', from: 'earth', to: 'moon', left: 1, total: 2 },
+        },
+      ],
+      seq: 1,
+    },
+  } as never;
+
+  const host = doc.createElement('div');
+  renderStarMap(host, { state: st, visible: [], visibleByBoard: {}, ghosts: [] } as never, 'A', null);
+  const sails = host.querySelectorAll('.sm-sail');
+  assert.equal(sails.length, 1, `航道上要画一枚三角，实际 ${sails.length}`);
+  const tip = sails[0]!.querySelector('title')?.textContent ?? '';
+  assert.ok(tip.includes('前哨站'), `三角的提示要写清是哪座站：${tip}`);
+  assert.ok(tip.includes('50%'), `走了一半要写 50%：${tip}`);
+  /*
+   * 尖头指向**目的地**：三角要跟着航线旋转。
+   * 这条航线是水平的（earth → moon 在右边），所以角度是 0，
+   * 只验"有 rotate"，方向由 `points` 的尖头在 +x 保证。
+   */
+  const tf = sails[0]!.getAttribute('transform') ?? '';
+  assert.ok(tf.includes('translate'), `位置要按进度插值：${tf}`);
+  assert.ok(tf.includes('rotate('), `三角要跟着航线指向终点：${tf}`);
+  const poly = sails[0]!.querySelector('polygon')!.getAttribute('points') ?? '';
+  assert.ok(poly.trim().startsWith('0.12,0'), `尖头要在 +x（朝终点）：${poly}`);
 });
 
 check('地形类正确分布', () => {
@@ -458,14 +771,138 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
   // 一格自己的、一格敌人的（都摆在视野里，否则按迷雾规则根本不该画）
   const mine = addMark(st, { kind: 'nv-mine', owner: 'A', x: 2, y: 2, charges: 1, hidden: true });
   const foe = addMark(st, { kind: 'nv-mine', owner: 'B', x: 3, y: 2, charges: 1, hidden: false });
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
     host,
     {
       state: st,
-      visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
       ghosts: [],
       rememberedTiles: new Map(),
+      rememberedByBoard: {},
       rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之间不标', () => {
+  /*
+   * 深水 #4a7fa6 / 浅水 #a8cadf 硬拼是一条刀切边，所以 board.ts 会给"挨着
+   * 另一档"的那几侧写 `data-wt/wr/wb/wl`，CSS 在那一侧铺一道半透明的对方色，
+   * 两侧各铺一半、边界线上的颜色正好是两档的中点。
+   *
+   * 这条钉两件事：
+   *   1. 方向要对（`d` = 我在浅水这侧、叠深色；`l` = 我在深水这侧、叠浅色）；
+   *   2. **同档之间不标**——标了就会在浅水和浅水之间平白多一道坡。
+   *      "水域"和"浅流"算同一档（色差本来就小）。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['naval-fleet'] }, 313);
+
+  const put = (x: number, y: number, t: string) => {
+    st.tiles[y * st.w + x]!.terrain = t as never;
+  };
+  // 第 0 行：深 深 水 水
+  put(0, 0, 'deep');
+  put(1, 0, 'deep');
+  put(2, 0, 'water');
+  put(3, 0, 'water');
+  // 第 1 行：深 浅（竖直方向）
+  put(1, 1, 'shallow');
+
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+
+  const tile = (x: number, y: number) => host.querySelector(`.tile[data-x="${x}"][data-y="${y}"]`)!;
+
+  // (1,0) 深水：右边是水域 → 该朝右铺浅色；左边是深水 → 不铺
+  assert.equal(tile(1, 0).getAttribute('data-wr'), 'l', '深水挨浅水，右边该叠浅色');
+  assert.equal(tile(1, 0).getAttribute('data-wl'), '0', '左边还是深水，不该铺');
+  // (2,0) 水域：左边是深水 → 朝左叠深色
+  assert.equal(tile(2, 0).getAttribute('data-wl'), 'd', '浅水挨深水，左边该叠深色');
+  // (0,0) 深水：右边也是深水 → 一个方向都不该标
+  assert.equal(tile(0, 0).getAttribute('data-wr'), '0', '同档之间不铺');
+  // (3,0) 水域：左边是水域（同档），下边也按同档算 → 不铺
+  assert.equal(tile(3, 0).getAttribute('data-wl'), '0', '水域之间不铺');
+  // (1,0) 下面是浅流：浅流和深水不同档，要铺（竖直方向也要连上）
+  assert.equal(tile(1, 0).getAttribute('data-wb'), 'l', '深水挨浅流，下边也该叠浅色');
+  // (3,0) 下面是水域：水域和浅流算同档，不铺
+  assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和浅流算同一档，不铺');
+  host.remove();
+});
+
+  try {
+    const marks = host.querySelectorAll('.fx-mark');
+    assert.equal(marks.length, 2, `两条留痕都该画出来，实际 ${marks.length}`);
+    assert.ok(host.querySelector('.fx-mark.mine'), '自己布的应该是实心（.mine）');
+    assert.ok(host.querySelector('.fx-mark.seen'), '敌方已发现的应该是空心（.seen）');
+    assert.equal(host.querySelector(`.fx-mark[title="水雷"]`) !== null, true, '要有名字，悬停能看出来是什么');
+    // 它不该混进棋子层：雷不是单位
+    assert.equal(host.querySelectorAll('.unit').length, st.units.length);
+    assert.ok(mine.id !== foe.id, '两枚雷的 id 不能撞');
+  } finally {
+    host.remove();
+  }
+});
+
+check('棋子贴图：默认关，有图也仍然显示汉字', () => {
+  /*
+   * 这是 2026-11-11 那个兵种美术试验的开关。默认必须是关的：
+   * 现在只有 4 个兵种有图，默认打开会让棋盘变成"一半图一半字"，比全字更乱。
+   * 关着的时候**一个 img 都不该出现**，也不该去拉清单。
+   */
+  const was = uiArtOn();
+  setUiArt(false);
+  __setArtIndexForTest(['militia']);
+
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1 }, 4242);
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
     },
     {
       selectedId: null,
@@ -479,17 +916,76 @@ check('地上的东西：自己的雷画实心，敌方已发现的画空心', (
     },
   );
   try {
-    const marks = host.querySelectorAll('.fx-mark');
-    assert.equal(marks.length, 2, `两条留痕都该画出来，实际 ${marks.length}`);
-    assert.ok(host.querySelector('.fx-mark.mine'), '自己布的应该是实心（.mine）');
-    assert.ok(host.querySelector('.fx-mark.seen'), '敌方已发现的应该是空心（.seen）');
-    assert.equal(host.querySelector(`.fx-mark[title="水雷"]`) !== null, true, '要有名字，悬停能看出来是什么');
-    // 它不该混进棋子层：雷不是单位
-    assert.equal(host.querySelectorAll('.unit').length, st.units.length);
-    assert.ok(mine.id !== foe.id, '两枚雷的 id 不能撞');
+    assert.equal(host.querySelectorAll('.unit-art').length, 0, '关着就不该有贴图');
+    const inner = host.querySelector('.unit-inner');
+    assert.ok((inner?.textContent ?? '').trim().length > 0, '应该还是汉字');
   } finally {
     host.remove();
   }
+
+  setUiArt(was);
+  __setArtIndexForTest(null);
+});
+
+check('棋子贴图：打开后只有清单里的兵种换成图，没图的回退汉字', () => {
+  /*
+   * 这条守的是"绝不出现空格子"：清单里没有的、或者图加载失败的，
+   * 都必须退回汉字。棋盘上出现一个没有任何标识的方块，玩家没法判断那是什么。
+   */
+  const was = uiArtOn();
+  setUiArt(true);
+  __setArtIndexForTest(['militia']);
+
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1 }, 4243);
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
+  renderBoard(
+    host,
+    {
+      state: st,
+      visible: allSeen,
+      visibleByBoard: { earth: allSeen },
+      ghosts: [],
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      rememberedCities: new Map(),
+      terrainHidden: false,
+    },
+    {
+      selectedId: null,
+      reach: [],
+      targets: [],
+      siegeTargets: [],
+      selectedCityId: null,
+      placeable: [],
+      threat: [],
+      me: 'A',
+    },
+  );
+  try {
+    const militiaCount = st.units.filter((u) => u.type === 'militia').length;
+    const imgs = [...host.querySelectorAll('img.unit-art')];
+    assert.equal(imgs.length, militiaCount, '只有清单里的民兵该换成图');
+    for (const img of imgs) {
+      assert.ok(
+        (img.getAttribute('src') ?? '').includes('art/units/militia.png'),
+        '路径要按兵种 id 约定，加新图不用改代码',
+      );
+    }
+    // 其余兵种仍然是字
+    const glyphs = [...host.querySelectorAll('.unit-inner')].filter((el) => !el.querySelector('img'));
+    assert.ok(glyphs.length > 0, '没图的兵种应该还有汉字');
+    for (const el of glyphs) {
+      assert.ok((el.textContent ?? '').trim().length > 0, '没图也不能变空');
+    }
+  } finally {
+    host.remove();
+  }
+
+  setUiArt(was);
+  __setArtIndexForTest(null);
 });
 
 check('顶栏：给扩展的棋盘视图留了容器', () => {
@@ -612,6 +1108,42 @@ const emptyUi = {
   placeable: [] as number[],
   threat: [] as number[],
 };
+
+check('棋盘视图的字符层：只画给了字的格，没字时一节点不多', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 9191);
+  const view = playerView(st, 'A');
+  const a = 3 * st.w + 2;
+  const b = 4 * st.w + 5;
+  try {
+    // 只有颜色：和从前一样，一个字都没有
+    renderBoard(host, view, {
+      ...emptyUi,
+      boardView: new Map([[a, 'rgba(0,0,0,0.2)']]),
+    });
+    assert.equal(host.querySelectorAll('.fx-qi').length, 1, '一格染色就是一个节点');
+    assert.equal(host.querySelector('.fx-qi.wind'), null, '没给字就不该有字符类');
+
+    // 给了字：同一个节点，字在格中央
+    renderBoard(host, view, {
+      ...emptyUi,
+      boardView: new Map([
+        [a, 'rgba(0,0,0,0.2)'],
+        [b, 'rgba(0,0,0,0.2)'],
+      ]),
+      boardGlyph: new Map([[a, '→']]),
+    });
+    const wind = host.querySelector('.fx-qi.wind');
+    assert.ok(wind, '有字的格要挂上 wind 类');
+    assert.equal(wind.textContent, '→', '字要落在染色层里');
+    assert.equal((wind as HTMLElement).style.gridColumn, '3', '位置还是那一格');
+    assert.equal(host.querySelectorAll('.fx-qi.wind').length, 1, '没给字的格不许跟着长字');
+  } finally {
+    host.remove();
+  }
+});
 
 check('同一局面重画：格子、棋子、城市的节点身份不变', () => {
   const host = doc.createElement('div');
@@ -832,6 +1364,155 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
+check('装配坞：每件装备写着数据与耗电，插槽与电力收支都看得见', () => {
+  /*
+   * 用户 2026-11-10 的诉求：装配坞以前每件只写"耗能 N"，装甲板/系统槽装了
+   * 什么效果全靠猜；插槽数量和电力收支也没有地方看。
+   *
+   * 这条钉的是"信息有没有出现在界面上"，不是"好不好看"：
+   *   · 每件候选装备的第二行 = 耗电 + 具体数据（护甲/移速/视野…）
+   *   · 属性卡与装配坞都写插槽用量（几/几）
+   *   · 电力块给出产能、已用、余量，以及"几座电站"
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 7, expansionIds: ['armor-era7'] }, 707);
+
+  // 找两块空地：一台素体 + 一座电站
+  const free = st.tiles
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.terrain === 'plain' && !t.cityId)
+    .map(({ i }) => ({ x: i % st.w, y: Math.floor(i / st.w) }))
+    .filter((p) => !st.units.some((u) => u.x === p.x && u.y === p.y));
+  assert.ok(free.length >= 2, '棋盘上得有两块空地');
+
+  st.units.push({
+    id: 'frame1', type: 'armor_anvil', owner: 'A',
+    x: free[0]!.x, y: free[0]!.y, hp: 175, kills: 0, moved: false, acted: false,
+  });
+  st.units.push({
+    id: 'plant1', type: 'armor_coal', owner: 'A',
+    x: free[1]!.x, y: free[1]!.y, hp: 70, kills: 0, moved: false, acted: false,
+  });
+  const frame = st.units.find((u) => u.id === 'frame1')!;
+
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: frame,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const text = (host.textContent ?? '').replace(/\s+/g, ' ');
+
+  // 1) 插槽：素体 5 格（主1 副1 甲2 统0 设1）
+  assert.ok(text.includes('插槽'), `属性卡/装配坞该有插槽一行：${text.slice(0, 200)}`);
+  assert.ok(text.includes('0/5'), '还没装东西时应该是 0/5');
+
+  // 2) 电力：产能 120（一座燃煤电站）、已用 20（素体自身耗电）、余量 100
+  //    2026-11-12 起电力条挪到侧栏顶部：**不选装甲也要看得见**，
+  //    这里选中的是素体，属于"顺带也在"的那一档。
+  assert.ok(text.includes('产能'), '要写产能');
+  assert.ok(/产能\s*120/.test(text), `产能该是 120：${text.match(/产能[^已]*/)?.[0] ?? ''}`);
+  assert.ok(/已用\s*20/.test(text), '已用该是 20（素体自身）');
+  assert.ok(/余量\s*100/.test(text), '余量该是 100');
+  assert.ok(text.includes('1 座电站'), '要写几座电站在发电');
+
+  // 3) 每件候选装备都要带"耗电 + 具体数据"
+  const rows = [...host.querySelectorAll('[data-act="mount"]')];
+  assert.ok(rows.length > 0, '该有可装的候选装备');
+  for (const row of rows) {
+    const t = (row.textContent ?? '').replace(/\s+/g, ' ');
+    assert.ok(t.includes('耗电'), `候选装备没写耗电：${t}`);
+    assert.ok(/耗电\s*\d+/.test(t), `耗电后面要跟数字：${t}`);
+  }
+  // 纯加法修正的模块（装甲板）必须把效果写出来，不能只有"耗能 6"
+  const plate = rows.find((r) => (r.textContent ?? '').includes('复合装甲'));
+  if (plate) {
+    const t = (plate.textContent ?? '').replace(/\s+/g, ' ');
+    assert.ok(/护甲\s*\+\d+|生命上限\s*\+\d+/.test(t), `装甲板要写出加多少：${t}`);
+  }
+  /*
+   * 4) 装上一件之后：**槽位角标保持"主/副/甲/统/设"，拆卸单独成组**。
+   *
+   * 旧版把已装模块整行做成了"拆"按钮，于是五件模块排下来全是"拆"，
+   * 主武器和装甲板分不出来。现在已装是只读行（角标是槽位），
+   * 拆卸是另一组按钮（角标才是"拆"，文字写"槽位 · 名称"）。
+   */
+  frame.modules = ['autocannon'];
+  const host4 = doc.createElement('div');
+  renderPanel(host4, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: frame,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const staticRow = host4.querySelector('.recruit-btn.is-static');
+  assert.ok(staticRow, '已装模块要有一条只读行');
+  const st1 = (staticRow!.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(st1.includes('主'), `只读行的角标要保留槽位：${st1}`);
+  assert.ok(st1.includes('速射炮'), '只读行要写明装的是什么');
+  assert.ok(!st1.includes('拆'), '只读行不该出现"拆"');
+  const un = host4.querySelector('[data-act="unmount"]');
+  assert.ok(un, '拆卸要单独一颗按钮');
+  const ut = (un!.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(ut.includes('拆'), `拆卸按钮写"拆"：${ut}`);
+  assert.ok(ut.includes('主 · 速射炮'), `拆卸按钮要写明"槽位 · 名称"：${ut}`);
+  const mountRow = host4.querySelector('[data-act="mount"]');
+  assert.ok(mountRow, '还要有可装模块');
+  assert.notStrictEqual(
+    un!.closest('.recruit-list'),
+    mountRow!.closest('.recruit-list'),
+    '拆卸与装配必须分成两组，不能混在一条列表里',
+  );
+  host4.remove();
+  frame.modules = [];
+
+  host.remove();
+
+  /*
+   * 选中的不是装甲，电力条照样在（2026-11-12 用户的要求：
+   * "建出发电站后应默认显示电量，无需点击装甲"）。
+   */
+  const host2 = doc.createElement('div');
+  renderPanel(host2, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const t2 = (host2.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(/产能\s*120/.test(t2), `没选装甲时也该看到电力：${t2.slice(0, 120)}`);
+  host2.remove();
+
+  /*
+   * 一座电站都没有的时候，电量信息一个字都不该出现——
+   * "产能 0 / 过载 20"只会让人以为哪里坏了。
+   */
+  const bare = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 7, expansionIds: ['armor-era7'] }, 708);
+  bare.units.push({
+    id: 'frame2', type: 'armor_anvil', owner: 'A',
+    x: free[0]!.x, y: free[0]!.y, hp: 175, kills: 0, moved: false, acted: false,
+  });
+  const host3 = doc.createElement('div');
+  renderPanel(host3, {
+    view: playerView(bare, 'A'),
+    me: 'A',
+    selectedUnit: bare.units.find((u) => u.id === 'frame2') ?? null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const t3 = (host3.textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(!t3.includes('产能'), '没电站时不该画电力块');
+  assert.ok(!t3.includes('余量'), '没电站时不该出现"余量"');
+  host3.remove();
+});
+
 check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
   // 雾里连地形都要走一遍才记得住，隔壁还剩多少钱更不该摆在 HUD 上——
   // 那等于免费告诉玩家"他还能不能再买一队兵"，照着想就是上帝视角。
@@ -863,8 +1544,88 @@ check('浓雾蔽野：对面的钱袋是打探不到的情报', () => {
 });
 
 /**
- * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
+ * 雾里点一格：不能顺手把地形和敌情一起点出来。
  *
+ * 棋盘上画着雾、侧栏却把雾里的地形念出来（浓雾局里尤其荒谬），
+ * 或者把那一格的灵气来源写出来（"灵田 +15" 等于替你点出了对面建筑），
+ * 那这层雾就只是个视觉效果。两条边界：
+ *   · 连地形都遮的局（浓雾蔽野）→ 雾外只翻记忆，没记忆就写「未探明」；
+ *   · 地形公开的局 → 地形照写，但格子上的**活数据**（灵气、天气）只在视野内问。
+ */
+check('雾里点格子：地形和敌情都不该被点出来', () => {
+  const host = doc.createElement('div');
+  const paint = (st: ReturnType<typeof createMatch>, x: number, y: number) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: { x, y },
+    });
+  const xyOf = (st: ReturnType<typeof createMatch>, i: number) => ({
+    x: i % st.w,
+    y: Math.floor(i / st.w),
+  });
+
+  // ── 连地形都遮的局 ──
+  const dark = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: ['blackout'] }, 4242);
+  const darkView = playerView(dark, 'A');
+  const seenDark = new Set(darkView.visible);
+  let cold = -1;
+  for (let i = 0; i < dark.w * dark.h; i++) {
+    if (!seenDark.has(i) && !darkView.rememberedTiles.has(i)) {
+      cold = i;
+      break;
+    }
+  }
+  assert.ok(cold >= 0, '总该有一格是没探索过的');
+  const coldPt = xyOf(dark, cold);
+  paint(dark, coldPt.x, coldPt.y);
+  const coldText = host.textContent ?? '';
+  assert.ok(coldText.includes('未探明'), `雾外没记忆的格该写「未探明」，实际：${coldText.slice(0, 80)}`);
+  assert.ok(!coldText.includes('进入消耗'), '「未探明」的格不许报进入消耗——那就等于报了地形');
+
+  // 记忆里的那一格：写记忆中的地形，并且明说是记的（可能已经变了）。
+  // 开局那一眼看到的格子此刻都还看得见，翻不到"记忆"，所以直接往账本上记一笔——
+  // 等价于"早先我从这一格走过"（浓雾局里这份账本就是 `refreshMemory` 写的）。
+  dark.memory.A.tiles = dark.memory.A.tiles ?? {};
+  dark.memory.A.tiles[cold] = 'forest';
+  assert.equal(
+    playerView(dark, 'A').rememberedTiles.get(cold),
+    'forest',
+    '前提：雾外那一格已经在记忆里',
+  );
+  paint(dark, coldPt.x, coldPt.y);
+  const memText = host.textContent ?? '';
+  assert.ok(memText.includes('森林'), `该按记忆报出地形，实际：${memText.slice(0, 80)}`);
+  assert.ok(memText.includes('记忆里的地形'), `翻记忆时要标出来，实际：${memText.slice(0, 80)}`);
+
+  // ── 地形公开的局：地形照写，但灵气这种活数据只在视野内 ──
+  const lit = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: ['cultivation'] }, 515);
+  const litView = playerView(lit, 'A');
+  const seenLit = new Set(litView.visible);
+  const far = [...Array(lit.w * lit.h).keys()].find((i) => !seenLit.has(i));
+  assert.ok(far !== undefined, '雾里总该有看不见的格');
+  const farPt = xyOf(lit, far!);
+  paint(lit, farPt.x, farPt.y);
+  assert.ok(
+    !(host.textContent ?? '').includes('灵气浓度'),
+    '雾外的格不该报灵气浓度——那行还带着"灵田 +15"的来源',
+  );
+
+  const near = litView.visible[0];
+  assert.ok(near !== undefined, '自己脚边总看得见');
+  const nearPt = xyOf(lit, near!);
+  paint(lit, nearPt.x, nearPt.y);
+  assert.ok(
+    (host.textContent ?? '').includes('灵气浓度'),
+    '看得见的格该照常写出灵气浓度',
+  );
+});
+
+/**
+ * 产兵建筑点开走的是 `renderCamp` 这条支路，**不会**走到单位详情卡。
  * 扩展给单位挂的操作（宗门大殿的「研发 / 遗弃」）以前只画在详情卡上，
  * 于是实战里点开宗门大殿只剩"招募弟子"，研发按钮根本不存在。
  * 这条用例按"点开一座产兵建筑"的方式渲染，把那条支路钉住。
@@ -947,6 +1708,52 @@ check('多次攻击兵的面板写"还剩几次"，不是"几段"', () => {
   paint();
   text = host.textContent ?? '';
   assert.ok(text.includes(`还剩 ${burst - 1} / ${burst} 次`), '出手之后剩余次数要跟着减');
+});
+
+check('潜行兵的面板写着"隐蔽中 / 已现形"', () => {
+  // 潜行/潜航/隐身 2026-11-09 起都是"出手即现形"，可这条约束在界面上原本一个字都没有：
+  // 玩家开完一枪，不知道自己的兵自此整个敌方回合都露在外面。
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 919);
+  st.fog = true;
+  st.current = 'A';
+  const scout = st.units.find((u) => u.owner === 'A' && u.type === 'scout');
+  assert.ok(scout, '开局该有斥候（自带潜行）');
+
+  // 挪到一块没人的森林上——潜行只在森林/丘陵成立。
+  // 还必须离敌人两格以上：贴到相邻格就现形，那测的就不是"藏住了"。
+  const spot = st.tiles.findIndex((t, k) => {
+    if (t.terrain !== 'forest' || t.cityId) return false;
+    const x = k % st.w;
+    const y = Math.floor(k / st.w);
+    return !st.units.some(
+      (u) => u.y * st.w + u.x === k || (u.owner !== 'A' && Math.abs(u.x - x) + Math.abs(u.y - y) <= 1),
+    );
+  });
+  assert.ok(spot >= 0, '这张图上该有离敌人两格以上、没人的森林');
+  scout!.x = spot % st.w;
+  scout!.y = Math.floor(spot / st.w);
+
+  const paint = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: scout!,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+
+  paint();
+  let text = host.textContent ?? '';
+  assert.ok(text.includes('隐蔽中'), '蹲在林子里该显示"隐蔽中"');
+  assert.ok(!text.includes('已现形'), '没出手就不该说已现形');
+
+  (scout as Unit & { acted?: boolean }).acted = true;
+  paint();
+  text = host.textContent ?? '';
+  assert.ok(text.includes('已现形'), '出过手就该说已现形');
+  assert.ok(!text.includes('隐蔽中'), '出过手就不该还说隐蔽中');
 });
 
 check('溅射兵的面板写的是"现在这一发"的半径和比例', () => {
@@ -1545,6 +2352,124 @@ check('详情面板显示的是算上修正的真实数值', () => {
   );
   const eff = effectiveStats(st, vet);
   assert.ok(html.includes(`<b>${eff.atk}`) || html.includes(`${eff.atk}（基础`), '面板数字要等于 effectiveStats');
+  // 2026-11-11：攻击那一格在"有修正"时会跨两列，明细紧贴在自己那格下面。
+  // 不这么放的话，明细会被挤到半格宽里，一条"老兵不死 +2"折成三行。
+  assert.ok(
+    host.querySelector('.stat-span .stat-mods'),
+    '修正明细要在跨列的那一格里面（.stat-span .stat-mods）',
+  );
+});
+
+check('属性卡：数值排成两列，标签在上、数值在下', () => {
+  /*
+   * 一行一条的时候，每行右边半截全空着：13px 的字，一行只用掉十二三个字符宽，
+   * 一个普通兵光属性就要 140px 竖向空间。改成两列之后玩家不用先滚一屏才看得见
+   * 「拆除」。这条守的是"排法"本身——数字对不对由上面那条管。
+   */
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5150,
+  );
+  const unit = st.units.find((u) => u.owner === 'A')!;
+  assert.ok(unit, '开局 A 方应该有兵');
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: unit,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const grid = host.querySelector<HTMLElement>('.stat-grid');
+  assert.ok(grid, '属性要收进 .stat-grid（两列容器）');
+  const cells = [...grid!.children].filter((el) => el.classList.contains('info-row'));
+  assert.ok(cells.length >= 4, `普通兵至少四格：生命 / 移动力 / 攻击护甲 / 射程视野，实际 ${cells.length}`);
+  // 竖排靠的是 DOM 顺序（span 在前、b 在后）——顺序反了 CSS 也不会换回来
+  for (const cell of cells) {
+    assert.ok(cell.querySelector('span') && cell.querySelector('b'), '每格都要有标签和数值');
+    assert.equal(
+      cell.firstElementChild?.tagName,
+      'SPAN',
+      '标签必须排在数值前面：竖排时先读到的就是它',
+    );
+  }
+  assert.ok(
+    (grid!.textContent ?? '').includes('生命') && (grid!.textContent ?? '').includes('移动力'),
+    '生命和移动力都要在网格里',
+  );
+  // 没有修正时不许出现跨列块——那会空出右边一整格，看着像数字没加载出来
+  assert.equal(host.querySelector('.stat-span'), null, '没有修正明细时不该有跨列块');
+});
+
+check('建造面板按用途分组：防御 / 营地 / 经济 / 桥', () => {
+  /*
+   * 2026-11-11 整合建造单位之后，奴隶能盖 7 样、建筑队能盖 33 样
+   * （高代继承低代，还把时代军备包的工事都收了进来）。平铺一列的话
+   * 玩家在一屏里找不到"我要的那座塔"，所以按用途分了四组。
+   *
+   * 这条守的是**分组真的出现了**，而不是只有数据改了：
+   * 默认局里奴隶的 4 样正好各归一组，四组标题都该在。
+   */
+  const st = createMatch(
+    {
+      size: 12,
+      startEra: 1,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: [],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    },
+    5151,
+  );
+  st.current = 'A';
+  const laborer = {
+    id: 'builder-probe',
+    type: 'laborer',
+    owner: 'A' as const,
+    x: 6,
+    y: 6,
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(laborer);
+
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: laborer,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const titles = [...host.querySelectorAll('.recruit-group-title')].map((el) => el.textContent ?? '');
+  for (const label of ['防御工事', '营地', '经济建筑', '桥']) {
+    assert.ok(
+      titles.some((t) => t.startsWith(label)),
+      `建造面板缺了「${label}」这一组，实际分组：${titles.join(' / ')}`,
+    );
+  }
+  // 每组标题带数量，且加起来等于按钮总数——不然"共 N 种"和实际摆出来的对不上
+  const countOf = (t: string) => Number(/·\s*(\d+)$/.exec(t)?.[1] ?? 0);
+  const sum = titles.reduce((n, t) => n + countOf(t), 0);
+  assert.equal(
+    sum,
+    host.querySelectorAll('[data-act="build"]').length,
+    '各组数量之和必须等于建造按钮总数',
+  );
 });
 
 console.log('\n城市与产兵');
@@ -1701,6 +2626,94 @@ check('选中建造单位后能看到它可建造什么', () => {
   assert.ok(html.includes('磨坊'), '奴隶应该能建磨坊');
 });
 
+check('选卡：建造单位的按钮和悬停都不列没选到的建筑', () => {
+  /*
+   * 线上反馈：选卡模式下，工兵的建造按钮写着"能造箭塔"、悬停提示也列着箭塔，
+   * 点下去才弹"名单外的建筑造不出来"——玩家把工兵走到位、搭上半个回合，
+   * 最后一步被拒。这里守三件事：
+   *   ① 建造按钮只列名单内的 + 骨架（军营、桥）；
+   *   ② 悬停提示里那句"可建造：…"同样只列名单内的；
+   *   ③ 骨架建筑不受名单影响。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, draftMode: true }, 6210);
+  st.current = 'A';
+  assert.ok(st.draft, '这一局应该有选卡');
+  // 一份"什么都没选到"的名单：箭塔、磨坊都不在
+  st.draft!.picks.A = [];
+  st.draft!.picks.B = [];
+  st.draft!.phase = 'done';
+  const city = st.cities.find((c) => c.owner === 'A');
+  assert.ok(city, '应该有己方城市');
+  const builder: Unit = {
+    id: 'draft-builder',
+    type: 'laborer',
+    owner: 'A',
+    x: city!.x + (st.config.citySize ?? 2),
+    y: city!.y,
+    hp: 20,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(builder);
+
+  // ① 建造按钮
+  const usHost = doc.createElement('div');
+  renderPanel(usHost, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: builder,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  assert.equal(
+    usHost.querySelector('[data-act="build"][data-type="tower"]'),
+    null,
+    '没选到箭塔，就不该有箭塔按钮',
+  );
+  assert.ok(
+    usHost.querySelector('[data-act="build"][data-type="bridge"]'),
+    '桥是骨架建筑，永远能造',
+  );
+  const listText = usHost.innerHTML;
+  assert.ok(!listText.includes('箭塔'), '建造区里不该出现"箭塔"三个字');
+
+  // ② 悬停提示（在城市产兵面板里，奴隶那张卡的 hover-tip）
+  const cityHost = doc.createElement('div');
+  renderPanel(cityHost, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city!.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const tips = Array.from(cityHost.querySelectorAll('.hover-tip')).map((t) => t.textContent ?? '');
+  const buildTip = tips.find((t) => t.includes('可建造：'));
+  assert.ok(buildTip, '奴隶的悬停提示里应该有"可建造："那一行');
+  assert.ok(!buildTip!.includes('箭塔'), `悬停提示不该列没选到的箭塔：${buildTip}`);
+  assert.ok(buildTip!.includes('木桥'), '骨架建筑（桥）要在提示里');
+});
+
+check('数值行到处都带「视野」：产兵按钮 / 建造清单 / 棋子悬停', () => {
+  /*
+   * 2026-11-09 的统一：数值行只有一处实现（`core/info.unitStatLine`），
+   * 里面含视野。这条盯的是"界面上真的出现了"，不是"函数返回值里有"。
+   */
+  const recruit = doc.querySelector<HTMLElement>('.recruit-btn');
+  assert.ok(recruit, '应该有产兵按钮');
+  const rText = recruit.textContent ?? '';
+  assert.ok(/视野 \d+/.test(rText), `产兵按钮的数值行里要有视野：${rText}`);
+  assert.ok(/射 \d+/.test(rText), '射程也要还在（别为了加视野把它挤掉）');
+
+  // 棋子本身的悬停提示（title）
+  const unitEl = doc.querySelector<HTMLElement>('.unit');
+  assert.ok(unitEl, '场上应该有棋子');
+  const title = unitEl.getAttribute('title') ?? '';
+  assert.ok(/视野 \d+/.test(title), `棋子悬停里要有视野：${title}`);
+});
+
 check('点敌方城市显示攻城提示', () => {
   const enemyTile = doc.querySelector<HTMLElement>('.tile.t-city.own-B');
   assert.ok(enemyTile, '找不到敌方城市格');
@@ -1772,12 +2785,15 @@ console.log('\n开局设置');
  * 将来入口再挪一次，只需要改这一个函数。
  */
 function openSetup(): void {
-  click('[data-act="new-game"]');
+  goHome();
   assert.ok(doc.querySelector('.title-screen'), '顶栏那颗按钮应该先把人送回首页');
   click('[data-title="new"]');
 }
 
-check('顶栏「首页」回到门面，再点「开始对局」才打开设置面板', () => {
+check('顶栏「设置」→「回首页」回到门面，再点「开始对局」才打开设置面板', () => {
+  // 2026-11-11：顶栏不再直接放「首页」，它随规则书/反馈/导出一起进了设置弹窗
+  click('[data-act="settings"]');
+  assert.ok(doc.querySelector('.modal-mask'), '顶栏的「设置」要打开弹窗');
   click('[data-act="new-game"]');
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '顶栏那颗按钮应该打开首页');
@@ -1796,21 +2812,176 @@ check('顶栏「首页」回到门面，再点「开始对局」才打开设置�
   assert.equal(doc.querySelector('[data-ailevel]'), null, '热座模式不该有难度选项');
 });
 
+check('先手可以选红方 / 蓝方 / 随机，随机要说明按种子抽', () => {
+  const active = () =>
+    doc.querySelector<HTMLElement>('[data-first].active')?.dataset.first ?? '';
+  assert.equal(doc.querySelectorAll('[data-first]').length, 3, '应该有红方/蓝方/随机三档');
+  assert.equal(active(), 'A', '默认是红方先手');
+
+  click('[data-first="B"]');
+  assert.equal(active(), 'B', '点蓝方先手应该切过去');
+
+  click('[data-first="random"]');
+  assert.equal(active(), 'random', '点随机应该切过去');
+  const hints = [...doc.querySelectorAll<HTMLElement>('.field-hint')]
+    .map((el) => el.textContent ?? '')
+    .join(' ');
+  assert.ok(hints.includes('种子'), '选了随机要说明"按种子抽、抽完存成什么"');
+
+  // 切回默认，别把后面的用例带偏
+  click('[data-first="A"]');
+  assert.equal(active(), 'A');
+});
+
 check('扩展条目只印一句话，规则细则留给规则书', () => {
   /*
    * 2026-11-04：面板原来直接印 `summary`。一条扩展动辄一百多字，
    * 有的干脆把十几个兵种名一口气列完（"桨帆船、德罗蒙、卡拉克、盖伦……"），
    * 二十几条挤在一屏里，玩家读完才知道自己该不该勾。
    * 现在面板只印 `blurb`（一句话），summary 留在规则书的合册总表里。
+   *
+   * 2026-11-12：卡片里多了「关系」标签（前置/冲突/联动），所以字数只量
+   * **说明那一行**——把标签一起数进去，"海军"就会因为"联动：信息化"而超标。
    */
   const item = doc.querySelector<HTMLElement>('[data-exp="naval"]')?.closest('.expansion-item');
   assert.ok(item, '面板里应该有「海军」这一条');
-  const text = item!.textContent ?? '';
+  const desc = item!.querySelector<HTMLElement>('.expansion-body > span:not(.expansion-tags)');
+  assert.ok(desc, '卡片里该有说明那一行');
+  const text = desc!.textContent ?? '';
   assert.ok(text.includes('从桨帆船到航母'), `面板该印那句 blurb，实际是：${text.trim()}`);
   assert.ok(!text.includes('德罗蒙'), '整串船名不该搬进面板——那些在规则书里');
   assert.ok(text.trim().length <= 40, `一条扩展的说明在面板上不该超过一行，实际 ${text.trim().length} 字`);
 });
 
+check('扩展卡片标出三种关系：前置（蓝）· 冲突（红）· 联动（绿）', () => {
+  /*
+   * 玩家在这里要回答的是同一个问题——"这个包和别的包什么关系"。
+   * 三种关系的形状一样、只有底色不同，所以这里只查"哪一类标签出现在谁身上"。
+   *
+   * 冲突尤其要**两侧都标**：只写在被冲突的那一侧，另一张卡上什么都没写，
+   * 玩家勾下去才被拒，那种体验比没有提示更差。
+   */
+  const chipsOf = (id: string): HTMLElement[] => {
+    const card = doc.querySelector<HTMLElement>(`[data-exp="${id}"]`)?.closest('.expansion-item');
+    assert.ok(card, `面板里应该有「${id}」这一条`);
+    return [...card!.querySelectorAll<HTMLElement>('.expansion-req')];
+  };
+
+  const city = chipsOf('city-works');
+  const clash = city.find((c) => c.classList.contains('is-clash'));
+  assert.ok(clash, '城郭要标出冲突');
+  assert.ok(clash!.textContent?.includes('修真'), `冲突标签该指名道姓，实际：${clash!.textContent}`);
+
+  const cult = chipsOf('cultivation');
+  assert.ok(
+    cult.some((c) => c.classList.contains('is-clash') && c.textContent?.includes('城郭')),
+    '修真那一侧也要标出来（关系只写在城郭的数据里，显示要对称）',
+  );
+
+  const fan = chipsOf('fantasy');
+  const link = fan.find((c) => c.classList.contains('is-link'));
+  assert.ok(link, '奇想要标出联动');
+  assert.ok(link!.textContent?.includes('信息化'), `联动标签该写出目标，实际：${link!.textContent}`);
+
+  // 前置那一类还是原来的写法（太空战争依赖太空时代）
+  const sw = chipsOf('space-war');
+  assert.ok(
+    sw.some((c) => !c.classList.contains('is-clash') && !c.classList.contains('is-link') && c.textContent?.includes('太空时代')),
+    '前置还是蓝色的那一种',
+  );
+});
+
+check('勾选冲突的包会被拒绝，并说清是谁挡着', () => {
+  /*
+   * 规则层会把冲突的那一包剔掉（`enabledExpansionIds`），但那对玩家是**静默**的：
+   * 他勾了、开局了，才发现少了一整包。所以面板要在勾选这一刻就拒绝，
+   * 并写出挡路的那一个——玩家自己决定撤哪个。
+   */
+  const box = (id: string): HTMLInputElement => {
+    const el = doc.querySelector<HTMLInputElement>(`[data-exp="${id}"]`);
+    assert.ok(el, `找不到 ${id} 的勾选框`);
+    return el!;
+  };
+
+  if (!box('city-works').checked) box('city-works').click();
+  assert.equal(box('city-works').checked, true, '前提：城郭已经勾上');
+
+  // 勾修真：应当被拒（paint 之后要重新查节点）
+  box('cultivation').click();
+  assert.equal(box('cultivation').checked, false, '冲突的包不该被勾上');
+  const note = doc.querySelector<HTMLElement>('.map-note.is-bad');
+  assert.ok(note, '该给一行提示');
+  assert.ok(note!.textContent?.includes('修真'), `提示要指名道姓，实际：${note!.textContent}`);
+
+  // 收尾：把城郭取消，别把这一局的配置留给后面的用例
+  box('city-works').click();
+  assert.equal(box('city-works').checked, false, '取消之后能正常关掉');
+});
+
+check('状态徽章：自己人和敌人都看得见（含自己的产兵建筑）', () => {
+  /*
+   * 2026-11-12 实机反馈："看不到自己中了什么状态，只能看见敌方的"。
+   *
+   * 根因不是数据、也不是 CSS：**自己的产兵建筑走的是 `renderCamp` 这条支路**，
+   * 不是通用单位卡。同一座军营，敌方点开有「中毒 2 回合」，自己点开只有血条——
+   * 而军营正是最容易被毒/烧的建筑，掉血却看不到来源最难查。
+   *
+   * 这条用例把四条路都钉住：自己的兵、敌方的兵、自己的营、敌方的营。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, expansionIds: [] }, 4477);
+  st.current = 'A';
+  const paint = (input: Partial<Parameters<typeof renderPanel>[1]>) =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+      ...input,
+    });
+
+  const mine = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.category === 'combat')!;
+  const foe = st.units.find((u) => u.owner === 'B' && st.unitTypes[u.type]?.category === 'combat')!;
+  assert.ok(mine && foe, '开局该有两边的战斗单位');
+  mine.status = { poison: 2 };
+  foe.status = { burn: 2 };
+
+  paint({ selectedUnit: mine });
+  assert.ok(host.querySelector('.status-chip'), '自己的兵要显示状态徽章');
+  paint({ selectedUnit: foe });
+  assert.ok(host.querySelector('.status-chip'), '敌方的兵也要显示');
+
+  // 产兵建筑：自己走 renderCamp，敌方走通用卡——两条都要有
+  const campDef = UNIT_TYPES.camp ?? Object.values(st.unitTypes).find((d) => d.id.startsWith('camp'));
+  assert.ok(campDef, '应该能找到一个产兵建筑定义');
+  const put = (owner: 'A' | 'B', x: number, y: number) => {
+    const u: Unit = {
+      id: `camp-${owner}`,
+      type: campDef!.id,
+      owner,
+      x,
+      y,
+      hp: campDef!.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+      status: { poison: 2 },
+    };
+    st.units.push(u);
+    st.tiles[y * st.w + x] = { terrain: 'plain', cityId: null };
+    return u;
+  };
+  const mineCamp = put('A', 5, 5);
+  paint({ selectedUnit: mineCamp, selectedCampId: mineCamp.id });
+  assert.ok(host.textContent?.includes('中毒'), '自己的军营也要写中毒');
+  assert.equal(host.querySelectorAll('.status-chip').length >= 1, true, '自己的军营要有状态徽章');
+
+  const foeCamp = put('B', 7, 5);
+  paint({ selectedUnit: foeCamp });
+  assert.ok(host.textContent?.includes('中毒'), '敌方的军营照旧');
+});
 /** 兵种池弹层：开着就别再点一次（第二次点会把上一层盖回去） */
 function openPool(): void {
   if (!doc.querySelector('.pool-layer')) click('[data-act="unit-pool"]');
@@ -2359,6 +3530,7 @@ await checkAsync('地图页：选图和传图在同一页，没解析前只有"�
     pack: '',
     era: 0,
     cityEra: 1,
+    selection: null,
     running: false,
     round: 1,
     result: '',
@@ -2423,6 +3595,28 @@ await checkAsync('开始界面选三人：对手区换成说明，开局后顶�
     (body.textContent ?? '').includes('每家一座城'),
     '选三人之后要写清"每家一座城"这条规则',
   );
+
+  /*
+   * 先手：多人局不给"手选某方"（席位顺序牵着城位），只给「按席位顺序 / 随机」。
+   * 两家局那三档（红方/蓝方/随机）在这里不该出现。
+   */
+  const firstChips = [...body.querySelectorAll<HTMLElement>('[data-first]')];
+  assert.deepEqual(
+    firstChips.map((el) => (el.textContent ?? '').trim()),
+    ['按席位顺序', '随机'],
+    '三人局先手只该有「按席位顺序 / 随机」两档',
+  );
+  click('[data-first="random"]');
+  assert.ok(
+    doc.querySelector<HTMLElement>('[data-first="random"]')!.classList.contains('active'),
+    '点随机要能选中',
+  );
+  assert.ok(
+    (doc.querySelector('.modal-body')!.textContent ?? '').includes('抽到谁谁先动'),
+    '选了随机要说明"在参赛席位上抽"',
+  );
+  // 切回按席位，别影响后面这局的断言
+  click('[data-first="A"]');
 
   click('[data-act="start"]');
   await new Promise((resolve) => setTimeout(resolve, 80));
@@ -2500,12 +3694,14 @@ check('升级后城市更硬，产兵列表也多出二级兵', () => {
   // 时代 2 城市护甲应该是 6
   assert.ok(html.includes('护甲</span><b>6</b>'), '护甲应该提升到 6');
   assert.ok(doc.querySelectorAll('.recruit-btn').length >= 8, '时代 II 应该能看到两个时代的兵种');
-  assert.ok(!html.includes('升级后可解锁：长枪兵'), '长枪兵应该已经从锁定变成可选');
+  // 2026-11-11：解锁名单收进折叠块，判据从"整段 HTML 里有没有某个词"改成"名单里有没有"
+  const unlockList = doc.querySelector('.unlock-list')?.textContent ?? '';
+  assert.ok(!unlockList.includes('长枪兵'), '长枪兵应该已经从锁定名单里消失');
 });
 
 check('打过一局之后回首页，「继续上一局」就亮了', () => {
   // 上面已经开过好几局，所以这里应该能接着打——与"第一次来"那条正好成对
-  click('[data-act="new-game"]');
+  goHome();
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '先回首页');
   const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
@@ -2525,7 +3721,7 @@ check('兵种编辑器在首页，顶栏不再有这颗按钮', () => {
   assert.equal(doc.querySelector('[data-act="unit-editor"]'), null, '顶栏不该还留着兵种编辑器');
   assert.equal(doc.querySelector('[data-act="import"]'), null, '顶栏也不该留着导入对局');
 
-  click('[data-act="new-game"]');
+  goHome();
   assert.ok(doc.querySelector('.title-screen'), '先回首页');
   assert.ok(doc.querySelector('[data-title="editor"]'), '首页应该有兵种编辑器入口');
   assert.ok(doc.querySelector('[data-title="import"]'), '首页应该有导入对局入口');
@@ -2672,7 +3868,7 @@ check('军营面板列出兵种，并写清自己是哪一档', () => {
   assert.ok(html.includes('时代'), '应该写清这座营自己的时代');
   assert.ok(html.includes('青铜'), '一级营就是青铜时代——不随后方城市变化');
   assert.ok(!html.includes('铁器'), '不能把后方城市的时代写成营的时代');
-  assert.ok(html.includes('自动开火'), '军营会替自己开火');
+  assert.ok(html.includes('反应射击'), '军营会替自己开火（敌人踏进射程就打）');
   assert.ok(host.querySelectorAll('.recruit-btn').length >= 5, '军营应该和城市一样列兵种');
   // 一级营出不了二级兵：既不列在可造里，也不该灰着挂在"还造不出来"
   assert.equal(host.querySelector('[data-type="spearman"]'), null, '一级营根本不该列二级兵');
@@ -3003,16 +4199,29 @@ check('开局面板能选角色', () => {
   assert.ok(doc.querySelector('[data-role="full"]'), '应该有亲自指挥选项');
 });
 
-check('开局面板有"数据收集"开关，默认关', () => {
+check('开局面板有"数据收集"开关，默认开', () => {
+  /*
+   * 2026-11-11 用户拍板：默认从"关"改成"开"。
+   *
+   * 原来那条断言写的是「默认必须是关的：不勾就不记，也不多交东西」。
+   * 立场没错，代价是数据——65 局里只有 19 局带动作序列，剩下的事后想复盘
+   * 连素材都没有。改开之后的边界：**记录**默认开（只发生在本机），
+   * **发送**仍然要玩家在结算卡上点一下，取消勾选也会被记住。
+   */
   const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
-  assert.ok(box, '应该有"结束后上传详细数据"的勾选框');
-  assert.equal(box.checked, false, '默认必须是关的：不勾就不记，也不多交东西');
-  // 勾上之后只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  assert.ok(box, '应该有"记录详细数据"的勾选框');
+  assert.equal(box.checked, true, '默认勾上：否则半数对局事后想复盘都没有素材');
+
+  // 取消勾选只翻转卡片样式，不该重绘整个面板（否则 checkbox 会闪、焦点会丢）
+  box.checked = false;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.ok(
+    !box.closest('.expansion-item')?.classList.contains('on'),
+    '取消之后卡片不该还亮着',
+  );
   box.checked = true;
   box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
-  box.checked = false;
-  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
 });
 
 await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {
@@ -4163,6 +5372,187 @@ check('上帝模式开局：工具栏、兵种货架、全图视角一次到位'
   assert.ok((doc.querySelector('[data-ref="who"]')?.textContent ?? '').includes('上帝模式'));
 });
 
+/*
+ * 拖动绘制。
+ *
+ * jsdom 没有 Pointer Events，所以这里手工派发 pointerdown/pointermove/pointerup，
+ * 坐标靠给 `.tiles` 钉一个 400×400 的矩形来换算（和上面"点地图"那条同一套办法）。
+ * 要守的三件事：
+ *   1. 快速拖动只发起点和终点，中间那几格也必须被补上；
+ *   2. 整根拖动在撤销栈里只占一步；
+ *   3. 单格点击的老行为不变。
+ */
+let lastDragCell: { x: number; y: number } | null = null;
+
+check('上帝模式：笔刷按住拖过去，沿途每一格都刷到，撤销只退一步', () => {
+  // 挑一个地形笔刷：不依赖货架里有没有某个兵，也不会被"这格站着东西"挡住
+  click('[data-act="god-terrain"][data-terrain="forest"]');
+
+  const board = doc.querySelector<HTMLElement>('#board')!;
+  const tiles = board.querySelector<HTMLElement>('.tiles')!;
+  const cols = Number(board.style.getPropertyValue('--cols'));
+  const rows = Number(board.style.getPropertyValue('--rows'));
+  assert.ok(cols > 0 && rows > 0, '棋盘应该已经写好了行列数');
+
+  const box = 400;
+  Object.defineProperty(tiles, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      left: 100, top: 50, width: box, height: box, right: 100 + box, bottom: 50 + box, x: 100, y: 50,
+    }),
+  });
+  const cw = box / cols;
+  const ch = box / rows;
+  const at = (x: number, y: number) => ({
+    clientX: 100 + (x + 0.5) * cw,
+    clientY: 50 + (y + 0.5) * ch,
+  });
+  const fire = (type: string, p: { clientX: number; clientY: number }) => {
+    board.dispatchEvent(new window.MouseEvent(type, { ...p, bubbles: true }));
+  };
+
+  const before = savedGame();
+  // 城格改不了地形、已经是森林的格看不出变化——所以自己找一段"干净"的横线
+  const clean = (x: number, y: number): boolean => {
+    const t = before.tiles[y * cols + x];
+    return !!t && !t.cityId && t.terrain !== 'forest';
+  };
+  let sx = -1;
+  let sy = -1;
+  for (let y = 0; y < rows && sx < 0; y += 1) {
+    for (let x = 0; x + 4 < cols; x += 1) {
+      if (clean(x, y) && clean(x + 1, y) && clean(x + 2, y) && clean(x + 3, y) && clean(x + 4, y)) {
+        sx = x;
+        sy = y;
+        break;
+      }
+    }
+  }
+  assert.ok(sx >= 0, '这张图上应该有一段能连着刷五格的干净横线');
+
+  // 只发起点和终点，中间一格都不发——这就是"很快地划过去"
+  fire('pointerdown', at(sx, sy));
+  fire('pointermove', at(sx + 4, sy));
+  fire('pointerup', at(sx + 4, sy));
+  lastDragCell = { x: sx + 4, y: sy };
+
+  const after = savedGame();
+  for (let k = 0; k <= 4; k += 1) {
+    assert.equal(
+      after.tiles[sy * cols + sx + k]!.terrain,
+      'forest',
+      `(${sx + k},${sy}) 漏了：快速拖动必须把中间格子补齐`,
+    );
+  }
+  // 线外面的格子一格都不许动
+  if (sy + 1 < rows && clean(sx, sy + 1)) {
+    assert.equal(
+      after.tiles[(sy + 1) * cols + sx]!.terrain,
+      before.tiles[(sy + 1) * cols + sx]!.terrain,
+      '拖出界了：下面那一行不该被刷到',
+    );
+  }
+
+  // 一次「撤回」把整根拖动全退掉 → 这根拖动在撤销栈里只占一步
+  click('[data-act="undo"]');
+  const undone = savedGame();
+  for (let k = 0; k <= 4; k += 1) {
+    assert.equal(
+      undone.tiles[sy * cols + sx + k]!.terrain,
+      before.tiles[sy * cols + sx + k]!.terrain,
+      `撤回一次就该把 (${sx + k},${sy}) 一起退回去，说明整根拖动只压了一步`,
+    );
+  }
+});
+
+check('上帝模式：单格点击照旧，拖动尾巴不会把这一下吞掉或画两遍', () => {
+  const board = doc.querySelector<HTMLElement>('#board')!;
+  const cols = Number(board.style.getPropertyValue('--cols'));
+  const rows = Number(board.style.getPropertyValue('--rows'));
+  const box = 400;
+  const cw = box / cols;
+  const ch = box / rows;
+  const at = (x: number, y: number) => ({
+    clientX: 100 + (x + 0.5) * cw,
+    clientY: 50 + (y + 0.5) * ch,
+  });
+
+  const before = savedGame();
+  // 找一个既不是城、还不是森林、也不在上一条用例那次拖动的落点上
+  let cell: { x: number; y: number } | null = null;
+  for (let y = 0; y < rows && !cell; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      const t = before.tiles[y * cols + x];
+      if (!t || t.cityId || t.terrain === 'forest') continue;
+      if (lastDragCell && lastDragCell.x === x && lastDragCell.y === y) continue;
+      cell = { x, y };
+      break;
+    }
+  }
+  assert.ok(cell, '图上应该有没被画过的空格');
+  const index = cell!.y * cols + cell!.x;
+
+  // 1) 纯点击（没有 pointerdown/up，只有 click）：老路径必须还在
+  board
+    .querySelector<HTMLElement>(`.tile[data-x="${cell!.x}"][data-y="${cell!.y}"]`)!
+    .dispatchEvent(new window.MouseEvent('click', { ...at(cell!.x, cell!.y), bubbles: true }));
+  assert.equal(savedGame().tiles[index]!.terrain, 'forest', '单格点击还应该照旧刷上');
+
+  // 2) 按下-松开但没动（手指点一下）：落笔走 click，不能被拖动吃掉，也不能刷两遍
+  const second = (() => {
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        const t = before.tiles[y * cols + x];
+        if (!t || t.cityId || t.terrain === 'forest') continue;
+        if (x === cell!.x && y === cell!.y) continue;
+        return { x, y };
+      }
+    }
+    return null;
+  })();
+  assert.ok(second, '还需要第二个空格');
+  board.dispatchEvent(new window.MouseEvent('pointerdown', { ...at(second!.x, second!.y), bubbles: true }));
+  board.dispatchEvent(new window.MouseEvent('pointerup', { ...at(second!.x, second!.y), bubbles: true }));
+  // 松手后浏览器会补一个 click
+  board
+    .querySelector<HTMLElement>(`.tile[data-x="${second!.x}"][data-y="${second!.y}"]`)!
+    .dispatchEvent(new window.MouseEvent('click', { ...at(second!.x, second!.y), bubbles: true }));
+  assert.equal(
+    savedGame().tiles[second!.y * cols + second!.x]!.terrain,
+    'forest',
+    '点一下也要刷上',
+  );
+});
+
+check('上帝模式：工具栏有「上传这张图」，弹窗先把尺寸、城数和审核流程说清楚', () => {
+  const btn = doc.querySelector<HTMLElement>('[data-act="god-map-upload"]');
+  assert.ok(btn, '上帝模式工具栏要能上传地图');
+
+  btn!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const mask = doc.querySelector<HTMLElement>('.modal-mask');
+  assert.ok(mask, '点了应该弹出上传面板');
+
+  const text = mask!.textContent ?? '';
+  assert.ok(text.includes('上传这张地图'), '弹窗要有标题');
+  assert.ok(text.includes('云端地图库'), '要说清传到哪儿去');
+  // 审核这句话必须在场：不写清楚，作者会以为传完别人立刻就能选
+  assert.ok(
+    text.includes('审核放行') || text.includes('等审核') || text.includes('先进审核队列'),
+    `要说明这是要走审核的：${text.slice(0, 120)}`,
+  );
+  assert.ok(mask!.querySelector('[data-field="name"]'), '要有地图名输入框');
+
+  // 能导出的图会显示尺寸统计；导不出（城贴边等）会显示原因——两种都得有内容
+  const hasStat = /\d+×\d+/.test(text);
+  const errBox = mask!.querySelector('.map-err');
+  assert.ok(hasStat || errBox, `弹窗该显示尺寸统计，或者说明为什么传不了：${text.slice(0, 160)}`);
+
+  const close = mask!.querySelector<HTMLElement>('[data-act="close"]');
+  assert.ok(close, '要能关掉');
+  close!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(doc.querySelector('.modal-mask'), null, '关掉之后遮罩要收起来');
+});
+
 check('己方战报只给自己的条目和战损，观战才看全部', () => {
   const st = createMatch(
     {
@@ -4205,6 +5595,216 @@ check('己方战报只给自己的条目和战损，观战才看全部', () => {
   assert.ok(all.includes('他在攒钱'), '观战/热座要看全部');
 });
 
+check('设置弹窗：主题、动效、铃声、低频入口都在里面', () => {
+  /*
+   * 2026-11-11：顶栏那排"想起来才改"的按钮改成一颗「设置」。
+   * 这条钉住"搬进去的东西一件都不少"——搬家最容易掉的正是最后那件。
+   *
+   * 顺带把主题开关也放进来：之前只能用 `?ui=modern` 或控制台，用户问过
+   * "modern 开关在哪"，答起来都不像正常产品。
+   */
+  const html = settingsHtml({
+    theme: 'modern',
+    reducedMotion: true,
+    chime: 0.35,
+    chimeText: '铃声 35%',
+  });
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  for (const act of [
+    'set-theme',
+    'set-motion',
+    'chime-range',
+    'chime-test',
+    'export',
+    'new-game',
+    'manual',
+    'feedback',
+    'settings-close',
+  ]) {
+    assert.ok(html.includes(`data-act="${act}"`), `设置里缺了 ${act}`);
+  }
+
+  // 当前值要如实反映：深色主题选中的是「新版」，动效选中的是「减少」
+  assert.ok(/data-theme="modern"[^>]*>新版/.test(html), '当前主题要标在「新版」上');
+  assert.ok(/data-motion="reduced"[^>]*>减少/.test(html), '减少动效要标在「减少」上');
+  assert.ok(text.includes('铃声 35%'), `音量文字要写出来：${text.slice(0, 80)}`);
+  // 滑块的值跟 chime 走，别写死 60
+  assert.ok(/value="35"/.test(html), '滑块初值要等于当前音量');
+
+  // 副标题要说清"这是本机设置"——不然玩家会以为它会跟着存档走
+  assert.ok(text.includes('只影响这台设备'), '要说清这些设置不进存档');
+});
+
+check('手机设置里多出「对局中」：迷雾开关和联机入口', () => {
+  /*
+   * 2026-11-11：360px 宽的顶栏放不下「联机」「迷雾」两颗按钮，
+   * 结果是「设置」被挤出屏幕。按频率分层后，这两颗只在手机上搬进设置——
+   * 桌面顶栏本来就有，所以 compact 不传时**不能**重复出现（两处状态两条路径）。
+   */
+  const phone = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: true,
+    roomCode: null,
+  });
+  assert.ok(phone.includes('data-act="toggle-fog"'), '手机设置里要有迷雾开关');
+  assert.ok(phone.includes('data-act="online"'), '手机设置里要有联机入口');
+  assert.ok(/class="chip active" data-act="toggle-fog"/.test(phone), '迷雾开着时开关要高亮');
+  assert.ok(phone.includes('联机'), '要有「联机」这两个字，不能只有一个图标');
+
+  // 桌面版：不传 compact 就不该出现这一组
+  const desktop = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+  });
+  assert.equal(
+    desktop.includes('data-act="toggle-fog"'),
+    false,
+    '桌面顶栏本来就有迷雾按钮，设置里不该再放一份',
+  );
+
+  // 房间码：在房间里要写出来，不然玩家不知道该点「房间」还是「联机」
+  const inRoom = settingsHtml({
+    theme: 'legacy',
+    reducedMotion: false,
+    chime: 0.6,
+    chimeText: '铃声 60%',
+    compact: true,
+    fog: false,
+    roomCode: 'AB12CD',
+  });
+  assert.ok(inRoom.includes('AB12CD'), '房间里要显示房间码');
+  assert.ok(inRoom.includes('当前房间'), '要说清这是当前房间');
+});
+
+check('主题开关：只改 html 上的两个属性，回退就是删掉它们', () => {
+  /*
+   * 2026-11-10 UI 重构的第一层。这条守的是**机制**而不是长相：
+   *   · legacy / modern 由 `<html data-ui>` 决定，CSS 里只有一个变量块；
+   *   · 回退 = 删属性（或 `__ui('legacy')`），不需要重新加载、不碰任何规则；
+   *   · 动效是第二根正交的轴（reduced 与主题可任意组合）。
+   *
+   * 长相在 jsdom 里验不了（没有布局、不算样式），所以这条只钉"属性写对了"。
+   */
+  const el = doc.createElement('html');
+
+  const modern = applyUiTheme({ root: el, mode: 'modern', motion: 'reduced' });
+  assert.deepEqual(modern, { mode: 'modern', motion: 'reduced' });
+  assert.equal(el.dataset.ui, 'modern', '要落到 data-ui 上');
+  assert.equal(el.dataset.motion, 'reduced', '动效是独立的一根轴');
+
+  const back = applyUiTheme({ root: el, mode: 'legacy', motion: 'full' });
+  assert.deepEqual(back, { mode: 'legacy', motion: 'full' });
+  assert.equal(el.dataset.ui, 'legacy', '切回去只改这一个属性');
+  assert.equal(el.dataset.motion, 'full');
+
+  // 没传 mode 时按"URL > localStorage > legacy"解析；jsdom 的地址里没有 ?ui
+  assert.equal(resolveUiMode(), 'legacy', '默认必须是旧版，不能把 modern 当默认');
+
+  // 切换要**立刻**生效（记住偏好那一步写 localStorage，jsdom 默认源没有存储权限，
+  // 所以这里只断言"当场生效"，持久化由 `applyUiTheme` 的 URL 分支兜着）
+  setUiMode('modern', el);
+  assert.equal(el.dataset.ui, 'modern', '切换后当场生效');
+  setUiMode('legacy', el);
+  assert.equal(el.dataset.ui, 'legacy', '切回来也当场生效');
+});
+
+check('上帝模式框选：矩形染色 + 工具栏报数 + 批量按钮都在', () => {
+  /*
+   * 2026-11-10 加的框选。这条守两件事：
+   *   1. 棋盘认得选区（`.tile.god-sel`）——不然框完没有任何反馈；
+   *   2. 工具栏把"框了多大、里面有几个人"写出来，并把批量按钮摆出来。
+   *
+   * 拖动本身（pointerdown/move/up）走的是 main.ts 的事件，jsdom 里没有布局、
+   * `cellAtPoint` 算不出格子，所以那一段只能在真浏览器里验；
+   * 这里守的是"数据 → 界面"这一半，规则那一半在 test:rules「框选批量」。
+   */
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 606);
+  const marked = [0, 1, 12, 13];
+  renderBoard(host, playerView(st, 'A'), {
+    selectedId: null,
+    reach: [],
+    targets: [],
+    siegeTargets: [],
+    selectedCityId: null,
+    placeable: [],
+    threat: [],
+    marqueeTiles: marked,
+  });
+  try {
+    assert.equal(
+      host.querySelectorAll('.tile.god-sel').length,
+      marked.length,
+      '选区里的四格要打上 god-sel（一行的两格 + 下一行的两格）',
+    );
+  } finally {
+    host.remove();
+  }
+
+  const bar = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: { w: 3, h: 2, cells: 6, units: 4 },
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  const text = bar.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(text.includes('3×2'), `要写选区尺寸：${text.slice(0, 120)}`);
+  assert.ok(text.includes('6 格'), '要写格数');
+  assert.ok(text.includes('4 个单位'), '要写单位数');
+  for (const act of ['god-batch-del', 'god-batch-terrain', 'god-batch-fill', 'god-shift', 'god-sel-clear']) {
+    assert.ok(bar.includes(`data-act="${act}"`), `批量按钮缺了 ${act}`);
+  }
+  assert.ok(text.includes('删兵（4）'), '删兵按钮上要带数量——点之前就知道会动到几个');
+
+  // 没有选区时这一块不该出现（工具栏保持原来的样子）
+  const bare = godBarHtml({
+    state: st,
+    side: 'A',
+    brush: { kind: 'none' },
+    pack: '',
+    era: 0,
+    cityEra: 1,
+    selection: null,
+    running: false,
+    round: 1,
+    result: '',
+    speed: 0,
+    speedNames: ['慢', '快'],
+    log: [],
+    play: null,
+    myTurn: true,
+    passing: false,
+    detail: '',
+    query: '',
+    quick: false,
+  });
+  assert.equal(bare.includes('god-batch-del'), false, '没选区就不该有批量按钮');
+});
+
 check('沙盒货架也能按扩展包切一刀', () => {
   // 直接渲染货架，不经过整局：验的是"分组口径"这一件事
   const st = createMatch(
@@ -4227,6 +5827,7 @@ check('沙盒货架也能按扩展包切一刀', () => {
       pack,
       era,
       cityEra: 1,
+      selection: null,
       running: false,
       round: 1,
       result: '',
@@ -4365,9 +5966,23 @@ check('换「城市」笔刷会把能放的 2×2 角点亮，点一格就盖起�
   const spots = doc.querySelectorAll('.tile.placeable');
   assert.ok(spots.length > 0, '应该有橙格提示哪里能放城');
 
+  /*
+   * 高亮 = "点下去一定建得成"，所以这里逐个试前几个橙格，**至少有一个能盖起来**。
+   * 不钉死"第一个"：第一格取决于地图，换一版地形就会换位置，
+   * 那不是在守契约，是在守某一张图。
+   */
   const before = savedGame();
-  spots[0]!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  let built = 0;
+  for (const spot of Array.from(spots).slice(0, 6)) {
+    const b = savedGame();
+    (spot as HTMLElement).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    if (savedGame().cities.length === b.cities.length + 1) {
+      built += 1;
+      break;
+    }
+  }
   const after = savedGame();
+  assert.equal(built, 1, '点橙格应该真能盖出城来');
   assert.equal(after.cities.length, before.cities.length + 1, '城没盖起来');
 });
 
@@ -4990,6 +6605,8 @@ check('点「规则书」：一本就直开，多本先问看哪本', () => {
   };
   try {
     // 当前对局是默认配置：核心册 + 小型合订本 = 两本，应该弹书单
+    // 2026-11-11 起这条入口收在「设置」里，先开门再点书
+    click('[data-act="settings"]');
     click('[data-act="manual"]');
     const rows = Array.from(doc.querySelectorAll<HTMLElement>('.book-row'));
     assert.equal(rows.length, 2, `默认配置应该有两本书可选，实际 ${rows.length}`);
@@ -5562,18 +7179,35 @@ check('天气标识：换季之后徽标和效果一起更新', () => {
   assert.ok(!winterHtml.includes('酷暑'), '换季之后不该还留着上一个季节的天气');
 });
 
-check('天气标识：顶栏的季节条跟着回合走', () => {
+check('天气标识：顶栏的季节徽章跟着回合走', () => {
+  // 季节以前是核心写死的 `TopbarState.season` + `data-ref="season"`；
+  // 现在它是扩展的一枚常驻徽章（`topbarBadges` 钩子），核心只认"一段文字"。
   const spring = weatherScene(5);
   const w = bootWith(spring.st);
-  const chip = w.document.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.ok(chip, '顶栏要有季节块');
-  assert.equal(chip.hidden, false, '开了天气就该显示');
-  assert.ok(chip.textContent?.includes('春'), `第 5 回合是春：${chip.textContent}`);
+  const badge = w.document.querySelector('.topbar-badge') as HTMLElement | null;
+  assert.ok(badge, '顶栏要有季节徽章（由扩展提供）');
+  assert.ok(badge.textContent?.includes('春'), `第 5 回合是春：${badge.textContent}`);
 
   const winter = weatherScene(35);
   const w2 = bootWith(winter.st);
-  const chip2 = w2.document.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.ok(chip2?.textContent?.includes('冬'), `第 35 回合是冬：${chip2?.textContent}`);
+  const badge2 = w2.document.querySelector('.topbar-badge');
+  assert.ok(badge2?.textContent?.includes('冬'), `第 35 回合是冬：${badge2?.textContent}`);
+});
+
+check('天气块：点单位时由扩展注入（核心不认识天气）', () => {
+  // 天气块是 HTML（带按气候分色的徽标），走 `getTilePanelHtml` 钩子原样插入。
+  // 这条钉住"钩子真的接上了"——以前它是 panel.ts 里直接 import 气候表拼出来的。
+  const { st, me } = weatherScene(15);
+  const w = bootWith(st);
+  const d = w.document;
+  d.querySelector<HTMLElement>(`.unit[data-id="${me.id}"]`)!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  const side = d.querySelector('.side')!.innerHTML;
+  assert.ok(side.includes('weather-badge'), '要有天气徽标');
+  assert.ok(side.includes('脚下的天气'), '单位卡上的标题：按格算，不是我身上的状态');
+  // class 选择器只能精确匹配，所以这里用正则找 `weather-badge w-xxx`
+  assert.ok(/weather-badge w-[a-zA-Z]+/.test(side), '徽标要带气候 class，才能按天气上色');
 });
 
 check('没开「季节与气候」时，界面一点天气都不出现', () => {
@@ -5585,9 +7219,11 @@ check('没开「季节与气候」时，界面一点天气都不出现', () => {
   );
   const side = d.querySelector('.side')!.innerHTML;
   assert.ok(!side.includes('weather-badge'), '没开扩展就不该有天气徽标');
+  assert.ok(!side.includes('这里的天气') && !side.includes('脚下的天气'), '连标题也不该留');
 
-  const chip = d.querySelector('[data-ref="season"]') as HTMLElement | null;
-  assert.equal(chip?.hidden, true, '季节块也该藏起来');
+  // 常驻徽章那块整个是空的（CSS 的 :empty 会把它收起来）
+  const box = d.querySelector('[data-ref="topbar-badges"]') as HTMLElement | null;
+  assert.ok(!box || box.childElementCount === 0, '没开扩展就不该有常驻徽章');
 });
 
 console.log('\n对局数据上传');
@@ -5694,8 +7330,13 @@ check('反馈：对局打到一半也能拍下现场（不必等打完）', () =
   const w = bootWith(st);
   const d = w.document;
 
+  // 入口已经收进「设置」：打到一半也要两步点到（顶栏设置 → 反馈）
+  const gear = d.querySelector<HTMLElement>('[data-act="settings"]');
+  assert.ok(gear, '顶栏要一直有个「设置」入口');
+  gear!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
   const btn = d.querySelector<HTMLElement>('[data-act="feedback"]');
-  assert.ok(btn, '顶栏要一直有个「反馈」入口');
+  assert.ok(btn, '设置里要一直有个「反馈」入口');
   btn!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 
   const modal = d.querySelector<HTMLElement>('.feedback-modal');
@@ -5934,10 +7575,10 @@ check('选卡模式下，城市的「升级后可解锁」只列这一局真能�
       selectedTile: null,
     });
 
-    const html = host.innerHTML;
-    const m = /升级后可解锁：([^<]*)</.exec(html);
-    assert.ok(m, '产兵面板还是该给出"升级后可解锁"这句提示');
-    const names = m![1]!
+    // 2026-11-11：名单收进 <details> 里了，抓的话直接从名单节点取——
+    // 别再用正则去啃那句提示的文案（改个字就红，而且红得没意义）
+    assert.ok(host.querySelector('.unlock-fold'), '产兵面板还是该给出"升级后可解锁"这句提示');
+    const names = (host.querySelector('.unlock-list')?.textContent ?? '')
       .split('、')
       .map((t) => t.trim())
       .filter(Boolean);
@@ -6132,6 +7773,109 @@ check('选卡：底部「我已选」区把每张卡的完整面板都摊开，�
       (emptyPanel!.textContent ?? '').includes('还没有人选卡'),
       '空状态要说清楚现在是禁用阶段',
     );
+  } finally {
+    host.remove();
+  }
+});
+
+check('选卡：轮流禁用——不是自己回合时池子是灰的，提示写明轮到谁', () => {
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch({ ...DEFAULT_CONFIG, draftMode: true }, 4243, {});
+    const r = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(r.ok, r.ok ? '' : `进禁用失败：${r.reason}`);
+    st = r.state;
+
+    // 先禁的那一方 = 后拿第一签的那一方
+    const first = st.draft!.banTurn!;
+    const second = first === 'A' ? 'B' : 'A';
+
+    // 站在"没轮到"的那一方看：池子必须是灰的，并说清在等谁
+    host.innerHTML = draftScreenHtml(st, { seat: second, now: Date.now(), isAi: () => false });
+    const blocked = host.querySelectorAll('.draft-card.is-blocked');
+    assert.ok(blocked.length > 0, '没轮到的这一方，池子里的卡应该都是灰的');
+    const hint = host.querySelector('.draft-hint')?.textContent ?? '';
+    assert.ok(hint.includes('正在禁用'), `提示要写明对面在禁：${hint}`);
+
+    // 站在"轮到"的那一方看：卡是可点的，提示说的是"轮到你"
+    host.innerHTML = draftScreenHtml(st, { seat: first, now: Date.now(), isAi: () => false });
+    assert.equal(host.querySelectorAll('.draft-card.is-blocked').length, 0, '轮到的一方，卡不该是灰的');
+    const mineHint = host.querySelector('.draft-hint')?.textContent ?? '';
+    assert.ok(mineHint.includes('轮到你禁用'), `提示要写"轮到你禁用"：${mineHint}`);
+
+    // 禁完之后交棒：轮次真的换人了
+    const id = remainingUnits(st).find((x) => st.unitTypes[x]?.category === 'combat')!;
+    st.current = first;
+    const done = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, first);
+    assert.ok(done.ok, done.ok ? '' : `禁用失败：${done.reason}`);
+    st = done.state;
+    assert.equal(st.draft!.banTurn, second, '禁完一格就该交棒');
+    host.innerHTML = draftScreenHtml(st, { seat: first, now: Date.now(), isAi: () => false });
+    assert.ok(
+      (host.querySelector('.draft-hint')?.textContent ?? '').includes('正在禁用'),
+      '交棒之后，原来看得到池子的那一方也该变成"等对面"',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
+check('选卡：对面已经选中的兵，鼠标挪上去也要给完整面板', () => {
+  /*
+   * 选卡时最想研究的一件事就是"对面拿走了什么"——它是不是我打算禁的那张、
+   * 几甲几射程、带什么能力。以前槽位上只有一个名字，等于让人凭记忆打。
+   */
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    let st = createMatch({ ...DEFAULT_CONFIG, draftMode: true }, 4242, {});
+    let r = applyAction(st, { type: 'DRAFT_START', at: Date.now() }, 'A');
+    assert.ok(r.ok, r.ok ? '' : `进禁用失败：${r.reason}`);
+    st = r.state;
+
+    // 两边把禁用交完
+    for (let guard = 0; guard < 8 && st.draft!.phase === 'ban'; guard += 1) {
+      for (const side of ['A', 'B'] as const) {
+        if (st.draft!.bans[side].length >= st.draft!.banSlots) continue;
+        const id = remainingUnits(st)[0]!;
+        st.current = side;
+        const rr = applyAction(st, { type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
+        if (rr.ok) st = rr.state;
+      }
+    }
+    // 走四手：蛇形是 A,B,B,A，所以两边各有一张
+    for (let i = 0; i < 4; i += 1) {
+      const side = st.draft!.order[st.draft!.step];
+      if (!side) break;
+      const pickId = remainingUnits(st).find((id) => st.unitTypes[id]?.category === 'combat');
+      if (!pickId) break;
+      st.current = side;
+      const rr = applyAction(st, { type: 'DRAFT_PICK', unitId: pickId, at: Date.now() }, side);
+      if (!rr.ok) break;
+      st = rr.state;
+    }
+
+    host.innerHTML = draftScreenHtml(st, { seat: 'A', now: Date.now(), isAi: () => false });
+
+    const bSlot = host.querySelector<HTMLElement>('.draft-side.is-b .draft-slot.is-pick.is-filled');
+    assert.ok(bSlot, 'B 那边应该已经有一张选好的兵');
+    assert.ok(bSlot!.hasAttribute('data-hover-tip'), '已选槽位要能被悬停');
+    const tip = bSlot!.querySelector('.hover-tip');
+    assert.ok(tip, '槽位里要带完整详情');
+    const text = tip!.textContent ?? '';
+    for (const need of ['攻', '甲', '血', '射', '视']) {
+      assert.ok(text.includes(need), `对面那张的详情缺了「${need}」`);
+    }
+    // 详情里的数值要和这个兵对得上（不是拿池子里第一张糊弄）
+    const id = st.draft!.picks.B[0]!;
+    const def = st.unitTypes[id]!;
+    assert.ok(text.includes(def.name), '详情要是这一张');
+    assert.ok(text.includes(`血 ${def.maxHp}`), '血量要对得上');
+
+    // 自己那一侧同样有详情：没道理只有对面能看
+    const aSlot = host.querySelector<HTMLElement>('.draft-side.is-a .draft-slot.is-pick.is-filled');
+    assert.ok(aSlot?.querySelector('.hover-tip'), '自己已选的也要有详情');
   } finally {
     host.remove();
   }
@@ -6336,12 +8080,16 @@ check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也
     threat: [] as number[],
     me: 'A' as const,
   };
+  const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   const allVisible = {
     state: st,
-    visible: Array.from({ length: st.w * st.h }, (_, i) => i),
+    visible: allSeen,
+    visibleByBoard: { earth: allSeen },
     ghosts: [] as never[],
     rememberedTiles: new Map(),
+    rememberedByBoard: {},
     rememberedCities: new Map(),
+    terrainHidden: false,
   };
 
   const calls: string[] = [];
@@ -6613,15 +8361,30 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   assert.ok(!sideText.includes('轮到你行动'), '复盘里没有"你"的回合');
   assert.ok(!sideText.includes('（你）'), '席位栏不该把某一方标成"你"——复盘里两边都是别人');
 
-  // 顶栏：会改局的那五个必须收起来，纯看的留下
+  /*
+   * 顶栏：会改局的那几个收起来，纯看的留下。
+   *
+   * 2026-11-11 起低频入口都进了「设置」，所以这里多一层：设置按钮本身要在，
+   * 打开之后「导出对局」得消失——复盘导的是别人那局，原来顶栏那颗就是藏起来的，
+   * 搬进弹窗不能把这条规矩丢了。
+   */
   const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
-  for (const act of ['toggle-ai', 'export', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+  for (const act of ['toggle-ai', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
     assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
   }
-  for (const act of ['manual', 'feedback']) {
-    assert.ok(topBtn(act), `顶栏该留着 ${act}`);
-    assert.notEqual(topBtn(act)!.hidden, true, `${act} 不该被藏起来`);
+  assert.ok(topBtn('settings'), '顶栏该留着「设置」');
+  assert.notEqual(topBtn('settings')!.hidden, true, '「设置」不该被藏起来');
+
+  topBtn('settings')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const gear = d.querySelector<HTMLElement>('.modal-mask')!;
+  assert.equal(gear.querySelector('[data-act="export"]'), null, '复盘里设置弹窗不给导出');
+  for (const act of ['manual', 'feedback', 'new-game']) {
+    assert.ok(gear.querySelector(`[data-act="${act}"]`), `设置里该留着 ${act}`);
   }
+  gear.querySelector<HTMLElement>('[data-act="settings-close"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
+  assert.equal(d.querySelector('.modal-mask'), null, '关掉设置别留一层遮罩');
 
   // 结算卡：别人那局打完了，不该问"要不要捐出这局的数据"
   assert.equal(d.querySelector('.report-card'), null, '复盘里不该冒出结算卡——上传的是别人那局');
@@ -6630,7 +8393,14 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   d.querySelector<HTMLElement>('[data-act="rp-exit"]')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   await wait(100);
   assert.equal(topBtn('toggle-ai')?.hidden, false, '退出后顶栏要复原');
-  assert.equal(topBtn('export')?.hidden, false, '退出后导出对局要回来');
+  topBtn('settings')!.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.ok(
+    d.querySelector('.modal-mask [data-act="export"]'),
+    '退出复盘后设置里的「导出对局」要回来',
+  );
+  d.querySelector<HTMLElement>('[data-act="settings-close"]')!.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
   assert.equal(d.querySelector('.tile.t-city.own-A') !== null, true, '退出后还是本机那局');
 });
 
@@ -6941,7 +8711,12 @@ check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来'
   /*
    * 用教程局走到底（它本身就是一局"破城获胜"的完整局），然后出卡。
    * 三个数各自有明确的来源，不能靠文案：
-   *   破城回合 → city.capturedTurn；MVP → 单位击杀累加；关键三步 → 局面事实。
+   *   破城回合 → city.capturedTurn；MVP → killTally（规则层记的按兵种人头账）；
+   *   关键三步 → 局面事实。
+   *
+   * MVP 这条以前是**只写在标题里、没人验**的：它读 `unit.kills`，而那个字段
+   * 只有「老兵不死」扩展在写，于是普通对局里恒为 0，卡面永远是"没有击杀"。
+   * 现在人头由 rules 的 creditKill 统一记，这条用例正好把它钉住。
    */
   let s = createTutorialMatch();
   const act = (a: Parameters<typeof applyAction>[1]): void => {
@@ -6973,7 +8748,73 @@ check('战报卡：破城回合 / MVP / 关键三步都从局面上算得出来'
   assert.equal(card.steps.length, 3, '关键三步就是三条');
   assert.ok(card.steps[1]!.includes('拿下第一座城'), '第二条讲破城');
   assert.equal(card.sides.length, 2, '两人局两张席位');
+  // 教程局那一刀没打死人（诱饵农民还剩 4 血），所以这里**该**是空 MVP。
+  // 反过来钉住"没击杀就别编一个 MVP 出来"——卡面会印成"没有击杀"。
+  assert.equal(card.mvp, null, '一局没打死过人就该是空 MVP，不能拿存活最多的兵充数');
+  assert.ok(battleCardText(card).includes('MVP：这一局没有击杀'), '文案要如实说没击杀');
   assert.ok(battleCardText(card).includes('战报'), '复制出去的文案要有抬头');
+  assert.ok(
+    battleCardText(card).startsWith('【战报】胜利'),
+    `抬头要用「胜利」而不是「我赢了」，实际：${battleCardText(card).split('\n')[0]}`,
+  );
+  assert.ok(!battleCardText(card).includes('我赢'), '复制出去的文案也不许用第一人称');
+});
+
+check('战报卡：MVP 来自规则层的人头账，不开「老兵不死」也有', () => {
+  /*
+   * 这条钉的就是这个字段最初坏掉的地方：MVP 原来只读 `unit.kills`，
+   * 而那个字段只有「老兵不死」扩展在维护——于是没开那个包的对局里，
+   * 卡面永远写"没有击杀"，而且连"杀了五个人之后自己倒下"的老兵也一起不算。
+   *
+   * 现在人头由 rules 的 creditKill 统一记（单位身上一份 + 局级 killTally 一份），
+   * 这里验三件事：记上了、按兵种合并、击杀者自己阵亡也不丢。
+   */
+  let s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 4321);
+  s.units = [];
+  const put = (owner: 'A' | 'B', type: string, x: number, y: number, hp?: number) => {
+    const def = s.unitTypes[type]!;
+    const u = {
+      id: `t-${owner}-${type}-${x}-${y}`,
+      type,
+      owner,
+      x,
+      y,
+      hp: hp ?? def.maxHp,
+      kills: 0,
+      atkBonus: 0,
+      moved: false,
+      acted: false,
+    };
+    s.units.push(u as never);
+    return u;
+  };
+
+  const hero = put('A', 'militia', 5, 5);
+  hero.atkBonus = 99; // 一刀一个，省得摆一串靶子
+  const prey = put('B', 'militia', 6, 5, 1);
+  s.current = 'A';
+  let r = applyAction(s, { type: 'ATTACK', unitId: hero.id, targetId: prey.id });
+  assert.ok(r.ok, r.ok ? '' : (r as { reason: string }).reason);
+  s = r.state;
+
+  let card = buildBattleCard(s, 'A', 'test');
+  assert.ok(card.mvp, '打死了人就必须有 MVP——以前这里恒为 null');
+  assert.equal(card.mvp!.type, 'militia');
+  assert.equal(card.mvp!.kills, 1, `MVP 该记 1 个人头，实际 ${card.mvp!.kills}`);
+  assert.ok(battleCardText(card).includes('MVP：民兵'), '文案和卡面读同一份数据');
+
+  // 击杀者自己倒下之后：单位身上那份跟着没了，局级账不能丢
+  const avenger = put('B', 'militia', 5, 6);
+  avenger.atkBonus = 99;
+  s.current = 'B';
+  r = applyAction(s, { type: 'ATTACK', unitId: avenger.id, targetId: hero.id });
+  assert.ok(r.ok, r.ok ? '' : (r as { reason: string }).reason);
+  s = r.state;
+  assert.equal(s.units.some((u) => u.id === hero.id), false, 'MVP 本人应该已经阵亡');
+  card = buildBattleCard(s, 'A', 'test');
+  assert.ok(card.mvp, '杀的兵死了，人头还得留在账上');
+  assert.equal(card.mvp!.kills, 1);
+  assert.equal(card.mvp!.alive, 0, '终局存活 0 也要如实写进卡面');
 });
 
 check('战报卡：卡片能打开、能关掉，画不出图时退回纯文字', () => {
@@ -7091,6 +8932,7 @@ check('战报卡：卡面每一笔都画在卡片里，没顶出边', () => {
     assert.ok(draws.some((x) => x.text.includes('战报')), `${label}：抬头要有「战报」两个字`);
   };
   scan('平局那张');
+  assert.ok(draws.some((x) => x.text === '平局'), '平局那一档的标题就是「平局」');
 
   /*
    * 再画一张赢局：这一档才是最常见的样子（大号破城回合 + 右侧击杀数）。
@@ -7121,6 +8963,230 @@ check('战报卡：卡面每一笔都画在卡片里，没顶出边', () => {
     fakeDoc,
   );
   scan('赢局那张');
+  // 卡面是拿来转发的：标题用「胜利 / 失败」，不能写「我赢了 / 我输了」——
+  // 第一人称到了别人手里会被读成他自己赢了。
+  assert.ok(draws.some((x) => x.text === '胜利'), '赢局标题要用「胜利」');
+  assert.ok(!draws.some((x) => x.text.includes('我赢') || x.text.includes('我输')), '卡面不许出现第一人称的胜负');
+});
+
+console.log('\n选卡预览与撤回位置');
+
+check('对局中选卡模式下，点自己/对面的城会显示对应的名单预览', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, draftMode: true }, 4321);
+  assert.ok(st.draft, '选卡模式应该有 draft');
+  st.draft!.skipped = false;
+  st.draft!.picks = { ...st.draft!.picks, A: ['militia', 'archer'], B: ['spearman', 'militia'] };
+
+  const own = st.cities.find((c) => c.owner === 'A')!;
+  const foe = st.cities.find((c) => c.owner === 'B')!;
+
+  const paint = (cityId: string) => {
+    const host = doc.createElement('div');
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: cityId,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    return host;
+  };
+
+  // 自己的城：显示自己那一方（is-a）
+  const mineHost = paint(own.id);
+  assert.ok(mineHost.querySelector('.draft-picked.is-a'), '点自己的城该出自己那一方的清单');
+  assert.ok(!mineHost.querySelector('.draft-picked.is-b'), '点自己的城不该冒出对面的清单');
+  assert.ok((mineHost.textContent ?? '').includes('选到的卡'), '标题要说明这是选到的卡');
+  assert.ok((mineHost.textContent ?? '').includes(`2 / ${st.draft!.pickSlots}`), '要写出选了几张');
+
+  // 对面的城：显示对面那一方（is-b），而且和选卡界面用同一套卡片样式
+  const foeHost = paint(foe.id);
+  const block = foeHost.querySelector('.draft-picked.is-b');
+  assert.ok(block, '点对面的城该出对面那一方的清单');
+  assert.ok(!foeHost.querySelector('.draft-picked.is-a'), '点对面的城不该显示自己的清单');
+  assert.ok(block!.querySelector('.draft-pick'), '卡片要复用选卡界面那套 .draft-pick 结构');
+});
+
+check('「撤回一步」离开「结束回合」那一块，两处点击区域不重叠', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 4321);
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+    canUndo: true,
+  });
+
+  const undo = host.querySelector('[data-act="undo"]');
+  const endTurn = host.querySelector('[data-act="end-turn"]');
+  assert.ok(undo, '撤回按钮还得在');
+  assert.ok(endTurn, '结束回合按钮还得在');
+  assert.ok(undo!.closest('.undo-row'), '撤回要在顶部那一行里');
+  assert.ok(!undo!.closest('.side-footer'), '撤回不许留在结束回合所在的那一块');
+  assert.ok(!undo!.closest('.side-actions'), '撤回不许和认输挤同一排');
+  // 两颗按钮不在同一个父节点下，就不可能叠在一起
+  assert.notEqual(undo!.parentElement?.parentElement, endTurn!.parentElement, '两颗按钮不该共用一个容器');
+});
+
+check('月球基地：卡上有采样技能和倒计时，月面的工程队有「展开」按钮', () => {
+  /*
+   * 登月胜利只有两个交互：月面上「展开月球基地」、基地上「月壤采样」。
+   * 它们分别是单位动作和主动技能——两条不同的渲染路径，都在这条里钉住。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7793);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  st.units = st.units.filter((u) => u.x !== 4 || u.y !== 4);
+  const base = {
+    id: 'base-test',
+    type: 'moon-base',
+    owner: 'A',
+    x: 4,
+    y: 4,
+    hp: 200,
+    kills: 0,
+    moved: false,
+    acted: false,
+    board: 'moon',
+    custom: { sample: 2 },
+  };
+  st.units.push(base as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: base as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('还剩 2 个回合'), `倒计时要在卡上，实际：${text.slice(0, 120)}`);
+    const btn = host.querySelector('[data-act="hero-skill"][data-skill="lunar-sampling"]');
+    assert.ok(btn, '「月壤采样」按钮不见了');
+
+    // 换成月面上的工程队：该出现「展开月球基地」
+    st.units = st.units.filter((u) => u.id !== 'base-test');
+    const crew = {
+      id: 'crew-moon',
+      type: 'crew',
+      owner: 'A',
+      x: 6,
+      y: 6,
+      hp: 30,
+      kills: 0,
+      moved: false,
+      acted: false,
+      board: 'moon',
+    };
+    st.units.push(crew as never);
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: crew as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    assert.ok(
+      host.querySelector('[data-action="base:deploy"]'),
+      '月面工程队该有「展开月球基地」按钮',
+    );
+  } finally {
+    host.remove();
+  }
+});
+
+check('切图：同一块画布换成另一张图的尺寸与格子', () => {
+  const host = doc.createElement('div');
+  host.className = 'board';
+  doc.body.appendChild(host);
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2, expansionIds: [] }, 9192);
+  const earth = playerView(st, 'A');
+  try {
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '地球 12×12');
+    assert.equal(host.style.getPropertyValue('--cols'), '12');
+
+    // 一张 3×3 的小图：格子层必须按它自己的尺寸重建，不能残留地球的 144 格
+    const tiles = Array.from({ length: 9 }, (_, i) => ({
+      terrain: i === 4 ? 'forest' : 'plain',
+      cityId: null,
+    }));
+    const moon = {
+      ...earth,
+      state: { ...earth.state, w: 3, h: 3, tiles, units: [], cities: [], marks: [] },
+      visible: Array.from({ length: 9 }, (_, i) => i),
+      visibleByBoard: { earth: earth.visible, moon: Array.from({ length: 9 }, (_, i) => i) },
+      rememberedTiles: new Map(),
+      rememberedByBoard: {},
+      ghosts: [],
+    };
+    renderBoard(host, moon as never, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 9, '切到 3×3 要重建格子层');
+    assert.equal(host.style.getPropertyValue('--cols'), '3');
+
+    // 切回地球：还是 144，不是 9
+    renderBoard(host, earth, { ...emptyUi });
+    assert.equal(host.querySelectorAll('.tile').length, 144, '切回来要回到 12×12');
+  } finally {
+    host.remove();
+  }
+});
+
+check('火箭发射井：属性卡写着燃料与货舱，加注/发射按钮都在', () => {
+  /*
+   * 发射井的全部交互都在侧栏：货舱是现成的那套（装载/卸载），
+   * 加注和发射是扩展给的两个按钮。这条钉"它们真的画出来了"——
+   * 规则层的用例只能验状态，验不了这对按钮有没有长在卡上。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 5, expansionIds: ['space-age'] }, 7781);
+  for (const t of st.tiles) if (t.terrain !== 'water' && t.terrain !== 'deep') t.terrain = 'plain';
+  const silo = {
+    id: 'silo-test',
+    type: 'rocket_silo',
+    owner: 'A',
+    x: 6,
+    y: 6,
+    hp: 120,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units = st.units.filter((u) => !(u.x === 6 && u.y === 6));
+  st.units.push(silo as never);
+
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  try {
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: silo as never,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    const text = host.textContent ?? '';
+    assert.ok(text.includes('燃料 0 / 3'), `燃料进度要写在卡上，实际：${text.slice(0, 120)}`);
+    assert.ok(text.includes('货舱：空'), '货舱状态要写在卡上');
+    assert.ok(host.querySelector('[data-action="silo:fuel"]'), '加注按钮不见了');
+    assert.ok(host.querySelector('[data-action="silo:launch"]'), '发射按钮不见了');
+    // 没燃料、没货：发射必须是禁用的，而不是点了才说不行
+    assert.equal(
+      host.querySelector('[data-action="silo:launch"]')!.hasAttribute('disabled'),
+      true,
+      '条件不齐时发射按钮该是灰的',
+    );
+  } finally {
+    host.remove();
+  }
 });
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);

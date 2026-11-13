@@ -17,6 +17,7 @@ import { abilityById } from '../core/ability-registry.ts';
 import { airLayer } from '../core/rules.ts';
 import { EXPANSIONS, unitSourceIdOf, unitSourceOf } from '../core/expansions.ts';
 import { resourceName } from '../core/resources.ts';
+import { unitStatLine } from '../core/info.ts';
 import type { ResourceId } from '../core/types.ts';
 import { ELEMENT_NAME } from '../core/types.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
@@ -55,16 +56,12 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 const DOMAIN_LABEL: Record<string, string> = { water: '水军', air: '空军' };
 
-/** 一行数值：攻/甲/血是每个兵种都有的，其余有才写 */
-function statLine(def: UnitTypeDef): string {
-  const bits = [`攻 ${def.atk}`, `甲 ${def.armor}`, `血 ${def.maxHp}`];
-  if (def.move > 0) bits.push(`移 ${def.move}`);
-  bits.push(`射 ${def.range}`, `视 ${def.vision}`);
-  if (def.splash) bits.push(`溅射 ${def.splash}`);
-  if (def.burst && def.burst > 1) bits.push(`连击 ${def.burst}`);
-  if (def.magicAtk) bits.push(`魔攻 ${def.magicAtk}`);
-  return bits.join(' · ');
-}
+/*
+ * 一行数值直接复用 `core/info` 的 `unitStatLine`。
+ *
+ * 这里原本是本地写的一份，措辞还和别处不同（它写「视」，产兵面板干脆没有这一项）。
+ * 同一张兵种卡，从选卡面板看和从兵营面板看差一个数字，是最没道理的不一致。
+ */
 
 /** 造价：金币 + 扩展带来的其它资源（有才写） */
 function costLine(def: UnitTypeDef): string {
@@ -100,7 +97,7 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
   });
   return `<span class="hover-tip" hidden>
       <span class="tip-title"><b>${def.name}</b><i>${meta.join(' · ')}</i></span>
-      <span class="tip-row">${statLine(def)}</span>
+      <span class="tip-row">${unitStatLine(def)}</span>
       <span class="tip-row">${costLine(def)}</span>
       ${abil.length > 0 ? `<span class="tip-row tip-abil">能力：${abil.join(' · ')}</span>` : ''}
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${builds.names.join('、')}（共 ${builds.names.length} 种）</span>` : ''}
@@ -119,10 +116,13 @@ function unitTip(def: UnitTypeDef, blocked: boolean, reason: string): string {
 function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   const bits = [`${eraDef(def.era).name}`];
   if (def.cost > 0) bits.push(`${def.cost} 金`);
+  // 紧凑卡是"一眼挑兵"用的，只写最能区分人的几项；视野跟着射程一起出，
+  // 因为"打得到多远"和"看得到多远"是同一个问题的两面。
   if (def.category === 'combat') bits.push(`攻 ${def.atk} · 血 ${def.maxHp}`);
   else bits.push('建筑');
   if (def.splash) bits.push(`溅射 ${def.splash}`);
   if (def.range >= 2) bits.push(`射程 ${def.range}`);
+  bits.push(`视野 ${def.vision}`);
   return `<span class="draft-card-wrap" data-hover-tip>
     <button type="button" class="draft-card ${def.category === 'building' ? 'is-building' : ''}${blocked ? ' is-blocked' : ''}"
       data-draft="${def.id}" ${blocked ? 'aria-disabled="true"' : ''}>
@@ -136,12 +136,29 @@ function unitCard(def: UnitTypeDef, blocked: boolean, reason: string): string {
   </span>`;
 }
 
-/** 一个槽位：已经定了就显示名字，没定就显示虚线占位 */
-function slotChip(label: string, kind: 'ban' | 'pick', filled: string | null): string {
-  if (filled) {
-    return `<span class="draft-slot is-${kind} is-filled">${filled}</span>`;
-  }
-  return `<span class="draft-slot is-${kind}">${label}</span>`;
+/**
+ * 一个槽位：已经定了就显示名字，没定就显示虚线占位。
+ *
+ * 定下来的那一格**也带完整详情**（2026-11-07）。
+ *
+ * 原来这里只印一个名字。可是"对面拿走了什么"恰恰是选卡时最想研究的一件事：
+ * 要确认它是不是我打算禁的那张、要确认它几甲几射程、要确认它带着什么能力。
+ * 只给名字，等于让人凭记忆打——而池子有二十张卡，记忆是靠不住的。
+ * 既然池子里的卡都有详情，已经落到位置上的那一张没理由反而看不全。
+ *
+ * 注释里"点不动"这条对它不成立：这是**已经定了**的格子，本来就没有点击这回事，
+ * 所以 `unitTip` 的 blocked 一律传 false。
+ */
+function slotChip(
+  label: string,
+  kind: 'ban' | 'pick',
+  id: string | null,
+  s: GameState,
+): string {
+  if (!id) return `<span class="draft-slot is-${kind}">${label}</span>`;
+  const def = s.unitTypes[id];
+  if (!def) return `<span class="draft-slot is-${kind} is-filled">${id}</span>`;
+  return `<span class="draft-slot is-${kind} is-filled is-tippy" data-hover-tip>${def.name}${unitTip(def, false, '')}</span>`;
 }
 
 function sideBlock(
@@ -151,22 +168,29 @@ function sideBlock(
 ): string {
   const view = draftView(s)!;
   const mine = view[side === 'A' ? 'a' : 'b'];
-  const banned = mine.bans.map((id) => s.unitTypes[id]?.name ?? id);
-  const picked = mine.picks.map((id) => s.unitTypes[id]?.name ?? id);
+  // 传 id 而不是名字：槽位要自己查面板上的完整详情（见 slotChip）
+  const banned = mine.bans;
+  const picked = mine.picks;
 
   const banSlots: string[] = [];
   for (let i = 0; i < (s.draft?.banSlots ?? 0); i++) {
-    banSlots.push(slotChip('禁', 'ban', banned[i] ?? null));
+    banSlots.push(slotChip('禁', 'ban', banned[i] ?? null, s));
   }
   const pickSlots: string[] = [];
   for (let i = 0; i < (s.draft?.pickSlots ?? 0); i++) {
-    pickSlots.push(slotChip(String(i + 1), 'pick', picked[i] ?? null));
+    pickSlots.push(slotChip(String(i + 1), 'pick', picked[i] ?? null, s));
   }
 
   // 状态行：这一方现在在干什么。禁用期是"盲禁"，所以只报"交没交"，不报禁了什么。
   let status = '';
   if (view.phase === 'ban') {
-    status = mine.banDone ? '已提交禁用' : '正在挑禁用';
+    // 轮流制：三种状态要分开——轮到我了 / 我在禁但没禁完 / 我禁完了
+    const myTurn = view.banTurn === side;
+    status = mine.banDone
+      ? `已禁 ${mine.bans.length} 个`
+      : myTurn
+        ? `轮到禁用（还剩 ${Math.max(0, (s.draft?.banSlots ?? 0) - mine.bans.length)} 个）`
+        : '等对面禁用';
   } else if (view.phase === 'pick') {
     status = opts.toAct === side ? '轮到你选' : `已选 ${picked.length} / ${s.draft?.pickSlots}`;
   } else {
@@ -401,6 +425,31 @@ function pickedPanel(s: GameState, seat: PlayerId): string {
 }
 
 /**
+ * 只读的"这一方选到了什么"——给**对局中**点城市时用。
+ *
+ * 为什么复用 `pickedCard` 而不是另写一套小卡片：
+ * 这段内容的意义就是"和选卡界面右侧那个预览一模一样"。两份实现一定会漂移
+ * （一边加了字段、另一边忘了），而玩家会立刻发现"BP 时看到的面板和打起来看到的不一样"。
+ *
+ * `skipped`（跳过选卡）时返回空串：那种局面没有名单，显示一个空框只会让人以为坏了。
+ */
+export function draftedCardsHtml(s: GameState, seat: PlayerId): string {
+  const draft = s.draft;
+  if (!draft || draft.skipped) return '';
+  const picks = (draft.picks[seat] ?? []).filter((id) => !!s.unitTypes[id]);
+  if (picks.length === 0) return '';
+  const cards = picks.map((id, i) => pickedCard(s.unitTypes[id]!, i + 1)).join('');
+  return `<section class="draft-picked is-${seat === 'A' ? 'a' : 'b'}" style="margin-top:12px">
+    <div class="draft-picked-head">
+      <b>${sideName(s, seat)} · 选到的卡</b>
+      <span class="draft-picked-count">${picks.length} / ${draft.pickSlots}</span>
+      <span class="draft-picked-hint">这一局的名单，BP 时定下的</span>
+    </div>
+    <div class="draft-picked-grid">${cards}</div>
+  </section>`;
+}
+
+/**
  * 等待开局（lobby）。
  *
  * 这一屏存在的理由很具体：选卡遮罩是整屏的，一盖上去顶栏的「联机」「新对局」
@@ -532,16 +581,28 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
   const seat = ctx.seat;
   const aiTurn = view.toAct ? ctx.isAi(view.toAct) : false;
 
-  // 谁能点：禁用期＝本地这一方还没交；选人期＝当前这一方就是本地席位
-  const canBan = view.phase === 'ban' && !view[seat === 'A' ? 'a' : 'b'].banDone;
+  /*
+   * 谁能点：禁用期＝**轮到本地这一方**且还没禁满；选人期＝当前这一方就是本地席位。
+   *
+   * 轮流禁之后"没禁满"不再等于"能点"：对面那一轮里你也还没禁满，
+   * 但一步都不该让你下（规则层也会拒，界面必须先在前面拦住，否则点一下弹一句
+   * "轮到红方禁用"——那是在用提示音代替禁用）。
+   */
+  const banTurn = view.phase === 'ban' ? view.banTurn : null;
+  const myBanLeft = Math.max(0, draft.banSlots - draft.bans[seat].length);
+  const canBan = view.phase === 'ban' && banTurn === seat && myBanLeft > 0;
   const canPick = view.phase === 'pick' && view.toAct === seat;
   const clickable = canBan || canPick;
 
   const hint =
     view.phase === 'ban'
       ? canBan
-        ? `挑一个你最不想看到的兵种禁掉（${draft.banSlots} 个），对方同时在进行，互相看不到`
-        : `你已提交，等${sideName(s, seat === 'A' ? 'B' : 'A')}禁用`
+        ? myBanLeft === draft.banSlots
+          ? `轮到你禁用：挑 ${draft.banSlots} 个最不想看到的兵种，禁完就换对面`
+          : `还能禁 ${myBanLeft} 个，禁完就换对面`
+        : banTurn && banTurn !== seat
+          ? `${sideName(s, banTurn)}正在禁用，禁完轮到你`
+          : `你已禁完，等${sideName(s, seat === 'A' ? 'B' : 'A')}禁用`
       : view.phase === 'pick'
         ? view.toAct === seat
           ? '轮到你选：点一个兵加入本局名单'
@@ -595,22 +656,33 @@ export function draftScreenHtml(s: GameState, ctx: DraftScreenCtx): string {
       : canBan
         ? ''
         : view.phase === 'ban'
-          ? '你已经提交过禁用了，等对面'
+          ? banTurn && banTurn !== seat
+            ? `现在轮到${sideName(s, banTurn)}禁用`
+            : '你已经禁完了，等对面'
           : '现在不是你的操作';
   const cards = remain.map((id) => unitCard(s.unitTypes[id]!, !clickable, blockReason)).join('');
 
-  // 禁用期不揭晓对面禁了什么；选人期两边都公开
+  /*
+   * 禁用条：**已经禁完的那一方要露出来**。
+   *
+   * 盲禁时代这里是空的（"禁用期不揭晓对面禁了什么"），因为两边同时交、
+   * 交完一起开。轮流禁之后这条反过来了：后禁的一方**必须**看得见先禁方禁了
+   * 什么，否则他会去禁一个已经被禁掉的兵（规则层会拒，但那已经浪费了他的时间）。
+   * 只看"禁完的"——还在禁的那一方没禁完，露一半出来只会误导。
+   */
   const banLine = (side: PlayerId) => {
     const list = draft.bans[side].filter(Boolean);
     return list.map((id) => s.unitTypes[id]?.name ?? id).join('、');
   };
+  const banDoneOf = (side: PlayerId) => draft.bans[side].length >= draft.banSlots;
+  const showBans = (side: PlayerId) => view.phase === 'pick' || banDoneOf(side);
   const bansHtml =
-    view.phase === 'ban'
+    !showBans('A') && !showBans('B')
       ? ''
       : `<div class="draft-bans">
           <span class="draft-bans-title">禁用</span>
-          <span class="draft-ban-chip is-a">${sideName(s, 'A')}：${banLine('A') || '无'}</span>
-          <span class="draft-ban-chip is-b">${sideName(s, 'B')}：${banLine('B') || '无'}</span>
+          ${showBans('A') ? `<span class="draft-ban-chip is-a">${sideName(s, 'A')}：${banLine('A') || '无'}</span>` : ''}
+          ${showBans('B') ? `<span class="draft-ban-chip is-b">${sideName(s, 'B')}：${banLine('B') || '无'}</span>` : ''}
         </div>`;
 
   const log = draft.history

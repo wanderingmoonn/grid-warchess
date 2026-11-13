@@ -37,7 +37,7 @@
  */
 
 import type { AbilityDef } from './abilities.ts';
-// 第六时代的 15 个专精兵和他们那一套能力仍然定义在 contemporary-packs.ts 里
+// 第六时代的 14 个专精兵和他们那一套能力仍然定义在 contemporary-packs.ts 里
 // （那边有按 EHP 校准过的数值口径），这里只负责把它们并进同一个包。
 // 依赖方向是单向的：era-packs → contemporary-packs，反过来没有引用。
 import { CONTEMPORARY_WAR, MODERN_ABILITIES } from './contemporary-packs.ts';
@@ -153,9 +153,15 @@ const ANTIQUITY: UnitTypeDef[] = [
   // ---- 工事 ----
   {
     // 瞭望塔：青铜的"眼睛"。
-    // 第一版 atk 12 / 视野 5 / 75 金，实测每百金杀伤 72.7（原版箭塔 37.0）——
-    // 视野 5 在 12×12 上等于半个棋盘，它永远先手开火。现在视野收到 4、攻击 12→10、
-    // 价格提到 85：仍然是最好的侦察塔，但不再是"造了就赢"。
+    //
+    // 第一版 atk 12 / 视野 5 / 75 金，实测每百金杀伤 72.7（原版箭塔 37.0），
+    // 后来收到 atk 10 / 视野 4 / 85 金。**2026-11-09 视野 4→6**（玩家要求 +2）。
+    //
+    // 加这 2 点之前先确认了一件事：自动开火（`fireBuildings`）是照 `range` 选靶的，
+    // **不看视野**——所以视野只影响迷雾和 AI 的信息，不会让它多打一发。
+    // 这也是当初"视野 5 就永远先手开火"那句注释说不通的地方：真正决定杀伤的是 atk，不是视野。
+    // 6 格的可见面积（欧氏圆，≈113 格）是 4 格（≈50 格）的 2.26 倍，
+    // 12×12 上一座塔能看住大半个棋盘——这是"侦察塔"该有的样子，但它仍是静止的 85 金工事。
     id: 'anc_watchtower',
     name: '瞭望塔',
     short: '望',
@@ -167,7 +173,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     armor: 4,
     maxHp: 32,
     range: 4,
-    vision: 4,
+    vision: 6,
     autoAttack: true,
   },
   {
@@ -213,6 +219,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     short: '匠',
     era: 1,
     category: 'builder',
+    legacy: true,
     cost: 55,
     move: 2,
     atk: 5,
@@ -220,7 +227,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     maxHp: 20,
     range: 1,
     vision: 2,
-    builds: ['anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'bridge', 'camp'],
+    builds: [],
   },
   {
     // 三层桨战船：青铜海权的象征，撞角为主。
@@ -315,24 +322,6 @@ const MEDIEVAL: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     abilities: ['shield-wall'],
-  },
-  {
-    // 热那亚弩手：射程和破甲都在长弓之上，代价是慢。
-    // 第一版 100 金 atk 18，打出场均每百金 55.3（长弓 31.7）——破甲在"人人有甲"的铁器
-    // 太值钱。攻击收到 16、价格提到 110，让它变成"贵一点的解甲方案"而不是全面替代长弓。
-    id: 'med_crossbow',
-    name: '弩手',
-    short: '弩',
-    era: 2,
-    category: 'combat',
-    cost: 110,
-    move: 2,
-    atk: 14,
-    armor: 1,
-    maxHp: 24,
-    range: 4,
-    vision: 3,
-    abilities: ['armor-pierce'],
   },
   {
     // 蒙古骑射手：打带跑。first-strike = 不挨反击，它就是靠这个活着的。
@@ -475,6 +464,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '掘',
     era: 2,
     category: 'builder',
+    legacy: true,
     cost: 95,
     move: 2,
     atk: 4,
@@ -482,7 +472,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     maxHp: 22,
     range: 1,
     vision: 2,
-    builds: ['med_wall', 'med_donjon', 'bridge', 'camp2'],
+    builds: [],
   },
   {
     // 齿轮帆船：铁器唯一能运兵过河的船，运 3 个
@@ -870,6 +860,9 @@ const GUNPOWDER: UnitTypeDef[] = [
     // 第一版给了 first-strike（不挨反击），实测直接失衡：140 金打出每百金 61.7 杀伤、
     // 交换比 5.65，比同代火枪兵高 76%——"射程 5 + 不吃反击 + 潜行"等于无风险打靶。
     // 现在只保留潜行，射程收到 4、攻击 28→24，回到"视野好、能阴人、但被贴上就死"的定位。
+    // 2026-11-09 补了第二刀：当时那次只砍了射程，没动潜行本身，所以"蹲林子无限白打"
+    // 还在——潜行现在改成**出手即现形**（见 abilities.ts 的 stealth）。猎兵因此变成
+    // "每回合偷一发、打完露一整个敌方回合"，4 格射程的含金量比之前低一档。
     id: 'gp_sharpshooter',
     name: '猎兵',
     short: '猎',
@@ -999,6 +992,31 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 24,
     range: 1,
     vision: 3,
+    /*
+     * 2026-11-11：城市产出 27 → 16，**回调** 11-10 那次加强。
+     *
+     * 当时的问题是真问题（它是全表最差的经济曲线：回本 9.4，比时代 1 的农民 6.4、
+     * 时代 3 的种植园主 6.0 都慢），但一刀提到 27 把它变成了时代 3 最快的经济单位
+     * ——那不是修好，是反着错。数值回到 2026-11-10 之前：
+     * 城市 16 / 平地 9 / 丘陵 5 / 森林 4。
+     *
+     * ── 2026-11-11 傍晚补记（重要，动这条之前先读）─────────────────────
+     * 上面最后那句"它的价值有一半在移动力和视野上，回本这把尺子不适用"，
+     * 被实测否掉了：它和种植园主是**同一副身板**（攻 4 / 甲 2 / 血 24 / 移 2），
+     * 移动力一点没多，只多 1 点视野、贵 30 金。
+     *
+     * 真正被漏掉的是**支持削弱**的那一半：产出表里城市就是它最好的地形，
+     * 造在城里当轮就满产；而别的经济单位当回合动不了、站在城里收入是 0，
+     * 必须先花一轮走出去——它天然快一轮。所以"比同代慢一点"是对的。
+     *
+     * 但 16 慢得过头：实测 10 轮回本，比同代最慢的种植园主（7 轮）还慢 3 轮，
+     * 比 45 金的时代 1 农民（8 轮）都差。当时据此改成了 20（8 轮，慢一轮），
+     * 随后**按要求全部撤回**：现阶段不做平衡，先保持 16 不动。
+     *
+     * 完整论证、实测表、19/20/22/26 各档的回本曲线见
+     * docs/ANALYSIS-QUARTERMASTER-2026-11-11.md；复现用
+     * `npm run probe:econ-payback`（支持 --qm 试算，不改表）。
+     */
     incomeByTerrain: { city: 16, plain: 9, hill: 5, forest: 4 },
   },
   {
@@ -1008,6 +1026,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     short: '坑',
     era: 3,
     category: 'builder',
+    legacy: true,
     cost: 135,
     move: 2,
     atk: 5,
@@ -1015,7 +1034,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     maxHp: 24,
     range: 1,
     vision: 2,
-    builds: ['gp_chevaux', 'gp_earthwork', 'gp_bastion', 'bridge2', 'camp3'],
+    builds: [],
   },
   {
     // 风帆战列舰：三层甲板、一百门炮，火器时代的海上霸主
@@ -1197,7 +1216,8 @@ const INDUSTRY: UnitTypeDef[] = [
     armor: 10,
     maxHp: 60,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 3,
     autoAttack: true,
   },
@@ -1257,6 +1277,7 @@ const INDUSTRY: UnitTypeDef[] = [
     short: '地',
     era: 4,
     category: 'builder',
+    legacy: true,
     cost: 210,
     move: 2,
     atk: 5,
@@ -1264,7 +1285,7 @@ const INDUSTRY: UnitTypeDef[] = [
     maxHp: 26,
     range: 1,
     vision: 2,
-    builds: ['ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bridge2', 'camp4'],
+    builds: [],
   },
   {
     // 驱逐舰：蒸汽时代的海上多面手，带一点溅射
@@ -1458,7 +1479,8 @@ const MODERN: UnitTypeDef[] = [
     armor: 15,
     maxHp: 90,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 4,
     autoAttack: true,
   },
@@ -1476,7 +1498,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 34,
     range: 1,
     vision: 3,
-    incomeByTerrain: { city: 30, plain: 18, hill: 10, forest: 9 },
+    incomeByTerrain: { city: 56, plain: 34, hill: 19, forest: 17 },
   },
   {
     // 工兵：拒马、机枪地堡、钢桥、前进基地
@@ -1485,6 +1507,7 @@ const MODERN: UnitTypeDef[] = [
     short: '战',
     era: 5,
     category: 'builder',
+    legacy: true,
     cost: 265,
     move: 2,
     atk: 5,
@@ -1492,7 +1515,7 @@ const MODERN: UnitTypeDef[] = [
     maxHp: 30,
     range: 1,
     vision: 2,
-    builds: ['mod_dragonsteeth', 'mod_concretewall', 'mod_mgbunker', 'bridge3', 'camp5'],
+    builds: [],
   },
   {
     // 驱逐舰：现代海军的通用平台
@@ -1547,7 +1570,7 @@ const MODERN: UnitTypeDef[] = [
  * 合并之后只剩一个勾：勾上就是"每一代都有额外的兵"。
  *
  * ---------------------------------------------------------------
- * 第六时代那 15 个专精兵为什么还留着条件
+ * 第六时代那 14 个专精兵为什么还留着条件
  * ---------------------------------------------------------------
  * 它们的 `requiresPack` 是「信息化」：那一代是「信息化」这个包开出来的
  * （`unlockEra: 6`），不勾它城市永远升不到 6 级，这批兵一个都造不出来。
@@ -1558,15 +1581,17 @@ const MODERN: UnitTypeDef[] = [
 export const ERA_ARMS: Expansion = {
   id: 'era-arms',
   scale: 'large',
+  // 第六代那 15 个专精兵挂在「信息化」上（兵种级 requiresPack），不开它就不进场
+  recommends: ['pack-contemporary'],
   name: '时代军备',
   blurb: '每一代都多一批可选兵种。',
   summary:
     '每一代都多出一批可选兵种：青铜的投石兵/战车/攻城槌/旌旗车，铁器的瑞士长矛兵/重装军士/' +
     '战象/弩炮/攻城塔，火器的线列步兵/胸甲骑兵/猎兵/棱堡，蒸汽的堑壕突击队/火焰喷射器/' +
     '列车炮/马克 I 坦克，机械化的伞兵/突击队/喀秋莎/重型坦克；布雷与扫雷的能力也在这一包里。' +
-    '另含第六时代的 15 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
+    '另含第六时代的 14 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
     '远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、' +
-    '前进指挥所、物流集团、工程兵团）——**这批要同时开「信息化」才会出现**，' +
+    '前进指挥所、物流集团）——**这批要同时开「信息化」才会出现**，' +
     '因为第六时代是那个包开出来的。',
   hooks: {},
   abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ...MODERN_ABILITIES],

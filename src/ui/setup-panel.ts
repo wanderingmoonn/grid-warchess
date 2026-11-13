@@ -18,14 +18,18 @@ import { ERAS, UNIT_TYPES, eraDef, isPseudoUnit } from '../core/config.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
 import { buildListOf } from '../core/build-list.ts';
+import { unitStatLine } from '../core/info.ts';
 import {
   EXPANSIONS,
   availableExpansions,
+  conflictIdsOf,
+  conflictsWith,
   eraCeilingFor,
   expansionById,
   lockedEraPacks,
 } from '../core/expansions.ts';
 import { MAP_STYLES, MAP_SYMMETRIES, mapStylesFor, twoCityMinSize } from '../core/mapgen.ts';
+import { draftAlwaysAllowed } from '../core/draft.ts';
 import {
   MAP_MAX_BYTES,
   MAP_MAX_SIZE,
@@ -111,6 +115,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       playerCount: initial.playerCount ?? 2,
       // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）
       twoCities: initial.twoCities === true,
+      // 时代路线跟着上一局走（面板暂时不提供选择器，留给扩展/调试指定）
+      ...(initial.eraRoute ? { eraRoute: initial.eraRoute } : {}),
+      // 先手方跟着上一局走：想连打几局都是自己后手，只选一次就够
+      firstSide: initial.firstSide === 'B' || initial.firstSide === 'random' ? initial.firstSide : 'A',
       mapStyle: initial.mapStyle ?? 'random',
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
@@ -128,7 +136,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       draftPickMs: initial.draftPickMs,
       // 这里也是逐个字段抄的：漏一个，界面上那个开关就等于永远关着。
       // 优先用本机偏好（"只勾一次"），其次沿用上一局的选择，最后才是关。
-      recordDetail: loadRecordPref() ?? initial.recordDetail === true,
+      /*
+       * 默认**开**（2026-11-11 用户拍板改的）。
+       *
+       * 原来是默认关，理由是"不勾就不记，也不多交东西"。那条立场本身没错，
+       * 代价是数据：65 局里只有 19 局带动作序列，剩下 46 局事后想复盘都没有素材。
+       *
+       * 改默认开之后，边界仍然清楚：
+       *   · **记录**默认开——它只发生在这台机器上，不替玩家做任何对外动作；
+       *   · **发送**仍然要玩家在结算卡上点一下，这一层没动；
+       *   · 取消勾选会记住（loadRecordPref），下次还是关的。
+       * 换句话说：默认帮你把素材留着，但决定权还在你手里。
+       */
+      recordDetail: loadRecordPref() ?? true,
     };
 
     // 上一次存下来的勾选里可能带着伪单位（攻城结算用的「城市」壳）或者本版
@@ -270,6 +290,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     let mapDraft: FixedMap | null = null;
     let mapNote = '';
     let mapBad = false;
+    /** 扩展区的提示（目前只有"这两个包不能同开"） */
+    let expNote = '';
 
     /*
      * 固定地图：内置四张 + 云端地图库里别人上传的那些。
@@ -536,11 +558,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 eraOf: (id) => catalog[id]?.era,
               });
               const buildTip = builds.names.length > 0 ? ` · 可建 ${builds.names.join('、')}` : '';
-              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost}${buildTip}`;
+              /*
+               * 选卡模式下，经济/建造单位、生产性建筑、桥、经济建筑**不进卡池**：
+               * 它们开局自带（`draftAlwaysAllowed`）。这张表是"这一局能造什么"，
+               * 所以它们照样列——但不标出来的话，玩家会以为"磨坊怎么还在卡池里"。
+               * 2026-11-08 就是因为这个来问的（那份其实是老存档里落过盘的旧池子）。
+               */
+              const auto = config.draftMode && draftAlwaysAllowed(u);
+              const autoTip = auto ? ' · 选卡模式下开局自带，不进卡池' : '';
+              // 悬停里也给完整数值行（含视野）：这里是玩家决定"带不带它"的地方，
+              // 只有一个造价和名字的话，几个同类兵之间根本没法比
+              const title = `${u.name}${from ? ` · ${from}` : ''} · 造价 ${u.cost} · ${unitStatLine(u)}${buildTip}${autoTip}`;
               return `<button class="chip ${isUnitOn(u.id) ? 'active' : ''} ${
                 from ? 'is-extra' : ''
               }" data-unit="${u.id}" title="${esc(title)}">
-                 ${u.short} ${u.name}
+                 ${u.short} ${u.name}${auto ? '<span class="chip-auto">自带</span>' : ''}
                </button>`;
             })
             .join('');
@@ -559,12 +591,30 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         extraTotal > 0 ? ` · 其中 ${extraTotal} 个来自扩展或自定义` : ''
       }`;
 
-      // 前置关系直接写在卡片上：一个"勾了却不生效"的开关比没有这个开关更糟
-      const reqLine = (id: string): string => {
+      /*
+       * 三种关系画成同一种小标签，只有底色不同：依赖（蓝）、冲突（红）、联动（绿）。
+       *
+       * 为什么挤在同一个位置：玩家在勾选的那一刻要回答的其实是同一个问题——
+       * "这个包和别的包是什么关系"。分三处写（说明里一句、脚注一句、悬停里一句）
+       * 等于没有。冲突必须**两个包都写**：只写在被冲突的那一侧，玩家会在另一张
+       * 卡上什么都看不到，勾下去才被拒。
+       */
+      const nameOf = (x: string): string => expansionById(x)?.name ?? x;
+      const relChips = (id: string): string => {
+        const out: string[] = [];
         const need = expansionById(id)?.requires ?? [];
-        if (need.length === 0) return '';
-        const names = need.map((r) => expansionById(r)?.name ?? r).join('、');
-        return `<span class="expansion-req">需先开：${names}</span>`;
+        if (need.length > 0) {
+          out.push(`<span class="expansion-req">依赖：${need.map(nameOf).join('、')}</span>`);
+        }
+        const clash = conflictIdsOf(id);
+        if (clash.length > 0) {
+          out.push(`<span class="expansion-req is-clash">冲突：${clash.map(nameOf).join('、')}</span>`);
+        }
+        const link = expansionById(id)?.recommends ?? [];
+        if (link.length > 0) {
+          out.push(`<span class="expansion-req is-link">推荐：${link.map(nameOf).join('、')}</span>`);
+        }
+        return out.length > 0 ? `<span class="expansion-tags">${out.join('')}</span>` : '';
       };
       // 隐藏的扩展（规则在跑但玩家还选不到）不列出来
       //
@@ -580,7 +630,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           <span class="expansion-body">
             <b>${e.name}</b>
             <span>${e.blurb ?? e.summary}</span>
-            ${reqLine(e.id)}
+            ${relChips(e.id)}
           </span>
         </label>`,
       ).join('');
@@ -594,11 +644,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
                 <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
                 <span class="expansion-body">
-                  <b>结束后上传这局的详细数据</b>
+                  <b>记录这局的详细数据（默认开启）</b>
                   <span>
                     记每回合的兵力 / 城防 / 金币，以及双方的出兵与行动次数，
                     还有每一步的动作——这局能在本地逐帧重放。
-                    不记玩家名与房间码。勾一次就记住；结算卡会自动打勾，但发送仍要你点一下。
+                    不记玩家名与房间码。取消勾选就不再记录（会记住你的选择）；
+                    上传仍要你在结算卡上点一下，不点不会发出去。
                   </span>
                 </span>
               </label>
@@ -629,6 +680,38 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${aiLevelChips}`
               }
             </section>
+
+            ${
+              config.godMode
+                ? ''
+                : playerCount === 2
+                  ? `<section class="field">
+              <div class="field-label">先手 <span class="field-hint">${
+                config.aiOpponent || config.aiAlly
+                  ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
+                  : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
+              }</span></div>
+              <div class="chip-row">
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">红方先手</button>
+                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}" data-first="B">蓝方先手</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+              </div>
+              ${config.firstSide === 'random' ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>' : ''}
+            </section>`
+                  : `<section class="field">
+              <div class="field-label">先手 <span class="field-hint">谁先行动、谁先禁/先选卡</span></div>
+              <div class="chip-row">
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">按席位顺序</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+              </div>
+              ${
+                config.firstSide === 'random'
+                  ? '<div class="field-hint">在参赛的席位上抽（三家就在 A/B/C 里抽），抽到谁谁先动；抽完存成具体席位，复盘不会变。</div>'
+                  : ''
+              }
+              <div class="field-hint">多人局的城位与出生点按席位固定，不跟着这个走——这里只决定谁先动。</div>
+            </section>`
+            }
 
             <section class="field">
               <div class="field-label">
@@ -757,6 +840,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <section class="field">
               <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
               <div class="expansion-list">${expItems}</div>
+              ${expNote ? `<div class="map-note is-bad">${esc(expNote)}</div>` : ''}
             </section>
 
             <section class="field">
@@ -817,18 +901,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                           `${m.w}×${m.h}`,
                           mapThumbSvg(m, thumbCity),
                           m.id === pickedMapId,
-                          m.author ? ` · ${esc(m.author)}` : '',
+                          `${m.author ? ` · ${esc(m.author)}` : ''}${m.pending ? ' · 待审核' : ''}`,
                         ),
                       )
                       .join('')}</div>`
-                  : `<div class="field-hint">还没有人传过。下面传一张上去，所有人都能在这里选到它。</div>`
+                  : `<div class="field-hint">库里还没有公开的图。下面传一张上去，审核通过后所有人都能在这里选到它。</div>`
               }
               ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
             </section>
 
             <section class="field">
               <div class="field-label">
-                上传地图 <span class="field-hint">传上去的图，所有玩家开局都能选到</span>
+                上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
               </div>
               ${
                 mapDraft
@@ -840,7 +924,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                          <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
                        </div>
                        <div class="map-draft-act">
-                         <button class="btn btn-sm btn-primary" data-act="map-upload">上传到地图库</button>
+                         <button class="btn btn-sm btn-primary" data-act="map-upload">提交审核</button>
                          <button class="btn btn-sm" data-act="map-cancel">取消</button>
                        </div>
                      </div>`
@@ -1013,6 +1097,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           const need = twoCityMinSize(2, config.playerCount === 4 ? 4 : 3);
           if (config.size < need) config.size = need;
         }
+        paint();
+        return;
+      }
+
+      const firstBtn = target.closest<HTMLElement>('[data-first]');
+      if (firstBtn?.dataset.first) {
+        const v = firstBtn.dataset.first;
+        config.firstSide = v === 'B' ? 'B' : v === 'random' ? 'random' : 'A';
         paint();
         return;
       }
@@ -1240,7 +1332,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             config.fixedMap = got;
             config.size = got.w;
             mapDraft = null;
-            mapNote = `已上传「${got.name}」，现在所有玩家都能在地图库里选到它（本局已选中）`;
+            mapNote = `已提交「${got.name}」，等审核放行后别人就能选到它（本局已选中，你自己随时能用）`;
             mapBad = false;
           } else {
             mapNote = res.reason ?? '上传失败';
@@ -1301,6 +1393,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 兵种池同样是扩展的函数：这一包带的兵会多出来 / 少掉十几格。
       const unitsBefore = Object.keys(unitPool().catalog).length;
       if (input.checked) {
+        /*
+         * 冲突：**直接拒绝**，并且说清是谁挡着。
+         *
+         * 为什么不是"自动把另一个取消掉"：那会在玩家没看清的情况下悄悄改掉
+         * 他的选择，而且下一步开局他会发现规则少了一整包。拒绝 + 指名，
+         * 玩家自己决定撤哪个。
+         */
+        const clash = conflictsWith(config.expansionIds, id);
+        if (clash.length > 0) {
+          expNote = `「${expansionById(id)?.name ?? id}」和「${clash
+            .map((x) => expansionById(x)?.name ?? x)
+            .join('、')}」不能同开：两套规则会互相拆台。要选它，先取消上面那个。`;
+          paint();
+          return;
+        }
+        expNote = '';
         if (!config.expansionIds.includes(id)) config.expansionIds.push(id);
         // 自动补上前置：勾了「骑士团」却没勾「法则」，这包兵根本不会进场。
         for (const need of expansionById(id)?.requires ?? []) {

@@ -346,12 +346,25 @@ function carveGreatRiver(c: MapBuildCtx): void {
   const shoal = makeNoise(c.rng, Math.max(4, Math.round(along / 4)), 5);
 
   const half = 1.1; // 河心半宽（格）
+  /*
+   * 渡口：**整条横截面都得是浅滩**，否则陆军根本过不去。
+   *
+   * 以前这里只在 `dist <= half + 1`（河岸那两格）画浅滩，河心 `dist <= half`
+   * 永远是深水——那不叫渡口，只是"河岸上多了一条能走的沙滩"，
+   * 从头到尾没有一处能过人的地方。以前看图能过河，是因为 `mapgen.carve` 事后
+   * 按最短路径把水凿成了浅滩；2026-11-08 起那条兜底拆掉了（水必须保持连通），
+   * 这里就得自己把渡口画对。
+   *
+   * 阈值抬到 0.72：渡口是"几处"，不是"半条河"。
+   */
+  let fords = 0;
   for (let t = 0; t < along; t += 1) {
     // 河身蜿蜒 ±1.5 格
     const wobble = (wob(t / 5, 0.5) - 0.5) * 3;
     const centre = mid + wobble;
-    // 这一段河床高不高：高的地方两岸连成浅滩
-    const shallowHere = shoal(t / 4, 0.5) > 0.56;
+    // 这一段河床高不高：高的地方整条横截面都成了浅滩，人可以徒涉
+    const shallowHere = shoal(t / 4, 0.5) > 0.72;
+    if (shallowHere) fords += 1;
     for (let d = -3; d <= 3; d += 1) {
       const x = axisH ? t : Math.round(centre + d);
       const y = axisH ? Math.round(centre + d) : t;
@@ -359,12 +372,33 @@ function carveGreatRiver(c: MapBuildCtx): void {
       if (c.blocked.has(y * w + x)) continue;
       const dist = Math.abs(d);
       if (dist <= half) {
-        c.put(x, y, 'water');
+        // 渡口段：河心也是浅滩——船照样能过，陆军能涉水
+        c.put(x, y, shallowHere ? 'shallow' : 'water');
       } else if (dist <= half + 1) {
         c.put(x, y, shallowHere ? 'shallow' : 'water');
       } else {
         // 河岸：水位线以上一格是谷地，形成"河谷"的横截面
         if (c.at(x, y) !== 'water') c.put(x, y, 'valley');
+      }
+    }
+  }
+  /*
+   * 兜底：一段渡口都没抽到时，在中段强制开两格。
+   *
+   * 噪声是随机的，`> 0.72` 在 12×12 这种短河上完全可能一次都不触发。
+   * 没有渡口的大川图等于"两军永远见不着面"——那不是难打，是打不起来。
+   */
+  if (fords === 0) {
+    const centre0 = Math.floor(along / 2);
+    for (let t = centre0; t < Math.min(along, centre0 + 2); t += 1) {
+      const wobble = (wob(t / 5, 0.5) - 0.5) * 3;
+      const centre = mid + wobble;
+      for (let d = -3; d <= 3; d += 1) {
+        const x = axisH ? t : Math.round(centre + d);
+        const y = axisH ? Math.round(centre + d) : t;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        if (c.blocked.has(y * w + x)) continue;
+        if (Math.abs(d) <= half + 1) c.put(x, y, 'shallow');
       }
     }
   }

@@ -6,6 +6,7 @@
 import type { GameState, Unit, City, SkillDef } from '../../types.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview } from '../../skill-hooks.ts';
 import { getExp, getRank, addExp } from '../progression.ts';
+import { boardIdOf } from '../../board.ts';
 
 // ── 数值 ──────────────────────────────────────────
 /** 基础射程（格） */
@@ -95,16 +96,17 @@ registerSkillEffect('sword-sweep', (c) => {
   // 2. 算路径
   const tx = c.target?.x ?? c.self.x + 1;
   const ty = c.target?.y ?? c.self.y;
-  const hitCells = getSwordSweepCells(c.state, c.self, tx, ty);
+  // 路径按施法者那张图算：月球上的剑气不该扫到地球同坐标的人
+  const hitCells = getSwordSweepCells(c.view, c.self, tx, ty);
 
   // 战况烈度：剑气扫过的每一格都记，含空格——这才是"范围"的完整口径。
   // noteHeatCell 默认记到"当前行动方的对手"账上，正好是"对方阵地上的弹坑"。
   for (const cell of hitCells) {
-    c.api.noteHeat(c.state, cell.x, cell.y);
+    c.api.noteHeat(c.state, cell.x, cell.y, boardIdOf(c.self));
   }
 
   // 3. 找受害者
-  const victims = c.state.units.filter(u =>
+  const victims = c.view.units.filter(u =>
     u.owner !== c.self.owner &&
     u.hp > 0 &&
     hitCells.some(cell => cell.x === u.x && cell.y === u.y)
@@ -199,6 +201,6 @@ registerSkillEffect('sword-sweep', (c) => {
 });
 
 registerSkillPreview('sword-sweep', (c) => {
-  const cells = getSwordSweepCells(c.state, c.self, c.target.x, c.target.y);
-  return cells.map(cell => cell.y * c.state.w + cell.x);
+  const cells = getSwordSweepCells(c.view, c.self, c.target.x, c.target.y);
+  return cells.map(cell => cell.y * c.view.w + cell.x);
 });

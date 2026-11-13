@@ -115,12 +115,18 @@ const TERRAIN_VALUE: Record<Terrain, number> = {
   valley: 0.9,
   marsh: 0.45,
   dune: 0.7,
+  regolith: 1,
+  crater: 0.75,
   water: 0.15,
   shallow: 0.5,
   deep: 0.05,
   mountain: 0.1,
   bridge: 1,
   city: 1,
+  // 空间站：甲板当平地，虚空是墙——RL 只在跑地表，给值只为表完整
+  deck: 1,
+  void: 0,
+  wreck: 0.8,
 };
 
 /**

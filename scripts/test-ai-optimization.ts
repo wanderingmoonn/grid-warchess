@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
-import { abilityValue, combatCore, effectiveHp, raidPremium, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
+import { combatCore, effectiveHp, raidPremium, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
 import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from '../src/core/types.ts';
@@ -637,27 +637,8 @@ test('跨代：2 代兵放到 6 代的谱下，输出和生存都会掉',()=>{
   assert.ok(inSix.ehp < own.ehp, `低代兵在 6 代谱下等效血没掉：${inSix.ehp.toFixed(0)} vs ${own.ehp.toFixed(0)}`);
 });
 
-test('掠空：速攻比均势值钱，均势又比龟缩值钱',()=>{
-  const s = arena();
-  // 拿民兵当底子捏一个"只差掠空"的兵，避免依赖某个扩展包的兵种表
-  const base = s.unitTypes['militia']!;
-  const d = {...base, id:'t-overfly', abilities:['fly-over']};
-  const push = abilityValue(d, {tempo:1, visionCoverage:0.4, fog:true});
-  const flat = abilityValue(d, {tempo:0, visionCoverage:0.4, fog:true});
-  const hold = abilityValue(d, {tempo:-1, visionCoverage:0.4, fog:true});
-  assert.ok(push > flat && flat > hold, `掠空没有随局面倾斜：速攻 ${push} / 均势 ${flat} / 龟缩 ${hold}`);
-  assert.equal(flat, 0.18, `均势下掠空应值 0.18，实际 ${flat}`);
-  assert.ok(push - flat >= 0.05, `速攻只比均势多 ${(push-flat).toFixed(3)}，倾斜幅度不够看`);
-});
-
-test('掠空必须比飞行贵：它是飞行的超集',()=>{
-  const s = arena();
-  const base = s.unitTypes['militia']!;
-  const flying = {...base, id:'t-fly', flight:true};
-  const overfly = {...base, id:'t-overfly', abilities:['fly-over']};
-  const a = abilityValue(flying, NEUTRAL_CONTEXT);
-  const b = abilityValue(overfly, NEUTRAL_CONTEXT);
-  assert.ok(b > a, `掠空 ${b} 不比飞行 ${a} 贵——加强版反而更便宜`);
-});
+// 「掠空」（fly-over）2026-11-07 整个删掉了，所以它那两条定价用例也一起删：
+// 「均势下应值 0.18」「必须比飞行贵」——两条都在量一个已经不存在的词。
+// 飞行本身的价格（FLIGHT_VALUE = 0.15）由 combatCore 的用例继续盯着。
 
 console.log(`${passed} AI optimization tests passed`);

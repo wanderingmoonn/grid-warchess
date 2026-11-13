@@ -271,13 +271,19 @@ const LAY_MINES: AbilityDef = {
  *
  * 注意它**不是无敌**：贴脸就现形，一旦被发现，护甲 9、血量 100 的船
  * 挨两轮齐射就没了。所以潜艇的正确用法是"打完就换位置"，不是站桩。
+ *
+ * 2026-11-09：`hidden` 从"永久"改成"出手即现形"（和潜行同一把尺子）。
+ * 原先是 `() => true`，于是射程 3~4 的潜艇可以一直躲在水下白打，
+ * 连"打完换位置"这个唯一代价都省了。现在开火那一发仍然匿名、仍然不挨反击，
+ * 但开完就露出来，对面整个回合都能还手——潜航这才是一条**偷袭**能力。
  */
 const SUBMERGE: AbilityDef = {
   id: 'nv-submerge',
   name: '潜航',
-  summary: '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。',
+  summary:
+    '迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新潜下去。',
   group: 'move',
-  hooks: { hidden: () => true, noCounter: true },
+  hooks: { hidden: (c) => !c.self.acted, noCounter: true },
 };
 
 /**
@@ -911,7 +917,9 @@ const FLEET_UNITS: UnitTypeDef[] = [
     move: 4,
     atk: 22,
     armor: 12,
-    maxHp: 190,
+    // 2026-11-08：三艘航母统一 ×1.15（190 → 219）。改的时候三艘要一起动，
+    // 单改一艘等于把「轻母是数量、舰母是质量」这条分工掰弯。
+    maxHp: 219,
     range: 3,
     vision: 9,
     domain: 'water',
@@ -985,7 +993,7 @@ const FLEET_UNITS: UnitTypeDef[] = [
     move: 5,
     atk: 20,
     armor: 10,
-    maxHp: 130,
+    maxHp: 150,
     range: 3,
     vision: 8,
     domain: 'water',
@@ -1072,9 +1080,9 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     move: 3,
     atk: 26,
     armor: 15,
-    maxHp: 260,
-    range: 3,
-    vision: 9,
+    maxHp: 299,
+    range: 4,
+    vision: 10,
     domain: 'water',
     // 2×2：占四格、四格都挡路、只在四格里挨一份伤害（见 rules 的 distBetweenUnits）。
     // 这是引擎里"大型单位"的唯一表达方式，也是城市与兵营在用的那套。
@@ -1110,8 +1118,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 85,
     armor: 17,
     maxHp: 175,
-    range: 6,
-    vision: 6,
+    range: 7,
+    vision: 7,
     domain: 'water',
     abilities: ['armor-pierce', 'nv-shore-bombard'],
     // 基洛夫级那种核动力大巡洋舰：**它接的是战列舰的位置，但不是战列舰**。
@@ -1130,8 +1138,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 72,
     armor: 15,
     maxHp: 150,
-    range: 6,
-    vision: 7,
+    range: 7,
+    vision: 8,
     domain: 'water',
     abilities: ['nv-aa-cover', 'armor-pierce'],
     // 舰队之伞：视野 7 比超巡好，区域防空对空中层多打 12 点。
@@ -1149,8 +1157,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 92,
     armor: 9,
     maxHp: 100,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
     domain: 'water',
     abilities: ['nv-submerge'],
     // 水下刺客：迷雾局里贴脸才现形，先手不被反击。
@@ -1169,8 +1177,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 74,
     armor: 7,
     maxHp: 72,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     domain: 'water',
     abilities: ['nv-submerge'],
     /*
@@ -1196,8 +1204,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 22,
     armor: 12,
     maxHp: 165,
-    range: 2,
-    vision: 6,
+    range: 3,
+    vision: 7,
     domain: 'water',
     // 两种装法并存：舱里的陆战队，甲板上的直升机。
     carry: { hold: { max: 4 }, deck: { max: 2, launchRange: 1 } },
@@ -1219,8 +1227,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 58,
     armor: 5,
     maxHp: 58,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
     domain: 'water',
     // 空潜快里的"快"：400 金买不到的东西它都有——射程 4、移 7、58 攻。
     // 代价是甲 5、血 58：挨一发战列舰的溅射就没了。
@@ -1237,8 +1245,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 56,
     armor: 10,
     maxHp: 100,
-    range: 5,
-    vision: 5,
+    range: 6,
+    vision: 6,
     domain: 'water',
     abilities: ['armor-pierce'],
     /*
@@ -1263,8 +1271,8 @@ const MODERN_FLEET_UNITS: UnitTypeDef[] = [
     atk: 26,
     armor: 2,
     maxHp: 26,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     domain: 'water',
     /*
      * 无人水面艇（USV）：不载人，所以敢冲、敢死、敢贴近。
@@ -1395,9 +1403,9 @@ function portRepair(state: GameState, player: PlayerId): void {
  * 甲板整备：把"轮到你"这个时机转告空军扩展（没接入就什么都不做）。
  *
  * 两个海军包都挂了这个钩子，所以同一次回合开始会被叫两遍。空军那边的
- * `onDeckTurnStart` 是"先收、再修、后放"的完整一套——跑两遍的后果不是
- * 放两架，而是**刚放出去的那架立刻被收回来再修一次**，玩家看到的是
- * "飞机原地没动、血却多回了 8 点"。所以这里用和 `portRepair` 同一个办法：
+ * `onDeckTurnStart` 现在只剩整备（收和放都已改成玩家动作），所以跑两遍
+ * 不再会"刚放出去又被收回来"，但**甲板上的飞机会一回合回 16 点血**——
+ * 照样是错的。所以这里用和 `portRepair` 同一个办法：
  * 在船身上记一个本回合的哨兵，第二遍直接跳过。
  */
 function deckUpkeep(state: GameState, player: PlayerId): void {
@@ -1418,7 +1426,7 @@ function navalPanelLines(state: GameState, unit: Unit): string[] {
   // 大型单位的体量要写出来：玩家点了半天发现"怎么放不下"，
   // 得有一句话告诉他这不是 bug，是 2×2 的要求。
   if (state.unitTypes[unit.type]?.footprint === 2) {
-    lines.push('占地 2×2：四格一起挡路，起飞/停泊都要 2×2 的开阔水面');
+    lines.push('占地 2×2');
   }
   const deck = deckLine(state.unitTypes[unit.type], unit);
   if (deck) lines.push(deck);
@@ -1479,9 +1487,36 @@ const deepenWater: NonNullable<Expansion['afterTerrain']> = (g, w, h) => {
   }
   // 离岸 >=2 格才算外海：沿岸那一圈留成水域，
   // 这样"贴着岸能不能下水/靠港"的老判定一条都不用改。
+  //
+  // 2026-11-13：再加一道**腐蚀**。原来只按"离岸 2 格"一刀切，于是两格宽的小湾、
+  // 一格宽的水道拐角都会变成一颗颗孤零零的深水格——玩家看到的是"水面上零星几个
+  // 深色方块"，读起来像渲染坏了，不像"这里更深"（用户原话："零星分布还是会有违和感"）。
+  // 现在只保留"至少两个正交邻居也是外海"的格子，反复几遍直到不再变化——
+  // 孤立格和死胡同会被抹平，成片的外海原样留下。
+  const deep = new Uint8Array(g.length);
   for (let i = 0; i < g.length; i++) {
-    if (g[i] !== 'water') continue;
-    if (far[i]! >= 2) g[i] = 'deep';
+    if (g[i] === 'water' && far[i]! >= 2) deep[i] = 1;
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const kill: number[] = [];
+    for (let i = 0; i < g.length; i++) {
+      if (!deep[i]) continue;
+      const x = i % w;
+      const y = (i / w) | 0;
+      let n = 0;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        if (deep[ny * w + nx]) n += 1;
+      }
+      if (n < 2) kill.push(i);
+    }
+    if (kill.length === 0) break;
+    for (const i of kill) deep[i] = 0;
+  }
+  for (let i = 0; i < g.length; i++) {
+    if (deep[i]) g[i] = 'deep';
   }
 };
 
@@ -1689,6 +1724,8 @@ export const NAVAL: Expansion = {
   name: '海军',
   blurb: '从桨帆船到航母，加水雷与海权规则。',
   scale: 'large',
+  // 第六代那几条船挂在「信息化」上：不开它，科技线到第五代为止
+  recommends: ['pack-contemporary'],
   summary:
     '第二到第六时代的水上力量：桨帆船、德罗蒙、卡拉克、盖伦、风帆巡航舰、护卫舰、鱼雷艇、' +
     '布雷舰、扫雷舰、浅水重炮舰、潜艇、运输舰、铁甲舰、装甲巡洋舰、战列巡洋舰、战列舰、' +

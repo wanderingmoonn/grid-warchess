@@ -79,6 +79,10 @@ export type Terrain =
   | 'marsh'
   /** 沙丘：起伏的沙脊，比平原高一档，视野好、没掩护 */
   | 'dune'
+  /** 月壤：月球表面的细碎尘土，走得动、没有掩护 */
+  | 'regolith'
+  /** 环形山：坑缘的碎石坡，挡一点、走得慢 */
+  | 'crater'
   /**
    * 浅流：漫过脚踝的水。陆军能涉水过去（一步顶两格），小船也能滑过去。
    *
@@ -96,7 +100,34 @@ export type Terrain =
    * 只有开了海军扩展的对局才会出现 deep 格（扩展的 afterTerrain 把
    * 离岸 2 格以上的 water 改写成 deep），老存档里一格都不会有。
    */
-  | 'deep';
+  | 'deep'
+  /**
+   * 虚空：空间站里**还没铺出来**的格子。
+   *
+   * 不可通行、不可建造、没有掩护——它不是"一种地形"，是"这里还没有东西"。
+   * 只有空间站棋盘会用；地表地图永远不会生成它。
+   */
+  | 'void'
+  /**
+   * 甲板：空间站里已经铺好的地板。
+   *
+   * 为什么不复用 `plain`：`buildOn: ['plain']` 的建筑（发射井）会在站内被
+   * 判成"可以盖"——一个建在空间站上的火箭发射井，听着就像 bug。
+   * 单独一种地形让这两件事在数据上就不可能混淆。
+   */
+  | 'deck'
+  /**
+   * 破损舱段：甲板被打穿之后的残骸。
+   *
+   * 和 `void` 的区别是它**曾经是甲板**——结构还在，所以：
+   *   · 人能站（登船部队就是从破口进来的），走一格顶两格（碎钢架硌脚）；
+   *   · 能从它旁边继续铺甲板（结构还连着），所以炸穿一格不会把站切成两半；
+   *   · 但**站不住建筑**——地板都没了，舱段往哪儿装。
+   *
+   * 修复走核心舱的「扩建甲板」：花一样的钱把它重新铺回甲板。
+   * 只有空间站棋盘会出现它。
+   */
+  | 'wreck';
 /*
  * 2026-10-30 删掉的两个地形：`lava`（熔岩）与 `volcano`（火山）。
  *
@@ -562,6 +593,19 @@ export interface UnitTypeDef {
    * 所以"换个更强的工兵"在棋盘上是有回报的，而不是只换个图标。
    */
   buildPower?: number;
+  /* ── 「装甲时代」的素体字段（全可选，见 core/armor.ts） ─────────────── */
+  /** 这是一台装甲素体（模块只能装在它身上） */
+  armorFrame?: boolean;
+  /** 插槽容量，按类型计数；没写的类型 = 0 个 */
+  slots?: { main?: number; sub?: number; plate?: number; system?: number; device?: number };
+  /** 素体自身的基础耗能（不含模块） */
+  draw?: number;
+  /** 底盘：只影响装配白名单与显示；`hover` 的素体另外带 layer:'air' */
+  chassis?: 'tracked' | 'walker' | 'hover' | 'quad';
+  /** 素体的「撞击」：一件武器都没装时的唯一攻击手段 */
+  ramAtk?: number;
+  /** 供电：这座建筑给己方装甲提供多少点额度（派生指标，不存库存） */
+  armorPower?: number;
   /**
    * 占地边长（格）。缺省 1 = 一格。
    *
@@ -722,6 +766,18 @@ export interface UnitTypeDef {
    */
   campOnly?: boolean;
   /**
+   * 老存档兼容用的"退役兵种"：定义还在，但**任何人都造不出来**。
+   *
+   * 2026-11-11 整合建造单位时加的。原来每个时代有两个建造单位（本体线一个、
+   * 时代军备包一个），功能重叠、军备线的施工力还统一是默认的 8。删掉之后
+   * 老存档里那些单位会变成"未知类型"（名字都没有），所以定义留着，
+   * 只把入口关掉：
+   *   · 城市产兵表、选卡池、手册一律不列；
+   *   · 已经站在盘上的照常显示、照常移动和攻击；
+   *   · `builds` 清空——它已经不代表任何建造路线了。
+   */
+  legacy?: boolean;
+  /**
    * 法器：修士炼出来的器物，不是活人。
    *
    * 它身上有两条**所有法器共有**的规则（见 cultivation/artifacts.ts），
@@ -807,6 +863,13 @@ export interface City {
   /** 左上角格坐标 */
   x: number;
   y: number;
+  /**
+   * 这座城在哪张图上；**缺省是地球**。
+   *
+   * 第一个版本里其它图（月球、空间站）不放城，所以它实际上总是 undefined；
+   * 留着是因为"占城"这个动作迟早会跨图，先让字段在，后面只改判定不改成结构。
+   */
+  board?: BoardId;
   /** 边长，目前固定 2 */
   size: number;
   owner: PlayerId;
@@ -839,6 +902,14 @@ export interface Unit {
   owner: PlayerId;
   x: number;
   y: number;
+  /**
+   * 这个单位站在哪张图上；**缺省是地球**。
+   *
+   * 为什么用可选字段而不是给每个单位都写上：旧存档、旧回放、以及绝大多数
+   * 只在地球上打的代码路径都不需要知道"图"这件事。默认值收在
+   * `core/board.ts` 的 `boardIdOf()` 里，判空只写一处。
+   */
+  board?: BoardId;
   hp: number;
   /** 累计击杀数，给"老兵"这类扩展规则用；不开扩展就是纯装饰 */
   kills: number;
@@ -851,6 +922,42 @@ export interface Unit {
    * 所以标记必须落在实例上。
    */
   summoned?: boolean;
+  /* ── 「装甲时代」的单位字段（全可选，见 core/armor.ts） ───────────────── */
+  /** 已装模块 id，**按装配顺序**（断电时后装的先停，武器也按这个顺序显示） */
+  modules?: string[];
+  /** 设备剩余充能：key = 模块 id */
+  charges?: Record<string, number>;
+  /**
+   * 每件武器各自的账：key = 模块 id。
+   *
+   * 为什么不是"一个每回合清空的数组"：`shots` 一回合能打几次、`reload` 要冷却
+   * 几回合，两件事必须分开记，否则"两回合 1 发"的重炮会在换回合时被当成满了。
+   */
+  weaponUse?: Record<string, { turn: number; shots: number; readyTurn?: number }>;
+  /**
+   * 额外生命：模块给的一层"先掉的血"。
+   *
+   * 它**不是血量上限**：上限永远是模块的额度（`extraHpCap`），这个字段是当前值，
+   * 卸下模块要跟着截断。设计上不做任何回血，只有「整备」能补。
+   */
+  extraHp?: number;
+  /**
+   * 别人给的、不属于任何模块的额外生命额度（整备臂「+40」这类）。
+   *
+   * 为什么单开一个数，而不是往 `modules` 里塞一个假模块：
+   * `extraHpCap` 是按**自己装的模块**算上限的，别人的模块不该记在我头上
+   * （否则我卸不掉它、面板还会显示一件我没装的装备）。
+   *
+   * 它是**一次性授予**：给了就涨上限、涨当前值，打光不会自己回来。
+   */
+  extraHpBonus?: number;
+  /**
+   * 「超载协议」的停机回合：等于当前回合号时，这台装甲**整台停机**（所有模块离线）。
+   *
+   * 存在实例上而不是按"装了超载就一定停"现算：停机是**周期性**的，
+   * 要记走到第几个自己的回合了；纯函数算不出来（没有起点）。
+   */
+  overheatTurn?: number;
   /** 本回合移动力已耗尽 */
   moved: boolean;
   /** 本回合已攻击 */
@@ -881,12 +988,15 @@ export interface Unit {
    */
   buildLeft?: number;
   /**
-   * 本回合**手动**开过火（只有能自动开火的建筑用得上）。
+   * 上一次"反应射击"是在第几回合触发的。
    *
-   * 为什么不复用 acted：新盖好的建筑本来就是 acted=true（当回合不能行动），
-   * 拿它当判据，"刚建好的塔"就永远打不出第一炮。两件事得分开记。
+   * 一个单位一回合只会踏进射程一次（走完之后 `moved` 就为真），所以按回合去重
+   * 就够了；`attacksLeft` 才是"还剩几发"，两件事分开记。
+   *
+   * 为什么不用 `acted`：刚建好、刚下船的单位都是 `acted = true`，
+   * 拿它当判据，"刚落地就站到塔跟前"的兵会免疫第一轮火力。
    */
-  manualFired?: boolean;
+  reactedTurn?: number;
   /**
    * 货舱：被这条船载着的单位。
    *
@@ -1008,6 +1118,19 @@ export interface Unit {
    * 连开三次——那不是"攒着用"，那是"一回合无敌三回合"。
    */
   skillTurn?: number;
+
+  /**
+   * 这个单位是在哪个回合**上场**的（全局 `s.turn`）。
+   *
+   * 为什么需要它：`makeUnit` 会给新单位写上 `moved: true, acted: true`，
+   * 于是"这一回合不能走、不能打"是天然成立的；但**英雄技能不查这两个字段**，
+   * 结果刚招募出来的英雄当回合就能放技能——花一次钱买到"上场 + 一记大招"。
+   *
+   * 所以单独记一笔出生回合，给技能那条路一个和"走/打"对齐的闸门。
+   * 老存档里没有这个字段（undefined），条件 `bornTurn === s.turn` 自然不成立，
+   * 于是老对局不会因为读档而多出一条限制。
+   */
+  bornTurn?: number;
 
   /**
    * 「岁数」：这个单位熬过了多少个**自己的**回合开始。
@@ -1278,7 +1401,35 @@ export interface MatchConfig {
    */
   secondGoldBonus?: number;
   /**
-   * 先手（A）第一回合不结算收入，默认 false。
+   * 这一局用哪条时代演进路线（见 `core/era-routes.ts`）。
+   *
+   * 缺省 `'linear'`：就是"每级 +1"的老科技线，所有老存档读回来都是它。
+   * 换线只改"从现在起往哪升"，不会改写已经升过的城——城市的 `era` 是既成事实。
+   */
+  eraRoute?: string;
+  /**
+   * 玩家**选的**先手档位：'A'（按席位）/ 'B'（两人局才有）/ 'random'。
+   *
+   * 这只是面板的记忆，规则不读它——真正生效的是 `firstSeat`。
+   * 分两个字段是因为"随机"抽完之后必须落成具体席位（复盘要能逐帧还原），
+   * 而落定的席位又反过来会被面板误当成"上次手动选的那一方"：
+   * 四家局抽到 B 和两人局手选 B 是两件事，只用一个字段就分不开。
+   */
+  firstSide?: 'A' | 'B' | 'random';
+  /**
+   * 这一局**实际**谁先动（抽完之后的结果）。缺省 'A'。
+   *
+   * 它同时决定三件事，别只改其中一件：
+   *   · 谁先行动（`state.current`）；
+   *   · 选卡 BP 谁先禁/先选（`createDraft` 按先手方轮转席位）；
+   *   · 先后手补偿发给**除先手之外**的人（原来写死"发给 B"）。
+   *
+   * 两人局可以手动选 A/B；三四人局只能选"随机"——多人局的席位顺序还牵着
+   * 出生点和城的排布，让玩家任选先手等于让一张图的公平性取决于一个下拉框。
+   */
+  firstSeat?: PlayerId;
+  /**
+   * 先手第一回合不结算收入，默认 false。
    *
    * 现在的规则是"开局先手先领一次收入再行动"，等于先手白拿一回合的钱
    * （青铜约 91 金，够买三个民兵）。把它关掉是一种结构性的先后手配平：
@@ -1339,6 +1490,8 @@ export interface KnownUnit {
   type: string;
   x: number;
   y: number;
+  /** 在哪张图上看到的；缺省地球（旧存档没有这个字段） */
+  board?: BoardId;
   /** 在哪一行动序号被看到的 */
   seenAt: number;
 }
@@ -1370,6 +1523,14 @@ export interface PlayerMemory {
    * 用对象而不是数组：格索引是稀疏的，1024 格的图上打十回合可能只走过几十格。
    */
   tiles?: Record<number, Terrain>;
+  /**
+   * 每张图各自的"走过的地形"。`tiles` 是它在地球那一份的历史别名。
+   *
+   * 为什么不像 `visible` 那样直接替换：`tiles` 已经写进老存档，
+   * 而且浓雾扩展目前只作用于地球。新代码读 `tilesByBoard`，老存档读 `tiles`
+   * 再回填——两边都能活，等真有第二张图需要浓雾时再统一。
+   */
+  tilesByBoard?: Record<BoardId, Record<number, Terrain>>;
   /** 见过的城市（含敌城），浓雾下用来还原"记忆里的城" */
   cities?: KnownCity[];
 }
@@ -1426,6 +1587,22 @@ export interface DraftState {
   order: PlayerId[];
   /** 已经完成了几步选人 */
   step: number;
+  /**
+   * 现在轮到谁禁用（轮流禁用）。
+   *
+   * 2026-11-07 之前是**双方同时盲禁**：两边各交各的，交完一起揭晓。
+   * 现在改成轮流：一方把自己那几个禁位一次禁完，才轮到另一方。
+   *
+   * 两个直接后果，都不是副作用而是这条规则本身：
+   *   · **后禁的一方看得到先禁的成果**——他必须看到，否则会去禁一个已经被
+   *     禁掉的兵；这份信息优势是"后禁"的补偿，所以先禁方给了**后拿第一签**
+   *     的那一方（见 createDraft）。
+   *   · 单方连续禁多个时不再有"和其它禁用撞车"的问题，`bans[x]` 里不会出现
+   *     别人禁过的 id（会被 DRAFT_BAN 挡掉）。
+   *
+   * 可缺省：老存档里没有这个字段，读的时候按"谁还没禁满就是谁"兜底。
+   */
+  banTurn?: PlayerId;
   /**
    * 选卡进度号：每做一步 +1，从 1 开始。
    *
@@ -1486,6 +1663,216 @@ export interface OrderDirective {
   target?: { seat: PlayerId } | { dx: number; dy: number };
 }
 
+/**
+ * 一张图的身份。地球固定叫 `earth`，其余由扩展在运行时创建（月球、空间站……）。
+ *
+ * 用字符串而不是数字：存档、日志、联机包里都能直接读懂，加图不用维护序号表。
+ */
+export type BoardId = string;
+
+/** 这一张图是什么——地图列表的图标、以及"要不要跑气候/灵气"都看它 */
+export type BoardKind = 'planet' | 'station' | 'orbit';
+
+/**
+ * 一张棋盘。
+ *
+ * ── 存储上的一个约定 ─────────────────────────────────────
+ *
+ * **地球不进 `boards`**：它的格仍然在 `GameState.w / h / tiles` 里。
+ *
+ * 这不是偷懒，是为了躲开 `structuredClone`：如果 `boards.earth.tiles` 和
+ * `state.tiles` 指向同一个数组，克隆之后会变成两份独立的副本，
+ * 之后一边改了另一边不知道——`playerView` 每次渲染都要克隆，这个坑会立刻炸。
+ *
+ * 所以规则是：地球用 `w/h/tiles`，**别的图**用 `boards`。
+ * 要按图取格子，一律走 `core/board.ts` 的 `boardOf(s, id)`：
+ * 它认这个约定，调用方不需要知道地球是特例。
+ */
+/**
+ * 一张图的**环境**：进入这张图就生效，和站在哪一格无关。
+ *
+ * 和地形是两回事：地形按格（这格是森林、那格是环形山），
+ * 环境按图（整张月球都缺氧）。所以它挂在 `Board` 上，不进地形表。
+ *
+ * 以后的"辐射区""毒雾"也是同一个字段，不用再加一套。
+ */
+export interface HazardSpec {
+  id: string;
+  name: string;
+  /** 护甲除以几（向下取整）。**无保底**：0 就是 0 */
+  armorDiv?: number;
+  /** 移动力乘以几 */
+  moveMul?: number;
+  /** 乘完之后的保底（通常 1） */
+  moveMin?: number;
+}
+
+export interface Board {
+  id: BoardId;
+  kind: BoardKind;
+  /** 这张图的环境（缺省 = 没有） */
+  hazard?: HazardSpec;
+  /** 地图列表上显示的名字（"月球"、"前哨站"）；缺省用 id */
+  name?: string;
+  w: number;
+  h: number;
+  tiles: Tile[];
+}
+
+/**
+ * 星图上的一个点。
+ *
+ * ── 为什么"节点"和"棋盘"不是一回事 ───────────────────────
+ *
+ * 地球和月球既是节点、又有棋盘；**轨道槽位只有位置、没有格子**（核心舱还没到，
+ * 那里什么都不是）；空间站有格子，但它"停"在某个槽位上——站内坐标和星图位置
+ * 是两套坐标，混成一张表就再也表达不了"站从 A 槽挪到 B 槽、站内的人没动"。
+ *
+ * 所以 `board` 是可选的：有棋盘的节点才填。
+ */
+export type StarNodeId = string;
+
+export interface StarNode {
+  id: StarNodeId;
+  kind: 'planet' | 'moon' | 'orbit';
+  /** 有棋盘的节点才有：地球 'earth'、月球 'moon'、空间站生成时给的 id */
+  board?: BoardId;
+  name: string;
+}
+
+/**
+ * 一条航道：两节点之间的**连接**。
+ *
+ * 它不是一个"可以被守住的路口"——太空里可以向任何方向飞，
+ * 所谓航道只是"这两个星球之间有路"的抽象。所以：
+ *   · **一条边 = 相连**，不存在平行航道，"走哪条"不是一个问题；
+ *   · **不能封锁**：没有关卡、没有巡逻，另一头也挡不住你来；
+ *   · 只有 `turns` 是可调的（航程），它是**看得见的窗口**：
+ *     对手读得到"火箭还有 N 回合到"，才谈得上在落点等它。
+ *
+ * 如果哪天要做"拦截"，那是"打在天上的单位"，不是"封一条路"——
+ * 那时加的是战斗规则，不是这条边上的一个开关。
+ */
+export interface ReconMark {
+  owner: PlayerId;
+  board: BoardId;
+  /** 谁观测的（同一座模块再观测会覆盖） */
+  by: string;
+  /** 这张图的格号 */
+  cells: number[];
+  turn: number;
+}
+
+export interface StarLane {
+  id: string;
+  a: StarNodeId;
+  b: StarNodeId;
+  /**
+   * 航道的**距离**（抽象单位，1 点 = 速度 1 时飞 1 回合）。
+   *
+   * 实际回合数是 `ceil(distance / 速度)`，速度由发射方的推进器决定
+   * （见 `space/station.ts` 的 `thrusterSpeed`）。
+   * 所以不要把 `distance` 当"要几回合"直接显示——那是 `laneTurnsFor` 的事。
+   */
+  distance?: number;
+  /**
+   * 老存档的"航程"字段（11-12 之前只有这个）。
+   *
+   * 新局不再写它，读的时候用 `laneDistance()` 兜底：`distance ?? turns`。
+   * 留着不改名，是为了让老存档读进来仍然能飞。
+   */
+  turns?: number;
+}
+
+/** 一座空间站：一张棋盘 + 它现在停在哪个节点上 + 是谁的 */
+export interface StarStation {
+  board: BoardId;
+  at: StarNodeId;
+  owner: PlayerId;
+  /** 展开它的核心舱型号（决定尺寸的那一个） */
+  core: string;
+  /**
+   * 正在航向另一个节点。
+   *
+   * 站内的坐标一点不动（棋盘还是那张），变的只是它挂在星图的哪个节点——
+   * 这就是"改字段，不真挪坐标"。
+   * `left` 归零时把 `at` 改成 `to`，清掉这个字段。
+   */
+  travel?: {
+    lane: string;
+    from: StarNodeId;
+    to: StarNodeId;
+    /** 还要几个自己的回合到 */
+    left: number;
+    /**
+     * 出发时算出来的总航程。
+     *
+     * 星图上要按"走完全程的百分之几"画它，只有 `left` 是画不出来的：
+     * 不知道起点在哪，就不知道它走了多远。老存档没有这个字段，按 `left` 兜底
+     * （进度 0，贴在出发端）。
+     */
+    total?: number;
+  };
+  /**
+   * 废墟：核心舱被打掉之后，这座站进入"还能抢修"的状态。
+   *
+   * 它**不是**立刻消失：3 个回合（按原主的回合算）之内，只要有人站在站里
+   * 付一笔维护费，就能把它连同所有舱段一起接管；到期还没人管，整张棋盘
+   * 连同上面的一切（舱段、人）一起删掉。
+   *
+   * 为什么留一段窗口而不是当场删：太空里"打掉核心"应该是**抢船**，不是
+   * 点一下就没——打的人想留着自己用，守的人想抢修回来，窗口就是这两拨人的
+   * 争夺时间。也正因为有窗口，"拆除自己的站"才不需要另写一套流程。
+   */
+  ruin?: {
+    /** 还剩几个"by 的回合" */
+    left: number;
+    /** 按谁的回合倒计时（原主；自己拆也是原主） */
+    by: PlayerId;
+    /** 核心舱原来的位置：接管时新核心就落在这里 */
+    x: number;
+    y: number;
+  };
+}
+
+export interface Starmap {
+  nodes: StarNode[];
+  lanes: StarLane[];
+  stations: StarStation[];
+  /** 生成空间站 board id 用的序号（`station-1`、`station-2`……） */
+  seq: number;
+}
+
+/**
+ * 一段正在飞的航程。
+ *
+ * `cargo` 里的单位**已经从 `units` 里摘掉了**：留在棋盘上会被回合重置、
+ * 被迷雾裁、被战斗误伤，还会在两张图上同时出现。货舱那套语义正好能复用。
+ */
+export interface Transit {
+  id: string;
+  owner: PlayerId;
+  lane: string;
+  from: StarNodeId;
+  to: StarNodeId;
+  /**
+   * 到哪儿去：
+   *   · `surface`（缺省）= 落到某张图上，按那张图的落点放人；
+   *   · `orbit` = 到星球**轨道**，那里可能还没有棋盘——核心舱到了才生成。
+   * 老存档没有这个字段，读出来是 surface，行为不变。
+   */
+  kind?: 'surface' | 'orbit';
+  /**
+   * 目的地棋盘。有值 = 落到这张图（**自己的空间站**），没有 = 落到节点自己的棋盘。
+   *
+   * 站是已经存在的棋盘，所以它走的是 surface 那条路，只是"哪张图"换了人指定。
+   */
+  board?: BoardId;
+  /** 还要几个回合到（0 = 这一回合开始时到达） */
+  left: number;
+  cargo: Unit[];
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1504,6 +1891,36 @@ export interface GameState {
   w: number;
   h: number;
   tiles: Tile[];
+  /**
+   * 地球**以外**的棋盘（月球、空间站、小行星……），按 id 索引。
+   *
+   * 地球不放在这里——原因见 `Board` 的注释（克隆会让别名分叉）。
+   * 旧存档没有这个字段，读出来是 undefined，语义正好等于"只有地球一张图"。
+   * 取图一律用 `core/board.ts` 的 `boardOf()`，不要自己判断。
+   */
+  boards?: Record<BoardId, Board>;
+  /**
+   * 侦察情报（遥感观测这类）。可选：只有太空战争会写。
+   *
+   * 和 `spotlight`（让别人看见我）方向相反——这里是"我看见别人"。
+   */
+  recon?: ReconMark[];
+  /**
+   * 星图：图与图之间的关系（哪些节点、怎么连通、空间站停在哪）。
+   *
+   * 只有太空包会写它；没开那类扩展的对局是 `undefined`，语义正好等于
+   * "只有一张地球、没有航道"——所以旧存档、旧回放都不用兼容层。
+   * 取节点/航道一律走 `core/space/starmap.ts`，别自己遍历。
+   */
+  starmap?: Starmap;
+  /**
+   * 在途投送：点火之后、还没落地的单位。
+   *
+   * 这些单位**不在 `units` 里**（原因见 `Transit` 的注释），所以：
+   * 回合重置不会碰它们、迷雾不会裁它们、攻击也打不到它们。
+   * 旧存档是 `undefined`，等于"天上没人"。
+   */
+  transit?: Transit[];
   cities: City[];
   units: Unit[];
   players: Record<PlayerId, PlayerState>;
@@ -1667,6 +2084,19 @@ export interface GameState {
    */
   fallen?: FallenRecord[];
   /**
+   * 每方**按兵种**累计的击杀数：`killTally[击杀方][击杀者的兵种 id] = 人头数`。
+   *
+   * 为什么不数 `Unit.kills`：
+   *   · 那个字段跟着单位一起消失——一个杀了五个人、最后倒在城下的老兵，
+   *     它的人头数在战报卡上会凭空归零，而"最猛的那个兵"恰恰常常是死人；
+   *   · 它以前只有「老兵不死」扩展在写（那扩展拿它加攻击力），
+   *     于是没开那个包的对局里，所有兵种的击杀数都是 0——战报卡的 MVP 永远是空的。
+   *
+   * 现在由规则层在 `fireKilled` 里记（那里是唯一知道"谁杀了谁"的地方），
+   * 扩展只读不写。旧存档没有这个字段，读出来是 undefined，语义等于"还没统计"。
+   */
+  killTally?: Partial<Record<PlayerId, Record<string, number>>>;
+  /**
    * 留在格子上的东西（水雷、地雷、火场……）。见 `Mark` 与 core/marks.ts。
    *
    * 旧存档没有这个字段，读出来是 undefined，语义正好等于"棋盘上什么都没有"。
@@ -1723,9 +2153,17 @@ export interface FallenRecord {
 }
 
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */
-export type Action =
+type ActionBase =
   | { type: 'MOVE'; unitId: string; x: number; y: number }
-  | { type: 'ATTACK'; unitId: string; targetId: string; x?: number; y?: number }
+  | {
+      type: 'ATTACK';
+      unitId: string;
+      targetId: string;
+      x?: number;
+      y?: number;
+      /** 装甲：用哪件武器开火（不填就自动挑第一件能打的，再退到撞击） */
+      weapon?: string;
+    }
   | { type: 'SIEGE'; unitId: string; cityId: string; x?: number; y?: number }
   /**
    * 产兵。source 是城市（cityId）或军营（unitId），两者选其一。
@@ -1748,6 +2186,24 @@ export type Action =
     }
   /** 由建造单位在野外盖建筑：谁盖、盖什么、盖在哪 */
   | { type: 'BUILD'; unitId: string; unitType: string; x: number; y: number }
+  /** 装甲装配：走到装配坞旁边，花一回合把模块装上（见 core/armor.ts） */
+  | { type: 'MOUNT'; unitId: string; moduleId: string }
+  /** 装甲拆卸：不花回合，退一半金币 */
+  | { type: 'UNMOUNT'; unitId: string; moduleId: string }
+  /**
+   * 用一件设备（装备在 `device` 槽里的主动道具）。
+   *
+   * 目标语义按模块自己声明：要选点的传 `x`/`y`（弹射钩索的落点）或
+   * `targetId`（整备臂的友军），自动型的两个都不传。
+   * 用设备会吃掉本回合的"非移动动作"（`acted`），所以和开火互斥。
+   */
+  | { type: 'USE_DEVICE'; unitId: string; deviceId: string; x?: number; y?: number; targetId?: string }
+  /** 装甲整备：贴着装配坞补充能与额外生命，按缺口付金，占掉这座坞本回合的名额 */
+  | { type: 'RECHARGE'; unitId: string }
+  /** 航母：把甲板上第一架飞机放飞出去 */
+  | { type: 'LAUNCH'; unitId: string }
+  /** 航母：把贴身的这架飞机收进甲板（玩家手动，不再自动回收） */
+  | { type: 'RECOVER'; unitId: string; planeId: string }
   /** 上船：相邻的陆军走进渡船的货舱 */
   | { type: 'LOAD'; unitId: string; cargoId: string }
   /** 下船：把货舱里的单位放到相邻的空地上 */
@@ -1835,6 +2291,18 @@ export type Action =
    */
   | { type: 'PLAN_END' }
   | { type: 'END_TURN' };
+
+/**
+ * 一个动作 + 它发生在哪张图上。
+ *
+ * `board` 缺省是地球：旧存档、旧回放、以及所有单图玩法都不写这个字段。
+ * 规则层在派发前必须校验"动作指向的单位/坐标真的在这张图上"——
+ * 否则一张 7×7 空间站的坐标会被当成地球的 (3,4)，静默执行到完全无关的格子上。
+ */
+export type Action = ActionBase & {
+  /** 这张图之外的图由扩展在运行时创建；缺省地球 */
+  board?: BoardId;
+};
 
 /** 产兵的源头：城市，或者产兵建筑（军营 / 船坞 / 炼器炉……） */
 export type ProduceSource =

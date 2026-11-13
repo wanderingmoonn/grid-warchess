@@ -132,6 +132,16 @@ export const CONFIG = {
     marsh: 0,
     // 沙丘：沙脊上目标明显
     dune: 1,
+    // 月壤：开阔、没有掩护
+    regolith: 0,
+    // 环形山：坑缘的碎石能挡一下
+    crater: 2,
+    // 虚空：站不上去，防御加成没有意义
+    void: 0,
+    // 甲板：平的，没遮挡
+    deck: 0,
+    // 破损舱段：破口两面透风，站在那里就是露着
+    wreck: 0,
   } as Record<Terrain, number>,
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
@@ -154,6 +164,16 @@ export const CONFIG = {
     deep: 99,
     marsh: 2,
     dune: 2,
+    // 月壤：松但平，正常走
+    regolith: 1,
+    // 环形山：爬坑缘费劲
+    crater: 2,
+    // 虚空：过不去（99 是"不可通行"的通用写法）
+    void: 99,
+    // 甲板：正常走
+    deck: 1,
+    // 破损舱段：能过，但碎钢架和裸露的管路绊脚，走一格顶两格
+    wreck: 2,
   } as Record<Terrain, number>,
 
   /**
@@ -177,6 +197,11 @@ export const CONFIG = {
     dune: '沙丘',
     shallow: '浅流',
     deep: '深水',
+    regolith: '月壤',
+    crater: '环形山',
+    void: '虚空',
+    deck: '甲板',
+    wreck: '破损舱段',
   } as Record<Terrain, string>,
 };
 
@@ -316,6 +341,26 @@ export const ERAS: EraDef[] = [
     cityMaxHp: 96,
     cityArmor: 14,
     cityIncome: 62,
+  },
+  {
+    level: 7,
+    name: '装甲时代',
+    short: '装甲',
+    hint: '平台、模块与供电',
+    upgradeCost: 1440,
+    cityMaxHp: 112,
+    cityArmor: 16,
+    cityIncome: 68,
+  },
+  {
+    level: 8,
+    name: '聚变时代',
+    short: '聚变',
+    hint: '超载、光环与重型平台',
+    upgradeCost: 1980,
+    cityMaxHp: 132,
+    cityArmor: 19,
+    cityIncome: 78,
   },
 ];
 
@@ -485,7 +530,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 20,
     range: 1,
     vision: 2,
-    builds: ['tower', 'mill', 'bridge', 'camp'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower'],
     buildPower: 8,
   },
   tower: {
@@ -605,6 +650,14 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 20,
     range: 1,
     vision: 2,
+    /*
+     * 2026-11-11：给伐木工「穿林」。
+     *
+     * 它每天在林子里干活，却是全场走得最慢的单位之一（移动力 2），
+     * 进森林还要付整步——"在自家林地挪一格等于走两格"，这个手感是错的。
+     * 穿上林之后森林不再减速，它就真的成了"林子里的搬运工"。
+     */
+    abilities: ['forest-walk'],
     incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0 },
   },
   miller: {
@@ -620,7 +673,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 22,
     range: 1,
     vision: 2,
-    builds: ['keep', 'watermill', 'bridge', 'camp', 'camp2'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon'],
     buildPower: 12,
   },
   keep: {
@@ -665,6 +718,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
    * 和长弓的分工：长弓（90 金 / 射 4）靠射程压制，弩（82 金 / 射 3）靠**破甲**。
    * 弩的拉力大、装填慢，所以移动和血量都比长弓差一点——它不是"更好的弓"，
    * 是"拉得开重甲的那把"。铁器时代的主力远程从这一格开始分成两条路。
+   *
+   * 2026-11-07 攻击 16 → 19：射 3 + 破甲的组合在二代打重甲时，16 攻减完甲
+   * 只剩个位数，落在"要两轮才能换掉一个二级步兵"的尴尬区间。+3 之后
+   * 战力 45.0 → 49.8（×1.11），82 金没动，性价比从 3.98 抬到 4.42，
+   * 才真正配得上"二代唯一的破甲远程"这个定位。
    */
   crossbow: {
     id: 'crossbow',
@@ -674,7 +732,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     category: 'combat',
     cost: 82,
     move: 2,
-    atk: 16,
+    atk: 19,
     armor: 1,
     maxHp: 24,
     range: 3,
@@ -803,7 +861,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    builds: ['battery', 'factory', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork'],
     buildPower: 18,
   },
   battery: {
@@ -925,7 +983,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 26,
     range: 1,
     vision: 2,
-    builds: ['fortress', 'arsenal', 'bridge', 'bridge2', 'camp', 'camp2', 'camp3', 'camp4'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks'],
     buildPower: 24,
   },
   fortress: {
@@ -1032,7 +1090,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 36, city: 24, forest: 14, hill: 12 },
+    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16 },
   },
   crew: {
     id: 'crew',
@@ -1047,7 +1105,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 2,
-    builds: ['bunker', 'industrialpark', 'bridge', 'bridge2', 'bridge3', 'camp', 'camp2', 'camp3', 'camp4', 'camp5'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bunker', 'industrialpark', 'bridge3', 'camp5', 'mod_concretewall', 'mod_dragonsteeth', 'mod_mgbunker'],
     buildPower: 32,
   },
   bunker: {
@@ -1063,7 +1121,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 13,
     maxHp: 86,
     range: 4,
-    vision: 3,
+    // 视野必须 ≥ 射程：2026-11-09 起"看不见就不能开火"，自动开火也吃这条。
+    // 留着原来的 3 等于把这座塔的射程悄悄砍成 3，而造价和攻击都是按 4 定的。
+    vision: 4,
     autoAttack: true,
   },
   industrialpark: {
@@ -1134,7 +1194,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge2: {
     id: 'bridge2',
@@ -1151,7 +1211,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   bridge3: {
     id: 'bridge3',
@@ -1168,7 +1228,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 0,
     vision: 0,
     bridges: true,
-    buildOn: ['water'],
+    buildOn: ['water', 'marsh'],
   },
   camp: {
     id: 'camp',

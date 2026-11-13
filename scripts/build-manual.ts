@@ -14,17 +14,19 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ABILITY_GROUP_NAME } from '../src/core/abilities.ts';
+import { MODULES, moduleSpecText } from '../src/core/armor.ts';
 // 能力表是"核心 + 各扩展贡献"合并出来的：规则书要印全，不能只印本体的那几条。
 import { abilityById, allAbilities } from '../src/core/ability-registry.ts';
 import { buildListOf } from '../src/core/build-list.ts';
 import { deckCarryOf, holdOf } from '../src/core/carry.ts';
 import { produceEveryTurns, produceOf } from '../src/core/produce.ts';
 import { BASE_MAX_ERA, CATEGORY_NAME, CITY, CONFIG, ERAS, UNIT_TYPES } from '../src/core/config.ts';
-import { BLOOD_TURN, EXPANSIONS, availableExpansions } from '../src/core/expansions.ts';
+import { BLOOD_TURN, EXPANSIONS, availableExpansions, conflictIdsOf } from '../src/core/expansions.ts';
 // 修真那一册的正文要从这些地方取数字，一个都不许在文案里手打。
 import {
   AGING_DEATH_AGE,
   EXP_GROWTH_FLAT,
+  LOW_RANK_GROWTH,
   LIFESPAN_BASE,
   LIFESPAN_PER_RANK,
   MAX_RANK,
@@ -223,9 +225,18 @@ function esc(t: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** 能力说明里有 `**加粗**` 这种手写标记，转成标签；其余照常转义 */
+/**
+ * 富文本：先转义，再把**白名单里的标签**和 `**加粗**` 放回去。
+ *
+ * 扩展的 `summary` 是手写的，两种写法都出现过：`**加粗**` 和直接写 `<b>`。
+ * 早先这里只有 `esc()`，于是册子里原样印出 `&lt;b&gt;`——玩家看到的是
+ * 一堆 HTML 符号。现在统一走这个函数：标签先被转义，再按白名单还原，
+ * 所以 `<script>` 这类东西仍然只会显示成文本。
+ */
 function rich(t: string): string {
-  return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  return esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/&lt;(\/?)(b|strong|i|em|code|br)\s*\/?&gt;/g, '<$1$2>');
 }
 
 /* ---------------------------------------------------------------------------
@@ -286,9 +297,11 @@ const GENERIC_TERMS: Term[] = [
   },
   {
     key: 'auto',
-    name: '自动开火',
-    brief: '每回合不消耗行动，自动向射程内最合适的目标开一次火。',
-    more: '建筑专用。玩家点它开火仍然算"手动"，两者不叠加（同一回合只打一次）。',
+    name: '反应射击',
+    brief: '敌人踏进射程那一刻就打，用掉的是这一回合的攻击次数。',
+    more: `和手动开火<b>共用同一份次数</b>：一回合总共还是那么几发，变的只是时机——
+      从"挨完打才还手"变成"进门就打"。先打刚踏进射程的那个，它倒了还有余弹就按最近、血最少转火。
+      对方站在射程里不动时（比如贴上来的兵原地砍塔），你的回合开始会补一轮，那一轮也算在这份次数里。`,
   },
   {
     key: 'immobile',
@@ -406,6 +419,22 @@ const GENERIC_TERMS: Term[] = [
     name: '属性精研',
     brief: '至尊法师的四种形态：火再叠一层、水挂霜缚、自然攻击时回血、暗把魔法段 ×1.5。',
     more: '所以「转属性」是在"控场"和"爆发"之间选，而不是在四种颜色里挑好看的那个。',
+  },
+  {
+    key: 'slots',
+    name: '插槽',
+    brief: '装甲素体身上能装模块的位置，按类型分别计数：主 / 副 / 甲 / 统 / 设。',
+    more: `每一类各数各的：主槽只吃主武器，装甲板只能进甲槽，装满了这一类就再塞不进去。
+      素体的攻/血/甲是**空壳**的底子，真正打仗的数字全看装了什么——所以看一台装甲先看插槽，再看其它列。
+      想装满一台要先盖装配坞（贴身穿好才能装配），每装一件这台当回合就不能再动了。`,
+  },
+  {
+    key: 'power',
+    name: '供电',
+    brief: '电站给己方装甲提供的电能额度；每台素体和每件模块都在吃它。',
+    more: `电不存库存，"产能 − 需求"每回合现算；需求超过产能时，从**最后装上去的那件**开始断电，
+      被断的那件当场失效（面板上标"断电"）。所以别在过载边缘追求"再多装一件"——
+      侧栏顶部的电力条会先变红，它只在你有电站时才出现。`,
   },
 ];
 
@@ -525,6 +554,19 @@ const ALL_UNIT_DEFS: Record<string, UnitTypeDef> = { ...UNIT_TYPES };
 for (const e of EXPANSIONS) {
   for (const u of e.units ?? []) ALL_UNIT_DEFS[u.id] = u;
 }
+
+/**
+ * 退役兵种（types.ts 的 `legacy`）不进规则书。
+ *
+ * 定义还留在兵种表里，是为了**老存档里的单位不至于变成"未知类型"**；
+ * 但手册里要是照样列着"工匠 / 掘城兵 / 工兵团"，读者会去找产线，
+ * 而产线在 2026-11-11 已经整合掉了——书里学不到、也造不出来。
+ *
+ * 注意 `ALL_UNIT_DEFS` 上面那一行**不过滤**：查名字时仍需要它们。
+ */
+const liveUnits = (p: { units?: UnitTypeDef[] }): UnitTypeDef[] =>
+  (p.units ?? []).filter((u) => !u.legacy);
+
 const manualNameOf = (id: string): string => ALL_UNIT_DEFS[id]?.name ?? id;
 
 /**
@@ -555,6 +597,31 @@ function traitsOf(u: UnitTypeDef): string {
     );
     parts.push(ref(key, `${k.name} CD${k.cooldown}`));
   }
+  /*
+   * 装甲素体：**插槽是它最重要的一列**（2026-11-12 补）。
+   *
+   * 这一列以前对装甲素体几乎是空的：攻/血在表头，而"能装几个主槽"这个决定
+   * 战力的数字整张表都查不到，只能开一局点开属性卡。现在按 `主2·副1·甲2…`
+   * 印出来；电站再把"供电 +N"印上——它是这套系统唯一的电源，不写进表等于没写。
+   *
+   * 顺序和面板里的 `SLOT_CHAR`（主/副/甲/统/设）一致，两边对着看不用换算。
+   */
+  if (u.armorFrame) {
+    const order: Array<[keyof NonNullable<UnitTypeDef['slots']>, string]> = [
+      ['main', '主'],
+      ['sub', '副'],
+      ['plate', '甲'],
+      ['system', '统'],
+      ['device', '设'],
+    ];
+    const slots = order
+      .filter(([k]) => (u.slots?.[k] ?? 0) > 0)
+      .map(([k, ch]) => `${ch}${u.slots?.[k] ?? 0}`)
+      .join(' ');
+    if (slots) parts.push(ref('slots', `插槽 ${slots}`));
+    if ((u.draw ?? 0) > 0) parts.push(ref('power', `耗电 ${u.draw}`));
+  }
+  if ((u.armorPower ?? 0) > 0) parts.push(ref('power', `供电 +${u.armorPower}`));
   if (u.incomeByTerrain) {
     const best = Object.entries(u.incomeByTerrain).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
     if (best) parts.push(ref('income', `产出 ${terrainName(best[0])} +${best[1]}`));
@@ -836,15 +903,29 @@ function expansionTable(): string {
       <tbody>
         ${small
           .map((e) => {
-            // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场
-            const req = (e.requires ?? []).length
-              ? ` <span class="c">（需先开 ${(e.requires ?? [])
-                  .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
-                  .join('、')}）</span>`
-              : '';
+            // 依赖关系要写出来：只勾子包不勾前置，子包根本不进场；
+            // 冲突同理——两包一起勾，后勾的那个直接被拒
+            const req = [
+              (e.requires ?? []).length
+                ? `需先开 ${(e.requires ?? [])
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')}`
+                : '',
+              conflictIdsOf(e.id).length
+                ? `不能同开 ${conflictIdsOf(e.id)
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')}`
+                : '',
+              (e.recommends ?? []).length
+                ? `与 ${(e.recommends ?? [])
+                    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+                    .join('、')} 联动`
+                : '',
+            ].filter(Boolean);
+            const reqNote = req.length ? ` <span class="c">（${req.join('；')}）</span>` : '';
             // 默认开着的那条要标出来：新对局不特别选就是它
             const tag = DEFAULT_CONFIG.expansionIds.includes(e.id) ? '<span class="c">（默认开）</span>' : '';
-            return `<tr><td class="name">${esc(e.name)}${tag}${req}</td><td>${esc(e.summary)}</td><td class="traits">—</td></tr>`;
+            return `<tr><td class="name">${esc(e.name)}${tag}${reqNote}</td><td>${rich(e.summary)}</td><td class="traits">—</td></tr>`;
           })
           .join('')}
       </tbody>
@@ -929,7 +1010,7 @@ const MANUAL_CSS = `
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -942,7 +1023,7 @@ const MANUAL_CSS = `
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -955,7 +1036,7 @@ const MANUAL_CSS = `
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -986,7 +1067,7 @@ const MANUAL_CSS = `
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -998,7 +1079,7 @@ const MANUAL_CSS = `
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -1016,7 +1097,7 @@ const MANUAL_CSS = `
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -1042,7 +1123,7 @@ const MANUAL_CSS = `
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -1051,14 +1132,71 @@ const MANUAL_CSS = `
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -1091,7 +1229,7 @@ const MANUAL_CSS = `
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -1126,7 +1264,7 @@ const MANUAL_CSS = `
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -1134,7 +1272,7 @@ const MANUAL_CSS = `
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
@@ -1262,6 +1400,12 @@ function page(b: Book): string {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${b.title}</title>
 <style>${MANUAL_CSS}</style>
 </head>
@@ -1335,8 +1479,9 @@ const CORE_BODY_MAIN = `    <section id="goal">
     <section id="flow">
       <h2><span class="sec-num">02</span>回合流程</h2>
       <ol>
-        <li><b>对方回合结束时</b>，你的建筑自动开火一次（打射程内最近、血最少的敌人）。<b>这一炮和你自己点的是同一炮</b>——
-          本回合手动开过火的塔不再补射。早先两段都算，结果是"手动开火"变成纯白送：点它反而比等它自己打更亏。</li>
+        <li><b>反应射击</b>：敌人踏进射程的那一刻就打，不是等回合末补一炮。打出去的发数从这座建筑
+          本回合的攻击次数里扣，和你自己点开火<b>共用同一份</b>——一回合总共还是那么几发，
+          变的只是时机：从"挨完打才还手"变成"进门就打"。先打刚进来的那个，它倒了还有余弹就转火。</li>
         <li><b>你的回合开始</b>，结算收入：基础 ${CONFIG.baseIncome} + 每座城按自己的时代贡献 + 每个经济单位按所在地形产出。</li>
         <li>你的单位恢复行动力（移动一次、攻击一次）。</li>
         <li>你行动：移动、攻击、攻城、建造、在城市生产、升级城市。</li>
@@ -1355,11 +1500,11 @@ const CORE_BODY_MAIN = `    <section id="goal">
       <p>水和桥不是装饰，它们决定"能不能过去"：</p>
       <ul>
         <li><b>水域</b>陆军进不去，但<b>能养活一支舰队</b>。水军在水上一格一步，机动性其实比陆军好；它的短板是上不了岸、也进不了城。</li>
-        <li><b>桥</b>是修在水面上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
+        <li><b>桥</b>是修在水面（或沼泽）上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
         <li>桥上<b>能穿过，也能停</b>：桥在那一格上，人站在桥面。守桥、堵口、走到一半换气都靠这条——一格宽的桥不是"只能穿过去的门"，而是"只站得下一个人"的窄路。</li>
         <li>桥<b>不挡水路</b>：船从桥底下过，和走在河上一样。想把一条河彻底封死，得靠岸上的兵，不能靠桥。</li>
-        <li>桥有耐久（${UNIT_TYPES.bridge.maxHp}），被打掉之后地形立刻退回水面。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
-        <li>桥只能架在<b>至少一侧是陆地</b>的水面上——一片汪洋上架不了桥。</li>
+        <li>桥有耐久（${UNIT_TYPES.bridge.maxHp}），被打掉之后地形立刻退回原样（水域还是水域，沼泽还是沼泽）。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
+        <li>桥只能架在<b>至少一侧是陆地</b>的水面或沼泽上——一片汪洋上架不了桥。沼泽本来就能踩着走（移动力 2），架桥是为了让全军的补给线快一步。</li>
       </ul>
       <h3>渡船：让人过水</h3>
       <ul>
@@ -1466,7 +1611,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <dt>战斗单位</dt><dd>打仗的。每回合能移动一次、攻击一次。</dd>
         <dt>经济单位</dt><dd>站在合适地形上产出金币（农民在平原、伐木工在森林）。很脆，需要保护。</dd>
         <dt>建造单位</dt><dd>自己不产金，但能盖建筑。建造会占掉整个回合。</dd>
-        <dt>建筑</dt><dd>移动力 0，不可移动。军事建筑每回合自动开火，经济建筑按地形产金，桥把水面变成可通行的桥面，军营则是能推到前线的产兵点。</dd>
+        <dt>建筑</dt><dd>移动力 0，不可移动。军事建筑会反应射击（敌人踏进射程即打），经济建筑按地形产金，桥把水面变成可通行的桥面，军营则是能推到前线的产兵点。</dd>
         <dt>水军</dt><dd>只能在水面上行动（一格一步），从<b>临水城市</b>或<b>临水军营</b>边上的空水面下水。上不了岸，也进不了城；桥底下能过。</dd>
         <dt>运输船</dt><dd>渡船不打架，但它能把贴身的陆军装进货舱（容量 ${UNIT_TYPES.ferry?.capacity ?? 2}）运过水面。这是没有桥的时候唯一的过河方式，也是所有运输单位的通例：船沉了，舱里的人一起没。</dd>
       </dl>
@@ -1591,7 +1736,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
           不到一秒就散，不计入上面那份复盘——所以不会和"上回合挨打"的红格混在一起。</li>
         <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
         <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
-        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
+        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑的反应射击、
           中毒灼烧这类持续掉血、天气扣血都不计入——混进来会让"哪里被打得最狠"失真。</li>
       </ul>
       <div class="callout">
@@ -1704,9 +1849,11 @@ const CORE_BODY_MAIN = `    <section id="goal">
       <ul>
         <li>建造消耗该单位<b>整个回合</b>（移动和攻击都没了）。</li>
         <li>建造者本身攻击力只有 4~5、血 20~30，派到前线修工事是真的有风险。</li>
-        <li>军事建筑在<b>对方回合开始时</b>自动开火，打射程内最近且血最少的敌人。有攻击力也有射程，所以被单位攻击时会正常反击。军营同样有哨兵，贴到营门口会被敲一下。</li>
-        <li>建筑的火力<b>一轮只有一段</b>：你自己点过（手动画出攻击范围再点目标），回合交给对方时它就不再补射；
-          没点过，才轮到自动那一下。刚建好的建筑当回合不能动，所以第一炮总是自动打的。</li>
+        <li>军事建筑有<b>反应射击</b>：敌人踏进射程就挨打，先打刚进来的那个，它倒了还有余弹就按最近、血最少转火。
+          有攻击力也有射程，所以被单位攻击时会正常反击。军营同样有哨兵，贴到营门口会被敲一下。</li>
+        <li><b>一回合总共只有那么几发</b>：反应射击和你手动开火共用这一份次数。所以你点过一炮之后，
+          对面再冲进来时它只剩其余几发；反过来，你这一回合没点，它也不会"烂在手里"——
+          敌人进来照样打，一直没人进来则在你的回合开始时补射射程里已经站着的敌人。</li>
         <li><b>军营只能扎在平原或丘陵上</b>（地形要求写在兵种数据里，不写死在代码里）。它是最便宜的"把补给点往前推"的办法：省掉新兵从后方跑到前线的那几个回合。</li>
         <li><b>建在自家城里要留出兵位</b>：如果这一格是这座城最后一个空位，界面会拒绝开工并说明原因。
           这一条是踩出来的——在只剩一格空地的城里盖座塔，城市的产兵格就变成 0，从此一兵不出，
@@ -1786,6 +1933,15 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li>地形始终可见，<b>只有对方单位受迷雾影响</b>。</li>
         <li>视野来源：己方单位的视野半径、己方城市周围 ${CONFIG.cityVision} 格。</li>
         <li>离开视野的敌人会留下<b>半透明幽灵</b>，标在最后已知位置。移动过或已阵亡你都无从确认——这正是它的乐趣。</li>
+        <li><b>看得见才打得到</b>：攻击、攻城、<b>挨打后的反击</b>、<b>塔的反应射击</b>
+          都要求目标在本方视野里。城虽然一直画在地图上（地形是公开的），
+          但视野外的城墙砸不动；幽灵位置也不能当靶子。视野按"本方"算——旁边的友军或自己的城看见了，
+          就有人替你报点，可以打。</li>
+        <li><b>看得见那一格 ≠ 看得见那个兵</b>：带潜行、潜航、隐身的单位藏在林子、水下或云里时，
+          格子亮着、人却不显形——所以既打不着它，挨了它打也反击不了。破法是贴到相邻格。
+          反过来，它自己一出手就现形，那个敌方回合里它躲不了还手。</li>
+        <li>地形会改视野：<b>森林、河谷、沼泽 −1，丘陵 +1</b>（见「地形高差」）。站进林子的弓手看得近一格，
+          射程却没变——那多出来的一格就是打不着的，往下看"射程 / 视野"那一行。</li>
         <li>玩家视角恒等于当前行动方。人机对战时 AI 也只吃同一份过滤后的视图，不作弊。</li>
       </ul>
       <div class="callout">
@@ -2343,6 +2499,9 @@ const SMALL_NOTES: Record<string, string> = {
         <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
         <li><b>对面的钱袋也看不见了</b>：HUD 上对方金币只显示成一个「?」。这一条和"地形要侦察"是一回事——
           知道对面还剩多少钱，等于知道他还能不能再买一队兵，那是免费的战略情报。</li>
+        <li><b>点雾里的格子也问不出东西</b>：侧栏只写「未探明」；
+          走过的地方按<b>记忆里的地形</b>显示（会标出来，因为对面可能已经在那儿架了桥）。
+          天气、灵气浓度这类<b>活数据</b>一律不报——不然点一圈就等于把对面读了一遍。</li>
       </ul>`,
   'last-stand': `<p><b>凡是改伤害的扩展，都会写在单位详情的第一行。</b>「哀兵必胜」（丢过首城的一方全军伤害 ×1.1）
         会直接标在面板顶上——不写出来，玩家只会看到"我这一下打了 16"，永远不知道为什么不是 15。</p>`,
@@ -2372,7 +2531,7 @@ function smallSection(e: Exp, num: number): string {
   return `
     <section id="exp-${esc(e.id)}">
       <h2><span class="sec-num">${String(num).padStart(2, '0')}</span>${esc(e.name)}</h2>
-      <p>${esc(e.summary)}</p>
+      <p>${rich(e.summary)}</p>
 ${SMALL_NOTES[e.id] ? '      ' + SMALL_NOTES[e.id] : ''}
     </section>`;
 }
@@ -2506,7 +2665,7 @@ function mergedTable(
 
   const rows: string[] = [];
   for (const p of packs) {
-    const units = [...(p.units ?? [])].sort(
+    const units = [...liveUnits(p)].sort(
       (a, b) => a.era - b.era || a.cost - b.cost || a.name.localeCompare(b.name, 'zh-CN'),
     );
     if (units.length === 0) continue;
@@ -2540,8 +2699,18 @@ function mergedTable(
   }
   if (rows.length === 0) return '<p class="era-meta">这一册不带兵种，只改规则。</p>';
 
+  /*
+   * 长表（>20 行）额外挂一个 `.tall`：表头吸顶、首列吸左。
+   *
+   * 用户的原话是"兵种一多，数据和顶上那几个分类根本对不上"——89 行的表滚过两屏，
+   * 表头早没了，12 个数字列全靠记；手机上更惨，横向滚一下连兵种名都看不见，
+   * 一屏只剩一串光秃秃的数。
+   *
+   * 短表不挂：9 行的表一屏就看完了，给它限高只会多出一条内滚动条。
+   */
+  const tall = rows.length > 20 ? ' tall' : '';
   return `
-    <div class="scroll-x">
+    <div class="scroll-x${tall}">
       <table class="wide">
         <thead><tr>${useCols.map((c) => `<th>${c}</th>`).join('')}</tr></thead>
         <tbody>${rows.join('')}</tbody>
@@ -2571,53 +2740,155 @@ function eraRange(eras: readonly number[]): string {
 function packsOverview(packs: readonly Exp[]): string {
   return `
     <table class="overview">
-      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>前置</th><th>它解决什么</th></tr></thead>
+      <thead><tr><th>包</th><th>兵种</th><th>时代</th><th>关系</th><th>它解决什么</th></tr></thead>
       <tbody>
         ${packs
           .map((p) => {
-            const us = p.units ?? [];
+            const us = liveUnits(p);
             const eras = [...new Set(us.map((u) => u.era))].sort((a, b) => a - b);
-            // 前置只写简称（"法则"而不是"奇想·法则"）：这一列本来就只有一指宽
-            const req = (p.requires ?? [])
-              .map((id) => {
-                const r = EXPANSIONS.find((x) => x.id === id);
-                return r ? shortPackName(r) : id;
-              })
-              .join('、');
+            /*
+             * 关系一列写三件事：前置（不开就不进场）、冲突（不能同开）、
+             * 联动（一起开才完整）。只写简称（"法则"而不是"奇想·法则"）：
+             * 这一列本来就只有一指宽。
+             */
+            const shortOf = (id: string): string => {
+              const r = EXPANSIONS.find((x) => x.id === id);
+              return r ? shortPackName(r) : id;
+            };
+            const req = [
+              (p.requires ?? []).length ? `需先开 ${(p.requires ?? []).map(shortOf).join('、')}` : '',
+              conflictIdsOf(p.id).length
+                ? `不能同开 ${conflictIdsOf(p.id).map(shortOf).join('、')}`
+                : '',
+              (p.recommends ?? []).length
+                ? `联动 ${(p.recommends ?? []).map(shortOf).join('、')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('；');
             return `<tr><td class="name">${esc(p.name)}</td><td class="num">${
               us.length || '—'
             }</td><td class="num">${eras.length ? eraRange(eras) : '—'}</td><td class="nowrap">${
               req ? esc(req) : '—'
-            }</td><td>${esc(p.summary)}</td></tr>`;
+            }</td><td>${rich(p.summary)}</td></tr>`;
           })
           .join('')}
       </tbody>
     </table>`;
 }
 
+/**
+ * 装甲时代 / 聚变时代的**装备表**。
+ *
+ * 用户 2026-11-10 的反馈：装配坞里能看全了，但开局前想查"速射炮几伤害、
+ * 什么装甲板最划算"还得先开一局。规则书缺这张表。
+ *
+ * 数据全部来自 `MODULES` + `moduleSpecText`（和装配坞同一份文字），
+ * 所以改数值只改一处，书和界面一起跟着变。
+ *
+ * 槽位分组而不是按时代拆：模块本身**不按时代上锁**（`canMount` 只看槽位、
+ * 素体白黑名单、地面/空中），拿了 7 代素体就能装 8 代的模块。按时代拆表
+ * 反而会让人以为"这个模块要 8 代才能装"。
+ */
+function armorModuleSection(): string {
+  const SLOT_TITLE: Array<[string, string]> = [
+    ['main', '主武器'],
+    ['sub', '副武器'],
+    ['plate', '装甲板'],
+    ['system', '系统'],
+    ['device', '设备'],
+  ];
+  const tables = SLOT_TITLE.map(([slot, title]) => {
+    const rows = Object.values(MODULES)
+      .filter((m) => m.slot === slot)
+      .sort((a, b) => a.cost - b.cost);
+    if (rows.length === 0) return '';
+    const body = rows
+      .map(
+        (m) => `
+      <tr data-mod="${esc(m.id)}">
+        <td class="name">${esc(m.name)}</td>
+        <td class="num">${m.cost}</td>
+        <td class="num">${m.draw}</td>
+        <td class="traits">${esc(moduleSpecText(m))}</td>
+      </tr>`,
+      )
+      .join('');
+    return `
+    <h4>${title}（${rows.length} 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+  }).join('');
+  if (!tables) return '';
+
+  const deviceRows = Object.values(MODULES).filter((m) => m.slot === 'device');
+  const maxDraw = Math.max(0, ...Object.values(MODULES).map((m) => m.draw));
+
+  return `
+    <section id="pack-mods">
+      <h2><span class="sec-num">03</span>装备表</h2>
+      <p>素体本身不会打人（只有撞击），战力全在<b>装了什么</b>上。装配要贴着<b>装配坞</b>；
+        <b>装上一件，这台当回合就不能再行动</b>——但同回合可以接着装，钱和电够就行
+        （2026-11-12 起取消了"每座坞每回合只接一单"）。拆卸不花回合、退一半金币，
+        它和装配在面板里是分开的两组。同一类槽位装满了就装不进去，
+        素体面板和装配坞里都写着"已用 / 总数"。</p>
+      <p><b>电是硬约束。</b>每台素体自己就有基础耗电，每件模块再叠一笔（下表"耗电"列，
+        最大 ${maxDraw} 点）。发电厂是唯一来源（另有「超载协议」自带额度，代价是定期停机）。
+        需求超过供给时，从最后装上去的那件开始断电——所以别在过载边缘追求"再多一件"，
+        装配坞的电力条会先变红。</p>
+      <p>模块<b>不按时代上锁</b>：拿着 7 代素体也能装 8 代的模块，
+        只要槽位、素体白名单、地面/空中对得上。下表按槽位分组，就是这个原因。</p>
+      ${tables}
+      ${deviceRows.length ? `<p class="era-meta">设备（${deviceRows.length} 件）要用掉装配坞当回合的
+        "整备"名额，效果走地图上的落点选择，不在装配的那一刻结算。</p>` : ''}
+    </section>`;
+}
+
 /** 单个大包一本（城市工坊、季节这类不归组的） */
 function packBook(e: Exp): Book {
   resetTerms();
-  const units = e.units ?? [];
+  const units = liveUnits(e);
   const eras = [...new Set(units.map((u) => u.era))].sort((a, b) => a - b);
   const reqNames = (e.requires ?? [])
     .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
     .join('、');
+  // 冲突与联动也印在书头：规则书是查关系的地方，不该只写"前置"这一种
+  const clashNames = conflictIdsOf(e.id)
+    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+    .join('、');
+  const linkNames = (e.recommends ?? [])
+    .map((id) => EXPANSIONS.find((x) => x.id === id)?.name ?? id)
+    .join('、');
 
+  // 大包自己的「补充规则」。以前只有合册会印，单独成册的包反而漏掉
+  const notesHtml =
+    (e.manualNotes ?? []).length > 0
+      ? `<ul class="pack-notes">${(e.manualNotes ?? [])
+          .map((n) => `<li>${rich(n)}</li>`)
+          .join('')}</ul>`
+      : '';
+
+  // 装甲两包多一节装备表：装配坞里能看，但开局前查数值也得有地方
+  const armorMods = e.id.startsWith('armor-') ? armorModuleSection() : '';
   const nav = `
     <a href="#pack-intro">1. 这个包是什么</a>
     <a href="#pack-units">2. 兵种表</a>
-    <a href="#pack-terms">3. 机制词条</a>
+    ${armorMods ? '<a href="#pack-mods">3. 装备表</a>' : ''}
+    <a href="#pack-terms">${armorMods ? '4' : '3'}. 机制词条</a>
   `;
 
   const body = `
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>${esc(e.summary)}</p>
+      <p>${rich(e.summary)}</p>${notesHtml}
       <dl class="kv">
         <dt>兵种数量</dt><dd>${units.length} 个</dd>
         <dt>覆盖时代</dt><dd>${eras.length ? eras.map((n) => `${n}（${esc(ERAS[n - 1]?.name ?? '')}）`).join('、') : '—（不带兵种）'}</dd>
         ${reqNames ? `<dt>前置</dt><dd>需要先开「${esc(reqNames)}」</dd>` : ''}
+        ${clashNames ? `<dt>冲突</dt><dd>不能和「${esc(clashNames)}」同时开：两套规则会互相拆台</dd>` : ''}
+        ${linkNames ? `<dt>联动</dt><dd>和「${esc(linkNames)}」一起开才完整（不是前置，单开少一部分内容）</dd>` : ''}
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
       </dl>
       <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
@@ -2631,8 +2902,10 @@ function packBook(e: Exp): Book {
       ${units.length ? mergedTable([e], 'era', false) : '<p class="era-meta">这个包不带兵种，只改规则——表就不用列了。</p>'}
     </section>
 
+    ${armorMods}
+
     <section id="pack-terms">
-      <h2><span class="sec-num">03</span>机制词条</h2>
+      <h2><span class="sec-num">${armorMods ? '04' : '03'}</span>机制词条</h2>
       <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
       ${termTable(takeTerms())}
     </section>
@@ -2792,7 +3065,14 @@ function cultivationRules(): string {
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
-          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点。 剑修：（境界 + ${EXP_GROWTH_FLAT}）÷ 2 点（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <span class="c">炼气士与体修：境界 + ${EXP_GROWTH_FLAT} 点，<b>0~2 期另有起步加成
+          +${LOW_RANK_GROWTH[0]} / +${LOW_RANK_GROWTH[1]} / +${LOW_RANK_GROWTH[2]} 点</b>。
+          剑修：上面那个数 ÷ 2（向下取整，最少 1 点）。魔修：固定 ${EXP_GROWTH_BLOOD} 点——他们不靠打坐。</span>
+          <div style="margin-top:6px;color:#6b6459;font-size:13px">
+            起步加成只给 0~2 期：修士的成长是"前期慢、后期陡"，不加成的话
+            从 0 期练到 3 期要三十多个回合，而那时候本体的科技早换两代了。
+            但它<b>不动天花板</b>——纯打坐仍然到 5 期封顶，再往上必须靠打仗续命。
+          </div>
         </li>
         <li><b>战斗击杀</b>：亲手击杀敌方单位时获得，但要满足三个条件——目标值得一战、你还没到收益归零的境界、本回合额度没用完。详见下面那张表。<br/>
           <span class="c">单次 = ${KILL_EXP_BASE} 点 × 境界系数 × 流派倍率（剑修 ${SWORD_KILL_EXP_MUL} 倍），四舍五入。</span>
@@ -3043,13 +3323,15 @@ function cultivationRules(): string {
           也就是说，把低阶弟子扔在荒地里，他的灵力是<b>存不住</b>的。</li>
         <li><b>拆掉源不会瞬间清零</b>：浓度只是不再补充，按扩散和损耗慢慢退回去。
           灵矿被拆了，它抽干的那片地也要过一阵才缓过来。</li>
-        <li><b>看全图</b>：顶栏那个「灵气」按钮——<b>悬停</b>就在棋盘上铺一层
+        <li><b>看视野内的浓度</b>：顶栏那个「灵气」按钮——<b>悬停</b>就在棋盘上铺一层
           五档绿（越深越浓），<b>移开自动消失</b>；<b>点一下钉住</b>，这时移开也留着，
-          再点一下取消。染色是<b>全图</b>的——灵气是天地之气，不是谁藏起来的底牌
-          （丹药那种才需要藏）。</li>
+          再点一下取消。染色<b>只铺在自己看得见的格子上</b>——
+          灵气场是按整张图算的（对面一座灵田，四邻都会变浓），
+          所以全图摊开就等于白送一张敌方建筑分布图。迷雾里留白，看不清才正常。</li>
       </ul>
-      <p>在哪看：点一个空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
-        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。</p>
+      <p>在哪看：点一个<b>看得见的</b>空格子，侧栏写「灵气浓度 62 / 100（森林 +5）」；
+        选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。
+        雾里的格子不报这行——浓度是活数据，报出来就等于替你点了对面的灵田。</p>
 
       <h3>灵泉</h3>
       <p>${SPIRIT_SPRING.name}是<b>时代 ${SPIRIT_SPRING.era}</b> 的支援建筑（${SPIRIT_SPRING.maxHp} 血 /
@@ -3309,7 +3591,7 @@ const BOOK_GROUPS: BookGroup[] = [
       <p><b>第六代的开关只有一处</b>：「信息化」的 <code>unlockEra: 6</code> 把科技线推到第六级。
         时代军备里那 15 个第六代兵（机械化步兵、主战坦克、反坦克导弹、自行榴弹炮、远程火箭炮、
         防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、前进指挥所、
-        物流集团、工程兵团、特种部队）靠兵种级 <code>requiresPack</code> 挂在那上面：
+        物流集团、特种部队）靠兵种级 <code>requiresPack</code> 挂在那上面：
         没勾「信息化」时它们不进本局兵种表——造不出来的兵，等于没有。</p>`,
   },
   {
@@ -3401,9 +3683,9 @@ const BOOK_GROUPS: BookGroup[] = [
         因为能不能上舰是工程问题（起落架、机翼折叠、弹射与拦阻），不是数值问题；
         重型轰炸机、战略轰炸机、运输机永远上不去。</p>
       <p>甲板上的飞机<b>不占棋盘格</b>（否则一艘航母四个机位，周边八格全被堵死）。
-        每回合轮到航母时按<b>先收、再修、后放</b>走一遍：贴着母舰的舰载机自动返航进甲板，
-        甲板上的飞机回 8 点，然后再放出去一架。放飞占掉这一回合的移动；
-        起飞失败不会损失飞机——它会留在甲板上，下回合再试。</p>
+        收和放都<b>由玩家决定</b>：飞机贴到母舰两格内点「回收」进甲板，甲板上的飞机
+        每回合回复<b>一半血量</b>——残血机停两回合就能满血再战；想让它出战再点「放飞」，
+        放飞占掉这一回合的移动。起飞失败不会损失飞机——它会留在甲板上，下回合再试。</p>
       <p>没有开空军扩展时，航母照常是一条船：数值、指挥光环、视野都在，
         只是甲板是空的、面板上写着「空军扩展未接入」。<b>不做"假装有飞机"的兜底</b>——
         那会让玩家以为起了飞，实际棋盘上什么都没有。</p>
@@ -3429,11 +3711,11 @@ function groupMembers(g: BookGroup): Exp[] {
 
 function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
   resetTerms();
-  const total = packs.reduce((n, p) => n + (p.units?.length ?? 0), 0);
-  const eras = [...new Set(packs.flatMap((p) => (p.units ?? []).map((u) => u.era)))].sort(
+  const total = packs.reduce((n, p) => n + (liveUnits(p).length), 0);
+  const eras = [...new Set(packs.flatMap((p) => liveUnits(p).map((u) => u.era)))].sort(
     (a, b) => a - b,
   );
-  const withUnits = packs.filter((p) => (p.units ?? []).length > 0);
+  const withUnits = packs.filter((p) => liveUnits(p).length > 0);
   /**
    * 各包要点。写成函数而不是先算好：这段里将来可能引用机制词条（现在还没有），
    * 一旦引用了，它必须在"表格已经渲染完"之后求值——模板里的插值顺序就是求值顺序，
@@ -3471,7 +3753,7 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
     <a href="#g-intro">1. 基础信息</a>
     <a href="#g-units">2. 兵种总表</a>
     ${packs
-      .filter((p) => (p.units ?? []).length > 0)
+      .filter((p) => liveUnits(p).length > 0)
       .map((p) => `<a class="sub" href="#p-${esc(p.id)}">${esc(shortPackName(p))}</a>`)
       .join('\n    ')}
     <a href="#g-notes">3. 各包要点</a>${hasRules ? '\n    <a href="#g-rules">4. 特殊规则</a>' : ''}
@@ -3570,6 +3852,22 @@ mkdirSync('public', { recursive: true });
 
 // 先渲染再写：page() 只拼字符串，渲染一次就够，后面覆盖自检直接用这份结果
 const rendered = books.map((b) => ({ b, html: page(b) }));
+
+/*
+ * 自检：册子里不许出现被转义掉的标签。
+ *
+ * `summary` 这类手写文案以前走的是 `esc()`，于是 `<b>` 原样印成
+ * `&lt;b&gt;`——玩家看到一堆 HTML 符号，加粗也没了。现在文案统一走 `rich()`，
+ * 但以后新加一册、新加一段时很容易又漏。与其等玩家截图反馈，
+ * 不如让 `npm run manual` 直接失败：报错里带着漏出来的那个标签。
+ */
+for (const { b, html } of rendered) {
+  const leak = html.match(/&lt;\/?(?:b|strong|i|em|code|br)&gt;/);
+  if (leak) {
+    throw new Error(`${b.file} 里有没渲染的标签「${leak[0]}」——手写文案要走 rich()`);
+  }
+}
+
 for (const { b, html } of rendered) {
   writeFileSync(b.file, html, 'utf-8');
   const kb = Math.round(html.length / 1024);
@@ -3604,7 +3902,7 @@ for (const { html } of rendered) {
   for (const m of html.matchAll(/data-unit="([^"]+)"/g)) seenUnits.add(m[1] ?? '');
 }
 const missing = largeExps.flatMap((e) =>
-  (e.units ?? []).filter((u) => !seenUnits.has(u.id)).map((u) => `${e.name} · ${u.name}（${u.id}）`),
+  liveUnits(e).filter((u) => !seenUnits.has(u.id)).map((u) => `${e.name} · ${u.name}（${u.id}）`),
 );
 if (missing.length > 0) {
   throw new Error(`有 ${missing.length} 个扩展兵种没有进任何一册：\n  ${missing.join('\n  ')}`);
@@ -3648,6 +3946,6 @@ for (const { b, html } of rendered) {
 writeFileSync('manual.html', rendered[0]!.html, 'utf-8');
 console.log(
   `共 ${books.length} 册（原 ${1 + 1 + largeExps.length} 册）· 兵种 ${Object.keys(UNIT_TYPES).length} 个 · ` +
-    `扩展兵种 ${largeExps.reduce((n, e) => n + (e.units?.length ?? 0), 0)} 个已全部入册 · ` +
+    `扩展兵种 ${largeExps.reduce((n, e) => n + liveUnits(e).length, 0)} 个已全部入册 · ` +
     `能力 ${allAbilities().length} 条 · 扩展 ${EXPANSIONS.length} 个`,
 );

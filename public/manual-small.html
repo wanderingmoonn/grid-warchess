@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 扩展规则（小型）</title>
 <style>
   :root {
@@ -55,7 +61,7 @@
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -68,7 +74,7 @@
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -81,7 +87,7 @@
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -112,7 +118,7 @@
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -124,7 +130,7 @@
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -142,7 +148,7 @@
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -168,7 +174,7 @@
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -177,14 +183,71 @@
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -217,7 +280,7 @@
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -252,7 +315,7 @@
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -260,7 +323,7 @@
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
@@ -327,7 +390,7 @@
     <table>
       <thead><tr><th>扩展</th><th>效果</th><th>附带兵种</th></tr></thead>
       <tbody>
-        <tr><td class="name">战争经济</td><td>每消灭一个对方单位，立刻获得 15 金币。</td><td class="traits">—</td></tr><tr><td class="name">老兵不死</td><td>单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。</td><td class="traits">—</td></tr><tr><td class="name">堑壕战</td><td>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</td><td class="traits">—</td></tr><tr><td class="name">闪电战</td><td>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</td><td class="traits">—</td></tr><tr><td class="name">大征兵</td><td>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</td><td class="traits">—</td></tr><tr><td class="name">大雾来了</td><td>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</td><td class="traits">—</td></tr><tr><td class="name">浓雾蔽野</td><td>基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：没去过的格连地形和城市都不画，只剩一片黑。走过的地方会留在记忆里——地形按上次看到的样子画（压暗），城画成虚线框的&quot;旧情报&quot;，敌人的位置停在最后被看见的那一格。而且迷雾锁定开启、不能关掉；对面的金币也看不见（HUD 上只有一个「?」）。</td><td class="traits">—</td></tr><tr><td class="name">死亡枕藉</td><td>单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害（按护甲结算）——砸不到空中的东西。</td><td class="traits">—</td></tr><tr><td class="name">固若金汤</td><td>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</td><td class="traits">—</td></tr><tr><td class="name">血战<span class="c">（默认开）</span></td><td>第 50 回合起（三/四人局按人数等比顺延）：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</td><td class="traits">—</td></tr><tr><td class="name">先后手补偿<span class="c">（默认开）</span></td><td>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</td><td class="traits">—</td></tr><tr><td class="name">哀兵必胜</td><td>先丢掉一座城的一方，全军攻击 +10%——野战、反击、攻城都算。城没了，气还在。</td><td class="traits">—</td></tr><tr><td class="name">地形高差</td><td>每类地形有自己的高度与脾气：站得高看得远（俯射 +1 格、视野 +1），仰攻吃亏，往高处走每层多花 1 点移动力；熔岩会烧人、沼泽会陷脚、沙丘看得远但没掩体、浅流是唯一两边都能走的水（陆军涉水、水军贴滩）。带 7 种新地形与 6 种等高线地貌（高原、峡谷、火山群、沼泽、群岛、大川）。</td><td class="traits">—</td></tr><tr><td class="name">行动点</td><td>移动、攻击、上下船、释放技能统一成&quot;行动&quot;，每次从单位自己的行动点（E）里扣：移动/上下船 20E、攻击每段 40/段数 E、技能 60E；池子按兵种分档：骑兵/车 120、远程 110、其余 100。E 不够就走不动、也打不出第二下；技能与保底那一击拦不住，会记成透支，下回合先扣回去。</td><td class="traits">—</td></tr><tr><td class="name">高机动性</td><td>全场的移动力、射程、视野一律 ×1.5：移动向上取整（2 → 3），视野向上取整（2 → 3），射程向下取整（3 → 4、5 → 7），近战仍然是射程 1。改的是&quot;一回合能覆盖多大一片战场&quot;，不是某支兵的强弱——大家都变快，强弱对比几乎不动，但接敌距离、绕后回合数、攻城前的视野盲区全都会变。</td><td class="traits">—</td></tr>
+        <tr><td class="name">战争经济</td><td>每消灭一个对方单位，立刻获得 15 金币。</td><td class="traits">—</td></tr><tr><td class="name">老兵不死</td><td>单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在<b>己方城市地块</b>上的单位回复 8% 最大生命。</td><td class="traits">—</td></tr><tr><td class="name">堑壕战</td><td>站在森林或丘陵上的单位额外 +2 护甲（吃破甲，也挡得住低时代攻击）。</td><td class="traits">—</td></tr><tr><td class="name">闪电战</td><td><b>陆地</b>上移动力 3 以上的单位移动 +2、造价 +10%。水军与空军不吃这一套——它们的速度归各自的扩展管，再加一档会让&quot;最快的船/最快的飞机&quot;直接甩开陆地。</td><td class="traits">—</td></tr><tr><td class="name">大征兵</td><td>所有时代的战斗单位造价 −20%，但双方起始金币 −50%。人多，但穷。</td><td class="traits">—</td></tr><tr><td class="name">大雾来了</td><td>大雾一起，所有单位视野 −1。撞上了才知道对面是谁。</td><td class="traits">—</td></tr><tr><td class="name">浓雾蔽野</td><td>基础规则的雾只遮单位，地图永远看得见。这个扩展把地图本身也遮掉：没去过的格连地形和城市都不画，只剩一片黑。走过的地方会留在记忆里——地形按上次看到的样子画（压暗），城画成虚线框的&quot;旧情报&quot;，敌人的位置停在最后被看见的那一格。而且迷雾锁定开启、不能关掉；对面的金币也看不见（HUD 上只有一个「?」）。</td><td class="traits">—</td></tr><tr><td class="name">死亡枕藉</td><td>单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害（按护甲结算）——砸不到空中的东西。</td><td class="traits">—</td></tr><tr><td class="name">固若金汤</td><td>所有城市耐久上限 +20、护甲 +1。攻城变成真正的苦差事。</td><td class="traits">—</td></tr><tr><td class="name">血战<span class="c">（默认开）</span></td><td>第 50 回合起（三/四人局按人数等比顺延）：城市不再回血、升级时代恢复原价、全军移动与视野各 +1。后期不许再磨。</td><td class="traits">—</td></tr><tr><td class="name">先后手补偿<span class="c">（默认开）</span></td><td>后手开局多拿一笔起始金：12×12 补 20%、16×16 补 5%，中间尺寸线性插值。小图补得多，大图补得少。</td><td class="traits">—</td></tr><tr><td class="name">哀兵必胜</td><td>先丢掉一座城的一方，全军攻击 +10%——野战、反击、攻城都算。城没了，气还在。</td><td class="traits">—</td></tr><tr><td class="name">地形高差</td><td>每类地形有自己的高度与脾气：站得高看得远（俯射 +1 格、视野 +1），仰攻吃亏，往高处走每层多花 1 点移动力；熔岩会烧人、沼泽会陷脚、沙丘看得远但没掩体、浅流是唯一两边都能走的水（陆军涉水、水军贴滩）。带 7 种新地形与 6 种等高线地貌（高原、峡谷、火山群、沼泽、群岛、大川）。</td><td class="traits">—</td></tr><tr><td class="name">行动点</td><td>移动、攻击、上下船、释放技能统一成&quot;行动&quot;，每次从单位自己的行动点（E）里扣：移动/上下船 20E、攻击每段 40/段数 E、技能 60E；池子按兵种分档：骑兵/车 120、远程 110、其余 100。E 不够就走不动、也打不出第二下；技能与保底那一击拦不住，会记成透支，下回合先扣回去。</td><td class="traits">—</td></tr><tr><td class="name">高机动性</td><td>全场的移动力、射程、视野一律 ×1.5：移动向上取整（2 → 3），视野向上取整（2 → 3），射程向下取整（3 → 4、5 → 7），近战仍然是射程 1。改的是&quot;一回合能覆盖多大一片战场&quot;，不是某支兵的强弱——大家都变快，强弱对比几乎不动，但接敌距离、绕后回合数、攻城前的视野盲区全都会变。</td><td class="traits">—</td></tr>
       </tbody>
     </table>
       <div class="callout">
@@ -343,7 +406,7 @@
     </section>
     <section id="exp-veterans">
       <h2><span class="sec-num">03</span>老兵不死</h2>
-      <p>单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。</p>
+      <p>单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在<b>己方城市地块</b>上的单位回复 8% 最大生命。</p>
 
     </section>
     <section id="exp-trench">
@@ -353,7 +416,7 @@
     </section>
     <section id="exp-blitz">
       <h2><span class="sec-num">05</span>闪电战</h2>
-      <p>所有移动力 3 以上的快速单位移动 +2、造价 +10%。</p>
+      <p><b>陆地</b>上移动力 3 以上的单位移动 +2、造价 +10%。水军与空军不吃这一套——它们的速度归各自的扩展管，再加一档会让&quot;最快的船/最快的飞机&quot;直接甩开陆地。</p>
 
     </section>
     <section id="exp-conscription">
@@ -377,6 +440,9 @@
         <li>顶栏的迷雾开关<b>锁定为开</b>，不能关——能一键关掉的话，这个扩展就只是个大号的显示选项。</li>
         <li><b>对面的钱袋也看不见了</b>：HUD 上对方金币只显示成一个「?」。这一条和"地形要侦察"是一回事——
           知道对面还剩多少钱，等于知道他还能不能再买一队兵，那是免费的战略情报。</li>
+        <li><b>点雾里的格子也问不出东西</b>：侧栏只写「未探明」；
+          走过的地方按<b>记忆里的地形</b>显示（会标出来，因为对面可能已经在那儿架了桥）。
+          天气、灵气浓度这类<b>活数据</b>一律不报——不然点一圈就等于把对面读了一遍。</li>
       </ul>
     </section>
     <section id="exp-scorched-earth">

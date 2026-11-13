@@ -19,9 +19,11 @@
  *      产出平庸、耐久 +35%，于是最划算的用法是把它修在隘口上堵路。
  */
 
+import { navigable } from './config.ts';
 import { isProducer } from './produce.ts';
 import type { Expansion } from './expansions.ts';
-import type { UnitTypeDef } from './types.ts';
+import type { GameState, PlayerId, Terrain, UnitTypeDef } from './types.ts';
+import type { ResourceCost } from './resources.ts';
 import { seatsOf } from './types.ts';
 import { isBioUnit } from './resources.ts';
 
@@ -64,13 +66,6 @@ const GOLD_SHARE = 0.3;
 const ECO_RES_SHARE = 0.55;
 const ECO_GOLD_SHARE = 0.2;
 const ECO_OUTPUT_SHARE = 0.8;
-/**
- * 经济**单位**把金币折成粮/材的比例。
- *
- * 0.6 = 六成折成粮/材、四成留金。11-04 曾按地形对调过，11-06 回撤，
- * 现在所有地形统一用它——**想再试对调，改这一个数就行**，别去改分支。
- */
-const ECO_UNIT_OUTPUT_SHARE = 0.6;
 const EARLY_ECO_RES_SHARE = 0.6;
 /**
  * 经济建筑的耐久系数。
@@ -82,8 +77,14 @@ const EARLY_ECO_RES_SHARE = 0.6;
  */
 const ECO_HP = 1.1;
 
-/** 经济建筑（产金币或产粮材的那种）——它们的"反击"最该被削 */
-function isEcoBuilding(def: UnitTypeDef): boolean {
+/**
+ * 经济建筑（产金币或产粮材的那种）——它们的"反击"最该被削。
+ *
+ * 导出是因为**选卡也要用它**：这类建筑不进卡池（见 `draftAlwaysAllowed`）。
+ * 两处必须共用同一个判据——"哪些算经济建筑"分成两份写，迟早会出现
+ * "选卡里还躺着一个磨坊"这种事。
+ */
+export function isEcoBuilding(def: UnitTypeDef): boolean {
   // 注意 yield：粮仓与采石场的产出不写成 income，只写 yield。
   // 早先漏了这一条，"经济建筑"的整套待遇（不还手、造价减免、削耐久）
   // 全都没落到这两个建筑身上——而它们恰恰是隘口堵路的主角。
@@ -232,7 +233,111 @@ const NEW_BUILDINGS: UnitTypeDef[] = [
  * 单位之间不靠"更肥的地形表"取胜，靠"同一块地出得更多"——
  * 这样后期不必去抢特定的丘陵，而是"换人"就能扩产。
  */
+/* ── 收税（2026-11-10） ──────────────────────────────────────────────────
+ *
+ * 用户定的规则：
+ *   · 牧民：产出对半分成粮食与材料；
+ *   · 税官：把全场粮+材的当回合产出按比例折成金币；
+ *   · 其余经济单位：按脚下地形定产什么——平原/水域出粮、城市出金、其它出材。
+ *
+ * 为什么要一个税官：这套扩展把金币折得太狠（原来 0.8 折成粮材、只留 0.2），
+ * 而"出兵"仍然要三成金币。结果就是"粮材堆成山、金币见底"——兵摆在城里造不出来。
+ * 税官就是把那堆粮材换回金币的出口。
+ */
+
+/** 税官这个兵种的 id（定义在下面的 NEW_ECONOMY_UNITS 里） */
+const TAX_UNIT = 'tax_collector';
+
+/**
+ * 每名税官每回合从"全场粮+材"里抽多少金币。
+ *
+ * 0.1 = 抽一成。这个数怎么来的、为什么不能再高，见 `taxableOutputOf` 上面
+ * 那段账：它不是拍出来的，是按"三成金币 = 出兵的全部金币开销"反推的。
+ */
+const TAX_RATE = 0.1;
+
+/**
+ * 一个经济单位站在这种地形上，产出该落到哪种资源。
+ *
+ * 单一出口：`modifyYield`（真正改写产出）和 `taxableOutputOf`（算税基）
+ * 都调它，避免"界面上是粮、税按材算"这种两套口径。
+ */
+function econResAt(def: UnitTypeDef, terrain: Terrain): 'gold' | 'food' | 'material' | 'mixed' {
+  // 牧民是特例：牛羊既是口粮也是皮革毛料，对半分
+  if (def.id === 'herder') return 'mixed';
+  if (terrain === 'city') return 'gold';
+  // 水域与平原：种的就是粮。桥面也算水域（桥下还是河）
+  if (terrain === 'plain' || navigable(terrain)) return 'food';
+  // 森林、丘陵、高山、沼泽……剩下的都算材料
+  return 'material';
+}
+
+/**
+ * 这名玩家这一回合能产的**粮食与材料合计**（税基）。
+ *
+ * 为什么不直接调 `rules.unitYield` 累加：那会让 `city-works → rules → expansions
+ * → city-works` 成环，模块初始化顺序一旦变了就是 TDZ 崩。这里的口径写死成
+ * "兵种表 × 脚下地形"，和 `modifyYield` 用的是同一个 `econResAt`，
+ * 差一样东西：**临水贸易加成**（那 3 金是"靠水吃水"的补贴，不算进税基）。
+ *
+ * 税官自己不算进税基——否则"N 个税官互相收税"会越叠越高。
+ */
+function taxableOutputOf(s: GameState, p: PlayerId): number {
+  let total = 0;
+  for (const u of s.units) {
+    if (u.owner !== p || u.hp <= 0) continue;
+    const def = s.unitTypes[u.type];
+    if (!def || def.id === TAX_UNIT) continue;
+    const tile = s.tiles[u.y * s.w + u.x];
+    const terrain = tile?.terrain ?? 'plain';
+
+    // 能直接产粮/材的（扩展自己写的 yieldByTerrain）：原样计入
+    const direct = def.yieldByTerrain?.[terrain];
+    if (direct) total += (direct.food ?? 0) + (direct.material ?? 0);
+
+    const gold = def.incomeByTerrain ? (def.incomeByTerrain[terrain] ?? 0) : (def.income ?? 0);
+    if (gold <= 0) continue;
+
+    if (def.category === 'economy') {
+      // 'gold' = 站在城里收钱，那份钱不变成粮材，也就不该计税
+      if (econResAt(def, terrain) !== 'gold') total += gold;
+    } else if (isEcoBuilding(def)) {
+      // 经济建筑：磨坊磨粮、工厂出材，折的是八成（见 ECO_OUTPUT_SHARE）
+      total += Math.max(1, Math.round(gold * ECO_OUTPUT_SHARE));
+    }
+  }
+  return total;
+}
+
+/** 这名玩家此刻的时代（取自家城的最高一代；没有城就按开局时代） */
+function playerEraOf(s: GameState, p: PlayerId): number {
+  let era = 0;
+  for (const c of s.cities) if (c.owner === p && !c.ruined) era = Math.max(era, c.era);
+  return era || s.config.startEra;
+}
+
 const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
+  // 税官：1 时代就能造，自己一分钱不产，产的是"全场粮+材的一成"。
+  //
+  // 为什么标准产出全是 0：它的收入必须**看得见地**跟着别的产业走。写成
+  // "基础 3 金 + 抽成"会让玩家算不清"再多一个税官到底值多少"，
+  // 而沙盒类游戏的乐趣恰好在能算清这笔账。数字全在 `modifyYield` 里算。
+  {
+    id: TAX_UNIT,
+    name: '税官',
+    short: '税',
+    era: 1,
+    category: 'economy',
+    // 比农民贵一档：它是"把粮食变成金币"的机器，开局押它意味着先不押产能
+    cost: 85,
+    move: 2,
+    atk: 2,
+    armor: 1,
+    maxHp: 16,
+    range: 1,
+    vision: 2,
+    incomeByTerrain: { city: 0, plain: 0, hill: 0, forest: 0 },
+  },
   {
     id: 'quarrier',
     name: '采石工',
@@ -262,7 +367,7 @@ const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
     maxHp: 26,
     range: 1,
     vision: 2,
-    incomeByTerrain: { hill: 36, forest: 20, plain: 8, city: 10 },
+    incomeByTerrain: { hill: 40, forest: 22, plain: 9, city: 11 },
   },
   {
     id: 'materials',
@@ -278,7 +383,7 @@ const NEW_ECONOMY_UNITS: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     // 现代建材不只从山里来：城郊的拆迁料、预制件也算，所以 city 一档给得不低
-    incomeByTerrain: { hill: 48, forest: 26, city: 18, plain: 12 },
+    incomeByTerrain: { hill: 58, forest: 31, city: 22, plain: 14 },
   },
 ];
 
@@ -305,10 +410,25 @@ export const CITY_WORKS: Expansion = {
   name: '城郭与物料',
   blurb: '更大的主城，多出粮食与建材。',
   summary:
-    '主城扩成 3×3；兵要吃粮、楼要耗材（金币只占零头）；经济单位按脚下地形出粮或出材，经济建筑只产一种资源；' +
+    '主城扩成 3×3；兵要吃粮、楼要耗材（金币只占零头）。经济单位按**脚下地形**定产什么：' +
+    '平原与水域全出粮、城市里全出金、森林丘陵等全出材；牧民粮食与材料各一半。' +
+    '**税官**（1 时代可造，最多与当前时代同数）把全场粮材的一成折成金币，' +
+    '专门解决"粮材堆成山、金币见底造不出兵"。' +
     '建材产线一路排到现代（采石工→矿队→建材公司，砖窑→水泥厂→建材基地）；' +
     '箭塔改成两回合施工、可驻军、视野更远但打不疼；高山画得更扎眼。',
   scale: 'large',
+  /*
+   * 和修真互斥。
+   *
+   * 这一包把造价从"金币为主"整个换成"粮/材为主、金币只占零头"，
+   * 而修真那套经济（灵石收入、修炼、炼丹）全建立在金币与灵石上。
+   * 两个一起开，玩家会在"造兵几乎不花钱"和"修士要靠金币堆出来"之间
+   * 得到一个既不平衡也解释不通的中间态——不是数值差一点，是两套经济互相拆台。
+   *
+   * 只写在这一侧：冲突是双向判的（见 `expansionsClash`），两边各写一遍
+   * 改 id 时必然漏一个。
+   */
+  conflicts: ['cultivation'],
   // 主城 3×3：地图生成时就要知道，所以写在扩展上而不是开局钩子里
   citySize: 3,
   units: [...NEW_BUILDINGS, ...NEW_ECONOMY_UNITS],
@@ -335,57 +455,97 @@ export const CITY_WORKS: Expansion = {
       return isBioUnit(unitType) ? { food: share } : { material: share };
     },
 
-    // ── 产出：金币拆一大半出来，按地形落到粮或材上 ──
+    // ── 产出：经济单位按地形定产什么，税官把粮材换回金币 ──
+    //
+    // 2026-11-10 用户定口径（旧口径是"金 8 折成粮材，森林丘陵出材、其它出粮"）：
+    //   · 牧民：粮食与材料各一半；
+    //   · 税官：全场粮+材的一成，折成金币（见 TAX_RATE）；
+    //   · 其它经济单位：**全折**，平原/水域出粮、城市出金、剩余地形出材。
+    //
+    // 旧口径的两条教训留在这儿，别重走：
+    //   · 11-04 曾把比例对调成"六成留金"（怕升级城市没钱），结果建材掉三分之一，
+    //     金币并没有因此宽裕——支出结构没变，只是把短缺挪了个地方；
+    //   · 11-08 反向提到 0.8（折得更狠），金币随即变紧，这才有了 11-10 的税官。
     modifyYield: ({ state, unit, yields }) => {
       const def = state.unitTypes[unit.type];
       if (!def) return yields;
+
+      /*
+       * 税官：先算它的收入，再谈别的。
+       *
+       * 它不吃地形——靠的是"这一方这一回合产了多少粮材"。所以必须在
+       * `gold <= 0` 的早退之前处理：它的标准产出表全是 0。
+       *
+       * 每名税官各抽一份（不是"总数由几个税官平分"）：上限由时代数卡着
+       * （见 produceBlocked），"再补一个税官能多收多少"由此变成一个可算的问题。
+       */
+      if (def.id === TAX_UNIT) {
+        const base = taxableOutputOf(state, unit.owner);
+        const tax = Math.round(base * TAX_RATE);
+        return tax > 0 ? { ...yields, gold: tax } : yields;
+      }
+
       const gold = yields.gold ?? 0;
       if (gold <= 0) return yields;
 
       const ecoUnit = def.category === 'economy';
       const ecoBuilding = isEcoBuilding(def);
       if (!ecoUnit && !ecoBuilding) return yields;
-      // 海上的经济建筑不参与这一套折算。
-      //
-      // 「城郭」说的是城市的补给链：把金币换成粮/材，喂给城里的人和工事。
-      // 钻井平台不在这个链条上——它离岸好几格，产的是原油，卖的是钱。
-      // 而且它是海战包的核心收入点（回本按 50 金/回合算的），
-      // 折成建材等于把这一格的经济设计推倒重来。
-      if (def.domain === 'water') return yields;
 
       const tile = state.tiles[unit.y * state.w + unit.x];
       const terrain = tile?.terrain ?? 'plain';
-      // 经济单位看脚下：林子丘陵出建材，平地城头出粮食。
-      // 经济建筑看它自己是"磨坊"还是"工厂"：前期的磨坊磨的是粮，
-      // 后期的工厂/兵工厂出的是建材——这样两样资源都有自己的产线，
-      // 而不是所有建筑都往粮仓一个方向挤（那会让建材只能靠林子里的农民）。
-      const res = ecoBuilding
-        ? ecoResOf(def)
-        : terrain === 'forest' || terrain === 'hill'
-          ? 'material'
-          : 'food';
-      // 建筑拆得比单位狠：0.8 对 0.6。建筑不会动、不会跑、也不用占编制，
-      // 它唯一的用处就是把金币变成粮/材——那就把这件事做到极致，
-      // 换取"它不能当墙"（见下面的耐久调整）。
-      //
+
       /*
-       * 单位这一档 **2026-11-06 回撤了对调**。
+       * 水上的东西不参与这套折算。
        *
-       * 11-04 曾经把平原/丘陵/森林上的比例反过来（六成留金、四成折成粮/材），
-       * 理由是"升级城市只吃金币，折太狠就永远差那笔升级钱"。
-       * 实玩下来这个理由站不住：那三种地形是建材线的**主要产地**，对调之后
-       * 建材产出掉三分之一（时代 5 的建材兵 29 → 19），而金币并没有因此变得宽裕
-       * ——因为支出结构没跟着变，只是把短缺从金币挪到了建材。
-       *
-       * 所以回到统一口径：所有地形的经济单位都按 ECO_UNIT_OUTPUT_SHARE 折算。
-       * 想再对调，别改这里的分支，改那个常数（它就是为了"只有一个开关"才拆出来的）。
+       * 「城郭」说的是城市补给链：把金币换成粮材，喂给城里的人和工事。
+       * 船跑的是贸易、钻井平台卖的是原油——它们离这条链子很远，
+       * 而且都是海战包的经济核心（按金/回合定的价），折成粮食等于把它推倒重来。
+       * 所以水域经济单位直接放行，保持原样。
        */
-      const share = ecoBuilding ? ECO_OUTPUT_SHARE : ECO_UNIT_OUTPUT_SHARE;
-      const converted = Math.max(1, Math.round(gold * share));
-      const out = { ...yields };
-      out.gold = Math.max(0, gold - converted);
-      out[res] = (out[res] ?? 0) + converted;
+      if (def.domain === 'water') return yields;
+
+      // 经济建筑维持原口径：磨坊磨粮、工厂出材，折八成
+      if (ecoBuilding) {
+        const res = ecoResOf(def);
+        const converted = Math.max(1, Math.round(gold * ECO_OUTPUT_SHARE));
+        const out = { ...yields };
+        out.gold = Math.max(0, gold - converted);
+        out[res] = (out[res] ?? 0) + converted;
+        return out;
+      }
+
+      // 经济单位：全折。产出落到哪种资源只看脚下
+      const res = econResAt(def, terrain);
+      // 城市里的经济单位原样收金币：那是"城里做买卖"，不是种地
+      if (res === 'gold') return yields;
+
+      const out: ResourceCost = { ...yields, gold: 0 };
+      if (res === 'mixed') {
+        // 牧民：一半口粮、一半皮毛细料；奇数时多出的那一点给材料（牲畜身上能用的更多）
+        const food = Math.floor(gold / 2);
+        out.food = (out.food ?? 0) + food;
+        out.material = (out.material ?? 0) + (gold - food);
+      } else {
+        out[res] = (out[res] ?? 0) + gold;
+      }
       return out;
+    },
+
+    // ── 税官的数量上限：等于当前时代 ──
+    //
+    // 走 `produceBlocked` 而不是在别处拦：这个钩子规则层、面板、AI 三处都认，
+    // 面板上直接就是"造不了 + 一句理由"，不会出现"按钮亮着点下去被拒"。
+    produceBlocked: ({ state, source, target }) => {
+      if (target.id !== TAX_UNIT) return null;
+      const owner = source.kind === 'city' ? source.city.owner : source.camp.owner;
+      const era = playerEraOf(state, owner);
+      const cap = Math.max(1, era);
+      const have = state.units.filter(
+        (u) => u.owner === owner && u.type === TAX_UNIT && u.hp > 0,
+      ).length;
+      if (have < cap) return null;
+      return `税官最多 ${cap} 个（等于当前时代），已经有 ${have} 个`;
     },
 
     // ── 开局：改本局的兵种表与城市 ──

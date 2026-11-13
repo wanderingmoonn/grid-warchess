@@ -12,7 +12,7 @@ import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
 import { holdOf } from './core/carry.ts';
-import { skillsOf } from './core/query.ts';
+import { coversTile, skillsOf } from './core/query.ts';
 import { isProducer } from './core/produce.ts';
 import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
@@ -21,7 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { playerView } from './core/fog.ts';
+import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
 import {
@@ -36,7 +36,8 @@ import {
   cityAt,
   citiesOf,
   cityName,
-  distance,
+  distBetweenUnits,
+  distToUnit,
   disbandRefundOf,
   eggSpots,
   heroBlocked,
@@ -63,19 +64,39 @@ import {
 } from './core/rules.ts';
 import {
   clearUnits,
+  deleteUnitsInRect,
+  fillUnitsInRect,
+  paintRect,
   paintTerrain,
   placeCity,
   placeUnit,
+  rectH,
+  rectOf,
+  rectW,
   removeAt,
   sandboxCityProblem,
+  translateUnitsInRect,
+  unitsInRect,
 } from './core/sandbox.ts';
-import type { SandboxResult } from './core/sandbox.ts';
+import type { Rect, SandboxResult } from './core/sandbox.ts';
 import { loadCustomUnits } from './core/customUnits.ts';
 import { createMatch, DEFAULT_CONFIG, DEFAULT_PLAYER_NAMES, normalizePlayerNames, randomSeed } from './core/setup.ts';
 import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
-import type { Action, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
-import { coordsFromEvent, renderBoard } from './ui/board.ts';
+import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
+import { lineBetween } from './core/grid-line.ts';
+import { cellAtPoint, coordsFromEvent, refreshCellVar, renderBoard } from './ui/board.ts';
+import { scopeBoardUi } from './ui/board-scope.ts';
+import type { BoardUi } from './ui/board.ts';
+import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
+import { createMoonBoard } from './core/space/moon.ts';
+import { hasStarRows, starRows } from './ui/star-panel.ts';
+import { peekStarmap } from './core/space/starmap.ts';
+import { renameStation } from './core/space/station.ts';
+import { starLayout } from './ui/star-layout.ts';
+import { renderStarMap, type StarSelection } from './ui/star-map.ts';
+import { nodeName } from './core/space/starmap.ts';
+import type { StarPanelInfo } from './ui/panel.ts';
 import {
   aiDraftBan,
   aiDraftPick,
@@ -87,10 +108,10 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, seasonLabel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
+import { renderPanel, invalidatePanel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
-import type { MatchReport } from './core/report.ts';
+import type { LoggedAction, MatchReport } from './core/report.ts';
 import {
   newTimeline,
   noteAction,
@@ -103,7 +124,8 @@ import {
 import { uploadReport } from './net/reports.ts';
 import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
-import { loadChimeVolume, nextChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
+import { openMapUpload } from './ui/map-upload.ts';
+import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
 import { openTitle } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
@@ -155,8 +177,34 @@ import {
   fetchPresence,
   heartbeat,
 } from './net/presence.ts';
-import { SKILL_PREVIEWERS } from './core/skill-hooks.ts';
+import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
+import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
+import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
+import { settingsHtml } from './ui/settings.ts';
+import { MODULES, deviceTargetOf } from './core/armor.ts';
+
+/*
+ * 主题要在**任何渲染之前**落地。
+ *
+ * `applyUiTheme` 只改 `<html data-ui>` / `data-motion>` 两个属性，不碰任何规则；
+ * 但必须抢在第一帧之前——放在模块末尾（我第一版就放那儿了）会先按 legacy 画一帧
+ * 再跳成 modern，那一闪比不换主题还难受。所以放在 import 之后、所有初始化之前。
+ *
+ * 切换入口（暂不进设置页）：
+ *   · 地址栏 `?ui=modern`（对比用，优先级最高）；
+ *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
+ */
+applyUiTheme();
+installUiConsole();
+/*
+ * 兵种贴图：默认关，只把 `<html data-art>` 定下来。
+ * 真的打开时才去拉清单——关着的时候一个字节都不多请求。
+ */
+initUnitArt();
+initTerrainArt();
+
 
 /**
  * 非空时表示某个英雄正在等玩家选技能目标。
@@ -174,6 +222,14 @@ let pendingSkill:
  * 不必重算一遍预览，棋盘也不用跟着重绘。
  */
 let skillAimKey = '';
+
+/**
+ * 非空时表示某台装甲正在等玩家给设备选落点（弹射钩索）。
+ *
+ * 和 `pendingSkill` 是同一个套路，但不合并：技能有冷却/连发这一整套要处理，
+ * 设备只有"选一格"。合成一个字段之后，"取消"该退回哪一层就说不清了。
+ */
+let pendingDevice: { unitId: string; deviceId: string } | null = null;
 
 /**
  * 邀请链接：在当前地址上加 `?room=CODE`。
@@ -212,6 +268,8 @@ appEl.innerHTML = `
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
         </div>
+        <div class="star-map" id="star-map" hidden></div>
+        <div class="board-list" id="board-list"></div>
       </div>
       <aside class="side" id="side"></aside>
     </div>
@@ -231,6 +289,10 @@ const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
  * 它只认"可视区域"这一个坐标系，永远钉在右下角。
  */
 const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
+/** 左上角的地图列表：收起时只显示当前图，点开列出所有图 */
+const boardListEl = pick<HTMLElement>(appEl, '#board-list');
+/** 星图覆盖层：盖在棋盘上，按 Esc / 关闭退出 */
+const starMapEl = pick<HTMLElement>(appEl, '#star-map');
 /**
  * 强制模式的横幅。
  *
@@ -240,6 +302,25 @@ const boardScrollEl = pick<HTMLElement>(appEl, '#board-scroll');
  */
 const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
+
+/*
+ * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
+ *
+ * `<details>` 的 `toggle` 事件**不冒泡**，所以只能用捕获阶段挂在容器上。
+ * 面板每次重建都会按这个标记重新加 `open`，收起/展开才不会一刷新就弹回去。
+ */
+sideEl.addEventListener(
+  'toggle',
+  (e) => {
+    const el = e.target as HTMLElement | null;
+    if (!el || !el.classList.contains('card-fold')) return;
+    const open = (el as HTMLDetailsElement).open;
+    // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
+    if (el.dataset.fold === 'log') logOpen = open;
+    else opsOpen = open;
+  },
+  true,
+);
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
 const replayEl = pick<HTMLElement>(appEl, '#replay');
@@ -330,15 +411,91 @@ function syncBoardViewChips(views: BoardView[]): void {
   }
 }
 
-/** 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined */
-function computeBoardView(): Map<number, string> | undefined {
+/**
+ * 顶栏的常驻徽章（季节这类"整局的一个状态"）。
+ *
+ * 和 `syncBoardViewChips` 同一套做法：只在内容签名变了时才写 DOM。
+ * 以前季节是 `TopbarState.season` 一个具名字段 + 一个 `data-ref="season"`，
+ * 那是核心为「季节与气候」这个词专门开的口子——现在它只是"某个扩展的一枚徽章"。
+ */
+function syncTopbarBadges(): void {
+  const box = topbarEl.querySelector<HTMLElement>('[data-ref="topbar-badges"]');
+  if (!box) return;
+  const badges: Array<{ id: string; text: string; hint: string }> = [];
+  for (const e of activeExpansions(state)) {
+    if (!e.hooks.topbarBadges) continue;
+    badges.push(...e.hooks.topbarBadges({ state }));
+  }
+  const sig = badges.map((b) => `${b.id}:${b.text}:${b.hint}`).join('|');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const esc = (t: string) =>
+    t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  box.innerHTML = badges
+    .map((b) => `<span class="topbar-badge" title="${esc(b.hint)}">${esc(b.text)}</span>`)
+    .join('');
+}
+
+/*
+ * 浓雾下点黑格：**不拦，交给面板说"未探明"**。
+ *
+ * 2026-11-10 之前这里有一对 `blackedOutAt` / `refuseLook`：浓雾里点视野外的格子
+ * 直接 toast 一句「看不清」就吞掉这次点击。同日另一条线（Liuks）把遮蔽做到了
+ * 面板层——`PlayerView.terrainHidden` + 「未探明」/「记忆里的地形（可能有变）」，
+ * 活数据（灵气浓度、脚下天气）只在看得见时才算。
+ *
+ * 两套叠在一起的结果是：面板那套在浓雾里永远走不到，玩家只能得到一句提示。
+ * 所以按"留面板、不留硬拦"收口：点得开，但念不出东西——这比"点不动"信息量更大，
+ * 也让普通雾与浓雾共用一条判断（`terrainHidden`）。
+ *
+ * 视图染色那条闸门（`onlyVisibleCells`）仍然在：它管的是"别把天气画到黑区"，
+ * 和点击是两回事。
+ */
+
+/**
+ * 这一帧要染的格子（格索引 → 颜色）。没有激活的视图就返回 undefined。
+ *
+ * `visible` 是这一帧的视野：视图染色必须过一遍 `onlyVisibleCells`。
+ * 天气、灵气这些场都是**按全图算的**（存在各自的 `Tile.custom` 里），
+ * 不裁的话，看视图就等于开了一张全图透视——对面城市在哪、附近是山是林，
+ * 一眼就能读出来。遮蔽放在核心而不是各个扩展里，是为了只有一个地方能漏。
+ */
+function computeBoardView(visible: readonly number[]): Map<number, string> | undefined {
   const id = activeBoardViewId();
   if (!id) return undefined;
   const def = boardViewsOf().find((v) => v.id === id);
-  const cells = def?.cells?.({ state, viewer: me() });
+  const cells = def?.cells?.({ state, viewer: me(), board: activeBoardId });
   if (!cells || cells.length === 0) return undefined;
+
+  /*
+   * 格号是**这张图**的格号，宽也必须取这张图的：以前写死 `state.w`，
+   * 于是在月球/空间站上打开的视图会按地球的列宽换算，颜色整体错行。
+   * `visible` 由调用方给（那张图的可见集），不是地球那一份。
+   */
+  const w = boardOf(state, activeBoardId).w;
   const out = new Map<number, string>();
-  for (const c of cells) out.set(c.y * state.w + c.x, c.color);
+  for (const c of onlyVisibleCells(state, visible, cells, activeBoardId)) {
+    out.set(c.y * w + c.x, c.color);
+  }
+  return out;
+}
+
+/**
+ * 视图层上的字符（风向箭头）。和染色同一条可见性闸门：
+ * 雾外的箭头同样不许出现——它泄露的信息（哪边风大）和颜色一样多。
+ */
+function computeBoardGlyph(visible: readonly number[]): Map<number, string> | undefined {
+  const id = activeBoardViewId();
+  if (!id) return undefined;
+  const def = boardViewsOf().find((v) => v.id === id);
+  const glyphs = def?.glyph?.({ state, viewer: me(), board: activeBoardId });
+  if (!glyphs || glyphs.length === 0) return undefined;
+  // 和染色同一个道理：格号属于这张图，列宽也得取这张图的
+  const w = boardOf(state, activeBoardId).w;
+  const out = new Map<number, string>();
+  for (const g of onlyVisibleCells(state, visible, glyphs, activeBoardId)) {
+    out.set(g.y * w + g.x, g.text);
+  }
   return out;
 }
 let selectedId: string | null = null;
@@ -540,7 +697,7 @@ let recorder: MatchTimeline | null = null;
  * 上限 1500 步：一局通常 400~1000 步；超了就从尾部截断并计数（`actionsDropped`），
  * 让"这份日志不全"这件事在报告里自己说出来，而不是重放时对不上再让人去猜。
  */
-let actionLog: Action[] | null = null;
+let actionLog: LoggedAction[] | null = null;
 let actionDropped = 0;
 let actionBytes = 0;
 /** 步数上限 */
@@ -577,9 +734,12 @@ function resetRecorder(): void {
 function noteStep(actor: PlayerId, action: Action): void {
   if (actionLog) {
     if (actionLog.length < ACTION_LOG_CAP && actionBytes < ACTION_LOG_BYTES) {
-      actionLog.push(action);
+      // 带上行动方（2026-11-11）：END_TURN 归谁光看动作推不准，
+      // 而"人这一步怎么想的"恰恰要靠它把人类的决策单独拎出来
+      const step = { ...action, by: actor } as LoggedAction;
+      actionLog.push(step);
       // 粗算就够：这里的用途只是"别撞上限"，不需要精确
-      actionBytes += JSON.stringify(action).length + 1;
+      actionBytes += JSON.stringify(step).length + 1;
     } else {
       actionDropped += 1;
     }
@@ -692,6 +852,12 @@ function planMovePath(before: GameState, action: Action): void {
   if (action.type !== 'MOVE') return;
   const u = before.units.find((x) => x.id === action.unitId);
   if (!u) return;
+  // 别的图不画拐弯路径：`pathCells` 是按地球宽度写死的。直线滑过去就够用了，
+  // 真要为月球画逐格路径，等它有了障碍和地形再说。
+  if (boardIdOf(u) !== EARTH) {
+    pendingMovePath = null;
+    return;
+  }
   pendingMovePath = new Map([
     [u.id, pathCells(before, { x: u.x, y: u.y }, { x: action.x, y: action.y }, u.type)],
   ]);
@@ -901,6 +1067,101 @@ function myTurn(): boolean {
  * 这里再算一遍纯属白烧——`playerView` 每帧 1.4ms，32×32 上占单帧的 7%。
  * 单独重画面板的那条路没有，就现算。
  */
+/**
+ * 侧栏折叠卡是否展开（「操作」「战报」各一个）。
+ *
+ * 面板是**整块重建**的（每回合、每次金币变动都会重写 innerHTML），`<details>`
+ * 的 open 状态一重建就没了。所以状态存在这里，渲染时带上去；`<details>` 的
+ * toggle 不冒泡，监听挂在 sideEl 上用捕获。
+ */
+let opsOpen = false;
+let logOpen = false;
+
+/**
+ * 星图上选中节点/航线时，侧栏那张卡的内容。
+ *
+ * 只产出"几行已经算好的字"，不把星图数据塞进面板：面板不需要知道
+ * 节点画在哪个格、航线连谁，它只负责画。以后星图加东西，改这里就够了。
+ */
+function starPanelInfo(): StarPanelInfo | null {
+  if (!starOpen || !starSel) return null;
+  const lay = starLayout(state);
+  if (!lay) return null;
+  const who = (p: PlayerId): string => state.players[p]?.name ?? p;
+  const trips = state.transit ?? [];
+
+  if (starSel.kind === 'node') {
+    const n = lay.nodes.find((x) => x.id === starSel!.id);
+    if (!n) return null;
+    const lines: string[] = [
+      n.kind === 'moon' ? '卫星' : n.kind === 'orbit' ? '轨道槽位' : '星球',
+    ];
+    if (n.stations.length === 0) {
+      lines.push('轨道上没有空间站');
+    } else {
+      lines.push(`轨道上停泊 ${n.stations.length} 座空间站`);
+      for (const st of n.stations) {
+        lines.push(
+          `· ${st.ownerName}的「${st.name}」`
+          + `${st.travelTo ? `（正在驶向${st.travelTo}）` : ''}`
+          + `${st.ruinLeft ? `（废墟，${st.ruinLeft} 回合后消失）` : ''}`,
+        );
+      }
+    }
+    // 正往这儿飞的站：到了才会出现在 n.stations 里，所以单独说一句
+    const inbound = (peekStarmap(state)?.stations ?? []).filter((st) => st.travel?.to === n.id);
+    for (const st of inbound) {
+      const name = state.boards?.[st.board]?.name ?? st.board;
+      lines.push(`${who(st.owner)}的「${name}」正在驶来，还有 ${Math.max(0, st.travel!.left)} 回合`);
+    }
+    const incoming = trips.filter((t) => t.to === n.id);
+    if (incoming.length === 0) {
+      lines.push('没有东西正在飞来');
+    } else {
+      for (const t of incoming) {
+        lines.push(`${who(t.owner)}的火箭正在飞来，还有 ${Math.max(0, t.left)} 回合`);
+      }
+    }
+    const goto: Array<{ label: string; board: string }> = [];
+    if (n.board) goto.push({ label: n.name, board: n.board });
+    for (const st of n.stations) goto.push({ label: st.name, board: st.board });
+    // 改名不在这里：它挂在核心舱的单位卡上（玩家改名的时机是"我正在看这座站"）
+    return { kind: 'node', title: n.name, lines, ...(goto.length > 0 ? { goto } : {}) };
+  }
+
+  const lane = lay.lanes.find((l) => l.id === starSel!.id);
+  if (!lane) return null;
+  const onWay = trips.filter((t) => t.lane === lane.id);
+  // 航行中的站也算"路上有东西"——以前这条只数火箭，于是站开着的时候航线卡写着"路上没有东西"
+  const sailing = (peekStarmap(state)?.stations ?? []).filter((st) => st.travel?.lane === lane.id);
+  /*
+   * 这里只写**火箭**的航程：弹道固定，和谁发、有没有推进器都无关。
+   * 空间站自己开过去是另一回事（距离 ÷ 航速），回合数在站的卡片和下面
+   * 那几行"正在驶向"里，不混在一起写。
+   */
+  const lines = [
+    `${lane.a.name} ⇄ ${lane.b.name}`,
+    `火箭航程 ${lane.turns} 回合（点火之后开始算）`,
+  ];
+  if (onWay.length === 0 && sailing.length === 0) {
+    lines.push('路上没有东西');
+  }
+  for (const t of onWay) {
+    lines.push(`${who(t.owner)}的火箭 → ${nodeName(state, t.to)}，还有 ${Math.max(0, t.left)} 回合`);
+  }
+  for (const st of sailing) {
+    const name = state.boards?.[st.board]?.name ?? st.board;
+    const pct = st.travel?.total
+      ? Math.round((1 - (st.travel.left ?? 0) / st.travel.total) * 100)
+      : 0;
+    lines.push(
+      `${who(st.owner)}的「${name}」正在驶向${nodeName(state, st.travel!.to)}：` +
+        `还有 ${Math.max(0, st.travel!.left)} 回合（已走 ${pct}%）`,
+    );
+  }
+  return { kind: 'lane', title: `航道 · ${lane.a.name} ⇄ ${lane.b.name}`, lines };
+}
+
 function panelInput(known?: PlayerView): PanelInput {
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
@@ -908,10 +1169,21 @@ function panelInput(known?: PlayerView): PanelInput {
     view,
     me: me(),
     // 注意用 view.state 而不是 state：面板同样不该看到视野外的东西
-    selectedUnit: picked,
-    selectedCityId,
-    selectedCampId,
-    selectedTile,
+    /*
+     * 星图打开时，棋盘的选中一律不显示。
+     *
+     * 两套东西没有关系：星图上点的是节点/航线，棋盘上点的是格/单位。
+     * 一起摆出来时，玩家会在"星球卡"上面看到刚才点的那块平原——像是没刷新。
+     * 选中本身不清（关掉星图还要用），只是这一帧不显示。
+     */
+    selectedUnit: starOpen ? null : picked,
+    selectedCityId: starOpen ? null : selectedCityId,
+    selectedCampId: starOpen ? null : selectedCampId,
+    selectedTile: starOpen ? null : selectedTile,
+    activeBoard: activeBoardId,
+    star: starPanelInfo(),
+    opsOpen,
+    logOpen,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,
@@ -945,7 +1217,7 @@ function panelInput(known?: PlayerView): PanelInput {
      * 战报卡只排一种情况：复盘。
      *
      * 复盘里 `me()` 是"看棋的人"的席位，拖进来的那局跟你没关系，
-     * 生成的卡会把别人那局标成"我赢了"——和结算卡替人签同意书是同一类错。
+     * 生成的卡会把别人那局标成"胜利"——和结算卡替人签同意书是同一类错。
      * 上帝模式、双 AI 观战**给**：前者是自家最常用的模式，
      * 后者打完一局正好发群里。
      */
@@ -1269,7 +1541,22 @@ function tutorialMarksOf(): {
   return { tutorialTiles: m.tiles, tutorialCityId: m.cityId, tutorialOwnCityId: m.ownCityId };
 }
 
+/**
+ * 贴图清单是异步的：**第一帧一定还没有它**。
+ *
+ * 所以不能在启动时拉一次就完事——那一刻还没有渲染入口，拉到了也没人重画，
+ * 结果就是"打开了开关、棋盘照旧全是汉字"，看着像开关失效。
+ * 放在 render 里惰性触发：清单到货后补画一帧，只补一次。
+ */
+let artIndexAsked = false;
+function ensureArtIndex(): void {
+  if (artIndexAsked || !uiArtOn()) return;
+  artIndexAsked = true;
+  void loadUnitArtIndex().then(() => render());
+}
+
 function render(): void {
+  ensureArtIndex();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -1278,7 +1565,8 @@ function render(): void {
   // 顶栏可能被整块重建（换局、导入存档），观战人数不在对局状态里，
   // 重建之后要补写一次；不补的话它会一直空着，直到下一次心跳。
   setWatchCount(watchCount);
-  // 顶栏的棋盘视图 chip（扩展给的；没有就整块不占位）
+  // 顶栏的扩展槽位：常驻徽章（季节）+ 棋盘视图 chip。都没有就整块不占位。
+  syncTopbarBadges();
   syncBoardViewChips(boardViewsOf());
   /*
    * 复盘时换一副眼镜：**旁观 + 全信息**。
@@ -1288,11 +1576,22 @@ function render(): void {
    * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
    */
   const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
+  syncBoardList(view);
+  // 星图：盖在棋盘上的一层。没开就不画，开了才按当前视图算一遍
+  starMapEl.hidden = !starOpen;
+  if (starOpen) renderStarMap(starMapEl, view, me(), starSel);
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
   const threat =
-    !replay && selected && selected.owner === state.current && !selected.acted && !pendingSkill
+    !replay &&
+    selected &&
+    // 不再限定地球：threatTiles 已经按单位所在的图算，返回的也是那张图的格号。
+    // 限定地球会让月面上的兵永远看不到"我这一步能威胁到哪"。
+    selected.owner === state.current &&
+    !selected.acted &&
+    !pendingSkill
       ? Array.from(threatTiles(state, selected))
       : [];
 
@@ -1329,7 +1628,7 @@ function render(): void {
     lastStrikerId = null;
   }
 
-  renderBoard(boardEl, view, {
+  const boardUi: BoardUi = {
     selectedId,
     reach,
     targets,
@@ -1338,10 +1637,14 @@ function render(): void {
     siegeTargets: siege,
     selectedCityId,
     placeable: computePlaceable(),
+    // 框选：拖动中显示临时矩形，松手后显示提交的那一块
+    marqueeTiles: godRectIndices(),
     threat,
     heat,
-    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值。
-    boardView: computeBoardView(),
+    // 扩展染的那一层（灵气浓度等）。只在视图打开时有值，且按视野裁过。
+    // 可见集按**正在看的那张图**给：地球的索引在月球上不是一个位置
+    boardView: computeBoardView(view.visibleByBoard[activeBoardId] ?? []),
+    boardGlyph: computeBoardGlyph(view.visibleByBoard[activeBoardId] ?? []),
     heatFlash: heatFlashView,
     flashSeq: heatFlash?.seq ?? 0,
     movePath: pendingMovePath ?? undefined,
@@ -1355,7 +1658,29 @@ function render(): void {
      * 棋盘每帧重建、首帧还在 rAF 里，贴上去的那一下经常白贴（城市红框就是这么丢的）。
      */
     ...(tutorial.tutorialOn() ? tutorialMarksOf() : {}),
-  });
+  };
+  /*
+   * 画**当前这一张**图。
+   *
+   * `viewOnBoard` 给渲染层一份"替身视图"：宽高、格子、单位、城市都换成
+   * 那张图的那一份（地球也走这条路——不裁的话月球上的兵会画到地球上）。
+   * 没有别的图的东西时它原样返回，一个对象都不建。
+   * 选中/可达/染色这类"图内坐标"在 boardUiFor 里按图过滤。
+   */
+  renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
+
+  /*
+   * 笔刷在手时，棋盘自己吃掉触摸手势。
+   *
+   * `.board-scroll` 在放大档是 `touch-action: pan-x pan-y`，手指一划就变成滚地图，
+   * pointermove 直接被浏览器掐掉——拖动绘制在触摸设备上会"划一下就断"。
+   * 这个 class 必须在**手势开始之前**就在，所以放在每帧渲染里维护，
+   * 而不是等 pointerdown 再贴。
+   */
+  boardEl.classList.toggle(
+    'brush-paint',
+    state.config.godMode === true && !replay && godBrush.kind !== 'none' && !godInControl(),
+  );
   // 路线只演一次：下一次重绘不该再播一遍
   pendingMovePath = null;
 
@@ -1375,10 +1700,21 @@ function render(): void {
   }
 
   if (state.config.godMode === true && !replay) {
-    // 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
-    // 兵是自己一手摆上去的，摆的时候就知道它是谁。
-    renderGodShelf();
+    /*
+     * 上帝模式把侧栏整块让给兵种货架：这个模式里没人要看属性卡，
+     * 兵是自己一手摆上去的，摆的时候就知道它是谁。
+     *
+     * **例外是星图**：星图卡也在侧栏里。货架要是永远压在上面，
+     * 沙盒里点星球就只能看到一堆兵种，永远找不到自己那座空间站。
+     */
     renderGodBar();
+    if (starOpen) {
+      // 清签名：关掉星图之后货架才会被重画回来（否则签名没变会早退）
+      godShelfSig = '';
+      keepSideScroll(() => renderPanel(sideEl, panelInput(view)));
+    } else {
+      renderGodShelf();
+    }
   } else {
     // 离开沙盒（新对局 / 导入 / 切回普通局）：两份签名作废，
     // 下次再进上帝模式时不会拿着上一局的签名把重绘挡掉
@@ -1406,7 +1742,6 @@ function render(): void {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
     turn: state.turn,
-    season: state.config.expansionIds.includes('seasons') ? seasonLabel(state.turn) : null,
     current: state.current,
     currentName: state.players[state.current].name,
     aiCurrent: isAiSide(state, state.current),
@@ -1492,6 +1827,32 @@ function render(): void {
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
 /**
+ * 当前在看哪张图。
+ *
+ * 地球之外由图在运行时创建（月球、空间站）。这个变量只决定"画哪一张"，
+ * 不参与任何规则计算——规则层认的是单位/动作自带的 `board`。
+ */
+let activeBoardId: BoardId = EARTH;
+
+/**
+ * 星图覆盖层开着吗。**纯界面状态**：不进存档、不进回放，
+ * 也不影响任何规则——关掉它跟重新打开页面看到的是同一局。
+ */
+let starOpen = false;
+/** 星图上选中了哪个节点/航线。切图或关星图时清掉 */
+let starSel: StarSelection | null = null;
+/** 左下角地图列表是否展开 */
+let boardListOpen = false;
+/** 地图列表已经画出来的签名，避免每帧重建 DOM */
+let boardListSig = '';
+/**
+ * 每张图各自的相机（缩放档 + 滚动位置）。
+ *
+ * 切图要还原相机：32×32 的地球放大到中间看战场，切到 7×7 的空间站再切回来，
+ * 如果回到左上角，玩家得重新拖一遍——多图玩法里这个动作一天要做几十次。
+ */
+const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number }>();
+/**
  * 上一次 `fitBoard()` 用的是哪一档。
  *
  * 这是"我想要的档位"和"屏幕上真的写进去的档位"之间的对账单。
@@ -1540,6 +1901,12 @@ function fitBoard(): void {
   if (width <= 0) return;
 
   const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
+  /*
+   * 把"顶部占了多少"写给 CSS：左上角的地图列表是 `position: fixed`，
+   * 它不知道指挥官条（上帝模式 / AI 观战时会多出一条）有多高，
+   * 写死 54px 就会压在条上。变量名一次说清，别的地方也能用。
+   */
+  document.documentElement.style.setProperty('--chrome', `${chrome}px`);
   const box = boardWrapEl.parentElement;
   const cs = box ? window.getComputedStyle(box) : null;
   const padY = cs
@@ -1571,6 +1938,16 @@ function fitBoard(): void {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
   }
+
+  /*
+   * 尺寸变了，格宽也要跟着变。
+   *
+   * `--cell` 是 renderBoard 写的，而这里只改棋盘外框、不重画内容；
+   * 格子按 `1fr` 排会自己跟着走，但"按格取景"的背景（丘陵纹理、水面波光）
+   * 还在用旧格宽算偏移，图案在格边界上就对不齐——表现是缩放后丘陵/水面
+   * "断开"，点一下棋盘（触发重画）又好了。这一句把这个窗口关掉。
+   */
+  refreshCellVar(boardEl, state?.w ?? 0);
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
@@ -1677,6 +2054,10 @@ function zoomStep(dir: 1 | -1): void {
  * 而且再开一局还是这样（新局同样只改了数字）。
  */
 function resetZoom(): void {
+  activeBoardId = EARTH;
+  boardListOpen = false;
+  boardListSig = '';
+  boardCameras.clear();
   boardZoom = 1;
   // 尺寸缓存必须作废，否则下一帧不会重新量
   boardDirty = true;
@@ -1686,6 +2067,286 @@ function resetZoom(): void {
   boardScrollEl.classList.remove('dragging', 'zoomed');
   boardEl.classList.remove('zoomed');
 }
+
+/** 地图列表里的小标记：图的类型（地球单独给个"地"） */
+function boardGlyphOf(id: BoardId): string {
+  if (id === EARTH) return '地';
+  const kind = boardKindOf(state, id);
+  return kind === 'station' ? '站' : kind === 'orbit' ? '轨' : '星';
+}
+
+/** 这一张图上还有几个自家单位能动（建筑不算） */
+function boardReadyCount(view: PlayerView, id: BoardId): number {
+  if (replay || spectating()) return 0;
+  return view.state.units.filter((u) => {
+    if (u.owner !== me() || boardIdOf(u) !== id || u.acted) return false;
+    return view.state.unitTypes[u.type]?.category !== 'building';
+  }).length;
+}
+
+/** 这一张图上有没有看得见的敌人（地图列表上的红点） */
+function boardHasContact(view: PlayerView, id: BoardId): boolean {
+  if (replay || spectating()) return false;
+  return view.state.units.some((u) => u.owner !== me() && boardIdOf(u) === id);
+}
+
+/** 地图列表里的文字来自扩展，转义一遍再拼 HTML */
+function escapeBoardText(t: string): string {
+  return t
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 左下角的地图列表。
+ *
+ * 收起时只显示当前图（名字 + 待命数 + 敌人红点），点开列出所有图。
+ * 用签名挡住每帧重建：棋盘一帧要重画很多次，列表没必要跟着抖。
+ */
+function syncBoardList(view: PlayerView): void {
+  if (!hasBoard(state, activeBoardId)) activeBoardId = EARTH;
+  /*
+   * 废墟的倒计时也要进列表。
+   *
+   * 一座站变成废墟之后，它没有核心舱、所有舱段停摆——玩家最需要知道的
+   * 就是"还剩几个回合"，而这个数字只在站内面板上看得到。列表是全局面板里
+   * 唯一一栏一直亮着的东西，所以这里给一个「废 N」角标。
+   */
+  const ruinLeftOf = (id: BoardId): number =>
+    peekStarmap(state)?.stations.find((st) => st.board === id)?.ruin?.left ?? 0;
+  const entryOf = (id: BoardId) => ({
+    id,
+    name: boardName(state, id),
+    ready: boardReadyCount(view, id),
+    contact: boardHasContact(view, id),
+    ruin: ruinLeftOf(id),
+  });
+  /*
+   * 面板的顺序：**星图 → 星球 → 自己的空间站**。
+   *
+   * 以前站不进这个列表（"站是进得去的地方，不是要切的战场"），但实际用下来
+   * "回自己的站"是高频操作，而星图要三步（开星图 → 点星球 → 点前往）。
+   * 列表里直接放一个「站」，一步就到。
+   *
+   * 站排在最后：只有地球和月球的局，这个列表长得还和以前一样，
+   * 多出来的那一截在下面。
+   */
+  const ids = boardIds(state);
+  const isStation = (id: BoardId) => state.boards?.[id]?.kind === 'station';
+  const planetIds = ids.filter((id) => !isStation(id));
+  const stationIds = ids.filter(isStation);
+  const entries = [...planetIds, ...stationIds].map(entryOf);
+  const devAdd = godMode() && !replay;
+  const showList = entries.length > 1 || devAdd;
+  const sig = [
+    // show/hide 也算进签名：隐藏时 DOM 被清空了，切回来必须重建
+    showList ? 'show' : 'hide',
+    boardListOpen ? 'open' : 'shut',
+    activeBoardId,
+    replay ? 'replay' : '',
+    ...entries.map((e) => `${e.id}/${e.name}/${e.ready}/${e.contact}/${e.ruin}`),
+    // 在途的倒计时：面板展开时它每回合都在变，不进签名就永远停在旧数字
+    ...(state.transit ?? []).map((t) => `${t.owner}/${t.to}/${t.left}`),
+  ].join('|');
+  if (sig === boardListSig) return;
+  boardListSig = sig;
+
+  /*
+   * 只有一张图时**整个面板都不出现**。
+   *
+   * 它存在的理由是"在图之间切换 + 看在途"；只有地球的时候，它是一块永远
+   * 只有一个选项的按钮，占着角落还挡地图。判据用"这一局有几张图"，
+   * 不是"有没有开某个扩展"——以后加空间站、别的星球不用回来改。
+   *
+   * 唯一的例外是上帝模式的开发按钮（生成月球图）：那东西本来就是为了
+   * "还没有图的时候造一张图"而存在的，藏起来就点不到了。
+   *
+   * 隐藏用**内联 `display:none`**，不再只靠 `.board-list.single` 那个类：
+   * 玩家反馈"还是看得见"，而类样式会被 `display:flex` 或别处的覆盖层吃掉，
+   * 内联样式没有这个问题（CSS 那条留作兜底）。
+   */
+  boardListEl.style.display = showList ? '' : 'none';
+  boardListEl.classList.toggle('single', !showList);
+  if (!showList) {
+    // 收起时把展开状态归位、DOM 也清掉：否则下一局多图时会一进场就是展开的
+    boardListOpen = false;
+    boardListEl.classList.remove('open');
+    boardListEl.innerHTML = '';
+    return;
+  }
+
+  boardListEl.classList.toggle('open', boardListOpen);
+  const cur = entries.find((e) => e.id === activeBoardId) ?? entryOf(activeBoardId);
+  const current =
+    `<button class="bl-current" data-act="bl-toggle" title="切换地图（共 ${entries.length} 个地方）">` +
+    `<span class="bl-kind">${boardGlyphOf(cur.id)}</span>` +
+    `<span class="bl-name">${escapeBoardText(cur.name)}</span>` +
+    (cur.ready > 0 ? `<span class="bl-ready">${cur.ready}</span>` : '') +
+    (cur.ruin > 0 ? `<span class="bl-ruin" title="废墟：${cur.ruin} 个回合后消失">废 ${cur.ruin}</span>` : '') +
+    (cur.contact ? '<i class="bl-contact" title="这张图上有敌人"></i>' : '') +
+    `<span class="bl-caret">▾</span>` +
+    `</button>`;
+
+  const rowOf = (e: { id: BoardId; name: string; ready: number; contact: boolean; ruin: number }): string =>
+    `<button class="bl-row${e.id === activeBoardId ? ' on' : ''}" data-board="${escapeBoardText(e.id)}" title="${escapeBoardText(e.name)}">` +
+    `<span class="bl-kind">${boardGlyphOf(e.id)}</span>` +
+    `<span class="bl-name">${escapeBoardText(e.name)}</span>` +
+    (e.ready > 0 ? `<span class="bl-ready">${e.ready}</span>` : '') +
+    (e.ruin > 0 ? `<span class="bl-ruin" title="废墟：${e.ruin} 个回合后消失">废 ${e.ruin}</span>` : '') +
+    (e.contact ? '<i class="bl-contact"></i>' : '') +
+    `</button>`;
+  const rows =
+    planetIds.map((id) => rowOf(entryOf(id))).join('') +
+    (stationIds.length > 0
+      ? `<div class="bl-sep">空间站</div>${stationIds.map((id) => rowOf(entryOf(id))).join('')}`
+      : '');
+
+  /*
+   * 星图：**相连**与**在途**。
+   *
+   * 星图放在这个面板里而不是单独开一块，是因为它们回答的是同一个问题
+   * "我在哪、还能去哪"。只有一张图时整个面板是隐藏的，玩家也就不会
+   * 被这一堆信息淹没——要看的时候它才在。
+   *
+   * 航道只写"谁连着谁、几回合"：太空里可以向任何方向飞，没有"封哪条路"
+   * 这回事（见 `StarLane` 的注释）。
+   */
+  const star = starRows(state);
+  // 航道属于星图（战争包）；"在途"是发射的一部分，基础包也该看得见
+  if (!hasSpaceWar()) star.lanes = [];
+  const laneRows = star.lanes
+    .map(
+      (l) =>
+        `<div class="bl-lane">${escapeBoardText(l.a)} ⇄ ${escapeBoardText(l.b)}` +
+        `<span class="bl-lane-t">${l.turns} 回合</span></div>`,
+    )
+    .join('');
+  const tripRows = star.trips
+    .map(
+      (t) =>
+        `<div class="bl-trip" title="${escapeBoardText(t.who)}的火箭还有 ${t.left} 个回合到达">` +
+        `<span class="bl-trip-who">${escapeBoardText(t.who)}</span>` +
+        `<span class="bl-trip-to">→ ${escapeBoardText(t.to)}</span>` +
+        `<span class="bl-trip-left">${t.left}</span>` +
+        `</div>`,
+    )
+    .join('');
+  const starHtml = hasStarRows(star) ? `<div class="bl-star">${laneRows}${tripRows}</div>` : '';
+
+  // 星图入口：单图时整个面板是隐藏的，走不到这里
+  const starBtn = hasSpaceWar()
+    ? `<button class="bl-row bl-star-open" data-act="star-open">` +
+      `<span class="bl-kind">图</span><span class="bl-name">查看星图</span></button>`
+    : '';
+
+  // 调试脚手架：第四步接入真正的月球后删掉
+  const debug = devAdd
+    ? `<button class="bl-add" data-act="bl-add" title="开发用：按地球的尺寸生成月球图">＋ 月球</button>`
+    : '';
+
+  boardListEl.innerHTML = `${current}<div class="bl-menu">${starBtn}${rows}${starHtml}${debug}</div>`;
+}
+
+/**
+ * 切到另一张图。
+ *
+ * 只换"渲染的是哪张图"和相机，规则一行不动——单位、视野、动作各自带着
+ * 自己的 `board`，切图不影响它们。
+ */
+function switchBoard(id: BoardId): void {
+  if (id === activeBoardId || !hasBoard(state, id)) return;
+  // 走之前把相机存下来
+  boardCameras.set(activeBoardId, {
+    zoom: boardZoom,
+    left: boardScrollEl.scrollLeft,
+    top: boardScrollEl.scrollTop,
+  });
+
+  activeBoardId = id;
+  /*
+   * 选中、待放技能、待选落点全部清掉。
+   *
+   * 它们记的是**地球**的格坐标；原样带到 7×7 的空间站上，要么越界，
+   * 要么指向完全无关的格子。清掉是最不容易出错的做法——重新点一下就是了。
+   */
+  selectedId = null;
+  selectedTile = null;
+  selectedCityId = null;
+  selectedCampId = null;
+  pendingMovePath = null;
+  pendingSkill = null;
+  pendingDevice = null;
+  /*
+   * 切图**不动** `boardListOpen`：玩家要"保持展开/关闭状态"。
+   * 以前这里强制收起，于是"点完一座站想再点另一座"要重新展开一次——
+   * 而这个列表本来就是连着点的地方。
+   */
+  // 星图盖着的时候切了图：把覆盖层收掉，否则新图上还压着一层旧星图
+  starOpen = false;
+  starSel = null;
+
+  const cam = boardCameras.get(id) ?? { zoom: 1, left: 0, top: 0 };
+  boardZoom = cam.zoom;
+  boardDirty = true;
+  render();
+
+  const restore = (): void => {
+    boardScrollEl.scrollLeft = cam.left;
+    boardScrollEl.scrollTop = cam.top;
+  };
+  // 等这一帧的尺寸写完再还原滚动位置，否则会被 fitBoard 的布局覆盖
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+  else restore();
+}
+
+/**
+ * 上帝模式里的「＋ 月球」：按当前的玩法生成真正的月球图。
+ *
+ * 正式入口在「太空时代」扩展里（第 5 步接），这里只是提前留一个能看效果的按钮：
+ * 尺寸按 `moonSizeFor(state.w)` 跟着地球缩，地形是月壤 + 环形山。
+ */
+function addMoonBoard(): void {
+  if (!godMode() || replay) return;
+  if (state.boards?.moon) {
+    switchBoard('moon');
+    return;
+  }
+  const board = createMoonBoard(state.w, state.seed);
+  state.boards ??= {};
+  state.boards.moon = board;
+  // 迷雾记忆按图刷新一次，切过去不会满屏"未探明"
+  refreshMemory(state);
+  switchBoard('moon');
+}
+
+/**
+ * 把"整局"的高亮缩到这张图（纯换算，实现在 ui/board-scope.ts，可被测试直接调）。
+ *
+ * 以前这段对非地球图**无条件清空** `targets` 等字段，于是月面上选中单位后
+ * 一个可攻击格都不亮、点也点不动——看着像"月面不能打"，其实是界面把数据扔了。
+ */
+function boardUiFor(ui: BoardUi, id: BoardId): BoardUi {
+  return scopeBoardUi(ui, id, state.units);
+}
+
+boardListEl.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act],[data-board]');
+  if (!el) return;
+  const act = el.dataset.act;
+  if (act === 'bl-toggle') {
+    boardListOpen = !boardListOpen;
+    syncBoardList(viewNow());
+    return;
+  }
+  if (act === 'bl-add') {
+    addMoonBoard();
+    return;
+  }
+  const id = el.dataset.board;
+  if (id) switchBoard(id);
+});
 
 /**
  * 顶栏还有没有"藏起来的部分"，用两侧的阴影提示。
@@ -1700,6 +2361,31 @@ function syncTopbarScroll(): void {
 }
 /** 根据当前选中单位重算可达、可攻击、可攻城集合 */
 function refreshSelection(): void {
+  /*
+   * 别的图还没有动作系统：可达格、攻击目标、技能落点全是**地球**坐标算出来的，
+   * 在月球上算一遍只会把地球那套高亮带过去（它们最终也会被 boardUiFor 清掉）。
+   * 直接清空，省一次错误的寻路。
+   */
+  if (activeBoardId !== EARTH && !pendingSkill) {
+    /*
+     * 别的图也能走（第 8 步起的月面行动）：可达格由 `reachableTiles` 按
+     * 单位所在的图算，索引也是那张图的索引，和渲染层对得上。
+     *
+     * 攻击、攻城、技能选点仍然只在地球：它们的射程、溅射、地形掩护全按
+     * `state` 结算，月面战斗是「太空战争」那一包的事。
+     */
+    reach = [];
+    targets = [];
+    siege = [];
+    aimTiles = [];
+    skillThreatTiles = [];
+    const unit = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+    if (unit && unit.owner === me() && boardIdOf(unit) === activeBoardId && !unit.acted) {
+      reach = canMove(unit) ? Array.from(reachableTiles(state, unit).keys()) : [];
+    }
+    return;
+  }
+
   if (pendingSkill) {
     reach = [];
     targets = [];
@@ -1722,15 +2408,38 @@ function refreshSelection(): void {
        */
       if (pendingSkill.targeting === 'point') {
         /*
-         * 选点型也要先把**基础范围**点亮。
+         * 先点亮**可落点的范围圈**。
          *
-         * 以前这里直接 return，于是"射程圈"只有鼠标扫过去才出现——第一次玩的
-         * 人会以为这个技能没有范围，或者以为它坏了。现在先用"落点 = 自己脚下"
-         * 问一次预览器：掌心雷那种"以自己为圆心的射程圈"立刻就有了；
-         * 传送阵的预览器在落点=自己时返回空（原地传送没有意义），保持不亮。
+         * 两条来源，谁有就用谁：
+         *   1. 技能登记过"合法落点"（`SKILL_TARGET_CELLS`，陨卵就是这种）——
+         *      直接把它给的那一片点亮。这是玩家判断"9 格边界在哪"的唯一线索。
+         *      2026-11-09 我合 main.ts 时以为这张表没人读，整段删了，
+         *      结果陨卵在界面上没有射程圈；这次连"点空地也能放"一起补回来。
+         *   2. 没登记的（掌心雷、传送阵这类）——拿"落点 = 自己脚下"问一次预览器：
+         *      以自己为圆心的射程圈立刻就有；传送阵在落点=自己时返回空，保持不亮。
+         *
+         * 点亮只影响观感：选点型的点击判定不查 `aimTiles`（见 skill-aim.ts），
+         * 所以"圈外的格子点了会失败"这件事仍然由规则层给说法。
          */
-        if (previewer && caster) {
-          skillThreatTiles = previewer({ state, self: caster, target: { x: caster.x, y: caster.y } });
+        const skillDef = heroSkillsOf(state, caster).find((k) => k.def.id === skillId)?.def;
+        const cellsOf = skillDef ? SKILL_TARGET_CELLS[skillDef.effect] : undefined;
+        if (cellsOf && skillDef) {
+          /*
+           * 选点格按**技能自己声明的那张图**：缺省是施法者所在的图，
+           * 遥感模块这类跨图技能会明确指定"脚下那颗星球表面"。
+           * 格号不通用（地球 20 宽的 i=45 和月球 9 宽的 i=45 不是一个位置）。
+           */
+          const res = cellsOf({ state, view: boardStateOf(state, caster), self: caster, skill: skillDef });
+          const cells = Array.isArray(res) ? res : res.cells;
+          const board = Array.isArray(res) ? boardIdOf(caster) : (res.board ?? boardIdOf(caster));
+          for (const p of cells) aimTiles.push(idxOn(state, board, p.x, p.y));
+        } else if (previewer && caster) {
+          skillThreatTiles = previewer({
+            state,
+            view: boardStateOf(state, caster),
+            self: caster,
+            target: { x: caster.x, y: caster.y },
+          });
         }
         return;
       }
@@ -1748,7 +2457,12 @@ function refreshSelection(): void {
 
           // 2. 如果有预览器，就问一下这个方向会打到哪
           if (previewer) {
-            const cells = previewer({ state, self: caster, target: { x: aimX, y: aimY } });
+            const cells = previewer({
+              state,
+              view: boardStateOf(state, caster),
+              self: caster,
+              target: { x: aimX, y: aimY },
+            });
             for (const cell of cells) {
               // 把自己脚下和起点的 aim 格剔除
               if (cell !== caster.y * state.w + caster.x && !aimTiles.includes(cell)) {
@@ -1842,9 +2556,11 @@ function clearSelection(): void {
 function computeIncomeHints(unit: Unit | undefined): Map<number, ResourceCost> {
   const hints = new Map<number, ResourceCost>();
   if (!unit || reach.length === 0) return hints;
+  // `reach` 是**单位所在那张图**的格号，反算坐标必须用那张图的宽度
+  const w = boardOf(state, boardIdOf(unit)).w;
   for (const i of reach) {
-    const x = i % state.w;
-    const y = Math.floor(i / state.w);
+    const x = i % w;
+    const y = Math.floor(i / w);
     const yields = unitYieldAt(state, unit, x, y);
     if (Object.keys(yields).length > 0) hints.set(i, yields);
   }
@@ -1876,7 +2592,7 @@ function computePlaceable(): number[] {
     const out: number[] = [];
     for (let y = 0; y < state.h; y++) {
       for (let x = 0; x < state.w; x++) {
-        if (distance(ferry, { x, y }) !== 1) continue;
+        if (distToUnit(state, { x, y }, ferry) !== 1) continue;
         const tile = state.tiles[y * state.w + x];
         if (!tile) continue;
         // 落点问规则层（canStandAt 按**货舱里那个兵**判）：自己数一遍地形的话，
@@ -1904,11 +2620,16 @@ function computePlaceable(): number[] {
   // 军营那次就是这么坏的：规则里判临水只认 `water`，这里用的 `adjacentToWater`
   // 认桥面，于是桥头被高亮成可建，点下去才回一句"必须扎在水边"。
   // 判据只能有一处，界面这一层只负责问。
+  /*
+   * 按**建造者所在的那张图**算：月面上的工程队看的是月球的格子。
+   * `boardState` 对地球直接返回 state 本身，所以这条不影响原路径。
+   */
+  const grid = boardState(state, boardIdOf(builder));
   const out: number[] = [];
-  for (let y = 0; y < state.h; y++) {
-    for (let x = 0; x < state.w; x++) {
-      if (buildSiteError(state, def, builder, x, y) !== null) continue;
-      out.push(y * state.w + x);
+  for (let y = 0; y < grid.h; y++) {
+    for (let x = 0; x < grid.w; x++) {
+      if (buildSiteError(grid, def, builder, x, y) !== null) continue;
+      out.push(y * grid.w + x);
     }
   }
   return out;
@@ -2015,8 +2736,9 @@ function draftIsAi(side: PlayerId): boolean {
 /**
  * 座位交接。
  *
- * 禁用是盲禁：我交完就该把设备交出去，不能顺手替对面也点了。
- * 选人期则完全由 order 决定——轮到谁，设备就跟着谁。
+ * 禁用改成轮流之后（2026-11-07），两段的判据其实是同一个了：
+ * **轮到谁，设备就跟着谁**。禁用期不再有"我交完就把设备交出去"这一步模糊操作
+ * ——只要 `banTurn` 不是我，设备就该在对面的手上。
  */
 function syncDraftSeat(): void {
   const view = draftView(state);
@@ -2030,12 +2752,8 @@ function syncDraftSeat(): void {
     draftSeat = view.toAct;
     return;
   }
-  if (view.phase === 'ban') {
-    const mine = draftSeat === 'A' ? view.a : view.b;
-    if (!mine.banDone) return;
-    const other: PlayerId = draftSeat === 'A' ? 'B' : 'A';
-    const otherView = other === 'A' ? view.a : view.b;
-    if (!otherView.banDone && !draftIsAi(other)) draftSeat = other;
+  if (view.phase === 'ban' && view.banTurn && !draftIsAi(view.banTurn)) {
+    draftSeat = view.banTurn;
   }
 }
 
@@ -2338,11 +3056,11 @@ function scheduleDraftAi(): void {
   if (draftAiPending) return;
   const view = draftView(state);
   if (!view) return;
+  // 轮流禁用之后，"轮到谁"才是判据：不能再用"还有谁没禁完"——
+  // 对面那一轮里没禁完的那个席位是玩家自己，AI 不该替他下手
   const aiPending =
     view.phase === 'ban'
-      ? (['A', 'B'] as PlayerId[]).some(
-          (side) => draftIsAi(side) && !(side === 'A' ? view.a : view.b).banDone,
-        )
+      ? !!view.banTurn && draftIsAi(view.banTurn)
       : view.phase === 'pick' && !!view.toAct && draftIsAi(view.toAct);
   if (!aiPending) return;
 
@@ -2353,10 +3071,8 @@ function scheduleDraftAi(): void {
     const now = draftView(state);
     if (!now) return;
     if (now.phase === 'ban') {
-      const side = (['A', 'B'] as PlayerId[]).find(
-        (sd) => draftIsAi(sd) && !(sd === 'A' ? now.a : now.b).banDone,
-      );
-      if (!side) return;
+      const side = now.banTurn;
+      if (!side || !draftIsAi(side)) return;
       const id = aiDraftBan(state, side);
       if (id) dispatchDraft({ type: 'DRAFT_BAN', unitId: id, at: Date.now() }, side);
       return;
@@ -2511,7 +3227,9 @@ function bindHoverTips(): void {
   // 滚动、点击、切走：浮层立刻收起来，别让它飘在旧位置上
   appEl.addEventListener('scroll', hideHoverTip, true);
   document.addEventListener('visibilitychange', hideHoverTip);
-  appEl.addEventListener('click', hideHoverTip, true);
+
+
+appEl.addEventListener('click', hideHoverTip, true);
 }
 
 /** 点兵种卡：按当前阶段决定是禁用还是选用 */
@@ -2521,9 +3239,14 @@ function onDraftClick(typeId: string): void {
   // 席位一律问 draftActor()：联机以房间为准，热座看交接
   const seat = draftActor();
   if (view.phase === 'ban') {
+    // 轮流禁用：先看轮到谁，再看禁没禁满——顺序反过来会给出误导的提示
+    if (view.banTurn && view.banTurn !== seat) {
+      toast(`现在轮到${state.players[view.banTurn].name}禁用`);
+      return;
+    }
     const mine = seat === 'A' ? view.a : view.b;
     if (mine.banDone) {
-      toast('你已经禁用过了，等对面');
+      toast('你已经禁完了，等对面');
       return;
     }
     dispatchDraft({ type: 'DRAFT_BAN', unitId: typeId, at: Date.now() }, seat);
@@ -2770,7 +3493,15 @@ function undoLast(): void {
  */
 function stackAt(x: number, y: number): Unit[] {
   const view = viewNow().state;
-  const list = unitsAt(view, x, y).slice();
+  /*
+   * **只收当前这张图上的单位**。
+   *
+   * `unitsAt` 是按坐标算的，不认识"图"：月球上的兵在 (5,5)，地球的 (5,5)
+   * 也会把它找出来。于是玩家在地球点一下那个空格，就选中了月球上的那支兵，
+   * 之后的走子指令全按地球坐标下——月球的兵在地球上走，对面还看不见它。
+   * 这个幽灵就是这么来的（2026-11-10 实机反馈）。
+   */
+  const list = unitsAt(view, x, y).filter((u) => boardIdOf(u) === activeBoardId).slice();
   const rank = (u: Unit) => {
     if (utype(view, u.type).category === 'building') return 2;
     return isAirborne(view, u) ? 0 : 1;
@@ -2917,6 +3648,166 @@ function inspectAt(coords: { x: number; y: number } | null): void {
 
 function onBoardClick(e: Event): void {
   /*
+   * 选点 / 设备落点**优先于一切**：比"这是哪张图"还早。
+   *
+   * 这个函数一进来就有一个 `if (activeBoardId !== EARTH)` 分支，非地球图的
+   * 点击全被它接走（建造选址 → 走子 → 选中）。技能选点如果排在它后面，
+   * 在空间站/月球上永远点不到落点——这正是"扩建甲板点不中格子"的真因。
+   *
+   * "正在等一个落点"是全局状态：此时点棋盘只有一个含义，跟在哪张图、
+   * 是不是上帝模式都无关。
+   */
+  /*
+   * 选点 / 设备落点**优先于一切模式**。
+   *
+   * 这一段以前排在上帝模式分支之后：一开沙盒，点技能按钮虽然进了瞄准模式，
+   * 再点棋盘却被 `godMode` 那段接走（落子/选中），技能永远落不了点。
+   * "正在等一个落点"是全局状态，不该被任何模式抢走。
+   */
+  if (handoffOpen || state.winner) return;
+
+  const coords = coordsFromEvent(e);
+
+  // 0.1) 正在等待技能选点
+  if (pendingSkill && coords) {
+    /*
+     * 格号必须按**当前正在看的这张图**算。
+     *
+     * 这里原来写 `idx(state, ...)`（地球的列宽）。空间站只有 5×5，
+     * 按地球 20 宽算出来的格号跟 `aimTiles` 里那串（`idxOn` 算的）
+     * 永远对不上——于是 every 一次落点都被判成"不在合法格内"，
+     * 表现就是**技能点不中任何格子**，连提示都没有。
+     */
+    const cell = idxOn(state, activeBoardId, coords.x, coords.y);
+    const { unitId, skillId, targeting } = pendingSkill;
+    const caster = state.units.find((u) => u.id === unitId);
+    // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
+    // **照扣灵石**，玩家手一抖点到自家阵上就白亏 10 灵石，没必要。
+    //
+    // 坐标相同**且在同一张图**才算"自己脚下"：跨图技能（遥感看地表、轨道炮
+    // 打对面的站）里，"站上的 (3,3)" 和 "地球/对面站上的 (3,3)" 是两回事，
+    // 只比坐标的话，玩家一点就"已取消施法"。
+    const onSelf =
+      !!caster && boardIdOf(caster) === activeBoardId && caster.x === coords.x && caster.y === coords.y;
+
+    // 选点型技能（传送阵）：地图上任意一格都是合法落点；方向型只认四邻热区。
+    // 判定放在 skill-aim.ts 里，测试能直接把两种技能的规则钉住。
+    const picked = skillTargetPicked({ targeting, onSelf, aimTiles, cell });
+
+    if (picked) {
+      const ok = dispatch({
+        type: 'HERO_SKILL',
+        unitId,
+        skillId,
+        targetX: coords.x,
+        targetY: coords.y,
+      });
+
+      // 放完之后还放不放得出去：
+      //   · 成功 + 还能连发（multiCast）→ 留在瞄准模式，下一发直接点方向
+      //   · 成功 + 次数/冷却已经不够     → 退出，回到普通操作
+      //   · 失败（dispatch 已经 toast 了原因）→ 也退出，别让玩家困在一个必然失败的模式里
+      if (!(ok && canRepeatSkill(unitId, skillId))) {
+        pendingSkill = null;
+      }
+    } else {
+      // 方向型点到 4 格之外、或全图选点点到自己脚下：取消施法
+      pendingSkill = null;
+      toast('已取消施法');
+    }
+    refreshSelection(); // 恢复常规的移动/攻击高亮
+    render();
+    return; // 阻断后续的逻辑
+  }
+
+  // 0.15) 正在等待设备选点（弹射钩索）
+  if (pendingDevice && coords) {
+    const { unitId, deviceId } = pendingDevice;
+    pendingDevice = null;
+    const self = state.units.find((x) => x.id === unitId);
+    // 点回自己脚下 = 放弃：钩索"落点等于原地"本来就是非法目标，
+    // 与其让规则层回一句"已经在那一格了"，不如当取消。
+    if (self && coords.x === self.x && coords.y === self.y) {
+      toast('已取消');
+    } else {
+      dispatch({ type: 'USE_DEVICE', unitId, deviceId, x: coords.x, y: coords.y });
+    }
+    refreshSelection();
+    render();
+    return;
+  }
+
+  /*
+   * 别的图（月球、以后的空间站）现在只做到"点得中、看得见"。
+   *
+   * 走子 / 开火 / 建造整条链路都按**地球**的坐标与宽度算（`idx()` 认的是
+   * `state.w`），在 12×12 的月球上点 (3,4) 会被当成地球的 (3,4) 去执行。
+   * 所以这里只做选中：选中之后侧栏那张属性卡是真的（它读的是单位自己），
+   * 面板里的按钮也照常能用——发射井的加注/发射就是在这条路上跑的。
+   */
+  if (activeBoardId !== EARTH) {
+    const at = coordsFromEvent(e);
+    if (!at) return;
+    const id = activeBoardId;
+    const board = boardOf(state, id);
+    if (at.x < 0 || at.y < 0 || at.x >= board.w || at.y >= board.h) return;
+
+    /*
+     * 别的图（目前是月球）的点击：**建造选址 → 走子 → 选中**。
+     *
+     * 顺序和地球那条一致。这里没有攻击/攻城/技能选点——月面战斗还没做
+     * （见 refreshSelection 里的说明），所以那几种点击后面会落到"选中/取消"。
+     */
+    if (buildPlan) {
+      const plan = buildPlan;
+      const built = dispatch({
+        type: 'BUILD',
+        unitId: plan.unitId,
+        unitType: plan.type,
+        x: at.x,
+        y: at.y,
+      });
+      if (built) buildPlan = null;
+      refreshSelection();
+      render();
+      return;
+    }
+
+    const here = state.units.filter((u) => boardIdOf(u) === id && coversTile(state, u, at.x, at.y));
+    // 和地球那条一致：兵压在建筑上面，先选兵
+    const pick =
+      here.filter((u) => state.unitTypes[u.type]?.category !== 'building').at(-1) ?? here.at(-1);
+
+    // 点空地、手上又选着自己的人：下移动命令（走不走得通由规则层说）
+    if (!pick && selectedId) {
+      const sel = state.units.find((u) => u.id === selectedId);
+      if (sel && sel.owner === me() && boardIdOf(sel) === id && !sel.acted) {
+        if (dispatch({ type: 'MOVE', unitId: sel.id, x: at.x, y: at.y })) return;
+      }
+    }
+
+    selectedId = pick?.id ?? null;
+    selectedCityId = null;
+    /*
+     * 点空地：**把这一格交给侧栏**。
+     *
+     * 以前这里写死 `selectedTile = null` 再弹一句 toast，于是侧栏永远
+     * 只显示上一次选中的东西——在空间站上点虚空看起来"什么都没发生"。
+     * 选中的是一个单位时才清格子。
+     */
+    selectedTile = pick || selectedId ? null : at;
+    aimTiles = [];
+    skillThreatTiles = [];
+    refreshSelection();
+    if (!pick && !selectedId) {
+      const tile = board.tiles[at.y * board.w + at.x];
+      if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+    }
+    render();
+    return;
+  }
+
+  /*
    * 复盘里点棋盘只有一个意思：**看看这个兵现在是什么样**。
    *
    * 走子/开火那条路整段跳过——`state` 是历史帧，改它就等于篡改别人的对局。
@@ -2979,54 +3870,24 @@ function onBoardClick(e: Event): void {
     const probe = coordsFromEvent(e);
     if (!selectedId && probe && !cityAt(state, probe.x, probe.y)) {
       if (stackAt(probe.x, probe.y).length === 0) {
-        const tile = state.tiles[idx(state, probe.x, probe.y)];
+        /*
+         * 按**当前这张图**取格。
+         *
+         * 这里原来读 `state.tiles`（地球）：在空间站点一格虚空，
+         * 弹出来的是"地球上同一坐标"的地形，而且只弹一句 toast——
+         * 侧栏什么都不变，玩家以为"点了没反应"。
+         */
+        const tile = tileOn(state, activeBoardId, probe.x, probe.y);
         if (tile) toast(TERRAIN_NAMES[tile.terrain] ?? tile.terrain);
+        selectedId = null;
+        selectedCityId = null;
+        selectedCampId = null;
+        selectedTile = probe;
+        render();
+        return;
       }
     }
   }
-  if (handoffOpen || state.winner) return;
-
-  const coords = coordsFromEvent(e);
-
-  // 0.1) 正在等待技能选点
-  if (pendingSkill && coords) {
-    const cell = idx(state, coords.x, coords.y);
-    const { unitId, skillId, targeting } = pendingSkill;
-    const caster = state.units.find((u) => u.id === unitId);
-    // 点自己脚下：全图选点时当作"取消"。技能那边会把"落点 = 自己"判成过载并
-    // **照扣灵石**，玩家手一抖点到自家阵上就白亏 10 灵石，没必要。
-    const onSelf = !!caster && caster.x === coords.x && caster.y === coords.y;
-
-    // 选点型技能（传送阵）：地图上任意一格都是合法落点；方向型只认四邻热区。
-    // 判定放在 skill-aim.ts 里，测试能直接把两种技能的规则钉住。
-    const picked = skillTargetPicked({ targeting, onSelf, aimTiles, cell });
-
-    if (picked) {
-      const ok = dispatch({
-        type: 'HERO_SKILL',
-        unitId,
-        skillId,
-        targetX: coords.x,
-        targetY: coords.y,
-      });
-
-      // 放完之后还放不放得出去：
-      //   · 成功 + 还能连发（multiCast）→ 留在瞄准模式，下一发直接点方向
-      //   · 成功 + 次数/冷却已经不够     → 退出，回到普通操作
-      //   · 失败（dispatch 已经 toast 了原因）→ 也退出，别让玩家困在一个必然失败的模式里
-      if (!(ok && canRepeatSkill(unitId, skillId))) {
-        pendingSkill = null;
-      }
-    } else {
-      // 方向型点到 4 格之外、或全图选点点到自己脚下：取消施法
-      pendingSkill = null;
-      toast('已取消施法');
-    }
-    refreshSelection(); // 恢复常规的移动/攻击高亮
-    render();
-    return; // 阻断后续的逻辑
-  }
-
   // AI 正在行动：不许下子，但"看"必须留着。
   //
   // 对手思考、走子、开火，这一段能持续十几秒；以前整块 return，
@@ -3275,7 +4136,17 @@ function onBoardClick(e: Event): void {
   if (loadPlan) {
     const ferry = state.units.find((u) => u.id === loadPlan);
     const cargo = clickedUnitId ? state.units.find((u) => u.id === clickedUnitId) : null;
-    if (ferry && cargo && cargo.owner === ferry.owner && distance(ferry, cargo) === 1) {
+    /*
+     * 贴身按**占地**算，不是锚点：2×2 的发射井锚点在左上角，
+     * 站在它右下角旁边的兵，锚点距离是 3。规则层早就改过来了（doLoad 用的是
+     * distBetweenUnits），这里漏改，玩家按下去只会听到"点一个贴着船的己方陆军"。
+     */
+    if (
+      ferry &&
+      cargo &&
+      cargo.owner === ferry.owner &&
+      distBetweenUnits(state, ferry, cargo) === 1
+    ) {
       dispatch({ type: 'LOAD', unitId: ferry.id, cargoId: cargo.id });
       loadPlan = null;
       return;
@@ -3289,7 +4160,7 @@ function onBoardClick(e: Event): void {
 
   if (unloadPlan) {
     const ferry = state.units.find((u) => u.id === unloadPlan);
-    if (ferry?.cargo?.length && coords && distance(ferry, coords) === 1) {
+    if (ferry?.cargo?.length && coords && distToUnit(state, coords, ferry) === 1) {
       const cargoId = ferry.cargo[0]!.id;
       const ok = dispatch({
         type: 'UNLOAD',
@@ -3454,6 +4325,79 @@ function downloadMatchReport(): void {
   toast(`已导出 ${a.download}`);
 }
 
+/**
+ * 星图相关的动作。
+ *
+ * 独立成一个函数、由 `handleAction` 的**开头**分发，而不是塞进那个大 switch：
+ * 星图是"叠在棋盘上的一层视图"，不是对局动作，混在一起既难找，也容易像
+ * 上一版那样被插到 `handleReplayAction` 的 switch 里——按钮点下去毫无反应，
+ * 因为那条路只在 `rp-` 前缀时才走。
+ */
+function handleStarAction(act: string, el: HTMLElement): void {
+  switch (act) {
+    case 'star-open':
+      if (!hasSpaceWar()) {
+        toast('这一局没有开「太空战争」，没有星图');
+        return;
+      }
+      if (!starLayout(state)) {
+        toast('这一局只有一张图，没有星图可看');
+        return;
+      }
+      starOpen = true;
+      starSel = null;
+      render();
+      return;
+    case 'star-close':
+      starOpen = false;
+      starSel = null;
+      render();
+      return;
+    case 'star-node':
+      starSel = { kind: 'node', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-lane':
+      starSel = { kind: 'lane', id: el.dataset.id ?? '' };
+      render();
+      return;
+    case 'star-go': {
+      const id = el.dataset.id;
+      if (!id || !hasBoard(state, id)) return;
+      starOpen = false;
+      starSel = null;
+      // 已经在这张图上：switchBoard 会直接返回，那就自己重画一次把覆盖层收掉
+      if (id === activeBoardId) render();
+      else switchBoard(id);
+      return;
+    }
+    case 'star-rename': {
+      /*
+       * 改名不在 action 流里（没有这种动作类型），所以**回放里禁止**：
+       * 回放是按动作重演的，名字却直接写在 state 上，重演会抹掉它，
+       * 表现是"我改的名字过一会儿自己变回去了"。
+       */
+      if (replay) {
+        toast('回放里不能改名字');
+        return;
+      }
+      const id = el.dataset.id;
+      if (!id) return;
+      const cur = state.boards?.[id]?.name ?? '';
+      const next = window.prompt('给这座空间站起个名字（最多 14 个字）', cur);
+      if (next === null) return;
+      const err = renameStation(state, id, next);
+      if (err) {
+        toast(err);
+        return;
+      }
+      // 面板标题也读这个名字，重画一次就全同步了
+      render();
+      return;
+    }
+  }
+}
+
 function handleAction(act: string, el: HTMLElement): void {
   // 复盘控件先处理：它在"对局已经结束/不该能操作"的时候仍然要能按，
   // 所以不能跟着下面那堆对局动作一起被挡掉
@@ -3461,22 +4405,41 @@ function handleAction(act: string, el: HTMLElement): void {
     handleReplayAction(act, el);
     return;
   }
+  // 星图是只读视图，不走对局那道闸（复盘里也要能开）
+  if (act.startsWith('star-')) {
+    handleStarAction(act, el);
+    return;
+  }
   /*
    * 复盘里除了"看"，别的对局动作一律不接。
    *
    * 不能只靠 `dispatch` 那道闸：侧栏里有一半按钮根本不走 dispatch
    * （撤回直接弹 undoStack、联机直接换 state、参谋部直接排队列）。
-   * 逐个去堵必然漏，所以在这儿统一拦——只放行三件和"改这一局"无关的事：
-   * 规则书、反馈、回首页。
+   * 逐个去堵必然漏，所以在这儿统一拦——只放行和"改这一局"无关的事：
+   * 规则书、反馈、回首页，以及装这三件的「设置」弹窗本身
+   * （它里面的「导出」由 settingsHtml 的 replay 参数自己收起来）。
    */
   if (replay) {
-    const harmless = act === 'manual' || act === 'feedback' || act === 'new-game';
+    /*
+     * 星图不在这张名单里：它在上面就前置分发掉并 return 了，
+     * 压根走不到这道闸（`star-*` 不改这一局的任何东西，复盘里也能开）。
+     *
+     * `new-match`（Alt+N / 设置里的「新对局」）要放行：它和 `new-game` 一样是
+     * "离开这一局"，先 exitReplay 再开面板，所以算无害。
+     */
+    const harmless =
+      act === 'manual' ||
+      act === 'feedback' ||
+      act === 'new-game' ||
+      act === 'new-match' ||
+      act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
       return;
     }
-    // 回首页之前先把那一局还回去：不还原的话，首页后面躲着的是一份别人棋的副本
-    if (act === 'new-game') exitReplay();
+    // 「回首页」「新对局」都是"离开这一局"：先把借来的 state 还回去再放行。
+    // 不还原的话，开局面板拿到的 `state.config` 是**别人那局**的配置。
+    if (act === 'new-game' || act === 'new-match') exitReplay();
   }
   switch (act) {
     case 'force-move':
@@ -3540,18 +4503,80 @@ function handleAction(act: string, el: HTMLElement): void {
       undoLast();
       return;
 
-    case 'chime':
-      chimeVolume = nextChimeVolume(chimeVolume);
-      saveChimeVolume(chimeVolume);
-      // 点一下顺手试听当前档位（音量 0 时 playChime 自己会跳过）
-      playChime(chimeVolume);
-      render();
-      return;
+    /*
+     * 顶栏那颗"铃声：60% → 80% → 0 → 60%"的循环按钮已经拆了（2026-11-11），
+     * 音量改在「设置」里用滑块调，那才是"调一个连续量"该有的样子。
+     * 原来那个 case 留在这儿只会变成第二条没人管的设置路径。
+     */
 
     case 'surrender': {
       // 认输是不可逆的，必须问一句
       if (!window.confirm('确认认输？这一局会直接判负，且不能撤回。')) return;
       dispatch({ type: 'SURRENDER' });
+      return;
+    }
+
+    case 'launch': {
+      if (!selectedId) return;
+      dispatch({ type: 'LAUNCH', unitId: selectedId });
+      refreshSelection();
+      return;
+    }
+
+    case 'recover': {
+      const planeId = el.dataset.plane;
+      if (!selectedId || !planeId) return;
+      dispatch({ type: 'RECOVER', unitId: selectedId, planeId });
+      refreshSelection();
+      return;
+    }
+
+    case 'mount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'MOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'unmount': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      dispatch({ type: 'UNMOUNT', unitId: selectedId, moduleId: mod });
+      refreshSelection();
+      return;
+    }
+
+    // 用设备。要选落点的那一种（弹射钩索）先进入"等玩家点地图"的状态，
+    // 其余的直接结算：整备臂的目标是"相邻友军"，按钮本身就是按友军各出一个，
+    // 所以 `data-target` 已经带上了目标 id。
+    case 'use-device': {
+      const mod = el.dataset.mod;
+      if (!selectedId || !mod) return;
+      const target = el.dataset.target;
+      if (target) {
+        dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod, targetId: target });
+        refreshSelection();
+        return;
+      }
+      const u = state.units.find((x) => x.id === selectedId);
+      const kind = u ? MODULES[mod]?.device : undefined;
+      if (kind && deviceTargetOf(kind) === 'tile') {
+        pendingDevice = { unitId: selectedId, deviceId: mod };
+        toast('在地图上点一个 3 格内的空地作为落点');
+        refreshSelection();
+        render();
+        return;
+      }
+      dispatch({ type: 'USE_DEVICE', unitId: selectedId, deviceId: mod });
+      refreshSelection();
+      return;
+    }
+
+    case 'recharge': {
+      if (!selectedId) return;
+      dispatch({ type: 'RECHARGE', unitId: selectedId });
+      refreshSelection();
       return;
     }
 
@@ -3599,6 +4624,19 @@ function handleAction(act: string, el: HTMLElement): void {
           return;
         }
         const targeting = skillDef.targeting === 'point' ? 'point' : 'direction';
+
+        /*
+         * 跨图选点：技能自己声明"要选哪张图的格子"（遥感模块观测的是脚下星球）。
+         * 必须在**进入瞄准模式之前**切过去，否则玩家点的是地球、算的是空间站。
+         * `switchBoard` 会清掉 `pendingSkill`，所以顺序不能反过来。
+         */
+        if (targeting === 'point' && unit) {
+          const fn = SKILL_TARGET_CELLS[skillDef.effect];
+          const res = fn?.({ state, view: boardStateOf(state, unit), self: unit, skill: skillDef });
+          const want = res && !Array.isArray(res) ? res.board : undefined;
+          if (want && want !== activeBoardId && hasBoard(state, want)) switchBoard(want);
+        }
+
         pendingSkill = { unitId, skillId, targeting };
         refreshSelection(); // 刷新高亮
         toast(
@@ -3818,6 +4856,11 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    case 'settings': {
+      openSettings();
+      return;
+    }
+
     case 'manual': {
       openManualFlow();
       return;
@@ -3874,6 +4917,22 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'import': {
       // 顶栏这颗按钮也挪到首页了，分支留作同一条实现（见 importMatchFlow）
       importMatchFlow();
+      return;
+    }
+
+    /*
+     * 「新对局」：直接开开局面板，**不经过首页**。
+     *
+     * 首页那颗「开始对局」走的也是 `newGameFlow()`，所以两条入口是同一套实现：
+     * 面板里点「开始对局」才会真的换局，点取消等于什么都没发生。
+     *
+     * 复盘里先退出来：这时 `state` 是别人那局的某一帧，开局面板拿到的
+     * `state.config` 也是别人的；不退的话，确认之后新局起来了，
+     * 复盘条还挂在上面，`replayIndex` 和新 `state` 对不上。
+     */
+    case 'new-match': {
+      if (replay) exitReplay();
+      newGameFlow();
       return;
     }
 
@@ -4000,6 +5059,83 @@ function handleAction(act: string, el: HTMLElement): void {
       return;
     }
 
+    // ---------- 框选之后的批量操作（2026-11-10） ----------
+    //
+    // 每个 case 都是"纯函数算新状态 → godBatchApply 压一次撤销 → toast 报数"。
+    // 报数不是客套：刷一片地形里有城会被跳过，不说清楚玩家会以为漏刷了。
+    case 'god-batch-del': {
+      if (!godRect) return;
+      const r = deleteUnitsInRect(state, godRect);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      godBatchApply(r.state, `删除 ${r.removed} 个单位（城留着）`);
+      return;
+    }
+
+    case 'god-batch-terrain': {
+      if (!godRect) return;
+      // 手上没地形笔刷就刷成平原：沙盒里最常做的是"把这片推平"
+      const t: Terrain = godBrush.kind === 'terrain' ? godBrush.terrain : 'plain';
+      const r = paintRect(state, godRect, t);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      godBatchApply(
+        r.state,
+        `刷上${CONFIG.terrainName[t]} ${r.painted} 格${r.skipped > 0 ? `（跳过 ${r.skipped} 格：城 / 有兵 / 已经是这个地形）` : ''}`,
+      );
+      return;
+    }
+
+    case 'god-batch-fill': {
+      if (!godRect) return;
+      // 手上没兵种笔刷就填民兵：它是货架上的第一格，也是"凑一支队伍"的默认
+      const type = godBrush.kind === 'unit' ? godBrush.type : 'militia';
+      const r = fillUnitsInRect(state, godRect, godSide, type);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      const name = state.unitTypes[type]?.name ?? type;
+      const tail = r.capped
+        ? '（到上限，没放完）'
+        : r.skipped > 0
+          ? `（${r.skipped} 格站不下）`
+          : '';
+      godBatchApply(r.state, `放下 ${r.placed} 个${name}${tail}`);
+      return;
+    }
+
+    case 'god-shift': {
+      if (!godRect) return;
+      const dx = Number(el.dataset.dx ?? 0);
+      const dy = Number(el.dataset.dy ?? 0);
+      const r = translateUnitsInRect(state, godRect, dx, dy);
+      if (!r.ok) {
+        toast(r.reason);
+        return;
+      }
+      // 选区跟着走一格，才能连着按：挪完还框着同一批人
+      godRect = {
+        x0: Math.max(0, Math.min(state.w - 1, godRect.x0 + dx)),
+        y0: Math.max(0, Math.min(state.h - 1, godRect.y0 + dy)),
+        x1: Math.max(0, Math.min(state.w - 1, godRect.x1 + dx)),
+        y1: Math.max(0, Math.min(state.h - 1, godRect.y1 + dy)),
+      };
+      godBatchApply(r.state, `整体平移 ${r.moved} 个单位`);
+      return;
+    }
+
+    case 'god-sel-clear': {
+      godRect = null;
+      godSig = '';
+      render();
+      return;
+    }
+
     // 地形笔刷：再点一次同一种地形＝放下笔刷，和兵种货架一个手感
     case 'god-terrain': {
       const t = el.dataset.terrain as Terrain | undefined;
@@ -4049,6 +5185,21 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'god-clear': {
       godApply(clearUnits(state, el.dataset.side === 'B' ? 'B' : 'A'));
+      return;
+    }
+
+    /*
+     * 上传这张图：沙盒 → 云端地图库（待审核）。
+     *
+     * 不在这里直接传：地图名要人填，折算和校验的结果也要先说清楚。
+     * 弹窗负责那三句话，这里只负责把当前局面递过去。
+     */
+    case 'god-map-upload': {
+      if (godRunning || godPassing) {
+        toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
+        return;
+      }
+      openMapUpload({ state });
       return;
     }
 
@@ -5163,6 +6314,59 @@ async function runCommanderBatch(): Promise<void> {
 let godSide: PlayerId = 'A';
 /** 手上拿的是什么 */
 let godBrush: GodBrush = { kind: 'none' };
+
+/* ── 框选（2026-11-10） ────────────────────────────────────────────────
+ *
+ * 一次拖动有三种可能的含义，靠**手上有没有笔刷**分开，不靠修饰键：
+ *   · 空手（`brush.kind === 'none'`）→ 斜向拖出矩形选区；
+ *   · 拿着地形/兵种/橡皮 → 仍然是"拖动绘制"（老行为，一个字没改）。
+ *
+ * 为什么不加 Shift/Alt：沙盒里 Shift 已经在正常对局里是"强制攻击"，
+ * 而这里最常做的事就是"摆一片"。让"空手"承担框选，符合"手上没工具 =
+ * 在指东西"这个直觉，也不需要玩家记住第二个修饰键。
+ *
+ * 单击不受影响：框选要到**第一次 pointermove** 才算成立（和笔刷拖动同一个
+ * 门槛），所以"点一下看看这格是什么"照旧走 `onGodClick`。
+ */
+let godRect: Rect | null = null;
+/** 正在拖的那个（松手才提交给 godRect；没动过就当作单击，不产选区） */
+let godMarquee: { a: { x: number; y: number }; b: { x: number; y: number }; pid: number } | null = null;
+
+/** 选区里那几格的索引（给棋盘染色用）；没有选区就是空数组 */
+function godRectIndices(): number[] {
+  const r = godMarquee ? rectOf(godMarquee.a, godMarquee.b, state.w, state.h) : godRect;
+  if (!r) return [];
+  const out: number[] = [];
+  for (let y = r.y0; y <= r.y1; y += 1) {
+    for (let x = r.x0; x <= r.x1; x += 1) out.push(y * state.w + x);
+  }
+  return out;
+}
+
+/** 工具栏那块摘要要的三个数 */
+function godSelectionForUi(): { w: number; h: number; cells: number; units: number } | null {
+  const r = godRect;
+  if (!r) return null;
+  return { w: rectW(r), h: rectH(r), cells: rectW(r) * rectH(r), units: unitsInRect(state, r).length };
+}
+
+/**
+ * 批量操作的统一出口：**只压一次撤销**。
+ *
+ * 选二十个兵删掉，撤销一下就全回来——和"一笔拖动 = 一步"是同一条规矩。
+ * 复用 `godApply` 不行：那个每次调用压一次栈，二十次操作就是二十层撤销。
+ */
+function godBatchApply(next: GameState, msg: string): void {
+  undoStack.push(state);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  state = next;
+  godResult = '';
+  godSig = '';
+  godShelfSig = '';
+  saveMatch(state);
+  render();
+  toast(msg);
+}
 /** 摆城用哪个时代；0 表示"还没挑过"，按这一局的起始时代走 */
 let godCityEra = 0;
 /**
@@ -5278,6 +6482,17 @@ function godMode(): boolean {
 }
 
 /**
+ * 这一局开没开「太空战争」。
+ *
+ * 星图与空间站属于那个包，基础包（太空时代）只有月球和发射井。
+ * 直接看 `config.expansionIds`：`requires` 在开局时已经把不满足的包滤掉了，
+ * 所以这里看到的就是"真的生效了"的列表。
+ */
+function hasSpaceWar(): boolean {
+  return state.config.expansionIds.includes('space-war');
+}
+
+/**
  * 现在轮不轮得到玩家自己走一步。
  *
  * `'both'` 档永远算"轮到你"——两边都是你，当前行动方就是你要走的那一方。
@@ -5330,6 +6545,7 @@ function godUi() {
     state,
     side: godSide,
     brush: godBrush,
+    selection: godSelectionForUi(),
     pack: godPack,
     era: godEra,
     // 没挑过时代就按这一局的起始时代：从青铜开局的人摆出来的城，
@@ -5413,6 +6629,11 @@ function renderGodBar(): void {
     // 有一枚蛋等着孵也要重绘：工具栏上那句结论会从"接着摆"变成
     // "还有一枚蛋"，而蛋出现时单位数正好减一，两边都得算进签名
     state.pendingEgg ? state.pendingEgg.owner : '-',
+    // 框选：选区的尺寸/格数/单位数会整条出现或整条消失，四样都要进签名。
+    // 漏了它，拖完一次框选工具栏不会变（第一次就踩到了）。
+    godRect ? `${godRect.x0},${godRect.y0},${godRect.x1},${godRect.y1}` : '-',
+    // 选区里的兵力会随批量操作变（删兵、放兵、平移），所以另算一个数
+    godRect ? unitsInRect(state, godRect).length : 0,
   ].join('|');
   if (sig === godSig) return;
   godSig = sig;
@@ -5501,6 +6722,25 @@ function godApply(result: SandboxResult): void {
   render();
 }
 
+/**
+ * 把笔刷作用到**一格**：只算，不落撤销栈、不存档、不重绘。
+ *
+ * 拖动绘制要在一根手指划过的十几格上连着改局面。如果每格都走 `godApply`，
+ * 一次拖动会在撤销栈里压十几步——按一下 Ctrl+Z 只退一格，用起来就是"撤销坏了"。
+ * 所以把"改局面"和"记一步"拆开：这里只改，提交由 `godStrokeEnd` 统一做一次。
+ */
+function godPaintAt(base: GameState, x: number, y: number): SandboxResult {
+  // 空手不落笔（"空手点一下 = 看看这格是什么"，那是 `onGodClick` 的事）
+  if (godBrush.kind === 'none') return { ok: false, reason: '先挑一个笔刷' };
+  if (godBrush.kind === 'erase') return removeAt(base, x, y);
+  if (godBrush.kind === 'city') {
+    return placeCity(base, godSide, x, y, godCityEra || base.config.startEra);
+  }
+  // 改地形不看"摆给谁"：地形不属于任何一方
+  if (godBrush.kind === 'terrain') return paintTerrain(base, x, y, godBrush.terrain);
+  return placeUnit(base, godSide, godBrush.type, x, y);
+}
+
 function onGodClick(e: Event): void {
   if (godRunning || godPassing) {
     toast(godRunning ? 'AI 正在打，先按「停止」' : '对面那一边在走，等它走完');
@@ -5509,6 +6749,25 @@ function onGodClick(e: Event): void {
   const coords = coordsFromEvent(e);
   if (!coords) return;
   const { x, y } = coords;
+
+  // 这一次 click 是刚结束那根拖动的尾巴：那一格拖动时已经画过了，
+  // 再走一遍就是重复落子（摆兵/橡皮会直接报"这格已经有东西"）。
+  if (godDragTail && performance.now() - godDragTail.at < 600 && godDragTail.x === x && godDragTail.y === y) {
+    godDragTail = null;
+    return;
+  }
+
+  /*
+   * 有选区的时候，点棋盘 = 先收选区（并继续做这一下原本要做的事）。
+   *
+   * 不这么做的话，选区会一直亮着，玩家改完一批想去点别的地方，屏幕上
+   * 还挂着一块蓝框，分不清"现在框的是谁"。
+   */
+  if (godRect) {
+    godRect = null;
+    godSig = '';
+    render();
+  }
 
   // 空手：这一格上是什么。沙盒里没有属性卡这回事，
   // 想知道血量就点一下，一句话说清就够了。
@@ -5531,14 +6790,200 @@ function onGodClick(e: Event): void {
     return;
   }
 
-  if (godBrush.kind === 'erase') godApply(removeAt(state, x, y));
-  else if (godBrush.kind === 'city') {
-    godApply(placeCity(state, godSide, x, y, godCityEra || state.config.startEra));
-  } else if (godBrush.kind === 'terrain') {
-    // 改地形不看"摆给谁"：地形不属于任何一方
-    godApply(paintTerrain(state, x, y, godBrush.terrain));
-  } else godApply(placeUnit(state, godSide, godBrush.type, x, y));
+  godApply(godPaintAt(state, x, y));
 }
+
+/* ── 笔刷拖动绘制 ─────────────────────────────────────────────────────────
+ *
+ * 按下记一笔底账 → 移动时把**上一格到这一格之间的每一格**都补上 → 松开提交。
+ *
+ * 三件事是刻意这么定的：
+ *   · **按下不落笔**。落笔放在第一次 pointermove。这样"点一下"这个手势
+ *     根本不会进入拖动路径，松手后照旧由 click 走 `onGodClick`——
+ *     单格点击的行为一个字节都没变，也不会和它抢。
+ *   · **补线用 Bresenham，不用"逐格点"**。快速拖动时 pointermove 本身会跳格
+ *     （60Hz 手指一划就是三四格），只画事件点会画出一条虚线。
+ *     有 `getCoalescedEvents` 就把浏览器压掉的中间采样也取出来一起算。
+ *   · **撤销只压一次**。整根拖动 = 一步。鼠标划过去的不是十几次操作。
+ */
+let godStroke: {
+  /** 按下之前的局面：撤销栈要压的就是它 */
+  base: GameState;
+  /** 上一次落笔的格（补线的起点） */
+  last: { x: number; y: number };
+  /** 这一笔已经画过的格，避免同一个格子反复改（来回划不该刷十遍） */
+  cells: Set<number>;
+  /** 画成功几格。为 0 就不是拖动，交给 click 走原路 */
+  painted: number;
+  /** 第一句失败原因：整笔一格都没画上时说出来，画上了就当噪声吞掉 */
+  error: string;
+  pid: number;
+} | null = null;
+
+/** 拖动刚结束的那一格。用来吞掉松手后派生出来的那一下 click */
+let godDragTail: { x: number; y: number; at: number } | null = null;
+
+/** 画一格（同一笔里画过的跳过） */
+function godStrokePaint(x: number, y: number): void {
+  const stroke = godStroke;
+  if (!stroke) return;
+  const key = y * state.w + x;
+  if (stroke.cells.has(key)) return;
+  stroke.cells.add(key);
+  const r = godPaintAt(state, x, y);
+  if (!r.ok) {
+    if (!stroke.error) stroke.error = r.reason;
+    return;
+  }
+  state = r.state;
+  stroke.painted += 1;
+}
+
+/** 能不能起笔：和 `onGodClick` 的门槛保持一致（那边拦什么，这边也拦什么） */
+function godStrokeBegin(e: PointerEvent): boolean {
+  if (state.config.godMode !== true || replay) return false;
+  if (godRunning || godPassing) return false;
+  if (e.pointerType === 'mouse' && e.button !== 0) return false;
+  const at = cellAtPoint(boardEl, e.clientX, e.clientY);
+  if (!at) return false;
+
+  /*
+   * 空手：起一个**框选**，不落笔。
+   *
+   * 松手之前都不算数（见 `godStrokeEnd`）：这样"点一下"根本不会产生选区，
+   * 也就不会和 `onGodClick` 抢——和笔刷拖动"按下不落笔"是同一个理由。
+   */
+  if (godBrush.kind === 'none') {
+    godMarquee = { a: at, b: at, pid: e.pointerId };
+    try {
+      boardEl.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* 抓不住只影响"划出边界还能继续"，不该让框选连起点都没有 */
+    }
+    e.stopPropagation();
+    return true;
+  }
+
+  /*
+   * 有笔刷时，操控档不给画：那里的一举一动都是"真的走一步"，
+   * 拖过一片就等于替对手改局面。摆放档（`play === null`）才允许笔刷拖动。
+   *
+   * 框选**两种档都允许**：它只选不改，选完要按哪颗批量按钮还是玩家自己决定。
+   */
+  if (godInControl()) return false;
+
+  godStroke = { base: state, last: at, cells: new Set(), painted: 0, error: '', pid: e.pointerId };
+  /*
+   * 抓指针：手指/鼠标划出棋盘边界也还算数，不会拖到一半断掉。
+   *
+   * 包 try：指针已经失效（比如这一下是合成事件、或者系统刚把手势抢走）时，
+   * 规范允许 `setPointerCapture` 抛 NotFoundError。抓不住只影响"划出边界还能继续"，
+   * 不该把整根拖动连第一格都赔进去。
+   */
+  try {
+    boardEl.setPointerCapture?.(e.pointerId);
+  } catch {
+    /* 抓不住就算了，拖动本身照旧 */
+  }
+  // 别让 .board-scroll 顺手把这一下当成"拖地图"（放大档里它也在听 pointerdown）
+  e.stopPropagation();
+  return true;
+}
+
+function godStrokeMove(e: PointerEvent): void {
+  if (godMarquee) {
+    if (e.pointerId !== godMarquee.pid) return;
+    const at = cellAtPoint(boardEl, e.clientX, e.clientY);
+    if (!at) return; // 划出棋盘就停在最后一格，不把选区缩成 0
+    if (at.x === godMarquee.b.x && at.y === godMarquee.b.y) return;
+    godMarquee.b = at;
+    render();
+    return;
+  }
+  const stroke = godStroke;
+  if (!stroke || e.pointerId !== stroke.pid) return;
+
+  /*
+   * 合并采样：高刷新率鼠标/极快的手指一帧里会攒好几个点，浏览器只派发最后一个。
+   * 不取出来，补线的起点就会从"上一个派发点"算起，那几格照样漏。
+   */
+  const coalesced =
+    typeof e.getCoalescedEvents === 'function' ? (e.getCoalescedEvents() as PointerEvent[]) : [];
+  const points = coalesced.length > 0 ? coalesced : [e];
+
+  let dirty = false;
+  for (const ev of points) {
+    const at = cellAtPoint(boardEl, ev.clientX, ev.clientY);
+    if (!at) continue;
+    /*
+     * 第一笔要把**按下那一格**补上。
+     *
+     * 落笔是"不含起点、含终点"的（起点算上一笔画过），可按下的时候我们故意
+     * 什么都没画——留给"点一下"走 click 那条老路。于是第一格必须在这里补：
+     * 不补的话，从 (2,3) 划到 (6,3) 画出来是 (3..6)，起点那个洞永远在。
+     */
+    if (stroke.cells.size === 0) {
+      const beforeFirst = stroke.painted;
+      godStrokePaint(stroke.last.x, stroke.last.y);
+      if (stroke.painted !== beforeFirst) dirty = true;
+    }
+    if (at.x === stroke.last.x && at.y === stroke.last.y) continue;
+    const before = stroke.painted;
+    for (const c of lineBetween(stroke.last, at)) godStrokePaint(c.x, c.y);
+    stroke.last = at;
+    if (stroke.painted !== before) dirty = true;
+  }
+  // 一帧最多重绘一次：每个格子都 render 会让 20×20 的拖动掉到个位数帧
+  if (dirty) render();
+}
+
+function godStrokeEnd(e: PointerEvent): void {
+  if (godMarquee) {
+    if (e.pointerId !== godMarquee.pid) return;
+    const m = godMarquee;
+    godMarquee = null;
+    const r = rectOf(m.a, m.b, state.w, state.h);
+    const clicked = r.x0 === r.x1 && r.y0 === r.y1;
+    /*
+     * 没拖开就当作单击：不产选区、清掉旧选区，把这一下让给 `onGodClick`。
+     * （拖开的门槛是"矩形超过一格"，不是"指针动过"——手抖一像素不该变成 1×1 选区。）
+     */
+    godRect = clicked ? null : r;
+    if (!clicked) {
+      const n = unitsInRect(state, r).length;
+      toast(`已选 ${rectW(r)}×${rectH(r)} 区域 · ${n} 个单位`);
+    }
+    // 吞掉松手后浏览器补的那一下 click（它会落到 onGodClick 上）
+    godDragTail = { x: m.b.x, y: m.b.y, at: performance.now() };
+    render();
+    return;
+  }
+  const stroke = godStroke;
+  if (!stroke || e.pointerId !== stroke.pid) return;
+  godStroke = null;
+  try {
+    if (boardEl.hasPointerCapture?.(stroke.pid)) boardEl.releasePointerCapture(stroke.pid);
+  } catch {
+    /* 同上：抓没抓到都不影响已经画上的格子 */
+  }
+
+  // 一格都没画上：要么是"点一下"（该由 click 走原路），要么每格都失败了
+  if (stroke.painted === 0) {
+    state = stroke.base;
+    if (stroke.error) toast(stroke.error);
+    return;
+  }
+
+  // 整根拖动压一步撤销
+  undoStack.push(stroke.base);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  godResult = '';
+  saveMatch(state);
+  render();
+  // 松手这一格拖动时已经画过了，记下来吞掉随之而来的 click
+  godDragTail = { x: stroke.last.x, y: stroke.last.y, at: performance.now() };
+}
+
 
 /**
  * 玩家结束回合之后：把对面那一步补上，然后交还。
@@ -6547,8 +7992,7 @@ const endPan = (e?: Event): void => {
   }
 };
 boardScrollEl.addEventListener('pointerup', endPan);
-boardScrollEl.addEventListener('pointercancel', endPan);
-boardScrollEl.addEventListener('pointerleave', (e) => {
+boardScrollEl.addEventListener('pointercancel', endPan);boardScrollEl.addEventListener('pointerleave', (e) => {
   /*
    * 已经抓住指针了就别再因为"离开元素边界"收工。
    *
@@ -6558,6 +8002,32 @@ boardScrollEl.addEventListener('pointerleave', (e) => {
    */
   if (boardScrollEl.hasPointerCapture?.(e.pointerId)) return;
   endPan(e);
+});
+
+/*
+ * 笔刷拖动：按下起笔、移动补格、松开提交。
+ *
+ * 挂在 `boardEl`（`#board`，一个长期存在的节点）而不是格子上：棋盘每帧都在重建
+ * 子节点，监听器挂在格子上，第一次重绘之后就没了。指针捕获也抓在这个节点上，
+ * 所以整根拖动的 pointermove 都会回到这里，哪怕手已经划到棋盘外面。
+ */
+boardEl.addEventListener('pointerdown', (e) => {
+  godStrokeBegin(e as PointerEvent);
+});
+boardEl.addEventListener('pointermove', (e) => {
+  // 框选时 `godStroke` 是空的（那一笔没落），所以两个都要判
+  if (!godStroke && !godMarquee) return;
+  godStrokeMove(e as PointerEvent);
+});
+boardEl.addEventListener('pointerup', (e) => {
+  if (!godStroke && !godMarquee) return;
+  godStrokeEnd(e as PointerEvent);
+});
+boardEl.addEventListener('pointercancel', (e) => {
+  // 系统把手势抢走了（来电、切后台）。已经画上去的东西**留着**：
+  // 玩家看得见它，回滚等于把他刚画的抹掉，比"提前提交"更没道理。
+  if (!godStroke && !godMarquee) return;
+  godStrokeEnd(e as PointerEvent);
 });
 
 // 悬停看详情：选卡时判断禁不禁、造兵之前判断这个工兵能盖什么，都靠这一套
@@ -6737,6 +8207,23 @@ appEl.addEventListener('input', (e) => {
  *      "想按 A 结果结束了回合"；
  *   3. 按住不放（e.repeat）只认第一下，否则连发会把好几个回合一起交出去。
  */
+/*
+ * 星图开着时，Esc 先关它。
+ *
+ * 这条必须**排在复盘那条前面**：复盘里也能开星图，而 Esc 在那边是"退出复盘"。
+ * 玩家的心理顺序是"先退一层"——按一次 Esc 直接把这局复盘关掉会很突兀。
+ * 用 `stopImmediatePropagation` 而不是 `stopPropagation`：两个监听都挂在 window 上，
+ * 后者拦不住同级的其他监听器。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!starOpen || e.key !== 'Escape') return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  starOpen = false;
+  starSel = null;
+  render();
+});
+
 window.addEventListener('keydown', (e) => {
   if (!godQuick || state.config.godMode !== true) return;
   // 复盘里空格归复盘（播放/暂停）：这里再拦一道，否则放一段沙盒回放时空格会被
@@ -6837,6 +8324,35 @@ window.addEventListener('keydown', (e) => {
 });
 
 /*
+ * 新对局快捷键：Alt + N（设置里写着，见 `settingsHtml`）。
+ *
+ * 为什么不用单键 N：棋盘上没有任何地方提示"按 N"，误触的代价是丢掉当前这一局
+ * 的设置面板——虽然还要在面板里确认，但一个无提示的单键太容易在输入法、
+ * 快捷回复这些场景里被按下。Alt + N 不撞浏览器的新建窗口（那是 Ctrl + N，
+ * 拦不住也不该拦），也不撞已有的键位（空格 = 上帝模式结束回合，←→ = 复盘逐帧）。
+ *
+ * 守卫沿用空格那条：输入中不抢；按住不放只认第一下（否则按住 N 会连开面板）。
+ *
+ * 弹窗规则：**已经有一层弹窗时不开**——首页、规则书、联机面板都盖在棋盘上，
+ * 再叠一层开局面板，关的时候要关两次，而且下面那层的状态是旧的。
+ * 设置面板是唯一例外：那颗「新对局」按钮本来就在里面，按快捷键等于点它。
+ */
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || e.metaKey) return;
+  if (e.code !== 'KeyN' && (e.key ?? '').toLowerCase() !== 'n') return;
+  if (e.repeat) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable)) return;
+  const openMask = document.querySelector('.modal-mask');
+  if (openMask) {
+    if (openMask !== settingsMask) return;
+    closeSettings();
+  }
+  e.preventDefault();
+  handleAction('new-match', document.body);
+});
+
+/*
  * 复盘进度条。
  *
  * `input` 是拖动过程中连续触发的（跟手），`change` 是松手那一下。
@@ -6896,7 +8412,7 @@ boardEl.addEventListener('mouseover', (e) => {
   const previewer = SKILL_PREVIEWERS[pending.skillId];
   if (!caster || !previewer) return;
   skillAimKey = key;
-  skillThreatTiles = previewer({ state, self: caster, target: { x, y } });
+  skillThreatTiles = previewer({ state, view: boardStateOf(state, caster), self: caster, target: { x, y } });
   render();
 });
 
@@ -6911,7 +8427,14 @@ boardEl.addEventListener('mouseout', (e) => {
   const previewer = SKILL_PREVIEWERS[pendingSkill.skillId];
   skillAimKey = '';
   skillThreatTiles =
-    caster && previewer ? previewer({ state, self: caster, target: { x: caster.x, y: caster.y } }) : [];
+    caster && previewer
+      ? previewer({
+          state,
+          view: boardStateOf(state, caster),
+          self: caster,
+          target: { x: caster.x, y: caster.y },
+        })
+      : [];
   render();
 });
 
@@ -7130,3 +8653,152 @@ if (drift) {
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
 if (forceHome || invited.length < 4) showTitle();
+
+/* ── 设置弹窗 ────────────────────────────────────────────────────────────
+ *
+ * 顶栏只留每回合都要看的东西；"想起来才改"的都进这里：主题、动效、铃声、
+ * 导出、规则书、反馈、回首页。
+ *
+ * 为什么自己建节点而不进 render()：面板每帧重建，而弹窗是**短暂**的、带输入
+ * 焦点（滑块）——扔进渲染循环会被反复冲掉，拖动滑块的手感直接废掉。
+ */
+let settingsMask: HTMLElement | null = null;
+
+function closeSettings(): void {
+  settingsMask?.remove();
+  settingsMask = null;
+}
+
+function openSettings(): void {
+  closeSettings();
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  settingsMask = mask;
+
+  const paint = (): void => {
+    mask.innerHTML = settingsHtml({
+      theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
+      reducedMotion: document.documentElement.dataset.motion === 'reduced',
+      chime: chimeVolume,
+      chimeText: chimeLabel(chimeVolume),
+      unitArt: uiArtOn(),
+      terrainArt: uiTerrainOn(),
+      replay: replay !== null,
+      // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
+      // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
+      compact:
+        typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 640px)').matches
+          : window.innerWidth <= 640,
+      fog: state.fog !== false,
+      blackout: state.config.expansionIds.includes('blackout'),
+      roomCode: room?.code ?? null,
+    });
+  };
+  paint();
+  document.body.append(mask);
+
+  mask.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    // 点遮罩空白处 = 关闭（和规则书那些弹窗一个手势）
+    if (t === mask) {
+      closeSettings();
+      return;
+    }
+    const el = t.closest<HTMLElement>('[data-act]');
+    const act = el?.dataset.act;
+    if (!act) return;
+
+    if (act === 'settings-close') {
+      closeSettings();
+      return;
+    }
+    if (act === 'set-theme') {
+      setUiMode(el!.dataset.theme === 'modern' ? 'modern' : 'legacy');
+      paint();
+      return;
+    }
+    if (act === 'set-motion') {
+      setUiMotion(el!.dataset.motion === 'reduced' ? 'reduced' : 'full');
+      paint();
+      return;
+    }
+    if (act === 'set-fx') {
+      /*
+       * 一个按钮管两件事：地面材质 + 棋子贴图。
+       *
+       * 拆成两个开关的那一版，用户点了「棋子贴图」发现地面没变——
+       * "切换贴图"在他脑子里是一个动作。合并之后仍然两个状态分开存，
+       * 只是入口只有一个。
+       */
+      const on = el!.dataset.fx === 'on';
+      setUiTerrain(on);
+      setUiArt(on);
+      if (on) {
+        // 棋子清单要等拉回来，先画一帧地形，到货后再补一帧
+        void loadUnitArtIndex().then(() => paint());
+      }
+      paint();
+      return;
+    }
+    if (act === 'set-terrain') {
+      setUiTerrain(el!.dataset.terrain === 'on');
+      paint();
+      return;
+    }
+    if (act === 'set-art') {
+      const on = el!.dataset.art === 'on';
+      setUiArt(on);
+      if (on) {
+        // 清单要先到，否则这一帧仍然全是汉字，看起来像"点了没反应"
+        void loadUnitArtIndex().then(() => paint());
+      }
+      paint();
+      return;
+    }
+    if (act === 'chime-test') {
+      playChime(chimeVolume);
+      return;
+    }
+
+    /*
+     * 迷雾开关：**不关弹窗**，原地重画。
+     * 玩家刚点的就是这一屏上的开关，把他踢出去再开一次才能确认结果，
+     * 那是把"看一眼变成了三步"。其余动作仍然走下面那条统一出口。
+     */
+    if (act === 'toggle-fog') {
+      const proxy = document.createElement('button');
+      proxy.dataset.act = act;
+      appEl.append(proxy);
+      proxy.click();
+      proxy.remove();
+      paint();
+      return;
+    }
+
+    /*
+     * 其余动作（导出 / 回首页 / 规则书 / 反馈 / 联机）走**主分发**，不在这里重写一遍。
+     * 造一个带同样 data-act 的替身点一下：多一条实现就多一条会跑偏的地方。
+     */
+    closeSettings();
+    const proxy = document.createElement('button');
+    proxy.dataset.act = act;
+    appEl.append(proxy);
+    proxy.click();
+    proxy.remove();
+  });
+
+  // 滑块：拖动时只改音量与那一行文字，不整块重画（重画会丢焦点、断手感）
+  mask.addEventListener('input', (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.dataset.act !== 'chime-range') return;
+    chimeVolume = Math.min(1, Math.max(0, Number(t.value) / 100));
+    saveChimeVolume(chimeVolume);
+    const value = mask.querySelector('.set-value');
+    if (value) value.textContent = chimeLabel(chimeVolume);
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settingsMask) closeSettings();
+});

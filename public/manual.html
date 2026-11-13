@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 规则书</title>
 <style>
   :root {
@@ -55,7 +61,7 @@
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -68,7 +74,7 @@
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -81,7 +87,7 @@
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -112,7 +118,7 @@
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -124,7 +130,7 @@
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -142,7 +148,7 @@
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -168,7 +174,7 @@
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -177,14 +183,71 @@
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -217,7 +280,7 @@
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -252,7 +315,7 @@
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -260,7 +323,7 @@
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
@@ -341,8 +404,9 @@
     <section id="flow">
       <h2><span class="sec-num">02</span>回合流程</h2>
       <ol>
-        <li><b>对方回合结束时</b>，你的建筑自动开火一次（打射程内最近、血最少的敌人）。<b>这一炮和你自己点的是同一炮</b>——
-          本回合手动开过火的塔不再补射。早先两段都算，结果是"手动开火"变成纯白送：点它反而比等它自己打更亏。</li>
+        <li><b>反应射击</b>：敌人踏进射程的那一刻就打，不是等回合末补一炮。打出去的发数从这座建筑
+          本回合的攻击次数里扣，和你自己点开火<b>共用同一份</b>——一回合总共还是那么几发，
+          变的只是时机：从"挨完打才还手"变成"进门就打"。先打刚进来的那个，它倒了还有余弹就转火。</li>
         <li><b>你的回合开始</b>，结算收入：基础 20 + 每座城按自己的时代贡献 + 每个经济单位按所在地形产出。</li>
         <li>你的单位恢复行动力（移动一次、攻击一次）。</li>
         <li>你行动：移动、攻击、攻城、建造、在城市生产、升级城市。</li>
@@ -367,11 +431,11 @@
       <p>水和桥不是装饰，它们决定"能不能过去"：</p>
       <ul>
         <li><b>水域</b>陆军进不去，但<b>能养活一支舰队</b>。水军在水上一格一步，机动性其实比陆军好；它的短板是上不了岸、也进不了城。</li>
-        <li><b>桥</b>是修在水面上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
+        <li><b>桥</b>是修在水面（或沼泽）上的建筑：建好之后那一格变成桥面，<b>双向通行</b>——你的兵能过，对方的兵也能过。桥不是"自家专属的浮桥"，它是一条路。</li>
         <li>桥上<b>能穿过，也能停</b>：桥在那一格上，人站在桥面。守桥、堵口、走到一半换气都靠这条——一格宽的桥不是"只能穿过去的门"，而是"只站得下一个人"的窄路。</li>
         <li>桥<b>不挡水路</b>：船从桥底下过，和走在河上一样。想把一条河彻底封死，得靠岸上的兵，不能靠桥。</li>
-        <li>桥有耐久（40），被打掉之后地形立刻退回水面。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
-        <li>桥只能架在<b>至少一侧是陆地</b>的水面上——一片汪洋上架不了桥。</li>
+        <li>桥有耐久（40），被打掉之后地形立刻退回原样（水域还是水域，沼泽还是沼泽）。想断掉这条路，只能把桥打塌——这是真实的防守手段，也是真实的进攻目标。<b>远程也能拆桥，但一发只算半伤</b>；贴着桥头（相邻一格）打才是满伤（详见下一节）。</li>
+        <li>桥只能架在<b>至少一侧是陆地</b>的水面或沼泽上——一片汪洋上架不了桥。沼泽本来就能踩着走（移动力 2），架桥是为了让全军的补给线快一步。</li>
       </ul>
       <h3>渡船：让人过水</h3>
       <ul>
@@ -478,7 +542,7 @@
         <dt>战斗单位</dt><dd>打仗的。每回合能移动一次、攻击一次。</dd>
         <dt>经济单位</dt><dd>站在合适地形上产出金币（农民在平原、伐木工在森林）。很脆，需要保护。</dd>
         <dt>建造单位</dt><dd>自己不产金，但能盖建筑。建造会占掉整个回合。</dd>
-        <dt>建筑</dt><dd>移动力 0，不可移动。军事建筑每回合自动开火，经济建筑按地形产金，桥把水面变成可通行的桥面，军营则是能推到前线的产兵点。</dd>
+        <dt>建筑</dt><dd>移动力 0，不可移动。军事建筑会反应射击（敌人踏进射程即打），经济建筑按地形产金，桥把水面变成可通行的桥面，军营则是能推到前线的产兵点。</dd>
         <dt>水军</dt><dd>只能在水面上行动（一格一步），从<b>临水城市</b>或<b>临水军营</b>边上的空水面下水。上不了岸，也进不了城；桥底下能过。</dd>
         <dt>运输船</dt><dd>渡船不打架，但它能把贴身的陆军装进货舱（容量 2）运过水面。这是没有桥的时候唯一的过河方式，也是所有运输单位的通例：船沉了，舱里的人一起没。</dd>
       </dl>
@@ -603,7 +667,7 @@
           不到一秒就散，不计入上面那份复盘——所以不会和"上回合挨打"的红格混在一起。</li>
         <li><b>看见才闪</b>：视野外的格子不会有红格。看不见的地方不该告诉你"那边刚打过仗"。</li>
         <li><b>每回合自动换一批</b>：新的敌方回合打完，表就换成新的；对面没打你，它就是空的。</li>
-        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑自动开火、
+        <li>只算<b>对面主动打出来的</b>：反击（你打过去被还手）、建筑的反应射击、
           中毒灼烧这类持续掉血、天气扣血都不计入——混进来会让"哪里被打得最狠"失真。</li>
       </ul>
       <div class="callout">
@@ -713,9 +777,11 @@
       <ul>
         <li>建造消耗该单位<b>整个回合</b>（移动和攻击都没了）。</li>
         <li>建造者本身攻击力只有 4~5、血 20~30，派到前线修工事是真的有风险。</li>
-        <li>军事建筑在<b>对方回合开始时</b>自动开火，打射程内最近且血最少的敌人。有攻击力也有射程，所以被单位攻击时会正常反击。军营同样有哨兵，贴到营门口会被敲一下。</li>
-        <li>建筑的火力<b>一轮只有一段</b>：你自己点过（手动画出攻击范围再点目标），回合交给对方时它就不再补射；
-          没点过，才轮到自动那一下。刚建好的建筑当回合不能动，所以第一炮总是自动打的。</li>
+        <li>军事建筑有<b>反应射击</b>：敌人踏进射程就挨打，先打刚进来的那个，它倒了还有余弹就按最近、血最少转火。
+          有攻击力也有射程，所以被单位攻击时会正常反击。军营同样有哨兵，贴到营门口会被敲一下。</li>
+        <li><b>一回合总共只有那么几发</b>：反应射击和你手动开火共用这一份次数。所以你点过一炮之后，
+          对面再冲进来时它只剩其余几发；反过来，你这一回合没点，它也不会"烂在手里"——
+          敌人进来照样打，一直没人进来则在你的回合开始时补射射程里已经站着的敌人。</li>
         <li><b>军营只能扎在平原或丘陵上</b>（地形要求写在兵种数据里，不写死在代码里）。它是最便宜的"把补给点往前推"的办法：省掉新兵从后方跑到前线的那几个回合。</li>
         <li><b>建在自家城里要留出兵位</b>：如果这一格是这座城最后一个空位，界面会拒绝开工并说明原因。
           这一条是踩出来的——在只剩一格空地的城里盖座塔，城市的产兵格就变成 0，从此一兵不出，
@@ -788,6 +854,15 @@
         <li>地形始终可见，<b>只有对方单位受迷雾影响</b>。</li>
         <li>视野来源：己方单位的视野半径、己方城市周围 1 格。</li>
         <li>离开视野的敌人会留下<b>半透明幽灵</b>，标在最后已知位置。移动过或已阵亡你都无从确认——这正是它的乐趣。</li>
+        <li><b>看得见才打得到</b>：攻击、攻城、<b>挨打后的反击</b>、<b>塔的反应射击</b>
+          都要求目标在本方视野里。城虽然一直画在地图上（地形是公开的），
+          但视野外的城墙砸不动；幽灵位置也不能当靶子。视野按"本方"算——旁边的友军或自己的城看见了，
+          就有人替你报点，可以打。</li>
+        <li><b>看得见那一格 ≠ 看得见那个兵</b>：带潜行、潜航、隐身的单位藏在林子、水下或云里时，
+          格子亮着、人却不显形——所以既打不着它，挨了它打也反击不了。破法是贴到相邻格。
+          反过来，它自己一出手就现形，那个敌方回合里它躲不了还手。</li>
+        <li>地形会改视野：<b>森林、河谷、沼泽 −1，丘陵 +1</b>（见「地形高差」）。站进林子的弓手看得近一格，
+          射程却没变——那多出来的一格就是打不着的，往下看"射程 / 视野"那一行。</li>
         <li>玩家视角恒等于当前行动方。人机对战时 AI 也只吃同一份过滤后的视图，不作弊。</li>
       </ul>
       <div class="callout">
@@ -817,7 +892,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上时，敌人要贴到相邻格才发现它。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">掠空</td><td>掠过水面：可以飞越水面并停在水上，森林和丘陵按 1 步算，河防对它不成立；但爬不了高山。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">飞行</td><td>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">—</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-stealth"><td class="name">潜行</td><td>站在森林或丘陵上、且这回合还没出过手时，敌人要贴到相邻格才发现它。一出手就现形，开阔地上无效。</td><td class="traits">斥候</td></tr><tr id="t-ab-fly"><td class="name">掠空</td><td>掠过水面：可以飞越水面并停在水上，森林和丘陵按 1 步算，河防对它不成立；但爬不了高山。</td><td class="traits">—</td></tr><tr id="t-ab-fly-over"><td class="name">飞行</td><td>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</td><td class="traits">—</td></tr><tr id="t-ab-forest-walk"><td class="name">穿林</td><td>森林和丘陵的移动消耗按 1 算。</td><td class="traits">伐木工</td></tr><tr id="t-ab-kill-rush"><td class="name">收割</td><td>亲手斩杀一个单位后，立刻恢复本回合的移动力（攻击次数不恢复）。杀完能走，但走完还是要等下回合才能再出手。</td><td class="traits">—</td></tr><tr id="t-ab-leap"><td class="name">跳跃</td><td>一跃过水：水面、森林、丘陵都按 1 步算，河防对它不成立。</td><td class="traits">—</td></tr><tr id="t-ab-vanish"><td class="name">隐匿</td><td>不挑地形：只要这一回合还没动过、没出过手，敌人就得贴到相邻格才看得见它。一出手就现形。</td><td class="traits">—</td></tr><tr id="t-ab-phase"><td class="name">穿行</td><td>可以穿过敌军（但不能停在敌军身上）。堵枪眼对它没用，它本来就是穿过去的。</td><td class="traits">—</td></tr><tr id="t-ab-slow-offroad"><td class="name">重甲难行</td><td>森林、丘陵、城市的进入消耗翻倍。铁罐头在平地上是墙，在树林里是靶子。</td><td class="traits">—</td></tr><tr id="t-ab-nv-submerge"><td class="name">潜航</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新潜下去。</td><td class="traits">—</td></tr><tr id="t-ab-af-stealth"><td class="name">隐身</td><td>迷雾局里只有相邻的敌人才发现得了它；攻击不会引来反击。一出手就现形，换回合才重新隐身。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>支援</h4>
@@ -968,7 +1043,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-builds-laborer">可建 4 种建筑</a></td>
+        <td class="traits"><a class="ref" href="#t-builds-laborer">可建 7 种建筑</a></td>
       </tr></tbody>
     </table>
     <h4>建筑</h4>
@@ -985,7 +1060,7 @@
         <td class="num">—</td>
         <td class="num">3</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="mill">
         <td class="name">磨坊</td>
@@ -1021,7 +1096,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1077,7 +1152,7 @@
         <td class="name">弩兵</td>
         <td class="glyph">弩</td>
         <td class="num">82</td>
-        <td class="num">16</td>
+        <td class="num">19</td>
         <td class="num">1</td>
         <td class="num">24</td>
         <td class="num">2</td>
@@ -1112,7 +1187,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-income">产出 森林 +12</a></td>
+        <td class="traits"><a class="ref" href="#t-ab-forest-walk">穿林</a> · <a class="ref" href="#t-income">产出 森林 +12</a></td>
       </tr></tbody>
     </table>
     <h4>建造单位</h4>
@@ -1129,7 +1204,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-builds-miller">可建 5 种建筑</a></td>
+        <td class="traits"><a class="ref" href="#t-builds-miller">可建 12 种建筑</a></td>
       </tr></tbody>
     </table>
     <h4>建筑</h4>
@@ -1146,7 +1221,7 @@
         <td class="num">—</td>
         <td class="num">3</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="watermill">
         <td class="name">水车</td>
@@ -1170,7 +1245,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1278,7 +1353,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-builds-engineer">可建 7 种建筑</a></td>
+        <td class="traits"><a class="ref" href="#t-builds-engineer">可建 19 种建筑</a></td>
       </tr></tbody>
     </table>
     <h4>建筑</h4>
@@ -1295,7 +1370,7 @@
         <td class="num">—</td>
         <td class="num">4</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="factory">
         <td class="name">工厂</td>
@@ -1331,7 +1406,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1410,7 +1485,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-income">产出 平原 +36</a></td>
+        <td class="traits"><a class="ref" href="#t-income">产出 平原 +48</a></td>
       </tr></tbody>
     </table>
     <h4>建造单位</h4>
@@ -1427,7 +1502,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-builds-foreman">可建 8 种建筑</a></td>
+        <td class="traits"><a class="ref" href="#t-builds-foreman">可建 26 种建筑</a></td>
       </tr></tbody>
     </table>
     <h4>建筑</h4>
@@ -1444,7 +1519,7 @@
         <td class="num">—</td>
         <td class="num">4</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="arsenal">
         <td class="name">兵工厂</td>
@@ -1468,7 +1543,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">4</td>
-        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -1547,7 +1622,7 @@
         <td class="num">2</td>
         <td class="num">1</td>
         <td class="num">2</td>
-        <td class="traits"><a class="ref" href="#t-builds-crew">可建 10 种建筑</a></td>
+        <td class="traits"><a class="ref" href="#t-builds-crew">可建 33 种建筑</a></td>
       </tr></tbody>
     </table>
     <h4>建筑</h4>
@@ -1563,8 +1638,8 @@
         <td class="num">86</td>
         <td class="num">—</td>
         <td class="num">4</td>
-        <td class="num">3</td>
-        <td class="traits"><a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="num">4</td>
+        <td class="traits"><a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr>
       <tr data-unit="industrialpark">
         <td class="name">工业园</td>
@@ -1600,7 +1675,7 @@
         <td class="num">—</td>
         <td class="num">1</td>
         <td class="num">5</td>
-        <td class="traits"><a class="ref" href="#t-produce">产兵（造价 90%）</a> · <a class="ref" href="#t-auto">自动开火</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
+        <td class="traits"><a class="ref" href="#t-produce">产兵（造价 90%）</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td>
       </tr></tbody>
     </table>
       </div>
@@ -2095,7 +2170,9 @@
       <h2><span class="sec-num">21</span>机制词条</h2>
       <p>正文与兵种表里带<b>虚线下划线</b>的词，鼠标停上去会浮一句说明，点一下跳到这里。
         只收能力之外的机制；能力在第 13 章那张表里，每条都是一个可跳转的锚点。</p>
-      <dl class="terms"><dt id="t-burst">攻击次数</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-carry">装载</dt><dd>能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。 <span class="more">装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-builds-laborer">可建造 · 奴隶</dt><dd>可建造：箭塔、磨坊、木桥、军营（共 4 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-auto">自动开火</dt><dd>每回合不消耗行动，自动向射程内最合适的目标开一次火。 <span class="more">建筑专用。玩家点它开火仍然算&quot;手动&quot;，两者不叠加（同一回合只打一次）。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-produce">产兵</dt><dd>这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。 <span class="more">括号里是这座营和&quot;默认产能&quot;不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。</span></dd><dt id="t-builds-miller">可建造 · 民夫</dt><dd>可建造：石堡、水车、木桥、军营、寨垒（共 5 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-builds-engineer">可建造 · 劳工</dt><dd>可建造：炮台、工厂、木桥、石桥、军营、寨垒、堡寨（共 7 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-foreman">可建造 · 工程师</dt><dd>可建造：要塞、兵工厂、木桥、石桥、军营、寨垒、堡寨、兵站（共 8 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-crew">可建造 · 建筑队</dt><dd>可建造：碉堡、工业园、木桥、石桥、钢桥、军营、寨垒、堡寨、兵站、前进基地（共 10 种）。建造占掉整个回合，范围 2 格。</dd></dl>
+      <dl class="terms"><dt id="t-burst">攻击次数</dt><dd>一回合能发起 N 次独立攻击，每次都是完整的一击，可以换目标。 <span class="more">次数用完才算行动结束；它挨打时的反击次数也等于这个 N，所以围攻比单挑划算。</span></dd><dt id="t-builds">建造</dt><dd>能盖哪几类建筑；建造会占掉这个单位整个回合。 <span class="more">建造距离 2 格；沿已铺好的桥面可以再往外递两节。</span></dd><dt id="t-carry">装载</dt><dd>能把贴身的单位装进货舱运过去；船沉了，舱里的人一起没。数字是舱位数。 <span class="more">装卸各花掉一次行动，所以每回合只能装卸一次；装完仍然可以开走。正常情况下下船的单位当回合不能再动、不能再打；但「加强渡船」放开了一条：下船那一刻还没行动过的兵，可以照常行动一次（同一个兵一回合只免一次）。</span></dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-builds-laborer">可建造 · 奴隶</dt><dd>可建造：箭塔、磨坊、木桥、军营、栅栏、夯土城墙、瞭望塔（共 7 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-auto">反应射击</dt><dd>敌人踏进射程那一刻就打，用掉的是这一回合的攻击次数。 <span class="more">和手动开火<b>共用同一份次数</b>：一回合总共还是那么几发，变的只是时机——
+      从&quot;挨完打才还手&quot;变成&quot;进门就打&quot;。先打刚踏进射程的那个，它倒了还有余弹就按最近、血最少转火。
+      对方站在射程里不动时（比如贴上来的兵原地砍塔），你的回合开始会补一轮，那一轮也算在这份次数里。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-produce">产兵</dt><dd>这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。 <span class="more">括号里是这座营和&quot;默认产能&quot;不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。</span></dd><dt id="t-builds-miller">可建造 · 民夫</dt><dd>可建造：箭塔、磨坊、木桥、军营、栅栏、夯土城墙、瞭望塔、石堡、水车、寨垒、城墙、主楼（共 12 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-builds-engineer">可建造 · 劳工</dt><dd>可建造：箭塔、磨坊、木桥、军营、栅栏、夯土城墙、瞭望塔、石堡、水车、寨垒、城墙、主楼、炮台、工厂、石桥、堡寨、棱堡、防马桩、土垒胸墙（共 19 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-foreman">可建造 · 工程师</dt><dd>可建造：箭塔、磨坊、木桥、军营、栅栏、夯土城墙、瞭望塔、石堡、水车、寨垒、城墙、主楼、炮台、工厂、石桥、堡寨、棱堡、防马桩、土垒胸墙、要塞、兵工厂、兵站、铁丝网、混凝土胸墙、机枪碉堡、钢厂（共 26 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-crew">可建造 · 建筑队</dt><dd>可建造：箭塔、磨坊、木桥、军营、栅栏、夯土城墙、瞭望塔、石堡、水车、寨垒、城墙、主楼、炮台、工厂、石桥、堡寨、棱堡、防马桩、土垒胸墙、要塞、兵工厂、兵站、铁丝网、混凝土胸墙、机枪碉堡、钢厂、碉堡、工业园、钢桥、前进基地、混凝土掩体墙、反坦克拒马、重机枪地堡（共 33 种）。建造占掉整个回合，范围 2 格。</dd></dl>
     </section>
 
 

@@ -229,10 +229,17 @@ const CHAR: Record<Terrain, string> = {
   valley: 'v',
   marsh: 'w',
   dune: 'd',
+  // 月球地形：生成器不画，只有月球图用；留字符是为了调试转储
+  regolith: 'r',
+  crater: 'c',
   shallow: 's', // 浅滩：陆军能踩过去的"水"
   // 生成器自己**不画**深水：它是「海战」扩展在 afterTerrain 里把
   // 离岸 2 格以上的 water 改写的。这里留字符只是为了类型完整 + 调试转储够用。
   deep: 'D',
+  // 空间站专用：生成器不画，留字符只为类型完整与调试转储
+  void: '#',
+  deck: '_',
+  wreck: '%',
 };
 
 /**
@@ -256,6 +263,29 @@ const CHAR_TO_TERRAIN: Record<string, Terrain> = (() => {
 export function terrainFromChar(ch: string): Terrain {
   return CHAR_TO_TERRAIN[ch] ?? 'plain';
 }
+
+/**
+ * 地形 → 行字符串里的字符。导出地图时用。
+ *
+ * 和 `terrainFromChar` **同一张表**。以前 `fixed-maps.ts` 自己抄了一份
+ * "只收六种本体地形"的白名单，于是上帝模式画好的沼泽/台地一导出就被拒——
+ * 两份表就是两个真相，这次把导出这边也接回这张表上。
+ */
+export function terrainCharOf(t: Terrain): string {
+  return CHAR[t] ?? '.';
+}
+
+/**
+ * 地图文本里允许出现的字符（去重后的一份）。
+ *
+ * 就是"每种地形各一个字符"：`.` 同时是平原，`'city'` 不单独占字符
+ * （格子是不是城由 cityId / citiesA-B 决定，字符只管地貌）。
+ *
+ * 扩展地形（P 台地 / v 谷地 / w 沼泽 / d 沙丘 / s 浅流 / D 深水）**照样收**：
+ * 它们是规则层的正式地形，渲染、移动、视野都无条件支持——扩展只决定
+ * "地图生成器会不会画它"，不决定"这张图能不能有它"。
+ */
+export const MAP_TERRAIN_CHARS: string = [...new Set(Object.values(CHAR))].join('');
 
 type Pos = { x: number; y: number };
 
@@ -286,14 +316,6 @@ interface Ctx {
   g: Terrain[];
   /** 城市边长（2 或扩展要求的 3）。所有"城市占几格"的推算都读它。 */
   citySize: number;
-  /**
-   * 能不能把"跨水的通道"挖成浅滩而不是平原。
-   *
-   * 开着「地形高差」时为真：浅滩是陆军涉得过去、水军也滑得过去的水面，
-   * 用它当渡口比"把河填成一段平地"合理得多——填平地等于凭空多出一条陆桥，
-   * 河/海在海图上会突然断开一截，而且船也会被那条陆桥挡住。
-   */
-  shallowOk?: boolean;
 }
 
 const at = (c: Ctx, x: number, y: number): Terrain | undefined =>
@@ -305,6 +327,33 @@ const put = (c: Ctx, x: number, y: number, t: Terrain): void => {
 };
 
 const mirrorOf = (c: Ctx, p: Pos): Pos => ({ x: c.w - 1 - p.x, y: c.h - 1 - p.y });
+
+/**
+ * "这格是水"的统一判据。
+ *
+ * 浅滩也算水：船能停在上面、水面连通性也靠它维持（渡口就是浅滩）。
+ * 只有 `water` / `deep` 才算水的话，"河道通不通"会被自己的统计口径骗过去。
+ */
+const WET: ReadonlySet<Terrain> = new Set<Terrain>(['water', 'deep', 'shallow']);
+const isWet = (t: Terrain | undefined): boolean => (t ? WET.has(t) : false);
+
+/**
+ * 目标水域占比（2026-11-08 由 13.8% 提到 20%）。
+ *
+ * 为什么是"占比"而不是"几片湖"：地图尺寸从 12 到 64 都有人玩，按块数给会让
+ * 12×12 上一片湖占八分之一、64×64 上四片湖等于没有。按占比给，任何尺寸都一致。
+ *
+ * 单张允许 12%~32%：这是**目标值**，不是硬约束——河图的河已经占掉一截，
+ * 按缺口补的湖只要别把地图泡掉就行。真正的硬下限由收尾的 `topUpWater` 兜。
+ */
+const WATER_TARGET = 0.2;
+
+/** 全图水面格数（含浅滩） */
+function countWet(c: Ctx): number {
+  let n = 0;
+  for (let i = 0; i < c.g.length; i++) if (isWet(c.g[i])) n += 1;
+  return n;
+}
 
 /** 点对称镜像（单格），导出给外部换算用 */
 export function mirrorCell(x: number, y: number, w: number, h: number): Pos {
@@ -640,7 +689,8 @@ function paintRiver(
   const mark = (x: number, y: number, t: Terrain) => {
     if (at(c, x, y) === undefined) return;
     put(c, x, y, t);
-    if (t === 'water') painted.add(y * c.w + x);
+    // 浅滩也是这条河的一部分：船能过、陆军能涉，不该被当成"没有水"
+    if (t === 'water' || t === 'shallow') painted.add(y * c.w + x);
   };
 
   // 河要有体量：有渡口的图 2~3 格宽起步、还能鼓成汪洋；
@@ -666,8 +716,11 @@ function paintRiver(
       const d = Math.abs(t - lake.center);
       if (d <= lake.radius) w = Math.max(w, width + lake.radius + 2 - d);
     }
-    // 上限：汪洋可以大，但不能把整张图泡了，否则两边连照面的地方都没有
-    return Math.min(w, Math.max(4, Math.round(span * 0.42)));
+    // 上限：汪洋可以大，但不能把整张图泡了，否则两边连照面的地方都没有。
+    // 这条是从 0.42 收到 0.26 的（2026-11-08）：按跨度给 42% 时，12×12 的河
+    // 最宽处能到 5 格——光河本身就占掉两成地图，再叠港湾就冲过 40%。
+    // 按"跨度的四分之一"给，12→3、20→5、32→8，汪洋还在，但留得下陆地。
+    return Math.min(w, Math.max(3, Math.round(span * 0.26)));
   };
 
   // 渡口：2 处（大图 3 处），各 2 格宽，尽量避开汪洋。无渡口图没有渡口
@@ -691,15 +744,23 @@ function paintRiver(
     base = clampBase(base);
 
     if (inGap(t)) {
-      // 渡口。开着「地形高差」时铺一段**浅滩**：这才是"能徒涉的渡口"该有的样子，
-      // 也让这条河在视觉上不断——以前这里只是"不画水"，于是渡口就是一截平原，
-      // 远看像河被谁填了一段，还顺带把船挡在河外。
-      if (c.shallowOk) {
-        const w = widthAt(t);
-        for (let k = 0; k < w; k++) {
-          const [x, y] = axis === 'h' ? [t, base + k] : [base + k, t];
-          mark(x, y, 'shallow');
-        }
+      /*
+       * 渡口：**一律画浅滩**（2026-11-08 改成无条件，不再看扩展）。
+       *
+       * 以前这里是 `c.shallowOk ? 'shallow' : 干脆不画`。没开「地形高差」时
+       * "不画"等于在河上开一段平原——一条横贯全图的河被 2~3 处渡口切成 2~4 段，
+       * 每一段都成了独立的小水塘，水军下水之后只能在里面转圈。
+       *
+       * 为什么不能"留一条窄水道"兼顾两边：陆军过河是**垂直**穿河宽方向，
+       * 河宽里剩任何一格水，那一列就过不去；而船要求每一列至少一格水且正交相连。
+       * 同一格不可能既挡陆军又放船——除非它同时"能走又能开船"，那就是浅滩
+       * （`config.navigable()` 含 shallow，陆军移动力 2）。
+       * 所以渡口只能是浅滩：河从头到尾都是水面，船能开到底，陆军照样徒涉。
+       */
+      const w = widthAt(t);
+      for (let k = 0; k < w; k++) {
+        const [x, y] = axis === 'h' ? [t, base + k] : [base + k, t];
+        mark(x, y, 'shallow');
       }
       continue;
     }
@@ -909,6 +970,133 @@ function growRegion(
 }
 
 /**
+ * 长一片**圆盘状**的水（湖、汪洋处）。
+ *
+ * ---------------------------------------------------------------
+ * 为什么不用 `growRegion`
+ * ---------------------------------------------------------------
+ * `growRegion` 是随机前沿扩张：每步从 frontier 里随机挑一格吃掉。它保证"连成一片"，
+ * 但长出来的边缘是毛刺状的——同样 20 格，它是一片"树莓"，周长 22~26；
+ * 圆盘平滑后周长只有 16~18，视觉上才像湖，也才给船留出够走的宽度。
+ *
+ * 做法：由面积反推半径 `r = sqrt(area/π)`；
+ *   · `0.72r` 以内必填；
+ *   · `0.72r ~ 1.15r` 之间按线性衰减的概率填（边缘不规则，不是正圆）；
+ *   · 按"离圆心由近到远"取前 `area` 格，保证不超支；
+ *   · 最后做一遍 3×3 平滑：削掉只有 1 个水邻居的凸起、填掉被水围住的单格空地。
+ *
+ * `allow` 用来把湖挡在城市近郊之外（城门口要能出兵）。
+ */
+function blobRegion(
+  c: Ctx,
+  rng: () => number,
+  center: Pos,
+  terrain: Terrain,
+  area: number,
+  blocked: Set<number>,
+  allow?: (x: number, y: number) => boolean,
+  /**
+   * 这一格能不能被水淹掉。
+   *
+   * 默认只吃"干净的空地"。收尾补水会放宽到"丘陵、林地也行，山不行"——
+   * 12×12 的山岭图上空地早就被散布的丘陵和林子占完了，只吃空地的话
+   * 补水一格都长不出来，实测有整张图只剩 6.9% 水的。
+   * 山必须排除：那是地形骨架，泡掉就等于把山岭抹平了。
+   */
+  ground: (t: Terrain) => boolean = (t) => t === 'plain',
+): number {
+  const centerT = at(c, center.x, center.y);
+  if (centerT === undefined || !ground(centerT)) return 0;
+  const r = Math.max(1.2, Math.sqrt(Math.max(1, area) / Math.PI));
+  const inner = r * 0.72;
+  const outer = r * 1.15;
+  const cells: Pos[] = [];
+  const x0 = Math.floor(center.x - outer);
+  const x1 = Math.ceil(center.x + outer);
+  const y0 = Math.floor(center.y - outer);
+  const y1 = Math.ceil(center.y + outer);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const t = at(c, x, y);
+      if (t === undefined || !ground(t)) continue;
+      if (blocked.has(y * c.w + x)) continue;
+      if (allow && !allow(x, y)) continue;
+      const d = Math.hypot(x - center.x, y - center.y);
+      if (d > outer) continue;
+      if (d > inner) {
+        const keep = 1 - (d - inner) / Math.max(0.001, outer - inner);
+        if (rng() > Math.max(0.18, keep * 0.85)) continue;
+      }
+      cells.push({ x, y });
+    }
+  }
+  const dist = (p: Pos): number => Math.hypot(p.x - center.x, p.y - center.y);
+  cells.sort((a, b) => dist(a) - dist(b));
+  const chosen = cells.slice(0, Math.max(1, Math.round(area)));
+  const wetN = (x: number, y: number): number => {
+    let n = 0;
+    for (const [dx, dy] of DIRS) if (isWet(at(c, x + dx, y + dy))) n += 1;
+    return n;
+  };
+
+  for (const p of chosen) {
+    put(c, p.x, p.y, terrain);
+    blocked.add(p.y * c.w + p.x);
+  }
+  /*
+   * 只留"从种子能走到的"那部分。
+   *
+   * 按距离截断之后，最外圈可能有个别格子跟主体断开了（它和主体之间那一格
+   * 没被选中）——那就是一块 1~2 格的碎水。这里从种子做一次四连通泛洪，
+   * 走不到的、又是这次新画的格子，一律退回平地。
+   * 泛洪会把**原有**的水面也当通路（种子常常就贴着一片旧水），
+   * 所以"新湖并进老湖"不会被误判成碎片。原有的水一格都不动。
+   */
+  if (chosen.length > 1) {
+    const reach = new Set<number>();
+    const stack: number[] = [center.y * c.w + center.x];
+    reach.add(center.y * c.w + center.x);
+    while (stack.length > 0) {
+      const i = stack.pop()!;
+      const x = i % c.w;
+      const y = Math.floor(i / c.w);
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (!isWet(at(c, nx, ny))) continue;
+        const ni = ny * c.w + nx;
+        if (reach.has(ni)) continue;
+        reach.add(ni);
+        stack.push(ni);
+      }
+    }
+    for (const p of chosen) {
+      const i = p.y * c.w + p.x;
+      if (reach.has(i)) continue;
+      put(c, p.x, p.y, 'plain');
+      blocked.delete(i);
+    }
+  }
+  /*
+   * 只填洞，**不削凸起**。
+   *
+   * 曾经有一版在这里"削掉只有 1 个水邻居的毛刺"。那是错的：`wetN` 是在边削边算的，
+   * 一个加号形的小湖会从四个臂开始退化，削到最后一个都不剩——12×12 上实测
+   * 补水阶段长出来的湖全被自己削没了，整张图只剩 4.9% 水。
+   * 而且"毛刺"只要还连在主水体上，就不会变成一块独立碎水，留着无妨。
+   */
+  for (const p of cells) {
+    if (at(c, p.x, p.y) !== 'plain') continue;
+    if (blocked.has(p.y * c.w + p.x)) continue;
+    if (allow && !allow(p.x, p.y)) continue;
+    if (wetN(p.x, p.y) >= 3) put(c, p.x, p.y, terrain);
+  }
+  let placed = 0;
+  for (const p of chosen) if (isWet(at(c, p.x, p.y))) placed += 1;
+  return placed;
+}
+
+/**
  * 一条会拐弯的线：从 start 出发，朝 target 走，偶尔横向抖一下。
  *
  * 用来画支流。它比主河简单——主河要保证横贯全图、还要留渡口，
@@ -983,8 +1171,34 @@ function enrichTerrain(
 
   const mirrorPos = (p: Pos): Pos => mirrorOf(c, p);
 
-  /** 在 A 区里挑一块空地的种子 */
-  const seedInA = (): Pos | null => {
+  /** 在 A 区里挑一块空地的种子（`nearWater` 为真时优先挑贴着水的） */
+  const seedInA = (nearWater = false): Pos | null => {
+    if (nearWater) {
+      /*
+       * 贴着水长：湖是河的"湾"，不是独立的水坑。
+       *
+       * 这一条比"把湖画大"更能救海军——两块 20 格的水如果各自独立，
+       * 船只能在两个池子里分别转圈；只有连成一片，通航范围才是整片水域。
+       * 所以先找"和水正交相邻的空地"，找不到才退回全图随机。
+       */
+      const shore: Pos[] = [];
+      for (let y = 1; y < c.h - 1; y++) {
+        for (let x = 1; x < c.w - 1; x++) {
+          if (zoneOf(x, y) !== 'A') continue;
+          if (blocked.has(y * c.w + x)) continue;
+          if (at(c, x, y) !== 'plain') continue;
+          let touch = false;
+          for (const [dx, dy] of DIRS) {
+            if (isWet(at(c, x + dx, y + dy))) {
+              touch = true;
+              break;
+            }
+          }
+          if (touch) shore.push({ x, y });
+        }
+      }
+      if (shore.length > 0) return shore[Math.floor(rng() * shore.length)]!;
+    }
     for (let t = 0; t < 300; t++) {
       const x = 1 + Math.floor(rng() * (c.w - 2));
       const y = 1 + Math.floor(rng() * (c.h - 2));
@@ -996,26 +1210,38 @@ function enrichTerrain(
     return null;
   };
 
-  // ---- 湖：成对的凹地水面 ----
+  // ---- 湖：按"水占比缺口"给面积，形状是圆盘 ----
   //
-  // 按**面积**给，不是按边长：边长翻倍，格子数翻四倍，按边长给会让大图上
-  // 的湖显得越来越"小气"（64×64 实测含水量反而比 32×32 低）。
+  // 旧版是固定 `tiles/700` 对、每块 `tiles*0.02`（20×20 上就是 1 对 8 格），
+  // 结果水永远只有两三个小水坑；而河图里河已经占了 10%，再叠同样多的湖就过头。
+  // 现在反过来算：目标占比 - 已有的水 = 缺口，缺口除以"每对约 10% 地图"得对数，
+  // 每块 = 缺口 / (对数 × 2)（因为每对要长两处，镜像各一处）。
+  // 这样同一套参数在任何尺寸、任何地貌上都指向同一个占比。
   const tiles = c.w * c.h;
-  const lakePairs = Math.max(1, Math.min(4, Math.round(tiles / 700)));
-  const lakeArea = Math.max(8, Math.min(55, Math.round(tiles * 0.02)));
+  const gap = Math.max(0, Math.round(tiles * WATER_TARGET) - countWet(c));
+  // 缺口太小就一片都不长。以前这里是 `Math.max(1, ...)`，于是"河已经把份额吃满"的
+  // 图上还会硬塞一对湖，实测能推到 45%——一条河 + 一个汪洋湾，地图整个泡汤。
+  const lakePairs =
+    gap < Math.max(8, Math.round(tiles * 0.02))
+      ? 0
+      : Math.max(1, Math.min(4, Math.round(gap / Math.max(1, Math.round(tiles * 0.1)))));
+  const lakeArea = Math.max(8, Math.round(gap / Math.max(1, lakePairs * 2)));
   for (let k = 0; k < lakePairs; k++) {
-    const seed = seedInA();
+    // 每一对都优先贴水：湖要长成河的"湾"、湖与湖要串起来，
+    // 海军才有一条能走的水道。长不出来（没水可贴）才退回全图随机。
+    const seed = seedInA(true);
     if (!seed) break;
-    const area = Math.round(lakeArea * (0.75 + rng() * 0.5));
-    growRegion(c, rng, seed, 'water', area, blocked);
-    growRegion(c, rng, mirrorPos(seed), 'water', area, blocked);
+    const area = Math.max(6, Math.round(lakeArea * (0.8 + rng() * 0.4)));
+    blobRegion(c, rng, seed, 'water', area, blocked);
+    blobRegion(c, rng, mirrorPos(seed), 'water', area, blocked);
   }
 
   // ---- 支流：从地图边流进城与城之间的空档 ----
   //
-  // 只给真正的大图（≥28）。20×20 上一条支流就能把战场切成两半，
-  // 实测加上之后 20×20 的攻城次数从 7 掉到 1——那不是"丰富"，是"堵"。
-  if (size >= 28) {
+  // 20×20 以前不给：一条支流就能把战场切成两半（实测攻城次数 7 → 1）。
+  // 现在连通性兜底已经拆掉、水本来就该是障碍，所以门槛降到 22——
+  // 大一点的图上多一条能通航的水道，比多一块死湖有用。
+  if (size >= 22) {
     const mid = { x: Math.floor(c.w / 2), y: Math.floor(c.h / 2) };
     const edge = Math.floor(rng() * 4);
     const t = 3 + Math.floor(rng() * (size - 6));
@@ -1085,6 +1311,98 @@ function enrichTerrain(
       growRegion(c, rng, seed, 'forest', a, blocked);
       growRegion(c, rng, mirrorPos(seed), 'forest', a, blocked);
     }
+  }
+}
+
+/**
+ * 收尾校平：水不够就往"贴着已有水域"的空地上再长一块，够了就一格不加。
+ *
+ * 为什么要有这一步：前面的湖是**按缺口估算**长的（`enrichTerrain`），
+ * 但中途会被城市压平、被别的林地抢地、被城郊的浅滩填补改数，
+ * 实测会偏 2~4 个百分点。与其把每处参数都调到刚好，不如量一次真实占比再补。
+ *
+ * 三条约束：
+ *   · **只补不削**。削水最容易制造碎块——从大块边缘啃一口，剩下的就散了；
+ *   · **贴水优先**。新长的一定要挨着已有水面，这样补的是"把湖加宽"，
+ *     而不是"在空地上多撒一个池塘"，连通性只会变好不会变差；
+ *   · **不进城市近郊**（`apron`）。城门口要能出兵，这一条不能被补水破坏。
+ */
+function topUpWater(
+  c: Ctx,
+  rng: () => number,
+  zoneOf: (x: number, y: number) => 'A' | 'B',
+  cities: { A: Pos[]; B: Pos[] },
+  contour: boolean,
+): void {
+  const tiles = c.w * c.h;
+  const target = Math.round(tiles * WATER_TARGET);
+  const apron = (x: number, y: number): boolean => {
+    // 只护城block外一圈（切比雪夫 1）。以前护到 2 圈，12×12 上四座城加起来
+    // 能盖掉八成棋盘，补水直接找不到落点——实测有整张图只剩 2.8% 水的。
+    for (const p of [...cities.A, ...cities.B]) {
+      if (x >= p.x - 1 && x <= p.x + c.citySize && y >= p.y - 1 && y <= p.y + c.citySize) {
+        return true;
+      }
+    }
+    return false;
+  };
+  /*
+   * 能淹的地：丘陵、林地都行，山不行。
+   *
+   * `blocked` 在这条路上**不能用**：它记的是"已经有地形了"，而山岭图上那几乎就是
+   * 整张棋盘（散布的丘陵 + 林地）。照它挑，补水一格都落不下来。
+   * 城由 `apron` 兜——那才是唯一不能碰的东西。
+   */
+  /*
+   * 等高线地貌（「地形高差」那几种）另有一套口径：只淹"低处"。
+   *
+   * 那套生成器是"连续高度场 + 阈值分层"，水本来只出现在最低那一带
+   * （`water` / `shallow`，再往上是 `valley`）。往上糊一个圆盘湖不难看，
+   * 糊到台地/山顶上就难看了——所以只允许河谷、平原、沼泽、林地和丘陵。
+   * 台地（plateau）与峡谷外沿一律不碰。
+   */
+  const LOWLAND = new Set<Terrain>(['plain', 'valley', 'marsh', 'forest', 'hill']);
+  const ground = (t: Terrain): boolean =>
+    contour ? LOWLAND.has(t) : t !== 'mountain' && !isWet(t);
+  const pick = (onShore: boolean): Pos | null => {
+    const cands: Pos[] = [];
+    for (let y = 1; y < c.h - 1; y++) {
+      for (let x = 1; x < c.w - 1; x++) {
+        if (zoneOf(x, y) !== 'A') continue;
+        if (apron(x, y)) continue;
+        const t = at(c, x, y);
+        if (t === undefined || !ground(t)) continue;
+        if (onShore) {
+          let touch = false;
+          for (const [dx, dy] of DIRS) {
+            if (isWet(at(c, x + dx, y + dy))) {
+              touch = true;
+              break;
+            }
+          }
+          if (!touch) continue;
+        }
+        cands.push({ x, y });
+      }
+    }
+    return cands.length > 0 ? cands[Math.floor(rng() * cands.length)]! : null;
+  };
+
+  let guard = 0;
+  while (guard++ < 8) {
+    const have = countWet(c);
+    if (have >= target) return;
+    // 一处要长多少：两格一处（本体 + 镜像），所以缺口对半分
+    const want = Math.min(Math.round(tiles * 0.05), Math.ceil((target - have) / 2));
+    if (want < 5) return;
+    const seed = pick(true) ?? pick(false);
+    if (!seed) return;
+    const allow = (x: number, y: number): boolean => !apron(x, y);
+    // 传一副空账本：这一路不认 `blocked`（见 ground 的注释）
+    const scratch = new Set<number>();
+    const a1 = blobRegion(c, rng, seed, 'water', want, scratch, allow, ground);
+    const a2 = blobRegion(c, rng, mirrorOf(c, seed), 'water', want, scratch, allow, ground);
+    if (a1 + a2 === 0) return;
   }
 }
 
@@ -1222,22 +1540,24 @@ function cheapestPath(
 }
 
 /**
- * 把挡路的水/山凿开：水变成浅滩，山开出隘口（丘陵）。
+ * 给挡路的山开隘口（水**一律不动**）。
  *
- * mirror 为真时同步凿镜像格 —— 否则"完全对称"会被这一凿打破，
- * 而且凿完还得再对称一次，反而可能把刚开的路又堵回去。
+ * ---------------------------------------------------------------
+ * 为什么不再凿水（2026-11-08）
+ * ---------------------------------------------------------------
+ * 这里以前会把路径上的水改成浅滩或平原，目的是"保证陆军能走到对面"。
+ * 代价是：一条好好的河被填出若干个假陆桥，河断成几截，水军下水就是一口死塘。
+ * 用户的原话是"你现在最缺的就是河流的连通性"——所以这条兜底整个拆掉。
  *
- * 凿水凿成什么，看 `c.shallowOk`：
- *   · 没开「地形高差」：只能是平原（本体没有浅滩这种东西）；
- *   · 开了：用浅滩。既让陆军涉得过去，又不把水面截断——船照样能从这条口子过，
- *     横贯全图的大川/海峡才不会因为"连通性修补"被填出一条假陆桥。
+ * 现在的水是**真障碍**：要么造桥（`bridgeChainOk` 支持接龙，任意宽度都能架）、
+ * 要么飞过去、要么下水。这和四人局早就在用的口径一致（见多人图那边的 `cut`），
+ * 这次只是把它推广到双人和三人局。
+ *
+ * 山不一样：桥架不过山、飞行不是每族都有，所以山必须留隘口。
  */
-function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false, preserve?: Set<number>): void {
+function carve(c: Ctx, path: Pos[], blocked: Set<number>, mirror = false): void {
   const cut = (x: number, y: number) => {
-    if (preserve?.has(y * c.w + x)) return;
-    const t = at(c, x, y);
-    if (t === 'water') put(c, x, y, c.shallowOk ? 'shallow' : 'plain');
-    else if (t === 'mountain') put(c, x, y, 'hill');
+    if (at(c, x, y) === 'mountain') put(c, x, y, 'hill');
   };
 
   for (const p of path) {
@@ -1274,41 +1594,94 @@ function clearAroundCity(c: Ctx, city: Pos): void {
 }
 
 /**
- * 在城边开一小片水：湖泊或河湾。
+ * 在城边开一片**港湾**：湖泊或河湾。
  *
  * 目的很实际——水军只能在临水城市下水，如果地图上所有城都不挨水，
- * 那这一整类兵种就等于不存在。所以每座城有较大概率自带一片水面。
+ * 那这一整类兵种就等于不存在。
+ *
+ * 2026-11-08 改成"港湾"而不是"水坑"：
+ *   · 以前是 2~4 格的一串格子，全图 4 座城就是 4 堆独立碎水（实测碎水 3.5 块/张图）；
+ *   · 现在先看城门四个方向哪边**已经有水**，优先朝那边铺，让它并进大河/大湖；
+ *     没有现成的水才自己开一片 5~8 格的湾。
+ * 水军要的是"能从城里下水、并且开得出去"，一堆互不相连的小水洼没这个用。
  */
-function lakeNearCity(c: Ctx, city: Pos, rng: () => number): void {
-  if (rng() > 0.8) return;
+function lakeNearCity(c: Ctx, city: Pos, rng: () => number, cities: Set<number>): void {
+  if (rng() > 0.85) return;
 
-  const dirs = DIRS[Math.floor(rng() * DIRS.length)] ?? [0, 1];
-  const [dx, dy] = dirs;
+  /** 这一侧城墙外第 k 格（k 从 1 开始），用于探测"哪边已经有水" */
+  const cellOut = ([dx, dy]: readonly [number, number], k: number): Pos => ({
+    x: dx > 0 ? city.x + c.citySize - 1 + k : dx < 0 ? city.x - k : city.x,
+    y: dy > 0 ? city.y + c.citySize - 1 + k : dy < 0 ? city.y - k : city.y,
+  });
+
+  // 先看哪一侧 3 格以内已经有水：优先朝那边铺，让港湾并进大河/大湖
+  const wetDir = DIRS.find((d) => {
+    for (let k = 1; k <= 3; k++) {
+      const p = cellOut(d, k);
+      if (isWet(at(c, p.x, p.y))) return true;
+    }
+    return false;
+  });
+  const dir =
+    wetDir && rng() < 0.8 ? wetDir : DIRS[Math.floor(rng() * DIRS.length)] ?? [0, 1];
+  const [dx, dy] = dir;
+
+  /*
+   * 港湾也吃"水预算"。
+   *
+   * 每座城一片 5~8 格的水，四座城就是 20~30 格：20×20 上是 5~8%，12×12 上接近两成。
+   * 不按预算发的话，河图（河本身已经占掉一成多）会被港湾推过 40%——
+   * 实测 12×12 的河图有 47% 的。预算见底时只允许"朝已有水面接一格"，
+   * 不再凭空开新水洼（那种小水洼对水军没有意义，只会变成碎水）。
+   */
+  const tiles = c.w * c.h;
+  const left = Math.round(tiles * WATER_TARGET) - countWet(c);
+  if (left < 3) return;
+  const size = Math.min(wetDir && rng() < 0.8 ? 8 : 6, Math.max(3, left));
   // 从城墙上往外一格开始铺
   const startX =
     dx > 0 ? city.x + c.citySize : dx < 0 ? city.x - 1 : city.x + (rng() < 0.5 ? 0 : 1);
   const startY =
     dy > 0 ? city.y + c.citySize : dy < 0 ? city.y - 1 : city.y + (rng() < 0.5 ? 0 : 1);
 
-  const size = 2 + Math.floor(rng() * 3);
   let cur = { x: startX, y: startY };
+  const inCityOf = (p: Pos): boolean =>
+    p.x >= city.x &&
+    p.x <= city.x + c.citySize - 1 &&
+    p.y >= city.y &&
+    p.y <= city.y + c.citySize - 1;
+  /** 横摆用的垂直方向 */
+  const [px, py] = dx === 0 ? [1, 0] : [0, 1];
   for (let i = 0; i < size; i++) {
-    const t = at(c, cur.x, cur.y);
-    if (t === undefined) break;
-    // 不覆盖城市格
-    const inCity =
-      cur.x >= city.x &&
-      cur.x <= city.x + c.citySize - 1 &&
-      cur.y >= city.y &&
-      cur.y <= city.y + c.citySize - 1;
-    if (!inCity) put(c, cur.x, cur.y, 'water');
-
-    // 顺着同一个方向延伸，偶尔横摆一格，长得像湖不像点
-    const side = rng() < 0.3 ? (rng() < 0.5 ? 1 : -1) : 0;
-    cur = {
-      x: cur.x + dx + (dy === 0 ? 0 : side),
-      y: cur.y + dy + (dx === 0 ? 0 : side),
-    };
+    if (at(c, cur.x, cur.y) === undefined) break;
+    /*
+     * 撞到**另一座城**就停。
+     *
+     * 港湾是直线往一个方向铺的，两座城挨得近时（12×12 上常见）它会一路刷到
+     * 对面那座城身上——把人家整块城格刷成水，那座城当场变成"水上孤岛"，
+     * 出生点、出兵、港口全乱。以前一次只刷 2~4 格，勉强够不到；改成港湾之后
+     * 一次 6~8 格，这个洞就露出来了。
+     */
+    if (cities.has(cur.y * c.w + cur.x)) break;
+    // 加宽格只在"主干那一格真的画了"的时候才画，否则会在城墙拐角处
+    // 留下一个和谁都不相邻的孤格（1 格碎水就是这么来的）
+    if (!inCityOf(cur)) {
+      put(c, cur.x, cur.y, 'water');
+      /*
+       * 加宽一格，让港湾是一片水而不是一条线。
+       *
+       * 这里以前是"偶尔斜着挪一格"（`cur.x + dx + side` / `cur.y + dy + side`）——
+       * 斜移出来的格子**只共角不共边**，四连通下每一格都是一块独立的水，
+       * 一张图 4 座城就凭空多出 4 块 1 格碎水。这也是"水域过于零散"的一部分来源。
+       * 现在只走正交一步，加宽用另一个正交方向补，铺出来是连成一片的湾。
+       */
+      const spread = rng() < 0.5 ? 1 : -1;
+      const wide: Pos = { x: cur.x + px * spread, y: cur.y + py * spread };
+      if (at(c, wide.x, wide.y) !== undefined && !inCityOf(wide) && !cities.has(wide.y * c.w + wide.x)) {
+        put(c, wide.x, wide.y, 'water');
+      }
+    }
+    cur = { x: cur.x + dx, y: cur.y + dy };
   }
 }
 
@@ -1512,10 +1885,7 @@ export function generateLayout(
 
   // 这一局有没有"浅滩"这种东西：只要某个启用的扩展登记了浅流地形，就有。
   // 不点名具体扩展——谁引入了浅流，谁就顺带享有"凿水凿成浅滩"这套待遇。
-  const shallowOk = (opts.expansions ?? []).some((id) =>
-    (expansionById(id)?.terrains ?? []).includes('shallow'),
-  );
-  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize, shallowOk };
+  const c: Ctx = { w, h, g: new Array<Terrain>(w * h).fill('plain'), citySize };
 
   const rngStyle = makeRng(seed * 2654435761 + size * 7919 + 11);
   const rngCity = makeRng(seed * 40503 + size * 7919 + 29);
@@ -1692,10 +2062,18 @@ export function generateLayout(
   };
   symmetrize();
 
-  // ---- 连通性：A 主城能走到所有城 ----
+  // ---- 连通性：只给山开隘口，水一格都不动（见 carve 的注释） ----
   const isCity = (x: number, y: number) => cityCells.has(y * w + x);
   const anchorA = plan.A[0];
-  if (anchorA) {
+  /**
+   * 从 A 主城往每座城找一条最省事的路，把**山**开出隘口。
+   *
+   * 水在 `carve` 里已经不处理了，这里传 `forbid` 只为了解决一件事：
+   * 无渡口图上如果允许路径穿过主河，凿出来的隘口会落在河对岸——
+   * 陆军过不去，那个口子等于白开。所以无渡口时仍然让路径绕开河身。
+   */
+  const openPasses = (): void => {
+    if (!anchorA) return;
     for (const target of [...plan.A.slice(1), ...plan.B]) {
       // 从城边上出发（城格本身是 plain，可以直接当起点）
       const path = cheapestPath(
@@ -1705,57 +2083,73 @@ export function generateLayout(
         isCity,
         fordless ? riverCells : undefined,
       );
-      if (path) carve(c, path, blocked, symmetry === 'mirror', fordless ? riverCells : undefined);
+      if (path) carve(c, path, blocked, symmetry === 'mirror');
     }
-  }
+  };
+  openPasses();
 
   // ---- 城市周边清空 + 城边开一片水（给港口留位置） ----
-  for (const p of plan.A) lakeNearCity(c, p, rngTerrain);
-  for (const p of plan.B) lakeNearCity(c, p, rngTerrain);
+  for (const p of plan.A) lakeNearCity(c, p, rngTerrain, cityCells);
+  for (const p of plan.B) lakeNearCity(c, p, rngTerrain, cityCells);
   for (const p of [...plan.A, ...plan.B]) clearAroundCity(c, p);
 
-  // 河/湖可能把城围成孤岛：城墙外一圈最多留两格水（留给港口），其余填平。
-  // 不这么做会出现"城在水中央、上岸要绕半张图"的地图。
+  /*
+   * 城郊：**保证城外还有 ≥3 格能站人的陆地，但不再把水面填掉**。
+   *
+   * 旧规则是"城墙外一圈最多留 2 格水，其余填平"。水里一多，这条会把城边的湖
+   * 削成一条两格宽的护城河——水军想在城门口下水就没地方了，等于把
+   * "临水城市"这件事从地图上抹掉。
+   *
+   * 现在只在陆地真的不够站人时才动手，而且填的是**浅滩**不是平原：
+   * 陆军能踩、船能停，水面一格不少（`navigable()` 含 shallow）。
+   * 三格是 `spawnsAround` 的最低要求——开局一个兵都摆不下才是真的坏图。
+   */
+  const STANDABLE_MIN = 3;
   for (const p of [...plan.A, ...plan.B]) {
     const ring: Array<{ x: number; y: number; d: number }> = [];
-    for (let dy = -1; dy <= 2; dy++) {
-      for (let dx = -1; dx <= 2; dx++) {
+    let standable = 0;
+    for (let dy = -1; dy <= citySize; dy++) {
+      for (let dx = -1; dx <= citySize; dx++) {
         const x = p.x + dx;
         const y = p.y + dy;
-        const inCity = x >= p.x && x <= p.x + 1 && y >= p.y && y <= p.y + 1;
+        const inCity = x >= p.x && x < p.x + citySize && y >= p.y && y < p.y + citySize;
         if (inCity) continue;
-        if (at(c, x, y) !== 'water') continue;
-        ring.push({ x, y, d: Math.abs(dx - 0.5) + Math.abs(dy - 0.5) });
+        const t = at(c, x, y);
+        if (t === undefined) continue;
+        if (isWet(t) || t === 'mountain') {
+          ring.push({ x, y, d: Math.abs(dx - 0.5) + Math.abs(dy - 0.5) });
+        } else {
+          standable += 1;
+        }
       }
     }
-    // 离城心最近的两格留作港口，其它填掉。开了「地形高差」时填成浅滩而不是平地：
-    // 船还能停在城门口那片水里，陆军也能直接涉水出城——两边都不吃亏。
-    //
-    // 两处例外，都为了"无渡口河"那张图的口径（对外宣称"过河只能造桥"）：
-    //   · 河身那几格**保持深水**——填平等于在城门口架了一座不用造的桥；
-    //   · 其余的水**填平地**，不留浅滩——天堑图上"一格浅滩都没有"是硬口径，
-    //     而城边正是最要命的位置：留个能徒涉的口子，桥就白造了。
+    if (standable >= STANDABLE_MIN) continue;
     ring.sort((a, b) => a.d - b.d);
-    for (const t of ring.slice(2)) {
+    for (const t of ring) {
+      if (standable >= STANDABLE_MIN) break;
+      // 天堑图（无渡口）的硬口径：河身那几格保持深水，城门口不留可徒涉的口子，
+      // 否则"过河只能造桥"就成了一句空话。城圈的其它水照常填成浅滩。
       if (fordless && riverCells.has(t.y * c.w + t.x)) continue;
-      put(c, t.x, t.y, c.shallowOk && !fordless ? 'shallow' : 'plain');
+      put(c, t.x, t.y, 'shallow');
+      standable += 1;
     }
   }
   symmetrize(); // 城郊处理也要对称，否则镜像模式会和"严格对称"对不上
 
-  // 湖可能把城围住，重新对一次连通性
-  if (anchorA) {
-    for (const target of [...plan.A.slice(1), ...plan.B]) {
-      const path = cheapestPath(
-        c,
-        { x: anchorA.x, y: anchorA.y + 1 },
-        { x: target.x, y: target.y + 1 },
-        isCity,
-        fordless ? riverCells : undefined,
-      );
-      if (path) carve(c, path, blocked, symmetry === 'mirror', fordless ? riverCells : undefined);
-    }
-  }
+  // ---- 收尾校平：水不够就贴着已有水域再长，够了一格不加 ----
+  //
+  // 前面的湖是"按缺口估算"长的，中途会被城市、山、别的林地吃掉一些，
+  // 而且城边水、浅滩填补都会改数。这里量一次真实占比，只补不削：
+  // **削水最容易制造碎块**（从大块边缘啃一口，剩下的就散了）。
+  //
+  // 等高线地貌只淹低处（见 topUpWater 里的 LOWLAND），本体地貌不淹山。
+  //  等高线地貌（`build`）也要补水：它们的阈值分层只决定"水在最低那一带"，
+  //  并不保证有多少——实测同一套参数能出 2.5%，也能出 43%。不补的话，
+  //  玩家勾了「地形高差」就会抽到 7% 水的图（线上反馈就是这么来的）。
+  topUpWater(c, rngTerrain, zoneOf, plan, !!build);
+
+  // 湖可能把城围住，重新找一次隘口（只平山，不动水）
+  openPasses();
 
   // ---- 扩展的地形收尾：整张棋盘交给它们整理一遍 ----
   //
@@ -2452,6 +2846,120 @@ export function generateMultiLayout(
   }
 
   /*
+   * ---- 水域校平：多人图以前一格都没调 ----
+   *
+   * 线上反馈"新开一把只有 7% 水"。双人那边有湖、有港湾、有收尾补水，
+   * 多人这边**一套都没有**——水域只靠"每团 2 格的点缀水"加中心那一小圈，
+   * 实测 3 人图 7.9%、4 人图 6.7%，最干的种子直接 0%。
+   *
+   * 这里补上和双人同一个目标（`WATER_TARGET`），但必须保住多人图的公平：
+   *   · **四家**：只长一处，然后把**画上去的那几格**按 90° 镜像复制三份。
+   *     不能"在四个镜像点上各长一次"——`blobRegion` 每次都要摇随机数，
+   *     四次长出来的形状不一样，逐格镜像对称当场就破了（实测差 28 格）。
+   *   · **三家**：方格棋盘没有 120° 旋转对称，只能做"数量公平"。
+   *     做法是每轮挑**水最少的那个区**补一块，补到三家齐平为止。
+   */
+  {
+    const target = Math.round(w * h * WATER_TARGET);
+    const ground = (t: Terrain): boolean =>
+      t === 'plain' || t === 'valley' || t === 'forest' || t === 'hill' || t === 'marsh';
+    const allowWater = (x: number, y: number): boolean => !apron.has(y * w + x);
+    const pickInRegion = (r: number, onShore: boolean): Pos | null => {
+      const cands: Pos[] = [];
+      for (let y = 1; y < h - 1; y += 1) {
+        for (let x = 1; x < w - 1; x += 1) {
+          if (apron.has(y * w + x)) continue;
+          if (regionOf(x, y) !== r) continue;
+          const t = at(c, x, y);
+          if (t === undefined || !ground(t)) continue;
+          if (onShore) {
+            let touch = false;
+            for (const [dx, dy] of DIRS) {
+              if (isWet(at(c, x + dx, y + dy))) {
+                touch = true;
+                break;
+              }
+            }
+            if (!touch) continue;
+          }
+          cands.push({ x, y });
+        }
+      }
+      return cands.length > 0 ? cands[Math.floor(rng() * cands.length)]! : null;
+    };
+    const scratch = new Set<number>();
+    /** 在 region 里长一块水，返回真实画上的格数 */
+    const grow = (r: number, each: number): number => {
+      const seed = pickInRegion(r, true) ?? pickInRegion(r, false);
+      if (!seed) return 0;
+      return blobRegion(c, rng, seed, 'water', each, scratch, allowWater, ground);
+    };
+    /**
+     * 四家：长一块，再把"新画上去的格子"镜像复制三份。
+     *
+     * 复制的是**结果**，不是过程——随机数只摇一次，四角才严格同形。
+     */
+    const growFourFold = (each: number): number => {
+      const seed = pickInRegion(0, true) ?? pickInRegion(0, false);
+      if (!seed) return 0;
+      const before = new Set<number>();
+      for (let i = 0; i < c.g.length; i += 1) if (isWet(c.g[i])) before.add(i);
+      const painted = blobRegion(c, rng, seed, 'water', each, scratch, allowWater, ground);
+      if (painted === 0) return 0;
+      const fresh: Pos[] = [];
+      for (let i = 0; i < c.g.length; i += 1) {
+        if (isWet(c.g[i]) && !before.has(i)) {
+          fresh.push({ x: i % w, y: Math.floor(i / w) });
+        }
+      }
+      for (const p of fresh) {
+        for (const q of [
+          { x: w - 1 - p.x, y: p.y },
+          { x: p.x, y: h - 1 - p.y },
+          { x: w - 1 - p.x, y: h - 1 - p.y },
+        ]) {
+          if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) continue;
+          if (apron.has(q.y * w + q.x)) continue;
+          if (at(c, q.x, q.y) === 'mountain') continue;
+          put(c, q.x, q.y, 'water');
+        }
+      }
+      return fresh.length * 4;
+    };
+    const wetInRegion = (r: number): number => {
+      let k = 0;
+      for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+          if (regionOf(x, y) !== r) continue;
+          if (isWet(at(c, x, y))) k += 1;
+        }
+      }
+      return k;
+    };
+
+    if (n === 4) {
+      let guard = 0;
+      while (guard < 6) {
+        guard += 1;
+        const gap = target - countWet(c);
+        if (gap < 12) break;
+        if (growFourFold(Math.max(5, Math.ceil(gap / 4))) === 0) break;
+      }
+    } else {
+      const per = Math.round(target / n);
+      let guard = 0;
+      while (guard < 10) {
+        guard += 1;
+        let worst = 0;
+        for (let r = 1; r < n; r += 1) if (wetInRegion(r) < wetInRegion(worst)) worst = r;
+        const deficit = per - wetInRegion(worst);
+        if (deficit < 4) break;
+        if (grow(worst, Math.min(deficit, Math.max(6, Math.ceil(deficit)))) === 0) break;
+      }
+    }
+  }
+
+  /*
    * ---- 连通性：每家都得能靠陆路走到中间 ----
    *
    * 加进十字河/放射河之后这条从"保险"变成了"必须"：水面一横，某一家可能被
@@ -2466,22 +2974,16 @@ export function generateMultiLayout(
     // 城格集合在上面统一算过了（扩展地貌也要用同一份），这里不再抄一遍
     const isCity = (x: number, y: number) => cityCells.has(y * w + x);
     /**
-     * 开一条口子。`rock` 为真时**只平山、不动水**。
+     * 开一条口子：**只平山，水一格不动**。
      *
-     * 水是"可以靠桥和飞行解决"的障碍，山不是——桥架不过山，飞行也不是每个种族都有。
-     * 所以四人局只保证"没有被山彻底封死"，水面留给人自己想办法（用户原话：
-     * 四人别太在意连通性，大不了修桥用飞行）。
+     * 四人局早就是这个口径（"水可以靠桥和飞行解决，山不行——桥架不过山，
+     * 飞行也不是每族都有"）。2026-11-08 起三家局也并进来，两个人口径一致，
+     * 代价是河边不再"必然能走过去"：过河要么造桥、要么飞、要么下水。
      */
-    const cut = (x: number, y: number, rock = false) => {
+    const cut = (x: number, y: number) => {
       if (x <= 0 || y <= 0 || x >= w - 1 || y >= h - 1) return;
       if (apron.has(y * w + x)) return;
-      const t = at(c, x, y);
-      if (t === 'water') {
-        if (rock) return;
-        put(c, x, y, c.shallowOk ? 'shallow' : 'plain');
-      } else if (t === 'mountain') {
-        put(c, x, y, 'hill');
-      }
+      if (at(c, x, y) === 'mountain') put(c, x, y, 'hill');
     };
     /*
      * 终点是**另一家**，不是地图中心。
@@ -2507,10 +3009,10 @@ export function generateMultiLayout(
        */
       const cutSym = (path: Pos[] | null): void => {
         for (const p of path ?? []) {
-          cut(p.x, p.y, true);
-          cut(w - 1 - p.x, p.y, true);
-          cut(w - 1 - p.x, h - 1 - p.y, true);
-          cut(p.x, h - 1 - p.y, true);
+          cut(p.x, p.y);
+          cut(w - 1 - p.x, p.y);
+          cut(w - 1 - p.x, h - 1 - p.y);
+          cut(p.x, h - 1 - p.y);
         }
       };
       const at2 = (i: number) => ({ x: anchors[i]!.x, y: anchors[i]!.y + 1 });

@@ -18,6 +18,7 @@
 import { CONFIG, ERAS } from '../core/config.ts';
 import { eraCeilingOf } from '../core/expansions.ts';
 import { buildListOf } from '../core/build-list.ts';
+import { unitStatLine } from '../core/info.ts';
 
 import { paintTerrainsFor } from '../core/sandbox.ts';
 import type { GameState, LogEntry, PlayerId, Terrain } from '../core/types.ts';
@@ -30,6 +31,14 @@ export type GodBrush =
   | { kind: 'erase' }
   | { kind: 'terrain'; terrain: Terrain }
   | { kind: 'unit'; type: string };
+
+/** 框选之后给界面看的摘要（格数、单位数、尺寸） */
+export interface GodSelection {
+  w: number;
+  h: number;
+  cells: number;
+  units: number;
+}
 
 export interface GodUi {
   state: GameState;
@@ -53,6 +62,12 @@ export interface GodUi {
   era: number;
   /** 摆城时用哪个时代（1-5） */
   cityEra: number;
+  /**
+   * 当前框选（null = 没有选区）。
+   *
+   * 只在沙盒的"摆放档"里出现：操控档下拖动是走子/滚地图，不该弹这块。
+   */
+  selection: GodSelection | null;
   /** AI 正在打 */
   running: boolean;
   /** 打到第几回合（running 时有意义） */
@@ -190,13 +205,47 @@ export function godBarHtml(ui: GodUi): string {
     ),
   ).join('');
 
+  /*
+   * 选区那一条。
+   *
+   * 三个设计点：
+   *   · **数量写在按钮上**（删兵(7)），玩家点之前就知道会动到几个；
+   *   · 刷地形 / 放兵跟着**当前笔刷**走，没挑笔刷时说清楚"会刷成平原"，
+   *     免得点了之后发现地形不对还以为坏了；
+   *   · 平移做成四颗箭头而不是"拖过去"：拖动已经是框选和笔刷的，
+   *     再抢一手就没人分得清"我在拖什么"。
+   */
+  const sel = ui.selection;
+  const selRow = sel
+    ? `<div class="god-group god-select">
+         <span class="god-label">选区</span>
+         <span class="hint">${sel.w}×${sel.h} · ${sel.cells} 格 · ${sel.units} 个单位</span>
+         <div class="chip-row">
+           <button class="btn btn-sm" data-act="god-batch-del"${
+             sel.units > 0 ? '' : ' disabled'
+           } title="把选区里的单位全删掉（城留着）">删兵（${sel.units}）</button>
+           <button class="btn btn-sm" data-act="god-batch-terrain" title="按当前地形笔刷刷满选区；没挑笔刷就刷成平原">刷地形</button>
+           <button class="btn btn-sm" data-act="god-batch-fill" title="按当前兵种笔刷填满空格；没挑兵种就填民兵">放兵</button>
+           <span class="hint">整体平移</span>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="0" data-dy="-1">↑</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="-1" data-dy="0">←</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="1" data-dy="0">→</button>
+           <button class="btn btn-sm" data-act="god-shift" data-dx="0" data-dy="1">↓</button>
+           <button class="btn btn-sm" data-act="god-sel-clear" title="收起选区（不影响图上的东西）">取消选区</button>
+         </div>
+       </div>`
+    : '';
+
   return `
     <div class="cmd-head">
       <b>上帝模式</b>
       <span class="cmd-hint">${
-        ui.play === null ? '全图无雾 · 摆兵摆城都不要钱' : '全图无雾 · 放下笔刷后点棋盘就是走子'
+        ui.play === null
+          ? '全图无雾 · 摆兵摆城都不要钱 · 空手斜拖可框选'
+          : '全图无雾 · 点棋盘就是走子 · 空手斜拖可框选'
       }</span>
     </div>
+    ${selRow}
     <div class="god-group">
       <span class="god-label">摆给</span>
       <div class="chip-row">${sideChips}</div>
@@ -228,6 +277,7 @@ export function godBarHtml(ui: GodUi): string {
         <button class="btn btn-primary" data-act="god-run-round" title="AI 替当前这一方走完这一回合（顶栏那个「第 N 回合」只加 1），然后交还给你">交给 AI · 一回合</button>
         <button class="btn" data-act="god-run-dead" title="AI 一直打到一方没兵为止，随时可以按停止">接管 · 打到全灭</button>
         <button class="btn btn-sm" data-act="undo" title="退回上一步（包括战斗之前）">撤回</button>
+        <button class="btn btn-sm" data-act="god-map-upload" title="把这一局的地形和城位存成一张地图，交到云端地图库（要审核）">上传这张图</button>
       </div>
     </div>
     ${(() => {
@@ -269,14 +319,14 @@ function brushHint(ui: GodUi, s: GameState): string {
   switch (ui.brush.kind) {
     case 'unit': {
       const def = s.unitTypes[ui.brush.type];
-      return `笔刷：${def?.name ?? ui.brush.type} —— 点棋盘落子，可以连着摆`;
+      return `笔刷：${def?.name ?? ui.brush.type} —— 点一格落子；按住拖过去能连着铺一片`;
     }
     case 'city':
       return '笔刷：城市 —— 点 2×2 的左上角，橙格是能放的位置';
     case 'erase':
-      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城';
+      return '笔刷：橡皮 —— 点单位擦单位，点空城擦城；按住拖过去能连着擦';
     case 'terrain':
-      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，可以连着刷（城格和站着东西的格改不了）`;
+      return `笔刷：${CONFIG.terrainName[ui.brush.terrain]} —— 点一格改地形，或按住拖过去整片刷（城格和站着东西的格改不了）`;
     default:
       return '笔刷：查看 —— 点一格看看那儿有什么';
   }
@@ -388,7 +438,7 @@ export function godShelfHtml(ui: GodUi): string {
         const buildTip = builds.names.length > 0
           ? ` · 可建 ${escapeHtml(builds.names.join('、'))}`
           : '';
-        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${u.maxHp} 血 · 攻 ${u.atk}${u.armor ? ` · 甲 ${u.armor}` : ''}${buildTip}">
+        return `<button class="chip ${on ? 'active' : ''}" data-act="god-pick" data-unit="${u.id}" title="${u.cost} 金 · ${unitStatLine(u)}${buildTip}">
           ${u.short} ${u.name}
         </button>`;
       })

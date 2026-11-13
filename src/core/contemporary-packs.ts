@@ -101,9 +101,7 @@ export const MODERN_ABILITIES: AbilityDef[] = [
             if (c.side !== 'attacker' || !c.foe) return;
             const def = c.api.utype(c.state, c.foe.type);
             const flying =
-              def.layer === 'air' ||
-              c.api.hasAbility(c.state, c.foe, 'fly-over') ||
-              c.api.hasAbility(c.state, c.foe, 'fly');
+              def.layer === 'air' || c.api.hasAbility(c.state, c.foe, 'fly');
             if (flying) c.damage = Math.round(c.damage * ANTI_AIR);
           },
         },
@@ -147,8 +145,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     atk: 55,
     armor: 5,
     maxHp: 52,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
   },
   {
     // 中型坦克：这一代的主力装甲。护甲 12 比机械化坦克（10）厚一档，
@@ -167,8 +165,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     atk: 66,
     armor: 12,
     maxHp: 96,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     abilities: ['shield-wall', 'siege-master'],
     bio: false,
   },
@@ -189,8 +187,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     // 2026-11-03 数值复核：射程 6 → 5，视野 3 → 4。
     // 交换比 19.55、每百金承伤 1.4，是全表最"够不着"的一个；
     // 视野补到 4 是为了让"射程 > 视野"这条冲突在这里先收掉一格。
-    range: 5,
-    vision: 4,
+    range: 6,
+    vision: 5,
     splash: 2,
     abilities: ['siege-master'],
     bio: false,
@@ -209,8 +207,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     atk: 38,
     armor: 6,
     maxHp: 44,
-    range: 3,
-    vision: 6,
+    range: 4,
+    vision: 7,
     bio: false,
   },
 
@@ -229,7 +227,7 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     maxHp: 32,
     range: 2,
     vision: 4,
-    incomeByTerrain: { plain: 38, city: 26, forest: 15, hill: 13 },
+    incomeByTerrain: { plain: 62, city: 42, forest: 24, hill: 21 },
   },
   {
     // 工程兵：盖底座的三种建筑 + 全部桥 + 第六代军营。
@@ -250,7 +248,7 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     // 海上钻井平台也归它：那是第六时代唯一一座"盖在海面上"的经济建筑。
     // 挂在这一位（底座工程兵）而不是「工程兵团」，是因为「现代海军」只要求
     // 「信息化」——挂到需要「现代战争」的那一位身上，会有整整一档玩家修不了自己的平台。
-    builds: ['ct_pillbox', 'ct_industrial', 'bridge', 'bridge2', 'bridge3', 'camp6', 'nv_oil_platform'],
+    builds: ['tower', 'mill', 'bridge', 'camp', 'anc_palisade', 'anc_rammed_wall', 'anc_watchtower', 'keep', 'watermill', 'camp2', 'med_wall', 'med_donjon', 'battery', 'factory', 'bridge2', 'camp3', 'gp_bastion', 'gp_chevaux', 'gp_earthwork', 'fortress', 'arsenal', 'camp4', 'ind_wire', 'ind_concrete', 'ind_pillbox', 'ind_steelworks', 'bunker', 'industrialpark', 'bridge3', 'camp5', 'mod_concretewall', 'mod_dragonsteeth', 'mod_mgbunker', 'ct_pillbox', 'ct_industrial', 'camp6', 'cnt_armorwall', 'cnt_bunker', 'cnt_hq', 'nv_oil_platform'],
   },
 
   // ---- 建筑 ----
@@ -270,7 +268,8 @@ const CONTEMPORARY_BASE: UnitTypeDef[] = [
     armor: 13,
     maxHp: 88,
     range: 5,
-    vision: 4,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 5,
     autoAttack: true,
   },
   {
@@ -335,8 +334,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 54,
     armor: 7,
     maxHp: 62,
-    range: 3,
-    vision: 4,
+    range: 4,
+    vision: 5,
   },
   {
     // 主战坦克：底座坦克的"上一档"——破甲（尾翼稳定脱壳穿甲弹）＋ 破城。
@@ -351,8 +350,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 78,
     armor: 17,
     maxHp: 120,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['armor-pierce', 'siege-master'],
     bio: false,
   },
@@ -370,8 +369,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 66,
     armor: 3,
     maxHp: 42,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     abilities: ['armor-pierce', 'first-strike'],
   },
   {
@@ -387,8 +386,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 56,
     armor: 5,
     maxHp: 52,
-    range: 3,
-    vision: 5,
+    range: 4,
+    vision: 6,
     abilities: ['stealth'],
   },
 
@@ -406,8 +405,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 60,
     armor: 6,
     maxHp: 64,
-    range: 5,
-    vision: 2,
+    range: 6,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
     bio: false,
@@ -425,8 +424,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 40,
     armor: 4,
     maxHp: 56,
-    range: 5,
-    vision: 2,
+    range: 6,
+    vision: 3,
     splash: 3,
     abilities: ['siege-master'],
     bio: false,
@@ -444,8 +443,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 46,
     armor: 4,
     maxHp: 58,
-    range: 5,
-    vision: 5,
+    range: 6,
+    vision: 6,
     abilities: ['anti-air'],
     bio: false,
   },
@@ -465,8 +464,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 58,
     armor: 6,
     maxHp: 66,
-    range: 4,
-    vision: 5,
+    range: 5,
+    vision: 6,
     abilities: ['armor-pierce'],
     flight: true,
     layer: 'air',
@@ -485,8 +484,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 34,
     armor: 2,
     maxHp: 32,
-    range: 5,
-    vision: 6,
+    range: 6,
+    vision: 7,
     flight: true,
     layer: 'air',
     bio: false,
@@ -506,8 +505,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     atk: 70,
     armor: 13,
     maxHp: 120,
-    range: 5,
-    vision: 6,
+    range: 6,
+    vision: 7,
     domain: 'water',
     abilities: ['armor-pierce'],
     bio: false,
@@ -546,7 +545,8 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     armor: 16,
     maxHp: 100,
     range: 4,
-    vision: 3,
+    // 视野 = 射程：自动开火也要求看得见（见 config.ts bunker 的注释）
+    vision: 4,
     burst: 4,
     autoAttack: true,
   },
@@ -587,7 +587,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     maxHp: 34,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 40, city: 26, forest: 16, hill: 14 },
+    incomeByTerrain: { plain: 68, city: 44, forest: 27, hill: 24 },
   },
   {
     // 工程兵团：盖"加料"的三种工事 + 钢桥，不碰底座的建筑（那是工程兵的活）。
@@ -597,6 +597,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     short: '团',
     era: 6,
     category: 'builder',
+    legacy: true,
     cost: 320,
     move: 2,
     atk: 6,
@@ -605,7 +606,7 @@ export const CONTEMPORARY_WAR: UnitTypeDef[] = [
     range: 1,
     vision: 2,
     buildPower: 40,
-    builds: ['cnt_armorwall', 'cnt_bunker', 'cnt_hq', 'bridge3'],
+    builds: [],
   },
 ];
 
@@ -650,7 +651,7 @@ export const MODERN_WARFARE: Expansion = {
   summary:
     '第六代的专精兵：机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、远程火箭炮、' +
     '防空导弹营、武装直升机、察打无人机、导弹驱逐舰，外加复合装甲墙、加固地堡、前进指挥所、' +
-    '物流集团与工程兵团。需要先开「信息化」。',
+    '与物流集团。需要先开「信息化」。',
   requires: ['pack-contemporary'],
   hooks: {},
   abilities: MODERN_ABILITIES,

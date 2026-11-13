@@ -1,5 +1,8 @@
-# 依赖
-node_modules/
+# 依赖目录。末尾**不能**带斜杠：`node_modules/` 只匹配目录，
+# 而 git worktree 里的 node_modules 常常是个符号链接，带斜杠就漏过去了。
+# （2026-11-11 真漏过一次：一个自指的 node_modules 链接混进了合并提交，
+#   之后 checkout 出来的工作区一装依赖就成了死循环链接。）
+node_modules
 
 # 构建产物（由 npm run build 生成，不进版本库）
 dist/
@@ -27,6 +30,8 @@ Thumbs.db
 # 平衡实验的历史产物（results/packs 里的报告要进库，其余不进）
 results/*
 !results/packs/
+# 反应射击评测（2026-11-11）：报告和原始 json 都要进库，方便复查
+!results/reaction/
 
 # 跑批脚本一次性导出的实验数据（results20/ results21/ …）
 # 它们都能用 scripts/ 里的脚本按种子重跑出来，几百 KB 的 JSON 进库只是拖慢克隆

@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>时代与回旋镖 · 聚变时代</title>
+<style>
+  :root {
+    --bg: #f5f2ea;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --text: #2b2823;
+    --muted: #6b6459;
+    --faint: #9a9287;
+    --line: #e2ddd3;
+    --a: #2f6ea8;
+    --b: #b8433a;
+    --accent: #b08442;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.75 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 28px 100px;
+  }
+  nav {
+    position: sticky;
+    top: 40px;
+    align-self: start;
+    font-size: 13px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  nav .nav-title {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  nav a {
+    display: block;
+    padding: 4px 0 4px 10px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--line); }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
+
+  main { min-width: 0; }
+  header.page-head { margin-bottom: 44px; }
+  header.page-head h1 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  section { margin-bottom: 48px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 26px 0 8px;
+  }
+  h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 18px 0 7px;
+    letter-spacing: 0.02em;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  b { font-weight: 600; }
+
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.9;
+    color: var(--text);
+  }
+  .formula .c { color: var(--faint); }
+
+  .callout {
+    background: #fbf7ea;
+    border: 1px solid #e7dcc0;
+    border-radius: 10px;
+    padding: 12px 15px;
+    margin: 14px 0 18px;
+    font-size: 14px;
+    color: #5d4c28;
+  }
+  .callout b { color: #4a3b1c; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel-2);
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 9px;
+    border-bottom: 1px solid #efece4;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfbf8; }
+  td.name { font-weight: 500; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  /* 合册开头那张总览：列宽固化，否则"它解决什么"会把前面几列挤成一字一行 */
+  table.overview { table-layout: fixed; }
+  table.overview th:nth-child(1), table.overview td:nth-child(1) { width: 17%; }
+  table.overview th:nth-child(2), table.overview td:nth-child(2) { width: 7%; }
+  table.overview th:nth-child(3), table.overview td:nth-child(3) { width: 11%; }
+  table.overview th:nth-child(4), table.overview td:nth-child(4) { width: 11%; }
+  /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
+     那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
+     数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
+  table.rank-table { table-layout: fixed; font-size: 12px; }
+  table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
+  table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
+  table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
+  td.glyph {
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  td.traits { color: var(--muted); font-size: 12px; }
+  td.traits b { color: var(--a); font-weight: 500; }
+
+  /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
+     所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
+  .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
+  .scroll-x table { margin: 0; min-width: 700px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
+  table.wide th, table.wide td { padding: 6px 8px; }
+  td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
+     会把它盖掉，而这条边界比斑马纹重要得多 */
+  tr.grp td {
+    background: var(--panel-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 机制引用：正文里只留名字，解释在悬停浮层与词条表里 */
+  a.ref {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed #bfb6a4;
+    cursor: help;
+  }
+  a.ref:hover, a.ref:focus { color: var(--a); border-bottom-color: var(--a); outline: none; }
+  td.traits a.ref { color: var(--a); }
+
+  .tip {
+    position: fixed;
+    z-index: 90;
+    max-width: 320px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2b2823;
+    color: #f3efe6;
+    font-size: 12px;
+    line-height: 1.65;
+    box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .tip.on { opacity: 1; }
+
+  .terms {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 7px 18px;
+    margin: 6px 0 18px;
+    font-size: 13px;
+  }
+  .terms dt {
+    color: var(--text);
+    font-weight: 500;
+    padding-top: 1px;
+    scroll-margin-top: 24px;
+  }
+  .terms dd { margin: 0; color: var(--muted); }
+  .terms dd .more { color: var(--faint); }
+  .terms dt:target { color: var(--a); }
+
+  .era-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 6px;
+    margin-bottom: 20px;
+  }
+  .era-block h3 { margin-top: 0; }
+  .era-meta {
+    font-size: 12px;
+    color: var(--faint);
+    margin: 0 0 4px;
+  }
+  .era-block table { border: none; background: transparent; }
+  .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
+  .era-block tbody tr:nth-child(even) { background: transparent; }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; padding: 28px 18px 70px; }
+    nav { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  }
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    .layout { display: block; max-width: none; padding: 0; }
+    nav { display: none; }
+    .tip { display: none; }
+    a.ref { border-bottom: none; }
+    section { page-break-inside: avoid; margin-bottom: 26px; }
+    .era-block, table, .callout, .formula { page-break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="nav-title">目录</div>
+    
+    <a href="#pack-intro">1. 这个包是什么</a>
+    <a href="#pack-units">2. 兵种表</a>
+    <a href="#pack-mods">3. 装备表</a>
+    <a href="#pack-terms">4. 机制词条</a>
+  
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <h1>时代与回旋镖 · 聚变时代</h1>
+      <p>扩展分册 · 9 个兵种 · 本文件由 npm run manual 从配置自动生成</p>
+    </header>
+
+
+    <section id="pack-intro">
+      <h2><span class="sec-num">01</span>这个包是什么</h2>
+      <p>第八时代「聚变时代」：三台更极端的素体（塔 / 蜂群母体 / 猎手）与 24 件新模块。「超载协议」是唯一允许耗能超过供电的东西——它自己发 40 点额度。三条光环（集群协议 / 反导穹顶 / 战区指挥车坞）复用现成的 AuraSpec。「反重力悬浮」把地面素体改成空中单位，代价是拿不到地形护甲。</p>
+      <dl class="kv">
+        <dt>兵种数量</dt><dd>9 个</dd>
+        <dt>覆盖时代</dt><dd>8（聚变时代）</dd>
+        <dt>前置</dt><dd>需要先开「装甲时代」</dd>
+        
+        
+        <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
+      </dl>
+      <p>这个包的兵在<b>生产面板里带徽标</b>（名字旁的小圆标写着它来自哪个包），
+        搜索框里敲包名也能过滤。产兵照旧卡时代：<code>兵种时代 &lt; 城市时代 − 1</code> 的不出列，
+        和原版兵是同一把尺子。</p>
+      
+    </section>
+
+    <section id="pack-units">
+      <h2><span class="sec-num">02</span>兵种表</h2>
+      
+    <div class="scroll-x">
+      <table class="wide">
+        <thead><tr><th>名称</th><th>图标</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
+        <tbody><tr class="grp" id="p-armor-era8"><td colspan="11">聚变时代 · 9 个</td></tr><tr data-unit="armor_drone2"><td class="name">重装无人机</td><td class="glyph">重</td><td class="num">8</td><td class="num">110</td><td class="num">18</td><td class="num">3</td><td class="num">34</td><td class="num">6</td><td class="num">4</td><td class="num">6</td><td class="traits">—</td></tr><tr data-unit="armor_food8"><td class="name">合成食品局</td><td class="glyph">食</td><td class="num">8</td><td class="num">500</td><td class="num">4</td><td class="num">4</td><td class="num">32</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-income">产出 平原 +116</a></td></tr><tr data-unit="armor_forge8"><td class="name">元素铸造局</td><td class="glyph">铸</td><td class="num">8</td><td class="num">520</td><td class="num">4</td><td class="num">6</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 丘陵 +120</a></td></tr><tr data-unit="armor_cmd"><td class="name">战区指挥车坞</td><td class="glyph">指</td><td class="num">8</td><td class="num">620</td><td class="num">0</td><td class="num">8</td><td class="num">56</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-power">供电 +60</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="armor_swarm"><td class="name">「蜂群母体」</td><td class="glyph">群</td><td class="num">8</td><td class="num">720</td><td class="num">29</td><td class="num">21</td><td class="num">312</td><td class="num">4</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-slots">插槽 副1 统1 设3</a> · <a class="ref" href="#t-power">耗电 30</a></td></tr><tr data-unit="armor_hunter"><td class="name">「猎手」高速</td><td class="glyph">猎</td><td class="num">8</td><td class="num">760</td><td class="num">34</td><td class="num">18</td><td class="num">273</td><td class="num">6</td><td class="num">1</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-slots">插槽 主1 副2 统1 设2</a> · <a class="ref" href="#t-power">耗电 26</a></td></tr><tr data-unit="armor_tower"><td class="name">「塔」重型</td><td class="glyph">塔</td><td class="num">8</td><td class="num">820</td><td class="num">44</td><td class="num">31</td><td class="num">429</td><td class="num">3</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-slots">插槽 主2 副1 甲2 统2 设1</a> · <a class="ref" href="#t-power">耗电 36</a></td></tr><tr data-unit="armor_yard"><td class="name">装配总厂</td><td class="glyph">厂</td><td class="num">8</td><td class="num">980</td><td class="num">0</td><td class="num">10</td><td class="num">78</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="armor_fusion"><td class="name">聚变堆</td><td class="glyph">堆</td><td class="num">8</td><td class="num">1400</td><td class="num">0</td><td class="num">9</td><td class="num">58</td><td class="num">—</td><td class="num">0</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-power">供电 +280</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr></tbody>
+      </table>
+    </div>
+    </section>
+
+    
+    <section id="pack-mods">
+      <h2><span class="sec-num">03</span>装备表</h2>
+      <p>素体本身不会打人（只有撞击），战力全在<b>装了什么</b>上。装配要贴着<b>装配坞</b>；
+        <b>装上一件，这台当回合就不能再行动</b>——但同回合可以接着装，钱和电够就行
+        （2026-11-12 起取消了"每座坞每回合只接一单"）。拆卸不花回合、退一半金币，
+        它和装配在面板里是分开的两组。同一类槽位装满了就装不进去，
+        素体面板和装配坞里都写着"已用 / 总数"。</p>
+      <p><b>电是硬约束。</b>每台素体自己就有基础耗电，每件模块再叠一笔（下表"耗电"列，
+        最大 20 点）。发电厂是唯一来源（另有「超载协议」自带额度，代价是定期停机）。
+        需求超过供给时，从最后装上去的那件开始断电——所以别在过载边缘追求"再多一件"，
+        装配坞的电力条会先变红。</p>
+      <p>模块<b>不按时代上锁</b>：拿着 7 代素体也能装 8 代的模块，
+        只要槽位、素体白名单、地面/空中对得上。下表按槽位分组，就是这个原因。</p>
+      
+    <h4>主武器（10 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>
+      <tr data-mod="chainsaw">
+        <td class="name">链锯臂</td>
+        <td class="num">140</td>
+        <td class="num">6</td>
+        <td class="traits">伤害 179 · 射程 1</td>
+      </tr>
+      <tr data-mod="flamer">
+        <td class="name">火焰喷射器</td>
+        <td class="num">170</td>
+        <td class="num">12</td>
+        <td class="traits">伤害 62 · 射程 4 · 溅射 1</td>
+      </tr>
+      <tr data-mod="autocannon">
+        <td class="name">速射炮</td>
+        <td class="num">190</td>
+        <td class="num">10</td>
+        <td class="traits">伤害 49 · 射程 7 · 2 连发</td>
+      </tr>
+      <tr data-mod="antitank">
+        <td class="name">反装甲炮</td>
+        <td class="num">240</td>
+        <td class="num">14</td>
+        <td class="traits">伤害 96 · 射程 7 · 破甲</td>
+      </tr>
+      <tr data-mod="twin">
+        <td class="name">双联装炮塔</td>
+        <td class="num">280</td>
+        <td class="num">14</td>
+        <td class="traits">伤害 72 · 射程 8 · 每次 2 段</td>
+      </tr>
+      <tr data-mod="empcannon">
+        <td class="name">电磁脉冲炮</td>
+        <td class="num">300</td>
+        <td class="num">12</td>
+        <td class="traits">伤害 75 · 射程 8 · 命中叠 2 层减速</td>
+      </tr>
+      <tr data-mod="laserarray">
+        <td class="name">激光阵列</td>
+        <td class="num">340</td>
+        <td class="num">14</td>
+        <td class="traits">伤害 125 · 射程 9</td>
+      </tr>
+      <tr data-mod="plasmacannon">
+        <td class="name">等离子加农</td>
+        <td class="num">380</td>
+        <td class="num">16</td>
+        <td class="traits">伤害 135 · 射程 8 · 溅射 1</td>
+      </tr>
+      <tr data-mod="plasmaedge">
+        <td class="name">等离子刃</td>
+        <td class="num">380</td>
+        <td class="num">18</td>
+        <td class="traits">伤害 312 · 射程 1 · 破甲</td>
+      </tr>
+      <tr data-mod="railgun">
+        <td class="name">轨道炮</td>
+        <td class="num">420</td>
+        <td class="num">20</td>
+        <td class="traits">伤害 273 · 射程 11 · 破甲 · 打完冷却 1 回合</td>
+      </tr></tbody>
+    </table>
+    <h4>副武器（9 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>
+      <tr data-mod="dozer">
+        <td class="name">破障铲</td>
+        <td class="num">80</td>
+        <td class="num">4</td>
+        <td class="traits">伤害 44 · 射程 1 · 对建筑 ×2</td>
+      </tr>
+      <tr data-mod="coax">
+        <td class="name">同轴机枪</td>
+        <td class="num">90</td>
+        <td class="num">4</td>
+        <td class="traits">伤害 34 · 射程 6 · 2 连发</td>
+      </tr>
+      <tr data-mod="maghammer">
+        <td class="name">磁力锤</td>
+        <td class="num">160</td>
+        <td class="num">8</td>
+        <td class="traits">伤害 135 · 射程 1 · 破甲</td>
+      </tr>
+      <tr data-mod="grenade">
+        <td class="name">榴弹发射器</td>
+        <td class="num">170</td>
+        <td class="num">6</td>
+        <td class="traits">伤害 73 · 射程 7 · 溅射 1 · 对建筑 ×1.5</td>
+      </tr>
+      <tr data-mod="flak">
+        <td class="name">防空炮</td>
+        <td class="num">200</td>
+        <td class="num">8</td>
+        <td class="traits">伤害 57 · 射程 8 · 2 连发 · 只打空中</td>
+      </tr>
+      <tr data-mod="ciws">
+        <td class="name">近防激光</td>
+        <td class="num">200</td>
+        <td class="num">6</td>
+        <td class="traits">伤害 47 · 射程 5 · 远程伤害 −10</td>
+      </tr>
+      <tr data-mod="slowmissile">
+        <td class="name">缓速弹发射器</td>
+        <td class="num">220</td>
+        <td class="num">6</td>
+        <td class="traits">伤害 60 · 射程 8 · 命中叠 1 层减速</td>
+      </tr>
+      <tr data-mod="micromissile">
+        <td class="name">微型导弹巢</td>
+        <td class="num">260</td>
+        <td class="num">8</td>
+        <td class="traits">伤害 39 · 射程 9 · 3 连发</td>
+      </tr>
+      <tr data-mod="gravityhammer">
+        <td class="name">重力锤</td>
+        <td class="num">280</td>
+        <td class="num">12</td>
+        <td class="traits">伤害 182 · 射程 1 · 溅射 1</td>
+      </tr></tbody>
+    </table>
+    <h4>装甲板（8 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>
+      <tr data-mod="lightframe">
+        <td class="name">轻量化骨架</td>
+        <td class="num">140</td>
+        <td class="num">0</td>
+        <td class="traits">护甲 -1 · 移速 +1</td>
+      </tr>
+      <tr data-mod="skirts">
+        <td class="name">防爆裙板</td>
+        <td class="num">150</td>
+        <td class="num">2</td>
+        <td class="traits">免疫溅射</td>
+      </tr>
+      <tr data-mod="composite">
+        <td class="name">复合装甲板</td>
+        <td class="num">160</td>
+        <td class="num">0</td>
+        <td class="traits">护甲 +4</td>
+      </tr>
+      <tr data-mod="reactive">
+        <td class="name">反应装甲</td>
+        <td class="num">200</td>
+        <td class="num">2</td>
+        <td class="traits">受到的远程伤害 −15</td>
+      </tr>
+      <tr data-mod="tracks">
+        <td class="name">全地形履带</td>
+        <td class="num">200</td>
+        <td class="num">4</td>
+        <td class="traits">移速 +1 · 森林丘陵按 1 步</td>
+      </tr>
+      <tr data-mod="reactorveil">
+        <td class="name">反应堆护罩</td>
+        <td class="num">280</td>
+        <td class="num">8</td>
+        <td class="traits">溅射伤害 −35%</td>
+      </tr>
+      <tr data-mod="structlayer">
+        <td class="name">结构强化层</td>
+        <td class="num">300</td>
+        <td class="num">6</td>
+        <td class="traits">护甲 +4 · 生命上限 +117</td>
+      </tr>
+      <tr data-mod="phasearmor">
+        <td class="name">相位装甲</td>
+        <td class="num">360</td>
+        <td class="num">10</td>
+        <td class="traits">护甲 +8 · 移速 -1</td>
+      </tr></tbody>
+    </table>
+    <h4>系统（14 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>
+      <tr data-mod="radar">
+        <td class="name">战场雷达</td>
+        <td class="num">120</td>
+        <td class="num">4</td>
+        <td class="traits">视野 +3</td>
+      </tr>
+      <tr data-mod="booster">
+        <td class="name">突进推进器</td>
+        <td class="num">220</td>
+        <td class="num">6</td>
+        <td class="traits">护甲 -2 · 移速 +2</td>
+      </tr>
+      <tr data-mod="jammer">
+        <td class="name">电子压制</td>
+        <td class="num">240</td>
+        <td class="num">6</td>
+        <td class="traits">相邻敌军叠 1 层减速</td>
+      </tr>
+      <tr data-mod="targeting">
+        <td class="name">瞄准阵列</td>
+        <td class="num">240</td>
+        <td class="num">4</td>
+        <td class="traits">射程 +1</td>
+      </tr>
+      <tr data-mod="gyro">
+        <td class="name">陀螺稳定器</td>
+        <td class="num">260</td>
+        <td class="num">6</td>
+        <td class="traits">移动后开火不吃减伤</td>
+      </tr>
+      <tr data-mod="shieldgen">
+        <td class="name">护盾发生器</td>
+        <td class="num">280</td>
+        <td class="num">8</td>
+        <td class="traits">生命上限 +78</td>
+      </tr>
+      <tr data-mod="vector">
+        <td class="name">矢量喷口</td>
+        <td class="num">300</td>
+        <td class="num">6</td>
+        <td class="traits">移速 +1 · 移动后远程伤害 −8</td>
+      </tr>
+      <tr data-mod="dronebay">
+        <td class="name">无人机母舱</td>
+        <td class="num">320</td>
+        <td class="num">8</td>
+        <td class="traits">每 2 回合召唤，最多 2 个</td>
+      </tr>
+      <tr data-mod="overload">
+        <td class="name">超载协议</td>
+        <td class="num">320</td>
+        <td class="num">6</td>
+        <td class="traits">供电 +40</td>
+      </tr>
+      <tr data-mod="sprint">
+        <td class="name">战术冲刺</td>
+        <td class="num">320</td>
+        <td class="num">8</td>
+        <td class="traits">未出手时移速 +3 · 移动 +3；本回合开过火就没有这 +3</td>
+      </tr>
+      <tr data-mod="swarmprotocol">
+        <td class="name">集群协议</td>
+        <td class="num">340</td>
+        <td class="num">8</td>
+        <td class="traits">光环（半径 2）：友军攻击 +6</td>
+      </tr>
+      <tr data-mod="aegisdome">
+        <td class="name">反导穹顶</td>
+        <td class="num">380</td>
+        <td class="num">10</td>
+        <td class="traits">光环（半径 2）：敌军攻击 −15%</td>
+      </tr>
+      <tr data-mod="antigrav">
+        <td class="name">反重力悬浮</td>
+        <td class="num">400</td>
+        <td class="num">10</td>
+        <td class="traits">移速 +2 · 装上后升空 · 装上的地面素体会变成空中单位（近战得多走一格才够得着，但也不再吃地形护甲）</td>
+      </tr>
+      <tr data-mod="heavybay">
+        <td class="name">重装母舱</td>
+        <td class="num">420</td>
+        <td class="num">10</td>
+        <td class="traits">每 2 回合召唤，最多 2 个</td>
+      </tr></tbody>
+    </table>
+    <h4>设备（9 件）</h4>
+    <table>
+      <thead><tr><th>名称</th><th>造价</th><th>耗电</th><th>数据</th></tr></thead>
+      <tbody>
+      <tr data-mod="smoke">
+        <td class="name">烟幕发生器</td>
+        <td class="num">110</td>
+        <td class="num">4</td>
+        <td class="traits">2 次使用 · 身下周及相邻格布烟幕，站里面的己方单位受远程伤害 −30%，两个自己回合后散去</td>
+      </tr>
+      <tr data-mod="miner">
+        <td class="name">布雷器</td>
+        <td class="num">120</td>
+        <td class="num">5</td>
+        <td class="traits">1 次使用 · 在相邻空格布 2 枚地雷（敌方踩上炸 40，自己人不炸）</td>
+      </tr>
+      <tr data-mod="servicerig">
+        <td class="name">整备臂</td>
+        <td class="num">130</td>
+        <td class="num">6</td>
+        <td class="traits">2 次使用 · 给相邻友军 +40 额外生命（一次性，打光不回来）</td>
+      </tr>
+      <tr data-mod="grapnel">
+        <td class="name">弹射钩索</td>
+        <td class="num">180</td>
+        <td class="num">6</td>
+        <td class="traits">2 次使用 · 瞬移到 3 格内的空地，当回合不能再移动</td>
+      </tr>
+      <tr data-mod="swarmpod">
+        <td class="name">蜂群弹射器</td>
+        <td class="num">240</td>
+        <td class="num">6</td>
+        <td class="traits">2 次使用 · 一次放出 2 架蜂群无人机（全场上限 2 架）</td>
+      </tr>
+      <tr data-mod="shieldproj">
+        <td class="name">护盾投影器</td>
+        <td class="num">300</td>
+        <td class="num">10</td>
+        <td class="traits">1 次使用 · 周围 1 格的友军各 +30 额外生命</td>
+      </tr>
+      <tr data-mod="swarmheavy">
+        <td class="name">无人机蜂群</td>
+        <td class="num">320</td>
+        <td class="num">8</td>
+        <td class="traits">2 次使用 · 一次放出 2 架重装无人机（全场上限 2 架）</td>
+      </tr>
+      <tr data-mod="lance">
+        <td class="name">轨道引导</td>
+        <td class="num">400</td>
+        <td class="num">14</td>
+        <td class="traits">1 次使用 · 标记 3×3，下一个回合开始时其中的单位各受 120 伤害</td>
+      </tr>
+      <tr data-mod="phasestep">
+        <td class="name">相位穿越</td>
+        <td class="num">400</td>
+        <td class="num">12</td>
+        <td class="traits">2 次使用 · 瞬移到 6 格内的空地</td>
+      </tr></tbody>
+    </table>
+      <p class="era-meta">设备（9 件）要用掉装配坞当回合的
+        "整备"名额，效果走地图上的落点选择，不在装配的那一刻结算。</p>
+    </section>
+
+    <section id="pack-terms">
+      <h2><span class="sec-num">04</span>机制词条</h2>
+      <p>表里带虚线下划线的词，鼠标停上去会浮一句说明；点一下停在这里。</p>
+      <dl class="terms"><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-power">供电</dt><dd>电站给己方装甲提供的电能额度；每台素体和每件模块都在吃它。 <span class="more">电不存库存，&quot;产能 − 需求&quot;每回合现算；需求超过产能时，从<b>最后装上去的那件</b>开始断电，
+      被断的那件当场失效（面板上标&quot;断电&quot;）。所以别在过载边缘追求&quot;再多装一件&quot;——
+      侧栏顶部的电力条会先变红，它只在你有电站时才出现。</span></dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-slots">插槽</dt><dd>装甲素体身上能装模块的位置，按类型分别计数：主 / 副 / 甲 / 统 / 设。 <span class="more">每一类各数各的：主槽只吃主武器，装甲板只能进甲槽，装满了这一类就再塞不进去。
+      素体的攻/血/甲是<b>空壳</b>的底子，真正打仗的数字全看装了什么——所以看一台装甲先看插槽，再看其它列。
+      想装满一台要先盖装配坞（贴身穿好才能装配），每装一件这台当回合就不能再动了。</span></dd></dl>
+    </section>
+  
+    <footer>
+      时代与回旋镖 · 聚变时代 · 由 build-manual.ts 生成，数值直接取自配置，改完请重跑 <code>npm run manual</code>。
+    </footer>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  if (!tip) return;
+  var cur = null;
+
+  /** 从词条落点读一句话。取不到就返回空串，浮层不弹（而不是弹一个空框） */
+  function textOf(href) {
+    var key = (href || '').slice(1);
+    if (!key) return '';
+    var el = document.getElementById(key);
+    if (!el) return '';
+    // 能力总表：一行一个能力，效果在第二格
+    if (el.tagName === 'TR') {
+      var cell = el.cells && el.cells[1];
+      return cell ? cell.textContent : '';
+    }
+    // 词条表：<dt> 名字，下一格 <dd> 是说明。more 太长，浮层只要第一段
+    var dd = el.nextElementSibling;
+    if (!dd) return '';
+    var brief = dd.firstChild ? dd.firstChild.textContent : dd.textContent;
+    return (brief || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function show(a) {
+    var text = textOf(a.getAttribute('href'));
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('on');
+    var r = a.getBoundingClientRect();
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = r.left + r.width / 2 - w / 2;
+    var y = r.top - h - 9;
+    if (y < 8) y = r.bottom + 9;
+    if (x < 8) x = 8;
+    if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    cur = a;
+  }
+
+  function hide() {
+    tip.classList.remove('on');
+    cur = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) { if (a !== cur) show(a); } else hide();
+  });
+  document.addEventListener('mouseout', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a && a === cur && !a.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a.ref') : null;
+    if (a) show(a);
+  });
+  document.addEventListener('focusout', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>

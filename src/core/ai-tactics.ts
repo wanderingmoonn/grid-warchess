@@ -30,6 +30,15 @@ export interface TacticalMap {
    * 宁可高估。
    */
   soon: (unit: Unit, excludedEnemy?: string) => Exposure;
+  /**
+   * 走进这一格要付的"入界费"：**只有本次新踏进**那些自动开火建筑的射程才算。
+   *
+   * 为什么和 `exposure` 不是一回事：那个估的是"我站这儿，挨多少"——站着不动
+   * 也照样挨。2026-11-11 起建筑改成"敌人踏进射程就立刻打一发"，于是"走进去"
+   * 成了一个**当场结算**的动作，AI 要判断的是"这一步额外花多少"。
+   * 两个口径叠在一起才是完整的账：进界收一次，站着每回合再收。
+   */
+  entryToll: (unit: Unit, x: number, y: number) => number;
 }
 
 /**
@@ -130,6 +139,29 @@ export function tacticalMap(s: GameState, owner: PlayerId): TacticalMap {
       const result = { damage, count, lethal: damage >= unit.hp };
       soonCache.set(key, result);
       return result;
+    },
+    /*
+     * 入界费：只算**这一次新进入**的自动开火建筑。
+     *
+     * `grid` 本来就是"每一格被谁覆盖"，所以这里不用再扫全图：
+     * 目标格的覆盖表减去当前格的覆盖表，差集就是"这一步新惹上的炮口"。
+     * 建筑不会动（`reachableTiles` 只有它自己那一格），所以覆盖表里
+     * 一个建筑最多出现一次，不用按位置去重。
+     */
+    entryToll(unit, x, y) {
+      const here = grid[idx(s, unit.x, unit.y)];
+      const there = grid[idx(s, x, y)];
+      if (!there || there.size === 0) return 0;
+      let dmg = 0;
+      for (const [enemyId, origins] of there) {
+        if (here?.has(enemyId)) continue;
+        const e = origins.stationary ?? origins.stacked ?? origins.nearest;
+        if (!e) continue;
+        // 只有"会自己开火"的建筑收这笔：普通兵是主动过来打的，那是 exposure 的账
+        if (!utype(s, e.type).autoAttack) continue;
+        dmg += computeDamage(s, e, { ...unit, x, y });
+      }
+      return dmg;
     },
   };
 }

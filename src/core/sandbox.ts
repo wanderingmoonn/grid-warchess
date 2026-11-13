@@ -16,6 +16,7 @@
 import { CONFIG, eraDef } from './config.ts';
 import { activeExpansions, eraCeilingOf } from './expansions.ts';
 import { canStandAt, cityAt, citySizeOf, coversTile } from './rules.ts';
+import { footprintOf, tilesOfUnit } from './query.ts';
 import type { City, GameState, PlayerId, Terrain, Unit } from './types.ts';
 
 export type SandboxResult = { ok: true; state: GameState } | { ok: false; reason: string };
@@ -203,6 +204,197 @@ export function removeAt(s: GameState, x: number, y: number): SandboxResult {
   }
 
   return { ok: false, reason: '这一格上没有东西' };
+}
+
+
+/* ── 框选与批量操作（2026-11-10） ────────────────────────────────────────
+ *
+ * 上帝模式以前只有"一笔一笔地摆/擦"。摆一场三十个单位的歼灭战要点三十下，
+ * 想清掉半个棋盘得一个一个擦——这不是"绕过规则"，这就是"手酸"。
+ *
+ * 这一组是**纯函数**：给一个矩形，返回新状态和"做了几件、跳过几件"。
+ * 界面那边只负责"选区怎么来、结果怎么说"，一行规则都不写死在里面。
+ *
+ * 三个共同的取舍：
+ *   · 只认**格坐标**，不认屏幕：矩形在 main.ts 里由两次 pointer 点算出来；
+ *   · 一律"克隆再改"，失败整块丢掉，不留半截状态（和上面那些单点操作一致）；
+ *   · 批量操作**能跳过的就跳过、并报数**，不因为一格不合格就把整批撤掉——
+ *     "刷一片地形"里有座城很正常，为它让整个操作失败是帮倒忙。
+ */
+
+/** 矩形选区：含两个端点，字段已归一（x0 ≤ x1） */
+export interface Rect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** 两次点击之间的矩形，顺序随便给（斜着拖是常态） */
+export function rectOf(a: { x: number; y: number }, b: { x: number; y: number }, w: number, h: number): Rect {
+  const x0 = Math.max(0, Math.min(a.x, b.x));
+  const y0 = Math.max(0, Math.min(a.y, b.y));
+  const x1 = Math.min(w - 1, Math.max(a.x, b.x));
+  const y1 = Math.min(h - 1, Math.max(a.y, b.y));
+  return { x0, y0, x1, y1 };
+}
+
+export function rectW(r: Rect): number {
+  return r.x1 - r.x0 + 1;
+}
+
+export function rectH(r: Rect): number {
+  return r.y1 - r.y0 + 1;
+}
+
+/** 选区里的单位：**按覆盖格算**，2×2 的建筑只要压到一格就算选中 */
+export function unitsInRect(s: GameState, r: Rect): Unit[] {
+  return s.units.filter((u) => {
+    for (let y = r.y0; y <= r.y1; y += 1) {
+      for (let x = r.x0; x <= r.x1; x += 1) if (coversTile(s, u, x, y)) return true;
+    }
+    return false;
+  });
+}
+
+/** 批量删兵。城留着——"删兵"和"拆城"是两件事，别一个按钮干两件 */
+export function deleteUnitsInRect(
+  s: GameState,
+  r: Rect,
+): { ok: true; state: GameState; removed: number } | { ok: false; reason: string } {
+  const doomed = unitsInRect(s, r);
+  if (doomed.length === 0) return { ok: false, reason: '选区里没有单位' };
+  const ids = new Set(doomed.map((u) => u.id));
+  const next = clone(s);
+  next.units = next.units.filter((u) => !ids.has(u.id));
+  return { ok: true, state: next, removed: doomed.length };
+}
+
+/** 批量刷地形：城格和有兵站着的格跳过，报数给界面 */
+export function paintRect(
+  s: GameState,
+  r: Rect,
+  terrain: Terrain,
+): { ok: true; state: GameState; painted: number; skipped: number } | { ok: false; reason: string } {
+  if (!paintTerrainsFor(s).includes(terrain)) return { ok: false, reason: '这种地形不能直接刷' };
+  const next = clone(s);
+  let painted = 0;
+  let skipped = 0;
+  for (let y = r.y0; y <= r.y1; y += 1) {
+    for (let x = r.x0; x <= r.x1; x += 1) {
+      const t = next.tiles[y * next.w + x];
+      if (!t) {
+        skipped += 1;
+        continue;
+      }
+      if (t.cityId || next.units.some((u) => coversTile(next, u, x, y))) {
+        skipped += 1;
+        continue;
+      }
+      if (t.terrain === terrain) {
+        skipped += 1;
+        continue;
+      }
+      t.terrain = terrain;
+      painted += 1;
+    }
+  }
+  if (painted === 0) return { ok: false, reason: '选区里没有能改的格子（城和兵都站在上面？）' };
+  return { ok: true, state: next, painted, skipped };
+}
+
+/**
+ * 批量放兵：**只填空格**，每格一个。
+ *
+ * `cap` 是安全阀：9×9 的选区一口气放 81 个兵，局就跑不动了（AI 每帧都要遍历）。
+ * 到顶就停手并把 `capped` 报给界面，让人知道"没放完"而不是以为选区别名。
+ */
+export function fillUnitsInRect(
+  s: GameState,
+  r: Rect,
+  owner: PlayerId,
+  type: string,
+  cap = 120,
+): { ok: true; state: GameState; placed: number; skipped: number; capped: boolean } | { ok: false; reason: string } {
+  const def = s.unitTypes[type];
+  if (!def) return { ok: false, reason: '这一局里没有这个兵种' };
+  const next = clone(s);
+  let placed = 0;
+  let skipped = 0;
+  for (let y = r.y0; y <= r.y1; y += 1) {
+    for (let x = r.x0; x <= r.x1; x += 1) {
+      if (placed >= cap) return { ok: true, state: next, placed, skipped, capped: true };
+      if (!canStandAt(next, x, y, type)) {
+        skipped += 1;
+        continue;
+      }
+      next.units.push({
+        id: `u${next.nextUnitSeq++}`,
+        type,
+        owner,
+        x,
+        y,
+        hp: def.maxHp,
+        kills: 0,
+        moved: true,
+        acted: true,
+        bornTurn: next.turn,
+        ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
+      });
+      placed += 1;
+    }
+  }
+  if (placed === 0) return { ok: false, reason: '选区里没有能站下它的空格' };
+  return { ok: true, state: next, placed, skipped, capped: false };
+}
+
+/**
+ * 整体平移选区内所有单位（含 2×2 的建筑）。
+ *
+ * **要么全动、要么全不动**：只要有一个会被推到棋盘外、或者落点站不下，
+ * 整笔就拒绝。半截平移比不动糟得多——兵散了一半、队形全乱，而玩家是按
+ * "整体挪一格"去想的。
+ *
+ * 判落点前先把自己这一批从盘上摘掉：否则"整个方阵往前一步"里，
+ * 每个人都会撞到前面的自己人。
+ */
+export function translateUnitsInRect(
+  s: GameState,
+  r: Rect,
+  dx: number,
+  dy: number,
+): { ok: true; state: GameState; moved: number } | { ok: false; reason: string } {
+  const movers = unitsInRect(s, r);
+  if (movers.length === 0) return { ok: false, reason: '选区里没有单位' };
+  const ids = new Set(movers.map((u) => u.id));
+  const next = clone(s);
+  next.units = next.units.filter((u) => !ids.has(u.id));
+
+  // 已经占住的格（没在移动的那批人）
+  const taken = new Set<number>();
+  for (const u of next.units) for (const t of tilesOfUnit(next, u)) taken.add(t.y * next.w + t.x);
+
+  const movedUnits: Unit[] = [];
+  for (const u of movers) {
+    const nx = u.x + dx;
+    const ny = u.y + dy;
+    const n = footprintOf(next, u);
+    if (nx < 0 || ny < 0 || nx + n > next.w || ny + n > next.h) {
+      return { ok: false, reason: '有单位会被推到棋盘外面' };
+    }
+    for (const t of tilesOfUnit(next, { ...u, x: nx, y: ny })) {
+      const i = t.y * next.w + t.x;
+      if (taken.has(i)) return { ok: false, reason: `(${t.x},${t.y}) 已经有人站着了` };
+      taken.add(i);
+    }
+    // 地形/层级合法性交给 canStandAt；它看的是"这一格能不能站这个兵"
+    if (!canStandAt(next, nx, ny, u.type)) {
+      return { ok: false, reason: `(${nx},${ny}) 这个兵站不上去` };
+    }
+    movedUnits.push({ ...u, x: nx, y: ny });
+  }
+  next.units.push(...movedUnits);
+  return { ok: true, state: next, moved: movedUnits.length };
 }
 
 /** 把一方摆上去的兵全部撤走（城留着——城是靶子，不是"部队"） */

@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<!--
+  2026-11-11 补：以前这里没有 viewport，手机上打开规则书整页按 980px 渲染再缩小 ——
+  文字小到读不了，十二列的兵种表挤成一团，"数据和顶上的分类对不上"有一大半是它。
+  顺带让 @media (max-width: 860px) 在真机上第一次真正生效（原来视口按 980 算，永远不触发）。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>时代与回旋镖 · 季节与气候</title>
 <style>
   :root {
@@ -55,7 +61,7 @@
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
-  nav a.sub { padding-left: 22px; font-size: 12.5px; }
+  nav a.sub { padding-left: 22px; font-size: 12px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -68,7 +74,7 @@
   header.page-head p {
     margin: 0;
     color: var(--muted);
-    font-size: 13.5px;
+    font-size: 14px;
   }
 
   section { margin-bottom: 48px; scroll-margin-top: 24px; }
@@ -81,7 +87,7 @@
   }
   h2 .sec-num { color: var(--faint); font-weight: 400; margin-right: 8px; }
   h3 {
-    font-size: 15.5px;
+    font-size: 16px;
     font-weight: 600;
     margin: 26px 0 8px;
   }
@@ -112,7 +118,7 @@
     padding: 14px 16px;
     margin: 12px 0 16px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.9;
     color: var(--text);
   }
@@ -124,7 +130,7 @@
     border-radius: 10px;
     padding: 12px 15px;
     margin: 14px 0 18px;
-    font-size: 13.5px;
+    font-size: 14px;
     color: #5d4c28;
   }
   .callout b { color: #4a3b1c; }
@@ -142,7 +148,7 @@
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     background: var(--panel-2);
     padding: 7px 9px;
@@ -168,7 +174,7 @@
   /* 修真各境界表：13 列，列宽由 <colgroup> 给（不借用 .overview 的列宽，
      那个类把第 1 列钉在 17%，而这里的「境界」只有一个数字）。
      数字居中才好竖着扫；名称和特殊能力左对齐，它们是文字。 */
-  table.rank-table { table-layout: fixed; font-size: 12.5px; }
+  table.rank-table { table-layout: fixed; font-size: 12px; }
   table.rank-table th, table.rank-table td { padding: 6px 5px; text-align: center; }
   table.rank-table th:nth-child(3), table.rank-table td:nth-child(3),
   table.rank-table th:nth-child(13), table.rank-table td:nth-child(13) { text-align: left; }
@@ -177,14 +183,71 @@
     font-weight: 600;
     color: var(--muted);
   }
-  td.traits { color: var(--muted); font-size: 12.5px; }
+  td.traits { color: var(--muted); font-size: 12px; }
   td.traits b { color: var(--a); font-weight: 500; }
 
   /* 合册的总表列多，窄屏上让它自己滚。阈值取 700：正文区在 1080 宽下是 764px，
      所以桌面上不滚；手机上滚，但那种屏幕本来也读不了十五列 */
   .scroll-x { overflow-x: auto; margin: 8px 0 18px; }
   .scroll-x table { margin: 0; min-width: 700px; }
-  table.wide { font-size: 12.5px; }
+
+  /*
+   * 长表：表头吸顶 + 首列吸左（2026-11-11）。
+   *
+   * 起因是用户那句"兵种一多，数据和顶上那几个分类根本对不上"：
+   *   ① 89 行的表滚过两屏之后表头早就没了，12 个数字列全靠记；
+   *   ② 手机上横向滚一下，兵种名跟着滚出去，一屏只剩一串光秃秃的数字。
+   *
+   * 为什么以前不做吸顶：.scroll-x 是 overflow-x: auto，按规范它同时
+   * 把 overflow-y 也算成 auto —— 它本身就是滚动容器，
+   * thead 的 position: sticky; top: 0 会相对它自己贴，
+   * 而它自己不纵向滚，等于没效果。现在反过来利用这一点：
+   * 给它一个 max-height 让它真的纵向滚，表头就贴在它自己的顶边。
+   *
+   * 代价是页面上多一层内滚动，所以只给长表挂（>20 行），短表照旧。
+   */
+  .scroll-x.tall {
+    max-height: 74vh;
+    overflow: auto;
+    /* 圆角改由容器提供（表格自己那条 overflow: hidden 会把 sticky 废掉，见下） */
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding-bottom: 1px;
+  }
+  /*
+   * 表格自己那条 overflow: hidden（用来裁圆角）是表头吸顶失效的第二个原因：
+   * 它让 table 成为 sticky 的包含滚动容器，而 table 自己不滚。
+   * 长表把这条撤掉，圆角交给外层 .scroll-x.tall。
+   */
+  .scroll-x.tall table {
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+  }
+  .scroll-x.tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--panel-2);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .scroll-x.tall th:first-child,
+  .scroll-x.tall td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    /* 必须不透明：底下滚过去的数字会从半透明里透出来，比不吸左还乱 */
+    background: var(--panel);
+  }
+  /* 斑马纹要跟着搬过来，否则吸左那一列变成一条纯白竖带 */
+  .scroll-x.tall tbody tr:nth-child(even) td:first-child { background: #fcfbf8; }
+  /* 左上角那一格同时吸顶和吸左，层级要压过两者 */
+  .scroll-x.tall thead th:first-child { z-index: 4; }
+  /* 分组行是整行 colspan，别跟着吸左——它会横着盖住半张表 */
+  .scroll-x.tall tr.grp td { position: static; }
+
+  table.wide { font-size: 12px; }
   table.wide th, table.wide td { padding: 6px 8px; }
   td.src { color: var(--faint); font-size: 12px; white-space: nowrap; }
   /* 分组行：包与包的边界。写了 !important 是因为 :nth-child(even) 的斑马纹
@@ -217,7 +280,7 @@
     border-radius: 8px;
     background: #2b2823;
     color: #f3efe6;
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.65;
     box-shadow: 0 8px 26px rgba(30, 24, 12, 0.22);
     pointer-events: none;
@@ -252,7 +315,7 @@
   }
   .era-block h3 { margin-top: 0; }
   .era-meta {
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--faint);
     margin: 0 0 4px;
   }
@@ -260,7 +323,7 @@
   .era-block th { background: transparent; border-bottom: 1px solid var(--line); }
   .era-block tbody tr:nth-child(even) { background: transparent; }
 
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 13.5px; margin-bottom: 16px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; font-size: 14px; margin-bottom: 16px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; }
 
@@ -295,6 +358,7 @@
     
     <a href="#pack-intro">1. 这个包是什么</a>
     <a href="#pack-units">2. 兵种表</a>
+    
     <a href="#pack-terms">3. 机制词条</a>
   
   </nav>
@@ -308,10 +372,12 @@
 
     <section id="pack-intro">
       <h2><span class="sec-num">01</span>这个包是什么</h2>
-      <p>春夏秋冬每 10 回合轮换。每格的气候由地形与海陆距离决定，再改这一格上的移动、护甲、视野、射程与产出。气候不影响城市。</p>
+      <p>春夏秋冬每 10 回合轮换，但<b>换季不是跳变</b>：气温沿着一条连续的年曲线走，从仲春 15°C 匀速升到仲夏 34°C、再落到仲冬 −6.5°C，一回合只走两度多；水比热大，所以海水的升降永远比陆地慢半拍。<b>每张图有自己的气候带</b>：地图种子决定整年偏冷还是偏暖（±5.5°C），顶栏写着&quot;偏北/偏南&quot;，偏北的图冬天连平原都会进严冬。每格有气温、湿度与风：气温由季节基准、海陆年温差与地形海拔决定；湿度靠蒸发注入、随风吹、过饱和就下雨——<b>雨带会跟着风挪</b>，一场雨能从海上飘到内陆。风往一处挤的地方空气被抬起来、更容易饱和，于是先下雨；风散开的地方反过来，天更晴。所以雨是<b>沿风场排成的一条条带</b>，不是随机撒的斑点。风是气压差吹出来的：冷处压高、暖处压低，所以山脚海边天生有风；再叠一层四季各不相同的<b>主导风</b>（春西、夏南、秋东、冬北，四季两两相对），以及每两回合换一档的阵风。风还会被<b>地转偏向力</b>拧一个角度：偏北的图逆时针、偏南的顺时针、正中间不偏（同一个种子既决定这张图冷不冷，也决定它的气旋往哪边转）。<b>风暴要雨大风也大</b>：外海的大雨配上够强的风才算风暴，所以它总在阵风那几天出现，平时海面只是阴天。这些驱动一起给出一个<b>徽标</b>（严冬 / 寒冷 / 温和 / 大风 / 湿热 …），但徽标只是挑一个最显眼的讲，<b>真正生效的效果是各驱动分别算一档再叠加的</b>：气温 5°C 一档（10~20°C 是舒适带）、湿度三段、风一条线、降水看大小。<b>产出加成一律相加不相乘</b>（温度 −50%~+20%、湿度 −10%~+25%、降水 +5%~+15%，合计夹在 −60%~+90%），怎么叠都在能心算的范围里。潮湿天（相对湿度 ≥ 80%）每个单位要交 <b>4 金</b>维护费——固定金额，便宜的单位心疼、高级经济单位几乎无感，高时代自然更扛天气。<b>日常的冷暖只动经济与护甲，不拖慢部队</b>——只有严冬（−10°C 以下）与酷暑（32°C 以上）真的走不动；而<b>大风只打空军</b>：风过线时逆风飞进那一格，每格多花 1 点移动力，地面部队一格都不受影响。<b>有些效果是几个驱动凑出来的</b>，面板会单独列一条带名字的，不用自己拿温度湿度去推：「浓雾：视野和射程都压到 2」——起雾要 20°C 以下、不下雨、相对湿度 ≥ 76%，而且<b>只按得住视野 ≤5 的部队</b>，看得更远的单位雾里照样看得远；「雷暴」「风暴」「封冻」「浮冰」同理，各占一行并写明伤害或限制。气候不影响城市。</p>
       <dl class="kv">
         <dt>兵种数量</dt><dd>0 个</dd>
         <dt>覆盖时代</dt><dd>—（不带兵种）</dd>
+        
+        
         
         <dt>怎么启用</dt><dd>新对局面板里勾选；规则以 id 记进存档，换机器打开不变</dd>
       </dl>
@@ -325,6 +391,8 @@
       <h2><span class="sec-num">02</span>兵种表</h2>
       <p class="era-meta">这个包不带兵种，只改规则——表就不用列了。</p>
     </section>
+
+    
 
     <section id="pack-terms">
       <h2><span class="sec-num">03</span>机制词条</h2>

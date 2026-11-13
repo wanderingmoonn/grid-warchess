@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { BoardId, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
@@ -28,16 +28,22 @@ import type { AbilityDef } from './abilities.ts';
 // 留痕种类（水雷/地雷……）的接口。同样只 import type：实现在 core/marks.ts，
 // 那边只依赖 types.ts，不会绕回来。
 import type { MarkKindDef } from './marks.ts';
+// 光环的声明式数据。同样只 import type：auras.ts 才是合并实现，
+// 而且它反过来要用 activeExpansions，写反了就是一个环。
+import type { AbilityApi, AuraSpec } from './ability-hooks.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_ARMS } from './era-packs.ts';
 import { FANTASY } from './fantasy-packs.ts';
 import { CITY_WORKS } from './city-works.ts';
-import { SEASONS } from './seasons.ts';
+import { SEASONS } from './seasons/index.ts';
+import { SPACE_AGE } from './space/space-age.ts';
+import { SPACE_WAR } from './space/space-war.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
 import { CONTEMPORARY_BASE_PACK } from './contemporary-packs.ts';
+import { ARMOR_ERA7, ARMOR_ERA8 } from './armor-expansion.ts';
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
 // 航母甲板那道"留给空军扩展"的接口在 naval-carrier.ts。这里只负责注册。
 import { NAVAL } from './naval-packs.ts';
@@ -57,6 +63,16 @@ export interface DamageCtx {
   defender: Unit;
   /** 已经算好的基础伤害（攻击 − 护甲 − 地形） */
   damage: number;
+  /**
+   * 这一步**之后**才会从伤害里扣掉的护甲（已经过破甲、地形、光环）。
+   *
+   * 为什么要把护甲也递进来：`modifyDamage` 拿到的是"扣甲之前"的伤害，想表达
+   * "目标实际掉血 ×0.7"就必须知道甲有多厚。烟幕就是这种——不知道甲，
+   * 只能把攻击力打七折，结果对厚甲目标变成近乎免疫。
+   */
+  armor: number;
+  /** 这一下是"溅射余波"还是主命中（反应堆护罩只吃前者的折扣） */
+  splash: boolean;
   isCounter: boolean;
 }
 
@@ -235,6 +251,27 @@ export interface StepCostCtx {
   cost: number;
 }
 
+/**
+ * 空中一格的步耗（**只有飞行单位会问**）。
+ *
+ * 为什么不复用 `StepCostCtx`：那条对飞行是**整段跳过**的——飞行按一格 1 点算，
+ * 不该被爬坡收费，所以 `stepCostInto` 见到 flyer 直接返回 1、一个钩子都不调。
+ * 天气要改的是"风把飞机拖慢"，跟地形无关，而且逆风还是顺风要看**这一步的方向**，
+ * 所以单开一个口子，签名里带 fromIdx / toIdx。
+ *
+ * 返回 undefined 表示不改。
+ */
+export interface AirStepCostCtx {
+  state: GameState;
+  unit: Unit;
+  /** 出发格索引；从地图外/部署进来时为负数 */
+  fromIdx: number;
+  /** 目标格索引 */
+  toIdx: number;
+  /** 已经算好的基础价（飞行恒为 1） */
+  cost: number;
+}
+
 export interface CityRegenCtx {
   state: GameState;
   city: City;
@@ -259,24 +296,18 @@ export interface KillCtx {
   killer?: Unit;
   killerOwner: PlayerId;
   /**
-   * 物理直伤（**先减护甲**）。在"有人死了"这个时机造成伤害一律走它。
+   * 钩子里能用的那套 API（伤害、战报、兵种名都在里面）。
    *
-   * 为什么不是 `hp -=`：那一行会绕开护甲、守御阵、受伤钩子和战报，
-   * 于是"重甲兵被尸体砸得和民兵一样疼"，而且很难发现。
-   * 这里的 `amount` 是**威力**（像攻击力），不是算好的伤害。
-   *
-   * 也不用 `onTurnEnd.hurt`：那个是**内生损耗**（交维护费），
-   * 不吃护甲、不转移、不触发受伤钩子——尸体砸人不是内生损耗。
+   * 为什么死亡钩子也要它：亡语里的"自爆"要在这一刻就伤到旁人，
+   * 而扩展没法 import 规则层（会绕成环）。`onDeath` 那条能力钩子早就带着它，
+   * 扩展到的那条却没有——同样的活儿在两条路上门槛不一样，
+   * 最后一定是"某个包里能写、别的包写不了"。
    */
-  hurtPhysical: (
-    u: Unit,
-    amount: number,
-    opts?: { pierce?: boolean; logText?: string | ((dealt: number) => string) },
-  ) => number;
+  api: AbilityApi;
   /**
    * 清场：把场上所有血量归零的单位按"死亡"流程处理掉（战报、亡语、击杀钩子）。
    *
-   * 在钩子里用 `hurtPhysical` 打死了人之后**必须**调它。别写
+   * 在钩子里用 `api.hurtPhysical` 打死了人之后**必须**调它。别写
    * `state.units = state.units.filter(u => u.hp > 0)`——那样尸体是被抹掉了，
    * 但它自己的亡语不会触发，连锁反应到第二代就断（焦土砸死自爆兵，
    * 自爆兵不会炸）。这一条是 2026-11-13 死亡合一之后才有的口子。
@@ -340,6 +371,25 @@ export interface ExpansionHooks {
   modifySiegeDamage?: (c: SiegeDamageCtx) => number;
   /** 纯函数：修正护甲（会在破甲之前生效） */
   modifyArmor?: (c: ArmorCtx) => number;
+
+  /**
+   * 选址否决：这条建筑**这一格**为什么不能盖（返回 null = 可以）。
+   *
+   * 和 `buildSiteError` 分工：核心只判通用的那几条（越界、占位、地形、距离、
+   * 会不会把城堵死），**扩展独有的上限**（"每颗星球每方只能有一座接驳站"）
+   * 走这里。不放进兵种数据，是因为它要读局面（你已经盖了几座），
+   * 而兵种表是纯数据。
+   *
+   * 拿到的是**建造者所在那张图**的投影（`boardStateOf`）：`state.units`
+   * 只有这张图上的兵，直接 filter 就是"这个星球上有几座"。
+   */
+  buildProblem?: (c: {
+    state: GameState;
+    player: PlayerId;
+    typeId: string;
+    x: number;
+    y: number;
+  }) => string | null;
   /** 纯函数：修正移动力 */
   modifyMove?: (c: MoveCtx) => number;
   /** 纯函数：修正兵种造价 */
@@ -352,6 +402,14 @@ export interface ExpansionHooks {
   modifyIncome?: (c: IncomeCtx) => number;
   /** 纯函数：修正视野半径 */
   modifyVision?: (c: VisionCtx) => number;
+  /**
+   * 纯函数：这个单位身上**除了兵种能力和 extraAbilities 之外**的光环来源。
+   *
+   * 给"模块类"光环用（装甲的集群协议、指挥车坞）。走这里而不是塞进 abilities：
+   * 模块是数据表里的条目，挂函数字段会让 `MODULES` 从纯数据变成不能序列化的东西。
+   * 返回单个或多个都行；断电的模块自己过滤掉（钩子拿得到 state，能查断电）。
+   */
+  extraAura?: (c: { state: GameState; unit: Unit }) => AuraSpec | AuraSpec[] | null;
   /**
    * 纯函数：这个玩家此刻被**强行点亮**的格子（格索引数组）。
    *
@@ -367,6 +425,18 @@ export interface ExpansionHooks {
    * 返回的是格索引（`y * w + x`），不是坐标对——调用方直接往 Set 里塞。
    */
   extraVision?: (c: { state: GameState; player: PlayerId }) => readonly number[];
+
+  /**
+   * 有单位真的掉了血（伤害已经写进 hp，死亡流程还没开始）。
+   *
+   * 给"被打断/被打醒"这一类规则用：太空的月壤采样被打一下就作废，
+   * 走的就是这条。和 `modifyDamage` 分工不同——那个改的是数值，
+   * 这个只在"确实掉了血"之后通知一声（`amount > 0`）。
+   *
+   * 不要在这里再扣血或杀人：死亡判定在 hurtUnit 之后的主流程里，
+   * 这里动血会让"这一下到底打死了没有"变成两处口径。
+   */
+  onUnitDamaged?: (c: { state: GameState; unit: Unit; amount: number; source?: Unit }) => void;
 
   /**
    * 这个单位现在**能不能下命令**。返回字符串 = 不能，字符串是给玩家的理由。
@@ -431,6 +501,13 @@ export interface ExpansionHooks {
   modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
   /** 纯函数：修正进入某一格的真实步耗（爬坡） */
   modifyStepCost?: (c: StepCostCtx) => number | undefined;
+  /**
+   * 纯函数：修正**飞行**进入某一格的步耗（逆风）。
+   *
+   * 和 `modifyStepCost` 分开是因为那条对飞行不调用（飞行不看地形起伏）。
+   * 这里问的是"风"，参数里带方向——逆风加价、顺风原价，是这一步的事。
+   */
+  airStepCost?: (c: AirStepCostCtx) => number | undefined;
   /**
    * 纯函数：这一局某类地形有多高（层）。
    *
@@ -506,7 +583,42 @@ export interface ExpansionHooks {
    *
    * 只在"点的是格子"这条支路调用；点单位、点城市时不走这里。
    */
-  getTilePanelLines?: (c: { state: GameState; x: number; y: number; viewer?: PlayerId }) => string[];
+  getTilePanelLines?: (c: {
+    state: GameState;
+    x: number;
+    y: number;
+    /**
+     * 这一格在**哪张图**上。缺省 = 地球（老扩展不用改）。
+     *
+     * 按格算的东西（灵气、天气、污染）都必须看它：空间站的 (3,2) 和地球的
+     * (3,2) 不是一个地方，"按坐标算一遍"会算出地球上的天气。
+     */
+    board?: BoardId;
+    viewer?: PlayerId;
+  }) => string[];
+
+  /**
+   * 格子 / 单位卡上的**扩展 HTML 块**。
+   *
+   * 和 `getTilePanelLines` 分工：那个是纯文本行（核心会转义），
+   * 这个是成品 HTML——天气块要带 `.weather-badge.w-cold` 这种按气候分色的
+   * 徽标，纯文本表达不了。
+   *
+   * ⚠️ 核心**原样插入**，不转义。所以只准扩展拼，别把玩家可改的名字
+   * （自定义兵种名、玩家昵称）塞进模板——那是 XSS 的入口。
+   *
+   * `unit` 有值表示"看的是这个单位"（标题可能不同），`x/y` 永远是它脚下那一格：
+   * 天气这类东西是按格算的，两种卡走同一个入口。
+   */
+  getTilePanelHtml?: (c: {
+    state: GameState;
+    x: number;
+    y: number;
+    unit?: Unit;
+    /** 同上：缺省 = 地球。不在那张图上算得出的东西，就返回空 */
+    board?: BoardId;
+    viewer?: PlayerId;
+  }) => string | null;
 
   /**
    * 棋盘视图：让扩展在棋盘上**染一层色**（灵气浓度、污染、视野……）。
@@ -518,6 +630,25 @@ export interface ExpansionHooks {
    * 那些状态只活在界面层，不进存档、不进回放）。
    */
   boardViews?: (c: { state: GameState }) => BoardView[];
+
+  /**
+   * 顶栏的**常驻徽章**（四季、潮汐、瘟疫这类"整局的一个状态"）。
+   *
+   * 和 `boardViews` 分工：那个是可点击、会往棋盘上染色的视图；
+   * 这个只是几行只读文字。以前「季节」是核心写死的 `TopbarState.season`
+   * 加一个 `data-ref="season"` 的 span——那就是核心为一个扩展开的具名口子，
+   * 现在换成这个。
+   *
+   * 返回空数组 = 这局没有常驻徽章，顶栏那块整块不占位。
+   */
+  topbarBadges?: (c: { state: GameState }) => Array<{
+    /** 稳定 id：换局重建、diff 都用它 */
+    id: string;
+    /** 徽章上的字，短 */
+    text: string;
+    /** 悬停提示 */
+    hint: string;
+  }>;
 
 
   /**
@@ -540,7 +671,8 @@ export interface ExpansionHooks {
   }) => UnitActionOption[];
 
   /**
-   * 处理 `UNIT_ACTION`。**谁声明了 `unitActions` 就由谁处理**（按扩展顺序取第一个），
+   * 处理 `UNIT_ACTION`。**谁在 `unitActions` 里列出了这个 id，就由谁处理**
+   * （同一份 offer 与 handler 成对，见 rules.doUnitAction），
    * 返回字符串 = 拒绝，字符串本身是给玩家看的理由；返回 null = 成功。
    *
    * 副作用（扣资源、改单位、写战报）都在这里做，规则层只负责把动作变成
@@ -567,6 +699,29 @@ export interface ExpansionHooks {
    * 观战（`reveal`）不裁：复盘和双 AI 观战要看全。
    */
   redactUnit?: (c: { state: GameState; unit: Unit; viewer: PlayerId }) => void;
+
+  /**
+   * 视图裁剪：**整个单位都不下发**（返回 true = 这个视角看不见它）。
+   *
+   * 和 `redactUnit` 分工不同：那个是"看得见这个人，抹掉他兜里的东西"，
+   * 这个是"连人影都不给"。空间站的舱段是第一个用户——敌方空间站的**外形**
+   * 是公开的（甲板铺到哪了大家都看得见），但舱段装的是什么、装在哪，
+   * 只能靠轨道轰击一格一格试出来。
+   *
+   * 三条约定和 `redactUnit` 一样（只对非自己的单位调用、观战不裁）。
+   * 额外一条：**记忆也要过这道闸**。否则"曾经看过"会在 `memory.known` 里
+   * 留下一份完整布局，按 F12 就能读出对面站里哪一格有炮——那正是这条
+   * 规则要藏的东西。`playerView` 因此会把这个判据同时用在活单位和幽灵上。
+   */
+  hideUnit?: (c: {
+    state: GameState;
+    /**
+     * 活单位或**记忆里的幽灵**。只保证有 `type / x / y / board`，
+     * 想判归属就从棋盘查（星图上的站有 owner），别读 `unit.owner`。
+     */
+    unit: Pick<Unit, 'type' | 'x' | 'y'> & { board?: Unit['board'] };
+    viewer: PlayerId;
+  }) => boolean;
 }
 
 /** `unitActions` 返回的按钮。文案由扩展给，样式由界面统一。 */
@@ -582,11 +737,35 @@ export interface BoardView {
   /** 悬停提示：这个视图在说什么 */
   hint: string;
   /** 每一格画什么色。返回空数组 = 这一帧不画 */
-  cells?: (c: { state: GameState; viewer: PlayerId }) => Array<{
+  cells?: (c: {
+    state: GameState;
+    viewer: PlayerId;
+    /**
+     * 正在看哪张图。**按格算的视图必须看它**：天气、灵气、控制区都是
+     * "这张图的第 (x,y) 格"，拿地球的格子去算月球，颜色会整体错行。
+     * 缺省 = 地球（老扩展不用改）。
+     */
+    board?: BoardId;
+  }) => Array<{
     x: number;
     y: number;
     /** CSS 颜色，通常带 alpha */
     color: string;
+  }>;
+  /**
+   * 染色层之上再写一个字符（风向箭头这类）。
+   *
+   * 和 `cells` 同一层、同一格：核心只负责"把字画在格中央"，
+   * 画什么字、什么时候该有字，全由扩展决定。
+   *
+   * 为什么不做成"任意 HTML"：这层每帧都在重画，塞 HTML 进去就等于
+   * 让扩展在渲染热路径上跑，而且一个手滑就是注入。字符够用了。
+   */
+  glyph?: (c: { state: GameState; viewer: PlayerId; board?: BoardId }) => Array<{
+    x: number;
+    y: number;
+    /** 一个字符（或很短的串），核心居中画出 */
+    text: string;
   }>;
 }
 
@@ -695,6 +874,31 @@ export interface Expansion {
    * 前置包把这件事变成显式的、可见的选择，而不是藏在代码里的隐式依赖。
    */
   requires?: string[];
+  /**
+   * **互斥**：这些包不能和本包同时开。
+   *
+   * 判据是**双向**的——`A.conflicts` 里有 `B`，等价于 `B.conflicts` 里有 `A`，
+   * 所以只在"更该负责的那一侧"写一次就够了（两边各写一遍，改 id 时必然漏一个）。
+   * 面板上两个包的卡片都会显示出这层关系（`conflictIdsOf` 负责对称化）。
+   *
+   * 冲突不是"数值上不划算"，而是**两套规则互相拆台**：现在唯一一条是
+   * 城郭与修真——城郭把造价改成粮/材（金币只占零头），修真整套经济长在金币
+   * 与灵石上，两个一起开，"钱"这件事就没有意义了。
+   *
+   * 处理方式：勾选时**直接拒绝**并说清是谁挡着（见开局面板）；配置里已经带着
+   * 一对冲突的（老存档、联机快照）由 `enabledExpansionIds` 按顺序保留先出现的
+   * 那个，保证同一个配置在任何机器上都算出同一套规则。
+   */
+  conflicts?: string[];
+  /**
+   * **联动**：和这些包一起开才完整，但**不是前置**——单开也能跑，只是少了那部分。
+   *
+   * 和 `requires` 的区别就一条：`requires` 没满足时整包不进场（连兵带钩子），
+   * 这个只是"少几格内容"。所以它只出现在面板上、不参与任何门控：
+   * 现在是「时代军备 / 海军 / 空军 / 奇想」各自有几个第六代兵种挂在
+   * 「信息化」上（兵种级 `requiresPack`），不开那个包，那几格永远不会出现。
+   */
+  recommends?: string[];
   /**
    * 规则书怎么归册：'small' 进小型扩展合订本，'large' 单独成册。
    *
@@ -918,6 +1122,25 @@ function lastStandDamage(state: GameState, owner: PlayerId, damage: number): num
   return state.firstCityLost === owner ? Math.round(damage * (1 + LAST_STAND_BONUS)) : damage;
 }
 
+/**
+ * 这一族兵算不算**陆地单位**。
+ *
+ * 「闪电战」（`blitz`）从 2026-11-10 起只对陆地生效：水军（`domain: 'water'`）
+ * 与空军（空中层）各自有"跑得快"的表达方式，再叠 +2 会让最快的船/飞机
+ * 直接甩开陆地——两条扩展各给一份速度，最后谁也不认账。
+ *
+ * 空中层的三条判据和 `rules.airLayer` 是同一条口径（layer / flight / 能力标志）。
+ * 这里没直接 import 它：`rules.ts` 反过来依赖本文件的 `activeExpansions`，
+ * 互相 import 会让模块初始化顺序变成隐式前提。判据只有三行，宁可抄一遍，
+ * 也不要一个只在某些加载顺序下成立的循环。
+ */
+export function isGroundUnitType(def: UnitTypeDef | undefined): boolean {
+  if (!def) return false;
+  if (def.layer === 'air' || def.flight === true) return false;
+  if ((def.abilities ?? []).includes('fly-over')) return false;
+  return def.domain !== 'water';
+}
+
 export const EXPANSIONS: Expansion[] = [
   {
     id: 'war-economy',
@@ -938,10 +1161,13 @@ export const EXPANSIONS: Expansion[] = [
     summary:
       '单位每击杀一个敌人永久 +1 攻击力，越打越硬；自己回合开始时，站在**己方城市地块**上的单位回复 8% 最大生命。',
     hooks: {
+      // 只**读** `unit.kills`，不自己累加。
+      //
+      // 累加已经上移到规则层（rules 的 creditKill，在 fireKilled 里调）：
+      // 击杀数是这局发生过的事实，不是这个扩展的属性。留在这里的话，
+      // 没开这个包的对局里所有击杀数都是 0，战报卡的 MVP 就永远是空的；
+      // 而两边都写一遍会变成一杀 +2 攻，等于偷偷把这包加强了一倍。
       modifyDamage: ({ attacker, damage }) => damage + attacker.kills,
-      onUnitKilled: ({ killer }) => {
-        if (killer) killer.kills += 1;
-      },
       // 新增：让老兵不死自己负责在面板上显示加成
       modifyStatAtk: ({ unit, atk }) => {
         // 如果这个兵有击杀数，面板上就加成
@@ -1003,13 +1229,18 @@ export const EXPANSIONS: Expansion[] = [
   {
     id: 'blitz',
     name: '闪电战',
-    blurb: '快速单位跑得更快，但更贵。',
-    summary: '所有移动力 3 以上的快速单位移动 +2、造价 +10%。',
+    blurb: '陆地快速单位跑得更快，但更贵。',
+    summary:
+      '**陆地**上移动力 3 以上的单位移动 +2、造价 +10%。水军与空军不吃这一套——它们的速度归各自的扩展管，' +
+      '再加一档会让"最快的船/最快的飞机"直接甩开陆地。',
     hooks: {
-      modifyMove: ({ state, unit, move }) =>
-        (state.unitTypes[unit.type]?.move ?? 0) >= 3 ? move + 2 : move,
+      modifyMove: ({ state, unit, move }) => {
+        const def = state.unitTypes[unit.type];
+        if (!def || !isGroundUnitType(def)) return move;
+        return def.move >= 3 ? move + 2 : move;
+      },
       modifyCost: ({ unitType, cost }) =>
-        unitType.move >= 3 ? cost + Math.round(cost * 0.1) : cost,
+        isGroundUnitType(unitType) && unitType.move >= 3 ? cost + Math.round(cost * 0.1) : cost,
     },
   },
   {
@@ -1060,7 +1291,7 @@ export const EXPANSIONS: Expansion[] = [
     blurb: '单位阵亡时波及周围。',
     summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害（按护甲结算）——砸不到空中的东西。',
     hooks: {
-      onUnitKilled: ({ state, victim, hurtPhysical, sweepDead }) => {
+      onUnitKilled: ({ state, victim, api, sweepDead }) => {
         const dirs: ReadonlyArray<readonly [number, number]> = [
           [1, 0],
           [-1, 0],
@@ -1120,11 +1351,11 @@ export const EXPANSIONS: Expansion[] = [
           }
           if (!touches) continue;
           /*
-           * 尸体砸人是**物理**伤害：走 hurtPhysical 才会先减甲，
+           * 尸体砸人是**物理**伤害：走 api.hurtPhysical 才会先减甲，
            * 也才会被守御阵替人接下来、写统一战报。
            * 以前这里是 `near.hp -= blast`，于是重甲兵和民兵被砸掉一样多。
            */
-          hurtPhysical(near, blast);
+          api.hurtPhysical(state, near, blast);
           hit += 1;
         }
         if (hit > 0) {
@@ -1218,10 +1449,21 @@ export const EXPANSIONS: Expansion[] = [
   ERA_ARMS,
   CITY_WORKS,
   SEASONS,
+  // 太空时代：目前只做"开局生成月球图"，为后面的火箭/登月打底。
+  // 排在季节之后、修真之前，只是读起来顺——它只挂 onMatchStart，没有判定顺序问题。
+  SPACE_AGE,
+  // 「太空战争」：星图 + 空间站，**依赖太空时代**（requires）。
+  // 紧跟在基础包后面：它挂的是空间站那摊事，和修真/军备没有顺序关系。
+  SPACE_WAR,
   CULTIVATION_PACK,
   // 「信息化」：第六时代的底座——解锁这一级科技 + 9 个最基本的兵。
   // 它是「时代军备」「海军」「空军」里那批第六代兵种的兵种级前置（requiresPack）。
   CONTEMPORARY_BASE_PACK,
+  // 「装甲时代」：第 7 时代的底座 + 装甲素体/模块/供电。排在信息化之后——
+  // 它解的是第 7 级科技，读起来才和时代阶梯同序。
+  ARMOR_ERA7,
+  // 「聚变时代」：第 8 级的底座，前置就是上面这个包（`requires: ['armor-era7']`）。
+  ARMOR_ERA8,
   // 「海军」：第二到第六代的船 + 两条海权规则 + 深水地形 + 水雷（一个包）。
   // 钩子只读地形与城，不参与伤害公式，所以排哪儿都不影响平衡。
   NAVAL,
@@ -1300,6 +1542,42 @@ export function expansionById(id: string): Expansion | undefined {
 }
 
 /**
+ * 这两个包互斥吗。
+ *
+ * **双向判**：`conflicts` 只在一边写，两边都要认。逐对查表比维护一份"冲突对"
+ * 表省事，也不会出现"同一对关系在一个方向生效、另一个方向不生效"。
+ */
+export function expansionsClash(a: string, b: string): boolean {
+  if (a === b) return false;
+  const ca = expansionById(a);
+  const cb = expansionById(b);
+  if (!ca || !cb) return false;
+  return (ca.conflicts ?? []).includes(cb.id) || (cb.conflicts ?? []).includes(ca.id);
+}
+
+/**
+ * 这个包**在面板上**要显示的冲突名单（对称化之后的结果）。
+ *
+ * 只写在一侧的关系，两个包的卡片都得看得见——不然玩家会在"被冲突"的那张卡上
+ * 什么都看不到，勾下去才被拒。
+ */
+export function conflictIdsOf(id: string): string[] {
+  const e = expansionById(id);
+  if (!e) return [];
+  const out = new Set((e.conflicts ?? []).map((x) => MERGED_INTO[x] ?? x));
+  for (const other of EXPANSIONS) {
+    if ((other.conflicts ?? []).some((x) => (MERGED_INTO[x] ?? x) === e.id)) out.add(other.id);
+  }
+  out.delete(e.id);
+  return [...out];
+}
+
+/** 已经选中的这些包里，有哪些和 `id` 冲突（面板拒绝勾选时要指名道姓） */
+export function conflictsWith(ids: readonly string[], id: string): string[] {
+  return normalizeExpansionIds(ids).filter((x) => expansionsClash(x, id));
+}
+
+/**
  * 开局面板与规则书里能出现的那部分扩展（`hidden` 的不在其中）。
  *
  * 只影响"玩家选不选得到"，不影响 `expansionById` / `activeExpansions`：
@@ -1346,14 +1624,23 @@ export function activeExpansions(state: GameState): Expansion[] {
 /**
  * 把"勾了什么"过滤成"真正生效了什么"。
  *
- * 前置关系可能成链（A 要 B、B 要 C），所以这里跑到不动点：
- * 每轮剔掉前置没满足的，直到没有可剔的。写成一次遍历会在
- * "C 被剔掉"和"B 要 C"之间随机出结果——取决于数组顺序，那是不可接受的。
+ * 两条关系在这里合流：
+ *   · `requires`：前置没满足 → 整包不进场；
+ *   · `conflicts`：两个互斥的包同时出现 → **留下先出现的那个**。
+ *
+ * 前置关系可能成链（A 要 B、B 要 C），所以跑到不动点：每轮剔掉前置没满足的，
+ * 直到没有可剔的。写成一次遍历会在 "C 被剔掉" 和 "B 要 C" 之间随机出结果——
+ * 取决于数组顺序，那是不可接受的。
+ *
+ * 冲突也放进同一个循环，因为两者会互相牵动：A 和 B 冲突、C 要 A，
+ * 剔掉 A 之后 C 也得跟着走。循环只会删不会加，所以一定收敛。
  */
 export function enabledExpansionIds(ids: readonly string[]): Set<string> {
   // 同样是先迁移再判前置：`requires` 里写的都是新 id，
   // 老配置带着旧 id 进来时若不迁移，"前置没满足"会把整个包剔掉
-  const on = new Set(normalizeExpansionIds(ids).filter((id) => !!expansionById(id)));
+  const order = normalizeExpansionIds(ids).filter((id) => !!expansionById(id));
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const on = new Set(order);
   for (;;) {
     let changed = false;
     for (const id of Array.from(on)) {
@@ -1361,6 +1648,25 @@ export function enabledExpansionIds(ids: readonly string[]): Set<string> {
       if (need.every((r) => on.has(r))) continue;
       on.delete(id);
       changed = true;
+    }
+    /*
+     * 冲突：按**配置里的先后**保留先出现的那个。
+     *
+     * 为什么是"先出现的赢"而不是"更重要的赢"：这里没有"更重要"这种信息，
+     * 而玩家的心理预期就是"我先勾的那个留下"。面板上想开另一个会先被拒绝，
+     * 所以这条只对老存档 / 联机快照这类"配置里本来就有一对"的情况生效。
+     */
+    for (const id of order) {
+      if (!on.has(id)) continue;
+      const mine = pos.get(id) ?? 0;
+      for (const other of order) {
+        if (other === id || !on.has(other)) continue;
+        if ((pos.get(other) ?? 0) > mine) continue; // 后面那个先让路，等它自己轮回来处理
+        if (!expansionsClash(id, other)) continue;
+        on.delete(id);
+        changed = true;
+        break;
+      }
     }
     if (!changed) return on;
   }

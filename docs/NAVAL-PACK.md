@@ -15,7 +15,7 @@
 | `src/core/types.ts` | `Terrain` 加一档 `deep` | **地形是核心类型**，绕不过 |
 | `src/core/config.ts` | `terrainDef` / `terrainCost` / `terrainName` / `passable` / `navigable` 各加 `deep` | 同上 |
 | `src/core/rules.ts` | ①多格移动（上一批）②吃水判定 ③`adjacentToWater` 认浅流 | 引擎规则 |
-| `src/core/climate.ts` | 深水/浅流归入"水面"档（天气用） | 兼容修复 |
+| `src/core/seasons/climate.ts` | 深水/浅流归入"水面"档（天气用） | 兼容修复 |
 | `src/core/info.ts` / `height-terrain.ts` / `mapgen.ts` | 地形说明、高度表、字符表补 `deep` | 配套 |
 
 一句话：**内容全在扩展区，地形与"大舰能走哪"这两件事必须在核心**——`Terrain` 是核心类型，寻路是核心函数，扩展没有"我自己定义一种地形"的接口（那样每个扩展都要改一份寻路）。

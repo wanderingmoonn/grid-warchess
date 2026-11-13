@@ -1,9 +1,11 @@
 // @ts-nocheck
+import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
 import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
 import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
+import { nextUpgradeCost } from '../../../src/core/config.ts';
 // GameState 只在 nextTurn/unitOf 的签名里当类型用；@ts-nocheck 关掉了检查，
 // 但漏了真 import 的话，将来取消 nocheck 会一次冒出十几个报错。
 import type { GameState } from '../../../src/core/types.ts';
@@ -500,9 +502,14 @@ export function run() {
       id: 't-tower', type: 'cultivation-spirit-tower', owner: 'A' as const,
       x: 5, y: 5, hp: 28, kills: 0, moved: true, acted: false,
     });
+    /*
+     * 靶子先站在散灵台的射程（4 格）外，等 B 的回合自己走进来：
+     * 2026-11-11 起防空建筑不再"回合末补一炮"，只有落位才触发反应射击。
+     */
+    for (let x = 6; x <= 10; x++) s.tiles[5 * s.w + x] = { terrain: 'plain', cityId: null };
     s.units.push({
       id: 't-target', type: 'militia', owner: 'B' as const,
-      x: 6, y: 5, hp: 100, kills: 0, moved: true, acted: true,
+      x: 10, y: 5, hp: 100, kills: 0, moved: true, acted: true,
     });
 
     s.players.A.res = { [SPIRIT_STONE]: TOWER_CHARGE_COST * 2 };
@@ -527,8 +534,12 @@ export function run() {
     );
     console.log('放完技能后的 custom：', towerAfterSkill.custom);
 
-    const r = applyAction(skillRes.state, { type: 'END_TURN' });
-    assert.ok(r.ok);
+    const endTurn = applyAction(skillRes.state, { type: 'END_TURN' });
+    assert.ok(endTurn.ok);
+
+    // B 的回合：把靶子挪进射程（10,5 → 9,5，距离 4）
+    const r = applyAction(endTurn.state, { type: 'MOVE', unitId: 't-target', x: 9, y: 5 });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
 
     console.log('战斗日志：', r.state.log.map(l => l.text));
 
@@ -1299,7 +1310,7 @@ export function run() {
 
     const previewer = SKILL_PREVIEWERS['teleport-swap'];
     assert.ok(previewer, '传送阵要注册落点预览，否则瞄准时什么都看不到');
-    const set = new Set(previewer!({ state: s, self: arr, target: { x: 9, y: 5 } }));
+    const set = new Set(previewer!({ state: s, view: s, self: arr, target: { x: 9, y: 5 } }));
     // 矢量 (4,0)：阵和源侧单位 +4，落点侧单位 −4
     assert.ok(set.has(idx(s, 9, 5)), '阵自己的新位置');
     assert.ok(set.has(idx(s, 10, 5)), '源侧单位的新位置');
@@ -3399,6 +3410,18 @@ export function run() {
     return { s: r.state, spirit: spirit! };
   };
 
+  test('修士造价：升到下一时代花费的一半', () => {
+    // 一条经济刻度，五支修士共用：不跟着这条例走，就会出现"2 代剑修比
+    // 骑士贵三倍"这种没人算得清的价格。
+    const s = fresh({ expansionIds: ['cultivation'] });
+    for (const id of ['qi-cultivator', 'sword-cultivator', 'body-cultivator', 'blood-cultivator', 'soul-cultivator']) {
+      const def = s.unitTypes[id];
+      assert.ok(def, `${id} 要在本局兵种表里`);
+      const want = (nextUpgradeCost(def.era) ?? 0) / 2;
+      assert.equal(def.cost, want, `${id}（${def.era} 代）造价该是 ${want}`);
+    }
+  });
+
   test('魂修：3 代修士，吃修炼也吃灵力', () => {
     const s = fresh({ expansionIds: ['cultivation'] });
     const def = s.unitTypes['soul-cultivator'];
@@ -3462,7 +3485,12 @@ export function run() {
 }
 
 // 这段魔法代码可以让这个文件被单独运行
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// 判据必须走 `pathToFileURL`。Windows 上 `process.argv[1]` 是 `G:\a\b.ts`，
+// 拼成 `` `file://${argv[1]}` `` 得到 `file://G:\a\b.ts`，永远不等于真实的
+// `file:///G:/a/b.ts`——于是整套用例静默跑 0 项、退出码 0，`npm run test:cultivation`
+// 看起来一直是绿的。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run();
   console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
   if (stats.failed > 0) process.exit(1);

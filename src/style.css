@@ -12,6 +12,10 @@
      名字是历史遗留（原本就是 A/B 两方），含义早就泛化了，先不动它。 */
   --a: #2f6ea8;
   --a-soft: #dfeaf4;
+  /* 填充用的主色。和 --a（文字/描边用的强调色）**故意分开**：
+     深色主题里 --a 必须提亮才看得清，但提亮之后白字压上去就不够对比了。
+     一个变量扛两个角色，迟早出现"浅蓝底 + 白字"。 */
+  --a-fill: #2f6ea8;
   --b: #b8433a;
   --b-soft: #f6e2df;
 
@@ -40,11 +44,194 @@
   --marsh: #a9b795;
   --dune: #e8d9a8;
   --shallow: #b7dcd6;
+  /* 月球：月壤比平原更灰更冷，环形山再暗一档——不看图例也能分出坑缘 */
+  --regolith: #d8d4ca;
+  --crater: #b6b1a7;
+  /* 空间站：虚空是"这里还没有东西"，所以近乎全黑；甲板是铺好的冷灰金属 */
+  --void: #14161a;
+  --deck: #7c8592;
+  /* 破损舱段：被打穿的甲板露出舱体，比甲板暗、比虚空亮 */
+  --wreck: #4b413a;
   --lava: #d99a72;
   --volcano: #8d8290;
 
   --radius: 12px;
   --cell: 44px;
+
+  /* ── 状态/语义家族（2026-11-10 第一批 token 化）────────────────────────
+   * 这些值原来散在 13 个选择器里写死。收成 token 不是为了"统一好看"，
+   * 是为了**换主题时它们能跟着走**：深色底上 #3f8a72 这种深绿会糊。
+   * 名字按语义取（ok/warn/danger），不按颜色取（不许叫 --green-500）。 */
+  --ok: #3f8a72;
+  --ok-deep: #3f7a54;
+  --ok-bg: #eef2ea;
+  --hp-high: #7ec47e;
+  --warn: #e0a33c;
+  --warn-deep: #d8892b;
+  --hp-mid: #e8c76b;
+  --danger-ring: #d9483f;
+  --danger-strong: #c0392b;
+  --hp-low: #e07b6b;
+  --price: #a8761a;
+  --ink-warm: #4a463d;
+
+  /* ── 面（2026-11-11）────────────────────────────────────────────────
+   * 一批"写死的浅色底"收成 token：它们原来各自硬编码（#f3f8fb / #fffdf6 /
+   * #fbf7ea / #eae6dd），文字则继承 --text。换深色主题时底色不动、文字变白，
+   * 于是白底白字——扩展标题和"结束后上传详细数据"就是这么消失的。
+   * 收成 token 之后，底色跟着主题走，这类问题从根上断掉。 */
+  --surface-hl: #f3f8fb;      /* 选中面（勾上的扩展项） */
+  --surface-hover: #fffdf6;   /* 悬停面（按钮、书页行、搜索框聚焦） */
+  --surface-warm: #fbf7ea;    /* 升级按钮 */
+  --surface-warm-2: #f6efd8;  /* 升级按钮悬停 */
+  --track: #eae6dd;           /* 进度条底槽（血条/电力条） */
+  /* 永远浅色的面（棋盘、天气徽标）上该用什么字色：两套主题都一样 */
+  --on-light: #2b2823;
+  /* 全屏遮罩（交接、暂停）：浅色主题是一层米白，深色主题必须换成一层暗。
+     复用 --bg 不行：那个是"页面底色"，遮罩要能盖住棋盘又不完全挡住。 */
+  --mask: rgba(242, 239, 232, 0.94);
+
+  /* ── 字阶 ────────────────────────────────────────────────────────────
+   * 2026-11-10 第一批：立 6 档、把半像素并回去。
+   * 2026-11-11 第二批：**所有字号一律走变量**，并补上漏掉的四档。
+   *
+   * 动之前的样子：14 种字号散在 112 处声明里，其中 `--fs-title/h1/h2` 三档
+   * 定义了却**一次都没被引用**（用的人全在直接写 `font-size: 17px`）——
+   * 建了变量没人用，等于没有。
+   *
+   * 现在 11 档，每一档只有一种用途，且全库只剩 `var(--fs-*)`：
+   *
+   *   10 micro  角标、kbd、行内元信息（原 9px 那两处也并进来了）
+   *   11 xs     次级说明：分组标题、meta 行、面板里的注释
+   *   12 sm     小号正文：表格、浮层、列表副行
+   *   13 body   正文：按钮、输入、卡片内容（全库最多，37 处）
+   *   14 md     **基准字号**（body 默认），强调行
+   *   15 h2     小节标题
+   *   16 h1     标题；输入框也必须是它——iOS 上小于 16px 聚焦会放大整页
+   *   17 title  面板标题
+   *   18 xl     弹窗大标题（原来的 19 / 20 一并到这儿，差 1px 看不出来）
+   *   30 num    房间码这类要一眼看清的大数字
+   *   40 hero   首页主标题
+   *
+   * 数值只改过三处：9→10、19→18、20→18。
+   * 别再往这条链里加新值——要更大的字，先问清楚它比 17 大多少、为什么。
+   */
+  --fs-micro: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-body: 13px;
+  --fs-md: 14px;
+  --fs-h2: 15px;
+  --fs-h1: 16px;
+  --fs-title: 17px;
+  --fs-xl: 18px;
+  --fs-num: 30px;
+  --fs-hero: 40px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 现代主题（modern）——**只覆盖变量，不改任何选择器**
+ *
+ * 这就是"双轨并行"的第一层，也是最安全的一层：旧规则一条都不用动，
+ * 只要 `<html data-ui="modern">`，下面这批变量就把底色、文字、描边、
+ * 交互色整体换掉。回退 = 删掉这个属性（或删掉这个块）。
+ *
+ * 覆盖面（实测）：--panel 34 处 · --panel-2 48 处 · --text 44 处 ·
+ * --text-2 49 处 · --text-3 82 处 · --line 71 处 · --line-strong 33 处，
+ * 合计 370 余处引用，改一次全跟着走。
+ *
+ * **地形色（--plain/--forest/…）刻意不动。**
+ * 那 17 个色是按浅底调的，棋盘也一直是浅底；把棋盘一起变暗会让人认不出
+ * 森林和沼泽——"看得清地形"比"整体统一"重要。这条以后要不要动，另说。
+ *
+ * 硬编码色值（193 处）这一版也不动：它们多是按钮/徽标上的强调色，
+ * 换主题时仍然可读。逐个 token 化是下一阶段的事，别在这一步混进来。
+ * ══════════════════════════════════════════════════════════════════════ */
+[data-ui='modern'] {
+  --bg: #14171c;
+  --panel: #1b1f26;
+  --panel-2: #222731;
+  /* 描边与三级文字是按**对比度**定的，不是凭感觉挑的：
+     --line 对 --panel 要 ≥1.5（分得开），--text-3 在三个底色上都要 ≥4.5
+     （它是 11–12px 的正文级文字，不吃"大字 3:1"的例外）。
+     第一版给的是 #2e343f / #737b8a，实测 1.32:1 与 3.51:1，都不达标——
+     `npm run test:contrast` 当场把它们顶回来了。 */
+  --line: #3a4250;
+  --line-strong: #4d5563;
+
+  --text: #e6e9ef;
+  --text-2: #a6adbb;
+  --text-3: #8b93a3;
+
+  /* 交互主色：深底上要提亮，否则 --a 作为文字/描边时对比不够 */
+  /* 作为"文字/描边"的强调色：深底上要提亮 */
+  --a: #5b9cf0;
+  --a-soft: #1d2a3d;
+  /* 作为"填充"的强调色：白字要压在它上面，所以**不提亮**，
+     和旧版保持一致（白字对 #2f6ea8 是 4.8:1）。 */
+  --a-fill: #2f6ea8;
+  --b: #e06058;
+  /* 2026-11-11：#3a2321 太浅了——危险按钮悬停时亮红 --b 压上去只有 4.15:1，
+     差一点点但不合格（13px 正文级）。压暗两档到 #2e1a18 之后是 4.6:1，
+     而且所有用它的地方（错误条、危险按钮底）都在深色主题下，变深只会更协调。 */
+  --b-soft: #2e1a18;
+
+  /* 席位色同样提亮，但**语义分工不变**：红方还是红、蓝方还是蓝 */
+  --team-a: #e06a61;
+  --team-a-soft: #3a2321;
+  --team-b: #6ba6f0;
+  --team-b-soft: #1d2a3d;
+  --team-c: #63c08a;
+  --team-c-soft: #1e3227;
+  --team-d: #d2a13c;
+  --team-d-soft: #33291a;
+
+  /* 圆角略收紧：现代面板偏"直角+小圆"，12px 在大卡片上显圆 */
+  --radius: 10px;
+
+  /* 状态家族：深底上要整体提亮，否则深绿/深红糊成一片。
+     色相不动——"成功是绿、危险是红"这条跨主题不能变。 */
+  --ok: #55b596;
+  --ok-deep: #63c08a;
+  --ok-bg: #1d2b25;
+  --hp-high: #5fbf7f;
+  --warn: #e8b455;
+  --warn-deep: #e0a344;
+  --hp-mid: #e3c069;
+  --danger-ring: #ef6a5f;
+  --danger-strong: #ef7a6c;
+  --hp-low: #e88478;
+  --price: #d8a53f;
+  --ink-warm: #cfc9bd;
+
+  --surface-hl: #22303d;
+  --surface-hover: #2a303a;
+  --surface-warm: #2b2519;
+  --surface-warm-2: #332d1e;
+  --track: #2b3038;
+  --mask: rgba(12, 14, 18, 0.9);
+}
+
+/* （原来这里有三条"深色主题下手写覆盖白底悬停"的补丁。
+   现在那些白底已经换成 --surface-hover / --surface-hl / --track，
+   底色跟着主题走，补丁就该删——留着会变成两套并行的真相。） */
+
+/* 提示条：原来固定深底白字，在深色主题里和背景糊成一片，加描边分开 */
+[data-ui='modern'] .toast {
+  background: #2a303a;
+  box-shadow: 0 0 0 1px #454d5b, 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* 「减少动态效果」：与主题正交的第二个开关。
+   不是把时长调小，而是**整段关掉**——动画前庭敏感的人要的是"不动"，
+   不是"动得快一点"。 */
+[data-motion='reduced'] *,
+[data-motion='reduced'] *::before,
+[data-motion='reduced'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
 }
 
 * {
@@ -61,7 +248,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-md);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -153,7 +340,7 @@ body {
 .brand {
   font-weight: 600;
   letter-spacing: 0.02em;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   white-space: nowrap;
 }
 
@@ -161,7 +348,7 @@ body {
   color: var(--text-3);
   font-weight: 400;
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .topbar-spacer {
@@ -177,7 +364,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-2);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   white-space: nowrap;
 }
@@ -201,6 +388,10 @@ body {
 .side-dot.b {
   background: var(--team-b);
 }
+
+/* 「更多」下拉：低频入口的容器。
+   summary 借了 .btn 的外观（同高同圆角），但去掉 details 的三角标记；
+   菜单浮在顶栏之上，右对齐——顶栏是最后一个元素，往左开才不会顶出屏幕。 */
 
 .topbar-actions {
   display: flex;
@@ -320,12 +511,14 @@ body {
   min-width: 30px;
   height: 28px;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1;
   border-radius: 8px;
   border: 1px solid rgba(120, 110, 92, 0.35);
+  /* 这几个按钮是**浮在棋盘上**的，棋盘在深色主题里也是浅底，
+     所以它们跟棋盘一起保持浅底 + 深字（--on-light），不能跟着面板变深。 */
   background: rgba(252, 250, 244, 0.92);
-  color: #4a463d;
+  color: var(--on-light);
   cursor: pointer;
   backdrop-filter: blur(2px);
   /* 容器已经是 none 了，按钮要把点击收回来 */
@@ -333,12 +526,513 @@ body {
 }
 
 .zoom-btn:hover {
+  /*
+   * 2026-11-11：原来这里是 `var(--surface-hover)`。那一族在 legacy 是浅色、
+   * 在 modern 是深色（#2a303a）——而这几个按钮按上面的注释**永远是浅底深字**
+   * （它们浮在棋盘上，棋盘在深色主题里也是浅底），于是 modern 下悬停变成
+   * 深底压深字，只剩 1.11:1，字直接消失。
+   * 换成和 `.bl-current:hover` 同一个浅色，这一族就自洽了。
+   */
   background: #fffdf6;
   border-color: rgba(120, 110, 92, 0.6);
 }
 
 .zoom-btn:active {
   transform: translateY(1px);
+}
+
+/* ---------- 左上角：星图（地图切换 + 在途） ---------- */
+/*
+ * 收起时只有一枚"当前图"的按钮，点开在它**下面**列出所有节点、相连关系和在途。
+ *
+ * 为什么从右下角搬到左上：左下角挤着缩放条和底栏，玩家反馈"手感不好"——
+ * 一枚要经常点的按钮不该和缩放挤在同一个角上。左上角在顶栏下面，
+ * 平时是空的，点起来也不挡地图中央。
+ *
+ * 容器本身不接点击，只有按钮接。
+ */
+.board-list {
+  position: fixed;
+  left: 14px;
+  /*
+   * 顶栏 +（可能存在的）指挥官条 + 10px。
+   *
+   * 以前写死 `54px + 10px`：上帝模式和 AI 观战会在顶栏下面多一条指挥官条，
+   * 列表就正好压在它上面，两边都点不顺手。`--chrome` 由 `fitBoard()` 写
+   * （它就是算棋盘可用高度时用的那个数），默认 54 是"只有顶栏"。
+   */
+  top: calc(var(--chrome, 54px) + 10px);
+  z-index: 60;
+  display: flex;
+  /* 向下展开：按钮在上，菜单在它下面（以前在左下角是向上展开的） */
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+/*
+ * 只有一张图时整个列表都不出现。
+ *
+ * 它存在的理由是"在地球和月球之间切换"；只有地球的时候，它是一块永远
+ * 只有一个选项的按钮，占着左下角还挡地图。`display:none` 必须写在
+ * `.board-list` 之后（同优先级靠源码顺序压过上面的 `display:flex`），
+ * 也别改成 `visibility`——那还占着点击区。
+ */
+.board-list.single {
+  display: none;
+}
+
+.board-list:hover,
+.board-list:focus-within,
+.board-list.open {
+  opacity: 1;
+}
+
+.bl-current,
+.bl-row,
+.bl-add {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 110, 92, 0.35);
+  background: rgba(252, 250, 244, 0.92);
+  color: #4a463d;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * hover / 选中态把底色换成了更亮的浅色，这里必须**显式再写一遍字色**：
+ * 只有底色、没有 color 的规则，`npm run test:contrast` 会按"继承 --text"去算，
+ * 而现代主题下 --text 近白 —— 于是报"浅底浅字"。
+ * 实际渲染没问题（文字色由上面那条基础规则给死），但显式写出来既不靠推断，
+ * 也把"这族按钮永远浅底深字、不跟主题变深"这条意图写在原地。
+ */
+.bl-current:hover,
+.bl-row:hover {
+  background: #fffdf6;
+  border-color: rgba(120, 110, 92, 0.6);
+  color: #4a463d;
+}
+
+.bl-current {
+  font-weight: 500;
+}
+
+.bl-menu {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  /* 图多的时候别顶出屏幕；超过就自己滚 */
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.board-list.open .bl-menu {
+  display: flex;
+}
+
+.bl-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(120, 110, 92, 0.16);
+  font-size: var(--fs-xs);
+  color: #6b6459;
+}
+
+.bl-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bl-ready {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f0c987;
+  color: #5a4212;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  text-align: center;
+}
+
+.bl-contact {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4553f;
+}
+
+/*
+ * 废墟倒计时：「废 3」。
+ *
+ * 用灰褐色的方块而不是红点：红色在这个列表里已经是"这里有敌人"，
+ * 废墟是"这里快没了"——两件事都得一眼看见，但不能混。
+ * 显式写死深字浅底，别让对比度体检按主题推断。
+ */
+.bl-ruin {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #d9cfc0;
+  color: #4a3b2c;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.bl-row.on {
+  background: #fbf3e2;
+  border-color: rgba(120, 110, 92, 0.7);
+  /* 同理：浅底必须配显式深字，别让体检按 --text 推断（见上面那条注释） */
+  color: #4a463d;
+}
+
+.bl-caret {
+  color: #8b8477;
+  font-size: var(--fs-micro);
+  transition: transform 0.15s ease;
+}
+
+.board-list.open .bl-caret {
+  transform: rotate(180deg);
+}
+
+/*
+ * 星图：相连 + 在途。
+ *
+ * 只读文字，不接点击。航道那行是"谁和谁连着、几回合"，
+ * 在途那行是"谁的东西正在飞、还剩几回合"——同一块面板回答
+ * "我在哪、还能去哪、路上有什么"。
+ */
+.bl-star {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 132px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(120, 110, 92, 0.35);
+}
+
+.bl-lane,
+.bl-trip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: #8b8477;
+  white-space: nowrap;
+}
+
+/* 航程靠右：一行里左边是"谁连着谁"，右边是"几回合" */
+.bl-lane-t,
+.bl-trip-left {
+  margin-left: auto;
+  color: #6b6459;
+}
+
+.bl-trip {
+  color: #6b6459;
+}
+
+.bl-trip-who {
+  font-weight: 500;
+}
+
+/* 列表里的分组标签（"空间站"）：一行小字 + 上方一道细线，不占点击 */
+.bl-sep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 4px 2px 0;
+  border-top: 1px dashed rgba(120, 110, 92, 0.3);
+  font-size: var(--fs-micro);
+  color: #8b8477;
+  pointer-events: none;
+}
+
+.bl-add {
+  border-style: dashed;
+  color: #8b8477;
+  font-size: var(--fs-xs);
+}
+
+/* ---------- 星图覆盖层 ---------- */
+/*
+ * 星图是"长得像棋盘的视图"，不是 boards 里的一张图（见 ui/star-map.ts 开头）。
+ * 盖在棋盘区上、压暗底下的棋盘，按「关闭」退出——这样切换图和看星图
+ * 是两件事，不会互相打断。
+ */
+.star-map {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  padding: 18px;
+  background: rgba(18, 17, 14, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * 不用 `.star-map { display:flex }`：那会被 `[hidden]` 的 UA 样式压住吗？
+ * 反了——是类选择器会压住 `[hidden]`。所以只在"没 hidden"时才给 flex。
+ */
+.star-map:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sm-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.sm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sm-title {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sm-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.sm-close {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.sm-close:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.sm-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--sm, 5), 1fr);
+  grid-template-rows: repeat(var(--sm, 5), 1fr);
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+/* 空格：只画一条极淡的线，让"棋盘"有骨架又不抢节点 */
+.sm-cell {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  opacity: 0.5;
+}
+
+.sm-lanes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 细线负责好看，粗的透明线负责接点击 */
+.sm-lane-line {
+  stroke: var(--line-strong);
+  stroke-width: 0.06;
+  fill: none;
+}
+
+/*
+ * 航线的**命中条**：一根透明的长按钮，铺在两点之间。
+ *
+ * 不把点击挂在 SVG 的 `<line>` 上：那要依赖 SVG 根 `pointer-events:none`
+ * 被子元素覆盖，实机上点不到（上一版就是这么翻车的）。普通按钮的命中
+ * 是浏览器最基础的能力，还自带 hover 与键盘焦点。
+ *
+ * 定位靠百分比：left/top 是 a 格中心的百分比，宽度是两点距离占整块的比例，
+ * 再按角度旋转——正方形网格下这样算正好贴合。
+ */
+.sm-lane-tap {
+  position: absolute;
+  height: 18px;
+  margin-top: -9px;
+  transform-origin: 0 50%;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.sm-lane-tap:hover {
+  background: rgba(216, 162, 74, 0.14);
+}
+
+.sm-lane-tap.on {
+  background: rgba(216, 162, 74, 0.2);
+}
+
+.sm-lane-tap:focus-visible {
+  outline: 2px solid #d8a24a;
+  outline-offset: 1px;
+}
+
+.sm-lane.on .sm-lane-line {
+  stroke: #d8a24a;
+  stroke-width: 0.1;
+}
+
+.sm-node {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: 7%;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sm-node:hover {
+  border-color: #d8a24a;
+}
+
+.sm-node.on {
+  border-color: #d8a24a;
+  box-shadow: inset 0 0 0 1px #d8a24a;
+}
+
+/* 还没有棋盘的节点（轨道槽位）：虚线，看得出来"现在去不了" */
+.sm-node.bare {
+  border-style: dashed;
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sm-node-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 角标挤在右上：待命数、在途、停泊的站数 */
+.sm-ready,
+.sm-trip,
+.sm-stations {
+  position: absolute;
+  top: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  font-size: var(--fs-micro);
+  line-height: 15px;
+  text-align: center;
+}
+
+.sm-ready {
+  right: 3px;
+  background: #f0c987;
+  color: #5a4212;
+}
+
+.sm-trip {
+  right: 3px;
+  top: 20px;
+  background: #7fb0d8;
+  color: #14303f;
+}
+
+.sm-stations {
+  left: 3px;
+  top: 3px;
+  background: #9fd8b6;
+  color: #16402a;
+}
+
+/* 航行中的站：航线上的小三角，位置就是航程进度 */
+.sm-sail polygon {
+  stroke: rgba(20, 18, 14, 0.5);
+  /* 三角本身只有 0.19 个单位宽，描边再粗就把形状糊掉了 */
+  stroke-width: 0.012;
+}
+
+.sm-sail.a polygon {
+  fill: var(--team-a);
+}
+
+.sm-sail.b polygon {
+  fill: var(--team-b);
+}
+
+/* 有空间站正在驶离这个节点：一个轻巧的箭头，不抢站数角标 */
+.sm-sailing {
+  position: absolute;
+  left: 3px;
+  top: 22px;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: #4d8fbf;
+}
+
+.sm-contact {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c4553f;
 }
 
 /* ---------- 棋盘 ---------- */
@@ -369,6 +1063,21 @@ body {
   flex: none;
 }
 
+/*
+ * 笔刷在手：拖动 = 画画，不是滚地图。
+ *
+ * `touch-action: none` 必须在这一层写死。`.board-scroll` 在放大档是
+ * `pan-x pan-y`，手指往边上一划就会被浏览器判成滚动手势，pointermove 直接
+ * 停发——拖到一半断掉，画出来只有第一格。这一条压过祖先的声明。
+ *
+ * 光标**不在这里改**。格子的光标只由交互状态决定（见下面 `.tile` 那段说明），
+ * 笔刷层再给格子写一句 cursor: crosshair 就会和"能不能去"那一套打架——
+ * 而且那条不变量是有测试守着的（它会扫这份样式表里 `.tile` 的基线块）。
+ */
+.board.brush-paint {
+  touch-action: none;
+}
+
 .tiles {
   display: grid;
   grid-template-columns: repeat(var(--cols, 12), 1fr);
@@ -392,12 +1101,28 @@ body {
  * 加新地形时别在 `.tile.t-*` 里写 cursor——那一定会和可达性打架。
  */
 .tile {
+  /* 棋盘是**唯一**不跟主题变的面（地形色按浅底调的）。
+     所以格子里的字色必须钉死成深色——继承 --text 的话，主题一变就白底白字。 */
+  color: var(--on-light);
   position: relative;
   border-right: 1px solid rgba(0, 0, 0, 0.045);
   border-bottom: 1px solid rgba(0, 0, 0, 0.045);
   cursor: pointer;
 }
 
+/*
+ * 基础地形：纯色。
+ *
+ * 2026-11-11 这里一度塞了手画的 CSS 纹理（radial-gradient 点阵、假树冠、假坡），
+ * 想解决"一片死色"。**删掉了**，两个原因：
+ *   1. 小格子上它一眼假——44px 里那几个半圆看着像贴纸，不像地面；
+ *   2. 更要命的是它成了**默认外观**：开关默认关，玩家看到的就是这套手画的，
+ *      真正生成的材质反而要手动去开。回退方案不该冒充成品。
+ *
+ * 现在：关 = 纯色（就是这张表），开 = 生成的材质图（见下面那一节）。
+ * 深水波纹、山、台地、沼泽、沙丘这些**保留**——它们是识别标志（"这是山，过不去"），
+ * 不是纹理，删了玩家会认错地形。
+ */
 .tile.t-plain {
   background: var(--plain);
 }
@@ -409,6 +1134,593 @@ body {
 }
 .tile.t-water {
   background: var(--water);
+}
+
+/*
+ * ── 地形材质（2026-11-11，图片层，默认关）─────────────────────────────
+ *
+ * 和上面那几条 CSS 纹理是**同一件事的两档**：关着用 CSS 画的（有纹理但一眼假），
+ * 开着换成混元生成的材质图（真材质，跨格连续）。
+ *
+ * 取景方式值得说明：每格用 `--x/--y` 去同一张 512×512 的大图上切一块，
+ * 因此**同一种地形连成片时纹理是连续的**——这正是 CSS 逐格平铺做不到的事
+ * （每格独立元素，图案只能各自重复，连起来就是墙纸）。
+ *
+ * 关着的时候这几个规则一条都不匹配，浏览器也不会去下载那几张 webp。
+ * 没有图的地形（台地/谷地/沼泽/沙丘/月壤/熔岩/城市/桥）继续用上面那套。
+ */
+html[data-terrain='on'] .tile {
+  /*
+   * 图的原始尺寸（512）。这一档是唯一说得通的：以下三种实测都不行——
+   *   768 → 每格是"几个放大的圆"，糊；
+   *   320 → 圆变小，还是糊；
+   *   128 → 纹理被压没了，整片退回纯色，只剩零星圆点。
+   *
+   * 根本原因是**图本身是照片纹理**，缩到 44px 的窗口里没有可读的层次。
+   * 想要"看得见的材质"，得换成图案化的 tile（每格一棵树、一块石头那种
+   * 专门为小尺寸画的图形），不是把大图缩一缩。这条留在这里是给下次的提醒。
+   */
+  background-size: 512px 512px;
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--cell) * -1)
+    calc(var(--y, 0) * var(--cell) * -1);
+}
+
+/*
+ * ── 两处结构性修正（2026-11-12 晚）───────────────────────────────────
+ *
+ * 用户连着两轮说"同地形之间的线还在"，这次定位到了真凶，都不是 border：
+ *
+ * 1. **每格各画一张背景**。`.tiles` 的轨道是 `1fr`，12 列 798px → 每格 66.5px，
+ *    是小数；每格背景按 `--x * --cell` 去大图上取景，落点亚像素，相邻格各自
+ *    绘制、各自抗锯齿，交界处必留一条 1px 的缝。抹 `border` 是抹不掉它的。
+ * 2. **`box-shadow: inset 0 0 0 1px`**。台地、深水、浅流、山、熔岩各有一条，
+ *    每格一圈内描边——它不叫 border，所以前两轮全漏了。
+ *
+ * 所以地面改成**整块挂在 `.tiles` 上**（一次绘制，缝不可能发生），平原格自己
+ * 不再有背景；同时把上面那几条内描边关掉。
+ */
+html[data-terrain='on'] .tiles {
+  background-color: var(--plain);
+}
+/*
+ * 材质模式下把格线**彻底去掉**（宽度也归零，不只是改颜色）。
+ *
+ * 上一版只写了 `border-color: transparent`，以为"看不见就是没有"。实测有两处漏：
+ *
+ *   1. **格子底色从边框里透出来。** `background-origin` 初始值是 `padding-box`，
+ *      贴图从内边距框起画，那 1px 边框里露的是格子自己的 `background-color`。
+ *      整片丘陵上于是浮出一层浅色网格线——不是抗锯齿，也不是接缝。加
+ *      `border-box` 之后贴图铺过去了，但只修好了"图"，没修好别的两层：
+ *   2. **`inset` 阴影画不进边框那 1px。** 内阴影是从边框**内缘**往里画的，
+ *      所以高山的断崖阴影/邻格投影到了格边就停住，留一条没压暗的亮缝
+ *      （实测那一列比两侧亮 24~40 个亮度级）。相邻两格各让 1px，缝正好在中间。
+ *   3. 那一列**仍然**比两侧亮 7 级（丘陵）：即使贴图铺到了，元素边缘落在
+ *      44.9px 这种小数上，最后一列是半覆盖的抗锯齿像素，底下的 `.tiles`
+ *      底色（`--plain` 的浅绿）会掺进来一点，连成片就是一条淡线。
+ *
+ * 三者同一个根源：**多出来的那 1px 边框**。所以直接归零。
+ *
+ * 关于"归零会不会动布局"：不会。`* { box-sizing: border-box }`，格子宽度来自
+ * 网格轨道（`repeat(n, 1fr)`），边框在这条宽度**里面**，去掉它只是内容框宽 1px。
+ * 实测同一格在改前/改后都是 44.891×44.891，±0 变化。（早先那句"border: 0 会
+ * 改变 box 尺寸"是 content-box 时代的结论，在这里不成立，改前先量了一遍。）
+ */
+html[data-terrain='on'] .tile {
+  background-origin: border-box;
+  border-width: 0;
+}
+/*
+ * 内描边（`inset 0 0 0 1px`）统一由下面那条合成规则盖掉：合成用的是透明的
+ * 占位阴影，等于把各 terrain 自带的"每格一圈"关掉，又不会和新的边缘阴影打架。
+ */
+/*
+ * 浅水的横条是逐格重复的：相位对不上，相邻格接起来就是"每格一条横线"。
+ *
+ * 这一层在材质模式下**改作水陆过渡用**（见下面"深水 ↔ 浅水的过渡"那一节）：
+ * 关掉的是"每格一条横线"，不是这个伪元素本身。
+ */
+
+/*
+ * ── 图案化 tile（B 方案，2026-11-12）──────────────────────────────────
+ *
+ * 和上面那张"一张大图取景"是两种完全不同的做法：
+ *   · 大图取景：把 512 的照片纹理缩小塞进 44px —— 没有可读层次（四档都试过）；
+ *   · 图案 tile：一个 tile 就是一个**为小尺寸画的图形**（一棵树、一块石头），
+ *     缩到 40px 仍然读得出"这是树"。这是 Advance Wars / Wargroove / 陷阵之志
+ *     那类地图的做法。
+ *
+ * 每种地形三张变体，按 `data-v`（由 board.ts 按坐标算）挑，避免同一片林子
+ * 全是同一个图标排成阵列。
+ *
+ * 图是**透明底**：地面色仍来自 `--forest` 那套变量，tile 只负责"长什么"。
+ * 所以换成 tile 之后，地形的色相不会跑——玩家靠颜色判断走位这件事没被破坏。
+ */
+/* tile 的公共摆放方式：一格一张，铺满，不重复 */
+/*
+ * 森林 tile 直接内联成 base64。
+ *
+ * 为什么不做成 /art/terrain/forest-1.png：**线上静态资源被托管拦了**——
+ * 不带 sharecode 的请求一律 403（连 assets 里的 js 也一样，curl 测的），
+ * 首页能开是因为浏览器走了别的路径，但图片没有那个保证。
+ * 三张 128 的 png 一共 ~30KB，base64 后 ~40KB，塞进 CSS 是能接受的代价：
+ * 它跟着 CSS 一起加载，不再依赖任何额外的静态请求。
+ *
+ * 以后图多了（六种地形 × 三张）就不适合内联了，那时候该换成
+ * 可访问的图床或者修托管的权限。
+ */
+/*
+ * 120%：让树冠超出格子一圈，被边界裁掉。
+ *
+ * 100% 时每格是一棵"完整的树"、四周留白，连成片就是"树图标阵列"，
+ * 格与格之间有空隙。放大到 120% 之后相邻的树互相压住一点，
+ * 才有"一片林子"的连接感。
+ *
+ * 不能更大：格子 67px 时 120% 是 80px，128 的图缩到 80 仍然清晰；
+ * 再往上（140%）图会被放大到超过原尺寸，边缘开始发毛。
+ */
+/*
+ * ── 后续地形的出图规格（2026-11-12 定）────────────────────────────────
+ *
+ * 森林用的这套是"一棵树 + 四周透明"，所以要靠 120% 放大来补连接感。
+ * **平原和丘陵不要照抄这个做法**，用户要的是：
+ *
+ *   图案铺满整个格子、边缘一直延伸到边界，拼起来无缝。
+ *
+ * 也就是"一张能平铺的地面质感"（草叶铺满、坡纹连成一片），而不是
+ * "一格一个独立图标"。这样相邻格天然连成一片，不需要放大去补缝。
+ *
+ * 命名不变：plain-1/2/3.png、hill-1/2/3.png，128×128、透明底可以留空
+ * （铺满图案时底色由 --plain/--hill 提供，图只画纹理和明暗）。
+ */
+html[data-terrain='on'] .tile.t-forest {
+  background-size: 120% 120%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-terrain='on'] .tile.t-forest {
+  background-image: url("data:image/png;base64,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");
+}
+/*
+ * 平原：**没有自己的纹理**——底色由 `.tiles` 那一层给。
+ *
+ * 之前铺的是一张 200px 的草地噪声（白点铺满整格）。那个"密"是结构性的：
+ * 均匀铺满的高频亮点永远读作雪花/盐粒，把对比度压下去只会变成"一块很平的
+ * 绿纸上面还有雪"，调参数救不回来。撤掉。
+ *
+ * 现在地面是整块的一层，平原格里只剩**零星一簇草**（密度 1/5 格）。
+ */
+html[data-terrain='on'] .tile.t-plain {
+  background: transparent;
+}
+/*
+ * 那簇草。
+ *
+ * **高度必须明显低于树**：树在 66px 的格子里约 39px 高，这里按 42% 格宽铺，
+ * 草叶实际 13~15px，占三分之一格。上一版按 78% 格宽铺、草叶 30px，
+ * 比树还高，整片读成"杂草丛生"——用户的原话是"草又比树高了"。
+ *
+ * 位置用 `--jx/--jy` 错开（0~18px 折一半），否则每格都在同一个角落长一簇。
+ */
+html[data-terrain='on'] .tile.t-plain[data-d='1']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/webp;base64,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");
+  background-repeat: no-repeat;
+  background-size: 42% auto;
+  background-position: calc(30% + var(--jx, 0px) * 0.5) calc(48% + var(--jy, 0px) * 0.5);
+  pointer-events: none;
+}
+
+/*
+ * 迷雾里没见过的格子不画地形细节。
+ *
+ * 看不清的地方本来就不该有"这里有石堆"的信息——那是给眼睛看的，
+ * 而这一类格子恰恰是"你看不清"的语义。何况一大片灰底上撒满彩色小图标，
+ * 观感上比纯色乱得多。
+ */
+/*
+ * 同种地形相邻时把那条边线藏掉——**这条已经不需要了**。
+ *
+ * 老方案是逐格算 `data-jr` / `data-jd`（右、下各一条），只把同地形那两侧的
+ * `border-color` 抹成透明。现在材质模式下所有格子的边框宽度都是 0，
+ * 没有线可藏；board.ts 里算这两个属性的代码也早就不在了（规则留着会误导下一个
+ * 改这里的人）。删掉。
+ */
+
+html[data-terrain='on'] .tile.out {
+  /* !important 在这里是必要的：`.t-forest[data-v='1']` 那几条是 (0,4,1)，
+     光靠 `.tile.out` 的 (0,3,1) 压不住，而"看不见的格子不画细节"是硬规则 */
+  background-image: none !important;
+}
+html[data-terrain='on'] .tile.t-forest[data-v='1'] {
+  background-image: url("data:image/webp;base64,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");
+}
+
+/*
+ * 关掉为"纯色块"配的那几个几何装饰。
+ *
+ * `.t-forest::before` 是一个半透明圆、`.t-hill::before` 是一道拱形——
+ * 它们是给纯色地面加"这里有点东西"的暗示用的。但它们画在**背景图之上**，
+ * 所以接上 tile 之后，看到的永远是那个圆，图再换也没用。
+ * 排查了两轮才想到这一层：一直以为是图糊了。
+ *
+ * 山、火山、台地、沼泽、沙丘的 `::before` **不在此列**：那些是形状标志
+ * （"这是山、过不去"），删了玩家会认错地形。
+ */
+html[data-terrain='on'] .tile.t-forest::before,
+html[data-terrain='on'] .tile.t-hill::before {
+  display: none;
+}
+/*
+ * 丘陵：**一张铺满整格、四边可平铺的"地面"**，不是"中心摆几块石头"。
+ *
+ * 这是第三次改。前两版都是"一格一张透明底的物件图"（中心两三个土丘），
+ * 结果格与格之间留着一圈底色，读成"沙地上摆了几块大石头"。
+ * 丘陵是**地形**，应该像草地那样满幅铺开、纹样一直画到边界、相邻格接得上。
+ *
+ * 做法：用混元生成一张"满地小土包"的纹理，裁掉右下角角标后缩到 198px，
+ * 按亮度重新映射到四档固定调色板（#8f774e / #a98e62 / #c6b284 / #d6c59b）
+ * ——生成图本身偏橙、对比也重，不重新上色会和树/草不是一套语言。
+ *
+ * `background-size` 跟着 `--cell` 走（3 格），所以棋盘缩放时颗粒大小不变；
+ * 取景按格坐标偏移（`--x/--y`），相邻格取纹理上相邻的一块，整片丘陵连续，
+ * 不会出现"每格贴一张同样的图"的阵列感。
+ */
+/*
+ * 丘陵：**一张铺满整格、四边可平铺的"地面"**，不是"中心摆几块石头"。
+ *
+ * 这是第三次改。前两版都是"一格一张透明底的物件图"（中心两三个土丘），
+ * 结果格与格之间留着一圈底色，读成"沙地上摆了几块大石头"。
+ * 丘陵是**地形**，应该像草地那样满幅铺开、纹样一直画到边界、相邻格接得上。
+ *
+ * 做法：用混元生成一张"满地小土包"的纹理，裁掉右下角角标后缩到 198px，
+ * 按亮度重新映射到四档固定调色板（#8f774e / #a98e62 / #c6b284 / #d6c59b）
+ * ——生成图本身偏橙、对比也重，不重新上色会和树/草不是一套语言。
+ *
+ * `background-size` 跟着 `--cell` 走（3 格），所以棋盘缩放时颗粒大小不变；
+ * 取景按格坐标偏移（`--x/--y`），相邻格取纹理上相邻的一块，整片丘陵连续，
+ * 不会出现"每格贴一张同样的图"的阵列感。
+ */
+html[data-terrain='on'] .tile.t-hill {
+  background-image: url("data:image/png;base64,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");
+  background-size: calc(var(--cell, 44px) * 5) calc(var(--cell, 44px) * 5);
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--cell) * -1)
+    calc(var(--y, 0) * var(--cell) * -1);
+}
+
+/*
+ * 丘陵区的外缘阴影（2026-11-12，第六次尝试）。
+ *
+ * 前面五种做法（居中物件、镜像平铺、满幅纹理、抠块重撒、每格明暗）全败在同一处：
+ * **光影或图案一旦逐格重复，格子就会浮出来**——上亮下暗成横条纹、每格光晕成绗缝
+ * 被面。所以这一次不在格子里画，只在**区域轮廓**上画：
+ *
+ *   丘陵区内部什么都不加，只有贴着别的地形的那一面，在**内侧**压一道阴影。
+ *   整块丘陵于是像一块被抬起来的地，四周有一圈坎，中间干净。
+ *
+ * `data-et/er/eb/el` 由 board.ts 按上下左右四邻算好（1 = 那边是别的地形）。
+ * 四个方向各写进一个自定义属性、最后合成一条 `box-shadow`——多条边同时是边缘时
+ * 才不会互相覆盖（直接写四条 box-shadow，后者会把前者顶掉）。
+ *
+ * 上亮下暗是有意的：抬起来的东西，上沿吃光、下沿投影，光的方向和树、土堆一致。
+ */
+/*
+ * 阴影合成：所有 terrain 共用一条 `box-shadow`，八条占位阴影分别由
+ * `--e-*`（自己这块地的四缘）和 `--m-*`（邻格高山投过来的影子）填。
+ *
+ * 为什么必须合成一条：`box-shadow` 是整条覆盖的，分开写四五个规则的话，
+ * 后写的会把前面的顶掉——之前丘陵"只有一边有坎"就是这个原因。
+ */
+html[data-terrain='on'] .tile {
+  /* 一格宽。下面所有阴影的尺寸都按它的比例算，缩放时自动跟着变 */
+  --u: var(--cell, 44px);
+  --e-t: 0 0 0 transparent;
+  --e-r: 0 0 0 transparent;
+  --e-b: 0 0 0 transparent;
+  --e-l: 0 0 0 transparent;
+  --m-t: 0 0 0 transparent;
+  --m-r: 0 0 0 transparent;
+  --m-b: 0 0 0 transparent;
+  --m-l: 0 0 0 transparent;
+  box-shadow:
+    var(--e-t),
+    var(--e-r),
+    var(--e-b),
+    var(--e-l),
+    var(--m-t),
+    var(--m-r),
+    var(--m-b),
+    var(--m-l);
+}
+/*
+ * 下面四条 `--e-*` 全部改用 `--u`（= 一格宽）的比例，不再写死 px。
+ *
+ * 以前的像素值是按格宽 25px 调的，放大到 66px 时那道坎只剩薄薄一层，
+ * 缩到 20px 又糊成一团——"放大和 32×32 时尤其明显"的缺陷报告里有一半是它。
+ * 坎的本质是"坡有多高"，坡当然该跟着格子一起长。
+ */
+html[data-terrain='on'] .tile.t-hill[data-et='1'] {
+  --e-t: inset 0 calc(var(--u) * 0.12) calc(var(--u) * 0.12) calc(var(--u) * -0.08) rgba(255, 252, 240, 0.55);
+}
+html[data-terrain='on'] .tile.t-hill[data-eb='1'] {
+  --e-b: inset 0 calc(var(--u) * -0.24) calc(var(--u) * 0.28) calc(var(--u) * -0.16) rgba(96, 74, 42, 0.55);
+}
+html[data-terrain='on'] .tile.t-hill[data-el='1'] {
+  --e-l: inset calc(var(--u) * 0.16) 0 calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.30);
+}
+html[data-terrain='on'] .tile.t-hill[data-er='1'] {
+  --e-r: inset calc(var(--u) * -0.16) 0 calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.30);
+}
+
+/*
+ * 高山：同一套 `--e-*`，但**重一档**。
+ *
+ * 丘陵的坎是 0.12~0.28 格宽、alpha 0.3~0.55；山用 0.24~0.56、0.45~0.60，
+ * 底部那道压得最深最宽（山的侧面高，投在自己脚下的阴影也长）。
+ * 上沿的亮边反而收了一点（0.45）：峰体自己顶上就有高光，格边上再来一道
+ * 亮线会变成"每格一个框"。
+ */
+html[data-terrain='on'] .tile.t-mountain[data-et='1'] {
+  --e-t: inset 0 calc(var(--u) * 0.24) calc(var(--u) * 0.28) calc(var(--u) * -0.16) rgba(255, 252, 240, 0.45);
+}
+html[data-terrain='on'] .tile.t-mountain[data-eb='1'] {
+  /*
+   * 南缘是山的"立面"。两条阴影叠起来才有立面感：
+   *   宽而软的一条 = 坡；
+   *   贴边窄而硬的一条 = 坡脚那条折线（没有它，坡就是一团雾）。
+   */
+  --e-b:
+    inset 0 calc(var(--u) * -0.46) calc(var(--u) * 0.34) calc(var(--u) * -0.16) rgba(26, 32, 44, 0.52),
+    inset 0 calc(var(--u) * -0.07) calc(var(--u) * 0.05) 0 rgba(20, 26, 36, 0.42);
+}
+html[data-terrain='on'] .tile.t-mountain[data-el='1'] {
+  --e-l:
+    inset calc(var(--u) * 0.30) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(26, 32, 44, 0.38),
+    inset calc(var(--u) * 0.05) 0 calc(var(--u) * 0.04) 0 rgba(20, 26, 36, 0.34);
+}
+html[data-terrain='on'] .tile.t-mountain[data-er='1'] {
+  --e-r:
+    inset calc(var(--u) * -0.30) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(26, 32, 44, 0.38),
+    inset calc(var(--u) * -0.05) 0 calc(var(--u) * 0.04) 0 rgba(20, 26, 36, 0.34);
+}
+
+/*
+ * 邻格投过来的影子（`data-m*`）—— "谁比谁高"最管用的那条线索。
+ *
+ * 一块地高不高，眼睛主要看**旁边陷不陷下去**，而不是自己画得多亮。
+ * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
+ * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
+ *
+ * 值从 "1" 改成 `m` / `h`：m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
+ * 这样画出来是**两级台阶**——丘陵把地面压低一点，山再压低一截。
+ * 以前只有山有影子，于是"山"只是"一块更灰的地"，因为没有参照物说它更高。
+ *
+ * 冷暖也分开：山影偏冷（蓝灰），丘影偏暖（土黄）。冷暖差比明度差更容易
+ * 读出"远处的高地"，而且不会让整片地都变脏。
+ */
+html[data-terrain='on'] .tile[data-mt='m'] {
+  /*
+   * 山投在下一格上的影子，同样两层：一层铺开（影子的衰减）、一层贴边（接触影）。
+   * 只有软的一层时，远看像那块地"本来就暗"，不像"被挡住了光"。
+   */
+  --m-t:
+    inset 0 calc(var(--u) * 0.52) calc(var(--u) * 0.72) calc(var(--u) * -0.34) rgba(24, 30, 44, 0.46),
+    inset 0 calc(var(--u) * 0.10) calc(var(--u) * 0.12) 0 rgba(20, 26, 38, 0.34);
+}
+html[data-terrain='on'] .tile[data-ml='m'] {
+  --m-l: inset calc(var(--u) * 0.36) 0 calc(var(--u) * 0.44) calc(var(--u) * -0.24) rgba(26, 32, 46, 0.26);
+}
+html[data-terrain='on'] .tile[data-mr='m'] {
+  --m-r: inset calc(var(--u) * -0.44) 0 calc(var(--u) * 0.52) calc(var(--u) * -0.28) rgba(26, 32, 46, 0.34);
+}
+html[data-terrain='on'] .tile[data-mb='m'] {
+  --m-b: inset 0 calc(var(--u) * -0.24) calc(var(--u) * 0.36) calc(var(--u) * -0.24) rgba(26, 32, 46, 0.22);
+}
+
+html[data-terrain='on'] .tile[data-mt='h'] {
+  --m-t: inset 0 calc(var(--u) * 0.18) calc(var(--u) * 0.34) calc(var(--u) * -0.14) rgba(96, 74, 42, 0.22);
+}
+html[data-terrain='on'] .tile[data-ml='h'] {
+  --m-l: inset calc(var(--u) * 0.14) 0 calc(var(--u) * 0.24) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.14);
+}
+html[data-terrain='on'] .tile[data-mr='h'] {
+  --m-r: inset calc(var(--u) * -0.18) 0 calc(var(--u) * 0.28) calc(var(--u) * -0.14) rgba(96, 74, 42, 0.18);
+}
+html[data-terrain='on'] .tile[data-mb='h'] {
+  --m-b: inset 0 calc(var(--u) * -0.12) calc(var(--u) * 0.20) calc(var(--u) * -0.12) rgba(96, 74, 42, 0.12);
+}
+
+/*
+ * 水面流动（2026-11-12）。
+ *
+ * 做法：两层**软高光**在纯色水面上漂移，方向和速度都不同，产生微微的波光。
+ * 为什么不用贴图加 `animation`：贴图是 512px 的、按格取景，动起来每格的相位会
+ * 各走各的，接缝立刻显形。这里用一个**尺寸固定的周期图案**（104×56 / 152×72），
+ * 动画的位移正好等于它自己的周期，所以首尾严丝合缝、可以无限循环；
+ * 每格的图案又是同一相位，连成片就是整片水一起动。
+ *
+ * 两个关键约束写在下面：大地图（>1024 格）关掉——那是逐格的 repaint，
+ * 4096 格同时动会把帧率吃掉；系统开了"减少动态效果"的也关掉。
+ */
+html[data-terrain='on'] .tile.t-water {
+  /*
+   * 相位对齐（`--wx/--wy`）。
+   *
+   * 上一版写成 `background-position: 0 0`，每格从图案的同一处开始画——
+   * 于是**每一格的图案完全一样**，软高光在格心、格边是暗的，连起来就是一张
+   * 方格网。用户说的"水域格子之间的接缝更突出"就是这个。
+   *
+   * 现在按格坐标偏移：相邻格取图案上相邻的一块，整片水是**一张连续的图**。
+   * 偏移量写进自定义属性，因为 keyframes 里也要用它（动画从 --wx 移动到 --wx+周期）。
+   */
+  --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
+  --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
+  background-image:
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 72%);
+  background-size: 118px 70px, 168px 94px;
+  background-repeat: repeat;
+  animation: water-flow 7s linear infinite;
+}
+/* 深水：同一个图案、压暗一档、慢一倍——"看不到底"的水流得慢 */
+html[data-terrain='on'] .tile.t-deep {
+  --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
+  --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
+  background-image:
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 72%);
+  background-size: 118px 70px, 168px 94px;
+  background-repeat: repeat;
+  animation: water-flow 13s linear infinite;
+}
+/*
+ * 位移正好各走一个周期（+148 / −214），首尾接得上；
+ * 起点是这一格的 `--wx/--wy`，所以整片水是同一个相位在走。
+ */
+@keyframes water-flow {
+  from {
+    background-position: var(--wx, 0px) var(--wy, 0px), var(--wx, 0px) var(--wy, 0px);
+  }
+  to {
+    background-position:
+      calc(var(--wx, 0px) + 118px) var(--wy, 0px),
+      calc(var(--wx, 0px) - 168px) var(--wy, 0px);
+  }
+}
+/* 大地图逐格 repaint 太贵；系统要求减少动效时也不该动 */
+html[data-terrain='on'] .board.big .tile.t-water,
+html[data-terrain='on'] .board.big .tile.t-deep {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-terrain='on'] .tile.t-water,
+  html[data-terrain='on'] .tile.t-deep {
+    animation: none;
+  }
+}
+html[data-terrain='on'] .tile.t-deep::before {
+  display: none;
+}
+/*
+ * ── 深水 ↔ 浅水的过渡（2026-11-13）────────────────────────────────────
+ *
+ * 深水 #4a7fa6、浅水 #a8cadf，两档差得够远，硬拼在一起就是一条刀切边。
+ * 而"脚底下还能踩，往外一步就没底"本来是连续的地形，边界该是一道坡。
+ *
+ * 做法（和邻格投影同一套思路）：**谁挨着另一档，就在自己这一侧朝那边铺
+ * 一道半透明的对方色**，两侧各铺一半。于是边界那条线上的颜色
+ * = 0.5×我的 + 0.5×他的，两边算出来是同一个值，接缝就消失了。
+ *
+ * 为什么不用 `background` 直接改 tile 本身：水面的动态波纹是
+ * `animation: water-flow` 在动 `background-position`，而 keyframes 只写了
+ * 两层——再往 `background-image` 里插一层渐变，渐变会被那条动画的位移
+ * 拖着走。所以过渡放在伪元素上，和动画互不干扰。
+ *
+ * `data-wt/wr/wb/wl` 由 board.ts 按四邻算好：`d` = 我这边浅、朝深水铺深色；
+ * `l` = 我这边深、朝浅水铺浅色。四个方向各一条渐变，没邻居的那几侧是
+ * `transparent`（渐变两端同色，等于没画），所以不用为每种组合单写规则。
+ */
+html[data-terrain='on'] .tile.t-water::before,
+html[data-terrain='on'] .tile.t-deep::before,
+html[data-terrain='on'] .tile.t-shallow::before {
+  display: block;
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* 覆盖掉非材质模式那层"每格一条横线" */
+  background: none;
+  /*
+   * 过渡带只占 **15%** 格宽。
+   *
+   * 先写过 55%：45px 的格子上两边各糊 22px，深水整格都被抹开，一条 1 格宽的
+   * 水道直接糊成一团水彩——2026-11-13 用户截图说"好乱好难看"。
+   * 现在 15% ≈ 7px，两格合起来 14px：读起来是"边上收了个圆角"，不是"抹了一道"。
+   * 再窄就回到刀切边，再宽就又开始糊，这个值别再往上加。
+   */
+  background-image:
+    linear-gradient(to left, var(--nb-r, transparent), transparent 15%),
+    linear-gradient(to right, var(--nb-l, transparent), transparent 15%),
+    linear-gradient(to bottom, var(--nb-t, transparent), transparent 15%),
+    linear-gradient(to top, var(--nb-b, transparent), transparent 15%);
+}
+
+/*
+ * 叠什么色：只按"邻居是哪一档"决定，不看我自己的类型。
+ * 两侧都用 0.5 的 alpha，中点才会重合；只要有一侧偷懒用别的值，
+ * 边界上就会重新出现一条缝（这条是这套做法唯一必须守住的数）。
+ */
+html[data-terrain='on'] .tile[data-wt='d'] {
+  --nb-t: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wr='d'] {
+  --nb-r: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wb='d'] {
+  --nb-b: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wl='d'] {
+  --nb-l: rgba(74, 127, 166, 0.5);
+}
+html[data-terrain='on'] .tile[data-wt='l'] {
+  --nb-t: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wr='l'] {
+  --nb-r: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wb='l'] {
+  --nb-b: rgba(168, 202, 223, 0.5);
+}
+html[data-terrain='on'] .tile[data-wl='l'] {
+  --nb-l: rgba(168, 202, 223, 0.5);
+}
+/*
+ * 高山（2026-11-13 第二次重做）。
+ *
+ * 走过两条死路，都记在这里，免得再走：
+ *
+ *   ① **一格一座峰**（程序画的三角锥 / 图像生成的写实峰体）。锥体的轮廓太强，
+ *      一格一个就成了盖章：九格九个尖，横竖都对齐；换成写实的又和淡彩平面打架。
+ *      用户的话："你怎么跑都是一个三角锥，稍微写实一点就又违和又不好看。"
+ *   ② **浅灰细麻点**（原始那版）。也没有形状，而且当年连 `background-size` 都
+ *      没写，每格都在采样同一小块，整片山是一模一样的浅灰方板。
+ *
+ * 现在这一版不放任何"单格物件"，只做**连续的石质地面**：
+ * 纹理横跨 5 格、按格坐标取景，相邻格接得上；高差完全交给阴影三条线——
+ * 区域的坎（`--e-*`）、邻格的投影（`data-m*`）、以及纹理自己的大尺度明暗。
+ */
+/*
+ * 只换成材质，**不再叠任何形状**：`.tile.t-mountain::before` 是给"关掉材质"
+ * 那套图标用的三角锥，材质模式下必须关掉——否则岩面底下会冒出一排蓝三角，
+ * 就是上一轮被否掉的"盖章"。
+ */
+html[data-terrain='on'] .tile.t-mountain::before {
+  display: none;
+}
+
+html[data-terrain='on'] .tile.t-mountain {
+  background-image: url('/art/terrain/mountain.webp');
+  background-size: calc(var(--u) * 5) calc(var(--u) * 5);
+  background-repeat: repeat;
+  background-position:
+    calc(var(--x, 0) * var(--u) * -1)
+    calc(var(--y, 0) * var(--u) * -1);
+}
+
+/* 浅水：细波纹。和水面色只差一点，靠"有纹路"表达"这是水" */
+.tile.t-water {
+  background-color: var(--water);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.32) 0 1px,
+    transparent 1px calc(var(--cell) * 0.19)
+  );
+  background-position: var(--jx, 0) var(--jy, 0);
 }
 
 /* 深水（外海/大河心）：深蓝底 + 稀疏波纹 + 内阴影。
@@ -509,6 +1821,86 @@ body {
   border-radius: 50% 50% 40% 40%;
   border-top: 3px solid rgba(180, 150, 90, 0.55);
   background: rgba(200, 175, 115, 0.22);
+}
+
+.tile.t-regolith {
+  background: var(--regolith);
+}
+
+/*
+ * 空间站的两格。
+ *
+ * 虚空不是"一种地形"，是"这里还没有东西"——所以它不该有纹理、不该有细节，
+ * 只是一块凹下去的深色。甲板相反：要有存在感，玩家一眼能看出站长到哪了。
+ */
+.tile.t-void {
+  background: var(--void);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* 甲板：冷灰金属 + 极淡的横向拼缝，像一块块铺板 */
+.tile.t-deck {
+  background: var(--deck);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.tile.t-deck::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.12) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+/*
+ * 破损舱段：甲板被炸穿的破口。
+ *
+ * 要一眼和甲板、虚空都分开：底色比甲板深得多（露出来的舱体结构），
+ * 但没有虚空那么黑（那里连地板都没有）。纹理用**斜向断口**而不是横拼缝，
+ * 远看就能认出"这一格不是好地板"——玩家要能扫一眼数出哪里被打开了口子。
+ */
+.tile.t-wreck {
+  background: var(--wreck);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.tile.t-wreck::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.16) 0 1px,
+      transparent 1px 6px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.35) 0 2px,
+      transparent 2px 9px
+    );
+}
+/* 月壤：细碎的麻点，别做成花纹——它是"什么都没有"的底 */.tile.t-regolith::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 32% 38%, rgba(110, 105, 96, 0.16) 0 6%, transparent 7%),
+    radial-gradient(circle at 70% 66%, rgba(110, 105, 96, 0.12) 0 5%, transparent 6%);
+}
+
+/* 环形山：坑缘一圈，中间比周围暗一点 */
+.tile.t-crater {
+  background: var(--crater);
+}
+.tile.t-crater::before {
+  content: '';
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: 2px solid rgba(92, 88, 80, 0.32);
+  background: rgba(120, 115, 106, 0.22);
 }
 
 /* 浅流：浅青底色 + 几道横向水纹，比深水（河）亮一档，
@@ -658,7 +2050,7 @@ body {
 }
 
 .tile.selected::after {
-  box-shadow: inset 0 0 0 3px #e0a33c;
+  box-shadow: inset 0 0 0 3px var(--warn);
 }
 
 /* 威胁范围：这个单位挪过去之后能打到哪些格。
@@ -760,13 +2152,30 @@ body {
   position: absolute;
   inset: 6px;
   display: grid;
-  grid-template-columns: repeat(var(--cols, 12), 1fr);
-  grid-template-rows: repeat(var(--rows, 12), 1fr);
+  /*
+   * `minmax(0, 1fr)` 而不是 `1fr`：这个层里有些格子要**写字**（风向箭头），
+   * 而 1fr 的列最小值取 min-content——64×64 时一格只有十几像素，箭头更宽，
+   * 于是整层被撑大、画到棋盘外面去。minmax(0, …) 允许列缩到 0，字由格子自己裁。
+   */
+  grid-template-columns: repeat(var(--cols, 12), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows, 12), minmax(0, 1fr));
+  overflow: hidden;
   pointer-events: none;
 }
 
 .fx-qi {
   border-radius: 4px;
+  overflow: hidden;
+}
+.fx-qi.wind {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 字号跟着格子走：16×16 时是 15px，64×64 自动缩到 8px，不然一格塞不下 */
+  font-size: clamp(8px, calc(var(--cell, 32px) * 0.6), 15px);
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .heat {
@@ -1077,7 +2486,7 @@ body {
 }
 
 .city-block.siege-target {
-  border-color: #d9483f;
+  border-color: var(--danger-ring);
   animation: siege-pulse 1.15s ease-in-out infinite;
 }
 
@@ -1107,7 +2516,7 @@ body {
   border-style: dashed;
 }
 .city-ruin {
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.04em;
   color: #8a2b22;
   white-space: nowrap;
@@ -1120,7 +2529,7 @@ body {
   filter: brightness(0.72) saturate(0.5);
 }
 .city-stale {
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.04em;
   color: #6d6255;
   white-space: nowrap;
@@ -1190,16 +2599,16 @@ body {
 .city-hp > i {
   display: block;
   height: 100%;
-  background: #7ec47e;
+  background: var(--hp-high);
   transition: width 0.25s ease;
 }
 
 .city-hp > i.mid {
-  background: #e8c76b;
+  background: var(--hp-mid);
 }
 
 .city-hp > i.low {
-  background: #e07b6b;
+  background: var(--hp-low);
 }
 
 .city-armor {
@@ -1273,6 +2682,51 @@ body {
   background: var(--team-b);
 }
 
+/*
+ * 兵种贴图（2026-11-11，试验层，默认关）。
+ *
+ * 只在设置里打开「棋子贴图」、且这个兵种真有图时才出现；其余仍然显示汉字，
+ * 所以这个类名出现与否本身就是"有没有用图"的唯一判据。
+ *
+ * `image-rendering: pixelated` 是必须的：这些是像素画，浏览器默认的双线性插值
+ * 会把边缘抹成糊块——同一张图在 34px 下，pixelated 认得出人形，默认插值认不出。
+ * 图片本身是透明底，阵营色由 `.unit-inner` 的背景提供，所以这里不用复制一份。
+ */
+.unit-inner.has-art {
+  /*
+   * 有图时把填充色让出来。
+   *
+   * 像素图本身是深色为主，压在饱和的队伍色（红/蓝）上会糊成一团——
+   * 实测第一版就是这样：小人几乎看不出轮廓。所以有图时改用中性浅底，
+   * 阵营改**描边**表达。阵营色回答"这是谁的兵"，它不该和"这是什么兵"抢同一块像素。
+   */
+  background: var(--panel);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 2px currentColor;
+}
+
+.unit.owner-A .unit-inner.has-art {
+  background: var(--panel);
+  color: var(--team-a);
+}
+
+.unit.owner-B .unit-inner.has-art {
+  background: var(--panel);
+  color: var(--team-b);
+}
+
+.unit-art {
+  display: block;
+  width: 86%;
+  height: 86%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .unit:hover .unit-inner {
   transform: translateY(-1px) scale(1.04);
 }
@@ -1280,7 +2734,7 @@ body {
 .unit.selected .unit-inner {
   box-shadow:
     0 0 0 2px #fff,
-    0 0 0 4px #e0a33c,
+    0 0 0 4px var(--warn),
     0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
@@ -1339,7 +2793,7 @@ body {
 .unit-build i {
   display: block;
   height: 100%;
-  background: #e0a33c;
+  background: var(--warn);
 }
 
 .unit.ghost {
@@ -1384,10 +2838,10 @@ body {
 }
 
 .unit-hp > i.hp-now.mid {
-  background: #e8c76b;
+  background: var(--hp-mid);
 }
 .unit-hp > i.hp-now.low {
-  background: #e07b6b;
+  background: var(--hp-low);
 }
 
 .unit-hp > i.hp-lag {
@@ -1440,8 +2894,67 @@ body {
   flex: 0 0 auto;
 }
 
+/* 可折叠的信息卡：标题行就是开关，右侧一个箭头指示开合。
+   用原生 <details> 而不是自己写开合：键盘（Enter/空格）、读屏、默认焦点行为
+   全都白送，而这些自己实现起来最容易漏。 */
+.card-fold {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+/* 卡片里只剩这一块（还没选任何东西时的默认页）：别再画卡片的框。
+   留着框会变成一条 34px 高的空盒子，看起来像个坏掉的输入框。 */
+.card:has(> .card-fold:only-child) {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* 它要是卡片里的第一块，就不该再画一条分隔线——那是"和上面分开"的意思，
+   而上面什么都没有。 */
+.card-fold:first-child {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+.card-fold > .fold-head {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  margin: 0;
+}
+
+/* 展开时才需要它和正文拉开一点 */
+.card-fold[open] > .fold-head {
+  margin-bottom: 8px;
+}
+
+.card-fold > .fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.card-fold > .fold-head::after {
+  content: '⌄';
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  transition: transform 0.15s ease;
+}
+
+.card-fold[open] > .fold-head::after {
+  content: '⌃';
+}
+
+.card-fold > .fold-head:hover {
+  color: var(--text);
+}
+
 .card-title {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-3);
   letter-spacing: 0.06em;
@@ -1468,7 +2981,7 @@ body {
 
 .vs-name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-body);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1493,13 +3006,13 @@ body {
 }
 
 .vs-stats {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   line-height: 1.55;
 }
 
 .vs-mid {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: center;
   min-width: 52px;
@@ -1509,7 +3022,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--panel-2);
@@ -1539,14 +3052,98 @@ body {
 .info-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 3px 0;
   color: var(--text-2);
+}
+
+/* 数值列用等宽数字（tabular-nums）。
+   战棋里"17/175""护甲 4""剩 2 次"这类数字每秒都在扫，比例字体的 1 比 7 窄，
+   上下两行就对不齐；等宽之后竖着一列能直接比大小。成本是零——只影响字形宽度，不改字号。 */
+.info-row b,
+.recruit-btn .price,
+.upgrade-btn .price,
+.unit-sub,
+.city-line {
+  font-variant-numeric: tabular-nums;
 }
 
 .info-row b {
   color: var(--text);
   font-weight: 500;
+}
+
+/*
+ * 单位属性表：两列。
+ *
+ * 来历：一行一条的排法，每行右边半截永远是空的（13px 字，一行只用掉
+ * 十二三个字符宽），一个普通兵光属性就吃掉 140px 竖向空间，玩家看兵得先
+ * 滚一屏才够得着「拆除」。
+ *
+ * 这里的排法是**竖排**（标签在上、数值在下），不是"两个 标签—数值 并排"：
+ * 并排时一格只剩 ~150px，「攻击 / 护甲 13 / 2（基础 1）」必然折行，折完
+ * 标签和数值对不上号；竖排让数值独占整格宽度，长也就自己换第二行。
+ *
+ * `minmax(0, 1fr)` 而不是 `1fr`：1fr 的下限是 min-content，
+ * 一条长数值会把整列撑宽顶出侧栏——和 `.main` 那次踩的是同一个坑。
+ */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 14px;
+  margin: 6px 0 2px;
+}
+
+/* 跨两列：带修正明细的攻击组、以及收入这种一行装不下的 */
+/*
+ * 跨两列的格子（攻击组、城市卡的「驻军休整」）。
+ *
+ * 内部也是两列：左边是数值，右边是修正明细。
+ * 最初写成"数值一行、明细整行铺在下面"，结果攻击跨列之后，
+ * 紧跟其后的「射程 / 视野」只剩半格，右边空出整整一格——看着像有个数字没加载出来。
+ * 明细挪到右边之后，那块宽度被用掉了，而且"哪里来的 +3"就贴在自己那个 13 的旁边。
+ */
+.stat-span,
+.stat-grid > .stat-wide {
+  grid-column: 1 / -1;
+}
+
+.stat-span {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
+  align-items: start;
+}
+
+.stat-grid > .info-row,
+.stat-span > .info-row {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 1px;
+  padding: 0;
+}
+
+/* 标签降一档、降一级灰度；数值升一档字重——一眼先看数字，再看它是什么 */
+.stat-grid > .info-row > span,
+.stat-span > .info-row > span {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.3;
+}
+
+.stat-grid > .info-row > b,
+.stat-span > .info-row > b {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.35;
+  /* 数值再长也不许撑破格子：宁可折行，不许把第二列挤出去 */
+  overflow-wrap: anywhere;
+}
+
+/* 明细收紧一点：它现在是跨列块的一部分，左边距要留给那条竖线 */
+.stat-span .stat-mods {
+  margin: 0 0 0 2px;
 }
 
 /* 真实数值的修正明细：攻击/护甲下面逐条列出"哪里来的几点"。
@@ -1559,7 +3156,7 @@ body {
 }
 
 .info-row.stat-mod {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   padding: 1.5px 0;
   color: var(--text-3);
 }
@@ -1591,7 +3188,7 @@ body {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid currentColor;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-2);
   background: var(--panel-2);
@@ -1603,7 +3200,7 @@ body {
 
 .status-chip i {
   font-style: normal;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   opacity: 0.75;
 }
 
@@ -1632,12 +3229,22 @@ body {
   border-width: 2px;
 }
 
+/* 隐匿：藏住了是冷灰蓝（"不显眼"），露出来是暖红（"你快挨打了"） */
+.status-chip.st-stealth {
+  color: #4a6b8a;
+  border-style: dashed;
+}
+
+.status-chip.st-exposed {
+  color: #b4463c;
+}
+
 /* 增益（药力、圣旗……）：青绿，和四种减益的色系分开。
    它和减益排在同一行、用同一个形状，因为它们要回答的是同一个问题：
    "这东西还剩几回合"——而不是"我的属性为什么是这个数"。 */
 .status-chip.st-buff {
-  color: #3f8a72;
-  background: color-mix(in srgb, #3f8a72 10%, var(--panel-2));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, var(--panel-2));
 }
 
 /* 单位与地形的"说明书" */
@@ -1645,7 +3252,7 @@ body {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px dashed var(--line);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.85;
 }
@@ -1653,7 +3260,7 @@ body {
 .hpbar {
   height: 6px;
   border-radius: 3px;
-  background: #eae6dd;
+  background: var(--track);
   overflow: hidden;
   margin: 8px 0 10px;
 }
@@ -1661,8 +3268,80 @@ body {
 .hpbar > i {
   display: block;
   height: 100%;
-  background: #7ec47e;
+  background: var(--hp-high);
   transition: width 0.2s ease;
+}
+
+/* 装配坞的电力收支条。
+   横向条 = 已用 / 产能，过载时整条变红并铺满——装配坞里最常见的挫败
+   就是"装上去才发现过载"，数字要先于按钮被看见。 */
+.power-line {
+  margin: 6px 0 4px;
+}
+
+.power-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.power-bar > i {
+  display: block;
+  height: 100%;
+  background: #5b9bd5;
+  transition: width 0.2s ease;
+}
+
+.power-bar > i.over {
+  background: var(--danger-strong);
+}
+
+/* 空间站的能量条：青绿，和地面电网的蓝区分开。
+   同一条横条、同一组数字，玩家不用再学一遍怎么读。 */
+.power-bar.station > i {
+  background: #3fae96;
+}
+
+.power-bar.station > i.over {
+  background: var(--danger-strong);
+}
+
+.power-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 5px;
+  font-size: var(--fs-sm);
+  /*
+   * 2026-11-12：这一块从装甲面板挪到了侧栏顶部（有电站就常驻），
+   * 所以配色不能再写死深灰——新版主题是深色面板，写死就成深底深字。
+   * 改用文字色变量，两套主题各自自洽。
+   */
+  color: var(--text-2);
+}
+
+.power-nums b {
+  color: var(--text);
+}
+
+.power-nums em {
+  font-style: normal;
+  opacity: 0.65;
+  margin-left: 4px;
+}
+
+.power-nums .over {
+  color: var(--danger-strong);
+}
+
+/* 上帝模式的框选：半透明底 + 内描边。
+   只加底色会被地形色吃掉（沙漠、雪原都亮），所以描边是必须的那一半；
+   用内阴影而不是 outline，是因为格子是 grid 里的紧邻块，outline 会和外层
+   .board 的边框打架、在放大档还会被裁。 */
+.tile.god-sel {
+  background-color: rgba(74, 144, 226, 0.25);
+  box-shadow: inset 0 0 0 2px rgba(46, 112, 196, 0.85);
 }
 
 .unit-head {
@@ -1680,7 +3359,7 @@ body {
   place-items: center;
   color: #fff;
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .unit-chip.a {
@@ -1692,11 +3371,11 @@ body {
 
 .unit-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .unit-sub {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -1710,7 +3389,7 @@ body {
 }
 
 .recruit-group-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   letter-spacing: 0.04em;
   margin-bottom: 5px;
@@ -1755,7 +3434,7 @@ body {
 
 .recruit-btn:hover:not(:disabled) {
   border-color: var(--line-strong);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .recruit-btn:disabled {
@@ -1772,18 +3451,61 @@ body {
 
 .recruit-btn .meta b {
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .recruit-btn .meta span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
 .recruit-btn .price {
-  font-size: 12px;
-  color: #a8761a;
+  font-size: var(--fs-sm);
+  color: var(--price);
   font-weight: 500;
+  /*
+   * 右边的短标记（"就绪" / "电力不足 3/15"）**不换行**。
+   *
+   * 换行本身没错，错的是它会把左边的标题挤到只剩一个字宽——技能名变成竖排，
+   * 玩家读不出这是哪个技能。文案已经改短，这里再兜一层：它永远是一行。
+   */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/*
+ * 标题（"空间站核心舱 · 建造推进器舱"）也守一行。
+ *
+ * 太长就省略，不要折成竖排——横排能扫读，竖排只能一个字一个字猜。
+ * 完整名字在 `title` 属性里（`heroSkillBlock` 已经写了）。
+ */
+.recruit-btn .meta b {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * 只读行：已装模块的展示行（2026-11-12）。
+ *
+ * 它和下面「可装模块」共用一套排版，但**不是按钮**——拆卸已经挪到单独一组。
+ * 所以要把"能点"的暗示全摘掉：手指不变成手型、悬停不亮、右侧那格写"已装"
+ * 而不是价格。留着 hover 效果的话，玩家会一直去点它。
+ */
+.recruit-btn.is-static {
+  background: var(--panel);
+  cursor: default;
+}
+
+.recruit-btn.is-static:hover {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.recruit-btn.is-static .price {
+  color: var(--text-3);
+  font-weight: 400;
 }
 
 /* 来源徽标：兵种从 49 个涨到 118 个之后，"这兵是哪个包的"必须写在脸上——
@@ -1794,7 +3516,7 @@ body {
   border-radius: 999px;
   background: var(--a-soft);
   color: var(--a);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   font-weight: 400;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -1826,7 +3548,7 @@ body {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1843,12 +3565,12 @@ body {
 .recruit-search-input:focus {
   outline: 2px solid var(--a-soft);
   border-color: var(--a);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .recruit-search-count {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -1871,7 +3593,7 @@ body {
 
 .pack-row .chip {
   padding: 3px 9px;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
 }
 
 /* 升级时代按钮：比产兵按钮更醒目，因为这是个战略决策 */
@@ -1884,7 +3606,7 @@ body {
   padding: 10px 12px;
   border: 1px solid #cdb684;
   border-radius: 10px;
-  background: #fbf7ea;
+  background: var(--surface-warm);
   color: var(--text);
   font: inherit;
   text-align: left;
@@ -1895,7 +3617,7 @@ body {
 }
 
 .upgrade-btn:hover:not(:disabled) {
-  background: #f6efd8;
+  background: var(--surface-warm-2);
   border-color: #b19a5c;
 }
 
@@ -1912,20 +3634,20 @@ body {
 }
 
 .upgrade-main b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
 }
 
 .upgrade-main span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   line-height: 1.45;
 }
 
 .upgrade-btn .price {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
-  color: #a8761a;
+  color: var(--price);
 }
 
 /* 战报 */
@@ -1935,7 +3657,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
@@ -1967,7 +3689,7 @@ body {
 
 .log-empty {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 6px 0;
 }
 
@@ -1978,6 +3700,16 @@ body {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
+}
+
+/* 只装主按钮（结束行动 / 提交计划）的那一层。
+   桌面它只是个普通容器；手机上它会变成贴底固定的一条（见文件末尾的手机适配）。 */
+.footer-main {
+  display: flex;
+}
+
+.footer-main > .btn {
+  flex: 1;
 }
 
 /* 结束回合下面那排：撤回 / 认输 */
@@ -2005,7 +3737,7 @@ body {
   padding: 9px 13px;
   border-radius: 9px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   cursor: pointer;
   transition:
     background 0.12s ease,
@@ -2029,13 +3761,22 @@ a.btn {
 
 .btn-primary {
   background: var(--text);
-  color: #fff;
+  color: var(--panel);
   border-color: var(--text);
   font-weight: 500;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #1f1d19;
+  /*
+   * 2026-11-11：这里原来写死 `#1f1d19`。legacy 下看不出问题（黑底白字，hover 更深），
+   * 但 modern 下 `.btn-primary` 是**反相**的——`background: var(--text)` 是浅色、
+   * `color: var(--panel)` 是深色——背景被这条硬编码压成近黑，文字还是深色，
+   * 于是按钮一悬停就变成黑底黑字。用户报的就是这个（"鼠标移到开始对局"）。
+   *
+   * 改成让背景跟着 `--text` 一起压暗：legacy 从近黑到更黑、modern 从浅灰到稍暗的浅灰，
+   * 文字色两头都不动，对比度就都保住了。顺手也少了一个魔法色值。
+   */
+  background: color-mix(in srgb, var(--text) 88%, #000);
 }
 
 .btn-block {
@@ -2044,11 +3785,11 @@ a.btn {
 
 .btn-sm {
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .hint {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.6;
 }
@@ -2076,7 +3817,7 @@ a.btn {
   z-index: 50;
   display: grid;
   place-items: center;
-  background: rgba(242, 239, 232, 0.94);
+  background: var(--mask);
   backdrop-filter: blur(8px);
 }
 
@@ -2092,14 +3833,14 @@ a.btn {
 
 .handoff-card h2 {
   margin: 0 0 8px;
-  font-size: 19px;
+  font-size: var(--fs-xl);
   font-weight: 600;
 }
 
 .handoff-card p {
   margin: 0 0 22px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
 }
 
@@ -2107,7 +3848,7 @@ a.btn {
   display: inline-block;
   padding: 4px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   margin-bottom: 14px;
 }
@@ -2131,7 +3872,7 @@ a.btn {
   color: #fff;
   padding: 9px 16px;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   z-index: 60;
   animation: toast-in 0.18s ease;
   pointer-events: none;
@@ -2224,13 +3965,13 @@ a.btn {
 
 .modal-head h2 {
   margin: 0 0 6px;
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .modal-head p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   line-height: 1.6;
 }
@@ -2244,6 +3985,107 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* ── 设置弹窗 ────────────────────────────────────────────────────────────
+ * 一行一件事：左边是名字 + 一句解释，右边是控件。
+ * 解释文字常驻而不是藏在 title 里——这些选项**一辈子只调一次**，
+ * 调的时候看不懂就再也不会回来看了。
+ */
+.set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.set-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.set-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.set-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+
+.set-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.5;
+  max-width: 34em;
+}
+
+.set-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.set-range {
+  width: 132px;
+  accent-color: var(--a);
+}
+
+.set-value {
+  min-width: 62px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * 快捷键的键帽。
+ *
+ * `kbd` 的浏览器默认样式（等宽 + 内嵌边框）在深色面板上几乎看不见，
+ * 所以自己画：浅一档的底色 + 圆角 + 细描边，看起来才像"一个可以按的键"。
+ * 别做成彩色——它旁边是「新对局」按钮，两个都染色会分不清哪个能点。
+ */
+.set-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
+.set-key-plus {
+  margin: 0 2px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* 设置里的 chip 组不要折行：`space-between` 会把右侧挤到很窄，
+   「旧版 / 新版」被压成上下两行——看着像两个独立开关，其实是二选一。 */
+.set-row .chip-row {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .modal-foot {
@@ -2260,15 +4102,47 @@ a.btn {
   align-items: baseline;
   gap: 6px;
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-2);
 }
 
 .field-hint {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-3);
+}
+
+/*
+ * 上传地图那一屏的结果条。
+ *
+ * 两种状态用同一个盒子，只换色：作者要的是"成了没有"，
+ * 而不是两条位置不同的提示里去找哪一条是这次的。
+ */
+.map-err,
+.map-ok {
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.map-err {
+  background: rgba(178, 62, 48, 0.08);
+  border: 1px solid rgba(178, 62, 48, 0.28);
+  color: #8d2f24;
+}
+.map-ok {
+  background: rgba(47, 110, 168, 0.08);
+  border: 1px solid rgba(47, 110, 168, 0.24);
+  color: #23527c;
+}
+.map-err ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.map-err li + li {
+  margin-top: 3px;
 }
 
 
@@ -2326,7 +4200,7 @@ a.btn {
 .map-card-thumb.is-random {
   display: grid;
   place-items: center;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   background-image: repeating-linear-gradient(
     45deg,
@@ -2344,7 +4218,7 @@ a.btn {
 }
 
 .map-card > b {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   /* 名字长也不许截断，允许两行 */
   overflow-wrap: anywhere;
@@ -2353,7 +4227,7 @@ a.btn {
 
 .map-card > i {
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -2392,7 +4266,7 @@ a.btn {
 
 .era-tag {
   flex: 0 0 38px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: right;
 }
@@ -2404,7 +4278,7 @@ a.btn {
   padding: 6px 12px;
   border-radius: 999px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition:
     background 0.12s ease,
@@ -2417,9 +4291,12 @@ a.btn {
 }
 
 .chip.active {
+  /* 反色态：底色用文字色、文字用**面板色**。
+     原来这里写死 #fff —— 深色主题下 --text 变成近白，于是白底白字。
+     写成 var(--panel) 之后两套主题都自洽：浅底深字 / 深底浅字。 */
   background: var(--text);
   border-color: var(--text);
-  color: #fff;
+  color: var(--panel);
 }
 
 /*
@@ -2432,8 +4309,22 @@ a.btn {
 .chip.is-extra::after {
   content: '扩';
   margin-left: 4px;
-  font-size: 9.5px;
+  font-size: var(--fs-micro);
   opacity: 0.6;
+}
+
+/*
+ * 选卡模式下「开局自带、不进卡池」的兵种。
+ *
+ * 兵种池这张表列的是"这一局能造什么"，所以经济建筑、军营、桥、经济/建造单位
+ * 都会出现——但它们不参与 BP，不该让人以为能在池子里选到。
+ * 2026-11-08 有人问"磨坊怎么还在选卡池里"，就是因为这个差别没画在脸上。
+ */
+.chip-auto {
+  margin-left: 5px;
+  font-size: var(--fs-micro);
+  opacity: 0.55;
+  letter-spacing: 0.02em;
 }
 
 .expansion-list {
@@ -2462,7 +4353,7 @@ a.btn {
 
 .expansion-item.on {
   border-color: #8fb0cc;
-  background: #f3f8fb;
+  background: var(--surface-hl);
 }
 
 .expansion-item input {
@@ -2477,12 +4368,12 @@ a.btn {
 }
 
 .expansion-body b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
 }
 
 .expansion-body span {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.5;
 }
@@ -2495,7 +4386,36 @@ a.btn {
   border-radius: 4px;
   background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
   color: var(--accent, #3b82f6);
-  font-size: 11px;
+  font-size: var(--fs-xs);
+}
+
+/*
+ * 三种关系同一副标签、三种底色：
+ *   依赖（默认蓝）· 冲突（红）· 联动（绿）。
+ *
+ * 形状完全一样是有意的——它们回答的是同一个问题"这个包和别的包什么关系"，
+ * 玩家只需要学会"看颜色区分关系"，不用再认三种不同的控件。
+ * 颜色走语义 token（`--danger-strong` / `--ok-deep`），换主题时跟着变。
+ */
+.expansion-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.expansion-tags .expansion-req {
+  margin-top: 0;
+}
+
+.expansion-body .expansion-req.is-clash {
+  background: color-mix(in srgb, var(--danger-strong) 12%, transparent);
+  color: var(--danger-strong);
+}
+
+.expansion-body .expansion-req.is-link {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok-deep);
 }
 
 .seed-row {
@@ -2507,7 +4427,7 @@ a.btn {
 
 .seed-row code {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   padding: 5px 9px;
   border-radius: 6px;
   border: 1px solid var(--line);
@@ -2516,7 +4436,7 @@ a.btn {
 
 .meta-line {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -2543,7 +4463,7 @@ a.btn {
 }
 
 .editor-group-title {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   letter-spacing: 0.05em;
   margin-bottom: 7px;
@@ -2568,8 +4488,8 @@ a.btn {
   place-items: center;
   border-radius: 8px;
   background: var(--text);
-  color: #fff;
-  font-size: 12px;
+  color: var(--panel);
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 
@@ -2578,11 +4498,11 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .editor-name small {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -2592,7 +4512,7 @@ a.btn {
 }
 
 .editor-empty {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.7;
   padding: 8px 2px;
@@ -2609,7 +4529,7 @@ a.btn {
 }
 
 .editor-block-title {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   margin-bottom: 8px;
 }
@@ -2624,14 +4544,14 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
 .editor-field input,
 .editor-field select {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 6px 8px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
@@ -2649,7 +4569,7 @@ a.btn {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   margin-bottom: 8px;
 }
@@ -2666,7 +4586,7 @@ a.btn {
 
 .editor-hint {
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   line-height: 1.6;
 }
@@ -2681,7 +4601,7 @@ a.btn {
 .editor-ability-tag {
   flex: 0 0 34px;
   padding-top: 2px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -2701,7 +4621,7 @@ a.btn {
   background: var(--a-soft);
   color: var(--a);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.08em;
   padding: 4px 10px;
@@ -2712,7 +4632,7 @@ a.btn {
 
 /* 观战人数：比房间码更轻，它是个状态不是按钮 */
 .watch-chip {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   padding: 3px 8px;
   border-radius: 999px;
@@ -2728,7 +4648,7 @@ a.btn {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 9px 11px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
@@ -2758,7 +4678,7 @@ a.btn {
 
 .room-input {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -2778,7 +4698,7 @@ a.btn {
   border-radius: 9px;
   background: var(--b-soft);
   color: var(--b);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 
@@ -2792,7 +4712,7 @@ a.btn {
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
 }
 
@@ -2814,14 +4734,14 @@ a.btn {
 .online-notes {
   margin: 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.75;
   color: var(--text-2);
 }
 
 .room-code {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 30px;
+  font-size: var(--fs-num);
   font-weight: 700;
   letter-spacing: 0.32em;
   text-align: center;
@@ -2841,7 +4761,7 @@ a.btn {
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--panel-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.6;
   margin-bottom: 16px;
 }
@@ -2873,7 +4793,7 @@ a.btn {
   padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -2907,7 +4827,7 @@ a.btn {
   }
 
   .turn-chip {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     padding: 3px 9px;
   }
 
@@ -2917,7 +4837,7 @@ a.btn {
 
   .topbar .btn {
     padding: 7px 10px;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
   }
 }
 
@@ -2958,7 +4878,7 @@ a.btn {
 }
 
 .cmd-plan-label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -2970,21 +4890,21 @@ a.btn {
 
 .cmd-plan-chips .chip {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .cmd-plan-dir {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   margin-left: auto;
 }
 
 .cmd-plan-dir select {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 3px 6px;
   border-radius: 6px;
   border: 1px solid var(--line-strong);
@@ -3000,17 +4920,17 @@ a.btn {
 }
 
 .cmd-head b {
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
 .cmd-hint {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
 .cmd-count {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   white-space: nowrap;
 }
@@ -3035,7 +4955,7 @@ a.btn {
 }
 
 .cmd-total {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   white-space: nowrap;
 }
@@ -3051,7 +4971,7 @@ a.btn {
 .cmd-progress i {
   display: block;
   height: 100%;
-  background: var(--a);
+  background: var(--a-fill);
   transition: width 120ms linear;
 }
 
@@ -3095,7 +5015,7 @@ a.btn {
   box-shadow: 0 10px 30px rgba(43, 40, 35, 0.18);
   padding: 14px 16px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.6;
 }
 
@@ -3107,7 +5027,7 @@ a.btn {
 
 .fatal-banner .fatal-msg {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3125,7 +5045,7 @@ a.btn {
 
 .fatal-banner .fatal-hint {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   margin-top: 8px;
 }
 
@@ -3167,12 +5087,12 @@ a.btn {
 }
 
 .start-brand b {
-  font-size: 14px;
+  font-size: var(--fs-md);
   letter-spacing: 0.02em;
 }
 
 .start-brand span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3198,13 +5118,13 @@ a.btn {
 }
 
 .start-nav-item b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
 }
 
 .start-nav-item span {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -3221,7 +5141,7 @@ a.btn {
 .start-rail-foot {
   margin-top: auto;
   padding: 8px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-3);
 }
@@ -3255,7 +5175,7 @@ a.btn {
 }
 
 .start-summary {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -3302,13 +5222,13 @@ a.btn {
 }
 
 .pool-open-text b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
 .pool-open-text i {
   font-style: normal;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.5;
 }
@@ -3316,7 +5236,7 @@ a.btn {
 .pool-open-go {
   margin-left: auto;
   flex: 0 0 auto;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--a);
 }
 
@@ -3351,12 +5271,12 @@ a.btn {
 }
 
 .pool-head-text b {
-  font-size: 15px;
+  font-size: var(--fs-h2);
   font-weight: 600;
 }
 
 .pool-head-text span {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--text-2);
 }
@@ -3440,7 +5360,7 @@ a.btn {
 
 .pool-body .chip.active::before {
   border-color: var(--a);
-  background: var(--a);
+  background: var(--a-fill);
 }
 
 .pool-body .chip:not(.active) {
@@ -3469,12 +5389,12 @@ a.btn {
 }
 
 .fb-summary b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
 .fb-summary span {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -3485,7 +5405,7 @@ a.btn {
 }
 
 .fb-label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
@@ -3499,7 +5419,7 @@ a.btn {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.55;
 }
 
@@ -3512,7 +5432,7 @@ a.btn {
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-2);
   cursor: pointer;
@@ -3524,7 +5444,7 @@ a.btn {
 }
 
 .fb-hint {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--text-3);
 }
@@ -3543,15 +5463,15 @@ a.btn {
 .fb-result {
   padding: 9px 11px;
   border-radius: 9px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
 .fb-result.is-ok {
   border: 1px solid #cfe3d4;
-  background: #f1f7f2;
-  color: #3f7a54;
+  background: var(--ok-bg);
+  color: var(--ok-deep);
 }
 
 .fb-result.is-bad {
@@ -3592,12 +5512,12 @@ a.btn {
   flex-direction: column;
   gap: 3px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
 .map-draft-meta > b {
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -3613,7 +5533,7 @@ a.btn {
 /* 上传状态行：错误信息里带行列号，长句也不许截断 */
 .map-note {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   overflow-wrap: anywhere;
   color: var(--text-2);
@@ -3624,7 +5544,7 @@ a.btn {
 }
 
 .map-note.is-ok {
-  color: #3f7a54;
+  color: var(--ok-deep);
 }
 
 /*
@@ -3719,7 +5639,7 @@ a.btn {
    */
   .chip {
     padding: 9px 14px;
-    font-size: 13px;
+    font-size: var(--fs-body);
   }
 
   /* 兵种池：手机上留白收一档，把高度还给那两百多个 chip */
@@ -3778,14 +5698,14 @@ a.btn {
 }
 
 .god-label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
 /* 结论/提示贴右边：左边是操作，右边是"刚才发生了什么" */
 .god-status {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   max-width: 360px;
   overflow: hidden;
@@ -3796,7 +5716,7 @@ a.btn {
 .god-live {
   display: flex;
   gap: 16px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
 }
 
@@ -3899,15 +5819,15 @@ a.btn {
 
 .book-row:hover {
   border-color: var(--a);
-  background: #fff;
+  background: var(--surface-hover);
 }
 
 .book-row b {
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .book-row span {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--muted);
   line-height: 1.5;
 }
@@ -3930,7 +5850,7 @@ a.btn {
   background: var(--panel-2);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition:
     background 0.12s ease,
@@ -3942,7 +5862,7 @@ a.btn {
 }
 
 .force-btn.armed {
-  background: var(--a);
+  background: var(--a-fill);
   border-color: var(--a);
   color: #fff;
 }
@@ -3962,10 +5882,10 @@ a.btn {
   z-index: 40;
   padding: 4px 11px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: #fff;
-  background: var(--a);
+  background: var(--a-fill);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   pointer-events: none;
 }
@@ -3977,7 +5897,7 @@ a.btn {
 .force-btn kbd,
 .hint kbd {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 4px;
   border-radius: 4px;
   border: 1px solid currentColor;
@@ -3989,20 +5909,23 @@ a.btn {
  * 图标 + 名字 + 逐条效果。颜色只是"一眼分冷暖干湿"的辅助，
  * 名字和数值才是准的——色弱玩家也得读得懂，所以不靠颜色单独表意。
  */
-/* 扩展的棋盘视图 chip：和「季节」同尺寸，但可点、有开关态 */
-.topbar-ext {
+/* 顶栏的两个扩展槽位：只读徽章（季节）与可点击的视图 chip。
+   它们并排、同尺寸——玩家不用分辨"哪个是官方的、哪个是扩展的"。 */
+.topbar-ext,
+.topbar-badges {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
 }
 
-/* 没有扩展提供视图时整块不占位，顶栏不会多出一段空白 */
-.topbar-ext:empty {
+/* 没有扩展提供内容时整块不占位，顶栏不会多出一段空白 */
+.topbar-ext:empty,
+.topbar-badges:empty {
   display: none;
 }
 
 .view-chip {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--panel-2);
@@ -4014,19 +5937,20 @@ a.btn {
 
 .view-chip:hover,
 .view-chip.on {
-  color: #3f8a72;
-  border-color: #3f8a72;
+  color: var(--ok);
+  border-color: var(--ok);
 }
 
 /* 钉住时背景也亮一档：光靠颜色分不出"悬停"和"钉住" */
 .view-chip.pinned {
-  background: color-mix(in srgb, #3f8a72 18%, var(--panel-2));
+  background: color-mix(in srgb, var(--ok) 18%, var(--panel-2));
   color: #2f6f5a;
 }
 
-.weather-chip {
+.weather-chip,
+.topbar-badge {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--panel-2);
@@ -4043,25 +5967,42 @@ a.btn {
   border: 1px solid var(--line);
 }
 
+/* 气象读数：温度 · 湿度/饱和。放在徽标下面一行小字——
+   它是"为什么是这个天气"的解释，不该抢徽标的注意力 */
+.weather-readout {
+  font-size: var(--fs-xs);
+  color: var(--text-3, var(--text-2));
+  margin: 4px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 .weather-badge {
   display: inline-block;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 700;
   padding: 3px 9px;
   border-radius: 999px;
-  background: #eef2ea;
+  background: var(--ok-bg);
   color: #4a5a44;
 }
 
 .weather-none {
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
 .weather-badge.w-mild {
-  background: #eef2ea;
+  background: var(--ok-bg);
   color: #4a5a44;
+}
+.weather-badge.w-cool {
+  background: #e2f1f1;
+  color: #2c6b6e;
+}
+.weather-badge.w-warm {
+  background: #fdf2da;
+  color: #8a5c12;
 }
 .weather-badge.w-cold {
   background: #e3edf6;
@@ -4099,6 +6040,10 @@ a.btn {
   background: #e8e8e8;
   color: #55524c;
 }
+.weather-badge.w-gale {
+  background: #e3ecf4;
+  color: #35566f;
+}
 .weather-badge.w-thunder {
   background: #f0e6f7;
   color: #5b3a7a;
@@ -4121,15 +6066,18 @@ a.btn {
    所以不上重色，勾选框和三个按钮排一行，失败时的说明才用红。 */
 .report-card {
   border-color: rgba(112, 148, 112, 0.45);
+  /* 这张卡是要**截图发出去**的：它必须永远是浅底，
+     所以字色也钉死成深色，不能跟着主题变白。 */
   background: rgba(247, 250, 245, 0.72);
+  color: var(--on-light);
 }
 
 .report-list {
   margin: 8px 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
-  color: #4a463d;
+  color: var(--ink-warm);
 }
 
 .report-privacy {
@@ -4141,7 +6089,7 @@ a.btn {
   align-items: flex-start;
   gap: 8px;
   margin: 10px 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: #3d3a33;
   cursor: pointer;
@@ -4216,7 +6164,7 @@ a.btn {
 
 .chat-fab {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -4260,7 +6208,7 @@ a.btn {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
   /* 抓手：整块面板只有这一条可以拖 */
   cursor: grab;
   user-select: none;
@@ -4274,7 +6222,7 @@ a.btn {
 
 .chat-head .chat-who {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
@@ -4285,7 +6233,7 @@ a.btn {
 .chat-x {
   border: 0;
   background: transparent;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   line-height: 1;
   color: var(--text-3);
   cursor: pointer;
@@ -4294,7 +6242,7 @@ a.btn {
 
 /* 「屏蔽」是两个字，按 16px 排会把标题挤掉一半，单独压小一号 */
 .chat-head .chat-mute {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 4px;
   border-radius: 4px;
   border: 1px solid var(--line);
@@ -4321,7 +6269,7 @@ a.btn {
   gap: 4px;
   flex-wrap: wrap;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-3);
   background: var(--panel-2);
@@ -4343,7 +6291,7 @@ a.btn {
 }
 
 .chat-empty {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   line-height: 1.5;
 }
@@ -4352,12 +6300,12 @@ a.btn {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.4;
 }
 
 .chat-line .chat-meta {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-3);
 }
 
@@ -4411,7 +6359,7 @@ a.btn {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -4425,7 +6373,7 @@ a.btn {
 }
 
 .chat-note {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--b);
   padding: 0 10px 8px;
   line-height: 1.4;
@@ -4456,7 +6404,7 @@ a.btn {
   /* iOS 上输入框字号小于 16px，聚焦时整页会被放大一次，
      放大之后聊天框就跑出屏幕——这一条是防这个的，别当成随手写的 */
   .chat-input {
-    font-size: 16px;
+    font-size: var(--fs-h1);
   }
 }
 
@@ -4507,14 +6455,14 @@ a.btn {
 .draft-step {
   grid-area: step;
   font-weight: 700;
-  font-size: 17px;
+  font-size: var(--fs-title);
   letter-spacing: 0.02em;
 }
 
 .draft-seat {
   grid-area: seat;
   justify-self: end;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -4526,7 +6474,7 @@ a.btn {
   grid-area: timer;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   color: var(--a);
   min-width: 44px;
   text-align: center;
@@ -4545,7 +6493,7 @@ a.btn {
 
 .draft-hint {
   grid-area: hint;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-2);
   line-height: 1.5;
 }
@@ -4570,13 +6518,13 @@ a.btn {
   justify-content: space-between;
   align-items: baseline;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--fs-md);
   margin-bottom: 8px;
 }
 
 .draft-pool-count {
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -4586,7 +6534,7 @@ a.btn {
   gap: 6px;
   align-items: center;
   margin-bottom: 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .draft-bans-title {
@@ -4684,7 +6632,7 @@ a.btn {
   border: 1px solid var(--line-strong);
   background: var(--panel);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--text);
 }
@@ -4701,12 +6649,12 @@ a.btn {
 }
 
 #hover-tip .tip-title b {
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 #hover-tip .tip-title i {
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -4751,14 +6699,14 @@ a.btn {
 
 .dc-name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dc-meta {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4793,7 +6741,7 @@ a.btn {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 700;
   color: var(--text-2);
   margin-bottom: 8px;
@@ -4802,7 +6750,7 @@ a.btn {
 .draft-map-facts {
   font-weight: 500;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .draft-map-grid {
@@ -4847,7 +6795,7 @@ a.btn {
 
 .draft-map-note {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   text-align: center;
 }
@@ -4877,11 +6825,11 @@ a.btn {
   justify-content: space-between;
   align-items: baseline;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .draft-side-status {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -4898,7 +6846,7 @@ a.btn {
 }
 
 .draft-slot {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   border-radius: 999px;
   border: 1px dashed var(--line-strong);
@@ -4923,6 +6871,21 @@ a.btn {
   font-weight: 600;
 }
 
+/*
+ * 已经落到槽位上的那一格可以悬停看完整面板（对面拿了什么，是最想研究的）。
+ * 光靠"名字是个小圆角标签"看不出来它还能悬停，所以给个 help 光标 +
+ * 一条虚线底：一眼知道"这里能问"。
+ */
+.draft-slot.is-tippy {
+  cursor: help;
+  text-underline-offset: 3px;
+  text-decoration: underline dotted color-mix(in srgb, currentColor 35%, transparent);
+}
+.draft-slot.is-ban.is-tippy {
+  /* 禁用位本来就有删除线，再叠一条虚线下划线会糊成一团，只留光标 */
+  text-decoration: line-through;
+}
+
 .draft-log {
   list-style: none;
   margin: 0;
@@ -4930,7 +6893,7 @@ a.btn {
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   display: flex;
   flex-direction: column;
@@ -4949,7 +6912,7 @@ a.btn {
 
 .draft-empty {
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 20px;
   text-align: center;
 }
@@ -5011,7 +6974,7 @@ a.btn {
 }
 
 .draft-picked-head > b {
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .draft-picked-count {
@@ -5021,7 +6984,7 @@ a.btn {
 }
 
 .draft-picked-hint {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   flex: 1 1 220px;
 }
@@ -5077,13 +7040,13 @@ a.btn {
 }
 
 .dp-index {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .dp-name {
-  font-size: 14px;
+  font-size: var(--fs-md);
   /* 名字长也不许截断，允许换行 */
   overflow-wrap: anywhere;
 }
@@ -5096,7 +7059,7 @@ a.btn {
 }
 
 .dp-tag {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   padding: 0 6px;
   border-radius: 999px;
@@ -5127,7 +7090,7 @@ a.btn {
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -5141,7 +7104,7 @@ a.btn {
 }
 
 .dp-cost {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   padding-top: 6px;
   border-top: 1px dashed var(--line);
@@ -5155,7 +7118,7 @@ a.btn {
 }
 
 .dp-trait {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--text-2);
 }
@@ -5195,7 +7158,7 @@ a.btn {
 
 .draft-btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 5px 11px;
   border-radius: 8px;
   border: 1px solid var(--line-strong);
@@ -5217,10 +7180,10 @@ a.btn {
 }
 
 .draft-btn.is-primary {
-  background: var(--a);
+  background: var(--a-fill);
   border-color: var(--a);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--fs-body);
   padding: 8px 16px;
 }
 
@@ -5241,12 +7204,12 @@ a.btn {
 
 .draft-lobby h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--fs-xl);
 }
 
 .draft-lobby-lead {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-2);
   max-width: 62ch;
@@ -5277,18 +7240,18 @@ a.btn {
 }
 
 .lobby-label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
 .lobby-code {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   letter-spacing: 0.18em;
   font-variant-numeric: tabular-nums;
 }
 
 .lobby-status {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   margin-left: auto;
 }
@@ -5302,7 +7265,7 @@ a.btn {
   flex: 1 1 260px;
   min-width: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 7px 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -5341,7 +7304,7 @@ a.btn {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.3;
 }
 
@@ -5372,7 +7335,7 @@ a.btn {
   border-radius: 50%;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-2);
 }
 
@@ -5386,7 +7349,7 @@ a.btn {
 }
 
 .cmd-chip-est {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -5402,7 +7365,7 @@ a.btn {
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1;
   padding: 0 1px;
 }
@@ -5415,7 +7378,7 @@ a.btn {
 .order-tag {
   margin-left: auto;
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--a);
   border: 1px solid color-mix(in srgb, var(--a) 35%, var(--line));
   border-radius: 999px;
@@ -5426,7 +7389,7 @@ a.btn {
 /* 面板标题旁那句"点兵种排进队列（2/5）" */
 .order-note {
   font-weight: 400;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-3);
 }
 
@@ -5511,7 +7474,7 @@ a.btn {
   gap: 7px;
   padding: 5px 8px;
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   border: 1px solid transparent;
 }
@@ -5528,7 +7491,7 @@ a.btn {
 
 .seat-row .seat-stats {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   text-align: right;
   overflow-wrap: anywhere;
@@ -5616,20 +7579,20 @@ a.btn {
 
 .title-kicker {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.18em;
   color: var(--text-3);
 }
 .title-name {
   margin: 0;
-  font-size: 40px;
+  font-size: var(--fs-hero);
   line-height: 1.15;
   letter-spacing: 0.04em;
   color: var(--text);
 }
 .title-sub {
   margin: 10px 0 26px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text-2);
 }
 
@@ -5646,7 +7609,7 @@ a.btn {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-h2);
   cursor: pointer;
 }
 .title-btn:hover:not(:disabled) {
@@ -5655,7 +7618,7 @@ a.btn {
 }
 .title-btn.primary {
   border-color: var(--a);
-  background: var(--a);
+  background: var(--a-fill);
   color: #fff;
 }
 .title-btn.primary:hover {
@@ -5675,7 +7638,7 @@ a.btn {
   gap: 4px 8px;
   justify-content: center;
   align-items: center;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text-3);
 }
 .title-links button {
@@ -5697,7 +7660,7 @@ a.btn {
 .title-latest {
   margin: 9px 0 0;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
@@ -5709,7 +7672,7 @@ a.btn {
   flex-wrap: wrap;
   gap: 6px 14px;
   justify-content: center;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 .title-era li {
@@ -5728,13 +7691,13 @@ a.btn {
   margin: 18px 0 0;
   padding-top: 14px;
   border-top: 1px solid var(--line);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
 @media (max-width: 520px) {
   .title-inner { padding: 30px 22px 22px; }
-  .title-name { font-size: 30px; }
+  .title-name { font-size: var(--fs-num); }
   .title-actions { flex-direction: column; }
   .title-btn { width: 100%; }
 }
@@ -5773,9 +7736,9 @@ a.btn {
   flex: 0 0 auto;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--a);
+  background: var(--a-fill);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.5px;
 }
 
@@ -5789,18 +7752,18 @@ a.btn {
 
 .rp-meta {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .rp-pos {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .rp-pos b {
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--fs-h2);
 }
 
 .rp-pos i {
@@ -5824,7 +7787,7 @@ a.btn {
   border-radius: 6px;
   background: var(--panel);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
@@ -5851,7 +7814,7 @@ a.btn {
   background: #fdf3e7;
   border: 1px solid #e8d5b8;
   color: #7a5a2a;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
@@ -5878,7 +7841,7 @@ a.btn {
   border-radius: 14px;
   background: rgba(47, 110, 168, 0.08);
   color: var(--a);
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 600;
   pointer-events: none;
 }
@@ -5925,7 +7888,7 @@ a.btn {
 }
 
 .tut-step {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   letter-spacing: 0.04em;
 }
@@ -5934,7 +7897,7 @@ a.btn {
   border: 0;
   background: none;
   padding: 2px 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-3);
   cursor: pointer;
 }
@@ -5943,13 +7906,13 @@ a.btn {
 
 .tut-title {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: var(--fs-h1);
   line-height: 1.3;
 }
 
 .tut-body {
   margin: 0 0 12px;
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   line-height: 1.7;
   color: var(--text-2);
   /* 正文里用 \n 分段：新手读两行就够，写成一坨没人看 */
@@ -5964,7 +7927,7 @@ a.btn {
 
 /* 高亮圈：画在格子内侧，不动布局；闪烁是为了"这一格可以被点"这件事能被余光看见 */
 .tut-ring {
-  outline: 3px solid #d8892b;
+  outline: 3px solid var(--warn-deep);
   outline-offset: -3px;
   animation: tut-pulse 1.1s ease-in-out infinite;
 }
@@ -5985,14 +7948,14 @@ a.btn {
  * 切成了四块。这里只换颜色、加粗、加一点外发光。
  */
 .city-block.tut-city-ring {
-  border-color: #d9483f;
+  border-color: var(--danger-ring);
   border-width: 3px;
   box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16);
   animation: tut-city-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes tut-city-pulse {
-  0%, 100% { border-color: #d9483f; box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16); }
+  0%, 100% { border-color: var(--danger-ring); box-shadow: 0 0 0 3px rgba(217, 72, 63, 0.16); }
   50% { border-color: rgba(217, 72, 63, 0.55); box-shadow: 0 0 0 6px rgba(217, 72, 63, 0.06); }
 }
 
@@ -6002,14 +7965,14 @@ a.btn {
 
 /* 自家城的教程框用琥珀色：和"敌城红框"分开，也和红方自身的红色边不撞色 */
 .city-block.tut-city-ring-own {
-  border-color: #d8892b;
+  border-color: var(--warn-deep);
   border-width: 3px;
   box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18);
   animation: tut-city-pulse-own 1.2s ease-in-out infinite;
 }
 
 @keyframes tut-city-pulse-own {
-  0%, 100% { border-color: #d8892b; box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18); }
+  0%, 100% { border-color: var(--warn-deep); box-shadow: 0 0 0 3px rgba(216, 137, 43, 0.18); }
   50% { border-color: rgba(216, 137, 43, 0.55); box-shadow: 0 0 0 6px rgba(216, 137, 43, 0.08); }
 }
 
@@ -6054,7 +8017,7 @@ a.btn {
   border: 0;
   background: none;
   padding: 2px 6px;
-  font-size: 20px;
+  font-size: var(--fs-xl);
   line-height: 1;
   color: var(--text-3);
   cursor: pointer;
@@ -6075,7 +8038,7 @@ a.btn {
   padding: 12px;
   background: var(--panel-2);
   border-radius: 10px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.7;
   color: var(--text-2);
   white-space: pre-line;
@@ -6090,3 +8053,311 @@ a.btn {
 
 /* 提示放在按钮**上面**：按钮是这张卡的最后一件东西，贴着底边才像"操作区" */
 .bc-tip { margin: 10px 0 0; }
+
+/* 顶部信息卡里的「撤回一步」。
+   它原来紧贴在「结束回合」下面：两颗按钮一个整行、一个半行，上下相邻，
+   而"走完了"和"退回上一步"点错的代价完全不对等。挪到顶栏之后靠这条留白
+   和下面那排玩家信息分开，别让人再把它当成回合按钮的一部分。 */
+.undo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.undo-row .hint {
+  flex: 1 1 auto;
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+
+/* ---------- 手机适配 ---------- */
+/*
+ * 这一批只有一条判据：**窄屏下把"并排"改成"竖排"**。
+ *
+ * 桌面侧栏固定 340px，两列属性表按容器宽度算就行；手机上侧栏变成
+ * 棋盘下面的一条整宽面板，视口宽度直接就是它的宽度，所以断点用视口就够。
+ */
+
+/* 设置弹窗：一行一件事（左标签 + 右控件）在 340px 以下会互相挤。
+   「减少动态效果」那条解释会折成四行、chip 被压到贴边——改成上下两段。 */
+@media (max-width: 560px) {
+  .modal-mask {
+    /* 24px 的留白在手机上等于白扔 48px 宽度，面板会显得比屏幕还窄一截 */
+    padding: 10px;
+  }
+
+  .modal-head {
+    padding: 16px 16px 0;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+  }
+
+  .modal-foot {
+    padding: 12px 16px;
+  }
+
+  .set-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .set-control {
+    /* 滑块吃掉多余宽度，数值和「试听」贴右边，一行正好 */
+    justify-content: flex-start;
+  }
+
+  .set-range {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 88px;
+  }
+
+  .set-value {
+    min-width: 56px;
+  }
+}
+
+/* 极窄屏（iPhone SE 一代那种 320px）：两列属性会窄到"基础 1 / 1"自己折行，
+   折出来的第二行看着像另一条属性的值。退回一列。 */
+@media (max-width: 360px) {
+  .stat-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * 开局面板的字段标题：`起始时代` + 一句解释，桌面是同一行的两段。
+ *
+ * 窄屏上它会被挤成**一列一个字**（"起/始/时/代"竖着排）。原因在 flex 的
+ * 最小尺寸：两段都是中文，中文的 min-content 就是一个字，于是两边都能
+ * 合法地缩到 1 个字宽，浏览器就这么分了——不是"字号太大"，是"允许它缩"。
+ *
+ * 所以这里不调字号，改成上下两段：标题独占一行，解释另起一行。
+ * 这也顺带解决了"解释太长时标题被压到只剩半行"的老问题。
+ */
+@media (max-width: 560px) {
+  .field-label {
+    display: block;
+  }
+
+  .field-label > .field-hint {
+    display: block;
+    margin-top: 3px;
+  }
+}
+
+/* 升级解锁预览（折叠）。
+   一条一句"解锁 N 种兵"，点开才是名单——它是"以后才用得上"的信息，
+   常驻展开会在侧栏底部糊两百多字，把结束回合顶出屏幕。 */
+.unlock-fold {
+  margin-top: 6px;
+}
+
+.unlock-fold > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  /* 虚下划线：看得出"这是能点的"，又不像链接那样抢眼 */
+  text-decoration: underline dotted currentColor;
+  text-underline-offset: 3px;
+}
+
+.unlock-fold > summary:hover {
+  color: var(--text);
+}
+
+.unlock-list {
+  margin-top: 5px;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/*
+ * 手机上把「详情卡」提到最前面。
+ *
+ * 桌面是"棋盘在左、侧栏在右"，席位栏在最上面是对的：它和棋盘一起看，
+ * 一眼知道现在轮到谁、双方还剩几座城。
+ *
+ * 手机是"棋盘在上、侧栏在下一整条"，顺序就变成了"棋盘 → 席位 → 你点的那个东西"。
+ * 点完一座城要先划过一张席位卡才看得见能造什么，而那张卡上的数字这一秒并不需要。
+ * 详情卡用 order 提上去，桌面的顺序一点不变（同一条规则只在窄屏生效）。
+ *
+ * 只对**真的选中了东西**的那张生效（`card-detail-live`）。什么都不选时，
+ * 详情卡里只有「操作」折叠行和英雄技能，把它提到席位栏前面反而更怪：
+ * 一眼看到的是一行"操作"，而不是"轮到谁、双方还有多少钱"。
+ */
+@media (max-width: 920px) {
+  .card-detail-live {
+    order: -1;
+  }
+}
+
+/*
+ * ── 手机：把「结束行动」钉在屏幕底部 ──────────────────────────────────────
+ *
+ * 手机上侧栏是棋盘下面的一整条，会长到两三屏（席位 + 详情 + 产兵表 + 战报）。
+ * 而「结束行动」是**每回合必点一次**的按钮，它排在最后——于是每回合都要
+ * 往回滑两屏。滑两次还能忍，一局几十回合就是几十次。
+ *
+ * 只固定主按钮那一层（.footer-main）：认输和底部那句提示仍随内容滚，
+ * 它们不该常驻遮挡棋盘。z-index 取 45——高于棋盘浮件（缩放条 60 反而在它上面，
+ * 靠位置错开），低于交接遮罩（50）和所有弹窗（70+），免得盖住必须读的东西。
+ */
+@media (max-width: 920px) {
+  .footer-main {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 18px rgba(40, 35, 25, 0.1);
+  }
+
+  /*
+   * 底栏把内容挡住的那一截：不给够，滚到底时最后一行永远差半行。
+   * 104 = 底栏（约 54）+ 浮在它上面的地图列表（28 + 间距 22）。
+   * 少给这 20px，滚到底时最后一行会被「地球」那颗按钮压住。
+   */
+  .side {
+    padding-bottom: 104px;
+  }
+
+  /* 缩放条并进底栏的左侧。
+     原来它是相对**视口**钉在右下角的，不管怎么摆都会盖住棋盘最右下那几格
+     （那几格里常常正好站着兵）。底栏已经是常驻的了，把它并进去：
+     左边三颗缩放按钮、右边一颗结束行动，谁都不遮挡。 */
+  .zoom-bar {
+    position: fixed;
+    left: 10px;
+    right: auto;
+    bottom: calc(9px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .zoom-bar .zoom-btn {
+    height: 34px;
+    min-width: 32px;
+    font-size: var(--fs-body);
+  }
+
+  /* 给左边那组缩放按钮让位：底栏本身还是整条，只是主按钮不再从最左边开始 */
+  .footer-main {
+    padding-left: 132px;
+  }
+
+  .chat-dock {
+    bottom: calc(114px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .toast {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/*
+ * 手机：「撤回一步」后面那句解释让位。
+ *
+ * "同一回合内可退，结束回合后就不能了"是**看懂一次就够**的说明，
+ * 却常驻占掉撤回按钮右边一大半行宽。手机上这张卡（席位栏）每屏都在，
+ * 而那一秒玩家要看的是双方金币和城数。按钮本身有 title，长按能看。
+ */
+@media (max-width: 560px) {
+  .undo-row .hint {
+    display: none;
+  }
+}
+
+/*
+ * 手机：「设置」钉在顶栏右缘。
+ *
+ * 360px 上顶栏放不下整套按钮（回合胶囊 + 交给 AI + 联机 + 迷雾 + 设置），
+ * 靠横滚才够得着——而它是**唯一**必须永远够得着的那个：主题、铃声、导出、
+ * 规则书、反馈全在里面。实测 360px 下它被裁得只剩半个"设"字。
+ *
+ * sticky 而不是把它移出滚动容器：顶栏的骨架只插一次 DOM（AI 每走一步都在
+ * render，重建按钮会让 mousedown/mouseup 之间换掉节点、点击丢失），
+ * 所以不能为了这件事改结构。sticky 只改定位，不动节点。
+ */
+@media (max-width: 640px) {
+  .topbar [data-act='settings'] {
+    position: sticky;
+    right: 0;
+    /* 别的按钮滚到它下面时不许透出来 */
+    background: var(--panel);
+    /* 左侧一道渐隐：看得出"从这儿开始是固定的" */
+    box-shadow: -10px 0 10px -8px rgba(40, 35, 25, 0.35);
+  }
+}
+
+/*
+ * 手机：顶栏只留「回合胶囊 · 交给 AI · 设置」。
+ *
+ * 「联机」「迷雾」一局里点不到一次（联机是开局前的事，迷雾基本定死在开局面板），
+ * 却每回合都占着横向空间——360px 上正是它们把「设置」挤出了屏幕。
+ * 现在这两颗搬进设置弹窗（settingsHtml 的 compact 组），顶栏一条都不用滚。
+ */
+@media (max-width: 640px) {
+  .topbar-actions [data-act='online'],
+  .topbar-actions [data-act='toggle-fog'] {
+    display: none;
+  }
+}
+
+/*
+ * 手机上的选卡卡片：数值行允许折行。
+ *
+ * `.dc-meta` 是 nowrap + ellipsis——桌面上池子是多列窄卡，截断是对的
+ * （一屏 20 张，靠悬停看详情）。手机上单列，一张卡有 300px 宽，
+ * 截断反而切在最要命的地方："攻 15 · 血 85 · 射程 2 · 视…" 永远看不到视野。
+ *
+ * 折成两行只多 14px 高，但"能不能打到它"这件事不用再悬停问了。
+ */
+@media (max-width: 640px) {
+  .dc-meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35;
+  }
+
+  /* 折行之后卡片会变高，把内边距和图标收一点，一屏仍然能看到十来张 */
+  .draft-card {
+    padding: 7px 9px;
+  }
+
+  .dc-icon {
+    flex: 0 0 auto;
+  }
+}
+
+/*
+ * 手机上「地图列表」也要抬到固定底栏上方。
+ *
+ * 它和缩放条都钉在左下角（这是 2026-11-11 上游加的功能，`left:14 / bottom:14`），
+ * 而底栏占了屏幕最下面一条——三样东西落在同一个角上，实测在 360px 上
+ * 叠成一团，"地"字、地图名和「+」挤在十几像素里互相盖。
+ *
+ * 现在：底栏左侧只留给缩放条（三颗），地图列表浮在底栏正上方。
+ * 它的菜单本来就是向上展开（column-reverse），抬高之后不会撞到底栏。
+ */
+@media (max-width: 920px) {
+  .board-list {
+    left: 10px;
+    top: calc(54px + 8px);
+    /*
+     * 触屏上没有 hover，那条 `opacity: .8` 会**一直**生效：
+     * 按钮本身 92% 白底，再乘 0.8 就只剩七成多，底下滚过去的文字直接透上来，
+     * 看着像两个图层叠在一起。桌面上能靠 hover 恢复，手机上恢复不了。
+     */
+    opacity: 1;
+  }
+}

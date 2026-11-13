@@ -15,6 +15,7 @@ import { normalizeUnitTypes } from '../core/customUnits.ts';
 // 否则 config 里留着旧 id，运行期按新 id 查不到包——表现就是"读档后扩展全失效"
 import { normalizeExpansionIds } from '../core/expansions.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
+import { pruneLegacyDraftPool } from '../core/draft.ts';
 import type { GameState } from '../core/types.ts';
 
 const KEY_MATCH = 'warchess:match:v1';
@@ -76,6 +77,39 @@ export function saveMatch(s: GameState): void {
   }
 }
 
+
+/**
+ * 摘掉"这一版已经不存在的兵种"。
+ *
+ * 兵种会被删：2026-11-09 的 `med_crossbow`（弩手）就因为和本体弩兵重复被拿掉了。
+ * 而 `utype()` 对不认识的 id 是**直接抛错**的（`本局没有兵种: xx`），
+ * 存档里只要站着一个，这一局就再也读不开——不是少一个兵，是整局打不开。
+ *
+ * 只摘单位本身：
+ *   · 货舱里的也跟着摘（船上的弩手同样会让 `utype` 炸）；
+ *   · 选卡名单里残留的 id 不用管——`canUseType` 先查 `unitTypes`，查不到就当没有；
+ *   · 战报是历史文本，改它反而是篡改记录。
+ *
+ * 返回摘掉几个，方便测试断言。
+ */
+export function pruneUnknownUnits(s: GameState): number {
+  if (!Array.isArray(s.units)) return 0;
+  const known = (id: string): boolean => !!s.unitTypes?.[id];
+  let dropped = 0;
+  s.units = s.units.filter((u) => {
+    if (known(u.type)) return true;
+    dropped += 1;
+    return false;
+  });
+  for (const u of s.units) {
+    if (!u.cargo || u.cargo.length === 0) continue;
+    const before = u.cargo.length;
+    u.cargo = u.cargo.filter((c) => known(c.type));
+    dropped += before - u.cargo.length;
+  }
+  return dropped;
+}
+
 export function loadMatch(): GameState | null {
   try {
     const raw = localStorage.getItem(scopedKey);
@@ -91,6 +125,13 @@ export function loadMatch(): GameState | null {
     if (parsed.config?.expansionIds) {
       parsed.config.expansionIds = normalizeExpansionIds(parsed.config.expansionIds);
     }
+    // 选卡池是**存下来的**，不会因为规则改了而重抽：11-07 把经济建筑移出卡池
+    // 之后，之前存的、打到一半的对局还顶着含磨坊的旧池子。这里就地摘掉
+    // （凑不够签位就不动，见 pruneLegacyDraftPool）。同样只改内存这份。
+    pruneLegacyDraftPool(parsed);
+    // 兵种表会被删（2026-11-09 删了弩手）：存档里残留的旧兵种必须在这里摘掉，
+    // 否则 `utype()` 一抛错，这局就是"读不开"而不是"少个兵"。
+    pruneUnknownUnits(parsed);
     return parsed;
   } catch {
     return null;

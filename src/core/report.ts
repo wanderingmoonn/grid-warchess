@@ -67,6 +67,18 @@ export interface ReportSide {
   hp: number;
 }
 
+/**
+ * 一条动作 + 是谁走的。
+ *
+ * 为什么还要 `by`：`unitId` / `cityId` 能推出归属，但**推不出 END_TURN**——
+ * 一个回合结束之后轮到谁，取决于先后手补偿、罚站、热座换手，光看动作顺序算不准。
+ * 分析"人这一步怎么想的"和重放校验都要这个字段，所以记动作的时候就带上，
+ * 而不是事后猜。
+ *
+ * 可选：2026-11-11 之前上传的 19 局没有它，读的时候按"能从 unitId 推"处理。
+ */
+export type LoggedAction = Action & { by?: PlayerId };
+
 export interface MatchReport {
   v: number;
   /** 生成时间（ISO）。只用来判断"这批数据是不是同一波版本打的" */
@@ -134,7 +146,7 @@ export interface MatchReport {
    *
    * 体积：一步约 50 字节，一局 800 步约 40 KB（库里有 256 KB 上限）。
    */
-  actions?: Action[];
+  actions?: LoggedAction[];
   /**
    * 开局那一份**完整配置**（v3 追加，可选）。
    *
@@ -183,7 +195,7 @@ export function buildMatchReport(
   now: Date = new Date(),
   timeline?: MatchTimeline | null,
   /** 动作序列（见 `MatchReport.actions`）：不传就不带这一块 */
-  actions?: Action[] | null,
+  actions?: LoggedAction[] | null,
   actionsDropped = 0,
 ): MatchReport {
   const seats = seatsOf(s);

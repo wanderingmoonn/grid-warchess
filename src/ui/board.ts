@@ -22,11 +22,14 @@
 
 import type { PlayerView } from '../core/fog.ts';
 import { markKindOf } from '../core/mark-registry.ts';
+import { unitStatBits } from '../core/info.ts';
 import { 
   buildProgress, 
   cityName, 
   footprintOf, 
   isAirborne, 
+  orderedStatuses,
+  STATUS_REGISTRY,
   underConstruction, 
   utype,
   maxHpOf
@@ -35,6 +38,8 @@ import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
+import { unitArtUrl } from './unit-art.ts';
+import { uiTerrainOn } from './terrain-art.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -62,6 +67,13 @@ export interface BoardUi {
   tutorialOwnCityId?: string | null;
   /** 处于野外建造模式时，可以放置建筑的空格 */
   placeable: number[];
+  /**
+   * 上帝模式的框选矩形（格索引）。只在沙盒里有值。
+   *
+   * 走渲染参数而不是"框完再贴 class"：棋盘每帧重建，贴上去的 class 下一帧
+   * 就没了；而且拖动过程中每帧都在重画，贴 class 会闪。
+   */
+  marqueeTiles?: number[];
   /** 威胁范围：移动之后能打到哪些格 */
   threat: number[];
   /**
@@ -80,6 +92,11 @@ export interface BoardUi {
    * 核心不知道颜色代表什么：灵气、污染、视野都走同一个口子。
    */
   boardView?: Map<number, string>;
+  /**
+   * 染色层上再写一个字符（风向箭头）。和 `boardView` 同层同格，
+   * 只有扩展给了字才有节点——没字的时候这一层和从前一模一样。
+   */
+  boardGlyph?: Map<number, string>;
   /**
    * 这一下**刚刚打出去**的格子（格索引 → 次数），闪一次就散。
    *
@@ -190,6 +207,11 @@ const TERRAIN_CLASS: Record<string, string> = {
   valley: 't-valley',
   marsh: 't-marsh',
   dune: 't-dune',
+  regolith: 't-regolith',
+  crater: 't-crater',
+  void: 't-void',
+  deck: 't-deck',
+  wreck: 't-wreck',
   shallow: 't-shallow',
   lava: 't-lava',
   volcano: 't-volcano',
@@ -449,6 +471,21 @@ function incomeBadgeOf(cost: ResourceCost): string {
   return first ? `+${first[1]}${resourceShort(first[0])}` : '';
 }
 
+/*
+ * 只刷新格宽（`--cell`），不重画棋盘。
+ *
+ * `fitBoard()` 改的是棋盘外框尺寸，格子是按 `1fr` 排的，会自己跟着走；
+ * 但 `--cell` 是 `renderBoard()` 里写的，缩放/窗口变化之后它还是旧值。
+ * 于是"按格取景"的背景（丘陵纹理、水面波光）用旧格宽算偏移，图案在格边界上
+ * 对不齐——表现就是"断开"，点一下棋盘触发重画又好了。
+ * 这个函数让 fitBoard 在改完尺寸后把格宽补上。
+ */
+export function refreshCellVar(el: HTMLElement, cols: number): void {
+  if (!Number.isFinite(cols) || cols <= 0) return;
+  const cellSize = Math.max(18, (el.clientWidth - 12) / cols);
+  setVar(el, '--cell', `${cellSize}px`);
+}
+
 export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): void {
   ensureStructure(el);
   const s = view.state;
@@ -494,10 +531,27 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   const visibleSet = new Set(view.visible);
   // 浓雾下"去过、此刻看不见"的格：按记忆里的样子画，压暗一档
   const rememberedTiles = view.rememberedTiles;
+  /*
+   * 每格**画出来的**是什么地形（外缘阴影要用它算邻接）。
+   *
+   * 不能直接用 `tile.terrain`：雾里看到的是**记忆**里的地形（`memo`），
+   * 浓雾没去过的更是 `unknown`。第一版拿真地形算邻接，于是阴影画在了
+   * "看着相同、实际不同"的地方——用户的原话是"丘陵之间莫名其妙多了阴影，
+   * 丘陵和别的地形之间几乎没有"。看着一样就该是一条平边，这是硬要求。
+   */
+  const dispTerrain: string[] = new Array(s.w * s.h).fill('');
+  for (let i = 0; i < s.w * s.h; i++) {
+    const t = s.tiles[i];
+    if (!t) continue;
+    const lit = !blackout || visibleSet.has(i);
+    const memo = lit ? undefined : rememberedTiles.get(i);
+    dispTerrain[i] = blackout && !lit && memo === undefined ? 'unknown' : (memo ?? t.terrain);
+  }
   const reachSet = new Set(ui.reach);
   const aimSet = new Set(ui.aimTiles);
   const skillThreatSet = new Set(ui.skillThreatTiles);
   const placeSet = new Set(ui.placeable);
+  const marqueeSet = new Set(ui.marqueeTiles ?? []);
   const tutSet = new Set(ui.tutorialTiles ?? []);
   const threatSet = new Set(ui.threat);
   // 战况烈度：格索引 → 上一个敌方回合挨打的次数。不是自己回合时是 undefined
@@ -523,7 +577,40 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
     for (let i = 0; i < s.w * s.h; i++) {
       const x = i % s.w;
       const y = (i - x) / s.w;
-      shell.push(`<div class="tile" data-x="${x}" data-y="${y}"></div>`);
+      /*
+       * 纹理错位（--jx / --jy）。
+       *
+       * 森林、丘陵这些纹理是**按格平铺**的（每格一个元素，背景只能各自重复），
+       * 三棵固定位置的树冠会在每一格同一个角落出现，连成片就是一张壁纸。
+       * 按坐标给一点偏移，同色地形连起来才像"一片林子"而不是"一堆同样的砖"。
+       * 这两项整局不变，所以和 data-x/data-y 一起在重建时写死。
+       */
+      const jx = ((x * 37 + y * 61) % 7) * 3;
+      const jy = ((x * 53 + y * 17) % 7) * 3;
+      /*
+       * 森林的疏密（`data-v`）**不在这里定**。
+       *
+       * 它取决于"周围几格是林子"，而那要按**画出来的地形**算（雾里看到的是记忆里的
+       * 地形，见下面 dispTerrain）。这条信息在渲染循环里才有，所以放到那儿写。
+       *
+       * 那段算 8 邻居数的代码（ring/variant）随之删掉——它服务的是旧的"深处/过渡/
+       * 林缘三档"，而灌木那一档已经去掉，改成"四邻全是林子就多长一棵针叶"。
+       */
+      /*
+       * 稀疏地形的装饰密度：约 1/5 的格子带一个小图案，其余留白。
+       *
+       * 第一版是"每格都放"，结果整片草地像菜园——战棋里平原的观感是
+       * **大片空 + 零星一点东西**，密了就变成图案阵列，反而比纯色更乱。
+       * 森林不参与这个开关：林子本来就该是密的。
+       */
+      const deco = (x * 31 + y * 17) % 5 === 0 ? '1' : '0';
+      /*
+       * `--x/--y` 也一起给：丘陵的纹理要按格坐标去大图上取景，
+       * 相邻格取相邻区域，整片才是一块连续的地面。
+       */
+      shell.push(
+        `<div class="tile" data-x="${x}" data-y="${y}" data-d="${deco}" style="--jx:${jx}px;--jy:${jy}px;--x:${x};--y:${y}"></div>`,
+      );
     }
     // 直接写 innerHTML，绕开 paintLayer 的"内容相同就不写"——
     // 重建这条路上层里本来就没有节点，跳过判断没有意义
@@ -563,10 +650,136 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
 
       if (threatSet.has(i) && !reachSet.has(i)) cls += ' threat';
       if (placeSet.has(i)) cls += ' placeable';
+      if (marqueeSet.has(i)) cls += ' god-sel';
       if (tutSet.has(i)) cls += ' tut-ring';
       if (s.fog && !visibleSet.has(i)) cls += ' out';
 
-      if (layer.cls[i] !== cls) {
+      /*
+       * 丘陵区的四条外缘（`data-et/er/eb/el`）：只有"这一面挨着另一种地形"才是 1，
+       * CSS 只在那几侧画内侧阴影，于是整片丘陵四周有一圈坎、中间是干净的。
+       *
+       * 逐格都画就变成每格一圈——那就是格子线，前面试过三次都栽在这上面。
+       * 邻接按 `dispTerrain`（画出来的地形）算，不是真地形：雾里看到的是记忆里的
+       * 地形，拿真地形算会让阴影出现在"看着一样"的两格之间。
+       */
+      /*
+       * 森林的疏密：**四邻全是林子 → 三棵针叶，否则两棵**。
+       *
+       * 用户的原话："针叶数量变化随周围森林数量增多，周围四格全是，两颗就变三棵"。
+       * 只看正交四邻（不看对角）——这样林子越靠里、树越密，边上自然稀，
+       * 远看就有了"林心 → 林缘"的层次，而且是**长出来的**，不是贴上去的分层。
+       *
+       * 同样按 `dispTerrain` 算：雾里看到的林子和算出来的林子必须是同一片，
+       * 否则又会出现"看着是树林却没长密"的错位（外缘阴影就栽过这个跟头）。
+       */
+      if (cls.includes('t-forest')) {
+        const isForest = (tx: number, ty: number): boolean =>
+          tx >= 0 && ty >= 0 && tx < s.w && ty < s.h && dispTerrain[ty * s.w + tx] === 'forest';
+        const dense = isForest(x, y - 1) && isForest(x, y + 1) && isForest(x - 1, y) && isForest(x + 1, y);
+        const v = dense ? '1' : '0';
+        if (node.dataset.v !== v) node.dataset.v = v;
+      }
+      /*
+       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵和高山都要。
+       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈——两者共用同一套数据，
+       * 只是 CSS 里的强度不同，这是"高山看起来比丘陵高"的一半来源。
+       */
+      if (cls.includes('t-hill') || cls.includes('t-mountain')) {
+        const isEdge = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
+          return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
+        };
+        const et = isEdge(x, y - 1);
+        const er = isEdge(x + 1, y);
+        const eb = isEdge(x, y + 1);
+        const el = isEdge(x - 1, y);
+        if (node.dataset.et !== et) node.dataset.et = et;
+        if (node.dataset.er !== er) node.dataset.er = er;
+        if (node.dataset.eb !== eb) node.dataset.eb = eb;
+        if (node.dataset.el !== el) node.dataset.el = el;
+      }
+
+      /*
+       * 邻格投过来的影子（`data-mt/mr/mb/ml`）——"谁比谁高"最管用的那条线索。
+       *
+       * 一块地高不高，眼睛主要看**旁边陷不陷下去**，而不是自己画得多亮。
+       * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
+       * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
+       *
+       * 值的含义从"1"改成 `m` / `h`：
+       *   m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
+       * 于是同一套数据画出一条**两级台阶**——丘陵把地面压低一点，山再压低一截，
+       * 而不是"山有影子、丘陵没有"，让人分不清是山高还是丘陵本来就平的。
+       *
+       * 山与山之间不投影（一条山脊，不该有缝），所以给山自己清空。
+       */
+      if (cls.includes('t-mountain')) {
+        if (node.dataset.mt) {
+          delete node.dataset.mt;
+          delete node.dataset.mr;
+          delete node.dataset.mb;
+          delete node.dataset.ml;
+        }
+      } else {
+        const kindAt = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
+          const t = dispTerrain[ty * s.w + tx];
+          return t === 'mountain' ? 'm' : t === 'hill' ? 'h' : '0';
+        };
+        const mt = kindAt(x, y - 1);
+        const mr = kindAt(x + 1, y);
+        const mb = kindAt(x, y + 1);
+        const ml = kindAt(x - 1, y);
+        if (mt !== '0' || mr !== '0' || mb !== '0' || ml !== '0') {
+          if (node.dataset.mt !== mt) node.dataset.mt = mt;
+          if (node.dataset.mr !== mr) node.dataset.mr = mr;
+          if (node.dataset.mb !== mb) node.dataset.mb = mb;
+          if (node.dataset.ml !== ml) node.dataset.ml = ml;
+        } else if (node.dataset.mt) {
+          delete node.dataset.mt;
+          delete node.dataset.mr;
+          delete node.dataset.mb;
+          delete node.dataset.ml;
+        }
+      }
+      /*
+       * 深水 ↔ 浅水之间那道坡（`data-wt/wr/wb/wl`）。
+       *
+       * 深水 #4a7fa6、浅水 #a8cadf，硬拼是一条刀切边；而"这一脚还踩得住、
+       * 再走一步就没底"本来是连续的。做法：**挨着另一档的那一侧，在自己这一侧
+       * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
+       * 两色的中点，于是接上。
+       *
+       * 值 = "该往这边叠什么"：`d` 我在浅水这侧、叠深水色；`l` 我在深水这侧、
+       * 叠浅水色。浅水和"水域"算同一档（色差本来就不大），互相之间不铺。
+       *
+       * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
+       * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
+       */
+      const WATER_RANK: Record<string, number> = { shallow: 1, water: 1, deep: 2 };
+      const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
+      if (rankHere > 0) {
+        const wetSide = (tx: number, ty: number): string => {
+          if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
+          const r = WATER_RANK[dispTerrain[ty * s.w + tx] ?? ''] ?? 0;
+          if (r === 0 || r === rankHere) return '0';
+          return r > rankHere ? 'd' : 'l';
+        };
+        const wt = wetSide(x, y - 1);
+        const wr = wetSide(x + 1, y);
+        const wb = wetSide(x, y + 1);
+        const wl = wetSide(x - 1, y);
+        if (node.dataset.wt !== wt) node.dataset.wt = wt;
+        if (node.dataset.wr !== wr) node.dataset.wr = wr;
+        if (node.dataset.wb !== wb) node.dataset.wb = wb;
+        if (node.dataset.wl !== wl) node.dataset.wl = wl;
+      } else if (node.dataset.wt) {
+        delete node.dataset.wt;
+        delete node.dataset.wr;
+        delete node.dataset.wb;
+        delete node.dataset.wl;
+      }
+if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
         node.className = cls;
@@ -637,9 +850,10 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (!color) continue;
         const x = i % s.w;
         const y = (i - x) / s.w;
+        const glyph = ui.boardGlyph?.get(i) ?? '';
         cells.push(
-          `<i class="fx-qi" data-x="${x}" data-y="${y}" ` +
-            `style="grid-column:${x + 1};grid-row:${y + 1};background:${color}"></i>`,
+          `<i class="fx-qi${glyph ? ' wind' : ''}" data-x="${x}" data-y="${y}" ` +
+            `style="grid-column:${x + 1};grid-row:${y + 1};background:${color}">${glyph}</i>`,
         );
       }
     }
@@ -889,12 +1103,18 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const playerName = s.players[u.owner].name;
   const kindText =
     def.category === 'building' ? '建筑' : def.category === 'economy' ? '经济单位' : '部队';
-  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · 甲 ${def.armor}`;
+  /*
+   * 悬停提示里的数值行走共用口径（含「视野」）。
+   *
+   * 血已经用"当前/上限"写在前面了，这里把「血」那一段筛掉，别写两遍。
+   */
+  const statBits = unitStatBits(def).filter((b) => !b.startsWith('血 '));
+  const name = `${playerName} · ${def.name}（${kindText}）· ${u.hp}/${def.maxHp} · ${statBits.join(' · ')}`;
 
   const cargo = u.cargo?.length ?? 0;
   const cargoBadge =
     cargo > 0
-      ? `<span style="font-size:9px;vertical-align:top;opacity:.85">${cargo}</span>`
+      ? `<span style="font-size:var(--fs-micro);vertical-align:top;opacity:.85">${cargo}</span>`
       : '';
 
   // 工地：进度条压在血条上面。没有它，玩家只看到一座"残血"的建筑，
@@ -911,17 +1131,50 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const siteNote = prog ? ` · 工地 ${prog.done}/${prog.need}（+${prog.rate}/回合）` : '';
 
   const title = `${name}${siteNote}${cargo > 0 ? ` · 载 ${cargo} 个单位` : ''}`;
-  const inner = `<div class="unit-inner">${def.short}${cargoBadge}
+  /*
+   * 悬停里补上身上挂的状态。
+   *
+   * 侧栏的属性卡已经有一排徽章，但那要"先选中"才看得见；棋盘上这两方
+   * 谁中了毒、谁还在烧，过去只能在战报里翻。这里不新增视觉元素，只把
+   * 已经在 state 里的东西接到已有的悬停提示上——两边的兵一样能看。
+   */
+  const statusText = orderedStatuses(u.status)
+    .map(([key, val]) => `${STATUS_REGISTRY[key]?.name ?? key} ${val}`)
+    .join(' · ');
+  const fullTitle = statusText ? `${title} · ${statusText}` : title;
+  /*
+   * 有贴图就用贴图，没有就还是那个汉字。
+   *
+   * 只在 `.unit-inner` 的**内容**上换，圆角方块和阵营底色都不动——
+   * 阵营色回答的是"这是谁的兵"，比"这是什么兵"更该优先读到，图替换掉的只是字。
+   *
+   * **地形材质开着时一律用汉字（2026-11-12）**：地上的树、石、水都是淡彩平面，
+   * 兵种那批像素小人压在上面又碎又花，整张图变成两种画风打架。
+   * 用户的判断是"目前兵种贴图太难看"，所以材质模式下退回汉字，
+   * 棋子贴图这个开关只在"原版"地面下才有意义。
+   */
+  const artUrl = uiTerrainOn() ? null : unitArtUrl(u.type);
+  const glyph = artUrl
+    ? `<img class="unit-art" src="${artUrl}" alt="" draggable="false" />`
+    : def.short;
+  const inner = `<div class="unit-inner${artUrl ? ' has-art' : ''}">${glyph}${cargoBadge}
       ${buildBar}
       <div class="unit-hp"><i class="hp-lag"></i><i class="hp-now ${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>`;
   const clsText = `${cls.join(' ')}${siteCls}`;
   const style = tileRect(s, u.x, u.y, fp);
   return {
-    key: `u:${u.id}`,
+    /*
+     * key 里带上"有没有贴图"这一维。
+     *
+     * 棋子层按 key 做 diff（内容没变就不写 DOM），而贴图清单是**异步到货**的：
+     * 第一帧没有图、写进了缓存，清单到了之后 key 若还是同一个，diff 会认定
+     * "内容没变"直接跳过——开关打开了、棋盘照旧全是汉字。
+     */
+    key: `u:${u.id}${artUrl ? ':art' : ''}`,
     cls: clsText,
     style,
-    title,
+    title: fullTitle,
     x: u.x,
     y: u.y,
     id: u.id,
@@ -929,7 +1182,7 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
     inner,
     hpRatio: Math.max(0, Math.min(1, ratio)),
     chipFrom: ui.hpDrops?.get(u.id),
-    sig: `${clsText}|${style}|${title}|${inner}`,
+    sig: `${clsText}|${style}|${fullTitle}|${inner}`,
   };
 }
 
@@ -984,22 +1237,42 @@ export function coordsFromEvent(e: Event): { x: number; y: number } | null {
    * 玩家能看出"点歪了"，看不出"这里没实现"。
    */
   const board = target.closest<HTMLElement>('.board');
-  const tiles = board?.querySelector<HTMLElement>('.tiles');
-  if (!board || !tiles) return null;
-
-  const cols = Number(board.style.getPropertyValue('--cols')) || 0;
-  const rows = Number(board.style.getPropertyValue('--rows')) || 0;
-  const box = tiles.getBoundingClientRect();
-  if (cols <= 0 || rows <= 0 || box.width <= 0 || box.height <= 0) return null;
+  if (!board) return null;
 
   // 只认鼠标/触摸那类带坐标的事件：键盘触发的 click 坐标是 0,0，换算出来是假命中
   const ev = e as MouseEvent;
   if (typeof ev.clientX !== 'number' || typeof ev.clientY !== 'number') return null;
   if (ev.clientX === 0 && ev.clientY === 0) return null;
 
+  return cellAtPoint(board, ev.clientX, ev.clientY);
+}
+
+/**
+ * 按屏幕坐标算落在哪一格（纯几何，**不看事件目标**）。
+ *
+ * 拖动绘制只能用这一条。指针被 `setPointerCapture` 抓到棋盘上之后，
+ * `pointermove` 的 target 就是 `.board` 本身了，`closest('[data-x]')` 永远查不到
+ * 格子——按老路径算，整根拖动画出来会是空的。合并采样（getCoalescedEvents）
+ * 拿到的那些中间点也一样没有格子节点可查。
+ *
+ * 顺带把上面那段兜底的几何换算收成一份：两处各写一遍，迟早会改歪一处。
+ */
+export function cellAtPoint(
+  board: HTMLElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  const tiles = board.querySelector<HTMLElement>('.tiles');
+  if (!tiles) return null;
+
+  const cols = Number(board.style.getPropertyValue('--cols')) || 0;
+  const rows = Number(board.style.getPropertyValue('--rows')) || 0;
+  const box = tiles.getBoundingClientRect();
+  if (cols <= 0 || rows <= 0 || box.width <= 0 || box.height <= 0) return null;
+
   const clamp = (v: number, hi: number): number => Math.min(hi, Math.max(0, v));
-  const x = clamp(Math.floor(((ev.clientX - box.left) / box.width) * cols), cols - 1);
-  const y = clamp(Math.floor(((ev.clientY - box.top) / box.height) * rows), rows - 1);
+  const x = clamp(Math.floor(((clientX - box.left) / box.width) * cols), cols - 1);
+  const y = clamp(Math.floor(((clientY - box.top) / box.height) * rows), rows - 1);
   return { x, y };
 }
 
