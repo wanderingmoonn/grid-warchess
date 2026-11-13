@@ -296,13 +296,23 @@ export interface KillCtx {
   killer?: Unit;
   killerOwner: PlayerId;
   /**
-   * 直接扣血用的接口。
+   * 钩子里能用的那套 API（伤害、战报、兵种名都在里面）。
    *
    * 为什么死亡钩子也要它：亡语里的"自爆"要在这一刻就伤到旁人，
    * 而扩展没法 import 规则层（会绕成环）。`onDeath` 那条能力钩子早就带着它，
-   * 扩展到的那条却没有——同样的活儿在两条路上门槛不一样，最后一定是"某个包里能写、别的包写不了"。
+   * 扩展到的那条却没有——同样的活儿在两条路上门槛不一样，
+   * 最后一定是"某个包里能写、别的包写不了"。
    */
   api: AbilityApi;
+  /**
+   * 清场：把场上所有血量归零的单位按"死亡"流程处理掉（战报、亡语、击杀钩子）。
+   *
+   * 在钩子里用 `api.hurtPhysical` 打死了人之后**必须**调它。别写
+   * `state.units = state.units.filter(u => u.hp > 0)`——那样尸体是被抹掉了，
+   * 但它自己的亡语不会触发，连锁反应到第二代就断（焦土砸死自爆兵，
+   * 自爆兵不会炸）。这一条是 2026-11-13 死亡合一之后才有的口子。
+   */
+  sweepDead: () => void;
 }
 
 export interface TurnStartCtx {
@@ -322,7 +332,16 @@ export interface TurnEndCtx {
   state: GameState;
   /** 刚刚结束回合的那一方 */
   player: PlayerId;
-  /** 造成真实伤害（不吃护甲）；血量归零由规则层统一清场 */
+  /**
+   * 造成**真实伤害**（不吃护甲），给维护费不足、天气持续伤害这类用它。
+   *
+   * 没有攻击方，也不该被守御阵挡下来——但它仍然是"内生损耗"，
+   * 不是一次打击：不触发受伤钩子（挨打反击、受击回血都不该被交税触发）。
+   * 血量归零由规则层统一清场。
+   *
+   * 想造成**有攻方的物理伤害**（爆炸、落石），用 `onUnitKilled` 那个
+   * `hurtPhysical`，那条会走护甲、转移和受伤钩子。
+   */
   hurt: (u: Unit, amount: number) => void;
   /** 写一条战报 */
   log: (p: PlayerId, text: string) => void;
@@ -1270,9 +1289,9 @@ export const EXPANSIONS: Expansion[] = [
     id: 'scorched-earth',
     name: '死亡枕藉',
     blurb: '单位阵亡时波及周围。',
-    summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害——砸不到空中的东西。',
+    summary: '单位阵亡时，对它四周相邻的地面单位各造成它最大生命 20% 的伤害（按护甲结算）——砸不到空中的东西。',
     hooks: {
-      onUnitKilled: ({ state, victim }) => {
+      onUnitKilled: ({ state, victim, api, sweepDead }) => {
         const dirs: ReadonlyArray<readonly [number, number]> = [
           [1, 0],
           [-1, 0],
@@ -1331,12 +1350,20 @@ export const EXPANSIONS: Expansion[] = [
             }
           }
           if (!touches) continue;
-          near.hp -= blast;
+          /*
+           * 尸体砸人是**物理**伤害：走 api.hurtPhysical 才会先减甲，
+           * 也才会被守御阵替人接下来、写统一战报。
+           * 以前这里是 `near.hp -= blast`，于是重甲兵和民兵被砸掉一样多。
+           */
+          api.hurtPhysical(state, near, blast);
           hit += 1;
         }
         if (hit > 0) {
-          log(state, victim.owner, `焦土：阵亡时波及 ${hit} 个临近单位，各 ${blast} 点`);
-          state.units = state.units.filter((u) => u.hp > 0);
+          // 报"威力"而不是"总和"：每个人挨的甲不一样，加起来是个没有含义的数
+          log(state, victim.owner, `焦土：阵亡时波及 ${hit} 个临近单位，各 ${blast} 点（按护甲结算）`);
+          // 清场走核心的 sweepDead：被砸死的单位也要跑自己的亡语，
+          // 否则"焦土砸死自爆兵"这条连锁在第二代就断了。
+          sweepDead();
         }
       },
     },

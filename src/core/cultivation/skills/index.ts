@@ -68,3 +68,26 @@ export {
   PALM_THUNDER_PER_RANK,
   palmThunderDamage,
 } from './palm-thunder.ts';
+export {
+  SPIRIT_BREATH_SKILL,
+  SPIRIT_BREATH_COST,
+  SPIRIT_BREATH_DRAIN,
+  SPIRIT_BREATH_QI_PER_EXP,
+  SPIRIT_BREATH_MIN_QI,
+  SPIRIT_BREATH_EXP_PER_RANK,
+  SPIRIT_BREATH_EXP_FLOOR,
+  spiritBreathCap,
+  spiritBreathExp,
+} from './spirit-breath.ts';
+export {
+  GANG_WIND_SKILL,
+  GANG_WIND_COST,
+  GANG_WIND_RANGE,
+  GANG_WIND_RADIUS,
+  GANG_WIND_BASE,
+  GANG_WIND_PER_RANK,
+  GANG_WIND_MIN_RANK,
+  GANG_WIND_RESEARCH_COST,
+  gangWindDamage,
+  gangWindInRange,
+} from './gang-wind.ts';

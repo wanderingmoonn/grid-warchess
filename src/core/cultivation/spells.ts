@@ -33,6 +33,13 @@ import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { getRank } from './progression.ts';
 import { PALM_THUNDER_COST, PALM_THUNDER_SKILL } from './skills/palm-thunder.ts';
+import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
+import {
+  GANG_WIND_COST,
+  GANG_WIND_MIN_RANK,
+  GANG_WIND_RESEARCH_COST,
+  GANG_WIND_SKILL,
+} from './skills/gang-wind.ts';
 
 /** 一条法术的元数据。`skill` 是它作为技能那一面的全部数据 */
 export interface SpellDef {
@@ -54,16 +61,39 @@ export interface SpellDef {
    * 而通用法术（比如掌心雷）谁都能学，才不会出现"四条流派只有一套法术"。
    */
   schools?: readonly string[];
+  /**
+   * 学它要求的最低境界（不写 = 0）。
+   *
+   * 和「法术位」是两件事，别混：
+   *   · 法术位 = `⌊境界 ÷ 2⌋`，管的是"**背得下几门**"；
+   *   · 这一个管的是"**够不够格学**"。
+   *
+   * 为什么需要它：法术位在 2 期就有 1 个，而 2 期的兵只有 55 点血——
+   * 一门按"境界 ×9"定标的 AOE 落在那个局面里就是降维打击。
+   * 有了这道闸，强法术可以放心地按高境界定标，不用为了低境界的安全把数值压平。
+   */
+  minRank?: number;
 }
 
 /**
  * 法术池。
  *
- * 目前只有一条样板，等设计者的 100 份草案落地后往这里加即可——
  * 加一条法术 = 写一个技能文件 + 在这里登记一行，别处一个字都不用改。
+ *
+ * 现在的三条是三种不同的"补强姿势"，正好可以当模板：
+ *   · 掌心雷——**补刀**：便宜、无视护甲、只打一个；
+ *   · 吐纳术——**成长**：不动战斗数值，把环境灵气换成修为；
+ *   · 罡风——**面积**：远、大、无视护甲，专门回答"被三台机甲围住怎么办"。
  */
 export const SPELLS: readonly SpellDef[] = [
   { skill: PALM_THUNDER_SKILL, cost: PALM_THUNDER_COST },
+  { skill: SPIRIT_BREATH_SKILL, cost: SPIRIT_BREATH_COST },
+  {
+    skill: GANG_WIND_SKILL,
+    cost: GANG_WIND_COST,
+    researchCost: GANG_WIND_RESEARCH_COST,
+    minRank: GANG_WIND_MIN_RANK,
+  },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */
@@ -233,6 +263,12 @@ export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): strin
   }
   if (spell.schools && !spell.schools.includes(u.type)) {
     return `这一门只有${spell.schools.map((id) => s.unitTypes[id]?.name ?? id).join('、')}学得会`;
+  }
+  // 境界门槛：比法术位更硬的一条。法术位管"背得下几门"，这条管"够不够格学"。
+  // 放在藏经阁之前——"你境界不够"是比"你没站对地方"更根本的拒绝理由。
+  const minRank = spell.minRank ?? 0;
+  if (getRank(u) < minRank) {
+    return `境界不足：这门法术要 ${minRank} 期以上（你 ${getRank(u)} 期）`;
   }
   if (!libraryNextTo(s, u)) {
     return `要站在藏经阁旁边才能读（宗门没了，藏书楼也废了）`;
