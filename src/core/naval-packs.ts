@@ -96,7 +96,7 @@ const SHORE_BOMBARD: AbilityDef = {
 const NAVAL_MINE: MarkKindDef = {
   id: 'nv-mine',
   name: '水雷',
-  summary: '敌舰踩上来就炸 14 点（无视护甲），炸完就没。自己的船踩不到自己的雷。',
+  summary: '敌舰踩上来就炸 14 点（按护甲结算），炸完就没。自己的船踩不到自己的雷。',
   // `mine` 这个标签是给扫雷舰用的：以后加磁性雷、音响雷，只要也打上它，
   // 扫雷舰就照样扫得掉——判定不能写死成"只认 nv-mine"。
   tags: ['mine', 'naval'],
@@ -112,10 +112,9 @@ const NAVAL_MINE: MarkKindDef = {
     // 换一条船来踩就该吃满 14 点。
     const swept = (def.abilities ?? []).includes('nv-sweep');
     const dmg = swept ? 4 : 14;
-    c.api.hurt(
-      c.unit,
-      dmg,
-      swept ? `${def.name} 切断了雷索，只受 ${dmg} 点` : `${def.name} 撞上水雷，损失 ${dmg} 点生命`,
+    // 水雷是物理伤害：走 hurtPhysical 先减甲（以前走 hurt，等于所有雷都无视护甲）
+    c.api.hurtPhysical(c.unit, dmg, (dealt) =>
+      swept ? `${def.name} 切断了雷索，只受 ${dealt} 点` : `${def.name} 撞上水雷，损失 ${dealt} 点生命`,
     );
     c.api.log(c.mark.owner, `水雷命中 ${def.name}`);
   },

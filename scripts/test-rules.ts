@@ -241,6 +241,7 @@ import {
   recruitSpawnCells,
   orderedStatuses,
   abilityApi,
+  hurtPhysical,
   refreshMemory,
   registerSkillEffect,
   registerStatus,
@@ -12820,13 +12821,19 @@ test('留痕：敌舰踩上去才炸（炸完就没了），自己的船踩不�
   assert.equal(r1.state.units.find((u) => u.id === own.id)!.hp, own.hp, '自己的雷不炸自己');
   assert.equal(marksOf(r1.state).length, 2, '没被踩响，雷还在');
 
-  // 敌人走上来：14 点、无视护甲，然后雷消失
+  // 敌人走上来：14 点先减甲，然后雷消失
   const foe = place(r1.state, 'B', 'gunboat', 10, 5);
   r1.state.current = 'B';
   const r2 = applyAction(r1.state, { type: 'MOVE', unitId: foe.id, x: 9, y: 5 });
   assert.ok(r2.ok, r2.ok ? '' : r2.reason);
   const hit = r2.state.units.find((u) => u.id === foe.id)!;
-  assert.equal(hit.hp, foe.hp - 14, '水雷 14 点，不走进攻公式');
+  // 2026-11-13 起雷是**物理伤害**：先减护甲，不再"无视护甲"
+  const hullArmor = s.unitTypes['gunboat']!.armor;
+  assert.equal(
+    hit.hp,
+    foe.hp - Math.max(0, 14 - hullArmor),
+    `水雷 14 点按护甲结算（船甲 ${hullArmor}）`,
+  );
   assert.equal(marksOf(r2.state).length, 1, '踩掉的那一枚消失，另一枚还在');
   // 战报双方都要有：挨炸的一方得知道自己是怎么没的
   assert.ok(
@@ -12931,7 +12938,13 @@ test('扫雷舰：自己踩到水雷只受 4 点（它先切断雷索）', () =>
   const r = applyAction(s, { type: 'MOVE', unitId: sweeper.id, x: 5, y: 5 });
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = r.state.units.find((u) => u.id === sweeper.id)!;
-  assert.equal(after.hp, sweeper.hp - 4, '扫雷舰踩雷只吃 4 点，不是 14 点');
+  // 减半的是"雷的威力"（4 点），之后照样按护甲结算
+  const sweeperArmor = s.unitTypes['nv_minesweeper']!.armor;
+  assert.equal(
+    after.hp,
+    sweeper.hp - Math.max(0, 4 - sweeperArmor),
+    `扫雷舰踩雷只吃 4 点，再减护甲 ${sweeperArmor}`,
+  );
   assert.equal(marksOf(r.state).length, 0, '雷还是被引爆了');
 });
 
@@ -13023,8 +13036,10 @@ test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   assert.equal(after(ship.id), 0, '1 血的火船应该被击沉');
   const blast = Math.max(1, Math.round(s.unitTypes['nv_fireship']!.atk / 2));
-  assert.equal(after(foe.id), 100 - blast, `相邻的敌人该吃 ${blast} 点`);
-  assert.equal(after(friendly.id), 100 - blast, '自爆不区分敌我');
+  // 自爆冲击波也是物理伤害：先减目标护甲（两条船同型，护甲一样）
+  const blastDealt = Math.max(0, blast - s.unitTypes['nv_fireship']!.armor);
+  assert.equal(after(foe.id), 100 - blastDealt, `相邻的敌人该吃 ${blastDealt} 点（${blast} 减护甲）`);
+  assert.equal(after(friendly.id), 100 - blastDealt, '自爆不区分敌我');
   assert.equal(after(far.id), 100, '隔一格的不该被波及');
 
   // 炮艇：射程 3 → 4。它是本体里唯一"便宜 + 破甲"的水面单位，
@@ -14424,7 +14439,9 @@ test('自爆：打不到空中的东西，地面照吃不误', () => {
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   assert.equal(after(bomb.id), 0, '1 血的民兵应该被打开自爆');
   const blast = Math.max(1, Math.round(s.unitTypes['militia']!.atk / 2));
-  assert.equal(after(ground.id), 100 - blast, `同一格的陆军该吃 ${blast} 点`);
+  // 2026-11-13：自爆改成物理伤害，先减甲
+  const blastDealt = Math.max(0, blast - s.unitTypes['archer']!.armor);
+  assert.equal(after(ground.id), 100 - blastDealt, `同一格的陆军该吃 ${blastDealt} 点（${blast} 减护甲）`);
   assert.equal(after(flyer.id), 100, '悬在上面的气球一点血都不该掉');
 });
 
@@ -15650,14 +15667,19 @@ test('布雷：陷阱师回合开始埋一枚哥布林陷阱，敌人踩上去�
   assert.equal(mine.charges, 1, '一枚雷只炸一次');
   assert.equal(r.state.units.length, 1, '陷阱不是单位，不该出现在 units 里');
 
-  // 敌人踩上去：10 点、无视护甲、减速 1 回合，雷消失
+  // 敌人踩上去：10 点先减甲、减速 1 回合，雷消失
   let cur = r.state;
   const enemy = place2(cur, 'B', 'swordsman', mine.x === 0 ? mine.x + 1 : mine.x - 1, mine.y);
   cur.current = 'B';
   const step = applyAction(cur, { type: 'MOVE', unitId: enemy.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === enemy.id)!;
-  assert.equal(hurt.hp, enemy.hp - 10, `踩雷应该掉 10 点，实际 ${enemy.hp - hurt.hp}`);
+  const guardArmor = cur.unitTypes['swordsman']!.armor;
+  assert.equal(
+    hurt.hp,
+    enemy.hp - Math.max(0, 10 - guardArmor),
+    `踩雷掉 10 减护甲 ${guardArmor}，实际 ${enemy.hp - hurt.hp}`,
+  );
   assert.equal(hurt.status?.slow ?? 0, 1, '踩雷还要减速 1 回合');
   assert.equal(marksOf(step.state).length, 0, '炸完就没了');
 });
@@ -15721,7 +15743,12 @@ test('地雷：工兵回合开始埋一枚轻雷，敌人踩上掉 16 点', () =
   const step = applyAction(r.state, { type: 'MOVE', unitId: enemy.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === enemy.id)!;
-  assert.equal(hurt.hp, enemy.hp - 16, `踩雷应该掉 16 点，实际 ${enemy.hp - hurt.hp}`);
+  const lineArmor = r.state.unitTypes['gp_lineinfantry']!.armor;
+  assert.equal(
+    hurt.hp,
+    enemy.hp - Math.max(0, 16 - lineArmor),
+    `踩雷掉 16 减护甲 ${lineArmor}，实际 ${enemy.hp - hurt.hp}`,
+  );
   assert.equal(marksOf(step.state).length, 0, '炸完就没了');
 });
 
@@ -15770,7 +15797,12 @@ test('地雷：扫雷兵清掉相邻的雷，自己踩雷只吃一半', () => {
   const walk = applyAction(r.state, { type: 'MOVE', unitId: sweeper.id, x: 4, y: 5 });
   assert.ok(walk.ok, walk.ok ? '' : walk.reason);
   const after = walk.state.units.find((u) => u.id === sweeper.id)!;
-  assert.equal(after.hp, sweeper.hp - 8, `扫雷兵踩雷应只吃 8 点，实际 ${sweeper.hp - after.hp}`);
+  const sweepArmor = r.state.unitTypes['mine-sweeper']!.armor;
+  assert.equal(
+    after.hp,
+    sweeper.hp - Math.max(0, 8 - sweepArmor),
+    `扫雷兵踩雷吃 8 点，再减护甲 ${sweepArmor}，实际 ${sweeper.hp - after.hp}`,
+  );
 });
 
 test('地雷：布雷车撒的是反装甲雷，一发 30 点，上限 4 枚', () => {
@@ -15791,7 +15823,57 @@ test('地雷：布雷车撒的是反装甲雷，一发 30 点，上限 4 枚', (
   const step = applyAction(r.state, { type: 'MOVE', unitId: tank.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === tank.id)!;
-  assert.equal(hurt.hp, tank.hp - 30, `反装甲雷应该 30 点，实际 ${tank.hp - hurt.hp}`);
+  // 反装甲雷是**破甲**（甲减半），不是无视护甲
+  const rifleArmor = r.state.unitTypes['rifleman']!.armor;
+  assert.equal(
+    hurt.hp,
+    tank.hp - Math.max(0, 30 - Math.floor(rifleArmor / 2)),
+    `反装甲雷 30 点、护甲 ${rifleArmor} 减半，实际 ${tank.hp - hurt.hp}`,
+  );
+});
+
+/*
+ * 2026-11-13：地雷/陷阱/自爆以前都走 `hurt`，而 `hurt` 是"扣这么多血"，
+ * 不减甲——于是「不经过 computeDamage 的伤害」全都有了无视护甲的特权。
+ * 修法是把"物理直伤"单列一个入口 `hurtPhysical`，这条用例钉住三条边界：
+ *   1. 走它就得减甲；2. pierce 只减一半；3. `hurt` 本身仍然不减甲（普攻靠它）。
+ */
+test('物理直伤：hurtPhysical 先减甲、hurt 不减——同一颗雷，重甲掉得少', () => {
+  const s = fresh({ expansionIds: [] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.units = [];
+
+  const light = place2(s, 'A', 'militia', 4, 4);
+  const heavy = place2(s, 'A', 'halberdier', 6, 4);
+  light.hp = 200;
+  heavy.hp = 200;
+
+  const lightArmor = s.unitTypes['militia']!.armor;
+  const heavyArmor = s.unitTypes['halberdier']!.armor;
+  assert.ok(heavyArmor > lightArmor, '前置：戟兵的甲要比民兵厚');
+
+  const onLight = hurtPhysical(s, light, 20);
+  const onHeavy = hurtPhysical(s, heavy, 20);
+  assert.equal(onLight, Math.max(0, 20 - lightArmor), '轻甲：20 减甲');
+  assert.equal(onHeavy, Math.max(0, 20 - heavyArmor), '重甲：20 减甲');
+  assert.ok(onHeavy < onLight, '同一颗雷，重甲兵掉的应该更少');
+
+  // 破甲：甲减半。反装甲雷用的就是这个，而不是"无视护甲"
+  const pierced = hurtPhysical(s, heavy, 20, { pierce: true });
+  assert.equal(pierced, Math.max(0, 20 - Math.floor(heavyArmor / 2)), '破甲只减一半甲');
+
+  // 打不穿：掉 0 点血，但不会把单位打没，也不会静默
+  heavy.hp = 200;
+  const blocked = hurtPhysical(s, heavy, Math.max(1, heavyArmor - 1));
+  assert.equal(blocked, 0, '打不穿就是 0');
+  assert.equal(heavy.hp, 200, '一滴血都不掉');
+
+  // 对照组：`hurt` 收的是"已经算好的伤害"，绝不能在这里再减一次甲——
+  // 普攻那条路（computeDamage → hurt）靠它，减两次等于所有攻击都变弱
+  const raw = place2(s, 'A', 'militia', 8, 4);
+  raw.hp = 200;
+  abilityApi.hurt(s, raw, 20);
+  assert.equal(raw.hp, 180, 'hurt 原样扣血，不再减甲');
 });
 
 test('造船厂：会架桥的工程兵能修，能在水面上产兵', () => {

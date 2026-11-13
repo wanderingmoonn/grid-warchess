@@ -588,7 +588,7 @@ const MEDIEVAL: UnitTypeDef[] = [
 const LAND_MINE_KIND: MarkKindDef = {
   id: 'era-mine',
   name: '地雷',
-  summary: '敌人踩上来就炸 16 点（无视护甲），炸完就没。自己人踩不到。',
+  summary: '敌人踩上来就炸 16 点（按护甲结算），炸完就没。自己人踩不到。',
   tags: ['mine', 'land'],
   hidden: true,
   // 能埋的地面：平地、林间、丘陵、沙丘、谷地、台地。
@@ -603,7 +603,9 @@ const LAND_MINE_KIND: MarkKindDef = {
     // 换一个兵来踩就该吃满伤害（和海军的水雷同一个写法）。
     const swept = (def.abilities ?? []).includes('clear-mines');
     const dmg = swept ? 8 : 16;
-    c.api.hurt(c.unit, dmg, `${def.name} 踩中地雷，损失 ${dmg} 点生命`);
+    // 地雷是**物理**伤害：走 hurtPhysical 才会先减甲（见 MarkApi 的注释）。
+    // 文案写成函数，因为"实际掉了多少"要等减完甲才知道。
+    c.api.hurtPhysical(c.unit, dmg, (dealt) => `${def.name} 踩中地雷，损失 ${dealt} 点生命`);
     c.api.log(c.mark.owner, `地雷命中 ${def.name}`);
   },
 };
@@ -611,7 +613,7 @@ const LAND_MINE_KIND: MarkKindDef = {
 const AT_MINE_KIND: MarkKindDef = {
   id: 'era-at-mine',
   name: '反装甲雷',
-  summary: '敌人踩上来就炸 30 点（无视护甲），炸完就没。专治重甲与攻城器。',
+  summary: '敌人踩上来就炸 30 点（破甲：目标护甲减半），炸完就没。专治重甲与攻城器。',
   tags: ['mine', 'land'],
   hidden: true,
   on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh'],
@@ -622,7 +624,19 @@ const AT_MINE_KIND: MarkKindDef = {
     const def = c.api.utype(c.unit.type);
     const swept = (def.abilities ?? []).includes('clear-mines');
     const dmg = swept ? 15 : 30;
-    c.api.hurt(c.unit, dmg, `${def.name} 触发了反装甲雷，损失 ${dmg} 点生命`);
+    /*
+     * 反装甲雷**破甲**，不是"无视护甲"。
+     *
+     * 这两件事差别很大：无视护甲等于把"重甲"这个属性整个作废，
+     * 而破甲只是砍一半——重甲兵仍然比轻甲兵扛得住，这正是"反装甲"该有的意思。
+     * （以前这里图省事走了 hurt，结果所有雷都变成了无视护甲。）
+     */
+    c.api.hurtPhysical(
+      c.unit,
+      dmg,
+      (dealt) => `${def.name} 触发了反装甲雷，损失 ${dealt} 点生命`,
+      { pierce: true },
+    );
     c.api.log(c.mark.owner, `反装甲雷命中 ${def.name}`);
   },
 };

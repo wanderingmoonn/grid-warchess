@@ -41,9 +41,24 @@ export interface MarkApi {
   utype(typeId: string): UnitTypeDef;
   /** 写一条战报。`open` = 双方都看得见，默认 true（雷炸了不该只有布的人知道） */
   log(owner: PlayerId, text: string, open?: boolean): void;
-  /** 直接扣血（不走进攻公式）。扣到 0 以下不用管，清场由引擎统一做 */
+  /** 直接扣血（不走进攻公式、也不减护甲）。只给"明示无视护甲"的东西用 */
   hurt(unit: Unit, amount: number, text: string): void;
-}
+  /**
+   * **物理直伤**：先减护甲再扣血。雷、陷阱这类"炸一下"的伤害都该走这里。
+   *
+   * 和 `hurt` 的分界：`amount` 是"炸多少"（像攻击力）就用这个；
+   * 是"该掉多少血"才用 `hurt`。走错的表现是重甲兵踩雷和民兵踩雷掉一样多。
+   *
+   * `text` 收一个函数，因为实际掉了多少要等减完甲才知道。
+   * `pierce` = 破甲（甲减半），给"反装甲雷"那种名字里写着破甲的东西。
+   * 返回实际扣掉的血（可能为 0）。
+   */
+  hurtPhysical(
+    unit: Unit,
+    amount: number,
+    text?: string | ((dealt: number) => string),
+    opts?: { pierce?: boolean },
+  ): number;}
 
 export interface MarkCtx {
   state: GameState;

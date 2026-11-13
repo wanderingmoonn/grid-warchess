@@ -107,8 +107,33 @@ export interface AbilityApi {
     s: GameState,
     target: Unit,
     amount: number,
-    opts?: { source?: Unit; logText?: string },
+    opts?: { source?: Unit; logText?: string | ((dealt: number) => string) },
   ): void;
+  /**
+   * **物理直伤**：先减护甲，再把剩下的扣掉。
+   *
+   * 什么时候用它，什么时候用 `hurt`：
+   *   · 数值是"攻击力"（地雷、陷阱、自爆冲击波、落石）→ **hurtPhysical**。
+   *     这类伤害从来没有"穿甲"的理由，无视护甲会让"重甲"这个属性白买。
+   *   · 数值是"已经算好的伤害"（普攻/溅射/反击走 `computeDamage` 之后）→ **hurt**。
+   *     再减一次甲就是扣两遍。
+   *   · 法术与真元（明示"无视护甲"是卖点）→ **hurt**，并在调用处写清这是故意的。
+   *
+   * 护甲取 `ownArmorOf`：**自己身上的甲**（兵种基础 + 圣剑/石化），
+   * 不含地形掩护、也不含临时护甲（圣旗/护体丹）——地雷埋在脚下，
+   * 不给你摆阵和吃药的时间。
+   *
+   * `pierce: true` 是"破甲"（甲减半），给反装甲雷那种"名字就写着反装甲"的东西用。
+   * 别用它来表达"我想让这一下更强"——那应该调 `amount`。
+   *
+   * 返回实际扣掉的血（可能被护甲减到 0）。
+   */
+  hurtPhysical(
+    s: GameState,
+    target: Unit,
+    amount: number,
+    opts?: { source?: Unit; logText?: string | ((dealt: number) => string); pierce?: boolean },
+  ): number;
   /** 这个单位现在的生命上限（已含境界加成、衰老等修正） */
   maxHpOf(s: GameState, u: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */

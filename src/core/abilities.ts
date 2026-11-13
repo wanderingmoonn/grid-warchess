@@ -128,7 +128,10 @@ export const CORE_ABILITIES: AbilityDef[] = [
             if (c.api.utype(c.state, near.type).layer === 'air') continue;
             // 自爆也是直接伤害，走唯一出口：转移、受伤钩子、致死清场一个不少。
             // 清场本身仍由主流程按 result.blasts 统一 sweepDead。
-            c.api.hurt(c.state, near, blast, { source: c.victim });
+            //
+            // 但它同时是**物理**伤害：`blast` 是"攻击力的一半"，不是算好的伤害。
+            // 走 hurt 会让自爆白嫖无视护甲，重甲兵被炸得和民兵一样疼。
+            c.api.hurtPhysical(c.state, near, blast, { source: c.victim });
             hit += 1;
           }
         }

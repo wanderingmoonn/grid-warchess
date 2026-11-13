@@ -291,6 +291,28 @@ export function exchangeMana(s: GameState, u: Unit): ManaExchange {
 }
 
 /**
+ * 从一格抽走灵气（「吐纳术」）。`ratio` 是抽走当前浓度的比例（0.5 = 抽一半）。
+ * 返回实际抽走的点数；抽不到 0 点就什么都不写。
+ *
+ * 为什么不复用 `exchangeMana`：那条路的目的地是**灵力**，而吐纳要去**修为**。
+ * 两条路都是"从格子里拿"，但拿完之后流向完全不同——混进同一个函数，
+ * 站在灵田上的修士就会凭空多出一份谁也不想要的自动结算。
+ *
+ * `writeQi` 仍然是唯一的写入口，这里只是多了一个**调用方**。
+ * 按两位小数落库之后再取整返回：返回值和格子上少掉的量最多差 0.5 点，
+ * 玩家看到的"抽走 49"和"浓度从 100 掉到 50.25"不会打架。
+ */
+export function drainQiAt(s: GameState, x: number, y: number, ratio: number): number {
+  const tile = s.tiles[idx(s, x, y)];
+  if (!tile) return 0;
+  const q = qiOfTile(tile);
+  const take = Math.min(q, Math.floor(q * Math.max(0, Math.min(1, ratio))));
+  if (take <= 0) return 0;
+  writeQi(tile, q - take);
+  return take;
+}
+
+/**
  * 只看不动：这个修士**如果**现在结算，会吸到 / 漏掉多少。
  *
  * 面板要写"每回合从环境吸 8"，但面板不能改状态。所以和 `exchangeMana`

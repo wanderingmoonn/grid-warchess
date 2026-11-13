@@ -311,6 +311,7 @@ export const abilityApi: AbilityApi = {
   hurt: (s, target, amount, opts) => {
     hurtUnit(s, target, amount, opts);
   },
+  hurtPhysical: (s, target, amount, opts) => hurtPhysical(s, target, amount, opts),
   maxHpOf: (s, u) => maxHpOf(s, u),
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
@@ -373,7 +374,7 @@ function hurtUnit(
   s: GameState,
   target: Unit,
   amount: number,
-  opts: { source?: Unit; logText?: string } = {},
+  opts: { source?: Unit; logText?: string | ((dealt: number) => string) } = {},
 ): { victim: Unit; amount: number; redirected: boolean } {
   const dmg = Math.max(0, Math.round(amount));
   if (dmg <= 0) return { victim: target, amount: 0, redirected: false };
@@ -399,7 +400,10 @@ function hurtUnit(
       true,
     );
   } else if (opts.logText) {
-    pushLog(s, victim.owner, opts.logText, true);
+    // logText 允许写成函数：地雷那种"攻击力"要**先减甲才知道掉了多少血**，
+    // 文案里的数字只能是结算之后的。写成字符串就会把 16 点写成 6 点。
+    const text = typeof opts.logText === 'function' ? opts.logText(dmg) : opts.logText;
+    pushLog(s, victim.owner, text, true);
   }
 
   const dctx: DamagedCtx = {
@@ -419,6 +423,52 @@ function hurtUnit(
   }
 
   return { victim, amount: dmg, redirected };
+}
+
+/**
+ * 物理直伤：**先减护甲**，再把剩下的血扣掉。地雷、陷阱、自爆冲击波走这条。
+ *
+ * 为什么需要它（2026-11-13 的约定）：
+ * `hurtUnit` 收的是"该掉多少血"，它自己是**不减甲**的——因为普攻那条路
+ * 已经在 `computeDamage` 里减过一次，再减就是扣两遍。于是"不经过
+ * computeDamage 的伤害"全都有了一个隐形的特权：无视护甲。
+ * 地雷、水雷、哥布林陷阱、自爆冲击波都是这么漏过去的，
+ * 表现是"重甲兵踩雷和民兵踩雷掉一样多"——那等于让重甲白买。
+ *
+ * 现在的分工写在 `AbilityApi.hurtPhysical` 的注释里，一句话：
+ * **数值是攻击力就走这里，数值是算好的伤害就走 hurt。**
+ *
+ * 护甲只取 `ownArmorOf`（兵种基础 + 圣剑/石化），**既不含地形掩护，
+ * 也不含临时护甲**（圣旗、护体丹）。那两样都是"这一仗的准备"，
+ * 而地雷是踩上去才炸的埋伏——不给你摆阵的时间。这条是刻意的分界，
+ * 不是漏了：想让药力扛雷，得把它并进 `ownArmorOf`，那会连带改掉普攻。
+ *
+ * `pierce` 是给"反装甲雷"那种名字里就写着破甲的东西准备的（甲减半）。
+ * 返回实际扣掉的血——0 表示这一下被甲完全吃掉了，调用方据此决定要不要报"毫发无伤"。
+ */
+export function hurtPhysical(
+  s: GameState,
+  target: Unit,
+  amount: number,
+  opts: { source?: Unit; logText?: string | ((dealt: number) => string); pierce?: boolean } = {},
+): number {
+  const raw = Math.max(0, Math.round(amount));
+  if (raw <= 0) return 0;
+  const armor = ownArmorOf(s, target);
+  const effective = opts.pierce ? Math.floor(armor / 2) : armor;
+  const dealt = Math.max(0, raw - effective);
+  if (dealt <= 0) {
+    /*
+     * 全被甲吃掉了也要留一条账。
+     *
+     * 不留的话，玩家只会看到"雷没了、人没掉血"，然后怀疑是不是没触发。
+     * 这条是**给防守方看的私有战报**（和普攻那条"刀砍不动"同一个口径）。
+     */
+    pushLog(s, target.owner, `${utype(s, target.type).name} 扛住了这一下（护甲 ${effective}）`, false);
+    return 0;
+  }
+  hurtUnit(s, target, dealt, { source: opts.source, logText: opts.logText });
+  return dealt;
 }
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -3692,8 +3742,9 @@ function syncBridges(s: GameState): void {
  * 一旦它 import 规则层就是循环。给一个小接口，扩展拿到的能力和
  * 兵种能力的钩子（`c.api`）是同一套语义，写起来不用换脑子。
  *
- * 雷炸出来的伤害**不走进攻公式**（无护甲、无地形、无反击）：
- * 地雷不跟你讲武德，扣血就是扣血。这也是它和"一次正常攻击"最清楚的分界。
+ * 雷炸出来的伤害是**物理伤害**：按目标护甲结算、不吃地形、不引发反击。
+ * 地雷不跟你讲武德，但"重甲"也不该白买——踩雷和挨刀在这一点上是同一件事，
+ * 区别只在于它没有攻方、不触发反击。见 `hurtPhysical`。
  */
 function markApi(s: GameState): MarkApi {
   return {
@@ -3704,6 +3755,8 @@ function markApi(s: GameState): MarkApi {
       // 取整、非正数早退都交给 hurtUnit；原本那条战报作为 logText 传进去。
       hurtUnit(s, unit, amount, { logText: text });
     },
+    hurtPhysical: (unit, amount, text, opts) =>
+      hurtPhysical(s, unit, amount, { logText: text, pierce: opts?.pierce }),
   };
 }
 

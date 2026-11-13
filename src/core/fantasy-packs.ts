@@ -1419,7 +1419,7 @@ const LAND_MINE: MarkKindDef = {
   // 改的只是显示名——玩家看到的是"哥布林陷阱"。
   id: 'gb-mine',
   name: '哥布林陷阱',
-  summary: '敌人踩上来就炸 10 点（无视护甲）并减速 1 回合，炸完就没。自己人踩不到。',
+  summary: '敌人踩上来就炸 10 点（按护甲结算）并减速 1 回合，炸完就没。自己人踩不到。',
   tags: ['mine', 'land'],
   hidden: true,
   on: ['plain', 'forest', 'hill', 'mountain', 'plateau', 'valley', 'marsh', 'dune'],
@@ -1428,7 +1428,7 @@ const LAND_MINE: MarkKindDef = {
   onEnter: (c) => {
     if (!c.unit) return;
     const def = c.api.utype(c.unit.type);
-    c.api.hurt(c.unit, 10, `${def.name} 踩响哥布林陷阱，损失 10 点生命`);
+    c.api.hurtPhysical(c.unit, 10, (dealt) => `${def.name} 踩响哥布林陷阱，损失 ${dealt} 点生命`);
     const st = (c.unit.status ??= {});
     st.slow = Math.max(st.slow ?? 0, 1);
     c.api.log(c.mark.owner, `哥布林陷阱命中 ${def.name}`);
