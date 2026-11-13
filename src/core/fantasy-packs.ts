@@ -41,7 +41,60 @@ import type { AbilityDef } from './abilities.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, marksAt } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
+import { registerStatus } from './statuses.ts';
 import type { UnitTypeDef } from './types.ts';
+
+/* ==========================================================================
+ * 一、这个包自己的两条持续状态（中毒 / 灼烧）
+ *
+ * 2026-11-13 从核心的 `STATUS_REGISTRY` 搬过来的。
+ *
+ * 为什么搬：这两条只有奇想包会贴（淬毒、燃焰、九头蛇之流），
+ * 关掉奇想之后它们在核心里就是两条永远不会出现的定义。而当初没能搬，
+ * 是因为 `registerStatus` 长在 `rules.ts` 里，扩展不能 import rules（运行时环）。
+ * 现在注册表下沉到 `statuses.ts`，这个包自己注册自己的。
+ *
+ * 注意 `onTurnStart` 拿到的 `c.hurt` 是**内生损耗**：不吃甲、不被守御阵接、
+ * 不触发"挨打"钩子。战报由返回的字符串负责，所以 `c.hurt` 自己不写日志。
+ * ======================================================================== */
+
+/**
+ * 燃烧：每层每回合多少伤害。
+ *
+ * 从"按生命上限的百分比"改成固定值，是因为百分比对高血量单位太狠：
+ * 九头蛇 115 血，8% 就是 9 点，一个 70 血的恶魔才 5 点——
+ * 同一把火在体型大的身上烧得更旺，这件事在直觉上说不通，
+ * 而且它让"怕火的巨型单位"直接没法上场。
+ *
+ * 现在叠层负责强度：挨一次火加一层，每层 4 点，结算完掉一层。
+ * 站着挨烤会越烧越旺，走出去两回合就熄了。
+ */
+export const BURN_PER_LAYER = 4;
+
+registerStatus({
+  id: 'poison',
+  name: '中毒',
+  summary: '每回合掉 6% 生命上限',
+  onTurnStart: (c) => {
+    const def = c.utypeOf(c.unit.type);
+    const dmg = Math.ceil(c.maxHpOf(c.unit) * 0.06);
+    c.hurt(dmg);
+    return `${def.name} 因中毒失去 ${dmg} 点生命`;
+  },
+});
+
+registerStatus({
+  id: 'burn',
+  name: '灼烧',
+  summary: `每层每回合掉 ${BURN_PER_LAYER} 点生命（怕火翻倍）`,
+  onTurnStart: (c) => {
+    const def = c.utypeOf(c.unit.type);
+    const mul = Math.max(1, def.weak?.fire ?? 1);
+    const dmg = c.val * BURN_PER_LAYER * mul;
+    c.hurt(dmg);
+    return `${def.name} 被灼烧（${c.val} 层）失去 ${dmg} 点生命`;
+  },
+});
 
 /**
  * 林地之主的护甲加成。
@@ -626,7 +679,9 @@ const FANTASY_ABILITIES: AbilityDef[] = [
   {
     id: 'burn-hit',
     name: '燃焰',
-    summary: '打中就让其点燃 3 回合，每回合掉 8% 生命上限——怕火的兵翻倍。',
+    // 文案必须跟着规则走：点燃是**按层**的（每层每回合 4 点，最多 3 层），
+    // 不是"8% 生命上限"——那是老版本按百分比结算时留下的说法，早就对不上了。
+    summary: '打中就让其点燃 1 层：每层每回合掉 4 点生命（最多 3 层）——怕火的兵翻倍。',
     group: 'attack',
     hooks: {
       onHit: [
@@ -1437,7 +1492,7 @@ const LAND_MINE: MarkKindDef = {
   // 改的只是显示名——玩家看到的是"哥布林陷阱"。
   id: 'gb-mine',
   name: '哥布林陷阱',
-  summary: '敌人踩上来就炸 10 点（无视护甲）并减速 1 回合，炸完就没。自己人踩不到。',
+  summary: '敌人踩上来就炸 10 点（按护甲结算）并减速 1 回合，炸完就没。自己人踩不到。',
   tags: ['mine', 'land'],
   hidden: true,
   on: ['plain', 'forest', 'hill', 'mountain', 'plateau', 'valley', 'marsh', 'dune'],
@@ -1446,7 +1501,7 @@ const LAND_MINE: MarkKindDef = {
   onEnter: (c) => {
     if (!c.unit) return;
     const def = c.api.utype(c.unit.type);
-    c.api.hurt(c.unit, 10, `${def.name} 踩响哥布林陷阱，损失 10 点生命`);
+    c.api.hurtPhysical(c.unit, 10, (dealt) => `${def.name} 踩响哥布林陷阱，损失 ${dealt} 点生命`);
     const st = (c.unit.status ??= {});
     st.slow = Math.max(st.slow ?? 0, 1);
     c.api.log(c.mark.owner, `哥布林陷阱命中 ${def.name}`);

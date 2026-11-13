@@ -157,7 +157,7 @@ registerSkillEffect('sword-sweep', (c) => {
           status: {},
         } as any;
         const dmg = c.api.computeDamage(c.state, c.self, fakeCity);
-        ct.hp -= dmg;
+        ct.hp -= dmg; // hp-exempt: 城市不是 Unit，hurtUnit 收不了它
         totalDmg += dmg;
         if (ct.hp <= 0) {
           // 调用核心统一接口：处理变废墟、挤人、写战报

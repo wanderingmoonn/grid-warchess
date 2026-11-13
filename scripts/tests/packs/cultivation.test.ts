@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, STATUS_REGISTRY, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
 import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
@@ -109,6 +109,21 @@ import {
 } from '../../../src/core/cultivation/spells.ts';
 import { MANA_REGEN, manaLimitForRank, manaOf, maxManaOf, setMana } from '../../../src/core/cultivation/mana.ts';
 import { PALM_THUNDER_COST, palmThunderDamage } from '../../../src/core/cultivation/skills/palm-thunder.ts';
+import {
+  SPIRIT_BREATH_COST,
+  SPIRIT_BREATH_EXP_FLOOR,
+  SPIRIT_BREATH_EXP_PER_RANK,
+  SPIRIT_BREATH_MIN_QI,
+  SPIRIT_BREATH_QI_PER_EXP,
+  spiritBreathCap,
+  spiritBreathExp,
+} from '../../../src/core/cultivation/skills/spirit-breath.ts';
+import {
+  GANG_WIND_COST,
+  GANG_WIND_MIN_RANK,
+  GANG_WIND_RADIUS,
+  gangWindDamage,
+} from '../../../src/core/cultivation/skills/gang-wind.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -1095,6 +1110,26 @@ export function run() {
     );
   });
 
+  test('守御阵：连「焦土」砸过来的也能接——它已经不再是绕过一切的裸扣血', () => {
+    // 2026-11-13 之前，焦土是 `near.hp -= blast`：守御阵接不住、也不算"挨打"。
+    // 现在它走 hurtPhysical，和地雷、自爆同一条路，所以这条该绿。
+    const s = fresh({ expansionIds: ['cultivation', 'scorched-earth'], godMode: true });
+    s.units = [];
+    const arr = place2(s, 'A', UNIT_IDS.GUARD_FORMATION, 5, 5);
+    const mate = place2(s, 'A', 'militia', 6, 5); // 紧挨着要倒下的那个，会被焦土波及
+    const bomb = place2(s, 'B', 'militia', 7, 5);
+    bomb.hp = 1; // 一碰就倒
+    const killer = place2(s, 'A', 'archer', 7, 6);
+    s.current = 'A';
+
+    const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+    assert.equal(at(mate.id).hp, mate.hp, '原目标一滴血没掉（这一下被阵接走了）');
+    assert.ok(at(arr.id).hp < arr.hp, '阵替友军吃了焦土');
+  });
+
   test('守御阵：友军建筑受击也转；半径外的友军不转', () => {
     const { s } = guardScene();
     s.units = [];
@@ -1123,12 +1158,20 @@ export function run() {
   });
 
   test('守御阵：中毒/灼烧这类状态伤害不转，血仍从原目标身上掉', () => {
-    const { s, arr, mate } = guardScene();
+    const { s, arr, mate } = guardScene(); // s.current === 'B'
     const before = { arr: arr.hp, mate: mate.hp };
     const dmg = Math.ceil(maxHpOf(s, mate) * 0.06);
-    STATUS_REGISTRY.poison.onTurnStart(s, mate, 1);
-    assert.equal(mate.hp, before.mate - dmg, '中毒扣的是中毒者自己的血');
-    assert.equal(arr.hp, before.arr, '阵不该替全军吃状态');
+
+    // 走真实路径：结束 B 的回合 → A 的回合开始结算中毒。
+    // 2026-11-13 起状态扣血也走 hurtUnit（internal），所以这条同时验两件事：
+    // 掉的血对得上，而且守御阵不会替全军吃状态。
+    mate.status = { poison: 1 };
+    const r = applyAction(s, { type: 'END_TURN' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const at = (id: string) => r.state.units.find((u) => u.id === id)!;
+
+    assert.equal(at(mate.id).hp, before.mate - dmg, '中毒扣的是中毒者自己的血');
+    assert.equal(at(arr.id).hp, before.arr, '阵不该替全军吃状态');
   });
 
   test('守御阵：自己挨打就吸守阵修士的血，每回合额度=境界', () => {
@@ -2594,6 +2637,147 @@ export function run() {
     });
     assert.equal(r.ok, false);
     assert.equal(manaOf(s.units.find((u) => u.id === mage.id)!), PALM_THUNDER_COST - 1, '失败不扣灵力');
+  });
+
+  // ── 吐纳术 / 罡风（2026-11-13）────────────────────
+  //
+  // 「用法术补强度」的头两发：一个补成长（环境灵气换修为），
+  // 一个补面积（远距离、大范围、无视护甲）。
+  // 这一组断言守的是同一件事——**按钮上写的数就是实际发生的数**。
+
+  /** 把某一格的灵气钉死（跳过 stepQiField，免得地形缺省来搅局） */
+  const setQi = (s: GameState, x: number, y: number, qi: number) => {
+    s.tiles[idx(s, x, y)] = { terrain: 'plain', cityId: null, custom: { qi } };
+  };
+
+  test('吐纳术：抽走一半灵气换修为，账面按 2:1 平账', () => {
+    const { s } = spellScene();
+    const mon = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mon, expForRank(5)); // 6 期
+    teachSpell(mon, spellOf('spirit-breath')!);
+    setQi(s, 6, 5, 100);
+
+    const card = heroSkillsOf(s, mon).find((k) => k.def.id === 'spirit-breath');
+    assert.ok(card, '学会之后技能栏里要有它');
+    assert.ok(card!.ready, `灵气和灵力都够，就该能点：${card!.notReadyReason}`);
+
+    const expBefore = getExp(mon);
+    const manaBefore = manaOf(mon);
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mon.id, skillId: 'spirit-breath' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const after = r.state.units.find((u) => u.id === mon.id)!;
+    const exp = spiritBreathExp(100, 6);
+    assert.equal(exp, 24, '100 的一半是 50，2 换 1 得 25，被 6 期上限 24 截掉 1');
+    assert.equal(getExp(after) - expBefore, exp, '修为按算出来的数入账');
+    assert.equal(
+      qiAt(r.state, 6, 5),
+      100 - exp * SPIRIT_BREATH_QI_PER_EXP,
+      '抽走的灵气 = 修为 × 每点修为的灵气（账要平）',
+    );
+    assert.equal(manaOf(after), manaBefore - SPIRIT_BREATH_COST, '扣灵力');
+  });
+
+  test('吐纳术：低境界有上限、灵气太薄时是灰的且不扣灵力', () => {
+    const { s } = spellScene();
+    const mon = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mon, expForRank(1)); // 2 期
+    teachSpell(mon, spellOf('spirit-breath')!);
+    setQi(s, 6, 5, 100);
+
+    assert.equal(spiritBreathCap(2), 8, '2 期一口最多 8 点（约两回合打坐）');
+    assert.equal(spiritBreathExp(100, 2), 8, '满灵气也只给上限那么多');
+
+    setQi(s, 6, 5, SPIRIT_BREATH_MIN_QI - 1);
+    const card = heroSkillsOf(s, mon).find((k) => k.def.id === 'spirit-breath')!;
+    assert.equal(card.ready, false, '灵气不够时不该是可点的');
+    assert.ok(card.notReadyReason?.includes('灵气'), `理由要说灵气：${card.notReadyReason}`);
+
+    const manaBefore = manaOf(mon);
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mon.id, skillId: 'spirit-breath' });
+    assert.equal(r.ok, false, '硬放要被拒');
+    assert.equal(manaOf(s.units.find((u) => u.id === mon.id)!), manaBefore, '失败不扣灵力');
+  });
+
+  test('罡风：半径内全中、半径外不中，伤害无视护甲', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期：刚好够门槛
+    teachSpell(mage, spellOf('gang-wind')!);
+
+    const onPoint = place2(s, 'B', 'militia', 7, 5); // 落点正上
+    const edge = place2(s, 'B', 'militia', 6, 6); // 距落点 2 格，压线
+    const outside = place2(s, 'B', 'militia', 9, 7); // 距落点 4 格
+    for (const u of [onPoint, edge, outside]) u.hp = 500;
+
+    const dmg = gangWindDamage(4);
+    const manaBefore = manaOf(mage);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'gang-wind',
+      targetX: 7,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const hpOf = (id: string) => r.state.units.find((u) => u.id === id)!.hp;
+    assert.equal(hpOf(onPoint.id), 500 - dmg, `落点上要正好掉 ${dmg}（民兵 1 甲不参与）`);
+    assert.equal(hpOf(edge.id), 500 - dmg, `半径 ${GANG_WIND_RADIUS} 内（含斜角）都要中`);
+    assert.equal(hpOf(outside.id), 500, '半径外的不能波及');
+    assert.equal(
+      manaOf(r.state.units.find((u) => u.id === mage.id)!),
+      manaBefore - GANG_WIND_COST,
+      '扣灵力',
+    );
+  });
+
+  test('罡风：空放不扣灵力，超射程直接拒', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3));
+    teachSpell(mage, spellOf('gang-wind')!);
+
+    const manaBefore = manaOf(mage);
+    const empty = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'gang-wind',
+      targetX: 7,
+      targetY: 5,
+    });
+    assert.equal(empty.ok, false, '圈里没人就该被拒');
+    assert.equal(manaOf(s.units.find((u) => u.id === mage.id)!), manaBefore, '空放不花灵力');
+
+    const far = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'gang-wind',
+      targetX: 14,
+      targetY: 14,
+    });
+    assert.equal(far.ok, false, '超出射程应该被拒');
+    assert.ok(far.ok ? '' : /射程|太远/.test(far.reason), `理由要说射程：${far.ok ? '' : far.reason}`);
+  });
+
+  test('罡风：4 期才学得会——法术位之外还有一道境界门槛', () => {
+    const { s, sect } = spellScene();
+    const low = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(low, expForRank(2)); // 3 期
+    assert.equal(spellOf('gang-wind')!.minRank, GANG_WIND_MIN_RANK, '法术池里要登记门槛');
+
+    const r = doAction(s, sect.id, 'research:gang-wind');
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const early = doAction(r.state, low.id, 'learn:gang-wind');
+    assert.equal(early.ok, false, '3 期不该学得会');
+    assert.ok(early.ok ? '' : /境界/.test(early.reason), `理由要说境界：${early.ok ? '' : early.reason}`);
+
+    // 藏经阁在 (6,4)，所以 4 期那位要站在它旁边（(7,4)）——否则会先被"站远"拦下
+    const mid = place2(r.state, 'A', 'qi-cultivator', 7, 4);
+    setCultivationExp(mid, expForRank(3)); // 4 期
+    const ok = doAction(r.state, mid.id, 'learn:gang-wind');
+    assert.ok(ok.ok, ok.ok ? '' : ok.reason);
   });
 
   test('宗门大殿的按钮：研发一组、遗弃一组，遗弃带确认文案', () => {

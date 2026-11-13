@@ -379,7 +379,7 @@ export const ARMOR8_UNITS: UnitTypeDef[] = [
 const ARMOR_MINE: MarkKindDef = {
   id: MINE_KIND,
   name: '反装甲地雷',
-  summary: '敌人踩上来炸 52 点（无视护甲），炸完就没。自己人不炸。',
+  summary: '敌人踩上来炸 52 点（破甲：目标护甲减半），炸完就没。自己人不炸。',
   tags: ['mine', 'land'],
   hidden: true,
   on: ['plain', 'forest', 'hill', 'dune', 'valley', 'plateau', 'marsh', 'city'],
@@ -390,7 +390,14 @@ const ARMOR_MINE: MarkKindDef = {
     const def = c.api.utype(c.unit.type);
     const swept = (def.abilities ?? []).includes('clear-mines');
     const dmg = swept ? 26 : 52;
-    c.api.hurt(c.unit, dmg, `${def.name} 踩中反装甲地雷，损失 ${dmg} 点生命`);
+    /*
+     * 破甲，不是"无视护甲"（2026-11-13 与火器时代那两种雷统一）：
+     * 无视护甲等于把"装甲"这个属性整个作废，而破甲只砍一半——
+     * 重装素体仍然比轻甲兵扛得住，这才是"反装甲"该有的意思。
+     */
+    c.api.hurtPhysical(c.unit, dmg, (dealt) => `${def.name} 踩中反装甲地雷，损失 ${dealt} 点生命`, {
+      pierce: true,
+    });
     c.api.log(c.mark.owner, `反装甲地雷命中 ${def.name}`);
   },
 };

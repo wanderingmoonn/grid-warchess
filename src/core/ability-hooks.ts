@@ -135,8 +135,33 @@ export interface AbilityApi {
     s: GameState,
     target: Unit,
     amount: number,
-    opts?: { source?: Unit; logText?: string },
+    opts?: { source?: Unit; logText?: string | ((dealt: number) => string) },
   ): void;
+  /**
+   * **物理直伤**：先减护甲，再把剩下的扣掉。
+   *
+   * 什么时候用它，什么时候用 `hurt`：
+   *   · 数值是"攻击力"（地雷、陷阱、自爆冲击波、落石）→ **hurtPhysical**。
+   *     这类伤害从来没有"穿甲"的理由，无视护甲会让"重甲"这个属性白买。
+   *   · 数值是"已经算好的伤害"（普攻/溅射/反击走 `computeDamage` 之后）→ **hurt**。
+   *     再减一次甲就是扣两遍。
+   *   · 法术与真元（明示"无视护甲"是卖点）→ **hurt**，并在调用处写清这是故意的。
+   *
+   * 护甲取 `ownArmorOf`：**自己身上的甲**（兵种基础 + 圣剑/石化），
+   * 不含地形掩护、也不含临时护甲（圣旗/护体丹）——地雷埋在脚下，
+   * 不给你摆阵和吃药的时间。
+   *
+   * `pierce: true` 是"破甲"（甲减半），给反装甲雷那种"名字就写着反装甲"的东西用。
+   * 别用它来表达"我想让这一下更强"——那应该调 `amount`。
+   *
+   * 返回实际扣掉的血（可能被护甲减到 0）。
+   */
+  hurtPhysical(
+    s: GameState,
+    target: Unit,
+    amount: number,
+    opts?: { source?: Unit; logText?: string | ((dealt: number) => string); pierce?: boolean },
+  ): number;
   /** 这个单位现在的生命上限（已含境界加成、衰老等修正） */
   maxHpOf(s: GameState, u: Unit): number;
   /** 算一下这个单位打那个单位能造成多少伤害 */
@@ -367,32 +392,16 @@ export const TURN_START = {
 } as const;
 
 /**
- * 持续状态的定义。
- * 扩展可以通过注册表注册自己的状态，从而影响单位。
+ * 持续状态的定义与结算上下文，**已经搬到 `statuses.ts`**（2026-11-13）。
+ *
+ * 搬家的原因很实在：注册表原先长在 `rules.ts` 里，而扩展包不能 import rules
+ * （运行时环），于是"扩展可以注册状态"这句话只能停在注释上——
+ * 中毒、灼烧这些奇想包的内容因此被迫写死在核心。
+ *
+ * 这里保留 re-export，只是为了不打断既有的 `import type { StatusDef }
+ * from './ability-hooks.ts'`；新代码请直接从 `./statuses.ts` 取。
  */
-export interface StatusDef {
-  id: string;
-  name: string;
-  summary: string;
-
-  /** 
-   * 回合开始时的结算（比如掉血、回血）。
-   * 返回字符串则写入战报，返回 null 表示不写。
-   */
-  onTurnStart?: (s: GameState, u: Unit, val: number) => string | null;
-
-  /** 修正移动力 */
-  modifyMove?: (s: GameState, u: Unit, val: number, move: number) => number;
-
-  /** 修正护甲 */
-  modifyArmor?: (s: GameState, u: Unit, val: number, armor: number) => number;
-
-  /** 修正攻击力（可以留给未来的面板和使用，目前先挂着） */
-  modifyAtk?: (s: GameState, u: Unit, val: number, atk: number) => number;
-  
-  /** 修正视野 */
-  modifyVision?: (s: GameState, u: Unit, val: number, vision: number) => number;
-}
+export type { StatusDef, StatusTickCtx } from './statuses.ts';
 
 export interface HitCtx {
   state: GameState;

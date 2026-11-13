@@ -31,8 +31,8 @@
     "inBounds(": 1
   },
   "src/core/cultivation/qi-field.ts": {
-    "state.tiles": 8,
-    "idx(": 5
+    "state.tiles": 11,
+    "idx(": 7
   },
   "src/core/cultivation/skills/blood-rite.ts": {
     "inBounds(": 1
@@ -135,7 +135,7 @@
     "state.tiles": 1
   },
   "src/ui/board.ts": {
-    "state.tiles": 8
+    "state.tiles": 7
   },
   "src/ui/draft-panel.ts": {
     "state.tiles": 3

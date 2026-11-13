@@ -362,22 +362,12 @@ export const abilityApi: AbilityApi = {
   hurt: (s, target, amount, opts) => {
     hurtUnit(s, target, amount, opts);
   },
+  hurtPhysical: (s, target, amount, opts) => hurtPhysical(s, target, amount, opts),
   maxHpOf: (s, u) => maxHpOf(s, u),
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
   attacksPerTurn: (s, u) => attacksPerTurn(s, u),
-  killUnit: (s, victim, killer, logText) => {
-    if (!s.units.some((u) => u.id === victim.id)) return; // 幂等
-    s.units = s.units.filter((u) => u.id !== victim.id);
-    pushLog(
-      s,
-      killer?.owner ?? other(victim.owner),
-      logText ?? `${utype(s, victim.type).name} 被消灭`,
-      true,
-    );
-    loseCargo(s, victim);
-    fireKilled(s, victim, killer);
-  },
+  killUnit: (s, victim, killer, logText) => killUnit(s, victim, killer, logText),
   destroyCity: (s, city, attackerOwner) => destroyCity(s, city, attackerOwner),
   noteHeat: (s, x, y, board) => {
     // 只记地球：格号在两张图上会撞（见 ability-hooks 的说明）
@@ -462,12 +452,35 @@ function hurtUnit(
   s: GameState,
   target: Unit,
   amount: number,
-  opts: { source?: Unit; logText?: string; kind?: string } = {},
+  opts: {
+    source?: Unit;
+    logText?: string | ((dealt: number) => string);
+    /** 跑批统计用的伤害标签（缺省 'attack'，反应射击是 'react'） */
+    kind?: string;
+    /**
+     * **损耗**（attrition）：这一下是"血在自己掉"，不是"挨了一下打"
+     * （维护费不足、中毒、灼烧、自损）。
+     *
+     * 它描述的是**伤害的性质**，不是某条能力的开关。现在读它的有两处，
+     * 都是"只在真的挨打时才该发生"的规则：
+     *   · 伤害转移（守御阵替友军挨刀）——没道理替人交维护费；
+     *   · 受伤钩子（挨打反击、受击回血）——交税不该触发反击。
+     *
+     * 以后再加「护盾先吸收」「荆棘反伤」这类机制，读的是同一个标记，
+     * 不必为每条能力各开一个后门。反过来说，如果哪天要让**某一条**防御
+     * 只挡物理、不挡法术，那应该把伤害种类传进 `redirectDamage` 让防御方自己判，
+     * 而不是在这里加第二个布尔。
+     *
+     * 另外它**仍然从这里走**：扣血、战报、致死清场只有一处。
+     * 以前这几条路各自 `u.hp -=`，代价是战报口径不一、死了不算任何人杀的。
+     */
+    attrition?: boolean;
+  } = {},
 ): { victim: Unit; amount: number; redirected: boolean } {
   const dmg = Math.max(0, Math.round(amount));
   if (dmg <= 0) return { victim: target, amount: 0, redirected: false };
 
-  const taker = redirectOf(s, target, dmg, opts.source);
+  const taker = opts.attrition ? null : redirectOf(s, target, dmg, opts.source);
   const victim = taker ?? target;
   const redirected = victim.id !== target.id;
 
@@ -484,7 +497,7 @@ function hurtUnit(
     victim.extraHp -= absorb;
     toHp -= absorb;
   }
-  victim.hp -= toHp;
+  victim.hp -= toHp; // hp-exempt: 唯一的扣血出口，全仓库只有这里可以直接改 hp
 
   /*
    * 转移的战报必须写，而且默认公开。
@@ -501,13 +514,17 @@ function hurtUnit(
       true,
     );
   } else if (opts.logText) {
-    pushLog(s, victim.owner, opts.logText, true);
+    // logText 允许写成函数：地雷那种"攻击力"要**先减甲才知道掉了多少血**，
+    // 文案里的数字只能是结算之后的。写成字符串就会把 16 点写成 6 点。
+    const text = typeof opts.logText === 'function' ? opts.logText(dmg) : opts.logText;
+    pushLog(s, victim.owner, text, true);
   }
 
   const dctx: DamagedCtx = {
     state: s, self: victim, amount: dmg, source: opts.source, api: abilityApi,
   };
-  for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
+  // 内生损耗不算"挨打"：中毒、交税不该触发反击/受击回血
+  if (!opts.attrition) for (const h of hooksOfUnit(s, victim)) h.onDamaged?.(dctx);
 
   /*
    * 扩展层的"真的掉血了"通知（数值已写进 hp）。
@@ -543,6 +560,52 @@ function hurtUnit(
   }
 
   return { victim, amount: dmg, redirected };
+}
+
+/**
+ * 物理直伤：**先减护甲**，再把剩下的血扣掉。地雷、陷阱、自爆冲击波走这条。
+ *
+ * 为什么需要它（2026-11-13 的约定）：
+ * `hurtUnit` 收的是"该掉多少血"，它自己是**不减甲**的——因为普攻那条路
+ * 已经在 `computeDamage` 里减过一次，再减就是扣两遍。于是"不经过
+ * computeDamage 的伤害"全都有了一个隐形的特权：无视护甲。
+ * 地雷、水雷、哥布林陷阱、自爆冲击波都是这么漏过去的，
+ * 表现是"重甲兵踩雷和民兵踩雷掉一样多"——那等于让重甲白买。
+ *
+ * 现在的分工写在 `AbilityApi.hurtPhysical` 的注释里，一句话：
+ * **数值是攻击力就走这里，数值是算好的伤害就走 hurt。**
+ *
+ * 护甲只取 `ownArmorOf`（兵种基础 + 圣剑/石化），**既不含地形掩护，
+ * 也不含临时护甲**（圣旗、护体丹）。那两样都是"这一仗的准备"，
+ * 而地雷是踩上去才炸的埋伏——不给你摆阵的时间。这条是刻意的分界，
+ * 不是漏了：想让药力扛雷，得把它并进 `ownArmorOf`，那会连带改掉普攻。
+ *
+ * `pierce` 是给"反装甲雷"那种名字里就写着破甲的东西准备的（甲减半）。
+ * 返回实际扣掉的血——0 表示这一下被甲完全吃掉了，调用方据此决定要不要报"毫发无伤"。
+ */
+export function hurtPhysical(
+  s: GameState,
+  target: Unit,
+  amount: number,
+  opts: { source?: Unit; logText?: string | ((dealt: number) => string); pierce?: boolean } = {},
+): number {
+  const raw = Math.max(0, Math.round(amount));
+  if (raw <= 0) return 0;
+  const armor = ownArmorOf(s, target);
+  const effective = opts.pierce ? Math.floor(armor / 2) : armor;
+  const dealt = Math.max(0, raw - effective);
+  if (dealt <= 0) {
+    /*
+     * 全被甲吃掉了也要留一条账。
+     *
+     * 不留的话，玩家只会看到"雷没了、人没掉血"，然后怀疑是不是没触发。
+     * 这条是**给防守方看的私有战报**（和普攻那条"刀砍不动"同一个口径）。
+     */
+    pushLog(s, target.owner, `${utype(s, target.type).name} 扛住了这一下（护甲 ${effective}）`, false);
+    return 0;
+  }
+  hurtUnit(s, target, dealt, { source: opts.source, logText: opts.logText });
+  return dealt;
 }
 
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
@@ -1357,32 +1420,24 @@ export function applyElementMul(
   return out;
 }
 
-import type { StatusDef } from './ability-hooks.ts';
+import { STATUS_REGISTRY, registerStatus } from './statuses.ts';
+import type { StatusDef } from './statuses.ts';
 
-export const STATUS_REGISTRY: Record<string, StatusDef> = {
-  poison: {
-    id: 'poison',
-    name: '中毒',
-    summary: '每回合掉 6% 生命上限',
-    onTurnStart: (s, u, _val) => {
-      const def = utype(s, u.type);
-      const dmg = Math.ceil(maxHpOf(s, u) * 0.06);
-      u.hp -= dmg;
-      return `${def.name} 因中毒失去 ${dmg} 点生命`;
-    },
-  },
-  burn: {
-    id: 'burn',
-    name: '灼烧',
-    summary: '每层每回合掉 4 点生命（怕火翻倍）',
-    onTurnStart: (s, u, val) => {
-      const def = utype(s, u.type);
-      const mul = Math.max(1, def.weak?.fire ?? 1);
-      const dmg = val * BURN_PER_LAYER * mul;
-      u.hp -= dmg;
-      return `${def.name} 被灼烧（${val} 层）失去 ${dmg} 点生命`;
-    },
-  },
+/*
+ * 状态注册表已经搬到 `statuses.ts`（那一层扩展能 import，不会把 rules 拖进环）。
+ * 这里 re-export 只是为了让既有的 `import { STATUS_REGISTRY } from './rules.ts'`
+ * 继续能用；新代码请直接从 `./statuses.ts` 取。
+ */
+export { STATUS_REGISTRY, registerStatus };
+
+/*
+ * 核心自己保留的五条状态。
+ *
+ * 中毒、灼烧已经搬到奇想包（`fantasy-packs.ts`）：它们是那个包的内容，
+ * 关掉奇想之后核心不该还留着一份"没人会贴的状态"。注册表本身在
+ * `statuses.ts`——那一层扩展也能 import，且不会把 rules 拖进环里。
+ */
+const CORE_STATUS_DEFS: Record<string, StatusDef> = {
   slow: {
     id: 'slow',
     name: '减速',
@@ -1446,6 +1501,8 @@ export const STATUS_REGISTRY: Record<string, StatusDef> = {
   },
 };
 
+for (const def of Object.values(CORE_STATUS_DEFS)) registerStatus(def);
+
 /**
  * 状态结算的固定顺序：中毒 → 灼烧 → 减速 → 诅咒。
  *
@@ -1471,19 +1528,6 @@ export function orderedStatuses(status: Unit['status']): Array<[string, number]>
 }
 
 /**
- * 注册一个持续状态（给扩展用）。
- *
- * 不提供覆盖：同 id 再注册一次直接抛。悄悄覆盖会让"两个包都想改中毒"
- * 变成按 import 顺序决定规则，这种 bug 最难查。
- */
-export function registerStatus(def: StatusDef): void {
-  if (Object.prototype.hasOwnProperty.call(STATUS_REGISTRY, def.id)) {
-    throw new Error(`状态「${def.id}」已经注册过了`);
-  }
-  STATUS_REGISTRY[def.id] = def;
-}
-
-/**
  * 燃烧：每层每回合多少伤害。
  *
  * 从"按生命上限的百分比"改成固定值，是因为百分比对高血量单位太狠：
@@ -1494,8 +1538,8 @@ export function registerStatus(def: StatusDef): void {
  * 现在叠层负责强度：挨一次火加一层，最多三层，每层 4 点，
  * 结算完掉一层。站着挨烤会越烧越旺，走出去两回合就熄了。
  */
-export const BURN_PER_LAYER = 4;
-// 层数上限也定义在 ability-hooks.ts（命中类能力要和这里用同一个上限），从这里转出去。
+// 「每层烧多少」是奇想包的内容（见 fantasy-packs.ts 的 BURN_PER_LAYER）。
+// 核心只留「最多几层」：那是命中类能力和回合结算共用的上限，属于机制。
 export { BURN_MAX_LAYERS };
 
 /**
@@ -3449,6 +3493,60 @@ function creditKill(s: GameState, killer: Unit): void {
   side[killer.type] = (side[killer.type] ?? 0) + 1;
 }
 
+/**
+ * 一个单位"死了"的**唯一实现**（2026-11-13 合一）。
+ *
+ * 死一次要做五件事，一件都不能少：
+ *   1. 从 `s.units` 移除（幂等——亡语可能连带杀掉别人，同一个人不能被处理两次）；
+ *   2. 写一条战报（默认写给它自己，有凶手就写给凶手）；
+ *   3. 清掉货舱（船沉了，船上的人跟着没，不能凭空回到棋盘上）；
+ *   4. 通知扩展 `onUnitKilled`（击杀奖励、招魂名单）；
+ *   5. 跑亡语 `onDeath`（自爆、分裂、灵体化）。
+ *
+ * 以前这五件事在四个地方各写了一遍（普攻、溅射、反击阵亡、sweepDead），
+ * 焦土更是直接 `filter`——结果"被焦土砸死的单位"不会触发它自己的亡语，
+ * 连锁反应到第二代就断了，而且没人看得出为什么。
+ *
+ * 注意：**"死"和"清场"是两件事**。血归零只代表"待清场"，
+ * 真正执行的是这里（或 `sweepDead` 批量转进来）。留出这个缝是因为
+ * 「油尽灯枯」要让修士在清场前再撑一拍——玩家还有机会救他。
+ *
+ * ── 边界：什么该走这里，什么不该 ──────────────────────────
+ *
+ * 走这里 = "这个单位死了"：被打死、被毒死、被烧死、自损而亡、坐化。
+ * 跟着它一起生效的有：战报、沉船、`onUnitKilled`（击杀奖励/招魂）、
+ * 亡语 `onDeath`（自爆、分裂、灵体化）。
+ *
+ * 不走这里 = "这个单位被移除了"：遣散、投降、分裂合体、桥塌落水。
+ * 这几件事没有凶手，也不该触发亡语（自爆兵掉进河里不该再炸一次）。
+ */
+function killUnit(s: GameState, victim: Unit, killer: Unit | undefined, logText?: string): void {
+  if (!s.units.some((u) => u.id === victim.id)) return; // 幂等
+  s.units = s.units.filter((u) => u.id !== victim.id);
+  /*
+   * 战报给谁看：有凶手就写给凶手那边；没有凶手（毒死、烧死、坐化、
+   * 反击同归于尽）就写给它自己——棋盘上血条归零是公开信息，
+   * 而且"我的人怎么没的"这条，防守方比谁都该看到。
+   */
+  pushLog(s, killer?.owner ?? victim.owner, logText ?? `${utype(s, victim.type).name} 被消灭`, true);
+  loseCargo(s, victim);
+  fireKilled(s, victim, killer);
+}
+
+/**
+ * 批量清场：把场上所有 hp ≤ 0 的单位交给 `killUnit`。
+ *
+ * 它是"死亡"的第二入口，不是第二套实现——里面只调 `killUnit`。
+ * 谁想让尸体立刻消失，就调这个，别自己 `filter`。
+ */
+function sweepDead(s: GameState): void {
+  // 先取快照：亡语可能在清理过程中再生出新的尸体（自爆连锁）
+  for (const u of [...s.units]) {
+    if (u.hp > 0) continue;
+    killUnit(s, u, undefined, `${utype(s, u.type).name} 倒下了`);
+  }
+}
+
 function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void {
   // 1) 先记账：人头数进两处——单位自己的 `kills`（「老兵不死」的加成来源），
   //    以及局级的 `killTally`（战报卡的 MVP 来源，单位死了也不丢）。
@@ -3470,7 +3568,15 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   // 先告诉世界"谁死了、死时是什么"，再处理"死后变成了什么"。
   // 亡语属于后者——它是死亡之后发生的事，不该污染死亡这件事本身。
   for (const e of activeExpansions(s)) {
-    e.hooks.onUnitKilled?.({ state: s, victim, killer, killerOwner, api: abilityApi });
+    e.hooks.onUnitKilled?.({
+      state: s,
+      victim,
+      killer,
+      killerOwner,
+      api: abilityApi,
+      // 清场入口：扩展在钩子里打死人之后必须调它（见 KillCtx.sweepDead）
+      sweepDead: () => sweepDead(s),
+    });
   }
 
   // 3) 再执行亡语/转化（自爆、重生、分裂、灵体化）。
@@ -3490,7 +3596,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   for (const h of hooksOfUnit(s, victim)) h.onDeath?.(dctx);
   // 自爆会波及旁人：这一步做完得扫一遍，把 hp 归零的清掉，
   // 否则下面的"解散/分裂"会看到一个已经死了的邻居。
-  if (dctx.result.blasts > 0) s.units = s.units.filter((u) => u.hp > 0);
+  if (dctx.result.blasts > 0) sweepDead(s);
 }
 
 function checkWinner(s: GameState): PlayerId | null {
@@ -4334,6 +4440,11 @@ function syncBridges(s: GameState): void {
     pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`, true);
   }
   const gone = new Set(drowned.map((u) => u.id));
+  /*
+   * 这里刻意**不走** `killUnit`：落水不是"被击杀"——没有凶手，
+   * 也不该跑亡语（一个自爆兵掉进河里不该再炸一次）。
+   * "死亡"与"移除"的分界写在 killUnit 的注释里：有亡语的走前者，纯粹消失的走后者。
+   */
   s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
@@ -4344,8 +4455,9 @@ function syncBridges(s: GameState): void {
  * 一旦它 import 规则层就是循环。给一个小接口，扩展拿到的能力和
  * 兵种能力的钩子（`c.api`）是同一套语义，写起来不用换脑子。
  *
- * 雷炸出来的伤害**不走进攻公式**（无护甲、无地形、无反击）：
- * 地雷不跟你讲武德，扣血就是扣血。这也是它和"一次正常攻击"最清楚的分界。
+ * 雷炸出来的伤害是**物理伤害**：按目标护甲结算、不吃地形、不引发反击。
+ * 地雷不跟你讲武德，但"重甲"也不该白买——踩雷和挨刀在这一点上是同一件事，
+ * 区别只在于它没有攻方、不触发反击。见 `hurtPhysical`。
  */
 function markApi(s: GameState): MarkApi {
   return {
@@ -4356,6 +4468,8 @@ function markApi(s: GameState): MarkApi {
       // 取整、非正数早退都交给 hurtUnit；原本那条战报作为 logText 传进去。
       hurtUnit(s, unit, amount, { logText: text });
     },
+    hurtPhysical: (unit, amount, text, opts) =>
+      hurtPhysical(s, unit, amount, { logText: text, pierce: opts?.pierce }),
   };
 }
 
@@ -4779,10 +4893,7 @@ function doAttack(
   }
 
   if (defender.hp <= 0) {
-    s.units = s.units.filter((u) => u.id !== defender.id);
-    pushLog(s, attacker.owner, `${dfName} 被消灭`, true);
-    loseCargo(s, defender);
-    fireKilled(s, defender, attacker);
+    killUnit(s, defender, attacker, `${dfName} 被消灭`);
     // 收割（刺客大师）：亲手斩掉一个，本回合的移动力就还回来。
     //
     // 只还移动、不还攻击。攻击次数由 acted 管着，这里刻意不碰——
@@ -4805,20 +4916,13 @@ function doAttack(
     }
   }
 
-  // 溅射打死的也要走同一套善后：战报 + 沉船 + 击杀钩子
+  // 溅射打死的也走同一个出口（战报 / 沉船 / 亡语 / 击杀钩子都在里面）
   for (const v of splashed) {
     if (v.unit.hp > 0) continue;
-    if (!s.units.some((u) => u.id === v.unit.id)) continue;
-    s.units = s.units.filter((u) => u.id !== v.unit.id);
-    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    loseCargo(s, v.unit);
-    fireKilled(s, v.unit, attacker);
+    killUnit(s, v.unit, attacker, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
   }
   if (attacker.hp <= 0) {
-    s.units = s.units.filter((u) => u.id !== attacker.id);
-    pushLog(s, attacker.owner, `${atName} 在反击中阵亡`, true);
-    loseCargo(s, attacker);
-    fireKilled(s, attacker, undefined);
+    killUnit(s, attacker, undefined, `${atName} 在反击中阵亡`);
   }
 
   s.winner = checkWinner(s);
@@ -4917,7 +5021,7 @@ function doSiege(
 
   const atName = utype(s, attacker.type).name;
   const dmg = damageToCity(attacker, city, s);
-  city.hp -= dmg;
+  city.hp -= dmg; // hp-exempt: 城市不是 Unit，hurtUnit 收不了它（城墙有自己的护甲公式）
 
   /*
    * 溅射：炮火砸在城墙上，附近挨得近的敌兵一样吃一份。
@@ -4991,11 +5095,7 @@ function doSiege(
   // 少这一段就会留下"血量 0 还站在场上"的兵——收口到 hurtUnit 时踩过这个坑。
   for (const v of splashed) {
     if (v.unit.hp > 0) continue;
-    if (!s.units.some((u) => u.id === v.unit.id)) continue;
-    s.units = s.units.filter((u) => u.id !== v.unit.id);
-    pushLog(s, attacker.owner, `${utype(s, v.unit.type).name} 被炮火波及消灭`, true);
-    loseCargo(s, v.unit);
-    fireKilled(s, v.unit, attacker);
+    killUnit(s, v.unit, attacker, `${utype(s, v.unit.type).name} 被炮火波及消灭`);
   }
 
   attacker.attacksLeft = Math.max(0, (attacker.attacksLeft ?? 1) - 1);
@@ -6890,24 +6990,6 @@ function doSurrender(s: GameState): ActionResult {
 }
 
 /**
- * 清场：把所有 hp ≤ 0 的单位收掉。
- *
- * 单独抽出来，是因为"回合开始的各种自动效果"（中毒、陷阱、自损、燃焰）
- * 可能一次性打死好几个人，而它们各自删各自的单位会漏掉沉船、击杀钩子、
- * 重生这些善后。统一扫一遍最不容易出错。
- */
-function sweepDead(s: GameState): void {
-  for (const u of [...s.units]) {
-    if (u.hp > 0) continue;
-    if (!s.units.some((x) => x.id === u.id)) continue;
-    s.units = s.units.filter((x) => x.id !== u.id);
-    pushLog(s, u.owner, `${utype(s, u.type).name} 倒下了`, true);
-    loseCargo(s, u);
-    fireKilled(s, u, undefined);
-  }
-}
-
-/**
  * 动作开始前的在册名单：id → 兵种/主人/位置。
  *
  * 船里的人也算在册——他们只是换了个地方放，不是死了。漏了这一步，
@@ -6964,7 +7046,18 @@ function tickStatuses(s: GameState, p: PlayerId): void {
     for (const [key, val] of orderedStatuses(u.status)) {
       const def = STATUS_REGISTRY[key];
       if (def?.onTurnStart) {
-        const logText = def.onTurnStart(s, u, val);
+        /*
+         * 状态掉血也走统一出口（`attrition`：内生损耗，不转移、不触发受伤钩子）。
+         * 战报仍由状态自己返回——所以 `c.hurt` 刻意不写日志，否则一条战报两遍。
+         */
+        const logText = def.onTurnStart({
+          state: s,
+          unit: u,
+          val,
+          hurt: (amount) => hurtUnit(s, u, amount, { attrition: true }).amount,
+          maxHpOf: (x) => maxHpOf(s, x),
+          utypeOf: (typeId) => utype(s, typeId),
+        });
         /*
          * 掉血这条要标成公开。
          *
@@ -6999,7 +7092,8 @@ function decayUnits(s: GameState, p: PlayerId): void {
     if (u.owner !== p) continue;
     const d = utype(s, u.type).decays ?? 0;
     if (d <= 0) continue;
-    u.hp -= d;
+    // 自损也是"扣血"，但它不是受伤（没人打它）：走 attrition，不转移、不触发钩子
+    hurtUnit(s, u, d, { attrition: true });
     pushLog(s, p, `${utype(s, u.type).name} 自身损耗 ${d} 点生命`, true);
   }
   sweepDead(s);
@@ -7167,7 +7261,16 @@ function doEndTurn(s: GameState): ActionResult {
       state: s,
       player: prevPlayer,
       hurt: (u, amount) => {
-        u.hp -= amount;
+        /*
+         * 维护费不足、天气持续伤害走这里：**不吃护甲**（这是有意的——
+         * 交不起税跟穿什么甲没关系），也没有攻击方。
+         *
+         * 但"不吃护甲"不等于"要另开一条扣血的路"。曾经这里直接
+         * `u.hp -= amount`，代价是守御阵挡不住它、受伤钩子不触发、
+         * 战报口径和别处对不上。现在统一走 `attrition`：
+         * 跳过转移和受伤钩子（语义正确），其余照旧。
+         */
+        hurtUnit(s, u, amount, { attrition: true });
       },
       log: (p, text) => pushLog(s, p, text),
     });

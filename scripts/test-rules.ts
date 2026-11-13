@@ -13,6 +13,9 @@
 // @ts-nocheck
 
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildListOf } from '../src/core/build-list.ts';
 import { describeUnit, unitStatLine } from '../src/core/info.ts';
 import { pruneUnknownUnits } from '../src/storage/save.ts';
@@ -317,6 +320,7 @@ import {
   recruitSpawnCells,
   orderedStatuses,
   abilityApi,
+  hurtPhysical,
   refreshMemory,
   reactionFireOn,
   registerSkillEffect,
@@ -4893,7 +4897,39 @@ test('焦土：阵亡时按最大生命 20% 波及四周', () => {
   const r = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: b.id });
   assert.ok(r.ok);
   const blast = Math.max(1, Math.round(UNIT_TYPES[b.type].maxHp * 0.2));
-  assert.equal(r.state.units.find((n) => n.id === neighbor.id)?.hp, beforeHp - blast);
+  // 2026-11-13：焦土改成物理直伤，先减目标护甲（以前是裸扣血）
+  const scoutArmor = UNIT_TYPES['scout']!.armor;
+  assert.equal(
+    r.state.units.find((n) => n.id === neighbor.id)?.hp,
+    beforeHp - Math.max(0, blast - scoutArmor),
+    `焦土 ${blast} 点减护甲 ${scoutArmor}`,
+  );
+});
+
+test('死亡合一：焦土砸死的兵也会跑自己的亡语（连锁不断）', () => {
+  // 2026-11-13 之前，焦土是 `state.units.filter(u => u.hp > 0)`：尸体被抹掉了，
+  // 但它自己的亡语一句都不跑。表现是"焦土砸死一个自爆兵，自爆兵不炸"，
+  // 连锁反应到第二代就断，而且没有任何报错。
+  const s = fresh({ expansionIds: ['scorched-earth'] });
+  s.units = [];
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  grantAbility(s, 'militia', 'kamikaze'); // 只有民兵会自爆，被砸死的那个用别的兵种
+
+  const killer = place(s, 'A', 'archer', 7, 6);
+  const bomb = place(s, 'B', 'scout', 7, 5); // 要倒下的（1 血，没有亡语）
+  bomb.hp = 1;
+  const bomber = place(s, 'B', 'militia', 6, 5); // 贴着，会被焦土砸死 → 应该有自爆
+  bomber.hp = 1;
+  place(s, 'A', 'militia', 5, 5); // 自爆的四邻，用来接伤害
+
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: killer.id, targetId: bomb.id });
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  assert.equal(r.state.units.some((u) => u.id === bomber.id), false, '自爆兵该被焦土砸死');
+  assert.ok(
+    r.state.log.some((l) => l.text.includes('自爆')),
+    '它死了就得炸——被焦土砸死不该静默消失',
+  );
 });
 
 test('多个扩展可以同时生效', () => {
@@ -6553,12 +6589,13 @@ test('陷阱不是单位：不会被当成攻击目标，踩上去照常炸', ()
   // 地雷 / 反装甲雷 / 哥布林陷阱 / 水雷都是 mark（marks.ts），不是 Unit。
   // 这条用例守的是"以后有人把陷阱实现成单位"：一旦它进了 units，
   // 它就会出现在 attackableTargets 里，变成能被打、也能被打死的怪东西。
-  const cases: Array<[string, string[], number]> = [
-    ['gb-mine', ['fantasy'], 10],
-    ['era-mine', ['era-arms'], 16],
-    ['era-at-mine', ['era-arms'], 30],
+  // 2026-11-13 起三种雷都走 hurtPhysical：先减护甲（反装甲雷是破甲，甲减半）
+  const cases: Array<[string, string[], number, boolean]> = [
+    ['gb-mine', ['fantasy'], 10, false],
+    ['era-mine', ['era-arms'], 16, false],
+    ['era-at-mine', ['era-arms'], 30, true],
   ];
-  for (const [kind, exps, dmg] of cases) {
+  for (const [kind, exps, raw, pierce] of cases) {
     const s = fresh({ startEra: 3, expansionIds: exps });
     for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
       s.tiles[idx(s, x, y)] = { terrain: 'plain', cityId: null };
@@ -6582,8 +6619,10 @@ test('陷阱不是单位：不会被当成攻击目标，踩上去照常炸', ()
     const step = applyAction(s, { type: 'MOVE', unitId: walker.id, x: 6, y: 5 });
     assert.ok(step.ok, step.ok ? '' : step.reason);
     const after = step.state.units.find((u) => u.id === walker.id);
+    const armor = s.unitTypes['militia']!.armor;
+    const dmg = Math.max(0, raw - (pierce ? Math.floor(armor / 2) : armor));
     if (after) {
-      assert.equal(after.hp, walker.hp - dmg, `${kind} 踩上去该掉 ${dmg} 点`);
+      assert.equal(after.hp, walker.hp - dmg, `${kind} 踩上去该掉 ${dmg} 点（${raw} 减甲 ${armor}）`);
     } else {
       // 反装甲雷 30 点对民兵是一发秒杀：没活下来也算"炸到了"
       assert.ok(walker.hp <= dmg, `${kind} 只有一发秒杀才允许查不到尸体，实际 ${walker.hp} > ${dmg}`);
@@ -15310,13 +15349,19 @@ test('留痕：敌舰踩上去才炸（炸完就没了），自己的船踩不�
   assert.equal(r1.state.units.find((u) => u.id === own.id)!.hp, own.hp, '自己的雷不炸自己');
   assert.equal(marksOf(r1.state).length, 2, '没被踩响，雷还在');
 
-  // 敌人走上来：14 点、无视护甲，然后雷消失
+  // 敌人走上来：14 点先减甲，然后雷消失
   const foe = place(r1.state, 'B', 'gunboat', 10, 5);
   r1.state.current = 'B';
   const r2 = applyAction(r1.state, { type: 'MOVE', unitId: foe.id, x: 9, y: 5 });
   assert.ok(r2.ok, r2.ok ? '' : r2.reason);
   const hit = r2.state.units.find((u) => u.id === foe.id)!;
-  assert.equal(hit.hp, foe.hp - 14, '水雷 14 点，不走进攻公式');
+  // 2026-11-13 起雷是**物理伤害**：先减护甲，不再"无视护甲"
+  const hullArmor = s.unitTypes['gunboat']!.armor;
+  assert.equal(
+    hit.hp,
+    foe.hp - Math.max(0, 14 - hullArmor),
+    `水雷 14 点按护甲结算（船甲 ${hullArmor}）`,
+  );
   assert.equal(marksOf(r2.state).length, 1, '踩掉的那一枚消失，另一枚还在');
   // 战报双方都要有：挨炸的一方得知道自己是怎么没的
   assert.ok(
@@ -15421,7 +15466,13 @@ test('扫雷舰：自己踩到水雷只受 4 点（它先切断雷索）', () =>
   const r = applyAction(s, { type: 'MOVE', unitId: sweeper.id, x: 5, y: 5 });
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = r.state.units.find((u) => u.id === sweeper.id)!;
-  assert.equal(after.hp, sweeper.hp - 4, '扫雷舰踩雷只吃 4 点，不是 14 点');
+  // 减半的是"雷的威力"（4 点），之后照样按护甲结算
+  const sweeperArmor = s.unitTypes['nv_minesweeper']!.armor;
+  assert.equal(
+    after.hp,
+    sweeper.hp - Math.max(0, 4 - sweeperArmor),
+    `扫雷舰踩雷只吃 4 点，再减护甲 ${sweeperArmor}`,
+  );
   assert.equal(marksOf(r.state).length, 0, '雷还是被引爆了');
 });
 
@@ -15513,8 +15564,10 @@ test('海军：火船阵亡自爆、炮艇射程 4（这两条是这次平衡改
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   assert.equal(after(ship.id), 0, '1 血的火船应该被击沉');
   const blast = Math.max(1, Math.round(s.unitTypes['nv_fireship']!.atk / 2));
-  assert.equal(after(foe.id), 100 - blast, `相邻的敌人该吃 ${blast} 点`);
-  assert.equal(after(friendly.id), 100 - blast, '自爆不区分敌我');
+  // 自爆冲击波也是物理伤害：先减目标护甲（两条船同型，护甲一样）
+  const blastDealt = Math.max(0, blast - s.unitTypes['nv_fireship']!.armor);
+  assert.equal(after(foe.id), 100 - blastDealt, `相邻的敌人该吃 ${blastDealt} 点（${blast} 减护甲）`);
+  assert.equal(after(friendly.id), 100 - blastDealt, '自爆不区分敌我');
   assert.equal(after(far.id), 100, '隔一格的不该被波及');
 
   // 炮艇：射程 3 → 4。它是本体里唯一"便宜 + 破甲"的水面单位，
@@ -17171,7 +17224,9 @@ test('自爆：打不到空中的东西，地面照吃不误', () => {
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   assert.equal(after(bomb.id), 0, '1 血的民兵应该被打开自爆');
   const blast = Math.max(1, Math.round(s.unitTypes['militia']!.atk / 2));
-  assert.equal(after(ground.id), 100 - blast, `同一格的陆军该吃 ${blast} 点`);
+  // 2026-11-13：自爆改成物理伤害，先减甲
+  const blastDealt = Math.max(0, blast - s.unitTypes['archer']!.armor);
+  assert.equal(after(ground.id), 100 - blastDealt, `同一格的陆军该吃 ${blastDealt} 点（${blast} 减护甲）`);
   assert.equal(after(flyer.id), 100, '悬在上面的气球一点血都不该掉');
 });
 
@@ -17382,12 +17437,17 @@ test('死亡枕藉：砸不到空中，2×2 按身体算，够不着的不会挨
   assert.equal(after(victim.id), 0, '1 血的军营应该倒下');
 
   // 贴着 2×2 身体的四个方向都该吃到（老代码只认锚点右侧/下侧，那几个方向全漏）
-  assert.equal(after(left.id), 28 - blast, '左边贴着身体的要吃到');
-  assert.equal(after(right.id), 28 - blast, '右边贴着身体的要吃到');
-  assert.equal(after(down.id), 28 - blast, '下边贴着身体的要吃到');
-  assert.equal(after(up.id), 28 - blast, '上边贴着身体的要吃到');
+  // 2026-11-13 起焦土是物理直伤：先减各自护甲
+  const milArmor = s.unitTypes['militia']!.armor;
+  const bowArmor = s.unitTypes['archer']!.armor;
+  const onMil = Math.max(0, blast - milArmor);
+  const onBow = Math.max(0, blast - bowArmor);
+  assert.equal(after(left.id), 28 - onMil, '左边贴着身体的要吃到');
+  assert.equal(after(right.id), 28 - onMil, '右边贴着身体的要吃到');
+  assert.equal(after(down.id), 28 - onMil, '下边贴着身体的要吃到');
+  assert.equal(after(up.id), 28 - onMil, '上边贴着身体的要吃到');
   // 阵亡波及不分敌我：站得近的自己人也吃
-  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - blast, '凑太近的自己人也吃');
+  assert.equal(after(archer.id), s.unitTypes['archer']!.maxHp - onBow, '凑太近的自己人也吃');
   // 够不着 / 打不到的
   assert.equal(after(far.id), s.unitTypes['militia']!.maxHp, '隔着两格的完全不该挨打');
   assert.equal(after(hover.id), s.unitTypes['af_balloon']!.maxHp, '空中单位砸不到');
@@ -17409,8 +17469,11 @@ test('死亡枕藉：1×1 的亡语仍然只是四邻', () => {
   assert.ok(r.ok, r.ok ? '' : r.reason);
   const after = (id: string) => r.state.units.find((u) => u.id === id)?.hp ?? 0;
   const blast = Math.max(1, Math.round(s.unitTypes['militia']!.maxHp * 0.2));
-  assert.equal(after(adj.id), 28 - blast, '正对着的一格要吃到');
-  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - blast, '另一边正对着的也要吃到');
+  // 焦土是物理直伤，先减各自护甲
+  const onMil = Math.max(0, blast - s.unitTypes['militia']!.armor);
+  const onBow = Math.max(0, blast - s.unitTypes['archer']!.armor);
+  assert.equal(after(adj.id), 28 - onMil, '正对着的一格要吃到');
+  assert.equal(after(killer.id), s.unitTypes['archer']!.maxHp - onBow, '另一边正对着的也要吃到');
   assert.equal(after(diag.id), s.unitTypes['militia']!.maxHp, '斜角不算相邻');
 });
 
@@ -18463,14 +18526,19 @@ test('布雷：陷阱师回合开始埋一枚哥布林陷阱，敌人踩上去�
   assert.equal(mine.charges, 1, '一枚雷只炸一次');
   assert.equal(r.state.units.length, 1, '陷阱不是单位，不该出现在 units 里');
 
-  // 敌人踩上去：10 点、无视护甲、减速 1 回合，雷消失
+  // 敌人踩上去：10 点先减甲、减速 1 回合，雷消失
   let cur = r.state;
   const enemy = place2(cur, 'B', 'swordsman', mine.x === 0 ? mine.x + 1 : mine.x - 1, mine.y);
   cur.current = 'B';
   const step = applyAction(cur, { type: 'MOVE', unitId: enemy.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === enemy.id)!;
-  assert.equal(hurt.hp, enemy.hp - 10, `踩雷应该掉 10 点，实际 ${enemy.hp - hurt.hp}`);
+  const guardArmor = cur.unitTypes['swordsman']!.armor;
+  assert.equal(
+    hurt.hp,
+    enemy.hp - Math.max(0, 10 - guardArmor),
+    `踩雷掉 10 减护甲 ${guardArmor}，实际 ${enemy.hp - hurt.hp}`,
+  );
   assert.equal(hurt.status?.slow ?? 0, 1, '踩雷还要减速 1 回合');
   assert.equal(marksOf(step.state).length, 0, '炸完就没了');
 });
@@ -18534,7 +18602,12 @@ test('地雷：工兵回合开始埋一枚轻雷，敌人踩上掉 16 点', () =
   const step = applyAction(r.state, { type: 'MOVE', unitId: enemy.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === enemy.id)!;
-  assert.equal(hurt.hp, enemy.hp - 16, `踩雷应该掉 16 点，实际 ${enemy.hp - hurt.hp}`);
+  const lineArmor = r.state.unitTypes['gp_lineinfantry']!.armor;
+  assert.equal(
+    hurt.hp,
+    enemy.hp - Math.max(0, 16 - lineArmor),
+    `踩雷掉 16 减护甲 ${lineArmor}，实际 ${enemy.hp - hurt.hp}`,
+  );
   assert.equal(marksOf(step.state).length, 0, '炸完就没了');
 });
 
@@ -18583,7 +18656,12 @@ test('地雷：扫雷兵清掉相邻的雷，自己踩雷只吃一半', () => {
   const walk = applyAction(r.state, { type: 'MOVE', unitId: sweeper.id, x: 4, y: 5 });
   assert.ok(walk.ok, walk.ok ? '' : walk.reason);
   const after = walk.state.units.find((u) => u.id === sweeper.id)!;
-  assert.equal(after.hp, sweeper.hp - 8, `扫雷兵踩雷应只吃 8 点，实际 ${sweeper.hp - after.hp}`);
+  const sweepArmor = r.state.unitTypes['mine-sweeper']!.armor;
+  assert.equal(
+    after.hp,
+    sweeper.hp - Math.max(0, 8 - sweepArmor),
+    `扫雷兵踩雷吃 8 点，再减护甲 ${sweepArmor}，实际 ${sweeper.hp - after.hp}`,
+  );
 });
 
 test('地雷：布雷车撒的是反装甲雷，一发 30 点，上限 4 枚', () => {
@@ -18604,7 +18682,111 @@ test('地雷：布雷车撒的是反装甲雷，一发 30 点，上限 4 枚', (
   const step = applyAction(r.state, { type: 'MOVE', unitId: tank.id, x: mine.x, y: mine.y });
   assert.ok(step.ok, step.ok ? '' : step.reason);
   const hurt = step.state.units.find((u) => u.id === tank.id)!;
-  assert.equal(hurt.hp, tank.hp - 30, `反装甲雷应该 30 点，实际 ${tank.hp - hurt.hp}`);
+  // 反装甲雷是**破甲**（甲减半），不是无视护甲
+  const rifleArmor = r.state.unitTypes['rifleman']!.armor;
+  assert.equal(
+    hurt.hp,
+    tank.hp - Math.max(0, 30 - Math.floor(rifleArmor / 2)),
+    `反装甲雷 30 点、护甲 ${rifleArmor} 减半，实际 ${tank.hp - hurt.hp}`,
+  );
+});
+
+/*
+ * 2026-11-13：地雷/陷阱/自爆以前都走 `hurt`，而 `hurt` 是"扣这么多血"，
+ * 不减甲——于是「不经过 computeDamage 的伤害」全都有了无视护甲的特权。
+ * 修法是把"物理直伤"单列一个入口 `hurtPhysical`，这条用例钉住三条边界：
+ *   1. 走它就得减甲；2. pierce 只减一半；3. `hurt` 本身仍然不减甲（普攻靠它）。
+ */
+test('物理直伤：hurtPhysical 先减甲、hurt 不减——同一颗雷，重甲掉得少', () => {
+  const s = fresh({ expansionIds: [] });
+  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
+  s.units = [];
+
+  const light = place2(s, 'A', 'militia', 4, 4);
+  const heavy = place2(s, 'A', 'halberdier', 6, 4);
+  light.hp = 200;
+  heavy.hp = 200;
+
+  const lightArmor = s.unitTypes['militia']!.armor;
+  const heavyArmor = s.unitTypes['halberdier']!.armor;
+  assert.ok(heavyArmor > lightArmor, '前置：戟兵的甲要比民兵厚');
+
+  const onLight = hurtPhysical(s, light, 20);
+  const onHeavy = hurtPhysical(s, heavy, 20);
+  assert.equal(onLight, Math.max(0, 20 - lightArmor), '轻甲：20 减甲');
+  assert.equal(onHeavy, Math.max(0, 20 - heavyArmor), '重甲：20 减甲');
+  assert.ok(onHeavy < onLight, '同一颗雷，重甲兵掉的应该更少');
+
+  // 破甲：甲减半。反装甲雷用的就是这个，而不是"无视护甲"
+  const pierced = hurtPhysical(s, heavy, 20, { pierce: true });
+  assert.equal(pierced, Math.max(0, 20 - Math.floor(heavyArmor / 2)), '破甲只减一半甲');
+
+  // 打不穿：掉 0 点血，但不会把单位打没，也不会静默
+  heavy.hp = 200;
+  const blocked = hurtPhysical(s, heavy, Math.max(1, heavyArmor - 1));
+  assert.equal(blocked, 0, '打不穿就是 0');
+  assert.equal(heavy.hp, 200, '一滴血都不掉');
+
+  // 对照组：`hurt` 收的是"已经算好的伤害"，绝不能在这里再减一次甲——
+  // 普攻那条路（computeDamage → hurt）靠它，减两次等于所有攻击都变弱
+  const raw = place2(s, 'A', 'militia', 8, 4);
+  raw.hp = 200;
+  abilityApi.hurt(s, raw, 20);
+  assert.equal(raw.hp, 180, 'hurt 原样扣血，不再减甲');
+});
+
+/*
+ * 扣血的出口守卫（2026-11-13）。
+ *
+ * 这个 bug 反复出现：地雷、焦土、自爆之所以"无视护甲"，都是因为
+ * 它们绕开了 `hurtUnit`，直接 `u.hp -= n`。绕过之后，转移（守御阵）、
+ * 受伤钩子、致死战报、击杀归属全都一起失效——而且不报错、很难发现。
+ *
+ * 光靠注释里的"别这么做"挡不住（`AbilityApi.hurt` 的注释里早就写了，
+ * 焦土照样绕过）。所以把它变成一条会红的测试：
+ * 全仓库只有 `hurtUnit` 内部可以裸改 hp，其它地方必须显式打
+ * `hp-exempt: <理由>` 才放行。新增一条直伤时，正确的写法是
+ * `abilityApi.hurtPhysical(...)` 或 `hurtPhysical(...)`。
+ */
+test('代码纪律：扣血只有一个出口，绕过它要显式豁免', () => {
+  const CORE = fileURLToPath(new URL('../src/core', import.meta.url));
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.ts')) files.push(p);
+    }
+  };
+  walk(CORE);
+
+  const offenders: string[] = [];
+  let exempted = 0;
+  for (const f of files) {
+    const lines = readFileSync(f, 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      const t = line.trim();
+      // 注释里提到 `u.hp -= n` 是在讲规矩，不是在扣血
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return;
+      if (!/\.hp\s*-=/.test(line)) return;
+      if (line.includes('hp-exempt')) {
+        exempted += 1;
+        return;
+      }
+      offenders.push(`${f.replace(CORE, 'src/core')}:${i + 1}  ${t}`);
+    });
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    '发现未经豁免的 `hp -=`（绕过了转移/受伤钩子/致死结算）：\n' +
+      `${offenders.join('\n')}\n` +
+      '改用 hurtPhysical(...) / abilityApi.hurtPhysical(...)；' +
+      '确实不该走这条路的（内生损耗、城市），在那一行加 `hp-exempt: 理由`。',
+  );
+  // 豁免本身也要有数：0 说明扫描没生效（路径写错、正则失效都会这样）
+  assert.ok(exempted > 0, '一条豁免都没扫到，说明这个检查没真正跑起来');
 });
 
 test('造船厂：会架桥的工程兵能修，能在水面上产兵', () => {
@@ -19584,7 +19766,7 @@ test('弹射钩索：3 格内瞬移，越距拒绝，落地就当移动过', () 
   assert.equal(chargesLeft(moved, 'grapnel'), 1, '用一次扣一次');
 });
 
-test('布雷器：一次布两枚，敌人踩上去炸 52，自己人不炸', () => {
+test('布雷器：一次布两枚，敌人踩上去炸 52（破甲），自己人不炸', () => {
   const s = fresh({ expansionIds: [...BASE.expansionIds, 'armor-era7'] });
   s.current = 'A';
   spawn(s, 'armor_coal', 'A', 7, 7);
@@ -19606,14 +19788,20 @@ test('布雷器：一次布两枚，敌人踩上去炸 52，自己人不炸', ()
   assert.ok(rr.ok, `自己人该走得进去：${!rr.ok ? rr.reason : ''}`);
   assert.equal(rr.state.units.find((u) => u.id === ally.id)!.hp, allyHp, '自己人的雷不炸自己人');
 
-  // ② 敌人踩上去：掉 40
+  // ② 敌人踩上去：52 点破甲（2026-11-13 起不再「无视护甲」）
   st = rr.state;
   st.current = 'B';
   const foe = spawn(st, 'armor_anvil', 'B', list[1]!.x, list[1]!.y - 1);
   const foeMax = st.unitTypes['armor_anvil']!.maxHp;
   rr = applyAction(st, { type: 'MOVE', unitId: foe.id, x: list[1]!.x, y: list[1]!.y });
   assert.ok(rr.ok, `敌人该走得进去：${!rr.ok ? rr.reason : ''}`);
-  assert.equal(rr.state.units.find((u) => u.id === foe.id)!.hp, foeMax - 52, '踩雷掉 52');
+  const foeArmor = st.unitTypes['armor_anvil']!.armor;
+  const mineDealt = Math.max(0, 52 - Math.floor(foeArmor / 2));
+  assert.equal(
+    rr.state.units.find((u) => u.id === foe.id)!.hp,
+    foeMax - mineDealt,
+    `踩雷掉 ${mineDealt}（52 破甲，甲 ${foeArmor} 减半）`,
+  );
 });
 
 test('烟幕：远程 −30%，贴脸不减，且只保护布设者那一方', () => {

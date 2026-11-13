@@ -154,6 +154,24 @@ import {
   PALM_THUNDER_SKILL,
 } from '../src/core/cultivation/skills/palm-thunder.ts';
 import {
+  SPIRIT_BREATH_COST,
+  SPIRIT_BREATH_DRAIN,
+  SPIRIT_BREATH_EXP_PER_RANK,
+  SPIRIT_BREATH_MIN_QI,
+  SPIRIT_BREATH_QI_PER_EXP,
+  SPIRIT_BREATH_SKILL,
+} from '../src/core/cultivation/skills/spirit-breath.ts';
+import {
+  GANG_WIND_BASE,
+  GANG_WIND_COST,
+  GANG_WIND_MIN_RANK,
+  GANG_WIND_PER_RANK,
+  GANG_WIND_RADIUS,
+  GANG_WIND_RANGE,
+  GANG_WIND_RESEARCH_COST,
+  GANG_WIND_SKILL,
+} from '../src/core/cultivation/skills/gang-wind.ts';
+import {
   SPRING_FLOOR_HEAL,
   SPRING_HEAL_RATIO,
   SPRING_HP_PER_STONE,
@@ -3249,7 +3267,8 @@ function cultivationRules(): string {
           这一步<b>会弹确认框</b>（误点一次就少一门法术，代价太大）。
           <b>已经学会的修士不受影响</b>——那属于遗忘，是静心阁的事。</li>
         <li><b>怎么学</b>：把修士挪到生效中的藏经阁旁边，选中它，在「研修」里点
-          <b>研读「某某」</b>。本方没研发过、法术位满了、流派不符、没站在藏书楼旁边，
+          <b>研读「某某」</b>。本方没研发过、<b>境界不够</b>（有些法术有境界门槛）、
+          法术位满了、流派不符、没站在藏书楼旁边，
           按钮会灰着并写清原因。</li>
         <li><b>${SILENT_PAVILION.name}</b>（${SILENT_PAVILION.cost} 金 +
           ${SILENT_PAVILION.costRes?.['spirit-stone'] ?? 0} 灵石，${SILENT_PAVILION.maxHp} 血 /
@@ -3257,12 +3276,25 @@ function cultivationRules(): string {
           站在旁边的修士可以<b>忘掉</b>一门已学的法术，<b>腾出法术位</b>。
           这一步会弹确认框；忘掉之后回藏经阁还能<b>重新学</b>（研发没丢），
           所以"换一门法术"的代价是走两趟路，不是重练。</li>
-        <li><b>${PALM_THUNDER_SKILL.name}</b>（样板法术）：射程 ${PALM_THUNDER_RANGE} 格，
+        <li><b>${PALM_THUNDER_SKILL.name}</b>（补刀）：射程 ${PALM_THUNDER_RANGE} 格，
           对一名敌人造成 <b>${PALM_THUNDER_BASE} + 境界 × ${PALM_THUNDER_PER_RANK}</b> 点伤害，
           <b>无视护甲</b>；耗 <b>${PALM_THUNDER_COST}</b> 灵力。
           <b>不限每回合一次</b>：灵力够就能连着放（9 期一回合能放两发），
           所以"什么时候把这池子烧掉"是玩家自己的决定；它不占攻击次数，也不占移动。
           它打不了城池，也打不了自己人。</li>
+        <li><b>${SPIRIT_BREATH_SKILL.name}</b>（成长）：抽走<b>脚下这一格</b>
+          ${Math.round(SPIRIT_BREATH_DRAIN * 100)}% 的环境灵气，每 <b>${SPIRIT_BREATH_QI_PER_EXP}</b> 点换
+          <b>1 点修为</b>，单次最多 <b>${SPIRIT_BREATH_EXP_PER_RANK} × 境界</b>；耗
+          <b>${SPIRIT_BREATH_COST}</b> 灵力。脚下少于 <b>${SPIRIT_BREATH_MIN_QI}</b> 点灵气就抽不出东西。
+          <b>它和灵力抢同一口灵气</b>——吐纳抽掉的，正是下一回合要吸来补灵力的那部分，
+          想练级就别想连放法术。灵气不分敌我，所以它也能用来抽干对面脚下的灵气。
+          同一格连抽会自己衰减（100 → 50 → 25），不需要额外限制次数。</li>
+        <li><b>${GANG_WIND_SKILL.name}</b>（面积）：射程 <b>${GANG_WIND_RANGE}</b> 格，
+          对落点 <b>${GANG_WIND_RADIUS}</b> 格内<b>所有敌人</b>（含建筑）造成
+          <b>${GANG_WIND_BASE} + 境界 × ${GANG_WIND_PER_RANK}</b> 点伤害，<b>无视护甲</b>；
+          耗 <b>${GANG_WIND_COST}</b> 灵力。<b>${GANG_WIND_MIN_RANK} 期以上</b>才学得会，
+          研发要 <b>${GANG_WIND_RESEARCH_COST}</b> 灵石。
+          它是修士面对重甲与围攻时的主力手段——甲越厚越赚，圈里的人越多越赚。</li>
       </ul>
 
       <h3>灵气浓度</h3>
@@ -3583,7 +3615,7 @@ const BOOK_GROUPS: BookGroup[] = [
         两栖攻击舰、导弹快艇、补给舰，外加海上钻井平台——<b>这一批要同时开「信息化」</b>，
         因为第六时代是那个包开出来的。</p>
       <p><b>水雷是留在格子上的东西，不是一条船</b>：布雷舰每回合在自己两格以内布一枚，
-        布完就开走；它沉了，雷还在。敌舰开上来才炸（14 点，无视护甲），炸一枚少一枚，
+        布完就开走；它沉了，雷还在。敌舰开上来才炸（14 点，<b>按护甲结算</b>），炸一枚少一枚，
         自己的船踩不到自己的雷。对面唯一的破法是派条快船去趟——贴到一格以内雷就现形，
         然后绕开。全场上限 6 枚，不然二十回合之后整片海都是雷。</p>
       <p><b>战列舰停在第五时代，第六时代没有战列舰</b>：1945 年之后再没有任何国家
