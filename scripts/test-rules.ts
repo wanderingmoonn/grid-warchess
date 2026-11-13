@@ -15774,18 +15774,36 @@ test('航母甲板：回合开始会把"整备"这个时机转告空军扩展', 
 
 console.log('\n海军：地形与舰种');
 
-test('深水：离岸两格才变外海，浅流原地不动', () => {
+test('深水：离岸两格起、而且要成片，浅流原地不动', () => {
+  const hook = expansionById('naval-fleet')!.afterTerrain!;
+
+  /*
+   * ① 小水塘（3×3）：**不该**出现深水。
+   *
+   * 老规则只看"离岸两格"，于是 3×3 的水塘正中间会孤零零变成一格深水——
+   * 玩家看到的是"水面上零星一个深色方块"，读起来像渲染坏了。
+   * 2026-11-13 加了腐蚀：至少要两个正交邻居也是外海才算数，孤立格抹平。
+   */
   const side = 7;
   const g: Terrain[] = new Array(side * side).fill('plain') as Terrain[];
   for (let y = 2; y <= 4; y++) for (let x = 2; x <= 4; x++) g[y * side + x] = 'water';
   g[2 * side + 2] = 'shallow'; // 一角改成浅流：它不该被深水化
-
-  const hook = expansionById('naval-fleet')!.afterTerrain!;
   hook(g, side, side);
 
-  assert.equal(g[3 * side + 3], 'deep', '水塘正中间离岸两格，应该是深水');
+  assert.equal(g[3 * side + 3], 'water', '小水塘不出现孤立的深水格');
   assert.equal(g[2 * side + 3], 'water', '贴着岸那一圈还是水域');
   assert.equal(g[2 * side + 2], 'shallow', '浅流不该被改成深水（会凭空掐掉陆军的过河口）');
+
+  // ② 成片的水域（5×5）：中间 3×3 连成一片，才是外海
+  const w2 = 9;
+  const h: Terrain[] = new Array(w2 * w2).fill('plain') as Terrain[];
+  for (let y = 2; y <= 6; y++) for (let x = 2; x <= 6; x++) h[y * w2 + x] = 'water';
+  hook(h, w2, w2);
+  assert.equal(h[4 * w2 + 4], 'deep', '成片水域的中心是外海');
+  assert.equal(h[3 * w2 + 3], 'deep', '3×3 的核心都该是深水');
+  assert.equal(h[2 * w2 + 2], 'water', '贴岸那一圈仍然是水域');
+  const deepCount = h.filter((t) => t === 'deep').length;
+  assert.equal(deepCount, 9, `5×5 的水面该留下 3×3 的深水，实际 ${deepCount}`);
 
   // 通行判定：船进得去，陆军进不去
   assert.equal(navigable('deep'), true, '船应该能进深水');

@@ -1561,9 +1561,9 @@ html[data-terrain='on'] .tile.t-water {
   --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
   --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
   background-image:
-    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 72%),
-    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 72%);
-  background-size: 148px 86px, 214px 118px;
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 72%);
+  background-size: 118px 70px, 168px 94px;
   background-repeat: repeat;
   animation: water-flow 7s linear infinite;
 }
@@ -1572,9 +1572,9 @@ html[data-terrain='on'] .tile.t-deep {
   --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
   --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
   background-image:
-    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0) 72%),
-    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 72%);
-  background-size: 148px 86px, 214px 118px;
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 72%);
+  background-size: 118px 70px, 168px 94px;
   background-repeat: repeat;
   animation: water-flow 13s linear infinite;
 }
@@ -1588,8 +1588,8 @@ html[data-terrain='on'] .tile.t-deep {
   }
   to {
     background-position:
-      calc(var(--wx, 0px) + 148px) var(--wy, 0px),
-      calc(var(--wx, 0px) - 214px) var(--wy, 0px);
+      calc(var(--wx, 0px) + 118px) var(--wy, 0px),
+      calc(var(--wx, 0px) - 168px) var(--wy, 0px);
   }
 }
 /* 大地图逐格 repaint 太贵；系统要求减少动效时也不该动 */

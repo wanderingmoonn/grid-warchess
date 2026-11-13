@@ -1488,9 +1488,36 @@ const deepenWater: NonNullable<Expansion['afterTerrain']> = (g, w, h) => {
   }
   // 离岸 >=2 格才算外海：沿岸那一圈留成水域，
   // 这样"贴着岸能不能下水/靠港"的老判定一条都不用改。
+  //
+  // 2026-11-13：再加一道**腐蚀**。原来只按"离岸 2 格"一刀切，于是两格宽的小湾、
+  // 一格宽的水道拐角都会变成一颗颗孤零零的深水格——玩家看到的是"水面上零星几个
+  // 深色方块"，读起来像渲染坏了，不像"这里更深"（用户原话："零星分布还是会有违和感"）。
+  // 现在只保留"至少两个正交邻居也是外海"的格子，反复几遍直到不再变化——
+  // 孤立格和死胡同会被抹平，成片的外海原样留下。
+  const deep = new Uint8Array(g.length);
   for (let i = 0; i < g.length; i++) {
-    if (g[i] !== 'water') continue;
-    if (far[i]! >= 2) g[i] = 'deep';
+    if (g[i] === 'water' && far[i]! >= 2) deep[i] = 1;
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const kill: number[] = [];
+    for (let i = 0; i < g.length; i++) {
+      if (!deep[i]) continue;
+      const x = i % w;
+      const y = (i / w) | 0;
+      let n = 0;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        if (deep[ny * w + nx]) n += 1;
+      }
+      if (n < 2) kill.push(i);
+    }
+    if (kill.length === 0) break;
+    for (const i of kill) deep[i] = 0;
+  }
+  for (let i = 0; i < g.length; i++) {
+    if (deep[i]) g[i] = 'deep';
   }
 };
 

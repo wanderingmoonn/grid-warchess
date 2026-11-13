@@ -840,6 +840,7 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
       siegeTargets: [],
       selectedCityId: null,
       placeable: [],
+      threat: [],
       me: 'A',
     },
   );
