@@ -518,9 +518,14 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
    * 这个 class 只做一件事：让 CSS 把这些**逐格**的昂贵效果关掉（见 style.css
    * 的 `.board.big` 段），换成纯色块。规则一行不动。
    *
-   * 阈值选 1024：32×32 关雾打起来很流畅，64×64 才是需要保护的那一档。
+   * 阈值改成 **>= 1024**（2026-11-14）：原来写 > 1024，32×32 正好 1024 格，
+   * 落在"小图"这一侧——于是 32×32 上水面动画（每格两层渐变在动）、
+   * 逐格 `::after` 过渡全都开着，开关迷雾时要重绘一千格带贴图的元素，
+   * 实测中位 137ms、最差 242ms，就是用户说的卡顿。
+   *
+   * 32×32 上格子只有 ~40px，动画几乎看不出，关掉不亏。
    */
-  el.classList.toggle('big', s.w * s.h > 1024);
+  el.classList.toggle('big', s.w * s.h >= 1024);
 
   // 浓雾（blackout 扩展）：连地形都不给看。
   // 基础规则的雾只遮单位，地图本身永远可见；这个扩展把"地图"也遮掉——
@@ -789,20 +794,27 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
        * 两色的中点，于是接上。
        *
-       * 值 = "该往这边叠什么"：`d` 我在浅水这侧、叠深水色；`l` 我在深水这侧、
-       * 叠浅水色。浅水和"水域"算同一档（色差本来就不大），互相之间不铺。
+       * 值 = **邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水。
+       * 以前只有 `d`/`l` 两个字母（"往深处/往浅处叠哪种色"），
+       * 因为浅流和水域被算成同一档、互相之间不铺——可它们一个是青、一个是蓝，
+       * 硬拼起来还是刀切边（2026-11-14 用户提的）。
+       *
+       * 现在三档分开排：浅流 1 / 水域 2 / 深水 3，每种邻居各有一种色，
+       * 两侧都用 0.5 的 alpha，边界线上的颜色仍是两色的中点。
        *
        * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
        * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
        */
-      const WATER_RANK: Record<string, number> = { shallow: 1, water: 1, deep: 2 };
+      const WATER_RANK: Record<string, number> = { shallow: 1, water: 2, deep: 3 };
+      const WATER_LETTER: Record<string, string> = { shallow: 's', water: 'w', deep: 'd' };
       const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
       if (rankHere > 0) {
         const wetSide = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const r = WATER_RANK[dispTerrain[ty * s.w + tx] ?? ''] ?? 0;
+          const t = dispTerrain[ty * s.w + tx] ?? '';
+          const r = WATER_RANK[t] ?? 0;
           if (r === 0 || r === rankHere) return '0';
-          return r > rankHere ? 'd' : 'l';
+          return WATER_LETTER[t] ?? '0';
         };
         const wt = wetSide(x, y - 1);
         const wr = wetSide(x + 1, y);

@@ -1330,7 +1330,18 @@ html[data-terrain='on'] .tile.t-plain[data-d='1']::before {
  * 改这里的人）。删掉。
  */
 
-html[data-terrain='on'] .tile.out {
+/*
+ * 视野外的格子：小图摘掉贴图，大地图**保留**。
+ *
+ * 摘贴图是为了省——看不见的格子不必画细节。但"摘/装"本身是有代价的：
+ * 开关迷雾时，一千格要同时卸下、再同时装回一张 512 的贴图，
+ * 实测 32×32 上每次切换中位 137ms（用户说的卡顿）。
+ *
+ * 大图（`.big`，含 32×32）改成保留贴图、只由雾的盖层（`.board.fog` 下 `.tile.out` 的 `::after`）
+ * 去盖——雾下看到的是"压暗的地形"而不是"空白格"，
+ * 顺便也更友好：玩家能记住地形轮廓。切换代价掉到个位数毫秒（下面有实测）。
+ */
+html[data-terrain='on'] .board:not(.big) .tile.out {
   /* !important 在这里是必要的：`.t-forest[data-v='1']` 那几条是 (0,4,1)，
      光靠 `.tile.out` 的 (0,3,1) 压不住，而"看不见的格子不画细节"是硬规则 */
   background-image: none !important;
@@ -1843,34 +1854,27 @@ html[data-terrain='on'] .tile.t-shallow::before {
 }
 
 /*
- * 叠什么色：只按"邻居是哪一档"决定，不看我自己的类型。
- * 两侧都用 0.5 的 alpha，中点才会重合；只要有一侧偷懒用别的值，
- * 边界上就会重新出现一条缝（这条是这套做法唯一必须守住的数）。
+ * 叠什么色：**按邻居是哪一档**决定，不看我自己的类型。
+ *
+ * 三档各一种色（都是 0.5 alpha，中点才会重合——这是这套做法唯一必须守住的数）：
+ *   `s` 浅流 #b7dcd6　`w` 水域 #a8cadf　`d` 深水 #4a7fa6
+ *
+ * 以前只有两档（浅/深），浅流和水域共用一档，所以它俩之间是一条硬边。
  */
-html[data-terrain='on'] .tile[data-wt='d'] {
-  --nb-t: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wr='d'] {
-  --nb-r: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wb='d'] {
-  --nb-b: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wl='d'] {
-  --nb-l: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wt='l'] {
-  --nb-t: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wr='l'] {
-  --nb-r: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wb='l'] {
-  --nb-b: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wl='l'] {
-  --nb-l: rgba(168, 202, 223, 0.5);
-}
+html[data-terrain='on'] .tile[data-wt='s'] { --nb-t: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wr='s'] { --nb-r: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wb='s'] { --nb-b: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wl='s'] { --nb-l: rgba(183, 220, 214, 0.5); }
+
+html[data-terrain='on'] .tile[data-wt='w'] { --nb-t: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wr='w'] { --nb-r: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wb='w'] { --nb-b: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wl='w'] { --nb-l: rgba(168, 202, 223, 0.5); }
+
+html[data-terrain='on'] .tile[data-wt='d'] { --nb-t: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wr='d'] { --nb-r: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wb='d'] { --nb-b: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wl='d'] { --nb-l: rgba(74, 127, 166, 0.5); }
 /*
  * 高山（2026-11-13 第二次重做）。
  *
