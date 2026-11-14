@@ -688,7 +688,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 台地是 2026-11-13 加进来的：在那之前它只是"一块更亮的绿色"，
        * 四周没有坎、也没有投影，站在丘陵旁边完全读不出高差。
        */
-      if (cls.includes('t-hill') || cls.includes('t-mountain') || cls.includes('t-plateau')) {
+      if (cls.includes('t-hill') || cls.includes('t-mountain') || cls.includes('t-plateau') || cls.includes('t-valley')) {
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
           return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
