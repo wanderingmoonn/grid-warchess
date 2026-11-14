@@ -1015,9 +1015,13 @@ function me(): PlayerId {
   // 以前这里跟着 state.current 走，于是 AI 的回合里面板把 AI 的兵当成自己的，
   // 产兵、升级、技能全都亮着（点下去又被 aiBusy 挡住），视野也跟着 AI 走。
   // 现在"我是谁"是固定的，AI 走它的回合时，面板就是一张只读的卡。
-  const aiA = isAiSide(state, 'A');
-  const aiB = isAiSide(state, 'B');
-  if (aiA !== aiB) return aiA ? 'B' : 'A';
+  //
+  // 三家四家局不能只问 A/B 两席：电脑可能坐在 C（关卡「三岔口」就是）。
+  // 改成"场上只有一个真人时，我就是那个真人"——两人局的三种情形和以前完全等价
+  // （人机 → 真人那席；双 AI → 没有真人，跟当前席位走；热座 → 两个真人，跟当前席位走），
+  // 三家四家局则正确地认出了"只有一个真人"的那一局。
+  const humans = seatsOf(state).filter((p) => !isAiSide(state, p));
+  if (humans.length === 1) return humans[0]!;
   return state.current;
 }
 

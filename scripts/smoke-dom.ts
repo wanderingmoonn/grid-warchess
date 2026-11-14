@@ -5415,7 +5415,13 @@ check('上帝模式：笔刷按住拖过去，沿途每一格都刷到，撤销�
   // 城格改不了地形、已经是森林的格看不出变化——所以自己找一段"干净"的横线
   const clean = (x: number, y: number): boolean => {
     const t = before.tiles[y * cols + x];
-    return !!t && !t.cityId && t.terrain !== 'forest';
+    if (!t || t.cityId || t.terrain === 'forest') return false;
+    /*
+     * 站着东西的格刷不了（见 core/sandbox.ts 的 paintTerrain：地形一改，上面那个人
+     * 可能就站在水里或山心里了）。开局部队撒在城周围，清理横线时必须绕开它们——
+     * 不绕的话，这条用例测的就不是"拖动补格"，而是"笔刷该不该跳过有人的格"。
+     */
+    return !before.units.some((u) => u.x === x && u.y === y);
   };
   let sx = -1;
   let sy = -1;
@@ -9188,6 +9194,40 @@ check('火箭发射井：属性卡写着燃料与货舱，加注/发射按钮都
     host.remove();
   }
 });
+
+
+/* ------------------------------------------------------------------ */
+/* 关卡模式                                                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡模式');
+openSetup();
+await wait(40);
+
+check('战役页有关卡可选，默认停在「自由对局」', () => {
+  const chips = [...doc.querySelectorAll<HTMLElement>('[data-level]')];
+  assert.ok(chips.length >= 3, `应该至少三个：自由对局 + 两张内建关卡，实际 ${chips.length}`);
+  assert.ok(chips[0]!.textContent?.includes('自由对局'), '第一张应该是「自由对局」');
+  assert.ok(chips[0]!.classList.contains('active'), '默认选中「自由对局」');
+});
+
+check('选「三岔口」：几家与托管都由关卡决定', () => {
+  click('[data-level="level:tri-corner"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('这一关是 3 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 160)}`);
+  assert.ok(body.includes('绿方'), '要写清哪一席交给电脑');
+  // 关卡接管之后，人数开关不再出现——留一排点了不生效的按钮比没有更糟
+  assert.equal(doc.querySelector('[data-players]'), null, '关卡选着的时候不该有人数开关');
+});
+
+check('切回「自由对局」：人数开关回来，关卡不残留', () => {
+  click('[data-level=""]');
+  assert.ok(doc.querySelector('[data-players]'), '自由对局下应该有人数开关');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(!body.includes('这一关是'), '不该再写着"这一关是 N 家"');
+});
+
+click('[data-act="cancel"]');
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 if (failed > 0) process.exit(1);

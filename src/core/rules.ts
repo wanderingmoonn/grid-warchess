@@ -6121,7 +6121,17 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
  */
 function doPlanCommit(s: GameState): ActionResult {
   if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
-  if (s.config.aiOpponent === true) {
+  /*
+   * 场上有电脑就不需要"互等提交"：它不用排计划，也不会点提交。
+   *
+   * 原来这里判的是 `aiOpponent === true`——两家局时代的写法。三家四家局里
+   * 电脑可能坐在 C/D（见 `MatchConfig.aiSeats`），那两个布尔永远是 false，
+   * 于是"有人机还要等人交计划"，对局就卡在那儿了。
+   */
+  const anyAi = (s.config.aiSeats?.length ?? 0) > 0
+    || s.config.aiOpponent === true
+    || s.config.aiAlly === true;
+  if (anyAi) {
     return { ok: false, reason: '人机局里对面由 AI 代管，不需要互等提交' };
   }
   if (s.winner) return { ok: false, reason: '对局已结束' };

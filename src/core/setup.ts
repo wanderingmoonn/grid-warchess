@@ -18,6 +18,7 @@ import {
 import { createDraft } from './draft.ts';
 import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
+import { validateLevel } from './level.ts';
 import { refreshMemory, grantOpeningIncome } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
@@ -204,27 +205,62 @@ export function createMatch(
   }
 
   /**
+   * 关卡（可选）。**在这里先解析一次**，因为下面三处都要用：几家、谁托管、地图。
+   *
+   * 关卡校验不过就当作没有关卡（退回普通对局），而不是让整局建不起来——
+   * 和固定地图的兜底同一条理由：一份坏配置不该让玩家连开局都开不了。
+   */
+  const checkedLevel = config.level ? validateLevel(config.level) : null;
+  const level = checkedLevel && checkedLevel.ok ? checkedLevel.level : null;
+
+  /**
    * 这一局几家。
    *
-   * 固定地图只有两个城位（`citiesA/B`），所以三人四人局一律走生成器——
-   * 与其让玩家上传的图在四人局里"有一家没城"，不如在选图那一步就不给选
-   * （开始界面里那块会置灰，这里再把一道关）。
+   * 关卡写了就算关卡的（那是这一关的设计），没写才看面板。
+   *
+   * 注意下面那条老注释此刻只对"普通对局 + 固定地图"成立：固定地图只有两个城位
+   * （`citiesA/B`），所以不提供第三四家的城。**关卡不受这条限制**——它自己带
+   * `seats.cities` 给第三四席，见 `LevelSeats`。
    */
-  const playerCount = (config.playerCount ?? 2) as 2 | 3 | 4;
+  const playerCount = (level?.seats?.count ?? config.playerCount ?? 2) as 2 | 3 | 4;
   /**
-   * 三人四人局：只有"指挥官模式"放行，托管整方的两个 AI 开关仍按两席关掉。
+   * 三人四人局：托管整方的 AI 开关以前按两席关掉，现在不关了。
    *
-   * 选卡 BP 和"AI 当对手/队友"都是按两个席位写的（BP 界面只有两栏、先后手补偿
-   * 只算两家），放进三家四家局会造出"蓝方有兵、但没人操作"这种说不清的局面。
-   *
-   * 指挥官模式不一样：它托管的正是**玩家自己这一方**。AI 的多人目标选择
-   * 在 2026-11-04 已经放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf / primaryFoe），
-   * 所以三家四家局里也能替某一方走完。`config` 是调用方的对象，不改它，用局部量往下传。
+   * 选卡 BP 和"先后手补偿"仍然只按两个席位写（BP 界面只有两栏、补偿只算两家），
+   * 这两样在多人局照样关；但"谁被电脑操作"已经不是两席的事情了：
+   * AI 的多方目标选择在 2026-11-04 放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf），
+   * 三家四家局里让丙丁交给电脑，它打得动。
    */
   const twoSeats = playerCount === 2;
   const draftMode = twoSeats && config.draftMode === true;
-  const aiOpponent = twoSeats && config.aiOpponent === true;
-  const aiAlly = twoSeats && config.aiAlly === true;
+  /** 这一局坐人的席位，按行动顺序 */
+  const seatList = PLAYER_ORDER.slice(0, playerCount) as PlayerId[];
+  /**
+   * 哪些席位交给电脑。三层优先级，写死顺序：
+   *   1. 关卡规定的（这一关的设计）；
+   *   2. 面板给的 `config.aiSeats`；
+   *   3. 都没有 → 按老的两个布尔推导（两家局的老存档走这条）。
+   *
+   * 三个字段的关系见 `MatchConfig.aiSeats`。注意 `[]` 是**有含义**的（全是真人），
+   * 所以判"有没有设置过"用的是 `!== undefined`，不是长度。
+   */
+  const aiSeatList: PlayerId[] = (() => {
+    const declared = level?.seats?.ai ?? config.aiSeats;
+    if (declared !== undefined) return seatList.filter((p) => declared.includes(p));
+    const legacy: PlayerId[] = [];
+    if (config.aiAlly === true) legacy.push('A');
+    if (config.aiOpponent === true) legacy.push('B');
+    return legacy.filter((p) => seatList.includes(p));
+  })();
+  /*
+   * 老的两个布尔继续写进 config，值由 `aiSeatList` 反算。
+   *
+   * 为什么还留着：报告、面板、指挥官模式判定都还在读它们，而且**两家局必须
+   * 逐字保持原样**（一局人机对战的老复盘要靠这两个字段认出"蓝方是电脑"）。
+   * 两家局下 `aiSeatList` 就来自这两个布尔，反算回去是恒等的。
+   */
+  const aiOpponent = twoSeats && aiSeatList.includes('B');
+  const aiAlly = twoSeats && aiSeatList.includes('A');
   const commanderMode = config.commanderMode === true;
 
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
@@ -286,7 +322,17 @@ export function createMatch(
    * 联机房间、分享链接一路传，谁都能改它。校验不过就退回随机生成——
    * 一张坏图不该让整局建不起来，但也不能让它带着半张地形进场。
    */
-  const fixed = config.fixedMap ? validateFixedMap(config.fixedMap) : null;
+  /*
+   * 关卡自带的地图**优先于** `config.fixedMap`。
+   *
+   * 关卡是"在哪打 + 怎么打"的整包，它的地图是这一关的一部分；面板上那张固定图
+   * 只是上一局留下的记忆，不该覆盖关卡。这里仍然过一遍校验：虽然 `validateLevel`
+   * 已经查过，但这一步是"所有地图进场的唯一关口"，多查一次换来的是
+   * "不存在一条绕过校验的地图路径"。
+   */
+  const levelMap = level?.map ?? null;
+  const fixedSource = levelMap ?? config.fixedMap ?? null;
+  const fixed = fixedSource ? validateFixedMap(fixedSource) : null;
   /*
    * 城位可能"贴边"，而本局的城可能是 3×3（「城郭」扩展）。
    *
@@ -300,14 +346,33 @@ export function createMatch(
     x: Math.max(0, Math.min(Math.max(0, (fixedMap?.w ?? 0) - citySize), c.x)),
     y: Math.max(0, Math.min(Math.max(0, (fixedMap?.h ?? 0) - citySize), c.y)),
   });
+  /*
+   * 多席位能不能用这张固定地图。
+   *
+   * 固定地图（含关卡地图）只有 A/B 两组城位，第三四席的城由关卡额外给。
+   * 所以"三家四家 + 固定地图"成立的条件是：**每一个多出来的席位都有城**。
+   * 缺一个就不走固定布局，退回生成器——宁可换一张随机图，也不要造出
+   * "有一家没城、第一回合就出局"的局面（那看起来像 bug，其实是配置错）。
+   */
+  const extraCities = level?.seats?.cities ?? {};
+  const multiOk =
+    playerCount === 2 || seatList.slice(2).every((p) => (extraCities[p as 'C' | 'D']?.length ?? 0) > 0);
+  /* 第三四席的城也要夹一次：理由和 A/B 完全相同（开城郭之后 3×3 会伸出棋盘） */
+  const clampExtraCities = (): Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> => {
+    const out: Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> = {};
+    if (extraCities.C) out.C = extraCities.C.map(clampCityInto);
+    if (extraCities.D) out.D = extraCities.D.map(clampCityInto);
+    return out;
+  };
   const layout =
-    fixedMap && twoSeats
+    fixedMap && multiOk
       ? layoutFromRows(
           fixedMap.rows,
           fixedMap.citiesA.map(clampCityInto),
           fixedMap.citiesB.map(clampCityInto),
           spawnPool,
           citySize,
+          clampExtraCities(),
         )
       : playerCount > 2
         ? generateMultiLayout(
@@ -407,8 +472,8 @@ export function createMatch(
     }
   };
 
-  /** 这一局实际坐人的席位，按行动顺序 */
-  const seats = PLAYER_ORDER.slice(0, playerCount);
+  /** 这一局实际坐人的席位，按行动顺序（= 前面算 aiSeatList 用的那份） */
+  const seats = seatList;
 
   /*
    * 谁先动。
@@ -508,6 +573,14 @@ export function createMatch(
       citySize,
       aiOpponent,
       aiAlly,
+      /*
+       * 通用写法：哪些席位由电脑操作。**永远写**，包括空数组。
+       *
+       * 空数组是有含义的（全是真人），而 `isAiSide` 判的是"这个字段有没有"——
+       * 不写空数组的话，一份三人全人局的 config 会落进"老存档"分支，
+       * 回头去读 aiOpponent/aiAlly，那是两家局的语义，会读出一个假的答案。
+       */
+      aiSeats: [...aiSeatList],
       aiLevel:
         config.aiLevel === 'basic'
           ? 'basic'
@@ -573,6 +646,16 @@ export function createMatch(
        */
       ...(config.aiDoctrine ? { aiDoctrine: config.aiDoctrine } : {}),
       ...(config.aiDoctrineSeat ? { aiDoctrineSeat: config.aiDoctrineSeat } : {}),
+      /*
+       * 关卡快照：整包进局面，不是只存 `level:id`。理由见 MatchConfig.level。
+       *
+       * 这一行绝对不能漏。这个对象是**逐个白名单抄的**，漏一个就等于那个开关在
+       * 开局瞬间被吃掉：2026-10-28 漏过 recordDetail（勾了数据收集却没有摘要）、
+       * 2026-11-06 漏过 aiDoctrine（三组"不同战术"跑出完全相同的对局）。
+       * 关卡漏了比这两个都糟——它不会报错，也不会少一个功能，而是整局**退化成
+       * 普通对局**，玩家只会觉得"这关怎么什么都没有"。
+       */
+      ...(checkedLevel && checkedLevel.ok ? { level: checkedLevel.level } : {}),
     },
     unitTypes,
     turn: 1,

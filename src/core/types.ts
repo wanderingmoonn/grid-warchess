@@ -1292,6 +1292,22 @@ export interface MatchConfig {
   /** A 方是否也由 AI 接管（双 AI 观战，用来观察平衡） */
   aiAlly: boolean;
   /**
+   * 哪些席位由电脑操作——`aiOpponent` / `aiAlly` 的**通用写法**。
+   *
+   * 那两个布尔是两家局时代的产物：`aiOpponent` 只认 B、`aiAlly` 只认 A，
+   * 而且只在两家局生效（见 setup.ts 的 twoSeats）。三家四家局要能让丙丁也交给电脑，
+   * 就得有一个不绑定席位的说法，这就是它。
+   *
+   * 三个字段的分工（别混着读）：
+   *   · `aiSeats` 是**权威**：`isAiSide()` 优先看它；
+   *   · `aiOpponent` / `aiAlly` 继续由 `createMatch` 按 `aiSeats` 反算出来写进 config，
+   *     只为让还没改的老代码（报告、面板、指挥官模式判定）读到一致的值；
+   *   · **老存档没有 `aiSeats`**，读出来是 undefined，`isAiSide` 自动回落到那两个布尔。
+   *
+   * 空数组是有含义的（＝全是真人），不能用 `if (aiSeats.length)` 判断"有没有设置过"。
+   */
+  aiSeats?: PlayerId[];
+  /**
    * AI 的思考深度。
    *
    * basic    —— 老版本的打分：只看"往前走多远"，不考虑对面能打到哪。
@@ -1383,6 +1399,19 @@ export interface MatchConfig {
    * 而且这种错不会报错，只会让人以为对方作弊。
    */
   fixedMap?: import('./fixed-maps.ts').FixedMap;
+  /**
+   * 这一局用的**关卡快照**（缺省 = 普通对局）。
+   *
+   * 注意它是"快照"不是"引用"：`createMatch` 会先过一遍 `validateLevel`，
+   * 拿到的是一份深拷贝再写进来。所以这一局的关卡不会因为我们后面改了注册表而变。
+   *
+   * 为什么不只存 `level:id`：和 `fixedMap` 完全同一条理由——config 会跟着存档、
+   * 房间、分享链接一路传，只存 id 就会出现"两边用的不是同一版关卡"，
+   * 而这种错不报错，只会让人以为对方作弊或游戏出 bug。
+   *
+   * 老存档没有这个字段，读出来是 undefined，语义正好等于"普通对局"。
+   */
+  level?: import('./level.ts').LevelDef;
   /**
    * 城市边长（占 size × size 格），缺省 2。
    *

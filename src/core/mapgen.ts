@@ -1737,6 +1737,16 @@ function spawnsAround(
  *      那部分规则一旦两处各写一份，改一处就会漂；
  *   3. 其余字段填默认值（style/symmetry/layout 只用于显示，`fordless` 永远 false：
  *      手绘图的河道由作者负责，不该被"无渡口"这条随机规则二次加工）。
+ *
+ * ── 2026-11-14：多出来的两席（关卡用）────────────────────────────────
+ *
+ * 原来这条只服务两家局，第三四家一律走随机生成器——因为公开的地图格式
+ * （`FixedMap`）只有 A/B 两组城位。关卡模式要做"三家混战的手绘关"，
+ * 于是加了 `extraCities`：**只给关卡用**，不进公开地图格式。
+ *
+ * 为什么不顺手把它加进 `FixedMap`：那是玩家上传的格式，多两个可选字段意味着
+ * 上传校验、导出文本、缩略图、审核全要跟着改，而现阶段玩家还传不了关卡。
+ * 等关卡也对玩家开放了，再谈把它提到公开格式里。
  */
 export function layoutFromRows(
   rows: string[],
@@ -1744,6 +1754,7 @@ export function layoutFromRows(
   citiesB: Pos[],
   unitPool: string[] = [],
   citySize = 2,
+  extraCities: Partial<Record<'C' | 'D', Pos[]>> = {},
 ): MapLayout {
   const h = rows.length;
   const w = rows[0]?.length ?? 0;
@@ -1756,7 +1767,9 @@ export function layoutFromRows(
     }
   }
   const blocked = new Set<number>();
-  for (const city of [...citiesA, ...citiesB]) {
+  const citiesC = extraCities.C ?? [];
+  const citiesD = extraCities.D ?? [];
+  for (const city of [...citiesA, ...citiesB, ...citiesC, ...citiesD]) {
     for (let dy = 0; dy < citySize; dy += 1) {
       for (let dx = 0; dx < citySize; dx += 1) {
         put(c, city.x + dx, city.y + dy, 'city');
@@ -1769,8 +1782,13 @@ export function layoutFromRows(
   const used = new Set<number>(blocked);
   const spawnsA: SpawnDef[] = [];
   const spawnsB: SpawnDef[] = [];
+  const spawnsC: SpawnDef[] = [];
+  const spawnsD: SpawnDef[] = [];
   citiesA.forEach((city, i) => spawnsA.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
   citiesB.forEach((city, i) => spawnsB.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+  // 第三四席用同一套撒点规则：手绘图不该自己定"谁站哪"
+  citiesC.forEach((city, i) => spawnsC.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
+  citiesD.forEach((city, i) => spawnsD.push(...spawnsAround(c, city, i === 0 ? 3 : 2, used, pool, i * 3)));
 
   return {
     w,
@@ -1780,8 +1798,13 @@ export function layoutFromRows(
     ),
     citiesA,
     citiesB,
+    // 两家局留 undefined，和以前完全一样（老存档、老测试断言都读这两个字段）
+    citiesC: citiesC.length > 0 ? citiesC : undefined,
+    citiesD: citiesD.length > 0 ? citiesD : undefined,
     spawnsA,
     spawnsB,
+    spawnsC: spawnsC.length > 0 ? spawnsC : undefined,
+    spawnsD: spawnsD.length > 0 ? spawnsD : undefined,
     // 固定地图没有"风格"可言：`style` 只用于界面显示，给它一个中性值
     style: 'open',
     symmetry: 'fair',

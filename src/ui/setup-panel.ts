@@ -42,6 +42,7 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
+import { allLevels, applyLevelToConfig } from '../core/level.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -123,6 +124,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
       fixedMap: initial.fixedMap,
+      // 关卡也跟着上一局走。**这一行漏了，选关卡就会在"开一次面板"之后静默消失**——
+      // 这个对象是逐个字段抄的，和 createMatch 里那份是同一个坑。
+      level: initial.level,
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
       // 关掉的兵种是"上一局的选择"的一部分：不抄过来的话，每次开新局
@@ -636,6 +640,50 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       ).join('');
 
       /* ── 战役页：这一局怎么打 ── */
+      /*
+       * 关卡。
+       *
+       * 现在的关卡都是我们内建的、玩家改不了（见 docs/PLAN-LEVEL-MODE）。所以选了关卡，
+       * 人数和对手就由关卡决定——下面那两块会换成一句只读的说明，而不是留一排
+       * "点了不生效"的开关。
+       *
+       * 想自己调？选「自由对局」就回到原来的样子。**改人数也会自动脱离关卡**，
+       * 因为一份"面板写 2 人、关卡写 3 人"的配置，建出来到底几家没人说得清。
+       */
+      const levelOn = !!config.level;
+      const levelChips = [
+        `<button class="chip ${!levelOn ? 'active' : ''}" data-level="">自由对局</button>`,
+        ...allLevels().map(
+          (l) =>
+            `<button class="chip ${config.level?.id === l.id ? 'active' : ''}" data-level="${esc(l.id)}" title="${esc(l.brief ?? '')}">${esc(l.name)}</button>`,
+        ),
+      ].join('');
+      const levelHint = config.level
+        ? `「${esc(config.level.name)}」${esc(config.level.brief ?? '')}`
+        : '内建关卡：地图、几家、谁交给电脑都按关卡来。';
+
+      /*
+       * 多席位局的"谁交给电脑"。
+       *
+       * 两家局用上面那三个档（热座 / 人机 / 双 AI 观战），因为那三种组合是玩家真正
+       * 会选的；三家四家局的组合太多（八种），列成档位等于让人在菜单里做题，
+       * 所以改成**每一席一个开关**，点一下翻转。
+       */
+      const seatLabel: Record<string, string> = { A: '红方', B: '蓝方', C: '绿方', D: '黄方' };
+      const aiSeatSet = new Set<string>(config.aiSeats ?? []);
+      const multiSeatChips = ['A', 'B', 'C', 'D']
+        .slice(0, playerCount)
+        .map(
+          (p) =>
+            `<button class="chip ${aiSeatSet.has(p) ? 'active' : ''}" data-ai-seat="${p}">${seatLabel[p]} · ${aiSeatSet.has(p) ? '电脑' : '真人'}</button>`,
+        )
+        .join('');
+      const levelAiText = (() => {
+        const ai = config.aiSeats ?? [];
+        if (ai.length === 0) return '这一关全是真人：可以热座轮流，也可以建房联机。';
+        return `这一关由电脑操作：${ai.map((p) => seatLabel[p] ?? p).join('、')}；其余席位是真人。`;
+      })();
+
       const battleView = `
             <section class="field">
               <div class="field-label">
@@ -657,10 +705,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                人数 <span class="field-hint">${playerHint}</span>
+                关卡 <span class="field-hint">${levelOn ? '这一局按关卡来' : '默认是自由对局'}</span>
               </div>
-              <div class="chip-row">${playerChips}${twoCityToggle}</div>
-              <div class="field-hint">${playerNote}</div>
+              <div class="chip-row">${levelChips}</div>
+              <div class="field-hint">${levelHint}</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                人数 <span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>
+              </div>
+              ${
+                levelOn
+                  ? `<div class="field-hint">这一关是 ${playerCount} 家。想自己定几家，在上面选「自由对局」。</div>`
+                  : `<div class="chip-row">${playerChips}${twoCityToggle}</div>
+              <div class="field-hint">${playerNote}</div>`
+              }
             </section>
 
             <section class="field">
@@ -668,8 +728,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 netOn ? '测试 AI 自带全视野：开雾也看得见你' : 'AI 会跟你一样受迷雾限制'
               }</span></div>
               ${
-                playerCount > 2
-                  ? `<div class="field-hint">${playerCount} 人局固定为「全真人」：可以本地热座轮流操作，也可以建房联机。AI 不进多方局。</div>`
+                levelOn
+                  ? `<div class="field-hint">${levelAiText}</div>`
+                  : playerCount > 2
+                  ? `<div class="chip-row">${multiSeatChips}</div>
+              <div class="field-hint">点一下翻转：真人自己走，电脑替它走。多方局里电脑会挑最强的一家当主攻，见谁打谁。</div>
+              ${config.aiSeats && config.aiSeats.length > 0 ? aiLevelChips : ''}`
                   : config.godMode
                   ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
                   : `<div class="chip-row">
@@ -1050,15 +1114,59 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return;
       }
 
+      /*
+       * 关卡：选一张＝把面板设成这一关的样子。
+       *
+       * 翻译只在 `applyLevelToConfig` 里做一次（面板和脚本共用），这里不重复读
+       * `level.seats` —— 两处各读一份，迟早有一处漏掉，表现是"面板写三家、建出来两家"。
+       */
+      const levelBtn = target.closest<HTMLElement>('[data-level]');
+      if (levelBtn) {
+        const id = levelBtn.dataset.level ?? '';
+        const picked = id ? allLevels().find((l) => l.id === id) ?? null : null;
+        Object.assign(config, applyLevelToConfig(config, picked));
+        paint();
+        return;
+      }
+
+      /*
+       * 多席位局：点某一席，翻转"真人 / 电脑"。
+       *
+       * 只在三家四家局出现。两家局用上面那三个档——那里的组合是玩家真正会选的，
+       * 列成"每一席一个开关"反而更难用。
+       */
+      const seatBtn = target.closest<HTMLElement>('[data-ai-seat]');
+      if (seatBtn?.dataset.aiSeat) {
+        const seat = seatBtn.dataset.aiSeat as 'A' | 'B' | 'C' | 'D';
+        const cur = new Set(config.aiSeats ?? []);
+        if (cur.has(seat)) cur.delete(seat);
+        else cur.add(seat);
+        // 按席位顺序存，存档和报告里读起来才不会随点击顺序变
+        config.aiSeats = (['A', 'B', 'C', 'D'] as const).filter((p) => cur.has(p));
+        paint();
+        return;
+      }
+
       // 人数：三家四家一律全真人，顺手把互斥的开关关掉——
       // 留一个"开着但不生效"的开关，比没有这个开关更让人费解。
       const playersBtn = target.closest<HTMLElement>('[data-players]');
       if (playersBtn?.dataset.players) {
         const n = Number(playersBtn.dataset.players);
         config.playerCount = n === 3 ? 3 : n === 4 ? 4 : 2;
+        /*
+         * 改人数＝脱离关卡。
+         *
+         * 关卡规定了"几家"和"谁托管"，面板再改就会和它打架。与其做出一个
+         * "看着是两家、实际建三家"的面板，不如老老实实退回自由对局——
+         * 这也正好是玩家想做的事：他要自己调，那就不该还在关卡里。
+         */
+        config.level = undefined;
         if (config.playerCount > 2) {
           config.aiOpponent = false;
           config.aiAlly = false;
+          // 三家四家：从"全真人"起步，谁要电脑得自己去点那一席
+          // （不清空的话，上一局两家局留下的 ['A','B'] 会让三家局一开局就有两个电脑）
+          config.aiSeats = [];
           // 指挥官模式**留着**：多人局也能用（每一方只排生产序列，其余交给 AI）。
           // 以前这里一起关掉，是因为 AI 只认一个对手——那条限制已经放开。
           config.draftMode = false;
@@ -1083,7 +1191,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           }
         }
         // 回到两人局：双城市开局这个开关不适用（两家本来就两座城），顺手关掉
-        if (config.playerCount === 2) config.twoCities = false;
+        if (config.playerCount === 2) {
+          config.twoCities = false;
+          /*
+           * 托管交回上面那三个档（热座 / 人机 / 双 AI）。
+           *
+           * 必须清成 undefined 而不是 []：`[]` 的意思是"全是真人"，
+           * 会把玩家刚点的「人机对战」压掉——面板显示人机对战、进去却两边都是人。
+           */
+          config.aiSeats = undefined;
+        }
         paint();
         return;
       }
