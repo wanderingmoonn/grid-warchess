@@ -3622,6 +3622,41 @@ html[data-terrain='on'] .tile.t-mountain {
   text-overflow: ellipsis;
 }
 
+/*
+ * 需要填值的技能（钉头七箭书、呼名落马术）。
+ *
+ * 卡片一行 + 输入行一行：输入框**不在按钮里面**——嵌套交互元素点击会冒泡，
+ * 玩家还没打完字法术就放出去了。
+ */
+.skill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skill-input-row {
+  display: flex;
+  gap: 6px;
+  padding-left: 36px; /* 和上面那行的文字对齐（26px 图标 + 10px 间距） */
+}
+
+.skill-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.skill-input:focus {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
 .skill-btn .meta span {
   display: -webkit-box;
   -webkit-line-clamp: 2;

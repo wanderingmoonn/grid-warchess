@@ -18,6 +18,11 @@ export const UNIT_IDS = {
   SERVANT: 'cultivation-servant',
   DEACON: 'cultivation-deacon',
   STEWARD: 'cultivation-steward',
+  // 召唤物（只能由法术造出来，建造表里没有）
+  LING_SHEN: 'cultivation-ling-shen',
+  CLONE: 'cultivation-clone',
+  MIAO_MEN: 'cultivation-miao-men',
+  HUN_DENG: 'cultivation-hun-deng',
   SPIRIT_FIELD: 'cultivation-spirit-field',
   SPIRIT_MINE: 'cultivation-spirit-mine',
   SPIRIT_TOWER: 'cultivation-spirit-tower',
