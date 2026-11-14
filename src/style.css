@@ -1746,6 +1746,29 @@ html[data-terrain='on'] .tile.t-deep {
   animation: water-flow 13s linear infinite;
 }
 /*
+ * 浅流（2026-11-14）：补上水面那一套**流动高光**。
+ *
+ * 之前它在材质模式下是"最素的"：底色 + 深浅过渡带，`::before` 被过渡带占着，
+ * 那层每格一条横线的水纹在材质模式里是 `background: none` 掉着的——
+ * 所以整片水域里，水和深水在动、浅流是死的，一眼就不像同一片水。
+ *
+ * 现在沿用同一套径向软高光、同一个 `water-flow` 动画、同样的相位对齐：
+ *   · 高光比水面更亮（0.22 / 0.15 vs 0.15 / 0.10）——浅水反光碎、看得见底；
+ *   · 周期更短（5s vs 7s）——水浅流得快；
+ *   · 图案尺寸和相位与水面一致，两者相接时纹路是连着的。
+ */
+html[data-terrain='on'] .tile.t-shallow {
+  --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
+  --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
+  background-image:
+    radial-gradient(74% 30% at 42% 42%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 72%),
+    radial-gradient(58% 26% at 74% 64%, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 72%);
+  background-size: 118px 70px, 168px 94px;
+  background-repeat: repeat;
+  animation: water-flow 5s linear infinite;
+}
+
+/*
  * 位移正好各走一个周期（+148 / −214），首尾接得上；
  * 起点是这一格的 `--wx/--wy`，所以整片水是同一个相位在走。
  */
@@ -1761,12 +1784,14 @@ html[data-terrain='on'] .tile.t-deep {
 }
 /* 大地图逐格 repaint 太贵；系统要求减少动效时也不该动 */
 html[data-terrain='on'] .board.big .tile.t-water,
-html[data-terrain='on'] .board.big .tile.t-deep {
+html[data-terrain='on'] .board.big .tile.t-deep,
+html[data-terrain='on'] .board.big .tile.t-shallow {
   animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
   html[data-terrain='on'] .tile.t-water,
-  html[data-terrain='on'] .tile.t-deep {
+  html[data-terrain='on'] .tile.t-deep,
+  html[data-terrain='on'] .tile.t-shallow {
     animation: none;
   }
 }
