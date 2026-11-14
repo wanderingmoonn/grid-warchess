@@ -176,6 +176,13 @@ export interface AbilityApi {
   ): number;
   /** 这个单位现在的生命上限（已含境界加成、衰老等修正） */
   maxHpOf(s: GameState, u: Unit): number;
+  /**
+   * 换主（策反、侵蚀、鬼蜮）。
+   *
+   * 别直接改 `unit.owner`：那样会漏掉"本回合不能再动""击杀额度清零""双方战报"，
+   * 而且漏了也不报错。理由见 rules 里 `convertUnit` 的注释。
+   */
+  convert(s: GameState, unit: Unit, owner: PlayerId, logText?: string): void;
   /** 算一下这个单位打那个单位能造成多少伤害 */
   computeDamage(s: GameState, attacker: Unit, defender: any, isCounter?: boolean): number;
   /** 算一下这个单位现在的溅射半径 */

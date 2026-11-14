@@ -47,6 +47,8 @@ registerStatus({
  */
 export function stunFor(u: Unit, turns: number): void {
   if (turns <= 0) return;
+  // 诸邪辟易：免疫减益期间，麻痹/定身/熔甲一律挂不上去
+  if (spellBuffsOf(u).ignoresDebuff) return;
   u.status ??= {};
   u.status[STUN_STATUS] = Math.max(u.status[STUN_STATUS] ?? 0, turns + 1);
 }
@@ -85,6 +87,7 @@ registerStatus({
  */
 export function rootFor(u: Unit, turns: number): void {
   if (turns <= 0) return;
+  if (spellBuffsOf(u).ignoresDebuff) return;
   u.status ??= {};
   u.status[ROOT_STATUS] = Math.max(u.status[ROOT_STATUS] ?? 0, turns + 1);
 }
@@ -127,6 +130,12 @@ export interface SpellBuffs {
   range?: number;
   /** 攻击次数 +N */
   attacks?: number;
+  /** 攻击次数 ×N（破碎虚空：一次当两次打） */
+  attacksMul?: number;
+  /** 万族之劫：攻击力再加上"麾下兵种种类数" */
+  legion?: boolean;
+  /** 诸邪辟易：一段时间内免疫减益状态 */
+  ignoresDebuff?: boolean;
   /** 溅射半径 +N */
   splash?: number;
   /** 御风：攻击伤害再加上"本回合移动格数" */
@@ -177,5 +186,7 @@ export function timedStatusFor(
   key: string,
   turns: number,
 ): void {
-  if (turns > 0) put(u, key, turns + 1);
+  if (turns <= 0) return;
+  if (spellBuffsOf(u).ignoresDebuff) return;
+  put(u, key, turns + 1);
 }

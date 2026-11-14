@@ -115,8 +115,10 @@ import {
   YUAN_CI_SHEN_GUANG_COST,
   boltDamage,
 } from '../../../src/core/cultivation/skills/bolt.ts';
-import { isStunned, isRooted } from '../../../src/core/cultivation/spell-statuses.ts';
+import { isStunned, isRooted, stunFor, rootFor } from '../../../src/core/cultivation/spell-statuses.ts';
+import { shieldOf } from '../../../src/core/cultivation/skills/shield.ts';
 import { marksOf, marksAt } from '../../../src/core/marks.ts';
+import { footprintOf, coversTile } from '../../../src/core/query.ts';
 import {
   SPIRIT_BREATH_COST,
   SPIRIT_BREATH_EXP_FLOOR,
@@ -3165,6 +3167,983 @@ export function run() {
       base + 3,
       '御风：移动了几格就加几点伤害',
     );
+  });
+
+  // ── 族 5 · 五行免耗（2026-11-14）──────────────────
+  //
+  // 守两个边界：**第 N 次还免、第 N+1 次照扣**，以及**关系不对时不生效**。
+  // 免耗最容易出的两个 bug 是"计数器不清"（永远免）和"关系不判"（随便免）。
+
+  test('小五行相生：相生才免，免完就照常扣灵力', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期：灵力上限 100
+    teachSpell(mage, spellOf('xiao-wuxing-sheng')!);
+    teachSpell(mage, spellOf('shi-fang-huo-hai')!); // 火，85
+    teachSpell(mage, spellOf('yao')!); // 土，100
+    // 垚 是范围法术，需要有敌人站在落点才放得出来
+    const dummy = place2(s, 'B', 'militia', 5, 7);
+    dummy.hp = 500;
+
+    const cast = (state: GameState, id: string) =>
+      applyAction(state, {
+        type: 'HERO_SKILL',
+        unitId: mage.id,
+        skillId: id,
+        targetX: 5,
+        targetY: 7,
+      });
+    const mana = (state: GameState) => manaOf(byId(state, mage.id));
+
+    let cur = s;
+    const credit = cast(cur, 'xiao-wuxing-sheng');
+    assert.ok(credit.ok, credit.ok ? '' : credit.reason);
+    cur = credit.state;
+    assert.equal(mana(cur), 100 - 30, '信用凭证本身要花钱');
+
+    // 第一发五行：还没有起点，算合（否则这门法术要先花一发才有用）
+    const first = cast(cur, 'shi-fang-huo-hai'); // 85 > 剩下的 70，不免就放不出来
+    assert.ok(first.ok, first.ok ? '' : first.reason);
+    cur = first.state;
+    assert.equal(mana(cur), 70, '第一发免耗：85 点没扣，剩 70');
+
+    // 第二发：火生土，相生成立
+    const second = cast(cur, 'yao'); // 100 > 70，不免也放不出来
+    assert.ok(second.ok, second.ok ? '' : second.reason);
+    cur = second.state;
+    assert.equal(mana(cur), 70, '第二发也免：额度用光为止');
+
+    // 第三发：土 → 土，相生不成立（土生金），照常扣 100，灵力不够
+    const third = cast(cur, 'yao');
+    assert.equal(third.ok, false, '第 N+1 次必须照常扣灵力');
+    assert.ok(third.ok ? '' : /灵力/.test(third.reason), `理由要说灵力：${third.ok ? '' : third.reason}`);
+  });
+
+  test('小五行相克：金克木连免两发，关系不对就停', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5));
+    teachSpell(mage, spellOf('xiao-wuxing-ke')!);
+    teachSpell(mage, spellOf('wan-ren-dao-shan')!); // 金，70
+    teachSpell(mage, spellOf('bai-li-du-zhang')!); // 木，70（要有敌人才能放）
+    const foe = place2(s, 'B', 'militia', 5, 7);
+    foe.hp = 500;
+
+    const mana = (state: GameState) => manaOf(byId(state, mage.id));
+    const cast = (state: GameState, id: string) =>
+      applyAction(state, {
+        type: 'HERO_SKILL',
+        unitId: mage.id,
+        skillId: id,
+        targetX: 5,
+        targetY: 7,
+      });
+
+    let cur = cast(s, 'xiao-wuxing-ke').state;
+    assert.equal(mana(cur), 70, '相克凭证 30');
+
+    cur = cast(cur, 'wan-ren-dao-shan').state; // 金，起手免
+    assert.equal(mana(cur), 70, '第一发（金）免');
+
+    cur = cast(cur, 'bai-li-du-zhang').state; // 木，金克木
+    assert.equal(mana(cur), 70, '第二发（木）也免，额度用光');
+
+    // 木克土，再放金不成立 → 照常扣 70，正好扣光
+    const after = cast(cur, 'wan-ren-dao-shan');
+    assert.ok(after.ok, after.ok ? '' : after.reason);
+    assert.equal(mana(after.state), 0, '关系不对就照常扣灵力');
+  });
+
+  // ── 族 7 · 攻击附加（2026-11-14）──────────────────
+
+  test('炼化：伤害换修为并回血（按实际伤害算）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('lian-hua')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'lian-hua' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    caster.hp = 5;
+    const expBefore = getExp(caster);
+    const hpBefore = caster.hp;
+
+    // 命中 20 点（模拟一次攻击落地）：修为 +40、回血 +10
+    CULTIVATION_HOOKS.onUnitDamaged!({
+      state: r.state,
+      unit: byId(r.state, foe.id),
+      amount: 20,
+      source: caster,
+      api: abilityApi,
+    });
+    assert.equal(getExp(byId(r.state, mage.id)), expBefore + 40, '按伤害的 2 倍入修为');
+    assert.equal(byId(r.state, mage.id).hp, hpBefore + 10, '回复伤害的一半');
+
+    // 只生效一次
+    CULTIVATION_HOOKS.onUnitDamaged!({
+      state: r.state,
+      unit: byId(r.state, foe.id),
+      amount: 20,
+      source: byId(r.state, mage.id),
+      api: abilityApi,
+    });
+    assert.equal(getExp(byId(r.state, mage.id)), expBefore + 40, '第二下不再结算');
+  });
+
+  test('溯因果：同类的其他单位一起挨同样一刀', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3));
+    teachSpell(mage, spellOf('su-yin-guo')!);
+
+    const hit = place2(s, 'B', 'militia', 6, 7);
+    const sameA = place2(s, 'B', 'militia', 8, 7);
+    const sameB = place2(s, 'B', 'militia', 9, 7);
+    const other = place2(s, 'B', 'body-cultivator', 10, 7);
+    for (const u of [hit, sameA, sameB, other]) u.hp = 500;
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'su-yin-guo' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    CULTIVATION_HOOKS.onUnitDamaged!({
+      state: r.state,
+      unit: byId(r.state, hit.id),
+      amount: 20,
+      source: byId(r.state, mage.id),
+      api: abilityApi,
+    });
+    assert.equal(byId(r.state, sameA.id).hp, 480, '同类型的第一个也挨打');
+    assert.equal(byId(r.state, sameB.id).hp, 480, '同类型的第二个也挨打');
+    assert.equal(byId(r.state, other.id).hp, 500, '不同兵种不该被牵连');
+  });
+
+  // ── 族 9 · 资源经济（2026-11-14）──────────────────
+
+  test('行万里：走过的格数换修为，换完清零（不能原地踏步刷）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('xing-wan-li')!);
+
+    const caster = byId(s, mage.id);
+    caster.moveSpent = 4;
+    const expBefore = getExp(caster);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'xing-wan-li' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(getExp(byId(r.state, mage.id)), expBefore + 12, '4 格 × 3 点');
+    assert.equal(byId(r.state, mage.id).moveSpent, 0, '换过就清零');
+
+    // 再点一次：没走过路，拒绝且不扣灵力
+    const manaBefore = manaOf(byId(r.state, mage.id));
+    const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'xing-wan-li' });
+    assert.equal(again.ok, false, '这一回合没走过路就不该生效');
+    assert.equal(manaOf(byId(r.state, mage.id)), manaBefore, '失败不扣灵力');
+  });
+
+  // ── 护盾 · 族 4（2026-11-14）────────────────────
+
+  test('护体灵光：盾先挨打、盾甲加甲、碎盾那一击的溢出被吃掉', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期
+    teachSpell(mage, spellOf('hu-ti-ling-guang')!);
+
+    const armorBefore = effectiveStats(s, mage).armor;
+    const hpBefore = mage.hp;
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'hu-ti-ling-guang' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const sh = shieldOf(caster)!;
+    assert.equal(sh.hp, 30 + 10 * getRank(caster), '盾血 = 30 + 境界×10');
+    assert.equal(effectiveStats(r.state, caster).armor, armorBefore + sh.armor, '盾有自己的护甲，要加上去');
+
+    // 打 20 点：全被盾吃掉，本体一点血不掉
+    abilityApi.hurt(r.state, caster, 20);
+    assert.equal(byId(r.state, mage.id).hp, hpBefore, '本体不掉血');
+    assert.equal(shieldOf(byId(r.state, mage.id))!.hp, sh.hp - 20, '盾血减少 20');
+  });
+
+  test('护体灵光：碎盾那一击的溢出不会穿透到本体', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3));
+    teachSpell(mage, spellOf('hu-ti-ling-guang')!);
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'hu-ti-ling-guang' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const sh = shieldOf(caster)!;
+    const hpBefore = caster.hp;
+
+    // 一发打穿：溢出部分被吃掉，本体 0 伤害
+    abilityApi.hurt(r.state, caster, sh.hp + 40);
+    assert.equal(byId(r.state, mage.id).hp, hpBefore, '盾碎的那一击不穿透');
+    assert.equal(shieldOf(byId(r.state, mage.id)), undefined, '盾没了');
+
+    // 再挨一下：这次真的掉血
+    abilityApi.hurt(r.state, byId(r.state, mage.id), 10);
+    assert.equal(byId(r.state, mage.id).hp, hpBefore - 10, '之后再挨打就正常掉血');
+  });
+
+  test('牵引术：把敌人拖近，路上被占就停在上一格', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('qian-yin-shu')!);
+
+    const foe = place2(s, 'B', 'militia', 6, 10); // 距离 5，正好在射程内
+    foe.hp = 500;
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'qian-yin-shu',
+      targetX: 6,
+      targetY: 10,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, foe.id).y, 7, '拖 3 格：10 → 7，停在施法者上面一格');
+    assert.equal(byId(r.state, foe.id).hp, 500, '牵引术不造成伤害');
+
+    // 再来一次，这次 (6,6) 上放个人挡路：拖不动了
+    setMana(byId(r.state, mage.id), 999); // 补满灵力，第二次才放得出来
+    const blocker = place2(r.state, 'A', 'militia', 6, 6);
+    const again = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'qian-yin-shu',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(again.ok, again.ok ? '' : again.reason);
+    assert.equal(byId(again.state, foe.id).y, 7, '前面被占住了，一格都拖不动');
+    assert.equal(byId(again.state, blocker.id).y, 6, '挡路的没被挤走');
+  });
+
+  // ── G6 复活 + 族 11（2026-11-14）──────────────────
+  //
+  // 这一组最重要的是：**免死之后境界/经验不能掉**（放回去的是同一个对象），
+  // 以及**只能免一次**（否则等于无限兵源）。
+
+  test('主角光环：免死一次，原地半血，境界与经验一点不掉', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('zhu-jiao-guang-huan')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'zhu-jiao-guang-huan' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const caster = byId(r.state, mage.id);
+    const rankBefore = getRank(caster);
+    const expBefore = getExp(caster);
+    const maxHp = maxHpOf(r.state, caster);
+
+    // 让它在原位被打死
+    abilityApi.killUnit(r.state, caster, byId(r.state, foe.id), '测试击杀');
+    const back = r.state.units.find((u) => u.id === mage.id);
+    assert.ok(back, '复活后要回到场上');
+    assert.equal(back!.hp, Math.round(maxHp * 0.5), '半血站起');
+    assert.equal(getRank(back!), rankBefore, '境界不能掉');
+    assert.equal(getExp(back!), expBefore, '经验不能掉');
+    assert.equal(back!.x, 6, '原地复活');
+
+    // 再死一次：这次真的没了
+    abilityApi.killUnit(r.state, back!, byId(r.state, foe.id), '第二次击杀');
+    assert.ok(!r.state.units.some((u) => u.id === mage.id), '护命符只生效一次');
+  });
+
+  test('替死转生：在凶手的位置站起来', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('ti-si-zhuan-sheng')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ti-si-zhuan-sheng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    abilityApi.killUnit(r.state, byId(r.state, mage.id), byId(r.state, foe.id), '测试击杀');
+    const back = r.state.units.find((u) => u.id === mage.id)!;
+    assert.equal(back.x, 6, '落在凶手的位置（x）');
+    assert.equal(back.y, 7, '落在凶手的位置（y）');
+  });
+
+  test('忘川逆流：把阵亡的同伴以半血唤回，一条记录只能唤一次', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 7 期，灵力 110
+    teachSpell(mage, spellOf('wang-chuan-ni-liu')!);
+
+    // 手动记一条"刚阵亡的同伴"（rules 会在动作清算时写，这里直接造一条）
+    s.fallen = [{ owner: 'A', type: 'qi-cultivator', x: 5, y: 5, turn: s.turn }];
+    const before = s.units.filter((u) => u.type === 'qi-cultivator').length;
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'wang-chuan-ni-liu' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = r.state.units.filter((u) => u.type === 'qi-cultivator').length;
+    assert.equal(after, before + 1, '召唤出一个同类形体');
+    assert.equal(r.state.fallen![0]!.revived, true, '记录要打上"已唤回"');
+
+    // 再放一次：没有可唤的人了
+    const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'wang-chuan-ni-liu' });
+    assert.equal(again.ok, false, '一条记录只能唤一次');
+  });
+
+  test('撒豆成兵：召出三个仆役，本回合不能行动', () => {
+    const { s } = spellScene();
+    // 挪到空地上：宗门附近四周都是建筑，站不下三个
+    const mage = place2(s, 'A', 'qi-cultivator', 10, 10);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('sa-dou-cheng-bing')!);
+
+    const before = s.units.filter((u) => u.type === 'cultivation-servant').length;
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'sa-dou-cheng-bing' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const servants = r.state.units.filter((u) => u.type === 'cultivation-servant');
+    assert.equal(servants.length, before + 3, '召出 3 个');
+    assert.ok(servants.every((u) => u.moved && u.acted), '召出来的本回合不能动');
+  });
+
+  // ── 族 8 · 绑定（2026-11-14）──────────────────────
+
+  test('替劫灵身：挨打时伤害转给灵身，本体不掉血', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('ti-jie-ling-shen')!);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ti-jie-ling-shen' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const decoyId = caster.custom!['lingShen'] as string;
+    const decoy = r.state.units.find((u) => u.id === decoyId)!;
+    assert.ok(decoy, '灵身要在场上');
+
+    const hpBefore = caster.hp;
+    const decoyBefore = decoy.hp; // 先存数：decoy 是同一个对象的活引用，扣血后读的就是新值
+    abilityApi.hurt(r.state, caster, 20);
+    assert.equal(byId(r.state, mage.id).hp, hpBefore, '本体不掉血');
+    assert.equal(byId(r.state, decoyId).hp, decoyBefore - 20, '伤害落在灵身身上');
+  });
+
+  test('化身分神：造出能行动的分身，到期自己消散', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 10, 10);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('hua-shen-fen-shen')!);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'hua-shen-fen-shen' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const clone = r.state.units.find((u) => u.type === 'cultivation-clone');
+    assert.ok(clone, '分身要造出来');
+    assert.equal(clone!.custom?.['cloneOf'], mage.id, '分身要记住本体');
+
+    // 转一圈（自己的回合末）不该消失，第二圈才该走
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state; // → B
+    cur = applyAction(cur, { type: 'END_TURN' }).state; // → A（B 的回合末不管它）
+    assert.ok(cur.units.some((u) => u.type === 'cultivation-clone'), '第一回合还在');
+    cur = applyAction(cur, { type: 'END_TURN' }).state; // → B
+    cur = applyAction(cur, { type: 'END_TURN' }).state; // → A，A 的回合末它已经活了 2 次
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state; // 第 3 次回合末
+    assert.ok(!cur.units.some((u) => u.type === 'cultivation-clone'), '到期消散');
+  });
+
+  test('众妙之门：立起来的门每回合给半径内的修士添修为', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 10, 10);
+    setCultivationExp(mage, expForRank(7)); // 8 期，灵力 120
+    teachSpell(mage, spellOf('zhong-miao-zhi-men')!);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'zhong-miao-zhi-men' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(
+      r.state.units.some((u) => u.type === 'cultivation-miao-men'),
+      '门是一个建筑单位',
+    );
+
+    const expBefore = getExp(byId(r.state, mage.id));
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state; // → B
+    cur = applyAction(cur, { type: 'END_TURN' }).state; // → A 的回合开始
+    assert.ok(getExp(byId(cur, mage.id)) > expBefore, '门要给修士添修为');
+  });
+
+  test('魂灯：主人倒下时在灯的位置重生，灯随之熄灭', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 10, 10);
+    setCultivationExp(mage, expForRank(3)); // 4 期，灵力 80
+    teachSpell(mage, spellOf('hun-deng')!);
+    const foe = place2(s, 'B', 'militia', 8, 8);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'hun-deng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const lampId = (caster.custom!['hunDeng'] as { id: string }).id;
+    const lamp = r.state.units.find((u) => u.id === lampId)!;
+    assert.ok(lamp, '灯要立起来');
+    const lampPos = { x: lamp.x, y: lamp.y };
+
+    abilityApi.killUnit(r.state, caster, byId(r.state, foe.id), '测试击杀');
+    const back = r.state.units.find((u) => u.id === mage.id);
+    assert.ok(back, '魂魄被灯接住');
+    assert.equal(back!.x, lampPos.x, '在灯的位置重生（x）');
+    assert.equal(back!.y, lampPos.y, '在灯的位置重生（y）');
+    assert.ok(!r.state.units.some((u) => u.id === lampId), '灯用掉了就熄灭');
+  });
+
+  // ── 族 10 · 转化 / 策反（2026-11-14）──────────────
+  //
+  // 五条只差"什么时候变"。这一组守的是：**变了之后真的是你的兵**
+  // （owner 换了、本回合不能再动），以及境界技能不丢（同一个人）。
+
+  test('心魔种道：下一次受伤当场倒戈，且本回合不能再动', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('xin-mo-zhong-dao')!);
+    const foe = place2(s, 'B', 'body-cultivator', 6, 7);
+    setCultivationExp(foe, expForRank(3)); // 敌方修士也有境界，倒戈后要保留
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'xin-mo-zhong-dao',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, foe.id).owner, 'B', '种下去还没发作');
+
+    const rankBefore = getRank(byId(r.state, foe.id));
+    abilityApi.hurt(r.state, byId(r.state, foe.id), 10);
+    const turned = byId(r.state, foe.id);
+    assert.equal(turned.owner, 'A', '受伤后倒戈');
+    assert.equal(getRank(turned), rankBefore, '境界保留');
+    assert.ok(turned.moved && turned.acted, '倒戈当回合不能再动');
+  });
+
+  test('胎中之谜：数够回合自己倒戈', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('tai-zhong-zhi-mi')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'tai-zhong-zhi-mi',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    /*
+     * 倒计时只在**目标的回合开始**减 1（`onTurnStart` 里判了 `u.owner === player`），
+     * 一回合 = 两个 END_TURN，所以第 5 个 END_TURN 才走到第 3 次 B 的回合开始。
+     */
+    let cur = r.state;
+    for (let i = 0; i < 4; i++) {
+      cur = applyAction(cur, { type: 'END_TURN' }).state;
+    }
+    assert.equal(byId(cur, foe.id).owner, 'B', '还没数够（才过两轮减 2）');
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(byId(cur, foe.id).owner, 'A', '第三次轮到 B 时倒戈');
+  });
+
+  test('酆都鬼蜮：死在这片地上的敌人变成我方鬼卒', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8)); // 9 期，灵力 130
+    teachSpell(mage, spellOf('feng-du-gui-yu')!);
+    const foe = place2(s, 'B', 'militia', 5, 7);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'feng-du-gui-yu',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    abilityApi.killUnit(r.state, byId(r.state, foe.id), byId(r.state, mage.id), '测试击杀');
+    const risen = byId(r.state, foe.id);
+    assert.ok(risen, '不该真的死掉');
+    assert.equal(risen!.owner, 'A', '变成鬼卒');
+    assert.ok(risen!.hp > 0, '以半血站起来');
+  });
+
+  test('道化魔染：染满两层就倒戈', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(7)); // 8 期，灵力 120
+    teachSpell(mage, spellOf('dao-hua-mo-ran')!);
+    const foe = place2(s, 'B', 'militia', 5, 7);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'dao-hua-mo-ran',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 自己的回合开始染一层（一回合 = 两个 END_TURN）
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(byId(cur, foe.id).owner, 'B', '第一层还没倒戈');
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(byId(cur, foe.id).owner, 'A', '第二层倒戈');
+  });
+
+  test('血脉侵蚀：被侵蚀倒下的人不是死，是倒戈', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100（这一发要 95）
+    teachSpell(mage, spellOf('xue-mai-qin-shi')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.hp = 5; // 残血：一发侵蚀就够
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'xue-mai-qin-shi',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // B 的回合开始侵蚀一次（一回合 = 两个 END_TURN）
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const after = byId(cur, foe.id);
+    assert.ok(after, '不该真的死掉');
+    assert.equal(after!.owner, 'A', '侵蚀倒下即倒戈');
+    assert.ok(after!.hp > 0, '留一口气');
+  });
+
+  // ── 簇 C · 规则豁免（2026-11-14）──────────────────
+
+  test('大道三千：学法术不再受流派限制', () => {
+    const { s } = spellScene();
+    const body = place2(s, 'A', 'body-cultivator', 6, 5);
+    setCultivationExp(body, expForRank(4)); // 5 期，灵力 90
+    teachSpell(body, spellOf('dao-san-qian')!);
+    // 假装这门已经研发过，好让闸走到"流派"那一道
+    s.researched = { ...(s.researched ?? {}), A: ['palm-thunder'] };
+    const swordOnly = { ...spellOf('palm-thunder')!, schools: ['sword-cultivator'] };
+
+    const before = spellLearnProblem(s, body, swordOnly) ?? '';
+    assert.ok(before.includes('学得会'), `体修学剑修的法术要被拦住：${before}`);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: body.id, skillId: 'dao-san-qian' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = spellLearnProblem(r.state, byId(r.state, body.id), swordOnly) ?? '';
+    /*
+     * 只断言"流派那道闸没了"：后面还有藏经阁、法术位两道闸，
+     * 这个场景里不一定站对地方，所以不断言整条为 null。
+     */
+    assert.ok(!after.includes('学得会'), `参过大道三千就不该再被流派拦：${after}`);
+  });
+
+  test('一元复始：把身上的状态与加成一次清空', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期
+    teachSpell(mage, spellOf('yi-yuan-fu-shi')!);
+    rootFor(mage, 2);
+    assert.ok(isRooted(mage), '先挂个定身');
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'yi-yuan-fu-shi' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(!isRooted(byId(r.state, mage.id)), '清空之后不再被定身');
+  });
+
+  test('诸邪辟易：免疫减益期间挂不上麻痹与定身', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('zhu-xie-bi-yi')!);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'zhu-xie-bi-yi' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    stunFor(caster, 2);
+    rootFor(caster, 2);
+    assert.ok(!isStunned(caster), '麻痹挂不上');
+    assert.ok(!isRooted(caster), '定身挂不上');
+  });
+
+  test('破碎虚空：射程拉满、攻击次数翻倍', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 7 期，灵力 110
+    teachSpell(mage, spellOf('po-sui-xu-kong')!);
+
+    const attacksBefore = attacksPerTurn(s, mage);
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'po-sui-xu-kong' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    assert.equal(attacksPerTurn(r.state, caster), attacksBefore * 2, '攻击次数 ×2');
+    assert.ok(effectiveRange(r.state, caster) >= 90, '射程拉到全图');
+  });
+
+  test('穷极：隔着大半张图也能打到', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 3, 3);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('qiong-ji')!);
+    const foe = place2(s, 'B', 'militia', 12, 12); // 曼哈顿距离 18
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'qiong-ji',
+      targetX: 12,
+      targetY: 12,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const dmg = 20 + 8 * getRank(byId(r.state, mage.id));
+    assert.equal(byId(r.state, foe.id).hp, 500 - dmg, '全图范围内照常结算伤害');
+  });
+
+  test('天下皆白：别人的伤害随回合数放大，施法者豁免', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(7)); // 8 期，灵力 120
+    teachSpell(mage, spellOf('tian-xia-jie-bai')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-xia-jie-bai' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const enemy = byId(r.state, foe.id);
+
+    // 把回合数推到 20：倍率 = 20 × 0.1 = 2
+    r.state.turn = 20;
+    const enemyHitsMage = computeDamage(r.state, enemy, caster);
+    const mageHitsEnemy = computeDamage(r.state, caster, enemy);
+
+    // 关掉法术对照一次
+    caster.status = { ...(caster.status ?? {}) };
+    delete caster.status['spell-white'];
+    const enemyHitsMageOff = computeDamage(r.state, enemy, caster);
+
+    assert.equal(enemyHitsMage, enemyHitsMageOff * 2, '别人的伤害 ×2（回合 20 × 0.1）');
+    r.state.turn = 20;
+    assert.ok(mageHitsEnemy > 0, '施法者自己的伤害照旧');
+  });
+
+  test('平等图腾：境界取视野内敌方最高，离开视野掉回 0', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期
+    teachSpell(mage, spellOf('ping-deng-tu-teng')!);
+    const ally = place2(s, 'A', 'body-cultivator', 6, 6);
+    setCultivationExp(ally, 0); // 从 0 期开始，便于看"抬上去"
+
+    /*
+     * 两个敌人是**为了验连锁**：
+     *   近处 4 期（起手视野就看得见）→ 境界先抬到 4 → 视野跟着变大（+4）
+     *   → 才看得见 7 格外的 8 期 → 境界再抬到 8。
+     * 如果只放一个 3 格内的 8 期，一次就抬满了，证明不了"涨了视野再涨境界"。
+     */
+    const near = place2(s, 'B', 'sword-cultivator', 6, 8); // 距离 2
+    setCultivationExp(near, expForRank(3)); // 4 期
+    const far = place2(s, 'B', 'sword-cultivator', 6, 13); // 距离 7，起手视野看不到
+    setCultivationExp(far, expForRank(7)); // 8 期
+    const rankStrong = getRank(byId(s, far.id));
+    assert.equal(getRank(byId(s, ally.id)), 0, '起手是 0 期');
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ping-deng-tu-teng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 转一圈到自己的回合开始：境界按视野内的强敌刷新
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(getRank(byId(cur, ally.id)), rankStrong, '境界被抬到视野内最强的那个');
+
+    // 把两个敌人都挪到看不见的地方：下一次刷新掉回 0
+    for (const id of [near.id, far.id]) {
+      const u = byId(cur, id);
+      u.x = 15;
+      u.y = 15;
+    }
+    let after = applyAction(cur, { type: 'END_TURN' }).state;
+    after = applyAction(after, { type: 'END_TURN' }).state;
+    assert.equal(getRank(byId(after, ally.id)), 0, '视野里没有强敌就掉回 0 期');
+  });
+
+  test('绝地天通：敌方在术中期间产不出修士', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 7 期，灵力 110
+    teachSpell(mage, spellOf('jue-di-tian-tong')!);
+    const camp = place2(s, 'B', 'militia', 8, 8);
+
+    const blockedBefore = CULTIVATION_HOOKS.produceBlocked?.({
+      state: s,
+      source: { kind: 'camp', camp },
+      target: s.unitTypes['qi-cultivator']!,
+    });
+    assert.equal(blockedBefore ?? null, null, '没放之前不受影响');
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'jue-di-tian-tong' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const blocked = CULTIVATION_HOOKS.produceBlocked?.({
+      state: r.state,
+      source: { kind: 'camp', camp: byId(r.state, camp.id) },
+      target: r.state.unitTypes['qi-cultivator']!,
+    });
+    assert.ok((blocked ?? '').includes('绝地天通'), `要说明是绝地天通挡的：${blocked}`);
+
+    // 非修士不受影响
+    const militiaOk = CULTIVATION_HOOKS.produceBlocked?.({
+      state: r.state,
+      source: { kind: 'camp', camp: byId(r.state, camp.id) },
+      target: r.state.unitTypes['militia']!,
+    });
+    assert.equal(militiaOk ?? null, null, '只封修士，不封普通兵');
+  });
+
+  test('法相天地：放大到 2×2；撑不下就卡住、动不了，腾出来就解开', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 10, 10);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('fa-xiang-tian-di')!);
+    // 下面那一格先占住：2×2 撑不开
+    const blocker = place2(s, 'A', 'militia', 11, 11);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'fa-xiang-tian-di' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const giant = byId(r.state, mage.id);
+    assert.equal(footprintOf(r.state, giant), 2, '长到 2×2');
+    assert.ok(coversTile(r.state, giant, 11, 10), '多出来的格子也算它占的');
+    assert.equal(movePower(r.state, giant), 0, '撑不下 → 不能移动');
+
+    // 挡路的走开：下一次刷新自动解开
+    const b = byId(r.state, blocker.id);
+    b.x = 14;
+    b.y = 14;
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const free = byId(cur, mage.id);
+    assert.ok(movePower(cur, free) > 0, '腾出空位后能动了');
+  });
+
+  // ── 簇 B · 输入通道（2026-11-14）──────────────────
+
+  test('G5 输入通道：需要填值的法术，空着填会被拒', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('ding-tou-qi-jian-shu')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.age = 30;
+
+    const noInput = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'ding-tou-qi-jian-shu',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.equal(noInput.ok, false, '不填就不该放出去');
+    assert.ok(
+      (noInput.ok ? '' : noInput.reason).includes('填'),
+      `理由要说清楚要填什么：${noInput.ok ? '' : noInput.reason}`,
+    );
+  });
+
+  test('钉头七箭书：猜中年龄重创并钉住，猜错只擦到', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期
+    teachSpell(mage, spellOf('ding-tou-qi-jian-shu')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.hp = 500;
+    foe.age = 30;
+
+    const wrong = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'ding-tou-qi-jian-shu',
+      targetX: 6,
+      targetY: 7,
+      input: '20',
+    });
+    assert.ok(wrong.ok, wrong.ok ? '' : wrong.reason);
+    const dmg = 50 + 12 * getRank(byId(wrong.state, mage.id));
+    assert.equal(byId(wrong.state, foe.id).hp, 500 - Math.round(dmg * 0.2), '猜错只吃两成');
+    assert.ok(!isRooted(byId(wrong.state, foe.id)), '猜错不钉住');
+
+    setMana(byId(wrong.state, mage.id), 999); // 补满灵力，第二发才放得出来
+    const right = applyAction(wrong.state, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'ding-tou-qi-jian-shu',
+      targetX: 6,
+      targetY: 7,
+      input: '30',
+    });
+    assert.ok(right.ok, right.ok ? '' : right.reason);
+    assert.equal(byId(right.state, foe.id).hp, 500 - Math.round(dmg * 0.2) - dmg, '猜中吃满');
+    assert.ok(isRooted(byId(right.state, foe.id)), '猜中钉住');
+  });
+
+  test('斩仙飞刀：记录三回合后落刀，挪开就落空', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('zhan-xian-fei-dao')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'zhan-xian-fei-dao',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, foe.id).hp, 500, '刚记下时不动刀');
+
+    // 三个自己的回合（一回合 = 两个 END_TURN）
+    let cur = r.state;
+    for (let i = 0; i < 6; i++) cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const dmg = 40 + 10 * getRank(byId(cur, mage.id));
+    assert.equal(byId(cur, foe.id).hp, 500 - dmg, '三回合后刀落');
+
+    // 再来一次，这次让目标跑开
+    const again = applyAction(cur, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'zhan-xian-fei-dao',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(again.ok, again.ok ? '' : again.reason);
+    const runner = byId(again.state, foe.id);
+    const hpBefore = runner.hp;
+    runner.x = 10;
+    runner.y = 10;
+    let cur2 = again.state;
+    for (let i = 0; i < 6; i++) cur2 = applyAction(cur2, { type: 'END_TURN' }).state;
+    assert.equal(byId(cur2, foe.id).hp, hpBefore, '离记录点太远就落空');
+  });
+
+  test('呼名落马术：报兵种名，全场同种敌人一起落马', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期
+    teachSpell(mage, spellOf('hu-ming-luo-ma-shu')!);
+    const a = place2(s, 'B', 'militia', 4, 4);
+    const b = place2(s, 'B', 'militia', 9, 9);
+    const other = place2(s, 'B', 'body-cultivator', 8, 8);
+    for (const u of [a, b, other]) u.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'hu-ming-luo-ma-shu',
+      input: '民兵',
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const dmg = 12 + 3 * getRank(byId(r.state, mage.id));
+    assert.equal(byId(r.state, a.id).hp, 500 - dmg, '第一个民兵落马');
+    assert.equal(byId(r.state, b.id).hp, 500 - dmg, '远处的民兵也落马');
+    assert.equal(byId(r.state, other.id).hp, 500, '别的兵种不受影响');
+    assert.ok(isRooted(byId(r.state, a.id)), '落马就是定身');
+
+    // 叫一个不存在名字：失败且不扣灵力
+    const manaBefore = manaOf(byId(r.state, mage.id));
+    const miss = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'hu-ming-luo-ma-shu',
+      input: '凤凰',
+    });
+    assert.equal(miss.ok, false, '叫不中就不该空放');
+    assert.equal(manaOf(byId(r.state, mage.id)), manaBefore, '失败不扣灵力');
+  });
+
+  // ── 簇 D · 效果转移（2026-11-14）──────────────────
+
+  test('张冠李戴：冲你来的伤害全部落到替身头上，替身死了就还给你', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 7 期，灵力上限 110（这一发要 95）
+    teachSpell(mage, spellOf('zhang-guan-li-dai')!);
+    setMana(mage, 999);
+    const decoy = place2(s, 'B', 'militia', 6, 7);
+    decoy.hp = 500;
+    const attacker = place2(s, 'B', 'body-cultivator', 5, 7);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'zhang-guan-li-dai',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    const hpBefore = caster.hp;
+
+    // 有人打施法者：伤害落到替身
+    abilityApi.hurt(r.state, caster, 20, { source: byId(r.state, attacker.id) });
+    assert.equal(byId(r.state, mage.id).hp, hpBefore, '本体不掉血');
+    assert.equal(byId(r.state, decoy.id).hp, 480, '替身挨了这 20 点');
+
+    // 替身被打死之后，转移自动失效
+    abilityApi.killUnit(r.state, byId(r.state, decoy.id), byId(r.state, attacker.id), '测试击杀');
+    abilityApi.hurt(r.state, byId(r.state, mage.id), 10);
+    assert.equal(byId(r.state, mage.id).hp, hpBefore - 10, '替身没了就还给自己');
+  });
+
+  test('张冠李戴：法术挑的目标也会被换掉（定身转到替身身上）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6));
+    teachSpell(mage, spellOf('zhang-guan-li-dai')!);
+    setMana(mage, 999);
+    const decoy = place2(s, 'B', 'militia', 6, 7);
+    decoy.hp = 500;
+
+    // 敌方也来一个修士，用元磁神光（麻痹）打施法者
+    const foe = place2(s, 'B', 'qi-cultivator', 6, 8);
+    setCultivationExp(foe, expForRank(4));
+    teachSpell(foe, spellOf('yuan-ci-shen-guang')!);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'zhang-guan-li-dai',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    r.state.current = 'B'; // 轮到敌方出手（否则"只能给自己人下命令"）
+    const hit = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: foe.id,
+      skillId: 'yuan-ci-shen-guang',
+      targetX: 6,
+      targetY: 5, // 指向施法者（A 的修士）
+    });
+    assert.ok(hit.ok, hit.ok ? '' : hit.reason);
+    assert.ok(!isStunned(byId(hit.state, mage.id)), '本体不该被麻痹');
+    assert.ok(isStunned(byId(hit.state, decoy.id)), '麻痹转到替身身上');
   });
 
   // ── 吐纳术 / 罡风（2026-11-13）────────────────────

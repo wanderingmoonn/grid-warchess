@@ -136,6 +136,42 @@ registerPreview([ROW]);     // 瞄准高亮：不用自己写
   ⚠️ 加成数值**不放 `StatusDef`**：`modifyAtk` 引擎还没接，写状态里会变成
   "面板有、伤害没有"。正确做法是数值放 `Unit.custom.spellBuff`、
   状态 `spell-buff` 只数回合，由 `hooks.ts` 的属性钩子去读。
+- **族 5 五行免耗 `wuxing`**（`skills/wuxing.ts`）：七条只差"免几次 + 什么关系"。
+  免耗挂在骨架的 `registerCostWaiver` 上——它必须发生在**扣灵力之前**。
+- **族 7 攻击附加 `strikeBonus`**（`skills/strike-bonus.ts`）：给下一次命中挂结算，
+  消费点在 `hooks.onUnitDamaged`（那里能拿到**实际伤害**）。
+- **族 9 资源经济 `economy`**（`skills/economy.ts`）：灵气/脚程换修为。
+- **簇 C 规则豁免 `rewrite`**（`skills/rewrite.ts`）：大道三千、一元复始、诸邪辟易、
+  万族之劫、破碎虚空、天下皆白、平等图腾、绝地天通、法相天地，
+  外加 `bolt` 家族的穷极（射程 99 = 全图）。
+  其中**平等图腾**在 `getRank` 上加了一层 `custom.rankOverride`，靠迭代实现
+  "境界涨 → 视野大 → 看到更强的敌人 → 再涨"的连锁；
+  **法相天地**在 `footprintOf` 上加了一层单位级覆盖（`custom.footprint`），
+  放大后撑不下会卡住，卡住时 `modifyMove` 返回 0（能动嘴，动不了腿）。
+  这几条改的是**规则**而不是数值，所以贴着各自的闸/钩子写，不进族。
+- **簇 D 效果转移 `transfer`**（`skills/transfer.ts` + `../transfer.ts`）：张冠李戴。
+  只改两个入口（`redirectDamage` + `resolveCast` 里的 victims），**不列影响清单**——
+  清单永远不完整，而这两处是"以某人为目标"的全部入口。
+- **簇 B 记录与延迟处决 `record`**（`skills/record.ts`）：斩仙飞刀、钉头七箭书、
+  呼名落马术。后两条要玩家**先填一个值**——`SkillDef.input` 声明要填什么，
+  面板自动多一行输入框，`doHeroSkill` 在空值时直接拒。
+- **族 10 转化 `convert`**（`skills/convert.ts`）：胎中之谜、心魔种道、血脉侵蚀、
+  酆都鬼蜮、道化魔染。五条只差"什么时候变"；**换主一律走 `api.convert`**
+  （唯一出口：本回合不能再动、击杀额度清零、双方战报），别直接改 `owner`。
+- **G6 复活 + 族 11（`skills/revive.ts`）**：主角光环、替死转生、忘川逆流。
+  免死 = 放回**同一个对象**（境界/经验/寿元全在）；招魂 = `s.fallen` 造新形体（修为不回来）。
+- **族 8 召唤（`skills/summon.ts`）**：撒豆成兵、替劫灵身、化身分神、众妙之门、魂灯。
+  造单位用 `api.spawnNear`，探位用 `api.freeNeighbor`（别用"先 spawn 一个试试"——
+  灵力不够时会凭空多一个兵）。**召唤物都是 `cost: 0` 且不在建造表里**，
+  绑定关系各写各的：灵身走 `redirectDamage`、分身靠 `custom.cloneOf`、
+  门在 `onTurnStart`、灯在 `onUnitKilled`（排在护命符之前）。
+- **族 4 拉拽 `pull`**（`skills/pull.ts`）：牵引术、缚之道、拘魂索命。
+  一格一格拖，撞到人或站不住就停在上一格；不会拖进施法者那格。
+- **护盾**（`skills/shield.ts`，`effect: 'shield'`）：护体灵光。
+  **不是召唤物**——不在场上多一个单位，而是挂在人身上的一层"先行血条"：
+  有自己护甲（走 `modifyArmor`）和血量（走核心 `absorbDamage`），
+  **碎盾那一击的溢出会被吃掉**，不穿透本体。数值放 `Unit.custom.shield`，
+  是否生效看状态 `spell-shield`。
 
 它们的参数就是"族的开关"长什么样的样板：
 

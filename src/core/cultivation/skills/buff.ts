@@ -24,11 +24,12 @@
  */
 import type { SkillCtx } from '../../skill-hooks.ts';
 import { registerSkillEffect } from '../../skill-hooks.ts';
-import { spendMana } from '../mana.ts';
+
 import { applySpellBuffs, type SpellBuffs } from '../spell-statuses.ts';
 import {
   defineSpellSkill,
   registerManaReady,
+  paySpellCost,
   registerPreview,
   spellCustom,
   type SpellRow,
@@ -146,7 +147,7 @@ registerSkillEffect('buff', (c: SkillCtx) => {
   const skillName = (c.skill as { name?: string } | undefined)?.name ?? '法术';
   const name = c.api.utype(s, self.type).name;
 
-  if (!spendMana(self, cost)) {
+  if (!paySpellCost(c, cost)) {
     c.result.ok = false;
     c.result.reason = `灵力不足（需要 ${cost} 点）`;
     return;
