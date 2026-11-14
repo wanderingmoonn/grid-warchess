@@ -49,6 +49,7 @@ import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
 import { SPIRIT_STONE_DEF } from './cultivation/resources.ts';
 import { CULTIVATION_HOOKS } from './cultivation/hooks.ts';
+import { CULTIVATION_MARK_KINDS } from './cultivation/spell-marks.ts';
 import { TOWER_CHARGE_COST, TOWER_BURST_CHARGES } from './cultivation/skills/index.ts';
 
 // 副作用注册：技能/解锁都是模块加载时自注册，必须 import 一次。
@@ -64,6 +65,8 @@ export const CULTIVATION_PACK: Expansion = {
   scale: 'large',
   hooks: CULTIVATION_HOOKS,
   abilities: CULTIVATION_ABILITIES,
+  // 法术留下的场（火海、刀山）。引擎负责可见性与次数，见 cultivation/spell-marks.ts
+  marks: CULTIVATION_MARK_KINDS,
   units: [
     CULTIVATOR, 
     SWORD_CULTIVATOR, 
