@@ -645,7 +645,41 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       if (memo !== undefined) cls += ' remembered';
       if (lit && tile.cityId) {
         const city = s.cities.find((c) => c.id === tile.cityId);
-        if (city) cls += ` own-${city.owner}`;
+        if (city) {
+          cls += ` own-${city.owner}`;
+          /*
+           * 城区的贴图档（`data-era`）：由这座城的**时代等级**决定（2026-11-15）。
+           *
+           * 视觉身份定成"城区"——一片屋顶与街巷，而不是一座要塞的立面。
+           * 时代一升，屋顶的形制也该跟着换：
+           *   青铜/铁器/火器 → `civil`（夯土街、木构与茅草·陶瓦）
+           *   蒸汽 → 以后补 `brick`（砖瓦、烟囱），现在先用 `civil`
+           *   机械化/信息化 → `concrete`（平顶、沥青街、玻璃格）
+           *   装甲/聚变 → 以后补 `alloy`（合金板、发光管线），现在先用 `concrete`
+           *
+           * 档位名直接用时代名派生的词（civil/brick/concrete/alloy），
+           * 别用数字：以后加时代不会让 1~8 的映射全乱。
+           */
+          node.dataset.cityEra = city.era <= 4 ? 'civil' : 'concrete';
+          /*
+           * 城市块的四条边（`data-ct/cr/cb/cl`）：邻居**不是同一座城**就是块的边界。
+           *
+           * 城市是 2×2 或 3×3 的一整块，块内四格必须连成一片；只在块的边缘画墙。
+           * 用 cityId 判，不用地形：城与城紧挨着时，中间那道墙也该在。
+           */
+          const sameCity = (tx: number, ty: number): string => {
+            if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
+            return s.tiles[ty * s.w + tx]?.cityId === city.id ? '0' : '1';
+          };
+          const ct = sameCity(x, y - 1);
+          const cr = sameCity(x + 1, y);
+          const cb = sameCity(x, y + 1);
+          const cl = sameCity(x - 1, y);
+          if (node.dataset.ct !== ct) node.dataset.ct = ct;
+          if (node.dataset.cr !== cr) node.dataset.cr = cr;
+          if (node.dataset.cb !== cb) node.dataset.cb = cb;
+          if (node.dataset.cl !== cl) node.dataset.cl = cl;
+        }
       }
       if (targetPositions.has(i)) cls += ' attackable';
       else if (reachSet.has(i)) cls += ' reach';
