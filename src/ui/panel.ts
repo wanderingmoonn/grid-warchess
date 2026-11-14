@@ -2471,6 +2471,14 @@ function powerBlock(s: GameState, owner: PlayerId): string {
 }
 
 function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
+  /*
+   * 上帝模式（2026-11-14）：点开一台装甲就能直接配装。
+   *
+   * 沙盒里没有金币和电的概念，所以按钮不再按"钱够不够/有没有贴坞/吃不吃的下电"
+   * 去禁用；只保留"这个素体装不装得上这件"（`canMount(..., { free: true })`）。
+   * 也不看 `canAct`（这回合动过没有）——试配置不该被回合锁住。
+   */
+  const god = s.config.godMode === true;
   const def = s.unitTypes[u.type];
   if (!def?.armorFrame) return '';
   const off = offlineModules(s, u);
@@ -2506,12 +2514,14 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
   const unmountRows = mine.map((id) => {
     const m = MODULES[id];
     if (!m) return '';
-    const refund = Math.floor(m.cost / 2);
-    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct ? '' : 'disabled'}
-      title="拆下来，退 ${refund} 金；不消耗本回合">
+    const refund = god ? 0 : Math.floor(m.cost / 2);
+    return `<button class="recruit-btn" data-act="unmount" data-mod="${id}" ${canAct || god ? '' : 'disabled'}
+      title="拆下来${god ? '（上帝模式不退钱）' : `，退 ${refund} 金`}；不消耗本回合">
       <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">拆</span>
-      <span class="meta"><b>${SLOT_CHAR[m.slot] ?? '?'} · ${m.name}</b><span>拆下退还 ${refund} 金 · 不花回合</span></span>
-      <span class="price">+${refund}</span>
+      <span class="meta"><b>${SLOT_CHAR[m.slot] ?? '?'} · ${m.name}</b><span>${
+        god ? '上帝模式 · 直接拆' : `拆下退还 ${refund} 金 · 不花回合`
+      }</span></span>
+      <span class="price">${god ? '—' : `+${refund}`}</span>
     </button>`;
   });
 
@@ -2519,14 +2529,14 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
     .filter((m) => !mine.includes(m.id))
     .filter((m) => fitsFrame(u, def, m))
     .map((m) => {
-      const chk = canMount(s, u, m.id);
+      const chk = canMount(s, u, m.id, { free: god });
       const why = chk.ok ? '' : (chk.reason ?? '');
-      return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && canAct ? '' : 'disabled'} title="${escapeHtml(why)}">
+      return `<button class="recruit-btn" data-act="mount" data-mod="${m.id}" ${chk.ok && (canAct || god) ? '' : 'disabled'} title="${escapeHtml(why)}">
         <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${m.slot === 'main' ? '主' : m.slot === 'sub' ? '副' : m.slot === 'plate' ? '甲' : m.slot === 'system' ? '统' : '设'}</span>
         <span class="meta"><b>${m.name}</b><span>耗电 ${m.draw} · ${escapeHtml(moduleSpecText(m))}${
           why ? ` · <b style="color:#b4463c">${escapeHtml(why)}</b>` : ''
         }</span></span>
-        <span class="price">${m.cost}</span>
+        <span class="price">${god ? '免费' : m.cost}</span>
       </button>`;
     });
 
@@ -2589,7 +2599,11 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
    */
   return `<div class="card-title" style="margin-top:14px">装配</div>
   <div class="info-row"><span>插槽</span><b>${slotLine(def, u)}</b></div>
-  <div class="hint">这台耗电 ${unitDraw(s, u)}（素体 ${def.draw ?? 0} + 模块 ${unitDraw(s, u) - (def.draw ?? 0)}）。装配要贴着装配坞；<b>装一件这台本回合就不能再行动</b>，但同回合可以接着装（钱和电够就行）。拆卸不花回合、退一半金币。</div>
+  <div class="hint">${
+    god
+      ? '<b>上帝模式</b>：点下面的按钮直接换装——不收金币、不看供电、不用贴着装配坞，也不消耗回合。拆卸不收也不退钱。'
+      : `这台耗电 ${unitDraw(s, u)}（素体 ${def.draw ?? 0} + 模块 ${unitDraw(s, u) - (def.draw ?? 0)}）。装配要贴着装配坞；<b>装一件这台本回合就不能再行动</b>，但同回合可以接着装（钱和电够就行）。拆卸不花回合、退一半金币。`
+  }</div>
   ${
     installed.length > 0
       ? `<div class="recruit-list" style="margin-top:8px">${installed.join('')}</div>`

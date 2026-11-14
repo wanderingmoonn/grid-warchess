@@ -834,6 +834,15 @@ export function offlineModules(s: GameState, u: Unit): Set<string> {
   const out = new Set<string>();
   if (!def?.armorFrame) return out;
   /*
+   * 上帝模式：**一律在线**（2026-11-14）。
+   *
+   * 沙盒里没有电站，按正常规则算就是"装上去立刻断电"——模块挂着但效果不生效，
+   * 那这个功能等于没做。用户的原话是"无须钱和电量"，所以这里直接短路：
+   * 供电不参与判断，装了什么就生效什么。超载停机也一并跳过——
+   * 那是资源约束带来的代价，沙盒里没有资源。
+   */
+  if (s.config.godMode === true) return out;
+  /*
    * 超载停机：这一回合整台离线。
    *
    * 「超载协议」用 "+40 额度" 换 "每 3 个自己的回合停 1 回合"，停机要停得彻底——
@@ -940,12 +949,25 @@ export interface MountCheck {
  * 这台本回合就不能动了（`doMount` 里置 acted / moved），之后想继续装只管装，
  * 钱和电够就行。整备（`doRecharge`）仍然按坞的名额走，那是另一条补给节奏。
  */
-export function canMount(s: GameState, u: Unit, moduleId: string): MountCheck {
+export function canMount(
+  s: GameState,
+  u: Unit,
+  moduleId: string,
+  opts: { free?: boolean } = {},
+): MountCheck {
   const def = s.unitTypes[u.type];
   if (!def?.armorFrame) return { ok: false, reason: '只有装甲素体才能装配模块' };
   const m = MODULES[moduleId];
   if (!m) return { ok: false, reason: '没有这个模块' };
   if (!fitsFrame(u, def, m)) return { ok: false, reason: `${def.name} 装不上「${m.name}」` };
+  /*
+   * 上帝模式（2026-11-14）：只保底"装得上"这一条。
+   *
+   * 沙盒里要的是"随手改配置看效果"——装配坞的距离、供电余量、金币，
+   * 这三条在上帝模式里全都不该拦人。**槽位与素体兼容性仍然保留**：
+   * 那不是资源，是规则（装不上的模块硬塞只会让面板显示一串不存在的数字）。
+   */
+  if (opts.free) return { ok: true };
   const dock = dockNextTo(s, u);
   if (!dock) return { ok: false, reason: '要走到装配坞旁边才能装配' };
   const rep = energyReport(s, u.owner);
@@ -965,14 +987,19 @@ export function canMount(s: GameState, u: Unit, moduleId: string): MountCheck {
  * 这台单位这一回合的行动。所以名额那一步去掉了（`spendDock` 只剩整备在用），
  * 改成：**装一件就置 acted**，之后还能接着装，只是这台这回合不动了。
  */
-export function doMount(s: GameState, unitId: string, moduleId: string): MountResult {
+export function doMount(
+  s: GameState,
+  unitId: string,
+  moduleId: string,
+  opts: { free?: boolean } = {},
+): MountResult {
   const u = s.units.find((x) => x.id === unitId && x.hp > 0);
   if (!u) return { ok: false, reason: '没有这个单位' };
-  const chk = canMount(s, u, moduleId);
+  const chk = canMount(s, u, moduleId, opts);
   if (!chk.ok) return { ok: false, reason: chk.reason ?? "装不上" };
   const m = MODULES[moduleId]!;
 
-  s.players[u.owner].gold -= m.cost;
+  if (!opts.free) s.players[u.owner].gold -= m.cost;
   u.modules = [...modulesOf(u), moduleId];
   if (m.charges) {
     u.charges = { ...(u.charges ?? {}), [moduleId]: m.charges };
@@ -984,8 +1011,11 @@ export function doMount(s: GameState, unitId: string, moduleId: string): MountRe
    * 这一条现在是**唯一的节流**（见 canMount 的说明），所以别顺手删：
    * 删了就成了"走到坞边上零成本换装"，装甲会变成一台随时改配置的变形金刚。
    */
-  u.acted = true;
-  u.moved = true;
+  // 上帝模式下不吃回合：沙盒里要连着试几种配置，装一件就锁住太笨
+  if (!opts.free) {
+    u.acted = true;
+    u.moved = true;
+  }
   return { ok: true };
 }
 
@@ -995,7 +1025,12 @@ export function doMount(s: GameState, unitId: string, moduleId: string): MountRe
  * 卸下 `extraHp` 类模块时当前额外生命要跟着截断——否则"装上补满、卸下带着走"
  * 就是无限血包。
  */
-export function doUnmount(s: GameState, unitId: string, moduleId: string): MountResult {
+export function doUnmount(
+  s: GameState,
+  unitId: string,
+  moduleId: string,
+  opts: { free?: boolean } = {},
+): MountResult {
   const u = s.units.find((x) => x.id === unitId && x.hp > 0);
   if (!u) return { ok: false, reason: '没有这个单位' };
   const list = modulesOf(u);
@@ -1005,7 +1040,8 @@ export function doUnmount(s: GameState, unitId: string, moduleId: string): Mount
   if (u.charges) delete u.charges[moduleId];
   if (u.weaponUse) delete u.weaponUse[moduleId];
   if (m.extraHp) u.extraHp = Math.max(0, Math.min(u.extraHp ?? 0, extraHpCap(s, u)));
-  s.players[u.owner].gold += Math.floor(m.cost / 2);
+  // 上帝模式不收钱也不退钱：否则"装—拆"循环就是印钞机
+  if (!opts.free) s.players[u.owner].gold += Math.floor(m.cost / 2);
   return { ok: true };
 }
 

@@ -4312,11 +4312,12 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       // 装甲装配 / 拆卸：判定与结算都在 core/armor.ts，这里只做转发。
       // 它们直接改 next，所以成功时要自己把 state 包回来。
       case 'MOUNT': {
-        const r = doMount(next, action.unitId, action.moduleId);
+        // 上帝模式：免费装配、不吃回合（见 canMount 的说明）
+        const r = doMount(next, action.unitId, action.moduleId, { free: next.config.godMode === true });
         return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
       }
       case 'UNMOUNT': {
-        const r = doUnmount(next, action.unitId, action.moduleId);
+        const r = doUnmount(next, action.unitId, action.moduleId, { free: next.config.godMode === true });
         return r.ok ? { ok: true, state: next } : { ok: false, reason: r.reason };
       }
       // 设备与整备（P5）。判定与效果都在 core/armor.ts，这里只转发。
