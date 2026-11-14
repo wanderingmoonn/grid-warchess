@@ -698,13 +698,24 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
           status = '未就绪';
         }
       }
+      /*
+       * 状态文字拆成两份用：
+       *   · `statusBrief` 印在按钮右边，**只留最前面那个词**
+       *     （"灵力不足（40 / 60）" → "灵力不足"）；
+       *   · `status` 全文塞进 title，鼠标停上去还能读到完整理由。
+       *
+       * 为什么：状态那一格是 `white-space: nowrap` 的。法术的理由动辄二十几个字
+       * （"法术位满了（1 / 1）：境界再高一点，或者去静心阁忘掉一门"），
+       * 不截断就会把左边的技能说明挤成一列竖排的字——玩家读不出这是哪个法术。
+       */
+      const statusBrief = status.split(/[（(：:]/)[0]!.trim();
       rows.push(
-        `<button class="recruit-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
+        `<button class="recruit-btn skill-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
           k.ready ? '' : 'disabled'
         } title="${escapeHtml(`${def.name} · ${k.def.name}｜${k.def.summary.replace(/<[^>]+>/g, '')}｜${status}`)}">
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
            <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
-           <span class="price">${status}</span>
+           <span class="price" title="${escapeHtml(status)}">${escapeHtml(statusBrief)}</span>
          </button>`,
       );
     }

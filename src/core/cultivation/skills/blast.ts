@@ -41,6 +41,7 @@ import { coversTile } from '../../query.ts';
 import { getRank } from '../progression.ts';
 import { trueDamageOf } from '../stats.ts';
 import { stunFor, rootFor, timedStatusFor } from '../spell-statuses.ts';
+import { placeField } from './field.ts';
 import {
   blastCoords,
   defineSpellSkill,
@@ -74,6 +75,13 @@ export interface BlastParams extends Record<string, unknown> {
   knockback?: number;
   /** 把爆发范围内的地形改成平原 */
   flatten?: boolean;
+  /**
+   * 打完留一片场（焱的余烬）。
+   *
+   * `ratio` 是"余场每格伤害 = 本发伤害 × 这个比例"：余烬本来就该比正身轻，
+   * 而且它每秒结算一次、能叠好几轮，按原伤害给会直接失控。
+   */
+  leaveField?: { kind: string; ratio: number; rounds: number };
   /** 五行（族 5 的免耗判定要读） */
   element?: 'metal' | 'wood' | 'water' | 'fire' | 'earth';
   /** 魂法 */
@@ -193,7 +201,14 @@ const YAN: SpellRow = {
   range: 7,
   preview: 'blast',
   radius: 2,
-  custom: { base: 24, perRank: 9, element: 'fire', soulBound: true } satisfies BlastParams,
+  custom: {
+    base: 24,
+    perRank: 9,
+    element: 'fire',
+    soulBound: true,
+    // 焱烧过的地方留一片余烬：每格是这一发的 40%，再烧 2 轮
+    leaveField: { kind: 'spell-fire', ratio: 0.4, rounds: 2 },
+  } satisfies BlastParams,
 };
 
 const YAO: SpellRow = {
@@ -258,8 +273,61 @@ const SEN: SpellRow = {
   custom: { base: 18, perRank: 7, lifesteal: 0.5, element: 'wood', soulBound: true } satisfies BlastParams,
 };
 
+/**
+ * 罡风：族里的样板法术（面积）。
+ *
+ * 它要解决的是"修士的普攻是单体多段"：境界再高，一回合也只是把一个目标
+ * 敲几下；对面三台机甲压上来时，挨的是三份伤害。缺的从来不是数值，是**面积**。
+ *
+ * 为什么写"所有敌人"而不是"打主目标 + 溅射"：溅射是 50% 的边际伤害，
+ * 半径再大也只是"顺便"。这里要的是一片人同时掉同样多的血，所以不走 splash
+ * 那条路，逐个 `hurt`——代价是它不吃任何溅射加成/减免，这是有意的。
+ */
+export const GANG_WIND_COST = 80;
+/** 施法距离 */
+export const GANG_WIND_RANGE = 8;
+/** 爆发半径（曼哈顿） */
+export const GANG_WIND_RADIUS = 2;
+/** 基础伤害 */
+export const GANG_WIND_BASE = 30;
+/** 每层境界加多少伤害 */
+export const GANG_WIND_PER_RANK = 9;
+/** 学它要求的最低境界：4 期（2 期就拿到会把这门法术变成本代最强 AOE） */
+export const GANG_WIND_MIN_RANK = 4;
+/** 研发要多少灵石（比默认 60 贵：强度摆在这） */
+export const GANG_WIND_RESEARCH_COST = 90;
+
+/** 这一发打多少（面板、按钮、结算共用同一份算式） */
+export function gangWindDamage(rank: number): number {
+  return GANG_WIND_BASE + GANG_WIND_PER_RANK * Math.max(0, rank);
+}
+
+/** 施法距离：修士是 1×1，点到点的曼哈顿距离就够了 */
+export function gangWindInRange(self: { x: number; y: number }, target: { x: number; y: number }): boolean {
+  return Math.abs(self.x - target.x) + Math.abs(self.y - target.y) <= GANG_WIND_RANGE;
+}
+
+const GANG_WIND: SpellRow = {
+  id: 'gang-wind',
+  name: '罡风',
+  summary:
+    `射程 ${GANG_WIND_RANGE} 格，对落点半径 ${GANG_WIND_RADIUS} 格内**所有**敌人造成 ` +
+    `${GANG_WIND_BASE} + 境界×${GANG_WIND_PER_RANK} 点伤害（无视护甲）；耗 ${GANG_WIND_COST} 灵力。`,
+  effect: 'blast',
+  cost: GANG_WIND_COST,
+  range: GANG_WIND_RANGE,
+  // 范围法术亮"这一下会罩住谁"，所以画在落点周围（按曼哈顿，能打到的才画）
+  preview: 'blast',
+  radius: GANG_WIND_RADIUS,
+  multiCast: true,
+  custom: { base: GANG_WIND_BASE, perRank: GANG_WIND_PER_RANK } satisfies BlastParams,
+};
+
+export const GANG_WIND_SKILL = defineSpellSkill(GANG_WIND);
+
 /** 这一族的全部数据行 */
 export const BLAST_ROWS: readonly SpellRow[] = [
+  GANG_WIND,
   RU_LAI_SHEN_ZHANG,
   HOU_TU_ZHEN_YUE,
   BAI_LI_DU_ZHANG,
@@ -421,6 +489,20 @@ registerSkillEffect('blast', (c) => {
 
   const flattened = p.flatten ? flattenArea(c, cast.point, radius) : false;
 
+  // 余场：焱烧过的地方会继续着火（复用族 3 的放场逻辑，不另写一套）
+  let leftField = 0;
+  if (p.leaveField) {
+    leftField = placeField(s, c.view, {
+      owner: self.owner,
+      kind: p.leaveField.kind,
+      center: cast.point,
+      radius,
+      dmg: Math.max(1, Math.round(dmg * p.leaveField.ratio)),
+      charges: p.leaveField.rounds,
+      physical: p.physical,
+    });
+  }
+
   // 生命汲取按**实际造成的伤害**算：打在护甲上被削掉的部分不该变成奶
   let healed = 0;
   if (p.lifesteal && total > 0) {
@@ -434,6 +516,7 @@ registerSkillEffect('blast', (c) => {
   if (killed > 0) bits.push(`${killed} 名当场殒命`);
   if (healed > 0) bits.push(`回复 ${healed} 点生命`);
   if (flattened) bits.push('地形化为平原');
+  if (leftField > 0) bits.push(`留下 ${leftField} 格余烬`);
   if (notes.length > 0) bits.push(...notes);
   c.result.log = `${name}施放${skillName}，${bits.join('，')}（耗 ${cost} 灵力）`;
 });

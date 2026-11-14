@@ -78,6 +78,48 @@ export function boltDamage(p: BoltParams, self: Unit, rank: number): number {
 }
 
 // ── 数据行 ────────────────────────────────────────
+/**
+ * 掌心雷：族里的样板法术（补刀）。
+ *
+ * 它要验证四件事，也是整个法术系统的地基：
+ *   1. **法术 ≠ 技能**：不在兵种表上、不随境界领悟，只能去藏经阁学；
+ *   2. **吃灵力**：每一发都从自己的灵力池里扣，扣不起按钮就是灰的；
+ *   3. **无视护甲**：走 `api.hurt`，不经过 `computeDamage` 的护甲段；
+ *   4. **不限每回合一次**：节拍交给灵力池（9 期一回合能放两发，0 期一发都攒不齐）。
+ *
+ * 伤害 `6 + 3 × 境界`：低境界是"一发换掉半个兵"，高境界反而被普攻追上——
+ * 这是有意的：法术的价值在"无视护甲 + 不还手"，不在数值膨胀。
+ */
+export const PALM_THUNDER_COST = 50;
+export const PALM_THUNDER_BASE = 6;
+export const PALM_THUNDER_PER_RANK = 3;
+export const PALM_THUNDER_RANGE = 3;
+
+/** 这一发打多少（面板和规则共用同一份算式） */
+export function palmThunderDamage(rank: number): number {
+  return PALM_THUNDER_BASE + PALM_THUNDER_PER_RANK * Math.max(0, rank);
+}
+
+const PALM_THUNDER: SpellRow = {
+  id: 'palm-thunder',
+  name: '掌心雷',
+  summary:
+    `射程 ${PALM_THUNDER_RANGE} 格，对一名敌人造成 ${PALM_THUNDER_BASE} + 境界×${PALM_THUNDER_PER_RANK} 点伤害（无视护甲）；` +
+    `耗 ${PALM_THUNDER_COST} 灵力。`,
+  effect: 'bolt',
+  cost: PALM_THUNDER_COST,
+  range: PALM_THUNDER_RANGE,
+  // 单体法术亮"我够得着哪一圈"；不按落点算，否则鼠标一动高亮就碎
+  preview: 'ring',
+  multiCast: true,
+  custom: {
+    base: PALM_THUNDER_BASE,
+    perRank: PALM_THUNDER_PER_RANK,
+  } satisfies BoltParams,
+};
+
+export const PALM_THUNDER_SKILL = defineSpellSkill(PALM_THUNDER);
+
 /** 灭神枪：70 灵力，3 期起可学（真元×2 在低境界太容易一发带走） */
 export const MIE_SHEN_QIANG_COST = 70;
 export const MIE_SHEN_QIANG_MIN_RANK = 3;
@@ -142,7 +184,12 @@ const WU_LEI_ZHENG_FA: SpellRow = {
 };
 
 /** 这一族的全部数据行（批量挂检查与高亮用） */
-export const BOLT_ROWS: readonly SpellRow[] = [MIE_SHEN_QIANG, YUAN_CI_SHEN_GUANG, WU_LEI_ZHENG_FA];
+export const BOLT_ROWS: readonly SpellRow[] = [
+  PALM_THUNDER,
+  MIE_SHEN_QIANG,
+  YUAN_CI_SHEN_GUANG,
+  WU_LEI_ZHENG_FA,
+];
 
 export const MIE_SHEN_QIANG_SKILL = defineSpellSkill(MIE_SHEN_QIANG);
 export const YUAN_CI_SHEN_GUANG_SKILL = defineSpellSkill(YUAN_CI_SHEN_GUANG);
