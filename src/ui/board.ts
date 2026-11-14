@@ -680,11 +680,15 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         if (node.dataset.v !== v) node.dataset.v = v;
       }
       /*
-       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵和高山都要。
-       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈——两者共用同一套数据，
-       * 只是 CSS 里的强度不同，这是"高山看起来比丘陵高"的一半来源。
+       * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵、高山、台地都要。
+       * 丘陵靠它画"抬起来一圈坎"，高山靠它画更重的一圈，台地卡在中间——
+       * 三者共用同一套数据，只是 CSS 里的强度不同。这是"谁比谁高"的一半来源
+       * （另一半是贴图/纹理本身）。
+       *
+       * 台地是 2026-11-13 加进来的：在那之前它只是"一块更亮的绿色"，
+       * 四周没有坎、也没有投影，站在丘陵旁边完全读不出高差。
        */
-      if (cls.includes('t-hill') || cls.includes('t-mountain')) {
+      if (cls.includes('t-hill') || cls.includes('t-mountain') || cls.includes('t-plateau') || cls.includes('t-valley')) {
         const isEdge = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
           return dispTerrain[ty * s.w + tx] === dispTerrain[i] ? '0' : '1';
@@ -706,14 +710,42 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 光从左上来，影子落在下侧：上面是高的地形，阴影压在它**上沿**（最深）；
        * 左右各一道很淡的贴边；高的地形在下面时不投影（影子朝下走，不会往上）。
        *
-       * 值的含义从"1"改成 `m` / `h`：
-       *   m = 山投的（长、冷、深），h = 丘投的（短、暖、浅）。
-       * 于是同一套数据画出一条**两级台阶**——丘陵把地面压低一点，山再压低一截，
-       * 而不是"山有影子、丘陵没有"，让人分不清是山高还是丘陵本来就平的。
+       * 值的含义：`m` = 山投的（长、冷、深）、`p` = 台地投的（居中）、
+       * `h` = 丘陵投的（短、暖、浅）。于是同一套数据排出**三级台阶**：
+       * 丘陵把地面压低一点，台地再压一截，山压得最狠。
        *
-       * 山与山之间不投影（一条山脊，不该有缝），所以给山自己清空。
+       * **2026-11-13：改成有方向的**——只有"比我高"的邻居才投影。
+       * 之前是无条件投：同高的丘陵之间也互相投，整片丘陵每一格的上沿都有一道影，
+       * 放大看就是一条条横向接缝；台地挨着丘陵时，丘陵还会把影子"往上"投到台地上，
+       * 于是台地看着比丘陵还低。现在按高度排序，谁高谁投。
        */
-      if (cls.includes('t-mountain')) {
+      const HEIGHT_RANK: Record<string, number> = { hill: 1, plateau: 2, mountain: 3 };
+      const rankOf = (t: string | undefined): number => HEIGHT_RANK[t ?? ''] ?? 0;
+      const myRank = cls.includes('t-mountain')
+        ? 3
+        : cls.includes('t-plateau')
+          ? 2
+          : cls.includes('t-hill')
+            ? 1
+            : 0;
+      if (myRank >= 3) {
+        /*
+         * 孤峰标记（`data-iso`）：四邻里山格少于 2 个。
+         *
+         * 四缘阴影是按"一整片山"调的，单格孤立时四面同时压暗，
+         * 落到平地上读成**一个洞**而不是一座峰。CSS 见到这个标记就把四缘收弱一档，
+         * 只留"这一块比周围高"的暗示。
+         */
+        let adjMountain = 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+          if (dispTerrain[ny * s.w + nx] === 'mountain') adjMountain += 1;
+        }
+        if (adjMountain < 2) node.dataset.iso = '1';
+        else if (node.dataset.iso) delete node.dataset.iso;
+        // 最高的地形不再挨别人的投影（山脊内部不该出现缝）
         if (node.dataset.mt) {
           delete node.dataset.mt;
           delete node.dataset.mr;
@@ -723,8 +755,9 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       } else {
         const kindAt = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const t = dispTerrain[ty * s.w + tx];
-          return t === 'mountain' ? 'm' : t === 'hill' ? 'h' : '0';
+          const r = rankOf(dispTerrain[ty * s.w + tx]);
+          if (r <= myRank) return '0';
+          return r === 3 ? 'm' : r === 2 ? 'p' : 'h';
         };
         const mt = kindAt(x, y - 1);
         const mr = kindAt(x + 1, y);
