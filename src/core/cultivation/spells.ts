@@ -32,14 +32,79 @@ import { resOf } from '../resources.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { getRank } from './progression.ts';
-import { PALM_THUNDER_COST, PALM_THUNDER_SKILL } from './skills/palm-thunder.ts';
-import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
 import {
+  PALM_THUNDER_COST,
+  PALM_THUNDER_SKILL,
+  MIE_SHEN_QIANG_COST,
+  MIE_SHEN_QIANG_MIN_RANK,
+  MIE_SHEN_QIANG_SKILL,
+  WU_LEI_ZHENG_FA_COST,
+  WU_LEI_ZHENG_FA_MIN_RANK,
+  WU_LEI_ZHENG_FA_SKILL,
+  YUAN_CI_SHEN_GUANG_COST,
+  YUAN_CI_SHEN_GUANG_MIN_RANK,
+  YUAN_CI_SHEN_GUANG_SKILL,
+} from './skills/bolt.ts';
+import {
+  BAI_LI_DU_ZHANG_COST,
+  BAI_LI_DU_ZHANG_SKILL,
+  HOU_TU_ZHEN_YUE_COST,
+  HOU_TU_ZHEN_YUE_MIN_RANK,
+  HOU_TU_ZHEN_YUE_SKILL,
+  MIAO_COST,
+  MIAO_SKILL,
+  RU_LAI_SHEN_ZHANG_COST,
+  RU_LAI_SHEN_ZHANG_MIN_RANK,
+  RU_LAI_SHEN_ZHANG_SKILL,
+  SEN_COST,
+  SEN_SKILL,
+  WU_XING_SPELL_MIN_RANK,
+  XIN_COST,
+  XIN_SKILL,
+  YAN_COST,
+  YAN_SKILL,
+  YAO_COST,
+  YAO_SKILL,
+  YI_SHAN_TIAN_HAI_COST,
+  YI_SHAN_TIAN_HAI_MIN_RANK,
+  YI_SHAN_TIAN_HAI_SKILL,
+  ZHAI_XING_NA_YUE_COST,
+  ZHAI_XING_NA_YUE_MIN_RANK,
+  ZHAI_XING_NA_YUE_SKILL,
   GANG_WIND_COST,
   GANG_WIND_MIN_RANK,
   GANG_WIND_RESEARCH_COST,
   GANG_WIND_SKILL,
-} from './skills/gang-wind.ts';
+} from './skills/blast.ts';
+import {
+  SHI_FANG_HUO_HAI_COST,
+  SHI_FANG_HUO_HAI_MIN_RANK,
+  SHI_FANG_HUO_HAI_SKILL,
+  WAN_REN_DAO_SHAN_COST,
+  WAN_REN_DAO_SHAN_MIN_RANK,
+  WAN_REN_DAO_SHAN_SKILL,
+  SHAN_HE_CHI_LING_COST,
+  SHAN_HE_CHI_LING_MIN_RANK,
+  SHAN_HE_CHI_LING_SKILL,
+  CHUN_FENG_HUA_YU_COST,
+  CHUN_FENG_HUA_YU_MIN_RANK,
+  CHUN_FENG_HUA_YU_SKILL,
+} from './skills/field.ts';
+import {
+  LING_MU_SHU_COST,
+  LING_MU_SHU_MIN_RANK,
+  LING_MU_SHU_SKILL,
+  TI_SHU_COST,
+  TI_SHU_MIN_RANK,
+  TI_SHU_SKILL,
+  TIAN_MO_JIE_TI_COST,
+  TIAN_MO_JIE_TI_MIN_RANK,
+  TIAN_MO_JIE_TI_SKILL,
+  YU_FENG_SHU_COST,
+  YU_FENG_SHU_MIN_RANK,
+  YU_FENG_SHU_SKILL,
+} from './skills/buff.ts';
+import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
 
 /** 一条法术的元数据。`skill` 是它作为技能那一面的全部数据 */
 export interface SpellDef {
@@ -94,6 +159,69 @@ export const SPELLS: readonly SpellDef[] = [
     researchCost: GANG_WIND_RESEARCH_COST,
     minRank: GANG_WIND_MIN_RANK,
   },
+  // ── 族 1 · 直伤（2026-11-14）──────────────────────────
+  //
+  // 这三门和掌心雷共用 `skills/bolt.ts` 的实现，各自只贡献一行数据。
+  // `minRank` 是"够不够格学"，和法术位（背得下几门）是两件事，见 SpellDef 上方。
+  { skill: MIE_SHEN_QIANG_SKILL, cost: MIE_SHEN_QIANG_COST, minRank: MIE_SHEN_QIANG_MIN_RANK },
+  {
+    skill: YUAN_CI_SHEN_GUANG_SKILL,
+    cost: YUAN_CI_SHEN_GUANG_COST,
+    minRank: YUAN_CI_SHEN_GUANG_MIN_RANK,
+  },
+  {
+    skill: WU_LEI_ZHENG_FA_SKILL,
+    cost: WU_LEI_ZHENG_FA_COST,
+    minRank: WU_LEI_ZHENG_FA_MIN_RANK,
+  },
+  // ── 族 2 · 范围伤害（2026-11-14）──────────────────────
+  //
+  // 10 条法术一套实现（`skills/blast.ts`）。五行五法（焱垚鑫淼森）都标了
+  // `custom.element`，族 5（五行免耗）以后要读它——这是"五行属性存哪"的答案：
+  // 存在技能自己的 `custom` 里，不往 `Unit` 上开字段。
+  {
+    skill: RU_LAI_SHEN_ZHANG_SKILL,
+    cost: RU_LAI_SHEN_ZHANG_COST,
+    minRank: RU_LAI_SHEN_ZHANG_MIN_RANK,
+  },
+  {
+    skill: HOU_TU_ZHEN_YUE_SKILL,
+    cost: HOU_TU_ZHEN_YUE_COST,
+    minRank: HOU_TU_ZHEN_YUE_MIN_RANK,
+  },
+  { skill: BAI_LI_DU_ZHANG_SKILL, cost: BAI_LI_DU_ZHANG_COST },
+  {
+    skill: YI_SHAN_TIAN_HAI_SKILL,
+    cost: YI_SHAN_TIAN_HAI_COST,
+    minRank: YI_SHAN_TIAN_HAI_MIN_RANK,
+  },
+  {
+    skill: ZHAI_XING_NA_YUE_SKILL,
+    cost: ZHAI_XING_NA_YUE_COST,
+    minRank: ZHAI_XING_NA_YUE_MIN_RANK,
+  },
+  { skill: YAN_SKILL, cost: YAN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: YAO_SKILL, cost: YAO_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: XIN_SKILL, cost: XIN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: MIAO_SKILL, cost: MIAO_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: SEN_SKILL, cost: SEN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  // ── 族 3 · 场域（2026-11-14）──────────────────────────
+  //
+  // 这两门自己不结算伤害：只把留痕放到格子上，之后由 core/marks.ts 在
+  // "有人走进来"和"每轮开始"时触发（见 spell-marks.ts）。
+  { skill: SHI_FANG_HUO_HAI_SKILL, cost: SHI_FANG_HUO_HAI_COST, minRank: SHI_FANG_HUO_HAI_MIN_RANK },
+  { skill: WAN_REN_DAO_SHAN_SKILL, cost: WAN_REN_DAO_SHAN_COST, minRank: WAN_REN_DAO_SHAN_MIN_RANK },
+  { skill: SHAN_HE_CHI_LING_SKILL, cost: SHAN_HE_CHI_LING_COST, minRank: SHAN_HE_CHI_LING_MIN_RANK },
+  { skill: CHUN_FENG_HUA_YU_SKILL, cost: CHUN_FENG_HUA_YU_COST, minRank: CHUN_FENG_HUA_YU_MIN_RANK },
+  // ── 族 6 · 自身增益（2026-11-14）──────────────────────
+  //
+  // 四条都不需要选点（`targeting: 'none'`）：加在自己身上。
+  // 数值挂在 `Unit.custom.spellBuff`，状态 `spell-buff` 只数回合——
+  // 因为 `StatusDef.modifyAtk` 引擎还没接上，写进状态里会"面板有、伤害没有"。
+  { skill: LING_MU_SHU_SKILL, cost: LING_MU_SHU_COST, minRank: LING_MU_SHU_MIN_RANK },
+  { skill: TI_SHU_SKILL, cost: TI_SHU_COST, minRank: TI_SHU_MIN_RANK },
+  { skill: TIAN_MO_JIE_TI_SKILL, cost: TIAN_MO_JIE_TI_COST, minRank: TIAN_MO_JIE_TI_MIN_RANK },
+  { skill: YU_FENG_SHU_SKILL, cost: YU_FENG_SHU_COST, minRank: YU_FENG_SHU_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */

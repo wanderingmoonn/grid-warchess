@@ -2137,6 +2137,17 @@ export interface Mark {
   hidden?: boolean;
   /** kind 自己的小数据（伤害、半径、回合数……），解释权归 kind */
   data?: Record<string, number>;
+  /**
+   * kind 自己的**任意**数据。核心不读、不解释，只负责让它跟着存档走。
+   *
+   * 和 `data` 的分工：`data` 是"一堆数"（伤害、半径），这条是"还得记住是谁、
+   * 放在哪"这类**需要非数字**的东西。典型场景是「施法者移动后失效」——
+   * 场得记住是谁放的、当时站在哪，`data` 只收数字就装不下单位 id。
+   *
+   * 约定和 `Unit.custom` / `Tile.custom` 一样：**键带自己的命名空间**
+   * （修真包写 `custom.spell`），免得两个扩展撞同一个 key。
+   */
+  custom?: Record<string, unknown>;
 }
 
 export interface FallenRecord {

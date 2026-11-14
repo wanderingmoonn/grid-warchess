@@ -350,6 +350,28 @@ export function previewExchange(s: GameState, u: Unit): ManaExchange {
 // ── 棋盘视图 ──────────────────────────────────────
 
 /** 浓度分几档。离散分档比连续渐变好读——玩家要答的是"这格浓不浓" */
+/**
+ * 往一格**加**灵气。返回实际加进去多少（可能被上限截断）。
+ *
+ * ── 为什么开这个口子（2026-11-14）──────────────────────────────
+ *
+ * 原先只有 `drainQiAt`（抽）对外开放，"写"一律走内部 `writeQi`，理由是
+ * "灵气只能由地形/建筑源汇产出，别让技能随手改"。这条约定立的时候
+ * **忘了法术也在这套系统里**——春风化雨要"在附近生成临时灵气源"，
+ * 没有写入口就做不了，只能退化成"发一次钱"或者干脆不做。
+ *
+ * 所以现在开口，但仍然守着一条：**只能经过 `writeQi`**（它负责夹到 0~QI_MAX）。
+ * 谁要改灵气就调这个函数，别自己去改 `tile.custom.qi`——那会绕过夹取，
+ * 出现负数或者 120/100 这种格子。
+ */
+export function raiseQiAt(s: GameState, x: number, y: number, amount: number): number {
+  const tile = s.tiles[y * s.w + x];
+  if (!tile) return 0;
+  const before = qiOfTile(tile);
+  writeQi(tile, before + amount);
+  return qiOfTile(tile) - before;
+}
+
 export const QI_VIEW_TIERS = 5;
 
 /**

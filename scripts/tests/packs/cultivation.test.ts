@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { pathToFileURL } from 'node:url';
 import { test, assert, stats, fresh, place2 } from '../support.ts';
-import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance } from '../../../src/core/rules.ts';
+import { applyAction, effectiveStats, movePower, maxHpOf, computeDamage, heroSkillsOf, unitYield, idx, abilityApi, produceAt, citiesOf, reachableTiles, recruitResCost, airLayer, canStandAt, canStrike, strikeDistance, visionOf, attacksPerTurn, effectiveRange } from '../../../src/core/rules.ts';
 import { distBetweenUnits } from '../../../src/core/query.ts';
 import { cultivationRank, getAgingYears, setCultivationExp } from '../../../src/core/cultivation-packs.ts';
 import { SPIRIT_STONE } from '../../../src/core/cultivation/resources.ts';
@@ -63,7 +63,7 @@ import { CULTIVATION_PACK } from '../../../src/core/cultivation-packs.ts';
 import { UNIT_IDS } from '../../../src/core/cultivation/identity.ts';
 import { isCultivatorUnit } from '../../../src/core/cultivation/identity.ts';
 import { SKY_STEP_SKILL } from '../../../src/core/cultivation/skills/sky-step.ts';
-import { PALM_THUNDER_SKILL } from '../../../src/core/cultivation/skills/palm-thunder.ts';
+import { PALM_THUNDER_SKILL } from '../../../src/core/cultivation/skills/bolt.ts';
 import { CULTIVATION_ABILITIES } from '../../../src/core/cultivation/abilities/index.ts';
 import { CORE_ABILITIES } from '../../../src/core/abilities.ts';
 import { CULTIVATOR_SKILL_UNLOCKS } from '../../../src/core/cultivation/skills/unlocks.ts';
@@ -108,7 +108,15 @@ import {
   teachSpell,
 } from '../../../src/core/cultivation/spells.ts';
 import { MANA_REGEN, manaLimitForRank, manaOf, maxManaOf, setMana } from '../../../src/core/cultivation/mana.ts';
-import { PALM_THUNDER_COST, palmThunderDamage } from '../../../src/core/cultivation/skills/palm-thunder.ts';
+import { PALM_THUNDER_COST, palmThunderDamage } from '../../../src/core/cultivation/skills/bolt.ts';
+import {
+  MIE_SHEN_QIANG_COST,
+  WU_LEI_ZHENG_FA_COST,
+  YUAN_CI_SHEN_GUANG_COST,
+  boltDamage,
+} from '../../../src/core/cultivation/skills/bolt.ts';
+import { isStunned, isRooted } from '../../../src/core/cultivation/spell-statuses.ts';
+import { marksOf, marksAt } from '../../../src/core/marks.ts';
 import {
   SPIRIT_BREATH_COST,
   SPIRIT_BREATH_EXP_FLOOR,
@@ -123,7 +131,7 @@ import {
   GANG_WIND_MIN_RANK,
   GANG_WIND_RADIUS,
   gangWindDamage,
-} from '../../../src/core/cultivation/skills/gang-wind.ts';
+} from '../../../src/core/cultivation/skills/blast.ts';
 
 export function run() {
   console.log('\n修真扩展');
@@ -2637,6 +2645,526 @@ export function run() {
     });
     assert.equal(r.ok, false);
     assert.equal(manaOf(s.units.find((u) => u.id === mage.id)!), PALM_THUNDER_COST - 1, '失败不扣灵力');
+  });
+
+  // ── 族 1 · 直伤（2026-11-14）──────────────────────
+  //
+  // 这一组守的是"同族共用一份实现、差别只在数据行"：
+  // 掌心雷、灭神枪、元磁神光、五雷正法走的是同一个 `SKILL_EFFECTS['bolt']`，
+  // 所以任何一条的算式写错，都会在这里而不是在三个月后的对局里暴露。
+
+  /** 按 id 取单位。别用上面的 `unitOf`——那个的第二参是**兵种**，不是 id */
+  const byId = (s: GameState, id: string) => s.units.find((u) => u.id === id)!;
+
+  test('灭神枪：直线贯穿、无视护甲、只打线上的人', () => {
+    const { s, sect } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 3 期才够格学
+    const researched = doAction(s, sect.id, 'research:mie-shen-qiang');
+    assert.ok(researched.ok, researched.ok ? '' : researched.reason);
+    const learned = doAction(researched.state, mage.id, 'learn:mie-shen-qiang');
+    assert.ok(learned.ok, learned.ok ? '' : learned.reason);
+    const cur = learned.state;
+    const caster = byId(cur, mage.id);
+
+    // 三个靶子站成一条横线（都在 6,5 往东的直线上），另一个故意站偏
+    const targets = [
+      [8, 5],
+      [9, 5],
+      [10, 5],
+    ].map(([x, y]) => {
+      const u = place2(cur, 'B', 'body-cultivator', x, y);
+      u.hp = 500;
+      return u;
+    });
+    const offLine = place2(cur, 'B', 'body-cultivator', 8, 7);
+    offLine.hp = 500;
+
+    const dmg = boltDamage({ base: 0, perRank: 0, trueMul: 2 }, caster, getRank(caster));
+    assert.ok(dmg > 0, '真元×2 得打出正数');
+    const manaBefore = manaOf(caster);
+
+    const r = applyAction(cur, {
+      type: 'HERO_SKILL',
+      unitId: caster.id,
+      skillId: 'mie-shen-qiang',
+      targetX: 10,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    for (const t of targets) {
+      assert.equal(byId(r.state, t.id).hp, 500 - dmg, `${t.x},${t.y} 要吃到满额真元伤害（护甲不参与）`);
+    }
+    assert.equal(byId(r.state, offLine.id).hp, 500, '不在直线上的敌人不该挨打');
+    assert.equal(manaOf(byId(r.state, caster.id)), manaBefore - MIE_SHEN_QIANG_COST, '扣灵力');
+  });
+
+  test('元磁神光：麻痹 1 个自己的回合（多存 1 是因为回合切换时才递减）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('yuan-ci-shen-guang')!);
+    const foe = place2(s, 'B', 'body-cultivator', 5, 7);
+    foe.hp = 500;
+
+    const dmg = 8 + 4 * getRank(byId(s, mage.id));
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'yuan-ci-shen-guang',
+      targetX: foe.x,
+      targetY: foe.y,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, foe.id).hp, 500 - dmg, '无视护甲');
+    assert.ok(isStunned(byId(r.state, foe.id)), '命中即麻痹');
+
+    // 轮到 B：状态刚被 tick 过一次（2 → 1），这一整回合仍不能行动
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    const stunnedFoe = byId(cur, foe.id);
+    assert.ok(isStunned(stunnedFoe), '接手回合时还在麻痹');
+    assert.ok(
+      (CULTIVATION_HOOKS.canCommand?.({ state: cur, unit: stunnedFoe }) ?? '').includes('麻痹'),
+      '规则层要给出"麻痹"这个理由，否则玩家只看到点了没反应',
+    );
+
+    // 再转两圈（B 的下一回合）：麻痹已经过期，可以行动
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.ok(!isStunned(byId(cur, foe.id)), '只麻痹一个回合，不该变成永久定身');
+  });
+
+  test('五雷正法：按护甲结算、半径内的敌人一起连锁（不是挑最近的一个）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4));
+    teachSpell(mage, spellOf('wu-lei-zheng-fa')!);
+    const caster = byId(s, mage.id);
+
+    const first = place2(s, 'B', 'body-cultivator', 5, 7); // 护甲 2
+    first.hp = 500;
+    // 挤在一起的一堆：连锁是一层层往外扩，半径内的会**同时**挨打
+    const crowd = [
+      [5, 9],
+      [6, 9],
+      [4, 9],
+      [5, 10],
+      [4, 10],
+      [6, 10],
+      [3, 10],
+    ].map(([x, y]) => {
+      const u = place2(s, 'B', 'militia', x, y);
+      u.hp = 500;
+      return u;
+    });
+    // 站得足够远的那个，连锁够不到
+    const far = place2(s, 'B', 'militia', 12, 2);
+    far.hp = 500;
+
+    const dmg = 10 + 5 * getRank(caster);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'wu-lei-zheng-fa',
+      targetX: first.x,
+      targetY: first.y,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const lost = 500 - byId(r.state, first.id).hp;
+    assert.equal(lost, Math.max(0, dmg - 2), '普攻型法术要被护甲削（和"无视护甲"的那几门区分开）');
+
+    const hurtCount = [first, ...crowd].filter((u) => byId(r.state, u.id).hp < 500).length;
+    assert.equal(hurtCount, crowd.length + 1, '半径内的人应该全被连锁到，一个不漏');
+    assert.equal(byId(r.state, far.id).hp, 500, '连锁够不到的人不该挨打');
+  });
+
+  // ── 族 2 · 范围伤害（2026-11-14）──────────────────
+  //
+  // 这一族守两件事：**能打到的格子才打得到**（曼哈顿，不含斜角），
+  // 以及"余韵"真的生效（击落 / 定身 / 击退 / 改地形 / 吸血）。
+  // 十条法术共用一份实现，所以这里钉的是实现，不是某一条的数值。
+
+  test('如来神掌：范围按曼哈顿算（斜角外打不到）、按护甲结算', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 灵力上限 90，刚好够一发
+    teachSpell(mage, spellOf('ru-lai-shen-zhang')!);
+    const caster = byId(s, mage.id);
+
+    // 落点 (5,7)：半径 2 的曼哈顿菱形
+    const near = place2(s, 'B', 'body-cultivator', 7, 7); // |2|+|0| = 2，在圈里
+    near.hp = 500;
+    const diagonal = place2(s, 'B', 'body-cultivator', 8, 8); // |3|+|1| = 4，圈外
+    diagonal.hp = 500;
+
+    const dmg = 20 + 8 * getRank(caster);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'ru-lai-shen-zhang',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, near.id).hp, 500 - (dmg - 2), '按护甲结算');
+    assert.equal(byId(r.state, diagonal.id).hp, 500, '曼哈顿距离之外的人不该被罩住');
+  });
+
+  test('厚土镇岳：击落改 layer；落点有人就比血量，多者活、少者死', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5));
+    teachSpell(mage, spellOf('hou-tu-zhen-yue')!);
+    const caster = byId(s, mage.id);
+
+    // 地面上那个血少、空中那个血多，两者叠在同一格
+    const ground = place2(s, 'B', 'militia', 5, 7);
+    ground.hp = 200;
+    const flyer = place2(s, 'B', 'militia', 8, 7);
+    flyer.hp = 300;
+    flyer.layer = 'air';
+    flyer.x = 5;
+    flyer.y = 7;
+
+    const dmg = 12 + 5 * getRank(caster);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'hou-tu-zhen-yue',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const fallen = byId(r.state, flyer.id);
+    assert.equal(fallen.layer, 'ground', '被击落：layer 改成地面');
+    assert.ok(!r.state.units.some((u) => u.id === ground.id), '血少的被砸死');
+    // 双方各吃一发 dmg，落地时活的那个再扣掉死者的剩余血量
+    assert.equal(fallen.hp, 300 - dmg - (200 - dmg), '活着的那个人要扣掉死者的血量');
+    assert.ok(isRooted(fallen), '厚土镇岳还要定住活着的人');
+  });
+
+  test('移山填海：击退 + 范围内地形化为平原', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 灵力上限 100，够 100
+    teachSpell(mage, spellOf('yi-shan-tian-hai')!);
+
+    // 落点脚下是森林，要变成平原
+    s.tiles[idx(s, 5, 7)] = { terrain: 'forest', cityId: null };
+    const foe = place2(s, 'B', 'militia', 7, 7); // 在落点东侧 2 格
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'yi-shan-tian-hai',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    // 地形写的是**新 state**：applyAction 不修改入参（和"移动是纯函数"同一条约定）
+    assert.equal(r.state.tiles[idx(r.state, 5, 7)].terrain, 'plain', '爆炸范围内的地形化为平原');
+    assert.equal(byId(r.state, foe.id).x, 9, '击退 2 格：从 7 推到 9（背向爆心）');
+  });
+
+  test('森：生命汲取按实际伤害的一半回血', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6));
+    teachSpell(mage, spellOf('sen')!);
+    const caster = byId(s, mage.id);
+    caster.hp = 10; // 残血，方便看回血
+    const before = caster.hp;
+
+    const foe = place2(s, 'B', 'body-cultivator', 5, 7);
+    foe.hp = 500;
+
+    const dmg = 18 + 7 * getRank(caster);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'sen',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    // 回血会被生命上限夹住（这个场景里修士上限只有 20），所以按"取小"来断言：
+    // 想看出比例是对的，得让 伤害×0.5 小于剩余空间，这里两件事都写清。
+    const expected = Math.min(maxHpOf(r.state, caster), before + Math.round(dmg * 0.5));
+    assert.equal(byId(r.state, caster.id).hp, expected, '按实际伤害的一半回血（受上限约束）');
+  });
+
+  // ── 族 3 · 场域（2026-11-14）──────────────────────
+  //
+  // 场域自己不结算伤害：它把留痕放到格子上，由 core/marks.ts 在
+  // "有人走上来"和"每轮开始"时触发。所以这一组测的是**接线**：
+  // 放对了格子、触发时机对、次数按预期递减。
+
+  test('十方火海：以自己为中心铺场，踏入被烧，布设者回合再烧一次', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力上限 90，够一发 85
+    teachSpell(mage, spellOf('shi-fang-huo-hai')!);
+
+    const foe = place2(s, 'B', 'militia', 6, 7); // 在半径 3 内
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'shi-fang-huo-hai',
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const fires = marksOf(r.state).filter((m) => m.kind === 'spell-fire');
+    assert.equal(fires.length, 25, '半径 3 的曼哈顿菱形是 25 格');
+    assert.equal(byId(r.state, foe.id).hp, 500, '落场本身不造成伤害，伤害发生在踏入/回合开始');
+
+    // 走到 B 的回合：火不归 B 结算，这一趟不该烧
+    const toB = applyAction(r.state, { type: 'END_TURN' });
+    assert.ok(toB.ok, toB.ok ? '' : toB.reason);
+    assert.equal(byId(toB.state, foe.id).hp, 500, '对手回合开始不该烧');
+
+    // 再回到 A 的回合：布设者回合开始，站在场里的人各烧一次
+    const toA = applyAction(toB.state, { type: 'END_TURN' });
+    assert.ok(toA.ok, toA.ok ? '' : toA.reason);
+    const dmg = 12 + 4 * getRank(byId(toA.state, mage.id));
+    assert.equal(byId(toA.state, foe.id).hp, 500 - dmg, '布设者回合开始烧一次');
+    const left = marksOf(toA.state).filter((m) => m.kind === 'spell-fire');
+    assert.equal(left[0]!.charges, 2, '烧一轮扣一次，持续 3 轮');
+  });
+
+  test('万仞刀山：踩上去挨一刀，割完即散', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期
+    teachSpell(mage, spellOf('wan-ren-dao-shan')!);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'wan-ren-dao-shan',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const blades = marksOf(r.state).filter((m) => m.kind === 'spell-blade');
+    assert.equal(blades.length, 13, '半径 2 是 13 格');
+    assert.equal(blades[0]!.hidden, undefined, '刀山是明面上的，不隐藏');
+
+    // 轮到 B，让一个敌人自己走进去（走真实路径：MOVE 会触发 enterTile）
+    const toB = applyAction(r.state, { type: 'END_TURN' });
+    const walker = place2(toB.state, 'B', 'militia', 6, 7);
+    walker.hp = 500;
+    const moved = applyAction(toB.state, { type: 'MOVE', unitId: walker.id, x: 5, y: 7 });
+    assert.ok(moved.ok, moved.ok ? '' : moved.reason);
+
+    const dmg = 18 + 6 * getRank(byId(moved.state, mage.id));
+    // 民兵 2 甲：刀是物理伤害，走 hurtPhysical，先减甲
+    assert.equal(byId(moved.state, walker.id).hp, 500 - Math.max(0, dmg - 2), '按护甲结算');
+    assert.equal(marksAt(moved.state, 5, 7).length, 0, '踩过的那一片刀散了');
+  });
+
+  test('焱：炸完在范围内留下火海余烬（复用族 3 的场）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力上限 100
+    teachSpell(mage, spellOf('yan')!);
+    const foe = place2(s, 'B', 'militia', 5, 7);
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'yan',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const embers = marksOf(r.state).filter((m) => m.kind === 'spell-fire');
+    assert.equal(embers.length, 13, '半径 2 的余烬');
+    const dmg = 24 + 9 * getRank(byId(r.state, mage.id));
+    assert.equal(embers[0]!.data?.['dmg'], Math.round(dmg * 0.4), '余烬按本发伤害的 40% 算');
+  });
+
+  test('山河敕令：压住范围，施法者一动整片就散', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力上限 100
+    teachSpell(mage, spellOf('shan-he-chi-ling')!);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'shan-he-chi-ling',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const edicts = marksOf(r.state).filter((m) => m.kind === 'spell-edict');
+    assert.equal(edicts.length, 25, '半径 3 的曼哈顿菱形是 25 格');
+    assert.equal(
+      (edicts[0]!.custom as { caster?: string } | undefined)?.caster,
+      mage.id,
+      '敕令要记住是谁放的（这就是给 Mark 开 custom 的用处）',
+    );
+
+    // 施法者还在原位：这片地上的产兵点被压住
+    const camp = place2(r.state, 'B', 'militia', 5, 7);
+    const blocked = CULTIVATION_HOOKS.produceBlocked?.({
+      state: r.state,
+      source: { kind: 'camp', camp },
+      target: r.state.unitTypes['militia']!,
+    });
+    assert.ok((blocked ?? '').includes('山河敕令'), `要说明是被敕令压住：${blocked}`);
+
+    // 人一动：立刻不再压制，且下一次结算整片散掉
+    const caster = byId(r.state, mage.id);
+    caster.x = 9;
+    caster.y = 9;
+    const blockedAfter = CULTIVATION_HOOKS.produceBlocked?.({
+      state: r.state,
+      source: { kind: 'camp', camp },
+      target: r.state.unitTypes['militia']!,
+    });
+    assert.equal(blockedAfter, null, '施法者走了就不该再压着');
+
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(marksOf(cur).filter((m) => m.kind === 'spell-edict').length, 0, '人走了整片敕令散掉');
+  });
+
+  test('春风化雨：治疗友军 + 在中心留一汪灵雨（真的补灵气）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2)); // 3 期
+    teachSpell(mage, spellOf('chun-feng-hua-yu')!);
+
+    const ally = place2(s, 'A', 'qi-cultivator', 5, 7);
+    ally.hp = 5;
+
+    const qiBefore = qiAt(s, 5, 7);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'chun-feng-hua-yu',
+      targetX: 5,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    const heal = 10 + 4 * getRank(byId(r.state, mage.id));
+    assert.equal(byId(r.state, ally.id).hp, Math.min(maxHpOf(r.state, ally), 5 + heal), '治疗友军');
+
+    const springs = marksOf(r.state).filter((m) => m.kind === 'spell-qi-spring');
+    assert.equal(springs.length, 1, '只在中心留一汪，铺满整片会让灵气一步到顶');
+
+    // 走到布设者自己的回合计一次，灵气真的涨了
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.ok(qiAt(cur, 5, 7) > qiBefore, `灵雨要真的补灵气：${qiBefore} → ${qiAt(cur, 5, 7)}`);
+  });
+
+  // ── 族 6 · 自身增益（2026-11-14）──────────────────
+  //
+  // 这一族最该守的是"**面板和结算是同一份数**"：状态里写加成、引擎不读，
+  // 就会出现"按钮说 ×3、伤害一点没变"。所以每条都从真实入口取数：
+  // 视野走 visionOf、射程/攻击次数走 attacksPerTurn、伤害走 computeDamage。
+
+  test('灵目术：视野 +2、射程 +1（到期自动还回去）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('ling-mu-shu')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const visionBefore = visionOf(s, mage);
+    const rangeBefore = effectiveRange(s, mage);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ling-mu-shu' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = byId(r.state, mage.id);
+    assert.equal(visionOf(r.state, after), visionBefore + 2, '视野 +2');
+    assert.equal(effectiveRange(r.state, after), rangeBefore + 1, '射程 +1');
+
+    // 转两圈（自己的两个回合）：状态到期，加成自动消失
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(visionOf(cur, byId(cur, mage.id)), visionBefore, '到期后视野回到原值');
+  });
+
+  test('体术：攻击伤害 ×3（钩子层面精确、结算层面确实变高）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('ti-shu')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const hook = (state: GameState, u: any) =>
+      CULTIVATION_HOOKS.modifyDamage!({
+        state,
+        attacker: u,
+        defender: foe,
+        damage: 100,
+        armor: 0,
+      } as any);
+
+    const hookBefore = hook(s, byId(s, mage.id));
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ti-shu' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(hook(r.state, byId(r.state, mage.id)), hookBefore * 3, '钩子输出正好三倍');
+
+    /*
+     * 结算层面不断言"正好三倍"：`computeDamage` 在钩子之后还会加一段固定加成
+     * （这段不该被乘）。所以这里只守"确实变高了"，精确性由上面那条钩子断言负责。
+     */
+    const dmgBefore = computeDamage(s, byId(s, mage.id), foe);
+    const dmgAfter = computeDamage(r.state, byId(r.state, mage.id), byId(r.state, foe.id));
+    assert.ok(dmgAfter > dmgBefore * 2, `体术要显著提高伤害：${dmgBefore} → ${dmgAfter}`);
+  });
+
+  test('天魔解体大法：掉四分之一生命上限，换来移动/攻击次数/溅射', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期
+    teachSpell(mage, spellOf('tian-mo-jie-ti')!);
+
+    const moveBefore = movePower(s, mage);
+    const attacksBefore = attacksPerTurn(s, mage);
+    const hpBefore = mage.hp;
+    const maxHp = maxHpOf(s, mage);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-mo-jie-ti' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const after = byId(r.state, mage.id);
+    assert.equal(after.hp, hpBefore - Math.round(maxHp * 0.25), '代价是四分之一生命上限');
+    assert.equal(movePower(r.state, after), moveBefore + 2, '移动 +2');
+    assert.equal(attacksPerTurn(r.state, after), attacksBefore + 1, '攻击次数 +1');
+  });
+
+  test('御风术：伤害额外加上本回合移动格数', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(2));
+    teachSpell(mage, spellOf('yu-feng-shu')!);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    const base = computeDamage(s, byId(s, mage.id), foe);
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'yu-feng-shu' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 走了 3 格（引擎自己在 doMove 里累加 moveSpent）
+    const caster = byId(r.state, mage.id);
+    caster.moveSpent = 3;
+    assert.equal(
+      computeDamage(r.state, caster, byId(r.state, foe.id)),
+      base + 3,
+      '御风：移动了几格就加几点伤害',
+    );
   });
 
   // ── 吐纳术 / 罡风（2026-11-13）────────────────────
