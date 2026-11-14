@@ -789,20 +789,27 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
        * 两色的中点，于是接上。
        *
-       * 值 = "该往这边叠什么"：`d` 我在浅水这侧、叠深水色；`l` 我在深水这侧、
-       * 叠浅水色。浅水和"水域"算同一档（色差本来就不大），互相之间不铺。
+       * 值 = **邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水。
+       * 以前只有 `d`/`l` 两个字母（"往深处/往浅处叠哪种色"），
+       * 因为浅流和水域被算成同一档、互相之间不铺——可它们一个是青、一个是蓝，
+       * 硬拼起来还是刀切边（2026-11-14 用户提的）。
+       *
+       * 现在三档分开排：浅流 1 / 水域 2 / 深水 3，每种邻居各有一种色，
+       * 两侧都用 0.5 的 alpha，边界线上的颜色仍是两色的中点。
        *
        * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
        * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
        */
-      const WATER_RANK: Record<string, number> = { shallow: 1, water: 1, deep: 2 };
+      const WATER_RANK: Record<string, number> = { shallow: 1, water: 2, deep: 3 };
+      const WATER_LETTER: Record<string, string> = { shallow: 's', water: 'w', deep: 'd' };
       const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
       if (rankHere > 0) {
         const wetSide = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const r = WATER_RANK[dispTerrain[ty * s.w + tx] ?? ''] ?? 0;
+          const t = dispTerrain[ty * s.w + tx] ?? '';
+          const r = WATER_RANK[t] ?? 0;
           if (r === 0 || r === rankHere) return '0';
-          return r > rankHere ? 'd' : 'l';
+          return WATER_LETTER[t] ?? '0';
         };
         const wt = wetSide(x, y - 1);
         const wr = wetSide(x + 1, y);

@@ -1843,34 +1843,27 @@ html[data-terrain='on'] .tile.t-shallow::before {
 }
 
 /*
- * 叠什么色：只按"邻居是哪一档"决定，不看我自己的类型。
- * 两侧都用 0.5 的 alpha，中点才会重合；只要有一侧偷懒用别的值，
- * 边界上就会重新出现一条缝（这条是这套做法唯一必须守住的数）。
+ * 叠什么色：**按邻居是哪一档**决定，不看我自己的类型。
+ *
+ * 三档各一种色（都是 0.5 alpha，中点才会重合——这是这套做法唯一必须守住的数）：
+ *   `s` 浅流 #b7dcd6　`w` 水域 #a8cadf　`d` 深水 #4a7fa6
+ *
+ * 以前只有两档（浅/深），浅流和水域共用一档，所以它俩之间是一条硬边。
  */
-html[data-terrain='on'] .tile[data-wt='d'] {
-  --nb-t: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wr='d'] {
-  --nb-r: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wb='d'] {
-  --nb-b: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wl='d'] {
-  --nb-l: rgba(74, 127, 166, 0.5);
-}
-html[data-terrain='on'] .tile[data-wt='l'] {
-  --nb-t: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wr='l'] {
-  --nb-r: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wb='l'] {
-  --nb-b: rgba(168, 202, 223, 0.5);
-}
-html[data-terrain='on'] .tile[data-wl='l'] {
-  --nb-l: rgba(168, 202, 223, 0.5);
-}
+html[data-terrain='on'] .tile[data-wt='s'] { --nb-t: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wr='s'] { --nb-r: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wb='s'] { --nb-b: rgba(183, 220, 214, 0.5); }
+html[data-terrain='on'] .tile[data-wl='s'] { --nb-l: rgba(183, 220, 214, 0.5); }
+
+html[data-terrain='on'] .tile[data-wt='w'] { --nb-t: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wr='w'] { --nb-r: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wb='w'] { --nb-b: rgba(168, 202, 223, 0.5); }
+html[data-terrain='on'] .tile[data-wl='w'] { --nb-l: rgba(168, 202, 223, 0.5); }
+
+html[data-terrain='on'] .tile[data-wt='d'] { --nb-t: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wr='d'] { --nb-r: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wb='d'] { --nb-b: rgba(74, 127, 166, 0.5); }
+html[data-terrain='on'] .tile[data-wl='d'] { --nb-l: rgba(74, 127, 166, 0.5); }
 /*
  * 高山（2026-11-13 第二次重做）。
  *
