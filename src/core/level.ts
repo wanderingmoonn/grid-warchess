@@ -16,19 +16,50 @@
  * 所以进局面的永远是**那一刻的快照**（`validateLevel` 返回的就是一份深拷贝）。
  * 我们以后改关卡——调平衡、改错字、把刷兵点挪一格——老存档里的那一份不会跟着变。
  *
- * ── 现在的状态（2026-11-14，批次 0~1）───────────────────────────────
+ * ── 现在的状态（2026-11-14，批次 0~2）───────────────────────────────
  *
- * 已经有内容的是两项：地图、几家与谁托管。开局部署、事件表、胜负条件、扩展规则
- * 都要在后面的批次加，加的时候直接往 `LevelDef` 上加字段，别在别处另起一份。
+ * 已经有内容的是四项：地图、几家与谁托管、开局部署、扩展规则。
+ * 事件表、胜负条件在后面的批次加，加的时候直接往 `LevelDef` 上加字段，
+ * 别在别处另起一份。
  *
  * 注册表里的关卡**不允许玩家修改**。等引擎稳了、编辑器开了，再谈玩家自定义；
  * 到那时候"来源"会多一种（玩家上传），但"进局面的是一份快照"这条不变。
  */
 
 import { validateFixedMap, type FixedMap, type MapPoint } from './fixed-maps.ts';
+import { expansionById } from './expansions.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
 import type { MatchConfig, PlayerId } from './types.ts';
+
+/**
+ * 关卡规定的一个开局兵。
+ *
+ * 只写"什么兵、站哪"。血量、护甲、攻击全走兵种表——关卡不该另存一份数值，
+ * 否则兵种一调平衡，关卡里那份就成了过期的影子。
+ */
+export interface DeployUnit {
+  type: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * 这一关对扩展的要求。
+ *
+ * 三档语义（面板上也是这么显示的）：
+ *   · `require` 必须开：玩家没勾也强制加上；
+ *   · `forbid` 禁用：玩家勾了也强制去掉；
+ *   · 没提到的：**保留玩家自己的选择**。
+ *
+ * 为什么必须有这一条：关卡里的部署和（以后的）事件会点名某个兵种。
+ * 作者写了"刷两个剑修"，玩家把修真包关了，那不是"少个兵"，是开局就查不到兵种。
+ * `require` 管的就是这件事。
+ */
+export interface LevelExpansionRules {
+  require?: string[];
+  forbid?: string[];
+}
 
 /**
  * 关卡里"这一局几家、谁在操作、多出来的两席城在哪"。
@@ -79,6 +110,19 @@ export interface LevelDef {
    * （改得动的只有"没被关节点掉的那些"，见批次 2 的扩展规则）。
    */
   seats?: LevelSeats;
+  /**
+   * 每席开局的兵。**没写的席位照旧按规则自动撒**（这是"加字段不改变老行为"的写法：
+   * 关卡没提这件事，就等于这件事不存在）。
+   *
+   * 写了就必须写全——写了两个兵就只有两个兵，不会再自动补开局部队，也不会送经济单位。
+   * 作者要的是"这一关就这么几个人"，补两个农民上去会让数字对不上。
+   *
+   * 只校验结构（在界内、不重叠、兵种非空）；**这个兵种在这一局存不存在**
+   * 要等 `createMatch` 拿到兵种表才知道，那边再查一次，查不到就跳过并在战报里说一声。
+   */
+  deploy?: Partial<Record<PlayerId, DeployUnit[]>>;
+  /** 这一关要求 / 禁止的扩展（见 `LevelExpansionRules`）*/
+  expansions?: LevelExpansionRules;
 }
 
 /**
@@ -119,12 +163,26 @@ const TRI_PAINT: Array<[number, number, string]> = (() => {
 })();
 
 /**
+ * 「断后」的地形：一条竖河横在中间，只有一座桥。
+ *
+ * 这张图的全部意义在那座桥上——守方一个兵卡住桥面，攻方人多也得一个一个上。
+ * 河其他地方一律不通（`~` 深水，陆军过不去），所以"走别处绕过去"不成立。
+ */
+const REAR_PAINT: Array<[number, number, string]> = (() => {
+  const out: Array<[number, number, string]> = [];
+  for (let y = 0; y < 14; y += 1) out.push([6, y, '~']);
+  // 唯一的一座桥。写在河之后，把那一格的水盖成桥面
+  out.push([6, 7, '=']);
+  out.push([3, 3, 'f'], [4, 3, 'f'], [3, 4, 'f']);
+  out.push([10, 10, 'f'], [10, 11, 'f'], [11, 10, 'f']);
+  return out;
+})();
+
+/**
  * 内建关卡。
  *
- * 前一张是"探针"：不给人玩，只把"选关卡 → 开局 → 存档 → 读档 → 复盘"这条链走一遍。
- * 后面每加一条机制都配一张这样的关卡，它们是回归测试的素材，不是作品。
- *
- * 批次 1 加了第一张**能给人玩**的：「三岔口」——三家混战，红蓝两家真人、绿方是电脑。
+ * 前两张是"测试夹具"：不追求好玩，各验证一条机制。
+ * 「三岔口」是第一张能给人玩的三家混战；「断后」验证"关卡能定开局兵力 + 扩展规则"。
  */
 export const LEVELS: LevelDef[] = [
   {
@@ -168,6 +226,50 @@ export const LEVELS: LevelDef[] = [
       cities: { C: [{ x: 12, y: 12 }] },
       // 绿方交给电脑。红蓝留给玩家——这就是"两个玩家对打 + 电脑骚扰"。
       ai: ['C'],
+    },
+  },
+  {
+    id: 'level:rear-guard',
+    version: LEVEL_VERSION,
+    name: '断后',
+    brief: '14×14，一座桥。你只有 1 个兵，对面 5 个——演示关卡可以决定开局兵力。',
+    map: {
+      id: 'levelmap:rear-guard',
+      name: '断后',
+      w: 14,
+      h: 14,
+      rows: rowsOf(14, 14, REAR_PAINT),
+      citiesA: [{ x: 2, y: 7 }],
+      citiesB: [{ x: 11, y: 7 }],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'] },
+    /*
+     * 开局兵力由关卡写死：守方一个民兵卡在桥面，攻方五个兵在河东岸。
+     *
+     * 写了部署就**不再自动撒开局部队、也不送经济单位**——否则"你只有 1 个兵"
+     * 这句话当场变成三个兵，作者要的数字对不上。
+     */
+    deploy: {
+      A: [{ type: 'militia', x: 6, y: 7 }],
+      B: [
+        { type: 'militia', x: 10, y: 5 },
+        { type: 'archer', x: 10, y: 6 },
+        { type: 'archer', x: 9, y: 7 },
+        { type: 'militia', x: 9, y: 8 },
+        { type: 'militia', x: 10, y: 9 },
+      ],
+    },
+    /*
+     * 扩展规则的两个真实理由，不是凑数：
+     *   · **必须开「哀兵必胜」**：这张图的主题就是"城丢了反而更能打"，不开这一包，
+     *     守方没有任何翻盘手段，五个兵碾过来就完了；
+     *   · **禁用「先后手补偿」**：这张图是不对称布阵（1 打 5），后手再补一笔金币，
+     *     等于把作者好不容易调出来的强弱差悄悄抹掉一截。
+     */
+    expansions: {
+      require: ['last-stand'],
+      forbid: ['turn-order-comp'],
     },
   },
 ];
@@ -239,6 +341,8 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
 
   const map = (checkedMap as { ok: true; map: FixedMap }).map;
   const seats = normalizeSeats(obj.seats, map, errors);
+  const expansions = normalizeExpansions(obj.expansions, errors);
+  const deploy = normalizeDeploy(obj.deploy, map, seats, errors);
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -252,8 +356,106 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       // undefined 字段悄悄删掉，"这个字段有没有"就变得分不清了。
       map: structuredClone(map),
       ...(seats ? { seats: structuredClone(seats) } : {}),
+      ...(deploy ? { deploy: structuredClone(deploy) } : {}),
+      ...(expansions ? { expansions: structuredClone(expansions) } : {}),
     },
   };
+}
+
+/**
+ * 校验"这一关要求 / 禁止哪些扩展"。
+ *
+ * 只查两件事：id 认不认识、有没有自相矛盾（同一个包既要求开又要求禁用）。
+ * **不查"这个包和那个包冲突"**——那是面板在勾选时做的判断（`conflictsWith`），
+ * 而关卡是我们自己写的，写之前就该知道；真写上去了，`createMatch` 里
+ * `enabledExpansionIds` 也会把前置不满足的整条剔掉，不会造出坏局面。
+ */
+function normalizeExpansions(raw: unknown, errors: string[]): LevelExpansionRules | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const obj = raw as Partial<LevelExpansionRules>;
+
+  const clean = (list: unknown, label: string): string[] => {
+    const out: string[] = [];
+    for (const item of Array.isArray(list) ? list : []) {
+      const id = String(item);
+      if (!expansionById(id)) {
+        errors.push(`${label}里的「${id}」不是一个已知的扩展`);
+        continue;
+      }
+      if (!out.includes(id)) out.push(id);
+    }
+    return out;
+  };
+  const require = clean(obj.require, '必须开的扩展');
+  const forbid = clean(obj.forbid, '禁用的扩展');
+  const both = require.filter((id) => forbid.includes(id));
+  if (both.length > 0) {
+    errors.push(`「${both.map((id) => expansionById(id)?.name ?? id).join('、')}」被同时要求开启和禁用`);
+  }
+  if (require.length === 0 && forbid.length === 0) return undefined;
+  return { ...(require.length > 0 ? { require } : {}), ...(forbid.length > 0 ? { forbid } : {}) };
+}
+
+/**
+ * 校验"每席开局的兵"。
+ *
+ * 这一层只查结构：席位坐不坐人、坐标在不在界内、有没有两处叠在同一格。
+ * **兵种在不在这一局**要到 `createMatch` 才查得了（那时才有兵种表），见那边的说明。
+ */
+function normalizeDeploy(
+  raw: unknown,
+  map: FixedMap,
+  seats: LevelSeats | undefined,
+  errors: string[],
+): Partial<Record<PlayerId, DeployUnit[]>> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const obj = raw as Partial<Record<PlayerId, unknown>>;
+  // 关卡没写几家就按两家算：A/B 是永远存在的两席
+  const seated = (seats ? SEAT_ORDER.slice(0, seats.count) : ['A', 'B']) as readonly PlayerId[];
+
+  const out: Partial<Record<PlayerId, DeployUnit[]>> = {};
+  /** 已经被占掉的格：跨席位也算，两家不能把兵摆在同一个格子上 */
+  const taken = new Set<string>();
+  for (const key of Object.keys(obj)) {
+    const seat = String(key).toUpperCase() as PlayerId;
+    if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+      errors.push(`部署里的席位「${key}」不是 A/B/C/D`);
+      continue;
+    }
+    if (!seated.includes(seat)) {
+      errors.push(`部署里有第 ${seat} 家，但这一关只坐 ${seated.join(' / ')}`);
+      continue;
+    }
+    const list = obj[seat];
+    if (!Array.isArray(list) || list.length === 0) {
+      errors.push(`第 ${seat} 家的部署是空的：要么不写这一席，要么至少写一个兵`);
+      continue;
+    }
+    const units: DeployUnit[] = [];
+    for (const item of list) {
+      const u = item as Partial<DeployUnit>;
+      const type = typeof u?.type === 'string' ? u.type.trim() : '';
+      const x = Math.round(Number(u?.x));
+      const y = Math.round(Number(u?.y));
+      if (!type) {
+        errors.push(`第 ${seat} 家有一个部署兵没写兵种`);
+        continue;
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= map.w || y >= map.h) {
+        errors.push(`第 ${seat} 家的「${type}」站在 (${String(u?.x)}, ${String(u?.y)})，超出棋盘`);
+        continue;
+      }
+      const key2 = `${x},${y}`;
+      if (taken.has(key2)) {
+        errors.push(`两处部署叠在 (${x}, ${y}) 上`);
+        continue;
+      }
+      taken.add(key2);
+      units.push({ type, x, y });
+    }
+    if (units.length > 0) out[seat] = units;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** 席位顺序。和 `PLAYER_ORDER` 同一份；本地重复一遍是为了不把运行期依赖引进来 */

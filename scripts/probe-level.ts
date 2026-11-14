@@ -333,6 +333,131 @@ if (!tri) {
   }
 }
 
+/* ── 9. 开局部署（批次 2）────────────────────────────────────── */
+line('9. 开局部署：「断后」');
+const rear = levelById('level:rear-guard');
+if (!rear) {
+  bad('找不到 level:rear-guard', '注册表里没有这张关卡');
+} else {
+  const s = createMatch({ ...DEFAULT_CONFIG, level: rear }, 20261114);
+  const mine = s.units.filter((u) => u.owner === 'A');
+  const foes = s.units.filter((u) => u.owner === 'B');
+  check(mine.length === 1, `守方正好 1 个兵（实际 ${mine.length}）`,
+    `期望 1，实际 ${mine.length}：写了部署的席位不该再自动撒兵/送经济单位`);
+  check(foes.length === 5, `攻方正好 5 个兵（实际 ${foes.length}）`, `期望 5，实际 ${foes.length}`);
+  check(mine[0]?.x === 6 && mine[0]?.y === 7, '守方那个兵站在桥面上',
+    `实际站在 (${mine[0]?.x}, ${mine[0]?.y})`);
+  check(mine[0]?.type === 'militia', `兵种按关卡写的来（${mine[0]?.type}）`);
+  check(s.units.every((u) => u.hp > 0), '所有部署兵都有血（数值取自兵种表）');
+  // 部署的兵也得能正常行动（别摆出一个"站在非法格子上"的局面）
+  const first = mine[0]!;
+  const moved = applyAction(s, { type: 'MOVE', unitId: first.id, x: 5, y: 7 } as Action);
+  check(moved.ok, '部署上去的兵当回合就能动', moved.ok ? '' : moved.reason);
+
+  /*
+   * 桥到底通不通。
+   *
+   * 这张图的全部设计都在那一格桥面上：如果 `=` 其实过不去，攻方会站在对岸
+   * 干看着，而这在"部署对不对"的检查里完全看不出来。
+   *
+   * 判据不是"攻方过河"——守方会补兵堵桥头，过不过得去取决于打法。
+   * 判的是**攻方能摸到桥头**：要么站到桥旁边那一列，要么已经把守桥那个兵打掉了。
+   * 两条都要求"从东岸走到桥"，桥不通就一条也做不到。
+   */
+  let reachedBridge = false;
+  let cur5 = s;
+  for (let i = 0; i < 60 && !cur5.winner; i++) {
+    const pick = aiNextAction(cur5) ?? ({ type: 'END_TURN' } as Action);
+    const r = applyAction(cur5, pick);
+    if (r.ok) cur5 = r.state;
+    else {
+      const end = applyAction(cur5, { type: 'END_TURN' } as Action);
+      if (!end.ok) break;
+      cur5 = end.state;
+    }
+    const atBridgeSide = cur5.units.some(
+      (u) => u.owner === 'B' && u.x === 7 && (u.y === 6 || u.y === 7 || u.y === 8),
+    );
+    const defenderGone = !cur5.units.some((u) => u.id === first.id);
+    if (atBridgeSide || defenderGone) {
+      reachedBridge = true;
+      break;
+    }
+  }
+  check(reachedBridge, '攻方能摸到桥头（桥是可通行的）',
+    '走了 60 步攻方还没到桥边——那一格大概是过不去的');
+}
+
+/* ── 10. 扩展规则三档 ─────────────────────────────────────────── */
+line('10. 扩展规则：必须开 / 禁用 / 其余自选');
+{
+  const rules = {
+    ...rear!,
+    id: 'level:test-exp',
+    // 故意和 DEFAULT_CONFIG 对着干：默认开的两包里禁一个、留一个，再要求一个默认没开的
+    expansions: { require: ['last-stand'], forbid: ['bloodbath'] },
+  };
+  const base: MatchConfig = {
+    ...DEFAULT_CONFIG,
+    expansionIds: ['bloodbath', 'turn-order-comp'],
+    level: rules,
+  };
+  const s = createMatch(base, 777);
+  const got = s.config.expansionIds;
+  check(got.includes('last-stand'), `必须开的包被加了进来（${got.join(' ') || '空'}）`,
+    `要求开 last-stand，实际 ${got.join(' ') || '空'}`);
+  check(!got.includes('bloodbath'), '被禁用的包被去掉了', `禁用了 bloodbath，实际 ${got.join(' ')}`);
+  check(got.includes('turn-order-comp'), '关卡没提到的包保留玩家原来的勾选',
+    `不该顺手清掉玩家自己勾的包，实际 ${got.join(' ')}`);
+  check(base.expansionIds.includes('bloodbath') && !base.expansionIds.includes('last-stand'),
+    '不修改调用方的 config（createMatch 是纯函数）');
+}
+
+/* ── 11. 坏部署挡得住、跳过时说清楚 ───────────────────────────── */
+line('11. 坏部署');
+{
+  // 结构错在 validateLevel 就拦住
+  const badCases: Array<[string, unknown]> = [
+    ['部署到没坐人的席位', {
+      ...rear!, id: 'level:x', expansions: undefined,
+      seats: { count: 2, ai: [] },
+      deploy: { D: [{ type: 'militia', x: 1, y: 1 }] },
+    }],
+    ['坐标出界', {
+      ...rear!, id: 'level:x', expansions: undefined,
+      deploy: { A: [{ type: 'militia', x: 99, y: 1 }] },
+    }],
+    ['两处叠在同一格', {
+      ...rear!, id: 'level:x', expansions: undefined,
+      deploy: { A: [{ type: 'militia', x: 2, y: 2 }, { type: 'archer', x: 2, y: 2 }] },
+    }],
+  ];
+  for (const [label, raw] of badCases) {
+    const res = validateLevel(raw);
+    check(!res.ok && res.errors.length > 0, `${label}：被拒并给出原因`, res.ok ? '居然通过了' : '被拒但没有原因');
+  }
+
+  // 语义错（兵种不存在 / 格子站不住）不该让整局崩，但要写进战报
+  const weird = {
+    ...rear!,
+    id: 'level:test-weird',
+    deploy: {
+      A: [
+        { type: 'militia', x: 6, y: 7 },
+        { type: 'no-such-unit', x: 2, y: 2 },
+        { type: 'militia', x: 6, y: 3 }, // 河里，站不住
+      ],
+      B: [{ type: 'militia', x: 10, y: 6 }],
+    },
+  };
+  const s = createMatch({ ...DEFAULT_CONFIG, level: weird }, 999);
+  check(s.units.filter((u) => u.owner === 'A').length === 1,
+    '认不出的兵种和站不住的格子都被跳过（守方只剩 1 个）',
+    `实际 ${s.units.filter((u) => u.owner === 'A').length} 个`);
+  const notes = s.log.map((l) => l.text).filter((t) => t.includes('关卡部署'));
+  check(notes.length === 2, `战报里有两条说明（${notes.length}）`, `期望 2 条，实际 ${notes.length}：${notes.join(' / ')}`);
+}
+
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {

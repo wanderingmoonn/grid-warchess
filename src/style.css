@@ -4579,6 +4579,22 @@ a.btn {
   background: var(--surface-hl);
 }
 
+/*
+ * 关卡锁定的扩展：勾不动。
+ *
+ * 只是压一点亮度、把指针改成默认——**不能做成"看起来禁用"的灰色**：
+ * 那条规则是这一关的一部分（比如"这一关必须开哀兵必胜"），要让人看得出
+ * "是被关卡钉住的"，而不是"这个包坏了"。真正的解释在条目里那行小字上。
+ */
+.expansion-item.is-locked {
+  opacity: 0.78;
+  cursor: default;
+}
+
+.expansion-item.is-locked:hover {
+  border-color: var(--line);
+}
+
 .expansion-item input {
   margin-top: 3px;
   accent-color: var(--a);

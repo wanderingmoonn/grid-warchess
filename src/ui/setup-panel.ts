@@ -609,6 +609,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 卡上什么都看不到，勾下去才被拒。
        */
       const nameOf = (x: string): string => expansionById(x)?.name ?? x;
+      /**
+       * 这一局是不是"按关卡来"。
+       *
+       * 定义得比用到它的地方早：扩展区（靠它判断哪些包被锁）、战役页（人数/对手）、
+       * 地图页（关卡自带地图）、关卡页（选中态）四处都要读它。
+       */
+      const levelOn = !!config.level;
       const relChips = (id: string): string => {
         const out: string[] = [];
         const need = expansionById(id)?.requires ?? [];
@@ -632,30 +639,55 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // （"桨帆船、德罗蒙、卡拉克、盖伦……"）。这个面板只回答"勾不勾"，
       // 想读细则的人点规则书——那里每册都有专章。没写 blurb 的退回 summary，
       // 免得将来新加的包在面板上变成一行空白。
+      /*
+       * 关卡锁定的扩展：必须开的算"已勾且点不动"，禁用的算"没勾且点不动"。
+       *
+       * 只锁**关卡提到的那些**。没提到的照旧归玩家——关卡没有意见，
+       * 就不该替玩家做决定（这也是 `LevelExpansionRules` 的三档语义）。
+       */
+      const lockedRequire = new Set(levelOn ? config.level?.expansions?.require ?? [] : []);
+      const lockedForbid = new Set(levelOn ? config.level?.expansions?.forbid ?? [] : []);
+      const expLockNote = (() => {
+        const req = [...lockedRequire].map(nameOf);
+        const forb = [...lockedForbid].map(nameOf);
+        if (req.length === 0 && forb.length === 0) return '';
+        const parts = [
+          req.length > 0 ? `必须开：${req.join('、')}` : '',
+          forb.length > 0 ? `禁用：${forb.join('、')}` : '',
+        ].filter(Boolean);
+        return `<div class="field-hint">这一关固定了扩展规则——${parts.join('；')}。其余包你自己定。</div>`;
+      })();
       const expItems = availableExpansions().map(
-        (e) => `
-        <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
-          <input type="checkbox" data-exp="${e.id}" ${config.expansionIds.includes(e.id) ? 'checked' : ''} />
+        (e) => {
+          const lock = lockedRequire.has(e.id) ? 'on' : lockedForbid.has(e.id) ? 'off' : '';
+          const on = lock === 'on' || (lock === '' && config.expansionIds.includes(e.id));
+          const tag =
+            lock === 'on'
+              ? '<span class="expansion-req">这一关必须开</span>'
+              : lock === 'off'
+                ? '<span class="expansion-req is-clash">这一关禁用</span>'
+                : '';
+          return `
+        <label class="expansion-item ${on ? 'on' : ''} ${lock ? 'is-locked' : ''}">
+          <input type="checkbox" data-exp="${e.id}" ${on ? 'checked' : ''} ${lock ? 'disabled' : ''} />
           <span class="expansion-body">
             <b>${e.name}</b>
             <span>${e.blurb ?? e.summary}</span>
             ${relChips(e.id)}
+            ${tag}
           </span>
-        </label>`,
+        </label>`;
+        },
       ).join('');
 
       /* ── 战役页：这一局怎么打 ── */
       /*
-       * 关卡。
+       * 人数和对手在选了关卡之后会变成只读说明——关卡决定了这两样，
+       * 留一排"点了不生效"的开关比没有更糟。
        *
-       * 现在的关卡都是我们内建的、玩家改不了（见 docs/PLAN-LEVEL-MODE）。所以选了关卡，
-       * 人数和对手就由关卡决定——下面那两块会换成一句只读的说明，而不是留一排
-       * "点了不生效"的开关。
-       *
-       * 想自己调？选「自由对局」就回到原来的样子。**改人数也会自动脱离关卡**，
+       * 想自己调？去「关卡」页选「自由对局」。**改人数也会自动脱离关卡**，
        * 因为一份"面板写 2 人、关卡写 3 人"的配置，建出来到底几家没人说得清。
        */
-      const levelOn = !!config.level;
 
       /*
        * 多席位局的"谁交给电脑"。
@@ -890,6 +922,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
+              ${expLockNote}
               <div class="expansion-list">${expItems}</div>
               ${expNote ? `<div class="map-note is-bad">${esc(expNote)}</div>` : ''}
             </section>
@@ -947,6 +980,31 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 ${(config.level.seats?.ai ?? []).length === 0 ? '全是真人' : `电脑操作：${(config.level.seats?.ai ?? []).map((p) => seatLabel[p] ?? p).join('、')}`} ·
                 地图由关卡自带，不能换
               </div>
+              ${
+                config.level.expansions
+                  ? `<div class="field-hint">
+                      扩展：${
+                        (config.level.expansions.require ?? []).length > 0
+                          ? `必须开 ${(config.level.expansions.require ?? []).map(nameOf).join('、')}`
+                          : ''
+                      }${
+                        (config.level.expansions.require ?? []).length > 0 &&
+                        (config.level.expansions.forbid ?? []).length > 0
+                          ? '；'
+                          : ''
+                      }${
+                        (config.level.expansions.forbid ?? []).length > 0
+                          ? `禁用 ${(config.level.expansions.forbid ?? []).map(nameOf).join('、')}`
+                          : ''
+                      }（在「战役」页可以看到具体是哪几个）
+                     </div>`
+                  : ''
+              }
+              ${
+                config.level.deploy
+                  ? `<div class="field-hint">开局兵力由关卡指定，不再自动撒兵。</div>`
+                  : ''
+              }
             </section>`
                 : `<section class="field">
               <div class="field-label">现在是自由对局</div>
@@ -1560,6 +1618,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       const id = input.dataset.exp;
       if (!id) return;
+      /*
+       * 关卡锁定的包：点不动。
+       *
+       * 界面上那个 input 已经是 `disabled`（点不出 change），这里是第二道门——
+       * 键盘、脚本、以后换控件都可能绕开 disabled。锁的是**关卡提到的那几个**，
+       * 其余包照旧归玩家。
+       */
+      const lockedByLevel = config.level
+        ? [...(config.level.expansions?.require ?? []), ...(config.level.expansions?.forbid ?? [])]
+        : [];
+      if (lockedByLevel.includes(id)) {
+        // 把界面拨回关卡要的样子（万一它被改过），然后什么都不做
+        paint();
+        return;
+      }
       // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
       // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
       const stylesBefore = mapStylesFor(config.expansionIds).length;

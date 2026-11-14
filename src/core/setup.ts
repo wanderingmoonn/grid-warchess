@@ -19,7 +19,7 @@ import { createDraft } from './draft.ts';
 import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
 import { validateLevel } from './level.ts';
-import { refreshMemory, grantOpeningIncome } from './rules.ts';
+import { canStandAt, refreshMemory, grantOpeningIncome } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
@@ -168,6 +168,15 @@ export function createMatch(
   // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
   // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
   /*
+   * 关卡（可选）。**必须最先解析**：它决定开哪些扩展、几家、谁托管、地图、开局部署。
+   *
+   * 校验不过就当作没有关卡（退回普通对局），而不是让整局建不起来——
+   * 和固定地图的兜底同一条理由：一份坏配置不该让玩家连开局都开不了。
+   */
+  const checkedLevel = config.level ? validateLevel(config.level) : null;
+  const level = checkedLevel && checkedLevel.ok ? checkedLevel.level : null;
+
+  /*
    * 先把扩展 id 迁移成现在的写法（2026-11-04 十六个包并成四个）。
    *
    * 这一步必须在这里做，不能只做在 enabledExpansionIds 里面：下面好几处是
@@ -175,7 +184,29 @@ export function createMatch(
    * citySize、开局战报里的 extensions 列表）。集合里是新 id、数组里是旧 id 时，
    * 每个都查不到——表现就是"勾了奇想包，兵种表里一个奇想兵都没有"。
    */
-  const expansionIds = normalizeExpansionIds(config.expansionIds);
+  /*
+   * 关卡对扩展的要求，在归一化**之前**套上去。
+   *
+   * 顺序是"先剔禁用的、再补必须开的"：
+   *   · 禁用优先，因为作者的意图是"这一关不能带这个包"，玩家勾了也不算；
+   *   · 必须开的补在最后，`validateLevel` 已经保证同一个包不会两头都写。
+   *
+   * 只动这一局的局部量，**不改调用方的 config**（createMatch 是纯函数）。
+   * 真正生效的集合会由下面 `state.config.expansionIds` 按"实际进场的包"重写，
+   * 所以存档里记的是真实值，不是玩家勾的那串。
+   */
+  const levelExpansions = level?.expansions;
+  const wantExpansions = (() => {
+    const base = [...config.expansionIds];
+    if (!levelExpansions) return base;
+    const forbid = new Set(levelExpansions.forbid ?? []);
+    const kept = base.filter((id) => !forbid.has(id));
+    for (const id of levelExpansions.require ?? []) {
+      if (!forbid.has(id) && !kept.includes(id)) kept.push(id);
+    }
+    return kept;
+  })();
+  const expansionIds = normalizeExpansionIds(wantExpansions);
 
   const extraUnits: Record<string, UnitTypeDef> = {
     ...customUnits,
@@ -203,15 +234,6 @@ export function createMatch(
     if (!liveExpansions.has(id)) continue;
     for (const r of expansionById(id)?.resources ?? []) registerResource(r);
   }
-
-  /**
-   * 关卡（可选）。**在这里先解析一次**，因为下面三处都要用：几家、谁托管、地图。
-   *
-   * 关卡校验不过就当作没有关卡（退回普通对局），而不是让整局建不起来——
-   * 和固定地图的兜底同一条理由：一份坏配置不该让玩家连开局都开不了。
-   */
-  const checkedLevel = config.level ? validateLevel(config.level) : null;
-  const level = checkedLevel && checkedLevel.ok ? checkedLevel.level : null;
 
   /**
    * 这一局几家。
@@ -541,7 +563,15 @@ export function createMatch(
     });
   };
 
-  for (const p of seats) for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
+  /*
+   * 关卡点了名的席位**不自动撒兵**：作者写"你只有 1 个兵"，开局就不该变成四个。
+   * 真正摆那几个兵要等 state 建好（见下面的 `levelDeploy` 那一段）。
+   */
+  const levelDeploy = level?.deploy ?? {};
+  for (const p of seats) {
+    if ((levelDeploy[p]?.length ?? 0) > 0) continue;
+    for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
+  }
 
   // 开局送两个经济单位，摆在自家城外的空地上——
   // 农民要站在平原才有产出，所以不能塞进城里
@@ -551,6 +581,9 @@ export function createMatch(
   });
   if (econPool.length > 0) {
     for (const owner of seats) {
+      // 关卡写了部署的席位也不送经济单位：那会把它写死的兵力再加两个，
+      // 而作者要的正是"就这几个人"。
+      if ((levelDeploy[owner]?.length ?? 0) > 0) continue;
       const ownCity = cities.find((c) => c.owner === owner);
       if (!ownCity) continue;
       for (let k = 0; k < 2; k++) {
@@ -692,6 +725,52 @@ export function createMatch(
       D: { known: [] },
     },
   };
+
+  /*
+   * 关卡点名的开局兵（`LevelDef.deploy`）。
+   *
+   * 放在 state 建好之后做，因为"这一格站不站得住"要问规则层（`canStandAt`），
+   * 而规则层要一整份 state。
+   *
+   * 两种摆不上去的情况都**跳过并写进战报**，不让整局建不起来：
+   *   · 兵种这一局没有（关卡没把扩展写进 `require`，或者玩家禁用了那个兵）；
+   *   · 这一格站不住（作者把兵写到水里、山里、或者跟城/别的兵叠上了）。
+   * 静默跳过是最糟的选择——作者会以为"我明明写了"而查不出原因，所以战报里必须有一句。
+   */
+  for (const p of seats) {
+    const list = levelDeploy[p];
+    if (!list || list.length === 0) continue;
+    for (const d of list) {
+      const def = state.unitTypes[d.type];
+      if (!def) {
+        state.log.push({
+          turn: 1,
+          player: p,
+          text: `关卡部署里的「${d.type}」这一局没有这个兵种，已跳过`,
+        });
+        continue;
+      }
+      if (!canStandAt(state, d.x, d.y, d.type)) {
+        state.log.push({
+          turn: 1,
+          player: p,
+          text: `关卡部署：${def.name} 在 (${d.x}, ${d.y}) 站不住，已跳过`,
+        });
+        continue;
+      }
+      state.units.push({
+        id: `u${state.nextUnitSeq++}`,
+        type: def.id,
+        owner: p,
+        x: d.x,
+        y: d.y,
+        hp: def.maxHp,
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+    }
+  }
 
   // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
   if (draftMode) {

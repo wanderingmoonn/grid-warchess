@@ -9240,6 +9240,28 @@ check('选了关卡，战役页的人数与对手变成只读说明', () => {
   assert.ok(foot.includes('三岔口'), `摘要里应该有关卡名，实际：${foot}`);
 });
 
+check('选「断后」：开局兵力与扩展规则都被关卡钉住', () => {
+  click('[data-tab="levels"]');
+  click('[data-level="level:rear-guard"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('开局兵力由关卡指定'), `关卡页要说明部署，实际：${body.slice(0, 200)}`);
+  assert.ok(body.includes('必须开') && body.includes('哀兵必胜'), '要写清必须开哪一包');
+
+  click('[data-tab="battle"]');
+  const req = doc.querySelector<HTMLInputElement>('[data-exp="last-stand"]');
+  const forb = doc.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
+  assert.ok(req, '扩展列表里应该有「哀兵必胜」');
+  assert.ok(req!.checked && req!.disabled, '必须开的包：勾上，而且点不动');
+  assert.ok(forb, '扩展列表里应该有「先后手补偿」');
+  assert.ok(!forb!.checked && forb!.disabled, '禁用的包：空着，而且点不动');
+  // 关卡没提到的包照旧归玩家
+  const other = doc.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
+  assert.ok(other && !other.disabled, '关卡没提到的包不该被锁');
+  // 锁定说明要讲清楚，不然玩家会以为界面坏了
+  const txt = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(txt.includes('这一关固定了扩展规则'), `扩展区要有锁定说明，实际：${txt.slice(0, 200)}`);
+});
+
 check('关卡页选「自由对局」：人数开关回来，关卡不残留', () => {
   click('[data-tab="levels"]');
   click('[data-level=""]');
