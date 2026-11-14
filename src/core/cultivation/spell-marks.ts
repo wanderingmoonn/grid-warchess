@@ -159,10 +159,35 @@ export const SPELL_QI_SPRING_MARK: MarkKindDef = {
   },
 };
 
+/**
+ * 酆都鬼蜮与道化魔染的地面：**只负责"看得见"**。
+ *
+ * 逻辑写在 `hooks.ts` 里而不是这里，因为这两条都要**换主**，而换主是规则层的
+ * 唯一出口（`convertUnit`）——`MarkApi` 上没有它，硬在这里做就只能直接改
+ * `owner`，那会把"本回合能否行动""战报口径"全部绕过去。
+ */
+export const SPELL_GHOST_MARK: MarkKindDef = {
+  id: 'spell-ghost',
+  name: '鬼蜮',
+  summary: '这片地上倒下的敌人会被拉起来，替布阵者效力。',
+  tags: ['field'],
+  hidden: false,
+};
+
+export const SPELL_TINT_MARK: MarkKindDef = {
+  id: 'spell-tint',
+  name: '魔染',
+  summary: '站在这里的敌人每回合被染上一层，两层就会倒戈。',
+  tags: ['field'],
+  hidden: false,
+};
+
 /** 这个包贡献的全部留痕种类（在 `cultivation-packs.ts` 里挂到 Expansion 上） */
 export const CULTIVATION_MARK_KINDS: MarkKindDef[] = [
   SPELL_FIRE_MARK,
   SPELL_BLADE_MARK,
   SPELL_EDICT_MARK,
   SPELL_QI_SPRING_MARK,
+  SPELL_GHOST_MARK,
+  SPELL_TINT_MARK,
 ];

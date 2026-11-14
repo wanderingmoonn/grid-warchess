@@ -709,14 +709,40 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
        * 不截断就会把左边的技能说明挤成一列竖排的字——玩家读不出这是哪个法术。
        */
       const statusBrief = status.split(/[（(：:]/)[0]!.trim();
+      const inner =
+        `<span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>` +
+        `<span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>` +
+        `<span class="price" title="${escapeHtml(status)}">${escapeHtml(statusBrief)}</span>`;
+      const title = `${def.name} · ${k.def.name}｜${k.def.summary.replace(/<[^>]+>/g, '')}｜${status}`;
+
+      /*
+       * 要填一个值的技能（SkillDef.input）：行本身变成**静态卡片**，
+       * 下面单独一行"输入框 + 施放"。
+       *
+       * 不把 input 塞进按钮里：那是嵌套交互元素，点输入框会连带触发按钮的点击
+       * ——玩家还没打完字，法术就已经放出去了。
+       */
+      if (k.def.input) {
+        const kind = k.def.input.kind === 'number' ? 'number' : 'text';
+        rows.push(
+          `<div class="skill-item">
+             <div class="recruit-btn skill-btn is-static" title="${escapeHtml(title)}">${inner}</div>
+             <div class="skill-input-row">
+               <input class="skill-input" type="${kind}" inputmode="${kind === 'number' ? 'numeric' : 'text'}"
+                 placeholder="${escapeHtml(k.def.input.label)}"
+                 ${k.ready ? '' : 'disabled'} />
+               <button class="btn btn-sm" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}"
+                 ${k.ready ? '' : 'disabled'}>施放</button>
+             </div>
+           </div>`,
+        );
+        continue;
+      }
+
       rows.push(
         `<button class="recruit-btn skill-btn" data-act="hero-skill" data-id="${u.id}" data-skill="${k.def.id}" ${
           k.ready ? '' : 'disabled'
-        } title="${escapeHtml(`${def.name} · ${k.def.name}｜${k.def.summary.replace(/<[^>]+>/g, '')}｜${status}`)}">
-           <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
-           <span class="meta"><b>${def.name} · ${k.def.name}${chargeNote}</b><span>${escapeHtml(k.def.summary)}</span></span>
-           <span class="price" title="${escapeHtml(status)}">${escapeHtml(statusBrief)}</span>
-         </button>`,
+        } title="${escapeHtml(title)}">${inner}</button>`,
       );
     }
   }

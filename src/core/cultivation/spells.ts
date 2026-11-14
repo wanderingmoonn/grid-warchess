@@ -104,6 +104,137 @@ import {
   YU_FENG_SHU_MIN_RANK,
   YU_FENG_SHU_SKILL,
 } from './skills/buff.ts';
+import { WUXING_SPELLS } from './skills/wuxing.ts';
+import {
+  LIAN_HUA_COST,
+  LIAN_HUA_MIN_RANK,
+  LIAN_HUA_SKILL,
+  SU_YIN_GUO_COST,
+  SU_YIN_GUO_MIN_RANK,
+  SU_YIN_GUO_SKILL,
+  TIAN_YU_BU_QU_COST,
+  TIAN_YU_BU_QU_MIN_RANK,
+  TIAN_YU_BU_QU_SKILL,
+} from './skills/strike-bonus.ts';
+import {
+  LIAN_LING_COST,
+  LIAN_LING_MIN_RANK,
+  LIAN_LING_SKILL,
+  XING_WAN_LI_COST,
+  XING_WAN_LI_MIN_RANK,
+  XING_WAN_LI_SKILL,
+} from './skills/economy.ts';
+import {
+  FU_ZHI_DAO_COST,
+  FU_ZHI_DAO_MIN_RANK,
+  FU_ZHI_DAO_SKILL,
+  JU_HUN_SUO_MING_COST,
+  JU_HUN_SUO_MING_MIN_RANK,
+  JU_HUN_SUO_MING_SKILL,
+  QIAN_YIN_SHU_COST,
+  QIAN_YIN_SHU_MIN_RANK,
+  QIAN_YIN_SHU_SKILL,
+} from './skills/pull.ts';
+import {
+  HU_TI_LING_GUANG_COST,
+  HU_TI_LING_GUANG_MIN_RANK,
+  HU_TI_LING_GUANG_SKILL,
+} from './skills/shield.ts';
+import {
+  TI_SI_ZHUAN_SHENG_COST,
+  TI_SI_ZHUAN_SHENG_MIN_RANK,
+  TI_SI_ZHUAN_SHENG_SKILL,
+  WANG_CHUAN_NI_LIU_COST,
+  WANG_CHUAN_NI_LIU_MIN_RANK,
+  WANG_CHUAN_NI_LIU_SKILL,
+  ZHU_JIAO_GUANG_HUAN_COST,
+  ZHU_JIAO_GUANG_HUAN_MIN_RANK,
+  ZHU_JIAO_GUANG_HUAN_SKILL,
+} from './skills/revive.ts';
+import {
+  SA_DOU_CHENG_BING_COST,
+  SA_DOU_CHENG_BING_MIN_RANK,
+  SA_DOU_CHENG_BING_SKILL,
+} from './skills/summon.ts';
+import {
+  DAO_HUA_MO_RAN_COST,
+  DAO_HUA_MO_RAN_MIN_RANK,
+  DAO_HUA_MO_RAN_SKILL,
+  FENG_DU_GUI_YU_COST,
+  FENG_DU_GUI_YU_MIN_RANK,
+  FENG_DU_GUI_YU_SKILL,
+  TAI_ZHONG_ZHI_MI_COST,
+  TAI_ZHONG_ZHI_MI_MIN_RANK,
+  TAI_ZHONG_ZHI_MI_SKILL,
+  XIN_MO_ZHONG_DAO_COST,
+  XIN_MO_ZHONG_DAO_MIN_RANK,
+  XIN_MO_ZHONG_DAO_SKILL,
+  XUE_MAI_QIN_SHI_COST,
+  XUE_MAI_QIN_SHI_MIN_RANK,
+  XUE_MAI_QIN_SHI_SKILL,
+} from './skills/convert.ts';
+import {
+  DAO_SAN_QIAN_COST,
+  DAO_SAN_QIAN_MIN_RANK,
+  DAO_SAN_QIAN_SKILL,
+  PO_SUI_XU_KONG_COST,
+  PO_SUI_XU_KONG_MIN_RANK,
+  PO_SUI_XU_KONG_SKILL,
+  QIONG_JI_COST,
+  QIONG_JI_MIN_RANK,
+  QIONG_JI_SKILL,
+  WAN_ZU_ZHI_JIE_COST,
+  WAN_ZU_ZHI_JIE_MIN_RANK,
+  WAN_ZU_ZHI_JIE_SKILL,
+  YI_YUAN_FU_SHI_COST,
+  YI_YUAN_FU_SHI_MIN_RANK,
+  YI_YUAN_FU_SHI_SKILL,
+  ZHU_XIE_BI_YI_COST,
+  ZHU_XIE_BI_YI_MIN_RANK,
+  ZHU_XIE_BI_YI_SKILL,
+  TIAN_XIA_JIE_BAI_COST,
+  TIAN_XIA_JIE_BAI_MIN_RANK,
+  TIAN_XIA_JIE_BAI_SKILL,
+  PING_DENG_TU_TENG_COST,
+  PING_DENG_TU_TENG_MIN_RANK,
+  PING_DENG_TU_TENG_SKILL,
+  JUE_DI_TIAN_TONG_COST,
+  JUE_DI_TIAN_TONG_MIN_RANK,
+  JUE_DI_TIAN_TONG_SKILL,
+  FA_XIANG_TIAN_DI_COST,
+  FA_XIANG_TIAN_DI_MIN_RANK,
+  FA_XIANG_TIAN_DI_SKILL,
+} from './skills/rewrite.ts';
+import {
+  DING_TOU_QI_JIAN_COST,
+  DING_TOU_QI_JIAN_MIN_RANK,
+  DING_TOU_QI_JIAN_SKILL,
+  HU_MING_LUO_MA_COST,
+  HU_MING_LUO_MA_MIN_RANK,
+  HU_MING_LUO_MA_SKILL,
+  ZHAN_XIAN_FEI_DAO_COST,
+  ZHAN_XIAN_FEI_DAO_MIN_RANK,
+  ZHAN_XIAN_FEI_DAO_SKILL,
+} from './skills/record.ts';
+import {
+  ZHANG_GUAN_LI_DAI_COST,
+  ZHANG_GUAN_LI_DAI_MIN_RANK,
+  ZHANG_GUAN_LI_DAI_SKILL,
+} from './skills/transfer.ts';
+import {
+  HUA_SHEN_FEN_SHEN_COST,
+  HUA_SHEN_FEN_SHEN_MIN_RANK,
+  HUA_SHEN_FEN_SHEN_SKILL,
+  HUN_DENG_COST,
+  HUN_DENG_MIN_RANK,
+  HUN_DENG_SKILL,
+  TI_JIE_LING_SHEN_COST,
+  TI_JIE_LING_SHEN_MIN_RANK,
+  TI_JIE_LING_SHEN_SKILL,
+  ZHONG_MIAO_ZHI_MEN_COST,
+  ZHONG_MIAO_ZHI_MEN_MIN_RANK,
+  ZHONG_MIAO_ZHI_MEN_SKILL,
+} from './skills/summon.ts';
 import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
 
 /** 一条法术的元数据。`skill` 是它作为技能那一面的全部数据 */
@@ -222,6 +353,76 @@ export const SPELLS: readonly SpellDef[] = [
   { skill: TI_SHU_SKILL, cost: TI_SHU_COST, minRank: TI_SHU_MIN_RANK },
   { skill: TIAN_MO_JIE_TI_SKILL, cost: TIAN_MO_JIE_TI_COST, minRank: TIAN_MO_JIE_TI_MIN_RANK },
   { skill: YU_FENG_SHU_SKILL, cost: YU_FENG_SHU_COST, minRank: YU_FENG_SHU_MIN_RANK },
+  // ── 族 5 · 五行免耗（2026-11-14）──────────────────────
+  //
+  // 七条只差两个参数（免几次 / 按什么关系），所以是**一张表摊出来的**，
+  // 不用逐条手写（见 wuxing.ts 的 ROWS_DEF）。
+  ...WUXING_SPELLS,
+  // ── 族 7 · 攻击附加（2026-11-14）──────────────────────
+  { skill: TIAN_YU_BU_QU_SKILL, cost: TIAN_YU_BU_QU_COST, minRank: TIAN_YU_BU_QU_MIN_RANK },
+  { skill: LIAN_HUA_SKILL, cost: LIAN_HUA_COST, minRank: LIAN_HUA_MIN_RANK },
+  { skill: SU_YIN_GUO_SKILL, cost: SU_YIN_GUO_COST, minRank: SU_YIN_GUO_MIN_RANK },
+  // ── 族 9 · 资源经济（2026-11-14）──────────────────────
+  { skill: LIAN_LING_SKILL, cost: LIAN_LING_COST, minRank: LIAN_LING_MIN_RANK },
+  { skill: XING_WAN_LI_SKILL, cost: XING_WAN_LI_COST, minRank: XING_WAN_LI_MIN_RANK },
+  // ── 族 4 · 拉拽（2026-11-14）──────────────────────
+  { skill: QIAN_YIN_SHU_SKILL, cost: QIAN_YIN_SHU_COST, minRank: QIAN_YIN_SHU_MIN_RANK },
+  { skill: FU_ZHI_DAO_SKILL, cost: FU_ZHI_DAO_COST, minRank: FU_ZHI_DAO_MIN_RANK },
+  { skill: JU_HUN_SUO_MING_SKILL, cost: JU_HUN_SUO_MING_COST, minRank: JU_HUN_SUO_MING_MIN_RANK },
+  // ── 护盾（2026-11-14）──────────────────────────────
+  //
+  // 作者澄清：护体灵光是**盾**，不是召唤物——有它自己的护甲和血量，盾碎那一击
+  // 的溢出也被吃掉。所以它不在族 8（召唤）里，走的是核心的 `absorbDamage` 钩子。
+  { skill: HU_TI_LING_GUANG_SKILL, cost: HU_TI_LING_GUANG_COST, minRank: HU_TI_LING_GUANG_MIN_RANK },
+  // ── 族 11 · 死亡触发（2026-11-14）────────────────────
+  //
+  // 主角光环 / 替死转生是**免死**：放回去的是同一个对象，境界经验寿元全在。
+  // 忘川逆流是**招魂**：从 `s.fallen` 造新形体，修为不随形体回来。
+  { skill: ZHU_JIAO_GUANG_HUAN_SKILL, cost: ZHU_JIAO_GUANG_HUAN_COST, minRank: ZHU_JIAO_GUANG_HUAN_MIN_RANK },
+  { skill: TI_SI_ZHUAN_SHENG_SKILL, cost: TI_SI_ZHUAN_SHENG_COST, minRank: TI_SI_ZHUAN_SHENG_MIN_RANK },
+  { skill: WANG_CHUAN_NI_LIU_SKILL, cost: WANG_CHUAN_NI_LIU_COST, minRank: WANG_CHUAN_NI_LIU_MIN_RANK },
+  // ── 族 8 · 召唤（2026-11-14，先一条）──────────────────
+  { skill: SA_DOU_CHENG_BING_SKILL, cost: SA_DOU_CHENG_BING_COST, minRank: SA_DOU_CHENG_BING_MIN_RANK },
+  // 另外四条是**绑定**：替劫（代受伤害）、化身（可行动+经验回流）、
+  // 众妙之门（光环建筑）、魂灯（死亡锚点）。共用"造出来"，剩下的各写各的。
+  { skill: TI_JIE_LING_SHEN_SKILL, cost: TI_JIE_LING_SHEN_COST, minRank: TI_JIE_LING_SHEN_MIN_RANK },
+  { skill: HUA_SHEN_FEN_SHEN_SKILL, cost: HUA_SHEN_FEN_SHEN_COST, minRank: HUA_SHEN_FEN_SHEN_MIN_RANK },
+  { skill: ZHONG_MIAO_ZHI_MEN_SKILL, cost: ZHONG_MIAO_ZHI_MEN_COST, minRank: ZHONG_MIAO_ZHI_MEN_MIN_RANK },
+  { skill: HUN_DENG_SKILL, cost: HUN_DENG_COST, minRank: HUN_DENG_MIN_RANK },
+  // ── 族 10 · 转化 / 策反（2026-11-14）────────────────────
+  //
+  // 五条只差"什么时候变"：倒计时 / 受伤 / 侵蚀致死 / 死在我的地上 / 染满两层。
+  // 换主一律走 `api.convert`（规则层唯一出口），境界技能丹药全保留。
+  { skill: TAI_ZHONG_ZHI_MI_SKILL, cost: TAI_ZHONG_ZHI_MI_COST, minRank: TAI_ZHONG_ZHI_MI_MIN_RANK },
+  { skill: XIN_MO_ZHONG_DAO_SKILL, cost: XIN_MO_ZHONG_DAO_COST, minRank: XIN_MO_ZHONG_DAO_MIN_RANK },
+  { skill: XUE_MAI_QIN_SHI_SKILL, cost: XUE_MAI_QIN_SHI_COST, minRank: XUE_MAI_QIN_SHI_MIN_RANK },
+  { skill: FENG_DU_GUI_YU_SKILL, cost: FENG_DU_GUI_YU_COST, minRank: FENG_DU_GUI_YU_MIN_RANK },
+  { skill: DAO_HUA_MO_RAN_SKILL, cost: DAO_HUA_MO_RAN_COST, minRank: DAO_HUA_MO_RAN_MIN_RANK },
+  // ── 簇 C · 规则豁免与全局改写（2026-11-14）──────────────
+  //
+  // 这几条改的是规则而不是数值：学法术的门槛、身上挂着的东西、攻击次数、
+  // 攻击力怎么算、射程管不管用。四条"要动地基"的（平等图腾/天下皆白/
+  // 绝地天通/法相天地）还没做，原因写在 rewrite.ts 的文件头。
+  { skill: DAO_SAN_QIAN_SKILL, cost: DAO_SAN_QIAN_COST, minRank: DAO_SAN_QIAN_MIN_RANK },
+  { skill: YI_YUAN_FU_SHI_SKILL, cost: YI_YUAN_FU_SHI_COST, minRank: YI_YUAN_FU_SHI_MIN_RANK },
+  { skill: ZHU_XIE_BI_YI_SKILL, cost: ZHU_XIE_BI_YI_COST, minRank: ZHU_XIE_BI_YI_MIN_RANK },
+  { skill: WAN_ZU_ZHI_JIE_SKILL, cost: WAN_ZU_ZHI_JIE_COST, minRank: WAN_ZU_ZHI_JIE_MIN_RANK },
+  { skill: PO_SUI_XU_KONG_SKILL, cost: PO_SUI_XU_KONG_COST, minRank: PO_SUI_XU_KONG_MIN_RANK },
+  { skill: QIONG_JI_SKILL, cost: QIONG_JI_COST, minRank: QIONG_JI_MIN_RANK },
+  // 三条"全局改写"（2026-11-14，口径由作者当场定）
+  { skill: TIAN_XIA_JIE_BAI_SKILL, cost: TIAN_XIA_JIE_BAI_COST, minRank: TIAN_XIA_JIE_BAI_MIN_RANK },
+  { skill: PING_DENG_TU_TENG_SKILL, cost: PING_DENG_TU_TENG_COST, minRank: PING_DENG_TU_TENG_MIN_RANK },
+  { skill: JUE_DI_TIAN_TONG_SKILL, cost: JUE_DI_TIAN_TONG_COST, minRank: JUE_DI_TIAN_TONG_MIN_RANK },
+  { skill: FA_XIANG_TIAN_DI_SKILL, cost: FA_XIANG_TIAN_DI_COST, minRank: FA_XIANG_TIAN_DI_MIN_RANK },
+  // ── 簇 B · 记录与延迟处决 + 呼名落马术（2026-11-14）──────
+  //
+  // 这三条里两条要玩家先填值（G5）：`SkillDef.input` 决定面板多一行输入框，
+  // 规则层在空值时直接拒（理由在 doHeroSkill 里统一给）。
+  { skill: ZHAN_XIAN_FEI_DAO_SKILL, cost: ZHAN_XIAN_FEI_DAO_COST, minRank: ZHAN_XIAN_FEI_DAO_MIN_RANK },
+  { skill: DING_TOU_QI_JIAN_SKILL, cost: DING_TOU_QI_JIAN_COST, minRank: DING_TOU_QI_JIAN_MIN_RANK },
+  { skill: HU_MING_LUO_MA_SKILL, cost: HU_MING_LUO_MA_COST, minRank: HU_MING_LUO_MA_MIN_RANK },
+  // 簇 D · 效果转移（2026-11-14）：改的是两个"目标入口"，不是一张影响清单
+  { skill: ZHANG_GUAN_LI_DAI_SKILL, cost: ZHANG_GUAN_LI_DAI_COST, minRank: ZHANG_GUAN_LI_DAI_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */
@@ -389,7 +590,14 @@ export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): strin
   if (!isResearched(s, u.owner, spell.skill.id)) {
     return `本方还没研发「${spell.skill.name}」——先在宗门大殿里研发它`;
   }
-  if (spell.schools && !spell.schools.includes(u.type)) {
+  /*
+   * 大道三千：参过这一门的人，学法术时**不受流派限制**。
+   *
+   * 闸设在"学"这一侧而不是法术自己身上：流派限制是 `spell.schools` 这道数据，
+   * 由这里统一判。让每一条想"无视流派"的法术各自去绕，等于把同一道闸抄 26 遍。
+   */
+  const daoAll = u.custom?.['daoAll'] === true;
+  if (!daoAll && spell.schools && !spell.schools.includes(u.type)) {
     return `这一门只有${spell.schools.map((id) => s.unitTypes[id]?.name ?? id).join('、')}学得会`;
   }
   // 境界门槛：比法术位更硬的一条。法术位管"背得下几门"，这条管"够不够格学"。

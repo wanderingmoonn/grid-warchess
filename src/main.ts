@@ -214,7 +214,7 @@ initTerrainArt();
  * 于是「挪移」只能往身边一格挪——技能数据里的 `targeting: 'point'` 白写了。
  */
 let pendingSkill:
-  | { unitId: string; skillId: string; targeting: 'point' | 'direction' }
+  | { unitId: string; skillId: string; targeting: 'point' | 'direction'; input?: string }
   | null = null;
 
 /**
@@ -3701,6 +3701,8 @@ function onBoardClick(e: Event): void {
         skillId,
         targetX: coords.x,
         targetY: coords.y,
+        // 需要输入值的技能（钉头七箭书）：把"点按钮那一刻填的值"带进瞄准后的这一发
+        input: pendingSkill?.input,
       });
 
       // 放完之后还放不放得出去：
@@ -4603,6 +4605,16 @@ function handleAction(act: string, el: HTMLElement): void {
       const skillId = el.dataset.skill;
       if (!unitId || !skillId) return;
 
+      /*
+       * 需要输入值的技能：从**同一行**的输入框里取值。
+       *
+       * 为什么要在这里读而不是把值写进 state：面板每次渲染都会重建 DOM，
+       * 而玩家打字不触发渲染——值就存在那个 input 里，点"施放"那一刻才取。
+       * 取不到（空着）就交给规则层拒：理由文案在 `doHeroSkill` 里统一给。
+       */
+      const inputEl = el.parentElement?.querySelector<HTMLInputElement>('.skill-input');
+      const inputValue = inputEl ? inputEl.value : undefined;
+
       // 去兵种表里查出这个技能的原始数据
       const unit = state.units.find(u => u.id === unitId);
       /*
@@ -4637,7 +4649,7 @@ function handleAction(act: string, el: HTMLElement): void {
           if (want && want !== activeBoardId && hasBoard(state, want)) switchBoard(want);
         }
 
-        pendingSkill = { unitId, skillId, targeting };
+        pendingSkill = { unitId, skillId, targeting, input: inputValue };
         refreshSelection(); // 刷新高亮
         toast(
           targeting === 'point'
@@ -4651,7 +4663,7 @@ function handleAction(act: string, el: HTMLElement): void {
       }
 
       // 没声明需要选点，或者找不到数据，维持原来的直接释放
-      dispatch({ type: 'HERO_SKILL', unitId, skillId });
+      dispatch({ type: 'HERO_SKILL', unitId, skillId, input: inputValue });
       render();
       return;
     }

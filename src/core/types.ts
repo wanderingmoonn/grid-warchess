@@ -189,6 +189,19 @@ export interface SkillDef {
   name: string;
   /** 一句话说明，直接印在按钮上——玩家点之前要能看懂会发生什么 */
   summary: string;
+  /**
+   * 这个技能要玩家先填一个值（数字或文字）。
+   *
+   * 为什么放在 `SkillDef` 而不是每条技能自己画界面：界面**由数据决定**才不会
+   * 漏——新增一条要输入的法术，只要写这个字段，面板就会自动多出一个输入框；
+   * 而引擎那边（`doHeroSkill`）也会在缺输入时直接拒绝，不会带着空值跑到底。
+   */
+  input?: {
+    kind: 'number' | 'text';
+    /** 输入框的提示语（"猜他的年龄"） */
+    label: string;
+    placeholder?: string;
+  };
   effect: SkillEffect;
   /**
    * 冷却：用完之后要等几个自己的回合。1 表示下回合就能再用。
@@ -2247,7 +2260,15 @@ type ActionBase =
    */
   | { type: 'DISBAND'; unitId: string }
   /** 英雄技能：谁放、放哪个 */
-  | { type: 'HERO_SKILL'; unitId: string; skillId: string; targetX?: number; targetY?: number }
+  | {
+      type: 'HERO_SKILL';
+      unitId: string;
+      skillId: string;
+      targetX?: number;
+      targetY?: number;
+      /** 需要输入值的技能（钉头七箭书猜年龄、呼名落马术报名号） */
+      input?: string;
+    }
   /**
    * 扩展自定义的"单位操作"（学法术、遗忘法术、传功……）。
    *
