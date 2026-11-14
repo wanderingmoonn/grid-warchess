@@ -802,9 +802,11 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
    * 两侧各铺一半、边界线上的颜色正好是两档的中点。
    *
    * 这条钉两件事：
-   *   1. 方向要对（`d` = 我在浅水这侧、叠深色；`l` = 我在深水这侧、叠浅色）；
-   *   2. **同档之间不标**——标了就会在浅水和浅水之间平白多一道坡。
-   *      "水域"和"浅流"算同一档（色差本来就小）。
+   *   1. 方向要对。2026-11-14 起三档分开排（浅流 1 / 水域 2 / 深水 3），
+   *      标记值改成**邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水。
+   *      以前只有 `d`/`l` 两个字母，而且浅流与水域算同档、互相不铺——
+   *      可它俩一个青一个蓝，硬拼仍是刀切边（用户看过截图后提的）。
+   *   2. **同档之间不标**——标了就会在同一种水之间平白多一道坡。
    */
   const host = doc.createElement('div');
   const st = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['naval-fleet'] }, 313);
@@ -817,8 +819,9 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   put(1, 0, 'deep');
   put(2, 0, 'water');
   put(3, 0, 'water');
-  // 第 1 行：深 浅（竖直方向）
+  // 第 1 行：深 浅（竖直方向）；(3,1) 固定成水域，别让生成的地形左右断言
   put(1, 1, 'shallow');
+  put(3, 1, 'water');
 
   const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
@@ -847,8 +850,8 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
 
   const tile = (x: number, y: number) => host.querySelector(`.tile[data-x="${x}"][data-y="${y}"]`)!;
 
-  // (1,0) 深水：右边是水域 → 该朝右铺浅色；左边是深水 → 不铺
-  assert.equal(tile(1, 0).getAttribute('data-wr'), 'l', '深水挨浅水，右边该叠浅色');
+  // (1,0) 深水：右边是水域 → 朝右铺"水域色"；左边是深水 → 不铺
+  assert.equal(tile(1, 0).getAttribute('data-wr'), 'w', '深水挨水域，右边该叠水域色');
   assert.equal(tile(1, 0).getAttribute('data-wl'), '0', '左边还是深水，不该铺');
   // (2,0) 水域：左边是深水 → 朝左叠深色
   assert.equal(tile(2, 0).getAttribute('data-wl'), 'd', '浅水挨深水，左边该叠深色');
@@ -856,10 +859,10 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   assert.equal(tile(0, 0).getAttribute('data-wr'), '0', '同档之间不铺');
   // (3,0) 水域：左边是水域（同档），下边也按同档算 → 不铺
   assert.equal(tile(3, 0).getAttribute('data-wl'), '0', '水域之间不铺');
-  // (1,0) 下面是浅流：浅流和深水不同档，要铺（竖直方向也要连上）
-  assert.equal(tile(1, 0).getAttribute('data-wb'), 'l', '深水挨浅流，下边也该叠浅色');
-  // (3,0) 下面是水域：水域和浅流算同档，不铺
-  assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和浅流算同一档，不铺');
+  // (1,0) 下面是浅流：浅流是独立一档，要铺浅流色（竖直方向也要连上）
+  assert.equal(tile(1, 0).getAttribute('data-wb'), 's', '深水挨浅流，下边该叠浅流色');
+  // (3,0) 下面是水域：同档，不铺
+  assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和水域不铺');
   host.remove();
 });
 
