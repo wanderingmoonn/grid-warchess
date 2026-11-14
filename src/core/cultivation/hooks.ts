@@ -9,7 +9,8 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
-import { isStunned } from './spell-statuses.ts';
+import { isStunned, spellBuffsOf } from './spell-statuses.ts';
+import { marksOf } from '../marks.ts';
 import { exchangeMana, qiAt, qiOverlayCells, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
 import {
   PILLS,
@@ -129,7 +130,17 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	},
 	modifyDamage: ({ state, attacker, damage }) => {
     if (!isCultivatorUnit(state, attacker)) return damage;
-    return damage + Math.floor(atkModifier(attacker) * swordMul(attacker));
+    let out = damage + Math.floor(atkModifier(attacker) * swordMul(attacker));
+    /*
+     * 族 6 的临时加成。放在这里而不是 `modifyStatAtk`：
+     *   · 体术的 ×3 是"打出来的伤害"，不是面板攻击力——写进面板会让玩家
+     *     按 ×3 去算攻城和反击，而那两条走的是别的钩子。
+     *   · 御风术加的是"本回合移动格数"，只有伤害结算这一拍才知道要不要加。
+     */
+    const buff = spellBuffsOf(attacker);
+    if (buff.atkMul) out = Math.floor(out * buff.atkMul);
+    if (buff.wind) out += attacker.moveSpent ?? 0;
+    return out;
   },
 	modifySiegeDamage: ({ state, attacker, damage }) => {
     if (!isCultivatorUnit(state, attacker)) return damage;
@@ -161,7 +172,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 射程修正
 	modifyRange: ({ state, unit, range }) => {
 		if (!isCultivatorUnit(state, unit)) return range;
-		return range + RangeModifier(unit);
+		// 灵目术的 +N 格（走 buff，不走兵种表）
+		return range + RangeModifier(unit) + (spellBuffsOf(unit).range ?? 0);
 	},
 	// ── 额外视野：异象点亮的那一格 ──────────────────
 	// 这是**纯函数**，会被寻路、威胁圈、记忆刷新反复调用，所以
@@ -176,7 +188,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 视野修正
 	modifyVision: ({ state, unit, base }) => {
 		if (!unit || !isCultivatorUnit(state, unit)) return base;
-		return Math.max(1, base + VisionModifier(unit));
+		return Math.max(1, base + VisionModifier(unit) + (spellBuffsOf(unit).vision ?? 0));
 	},
 	// 攻击次数
 	modifyAttacks: ({ state, unit, attacks }) => {
@@ -184,14 +196,14 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
       return (unit.custom?.burstCharges as number) ?? 0;
     }
 		if (isCultivatorUnit(state, unit)) {
-		  return attacks + attTimesModifier(unit);
+		  return attacks + attTimesModifier(unit) + (spellBuffsOf(unit).attacks ?? 0);
     }
     return attacks;
 	},
 	// 溅射半径
 	modifySplash: ({ state, attacker, splash }) => {
 		if (!isCultivatorUnit(state, attacker)) return splash;
-		return splash+SplashModifier(attacker);
+		return splash + SplashModifier(attacker) + (spellBuffsOf(attacker).splash ?? 0);
 	},
 	// 移动修正
 	modifyMove: ({ state, unit, move, visionOf }) => {
@@ -205,7 +217,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			return Math.max(1, Math.floor(move * ARTIFACT_MOVE_MUL));
 		}
 		if (!isCultivatorUnit(state, unit)) return move;
-		return move + moveModifier(unit);
+		// 天魔解体的移动力加成也走 buff（「大幅提升移动速度」）
+		return move + moveModifier(unit) + (spellBuffsOf(unit).move ?? 0);
 	},
   modifyYield: ({ state, unit, yields }) => {
     if (unit.type !== UNIT_IDS.SPIRIT_MINE) return yields;
@@ -240,6 +253,19 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 定价必须走钩子而不是写死在兵种表上：同一件修士，城市产线仍然卖金币，
 	// 只有宗门这一条线收灵石。这就是 `source` 那个参数存在的全部理由。
 	produceBlocked: ({ state, source, target }) => {
+		// ① 山河敕令压住的地方不许兴建（任何产兵点都不行）
+		const owner = source.kind === 'city' ? source.city.owner : source.camp.owner;
+		const at = source.kind === 'city' ? source.city : source.camp;
+		for (const m of marksOf(state)) {
+			if (m.kind !== 'spell-edict' || m.owner === owner) continue;
+			if (m.x !== at.x || m.y !== at.y) continue;
+			const cust = (m.custom ?? {}) as { caster?: string; cx?: number; cy?: number };
+			const caster = cust.caster ? state.units.find((u) => u.id === cust.caster) : undefined;
+			if (!caster || caster.x !== cust.cx || caster.y !== cust.cy) continue;
+			return '山河敕令压着这片地，无法兴建';
+		}
+
+		// ② 宗门只收修士弟子（原来的规则，顺序不能换：敕令比"收谁"更根本）
 		if (source.kind !== 'camp') return null;
 		if (state.unitTypes[source.camp.type]?.id !== SECT_ID) return null;
 		if (!isCultivatorDef(target)) return `${state.unitTypes[source.camp.type].name}只收修士弟子`;
@@ -549,6 +575,17 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 封印优先于麻痹报理由——封印是持续状态，麻痹只是这一回合的事，
 	// 先告诉玩家更根本的那条。
 	canCommand: ({ state, unit }) => sealedReasonOf(state, unit) ?? (isStunned(unit) ? '麻痹中，无法行动' : null),
+	/*
+	 * 山河敕令压住的地不能兴建。
+	 *
+	 * 判据和留痕那边一致：**施法者还站在原地**才算数（人走了场就散了，
+	 * 只是散场的时机在回合结算，这里不能再等那一拍，所以自己复核一次）。
+	 * 只封别人的敕令——自己人的场地当然不挡自己。
+	 */
+	/*
+	 * 山河敕令压住的地不能兴建 —— 已经并进上面那个 `produceBlocked` 的 ① 段。
+	 * 同一个钩子只能有一个实现，分两处写会互相覆盖（TS 也会直接报重复键）。
+	 */
 	getUnitPanelLines: ({ state, unit, viewer }) => {
 		const lines = getCultivationPanelLines(state, unit, viewer);
 		const sealed = sealedReasonOf(state, unit);

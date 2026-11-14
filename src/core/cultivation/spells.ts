@@ -32,8 +32,9 @@ import { resOf } from '../resources.ts';
 import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { getRank } from './progression.ts';
-import { PALM_THUNDER_COST, PALM_THUNDER_SKILL } from './skills/palm-thunder.ts';
 import {
+  PALM_THUNDER_COST,
+  PALM_THUNDER_SKILL,
   MIE_SHEN_QIANG_COST,
   MIE_SHEN_QIANG_MIN_RANK,
   MIE_SHEN_QIANG_SKILL,
@@ -70,14 +71,40 @@ import {
   ZHAI_XING_NA_YUE_COST,
   ZHAI_XING_NA_YUE_MIN_RANK,
   ZHAI_XING_NA_YUE_SKILL,
-} from './skills/blast.ts';
-import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
-import {
   GANG_WIND_COST,
   GANG_WIND_MIN_RANK,
   GANG_WIND_RESEARCH_COST,
   GANG_WIND_SKILL,
-} from './skills/gang-wind.ts';
+} from './skills/blast.ts';
+import {
+  SHI_FANG_HUO_HAI_COST,
+  SHI_FANG_HUO_HAI_MIN_RANK,
+  SHI_FANG_HUO_HAI_SKILL,
+  WAN_REN_DAO_SHAN_COST,
+  WAN_REN_DAO_SHAN_MIN_RANK,
+  WAN_REN_DAO_SHAN_SKILL,
+  SHAN_HE_CHI_LING_COST,
+  SHAN_HE_CHI_LING_MIN_RANK,
+  SHAN_HE_CHI_LING_SKILL,
+  CHUN_FENG_HUA_YU_COST,
+  CHUN_FENG_HUA_YU_MIN_RANK,
+  CHUN_FENG_HUA_YU_SKILL,
+} from './skills/field.ts';
+import {
+  LING_MU_SHU_COST,
+  LING_MU_SHU_MIN_RANK,
+  LING_MU_SHU_SKILL,
+  TI_SHU_COST,
+  TI_SHU_MIN_RANK,
+  TI_SHU_SKILL,
+  TIAN_MO_JIE_TI_COST,
+  TIAN_MO_JIE_TI_MIN_RANK,
+  TIAN_MO_JIE_TI_SKILL,
+  YU_FENG_SHU_COST,
+  YU_FENG_SHU_MIN_RANK,
+  YU_FENG_SHU_SKILL,
+} from './skills/buff.ts';
+import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
 
 /** 一条法术的元数据。`skill` 是它作为技能那一面的全部数据 */
 export interface SpellDef {
@@ -178,6 +205,23 @@ export const SPELLS: readonly SpellDef[] = [
   { skill: XIN_SKILL, cost: XIN_COST, minRank: WU_XING_SPELL_MIN_RANK },
   { skill: MIAO_SKILL, cost: MIAO_COST, minRank: WU_XING_SPELL_MIN_RANK },
   { skill: SEN_SKILL, cost: SEN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  // ── 族 3 · 场域（2026-11-14）──────────────────────────
+  //
+  // 这两门自己不结算伤害：只把留痕放到格子上，之后由 core/marks.ts 在
+  // "有人走进来"和"每轮开始"时触发（见 spell-marks.ts）。
+  { skill: SHI_FANG_HUO_HAI_SKILL, cost: SHI_FANG_HUO_HAI_COST, minRank: SHI_FANG_HUO_HAI_MIN_RANK },
+  { skill: WAN_REN_DAO_SHAN_SKILL, cost: WAN_REN_DAO_SHAN_COST, minRank: WAN_REN_DAO_SHAN_MIN_RANK },
+  { skill: SHAN_HE_CHI_LING_SKILL, cost: SHAN_HE_CHI_LING_COST, minRank: SHAN_HE_CHI_LING_MIN_RANK },
+  { skill: CHUN_FENG_HUA_YU_SKILL, cost: CHUN_FENG_HUA_YU_COST, minRank: CHUN_FENG_HUA_YU_MIN_RANK },
+  // ── 族 6 · 自身增益（2026-11-14）──────────────────────
+  //
+  // 四条都不需要选点（`targeting: 'none'`）：加在自己身上。
+  // 数值挂在 `Unit.custom.spellBuff`，状态 `spell-buff` 只数回合——
+  // 因为 `StatusDef.modifyAtk` 引擎还没接上，写进状态里会"面板有、伤害没有"。
+  { skill: LING_MU_SHU_SKILL, cost: LING_MU_SHU_COST, minRank: LING_MU_SHU_MIN_RANK },
+  { skill: TI_SHU_SKILL, cost: TI_SHU_COST, minRank: TI_SHU_MIN_RANK },
+  { skill: TIAN_MO_JIE_TI_SKILL, cost: TIAN_MO_JIE_TI_COST, minRank: TIAN_MO_JIE_TI_MIN_RANK },
+  { skill: YU_FENG_SHU_SKILL, cost: YU_FENG_SHU_COST, minRank: YU_FENG_SHU_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */

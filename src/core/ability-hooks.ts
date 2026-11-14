@@ -135,7 +135,19 @@ export interface AbilityApi {
     s: GameState,
     target: Unit,
     amount: number,
-    opts?: { source?: Unit; logText?: string | ((dealt: number) => string) },
+    opts?: {
+      source?: Unit;
+      logText?: string | ((dealt: number) => string);
+      /**
+       * **内生损耗**：自己伤自己（施法代价、反噬）。
+       *
+       * 只跳过两件事：伤害转移、受伤钩子。护甲照旧不吃——这是"该掉多少血"
+       * 的语义（见文件顶部 hurt / hurtPhysical 的分工）。
+       * 状态结算那边早就在用同一条语义（`StatusTickCtx.hurt`），这里只是把
+       * 同一个口子开给技能，免得它们各自 `hp -=` 绕开统一出口。
+       */
+      attrition?: boolean;
+    },
   ): void;
   /**
    * **物理直伤**：先减护甲，再把剩下的扣掉。

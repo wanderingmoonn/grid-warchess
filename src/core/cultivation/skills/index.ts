@@ -9,6 +9,10 @@
  * 所以「新增一个技能」= 在本目录加一个文件 + 在下面加一行 export，
  * 不用再去别处登记。
  *
+ * 法术按**族**分文件（`bolt` 直伤 / `blast` 范围 / `field` 场域），
+ * 一族一个文件、族里的每条法术是文件里的一行数据。所以这里按族导出，
+ * 不再按法术名导出——掌心雷和罡风已经并进各自的族，没有单独文件了。
+ *
  * ⚠️ 红线：本目录的文件都不许 import `../units.ts`。
  * units.ts 要从这里取 SkillDef，反过来 import 就成环；
  * Node 的 ESM 环是运行时才炸（undefined / TDZ），编译期完全看不出来。
@@ -61,14 +65,6 @@ export {
 } from './teleport-swap.ts';
 export { learnSkill, CULTIVATOR_SKILL_UNLOCKS } from './unlocks.ts';
 export {
-  PALM_THUNDER_SKILL,
-  PALM_THUNDER_COST,
-  PALM_THUNDER_RANGE,
-  PALM_THUNDER_BASE,
-  PALM_THUNDER_PER_RANK,
-  palmThunderDamage,
-} from './palm-thunder.ts';
-export {
   SPIRIT_BREATH_SKILL,
   SPIRIT_BREATH_COST,
   SPIRIT_BREATH_DRAIN,
@@ -79,24 +75,16 @@ export {
   spiritBreathCap,
   spiritBreathExp,
 } from './spirit-breath.ts';
-export {
-  GANG_WIND_SKILL,
-  GANG_WIND_COST,
-  GANG_WIND_RANGE,
-  GANG_WIND_RADIUS,
-  GANG_WIND_BASE,
-  GANG_WIND_PER_RANK,
-  GANG_WIND_MIN_RANK,
-  GANG_WIND_RESEARCH_COST,
-  gangWindDamage,
-  gangWindInRange,
-} from './gang-wind.ts';
-/*
- * 族 1 · 直伤。掌心雷也在这一族里（它的数据行留在自己的文件，
- * 实现是 `bolt.ts` 那一份），所以这两行 export 一起构成"族 1 的全部内容"。
- */
+
+/* 族 1 · 直伤：掌心雷（样板）、灭神枪、元磁神光、五雷正法 */
 export {
   BOLT_ROWS,
+  PALM_THUNDER_SKILL,
+  PALM_THUNDER_COST,
+  PALM_THUNDER_RANGE,
+  PALM_THUNDER_BASE,
+  PALM_THUNDER_PER_RANK,
+  palmThunderDamage,
   MIE_SHEN_QIANG_SKILL,
   YUAN_CI_SHEN_GUANG_SKILL,
   WU_LEI_ZHENG_FA_SKILL,
@@ -108,9 +96,20 @@ export {
   WU_LEI_ZHENG_FA_MIN_RANK,
   boltDamage,
 } from './bolt.ts';
-/* 族 2 · 范围伤害：10 条法术共用一份实现，形状一样、余韵不同。 */
+
+/* 族 2 · 范围伤害：罡风（样板）加 10 条魂法/武术，形状一样、余韵不同 */
 export {
   BLAST_ROWS,
+  GANG_WIND_SKILL,
+  GANG_WIND_COST,
+  GANG_WIND_RANGE,
+  GANG_WIND_RADIUS,
+  GANG_WIND_BASE,
+  GANG_WIND_PER_RANK,
+  GANG_WIND_MIN_RANK,
+  GANG_WIND_RESEARCH_COST,
+  gangWindDamage,
+  gangWindInRange,
   RU_LAI_SHEN_ZHANG_SKILL,
   HOU_TU_ZHEN_YUE_SKILL,
   BAI_LI_DU_ZHANG_SKILL,
@@ -138,3 +137,53 @@ export {
   WU_XING_SPELL_MIN_RANK,
   blastDamage,
 } from './blast.ts';
+
+/* 族 3 · 场域：把一片地变成危险区（留痕交给 core/marks.ts 结算） */
+export {
+  FIELD_ROWS,
+  SHI_FANG_HUO_HAI_SKILL,
+  WAN_REN_DAO_SHAN_SKILL,
+  SHAN_HE_CHI_LING_SKILL,
+  CHUN_FENG_HUA_YU_SKILL,
+  SHI_FANG_HUO_HAI_COST,
+  SHI_FANG_HUO_HAI_MIN_RANK,
+  SHI_FANG_HUO_HAI_RADIUS,
+  WAN_REN_DAO_SHAN_COST,
+  WAN_REN_DAO_SHAN_MIN_RANK,
+  WAN_REN_DAO_SHAN_RADIUS,
+  SHAN_HE_CHI_LING_COST,
+  SHAN_HE_CHI_LING_MIN_RANK,
+  SHAN_HE_CHI_LING_RADIUS,
+  CHUN_FENG_HUA_YU_COST,
+  CHUN_FENG_HUA_YU_MIN_RANK,
+  CHUN_FENG_HUA_YU_RADIUS,
+  CHUN_FENG_HUA_YU_QI,
+  CHUN_FENG_HUA_YU_ROUNDS,
+  fieldDamage,
+  placeField,
+} from './field.ts';
+
+/* 族 6 · 自身增益：把"这一阵子更强"写进状态（数值在 custom，状态只数回合） */
+export {
+  BUFF_ROWS,
+  LING_MU_SHU_SKILL,
+  TI_SHU_SKILL,
+  TIAN_MO_JIE_TI_SKILL,
+  YU_FENG_SHU_SKILL,
+  LING_MU_SHU_COST,
+  LING_MU_SHU_MIN_RANK,
+  LING_MU_SHU_ROUNDS,
+  LING_MU_SHU_VISION,
+  LING_MU_SHU_RANGE,
+  TI_SHU_COST,
+  TI_SHU_MIN_RANK,
+  TI_SHU_ROUNDS,
+  TI_SHU_ATK_MUL,
+  TIAN_MO_JIE_TI_COST,
+  TIAN_MO_JIE_TI_MIN_RANK,
+  TIAN_MO_JIE_TI_ROUNDS,
+  TIAN_MO_JIE_TI_HP_PCT,
+  YU_FENG_SHU_COST,
+  YU_FENG_SHU_MIN_RANK,
+  YU_FENG_SHU_ROUNDS,
+} from './buff.ts';

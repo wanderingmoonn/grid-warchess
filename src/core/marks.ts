@@ -68,6 +68,15 @@ export interface MarkCtx {
   /** 现在轮到谁（onTurnStart 时才有） */
   player?: PlayerId;
   api: MarkApi;
+  /**
+   * 立刻撤掉这一条留痕。
+   *
+   * 给"条件不再成立"的场用：山河敕令要求施法者站着不动，人一走场就该散，
+   * 而"散掉"不是"扣一次次数"——次数是按回合走的，人走了可能还有三回合额度。
+   * 让 kind 自己去改 `charges` 也能凑出同样效果，但那是拿"次数"当"删除"用，
+   * 下一个读这段代码的人会以为它按次数算。
+   */
+  remove?(): void;
 }
 
 export interface MarkKindDef {
@@ -199,7 +208,13 @@ export function enterTile(s: GameState, unit: Unit, api: MarkApi): void {
     if (!kind?.onEnter) continue;
     if (kind.trigger === 'enemy' && mark.owner === unit.owner) continue;
     if (!terrainOk(kind, s, mark)) continue;
-    const consume = kind.onEnter({ state: s, mark, unit, api });
+    const consume = kind.onEnter({
+      state: s,
+      mark,
+      unit,
+      api,
+      remove: () => removeMark(s, mark.id),
+    });
     if (consume !== false) spend(s, mark);
   }
 }
@@ -219,7 +234,13 @@ export function tickMarks(s: GameState, player: PlayerId, api: MarkApi): void {
     const kind = markKindOf(mark.kind);
     if (!kind?.onTurnStart) continue;
     if (!terrainOk(kind, s, mark)) continue;
-    const consume = kind.onTurnStart({ state: s, mark, player, api });
+    const consume = kind.onTurnStart({
+      state: s,
+      mark,
+      player,
+      api,
+      remove: () => removeMark(s, mark.id),
+    });
     if (consume !== false) spend(s, mark);
   }
 }

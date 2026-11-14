@@ -3474,6 +3474,36 @@ html[data-terrain='on'] .tile.t-mountain {
 }
 
 /*
+ * 技能行（面板里的「技能」菜单）。
+ *
+ * 和产兵行共用 `.recruit-btn`，但要解决两个只有技能才有的问题：
+ *
+ *   1. **状态格必须有上限**。技能的就绪原因可以很长（灵力、法术位、境界、
+ *      站没站对地方），而 `.price` 是 nowrap 的——不封顶它能把整个按钮撑爆，
+ *      把左边那句"会发生什么"挤成一列竖排字。文案侧已经在 `panel.ts` 里
+ *      截成短标签，这里再按宽度兜一次，鼠标停上去能看到全文。
+ *   2. **说明允许两行**。法术说明本来就比"造一个民兵"长，一行装不下时
+ *      给出两行的余地，而不是让人横着读一条被压扁的窄栏。
+ */
+.skill-btn {
+  align-items: flex-start;
+}
+
+.skill-btn .price {
+  max-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-btn .meta span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+}
+
+/*
  * 标题（"空间站核心舱 · 建造推进器舱"）也守一行。
  *
  * 太长就省略，不要折成竖排——横排能扫读，竖排只能一个字一个字猜。

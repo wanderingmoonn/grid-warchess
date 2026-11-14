@@ -94,6 +94,76 @@ export function isRooted(u: Unit): boolean {
   return (u.status?.[ROOT_STATUS] ?? 0) > 0;
 }
 
+// ── 术法加持（族 6 的临时属性）──────────────────────
+
+/**
+ * 状态键：一个**只用来数回合**的状态，本身不带任何效果。
+ *
+ * 为什么数值不写在 `StatusDef` 里：`StatusDef` 的 `modifyAtk` 引擎还没接上
+ * （只有 `modifyMove/Armor/Vision` 会被调用），所以"攻击 ×3"没法从状态里生效。
+ * 于是数值放进 `Unit.custom.spellBuff`，由 `hooks.ts` 的几个属性钩子去读；
+ * 这个状态只负责"还剩几回合"，到期后钩子读不到它，加成就自动失效。
+ *
+ * 这也顺手解决了"多种加成一起来了怎么办"：一个单位同时只保留一份 buff 数值
+ * （后放的覆盖前一份），但回合数取较长的那次。
+ */
+export const BUFF_STATUS = 'spell-buff';
+
+registerStatus({
+  id: BUFF_STATUS,
+  name: '术法加持',
+  summary: '身上挂着一门临时法术加成',
+});
+
+/** 族 6 的加成数值。全是增量，除了 `atkMul` 是倍率 */
+export interface SpellBuffs {
+  /** 攻击伤害倍率（体术 ×3） */
+  atkMul?: number;
+  /** 移动力 +N */
+  move?: number;
+  /** 视野 +N */
+  vision?: number;
+  /** 射程 +N */
+  range?: number;
+  /** 攻击次数 +N */
+  attacks?: number;
+  /** 溅射半径 +N */
+  splash?: number;
+  /** 御风：攻击伤害再加上"本回合移动格数" */
+  wind?: boolean;
+}
+
+/**
+ * 此刻生效的加成。状态没挂上就一律当 0——**不要**在到期时回头清理
+ * `Unit.custom`：清理点会分散在三四处（被打死、被驱散、回合切换），
+ * 漏一处就变成"buff 没了但加成还在"。以状态为准，custom 只当值仓库。
+ */
+export function spellBuffsOf(u: Unit): SpellBuffs {
+  if (((u.status?.[BUFF_STATUS] ?? 0) as number) <= 0) return {};
+  return ((u.custom?.['spellBuff'] as SpellBuffs | undefined) ?? {});
+}
+
+/**
+ * 挂上加成，持续 `turns` 个自己的回合。
+ *
+ * ── 为什么这里**不**像 `stunFor` 那样 `+1` ────────────────────────
+ *
+ * `stunFor` 的 +1 是为了让效果活过**对方**接手回合时的那次 tick——不 +1
+ * 就等于什么都没发生。加持不一样：它是在**自己回合**挂上去的，当场就生效，
+ * 不需要活过任何一次 tick 才算数。存 `turns` 的意思是"这一回合 + 之后
+ * turns−1 个自己的回合"，正好等于玩家说的"持续 N 回合"。
+ *
+ * 这两条口径混用会差一整回合，而差的那回合玩家几乎看不出来（"我明明写着 2 回合"）。
+ *
+ * 后放的覆盖先放的：两个加成叠乘会让"体术 × 天魔解体"这种组合失控，
+ * 而玩家看不出是哪一条导致的。回合数取较长的那个，免得短的那次把长的顶掉。
+ */
+export function applySpellBuffs(u: Unit, turns: number, buffs: SpellBuffs): void {
+  u.status ??= {};
+  u.status[BUFF_STATUS] = Math.max(u.status[BUFF_STATUS] ?? 0, turns);
+  u.custom = { ...(u.custom ?? {}), spellBuff: buffs };
+}
+
 /**
  * 给单位挂一个"持续 `turns` 个自己的回合"的状态（核心已有的状态也用它，例如熔甲）。
  *

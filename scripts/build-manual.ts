@@ -153,7 +153,7 @@ import {
   PALM_THUNDER_PER_RANK,
   PALM_THUNDER_RANGE,
   PALM_THUNDER_SKILL,
-} from '../src/core/cultivation/skills/palm-thunder.ts';
+} from '../src/core/cultivation/skills/bolt.ts';
 import {
   SPIRIT_BREATH_COST,
   SPIRIT_BREATH_DRAIN,
@@ -171,7 +171,7 @@ import {
   GANG_WIND_RANGE,
   GANG_WIND_RESEARCH_COST,
   GANG_WIND_SKILL,
-} from '../src/core/cultivation/skills/gang-wind.ts';
+} from '../src/core/cultivation/skills/blast.ts';
 import {
   SPRING_FLOOR_HEAL,
   SPRING_HEAL_RATIO,
