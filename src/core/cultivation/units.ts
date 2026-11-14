@@ -870,3 +870,88 @@ export const GUARD_FORMATION: UnitTypeDef = {
   vision: 2,
   abilities: ['formation-guardian'],
 };
+
+/*
+ * ── 召唤物（族 8）────────────────────────────────────────────────
+ *
+ * 这三个**只能由法术造出来**：建造表里没有它们，城市产线也不供应。
+ * 所以 `cost` 写 0——它们不该在任何"造得起/造不起"的判断里出现。
+ */
+
+/**
+ * 替劫灵身：替主人挨刀的傀儡。
+ *
+ * `move: 0` 且 `atk: 0` 是刻意的：它不是一个能打的单位，只是"一层会死的护甲"。
+ * 给它行动力会让玩家拿它去探路，那就变成两个单位了。
+ */
+export const LING_SHEN: UnitTypeDef = {
+  id: UNIT_IDS.LING_SHEN,
+  name: '替劫灵身',
+  short: '劫',
+  era: 1,
+  category: 'combat',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 3,
+  maxHp: 50,
+  range: 1,
+  vision: 2,
+};
+
+/**
+ * 化身分神造出来的分身：和本体同兵种、同境界，能行动。
+ *
+ * 单独一个兵种而不是直接复制修士，是为了让"分身"在面板上有个说得清的名字
+ * （否则战报里会出现两个同名修士，玩家分不清哪个是真身）。
+ */
+export const CLONE: UnitTypeDef = {
+  id: UNIT_IDS.CLONE,
+  name: '化身',
+  short: '化',
+  era: 1,
+  category: 'combat',
+  cost: 0,
+  move: 3,
+  atk: 10,
+  armor: 3,
+  maxHp: 30,
+  range: 1,
+  vision: 3,
+};
+
+/** 众妙之门：光环建筑。每回合给半径内的友方修士添一份修为。 */
+export const MIAO_MEN: UnitTypeDef = {
+  id: UNIT_IDS.MIAO_MEN,
+  name: '众妙之门',
+  short: '门',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 60,
+  range: 1,
+  vision: 4,
+};
+
+/**
+ * 魂灯：死亡锚点。主人倒下时，灯会把他的魂魄接住一次。
+ *
+ * 它本身没有任何战斗力，所以敌方要不要花一刀去拆灯，是一笔很真实的选择。
+ */
+export const HUN_DENG: UnitTypeDef = {
+  id: UNIT_IDS.HUN_DENG,
+  name: '魂灯',
+  short: '灯',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 2,
+  maxHp: 40,
+  range: 1,
+  vision: 4,
+};

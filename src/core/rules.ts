@@ -363,6 +363,7 @@ export const abilityApi: AbilityApi = {
     hurtUnit(s, target, amount, opts);
   },
   hurtPhysical: (s, target, amount, opts) => hurtPhysical(s, target, amount, opts),
+  convert: (s, unit, owner, logText) => convertUnit(s, unit, owner, logText),
   maxHpOf: (s, u) => maxHpOf(s, u),
   computeDamage: (s, attacker, defender, isCounter) => computeDamage(s, attacker, defender, isCounter),
   splashRadiusOf: (s, u) => splashRadiusOf(s, u),
@@ -492,6 +493,26 @@ function hurtUnit(
    * 所以这里不需要再判上限：`extraHp` 本身就不该超过额度。
    */
   let toHp = dmg;
+
+  /*
+   * 护盾层（扩展提供）：在扣血之前把伤害吃掉。
+   *
+   * 位置放在 `extraHp` 之前：护盾是"法术给的临时外层"，会比装甲模块更先挨打
+   * ——玩家看到的是"盾先碎，然后才轮到装甲"。
+   *
+   * 和转移一样，**损耗不吃盾**（中毒、维护费是"血在自己掉"，盾挡不住）。
+   */
+  if (!opts.attrition) {
+    for (const e of activeExpansions(s)) {
+      if (!e.hooks.absorbDamage) continue;
+      const absorbed = e.hooks.absorbDamage({ state: s, victim, amount: toHp, source: opts.source });
+      if (absorbed > 0) {
+        toHp = Math.max(0, toHp - absorbed);
+        if (toHp <= 0) break;
+      }
+    }
+  }
+
   if (victim.extraHp && victim.extraHp > 0) {
     const absorb = Math.min(victim.extraHp, toHp);
     victim.extraHp -= absorb;
@@ -532,7 +553,7 @@ function hurtUnit(
    * 传的是 `victim`：伤害被守御阵接走时，掉血的是接替者，不是原目标。
    */
   for (const e of activeExpansions(s)) {
-    e.hooks.onUnitDamaged?.({ state: s, unit: victim, amount: toHp, source: opts.source });
+    e.hooks.onUnitDamaged?.({ state: s, unit: victim, amount: toHp, source: opts.source, api: abilityApi });
   }
 
   /*
@@ -3534,6 +3555,48 @@ function killUnit(s: GameState, victim: Unit, killer: Unit | undefined, logText?
 }
 
 /**
+ * 换主：把一个单位交给另一方。
+ *
+ * ── 为什么要有唯一出口 ──────────────────────────────────────────
+ *
+ * "改个 `owner` 就完事"看着简单，但漏掉其中任何一条都会出一类难查的 bug：
+ *   · **本回合不能再动**（`moved/acted` 置真）。不置的话策反完当场就能打，
+ *     等于一个法术白赚一次行动，而且是"抢过来的兵替你出手"；
+ *   · **本回合击杀额度清零**：`killExpTurn/killExpThisTurn` 是"这个回合从
+ *     击杀拿了多少"的账，跟着人走会让新主人的额度被上一个人的消费卡住；
+ *   · **战报写给双方**（`open = true`）：棋盘上换旗是公开信息，
+ *     只写给一边会变成"我的兵突然不动了"。
+ *
+ * 境界、经验、寿元、学过的法术、随身丹药**一律保留**——这是 2026-11-14
+ * 作者定下的口径：策反一个高期修士就该是一笔巨大的战利品。
+ * 它们本来就存在单位和 `custom` 上，这里不需要搬。
+ */
+export function convertUnit(
+  s: GameState,
+  unit: Unit,
+  newOwner: PlayerId,
+  logText?: string,
+): void {
+  if (unit.owner === newOwner) return;
+  const from = unit.owner;
+  unit.owner = newOwner;
+  unit.moved = true;
+  unit.acted = true;
+  if (unit.custom) {
+    const rest = { ...unit.custom };
+    delete rest['killExpTurn'];
+    delete rest['killExpThisTurn'];
+    unit.custom = rest;
+  }
+  pushLog(
+    s,
+    newOwner,
+    logText ?? `${utype(s, unit.type).name} 转投 ${newOwner} 旗下（原属 ${from}）`,
+    true,
+  );
+}
+
+/**
  * 批量清场：把场上所有 hp ≤ 0 的单位交给 `killUnit`。
  *
  * 它是"死亡"的第二入口，不是第二套实现——里面只调 `killUnit`。
@@ -4372,7 +4435,7 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'DISBAND':
         return doDisband(next, action.unitId);
       case 'HERO_SKILL':
-        return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY);
+        return doHeroSkill(next, action.unitId, action.skillId, action.targetX, action.targetY, action.input);
       case 'UNIT_ACTION':
         return doUnitAction(next, action.unitId, action.actionId);
       case 'PLACE_EGG':
@@ -6768,7 +6831,14 @@ function doUnitAction(s: GameState, unitId: string, actionId: string): ActionRes
   return { ok: true, state: s };
 }
 
-function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: number, targetY?: number): ActionResult {
+function doHeroSkill(
+  s: GameState,
+  unitId: string,
+  skillId: string,
+  targetX?: number,
+  targetY?: number,
+  input?: string,
+): ActionResult {
   const u = s.units.find((x) => x.id === unitId);
   if (!u) return { ok: false, reason: '这里已经没有这个单位了' };
   if (u.owner !== s.current) return { ok: false, reason: '只能给自己人下命令' };
@@ -6803,6 +6873,16 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
     return { ok: false, reason: `${skill.name} 还要等 ${cd} 回合` };
   }
 
+  /*
+   * 要输入却没输入：**在动手之前**拒掉。
+   *
+   * 不在这里挡的话，法术会带着 `undefined` 跑到结算里——钉头七箭书会把
+   * `Number('') = 0` 当成"猜年龄 0"，玩家看到的是"我明明没填，它却说我猜错了"。
+   */
+  if (skill.input && (input === undefined || String(input).trim() === '')) {
+    return { ok: false, reason: `${skill.name}要先填「${skill.input.label}」` };
+  }
+
   const handler = SKILL_EFFECTS[skill.effect];
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
 
@@ -6814,6 +6894,7 @@ function doHeroSkill(s: GameState, unitId: string, skillId: string, targetX?: nu
     skill, 
     api: abilityApi,
     target: (typeof targetX === 'number' && typeof targetY === 'number') ? { x: targetX, y: targetY } : undefined,
+    input,
     result: { ok: true, log: `${def.name} 使用「${skill.name}」` }
   };
 
@@ -7331,7 +7412,7 @@ function doEndTurn(s: GameState): ActionResult {
   pushLog(s, nextPlayer, `回合开始，获得 ${label}`);
 
   for (const e of activeExpansions(s)) {
-    e.hooks.onTurnStart?.({ state: s, player: nextPlayer });
+    e.hooks.onTurnStart?.({ state: s, player: nextPlayer, api: abilityApi });
   }
 
   // 地上的东西也在"回合开始"这一刻结算（火场、毒雾、自爆引信……）。

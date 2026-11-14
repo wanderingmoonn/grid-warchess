@@ -10,7 +10,21 @@ import {
 } from './sect.ts';
 import { regenMana } from './mana.ts';
 import { isStunned, spellBuffsOf } from './spell-statuses.ts';
-import { marksOf } from '../marks.ts';
+import { marksOf, marksAt } from '../marks.ts';
+import { shieldOf, breakShield } from './skills/shield.ts';
+import { reviveMarkOf } from './skills/revive.ts';
+import { TI_JIE_LING_SHEN_BIND_RADIUS, HUN_DENG_RATIO } from './skills/summon.ts';
+import { DAO_HUA_MO_RAN_LAYERS } from './skills/convert.ts';
+import { knifeMarkOf } from './skills/record.ts';
+import { daiTargetOf } from './transfer.ts';
+import {
+	giantStuckOf,
+	refreshGiantStuck,
+	WHITE_STATUS,
+	EQUALITY_STATUS,
+	SEAL_STATUS,
+	TIAN_XIA_JIE_BAI_COEF,
+} from './skills/rewrite.ts';
 import { exchangeMana, qiAt, qiOverlayCells, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
 import {
   PILLS,
@@ -47,7 +61,7 @@ import {
   cultivatorsCovering,
   isArtifact,
 } from './artifacts.ts';
-import { addExp, getExpGrowth, ensureLifespan, isDoomed } from './progression.ts';
+import { addExp, getExpGrowth, ensureLifespan, isDoomed, getRank } from './progression.ts';
 import { 
   atkModifier, 
   armorModifier, 
@@ -68,7 +82,7 @@ import { bestAdjacentCultivatorRank } from './abilities/formation-guard.ts';
 import { guardianFor } from './abilities/formation-guardian.ts';
 import { SEAL_AURA_RADIUS, SEAL_MOVE_PCT } from './abilities/formation-seal.ts';
 // query.ts 只 import type，不会和 rules.ts 形成环。
-import { distBetweenUnits, idx, inBounds, underConstruction } from '../query.ts';
+import { distBetweenUnits, idx, inBounds, underConstruction, coversTile } from '../query.ts';
 
 /**
  * 写一条**公开**战报。
@@ -109,7 +123,130 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 额度记在击杀者身上（custom.killExpThisTurn），随存档走。
 	// "哪一回合"用 s.turn 判：跨回合自动归零，不用额外的清理钩子。
 	onUnitKilled: (c) => {
+		/*
+		 * ── 免死（族 11）────────────────────────────────────────
+		 *
+		 * `killUnit` 的顺序是"先从 `s.units` 摘掉、再通知钩子"，
+		 * 所以这里把**同一个对象** push 回去就是复活：境界、经验、寿元、
+		 * 学过的技能全在对象里，一条都没丢（G6 要守的就是这条）。
+		 *
+		 * 复活后把 `moved/acted` 置真：这一回合不能再动，否则等于凭空多一个回合。
+		 * 也顺手 return —— 没死成就不该给对面击杀经验。
+		 */
+		/*
+		 * ── 魂灯（族 8）──────────────────────────────────────────
+		 *
+		 * 比"护命符"更早判：灯是**有位置的**，而且会被敌方拆掉——
+		 * 灯在，就按灯的位置接回来；灯没了，才轮到身上的护命符。
+		 * 这样两条免死同时存在时，玩家看到的是"灯先亮"，符合造物的直觉。
+		 */
+		const lampId = c.victim.custom?.['hunDeng'] as
+			| { id: string; x: number; y: number }
+			| undefined;
+		if (lampId) {
+			const lamp = c.state.units.find((u) => u.id === lampId.id && u.hp > 0);
+			if (lamp) {
+				const v = c.victim;
+				const maxHp = c.api.maxHpOf(c.state, v);
+				v.hp = Math.max(1, Math.round(maxHp * HUN_DENG_RATIO));
+				v.x = lamp.x;
+				v.y = lamp.y;
+				v.moved = true;
+				v.acted = true;
+				// 灯只能接一次：把灯熄掉（走 killUnit，战报和编制都跟着走）
+				c.api.killUnit(c.state, lamp, undefined, '魂灯燃尽');
+				c.state.units.push(v);
+				c.api.pushLog(
+					c.state,
+					v.owner,
+					`${c.api.utype(c.state, v.type).name}的魂魄被魂灯接住，自灯火中重生`,
+					true,
+				);
+				return;
+			}
+		}
+
+		const mark = reviveMarkOf(c.victim);
+		if (mark && !mark.used) {
+			const v = c.victim;
+			const maxHp = c.api.maxHpOf(c.state, v);
+			v.hp = Math.max(1, Math.round(maxHp * mark.ratio));
+			if (mark.atKiller && c.killer) {
+				v.x = c.killer.x;
+				v.y = c.killer.y;
+			}
+			v.moved = true;
+			v.acted = true;
+			// `used` 记在同一个对象上：整局只生效一次，这是天然的
+			v.custom = { ...(v.custom ?? {}), revive: { ...mark, used: true } };
+			c.state.units.push(v);
+			c.api.pushLog(
+				c.state,
+				v.owner,
+				`${c.api.utype(c.state, v.type).name}的护命符碎了——${mark.atKiller ? '在凶手面前' : '原地'}重新站起`,
+				true,
+			);
+			return;
+		}
+
+		/*
+		 * 酆都鬼蜮：死在我方鬼蜮上的敌人不会死，变成鬼卒。
+		 *
+		 * 先于"护命符"之外的所有死亡逻辑判——它是**地形**在起作用（谁站上去谁挨），
+		 * 和"这个人身上有没有护命符"无关。
+		 */
+		const ghost = marksAt(c.state, c.victim.x, c.victim.y).find(
+			(m) => m.kind === 'spell-ghost' && m.owner !== c.victim.owner,
+		);
+		if (ghost) {
+			const v = c.victim;
+			v.hp = Math.max(1, Math.round(c.api.maxHpOf(c.state, v) * 0.5));
+			v.moved = true;
+			v.acted = true;
+			c.state.units.push(v);
+			c.api.convert(c.state, v, ghost.owner, `酆都鬼蜮：${unitNameOf(c.state, v)} 被拉起来，改听鬼蜮之主号令`);
+			return;
+		}
+
+		/*
+		 * 血脉侵蚀：被侵蚀到 0 的人不是"死"，是**倒戈**。
+		 *
+		 * 它和鬼蜮的区别是：鬼蜮吃的是"死在我地上的人"，侵蚀吃的是"我亲手侵蚀死的人"，
+		 * 所以判据挂在单位身上（`custom.erode`）而不是地上。
+		 */
+		const erode = c.victim.custom?.['erode'] as { pct: number; to: string } | undefined;
+		if (erode) {
+			const v = c.victim;
+			v.hp = Math.max(1, Math.round(c.api.maxHpOf(c.state, v) * 0.3));
+			v.moved = true;
+			v.acted = true;
+			const rest = { ...(v.custom ?? {}) };
+			delete rest['erode'];
+			v.custom = rest;
+			c.state.units.push(v);
+			c.api.convert(c.state, v, erode.to as never, `血脉侵蚀：${unitNameOf(c.state, v)} 血被换尽，倒戈`);
+			return;
+		}
+
 		const killer = c.killer;
+		/*
+		 * 化身分神：分身杀的人，修为归本体。
+		 *
+		 * 分身本身不是修士（它是另一类兵种），所以下面那条"杀敌加修为"不会给它。
+		 * 这里把功劳转回本体——否则"造个分身去砍人"等于把经验扔了，
+		 * 玩家会本能地觉得亏。
+		 */
+		const cloneOf = killer?.custom?.['cloneOf'] as string | undefined;
+		if (killer && cloneOf) {
+			const owner = c.state.units.find((u) => u.id === cloneOf);
+			if (owner && isCultivatorUnit(c.state, owner)) {
+				const victimAtk = c.state.unitTypes[c.victim.type]?.atk ?? 0;
+				const gain = calcKillExp(owner, 0, victimAtk);
+				if (gain > 0) addExp(owner, c.state, gain);
+			}
+			return;
+		}
+
 		if (!killer || !isCultivatorUnit(c.state, killer)) return;
 		// 魔修不吃击杀历练：它的修为全部来自「血祭」，那条路已经绕过了每回合上限。
 		// 再叠一份击杀经验就是双通道，升级节奏会直接翻倍（见 skills/blood-rite.ts）。
@@ -128,7 +265,99 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		killer.custom = { ...prev, killExpTurn: c.state.turn, killExpThisTurn: used + gain };
 		addExp(killer, c.state, gain);
 	},
+	/*
+	 * 族 7（攻击附加）的结算点：血真的掉了之后，看施法者身上有没有"待结算"。
+	 *
+	 * 三条都按**实际伤害**算：偷多少灵石、换多少修为都该看对方掉了几点血，
+	 * 按纸面伤害算会让高甲单位变成提款机。
+	 *
+	 * 结算前先把标记摘掉：溯因果会再造成伤害，而那次伤害也会走进本钩子——
+	 * 不清标记就是无限连锁（而且每一层都会真实扣血）。
+	 */
+	onUnitDamaged: ({ state, unit, amount, source, api }) => {
+		/*
+		 * 心魔种道：**下一次受伤当场倒戈**。
+		 *
+		 * 放在"有没有待结算的攻击附加"之前判：那是施法者的账，这是挨打者身上的账，
+		 * 两件事不该互相挡。倒戈之后这一下伤害照样已经落地了（钩子在扣血之后），
+		 * 也就意味着"你先把他打疼，他才肯降"——正是这门法术的意象。
+		 */
+		const onHurt = unit.custom?.['convertOnHurt'] as { to: string } | undefined;
+		if (onHurt && unit.owner !== onHurt.to) {
+			const rest = { ...(unit.custom ?? {}) };
+			delete rest['convertOnHurt'];
+			unit.custom = rest;
+			api.convert(state, unit, onHurt.to as never, `心魔种发：${unitNameOf(state, unit)} 当场倒戈`);
+			return;
+		}
+
+		if (!source || amount <= 0) return;
+		const pending = source.custom?.['pendingStrike'] as
+			| { mode: 'steal' | 'refine' | 'cause'; ratio: number }
+			| undefined;
+		if (!pending) return;
+
+		const rest = { ...(source.custom ?? {}) };
+		delete rest['pendingStrike'];
+		source.custom = rest;
+
+		if (pending.mode === 'steal') {
+			// 偷的是**灵石**：它是这个包唯一的通用货币，偷金币对修士没有意义
+			const want = Math.floor(amount * pending.ratio);
+			const victim = state.players[unit.owner];
+			const have = victim ? Number((victim.res ?? {})[SPIRIT_STONE] ?? 0) : 0;
+			const take = Math.max(0, Math.min(want, have));
+			if (take > 0) {
+				addRes(victim!, SPIRIT_STONE, -take);
+				addRes(state.players[source.owner], SPIRIT_STONE, take);
+				api.pushLog(state, source.owner, `天予不取：从对手处取得 ${take} 灵石`);
+			}
+			return;
+		}
+
+		if (pending.mode === 'refine') {
+			addExp(source, state, Math.floor(amount * pending.ratio));
+			const before = source.hp;
+			source.hp = Math.min(api.maxHpOf(state, source), source.hp + Math.floor(amount * 0.5));
+			const healed = source.hp - before;
+			api.pushLog(
+				state,
+				source.owner,
+				`炼化：伤害尽归己用` + (healed > 0 ? `，回复 ${healed} 点生命` : ''),
+			);
+			return;
+		}
+
+		// 溯因果：同类型的其他单位挨同样一刀（真伤，不再走护甲）
+		const others = state.units.filter(
+			(u) => u !== unit && u.hp > 0 && u.type === unit.type && u.owner !== source.owner,
+		);
+		for (const u of others) {
+			api.hurt(state, u, amount, {
+				source,
+				logText: `${api.utype(state, u.type).name}因因果牵连，受到 ${amount} 点伤害`,
+			});
+		}
+		if (others.length > 0) api.pushLog(state, source.owner, `溯因果：牵连 ${others.length} 名同类`);
+	},
 	modifyDamage: ({ state, attacker, damage }) => {
+    /*
+     * 天下皆白：**全场**伤害随回合数放大，施法者本人豁免（唯我独黑）。
+     *
+     * 放在最前面，因为它是"世界规则"而不是某人的加成——先按世界放大，
+     * 再叠加各人的倍率，读起来也符合玩家的直觉。
+     *
+     * **不设上限**（作者明确要求）：倍率 = 当前回合 × 0.1，第 50 回合就是 ×5。
+     * `Math.max(1, …)` 只是让前几回合不至于反而变弱。
+     */
+    const white = state.units.find(
+      (u) => ((u.status?.[WHITE_STATUS] ?? 0) as number) > 0 && u.hp > 0,
+    );
+    if (white && attacker.id !== white.id) {
+      const mul = Math.max(1, state.turn * TIAN_XIA_JIE_BAI_COEF);
+      damage = Math.max(1, Math.round(damage * mul));
+    }
+
     if (!isCultivatorUnit(state, attacker)) return damage;
     let out = damage + Math.floor(atkModifier(attacker) * swordMul(attacker));
     /*
@@ -140,6 +369,19 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
     const buff = spellBuffsOf(attacker);
     if (buff.atkMul) out = Math.floor(out * buff.atkMul);
     if (buff.wind) out += attacker.moveSpent ?? 0;
+    /*
+     * 万族之劫：麾下有几种兵，就多几分攻击。
+     *
+     * 数的是**兵种种类**而不是个数：按个数给会让"爆兵"变成唯一解，
+     * 而这条法术的意象是"万族来朝"——凑齐各族比堆同一族更契合。
+     */
+    if (buff.legion) {
+      const kinds = new Set<string>();
+      for (const u of state.units) {
+        if (u.owner === attacker.owner && u.hp > 0) kinds.add(u.type);
+      }
+      out += kinds.size;
+    }
     return out;
   },
 	modifySiegeDamage: ({ state, attacker, damage }) => {
@@ -167,7 +409,26 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			return armor + bonus;
 		}
 		if (!isCultivatorUnit(state, defender)) return armor;
-		return Math.max(0, armor + armorModifier(defender));
+		// 护体灵光的盾甲：有盾才加，盾碎/到期就没了（护甲也只挡物理，和法术口径一致）
+		return Math.max(0, armor + armorModifier(defender) + (shieldOf(defender)?.armor ?? 0));
+	},
+	/*
+	 * 护体灵光：在扣真血之前把伤害吃掉。
+	 *
+	 * **碎盾那一击吃掉全部溢出**（作者明确要的手感）：不是"盾剩 5 点就只挡 5 点、
+	 * 剩下 30 点穿透"，而是这一击整个被盾吃掉、盾消失。所以 `amount >= hp` 时
+	 * 返回的是 `amount`，不是 `hp`。
+	 */
+	absorbDamage: ({ victim, amount }) => {
+		const sh = shieldOf(victim);
+		if (!sh) return 0;
+		if (amount >= sh.hp) {
+			breakShield(victim);
+			return amount;
+		}
+		// 没碎：改 shield.hp 本身（同一个对象，写回 custom 保持一致）
+		victim.custom = { ...(victim.custom ?? {}), shield: { ...sh, hp: sh.hp - amount } };
+		return amount;
 	},
 	// 射程修正
 	modifyRange: ({ state, unit, range }) => {
@@ -184,7 +445,31 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 只换"谁掉血"，不换"谁被命中"：命中状态、击退、反击全部留在原目标身上。
 	// 规则层的 hurtUnit 保证只问一次、接替者活着且在册、不会转给自己。
 	// 中毒/灼烧/自损不走这条路径（它们本来就不经过 hurtUnit）。
-	redirectDamage: ({ state, victim }) => guardianFor(state, victim),
+	/*
+	 * 谁会替这个单位挨这一下。
+	 *
+	 * 顺序：**先替劫灵身，再守御阵**。灵身是"专门为挡刀造出来的"，
+	 * 让它先上才符合玩家的预期（造它的钱就是为这一刻花的）；
+	 * 守御阵是顺手挡，不该抢在它前面把阵耗掉。
+	 */
+	redirectDamage: ({ state, victim }) => {
+		/*
+		 * 张冠李戴排在最前：它是"冲着我来的一切都给他"，
+		 * 比替劫灵身（专为挡刀造的）和守御阵（顺手挡）都更根本。
+		 */
+		const transferred = daiTargetOf(state, victim);
+		if (transferred) return transferred;
+
+		const decoyId = victim.custom?.['lingShen'] as string | undefined;
+		if (decoyId) {
+			const decoy = state.units.find((u) => u.id === decoyId && u.hp > 0);
+			// 距离是有意的约束：灵身被远远甩开就不该还替他挨打
+			if (decoy && distBetweenUnits(state, victim, decoy) <= TI_JIE_LING_SHEN_BIND_RADIUS) {
+				return decoy;
+			}
+		}
+		return guardianFor(state, victim);
+	},
 	// 视野修正
 	modifyVision: ({ state, unit, base }) => {
 		if (!unit || !isCultivatorUnit(state, unit)) return base;
@@ -196,7 +481,11 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
       return (unit.custom?.burstCharges as number) ?? 0;
     }
 		if (isCultivatorUnit(state, unit)) {
-		  return attacks + attTimesModifier(unit) + (spellBuffsOf(unit).attacks ?? 0);
+		  const buff = spellBuffsOf(unit);
+		  let out = attacks + attTimesModifier(unit) + (buff.attacks ?? 0);
+		  // 破碎虚空：这一回合的攻击次数翻倍（先加后乘，"多打一次"也会被翻）
+		  if (buff.attacksMul) out = Math.floor(out * buff.attacksMul);
+		  return out;
     }
     return attacks;
 	},
@@ -217,6 +506,14 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			return Math.max(1, Math.floor(move * ARTIFACT_MOVE_MUL));
 		}
 		if (!isCultivatorUnit(state, unit)) return move;
+		/*
+		 * 法相天地：身形撑不下四格时**动不了**。
+		 *
+		 * 用"移动力归零"而不是 `canCommand`：卡住的是身子，不是手脚——
+		 * 他还能打、还能施法，只是挪不动。用 `canCommand` 会连攻击一起封掉，
+		 * 那是另一种法术（封印）的语义。
+		 */
+		if (giantStuckOf(unit)) return 0;
 		// 天魔解体的移动力加成也走 buff（「大幅提升移动速度」）
 		return move + moveModifier(unit) + (spellBuffsOf(unit).move ?? 0);
 	},
@@ -264,6 +561,12 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			if (!caster || caster.x !== cust.cx || caster.y !== cust.cy) continue;
 			return '山河敕令压着这片地，无法兴建';
 		}
+
+		// ①b 绝地天通：敌方在术中期间产不出修士
+		const sealed = state.units.some(
+			(u) => u.owner !== owner && u.hp > 0 && ((u.status?.[SEAL_STATUS] ?? 0) as number) > 0,
+		);
+		if (sealed && isCultivatorDef(target)) return '绝地天通：天地断绝，修士降不下来';
 
 		// ② 宗门只收修士弟子（原来的规则，顺序不能换：敕令比"收谁"更根本）
 		if (source.kind !== 'camp') return null;
@@ -504,10 +807,154 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		unit.custom = next;
 	},
 	// ── 回合开始：寿元判定 + 打坐 ──────────────────
-	onTurnStart: ({ state, player }) => {
+	onTurnStart: ({ state, player, api }) => {
+		/*
+		 * ── 族 10 的回合开始结算 ────────────────────────────────
+		 *
+		 * 三件事都放在"某个人的回合开始"这一拍，因为它们的时钟就是回合：
+		 *   · 胎中之谜：倒计时 −1，到 0 倒戈；
+		 *   · 血脉侵蚀：按比例掉血（**内生损耗**，不该被守御阵接走、也不触发挨打）；
+		 *   · 道化魔染：站在染区里的敌人被染一层，积满两层倒戈。
+		 *
+		 * 换主一律走 `api.convert`（规则层唯一出口）：它会顺手把"本回合不能再动"
+		 * 和"击杀额度清零"做掉。直接改 `owner` 会漏，而且不会报错。
+		 */
+		for (const u of [...state.units]) {
+			if (u.hp <= 0 || u.owner !== player) continue;
+
+			const convertIn = u.custom?.['convertIn'] as { turns: number; to: string } | undefined;
+			if (convertIn) {
+				if (convertIn.turns <= 1) {
+					const rest = { ...(u.custom ?? {}) };
+					delete rest['convertIn'];
+					u.custom = rest;
+					api.convert(state, u, convertIn.to as never, `胎中之谜解开：${unitNameOf(state, u)} 倒戈`);
+				} else {
+					u.custom = { ...(u.custom ?? {}), convertIn: { ...convertIn, turns: convertIn.turns - 1 } };
+				}
+			}
+
+			const erode = u.custom?.['erode'] as { pct: number; to: string } | undefined;
+			if (erode) {
+				const dmg = Math.max(1, Math.round(api.maxHpOf(state, u) * erode.pct));
+				api.hurt(state, u, dmg, { attrition: true });
+				// 掉到 0 的收场在 onUnitKilled 里（那边会按 erode 直接倒戈）
+			}
+		}
+
+		/*
+		 * 平等图腾：境界动态化 + **连锁反应**。
+		 *
+		 * 迭代到不动点为止：
+		 *   境界↑ → `VisionModifier` 让视野变大 → 看到更强的敌人 → 境界↑ …
+		 * 视野里一个修士都没有就直接落到 0（作者要的"全部离开视野就掉 0"）。
+		 *
+		 * 上限 8 轮只是防"两边都挂着图腾"时的互指无限递归；正常局面两三轮就收敛。
+		 */
+		for (const u of state.units) {
+			if (u.hp <= 0 || u.owner !== player) continue;
+			const on = ((u.status?.[EQUALITY_STATUS] ?? 0) as number) > 0;
+			if (!on) {
+				// 状态没了就把覆盖摘掉，境界回到自己的修为
+				if (u.custom && u.custom['rankOverride'] !== undefined) {
+					const rest = { ...u.custom };
+					delete rest['rankOverride'];
+					u.custom = rest;
+				}
+				continue;
+			}
+			let best = 0;
+			for (let i = 0; i < 8; i++) {
+				u.custom = { ...(u.custom ?? {}), rankOverride: best };
+				const vision = Math.max(
+					1,
+					(state.unitTypes[u.type]?.vision ?? 0) + VisionModifier(u) + (spellBuffsOf(u).vision ?? 0),
+				);
+				let maxEnemy = 0;
+				for (const e of state.units) {
+					if (e.hp <= 0 || e.owner === u.owner) continue;
+					if (!isCultivatorUnit(state, e)) continue;
+					if (Math.abs(e.x - u.x) + Math.abs(e.y - u.y) > vision) continue;
+					maxEnemy = Math.max(maxEnemy, getRank(e));
+				}
+				if (maxEnemy === best) break;
+				best = maxEnemy;
+			}
+			u.custom = { ...(u.custom ?? {}), rankOverride: best };
+		}
+
+		/*
+		 * 斩仙飞刀：记满三回合，刀落。
+		 *
+		 * 判"挪没挪开"用**记录点**（切比雪夫 1 格内算没动）：草案里的"记录位置"
+		 * 只有在"跑得掉"时才有意义，否则它就只是一个延迟 3 回合的伤害。
+		 * 落刀用 `attrition`——这一刀没有攻方，也不该被守御阵接走。
+		 */
+		for (const u of [...state.units]) {
+			if (u.hp <= 0) continue;
+			const mark = knifeMarkOf(u);
+			if (!mark || mark.by !== player) continue;
+			if (mark.turns > 1) {
+				u.custom = { ...(u.custom ?? {}), feiDao: { ...mark, turns: mark.turns - 1 } };
+				continue;
+			}
+			const rest = { ...(u.custom ?? {}) };
+			delete rest['feiDao'];
+			u.custom = rest;
+			const moved = Math.max(Math.abs(u.x - mark.x), Math.abs(u.y - mark.y));
+			if (moved > 1) {
+				api.pushLog(state, player, `斩仙飞刀落空：${unitNameOf(state, u)} 已经不在记录的位置`);
+				continue;
+			}
+			api.hurt(state, u, mark.dmg, {
+				attrition: true,
+				logText: `斩仙飞刀落下：${unitNameOf(state, u)} 受到 ${mark.dmg} 点伤害`,
+			});
+		}
+
+		// 法相天地：每回合重算一次"卡住没有"（挡路的人走开就自动解开）
+		for (const u of state.units) {
+			if (u.hp <= 0 || u.owner !== player) continue;
+			if (u.custom?.['footprint'] !== 2) continue;
+			refreshGiantStuck(state, api, u);
+		}
+
+		// 道化魔染：染区里每回合 +1 层
+		for (const mark of marksOf(state)) {
+			if (mark.kind !== 'spell-tint' || mark.owner !== player) continue;
+			for (const u of state.units) {
+				if (u.hp <= 0 || u.owner === mark.owner) continue;
+				if (!coversTile(state, u, mark.x, mark.y)) continue;
+				const tint = u.custom?.['tint'] as { to: string; layers: number } | undefined;
+				const layers = (tint?.layers ?? 0) + 1;
+				if (layers >= DAO_HUA_MO_RAN_LAYERS) {
+					const rest = { ...(u.custom ?? {}) };
+					delete rest['tint'];
+					u.custom = rest;
+					api.convert(state, u, mark.owner, `道化魔染：${unitNameOf(state, u)} 被染透，倒戈`);
+				} else {
+					u.custom = { ...(u.custom ?? {}), tint: { to: mark.owner, layers } };
+				}
+			}
+		}
+
 		// 灵气场：每方回合走一步。必须在遍历单位之前——它和"谁在场上"无关，
 		// 是环境自己的演化；后面的交换读的正是这一步之后的结果。
 		stepQiField(state);
+
+		// 众妙之门：每回合给半径内的友方修士添一份修为。
+		// 放在"遍历单位刷灵力"之前——它不依赖灵力，也不该被某个修士的死亡顺序影响。
+		for (const gate of state.units) {
+			if (gate.hp <= 0 || gate.owner !== player) continue;
+			const radius = Number(gate.custom?.['gateRadius'] ?? 0);
+			const exp = Number(gate.custom?.['gateExp'] ?? 0);
+			if (radius <= 0 || exp <= 0) continue;
+			for (const u of state.units) {
+				if (u.owner !== player || !isCultivatorUnit(state, u)) continue;
+				if (distBetweenUnits(state, gate, u) > radius) continue;
+				addExp(u, state, exp);
+			}
+		}
 
 		for (const u of state.units) {
       if (u.owner !== player) continue;
@@ -561,8 +1008,30 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// ── 回合结束：熄灭别人的异象 ──────────────────
 	// 只清"别人"的：突破发生在自己回合，如果自己回合结束也清，
 	// 那盏灯还没等到敌方回合就被自己掐了。
-	onTurnEnd: ({ state, player }) => {
+	onTurnEnd: ({ state, player, hurt, log }) => {
 		clearAnomaliesOfOthers(state, player);
+
+		/*
+		 * 化身分神到期。
+		 *
+		 * 在自己的回合末结算，而不是"每回合都减"：分身是"自己的"召唤物，
+		 * 按主人的回合数计才符合"持续 N 回合"的读法。
+		 *
+		 * 用 `hurt` 而不是直接删：扣血到 0 之后由规则层统一清场，
+		 * 死亡流程（战报、经验回流）一条都不会漏。
+		 */
+		for (const u of state.units) {
+			if (u.owner !== player || u.hp <= 0) continue;
+			const turns = Number(u.custom?.['cloneTurns'] ?? 0);
+			if (!turns) continue;
+			const left = turns - 1;
+			if (left > 0) {
+				u.custom = { ...(u.custom ?? {}), cloneTurns: left };
+				continue;
+			}
+			log(player, `${state.unitTypes[u.type]?.name ?? '化身'}的化身消散了`);
+			hurt(u, u.hp);
+		}
 	},
 
 	// ── 面板信息 ───────────────────────────────────
@@ -614,3 +1083,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		},
 	],
 };
+
+/** 战报里用的兵种名；兵种表被改坏也不该让钩子炸掉 */
+function unitNameOf(s: GameState, u: Unit): string {
+	return s.unitTypes[u.type]?.name ?? u.type;
+}
