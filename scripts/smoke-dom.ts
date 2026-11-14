@@ -9204,27 +9204,51 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('战役页有关卡可选，默认停在「自由对局」', () => {
-  const chips = [...doc.querySelectorAll<HTMLElement>('[data-level]')];
-  assert.ok(chips.length >= 3, `应该至少三个：自由对局 + 两张内建关卡，实际 ${chips.length}`);
-  assert.ok(chips[0]!.textContent?.includes('自由对局'), '第一张应该是「自由对局」');
-  assert.ok(chips[0]!.classList.contains('active'), '默认选中「自由对局」');
+check('左侧多了「关卡」一页，和战役 / 地图同级', () => {
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
+  assert.deepEqual(tabs, ['levels', 'battle', 'maps'], `三页的顺序应该是 关卡 / 战役 / 地图，实际 ${tabs.join(',')}`);
 });
 
-check('选「三岔口」：几家与托管都由关卡决定', () => {
+check('关卡页是一格格卡片，默认停在「自由对局」', () => {
+  click('[data-tab="levels"]');
+  const cards = [...doc.querySelectorAll<HTMLElement>('[data-level]')];
+  assert.ok(cards.length >= 3, `应该至少三张：自由对局 + 两张内建关卡，实际 ${cards.length}`);
+  assert.ok(cards[0]!.textContent?.includes('自由对局'), '第一张应该是「自由对局」');
+  assert.ok(cards[0]!.classList.contains('active'), '默认选中「自由对局」');
+  // 关卡页不该把战役页那一堆开关也带过来
+  assert.equal(doc.querySelector('[data-players]'), null, '关卡页不该出现人数开关');
+});
+
+check('选「三岔口」：卡片上有缩略图，说明里有几家与谁托管', () => {
   click('[data-level="level:tri-corner"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('这一关是 3 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 160)}`);
+  assert.ok(body.includes('这一关'), `要有一段"这一关"的说明，实际：${body.slice(0, 160)}`);
+  assert.ok(body.includes('3 家'), '要写清几家');
   assert.ok(body.includes('绿方'), '要写清哪一席交给电脑');
-  // 关卡接管之后，人数开关不再出现——留一排点了不生效的按钮比没有更糟
-  assert.equal(doc.querySelector('[data-players]'), null, '关卡选着的时候不该有人数开关');
+  const active = doc.querySelector<HTMLElement>('[data-level="level:tri-corner"]');
+  assert.ok(active?.classList.contains('active'), '选中的卡片要高亮');
+  assert.ok(!!active?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
 });
 
-check('切回「自由对局」：人数开关回来，关卡不残留', () => {
+check('选了关卡，战役页的人数与对手变成只读说明', () => {
+  click('[data-tab="battle"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('这一关是 3 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 160)}`);
+  assert.equal(doc.querySelector('[data-players]'), null, '关卡选着的时候不该有人数开关');
+  // 底部摘要要说清"这一局打的是哪一关"
+  const foot = doc.querySelector('.start-summary')?.textContent ?? '';
+  assert.ok(foot.includes('三岔口'), `摘要里应该有关卡名，实际：${foot}`);
+});
+
+check('关卡页选「自由对局」：人数开关回来，关卡不残留', () => {
+  click('[data-tab="levels"]');
   click('[data-level=""]');
+  click('[data-tab="battle"]');
   assert.ok(doc.querySelector('[data-players]'), '自由对局下应该有人数开关');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(!body.includes('这一关是'), '不该再写着"这一关是 N 家"');
+  const foot = doc.querySelector('.start-summary')?.textContent ?? '';
+  assert.ok(!foot.includes('关卡「'), `摘要里不该再有"关卡「」，实际：${foot}`);
 });
 
 click('[data-act="cancel"]');

@@ -42,7 +42,7 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
-import { allLevels, applyLevelToConfig } from '../core/level.ts';
+import { allLevels, applyLevelToConfig, type LevelDef } from '../core/level.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -285,8 +285,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       return null;
     };
 
-    /** 左侧两页：战役（怎么打）与地图（在哪打）。默认停在战役 */
-    let tab: 'battle' | 'maps' = 'battle';
+    /**
+     * 左侧三页：关卡（打哪一关）、战役（怎么打）、地图（在哪打）。默认停在战役。
+     *
+     * 关卡单独一页，而不是塞在战役页顶上：它会一直长（每加一张关卡就多一张卡），
+     * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
+     */
+    let tab: 'battle' | 'maps' | 'levels' = 'battle';
     /** 换页的时候把滚动条拨回顶部：留在上一页的位置会让人以为页面没换 */
     let resetScroll = false;
 
@@ -651,16 +656,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 因为一份"面板写 2 人、关卡写 3 人"的配置，建出来到底几家没人说得清。
        */
       const levelOn = !!config.level;
-      const levelChips = [
-        `<button class="chip ${!levelOn ? 'active' : ''}" data-level="">自由对局</button>`,
-        ...allLevels().map(
-          (l) =>
-            `<button class="chip ${config.level?.id === l.id ? 'active' : ''}" data-level="${esc(l.id)}" title="${esc(l.brief ?? '')}">${esc(l.name)}</button>`,
-        ),
-      ].join('');
-      const levelHint = config.level
-        ? `「${esc(config.level.name)}」${esc(config.level.brief ?? '')}`
-        : '内建关卡：地图、几家、谁交给电脑都按关卡来。';
 
       /*
        * 多席位局的"谁交给电脑"。
@@ -705,19 +700,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                关卡 <span class="field-hint">${levelOn ? '这一局按关卡来' : '默认是自由对局'}</span>
-              </div>
-              <div class="chip-row">${levelChips}</div>
-              <div class="field-hint">${levelHint}</div>
-            </section>
-
-            <section class="field">
-              <div class="field-label">
                 人数 <span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>
               </div>
               ${
                 levelOn
-                  ? `<div class="field-hint">这一关是 ${playerCount} 家。想自己定几家，在上面选「自由对局」。</div>`
+                  ? `<div class="field-hint">这一关是 ${playerCount} 家。想自己定几家，去左边「关卡」页选「自由对局」。</div>`
                   : `<div class="chip-row">${playerChips}${twoCityToggle}</div>
               <div class="field-hint">${playerNote}</div>`
               }
@@ -917,6 +904,57 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>`;
 
       /*
+       * 关卡页：打哪一关。
+       *
+       * 为什么单独一页而不是塞在战役页顶上：它会一直长——每加一张关卡就多一张卡，
+       * 而"人数 / 对手 / 时代"这些一屏就放得下。地图页当年也是从"塞在战役页最下面"
+       * 搬出来的，同一条理由。
+       */
+      const levelCard = (l: LevelDef): string => {
+        const n = l.seats?.count ?? 2;
+        const ai = l.seats?.ai ?? [];
+        const who = ai.length === 0 ? '全真人' : `${ai.map((p) => seatLabel[p] ?? p).join('、')}电脑`;
+        return `<button type="button" class="map-card ${config.level?.id === l.id ? 'active' : ''}" data-level="${esc(l.id)}" title="${esc(l.brief ?? '')}">
+           <span class="map-card-thumb">${mapThumbSvg(l.map, 2, l.seats?.cities)}</span>
+           <b>${esc(l.name)}</b>
+           <i>${n} 家 · ${who}</i>
+         </button>`;
+      };
+      const levelsView = `
+            <section class="field">
+              <div class="field-label">
+                选一关 <span class="field-hint">关卡决定地图、几家、谁交给电脑</span>
+              </div>
+              <div class="map-gallery">
+                <button type="button" class="map-card ${levelOn ? '' : 'active'}" data-level="" title="自己定所有设置">
+                  <span class="map-card-thumb is-random">自由</span>
+                  <b>自由对局</b>
+                  <i>自己选地图和对手</i>
+                </button>
+                ${allLevels().map(levelCard).join('')}
+              </div>
+              <div class="field-hint">关卡由我们预制，暂时不能自己改。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
+            </section>
+
+            ${
+              config.level
+                ? `<section class="field">
+              <div class="field-label">这一关</div>
+              <div class="field-hint">${esc(config.level.brief ?? '')}</div>
+              <div class="field-hint">
+                ${config.level.map.w}×${config.level.map.h} ·
+                ${config.level.seats?.count ?? 2} 家 ·
+                ${(config.level.seats?.ai ?? []).length === 0 ? '全是真人' : `电脑操作：${(config.level.seats?.ai ?? []).map((p) => seatLabel[p] ?? p).join('、')}`} ·
+                地图由关卡自带，不能换
+              </div>
+            </section>`
+                : `<section class="field">
+              <div class="field-label">现在是自由对局</div>
+              <div class="field-hint">地图在「地图」页挑，人数和对手在「战役」页定。选择一张关卡，这三样都会按关卡来。</div>
+            </section>`
+            }`;
+
+      /*
        * 地图页：选图与传图是同一件事的两头。
        *
        * 之前"上传"藏在上帝模式侧栏里，而"选图"在开局面板里——同一条流水线的
@@ -926,9 +964,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const mapsView = `
             ${
               (config.playerCount ?? 2) > 2
-                ? `<section class="field">
+                ? config.level
+                  ? `<section class="field">
+                     <div class="field-label">这一局的地图 <span class="field-hint">由关卡自带</span></div>
+                     <div class="map-gallery">
+                       <button type="button" class="map-card active" data-level="${esc(config.level.id)}" title="这一关的地图">
+                         <span class="map-card-thumb">${mapThumbSvg(config.level.map, thumbCity, config.level.seats?.cities)}</span>
+                         <b>${esc(config.level.name)}</b>
+                         <i>${config.level.map.w}×${config.level.map.h} · 关卡</i>
+                       </button>
+                     </div>
+                     <div class="field-hint">这一关的地图是手摆的，第三四家的城由关卡一起带过来——公开的地图格式只有 A/B 两组城位。想换一张图，去「关卡」页选「自由对局」。</div>
+                   </section>`
+                  : `<section class="field">
                      <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
-                     <div class="field-hint">多人局不用固定地图：一张手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。</div>
+                     <div class="field-hint">多人局不用固定地图：一张上传的手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。关卡不受这条限制：它自己带第三四家的城位。</div>
                    </section>`
                 : `<section class="field">
               <div class="field-label">
@@ -1007,9 +1057,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
 
-      const summary = `${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
+      const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
         (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
-      }${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
+      }${config.level ? '关卡地图' : config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
 
       mask.innerHTML = `
         <div class="modal start-panel">
@@ -1019,6 +1069,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <span>回合制战棋</span>
             </div>
             <nav class="start-nav">
+              <button class="start-nav-item ${tab === 'levels' ? 'active' : ''}" data-tab="levels">
+                <b>关卡</b>
+                <span>选关 · 剧情</span>
+              </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
                 <b>战役</b>
                 <span>规则 · 时代 · 兵种</span>
@@ -1037,12 +1091,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 tab === 'battle'
                   ? `<h2>战役</h2>
                      <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
-                  : `<h2>地图</h2>
+                  : tab === 'levels'
+                    ? `<h2>关卡</h2>
+                       <p>内建关卡：地图、几家、谁交给电脑都按关卡来。选「自由对局」就全部自己定。</p>`
+                    : `<h2>地图</h2>
                      <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
               }
             </div>
 
-            <div class="modal-body">${tab === 'battle' ? battleView : mapsView}</div>
+            <div class="modal-body">${tab === 'battle' ? battleView : tab === 'maps' ? mapsView : levelsView}</div>
 
             <div class="modal-foot start-foot">
               <div class="start-summary">${summary}</div>
@@ -1106,7 +1163,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 左侧导航：换页就是换一屏内容，滚动位置跟着归零
       const tabBtn = target.closest<HTMLElement>('[data-tab]');
       if (tabBtn?.dataset.tab) {
-        const next = tabBtn.dataset.tab === 'maps' ? 'maps' : 'battle';
+        const t = tabBtn.dataset.tab;
+        const next = t === 'maps' ? 'maps' : t === 'levels' ? 'levels' : 'battle';
         if (next === tab) return;
         tab = next;
         resetScroll = true;
