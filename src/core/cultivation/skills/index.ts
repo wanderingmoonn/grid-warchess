@@ -91,3 +91,50 @@ export {
   gangWindDamage,
   gangWindInRange,
 } from './gang-wind.ts';
+/*
+ * 族 1 · 直伤。掌心雷也在这一族里（它的数据行留在自己的文件，
+ * 实现是 `bolt.ts` 那一份），所以这两行 export 一起构成"族 1 的全部内容"。
+ */
+export {
+  BOLT_ROWS,
+  MIE_SHEN_QIANG_SKILL,
+  YUAN_CI_SHEN_GUANG_SKILL,
+  WU_LEI_ZHENG_FA_SKILL,
+  MIE_SHEN_QIANG_COST,
+  MIE_SHEN_QIANG_MIN_RANK,
+  YUAN_CI_SHEN_GUANG_COST,
+  YUAN_CI_SHEN_GUANG_MIN_RANK,
+  WU_LEI_ZHENG_FA_COST,
+  WU_LEI_ZHENG_FA_MIN_RANK,
+  boltDamage,
+} from './bolt.ts';
+/* 族 2 · 范围伤害：10 条法术共用一份实现，形状一样、余韵不同。 */
+export {
+  BLAST_ROWS,
+  RU_LAI_SHEN_ZHANG_SKILL,
+  HOU_TU_ZHEN_YUE_SKILL,
+  BAI_LI_DU_ZHANG_SKILL,
+  YI_SHAN_TIAN_HAI_SKILL,
+  ZHAI_XING_NA_YUE_SKILL,
+  YAN_SKILL,
+  YAO_SKILL,
+  XIN_SKILL,
+  MIAO_SKILL,
+  SEN_SKILL,
+  RU_LAI_SHEN_ZHANG_COST,
+  RU_LAI_SHEN_ZHANG_MIN_RANK,
+  HOU_TU_ZHEN_YUE_COST,
+  HOU_TU_ZHEN_YUE_MIN_RANK,
+  BAI_LI_DU_ZHANG_COST,
+  YI_SHAN_TIAN_HAI_COST,
+  YI_SHAN_TIAN_HAI_MIN_RANK,
+  ZHAI_XING_NA_YUE_COST,
+  ZHAI_XING_NA_YUE_MIN_RANK,
+  YAN_COST,
+  YAO_COST,
+  XIN_COST,
+  MIAO_COST,
+  SEN_COST,
+  WU_XING_SPELL_MIN_RANK,
+  blastDamage,
+} from './blast.ts';

@@ -7,6 +7,7 @@ import type { GameState, Unit, City, SkillDef } from '../../types.ts';
 import { registerSkillEffect, registerSkillReadyCheck, registerSkillPreview } from '../../skill-hooks.ts';
 import { getExp, getRank, addExp } from '../progression.ts';
 import { boardIdOf } from '../../board.ts';
+import { rayCells } from '../spell-kernel.ts';
 
 // ── 数值 ──────────────────────────────────────────
 /** 基础射程（格） */
@@ -46,34 +47,20 @@ registerSkillReadyCheck('sword-sweep', (s, u) => {
   return left > 0;
 });
 
-/** 算出剑气打向 (targetX, targetY) 时，覆盖的所有格子坐标 */
+/**
+ * 算出剑气打向 (targetX, targetY) 时，覆盖的所有格子坐标。
+ *
+ * 几何本身搬进了 `spell-kernel.ts` 的 `rayCells`（四方向吸附 + 定长射线）：
+ * 直线攻击在这个包里只该有一种画法，灭神枪和剑气纵横共用同一份。
+ * 留这个薄壳是因为调用点读起来更顺，也因为射程要按境界现算。
+ */
 function getSwordSweepCells(
   s: GameState,
   self: Unit,
   targetX: number,
   targetY: number,
 ): Array<{ x: number; y: number }> {
-  const reach = sweepReachForRank(getRank(self));
-
-  const distX = targetX - self.x;
-  const distY = targetY - self.y;
-  let dx = Math.sign(distX);
-  let dy = Math.sign(distY);
-
-  // 四方向吸附：斜着点也归到最近的正方向
-  if (Math.abs(distX) > Math.abs(distY)) dy = 0;
-  else if (Math.abs(distY) > Math.abs(distX)) dx = 0;
-  if (dx === 0 && dy === 0) dx = 1;
-
-  const cells: Array<{ x: number; y: number }> = [];
-  for (let i = 1; i <= reach; i++) {
-    const tx = self.x + dx * i;
-    const ty = self.y + dy * i;
-    if (tx >= 0 && ty >= 0 && tx < s.w && ty < s.h) {
-      cells.push({ x: tx, y: ty });
-    }
-  }
-  return cells;
+  return rayCells(s, self, { x: targetX, y: targetY }, sweepReachForRank(getRank(self)));
 }
 
 registerSkillEffect('sword-sweep', (c) => {

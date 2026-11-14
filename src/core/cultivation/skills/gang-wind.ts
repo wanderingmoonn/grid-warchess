@@ -19,13 +19,24 @@
  * 代价是它不吃任何"溅射加成/减免"——这是有意的：溅射是物理层面的概念，
  * 罡风不是"一次打偏了的攻击"，它就是法术本身。
  *
+ * ── P0 之后 ──────────────────────────────────────────
+ *
+ * 它和掌心雷共用 `spell-kernel.ts`：校验、扣灵力、瞄准高亮都是骨架给的，
+ * 这个文件只剩"圈人 → 挨个打 → 报总数"。族 2（范围伤害）立起来时，
+ * 焱、垚、鑫、淼、森都会变成同一行的复制品。
+ *
  * ⚠️ 红线：本文件不许 import `../units.ts`（见 sky-step.ts 顶部）。
  */
-import type { SkillDef } from '../../types.ts';
-import { registerSkillEffect, registerSkillPreview, registerSkillReadyCheck } from '../../skill-hooks.ts';
-import { distToUnit } from '../../query.ts';
+import { registerSkillEffect } from '../../skill-hooks.ts';
 import { getRank } from '../progression.ts';
-import { canSpendMana, manaOf, spendMana } from '../mana.ts';
+import {
+  defineSpellSkill,
+  registerManaReady,
+  registerPreview,
+  resolveCast,
+  strikeAll,
+  type SpellRow,
+} from '../spell-kernel.ts';
 
 // ── 数值 ──────────────────────────────────────────
 /** 施放一次要多少灵力（比掌心雷贵一档：它是主力输出，不是补刀） */
@@ -54,104 +65,68 @@ export function gangWindInRange(self: { x: number; y: number }, target: { x: num
 }
 
 // ── 数据 ──────────────────────────────────────────
-export const GANG_WIND_SKILL: SkillDef = {
+const ROW: SpellRow = {
   id: 'gang-wind',
   name: '罡风',
   summary:
     `射程 ${GANG_WIND_RANGE} 格，对落点半径 ${GANG_WIND_RADIUS} 格内**所有**敌人造成 ` +
     `${GANG_WIND_BASE} + 境界×${GANG_WIND_PER_RANK} 点伤害（无视护甲）；耗 ${GANG_WIND_COST} 灵力。`,
   effect: 'gang-wind',
-  cooldown: 0,
+  cost: GANG_WIND_COST,
+  range: GANG_WIND_RANGE,
+  // 范围法术亮"这一下会罩住谁"，所以画在落点周围
+  preview: 'blast',
+  radius: GANG_WIND_RADIUS,
+  /*
+   * 高亮按**曼哈顿距离**取格子：能打到的才画。
+   *
+   * 这里原来是方框，四个斜角会被点亮却打不到（实际命中用 `distToUnit`，
+   * 对 1×1 单位就是曼哈顿距离）。那不是"宽一点的提示"，是骗玩家：
+   * 站位时按亮出来的范围数人头，会多算进两个根本不会被扫到的人。
+   * 2026-11-14 按作者口径改成和命中一致，`SpellRow.blastShape` 这个过渡字段一并删掉。
+   */
   // 和掌心雷一样：节拍交给灵力池，不额外限每回合一次
   multiCast: true,
-  targeting: 'point',
-  radius: GANG_WIND_RANGE,
 };
 
-// ── 实现 ──────────────────────────────────────────
-registerSkillReadyCheck('gang-wind', (_s, u) => {
-  if (!canSpendMana(u, GANG_WIND_COST)) {
-    return `灵力不足（${manaOf(u)} / ${GANG_WIND_COST}）`;
-  }
-  return true;
-});
+export const GANG_WIND_SKILL = defineSpellSkill(ROW);
 
+registerManaReady([ROW]);
+registerPreview([ROW]);
+
+// ── 实现 ──────────────────────────────────────────
 registerSkillEffect('gang-wind', (c) => {
   const s = c.state;
-  const self = c.self;
-  const target = c.target;
 
-  if (!target) {
+  const cast = resolveCast(c, {
+    cost: GANG_WIND_COST,
+    range: GANG_WIND_RANGE,
+    mode: 'area',
+    radius: GANG_WIND_RADIUS,
+    noTargetReason: () => '选一个落点',
+    // 先圈人再扣灵力：空放一发不该白花 80 点
+    emptyReason: () => '那里没有敌人',
+    tooFarReason: () => `太远了（罡风射程 ${GANG_WIND_RANGE} 格）`,
+  });
+  if (!cast.ok) {
     c.result.ok = false;
-    c.result.reason = '选一个落点';
-    return;
-  }
-  if (!gangWindInRange(self, target)) {
-    c.result.ok = false;
-    c.result.reason = `太远了（罡风射程 ${GANG_WIND_RANGE} 格）`;
-    return;
-  }
-
-  /*
-   * 先圈人再扣灵力：空放一发不该白花 80 点。
-   * 圈人的口径是 `distToUnit`（点到矩形的最短距离），不是"锚点坐标相等"——
-   * 2×2 的建筑只要有一角在圈里就算被扫到，这和玩家看到的范围一致。
-   */
-  const victims = s.units.filter(
-    (u) => u.hp > 0 && u.owner !== self.owner && distToUnit(s, target, u) <= GANG_WIND_RADIUS,
-  );
-  if (victims.length === 0) {
-    c.result.ok = false;
-    c.result.reason = '那里没有敌人';
-    return;
-  }
-  if (!spendMana(self, GANG_WIND_COST)) {
-    c.result.ok = false;
-    c.result.reason = `灵力不足（需要 ${GANG_WIND_COST} 点）`;
+    c.result.reason = cast.reason;
     return;
   }
 
-  const dmg = gangWindDamage(getRank(self));
-  const name = c.api.utype(s, self.type).name;
-  let total = 0;
-  let killed = 0;
+  const name = c.api.utype(s, c.self.type).name;
+  const dmg = gangWindDamage(getRank(c.self));
 
   // `victims` 是 filter 出来的新数组，killUnit 改的是 s.units，边遍历边删是安全的
-  for (const victim of victims) {
-    const vName = c.api.utype(s, victim.type).name;
-    const hpBefore = victim.hp;
-    c.api.hurt(s, victim, dmg, { source: self, logText: `${name}的罡风扫过，${vName} 受到 ${dmg} 点伤害` });
-    total += Math.max(0, hpBefore - victim.hp);
-    if (victim.hp <= 0) {
-      c.api.killUnit(s, victim, self, `${vName}被罡风撕碎`);
-      killed += 1;
-    }
-  }
+  const { total, killed } = strikeAll(c, cast.victims, dmg, {
+    hurt: (victim) =>
+      `${name}的罡风扫过，${c.api.utype(s, victim.type).name} 受到 ${dmg} 点伤害`,
+    kill: (victim) => `${c.api.utype(s, victim.type).name}被罡风撕碎`,
+  });
 
-  c.api.noteHeat(s, target.x, target.y);
+  c.api.noteHeat(s, cast.point.x, cast.point.y);
   c.result.log =
-    `${name}施放罡风，命中 ${victims.length} 名敌人，共造成 ${total} 点伤害` +
+    `${name}施放罡风，命中 ${cast.victims.length} 名敌人，共造成 ${total} 点伤害` +
     (killed > 0 ? `，${killed} 名当场殒命` : '') +
     `（耗 ${GANG_WIND_COST} 灵力）`;
-});
-
-/**
- * 瞄准预览：把**落点的爆发范围**亮出来。
- *
- * 和掌心雷相反——那个亮的是"我能打到哪一圈"，因为它只打一点；
- * 罡风要回答的是"我这一下会罩住谁"，所以亮的是落点周围的半径。
- */
-registerSkillPreview('gang-wind', (c) => {
-  const { state, self, target } = c;
-  if (!gangWindInRange(self, target)) return [];
-  const cells: number[] = [];
-  for (let dy = -GANG_WIND_RADIUS; dy <= GANG_WIND_RADIUS; dy++) {
-    for (let dx = -GANG_WIND_RADIUS; dx <= GANG_WIND_RADIUS; dx++) {
-      const x = target.x + dx;
-      const y = target.y + dy;
-      if (x < 0 || y < 0 || x >= state.w || y >= state.h) continue;
-      cells.push(y * state.w + x);
-    }
-  }
-  return cells;
 });

@@ -86,6 +86,7 @@ import {
   SPIRIT_REBIRTH_RANK_DROP,
   sweepReachForRank,
 } from '../src/core/cultivation/skills/index.ts';
+import { SPELLS, researchCostOf } from '../src/core/cultivation/spells.ts';
 import { SPIRIT_HP_BONUS_KEEP } from '../src/core/cultivation/abilities/spirit-ascension.ts';
 import { ANOMALY_MIN_RANK } from '../src/core/cultivation/abilities/anomaly.ts';
 import {
@@ -3296,6 +3297,31 @@ function cultivationRules(): string {
           研发要 <b>${GANG_WIND_RESEARCH_COST}</b> 灵石。
           它是修士面对重甲与围攻时的主力手段——甲越厚越赚，圈里的人越多越赚。</li>
       </ul>
+
+      <!--
+        法术一览：**从 SPELLS 生成**，不再手写。
+
+        为什么改：上面那三段是"导读"，写给第一次接触这个包的人；但法术一旦
+        做到几十门，手写必然漏——加了一门新法术、手册里没有，玩家就永远
+        不知道它存在，而且这种漏没有任何测试会红。所以清单交给注册表出。
+
+        文案直接用 SkillDef.summary：它本来就是"印在按钮上、玩家点之前要能
+        看懂"的那句话，和界面说的是同一份，不会两处对不上。
+      -->
+      <h3>法术一览</h3>
+      <table>
+        <thead><tr><th>法术</th><th>说明</th><th>灵力</th><th>研发</th><th>门槛</th></tr></thead>
+        <tbody>
+          ${SPELLS.map((sp) => {
+            const rank = sp.minRank ?? 0;
+            return `<tr><td class="name">${esc(sp.skill.name)}</td><td>${rich(
+              sp.skill.summary,
+            )}</td><td>${sp.cost}</td><td>${researchCostOf(sp)} 灵石</td><td>${
+              rank > 0 ? `${rank} 期` : '—'
+            }</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
 
       <h3>灵气浓度</h3>
       <p>每个格子有一个 <b>0～${QI_MAX}</b> 的灵气浓度。它不是贴在地形上的固定标签，
