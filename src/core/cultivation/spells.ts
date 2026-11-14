@@ -33,6 +33,44 @@ import { SPIRIT_STONE } from './resources.ts';
 import { UNIT_IDS } from './identity.ts';
 import { getRank } from './progression.ts';
 import { PALM_THUNDER_COST, PALM_THUNDER_SKILL } from './skills/palm-thunder.ts';
+import {
+  MIE_SHEN_QIANG_COST,
+  MIE_SHEN_QIANG_MIN_RANK,
+  MIE_SHEN_QIANG_SKILL,
+  WU_LEI_ZHENG_FA_COST,
+  WU_LEI_ZHENG_FA_MIN_RANK,
+  WU_LEI_ZHENG_FA_SKILL,
+  YUAN_CI_SHEN_GUANG_COST,
+  YUAN_CI_SHEN_GUANG_MIN_RANK,
+  YUAN_CI_SHEN_GUANG_SKILL,
+} from './skills/bolt.ts';
+import {
+  BAI_LI_DU_ZHANG_COST,
+  BAI_LI_DU_ZHANG_SKILL,
+  HOU_TU_ZHEN_YUE_COST,
+  HOU_TU_ZHEN_YUE_MIN_RANK,
+  HOU_TU_ZHEN_YUE_SKILL,
+  MIAO_COST,
+  MIAO_SKILL,
+  RU_LAI_SHEN_ZHANG_COST,
+  RU_LAI_SHEN_ZHANG_MIN_RANK,
+  RU_LAI_SHEN_ZHANG_SKILL,
+  SEN_COST,
+  SEN_SKILL,
+  WU_XING_SPELL_MIN_RANK,
+  XIN_COST,
+  XIN_SKILL,
+  YAN_COST,
+  YAN_SKILL,
+  YAO_COST,
+  YAO_SKILL,
+  YI_SHAN_TIAN_HAI_COST,
+  YI_SHAN_TIAN_HAI_MIN_RANK,
+  YI_SHAN_TIAN_HAI_SKILL,
+  ZHAI_XING_NA_YUE_COST,
+  ZHAI_XING_NA_YUE_MIN_RANK,
+  ZHAI_XING_NA_YUE_SKILL,
+} from './skills/blast.ts';
 import { SPIRIT_BREATH_COST, SPIRIT_BREATH_SKILL } from './skills/spirit-breath.ts';
 import {
   GANG_WIND_COST,
@@ -94,6 +132,52 @@ export const SPELLS: readonly SpellDef[] = [
     researchCost: GANG_WIND_RESEARCH_COST,
     minRank: GANG_WIND_MIN_RANK,
   },
+  // ── 族 1 · 直伤（2026-11-14）──────────────────────────
+  //
+  // 这三门和掌心雷共用 `skills/bolt.ts` 的实现，各自只贡献一行数据。
+  // `minRank` 是"够不够格学"，和法术位（背得下几门）是两件事，见 SpellDef 上方。
+  { skill: MIE_SHEN_QIANG_SKILL, cost: MIE_SHEN_QIANG_COST, minRank: MIE_SHEN_QIANG_MIN_RANK },
+  {
+    skill: YUAN_CI_SHEN_GUANG_SKILL,
+    cost: YUAN_CI_SHEN_GUANG_COST,
+    minRank: YUAN_CI_SHEN_GUANG_MIN_RANK,
+  },
+  {
+    skill: WU_LEI_ZHENG_FA_SKILL,
+    cost: WU_LEI_ZHENG_FA_COST,
+    minRank: WU_LEI_ZHENG_FA_MIN_RANK,
+  },
+  // ── 族 2 · 范围伤害（2026-11-14）──────────────────────
+  //
+  // 10 条法术一套实现（`skills/blast.ts`）。五行五法（焱垚鑫淼森）都标了
+  // `custom.element`，族 5（五行免耗）以后要读它——这是"五行属性存哪"的答案：
+  // 存在技能自己的 `custom` 里，不往 `Unit` 上开字段。
+  {
+    skill: RU_LAI_SHEN_ZHANG_SKILL,
+    cost: RU_LAI_SHEN_ZHANG_COST,
+    minRank: RU_LAI_SHEN_ZHANG_MIN_RANK,
+  },
+  {
+    skill: HOU_TU_ZHEN_YUE_SKILL,
+    cost: HOU_TU_ZHEN_YUE_COST,
+    minRank: HOU_TU_ZHEN_YUE_MIN_RANK,
+  },
+  { skill: BAI_LI_DU_ZHANG_SKILL, cost: BAI_LI_DU_ZHANG_COST },
+  {
+    skill: YI_SHAN_TIAN_HAI_SKILL,
+    cost: YI_SHAN_TIAN_HAI_COST,
+    minRank: YI_SHAN_TIAN_HAI_MIN_RANK,
+  },
+  {
+    skill: ZHAI_XING_NA_YUE_SKILL,
+    cost: ZHAI_XING_NA_YUE_COST,
+    minRank: ZHAI_XING_NA_YUE_MIN_RANK,
+  },
+  { skill: YAN_SKILL, cost: YAN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: YAO_SKILL, cost: YAO_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: XIN_SKILL, cost: XIN_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: MIAO_SKILL, cost: MIAO_COST, minRank: WU_XING_SPELL_MIN_RANK },
+  { skill: SEN_SKILL, cost: SEN_COST, minRank: WU_XING_SPELL_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */

@@ -18,6 +18,7 @@
 | `skills/` | **一个技能一个文件**：数值常量 + `SkillDef` + 就绪检查 + 效果 + 预览，全在一个文件里。 | `skills/index.ts` 负责 import 全部（触发注册）并汇总导出。**禁止 import `../units.ts`**，见第 2 节。 |
 | `abilities/` | **能力实现**。每个能力一个文件，`index.ts` 统一导出并组装成数组。 | 含效果型/光环型逻辑（如 `spirit-aura.ts`）。`unlocks.ts` 在这里，负责能力解锁。 |
 | `skills/unlocks.ts` | **技能解锁**。`learnSkill` + 技能触发表 + `onRankUp` 注册。 | 和能力解锁对称。详见第 4 节。 |
+| `spell-kernel.ts` | **法术骨架**。数据行类型 `SpellRow`、`defineSpellSkill`、批量挂灵力检查与瞄准高亮、`resolveCast`、`strike`。 | **不含任何一条法术的内容**（无数值、无文案、不注册 effect）。只放"所有法术都一样"的那层机制。见 5.0。 |
 | `hooks.ts` | **事件钩子**。`onUnitKilled`、`modifyDamage` 等 `ExpansionHooks` 的集合。 | 只放引擎回调，不含“给本包内部调用的 API”。 |
 | `panel.ts` | **UI 面板拼接**。拼成给玩家看的字符串。 | 纯查询。**禁止硬编码数值，必须引用 `stats.ts` 的常量。** |
 
@@ -85,6 +86,66 @@ Node 的 ESM 环是**运行时**才炸（`undefined` 或 TDZ），`tsc` 看不�
 **如果要加一种新途径（如“读秘籍”），绝不要改触发源层！** 在那个技能的实现里直接调用 `learnSkill`。
 
 ## 5. 常见任务指引
+
+### 5.0 新增一门**法术**（P0 之后，优先看这条）
+
+法术和"技能"的差别不在数据结构（都是 `SkillDef`），在**数量**：法术要做上百门，
+所以它们不走 5.1 那套"一个文件从头写到尾"，而是走 `spell-kernel.ts` 的**数据行**。
+
+一行数据只有"数"和"选哪个实现"：
+
+```ts
+const ROW: SpellRow = {
+  id: 'palm-thunder',
+  name: '掌心雷',
+  summary: `射程 3 格……耗 50 灵力。`,   // 按钮上印的就是这句
+  effect: 'bolt',        // 走哪个族的实现（SKILL_EFFECTS 的 key）
+  cost: 50,              // 灵力
+  range: 3,              // 射程；SkillDef.radius 也取它
+  preview: 'ring',       // ring = 亮自己周围；blast = 亮落点周围
+};
+
+export const PALM_THUNDER_SKILL = defineSpellSkill(ROW);
+registerManaReady([ROW]);   // 灵力就绪检查：不用自己写
+registerPreview([ROW]);     // 瞄准高亮：不用自己写
+```
+
+然后只剩"打中了发生什么"，用骨架的两个零件拼：
+
+- `resolveCast(c, spec)` —— 校验目标/自己人/射程，**通过了才扣灵力**，返回受害者列表。
+  射程按谁算要显式写：`rangeFrom: 'victim'`（到目标单位，掌心雷）或
+  `'point'`（到落点，罡风）。这两种口径在 2×2 单位上会给不同答案，别让骨架替你猜。
+- `strike` / `strikeAll(c, victims, dmg, text)` —— 走唯一扣血出口 `api.hurt`，
+  打死了再 `api.killUnit`，顺带算总伤害和击杀数。
+
+**加法术的顺序**是：先看它属于哪个族（`docs/SPELLS-TRIAGE-2026-11-13.md`）→
+族已经有了就只加一行；族还没有，先写那个族的 handler（一个族写一次，之后第 2~N 条免费）。
+
+现成的族：
+- **族 1 直伤 `bolt`**（`skills/bolt.ts`）：掌心雷、灭神枪、元磁神光、五雷正法；
+- **族 2 范围伤害 `blast`**（`skills/blast.ts`）：如来神掌、厚土镇岳、百里毒瘴、
+  移山填海、摘星拿月、焱、垚、鑫、淼、森。
+
+它们的参数就是"族的开关"长什么样的样板：
+
+```
+base / perRank   伤害 = base + perRank × 境界
+trueMul          改用「真元 × 倍率」当伤害（写了就忽略上面两个）
+line             直线贯穿（四方向射线，和剑气纵横同一份）
+chain / chainRadius  连锁（半径内全中，穿迷雾，不跨图）
+stun / root      麻痹（整回合不能动）/ 定身（只禁移动）
+sunder           熔甲         physical   true = 按护甲结算
+downAir          击落         knockback  击退几格
+flatten          范围内地形改平原   lifesteal  按伤害比例回血
+element          五行（metal/wood/water/fire/earth，族 5 要读）
+soulBound        魂法
+```
+
+加一条同族法术 = 在 `bolt.ts` 里加一个 `ROW` 常量 + 导出它的 `SkillDef`，
+再到 `spells.ts` 的 `SPELLS` 里登记一行。**别在族文件里写第二份 effect**。
+
+⚠️ **没跑通的法术不要登记进 `SPELLS`**：登记即上线，`SKILL_EFFECTS[effect]` 查不到
+实现时会当场抛错。半成品留在数据表里、注释掉或放进草稿数组，游戏永远是能玩的。
 
 ### 5.1 新增一个技能（90% 的情况只看这一条）
 1. 在 `skills/` 下新建 `my-skill.ts`：数值常量 + `SkillDef` + `registerSkillReadyCheck` + `registerSkillEffect`（+ 需要预览就 `registerSkillPreview`）。**四样放同一个文件**。

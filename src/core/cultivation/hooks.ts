@@ -9,6 +9,7 @@ import {
   sectRecruitStone,
 } from './sect.ts';
 import { regenMana } from './mana.ts';
+import { isStunned } from './spell-statuses.ts';
 import { exchangeMana, qiAt, qiOverlayCells, qiSourceLabel, QI_MAX, stepQiField } from './qi-field.ts';
 import {
   PILLS,
@@ -542,7 +543,12 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// ── 完全封印：被压到 0 移动力的单位不能下任何命令 ──
 	// 规则层会在移动/攻击/攻城/放技能/建造五个入口统一问它。
 	// 面板上也要写一行，否则玩家只看到"点了没反应"。
-	canCommand: ({ state, unit }) => sealedReasonOf(state, unit),
+	//
+	// 麻痹也走这一条：「动不了」必须对移动、攻击、施法同时生效。分散着写
+	// 迟早出现"能动但打不了"这种半瘫，而且只在特定动作上复现，很难查。
+	// 封印优先于麻痹报理由——封印是持续状态，麻痹只是这一回合的事，
+	// 先告诉玩家更根本的那条。
+	canCommand: ({ state, unit }) => sealedReasonOf(state, unit) ?? (isStunned(unit) ? '麻痹中，无法行动' : null),
 	getUnitPanelLines: ({ state, unit, viewer }) => {
 		const lines = getCultivationPanelLines(state, unit, viewer);
 		const sealed = sealedReasonOf(state, unit);
