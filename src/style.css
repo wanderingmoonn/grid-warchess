@@ -8938,3 +8938,23 @@ a.btn {
   overflow-y: auto;
   padding: 12px 18px 16px;
 }
+
+/*
+ * 扩展包的第三档：警告。
+ *
+ * 「必须开」和「禁用」是关卡对规则的硬要求，玩家没得选；这一档是作者的建议——
+ * 能开，但开了这一关就不再是设计过的那个难度。所以用琥珀而不是红/蓝：
+ * 红色读起来像"被禁了"，蓝色像"要你开"。
+ */
+.expansion-body .expansion-req.is-warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn-deep);
+}
+
+.field-hint.is-warn {
+  color: var(--warn-deep);
+}
+
+.field-hint.is-warn::before {
+  content: '⚠ ';
+}
