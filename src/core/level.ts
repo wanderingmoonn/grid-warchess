@@ -446,7 +446,7 @@ export const LEVELS: LevelDef[] = [
     id: 'level:lone-city',
     version: LEVEL_VERSION,
     name: '孤城',
-    brief: '14×14。你只有一座城，河对岸有两座。桥会被炸，水会退——撑到第 15 次行动。',
+    brief: '14×14。你只有一座城，河对岸有两座。桥会被炸，水会退——撑到第 30 次行动。',
     map: {
       id: 'levelmap:lone-city',
       name: '孤城',
@@ -471,13 +471,15 @@ export const LEVELS: LevelDef[] = [
       ],
       B: [
         { type: 'militia', x: 8, y: 3 },
+        { type: 'militia', x: 9, y: 2 },
         { type: 'archer', x: 9, y: 4 },
         { type: 'militia', x: 8, y: 6 },
         { type: 'militia', x: 9, y: 10 },
         { type: 'archer', x: 8, y: 11 },
+        { type: 'militia', x: 9, y: 11 },
       ],
     },
-    goals: [{ kind: 'survive', seat: 'A', untilTurn: 15 }],
+    goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
     /*
      * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
      * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
@@ -495,7 +497,7 @@ export const LEVELS: LevelDef[] = [
     events: [
       {
         id: 'blow',
-        when: { kind: 'turn', at: 6 },
+        when: { kind: 'turn', at: 9 },
         do: [
           { kind: 'say', text: '桥被炸断了。别再想着过河——守住这一头。' },
           { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, to: 'deep' },
@@ -503,7 +505,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'ebb',
-        when: { kind: 'turn', at: 11 },
+        when: { kind: 'turn', at: 20 },
         do: [
           { kind: 'say', text: '水位退了。整条河都能淌过去——他们不会只走桥了。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 7, y1: 13 }, to: 'shallow' },
@@ -517,7 +519,7 @@ export const LEVELS: LevelDef[] = [
     id: 'level:behead',
     version: LEVEL_VERSION,
     name: '斩首',
-    brief: '12×12。敌方主帅缩在城下的箭塔后面。第 15 次行动之前杀掉他，否则他撑住了。',
+    brief: '12×12。敌方主帅缩在城下的箭塔后面。第 18 次行动之前杀掉他，否则他撑住了。',
     map: {
       id: 'levelmap:behead',
       name: '斩首',
@@ -547,9 +549,9 @@ export const LEVELS: LevelDef[] = [
         // 不可建造：钱数只是占位，产线根本不列它
         cost: 60,
         move: 2,
-        atk: 16,
-        armor: 5,
-        maxHp: 45,
+        atk: 18,
+        armor: 9,
+        maxHp: 70,
         range: 1,
         vision: 3,
         summonedOnly: true,
@@ -570,6 +572,8 @@ export const LEVELS: LevelDef[] = [
         { type: 'militia', x: 8, y: 4 },
         { type: 'archer', x: 8, y: 2 },
         { type: 'militia', x: 10, y: 4 },
+        { type: 'archer', x: 7, y: 3 },
+        { type: 'militia', x: 9, y: 4 },
       ],
     },
     /*
@@ -582,7 +586,7 @@ export const LEVELS: LevelDef[] = [
      */
     goals: [
       { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将' },
-      { kind: 'survive', seat: 'B', untilTurn: 15 },
+      { kind: 'survive', seat: 'B', untilTurn: 18 },
     ],
     events: [
       {
@@ -994,6 +998,16 @@ export function applyLevelToConfig(base: MatchConfig, level: LevelDef | null): M
     ...base,
     level,
     fixedMap: undefined,
+    /*
+     * 关卡是"照着打的一局"，不是沙盒也不是观战：
+     * 上帝模式、指挥官模式、选卡都在这一层关掉。
+     *
+     * 光在界面上把它们灰掉是不够的——配置会跟着存档、房间、分享链接传，
+     * 而且"上一个关卡"留下的模式会被带进下一关（`applyLevelToConfig` 是拷贝 base 的）。
+     */
+    godMode: false,
+    commanderMode: false,
+    draftMode: false,
     // 选了关卡，尺寸就是关卡地图的尺寸；面板上那个数字跟着走，免得显示和事实相反
     size: level.map.w,
     playerCount: level.seats?.count ?? base.playerCount,

@@ -9231,7 +9231,7 @@ check('选「孤城」：卡片有缩略图，说明写清几城、目标、有�
   click('[data-level="level:lone-city"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
-  assert.ok(body.includes('守住 15 次行动'), '要写出守多久');
+  assert.ok(body.includes('守住 30 次行动'), '要写出守多久');
   assert.ok(body.includes('红方：'), '目标要标出是谁的目标');
   assert.ok(body.includes('处会在特定条件下发生的事'), '要说明有关卡事件');
   const card = doc.querySelector<HTMLElement>('[data-level="level:lone-city"]');
@@ -9260,6 +9260,30 @@ check('选了关卡：人数只读、时代/尺寸/先手点不动、扩展被�
   assert.ok(!forb!.checked && forb!.disabled, '这一关禁用的包：空着且点不动');
   const other = doc.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
   assert.ok(other && !other.disabled, '关卡没提到的包不该被锁');
+
+  /*
+   * 下面这几条是实机撞出来的：选了关卡，居然还能开上帝模式 / 指挥官 / 选卡，
+   * 还能点地貌、还能去地图页换图。都不影响关卡地图，但每一条都在问
+   * 我这局到底在玩什么。
+   */
+  assert.ok(locked('[data-role]'), '关卡局里 亲自指挥/指挥官/上帝 都不该能点');
+  assert.ok(locked('[data-draft-mode]'), '选卡模式也不该能点');
+  assert.ok(locked('[data-mapstyle]'), '地貌由关卡地图决定，不该能点');
+
+  click('[data-tab="maps"]');
+  const mapBody = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(mapBody.includes('由关卡自带'), `地图页要说明图是关卡带的，实际：${mapBody.slice(0, 200)}`);
+  assert.equal(doc.querySelectorAll('.modal-body [data-map]').length, 0, '关卡局里不该还能选别的图');
+  assert.ok(mapBody.includes('地图库'), '要说明关卡局不掺和地图库');
+  // 上传入口所在的那一段是 hidden，不是没渲染——所以要查"看得见的那一个"
+  assert.equal(
+    [...doc.querySelectorAll<HTMLElement>('.modal-body [data-act="map-file"]')].filter(
+      (b) => !b.closest('section')?.hidden,
+    ).length,
+    0,
+    '上传入口也该收起',
+  );
+  void other;
 });
 
 check('选「斩首」：两条目标都标了归属', () => {
@@ -9267,7 +9291,7 @@ check('选「斩首」：两条目标都标了归属', () => {
   click('[data-level="level:behead"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('消灭对方全部守将'), `要写清斩首目标，实际：${body.slice(0, 240)}`);
-  assert.ok(body.includes('蓝方：守住 15 次行动'), '敌方的时限目标也要写出来，并标明是蓝方的');
+  assert.ok(body.includes('蓝方：守住 18 次行动'), '敌方的时限目标也要写出来，并标明是蓝方的');
 });
 
 check('选「黄雀」：说清第三家要中途才登场', () => {
@@ -9303,7 +9327,7 @@ check('开局后顶栏常驻一行关卡目标', () => {
   assert.ok(goal, '顶栏应该有目标那一块');
   assert.ok(!goal!.hidden, '关卡局里这块不能藏着');
   const text = goal!.textContent ?? '';
-  assert.ok(text.includes('守住 15 次行动'), `要写出守多久，实际：${text}`);
+  assert.ok(text.includes('守住 30 次行动'), `要写出守多久，实际：${text}`);
   assert.ok(text.includes('还剩'), `要写出还剩几次，实际：${text}`);
 });
 

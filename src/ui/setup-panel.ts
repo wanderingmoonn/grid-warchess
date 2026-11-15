@@ -458,10 +458,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const multi = (config.playerCount ?? 2) > 2;
       const styles = mapStylesFor(config.expansionIds);
+      const styleLock = !!config.level;
       const styleChips = styles
         .map(
           (st) =>
-            `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
+            `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}${styleLock ? ' is-locked' : ''}" data-mapstyle="${st.id}" title="${styleLock ? '这一关的地形是写死的' : st.note}" ${styleLock ? 'disabled' : ''}>${st.name}</button>`,
         )
         .join('');
       // 提示也跟着变：没勾扩展时说清"多出来的地貌去哪了"，勾了就说现在是几种
@@ -637,6 +638,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 地图页（关卡自带地图）、关卡页（选中态）四处都要读它。
        */
       const levelOn = !!config.level;
+      /* 关卡局是照着打的一局：沙盒/观战/选卡这些"玩另一局"的模式一律锁掉 */
+      const roleLock = levelOn;
       const relChips = (id: string): string => {
         const out: string[] = [];
         const need = expansionById(id)?.requires ?? [];
@@ -856,12 +859,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
               </div>
               <div class="chip-row">
-                <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
-                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
+                <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" ${roleLock ? 'disabled' : ''} title="每个单位都由你自己走、自己打">亲自指挥</button>
+                <button class="chip ${config.commanderMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-role="commander" ${roleLock ? 'disabled' : ''} title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
                 ${
                   playerCount > 2
                     ? ''
-                    : `<button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
+                    : `<button class="chip ${config.godMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-role="god" ${roleLock ? 'disabled' : ''} title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
                 }
               </div>
               <div class="field-hint">${
@@ -881,8 +884,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 playerCount > 2
                   ? `<div class="field-hint">多人局暂不支持选卡：禁选是"双方互相看不见"设计的，三家四家一桌要改的是整套 BP 界面，不是加两行。这一局直接按下方勾选的兵种池开局。</div>`
                   : `<div class="chip-row">
-                <button class="chip ${config.draftMode ? '' : 'active'}" data-draft-mode="off" title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
-                <button class="chip ${config.draftMode ? 'active' : ''}" data-draft-mode="on" title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
+                <button class="chip ${config.draftMode ? '' : 'active'}${roleLock ? ' is-locked' : ''}" data-draft-mode="off" ${roleLock ? 'disabled' : ''} title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
+                <button class="chip ${config.draftMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-draft-mode="on" ${roleLock ? 'disabled' : ''} title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
               </div>`
               }
               <div class="field-hint">${
@@ -1084,20 +1087,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const mapsView = `
             ${
-              (config.playerCount ?? 2) > 2
-                ? config.level
-                  ? `<section class="field">
-                     <div class="field-label">这一局的地图 <span class="field-hint">由关卡自带</span></div>
+              config.level
+                ? `<section class="field">
+                     <div class="field-label">这一局的地图 <span class="field-hint">由关卡自带，换不了</span></div>
                      <div class="map-gallery">
-                       <button type="button" class="map-card active" data-level="${esc(config.level.id)}" title="这一关的地图">
+                       <button type="button" class="map-card active is-locked" data-level="${esc(config.level.id)}" title="这一关的地图" disabled>
                          <span class="map-card-thumb">${mapThumbSvg(config.level.map, thumbCity, config.level.seats?.cities)}</span>
                          <b>${esc(config.level.name)}</b>
                          <i>${config.level.map.w}×${config.level.map.h} · 关卡</i>
                        </button>
                      </div>
-                     <div class="field-hint">这一关的地图是手摆的，第三四家的城由关卡一起带过来——公开的地图格式只有 A/B 两组城位。想换一张图，去「关卡」页选「自由对局」。</div>
+                     <div class="field-hint">这一关的图是手摆的，城位也一起写死了。想换一张，去「关卡」页选「自由对局」。</div>
                    </section>`
-                  : `<section class="field">
+                : (config.playerCount ?? 2) > 2
+                  ? `<section class="field">
                      <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
                      <div class="field-hint">多人局不用固定地图：一张上传的手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。关卡不受这条限制：它自己带第三四家的城位。</div>
                    </section>`
@@ -1121,7 +1124,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>`
             }
 
-            <section class="field">
+            ${
+              config.level
+                ? `<section class="field">
+              <div class="field-label">地图库</div>
+              <div class="field-hint">关卡局不掺和地图库：这一关的图是写死的，选别的图、传新图都不会生效。想自由选图，先去「关卡」页选「自由对局」。</div>
+            </section>`
+                : ``
+            }
+            ${''}
+            <section class="field" ${config.level ? 'hidden' : ''}>
               <div class="field-label">
                 玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
                 <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
@@ -1145,7 +1157,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
             </section>
 
-            <section class="field">
+            <section class="field" ${config.level ? 'hidden' : ''}>
               <div class="field-label">
                 上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
               </div>
@@ -1176,7 +1188,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
             </section>
 
-            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
+            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" ${config.level ? 'disabled' : ''} hidden />`;
 
       const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
         (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
