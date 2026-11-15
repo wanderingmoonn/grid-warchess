@@ -118,15 +118,17 @@ export function loadMatch(): GameState | null {
     const parsed = JSON.parse(raw) as GameState;
     if (!isValidState(parsed)) return null;
     /*
-     * 关卡改过之后，**不要续那一局**。
+     * 关卡改过之后：**照样续档，只提醒一句**。
      *
-     * `createMatch` 把关卡整包快照进 `config.level`，事件、城位、部署全从快照读。
-     * 于是"作者改了关卡、玩家续旧档"会跑出旧内容，而且不报任何错——
-     * 表现就是"我明明加了援军，游戏里一个都没有"。
+     * `createMatch` 把关卡整包快照进 `config.level`，所以旧存档跑的是旧内容——
+     * 但它是**自洽的**（事件、城位、部署都来自同一份快照），不会崩。
      *
-     * 只比 `events` 和 `map.rows`：这两样决定"会发生什么"和"在哪发生"，
-     * 是作者改得最勤的；`deploy` 的对象 key 顺序不稳定，比了容易误判。
-     * 不一致就当作没有存档，让玩家从新版关卡开一局。
+     * 之前这里写的是"不一致就当没有存档"（`return null`），直接扔掉了存档。
+     * 那一下同时干掉两样东西：**「继续上一局」不见了**，而且**配置也回到默认**——
+     * 因为新开局的默认配置本来就寄生在这一局的 `state.config` 上。
+     * 对作者是方便（不用手动清缓存），对玩家是灾难。所以改成只警告。
+     *
+     * 想验证新版关卡：开一局新的就行（或者在开发者工具里清掉 localStorage）。
      */
     const snap = parsed.config?.level;
     if (snap?.id) {
@@ -135,7 +137,11 @@ export function loadMatch(): GameState | null {
         const changed =
           JSON.stringify(now.events ?? []) !== JSON.stringify(snap.events ?? []) ||
           JSON.stringify(now.map?.rows ?? []) !== JSON.stringify(snap.map?.rows ?? []);
-        if (changed) return null;
+        if (changed) {
+          console.warn(
+            `[存档] 关卡「${now.name}」在保存之后改过，这一局按旧版本继续。想看新版请开新局。`,
+          );
+        }
       }
     }
     // 老存档里双方还叫"我方/敌方"：读出来顺手换成红蓝，不用玩家重开一局
