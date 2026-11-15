@@ -9294,6 +9294,18 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
   // 默认配置里本来就带着「老兵不死」，所以这里只验勾上的那个出现在入口上
   assert.ok(entryNow.includes('血战'), '入口那一行要列出已经加了什么，实际：' + entryNow);
 
+
+  // 警告档：能开、不锁，但要说清"会变难"
+  click('[data-act="exp-drawer"]');
+  const warned = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="high-mobility"]');
+  assert.ok(warned, '抽屉里应该有「高机动性」');
+  assert.ok(!warned!.disabled, '警告不是禁用：还得能勾');
+  const warnTag = warned!.closest('.expansion-item')?.querySelector('.is-warn');
+  assert.ok(warnTag, '这一档要在条目上标出来');
+  assert.ok((warnTag!.textContent ?? '').includes('变难'), '标签要写清楚是变难，不是禁用');
+
+  const briefText = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(briefText.includes('明显变难'), '简报页也要提醒一句，实际：' + briefText.slice(0, 200));
   click('[data-act="exp-close"]');
   assert.equal(doc.querySelector('.exp-drawer'), null, '点关闭应该收起抽屉');
 

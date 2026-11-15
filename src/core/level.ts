@@ -255,8 +255,21 @@ export function goalText(goal: LevelGoal): string {
  * `require` 管的就是这件事。
  */
 export interface LevelExpansionRules {
+  /** 这一关必须开 */
   require?: string[];
+  /** 这一关必须禁 */
   forbid?: string[];
+  /**
+   * 能开，但会让这一关明显变难——只是**提示**，不锁。
+   *
+   * 和 require/forbid 是三件不同的事：那两个是关卡对规则的硬要求（会改这一局怎么打），
+   * 这个是作者对玩家的提醒（"加了这个，这一关会从难变成难玩"）。所以它不参与锁定，
+   * 只出现在简报页和扩展列表上。
+   *
+   * 典型例子：孤城只有 3 个守兵，开了「闪电战」或「高机动性」之后，攻方的机动优势
+   * 会被放大到无法应对。这种不该禁——玩家想挑战就该让他试——但得先说一声。
+   */
+  warn?: string[];
 }
 
 /**
@@ -534,31 +547,6 @@ export const LEVELS: LevelDef[] = [
      * 它最多多过去一两个兵，城一滴血不掉）。
      */
     ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
-    /*
-     * 游骑：从地图边缘长途奔袭的骑兵，只由事件刷出，谁也造不出来。
-     *
-     * 数值贴着铁器骑士（40 血 / 17 攻 / 4 甲），但**移动力从 3 提到 4**。
-     * 不靠移动力它撑不起"包抄"：从边缘到城要跑六七格，走 3 步的骑兵能被一步步点掉，
-     * 走 4 步才真的要在两翼分兵。
-     */
-    units: {
-      raider: {
-        id: 'raider',
-        name: '游骑',
-        short: '骑',
-        era: 2,
-        category: 'combat',
-        cost: 95,
-        move: 4,
-        atk: 16,
-        armor: 3,
-        maxHp: 36,
-        range: 1,
-        vision: 3,
-        // 只此一份：不进产线、AI 也不采购
-        summonedOnly: true,
-      },
-    },
     deploy: {
       A: [
         { type: 'militia', x: 4, y: 7 },
@@ -601,7 +589,14 @@ export const LEVELS: LevelDef[] = [
      * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
      * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
      */
-    expansions: { forbid: ['turn-order-comp','high-mobility'] },
+    /*
+     * 闪电战、高机动性不禁，只提醒。
+     *
+     * 这一关守方只有三个兵，攻方的机动优势被放大得很厉害：开了之后难度会从"要小心"
+     * 变成"基本守不住"。但那是玩家自己选的挑战，禁掉不如说清楚——
+     * 所以从 forbid 挪到 warn（`2026-11-15` 实机反馈：「开高机动性直接没法打」）。
+     */
+    expansions: { require:['era-arms'] , forbid: ['turn-order-comp'], warn: ['blitz', 'high-mobility'] },
     /*
      * 三段压力：
      *   1~5 次行动：桥还在。这是玩家**唯一能主动出门换兵**的窗口，也是这关的全部乐趣；
@@ -616,13 +611,13 @@ export const LEVELS: LevelDef[] = [
         id: 'flank-1',
         when: { kind: 'turn', at: 6 },
         do: [
-          { kind: 'say', text: '南北边冒出人影——是骑兵。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 2, y: 13 }] },
+          { kind: 'say', text: '南北边冒出斥候，小心之后更多的援兵。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'scout', x: 2, y: 0 }, { type: 'scout', x: 2, y: 13 }] },
         ],
       },
       {
         id: 'wave-3',
-        when: { kind: 'turn', at: 7 },
+        when: { kind: 'turn', at: 8 },
         do: [
           { kind: 'say', text: '对岸又有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
@@ -646,10 +641,10 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'flank-2',
-        when: { kind: 'turn', at: 12 },
+        when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '南北边骑兵再次绕行来了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+          { kind: 'say', text: '南北边骑兵绕行来了。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 2, y: 13 }] },
         ],
       },
       {
@@ -689,7 +684,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 20 },
         do: [
           { kind: 'say', text: '两翼又是一拨。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 3, y: 0 }, { type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 3, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 2, y: 13 }, { type: 'knight', x: 3, y: 13 }] },
         ],
       },
     ],
@@ -1289,12 +1284,26 @@ function normalizeExpansions(raw: unknown, errors: string[]): LevelExpansionRule
   };
   const require = clean(obj.require, '必须开的扩展');
   const forbid = clean(obj.forbid, '禁用的扩展');
+  /*
+   * 警告档：只留"既不必须开、也没被禁"的那些。
+   *
+   * 同时出现在 require/forbid 里的警告没有意义——玩家要么非开不可、要么根本开不了，
+   * 再提醒一句"会变难"只会让人困惑。静默剔掉，不报错：作者多半是在三个数组之间复制时
+   * 忘了删，报错反而打断他。
+   */
+  const warn = clean(obj.warn, '会变难的扩展').filter(
+    (id) => !require.includes(id) && !forbid.includes(id),
+  );
   const both = require.filter((id) => forbid.includes(id));
   if (both.length > 0) {
     errors.push(`「${both.map((id) => expansionById(id)?.name ?? id).join('、')}」被同时要求开启和禁用`);
   }
-  if (require.length === 0 && forbid.length === 0) return undefined;
-  return { ...(require.length > 0 ? { require } : {}), ...(forbid.length > 0 ? { forbid } : {}) };
+  if (require.length === 0 && forbid.length === 0 && warn.length === 0) return undefined;
+  return {
+    ...(require.length > 0 ? { require } : {}),
+    ...(forbid.length > 0 ? { forbid } : {}),
+    ...(warn.length > 0 ? { warn } : {}),
+  };
 }
 
 /**

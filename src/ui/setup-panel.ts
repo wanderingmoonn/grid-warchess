@@ -680,15 +680,29 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const lockedRequire = new Set(levelOn ? config.level?.expansions?.require ?? [] : []);
       const lockedForbid = new Set(levelOn ? config.level?.expansions?.forbid ?? [] : []);
+      // 第三档：不锁、只提醒。开了会让这一关明显变难
+      const warned = new Set(levelOn ? config.level?.expansions?.warn ?? [] : []);
       const expLockNote = (() => {
         const req = [...lockedRequire].map(nameOf);
         const forb = [...lockedForbid].map(nameOf);
-        if (req.length === 0 && forb.length === 0) return '';
+        const warn = [...warned].map(nameOf);
         const parts = [
           req.length > 0 ? `必须开：${req.join('、')}` : '',
           forb.length > 0 ? `禁用：${forb.join('、')}` : '',
         ].filter(Boolean);
-        return `<div class="field-hint">这一关固定了扩展规则——${parts.join('；')}。其余包你自己定。</div>`;
+        const lockLine =
+          parts.length > 0
+            ? `<div class="field-hint">这一关固定了扩展规则——${parts.join('；')}。其余包你自己定。</div>`
+            : '';
+        /*
+         * 警告档单独一行，而且**措辞要说清是"建议"不是"禁止"**：
+         * 写成"禁用"玩家会以为点不动；写成"会变难"他才知道自己还有选择。
+         */
+        const warnLine =
+          warn.length > 0
+            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难——想挑战可以开，但难度不是设计过的那个。</div>`
+            : '';
+        return lockLine + warnLine;
       })();
       const expItems = availableExpansions().map(
         (e) => {
@@ -699,7 +713,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ? '<span class="expansion-req">这一关必须开</span>'
               : lock === 'off'
                 ? '<span class="expansion-req is-clash">这一关禁用</span>'
-                : '';
+                : warned.has(e.id)
+                  ? '<span class="expansion-req is-warn">这一关会变难</span>'
+                  : '';
           return `
         <label class="expansion-item ${on ? 'on' : ''} ${lock ? 'is-locked' : ''}">
           <input type="checkbox" data-exp="${e.id}" ${on ? 'checked' : ''} ${lock ? 'disabled' : ''} />
