@@ -549,6 +549,7 @@ export const LEVELS: LevelDef[] = [
     ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
     deploy: {
       A: [
+        { type: 'lumberjack', x: 4, y: 5 },
         { type: 'militia', x: 4, y: 7 },
         { type: 'archer', x: 3, y: 7 },
         { type: 'militia', x: 4, y: 8 },
@@ -611,7 +612,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-1',
-        when: { kind: 'turn', at: 8 },
+        when: { kind: 'turn', at: 6 },
         do: [
           { kind: 'say', text: '对岸有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }] },
@@ -621,8 +622,8 @@ export const LEVELS: LevelDef[] = [
         id: 'blow',
         when: { kind: 'turn', at: 10 },
         do: [
-          { kind: 'say', text: '桥被炸断了。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
+          { kind: 'say', text: '桥被洪水冲垮了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'deep' },
         ],
       },
       {
@@ -637,8 +638,8 @@ export const LEVELS: LevelDef[] = [
         id: 'flank-2',
         when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '北边骑兵绕行来了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }] },
+          { kind: 'say', text: '北边骑兵绕行来了，南边也有先遣部队。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'scout', x: 2, y: 13 }, { type: 'scout', x: 3, y: 13 }] },
         ],
       },
       {
@@ -666,6 +667,14 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
+        id: 'end',
+        when: { kind: 'turn', at: 20 },
+        do: [
+          { kind: 'say', text: '河断流了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'plain' },
+        ],
+      },
+      {
         id: 'wave-5',
         when: { kind: 'turn', at: 20 },
         do: [
@@ -678,7 +687,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 24 },
         do: [
           { kind: 'say', text: '这次是南北夹击。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 3, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 2, y: 13 }, { type: 'knight', x: 3, y: 13 }] },
         ],
       },
     ],
