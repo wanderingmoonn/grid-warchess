@@ -533,7 +533,7 @@ export const LEVELS: LevelDef[] = [
      * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
      * 它最多多过去一两个兵，城一滴血不掉）。
      */
-    ai: { riskAversion: 0, cohesion: 0, appetite: 3 },
+    ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
     /*
      * 游骑：从地图边缘长途奔袭的骑兵，只由事件刷出，谁也造不出来。
      *
@@ -613,25 +613,6 @@ export const LEVELS: LevelDef[] = [
      */
     events: [
       {
-        id: 'blow',
-        when: { kind: 'turn', at: 10 },
-        do: [
-          { kind: 'say', text: '桥被炸断了。' },
-          // 四格一起炸。区域少写一行，桥就只塌一半——看着像"炸桥没生效"
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
-        ],
-      },
-      /*
-       * 五波援军，从第 5 次行动起就没断过。
-       *
-       * 这是死守感的来源，不是数值堆料：把兵一次加多，玩家撑过第一波就能反推；
-       * **持续来人**才会让他一直处在打退了、又来了、城下又有人的状态里，
-       * 也就没有余力把兵抽出去打对面。
-       *
-       * 实测（AI 对 AI）：**加多少波都撕不开这条河**——电脑不会集结兵力强渡。
-       * 所以这五波主要是给真人玩家的压力，不能指望它改变 AI 对局的结果。
-       */
-      {
         id: 'wave-1',
         when: { kind: 'turn', at: 3 },
         do: [
@@ -648,11 +629,28 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
+        id: 'flank-1',
+        when: { kind: 'turn', at: 6 },
+        do: [
+          { kind: 'say', text: '南北边冒出人影——是骑兵。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+        ],
+      },
+      {
         id: 'wave-3',
         when: { kind: 'turn', at: 7 },
         do: [
           { kind: 'say', text: '对岸又有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
+        ],
+      },
+      {
+        id: 'blow',
+        when: { kind: 'turn', at: 10 },
+        do: [
+          { kind: 'say', text: '桥被炸断了。' },
+          // 四格一起炸。区域少写一行，桥就只塌一半——看着像"炸桥没生效"
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
         ],
       },
       {
@@ -664,6 +662,14 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
+        id: 'flank-2',
+        when: { kind: 'turn', at: 12 },
+        do: [
+          { kind: 'say', text: '南北边骑兵再次绕行来了。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+        ],
+      },
+      {
         id: 'wave-5',
         when: { kind: 'turn', at: 15 },
         do: [
@@ -672,8 +678,16 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
-        id: 'wave-6',
+        id: 'ebb',
         when: { kind: 'turn', at: 15 },
+        do: [
+          { kind: 'say', text: '水位退了。整条河都能淌过去。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
+        ],
+      },
+      {
+        id: 'wave-6',
+        when: { kind: 'turn', at: 17 },
         do: [
           { kind: 'say', text: '又上来一队人，这次带着弓手。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
@@ -687,48 +701,12 @@ export const LEVELS: LevelDef[] = [
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
         ],
       },
-      /*
-       * 两翼的骑兵。
-       *
-       * 试过"把步兵直接送到西岸"，玩家第一反应是 AI 在耍赖——人凭空出现在身边，
-       * 不是"远处来了援军"。所以改成从**地图南北边缘**进场：从画面外跑进来，
-       * 视觉上是合围，不是空投。
-       *
-       * 兵种是游骑（移动 4 的铁器骑兵）：从边缘到城要跑六七格，走 3 步的骑兵会被
-       * 一步步点掉，走 4 步才逼得玩家把兵分到两翼——中间桥头的压力就松不下来了。
-       *
-       * 时间点排在水退之后：桥没了、水退了，他们从上游下游绕过来。
-       */
       {
-        id: 'flank-north',
-        when: { kind: 'turn', at: 6 },
-        do: [
-          { kind: 'say', text: '南北边冒出人影——是骑兵。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
-        ],
-      },
-      {
-        id: 'flank-south',
-        when: { kind: 'turn', at: 12 },
-        do: [
-          { kind: 'say', text: '南北边骑兵再次绕行来了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
-        ],
-      },
-      {
-        id: 'flank-both',
+        id: 'flank-3',
         when: { kind: 'turn', at: 20 },
         do: [
           { kind: 'say', text: '两翼又是一拨。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
-        ],
-      },
-      {
-        id: 'ebb',
-        when: { kind: 'turn', at: 15 },
-        do: [
-          { kind: 'say', text: '水位退了。整条河都能淌过去。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
         ],
       },
     ],
