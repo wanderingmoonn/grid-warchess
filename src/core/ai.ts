@@ -1181,6 +1181,7 @@ function scoreSiege(
   city: City,
   focusCityId: string | null,
   mood: AiMood,
+  foeEcon = 1,
 ): number {
   const dmg = damageToCity(attacker, city, s);
   if (dmg <= 0) return -10;
@@ -1191,6 +1192,15 @@ function scoreSiege(
   // 这一档整体抬过一次：以前破城的收益常常比"打掉一个杂兵"高不了多少，
   // AI 于是宁可在野战里刷人头，也不肯把兵力压到城下——而人头是赢不了棋的。
   let score = (capture ? 260 : (dmg / city.maxHp) * 62) + 26;
+
+  /*
+   * A（2026-11-15）：对面**一个经济单位都没有**时，攻城再加一档。
+   *
+   * 纯爆兵的对手没有产能可打，唯一的胜负手就是把城砸开——他不会靠经济追上来，
+   * 只会用兵换我们的兵。这时候还去跟满血战斗单位换血，等于拿阵容填他的兑换率
+   * （实测表现：站在射程外沿来回挪，一百回合不动手）。
+   */
+  if (foeEcon === 0) score += 30;
 
   // 战术倾向：速攻把攻城当唯一出路（破城是这套规则里唯一通向胜利的动作）；
   // 弃城期根本不往对面走。
@@ -1546,6 +1556,8 @@ interface Fields {
   crowd: Uint8Array;
   /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
   foeSplash: number;
+  /** 对面还剩几个经济单位。零 = 纯战斗阵容（见 scoreSiege 的加分与僵持破局） */
+  foeEcon: number;
   /**
    * 这一回合全军该集火的那一个敌人（见 `pickFocusTarget`）。
    *
@@ -2022,9 +2034,9 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
         killed = previewAttack(s,moved,enemy).toDefender >= enemy.hp ? enemy.id : undefined;
       }
     }
-    for (const city of siegeTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreSiege(s,unit,city,all.focusCityId,all.mood));
+    for (const city of siegeTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreSiege(s,unit,city,all.focusCityId,all.mood,all.foeEcon));
     for (const city of siegeTargets(s,moved)) {
-      const value=scoreSiege(s,moved,city,all.focusCityId,all.mood);
+      const value=scoreSiege(s,moved,city,all.focusCityId,all.mood,all.foeEcon);
       if (value>nextAttack) { nextAttack=value; killed=undefined; }
     }
     score += nextAttack * 0.82 - nowAttack * 0.65;
@@ -3187,7 +3199,7 @@ function unitCandidates(
     for (const c of siegeTargets(s, unit)) {
       out.push({
         action: { type: 'SIEGE', unitId: unit.id, cityId: c.id },
-        score: scoreSiege(s, unit, c, all.focusCityId, all.mood),
+        score: scoreSiege(s, unit, c, all.focusCityId, all.mood, all.foeEcon),
       });
     }
     /*
@@ -4455,6 +4467,8 @@ export const aiTrace = {
   planFlip: 0,
   /** 三回合计划实际跑了几次（够不够用、有没有被门控挡住） */
   planRuns: 0,
+  /** 僵持破局触发了几次（C，2026-11-15） */
+  staleCalls: 0,
   swapWhy: new Map<string, number>(),
   reset(): void {
     this.swapWhy.clear();
@@ -4465,6 +4479,7 @@ export const aiTrace = {
     this.lookaheadFlip = 0;
     this.planFlip = 0;
     this.planRuns = 0;
+    this.staleCalls = 0;
   },
 };
 
@@ -5845,6 +5860,8 @@ function aiNextActionCore(
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
+    // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
+    foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
   };
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
@@ -5899,6 +5916,36 @@ function aiNextActionCore(
   const commitAt =
     1.3 - 0.18 * mood.driveRaw.rush + 0.15 * mood.driveRaw.boom;
   fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
+
+  /*
+   * C（2026-11-15）：**僵持破局**。
+   *
+   * 症状：两边都在集兵，谁都不肯先踏进对方射程，于是一路拖到回合上限。
+   * 这不是某一处评分的 bug——只要双向都怕"进射程挨一轮"，就会锁死在这种平衡里。
+   * 所以这里不看单步分数，看**局面是不是在动**：两边战斗单位的总血量连着
+   * 若干个动作没变过，就说明没有任何一方在交换。
+   *
+   * 触发后只做一件事：`commit = true`。它的作用是关掉"追着路过的敌军打"
+   * 那一路（见 Fields.commit 的说明），部队才会真的朝城下压。
+   * 另外三道闸，免得开局集兵期就被误触发：
+   *   · `s.turn >= 20`——前十个回合双方本来就没接触，那不是僵持；
+   *   · `myEcon > foeEcon`——经济落后还去压城是送死，那种局面该继续攒；
+   *   · `myVal >= foeVal * 0.9`——兵力明显不如对面时，压城只是换个地方挨打。
+   */
+  const combatHp = (list: Unit[]): number =>
+    list.reduce(
+      (n, u) => (utype(view, u.type).category === 'combat' ? n + Math.max(0, u.hp) : n),
+      0,
+    );
+  const hpNow = combatHp(unitsOf(view, me)) + combatHp(foeUnits);
+  const prevStale = s.aiStale;
+  const staleN = prevStale && prevStale.hp === hpNow ? prevStale.n + 1 : 0;
+  s.aiStale = { hp: hpNow, n: staleN };
+  const myEcon = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length;
+  if (staleN >= 6 && s.turn >= 20 && myEcon > fields.foeEcon && myVal >= foeVal * 0.9) {
+    fields.commit = true;
+    if (aiTrace.on) aiTrace.staleCalls += 1;
+  }
 
   for (const u of unitsOf(view, me)) {
     candidates.push(...unitCandidates(view, u, fields, traits, rejected));

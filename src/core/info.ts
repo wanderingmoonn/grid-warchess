@@ -29,6 +29,12 @@ export interface TerrainInfo {
 }
 
 export const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
+  shadow: {
+    name: '阴影乱流',
+    cost: '2 移动力',
+    defense: '无加成',
+    note: '世界阴面唯一的地貌：站上去每回合被撕掉一段血。',
+  },
   plain: {
     name: '平原',
     cost: '1 移动力',

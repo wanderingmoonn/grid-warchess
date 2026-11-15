@@ -215,6 +215,7 @@ const TERRAIN_CLASS: Record<string, string> = {
   shallow: 't-shallow',
   lava: 't-lava',
   volcano: 't-volcano',
+  shadow: 't-shadow',
 };
 
 function ensureStructure(el: HTMLElement): void {

@@ -2558,9 +2558,32 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
  * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
  * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
-export function blockedFor(s: GameState, x: number, y: number, unit: { type: string; owner: PlayerId; modules?: string[]; layer?: UnitLayer }): boolean {
+export function blockedFor(
+  s: GameState,
+  x: number,
+  y: number,
+  unit: {
+    type: string;
+    owner: PlayerId;
+    modules?: string[];
+    layer?: UnitLayer;
+    id?: string;
+    custom?: Record<string, unknown>;
+  },
+): boolean {
   const tile = tileAt(s, x, y);
   if (!tile) return true;
+
+  /*
+   * 扩展加的"软墙"（梦境相位这类**位置约束**）。
+   *
+   * 问在这里而不是在 `doMove` 里：`blockedFor` 是寻路高亮、实际移动、
+   * 上船下船**共用**的那一处，只改它才不会出现"看着能走、点了走不过去"。
+   */
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.canEnterTile) continue;
+    if (!e.hooks.canEnterTile({ state: s, unit, x, y })) return true;
+  }
 
   const def = utype(s, unit.type);
   /*

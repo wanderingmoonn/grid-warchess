@@ -149,6 +149,21 @@ registerPreview([ROW]);     // 瞄准高亮：不用自己写
   **法相天地**在 `footprintOf` 上加了一层单位级覆盖（`custom.footprint`），
   放大后撑不下会卡住，卡住时 `modifyMove` 返回 0（能动嘴，动不了腿）。
   这几条改的是**规则**而不是数值，所以贴着各自的闸/钩子写，不进族。
+- **天衍四九**（`skills/tianyan.ts`）：回档。**只回滚棋盘**（`s.units` 全量替换成快照），
+  城市/灵石/击杀/回合/战报都不回滚，并写一条"这几回合被抹去"。两个触发点
+  （主动再放 / 施法者倒下）共用 `restoreFromTianyan`。
+- **烂柯棋局**（`skills/timegap.ts`）：**时间层面**的消失——从 `s.units` 真删掉、
+  快照存 `s.timeGap`，到期复制回来（占位先挤开，挤不开就抹掉并写乱流战报）。
+  别用 `hideUnit`（仍挡路）或阴面（换图）替代，那两者是空间层面。
+- **冥天大梦**（`skills/dream.ts`）：入梦那一刻拍快照（`clone`，别存引用）；边界走核心
+  `canEnterTile`（`blockedFor` 里问，寻路与移动共用一处）。施术者死 → 回滚一批人；
+  梦里死 → 真死，从快照里划掉。
+- **世界阴面**（`shadow-world.ts` + `skills/banish.ts`）：照太空包"新建一张图"
+  的做法，`s.boards['shadow-world']` 与地球同尺寸、全境 `shadow` 地形（每回合真伤）。
+  **懒创建**：第一发涉及阴面的法术才建图。别用 `hideUnit` 凑——它只挡视线，仍挡寻路。
+- **簇 A 时间与序列 `sequence`**（`skills/sequence.ts`）：一颗金丹、缩地成寸、
+  天外飞仙、苍蜣登阶。缩地成寸是**真瞬移**（直接改坐标）；苍蜣登阶用"第几个
+  5 回合"判批次，别用 `turn % 5`。
 - **簇 D 效果转移 `transfer`**（`skills/transfer.ts` + `../transfer.ts`）：张冠李戴。
   只改两个入口（`redirectDamage` + `resolveCast` 里的 victims），**不列影响清单**——
   清单永远不完整，而这两处是"以某人为目标"的全部入口。

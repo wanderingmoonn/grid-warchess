@@ -77,6 +77,8 @@ export type Terrain =
   | 'valley'
   /** 沼泽：低洼积水，走得慢但没有掩护 */
   | 'marsh'
+  /** 阴影乱流：世界阴面唯一的地貌，每回合撕扯站在上面的单位 */
+  | 'shadow'
   /** 沙丘：起伏的沙脊，比平原高一档，视野好、没掩护 */
   | 'dune'
   /** 月壤：月球表面的细碎尘土，走得动、没有掩护 */
@@ -1721,7 +1723,7 @@ export interface OrderDirective {
 export type BoardId = string;
 
 /** 这一张图是什么——地图列表的图标、以及"要不要跑气候/灵气"都看它 */
-export type BoardKind = 'planet' | 'station' | 'orbit';
+export type BoardKind = 'planet' | 'station' | 'orbit' | 'shadow';
 
 /**
  * 一张棋盘。
@@ -2039,6 +2041,18 @@ export interface GameState {
    */
   aiIntent?: Partial<Record<PlayerId, AiIntent>>;
   /**
+   * 僵持计数（AI 用，2026-11-15）。
+   *
+   * "双方连着几个动作都没掉血"是这游戏最典型的死局前兆：两边都在集兵、
+   * 谁都不肯先踏进对方射程，于是一路拖到回合上限。这里只记两件事：
+   * 上一次算账时两边战斗单位的总血量，以及**连续多少次 AI 决策没有掉血**。
+   * 数量变了就清零——有伤亡就说明局面在动，不需要破局。
+   *
+   * 只由 AI 自己读写，不改变任何合法动作；旧存档没有这个字段，
+   * 读出来是 undefined，语义正好等于"从没僵持过"。
+   */
+  aiStale?: { hp: number; n: number };
+  /**
    * 关卡进度：哪些事件已经触发过。
    *
    * **必须放在局面里**，不能放程序里。理由不是洁癖：电脑在决定这一步怎么走之前，
@@ -2172,6 +2186,32 @@ export interface GameState {
    */
   fallen?: FallenRecord[];
   /**
+   * 从时间线上"暂时被抹掉"的单位（烂柯棋局）。
+   *
+   * 和 `fallen` 的区别：那是**死了**，这是**不在这一刻**。所以这里存的是整个
+   * 单位的快照，到期原样复制回来——血量、境界、技能、`custom` 全都在。
+   *
+   * 为什么不挂在施法者身上：施法者自己也可能被棋局吞掉（它就是最该躲进去的人），
+   * 挂在他身上会跟着一起消失。所以放在**局**上。
+   */
+  timeGap?: TimeGapRecord[];
+  /**
+   * 天衍四九的存档点（棋盘快照）。
+   *
+   * **只存棋盘**：单位的花名册与它们的血/坐标/状态。城市、金币、击杀数、
+   * 回合数都**不进快照**——作者定的口径是"只回滚棋盘，账目留下并标注"，
+   * 所以回到存点之后，那几回合的钱和人头照样算数，只是地图上发生过的
+   * 事情被抹掉了。
+   */
+  tianyan?: {
+    owner: PlayerId;
+    /** 存点的施法者：他倒下时自动回档（"人遁其一"） */
+    caster: string;
+    /** 存点时的 `s.turn`，只用来写"抹去了哪几回合" */
+    turn: number;
+    units: Unit[];
+  };
+  /**
    * 每方**按兵种**累计的击杀数：`killTally[击杀方][击杀者的兵种 id] = 人头数`。
    *
    * 为什么不数 `Unit.kills`：
@@ -2249,6 +2289,18 @@ export interface FallenRecord {
   turn: number;
   /** 已经被招魂拉起来过一次，不能反复拉 */
   revived?: boolean;
+}
+
+/** 一段时间裂隙：谁、什么时候回来、回到哪 */
+export interface TimeGapRecord {
+  /** 完整快照（复制回来用） */
+  unit: Unit;
+  /** 还剩几个自己的回合 */
+  left: number;
+  /** 回来时落在哪 */
+  x: number;
+  y: number;
+  board?: BoardId;
 }
 
 /** 一次状态迁移的全部可能来源。新增玩法只在这里加分支。 */

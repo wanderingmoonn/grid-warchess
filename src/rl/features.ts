@@ -108,6 +108,7 @@ const nz = (v: number, scale: number): number => clip(v / scale);
  * 水要绕、山过不去。城市格算满——城是目标，不是障碍。
  */
 const TERRAIN_VALUE: Record<Terrain, number> = {
+  shadow: 0.1,
   plain: 1,
   forest: 0.8,
   hill: 0.85,

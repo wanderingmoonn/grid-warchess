@@ -13,10 +13,16 @@ import { isStunned, spellBuffsOf } from './spell-statuses.ts';
 import { marksOf, marksAt } from '../marks.ts';
 import { shieldOf, breakShield } from './skills/shield.ts';
 import { reviveMarkOf } from './skills/revive.ts';
+import { applySpellBuffs } from './spell-statuses.ts';
 import { TI_JIE_LING_SHEN_BIND_RADIUS, HUN_DENG_RATIO } from './skills/summon.ts';
 import { DAO_HUA_MO_RAN_LAYERS } from './skills/convert.ts';
 import { knifeMarkOf } from './skills/record.ts';
+import { DREAM_RING_KEY, dreamRingOf, dreamRecordOf } from './skills/dream.ts';
+import { returnFromTimeGap } from './skills/timegap.ts';
+import { restoreFromTianyan } from './skills/tianyan.ts';
 import { daiTargetOf } from './transfer.ts';
+import { BEETLE_STATUS } from './skills/sequence.ts';
+import { SHADOW_BOARD, SHADOW_DAMAGE, BANISH_KEY, type BanishMark } from './shadow-world.ts';
 import {
 	giantStuckOf,
 	refreshGiantStuck,
@@ -228,6 +234,68 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			return;
 		}
 
+		/*
+		 * 天衍四九的被动触发：存点的施法者倒下 → 自动回档（"人遁其一"）。
+		 *
+		 * 放在所有死亡处理**之前**：回档会把整个棋盘换掉，包括"他死了"这件事本身，
+		 * 所以后面的击杀经验、亡语、分身回流都不该再跑一遍——那个人的死被抹掉了。
+		 */
+		if (c.state.tianyan?.caster === c.victim.id) {
+			restoreFromTianyan(c.state, (owner, text) =>
+				c.api.pushLog(c.state, owner as never, text, true),
+			);
+			return;
+		}
+
+		/*
+		 * ── 冥天大梦（2026-11-14）──────────────────────────────
+		 *
+		 * 两种死法要分开处理：
+		 *   · 施术者死 → **回滚**：梦里还活着的人 + 他自己，回到入梦那一刻；
+		 *   · 梦里的人死 → **真死**：从回滚名单里划掉，梦醒也换不回来。
+		 *
+		 * 顺序要紧：先判施术者（他也有 ring，不能先被当成普通被困者划掉）。
+		 */
+		const rec = dreamRecordOf(c.victim);
+		if (rec) {
+			const v = c.victim;
+			for (const [id, sn] of Object.entries(rec.snap)) {
+				if (id === v.id) continue;
+				const u = c.state.units.find((x) => x.id === id && x.hp > 0);
+				if (!u) continue; // 死在梦里的不复活
+				u.x = sn.x;
+				u.y = sn.y;
+				u.hp = Math.min(sn.hp, c.api.maxHpOf(c.state, u));
+				u.board = sn.board;
+				u.moved = sn.moved;
+				u.acted = sn.acted;
+				u.status = { ...sn.status };
+				u.custom = { ...sn.custom };
+			}
+			const mine = rec.snap[v.id];
+			if (mine) {
+				v.x = mine.x;
+				v.y = mine.y;
+				v.hp = Math.max(1, mine.hp);
+				v.board = mine.board;
+				v.status = { ...mine.status };
+				v.custom = { ...mine.custom };
+				v.moved = true;
+				v.acted = true;
+				c.state.units.push(v);
+			}
+			c.api.pushLog(c.state, v.owner, '冥天大梦散了：梦里的人回到入梦那一刻', true);
+			return;
+		}
+
+		const ring = dreamRingOf(c.victim);
+		if (ring) {
+			// 梦里死了就是真死：从回滚名单里划掉，免得梦醒把尸体也"恢复"回来
+			const owner = c.state.units.find((x) => x.id === ring.by);
+			const ownerRec = owner ? dreamRecordOf(owner) : undefined;
+			if (ownerRec?.snap[c.victim.id]) delete ownerRec.snap[c.victim.id];
+		}
+
 		const killer = c.killer;
 		/*
 		 * 化身分神：分身杀的人，修为归本体。
@@ -431,6 +499,20 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		return amount;
 	},
 	// 射程修正
+	/*
+	 * 梦境边界：被困住的人踏不进圈外的格子。
+	 *
+	 * 走 `canEnterTile` 而不是 `canCommand`：他要能打、能施法，
+	 * 只是**走不出这个圈**。`canCommand` 会连攻击一起封掉，那是封印的语义。
+	 */
+	canEnterTile: ({ unit, x, y }) => {
+		const ring = unit.custom?.[DREAM_RING_KEY] as
+			| { cx: number; cy: number; radius: number }
+			| undefined;
+		if (!ring) return true;
+		return Math.abs(x - ring.cx) + Math.abs(y - ring.cy) <= ring.radius;
+	},
+
 	modifyRange: ({ state, unit, range }) => {
 		if (!isCultivatorUnit(state, unit)) return range;
 		// 灵目术的 +N 格（走 buff，不走兵种表）
@@ -912,6 +994,115 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			});
 		}
 
+		/*
+		 * 簇 A 的三条"下一回合生效"（都放在回合开始这一拍）：
+		 *
+		 *   · 缩地成寸：记好的落点这一刻生效——**瞬移**，不走寻路，
+		 *     所以中间隔山隔水都一样（它卖的就是这个）；
+		 *   · 天外飞仙：蓄力还了，移动力拉满一回合；
+		 *   · 苍蜣登阶：每 5 回合检定一次，还活着就长修为。
+		 */
+		for (const u of [...state.units]) {
+			if (u.hp <= 0 || u.owner !== player) continue;
+
+			const step = u.custom?.['suoDi'] as { x: number; y: number } | undefined;
+			if (step) {
+				const rest = { ...(u.custom ?? {}) };
+				delete rest['suoDi'];
+				u.custom = rest;
+				// 落点这一刻还站得住就过去；被人抢占了就留在原地（不硬挤）
+				const taken = state.units.some(
+					(o) => o.id !== u.id && o.hp > 0 && coversTile(state, o, step.x, step.y),
+				);
+				if (!taken && api.canStandAt(state, step.x, step.y, u.type, { ignoreUnits: true })) {
+					u.x = step.x;
+					u.y = step.y;
+					api.pushLog(state, player, `缩地成寸：${unitNameOf(state, u)} 一步踏到 (${step.x},${step.y})`);
+				} else {
+					api.pushLog(state, player, `缩地成寸没能落下：${unitNameOf(state, u)} 的落点被占了`);
+				}
+			}
+
+			if (u.custom?.['feiXianCharge']) {
+				const rest = { ...(u.custom ?? {}) };
+				delete rest['feiXianCharge'];
+				u.custom = rest;
+				applySpellBuffs(u, 1, { move: 99 });
+				api.pushLog(state, player, `天外飞仙：${unitNameOf(state, u)} 这一回合可一步千里`);
+			}
+
+			/*
+			 * 苍蜣登阶：用"第几个 5 回合"判断，而不是 `turn % 5 === 0`。
+			 *
+			 * 取模会被"hook 在加一之前还是之后跑"这种细节坑到：只要有一次
+			 * 跳过了 5 的倍数，那一个周期的检定就永远丢了。记下已检定的批次，
+			 * 跨过新的批次就检定一次，早晚都不漏。
+			 */
+			if (((u.status?.[BEETLE_STATUS] ?? 0) as number) > 0) {
+				const bucket = Math.floor(state.turn / 5);
+				const last = Number(u.custom?.['beetleBucket'] ?? 0);
+				if (bucket > last) {
+					const gain = Number(u.custom?.['beetleExp'] ?? 15);
+					addExp(u, state, gain);
+					u.custom = { ...(u.custom ?? {}), beetleBucket: bucket };
+					api.pushLog(state, player, `苍蜣登阶：${unitNameOf(state, u)} 检定通过，修为 +${gain}`);
+				}
+			}
+		}
+
+		/*
+		 * 世界阴面：乱流每回合撕一次，以及"放逐到期自己爬回来"。
+		 *
+		 * 伤害按**自己的回合**结算（和灵力、修炼同一拍）：两人局一回合 tick 两次，
+		 * 放在"回合开始"就自然等于"每个单位每轮挨一次"。
+		 */
+		for (const u of [...state.units]) {
+			if (u.hp <= 0 || u.owner !== player) continue;
+
+			if ((u.board ?? 'earth') === SHADOW_BOARD) {
+				api.hurt(state, u, SHADOW_DAMAGE, {
+					attrition: true,
+					logText: `阴影乱流撕扯：${unitNameOf(state, u)} 受到 ${SHADOW_DAMAGE} 点伤害`,
+				});
+				if (u.hp <= 0) continue;
+			}
+
+			const ban = u.custom?.[BANISH_KEY] as BanishMark | undefined;
+			if (ban) {
+				if (ban.turns > 1) {
+					u.custom = { ...(u.custom ?? {}), [BANISH_KEY]: { ...ban, turns: ban.turns - 1 } };
+					continue;
+				}
+				// 回来：优先回原位，被占了就在阳面找一格空地（阴面不产兵，扫一遍很便宜）
+				const rest = { ...(u.custom ?? {}) };
+				delete rest[BANISH_KEY];
+				u.custom = rest;
+				const back = freeSpotOnEarth(state, ban.x, ban.y);
+				u.board = ban.board;
+				u.x = back.x;
+				u.y = back.y;
+				u.moved = true;
+				u.acted = true;
+				api.pushLog(state, player, `虚空放逐结束：${unitNameOf(state, u)} 从阴面爬了回来（${back.x},${back.y}）`);
+			}
+		}
+
+		/*
+		 * 烂柯棋局：到期把快照复制回来。
+		 *
+		 * 计数按**它自己的主人**的回合走（和侵蚀、放逐同一套时钟）：
+		 * 两人局一回合 tick 两次，挂在"回合开始"就正好是每个单位每轮一次。
+		 */
+		for (const rec of [...(state.timeGap ?? [])]) {
+			if (rec.unit.owner !== player) continue;
+			if (rec.left > 1) {
+				rec.left -= 1;
+				continue;
+			}
+			state.timeGap = (state.timeGap ?? []).filter((r) => r !== rec);
+			returnFromTimeGap(state, rec, (owner, text) => api.pushLog(state, owner as never, text));
+		}
+
 		// 法相天地：每回合重算一次"卡住没有"（挡路的人走开就自动解开）
 		for (const u of state.units) {
 			if (u.hp <= 0 || u.owner !== player) continue;
@@ -1087,4 +1278,25 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 /** 战报里用的兵种名；兵种表被改坏也不该让钩子炸掉 */
 function unitNameOf(s: GameState, u: Unit): string {
 	return s.unitTypes[u.type]?.name ?? u.type;
+}
+
+/**
+ * 在阳面找一格能站的地方：优先回原位（原主走开之后那格往往还空着），
+ * 被人占了就整张图扫一遍。扫不到就贴着原点多试几圈——总比把人卡在阴面好。
+ */
+function freeSpotOnEarth(s: GameState, ox: number, oy: number): { x: number; y: number } {
+	const taken = (x: number, y: number) =>
+		s.units.some((o) => o.hp > 0 && (o.board ?? 'earth') === 'earth' && coversTile(s, o, x, y));
+	if (ox >= 0 && oy >= 0 && ox < s.w && oy < s.h && !taken(ox, oy)) return { x: ox, y: oy };
+	for (let r = 1; r < Math.max(s.w, s.h); r++) {
+		for (let dy = -r; dy <= r; dy++) {
+			for (let dx = -r; dx <= r; dx++) {
+				const x = ox + dx;
+				const y = oy + dy;
+				if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+				if (!taken(x, y)) return { x, y };
+			}
+		}
+	}
+	return { x: Math.max(0, Math.min(s.w - 1, ox)), y: Math.max(0, Math.min(s.h - 1, oy)) };
 }

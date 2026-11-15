@@ -1295,6 +1295,19 @@ html[data-terrain='on'] .tile {
  * 命名不变：plain-1/2/3.png、hill-1/2/3.png，128×128、透明底可以留空
  * （铺满图案时底色由 --plain/--hill 提供，图只画纹理和明暗）。
  */
+/*
+ * 阴影乱流（世界阴面）。
+ *
+ * 深紫偏黑、带一点波动纹理：它是"没有地貌的地貌"，颜色不能像任何一种地形，
+ * 否则玩家会以为那是一块普通的空地。
+ */
+.tile.t-shadow {
+  background:
+    repeating-linear-gradient(135deg, #221a33 0 6px, #2b2140 6px 12px),
+    radial-gradient(circle at 50% 50%, #3a2b55, #1a1426 70%);
+  color: #9d8ec0;
+}
+
 html[data-terrain='on'] .tile.t-forest {
   background-size: 120% 120%;
   background-position: center;
