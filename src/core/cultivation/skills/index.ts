@@ -400,6 +400,72 @@ export {
   ZHANG_GUAN_LI_DAI_ROUNDS,
 } from './transfer.ts';
 
+/* 簇 A · 时间与序列（先做不需要新地基的四条） */
+export {
+  SEQUENCE_ROWS,
+  YI_KE_JIN_DAN_SKILL,
+  SUO_DI_CHENG_CUN_SKILL,
+  TIAN_WAI_FEI_XIAN_SKILL,
+  CANG_QIANG_DENG_JIE_SKILL,
+  BEETLE_STATUS,
+  YI_KE_JIN_DAN_COST,
+  YI_KE_JIN_DAN_MIN_RANK,
+  SUO_DI_CHENG_CUN_COST,
+  SUO_DI_CHENG_CUN_MIN_RANK,
+  TIAN_WAI_FEI_XIAN_COST,
+  TIAN_WAI_FEI_XIAN_MIN_RANK,
+  CANG_QIANG_DENG_JIE_COST,
+  CANG_QIANG_DENG_JIE_MIN_RANK,
+  CANG_QIANG_DENG_JIE_ROUNDS,
+  CANG_QIANG_DENG_JIE_EXP,
+  CANG_QIANG_DENG_JIE_EVERY,
+} from './sequence.ts';
+
+/* 簇 A · 世界阴面：虚空放逐 */
+export {
+  BANISH_ROWS,
+  XU_KONG_FANG_ZHU_SKILL,
+  XU_KONG_FANG_ZHU_COST,
+  XU_KONG_FANG_ZHU_MIN_RANK,
+  XU_KONG_FANG_ZHU_TURNS,
+} from './banish.ts';
+
+/* 簇 A · 冥天大梦：困人 + 回滚一群人 */
+export {
+  DREAM_ROWS,
+  MING_TIAN_DA_MENG_SKILL,
+  MING_TIAN_DA_MENG_COST,
+  MING_TIAN_DA_MENG_MIN_RANK,
+  MING_TIAN_DA_MENG_RADIUS,
+  DREAM_STATUS,
+  DREAM_KEY,
+  DREAM_RING_KEY,
+  dreamRingOf,
+  dreamRecordOf,
+  type DreamSnap,
+  type DreamRecord,
+  type DreamRing,
+} from './dream.ts';
+
+/* 簇 A · 烂柯棋局：时间层面的消失 */
+export {
+  TIME_GAP_ROWS,
+  LAN_KE_QI_JU_SKILL,
+  LAN_KE_QI_JU_COST,
+  LAN_KE_QI_JU_MIN_RANK,
+  LAN_KE_QI_JU_TURNS,
+  returnFromTimeGap,
+} from './timegap.ts';
+
+/* 簇 A · 天衍四九：回档（只回滚棋盘） */
+export {
+  TIAN_YAN_ROWS,
+  TIAN_YAN_SI_JIU_SKILL,
+  TIAN_YAN_SI_JIU_COST,
+  TIAN_YAN_SI_JIU_MIN_RANK,
+  restoreFromTianyan,
+} from './tianyan.ts';
+
 /* 族 9 · 资源经济：场上的一份额度换修为 */
 export {
   ECONOMY_ROWS,

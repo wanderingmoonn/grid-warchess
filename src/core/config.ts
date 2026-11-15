@@ -112,6 +112,8 @@ export const CONFIG = {
 
   /** 地形防御加成，算进守方护甲 */
   terrainDef: {
+    // 阴影乱流：什么都挡不住，也什么都藏不住
+    shadow: 0,
     plain: 0,
     forest: 2,
     hill: 3,
@@ -146,6 +148,8 @@ export const CONFIG = {
 
   /** 进入一格的移动力消耗，99 表示不可通行。爬坡附加属于「地形高差」扩展，不在这里。 */
   terrainCost: {
+    // 阴影乱流：地面是"有"的，只是每走一步都在被撕——能走，但走不快
+    shadow: 2,
     plain: 1,
     forest: 2,
     hill: 2,
