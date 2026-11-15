@@ -1980,8 +1980,18 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     !(def.abilities ?? []).includes('siege-master') &&
     Number.isFinite(all.lineRef) &&
     before < all.lineRef;
-  const advanceWeight = aheadOfLine ? 0.15 : 1;
-  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush*0.35)) * advanceWeight;
+  /*
+   * 关卡的 AI 参数（`config.level.ai`）只在这里和战意那一项生效。
+   *
+   * `cohesion`：0 = 谁快谁先上，1 = 默认（前面的人等后面）。攻坚图要 0 附近的值——
+   * 河会把战线切成两段，先过去的永远算"在战线前面"，然后永远停着等。
+   */
+  const tuning = s.config.level?.ai;
+  const cohesion = Math.min(2, Math.max(0, tuning?.cohesion ?? 1));
+  // 1 → 0.15（默认惩罚），0 → 1（不惩罚），2 → 更狠（夹到 0.05）
+  const lineHold = cohesion <= 1 ? 1 - (1 - 0.15) * cohesion : Math.max(0.05, 0.15 - (cohesion - 1) * 0.1);
+  const advanceWeight = aheadOfLine ? lineHold : 1;
+  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush*0.35)) * advanceWeight * (tuning?.appetite ?? 1);
   /*
    * 地形分：**这一格对这个兵**值多少护甲，而不是"这一格值多少"。
    *
@@ -2022,8 +2032,13 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const risk = all.tactical.exposure(moved,killed);
   const cost = unitValue(s,unit);
   const loss = risk.damage / Math.max(1,def.maxHp);
-  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4);
-  if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
+  /*
+   * `riskAversion` 是关卡级的"愿意用多少伤亡换推进"。
+   * 默认 1 就是原来的算法；攻坚图写 0.4，它就肯顶着火力往前走。
+   */
+  const riskMul = Math.min(2, Math.max(0.2, s.config.level?.ai?.riskAversion ?? 1));
+  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4) * riskMul;
+  if (risk.lethal) score -= (30 + Math.min(75,cost*0.2)) * riskMul;
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
 
   /*

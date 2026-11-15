@@ -1086,8 +1086,19 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
    * 那就是纯视野盲区。只 spawn 不播报，玩家的体验就是"敌方所谓的援兵都没来"：
    * 看不见、也没人告诉他。这条断言防的就是这个。
    */
-  const waves = (lv.events ?? []).filter((e) => e.id.startsWith('wave'));
-  check(waves.length >= 3, `援军分 ${waves.length} 波`);
+  const waves = (lv.events ?? []).filter((e) => e.id.startsWith('wave') || e.id.startsWith('cross'));
+  check(waves.length >= 3, `援军/突击队分 ${waves.length} 波`);
+  // 过河突击队：投送是 AI 的硬伤，兵得直接放到西岸（详见关卡里那段注释）
+  const crossers = waves.filter((w) => w.id.startsWith('cross'));
+  check(crossers.length >= 2, `过河突击队 ${crossers.length} 支`);
+  const onWestBank = crossers.flatMap((w) =>
+    w.do.flatMap((d) => (d.kind === 'spawn' ? d.units.filter((u) => u.x <= 6) : [])),
+  );
+  check(
+    onWestBank.length === crossers.flatMap((w) => w.do.flatMap((d) => (d.kind === 'spawn' ? d.units : []))).length,
+    `突击队全部落在西岸（${onWestBank.length} 个）`,
+    '有突击队刷在东岸了：那样等于没送',
+  );
   const silent = waves.filter((w) => !w.do.some((d) => d.kind === 'say')).map((w) => w.id);
   check(silent.length === 0, '每一波援军都有播报', `这几波是静默的：${silent.join('、')}`);
   // 两格桥一起塌
