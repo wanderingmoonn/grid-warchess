@@ -1108,16 +1108,26 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
   check(spots.every((u) => u.type === 'raider'), '骑兵用的是关卡自带的游骑');
   const silent = waves.filter((w) => !w.do.some((d) => d.kind === 'say')).map((w) => w.id);
   check(silent.length === 0, '每一波援军都有播报', `这几波是静默的：${silent.join('、')}`);
-  // 两格桥一起塌
+  /*
+   * 桥塌：**从关卡数据里读**时间和目标地形，不写死。
+   *
+   * 写死过一版（"第 9 次"），作者把炸桥挪到第 10 次、地形从深水改成水，
+   * 探针立刻报红——而关卡其实是对的。这类断言要跟着数据走。
+   */
+  const blow = (lv.events ?? []).find((e) => e.id === 'blow');
+  check(!!blow, '关卡有炸桥事件');
+  const blowAt = blow?.when.kind === 'turn' ? blow.when.at : 0;
+  const blowTo = blow?.do.find((d) => d.kind === 'terrain') as { to?: string } | undefined;
   let cur = s;
-  for (let i = 0; i < 10 && cur.turn < 9 && !cur.winner; i++) {
+  for (let i = 0; i < 30 && cur.turn < blowAt && !cur.winner; i++) {
     const r = applyAction(cur, { type: 'END_TURN' } as Action);
     if (!r.ok) break;
     cur = r.state;
   }
   const at = (st: GameState, x: number, y: number): string => st.tiles[y * st.w + x]?.terrain ?? '?';
-  const gone = [[7, 7], [8, 7], [7, 8], [8, 8]].filter(([x, y]) => at(cur, x!, y!) === 'deep').length;
-  check(gone === 4, `第 ${cur.turn} 次行动后四格桥一起没了（${gone}/4））`.replace('）', ''), '四格没全塌：剩下的那行还能过河');
+  const want = blowTo?.to ?? 'water';
+  const gone = [[7, 7], [8, 7], [7, 8], [8, 8]].filter(([x, y]) => at(cur, x!, y!) === want).length;
+  check(gone === 4, `第 ${blowAt} 次行动后四格桥一起没了（${gone}/4 → ${want}）`, `四格没全塌：剩下的那行还能过河`);
 }
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */

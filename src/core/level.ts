@@ -706,7 +706,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 20 },
         do: [
           { kind: 'say', text: '两翼又是一拨。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 3, y: 0 }, { type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 3, y: 13 }] },
         ],
       },
     ],

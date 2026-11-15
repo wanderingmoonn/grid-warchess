@@ -175,6 +175,21 @@ export function createMatch(
    */
   const checkedLevel = config.level ? validateLevel(config.level) : null;
   const level = checkedLevel && checkedLevel.ok ? checkedLevel.level : null;
+  /*
+   * 关卡校验没过 → 这一局会**静默**按随机地图开。
+   *
+   * 这是唯一能留下证据的地方。不加这条，作者看到的是"我的关进游戏变成了随机图"，
+   * 而真实原因（两个兵写在同一格、某一行少了半格）得自己一行行找——
+   * 2026-11-15 就是这么卡住的：`flank-3` 里有两只游骑写在同一个坐标上。
+   *
+   * 跑 `npm run probe:level` 会把每张关卡的错因逐条列出来，比看控制台更快。
+   */
+  if (checkedLevel && !checkedLevel.ok) {
+    console.warn(
+      `[关卡] 「${config.level?.name ?? config.level?.id ?? '?'}」过不了校验，已按随机地图开局：`,
+      checkedLevel.errors,
+    );
+  }
 
   /*
    * 先把扩展 id 迁移成现在的写法（2026-11-04 十六个包并成四个）。
