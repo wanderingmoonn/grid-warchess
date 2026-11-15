@@ -5418,7 +5418,13 @@ check('上帝模式：笔刷按住拖过去，沿途每一格都刷到，撤销�
   // 城格改不了地形、已经是森林的格看不出变化——所以自己找一段"干净"的横线
   const clean = (x: number, y: number): boolean => {
     const t = before.tiles[y * cols + x];
-    return !!t && !t.cityId && t.terrain !== 'forest';
+    if (!t || t.cityId || t.terrain === 'forest') return false;
+    /*
+     * 站着东西的格刷不了（见 core/sandbox.ts 的 paintTerrain：地形一改，上面那个人
+     * 可能就站在水里或山心里了）。开局部队撒在城周围，清理横线时必须绕开它们——
+     * 不绕的话，这条用例测的就不是"拖动补格"，而是"笔刷该不该跳过有人的格"。
+     */
+    return !before.units.some((u) => u.x === x && u.y === y);
   };
   let sx = -1;
   let sy = -1;
@@ -9192,5 +9198,193 @@ check('火箭发射井：属性卡写着燃料与货舱，加注/发射按钮都
   }
 });
 
+
+/* ------------------------------------------------------------------ */
+/* 关卡模式                                                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡模式');
+openSetup();
+await wait(40);
+
+check('左侧多了「关卡」一页，和战役 / 地图同级', () => {
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
+  assert.deepEqual(tabs, ['levels', 'battle', 'maps'], `三页的顺序应该是 关卡 / 战役 / 地图，实际 ${tabs.join(',')}`);
+});
+
+check('关卡页只列玩家关，测试夹具不出现', () => {
+  click('[data-tab="levels"]');
+  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
+  assert.equal(ids[0], '', '第一张应该是「自由对局」');
+  const named = ids.filter(Boolean);
+  assert.equal(named.length, 3, `菜单里应该只有三关，实际 ${named.length}：${named.join(',')}`);
+  assert.ok(named.includes('level:lone-city'), '缺「孤城」');
+  assert.ok(named.includes('level:behead'), '缺「斩首」');
+  assert.ok(named.includes('level:latecomer'), '缺「黄雀」');
+  // 夹具关（断后 / 断桥 / 死守 / 三岔口 / 平地探针）不该出现在玩家的选关列表里
+  for (const dev of ['level:rear-guard', 'level:cut-bridge', 'level:hold-out', 'level:tri-corner', 'level:probe-flat']) {
+    assert.ok(!named.includes(dev), `测试夹具「${dev}」不该出现在菜单里`);
+  }
+});
+
+check('选「孤城」：卡片有缩略图，说明写清几城、目标、有事件', () => {
+  click('[data-level="level:lone-city"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
+  assert.ok(body.includes('守住 30 次行动'), '要写出守多久');
+  assert.ok(body.includes('红方：'), '目标要标出是谁的目标');
+  assert.ok(body.includes('处会在特定条件下发生的事'), '要说明有关卡事件');
+  const card = doc.querySelector<HTMLElement>('[data-level="level:lone-city"]');
+  assert.ok(!!card?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
+});
+
+check('选了关卡：整页变成任务简报，配置器不再出现', () => {
+  click('[data-tab="battle"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('目标'), '要写出目标');
+  assert.ok(body.includes('双方开局'), '要写出双方兵力');
+  assert.ok(body.includes('这一关固定'), '要写清这一关固定了什么');
+
+  /*
+   * 关键：**这些控件根本不该存在**，而不是灰掉。
+   * 灰掉的开关看起来像"差一步就能改"，玩家会反复去点、反复怀疑自己漏了什么。
+   */
+  const gone = ['[data-players]', '[data-era]', '[data-size]', '[data-first]',
+                '[data-role]', '[data-draft-mode]', '[data-mapstyle]'];
+  for (const sel of gone) {
+    assert.equal(doc.querySelectorAll('.modal-body ' + sel).length, 0, '关卡简报页不该有 ' + sel);
+  }
+
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
+  assert.ok(!tabs.includes('maps'), '关卡局不该有「地图」页');
+
+  const balance = doc.querySelectorAll('.level-balance > div');
+  assert.equal(balance.length, 2, '两家局应该有两张兵力卡');
+  assert.ok((balance[0].textContent ?? '').includes('兵'), '兵力卡要写几个兵');
+});
+
+check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () => {
+  const entry = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]');
+  assert.ok(entry, '简报页要有「换扩展重打」入口');
+  click('[data-act="exp-drawer"]');
+
+  const drawer = doc.querySelector<HTMLElement>('.exp-drawer');
+  assert.ok(drawer, '点开应该有抽屉');
+  const text = drawer!.textContent ?? '';
+  assert.ok(text.includes('先后手补偿'), '抽屉里要说明这一关禁用了什么，实际：' + text.slice(0, 160));
+
+  const items = drawer!.querySelectorAll('.expansion-item');
+  assert.ok(items.length > 10, '抽屉里应该是完整的扩展列表，实际 ' + items.length + ' 条');
+
+  const forbidden = drawer!.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
+  assert.ok(forbidden, '列表里应该有「先后手补偿」');
+  assert.ok(!forbidden!.checked && forbidden!.disabled, '关卡禁用的包：空着且点不动');
+
+  const free = drawer!.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
+  assert.ok(free && !free.disabled, '关卡没提到的包必须还能勾');
+
+
+  // 勾一个包：抽屉要留着（不然每勾一个就得重新点开），入口那一行要跟着变
+  click('[data-act="exp-drawer"]');
+  const free2 = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]');
+  assert.ok(free2, '抽屉里能找到「血战」');
+  free2!.click();
+  assert.ok(doc.querySelector('.exp-drawer'), '勾完包抽屉不该自己关掉');
+  const entryNow = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]')?.textContent ?? '';
+  // 默认配置里本来就带着「老兵不死」，所以这里只验勾上的那个出现在入口上
+  assert.ok(entryNow.includes('血战'), '入口那一行要列出已经加了什么，实际：' + entryNow);
+
+
+  // 警告档：能开、不锁，但要说清"会变难"
+  click('[data-act="exp-drawer"]');
+  const warned = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="high-mobility"]');
+  assert.ok(warned, '抽屉里应该有「高机动性」');
+  assert.ok(!warned!.disabled, '警告不是禁用：还得能勾');
+  const warnTag = warned!.closest('.expansion-item')?.querySelector('.is-warn');
+  assert.ok(warnTag, '这一档要在条目上标出来');
+  assert.ok((warnTag!.textContent ?? '').includes('变难'), '标签要写清楚是变难，不是禁用');
+
+  const briefText = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(briefText.includes('明显变难'), '简报页也要提醒一句，实际：' + briefText.slice(0, 200));
+  click('[data-act="exp-close"]');
+  assert.equal(doc.querySelector('.exp-drawer'), null, '点关闭应该收起抽屉');
+
+  // 再点一次取消勾选，免得把状态带进后面开局的那一局
+  click('[data-act="exp-drawer"]');
+  doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]')!.click();
+  click('[data-act="exp-close"]');
+});
+
+check('选「斩首」：两条目标都标了归属', () => {
+  click('[data-tab="levels"]');
+  click('[data-level="level:behead"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('消灭对方全部守将'), `要写清斩首目标，实际：${body.slice(0, 240)}`);
+  assert.ok(body.includes('蓝方：守住 18 次行动'), '敌方的时限目标也要写出来，并标明是蓝方的');
+});
+
+check('选「黄雀」：说清第三家要中途才登场', () => {
+  click('[data-level="level:latecomer"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('开局只有 2 家在场'), `要写清开局只有两家，实际：${body.slice(0, 260)}`);
+  assert.ok(body.includes('绿方'), '要指名是哪一家晚到');
+});
+
+check('切回「自由对局」：人数开关回来，关卡不残留', () => {
+  click('[data-level=""]');
+  click('[data-tab="battle"]');
+  assert.ok(doc.querySelector('[data-players]'), '自由对局下应该有人数开关');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(!body.includes('这一关是'), '不该再写着"这一关是 N 家"');
+  const foot = doc.querySelector('.start-summary')?.textContent ?? '';
+  assert.ok(!foot.includes('关卡「'), `摘要里不该再有"关卡「」，实际：${foot}`);
+});
+
+/*
+ * 真的开一局「孤城」：顶栏必须常驻一行目标。
+ * 这是唯一"不看代码也能验"的东西——玩家得知道自己在守到什么时候。
+ */
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level="level:lone-city"]');
+click('[data-act="start"]');
+await wait(150);
+
+check('开局后顶栏常驻一行关卡目标', () => {
+  const goal = doc.querySelector<HTMLElement>('[data-ref="goal"]');
+  assert.ok(goal, '顶栏应该有目标那一块');
+  assert.ok(!goal!.hidden, '关卡局里这块不能藏着');
+  const text = goal!.textContent ?? '';
+  assert.ok(text.includes('守住 30 次行动'), `要写出守多久，实际：${text}`);
+  assert.ok(text.includes('还剩'), `要写出还剩几次，实际：${text}`);
+});
+
+// 换回自由对局再开一局，顶栏那块应该收起来
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level=""]');
+click('[data-tab="battle"]');
+// 顺手点「双人热座」：这一条要验的是顶栏，不是 AI；而且没有 AI 就没有后台定时器，
+// 测试进程能干净地自己退出（否则会挂住，被外层杀掉）
+click('[data-ai="0"]');
+click('[data-act="start"]');
+// 顶栏是一帧一帧刷的：不等这一下，读到的是上一局留下的那块
+await wait(150);
+
+check('普通对局不显示目标那一块', () => {
+  const goal = doc.querySelector<HTMLElement>('[data-ref="goal"]');
+  assert.ok(goal?.hidden !== false, `自由对局里目标那一块应该 hidden，实际 hidden=${goal?.hidden}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
-if (failed > 0) process.exit(1);
+/*
+ * 主动退出。
+ *
+ * 最后几条用例会真的开一局（顶栏目标得在真对局里看），而关卡自带的电脑
+ * 会一直排定时器——不主动退出，这个测试进程永远不结束（被外层当超时杀掉）。
+ * 用 write 的回调再退：直接 process.exit 有可能把管道里的输出截断。
+ */
+const exitCode = failed > 0 ? 1 : 0;
+process.stdout.write('', () => process.exit(exitCode));

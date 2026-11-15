@@ -8,7 +8,7 @@
  * 也就一千多个 rect，和一张棋盘差不多量级——比"缩略图糊成一团"划算。
  */
 
-import type { FixedMap } from '../core/fixed-maps.ts';
+import type { FixedMap, MapPoint } from '../core/fixed-maps.ts';
 
 /** 地形配色：和 style.css 里那套保持一致，缩略图才和进局后看到的是同一种绿 */
 const COLOR: Record<string, string> = {
@@ -35,14 +35,23 @@ const COLOR: Record<string, string> = {
 
 const TEAM_A = '#b8433a';
 const TEAM_B = '#2f6ea8';
+/* 第三四席：和顶栏那套"红蓝绿黄"一致，否则缩略图上的颜色和进局后对不上 */
+const TEAM_C = '#3f7f4a';
+const TEAM_D = '#b58a2a';
 
 /**
  * 一张地图的缩略图（SVG 字符串）。
  *
  * @param cell 每格画多少个 SVG 单位。1 就够——`viewBox` 会缩放到 CSS 尺寸。
  * @param size 天了的城边长（默认 2），只影响画出来的方块大小。
+ * @param extra 第三四席的城位。**只有关卡会有**——公开的地图格式只有 A/B 两组，
+ *   不放这个参数的话，三家关卡的缩略图会少画一座城，看起来像坏图。
  */
-export function mapThumbSvg(map: FixedMap, citySize = 2): string {
+export function mapThumbSvg(
+  map: FixedMap,
+  citySize = 2,
+  extra?: Partial<Record<'C' | 'D', MapPoint[]>>,
+): string {
   const cells: string[] = [];
   for (let y = 0; y < map.h; y += 1) {
     const row = map.rows[y] ?? '';
@@ -57,6 +66,8 @@ export function mapThumbSvg(map: FixedMap, citySize = 2): string {
   for (const [list, color] of [
     [map.citiesA, TEAM_A],
     [map.citiesB, TEAM_B],
+    [extra?.C ?? [], TEAM_C],
+    [extra?.D ?? [], TEAM_D],
   ] as const) {
     for (const c of list) {
       cells.push(
