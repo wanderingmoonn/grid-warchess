@@ -42,6 +42,7 @@ const EXPANSION_TERRAINS: ReadonlySet<string> = new Set([
   'dune',
   'shallow',
   'deep',
+  'shadow',
 ]);
 
 const TERRAIN_NAME: Record<string, string> = {

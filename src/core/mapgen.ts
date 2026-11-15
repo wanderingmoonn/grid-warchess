@@ -217,6 +217,7 @@ export interface MapLayout {
 }
 
 const CHAR: Record<Terrain, string> = {
+  shadow: 's',
   plain: '.',
   forest: 'f',
   hill: 'h',

@@ -227,6 +227,7 @@ export const TUNING: ClimateTuning = {
   latitudeSpread: 55,
   coastAmp: { coastal: 60, nearshore: 85, inland: 115, shore: 105, shallow: 95, deep: 85 },
   terrain: {
+    shadow: { temp: 0, wet: 0, evap: 0, heat: 0 },
     plain: { temp: 0, wet: 62, evap: 2.6, heat: 480 },
     forest: { temp: -25, wet: 78, evap: 3.4, heat: 420 },
     hill: { temp: -30, wet: 72, evap: 3.0, heat: 450 },
